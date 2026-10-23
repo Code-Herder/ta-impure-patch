@@ -3,8 +3,9 @@
    WHAT THE BROWSER DOES, DONE HERE, because the mockup is the reference (hud-layout.md):
 
      * a part is premultiplied (tagpu_hudart.c) and blended ONE, ONE_MINUS_SRC_ALPHA;
-     * a box's edges fall where its fractional edges round, as Chrome snaps a background to
-       device pixels: the rasteriser's pixel-centre rule does that for a quad;
+     * a box's edges fall where its fractional edges round half up, as Chrome snaps an element to
+       device pixels: a part's in tagpu_hudlay_expand, a solid's, a dot's and a clip's here (snap).
+       The rasteriser's pixel-centre rule alone would round an edge at exactly half a pixel down;
      * text sits on the baseline `display: flex; align-items: center; line-height: 1` gives it,
        with Blink's roundings (tagpu_hudlay_baseline); the baseline is rounded to a whole pixel
        and the pen keeps its fraction, as Skia draws horizontal text;
@@ -262,6 +263,9 @@ typedef struct {
     int           fresh;        /* the next instance opens a batch: a group's first          */
 } B;
 
+/* a device coordinate snapped as Chrome snaps an element's edge: rounded half up */
+static float snap(float v) { return floorf(v + 0.5f); }
+
 static HUDINST* emit(B* c, int tex, int mode, float x0, float y0, float x1, float y1, const HUDOP* op)
 {
     HUDINST* q;
@@ -287,9 +291,13 @@ static HUDINST* emit(B* c, int tex, int mode, float x0, float y0, float x1, floa
     q->uv[0] = q->uv[1] = 0; q->uv[2] = q->uv[3] = 1;
     q->rgba[0] = q->rgba[1] = q->rgba[2] = q->rgba[3] = 1;
     if (op->clip.w >= 0) {
+        /* a box's clip snapped as the box; the chart's SVG clipPath is not a box Chrome snaps */
         HUDRECT k = tagpu_hudlay_clip(op, c->px);
-        q->clip[0] = k.x * c->px + c->ox; q->clip[1] = k.y * c->px + c->oy;
-        q->clip[2] = (k.x + k.w) * c->px + c->ox; q->clip[3] = (k.y + k.h) * c->px + c->oy;
+        q->clip[0] = k.x * c->px; q->clip[1] = k.y * c->px;
+        q->clip[2] = (k.x + k.w) * c->px; q->clip[3] = (k.y + k.h) * c->px;
+        if (op->kind != HOP_CHART)
+            for (int e = 0; e < 4; e++) q->clip[e] = snap(q->clip[e]);
+        q->clip[0] += c->ox; q->clip[2] += c->ox; q->clip[1] += c->oy; q->clip[3] += c->oy;
     } else {
         q->clip[0] = 1; q->clip[2] = 0; q->clip[1] = q->clip[3] = 0;
     }
@@ -565,7 +573,8 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
         /* fall through */
     case HOP_DOT:
         if (!(in = emit(c, -1, op->kind == HOP_DOT ? HUDM_DOT : op->flags & HOPF_SHADE ? HUDM_SHADE : HUDM_SOLID,
-                        op->r.x * px, op->r.y * px, (op->r.x + op->r.w) * px, (op->r.y + op->r.h) * px, op))) break;
+                        snap(op->r.x * px), snap(op->r.y * px), snap((op->r.x + op->r.w) * px),
+                        snap((op->r.y + op->r.h) * px), op))) break;
         colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
         in->prm[1] = op->shade * px / 2;
         break;

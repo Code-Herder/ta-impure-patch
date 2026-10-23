@@ -6,13 +6,9 @@
 /* a part: its art is painted behind its children */
 .hud .art { position: absolute; isolation: isolate; }
 .hud .art::before { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none; }
-/* 9-slice: the slice's edges keep their painted size in units, the middle stretches; an xtile part's middle is
-   one period of a seamless tile and repeats along x a whole number of times instead */
-.hud .art.nine::before { border-style: solid; border-color: transparent; border-width: var(--bw);
-  border-image: var(--bi) var(--bsl) fill / var(--bw) var(--bir); }
 .hud .art.whole::before { background: var(--bi) center / 100% 100% no-repeat; }
 .hud .art.icon::before { background: var(--bi) center / contain no-repeat; }
-/* grid-sliced parts and tiled fills are composed into one image at the drawn size */
+/* grid-sliced and 9-slice parts and tiled fills are composed into one image at the drawn size (hud.js, composing) */
 .hud .art.composed { background-size: 100% 100%; }
 .hud .art.composed::before { display: none; }
 /* a part the kit lacks is whitebox: a mid grey plate with a dark edge, darker while pressed; an icon it lacks is its
@@ -33,6 +29,7 @@
 .hud .off { pointer-events: none; }
 /* a pressed face sinks its content */
 .hud .art.pressed > .face { transform: translateY(calc(var(--press) * var(--u))); }
-.hud .hov { display: none; }
-.hud .row:hover > .hov { display: block; }
+/* hidden, not removed: a hover's composed parts are made at their laid-out size (hud.js, composing) */
+.hud .hov { visibility: hidden; }
+.hud .row:hover > .hov { visibility: visible; }
 .hud .clip { position: absolute; overflow: hidden; }

@@ -1438,15 +1438,19 @@ int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* e
     return !c.bad;
 }
 
-/* The kit's drawing, as quads. A grid-sliced part is drawn cell by cell, the cells sharing
-   their edges; a 9-slice part as CSS border-image draws it, its slice's edges kept at their size
-   in units unless the box is smaller than both together, when all four shrink by one factor;
-   a tiled fill scaled to its height and repeated along x at a whole-pixel period; an icon kept
-   to its aspect and centred. An `xtile` part's x bands are each one period of a seamless tile
+/* The kit's drawing, as quads, in the part's box snapped to whole pixels, each edge rounded half
+   up as Chrome snaps an element (the GPU's pixel-centre rule alone rounds an edge at exactly half a
+   pixel down: at 1920 x 1080 and HUD 100, 1.5 px a unit, the lanes plate's top at 874.5 drew from
+   row 874 against the mockup's 875). A grid-sliced part is drawn cell by cell, the cells sharing
+   their edges; a 9-slice part with its slice's edges kept at their size in units unless the box
+   is smaller than both together, when all four shrink by one factor; a tiled fill scaled to its
+   height and repeated along x at a whole-pixel period; an icon kept to its aspect and centred.
+   hud.js composes a grid or 9-slice part on a canvas of the snapped size by the same rules
+   (composeGrid, composeNine). An `xtile` part's x bands are each one period of a seamless tile
    (seamband.py): drawn as a whole number of copies at about their painted length, each copy an
-   equal share of the drawn band, as hud.js composes a grid part and as CSS border-image-repeat
-   `round` draws a 9-slice's middle, row by row at its edge's scale. A 9-slice's edges are whole
-   device pixels, as the browser draws them (edge_px). */
+   equal share of the drawn band, its edges whole pixels; a 9-slice's middle row by row at its
+   edge's scale, as CSS border-image-repeat `round` sizes it. A 9-slice's edges are whole device
+   pixels (edge_px). */
 float tagpu_hudlay_baseline(float y, float h, float size, float asc, float desc)
 {
     float A = floorf(asc * size + 0.5f), D = floorf(desc * size + 0.5f);
@@ -1464,9 +1468,10 @@ static int copies(double len, double period, int extra)
 }
 
 /* A 9-slice edge's drawn width in device pixels as the browser draws a border: a width of a pixel
-   or more floored to whole pixels, a thinner one drawn a pixel wide. MEASURED 2026-10-23 on Chrome,
-   the mockup's browser: the Take over button at 4K and HUD 150 (4.5 px a unit) drew its 8.81 px top
-   edge 8 px wide, which made its middle 5 `round` tiles of 199 px against the 4 of 248 px the exact
+   or more floored to whole pixels, a thinner one drawn a pixel wide (CSS Values 4's border-width
+   snapping), the rule Chrome's border-image follows, which composeNine in hud.js keeps. MEASURED
+   2026-10-23 on Chrome's border-image: the Take over button at 4K and HUD 150 (4.5 px a unit) drew its 8.81 px top edge
+   8 px wide, which made its middle 5 `round` tiles of 199 px against the 4 of 248 px the exact
    width gives, and its 10.67 px bottom edge 10 px, the bottom row's 4 tiles of 248 px. */
 static double edge_px(double v)
 {
@@ -1483,7 +1488,9 @@ HUDRECT tagpu_hudlay_clip(const HUDOP* op, float px)
 int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, int cap)
 {
     const HUDPART* k;
-    double x = op->r.x * px, y = op->r.y * px, w = op->r.w * px, h = op->r.h * px;
+    /* the box snapped as Chrome snaps an element's: each edge rounded half up to a whole pixel */
+    double x = floor(op->r.x * px + 0.5), y = floor(op->r.y * px + 0.5);
+    double w = floor((op->r.x + op->r.w) * px + 0.5) - x, h = floor((op->r.y + op->r.h) * px + 0.5) - y;
     int n = 0, i, j;
     if (op->kind != HOP_PART || op->part < 0 || op->part >= l->nparts || cap < 1) return 0;
     k = &l->part[op->part];
@@ -1492,14 +1499,14 @@ int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, 
         double bx[2 * HUD_MAXBAND + 2], by[2 * HUD_MAXBAND + 2];
         int nx = 0, ny = 0, extra;
         F f;
-        f.w = op->r.w; f.h = op->r.h; f.k = k;
+        f.w = w / px; f.h = h / px; f.k = k;
         bx[nx++] = 0; for (i = 0; i < k->nxs; i++) { bx[nx++] = k->xs[i][0]; bx[nx++] = k->xs[i][1]; } bx[nx++] = k->design[0];
         by[ny++] = 0; for (i = 0; i < k->nys; i++) { by[ny++] = k->ys[i][0]; by[ny++] = k->ys[i][1]; } by[ny++] = k->design[1];
         /* THE COPIES ARE BOUNDED BY `cap`: every row gets cap / rows quads, its nx - 1 cells take one
            each, and each band may add an equal share of what is left. */
         extra = k->nxs ? (cap / (ny - 1) - (nx - 1)) / k->nxs : 0;
-        /* the cell and copy edges are whole pixels from the part's corner, as hud.js composes the
-           part on a canvas of its own (composeGrid) */
+        /* the cell and copy edges are whole pixels from the part's corner, the band map taking the
+           snapped size, as hud.js composes the part on a canvas of that size (composeGrid) */
         for (j = 0; j + 1 < ny; j++)
             for (i = 0; i + 1 < nx; i++) {
                 double x0 = floor(fx(&f, bx[i]) * px + 0.5), x1 = floor(fx(&f, bx[i + 1]) * px + 0.5);
@@ -1528,7 +1535,7 @@ int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, 
         dy[0] = y; dy[1] = y + t; dy[2] = y + h - b; dy[3] = y + h;
         su[0] = 0; su[1] = k->slice[3] / k->pw; su[2] = 1 - k->slice[1] / k->pw; su[3] = 1;
         sv[0] = 0; sv[1] = k->slice[0] / k->ph; sv[2] = 1 - k->slice[2] / k->ph; sv[3] = 1;
-        /* THE MIDDLE COLUMN REPEATS AS CSS `round` TILES IT: a row's tile is the painted middle at that
+        /* THE MIDDLE COLUMN REPEATS AS CSS `round` WOULD TILE IT: a row's tile is the painted middle at that
            row's edge scale, the drawn edge width over its slice -- the top row and the middle at the
            top edge's (the bottom's when the top has none), the bottom row at the bottom's. Each row has
            cap / 3 quads, two of them its ends. */
@@ -1546,7 +1553,8 @@ int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, 
                 int c, mi = i == 1 ? m[j] : 1;
                 if (dx[i + 1] <= dx[i] || dy[j + 1] <= dy[j]) continue;
                 for (c = 0; c < mi && n < cap; c++, n++) {
-                    q[n].x0 = (float)(dx[i] + (dx[i + 1] - dx[i]) * c / mi); q[n].x1 = (float)(dx[i] + (dx[i + 1] - dx[i]) * (c + 1) / mi);
+                    q[n].x0 = (float)(dx[i] + floor((dx[i + 1] - dx[i]) * c / mi + 0.5));
+                    q[n].x1 = (float)(dx[i] + floor((dx[i + 1] - dx[i]) * (c + 1) / mi + 0.5));
                     q[n].y0 = (float)dy[j]; q[n].y1 = (float)dy[j + 1];
                     q[n].u0 = (float)su[i]; q[n].u1 = (float)su[i + 1]; q[n].v0 = (float)sv[j]; q[n].v1 = (float)sv[j + 1];
                 }

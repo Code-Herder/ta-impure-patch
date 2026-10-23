@@ -69,6 +69,8 @@ CASES = [
     ("1440-75-lanes-watched", "res=2560x1440&game=200&hud=75&np=8&nt=2&t=90&nf=3&lo&tl=1&paused", None, ""),
     ("1080-100-lanes-picker", "res=1920x1080&game=off&hud=100&np=6&nt=1&t=40&nf=3&lo&pick&paused", None, ""),
     ("4k-150-lanes-held", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&nf=3&lo&paused", None, "lane:0"),
+    # at device scale factor 1, the game's 1.5 pixels a unit: boxes on half pixels, which each side snaps
+    ("1080-100-lanes-dpr1", "res=1920x1080&game=150&hud=100&np=4&nt=4&t=70&nf=3&lo&paused", None, "", 1),
 ]
 # a chart point is a float in the game and a double in the mockup, and both write it to a tenth: one
 # within 1e-5 of a tenth's half can round either way, so a point may differ by that tenth
@@ -87,7 +89,7 @@ COLLECT = r"""() => {
     HUD.press(b, true); st.held = held; }
   if (hoverRow != null) {
     const row = document.querySelectorAll('#hud-layer .row')[hoverRow], r = R(row);
-    row.querySelector('.hov').style.display = 'block';
+    row.querySelector('.hov').style.visibility = 'visible';
     st.mx = r[0] + r[2] / 2; st.my = r[1] + r[3] / 2;
   }
   const els = [], ctx = document.createElement('canvas').getContext('2d');
@@ -99,12 +101,12 @@ COLLECT = r"""() => {
     return Math.round(255 * a);
   };
   for (const e of document.querySelectorAll('#hud-layer *')) {
-    if (!e.getClientRects().length) continue;
+    if (!e.getClientRects().length || getComputedStyle(e).visibility === 'hidden') continue;
     const dim = !!(e.closest('.row') && e.closest('.row').style.filter);
     if (e.classList.contains('art')) {
       let part = e.dataset.gp || e.dataset.tile;
       if (!part) { const m = /parts\/([^/]+)\.png/.exec(e.style.getPropertyValue('--bi')); part = m && m[1]; }
-      els.push({ kind: 'part', part, r: R(e), dim, alpha: opacity(e) });
+      els.push({ kind: 'part', part, r: R(e), dim, alpha: opacity(e), quads: e.dataset.quads ? JSON.parse(e.dataset.quads) : null });
     }
     if (e.dataset.act && !e.classList.contains('off')) {   // a disabled control takes no input
       const k = e.dataset.act + (e.dataset.val != null ? ':' + e.dataset.val : e.dataset.team != null ? ':' + e.dataset.team : e.dataset.seat != null ? ':' + e.dataset.seat
@@ -218,9 +220,9 @@ def serve():
     return httpd
 
 
-def mockup(port, query, hover, held, tmp):
+def mockup(port, query, hover, held, tmp, dpr=2):
     cfg = tmp / "pw.json"
-    cfg.write_text(json.dumps({"browser": {"contextOptions": {"deviceScaleFactor": 2, "viewport": {"width": 2100, "height": 1400}}}}))
+    cfg.write_text(json.dumps({"browser": {"contextOptions": {"deviceScaleFactor": dpr, "viewport": {"width": 2100, "height": 1400}}}}))
     pw = ["playwright-cli", f"-s=laycheck{os.getpid()}", f"--config={cfg}"]
     # the mockup's own default, prop=1 and two forks unless the case says otherwise: the game's look
     url = f"http://127.0.0.1:{port}/tools/hudart/mockup/index.html?{query}"
@@ -276,8 +278,8 @@ def main():
     faces = face_metrics()
     bad = 0
     try:
-        for name, query, hover, held in CASES:
-            dom = mockup(httpd.server_address[1], query, hover, held, tmp)
+        for name, query, hover, held, *dpr in CASES:
+            dom = mockup(httpd.server_address[1], query, hover, held, tmp, *dpr)
             sp = tmp / f"{name}.state.json"
             sp.write_text(json.dumps({**dom["state"], "faces": faces}))
             # the baseline is computed at the mockup's CSS pixels, the grid Blink rounds a face's metrics to
@@ -360,6 +362,44 @@ def main():
                     dm = sum(1 for c, d in pairs if bool(c.get("dim")) != bool(d.get("dim")))
                     extra += f", dim disagrees {dm}" if dm else ""
                     bad += dm
+                if k == "part":
+                    # a composed part's pieces: the same, edge for edge in device pixels and in the source
+                    def same(c, d):
+                        a, b = c.get("quads"), d.get("quads")
+                        if a is None or b is None:
+                            return a is None and b is None
+                        return len(a) == len(b) and all(abs(x - y) <= (1e-3 if i < 4 else 1e-4)
+                                                         for qa, qb in zip(a, b) for i, (x, y) in enumerate(zip(qa, qb)))
+                    def snapped_apart(c, d):
+                        """Chrome lays a box out in LayoutUnits, sixty-fourths of a CSS pixel summed down the
+                        element tree, the DLL in floats: an edge on a half pixel can come out a hair below it
+                        on one side and on or above it on the other, and snap a pixel apart. Then the pieces
+                        cannot be compared, and the box is held to the rect tolerance instead: True when the
+                        two snap apart with every such edge within it, False when they snap alike, None when
+                        an edge snaps apart by more."""
+                        if "snap" not in c:
+                            return False
+                        k = dom["u"] * dom["d"]
+                        r = d["r"]
+                        de = [r[0] * k, r[1] * k, (r[0] + r[2]) * k, (r[1] + r[3]) * k]
+                        ce = [c["r"][0] * k, c["r"][1] * k, (c["r"][0] + c["r"][2]) * k, (c["r"][1] + c["r"][3]) * k]
+                        apart = [i for i in range(4) if math.floor(de[i] + 0.5) != c["snap"][i]]
+                        if not apart:
+                            return False
+                        return True if all(abs(de[i] - ce[i]) <= TOL * k for i in apart) else None
+                    sa, pc = [], []
+                    for c, d in pairs:
+                        a = snapped_apart(c, d)
+                        if a:
+                            sa.append((c, d))
+                        elif a is None or not same(c, d):
+                            pc.append((c, d))
+                    extra += f", pieces disagree {len(pc)}" if pc else ""
+                    extra += f", {len(sa)} snapped a pixel apart on a half-pixel edge, within the tolerance" if sa else ""
+                    for c, d in pc[:3]:
+                        print(f"        pieces of {c['part']!r}: DLL {len(c.get('quads') or [])} {(c.get('quads') or [])[:2]} "
+                              f"mockup {len(d.get('quads') or [])} {(d.get('quads') or [])[:2]}")
+                    bad += len(pc)
                 if k in ("part", "text"):
                     al = sum(1 for c, d in pairs if abs(c.get("alpha", 255) - d.get("alpha", 255)) > 1)
                     extra += f", opacity disagrees {al}" if al else ""

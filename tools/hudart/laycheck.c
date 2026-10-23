@@ -3,9 +3,11 @@
      laycheck <art/hud dir> <state.json> [<CSS px a unit> <device px a unit>]
 
    With the two scales it also gives each text's baseline, in CSS pixels as the browser lays it
-   out, and each fill's clip as the draw takes it, at least one device pixel wide. The state is the mockup's own (index.html `state()`), so the two sides lay out the same
+   out, each fill's clip as the draw takes it, at least one device pixel wide, and each grid or
+   9-slice part's pieces in device pixels from its snapped corner (tagpu_hudlay_expand). The state is the mockup's own (index.html `state()`), so the two sides lay out the same
    game; tools/hudart/laycheck.py compares this output with the mockup's element boxes.
    Compiled natively by laycheck.py: tagpu_json.c and tagpu_hudlay.c are pure C99 for this. */
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -203,6 +205,20 @@ int main(int argc, char** argv)
         if (p->kind == HOP_PART) {
             printf(",\"part\":"); json_str(tagpu_hudlay_part(l, p->part)->name, (int)strlen(tagpu_hudlay_part(l, p->part)->name));
             printf(",\"alpha\":%u", painted(o, p));
+            /* a composed part's pieces from its snapped corner, as hud.js keeps them (`quads`) */
+            if (argc == 5 && (tagpu_hudlay_part(l, p->part)->kind == HK_GRID || tagpu_hudlay_part(l, p->part)->kind == HK_NINE)) {
+                static HUDQUAD q[HUD_MAXQUAD];
+                const float dpx = (float)atof(argv[4]);
+                /* the corner and far edges as tagpu_hudlay_expand snaps them, in its arithmetic */
+                const double X = floor(p->r.x * dpx + 0.5), Y = floor(p->r.y * dpx + 0.5);
+                const double X1 = floor((p->r.x + p->r.w) * dpx + 0.5), Y1 = floor((p->r.y + p->r.h) * dpx + 0.5);
+                int m = tagpu_hudlay_expand(l, p, dpx, q, HUD_MAXQUAD), j;
+                printf(",\"snap\":[%.0f,%.0f,%.0f,%.0f],\"quads\":[", X, Y, X1, Y1);
+                for (j = 0; j < m; j++)
+                    printf("%s[%.4f,%.4f,%.4f,%.4f,%.6f,%.6f,%.6f,%.6f]", j ? "," : "", q[j].x0 - X, q[j].y0 - Y,
+                           q[j].x1 - X, q[j].y1 - Y, q[j].u0, q[j].v0, q[j].u1, q[j].v1);
+                printf("]");
+            }
         }
         if (p->kind == HOP_SOLID || p->kind == HOP_DOT) printf(",\"rgba\":\"%08x\"", p->rgba);
         if (p->clip.w >= 0 && p->kind != HOP_TEXT && p->kind != HOP_CHART) {

@@ -16,7 +16,7 @@ const HUD = (() => {
   async function load(base) {
     root = base;
     [L, K] = await Promise.all([fetch(base + 'layout.json').then(r => r.json()), fetch(base + 'kit.json').then(r => r.json()).then(j => j.parts)]);
-    await Promise.all(Object.keys(K).filter(n => K[n].kind === 'grid' || K[n].kind === 'tile').map(n => {
+    await Promise.all(Object.keys(K).filter(n => ['grid', 'nine', 'tile'].includes(K[n].kind)).map(n => {
       const im = new Image(); im.src = url(n); IMG[n] = im; return im.decode();
     }));
     return { layout: L, kit: K };
@@ -82,23 +82,19 @@ const HUD = (() => {
     // a part the kit lacks is drawn as whitebox; an icon it lacks, as its stand-in glyph
     if (!k && part.startsWith('i_')) return `<div class="art noicon ${cls}" data-wb="${esc(WB_GLYPH[part.slice(2)] || part.slice(2))}" style="${rect(b)};--wbs:${+(b.h * .9).toFixed(3)}${style}"${attrs(data)}></div>`;
     if (!k) return `<div class="art noart ${cls}" style="${rect(b)}${style}"${attrs(data)}>${inner}</div>`;
-    if (k.kind === 'grid' || k.kind === 'tile')
-      return `<div class="art composed ${cls}" style="${rect(b)}${style}" data-${k.kind === 'grid' ? 'gp' : 'tile'}="${part}" data-w="${b.w}" data-h="${b.h}"${attrs(data)}>${inner}</div>`;
+    if (k.kind === 'grid' || k.kind === 'nine' || k.kind === 'tile')
+      return `<div class="art composed ${cls}" style="${rect(b)}${style}" data-${k.kind === 'tile' ? 'tile' : 'gp'}="${part}"${attrs(data)}>${inner}</div>`;
     return `<div class="art ${k.kind} ${cls}" data-part="${part}" style="${rect(b)};${vars(part)}${style}"${attrs(data)}>${inner}</div>`;
   }
-  // the custom properties that draw a 9-slice, whole or icon part
-  function vars(part) {
-    const k = K[part];
-    let v = `--bi:url('${url(part)}')`;
-    if (k.kind === 'nine') { const [t, r, b, l] = k.slice; v += `;--bsl:${t} ${r} ${b} ${l};--bw:${[t, r, b, l].map(x => U(x / k.scale)).join(' ')}`; v += `;--bir:${k.xtile ? 'round' : 'stretch'} stretch`; }
-    return v;
-  }
+  // the custom property that draws a whole or icon part
+  const vars = part => `--bi:url('${url(part)}')`;
   // a held button shows its pressed part, and its face sinks; released, it shows its own part again
   function press(el, down) {
     const part = down ? el.dataset.down : el.dataset.up;
     if (part && !K[part]) { el.classList.toggle('pressed', down); return; }
     if (!part) return;
-    for (const d of vars(part).split(';')) { const i = d.indexOf(':'); el.style.setProperty(d.slice(0, i), d.slice(i + 1)); }
+    if (el.dataset.gp) { el.dataset.gp = part; composeOne(el); }
+    else el.style.setProperty('--bi', `url('${url(part)}')`);
     el.classList.toggle('pressed', down);
   }
   const icon = (name, b, cls = '') => art('i_' + name, b, '', cls);
@@ -471,46 +467,141 @@ const HUD = (() => {
   }
   const nice = v => { if (!(v > 0)) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))), f = v / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p; };
 
-  /* ---- composing: a grid-sliced part cell by cell at its drawn size, the cells sharing rounded edges so no seam can
-     show; a tiled fill scaled to its height inside a three-tile strip, so the resampling stays periodic, then copied
-     at whole-pixel steps ---- */
-  function composeGrid(n, W, H, px) {
-    const k = K[n], img = IMG[n], key = [n, W, H, px].join('|');
-    if (cache[key]) return cache[key];
-    const [DW, DH] = k.design, fx = bandMap(k.xs, DW, W), fy = bandMap(k.ys, DH, H);
-    const bx = [0, ...k.xs.flat(), DW], by = [0, ...k.ys.flat(), DH], sx = img.naturalWidth / DW, sy = img.naturalHeight / DH;
-    const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(W * px)); c.height = Math.max(1, Math.round(H * px));
-    const g = c.getContext('2d'); g.imageSmoothingQuality = 'high';
-    for (let i = 0; i + 1 < bx.length; i++) for (let j = 0; j + 1 < by.length; j++) {
-      const dx0 = Math.round(fx(bx[i]) * px), dx1 = Math.round(fx(bx[i + 1]) * px), dy0 = Math.round(fy(by[j]) * px), dy1 = Math.round(fy(by[j + 1]) * px);
-      if (!(dx1 > dx0 && dy1 > dy0)) continue;
-      // an xtile part's x band (the odd cells) is one period of a seamless tile: repeated a whole number of times
-      // at its painted length in units, each copy taking an equal share of the drawn band
-      const n = k.xtile && i % 2 ? Math.max(1, Math.round((dx1 - dx0) / ((bx[i + 1] - bx[i]) * px))) : 1;
-      for (let c = 0; c < n; c++) {
-        const cx0 = dx0 + Math.round((dx1 - dx0) * c / n), cx1 = dx0 + Math.round((dx1 - dx0) * (c + 1) / n);
-        g.drawImage(img, bx[i] * sx, by[j] * sy, (bx[i + 1] - bx[i]) * sx, (by[j + 1] - by[j]) * sy, cx0, dy0, cx1 - cx0, dy1 - dy0);
+  /* ---- composing: a grid-sliced or 9-slice part, or a tiled fill, drawn on a canvas of its box's size snapped as
+     Chrome snaps the element, each edge rounded half up to a device pixel, which the element then shows pixel for
+     pixel. The pieces are tagpu_hudlay_expand's and are sampled as the DLL's GPU samples them (paint), so the game and
+     the mockup draw the same texels at the same pixels: a grid part cell by cell, the cells sharing rounded edges so
+     no seam can show; a 9-slice part's edges kept at their size in units (whole pixels, floored, never under one)
+     unless the box is smaller than both together, when all four shrink by one factor; a tiled fill one piece
+     repeating along x at its height's scale. An xtile part's x band is one period of a seamless tile, repeated a
+     whole number of times at about its painted length, each copy an equal share of the band with whole-pixel edges;
+     a 9-slice's middle row by row at that row's edge scale. Each grid or 9-slice part keeps its pieces (`quads`:
+     destination x0, y0, x1, y1 in its pixels, source u0, v0, u1, v1 in the part's), which tools/hudart/laycheck.py
+     compares with the DLL's. ---- */
+  const copies = (len, period) => period > 0 ? Math.max(1, Math.round(len / period)) : 1;
+  function canvas(w, h) { const c = document.createElement('canvas'); c.width = Math.max(1, w); c.height = Math.max(1, h); return c; }
+  /* A part's texels as the DLL uploads them, premultiplied to eight bits (tagpu_hudart.c), and its mip chain as the
+     DLL blits it: each level half the one above, floored, never under one texel, each texel the bilinear sample of
+     the level above at its centre, stored to eight bits (tagpu_vk_hud.c, vkCmdBlitImage with a linear filter). */
+  const MIPS = {};
+  function mips(n) {
+    if (MIPS[n]) return MIPS[n];
+    const img = IMG[n];
+    let w = img.naturalWidth, h = img.naturalHeight;
+    const g = canvas(w, h).getContext('2d');
+    g.drawImage(img, 0, 0);
+    const s = g.getImageData(0, 0, w, h).data, p = new Float32Array(w * h * 4);
+    for (let i = 0; i < s.length; i += 4) {
+      const a = s[i + 3];
+      p[i] = Math.floor((s[i] * a + 127) / 255); p[i + 1] = Math.floor((s[i + 1] * a + 127) / 255);
+      p[i + 2] = Math.floor((s[i + 2] * a + 127) / 255); p[i + 3] = a;
+    }
+    const L = [{ w, h, p }], o = [0, 0, 0, 0];
+    while ((w > 1 || h > 1) && L.length < 16) {
+      const nw = w > 1 ? w >> 1 : 1, nh = h > 1 ? h >> 1 : 1, q = new Float32Array(nw * nh * 4), up = L[L.length - 1];
+      for (let y = 0; y < nh; y++) for (let x = 0; x < nw; x++) {
+        bilinear(up, (x + 0.5) * w / nw, (y + 0.5) * h / nh, false, o);
+        for (let c = 0; c < 4; c++) q[(y * nw + x) * 4 + c] = Math.round(o[c]);
+      }
+      L.push({ w: nw, h: nh, p: q }); w = nw; h = nh;
+    }
+    return MIPS[n] = L;
+  }
+  // a level's bilinear sample at texel coordinates (x, y), texel centres at the halves; clamped to the edge, or along x
+  // repeating (wrap)
+  function bilinear(l, x, y, wrap, o) {
+    const tx = x - 0.5, ty = y - 0.5, x0 = Math.floor(tx), y0 = Math.floor(ty), fx = tx - x0, fy = ty - y0;
+    const cx = i => wrap ? ((i % l.w) + l.w) % l.w : Math.min(l.w - 1, Math.max(0, i)), cy = j => Math.min(l.h - 1, Math.max(0, j));
+    const a = cx(x0), b = cx(x0 + 1), c = cy(y0) * l.w, d = cy(y0 + 1) * l.w, p = l.p;
+    for (let k = 0; k < 4; k++)
+      o[k] = (p[(c + a) * 4 + k] * (1 - fx) + p[(c + b) * 4 + k] * fx) * (1 - fy) + (p[(d + a) * 4 + k] * (1 - fx) + p[(d + b) * 4 + k] * fx) * fy;
+  }
+  /* The pieces drawn as the DLL's part shader draws them: a pixel is a piece's when its centre is inside it, its
+     coordinates interpolated at that centre, and sampled through a linear filter between the two mip levels its
+     footprint falls between, the level of detail the log2 of the larger of the piece's two scales in texels a pixel
+     (the sampler: tagpu_vk_hud.c mk_sampler). */
+  function paint(n, quads, Wd, Hd, wrap) {
+    const L = mips(n), w0 = L[0].w, h0 = L[0].h, out = new ImageData(Math.max(1, Wd), Math.max(1, Hd)), d = out.data;
+    const A = [0, 0, 0, 0], B = [0, 0, 0, 0];
+    for (const [x0, y0, x1, y1, u0, v0, u1, v1] of quads) {
+      const su = (u1 - u0) / (x1 - x0), sv = (v1 - v0) / (y1 - y0);
+      const lod = Math.min(L.length - 1, Math.max(0, Math.log2(Math.max(Math.abs(su) * w0, Math.abs(sv) * h0))));
+      const l0 = Math.floor(lod), f = lod - l0, l1 = Math.min(L.length - 1, l0 + 1);
+      for (let y = Math.max(0, y0); y < Math.min(Hd, y1); y++) for (let x = Math.max(0, x0); x < Math.min(Wd, x1); x++) {
+        const u = u0 + (x + 0.5 - x0) * su, v = v0 + (y + 0.5 - y0) * sv;
+        bilinear(L[l0], u * L[l0].w, v * L[l0].h, wrap, A);
+        if (f > 0) { bilinear(L[l1], u * L[l1].w, v * L[l1].h, wrap, B); for (let k = 0; k < 4; k++) A[k] += (B[k] - A[k]) * f; }
+        const i = (y * out.width + x) * 4, a = A[3];
+        // the canvas holds unpremultiplied colour
+        d[i] = a > 0 ? A[0] * 255 / a : 0; d[i + 1] = a > 0 ? A[1] * 255 / a : 0; d[i + 2] = a > 0 ? A[2] * 255 / a : 0; d[i + 3] = a;
       }
     }
-    return cache[key] = c.toDataURL();
+    const c = canvas(Wd, Hd);
+    c.getContext('2d').putImageData(out, 0, 0);
+    return c.toDataURL();
   }
-  function composeTile(n, W, H, px) {
-    const img = IMG[n], key = ['t', n, W, H, px].join('|');
+  function composeGrid(n, Wd, Hd, px) {
+    const k = K[n], key = ['g', n, Wd, Hd, px].join('|');
     if (cache[key]) return cache[key];
-    const ch = Math.max(1, Math.round(H * px)), tw = Math.max(1, Math.round(img.naturalWidth * ch / img.naturalHeight));
-    const src = document.createElement('canvas'); src.width = 3 * img.naturalWidth; src.height = img.naturalHeight;
-    for (let i = 0; i < 3; i++) src.getContext('2d').drawImage(img, i * img.naturalWidth, 0);
-    const s = document.createElement('canvas'); s.width = 3 * tw; s.height = ch;
-    const sg = s.getContext('2d'); sg.imageSmoothingQuality = 'high'; sg.drawImage(src, 0, 0, 3 * tw, ch);
-    const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(W * px)); c.height = ch;
-    const g = c.getContext('2d');
-    for (let x = 0; x < c.width; x += tw) g.drawImage(s, tw, 0, tw, ch, x, 0, tw, ch);
-    return cache[key] = c.toDataURL();
+    const [DW, DH] = k.design, fx = bandMap(k.xs, DW, Wd / px), fy = bandMap(k.ys, DH, Hd / px);
+    const bx = [0, ...k.xs.flat(), DW], by = [0, ...k.ys.flat(), DH], quads = [];
+    for (let j = 0; j + 1 < by.length; j++) for (let i = 0; i + 1 < bx.length; i++) {
+      const dx0 = Math.round(fx(bx[i]) * px), dx1 = Math.round(fx(bx[i + 1]) * px), dy0 = Math.round(fy(by[j]) * px), dy1 = Math.round(fy(by[j + 1]) * px);
+      if (!(dx1 > dx0 && dy1 > dy0)) continue;
+      const m = k.xtile && i % 2 ? copies(dx1 - dx0, (bx[i + 1] - bx[i]) * px) : 1;
+      for (let e = 0; e < m; e++)
+        quads.push([dx0 + Math.round((dx1 - dx0) * e / m), dy0, dx0 + Math.round((dx1 - dx0) * (e + 1) / m), dy1, bx[i] / DW, by[j] / DH, bx[i + 1] / DW, by[j + 1] / DH]);
+    }
+    return cache[key] = { url: paint(n, quads, Wd, Hd, false), quads };
+  }
+  function composeNine(n, Wd, Hd, px) {
+    const k = K[n], img = IMG[n], key = ['n', n, Wd, Hd, px].join('|');
+    if (cache[key]) return cache[key];
+    const pw = img.naturalWidth, ph = img.naturalHeight, [st, sr, sb, sl] = k.slice, mw = pw - sr - sl;
+    const edge = v => v >= 1 ? Math.floor(v) : v > 0 ? 1 : 0;
+    let t = st / k.scale * px, r = sr / k.scale * px, b = sb / k.scale * px, l = sl / k.scale * px, f = 1;
+    if (l + r > 0) f = Math.min(f, Wd / (l + r));
+    if (t + b > 0) f = Math.min(f, Hd / (t + b));
+    t = edge(t * f); r = edge(r * f); b = edge(b * f); l = edge(l * f);
+    const dx = [0, l, Wd - r, Wd], dy = [0, t, Hd - b, Hd], sx = [0, sl, pw - sr, pw], sy = [0, st, ph - sb, ph];
+    let m = [1, 1, 1];
+    if (k.xtile) {
+      // a row's tile is the painted middle at its edge's scale: the top row and the middle at the top edge's, the bottom row at the bottom's
+      const ts = st > 0 && t > 0 ? t / st : 0, bs = sb > 0 && b > 0 ? b / sb : 0, ms = ts > 0 ? ts : bs > 0 ? bs : px * f / k.scale;
+      m = [ts > 0 ? ts : ms, ms, bs > 0 ? bs : ms].map(sc => copies(dx[2] - dx[1], mw * sc));
+    }
+    const quads = [];
+    for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) {
+      if (!(dx[i + 1] > dx[i] && dy[j + 1] > dy[j])) continue;
+      const mi = i === 1 ? m[j] : 1;
+      for (let e = 0; e < mi; e++)
+        quads.push([dx[i] + Math.round((dx[i + 1] - dx[i]) * e / mi), dy[j], dx[i] + Math.round((dx[i + 1] - dx[i]) * (e + 1) / mi), dy[j + 1],
+                    sx[i] / pw, sy[j] / ph, sx[i + 1] / pw, sy[j + 1] / ph]);
+    }
+    return cache[key] = { url: paint(n, quads, Wd, Hd, false), quads };
+  }
+  // a tiled fill: one piece the box's height, its period the part's width at that height in whole pixels, repeating
+  function composeTile(n, Wd, Hd) {
+    const img = IMG[n], key = ['t', n, Wd, Hd].join('|');
+    if (cache[key]) return cache[key];
+    const tw = Math.max(1, Math.round(img.naturalWidth * Math.max(1, Hd) / img.naturalHeight));
+    return cache[key] = { url: paint(n, [[0, 0, Wd, Hd, 0, 0, Wd / tw, 1]], Wd, Hd, true), quads: null };
+  }
+  // one composed part at its snapped size: its box's edges from the layer's corner, which sits on a device pixel
+  let layer = null, layerPx = 1;
+  function composeOne(e) {
+    const d = window.devicePixelRatio || 1, o = layer.getBoundingClientRect(), r = e.getBoundingClientRect();
+    const R = v => Math.floor(v * d + 0.5);
+    const w = R(r.right - o.left) - R(r.left - o.left), h = R(r.bottom - o.top) - R(r.top - o.top);
+    const n = e.dataset.gp || e.dataset.tile;
+    const out = e.dataset.tile ? composeTile(n, w, h) : K[n].kind === 'nine' ? composeNine(n, w, h, layerPx) : composeGrid(n, w, h, layerPx);
+    e.style.backgroundImage = `url("${out.url}")`;
+    if (out.quads) e.dataset.quads = JSON.stringify(out.quads);
   }
   // px: device pixels per HUD unit
   function compose(el, px) {
-    el.querySelectorAll('[data-gp]').forEach(e => { e.style.backgroundImage = `url("${composeGrid(e.dataset.gp, +e.dataset.w, +e.dataset.h, px)}")`; });
-    el.querySelectorAll('[data-tile]').forEach(e => { e.style.backgroundImage = `url("${composeTile(e.dataset.tile, +e.dataset.w, +e.dataset.h, px)}")`; });
+    layer = el; layerPx = px;
+    el.querySelectorAll('[data-gp], [data-tile]').forEach(composeOne);
   }
 
   /* ---- the toast: a short message in a dark box centred across the screen, above everything; the box is the layout's
