@@ -1806,8 +1806,8 @@ def watch_takeover(w, log, rec, stem, T, out, cover):
     hud(w, "click", f"takeas:{row}")
     got = log.wait(rf"replay: {re.escape(stem)}: taken over at GameTime {R0} as player {own}\b.*"
                    rf"timeline (\d+) \(parent 0\) is recorded from GameTime {R0}\b"
-                   rf"|replay: .*takeover.*refused", ACK_S, n)
-    if not got or "refused" in got:
+                   rf"|replay: {re.escape(stem)}: takeover (at \d+ )?refused:", ACK_S, n)
+    if not got or ": taken over at GameTime" not in got:
         raise Failed(f"the picker's takeover: {got.strip() if got else f'no line in {ACK_S} s'}")
     tl = int(re.search(r"timeline (\d+) \(parent 0\)", got).group(1))
     lines_in_order(log, n, [rf"a takeover as player {own} at GameTime {R0} waits"], "the picker's takeover")
