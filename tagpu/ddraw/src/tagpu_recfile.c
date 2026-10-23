@@ -70,15 +70,15 @@ typedef struct FileJob {
     unsigned nrows;
 } FileJob;
 static FileJob* s_pending[FILE_JOBS];
-/* THE TICKETS. A request's outcome waits in a ring of REC_FILE_RESULTS slots, slot ticket % N.
-   THE INVARIANT, an ordering under jobs_lock: a ticket is in s_pending or in its ring slot at
-   every instant the lock is free -- the worker writes the result before the job leaves
-   s_pending, both under the lock, and the in-use refusal writes its result in the same hold of
-   the lock that issues the ticket. A slot names its ticket, so a ticket a later one has displaced
-   reads unknown (-2), never another request's outcome. The ring is at least twice the jobs that
-   run at once: before the ticket that displaces a result can be issued, at least
-   REC_FILE_RESULTS - FILE_JOBS of the requests issued between the two have finished. */
-_Static_assert(REC_FILE_RESULTS >= 2 * FILE_JOBS, "the results ring outlives the jobs in flight");
+/* THE TICKETS. A request's outcome waits in a ring of REC_FILE_RESULTS slots, filled in the order
+   the requests finish: the k-th completion writes slot k % N with its ticket.
+   THE INVARIANT, an ordering under jobs_lock: from its issue until N - 1 later requests have
+   finished, a ticket is in s_pending or in the ring at every instant the lock is free -- the
+   worker writes the result before the job leaves s_pending, both under the lock, and the in-use
+   refusal writes its result in the same hold of the lock that issues the ticket. So a result
+   outlives N - 1 later completions, and a ticket the ring no longer holds reads unknown (-2),
+   never another request's outcome: each slot names its ticket. */
+_Static_assert(REC_FILE_RESULTS >= 2 * FILE_JOBS, "the ring holds more outcomes than jobs run");
 static unsigned s_ticket;           /* the last issued; 0 is never one */
 static struct { unsigned ticket; int ok; char why[160]; } s_done[REC_FILE_RESULTS];
 static volatile LONG s_completed;   /* requests finished, written under the lock */
@@ -340,10 +340,11 @@ static void prune(const char* fresh, unsigned keep)
                c[PRUNE_GONE], c[PRUNE_KEPT], c[PRUNE_BUSY], c[PRUNE_ODD]);
 }
 
-/* a ticket's result into its ring slot, and the count of finished requests; under the lock */
+/* a ticket's result into the ring's next slot, and the count of finished requests; under the
+   lock, which every write of s_completed holds */
 static void result_put(unsigned ticket, int ok, const char* why)
 {
-    unsigned k = ticket % REC_FILE_RESULTS;
+    unsigned k = (unsigned)s_completed % REC_FILE_RESULTS;
     s_done[k].ticket = ticket;
     s_done[k].ok = ok;
     snprintf(s_done[k].why, sizeof s_done[k].why, "%s", why);
@@ -432,12 +433,17 @@ static unsigned job_queue(FileJob* j)
         }
         if (!s_jobs[i] && slot < 0) slot = i;
     }
-    /* a ticket a failed CreateThread took is never handed out, so no caller asks for it */
-    ticket = j->ticket = ticket_next();
-    if (slot >= 0) s_pending[slot] = j;
-    t = slot >= 0 ? CreateThread(NULL, 0, file_worker, j, 0, NULL) : NULL;
-    if (t) s_jobs[slot] = t;
-    else if (slot >= 0) s_pending[slot] = NULL;
+    /* a ticket only for a job that has a slot; one a failed CreateThread took is never handed
+       out, so no caller asks for it */
+    ticket = 0;
+    t = NULL;
+    if (slot >= 0) {
+        ticket = j->ticket = ticket_next();
+        s_pending[slot] = j;
+        t = CreateThread(NULL, 0, file_worker, j, 0, NULL);
+        if (t) s_jobs[slot] = t;
+        else s_pending[slot] = NULL;
+    }
     jobs_unlock();
     if (!t) free(j);
     return t ? ticket : 0;
@@ -469,18 +475,31 @@ unsigned recfile_touch(const char* path, const RecTimelineState* rows, unsigned 
 
 int recfile_result(unsigned ticket, char* why, unsigned cap)
 {
-    unsigned i, k = ticket % REC_FILE_RESULTS;
+    unsigned i;
     int r = -2;
     if (cap) why[0] = 0;
+    if (!ticket) return r;
     jobs_lock();
     for (i = 0; i < FILE_JOBS; i++)
         if (s_pending[i] && s_pending[i]->ticket == ticket) r = 0;
-    if (r && ticket && s_done[k].ticket == ticket) {
-        r = s_done[k].ok;
-        if (cap) snprintf(why, cap, "%s", s_done[k].why);
-    }
+    for (i = 0; r && i < REC_FILE_RESULTS; i++)
+        if (s_done[i].ticket == ticket) {
+            r = s_done[i].ok;
+            if (cap) snprintf(why, cap, "%s", s_done[i].why);
+        }
     jobs_unlock();
     return r;
+}
+
+int recfile_pending(const char* path)
+{
+    unsigned i;
+    int k = 0;
+    jobs_lock();
+    for (i = 0; i < FILE_JOBS; i++)
+        if (s_pending[i] && !_stricmp(s_pending[i]->path, path)) k = 1;
+    jobs_unlock();
+    return k;
 }
 
 /* without the lock: the frame visit asks every frame, and a count read one completion late only

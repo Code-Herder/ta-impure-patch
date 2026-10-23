@@ -262,9 +262,11 @@ typedef struct RecTimeline {
     unsigned difficulty, has_ai;       /* its RT_OPTIONS difficulty; an RT_PLAYER of controller 2   */
     unsigned controlled;               /* its RT_OPTIONS controlled player (RecHeader.controlled),
                                           main+0x2A42 when the recorder wrote the header: in a
-                                          takeover's fork the seat it was played as, which
-                                          tk_live stores before the fork's first capture point
-                                          [INFERRED from that order]                              */
+                                          takeover's fork the seat it was played as. READ: the
+                                          takeover's tk_live stores P there, then tk_end arms the
+                                          fork, whose header header_build writes at its first
+                                          capture point (tagpu_recorder.c); the forks lane's
+                                          `hud state` check compares every fork's seat with P   */
     unsigned long long header_off;     /* its RB_HEADER's byte                                      */
     unsigned long long first_off;      /* the block after its header                                */
     unsigned long long end_off;        /* the byte after its last complete block                    */

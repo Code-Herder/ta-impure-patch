@@ -51,9 +51,13 @@ enum RecFileOp { REC_FILE_TOUCH, REC_FILE_DELETE, REC_FILE_EXPORT, REC_FILE_COMP
 unsigned recfile_request(const char* path, unsigned op, unsigned id, const char* output,
                          const char* request);
 /* A ticket's outcome: 0 still queued or running; 1 done; -1 refused, `why` filled; -2 unknown --
-   never issued, or displaced from the last REC_FILE_RESULTS outcomes. Any thread. */
+   never issued, or finished before the last REC_FILE_RESULTS completions: a result outlives
+   REC_FILE_RESULTS - 1 later ones. Any thread. */
 #define REC_FILE_RESULTS 16
 int recfile_result(unsigned ticket, char* why, unsigned cap);
+/* 1 while a queued or running request names `path`, spelled as the request spelled it: for a
+   caller that must not take the file's lock before that request is done. Any thread. */
+int recfile_pending(const char* path);
 /* How many requests have finished: it changes after each, for a reader that wants to know that
    some file may have changed. Any thread, without the queue's lock. */
 unsigned recfile_completed(void);

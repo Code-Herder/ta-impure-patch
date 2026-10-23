@@ -187,7 +187,7 @@ static RecReader* s_rd;             /* the recording this level plays           
 static char       s_name[MAX_PATH];  /* the request's name, or the browser's file stem          */
 static char       s_path[MAX_PATH];  /* its path, "replays\\<file>"                            */
 /* the chain that plays: its root's first GameTime, from the summary at the fill, and its last
-   timeline's last, from the scan that chose it (F1) */
+   timeline's last, from the scan that chose it (first_iteration) */
 static struct { unsigned first, last; int ok; } s_span;
 static unsigned   s_viewer;         /* V                                                          */
 static unsigned   s_view;           /* the viewed player: V for full visibility, or a seat         */
@@ -269,6 +269,17 @@ static int rw_skirmish(const RecHeader* h, char* why, unsigned cap)
 }
 static void rw_finish(char* ta, int back);
 static void rw_poll(void);
+/* the rewind verb waiting for the frame visit (THE REWIND'S VERBS); a level's alone: the level's
+   end and every rewind's disposal empty it (rw_dispose), and none is taken while no level is in
+   play (s_in_play) */
+static struct {
+    int      pending, op;
+    unsigned T;
+    char     dump[40];
+} s_rwq;
+/* a level is in play: from the frame visit, which only the in-play draw call 0x4969CD makes, to
+   the teardown wrap's entry (tagpu_replay_level_end); game thread */
+static int s_in_play;
 static int rw_trigger(const char* line);
 static void rw_visit(void);
 static void rw_dispose(void);
@@ -321,7 +332,8 @@ static struct {
     unsigned axis_first, axis_last;
     unsigned done;                  /* recfile_completed(), taken BEFORE the scan: a job that
                                        finishes during it makes the next visit scan again        */
-    int      failed;                /* a scan failure is logged once a playing                   */
+    int      failed;                /* a scan failure is logged once a playing; the rows come
+                                       back at the next refresh point that scans               */
 } s_tlc;
 static void tlc_refresh(void);
 static int tlc_open(void);
@@ -8101,6 +8113,7 @@ static void rw_dispose(void)
         DeleteFileA(path);
     }
     memset(&s_rw, 0, sizeof s_rw);
+    memset(&s_rwq, 0, sizeof s_rwq);
 }
 
 static int rw_prepare(char* ta, char* why, unsigned cap)
@@ -8268,7 +8281,7 @@ static int rw_eye(const Lv* L, unsigned T, char* why, unsigned cap)
    (tagpu_replay_result): `op` the verb, RW_BAD for one the parse did not know */
 static void rw_said(int ok, int op, const char* fmt, ...)
 {
-    char text[200];
+    char text[320];                     /* the longest: "open refused: " and a 200-byte reason */
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(text, sizeof text, fmt, ap);
@@ -8384,9 +8397,14 @@ static void rw_poll(void)
         }
         rw_said(1, TAGPU_REPLAY_RW_OPEN, "opened at GameTime %u; the file holds %u to %u", s_rw.G,
                 s_span.first, s_span.last);
-    } else if (s_rw.state == RW_ENDING && WaitForSingleObject(s_rw.done, 0) == WAIT_OBJECT_0) {
+    } else if (s_rw.state == RW_ENDING && WaitForSingleObject(s_rw.done, 0) == WAIT_OBJECT_0 &&
+               !recfile_pending(s_rw.path)) {
         /* the fork starts at the refresh rw_run found and checked before it ended the original:
-           the writer only appends, so the blocks to that GameTime are the same */
+           the writer only appends, so the blocks to that GameTime are the same. THE ORDERING
+           with the original's own compaction: an append writer queues it before it signals its
+           done event (tagpu_recwriter.c, the hand-over), so once the event is seen the
+           compaction is queued, running or finished, and the fork waits for it to finish
+           before tk_open takes the file's lock, which the compaction holds while it runs */
         s_seek.mode = SK_TAKEOVER;
         s_seek.T = s_rw.R;
         s_seek.P = s_rw.P;
@@ -8404,11 +8422,6 @@ static void rw_poll(void)
    the frame visit runs it (rw_visit). RW_BAD, a verb the parse did not know, is queued too: it
    meets every state refusal before its own, as every verb does. */
 #define RW_BAD (-1)
-static struct {
-    int      pending, op;
-    unsigned T;
-    char     dump[40];
-} s_rwq;
 
 static void rw_queue(int op, unsigned T, const char* dump)
 {
@@ -8540,9 +8553,16 @@ static int rw_trigger(const char* line)
 static void rw_visit(void)
 {
     char* ta = ta_main();
+    char dump[sizeof s_rwq.dump];
+    int op;
+    unsigned T;
     if (!s_rwq.pending || !ta) return;
+    /* taken whole first: rw_run disposes of the rewind, and the queue with it, on its way out */
+    op = s_rwq.op;
+    T = s_rwq.T;
+    memcpy(dump, s_rwq.dump, sizeof dump);
     s_rwq.pending = 0;
-    rw_run(ta, s_rwq.op, s_rwq.T, s_rwq.dump);
+    rw_run(ta, op, T, dump);
 }
 
 #define TRIGGER    SIM_TOOL_FILE("tagpu_replay.trigger")
@@ -8997,10 +9017,13 @@ static void rt_due(char* ta, unsigned next)
    nothing and the recorder's armed dumps wait (tagpu_replay_held). A frame may run several steps,
    so GameTime can pass fork_at before the visit; the seek sets it to fork_at - 1 (R6) whatever the
    host reached, as any backward seek does, so every armed dump's GameTime comes again. No state of
-   the hold survives the seek (THE SEEK's invariant). */
+   the hold survives the seek (THE SEEK's invariant). A request already waiting (the trigger's or
+   the HUD's seek or takeover) is kept, in place of the boundary's: it is the hold's seek, and the
+   frame visit arms the boundary's again if it is refused. */
 static void boundary_wait(void)
 {
     s_hold = 1;
+    if (s_seek.pending && !s_seek.boundary) return;
     memset(&s_seek, 0, sizeof s_seek);
     s_seek.pending = 1;
     s_seek.mode = SK_SEEK;
@@ -9067,10 +9090,12 @@ static void viewer_frame(void)
     E_MinimapFog();
 }
 
-/* The span is the chain's (F1): a fork's playing seeks and clamps within its own chain. The
-   root's first GameTime stays the summary's (span_read), and a file whose summary could not be
-   read keeps no span; for the original the last is the summary's too, both the first RB_END's.
-   Set when the chain is chosen (first_iteration) and when a switch changes it (tl_switch). */
+/* The span is the chain's: a fork's playing seeks and clamps within its own chain. The root's
+   first GameTime stays the summary's (span_read), and a file whose summary could not be read
+   keeps no span. For the original nothing changes: the scan's last is its last stream block's,
+   and the summary's is its end block's RT_LAST, the same GameTime because the writer's finish()
+   flushes the stream before it writes the end block (tagpu_recwriter.c). Set when the chain is
+   chosen (first_iteration) and when a switch changes it (tl_switch). */
 static void span_chain(void)
 {
     if (s_span.ok) {
@@ -9299,6 +9324,7 @@ static void frame_visit(void)
     unsigned now;
     Lv L;
     const RecWorld* W;
+    s_in_play = 1;
     trigger_read();
     rw_visit();             /* the rewind verb asked since the last visit (THE REWIND'S VERBS) */
     fork_poll();            /* the HUD's fork requests that have finished */
@@ -9634,7 +9660,8 @@ void tagpu_replay_level_end(void)
     int stale = s_opt.stale;
     slice_disarm();
     pace_level_end();
-    rw_dispose();
+    s_in_play = 0;
+    rw_dispose();                       /* the rewind's queued verb with it */
     if (options_restore(ta) && stale) E_SaveSettings();     /* THE PLAYER'S SETTINGS */
     /* both cases log `replay: <name> at its level's end, GameTime <t>`, the line tacli's
        `replay seek` takes as the end of the level a playback was on */
@@ -9672,10 +9699,12 @@ void tagpu_replay_level_end(void)
 }
 
 /* ---- THE HUD'S RECORDER CALLS (tagpu_replay.h) -----------------------------------------------
-   Every call is the game thread's. A HUD click comes from the wndproc or the shield's mouse path,
-   both on that thread, so a call that changes anything queues it and the frame visit runs it,
-   between two steps (THE SEEK, THE REWIND'S VERBS, the file worker's tickets); the plan only
-   reads, and answers at once. */
+   Every call is the game thread's, between two sim steps, never inside one: a HUD click comes
+   from the wndproc or the shield's mouse path, the trigger from the frame visit. A call that
+   changes anything queues it and the frame visit runs it (THE SEEK, THE REWIND'S VERBS, the file
+   worker's tickets). The plan answers at once, committing nothing, but it reads the file: its
+   scans read every block header three times (takeover_point's two, the cache's one), so it is
+   called for a click, never per frame. */
 
 /* the cache and its axis are given while a recording is open: a playing past its first step,
    or a live rewind's recording */
@@ -9957,7 +9986,7 @@ int tagpu_replay_watch_timeline(unsigned id)
 
 int tagpu_replay_rewind(int op, unsigned T, const char* dump)
 {
-    if (!ta_main()) return 0;
+    if (!ta_main() || !s_in_play) return 0;
     if (op < TAGPU_REPLAY_RW_OPEN || op > TAGPU_REPLAY_RW_CLOSE) {
         rw_said(0, op, "refused: expected open, seek T, now, fork or close");
         return 0;
