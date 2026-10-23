@@ -304,10 +304,10 @@ own, half up, and added to the whole-pixel baseline. MEASURED 2026-10-23 in Chro
 1, Oswald 500 at 9.45 px, offsets stepped by sixteenths and eighths of a pixel: an origin at 0.125
 drew as 0.25, at 0.375 as 0.5 and at 0.875 on the next pixel, the same for a shadow's x offset; a
 shadow's y offset of 0.375 or −0.5 drew on the text's own rows and one of 0.5 or −0.625 a row off,
-for a text box whose top was on a whole pixel and for one 0.3 past it alike. The game drew a
-copy's y fraction through the atlas's filter instead, which spread the outline of the lane labels
-over the rows above and below their caps (at 1920 × 1080 and HUD 100 a cap's top row differed on
-every label).
+for a text box whose top was on a whole pixel and for one 0.3 past it alike. A copy whose y
+fraction is drawn through the atlas's filter instead spreads the outline over the rows above and
+below the caps, which a small style such as the lane labels' (9.45 px at 1920 × 1080 and HUD 100)
+shows as a lighter or darker cap row.
 
 **One residual, MEASURED 2026-10-08.** A sweep of Chrome's rounded metrics (canvas
 `measureText`'s `fontBoundingBoxAscent` and `fontBoundingBoxDescent`) over 1 to 60 px in 1/64
