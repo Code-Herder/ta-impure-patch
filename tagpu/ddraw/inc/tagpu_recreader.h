@@ -243,6 +243,17 @@ int recr_summary(const char* path, RecSummary* s, char* why, unsigned cap);
    our recordings in a format it does not (its magic, header block and format entry read), -1
    anything else, a file it cannot open or read among them. */
 int recr_format_of(const char* path);
+/* THE ROOT KEY: what tells one recording from another at the same name for the whole life of the
+   file, as its size does not. It is the root segment's RB_HEADER block, the file's first, right
+   after REC_MAGIC, whose bytes nothing rewrites: a fork, a touch and a deletion's timeline table
+   are written after the last complete block (file_append, recr_manage), which a playable root
+   segment's header always precedes, and a compaction or an export copies the root header first
+   and unchanged (file_compact: copy_block, needed[0]). Its RT_WALLCLOCK, the start to 100 ns, makes
+   it one recording's. key[0] is the block's crc_body, key[1] its crc_head. Read through `f` from
+   byte 0, which moves its file pointer, so any handle with read access serves, an exclusive one
+   included. 1 read; 0 the file does not begin with a whole header block (not a recording, or one
+   cut before its first block's header ends), the key zero; -1 the file could not be read. */
+int recr_root_key(void* f, unsigned key[2]);
 /* The start `path`'s header records (RT_WALLCLOCK), as a FILETIME in UTC, for the prune's order:
    1 read, from a recording of any format whose header carries the entry as this build writes
    it; 0 read without one: a file that is not one of our recordings (its first 8 bytes are not
