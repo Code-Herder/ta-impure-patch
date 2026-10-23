@@ -905,6 +905,63 @@ def cover_ask(w, log, name):
         rf"cover: .*{name}.*(refused|could not|NOT written)", f"cover {name}")
 
 
+HUD_ROW_RX = re.compile(r"(\d+):(\d+)@(\d+)\.\.(\d+)/([LD])/c(\d+)(\*?)$")
+HUD_STATE_RX = {
+    "timelines": re.compile(r"replay: (.+?): hud state timelines (.*); axis (\d+)\.\.(\d+); span "
+                            r"(\d+)\.\.(\d+); watched (\d+)\s*$"),
+    "rewind": re.compile(r"replay: (.+?): hud state rewind (\w+) available ([01]) span "
+                         r"(\d+)\.\.(\d+) G (\d+) T (\d+)\s*$"),
+    "result": re.compile(r"replay: (.+?): hud state result (\d+) (\w+) op (-?\d+) "
+                         r"(ok|refused): (.*?)\s*$"),
+}
+
+
+def hud_state_parse(lines):
+    """The three lines of the trigger's `hud state` (tagpu_replay.c, the trigger) as a dict, or
+    None when one is missing: `name`; `timelines`, a row dict each (id, parent, fork_at, last,
+    live, controlled, on_chain), [] for `none`; `axis` and `span` as (first, last); `watched`;
+    `rewind` (state, available, span, G, T); `result` (serial, kind, op, ok, why). The last of
+    each line counts."""
+    got = {}
+    for ln in lines:
+        for key, rx in HUD_STATE_RX.items():
+            m = rx.search(ln)
+            if m:
+                got[key] = m
+    if len(got) != len(HUD_STATE_RX):
+        return None
+    t, r, q = got["timelines"], got["rewind"], got["result"]
+    rows = []
+    if t[2] != "none":
+        for text in t[2].split(" "):
+            m = HUD_ROW_RX.match(text)
+            if not m:
+                return None
+            rows.append({"id": int(m[1]), "parent": int(m[2]), "fork_at": int(m[3]),
+                         "last": int(m[4]), "live": m[5] == "L", "controlled": int(m[6]),
+                         "on_chain": m[7] == "*"})
+    return {"name": t[1], "timelines": rows, "axis": (int(t[3]), int(t[4])),
+            "span": (int(t[5]), int(t[6])), "watched": int(t[7]),
+            "rewind": {"state": r[2], "available": r[3] == "1", "span": (int(r[4]), int(r[5])),
+                       "G": int(r[6]), "T": int(r[7])},
+            "result": {"serial": int(q[2]), "kind": q[3], "op": int(q[4]), "ok": q[5] == "ok",
+                       "why": q[6]}}
+
+
+def hud_state(w, log):
+    """What the HUD's recorder calls answer now (tagpu_replay.h, THE HUD'S RECORDER CALLS),
+    through the trigger's `hud state`: hud_state_parse's dict. The result line is the last of the
+    three the frame visit logs."""
+    n = len(log.lines)
+    w.trigger("hud state")
+    if not log.wait(r"hud state result ", ACK_S, n):
+        raise CouldNotRun(f"hud state: no answer in {ACK_S} s")
+    got = hud_state_parse(log.lines[n:])
+    if got is None:
+        raise Failed(f"hud state: lines not understood: {log.lines[n:]}")
+    return got
+
+
 def wait_dumps(log, names, running=False):
     """Every named dump taken, or the first that will not be: on a level that runs toward them
     (`running`), bounded by a stall alone; else already taken, each line a frame's answer."""
@@ -2021,6 +2078,92 @@ def forks_steps(w, fx, out, results):
 
     plays = []
 
+    def hud_route(log, tl):
+        """The HUD's recorder calls on the playing of timeline `tl` (tagpu_replay.h, THE HUD'S
+        RECORDER CALLS): `hud state` against the file the game reads, then the HUD's fork route --
+        the playing timeline's deletion refused as in use, an export of timeline 4 done, and the
+        two outcomes in turn."""
+        game = w.gamedir / "replays" / "forks.imprec"
+        copy, = copies("hud state", game)
+        segs, stop = tarec.file_segments(copy)
+        if stop:
+            raise Failed(f"forks: hud state: the file: {stop}")
+        st = hud_state(w, log)
+        want = [(s["id"], s["parent"], s["fork_at"], s["last"] or 0, s["state"] == 1)
+                for s in segs]
+        rows = st["timelines"]
+        got = [(r["id"], r["parent"], r["fork_at"], r["last"], r["live"]) for r in rows]
+        if got != want:
+            raise Failed(f"forks: hud state timelines {got}, the file's {want}")
+        # a fork's header names the seat it was played as: the takeover's player
+        seats = {r["id"]: r["controlled"] for r in rows if r["id"]}
+        if any(c != P for c in seats.values()):
+            raise Failed(f"forks: hud state: the forks' controlled seats {seats}, not {P}")
+        start = segs[0]["header"]["start"]
+        last = max(s["last"] for s in segs if s["state"] == 1 and s["last"] is not None)
+        if st["axis"] != (start, last):
+            raise Failed(f"forks: hud state axis {st['axis']}, the file's ({start}, {last})")
+        chain = [s["id"] for s in tarec.chain(segs, tl)]
+        played = next(s for s in segs if s["id"] == tl)
+        if st["span"] != (start, played["last"]):
+            raise Failed(f"forks: hud state span {st['span']}, timeline {tl}'s chain "
+                         f"({start}, {played['last']})")
+        if st["watched"] != tl or [r["id"] for r in rows if r["on_chain"]] != chain:
+            raise Failed(f"forks: hud state watches {st['watched']} on "
+                         f"{[r['id'] for r in rows if r['on_chain']]}, not {tl} on {chain}")
+        # the in-game prediction is the plan's (tagpu_replay_takeover_plan), against the file's
+        T = played["last"]
+        R = tarec.refresh_at(str(copy), tl, T)
+        evict = tarec.fork_prediction(segs, tl, R)
+        want = "fork would delete " + ("no timeline" if evict is None else f"timeline {evict}")
+        n = len(log.lines)
+        w.trigger(f"takeover {P} at {T} dry-run")
+        said = log.wait(r"replay: .*: (fork would delete (no timeline|timeline \d+)|fork "
+                        r"prediction refused: |takeover refused: )", ACK_S, n)
+        rounded = R == T or log.wait(rf"a takeover asked for at GameTime {T} takes over at {R}, ",
+                                     0, n)
+        if not said or want not in said or not rounded:
+            raise Failed(f"forks: the in-game prediction at {T}: "
+                         f"{said.strip() if said else 'no answer'}; the file's: {want} from {R}")
+        # a refused seek's outcome, the HUD's toast: GameTime 0 is outside every recording
+        n = len(log.lines)
+        w.trigger("seek 0")
+        if not log.wait(r"replay: .*: seek to 0 refused: ", ACK_S, n):
+            raise Failed("forks: a seek to GameTime 0 was not refused")
+        sought = hud_state(w, log)["result"]
+        if (sought["kind"], sought["ok"]) != ("seek", False) or \
+                sought["serial"] != st["result"]["serial"] + 1:
+            raise Failed(f"forks: hud state result {sought} after a refused seek, from serial "
+                         f"{st['result']['serial']}")
+        n = len(log.lines)
+        w.trigger(f"hud fork delete {tl}")
+        if not log.wait(rf"the HUD's fork request \d+ refused: timeline {tl} is in use", ACK_S, n) \
+                or not log.wait(rf"replay: forks .*: refused: timeline {tl} is in use", ACK_S, n):
+            raise Failed(f"forks: the HUD's deletion of the playing timeline {tl} was not refused "
+                         f"as in use")
+        n = len(log.lines)
+        w.trigger('hud fork export 4 "hudexport4"')
+        done = log.wait(r"the HUD's fork request (?:\d+ done|\d+ refused|refused|\d+):", 180, n)
+        if not done or " done: " not in done:
+            raise Failed(f"forks: the HUD's export: {done.strip() if done else 'no outcome'}")
+        if not log.wait(r"replay: forks .*: done: .* \[request=-\]", ACK_S, n):
+            raise Failed("forks: the HUD's export: no line from the file worker")
+        exported = w.gamedir / "replays" / "hudexport4.imprec"
+        ids = [s["id"] for s in check_file(exported, "the HUD's export")]
+        if ids != [0, 4]:
+            raise Failed(f"forks: the HUD's export holds {ids}, not the chain [0, 4]")
+        # the later steps count the replays folder: check_file has copied it
+        exported.unlink()
+        again = hud_state(w, log)["result"]
+        if (again["kind"], again["op"], again["ok"]) != ("fork", 2, True) or \
+                again["serial"] != sought["serial"] + 2:
+            raise Failed(f"forks: hud state result {again} after the HUD's refused deletion and "
+                         f"its export, from serial {sought['serial']}")
+        results.add(("forks: the HUD's recorder calls", PASS,
+                     f"timelines {got}, axis {st['axis']}, chain {chain}; {want} at {T}; seek 0 "
+                     f"refused; delete {tl} refused in use, export 4 done; serial "
+                     f"{st['result']['serial']} -> {again['serial']}"))
+
     def command(action, tid, export=None, expect=True):
         say(f"forks: {action} {tid}" + (f" to {export}" if export else ""))
         rec = w.gamedir / "replays" / "forks.imprec"
@@ -2063,6 +2206,7 @@ def forks_steps(w, fx, out, results):
     if T5 != fork2 + 1:
         raise Failed(f"forks: K5 asked for at {fork2 + 10} did not start at {fork2 + 1}")
     log = start_play(5, T5 + 1, "playing 5")
+    hud_route(log, 5)
     # Timeline IDs are local to their file: a playing protects only that recording.
     other = w.gamedir / "replays" / "other.imprec"
     shutil.copy2(source, other)

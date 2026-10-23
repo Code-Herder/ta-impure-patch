@@ -233,6 +233,9 @@ int tagpu_rec_fork_arm(RecFork* f);
    0 pending, 1 complete, -1 failed. Suspension retains the unpublished step's events and all
    capture baselines. Resume compares every feature row before the next iteration is published. */
 int tagpu_rec_rewind_open(unsigned* timeline, char* why, unsigned whycap);
+/* What tagpu_rec_rewind_open would refuse, without its flush: 1 while a healthy skirmish
+   recording is being written and not suspended. Game thread. */
+int tagpu_rec_rewind_ready(void);
 int tagpu_rec_rewind_flush(char* path, unsigned cap);
 int tagpu_rec_suspend(int on);
 

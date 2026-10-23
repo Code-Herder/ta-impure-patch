@@ -305,8 +305,27 @@ def run(t, w, fx, out):
             until(601)
             log.read()
             start = len(log.lines)
+            # the HUD's rewind calls (tagpu_replay.h, LIVE REWIND) as the trigger reaches them: a
+            # held live recorded skirmish can open one, the open's state and outcome, and a
+            # refused verb's outcome, the HUD's toast
+            idle = t.hud_state(w, log)["rewind"]
+            check("hud state idle", idle["state"] == "idle" and idle["available"], f"{idle}")
             opened = command("open", dump="open")
             G0 = opened["dump_at"]
+            st = t.hud_state(w, log)
+            check("hud state open", st["rewind"]["state"] == "open" and st["rewind"]["G"] == G0 and
+                  st["result"]["kind"] == "rewind" and st["result"]["op"] == 0 and
+                  st["result"]["ok"] and st["result"]["why"].startswith("opened at GameTime "),
+                  f"{st['rewind']}; {st['result']}")
+            n = len(log.lines)
+            # GameTime 0 is outside every recording: the span's check refuses it whatever the
+            # recording's start
+            w.trigger("rewind seek 0")
+            refused = log.wait(r"rewind: seek refused: iteration 0 is outside ", t.ACK_S, n)
+            got = t.hud_state(w, log)["result"]
+            check("hud state refused", bool(refused) and got["kind"] == "rewind" and
+                  got["op"] == 1 and not got["ok"] and got["serial"] == st["result"]["serial"] + 1,
+                  f"{refused.strip() if refused else 'no refusal line'}; {got}")
             t.arm_dump(w, log, "a", G0 + 30)
             pause_probe("open pause guard")
             # Do the objective setup under the existing pause: command latency must not
@@ -413,6 +432,31 @@ def run(t, w, fx, out):
             w.collect(q)
             w.stop()
             compare("fresh seek", "compare-dumps", rec, live / "dump-r.bin", q / "dump-q.bin")
+
+            # Q1: a fork's playing seeks within its own chain, past the original's last (F1)
+            q1 = out / "Q1"
+            T = G2 + 300
+            if not segs[1]["last"] or not G2 < T <= segs[1]["last"]:
+                raise t.CouldNotRun(f"rewind Q1: GameTime {T} is not past {G2} in the fork, which "
+                                    f"ends at {segs[1]['last']}")
+            w.place(fix, fx["dll"])
+            log = t.Log(w)
+            rc, text = t.tacli("replay", "play", w.name, rec, "--timeline", 1, "--defaults",
+                               "--restart", "--keep-dll", timeout=t.LAUNCH_TIMEOUT)
+            if rc:
+                raise t.CouldNotRun(text)
+            log.read()
+            start = len(log.lines)
+            w.trigger(f"hud seek {T}")
+            got = log.wait(r"replay: .*: at GameTime \d+, sought from|"
+                           r"replay: .*seek to \d+ (from the HUD )?refused", t.ACK_S, start)
+            check("fork span", bool(got) and f"at GameTime {T}, sought from" in got,
+                  f"asked {T}, past the original's last {G2}: "
+                  f"{got.strip() if got else 'no answer'}")
+            if fx["cover"]:
+                t.cover_ask(w, log, "rewind-Q1")
+            w.collect(q1)
+            w.stop()
 
             p = out / "P"
             playback = {**fx, "viewed": header["options"]["viewed"]}

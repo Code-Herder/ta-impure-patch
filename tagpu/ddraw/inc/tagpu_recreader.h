@@ -260,6 +260,11 @@ typedef struct RecTimeline {
     unsigned first, last;              /* its first and last complete iteration; 0, 0 for none      */
     unsigned end_reason;               /* RT_END_REASON of its end block; 0 when it has none        */
     unsigned difficulty, has_ai;       /* its RT_OPTIONS difficulty; an RT_PLAYER of controller 2   */
+    unsigned controlled;               /* its RT_OPTIONS controlled player (RecHeader.controlled),
+                                          main+0x2A42 when the recorder wrote the header: in a
+                                          takeover's fork the seat it was played as, which
+                                          tk_live stores before the fork's first capture point
+                                          [INFERRED from that order]                              */
     unsigned long long header_off;     /* its RB_HEADER's byte                                      */
     unsigned long long first_off;      /* the block after its header                                */
     unsigned long long end_off;        /* the byte after its last complete block                    */
@@ -289,6 +294,9 @@ int recr_timelines(RecReader* r, RecTimeline* out, unsigned cap, char* why, unsi
 int recr_timeline(RecReader* r, unsigned id, char* why, unsigned cap);
 /* the chosen timeline */
 const RecTimeline* recr_selected(const RecReader* r);
+/* The chain that plays, root first: its timelines' ids, at most `cap` into `ids`; their count.
+   It reads only the reader's own record of the chain, never the file. */
+unsigned recr_chain_ids(const RecReader* r, unsigned* ids, unsigned cap);
 /* 1 when the segment the world was last read from carries a multiplayer roster: a multiplayer
    file's own segment, never a takeover's timeline, which a skirmish level records */
 int recr_segment_mp(const RecReader* r);

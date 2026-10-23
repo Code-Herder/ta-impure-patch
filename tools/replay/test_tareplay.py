@@ -3009,6 +3009,50 @@ class RunLock(unittest.TestCase):
         self.assertEqual(b.returncode, 0)
 
 
+class HudState(unittest.TestCase):
+    """tareplay.hud_state_parse: the trigger's three `hud state` lines, as tagpu_replay.c's
+    hud_state_log formats them"""
+
+    def test_rows_and_states(self):
+        lines = [
+            "12:00:01 replay: forks: hud state timelines 0:0@0..5000/L/c1* 1:0@316..760/D/c1 "
+            "2:0@1201..1650/L/c1* 5:2@1202..1650/L/c1*; axis 1..5000; span 1..1650; watched 5\r",
+            "12:00:01 replay: forks: hud state rewind idle available 0 span 0..0 G 0 T 0",
+            "12:00:01 replay: forks: hud state result 7 fork op 2 ok: exported timeline 4",
+        ]
+        got = tareplay.hud_state_parse(lines)
+        self.assertEqual(got["name"], "forks")
+        self.assertEqual([r["id"] for r in got["timelines"]], [0, 1, 2, 5])
+        self.assertEqual(got["timelines"][1], {"id": 1, "parent": 0, "fork_at": 316, "last": 760,
+                                               "live": False, "controlled": 1, "on_chain": False})
+        self.assertEqual([r["id"] for r in got["timelines"] if r["on_chain"]], [0, 2, 5])
+        self.assertEqual((got["axis"], got["span"], got["watched"]), ((1, 5000), (1, 1650), 5))
+        self.assertEqual(got["rewind"], {"state": "idle", "available": False, "span": (0, 0),
+                                         "G": 0, "T": 0})
+        self.assertEqual(got["result"], {"serial": 7, "kind": "fork", "op": 2, "ok": True,
+                                         "why": "exported timeline 4"})
+
+    def test_none_and_refused(self):
+        lines = [
+            "replay: -: hud state timelines none; axis 0..0; span 0..0; watched 0",
+            "replay: -: hud state rewind open available 0 span 1..900 G 900 T 0",
+            "replay: -: hud state result 3 rewind op -1 refused: refused: no rewind is open",
+        ]
+        got = tareplay.hud_state_parse(lines)
+        self.assertEqual(got["timelines"], [])
+        self.assertEqual(got["result"]["op"], -1)
+        self.assertFalse(got["result"]["ok"])
+        self.assertEqual(got["result"]["why"], "refused: no rewind is open")
+
+    def test_missing_line(self):
+        self.assertIsNone(tareplay.hud_state_parse(
+            ["replay: -: hud state timelines none; axis 0..0; span 0..0; watched 0"]))
+        self.assertIsNone(tareplay.hud_state_parse([
+            "replay: x: hud state timelines 0:0@0..9/Q/c1; axis 0..9; span 0..9; watched 0",
+            "replay: x: hud state rewind idle available 1 span 0..0 G 0 T 0",
+            "replay: x: hud state result 0 none op 0 refused: "]))
+
+
 if __name__ == "__main__":
     import devpy
     devpy.ensure()
