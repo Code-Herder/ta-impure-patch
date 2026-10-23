@@ -1594,6 +1594,9 @@ def index_lines(rd):
     return {ln.split("\t", 1)[0]: ln for ln in lines if "\t" in ln}
 
 
+GONE_LINES = 1100     # more than the browser's ENT_MAX (1024, tagpu_replays.c)
+
+
 def root_key(path):
     """recr_root_key's key as index.dat writes it: the root header block's crc_body and crc_head,
     the block right after the 8-byte magic, at bytes 32..40 (tagpu_recfmt.h, RecBlock)."""
@@ -1702,10 +1705,14 @@ def watch_lane(w, fx, rec, out, T):
                     {tag: edit, tarec.RT_WALLCLOCK: started_at(now - 60 * k)})
     header_copy(rec, rd / f"{stem}.imprec",
                 {tarec.RT_WALLCLOCK: started_at(now - 60 * len(copies))})
-    # THE CONVERSION (tagpu_replays.c): a version-1 index, the only line the recording's, at its
-    # file's size, a favourite with a bookmark at T (name size format start last end fav played
-    # map nseats marks): no mark of an earlier run's copies, and the line keeps both
-    (rd / "index.dat").write_text("IMPURE-REPLAYS-INDEX\t1\n"
+    # THE CONVERSION (tagpu_replays.c): a version-1 index (name size format start last end fav
+    # played map nseats marks) of GONE_LINES lines for files that are not there, then the
+    # recording's, at its file's size, a favourite with a bookmark at T: past the browser's
+    # ENT_MAX, so THE TABLE must hold every line for the recording's to keep both, and the others
+    # go at the first write, their files proven gone. No mark of an earlier run's copies.
+    gone = "".join(f"gone-{i:04d}.imprec\t100\t0\t0\t0\t0\t1\t0\t-\t0\t\n"
+                   for i in range(GONE_LINES))
+    (rd / "index.dat").write_text("IMPURE-REPLAYS-INDEX\t1\n" + gone +
                                   f"{stem}.imprec\t{(rd / f'{stem}.imprec').stat().st_size}"
                                   f"\t0\t0\t0\t0\t1\t0\t-\t0\t{T}\n", newline="\n")
     log = Log(w)
@@ -1715,8 +1722,12 @@ def watch_lane(w, fx, rec, out, T):
     ui_on(w, "MAINMENU.GUI", 120)
     ui(w, "click", "REPLAYS")
     ui_on(w, "REPLAYS.GUI", ACK_S)
+    left = [n for n in index_lines(rd) if n.startswith("gone-")]
+    if left:
+        raise Failed(f"the conversion: {len(left)} lines of files that are not there kept")
     res.append(("W: a version-1 index converted", PASS,
-                keyed_line(rd, f"{stem}.imprec", T, "the conversion")))
+                f"line {GONE_LINES + 1}: " + keyed_line(rd, f"{stem}.imprec", T, "the conversion")
+                + f"; the {GONE_LINES} lines of absent files gone"))
 
     # the refusals: the header's check (watch_refuse), then the Start's own, past the undoable
     # steps (watch_undo); each notice answered, back to the browser
