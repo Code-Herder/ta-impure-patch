@@ -3,7 +3,8 @@
    THIS FILE IS THE RASTERISER AND NOTHING ELSE. Where things go is tagpu_hudlay.c's (the
    mockup's rules, in C); what each op becomes -- quads, glyphs, fills -- is tagpu_huddraw.c's;
    the shaders are that file's GLSL, compiled into inc/spirv/tagpu_huddraw.spv.h. Here: the
-   images, the uploads, one pipeline, and a draw per run of instances that share a texture.
+   images, the uploads, one pipeline state built twice -- against the seam's render pass and
+   against the groups' layer's -- and a draw per run of instances that share a texture.
 
    ONE INSTANCE PER QUAD, a four-vertex strip each, so a frame's buffer is the instances alone:
    96 bytes a quad, HUD_MAXINST of them per frame slot. Each slot has its own range of one
@@ -65,7 +66,9 @@
     X(vkAllocateMemory) X(vkFreeMemory) X(vkMapMemory) X(vkUnmapMemory) \
     X(vkCmdBindPipeline) X(vkCmdBindVertexBuffers) X(vkCmdBindDescriptorSets) \
     X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) \
-    X(vkCmdCopyBufferToImage) X(vkCmdPipelineBarrier) X(vkCmdBlitImage) X(vkCmdClearColorImage)
+    X(vkCmdCopyBufferToImage) X(vkCmdPipelineBarrier) X(vkCmdBlitImage) X(vkCmdClearColorImage) \
+    X(vkCreateRenderPass) X(vkDestroyRenderPass) X(vkCreateFramebuffer) X(vkDestroyFramebuffer) \
+    X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass)
 
 #define DECL(n) static PFN_##n n;
 IFNS(DECL)
@@ -104,6 +107,26 @@ static HUDOPS                s_ops;             /* render thread's; 400 KB, neve
 static HUDBATCH              s_batch[HUD_MAXBATCH];
 static int                   s_nbatch, s_ninst;
 static int                   s_saidDrop, s_saidMiss, s_saidChart;
+
+/* THE GROUPS' LAYER (tagpu_huddraw.c, THE GROUPS): an image a frame slot, cleared and drawn by
+   this pass's own render pass in `prepare` and sampled by the attachment's composites in `record`,
+   both in the slot's command buffer. The seam's fence wait on the slot proves the slot's last use
+   of it done (tagpu_vk_pass.h), so it is replaced, when a frame's regions outgrow it, with nothing
+   in flight naming it. Its descriptor set is the slot's for the pass's life and is re-pointed at
+   each new image, so a set in hand always names the current one. */
+typedef struct {
+    VkImage         img;
+    VkDeviceMemory  mem;
+    VkImageView     view;
+    VkFramebuffer   fb;
+    VkDescriptorSet set;
+    int             w, h;
+} LAYER;
+static VkRenderPass          s_lrp;
+static VkPipeline            s_lpipe;           /* the pipeline again, against s_lrp          */
+static LAYER                 s_layer[TAGPU_VK_SLOTS];
+static HUDLAYREG              s_group[HUD_MAXGRP];
+static int                   s_ngroup, s_nmain, s_layW, s_layH;
 
 static void plog(const TAGPU_VKPASS* d, const char* fmt, ...)
 {
@@ -292,6 +315,196 @@ static void blit_chain(VkCommandBuffer cb, const TEX* t)
                          0, 0, NULL, 0, NULL, 1, &b);
 }
 
+/* one run of instances, its texture bound: the slot's layer for a group's composite */
+static void draw_batch(VkCommandBuffer cb, const HUDBATCH* b, uint32_t slot)
+{
+    VkDescriptorSet set = b->tex == HUD_TEX_LAYER ? s_layer[slot].set
+                        : b->tex == HUD_TEX_ATLAS ? s_atlas.set : b->tex == HUD_TEX_CHART ? s_chart.set
+                        : b->tex >= 0 && b->tex < s_nparts ? s_part[b->tex].set : s_atlas.set;
+    if (!b->count) return;
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_plo, 0, 1, &set, 0, NULL);
+    vkCmdDraw(cb, 4, (uint32_t)b->count, 0, (uint32_t)b->first);
+}
+
+/* ---- the groups' layer ------------------------------------------------------------------------ */
+
+/* One colour attachment in the attachment's own format, so a group blends in the layer as it would
+   have on the attachment. LOAD_OP_CLEAR over the render area, which holds every region; the
+   contents outside it are never sampled. FIRST SCOPE: the slot's earlier frames, whose composites
+   sampled the image -- a write after their reads. SECOND: the composites of this frame's render
+   pass, which read what this one wrote. */
+static int build_layer_pass(const TAGPU_VKPASS* d)
+{
+    VkAttachmentDescription at;
+    VkAttachmentReference ref;
+    VkSubpassDescription sp;
+    VkSubpassDependency dep[2];
+    VkRenderPassCreateInfo rpi = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+    memset(&at, 0, sizeof at);
+    at.format = d->fmt;
+    at.samples = VK_SAMPLE_COUNT_1_BIT;
+    at.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    at.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    at.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    at.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    at.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    at.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    ref.attachment = 0;
+    ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    memset(&sp, 0, sizeof sp);
+    sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp.colorAttachmentCount = 1;
+    sp.pColorAttachments = &ref;
+    memset(dep, 0, sizeof dep);
+    dep[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    dep[0].dstSubpass = 0;
+    dep[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep[1].srcSubpass = 0;
+    dep[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dep[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dep[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    rpi.attachmentCount = 1; rpi.pAttachments = &at;
+    rpi.subpassCount = 1; rpi.pSubpasses = &sp;
+    rpi.dependencyCount = 2; rpi.pDependencies = dep;
+    return vkCreateRenderPass(d->dev, &rpi, NULL, &s_lrp) == VK_SUCCESS;
+}
+
+/* the image, its view and its framebuffer given back; the set stays the slot's */
+static void layer_free(VkDevice dev, LAYER* L)
+{
+    if (L->fb)   vkDestroyFramebuffer(dev, L->fb, NULL);
+    if (L->view) vkDestroyImageView(dev, L->view, NULL);
+    if (L->img)  vkDestroyImage(dev, L->img, NULL);
+    if (L->mem)  vkFreeMemory(dev, L->mem, NULL);
+    L->fb = VK_NULL_HANDLE; L->view = VK_NULL_HANDLE; L->img = VK_NULL_HANDLE; L->mem = VK_NULL_HANDLE;
+    L->w = L->h = 0;
+}
+
+/* The slot's layer at least w x h, grown in steps of 64 pixels so a picker that opens and closes
+   does not rebuild it. Safe to replace here: the caller owns the slot (the seam's fence wait). */
+static int layer_size(const TAGPU_VKPASS* d, LAYER* L, int w, int h)
+{
+    VkImageCreateInfo ici = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+    VkMemoryAllocateInfo mai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+    VkImageViewCreateInfo ivi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+    VkFramebufferCreateInfo fci = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+    VkDescriptorImageInfo ii;
+    VkWriteDescriptorSet wr;
+    VkMemoryRequirements req;
+    int type;
+    if (L->img && L->w >= w && L->h >= h) return 1;
+    w = ((w > L->w ? w : L->w) + 63) / 64 * 64;
+    h = ((h > L->h ? h : L->h) + 63) / 64 * 64;
+    layer_free(d->dev, L);
+    ici.imageType = VK_IMAGE_TYPE_2D;
+    ici.format = d->fmt;
+    ici.extent.width = (uint32_t)w;
+    ici.extent.height = (uint32_t)h;
+    ici.extent.depth = 1;
+    ici.mipLevels = 1;
+    ici.arrayLayers = 1;
+    ici.samples = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vkCreateImage(d->dev, &ici, NULL, &L->img) != VK_SUCCESS) { L->img = VK_NULL_HANDLE; return 0; }
+    vkGetImageMemoryRequirements(d->dev, L->img, &req);
+    if ((type = mem_type(d, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) < 0) { layer_free(d->dev, L); return 0; }
+    mai.allocationSize = req.size;
+    mai.memoryTypeIndex = (uint32_t)type;
+    if (vkAllocateMemory(d->dev, &mai, NULL, &L->mem) != VK_SUCCESS) { L->mem = VK_NULL_HANDLE; layer_free(d->dev, L); return 0; }
+    if (vkBindImageMemory(d->dev, L->img, L->mem, 0) != VK_SUCCESS) { layer_free(d->dev, L); return 0; }
+    ivi.image = L->img;
+    ivi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    ivi.format = d->fmt;
+    ivi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    ivi.subresourceRange.levelCount = 1;
+    ivi.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(d->dev, &ivi, NULL, &L->view) != VK_SUCCESS) { L->view = VK_NULL_HANDLE; layer_free(d->dev, L); return 0; }
+    fci.renderPass = s_lrp;
+    fci.attachmentCount = 1;
+    fci.pAttachments = &L->view;
+    fci.width = (uint32_t)w;
+    fci.height = (uint32_t)h;
+    fci.layers = 1;
+    if (vkCreateFramebuffer(d->dev, &fci, NULL, &L->fb) != VK_SUCCESS) { L->fb = VK_NULL_HANDLE; layer_free(d->dev, L); return 0; }
+    if (!L->set) {
+        VkDescriptorSetAllocateInfo dai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+        dai.descriptorPool = s_dpool;
+        dai.descriptorSetCount = 1;
+        dai.pSetLayouts = &s_dsl;
+        if (vkAllocateDescriptorSets(d->dev, &dai, &L->set) != VK_SUCCESS) { L->set = VK_NULL_HANDLE; layer_free(d->dev, L); return 0; }
+    }
+    /* texel for pixel: the composite samples texel centres, so nearest is exact */
+    memset(&ii, 0, sizeof ii);
+    ii.sampler = s_near;
+    ii.imageView = L->view;
+    ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    memset(&wr, 0, sizeof wr);
+    wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wr.dstSet = L->set;
+    wr.dstBinding = 40;
+    wr.descriptorCount = 1;
+    wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    wr.pImageInfo = &ii;
+    vkUpdateDescriptorSets(d->dev, 1, &wr, 0, NULL);
+    L->w = w; L->h = h;
+    return 1;
+}
+
+/* This frame's groups drawn into the slot's layer, before the render pass: each region cleared and
+   its instances drawn with the attachment's viewport, scissored to it; then the composites' uv,
+   in layer pixels, divided by the image's size. 0 when the layer could not be made. */
+static int layer_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot, uint32_t w, uint32_t h)
+{
+    LAYER* L = &s_layer[slot];
+    HUDINST* in = (HUDINST*)(s_imap + (size_t)slot * IBYTES);
+    VkRenderPassBeginInfo rbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+    VkClearValue clear;
+    VkViewport vp;
+    VkDeviceSize off = (VkDeviceSize)slot * IBYTES;
+    int i, j, k;
+    if (!layer_size(d, L, s_layW > 0 ? s_layW : 1, s_layH > 0 ? s_layH : 1)) return 0;
+    for (i = 0; i < s_nmain; i++) {
+        const HUDBATCH* b = &s_batch[i];
+        if (b->tex != HUD_TEX_LAYER) continue;
+        for (j = b->first; j < b->first + b->count; j++) {
+            in[j].uv[0] /= (float)L->w; in[j].uv[2] /= (float)L->w;
+            in[j].uv[1] /= (float)L->h; in[j].uv[3] /= (float)L->h;
+        }
+    }
+    memset(&clear, 0, sizeof clear);
+    rbi.renderPass = s_lrp;
+    rbi.framebuffer = L->fb;
+    rbi.renderArea.extent.width = (uint32_t)(s_layW > 0 ? s_layW : 1);
+    rbi.renderArea.extent.height = (uint32_t)(s_layH > 0 ? s_layH : 1);
+    rbi.clearValueCount = 1;
+    rbi.pClearValues = &clear;
+    vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+    vp.x = 0.0f; vp.y = 0.0f;
+    vp.width = (float)w; vp.height = (float)h;
+    vp.minDepth = 0.0f; vp.maxDepth = 1.0f;
+    vkCmdSetViewport(cb, 0, 1, &vp);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_lpipe);
+    vkCmdBindVertexBuffers(cb, 0, 1, &s_ibuf, &off);
+    for (k = 0; k < s_ngroup; k++) {
+        const HUDLAYREG* g = &s_group[k];
+        VkRect2D sc;
+        if (!g->nb) continue;
+        sc.offset.x = g->x; sc.offset.y = g->y;
+        sc.extent.width = (uint32_t)g->w; sc.extent.height = (uint32_t)g->h;
+        vkCmdSetScissor(cb, 0, 1, &sc);
+        for (i = g->b0; i < g->b0 + g->nb; i++) draw_batch(cb, &s_batch[i], slot);
+    }
+    vkCmdEndRenderPass(cb);
+    return 1;
+}
+
 /* ---- the build ------------------------------------------------------------------------------- */
 
 static int build_pipeline(const TAGPU_VKPASS* d)
@@ -388,6 +601,12 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     gp.subpass = 0;
     r = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipe);
     if (r != VK_SUCCESS) { plog(d, "hud: vkCreateGraphicsPipelines refused it (%d)", (int)r); goto out; }
+    /* the same state against the layer's pass, which has no depth attachment: the depth state is
+       then ignored */
+    if (!build_layer_pass(d)) { plog(d, "hud: the layer's render pass was refused"); goto out; }
+    gp.renderPass = s_lrp;
+    r = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_lpipe);
+    if (r != VK_SUCCESS) { plog(d, "hud: vkCreateGraphicsPipelines refused the layer's (%d)", (int)r); goto out; }
     ok = 1;
 out:
     if (vs) vkDestroyShaderModule(d->dev, vs, NULL);
@@ -424,8 +643,10 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art)
     if (!format_ok(d, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT
                                               | VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT)
         || !format_ok(d, VK_FORMAT_R8_UNORM, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)
-        || !format_ok(d, VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
-        plog(d, "hud: this device cannot filter or blit RGBA8 / R8, or sample RGBA32F - the pass stays down");
+        || !format_ok(d, VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)
+        || !format_ok(d, d->fmt, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+        plog(d, "hud: this device cannot filter or blit RGBA8 / R8, sample RGBA32F, or blend into and "
+                "sample its attachment's format - the pass stays down");
         return 0;
     }
     s_nparts = tagpu_hudlay_nparts(art->lay);
@@ -447,8 +668,8 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art)
 
     memset(&ps, 0, sizeof ps);
     ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps.descriptorCount = (uint32_t)s_nparts + 2;
-    dpi.maxSets = (uint32_t)s_nparts + 2;
+    ps.descriptorCount = (uint32_t)s_nparts + 2 + TAGPU_VK_SLOTS;
+    dpi.maxSets = (uint32_t)s_nparts + 2 + TAGPU_VK_SLOTS;
     dpi.poolSizeCount = 1;
     dpi.pPoolSizes = &ps;
     if (vkCreateDescriptorPool(d->dev, &dpi, NULL, &s_dpool) != VK_SUCCESS) return 0;
@@ -684,7 +905,7 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     float px;
     int dropped = 0, r, due, ox, oy;
 
-    s_ninst = s_nbatch = 0;
+    s_ninst = s_nbatch = s_nmain = s_ngroup = 0;
     tagpu_hudstate_drawn(NULL);
     if (s_state == ST_REFUSED || !tagpu_hudstate_frame(d->frame, &st, &px, &ox, &oy)) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS || w == 0 || h == 0 || !(px > 0)) return 0;
@@ -714,7 +935,8 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         return 0;
     }
     s_ninst = tagpu_huddraw_build(art, &s_ops, px, ox, oy, (int)w, (int)h, (HUDINST*)(s_imap + (size_t)slot * IBYTES),
-                                  HUD_MAXINST, s_batch, HUD_MAXBATCH, &s_nbatch, &dropped);
+                                  HUD_MAXINST, s_batch, HUD_MAXBATCH, &s_nbatch, &s_nmain,
+                                  s_group, &s_ngroup, &s_layW, &s_layH, &dropped);
     if ((dropped || s_ops.overflow) && !s_saidDrop) {
         s_saidDrop = 1;
         plog(d, "hud: %d glyphs did not fit the atlas this frame%s (said once)", dropped,
@@ -760,6 +982,15 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         tagpu_huddraw_chart(&gen);
         if (gen != s_cgen) hide_mode((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_ninst, HUDM_CHART);
     }
+    /* a frame with a group has its composites, which bind the layer: it is made whenever there is
+       one, even if every region is empty */
+    if (s_ngroup > 0 && !layer_record(d, cb, slot, w, h)) {
+        plog(d, "hud: the groups' layer (%dx%d) could not be made - the pass stops drawing", s_layW, s_layH);
+        s_state = ST_REFUSED;
+        tagpu_hudstate_refuse("its groups' layer could not be made");
+        s_ninst = 0;
+        return 0;
+    }
     /* what this frame draws is what a click is tested against */
     if (s_ninst > 0) tagpu_hudstate_drawn(&s_ops);
     return s_ninst > 0;
@@ -796,14 +1027,7 @@ void tagpu_vk_hud_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     vkCmdSetScissor(cb, 0, 1, &sc);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipe);
     vkCmdBindVertexBuffers(cb, 0, 1, &s_ibuf, &off);
-    for (i = 0; i < s_nbatch; i++) {
-        const HUDBATCH* b = &s_batch[i];
-        const TEX* t = b->tex == HUD_TEX_ATLAS ? &s_atlas : b->tex == HUD_TEX_CHART ? &s_chart
-                     : b->tex >= 0 && b->tex < s_nparts ? &s_part[b->tex] : &s_atlas;
-        if (!b->count) continue;
-        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_plo, 0, 1, &t->set, 0, NULL);
-        vkCmdDraw(cb, 4, (uint32_t)b->count, 0, (uint32_t)b->first);
-    }
+    for (i = 0; i < s_nmain; i++) draw_batch(cb, &s_batch[i], slot);
     s_ninst = 0;
 }
 
@@ -815,6 +1039,12 @@ void tagpu_vk_hud_down(const TAGPU_VKPASS* d)
     for (i = 0; i < TAGPU_VK_SLOTS; i++)
         if (s_stage[i].buf) tagpu_vk_stage_drop(d, &s_stage[i]);
     if (s_pipe)  { vkDestroyPipeline(dev, s_pipe, NULL); s_pipe = VK_NULL_HANDLE; }
+    if (s_lpipe) { vkDestroyPipeline(dev, s_lpipe, NULL); s_lpipe = VK_NULL_HANDLE; }
+    for (i = 0; i < TAGPU_VK_SLOTS; i++) {
+        layer_free(dev, &s_layer[i]);
+        s_layer[i].set = VK_NULL_HANDLE;    /* it goes back with the pool */
+    }
+    if (s_lrp)   { vkDestroyRenderPass(dev, s_lrp, NULL); s_lrp = VK_NULL_HANDLE; }
     if (s_plo)   { vkDestroyPipelineLayout(dev, s_plo, NULL); s_plo = VK_NULL_HANDLE; }
     for (i = 0; i < MAXPART; i++) free_tex(dev, &s_part[i]);
     free_tex(dev, &s_atlas);
@@ -833,7 +1063,7 @@ void tagpu_vk_hud_down(const TAGPU_VKPASS* d)
     s_agen = 0;
     s_cgen = 0;
     s_cclear = 0;
-    s_ninst = s_nbatch = 0;
+    s_ninst = s_nbatch = s_nmain = s_ngroup = 0;
     /* UNBUILT, not REFUSED: a teardown or a resize must let the pass come back */
     s_state = ST_UNBUILT;
 }

@@ -1781,8 +1781,11 @@ def watch_takeover(w, log, rec, stem, T, out, cover):
     exactly the players who still have a unit -- the rule the takeover refuses by -- and the row of
     the seat the recording's human commanded takes over at R0 itself, with no rounding. The fork
     plays 300 ticks and the game ends; offline its first iteration is R0 and equals its parent's
-    chain there (compare-fork). The coverage is asked for on the fork's level, so it holds the
-    HUD's takeover. Returns its checks."""
+    chain there (compare-fork). First, past the fixture's end scenario (replay-end.json: every
+    unit gone but one AI's), the picker at a refresh RD must dim exactly the seats with no unit,
+    some of them, and the takeover itself must refuse one of those at RD by the same word. The
+    coverage is asked for on the fork's level, so it holds the HUD's takeover. Returns its
+    checks."""
     res = []
     seg0 = tarec.file_segments(rec)[0][0]
     first = seg0["first"]
@@ -1799,6 +1802,7 @@ def watch_takeover(w, log, rec, stem, T, out, cover):
         until_fact(w, lambda: peek(w, PAUSE_WORD) & 1, "the HUD's pause")
     except CouldNotRun as e:
         raise Failed(str(e))
+    res.append(defeated_seats(w, log, rec, stem, seg0))
     n = len(log.lines)
     w.trigger(f"hud seek {X}")
     got = log.wait(rf"replay: {re.escape(stem)}: at GameTime {X}, sought from", ACK_S, n)
@@ -1887,6 +1891,48 @@ def watch_takeover(w, log, rec, stem, T, out, cover):
         raise Failed(f"the picker's fork {tl}: compare-fork: {last(o)}")
     res.append(("W: the picker's fork", PASS, f"timeline {tl} from R0 {R0}; compare-fork: {last(o)}"))
     return res
+
+
+def defeated_seats(w, log, rec, stem, seg0):
+    """W's picker where seats are out of the game: paused, the playback sought 5 past the last
+    refresh RD of the recording, which the end scenario has left with one AI's unit; Take over
+    snaps back to RD and its clickable rows are exactly the seats with a unit, some seats having
+    none; then the trigger's takeover of the first seat with none, at RD itself, is refused for
+    having no unit there, the word tk_bound reads (+0x144) and the column's `out` with it. Leaves
+    the playback paused with the picker closed. Returns its check."""
+    try:
+        RD = tarec.refresh_at(str(rec), 0, seg0["last"] - 30)
+    except tarec.Unreadable as e:
+        raise CouldNotRun(f"the defeated seats: the refresh at or before {seg0['last'] - 30}: {e}")
+    n = len(log.lines)
+    w.trigger(f"hud seek {RD + 5}")
+    if not log.wait(rf"replay: {re.escape(stem)}: at GameTime {RD + 5}, sought from", ACK_S, n):
+        raise CouldNotRun(f"the HUD's seek to {RD + 5}: no line in {ACK_S} s")
+    hud(w, "click", "takeover")
+    d = until_pick(w, 2, "Take over past the end scenario")
+    st, keys = d["state"], {h["key"] for h in d["hits"]["at"]}
+    if st["pick"]["R"] != RD:
+        raise Failed(f"Take over at {RD + 4}: the picker starts at {st['pick']['R']}, not {RD}")
+    units = [p["units"] for p in st["seats"]]
+    wrong = [k for k, u in enumerate(units) if (f"takeas:{k}" in keys) != (u != 0)]
+    if wrong:
+        raise Failed(f"the picker's rows {wrong} at {RD}: clickable is not 'has a unit' (units {units})")
+    out = [k for k, u in enumerate(units) if u == 0]
+    if not out or len(out) == len(units):
+        raise CouldNotRun(f"the defeated seats: at {RD} the units are {units}, not some seats out")
+    hud(w, "click", "takeover")
+    until_pick(w, 0, "Take over closed past the end scenario")
+    P = tarec.header_only(rec)["players"][out[0]]["index"]
+    n = len(log.lines)
+    w.trigger(f"takeover {P} at {RD}")
+    got = log.wait(rf"replay: {re.escape(stem)}: (takeover (at \d+ )?refused:|taken over at)", ACK_S, n)
+    want = f"player {P} has no unit at GameTime {RD}"
+    if not got or want not in got:
+        raise Failed(f"the takeover of row {out[0]}, out at {RD}: "
+                     f"{got.strip() if got else f'no line in {ACK_S} s'}; expected '{want}'")
+    return ("W: the picker dims the seats the takeover refuses", PASS,
+            f"at RD {RD}: rows {out} out (units {units}), not clickable; the takeover of player {P} "
+            f"refused: {want}")
 
 
 def forks_picker(w, log, T5, P):

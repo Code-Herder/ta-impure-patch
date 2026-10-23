@@ -3,7 +3,8 @@
 /* The replay HUD, drawn by Vulkan. Implementation: tagpu_vk_hud.c; plan:
    research/notes/hud-in-game.md. The two-phase contract of tagpu_vk_fps.h: `prepare` before the
    render pass, `record` inside it, both on the render thread on the command buffer the seam is
-   recording, in one frame; `prepare` returning 0 means nothing to draw. It is recorded after the
+   recording, in one frame; `prepare` returning 0 means nothing to draw. `prepare` records a
+   render pass of its own, the groups' layer (tagpu_vk_hud.c), so it must run outside the seam's. It is recorded after the
    world and before the engine's UI, so the engine's dialogs and the cursor draw over it. */
 #include "tagpu_vk_pass.h"
 

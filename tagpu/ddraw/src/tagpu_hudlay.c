@@ -36,6 +36,7 @@ typedef struct {
     size_t          errn;
     int             bad;
     unsigned        flags;      /* given to every op: HOPF_DIM inside an out player's row */
+    uint8_t         grp;        /* given to every op: the group it is drawn in, 0 none      */
 } C;
 
 /* ---- reading the layout ---------------------------------------------------------------------- */
@@ -86,6 +87,7 @@ static HUDOP* op(C* c, int kind, R r)
     memset(p, 0, sizeof *p);
     p->kind = (uint8_t)kind;
     p->flags = (uint8_t)c->flags;
+    p->grp = c->grp;
     p->part = -1;
     p->r.x = (float)r.x; p->r.y = (float)r.y; p->r.w = (float)r.w; p->r.h = (float)r.h;
     p->clip.w = -1;
@@ -125,13 +127,12 @@ static HUDOP* art(C* c, const char* part, R b, double opacity)
     p->rgba = 0xFFFFFF00u | (uint32_t)lround(255.0 * (opacity < 0 ? 0 : opacity > 1 ? 1 : opacity));
     return p;
 }
-static void icon_a(C* c, const char* name, R b, double opacity)
+static void icon(C* c, const char* name, R b)
 {
     char n[40];
     snprintf(n, sizeof n, "i_%s", name);
-    art(c, n, b, opacity);
+    art(c, n, b, 1);
 }
-static void icon(C* c, const char* name, R b) { icon_a(c, name, b, 1); }
 /* a control: a new call site extends tagpu_hudlay_max_hot */
 static void hot(C* c, R b, const char* key)
 {
@@ -331,16 +332,17 @@ static void text(C* c, const char* s, R b, const char* style, const PL* sl, uint
     text_runs(c, &r, 1, b, style, sl, dy);
 }
 
-/* The texts made since op `from` at opacity a: those inside a disabled control, which the mockup
-   dims whole (CSS opacity on the control). Each glyph and its outline or shadow copies take a,
-   where CSS fades them as one layer: under a glyph its copies show through at a (1 - a) more. */
-static void texts_at(C* c, int from, double a)
+/* A disabled control's ops, drawn between the two, are one group at opacity a (tagpu_hudlay.h,
+   THE GROUPS): each of them is made at full opacity. The bound HUD_MAXGRP holds by
+   construction, so a group past it is an overflow like an op past HUD_MAXOP. */
+static void group_begin(C* c, double a)
 {
-    int i;
-    for (i = from; i < c->o->n; i++)
-        if (c->o->op[i].kind == HOP_TEXT)
-            c->o->op[i].rgba = 0xFFFFFF00u | (uint32_t)floor(a * 255 + 0.5);
+    if (c->o->ngrp >= HUD_MAXGRP) { c->o->overflow = 1; return; }
+    c->o->grp[c->o->ngrp++] = (float)a;
+    c->grp = (uint8_t)c->o->ngrp;
 }
+static void group_end(C* c) { c->grp = 0; }
+_Static_assert(HUD_MAXGRP <= 255, "a group's number is an op's uint8_t");
 
 /* hud.js k1: rounded, with a thousands separator */
 static void k1(char* o, size_t n, double v)
@@ -444,22 +446,22 @@ static void button(C* c, const BTN* s, const TJV* kind, R b, int on)
 {
     F f = frame(c->l, b.w, b.h, NULL);
     int pressed = on || (c->st->held[0] && !strcmp(c->st->held, s->key));
-    double dy = pressed ? c->l->g.press_shift : 0, a = s->off ? s->off : 1;
-    art(c, str(c, kind, pressed ? "pressed" : "part"), b, a);
+    double dy = pressed ? c->l->g.press_shift : 0;
+    if (s->off) group_begin(c, s->off);
+    art(c, str(c, kind, pressed ? "pressed" : "part"), b, 1);
     if (!s->off) hot(c, b, s->key);
     if (s->icon) {
         PL p = spec(s->icon);
         const char* n = s->icon_name ? s->icon_name
                       : tj_get(s->icon, "playing") && c->st->playing ? str(c, s->icon, "playing") : str(c, s->icon, "name");
         R r = at(place(c, &f, &p), b.x, b.y + dy);
-        icon_a(c, n, r, a);
+        icon(c, n, r);
     }
     if (s->textspec) {
         PL p = spec(s->textspec);
-        int from = c->o->n;
         text(c, s->text, at(place(c, &f, &p), b.x, b.y), str(c, s->textspec, "style"), &p, 0, dy);
-        texts_at(c, from, a);
     }
+    if (s->off) group_end(c);
 }
 
 /* ---- the dock: the transport plate from the side panel's edge, the timeline housing to the
@@ -1358,7 +1360,8 @@ static void picker(C* c)
        first, finds a row over it */
     hot(c, box(x, y, w, h), "picker");
     art(c, str(c, Pk, "part"), box(x, y, w, h), 1);
-    clock_s(t0, sizeof t0, st->pick_t);
+    /* the playhead's own time: the world the takeover starts from is the one on screen */
+    clock_s(t0, sizeof t0, st->t);
     snprintf(s, sizeof s, "Take over at\xC2\xA0%s\xC2\xA0" "as", t0);     /* NO-BREAK SPACEs */
     memset(&p, 0, sizeof p);
     text(c, s, box(x + pad + tj_num(tj_at(tp, 0), 0), y + pad,
@@ -1367,23 +1370,23 @@ static void picker(C* c)
         const HUDSEAT* q = &st->seat[k];
         R rb = box(x + pad, y + pad + th + k * (rh + rg), w - 2 * pad, rh);
         F f = frame(c->l, rb.w, rh, NULL);
-        int gone = q->out, pressed, from;
+        int gone = q->out, pressed;
         snprintf(key, sizeof key, "takeas:%d", k);
         pressed = !gone && c->st->held[0] && !strcmp(c->st->held, key);
         if (!gone) hot(c, rb, key);
-        art(c, str(c, Rw, pressed ? "pressed" : "part"), rb, gone ? off : 1);
+        else group_begin(c, off);
+        art(c, str(c, Rw, pressed ? "pressed" : "part"), rb, 1);
         memset(&p, 0, sizeof p);
         p.pad[0] = p.pad[1] = p.pad[3] = spad;
         p.hasw = 1; p.w = sw; p.ax = 'l';
-        solid(c, at(place(c, &f, &p), rb.x, rb.y), q->colour, gone ? off : 1);
+        solid(c, at(place(c, &f, &p), rb.x, rb.y), q->colour, 1);
         p = spec(Nm);
-        from = c->o->n;
         text(c, q->name, at(place(c, &f, &p), rb.x, rb.y), str(c, Nm, "style"), &p, 0, 0);
         if (gone) {
             p = spec(Nt);
             p.centre = 2;
             text(c, "defeated", at(place(c, &f, &p), rb.x, rb.y), str(c, Nt, "style"), &p, 0, 0);
-            texts_at(c, from, off);
+            group_end(c);
         }
     }
     if (wn) {
@@ -1423,7 +1426,7 @@ int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* e
     C c;
     memset(&c, 0, sizeof c);
     c.l = l; c.L = l->L; c.st = st; c.o = out; c.err = err; c.errn = errn;
-    out->n = out->nrun = out->ntext = out->overflow = 0;
+    out->n = out->nrun = out->ntext = out->overflow = out->ngrp = 0;
     out->first = out->last = 0;
     out->track_x0 = out->track_x1 = 0;
     if (err && errn) err[0] = 0;
@@ -1783,7 +1786,6 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     st->timeline = 1;
     st->replace = 1;
     st->picker = st->pick_down = 1;
-    st->pick_t = 30;
     strcpy(st->held, "takeas:0");
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(l, o, "forks build", err, errn)) goto done;
     /* the lanes, every fork the packet carries: a fork of the original on the chain, a fork of it

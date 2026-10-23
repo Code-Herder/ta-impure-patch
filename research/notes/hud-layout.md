@@ -298,7 +298,8 @@ At those sizes the game's line sits a pixel off the mockup's.
   `fold:0`, `row:4`, and a lane's and its buttons' the lane's (`lane:1`, `delete:1`; the mockup's
   `data-fork`). The game hit-tests these, topmost (last painted) first
   ([The replay HUD in game](hud-in-game.md), *Input*).
-- **A disabled control** is drawn at its `off` opacity, its icon and its text too, and has no
+- **A disabled control** is drawn at its `off` opacity as one layer, its part, icon, stripe and
+  text composited first and the whole faded once, as CSS `opacity` on its element does; it has no
   clickable of its own: the TEAMS chip when the teams are not told apart (one team, or a free-for-all), at
   `split.off` (0.45).
 - **An inset edge** (a resource bar's) is flagged on its ops (`HOPF_EDGE`), so `laycheck` matches
@@ -398,8 +399,8 @@ At those sizes the game's line sits a pixel off the mockup's.
   over button, from the transport plate's left: `pad`, the title `title.h`, a row of `row.h` and
   `row.gap` for each player, the warning when shown, then `pad` again.
 - **The title** reads "Take over at m:ss as", with no-break spaces round the time, inset by
-  `title.pad` in `title.style`. In game the time is the picker's start R (`pick_t`), in the
-  mockup the playhead's.
+  `title.pad` in `title.style`. The time is the playhead's, `t`, in game as in the mockup: the
+  world a takeover starts from is the one on screen.
 - **A row** is the part `row.part` (`row.pressed` while held), keyed `takeas:<i>` with i the
   row's index, as a column row's is. In it, the player's colour as a stripe `stripe.w` wide inset
   by `stripe.pad` from the row's left, top and bottom; the name inset by `row.name.pad`; and for

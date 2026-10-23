@@ -144,9 +144,9 @@ The owner's decisions:
 | `tagpu_menu.c` | the modal test `tagpu_menu_modal`, and Leave's question opened from the DrawGameScreen observer behind its guard | game |
 | `tagpu_shield.c`, `wndproc.c`, `tagpu_input.c` | the mouse paths into `tagpu_hudinput_button` and `tagpu_hudinput_wheel`; the device tokens `ddown:`, `dup:` and `dwheel:` | game |
 | `tagpu_hudlay.c`/`.h` | `hud.js`'s placement and builders in C, over `layout.json` and `kit.json`, the stats window and its chart among them; the text baseline; a part op as quads; the controls as `HOP_HOT` ops | either: a pure function |
-| `tagpu_huddraw.c`/`.h` | the ops as instances; the glyph atlas; the chart's image; the shader pair | render |
+| `tagpu_huddraw.c`/`.h` | the ops as instances; the glyph atlas; the chart's image; the groups' regions and composites; the shader pair | render |
 | `tagpu_hudart.c`/`.h` | the loader: the `HUDPAK` resource, the parts decoded, the faces opened | its own, then immutable |
-| `tagpu_vk_hud.c`/`.h` | the pass: the images, the uploads, one pipeline, a draw per run of instances | render |
+| `tagpu_vk_hud.c`/`.h` | the pass: the images, the uploads, the groups' layer and its render pass, one pipeline state built against each pass, a draw per run of instances | render |
 | `tagpu_json.c`/`.h` | the JSON parser the layout reads its two files with | either |
 | `tagpu_packet.h`, `tagpu_packet_pub.c`, `tagpu_packet.c` | `TAGPU_PK_HUD`, its area `hud_off`/`hud_len`, its fill, and `frame_valid`'s bounds on `nseat` and `nmark`; `TAGPU_PK_HUDSTAT` in `hstat_off`/`hstat_len`, and its bounds; `TAGPU_CMD_HUD` in the command record, and its take | game → render, render → game |
 | `tools/hudpak.py`, `res.rc`, the Makefile | `art/hud/` packed into `inc/tagpu_hudpak.bin` (gitignored), embedded as the `RCDATA` resource `HUDPAK` | build |
@@ -158,6 +158,23 @@ The owner's decisions:
   before `tagpu_vk_gui_record`, after the world target's composite.
 - **The HUD covers the world and nothing else.** The engine's dialogs, its messages and its menu
   draw over it, and so does the cursor, which is the last quad of the UI pass's sharp layer.
+- **A disabled control is one layer, as CSS `opacity` on its element makes it.** The builder
+  marks a disabled button's ops, and an out-of-game picker row's, as one group with the control's
+  opacity a (`group_begin`, `tagpu_hudlay.h` *THE GROUPS*). The drawer draws each group's ops at
+  full opacity into a region of its own on a layer image, cleared to transparent, moved there by
+  a whole-pixel offset so they rasterise as they would in place, and puts one quad where the
+  group stands in paint order, sampling the region texel for pixel at opacity a
+  (`tagpu_huddraw.c`, *THE GROUPS*). Both are premultiplied OVER, so the pixel is
+  a L + (1 − a L.a) B for the layer L, the mockup's. `tagpu_vk_hud_prepare` records the layer's
+  own render pass before the seam's; the layer is an image a frame slot, replaced behind the
+  slot's fence wait when a frame's regions outgrow it. Each group has its own region, so two that
+  overlap on screen fade apart. At most `HUD_MAXHOT` groups: each is a control made at a
+  `hot()` site. MEASURED 2026-10-23 at 1024×768 on the stock-limits recording past its end
+  scenario, the game against the mockup fed its dump, best shift (0, 0) everywhere: the out
+  picker rows' mean difference 6.27, 5.10 and 5.16 (7.05, 5.71 and 5.68 when each part, icon
+  and glyph took a on its own), the disabled TEAMS chip 5.73 (6.31), the Forks bay with no fork 5.44
+  (6.75), against 7.43 to 8.44 for enabled controls in the same capture; all 4831 pixels that
+  changed lie inside the groups.
 - **It is alpha-blended at the device's resolution**, premultiplied (`ONE`,
   `ONE_MINUS_SRC_ALPHA`): the parts' straight alpha is premultiplied once, at load, so filtering
   and mipmaps cannot darken an edge.
@@ -507,6 +524,20 @@ takeover would delete.
 4. **Open** while the playback is paused at R − 1. A row takes over its seat at R
    (`tagpu_replay_takeover_request(seat, R, -1)`), which R does not round.
 
+**Every time the HUD names is the playhead's.** The HUD's playhead is the last iteration the
+playback applied (`now`), so a seek to T shows T − 1, and the world the takeover starts from —
+its first iteration is R — is the one on screen at R − 1. The picker's title is drawn from the
+playhead's own value (`st->t`), which an open picker holds at R − 1 in the same fill, and the
+toasts name R − 1 (the playhead at the click, for a refused plan) rounded as the dock's clock
+rounds (`clock_at`).
+
+**A plan follows the file's timelines.** The plan is made under the timelines' serial
+(`tagpu_replay_timelines_serial`), which grows at each change of the rows or the axis. While the
+picker seeks or is open, a new serial plans again at R, once for that change, so the fork the
+picker names for deletion is the one the takeover would delete; a plan that no longer starts at
+R closes the picker with "Cannot take over at m:ss". A plan reads the file's block headers, so it
+is made at the click and at a change and never per frame.
+
 It closes on its button, on rew, fwd, play and a press on the track, when the playhead leaves
 R − 1 or the playback runs (the Pause key, a trigger's seek), and in every state when the
 timeline that plays changes, since a switch can change the chain without moving the playhead and
@@ -522,7 +553,9 @@ picker's "defeated" rows are R0's refusals, by construction**: a row's player is
 after the seek to R the reader's world is iteration R (a frame visit holds `W->tick == now + 1`);
 `tk_bound` refuses P on the same word of the same world (`player %u has no unit at GameTime
 %u`); and the picker opens only when now + 1 == R. So it dims exactly the seats the takeover would
-refuse.
+refuse. W checks it where seats are out: past the fixture's end scenario, at a refresh, the
+picker's clickable rows are the seats with a unit, and the takeover refuses one without by that
+line.
 
 **After the takeover** the level is a live skirmish: puppet mode ends and the reader closes, so
 the replay HUD stops drawing at the frame visit that runs the takeover; the toast shows until
@@ -821,7 +854,10 @@ The replay harness's W lane drives the HUD through it ([completeness](tadr-port/
 seek entry, at a GameTime of the test's choosing), Sight twice on row 0, Follow, Follow again and
 Jump on the row of the seat the recording's human commanded, Cursors off and on, play again,
 and Leave, answered Yes through `tacli ui`. On the second Watch it takes over through the HUD
-(`watch_takeover`): paused 15 ticks past a refresh R0, Take over must seek back to R0 and open
+(`watch_takeover`). First at the recording's last refresh RD, where the end scenario has left one
+AI's unit (`defeated_seats`): Take over must open at RD with a clickable row for exactly the
+seats that have a unit, some having none, and the trigger's takeover of one without must be
+refused for having no unit at RD. Then, paused 15 ticks past a refresh R0, Take over must seek back to R0 and open
 the picker there with a clickable row for exactly the players who have a unit; the controlled
 seat's row must take over at R0 with no rounding; the fork plays 300 ticks, and offline it must
 start at R0 and its first iteration equal its parent's chain there (`compare-fork`). The X lane
@@ -911,18 +947,10 @@ the render thread.
 
 ## Gaps
 
-- **A disabled control's text is faded glyph by glyph, not as one layer.** The mockup dims a
-  disabled control whole (CSS `opacity` on it and everything in it): its text and the text's
-  outline or shadow are composited first and faded together. The DLL gives a text op the
-  control's opacity a (`texts_at`, the op's `rgba`), and each glyph and each of its copies takes
-  it alone, so where a copy lies under its glyph the background shows through at (1 − a)² instead
-  of (1 − a): at the picker row's and the split chip's 0.45, 0.30 of it instead of 0.55 [computed
-  from the blend, not measured]. All three styles there carry copies (`header` an outline, `label` a
-  shadow, `face_chip` an outline). laycheck compares the opacity, which agrees, not the pixels.
-- **The picker's title names R; the playhead stands at R − 1.** Both show the same second where R
-  − 1 falls on a whole second, as it does at a refresh 1 modulo 30 [INFERRED from the clock's
-  rounding to whole seconds].
 - **Closing a picker that is seeking leaves its seek to run**: the playback still goes back to R.
+- **No test plans again on a timelines change.** It needs a fork of the playing's own file
+  deleted while the picker is open: X's one playing with forks to spare is "playing 5", whose
+  forks its later steps count on, and a playing of a copy is a game of its own.
 - **GDI has no stats window**, as it has no replay HUD.
 - **The samples are held values, not interpolated**: each is the first walked iteration at or
   after its time, at least 1 s apart and at most 512 a recording, so a long recording's chart
