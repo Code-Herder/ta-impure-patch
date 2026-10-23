@@ -583,8 +583,8 @@ Stores through a computed address are not excluded by this scan.
 
 - The table is written at the seat fill on the game thread, before the loader thread exists, and cleared at the level's teardown.
 - COB reads it on the game thread in play, and on the loader thread during Create's first slice. There are no loader-thread creates on a puppet host, but the ordering covers them anyway.
-- **Takeover** follows the approved rule: flip the seats (`seat[s] = 0`, `+0x73` = the recorded controller), then re-create the units. Create's first step then reads 75 from the live controller.
-- **Recorded controller changes** (multiplayer) update `local[]` at the boundary where the applier applies them.
+- **Takeover**: TK1 flips the seats' `+0x73` (P human, every other seat AI) and sets `local[]` from those types (1 for each), after the kills and before R7 re-creates the units; `seat[]` stays set while the puppet mode is on. Create's first slice runs inside R7's creates, while the mode is on, so it reads 75 from that `local[]`; the takeover's end turns the mode off, and from there the live getter answers from `+0x73` (`tagpu_replay.c`, `tk_seats`).
+- **Controller changes between segments** (a multiplayer file and its takeover timeline) set `local[]` from the segment the reader stands in, at each seek's R0 (`mp_follow`, `tagpu_puppet_locals`). Within a segment the header's controllers stand.
 
 S1 does not yet record controller changes. The decision says the recording carries each one, but S1 has only the header. A skirmish needs none for getter 75; a takeover does, to know which seats are AI.
 

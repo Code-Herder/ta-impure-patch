@@ -1711,7 +1711,15 @@ and writes RT_HOLD (`tagpu_recwriter.c`), so without RT_HOLD every iteration's
 records went to the stream as captured, and a filter with no rows and no
 flags writes every record as it came (`tagpu_reclossy.c`); the reader refuses
 a multiplayer header with RT_HOLD. So the refresh rule, which exists because
-held weapon targets may be stale, is vacuous there. A takeover inside the
+held weapon targets may be stale, is vacuous there. What is exact is the
+recorder's stream, and so the world composed from it at T: the takeover starts
+from the composed parent, which `recmp_compare.py --fork` compares it with,
+not from what every machine held at T. The composition's own residuals stand
+at every T alike: each remote unit is its owner's last image (with its owner's
+weapon targets, below); a unit created but not yet described by its owner is
+made from its create and counted on the seek's line ("created and not yet
+described"); and envelopes past T are held back ("envelopes of T held"). A
+takeover inside the
 takeover timeline -- a skirmish segment, which holds -- rounds to its refresh
 at or before T as any skirmish takeover does. `tarec.takeover_at` gives the
 same start offline. The residual this neither adds nor removes [INFERRED, not
@@ -1727,11 +1735,20 @@ the first header's controllers for the whole level, so a playing of the
 takeover timeline -- recorded by a live skirmish that answered 1 for every
 seat -- answered 0 for the root's remote seats. `mp_follow` now takes each
 segment's controllers (`recr_segment_controllers`) and hands them to
-`tagpu_puppet_locals` before its skirmish return, so every seek follows them,
-and logs `from GameTime T getter 75 answers 1 for seats …` when they change.
-The ordering: the table changes only inside a seek's R0, on the game thread
-between steps, before R3 kills every unit and R7 makes T's afresh, and a fresh
-COB's Create reads getter 75 first.
+`tagpu_puppet_locals` once the segment is followed (before its skirmish
+return, and after the cells' rule has followed), so every seek follows them,
+and logs `from GameTime T getter 75's table is set to 1 for seats …` when the
+table changes. **A takeover's own creates answer the takeover's seats**: R7
+runs every create's first slice at once (the COB setup `0x485D40`, run-now),
+while the puppet mode is still on, so TK1 (`tk_seats`) sets the table from the
+types it has just written -- P human and every other seat AI, 1 for all of
+them -- after R3's kills and before R7; the takeover's end then turns the mode
+off and the live getter answers from `+0x73`. The ordering: the table changes
+only inside a seek, on the game thread between steps -- in R0 and at TK1 --
+before R7 makes T's units afresh, and a fresh COB's Create reads getter 75
+first. A seek that fails after R0 leaves the target segment's answers until
+`sk_back` reads back; a read-back that fails stops the playing with them in
+place, which only the stopped frame shows (accepted).
 
 **R3b, the cells after the kills** (`sk_cells_clear`). Where the cells are
 the engine's, the seek has relied on R3's kills leaving no unit on the grid,

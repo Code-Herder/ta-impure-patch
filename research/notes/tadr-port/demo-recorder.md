@@ -176,8 +176,11 @@ other players; a multiplayer game is rewound from its finished recording.
 - **An unfinished recording** (a crash, or leaving early) opens in the Replays browser like any
   other: fork from any point or play on from its end. There is no separate "Continue" feature.
 - **A multiplayer recording's fork starts at the moment chosen; a skirmish's at a refresh**, the
-  last one at or before the moment chosen. A multiplayer recording keeps every value as it was at
-  every tick, so a fork can start anywhere in it. A skirmish recording refreshes at the second
+  last one at or before the moment chosen. A multiplayer recording holds no value back between
+  ticks, so a fork can start anywhere in it, from the world the players' machines' contributions
+  compose at that moment -- each player's units as their owner's machine last described them
+  ([what that composition leaves open](demo-recorder-multiplayer-slice.md#the-takeover-of-a-multiplayer-recording)).
+  A skirmish recording refreshes at the second
   tick of each timeline and then every 300 ticks (10 s of game time at normal speed), and between
   two refreshes it may hold internal values a viewer never sees at an earlier value, which a live
   game must not inherit ([S4b](demo-recorder-s4-takeover.md#driving-it)); a fork of a

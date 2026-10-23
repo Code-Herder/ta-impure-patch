@@ -971,8 +971,9 @@ the evidence [the host note](demo-recorder-s2-host.md)'s, and what the module wr
     table agrees with the recording's; S2b writes no declared table but the wind's, and a hook
     that skipped puppets would have left its table differing.
 - **Getter 75** answers, for each puppet seat, the recording machine's bit, from a per-seat table
-  built from the header at the seat fill, declared `SIM_CONTENT` in `tagpu_puppet.c` and constant
-  for the level. The recorder refuses to record a puppet host.
+  built from the header at the seat fill, declared `SIM_CONTENT` in `tagpu_puppet.c`, and rebuilt
+  from the header of the segment the reader stands in at each seek and from the new seat types at
+  a takeover (`tagpu_puppet_locals`). The recorder refuses to record a puppet host.
 - **The dumps and the comparison.** `dump <name>` in `tagpu_replay.trigger` writes the live world
   with a header naming its tables, and `tools/replay/tarec.py compare --puppet` compares it with
   the recording read back to its GameTime: every unit, player and order list image and every
