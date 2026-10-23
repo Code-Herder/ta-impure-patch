@@ -11368,22 +11368,31 @@ static void pause_icon_init(void)
 }
 
 /* THE MESSAGE LINES. DrawChatText 0x464060 draws each line of the engine's message ring through
-   DrawText 0x4A50E0 at x 0x8A, the first line's top 0x34, which `mov dword [esp+0x14],0x34` at
-   0x4640D6 stores in its frame before the loop (each next line a font height down, 0x46423E; the
-   loop's back edge is 0x4640DE, past these 8 bytes, and nothing jumps into them: DISASSEMBLED).
-   The live HUD's strip covers that corner, so while it is on the screen the lines start under it
-   (tagpu_hudinput_chat_top): the stub stores that value instead and goes on at 0x4640DE. eax
-   holds main there and 0x4640DE reads it, so the stub keeps it; nothing between reads the flags.
-   Game thread, inside the draw. */
+   DrawText 0x4A50E0, the first line's top 0x34, which `mov dword [esp+0x14],0x34` at 0x4640D6
+   stores in its frame before the loop (each next line a font height down, 0x46423E; the loop's
+   back edge is 0x4640DE, past these 8 bytes, and nothing jumps into them: DISASSEMBLED). A line of
+   kind 0x0A has its text at x 0x8A; any other kind draws an icon box at x 0x8A, ftol(0.8 * h)
+   square with h the font height (0x4FD520), and its text at ftol(138 + 1.5 * that side)
+   (0x4FD528, 0x4FD530; ebx rewritten at 0x4641E6). The live HUD's strip covers that corner, so
+   while the last frame drawn had it the lines start under it (tagpu_hudinput_chat_top), and only
+   for DrawGameScreen's call: the stub stores that value when the return address is 0x469FD0,
+   after the call at 0x469FCB, and 0x34 for the other two callers, 0x41F7A5 and 0x41F9D8, both
+   outside DrawGameScreen, whose lines no strip covers. The frame is sub esp,0x20 and four pushes, and the
+   argument pushed for 0x4C1420 at 0x4640B1 is popped by its `ret 4`, so after the stub's own push
+   the return address is [esp+0x34] and the frame's +0x14 is [esp+0x18] (DISASSEMBLED). eax holds
+   main there and 0x4640DE reads it, so the stub keeps it; the flags it changes are set again
+   before any read, by the `dec ecx` at 0x4640E4. Game thread, inside the draw. */
 static void chat_top_init(void)
 {
-    enum { SITE = 0x004640D6u, BACK = 0x004640DEu };
+    enum { SITE = 0x004640D6u, BACK = 0x004640DEu, DRAW_CALL = 0x00469FCBu, DRAW_RET = 0x00469FD0u,
+           CHAT = 0x00464060u };
     static const unsigned char STOLEN[8] = { 0xC7, 0x44, 0x24, 0x14, 0x34, 0x00, 0x00, 0x00 };
     const int* top = tagpu_hudinput_chat_top();
+    unsigned ret = DRAW_RET;
     unsigned char *stub, *p;
-    if (!tagpu_detour_bytes_ok(SITE, STOLEN, (int)sizeof STOLEN)) {
-        tagpu_logf("replay: DrawChatText's first line 0x4640D6 holds other bytes: the messages stay "
-                   "under the live HUD's strip");
+    if (!tagpu_detour_bytes_ok(SITE, STOLEN, (int)sizeof STOLEN) || !call_is(DRAW_CALL, CHAT)) {
+        tagpu_logf("replay: DrawChatText's first line 0x4640D6 or its call 0x469FCB holds other "
+                   "bytes: the messages stay under the live HUD's strip");
         return;
     }
     if (!(stub = p = tagpu_detour_stub())) {
@@ -11392,8 +11401,12 @@ static void chat_top_init(void)
         return;
     }
     *p++ = 0x50;                                        /* push eax            */
+    *p++ = 0xB8; *p++ = 0x34; *p++ = 0; *p++ = 0; *p++ = 0;   /* mov eax,0x34  */
+    *p++ = 0x81; *p++ = 0x7C; *p++ = 0x24; *p++ = 0x34;       /* cmp dword [esp+0x34],DRAW_RET */
+    memcpy(p, &ret, 4); p += 4;
+    *p++ = 0x75; *p++ = 0x05;                           /* jne store           */
     *p++ = 0xA1; memcpy(p, &top, 4); p += 4;            /* mov eax,[top]       */
-    *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = 0x18; /* mov [esp+0x18],eax: the frame's +0x14 */
+    *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = 0x18; /* store: mov [esp+0x18],eax: the frame's +0x14 */
     *p++ = 0x58;                                        /* pop eax             */
     *p++ = 0xE9; tagpu_detour_rel(p, BACK); p += 4;
     if (!tagpu_detour_land(SITE, stub, (int)sizeof STOLEN)) {

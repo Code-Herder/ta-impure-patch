@@ -562,7 +562,12 @@ static void dock(C* c)
    there (the lines themselves start under the strip while it is on screen: tagpu_hudinput.c,
    chat_top). The Config panel, which hangs under the bar's right end over the strip's actions,
    stays over it because the Vulkan pass draws the UI again inside the panel's rect after this
-   layer (tagpu_vk.c). ---------- */
+   layer (tagpu_vk.c).
+   A TRANSPORT BUTTON WITH `off_at_end` IS DISABLED WHILE THE PLAYHEAD IS AT THE STRIP'S END: fwd,
+   which has nothing ahead of it there. That is the rewind open and not yet moved: open, the world
+   is the one the rewind opened at, G, the strip's end; in the past it is a seek's target - 1, and
+   every target is held to the recording's last GameTime, which is before G -- so t < T exactly
+   in the past (tagpu_hudstate.c, present_live). ---------- */
 
 static void live(C* c)
 {
@@ -606,6 +611,7 @@ static void live(C* c)
         b.key = str(c, t, "act");
         b.icon = tj_get(t, "icon");
         b.off = tj_num(tj_get(t, "off"), 0);
+        if (!b.off && !(st->t < st->T)) b.off = tj_num(tj_get(t, "off_at_end"), 0);
         button(c, &b, Sb, box(x + cx, y + pad, num(c, t, "w"), ih), 0);
         cx += num(c, t, "w") + gap;
     }
@@ -1251,7 +1257,8 @@ static void chart(C* c, R cb, double Rl)
 /* ---- the toast: a short message in a dark box centred across the screen, above everything. The
    box is as wide as its text and `pad` each side of it, never narrower than `w` nor wider than
    `max_w`: the text is measured in its face by the layout's measure (tagpu_hudlay_measure), as
-   hud.js measures it. On the live HUD it is the top layer, over the engine's message lines as the
+   hud.js measures it, and a text wider than `max_w` allows is cut at the pad, never drawn over the
+   box's edge or past it. On the live HUD it is the top layer, over the engine's message lines as the
    strip is, and while the strip is drawn it sits clear of it (live_clear: the strip's gap under
    the bar again under it) */
 
@@ -1276,7 +1283,7 @@ static void toast(C* c)
     ring(c, b, e, ec, 1);
     memset(&p, 0, sizeof p);
     p.centre = 1;
-    text(c, st->toast, b, str(c, Ts, "style"), &p, 0, 0);
+    text(c, st->toast, box(b.x + g->toast_pad, b.y, b.w - 2 * g->toast_pad, b.h), str(c, Ts, "style"), &p, 0, 0);
     c->top = 0;
 }
 

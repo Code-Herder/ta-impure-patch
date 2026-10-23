@@ -2681,6 +2681,7 @@ static void mir_finish(const TAGPU_FRAME* f)
     if (!s_mirRec || (s_mStrAny && s_mStrGen != tagpu_text_glyph_gen()) ||
         (s_mAtAny && s_mAtGen != s_atlas.gen)) {
         memset(&s_mHand, 0, sizeof s_mHand);
+        s_mHand.panelR = s_mHand.panelB = -1;   /* no panel: the memset's 0..0 is a one-pixel box */
         s_mHand.frame = f->frame_counter;
         s_mHand.lost = 1;
         s_mHave = 1; s_mTaken = 0; s_mFrame = f->frame_counter;

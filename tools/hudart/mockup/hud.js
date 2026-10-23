@@ -251,8 +251,10 @@ const HUD = (() => {
     if (!st.live.open) return h;
     const x = st.frame.panel + S.l, w = st.W - S.r - x, y = st.frame.top + S.t, ih = S.h - 2 * S.pad;
     let inner = '', cx = S.pad;
-    // a transport button with `off` is drawn disabled: play, since the rewind holds the past paused and has no verb to play it
-    for (const t of S.transport) { inner += button({ act: t.act, icon: t.icon, off: t.off }, S.button, { x: cx, y: S.pad, w: t.w, h: ih }, st); cx += t.w + S.gap; }
+    // a transport button with `off` is drawn disabled: play, since the rewind holds the past paused and has no verb to play it;
+    // one with `off_at_end` while the playhead is at the strip's end, the rewind open and not yet moved: fwd, with nothing ahead
+    for (const t of S.transport) { const off = t.off || (st.t < st.T ? 0 : t.off_at_end || 0);
+      inner += button({ act: t.act, icon: t.icon, off }, S.button, { x: cx, y: S.pad, w: t.w, h: ih }, st); cx += t.w + S.gap; }
     const right = S.actions.reduce((a, q) => a + q.w + S.gap, 0) + S.time.w + S.now.w;
     const tw = w - S.pad - right - cx, Tr = S.track, tb = { x: cx, y: (S.h - Tr.h) / 2, w: tw, h: Tr.h };
     const fp = Tr.fill.pad, fb = { x: fp[0], y: fp[1], w: tw - fp[0] - fp[2], h: Tr.h - fp[1] - fp[3] }, p = st.t / st.T;
@@ -484,7 +486,8 @@ const HUD = (() => {
   }
 
   /* ---- the toast: a short message in a dark box centred across the screen, above everything. The box is as wide as
-     its text and `pad` each side, never narrower than `w` nor wider than `max_w`. While the live strip is drawn the
+     its text and `pad` each side, never narrower than `w` nor wider than `max_w`, and a longer text is cut at the pad,
+     never drawn over the box's edge or past it. While the live strip is drawn the
      toast sits clear of it: the strip's gap under the bar, again under the strip ---- */
   function toast(st) {
     const Ts = L.toast, S = L.proposed.live.strip, clear = st.frame.top + 2 * S.t + S.h;
@@ -492,7 +495,7 @@ const HUD = (() => {
     const w = Math.min(Math.max(textWidth(st.toast, Ts.style) + 2 * Ts.pad, Ts.w), Ts.max_w);
     const b = { x: (st.W - w) / 2, y, w, h: Ts.h }, n = parseInt(Ts.bg.slice(1), 16);
     return `<div class="box" style="${rect(b)};background:rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${Ts.alpha});box-shadow:inset 0 0 0 ${U(Ts.edge)} ${Ts.edge_colour}">`
-      + text(esc(st.toast), zero(b.w, b.h), Ts.style, { align: 'c' }) + `</div>`;
+      + text(esc(st.toast), { x: Ts.pad, y: 0, w: b.w - 2 * Ts.pad, h: b.h }, Ts.style, { align: 'c' }) + `</div>`;
   }
 
   // the whole HUD for a state; see index.html for the state's fields

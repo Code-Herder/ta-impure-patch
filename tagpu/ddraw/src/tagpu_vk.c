@@ -2650,8 +2650,9 @@ static int vk_present(void)
                happen out here -- exactly as the shadow map records its map in
                `prepare`. */
             /* THE REPLAY HUD: its base layer over the world and under the engine's UI, its top
-               layer over the UI (the record, below). It claims no A/B frame, so a capture with
-               it drawn stands down (the census below). */
+               layer over the UI (the record, below). It claims no A/B frame, so a capture of the
+               swapchain image with it drawn stands down; a world capture reads the world target,
+               which it never draws into (the census below). */
             draw_hud = tagpu_vk_hud_prepare(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             draw_gui = tagpu_vk_gui_prepare(&s_pass, cb, fi);
             ab_gui = tagpu_vk_gui_ab_frame();
@@ -2888,6 +2889,12 @@ static int vk_present(void)
                 abworld = 1;
             }
         }
+        /* THE HUD IS NEVER IN A WORLD CAPTURE: both its layers record in the swapchain's render
+           pass, after the world target is composited into it (below), so it is one more pass in the
+           captured image only when the capture reads the swapchain. A recorded live skirmish
+           always draws the rewind button, and no lever turns the HUD off there, so counting it
+           for a world capture would refuse every world A/B taken in one. */
+        if (abworld) ndraw -= draw_hud;
         if (nclaim > 1 || (nclaim == 1 && ndraw > 1))
             vklog("%d A/B levers claimed this frame and %d passes drew into it - "
                   "nothing captured. A Vulkan frame carries every armed pass at "

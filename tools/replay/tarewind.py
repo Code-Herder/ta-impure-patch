@@ -131,31 +131,82 @@ def run(t, w, fx, out):
         check(label, g1 == g2 == g, f"Pause key at GameTime {g}: {g1}, then {g2}")
 
     def hud_cycle(G3):
-        """THE HUD'S REWIND, on the live level held at G3: the button opens the strip at now, its
-        rew seeks 10 s back and Back to now returns -- the open, a seek and the return to now of
-        the G1 cycle, sent by clicks through the HUD's route (tagpu_replay_rewind). The pause
-        icon's rule is checked by eye: neither a peek nor the dump can see the icon."""
+        """THE HUD'S REWIND, on the live level held at G3, every verb sent by a click through the
+        HUD's route (tagpu_replay_rewind): the button opens the strip at now, with fwd drawn
+        disabled there, and closes it unmoved, as Play from here in the open strip does; in the
+        past rew seeks 10 s back, fwd 10 s forward, a drag on the track seeks to the pointer, and
+        fwd within 10 s of the span's end, the button and Back to now each return to now. Checked
+        by eye, not here: the pause icon's rule, which neither a peek nor the dump can see, and
+        Play from here's "Playing on from" toast, which shows for the layout's toast.ms of wall
+        time, so no dump is sure to fall inside it."""
+        def idle(label):
+            d = hud_show(lambda d: d["state"]["rw"]["state"] == "idle", "the closed strip")
+            check(label, log.at == G3 and not hud_keys(d) & {"live", "rew", "live_play"},
+                  f"held at GameTime {log.at}; controls {sorted(hud_keys(d))}")
+
+        def open_strip(label):
+            got = hud_click("rewind", rf"rewind: opened at GameTime {G3}; the file holds \d+ to \d+",
+                            label)
+            m = re.search(r"the file holds (\d+) to (\d+)", got)
+            return hud_show(lambda d: d["state"]["rw"]["state"] == "open", "the open strip"), \
+                int(m[1]), int(m[2])
+
+        def seek(key, T, what):
+            hud_click(key, rf"rewind: seek {T} complete", what)
+            return hud_show(lambda d: d["state"]["rw"]["state"] == "past", "the past")
+
+        def back(key, what):
+            hud_click(key, rf"rewind: returned to now at GameTime {G3}\b", what)
+            t.adopt_held(w, log, what)
+
         d = hud_show(lambda d: "rewind" in hud_keys(d), "the rewind button")
         st = d["state"]
         check("hud idle", st.get("mode") == "live" and st["rw"]["state"] == "idle" and
               not hud_keys(d) & {"live", "rew", "live_play"},
               f"mode {st.get('mode')}, rewind {st['rw']['state']}, controls {sorted(hud_keys(d))}")
-        hud_click("rewind", rf"rewind: opened at GameTime {G3}\b", "the button's open")
-        d = hud_show(lambda d: d["state"]["rw"]["state"] == "open", "the open strip")
+        d, _, _ = open_strip("the button's open")
         keys = hud_keys(d)
-        check("hud open", {"live", "rew", "fwd", "track", "live_play", "live_now"} <= keys and
-              "play" not in keys, f"controls {sorted(keys)}")
-        first = d["state"]["rw"]["first"]
-        T = max(first + 1, G3 - 300)
-        hud_click("rew", rf"rewind: seek {T} complete", f"rew's seek to {T}")
-        d = hud_show(lambda d: d["state"]["rw"]["state"] == "past", "the past")
-        check("hud rew", abs(d["state"]["t"] - (T - 1 - first) / 30) < 1e-3,
-              f"seek {T}: t {d['state']['t']:.3f} s from {first}")
-        hud_click("live_now", rf"rewind: returned to now at GameTime {G3}\b", "Back to now")
-        t.adopt_held(w, log, "the HUD's return to now")
-        d = hud_show(lambda d: d["state"]["rw"]["state"] == "idle", "the closed strip")
-        check("hud now", log.at == G3 and not hud_keys(d) & {"live", "rew", "live_play"},
-              f"held at GameTime {log.at}; controls {sorted(hud_keys(d))}")
+        check("hud open", {"live", "rew", "track", "live_play", "live_now"} <= keys and
+              not keys & {"play", "fwd"}, f"controls {sorted(keys)}")
+        hud_click("rewind", r"rewind: closed, nothing moved", "the button's close")
+        idle("hud close")
+        open_strip("the open before Play from here")
+        hud_click("live_play", r"rewind: closed, nothing moved", "Play from here in the open strip")
+        idle("hud play on")
+
+        _, first, last = open_strip("the open before the past")
+        T1 = max(first + 1, G3 - 300)
+        d = seek("rew", T1, f"rew's seek to {T1}")
+        check("hud rew", abs(d["state"]["t"] - (T1 - 1 - first) / 30) < 1e-3 and "fwd" in hud_keys(d),
+              f"seek {T1}: t {d['state']['t']:.3f} s from {first}; controls {sorted(hud_keys(d))}")
+        T2 = max(first + 1, T1 - 1 - 300)
+        seek("rew", T2, f"rew's second seek to {T2}")
+        T3 = T2 - 1 + 300
+        if T3 >= last:
+            raise t.CouldNotRun(f"hud fwd: the past at {T2 - 1} is within 10 s of the span's end {last}")
+        seek("fwd", T3, f"fwd's seek to {T3}")
+        # the track released at its right end seeks to the span's last GameTime: the pointer's
+        # fraction 1 is G3, held to `last` (tagpu_hudinput.c, live_seek_at)
+        log.read()
+        n = len(log.lines)
+        hud("scrub", 0.5, 1.0)
+        if not log.wait(rf"rewind: seek {last} complete", t.ACK_S, n):
+            raise t.Failed(f"hud: the track's drag: no `rewind: seek {last} complete` in {t.ACK_S} s")
+        d = hud_show(lambda d: d["state"]["rw"]["state"] == "past" and
+                     abs(d["state"]["t"] - (last - 1 - first) / 30) < 1e-3, "the drag's past")
+        check("hud drag", "fwd" in hud_keys(d), f"t {d['state']['t']:.3f} s; controls {sorted(hud_keys(d))}")
+        back("fwd", "fwd within 10 s of the span's end")
+        idle("hud fwd now")
+
+        open_strip("the open before the button's return")
+        seek("rew", T1, f"rew's seek to {T1}")
+        back("rewind", "the button's return to now")
+        idle("hud button now")
+
+        open_strip("the open before Back to now")
+        seek("rew", T1, f"rew's seek to {T1}")
+        back("live_now", "Back to now")
+        idle("hud now")
 
     def play_from_here(rec, header, AF, ue):
         """U-E, PLAY FROM HERE ON THE HUD (owner decision 1-B), on a copy of the recording, which

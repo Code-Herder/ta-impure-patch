@@ -3975,13 +3975,22 @@ refuse:
    engine's screen-space y, which grows downward, so they take a positive
    height. `gui`, `fps` and `scaffold` are the ones whose shaders need the
    flip; tagpu_vk_pass.h's `flipok` has the table. */
+/* the composite's place in a w x h attachment, rows from the top: the frame's viewport, or the
+   whole attachment without one; the one rule lay_viewport and tagpu_vk_gui_panel_rect both map
+   by, so the panel's rect lands on the pixels the composite drew */
+static void lay_place(uint32_t w, uint32_t h, int* x, int* ytop, int* vw, int* vh)
+{
+    *x = s_layVp[0]; *vw = s_layVp[2]; *vh = s_layVp[3];
+    if (*vw <= 0 || *vh <= 0) { *x = 0; *vw = (int)w; *vh = (int)h; *ytop = 0; }
+    else *ytop = (int)h - s_layVp[1] - *vh;
+    if (*ytop < 0) *ytop = 0;
+}
+
 static void lay_viewport(VkCommandBuffer cb, uint32_t w, uint32_t h)
 {
     VkViewport vp;
-    int x = s_layVp[0], vw = s_layVp[2], vh = s_layVp[3], ytop;
-    if (vw <= 0 || vh <= 0) { x = 0; vw = (int)w; vh = (int)h; ytop = 0; }
-    else ytop = (int)h - s_layVp[1] - vh;
-    if (ytop < 0) ytop = 0;
+    int x, vw, vh, ytop;
+    lay_place(w, h, &x, &ytop, &vw, &vh);
     vp.x = (float)x;
     vp.y = (float)(ytop + vh);
     vp.width = (float)vw;
@@ -4037,8 +4046,15 @@ static int record_in(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot, u
     SLOT* s;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS || !s_layDrew[slot]) return 0;
     s = &s_slot[slot];
-    if (r.offset.x < 0) { r.extent.width -= (uint32_t)-r.offset.x; r.offset.x = 0; }
-    if (r.offset.y < 0) { r.extent.height -= (uint32_t)-r.offset.y; r.offset.y = 0; }
+    /* a rect wholly left of or above the attachment is empty, and the extent never wraps */
+    if (r.offset.x < 0) {
+        if ((uint32_t)-r.offset.x >= r.extent.width) return 0;
+        r.extent.width -= (uint32_t)-r.offset.x; r.offset.x = 0;
+    }
+    if (r.offset.y < 0) {
+        if ((uint32_t)-r.offset.y >= r.extent.height) return 0;
+        r.extent.height -= (uint32_t)-r.offset.y; r.offset.y = 0;
+    }
     if ((uint32_t)r.offset.x >= w || (uint32_t)r.offset.y >= h) return 0;
     if (r.extent.width > w - (uint32_t)r.offset.x) r.extent.width = w - (uint32_t)r.offset.x;
     if (r.extent.height > h - (uint32_t)r.offset.y) r.extent.height = h - (uint32_t)r.offset.y;
@@ -4057,12 +4073,11 @@ static int record_in(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot, u
 
 int tagpu_vk_gui_panel_rect(uint32_t slot, uint32_t w, uint32_t h, VkRect2D* r)
 {
-    int x = s_layVp[0], vw = s_layVp[2], vh = s_layVp[3], ytop, x0, y0, x1, y1;
+    int x, vw, vh, ytop, x0, y0, x1, y1;
     float sx, sy;
     if (slot >= TAGPU_VK_SLOTS || !s_layDrew[slot] || s_layPanel[2] < s_layPanel[0] ||
         s_layPanel[3] < s_layPanel[1] || s_surfW <= 0 || s_surfH <= 0) return 0;
-    if (vw <= 0 || vh <= 0) { x = 0; vw = (int)w; vh = (int)h; ytop = 0; }
-    else ytop = (int)h - s_layVp[1] - vh;
+    lay_place(w, h, &x, &ytop, &vw, &vh);
     /* the surface's pixels to the attachment's as lay_viewport maps the composite, each edge to
        the pixel whose centre it passes */
     sx = (float)vw / (float)s_surfW;

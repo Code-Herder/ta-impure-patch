@@ -677,16 +677,22 @@ static void hide_mode(HUDINST* in, int n, int mode)
         if (in[i].prm[0] == (float)mode) in[i].rgba[0] = in[i].rgba[1] = in[i].rgba[2] = in[i].rgba[3] = 0;
 }
 
-/* The device-pixel union of the top layer's `n` instances, held to the `w` x `h` attachment */
+/* The device-pixel union of the quads the top layer's `n` instances emit, held to the `w` x `h`
+   attachment. The quad is `ndc`, what the vertex shader places; `px` is not always a box (a line's
+   two ends, a chart band's segments), so it does not bound what is drawn. */
 static void top_rect(const HUDINST* in, int n, uint32_t w, uint32_t h)
 {
     float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
     int i;
     for (i = 0; i < n; i++) {
-        if (in[i].px[0] < x0) x0 = in[i].px[0];
-        if (in[i].px[1] < y0) y0 = in[i].px[1];
-        if (in[i].px[2] > x1) x1 = in[i].px[2];
-        if (in[i].px[3] > y1) y1 = in[i].px[3];
+        float a = (in[i].ndc[0] + 1) * 0.5f * (float)w, b = (in[i].ndc[2] + 1) * 0.5f * (float)w;
+        float c = (in[i].ndc[1] + 1) * 0.5f * (float)h, e = (in[i].ndc[3] + 1) * 0.5f * (float)h;
+        if (a > b) { float t = a; a = b; b = t; }
+        if (c > e) { float t = c; c = e; e = t; }
+        if (a < x0) x0 = a;
+        if (c < y0) y0 = c;
+        if (b > x1) x1 = b;
+        if (e > y1) y1 = e;
     }
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;

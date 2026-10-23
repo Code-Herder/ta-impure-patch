@@ -72,22 +72,52 @@ static int      s_rwState;              /* TAGPU_REPLAY_RWS_*                   
 static unsigned s_rwG;                  /* where the rewind opened: now, the strip's end          */
 static int      s_arm;
 static unsigned s_armR, s_armEvict;     /* where Play from here starts, and the fork it deletes   */
+static unsigned s_armSerial;            /* the timelines' serial the plan read                    */
 static unsigned s_resSeen;              /* the last outcome's serial looked at                    */
 static int      s_rwAsked;              /* a verb the HUD sent has not had its outcome yet        */
 static unsigned s_forkAt;               /* the GameTime the HUD's fork starts at                  */
-/* THE ENGINE'S MESSAGE LINES, read by DrawChatText's stub (tagpu_replay.c, THE MESSAGE LINES):
-   the first line's top in the engine's own pixels, the engine's 0x34 unless the live strip is on
-   the screen */
+/* THE ENGINE'S MESSAGE LINES, read by DrawChatText's stub for DrawGameScreen's call only
+   (tagpu_replay.c, THE MESSAGE LINES): the first line's top in the engine's own pixels, the
+   engine's 0x34 unless the last frame drawn had the live strip */
 #define CHAT_TOP   0x34
 #define ENGINE_BAR 32                   /* the world region's top, engine pixels, at any HUD scale */
 static int      s_chatTop = CHAT_TOP;
 
+static int drawn(const char* key);
+
+/* WHERE THE MESSAGE LINES START: below the live strip while the last frame drew it, so no line is
+   under it or beside its left end. The strip ends live_clear units under the bar (the layout's
+   strip.t and strip.h, its gap under it as over it), and a unit is the attachment's height / 720
+   times the HUD's own scale while the bar is the frame's bh scaled by the same height / the
+   frame's height (tagpu_hudstate_present): in the frame's pixels the clear row is
+   bh + live_clear * scale * gh / 720, whatever the window, and the world region is drawn
+   bh - 32 lower than the engine draws it (tagpu_hud_shift), so in the engine's pixels it is
+   32 + live_clear * scale * gh / 720. Never above the engine's own 0x34. */
+static void chat_top(void)
+{
+    const HUDART* art = tagpu_hudart_get();
+    int y = CHAT_TOP;
+    if (art && drawn("live") && g_ddraw.height > 0) {
+        float clear = tagpu_hudlay_globals(art->lay)->live_clear * (float)tagpu_hudinput_scale() / 100.0f;
+        int at = ENGINE_BAR + (int)ceilf(clear * (float)g_ddraw.height / 720.0f);
+        if (at > y && at < (int)g_ddraw.height) y = at;
+    }
+    s_chatTop = y;
+}
+
+/* THE ORDERING: the take runs in DrawGameScreen's hook before the draw (tagpu_packet_pub.c, THE
+   COMMANDS), and DrawChatText runs inside that draw, so the message lines' top is always the hit
+   map's that this draw's clicks are tested against: the strip's when the last frame drawn had it,
+   0x34 when it had none or no map has come back. */
 void tagpu_hudinput_take(const TAGPU_CMD_HUD* h)
 {
-    if (!h) { s_hit.n = 0; return; }
-    s_hit = *h;
-    if (s_hit.n > TAGPU_CMD_HUDHITS) s_hit.n = TAGPU_CMD_HUDHITS;
-    if (s_hit.nseat > TAGPU_PK_HUD_SEATS) s_hit.nseat = TAGPU_PK_HUD_SEATS;
+    if (!h) s_hit.n = 0;
+    else {
+        s_hit = *h;
+        if (s_hit.n > TAGPU_CMD_HUDHITS) s_hit.n = TAGPU_CMD_HUDHITS;
+        if (s_hit.nseat > TAGPU_PK_HUD_SEATS) s_hit.nseat = TAGPU_PK_HUD_SEATS;
+    }
+    chat_top();
 }
 
 /* THE PAUSE ICON GOES WHERE A CONTROL ON THE SCREEN CARRIES THE PAUSE: the replay HUD's play
@@ -306,6 +336,10 @@ static void live_fork(void)
    toast's time (2341 ms measured 2026-10-23 on the battle test group, against toast.ms 1800), and
    a second click after the toast's time would otherwise delete a fork no line on the screen
    named.
+   THE PLAN IS THE TIMELINES' AS IT LEFT THEM: the plan refreshes their cache, so the serial is
+   read after it (tagpu_replay_timelines_serial); when it moves before the second click the file's
+   forks are no longer the ones the plan counted and the eviction named may not be the fork's, so
+   live_fill ends the arm and the next click plans again.
    THE PLAN SCANS THE FILE, so it is asked here, on a click, on the game thread between two steps,
    and nowhere per frame: neither live_fill nor the render half calls it. */
 static void live_play(void)
@@ -325,6 +359,7 @@ static void live_play(void)
         return;
     }
     if (p.R == T && p.evict == UINT32_MAX) { live_fork(); return; }
+    s_armSerial = tagpu_replay_timelines_serial();
     s_armR = p.R;
     s_armEvict = p.evict;
     if (p.R != T && !rw_send(TAGPU_REPLAY_RW_SEEK, p.R)) return;
@@ -358,30 +393,15 @@ static void live_act(const char* key)
         unsigned T = s_now > JUMP ? s_now - JUMP : 0;
         rw_send(TAGPU_REPLAY_RW_SEEK, T > s_first + 1 ? T : s_first + 1);
     } else if (!strcmp(key, "fwd")) {
-        rw_send(TAGPU_REPLAY_RW_SEEK, s_now + JUMP < s_last ? s_now + JUMP : s_last);
+        /* open, the world is the strip's end and fwd is drawn disabled (tagpu_hudlay.c, live); in
+           the past a jump that reaches the span's last GameTime, G - 1 or before, is back to now:
+           a seek there would stop short of the world the rewind opened at */
+        if (rw != TAGPU_REPLAY_RWS_PAST) return;
+        if (s_now + JUMP >= s_last) rw_send(TAGPU_REPLAY_RW_NOW, 0);
+        else rw_send(TAGPU_REPLAY_RW_SEEK, s_now + JUMP);
     } else if (!strcmp(key, "live_now")) {
         rw_send(rw == TAGPU_REPLAY_RWS_OPEN ? TAGPU_REPLAY_RW_CLOSE : TAGPU_REPLAY_RW_NOW, 0);
     }
-}
-
-/* WHERE THE MESSAGE LINES START: below the live strip while the last frame drew it, so no line is
-   under it or beside its left end. The strip ends live_clear units under the bar (the layout's
-   strip.t and strip.h, its gap under it as over it), and a unit is the attachment's height / 720
-   times the HUD's own scale while the bar is the frame's bh scaled by the same height / the
-   frame's height (tagpu_hudstate_present): in the frame's pixels the clear row is
-   bh + live_clear * scale * gh / 720, whatever the window, and the world region is drawn
-   bh - 32 lower than the engine draws it (tagpu_hud_shift), so in the engine's pixels it is
-   32 + live_clear * scale * gh / 720. Never above the engine's own 0x34. */
-static void chat_top(void)
-{
-    const HUDART* art = tagpu_hudart_get();
-    int y = CHAT_TOP;
-    if (art && drawn("live") && g_ddraw.height > 0) {
-        float clear = tagpu_hudlay_globals(art->lay)->live_clear * (float)tagpu_hudinput_scale() / 100.0f;
-        int at = ENGINE_BAR + (int)ceilf(clear * (float)g_ddraw.height / 720.0f);
-        if (at > y && at < (int)g_ddraw.height) y = at;
-    }
-    s_chatTop = y;
 }
 
 const int* tagpu_hudinput_chat_top(void)
@@ -400,7 +420,6 @@ static void live_fill(TAGPU_PK_HUD* h)
     int cx, cy;
 
     s_live = 1;
-    chat_top();
     s_now = h->now;
     s_first = h->first;
     s_last = h->last;
@@ -420,7 +439,7 @@ static void live_fill(TAGPU_PK_HUD* h)
             }
         }
     }
-    if (s_rwState != TAGPU_REPLAY_RWS_PAST) s_arm = ARM_NONE;
+    if (s_rwState != TAGPU_REPLAY_RWS_PAST || tagpu_replay_timelines_serial() != s_armSerial) s_arm = ARM_NONE;
     else if (s_arm == ARM_SEEKING && s_now + 1 == s_armR) { s_arm = ARM_ARMED; arm_toast(); }
     else if (s_arm == ARM_ARMED && s_now + 1 != s_armR) s_arm = ARM_NONE;
     h->rw_arm = (uint8_t)s_arm;
@@ -591,7 +610,6 @@ void tagpu_hudinput_fill(TAGPU_PK_HUD* h)
 
     if (h->mode == TAGPU_PK_HUD_LIVE) { live_fill(h); return; }
     s_live = 0;
-    s_chatTop = CHAT_TOP;
     s_now = h->now;
     s_first = h->first;
     s_last = h->last;
