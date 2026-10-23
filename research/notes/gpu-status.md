@@ -2985,10 +2985,13 @@ index over `INDEX_CAP`), does not keep its file. The tareplay forks test runs th
 folder and checks its line and what is left (`prune_step`). MEASURED 2026-10-22
 on an instance with play defaults on and no lever file: 55 older recordings, the newest 49 kept
 beside the new one; of the other six, the 2 oldest plain copies deleted, a favourite, a bookmarked
-file and a file with a live fork (made by a real takeover) kept as forked or marked, and an
-unreadable file kept. With `keep 3`, the next game's 54 older recordings: the newest 2 kept, 48
+file and a file with a live fork (made by a real takeover) kept as forked or marked, and a file
+that is not a recording kept. With `keep 3`, the next game's 54 older recordings: the newest 2 kept, 48
 deleted and the same four kept. **Not exercised:** *in use*, since a file held open by another process
-could not be reproduced under Wine on the reference setup.
+could not be reproduced under Wine on the reference setup. MEASURED 2026-10-23 by `prune_step` in
+the landing gate, both builds: `6 older recordings, the newest 1 kept; of the rest, 2 deleted, 2 kept
+(forked or marked), 0 in use, 1 unreadable`, the older-format copy among the deleted. A name too long
+for its lock path is counted unreadable before the sort, outside N.
 
 **Its events have 59 sites of their own** (the attach log's `recorder: N event sites in`),
 byte-matched and built at `DllMain` by `tagpu_rec_init`, all before any lands; no recording starts
