@@ -2970,8 +2970,10 @@ by the clock of the machine that recorded it. So watching a replay does not keep
 does exporting one (an export carries its root's header and start); a favourite or a bookmark
 does. A clock set back makes each new recording the oldest at the next game's prune, and a file
 dated in the future holds one of the kept places until the clock passes it. The Replays browser
-still lists newest first by last write (`newest_first`, `tagpu_replays.c`), so its order, and which
-recordings its `ENT_MAX` cut lists, can differ from the prune's. The first `REC_KEEP` −
+lists in this same order (`recfile_newer_first`, which `scan` in `tagpu_replays.c` sorts by too),
+each file's start kept in its `index.dat` line with its root key and read again only with a new
+key, so its `ENT_MAX` cut lists the recordings the prune keeps first; a file whose key or start
+cannot be read at the open sorts as the prune sorts one it cannot read, after every dated one. The first `REC_KEEP` −
 1 = 49 are kept, so the newest 50 are kept counting the new one. The lever's text `keep N` changes the count (`keep_count`, `tagpu_recorder.c`): with no
 number, or `keep 0`, it is `REC_KEEP`; `keep 1` keeps the new one alone. Each older recording is
 deleted unless it is in use, has a live fork, is a favourite or bookmarked in `replays\index.dat`, or
@@ -2983,18 +2985,24 @@ comment above `prune_one`): the prune takes the recording's lock exclusively, as
 timelines, and a live fork keeps it; opens the recording itself exclusively with DELETE access,
 which fails while anything holds it open and, while held, lets no playing start, a playing being
 the only way a bookmark is added; and then, under the index's lock, which `index_save` also takes
-(`idx_lock`, `tagpu_replays.c`), reads the file's marks off the disk and marks it for deletion on
-that handle (`tagpu_replays_unmarked_delete`). It goes when the handle closes, and a mark the index
-held before that read keeps it. The lock file goes with the recording, through the exclusive handle
+(`idx_lock`, `tagpu_replays.c`), reads the file's marks off the disk — its line, found as the
+browser finds it (the name exactly, else the name in another case; a second line of the name
+merged in), counts when it is of the root key read through that same handle (`recr_root_key`: no
+open by path can share it), or has its key unknown (a line the version-1 conversion or a merge
+left) — and marks it for deletion on that handle (`tagpu_replays_unmarked_delete`); an index of
+any version but 3 (version 1 until its conversion, an earlier build's version 2), one that cannot
+be read, or one that is not text decides nothing, so every recording is kept. It goes when the handle closes, and a mark the
+index held before that read keeps it. The lock file goes with the recording, through the exclusive handle
 no other caller can share, and so does a lock file the prune created itself for a recording it
 keeps. `SetFileInformationByHandle` is resolved at run time, so the DLL still loads on XP; where it
 is absent the prune deletes nothing and counts every older recording as in use. One line per
 prune: `recorder: prune at <new>: N older recordings, the newest K kept; of the rest, D deleted, M
 kept (forked or marked), B in use, U unreadable`, where *in use* also counts a recording whose lock
-or file could not be opened exclusively, one whose index could not be read, and one whose header
-the date pass could not read. The process's exit waits for the worker (`recfile_exit`), so the
-prune stops at the next file once the exit has begun, in the date pass as in the deletion, and a
-date pass the exit cut short deletes nothing.
+or file could not be opened exclusively, one whose root key could not be read, one whose header
+the date pass could not read, and every recording while the index could not be read, is of
+version 1 (not yet converted) or of a version this build does not know. The process's exit waits
+for the worker (`recfile_exit`), so the prune stops at the next file once the exit has begun, in the
+date pass as in the deletion, and a date pass the exit cut short deletes nothing.
 **What the ordering does not cover:** a favourite given while a prune runs, after it has read that
 file's marks, or one the index could not save (`index_save` failing to write `index.tmp`, or the
 index over `INDEX_CAP`), does not keep its file. The tareplay forks test runs the prune on a seeded

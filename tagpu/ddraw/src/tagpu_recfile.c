@@ -207,16 +207,19 @@ static int prune_one(const char* path)
 /* `t` the recorded start and `dated` what recr_wallclock_of said: 1 dated, 0 read without a
    start, -1 not read */
 typedef struct { char name[MAX_PATH]; FILETIME t; int dated; } PruneFile;
-/* A strict weak order, newest first: by the recorded start, every file without one after every
-   dated file, then by name, latest first (a recording's name begins with its local start time).
-   Names equal under the case-insensitive comparison keep an unspecified order between them. */
+int recfile_newer_first(int dx, const FILETIME* tx, const char* x, int dy, const FILETIME* ty,
+                        const char* y)
+{
+    int c = (dy > 0) - (dx > 0);
+    if (!c && dx > 0) c = CompareFileTime(ty, tx);
+    return c ? c : _stricmp(y, x);
+}
+
 static int newer_first(const void* a, const void* b)
 {
     const PruneFile* x = (const PruneFile*)a;
     const PruneFile* y = (const PruneFile*)b;
-    int c = (y->dated > 0) - (x->dated > 0);
-    if (!c && x->dated > 0) c = CompareFileTime(&y->t, &x->t);
-    return c ? c : _stricmp(y->name, x->name);
+    return recfile_newer_first(x->dated, &x->t, x->name, y->dated, &y->t, y->name);
 }
 
 static int exiting(void)

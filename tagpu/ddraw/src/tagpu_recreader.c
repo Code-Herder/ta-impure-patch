@@ -2813,6 +2813,23 @@ int recr_wallclock_of(const char* path, FILETIME* utc)
     return k;
 }
 
+int recr_root_key(void* f, unsigned key[2])
+{
+    unsigned char head[8 + sizeof(RecBlock)];
+    RecBlock b;
+    DWORD got = 0;
+    key[0] = key[1] = 0;
+    if (!seek_to(f, 0) || !ReadFile(f, head, sizeof head, &got, NULL)) return -1;
+    if (got != sizeof head || memcmp(head, REC_MAGIC, 8)) return 0;
+    memcpy(&b, head + 8, sizeof b);
+    if (b.magic != REC_BLOCK_MAGIC || (uint32_t)Crc32_ComputeBuf(0, &b, 28) != b.crc_head ||
+        b.kind != RB_HEADER)
+        return 0;
+    key[0] = b.crc_body;
+    key[1] = b.crc_head;
+    return 1;
+}
+
 RecReader* recr_dump_world(const char* path, char* why, unsigned cap)
 {
     HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
@@ -2840,7 +2857,9 @@ int recr_summary(const char* path, RecSummary* s, char* why, unsigned cap)
         snprintf(why, cap, "no memory");
         return 0;
     }
-    r->f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+    /* shared for writing as recr_open is: the walk stops at the first torn or cut block, so a
+       file a touch or a fork is appending to reads up to its last whole one */
+    r->f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
                        FILE_FLAG_SEQUENTIAL_SCAN, NULL);
     if (r->f == INVALID_HANDLE_VALUE) {
         snprintf(why, cap, "cannot open %s (%lu)", path, GetLastError());
