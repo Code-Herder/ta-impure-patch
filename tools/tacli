@@ -2497,7 +2497,9 @@ def cmd_wheel(args):
 
 # the trigger the replay HUD answers (tagpu_hudstate.c). Its controls are keyed as the layout makes
 # them, and `hud show` lists the frame's; the takeover's are takeover (the Take over button), picker
-# (the picker's plate), takeas:<row> (take over that row's player) and lanes (the Forks bay)
+# (the picker's plate), takeas:<row> (take over that row's player) and lanes (the Forks bay); the
+# fork lanes' are lane:<k> (watch lane k's fork, or the replay from the watched one), export:<k> and
+# delete:<k> (two clicks: the first arms it)
 HUD_ASK = "tagpu_replayhud.dump"
 HUD_OUT = "tagpu_replayhud.json"
 
@@ -7321,7 +7323,8 @@ def build_parser():
                     help="show | wait | click <key> | hover <key> | wheel <key> <notches> | "
                          "scrub <from> <to> | drag <key> <dx> <dy> -- a key as `show` lists it "
                          "(play, speed, track, jump:2, fold:0, cursors, stats, chip:army, drag, "
-                         "takeover, takeas:<row>, lanes, picker, ...); a row's button hovers its "
+                         "takeover, takeas:<row>, lanes, picker, lane:<k>, export:<k>, delete:<k>, "
+                         "...); a row's button hovers its "
                          "row first")
     hd.add_argument("rest", nargs="*")
     hd.add_argument("--right", action="store_true", help="click: the right button")

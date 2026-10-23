@@ -62,6 +62,13 @@ CASES = [
     ("4k-150-picker-full", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&nf=3&pick&paused", None, ""),
     ("1080-100-watched-fork-closed", "res=1920x1080&game=off&hud=100&np=6&nt=1&t=40&nf=3&tl=1&paused", None, ""),
     ("4k-150-picker-held", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&nf=3&pick&paused", None, "takeover"),
+    # the lanes open, three forks of which the third by branch point is a fork of the first: its line
+    # rises to the first's lane; watched, the chain fills along the first lane to its branch; the
+    # lane the picker's takeover replaces outlined; a lane held
+    ("4k-150-lanes", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&nf=3&lo&paused", None, ""),
+    ("1440-75-lanes-watched", "res=2560x1440&game=200&hud=75&np=8&nt=2&t=90&nf=3&lo&tl=1&paused", None, ""),
+    ("1080-100-lanes-picker", "res=1920x1080&game=off&hud=100&np=6&nt=1&t=40&nf=3&lo&pick&paused", None, ""),
+    ("4k-150-lanes-held", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&nf=3&lo&paused", None, "lane:0"),
 ]
 # a chart point is a float in the game and a double in the mockup, and both write it to a tenth: one
 # within 1e-5 of a tenth's half can round either way, so a point may differ by that tenth

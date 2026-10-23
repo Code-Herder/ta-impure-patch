@@ -152,6 +152,9 @@ int main(int argc, char** argv)
         snprintf(f->name, sizeof f->name, "%s", tj_str(tj_get(e, "name"), ""));
         f->from = (float)tj_num(tj_get(e, "from"), 0);
         f->end = (float)tj_num(tj_get(e, "end"), 0);
+        f->parent = (int)tj_num(tj_get(e, "parent"), 0);
+        /* the packet's flags (TAGPU_PK_FORK_*): the mockup's `chain`, and the watched one by its place */
+        f->flags = (tj_is(tj_get(e, "chain"), TJ_TRUE) ? 2 : 0) | (st->nfork - 1 == st->timeline ? 1 : 0);
     }
     v = tj_get(S, "stats");
     if (v) {

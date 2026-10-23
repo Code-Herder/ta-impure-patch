@@ -154,6 +154,9 @@ static void toast(const char* fmt, ...)
     va_end(a);
     s_toast[sizeof s_toast - 1] = 0;
     s_toastAt = GetTickCount();
+    /* the log keeps what the player was told: a toast shows for toast.ms of wall clock, which a
+       frame dump taken every 30 frames can miss on a slow display */
+    tagpu_logf("hud: toast \"%s\"", s_toast);
 }
 
 /* the window's place as asked: the last drag's, or the layout's */

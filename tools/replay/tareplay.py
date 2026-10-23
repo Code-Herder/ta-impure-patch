@@ -2223,10 +2223,15 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     whose live timelines are 0, 2, 4 and 5: from timeline 5 to 2 by a seek, whose world a round
     trip rebuilds in place; from 2 to 4 at a GameTime before both forks, re-chained with no seek;
     the eviction the in-level stamps decide, which the file's own would not; the re-chained
-    reader's world past 2's fork, and 4's boundary crossed on it; a refused switch, which moves nothing; the watched timeline 4
-    deleted, a switch to 0 first; and the level's end, one touch of every timeline it played.
-    `base` is a GameTime of the original before 2 and 4 fork. The tarec checks go on `results`'
-    offline pool, reading copies taken at once (`copies`)."""
+    reader's world past 2's fork, and 4's boundary crossed on it; a refused switch, which moves
+    nothing; timeline 2 exported; the watched timeline 4 deleted, a switch to 0 first; and the
+    level's end, one touch of every timeline it played. Every step the replay HUD offers is
+    driven through it, by the fork lanes (tagpu_hudinput.c, THE LANES): the switches by a lane's
+    click, the export by its Export, the deletion by Delete's two clicks; the refused switch to 1,
+    which no lane lists, stays a trigger. After each switch by a lane the markers' walker walks
+    the new chain (tagpu_hudmarks.c, the polled join). `base` is a GameTime of the original before
+    2 and 4 fork. The tarec checks go on `results`' offline pool, reading copies taken at once
+    (`copies`)."""
     segs, stop = tarec.file_segments(x2)
     live = sorted(s["id"] for s in segs if s["state"] == 1)
     if stop or live != [0, 2, 4, 5]:
@@ -2247,17 +2252,76 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     if rc:
         raise Failed(f"X2: play timeline 5: {last(text)}")
     held_start(w, log)
+    start = segs[0]["header"]["start"]
 
-    def switch(tid):
-        """The trigger's `timeline tid` and the switch's line: (the line, the log index before
-        the trigger)."""
+    def hud_until(fact, what):
+        """The HUD's dump once `fact(dump)` holds: the input acts on a click at the next fill,
+        and the dump is a later frame's."""
+        end = time.monotonic() + ACK_S
+        while True:
+            d = hud_show(w)
+            if fact(d):
+                return d
+            if time.monotonic() >= end:
+                raise Failed(f"X2: {what}: not so after {ACK_S} s: {d['state'].get('forks')}, "
+                             f"timeline {d['state'].get('timeline')}, armed {d['state'].get('armed')}")
+            nap(0.2)
+
+    def lane(tid):
+        """The index of timeline tid's lane in the frame on screen."""
+        ids = [f["id"] for f in hud_show(w)["state"]["forks"]]
+        if tid not in ids:
+            raise Failed(f"X2: no lane for timeline {tid}: the lanes are {ids}")
+        return ids.index(tid)
+
+    def markers_back(n, what):
+        """The walker of the new chain, started once the old one is joined: its line, then its
+        commander deaths and defeats in the dump when it found any."""
+        got = log.wait(r"hud: markers: (?!.*\(stopped: )", ACK_S, n)
+        if not got:
+            raise Failed(f"X2: {what}: the markers' walker did not walk the new chain in {ACK_S} s")
+        m = re.search(r"hud: markers: (\d+) commander deaths.*?(\d+) defeats", got)
+        if not m:
+            raise Failed(f"X2: {what}: the markers' walker: {got.strip()}")
+        if int(m[1]) + int(m[2]):
+            hud_until(lambda d: any(k["kind"] != "bookmark" for k in d["state"]["markers"]),
+                      f"{what}: the markers drawn again")
+        return f"{m[1]} deaths, {m[2]} defeats"
+
+    def switch(tid, by_lane=None):
+        """Timeline tid asked for -- by a click on lane `by_lane`, else by the trigger's
+        `timeline tid` -- and the switch's line: (the line, the log index before the ask)."""
         n = len(log.lines)
-        w.trigger(f"timeline {tid}")
+        if by_lane is None:
+            w.trigger(f"timeline {tid}")
+        else:
+            hud(w, "click", f"lane:{by_lane}")
         got = log.wait(rf"replay: .*: watching timeline {tid} (at GameTime|from GameTime|"
                        rf"refused)", ACK_S, n)
         if not got:
-            raise Failed(f"X2: no answer to `timeline {tid}` in {ACK_S} s")
+            raise Failed(f"X2: no answer to timeline {tid}'s "
+                         f"{'trigger' if by_lane is None else f'lane {by_lane}'} in {ACK_S} s")
         return got, n
+
+    # the lanes opened by the Forks bay: by branch point 2, 5 and 4, 5 a fork of 2, each lane the
+    # file's segment, 5 watched; every lane's three controls clickable
+    hud(w, "click", "lanes")
+    d = hud_until(lambda d: d["state"]["lanesOpen"], "the Forks bay opened")
+    lanes = d["state"]["forks"]
+    want = [(t, at[t]["parent"], (at[t]["fork_at"] - start) / 30, (at[t]["last"] - start) / 30)
+            for t in (2, 5, 4)]
+    if [(f["id"], f["parent"]) for f in lanes] != [(t, q) for t, q, _, _ in want] or \
+            any(abs(f["from"] - a) > 1e-3 or abs(f["end"] - b) > 1e-3
+                for f, (_, _, a, b) in zip(lanes, want)):
+        raise Failed(f"X2: the lanes {lanes}; the file's (id, parent, from, end) {want}")
+    if d["state"]["timeline"] != 1:
+        raise Failed(f"X2: the watched lane is {d['state']['timeline']}, not 5's, 1")
+    keys_on = {h["key"] for h in d["hits"]["at"]}
+    lost = [f"{a}:{k}" for k in range(3) for a in ("lane", "export", "delete")
+            if f"{a}:{k}" not in keys_on]
+    if lost:
+        raise Failed(f"X2: the lanes' controls {lost} are not in the hit map")
+    walks = []
 
     def watched(tid, chain):
         st = hud_state(w, log)
@@ -2273,11 +2337,12 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
         return copies(f"X2 {dname}", w.gamedir / "replays" / f"dump-{dname}.bin")[0]
 
     # 2. the seek path, 5 -> 2: GameTime T5 + 1 is in 5's own segment, which 2's chain lacks
-    got, n = switch(2)
+    got, n = switch(2, lane(2))
     want = f"watching timeline 2 at GameTime {T5 + 1} (sought from {T5} in "
     if want not in got or not log.wait(rf"replay: .*: at GameTime {T5 + 1}, sought from GameTime "
                                        rf"{T5} in ", 0, n):
         raise Failed(f"X2: 5 -> 2: {got.strip()}; wanted the seek's line, then `{want}`")
+    walks.append(f"2: {markers_back(n, '5 -> 2')}")
     arm(w, log, f"roundtrip x2a at {T5 + 31}", rf"round trip x2a armed for GameTime {T5 + 31}",
         r"round trip x2a( at \d+)? refused", "X2: roundtrip x2a")
     run_to(w, log, T5 + 31, [])
@@ -2295,13 +2360,26 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     w.trigger(f"hud seek {base}")
     if not log.wait(rf"replay: .*: at GameTime {base}, sought from ", ACK_S, n):
         raise Failed(f"X2: the HUD's seek to {base}: no seek line")
-    got, n = switch(4)
+    got, n = switch(4, lane(4))
     want = f"watching timeline 4 from GameTime {base - 1} (shared history: no rebuild)"
     if want not in got or log.wait(r"replay: .*: at GameTime \d+, sought from ", 0, n):
         raise Failed(f"X2: 2 -> 4: {got.strip()}; wanted `{want}` and no seek")
+    walks.append(f"4: {markers_back(n, '2 -> 4')}")
+    watched(4, [0, 4])
+    # the watched lane clicked goes back to the replay, and clicked again watches 4 once more
+    got, n = switch(0, lane(4))
+    if "refused" in got:
+        raise Failed(f"X2: the watched lane back to the replay: {got.strip()}")
+    walks.append(f"0: {markers_back(n, '4 -> 0')}")
+    hud_until(lambda d: d["state"]["timeline"] == -1, "back to the replay")
+    got, n = switch(4, lane(4))
+    if "refused" in got:
+        raise Failed(f"X2: 0 -> 4: {got.strip()}")
+    walks.append(f"4: {markers_back(n, '0 -> 4')}")
     watched(4, [0, 4])
     # 4. the eviction: the file's last-used order puts 2 (touched by the lane's playing of 2)
-    # before 5 (made after it); the level's stamps -- 5 left at step 2, 2 at step 3 -- put 5 first
+    # before 5 (made after it); the level's stamps, in the order the timelines were left -- 5 at
+    # step 2, 2 at step 3, then 4 and 0 by the lanes -- put 5 first, 4 being the one watched
     if not used[2] < used[5]:
         raise CouldNotRun(f"X2: the file's last-used times do not put 2 before 5: {used}")
     n = len(log.lines)
@@ -2332,10 +2410,35 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
         raise Failed(f"X2: the switch to 1: {got.strip()}")
     d = dump_now("x2d")
     results.later(check_or_fail, "X2: a refused switch", "compare-dumps", x2, c, d)
-    # 7. the watched timeline deleted: a switch to 0 first, past 4's fork a seek, then the
-    # deletion and its outcome
+    # the export of 2 by its lane's Export: replays\<name>-F2.imprec, the chain [0, 2]; taken out
+    # of the instance's replays\ at once, since the later steps count that folder
     n = len(log.lines)
-    w.trigger("hud fork delete 4")
+    hud(w, "click", f"export:{lane(2)}")
+    done = log.wait(r"the HUD's fork request (?:\d+ done|\d+ refused|refused|\d+):", 180, n)
+    if not done or " done: " not in done:
+        raise Failed(f"X2: the lane's export of 2: {done.strip() if done else 'no outcome'}")
+    if not log.wait(r'hud: toast "F2 saved as a replay of its own"', ACK_S, n):
+        raise Failed("X2: the lane's export of 2: no toast `F2 saved as a replay of its own`")
+    exported = w.gamedir / "replays" / f"{name}-F2.imprec"
+    copy, = copies("X2 export", exported)
+    exported.unlink()
+    esegs, estop = tarec.file_segments(copy)
+    if estop or [s["id"] for s in esegs if s["state"] == 1] != [0, 2]:
+        raise Failed(f"X2: the lane's export holds {[s['id'] for s in esegs]}, not the chain [0, 2]"
+                     + (f" ({estop})" if estop else ""))
+    for s in esegs:
+        results.later(check_or_fail, f"X2: the lane's export, timeline {s['id']}", "check", copy,
+                      "--timeline", s["id"])
+    # 7. the watched timeline deleted by its lane's Delete, the first click arming it: a switch to
+    # 0 first, past 4's fork a seek, then the deletion and its outcome
+    k4 = lane(4)
+    n = len(log.lines)
+    hud(w, "click", f"delete:{k4}")
+    if not log.wait(r'hud: toast "Click again to delete F4"', ACK_S, n):
+        raise Failed("X2: Delete's first click: no toast `Click again to delete F4`")
+    hud_until(lambda d: d["state"]["armed"] == k4, "Delete armed")
+    n = n_del = len(log.lines)
+    hud(w, "click", f"delete:{k4}")
     order = (r"replay: .*: watching timeline 0 (at GameTime \d+ \(sought|refused)",
              r"replay: forks .*: (done|refused): .*timeline 4",
              r"replay: .*: the HUD's fork request (\d+ )?(done|refused)")
@@ -2353,6 +2456,11 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     left = sorted(r["id"] for r in st["timelines"] if r["live"])
     if left != [0, 2, 5]:
         raise Failed(f"X2: hud state's live timelines after the deletion: {left}")
+    walks.append(f"0: {markers_back(n_del, 'the deletion of 4')}")
+    d = hud_until(lambda d: [f["id"] for f in d["state"]["forks"]] == [2, 5], "the lanes after the deletion")
+    if d["state"]["timeline"] != -1 or d["state"]["armed"] != -1:
+        raise Failed(f"X2: after the deletion the watched lane is {d['state']['timeline']} and the "
+                     f"armed one {d['state']['armed']}, not -1 and -1")
     # 8. the level's end: one touch, the last timeline first, then the others as they were left;
     # 4 is deleted and skipped
     if fx["cover"]:
@@ -2377,9 +2485,9 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     w.collect(out / "X2")
     w.stop()
     results.add(("forks: X2, watching another timeline in place", PASS,
-                 f"5 -> 2 sought at {T5 + 1}; 2 -> 4 re-chained at {base - 1}; the stamps evict 5; "
-                 f"4 at {F2 + 30} and past {F4}; 1 refused; delete 4 by way of 0; touched 0, 5, "
-                 f"2"))
+                 f"by the lanes: 5 -> 2 sought at {T5 + 1}; 2 -> 4 re-chained at {base - 1}, back to 0 "
+                 f"and to 4; the stamps evict 5; 4 at {F2 + 30} and past {F4}; 1 refused; 2 "
+                 f"exported; delete 4 by way of 0; touched 0, 5, 2; walks {'; '.join(walks)}"))
 
 
 def forks_steps(w, fx, out, results):
