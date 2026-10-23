@@ -15067,7 +15067,9 @@ at `ctrls+0xEC`. Callers reject any result that differs from requested text.
   nibble [INFERRED: which kinds of message the player's setting shows]. In engine pixels, so under
   HUD scale they move with the world region. Three callers: `0x469FCB` (DrawGameScreen, return
   address `0x469FD0`), `0x41F7A5` and `0x41F9D8` (both outside DrawGameScreen; return addresses
-  `0x41F7AA` and `0x41F9DD`). The frame at `0x4640D6`: `sub esp,0x20` and four pushes, `0x30`
+  `0x41F7AA` and `0x41F9DD`). `0x41F9D8` is in `0x41F7F0`, which loads `MSGBOX.GUI` (`push 0x502BD4` at `0x41F97C`); `0x41F7A5` is in `0x41F760`, gated on `main+0x39057 == 1`, whose address appears nowhere in the exe, so how it is reached is not known [INFERRED: an address computed at run time, or not at all]. Neither is measured under the strip; the gate stores `0x34` for both (DISASSEMBLED: `0x41F765 cmp dword [eax+0x39057],1`,
+  `jne 0x41F7E0`; no call, jump or stored dword names `0x41F760`; `0x41F7F0` is reached by
+  `jmp` at `0x499880`). The frame at `0x4640D6`: `sub esp,0x20` and four pushes, `0x30`
   bytes above the return address; the push of `0x4640B1` is the argument of `0x4C1420`, whose
   `ret 4` pops it, so the return address is `[esp+0x30]` there (DISASSEMBLED). **Patched at
   `0x4640D6..0x4640DD`**,
@@ -15089,9 +15091,9 @@ at `ctrls+0xEC`. Callers reject any result that differs from requested text.
   and `0x4640E4 dec ecx` sets them again before any read (`je` at `0x4640E5` reads ZF only, and
   no carry reader comes before a `cmp`). `s_chatTop` (`tagpu_hudinput.c`) is written on the same
   game thread at the hit map's take (`tagpu_hudinput_take`, in DrawGameScreen's hook before the
-  draw) and the level's end: `0x34`, or, when that map has the live HUD's strip (the last frame
-  drawn had it), `32 + live_clear · scale · gh / 720`, so the lines start under the strip
-  (hud-in-game.md, *The top layer*).
+  draw), from a map whose HUD pass ran only, and at the level's end: `0x34`, or, when that map
+  has the live HUD's strip (the last frame drawn had it), `32 + live_clear · scale · gh / 720`, so
+  the lines start under the strip (hud-in-game.md, *The top layer*).
 - **`0x467D70` the HUD panel painter**, `void (void)`, one caller `0x49842A`, prologue
   `A1 E8 1D 51 00` (5): `esi = *(main+0x37E1B)`; `0x4C69A0(esi)`; `0x4C6890(esi, 0)`; three
   side-specific GAF frames (`main + side·4 + 0x1481F / 0x14833 / 0x14847`, side from

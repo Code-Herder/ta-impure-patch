@@ -19,7 +19,8 @@ top bar and, while a rewind is open, its strip under the bar — and drives the 
 own verbs. Its layout agrees with the mockup's (laycheck). MEASURED 2026-10-23 by the runner's
 games, on the reference setup's private Xvfb:
 
-- **at 8056ef6a**: U's 36 checks with the HUD cycle, every comparison EQUAL; the W control, W's 10
+- **at 8056ef6a**: U's 36 checks with the HUD cycle of that commit (open, rew, Back to now),
+  every comparison EQUAL; the W control, W's 10
   checks (`tareplay.py run stock-limits --cover`); the button and the strip placed as the mockup
   places them at 1080 with the HUD at 100 and at 4K with the HUD at 150; the cursor over the
   button; the PAUSED rule; GDI unchanged;
@@ -29,7 +30,12 @@ games, on the reference setup's private Xvfb:
 - **at 54adfac8**: U and U-E 40 of 40 again (`tareplay.py rewind battle --cover`); the captures
   against the mockup with message lines on screen, the strip open and closed, and the armed toast
   with its eviction; a 250-frame recording of the Config panel opened and closed over the open
-  strip, in which no frame shows the strip over the panel.
+  strip, in which no frame shows the strip over the panel;
+- **at c7bdb170**: U and U-E 45 of 45 with the HUD cycle *The tests* describe
+  (`tareplay.py rewind battle --cover`); `tareplay.py run stock-limits --cover` 132 passed, none
+  failed; the captures with message lines, the Config panel and the toast; and a world A/B in a
+  recorded skirmish captures with the HUD in the frame, and stands down only while the UI pass
+  is on too, as it always has.
 
 What is still owed is in *Gaps*.
 
@@ -197,7 +203,8 @@ The owner's decisions:
   or FPS A/B with the HUD drawn stands down rather than comparing the wrong frame, while a world
   A/B, which reads the world target, does not count it (`tagpu_vk.c`). A live recorded skirmish
   always draws the rewind button and no lever turns the HUD off there, so counting it would refuse
-  every world A/B in one.
+  every world A/B in one. The UI pass still counts: under the play defaults a world A/B needs
+  `tagpu_gui.off`, as before.
 - **The render thread builds its state in the overlay frame.** `tagpu_overlay.c` calls
   `tagpu_hudstate_present` after `tagpu_gui_present`, which turns the packet's record into the
   layout's state and stamps it with the frame's `frame_counter`; the pass takes it through
@@ -830,18 +837,24 @@ are flagged `HOPF_TOP` and drawn after the composite:
   DrawChatText's store of its first line's top (`0x4640D6`, `chat_top_init`, `tagpu_replay.c`)
   stores `tagpu_hudinput_chat_top`'s value instead of `0x34` when its return address is
   DrawGameScreen's (`0x469FD0`, after the call at `0x469FCB`), and `0x34` for the two other
-  callers, `0x41F7A5` and `0x41F9D8`, whose lines no strip covers. The game thread sets that value
-  at the hit map's take (`tagpu_hudinput_take`), which runs in DrawGameScreen's hook before the
-  draw that calls DrawChatText, so the lines' top and the controls a click is tested against are
-  one map's: `0x34` when the map is empty (no HUD, its pass refused, GDI), or, when it has the
-  strip's plate (`live`), the first engine row clear of the strip,
+  callers: `0x41F9D8` is in `0x41F7F0`, which loads `MSGBOX.GUI` (`push 0x502BD4` at `0x41F97C`); `0x41F7A5` is in `0x41F760`, gated on `main+0x39057 == 1`, whose address appears nowhere in the exe, so how it is reached is not known [INFERRED: an address computed at run time, or not at all]. Neither is measured under the strip; the gate stores `0x34` for both. The game thread sets that value at the hit map's take
+  (`tagpu_hudinput_take`), which runs in DrawGameScreen's hook before the draw that calls
+  DrawChatText. **Only a map whose HUD pass ran moves it** (the map's `pass`, set by
+  `tagpu_vk_hud_prepare`'s first call and cleared by each record): a render frame `vk_present`
+  did not prepare posts an empty map that says nothing about the screen, which still shows the
+  last frame presented, so the lines keep that frame's verdict instead of jumping to `0x34` for one
+  draw. A map with `pass` gives `0x34` when that frame drew no strip, or, when it has the strip's
+  plate (`live`), the first engine row clear of the strip,
   `32 + live_clear · scale · gh / 720`. `live_clear` is the layout's `2·strip.t + strip.h`, the
   strip's gap under the bar again under it; `scale` the HUD's own; `gh` the engine's height. A
   HUD unit is the attachment's height / 720 times the scale, and the bar is the frame's `bh`
   scaled by the attachment's height over `gh`, so the window's size cancels out and the row is
   exact in the frame's pixels; the world region is drawn `bh − 32` lower than the engine draws
-  it, which gives the engine's row. Back to `0x34` when the strip is not drawn, in a replay and at
-  the level's end. GDI draws no HUD, so its lines never move. If the bytes at `0x4640D6` or the
+  it, which gives the engine's row. Every way the HUD stops drawing gives `0x34`: on GDI and once
+  the HUD is refused the mode is NONE on the game thread (`tagpu_hudstate_on`), which the take
+  checks first, with no map needed; with no level to show no packet is filled, and the pass that
+  runs builds no state and posts an empty map with `pass` set; a replay's map has no strip; the
+  level's end resets it. GDI draws no HUD, so its lines never move. If the bytes at `0x4640D6` or the
   call at `0x469FCB` differ the log says `replay: DrawChatText's first line 0x4640D6 or its call
   0x469FCB holds other bytes: the messages stay under the live HUD's strip`, and the strip still
   covers them.
@@ -874,7 +887,7 @@ are flagged `HOPF_TOP` and drawn after the composite:
 
 ### The tests
 
-U clicks the HUD on the live level before its fork (`tarewind.py`, `hud_cycle`): the button
+U's HUD cycle clicks the HUD on the live level before its fork (`tarewind.py`, `hud_cycle`): the button
 opens the strip, with fwd not clickable there, and closes it unmoved; Play from here in the open
 strip closes it; in the past rew seeks back twice, fwd seeks 10 s forward, a drag on the track
 released at its right end seeks to the span's last GameTime, and from there fwd returns to now;

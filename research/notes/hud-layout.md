@@ -147,7 +147,8 @@ dark edge, and an icon it lacks as a stand-in glyph.
   reuses the bay buttons, the timeline fill and the playhead. Its play is drawn disabled (`off`):
   the rewind holds the past paused and has no verb that plays it. Its fwd is drawn disabled while
   the playhead is at the strip's end (`off_at_end`), the rewind open and not yet moved, with
-  nothing ahead of it; from the past, a fwd that reaches the end is Back to now. Play from here is drawn pressed
+  nothing ahead of it; from the past, a fwd that reaches the recording's last GameTime, a tick
+  before the strip's end, is Back to now, in the page as in the game. Play from here is drawn pressed
   while it is armed (the game's dump, `rw.arm` 2), and `?state=` draws the game's live dump.
 
 The shell screens of variation B (fork rows in the Replays browser, Delete and Play on there,
