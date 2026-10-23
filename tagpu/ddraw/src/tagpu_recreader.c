@@ -2857,6 +2857,18 @@ int recr_segment_mp(const RecReader* r) { return r->in_seg && seg_header(r)->has
 
 int recr_segment_cells(const RecReader* r) { return r->in_seg && recr_holds_cells(seg_header(r)); }
 
+int recr_segment_controllers(const RecReader* r, unsigned char ctl[REC_PLAYERS])
+{
+    const RecHeader* h;
+    unsigned i;
+    memset(ctl, 0, REC_PLAYERS);
+    if (!r->in_seg) return 0;
+    h = seg_header(r);
+    for (i = 0; i < h->nseats; i++)
+        if (h->seats[i].index < REC_PLAYERS) ctl[h->seats[i].index] = h->seats[i].controller;
+    return 1;
+}
+
 /* 1 the header is of this format */
 static int info_header(RecInfo* o, const unsigned char* b, size_t len)
 {

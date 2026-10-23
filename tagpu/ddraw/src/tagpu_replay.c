@@ -922,6 +922,11 @@ static void viewer_take(const char* ta)
     s_vrec.taken = 1;
 }
 
+/* getter 75's answer for a seat's units on a puppet: 1 where the recording machine simulated
+   them, its humans and its AIs, as the live getter answers from +0x73 (tagpu_patches.c,
+   cob_get) */
+static unsigned char seat_local(unsigned controller) { return controller == 1 || controller == 2; }
+
 /* §6.4's seating, after validate; `view` the viewed player, V or a recorded seat (§2.9) */
 static void seat_level(char* ta, const RecHeader* h, unsigned view)
 {
@@ -943,7 +948,7 @@ static void seat_level(char* ta, const RecHeader* h, unsigned view)
         name_put(rec + PL_NAME2, s->name);
         memcpy(rec + PL_ALLY, s->ally, 11);     /* the activation zeroes the row */
         seatv[s->index] = 1;
-        localv[s->index] = s->controller == 1 || s->controller == 2;   /* getter 75 there */
+        localv[s->index] = seat_local(s->controller);
         if (s->index == h->controlled) shown = s;
         if (s->index < lowest) lowest = s->index;
     }
@@ -5073,11 +5078,29 @@ static unsigned mp_make_held(const Lv* L)
    replay plays it as a skirmish's -- the recorded world whole, the cells as that segment holds
    them (THE UNIT SLOTS AND THE YARD BIT) -- and in the file's own segment it composes T's world
    (THE SEEK OF A MULTIPLAYER RECORDING). Called after every reader seek, before the seek writes
-   anything, so the contest's rule a crossing changes is in before the seek's creates stamp. 1,
-   or 0 the playing stopped. */
+   anything, so the contest's rule a crossing changes is in before the seek's creates stamp, and
+   getter 75's per-seat answers are the segment's controllers' (THE ORDERING in
+   tagpu_puppet_locals). 1, or 0 the playing stopped. */
 static int mp_follow(const Lv* L, unsigned T)
 {
+    _Static_assert(PUPPET_PLAYERS == REC_PLAYERS, "getter 75's answers are by recorded player");
+    unsigned char ctl[REC_PLAYERS], local[PUPPET_PLAYERS];
     int here, held;
+    unsigned i;
+    /* before the skirmish return: a skirmish chain's seeks follow it too, its answers staying 1;
+       a reader that stands in no segment leaves the answers as they are */
+    if (recr_segment_controllers(s_rd, ctl)) {
+        for (i = 0; i < REC_PLAYERS; i++) local[i] = seat_local(ctl[i]);
+        if (tagpu_puppet_locals(local)) {
+            char seats[3 * REC_PLAYERS + 1];
+            unsigned n = 0;
+            seats[0] = 0;
+            for (i = 0; i < REC_PLAYERS; i++)
+                if (local[i]) n += (unsigned)snprintf(seats + n, sizeof seats - n, " %u", i);
+            tagpu_logf("replay: %s: from GameTime %u getter 75 answers 1 for seats%s, the "
+                       "segment's own humans and AIs", s_name, T, n ? seats : " none");
+        }
+    }
     if (!s_mp.level) return 1;
     here = recr_segment_mp(s_rd);
     held = !here && recr_segment_cells(s_rd);

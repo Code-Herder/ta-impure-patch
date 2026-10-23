@@ -51,6 +51,11 @@ void tagpu_puppet_end(void);
    logged, inside a footprint writer. 1, or 0 when the contest's rule could not follow it, and
    then nothing changed. */
 int tagpu_puppet_engine_cells(int engine_cells, int mp_state);
+/* getter 75's answers anew, for the segment a playing's reader stands in after a seek
+   (tagpu_replay.c, mp_follow). On the game thread between steps, before the seek remakes every
+   unit, whose Create reads them first. 0 when this level plays no recording, else 1 when any
+   answer changed. */
+int tagpu_puppet_locals(const unsigned char local[PUPPET_PLAYERS]);
 /* 1 when the six contest sites held the stock bytes at attach and none holds another module's
    bytes now (tagpu_contest.h): then the recording machine's rule goes in unless a page write
    fails. A level that would need that rule (THE CONTEST'S RULE) plays, and a rewind of such a

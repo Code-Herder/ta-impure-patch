@@ -833,6 +833,23 @@ int tagpu_puppet_engine_cells(int engine_cells, int mp_state)
     return 1;
 }
 
+/* THE ORDERING: the only writer after the seat fill, between steps inside a seek's R0, before R3
+   kills every unit and R7 makes T's afresh -- and a fresh COB's Create reads getter 75 first --
+   so no unit runs on an earlier segment's answer; the loader's reads of the table ended before
+   the first step (PuppetTable.playing), which every seek follows. */
+int tagpu_puppet_locals(const unsigned char local[PUPPET_PLAYERS])
+{
+    unsigned i;
+    int changed = 0;
+    if (!s_pup.on) return 0;
+    for (i = 0; i < PUPPET_PLAYERS; i++) {
+        unsigned char v = local[i] ? 1 : 0;
+        if (s_pup.local[i] != v) changed = 1;
+        s_pup.local[i] = v;
+    }
+    return changed;
+}
+
 void tagpu_puppet_end(void)
 {
     /* the engine's own rule again, or contest_write has logged why a NOP of ours stays, which

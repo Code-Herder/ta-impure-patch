@@ -301,6 +301,11 @@ int recr_segment_mp(const RecReader* r);
 /* 1 when that segment holds its cells (recr_holds_cells): every skirmish segment a writer of
    this format makes (REC_SKIRMISH_HOLDS), a multiplayer file's takeover timeline among them */
 int recr_segment_cells(const RecReader* r);
+/* The controllers of the seats of the segment the world was last read from, by record:
+   ctl[index] its RT_PLAYER controller for each seat that header names, 0 for every other
+   record. 1, or 0 before an iteration is read (ctl all 0). A copy: the segment's header is
+   freed by the next scan of the file's segments (segs_scan), which most reader calls run. */
+int recr_segment_controllers(const RecReader* r, unsigned char ctl[REC_PLAYERS]);
 /* Where a fork at `at` is appended, found afresh: the caller holds the file open for writing
    first, so no other writer can change it until the fork's writer has used this (tagpu_replay.c,
    TK0). A torn last block is not kept, an unfinished last segment with no complete iteration is
