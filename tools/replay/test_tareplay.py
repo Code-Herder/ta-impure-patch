@@ -3017,6 +3017,7 @@ class HudState(unittest.TestCase):
         lines = [
             "12:00:01 replay: forks: hud state timelines 0:0@0..5000/L/c1* 1:0@316..760/D/c1 "
             "2:0@1201..1650/L/c1* 5:2@1202..1650/L/c1*; axis 1..5000; span 1..1650; watched 5\r",
+            "12:00:01 replay: forks: hud state cache serial 3",
             "12:00:01 replay: forks: hud state rewind idle available 0 span 0..0 G 0 T 0",
             "12:00:01 replay: forks: hud state result 7 fork op 2 ok: exported timeline 4",
         ]
@@ -3026,7 +3027,8 @@ class HudState(unittest.TestCase):
         self.assertEqual(got["timelines"][1], {"id": 1, "parent": 0, "fork_at": 316, "last": 760,
                                                "live": False, "controlled": 1, "on_chain": False})
         self.assertEqual([r["id"] for r in got["timelines"] if r["on_chain"]], [0, 2, 5])
-        self.assertEqual((got["axis"], got["span"], got["watched"]), ((1, 5000), (1, 1650), 5))
+        self.assertEqual((got["axis"], got["span"], got["watched"], got["cache"]),
+                         ((1, 5000), (1, 1650), 5, 3))
         self.assertEqual(got["rewind"], {"state": "idle", "available": False, "span": (0, 0),
                                          "G": 0, "T": 0})
         self.assertEqual(got["result"], {"serial": 7, "kind": "fork", "op": 2, "ok": True,
@@ -3035,6 +3037,7 @@ class HudState(unittest.TestCase):
     def test_none_and_refused(self):
         lines = [
             "replay: -: hud state timelines none; axis 0..0; span 0..0; watched 0",
+            "replay: -: hud state cache serial 0",
             "replay: -: hud state rewind open available 0 span 1..900 G 900 T 0",
             "replay: -: hud state result 3 rewind op -1 refused: refused: no rewind is open",
         ]
@@ -3049,6 +3052,7 @@ class HudState(unittest.TestCase):
             ["replay: -: hud state timelines none; axis 0..0; span 0..0; watched 0"]))
         self.assertIsNone(tareplay.hud_state_parse([
             "replay: x: hud state timelines 0:0@0..9/Q/c1; axis 0..9; span 0..9; watched 0",
+            "replay: x: hud state cache serial 1",
             "replay: x: hud state rewind idle available 1 span 0..0 G 0 T 0",
             "replay: x: hud state result 0 none op 0 refused: "]))
 

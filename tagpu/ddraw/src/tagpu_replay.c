@@ -322,6 +322,9 @@ static struct {
     int      failed;                /* a scan failure is logged once a playing; the rows come
                                        back at the next refresh point that scans               */
 } s_tlc;
+/* tagpu_replay_timelines_serial: one more at each change of the cache's rows or axis, the
+   playing's end emptying it included; outside s_tlc, so no reset gives an old value again */
+static unsigned s_tlc_serial;
 static void tlc_refresh(void);
 /* the HUD's fork requests the file worker has not answered yet (tagpu_replay_fork_op): four,
    since a click a frame cannot outrun the worker's eight jobs and the HUD shows one outcome at
@@ -543,6 +546,7 @@ static void replay_close(void)
     memset(&s_seek, 0, sizeof s_seek);
     s_hold = 0;                         /* a boundary's hold ends with its playing */
     s_frame_tick = ~0u;
+    if (s_tlc.n || s_tlc.axis_first || s_tlc.axis_last) s_tlc_serial++;
     memset(&s_tlc, 0, sizeof s_tlc);
     memset(s_fk, 0, sizeof s_fk);
     slice_reset();
@@ -8568,6 +8572,7 @@ static void rw_visit(void)
      `<id>:<parent>@<fork_at>..<last>/<L|D>/c<controlled>` with `*` after a row on the chain,
      `none` with NAME `-` when no recording is open (tagpu_replay_timelines, tagpu_replay_axis,
      tagpu_replay_span, tagpu_replay_timeline);
+     `... hud state cache serial S` (tagpu_replay_timelines_serial);
      `... hud state rewind <idle|flush|open|past|ending> available <0|1> span F..L G g T t`
      (tagpu_replay_rewind_state);
      `... hud state result <serial> <none|takeover|rewind|fork|seek> op <op> <ok|refused>: <why>`
@@ -9467,7 +9472,7 @@ static int tlc_open(void)
    old tables on failure, and seeks back to where the reader stood -- so the cache adds no new
    kind of read. The axis: the root's first GameTime and the greatest last GameTime of the span
    and every live timeline; a failed scan leaves no rows and the span as the axis. */
-static void tlc_refresh(void)
+static void tlc_scan(void)
 {
     RecTimeline rows[RECR_TIMELINES];
     unsigned ids[RECR_TIMELINES], nids, i, j;
@@ -9503,6 +9508,40 @@ static void tlc_refresh(void)
         if (t->live && t->last > s_tlc.axis_last) s_tlc.axis_last = t->last;
     }
     s_tlc.n = n;
+}
+
+/* the cache's rows and axis as they stand, for tlc_changed */
+typedef struct {
+    int n;
+    unsigned axis_first, axis_last;
+    TAGPU_REPLAY_TIMELINE row[RECR_TIMELINES];
+} TlcView;
+
+static void tlc_view(TlcView* v)
+{
+    memset(v, 0, sizeof *v);
+    v->n = s_tlc.n;
+    v->axis_first = s_tlc.axis_first;
+    v->axis_last = s_tlc.axis_last;
+    memcpy(v->row, s_tlc.row, (size_t)s_tlc.n * sizeof *v->row);
+}
+
+/* the serial moves when what tagpu_replay_timelines and tagpu_replay_axis give has changed since
+   `was`: the rows compare whole, every field written by tlc_scan (no padding: unsigneds and ints) */
+static void tlc_changed(const TlcView* was)
+{
+    TlcView now;
+    tlc_view(&now);
+    if (memcmp(&now, was, sizeof now)) s_tlc_serial++;
+}
+
+static void tlc_refresh(void)
+{
+    TlcView was;
+    if (!s_rd) return;
+    tlc_view(&was);
+    tlc_scan();
+    tlc_changed(&was);
 }
 
 int tagpu_replay_takeover_plan(unsigned T, TAGPU_REPLAY_TKPLAN* out)
@@ -9579,6 +9618,11 @@ int tagpu_replay_timelines(TAGPU_REPLAY_TIMELINE* out, int cap)
     n = s_tlc.n < cap ? s_tlc.n : cap;
     for (i = 0; i < n; i++) out[i] = s_tlc.row[i];
     return n;
+}
+
+unsigned tagpu_replay_timelines_serial(void)
+{
+    return s_tlc_serial;
 }
 
 int tagpu_replay_axis(unsigned* first, unsigned* last)
@@ -9728,6 +9772,7 @@ static void hud_state_log(void)
     tagpu_replay_span(&sf, &sl);
     tagpu_logf("replay: %s: hud state timelines %s; axis %u..%u; span %u..%u; watched %u", name,
                rows, af, al, sf, sl, tagpu_replay_timeline());
+    tagpu_logf("replay: %s: hud state cache serial %u", name, tagpu_replay_timelines_serial());
     tagpu_replay_rewind_state(&rw);
     tagpu_logf("replay: %s: hud state rewind %s available %d span %u..%u G %u T %u", name,
                (unsigned)rw.state < 5 ? states[rw.state] : "?", rw.available, rw.first, rw.last,
