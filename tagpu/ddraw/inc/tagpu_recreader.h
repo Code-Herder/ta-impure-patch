@@ -249,7 +249,7 @@ int recr_format_of(const char* path);
    it one recording's. key[0] is the block's crc_body, key[1] its crc_head. Read through `f` from
    byte 0, which moves its file pointer, so any handle with read access serves, an exclusive one
    included. 1 read; 0 the file does not begin with a whole header block (not a recording, or one
-   cut inside its first block), the key zero; -1 the file could not be read. */
+   cut before its first block's header ends), the key zero; -1 the file could not be read. */
 int recr_root_key(void* f, unsigned key[2]);
 
 /* A TIMELINE is a segment of the file (tagpu_recfmt.h): the original, id 0, or a fork recorded

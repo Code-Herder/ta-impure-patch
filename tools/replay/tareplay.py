@@ -1557,6 +1557,30 @@ def index_lines(rd):
     return {ln.split("\t", 1)[0]: ln for ln in lines if "\t" in ln}
 
 
+def root_key(path):
+    """recr_root_key's key as index.dat writes it: the root header block's crc_body and crc_head,
+    the block right after the 8-byte magic, at bytes 32..40 (tagpu_recfmt.h, RecBlock)."""
+    return "%08X%08X" % struct.unpack_from("<II", Path(path).read_bytes()[:40], 32)
+
+
+def keyed_line(rd, name, T, what):
+    """The index's line of `name`, Failed unless the index is version 2's and the line carries
+    its file's root key, the favourite and the one bookmark at T: name size key format start last
+    end fav played map nseats seat... marks (tagpu_replays.c, the index). Returns a summary."""
+    f = rd / "index.dat"
+    head = f.read_text(errors="replace").split("\n", 1)[0] if f.exists() else ""
+    ln = index_lines(rd).get(name, "")
+    c = ln.split("\t")
+    at = 11 + int(c[10]) if len(c) > 10 and c[10].isdigit() else len(c)
+    marks = c[at] if at < len(c) else None
+    key = root_key(rd / name)
+    if head != "IMPURE-REPLAYS-INDEX\t2" or len(c) < 12 or c[2] != key or c[7] != "1" or \
+            marks != str(T):
+        raise Failed(f"{what}: index {head!r}, line {ln!r}; expected key {key}, the favourite and "
+                     f"the bookmark {T}")
+    return f"key {key}, size {c[1]}, favourite, bookmark {marks}"
+
+
 def watch_button(w):
     """The Replays browser's Watch button's state as `tacli ui` shows it: ok or grayed."""
     m = re.search(r"\bbutton\s+WATCH\s+\S+\s+(\S+)", ui(w))
@@ -1617,17 +1641,18 @@ def watch_hud(w, log, rec):
 
 def watch_lane(w, fx, rec, out, T):
     """W: the playback started as a player starts it, through the Replays browser's Watch, and
-    driven through the replay HUD: two copies of the recording refused, the data refusal's marked
-    and the missing map's not, then the recording watched, its speed changed on the HUD, the
+    driven through the replay HUD: a version-1 index converted at the browser's open, its line's
+    favourite and bookmark kept with the file's root key, two copies of the recording refused, the
+    data refusal's marked and the missing map's not, then the recording watched, its speed changed on the HUD, the
     in-game Options' OK (the settings save), a pause, the HUD's seek to T with dump w<T>, the
-    resume, Leave, and a second Watch from the browser it returns to.
+    resume, Leave with the marks still on the line, and a second Watch from the browser it
+    returns to.
     Returns its own checks, (name, verdict, detail) each; a claim that does not hold is Failed."""
     fix, stem, res = fx["fix"], fx["name"], []
     w.stop()
     w.place(fix, fx["dll"])
     rd = w.gamedir / "replays"
     rd.mkdir(exist_ok=True)
-    (rd / "index.dat").unlink(missing_ok=True)     # no mark of an earlier run's copies
     copies = [(f"{stem}-layout", tarec.RT_LAYOUT, other_layout,
                "it was recorded with another exclusion file (replay-layout.tsv)"),
               (f"{stem}-map", tarec.RT_SETTINGS_MAP, no_such_map, TERRAIN)]
@@ -1637,6 +1662,12 @@ def watch_lane(w, fx, rec, out, T):
         os.utime(rd / f"{name}.imprec", (now - 60 * k, now - 60 * k))
     shutil.copyfile(rec, rd / f"{stem}.imprec")
     os.utime(rd / f"{stem}.imprec", (now - 60 * len(copies),) * 2)
+    # THE CONVERSION (tagpu_replays.c): a version-1 index, the only line the recording's, at its
+    # file's size, a favourite with a bookmark at T (name size format start last end fav played
+    # map nseats marks): no mark of an earlier run's copies, and the line keeps both
+    (rd / "index.dat").write_text("IMPURE-REPLAYS-INDEX\t1\n"
+                                  f"{stem}.imprec\t{(rd / f'{stem}.imprec').stat().st_size}"
+                                  f"\t0\t0\t0\t0\t1\t0\t-\t0\t{T}\n", newline="\n")
     log = Log(w)
     rc, o = tacli("launch", w.name, "--defaults", "--keep-dll", timeout=LAUNCH_TIMEOUT)
     if rc:
@@ -1644,6 +1675,8 @@ def watch_lane(w, fx, rec, out, T):
     ui_on(w, "MAINMENU.GUI", 120)
     ui(w, "click", "REPLAYS")
     ui_on(w, "REPLAYS.GUI", ACK_S)
+    res.append(("W: a version-1 index converted", PASS,
+                keyed_line(rd, f"{stem}.imprec", T, "the conversion")))
 
     # the refusals: the header's check (watch_refuse), then the Start's own, past the undoable
     # steps (watch_undo); each notice answered, back to the browser
@@ -1753,6 +1786,9 @@ def watch_lane(w, fx, rec, out, T):
                      f"player's were {stored} and {ceil0}")
     res.append(("W: Leave", PASS, f"the browser back; gamespeed {back} stored, the ceiling "
                                   f"{ceil3}, the player's"))
+    # the playing's end appends its timeline table (the touch), and the marks follow the key
+    res.append(("W: the marks after the playing", PASS,
+                keyed_line(rd, f"{stem}.imprec", T, "the marks after the playing")))
 
     # a second Watch from the browser Leave returned to; its level writes the coverage, which
     # holds the first level's teardown too (the bitmap is the process's)
@@ -1797,15 +1833,17 @@ def check_or_fail(why, *args):
 def prune_step(w, fx, out, forked):
     """THE PRUNE (tagpu_recfile.h) on a recorded launch of the fixture's scenario, under the
     instance's `keep 2` (Worker): replays\\ seeded, oldest last, with two plain copies of L's
-    recording, a favourite one, a recording with live forks (`forked`, the lane's own), one in the
-    format before this build's and a file that is not a recording. Besides the new recording the
-    newest is kept; of the rest the second plain copy and the older format go, and the favourite,
+    recording, a favourite one whose line's key is unknown (as THE CONVERSION leaves it), one
+    bookmarked on a line of its own key, a recording with live forks (`forked`, the lane's own),
+    one in the format before this build's and a file that is not a recording; the second plain
+    copy's line a favourite of another key. Besides the new recording the newest is kept; of the
+    rest the second plain copy and the older format go, and the favourite, the bookmarked one,
     the forked one and the non-recording stay. Returns its check."""
     w.place(fx["fix"], fx["dll"])
     rd = w.gamedir / "replays"
     rd.mkdir(exist_ok=True)
     rec, now = Path(fx["rec"]), time.time()
-    seeds = ("plain-a", "plain-b", "starred", "forked", "older", "not-a-recording")
+    seeds = ("plain-a", "plain-b", "starred", "marked", "forked", "older", "not-a-recording")
     for k, name in enumerate(seeds):
         dst = rd / f"0000 {name}.imprec"
         if name == "forked":
@@ -1818,15 +1856,18 @@ def prune_step(w, fx, out, forked):
         else:
             shutil.copyfile(rec, dst)
         os.utime(dst, (now - 600 * (k + 1),) * 2)
-    star = rd / "0000 starred.imprec"
-    # an index line with the favourite flag set: name size key format start last end fav played
-    # map nseats marks (tagpu_replays.c, the index). The key is the root header block's crc_body
-    # and crc_head, the block right after the 8-byte magic (recr_root_key), at bytes 32..40; the
-    # plain copies share it, so the line is the starred one's by its name
-    body, head = struct.unpack_from("<II", star.read_bytes()[:40], 32)
-    (rd / "index.dat").write_text("IMPURE-REPLAYS-INDEX\t2\n"
-                                  f"{star.name}\t{star.stat().st_size}\t{body:08X}{head:08X}"
-                                  "\t0\t0\t0\t0\t1\t0\t-\t0\t\n",
+    # index lines: name size key format start last end fav played map nseats marks
+    # (tagpu_replays.c, the index). The copies of L's recording share its root key (root_key), so
+    # a line is a copy's by its name and its key: the starred one's key unknown, a favourite;
+    # the marked one's its own, a bookmark; plain-b's another, a favourite of another recording
+    key = root_key(rd / "0000 starred.imprec")
+    wrong = "%016X" % (int(key, 16) ^ 1)
+
+    def line(name, k, fav, marks):
+        return (f"0000 {name}.imprec\t{(rd / f'0000 {name}.imprec').stat().st_size}\t{k}"
+                f"\t0\t0\t0\t0\t{fav}\t0\t-\t0\t{marks}\n")
+    (rd / "index.dat").write_text("IMPURE-REPLAYS-INDEX\t2\n" + line("starred", "-", 1, "") +
+                                  line("marked", key, 0, "301") + line("plain-b", wrong, 1, ""),
                                   newline="\n")
     log = Log(w)
     rc, text = tacli("scenario", "load", w.name, SCENARIOS / fx["fix"]["load"], "--defaults",
@@ -1839,9 +1880,12 @@ def prune_step(w, fx, out, forked):
     left = sorted(p.name for p in rd.glob("0000 *.imprec"))
     w.collect(out / "prune")
     w.stop()
-    want = ("6 older recordings, the newest 1 kept; of the rest, 2 deleted, 2 kept (forked or "
+    # 7 besides the new one; plain-a the newest kept; of the other 6, plain-b and older deleted,
+    # starred, marked and forked kept, not-a-recording unreadable
+    want = ("7 older recordings, the newest 1 kept; of the rest, 2 deleted, 3 kept (forked or "
             "marked), 0 in use, 1 unreadable")
-    kept = sorted(f"0000 {n}.imprec" for n in ("plain-a", "starred", "forked", "not-a-recording"))
+    kept = sorted(f"0000 {n}.imprec"
+                  for n in ("plain-a", "starred", "marked", "forked", "not-a-recording"))
     if not got or want not in got or left != kept:
         raise Failed(f"prune: {got.strip() if got else f'no prune line in {ACK_S} s'}; left {left}")
     return ("forks: the prune", PASS, f"{want}; left {', '.join(left)}")

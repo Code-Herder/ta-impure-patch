@@ -2785,7 +2785,9 @@ int recr_summary(const char* path, RecSummary* s, char* why, unsigned cap)
         snprintf(why, cap, "no memory");
         return 0;
     }
-    r->f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+    /* shared for writing as recr_open is: the walk stops at the first torn or cut block, so a
+       file a touch or a fork is appending to reads up to its last whole one */
+    r->f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
                        FILE_FLAG_SEQUENTIAL_SCAN, NULL);
     if (r->f == INVALID_HANDLE_VALUE) {
         snprintf(why, cap, "cannot open %s (%lu)", path, GetLastError());
