@@ -561,6 +561,13 @@ DLL emits textured quads.
       What the margin cannot close is an edge whose exact value lies within the arithmetic's
       error of 1/64 px below a half; the nearest in those cases lies about 7 × 10⁻⁴ px from it,
       and both sides round it alike.
+    - **The DLL's rounding is one arithmetic wherever it is compiled.** `tagpu_hud_snap` takes a
+      float, so every caller rounds its product (and a far edge's sum, `tagpu_hud_edge`) to float
+      before the rule, and the rule itself is exact in double. The DLL's x87 code (`-std=c99`
+      rounds an excess-precision value at a cast, an assignment and a parameter) and laycheck's
+      native SSE build therefore put the same float on the same pixel, and the hit map
+      (`tagpu_hudstate.c`) tests a click against those pixels too. hud.js computes in double, the
+      one place the margin above is what makes the sides agree.
     - **The mockup pins every box itself** (`pin` in `hud.js`). It computes each box's edges from
       the layout's own numbers, kept on the element as `--x`, `--y`, `--w` and `--h`, and gives the
       element its offset from its parent's pinned corner in CSS pixels. Chrome's layout is never
@@ -570,8 +577,9 @@ DLL emits textured quads.
       of a device pixel off a whole one, which its own pixel snapping takes back out. A part, a
       fill's clip, a solid and a dot are pinned. A text, the stats window (whose drop shadow the
       DLL blurs from the exact box) and the chart's lines keep their exact place. The chart's SVG
-      is given a viewport on whole pixels and a view box offset to match, and its legend swatches
-      and their rings are four-solid rings as the DLL draws them, each snapped. A resource bar's
+      is given a viewport on whole pixels and a view box offset to match, its legend swatches are
+      snapped, and their rings are drawn as the DLL draws them, four sides on edges snapped once
+      (`ringEdges`). A resource bar's
       fill is a box of its own, as the DLL's is.
   At 1920 × 1080 and replay HUD 100, 1.5 pixels a unit, many edges fall on halves: the lanes
   plate spans 874.5 to 958.5 and the Take over button 928.5 to 958.5. MEASURED 2026-10-23 on the

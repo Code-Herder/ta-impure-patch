@@ -127,7 +127,9 @@ typedef struct {
 enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART };
 #define HOPF_DIM    1u      /* the dim filter of a player who is out (layout.json `dim`) */
 #define HOPF_SHADE  2u      /* HOP_SOLID: an inner shadow `shade` units deep, black 55 % */
-#define HOPF_EDGE   4u      /* HOP_SOLID: one side of an inset edge (ring)                     */
+#define HOPF_RING   4u      /* HOP_SOLID: an inset edge `size` units deep inside r, drawn as
+                               four solids between r and r inset by `size`, every edge snapped
+                               once and shared by the sides that meet on it (tagpu_huddraw.c) */
 #define HOPF_DROP   8u      /* HOP_SOLID: CSS box-shadow 0 `size` `shade` round the box r, in the
                                op's colour, painted outside r only */
 #define HOPF_BASE   16u     /* HOP_TEXT: an SVG <text>, r.x its anchor and r.y its baseline;
@@ -144,7 +146,8 @@ typedef struct {
     int16_t  style;         /* HOP_TEXT: the style's index in layout.json `styles`        */
     uint8_t  centre;        /* HOP_TEXT: 1 centred, 2 to the box's right, 0 from its left */
     uint8_t  grp;           /* 0, or the group it is drawn in: HUDOPS `grp[grp - 1]`        */
-    float    size;          /* HOP_TEXT: the font size in units, after `fit`              */
+    float    size;          /* HOP_TEXT: the font size in units, after `fit`; HOPF_DROP: the
+                               shadow's offset; HOPF_RING: the edge's depth; a line's and the chart's stroke width */
     uint16_t run, nrun;     /* HOP_TEXT: its runs; HOP_HOT: run = the key's offset in text */
 } HUDOP;
 
@@ -301,8 +304,40 @@ HUDRECT tagpu_hudlay_clip(const HUDOP* op, float px);
    arithmetic: float's 24 bits leave under 2.5e-4 px a rounding below 4096 px, a few roundings an
    edge [INFERRED from the format], and laycheck finds the two sides' edges equal on every box. The
    margin makes both sides round such an edge up. hud.js pins its boxes and composes its parts by the
-   same rule (snapPx). */
-static inline double tagpu_hud_snap(double v) { return floor(v + 0.5 + 1.0 / 64); }
+   same rule (snapPx).
+   ONE ARITHMETIC WHEREVER IT RUNS: the parameter is a float, so every caller rounds its product
+   to float first -- a sum inside it is rounded to float by the caller too (tagpu_hud_edge) -- and
+   the rest is in double, where adding the half and the margin to a float is exact. The DLL's x87
+   code (-std=c99 rounds at an assignment, a cast and a parameter: -fexcess-precision=standard)
+   and laycheck's SSE build therefore give the same pixel for the same float. */
+static inline double tagpu_hud_snap(float v) { return floor((double)v + 0.5 + 1.0 / 64); }
+
+/* the far edge of a box from `a` units long `b`, at `px` a unit, snapped: the sum and the product
+   each rounded to float, as every caller computes them */
+static inline double tagpu_hud_edge(float a, float b, float px)
+{
+    float e = a + b;
+    return tagpu_hud_snap(e * px);
+}
+
+/* a ring's (HOPF_RING) edges in device pixels: X[0], X[3] the outer box's, X[1], X[2] the inner
+   box's, Y the same. Each is snapped once and the four sides share them -- top X0..X3 x Y0..Y1,
+   bottom X0..X3 x Y2..Y3, left X0..X1 x Y1..Y2, right X2..X3 x Y1..Y2 -- so they meet with neither
+   a gap nor an overlap. An edge deeper than half the box meets its opposite in the middle. hud.js
+   `pinRing` computes the same edges. */
+static inline void tagpu_hud_ring(const HUDOP* op, float px, float X[4], float Y[4])
+{
+    X[0] = (float)tagpu_hud_snap(op->r.x * px);
+    Y[0] = (float)tagpu_hud_snap(op->r.y * px);
+    X[3] = (float)tagpu_hud_edge(op->r.x, op->r.w, px);
+    Y[3] = (float)tagpu_hud_edge(op->r.y, op->r.h, px);
+    X[1] = (float)tagpu_hud_edge(op->r.x, op->size, px);
+    Y[1] = (float)tagpu_hud_edge(op->r.y, op->size, px);
+    X[2] = (float)tagpu_hud_edge(op->r.x + op->r.w, -op->size, px);
+    Y[2] = (float)tagpu_hud_edge(op->r.y + op->r.h, -op->size, px);
+    if (X[1] > X[2]) X[1] = X[2] = (float)floor((X[1] + X[2]) / 2);
+    if (Y[1] > Y[2]) Y[1] = Y[2] = (float)floor((Y[1] + Y[2]) / 2);
+}
 
 /* Whether the state's teams are told apart: two or more, one of them with two players (hud.js,
    `headed`). The column's headers, the teams chip and the stats window's team split follow it. */

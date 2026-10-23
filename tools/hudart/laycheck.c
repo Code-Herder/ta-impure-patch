@@ -244,9 +244,10 @@ int main(int argc, char** argv)
         const HUDOP* p = &o->op[i];
         static const char* kinds[] = { "part", "solid", "dot", "text", "hot", "line", "chart" };
         const char* kind = p->kind == HOP_SOLID && (p->flags & HOPF_DROP) ? "shadow"
+                         : p->kind == HOP_SOLID && (p->flags & HOPF_RING) ? "ring"
                          : p->kind == HOP_TEXT && (p->flags & HOPF_BASE) ? "svgtext" : kinds[p->kind];
-        printf("%s{\"kind\":\"%s\",\"x\":%.4f,\"y\":%.4f,\"w\":%.4f,\"h\":%.4f,\"dim\":%d,\"edge\":%d", i ? ",\n" : "",
-               kind, p->r.x, p->r.y, p->r.w, p->r.h, (p->flags & HOPF_DIM) != 0, (p->flags & HOPF_EDGE) != 0);
+        printf("%s{\"kind\":\"%s\",\"x\":%.4f,\"y\":%.4f,\"w\":%.4f,\"h\":%.4f,\"dim\":%d", i ? ",\n" : "",
+               kind, p->r.x, p->r.y, p->r.w, p->r.h, (p->flags & HOPF_DIM) != 0);
         if (p->flags & HOPF_DROP) printf(",\"dy\":%.4f,\"blur\":%.4f", p->size, p->shade);
         if (p->kind == HOP_LINE || p->kind == HOP_CHART) printf(",\"rgba\":\"%08x\",\"width\":%.4f", p->rgba, p->size);
         if (p->kind == HOP_CHART) printf(",\"clip\":[%.4f,%.4f,%.4f,%.4f]", p->clip.x, p->clip.y, p->clip.w, p->clip.h);
@@ -257,7 +258,7 @@ int main(int argc, char** argv)
             if (argc == 5 && (tagpu_hudlay_part(l, p->part)->kind == HK_GRID || tagpu_hudlay_part(l, p->part)->kind == HK_NINE)) {
                 static HUDQUAD q[HUD_MAXQUAD];
                 const float dpx = (float)atof(argv[4]);
-                const double X = tagpu_hud_snap(p->r.x * dpx), Y = tagpu_hud_snap(p->r.y * dpx);
+                const double X = tagpu_hud_snap(p->r.x * dpx), Y = tagpu_hud_snap(p->r.y * dpx);   /* the corner */
                 int m = tagpu_hudlay_expand(l, p, dpx, q, HUD_MAXQUAD), j;
                 printf(",\"quads\":[");
                 for (j = 0; j < m; j++)
@@ -267,12 +268,18 @@ int main(int argc, char** argv)
             }
         }
         if (p->kind == HOP_SOLID || p->kind == HOP_DOT) printf(",\"rgba\":\"%08x\"", p->rgba);
-        /* the device pixels a part, a solid or a dot is drawn on, its box snapped in the draw's arithmetic
-           (tagpu_hudlay_expand, tagpu_huddraw.c snap) */
+        /* the device pixels a part, a solid or a dot is drawn on: tagpu_hud_snap of the same float
+           products the draw rounds (tagpu_hudlay_expand, tagpu_huddraw.c snap) */
         if (argc == 5 && (p->kind == HOP_PART || p->kind == HOP_DOT || (p->kind == HOP_SOLID && !(p->flags & HOPF_DROP)))) {
             const float dpx = (float)atof(argv[4]);
             printf(",\"snap\":[%.0f,%.0f,%.0f,%.0f]", tagpu_hud_snap(p->r.x * dpx), tagpu_hud_snap(p->r.y * dpx),
-                   tagpu_hud_snap((p->r.x + p->r.w) * dpx), tagpu_hud_snap((p->r.y + p->r.h) * dpx));
+                   tagpu_hud_edge(p->r.x, p->r.w, dpx), tagpu_hud_edge(p->r.y, p->r.h, dpx));
+            /* a ring's inner box: the edges its sides share, as the draw computes them */
+            if (p->flags & HOPF_RING) {
+                float X[4], Y[4];
+                tagpu_hud_ring(p, dpx, X, Y);
+                printf(",\"isnap\":[%.0f,%.0f,%.0f,%.0f]", X[1], Y[1], X[2], Y[2]);
+            }
         }
         if (p->clip.w >= 0 && p->kind != HOP_TEXT && p->kind != HOP_CHART) {
             HUDRECT k = argc == 5 ? tagpu_hudlay_clip(p, (float)atof(argv[4])) : p->clip;
@@ -280,7 +287,7 @@ int main(int argc, char** argv)
             if (argc == 5) {
                 const float dpx = (float)atof(argv[4]);
                 printf(",\"csnap\":[%.0f,%.0f,%.0f,%.0f]", tagpu_hud_snap(k.x * dpx), tagpu_hud_snap(k.y * dpx),
-                       tagpu_hud_snap((k.x + k.w) * dpx), tagpu_hud_snap((k.y + k.h) * dpx));
+                       tagpu_hud_edge(k.x, k.w, dpx), tagpu_hud_edge(k.y, k.h, dpx));
             }
         }
         if (p->kind == HOP_TEXT) {

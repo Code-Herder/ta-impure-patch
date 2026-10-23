@@ -77,8 +77,10 @@ const HUD = (() => {
   const frect = b => `${rect(b)};--fl:1`;
   // an inset edge e wide on box b, drawn as the DLL draws it (ring in tagpu_hudlay.c): four solids, the top and bottom
   // across the box and the sides between them, each pinned to whole pixels on its own
-  const ring = (b, e, col) => [[b.x, b.y, b.w, e], [b.x, b.y + b.h - e, b.w, e], [b.x, b.y + e, e, b.h - 2 * e], [b.x + b.w - e, b.y + e, e, b.h - 2 * e]]
-    .map(([x, y, w, h]) => `<div class="box" style="${rect({ x, y, w, h })};background:${col};pointer-events:none"></div>`).join('');
+  // an inset edge e units deep inside box b, as the DLL's ring: one box whose four sides pin() places on edges it
+  // snaps once (ringEdges)
+  const ring = (b, e, col) => `<div class="box ring" style="${rect(b)};pointer-events:none" data-e="${e}">`
+    + `<i style="background:${col}"></i>`.repeat(4) + '</div>';
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
   const WB_GLYPH = { export: '⇩', delete: '✕', rewind: '⟲' };
   const attrs = a => Object.entries(a || {}).map(([k, v]) => ` data-${k}="${esc(v)}"`).join('');
@@ -473,14 +475,13 @@ const HUD = (() => {
       + tx(xph, Tp + ph + A.below, clock(st.t), `font-size="${A.size}" fill="${C.now.colour}" text-anchor="middle" font-weight="700"`);
     const Lg = C.legend, lx = W - R + Lg.x + Lg.pad, ly = Tp + Lg.pad, lw = R - Lg.r - 2 * Lg.pad, lh = ph - 2 * Lg.pad;
     const ranked = G.map(g => ({ g, v: NS ? g.v[now] : 0 })).sort((a, b) => b.v - a.v), rh = Math.min(Lg.row, lh / ranked.length), fs = Math.min(Lg.size, rh * Lg.text_h);
-    // a swatch is a solid, and a dark one has a ring of four solids on its edge, half in and half out, as the DLL draws
-    // them (ring in tagpu_hudlay.c), so pin() snaps each to whole pixels as the DLL's draw does
+    // a swatch is a solid, and a dark one has a ring on its edge, half in and half out, as the DLL draws them (ring in
+    // tagpu_hudlay.c); pinChart snaps the swatch and places the ring's four sides on its shared edges (ringEdges)
     const box = (x, y, w, h, fill) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${fill}"/>`;
     return h + ranked.map((e, k) => { const yy = ly + k * rh, sy = yy + rh * Lg.swatch_y, sw = Lg.swatch, sh = rh * Lg.swatch_h, t = Lg.swatch_edge_w;
       const bx = lx - t / 2, by = sy - t / 2, bw = sw + t, bh = sh + t;
       return box(lx, sy, sw, sh, e.g.col)
-        + (dark(e.g.col) ? [[bx, by, bw, t], [bx, by + bh - t, bw, t], [bx, by + t, t, bh - 2 * t], [bx + bw - t, by + t, t, bh - 2 * t]]
-          .map(([x, y, w, h]) => box(x, y, w, h, Lg.swatch_edge)).join('') : '')
+        + (dark(e.g.col) ? `<g data-ring="${bx} ${by} ${bw} ${bh} ${t}" fill="${Lg.swatch_edge}">${'<rect/>'.repeat(4)}</g>` : '')
         + tx(lx + Lg.text_x, yy + rh * Lg.text_y, e.g.name, `font-size="${fs}" fill="${Lg.name}"`)
         + tx(lx + lw, yy + rh * Lg.text_y, fv(e.v), `font-size="${fs}" fill="${Lg.value}" text-anchor="end"`); }).join('');
   }
@@ -501,6 +502,15 @@ const HUD = (() => {
   // an edge less than a sixty-fourth below a half counted as on it, so an edge exactly on a half rounds alike in either
   // side's arithmetic
   const snapPx = v => Math.floor(v + 0.5 + 1 / 64);
+  /* A ring's edges in device pixels, as tagpu_hud_ring computes them: [X0, X1, X2, X3] across, the outer box's and the
+     inner box's, each snapped once, and the same down; an edge deeper than half the box meets its opposite in the
+     middle. Its sides -- top, bottom, left, right -- share them, so they meet with neither a gap nor an overlap. */
+  function ringEdges(x, y, w, h, e, px) {
+    const X = [snapPx(x * px), snapPx((x + e) * px), snapPx((x + w - e) * px), snapPx((x + w) * px)];
+    const Y = [snapPx(y * px), snapPx((y + e) * px), snapPx((y + h - e) * px), snapPx((y + h) * px)];
+    for (const A of [X, Y]) if (A[1] > A[2]) A[1] = A[2] = Math.floor((A[1] + A[2]) / 2);
+    return { X, Y, sides: [[X[0], Y[0], X[3], Y[1]], [X[0], Y[2], X[3], Y[3]], [X[0], Y[1], X[1], Y[2]], [X[2], Y[1], X[3], Y[2]]] };
+  }
   const copies = (len, period) => period > 0 ? Math.max(1, Math.round(len / period)) : 1;
   function canvas(w, h) { const c = document.createElement('canvas'); c.width = Math.max(1, w); c.height = Math.max(1, h); return c; }
   /* A part's texels as the DLL uploads them, premultiplied to eight bits (tagpu_hudart.c), and its mip chain as the
@@ -647,6 +657,14 @@ const HUD = (() => {
         c.style.left = `${(X0 - rx) / d}px`; c.style.top = `${(Y0 - dy * px - ry) / d}px`;
         c.style.width = `${(X1 - X0) / d}px`; c.style.height = `${(Y1 - Y0) / d}px`;
         if ((c.dataset.gp || c.dataset.tile) && c.dataset.made && c.dataset.made !== c.dataset.dev) composeOne(c);
+        if (c.classList.contains('ring')) {
+          const R = ringEdges(ax, ay, w, h, +c.dataset.e, px);
+          c.dataset.idev = `${R.X[1]} ${R.Y[1]} ${R.X[2]} ${R.Y[2]}`;
+          [...c.children].forEach((s, k) => { const [a, b, e, f] = R.sides[k];
+            Object.assign(s.style, { position: 'absolute', left: `${(a - X0) / d}px`, top: `${(b - Y0) / d}px`,
+                                     width: `${(e - a) / d}px`, height: `${(f - b) / d}px` }); });
+          continue;
+        }
         walk(c, ax, ay, X0, Y0);
       }
     };
@@ -661,6 +679,14 @@ const HUD = (() => {
     c.style.left = `${(X0 - rx) / d}px`; c.style.top = `${(Y0 - ry) / d}px`;
     c.style.width = `${(X1 - X0) / d}px`; c.style.height = `${(Y1 - Y0) / d}px`;
     c.setAttribute('viewBox', `${X0 / px - ax} ${Y0 / px - ay} ${(X1 - X0) / px} ${(Y1 - Y0) / px}`);
+    for (const g of c.querySelectorAll(':scope > g[data-ring]')) {
+      const [x, y, rw, rh, e] = g.dataset.ring.split(' ').map(Number), R = ringEdges(ax + x, ay + y, rw, rh, e, px);
+      g.dataset.dev = `${R.X[0]} ${R.Y[0]} ${R.X[3]} ${R.Y[3]}`;
+      g.dataset.idev = `${R.X[1]} ${R.Y[1]} ${R.X[2]} ${R.Y[2]}`;
+      [...g.children].forEach((r, k) => { const [a, b, e2, f] = R.sides[k];
+        r.setAttribute('x', a / px - ax); r.setAttribute('y', b / px - ay);
+        r.setAttribute('width', (e2 - a) / px); r.setAttribute('height', (f - b) / px); });
+    }
     for (const r of c.querySelectorAll(':scope > rect')) {
       if (!r.dataset.r) r.dataset.r = ['x', 'y', 'width', 'height'].map(k => r.getAttribute(k)).join(' ');
       const [x, y, rw, rh] = r.dataset.r.split(' ').map(Number);

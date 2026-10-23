@@ -295,10 +295,13 @@ static HUDINST* emit(B* c, int tex, int mode, float x0, float y0, float x1, floa
     if (op->clip.w >= 0) {
         /* a box's clip snapped as the box; the chart's SVG clipPath is not a box Chrome snaps */
         HUDRECT k = tagpu_hudlay_clip(op, c->px);
-        q->clip[0] = k.x * c->px; q->clip[1] = k.y * c->px;
-        q->clip[2] = (k.x + k.w) * c->px; q->clip[3] = (k.y + k.h) * c->px;
-        if (op->kind != HOP_CHART)
-            for (int e = 0; e < 4; e++) q->clip[e] = snap(q->clip[e]);
+        if (op->kind != HOP_CHART) {
+            q->clip[0] = snap(k.x * c->px); q->clip[1] = snap(k.y * c->px);
+            q->clip[2] = (float)tagpu_hud_edge(k.x, k.w, c->px); q->clip[3] = (float)tagpu_hud_edge(k.y, k.h, c->px);
+        } else {
+            q->clip[0] = k.x * c->px; q->clip[1] = k.y * c->px;
+            q->clip[2] = (k.x + k.w) * c->px; q->clip[3] = (k.y + k.h) * c->px;
+        }
         q->clip[0] += c->ox; q->clip[2] += c->ox; q->clip[1] += c->oy; q->clip[3] += c->oy;
     } else {
         q->clip[0] = 1; q->clip[2] = 0; q->clip[1] = q->clip[3] = 0;
@@ -541,11 +544,24 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
             in->prm[1] = sg;
             break;
         }
+        if (op->flags & HOPF_RING) {
+            float X[4], Y[4];
+            int s;
+            tagpu_hud_ring(op, px, X, Y);
+            for (s = 0; s < 4; s++) {
+                static const int side[4][4] = { { 0, 0, 3, 1 }, { 0, 2, 3, 3 }, { 0, 1, 1, 2 }, { 2, 1, 3, 2 } };
+                const int* d = side[s];
+                if (X[d[2]] <= X[d[0]] || Y[d[3]] <= Y[d[1]]) continue;
+                if (!(in = emit(c, -1, HUDM_SOLID, X[d[0]], Y[d[1]], X[d[2]], Y[d[3]], op))) break;
+                colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
+            }
+            break;
+        }
         /* fall through */
     case HOP_DOT:
         if (!(in = emit(c, -1, op->kind == HOP_DOT ? HUDM_DOT : op->flags & HOPF_SHADE ? HUDM_SHADE : HUDM_SOLID,
-                        snap(op->r.x * px), snap(op->r.y * px), snap((op->r.x + op->r.w) * px),
-                        snap((op->r.y + op->r.h) * px), op))) break;
+                        snap(op->r.x * px), snap(op->r.y * px), (float)tagpu_hud_edge(op->r.x, op->r.w, px),
+                        (float)tagpu_hud_edge(op->r.y, op->r.h, px), op))) break;
         colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
         in->prm[1] = op->shade * px / 2;
         break;

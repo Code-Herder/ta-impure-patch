@@ -146,8 +146,15 @@ COLLECT = r"""() => {
       els.push({ kind: 'text', text: e.textContent, r: R(e), dim, alpha: opacity(e), size: parseFloat(cs.fontSize) / u, base,
                  asc: fm.fontBoundingBoxAscent, desc: fm.fontBoundingBoxDescent });
     }
+    // a ring: its outer box and its inner one as pinned, and the four boxes Chrome painted its sides on
+    if (e.classList.contains('ring')) {
+      const c = getComputedStyle(e.firstElementChild).backgroundColor.match(/\d+/g).slice(0, 3).map(Number);
+      els.push({ kind: 'ring', rgb: c, r: R(e), dim, dev: dev(e), idev: e.dataset.idev.split(' ').map(Number), painted: painted(e),
+                 sides: [...e.children].map(painted) });
+      continue;
+    }
     const bg = e.style.background || e.style.backgroundColor;
-    if (bg && !e.classList.contains('art')) {
+    if (bg && !e.classList.contains('art') && !e.parentElement.classList.contains('ring')) {
       const c = getComputedStyle(e).backgroundColor.match(/\d+/g).slice(0, 3).map(Number);
       els.push({ kind: e.style.borderRadius ? 'dot' : 'solid', rgb: c, r: R(e), dim, dev: dev(e), painted: painted(e) });
     }
@@ -162,7 +169,7 @@ COLLECT = r"""() => {
   const chart = { groups: [] };
   for (const svg of document.querySelectorAll('#hud-layer svg[data-chart]')) {
     const o = R(svg), A = (e, k) => +e.getAttribute(k);
-    const [faint, past] = svg.querySelectorAll(':scope > g'), cw = A(svg.querySelector('clipPath rect'), 'width');
+    const [faint, past] = svg.querySelectorAll(':scope > g:not([data-ring])'), cw = A(svg.querySelector('clipPath rect'), 'width');
     els.push({ kind: 'chart', r: o, alpha: Math.round(255 * +faint.getAttribute('opacity')), clip: o });
     els.push({ kind: 'chart', r: o, alpha: 255, clip: [o[0], o[1], Math.max(0, Math.min(o[2], cw)), o[3]] });
     for (const l of svg.querySelectorAll(':scope > line'))
@@ -176,6 +183,11 @@ COLLECT = r"""() => {
       const [x, y, w, h] = r.dataset.r.split(' ').map(Number), b = r.getBoundingClientRect();
       els.push({ kind: 'solid', rgb: hex(r.getAttribute('fill')), r: [o[0] + x, o[1] + y, w, h], dim: false, dev: r.dataset.dev.split(' ').map(Number),
                  painted: [b.left - s.left, b.top - s.top, b.right - s.left, b.bottom - s.top].map(v => Math.round(v * d)) });
+    }
+    for (const g of svg.querySelectorAll(':scope > g[data-ring]')) {
+      const [x, y, w, h] = g.dataset.ring.split(' ').map(Number), dv = g.dataset.dev.split(' ').map(Number);
+      els.push({ kind: 'ring', rgb: hex(g.getAttribute('fill')), r: [o[0] + x, o[1] + y, w, h], dim: false, dev: dv,
+                 idev: g.dataset.idev.split(' ').map(Number), painted: dv, sides: [...g.children].map(painted) });
     }
     // the body, in paint order: a group's halo (a dark colour's), its line, its cross
     let halo = false;
@@ -313,7 +325,7 @@ def main():
                 keep.mkdir(parents=True, exist_ok=True)
                 (keep / f"{name}.dom.json").write_text(json.dumps(dom, indent=1))
                 (keep / f"{name}.ops.json").write_text(r.stdout)
-            cs = {"part": [], "text": [], "solid": [], "dot": [], "hot": [], "clip": [], "svgtext": [], "line": [], "chart": [], "shadow": []}
+            cs = {"part": [], "text": [], "solid": [], "ring": [], "dot": [], "hot": [], "clip": [], "svgtext": [], "line": [], "chart": [], "shadow": []}
             for o in ops["ops"]:
                 o["r"] = [o["x"], o["y"], o["w"], o["h"]]
                 cs[o["kind"]].append(o)
@@ -322,6 +334,7 @@ def main():
             ds = {k: [e for e in dom["els"] if e["kind"] == k] for k in cs}
             keys = {"part": lambda e: e["part"], "text": lambda e: e["text"], "hot": lambda e: e["key"],
                     "solid": lambda e: tuple(e["rgb"]) if "rgb" in e else tuple(int(e["rgba"][i:i + 2], 16) for i in (0, 2, 4)),
+                    "ring": lambda e: tuple(e["rgb"]) if "rgb" in e else tuple(int(e["rgba"][i:i + 2], 16) for i in (0, 2, 4)),
                     "dot": lambda e: tuple(e["rgb"]) if "rgb" in e else tuple(int(e["rgba"][i:i + 2], 16) for i in (0, 2, 4)),
                     "clip": lambda e: 0, "shadow": lambda e: 0,
                     "svgtext": lambda e: e["text"],
@@ -378,7 +391,7 @@ def main():
                               or abs(int(c["rgba"][6:8], 16) - d["alpha"]) > 1)
                     extra += f", offset/blur/opacity disagree {att}" if att else ""
                     bad += att
-                if k in ("part", "text", "solid"):
+                if k in ("part", "text", "solid", "ring"):
                     dm = sum(1 for c, d in pairs if bool(c.get("dim")) != bool(d.get("dim")))
                     extra += f", dim disagrees {dm}" if dm else ""
                     bad += dm
@@ -396,7 +409,19 @@ def main():
                         print(f"        pieces of {c['part']!r}: DLL {len(c.get('quads') or [])} {(c.get('quads') or [])[:2]} "
                               f"mockup {len(d.get('quads') or [])} {(d.get('quads') or [])[:2]}")
                     bad += len(pc)
-                if k in ("part", "solid", "dot", "clip"):
+                if k == "ring":
+                    # the inner box's edges, which the four sides share, and the sides Chrome painted on them
+                    def sides(d):
+                        (x0, y0, x3, y3), (x1, y1, x2, y2) = d["dev"], d["idev"]
+                        return [[x0, y0, x3, y1], [x0, y2, x3, y3], [x0, y1, x1, y2], [x2, y1, x3, y2]]
+                    ia = [(c, d) for c, d in pairs if c.get("isnap") != d["idev"]]
+                    ip = [(c, d) for c, d in pairs if d["sides"] != sides(d)]
+                    extra += f", {len(ia)} inner edges a pixel apart" if ia else ""
+                    extra += f", {len(ip)} with a side painted off its edges" if ip else ""
+                    for c, d in (ia + ip)[:3]:
+                        print(f"        {keys[k](c)!r}: DLL inner {c.get('isnap')} pinned {d['idev']} sides painted {d['sides']}")
+                    bad += len(ia) + len(ip)
+                if k in ("part", "solid", "ring", "dot", "clip"):
                     # the device pixels: the DLL's snapped box, the one hud.js pinned, and the one Chrome painted
                     sa = [(c, d) for c, d in pairs if d.get("dev") is not None and c.get("snap") != d["dev"]]
                     sp = [(c, d) for c, d in pairs if d.get("dev") is not None and d["painted"] != d["dev"]]

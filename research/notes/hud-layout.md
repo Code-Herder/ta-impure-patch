@@ -346,9 +346,12 @@ from 3.79 % (best at a one-pixel shift) to 1.25 % (at none).
   clickable of its own: the TEAMS chip when the teams are not told apart (one team, or a free-for-all), at
   `split.off` (0.45); the live strip's play, always, and its fwd at the strip's end, both at 0.45.
 - **An inset edge** — a resource bar's, the toast's, the replace outline, a dark legend swatch's —
-  is a ring of four solids on both sides (`ring` in `tagpu_hudlay.c` and `hud.js`): the top and
-  bottom across the box, the sides between them, each snapped to whole pixels on its own. laycheck
-  pairs them as solids.
+  is a ring (`ring` in `tagpu_hudlay.c` and `hud.js`): one op, its box and its depth, that the draw
+  turns into four solids, the top and bottom across the box and the sides between them. Its edges
+  are the outer box's and the inner box's, each snapped once (`tagpu_hud_ring`, `ringEdges` in
+  `hud.js`), and the sides share them, so they can neither gap nor overlap; an edge deeper than
+  half the box meets its opposite in the middle. laycheck pairs rings by colour and compares both
+  boxes' pixels and the four sides Chrome painted.
 
 ### The dock
 
@@ -618,28 +621,32 @@ every element's box in HUD units, runs `tagpu_hudlay.c` compiled natively (`layc
 same state, and pairs the two element by element: every part by name and painted opacity (its own
 times its ancestors', as a disabled button's icon is dimmed), every text by its string and painted
 opacity, every
-solid by its colour, an inset edge's four among them, every clickable by its key. From the
+solid and every ring by its colour, every clickable by its key. From the
 chart's SVG it pairs the line ops by colour (with width and opacity), the SVG texts by string
 (with anchor, size and colour), the two chart ops by opacity (with their clip) and the drop
 shadow (offset, blur, opacity), and compares every group's colour, halo, points and cross, a
 point within a tenth of a unit, the precision both sides write. It also measures every text's baseline in the browser — a zero-size
 inline-block probe on the text's own line — against `tagpu_hudlay_baseline` from the faces'
-metrics. It compares every part's, solid's, dot's and clip's device pixels three ways: the box the
-DLL's draw snaps (`laycheck.c` prints it), the box `hud.js` pinned, and the box Chrome painted.
+metrics. It compares every part's, solid's, ring's, dot's and clip's device pixels three ways: the
+box the DLL's draw snaps (`laycheck.c` prints it), the box `hud.js` pinned, and the box Chrome
+painted; for a ring its inner box as well, and the four sides Chrome painted against the edges they
+share.
 And it compares every grid and 9-slice part's pieces — the destination edges in device pixels from
 the snapped corner, the source rectangle — with `tagpu_hudlay_expand`'s. A box is compared in
 units by the numbers `hud.js` pinned it from, a text's baseline as Chrome lays it out. It exits 1
 on a box or baseline more than its tolerance off, a part's or a text's opacity more than one level
-off, a dim that disagrees, a box snapped or painted on other pixels, pieces that disagree, a box
-the mockup did not pin, or an element only one side has.
+off, a dim that disagrees, a box snapped or painted on other pixels, a ring's inner edges or
+sides on other pixels, pieces that disagree, a box the mockup did not pin, or an element only one
+side has.
 
 MEASURED 2026-10-08 on the first six cases, again on all eight once the controls were laid out
 for input, on all thirteen with the stats window (2026-10-09), on all eighteen at `prop=1`
 (2026-10-23), on all twenty-two with the lanes (2026-10-23), and on all twenty-three with every
 box's device pixels and every grid and 9-slice part's pieces (2026-10-23): the two agree, and across
 the cases the 1615 parts, 974 solids, 173 dots and 25 clips are each on the same pixels in the
-DLL, pinned and painted; and on all thirty with the live HUD and every inset edge a ring of four
-solids (2026-10-23). A halo
+DLL, pinned and painted; and on all thirty with the live HUD and every inset edge a ring
+(2026-10-23): 1689 parts, 977 solids, 358 rings (inner edges and sides too), 173 dots and 30
+clips, each on the same pixels in the DLL, pinned and painted. A halo
 polyline is told from its line by its `stroke-opacity`, which only the halo carries. At 4K every
 box is within 0.018 units and every baseline within 0.0145 (the twenty-two cases, 2026-10-23). The Oswald residual above is named, not failed, and only where the same rule on
 Chrome's own rounded ascent and descent (`measureText`'s `fontBoundingBoxAscent`/`Descent`) gives

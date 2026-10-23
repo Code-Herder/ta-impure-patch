@@ -273,18 +273,14 @@ static R place(C* c, const F* f, const PL* s)
 static R at(R b, double ox, double oy) { b.x += ox; b.y += oy; return b; }
 static R box(double x, double y, double w, double h) { R b; b.x = x; b.y = y; b.w = w; b.h = h; return b; }
 
-/* an inset edge `e` units deep round box b, as one ring: top and bottom whole, the sides between them */
+/* an inset edge `e` units deep inside box b, as one ring: one op the draw turns into four solids,
+   top and bottom whole, the sides between them (HOPF_RING) */
 static void ring(C* c, R b, double e, uint32_t rgb, double alpha)
 {
-    R side[4];
-    int k;
-    side[0] = box(b.x, b.y, b.w, e);
-    side[1] = box(b.x, b.y + b.h - e, b.w, e);
-    side[2] = box(b.x, b.y + e, e, b.h - 2 * e);
-    side[3] = box(b.x + b.w - e, b.y + e, e, b.h - 2 * e);
-    for (k = 0; k < 4; k++) {
-        HUDOP* p = solid(c, side[k], rgb, alpha);
-        if (p) p->flags |= HOPF_EDGE;
+    HUDOP* p = solid(c, b, rgb, alpha);
+    if (p) {
+        p->flags |= HOPF_RING;
+        p->size = (float)e;
     }
 }
 
@@ -1626,7 +1622,7 @@ int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, 
     const HUDPART* k;
     /* the box snapped as Chrome snaps an element's: each edge rounded half up to a whole pixel */
     double x = tagpu_hud_snap(op->r.x * px), y = tagpu_hud_snap(op->r.y * px);
-    double w = tagpu_hud_snap((op->r.x + op->r.w) * px) - x, h = tagpu_hud_snap((op->r.y + op->r.h) * px) - y;
+    double w = tagpu_hud_edge(op->r.x, op->r.w, px) - x, h = tagpu_hud_edge(op->r.y, op->r.h, px) - y;
     int n = 0, i, j;
     if (op->kind != HOP_PART || op->part < 0 || op->part >= l->nparts || cap < 1) return 0;
     k = &l->part[op->part];
@@ -1645,13 +1641,13 @@ int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, 
            snapped size, as hud.js composes the part on a canvas of that size (composeGrid) */
         for (j = 0; j + 1 < ny; j++)
             for (i = 0; i + 1 < nx; i++) {
-                double x0 = tagpu_hud_snap(fx(&f, bx[i]) * px), x1 = tagpu_hud_snap(fx(&f, bx[i + 1]) * px);
-                double y0 = y + tagpu_hud_snap(fy(&f, by[j]) * px), y1 = y + tagpu_hud_snap(fy(&f, by[j + 1]) * px);
+                double x0 = tagpu_hud_snap((float)fx(&f, bx[i]) * px), x1 = tagpu_hud_snap((float)fx(&f, bx[i + 1]) * px);
+                double y0 = y + tagpu_hud_snap((float)fy(&f, by[j]) * px), y1 = y + tagpu_hud_snap((float)fy(&f, by[j + 1]) * px);
                 int c, m = k->xtile && i % 2 ? copies(x1 - x0, (bx[i + 1] - bx[i]) * px, extra) : 1;
                 if (x1 <= x0 || y1 <= y0) continue;
                 for (c = 0; c < m && n < cap; c++, n++) {
-                    q[n].x0 = (float)(x + x0 + tagpu_hud_snap((x1 - x0) * c / m));
-                    q[n].x1 = (float)(x + x0 + tagpu_hud_snap((x1 - x0) * (c + 1) / m));
+                    q[n].x0 = (float)(x + x0 + tagpu_hud_snap((float)((x1 - x0) * c / m)));
+                    q[n].x1 = (float)(x + x0 + tagpu_hud_snap((float)((x1 - x0) * (c + 1) / m)));
                     q[n].y0 = (float)y0; q[n].y1 = (float)y1;
                     q[n].u0 = (float)(bx[i] / k->design[0]); q[n].u1 = (float)(bx[i + 1] / k->design[0]);
                     q[n].v0 = (float)(by[j] / k->design[1]); q[n].v1 = (float)(by[j + 1] / k->design[1]);
@@ -1689,8 +1685,8 @@ int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, 
                 int c, mi = i == 1 ? m[j] : 1;
                 if (dx[i + 1] <= dx[i] || dy[j + 1] <= dy[j]) continue;
                 for (c = 0; c < mi && n < cap; c++, n++) {
-                    q[n].x0 = (float)(dx[i] + tagpu_hud_snap((dx[i + 1] - dx[i]) * c / mi));
-                    q[n].x1 = (float)(dx[i] + tagpu_hud_snap((dx[i + 1] - dx[i]) * (c + 1) / mi));
+                    q[n].x0 = (float)(dx[i] + tagpu_hud_snap((float)((dx[i + 1] - dx[i]) * c / mi)));
+                    q[n].x1 = (float)(dx[i] + tagpu_hud_snap((float)((dx[i + 1] - dx[i]) * (c + 1) / mi)));
                     q[n].y0 = (float)dy[j]; q[n].y1 = (float)dy[j + 1];
                     q[n].u0 = (float)su[i]; q[n].u1 = (float)su[i + 1]; q[n].v0 = (float)sv[j]; q[n].v1 = (float)sv[j + 1];
                 }
@@ -1698,7 +1694,7 @@ int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, 
         return n;
     }
     case HK_TILE: {
-        double ch = fmax(1, tagpu_hud_snap(h)), tw = fmax(1, tagpu_hud_snap(k->pw * ch / k->ph));
+        double ch = fmax(1, h), tw = fmax(1, tagpu_hud_snap((float)(k->pw * ch / k->ph)));
         q[0].x0 = (float)x; q[0].x1 = (float)(x + w); q[0].y0 = (float)y; q[0].y1 = (float)(y + h);
         q[0].u0 = 0; q[0].u1 = (float)(w / tw); q[0].v0 = 0; q[0].v1 = 1;
         return 1;
