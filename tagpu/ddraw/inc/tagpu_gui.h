@@ -436,6 +436,13 @@ typedef struct TAGPU_GUIHAND {
     int   sharpOn;                  /* the sharp layer had COVERAGE this frame
                                        -- not merely that it exists, which it
                                        does on every frame once it is made */
+    /* THE CONFIG PANEL'S BOX in the presented surface's screen pixels,
+       inclusive, while the flip this composite shows had it open; panelR <
+       panelL none. It came with that flip's ops (PK_FRAME), so it says whether
+       THIS composite holds the panel: the live HUD's top layer is drawn over
+       the composite and the composite again over it inside the panel's
+       rect (tagpu_vk_gui_record_whole). */
+    int   panelL, panelT, panelR, panelB;
 
     /* the A/B claim: nonzero on the ONE frame `tagpu_gui.ab` latched it, the
        frame the Vulkan pass captures. */

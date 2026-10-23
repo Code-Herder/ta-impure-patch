@@ -523,7 +523,7 @@ held slots and yard bit the stream's last or the exact ones, and the tick's inpu
 only where they differ in those alone. A puppet's straight dumps take their cells' slots and yard
 bits from the exact stream; a seek's are checked by the occupancy rule (*Decisions taken*,
 2026-10-12). The fixtures with a takeover launch every process with `tagpu_rec.refresh 30`
-(*Taking over*: a takeover starts at a refresh). **A hold row is a loosening**, the owner's
+(*Taking over*: a takeover of a segment that holds something starts at a refresh). **A hold row is a loosening**, the owner's
 decision like an exclusion: it names its readers on a playback host and its evidence, and a reader
 found there that shows the byte removes the row. The table's rows, the owner's (2026-10-11), hold
 the three weapon slots' aim and target state, the unit's resource ledger's accumulators (`+0xBC`
@@ -1213,9 +1213,11 @@ Not closed by the marker:
   keep their lag, and another owner's units are unchanged
   ([multiplayer slice](demo-recorder-multiplayer-slice.md)).
 
-Gaps stated, not closed: in a multiplayer recording, getter 75 per seat reproduces the recording
-machine's view, so other players' owner-only indicators, which that machine never showed, are
-absent. And a takeover's fresh COB resets what a mod keeps in COB statics and piece visibility
+Gaps stated, not closed: within a multiplayer segment, getter 75 per seat reproduces the
+recording machine's view, so other players' owner-only indicators, which that machine never
+showed, are absent; across a segment the answers follow each segment's controllers, so a
+takeover timeline of a multiplayer file, every seat local on the machine that recorded it,
+shows every seat's (`mp_follow`, `tagpu_puppet_locals`). And a takeover's fresh COB resets what a mod keeps in COB statics and piece visibility
 (for example Mayhem's upgraded metal extractor looks un-upgraded after a fork, while its attached
 module and `+0x10E` are restored) [INFERRED from the scripts].
 

@@ -29,6 +29,7 @@
 #include <math.h>
 #include <string.h>
 #include "tagpu_huddraw.h"
+#include "tagpu_hudtext.h"
 
 /* ---- the shaders ---------------------------------------------------------------------------
 
@@ -321,32 +322,7 @@ static void colour(HUDINST* q, uint32_t rgb, float a)
     q->rgba[3] = a;
 }
 
-/* the next code point of UTF-8, or U+FFFD for a bad sequence */
-static uint32_t utf8(const unsigned char** s, const unsigned char* e)
-{
-    const unsigned char* p = *s;
-    uint32_t c = *p++;
-    int n = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : 0;
-    if (c >= 0x80 && n == 0) { *s = p; return 0xFFFD; }
-    c &= n == 3 ? 0x07 : n == 2 ? 0x0F : n == 1 ? 0x1F : 0x7F;
-    while (n-- > 0) {
-        if (p >= e || (*p & 0xC0) != 0x80) { *s = p; return 0xFFFD; }
-        c = (c << 6) | (*p++ & 0x3F);
-    }
-    *s = p;
-    return c;
-}
-
-/* CSS `text-transform: uppercase` for what a HUD string can hold: ASCII and Latin-1. ß has no
-   one-letter capital and stays; ÿ becomes Ÿ, outside Latin-1. */
-static uint32_t upper(uint32_t c)
-{
-    if ((c >= 'a' && c <= 'z') || (c >= 0xE0 && c <= 0xFE && c != 0xF7)) return c - 32;
-    if (c == 0xFF) return 0x178;
-    return c;
-}
-
-#define MAXCH 160
+#define MAXCH TAGPU_HUDTEXT_MAX
 
 static void text(B* c, const HUDOP* op)
 {
@@ -355,7 +331,7 @@ static void text(B* c, const HUDOP* op)
     int fi = c->art->style_face[op->style];
     const HUDFACE* f = &c->art->face[fi];
     float size = op->size * c->px, sc = stbtt_ScaleForMappingEmToPixels(&f->info, size);
-    float sp = S->spacing * size, width = 0, x, base;
+    float sp = S->spacing * size, width, x, base;
     uint32_t cp[MAXCH], rgb[MAXCH];
     int gi[MAXCH], n = 0, i, k, r, copies;
     float pen[MAXCH];
@@ -366,20 +342,14 @@ static void text(B* c, const HUDOP* op)
         const HUDRUN* run = &c->ops->run[op->run + r];
         const unsigned char *s = (const unsigned char*)c->ops->text + run->off, *e = s + run->len;
         while (s < e && n < MAXCH) {
-            uint32_t ch = utf8(&s, e);
-            cp[n] = S->upper ? upper(ch) : ch;
+            uint32_t ch = tagpu_hudtext_utf8(&s, e);
+            cp[n] = S->upper ? tagpu_hudtext_upper(ch) : ch;
             rgb[n] = run->rgb ? run->rgb : S->rgb;
             gi[n] = stbtt_FindGlyphIndex(&f->info, (int)cp[n]);
             n++;
         }
     }
-    for (i = 0; i < n; i++) {
-        int adv, lsb;
-        stbtt_GetGlyphHMetrics(&f->info, gi[i], &adv, &lsb);
-        if (i) width += sc * (float)stbtt_GetGlyphKernAdvance(&f->info, gi[i - 1], gi[i]);
-        pen[i] = width;
-        width += sc * (float)adv + sp;
-    }
+    width = tagpu_hudtext_pens(&f->info, sc, sp, gi, n, pen);
     if (op->flags & HOPF_BASE) {
         /* an SVG <text>: its anchor at x, its baseline at y, painted on a whole pixel */
         x = op->r.x * c->px - (op->centre == 1 ? width / 2 : op->centre == 2 ? width : 0);
@@ -623,8 +593,6 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
    where they stand, each at the group's opacity -- overlapping ops of it then show through each
    other, the one difference -- and the build starts again without it, at most once per group. */
 
-/* the shelf the next region opens on, and the layer's extent so far */
-typedef struct { int x, y, h, w_used, h_used; } SHELF;
 
 static void group_box(const B* c, int i0, int* x0, int* y0, int* x1, int* y1)
 {
@@ -649,7 +617,7 @@ static void group_box(const B* c, int i0, int* x0, int* y0, int* x1, int* y1)
 /* group k's ops [i0, i1) drawn into its region; its composite at index `at` (-1 none) set. 0 when
    the region does not fit the attachment. */
 static int draw_group(B* c, const HUDOPS* ops, int k, int i0, int i1, int at, int* charted,
-                      SHELF* sh, HUDLAYREG* g)
+                      HUDSHELF* sh, HUDLAYREG* g)
 {
     int j0 = c->n, i, x0, y0, x1, y1, w, h;
     float dx, dy;
@@ -694,17 +662,23 @@ static int draw_group(B* c, const HUDOPS* ops, int k, int i0, int i1, int at, in
     return 1;
 }
 
-int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, float px, int ox, int oy, int w, int h,
-                        HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb, int* nmain,
-                        HUDLAYREG* g, int* ng, int* lw, int* lh, int* dropped, int* unfit)
+void tagpu_huddraw_begin(void)
+{
+    if (s_full) atlas_empty();
+}
+
+int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, int layer, float px, int ox, int oy,
+                        int w, int h, HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb,
+                        int* nmain, int* nminst, HUDLAYREG* g, int* ng, HUDSHELF* shelf,
+                        int* dropped, int* unfit)
 {
     B c;
     HUDOP none;
-    SHELF sh;
+    HUDSHELF sh;
     int at[HUD_MAXGRP];
     unsigned char out[HUD_MAXGRP];      /* the groups refused a region: drawn op by op */
+    const int ng0 = *ng;
     int i, i0, k, charted, again;
-    if (s_full) atlas_empty();
     memset(out, 0, sizeof out);
     memset(&none, 0, sizeof none);
     none.clip.w = -1;
@@ -718,10 +692,12 @@ int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, float px, int ox, 
         for (k = 0; k < HUD_MAXGRP; k++) at[k] = -1;
 
         /* the attachment's instances, a group's composite where its last op stands; a refused
-           group's ops in place, each faded by the group's opacity (premultiplied: all four) */
+           group's ops in place, each faded by the group's opacity (premultiplied: all four). A
+           group's ops are one control's, all of one layer. */
         for (i = 0; i < ops->n; i++) {
             const HUDOP* op = &ops->op[i];
             HUDINST* q;
+            if (((op->flags & HOPF_TOP) != 0) != (layer != 0)) continue;
             if (!op->grp || op->grp > ops->ngrp || out[op->grp - 1]) {
                 int j, n0 = c.n;
                 float a = op->grp && op->grp <= ops->ngrp ? ops->grp[op->grp - 1] : 1.0f;
@@ -737,22 +713,23 @@ int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, float px, int ox, 
                 at[op->grp - 1] = (int)(q - c.inst);
         }
         *nmain = c.nb;
+        *nminst = c.n;
 
-        /* the groups' own, each in its region of the layer */
-        memset(&sh, 0, sizeof sh);
-        *ng = 0;
+        /* the groups' own, each in its region of the layer, packed after the regions an earlier
+           build of the frame placed; a retry starts again from where this build began */
+        sh = *shelf;
+        *ng = ng0;
         for (i = 0; i < ops->n && !again; i = i0) {
             int gk = ops->op[i].grp;
             i0 = i + 1;
-            if (!gk) continue;
+            if (!gk || ((ops->op[i].flags & HOPF_TOP) != 0) != (layer != 0)) continue;
             while (i0 < ops->n && ops->op[i0].grp == gk) i0++;
             if (gk > ops->ngrp || out[gk - 1]) continue;
             if (draw_group(&c, ops, gk - 1, i, i0, at[gk - 1], &charted, &sh, &g[*ng])) ++*ng;
             else { out[gk - 1] = 1; ++*unfit; again = 1; }
         }
     } while (again);
-    *lw = sh.w_used;
-    *lh = sh.h_used;
+    *shelf = sh;
     *nb = c.nb;
     *dropped = c.dropped;
     return c.n;

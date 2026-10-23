@@ -177,7 +177,8 @@ def fork(path, n):
         return 2
     compose(a, start, hist.at(T), hist.roster.actors)
     unseen = contacts(a, b, scan)
-    tarec.fork_view(a, b, h, c["header"])
+    # the header of the parent chain's segment that holds fork_at (stream_to's world at T)
+    tarec.fork_view(a, b, a.header, c["header"])
     gnames = tarec.globals_names(tarec.globals_list(h.get("globals"))[2])
     stale = tarec.occupancy(a, b) + tarec.sort_chains(a, b)
     lines, _ = a.differences(b, h["tables"], c["header"]["tables"], gnames=gnames,

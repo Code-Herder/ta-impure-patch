@@ -25,6 +25,7 @@ import zlib
 from unittest.mock import Mock, patch
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -1323,9 +1324,9 @@ def hold_entry(refresh=30, flags=0, unit_held=(), node_held=()):
     return tlv(tarec.RT_HOLD, struct.pack("<II", refresh, flags) + bytes(32) + unit + node)
 
 
-def held_header(**hold):
-    """header(), RT_HOLD appended: its entries are read in any order."""
-    raw = header()
+def held_header(timeline=None, **hold):
+    """header(timeline), RT_HOLD appended: its entries are read in any order."""
+    raw = header(timeline)
     p = raw[32:] + hold_entry(**hold)
     return block(tarec.RB_HEADER, 0, 0, p)
 
@@ -1493,6 +1494,81 @@ class LossyStream(unittest.TestCase):
                     tarec.header(held_header(**hold)[32:])
         with self.assertRaisesRegex(tarec.Unreadable, "of 12 bytes"):
             tarec.header(header()[32:] + tlv(tarec.RT_HOLD, bytes(12)))
+
+
+class SegmentRules(unittest.TestCase):
+    """What a chain's segments may differ in (tarec.shape_differs, as tagpu_recreader.c's), which
+    segment holds nothing (holds_nothing) and where a takeover starts (takeover_at): T itself in a
+    segment that holds nothing, else the refresh at or before T."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @staticmethod
+    def parsed(raw):
+        return tarec.header(raw[32:])
+
+    def mp(self, raw):
+        return dict(self.parsed(raw), multiplayer=b"roster", mp_seats=b"seats", mode=3)
+
+    def test_shape_rules(self):
+        cells = self.parsed(held_header(flags=tarec.RECL_CELLS))
+        self.assertIsNone(tarec.shape_differs(cells, self.mp(header())))
+        self.assertEqual(tarec.shape_differs(self.mp(header()), cells), "multiplayer roster")
+        self.assertEqual(tarec.shape_differs(cells, self.parsed(held_header(flags=0))),
+                         "held cells")
+        self.assertEqual(tarec.shape_differs(cells, self.parsed(header())), "held cells")
+        self.assertIsNone(tarec.shape_differs(self.parsed(held_header(flags=0)),
+                                              self.parsed(header())))
+
+    def test_holds_nothing(self):
+        for raw, nothing in ((header(), True), (held_header(flags=0), True),
+                             (held_header(flags=tarec.RECL_CELLS), False),
+                             (held_header(flags=tarec.RECL_SPRAYS), False),
+                             (held_header(unit_held=(5,)), False)):
+            with self.subTest(nothing=nothing):
+                self.assertEqual(tarec.holds_nothing(self.parsed(raw)), nothing)
+
+    def test_takeover_at(self):
+        S, F = tarec.RBF_STORED, tarec.RBF_REFRESH
+        first = (tlv(tarec.RK_UNIT, struct.pack("<HH", 1, 0) + bytes(tarec.REC_UNIT_IMAGE)) +
+                 tlv(tarec.RK_MAPPED, struct.pack("<I", 0) + bytes(2)))
+        ticks = LossyStream.ticks
+        root = [header(), flagged(tarec.RB_STREAM, 1, 1, ticks(1, 1, {1: first}), S | F),
+                flagged(tarec.RB_STREAM, 2, 40, ticks(2, 40, {}), S), end_block(40, 13)]
+        child = [held_header(timeline=(1, 0, 21), flags=0, unit_held=(5,)),
+                 flagged(tarec.RB_STREAM, 21, 21, ticks(21, 21, {21: first}), S | F),
+                 flagged(tarec.RB_STREAM, 22, 22, ticks(22, 22, {}), S | F),
+                 flagged(tarec.RB_STREAM, 23, 50, ticks(23, 50, {}), S | F), end_block(50)]
+        path = Path(self.tmp.name) / "r.imprec"
+        path.write_bytes(tarec.REC_MAGIC + b"".join(root + child))
+        path = str(path)
+        # the root holds nothing: every iteration of its part is a start
+        self.assertEqual([tarec.takeover_at(path, 1, T) for T in (2, 10, 20)], [2, 10, 20])
+        # the child holds dword 5: a request rounds to its refresh at or before, and none starts
+        # at its first iteration
+        self.assertEqual([tarec.takeover_at(path, 1, T) for T in (22, 30, 50)], [22, 22, 50])
+        with self.assertRaisesRegex(tarec.Unreadable, "timeline 1's first iteration.*is 22"):
+            tarec.takeover_at(path, 1, 21)
+        with self.assertRaisesRegex(tarec.Unreadable, "timeline 0's first iteration.*is 2"):
+            tarec.takeover_at(path, 1, 1)
+        self.assertEqual(tarec.refresh_at(path, 1, 10), 1)
+        self.assertTrue(tarec.holds_nothing(tarec.segment_at(path, 1, 20)["header"]))
+        self.assertFalse(tarec.holds_nothing(tarec.segment_at(path, 1, 21)["header"]))
+        with self.assertRaisesRegex(tarec.Unreadable, "outside timeline 1's chain"):
+            tarec.takeover_at(path, 1, 51)
+
+    def test_event_check_yards_per_segment(self):
+        ec = tarec.EventCheck()
+        for mode, yards in ((3, False), (2, True), (3, False)):
+            ec.on_record(SimpleNamespace(header={"mode": mode}), tarec.RK_TICK, b"")
+            self.assertEqual(ec.yards, yards)
+        ec = tarec.EventCheck(yards=True)
+        ec.on_record(SimpleNamespace(header={"mode": 3}), tarec.RK_TICK, b"")
+        self.assertTrue(ec.yards)
 
 
 class LossyCells(unittest.TestCase):

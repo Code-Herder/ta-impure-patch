@@ -1753,8 +1753,8 @@ the measured runs and what they mean for the design are in the
   (`tagpu_recorder.c`, READ), which is where a takeover's fork names the seat it was played as:
   the takeover's `tk_live` stores that seat in `+0x2A42`, then `tk_end` arms the fork, whose
   header `header_build` writes at its first capture point (`tagpu_replay.c`,
-  `tagpu_recorder.c`, READ); the forks lane's `hud state` check compares every fork's seat with
-  the player it took over as.
+  `tagpu_recorder.c`, READ). MEASURED 2026-10-23 by the forks lane's `hud state` check on
+  `battle`: forks 2, 4 and 5 each name the player taken over as.
 - **The seat activation `0x464290(seat, type)`** (stdcall, `ret 8`; callers `0x47A7C7` and
   `0x47A81E` in the fill, `0x450C29` in the join `0x450A10`, and `0x496DC2`/`0x496DCB` in `0x496DB0`,
   which seats 0 as type 1 and 1 as type 2 and sets `+0x2A3C` to 2 [role not traced]) zeroes the
@@ -4313,10 +4313,14 @@ the plan would hold (2026-10-11; rel32 and stored-pointer scans of `.text`, each
   puppet; all of them run after a takeover. A held target is a value the engine produced for that
   unit, so its index is a slot of the unit array: what the missing tests let through is a target
   that has died or whose slot has been reused since, not an address outside the array. So a
-  takeover starts only at a refresh, where the targets are the engine's own (`tagpu_replay.c`,
-  `tk_bound`), and the units the refresh's image does not describe have their three slots'
-  targets set to none, (0, `0x8000`), the words AutoAim writes when it drops a target
-  (`0x48A2AF`, `0x48A2B4`, DIS) (`tk_orphans`).
+  takeover starts only where the stream holds no target at an earlier value: at a refresh of a
+  segment that holds, at any iteration of one that holds nothing (`tagpu_replay.c`, `tk_bound`,
+  `recr_exact_at`). There a skirmish's targets are the engine's own; a multiplayer segment's
+  world is exact against the composed parent, whose remote images carry their owners' machines'
+  targets (the composition's residuals: [multiplayer slice](tadr-port/demo-recorder-multiplayer-slice.md#the-takeover-of-a-multiplayer-recording)).
+  The units the image does not describe have their three slots' targets set to none, (0,
+  `0x8000`), the words AutoAim writes when it drops a target (`0x48A2AF`, `0x48A2B4`, DIS)
+  (`tk_orphans`).
 - **The shot builder reads slot `+0x10` on a puppet** (`0x49CE62`, *The weapon slots*): a field
   constant after the create, so the plan's "read by owner code only" does not hold for it, and the
   table does not hold it.
@@ -15051,7 +15055,49 @@ at `ctrls+0xEC`. Callers reject any result that differs from requested text.
 - `DrawPopupF4Dialog 0x4948E0`: `DrawText 0x4A50E0` ×5, `0x4BF4D0` ×3 (the frame), `0x4C7580`
   ×1, `0x4B7F30`. `DrawPopupButtomDialog 0x4689C0`: `DrawText` ×3, `0x4B7F90` ×1, `0x4C6AE0`.
   `DrawChatText 0x464060`: `DrawText` ×1, `0x467C00` ×1 (a message-box painter that also calls
-  `0x4C6890`, `0x4C69A0` and the flip itself), `SetFont`/`SetTextColors`.
+  `0x4C6890`, `0x4C69A0` and the flip itself), `SetFont`/`SetTextColors`. **Where it draws**
+  (DISASSEMBLED): each line through `DrawText 0x4A50E0`, the first line's top `0x34`
+  (`[esp+0x14]`, `0x4640D6`), each next one down by the font's height (`0x4C1450`, `0x46423E`);
+  nothing when `main+0x37F27` (the lines shown) is 0 (`0x464077`). The text's x is `0x8A`
+  (`ebx`, `0x464186`) only for a line whose kind byte is `0x0A` (`0x464194` jumps straight to the
+  `DrawText` call). Any other kind first draws an icon box through `0x467C00` at x `0x8A`, the
+  line's top, `s = ftol(0.8 · h)` square, with `h` the font's height again (`0x464199`) and 0.8 the
+  double at `0x4FD520`; its text then goes at `ftol(138 + 1.5 · s)`: `s · −1.5` (`0x4FD528`)
+  subtracted from 138.0 (`0x4FD530`, `fsubr`), `ftol` `0x4E43A0`, and `ebx` rewritten at
+  `0x4641E6`. The
+  lines are a ring of 30 records of `0x48` bytes (`edi` wraps at `0x1E`, `0x46424C`), the text at
+  `main + 0x12EF + 0x48·i`, a kind byte at `+0x1335` and flags at `+0x1336`, from
+  `main+0x2A3E`; the gate at `0x4640DE` reads `main+0x37EFE` (1, 2 or 3) against the flags' low
+  nibble [INFERRED: which kinds of message the player's setting shows]. In engine pixels, so under
+  HUD scale they move with the world region. Three callers: `0x469FCB` (DrawGameScreen, return
+  address `0x469FD0`), `0x41F7A5` and `0x41F9D8` (both outside DrawGameScreen; return addresses
+  `0x41F7AA` and `0x41F9DD`). `0x41F9D8` is in `0x41F7F0`, which loads `MSGBOX.GUI` (`push 0x502BD4` at `0x41F97C`); `0x41F7A5` is in `0x41F760`, gated on `main+0x39057 == 1`, whose address appears nowhere in the exe, so how it is reached is not known [INFERRED: an address computed at run time, or not at all]. Neither is measured under the strip; the gate stores `0x34` for both (DISASSEMBLED: `0x41F765 cmp dword [eax+0x39057],1`,
+  `jne 0x41F7E0`; no call, jump or stored dword names `0x41F760`; `0x41F7F0` is reached by
+  `jmp` at `0x499880`). The frame at `0x4640D6`: `sub esp,0x20` and four pushes, `0x30`
+  bytes above the return address; the push of `0x4640B1` is the argument of `0x4C1420`, whose
+  `ret 4` pops it, so the return address is `[esp+0x30]` there (DISASSEMBLED). **Patched at
+  `0x4640D6..0x4640DD`**,
+  the 8 bytes `C7 44 24 14 34 00 00 00` (`mov dword [esp+0x14],0x34`; `eax` = main from
+  `0x4640C0`, read again at `0x4640DE`). The loop's back edge is `0x46425E jne 0x4640DE`, past the
+  8 bytes, and nothing lands inside them (DISASSEMBLED: no direct branch or call in the exe
+  targets `0x4640D6..0x4640DD`, and the function's switch table at `0x464270` holds only
+  `0x46410F` and `0x464142`).
+  `chat_top_init` (`tagpu_replay.c`, from `tagpu_replay_init`) checks the 8 bytes with
+  `tagpu_detour_bytes_ok` and that `0x469FCB` is still `E8` to `0x464060` (`call_is`); on a
+  mismatch it logs `replay: DrawChatText's first line 0x4640D6 or its call 0x469FCB holds other
+  bytes: the messages stay under the live HUD's strip` and writes nothing, and if no stub memory
+  is had or the landing fails it logs that and frees the stub. Otherwise it lands a 5-byte `jmp`
+  and 3 `nop`s (`tagpu_detour_land`) to the stub: `50` push eax; `B8 34 00 00 00` mov eax,0x34;
+  `81 7C 24 34 D0 9F 46 00` cmp dword [esp+0x34],0x469FD0 (the return address past the push);
+  `75 05` jne store; `A1 <addr>` mov eax,[`s_chatTop`]; store: `89 44 24 18` mov [esp+0x18],eax
+  (the frame's `+0x14` past the push); `58` pop eax; `E9` jmp `0x4640DE`. So only DrawGameScreen's
+  call reads `s_chatTop`; the other two store the engine's `0x34`. The `cmp` changes the flags,
+  and `0x4640E4 dec ecx` sets them again before any read (`je` at `0x4640E5` reads ZF only, and
+  no carry reader comes before a `cmp`). `s_chatTop` (`tagpu_hudinput.c`) is written on the same
+  game thread at the hit map's take (`tagpu_hudinput_take`, in DrawGameScreen's hook before the
+  draw), from a map whose HUD pass ran only, and at the level's end: `0x34`, or, when that map
+  has the live HUD's strip (the last frame drawn had it), `32 + live_clear · scale · gh / 720`, so
+  the lines start under the strip (hud-in-game.md, *The top layer*).
 - **`0x467D70` the HUD panel painter**, `void (void)`, one caller `0x49842A`, prologue
   `A1 E8 1D 51 00` (5): `esi = *(main+0x37E1B)`; `0x4C69A0(esi)`; `0x4C6890(esi, 0)`; three
   side-specific GAF frames (`main + side·4 + 0x1481F / 0x14833 / 0x14847`, side from
@@ -15224,7 +15270,7 @@ call order, with each gate (`ebx` is the function's `drawUnits` argument):
 | `0x46A107..0x46A1CB` | `0x46A102` loads `eax` = main; `test byte [eax+0x38A51],1` at `0x46A107`, `je 0x46A140` at `0x46A10E`. Set: `0x46A110..0x46A13E` draws the GAF `main+0x1481B` (`igpaused`) frame 0 at (`[esp+0xAC]`, `[esp+0xB0]`) through `GAF_SequenceIndex2Frame 0x4B7F30` and `CopyGafToContext 0x4B7F90`, reloads `eax` and jumps to `0x46A14E`; clear: `0x46A140` loads the same `esi`/`edi` and falls into `0x46A14E`. **From `0x46A14E`, paused or not**, unless the local player's PlayerInfo (`[main + 0x14B·[main+0x2A42] + 0x1B8A]`) has `+0x9B & 0x40` (a watcher), `main+0x3923B` bit 5 → `main+0x14813`, bit 6 → `main+0x14817` | the pause icon `PAUSED`, in the middle of the world (MEASURED 2026-10-09 on the Vulkan lane: a paused replay drew it there, over the replay HUD's stats window); then the won and lost status icons [INFERRED from bits 5, 6 being the game end's won and lost]. DISASSEMBLED. The replay HUD's stub sits on the test at `0x46A107` (*The replay HUD's stats window and the pause icon*) |
 | **`0x46A1D0..0x46A2A3`** | **`main+0x37F2F` bit 6 — the `+clock` cheat** (handler `0x417300`: the bit flipped, then `0x430F00`) | the sim tick `main+0x38A47` split into h:m:s (÷108 000, ÷1 800, ÷30 — 30 ticks a second), `"%s : %02d:%02d:%02d"` (`0x507794`) with `"Game Time"` (`0x504910`, through `0x4C5740` [INFERRED: the string table]); `DrawTextCustomFont 0x4C14F0` at x `0x82`, y `[gfx+0xD8]` (`0x4B6710` [INFERRED: the primary's height]) `− 0x22 −` the font height (`0x4C1450`): the viewport's bottom-left, just above the bottom bar. **The seconds tick between two shots** — the walk measures it with the in-game menu open, which pauses the sim and the clock with it **in single player** (the pause is a separate flagged action, not a property of the push -- see *The screen lifecycle* below; a network game cannot be paused unilaterally) |
 | `0x46A2A8` | `[main+0x38A51] & 2` | the GAF `main+0x148CF` frame 0 at (`screenW − 0x10`, `screenH − 0x50`); not exercised |
-| `0x46A2E7`, `0x46A303` | — | clip reset `0x4C69C0`, then the retained GUI blit `0x4AB170` |
+| `0x46A2E7`, `0x46A303` | — | clip reset `0x4C69C0`, then the retained GUI blit `0x4AB170` (`46a303: call 0x4ab170`, `46a308: mov edx,[0x511de8]`, DISASSEMBLED). It paints the whole top bar, so the Impure Config sprocket is drawn after it, by an observer at `0x46A308` through `CopyGafToContext 0x4B7F90` (`tagpu_menu.c`, `draw_trigger`), and the live HUD's rewind button beside the sprocket is the Vulkan pass's top layer, drawn after the GUI composite (*Live rewind* in [the HUD in game](hud-in-game.html)) |
 | `0x46A308..0x46A3B8` | `[main+0x38DD5]` and `ebx` | the nine profiler bars `0x46B900` |
 | `0x46A3C2` **`DrawOptionsTab 0x45FFB0`** (the symbol's name; the `LIGHTBAR` wipe) | `0x512FE4 != 0` | below |
 | `0x46A3C7` `0x4C2870` | — | the cursor, back buffer only |

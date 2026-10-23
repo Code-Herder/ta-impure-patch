@@ -156,10 +156,11 @@ static void state_drop(void* f)
 }
 
 /* the wreck records' bytes need no clearing: a record is read only under its known bit */
-static void state_restart(void* f, const RecFrameWorld* w)
+static void state_restart(void* f, const RecCodecParams* p, const RecFrameWorld* w)
 {
     State* x = (State*)f;
     unsigned i;
+    (void)p;
     (void)w;
     memset(&x->k, 0, sizeof x->k);
     memset(x->wknown, 0, x->nwrecks);

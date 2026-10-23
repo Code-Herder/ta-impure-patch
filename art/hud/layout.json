@@ -24,7 +24,7 @@
   "chart":       {"font": "Barlow Condensed", "weight": 600, "size": 6.5,  "colour": "#8a93a8", "upper": true,  "spacing": 0.03, "shadow": 0}
  },
 
- "toast": {"top": 0.07, "w": 150, "h": 18, "bg": "#080a06", "alpha": 0.86, "edge": 0.25, "edge_colour": "#4a4c3c", "style": "toast", "ms": 1800},
+ "toast": {"top": 0.07, "w": 150, "max_w": 260, "pad": 8, "h": 18, "bg": "#080a06", "alpha": 0.86, "edge": 0.25, "edge_colour": "#4a4c3c", "style": "toast", "ms": 1800},
 
  "dock": {
   "h": 46, "act": "dock",
@@ -161,13 +161,13 @@
                      "note": {"pad": [0, 0, 4, 0], "style": "label"}, "off": 0.45},
              "warn": {"line": 10, "pad": [4, 3, 4, 2], "style": "window_foot", "colour": "#ffb070"}},
   "live": {
-   "entry": {"bar": 32, "sprocket": {"r": 16, "t": 2, "s": 28}, "r": 47, "t": 2, "s": 28,
+   "entry": {"bar": 32, "r": 47, "t": 2, "s": 28,
              "part": "rewind_button", "pressed": "rewind_button_down", "icon": {"name": "rewind", "padf": 0.16}},
    "strip": {"part": "live_one", "l": 12, "r": 12, "t": 6, "h": 34, "pad": 5, "gap": 3,
              "button": {"part": "bay_button", "pressed": "bay_button_down"},
              "transport": [{"act": "rew", "icon": {"name": "rew", "w": 14, "h": 14}, "w": 24},
-                           {"act": "play", "icon": {"name": "play", "playing": "pause", "w": 14, "h": 14}, "w": 24},
-                           {"act": "fwd", "icon": {"name": "fwd", "w": 14, "h": 14}, "w": 24}],
+                           {"act": "play", "icon": {"name": "play", "w": 14, "h": 14}, "w": 24, "off": 0.45},
+                           {"act": "fwd", "icon": {"name": "fwd", "w": 14, "h": 14}, "w": 24, "off_at_end": 0.45}],
              "track": {"part": "live_groove", "h": 14, "ends": 2, "fill": {"part": "track_fill", "pad": [2, 2, 2, 2]},
                        "playhead": {"part": "playhead", "w": 4, "pad": [0, -1, 0, -1]}},
              "now": {"w": 20, "style": "label", "align": "c"},

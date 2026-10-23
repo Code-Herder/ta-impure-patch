@@ -37,17 +37,32 @@ typedef struct { int tex, first, count; } HUDBATCH;
    viewport and the region as the scissor. */
 typedef struct { int x, y, w, h, b0, nb; } HUDLAYREG;
 
-/* The instances for `ops` at `px` device pixels a unit, the game screen's top-left corner at
-   (`ox`, `oy`) on a `w` x `h` attachment. Returns the instance count; `*nb` batches, of which the
-   first `*nmain` are the attachment's and the rest the groups' (`g`, `*ng` of them, room for
-   HUD_MAXGRP), whose layer is at least `*lw` x `*lh`, never more than `w` x `h`. A group's
-   composite is a HUD_TEX_LAYER instance whose uv are the region's corners IN LAYER PIXELS, which
-   the pass divides by the size of the image it binds. A group whose region does not fit is drawn
-   op by op on the attachment instead, counted in `*unfit`. Glyphs the atlas could not take are
-   left out and counted in `*dropped` (the atlas is rebuilt on the next call that needs room). */
-int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, float px, int ox, int oy, int w, int h,
-                        HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb, int* nmain,
-                        HUDLAYREG* g, int* ng, int* lw, int* lh, int* dropped, int* unfit);
+/* The shelf the next region opens on, and the layer's extent so far: one a frame, zeroed before
+   its first build and carried through both, so the two layers' groups share one layer image. */
+typedef struct { int x, y, h, w_used, h_used; } HUDSHELF;
+
+/* A frame's builds begin: the glyph atlas is emptied here, if a glyph did not fit, and nowhere
+   else. THE ORDERING THE TWO LAYERS REST ON: an atlas emptied between a frame's two builds would
+   leave the first build's glyphs naming emptied texels; emptied only before the frame's first
+   build, both layers' glyphs are of one generation, which the upload rule above covers. Once a
+   frame, before its first tagpu_huddraw_build. */
+void tagpu_huddraw_begin(void);
+
+/* The instances for layer `layer` of `ops` -- 0 the ops without HOPF_TOP, 1 those with it -- at
+   `px` device pixels a unit, the game screen's top-left corner at (`ox`, `oy`) on a `w` x `h`
+   attachment. Returns the instance count; `*nb` batches, of which the first `*nmain` are the
+   attachment's, holding the first `*nminst` instances, and the rest the groups'. The groups'
+   regions are appended to `g` from `*ng` on (room for HUD_MAXGRP in all), packed on `*shelf`,
+   whose extent is then the least the layer must be, never more than `w` x `h`; each region's b0
+   is an index into `b`. A group's composite is a HUD_TEX_LAYER instance whose uv are the region's
+   corners IN LAYER PIXELS, which the pass divides by the size of the image it binds. A group whose
+   region does not fit is drawn op by op on the attachment instead, counted in `*unfit`. Glyphs the
+   atlas could not take are left out and counted in `*dropped` (the atlas is rebuilt at the next
+   frame's tagpu_huddraw_begin). */
+int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, int layer, float px, int ox, int oy,
+                        int w, int h, HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb,
+                        int* nmain, int* nminst, HUDLAYREG* g, int* ng, HUDSHELF* shelf,
+                        int* dropped, int* unfit);
 
 /* THE GLYPH ATLAS: one R8 coverage image. `gen` changes when it is emptied because a glyph did
    not fit; the rows [*y0, *y1) are the ones changed since tagpu_huddraw_atlas_sent last covered

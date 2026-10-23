@@ -1,8 +1,9 @@
 #ifndef TAGPU_HUDINPUT_H
 #define TAGPU_HUDINPUT_H
-/* tagpu_hudinput -- the replay HUD's input and its commands: a click hit-tested against the
-   controls of the last frame the HUD was drawn on, and acted on through the replay's own calls
-   (inc/tagpu_replay.h). Design: research/notes/hud-in-game.md, *Input*.
+/* tagpu_hudinput -- the HUD's input and its commands: a click hit-tested against the controls of
+   the last frame the HUD was drawn on, and acted on through the replay's own calls
+   (inc/tagpu_replay.h) -- a replay's, or a live skirmish's rewind verbs. Design:
+   research/notes/hud-in-game.md, *Input* and *Live rewind*.
 
    GAME THREAD, every entry point: the two mouse paths of the shield and the wndproc TA pumps on
    that thread, the packet's fill, the command record's take, the DrawGameScreen observer and the
@@ -18,10 +19,12 @@
    for -- is no controls. */
 void tagpu_hudinput_take(const TAGPU_CMD_HUD* h);
 
-/* The HUD is on the screen: a recording plays with the HUD on (tagpu_hudstate_drawing) and the
+/* A control on the screen carries the pause, so the engine's PAUSED icon is not drawn: the
    record last taken had controls -- the render thread posts the last frame's map, empty when that
-   frame drew no HUD, and the in-play draw takes it before anything it draws. Game thread; cdecl,
-   for the pause icon's stub (tagpu_replay.c, THE PAUSE ICON). */
+   frame drew no HUD, and the in-play draw takes it before anything it draws -- and they are the
+   replay HUD's, or the live HUD's while a rewind owns the level (tagpu_hudstate_mode). The live HUD
+   idle answers 0: a live game the player pauses shows PAUSED. Game thread; cdecl, for the pause
+   icon's stub (tagpu_replay.c, THE PAUSE ICON). */
 int  __cdecl tagpu_hudinput_on_screen(void);
 
 /* A left or right button at the window's client point (cx, cy) -- cx < 0 when the point is not
@@ -39,11 +42,17 @@ int  tagpu_hudinput_wheel(UINT msg, WPARAM wp, LPARAM lp);
    consumed. */
 void tagpu_hudinput_cancel(void);
 
-/* The packet's fill: the HUD's own state into `h`, and the timeline drag's seek, once a frame. */
+/* The packet's fill: the HUD's own state into `h`, and the timeline drag's seek, once a frame;
+   for the live HUD (`h->mode`), the outcome of its rewind verbs and Play from here's arm too. */
 void tagpu_hudinput_fill(TAGPU_PK_HUD* h);
 
 /* The replay HUD's own scale, percent: its button's last choice, else the settings store's. */
 unsigned tagpu_hudinput_scale(void);
+
+/* The top of the engine's first message line, in its own pixels: the engine's 0x34, or below the
+   live strip while the last frame drew it. The game thread writes it at the packet's fill and at
+   the level's end; DrawChatText's stub reads it (tagpu_replay.c), on the same thread. */
+const int* tagpu_hudinput_chat_top(void);
 
 /* Leave, for tagpu_menu.c's observer, which opens the question where the engine's screens are
    opened: 1 when the button asked for it since the last call; `opened` says whether it was.

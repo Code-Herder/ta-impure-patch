@@ -4,8 +4,16 @@
    research/notes/hud-in-game.md. The two-phase contract of tagpu_vk_fps.h: `prepare` before the
    render pass, `record` inside it, both on the render thread on the command buffer the seam is
    recording, in one frame; `prepare` returning 0 means nothing to draw. `prepare` records a
-   render pass of its own, the groups' layer (tagpu_vk_hud.c), so it must run outside the seam's. It is recorded after the
-   world and before the engine's UI, so the engine's dialogs and the cursor draw over it. */
+   render pass of its own, the groups' layer (tagpu_vk_hud.c), so it must run outside the seam's.
+
+   TWO LAYERS. The base layer is recorded after the world and before the engine's UI, so the
+   engine's dialogs and the cursor draw over it. The top layer (HOPF_TOP, tagpu_hudlay.h: the live
+   rewind's button, which sits in the top bar the UI paints whole, and its strip and toast, which
+   the engine's message lines would cross; tagpu_hudlay.c, live) is recorded after the UI; then
+   the whole UI again inside the Config panel's rect while the panel is open
+   (tagpu_vk_gui_record_whole), and the UI's sharp layer -- the cursor -- inside the top layer's
+   rect (tagpu_vk_gui_record_sharp), so the panel stays over the strip and the cursor stays the
+   topmost thing on the screen. Both layers' groups are drawn into the one groups' layer. */
 #include "tagpu_vk_pass.h"
 
 /* Build or refresh what this frame needs and fill slot `slot`'s instances for this frame's HUD
@@ -13,9 +21,18 @@
 int  tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                           uint32_t w, uint32_t h);
 
-/* Draw it, inside the render pass. */
+/* Draw the base layer, inside the render pass. */
 void tagpu_vk_hud_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                          uint32_t w, uint32_t h);
+
+/* Draw the top layer, inside the render pass, after the engine's UI: the same pipeline,
+   viewport, scissor and buffer as `record`. 1 when it drew. The frame's last HUD call. */
+int  tagpu_vk_hud_record_top(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                             uint32_t w, uint32_t h);
+
+/* The device pixels the top layer drew this frame, on the attachment: 1 with the rect, 0 when it
+   is empty. */
+int  tagpu_vk_hud_top_rect(VkRect2D* r);
 
 /* Give everything back: the seam calls it from `vk_down`, after its vkDeviceWaitIdle and
    before the device is destroyed. Safe when nothing was built. */

@@ -142,6 +142,7 @@ typedef struct TWIN {
 static TWIN   s_twins[MAX_TWINS];
 static int    s_ntwins = 0;
 static unsigned s_presented = 0;        /* the last PK_FRAME's surface         */
+static short    s_panelBox[4] = { 0, 0, -1, -1 };   /* and its Config panel box, r < l none */
 
 static TAGPU_GAFATLAS s_atlas;
 static TAGPU_GAFENT   s_ents[ATLAS_MAX];
@@ -516,12 +517,14 @@ static const char* TINT_FS =
     "  oIdx = vec4(texelFetch(uShade, ivec2(i, uRow), 0).r, g.g, 0.0, 0.0);\n"
     "  oCol = texelFetch(uShade, ivec2(i, uRow + textureSize(uShade, 0).y / 2), 0); }\n";
 /* the layer over the frame: uv.y = 0 at the top of the screen; the twin's
-   row 0 is the surface's row 0 */
+   row 0 is the surface's row 0. a.z is sharpOnly: 1 on the quad that draws
+   the sharp layer alone (LAY_FS) */
 static const char* LAY_VS =
     "#version 330 core\n"
     "layout(location=0) in vec4 a;\n"
     "out vec2 uv;\n"
-    "void main(){ uv = a.xy;\n"
+    "flat out float sharpOnly;\n"
+    "void main(){ uv = a.xy; sharpOnly = a.z;\n"
     "  gl_Position = vec4(a.x*2.0-1.0, 1.0-a.y*2.0, 0.0, 1.0); }\n";
 /* A CLIENT'S FILL IN THE SHARP LAYER: a constant colour over a quad given in
    sharp-layer pixels, y DOWN from the viewport's top row. It pairs with QVS,
@@ -562,6 +565,7 @@ static const char* CURS_FS =
 static const char* LAY_FS =
     "#version 330 core\n"
     "in vec2 uv; out vec4 frag;\n"
+    "flat in float sharpOnly;\n"
     /* NO SAMPLER OF THE ENGINE'S OWN FRAME IS DECLARED HERE: nothing of the
        engine's reaches the screen, and a pipeline that cannot name the image
        cannot sample it. */
@@ -646,6 +650,11 @@ static const char* LAY_FS =
     "    vec4 sh = texelFetch(uSharp, sp, 0);\n"
     "    if (sh.a > 0.5) { frag = vec4(sh.rgb, 1.0); return; }\n"
     "  }\n"
+    /* THE SHARP-ONLY QUAD ENDS HERE: it is the cursor drawn again over the
+       replay HUD's top layer, which is drawn after this composite
+       (tagpu_vk_gui_record_sharp), so it keeps the sharp layer's texels and
+       nothing else. The composite's own quad has sharpOnly 0 and goes on. */
+    "  if (sharpOnly > 0.5) discard;\n"
     /* THE CURSOR'S RECT IS NOT DISCARDED HERE, and the difference is a hole
        rather than a nicety: nothing of the engine's frame is underneath, so
        discarding here would punch the twin's own background out and leave the
@@ -934,6 +943,7 @@ static void twins_reset(void)
 {
     while (s_ntwins) twin_drop(&s_twins[0]);
     s_presented = 0;
+    s_panelBox[0] = s_panelBox[1] = 0; s_panelBox[2] = s_panelBox[3] = -1;
     tagpu_gaf_atlas_reset(&s_atlas);
 }
 
@@ -1467,7 +1477,10 @@ static void drain(void)
             tagpu_text_glyph_feed(o->font_id, o->font_rows, o->font_yoff,
                                   g_guiq.arena + o->aoff, o->gcount, o->alen);
         switch (o->kind) {
-        case PK_FRAME:  s_presented = o->surf; break;
+        case PK_FRAME:
+            s_presented = o->surf;
+            s_panelBox[0] = o->l; s_panelBox[1] = o->t; s_panelBox[2] = o->r; s_panelBox[3] = o->b;
+            break;
         case PK_RESET:  twins_reset();
             tagpu_gui_reset_record(&s_mirReset);
             { TAGPU_GUIOP* m = mir_op(); if (m) m->kind = TAGPU_GUIOP_RESET; }
@@ -2412,6 +2425,8 @@ static void draw_layer(const TAGPU_FRAME* f)
     if (s_mirRec) {
         s_mHand.presented = s_presented;
         s_mHand.surfW = t->w; s_mHand.surfH = t->h;
+        s_mHand.panelL = s_panelBox[0]; s_mHand.panelT = s_panelBox[1];
+        s_mHand.panelR = s_panelBox[2]; s_mHand.panelB = s_panelBox[3];
         s_mHand.vpKey = tagpu_terrown_filled() ? key : -1;
         s_mHand.vpL = (float)L; s_mHand.vpT = (float)T;
         s_mHand.vpW = (float)W; s_mHand.vpH = (float)H;
@@ -2666,6 +2681,7 @@ static void mir_finish(const TAGPU_FRAME* f)
     if (!s_mirRec || (s_mStrAny && s_mStrGen != tagpu_text_glyph_gen()) ||
         (s_mAtAny && s_mAtGen != s_atlas.gen)) {
         memset(&s_mHand, 0, sizeof s_mHand);
+        s_mHand.panelR = s_mHand.panelB = -1;   /* no panel: the memset's 0..0 is a one-pixel box */
         s_mHand.frame = f->frame_counter;
         s_mHand.lost = 1;
         s_mHave = 1; s_mTaken = 0; s_mFrame = f->frame_counter;
@@ -2682,6 +2698,7 @@ static void mir_finish(const TAGPU_FRAME* f)
     s_handAssetTok = s_mirAssetTok; s_mirAssetTok = 0;
     if (!s_mLayer) {
         s_mHand.presented = 0; s_mHand.surfW = s_mHand.surfH = 0;
+        s_mHand.panelL = s_mHand.panelT = 0; s_mHand.panelR = s_mHand.panelB = -1;
         s_mHand.sharpOn = 0;
         s_mHand.colourTwins = 0;
         s_mHand.colValid = 0;

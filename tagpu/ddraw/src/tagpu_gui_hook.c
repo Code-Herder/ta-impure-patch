@@ -55,6 +55,7 @@
 #include "tagpu_trigger.h"
 #include "tagpu_log.h"
 #include "tagpu_profiles.h"
+#include "tagpu_menu.h"
 
 #define TA_MAINPP     0x00511DE8u
 #define OFF_GUI_TOP   0x531           /* GUIInfo.TheActive_GUIMEM               */
@@ -2893,6 +2894,7 @@ static void publish_window(unsigned flipSurf)
             s = pub_surf(op->base);
             if (s && seed_due(s) && !pub_seed(s)) return;
             o = pub_op(PK_FRAME, op->base); if (!o) return;
+            o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
             pub_commit();
             continue;
         }
@@ -3897,6 +3899,19 @@ static int __cdecl before_flip(void* entry_esp)
         OP* o = &s_ops[s_nops++];
         memset(o, 0, sizeof *o);
         o->kind = OP_FLIP; o->base = s->base;
+        /* THE CONFIG PANEL'S BOX, TAKEN WITH THE FRAME THAT DREW IT. The panel opens and closes
+           only at DrawGameScreen's entry (tagpu_menu.c, menu_tick), before the frame draws, and the
+           retained GUI blit draws it on every frame it is open, so at this flip the box says
+           whether this frame's surface holds the panel. It crosses in this flip's PK_FRAME, and the
+           consumer reads it from the hand-over of the composite it draws. */
+        {
+            int l, t, r, b;
+            if (tagpu_menu_panel_box(&l, &t, &r, &b)) {
+                o->l = (short)l; o->t = (short)t; o->r = (short)r; o->b = (short)b;
+            } else {
+                o->l = o->t = 0; o->r = o->b = -1;
+            }
+        }
         frameRecorded = 1;
     }
     /* the cursor is drawn into the back buffer INSIDE the flip and its

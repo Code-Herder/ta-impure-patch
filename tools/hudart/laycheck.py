@@ -71,6 +71,16 @@ CASES = [
     ("4k-150-lanes-held", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&nf=3&lo&paused", None, "lane:0"),
     # at device scale factor 1, the game's 1.5 pixels a unit: boxes on half pixels, which each side snaps
     ("1080-100-lanes-dpr1", "res=1920x1080&game=150&hud=100&np=4&nt=4&t=70&nf=3&lo&paused", None, "", 1),
+    # the live HUD: the rewind button alone, then its strip open
+    ("4k-150-live", "res=3840x2160&game=150&hud=150&mode=live", None, ""),
+    ("1080-100-live-rw", "res=1920x1080&game=off&hud=100&mode=live&rw", None, ""),
+    ("1440-75-live-rw", "res=2560x1440&game=200&hud=75&mode=live&rw", None, ""),
+    # the strip just opened: the playhead at its end, where fwd is drawn disabled
+    ("1080-100-live-open", "res=1920x1080&game=off&hud=100&mode=live&rw&t=132", None, ""),
+    # the toast clear of the open strip, and where the strip is closed
+    ("1080-100-live-rw-toast", "res=1920x1080&game=off&hud=100&mode=live&rw&toast=Click%20again%20to%20play%20from%200%3A30", None, ""),
+    ("4k-150-live-rw-toast", "res=3840x2160&game=150&hud=150&mode=live&rw&toast=Click%20again%20to%20play%20from%200%3A30%2C%20replacing%20F2", None, ""),
+    ("1440-75-live-toast", "res=2560x1440&game=200&hud=75&mode=live&toast=Rewind%20refused", None, ""),
 ]
 # a chart point is a float in the game and a double in the mockup, and both write it to a tenth: one
 # within 1e-5 of a tenth's half can round either way, so a point may differ by that tenth
@@ -280,8 +290,9 @@ def main():
         keep = Path(sys.argv[2])
     tmp = Path(tempfile.mkdtemp(prefix="laycheck"))
     exe = tmp / "laycheck"
-    cc = subprocess.run(["gcc", "-O1", "-std=c99", "-Wall", f"-I{SRC}", str(ROOT / "tools/hudart/laycheck.c"),
-                         str(SRC / "tagpu_json.c"), str(SRC / "tagpu_hudlay.c"), "-lm", "-o", str(exe)],
+    cc = subprocess.run(["gcc", "-O1", "-std=c99", "-Wall", f"-I{SRC}", f"-I{SRC.parent / 'inc'}",
+                         str(ROOT / "tools/hudart/laycheck.c"), str(SRC / "tagpu_json.c"),
+                         str(SRC / "tagpu_hudlay.c"), str(SRC / "tagpu_hudtext.c"), "-lm", "-o", str(exe)],
                         capture_output=True, text=True)
     if cc.returncode:
         sys.exit("laycheck: the native build failed\n" + cc.stderr)

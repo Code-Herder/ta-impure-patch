@@ -2499,15 +2499,16 @@ def cmd_wheel(args):
 # them, and `hud show` lists the frame's; the takeover's are takeover (the Take over button), picker
 # (the picker's plate), takeas:<row> (take over that row's player) and lanes (the Forks bay); the
 # fork lanes' are lane:<k> (watch lane k's fork, or the replay from the watched one), export:<k> and
-# delete:<k> (two clicks: the first arms it)
+# delete:<k> (two clicks: the first arms it); the live HUD's are rewind, rew, fwd, track, live_play
+# and live_now
 HUD_ASK = "tagpu_replayhud.dump"
 HUD_OUT = "tagpu_replayhud.json"
 
 
 def _hud_dump(inst: Instance, timeout: float) -> dict:
-    """The replay HUD's state and the controls of the frame on screen, as the game dumps them: the
-    old answer removed, the trigger written, and the new answer read once the game has taken the
-    trigger. Only a Vulkan replay's HUD answers."""
+    """The HUD's state and the controls of the frame on screen, as the game dumps them: the old
+    answer removed, the trigger written, and the new answer read once the game has taken the
+    trigger. Only the Vulkan lane's HUD answers: a replay's, or a live recorded skirmish's."""
     ask, ans = inst.gamedir / HUD_ASK, inst.gamedir / HUD_OUT
     ans.unlink(missing_ok=True)
     ask.write_text("")
@@ -2520,7 +2521,8 @@ def _hud_dump(inst: Instance, timeout: float) -> dict:
                 pass
         time.sleep(0.1)
     ask.unlink(missing_ok=True)
-    die(f"no replay HUD answered in {timeout:g}s (a recording playing on the Vulkan renderer?)")
+    die(f"no HUD answered in {timeout:g}s (a recording playing, or a live recorded skirmish, on "
+        f"the Vulkan renderer?)")
 
 
 def _hud_rect(dump: dict, key: str):
@@ -2546,13 +2548,14 @@ def _hud_find(inst: Instance, key: str, timeout: float):
                 d = _hud_dump(inst, timeout)
                 r = _hud_rect(d, key)
     if r is None:
-        die(f"the replay HUD shows no control {key!r}: "
+        die(f"the HUD shows no control {key!r}: "
             + " ".join(h["key"] for h in d["hits"]["at"]))
     return d, r
 
 
 def cmd_hud(args):
-    """The replay HUD: its state, and its controls driven by name in device space.
+    """The HUD -- a replay's, or a live recorded skirmish's rewind: its state, and its controls
+    driven by name in device space.
 
     Every action is a device-space injection at the control's place in the frame the game last
     drew -- the same path a player's click takes, and not a call of the replay's API -- so a
@@ -2568,8 +2571,20 @@ def cmd_hud(args):
         d = _hud_dump(inst, tmo)
         st, hits = d["state"], d["hits"]
         sw = st.get("stats", {})
+        # two scales: `hud` is the replay HUD's own (its scale button), the mockup's field; the
+        # game's HUD scale is the engine frame's, q8 / 256
+        scales = f"its scale {round(st['hud'] * 100)}%, the game's HUD {round(d['q8'] * 100 / 256)}%"
+        if st.get("mode") == "live":
+            rw = st["rw"]
+            human = (f"live, rewind {rw['state']}, t {st['t']:.1f} of {st['T']:.1f} s, {scales}, arm {rw['arm']}"
+                     + (f" at GameTime {rw['R']}" + (f", replacing F{rw['evict']}" if rw["evict"] is not None else "")
+                        if rw["arm"] else "")
+                     + (f", toast {st['toast']!r}" if st["toast"] else "") + "\n"
+                     + "\n".join(f"  {h['key']:<16} {h['r']}" for h in hits["at"]))
+            out(d, args.json, human=human)
+            return
         human = (f"t {st['t']:.1f} of {st['T']:.1f} s, {'playing' if st['playing'] else 'paused'}, "
-                 f"{st['speed']:g}x, HUD {round(st['hud'] * 100)}%, sight {st['sight']}, "
+                 f"{st['speed']:g}x, {scales}, sight {st['sight']}, "
                  f"follow {st['follow']}, scroll {st['scroll']} (last {hits['last']})"
                  + (f", toast {st['toast']!r}" if st["toast"] else "")
                  + (f", picker {st['pick']['R']}" if st.get("pick", {}).get("state") == 2 else "")
@@ -6083,7 +6098,8 @@ def _replay_takeover_wait(inst, name, lines, first, timeout, held=False):
     resumes the level: the wait returns at the takeover's line once the hold's line is seen too,
     whichever came first (`held`), and the recording's line is the caller's to wait for."""
     n = re.escape(name)
-    # the takeover starts at the refresh at or before T, which its line names (tk_bound)
+    # the takeover starts at T where its segment holds nothing, else at the refresh at or before
+    # it, which its line names (tk_bound)
     taken_rx = re.compile(
         rf"replay: {n}: taken over at GameTime (\d+) as player (\d+), difficulty (\d+), in (\d+) ms "
         rf"\(read (\d+), rebuild (\d+), AI (\d+), passability (\d+)\); units (\d+) killed, "
@@ -6197,9 +6213,9 @@ def replay_prediction(args):
     tarec = _tarec(blocks=True)
     try:
         segs, _ = tarec.file_segments(args.recording)
-        # the takeover starts at the refresh at or before --at (tagpu_replay.c, tk_bound)
+        # the takeover starts at T, or the refresh at or before it (tarec.takeover_at)
         evict = tarec.fork_prediction(segs, args.timeline,
-                                      tarec.refresh_at(args.recording, args.timeline, args.at))
+                                      tarec.takeover_at(args.recording, args.timeline, args.at))
     except (OSError, tarec.Unreadable) as e:
         die(str(e))
     out({"dry_run": True, "would_delete": evict}, args.json,
@@ -7316,7 +7332,8 @@ def build_parser():
                          "and scrolls only over a list")
     wh.set_defaults(func=cmd_wheel)
 
-    hd = sub.add_parser("hud", help="the replay HUD: its state, and its controls by name")
+    hd = sub.add_parser("hud", help="the HUD -- a replay's, or a live skirmish's rewind: its state, "
+                                    "and its controls by name")
     add_common(hd)
     hd.add_argument("name")
     hd.add_argument("verb", nargs="?", default="show",
@@ -7324,8 +7341,8 @@ def build_parser():
                          "scrub <from> <to> | drag <key> <dx> <dy> -- a key as `show` lists it "
                          "(play, speed, track, jump:2, fold:0, cursors, stats, chip:army, drag, "
                          "takeover, takeas:<row>, lanes, picker, lane:<k>, export:<k>, delete:<k>, "
-                         "...); a row's button hovers its "
-                         "row first")
+                         "...; live: rewind, rew, fwd, track, live_play, live_now); a row's "
+                         "button hovers its row first")
     hd.add_argument("rest", nargs="*")
     hd.add_argument("--right", action="store_true", help="click: the right button")
     hd.add_argument("--timeout", type=float, default=20.0, help="seconds to wait for the HUD")
@@ -7654,9 +7671,10 @@ def build_parser():
                                   "one whose running playback is taken over")
     rpt.add_argument("recording", nargs="?", default=None, help="an .imprec file")
     rpt.add_argument("--at", type=gametime_type, required=True, metavar="T",
-                     help="the GameTime the live game starts from, rounded down to the "
-                          "recording's refresh at or before it, which the takeover's line names "
-                          "(`at` in --json)")
+                     help="the GameTime the live game starts from: T itself in a multiplayer "
+                          "segment, which holds nothing, else rounded down to the recording's "
+                          "refresh at or before it, which the takeover's line names (`at` in "
+                          "--json)")
     rpt.add_argument("--player", type=int, required=True, metavar="P",
                      help="the recorded player to take over")
     rpt.add_argument("--difficulty", type=int, choices=(0, 1, 2), default=None,

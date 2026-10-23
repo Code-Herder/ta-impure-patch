@@ -165,17 +165,19 @@ function state() {
     .concat(S.bm.map(t => ({ t, kind: 'bookmark', seat: -1 })));
   const sw = S.sw || { x: L.window.x, y: L.window.y };
   // the game's dump carries its stats whole: the window, its measure and split, and the groups as the game drew them
+  // and, live, its mode, the strip's state and the rewind's (`live` draws the live HUD, hud.js `draw`)
   if (GAME) { const g = GAME.state;
     return { W: g.W, H: g.H, frame: g.frame, t: g.t, T: g.T, playing: g.playing, speed: g.speed, hud: g.hud, seats: g.seats, teams: g.teams,
       folded: g.folded, markers: g.markers, toggles: g.toggles, sight: g.sight, follow: g.follow, scroll: g.scroll, toast: g.toast,
-      stats: g.stats,
+      stats: g.stats, mode: g.mode, ...(g.mode === 'live' ? { live: g.live, rw: g.rw } : {}),
       // the proposed features as the game drew them: its forks, its axis and fill, its picker
       ...(g.forks ? { ends: g.ends, len: g.len, fillTo: g.fillTo, timeline: g.timeline, lanesOpen: g.lanesOpen, picker: g.picker,
                       armed: g.armed, replace: g.replace,
                       // a fork on the chain that plays is the game's TAGPU_PK_FORK_CHAIN flag, the mockup's `chain`
                       forks: g.forks.map(f => ({ ...f, chain: !!(f.flags & 2) })) } : {}) }; }
   const base = { W: w / u, H: h / u, frame: { panel: ef.panel / ud, top: ef.bar / ud, bottom: ef.bar / ud } };
-  if (S.prop && S.mode === 'live') return { ...base, t: S.t, T, playing: S.playing, speed: S.speed, hud: S.hud, live: { open: S.rw }, toast: S.toast, stats: { open: false } };
+  // the rewind holds the past paused, so the live strip never plays
+  if (S.prop && S.mode === 'live') return { ...base, t: S.t, T, playing: false, speed: S.speed, hud: S.hud, live: { open: S.rw }, toast: S.toast, stats: { open: false } };
   const fl = S.prop ? forkList() : null, lru = fl && fl.length >= FORK_MAX ? fl.indexOf(fl.reduce((a, f) => f.seen < a.seen ? f : a)) : -1;
   // the track fills to where the chain leaves the replay: its first fork's branch
   const ch = S.prop ? chain() : [];
@@ -192,8 +194,12 @@ const px = () => unit() * (window.devicePixelRatio || 1);
 function build() { HUD.draw(layer, state(), px()); }
 
 /* ---- the backdrop: a 1280 x 720 replay frame from our renderer, whose own side panel is 128 pixels and bars 32, recut so that
-   the panel and bars are drawn at the engine's magnification and the world fills what they leave. The bars' plain tile
-   repeats out to the screen's right, as far as the screen is wide; the HUD only depends on where the frame ends. ---- */
+   the panel and bars are drawn at the engine's magnification and the world fills what they leave. Past the bars' first
+   1155 pixels the engine repeats their columns 642 to 1154, every 513 pixels out to the screen's right (MEASURED
+   2026-10-23: a 1920 x 1080 frame's bars equal the 1280 frame's column for column, shifted by 0, 513 or 1026, the
+   resource numbers and the sprocket aside), so the separators land where the game's do. The top bar's right end
+   carries the Impure Config sprocket, 28 pixels square at 44 from the bar's right and 2 down (tagpu_menu.c,
+   trigger_rect), drawn from the frame's own. The HUD only depends on where the frame ends. ---- */
 const BD = new Image(); BD.src = '../../../research/notes/assets/hud-art/backdrop.png';
 function backdrop() {
   const cv = $('#bg'), dv = device(), f = engineFrame(dv.W, dv.H, S.game), k = f.scale;
@@ -203,12 +209,13 @@ function backdrop() {
   const world = { x: f.panel, y: f.bar, w: dv.W - f.panel, h: dv.H - 2 * f.bar }, src = { x: 128, y: 32, w: 1152, h: 656 };
   const c = Math.max(world.w / src.w, world.h / src.h), sw = world.w / c, sh = world.h / c;
   g.drawImage(BD, src.x + (src.w - sw) / 2, src.y + (src.h - sh) / 2, sw, sh, world.x, world.y, world.w, world.h);
+  const at = x => f.panel + (x - 128) * k, end = 128 + (dv.W - f.panel) / k;                           // the bar's own pixels
   const bar = (sy, y) => {
-    g.drawImage(BD, 128, sy, 688, 32, f.panel, y, 688 * k, f.bar);                                      // the bar's content
-    for (let x = f.panel + 688 * k; x < dv.W - 64 * k; x += 168 * k) g.drawImage(BD, 816, sy, 168, 32, x, y, 168 * k, f.bar);   // its plain tile
-    g.drawImage(BD, 1216, sy, 64, 32, dv.W - 64 * k, y, 64 * k, f.bar);                                  // its right end
+    g.drawImage(BD, 128, sy, 1027, 32, f.panel, y, 1027 * k, f.bar);                                    // the bar's content
+    for (let x = 1155; x < end; x += 513) g.drawImage(BD, 642, sy, 513, 32, at(x), y, 513 * k, f.bar);   // its repeat
   };
   bar(0, 0); bar(688, dv.H - f.bar);
+  g.drawImage(BD, 1236, 2, 28, 28, at(end - 44), 2 * k, 28 * k, 28 * k);                              // the sprocket
   g.fillStyle = '#000'; g.fillRect(0, 0, f.panel, dv.H);
   g.drawImage(BD, 0, 0, 128, 720, 0, 0, f.panel, 720 * k);
 }
@@ -256,7 +263,9 @@ layer.addEventListener('click', e => {
   switch (a.dataset.act) {
     case 'play': if (S.t >= tlEnd()) S.t = 0; S.playing = !S.playing; break;
     case 'rew': S.t = Math.max(0, S.t - 10); break;
-    case 'fwd': S.t = Math.min(tlEnd(), S.t + 10); break;
+    // live, as the game: a jump that reaches the recording's last GameTime, one tick (1/30 s) before now, is back to
+    // now, which closes the strip (tagpu_hudinput.c, live_act)
+    case 'fwd': if (S.mode === 'live' && S.t + 10 >= T - 1 / 30) { S.rw = false; S.t = T; } else S.t = Math.min(tlEnd(), S.t + 10); break;
     case 'lanes': if (S.forks.length) S.lo = !S.lo; break;
     case 'takeover': S.pick = !S.pick; if (S.pick) S.playing = false; break;
     case 'takeas': { const p = state().seats[+a.dataset.seat], fl = forkList();

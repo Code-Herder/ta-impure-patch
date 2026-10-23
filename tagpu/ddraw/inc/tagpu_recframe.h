@@ -265,9 +265,12 @@ typedef struct RecFrameOps {
     /* NULL: no memory. The params' sizes are the codec's for its life (reccodec_new). */
     void* (*make)(const RecCodecParams* p);
     void  (*drop)(void* f);
-    /* every piece of state cleared or taken from `w`, its latches with it: reccodec_restart.
-       `w` is NULL when the restart leaves the codec invalid, else of the frame's grid size. */
-    void  (*restart)(void* f, const RecFrameWorld* w);
+    /* every piece of state cleared or taken from `w`, its latches with it, and what the
+       segment's params `p` set that is not a size: the orders frame's scheme (`p->hold`);
+       reccodec_restart. `w` is NULL when the restart leaves the codec invalid, else of the
+       frame's grid size. A frame takes no size from `p`: its allocations are make's, for its
+       life. */
+    void  (*restart)(void* f, const RecCodecParams* p, const RecFrameWorld* w);
     /* the encoder's: the frame's part of the world the codec keeps through every block; NULL for
        a frame that keeps none */
     void  (*world)(const void* f, RecFrameWorld* out);

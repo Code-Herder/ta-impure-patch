@@ -1011,6 +1011,25 @@ static void viewer_take(const char* ta)
     s_vrec.taken = 1;
 }
 
+/* getter 75's answer for a seat's units on a puppet: 1 where the recording machine simulated
+   them, its humans and its AIs, as the live getter answers from +0x73 (tagpu_patches.c,
+   cob_get) */
+static unsigned char seat_local(unsigned controller) { return controller == 1 || controller == 2; }
+
+/* getter 75's table anew (tagpu_puppet_locals), and a line naming what it was set to when that
+   changed it: the seats answering 1 from GameTime T, and `whose` they are */
+static void locals_set(const unsigned char local[PUPPET_PLAYERS], unsigned T, const char* whose)
+{
+    char seats[3 * PUPPET_PLAYERS + 1];
+    unsigned i, n = 0;
+    if (!tagpu_puppet_locals(local)) return;
+    seats[0] = 0;
+    for (i = 0; i < PUPPET_PLAYERS; i++)
+        if (local[i]) n += (unsigned)snprintf(seats + n, sizeof seats - n, " %u", i);
+    tagpu_logf("replay: %s: from GameTime %u getter 75's table is set to 1 for seats%s, %s",
+               s_name, T, n ? seats : " none", whose);
+}
+
 /* §6.4's seating, after validate; `view` the viewed player, V or a recorded seat (§2.9) */
 static void seat_level(char* ta, const RecHeader* h, unsigned view)
 {
@@ -1032,7 +1051,7 @@ static void seat_level(char* ta, const RecHeader* h, unsigned view)
         name_put(rec + PL_NAME2, s->name);
         memcpy(rec + PL_ALLY, s->ally, 11);     /* the activation zeroes the row */
         seatv[s->index] = 1;
-        localv[s->index] = s->controller == 1 || s->controller == 2;   /* getter 75 there */
+        localv[s->index] = seat_local(s->controller);
         if (s->index == h->controlled) shown = s;
         if (s->index < lowest) lowest = s->index;
     }
@@ -2916,7 +2935,7 @@ static void ord_teardown(char* n)
    when it drops a target (0x48A2AF, 0x48A2B4, DISASSEMBLED): such a unit's image was last
    written from the stream before T, where a target is a held value (tagpu_reclossy.c) that the
    refresh at T corrects only for the units the image describes, and from T the owner code that
-   resolves a target runs on it (tk_bound, THE REFRESH). The side slots past the third are no
+   resolves a target runs on it (tk_bound, THE EXACT START). The side slots past the third are no
    part of the unit image, so the stream holds none of them. */
 static unsigned tk_orphans(const Lv* L, const RecWorld* W)
 {
@@ -5163,18 +5182,33 @@ static unsigned mp_make_held(const Lv* L)
    replay plays it as a skirmish's -- the recorded world whole, the cells as that segment holds
    them (THE UNIT SLOTS AND THE YARD BIT) -- and in the file's own segment it composes T's world
    (THE SEEK OF A MULTIPLAYER RECORDING). Called after every reader seek, before the seek writes
-   anything, so the contest's rule a crossing changes is in before the seek's creates stamp. 1,
-   or 0 the playing stopped. */
+   anything, so the contest's rule a crossing changes is in before the seek's creates stamp, and
+   getter 75's per-seat answers are the segment's controllers' (THE ORDERING in
+   tagpu_puppet_locals), set only once the segment is followed. A seek that fails after this
+   leaves them the target segment's; sk_back's read-back puts them back with the reader, and a
+   read-back that fails stops the playing, where they then show only in the stopped frame
+   (accepted: nothing runs on them). 1, or 0 the playing stopped. */
 static int mp_follow(const Lv* L, unsigned T)
 {
-    int here, held;
-    if (!s_mp.level) return 1;
+    _Static_assert(PUPPET_PLAYERS == REC_PLAYERS, "getter 75's answers are by recorded player");
+    unsigned char ctl[REC_PLAYERS], local[PUPPET_PLAYERS];
+    int here, held, seg;
+    unsigned i;
+    /* a reader that stands in no segment leaves the answers as they are */
+    seg = recr_segment_controllers(s_rd, ctl);
+    for (i = 0; i < REC_PLAYERS; i++) local[i] = seat_local(ctl[i]);
+    /* a skirmish chain's seeks follow it too, its answers staying 1 */
+    if (!s_mp.level) {
+        if (seg) locals_set(local, T, "the segment's own humans and AIs");
+        return 1;
+    }
     here = recr_segment_mp(s_rd);
     held = !here && recr_segment_cells(s_rd);
     if (!tagpu_puppet_engine_cells(here || held, here)) {
         mp_fail("the cells' rule could not follow the segment at GameTime %u (tagpu_puppet.c)", T);
         return 0;
     }
+    if (seg) locals_set(local, T, "the segment's own humans and AIs");
     s_mp.on = here;
     s_engine_cells = here || held;
     s_cells_held = held;
@@ -6573,10 +6607,10 @@ static void sk_buckets(const Lv* L, const RecWorld* W, unsigned nheads)
    contest's marks, +0x110 bits 26 and 27, from the images, after R10 wrote the recording's slots
    and yard bits. The engine plays on from here, and its writers read both: the clear re-claims
    around a bit-26 holder, the re-claim acts on bit 27 (tagpu_puppet.c, THE FOOTPRINT WRITERS). The
-   world is exact here: a takeover starts at a refresh (takeover_point), where the stream's held
-   bytes are the writer's own (tagpu_reclossy.c), and a return to now from the saved image of the
-   present, a dump, which holds every byte. TK4a's passability refresh then runs over the grid
-   whole (tk_live). The bound: a slot live in the image whose host slot holds a live unit of its
+   world is exact here: a takeover of a segment that holds its cells starts at a refresh
+   (takeover_point), where the stream's held bytes are the writer's own (tagpu_reclossy.c), and
+   a return to now from the saved image of the present, a dump, which holds every byte. TK4a's
+   passability refresh then runs over the grid whole (tk_live). The bound: a slot live in the image whose host slot holds a live unit of its
    type (holds), as states_put's. */
 static void tk_cells(const Lv* L, const RecWorld* W)
 {
@@ -7439,10 +7473,12 @@ static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, int back
         snprintf(why, cap, "player %u is not one of the recording's seats", P);
         return 0;
     }
-    /* THE REFRESH. A takeover from the file starts only at a refresh iteration, where the
-       stream's world equals the recording writer's exact copy (tagpu_recwriter.c, iteration_done,
-       checked there before every refresh block ends): a bound on what the takeover hands the
-       engine, which from TK4a runs every unit's owner code on these values. Between two
+    /* THE EXACT START. A takeover from the file starts only where the stream's world equals the
+       recording writer's exact copy: at every iteration of a segment whose header holds nothing
+       (recr_exact_at; a multiplayer file's own segment, whose writer runs no lossy filter), and
+       elsewhere at a refresh iteration (tagpu_recwriter.c, iteration_done, checked there before
+       every refresh block ends): a bound on what the takeover hands the engine, which from TK4a
+       runs every unit's owner code on these values. Between two
        refreshes the stream holds the bytes RT_HOLD names, the weapon slots' targets among them,
        and two owner readers would take a held target as it is: the target resolver 0x48A190
        forms begin + movsx(word 0) * 0x118 with no bound and no alive test (0x48A19F..0x48A1D7),
@@ -7450,16 +7486,23 @@ static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, int back
        A held value is one the engine produced for that unit (tagpu_reclossy.c, THE INVARIANTS),
        so its index is a slot of the unit array: the hazard is a target that has died or whose
        slot has been reused since, not an address outside the array. At a refresh the targets
-       are the engine's own. The callers round a request down to the refresh before it
-       (takeover_point); a return to the saved present (`back`) starts from the live game's own
-       frame, not from the file. */
+       are the engine's own. The callers start at T where that holds and round a request down to
+       the refresh before it elsewhere (takeover_point); a return to the saved present (`back`)
+       starts from the live game's own frame, not from the file. */
     if (!back) {
-        unsigned R = recr_refresh_at(s_rd, W->tick, NULL, w2, sizeof w2);
-        if (R != W->tick) {
-            if (R) snprintf(why, cap, "GameTime %u is not a refresh iteration: the last at or "
-                            "before it is %u", W->tick, R);
-            else snprintf(why, cap, "%s", w2);
+        int exact = recr_exact_at(s_rd, W->tick, NULL, w2, sizeof w2);
+        if (exact < 0) {
+            snprintf(why, cap, "%s", w2);
             return 0;
+        }
+        if (!exact) {
+            unsigned R = recr_refresh_at(s_rd, W->tick, NULL, w2, sizeof w2);
+            if (R != W->tick) {
+                if (R) snprintf(why, cap, "GameTime %u is not a refresh iteration: the last at or "
+                                "before it is %u", W->tick, R);
+                else snprintf(why, cap, "%s", w2);
+                return 0;
+            }
         }
     }
     /* A takeover needs a playable seat. Returning to the saved present must also
@@ -7530,33 +7573,40 @@ static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, int back
     return 1;
 }
 
-/* THE TAKEOVER'S START, found before anything is committed to it: R, the refresh at or before T
-   that tk_bound requires, and the append point after R - 1 that tk_open finds again under the
-   file's lock, so a request no takeover can serve is refused while the playing -- or a rewind's
-   live original -- still runs. A refresh that is its timeline's first iteration cannot start one:
-   the iteration before it is the parent's, or none for the original (recr_append_point). The
-   writer makes every segment's second iteration a refresh (tagpu_reclossy.h,
-   reclossy_is_refresh), so only a request for a first iteration meets that, and the refusal names
-   the second, which `next` (NULL allowed) is then given: the HUD's takeover snaps forward to it
+/* THE TAKEOVER'S START, found before anything is committed to it: R, where tk_bound lets one
+   start -- T itself when the segment holding T holds nothing (recr_exact_at), else the refresh
+   at or before T -- and the append point after R - 1 that tk_open finds again under the file's
+   lock, so a request no takeover can serve is refused while the playing -- or a rewind's live
+   original -- still runs. A start that is its timeline's first iteration cannot start one: the
+   iteration before it is the parent's, or none for the original (recr_append_point). The writer
+   makes every segment's second iteration a refresh (tagpu_reclossy.h, reclossy_is_refresh), so
+   only a request for a first iteration meets that, and the refusal names the next, which `next`
+   (NULL allowed) is then given: the HUD's takeover snaps forward to it
    (tagpu_replay_takeover_plan); the trigger never does. R with `a` filled, or 0 (why). */
 static unsigned takeover_point(unsigned T, RecAppend* a, char* why, unsigned cap, unsigned* next)
 {
     RecTimeline seg;
     char w2[160];
-    unsigned R = recr_refresh_at(s_rd, T, &seg, w2, sizeof w2);
+    int exact = recr_exact_at(s_rd, T, &seg, w2, sizeof w2);
+    unsigned R = exact < 0 ? 0 : exact ? T : recr_refresh_at(s_rd, T, &seg, w2, sizeof w2);
     if (!R) {
         snprintf(why, cap, "%s", w2);
         return 0;
     }
     if (R == seg.first) {
-        snprintf(why, cap, "GameTime %u rounds to the refresh %u, timeline %u's first iteration, "
-                 "which no takeover starts at; the first GameTime one can is %u", T, R, seg.id,
-                 R + 1);
-        if (next) *next = R + 1;
+        if (exact)
+            snprintf(why, cap, "GameTime %u is timeline %u's first iteration, which no takeover "
+                     "starts at; the first GameTime one can is %u", T, seg.id, T + 1);
+        else
+            snprintf(why, cap, "GameTime %u rounds to the refresh %u, timeline %u's first "
+                     "iteration, which no takeover starts at; the first GameTime one can is %u",
+                     T, R, seg.id, R + 1);
+        if (next) *next = R + 1;            /* R is T in the exact form */
         return 0;
     }
     if (!recr_append_point(s_rd, R - 1, a, s_used, s_nused, w2, sizeof w2)) {
-        snprintf(why, cap, "GameTime %u rounds to the refresh %u: %s", T, R, w2);
+        if (exact) snprintf(why, cap, "GameTime %u: %s", T, w2);
+        else snprintf(why, cap, "GameTime %u rounds to the refresh %u: %s", T, R, w2);
         return 0;
     }
     return R;
@@ -7637,13 +7687,17 @@ static int tk_open(unsigned T, char* why, unsigned cap)
    +0x94. TK1 runs it before the creates; R8's players_put then writes each seat's PlayerInfo from
    the image, +0x94 included, and +0x73 not (replay-layout.tsv, `controller`), so it runs again
    after it and the two copies agree, as the setter leaves them in a live game. */
+static unsigned tk_type(unsigned seat, unsigned P)
+{
+    return s_rw.state ? s_rw.types[seat] : seat == P ? 1u : 2u;
+}
+
 static void tk_types(char* ta, unsigned P)
 {
     const RecHeader* h = recr_header(s_rd);
     unsigned i;
     for (i = 0; i < h->nseats; i++)
-        E_SetType(player_rec(ta, h->seats[i].index), s_rw.state ?
-                  s_rw.types[h->seats[i].index] : h->seats[i].index == P ? 1u : 2u);
+        E_SetType(player_rec(ta, h->seats[i].index), tk_type(h->seats[i].index, P));
 }
 
 static void tk_seats(char* ta, unsigned P, unsigned D)
@@ -7656,6 +7710,18 @@ static void tk_seats(char* ta, unsigned P, unsigned D)
     if (!s_rw.state) memcpy(ta + OFF_DIFFICULTY, &D, 4);
     QueryPerformanceCounter(&a);
     tk_types(ta, P);
+    /* getter 75's table for the new types, before R7: R7's creates run Create's first slice at
+       once -- the create 0x485F50 calls the COB setup 0x485D40 at 0x4860A6, which starts Create
+       run-now (push 1 at 0x485DDD; DISASSEMBLED, exe-reverse-engineering.md) -- so its GET 75
+       reads the table while the puppet mode is still on, and from here a type-1 or type-2 seat
+       is local (seat_local), as the live getter answers once the takeover ends the mode */
+    {
+        unsigned char local[PUPPET_PLAYERS] = { 0 };
+        for (i = 0; i < h->nseats; i++)
+            if (h->seats[i].index < PUPPET_PLAYERS)
+                local[h->seats[i].index] = seat_local(tk_type(h->seats[i].index, P));
+        locals_set(local, *(unsigned*)(ta + OFF_GAMETIME) + 1, "the takeover's humans and AIs");
+    }
     for (i = 0; i < h->nseats; i++) {
         unsigned st = h->seats[i].index;
         char* rec = player_rec(ta, st);
@@ -7843,9 +7909,9 @@ static int seek_run(char* ta)
        touched before TK0 returns -- and in this mode s_rd is the second reader, B, the playing's
        own never moved. So a refusal leaves B to tl_switch, which closes it, and calls no
        sk_back: putting s_rd back restores everything a playing reads, except what every refused
-       seek also leaves -- the eye's lead (eye_begin) and the cleared click overlay -- and, in a
-       multiplayer playing, the materializer's rule mp_follow set from B's segment, which
-       tl_switch sets back from the first reader's. */
+       seek also leaves -- the eye's lead (eye_begin) and the cleared click overlay -- and what
+       mp_follow set from B's segment (getter 75's answers; in a multiplayer playing the
+       materializer), which tl_switch sets back from the first reader's. */
     const int sw = s_seek.mode == SK_SWITCH;
     unsigned T = s_seek.T, prev = W->tick, h, nheads = 0, refused0, built0, P = s_seek.P;
     int D = s_seek.D;
@@ -8618,7 +8684,7 @@ static void rw_visit(void)
      history: no rebuild)`, `watching timeline N at GameTime T (sought from G in M ms)`, or
      `watching timeline N refused: <why>`; a refusal the request can see is logged at once.
    - `hud state`: what the HUD's recorder calls answer, on any level, with or without a
-     recording, a rewind's included, in three lines a test parses:
+     recording, a rewind's included, in four lines a test parses:
      `replay: NAME: hud state timelines <rows>; axis A..B; span F..L; watched N`, each row
      `<id>:<parent>@<fork_at>..<last>/<L|D>/c<controlled>` with `*` after a row on the chain,
      `none` with NAME `-` when no recording is open (tagpu_replay_timelines, tagpu_replay_axis,
@@ -8631,7 +8697,8 @@ static void rw_visit(void)
      is an interface.
    - `takeover <P> at <T>` or `takeover <P> at <T> difficulty <D>`: on a level that plays a
      recording, the takeover waits for the next frame visit after the first step (THE TAKEOVER);
-     it takes over at the refresh at or before T, and says so when that is not T (tk_bound). A
+     it takes over at T where the segment holding T holds nothing, else at the refresh at or
+     before T, and says so when that is not T (tk_bound). A
      start no fork can be appended after is refused at once (takeover_point); the checks that
      need the world there are R0's, so their refusals come from seek_run.
    - `follow <seat>`, `jump <seat>`, `follow free`: the HUD's Follow, Jump and Free cam
@@ -8881,6 +8948,12 @@ static void trigger_read(void)
         char* ta = ta_main();
         if (!ta || s_rw.state || !tagpu_puppet_on() || !s_rd || s_dead) {
             tagpu_logf("replay: frame seek refused: this level is not ordinary playback");
+            return;
+        }
+        /* a boundary's hold ends only with the seek the frame visit runs for it (THE BOUNDARY):
+           this seek, run here, would drop that one and leave the hold set */
+        if (s_hold) {
+            tagpu_logf("replay: frame seek refused: the playing waits at a timeline boundary");
             return;
         }
         s_seek.pending = 0;
@@ -9268,14 +9341,16 @@ static int sw_seek(char* ta, unsigned left, unsigned id, unsigned del)
     QueryPerformanceCounter(&t1);
     if (!ok) {
         /* THE RESTORATION: seek_run moved B alone and wrote nothing to the host (seek_run, at
-           `sw`). A multiplayer playing's materializer follows the segment the reader stands in,
-           which a refusal after its mp_follow left as B's: A's is put back as sk_back puts it,
-           at A's GameTime, and a failure stops the playing there. */
+           `sw`). What follows the segment the reader stands in -- getter 75's per-seat answers
+           and, in a multiplayer playing, the materializer -- a refusal after seek_run's
+           mp_follow left as B's: A's are put back as sk_back puts them, by mp_follow at A's
+           GameTime, and a failure stops the playing there. A refusal before that call
+           (level_of, recr_seek) left them A's, and the call sets them to the same again. */
         s_rd = s_sw.prev;
         s_sw.prev = NULL;
         recr_close(B);
         recfile_release(id);
-        if (s_mp.level && level_of(ta, &L)) mp_follow(&L, recr_world(s_rd)->tick);
+        if (level_of(ta, &L)) mp_follow(&L, recr_world(s_rd)->tick);
         s_seek = saved;
         s_hold = held;
         sw_refused(id, del, "the seek refused");
@@ -9739,8 +9814,9 @@ void tagpu_replay_level_end(void)
    from the wndproc or the shield's mouse path, the trigger from the frame visit. A call that
    changes anything queues it and the frame visit runs it (THE SEEK, THE REWIND'S VERBS, the file
    worker's tickets). The plan answers at once, committing nothing, but it reads the file: its
-   scans read every block header three times (takeover_point's two, the cache's one), so it is
-   called for a click, never per frame. */
+   scans read every block header three times where the segment holding T holds nothing and four
+   times elsewhere (takeover_point's recr_exact_at, recr_refresh_at in the refresh form and
+   recr_append_point, then the cache's), so it is called for a click, never per frame. */
 
 /* the cache and its axis are given while a recording is open: a playing past its first step,
    or a live rewind's recording */
@@ -9874,8 +9950,9 @@ int tagpu_replay_takeover_request(unsigned P, unsigned T, int D)
                    "use rewind commands while live rewind owns the level");
         return 0;
     }
-    /* a takeover starts at the refresh at or before the GameTime asked (tk_bound), and one that
-       cannot start there is refused before the seek (takeover_point) */
+    /* a takeover starts at T where the segment holding T holds nothing, else at the refresh at or
+       before it (tk_bound), and one that cannot start there is refused before the seek
+       (takeover_point) */
     R = takeover_point(T, &a, why, sizeof why, NULL);
     if (!R) {
         tagpu_logf("replay: %s: takeover refused: %s", s_name, why);
@@ -10107,7 +10184,7 @@ void tagpu_replay_result(TAGPU_REPLAY_RESULT* out)
     *out = s_res;
 }
 
-/* The trigger's `hud state`: what the HUD's calls answer, in three lines a test parses. */
+/* The trigger's `hud state`: what the HUD's calls answer, in four lines a test parses. */
 static void hud_state_log(void)
 {
     static const char* const states[] = {"idle", "flush", "open", "past", "ending"};
@@ -11691,11 +11768,13 @@ static void watch_sites_init(void)
    0x46A140` at 0x46A10E, with eax = main from 0x46A102; 0x46A110 draws it and goes on at 0x46A14E,
    as 0x46A140 does after loading the same esi/edi. A recording played with the replay HUD shows no
    icon: the HUD's play button carries the pause (the mockup has none), and the icon sits in the
-   middle of the world, under the stats window. The stub takes the icon's branch only when the
-   pause bit is set and tagpu_hudinput_on_screen answers 0 -- the frame on the screen shows no HUD,
-   its art still loading or its pass down, so the icon is the pause's only sign; it keeps every
-   register, and neither continuation reads the flags before setting them. Game thread, inside the
-   draw, after the in-play draw's take of the command record. */
+   middle of the world, under the stats window; nor does a live rewind's strip, which holds the
+   game. The stub takes the icon's branch only when the pause bit is set and
+   tagpu_hudinput_on_screen answers 0 -- no control on the screen carries the pause: no HUD drawn,
+   its art still loading or its pass down, or the live HUD's one button with no rewind open -- so
+   the icon is the pause's only sign; it keeps every register, and neither continuation reads the
+   flags before setting them. Game thread, inside the draw, after the in-play draw's take of the
+   command record. */
 static void pause_icon_init(void)
 {
     enum { SITE = 0x0046A107u, DRAW = 0x0046A110u, SKIP = 0x0046A140u };
@@ -11730,6 +11809,61 @@ static void pause_icon_init(void)
     tagpu_logf("replay: the pause icon's test 0x46A107 in");
 }
 
+/* THE MESSAGE LINES. DrawChatText 0x464060 draws each line of the engine's message ring through
+   DrawText 0x4A50E0, the first line's top 0x34, which `mov dword [esp+0x14],0x34` at 0x4640D6
+   stores in its frame before the loop (each next line a font height down, 0x46423E; the loop's
+   back edge is 0x4640DE, past these 8 bytes, and nothing jumps into them: DISASSEMBLED). A line of
+   kind 0x0A has its text at x 0x8A; any other kind draws an icon box at x 0x8A, ftol(0.8 * h)
+   square with h the font height (0x4FD520), and its text at ftol(138 + 1.5 * that side)
+   (0x4FD528, 0x4FD530; ebx rewritten at 0x4641E6). The live HUD's strip covers that corner, so
+   while the last frame drawn had it the lines start under it (tagpu_hudinput_chat_top), and only
+   for DrawGameScreen's call: the stub stores that value when the return address is 0x469FD0,
+   after the call at 0x469FCB, and 0x34 for the other two callers: 0x41F9D8 is in 0x41F7F0, which
+   loads MSGBOX.GUI (push 0x502BD4 at 0x41F97C), and 0x41F7A5 in 0x41F760, gated on
+   main+0x39057 == 1, whose address appears nowhere in the exe, so how it is reached is not known
+   [INFERRED: through an address computed at run time, or not at all]; neither is
+   measured under the strip, and the gate keeps both at the engine's value. The frame is sub
+   esp,0x20 and four pushes, and the
+   argument pushed for 0x4C1420 at 0x4640B1 is popped by its `ret 4`, so after the stub's own push
+   the return address is [esp+0x34] and the frame's +0x14 is [esp+0x18] (DISASSEMBLED). eax holds
+   main there and 0x4640DE reads it, so the stub keeps it; the flags it changes are set again
+   before any read, by the `dec ecx` at 0x4640E4. Game thread, inside the draw. */
+static void chat_top_init(void)
+{
+    enum { SITE = 0x004640D6u, BACK = 0x004640DEu, DRAW_CALL = 0x00469FCBu, DRAW_RET = 0x00469FD0u,
+           CHAT = 0x00464060u };
+    static const unsigned char STOLEN[8] = { 0xC7, 0x44, 0x24, 0x14, 0x34, 0x00, 0x00, 0x00 };
+    const int* top = tagpu_hudinput_chat_top();
+    unsigned ret = DRAW_RET;
+    unsigned char *stub, *p;
+    if (!tagpu_detour_bytes_ok(SITE, STOLEN, (int)sizeof STOLEN) || !call_is(DRAW_CALL, CHAT)) {
+        tagpu_logf("replay: DrawChatText's first line 0x4640D6 or its call 0x469FCB holds other "
+                   "bytes: the messages stay under the live HUD's strip");
+        return;
+    }
+    if (!(stub = p = tagpu_detour_stub())) {
+        tagpu_logf("replay: no memory for the message lines' stub: they stay under the live HUD's "
+                   "strip");
+        return;
+    }
+    *p++ = 0x50;                                        /* push eax            */
+    *p++ = 0xB8; *p++ = 0x34; *p++ = 0; *p++ = 0; *p++ = 0;   /* mov eax,0x34  */
+    *p++ = 0x81; *p++ = 0x7C; *p++ = 0x24; *p++ = 0x34;       /* cmp dword [esp+0x34],DRAW_RET */
+    memcpy(p, &ret, 4); p += 4;
+    *p++ = 0x75; *p++ = 0x05;                           /* jne store           */
+    *p++ = 0xA1; memcpy(p, &top, 4); p += 4;            /* mov eax,[top]       */
+    *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = 0x18; /* store: mov [esp+0x18],eax: the frame's +0x14 */
+    *p++ = 0x58;                                        /* pop eax             */
+    *p++ = 0xE9; tagpu_detour_rel(p, BACK); p += 4;
+    if (!tagpu_detour_land(SITE, stub, (int)sizeof STOLEN)) {
+        tagpu_detour_stub_free(stub);
+        tagpu_logf("replay: FAILED DrawChatText's first line 0x4640D6 could not be written: the "
+                   "messages stay under the live HUD's strip");
+        return;
+    }
+    tagpu_logf("replay: DrawChatText's first line 0x4640D6 in");
+}
+
 void tagpu_replay_init(void)
 {
     enum { FILL = 0x0047B092u, PERSIST = 0x0047B09Cu, START1 = 0x00497963u, START2 = 0x00497ACDu,
@@ -11739,6 +11873,7 @@ void tagpu_replay_init(void)
     int ok = 1;
     frame_site_init();
     pause_icon_init();
+    chat_top_init();
     rw_pause_init();
     rt_pace_init();
     mp_arena_init();

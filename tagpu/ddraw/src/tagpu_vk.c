@@ -2327,6 +2327,22 @@ static void world_records(VkCommandBuffer cb, uint32_t fi, uint32_t w, uint32_t 
     if (draw_mark) tagpu_vk_mark_record(&s_pass, cb, fi, s_vk.rp, w, h);
 }
 
+/* `a` cut to the part of it inside `b`: 1 when that part is not empty */
+static int rect_meet(VkRect2D* a, const VkRect2D* b)
+{
+    int32_t x0 = a->offset.x > b->offset.x ? a->offset.x : b->offset.x;
+    int32_t y0 = a->offset.y > b->offset.y ? a->offset.y : b->offset.y;
+    int32_t ax = a->offset.x + (int32_t)a->extent.width, bx = b->offset.x + (int32_t)b->extent.width;
+    int32_t ay = a->offset.y + (int32_t)a->extent.height, by = b->offset.y + (int32_t)b->extent.height;
+    int32_t x1 = ax < bx ? ax : bx, y1 = ay < by ? ay : by;
+    if (x1 <= x0 || y1 <= y0) return 0;
+    a->offset.x = x0;
+    a->offset.y = y0;
+    a->extent.width = (uint32_t)(x1 - x0);
+    a->extent.height = (uint32_t)(y1 - y0);
+    return 1;
+}
+
 static int vk_present(void)
 {
     uint32_t idx = 0, fi = s_vk.frame % s_vk.nimg;
@@ -2510,7 +2526,7 @@ static int vk_present(void)
         int draw_world = 0;
         uint32_t tw = 0, th = 0;    /* the world target's extent, when there is one */
         int draw_fps = 0, draw_scaf = 0, draw_feat = 0, draw_terr = 0, draw_fx = 0;
-        int draw_gui = 0, draw_hud = 0;
+        int draw_gui = 0, draw_hud = 0, gui_drew = 0;
         int draw_mark = 0, ab_mark = 0;
         int draw_unit = 0;
         int ab_fps = 0, ab_scaf = 0, ab_feat = 0, ab_terr = 0, ab_fx = 0;
@@ -2633,8 +2649,10 @@ static int vk_present(void)
                and render passes may not nest, so the whole op replay has to
                happen out here -- exactly as the shadow map records its map in
                `prepare`. */
-            /* THE REPLAY HUD, over the world and under the engine's UI. It claims no A/B frame,
-               so a capture with it drawn stands down (the census below). */
+            /* THE REPLAY HUD: its base layer over the world and under the engine's UI, its top
+               layer over the UI (the record, below). It claims no A/B frame, so a capture of the
+               swapchain image with it drawn stands down; a world capture reads the world target,
+               which it never draws into (the census below). */
             draw_hud = tagpu_vk_hud_prepare(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             draw_gui = tagpu_vk_gui_prepare(&s_pass, cb, fi);
             ab_gui = tagpu_vk_gui_ab_frame();
@@ -2759,15 +2777,35 @@ static int vk_present(void)
             }
             /* THE UI GOES OVER THE WORLD AND UNDER THE READOUT: the readout
                has to sit above the side panel
-               and the dialogs or they hide it. The return is not kept: the
-               engine's own cursor blit reaches only the golden source, and
-               suppressing it would just put a hole in the reference. */
-            /* the replay HUD covers the world and nothing else: the engine's dialogs, its
-               messages and the cursor draw over it */
+               and the dialogs or they hide it. The engine's own cursor blit
+               reaches only the golden source, and suppressing it would just
+               put a hole in the reference; the return says only whether the
+               composite, and with it the sharp layer's cursor, was drawn. */
+            /* the replay HUD's base layer covers the world and nothing else: the engine's
+               dialogs, its messages and the cursor draw over it */
             if (draw_hud)
                 tagpu_vk_hud_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_gui)
-                tagpu_vk_gui_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
+                gui_drew = tagpu_vk_gui_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
+            /* THE HUD'S TOP LAYER, THE CONFIG PANEL AND THE CURSOR BACK OVER IT. The top
+               layer (the live rewind's button, in the top bar the UI paints whole, and its strip
+               and toast, over the engine's message lines) is drawn after the UI's composite;
+               then the whole composite again inside the Config panel's rect while the panel is
+               open, and the composite's sharp layer inside the top layer's rect. In one command
+               buffer and one render pass, draws land in record order, so the panel is over the
+               strip in its rect, and the sharp layer -- the only cursor (tagpu_gui_surf.c,
+               LAY_FS) -- is the last thing drawn at every pixel of the top layer's rect, as the
+               composite's is everywhere else, and the cursor stays topmost. */
+            if (draw_hud) {
+                VkRect2D top, pan;
+                if (tagpu_vk_hud_record_top(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height) &&
+                    gui_drew && tagpu_vk_hud_top_rect(&top)) {
+                    if (tagpu_vk_gui_panel_rect(fi, s_vk.ext.width, s_vk.ext.height, &pan) &&
+                        rect_meet(&pan, &top))
+                        tagpu_vk_gui_record_whole(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height, pan);
+                    tagpu_vk_gui_record_sharp(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height, top);
+                }
+            }
             if (draw_scaf)
                 tagpu_vk_scaffold_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_fps)
@@ -2851,6 +2889,14 @@ static int vk_present(void)
                 abworld = 1;
             }
         }
+        /* THE HUD IS NEVER IN A WORLD CAPTURE: both its layers record in the swapchain's render
+           pass, after the world target is composited into it (world_records, then
+           tagpu_vk_hud_record and tagpu_vk_hud_record_top, above), so it is one more pass in the
+           captured image only when the capture reads the swapchain. A recorded live skirmish
+           always draws the rewind button, and no lever turns the HUD off there, so counting it
+           for a world capture would refuse every world A/B taken in one. The UI pass still
+           counts: under the play defaults a world A/B needs tagpu_gui.off, as it always has. */
+        if (abworld) ndraw -= draw_hud;
         if (nclaim > 1 || (nclaim == 1 && ndraw > 1))
             vklog("%d A/B levers claimed this frame and %d passes drew into it - "
                   "nothing captured. A Vulkan frame carries every armed pass at "

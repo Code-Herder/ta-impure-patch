@@ -21,8 +21,11 @@ struct HUDLAY {
     const TJV*  L;
     HUDGLOBALS  g;
     int         max_hot;        /* tagpu_hudlay_max_hot */
+    int         live_hot;       /* the live HUD's part of it (live())                         */
     int         nparts;
     HUDPART     part[HUD_MAXPART];
+    HUDTEXTW    measure;        /* tagpu_hudlay_measure; NULL until given            */
+    void*       mctx;
 };
 
 typedef struct { double x, y, w, h; } R;
@@ -37,6 +40,7 @@ typedef struct {
     int             bad;
     unsigned        flags;      /* given to every op: HOPF_DIM inside an out player's row */
     uint8_t         grp;        /* given to every op: the group it is drawn in, 0 none      */
+    int             top;        /* every op is the top layer's (HOPF_TOP)                     */
 } C;
 
 /* ---- reading the layout ---------------------------------------------------------------------- */
@@ -86,7 +90,7 @@ static HUDOP* op(C* c, int kind, R r)
     p = &c->o->op[c->o->n++];
     memset(p, 0, sizeof *p);
     p->kind = (uint8_t)kind;
-    p->flags = (uint8_t)c->flags;
+    p->flags = (uint8_t)(c->flags | (c->top ? HOPF_TOP : 0u));
     p->grp = c->grp;
     p->part = -1;
     p->r.x = (float)r.x; p->r.y = (float)r.y; p->r.w = (float)r.w; p->r.h = (float)r.h;
@@ -740,6 +744,119 @@ static void takeover(C* c, R tb)
     bt.textspec = obj(c, T, "text");
     bt.text = str(c, T, "label");
     button(c, &bt, T, box(tb.x, tb.y - num(c, T, "gap") - h, tb.w, h), c->st->pick_down);
+}
+
+/* ---- live rewind: a button beside the Impure Config sprocket in the top bar, and the strip it
+   opens under the bar over the paused game -- the transport, the track up to now, the time, Play
+   from here and Back to now. The button is placed in the top bar's own pixels (entry.bar tall),
+   scaled with it, as the engine places the sprocket (tagpu_menu.c, trigger_rect). The sprocket is
+   the engine's art and the engine draws it, so the mockup's stand-in for it is not drawn here.
+   THE BUTTON IS THE TOP LAYER (HOPF_TOP): the engine's UI paints the whole bar, so an op under it
+   would be painted over, and the Vulkan pass draws this layer after the UI composite.
+   THE STRIP IS THE TOP LAYER TOO: the engine draws its message lines at the world's top left, in
+   the composite, and only a layer drawn after it keeps the strip whole whatever the engine draws
+   there (the lines themselves start under the strip while it is on screen: tagpu_hudinput.c,
+   chat_top). The Config panel, which hangs under the bar's right end over the strip's actions,
+   stays over it because the Vulkan pass draws the UI again inside the panel's rect after this
+   layer (tagpu_vk.c).
+   A TRANSPORT BUTTON WITH `off_at_end` IS DISABLED WHILE THE PLAYHEAD IS AT THE STRIP'S END: fwd,
+   which has nothing ahead of it there. That is the rewind open and not yet moved: open, the world
+   is the one the rewind opened at, G, the strip's end; in the past it is a seek's target - 1, and
+   every target is held to the recording's last GameTime, which is before G -- so t < T exactly
+   in the past (tagpu_hudstate.c, present_live). ---------- */
+
+static void live(C* c)
+{
+    const HUDSTATE* st = c->st;
+    const TJV *Lv = obj(c, obj(c, c->L, "proposed"), "live"), *E = obj(c, Lv, "entry"), *S = obj(c, Lv, "strip");
+    const TJV *Sb = obj(c, S, "button"), *trs = arr(c, S, "transport"), *acts = arr(c, S, "actions");
+    const TJV *Tr = obj(c, S, "track"), *fill = obj(c, Tr, "fill"), *ph = obj(c, Tr, "playhead");
+    const TJV *Nw = obj(c, S, "now"), *Tm = obj(c, S, "time");
+    double k = st->top / num(c, E, "bar"), es = num(c, E, "s") * k;
+    double x, w, y, h, pad, gap, ih, cx, right = 0, tw, th, ends, p = st->T > 0 ? st->t / st->T : 0;
+    char t0[16], t1[16], tx[48];
+    BTN b;
+    PL pl;
+    R tb;
+    int i;
+
+    memset(&b, 0, sizeof b);
+    b.key = "rewind";
+    b.icon = obj(c, E, "icon");
+    c->top = 1;
+    button(c, &b, E, box(st->W - (num(c, E, "r") + num(c, E, "s")) * k, num(c, E, "t") * k, es, es), st->rw_down);
+    c->top = 0;
+    if (!st->live_open) return;
+    c->top = 1;
+
+    x = st->panel + num(c, S, "l");
+    w = st->W - num(c, S, "r") - x;
+    y = st->top + num(c, S, "t");
+    h = num(c, S, "h");
+    pad = num(c, S, "pad");
+    gap = num(c, S, "gap");
+    ih = h - 2 * pad;
+    /* the strip is the HUD's whole: a click between its controls is taken too. Placed before
+       them, so the hit test, last first, finds a control over its plate. */
+    hot(c, box(x, y, w, h), "live");
+    art(c, str(c, S, "part"), box(x, y, w, h), 1);
+    cx = pad;
+    for (i = 0; trs && i < trs->n; i++) {
+        const TJV* t = tj_at(trs, i);
+        memset(&b, 0, sizeof b);
+        b.key = str(c, t, "act");
+        b.icon = tj_get(t, "icon");
+        b.off = tj_num(tj_get(t, "off"), 0);
+        if (!b.off && !(st->t < st->T)) b.off = tj_num(tj_get(t, "off_at_end"), 0);
+        button(c, &b, Sb, box(x + cx, y + pad, num(c, t, "w"), ih), 0);
+        cx += num(c, t, "w") + gap;
+    }
+    for (i = 0; acts && i < acts->n; i++) right += num(c, tj_at(acts, i), "w") + gap;
+    right += num(c, Tm, "w") + num(c, Nw, "w");
+    tw = w - pad - right - cx;
+    th = num(c, Tr, "h");
+    ends = num(c, Tr, "ends");
+    tb = box(x + cx, y + (h - th) / 2, tw, th);
+    hot(c, tb, "track");
+    c->o->track_x0 = (float)(tb.x + along(tw, ends, 0));
+    c->o->track_x1 = (float)(tb.x + along(tw, ends, 1));
+    art(c, str(c, Tr, "part"), tb, 1);
+    {
+        const TJV* fp = arr(c, fill, "pad");
+        double p0 = tj_num(tj_at(fp, 0), 0), p1 = tj_num(tj_at(fp, 1), 0), p2 = tj_num(tj_at(fp, 2), 0), p3 = tj_num(tj_at(fp, 3), 0);
+        double pw = num(c, ph, "w");
+        R fb = box(tb.x + p0, tb.y + p1, tw - p0 - p2, th - p1 - p3), phb;
+        F tf = frame(c->l, tw, th, NULL);
+        HUDOP* a;
+        if ((a = art(c, str(c, fill, "part"), fb, 1))) {
+            a->clip.x = (float)fb.x; a->clip.y = (float)fb.y; a->clip.w = (float)(fb.w * p); a->clip.h = (float)fb.h;
+        }
+        memset(&pl, 0, sizeof pl);
+        pl_pad(&pl, tj_get(ph, "pad"));
+        phb = place(c, &tf, &pl);
+        art(c, str(c, ph, "part"), box(tb.x + along(tw, ends, p) - pw / 2, tb.y + phb.y, pw, phb.h), 1);
+    }
+    cx += tw;
+    pl = spec(Nw);
+    text(c, "now", box(x + cx, y + pad, num(c, Nw, "w"), ih), str(c, Nw, "style"), &pl, 0, 0);
+    cx += num(c, Nw, "w");
+    clock_s(t0, sizeof t0, st->t);
+    clock_s(t1, sizeof t1, st->T);
+    snprintf(tx, sizeof tx, "%s / %s", t0, t1);
+    pl = spec(Tm);
+    text(c, tx, box(x + cx, y + pad, num(c, Tm, "w"), ih), str(c, Tm, "style"), &pl, 0, 0);
+    cx += num(c, Tm, "w") + gap;
+    for (i = 0; acts && i < acts->n; i++) {
+        const TJV* q = tj_at(acts, i);
+        memset(&b, 0, sizeof b);
+        b.key = str(c, q, "act");
+        b.textspec = obj(c, S, "text");
+        b.text = str(c, q, "text");
+        /* Play from here is held down while it is armed: the next click plays */
+        button(c, &b, Sb, box(x + cx, y + pad, num(c, q, "w"), ih), !strcmp(b.key, "live_play") && st->rw_arm == 2);
+        cx += num(c, q, "w") + gap;
+    }
+    c->top = 0;
 }
 
 /* ---- the column: team headers and player rows from the top bar down, as many as fit above the
@@ -1401,22 +1518,37 @@ static void picker(C* c)
     }
 }
 
-/* ---- the toast: a short message in a dark box centred across the screen, above everything; the box
-   is the layout's size, not the text's, since this file has no faces to measure text with ------- */
+/* ---- the toast: a short message in a dark box centred across the screen, above everything. The
+   box is as wide as its text and `pad` each side of it, never narrower than `w` nor wider than
+   `max_w`: the text is measured in its face by the layout's measure (tagpu_hudlay_measure), as
+   hud.js measures it, and a text wider than `max_w` allows is cut at the pad, never drawn over the
+   box's edge or past it. On the live HUD it is the top layer, over the engine's message lines as the
+   strip is, and while the strip is drawn it sits clear of it (live_clear: the strip's gap under
+   the bar again under it) */
 
 static void toast(C* c)
 {
     const HUDSTATE* st = c->st;
+    const HUDGLOBALS* g = &c->l->g;
     const TJV* Ts = obj(c, c->L, "toast");
-    double w = num(c, Ts, "w"), h = num(c, Ts, "h"), e = num(c, Ts, "edge");
-    R b = box((st->W - w) / 2, st->H * num(c, Ts, "top"), w, h);
+    int si = style_index(c->l, str(c, Ts, "style"));
+    double w = g->toast_w, h = num(c, Ts, "h"), e = num(c, Ts, "edge"), y = st->H * num(c, Ts, "top");
     uint32_t ec = hexrgb(str(c, Ts, "edge_colour"));
+    R b;
     PL p;
+    if (c->l->measure && si >= 0) {
+        double tw = c->l->measure(c->l->mctx, si, g->style[si].size, st->toast) + 2 * g->toast_pad;
+        w = fmin(fmax(tw, g->toast_w), g->toast_max_w);
+    }
+    if (st->live_open && y < st->top + c->l->g.live_clear) y = st->top + c->l->g.live_clear;
+    b = box((st->W - w) / 2, y, w, h);
+    c->top = st->live;
     solid(c, b, hexrgb(str(c, Ts, "bg")), num(c, Ts, "alpha"));
     ring(c, b, e, ec, 1);
     memset(&p, 0, sizeof p);
     p.centre = 1;
-    text(c, st->toast, b, str(c, Ts, "style"), &p, 0, 0);
+    text(c, st->toast, box(b.x + g->toast_pad, b.y, b.w - 2 * g->toast_pad, b.h), str(c, Ts, "style"), &p, 0, 0);
+    c->top = 0;
 }
 
 /* ---- the entry points ------------------------------------------------------------------------- */
@@ -1430,10 +1562,14 @@ int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* e
     out->first = out->last = 0;
     out->track_x0 = out->track_x1 = 0;
     if (err && errn) err[0] = 0;
-    dock(&c);
-    column(&c);
-    if (st->stats.open) window_(&c);
-    if (st->picker) picker(&c);
+    /* the live HUD or the replay's, and the toast over either (hud.js `draw`) */
+    if (st->live) live(&c);
+    else {
+        dock(&c);
+        column(&c);
+        if (st->stats.open) window_(&c);
+        if (st->picker) picker(&c);
+    }
     if (st->toast[0]) toast(&c);
     return !c.bad;
 }
@@ -1659,7 +1795,13 @@ static int load_globals(HUDLAY* l, char* err, size_t errn)
     l->g.pos_rgb = hexrgb(str(&c, v, "pos"));
     l->g.neg_rgb = hexrgb(str(&c, v, "neg"));
     l->g.track_ends = (float)num(&c, obj(&c, obj(&c, obj(&c, l->L, "dock"), "rail"), "track"), "ends");
-    l->g.toast_ms = (unsigned)num(&c, obj(&c, l->L, "toast"), "ms");
+    v = obj(&c, l->L, "toast");
+    l->g.toast_ms = (unsigned)num(&c, v, "ms");
+    l->g.toast_w = (float)num(&c, v, "w");
+    l->g.toast_max_w = (float)num(&c, v, "max_w");
+    l->g.toast_pad = (float)num(&c, v, "pad");
+    v = obj(&c, obj(&c, obj(&c, l->L, "proposed"), "live"), "strip");
+    l->g.live_clear = (float)(2 * num(&c, v, "t") + num(&c, v, "h"));
     v = arr(&c, obj(&c, l->L, "chart"), "teams");
     for (l->g.nteam_rgb = 0; v && l->g.nteam_rgb < v->n && l->g.nteam_rgb < 8; l->g.nteam_rgb++)
         l->g.team_rgb[l->g.nteam_rgb] = hexrgb(tj_str(tj_at(v, l->g.nteam_rgb), ""));
@@ -1699,7 +1841,7 @@ static int load_globals(HUDLAY* l, char* err, size_t errn)
 static int max_hot(HUDLAY* l, char* err, size_t errn)
 {
     C c;
-    const TJV *D, *Cl, *Wn, *trays, *ms, *sp, *v;
+    const TJV *D, *Cl, *Wn, *trays, *ms, *sp, *Ls, *v;
     int n = 0, i, j;
     memset(&c, 0, sizeof c);
     c.l = l; c.L = l->L; c.err = err; c.errn = errn;
@@ -1732,17 +1874,23 @@ static int max_hot(HUDLAY* l, char* err, size_t errn)
     /* lanes(): the plate, and for each fork a lane and its buttons */
     if ((v = arr(&c, obj(&c, obj(&c, obj(&c, obj(&c, l->L, "proposed"), "forks"), "lane"), "buttons"), "items")))
         n += 1 + HUD_MAXFORK * (1 + v->n);
-    return c.bad ? -1 : n;
+    /* live(): the button, the strip's plate, its transport, its track and its actions; a build
+       is one HUD or the other, so the bound is the larger */
+    Ls = obj(&c, obj(&c, obj(&c, l->L, "proposed"), "live"), "strip");
+    l->live_hot = 3;
+    if ((v = arr(&c, Ls, "transport"))) l->live_hot += v->n;
+    if ((v = arr(&c, Ls, "actions"))) l->live_hot += v->n;
+    return c.bad ? -1 : n > l->live_hot ? n : l->live_hot;
 }
 
-/* a build's controls against the bound: a hot() site the bound has no term for */
-static int hot_fits(const HUDLAY* l, const HUDOPS* o, const char* what, char* err, size_t errn)
+/* a build's controls against its HUD's bound: a hot() site the bound has no term for */
+static int hot_fits(const HUDOPS* o, int bound, const char* what, char* err, size_t errn)
 {
     int i, n = 0;
     for (i = 0; i < o->n; i++) n += o->op[i].kind == HOP_HOT;
-    if (n <= l->max_hot) return 1;
+    if (n <= bound) return 1;
     snprintf(err, errn, "hudlay: the self-test's %s makes %d controls, above the bound of %d "
-             "(tagpu_hudlay_max_hot has no term for one)", what, n, l->max_hot);
+             "(tagpu_hudlay_max_hot has no term for one)", what, n, bound);
     return 0;
 }
 
@@ -1808,9 +1956,9 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
         g->death = i ? -1.0f : 1.0f;
         g->v[0] = 1; g->v[1] = 2; g->v[2] = 3;
     }
-    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(l, o, "first build", err, errn)) goto done;
+    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->max_hot, "first build", err, errn)) goto done;
     st->H = 300; st->scroll = 1;    /* the scroll bar */
-    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(l, o, "scrolled build", err, errn)) goto done;
+    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->max_hot, "scrolled build", err, errn)) goto done;
     st->H = 720; st->scroll = 0;
     st->T = 90; st->ends = 60; st->len = 80; st->fill_to = 20;
     st->nfork = HUD_MAXFORK;
@@ -1826,7 +1974,7 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     st->replace = 1;
     st->picker = st->pick_down = 1;
     strcpy(st->held, "takeas:0");
-    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(l, o, "forks build", err, errn)) goto done;
+    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->max_hot, "forks build", err, errn)) goto done;
     /* the lanes, every fork the packet carries: a fork of the original on the chain, a fork of it
        watched, whose line rises to its parent, and a short one at the track's right end, clamped
        there, its Delete armed and outlined as the one a takeover replaces; the first lane held */
@@ -1847,7 +1995,12 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     st->lanes_open = 1;
     st->armed = st->replace = 2;
     strcpy(st->held, "lane:0");
-    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(l, o, "lanes build", err, errn)) goto done;
+    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->max_hot, "lanes build", err, errn)) goto done;
+    /* the live HUD: the button alone, then the strip open with Play from here armed */
+    st->H = 720; st->live = 1;
+    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->live_hot, "live build", err, errn)) goto done;
+    st->live_open = st->rw_down = 1; st->rw_arm = 2;
+    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->live_hot, "live strip's build", err, errn)) goto done;
     ok = 1;
 done:
     free(st);
@@ -1867,5 +2020,11 @@ void tagpu_hudlay_free(HUDLAY* l)
 }
 
 const HUDGLOBALS* tagpu_hudlay_globals(const HUDLAY* l) { return &l->g; }
+
+void tagpu_hudlay_measure(HUDLAY* l, HUDTEXTW measure, void* ctx)
+{
+    l->measure = measure;
+    l->mctx = ctx;
+}
 int tagpu_hudlay_nparts(const HUDLAY* l) { return l->nparts; }
 const HUDPART* tagpu_hudlay_part(const HUDLAY* l, int i) { return i >= 0 && i < l->nparts ? &l->part[i] : NULL; }

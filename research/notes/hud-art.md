@@ -556,7 +556,7 @@ DLL emits textured quads.
     - **An edge exactly on a half rounds up on both sides.** The layout computes in float and
       `hud.js` in double, so such an edge comes out a hair either side of the half. The rule
       counts an edge less than 1/64 px below a half as on it. Of the 16 728 snapped edges in
-      laycheck's twenty-three cases, 389 fall in that margin, most of them halves the float
+      laycheck's first twenty-three cases, 389 fall in that margin, most of them halves the float
       arithmetic left a ten-thousandth short (MEASURED 2026-10-23 from the ops laycheck prints).
       What the margin cannot close is an edge whose exact value lies within the arithmetic's
       error of 1/64 px below a half; the nearest in those cases lies about 7 × 10⁻⁴ px from it,

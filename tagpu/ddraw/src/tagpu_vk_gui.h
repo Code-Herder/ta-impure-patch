@@ -42,6 +42,28 @@ int  tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
 int  tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                          uint32_t w, uint32_t h);
 
+/* The composite's sharp layer -- the cursor -- drawn again inside `r`, in the
+   attachment's pixels: the replay HUD's top layer is drawn after the
+   composite (tagpu_vk_hud.h), and this puts the cursor back over it. The
+   composite's pipeline, set and viewport with its sharp-only quad, whose
+   fragments outside the sharp layer are discarded (LAY_FS). Draws only when
+   `record` drew this slot's composite this frame; 1 when it drew. Inside the
+   seam's render pass, after the top layer. */
+int  tagpu_vk_gui_record_sharp(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                               uint32_t w, uint32_t h, VkRect2D r);
+
+/* The whole composite drawn again inside `r`, as `record_sharp` draws its sharp layer: what the
+   engine drew there goes back over the HUD's top layer -- the Config panel, inside its rect, over
+   the live HUD's strip. The same conditions and the same place in the pass. */
+int  tagpu_vk_gui_record_whole(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                               uint32_t w, uint32_t h, VkRect2D r);
+
+/* The Config panel on the `w` x `h` attachment, as the composite `record` drew this frame for
+   `slot` places it: 1 with its rect when that composite's own hand-over says the panel was open
+   at its flip (TAGPU_GUIHAND::panelL..), 0 otherwise. The box and the composite are one
+   snapshot, so the rect names the panel exactly when the composite holds it. */
+int  tagpu_vk_gui_panel_rect(uint32_t slot, uint32_t w, uint32_t h, VkRect2D* r);
+
 /* 1 on the ONE frame `tagpu_gui.ab` latched its claim and the `_vk.ppm` target
    was unlinked, so the seam captures THAT frame. It does not mean a file was
    written. Consumed. */

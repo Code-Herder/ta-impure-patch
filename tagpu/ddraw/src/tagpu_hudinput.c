@@ -1,11 +1,12 @@
-/* tagpu_hudinput.c -- the replay HUD's input and its commands. Contract: tagpu_hudinput.h. Design:
-   research/notes/hud-in-game.md, *Input*.
+/* tagpu_hudinput.c -- the HUD's input and its commands: a replay's, and a live skirmish's rewind.
+   Contract: tagpu_hudinput.h. Design: research/notes/hud-in-game.md, *Input* and *Live rewind*.
 
    GAME THREAD, ALL OF IT. Every static below is this thread's: the shield's two mouse paths and
    the wndproc run on it (TA pumps its window on the game thread), and so do the packet's fill,
    the command record's take, the DrawGameScreen observer and the teardown wrap's entry. */
 #include <windows.h>
 #include <limits.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +21,7 @@
 #include "tagpu_replay.h"
 #include "tagpu_settings.h"
 #include "tagpu_log.h"
+#include "dd.h"
 
 #define JUMP     300u                   /* rewind and forward: 10 s of GameTime at 30 a second   */
 #define BM_NEAR  90u                    /* the bookmark button removes one within 3 s of now      */
@@ -92,28 +94,97 @@ static unsigned s_armed;
 static int      s_watchAsked;
 static unsigned s_watchId;
 static unsigned s_forkAsk[HUD_FORKASK], s_forkAskNext;
+/* THE LIVE HUD (live_act): the last fill's mode and rewind state, Play from here's arm, and the
+   outcome of the rewind verbs it sent (inc/tagpu_replay.h, tagpu_replay_result) */
+enum { ARM_NONE, ARM_SEEKING, ARM_ARMED };
+static int      s_live;                 /* the last fill was the live HUD's                       */
+static int      s_rwState;              /* TAGPU_REPLAY_RWS_*                                     */
+static unsigned s_rwG;                  /* where the rewind opened: now, the strip's end          */
+static int      s_arm;
+static unsigned s_armR, s_armEvict;     /* where Play from here starts, and the fork it deletes   */
+static unsigned s_armSerial;            /* the timelines' serial the plan read                    */
+static unsigned s_liveSeen;             /* the last outcome's serial looked at                    */
+static int      s_rwAsked;              /* a verb the HUD sent has not had its outcome yet        */
+static unsigned s_forkAt;               /* the GameTime the HUD's fork starts at                  */
+/* THE ENGINE'S MESSAGE LINES, read by DrawChatText's stub for DrawGameScreen's call only
+   (tagpu_replay.c, THE MESSAGE LINES): the first line's top in the engine's own pixels, the
+   engine's 0x34 unless the last frame drawn had the live strip */
+#define CHAT_TOP   0x34
+#define ENGINE_BAR 32                   /* the world region's top, engine pixels, at any HUD scale */
+static int      s_chatTop = CHAT_TOP;
 
+static int drawn(const char* key);
+
+/* WHERE THE MESSAGE LINES START: below the live strip while the last frame drew it, so no line is
+   under it or beside its left end. The strip ends live_clear units under the bar (the layout's
+   strip.t and strip.h, its gap under it as over it), and a unit is the attachment's height / 720
+   times the HUD's own scale while the bar is the frame's bh scaled by the same height / the
+   frame's height (tagpu_hudstate_present): in the frame's pixels the clear row is
+   bh + live_clear * scale * gh / 720, whatever the window, and the world region is drawn
+   bh - 32 lower than the engine draws it (tagpu_hud_shift), so in the engine's pixels it is
+   32 + live_clear * scale * gh / 720. Never above the engine's own 0x34. */
+static void chat_top(void)
+{
+    const HUDART* art = tagpu_hudart_get();
+    int y = CHAT_TOP;
+    if (art && drawn("live") && g_ddraw.height > 0) {
+        float clear = tagpu_hudlay_globals(art->lay)->live_clear * (float)tagpu_hudinput_scale() / 100.0f;
+        int at = ENGINE_BAR + (int)ceilf(clear * (float)g_ddraw.height / 720.0f);
+        if (at > y && at < (int)g_ddraw.height) y = at;
+    }
+    s_chatTop = y;
+}
+
+/* THE ORDERING: the take runs in DrawGameScreen's hook before the draw (tagpu_packet_pub.c, THE
+   COMMANDS), and DrawChatText runs inside that draw, so the message lines' top is set before the
+   draw reads it.
+   THE VERDICT IS THE LAST PASS'S: a map whose HUD pass ran (`pass`) says whether that frame drew
+   the strip, and only such a map moves the lines; a record with no pass behind it (tagpu_vk_frame
+   returned before vk_present prepared) says nothing about the screen, which still shows the last
+   frame presented, so the lines keep that frame's verdict and do not jump to 0x34 for one draw.
+   Every way the HUD stops drawing gives 0x34: on GDI and once the HUD is refused the mode is NONE
+   here, on this thread (tagpu_hudstate_on), with no map needed; with no level to show (mode
+   NONE) no packet is filled, so the pass that runs builds no state and posts an empty map with
+   `pass` set (tagpu_vk_hud_prepare: tagpu_hudstate_drawn(NULL) first); and the level's end resets
+   it (tagpu_hudinput_level_end). */
 void tagpu_hudinput_take(const TAGPU_CMD_HUD* h)
 {
-    if (!h) { s_hit.n = 0; return; }
-    s_hit = *h;
-    if (s_hit.n > TAGPU_CMD_HUDHITS) s_hit.n = TAGPU_CMD_HUDHITS;
-    if (s_hit.nseat > TAGPU_PK_HUD_SEATS) s_hit.nseat = TAGPU_PK_HUD_SEATS;
-    if (s_hit.nlane > TAGPU_PK_HUD_FORKS) s_hit.nlane = TAGPU_PK_HUD_FORKS;
+    if (!h) s_hit.n = 0;
+    else {
+        s_hit = *h;
+        if (s_hit.n > TAGPU_CMD_HUDHITS) s_hit.n = TAGPU_CMD_HUDHITS;
+        if (s_hit.nseat > TAGPU_PK_HUD_SEATS) s_hit.nseat = TAGPU_PK_HUD_SEATS;
+        if (s_hit.nlane > TAGPU_PK_HUD_FORKS) s_hit.nlane = TAGPU_PK_HUD_FORKS;
+    }
+    if (tagpu_hudstate_mode() == HUD_MODE_NONE) s_chatTop = CHAT_TOP;
+    else if (h && h->pass) chat_top();
 }
 
+/* THE PAUSE ICON GOES WHERE A CONTROL ON THE SCREEN CARRIES THE PAUSE: the replay HUD's play
+   button, or, live, the rewind's strip while a rewind owns the level and holds the game. The live
+   HUD idle is one button with no pause on it, so a live game the player pauses shows PAUSED as the
+   engine draws it; answering for the whole live mode would take the icon from every recorded
+   skirmish. */
 int __cdecl tagpu_hudinput_on_screen(void)
 {
-    return s_hit.n && tagpu_hudstate_drawing();
+    TAGPU_REPLAY_RWSTATE rw;
+    int mode;
+    if (!s_hit.n) return 0;
+    mode = tagpu_hudstate_mode();
+    if (mode == HUD_MODE_REPLAY) return 1;
+    if (mode != HUD_MODE_LIVE) return 0;
+    tagpu_replay_rewind_state(&rw);
+    return rw.state != TAGPU_REPLAY_RWS_IDLE;
 }
 
-/* THE HUD TAKES A CLICK ONLY WHERE THE PLAYER SAW IT AND COULD REACH IT: the playback is live, the
-   HUD is drawn (tagpu_hudstate_on: the Vulkan lane, the pass not refused), the last frame it was
-   drawn on had controls, and no menu covers the world -- the engine's own test, and Leave's
-   question (tagpu_menu_modal). Under a menu the click is the engine's. */
+/* THE HUD TAKES A CLICK ONLY WHERE THE PLAYER SAW IT AND COULD REACH IT: the HUD shows something
+   for the level (tagpu_hudstate_mode: the Vulkan lane, the pass not refused, a recording playing or
+   a live recorded skirmish), the last frame it was drawn on had controls, and no menu covers the
+   world -- the engine's own test, and Leave's question (tagpu_menu_modal). Under a menu the click
+   is the engine's. */
 static int active(void)
 {
-    return s_hit.n && tagpu_hudstate_on() && tagpu_replay_live() && !tagpu_menu_modal();
+    return s_hit.n && tagpu_hudstate_mode() != HUD_MODE_NONE && !tagpu_menu_modal();
 }
 
 /* THE RENDER-OPTIONS PANEL AND ITS SPROCKET ARE DRAWN OVER THE HUD, and the engine's pump, which
@@ -137,6 +208,15 @@ static int hit(int cx, int cy, char* key)
             return 1;
         }
     }
+    return 0;
+}
+
+/* the last frame drawn has the control `key` */
+static int drawn(const char* key)
+{
+    unsigned i;
+    for (i = 0; i < s_hit.n; i++)
+        if (!strcmp(s_hit.hit[i].key, key)) return 1;
     return 0;
 }
 
@@ -448,6 +528,200 @@ static void lane_fill(TAGPU_PK_HUD* h, const TAGPU_REPLAY_RESULT* r, int fresh)
     if (!listed) s_armed = 0;
 }
 
+/* ---- the live HUD: the rewind's button and strip ------------------------------------------- */
+
+/* a GameTime as the strip's clock: m:ss from the rewind's first GameTime */
+static const char* live_clock(char* b, size_t n, unsigned T)
+{
+    unsigned s = (T > s_first ? T - s_first : 0) / TICKS;
+    snprintf(b, n, "%u:%02u", s / 60, s % 60);
+    return b;
+}
+
+/* one of the rewind's verbs, for the next frame visit, as the `rewind` trigger's (THE LIVE REWIND,
+   tagpu_replay.c); its outcome comes back through tagpu_replay_result (live_fill). 1 queued; 0
+   refused at once -- no level in play, as after the level's end, which clears the queue -- and
+   then the arm ends and the toast says so, since no outcome will follow. */
+static int rw_send(int op, unsigned T)
+{
+    if (tagpu_replay_rewind(op, T, NULL)) {
+        s_rwAsked = 1;
+        return 1;
+    }
+    s_arm = ARM_NONE;
+    toast("Rewind refused");
+    return 0;
+}
+
+/* the strip's track: the drawn frame's run mapped on the span it was drawn with (t_first, t_last),
+   held to the rewind's own span, a seek a frame and the newest replacing one not yet run.
+   THE BOUND: the drawn span is the render thread's and only turns a pixel into a GameTime; the
+   clamp is to this thread's span, and the rewind refuses a seek outside its own. */
+static void live_seek_at(int cx)
+{
+    int x0 = s_hit.track_x0, x1 = s_hit.track_x1;
+    double f;
+    unsigned T;
+    if (x1 <= x0 || s_hit.t_last <= s_hit.t_first || s_last <= s_first) return;
+    if (s_rwState != TAGPU_REPLAY_RWS_OPEN && s_rwState != TAGPU_REPLAY_RWS_PAST) return;
+    f = (double)(cx - x0) / (double)(x1 - x0);
+    f = f < 0 ? 0 : f > 1 ? 1 : f;
+    T = s_hit.t_first + (unsigned)(f * (double)(s_hit.t_last - s_hit.t_first) + 0.5);
+    T = T < s_first + 1 ? s_first + 1 : T > s_last ? s_last : T;
+    if (T == s_dragT) return;
+    s_dragT = T;
+    s_arm = ARM_NONE;
+    rw_send(TAGPU_REPLAY_RW_SEEK, T);
+}
+
+/* the HUD's fork: the game goes on from the world on the screen */
+static void live_fork(void)
+{
+    s_forkAt = s_now + 1;
+    s_arm = ARM_NONE;
+    rw_send(TAGPU_REPLAY_RW_FORK, 0);
+}
+
+/* THE PLAY FROM HERE. What is taken over is what is shown (owner decision 1-B): the rewind's fork
+   starts at the refresh at or before its last seek's target (takeover_point), up to a refresh
+   interval before the world on the screen, so the first click asks the takeover's plan where the
+   fork would start and what it would delete, snaps the past back to that start and shows it with
+   the warning; the second plays.
+   THE ORDERING ON THIS THREAD: the second click sends FORK only ARM_ARMED, which live_fill sets
+   only once s_now + 1 == s_armR -- the snap's seek has run and the world on the screen is R - 1.
+   The snap's SEEK made R the rewind's seek target, so the fork verb's own takeover_point(R), on the
+   same reader, answers R: the fork starts at the world shown, by the function the plan ran, and
+   the eviction shown is the one the fork acts on. The plan reserves nothing.
+   THE WARNING SAYS WHAT THE SECOND CLICK DOES, so it is the arm's: live_fill starts it when the arm
+   is set, at R, and holds it for as long as the arm holds -- the snap's seek can outlast the
+   toast's time (2341 ms measured 2026-10-23 on the battle test group, against toast.ms 1800), and
+   a second click after the toast's time would otherwise delete a fork no line on the screen
+   named.
+   THE PLAN IS THE TIMELINES' AS IT LEFT THEM: the plan refreshes their cache, so the serial is
+   read after it (tagpu_replay_timelines_serial); when it moves before the second click the file's
+   forks are no longer the ones the plan counted and the eviction named may not be the fork's, so
+   live_fill ends the arm and the next click plans again.
+   THE PLAN SCANS THE FILE, so it is asked here, on a click, on the game thread between two steps,
+   and nowhere per frame: neither live_fill nor the render half calls it. */
+static void live_play(void)
+{
+    TAGPU_REPLAY_TKPLAN p;
+    char a[16];
+    unsigned T = s_now + 1;
+    if (s_rwState == TAGPU_REPLAY_RWS_OPEN) {
+        s_arm = ARM_NONE;
+        if (rw_send(TAGPU_REPLAY_RW_CLOSE, 0)) toast("Playing on from %s", live_clock(a, sizeof a, s_rwG));
+        return;
+    }
+    if (s_rwState != TAGPU_REPLAY_RWS_PAST || s_arm == ARM_SEEKING) return;
+    if (s_arm == ARM_ARMED) { live_fork(); return; }
+    if (!tagpu_replay_takeover_plan(T, &p)) {
+        toast("Cannot play from %s", live_clock(a, sizeof a, s_now));
+        return;
+    }
+    if (p.R == T && p.evict == UINT32_MAX) { live_fork(); return; }
+    s_armSerial = tagpu_replay_timelines_serial();
+    s_armR = p.R;
+    s_armEvict = p.evict;
+    if (p.R != T && !rw_send(TAGPU_REPLAY_RW_SEEK, p.R)) return;
+    s_arm = ARM_SEEKING;
+}
+
+static void arm_toast(void)
+{
+    char a[16], warn[24] = "";
+    if (s_armEvict != UINT32_MAX) snprintf(warn, sizeof warn, ", replacing F%u", s_armEvict);
+    toast("Click again to play from %s%s", live_clock(a, sizeof a, s_armR), warn);
+}
+
+/* A click on the live HUD's control, released over it: the rewind's verbs. The strip's plate is
+   taken and does nothing; any other key ends Play from here's arm. */
+static void live_act(const char* key)
+{
+    int rw = s_rwState, strip = rw == TAGPU_REPLAY_RWS_OPEN || rw == TAGPU_REPLAY_RWS_PAST;
+    if (!strcmp(key, "live_play")) { live_play(); return; }
+    if (!strcmp(key, "live")) return;
+    s_arm = ARM_NONE;
+    if (!strcmp(key, "rewind")) {
+        /* the button opens the strip at now and closes it back to now; while the writer flushes
+           or a fork ends the original, the rewind would refuse the verb, so none is sent */
+        if (rw == TAGPU_REPLAY_RWS_IDLE) rw_send(TAGPU_REPLAY_RW_OPEN, 0);
+        else if (rw == TAGPU_REPLAY_RWS_OPEN) rw_send(TAGPU_REPLAY_RW_CLOSE, 0);
+        else if (rw == TAGPU_REPLAY_RWS_PAST) rw_send(TAGPU_REPLAY_RW_NOW, 0);
+    } else if (!strip) {
+        return;
+    } else if (!strcmp(key, "rew")) {
+        unsigned T = s_now > JUMP ? s_now - JUMP : 0;
+        rw_send(TAGPU_REPLAY_RW_SEEK, T > s_first + 1 ? T : s_first + 1);
+    } else if (!strcmp(key, "fwd")) {
+        /* open, the world is the strip's end and fwd is drawn disabled (tagpu_hudlay.c, live); in
+           the past a jump that reaches the span's last GameTime, G - 1 or before, is back to now:
+           a seek there would stop short of the world the rewind opened at */
+        if (rw != TAGPU_REPLAY_RWS_PAST) return;
+        if (s_now + JUMP >= s_last) rw_send(TAGPU_REPLAY_RW_NOW, 0);
+        else rw_send(TAGPU_REPLAY_RW_SEEK, s_now + JUMP);
+    } else if (!strcmp(key, "live_now")) {
+        rw_send(rw == TAGPU_REPLAY_RWS_OPEN ? TAGPU_REPLAY_RW_CLOSE : TAGPU_REPLAY_RW_NOW, 0);
+    }
+}
+
+const int* tagpu_hudinput_chat_top(void)
+{
+    return &s_chatTop;
+}
+
+/* The packet's fill, live: the clock and the rewind's state, the outcome of the HUD's last verb,
+   Play from here's arm, the track's drag, and the pointer, the held control and the toast. */
+static void live_fill(TAGPU_PK_HUD* h)
+{
+    const HUDART* art = tagpu_hudart_get();
+    unsigned ms = art ? tagpu_hudlay_globals(art->lay)->toast_ms : 0;
+    TAGPU_REPLAY_RESULT r;
+    char a[16];
+    int cx, cy;
+
+    s_live = 1;
+    s_now = h->now;
+    s_first = h->first;
+    s_last = h->last;
+    s_rwState = h->rw_state;
+    s_rwG = h->rw_G;
+    /* each outcome once, by its serial; the HUD speaks for its own verbs only */
+    tagpu_replay_result(&r);
+    if (r.serial != s_liveSeen) {
+        s_liveSeen = r.serial;
+        if (r.kind == TAGPU_REPLAY_RQ_REWIND && s_rwAsked) {
+            s_rwAsked = 0;
+            if (!r.ok) {
+                s_arm = ARM_NONE;
+                toast("Rewind refused");
+            } else if (r.op == TAGPU_REPLAY_RW_FORK) {
+                toast("Playing from %s", live_clock(a, sizeof a, s_forkAt));
+            }
+        }
+    }
+    if (s_rwState != TAGPU_REPLAY_RWS_PAST || tagpu_replay_timelines_serial() != s_armSerial) s_arm = ARM_NONE;
+    else if (s_arm == ARM_SEEKING && s_now + 1 == s_armR) { s_arm = ARM_ARMED; arm_toast(); }
+    else if (s_arm == ARM_ARMED && s_now + 1 != s_armR) s_arm = ARM_NONE;
+    h->rw_arm = (uint8_t)s_arm;
+    h->rw_R = s_arm ? s_armR : 0;
+    h->rw_evict = s_arm ? s_armEvict : UINT32_MAX;
+
+    if (s_drag) {
+        if (!active()) { s_drag = 0; s_held[0] = 0; }
+        else if (mouse_last_client(&cx, &cy)) live_seek_at(cx);
+    }
+    h->px = h->py = -1;
+    if (mouse_last_client(&cx, &cy) && cx < SHRT_MAX && cy < SHRT_MAX) { h->px = (int16_t)cx; h->py = (int16_t)cy; }
+    memcpy(h->held, s_held, sizeof h->held);
+    /* while armed the toast is the arm's: every other toast on the live HUD ends the arm first */
+    if (s_toast[0] && (s_arm == ARM_ARMED || GetTickCount() - s_toastAt < ms))
+        memcpy(h->toast, s_toast, sizeof h->toast);
+    else h->toast[0] = 0;
+}
+
+/* ---- the replay HUD ------------------------------------------------------------------------- */
+
 /* A click on a control, released over it. Every command is the replay's own call or the stats
    window's own state; a key with no command -- the dock's, the column's and the window's plates,
    the scroll track, the window's title -- is taken and does nothing. */
@@ -456,6 +730,7 @@ static void act(const char* key)
     const char* colon = strchr(key, ':');
     size_t k = colon ? (size_t)(colon - key) : strlen(key);
     int n = colon ? atoi(colon + 1) : -1, i;
+    if (s_live) { live_act(key); return; }
     if (pick_act(key, k, n)) return;
     if (lane_act(key, k, n)) return;
     if (IS("rew")) {
@@ -536,7 +811,8 @@ int tagpu_hudinput_button(int cx, int cy, int gx, int gy, int down, int right)
         s_down &= ~bit;
         if (!right) {
             if (s_drag) {
-                if (cx >= 0) seek_at(cx);
+                if (cx >= 0 && s_live) live_seek_at(cx);
+                else if (cx >= 0) seek_at(cx);
             } else if (s_wdrag) {
                 if (cx >= 0) stat_drag(cx, cy);
             } else if (s_held[0] && cx >= 0 && active() && !under_menu(gx, gy) && hit(cx, cy, key) &&
@@ -560,8 +836,11 @@ int tagpu_hudinput_button(int cx, int cy, int gx, int gy, int down, int right)
     if (!strcmp(key, "track")) {
         s_drag = 1;
         s_dragT = UINT_MAX;
-        seek_at(cx);
-        s_pick = PICK_CLOSED;               /* the playhead moves */
+        if (s_live) live_seek_at(cx);
+        else {
+            seek_at(cx);
+            s_pick = PICK_CLOSED;           /* the playhead moves */
+        }
     } else if (!strcmp(key, "drag")) {
         s_wdrag = 1;
         s_wdx = cx;
@@ -596,6 +875,8 @@ void tagpu_hudinput_fill(TAGPU_PK_HUD* h)
     TAGPU_REPLAY_RESULT r;
     int cx, cy, i, fresh;
 
+    if (h->mode == TAGPU_PK_HUD_LIVE) { live_fill(h); return; }
+    s_live = 0;
     s_now = h->now;
     s_first = h->first;
     s_last = h->last;
@@ -706,4 +987,7 @@ void tagpu_hudinput_level_end(void)
     s_armed = 0;
     s_watchAsked = 0;
     memset(s_forkAsk, 0, sizeof s_forkAsk);
+    s_live = s_rwAsked = 0;
+    s_arm = ARM_NONE;
+    s_chatTop = CHAT_TOP;
 }

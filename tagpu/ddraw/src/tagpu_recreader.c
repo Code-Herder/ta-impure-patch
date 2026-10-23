@@ -29,7 +29,9 @@
    may have been appended since. A playing reads one CHAIN of timelines, root first, chosen by
    recr_timeline before its first iteration; every segment of it agrees with the first header in
    shape, which is the bound that keeps the world's allocations, sized from the first header,
-   valid for every segment's records.
+   valid for every segment's records. What a segment's header may set for its own records (its
+   RT_HOLD, mode and roster, its seats' controllers), the reader takes from that segment's header
+   (seg_header), never from the first's.
    THE INVARIANT that makes a chain one world: a segment's records are applied only over a world
    reset to that segment's first iteration, or built from that segment's own snapshot over that
    segment's own base. No record of one segment is applied over another segment's world except
@@ -309,7 +311,11 @@ static int sections_body(RecReader* r, const RecBlock* b, const unsigned char* s
        encoder restarted from, and its grid, which every image of the segment read so far built
        (apply), or a snapshot over the base did. The codec was made for the sizes of the first
        segment it met -- slots, projectile pool, grid and wreck pool -- which every segment's
-       header equals (segs_scan, shape_differs); h->codec is this segment's own. */
+       header equals (segs_scan, shape_differs); h->codec is this segment's own. The restart
+       takes from h->codec what a segment may set, the orders frame's scheme (RT_HOLD).
+       THE ORDERING: every change of segment resets the world (world_reset), which invalidates
+       the codec, and sections_ready refuses a block that continues an invalid one. So a
+       segment's records are decoded only after a restart from its own header. */
     if (b->flags & RBF_FRAME_RESET) {
         RecFrameWorld fw = { r->h.grid_w, r->h.grid_h, r->w.grid };
         reccodec_restart(r->codec, &h->codec, r->w.unit, r->w.live, r->w.proj, r->w.nproj,
@@ -2034,12 +2040,14 @@ static const char* shape_differs(const RecHeader* a, const RecHeader* b)
     if (a->units_each != b->units_each) return "units a player";
     if (a->has_mp && b->has_mp && (memcmp(&a->mp,&b->mp,sizeof a->mp) ||
         memcmp(&a->mp_seats,&b->mp_seats,sizeof a->mp_seats))) return "multiplayer source/seat mapping";
+    /* a multiplayer roster follows only a multiplayer first header: the materializer is armed by
+       the first header's mode alone (tagpu_replay.c, play_first) and follows from there into and
+       out of the segments of its roster (mp_follow) */
+    if (a->has_mp && !b->has_mp) return "multiplayer roster";
     /* a skirmish chain's segments all hold their cells or none do: the playing keeps the engine's
        slots, or the recording's, from its first step (tagpu_replay.c, THE UNIT SLOTS AND THE YARD
        BIT), and a skirmish chain has no crossing that changes it */
     if (!a->has_mp && !b->has_mp && recr_holds_cells(a) != recr_holds_cells(b)) return "held cells";
-    /* the codec is made for the first segment's RT_HOLD, which picks its orders frame's scheme */
-    if (a->has_hold != b->has_hold) return "RT_HOLD";
     if (a->has_unitdefs != b->has_unitdefs || a->ndefs != b->ndefs || a->defs_hash != b->defs_hash)
         return "unit types";
     if (a->has_weapons != b->has_weapons || a->nweapons != b->nweapons ||
@@ -2260,21 +2268,40 @@ int recr_append_point(RecReader* r, unsigned at, RecAppend* a, const RecTimeline
     return 1;
 }
 
+/* The chosen chain's index of the segment that has stream blocks and covers T, found afresh from
+   the index (segs_scan), or -1 (why). recr_refresh_at and recr_exact_at both take it, so the two
+   always name one segment. */
+static int chain_hold(RecReader* r, unsigned T, char* why, unsigned cap)
+{
+    unsigned hold;
+    if (segs_scan(r, 0, why, cap) < 0) return -1;
+    for (hold = 0; hold < r->nchain; hold++) {
+        const RecSeg* s = chain_seg(r, hold);
+        if (s->nstream && T >= s->t.first && T <= cover_end(r, hold)) return (int)hold;
+    }
+    snprintf(why, cap, "GameTime %u is outside the timeline played", T);
+    return -1;
+}
+
+int recr_exact_at(RecReader* r, unsigned T, RecTimeline* seg, char* why, unsigned cap)
+{
+    const RecSeg* s;
+    int hold = chain_hold(r, T, why, cap);
+    if (hold < 0) return -1;
+    s = chain_seg(r, (unsigned)hold);
+    if (seg) *seg = s->t;
+    /* read here: the next scan of the segments frees their headers (segs_scan) */
+    return recr_holds_nothing(s->h);
+}
+
 unsigned recr_refresh_at(RecReader* r, unsigned T, RecTimeline* seg, char* why, unsigned cap)
 {
     const RecSeg* s;
     RecLossyBlock* b;
-    unsigned hold, j, n = 0, R;
-    if (segs_scan(r, 0, why, cap) < 0) return 0;
-    for (hold = 0; hold < r->nchain; hold++) {
-        s = chain_seg(r, hold);
-        if (s->nstream && T >= s->t.first && T <= cover_end(r, hold)) break;
-    }
-    if (hold == r->nchain) {
-        snprintf(why, cap, "GameTime %u is outside the timeline played", T);
-        return 0;
-    }
-    s = chain_seg(r, hold);
+    unsigned j, n = 0, R;
+    int hold = chain_hold(r, T, why, cap);
+    if (hold < 0) return 0;
+    s = chain_seg(r, (unsigned)hold);
     if (seg) *seg = s->t;
     b = (RecLossyBlock*)malloc(s->nstream * sizeof *b);
     if (!b) {
@@ -2967,6 +2994,18 @@ const RecHeader* recr_header(const RecReader* r) { return &r->h; }
 int recr_segment_mp(const RecReader* r) { return r->in_seg && seg_header(r)->has_mp; }
 
 int recr_segment_cells(const RecReader* r) { return r->in_seg && recr_holds_cells(seg_header(r)); }
+
+int recr_segment_controllers(const RecReader* r, unsigned char ctl[REC_PLAYERS])
+{
+    const RecHeader* h;
+    unsigned i;
+    memset(ctl, 0, REC_PLAYERS);
+    if (!r->in_seg) return 0;
+    h = seg_header(r);
+    for (i = 0; i < h->nseats; i++)
+        if (h->seats[i].index < REC_PLAYERS) ctl[h->seats[i].index] = h->seats[i].controller;
+    return 1;
+}
 
 /* 1 the header is of this format */
 static int info_header(RecInfo* o, const unsigned char* b, size_t len)

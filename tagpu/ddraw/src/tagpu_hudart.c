@@ -7,6 +7,9 @@
 #include "lodepng.h"
 #include "tagpu_log.h"
 
+/* the declarations first: the implementation below is included once, and stb_truetype guards
+   only its declarations against a second inclusion */
+#include "tagpu_hudtext.h"
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "tagpu_hudart.h"
 
@@ -105,6 +108,16 @@ static int faces(char* err, size_t errn)
     return 1;
 }
 
+/* the layout's measure: a string's width in a style's face, as tagpu_huddraw.c sets it */
+static double measure(void* ctx, int style, double size, const char* s)
+{
+    const HUDGLOBALS* g = tagpu_hudlay_globals(s_art.lay);
+    (void)ctx;
+    if (style < 0 || style >= g->nstyle) return 0;
+    return tagpu_hudtext_width(&s_art.face[s_art.style_face[style]].info, (float)size, g->style[style].spacing,
+                               g->style[style].upper, s, strlen(s));
+}
+
 /* ---- the parts ------------------------------------------------------------------------------- */
 
 /* PREMULTIPLIED ONCE, HERE, so that the filtering and the mipmaps the pass makes average colours
@@ -162,6 +175,7 @@ static DWORD WINAPI loader(LPVOID unused)
     HGLOBAL g;
     DWORD t0 = GetTickCount();
     double mpx = 0;
+    HUDLAY* lay = NULL;
     (void)unused;
     err[0] = 0;
     if (!(r = FindResourceA(g_ddraw_module, "HUDPAK", MAKEINTRESOURCEA(10))) || !(g = LoadResource(g_ddraw_module, r))
@@ -169,14 +183,17 @@ static DWORD WINAPI loader(LPVOID unused)
         snprintf(err, sizeof err, "no HUDPAK resource");
     else if (!(lt = (const char*)pak_file("layout.json", &nl)) || !(kt = (const char*)pak_file("kit.json", &nk)))
         snprintf(err, sizeof err, "the archive lacks layout.json or kit.json");
-    else if (!(s_art.lay = tagpu_hudlay_load(lt, nl, kt, nk, png_size, NULL, err, sizeof err))) {}
-    else if (!faces(err, sizeof err)) {}
+    else if (!(lay = tagpu_hudlay_load(lt, nl, kt, nk, png_size, NULL, err, sizeof err))) {}
+    else if ((s_art.lay = lay), !faces(err, sizeof err)) {}
     else if (!parts(err, sizeof err, &mpx)) {}
     if (err[0]) {
         tagpu_logf("hud: NOT loaded - %s", err);
         InterlockedExchange(&s_ready, 2);
         return 0;
     }
+    /* the faces are the measure's, so it is given once they are open, and before s_ready
+       publishes the layout to the render thread */
+    tagpu_hudlay_measure(lay, measure, NULL);
     tagpu_logf("hud: loaded %d parts (%.1f Mpx) and %d faces in %lu ms",
                tagpu_hudlay_nparts(s_art.lay), mpx, s_art.nface, (unsigned long)(GetTickCount() - t0));
     InterlockedExchange(&s_ready, 1);

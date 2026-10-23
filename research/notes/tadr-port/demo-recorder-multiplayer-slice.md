@@ -1688,6 +1688,68 @@ composes T's world and the cells are the engine's. The boundary's seek to
 `fork_at` crosses into the timeline, and a seek back before it composes
 again. `recr_segment_mp` names the segment the world was read from.
 
+**A chain's segments may differ in RT_HOLD.** The file's own segment has no
+RT_HOLD and its takeover timeline has the skirmish's, so the two code their
+order lists in different schemes (the orders frame's scheme 1 and 2). The C
+codec takes the scheme at every restart from the params of the segment being
+read (`orders_restart`), and the ordering makes that the segment's own: every
+change of segment resets the world, which invalidates the codec, and a block
+that continues an invalid codec is refused, so a segment's records are decoded
+only after a restart from its own header. The shape rule
+(`tagpu_recreader.c`, `shape_differs`, mirrored by `tarec.shape_differs`) no
+longer compares RT_HOLD; it refuses a multiplayer roster under a skirmish
+first header instead ("multiplayer roster"), because the materializer is armed
+by the first header's mode alone (`play_first`), and keeps the held-cells rule
+for skirmish chains.
+
+**Where the takeover starts.** In a segment whose header holds nothing -- no
+RT_HOLD, which is a multiplayer file's own segment, or an RT_HOLD with no flag
+and no held bit -- the takeover starts at T itself (`recr_exact_at`,
+`takeover_point`, `tk_bound`'s THE EXACT START). The invariant is a bound read
+from the file: the writer's one `!mp_in` branch both makes the lossy filter
+and writes RT_HOLD (`tagpu_recwriter.c`), so without RT_HOLD every iteration's
+records went to the stream as captured, and a filter with no rows and no
+flags writes every record as it came (`tagpu_reclossy.c`); the reader refuses
+a multiplayer header with RT_HOLD. So the refresh rule, which exists because
+held weapon targets may be stale, is vacuous there. What is exact is the
+recorder's stream, and so the world composed from it at T: the takeover starts
+from the composed parent, which `recmp_compare.py --fork` compares it with,
+not from what every machine held at T. The composition's own residuals stand
+at every T alike: each remote unit is its owner's last image (with its owner's
+weapon targets, below); a unit created but not yet described by its owner is
+made from its create and counted on the seek's line ("created and not yet
+described"); and envelopes past T are held back ("envelopes of T held"). A
+takeover inside the
+takeover timeline -- a skirmish segment, which holds -- rounds to its refresh
+at or before T as any skirmish takeover does. `tarec.takeover_at` gives the
+same start offline. The residual this neither adds nor removes [INFERRED, not
+measured]: a composed world's remote images carry their owners' machines'
+weapon targets, and where the composition puts another unit in such a
+target's slot, the resolver `0x48A190` reads that unit; that is the same at
+any T of a multiplayer segment, since a refresh there only ends a block, and
+the bound in `tk_bound`'s comment still holds (the index is a slot of the
+unit array).
+
+**Getter 75 follows the segment.** The puppet table's per-seat answers were
+the first header's controllers for the whole level, so a playing of the
+takeover timeline -- recorded by a live skirmish that answered 1 for every
+seat -- answered 0 for the root's remote seats. `mp_follow` now takes each
+segment's controllers (`recr_segment_controllers`) and hands them to
+`tagpu_puppet_locals` once the segment is followed (before its skirmish
+return, and after the cells' rule has followed), so every seek follows them,
+and logs `from GameTime T getter 75's table is set to 1 for seats …` when the
+table changes. **A takeover's own creates answer the takeover's seats**: R7
+runs every create's first slice at once (the COB setup `0x485D40`, run-now),
+while the puppet mode is still on, so TK1 (`tk_seats`) sets the table from the
+types it has just written -- P human and every other seat AI, 1 for all of
+them -- after R3's kills and before R7; the takeover's end then turns the mode
+off and the live getter answers from `+0x73`. The ordering: the table changes
+only inside a seek, on the game thread between steps -- in R0 and at TK1 --
+before R7 makes T's units afresh, and a fresh COB's Create reads getter 75
+first. A seek that fails after R0 leaves the target segment's answers until
+`sk_back` reads back; a read-back that fails stops the playing with them in
+place, which only the stopped frame shows (accepted).
+
 **R3b, the cells after the kills** (`sk_cells_clear`). Where the cells are
 the engine's, the seek has relied on R3's kills leaving no unit on the grid,
 since a death clears the footprint the unit stands in. That holds only while
@@ -1775,9 +1837,70 @@ reproduction recording:
 - The skirmish `tareplay.py takeover battle --cover` passes every check on
   the same build, compare-fork EQUAL.
 
-**Not run:** a takeover inside the timeline itself, and a running playback
-taken over backwards (the driver arms its dump before the takeover, and the
-recorder refuses a dump at a GameTime the level has passed).
+MEASURED 2026-10-23 on the reference setup, internal speed 20, the coverage
+build of `09ed62ec`, a four-actor recording of GameTime 1–1347
+(`recmp_create_begin_test.py --until 1277`):
+
+- **At 1081 as player 1**, which is 3·300 + 181 and no refresh: the takeover
+  starts at 1081 itself, with no rounding line, and its line names 1081
+  (`at` 1081, timeline 1); 3 units killed, 43 made, orders 39 built and 3
+  adopted. TK1 set getter 75's table to 1 for seats 0 1 2 3 (it held 0 2,
+  the recording machine's). The AI plays: seats 0, 2 and 3 issue 95, 32 and
+  13 orders in the 1,800-tick window, 86% of 28 mobile units move, seat 3
+  builds. The fork's first iteration is EQUAL to the composed parent (43
+  units, 0 unscanned), `tarec check --timeline 1` explains every change in
+  3,064 steps with 0 corrections, the live dump at 1201 (a refresh of the
+  fork) is EQUAL to the timeline's stream, `codectest verify` decodes all 116
+  sectioned blocks of the mixed chain alike in C and Python, and the
+  original's bytes are untouched.
+- **The fork played across its boundary**, crossing at 1081 twice (0
+  refused), around a seek from 1272 back to 1050. Getter 75's table was set to
+  1 for seats 0 1 2 3 at each entry into the fork and for seats 0 2 after the
+  seek back into the multiplayer segment (the table's own line; no COB trace
+  reads key 75). Dumps EQUAL: at 1050 in the multiplayer segment
+  (`recmp_compare.py`); at 1140, 1170 and 1201 in the fork (`tarec compare
+  --puppet --seek --timeline 1`); the round trip at 1160 (`tarec
+  compare-dumps --timeline 1 --seek`). The straight playing's dump at 1020,
+  in the multiplayer segment before any seek, has **1 difference**: cell (157,
+  82) of mobile unit 1503's footprint names unit 10, which overlaps it there
+  and carries the holder's mark. Main's build `b76515f9` gives the same
+  difference on the same recording played alone to 1020, so it does not come
+  from this landing; it is open (the multiplayer comparison checks the grid's
+  slots without the contest's rule).
+- On the build before the merge of format 25 (recording 1–1354): a seek from
+  1010 to 1150 and a fresh process at 1150 gave EQUAL dumps at 1000, 1150 and
+  1270, and the fresh seek EQUAL against the running one at 1150; those runs
+  were not repeated.
+- **A takeover inside the fork**, asked for at 1150: it starts at 1082, the
+  fork's second iteration and a refresh -- `tarec.takeover_at` gives 1082 and
+  the harness asks for it there; asked for at 1150 directly, on the build
+  before the merge, the DLL logged `a takeover asked for at GameTime 1150
+  takes over at 1082`. Timeline 2 is EQUAL to its parent segment at 1082
+  (`tarec compare-fork … 2`, through the skirmish segment's header); `tarec
+  check --timeline 2` explains every change in 3,062 steps; the AI seats issue
+  98, 30 and 13 orders and 89% of 28 mobile units move.
+
+**Not run:** a takeover at a multiplayer recording's first iteration (the
+refusal's exact-start text), a running playback taken over backwards (the
+driver arms its dump before the takeover, and the recorder refuses a dump at a
+GameTime the level has passed), and Windows.
+
+**Gaps this leaves open.**
+- The HUD's span and its snap to a takeover's start are the HUD's; it should
+  take the start from `takeover_point` (or `tarec.takeover_at`), never from
+  `recr_refresh_at`.
+- A live skirmish taken over from a multiplayer file cannot rewind: the live
+  rewind refuses a mode-3 first header (`rw_skirmish`).
+- Watch refuses multiplayer files.
+- `tarec lossy-check` and `compare --exact` cannot read a multiplayer chain:
+  its root has no RB_EXACT.
+- `tarec info` prints only the first header's hold, and `tarec pov --check`
+  refuses any file whose first header is multiplayer.
+- A contest site held by another module stops a multiplayer fork's playing at
+  the crossing ("the cells' rule could not follow the segment") rather than at
+  its start: `validate_header` checks the first header only.
+- Names, sides and logos are shown from the first header; a takeover keeps
+  them (equal in every measured fork), and no writer changes them.
 
 ### Each player's explored map in playback
 

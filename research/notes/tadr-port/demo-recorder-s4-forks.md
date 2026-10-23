@@ -111,7 +111,7 @@ unknown. A job is given a ticket only once it has a worker's slot; the deletion 
 playing claims is a queued request whose outcome, `timeline N is in use`, is in the ring at once.
 **The ordering, under the queue's lock:** the worker writes the result before its job leaves the
 pending set, so from its issue a ticket is pending or in the ring at every instant the lock is
-free, until 15 later requests have finished: a result outlives 15 later completions. Each slot
+free, until 15 completions after its own: a result outlives 15 completions after its own. Each slot
 names its ticket, so a ticket the ring no longer holds reads unknown, never another request's
 outcome. `recfile_completed` counts the finished requests without the lock, for a reader
 that wants to know some file may have changed.
@@ -129,7 +129,9 @@ same way, so the HUD matches each outcome to its own request (*The outcomes* in
 [the HUD in game](../hud-in-game.md)). The trigger's
 `hud fork delete <id>` and `hud fork export <id> "<stem>"` are the tests' way to it. Deleting the
 timeline that plays is a switch first (*Watching another timeline in place*); the forks trigger's
-deletion of it, which no switch precedes, is refused as in use.
+deletion of it, which no switch precedes, is refused as in use. An export runs while a playing
+reads the file: MEASURED 2026-10-23 on `battle`, the HUD's export of fork 4 during fork 5's playing
+holds `[0, 4]`.
 
 **The HUD's timelines** come from a cache the game thread refreshes at the first iteration, a
 rewind's open, a takeover's plan and the frame visit after any file job finished, never per frame:
@@ -139,8 +141,8 @@ RT_OPTIONS byte 18, which the recorder takes from `main+0x2A42`: in a fork, the 
 played as. `tagpu_replay_timelines_serial` grows by one at every change of the rows or the axis,
 the playing's end included, so a caller (the takeover's picker) knows when to read them and plan
 again. READ: the takeover's `tk_live` stores that seat in `+0x2A42`, then `tk_end` arms the
-fork, whose header `header_build` writes at its first capture point; the X lane's `hud state`
-check compares every fork's seat with the player it took over as. The axis runs from the root's first GameTime to the greatest last of a live timeline.
+fork, whose header `header_build` writes at its first capture point. MEASURED 2026-10-23 by the
+X lane's `hud state` check on `battle`: forks 2, 4 and 5 each name the player taken over as. The axis runs from the root's first GameTime to the greatest last of a live timeline.
 
 ## Watching another timeline in place
 
@@ -171,8 +173,9 @@ seek, `tl_switch` takes it in one of two ways:
   moved. **The invariant, an ordering:** every refusal of `seek_run` comes before its first host
   write (R1), and in SWITCH mode it calls no `sk_back`; so a refused switch closes the second
   reader and puts the first back, and the playing goes on as before -- except what every refused
-  seek leaves (the eye's lead, the cleared click overlay), and in a multiplayer playing the
-  materializer's rule, which `mp_follow` sets back from the first reader's segment. **The
+  seek leaves (the eye's lead, the cleared click overlay), and what `mp_follow` follows from the
+  segment -- getter 75's per-seat answers, and in a multiplayer playing the materializer's rule
+  -- which `mp_follow` sets back from the first reader's segment. **The
   residual:** in a multiplayer playing, a refusal from the second reader's materializer
   (`mp_follow` on it failing) is sticky (`mp_fail`) and stops the playing, as it stops it after
   any refused seek; restoring it would need the first reader's materializer rebuilt whole by
@@ -223,7 +226,12 @@ timelines 0, 2, 4 and 5), one launch held at fork 5's first iteration:
 5. a switch to the evicted timeline 1 refused, the dumps before and after it EQUAL;
 6. the deletion of the watched 4: the switch to 0 (a seek, past 4's fork), the worker's deletion,
    the HUD's outcome, live `[0, 2, 5]`;
-7. the level's end: `touched timelines 0, 5, 2`, and the three last-use times later than before.
+7. the level's end: `touched timelines 0, 5, 2`, and the three last-use times later than before;
+8. a bookmark (`tacli hud click bookmark`) set on 2 at the GameTime of step 2's HUD seek, before
+   both forks, listed by `tacli hud show` on 2, again on 4 after step 2's switch and on 0 after
+   step 6's, whose deletion grew the file; and after the level's end index.dat's line for the
+   file holds it, keyed by the file's root key (index version 3, `tagpu_replays.c`). Each
+   switch's new walk reads the bookmarks back from the index (`tagpu_hudmarks.c`, `walk_start`).
 
 **Measured 2026-10-23** on the coverage build, `battle`, X2 alone (`--x2-only`) on the file the
 lane's run made (T5 = 902, F2 = 901, F4 = 1501, base 601): 5 -> 2 sought at 903 in 2032 ms, the
@@ -234,10 +242,12 @@ deletion of 4 by way of 0, sought at 1532 in 2987 ms, the deletion's compaction 
 the playing held the file (error 5, the replacement refused, as *File ordering and lifetimes*
 says); the touch `touched timelines 0, 5, 2`, compacting to three segments once the playing had
 closed. Every function the switch adds or changes was reached by X2's coverage file. In the
-whole lane's run of the same day, whose GameTimes the commit picks (base 811, F2 1111, F4 1711):
-5 -> 2 sought in 2466 ms, 2 -> 4 re-chained from 810, the re-chained reader's dump at 1141 and
-the one past 4's fork both EQUAL to a fresh seek of 4, 4 -> 0 sought in 3333 ms, and every other
-check of the lane passing.
+whole lane's run of the same day, on the build with main's exact-T takeovers merged, whose
+GameTimes the commit picks (base 781, F2 1081, F4 1681): 5 -> 2 sought at 1083 in 2396 ms, the
+bookmark set at 780, 2 -> 4 re-chained from 780, the re-chained reader's dump at 1111 and the one
+past 4's fork both EQUAL to a fresh seek of 4, 4 -> 0 sought at 1712 in 3240 ms, the bookmark
+listed on 2, 4 and 0 and kept on its index line under the root key, and every other check of the
+lane passing (25, in 5 min).
 `codectest outcomes` plays `recr_rechain`'s edges offline: a reader at a fork's `fork_at - 1`
 re-chains onto it and its next read is that fork's boundary; at `fork_at` it does not and reads on;
 a reader that has read nothing, one that has read its end, and one in a sibling fork's segment
@@ -249,10 +259,11 @@ its argument is the structural one above. Of the refusals at the frame visit, X2
 a claim refused because the timeline's deletion is queued, and a re-chain or a second reader
 refused by the file (`k < 0`, a timeline the cache still lists live), each need a deletion to
 finish between the request's look at the cache and the visit, which no test can order; the
-refusal X2 plays is the request's own. X2 plays a single-player file: the multiplayer lines of
-the restoration (`mp_follow`) are reached by no test; a ten-seat X2 would reach them. Two things
-fixed from the first header stay as a switch finds them, as a boundary crossing leaves them:
-getter 75's `local[]` (`seat_level`) and the viewer's side art. The HUD's walker (markers, stats)
+refusal X2 plays is the request's own. X2 plays a single-player file: `mp_follow`'s multiplayer
+branch on a switch is reached by no test; a ten-seat X2 would reach it. Getter 75's per-seat
+answers follow the segment: a sought switch sets them from the new chain's segment (`mp_follow`
+in `seek_run`), and a re-chain keeps the segment, so its answers stand. The viewer's side art,
+fixed from the first header, stays as a switch finds it, as a boundary crossing leaves it. The HUD's walker (markers, stats)
 of the left timeline is joined, with its bounded wait on the game thread, at the HUD's next fill
 after a switch, as at any timeline change, until the lanes' landing polls it; its reads are of
 blocks no deletion rewrites, in a file no compaction can replace while it is open. A touch

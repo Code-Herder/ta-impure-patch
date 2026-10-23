@@ -64,8 +64,9 @@ A fixture fixtures.json gives a `takeover` runs two processes more, K after L an
     K  takeover  `replay takeover` of L's recording at T = T2, or the entry's `at`, as player P
                  (the recording's controlled player unless the entry names one) in a fresh
                  process, which records
-                 timeline 1 into the same file; T is the refresh at or before the point drawn,
-                 which REFRESH_LEVER's grid makes the point itself: the window, its boxes and ErrorLog.txt watched,
+                 timeline 1 into the same file; T is the refresh at or before the point drawn (a
+                 skirmish takeover starts there, tarec.takeover_at), which REFRESH_LEVER's grid
+                 makes the point itself: the window, its boxes and ErrorLog.txt watched,
                  the entry's `order` and `type` given, a dump k<T+dump>, the level ended
     F  boundary  `replay seek T-300 --timeline 1` of K's file in a fresh process, which plays
                  across the fork at T, dump f<T+300> (or at T+dump when that comes first)
@@ -191,9 +192,10 @@ DECLINE_LEVER = "tagpu_rec.decline"
 # L and K launch with EXACT_LEVER in their game folder: the writer follows each stream block with
 # the exact records it filtered (RB_EXACT), against which `tarec compare --exact` reads their dumps
 # and `tarec lossy-check` the lossy stream (tagpu_reclossy.c). A fixture with a `takeover` launches
-# every process with REFRESH_LEVER holding TAKEOVER_REFRESH: a takeover starts at the refresh at or
-# before the GameTime asked (tagpu_replay.c, tk_bound), and every point the harness draws is 1
-# (mod 30), so on that grid the takeover, the forks and the rewind's fork start where they ask
+# every process with REFRESH_LEVER holding TAKEOVER_REFRESH: a skirmish takeover starts at the
+# refresh at or before the GameTime asked (tagpu_replay.c, tk_bound), and every point the harness
+# draws is 1 (mod 30), so on that grid the takeover, the forks and the rewind's fork start where
+# they ask
 EXACT_LEVER = "tagpu_rec.exact"
 REFRESH_LEVER = "tagpu_rec.refresh"
 TAKEOVER_REFRESH = 30
@@ -1666,17 +1668,23 @@ def root_key(path):
     return "%08X%08X" % struct.unpack_from("<II", Path(path).read_bytes()[:40], 32)
 
 
-def keyed_line(rd, name, T, what):
-    """The index's line of `name`, Failed unless the index is version 2's and the line carries
-    its file's root key, the favourite and the one bookmark at T: name size key started format
-    start last end fav played map nseats seat... marks (tagpu_replays.c, the index). Returns a
-    summary."""
+def index_line(rd, name):
+    """The index's head line, and `name`'s line split and its marks field (None for none): name
+    size key started format start last end fav played map nseats seat... marks (tagpu_replays.c,
+    the index)."""
     f = rd / "index.dat"
     head = f.read_text(errors="replace").split("\n", 1)[0] if f.exists() else ""
-    ln = index_lines(rd).get(name, "")
-    c = ln.split("\t")
+    c = index_lines(rd).get(name, "").split("\t")
     at = 12 + int(c[11]) if len(c) > 11 and c[11].isdigit() else len(c)
-    marks = c[at] if at < len(c) else None
+    return head, c, c[at] if at < len(c) else None
+
+
+def keyed_line(rd, name, T, what):
+    """The index's line of `name`, Failed unless the index is version 3's and the line carries
+    its file's root key, the favourite and the one bookmark at T (index_line). Returns a
+    summary."""
+    head, c, marks = index_line(rd, name)
+    ln = "\t".join(c)
     key = root_key(rd / name)
     if head != "IMPURE-REPLAYS-INDEX\t3" or len(c) < 13 or c[2] != key or c[8] != "1" or \
             marks != str(T):
@@ -2270,14 +2278,14 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     trip rebuilds in place; from 2 to 4 at a GameTime before both forks, re-chained with no seek;
     the eviction the in-level stamps decide, which the file's own would not; the re-chained
     reader's world past 2's fork, and 4's boundary crossed on it; a refused switch, which moves
-    nothing; timeline 2 exported; the watched timeline 4 deleted, a switch to 0 first; and the
-    level's end, one touch of every timeline it played. Every step the replay HUD offers is
-    driven through it, by the fork lanes (tagpu_hudinput.c, THE LANES): the switches by a lane's
-    click, the export by its Export, the deletion by Delete's two clicks; the refused switch to 1,
-    which no lane lists, stays a trigger. After each switch by a lane the markers' walker walks
-    the new chain (tagpu_hudmarks.c, the polled join). `base` is a GameTime of the original before
-    2 and 4 fork. The tarec checks go on `results`' offline pool, reading copies taken at once
-    (`copies`)."""
+    nothing; timeline 2 exported; the watched timeline 4 deleted, a switch to 0 first; a bookmark
+    set on 2 and listed on 4 and on 0, its index line keyed by the file's root key; and the level's
+    end, one touch of every timeline it played. Every step the replay HUD offers is driven through
+    it, by the fork lanes (tagpu_hudinput.c, THE LANES): the switches by a lane's click, the export
+    by its Export, the deletion by Delete's two clicks; the refused switch to 1, which no lane
+    lists, stays a trigger. After each switch by a lane the markers' walker walks the new chain
+    (tagpu_hudmarks.c, the polled join). `base` is a GameTime of the original before 2 and 4 fork.
+    The tarec checks go on `results`' offline pool, reading copies taken at once (`copies`)."""
     segs, stop = tarec.file_segments(x2)
     live = sorted(s["id"] for s in segs if s["state"] == 1)
     if stop or live != [0, 2, 4, 5]:
@@ -2290,7 +2298,14 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     used = {s["id"]: s["last_used"] for s in segs}
     name = x2.stem
     say(f"forks: X2 on {name}, from timeline 5 at {T5 + 1}")
+    w.stop()
     w.place(fx["fix"], fx["dll"])
+    # an index line an earlier run left for this name keeps its bookmarks when the file is the
+    # same copy, root key and all, and would hand step 9 one: the line goes while the game is down
+    idx = w.gamedir / "replays" / "index.dat"
+    if idx.exists():
+        lines = idx.read_text(errors="replace").splitlines(keepends=True)
+        idx.write_text("".join(ln for ln in lines if not ln.startswith(x2.name + "\t")))
     log = Log(w)
     rc, text = tacli("replay", "seek", w.name, T5 + 1, "--recording", x2, "--timeline", 5,
                      "--defaults", "--restart", "--keep-dll", "--perspective", P, "--timeout",
@@ -2376,6 +2391,12 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
             raise Failed(f"X2: hud state watches {st['watched']} on {on}, not {tid} on {chain}")
         return st
 
+    def bookmarks(where):
+        """The HUD's bookmark markers as `tacli hud show` lists them: their times, from the
+        span's first iteration, which every timeline of the file shares (the root's)."""
+        d = json.loads(hud(w, "show", "--json", timeout=ACK_S))
+        return [m["t"] for m in d["state"]["markers"] if m["kind"] == "bookmark"]
+
     def dump_now(dname):
         arm(w, log, f"dump {dname} now", rf"recorder: frame dump {dname} at GameTime",
             rf"recorder: (frame )?dump(:| {dname}) .*(refused|please|not letters|cannot)",
@@ -2406,6 +2427,20 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     w.trigger(f"hud seek {base}")
     if not log.wait(rf"replay: .*: at GameTime {base}, sought from ", ACK_S, n):
         raise Failed(f"X2: the HUD's seek to {base}: no seek line")
+    # 9. the bookmark, before both forks, where every timeline's chain holds it: index.dat keys
+    # it by the file's name and root key (tagpu_replays.c), so each switch's new walk reads it
+    # back (tagpu_hudmarks.c, walk_start), and so does step 7's, whose deletion grows the file
+    n = len(log.lines)
+    hud(w, "click", "bookmark", timeout=ACK_S)
+    got = log.wait(rf"replays: bookmark at \d+ in {re.escape(x2.name)} (\(\d+ now\)|refused: )",
+                   ACK_S, n)
+    if not got or "refused" in got:
+        raise Failed(f"X2: the HUD's bookmark: {got.strip() if got else 'no line'}")
+    BT = int(re.search(r"bookmark at (\d+)", got).group(1))
+    marked = bookmarks("on 2")
+    if len(marked) != 1:
+        raise Failed(f"X2: the HUD lists bookmarks at {marked} s on 2; wanted the one at "
+                     f"GameTime {BT}")
     got, n = switch(4, lane(4))
     want = f"watching timeline 4 from GameTime {base - 1} (shared history: no rebuild)"
     if want not in got or log.wait(r"replay: .*: at GameTime \d+, sought from ", 0, n):
@@ -2423,6 +2458,8 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
         raise Failed(f"X2: 0 -> 4: {got.strip()}")
     walks.append(f"4: {markers_back(n, '0 -> 4')}")
     watched(4, [0, 4])
+    if bookmarks("on 4") != marked:
+        raise Failed(f"X2: the HUD lists bookmarks at {bookmarks('on 4')} s on 4; on 2 {marked}")
     # 4. the eviction: the file's last-used order puts 2 (touched by the lane's playing of 2)
     # before 5 (made after it); the level's stamps, in the order the timelines were left -- 5 at
     # step 2, 2 at step 3, then 4 and 0 by the lanes -- put 5 first, 4 being the one watched
@@ -2508,6 +2545,9 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     if d["state"]["timeline"] != -1 or d["state"]["armed"] != -1:
         raise Failed(f"X2: after the deletion the watched lane is {d['state']['timeline']} and the "
                      f"armed one {d['state']['armed']}, not -1 and -1")
+    if bookmarks("on 0") != marked:
+        raise Failed(f"X2: the HUD lists bookmarks at {bookmarks('on 0')} s on 0 after the "
+                     f"deletion; on 2 {marked}")
     # 8. the level's end: one touch, the last timeline first, then the others as they were left;
     # 4 is deleted and skipped
     if fx["cover"]:
@@ -2529,12 +2569,18 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     if stop or sorted(now) != [0, 2, 5] or any(now[t] <= used[t] for t in (0, 2, 5)):
         raise Failed(f"X2: last-used after the touch {now}, before {used}"
                      + (f" ({stop})" if stop else ""))
+    head, c, marks = index_line(w.gamedir / "replays", x2.name)
+    key = root_key(after)
+    if head != "IMPURE-REPLAYS-INDEX\t3" or len(c) < 13 or c[2] != key or marks != str(BT):
+        raise Failed(f"X2: index {head!r}, line {chr(9).join(c)!r}; expected key {key} and the "
+                     f"bookmark {BT}")
     w.collect(out / "X2")
     w.stop()
     results.add(("forks: X2, watching another timeline in place", PASS,
                  f"by the lanes: 5 -> 2 sought at {T5 + 1}; 2 -> 4 re-chained at {base - 1}, back to 0 "
                  f"and to 4; the stamps evict 5; 4 at {F2 + 30} and past {F4}; 1 refused; 2 "
-                 f"exported; delete 4 by way of 0; touched 0, 5, 2; walks {'; '.join(walks)}"))
+                 f"exported; delete 4 by way of 0; the bookmark at {BT} listed on 2, 4 and 0, keyed "
+                 f"{key}; touched 0, 5, 2; walks {'; '.join(walks)}"))
 
 
 def forks_steps(w, fx, out, results):
@@ -2590,13 +2636,13 @@ def forks_steps(w, fx, out, results):
             raise Failed(f"forks: timeline {tl}'s playing did not touch its last-used time")
 
     def fork(tid, T, parent=0):
-        """Timeline `tid` taken over from `parent` at T, which starts at the refresh at or before
-        it (tk_bound): that GameTime, which the fork names as its fork_at."""
+        """Timeline `tid` taken over from `parent` at T, which starts at T or the refresh at or
+        before it (tarec.takeover_at): that GameTime, which the fork names as its fork_at."""
         try:
-            R = tarec.refresh_at(str(source), parent, T)
+            R = tarec.takeover_at(str(source), parent, T)
         except tarec.Unreadable as e:
-            raise CouldNotRun(f"forks: K{tid}: the refresh at or before {T}: {e}")
-        say(f"forks: K{tid} from {parent} at {T}" + (f", the refresh {R}" if R != T else ""))
+            raise CouldNotRun(f"forks: K{tid}: the takeover's start for {T}: {e}")
+        say(f"forks: K{tid} from {parent} at {T}" + (f", starting at {R}" if R != T else ""))
         T = R
         w.place(fx["fix"], fx["dll"])
         log = Log(w)
@@ -2698,16 +2744,24 @@ def forks_steps(w, fx, out, results):
                          f"{[r['id'] for r in rows if r['on_chain']]}, not {tl} on {chain}")
         # the in-game prediction is the plan's (tagpu_replay_takeover_plan), against the file's
         T = played["last"]
-        R = tarec.refresh_at(str(copy), tl, T)
-        evict = tarec.fork_prediction(segs, tl, R)
-        want = "fork would delete " + ("no timeline" if evict is None else f"timeline {evict}")
+        try:
+            R = tarec.takeover_at(str(copy), tl, T)
+            evict = tarec.fork_prediction(segs, tl, R)
+            want = "fork would delete " + ("no timeline" if evict is None else f"timeline {evict}")
+        except tarec.Unreadable as e:
+            # a start that is a timeline's first iteration: the DLL refuses it, naming the same
+            # next GameTime (takeover_point)
+            nxt = re.search(r"the first GameTime one can is (\d+)", str(e))
+            if not nxt:
+                raise CouldNotRun(f"forks: the takeover at {T} of timeline {tl}: {e}")
+            R, want = None, f"fork prediction refused: .*the first GameTime one can is {nxt[1]}"
         n = len(log.lines)
         w.trigger(f"takeover {P} at {T} dry-run")
         said = log.wait(r"replay: .*: (fork would delete (no timeline|timeline \d+)|fork "
                         r"prediction refused: |takeover refused: )", ACK_S, n)
-        rounded = R == T or log.wait(rf"a takeover asked for at GameTime {T} takes over at {R}, ",
-                                     0, n)
-        if not said or want not in said or not rounded:
+        rounded = R is None or R == T or \
+            log.wait(rf"a takeover asked for at GameTime {T} takes over at {R}, ", 0, n)
+        if not said or not re.search(want, said) or not rounded:
             raise Failed(f"forks: the in-game prediction at {T}: "
                          f"{said.strip() if said else 'no answer'}; the file's: {want} from {R}")
         # a refused seek's outcome, the HUD's toast: GameTime 0 is outside every recording
@@ -3704,12 +3758,11 @@ class Run:
                 if "K" in fx["want"]:
                     T, fx["tk_P"] = tk_point(fx, h, *fx["tk_ask"])
                     try:
-                        fx["tk_T"] = tarec.refresh_at(str(fx["rec"]), 0, T)
+                        fx["tk_T"] = tarec.takeover_at(str(fx["rec"]), 0, T)
                     except tarec.Unreadable as e:
-                        raise CouldNotRun(f"the takeover's refresh at or before {T}: {e}")
+                        raise CouldNotRun(f"the takeover's start for {T}: {e}")
                     if fx["tk_T"] != T:
-                        say(f"{name}: the takeover asked for at {T} starts at {fx['tk_T']}, the "
-                            f"refresh at or before it")
+                        say(f"{name}: the takeover asked for at {T} starts at {fx['tk_T']}")
                 for p in fx["want"][1:]:
                     if p != "F":                # F follows K, which it reads
                         self.put(name, p)

@@ -115,8 +115,10 @@ section behind its **Proposed** switch (on by default, `prop=0` turns it off). *
 its replay side** — the Forks bay and the forks housing, the axis, the fill and the shaded groove,
 Take over and the player picker, and the fork lanes — from the same rows, always (*Take over and
 the picker*, *The lanes*, and [The replay HUD in game](hud-in-game.md), *Take over* and *The
-lanes*), and `laycheck.py` checks every case at `prop=1`. Live rewind is the mockup's alone. A part the kit has no art for yet is
-drawn as whitebox: a mid-grey plate with a dark edge, and an icon it lacks as a stand-in glyph.
+lanes*), **and its live mode** (`live` in `tagpu_hudlay.c`; [the HUD in game](hud-in-game.md),
+*Live rewind*), and `laycheck.py` checks every case at `prop=1`. A part the kit has no art for
+yet is drawn as whitebox: a mid-grey plate with a dark edge, and an icon it lacks as a stand-in
+glyph.
 
 - **The Forks bay.** A bay at the timeline housing's left end, spanning the marker lane and the
   track, shows and hides the lanes; they are hidden whenever a replay starts. It shows the fold
@@ -148,10 +150,15 @@ drawn as whitebox: a mid-grey plate with a dark edge, and an icon it lacks as a 
   forks kept, the picker says which fork a take-over replaces, the one watched least recently,
   and outlines that fork's lane.
 - **Live rewind.** With `mode=live` the page shows a live game. A rewind button sits in the top
-  bar beside the Impure Config sprocket; the sprocket is drawn as a dark stand-in, since the
-  game draws it outside the HUD. The button opens a strip under the top bar over the paused game:
+  bar beside the Impure Config sprocket, which is the engine's own, drawn by the page's backdrop
+  as the game draws it, where the bars repeat as the engine repeats them. The button opens a strip under the top bar over the paused game:
   the transport, a track up to NOW, the time, **Play from here** and **Back to now**. The strip
-  reuses the bay buttons, the timeline fill and the playhead.
+  reuses the bay buttons, the timeline fill and the playhead. Its play is drawn disabled (`off`):
+  the rewind holds the past paused and has no verb that plays it. Its fwd is drawn disabled while
+  the playhead is at the strip's end (`off_at_end`), the rewind open and not yet moved, with
+  nothing ahead of it; from the past, a fwd that reaches the recording's last GameTime, a tick
+  before the strip's end, is Back to now, in the page as in the game. Play from here is drawn pressed
+  while it is armed (the game's dump, `rw.arm` 2), and `?state=` draws the game's live dump.
 
 The shell screens of variation B (fork rows in the Replays browser, Delete and Play on there,
 Rewind on the end screen, and the Record games and Keep replays rows in Impure Config) are
@@ -337,7 +344,7 @@ from 3.79 % (best at a one-pixel shift) to 1.25 % (at none).
 - **A disabled control** is drawn at its `off` opacity as one layer, its part, icon, stripe and
   text composited first and the whole faded once, as CSS `opacity` on its element does; it has no
   clickable of its own: the TEAMS chip when the teams are not told apart (one team, or a free-for-all), at
-  `split.off` (0.45).
+  `split.off` (0.45); the live strip's play, always, and its fwd at the strip's end, both at 0.45.
 - **An inset edge** — a resource bar's, the toast's, the replace outline, a dark legend swatch's —
   is a ring of four solids on both sides (`ring` in `tagpu_hudlay.c` and `hud.js`): the top and
   bottom across the box, the sides between them, each snapped to whole pixels on its own. laycheck
@@ -492,10 +499,15 @@ track's x plus `ends` plus (w − 2 × `ends`) × t / T.
 ### The toast
 
 A short message (`toast` in the state) in a dark box centred across the screen, `toast.top` of
-its height down, above everything: a `toast.w` × `toast.h` box (150 × 18) in `toast.bg` at
-`toast.alpha`, an edge of `toast.edge` in `toast.edge_colour`, the text in the `toast` style,
-centred. The box is the layout's size, not the text's, since the DLL lays out without the faces'
-metrics. It shows for `toast.ms` (1800).
+its height down, above everything: a box `toast.h` (18) tall in `toast.bg` at `toast.alpha`, an
+edge of `toast.edge` in `toast.edge_colour`, the text in the `toast` style, centred. The box is as
+wide as the text and `toast.pad` (8) each side, never narrower than `toast.w` (150) nor wider than
+`toast.max_w` (260): the mockup measures the text in its face in a canvas, and the DLL with the
+faces it draws with (`tagpu_hudlay_measure`, `tagpu_hudtext_width`). The text's box is the
+toast's less `toast.pad` each side, so a text longer than `toast.max_w` allows is cut there, never
+drawn over the edge or past the box. On the live HUD, while the
+strip is open, it sits clear of the strip: `2·strip.t + strip.h` under the bar, or `toast.top`
+when that is lower. It shows for `toast.ms` (1800).
 
 ### The stats window
 
@@ -580,7 +592,7 @@ The rules:
 ## Checking the C against the mockup
 
 `tools/hudart/laycheck.py` opens the mockup headless at its default `prop=1` with two forks
-kept, the game's look, for twenty-three cases (4K at 150 with two
+kept, the game's look, for thirty cases (4K at 150 with two
 teams, 4K at Auto with the list too long, 1080p at 100 with one team, 1440p at 75 with a row
 hovered and a button held, 4K at 150 as a six-player free-for-all, 4K at 150 as a 2v1v1, 4K at
 150 with fourteen players scrolled to item 3 and a toast, 1440p at 75 with the first row hovered
@@ -597,7 +609,11 @@ lanes open on the seed's three forks, the third by branch point a fork of the fi
 the chain filled along the first lane to its branch), `1080-100-lanes-picker` (the replace
 outline) and `4k-150-lanes-held` (a lane held), and `1080-100-lanes-dpr1`, the lanes at the
 game's own 1.5 pixels a unit with the browser at one device pixel to a CSS pixel, where the boxes
-fall on half pixels), takes the mockup's state and
+fall on half pixels, and seven of the live HUD: `4k-150-live` (the rewind button alone),
+`1080-100-live-rw` and `1440-75-live-rw` (its strip open), `1080-100-live-open` (the strip just
+opened, fwd disabled at its end), and the toast clear of the open strip and where it is closed,
+`1080-100-live-rw-toast`, `4k-150-live-rw-toast` (the eviction's warning) and
+`1440-75-live-toast`), takes the mockup's state and
 every element's box in HUD units, runs `tagpu_hudlay.c` compiled natively (`laycheck.c`) on the
 same state, and pairs the two element by element: every part by name and painted opacity (its own
 times its ancestors', as a disabled button's icon is dimmed), every text by its string and painted
@@ -622,7 +638,8 @@ for input, on all thirteen with the stats window (2026-10-09), on all eighteen a
 (2026-10-23), on all twenty-two with the lanes (2026-10-23), and on all twenty-three with every
 box's device pixels and every grid and 9-slice part's pieces (2026-10-23): the two agree, and across
 the cases the 1615 parts, 974 solids, 173 dots and 25 clips are each on the same pixels in the
-DLL, pinned and painted. A halo
+DLL, pinned and painted; and on all thirty with the live HUD and every inset edge a ring of four
+solids (2026-10-23). A halo
 polyline is told from its line by its `stroke-opacity`, which only the halo carries. At 4K every
 box is within 0.018 units and every baseline within 0.0145 (the twenty-two cases, 2026-10-23). The Oswald residual above is named, not failed, and only where the same rule on
 Chrome's own rounded ascent and descent (`measureText`'s `fontBoundingBoxAscent`/`Descent`) gives
