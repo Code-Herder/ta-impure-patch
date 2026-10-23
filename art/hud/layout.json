@@ -133,7 +133,7 @@
  },
 
  "proposed": {
-  "about": "Variation B of the replay UI's missing features, whitebox: forks as lanes over the timeline, Take over and its player picker, live rewind. The mockup draws it behind its Proposed switch; the DLL does not read it yet. A part the kit lacks is drawn as whitebox.",
+  "about": "Variation B of the replay UI's missing features, whitebox: forks as lanes over the timeline, Take over and its player picker, live rewind. The mockup draws it behind its Proposed switch; the DLL draws it: hud.js and tagpu_hudlay.c read the same rows. A part the kit lacks is drawn as whitebox.",
   "forks": {
    "max": 3,
    "plate": {"part": "lanes_plate", "gap": 3, "pad": [0, 4, 0, 4]},

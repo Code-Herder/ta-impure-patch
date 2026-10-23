@@ -74,6 +74,12 @@ int main(int argc, char** argv)
     if (!(kt = slurp(path, &nk))) { fprintf(stderr, "laycheck: cannot read %s\n", path); return 2; }
     if (!(l = tagpu_hudlay_load(lt, nl, kt, nk, png_size, argv[1], err, sizeof err))) { fprintf(stderr, "laycheck: %s\n", err); return 1; }
     if (!(stt = slurp(argv[2], &ns)) || !(sd = tagpu_json_parse(stt, ns, err, sizeof err))) { fprintf(stderr, "laycheck: state: %s\n", err); return 2; }
+    /* the fork limit is the mockup's, the layout's proposed.forks.max; the game's is the recorder's */
+    {
+        TJDOC* ld = tagpu_json_parse(lt, nl, err, sizeof err);
+        st->fork_max = ld ? (int)tj_num(tj_get(tj_get(tj_get(tagpu_json_root(ld), "proposed"), "forks"), "max"), 0) : 0;
+        tagpu_json_free(ld);
+    }
 
     S = tagpu_json_root(sd);
     st->W = (float)tj_num(tj_get(S, "W"), 0);
@@ -125,6 +131,28 @@ int main(int argc, char** argv)
     st->follow = (int)tj_num(tj_get(S, "follow"), -1);
     st->scroll = (int)tj_num(tj_get(S, "scroll"), 0);
     snprintf(st->toast, sizeof st->toast, "%s", tj_str(tj_get(S, "toast"), ""));
+    /* proposed, variation B: the mockup's names (index.html `state()`); a state without them is the
+       original's alone */
+    st->ends = (float)tj_num(tj_get(S, "ends"), st->T);
+    st->len = (float)tj_num(tj_get(S, "len"), st->T);
+    st->fill_to = (float)tj_num(tj_get(S, "fillTo"), st->T);
+    st->timeline = (int)tj_num(tj_get(S, "timeline"), -1);
+    st->lanes_open = tj_is(tj_get(S, "lanesOpen"), TJ_TRUE);
+    st->picker = tj_is(tj_get(S, "picker"), TJ_TRUE);
+    st->armed = (int)tj_num(tj_get(S, "armed"), -1);
+    st->replace = (int)tj_num(tj_get(S, "replace"), -1);
+    /* the Take over button is down while the picker is open, and the picker's title is the
+       playhead's clock: the mockup's st.t */
+    st->pick_down = st->picker;
+    st->pick_t = st->t;
+    v = tj_get(S, "forks");
+    for (e = v ? v->first : NULL; e && st->nfork < HUD_MAXFORK; e = e->next) {
+        HUDFORK* f = &st->fork[st->nfork++];
+        f->id = (int)tj_num(tj_get(e, "id"), 0);
+        snprintf(f->name, sizeof f->name, "%s", tj_str(tj_get(e, "name"), ""));
+        f->from = (float)tj_num(tj_get(e, "from"), 0);
+        f->end = (float)tj_num(tj_get(e, "end"), 0);
+    }
     v = tj_get(S, "stats");
     if (v) {
         HUDSTATS* x = &st->stats;

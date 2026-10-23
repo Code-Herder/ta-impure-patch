@@ -174,16 +174,20 @@ static void stat_drag(int cx, int cy)
     s_statPlaced = 1;
 }
 
-/* the timeline: the playhead's run is the recording, first to last */
+/* THE TIMELINE: a click is mapped on the span the track was drawn with, the drawn frame's axis, so
+   it lands where the player saw that time on the track even when the axis has changed since the
+   draw (a fork made or deleted, the lanes opened). The axis is the render thread's data and turns
+   a pixel into a GameTime only; tagpu_replay_seek_request clamps that to the playing's own span,
+   so a stale axis costs a seek to a slightly different time, never one outside the recording. */
 static void seek_at(int cx)
 {
     int x0 = s_hit.track_x0, x1 = s_hit.track_x1;
     double f;
     unsigned T;
-    if (x1 <= x0 || s_last <= s_first) return;
+    if (x1 <= x0 || s_hit.t_last <= s_hit.t_first) return;
     f = (double)(cx - x0) / (double)(x1 - x0);
     f = f < 0 ? 0 : f > 1 ? 1 : f;
-    T = s_first + (unsigned)(f * (double)(s_last - s_first) + 0.5);
+    T = s_hit.t_first + (unsigned)(f * (double)(s_hit.t_last - s_hit.t_first) + 0.5);
     if (T == s_dragT) return;
     s_dragT = T;
     tagpu_replay_seek_request(T);

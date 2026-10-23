@@ -212,7 +212,7 @@ typedef struct {
     int    hasw, hash;
     double w, h;
     char   ax, ay;
-    int    centre;          /* a text slot's `align: "c"` */
+    int    centre;          /* a text slot's `align`: 1 "c", 2 "r", 0 from the left */
     double fit;             /* a text slot's `fit`, 0 = none */
     const TJV* src;         /* the JSON object it was read from, for messages */
 } PL;
@@ -240,7 +240,10 @@ static PL spec(const TJV* o)
     if ((v = tj_get(o, "h"))) { s.hash = 1; s.h = tj_num(v, 0); }
     s.ax = tj_str(tj_get(o, "ax"), "c")[0];
     s.ay = tj_str(tj_get(o, "ay"), "c")[0];
-    s.centre = tj_str(tj_get(o, "align"), "")[0] == 'c';
+    {
+        char al = tj_str(tj_get(o, "align"), "")[0];
+        s.centre = al == 'c' ? 1 : al == 'r' ? 2 : 0;
+    }
     s.fit = tj_num(tj_get(o, "fit"), 0);
     return s;
 }
@@ -451,17 +454,23 @@ static void button(C* c, const BTN* s, const TJV* kind, R b, int on)
 
 static double along(double w, double e, double f) { return e + (w - 2 * e) * f; }
 
+static void forks_bay(C* c, const F* fr, double rx, double y);
+static void takeover(C* c, R tb);
+
 static void dock(C* c)
 {
     const HUDSTATE* st = c->st;
     const TJV *D = obj(c, c->L, "dock"), *T = obj(c, D, "transport"), *Rl = obj(c, D, "rail");
     const TJV *tbtn = obj(c, T, "button"), *btns = arr(c, T, "buttons"), *M = obj(c, Rl, "markers");
     const TJV *Bd = obj(c, M, "badge"), *tk = obj(c, Rl, "track"), *fill = obj(c, tk, "fill"), *ph = obj(c, tk, "playhead");
-    const TJV *tm = obj(c, Rl, "time");
+    const TJV *tm = obj(c, Rl, "time"), *P = obj(c, obj(c, c->L, "proposed"), "forks");
     double Dh = num(c, D, "h"), y = st->H - st->bottom - Dh, Tw = num(c, T, "w");
     R tb = box(st->panel + num(c, T, "l"), y, Tw, Dh);
     F f = frame(c->l, Tw, Dh, str(c, T, "part")), fr;
     double rx, rw, p = st->T > 0 ? st->t / st->T : 0, ends;
+    /* the share of the track filled: to the playhead, or to where the watched chain leaves the
+       original (hud.js `filled`) */
+    double pf = st->T > 0 ? fmin(st->t, st->fill_to) / st->T : 0;
     R lane, tr, fb, phb;
     PL pl;
     int i;
@@ -495,13 +504,15 @@ static void dock(C* c)
 
     rx = tb.x + Tw + num(c, Rl, "gap");
     rw = st->W - num(c, Rl, "r") - rx;
-    fr = frame(c->l, rw, Dh, str(c, Rl, "part"));
+    /* the housing painted with the Forks bay's pocket at its left end: the game always draws the
+       proposed features, the mockup's switch is its own */
+    fr = frame(c->l, rw, Dh, str(c, P, "rail"));
     pl = spec(M);
     lane = place(c, &fr, &pl);
     pl = spec(tk);
     tr = place(c, &fr, &pl);
     hot(c, box(rx, y, rw, Dh), str(c, D, "act"));
-    art(c, str(c, Rl, "part"), box(rx, y, rw, Dh), 1);
+    art(c, str(c, P, "rail"), box(rx, y, rw, Dh), 1);
     {
         double me = num(c, M, "ends"), dot = num(c, Bd, "dot"), ic = num(c, Bd, "icon");
         const TJV* icons = obj(c, M, "icons");
@@ -529,7 +540,14 @@ static void dock(C* c)
         c->o->track_x1 = (float)(trb.x + along(tr.w, ends, 1));
         fb = box(trb.x + p0, trb.y + p1, tr.w - p0 - p2, tr.h - p1 - p3);
         if ((a = art(c, str(c, fill, "part"), fb, 1))) {
-            a->clip.x = (float)fb.x; a->clip.y = (float)fb.y; a->clip.w = (float)(fb.w * p); a->clip.h = (float)fb.h;
+            a->clip.x = (float)fb.x; a->clip.y = (float)fb.y; a->clip.w = (float)(fb.w * pf); a->clip.h = (float)fb.h;
+        }
+        /* the groove past the original's end, when a fork runs longer: shaded, the original has
+           nothing there (hud.js `after`) */
+        if (st->ends < st->T) {
+            const TJV* A = obj(c, P, "after");
+            double ax = along(tr.w, ends, st->ends / st->T);
+            solid(c, box(trb.x + ax, fb.y, fb.w - (ax - p0), fb.h), hexrgb(str(c, A, "colour")), num(c, A, "alpha"));
         }
         memset(&pl, 0, sizeof pl);
         pl_pad(&pl, tj_get(ph, "pad"));
@@ -539,11 +557,52 @@ static void dock(C* c)
             art(c, str(c, ph, "part"), box(trb.x + phx - pw / 2, trb.y + phb.y, pw, phb.h), 1);
         }
     }
+    /* the playhead's clock and the watched chain's end */
     clock_s(t0, sizeof t0, st->t);
-    clock_s(t1, sizeof t1, st->T);
+    clock_s(t1, sizeof t1, st->len);
     snprintf(tx, sizeof tx, "%s / %s", t0, t1);
     pl = spec(tm);
     text(c, tx, at(place(c, &fr, &pl), rx, y), str(c, tm, "style"), &pl, 0, 0);
+    forks_bay(c, &fr, rx, y);
+    takeover(c, tb);
+}
+
+/* the Forks bay at the housing's left end opens and closes the lanes and counts the forks; it
+   sits in the pocket painted for it in the housing (fr, the housing's frame) */
+static void forks_bay(C* c, const F* fr, double rx, double y)
+{
+    const HUDSTATE* st = c->st;
+    const TJV *B = obj(c, obj(c, obj(c, c->L, "proposed"), "forks"), "bay"), *ic = obj(c, B, "icon"), *cn = obj(c, B, "count");
+    int n = st->nfork, open = st->lanes_open && n > 0;
+    double cy = num(c, cn, "y");
+    PL p = spec(B);
+    R b = at(place(c, fr, &p), rx, y);
+    BTN bt;
+    char s[16];
+    memset(&bt, 0, sizeof bt);
+    bt.key = "lanes";
+    bt.icon = ic;
+    bt.icon_name = str(c, ic, open ? "open" : "closed");
+    bt.off = n ? 0 : num(c, B, "off");
+    button(c, &bt, B, b, open);
+    snprintf(s, sizeof s, "%d", n);
+    memset(&p, 0, sizeof p);
+    p.centre = 1;
+    text(c, s, box(b.x, b.y + b.h * cy, b.w, b.h * (1 - cy)), str(c, cn, "style"), &p, 0, 0);
+}
+
+/* Take over at the playhead: a button on the transport plate, as wide as it, level with the lanes;
+   it opens the picker, and is down while the picker is asked for, sought to or open */
+static void takeover(C* c, R tb)
+{
+    const TJV* T = obj(c, obj(c, obj(c, c->L, "proposed"), "forks"), "takeover");
+    double h = num(c, T, "h");
+    BTN bt;
+    memset(&bt, 0, sizeof bt);
+    bt.key = "takeover";
+    bt.textspec = obj(c, T, "text");
+    bt.text = str(c, T, "label");
+    button(c, &bt, T, box(tb.x, tb.y - num(c, T, "gap") - h, tb.w, h), c->st->pick_down);
 }
 
 /* ---- the column: team headers and player rows from the top bar down, as many as fit above the
@@ -1137,6 +1196,71 @@ static void chart(C* c, R cb, double Rl)
 #undef Y
 }
 
+/* ---- the player picker, opened by Take over: every player, the one taken over played by you from
+   the picker's start and the others by the computer. A player out of the game there -- no unit
+   left, the column's dim rule -- cannot be taken, as the takeover itself refuses one (tk_bound).
+   At the fork limit it says which fork goes ----------------------------------------------------- */
+
+static void picker(C* c)
+{
+    const HUDSTATE* st = c->st;
+    const TJV *Pr = obj(c, c->L, "proposed"), *Pk = obj(c, Pr, "picker"), *Rw = obj(c, Pk, "row"), *Ti = obj(c, Pk, "title");
+    const TJV *Wr = obj(c, Pk, "warn"), *Sp = obj(c, Rw, "stripe"), *Nm = obj(c, Rw, "name"), *Nt = obj(c, Rw, "note");
+    const TJV *D = obj(c, c->L, "dock"), *T = obj(c, obj(c, Pr, "forks"), "takeover");
+    const TJV *tp = arr(c, Ti, "pad"), *wp = arr(c, Wr, "pad");
+    double pad = num(c, Pk, "pad"), w = num(c, Pk, "w"), th = num(c, Ti, "h"), rh = num(c, Rw, "h"), rg = num(c, Rw, "gap");
+    double line = num(c, Wr, "line"), off = num(c, Rw, "off"), sw = num(c, Sp, "w"), spad = num(c, Sp, "pad");
+    double ty = st->H - st->bottom - num(c, D, "h") - num(c, T, "gap") - num(c, T, "h"), h, x, y;
+    int full = st->fork_max > 0 && st->nfork >= st->fork_max, wn = full ? 2 : 0, k;
+    uint32_t wrgb = hexrgb(str(c, Wr, "colour"));
+    char s[96], t0[16], key[HUD_KEYLEN];
+    PL p;
+
+    h = pad + th + st->nseat * (rh + rg) + (wn ? tj_num(tj_at(wp, 1), 0) + wn * line + tj_num(tj_at(wp, 3), 0) : 0) + pad;
+    x = st->panel + num(c, obj(c, D, "transport"), "l");
+    y = ty - num(c, Pk, "gap") - h;
+    /* the plate is the HUD's whole, as the dock's is: placed before its rows, so the hit test, last
+       first, finds a row over it */
+    hot(c, box(x, y, w, h), "picker");
+    art(c, str(c, Pk, "part"), box(x, y, w, h), 1);
+    clock_s(t0, sizeof t0, st->pick_t);
+    snprintf(s, sizeof s, "Take over at\xC2\xA0%s\xC2\xA0" "as", t0);     /* NO-BREAK SPACEs */
+    memset(&p, 0, sizeof p);
+    text(c, s, box(x + pad + tj_num(tj_at(tp, 0), 0), y + pad,
+                   w - 2 * pad - tj_num(tj_at(tp, 0), 0) - tj_num(tj_at(tp, 2), 0), th), str(c, Ti, "style"), &p, 0, 0);
+    for (k = 0; k < st->nseat && k < HUD_MAXSEAT; k++) {
+        const HUDSEAT* q = &st->seat[k];
+        R rb = box(x + pad, y + pad + th + k * (rh + rg), w - 2 * pad, rh);
+        F f = frame(c->l, rb.w, rh, NULL);
+        int gone = q->out, pressed;
+        snprintf(key, sizeof key, "takeas:%d", k);
+        pressed = !gone && c->st->held[0] && !strcmp(c->st->held, key);
+        if (!gone) hot(c, rb, key);
+        art(c, str(c, Rw, pressed ? "pressed" : "part"), rb, gone ? off : 1);
+        memset(&p, 0, sizeof p);
+        p.pad[0] = p.pad[1] = p.pad[3] = spad;
+        p.hasw = 1; p.w = sw; p.ax = 'l';
+        solid(c, at(place(c, &f, &p), rb.x, rb.y), q->colour, gone ? off : 1);
+        p = spec(Nm);
+        text(c, q->name, at(place(c, &f, &p), rb.x, rb.y), str(c, Nm, "style"), &p, 0, 0);
+        if (gone) {
+            p = spec(Nt);
+            p.centre = 2;
+            text(c, "defeated", at(place(c, &f, &p), rb.x, rb.y), str(c, Nt, "style"), &p, 0, 0);
+        }
+    }
+    if (wn) {
+        const HUDFORK* r = st->replace >= 0 && st->replace < st->nfork ? &st->fork[st->replace] : &st->fork[0];
+        double y0 = y + pad + th + st->nseat * (rh + rg) + tj_num(tj_at(wp, 1), 0);
+        double lx = x + pad + tj_num(tj_at(wp, 0), 0), lw = w - 2 * pad - tj_num(tj_at(wp, 0), 0) - tj_num(tj_at(wp, 2), 0);
+        memset(&p, 0, sizeof p);
+        snprintf(s, sizeof s, "%d of %d forks kept: this one", st->fork_max, st->fork_max);
+        text(c, s, box(lx, y0, lw, line), str(c, Wr, "style"), &p, wrgb, 0);
+        snprintf(s, sizeof s, "replaces F%d, the one watched least recently", r->id);
+        text(c, s, box(lx, y0 + line, lw, line), str(c, Wr, "style"), &p, wrgb, 0);
+    }
+}
+
 /* ---- the toast: a short message in a dark box centred across the screen, above everything; the box
    is the layout's size, not the text's, since this file has no faces to measure text with ------- */
 
@@ -1169,6 +1293,7 @@ int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* e
     dock(&c);
     column(&c);
     if (st->stats.open) window_(&c);
+    if (st->picker) picker(&c);
     if (st->toast[0]) toast(&c);
     return !c.bad;
 }
@@ -1463,9 +1588,14 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     /* Every branch once: teams with headers, a folded team, a lost commander, a player out of
        the game, each marker kind, a hovered row with Sight on, a held button, every toggle, a
        toast, the stats window with a dark line and a commander's cross, and a column too short
-       for its items and scrolled, so the scroll bar is drawn. */
+       for its items and scrolled, so the scroll bar is drawn; then the proposed features: three
+       forks, one watched and the limit reached, the axis past the original's end, the Take over
+       button down and the picker open with a row that cannot be taken. */
     st->W = 1280; st->H = 720; st->panel = 128; st->top = 32; st->bottom = 32;
     st->t = 30; st->T = 60; st->playing = 1; st->speed = 1; st->hud = 1;
+    st->ends = st->len = st->fill_to = 60;
+    st->fork_max = HUD_MAXFORK;
+    st->timeline = st->replace = st->armed = -1;
     st->nseat = HUD_MAXSEAT;
     for (i = 0; i < HUD_MAXSEAT; i++) {
         HUDSEAT* q = &st->seat[i];
@@ -1499,6 +1629,23 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(l, o, "first build", err, errn)) goto done;
     st->H = 300; st->scroll = 1;    /* the scroll bar */
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(l, o, "scrolled build", err, errn)) goto done;
+    st->H = 720; st->scroll = 0;
+    st->T = 90; st->ends = 60; st->len = 80; st->fill_to = 20;
+    st->nfork = HUD_MAXFORK;
+    for (i = 0; i < HUD_MAXFORK; i++) {
+        HUDFORK* f = &st->fork[i];
+        f->id = i + 1;
+        snprintf(f->name, sizeof f->name, "P%d", i);
+        f->from = 20.0f + 10.0f * (float)i;
+        f->end = 60.0f + 10.0f * (float)i;
+        f->flags = i == 1 ? 1 | 2 : 0;          /* watched, and on the chain (TAGPU_PK_FORK_*) */
+    }
+    st->timeline = 1;
+    st->replace = 1;
+    st->picker = st->pick_down = 1;
+    st->pick_t = 30;
+    strcpy(st->held, "takeas:0");
+    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(l, o, "forks build", err, errn)) goto done;
     ok = 1;
 done:
     free(st);

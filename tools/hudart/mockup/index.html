@@ -164,7 +164,10 @@ function state() {
   if (GAME) { const g = GAME.state;
     return { W: g.W, H: g.H, frame: g.frame, t: g.t, T: g.T, playing: g.playing, speed: g.speed, hud: g.hud, seats: g.seats, teams: g.teams,
       folded: g.folded, markers: g.markers, toggles: g.toggles, sight: g.sight, follow: g.follow, scroll: g.scroll, toast: g.toast,
-      stats: g.stats }; }
+      stats: g.stats,
+      // the proposed features as the game drew them: its forks, its axis and fill, its picker
+      ...(g.forks ? { ends: g.ends, len: g.len, fillTo: g.fillTo, timeline: g.timeline, lanesOpen: g.lanesOpen, picker: g.picker,
+                      armed: g.armed, replace: g.replace, forks: g.forks } : {}) }; }
   const base = { W: w / u, H: h / u, frame: { panel: ef.panel / ud, top: ef.bar / ud, bottom: ef.bar / ud } };
   if (S.prop && S.mode === 'live') return { ...base, t: S.t, T, playing: S.playing, speed: S.speed, hud: S.hud, live: { open: S.rw }, toast: S.toast, stats: { open: false } };
   const fl = S.prop ? forkList() : null, lru = fl && fl.length >= FORK_MAX ? fl.indexOf(fl.reduce((a, f) => f.seen < a.seen ? f : a)) : -1;

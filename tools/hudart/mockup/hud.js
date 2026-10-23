@@ -230,7 +230,9 @@ const HUD = (() => {
     let inner = text(`Take over at&nbsp;<span data-tot>${clock(st.t)}</span>&nbsp;as`, { x: Pk.pad + Pk.title.pad[0], y: Pk.pad, w: Pk.w - 2 * Pk.pad - Pk.title.pad[0] - Pk.title.pad[2], h: Pk.title.h }, Pk.title.style);
     ps.forEach((p, k) => {
       const y = Pk.pad + Pk.title.h + k * (R.h + R.gap), rb = { x: Pk.pad, y, w: Pk.w - 2 * Pk.pad, h: R.h }, F = frame(rb.w, R.h);
-      const gone = p.lost && p.out && st.t >= p.death;
+      // a player out of the game cannot be taken: the column's dim rule, the one the game's takeover refuses by too
+      // (no unit left at the picker's start)
+      const gone = p.out;
       const row = `<div class="box" style="${rect(place(F, { pad: [R.stripe.pad, R.stripe.pad, 0, R.stripe.pad], w: R.stripe.w, ax: 'l' }))};background:${p.colour}"></div>`
         + text(esc(p.name), place(F, { pad: R.name.pad }), R.name.style, R.name) + (gone ? text('defeated', place(F, { pad: R.note.pad }), R.note.style, { align: 'r' }) : '');
       inner += art(R.part, rb, row, gone ? 'off' : 'hot', { act: 'takeas', seat: p.i, up: R.part, down: R.pressed }, gone ? `;opacity:${R.off}` : '');

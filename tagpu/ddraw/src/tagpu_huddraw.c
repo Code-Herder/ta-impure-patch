@@ -375,7 +375,7 @@ static void text(B* c, const HUDOP* op)
         x = op->r.x * c->px - (op->centre == 1 ? width / 2 : op->centre == 2 ? width : 0);
         base = floorf(op->r.y * c->px + 0.5f);
     } else {
-        x = op->r.x * c->px + (op->centre ? (op->r.w * c->px - width) / 2 : 0);
+        x = op->r.x * c->px + (op->centre == 1 ? (op->r.w * c->px - width) / 2 : op->centre == 2 ? op->r.w * c->px - width : 0);
         /* Chrome's baseline (tagpu_hudlay_baseline), painted on a whole pixel */
         base = floorf(tagpu_hudlay_baseline(op->r.y * c->px, op->r.h * c->px, size, f->ascent, f->descent) + 0.5f);
     }

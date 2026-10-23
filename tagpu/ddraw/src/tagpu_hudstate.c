@@ -124,6 +124,9 @@ static unsigned s_frame;                /* the render-thread frame `s_st` is for
 static float    s_px;
 static int      s_ox, s_oy;
 static uint8_t  s_seatOf[TAGPU_PK_HUD_SEATS];   /* row i's recorded seat, this frame's   */
+static unsigned s_tFirst, s_tLast;      /* the GameTime span the track is drawn with, this frame's */
+static unsigned s_pick, s_pickR, s_pickEvict;   /* the picker's state as the input keeps it, for
+                                                   the dump                                  */
 /* THE HIT MAP OF THE LAST FRAME DRAWN: written by the Vulkan pass once it has built a frame it will
    draw (tagpu_hudstate_drawn), read by the dump and then by the next command record
    (tagpu_hudstate_cmd), which empties it, all on this thread. So each drawn frame's map is posted
@@ -243,6 +246,20 @@ static void dump(const HUDSTATE* st, int vw, int vh, float u, int q8)
        clicks */
     fprintf(f, ",\"held\":");
     jstr(f, st->held);
+    /* proposed, variation B, under the mockup's names */
+    fprintf(f, ",\"ends\":%.9g,\"len\":%.9g,\"fillTo\":%.9g,\"timeline\":%d,\"lanesOpen\":%s,\"picker\":%s,"
+               "\"armed\":%d,\"replace\":%d,\"forks\":[", st->ends, st->len, st->fill_to, st->timeline,
+            st->lanes_open ? "true" : "false", st->picker ? "true" : "false", st->armed, st->replace);
+    for (i = 0; i < st->nfork; i++) {
+        fprintf(f, "%s{\"id\":%d,\"name\":", i ? "," : "", st->fork[i].id);
+        jstr(f, st->fork[i].name);
+        fprintf(f, ",\"from\":%.9g,\"end\":%.9g}", st->fork[i].from, st->fork[i].end);
+    }
+    /* the picker for the tests: 0 closed, 1 asked or seeking, 2 open; R and the eviction as
+       GameTimes and a timeline id */
+    fprintf(f, "],\"pick\":{\"state\":%u,\"R\":%u,\"evict\":", s_pick, s_pickR);
+    if (s_pickEvict == UINT32_MAX) fprintf(f, "null}");
+    else fprintf(f, "%u}", s_pickEvict);
     /* the stats window whole, as the mockup's state carries it */
     fprintf(f, ",\"stats\":{\"open\":%s,\"x\":%.9g,\"y\":%.9g,\"measure\":", st->stats.open ? "true" : "false",
             st->stats.x, st->stats.y);
@@ -332,6 +349,45 @@ static void stats(const struct TAGPU_PACKET* pk, const TAGPU_PK_HUD* h, HUDSTATE
     }
 }
 
+/* a GameTime in seconds from the track's start, held to [first, axis] */
+static float on_axis(unsigned T, unsigned first, unsigned axis)
+{
+    return (float)((T < first ? first : T > axis ? axis : T) - first) / TICKS;
+}
+
+/* THE FORKS AND THE PICKER, as the fill and the input keep them: each fork named by the seat it was
+   played as, as the packet's seats carry it, and the watched one, the one a takeover would
+   replace and the picker's start by their places in the list */
+static void forks(const TAGPU_PK_HUD* h, HUDSTATE* st, unsigned axis)
+{
+    int i, j;
+    st->nfork = h->nfork < HUD_MAXFORK ? h->nfork : HUD_MAXFORK;
+    st->fork_max = h->fork_max;
+    st->timeline = st->replace = st->armed = -1;
+    for (i = 0; i < st->nfork; i++) {
+        const TAGPU_PK_HUDFORK* k = &h->fork[i];
+        HUDFORK* f = &st->fork[i];
+        f->id = (int)k->id;
+        f->parent = (int)k->parent;
+        f->flags = k->flags;
+        f->from = on_axis(k->from, h->first, axis);
+        f->end = on_axis(k->end, h->first, axis);
+        for (j = 0; j < h->nseat && j < (int)TAGPU_PK_HUD_SEATS && h->seat[j].seat != k->seat; j++) {}
+        if (j < h->nseat && j < (int)TAGPU_PK_HUD_SEATS)
+            latin1_utf8(f->name, sizeof f->name, h->seat[j].name, sizeof h->seat[j].name);
+        else
+            snprintf(f->name, sizeof f->name, "Player %u", (unsigned)k->seat + 1);
+        if (k->flags & TAGPU_PK_FORK_WATCHED) st->timeline = i;
+    }
+    st->picker = h->pick == 2;
+    st->pick_down = h->pick != 0;
+    st->pick_t = on_axis(h->pick_R, h->first, axis);
+    st->lanes_open = h->lanes != 0;
+    if (st->picker)
+        for (i = 0; i < st->nfork; i++)
+            if (h->pick_evict != UINT32_MAX && st->fork[i].id == (int)h->pick_evict) st->replace = i;
+}
+
 void tagpu_hudstate_present(const TAGPU_FRAME* f)
 {
     const struct TAGPU_PACKET* pk = f->packet;
@@ -339,7 +395,7 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
     const unsigned char* pal = tagpu_pal_live();
     HUDSTATE* st = &s_st;
     int vw = f->vp_w, vh = f->vp_h, pw = 128, bh = 32, q8 = 256, i, k;
-    unsigned end;
+    unsigned end, axis;
     float u;
 
     s_have = 0;
@@ -359,9 +415,16 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
     st->panel = (float)pw * (float)vw / (float)f->game_width / u;
     st->top = st->bottom = (float)bh * (float)vh / (float)f->game_height / u;
 
-    /* the playhead stops at the recording's end; GameTime runs on past it */
+    /* THE TRACK'S AXIS is the fill's (axis_last): the original's span, or the longest live chain's
+       while the lanes are open or a fork is watched. The playhead stops at the end of the chain
+       that plays; GameTime runs on past it. Every time below is held to the axis, so a value the
+       fill got wrong draws in the wrong place on the track, never off it. */
     end = h->last > h->first ? h->last : h->first;
-    st->T = (float)(end - h->first) / TICKS;
+    axis = h->axis_last > end ? h->axis_last : end;
+    st->T = (float)(axis - h->first) / TICKS;
+    st->len = (float)(end - h->first) / TICKS;
+    st->ends = on_axis(h->orig_last, h->first, axis);
+    st->fill_to = on_axis(h->fill_to, h->first, axis);
     st->t = (float)((h->now < h->first ? h->first : h->now > end ? end : h->now) - h->first) / TICKS;
     /* at the recording's end the button shows play, as the mockup's does: the playhead has
        stopped, and a click there starts the recording over (tagpu_hudinput.c) */
@@ -421,6 +484,12 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
     st->held[sizeof st->held - 1] = 0;
     memcpy(st->toast, h->toast, sizeof st->toast);
     st->toast[sizeof st->toast - 1] = 0;
+    forks(h, st, axis);
+    s_tFirst = h->first;
+    s_tLast = axis;
+    s_pick = h->pick;
+    s_pickR = h->pick_R;
+    s_pickEvict = h->pick_evict;
     s_px = u;
     s_frame = f->frame_counter;
     s_have = 1;
@@ -460,6 +529,8 @@ void tagpu_hudstate_drawn(const HUDOPS* ops)
                    TAGPU_CMD_HUDHITS);
     }
     s_map.u = s_px;
+    s_map.t_first = s_tFirst;
+    s_map.t_last = s_tLast;
     s_map.W = s_st.W;
     s_map.H = s_st.H;
     s_map.track_x0 = dev((float)s_ox + ops->track_x0 * s_px);

@@ -142,7 +142,7 @@ typedef struct {
     uint32_t rgba;          /* HOP_SOLID, HOP_DOT: the colour; HOP_PART: 0xFFFFFF00 | opacity */
     float    shade;         /* HOPF_SHADE                                                 */
     int16_t  style;         /* HOP_TEXT: the style's index in layout.json `styles`        */
-    uint8_t  centre;        /* HOP_TEXT: centred, else from the box's left                */
+    uint8_t  centre;        /* HOP_TEXT: 1 centred, 2 to the box's right, 0 from its left */
     float    size;          /* HOP_TEXT: the font size in units, after `fit`              */
     uint16_t run, nrun;     /* HOP_TEXT: its runs; HOP_HOT: run = the key's offset in text */
 } HUDOP;
