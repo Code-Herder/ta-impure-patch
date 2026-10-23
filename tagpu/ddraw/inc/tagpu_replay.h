@@ -105,8 +105,8 @@ void tagpu_replay_level_end(void);
 
 /* The replay HUD's requests (tagpu_hudinput.c), on the game thread.
    live: the level plays a recording and its first step has played, which was not refused.
-   span: the chain that plays, its root's first GameTime and its last timeline's last (F1); 0
-   when none.
+   span: the chain that plays, its root's first GameTime and its last timeline's last; 0 when
+   none.
    path: "replays\\<file>" while a recording is open, else NULL; timeline: the timeline of it
    that plays, 0 the original -- a rewind into a fork changes it within the level.
    seek_request: a seek to T, clamped to [first + 1, last], for the next frame visit; 0 refused.
@@ -123,10 +123,12 @@ void tagpu_replay_pause(int on);
 int  tagpu_replay_speed(void);
 int  tagpu_replay_speed_set(unsigned gs);
 
-/* THE HUD'S RECORDER CALLS (tagpu_replay.c, THE HUD'S RECORDER CALLS), game thread only.
+/* THE HUD'S RECORDER CALLS (tagpu_replay.c, THE HUD'S RECORDER CALLS), game thread only, between
+   two sim steps, never inside one.
 
    THE TAKEOVER'S PLAN: where a takeover asked for at T starts and what its fork would delete,
-   found as the takeover finds them (takeover_point) and committing nothing. R is the refresh at
+   found as the takeover finds them (takeover_point) and committing nothing. It reads the file's
+   block headers three times, so it answers a click and is never called per frame. R is the refresh at
    or before T (tk_bound's bound); `next` is set only when T rounds to a timeline's first
    iteration, which no takeover starts at, and names the first GameTime one can (R + 1). 1 with
    R, or 0 with `why` and R = 0. A replay playing, or a live rewind gone into the past
@@ -164,7 +166,8 @@ int tagpu_replay_fork_op(int op, unsigned id, const char* stem);
 
 /* LIVE REWIND (tagpu_replay.c, THE LIVE REWIND), the trigger's verbs: queued for the next frame
    visit, the latest replacing an earlier one not yet taken. T is SEEK's; `dump` a frame dump
-   the operation's acknowledgement takes (a test's), NULL for none. 1 queued, 0 refused. */
+   the operation's acknowledgement takes (a test's), NULL for none. 1 queued; 0 refused: no
+   level in play, an unknown verb, or a dump name that is not letters, digits, - and _. */
 enum { TAGPU_REPLAY_RW_OPEN, TAGPU_REPLAY_RW_SEEK, TAGPU_REPLAY_RW_NOW, TAGPU_REPLAY_RW_FORK,
        TAGPU_REPLAY_RW_CLOSE };
 int tagpu_replay_rewind(int op, unsigned T, const char* dump);

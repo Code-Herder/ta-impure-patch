@@ -276,7 +276,7 @@ def run(t, w, fx, out):
             w.stop()
             compare("fresh seek", "compare-dumps", rec, live / "dump-r.bin", q / "dump-q.bin")
 
-            # Q1: a fork's playing seeks within its own chain, past the original's last (F1)
+            # Q1: a fork's playing seeks within its own chain, past the original's last
             q1 = out / "Q1"
             T = G2 + 300
             if not segs[1]["last"] or not G2 < T <= segs[1]["last"]:
