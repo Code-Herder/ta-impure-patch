@@ -58,7 +58,7 @@ rows, *Record games* and *Keep replays*.
 | How the browser is built (and how the dock and the cards were, before the replay HUD replaced them) | **Engine GUI screens plus blits**, as the Impure Config panel is: `.gui` screens written into `impure-patch.ufo`, the engine doing buttons, pressed states, hit-testing and quickkeys (it has no hover state: MEASURED 2026-10-01, landing 2), the DLL blitting only what a `.gui` cannot express (markers, the playhead, a card's live numbers) | The panel already proves the pattern non-modal and live over the world ([renderers](../renderers.md) §2.10); its traps — the re-push on every world click, the zoom transform — are known and fixed |
 | The dock's timeline strip | **One rect the DLL owns**: the dock's screen draws nothing there; the DLL draws the strip and hit-tests press, drag, release and marker clicks, and `tagpu_zoom` passes its points through untouched the way it does for `tagpu_menu_owns_point` | An `id=4` slider would paint the SLIDERS kit, add its own one-pixel arrow buttons and cannot make markers clickable ([gui-gadgets](../gui-gadgets.md) §2.4.1, §2.6) |
 | The recording list | **A stock `id=2` listbox** for selection, scrolling, the scroll bar, the wheel and the keyboard; the DLL blits the badges and the right-aligned length over each visible row from the list's own `top` and row height; the favourite star is hit-tested in its column | Everything a list does is the engine's; only the decoration is ours |
-| Recordings' summaries and the player's marks | **`replays\index.dat`**, one rebuildable file: a summary per recording keyed by file name and size, the favourite flag and the last-played time; a recording that does not match is re-read from its own header and end block; written atomically (a temporary file, then a rename) | Opening the screen reads one small file, and every summary can be rebuilt; only the marks live in the index alone |
+| Recordings' summaries and the player's marks | **`replays\index.dat`**, one rebuildable file: a summary per recording keyed by file name and **root key** (the root header block's two CRCs, `recr_root_key`, which no playing, fork, deletion or compaction changes), the favourite flag, the last-played time and the bookmarks; a line whose key is not its file's is another recording's and starts empty, and one whose file has changed size keeps its marks and has its summary re-read from the file's own header and end block; written atomically (a temporary file, then a rename) | Opening the screen reads one small file, and every summary can be rebuilt; only the marks live in the index alone |
 | *Record games* and *Keep replays* against the panel's rule that every row is live | **Both rows are live.** Off stops the recording now (the file ends, its end block saying why); On starts one at the current tick from a snapshot. Lowering *Keep replays* is in force at once and shown on the Replays screen; files are deleted when the next recording starts, oldest non-favourite first | Keeps the rule without an exception; a cycling click never deletes anything |
 | The key that opens the live game's timeline | **None.** The rewind button beside the sprocket, or the victory/defeat screen | `R` is TA's Repair order, and a free key is free only until a mod claims it |
 | Per-mod behaviour | **A per-mod table**, matched on the mod's **name** and guarded by its **content** (*The per-mod table*) | Exact for the mods we know; a DLL's size changes with every build of a mod, so it cannot identify one across versions |
@@ -331,7 +331,63 @@ the HUD (2026-10-09): from playing, GameTime held while asked and ran again afte
 paused, it stayed paused after No.
 
 **Bookmarks** are one field of `replays\index.dat`, after the seats: comma-separated GameTimes,
-at most 64, none within 30 of another, written through the index's temporary file and rename.
+at most 64, none within 30 of another, written through the index's temporary file and rename. They
+belong to the recording, not to a timeline, and follow its line's root key, so they survive the
+timeline table every playing's end appends (the touch), a fork, a deletion and a compaction. A
+bookmark is placed only inside the recording's span, and kept when a compaction after the root
+timeline's deletion shortens that span; the HUD draws only those inside the span it plays.
+MEASURED 2026-10-23, before the key: the index keyed a line by its size as well, and a bookmark at
+GameTime 2039 was gone after Leave and the browser's reopen (the file 119847 → 119895 bytes).
+MEASURED 2026-10-23 with the key (retail, a private Xvfb, a 4-seat recording of 4213 ticks
+watched through the browser): a bookmark placed on the HUD at GameTime 427 was in the index after
+Leave, whose touch grew the file 171974 → 172022 bytes, and on the HUD's timeline at the next
+Watch; the line's favourite, carried over from a version-1 line, stayed with it.
+**The index's version** is 3 (`IMPURE-REPLAYS-INDEX\t3`): after the size, the root key, then
+the recorded start (`RT_WALLCLOCK` as `recr_wallclock_of` reads it: a UTC FILETIME, `none`, or `-`
+not read yet), which the list is ordered by, newest first, exactly as the prune orders
+(`recfile_newer_first`), before its cut to 1024. **A mark goes only when a read proves its file
+changed or is gone.**
+
+- **The index is read whole and written whole.** Every line goes into one table that grows as it
+  needs (`ent_slot`), however many there are, apart from the browser's list of at most 1024; so a
+  file listed again later finds its own line, and no second line is ever made for a name the index
+  holds. Three kinds of line do not reach the table, or leave it: a line that does not parse is
+  not read, a second line of one name is merged into the first (the favourites or'd, the
+  bookmarks' union, the key unknown unless both lines have the same one), and a line whose file
+  is not there goes at the next write (below). A line that does not fit the 4 MB cap fails the
+  whole write, which then leaves the old index in place.
+- **Names are compared exactly, then without case**, both in the C locale: a file finds the line
+  of its exact name, else one of its name in another case (a file renamed in case alone), and
+  never one whose exact name is another file's, which Wine allows beside it. A file whose line is
+  already listed for a newer file is not listed, and logged. The prune finds a line by the same
+  rule.
+- **A version-1 index is converted at its first load**, text line by line, every line kept by
+  the conversion, those past 1024 too, and read as the table reads its own, then written at once. Each line's key and start are written `-`, *unknown*: no
+  file is read for them. The browser's next open reads both for every file in `replays\`, before
+  its cut to 1024, and a file it cannot read then sorts after the dated ones, as the prune sorts
+  it. The line takes its file's key at the first read of the file that succeeds, with version 1's
+  own rule: the favourite and the last-played time stay, and the bookmarks and the refusal's mark
+  stay while the file's size is still the line's. Until then the prune counts the line's marks by
+  its name alone. Any key field that is not sixteen hex digits reads as unknown, and a file whose
+  first bytes are not a whole recording header never gives its line a key.
+- **A line is dropped only when its file is not there**, besides a line that does not parse and
+  a second line of one name, merged: the name not found at a write, never an open that failed. A summary that could not be read now (the file held exclusively) leaves the
+  line's size unknown, so the next open reads it again.
+- **An index that cannot be read is never rebuilt over.** Only a missing file, or a missing
+  `replays\` folder, is no index; an empty one holds no mark either. A read that fails, a file
+  over 4 MB, one that is not text (a NUL in it), a version this build does not know (a later
+  build's among them), or no memory to read it whole makes every write of the index refuse and
+  log, until the file reads again. A favourite clicked then is put back as it was, and logged.
+  The prune reads the same file itself: it keeps every recording when it cannot read it either,
+  and otherwise decides from it, which no write has replaced.
+- **An index written by this branch's earlier builds is version 2**, of two layouts, one without
+  the recorded start; no version 2 ever shipped. This build reads it as a version it does not
+  know: it is never written over, and the prune keeps every recording.
+- **A downgrade is the hazard this cannot cover.** A build from before version 2 reads a version-3
+  index as foreign and rebuilds it, which loses its favourites and bookmarks; nothing in this build
+  can stop that.
+- The prune reads a version-1 index as "nothing decided" and keeps every recording, until the
+  first load converts it.
 
 **The speed and the pause are the player's.** Neither is recorded. The replay writes both only on
 a playback level (`tagpu_replay_speed_set`, `tagpu_replay_pause`); the player's speed is exchanged

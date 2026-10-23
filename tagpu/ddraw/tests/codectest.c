@@ -604,8 +604,7 @@ static int reading_next(Reading* g, double* ms)
                              sizeof g->r.why))
             return -1;
         if (g->dec && (g->dec->nslots != g->h.slots || g->dec->nproj != g->h.nproj ||
-                       g->dec->gw != g->h.gw || g->dec->gh != g->h.gh || g->dec->nwrecks != g->h.nwrecks ||
-                       g->dec->hold != g->p.hold)) {
+                       g->dec->gw != g->h.gw || g->dec->gh != g->h.gh || g->dec->nwrecks != g->h.nwrecks)) {
             snprintf(g->r.why, sizeof g->r.why, "a segment of another shape (%u slots, %u projectiles, a "
                      "%u x %u grid, %u wrecks) after %u, %u, %u x %u and %u", g->h.slots, g->h.nproj,
                      g->h.gw, g->h.gh, g->h.nwrecks, g->dec->nslots, g->dec->nproj, g->dec->gw,
@@ -3119,7 +3118,7 @@ static int sc_run(const RecCodecParams* p, SCase* s)
     memset(&sec, 0, sizeof sec);
     memset(&a, 0, sizeof a);
     a.nslots = p->nslots;
-    f->restart(x, NULL);
+    f->restart(x, p, NULL);
     ok = recf_write(&sec, SC_SCHEME, s->c, SC_N) && f->dec_open(x, sec.p, sec.n, 1, why, sizeof why) &&
          f->dec_iter(x, &a, why, sizeof why);
     for (i = 0; ok && i < s->nk; i++)
@@ -5579,7 +5578,8 @@ static void mo_list(RecBytes* b, const char* acts, uint32_t tick)
    segment with RT_HOLD, then one reset block of slot 1's main list -- A B C; B C, its head done
    (B and C matched to the kept list's second and third); X B C, a node in front; the unit's death;
    a new unit's B C, raw, the kept list dropped at the death -- and each index the decoder must
-   refuse; a segment without RT_HOLD writes scheme 1, and each decoder refuses the other's. */
+   refuse; a segment without RT_HOLD writes scheme 1, each decoder refuses the other's, and one
+   codec restarted with either segment's params decodes that segment's scheme. */
 static int outcomes_orders_matched(const RecCodecParams* p0)
 {
     enum { COL_IDX = 26 };
@@ -5668,8 +5668,27 @@ static int outcomes_orders_matched(const RecCodecParams* p0)
                      !reccodec_decode(rd, st1.sec.p, st1.sec.n, &out, why, sizeof why) &&
                          strstr(why, "scheme 1") != NULL, 1);
         reccodec_restart(rd, p0, pre.unit, pre.live, pre.pool, pre.pcount, pre.phw, &pv);
-        ok &= expect("orders: a restart with another RT_HOLD than the codec's leaves it invalid",
-                     reccodec_valid(rd), 0);
+        out.n = 0;
+        ok &= expect("orders: a codec made for a segment with RT_HOLD, restarted with the params of "
+                     "one without, decodes its scheme 1",
+                     reccodec_valid(rd) && reccodec_decode(rd, st1.sec.p, st1.sec.n, &out, why, sizeof why) &&
+                         out.n == y.n && !memcmp(out.p, y.p, y.n), 1);
+        reccodec_restart(rd, p, pre.unit, pre.live, pre.pool, pre.pcount, pre.phw, &pv);
+        out.n = 0;
+        ok &= expect("  and restarted with its own, its scheme 2",
+                     reccodec_valid(rd) && reccodec_decode(rd, keep.p, keep.n, &out, why, sizeof why) &&
+                         out.n == y.n && !memcmp(out.p, y.p, y.n), 1);
+        reccodec_restart(rd1, p, pre.unit, pre.live, pre.pool, pre.pcount, pre.phw, &pv);
+        out.n = 0;
+        ok &= expect("orders: a codec made for a segment without RT_HOLD, restarted with the params "
+                     "of one with it, decodes its scheme 2",
+                     reccodec_valid(rd1) && reccodec_decode(rd1, keep.p, keep.n, &out, why, sizeof why) &&
+                         out.n == y.n && !memcmp(out.p, y.p, y.n), 1);
+        reccodec_restart(rd1, p0, pre.unit, pre.live, pre.pool, pre.pcount, pre.phw, &pv);
+        out.n = 0;
+        ok &= expect("  and restarted with its own, its scheme 1",
+                     reccodec_valid(rd1) && reccodec_decode(rd1, st1.sec.p, st1.sec.n, &out, why, sizeof why) &&
+                         out.n == y.n && !memcmp(out.p, y.p, y.n), 1);
     }
     reccodec_stream_end(&st);
     reccodec_stream_end(&st1);

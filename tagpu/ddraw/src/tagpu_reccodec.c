@@ -492,7 +492,6 @@ static const RecFrameOps* const FRAMES[RECC_FRAMES] = { &recframe_cells, &recfra
 struct RecCodec {
     unsigned nslots;
     unsigned gw, gh, nwrecks;             /* the sizes the record frames were made for          */
-    int hold;                             /* ... and the orders frame's scheme (params' `hold`)  */
     int valid;
     RecCodecParams p;                     /* the restart's, copied: the codec owns what it reads */
     int lane_of[REC_LR_N];                /* the lane of each role but PLAIN and COUNT           */
@@ -591,7 +590,6 @@ RecCodec* reccodec_new(const RecCodecParams* p)
     c->gw = p->gw;
     c->gh = p->gh;
     c->nwrecks = p->nwrecks;
-    c->hold = p->hold;
     for (i = 0; i < RCS_COUNT; i++) c->fix[i] = -1;
     for (i = 0; i < RECC_FRAMES; i++) {
         c->frame[i] = FRAMES[i]->make(p);
@@ -853,9 +851,9 @@ void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* unit
     memset(c->tpair, 0, sizeof c->tpair);
     c->tpaired = c->featseen = 0;
     for (i = 0; i < RCS_COUNT; i++) rb_clear(&c->sec[i]);
-    for (i = 0; i < RECC_FRAMES; i++) FRAMES[i]->restart(c->frame[i], wok ? world : NULL);
+    for (i = 0; i < RECC_FRAMES; i++) FRAMES[i]->restart(c->frame[i], p, wok ? world : NULL);
     if (!wok || !p->usable || p->nslots != c->nslots || p->nproj != c->nproj || p->gw != c->gw ||
-        p->gh != c->gh || p->nwrecks != c->nwrecks || p->hold != c->hold || p->nlanes < 1 ||
+        p->gh != c->gh || p->nwrecks != c->nwrecks || p->nlanes < 1 ||
         p->nlanes > RECC_LANES_MAX || p->nair > RECC_AIR_MAX || p->ntypes > RECC_TYPES_MAX)
         return;
     if (p != &c->p) c->p = *p;

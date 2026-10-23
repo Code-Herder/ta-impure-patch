@@ -24,7 +24,9 @@
    prototype measured the match at +295,783, so a stream without RT_HOLD keeps scheme 1.
 
    THE BYTES. Scheme 1 in a segment whose header has no RT_HOLD (a multiplayer one), scheme 2 in
-   one that has it (RecCodecParams' `hold`); a reader takes only its segment's. Scheme 1 is 26
+   one that has it (RecCodecParams' `hold`); a reader takes only its segment's, which every
+   restart takes from that segment's params (orders_restart), so one decoder reads both schemes
+   across a chain. Scheme 1 is 26
    columns, for each record in record order:
        slot     varint zz32(slot - the previous record's slot in this iteration, 0 at its start)
        key      u8: bit 0 the list (0 the main list, 1 the sub list), bit 1 WHOLE, bit 2 CHUNK
@@ -93,7 +95,7 @@ typedef struct Kept {
 
 typedef struct Orders {
     unsigned nslots;
-    unsigned scheme, ncols;     /* the segment's: ORDERS_SCHEME or ORDERS_MATCH, its columns */
+    unsigned scheme, ncols;     /* the segment's, each restart's: ORDERS_SCHEME or ORDERS_MATCH, its columns */
     Kept* kept;                 /* nslots * 2, (slot, list) at slot * 2 + list              */
     unsigned char* used;        /* REC_ORDERS_MAX: the kept nodes a scheme-2 record matched  */
     unsigned char* arena;       /* acap nodes, the first `held` of them placed              */
@@ -176,11 +178,13 @@ static void orders_drop(void* f)
     free(x);
 }
 
-static void orders_restart(void* f, const RecFrameWorld* w)
+static void orders_restart(void* f, const RecCodecParams* p, const RecFrameWorld* w)
 {
     Orders* x = (Orders*)f;
     unsigned i;
     (void)w;
+    x->scheme = p->hold ? ORDERS_MATCH : ORDERS_SCHEME;
+    x->ncols = p->hold ? ORDERS_COLS : ORDERS_COLS1;
     memset(x->kept, 0, (size_t)x->nslots * 2 * sizeof(Kept));
     x->held = 0;
     x->oom = x->unfit = 0;
@@ -200,6 +204,8 @@ static int orders_copy(void* dst, const void* src)
     d->oom = s->oom;
     d->unfit = s->unfit;
     d->prev = s->prev;
+    d->scheme = s->scheme;
+    d->ncols = s->ncols;
     return 1;
 }
 #endif

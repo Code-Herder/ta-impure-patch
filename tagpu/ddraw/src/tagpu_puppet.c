@@ -833,6 +833,28 @@ int tagpu_puppet_engine_cells(int engine_cells, int mp_state)
     return 1;
 }
 
+/* THE ORDERING. The table's writers: tagpu_puppet_begin at the seat fill and at a live rewind's
+   start (tagpu_replay.c, rw_skirmish); this, inside a seek's R0 (mp_follow) and at a takeover's
+   TK1 (tk_seats), a rewind's return to the saved present among them; and tagpu_puppet_end at the
+   teardown, at a takeover's end (tk_end) and at that return's end, where the mode goes off and
+   the live getter answers again. This runs on the game thread between steps inside the seek --
+   mp_follow in R0, TK1 after R3's kills -- and so before R7 makes every unit of T afresh, and a
+   fresh COB's Create reads getter 75 first: no unit R7 makes runs on an earlier segment's answer.
+   The loader's reads of the table ended before the first step (PuppetTable.playing), which every
+   seek follows. */
+int tagpu_puppet_locals(const unsigned char local[PUPPET_PLAYERS])
+{
+    unsigned i;
+    int changed = 0;
+    if (!s_pup.on) return 0;
+    for (i = 0; i < PUPPET_PLAYERS; i++) {
+        unsigned char v = local[i] ? 1 : 0;
+        if (s_pup.local[i] != v) changed = 1;
+        s_pup.local[i] = v;
+    }
+    return changed;
+}
+
 void tagpu_puppet_end(void)
 {
     /* the engine's own rule again, or contest_write has logged why a NOP of ours stays, which

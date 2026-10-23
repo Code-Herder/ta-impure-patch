@@ -6077,7 +6077,8 @@ def _replay_takeover_wait(inst, name, lines, first, timeout, held=False):
     resumes the level: the wait returns at the takeover's line once the hold's line is seen too,
     whichever came first (`held`), and the recording's line is the caller's to wait for."""
     n = re.escape(name)
-    # the takeover starts at the refresh at or before T, which its line names (tk_bound)
+    # the takeover starts at T where its segment holds nothing, else at the refresh at or before
+    # it, which its line names (tk_bound)
     taken_rx = re.compile(
         rf"replay: {n}: taken over at GameTime (\d+) as player (\d+), difficulty (\d+), in (\d+) ms "
         rf"\(read (\d+), rebuild (\d+), AI (\d+), passability (\d+)\); units (\d+) killed, "
@@ -6191,9 +6192,9 @@ def replay_prediction(args):
     tarec = _tarec(blocks=True)
     try:
         segs, _ = tarec.file_segments(args.recording)
-        # the takeover starts at the refresh at or before --at (tagpu_replay.c, tk_bound)
+        # the takeover starts at T, or the refresh at or before it (tarec.takeover_at)
         evict = tarec.fork_prediction(segs, args.timeline,
-                                      tarec.refresh_at(args.recording, args.timeline, args.at))
+                                      tarec.takeover_at(args.recording, args.timeline, args.at))
     except (OSError, tarec.Unreadable) as e:
         die(str(e))
     out({"dry_run": True, "would_delete": evict}, args.json,
@@ -7591,9 +7592,10 @@ def build_parser():
                                   "one whose running playback is taken over")
     rpt.add_argument("recording", nargs="?", default=None, help="an .imprec file")
     rpt.add_argument("--at", type=gametime_type, required=True, metavar="T",
-                     help="the GameTime the live game starts from, rounded down to the "
-                          "recording's refresh at or before it, which the takeover's line names "
-                          "(`at` in --json)")
+                     help="the GameTime the live game starts from: T itself in a multiplayer "
+                          "segment, which holds nothing, else rounded down to the recording's "
+                          "refresh at or before it, which the takeover's line names (`at` in "
+                          "--json)")
     rpt.add_argument("--player", type=int, required=True, metavar="P",
                      help="the recorded player to take over")
     rpt.add_argument("--difficulty", type=int, choices=(0, 1, 2), default=None,
