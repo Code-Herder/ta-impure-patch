@@ -15,6 +15,16 @@ throwaway prototype and then in an interview on 2026-10-01; the decisions are in
 *Decided 2026-10-01*. The prototype (`tools/replay/prototype-replay-ui.html`, commits `7dcdd3ba`
 and `74f56dfd` on the S5 branch) is deleted before the first S5 landing.
 
+**Landing 5's two rows, *Record games* and *Keep replays*, are not built; what they switch is.**
+Every skirmish and multiplayer game is recorded by default, `tagpu_recorder.on` being a play
+default, and `tagpu_recorder.off` (or `tagpu_defaults.off`) in the game's folder is the only way to
+stop it. Each new recording, never a fork's, prunes `replays\` to a fixed count, the newest 50
+counting the new one, or the `keep N` the lever's text names; an older recording is deleted unless
+it is in use, has a live fork, is a favourite or is bookmarked in `index.dat`, or does not read as a
+recording ([GPU status](../gpu-status.md) §2.6e, *The prune*). That is the *Keep replays* decision
+below — files deleted when the next recording starts, oldest first, never a favourite — with a
+fixed count; landing 5 adds the count as a row, and recording switched on or off mid-game (ask 4).
+
 **Evidence tags.**
 
 - **MEASURED**: measured during the prototype, with the conditions given.
@@ -379,7 +389,7 @@ Items 1 to 3 are needed by landing 1, item 4 by landing 5.
 | **2 — watching** | the timeline, its markers, the transport, the speeds, bookmarks, Leave (built: *Watching*, first as the watching dock, now the replay HUD's); the timeline selector waits for S4 | — |
 | **3 — the streams and the cards** | each player's camera, cursor, clicks and selection recorded; Jump, Sight and Follow per player; the Overlays (built: first as the player cards and the dock's Overlays menu, now the replay HUD's rows and foot plate) | a recorder change of its own, planned with it |
 | **4 — live rewind** | the rewind button, the timeline in a live skirmish, Back to now, Play from here | S4 |
-| **5 — the switches** | *Record games* and *Keep replays* | ask 4 |
+| **5 — the switches** | *Record games* and *Keep replays* (not built; recording by default and the prune are in, *Status*) | ask 4 |
 
 Escalation has its own ground, plate and title font; Twilight's style is not drawn
 yet and uses the retail style, which is what an unknown mod gets anyway. Each lands as it is

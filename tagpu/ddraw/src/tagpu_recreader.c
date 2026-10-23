@@ -2720,6 +2720,27 @@ RecReader* recr_open(const char* path, char* why, unsigned cap)
     return open_handle(f, path, why, cap, 0);
 }
 
+int recr_format_of(const char* path)
+{
+    RecReader* r = (RecReader*)calloc(1, sizeof *r);
+    char magic[8], why[160];
+    RecBlock b;
+    int k = -1;
+    if (!r) return -1;
+    r->f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                       FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+    if (r->f != INVALID_HANDLE_VALUE && read_all(r->f, magic, 8) && !memcmp(magic, REC_MAGIC, 8)) {
+        r->off = 8;
+        if (block_read(r, &b, why, sizeof why) > 0 && b.kind == RB_HEADER) {
+            /* the format entry is read before any check that can refuse the header */
+            if (header_parse(&r->h, r->raw, r->rawn, why, sizeof why)) k = 1;
+            else if (r->h.format && !rec_format_supported(r->h.format)) k = 0;
+        }
+    }
+    recr_close(r);
+    return k;
+}
+
 RecReader* recr_dump_world(const char* path, char* why, unsigned cap)
 {
     HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,

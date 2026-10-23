@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_recfile.h"
+#include "tagpu_recreader.h"
+#include "tagpu_replays.h"
 #include "tagpu_log.h"
 
 int recmeta_parse(RecTimelineState* out, unsigned* count, const void* raw, unsigned bytes)
@@ -136,13 +138,134 @@ void recfile_leave(void)
     jobs_unlock();
 }
 
+/* ---- the prune (tagpu_recfile.h, THE PRUNE) ---------------------------------------------------- */
+
+enum { PRUNE_GONE, PRUNE_KEPT, PRUNE_BUSY, PRUNE_ODD };
+
+/* Has the recording a live timeline besides the original? 0 for one of another format, whose
+   timelines this build cannot read and cannot play either; -1 when it is not one of ours. */
+static int forked(const char* path)
+{
+    RecTimeline t[RECR_TIMELINES];
+    char why[160];
+    RecReader* r;
+    int n, i, f = 0, k = recr_format_of(path);
+    if (k <= 0) return k;
+    r = recr_open(path, why, sizeof why);
+    if (!r) return -1;
+    n = recr_timelines(r, t, RECR_TIMELINES, why, sizeof why);
+    recr_close(r);
+    if (n < 0) return -1;
+    for (i = 0; i < n && i < RECR_TIMELINES; i++)
+        if (t[i].id && t[i].state != REC_TL_DELETED) f = 1;
+    return f;
+}
+
+/* One recording older than the kept ones. WHY NOTHING IN USE OR MARKED IS DELETED (an ordering):
+   1. its lock, taken exclusively as every writer takes it (recfile_lock): no append, fork,
+      deletion or compaction runs on it from here on, so what step 2 reads stays true;
+   2. its timelines read: one with a live fork is kept, and so is a file that is not one of our
+      recordings; one in another format has none this build can read, so only step 4 keeps it;
+   3. the recording itself opened exclusively, with DELETE access: it fails while anything holds
+      it open (a playing, a reader, the writer), and while it is held nothing can open it, so no
+      playing starts and no bookmark is added, a bookmark being added only by a playing of it;
+   4. under the index's lock, a favourite or a bookmark keeps it; otherwise it is marked for
+      deletion on that handle (tagpu_replays_unmarked_delete) and goes when the handle closes.
+   Its lock goes with it, deleted through the exclusive handle of step 1, which no other caller
+   can share, so no two callers ever hold lock objects of one path. */
+static int prune_one(const char* path)
+{
+    char lock[MAX_PATH];
+    const char* name = strrchr(path, '\\') ? strrchr(path, '\\') + 1 : path;
+    HANDLE lk, f;
+    int made, fk, r;
+    FILE_DISPOSITION_INFO gone = { TRUE };
+    typedef BOOL (WINAPI* SetInfoFn)(HANDLE, FILE_INFO_BY_HANDLE_CLASS, LPVOID, DWORD);
+    SetInfoFn set = (SetInfoFn)(void*)GetProcAddress(GetModuleHandleA("kernel32.dll"),
+                                                     "SetFileInformationByHandle");
+    if (!set || snprintf(lock, sizeof lock, "%s.lock", path) >= (int)sizeof lock) return PRUNE_BUSY;
+    lk = CreateFileA(lock, GENERIC_READ | GENERIC_WRITE | DELETE, 0, NULL, OPEN_ALWAYS,
+                     FILE_ATTRIBUTE_HIDDEN, NULL);
+    if (lk == INVALID_HANDLE_VALUE) return PRUNE_BUSY;
+    made = GetLastError() != ERROR_ALREADY_EXISTS;
+    fk = forked(path);
+    r = fk < 0 ? PRUNE_ODD : fk ? PRUNE_KEPT : PRUNE_BUSY;
+    if (!fk) {
+        f = CreateFileA(path, GENERIC_READ | DELETE, 0, NULL, OPEN_EXISTING, 0, NULL);
+        if (f != INVALID_HANDLE_VALUE) {
+            int d = tagpu_replays_unmarked_delete(name, f);
+            r = d > 0 ? PRUNE_GONE : d == 0 ? PRUNE_KEPT : PRUNE_BUSY;
+            CloseHandle(f);
+        }
+    }
+    /* a lock this prune made for a recording it keeps goes too: nothing else holds it */
+    if (r == PRUNE_GONE || made) set(lk, FileDispositionInfo, &gone, sizeof gone);
+    CloseHandle(lk);
+    return r;
+}
+
+typedef struct { char name[MAX_PATH]; FILETIME t; } PruneFile;
+static int newer_first(const void* a, const void* b)
+{
+    return CompareFileTime(&((const PruneFile*)b)->t, &((const PruneFile*)a)->t);
+}
+
+static int exiting(void)
+{
+    int e;
+    jobs_lock();
+    e = s_exiting;
+    jobs_unlock();
+    return e;
+}
+
+static void prune(const char* fresh, unsigned keep)
+{
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA("replays\\*.imprec", &fd);
+    PruneFile* all = NULL;
+    const char* own = strrchr(fresh, '\\') ? strrchr(fresh, '\\') + 1 : fresh;
+    unsigned n = 0, cap = 0, i, c[4] = { 0 };
+    /* the new recording is one of the `keep` whether or not its writer has made it yet */
+    if (keep) keep--;
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || !_stricmp(fd.cFileName, own))
+                continue;
+            if (n == cap) {
+                PruneFile* g = (PruneFile*)realloc(all, (cap = cap ? 2 * cap : 256) * sizeof *all);
+                if (!g) break;
+                all = g;
+            }
+            /* a name too long for its path and its lock's is left alone, counted unreadable */
+            if (snprintf(all[n].name, MAX_PATH, "replays\\%s", fd.cFileName) >= MAX_PATH - 5) {
+                c[PRUNE_ODD]++;
+                continue;
+            }
+            all[n++].t = fd.ftLastWriteTime;
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    if (n > keep) {
+        qsort(all, n, sizeof *all, newer_first);
+        /* the process's exit waits for this worker (recfile_exit): it stops at the next file */
+        for (i = keep; i < n && !exiting(); i++) c[prune_one(all[i].name)]++;
+    }
+    free(all);
+    tagpu_logf("recorder: prune at %s: %u older recordings, the newest %u kept; of the rest, %u "
+               "deleted, %u kept (forked or marked), %u in use, %u unreadable", fresh, n, n < keep ? n : keep,
+               c[PRUNE_GONE], c[PRUNE_KEPT], c[PRUNE_BUSY], c[PRUNE_ODD]);
+}
+
 static DWORD WINAPI file_worker(void* arg)
 {
     FileJob* j = (FileJob*)arg;
     char why[256];
-    int ok = recr_manage(j->path, j->op, j->id, j->output, why, sizeof why);
-    tagpu_logf("replay: forks %s: %s: %s [request=%s]", j->path,
-               ok ? "done" : "refused", why, j->request[0] ? j->request : "-");
+    int ok = j->op == REC_FILE_PRUNE ? (prune(j->path, j->id), 1)
+           : recr_manage(j->path, j->op, j->id, j->output, why, sizeof why);
+    if (j->op != REC_FILE_PRUNE)
+        tagpu_logf("replay: forks %s: %s: %s [request=%s]", j->path,
+                   ok ? "done" : "refused", why, j->request[0] ? j->request : "-");
     jobs_lock();
     {
         unsigned i;

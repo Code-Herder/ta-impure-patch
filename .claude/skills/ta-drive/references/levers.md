@@ -49,6 +49,7 @@ the arm files count. A dependency turns off with its parent.
 | `mirror.on` | | the store's `edge` key decides it (below) |
 | `gui.on` | | |
 | `classicpp.on` | | |
+| `recorder.on` | | |
 
 Not on the defaults, and why: `owndraw`, `featown`, `fxown` stop the engine drawing what our pass
 draws and so hole the golden source (`tacli` still auto-arms them when the pass is armed, because
@@ -403,7 +404,7 @@ that map's size.
 | `tracer.on` | the unit-draw tracer (installs at attach) |
 | `spxlog.on` | the sub-pixel anchor filmstrip log |
 | `gui_census.trigger` | with `gui.on=census pgm`: writes the accumulated residual mask to `tagpu_gui_census.pgm` |
-| `recorder.on` | the demo recorder records a skirmish to `gamedir/replays/`; looked for at each level's first iteration, so arm it before the level starts (`references/modules.md`) |
+| `recorder.on` / `recorder.off` | a play default: the demo recorder records every skirmish and native multiplayer game to `gamedir/replays/`, and each new recording prunes that folder to the newest 50 (`keep N` in the file changes the count). On a bare tacli launch arm `recorder.on` to record; under `--defaults` arm `recorder.off` to stop. Read at each level's first iteration, so arm it before the level starts (`references/modules.md`) |
 | `tagpu_<pass>.ab` | the one-frame capture (`references/measuring.md`) |
 | `dmgdelay.on=K` | **test only, never on a player's instance**: every hit this peer sends leaves K ticks late (default 30, at most 3600), so a hit lands after its victim's slot has been reused; logs `enginefix: stale hits: TEST LEVER …` and a `take <slot> (first-free <slot>) at <GameTime>` line per local create. Arm it on the attacking peer (`references/modules.md`, *Stale hits*) |
 | `turbo.on=K` | **test only, a tacli test launch**: K ticks a frame (1..5, empty for 1) once `turbo on` reaches `tagpu_replay.trigger`, none while the recorder's ring is more than half full; `turbo: k=K at 0x49692D` at attach (`references/modules.md`, the demo recorder) |

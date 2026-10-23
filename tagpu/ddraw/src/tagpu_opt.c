@@ -132,6 +132,11 @@ static const Def s_defs[] = {
        which is the A/B. */
     { "tagpu_gui.on",       "", 0, 0 },                     /* the UI: panel, bars, minimap, cursor, shell */
     { "tagpu_classicpp.on", "", 0, 0, store_classicpp },    /* restored true colour, lit, shadowed */
+    /* THE RECORDER IS A PLAY DEFAULT: every skirmish and multiplayer game is recorded into
+       replays\, which is what the Replays browser, a takeover and a live rewind work from, and
+       a new recording prunes the old ones (tagpu_recfile.h, THE PRUNE). It records the game; it
+       changes nothing the simulation runs. */
+    { "tagpu_recorder.on",  "", 0, 0 },                     /* every game recorded, old ones pruned */
     /* HUD SCALE IS NOT A PLAY DEFAULT because nobody has decided it: it
        changes the look of every screen at every resolution, the top bar's
        right-hand half goes off-screen at any scale above 100 %, and whether

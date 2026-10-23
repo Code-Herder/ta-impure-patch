@@ -597,7 +597,7 @@ Recommendation:
 - This keeps `tagpu_recorder.c` `presentation`.
 - It is the owner's call, because it is a non-STATE class on memory the simulation reads.
 
-**The recorder must refuse a puppet host.** `tagpu_rec_capture` starts on any skirmish while `tagpu_recorder.on` exists. It must refuse to start while puppet mode is on, or it would record the playback as a new skirmish.
+**The recorder must refuse a puppet host.** `tagpu_rec_capture` starts on any skirmish while `tagpu_recorder.on` is on, which it is by default (a play default). It must refuse to start while puppet mode is on, or it would record the playback as a new skirmish.
 
 ---
 

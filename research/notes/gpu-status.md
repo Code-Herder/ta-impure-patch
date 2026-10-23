@@ -2933,11 +2933,15 @@ operand at offsets 2 to 5. Pass 3 also asks a DLL's **file** whether it exports 
 rather than asking the loaded module: `GetProcAddress` on a forwarded export loads and initialises
 the target, and every Patch Loader's `dplayx.dll` forwards all nine of its exports to `tplayx`.
 
-### 2.6e The demo recorder (`tagpu_recorder.c`, `tagpu_recwriter.c`, a skirmish on request)
+### 2.6e The demo recorder (`tagpu_recorder.c`, `tagpu_recwriter.c`, every game by default)
 
-S1, S2a, S3a, S3b, S3c-2 and S3c-3 of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s1-the-recorder): a skirmish
-is recorded to `replays\<date> <time> <map>.imprec` when `tagpu_recorder.on` is in the game's folder
-at the level's first iteration, and `tools/replay/tarec.py` reads a recording back. Its capture has no site of
+S1, S2a, S3a, S3b, S3c-2 and S3c-3 of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s1-the-recorder): every
+skirmish and native multiplayer game is recorded to `replays\<date> <time> <map>.imprec`, and
+`tools/replay/tarec.py` reads a recording back. `tagpu_recorder.on` is a play default
+(`tagpu_opt.c`'s table), read with `tagpu_opt_on` at the level's first iteration, so a game is
+recorded unless `tagpu_recorder.off` or `tagpu_defaults.off` is in the game's folder; a tacli
+instance's bare launch writes the second, and `tacli arm <i> recorder.on` records there. The lever
+decides whether a game is recorded, not what the simulation runs. Its capture has no site of
 its own: B2's stub on the unit tick's call (`0x4954ED`, §2.6c) calls the replay's
 `tagpu_replay_capture` (inert unless the level plays a recording, §2.6f) and then
 `tagpu_rec_capture`, both before the air pool's rebuild, on the game thread, and `tagpu_reclaim`'s
@@ -2948,6 +2952,46 @@ A recording does not start without that wrap, since nothing else would end it. *
 which the hook does not reach (`SC_CLOSE` in `wndproc.c`, `tagpu_refuse`, and the out-of-memory
 and unit-type refusals in `tagpu_patches.c`): the process's exit waits until the file of every
 recording that has ended is closed ([*Its lifetime*](tadr-port/demo-recorder-skirmish-slice.md#its-lifetime)).
+
+**The prune** (`tagpu_recfile.c`; THE PRUNE in `inc/tagpu_recfile.h`): each new recording, never a
+fork's, asks a recording-file worker to prune `replays\` as its writer starts (`recfile_request`,
+`REC_FILE_PRUNE`); a full queue or an exiting process refuses the request, and the log says
+`recorder: no prune at <file>: no file worker`. The other `replays\*.imprec` are taken newest first
+by last write time (a replay copied in with its old date counts as old) and the first `REC_KEEP` − 1 = 49 are kept, so the newest 50 are kept counting
+the new one. The lever's text `keep N` changes the count (`keep_count`, `tagpu_recorder.c`): with no
+number, or `keep 0`, it is `REC_KEEP`; `keep 1` keeps the new one alone. Each older recording is
+deleted unless it is in use, has a live fork, is a favourite or bookmarked in `replays\index.dat`, or
+is not one of our recordings. One of ours in another format (`recr_format_of`) is deleted like any
+other unmarked one: this build can neither read its forks nor play it, and keeping them would leave
+every format change's recordings on disk for good. **Nothing in use or marked can be deleted, by an ordering** (the
+comment above `prune_one`): the prune takes the recording's lock exclusively, as every writer does
+(`recfile_lock`), so no append, fork, deletion or compaction runs on it from then on; reads its
+timelines, and a live fork keeps it; opens the recording itself exclusively with DELETE access,
+which fails while anything holds it open and, while held, lets no playing start, a playing being
+the only way a bookmark is added; and then, under the index's lock, which `index_save` also takes
+(`idx_lock`, `tagpu_replays.c`), reads the file's marks off the disk and marks it for deletion on
+that handle (`tagpu_replays_unmarked_delete`). It goes when the handle closes, and a mark the index
+held before that read keeps it. The lock file goes with the recording, through the exclusive handle
+no other caller can share, and so does a lock file the prune created itself for a recording it
+keeps. `SetFileInformationByHandle` is resolved at run time, so the DLL still loads on XP; where it
+is absent the prune deletes nothing and counts every older recording as in use. One line per
+prune: `recorder: prune at <new>: N older recordings, the newest K kept; of the rest, D deleted, M
+kept (forked or marked), B in use, U unreadable`, where *in use* also counts a recording whose lock
+or file could not be opened exclusively and one whose index could not be read. The process's exit
+waits for the worker (`recfile_exit`), so the prune stops at the next file once the exit has begun.
+**What the ordering does not cover:** a favourite given while a prune runs, after it has read that
+file's marks, or one the index could not save (`index_save` failing to write `index.tmp`, or the
+index over `INDEX_CAP`), does not keep its file. The tareplay forks test runs the prune on a seeded
+folder and checks its line and what is left (`prune_step`). MEASURED 2026-10-22
+on an instance with play defaults on and no lever file: 55 older recordings, the newest 49 kept
+beside the new one; of the other six, the 2 oldest plain copies deleted, a favourite, a bookmarked
+file and a file with a live fork (made by a real takeover) kept as forked or marked, and a file
+that is not a recording kept. With `keep 3`, the next game's 54 older recordings: the newest 2 kept, 48
+deleted and the same four kept. **Not exercised:** *in use*, since a file held open by another process
+could not be reproduced under Wine on the reference setup. MEASURED 2026-10-23 by `prune_step` in
+the landing gate, both builds: `6 older recordings, the newest 1 kept; of the rest, 2 deleted, 2 kept
+(forked or marked), 0 in use, 1 unreadable`, the older-format copy among the deleted. A name too long
+for its lock path is counted unreadable before the sort, outside N.
 
 **Its events have 59 sites of their own** (the attach log's `recorder: N event sites in`),
 byte-matched and built at `DllMain` by `tagpu_rec_init`, all before any lands; no recording starts

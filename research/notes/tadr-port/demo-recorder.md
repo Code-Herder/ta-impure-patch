@@ -30,8 +30,9 @@ mechanism's first step: every writable static of the simulation files is declare
 build refuses one that is not; the bytes of the engine's unit and player records that are not
 recorded as values are listed in one exclusion file the build checks; the design lists the state
 that is still outside both. The skirmish slice's first landing, the recorder, records a skirmish
-to a file when asked and checks the file against the game as it goes
-([S1](demo-recorder-skirmish-slice.md#s1-the-recorder), 2026-09-29), and since S2a (2026-09-30) a
+to a file and checks the file against the game as it goes
+([S1](demo-recorder-skirmish-slice.md#s1-the-recorder), 2026-09-29), every skirmish and multiplayer
+game being recorded by default ([GPU status](../gpu-status.md) §2.6e), and since S2a (2026-09-30) a
 recording also carries every mover, order list and PlayerInfo and the engine's events. Since
 [S2b](demo-recorder-skirmish-slice.md#s2b-watching) (2026-09-30) `tacli replay play` plays a
 recording back on puppets, showing everything or one recorded player's view, and every recorded
@@ -192,8 +193,11 @@ other players; a multiplayer game is rewound from its finished recording.
 
 ## Recording lifecycle and storage
 
-- **Automatic recording is on by default** in skirmish and multiplayer, with an opt-out. In a
-  skirmish the opt-out also disables rewind, which reads the recording. In multiplayer it means
+- **Automatic recording is on by default** in skirmish and multiplayer, with an opt-out. Built:
+  `tagpu_recorder.on` is a play default, and the opt-out is `tagpu_recorder.off` (or
+  `tagpu_defaults.off`) in the game's folder; the in-game switch is S5's *Record games* row, not
+  built ([GPU status](../gpu-status.md) §2.6e). In a skirmish the opt-out also disables rewind,
+  which reads the recording. In multiplayer it means
   only "do not save my file": the player still sends what the other players' recordings need
   ([below](#multiplayer-contributions)).
 - **Continue after the recording player is defeated**, while they remain connected, through to
@@ -205,8 +209,12 @@ other players; a multiplayer game is rewound from its finished recording.
   that is reclaimed by rewriting the file when the recording is closed; the new copy replaces the
   old one only once it is complete. The original timeline's blocks are copied unchanged, never
   re-encoded or modified.
-- **Keep recordings by default.** Show total replay storage in the browser. Offer optional
-  cleanup by age or total size; favorites are protected from automatic deletion.
+- **Keep the newest recordings, and every one the player marked.** Each new recording prunes
+  `replays\` to the newest 50, or the count the lever's text `keep N` names, and never deletes a
+  recording that is in use, has a live fork, is a favourite or is bookmarked
+  ([GPU status](../gpu-status.md) §2.6e, *The prune*); the in-game count is S5's *Keep replays*
+  row, not built. The browser's footer shows the disk the replays use (`Replays use N MB of
+  disk.`); a cleanup by age or total size is not built.
 - **Disk budget.** Targets per match-hour: **at most 10 MB for a 1v1, 25 MB for a
   typical four-player game, and 100 MB for ten players with 1,500 units.** Every value a viewer
   sees stays exact at every tick, made small by lossless coding
@@ -434,7 +442,7 @@ Multiplayer adds contributions on top of a state pipeline that already works.
 |---|---|---|
 | Product contract | Scope, architecture, viewer features, storage policy and open decisions recorded here | **Decisions recorded, 2026-09-28** |
 | Feasibility | Three experiments, most decisive first: (1) a level holding remote-type players driven by Impure without a network session: seating up to ten players, which a stock skirmish refuses beyond four (measured, [scenario format](../scenario-format.md)), and a viewer with no seat of its own, since a ten-player recording fills every seat; (2) rebuilding 1,500 units in place with their state and order queues, timed against the seek and takeover targets, and turning a puppet seat into a working AI without a level reload, by making the seat local and re-creating its units; (3) recording a real skirmish: how close the puppet replay is to the original, size per hour, and game-thread cost | **Done, 2026-09-29.** **(1)** A skirmish level holds ten puppet players, 4–9 included, with the viewer on a puppet seat; the units stay inert, and the level ends only by the recording once its victory and defeat tests are switched off ([evidence](demo-recorder-state-evidence.md#the-puppet-host-measured)). **(2)** A rebuild of 1,227–1,432 units in play takes 11–47 ms, paused or not; a puppet seat becomes a working AI in about 1 ms without a reload, the seat made local before its units are re-created; order and factory queues and builds in progress continue ([evidence](demo-recorder-state-evidence.md#rebuild-takeover-and-rewind-measured)). **(3)** A recorded 1,432-unit battle replays with every recorded unit value identical at every checkpoint, walking included; the recorder costs about 0.1 ms per tick; a battle of that size sustained for an hour would exceed the 100 MB budget ([evidence](demo-recorder-state-evidence.md#recording-and-replay-measured)). Not yet shown: features, wrecks and projectiles in a rebuild; footprints, sight, sounds and the nano spray in playback; a real hour. Desk research in the [state design evidence](demo-recorder-state-evidence.md); packet-era experiments in the [exploration](demo-recorder-exploration.md) |
-| Skirmish slice | Recording, puppet watching, seeking, live rewind and takeover, forks, the Replays browser, `tacli` | **S1 to S3c-3 landed, 2026-09-29 to 10-01** ([the plan](demo-recorder-skirmish-slice.md)): a skirmish recorded on request with its self-verification, watched on puppets equal to the recording at every checkpoint, sought to any GameTime, and checked by the harness with its puppet round trip, its counted effects and its images gate, which every landing that changes simulation code now runs on the fixtures its changed features name; seeking (S3) is complete; **S4a and S4b landed, 2026-10-02**. S4b is the takeover from a recording: a recording taken over at any GameTime as one of its players, the others AI, the game after it recorded as a new timeline of the same file and played back across the fork ([the takeover](demo-recorder-s4-takeover.md)); S4c provides [fork management](demo-recorder-s4-forks.md), and S4d provides [live rewind](demo-recorder-s4-rewind.md) through tacli, verified by the 20-fixture landing tier |
+| Skirmish slice | Recording, puppet watching, seeking, live rewind and takeover, forks, the Replays browser, `tacli` | **S1 to S3c-3 landed, 2026-09-29 to 10-01** ([the plan](demo-recorder-skirmish-slice.md)): a skirmish recorded with its self-verification, watched on puppets equal to the recording at every checkpoint, sought to any GameTime, and checked by the harness with its puppet round trip, its counted effects and its images gate, which every landing that changes simulation code now runs on the fixtures its changed features name; seeking (S3) is complete; **S4a and S4b landed, 2026-10-02**. S4b is the takeover from a recording: a recording taken over at any GameTime as one of its players, the others AI, the game after it recorded as a new timeline of the same file and played back across the fork ([the takeover](demo-recorder-s4-takeover.md)); S4c provides [fork management](demo-recorder-s4-forks.md), and S4d provides [live rewind](demo-recorder-s4-rewind.md) through tacli, verified by the 20-fixture landing tier |
 | Multiplayer slice | Contributions, the other players' perspectives, chat and pings, multiplayer takeover with the others as AI | **Stages 1–5 landed 2026-10-06** ([the slice](demo-recorder-multiplayer-slice.md)): contributions from every Impure peer; a saved multiplayer recording plays, seeks and is taken over with the others as AI; each player's explored map, chat with its audiences, and camera, cursor, clicks and selection ([stage 4c](demo-recorder-perspective-streams.md)); ten recorded seats with the viewer in record 10 ([stage 5](demo-recorder-ten-seats.md)). Open: stage 6 (traffic budget, admission control), a player who leaves, migration |
 | Analysis and polish | Statistics dashboard, bookmarks, speed presets | **Planned** |
 | Verification | The automated parallel harness and its restore round trip, built with the skirmish slice and extended by each later one; continuous self-verification in every recording; seek and takeover latency; size and live-cost measurements; the construction-glow checks | **Required across milestones.** The declarations of Impure's simulation state and their build check, and the exclusion file with its check, are built (2026-09-29, [completeness design](demo-recorder-completeness.md#option-b-declare-and-measure)), and every recording verifies itself as it is made ([S1](demo-recorder-skirmish-slice.md#self-verification)); the harness's core and its puppet round trip are built ([S3c-1](demo-recorder-skirmish-slice.md#s3c-1-one-writer-for-the-tables-and-the-round-trip)), with the counts, the images gate and the address scan ([S3c-2](demo-recorder-skirmish-slice.md#s3c-2-counted-on-puppets-and-the-images-gate)), and is the landing gate for simulation code, with the coverage build and the broad tier before every release ([S3c-3](demo-recorder-skirmish-slice.md#s3c-3-fixtures-beside-the-code-and-the-gate)) |
@@ -491,7 +499,8 @@ evidence, and keep remaining gaps visible.
    (*P6*), 14.06 in format 19, whose unit frame predicts more from per-type engine constants
    (*P4*), 13.12 in format 21, which lists the units against the frame's own state (*P5*), and
    12.71 in format 22, which codes the explicit sprays, the order nodes and the surviving
-   projectiles against more of what both sides keep (*P7*). Until the reduced stream lands, a skirmish is recorded only on request.
+   projectiles against more of what both sides keep (*P7*). Every skirmish and multiplayer game is recorded by default whatever the stream's size,
+   and the prune bounds how many recordings `replays\` keeps, not how large each one is.
 3. **Snapshot interval: decided** (2026-10-10). A snapshot every 1,800 ticks, 60 s of game time,
    chosen against the disk budget with the seek target relaxed for dense battles (*Playback and
    seeking*).
