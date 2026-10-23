@@ -141,8 +141,8 @@ dark edge, and an icon it lacks as a stand-in glyph.
   kept, the picker says which fork a take-over replaces, the one watched least recently, and
   outlines that fork's lane.
 - **Live rewind.** With `mode=live` the page shows a live game. A rewind button sits in the top
-  bar beside the Impure Config sprocket; the sprocket is drawn as a dark stand-in, since the
-  game draws it outside the HUD. The button opens a strip under the top bar over the paused game:
+  bar beside the Impure Config sprocket, which is the engine's own, drawn by the page's backdrop
+  as the game draws it, where the bars repeat as the engine repeats them. The button opens a strip under the top bar over the paused game:
   the transport, a track up to NOW, the time, **Play from here** and **Back to now**. The strip
   reuses the bay buttons, the timeline fill and the playhead. Its play is drawn disabled (`off`):
   the rewind holds the past paused and has no verb that plays it. Play from here is drawn pressed

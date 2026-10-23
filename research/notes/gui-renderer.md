@@ -4329,10 +4329,11 @@ recorded after the cursor covers it.
 
 ### 24.4 The sharp layer drawn again over the HUD's top layer  [SOURCE, not yet run]
 
-The composite is the UI's one full-screen quad, and it paints the whole top bar, so the live HUD's
-rewind button, which sits in the bar beside the Impure Config sprocket, is drawn after it — the
-HUD's top layer ([the HUD in game](hud-in-game.html), *Live rewind*). The cursor would then be
-under the button. So the composite's vertex buffer carries **a second quad**, right after the
+The composite is the UI's one full-screen quad, and it paints the whole top bar and the engine's
+message lines, so the live HUD's rewind button, which sits in the bar beside the Impure Config
+sprocket, and its strip, which the message lines would cross, are drawn after it — the HUD's top
+layer ([the HUD in game](hud-in-game.html), *Live rewind*). The cursor would then be
+under them. So the composite's vertex buffer carries **a second quad**, right after the
 composite's own (`s_laySharp`, `nquad + nsdraw + 1`; the grow reserves `+ 2`): the same unit
 square with `a.z = 1` at every vertex, which `LAY_VS` passes as the flat `sharpOnly`, and `LAY_FS`
 discards right after its sharp-layer test when it is set. `tagpu_vk_gui_record_sharp` draws it
@@ -4341,7 +4342,8 @@ top layer, and only when `tagpu_vk_gui_record` drew this slot's composite this f
 (`s_layDrew`). Draws in one render pass land in record order, so the sharp layer — the only cursor
 — is the last thing drawn in that rect, as the composite's own is everywhere else. The
 composite's own quad has `a.z = 0`, so its output is unchanged by construction. The minimap is in
-the sharp layer too and never reaches the top bar.
+the sharp layer too and never reaches the top layer's rect: it is in the side panel, and the strip
+starts right of it.
 
 ## 25. The movie on the Vulkan lane — `PK_MOVIE`  [MEASURED 2026-09-26]
 

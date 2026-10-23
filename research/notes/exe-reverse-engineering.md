@@ -15049,7 +15049,16 @@ at `ctrls+0xEC`. Callers reject any result that differs from requested text.
 - `DrawPopupF4Dialog 0x4948E0`: `DrawText 0x4A50E0` ×5, `0x4BF4D0` ×3 (the frame), `0x4C7580`
   ×1, `0x4B7F30`. `DrawPopupButtomDialog 0x4689C0`: `DrawText` ×3, `0x4B7F90` ×1, `0x4C6AE0`.
   `DrawChatText 0x464060`: `DrawText` ×1, `0x467C00` ×1 (a message-box painter that also calls
-  `0x4C6890`, `0x4C69A0` and the flip itself), `SetFont`/`SetTextColors`.
+  `0x4C6890`, `0x4C69A0` and the flip itself), `SetFont`/`SetTextColors`. **Where it draws**
+  (DISASSEMBLED): each line through `DrawText 0x4A50E0` at x `0x8A` (`ebx`, `0x464186`), the first
+  line's top `0x34` (`[esp+0x14]`, `0x4640D6`), each next one down by the font's height
+  (`0x4C1450`, `0x46423E`); nothing when `main+0x37F27` (the lines shown) is 0 (`0x464077`). The
+  lines are a ring of 30 records of `0x48` bytes (`edi` wraps at `0x1E`, `0x46424C`), the text at
+  `main + 0x12EF + 0x48·i`, a kind byte at `+0x1335` and flags at `+0x1336`, from
+  `main+0x2A3E`; the gate at `0x4640DE` reads `main+0x37EFE` (1, 2 or 3) against the flags' low
+  nibble [INFERRED: which kinds of message the player's setting shows]. In engine pixels, so under
+  HUD scale they move with the world region. The live HUD's strip covers that corner and draws in
+  the top layer for it (hud-in-game.md, *The top layer*).
 - **`0x467D70` the HUD panel painter**, `void (void)`, one caller `0x49842A`, prologue
   `A1 E8 1D 51 00` (5): `esi = *(main+0x37E1B)`; `0x4C69A0(esi)`; `0x4C6890(esi, 0)`; three
   side-specific GAF frames (`main + side·4 + 0x1481F / 0x14833 / 0x14847`, side from

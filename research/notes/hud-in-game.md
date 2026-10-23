@@ -166,7 +166,8 @@ The owner's decisions:
 - **The HUD covers the world and nothing else.** The engine's dialogs, its messages and its menu
   draw over it, and so does the cursor, which is the last quad of the UI pass's sharp layer.
 - **But for its top layer**, the ops flagged `HOPF_TOP` (the live rewind's button, which sits in
-  the top bar the UI paints whole): `tagpu_vk_hud_record_top` draws them after
+  the top bar the UI paints whole, and its strip while no engine screen the player uses is up,
+  over the engine's message lines): `tagpu_vk_hud_record_top` draws them after
   `tagpu_vk_gui_record`, and the UI's sharp layer is drawn again inside their rect
   (`tagpu_vk_gui_record_sharp`), so the cursor stays on top (*Live rewind*, *The top layer*).
 - **It is alpha-blended at the device's resolution**, premultiplied (`ONE`,
@@ -702,8 +703,8 @@ frame visit.
 - **The layout** (`live`, `tagpu_hudlay.c`, a port of hud.js `live`): the button at
   `(W − (entry.r + entry.s)·k, entry.t·k)`, `entry.s·k` square, with `k = top / entry.bar` — the
   bar's own pixels, as the engine places the sprocket (`trigger_rect`, `tagpu_menu.c`: x
-  `w − 44`, y 2, 28 square), so the button sits 3 bar pixels left of it. The mockup's whitebox
-  sprocket is its stand-in for the engine's and is not drawn. **The strip's play is drawn
+  `w − 44`, y 2, 28 square), so the button sits 3 bar pixels left of it. The sprocket is the
+  engine's: the mockup's backdrop carries it, and the HUD draws none. **The strip's play is drawn
   disabled** (`off` in `layout.json`, the mockup too): the rewind holds the past paused and has no
   verb that plays it toward now (the owner's choice for this round). Play from here is drawn
   pressed while it is armed. The toast draws in both modes.
@@ -740,9 +741,15 @@ is held at the seek's target − 1, so `now + 1` is the T the fork would use:
 
 - refused: "Cannot play from m:ss";
 - R is that T and nothing would be deleted: FORK, one click;
-- else the arm takes R and the fork it would delete, SEEKs to R when R is earlier (the snap back),
-  and toasts "Click again to play from m:ss[, replacing F<n>]"; the arm is *seeking* until the
-  world on screen is R − 1, then *armed*, drawn pressed; the second click sends FORK.
+- else the arm takes R and the fork it would delete and SEEKs to R when R is earlier (the snap
+  back); the arm is *seeking* until the world on screen is R − 1, then *armed*, drawn pressed;
+  the second click sends FORK.
+- **The warning is the arm's**: "Click again to play from m:ss[, replacing F<n>]" starts when the
+  arm is set, at R, and is held for as long as the arm holds, past the toast's 1.8 s. The snap's
+  seek can outlast the toast (2341 ms measured 2026-10-23 on the battle test group), and the
+  warning names the fork the second click deletes, so it is on screen whenever that click can
+  come. Every other toast of the live HUD ends the arm first, so while armed the toast is the
+  arm's.
 
 **The ordering it rests on** (one thread): FORK is sent only armed, which needs the snap's seek to
 have run, so the rewind's seek target is R; the fork verb's own `takeover_point(R)` on the same
@@ -769,8 +776,21 @@ are flagged `HOPF_TOP` and drawn after the composite:
   `a.z = 0`, so its output is unchanged. The redraw runs only when the composite was drawn this
   frame for this slot. No new GPU object; it is all `record`, on the render thread.
 - **The hit map lists the top layer's controls first**, then the rest topmost-first.
-- **The Config panel** hangs below the bar (`panel_rect`, `tagpu_menu.c`) and does not reach the
-  button's rect; a point the sprocket or the panel owns is the menu's (`tagpu_menu_owns_point`).
+- **The strip is the top layer too**, so the engine's message lines cannot draw over it. The
+  engine draws them in the world's top left (`DrawChatText 0x464060`: x `0x8A`, the first line's
+  top `0x34`, each next one a font height down, DISASSEMBLED), under the strip's left end, and
+  they are in the composite: only a layer drawn after it keeps the strip whole (the runner's 1080
+  capture at HUD 100 showed four "Under Attack" lines hiding rew, play, fwd and the track's start
+  while the strip was in the base layer).
+- **Unless an engine screen the player uses is up.** The game thread sets the packet's
+  `rw_under` while `tagpu_menu_modal` holds (a menu over the world, Leave's question, the chat's
+  input) or the Config panel is open
+  (`tagpu_menu_panel_open`); the strip then draws in the base layer, under the composite, as the
+  rest of the HUD does. The Config panel hangs below the bar's right end (`panel_rect`,
+  `tagpu_menu.c`), over the strip's actions, so the panel is over the strip while it is open. The
+  button stays in the top layer: neither reaches the bar. A point the sprocket or the panel owns
+  is the menu's (`tagpu_menu_owns_point`). While `rw_under` holds, the message lines draw over the
+  strip's left end again, as they do over the engine's own screens.
   [INFERRED] The engine draws no control in the bar under the button (`W − 75 s .. W − 47 s` at
   the game's HUD scale s): owed, a check by eye at the smallest window the HUD supports.
 
@@ -779,10 +799,13 @@ are flagged `HOPF_TOP` and drawn after the composite:
 U clicks the HUD's open, rew and Back to now on the live level before its fork (`tarewind.py`,
 `hud_cycle`); U-E, on a copy of the recording, takes over timeline 1, forks it by a rewind, and
 plays Play from here past a refresh of that fork: the snap back to the refresh, the eviction
-named, the second click's fork there with the named timeline deleted and the fork EQUAL to its
-recording (`play_from_here`, on a takeover fixture, whose refreshes are on the 30-GameTime grid).
+named in the toast, the second click's fork there with the named timeline deleted and the fork
+EQUAL to its recording (`play_from_here`, on a takeover fixture, whose refreshes are on the
+30-GameTime grid). A fork's `recorder: recording timeline` line comes at its first capture, the
+first step after the resume, so U-E reads it after running the held level, as U does.
 The pause icon's rule is checked by eye: neither a peek nor `tacli hud show` sees the icon.
-`tacli hud show` prints `live, rewind <state>, t … of … s, arm <n>` and the dump carries
+`tacli hud show` prints `live, rewind <state>, t … of … s, its scale …%, the game's HUD …%, arm
+<n>` and the dump carries
 `mode`, `live` (`{open}`) and `rw` (`state`, `arm`, `R`, `evict`, `G`, `first`), which the
 mockup's `?state=` draws.
 
@@ -797,7 +820,9 @@ summary's.
   frames (`tagpu_hudstate_present`), deletes it, and writes `tagpu_replayhud.json` through a
   `.tmp` file and `MoveFileEx`: the state in the mockup's own shape and in HUD units, with the
   device's size, the pixels a unit is (`px`) and the engine frame's scale (`q8`), the stats
-  window and its groups among it. The log says `hud: state dumped to tagpu_replayhud.json: …`.
+  window and its groups among it. Two scales: the state's `hud` is the mockup's field, the replay
+  HUD's own scale (its scale button, 0.75 to 1.5), which the live HUD keeps too; the game's HUD
+  scale is `q8` / 256 (`hud: ARMED … stored 150` in the log is that one). The log says `hud: state dumped to tagpu_replayhud.json: …`.
 - **The mockup draws exactly that state** given `?state=<url of the json>`
   (`tools/hudart/mockup/index.html`). It loads the shipped faces from `art/hud/fonts/` with
   `@font-face`, so a glyph the faces lack is missing there as it is in game.
@@ -854,6 +879,8 @@ the render thread.
   has no on-screen seek, pause, speed, Sight or Follow.
 - **The dump answers every 30 frames**, so at a low frame rate `tacli hud show` can miss a toast
   that lasts 1.8 s: at about 5 frames a second a dump is 6 s apart. Check a toast with a capture.
+  Play from here's warning is the exception: it holds while the arm holds, so every dump that
+  shows the arm shows it.
 - **The hit map is one frame behind the HUD being built**, by design: it is the frame on screen.
   A control that moves between two frames (a row's buttons appearing under the pointer, the
   column scrolling) is clickable where the player saw it, not where the next frame draws it.
