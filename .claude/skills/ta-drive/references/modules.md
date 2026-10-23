@@ -275,8 +275,9 @@ the worker for the playing and removes it after). The same script seeks:
 `--roundtrip T` (dump A, poison, seek, dump B; compare the pair with `tarec.py
 compare-dumps`), `--seek A:T` (at GameTime A seek to T in the same process,
 dumps s<T> and s<T+120>), `--fresh T` alone (a fresh process at T, dump
-q<T>), or `--takeover T:P` alone (a fresh process takes over as P at R, the
-refresh at or before T, which the takeover's line names; dump k<R+120>, then tareplay's
+q<T>), or `--takeover T:P` alone (a fresh process takes over as P at R -- T itself in a
+multiplayer segment, which holds nothing, else the refresh at or before T
+(`tarec.takeover_at`) -- which the takeover's line names and tacli is asked for; dump k<R+120>, then tareplay's
 AI-activity check; the file with its timeline is
 kept as `fork-<name>`; `recmp_compare.py --fork 1 FILE` compares the fork's
 first iteration with the composed parent; the grid's slots and the sort buckets' chains are
@@ -887,8 +888,9 @@ block that reads to its last complete block.
   `compare FILE DUMP…` (`--puppet` for a playing's dumps). Exit 0 when every check holds, 1 when
   one fails, 2 when a file cannot be read. `compare --images DUMP OTHERDUMP` is a report, exit 0:
   the bytes of the main block and `.data` that differ and that no row of
-  `tagpu/ddraw/replay-globals.tsv` covers. `compare-dumps FILE DUMP OTHERDUMP` compares two
-  playings' dumps at one GameTime, the sight counters included. Every dump also carries the
+  `tagpu/ddraw/replay-globals.tsv` covers. `compare-dumps FILE DUMP OTHERDUMP [--timeline N]` compares two
+  playings' dumps at one GameTime, the sight counters included, by the rules of timeline N's
+  segment that holds that GameTime (a multiplayer file's takeover timeline is a skirmish's). Every dump also carries the
   counts of the engine's roots and sinks: `counts FILE DUMP` lists them, and `compare-counts FILE
   L_A L_B P_A P_B` compares a live game's (two of its dumps) with a playing's over the same
   window — roots exactly, sinks within `tagpu/ddraw/replay-absent.tsv`'s band less its rows, and no
@@ -1105,9 +1107,11 @@ block that reads to its last complete block.
 - **Take over**: `tacli replay takeover <i> [FILE [--timeline N]] --at T --player P
   [--difficulty D] [--dump NAME --dump-at G]` makes the playback a live skirmish as player P,
   every other recorded seat an AI (D 0–2, by default the recording's difficulty, or 2 when it had
-  no AI). It starts at R, the refresh at or before T, where the stream's world is the recorder's
-  exact copy: each segment's first two iterations, then every GameTime 1 modulo the interval
-  (300 ticks, or a skirmish recording's `tagpu_rec.refresh`); the DLL logs `a takeover asked for at
+  no AI). It starts at R, where the stream's world is the recorder's exact copy: R = T in a
+  segment that holds nothing (a multiplayer recording's own segment), else the refresh at or
+  before T -- each segment's first two iterations, then every GameTime 1 modulo the interval
+  (300 ticks, or the recording's `tagpu_rec.refresh`) -- which a skirmish segment, a multiplayer
+  file's takeover timeline among them, always needs; the DLL logs `a takeover asked for at
   GameTime <T> takes over at <R>` when they differ. A timeline's first iteration is never a start
   (the fork would follow its parent's iteration), so a request for it is refused naming the
   next. With FILE it launches the instance on it, P viewed, and takes over once it plays;
@@ -1117,7 +1121,7 @@ block that reads to its last complete block.
   `tagpu_hold.on` returns at the hold's line instead (the level held at R−1; `--json` gives the
   hold's line as `held`): the recorder's line, and `--dump`, come once the level is resumed. A
   `--dump-at` G is a GameTime of the live game, so a dump meant to follow the start by k ticks
-  is armed at R + k, R from `tarec.refresh_at`. The game after R is appended as timeline I to the file the
+  is armed at R + k, R from `tarec.takeover_at`. The game after R is appended as timeline I to the file the
   level plays: the instance's copy, `gamedir/replays/<name>.imprec`, whose path tacli prints (`the
   fork:`), never FILE itself. `--dump` arms a dump of the live game at G before the takeover, so it
   is never late. By hand: `takeover <P> at <T>[ difficulty <D>]` in the trigger. The file must be
@@ -1141,7 +1145,7 @@ block that reads to its last complete block.
   operates on a running recorded skirmish. `open` pauses and reports the complete
   seek interval; `seek T` inspects iteration T at frame T−1; `now` restores the
   saved present; `fork` resumes as a new timeline from R, the refresh at or before the
-  inspected T (as a takeover does, *Take over* above), logging `a fork asked for at GameTime <T>
+  inspected T (a live skirmish's segments always hold, *Take over* above), logging `a fork asked for at GameTime <T>
   takes over at <R>` when they differ. The start is found and checked before the original's
   recording ends, so a fork that cannot start is refused with the original still running.
   `close` without a seek leaves the world intact, otherwise it returns to now.

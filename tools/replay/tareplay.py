@@ -64,8 +64,9 @@ A fixture fixtures.json gives a `takeover` runs two processes more, K after L an
     K  takeover  `replay takeover` of L's recording at T = T2, or the entry's `at`, as player P
                  (the recording's controlled player unless the entry names one) in a fresh
                  process, which records
-                 timeline 1 into the same file; T is the refresh at or before the point drawn,
-                 which REFRESH_LEVER's grid makes the point itself: the window, its boxes and ErrorLog.txt watched,
+                 timeline 1 into the same file; T is the refresh at or before the point drawn (a
+                 skirmish takeover starts there, tarec.takeover_at), which REFRESH_LEVER's grid
+                 makes the point itself: the window, its boxes and ErrorLog.txt watched,
                  the entry's `order` and `type` given, a dump k<T+dump>, the level ended
     F  boundary  `replay seek T-300 --timeline 1` of K's file in a fresh process, which plays
                  across the fork at T, dump f<T+300> (or at T+dump when that comes first)
@@ -191,9 +192,10 @@ DECLINE_LEVER = "tagpu_rec.decline"
 # L and K launch with EXACT_LEVER in their game folder: the writer follows each stream block with
 # the exact records it filtered (RB_EXACT), against which `tarec compare --exact` reads their dumps
 # and `tarec lossy-check` the lossy stream (tagpu_reclossy.c). A fixture with a `takeover` launches
-# every process with REFRESH_LEVER holding TAKEOVER_REFRESH: a takeover starts at the refresh at or
-# before the GameTime asked (tagpu_replay.c, tk_bound), and every point the harness draws is 1
-# (mod 30), so on that grid the takeover, the forks and the rewind's fork start where they ask
+# every process with REFRESH_LEVER holding TAKEOVER_REFRESH: a skirmish takeover starts at the
+# refresh at or before the GameTime asked (tagpu_replay.c, tk_bound), and every point the harness
+# draws is 1 (mod 30), so on that grid the takeover, the forks and the rewind's fork start where
+# they ask
 EXACT_LEVER = "tagpu_rec.exact"
 REFRESH_LEVER = "tagpu_rec.refresh"
 TAKEOVER_REFRESH = 30
@@ -1646,10 +1648,43 @@ def browser_watch(w, log, row, name):
 
 
 def index_lines(rd):
-    """replays\\index.dat's lines by file name (tagpu_replays.c, the index's format)."""
+    """replays\\index.dat's lines by file name (tagpu_replays.c, the index's format), the first
+    line of a name as the DLL keeps it."""
     f = rd / "index.dat"
     lines = f.read_text(errors="replace").splitlines()[1:] if f.exists() else []
-    return {ln.split("\t", 1)[0]: ln for ln in lines if "\t" in ln}
+    out = {}
+    for ln in lines:
+        if "\t" in ln:
+            out.setdefault(ln.split("\t", 1)[0], ln)
+    return out
+
+
+GONE_LINES = 1100     # more than the browser's ENT_MAX (1024, tagpu_replays.c)
+
+
+def root_key(path):
+    """recr_root_key's key as index.dat writes it: the root header block's crc_body and crc_head,
+    the block right after the 8-byte magic, at bytes 32..40 (tagpu_recfmt.h, RecBlock)."""
+    return "%08X%08X" % struct.unpack_from("<II", Path(path).read_bytes()[:40], 32)
+
+
+def keyed_line(rd, name, T, what):
+    """The index's line of `name`, Failed unless the index is version 2's and the line carries
+    its file's root key, the favourite and the one bookmark at T: name size key started format
+    start last end fav played map nseats seat... marks (tagpu_replays.c, the index). Returns a
+    summary."""
+    f = rd / "index.dat"
+    head = f.read_text(errors="replace").split("\n", 1)[0] if f.exists() else ""
+    ln = index_lines(rd).get(name, "")
+    c = ln.split("\t")
+    at = 12 + int(c[11]) if len(c) > 11 and c[11].isdigit() else len(c)
+    marks = c[at] if at < len(c) else None
+    key = root_key(rd / name)
+    if head != "IMPURE-REPLAYS-INDEX\t3" or len(c) < 13 or c[2] != key or c[8] != "1" or \
+            marks != str(T):
+        raise Failed(f"{what}: index {head!r}, line {ln!r}; expected key {key}, the favourite and "
+                     f"the bookmark {T}")
+    return f"key {key}, size {c[1]}, favourite, bookmark {marks}"
 
 
 def watch_button(w):
@@ -1712,26 +1747,39 @@ def watch_hud(w, log, rec):
 
 def watch_lane(w, fx, rec, out, T):
     """W: the playback started as a player starts it, through the Replays browser's Watch, and
-    driven through the replay HUD: two copies of the recording refused, the data refusal's marked
-    and the missing map's not, then the recording watched, its speed changed on the HUD, the
-    in-game Options' OK (the settings save), a pause, the HUD's seek to T with dump w<T>, the
-    resume, Leave, and a second Watch from the browser it returns to.
+    driven through the replay HUD: a version-1 index converted at the browser's open, its line's
+    favourite and bookmark kept with the file's root key, two copies of the recording refused, the
+    data refusal's marked and the missing map's not, then the recording watched, its speed changed
+    on the HUD, the in-game Options' OK (the settings save), a pause, the HUD's seek to T with dump w<T>, the
+    resume, Leave with the marks still on the line, and a second Watch from the browser it
+    returns to.
     Returns its own checks, (name, verdict, detail) each; a claim that does not hold is Failed."""
     fix, stem, res = fx["fix"], fx["name"], []
     w.stop()
     w.place(fix, fx["dll"])
     rd = w.gamedir / "replays"
     rd.mkdir(exist_ok=True)
-    (rd / "index.dat").unlink(missing_ok=True)     # no mark of an earlier run's copies
     copies = [(f"{stem}-layout", tarec.RT_LAYOUT, other_layout,
                "it was recorded with another exclusion file (replay-layout.tsv)"),
               (f"{stem}-map", tarec.RT_SETTINGS_MAP, no_such_map, TERRAIN)]
+    # the browser lists newest first by the recorded start, as the prune orders (tagpu_replays.c,
+    # THE ORDER): the copies first, in this order, the recording itself last
     now = time.time()
     for k, (name, tag, edit, _) in enumerate(copies):
-        header_copy(rec, rd / f"{name}.imprec", {tag: edit})
-        os.utime(rd / f"{name}.imprec", (now - 60 * k, now - 60 * k))
-    shutil.copyfile(rec, rd / f"{stem}.imprec")
-    os.utime(rd / f"{stem}.imprec", (now - 60 * len(copies),) * 2)
+        header_copy(rec, rd / f"{name}.imprec",
+                    {tag: edit, tarec.RT_WALLCLOCK: started_at(now - 60 * k)})
+    header_copy(rec, rd / f"{stem}.imprec",
+                {tarec.RT_WALLCLOCK: started_at(now - 60 * len(copies))})
+    # THE CONVERSION (tagpu_replays.c): a version-1 index (name size format start last end fav
+    # played map nseats marks) of GONE_LINES lines for files that are not there, then the
+    # recording's, at its file's size, a favourite with a bookmark at T: past the browser's
+    # ENT_MAX, so THE TABLE must hold every line for the recording's to keep both, and the others
+    # go at the first write, their files proven gone. No mark of an earlier run's copies.
+    gone = "".join(f"gone-{i:04d}.imprec\t100\t0\t0\t0\t0\t1\t0\t-\t0\t\n"
+                   for i in range(GONE_LINES))
+    (rd / "index.dat").write_text("IMPURE-REPLAYS-INDEX\t1\n" + gone +
+                                  f"{stem}.imprec\t{(rd / f'{stem}.imprec').stat().st_size}"
+                                  f"\t0\t0\t0\t0\t1\t0\t-\t0\t{T}\n", newline="\n")
     log = Log(w)
     rc, o = tacli("launch", w.name, "--defaults", "--keep-dll", timeout=LAUNCH_TIMEOUT)
     if rc:
@@ -1739,6 +1787,12 @@ def watch_lane(w, fx, rec, out, T):
     ui_on(w, "MAINMENU.GUI", 120)
     ui(w, "click", "REPLAYS")
     ui_on(w, "REPLAYS.GUI", ACK_S)
+    left = [n for n in index_lines(rd) if n.startswith("gone-")]
+    if left:
+        raise Failed(f"the conversion: {len(left)} lines of files that are not there kept")
+    res.append(("W: a version-1 index converted", PASS,
+                f"line {GONE_LINES + 1}: " + keyed_line(rd, f"{stem}.imprec", T, "the conversion")
+                + f"; the {GONE_LINES} lines of absent files gone"))
 
     # the refusals: the header's check (watch_refuse), then the Start's own, past the undoable
     # steps (watch_undo); each notice answered, back to the browser
@@ -1848,6 +1902,9 @@ def watch_lane(w, fx, rec, out, T):
                      f"player's were {stored} and {ceil0}")
     res.append(("W: Leave", PASS, f"the browser back; gamespeed {back} stored, the ceiling "
                                   f"{ceil3}, the player's"))
+    # the playing's end appends its timeline table (the touch), and the marks follow the key
+    res.append(("W: the marks after the playing", PASS,
+                keyed_line(rd, f"{stem}.imprec", T, "the marks after the playing")))
 
     # a second Watch from the browser Leave returned to; its level writes the coverage, which
     # holds the first level's teardown too (the bitmap is the process's)
@@ -1892,19 +1949,21 @@ def check_or_fail(why, *args):
 def prune_step(w, fx, out, forked):
     """THE PRUNE (tagpu_recfile.h) on a recorded launch of the fixture's scenario, under the
     instance's `keep 2` (Worker): replays\\ seeded, the recorded starts (RT_WALLCLOCK) oldest
-    last, with two plain copies of L's recording, a favourite one, a recording with live forks
+    last, with two plain copies of L's recording, a favourite one whose line's key is unknown (as
+    THE CONVERSION leaves it), one bookmarked on a line of its own key, a recording with live forks
     (`forked`, the lane's own), one in format 24's shape (format24_copy) and a file that is not a
-    recording. The last two have no start this build reads, so they sort after the dated four,
-    the format-24 one first by name. The files' last-write times run the other way, so a prune
-    that ordered by them would keep the non-recording as the newest and delete the first plain
-    copy. Besides the new recording the newest is kept; of the rest the second plain copy and the
-    format-24 one go, and the favourite, the forked one and the non-recording stay.
-    Returns its check."""
+    recording; the second plain copy's line a favourite under the favourite copy's key, another
+    recording's. The last two seeds have no start this build reads, so they sort after the dated
+    five, the format-24 one first by name. The files' last-write times run the other way, so a
+    prune that ordered by them would keep the non-recording as the newest and delete the first
+    plain copy. Besides the new recording the newest is kept; of the rest the second plain copy and
+    the format-24 one go, and the favourite, the bookmarked one, the forked one and the
+    non-recording stay. Returns its check."""
     w.place(fx["fix"], fx["dll"])
     rd = w.gamedir / "replays"
     rd.mkdir(exist_ok=True)
     rec, now = Path(fx["rec"]), time.time()
-    seeds = ("plain-a", "plain-b", "starred", "forked", "older", "not-a-recording")
+    seeds = ("plain-a", "plain-b", "starred", "marked", "forked", "older", "not-a-recording")
     for k, name in enumerate(seeds):
         dst = rd / f"0000 {name}.imprec"
         start = {tarec.RT_WALLCLOCK: started_at(now - 600 * (k + 1))}
@@ -1917,11 +1976,19 @@ def prune_step(w, fx, out, forked):
         else:
             header_copy(rec, dst, start)
         os.utime(dst, (now - 600 * (len(seeds) - k),) * 2)
-    star = rd / "0000 starred.imprec"
-    # an index line with the favourite flag set: name size format start last end fav played map
-    # nseats marks (tagpu_replays.c, the index)
-    (rd / "index.dat").write_text("IMPURE-REPLAYS-INDEX\t1\n"
-                                  f"{star.name}\t{star.stat().st_size}\t0\t0\t0\t0\t1\t0\t-\t0\t\n",
+    # index lines: name size key started format start last end fav played map nseats marks
+    # (tagpu_replays.c, the index). Each copy's recorded start is its own, so each has its own
+    # root key (root_key): the starred one's line has its key unknown, a favourite; the marked
+    # one's its own key, a bookmark; plain-b's the starred one's key, a favourite of another file
+
+    def line(name, k, fav, marks):
+        return (f"0000 {name}.imprec\t{(rd / f'0000 {name}.imprec').stat().st_size}\t{k}\t-"
+                f"\t0\t0\t0\t0\t{fav}\t0\t-\t0\t{marks}\n")
+    marked, other = root_key(rd / "0000 marked.imprec"), root_key(rd / "0000 starred.imprec")
+    if other == root_key(rd / "0000 plain-b.imprec"):
+        raise CouldNotRun("prune: the starred and plain-b copies share a root key")
+    (rd / "index.dat").write_text("IMPURE-REPLAYS-INDEX\t3\n" + line("starred", "-", 1, "") +
+                                  line("marked", marked, 0, "301") + line("plain-b", other, 1, ""),
                                   newline="\n")
     log = Log(w)
     rc, text = tacli("scenario", "load", w.name, SCENARIOS / fx["fix"]["load"], "--defaults",
@@ -1934,9 +2001,12 @@ def prune_step(w, fx, out, forked):
     left = sorted(p.name for p in rd.glob("0000 *.imprec"))
     w.collect(out / "prune")
     w.stop()
-    want = ("6 older recordings, the newest 1 kept; of the rest, 2 deleted, 2 kept (forked or "
+    # 7 besides the new one; plain-a the newest kept; of the other 6, plain-b and older deleted,
+    # starred, marked and forked kept, not-a-recording unreadable
+    want = ("7 older recordings, the newest 1 kept; of the rest, 2 deleted, 3 kept (forked or "
             "marked), 0 in use, 1 unreadable")
-    kept = sorted(f"0000 {n}.imprec" for n in ("plain-a", "starred", "forked", "not-a-recording"))
+    kept = sorted(f"0000 {n}.imprec"
+                  for n in ("plain-a", "starred", "marked", "forked", "not-a-recording"))
     if not got or want not in got or left != kept:
         raise Failed(f"prune: {got.strip() if got else f'no prune line in {ACK_S} s'}; left {left}")
     return ("forks: the prune", PASS, f"{want}; left {', '.join(left)}")
@@ -2007,13 +2077,13 @@ def forks_steps(w, fx, out, results):
             raise Failed(f"forks: timeline {tl}'s playing did not touch its last-used time")
 
     def fork(tid, T, parent=0):
-        """Timeline `tid` taken over from `parent` at T, which starts at the refresh at or before
-        it (tk_bound): that GameTime, which the fork names as its fork_at."""
+        """Timeline `tid` taken over from `parent` at T, which starts at T or the refresh at or
+        before it (tarec.takeover_at): that GameTime, which the fork names as its fork_at."""
         try:
-            R = tarec.refresh_at(str(source), parent, T)
+            R = tarec.takeover_at(str(source), parent, T)
         except tarec.Unreadable as e:
-            raise CouldNotRun(f"forks: K{tid}: the refresh at or before {T}: {e}")
-        say(f"forks: K{tid} from {parent} at {T}" + (f", the refresh {R}" if R != T else ""))
+            raise CouldNotRun(f"forks: K{tid}: the takeover's start for {T}: {e}")
+        say(f"forks: K{tid} from {parent} at {T}" + (f", starting at {R}" if R != T else ""))
         T = R
         w.place(fx["fix"], fx["dll"])
         log = Log(w)
@@ -2114,16 +2184,24 @@ def forks_steps(w, fx, out, results):
                          f"{[r['id'] for r in rows if r['on_chain']]}, not {tl} on {chain}")
         # the in-game prediction is the plan's (tagpu_replay_takeover_plan), against the file's
         T = played["last"]
-        R = tarec.refresh_at(str(copy), tl, T)
-        evict = tarec.fork_prediction(segs, tl, R)
-        want = "fork would delete " + ("no timeline" if evict is None else f"timeline {evict}")
+        try:
+            R = tarec.takeover_at(str(copy), tl, T)
+            evict = tarec.fork_prediction(segs, tl, R)
+            want = "fork would delete " + ("no timeline" if evict is None else f"timeline {evict}")
+        except tarec.Unreadable as e:
+            # a start that is a timeline's first iteration: the DLL refuses it, naming the same
+            # next GameTime (takeover_point)
+            nxt = re.search(r"the first GameTime one can is (\d+)", str(e))
+            if not nxt:
+                raise CouldNotRun(f"forks: the takeover at {T} of timeline {tl}: {e}")
+            R, want = None, f"fork prediction refused: .*the first GameTime one can is {nxt[1]}"
         n = len(log.lines)
         w.trigger(f"takeover {P} at {T} dry-run")
         said = log.wait(r"replay: .*: (fork would delete (no timeline|timeline \d+)|fork "
                         r"prediction refused: |takeover refused: )", ACK_S, n)
-        rounded = R == T or log.wait(rf"a takeover asked for at GameTime {T} takes over at {R}, ",
-                                     0, n)
-        if not said or want not in said or not rounded:
+        rounded = R is None or R == T or \
+            log.wait(rf"a takeover asked for at GameTime {T} takes over at {R}, ", 0, n)
+        if not said or not re.search(want, said) or not rounded:
             raise Failed(f"forks: the in-game prediction at {T}: "
                          f"{said.strip() if said else 'no answer'}; the file's: {want} from {R}")
         # a refused seek's outcome, the HUD's toast: GameTime 0 is outside every recording
@@ -3113,12 +3191,11 @@ class Run:
                 if "K" in fx["want"]:
                     T, fx["tk_P"] = tk_point(fx, h, *fx["tk_ask"])
                     try:
-                        fx["tk_T"] = tarec.refresh_at(str(fx["rec"]), 0, T)
+                        fx["tk_T"] = tarec.takeover_at(str(fx["rec"]), 0, T)
                     except tarec.Unreadable as e:
-                        raise CouldNotRun(f"the takeover's refresh at or before {T}: {e}")
+                        raise CouldNotRun(f"the takeover's start for {T}: {e}")
                     if fx["tk_T"] != T:
-                        say(f"{name}: the takeover asked for at {T} starts at {fx['tk_T']}, the "
-                            f"refresh at or before it")
+                        say(f"{name}: the takeover asked for at {T} starts at {fx['tk_T']}")
                 for p in fx["want"][1:]:
                     if p != "F":                # F follows K, which it reads
                         self.put(name, p)

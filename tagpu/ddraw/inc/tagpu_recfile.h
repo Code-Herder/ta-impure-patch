@@ -25,6 +25,15 @@ uint64_t recfile_now(void);
 HANDLE recfile_lock(const char* path, char* why, unsigned cap);
 void recfile_unlock(HANDLE* lock);
 
+/* THE PRUNE'S ORDER, which the Replays browser lists by too (tagpu_replays.c, scan): < 0 when the
+   file named `x`, whose recorded start `tx` recr_wallclock_of read with answer `dx`, comes before
+   `y`'s. A strict weak order, newest first: by the recorded start, every file without one (an
+   answer of 0 or -1) after every dated file, then by name, latest first (a recording's name begins
+   with its local start time). Names equal under the case-insensitive comparison keep an
+   unspecified order between them. */
+int recfile_newer_first(int dx, const FILETIME* tx, const char* x, int dy, const FILETIME* ty,
+                        const char* y);
+
 enum RecFileOp { REC_FILE_TOUCH, REC_FILE_DELETE, REC_FILE_EXPORT, REC_FILE_COMPACT, REC_FILE_PRUNE };
 /* THE PRUNE. REC_FILE_PRUNE, requested as a new recording starts (`id` = how many to keep, `path`
    the new recording, one of the `id`): the other replays\*.imprec newest first by the start their
@@ -52,7 +61,7 @@ unsigned recfile_request(const char* path, unsigned op, unsigned id, const char*
                          const char* request);
 /* A ticket's outcome: 0 still queued or running; 1 done; -1 refused, `why` filled; -2 unknown --
    never issued, or finished before the last REC_FILE_RESULTS completions: a result outlives
-   REC_FILE_RESULTS - 1 later ones. Any thread. */
+   REC_FILE_RESULTS - 1 completions after its own. Any thread. */
 #define REC_FILE_RESULTS 16
 int recfile_result(unsigned ticket, char* why, unsigned cap);
 /* 1 while a queued or running request names `path`, spelled as the request spelled it: for a

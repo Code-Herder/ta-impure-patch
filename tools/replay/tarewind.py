@@ -459,12 +459,12 @@ def run(t, w, fx, out):
             compare("fork", "compare-fork", rec, 1)
             results.later(work_checks, t, works, rec)
             segs, stop = t.tarec.file_segments(rec)
-            # the fork starts at the refresh at or before T2 (tagpu_replay.c, tk_bound)
-            R2 = t.tarec.refresh_at(str(rec), 0, T2)
+            # the fork starts at T2, or the refresh at or before it (tarec.takeover_at)
+            R2 = t.tarec.takeover_at(str(rec), 0, T2)
             check("segments", not stop and len(segs) == 2 and segs[0]["end_reason"] == 13 and
                   segs[0]["last"] == G2 and segs[1]["parent"] == 0 and segs[1]["fork_at"] == R2,
                   f"original ends forked at {segs[0]['last']}; fork at {segs[1]['fork_at']}, the "
-                  f"refresh at or before {T2}")
+                  f"takeover's start for {T2}, {R2}")
             results.later(contiguous, t, rec, G1, G2)
             for name, tl, start in (("now", 0, G1 + 1), ("fork", 1, AF)):
                 results.later(ai_checks, t, rec, list(log.lines), name, tl, start)

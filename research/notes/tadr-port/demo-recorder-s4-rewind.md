@@ -123,7 +123,8 @@ available), after it (open, G, the outcome `opened at GameTime ...`) and after a
 (a live game a takeover made), its writer is an append writer, which queues the file's compaction
 before it signals its done event (`tagpu_recwriter.c`, the hand-over); the compaction holds the
 file's lock while it runs. So `rw_poll` takes the fork only once the done event is seen and no
-request on the file is queued or running (`recfile_pending`): from the event on the compaction is
+request on the file is queued or running (`recfile_pending`, which leaves out a prune: one named
+for this file only keeps it, and opens neither it nor its lock): from the event on the compaction is
 queued, running or finished, and the fork's `tk_open` takes the lock after it, never against it.
 
 ### The HUD's route

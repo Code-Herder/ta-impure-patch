@@ -61,7 +61,7 @@ It covers five tasks:
 - the resource transfer `0x464C60`;
 - the save writer `0x4326B0`.
 
-**Task 3: getter 75.** Getter 75 is Impure's `cob_get` in `tagpu_patches.c`, reached by an E9 at `0x480770`. On a puppet host it answers from a per-seat table built from the header's recorded controllers (1 or 2 answers 1). The table is written at the seat fill, before the loader thread exists. For a skirmish recording the answer is 1 for every seat.
+**Task 3: getter 75.** Getter 75 is Impure's `cob_get` in `tagpu_patches.c`, reached by an E9 at `0x480770`. On a puppet host it answers from a per-seat table built from the recorded controllers of the segment being read (1 or 2 answers 1). The table is written at the seat fill, before the loader thread exists, from the first header, and again after every seek from the segment the reader then stands in (`mp_follow`, `tagpu_puppet_locals`), on the game thread between steps, before the seek remakes every unit. For a skirmish recording the answer is 1 for every seat.
 
 **Task 4: YARD_OPEN.** Three functions are involved:
 
@@ -583,8 +583,8 @@ Stores through a computed address are not excluded by this scan.
 
 - The table is written at the seat fill on the game thread, before the loader thread exists, and cleared at the level's teardown.
 - COB reads it on the game thread in play, and on the loader thread during Create's first slice. There are no loader-thread creates on a puppet host, but the ordering covers them anyway.
-- **Takeover** follows the approved rule: flip the seats (`seat[s] = 0`, `+0x73` = the recorded controller), then re-create the units. Create's first step then reads 75 from the live controller.
-- **Recorded controller changes** (multiplayer) update `local[]` at the boundary where the applier applies them.
+- **Takeover**: TK1 flips the seats' `+0x73` (P human, every other seat AI) and sets `local[]` from those types (1 for each), after the kills and before R7 re-creates the units; `seat[]` stays set while the puppet mode is on. Create's first slice runs inside R7's creates, while the mode is on, so it reads 75 from that `local[]`; the takeover's end turns the mode off, and from there the live getter answers from `+0x73` (`tagpu_replay.c`, `tk_seats`).
+- **Controller changes between segments** (a multiplayer file and its takeover timeline) set `local[]` from the segment the reader stands in, at each seek's R0 (`mp_follow`, `tagpu_puppet_locals`). Within a segment the header's controllers stand.
 
 S1 does not yet record controller changes. The decision says the recording carries each one, but S1 has only the header. A skirmish needs none for getter 75; a takeover does, to know which seats are AI.
 

@@ -38,6 +38,7 @@
 #include "tagpu_art.h"
 #include "tagpu_recorder.h"    /* tagpu_rec_mod_print: the running game's archives */
 #include "tagpu_recreader.h"
+#include "tagpu_recfile.h"     /* recfile_newer_first: the prune's order, the list's */
 #include "tagpu_replays.h"
 #include "tagpu_profiles.h"
 #include "tagpu_replay.h"
@@ -153,7 +154,11 @@ typedef void  (__stdcall *list_cb_fn)(void* gi, void* rec);
 #define ROW_TEXT         120
 #define INDEX_PATH       "replays\\index.dat"
 #define INDEX_TMP        "replays\\index.tmp"
-#define INDEX_MAGIC      "IMPURE-REPLAYS-INDEX\t1"
+/* Version 3: version 2 is a layout no shipped build wrote, two layouts in fact, so an index of it
+   reads as a version this build does not know (s_idxBad) and none of its lines is read wrong. */
+#define INDEX_MAGIC      "IMPURE-REPLAYS-INDEX\t3"
+#define INDEX_VERSION    3
+#define INDEX_MAGIC_V1   "IMPURE-REPLAYS-INDEX\t1"   /* read once, to convert (index_convert) */
 #define INDEX_CAP        (4u << 20)
 #define MARKS_MAX        64             /* a recording's bookmarks                               */
 #define MARK_GAP         30             /* the closest two bookmarks may be, in GameTime: 1 s    */
@@ -1003,13 +1008,27 @@ static void __stdcall mm_oncommand(void* gi)
    ================================================================================================
    The index is a cache that can always be rebuilt, but for four marks it alone holds: the
    favourite flag, the last time a recording was played, its bookmarks and Watch's refusal. One
-   line per recording, keyed by its file name and size:
-     name size format start last end fav played map nseats seat... marks
+   line per recording, keyed by its file name and its root key:
+     name size key started format start last end fav played map nseats seat... marks
        I<gen> version modprint has_modprint archives mod result,commander,defeat...
        L code modprint buildkey a b                                         (tab-separated)
+   THE KEY (ent_refresh). `key` is recr_root_key's, the root header block's crc_body and crc_head
+   as sixteen hex digits, which the file keeps for its whole life while every playing's end grows
+   it (the touch's timeline table) and a fork, a deletion or a compaction changes its size. So the
+   marks follow the name and the key: a line whose key is not its file's is another recording's
+   and starts empty, and one whose key is but whose size is not keeps its marks and has the
+   summary, the fields from `format` on, read again. `size` is that summary's, the largest
+   unsigned value when the summary is to be read again. `-`, or any key field that is not sixteen
+   hex digits, is a key unknown (THE CONVERSION): the prune keeps the line's marks by its name,
+   and the first read of the file gives it the key.
+   `started` is the recorded start (RT_WALLCLOCK) the key's header holds, which the list is
+   ordered by as the prune orders (THE ORDER): a FILETIME in UTC as sixteen hex digits, `none` for
+   a header read without one, `-` for one not read yet. It is the key's, so it is read again only
+   with a new key.
    `played` is when Watch last started it, in seconds since 1970 (UTC), 0 for never. `marks` is the
-   replay HUD's bookmarks, comma-separated GameTimes inside [start, last], sorted; a line without the
-   field, as this version's first lines were written, has none.
+   replay HUD's bookmarks, comma-separated GameTimes, sorted, each inside [start, last] when it was
+   placed (tagpu_replays_mark_add) and kept when a compaction shortens the span; a line without
+   the field has none.
    From `I` on, what recr_info read: the version text, the archive fingerprint (hex) and whether
    the recording has one, the archives mounted, the mod named from them (mod_of), and each seat's
    result (RecResult), last commander death and defeat GameTimes, in the seats' order. `I` carries
@@ -1018,15 +1037,17 @@ static void __stdcall mm_oncommand(void* gi)
    From `L` on, the mark Watch's own check left (THE LOCK, below): the refusal's code
    (TAGPU_REPLAY_REFUSED_*), the running archive fingerprint and build key it was made under (hex),
    and the running values it compared (a decimal, b hex). A line without `L` has no mark.
-   format 0 is a recording this build could not read. A recording whose line does not match is
-   read again through recr_summary. The file is replaced whole, through a temporary file and a
-   rename, so a crash leaves the old index or the new one. Lines for recordings the list does not
-   hold are carried through unchanged while their file exists. */
+   format 0 is a recording this build could not read. The file is replaced whole, through a
+   temporary file and a rename, so a crash leaves the old index or the new one. Every line is in
+   THE TABLE, listed or not, and is written back while its file exists. */
 
 typedef struct {
     char     file[FILE_MAX];
     unsigned long long size;
-    FILETIME mtime;
+    unsigned key[2];                        /* THE KEY: recr_root_key's                        */
+    int      keyless;                       /* key unknown: written `-` (THE CONVERSION)       */
+    int      dated;                         /* recr_wallclock_of's answer for the key, -1 unread */
+    FILETIME started;                       /* the recorded start, UTC, when dated is 1         */
     unsigned format, start, last, end, fav, played, nseats;
     char     map[RECR_TEXT];
     char     name[REC_PLAYERS][RECR_NAME];
@@ -1047,8 +1068,15 @@ typedef struct {
     char len[12];
 } Row;
 
-static Ent   s_ent[ENT_MAX];
-static int   s_nent;
+/* THE TABLE: every line of the index, however many, read whole by index_read and written whole
+   by index_save, so no line can be lost by being left out of it, nor a second line made for a
+   name it holds. A line leaves it only as index_read and index_save say: one that does not parse,
+   a second of one name (merged), one whose file is not there. The browser's list (s_listed) is at
+   most ENT_MAX of them. LIFETIME: it grows by realloc (ent_slot) and is never freed, so an Ent
+   pointer is good only until the next ent_slot; every holder below takes one after the last
+   growth it can meet. */
+static Ent*  s_ent;
+static int   s_nent, s_entCap;
 static int   s_listed[ENT_MAX];             /* the recordings in replays\, newest first, by entry */
 static int   s_nlisted;
 static Row   s_row[ENT_MAX];                /* those the filter shows                          */
@@ -1066,7 +1094,6 @@ static int   s_watchReady;                  /* tagpu_replay_watch_ready at the o
 static char  s_blob[ENT_MAX * ROW_TEXT];    /* LIFETIME: SetListText keeps this pointer and
                                                never frees it; static, it outlives every read */
 static char  s_tlBlob[32];
-static char* s_idxRaw;                      /* the index as read, for the lines carried        */
 static unsigned long long s_disk;
 static int   s_nfiles;
 
@@ -1075,10 +1102,28 @@ static void sanitize(char* s)
     for (; *s; s++) if (*s == '\t' || *s == '\r' || *s == '\n') *s = ' ';
 }
 
+/* room for s_ent[s_nent], which the caller fills and counts: NULL when there is no memory */
+static Ent* ent_slot(void)
+{
+    if (s_nent == s_entCap) {
+        int cap = s_entCap ? s_entCap * 2 : 256;
+        Ent* n = (Ent*)realloc(s_ent, (size_t)cap * sizeof *n);
+        if (!n) return NULL;
+        s_ent = n;
+        s_entCap = cap;
+    }
+    return &s_ent[s_nent];
+}
+
+/* The line of the name `file`: one of exactly that name, else the first of that name in another
+   case -- a file renamed in case alone, which Windows' names do not tell apart -- or -1. Both
+   compares are the C locale's, never the user's: a locale's equal names (lstrcmpiA's) would
+   give two of Wine's files, whose names it does tell apart, one line. */
 static int ent_find(const char* file)
 {
     int i;
-    for (i = 0; i < s_nent; i++) if (!lstrcmpiA(s_ent[i].file, file)) return i;
+    for (i = 0; i < s_nent; i++) if (!strcmp(s_ent[i].file, file)) return i;
+    for (i = 0; i < s_nent; i++) if (!_stricmp(s_ent[i].file, file)) return i;
     return -1;
 }
 
@@ -1088,8 +1133,11 @@ static int uint_cmp(const void* a, const void* b)
     return x < y ? -1 : x > y;
 }
 
-/* `text`'s comma-separated GameTimes into e->marks: at most MARKS_MAX, each inside the line's
-   [start, last], sorted; anything else is dropped. `text` is cut up. */
+/* `text`'s comma-separated GameTimes into e->marks: at most MARKS_MAX, sorted; anything else is
+   dropped. A mark outside the line's [start, last] is kept: a compaction after the root
+   timeline's deletion shortens the span the summary reads, and the mark is still the
+   recording's. The HUD draws only those inside the span it plays (tagpu_hudstate.c). `text` is
+   cut up. */
 static void marks_parse(char* text, Ent* e)
 {
     char* p = text;
@@ -1097,8 +1145,7 @@ static void marks_parse(char* text, Ent* e)
     while (*p && e->nmarks < MARKS_MAX) {
         char* end;
         unsigned long v = strtoul(p, &end, 10);
-        if (end != p && (*end == ',' || !*end) && v >= e->start && v <= e->last && e->last)
-            e->marks[e->nmarks++] = (unsigned)v;
+        if (end != p && (*end == ',' || !*end)) e->marks[e->nmarks++] = (unsigned)v;
         p = strchr(p, ',');
         if (!p) break;
         p++;
@@ -1144,10 +1191,24 @@ static void lock_parse(char** f, int n, Ent* e)
     e->lock_b = strtoul(f[5], NULL, 16);
 }
 
-/* One index line into `e`; 0 when it is not one. `line` is NUL-terminated and is cut up. */
-static int ent_parse(char* line, Ent* e)
+/* `t`, sixteen hex digits, into two words; 0 when it is not that */
+static int hex16(const char* t, unsigned* hi, unsigned* lo)
 {
-    char* f[11 + REC_PLAYERS + 6 + REC_PLAYERS + 6];
+    unsigned a, b;
+    if (strlen(t) != 16 || strspn(t, "0123456789ABCDEFabcdef") != 16 ||
+        sscanf(t, "%8x%8x", &a, &b) != 2)
+        return 0;
+    *hi = a;
+    *lo = b;
+    return 1;
+}
+
+/* One index line into `e`; 0 when it is not one. `keyed`: of this version's layout, the root key
+   and the start after the size, else of version 1's. `line` is NUL-terminated and is cut up. */
+static int ent_parse(char* line, Ent* e, int keyed)
+{
+    char* f[13 + REC_PLAYERS + 6 + REC_PLAYERS + 6];
+    unsigned hi = 0, lo = 0;
     int n = 0, i, k;
     char* p = line;
     memset(e, 0, sizeof *e);
@@ -1156,6 +1217,18 @@ static int ent_parse(char* line, Ent* e)
         p = strchr(p, '\t');
         if (!p) break;
         *p++ = 0;
+    }
+    if (keyed) {
+        /* the key, taken out: the fields after it are numbered as version 1 numbers them. A
+           key field that is not sixteen hex digits -- `-`, or one damaged -- is a key unknown */
+        if (n < 12) return 0;
+        e->keyless = !hex16(f[2], &e->key[0], &e->key[1]);
+        if (e->keyless) e->key[0] = e->key[1] = 0;
+        e->dated = !strcmp(f[3], "none") ? 0 : hex16(f[3], &hi, &lo) ? 1 : -1;
+        e->started.dwHighDateTime = hi;
+        e->started.dwLowDateTime = lo;
+        memmove(f + 2, f + 4, (size_t)(n - 4) * sizeof f[0]);
+        n -= 2;
     }
     if (n < 10 || !f[0][0] || strlen(f[0]) >= FILE_MAX) return 0;
     lstrcpynA(e->file, f[0], FILE_MAX);
@@ -1177,52 +1250,210 @@ static int ent_parse(char* line, Ent* e)
     return 1;
 }
 
-static void index_load(void)
+static int same_key(const Ent* e, const unsigned key[2])
+{
+    return e->key[0] == key[0] && e->key[1] == key[1];
+}
+
+/* A second line of `into`'s name, `from`, into it, so neither's favourite nor bookmark is lost:
+   the favourites or'd, the bookmarks' union, sorted, at most MARKS_MAX. The key stays known only
+   when both lines know it and it is one key; otherwise the line is key-unknown, and its file's
+   first read applies THE CONVERSION's rule to it (ent_refresh). */
+static void ent_merge(Ent* into, const Ent* from)
+{
+    unsigned m[MARKS_MAX], a = 0, b = 0, n = 0;
+    into->fav |= from->fav;
+    while (n < MARKS_MAX && (a < into->nmarks || b < from->nmarks)) {
+        unsigned v = b >= from->nmarks ||
+                     (a < into->nmarks && into->marks[a] <= from->marks[b])
+                   ? into->marks[a] : from->marks[b];
+        if (a < into->nmarks && into->marks[a] == v) a++;
+        if (b < from->nmarks && from->marks[b] == v) b++;
+        m[n++] = v;
+    }
+    memcpy(into->marks, m, n * sizeof m[0]);
+    into->nmarks = n;
+    if (into->keyless || from->keyless || !same_key(into, from->key)) {
+        into->keyless = 1;
+        into->key[0] = into->key[1] = 0;
+    }
+}
+
+static int file_gone(DWORD error)
+{
+    return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+}
+
+/* `file`'s root key (recr_root_key) and size, read through one handle: recr_root_key's answer;
+   -1 too when the file cannot be opened now, and -2 when it is not there. It shares the file for
+   reading and writing as a reader does, so the writer, a playing and a file worker keep their
+   handles; the prune's exclusive one refuses it. */
+static int file_key(const char* file, unsigned key[2], unsigned long long* size)
+{
+    char path[MAX_PATH];
+    LARGE_INTEGER sz;
+    HANDLE h;
+    int k = -1;
+    key[0] = key[1] = 0;
+    _snprintf(path, sizeof path, "replays\\%s", file);
+    path[sizeof path - 1] = 0;
+    h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                    0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return file_gone(GetLastError()) ? -2 : -1;
+    if (GetFileSizeEx(h, &sz)) {
+        *size = (unsigned long long)sz.QuadPart;
+        k = recr_root_key(h, key);
+    }
+    CloseHandle(h);
+    return k;
+}
+
+/* NO MARK IS WRITTEN OVER. Set by index_read when replays\index.dat exists and could not be read
+   as an index this build writes: an error other than its absence, a file over INDEX_CAP, one
+   that is not text (a NUL in it), a version this build does not know, a later build's among
+   them, or no memory to read it whole. index_save then refuses, so the marks it holds are never
+   replaced by a rebuilt index. index_marked reads the same file itself: it keeps every recording
+   when it cannot read it either, and otherwise decides from it, which no write has replaced.
+   NULL when the index was read or there is none. */
+static const char* s_idxBad;
+
+/* THE CONVERSION of a version-1 index, whose lines are keyed by name and size alone: its text
+   made this version's, line by line, each line's key and start `-`, unknown, after its size. No
+   line is dropped and no file is read here; index_read then reads the lines as it reads its
+   own.
+   A line takes its file's key at the first read of the file that succeeds (ent_refresh), which
+   applies version 1's own rule: the favourite and the last-played time stay, and the bookmarks
+   and the refusal's mark stay while the file's size is still the line's. The converted text, or
+   NULL for no memory; `raw` is freed either way. */
+static char* index_convert(char* raw)
+{
+    const char* p = raw + sizeof INDEX_MAGIC_V1;
+    size_t lines = 1, at;
+    char* out;
+    for (at = 0; p[at]; at++) lines += p[at] == '\n';
+    out = (char*)malloc(sizeof INDEX_MAGIC + strlen(p) + 4 * lines + 1);
+    if (!out) {
+        free(raw);
+        return NULL;
+    }
+    memcpy(out, INDEX_MAGIC "\n", sizeof INDEX_MAGIC);
+    at = sizeof INDEX_MAGIC;
+    while (*p) {
+        const char* end = strchr(p, '\n');
+        size_t len = end ? (size_t)(end - p) + 1 : strlen(p);
+        const char* t1 = memchr(p, '\t', len);
+        const char* t2 = t1 ? memchr(t1 + 1, '\t', len - (size_t)(t1 + 1 - p)) : NULL;
+        size_t head = t2 ? (size_t)(t2 - p) : len;          /* the name and the size */
+        memcpy(out + at, p, head);
+        at += head;
+        if (t2) {
+            memcpy(out + at, "\t-\t-", 4);
+            at += 4;
+            memcpy(out + at, t2, len - head);
+            at += len - head;
+        }
+        p += len;
+    }
+    out[at] = 0;
+    free(raw);
+    return out;
+}
+
+/* The index on disk into THE TABLE: INDEX_VERSION an index of this version, 1 one of version 1,
+   converted (THE CONVERSION) and read as this version's, 0 none read -- no index (no file, or
+   no replays\ folder yet), or one that could not be read (s_idxBad). Every line goes into the
+   table but one that does not parse (ent_parse) and a second line of one name, which is merged
+   into the first (ent_merge). Names are told apart exactly, as Wine's files are. */
+static int index_read(void)
 {
     HANDLE h;
     LARGE_INTEGER sz;
-    DWORD got = 0;
-    char* copy;
+    DWORD got = 0, error;
+    char* raw = NULL;
     char* line;
+    int version, i;
 
-    free(s_idxRaw);
-    s_idxRaw = NULL;
     s_nent = 0;
+    s_idxBad = NULL;
     h = CreateFileA(INDEX_PATH, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-    if (h == INVALID_HANDLE_VALUE) return;
-    if (!GetFileSizeEx(h, &sz) || sz.QuadPart <= 0 || sz.QuadPart > INDEX_CAP ||
-        !(s_idxRaw = (char*)malloc((size_t)sz.QuadPart + 1)) ||
-        !ReadFile(h, s_idxRaw, (DWORD)sz.QuadPart, &got, NULL) || got != (DWORD)sz.QuadPart) {
-        CloseHandle(h);
-        free(s_idxRaw);
-        s_idxRaw = NULL;
-        return;
+    if (h == INVALID_HANDLE_VALUE) {
+        error = GetLastError();
+        if (file_gone(error)) return 0;
+        s_idxBad = "it could not be opened";
+        rlog("replays: " INDEX_PATH ": %s (%lu): nothing is written over it", s_idxBad, error);
+        return 0;
+    }
+    if (!GetFileSizeEx(h, &sz)) {
+        s_idxBad = "its size could not be read";
+    } else if (sz.QuadPart > INDEX_CAP) {
+        s_idxBad = "it is larger than INDEX_CAP";
+    } else if (sz.QuadPart > 0 && !(raw = (char*)malloc((size_t)sz.QuadPart + 1))) {
+        s_idxBad = "no memory to read it";
+    } else if (sz.QuadPart > 0 && (!ReadFile(h, raw, (DWORD)sz.QuadPart, &got, NULL) ||
+                                   got != (DWORD)sz.QuadPart)) {
+        s_idxBad = "it could not be read";
     }
     CloseHandle(h);
-    s_idxRaw[got] = 0;
-    if (strncmp(s_idxRaw, INDEX_MAGIC "\n", sizeof INDEX_MAGIC)) {
-        rlog("replays: " INDEX_PATH " is not an index of this version: rebuilt");
-        free(s_idxRaw);
-        s_idxRaw = NULL;
-        return;
+    /* an empty file holds no mark: it is no index, which the next save writes */
+    if (s_idxBad || !raw) {
+        free(raw);
+        if (s_idxBad) rlog("replays: " INDEX_PATH ": %s: nothing is written over it", s_idxBad);
+        return 0;
     }
-    copy = _strdup(s_idxRaw);
-    if (!copy) return;
-    for (line = strtok(copy + sizeof INDEX_MAGIC, "\n"); line && s_nent < ENT_MAX;
+    raw[got] = 0;
+    _Static_assert(sizeof INDEX_MAGIC == sizeof INDEX_MAGIC_V1, "the lines begin at one offset");
+    version = !strncmp(raw, INDEX_MAGIC "\n", sizeof INDEX_MAGIC) ? INDEX_VERSION
+            : !strncmp(raw, INDEX_MAGIC_V1 "\n", sizeof INDEX_MAGIC_V1) ? 1 : 0;
+    /* a NUL would end the text early, and the lines after it would go at the next write */
+    if (strlen(raw) != got) s_idxBad = "it is not text";
+    else if (version == 1 && !(raw = index_convert(raw))) s_idxBad = "no memory to convert it";
+    else if (!version) s_idxBad = "it is not an index of a version this build knows";
+    if (version == 1 && !s_idxBad)
+        rlog("replays: " INDEX_PATH " converted from version 1, every line's key unknown");
+    for (line = s_idxBad ? NULL : strtok(raw + sizeof INDEX_MAGIC, "\n"); line;
          line = strtok(NULL, "\n")) {
         size_t k = strlen(line);
+        Ent* e = ent_slot();
+        if (!e) {
+            s_idxBad = "no memory to read it whole";
+            break;
+        }
         if (k && line[k - 1] == '\r') line[k - 1] = 0;
-        if (ent_parse(line, &s_ent[s_nent]) && ent_find(s_ent[s_nent].file) < 0) s_nent++;
+        if (!ent_parse(line, e, 1)) continue;
+        for (i = 0; i < s_nent && strcmp(s_ent[i].file, e->file); i++) {}
+        if (i < s_nent) {
+            rlog("replays: " INDEX_PATH ": a second line for %s, merged into the first", e->file);
+            ent_merge(&s_ent[i], e);
+        } else {
+            s_nent++;
+        }
     }
-    free(copy);
+    free(raw);
+    if (s_idxBad) {
+        s_nent = 0;
+        rlog("replays: " INDEX_PATH ": %s: nothing is written over it", s_idxBad);
+        return 0;
+    }
+    return version;
 }
 
+static int index_save(void);
+
+/* The index on disk into THE TABLE; a version-1 index is written as this version's at once, so
+   that the prune, which reads only this version's, decides from it again. */
+static void index_load(void)
+{
+    if (index_read() == 1) index_save();
+}
+
+/* A line's file is there unless a read proves it is not: a file held open, or one an error
+   hides, keeps its line. */
 static int file_present(const char* file)
 {
     char path[MAX_PATH];
     _snprintf(path, sizeof path, "replays\\%s", file);
     path[sizeof path - 1] = 0;
-    return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+    return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES || !file_gone(GetLastError());
 }
 
 static int put_ent(char* b, int cap, int at, const Ent* e)
@@ -1231,8 +1462,13 @@ static int put_ent(char* b, int cap, int at, const Ent* e)
     unsigned i;
     lstrcpynA(map, e->map, sizeof map);
     sanitize(map);
-    at = gput(b, cap, at, "%s\t%I64u\t%u\t%u\t%u\t%u\t%u\t%u\t%s\t%u", e->file, e->size,
-              e->format, e->start, e->last, e->end, e->fav, e->played, map, e->nseats);
+    at = gput(b, cap, at, "%s\t%I64u\t", e->file, e->size);
+    at = e->keyless ? gput(b, cap, at, "-") : gput(b, cap, at, "%08X%08X", e->key[0], e->key[1]);
+    at = e->dated > 0 ? gput(b, cap, at, "\t%08lX%08lX", e->started.dwHighDateTime,
+                             e->started.dwLowDateTime)
+                      : gput(b, cap, at, e->dated ? "\t-" : "\tnone");
+    at = gput(b, cap, at, "\t%u\t%u\t%u\t%u\t%u\t%u\t%s\t%u", e->format, e->start, e->last,
+              e->end, e->fav, e->played, map, e->nseats);
     for (i = 0; i < e->nseats; i++) {
         lstrcpynA(nm, e->name[i], sizeof nm);
         sanitize(nm);
@@ -1267,8 +1503,8 @@ static void idx_unlock(void) { InterlockedExchange(&s_idxLock, 0); }
    shell, where no simulation is waiting on it, or on a level that plays a recording (the replay
    HUD's bookmarks): a playback is a skirmish, mode 2, with no peer, so the write can stall only the
    playback's own frame. The rule against a file write inside an OnCommand (tagpu_menu.c) is for a
-   network game, which a playback never is. */
-static void index_save(void)
+   network game, which a playback never is. 1 written. */
+static int index_save(void)
 {
     int cap = (int)INDEX_CAP, at, i;
     char* b = (char*)malloc((size_t)cap);
@@ -1276,32 +1512,20 @@ static void index_save(void)
     DWORD put = 0;
     BOOL ok;
 
-    if (!b) return;
-    at = gput(b, cap, 0, INDEX_MAGIC "\n");
-    for (i = 0; i < s_nent; i++) at = put_ent(b, cap, at, &s_ent[i]);
-    if (s_idxRaw) {
-        char* p = strchr(s_idxRaw, '\n');
-        while (p && *++p && at >= 0) {
-            char* end = strchr(p, '\n');
-            char* tab = strchr(p, '\t');
-            size_t len = end ? (size_t)(end - p) + 1 : strlen(p);
-            char file[FILE_MAX];
-            if (tab && (!end || tab < end) && (size_t)(tab - p) < FILE_MAX) {
-                memcpy(file, p, (size_t)(tab - p));
-                file[tab - p] = 0;
-                if (ent_find(file) < 0 && file_present(file) && at + (int)len + 1 < cap) {
-                    memcpy(b + at, p, len);
-                    at += (int)len;
-                    if (!end) b[at++] = '\n';
-                }
-            }
-            p = end;
-        }
+    if (s_idxBad) {
+        rlog("replays: " INDEX_PATH " not written: %s", s_idxBad);
+        return 0;
     }
+    if (!b) return 0;
+    at = gput(b, cap, 0, INDEX_MAGIC "\n");
+    /* every line of THE TABLE but one whose file a read proves gone; one that does not fit fails
+       the whole write */
+    for (i = 0; i < s_nent; i++)
+        if (file_present(s_ent[i].file)) at = put_ent(b, cap, at, &s_ent[i]);
     if (at < 0) {
         rlog("replays: the index does not fit in %u bytes: not written", INDEX_CAP);
         free(b);
-        return;
+        return 0;
     }
     idx_lock();
     h = CreateFileA(INDEX_TMP, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -1309,34 +1533,41 @@ static void index_save(void)
         idx_unlock();
         rlog("replays: cannot write " INDEX_TMP " (%lu)", GetLastError());
         free(b);
-        return;
+        return 0;
     }
     ok = WriteFile(h, b, (DWORD)at, &put, NULL) && put == (DWORD)at && FlushFileBuffers(h);
     CloseHandle(h);
     free(b);
-    if (!ok || !MoveFileExA(INDEX_TMP, INDEX_PATH, MOVEFILE_REPLACE_EXISTING |
-                                                  MOVEFILE_WRITE_THROUGH)) {
+    ok = ok && MoveFileExA(INDEX_TMP, INDEX_PATH,
+                           MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    if (!ok) {
         rlog("replays: cannot replace " INDEX_PATH " (%lu)", GetLastError());
         DeleteFileA(INDEX_TMP);
     }
     idx_unlock();
+    return ok;
 }
 
-/* Does the index on disk give `file` a favourite or a bookmark? Any line of that name counts,
-   whatever size it was written for. 1 marked, 0 not, -1 the index could not be read (a missing
-   index marks nothing). Under the index's lock, on any thread: it touches no s_ent. */
-static int index_marked(const char* file)
+/* Does the index on disk give the recording `file` of root key `key` a favourite or a bookmark?
+   Its line is found as index_read and ent_find find it: the line of exactly that name, else the
+   first of that name in another case, each with any later line of its own name merged in
+   (ent_merge). That line counts when it is of that key, whatever size it was written for (THE
+   KEY), or when its key is unknown (THE CONVERSION), whatever the file's key. 1 marked, 0 not,
+   -1 the index could not be read (a missing index marks nothing), is empty, is not text, or is
+   not of this version -- a version-1 one, converted at the next load (index_load), among them --
+   which keeps every recording. Under the index's lock, on any thread: it touches no s_ent. */
+static int index_marked(const char* file, const unsigned key[2])
 {
     HANDLE h = CreateFileA(INDEX_PATH, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
     LARGE_INTEGER sz;
     DWORD got = 0;
     char *raw, *line, *next;
-    Ent* e;
-    int marked = 0;
+    Ent *e, *exact, *other, *found;
+    int marked = 0, have_exact = 0, have_other = 0;
     if (h == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_FILE_NOT_FOUND ? 0 : -1;
     raw = GetFileSizeEx(h, &sz) && sz.QuadPart > 0 && sz.QuadPart <= INDEX_CAP
         ? (char*)malloc((size_t)sz.QuadPart + 1) : NULL;
-    e = (Ent*)malloc(sizeof *e);
+    e = (Ent*)malloc(3 * sizeof *e);
     if (!raw || !e || !ReadFile(h, raw, (DWORD)sz.QuadPart, &got, NULL) || got != (DWORD)sz.QuadPart) {
         CloseHandle(h);
         free(raw);
@@ -1345,15 +1576,30 @@ static int index_marked(const char* file)
     }
     CloseHandle(h);
     raw[got] = 0;
-    if (strncmp(raw, INDEX_MAGIC "\n", sizeof INDEX_MAGIC)) marked = -1;
+    exact = e + 1;
+    other = e + 2;
+    if (strlen(raw) != got || strncmp(raw, INDEX_MAGIC "\n", sizeof INDEX_MAGIC)) marked = -1;
     for (line = raw + sizeof INDEX_MAGIC; marked == 0 && *line; line = next) {
         size_t k;
         next = strchr(line, '\n');
         next = next ? (*next = 0, next + 1) : line + strlen(line);
         k = strlen(line);
         if (k && line[k - 1] == '\r') line[k - 1] = 0;
-        if (ent_parse(line, e) && !_stricmp(e->file, file) && (e->fav || e->nmarks)) marked = 1;
+        if (!ent_parse(line, e, 1)) continue;
+        if (!strcmp(e->file, file)) {
+            if (have_exact) ent_merge(exact, e);
+            else *exact = *e;
+            have_exact = 1;
+        } else if (have_other ? !strcmp(e->file, other->file) : !_stricmp(e->file, file)) {
+            if (have_other) ent_merge(other, e);
+            else *other = *e;
+            have_other = 1;
+        }
     }
+    found = have_exact ? exact : have_other ? other : NULL;
+    if (!marked && found && (found->keyless || same_key(found, key)) &&
+        (found->fav || found->nmarks))
+        marked = 1;
     free(raw);
     free(e);
     return marked;
@@ -1367,10 +1613,12 @@ int tagpu_replays_unmarked_delete(const char* file, HANDLE recording)
     SetInfoFn set = (SetInfoFn)(void*)GetProcAddress(GetModuleHandleA("kernel32.dll"),
                                                      "SetFileInformationByHandle");
     FILE_DISPOSITION_INFO gone = { TRUE };
+    unsigned key[2];
     int marked, r;
-    if (!set) return -1;
+    /* read through the prune's own handle: it shares nothing, so no open by path can */
+    if (!set || recr_root_key(recording, key) < 0) return -1;
     idx_lock();
-    marked = index_marked(file);
+    marked = index_marked(file, key);
     r = marked ? 0 : set(recording, FileDispositionInfo, &gone, sizeof gone) ? 1 : -1;
     idx_unlock();
     return marked < 0 ? -1 : r;
@@ -1523,17 +1771,35 @@ static void info_read(Ent* e)
     }
 }
 
-static void summarize(Ent* e)
+/* The summary's fields of `e` read again from its file; the marks stay. 1 read, 0 the file did
+   not read as a recording of this format (format 0), -1 it could not be opened now, `e`
+   unchanged. HELD (an ordering): a handle of ours, opened with the access and the sharing
+   recr_summary opens with, is held across its call. Every other handle on the file, opened before
+   ours or since, admits ours, so it admits recr_summary's identical open too: the summary cannot
+   fail to open once ours is open. A file ours cannot open now -- a prune's exclusive handle, say
+   -- is the -1, never a format 0 that would stand until the file's size changed again. */
+static int summarize(Ent* e)
 {
     char path[MAX_PATH], why[160];
     RecSummary s;
     unsigned i;
+    int read;
+    HANDLE held;
     _snprintf(path, sizeof path, "replays\\%s", e->file);
     path[sizeof path - 1] = 0;
-    e->format = e->start = e->last = e->end = e->nseats = e->nmarks = 0;
+    held = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                       0, NULL);
+    if (held == INVALID_HANDLE_VALUE) {
+        rlog("replays: %s: not read now (%lu): read again at the next open", e->file,
+             GetLastError());
+        return -1;
+    }
+    e->format = e->start = e->last = e->end = e->nseats = 0;
     e->lock = 0;                            /* the mark was the old content's */
     e->map[0] = 0;
-    if (recr_summary(path, &s, why, sizeof why)) {
+    read = recr_summary(path, &s, why, sizeof why);
+    CloseHandle(held);
+    if (read) {
         e->format = s.format;
         e->start = s.start;
         e->last = s.last;
@@ -1552,108 +1818,164 @@ static void summarize(Ent* e)
         if (dot) *dot = 0;
     }
     info_read(e);
+    return read;
+}
+
+/* `e` made the line of its file as the file is now, of root key `key` and size `size` (THE KEY):
+   another key is another recording, whose line starts with no favourite, last playing or
+   bookmark; the same key at another size is this recording grown or compacted, whose summary is
+   read again and whose marks stay. A line whose key is unknown takes this one, with THE
+   CONVERSION's rule: its favourite and last playing stay, its bookmarks and refusal mark while
+   the size is still its own, and its summary is read again. A summary that could not be read now
+   leaves the size unknown, so the next refresh reads it again. 1 when `e` changed. */
+static int ent_refresh(Ent* e, const unsigned key[2], unsigned long long size)
+{
+    int same_size = e->size == size, keep_lock = e->keyless && same_size;
+    unsigned lock = e->lock;
+    if (!e->keyless && same_key(e, key) && same_size) return 0;
+    if (e->keyless || !same_key(e, key))
+        e->dated = -1;                      /* the new key's start: read by scan (THE ORDER) */
+    if (e->keyless) {
+        if (!same_size) e->nmarks = 0;
+        e->keyless = 0;
+    } else if (!same_key(e, key)) {
+        e->fav = e->played = e->nmarks = 0;
+    }
+    e->key[0] = key[0];
+    e->key[1] = key[1];
+    e->size = size;
+    if (summarize(e) < 0) e->size = ~0ull;
+    if (keep_lock) e->lock = lock;
+    return 1;
+}
+
+/* A new line of `file` in THE TABLE, its key unknown until ent_refresh reads it: NULL when there
+   is no memory. Only for a name the table does not hold. */
+static Ent* ent_new(const char* file)
+{
+    Ent* e = ent_slot();
+    if (!e) return NULL;
+    s_nent++;
+    memset(e, 0, sizeof *e);
+    lstrcpynA(e->file, file, FILE_MAX);
+    e->keyless = 1;
+    e->size = ~0ull;
+    e->dated = -1;
+    return e;
 }
 
 /* ---- the replay HUD's bookmarks ---------------------------------------------------------------
    On the game thread, on a level that plays a recording, where the browser is closed: its rows are
    rebuilt by scan() whenever it opens, so reading the index into s_ent here takes nothing from it. */
 
-/* `file`'s line of `size` in the index as it is on disk, made from the recording when the index
-   has none or has it for another size (its bookmarks then go: they were another file's); NULL
-   when the index is full */
-static Ent* mark_ent(const char* file, unsigned long long size)
+/* `file`'s line in the index as it is on disk, made the line of the file as it is now
+   (ent_refresh); NULL, with the reason in `why`, when the file's key cannot be read or there is
+   no memory for a new line */
+static Ent* mark_ent(const char* file, const char** why)
 {
+    unsigned key[2];
+    unsigned long long size;
     int k;
+    Ent* e;
     index_load();
+    if (strlen(file) >= FILE_MAX || file_key(file, key, &size) != 1) {
+        *why = "its header cannot be read";
+        return NULL;
+    }
     k = ent_find(file);
-    if (k < 0) {
-        if (s_nent >= ENT_MAX) return NULL;
-        k = s_nent++;
-        memset(&s_ent[k], 0, sizeof s_ent[k]);
-        lstrcpynA(s_ent[k].file, file, FILE_MAX);
-        s_ent[k].size = ~0ull;
+    e = k >= 0 ? &s_ent[k] : ent_new(file);
+    if (!e) {
+        *why = "no memory for its line";
+        return NULL;
     }
-    if (s_ent[k].size != size) {
-        s_ent[k].size = size;
-        summarize(&s_ent[k]);
-    }
-    return &s_ent[k];
+    ent_refresh(e, key, size);
+    return e;
 }
 
-static void mark_done(void)
+int tagpu_replays_marks_get(const char* file, unsigned* out, int cap)
 {
-    free(s_idxRaw);
-    s_idxRaw = NULL;
-}
-
-int tagpu_replays_marks_get(const char* file, unsigned long long size, unsigned* out, int cap)
-{
+    unsigned key[2];
+    unsigned long long size;
     int k, n = 0;
     index_load();
     k = ent_find(file);
-    if (k >= 0 && s_ent[k].size == size)
-        for (; n < cap && n < (int)s_ent[k].nmarks; n++) out[n] = s_ent[k].marks[n];
-    mark_done();
+    if (k >= 0 && file_key(file, key, &size) == 1) {
+        Ent* e = &s_ent[k];
+        /* a line whose key is unknown takes it now, before this playing's end changes the size */
+        if (e->keyless && ent_refresh(e, key, size)) index_save();
+        if (same_key(e, key))
+            for (; n < cap && n < (int)e->nmarks; n++) out[n] = e->marks[n];
+    }
     return n;
 }
 
-int tagpu_replays_mark_add(const char* file, unsigned long long size, unsigned T)
+int tagpu_replays_mark_add(const char* file, unsigned T)
 {
-    Ent* e = strlen(file) < FILE_MAX ? mark_ent(file, size) : NULL;
+    const char* why = "";
+    Ent* e = mark_ent(file, &why);
     unsigned i, j;
     if (!e) {
-        rlog("replays: bookmark at %u in %s refused: the index has no room for it", T, file);
-        mark_done();
+        rlog("replays: bookmark at %u in %s refused: %s", T, file, why);
         return 0;
     }
     if (!e->format || T < e->start || T > e->last || e->nmarks >= MARKS_MAX) {
         rlog("replays: bookmark at %u in %s refused: %s", T, file,
              e->nmarks >= MARKS_MAX ? "it has 64 already" : "outside the recording");
-        mark_done();
         return 0;
     }
     for (i = 0; i < e->nmarks; i++)
         if ((T > e->marks[i] ? T - e->marks[i] : e->marks[i] - T) < MARK_GAP) {
             rlog("replays: bookmark at %u in %s refused: one is at %u", T, file, e->marks[i]);
-            mark_done();
             return 0;
         }
     for (i = 0; i < e->nmarks && e->marks[i] < T; i++) {}
     for (j = e->nmarks; j > i; j--) e->marks[j] = e->marks[j - 1];
     e->marks[i] = T;
     e->nmarks++;
-    index_save();
-    mark_done();
+    if (!index_save()) {
+        rlog("replays: bookmark at %u in %s refused: the index could not be written", T, file);
+        return 0;
+    }
     rlog("replays: bookmark at %u in %s (%u now)", T, file, e->nmarks);
     return 1;
 }
 
-int tagpu_replays_mark_remove(const char* file, unsigned long long size, unsigned T)
+int tagpu_replays_mark_remove(const char* file, unsigned T)
 {
-    Ent* e = strlen(file) < FILE_MAX ? mark_ent(file, size) : NULL;
+    const char* why = "";
+    Ent* e = mark_ent(file, &why);
     unsigned i;
     if (e)
         for (i = 0; i < e->nmarks; i++)
             if (e->marks[i] == T) {
                 memmove(&e->marks[i], &e->marks[i + 1], (e->nmarks - i - 1) * sizeof e->marks[0]);
                 e->nmarks--;
-                index_save();
-                mark_done();
+                if (!index_save()) {
+                    rlog("replays: bookmark at %u in %s not removed: the index could not be "
+                         "written", T, file);
+                    return 0;
+                }
                 rlog("replays: bookmark at %u in %s removed (%u left)", T, file, e->nmarks);
                 return 1;
             }
-    mark_done();
     return 0;
 }
 
-typedef struct { char file[FILE_MAX]; unsigned long long size; FILETIME mtime; } Found;
+/* a file in replays\: its key and size as file_key read them (`read` its answer), and its
+   recorded start (`dated` recr_wallclock_of's answer) */
+typedef struct {
+    char file[FILE_MAX];
+    int read, dated;
+    unsigned key[2];
+    unsigned long long size;
+    FILETIME started;
+} Found;
 
 static int newest_first(const void* a, const void* b)
 {
     const Found* x = (const Found*)a;
     const Found* y = (const Found*)b;
-    int c = CompareFileTime(&y->mtime, &x->mtime);
-    return c ? c : lstrcmpiA(y->file, x->file);
+    return recfile_newer_first(x->dated, &x->started, x->file, y->dated, &y->started, y->file);
 }
 
 /* A row for each recording listed that the filter shows: with All mods every one, else those of
@@ -1679,7 +2001,8 @@ static void rows_pick(void)
    asked for again.
    THE RULE that removes a mark: whenever the browser opens, a mark whose fingerprint or build key
    is not the running game's goes, since the data or the build it was refused under may have
-   changed; and a mark goes with its line's content when the file's size changes (summarize).
+   changed; and a mark goes with its line's content when the file's size changes (summarize,
+   ent_refresh).
    Nothing else removes one. The fingerprint is the mounted archives' names and sizes, so a change
    it does not see keeps the mark: a loose file in the game's folder, or an archive replaced by
    one of the same size. A refusal that is not a data refusal -- a missing map, a file being
@@ -1723,13 +2046,32 @@ static const char* lock_text(const Ent* e)
                                                   : "Made with other unit data.";
 }
 
-/* The recordings listed: every one in replays\, newest first, the first ENT_MAX of them. */
+/* The line of the found file `file` (ent_find), where a line of its name in another case is its
+   only while none of the `n` files found has that line's exact name: Wine tells such names
+   apart, and the line is that file's. -1 none. */
+static int found_line(const Found* found, int n, const char* file)
+{
+    int k = ent_find(file), j;
+    if (k < 0 || !strcmp(s_ent[k].file, file)) return k;
+    for (j = 0; j < n; j++)
+        if (!strcmp(found[j].file, s_ent[k].file)) return -1;
+    return k;
+}
+
+/* The recordings listed: every one in replays\, newest first, the first ENT_MAX of them. One whose
+   key cannot be read -- held by the prune, say -- is listed as its line has it, and not at all
+   without one: nothing is decided about its marks from a file that could not be read.
+   THE ORDER is the prune's (recfile_newer_first), by the recorded start, so the list's first
+   ENT_MAX are the ones the prune keeps first. A file's start is its line's when the line is its
+   key's and has read it, and is read (recr_wallclock_of) otherwise, before the sort; a file whose
+   key or start cannot be read now sorts as the prune sorts a file it cannot read, after every
+   dated one. */
 static void scan(void)
 {
     WIN32_FIND_DATAA fd;
     HANDLE h;
     Found* found = NULL;
-    int nf = 0, cap = 0, i, dirty = 0, kept = 0, gone;
+    int nf = 0, cap = 0, i, dirty = 0, kept = 0, total;
 
     index_load();
     s_nlisted = 0;
@@ -1755,42 +2097,66 @@ static void scan(void)
                 cap = c;
             }
             lstrcpynA(found[nf].file, fd.cFileName, FILE_MAX);
-            found[nf].size = size;
-            found[nf].mtime = fd.ftLastWriteTime;
             nf++;
         } while (FindNextFileA(h, &fd));
         FindClose(h);
     }
-    s_nfiles = nf;
+    s_nfiles = total = nf;
+    for (i = 0; i < nf; i++) {
+        Found* f = &found[i];
+        int k = found_line(found, total, f->file);
+        f->read = file_key(f->file, f->key, &f->size);
+        f->dated = -1;
+        f->started.dwLowDateTime = f->started.dwHighDateTime = 0;
+        if (f->read >= 0 && k >= 0 && !s_ent[k].keyless && same_key(&s_ent[k], f->key) &&
+            s_ent[k].dated >= 0) {
+            f->dated = s_ent[k].dated;
+            f->started = s_ent[k].started;
+        } else if (f->read >= 0) {
+            char path[MAX_PATH];
+            _snprintf(path, sizeof path, "replays\\%s", f->file);
+            path[sizeof path - 1] = 0;
+            f->dated = recr_wallclock_of(path, &f->started);
+        }
+    }
     if (nf > 1) qsort(found, (size_t)nf, sizeof *found, newest_first);
     if (nf > ENT_MAX) {
         rlog("replays: %d recordings; the browser lists the newest %d", nf, ENT_MAX);
         nf = ENT_MAX;
     }
 
-    /* the entries of listed files first, in list order; the rest leave s_ent and are carried
-       through by index_save while their file exists */
+    /* the lines of listed files first, in list order, the rest of THE TABLE after them. A file
+       with no line gets one; a file whose header is not a whole recording header (a read of 0)
+       is listed as its line has it, or with a new line of its summary, its key unknown. A file
+       whose line is already listed -- one of another case that a newer file of a third case
+       took -- is not listed: one line holds one file's marks */
     for (i = 0; i < nf; i++) {
-        int k = ent_find(found[i].file);
-        if (k >= 0 && k != kept) { Ent t = s_ent[kept]; s_ent[kept] = s_ent[k]; s_ent[k] = t; }
-        if (k >= 0) kept++;
-    }
-    gone = s_nent - kept;
-    s_nent = kept;
-    for (i = 0; i < nf; i++) {
-        int k = ent_find(found[i].file);
-        if (k < 0) {
-            k = s_nent++;
-            memset(&s_ent[k], 0, sizeof s_ent[k]);
-            lstrcpynA(s_ent[k].file, found[i].file, FILE_MAX);
-            s_ent[k].size = ~0ull;
+        const Found* f = &found[i];
+        int k = found_line(found, total, f->file), refreshed;
+        if (k >= 0 && k < kept) {
+            rlog("replays: %s: not listed: its line, %s, is a newer file's", f->file,
+                 s_ent[k].file);
+            continue;
         }
-        s_ent[k].mtime = found[i].mtime;
-        if (s_ent[k].size != found[i].size) {
-            s_ent[k].size = found[i].size;
-            summarize(&s_ent[k]);
+        if (k < 0) {
+            Ent* e = f->read < 0 ? NULL : ent_new(f->file);
+            if (!e) continue;
+            k = s_nent - 1;
+            if (f->read == 0) {
+                e->size = summarize(e) < 0 ? ~0ull : f->size;
+                dirty = 1;
+            }
+        }
+        if (k != kept) { Ent t = s_ent[kept]; s_ent[kept] = s_ent[k]; s_ent[k] = t; }
+        k = kept++;
+        refreshed = f->read == 1 && ent_refresh(&s_ent[k], f->key, f->size);
+        dirty |= refreshed;
+        if (f->read == 1 && s_ent[k].dated != f->dated) {
+            s_ent[k].dated = f->dated;
+            s_ent[k].started = f->started;
             dirty = 1;
-        } else if (!s_ent[k].info) {
+        }
+        if (!refreshed && !s_ent[k].info) {
             info_read(&s_ent[k]);
             dirty |= s_ent[k].info;
         }
@@ -1804,7 +2170,7 @@ static void scan(void)
         s_listed[s_nlisted++] = k;
     }
     free(found);
-    if (dirty || gone) index_save();
+    if (dirty) index_save();
     rows_pick();
 }
 
@@ -2207,9 +2573,14 @@ static char* recs_rec(char* gi, char** ctrls_out)
 
 static void fav_toggle(char* gi, int sel)
 {
+    Ent* e;
     if (sel < 0 || sel >= s_nrows) return;
-    s_ent[s_row[sel].ent].fav ^= 1;
-    index_save();
+    e = &s_ent[s_row[sel].ent];
+    e->fav ^= 1;
+    if (!index_save()) {
+        e->fav ^= 1;                        /* the star shows what the index holds */
+        rlog("replays: %s: the favourite not changed: the index could not be written", e->file);
+    }
     ((list_draw_fn)VA_LISTDRAW)(gi, s_recsIdx);
 }
 
@@ -2237,8 +2608,8 @@ static void replays_back(void* gi)
 }
 
 /* Watch: the selected recording through the replay's own Start. Its time goes into the index
-   first: a Start that commits pops this screen, whose destructor frees the index's carried lines,
-   so nothing is saved after it; a refused one puts the old time back. 1 when it committed. */
+   first: a Start that commits pops this screen, and nothing of the browser is saved after it; a
+   refused one puts the old time back. 1 when it committed. */
 static int watch(char* gi)
 {
     char* l = recs_rec(gi, NULL);
@@ -2287,10 +2658,10 @@ static void rows_refresh(char* gi)
    are written. */
 void tagpu_replays_refused(const char* file, unsigned code, unsigned a, unsigned b)
 {
-    char path[MAX_PATH];
-    WIN32_FILE_ATTRIBUTE_DATA fa;
+    unsigned key[2];
     unsigned long long size;
     char* gi = main_gi();
+    const char* why = "the index has no line for it";
     Ent* e = NULL;
     int k;
     if (strlen(file) >= FILE_MAX) return;
@@ -2302,15 +2673,19 @@ void tagpu_replays_refused(const char* file, unsigned code, unsigned a, unsigned
             return;
         }
     }
-    _snprintf(path, sizeof path, "replays\\%s", file);
-    path[sizeof path - 1] = 0;
-    if (!GetFileAttributesExA(path, GetFileExInfoStandard, &fa)) return;
-    size = ((unsigned long long)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
     if (s_gm) {
+        /* the browser's line, while it is still the file's as the file is (THE KEY) */
         k = ent_find(file);
-        if (k >= 0 && s_ent[k].size == size) e = &s_ent[k];
+        if (k < 0)
+            why = "the browser has no line for it";
+        else if (file_key(file, key, &size) != 1)
+            why = "its header cannot be read";
+        else if (!same_key(&s_ent[k], key) || s_ent[k].size != size)
+            why = "the file has changed since the browser read it";
+        else
+            e = &s_ent[k];
     } else {
-        e = mark_ent(file, size);
+        e = mark_ent(file, &why);
     }
     if (e) {
         e->lock = code;
@@ -2322,10 +2697,9 @@ void tagpu_replays_refused(const char* file, unsigned code, unsigned a, unsigned
         rlog("replays: %s marked: refusal %u (%u, %08X) under archives %08X, build key %08X",
              file, code, a, b, e->lock_print, e->lock_build);
     } else {
-        rlog("replays: %s not marked for refusal %u: the index has no line for it", file, code);
+        rlog("replays: %s not marked for refusal %u: %s", file, code, why);
     }
-    if (!s_gm) mark_done();
-    else if (e && gi && recs_rec(gi, NULL)) rows_refresh(gi);
+    if (s_gm && e && gi && recs_rec(gi, NULL)) rows_refresh(gi);
 }
 
 /* REPLAYS' OnCommand. Back is the one click left unanswered: the pump then calls this with -1,
@@ -2339,8 +2713,6 @@ static void __stdcall rp_oncommand(void* gi)
 
     if (idx < 0) {          /* the screen's destructor; the pump frees it next */
         s_gm = NULL;
-        free(s_idxRaw);
-        s_idxRaw = NULL;
         return;
     }
     if (!ctrls || idx < 1 || idx > rec_count(ctrls)) { ((gi_fn)VA_ACTDONE)(gi); return; }
