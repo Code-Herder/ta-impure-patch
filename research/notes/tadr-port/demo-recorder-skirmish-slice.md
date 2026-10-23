@@ -305,7 +305,11 @@ BOUNDS) make the bodies of their kinds, in payload order, from a section of colu
 a varint column count (1..32), each column's varint length, then the columns, which fill the
 section. A reader takes only its own scheme (2 in the cells and events frames, 1 in the state frame, and in
 the orders frame 2 in a segment whose header has `RT_HOLD`, else 1) and column count, and reads every
-column to its end, so a file of another build's coding is refused, never misread. The encoder walks
+column to its end, so a file of another build's coding is refused, never misread. The orders
+frame's scheme is each segment's: the codec takes it at every restart from that segment's own
+params (`orders_restart`), and every change of segment resets the world, which invalidates the
+codec, so one chain may mix the two schemes -- a multiplayer file and its skirmish takeover
+timeline do. The encoder walks
 each iteration's records in order after the unit and pool frames (`frames_walk`), giving each frame
 record to its frame and applying `RK_UNIT` and `RK_UNIT_GONE` to the unit copy as they come, so a
 frame sees at each record the same unit copy the decoder's walk has there (`RecFrameAt`). What each
@@ -1059,9 +1063,11 @@ build compared the wrong tables; a dump now carries a header naming them.
 - **The playback's own cost** is not measured.
 - **The replay's statics are outside the simulation-state check**, `tagpu_replay.c` being
   `presentation`: a takeover (S4) that resumes play from a playback has to account for them.
-- **A network recording's controller changes** are not followed: getter 75 answers the header's
-  controllers for the whole level. In a skirmish the one in-play change, the console's AI toggle,
-  flips types 1 and 2, which getter 75 answers alike ([the host note](demo-recorder-s2-host.md)).
+- **A network recording's controller changes within a segment** are not followed: within a
+  multiplayer segment getter 75 answers the recording machine's view, that segment header's
+  controllers; across a segment, each segment's controllers (`mp_follow`,
+  `tagpu_puppet_locals`). In a skirmish the one in-play change, the console's AI toggle, flips
+  types 1 and 2, which getter 75 answers alike ([the host note](demo-recorder-s2-host.md)).
 
 ## S3 — seeking
 

@@ -22,15 +22,20 @@ skirmish segment of the multiplayer file:
   and the recorder's start of the new timeline, and exits 1 on a refusal.
 - By hand, `takeover <P> at <T>[ difficulty <D>]` in `tagpu_replay.trigger` on a playing level.
   D defaults to the timeline's own difficulty when it has an AI seat, else 2.
-- **A takeover starts at a refresh.** T is rounded down to the refresh at or before it, read from
-  the file's index (`recr_refresh_at`): a segment's first and second iterations, then each GameTime
-  1 modulo the refresh interval (the first iteration past one that a gap skips), the interval being
-  RT_HOLD's in a skirmish recording -- 300, or the test lever `tagpu_rec.refresh`'s -- and 300 in
-  a multiplayer recording, whose header has no RT_HOLD (`reclossy_is_refresh`). The trigger logs
-  `a takeover asked for at GameTime T takes over at R` when they differ, the taken-over line names
-  R, and tacli reports it (`at` in `--json`); the level holds at R − 1. A live rewind's fork rounds
-  the same way. At a refresh the stream's world is the writer's exact copy, and between two the
-  stream may hold weapon targets that owner code resolves with no alive test (R0 below).
+- **A takeover starts at T where the segment holding T holds nothing, else at the refresh at or
+  before T.** A segment holds nothing when its header has no RT_HOLD -- a multiplayer file's own
+  segment, whose writer runs no lossy filter -- or an RT_HOLD with no flag and no held bit
+  (`recr_holds_nothing`); its stream's world is then the writer's exact copy at every iteration,
+  so R = T (`recr_exact_at`). Every skirmish segment a writer of this format makes holds
+  (`REC_SKIRMISH_HOLDS`), and there T is rounded down to the refresh at or before it, read from
+  the file's index (`recr_refresh_at`): a segment's first and second iterations, then each
+  GameTime 1 modulo RT_HOLD's refresh interval -- 300, or the test lever `tagpu_rec.refresh`'s --
+  (the first iteration past one that a gap skips; `reclossy_is_refresh`). The two calls name the
+  same segment (one chain walk, `chain_hold`). The trigger logs `a takeover asked for at GameTime
+  T takes over at R` when they differ, the taken-over line names R, and tacli reports it (`at` in
+  `--json`); the level holds at R − 1. A live rewind's fork rounds the same way. At a refresh the
+  stream's world is the writer's exact copy, and between two the stream may hold weapon targets
+  that owner code resolves with no alive test (R0 below).
 - **Every GameTime after a timeline's first iteration can be taken over.** The fork is appended
   after R − 1, which at a timeline's first iteration is its parent's iteration, or none for the
   original (`recr_append_point` refuses both). The second iteration is a refresh so that a request
@@ -51,8 +56,8 @@ skirmish segment of the multiplayer file:
   takeover on each. K takes over at T2, or at the entry's `at` (tenseat's: 901, the tick after its
   typed LOS command); `tareplay.py takeover --at T` overrides both. Those fixtures record with
   `tagpu_rec.refresh 30`, a refresh every 30 ticks, and every point the harness draws is 1 modulo
-  30, so the refresh at or before it is the point itself; the harness reads it from L's file all
-  the same (`tarec.refresh_at`).
+  30, so the refresh at or before it is the point itself; the harness reads the start from L's
+  file all the same (`tarec.takeover_at`, which mirrors `takeover_point`).
 
 ## The takeover's steps
 
@@ -61,7 +66,7 @@ order, and the takeover's are inserted (`tagpu_replay.c`, *THE TAKEOVER*):
 
 | Step | Where | What, and the invariant it rests on |
 |---|---|---|
-| R0 bound | before any host write | `tk_bound`: T is a refresh iteration of the file (`recr_refresh_at`) unless the rewind returns to the saved present, so the takeover hands the engine the writer's exact copy: the target resolver `0x48A190` forms `begin + movsx(word0)·0x118` with no bound and no alive test and AutoAim's read `0x48A1E0` tests only `+0xA6`, and both run as owner code from TK4a; a held target is an index the engine produced for that unit, so what they would meet is a dead or reused slot, never an address outside the array ([engine map](../exe-reverse-engineering.md#the-demo-recorders-lossy-stream-what-a-held-byte-meets-on-a-puppet-and-at-a-takeover-disassembled-2026-10-11)); P is a seat of the recording, and its live count `+0x144` at T is above 0 (the destructor's own elimination count); D is 0, 1 or 2; every recorded seat holds no AI object and no acquisition record (a puppet seat's player init skipped both), has its group table and sight counters, and has map bit `+0x146` = its index, below 10 (the acquisition table has ten entries), on the host and in the image at T, which R8 writes over the host's; V holds no AI object; the level has an objective; the recording's declared tables are the ones this build records, on the fields a reader compares across a chain, so the fork can be played (S4's D3: a fork is always recorded); and the recorder can record a fork (`tagpu_rec_fork_ready`). A refusal writes nothing and puts the reader back |
+| R0 bound | before any host write | `tk_bound`: T is an iteration of a segment that holds nothing (`recr_exact_at`) or a refresh iteration of the file (`recr_refresh_at`) unless the rewind returns to the saved present, so the takeover hands the engine the writer's exact copy: the target resolver `0x48A190` forms `begin + movsx(word0)·0x118` with no bound and no alive test and AutoAim's read `0x48A1E0` tests only `+0xA6`, and both run as owner code from TK4a; a held target is an index the engine produced for that unit, so what they would meet is a dead or reused slot, never an address outside the array ([engine map](../exe-reverse-engineering.md#the-demo-recorders-lossy-stream-what-a-held-byte-meets-on-a-puppet-and-at-a-takeover-disassembled-2026-10-11)); P is a seat of the recording, and its live count `+0x144` at T is above 0 (the destructor's own elimination count); D is 0, 1 or 2; every recorded seat holds no AI object and no acquisition record (a puppet seat's player init skipped both), has its group table and sight counters, and has map bit `+0x146` = its index, below 10 (the acquisition table has ten entries), on the host and in the image at T, which R8 writes over the host's; V holds no AI object; the level has an objective; the recording's declared tables are the ones this build records, on the fields a reader compares across a chain, so the fork can be played (S4's D3: a fork is always recorded); and the recorder can record a fork (`tagpu_rec_fork_ready`). A refusal writes nothing and puts the reader back |
 | TK0 | the last act of R0 | `tk_open`: the file opened for writing with `FILE_SHARE_READ` and checked to be the file the reader holds (volume and file index), **then** the append point found. Nothing after TK0 refuses |
 | TK1 | after R6, before R7 | `tk_seats`: viewed = P, the difficulty, each seat's type through the engine's setter (P 1, the others 2), each seat's AI object and acquisition record in the player init's order, then the AI profiles |
 | R8 | the orders | every node restarts (D1), the builders adopt their frames, Paralyze and BuildWeapon resume, and p1 is bounded (`tk_node`, `tk_node_bounded`); the lists of a host unit the kills left alive and the image does not describe are torn down, and its three weapon slots' targets set to none, (0, `0x8000`), since its image was last written from the stream before T and the refresh does not reach it (`tk_orphans`); the seat types again after `players_put`, which writes PlayerInfo `+0x94` from the image |

@@ -61,7 +61,7 @@ It covers five tasks:
 - the resource transfer `0x464C60`;
 - the save writer `0x4326B0`.
 
-**Task 3: getter 75.** Getter 75 is Impure's `cob_get` in `tagpu_patches.c`, reached by an E9 at `0x480770`. On a puppet host it answers from a per-seat table built from the header's recorded controllers (1 or 2 answers 1). The table is written at the seat fill, before the loader thread exists. For a skirmish recording the answer is 1 for every seat.
+**Task 3: getter 75.** Getter 75 is Impure's `cob_get` in `tagpu_patches.c`, reached by an E9 at `0x480770`. On a puppet host it answers from a per-seat table built from the recorded controllers of the segment being read (1 or 2 answers 1). The table is written at the seat fill, before the loader thread exists, from the first header, and again after every seek from the segment the reader then stands in (`mp_follow`, `tagpu_puppet_locals`), on the game thread between steps, before the seek remakes every unit. For a skirmish recording the answer is 1 for every seat.
 
 **Task 4: YARD_OPEN.** Three functions are involved:
 

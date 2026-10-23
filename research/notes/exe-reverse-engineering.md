@@ -4307,8 +4307,9 @@ the plan would hold (2026-10-11; rel32 and stored-pointer scans of `.text`, each
   puppet; all of them run after a takeover. A held target is a value the engine produced for that
   unit, so its index is a slot of the unit array: what the missing tests let through is a target
   that has died or whose slot has been reused since, not an address outside the array. So a
-  takeover starts only at a refresh, where the targets are the engine's own (`tagpu_replay.c`,
-  `tk_bound`), and the units the refresh's image does not describe have their three slots'
+  takeover starts only where the stream holds no target: at a refresh of a segment that holds,
+  at any iteration of one that holds nothing (`tagpu_replay.c`, `tk_bound`, `recr_exact_at`),
+  where the targets are the engine's own, and the units the refresh's image does not describe have their three slots'
   targets set to none, (0, `0x8000`), the words AutoAim writes when it drops a target
   (`0x48A2AF`, `0x48A2B4`, DIS) (`tk_orphans`).
 - **The shot builder reads slot `+0x10` on a puppet** (`0x49CE62`, *The weapon slots*): a field
