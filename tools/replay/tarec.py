@@ -45,8 +45,9 @@
                                              record, the players' sight counters included; --takeover
                                              applies the existing fork_view comparison policy;
                                              --seek, OTHERDUMP a seek's, checks its unit slots,
-                                             yard bits and contest marks by THE OCCUPANCY RULE on
-                                             a file that holds its cells
+                                             yard bits and contest marks by THE OCCUPANCY RULE in
+                                             a segment that holds its cells; the rules are those
+                                             of the segment that holds the dumps' GameTime
   tools/replay/tarec.py counts FILE DUMP     a dump's counts of roots, sinks and observed sites
   tools/replay/tarec.py compare-counts FILE LIVE_A LIVE_B PUPPET_A PUPPET_B [--absent TSV]
                                              [--rewind | --cob-exact]
@@ -81,8 +82,8 @@
                                              clock takes, the eye before the range clamp and the
                                              level x 65536 (tagpu_persp.c, mirrored)
 
-  check, compare, compare --puppet and lossy-check take --timeline N: the chain of timeline N,
-  read across each fork it descends from. check, compare and compare --puppet take --exact: the
+  check, compare, compare --puppet, compare-dumps and lossy-check take --timeline N: the chain of
+  timeline N, read across each fork it descends from. check, compare and compare --puppet take --exact: the
   world built from the exact records instead of the stream (exact_blocks).
 
   images-gate alone takes --stock-secondary-cosmetics: the owner-approved native cosmetic-pool
@@ -1661,7 +1662,9 @@ class EventCheck:
     feature call's, so the world summarised here is every reader's. Between the images of two
     iterations, a unit that appears must have its create, one that disappears its death, one whose
     state byte +0x10E changed a state event with the new byte, one whose build fraction +0x104
-    reached 0.0 its build done, and, with `yards` (a skirmish's: its recorder writes them), one
+    reached 0.0 its build done, and, with `yards` (a skirmish's: its recorder writes them; None,
+    the default, takes the rule per segment from the world's header, since a multiplayer file's
+    takeover timeline is a skirmish's, whose recorder writes them; a bool fixes it), one
     whose yard, +0x10F bit 2, changed a yard event whose last one for it is the new yard, since
     YARD_OPEN 0x47DAC0 is that bit's one writer (0x47DAF1) -- unless the slot died and was made
     again in the step, which the create and the death both name; and a unit made in the step has
@@ -1671,8 +1674,9 @@ class EventCheck:
     events and not dead since -- and a script slice a slot at most once (tagpu_recfmt.h,
     RK_EV_SLICE, RK_EV_QUERY)."""
 
-    def __init__(self, limit=20, yards=False):
-        self.yards = yards
+    def __init__(self, limit=20, yards=None):
+        self.fixed = yards
+        self.yards = bool(yards)
         self.open = False           # an iteration has begun
         self.in_events = False      # ... and its images are behind us
         self.summary_now = None     # its world, once its images are applied
@@ -1703,6 +1707,8 @@ class EventCheck:
         self.in_events = True
 
     def on_record(self, w, kind, b):
+        if self.fixed is None and w.header is not None:
+            self.yards = w.header.get("mode") != 3
         if kind is None:
             self.before_tick(w)
             return
@@ -2175,7 +2181,7 @@ def cmd_check(path, timeline=0, exact=False):
             for line in lines:
                 print("  " + line.replace("dump", "snapshot"))
 
-    ec = EventCheck(yards=h.get("mode") != 3)
+    ec = EventCheck()
     w = stream_to(h, bl, on_snapshot=at_snapshot, on_record=ec.on_record)
     ec.finish(w)
     print(f"{path}: the stream reads to GameTime {w.tick} ({w.corrections} corrections in it); "
@@ -2744,7 +2750,8 @@ def fork_view(a, b, ha, hb):
 
 def cmd_compare_fork(path, n):
     """Timeline n's first iteration, the world the takeover's rebuild made, against its parent's
-    chain at fork_at, through fork_view."""
+    chain at fork_at, through fork_view with the header of the parent chain's segment that holds
+    fork_at (a fork of a fork takes its parent segment's controllers, not the root's)."""
     segs, _ = file_segments(path, decode=True)
     c = chain(segs, n)[-1]
     if not c["id"]:
@@ -2760,7 +2767,7 @@ def cmd_compare_fork(path, n):
     if b.tick != T:
         print(f"{path}: timeline {n}'s first iteration is GameTime {b.tick}, not {T}")
         return 2
-    fork_view(a, b, hp, c["header"])
+    fork_view(a, b, a.header, c["header"])
     lines, k = a.differences(b, hp["tables"], c["header"]["tables"], gnames=known_names(hp))
     print(f"{path}: timeline {n} at GameTime {T} against timeline {c['parent']}'s chain, "
           f"{len(b.units)} live units: " + ("EQUAL" if not k else f"{k} DIFFERENCES"))
@@ -3224,13 +3231,15 @@ def dump_images(path):
     return tick, dh.get("globals"), images
 
 
-def cmd_compare_dumps(path, a_path, b_path, takeover=False, seek=False):
+def cmd_compare_dumps(path, a_path, b_path, takeover=False, seek=False, timeline=0):
     """Two dumps of playings of FILE at the same GameTime, the same player viewed: every record
     they carry, the players' sight counters included, equal byte for byte. FILE gives the
-    dimensions and the globals' names; only its header is read. With `seek`, B a seek's, on a
-    file that holds its cells: B's unit slots, yard bits and contest marks by THE OCCUPANCY
+    dimensions and the globals' names from its first header; the rules below come from the
+    header of `timeline`'s chain segment that holds the dumps' GameTime (segment_at), since a
+    multiplayer file's takeover timeline is a skirmish segment. With `seek`, B a seek's, in a
+    segment that holds its cells: B's unit slots, yard bits and contest marks by THE OCCUPANCY
     RULE, and A's, the straight playing's, by the same rule on their own, since B's then stand
-    in for them in the comparison. With `seek` on a multiplayer file, both dumps' sort buckets
+    in for them in the comparison. With `seek` in a multiplayer segment, both dumps' sort buckets
     by the engine's invariants and +0x8E of a unit not carried left out (sort_chains): a seek's
     order there is a function of T's composed world, a playing's of its history."""
     h = header_only(path)
@@ -3241,14 +3250,15 @@ def cmd_compare_dumps(path, a_path, b_path, takeover=False, seek=False):
               + ("" if ah.get("frame") == bh.get("frame") else
                  ": one is a frame dump and the other is not, or their frames differ"))
         return 1
+    hs = segment_at(path, timeline, a.tick)["header"]
     if takeover:
-        fork_view(a, b, h, h)
+        fork_view(a, b, hs, hs)
     stale = []
-    if seek and holds_cells(h):
+    if seek and holds_cells(hs):
         # occupancy(a, a) writes A's own cells and marks over themselves
         stale = ["A's " + line for line in occupancy(a, a, contest=True)]
         stale += occupancy(a, b, contest=True)
-    if seek and h.get("mode") == 3:
+    if seek and hs.get("mode") == 3:
         stale += ["A's " + line for line in chain_faults(a)] + sort_chains(a, b)
     lines, n = a.differences(b, ah["tables"], bh["tables"], gnames=known_names(h), sight=True)
     lines, n = lines + stale, n + len(stale)
@@ -3865,7 +3875,8 @@ def main(argv):
         argv = argv[:k] + argv[k + 2:]
     if "--timeline" in argv:
         k = argv.index("--timeline")
-        if argv[1:2] not in (["check"], ["compare"], ["lossy-check"]) or k + 1 >= len(argv) or \
+        if argv[1:2] not in (["check"], ["compare"], ["lossy-check"], ["compare-dumps"]) or \
+                k + 1 >= len(argv) or \
                 not argv[k + 1].isdigit():
             print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
             return 2
@@ -3933,7 +3944,7 @@ def main(argv):
         if images:
             return cmd_images(argv[2], argv[3])
         if argv[1] == "compare-dumps":
-            return cmd_compare_dumps(argv[2], argv[3], argv[4], takeover, seek)
+            return cmd_compare_dumps(argv[2], argv[3], argv[4], takeover, seek, timeline)
         if argv[1] == "images-gate":
             return cmd_images_gate(argv[2], (argv[3], argv[4]), (argv[5], argv[6]),
                                    (argv[7], argv[8]), argv[9], argv[10], argv[11:],
