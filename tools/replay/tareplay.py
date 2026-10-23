@@ -64,8 +64,9 @@ A fixture fixtures.json gives a `takeover` runs two processes more, K after L an
     K  takeover  `replay takeover` of L's recording at T = T2, or the entry's `at`, as player P
                  (the recording's controlled player unless the entry names one) in a fresh
                  process, which records
-                 timeline 1 into the same file; T is the refresh at or before the point drawn,
-                 which REFRESH_LEVER's grid makes the point itself: the window, its boxes and ErrorLog.txt watched,
+                 timeline 1 into the same file; T is the refresh at or before the point drawn (a
+                 skirmish takeover starts there, tarec.takeover_at), which REFRESH_LEVER's grid
+                 makes the point itself: the window, its boxes and ErrorLog.txt watched,
                  the entry's `order` and `type` given, a dump k<T+dump>, the level ended
     F  boundary  `replay seek T-300 --timeline 1` of K's file in a fresh process, which plays
                  across the fork at T, dump f<T+300> (or at T+dump when that comes first)
@@ -191,9 +192,10 @@ DECLINE_LEVER = "tagpu_rec.decline"
 # L and K launch with EXACT_LEVER in their game folder: the writer follows each stream block with
 # the exact records it filtered (RB_EXACT), against which `tarec compare --exact` reads their dumps
 # and `tarec lossy-check` the lossy stream (tagpu_reclossy.c). A fixture with a `takeover` launches
-# every process with REFRESH_LEVER holding TAKEOVER_REFRESH: a takeover starts at the refresh at or
-# before the GameTime asked (tagpu_replay.c, tk_bound), and every point the harness draws is 1
-# (mod 30), so on that grid the takeover, the forks and the rewind's fork start where they ask
+# every process with REFRESH_LEVER holding TAKEOVER_REFRESH: a skirmish takeover starts at the
+# refresh at or before the GameTime asked (tagpu_replay.c, tk_bound), and every point the harness
+# draws is 1 (mod 30), so on that grid the takeover, the forks and the rewind's fork start where
+# they ask
 EXACT_LEVER = "tagpu_rec.exact"
 REFRESH_LEVER = "tagpu_rec.refresh"
 TAKEOVER_REFRESH = 30
@@ -1908,13 +1910,13 @@ def forks_steps(w, fx, out, results):
             raise Failed(f"forks: timeline {tl}'s playing did not touch its last-used time")
 
     def fork(tid, T, parent=0):
-        """Timeline `tid` taken over from `parent` at T, which starts at the refresh at or before
-        it (tk_bound): that GameTime, which the fork names as its fork_at."""
+        """Timeline `tid` taken over from `parent` at T, which starts at T or the refresh at or
+        before it (tarec.takeover_at): that GameTime, which the fork names as its fork_at."""
         try:
-            R = tarec.refresh_at(str(source), parent, T)
+            R = tarec.takeover_at(str(source), parent, T)
         except tarec.Unreadable as e:
-            raise CouldNotRun(f"forks: K{tid}: the refresh at or before {T}: {e}")
-        say(f"forks: K{tid} from {parent} at {T}" + (f", the refresh {R}" if R != T else ""))
+            raise CouldNotRun(f"forks: K{tid}: the takeover's start for {T}: {e}")
+        say(f"forks: K{tid} from {parent} at {T}" + (f", starting at {R}" if R != T else ""))
         T = R
         w.place(fx["fix"], fx["dll"])
         log = Log(w)
@@ -2926,12 +2928,11 @@ class Run:
                 if "K" in fx["want"]:
                     T, fx["tk_P"] = tk_point(fx, h, *fx["tk_ask"])
                     try:
-                        fx["tk_T"] = tarec.refresh_at(str(fx["rec"]), 0, T)
+                        fx["tk_T"] = tarec.takeover_at(str(fx["rec"]), 0, T)
                     except tarec.Unreadable as e:
-                        raise CouldNotRun(f"the takeover's refresh at or before {T}: {e}")
+                        raise CouldNotRun(f"the takeover's start for {T}: {e}")
                     if fx["tk_T"] != T:
-                        say(f"{name}: the takeover asked for at {T} starts at {fx['tk_T']}, the "
-                            f"refresh at or before it")
+                        say(f"{name}: the takeover asked for at {T} starts at {fx['tk_T']}")
                 for p in fx["want"][1:]:
                     if p != "F":                # F follows K, which it reads
                         self.put(name, p)

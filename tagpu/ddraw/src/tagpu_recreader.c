@@ -2193,21 +2193,40 @@ int recr_append_point(RecReader* r, unsigned at, RecAppend* a, char* why, unsign
     return 1;
 }
 
+/* The chosen chain's index of the segment that has stream blocks and covers T, found afresh from
+   the index (segs_scan), or -1 (why). recr_refresh_at and recr_exact_at both take it, so the two
+   always name one segment. */
+static int chain_hold(RecReader* r, unsigned T, char* why, unsigned cap)
+{
+    unsigned hold;
+    if (segs_scan(r, 0, why, cap) < 0) return -1;
+    for (hold = 0; hold < r->nchain; hold++) {
+        const RecSeg* s = chain_seg(r, hold);
+        if (s->nstream && T >= s->t.first && T <= cover_end(r, hold)) return (int)hold;
+    }
+    snprintf(why, cap, "GameTime %u is outside the timeline played", T);
+    return -1;
+}
+
+int recr_exact_at(RecReader* r, unsigned T, RecTimeline* seg, char* why, unsigned cap)
+{
+    const RecSeg* s;
+    int hold = chain_hold(r, T, why, cap);
+    if (hold < 0) return -1;
+    s = chain_seg(r, (unsigned)hold);
+    if (seg) *seg = s->t;
+    /* read here: the next scan of the segments frees their headers (segs_scan) */
+    return recr_holds_nothing(s->h);
+}
+
 unsigned recr_refresh_at(RecReader* r, unsigned T, RecTimeline* seg, char* why, unsigned cap)
 {
     const RecSeg* s;
     RecLossyBlock* b;
-    unsigned hold, j, n = 0, R;
-    if (segs_scan(r, 0, why, cap) < 0) return 0;
-    for (hold = 0; hold < r->nchain; hold++) {
-        s = chain_seg(r, hold);
-        if (s->nstream && T >= s->t.first && T <= cover_end(r, hold)) break;
-    }
-    if (hold == r->nchain) {
-        snprintf(why, cap, "GameTime %u is outside the timeline played", T);
-        return 0;
-    }
-    s = chain_seg(r, hold);
+    unsigned j, n = 0, R;
+    int hold = chain_hold(r, T, why, cap);
+    if (hold < 0) return 0;
+    s = chain_seg(r, (unsigned)hold);
     if (seg) *seg = s->t;
     b = (RecLossyBlock*)malloc(s->nstream * sizeof *b);
     if (!b) {

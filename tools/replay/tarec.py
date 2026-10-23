@@ -480,6 +480,14 @@ def holds_cells(h):
     return bool(h) and bool(h.get("hold", {}).get("flags", 0) & RECL_CELLS)
 
 
+def holds_nothing(h):
+    """True when a header's stream holds nothing, as tagpu_recreader.h's recr_holds_nothing: no
+    RT_HOLD, or one with no flag and no held bit. Its stream's world is then the writer's exact
+    copy at every iteration, not only at a refresh."""
+    hold = h.get("hold")
+    return not hold or (not hold["flags"] and not any(hold["unit"]) and not any(hold["node"]))
+
+
 def feature_dims(h):
     """The grid's columns and rows, the wreck pool's records and the projectile pool's records a
     recording's header states."""
@@ -1974,21 +1982,44 @@ def file_segments(path, decode=False):
     return segments(bl, offsets), stop
 
 
+def _segment_at(bl, offsets, timeline, T):
+    ch = chain(segments(bl, offsets), timeline)
+    for i, s in enumerate(ch):
+        end = ch[i + 1]["fork_at"] - 1 if i + 1 < len(ch) else s["last"]
+        if s["first"] is not None and s["first"] <= T <= end:
+            return s
+    raise Unreadable(f"GameTime {T} is outside timeline {timeline}'s chain")
+
+
+def segment_at(path, timeline, T):
+    """The segment of `timeline`'s chain whose part holds T -- each segment's to its child's
+    fork_at - 1 -- as tagpu_recreader.c's chain_hold finds it, its header among its keys.
+    Unreadable when T is outside the chain."""
+    offsets = []
+    bl, _ = blocks(path, None, offsets, decode=False)
+    return _segment_at(bl, offsets, timeline, T)
+
+
 def refresh_at(path, timeline, T):
-    """The GameTime a takeover of `timeline` asked for at T starts from, as tagpu_recreader.c's
+    """The last refresh at or before T in the chain's segment that holds it, as tagpu_recreader.c's
     recr_refresh_at finds it: in the chain's segment whose part holds T, the largest `last` <= T
     of a stream block flagged RBF_REFRESH, or the segment's first iteration. Unreadable when T is
     outside the chain."""
     offsets, flags = [], []
     bl, _ = blocks(path, None, offsets, flags=flags, decode=False)
     fl = {id(b): f for b, f in zip(bl, flags)}
-    ch = chain(segments(bl, offsets), timeline)
-    for i, s in enumerate(ch):
-        end = ch[i + 1]["fork_at"] - 1 if i + 1 < len(ch) else s["last"]
-        if s["first"] is not None and s["first"] <= T <= end:
-            return max([s["first"]] + [b[2] for b in s["blocks"] if b[0] == RB_STREAM and
-                                       fl[id(b)] & RBF_REFRESH and b[2] <= T])
-    raise Unreadable(f"GameTime {T} is outside timeline {timeline}'s chain")
+    s = _segment_at(bl, offsets, timeline, T)
+    return max([s["first"]] + [b[2] for b in s["blocks"] if b[0] == RB_STREAM and
+                               fl[id(b)] & RBF_REFRESH and b[2] <= T])
+
+
+def takeover_at(path, timeline, T):
+    """The GameTime a takeover of `timeline` asked for at T starts from, as tagpu_replay.c's
+    takeover_point finds it: T itself where the chain's segment holding T holds nothing
+    (holds_nothing), else refresh_at."""
+    if holds_nothing(segment_at(path, timeline, T)["header"]):
+        return T
+    return refresh_at(path, timeline, T)
 
 
 def seek_start(path, timeline, T, lead):

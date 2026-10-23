@@ -90,6 +90,21 @@ static __inline int recr_holds_cells(const RecHeader* h)
     return h->has_hold && (h->hold.flags & RECL_CELLS) != 0;
 }
 
+/* 1 when the header's stream holds nothing: no RT_HOLD -- its writer ran no lossy filter
+   (tagpu_recwriter.c, header_apply: one branch makes the filter and writes RT_HOLD) -- or an
+   RT_HOLD with no flag and no held bit, whose filter writes every record as it came
+   (tagpu_reclossy.c). Its stream's world is then the writer's exact copy at every iteration,
+   not only at a refresh. */
+static __inline int recr_holds_nothing(const RecHeader* h)
+{
+    unsigned i;
+    if (!h->has_hold) return 1;
+    if (h->hold.flags) return 0;
+    for (i = 0; i < REC_UNIT_IMAGE; i++) if (h->hold.unit[i]) return 0;
+    for (i = 0; i < REC_ORDER_IMAGE; i++) if (h->hold.node[i]) return 0;
+    return 1;
+}
+
 /* one node list of a live unit, its node images in list order */
 typedef struct RecList { unsigned n, cap; unsigned char* img; } RecList;
 
@@ -298,10 +313,16 @@ int recr_same_file(const RecReader* r, void* f);
 /* The last refresh iteration at or before T of the chosen chain, found afresh from the index: the
    largest `last` <= T of a stream block with RBF_REFRESH in the chain's segment that covers T, or
    that segment's first iteration (tagpu_reclossy.h, reclossy_refresh_at), and with `seg` that
-   segment's RecTimeline. At a refresh the stream's world is the writer's exact copy, which is why
-   a takeover starts only there (tagpu_replay.c, tk_bound). The GameTime, or 0 (why) when T is
-   outside the chain or the file cannot be read. */
+   segment's RecTimeline. At a refresh the stream's world is the writer's exact copy, which is
+   where a takeover of a segment that holds something starts (tagpu_replay.c, tk_bound;
+   recr_exact_at). The GameTime, or 0 (why) when T is outside the chain or the file cannot be
+   read. */
 unsigned recr_refresh_at(RecReader* r, unsigned T, RecTimeline* seg, char* why, unsigned cap);
+/* Whether the chosen chain's segment that covers T holds nothing (recr_holds_nothing), found
+   afresh as recr_refresh_at finds it, with `seg` (NULL for none) that segment's RecTimeline: 1 it
+   holds nothing, so every iteration of it is exact; 0 it holds something, so only its refreshes
+   are; -1 (why) T is outside the chain or the file cannot be read. */
+int recr_exact_at(RecReader* r, unsigned T, RecTimeline* seg, char* why, unsigned cap);
 
 /* Authority at the currently read world tick. Rebuild after seek/segment/index
    changes; advancing queries consume only new application records. Unknown stays

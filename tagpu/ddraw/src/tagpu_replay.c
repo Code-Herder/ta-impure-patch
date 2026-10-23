@@ -2826,7 +2826,7 @@ static void ord_teardown(char* n)
    when it drops a target (0x48A2AF, 0x48A2B4, DISASSEMBLED): such a unit's image was last
    written from the stream before T, where a target is a held value (tagpu_reclossy.c) that the
    refresh at T corrects only for the units the image describes, and from T the owner code that
-   resolves a target runs on it (tk_bound, THE REFRESH). The side slots past the third are no
+   resolves a target runs on it (tk_bound, THE EXACT START). The side slots past the third are no
    part of the unit image, so the stream holds none of them. */
 static unsigned tk_orphans(const Lv* L, const RecWorld* W)
 {
@@ -6483,10 +6483,10 @@ static void sk_buckets(const Lv* L, const RecWorld* W, unsigned nheads)
    contest's marks, +0x110 bits 26 and 27, from the images, after R10 wrote the recording's slots
    and yard bits. The engine plays on from here, and its writers read both: the clear re-claims
    around a bit-26 holder, the re-claim acts on bit 27 (tagpu_puppet.c, THE FOOTPRINT WRITERS). The
-   world is exact here: a takeover starts at a refresh (takeover_point), where the stream's held
-   bytes are the writer's own (tagpu_reclossy.c), and a return to now from the saved image of the
-   present, a dump, which holds every byte. TK4a's passability refresh then runs over the grid
-   whole (tk_live). The bound: a slot live in the image whose host slot holds a live unit of its
+   world is exact here: a takeover of a segment that holds its cells starts at a refresh
+   (takeover_point), where the stream's held bytes are the writer's own (tagpu_reclossy.c), and
+   a return to now from the saved image of the present, a dump, which holds every byte. TK4a's
+   passability refresh then runs over the grid whole (tk_live). The bound: a slot live in the image whose host slot holds a live unit of its
    type (holds), as states_put's. */
 static void tk_cells(const Lv* L, const RecWorld* W)
 {
@@ -7347,10 +7347,12 @@ static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, int back
         snprintf(why, cap, "player %u is not one of the recording's seats", P);
         return 0;
     }
-    /* THE REFRESH. A takeover from the file starts only at a refresh iteration, where the
-       stream's world equals the recording writer's exact copy (tagpu_recwriter.c, iteration_done,
-       checked there before every refresh block ends): a bound on what the takeover hands the
-       engine, which from TK4a runs every unit's owner code on these values. Between two
+    /* THE EXACT START. A takeover from the file starts only where the stream's world equals the
+       recording writer's exact copy: at every iteration of a segment whose header holds nothing
+       (recr_exact_at; a multiplayer file's own segment, whose writer runs no lossy filter), and
+       elsewhere at a refresh iteration (tagpu_recwriter.c, iteration_done, checked there before
+       every refresh block ends): a bound on what the takeover hands the engine, which from TK4a
+       runs every unit's owner code on these values. Between two
        refreshes the stream holds the bytes RT_HOLD names, the weapon slots' targets among them,
        and two owner readers would take a held target as it is: the target resolver 0x48A190
        forms begin + movsx(word 0) * 0x118 with no bound and no alive test (0x48A19F..0x48A1D7),
@@ -7358,16 +7360,23 @@ static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, int back
        A held value is one the engine produced for that unit (tagpu_reclossy.c, THE INVARIANTS),
        so its index is a slot of the unit array: the hazard is a target that has died or whose
        slot has been reused since, not an address outside the array. At a refresh the targets
-       are the engine's own. The callers round a request down to the refresh before it
-       (takeover_point); a return to the saved present (`back`) starts from the live game's own
-       frame, not from the file. */
+       are the engine's own. The callers start at T where that holds and round a request down to
+       the refresh before it elsewhere (takeover_point); a return to the saved present (`back`)
+       starts from the live game's own frame, not from the file. */
     if (!back) {
-        unsigned R = recr_refresh_at(s_rd, W->tick, NULL, w2, sizeof w2);
-        if (R != W->tick) {
-            if (R) snprintf(why, cap, "GameTime %u is not a refresh iteration: the last at or "
-                            "before it is %u", W->tick, R);
-            else snprintf(why, cap, "%s", w2);
+        int exact = recr_exact_at(s_rd, W->tick, NULL, w2, sizeof w2);
+        if (exact < 0) {
+            snprintf(why, cap, "%s", w2);
             return 0;
+        }
+        if (!exact) {
+            unsigned R = recr_refresh_at(s_rd, W->tick, NULL, w2, sizeof w2);
+            if (R != W->tick) {
+                if (R) snprintf(why, cap, "GameTime %u is not a refresh iteration: the last at or "
+                                "before it is %u", W->tick, R);
+                else snprintf(why, cap, "%s", w2);
+                return 0;
+            }
         }
     }
     /* A takeover needs a playable seat. Returning to the saved present must also
@@ -7438,31 +7447,38 @@ static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, int back
     return 1;
 }
 
-/* THE TAKEOVER'S START, found before anything is committed to it: R, the refresh at or before T
-   that tk_bound requires, and the append point after R - 1 that tk_open finds again under the
-   file's lock, so a request no takeover can serve is refused while the playing -- or a rewind's
-   live original -- still runs. A refresh that is its timeline's first iteration cannot start one:
-   the iteration before it is the parent's, or none for the original (recr_append_point). The
-   writer makes every segment's second iteration a refresh (tagpu_reclossy.h,
-   reclossy_is_refresh), so only a request for a first iteration meets that, and the refusal names
-   the second. R with `a` filled, or 0 (why). */
+/* THE TAKEOVER'S START, found before anything is committed to it: R, where tk_bound lets one
+   start -- T itself when the segment holding T holds nothing (recr_exact_at), else the refresh
+   at or before T -- and the append point after R - 1 that tk_open finds again under the file's
+   lock, so a request no takeover can serve is refused while the playing -- or a rewind's live
+   original -- still runs. A start that is its timeline's first iteration cannot start one: the
+   iteration before it is the parent's, or none for the original (recr_append_point). The writer
+   makes every segment's second iteration a refresh (tagpu_reclossy.h, reclossy_is_refresh), so
+   only a request for a first iteration meets that, and the refusal names the next. R with `a`
+   filled, or 0 (why). */
 static unsigned takeover_point(unsigned T, RecAppend* a, char* why, unsigned cap)
 {
     RecTimeline seg;
     char w2[160];
-    unsigned R = recr_refresh_at(s_rd, T, &seg, w2, sizeof w2);
+    int exact = recr_exact_at(s_rd, T, &seg, w2, sizeof w2);
+    unsigned R = exact < 0 ? 0 : exact ? T : recr_refresh_at(s_rd, T, &seg, w2, sizeof w2);
     if (!R) {
         snprintf(why, cap, "%s", w2);
         return 0;
     }
     if (R == seg.first) {
-        snprintf(why, cap, "GameTime %u rounds to the refresh %u, timeline %u's first iteration, "
-                 "which no takeover starts at; the first GameTime one can is %u", T, R, seg.id,
-                 R + 1);
+        if (exact)
+            snprintf(why, cap, "GameTime %u is timeline %u's first iteration, which no takeover "
+                     "starts at; the first GameTime one can is %u", T, seg.id, T + 1);
+        else
+            snprintf(why, cap, "GameTime %u rounds to the refresh %u, timeline %u's first "
+                     "iteration, which no takeover starts at; the first GameTime one can is %u",
+                     T, R, seg.id, R + 1);
         return 0;
     }
     if (!recr_append_point(s_rd, R - 1, a, w2, sizeof w2)) {
-        snprintf(why, cap, "GameTime %u rounds to the refresh %u: %s", T, R, w2);
+        if (exact) snprintf(why, cap, "GameTime %u: %s", T, w2);
+        else snprintf(why, cap, "GameTime %u rounds to the refresh %u: %s", T, R, w2);
         return 0;
     }
     return R;
@@ -8403,7 +8419,8 @@ static int rw_trigger(const char* line)
      exactly.
    - `takeover <P> at <T>` or `takeover <P> at <T> difficulty <D>`: on a level that plays a
      recording, the takeover waits for the next frame visit after the first step (THE TAKEOVER);
-     it takes over at the refresh at or before T, and says so when that is not T (tk_bound). A
+     it takes over at T where the segment holding T holds nothing, else at the refresh at or
+     before T, and says so when that is not T (tk_bound). A
      start no fork can be appended after is refused at once (takeover_point); the checks that
      need the world there are R0's, so their refusals come from seek_run.
    - `follow <seat>`, `jump <seat>`, `follow free`: the HUD's Follow, Jump and Free cam
@@ -8654,8 +8671,9 @@ static void trigger_read(void)
                 tagpu_logf("replay: takeover refused: this level plays no recording");
                 return;
             }
-            /* a takeover starts at the refresh at or before the GameTime asked (tk_bound), and
-               one that cannot start there is refused before the seek (takeover_point) */
+            /* a takeover starts at T where the segment holding T holds nothing, else at the
+               refresh at or before it (tk_bound), and one that cannot start there is refused
+               before the seek (takeover_point) */
             R = takeover_point(T, &a, why, sizeof why);
             if (!R) {
                 tagpu_logf("replay: %s: %s refused: %s", s_name,
