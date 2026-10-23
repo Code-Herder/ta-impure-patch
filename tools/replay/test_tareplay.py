@@ -1548,9 +1548,13 @@ class SegmentRules(unittest.TestCase):
         path = str(path)
         # the root holds nothing: every iteration of its part is a start
         self.assertEqual([tarec.takeover_at(path, 1, T) for T in (2, 10, 20)], [2, 10, 20])
-        # the child holds dword 5: a request rounds to its refresh at or before
-        self.assertEqual([tarec.takeover_at(path, 1, T) for T in (21, 22, 30, 50)],
-                         [21, 22, 22, 50])
+        # the child holds dword 5: a request rounds to its refresh at or before, and none starts
+        # at its first iteration
+        self.assertEqual([tarec.takeover_at(path, 1, T) for T in (22, 30, 50)], [22, 22, 50])
+        with self.assertRaisesRegex(tarec.Unreadable, "timeline 1's first iteration.*is 22"):
+            tarec.takeover_at(path, 1, 21)
+        with self.assertRaisesRegex(tarec.Unreadable, "timeline 0's first iteration.*is 2"):
+            tarec.takeover_at(path, 1, 1)
         self.assertEqual(tarec.refresh_at(path, 1, 10), 1)
         self.assertTrue(tarec.holds_nothing(tarec.segment_at(path, 1, 20)["header"]))
         self.assertFalse(tarec.holds_nothing(tarec.segment_at(path, 1, 21)["header"]))

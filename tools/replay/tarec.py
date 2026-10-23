@@ -2042,10 +2042,14 @@ def refresh_at(path, timeline, T):
 def takeover_at(path, timeline, T):
     """The GameTime a takeover of `timeline` asked for at T starts from, as tagpu_replay.c's
     takeover_point finds it: T itself where the chain's segment holding T holds nothing
-    (holds_nothing), else refresh_at."""
-    if holds_nothing(segment_at(path, timeline, T)["header"]):
-        return T
-    return refresh_at(path, timeline, T)
+    (holds_nothing), else refresh_at. Unreadable, as takeover_point refuses it, when that start
+    is its segment's first iteration, after which no fork can be appended."""
+    s = segment_at(path, timeline, T)
+    R = T if holds_nothing(s["header"]) else refresh_at(path, timeline, T)
+    if R == s["first"]:
+        raise Unreadable(f"GameTime {R} is timeline {s['id']}'s first iteration, which no "
+                         f"takeover starts at; the first GameTime one can is {R + 1}")
+    return R
 
 
 def seek_start(path, timeline, T, lead):

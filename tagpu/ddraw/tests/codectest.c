@@ -5678,6 +5678,17 @@ static int outcomes_orders_matched(const RecCodecParams* p0)
         ok &= expect("  and restarted with its own, its scheme 2",
                      reccodec_valid(rd) && reccodec_decode(rd, keep.p, keep.n, &out, why, sizeof why) &&
                          out.n == y.n && !memcmp(out.p, y.p, y.n), 1);
+        reccodec_restart(rd1, p, pre.unit, pre.live, pre.pool, pre.pcount, pre.phw, &pv);
+        out.n = 0;
+        ok &= expect("orders: a codec made for a segment without RT_HOLD, restarted with the params "
+                     "of one with it, decodes its scheme 2",
+                     reccodec_valid(rd1) && reccodec_decode(rd1, keep.p, keep.n, &out, why, sizeof why) &&
+                         out.n == y.n && !memcmp(out.p, y.p, y.n), 1);
+        reccodec_restart(rd1, p0, pre.unit, pre.live, pre.pool, pre.pcount, pre.phw, &pv);
+        out.n = 0;
+        ok &= expect("  and restarted with its own, its scheme 1",
+                     reccodec_valid(rd1) && reccodec_decode(rd1, st1.sec.p, st1.sec.n, &out, why, sizeof why) &&
+                         out.n == y.n && !memcmp(out.p, y.p, y.n), 1);
     }
     reccodec_stream_end(&st);
     reccodec_stream_end(&st1);
