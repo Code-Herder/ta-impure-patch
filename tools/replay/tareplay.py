@@ -2222,8 +2222,8 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     """X2, THE SWITCH (tagpu_replay.c) in one playing of `x2`, a copy of the forks lane's file
     whose live timelines are 0, 2, 4 and 5: from timeline 5 to 2 by a seek, whose world a round
     trip rebuilds in place; from 2 to 4 at a GameTime before both forks, re-chained with no seek;
-    the eviction the in-level stamps decide, which the file's own would not; 4's boundary crossed
-    on the re-chained reader; a refused switch, which moves nothing; the watched timeline 4
+    the eviction the in-level stamps decide, which the file's own would not; the re-chained
+    reader's world past 2's fork, and 4's boundary crossed on it; a refused switch, which moves nothing; the watched timeline 4
     deleted, a switch to 0 first; and the level's end, one touch of every timeline it played.
     `base` is a GameTime of the original before 2 and 4 fork. The tarec checks go on `results`'
     offline pool, reading copies taken at once (`copies`)."""
@@ -2311,11 +2311,18 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     if not said or "fork would delete timeline 5" not in said:
         raise Failed(f"X2: the prediction after watching 5 then 2: "
                      f"{said.strip() if said else 'no answer'}; wanted timeline 5")
-    # 5. 4's boundary, crossed by the re-chained reader
+    # 5. the re-chained reader's own world, past 2's fork, where the chain it left would have
+    # crossed into 2, and then 4's boundary, crossed by it
+    if not F2 + 30 < F4:
+        raise CouldNotRun(f"X2: GameTime {F2 + 30} is not before 4's fork at {F4}")
+    arm_dump(w, log, "x2b0", F2 + 30)
     arm_dump(w, log, "x2b", F4 + 30)
     run_to(w, log, F4 + 30, [])
-    wait_dumps(log, ["x2b"])
-    d = copies("X2 x2b", w.gamedir / "replays" / "dump-x2b.bin")[0]
+    wait_dumps(log, ["x2b0", "x2b"])
+    d0, d = copies("X2 x2b", w.gamedir / "replays" / "dump-x2b0.bin",
+                   w.gamedir / "replays" / "dump-x2b.bin")
+    results.later(check_or_fail, "X2: timeline 4 before its fork, played by the re-chained "
+                  "reader", "compare", "--puppet", "--seek", x2, d0, "--timeline", 4)
     results.later(check_or_fail, "X2: timeline 4 past its fork on the re-chained reader",
                   "compare", "--puppet", "--seek", x2, d, "--timeline", 4)
     # 6. a refused switch moves nothing: 1 was evicted and compacted away
@@ -2371,7 +2378,8 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     w.stop()
     results.add(("forks: X2, watching another timeline in place", PASS,
                  f"5 -> 2 sought at {T5 + 1}; 2 -> 4 re-chained at {base - 1}; the stamps evict 5; "
-                 f"4 past {F4}; 1 refused; delete 4 by way of 0; touched 0, 5, 2"))
+                 f"4 at {F2 + 30} and past {F4}; 1 refused; delete 4 by way of 0; touched 0, 5, "
+                 f"2"))
 
 
 def forks_steps(w, fx, out, results):

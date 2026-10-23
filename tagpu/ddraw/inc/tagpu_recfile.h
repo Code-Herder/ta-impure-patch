@@ -74,9 +74,11 @@ void recfile_exit(void);
 /* REC_FILE_TOUCH with every row a playing stamped, the first its last timeline: the ticket, or 0
    as recfile_request refuses. */
 unsigned recfile_touch(const char* path, const RecTimelineState* rows, unsigned n);
-/* THE CLAIMS. A playing reserves the timeline it plays, and a switch the one it moves to, from
-   before its reader reads the file's metadata until after that reader closes. A deletion of a
-   reserved timeline is refused, and a claim of a timeline with a deletion queued is refused.
+/* THE CLAIMS. The timeline a playing chooses -- the one it plays, and the one a switch moves to
+   -- is claimed before the scan it is chosen from and released after its reader stops playing
+   it. A deletion of a claimed timeline is refused, and a claim of a timeline with a deletion
+   queued is refused. A reader that only reads, the HUD's walker's, claims nothing: what keeps its
+   bytes is the file's lifetime (tagpu_replay.c, THE SWITCH).
    A claim and a queued deletion both name a canonical path, a file identity and a timeline,
    under the queue's lock; replacement of the file cannot erase its path reservation.
    recfile_play: the playing's claim, every other cleared; 0 when that timeline's deletion is
@@ -91,8 +93,8 @@ void recfile_leave(void);
 /* File-only work, called by maintenance workers. No engine state is read. `rows`, a touch's
    alone (NULL, 0 for every other op): the timelines a playing stamped, the first `id`, its last
    timeline. A touch sets each row's live timeline's last-used time to the later of the file's and
-   the row's, skips a row whose timeline is absent or deleted, and refuses when the first row's
-   is. */
+   the row's, skips a row whose timeline is absent or deleted, and refuses when no row's is
+   live. */
 int recr_manage(const char* path, unsigned op, unsigned id, const char* output,
                 const RecTimelineState* rows, unsigned nrows, char* why, unsigned cap);
 #endif
