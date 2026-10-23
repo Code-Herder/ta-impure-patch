@@ -877,7 +877,9 @@ the render thread.
 
 - **The HUD font** is not decided; Oswald and Barlow Condensed are the mockup's.
 - **Address space.** The decoded parts stay for the session, 85 MB of a 32-bit process, and
-  the archive stays mapped with the DLL, 27.0 MB. The parts are painted at about twice the
+  the archive stays mapped with the DLL, 27.0 MB. The art loads on the first frame with a HUD
+  state, which since the live rewind is the first frame of a live recorded skirmish on the Vulkan
+  lane too, not only of a replay. The parts are painted at about twice the
   4.5 pixels a unit the HUD is drawn at on a 4K screen at 150 %, so most of both is detail no
   screen up to 4K shows. The owner keeps the full resolution. 20 of the 66 parts (34.4 MB decoded,
   10.7 MB of the archive) are the `proposed` section's: the Take over button and picker and the
