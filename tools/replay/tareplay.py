@@ -1819,10 +1819,14 @@ def prune_step(w, fx, out, forked):
             shutil.copyfile(rec, dst)
         os.utime(dst, (now - 600 * (k + 1),) * 2)
     star = rd / "0000 starred.imprec"
-    # an index line with the favourite flag set: name size format start last end fav played map
-    # nseats marks (tagpu_replays.c, the index)
-    (rd / "index.dat").write_text("IMPURE-REPLAYS-INDEX\t1\n"
-                                  f"{star.name}\t{star.stat().st_size}\t0\t0\t0\t0\t1\t0\t-\t0\t\n",
+    # an index line with the favourite flag set: name size key format start last end fav played
+    # map nseats marks (tagpu_replays.c, the index). The key is the root header block's crc_body
+    # and crc_head, the block right after the 8-byte magic (recr_root_key), at bytes 32..40; the
+    # plain copies share it, so the line is the starred one's by its name
+    body, head = struct.unpack_from("<II", star.read_bytes()[:40], 32)
+    (rd / "index.dat").write_text("IMPURE-REPLAYS-INDEX\t2\n"
+                                  f"{star.name}\t{star.stat().st_size}\t{body:08X}{head:08X}"
+                                  "\t0\t0\t0\t0\t1\t0\t-\t0\t\n",
                                   newline="\n")
     log = Log(w)
     rc, text = tacli("scenario", "load", w.name, SCENARIOS / fx["fix"]["load"], "--defaults",

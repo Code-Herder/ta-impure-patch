@@ -33,21 +33,23 @@ void tagpu_replays_install(int ready);
 int  tagpu_replays_redirects(const char* name);
 
 /* The replay HUD's bookmarks (tagpu_hudmarks.h), in replays\\index.dat, on the game thread of a
-   level that plays a recording. `file` is the name in replays\\ and `size` its size: a line for
-   another size has none. get copies at most `cap`, sorted, and returns how many. add refuses a T
-   outside the recording, within 30 GameTime of another or past 64, remove refuses a T that is not
-   one; each writes the index whole, through a temporary file and a rename, and returns 1 when it
-   changed it. */
-int  tagpu_replays_marks_get(const char* file, unsigned long long size, unsigned* out, int cap);
-int  tagpu_replays_mark_add(const char* file, unsigned long long size, unsigned T);
-int  tagpu_replays_mark_remove(const char* file, unsigned long long size, unsigned T);
+   level that plays a recording. `file` is the name in replays\\; its line holds the bookmarks
+   while its key is the file's root key (recr_root_key), which no playing, fork, deletion or
+   compaction changes, and a line of another key, another recording's, has none. get copies at
+   most `cap`, sorted, and returns how many. add refuses a T outside the recording, within 30
+   GameTime of another or past 64, remove refuses a T that is not one; each writes the index
+   whole, through a temporary file and a rename, and returns 1 when it changed it. */
+int  tagpu_replays_marks_get(const char* file, unsigned* out, int cap);
+int  tagpu_replays_mark_add(const char* file, unsigned T);
+int  tagpu_replays_mark_remove(const char* file, unsigned T);
 
 /* On a recording-file worker (tagpu_recfile.c, the prune): marks `recording`, a handle with DELETE
    access that no other opener shares, for deletion unless replays\\index.dat gives `file` (its
-   name in replays\\) a favourite or a bookmark. The index is read off the disk under the lock its
-   writer takes, so a mark saved before this call keeps the recording. 1 marked for deletion (it
-   goes when the handle closes), 0 kept, -1 nothing decided: the index could not be read, or the
-   system has no SetFileInformationByHandle. */
+   name in replays\\) a favourite or a bookmark on its line of the root key read through
+   `recording`. The index is read off the disk under the lock its writer takes, so a mark saved
+   before this call keeps the recording. 1 marked for deletion (it goes when the handle closes), 0
+   kept, -1 nothing decided: the recording or the index could not be read, the index is of
+   version 1 and not yet converted, or the system has no SetFileInformationByHandle. */
 int  tagpu_replays_unmarked_delete(const char* file, HANDLE recording);
 
 /* Watch's own check refused the recording `file` of replays\\ with one of WATCH'S DATA REFUSALS

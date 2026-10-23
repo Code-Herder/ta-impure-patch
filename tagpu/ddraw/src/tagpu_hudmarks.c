@@ -28,11 +28,11 @@ static HANDLE          s_walkH;
 static int             s_walkStarted;
 static char            s_walkPath[MAX_PATH];
 static unsigned        s_walkTl;        /* the timeline walked: the one the playback plays        */
-/* the bookmarks: index.dat keys a recording by its name in replays\ and its size */
+/* the bookmarks: index.dat keys a recording by its name in replays\ and its root key, which
+   tagpu_replays.c reads from the file at each call */
 static unsigned        s_bm[BM_MAX];
 static int             s_nbm;
 static char            s_file[MAX_PATH];
-static unsigned long long s_size;
 static int             s_keyOk;
 /* THE STATS: each recorded player's measures every s_period GameTime from s_base, the walk's first
    iteration, read off the same iterations as the markers (THE WALKER) */
@@ -215,7 +215,6 @@ static DWORD WINAPI walker(void* arg)
 static void walk_start(void)
 {
     const char* path = tagpu_replay_path();
-    WIN32_FILE_ATTRIBUTE_DATA fa;
     unsigned k;
     s_walkStarted = 1;
     s_walkTl = tagpu_replay_timeline();
@@ -223,11 +222,10 @@ static void walk_start(void)
     lstrcpynA(s_walkPath, path, sizeof s_walkPath);
     s_keyOk = 0;
     s_nbm = 0;
-    if (!_strnicmp(path, "replays\\", 8) && GetFileAttributesExA(path, GetFileExInfoStandard, &fa)) {
+    if (!_strnicmp(path, "replays\\", 8)) {
         lstrcpynA(s_file, path + 8, sizeof s_file);
-        s_size = ((unsigned long long)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
         s_keyOk = 1;
-        s_nbm = tagpu_replays_marks_get(s_file, s_size, s_bm, BM_MAX);
+        s_nbm = tagpu_replays_marks_get(s_file, s_bm, BM_MAX);
     }
     InterlockedExchange(&s_walkStop, 0);
     InterlockedExchange(&s_mkN, 0);
@@ -318,12 +316,12 @@ int tagpu_hudmarks_bookmark(unsigned now, unsigned within, unsigned* at)
     }
     if (best >= 0) {
         *at = s_bm[best];
-        if (!tagpu_replays_mark_remove(s_file, s_size, s_bm[best])) return -1;
+        if (!tagpu_replays_mark_remove(s_file, s_bm[best])) return -1;
         memmove(&s_bm[best], &s_bm[best + 1], (size_t)(s_nbm - best - 1) * sizeof s_bm[0]);
         s_nbm--;
         return 0;
     }
-    if (s_nbm >= BM_MAX || !tagpu_replays_mark_add(s_file, s_size, now)) return -1;
+    if (s_nbm >= BM_MAX || !tagpu_replays_mark_add(s_file, now)) return -1;
     for (i = s_nbm; i > 0 && s_bm[i - 1] > now; i--) s_bm[i] = s_bm[i - 1];
     s_bm[i] = now;
     s_nbm++;
