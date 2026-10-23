@@ -161,7 +161,9 @@ THE CHAIN*):
 - **the header block**: the format version, Impure's build, the game mode, the map, the first
   GameTime, the start's wall clock (`RT_WALLCLOCK`: a FILETIME in UTC, then the local time's offset
   from UTC at that instant in minutes, east positive, daylight saving included, which
-  `tarec.py info` shows as the local time and its offset), the unit array's slots and the units each player may have, the unit
+  `tarec.py info` shows as the local time and its offset: MEASURED 2026-10-23, a landing gate's
+  recording read `started 2026-10-23 02:18:14 -04:00`, the reference setup's zone in daylight
+  saving time), the unit array's slots and the units each player may have, the unit
   types' count and a hash of their names, the players (index, controller, side, logo and name), the
   registry's levers and their text, the exclusion file's SHA-256, and the recorded declarations
   (index, class, key, row size, flags and name), so a reader can walk their images; the main

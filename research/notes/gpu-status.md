@@ -2995,8 +2995,13 @@ file and a file with a live fork (made by a real takeover) kept as forked or mar
 that is not a recording kept. With `keep 3`, the next game's 54 older recordings: the newest 2 kept, 48
 deleted and the same four kept. **Not exercised:** *in use*, since a file held open by another process
 could not be reproduced under Wine on the reference setup. MEASURED 2026-10-23 by `prune_step` in
-the landing gate, both builds: `6 older recordings, the newest 1 kept; of the rest, 2 deleted, 2 kept
-(forked or marked), 0 in use, 1 unreadable`, the older-format copy among the deleted. A name too long
+the landing gate, both builds, the seeds' last-write times against their recorded starts: `6 older
+recordings, the newest 1 kept; of the rest, 2 deleted, 2 kept (forked or marked), 0 in use, 1
+unreadable`, the older-format copy among the deleted and the first plain copy kept. **The order's
+cost**, MEASURED 2026-10-23 under Wine on the reference setup by a scratch harness calling
+`recr_wallclock_of` over 50 copies of a gate recording (a header block of 11,132 bytes each) with
+the page cache warm: 6.5 to 6.9 ms for the 50 over five passes, about 0.14 ms a file; a cold cache
+was not measured. A name too long
 for its lock path is counted unreadable before the sort, outside N.
 
 **Its events have 59 sites of their own** (the attach log's `recorder: N event sites in`),
