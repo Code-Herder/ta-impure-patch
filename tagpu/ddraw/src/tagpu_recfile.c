@@ -72,13 +72,12 @@ typedef struct FileJob {
 static FileJob* s_pending[FILE_JOBS];
 /* THE TICKETS. A request's outcome waits in a ring of REC_FILE_RESULTS slots, filled in the order
    the requests finish: the k-th completion writes slot k % N with its ticket.
-   THE INVARIANT, an ordering under jobs_lock: from its issue until N - 1 later requests have
-   finished, a ticket is in s_pending or in the ring at every instant the lock is free -- the
-   worker writes the result before the job leaves s_pending, both under the lock, and the in-use
-   refusal writes its result in the same hold of the lock that issues the ticket. So a result
-   outlives N - 1 later completions, and a ticket the ring no longer holds reads unknown (-2),
+   THE INVARIANT, an ordering under jobs_lock: from its issue until N - 1 completions after its
+   own, a ticket is in s_pending or in the ring at every instant the lock is free -- the worker
+   writes the result before the job leaves s_pending, both under the lock, and the in-use refusal
+   writes its result in the same hold of the lock that issues the ticket. So a result outlives
+   N - 1 completions after its own, and a ticket the ring no longer holds reads unknown (-2),
    never another request's outcome: each slot names its ticket. */
-_Static_assert(REC_FILE_RESULTS >= 2 * FILE_JOBS, "the ring holds more outcomes than jobs run");
 static unsigned s_ticket;           /* the last issued; 0 is never one */
 static struct { unsigned ticket; int ok; char why[160]; } s_done[REC_FILE_RESULTS];
 static volatile LONG s_completed;   /* requests finished, written under the lock */
@@ -272,16 +271,19 @@ static int prune_one(const char* path)
 /* `t` the recorded start and `dated` what recr_wallclock_of said: 1 dated, 0 read without a
    start, -1 not read */
 typedef struct { char name[MAX_PATH]; FILETIME t; int dated; } PruneFile;
-/* A strict weak order, newest first: by the recorded start, every file without one after every
-   dated file, then by name, latest first (a recording's name begins with its local start time).
-   Names equal under the case-insensitive comparison keep an unspecified order between them. */
+int recfile_newer_first(int dx, const FILETIME* tx, const char* x, int dy, const FILETIME* ty,
+                        const char* y)
+{
+    int c = (dy > 0) - (dx > 0);
+    if (!c && dx > 0) c = CompareFileTime(ty, tx);
+    return c ? c : _stricmp(y, x);
+}
+
 static int newer_first(const void* a, const void* b)
 {
     const PruneFile* x = (const PruneFile*)a;
     const PruneFile* y = (const PruneFile*)b;
-    int c = (y->dated > 0) - (x->dated > 0);
-    if (!c && x->dated > 0) c = CompareFileTime(&y->t, &x->t);
-    return c ? c : _stricmp(y->name, x->name);
+    return recfile_newer_first(x->dated, &x->t, x->name, y->dated, &y->t, y->name);
 }
 
 static int exiting(void)
@@ -491,13 +493,16 @@ int recfile_result(unsigned ticket, char* why, unsigned cap)
     return r;
 }
 
+/* A prune is not counted: its `path` names the new recording it keeps, and it never opens that
+   file or its lock (prune skips it by name) -- it locks only older recordings. */
 int recfile_pending(const char* path)
 {
     unsigned i;
     int k = 0;
     jobs_lock();
     for (i = 0; i < FILE_JOBS; i++)
-        if (s_pending[i] && !_stricmp(s_pending[i]->path, path)) k = 1;
+        if (s_pending[i] && s_pending[i]->op != REC_FILE_PRUNE &&
+            !_stricmp(s_pending[i]->path, path)) k = 1;
     jobs_unlock();
     return k;
 }

@@ -128,9 +128,11 @@ int  tagpu_replay_speed_set(unsigned gs);
 
    THE TAKEOVER'S PLAN: where a takeover asked for at T starts and what its fork would delete,
    found as the takeover finds them (takeover_point) and committing nothing. It reads the file's
-   block headers three times, so it answers a click and is never called per frame. R is the refresh at
-   or before T (tk_bound's bound); `next` is set only when T rounds to a timeline's first
-   iteration, which no takeover starts at, and names the first GameTime one can (R + 1). 1 with
+   block headers three times where the segment holding T holds nothing and four times elsewhere,
+   so it answers a click and is never called per frame. R is where
+   tk_bound lets one start: T itself or the refresh at or before it -- T where the segment holding
+   T holds nothing (recr_exact_at). `next` is set only when R is a timeline's first iteration,
+   which no takeover starts at, and names the first GameTime one can (R + 1). 1 with
    R, or 0 with `why` and R = 0. A replay playing, or a live rewind gone into the past
    (TAGPU_REPLAY_RWS_PAST), whose fork the plan then predicts. */
 typedef struct TAGPU_REPLAY_TKPLAN {
@@ -142,8 +144,9 @@ typedef struct TAGPU_REPLAY_TKPLAN {
 } TAGPU_REPLAY_TKPLAN;
 int tagpu_replay_takeover_plan(unsigned T, TAGPU_REPLAY_TKPLAN* out);
 /* The takeover as player P at T, for the next frame visit (THE TAKEOVER), D -1 for the
-   timeline's own difficulty: rounded to the refresh at or before T and refused at once when no
-   fork can be appended there (takeover_point). 1 queued; a later seek or takeover replaces it. */
+   timeline's own difficulty: started at T itself or the refresh at or before it, as the plan's R,
+   and refused at once when no fork can be appended there (takeover_point). 1 queued; a later seek
+   or takeover replaces it. */
 int tagpu_replay_takeover_request(unsigned P, unsigned T, int D);
 
 /* THE TIMELINES of the playing's file, as the last scan found them (THE TIMELINES CACHE): every
@@ -157,6 +160,9 @@ typedef struct TAGPU_REPLAY_TIMELINE {
 } TAGPU_REPLAY_TIMELINE;
 int tagpu_replay_timelines(TAGPU_REPLAY_TIMELINE* out, int cap);
 int tagpu_replay_axis(unsigned* first, unsigned* last);
+/* One more at every change of the cache's rows or axis, the playing's end emptying them included:
+   a caller that remembers it knows when to read them, and to re-plan a takeover, again. */
+unsigned tagpu_replay_timelines_serial(void);
 
 /* A fork of the playing's file deleted or exported (replays\<stem>.imprec), by the file worker:
    1 accepted, its outcome reported later through tagpu_replay_result (kind FORK) once the frame

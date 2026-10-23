@@ -486,7 +486,7 @@ over the world, is `tagpu_menu_modal`'s.
 | `rew`, `fwd` | transport | a seek 300 GameTime (10 s) back or forward, through `tagpu_replay_seek_request` |
 | `play` | transport | the pause toggled; at the recording's end a seek to its start and the pause cleared (the button shows play there, as the mockup's does) |
 | `speed` | transport | the next preset above the speed in force, 5, 10, 20, 40, 80 (½× to 8×), and from 8× back to ½× |
-| `bookmark` | transport | the bookmark nearest now within 90 GameTime (3 s) removed, else one added at now (`tagpu_hudmarks_bookmark`, through `tagpu_replays_mark_add`/`_remove` into `replays\index.dat`); the toast "Bookmark at m:ss" or "Bookmark removed", nothing when the recording was not opened from `replays\` or the list is full |
+| `bookmark` | transport | the bookmark nearest now within 90 GameTime (3 s) removed, else one added at now (`tagpu_hudmarks_bookmark`, through `tagpu_replays_mark_add`/`_remove` into `replays\index.dat`, on the recording's line by name and root key, so they survive every playing's end); the toast "Bookmark at m:ss" or "Bookmark removed", nothing when the recording was not opened from `replays\` or the list is full |
 | `uiscale` | transport | the HUD's scale to the next of 75, 100, 125, 150, wrapping, and into the settings store (`hud: the replay HUD's scale is N%`) |
 | `leave` | transport | Leave's question (*Leave*) |
 | `track` | timeline | a seek where it was pressed, one a frame while it is dragged, and one where it is released (*The press*) |
@@ -648,11 +648,17 @@ and Leave, answered Yes through `tacli ui`.
 What the HUD asks the recorder is declared in `inc/tagpu_replay.h`, *THE HUD'S RECORDER CALLS*,
 all on the game thread: the takeover's plan and request, the timelines of the playing's file with
 the axis they span, a fork's deletion and export, the live rewind's verbs and state, and the last
+<<<<<<< HEAD
 request's outcome, whose serial lets a caller see each outcome once; and the switch to another
 timeline of the file, `tagpu_replay_watch_timeline`, which the fork lanes' click will call, with the
 deletion of the watched timeline as a switch first. All are called between two
+=======
+request's outcome, whose serial lets a caller see each outcome once; the timelines carry a serial
+of their own, which moves when their rows or axis change. All are called between two
+>>>>>>> main
 sim steps, never inside one. A call that changes anything queues it for the frame visit; the plan
-commits nothing but reads the file's block headers three times, so it answers a click and is never
+commits nothing but reads the file's block headers three times (four where the segment holding
+T holds anything), so it answers a click and is never
 called per frame. The trigger's `takeover`, `rewind`, `hud seek` and `hud fork` run through the
 same calls, as does `timeline N`, and `hud state` prints what they answer (`tagpu_replay.c`, the trigger's comment). The
 details: [the takeover](tadr-port/demo-recorder-s4-takeover.md#driving-it),
@@ -663,8 +669,14 @@ control of the HUD calls them yet.
 
 **The span is the chain's.** A playing of a fork seeks, clamps and starts over within its own
 chain: the span runs from the root's first GameTime to the chosen timeline's last, which the scan
+<<<<<<< HEAD
 that chose it found (`first_iteration`), and a switch sets it again for the chain it moves to. For
 the original nothing changes, its last being the summary's.
+=======
+that chose it found (`first_iteration`). For the original nothing changes, its last being the
+summary's. MEASURED 2026-10-23 on the rewind lane's `battle` recording: a HUD seek to 5401 in the
+fork's playing goes to 5401, past the original's last, 5101.
+>>>>>>> main
 
 ## Checking it against the mockup
 

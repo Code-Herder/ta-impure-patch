@@ -176,10 +176,11 @@ static void* events_make(const RecCodecParams* p)
     return x;
 }
 
-static void events_restart(void* f, const RecFrameWorld* w)
+static void events_restart(void* f, const RecCodecParams* p, const RecFrameWorld* w)
 {
     Events* x = (Events*)f;
     unsigned i;
+    (void)p;
     (void)w;
     x->last = 0;
     x->names.n = 0;

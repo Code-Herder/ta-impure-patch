@@ -93,6 +93,21 @@ static __inline int recr_holds_cells(const RecHeader* h)
     return h->has_hold && (h->hold.flags & RECL_CELLS) != 0;
 }
 
+/* 1 when the header's stream holds nothing: no RT_HOLD -- its writer ran no lossy filter
+   (tagpu_recwriter.c, header_apply: one branch makes the filter and writes RT_HOLD) -- or an
+   RT_HOLD with no flag and no held bit, whose filter writes every record as it came
+   (tagpu_reclossy.c). Its stream's world is then the writer's exact copy at every iteration,
+   not only at a refresh. */
+static __inline int recr_holds_nothing(const RecHeader* h)
+{
+    unsigned i;
+    if (!h->has_hold) return 1;
+    if (h->hold.flags) return 0;
+    for (i = 0; i < REC_UNIT_IMAGE; i++) if (h->hold.unit[i]) return 0;
+    for (i = 0; i < REC_ORDER_IMAGE; i++) if (h->hold.node[i]) return 0;
+    return 1;
+}
+
 /* one node list of a live unit, its node images in list order */
 typedef struct RecList { unsigned n, cap; unsigned char* img; } RecList;
 
@@ -243,6 +258,17 @@ int recr_summary(const char* path, RecSummary* s, char* why, unsigned cap);
    our recordings in a format it does not (its magic, header block and format entry read), -1
    anything else, a file it cannot open or read among them. */
 int recr_format_of(const char* path);
+/* THE ROOT KEY: what tells one recording from another at the same name for the whole life of the
+   file, as its size does not. It is the root segment's RB_HEADER block, the file's first, right
+   after REC_MAGIC, whose bytes nothing rewrites: a fork, a touch and a deletion's timeline table
+   are written after the last complete block (file_append, recr_manage), which a playable root
+   segment's header always precedes, and a compaction or an export copies the root header first
+   and unchanged (file_compact: copy_block, needed[0]). Its RT_WALLCLOCK, the start to 100 ns, makes
+   it one recording's. key[0] is the block's crc_body, key[1] its crc_head. Read through `f` from
+   byte 0, which moves its file pointer, so any handle with read access serves, an exclusive one
+   included. 1 read; 0 the file does not begin with a whole header block (not a recording, or one
+   cut before its first block's header ends), the key zero; -1 the file could not be read. */
+int recr_root_key(void* f, unsigned key[2]);
 /* The start `path`'s header records (RT_WALLCLOCK), as a FILETIME in UTC, for the prune's order:
    1 read, from a recording of any format whose header carries the entry as this build writes
    it; 0 read without one: a file that is not one of our recordings (its first 8 bytes are not
@@ -265,8 +291,9 @@ typedef struct RecTimeline {
                                           takeover's fork the seat it was played as. READ: the
                                           takeover's tk_live stores P there, then tk_end arms the
                                           fork, whose header header_build writes at its first
-                                          capture point (tagpu_recorder.c); the forks lane's
-                                          `hud state` check compares every fork's seat with P   */
+                                          capture point (tagpu_recorder.c). MEASURED 2026-10-23
+                                          by the forks lane's `hud state` check: forks 2, 4 and
+                                          5 of battle each name the player taken over as       */
     unsigned long long header_off;     /* its RB_HEADER's byte                                      */
     unsigned long long first_off;      /* the block after its header                                */
     unsigned long long end_off;        /* the byte after its last complete block                    */
@@ -311,6 +338,11 @@ int recr_segment_mp(const RecReader* r);
 /* 1 when that segment holds its cells (recr_holds_cells): every skirmish segment a writer of
    this format makes (REC_SKIRMISH_HOLDS), a multiplayer file's takeover timeline among them */
 int recr_segment_cells(const RecReader* r);
+/* The controllers of the seats of the segment the world was last read from, by record:
+   ctl[index] its RT_PLAYER controller for each seat that header names, 0 for every other
+   record. 1, or 0 before an iteration is read (ctl all 0). A copy: the segment's header is
+   freed by the next scan of the file's segments (segs_scan), which most reader calls run. */
+int recr_segment_controllers(const RecReader* r, unsigned char ctl[REC_PLAYERS]);
 /* Where a fork at `at` is appended, found afresh: the caller holds the file open for writing
    first, so no other writer can change it until the fork's writer has used this (tagpu_replay.c,
    TK0). A torn last block is not kept, an unfinished last segment with no complete iteration is
@@ -331,10 +363,16 @@ int recr_same(const RecReader* a, const RecReader* b);
 /* The last refresh iteration at or before T of the chosen chain, found afresh from the index: the
    largest `last` <= T of a stream block with RBF_REFRESH in the chain's segment that covers T, or
    that segment's first iteration (tagpu_reclossy.h, reclossy_refresh_at), and with `seg` that
-   segment's RecTimeline. At a refresh the stream's world is the writer's exact copy, which is why
-   a takeover starts only there (tagpu_replay.c, tk_bound). The GameTime, or 0 (why) when T is
-   outside the chain or the file cannot be read. */
+   segment's RecTimeline. At a refresh the stream's world is the writer's exact copy, which is
+   where a takeover of a segment that holds something starts (tagpu_replay.c, tk_bound;
+   recr_exact_at). The GameTime, or 0 (why) when T is outside the chain or the file cannot be
+   read. */
 unsigned recr_refresh_at(RecReader* r, unsigned T, RecTimeline* seg, char* why, unsigned cap);
+/* Whether the chosen chain's segment that covers T holds nothing (recr_holds_nothing), found
+   afresh as recr_refresh_at finds it, with `seg` (NULL for none) that segment's RecTimeline: 1 it
+   holds nothing, so every iteration of it is exact; 0 it holds something, so only its refreshes
+   are; -1 (why) T is outside the chain or the file cannot be read. */
+int recr_exact_at(RecReader* r, unsigned T, RecTimeline* seg, char* why, unsigned cap);
 
 /* Authority at the currently read world tick. Rebuild after seek/segment/index
    changes; advancing queries consume only new application records. Unknown stays

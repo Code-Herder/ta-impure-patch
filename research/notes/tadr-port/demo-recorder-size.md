@@ -1250,7 +1250,8 @@ that a takeover inside the first interval has a start after the segment's first 
 iteration before is the parent's or none; it ends its stream
 block (`RBF_REFRESH`), the filter writes every difference there and the writer checks the stream's
 world equal to its copy, abandoning the file otherwise; a snapshot, still at least 1,800 ticks
-from the last, is taken only at a refresh. A takeover starts only at a refresh (the plan's last
+from the last, is taken only at a refresh. A takeover of a segment that holds something starts
+only at a refresh (the plan's last
 gap above; *S4b*). The test lever `tagpu_rec.exact` writes the exact records beside the stream
 (`RB_EXACT`), against which `tarec lossy-check` checks it. **The table has no row**, so every
 record is the capture's: MEASURED 2026-10-12, `codectest lossy` over the heavy hour's exact

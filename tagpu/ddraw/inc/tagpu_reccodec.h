@@ -54,7 +54,9 @@ typedef struct RecCodecParams {
     unsigned   ntypes;                /* ... and its rows                                         */
     RecTypeRow types[RECC_TYPES_MAX];
     int        hold;                  /* RT_HOLD is in the header: a skirmish stream, whose orders
-                                         frame matches nodes (tagpu_recframe_orders.c, scheme 2) */
+                                         frame matches nodes (tagpu_recframe_orders.c, scheme 2);
+                                         a restart takes it, so the segments one codec reads may
+                                         differ in it */
     int        usable;
 } RecCodecParams;
 
@@ -89,8 +91,8 @@ static __inline int reccodec_entry_of(unsigned tag)
 int  reccodec_params(RecCodecParams* p, unsigned nslots, unsigned nproj, unsigned gw, unsigned gh,
                      unsigned nwrecks, unsigned ndefs, const RecCodecEntries* e, char* why,
                      unsigned cap);
-/* A codec sized for the params' slots, pool, grid and wreck pool, and made for its `hold`, which
-   every restart's params must match. NULL: no memory, or a size past its bound. */
+/* A codec sized for the params' slots, pool, grid and wreck pool, which every restart's params
+   must match. NULL: no memory, or a size past its bound. */
 RecCodec* reccodec_new(const RecCodecParams* p);
 void reccodec_free(RecCodec* c);
 /* The world the record frames restart from (reccodec_restart): the reader's grid at the end of
@@ -106,9 +108,10 @@ typedef struct RecFrameWorld {
    REC_UNIT_DWORDS], live[nslots], and the projectile pool `pool` (nproj * REC_PROJ_IMAGE bytes,
    the records [hw, nproj) read as zero) with its count and extent, any of which may be the
    codec's own copy -- the cells frame from the world's grid, the other record frames empty, and
-   its working buffers empty with their failures cleared. Params of other sizes or another `hold`
-   than reccodec_new's, or a count past the extent or an extent past the pool, leave it invalid;
-   so does a world not of the codec's grid, or NULL. */
+   its working buffers empty with their failures cleared. Params of other sizes than
+   reccodec_new's, or a count past the extent or an extent past the pool, leave it invalid; so
+   does a world not of the codec's grid, or NULL. The params' `hold` sets the orders frame's
+   scheme from this restart on (tagpu_recreader.c, sections_body: each segment's own). */
 void reccodec_restart(RecCodec* c, const RecCodecParams* p, const uint32_t* units,
                       const unsigned char* live, const unsigned char* pool, unsigned count,
                       unsigned hw, const RecFrameWorld* world);

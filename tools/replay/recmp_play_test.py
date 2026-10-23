@@ -15,12 +15,14 @@ it reached it; 1 otherwise. The dumps are
 compared separately: this only drives the game. --roundtrip T arms the playing's round trip at T
 (dump A, the tables poisoned, a seek to T, dump B: rt<T>-a and rt<T>-b, frame dumps compared with
 `tarec.py compare-dumps FILE A B --seek`, which checks the sort buckets' chains of a multiplayer
-file instead of comparing their order). --seek A:T, when the playing reaches GameTime A (its dump pA), seeks
+file instead of comparing their order; with `--timeline N` for a round trip in timeline N's
+segments). --seek A:T, when the playing reaches GameTime A (its dump pA), seeks
 to T in the same process, dumping s<T> at T and s<T+120> 120 ticks on (when the recording
 reaches it; at speed 20 a nearer dump cannot be armed in time). --fresh T instead
 starts a fresh process at T (`tacli replay seek`), dump q<T>. --takeover T:P takes the recording
-over as player P in a fresh process (`tacli replay takeover`) at R, the refresh at or before T
-(tagpu_replay.c, tk_bound; the takeover's line names it, its `at`), dumps the live game at
+over as player P in a fresh process (`tacli replay takeover`) at R: T itself in a multiplayer
+segment, which holds nothing, else the refresh at or before T (tarec.takeover_at; the takeover's
+line names it, its `at`), dumps the live game at
 k<R+120>, then requires the AI seats to play: tareplay's takeover check, fresh AI orders reaching a handler
 for every AI seat and a quarter of their mobile units moving in the TAKEOVER_SPAN ticks after a
 pause; quits after it and keeps the file with its new timeline as DIR/fork-<RECORDING>. With
@@ -88,14 +90,15 @@ def main():
         tl = ["--timeline", a.timeline] if a.timeline is not None else []
         if a.takeover is not None:
             T, P = map(int, a.takeover.split(":"))
-            # the takeover starts at the refresh at or before T, which its line names; the dump,
-            # armed before it, is named from that start
+            # the takeover starts at T, or the refresh at or before it (tarec.takeover_at), which
+            # its line names; it is asked for at that start, and the dump, armed before it, is
+            # named from it
             try:
-                R = tarec.refresh_at(str(rec), a.timeline or 0, T)
+                R = tarec.takeover_at(str(rec), a.timeline or 0, T)
             except tarec.Unreadable as e:
-                raise tareplay.CouldNotRun(f"the refresh at or before {T}: {e}")
+                raise tareplay.CouldNotRun(f"the takeover's start for {T}: {e}")
             if R != T:
-                print(f"the takeover asked for at {T} starts at {R}, the refresh at or before it")
+                print(f"the takeover asked for at {T} starts at {R}")
             if a.from_ is None:
                 src = [rec, *tl, "--defaults", "--restart", "--keep-dll"]
             else:
@@ -109,7 +112,7 @@ def main():
                 arm_dump(w, log, f"p{a.from_}", a.from_)
                 wait_dumps(log, [f"p{a.from_}"], 900)
                 src = []
-            rc, o = tacli("replay", "takeover", w.name, *src, "--at", T, "--player", P,
+            rc, o = tacli("replay", "takeover", w.name, *src, "--at", R, "--player", P,
                           "--dump", f"k{R + AFTER}", "--dump-at", R + AFTER, "--timeout", 300,
                           "--json", timeout=LAUNCH_TIMEOUT + 300)
             print(o.strip())
