@@ -829,11 +829,14 @@ the render thread.
 
 ## Gaps
 
-- **A disabled control's text is drawn at full opacity.** The mockup dims a disabled control
-  whole (CSS `opacity` on it and everything in it); the DLL dims its part and its icon and draws
-  its text at full opacity, since a text op carries no opacity. That shows on a split chip that
-  is off and on a picker row whose player is out of the game (its name and "defeated"); laycheck
-  compares a part's opacity, not a text's, so it does not catch it.
+- **A disabled control's text is faded glyph by glyph, not as one layer.** The mockup dims a
+  disabled control whole (CSS `opacity` on it and everything in it): its text and the text's
+  outline or shadow are composited first and faded together. The DLL gives a text op the
+  control's opacity a (`texts_at`, the op's `rgba`), and each glyph and each of its copies takes
+  it alone, so where a copy lies under its glyph the background shows through at (1 − a)² instead
+  of (1 − a): at the picker row's and the split chip's 0.45, 0.30 of it instead of 0.55 [computed
+  from the blend, not measured]. All three styles there carry copies (`header` an outline, `label` a
+  shadow, `face_chip` an outline). laycheck compares the opacity, which agrees, not the pixels.
 - **The picker's title names R; the playhead stands at R − 1.** Both show the same second where R
   − 1 falls on a whole second, as it does at a refresh 1 modulo 30 [INFERRED from the clock's
   rounding to whole seconds].

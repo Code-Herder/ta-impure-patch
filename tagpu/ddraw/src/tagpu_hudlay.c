@@ -331,6 +331,17 @@ static void text(C* c, const char* s, R b, const char* style, const PL* sl, uint
     text_runs(c, &r, 1, b, style, sl, dy);
 }
 
+/* The texts made since op `from` at opacity a: those inside a disabled control, which the mockup
+   dims whole (CSS opacity on the control). Each glyph and its outline or shadow copies take a,
+   where CSS fades them as one layer: under a glyph its copies show through at a (1 - a) more. */
+static void texts_at(C* c, int from, double a)
+{
+    int i;
+    for (i = from; i < c->o->n; i++)
+        if (c->o->op[i].kind == HOP_TEXT)
+            c->o->op[i].rgba = 0xFFFFFF00u | (uint32_t)floor(a * 255 + 0.5);
+}
+
 /* hud.js k1: rounded, with a thousands separator */
 static void k1(char* o, size_t n, double v)
 {
@@ -445,7 +456,9 @@ static void button(C* c, const BTN* s, const TJV* kind, R b, int on)
     }
     if (s->textspec) {
         PL p = spec(s->textspec);
+        int from = c->o->n;
         text(c, s->text, at(place(c, &f, &p), b.x, b.y), str(c, s->textspec, "style"), &p, 0, dy);
+        texts_at(c, from, a);
     }
 }
 
@@ -1232,7 +1245,7 @@ static void picker(C* c)
         const HUDSEAT* q = &st->seat[k];
         R rb = box(x + pad, y + pad + th + k * (rh + rg), w - 2 * pad, rh);
         F f = frame(c->l, rb.w, rh, NULL);
-        int gone = q->out, pressed;
+        int gone = q->out, pressed, from;
         snprintf(key, sizeof key, "takeas:%d", k);
         pressed = !gone && c->st->held[0] && !strcmp(c->st->held, key);
         if (!gone) hot(c, rb, key);
@@ -1242,11 +1255,13 @@ static void picker(C* c)
         p.hasw = 1; p.w = sw; p.ax = 'l';
         solid(c, at(place(c, &f, &p), rb.x, rb.y), q->colour, gone ? off : 1);
         p = spec(Nm);
+        from = c->o->n;
         text(c, q->name, at(place(c, &f, &p), rb.x, rb.y), str(c, Nm, "style"), &p, 0, 0);
         if (gone) {
             p = spec(Nt);
             p.centre = 2;
             text(c, "defeated", at(place(c, &f, &p), rb.x, rb.y), str(c, Nt, "style"), &p, 0, 0);
+            texts_at(c, from, off);
         }
     }
     if (wn) {

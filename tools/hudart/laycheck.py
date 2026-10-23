@@ -81,16 +81,20 @@ COLLECT = r"""() => {
     st.mx = r[0] + r[2] / 2; st.my = r[1] + r[3] / 2;
   }
   const els = [], ctx = document.createElement('canvas').getContext('2d');
+  // the opacity an element is painted with: its own times every ancestor's, as a disabled
+  // control's icon and text are dimmed with it
+  const opacity = (e) => {
+    let a = 1;
+    for (let q = e; q && q.id !== 'hud-layer'; q = q.parentElement) a *= +getComputedStyle(q).opacity;
+    return Math.round(255 * a);
+  };
   for (const e of document.querySelectorAll('#hud-layer *')) {
     if (!e.getClientRects().length) continue;
     const dim = !!(e.closest('.row') && e.closest('.row').style.filter);
     if (e.classList.contains('art')) {
       let part = e.dataset.gp || e.dataset.tile;
       if (!part) { const m = /parts\/([^/]+)\.png/.exec(e.style.getPropertyValue('--bi')); part = m && m[1]; }
-      // the opacity it is painted with: its own times every ancestor's, as a disabled button's icon is dimmed
-      let a = 1;
-      for (let q = e; q && q.id !== 'hud-layer'; q = q.parentElement) a *= +getComputedStyle(q).opacity;
-      els.push({ kind: 'part', part, r: R(e), dim, alpha: Math.round(255 * a) });
+      els.push({ kind: 'part', part, r: R(e), dim, alpha: opacity(e) });
     }
     if (e.dataset.act && !e.classList.contains('off')) {   // a disabled control takes no input
       const k = e.dataset.act + (e.dataset.val != null ? ':' + e.dataset.val : e.dataset.team != null ? ':' + e.dataset.team : e.dataset.seat != null ? ':' + e.dataset.seat : '');
@@ -109,7 +113,7 @@ COLLECT = r"""() => {
       const cs = getComputedStyle(e);
       ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
       const fm = ctx.measureText('M');
-      els.push({ kind: 'text', text: e.textContent, r: R(e), dim, size: parseFloat(cs.fontSize) / u, base,
+      els.push({ kind: 'text', text: e.textContent, r: R(e), dim, alpha: opacity(e), size: parseFloat(cs.fontSize) / u, base,
                  asc: fm.fontBoundingBoxAscent, desc: fm.fontBoundingBoxDescent });
     }
     const bg = e.style.background || e.style.backgroundColor;
@@ -345,7 +349,7 @@ def main():
                     dm = sum(1 for c, d in pairs if bool(c.get("dim")) != bool(d.get("dim")))
                     extra += f", dim disagrees {dm}" if dm else ""
                     bad += dm
-                if k == "part":
+                if k in ("part", "text"):
                     al = sum(1 for c, d in pairs if abs(c.get("alpha", 255) - d.get("alpha", 255)) > 1)
                     extra += f", opacity disagrees {al}" if al else ""
                     bad += al

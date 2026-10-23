@@ -196,7 +196,8 @@ int main(int argc, char** argv)
         if (p->clip.w >= 0 && p->kind != HOP_TEXT && p->kind != HOP_CHART) printf(",\"clip\":[%.4f,%.4f,%.4f,%.4f]", p->clip.x, p->clip.y, p->clip.w, p->clip.h);
         if (p->kind == HOP_TEXT) {
             const char* sn = tagpu_hudlay_globals(l)->style[p->style].name;
-            printf(",\"style\":\"%s\",\"size\":%.4f,\"centre\":%d", sn, p->size, p->centre);
+            printf(",\"style\":\"%s\",\"size\":%.4f,\"centre\":%d,\"alpha\":%u", sn, p->size, p->centre,
+                   p->rgba & 0xFF);
             if (p->nrun) printf(",\"rgb\":\"%06x\"", o->run[p->run].rgb);
             /* the baseline at `px` a unit, from the face metrics the state carries per style */
             if (argc == 4) {

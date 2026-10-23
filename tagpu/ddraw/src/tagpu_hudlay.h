@@ -139,7 +139,8 @@ typedef struct {
     int16_t  part;          /* HOP_PART: the kit index                                    */
     HUDRECT  r;
     HUDRECT  clip;          /* w < 0: none                                                */
-    uint32_t rgba;          /* HOP_SOLID, HOP_DOT: the colour; HOP_PART: 0xFFFFFF00 | opacity */
+    uint32_t rgba;          /* HOP_SOLID, HOP_DOT: the colour; HOP_PART, HOP_TEXT: 0xFFFFFF00 |
+                               opacity                                                       */
     float    shade;         /* HOPF_SHADE                                                 */
     int16_t  style;         /* HOP_TEXT: the style's index in layout.json `styles`        */
     uint8_t  centre;        /* HOP_TEXT: 1 centred, 2 to the box's right, 0 from its left */

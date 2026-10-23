@@ -296,8 +296,8 @@ At those sizes the game's line sits a pixel off the mockup's.
   team's and a hover button's key adds the row's or the team's index in the frame, `jump:2`,
   `fold:0`, `row:4`. The game hit-tests these, topmost (last painted) first
   ([The replay HUD in game](hud-in-game.md), *Input*).
-- **A disabled control** is drawn at its `off` opacity, its icon too, and has no clickable of its
-  own: the TEAMS chip when the teams are not told apart (one team, or a free-for-all), at
+- **A disabled control** is drawn at its `off` opacity, its icon and its text too, and has no
+  clickable of its own: the TEAMS chip when the teams are not told apart (one team, or a free-for-all), at
   `split.off` (0.45).
 - **An inset edge** (a resource bar's) is flagged on its ops (`HOPF_EDGE`), so `laycheck` matches
   it with the mockup's `box-shadow` by that flag, not by its colour.
@@ -513,15 +513,16 @@ with the lanes closed: the axis takes in the forks, the fill stops at the fork's
 groove past the original is shaded) and `4k-150-picker-held` (Take over held)), takes the mockup's state and
 every element's box in HUD units, runs `tagpu_hudlay.c` compiled natively (`laycheck.c`) on the
 same state, and pairs the two element by element: every part by name and painted opacity (its own
-times its ancestors', as a disabled button's icon is dimmed), every text by its string, every
+times its ancestors', as a disabled button's icon is dimmed), every text by its string and painted
+opacity, every
 solid by its colour, every clickable by its key; an inset edge is set aside by its flag. From the
 chart's SVG it pairs the line ops by colour (with width and opacity), the SVG texts by string
 (with anchor, size and colour), the two chart ops by opacity (with their clip) and the drop
 shadow (offset, blur, opacity), and compares every group's colour, halo, points and cross, a
 point within a tenth of a unit, the precision both sides write. It also measures every text's baseline in the browser — a zero-size
 inline-block probe on the text's own line — against `tagpu_hudlay_baseline` from the faces'
-metrics. It exits 1 on a box or baseline more than its tolerance off, a part's opacity more than
-one level off, a dim that disagrees, or an element only one side has.
+metrics. It exits 1 on a box or baseline more than its tolerance off, a part's or a text's opacity
+more than one level off, a dim that disagrees, or an element only one side has.
 
 MEASURED 2026-10-08 on the first six cases, again on all eight once the controls were laid out
 for input, on all thirteen with the stats window (2026-10-09), and on all eighteen at `prop=1`
