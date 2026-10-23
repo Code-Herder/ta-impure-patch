@@ -62,6 +62,22 @@ static float    s_statX, s_statY;
 static int      s_wdrag;                /* the left press is on the window's title                */
 static int      s_wdx, s_wdy;           /* where it landed, in client pixels                      */
 static float    s_wox, s_woy;           /* the window's place then, in units                      */
+/* THE PICKER (owner decision 1-B, snap back): the button pauses the playback; the next fill plans
+   the takeover at the playhead and seeks back to the plan's start R; the picker opens once the
+   playback shows R, and a row takes over there. Closed again whenever the playhead leaves R or the
+   timeline that plays changes, since R and the eviction were planned for what was on screen. */
+enum { PICK_CLOSED, PICK_ASKED, PICK_SEEKING, PICK_OPEN };
+static int      s_pick;
+static unsigned s_pickR;                /* the plan's start: the first iteration the takeover runs */
+static unsigned s_pickEvict;            /* the fork it would delete; UINT32_MAX none               */
+static unsigned s_pickTl;               /* the timeline the plan was made on                       */
+static unsigned s_pickSerial;           /* the replay's result serial at the plan                  */
+static unsigned s_resSerial;            /* the last result serial the fill has seen                */
+static int      s_resSeen;              /* s_resSerial is this level's: a result older than the
+                                           level's first fill is never toasted                    */
+static int      s_lanes;                /* the Forks bay is open                                   */
+static unsigned s_nfork;                /* the last fill's forks                                   */
+static char     s_name[TAGPU_PK_HUD_SEATS][32];   /* the last fill's names by recorded seat, UTF-8 */
 
 void tagpu_hudinput_take(const TAGPU_CMD_HUD* h)
 {
@@ -200,6 +216,93 @@ static void scroll_by(int d)
     s_scroll = f < 0 ? 0 : f > (int)s_hit.last ? s_hit.last : (unsigned)f;
 }
 
+/* GameTime T as the replay's clock, whole seconds from its first */
+static unsigned secs(unsigned T)
+{
+    return (T > s_first ? T - s_first : 0) / TICKS;
+}
+
+#define IS(s) (k == sizeof(s "") - 1 && !strncmp(key, s, k))   /* a literal only */
+
+/* THE TAKEOVER'S KEYS: 1 when the key is one of them. A key that moves the playhead closes the
+   picker and is not taken, so act() goes on to move it. */
+static int pick_act(const char* key, size_t k, int n)
+{
+    if (IS("rew") || IS("fwd") || IS("play")) {
+        s_pick = PICK_CLOSED;
+        return 0;
+    }
+    if (IS("takeover")) {
+        if (s_pick != PICK_CLOSED) s_pick = PICK_CLOSED;
+        else {
+            /* paused at the click, so the engine runs no step before the next fill, whose GameTime
+               is then the playhead the player sees: the T the plan is for */
+            tagpu_replay_pause(1);
+            s_pick = PICK_ASKED;
+        }
+    } else if (IS("takeas")) {
+        /* a row's index is the drawn frame's; the takeover takes the recorded seat */
+        unsigned seat, t = secs(s_pickR);
+        if (s_pick != PICK_OPEN) return 1;
+        s_pick = PICK_CLOSED;
+        if (n < 0 || n >= s_hit.nseat || s_hit.seat[n] >= TAGPU_PK_HUD_SEATS) return 1;
+        seat = s_hit.seat[n];
+        if (tagpu_replay_takeover_request(seat, s_pickR, -1))
+            toast("Taking over %s at %u:%02u", s_name[seat], t / 60, t % 60);
+    } else if (IS("lanes")) {
+        if (s_nfork) s_lanes ^= 1;
+    } else if (!IS("picker")) {
+        return 0;
+    }
+    return 1;
+}
+
+/* THE PICKER'S STATES, at the fill (game thread; the frame visit runs a seek before the draw whose
+   fill this is, so a seek's result and the playhead it brought are seen together) */
+static void pick_fill(const TAGPU_PK_HUD* h, const TAGPU_REPLAY_RESULT* r, int fresh)
+{
+    unsigned t;
+    if (s_pick == PICK_ASKED) {
+        /* at the recording's end the playhead stands at `last` */
+        unsigned T = h->now + 1 < h->last ? h->now + 1 : h->last;
+        TAGPU_REPLAY_TKPLAN p;
+        int ok = tagpu_replay_takeover_plan(T, &p);
+        /* T is a timeline's first iteration, which no takeover starts at: one tick on is its
+           second, a refresh */
+        if (!ok && p.next) ok = tagpu_replay_takeover_plan(p.next, &p);
+        if (!ok) {
+            t = secs(T);
+            toast("Cannot take over at %u:%02u", t / 60, t % 60);
+            tagpu_logf("hud: take over refused: %s", p.why);
+            s_pick = PICK_CLOSED;
+            return;
+        }
+        s_pickR = p.R;
+        s_pickEvict = p.evict;
+        s_pickTl = tagpu_replay_timeline();
+        s_pickSerial = r->serial;
+        /* the seek is refused only when no recording plays */
+        s_pick = p.R == h->now + 1 || tagpu_replay_seek_request(p.R) ? PICK_SEEKING : PICK_CLOSED;
+    }
+    if (s_pick == PICK_SEEKING) {
+        if (h->now + 1 == s_pickR) s_pick = PICK_OPEN;
+        else if (fresh && r->serial != s_pickSerial && r->kind == TAGPU_REPLAY_RQ_SEEK) {
+            /* a seek finished since the plan without bringing the playback to R: ours was
+               refused, or a later one replaced it (the latest request runs). The picker never
+               waits for a seek that will not come. */
+            s_pick = PICK_CLOSED;
+            t = secs(s_pickR);
+            if (!r->ok) toast("Cannot go back to %u:%02u", t / 60, t % 60);
+        }
+    } else if (s_pick == PICK_OPEN && (!h->paused || h->now + 1 != s_pickR)) {
+        /* the playhead moved -- the Pause key, a trigger's seek -- so what the picker would take
+           over is no longer on screen */
+        s_pick = PICK_CLOSED;
+    }
+    /* a switch can change the chain without moving the playhead; the plan was the old chain's */
+    if (s_pick != PICK_CLOSED && tagpu_replay_timeline() != s_pickTl) s_pick = PICK_CLOSED;
+}
+
 /* A click on a control, released over it. Every command is the replay's own call or the stats
    window's own state; a key with no command -- the dock's, the column's and the window's plates,
    the scroll track, the window's title -- is taken and does nothing. */
@@ -208,7 +311,7 @@ static void act(const char* key)
     const char* colon = strchr(key, ':');
     size_t k = colon ? (size_t)(colon - key) : strlen(key);
     int n = colon ? atoi(colon + 1) : -1, i;
-#define IS(s) (k == sizeof(s "") - 1 && !strncmp(key, s, k))   /* a literal only */
+    if (pick_act(key, k, n)) return;
     if (IS("rew")) {
         tagpu_replay_seek_request(s_now > JUMP ? s_now - JUMP : 0);
     } else if (IS("fwd")) {
@@ -274,8 +377,8 @@ static void act(const char* key)
             if (k == strlen(SWITCHES[i].key) && !strncmp(key, SWITCHES[i].key, k))
                 tagpu_replay_overlay_set(SWITCHES[i].ov, !tagpu_replay_overlay(SWITCHES[i].ov));
     }
-#undef IS
 }
+#undef IS
 
 int tagpu_hudinput_button(int cx, int cy, int gx, int gy, int down, int right)
 {
@@ -311,6 +414,7 @@ int tagpu_hudinput_button(int cx, int cy, int gx, int gy, int down, int right)
         s_drag = 1;
         s_dragT = UINT_MAX;
         seek_at(cx);
+        s_pick = PICK_CLOSED;               /* the playhead moves */
     } else if (!strcmp(key, "drag")) {
         s_wdrag = 1;
         s_wdx = cx;
@@ -342,14 +446,32 @@ void tagpu_hudinput_fill(TAGPU_PK_HUD* h)
 {
     const HUDART* art = tagpu_hudart_get();
     unsigned ms = art ? tagpu_hudlay_globals(art->lay)->toast_ms : 0;
-    int cx, cy, i;
+    TAGPU_REPLAY_RESULT r;
+    int cx, cy, i, fresh;
 
     s_now = h->now;
     s_first = h->first;
     s_last = h->last;
     s_pov = 0;
-    for (i = 0; i < h->nseat && i < (int)TAGPU_PK_HUD_SEATS; i++)
-        if (h->seat[i].pov && h->seat[i].seat < TAGPU_PK_HUD_SEATS) s_pov |= 1u << h->seat[i].seat;
+    for (i = 0; i < h->nseat && i < (int)TAGPU_PK_HUD_SEATS; i++) {
+        const TAGPU_PK_HUDSEAT* q = &h->seat[i];
+        if (q->seat >= TAGPU_PK_HUD_SEATS) continue;
+        if (q->pov) s_pov |= 1u << q->seat;
+        tagpu_hudstate_utf8(s_name[q->seat], sizeof s_name[q->seat], q->name, sizeof q->name);
+    }
+    s_nfork = h->nfork;
+
+    /* THE REPLAY'S LAST OUTCOME, seen once: its serial grows at each */
+    tagpu_replay_result(&r);
+    fresh = s_resSeen && r.serial != s_resSerial;
+    s_resSerial = r.serial;
+    s_resSeen = 1;
+    pick_fill(h, &r, fresh);
+    if (fresh && r.kind == TAGPU_REPLAY_RQ_TAKEOVER && !r.ok) toast("Take over refused");
+    h->pick = (uint8_t)(s_pick == PICK_OPEN ? 2 : s_pick != PICK_CLOSED);
+    h->pick_R = s_pick != PICK_CLOSED ? s_pickR : 0;
+    h->pick_evict = s_pick != PICK_CLOSED ? s_pickEvict : UINT32_MAX;
+    h->lanes = (uint8_t)s_lanes;
 
     /* THE TIMELINE DRAG SEEKS TO THE POINTER ONCE A FRAME: a seek runs at the frame visit, so a
        request a frame is the most that can run, and the newest replaces one not yet run */
@@ -427,4 +549,9 @@ void tagpu_hudinput_level_end(void)
     s_toast[0] = 0;
     s_statOpen = s_wdrag = 0;
     s_leaveWant = s_leaveAsked = 0;
+    s_pick = PICK_CLOSED;
+    s_resSeen = 0;
+    s_lanes = 0;
+    s_nfork = 0;
+    memset(s_name, 0, sizeof s_name);
 }

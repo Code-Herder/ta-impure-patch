@@ -17,6 +17,7 @@
 #include "tagpu_hudart.h"
 #include "tagpu_replay.h"
 #include "tagpu_recfile.h"
+#include "tagpu_recreader.h"
 #include "tagpu_pal.h"
 #include "tagpu_hud.h"
 #include "tagpu_log.h"
@@ -50,10 +51,58 @@ int tagpu_hudstate_drawing(void)
     return tagpu_hudstate_on() && tagpu_replay_live() && tagpu_replay_span(&first, &last);
 }
 
+/* THE FORKS, from the replay's timelines cache (inc/tagpu_replay.h, THE TIMELINES): the file's
+   live forks by branch point, oldest first, as the mockup lists them (index.html `forkList`), each
+   with the seat it was played as and whether it is the watched one or on the chain that plays; the
+   original's end; and where the watched chain leaves the original, which the track fills to (the
+   chain's segment whose parent is the original). The recorder keeps at most REC_FORK_LIMIT live
+   forks (recr_append_point refuses a fifth), so only a foreign file holds more, and the packet
+   carries the oldest. */
+static char s_cutFile[MAX_PATH];        /* the file whose excess forks were said, once */
+
+static void fill_forks(TAGPU_PK_HUD* h, unsigned tl)
+{
+    TAGPU_REPLAY_TIMELINE row[RECR_TIMELINES];
+    int order[RECR_TIMELINES], n = tagpu_replay_timelines(row, RECR_TIMELINES), live = 0, i, j;
+    const char* path = tagpu_replay_path();
+
+    if (n > RECR_TIMELINES) n = RECR_TIMELINES;
+    h->orig_last = h->last;
+    h->fill_to = 0;
+    for (i = 0; i < n; i++) {
+        const TAGPU_REPLAY_TIMELINE* r = &row[i];
+        if (r->id == 0) h->orig_last = r->last;
+        if (r->id && r->on_chain && r->parent == 0) h->fill_to = r->fork_at;
+        if (!r->id || !r->live) continue;
+        for (j = live; j > 0 && (row[order[j - 1]].fork_at > r->fork_at ||
+                                 (row[order[j - 1]].fork_at == r->fork_at && row[order[j - 1]].id > r->id)); j--)
+            order[j] = order[j - 1];
+        order[j] = i;
+        live++;
+    }
+    if (live > (int)TAGPU_PK_HUD_FORKS && path && strcmp(path, s_cutFile)) {
+        lstrcpynA(s_cutFile, path, sizeof s_cutFile);
+        tagpu_logf("hud: %s holds %d live forks; the HUD shows the %u oldest", path, live, TAGPU_PK_HUD_FORKS);
+    }
+    for (i = 0; i < live && i < (int)TAGPU_PK_HUD_FORKS; i++) {
+        const TAGPU_REPLAY_TIMELINE* r = &row[order[i]];
+        TAGPU_PK_HUDFORK* f = &h->fork[i];
+        f->id = r->id;
+        f->from = r->fork_at;
+        f->end = r->last;
+        f->parent = r->parent;
+        f->seat = (uint8_t)(r->controlled < 0xFF ? r->controlled : 0xFF);
+        f->flags = (uint8_t)((r->id == tl ? TAGPU_PK_FORK_WATCHED : 0) | (r->on_chain ? TAGPU_PK_FORK_CHAIN : 0));
+    }
+    h->nfork = (uint8_t)i;
+    h->fork_max = REC_FORK_LIMIT;
+    if (tl == 0 || !h->fill_to) h->fill_to = h->orig_last;
+}
+
 int tagpu_hudstate_fill(TAGPU_PK_HUD* h, unsigned now)
 {
     TAGPU_REPLAY_PLAYER pl[TAGPU_PK_HUD_SEATS];
-    unsigned T[TAGPU_PK_HUD_MARKS], first, last;
+    unsigned T[TAGPU_PK_HUD_MARKS], first, last, a0, a1, tl;
     unsigned char kind[TAGPU_PK_HUD_MARKS], seat[TAGPU_PK_HUD_MARKS];
     int n, i;
 
@@ -90,7 +139,14 @@ int tagpu_hudstate_fill(TAGPU_PK_HUD* h, unsigned now)
         h->mark[i].seat = seat[i];
     }
     h->nmark = (uint16_t)i;
+    tl = tagpu_replay_timeline();
+    fill_forks(h, tl);
     tagpu_hudinput_fill(h);
+    /* THE AXIS takes in the forks only while their lanes are open or one is watched, as the
+       mockup's `axis()` does; closed, the track is the original's. After the input's fill, which
+       keeps whether the lanes are open. */
+    if (!tagpu_replay_axis(&a0, &a1) || a1 < h->last) a1 = h->last;
+    h->axis_last = h->lanes || tl ? a1 : h->orig_last > h->last ? h->orig_last : h->last;
     return 1;
 }
 
@@ -139,7 +195,7 @@ static int      s_mapCut;               /* a frame had more controls than the ma
    Latin-1, and the faces are cut to ASCII and Latin-1 (tools/hudart/fonts.py): a control code
    -- below 0x20, or 0x80..0x9F, which Latin-1 leaves to them -- is '?', and the soft hyphen,
    which Oswald lacks, is '-'. Nothing reaches the rasteriser that it would draw as a missing glyph. */
-static void latin1_utf8(char* dst, size_t cap, const char* src, size_t n)
+void tagpu_hudstate_utf8(char* dst, size_t cap, const char* src, size_t n)
 {
     size_t i, k = 0;
     for (i = 0; i < n && src[i] && k + 1 < cap; i++) {
@@ -374,7 +430,7 @@ static void forks(const TAGPU_PK_HUD* h, HUDSTATE* st, unsigned axis)
         f->end = on_axis(k->end, h->first, axis);
         for (j = 0; j < h->nseat && j < (int)TAGPU_PK_HUD_SEATS && h->seat[j].seat != k->seat; j++) {}
         if (j < h->nseat && j < (int)TAGPU_PK_HUD_SEATS)
-            latin1_utf8(f->name, sizeof f->name, h->seat[j].name, sizeof h->seat[j].name);
+            tagpu_hudstate_utf8(f->name, sizeof f->name, h->seat[j].name, sizeof h->seat[j].name);
         else
             snprintf(f->name, sizeof f->name, "Player %u", (unsigned)k->seat + 1);
         if (k->flags & TAGPU_PK_FORK_WATCHED) st->timeline = i;
@@ -435,7 +491,7 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
     for (i = 0; i < h->nseat && i < HUD_MAXSEAT; i++) {
         const TAGPU_PK_HUDSEAT* s = &h->seat[i];
         HUDSEAT* q = &st->seat[i];
-        latin1_utf8(q->name, sizeof q->name, s->name, sizeof s->name);
+        tagpu_hudstate_utf8(q->name, sizeof q->name, s->name, sizeof s->name);
         q->colour = pal ? (uint32_t)pal[s->pal * 4] << 16 | (uint32_t)pal[s->pal * 4 + 1] << 8 | pal[s->pal * 4 + 2]
                         : 0x808080;
         q->units = (float)s->units;

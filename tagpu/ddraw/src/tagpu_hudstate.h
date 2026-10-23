@@ -51,6 +51,11 @@ int  tagpu_hudstate_frame(unsigned frame, const HUDSTATE** st, float* px, int* o
    `tagpu_hudstate_frame` answered 1 for the same frame. */
 void tagpu_hudstate_drawn(const HUDOPS* ops);
 
+/* A recording's name -- the engine's 8-bit text, at most `n` bytes -- as the UTF-8 the HUD's faces
+   draw, into `dst` of `cap` bytes (tagpu_hudstate.c, THE NAMES IN WHAT THE FACES CARRY). Pure: either
+   thread. */
+void tagpu_hudstate_utf8(char* dst, size_t cap, const char* src, size_t n);
+
 /* The command record's HUD part: the hit map of the last frame drawn. Render thread. */
 void tagpu_hudstate_cmd(TAGPU_CMD_HUD* out);
 

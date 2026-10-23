@@ -1652,6 +1652,192 @@ def watch_hud(w, log, rec):
             f"{viewer}; GameTime {tick} and camera {eye} unchanged; " + "; ".join(lines))
 
 
+def hud_show(w):
+    """The replay HUD's dump of the frame on screen, as `tacli hud show --json` gives it."""
+    o = hud(w, "show", "--json")
+    return json.loads(o[o.index("{"):])
+
+
+def until_pick(w, state, what):
+    """The HUD's dump once its picker (`pick`: 0 closed, 1 asked or seeking, 2 open) is in
+    `state`: the picker moves at the fill, a frame or a seek after the click."""
+    end = time.monotonic() + ACK_S
+    while True:
+        d = hud_show(w)
+        if d["state"]["pick"]["state"] == state:
+            return d
+        if time.monotonic() >= end:
+            raise Failed(f"{what}: the picker is {d['state']['pick']} after {ACK_S} s, not in "
+                         f"state {state}")
+        nap(0.2)
+
+
+def lines_in_order(log, n, rxs, what):
+    """Each of `rxs` matched by a line from `n` on, in that order; Failed naming the first missing."""
+    log.read()
+    k = n
+    for rx in rxs:
+        while k < len(log.lines) and not re.search(rx, log.lines[k]):
+            k += 1
+        if k == len(log.lines):
+            raise Failed(f"{what}: no line matching {rx!r} in order after the click")
+        k += 1
+
+
+def watch_takeover(w, log, rec, stem, T, out, cover):
+    """V-1B on the HUD's route (owner decision 1-B, snap back): the playback paused 15 ticks past a
+    refresh R0, Take over seeks it back to R0 and opens the picker there, with a clickable row for
+    exactly the players who still have a unit -- the rule the takeover refuses by -- and the row of
+    the seat the recording's human commanded takes over at R0 itself, with no rounding. The fork
+    plays 300 ticks and the game ends; offline its first iteration is R0 and equals its parent's
+    chain there (compare-fork). The coverage is asked for on the fork's level, so it holds the
+    HUD's takeover. Returns its checks."""
+    res = []
+    seg0 = tarec.file_segments(rec)[0][0]
+    first = seg0["first"]
+    try:
+        # the fixtures record a refresh every 30 ticks: R0 is within 30 of T + 300
+        R0 = tarec.refresh_at(str(rec), 0, T + 300)
+    except tarec.Unreadable as e:
+        raise CouldNotRun(f"the HUD's takeover: the refresh at or before {T + 300}: {e}")
+    X = R0 + 15
+    if X >= seg0["last"]:
+        raise CouldNotRun(f"the HUD's takeover: {X} is past the recording's end {seg0['last']}")
+    hud(w, "click", "play")
+    try:
+        until_fact(w, lambda: peek(w, PAUSE_WORD) & 1, "the HUD's pause")
+    except CouldNotRun as e:
+        raise Failed(str(e))
+    n = len(log.lines)
+    w.trigger(f"hud seek {X}")
+    got = log.wait(rf"replay: {re.escape(stem)}: at GameTime {X}, sought from", ACK_S, n)
+    if not got:
+        raise CouldNotRun(f"the HUD's seek to {X}: no line in {ACK_S} s")
+
+    # the snap back: the picker asks, its plan rounds to R0, the playback is sought there
+    n = len(log.lines)
+    hud(w, "click", "takeover")
+    d = until_pick(w, 2, "Take over")
+    lines_in_order(log, n, [rf"replay: {re.escape(stem)}: seek to {R0} asked by the HUD",
+                            rf"replay: {re.escape(stem)}: at GameTime {R0}, sought from"],
+                   "Take over's snap back")
+    st, keys = d["state"], {h["key"] for h in d["hits"]["at"]}
+    if st["pick"]["R"] != R0:
+        raise Failed(f"Take over at {X - 1}: the picker starts at {st['pick']['R']}, not the "
+                     f"refresh {R0}")
+    if abs(st["t"] - (R0 - 1 - first) / 30) > 1e-3:
+        raise Failed(f"the picker opened with the playhead at {st['t']:.3f} s, not R0 - 1's "
+                     f"{(R0 - 1 - first) / 30:.3f} s")
+    rows = [(k, p["units"]) for k, p in enumerate(st["seats"])]
+    wrong = [k for k, u in rows if (f"takeas:{k}" in keys) != (u != 0)]
+    if wrong:
+        raise Failed(f"the picker's rows {wrong}: clickable is not 'has a unit' at R0 "
+                     f"(units {[u for _, u in rows]})")
+    out_rows = [k for k, u in rows if u == 0]
+    res.append(("W: Take over snaps back to the refresh", PASS,
+                f"paused at {X - 1}, the picker opened at R0 {R0} after the HUD's seek; "
+                f"{len(rows) - len(out_rows)} rows clickable, {len(out_rows)} out of the game "
+                f"{out_rows} not"))
+
+    # the controlled seat's row: the takeover at R0 itself
+    seats = tarec.header_only(rec)["players"]
+    own = (tarec.header_only(rec).get("options") or {}).get("controlled")
+    row = next((k for k, p in enumerate(seats) if p["index"] == own), None)
+    if row is None:
+        raise CouldNotRun(f"the picker: the controlled seat {own} has no row")
+    n = len(log.lines)
+    hud(w, "click", f"takeas:{row}")
+    got = log.wait(rf"replay: {re.escape(stem)}: taken over at GameTime {R0} as player {own}\b.*"
+                   rf"timeline (\d+) \(parent 0\) is recorded from GameTime {R0}\b"
+                   rf"|replay: .*takeover.*refused", ACK_S, n)
+    if not got or "refused" in got:
+        raise Failed(f"the picker's takeover: {got.strip() if got else f'no line in {ACK_S} s'}")
+    tl = int(re.search(r"timeline (\d+) \(parent 0\)", got).group(1))
+    lines_in_order(log, n, [rf"a takeover as player {own} at GameTime {R0} waits"], "the picker's takeover")
+    if any("takes over at" in ln for ln in log.lines[n:]):
+        raise Failed("the picker's takeover was rounded: it asked for a GameTime that is not R0")
+    res.append(("W: the picker takes over at R0", PASS, got[got.index("replay:"):].strip()))
+
+    # 300 ticks of the fork, held there; the HUD's pause is the Pause key's bit, which the key
+    # clears, and `pause at` holds the level at the end
+    hold_at(w, log, R0 + 300)
+    if peek(w, PAUSE_WORD) & 1:
+        rc, o = tacli("keys", w.name, "pause", timeout=INPUT_TIMEOUT)
+        if rc:
+            raise CouldNotRun(f"tacli keys pause: {last(o)}")
+    wait_paused(w, log, R0 + 300)
+    if cover:
+        cover_ask(w, log, "W")
+    n = len(log.lines)
+    rc, o = tacli("scenario", "apply", w.name, END_SCENARIO, timeout=300)
+    if rc:
+        raise CouldNotRun(f"apply {END_SCENARIO.name}: {last(o)}")
+    resume(w, log)
+    log.wait_running(r"recorder: writer: .* closed", n)
+    if not log.wait(rf"replay: {re.escape(stem)} .*: (done|refused):", 120, n):
+        raise CouldNotRun("the fork's level did not complete its file maintenance")
+    copy = out / "W-takeover.imprec"
+    shutil.copy2(fork_file(w, log), copy)
+    seg = next((s for s in tarec.file_segments(copy)[0] if s["id"] == tl), None)
+    if not seg or seg["fork_at"] != R0:
+        raise Failed(f"the picker's fork {tl}: fork_at {seg['fork_at'] if seg else 'none'}, not R0 {R0}")
+    rc, o = tarec_run("compare-fork", copy, tl)
+    if rc:
+        raise Failed(f"the picker's fork {tl}: compare-fork: {last(o)}")
+    res.append(("W: the picker's fork", PASS, f"timeline {tl} from R0 {R0}; compare-fork: {last(o)}"))
+    return res
+
+
+def forks_picker(w, log, T5, P):
+    """X's picker on "playing 5", held at T5 (its next iteration T5 + 1 is fork 5's second, a
+    refresh): Take over opens at once with no seek; its eviction is the dry run's; closed again;
+    then from T5 - 1, whose next iteration T5 is the fork's first, which no takeover starts at, the
+    plan snaps one tick forward and the picker opens at T5 + 1 after the seek there. Leaves the
+    playing held at T5 with the picker closed. Returns its check."""
+    n = len(log.lines)
+    hud(w, "click", "takeover")
+    d = until_pick(w, 2, "X's Take over")
+    log.read()
+    if any(re.search(r"seek to \d+ asked by the HUD", ln) for ln in log.lines[n:]):
+        raise Failed("X's Take over at a refresh sought: R is the next iteration, no seek runs")
+    st = d["state"]
+    if st["pick"]["R"] != T5 + 1:
+        raise Failed(f"X's Take over: the picker starts at {st['pick']['R']}, not {T5 + 1}")
+    n = len(log.lines)
+    w.trigger(f"takeover {P} at {T5 + 1} dry-run")
+    got = log.wait(r"replay: .*: (fork would delete (no timeline|timeline (\d+))|fork prediction refused: .*)",
+                   ACK_S, n)
+    if not got or "would delete" not in got:
+        raise Failed(f"X's dry run: {got.strip() if got else f'no line in {ACK_S} s'}")
+    m = re.search(r"would delete timeline (\d+)", got)
+    E = int(m.group(1)) if m else None
+    ids = [f["id"] for f in st["forks"]]
+    want_replace = ids.index(E) if E in ids else -1
+    if st["pick"]["evict"] != E or st["replace"] != want_replace:
+        raise Failed(f"X's picker: evict {st['pick']['evict']} replace {st['replace']}; the dry run "
+                     f"deletes {E}, lane {want_replace} of {ids}")
+    hud(w, "click", "takeover")
+    until_pick(w, 0, "X's Take over closed")
+
+    # the forward snap: T5 is the fork's first iteration
+    n = len(log.lines)
+    w.trigger(f"hud seek {T5}")
+    if not log.wait(rf"replay: .*: at GameTime {T5}, sought from", ACK_S, n):
+        raise CouldNotRun(f"X's seek to {T5}: no line in {ACK_S} s")
+    n = len(log.lines)
+    hud(w, "click", "takeover")
+    d = until_pick(w, 2, "X's Take over at a first iteration")
+    lines_in_order(log, n, [rf"replay: .*: seek to {T5 + 1} asked by the HUD",
+                            rf"replay: .*: at GameTime {T5 + 1}, sought from"], "X's forward snap")
+    if d["state"]["pick"]["R"] != T5 + 1:
+        raise Failed(f"X's forward snap: the picker starts at {d['state']['pick']['R']}, not {T5 + 1}")
+    hud(w, "click", "takeover")
+    until_pick(w, 0, "X's Take over closed")
+    return ("forks: the HUD's picker", PASS,
+            f"at T5 {T5}: opened at {T5 + 1} with no seek, evicting {E} as the dry run does "
+            f"(lane {want_replace}); from {T5 - 1}: snapped forward to {T5 + 1}")
+
+
 def watch_lane(w, fx, rec, out, T):
     """W: the playback started as a player starts it, through the Replays browser's Watch, and
     driven through the replay HUD: two copies of the recording refused, the data refusal's marked
@@ -1801,8 +1987,8 @@ def watch_lane(w, fx, rec, out, T):
     got = browser_watch(w, log, listed.index(f"{stem}.imprec"), stem)
     if not got.startswith(f"replay: playing {stem}:"):
         raise Failed(f"the second Watch: {got}")
-    if fx["cover"]:
-        cover_ask(w, log, "W")
+    hud(w, "wait", timeout=ACK_S)
+    res += watch_takeover(w, log, rec, stem, T, out, fx["cover"])
     w.collect(out)
     w.stop()
     return res
@@ -2063,6 +2249,7 @@ def forks_steps(w, fx, out, results):
     if T5 != fork2 + 1:
         raise Failed(f"forks: K5 asked for at {fork2 + 10} did not start at {fork2 + 1}")
     log = start_play(5, T5 + 1, "playing 5")
+    results.add(forks_picker(w, log, T5, P))
     # Timeline IDs are local to their file: a playing protects only that recording.
     other = w.gamedir / "replays" / "other.imprec"
     shutil.copy2(source, other)

@@ -2,7 +2,9 @@
 
 ## Status
 
-**Landings 1 to 3 are built: the replay HUD is a replay's controls on Vulkan.** The replay
+**Landings 1 to 3 are built: the replay HUD is a replay's controls on Vulkan.** Landing 4 adds
+the proposed features' replay side: **Take over replay** and its player picker, and the forks
+housing with its Forks bay, the track's axis, fill and shaded groove (*Take over*). The replay
 HUD of [The replay HUD's layout](hud-layout.md) — the column of team headers and player rows at
 the top right with its foot plate of buttons, the dock at the bottom with its transport
 buttons, the timeline and its markers, and the clock, and the stats window with its chart of
@@ -133,8 +135,8 @@ The owner's decisions:
 
 | File | What it holds | Thread |
 |---|---|---|
-| `tagpu_hudstate.c`/`.h` | whether the HUD draws; the packet's HUD record filled; the record turned into the layout's state, the teams, the names and the dump; the drawn frame's hit map, handed back in the command record | game (fill), render (present, the map) |
-| `tagpu_hudinput.c`/`.h` | the input: the hit map's copy, the press and release, the wheel, the commands, the HUD's own state (the held key, the folds, the scroll, the toast, the scale) and Leave's pause | game |
+| `tagpu_hudstate.c`/`.h` | whether the HUD draws; the packet's HUD record filled, the forks and the axis from the replay's timelines among it; the record turned into the layout's state, the teams, the names and the dump; the drawn frame's hit map, handed back in the command record | game (fill), render (present, the map) |
+| `tagpu_hudinput.c`/`.h` | the input: the hit map's copy, the press and release, the wheel, the commands, the HUD's own state (the held key, the folds, the scroll, the toast, the scale), Leave's pause, and the picker's states over the replay's takeover plan, seek and takeover | game |
 | `tagpu_hudmarks.c`/`.h` | the timeline's markers and the stats window's samples: the walker over the recording, and the bookmarks in `replays\index.dat` | game; the walker its own thread |
 | `tagpu_replay.c` | the unit types' army values for the walker (`tagpu_replay_army_values`); the pause icon's stub (`pause_icon_init`) | game |
 | `tagpu_menu.c` | the modal test `tagpu_menu_modal`, and Leave's question opened from the DrawGameScreen observer behind its guard | game |
@@ -302,7 +304,7 @@ The owner's decisions:
   toast. The render thread turns the pointer into HUD units for the hover, and Sight's and
   Follow's seats into rows.
   `frame_valid` checks the length and bounds `nseat` and `nmark` by the record's arrays before
-  the render thread loops over them. A record that does not fit the slot sets
+  the render thread loops over them, and the render thread bounds `nfork` by its own. A record that does not fit the slot sets
   `TAGPU_PK_TRUNC_HUD` (`0x800000`), and that frame draws no HUD.
 - **Each seat comes from the replay's image of its player record**, `W->player[seat]`, through
   `tagpu_replay_players` (`tagpu_replay.c`): the name, metal and energy stored, income and
@@ -315,6 +317,22 @@ The owner's decisions:
   it through the presented palette.
 - **"Lost"** is a commander-loss counter above 0 (the skull); **"out"** is no unit alive (the
   dimmed row).
+- **The clock is the chain that plays**: `first` and `last` are its root's first GameTime and its
+  last timeline's last, the span the replay's seek clamps to (`tagpu_replay_span`).
+- **The forks, the axis and the takeover** (`fill_forks` and `tagpu_hudinput_fill`): the file's
+  live forks from the replay's timelines cache (`tagpu_replay_timelines`), ordered by branch point
+  and then id as the mockup lists them, the first three (`TAGPU_PK_HUD_FORKS`, asserted equal to
+  `REC_FORK_LIMIT`), each with its id, `fork_at`, last GameTime, parent, the seat it was played as
+  (RT_OPTIONS `controlled`) and whether it is the watched one or on the chain that plays; a file
+  that holds more — only a foreign one can, since the recorder refuses a fifth live fork — logs
+  that once and shows the oldest. With them: `orig_last`, the original's last GameTime (timeline
+  0's row; `last` for a file without one); `fill_to`, where the watched chain leaves the original
+  (the `fork_at` of the chain's segment whose parent is 0; `orig_last` while the original plays);
+  `axis_last`, the track's end — the greatest last GameTime of a live timeline
+  (`tagpu_replay_axis`) while the lanes are open or a fork is watched, else the original's, as the
+  mockup's `axis()`; and the picker's state, start R and eviction, and whether the bay is open.
+  The render thread holds every one of these times to `[first, axis]` before it draws, so a value
+  the fill got wrong draws in the wrong place on the track and never off it.
 - **The markers** come from `tagpu_hudmarks.c` (`tagpu_hudmarks_get`): the commanders' deaths and
   the defeats as far as its walker has read the recording, then the bookmarks. The walker is a
   thread with its own reader of the recording, started by the first fill that finds the playback
@@ -443,6 +461,63 @@ loads, the pass is down or the chart's first image is not yet on the device, the
 bytes differ the log says `replay: the pause icon's test 0x46A107 holds other bytes: a replay
 shows it`.
 
+## Take over
+
+**What is drawn** ([The replay HUD's layout](hud-layout.md), *Take over and the picker*): the
+**Take over replay** button on top of the transport plate, down while the picker is asked for,
+sought to or open; the forks housing `rail_forks` with the **Forks bay** in its pocket, which
+counts the live forks and is drawn off with none; the track filled to the playhead or to where
+the watched chain leaves the original, whichever is first, and the groove past the original's
+end shaded while the axis runs past it; the clock's second time the watched chain's end; and the
+**picker**, drawn after the stats window: a row a seat, one whose player has no unit left drawn
+off with "defeated" and no hot, and at the fork limit two warning lines naming the fork the
+takeover would delete.
+
+**Owner decision 1-B: what is taken over is the world on screen.** The picker's states
+(`tagpu_hudinput.c`, `pick_act` and `pick_fill`, game thread):
+
+1. **Asked.** The click pauses the playback (bit 0 of `main+0x38A51`, the Pause key's bit) and
+   asks; the plan is the next fill's, not the click's. The click arrives in the wndproc between
+   two fills, when `s_now` is the last fill's GameTime; paused at the click, the engine runs no
+   step before the next fill, whose GameTime is the playhead the player sees.
+2. **The plan.** The fill plans at T = min(now + 1, last) (`tagpu_replay_takeover_plan`): R is
+   the refresh at or before T, as the takeover itself rounds (*Driving it* in
+   [S4b](tadr-port/demo-recorder-s4-takeover.md)), and the eviction is the fork the takeover's
+   append would delete. A plan refused with `next` — T is a timeline's first iteration, which no
+   takeover starts at — is made again at `next`, its second iteration, a refresh: the snap goes
+   one tick forward there. A plan refused outright closes the picker with the toast "Cannot take
+   over at m:ss" and `hud: take over refused: <why>`.
+3. **Seeking.** When R is not now + 1 the fill asks for a seek to R (`tagpu_replay_seek_request`,
+   `seek to R asked by the HUD`): the snap back. It opens at the first fill with now + 1 == R. A
+   seek that finishes since the plan without bringing the playback to R — refused, or replaced
+   by a later one, since the latest request runs — closes it; a refused one with the toast
+   "Cannot go back to m:ss". The frame visit runs a seek before the draw whose fill sees it, so
+   the seek's result and the playhead it brought are seen by the same fill: the picker never
+   waits for a seek that will not come.
+4. **Open** while the playback is paused at R − 1. A row takes over its seat at R
+   (`tagpu_replay_takeover_request(seat, R, -1)`), which R does not round.
+
+It closes on its button, on rew, fwd, play and a press on the track, when the playhead leaves
+R − 1 or the playback runs (the Pause key, a trigger's seek), and in every state when the
+timeline that plays changes, since a switch can change the chain without moving the playhead and
+the plan was the old chain's. Each new outcome the replay reports is seen once, by its serial
+(`tagpu_replay_result`); a takeover refused at the frame visit shows the toast "Take over
+refused", and the log has the reason.
+
+**THE INVARIANT.** The picker's world and the takeover's are both the seek's world at R: the
+picker's is the 1-B seek's, and the takeover's own seek rebuilds the same R (THE SEEK's invariant
+in `tagpu_replay.c`); at a refresh the stream is the writer's exact copy (`tk_bound`). **The
+picker's "defeated" rows are R0's refusals, by construction**: a row's player is out when its
+`units` is 0, which `tagpu_replay_players` reads from `recr_world(s_rd)->player[seat] + 0x144`;
+after the seek to R the reader's world is iteration R (a frame visit holds `W->tick == now + 1`);
+`tk_bound` refuses P on the same word of the same world (`player %u has no unit at GameTime
+%u`); and the picker opens only when now + 1 == R. So it dims exactly the seats the takeover would
+refuse.
+
+**After the takeover** the level is a live skirmish: puppet mode ends and the reader closes, so
+the replay HUD stops drawing at the frame visit that runs the takeover; the toast shows until
+then. The new fork's lane is there the next time the file is watched.
+
 ## Input
 
 The HUD takes a click where the player saw its controls. Everything on the game thread is
@@ -454,21 +529,37 @@ over the world, is `tagpu_menu_modal`'s.
 - **The render thread makes it from the frame it draws.** Once `tagpu_vk_hud_prepare` has built
   a frame it will draw, it hands the ops to `tagpu_hudstate_drawn`, which turns every `HOP_HOT`
   op into a rectangle in the window's client pixels, **topmost first** (the build paints in
-  order, so the last control painted is on top), at most `TAGPU_CMD_HUDHITS` = 64 (the rest are
-  logged once, `hud: N controls past the hit map's 64 are not clickable`). Counted from the
-  builders, a frame has at most 53: the dock's two plates, seven transport buttons and the track;
-  the column; ten rows and at most nine team headers; one hovered row's three buttons; the scroll
-  bar's track and two arrows; the foot plate's five buttons; and with the stats window open, its
-  plate, its title, its close button, seven measure chips and two split chips. With them go the
-  timeline's playhead run (`track_x0`, `track_x1`: the track's ends inset by `track.ends`), the
-  column's first item as drawn and the greatest it can be (`first`, `last`), and each row's
-  recorded seat (`seat[]`). **Each drawn frame's map is posted once**: `tagpu_hudstate_cmd`
+  order, so the last control painted is on top), at most `TAGPU_CMD_HUDHITS` = 128. With them go
+  the timeline's playhead run (`track_x0`, `track_x1`: the track's ends inset by `track.ends`) and
+  the GameTime span the track was drawn with (`t_first`, `t_last`: the chain's first and the
+  frame's axis), the column's first item as drawn and the greatest it can be (`first`, `last`),
+  and each row's recorded seat (`seat[]`).
+- **Every control a layout makes fits, by a bound computed from the layout.**
+  `tagpu_hudlay_max_hot` is the sum, over every place the rules emit a `HOP_HOT` op, of the most
+  that place can emit: the dock's two plates, `dock.transport.buttons` and the track; Take over
+  and the Forks bay; the column's plate; `2 × HUD_MAXSEAT − 1` headers and rows (a headed column
+  of sixteen seats has a team of two, so at most fifteen teams); the scroll bar's track and two
+  arrows; one hovered row's `hover.buttons`; `column.foot.buttons`; the window's plate, title
+  drag and close; each tray's chips (the measures of its group, the split's chips where it has
+  one); and the picker's plate and a row for each of `HUD_MAXSEAT` seats. With today's layout
+  that is 84 (computed by the load, 2026-10-23). The load refuses a layout whose bound is above
+  `HUD_MAXHOT` (128, asserted equal to `TAGPU_CMD_HUDHITS`) — "the layout makes up to N
+  controls; the hit map holds M" — and the HUD is then refused as for any layout that does not
+  load. Each of the load's self-test builds counts its own controls against the bound, which is
+  what catches a new `hot()` call site that has no term (the comment at `hot()` says so). The
+  render thread's cut at the array's end (`hud: N controls past the hit map's 128 are not
+  clickable`) stays as the array's own bound and cannot be reached by a layout that loads. **Each drawn frame's map is posted once**: `tagpu_hudstate_cmd`
   empties it as it copies it, so a frame that draws no HUD — the pass ran and drew none, or
   `tagpu_vk_frame` returned before the pass ran (no swapchain size yet, a rebuild, a display-mode
   change) — posts `n` = 0, and a click there is the engine's.
 - **The next command record carries it** (`TAGPU_CMD_HUD` in `TAGPU_CMD`, `tagpu_packet.h`):
   `tagpu_zoom_frame_end` fills it through `tagpu_hudstate_cmd` beside the zoom's fields. It is a
-  level, as the record's other levels are.
+  level, as the record's other levels are. With 128 controls the record is 4224 bytes (2152 with
+  64; measured by `sizeof`, 2026-10-23), past one page: `pkx_init` commits at least the record
+  for each slot before it zeroes it (`slot_commit(m, i, max(commit0, recBytes))`), so the zeroing
+  stays inside what was committed whatever the record's size, a reservation too small refuses the
+  arm by name, and `sizeof(TAGPU_CMD) + 4 <= PK_CMD_RESERVE` (64 KB) is asserted at compile
+  time.
 - **The game thread copies it at the take** (`tagpu_hudinput_take`, from the command record's
   apply in `tagpu_packet_pub.c`), before every in-play draw, bounding `n` and `nseat` by the
   arrays. A click between two takes reads this copy. A take with no record the exchange vouches
@@ -483,13 +574,17 @@ over the world, is `tagpu_menu_modal`'s.
 
 | Key | Where | What a click does |
 |---|---|---|
-| `rew`, `fwd` | transport | a seek 300 GameTime (10 s) back or forward, through `tagpu_replay_seek_request` |
-| `play` | transport | the pause toggled; at the recording's end a seek to its start and the pause cleared (the button shows play there, as the mockup's does) |
+| `rew`, `fwd` | transport | a seek 300 GameTime (10 s) back or forward, through `tagpu_replay_seek_request`; closes the picker |
+| `play` | transport | the pause toggled; at the recording's end a seek to its start and the pause cleared (the button shows play there, as the mockup's does); closes the picker |
 | `speed` | transport | the next preset above the speed in force, 5, 10, 20, 40, 80 (½× to 8×), and from 8× back to ½× |
 | `bookmark` | transport | the bookmark nearest now within 90 GameTime (3 s) removed, else one added at now (`tagpu_hudmarks_bookmark`, through `tagpu_replays_mark_add`/`_remove` into `replays\index.dat`); the toast "Bookmark at m:ss" or "Bookmark removed", nothing when the recording was not opened from `replays\` or the list is full |
 | `uiscale` | transport | the HUD's scale to the next of 75, 100, 125, 150, wrapping, and into the settings store (`hud: the replay HUD's scale is N%`) |
 | `leave` | transport | Leave's question (*Leave*) |
-| `track` | timeline | a seek where it was pressed, one a frame while it is dragged, and one where it is released (*The press*) |
+| `track` | timeline | a seek where it was pressed, one a frame while it is dragged, and one where it is released (*The press*); closes the picker |
+| `takeover` | above the transport plate | the picker asked for: the playback paused, and the next fill plans the takeover and seeks back to its start (*Take over*); while asked for, seeking or open, closes it |
+| `takeas:i` | the picker | with the picker open, row i's seat taken over at the picker's start (`tagpu_replay_takeover_request`), the toast "Taking over NAME at m:ss"; the picker closes. No hot for a row whose player has no unit left |
+| `picker` | the picker's plate | taken, and nothing done |
+| `lanes` | the Forks bay | the lanes opened or closed, while the file keeps a fork; no hot with none (the bay drawn off) |
 | `stats` | foot plate | the stats window opened or closed; drawn pressed while open |
 | `close` | the window's close button | the window closed |
 | `chip:<k>` | the window's trays | the measure `k` of `layout.json`'s `window.measures` (`metal`, `energy`, `excess`, `units`, `army`, `kills`, `losses`) |
@@ -537,8 +632,13 @@ buttons; it is how `tacli` finds a row to hover before clicking one of its butto
 - **The timeline drag:** a press on `track` seeks to the pointer at once; each packet fill then
   seeks to the pointer's x (`mouse_last_client`) when it has moved to a new GameTime, one request
   a frame, the newest replacing one not yet run; the release seeks to where it is. x maps along
-  the playhead's run from the recording's first GameTime to its last, clamped to the run. A drag
-  ends if the HUD stops taking clicks (`active` false at a fill).
+  the playhead's run onto the GameTime span the frame on screen drew the track with (`t_first`,
+  `t_last` in the hit map), clamped to the run, so a click lands where the player saw that time
+  even when the axis has changed since the draw — a fork made or deleted, the lanes opened. THE
+  BOUND: the span is the render thread's data and only turns a pixel into a GameTime;
+  `tagpu_replay_seek_request` clamps that to the playing's span, so a stale span costs a seek to a
+  slightly different time and never one outside the recording. A drag ends if the HUD stops
+  taking clicks (`active` false at a fill).
 - **The window drag:** a press on `drag` keeps the press's client point and where the window is
   drawn then: its place (the last drag's, else the layout's `window.x`, `window.y`) held on the
   last map's screen as the layout holds it (`stat_origin`), so a place kept from a smaller HUD
@@ -621,12 +721,17 @@ control's place in the frame on screen — and never calls the replay's API:
   writes `tagpu_replayhud.dump`, and reads `tagpu_replayhud.json` once the game has taken the
   trigger. The dump's `hits` object is the hit map of the frame on screen,
   `{"track": [x0, x1], "first": …, "last": …, "at": [{"key": …, "r": [x0, y0, x1, y1]}, …]}`,
-  topmost first, and the state carries `held`, `sight`, `follow`, `scroll`, `toast` and `stats`.
+  topmost first, and the state carries `held`, `sight`, `follow`, `scroll`, `toast` and `stats`,
+  and the proposed features under the mockup's names: `ends`, `len`, `fillTo`, `timeline`,
+  `lanesOpen`, `picker`, `armed`, `replace` and `forks` (`id`, `name`, `from`, `end`), in seconds
+  as the rest; and for the tests the picker's `pick`: `state` 0 closed, 1 asked or seeking, 2
+  open, its start `R` and its eviction `evict` (a timeline id, or null) as GameTimes and ids.
+  `show` adds `picker R` to its line while it is open.
 - **`click`** writes `dclick:` (`drclick:` with `--right`) at the control's centre, **`hover`**
   `dmove:`, and **`wheel`** `dwheel:x,y,n`, n notches (positive: away from the player, and the
   column scrolls up). A row's button (`jump:2`) shows only under the pointer, so tacli hovers its
   row (`row:2`) first and waits for the button to appear in the dump.
-- **`scrub`** presses on the track at one fraction of the recording (`ddown:`), moves in
+- **`scrub`** presses on the track at one fraction of the track's axis (`ddown:`), moves in
   `--steps` steps `--step-ms` apart (`dmove:`), and releases at the other (`dup:`).
 - **`drag`** presses at a control's centre (`ddown:`), moves by (dx, dy) client pixels in
   `--steps` steps `--step-ms` apart, and releases there: `tacli hud <i> drag drag 200 -80` drags
@@ -641,7 +746,13 @@ The replay harness's W lane drives the HUD through it ([completeness](tadr-port/
 *The replay test harness*): the speed, play, the trigger's `hud seek <T>` (the timeline's own
 seek entry, at a GameTime of the test's choosing), Sight twice on row 0, Follow, Follow again and
 Jump on the row of the seat the recording's human commanded, Cursors off and on, play again,
-and Leave, answered Yes through `tacli ui`.
+and Leave, answered Yes through `tacli ui`. On the second Watch it takes over through the HUD
+(`watch_takeover`): paused 15 ticks past a refresh R0, Take over must seek back to R0 and open
+the picker there with a clickable row for exactly the players who have a unit; the controlled
+seat's row must take over at R0 with no rounding; the fork plays 300 ticks, and offline it must
+start at R0 and its first iteration equal its parent's chain there (`compare-fork`). The X lane
+drives the picker on its fork 5 (`forks_picker`): at a refresh it opens with no seek, its
+eviction is the dry run's, and from a timeline's first iteration it snaps one tick forward.
 
 ## Checking it against the mockup
 
@@ -684,12 +795,28 @@ and Leave, answered Yes through `tacli ui`.
    baseline-text ops; the stats button, close, the chips and the title drag; the pause icon's
    stub; the dump's `stats`, `tacli hud drag` and the `stats:` line. Checked as *Status* says
    (2026-10-09).
+4. **Take over and the Forks bay** — built; it lands with the fork lanes. The records of the
+   forks, the takeover, the lanes and the live rewind in the packet, the command record and the
+   layout's state; the hit map at 128 under a bound the load computes from the layout;
+   `pkx_init`'s commit sized to the record; the dock's forks housing, bay, fill, groove and
+   clock; Take over and the picker by the mockup's rules, the picker's "defeated" being the
+   column's `out` in both; the picker's states over the replay's plan, seek and takeover calls;
+   the track's click on the drawn axis; the dump's proposed fields; laycheck at `prop=1`.
 
 Each landing is reviewed at `high`: it adds a pass and a hand-over between the game thread and
 the render thread.
 
 ## Gaps
 
+- **A disabled control's text is drawn at full opacity.** The mockup dims a disabled control
+  whole (CSS `opacity` on it and everything in it); the DLL dims its part and its icon and draws
+  its text at full opacity, since a text op carries no opacity. That shows on a split chip that
+  is off and on a picker row whose player is out of the game (its name and "defeated"); laycheck
+  compares a part's opacity, not a text's, so it does not catch it.
+- **The picker's title names R; the playhead stands at R − 1.** Both show the same second where R
+  − 1 falls on a whole second, as it does at a refresh 1 modulo 30 [INFERRED from the clock's
+  rounding to whole seconds].
+- **Closing a picker that is seeking leaves its seek to run**: the playback still goes back to R.
 - **GDI has no stats window**, as it has no replay HUD.
 - **The samples are held values, not interpolated**: each is the first walked iteration at or
   after its time, at least 1 s apart and at most 512 a recording, so a long recording's chart
@@ -720,6 +847,6 @@ the render thread.
   the archive stays mapped with the DLL, 27.0 MB. The parts are painted at about twice the
   4.5 pixels a unit the HUD is drawn at on a 4K screen at 150 %, so most of both is detail no
   screen up to 4K shows. The owner keeps the full resolution. 20 of the 66 parts (34.4 MB decoded,
-  10.7 MB of the archive) are the `proposed` section's: the Take over button and picker, the fork
-  lanes and the live rewind strip, which the DLL packs and decodes but draws only once their
-  landings make it read that section.
+  10.7 MB of the archive) are the `proposed` section's: the Take over button and picker and the
+  forks housing and bay, which the DLL draws, and the fork lanes and the live rewind strip, which
+  it packs and decodes but does not draw.
