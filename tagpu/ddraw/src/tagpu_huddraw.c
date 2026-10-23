@@ -741,7 +741,9 @@ int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, int layer, float p
             if (!gk || ((ops->op[i].flags & HOPF_TOP) != 0) != (layer != 0)) continue;
             while (i0 < ops->n && ops->op[i0].grp == gk) i0++;
             if (gk > ops->ngrp || out[gk - 1]) continue;
-            if (draw_group(&c, ops, gk - 1, i, i0, at[gk - 1], &charted, &sh, &g[*ng])) ++*ng;
+            /* `g` holds HUD_MAXGRP regions for the frame's builds together: a group past them is
+               refused as one that does not fit is */
+            if (*ng < HUD_MAXGRP && draw_group(&c, ops, gk - 1, i, i0, at[gk - 1], &charted, &sh, &g[*ng])) ++*ng;
             else { out[gk - 1] = 1; ++*unfit; again = 1; }
         }
     } while (again);
