@@ -668,9 +668,29 @@ typedef struct TAGPU_PK_HUDMARK {
     uint8_t  seat;              /* a recorded seat; 0xFF for a bookmark          */
     uint8_t  pad[2];
 } TAGPU_PK_HUDMARK;
+/* THE FORKS of the playing's file (inc/tagpu_replay.h, THE TIMELINES), the live
+   ones by branch point, oldest first, as the mockup lists them (index.html,
+   `forkList`) */
+#define TAGPU_PK_HUD_FORKS 3u       /* REC_FORK_LIMIT: the live forks a file keeps */
+enum { TAGPU_PK_FORK_WATCHED = 1, TAGPU_PK_FORK_CHAIN = 2 };
+typedef struct TAGPU_PK_HUDFORK {
+    uint32_t id;
+    uint32_t from, end;         /* its fork_at and its last GameTime             */
+    uint32_t parent;            /* its parent's id                               */
+    uint8_t  seat;              /* the seat it was played as (RT_OPTIONS
+                                   controlled)                                   */
+    uint8_t  flags;             /* TAGPU_PK_FORK_*: the one watched; a segment of
+                                   the chain that plays                          */
+    uint8_t  pad[2];
+} TAGPU_PK_HUDFORK;
+/* What the HUD shows: the replay's controls, or a live recorded skirmish's
+   rewind (tagpu_hudstate_mode) */
+enum { TAGPU_PK_HUD_REPLAY = 1, TAGPU_PK_HUD_LIVE = 2 };
 typedef struct TAGPU_PK_HUD {
     uint32_t now;               /* GameTime, which runs on past the recording    */
-    uint32_t first, last;       /* the recording's first and last GameTime       */
+    uint32_t first, last;       /* the chain that plays: its root's first
+                                   GameTime and its last timeline's last; in
+                                   LIVE mode the rewind's span                   */
     uint16_t speed;             /* the replay's speed ceiling, 10 = 1x           */
     uint8_t  paused;
     uint8_t  nseat;             /* <= TAGPU_PK_HUD_SEATS                         */
@@ -693,6 +713,34 @@ typedef struct TAGPU_PK_HUD {
     char     toast[TAGPU_PK_HUD_TOAST];  /* UTF-8; "" none                       */
     TAGPU_PK_HUDSEAT seat[TAGPU_PK_HUD_SEATS];
     TAGPU_PK_HUDMARK mark[TAGPU_PK_HUD_MARKS];
+    /* THE FORKS AND THE TAKEOVER (tagpu_hudstate.c, tagpu_hudinput.c) */
+    uint32_t axis_last;         /* the track's end: the longest live chain's last
+                                   while the lanes are open or a fork is watched,
+                                   else the original's                           */
+    uint32_t orig_last;         /* the original's last GameTime: the groove past
+                                   it is shaded                                  */
+    uint32_t fill_to;           /* where the watched chain leaves the original;
+                                   orig_last when the original is watched        */
+    uint32_t pick_R;            /* the picker's start: where the takeover begins */
+    uint32_t pick_evict;        /* the fork the takeover would delete;
+                                   UINT32_MAX none                               */
+    uint8_t  pick;              /* 0 closed, 1 asked (the button down), 2 open   */
+    uint8_t  lanes;             /* the Forks bay is open                         */
+    uint8_t  nfork;             /* <= TAGPU_PK_HUD_FORKS                         */
+    uint8_t  fork_max;          /* REC_FORK_LIMIT                                */
+    TAGPU_PK_HUDFORK fork[TAGPU_PK_HUD_FORKS];
+    /* THE LIVE REWIND (tagpu_hudstate.c, tagpu_hudinput.c) */
+    uint8_t  mode;              /* TAGPU_PK_HUD_*: a replay plays, or a live
+                                   recorded skirmish                             */
+    uint8_t  rw_state;          /* TAGPU_REPLAY_RWS_*                            */
+    uint8_t  rw_arm;            /* Play from here: 0, 1 snapping back to rw_R,
+                                   2 armed                                       */
+    uint8_t  pad4;
+    uint32_t rw_G;              /* the GameTime the rewind opened at: now, the
+                                   strip's end                                   */
+    uint32_t rw_R;              /* where Play from here starts                   */
+    uint32_t rw_evict;          /* the fork Play from here would delete;
+                                   UINT32_MAX none                               */
 } TAGPU_PK_HUD;
 
 /* The stats window's samples, while it is open: the chosen measure's, one row
@@ -1009,7 +1057,8 @@ typedef struct TAGPU_PACKET {
    HUD posts n = 0. Topmost first, in the window's client pixels, each key as
    the layout makes it: a row's index ("jump:2") is the drawn frame's, which
    `seat` turns into the recorded seat, and a team's the t-th of its grouping. */
-#define TAGPU_CMD_HUDHITS 64u
+#define TAGPU_CMD_HUDHITS 128u    /* HUD_MAXHOT: the layout's bound is checked at
+                                     its load (tagpu_hudlay_max_hot)              */
 typedef struct TAGPU_CMD_HUDHIT {
     int16_t  x0, y0, x1, y1;    /* [x0, x1) x [y0, y1)                           */
     char     key[TAGPU_PK_HUD_KEY];
@@ -1017,6 +1066,14 @@ typedef struct TAGPU_CMD_HUDHIT {
 typedef struct TAGPU_CMD_HUD {
     uint32_t n;                 /* <= TAGPU_CMD_HUDHITS                          */
     int16_t  track_x0, track_x1;/* the run the playhead travels, start to end    */
+    uint32_t t_first, t_last;   /* the GameTime span the track was drawn with: a
+                                   click is mapped on it                         */
+    uint8_t  nlane;             /* <= TAGPU_PK_HUD_FORKS: the lanes this frame
+                                   drew                                          */
+    uint8_t  pad3[3];
+    uint32_t lane_id[TAGPU_PK_HUD_FORKS];  /* lane k's timeline: "lane:k",
+                                   "export:k" and "delete:k" name the drawn
+                                   frame's lane, as a row's index names its seat */
     uint8_t  first, last;       /* the column's first item as drawn, and the
                                    greatest it can be                            */
     uint8_t  nseat;             /* <= TAGPU_PK_HUD_SEATS                         */

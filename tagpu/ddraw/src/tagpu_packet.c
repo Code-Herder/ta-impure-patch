@@ -287,7 +287,9 @@ static int pkx_init(PKX* m, unsigned commit0)
         if (!b) return 0;
         m->slot[i] = b;
         m->cap[i] = 0;
-        if (!slot_commit(m, i, commit0)) return 0;
+        /* the record is zeroed in what was committed for it: the commit covers the record
+           whatever its size, and a reserve too small for it refuses the arm here */
+        if (!slot_commit(m, i, commit0 > m->recBytes ? commit0 : m->recBytes)) return 0;
         memset(b, 0, m->recBytes);                    /* head_seq 0: never held a record */
     }
     /* the initial permutation: {W, cell, READ, PREV[, SPARE]} = {0, 1, 2, 3[, 4]} */
@@ -1052,6 +1054,9 @@ static void pkx_setup(PKX* m, const char* name, unsigned recBytes, unsigned rese
     m->valid = valid; m->pair = pair; m->tick = tick;
     m->prodByRole = prodByRole; m->consSleep = consSleep;
 }
+
+/* the command record, its canary included, fits one command slot's reservation */
+_Static_assert(sizeof(TAGPU_CMD) + 4u <= PK_CMD_RESERVE, "the command record outgrows its slot");
 
 void tagpu_packet_init(void)
 {

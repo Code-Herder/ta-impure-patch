@@ -19,6 +19,8 @@
 #define HUD_MAXSEAT  16
 #define HUD_MAXMARK  320
 #define HUD_KEYLEN   24
+#define HUD_MAXHOT   128        /* the hit map's controls: TAGPU_CMD_HUDHITS                  */
+#define HUD_MAXFORK  3          /* the forks drawn: TAGPU_PK_HUD_FORKS                        */
 
 typedef struct { float x, y, w, h; } HUDRECT;
 
@@ -45,6 +47,11 @@ unsigned tagpu_hudlay_toggle(const char* name);    /* 0: no such toggle */
 const char* tagpu_hudlay_toggle_name(unsigned bit);
 
 #define HUD_TOASTLEN 64
+
+/* A live fork of the playing's file, in seconds from the root's first GameTime, as the mockup's
+   forkList() gives it: `flags` the packet's TAGPU_PK_FORK_* (the one watched, a segment of the
+   chain that plays). */
+typedef struct { int id; char name[32]; float from, end; int parent; int flags; } HUDFORK;
 
 /* THE STATS WINDOW (hud.js `windowHtml`, `chart`): its place, its measure and its split as the
    input keeps them, and the groups the host made of the samples -- one per player, or one per
@@ -90,6 +97,26 @@ typedef struct {
     int      scroll;                /* the column's first item; held to its last in the build */
     char     toast[HUD_TOASTLEN];   /* UTF-8; "" = none                                       */
     HUDSTATS stats;
+    /* proposed, variation B (hud.js `dock`, `forksBay`, `lanes`, `takeover`, `picker`) */
+    float    ends;                  /* the original's end, seconds: the groove past it is shaded */
+    float    len;                   /* the watched chain's end: the time text's second clock  */
+    float    fill_to;               /* the track's fill stops here                            */
+    int      nfork, fork_max;
+    HUDFORK  fork[HUD_MAXFORK];     /* in the mockup's forkList() order                       */
+    int      timeline;              /* the watched fork's index in fork[]; -1 the original    */
+    int      lanes_open;
+    int      picker;                /* the picker is drawn                                    */
+    int      pick_down;             /* the Take over button is down: asked, seeking or open   */
+    float    pick_t;                /* the picker's title clock, seconds: R                   */
+    int      replace;               /* the fork a takeover replaces, while the picker is open;
+                                       -1 none                                                */
+    int      armed;                 /* the fork whose Delete is armed; -1 none                */
+    /* live (hud.js `live`): in live mode `t` is the playhead and `T` the strip's end, both in
+       seconds from the rewind's first GameTime */
+    int      live;                  /* the live HUD is drawn, not the replay's                */
+    int      live_open;             /* the strip is drawn: the rewind is open or in the past  */
+    int      rw_down;               /* the rewind button is down: a rewind owns the level     */
+    int      rw_arm;                /* Play from here's arm, as the packet's                  */
 } HUDSTATE;
 
 /* What to draw, in paint order, and where a click lands.
@@ -105,6 +132,7 @@ enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART };
                                op's colour, painted outside r only */
 #define HOPF_BASE   16u     /* HOP_TEXT: an SVG <text>, r.x its anchor and r.y its baseline;
                                `centre` is its text-anchor, 0 start, 1 middle, 2 end */
+#define HOPF_TOP    32u     /* an op of the top layer, drawn after the engine's UI */
 
 typedef struct {
     uint8_t  kind, flags;
@@ -202,6 +230,11 @@ typedef int (*HUDPNGSIZE)(void* ctx, const char* part, int* w, int* h);
 HUDLAY*           tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, size_t nkit,
                                     HUDPNGSIZE png_size, void* ctx, char* err, size_t errn);
 void              tagpu_hudlay_free(HUDLAY* l);
+/* The most HOP_HOT ops any state can build with this layout: the sum, over every place the rules
+   emit one, of the most that place can emit -- the layout's lists and the code's fixed maxima.
+   The load refuses a layout whose bound is above HUD_MAXHOT, so every control a loaded layout
+   draws fits the hit map. */
+int               tagpu_hudlay_max_hot(const HUDLAY* l);
 const HUDGLOBALS* tagpu_hudlay_globals(const HUDLAY* l);
 int               tagpu_hudlay_nparts(const HUDLAY* l);
 const HUDPART*    tagpu_hudlay_part(const HUDLAY* l, int i);

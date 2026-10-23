@@ -16,6 +16,7 @@
 #include "tagpu_hudmarks.h"
 #include "tagpu_hudart.h"
 #include "tagpu_replay.h"
+#include "tagpu_recfile.h"
 #include "tagpu_pal.h"
 #include "tagpu_hud.h"
 #include "tagpu_log.h"
@@ -113,6 +114,11 @@ static HUDSTATE s_st;
 typedef char hud_marks_fit[(TAGPU_PK_HUD_MARKS <= HUD_MAXMARK) ? 1 : -1];
 typedef char hud_stats_fit[(TAGPU_PK_HUD_POINTS == HUD_MAXPT && TAGPU_PK_HUD_MEASURE == HUD_MEASURE
                             && TAGPU_PK_HUD_SEATS <= HUD_MAXSEAT) ? 1 : -1];
+/* every control a loaded layout can make fits the hit map (tagpu_hudlay_max_hot), and every live
+   fork a file keeps fits the packet and the layout */
+_Static_assert(TAGPU_CMD_HUDHITS == HUD_MAXHOT, "the hit map holds the layout's bound");
+_Static_assert(TAGPU_PK_HUD_FORKS == REC_FORK_LIMIT && TAGPU_PK_HUD_FORKS == HUD_MAXFORK,
+               "the packet and the layout carry every live fork");
 static int      s_have;
 static unsigned s_frame;                /* the render-thread frame `s_st` is for */
 static float    s_px;

@@ -20,6 +20,7 @@ struct HUDLAY {
     TJDOC*      kdoc;
     const TJV*  L;
     HUDGLOBALS  g;
+    int         max_hot;        /* tagpu_hudlay_max_hot */
     int         nparts;
     HUDPART     part[HUD_MAXPART];
 };
@@ -131,6 +132,7 @@ static void icon_a(C* c, const char* name, R b, double opacity)
     art(c, n, b, opacity);
 }
 static void icon(C* c, const char* name, R b) { icon_a(c, name, b, 1); }
+/* a control: a new call site extends tagpu_hudlay_max_hot */
 static void hot(C* c, R b, const char* key)
 {
     HUDOP* p = op(c, HOP_HOT, b);
@@ -1388,6 +1390,55 @@ static int load_globals(HUDLAY* l, char* err, size_t errn)
     return !c.bad;
 }
 
+/* THE HIT MAP'S BOUND: one term for each place the rules emit a HOP_HOT op, the most it can emit.
+   A list's term is the layout's own length; a count the state sets is the code's maximum. */
+static int max_hot(HUDLAY* l, char* err, size_t errn)
+{
+    C c;
+    const TJV *D, *Cl, *Wn, *trays, *ms, *sp, *v;
+    int n = 0, i, j;
+    memset(&c, 0, sizeof c);
+    c.l = l; c.L = l->L; c.err = err; c.errn = errn;
+    D = obj(&c, l->L, "dock");
+    Cl = obj(&c, l->L, "column");
+    Wn = obj(&c, l->L, "window");
+    n += 2;                                                     /* dock: the plate, the housing */
+    if ((v = arr(&c, obj(&c, D, "transport"), "buttons"))) n += v->n;
+    n += 1;                                                     /* dock: the track */
+    n += 2;                                                     /* takeover(), forksBay() */
+    n += 1;                                                     /* column: its plate */
+    /* the column's headers and rows: a headed column of HUD_MAXSEAT seats has one team of two at
+       least, so at most HUD_MAXSEAT - 1 teams */
+    n += 2 * HUD_MAXSEAT - 1;
+    n += 3;                                                     /* column: the scroll track and buttons */
+    if ((v = arr(&c, obj(&c, l->L, "hover"), "buttons"))) n += v->n;   /* the one hovered row */
+    if ((v = arr(&c, obj(&c, Cl, "foot"), "buttons"))) n += v->n;
+    n += 3;                                                     /* window: the plate, the drag, close */
+    trays = arr(&c, Wn, "trays");
+    ms = arr(&c, Wn, "measures");
+    sp = arr(&c, obj(&c, Wn, "split"), "chips");
+    for (i = 0; trays && i < trays->n; i++) {
+        const TJV* tr = tj_at(trays, i);
+        const char* g = tj_str(tj_get(tr, "group"), "");
+        for (j = 0; ms && j < ms->n; j++)
+            if (!strcmp(tj_str(tj_get(tj_at(ms, j), "g"), ""), g)) n++;
+        if (tj_is(tj_get(tr, "split"), TJ_TRUE) && sp) n += sp->n;
+    }
+    n += 1 + HUD_MAXSEAT;                                       /* picker(): the plate, a row a seat */
+    return c.bad ? -1 : n;
+}
+
+/* a build's controls against the bound: a hot() site the bound has no term for */
+static int hot_fits(const HUDLAY* l, const HUDOPS* o, const char* what, char* err, size_t errn)
+{
+    int i, n = 0;
+    for (i = 0; i < o->n; i++) n += o->op[i].kind == HOP_HOT;
+    if (n <= l->max_hot) return 1;
+    snprintf(err, errn, "hudlay: the self-test's %s makes %d controls, above the bound of %d "
+             "(tagpu_hudlay_max_hot has no term for one)", what, n, l->max_hot);
+    return 0;
+}
+
 HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, size_t nkit,
                           HUDPNGSIZE png_size, void* ctx, char* err, size_t errn)
 {
@@ -1403,6 +1454,11 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     l->L = tagpu_json_root(l->ldoc);
     if (!load_kit(l, tj_get(tagpu_json_root(l->kdoc), "parts"), png_size, ctx, err, errn)) goto done;
     if (!load_globals(l, err, errn)) goto done;
+    if ((l->max_hot = max_hot(l, err, errn)) < 0) goto done;
+    if (l->max_hot > HUD_MAXHOT) {
+        snprintf(err, errn, "layout: the layout makes up to %d controls; the hit map holds %d", l->max_hot, HUD_MAXHOT);
+        goto done;
+    }
 
     /* Every branch once: teams with headers, a folded team, a lost commander, a player out of
        the game, each marker kind, a hovered row with Sight on, a held button, every toggle, a
@@ -1440,9 +1496,9 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
         g->death = i ? -1.0f : 1.0f;
         g->v[0] = 1; g->v[1] = 2; g->v[2] = 3;
     }
-    if (!tagpu_hudlay_build(l, st, o, err, errn)) goto done;
+    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(l, o, "first build", err, errn)) goto done;
     st->H = 300; st->scroll = 1;    /* the scroll bar */
-    if (!tagpu_hudlay_build(l, st, o, err, errn)) goto done;
+    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(l, o, "scrolled build", err, errn)) goto done;
     ok = 1;
 done:
     free(st);
@@ -1450,6 +1506,8 @@ done:
     if (!ok) { tagpu_hudlay_free(l); return NULL; }
     return l;
 }
+
+int tagpu_hudlay_max_hot(const HUDLAY* l) { return l->max_hot; }
 
 void tagpu_hudlay_free(HUDLAY* l)
 {
