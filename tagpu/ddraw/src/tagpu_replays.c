@@ -154,7 +154,10 @@ typedef void  (__stdcall *list_cb_fn)(void* gi, void* rec);
 #define ROW_TEXT         120
 #define INDEX_PATH       "replays\\index.dat"
 #define INDEX_TMP        "replays\\index.tmp"
-#define INDEX_MAGIC      "IMPURE-REPLAYS-INDEX\t2"
+/* Version 3: version 2 is a layout no shipped build wrote, two layouts in fact, so an index of it
+   reads as a version this build does not know (s_idxBad) and none of its lines is read wrong. */
+#define INDEX_MAGIC      "IMPURE-REPLAYS-INDEX\t3"
+#define INDEX_VERSION    3
 #define INDEX_MAGIC_V1   "IMPURE-REPLAYS-INDEX\t1"   /* read once, to convert (index_convert) */
 #define INDEX_CAP        (4u << 20)
 #define MARKS_MAX        64             /* a recording's bookmarks                               */
@@ -1067,9 +1070,11 @@ typedef struct {
 
 /* THE TABLE: every line of the index, however many, read whole by index_read and written whole
    by index_save, so no line can be lost by being left out of it, nor a second line made for a
-   name it holds. The browser's list (s_listed) is at most ENT_MAX of them. LIFETIME: it grows by
-   realloc (ent_slot) and is never freed, so an Ent pointer is good only until the next ent_slot;
-   every holder below takes one after the last growth it can meet. */
+   name it holds. A line leaves it only as index_read and index_save say: one that does not parse,
+   a second of one name (merged), one whose file is not there. The browser's list (s_listed) is at
+   most ENT_MAX of them. LIFETIME: it grows by realloc (ent_slot) and is never freed, so an Ent
+   pointer is good only until the next ent_slot; every holder below takes one after the last
+   growth it can meet. */
 static Ent*  s_ent;
 static int   s_nent, s_entCap;
 static int   s_listed[ENT_MAX];             /* the recordings in replays\, newest first, by entry */
@@ -1110,10 +1115,15 @@ static Ent* ent_slot(void)
     return &s_ent[s_nent];
 }
 
+/* The line of the name `file`: one of exactly that name, else the first of that name in another
+   case -- a file renamed in case alone, which Windows' names do not tell apart -- or -1. Both
+   compares are the C locale's, never the user's: a locale's equal names (lstrcmpiA's) would
+   give two of Wine's files, whose names it does tell apart, one line. */
 static int ent_find(const char* file)
 {
     int i;
-    for (i = 0; i < s_nent; i++) if (!lstrcmpiA(s_ent[i].file, file)) return i;
+    for (i = 0; i < s_nent; i++) if (!strcmp(s_ent[i].file, file)) return i;
+    for (i = 0; i < s_nent; i++) if (!_stricmp(s_ent[i].file, file)) return i;
     return -1;
 }
 
@@ -1193,9 +1203,9 @@ static int hex16(const char* t, unsigned* hi, unsigned* lo)
     return 1;
 }
 
-/* One index line into `e`, of the layout of index version `version`; 0 when it is not one.
-   `line` is NUL-terminated and is cut up. */
-static int ent_parse(char* line, Ent* e, int version)
+/* One index line into `e`; 0 when it is not one. `keyed`: of this version's layout, the root key
+   and the start after the size, else of version 1's. `line` is NUL-terminated and is cut up. */
+static int ent_parse(char* line, Ent* e, int keyed)
 {
     char* f[13 + REC_PLAYERS + 6 + REC_PLAYERS + 6];
     unsigned hi = 0, lo = 0;
@@ -1208,7 +1218,7 @@ static int ent_parse(char* line, Ent* e, int version)
         if (!p) break;
         *p++ = 0;
     }
-    if (version >= 2) {
+    if (keyed) {
         /* the key, taken out: the fields after it are numbered as version 1 numbers them. A
            key field that is not sixteen hex digits -- `-`, or one damaged -- is a key unknown */
         if (n < 12) return 0;
@@ -1245,6 +1255,30 @@ static int same_key(const Ent* e, const unsigned key[2])
     return e->key[0] == key[0] && e->key[1] == key[1];
 }
 
+/* A second line of `into`'s name, `from`, into it, so neither's favourite nor bookmark is lost:
+   the favourites or'd, the bookmarks' union, sorted, at most MARKS_MAX. The key stays known only
+   when both lines know it and it is one key; otherwise the line is key-unknown, and its file's
+   first read applies THE CONVERSION's rule to it (ent_refresh). */
+static void ent_merge(Ent* into, const Ent* from)
+{
+    unsigned m[MARKS_MAX], a = 0, b = 0, n = 0;
+    into->fav |= from->fav;
+    while (n < MARKS_MAX && (a < into->nmarks || b < from->nmarks)) {
+        unsigned v = b >= from->nmarks ||
+                     (a < into->nmarks && into->marks[a] <= from->marks[b])
+                   ? into->marks[a] : from->marks[b];
+        if (a < into->nmarks && into->marks[a] == v) a++;
+        if (b < from->nmarks && from->marks[b] == v) b++;
+        m[n++] = v;
+    }
+    memcpy(into->marks, m, n * sizeof m[0]);
+    into->nmarks = n;
+    if (into->keyless || from->keyless || !same_key(into, from->key)) {
+        into->keyless = 1;
+        into->key[0] = into->key[1] = 0;
+    }
+}
+
 static int file_gone(DWORD error)
 {
     return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
@@ -1275,15 +1309,18 @@ static int file_key(const char* file, unsigned key[2], unsigned long long* size)
 }
 
 /* NO MARK IS WRITTEN OVER. Set by index_read when replays\index.dat exists and could not be read
-   as an index this build writes: an error other than its absence, a file over INDEX_CAP, or a
-   version this build does not know, a later build's among them, or no memory to read it whole.
-   index_save then refuses, so the marks it holds are never replaced by a rebuilt index, and
-   index_marked keeps every recording. NULL when the index was read or there is none. */
+   as an index this build writes: an error other than its absence, a file over INDEX_CAP, one
+   that is not text (a NUL in it), a version this build does not know, a later build's among
+   them, or no memory to read it whole. index_save then refuses, so the marks it holds are never
+   replaced by a rebuilt index. index_marked reads the same file itself: it keeps every recording
+   when it cannot read it either, and otherwise decides from it, which no write has replaced.
+   NULL when the index was read or there is none. */
 static const char* s_idxBad;
 
 /* THE CONVERSION of a version-1 index, whose lines are keyed by name and size alone: its text
-   made version 2's, line by line, each line's key and start `-`, unknown, after its size. No
-   line is dropped and no file is read here: every line goes into THE TABLE.
+   made this version's, line by line, each line's key and start `-`, unknown, after its size. No
+   line is dropped and no file is read here; index_read then reads the lines as it reads its
+   own.
    A line takes its file's key at the first read of the file that succeeds (ent_refresh), which
    applies version 1's own rule: the favourite and the last-played time stay, and the bookmarks
    and the refusal's mark stay while the file's size is still the line's. The converted text, or
@@ -1322,9 +1359,11 @@ static char* index_convert(char* raw)
     return out;
 }
 
-/* The index on disk into THE TABLE, every line: 2 an index of this version, 1 one of version 1,
+/* The index on disk into THE TABLE: INDEX_VERSION an index of this version, 1 one of version 1,
    converted (THE CONVERSION) and read as this version's, 0 none read -- no index (no file, or
-   no replays\ folder yet), or one that could not be read (s_idxBad). */
+   no replays\ folder yet), or one that could not be read (s_idxBad). Every line goes into the
+   table but one that does not parse (ent_parse) and a second line of one name, which is merged
+   into the first (ent_merge). Names are told apart exactly, as Wine's files are. */
 static int index_read(void)
 {
     HANDLE h;
@@ -1332,7 +1371,7 @@ static int index_read(void)
     DWORD got = 0, error;
     char* raw = NULL;
     char* line;
-    int version;
+    int version, i;
 
     s_nent = 0;
     s_idxBad = NULL;
@@ -1363,11 +1402,13 @@ static int index_read(void)
     }
     raw[got] = 0;
     _Static_assert(sizeof INDEX_MAGIC == sizeof INDEX_MAGIC_V1, "the lines begin at one offset");
-    version = !strncmp(raw, INDEX_MAGIC "\n", sizeof INDEX_MAGIC) ? 2
+    version = !strncmp(raw, INDEX_MAGIC "\n", sizeof INDEX_MAGIC) ? INDEX_VERSION
             : !strncmp(raw, INDEX_MAGIC_V1 "\n", sizeof INDEX_MAGIC_V1) ? 1 : 0;
-    if (version == 1 && !(raw = index_convert(raw))) s_idxBad = "no memory to convert it";
+    /* a NUL would end the text early, and the lines after it would go at the next write */
+    if (strlen(raw) != got) s_idxBad = "it is not text";
+    else if (version == 1 && !(raw = index_convert(raw))) s_idxBad = "no memory to convert it";
     else if (!version) s_idxBad = "it is not an index of a version this build knows";
-    if (version == 1 && raw)
+    if (version == 1 && !s_idxBad)
         rlog("replays: " INDEX_PATH " converted from version 1, every line's key unknown");
     for (line = s_idxBad ? NULL : strtok(raw + sizeof INDEX_MAGIC, "\n"); line;
          line = strtok(NULL, "\n")) {
@@ -1378,7 +1419,14 @@ static int index_read(void)
             break;
         }
         if (k && line[k - 1] == '\r') line[k - 1] = 0;
-        if (ent_parse(line, e, 2) && ent_find(e->file) < 0) s_nent++;
+        if (!ent_parse(line, e, 1)) continue;
+        for (i = 0; i < s_nent && strcmp(s_ent[i].file, e->file); i++) {}
+        if (i < s_nent) {
+            rlog("replays: " INDEX_PATH ": a second line for %s, merged into the first", e->file);
+            ent_merge(&s_ent[i], e);
+        } else {
+            s_nent++;
+        }
     }
     free(raw);
     if (s_idxBad) {
@@ -1501,9 +1549,11 @@ static int index_save(void)
 }
 
 /* Does the index on disk give the recording `file` of root key `key` a favourite or a bookmark?
-   Its line of that name and that key counts, whatever size it was written for (THE KEY), and so
-   does a line of that name whose key is unknown (THE CONVERSION), whatever the file's key. 1
-   marked, 0 not, -1 the index could not be read (a missing index marks nothing), is empty, or is
+   Its line is found as index_read and ent_find find it: the line of exactly that name, else the
+   first of that name in another case, each with any later line of its own name merged in
+   (ent_merge). That line counts when it is of that key, whatever size it was written for (THE
+   KEY), or when its key is unknown (THE CONVERSION), whatever the file's key. 1 marked, 0 not,
+   -1 the index could not be read (a missing index marks nothing), is empty, is not text, or is
    not of this version -- a version-1 one, converted at the next load (index_load), among them --
    which keeps every recording. Under the index's lock, on any thread: it touches no s_ent. */
 static int index_marked(const char* file, const unsigned key[2])
@@ -1512,12 +1562,12 @@ static int index_marked(const char* file, const unsigned key[2])
     LARGE_INTEGER sz;
     DWORD got = 0;
     char *raw, *line, *next;
-    Ent* e;
-    int marked = 0;
+    Ent *e, *exact, *other, *found;
+    int marked = 0, have_exact = 0, have_other = 0;
     if (h == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_FILE_NOT_FOUND ? 0 : -1;
     raw = GetFileSizeEx(h, &sz) && sz.QuadPart > 0 && sz.QuadPart <= INDEX_CAP
         ? (char*)malloc((size_t)sz.QuadPart + 1) : NULL;
-    e = (Ent*)malloc(sizeof *e);
+    e = (Ent*)malloc(3 * sizeof *e);
     if (!raw || !e || !ReadFile(h, raw, (DWORD)sz.QuadPart, &got, NULL) || got != (DWORD)sz.QuadPart) {
         CloseHandle(h);
         free(raw);
@@ -1526,17 +1576,30 @@ static int index_marked(const char* file, const unsigned key[2])
     }
     CloseHandle(h);
     raw[got] = 0;
-    if (strncmp(raw, INDEX_MAGIC "\n", sizeof INDEX_MAGIC)) marked = -1;
+    exact = e + 1;
+    other = e + 2;
+    if (strlen(raw) != got || strncmp(raw, INDEX_MAGIC "\n", sizeof INDEX_MAGIC)) marked = -1;
     for (line = raw + sizeof INDEX_MAGIC; marked == 0 && *line; line = next) {
         size_t k;
         next = strchr(line, '\n');
         next = next ? (*next = 0, next + 1) : line + strlen(line);
         k = strlen(line);
         if (k && line[k - 1] == '\r') line[k - 1] = 0;
-        if (ent_parse(line, e, 2) && !_stricmp(e->file, file) &&
-            (e->keyless || same_key(e, key)) && (e->fav || e->nmarks))
-            marked = 1;
+        if (!ent_parse(line, e, 1)) continue;
+        if (!strcmp(e->file, file)) {
+            if (have_exact) ent_merge(exact, e);
+            else *exact = *e;
+            have_exact = 1;
+        } else if (have_other ? !strcmp(e->file, other->file) : !_stricmp(e->file, file)) {
+            if (have_other) ent_merge(other, e);
+            else *other = *e;
+            have_other = 1;
+        }
     }
+    found = have_exact ? exact : have_other ? other : NULL;
+    if (!marked && found && (found->keyless || same_key(found, key)) &&
+        (found->fav || found->nmarks))
+        marked = 1;
     free(raw);
     free(e);
     return marked;
@@ -1983,6 +2046,18 @@ static const char* lock_text(const Ent* e)
                                                   : "Made with other unit data.";
 }
 
+/* The line of the found file `file` (ent_find), where a line of its name in another case is its
+   only while none of the `n` files found has that line's exact name: Wine tells such names
+   apart, and the line is that file's. -1 none. */
+static int found_line(const Found* found, int n, const char* file)
+{
+    int k = ent_find(file), j;
+    if (k < 0 || !strcmp(s_ent[k].file, file)) return k;
+    for (j = 0; j < n; j++)
+        if (!strcmp(found[j].file, s_ent[k].file)) return -1;
+    return k;
+}
+
 /* The recordings listed: every one in replays\, newest first, the first ENT_MAX of them. One whose
    key cannot be read -- held by the prune, say -- is listed as its line has it, and not at all
    without one: nothing is decided about its marks from a file that could not be read.
@@ -1996,7 +2071,7 @@ static void scan(void)
     WIN32_FIND_DATAA fd;
     HANDLE h;
     Found* found = NULL;
-    int nf = 0, cap = 0, i, dirty = 0, kept = 0;
+    int nf = 0, cap = 0, i, dirty = 0, kept = 0, total;
 
     index_load();
     s_nlisted = 0;
@@ -2026,10 +2101,10 @@ static void scan(void)
         } while (FindNextFileA(h, &fd));
         FindClose(h);
     }
-    s_nfiles = nf;
+    s_nfiles = total = nf;
     for (i = 0; i < nf; i++) {
         Found* f = &found[i];
-        int k = ent_find(f->file);
+        int k = found_line(found, total, f->file);
         f->read = file_key(f->file, f->key, &f->size);
         f->dated = -1;
         f->started.dwLowDateTime = f->started.dwHighDateTime = 0;
@@ -2052,10 +2127,17 @@ static void scan(void)
 
     /* the lines of listed files first, in list order, the rest of THE TABLE after them. A file
        with no line gets one; a file whose header is not a whole recording header (a read of 0)
-       is listed as its line has it, or with a new line of its summary, its key unknown */
+       is listed as its line has it, or with a new line of its summary, its key unknown. A file
+       whose line is already listed -- one of another case that a newer file of a third case
+       took -- is not listed: one line holds one file's marks */
     for (i = 0; i < nf; i++) {
         const Found* f = &found[i];
-        int k = ent_find(f->file), refreshed;
+        int k = found_line(found, total, f->file), refreshed;
+        if (k >= 0 && k < kept) {
+            rlog("replays: %s: not listed: its line, %s, is a newer file's", f->file,
+                 s_ent[k].file);
+            continue;
+        }
         if (k < 0) {
             Ent* e = f->read < 0 ? NULL : ent_new(f->file);
             if (!e) continue;

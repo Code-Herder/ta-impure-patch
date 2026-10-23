@@ -1588,10 +1588,15 @@ def browser_watch(w, log, row, name):
 
 
 def index_lines(rd):
-    """replays\\index.dat's lines by file name (tagpu_replays.c, the index's format)."""
+    """replays\\index.dat's lines by file name (tagpu_replays.c, the index's format), the first
+    line of a name as the DLL keeps it."""
     f = rd / "index.dat"
     lines = f.read_text(errors="replace").splitlines()[1:] if f.exists() else []
-    return {ln.split("\t", 1)[0]: ln for ln in lines if "\t" in ln}
+    out = {}
+    for ln in lines:
+        if "\t" in ln:
+            out.setdefault(ln.split("\t", 1)[0], ln)
+    return out
 
 
 GONE_LINES = 1100     # more than the browser's ENT_MAX (1024, tagpu_replays.c)
@@ -1615,7 +1620,7 @@ def keyed_line(rd, name, T, what):
     at = 12 + int(c[11]) if len(c) > 11 and c[11].isdigit() else len(c)
     marks = c[at] if at < len(c) else None
     key = root_key(rd / name)
-    if head != "IMPURE-REPLAYS-INDEX\t2" or len(c) < 13 or c[2] != key or c[8] != "1" or \
+    if head != "IMPURE-REPLAYS-INDEX\t3" or len(c) < 13 or c[2] != key or c[8] != "1" or \
             marks != str(T):
         raise Failed(f"{what}: index {head!r}, line {ln!r}; expected key {key}, the favourite and "
                      f"the bookmark {T}")
@@ -1922,7 +1927,7 @@ def prune_step(w, fx, out, forked):
     marked, other = root_key(rd / "0000 marked.imprec"), root_key(rd / "0000 starred.imprec")
     if other == root_key(rd / "0000 plain-b.imprec"):
         raise CouldNotRun("prune: the starred and plain-b copies share a root key")
-    (rd / "index.dat").write_text("IMPURE-REPLAYS-INDEX\t2\n" + line("starred", "-", 1, "") +
+    (rd / "index.dat").write_text("IMPURE-REPLAYS-INDEX\t3\n" + line("starred", "-", 1, "") +
                                   line("marked", marked, 0, "301") + line("plain-b", other, 1, ""),
                                   newline="\n")
     log = Log(w)

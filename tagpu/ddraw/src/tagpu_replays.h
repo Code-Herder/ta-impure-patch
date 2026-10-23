@@ -48,9 +48,10 @@ int  tagpu_replays_mark_remove(const char* file, unsigned T);
    name in replays\\) a favourite or a bookmark on its line of the root key read through
    `recording`. The index is read off the disk under the lock its writer takes, so a mark saved
    before this call keeps the recording. 1 marked for deletion (it goes when the handle closes), 0
-   kept, -1 nothing decided: the recording's key or the index could not be read, the index is of
-   version 1 and not yet converted or of a version this build does not know, or the system has
-   no SetFileInformationByHandle. A line of that name whose key is unknown counts by its name. */
+   kept, -1 nothing decided: the recording's key or the index could not be read, the index is not
+   text, is of version 1 and not yet converted or of a version this build does not know, or the
+   system has no SetFileInformationByHandle. The line is the browser's for that name (the name
+   exactly, else in another case); one whose key is unknown counts by its name. */
 int  tagpu_replays_unmarked_delete(const char* file, HANDLE recording);
 
 /* Watch's own check refused the recording `file` of replays\\ with one of WATCH'S DATA REFUSALS
