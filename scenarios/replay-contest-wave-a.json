@@ -1,0 +1,313 @@
+{
+ "format": "ta-scenario/1",
+ "description": "A wave of the demo recorder's `contest-waves` test group: one ARMPW on each of the 16 lanes at y 3550, sent west to (3200, 3500). Written by scenarios/replay-contest.gen.py, whose header gives the design.",
+ "setup": {
+  "clear_existing": false
+ },
+ "units": [
+  {
+   "id": "wa0",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    3960,
+    3550
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      3200,
+      3500
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wa1",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4008,
+    3550
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      3200,
+      3500
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wa2",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4056,
+    3550
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      3200,
+      3500
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wa3",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4104,
+    3550
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      3200,
+      3500
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wa4",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4152,
+    3550
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      3200,
+      3500
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wa5",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4200,
+    3550
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      3200,
+      3500
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wa6",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4248,
+    3550
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      3200,
+      3500
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wa7",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4296,
+    3550
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      3200,
+      3500
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wa8",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4344,
+    3550
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      3200,
+      3500
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wa9",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4392,
+    3550
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      3200,
+      3500
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wa10",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4440,
+    3550
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      3200,
+      3500
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wa11",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4488,
+    3550
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      3200,
+      3500
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wa12",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4536,
+    3550
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      3200,
+      3500
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wa13",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4584,
+    3550
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      3200,
+      3500
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wa14",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4632,
+    3550
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      3200,
+      3500
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wa15",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4680,
+    3550
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      3200,
+      3500
+     ]
+    }
+   ]
+  }
+ ]
+}

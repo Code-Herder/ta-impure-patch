@@ -223,6 +223,27 @@
    "last_min": 2400,
    "cob": "exact"
   },
+  "contest-waves": {
+   "load": "replay-contest-walkers.json",
+   "steps": [[59, "apply", "replay-contest-wave-a.json"], [89, "apply", "replay-contest-wave-b.json"], [119, "apply", "replay-contest-wave-c.json"],
+             [149, "apply", "replay-contest-wave-a.json"], [179, "apply", "replay-contest-wave-b.json"], [209, "apply", "replay-contest-wave-c.json"],
+             [239, "apply", "replay-contest-wave-a.json"], [269, "apply", "replay-contest-wave-b.json"], [299, "apply", "replay-contest-wave-c.json"],
+             [329, "apply", "replay-contest-wave-a.json"], [359, "apply", "replay-contest-wave-b.json"], [389, "apply", "replay-contest-wave-c.json"],
+             [419, "apply", "replay-contest-wave-a.json"], [449, "apply", "replay-contest-wave-b.json"], [479, "apply", "replay-contest-wave-c.json"],
+             [509, "apply", "replay-contest-wave-a.json"], [539, "apply", "replay-contest-wave-b.json"], [569, "apply", "replay-contest-wave-c.json"],
+             [599, "apply", "replay-contest-wave-a.json"], [629, "apply", "replay-contest-wave-b.json"], [659, "apply", "replay-contest-wave-c.json"],
+             [689, "apply", "replay-contest-wave-a.json"], [719, "apply", "replay-contest-wave-b.json"], [749, "apply", "replay-contest-wave-c.json"],
+             [779, "apply", "replay-contest-wave-a.json"], [809, "apply", "replay-contest-wave-b.json"], [839, "apply", "replay-contest-wave-c.json"],
+             [869, "apply", "replay-contest-wave-a.json"], [899, "apply", "replay-contest-wave-b.json"], [929, "apply", "replay-contest-wave-c.json"],
+             [959, "apply", "replay-contest-wave-a.json"], [989, "apply", "replay-contest-wave-b.json"], [1019, "apply", "replay-contest-wave-c.json"],
+             [1049, "apply", "replay-contest-wave-a.json"], [1079, "apply", "replay-contest-wave-b.json"], [1109, "apply", "replay-contest-wave-c.json"],
+             [1139, "apply", "replay-contest-wave-a.json"], [1169, "apply", "replay-contest-wave-b.json"], [1199, "apply", "replay-contest-wave-c.json"],
+             [1229, "apply", "replay-contest-wave-a.json"], [1259, "apply", "replay-contest-wave-b.json"], [1289, "apply", "replay-contest-wave-c.json"],
+             [1319, "apply", "replay-contest-wave-a.json"], [1349, "apply", "replay-contest-wave-b.json"], [1379, "apply", "replay-contest-wave-c.json"],
+             [1409, "apply", "replay-contest-wave-a.json"]],
+   "end": 1800,
+   "unit_limit": 1000
+  },
   "randprobe": {
    "load": "replay-tenseat-load.json",
    "content": {"run": ["tools/randprobe_fixture.py", "{gamedir}"],

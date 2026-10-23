@@ -1,0 +1,504 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The demo recorder's `contest-waves` test group: 160 ARMFAV of the human seat patrolling 16 lanes across a band of Town & Country, and an AI seat that owns one CORSOLAR and nothing else. Written by scenarios/replay-contest.gen.py, whose header gives the design.",
+ "setup": {
+  "map": "Town & Country",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "groups": [
+  {
+   "id": "lane0",
+   "owner": 0,
+   "at": [
+    3960,
+    3750
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 100,
+    "angle": 90
+   },
+   "composition": [
+    {
+     "type": "ARMFAV",
+     "count": 10
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      3960,
+      4300
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lane1",
+   "owner": 0,
+   "at": [
+    4008,
+    3750
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 100,
+    "angle": 90
+   },
+   "composition": [
+    {
+     "type": "ARMFAV",
+     "count": 10
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      4008,
+      4300
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lane2",
+   "owner": 0,
+   "at": [
+    4056,
+    3750
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 100,
+    "angle": 90
+   },
+   "composition": [
+    {
+     "type": "ARMFAV",
+     "count": 10
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      4056,
+      4300
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lane3",
+   "owner": 0,
+   "at": [
+    4104,
+    3750
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 100,
+    "angle": 90
+   },
+   "composition": [
+    {
+     "type": "ARMFAV",
+     "count": 10
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      4104,
+      4300
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lane4",
+   "owner": 0,
+   "at": [
+    4152,
+    3750
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 100,
+    "angle": 90
+   },
+   "composition": [
+    {
+     "type": "ARMFAV",
+     "count": 10
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      4152,
+      4300
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lane5",
+   "owner": 0,
+   "at": [
+    4200,
+    3750
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 100,
+    "angle": 90
+   },
+   "composition": [
+    {
+     "type": "ARMFAV",
+     "count": 10
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      4200,
+      4300
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lane6",
+   "owner": 0,
+   "at": [
+    4248,
+    3750
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 100,
+    "angle": 90
+   },
+   "composition": [
+    {
+     "type": "ARMFAV",
+     "count": 10
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      4248,
+      4300
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lane7",
+   "owner": 0,
+   "at": [
+    4296,
+    3750
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 100,
+    "angle": 90
+   },
+   "composition": [
+    {
+     "type": "ARMFAV",
+     "count": 10
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      4296,
+      4300
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lane8",
+   "owner": 0,
+   "at": [
+    4344,
+    3750
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 100,
+    "angle": 90
+   },
+   "composition": [
+    {
+     "type": "ARMFAV",
+     "count": 10
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      4344,
+      4300
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lane9",
+   "owner": 0,
+   "at": [
+    4392,
+    3750
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 100,
+    "angle": 90
+   },
+   "composition": [
+    {
+     "type": "ARMFAV",
+     "count": 10
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      4392,
+      4300
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lane10",
+   "owner": 0,
+   "at": [
+    4440,
+    3750
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 100,
+    "angle": 90
+   },
+   "composition": [
+    {
+     "type": "ARMFAV",
+     "count": 10
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      4440,
+      4300
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lane11",
+   "owner": 0,
+   "at": [
+    4488,
+    3750
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 100,
+    "angle": 90
+   },
+   "composition": [
+    {
+     "type": "ARMFAV",
+     "count": 10
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      4488,
+      4300
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lane12",
+   "owner": 0,
+   "at": [
+    4536,
+    3750
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 100,
+    "angle": 90
+   },
+   "composition": [
+    {
+     "type": "ARMFAV",
+     "count": 10
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      4536,
+      4300
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lane13",
+   "owner": 0,
+   "at": [
+    4584,
+    3750
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 100,
+    "angle": 90
+   },
+   "composition": [
+    {
+     "type": "ARMFAV",
+     "count": 10
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      4584,
+      4300
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lane14",
+   "owner": 0,
+   "at": [
+    4632,
+    3750
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 100,
+    "angle": 90
+   },
+   "composition": [
+    {
+     "type": "ARMFAV",
+     "count": 10
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      4632,
+      4300
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lane15",
+   "owner": 0,
+   "at": [
+    4680,
+    3750
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 100,
+    "angle": 90
+   },
+   "composition": [
+    {
+     "type": "ARMFAV",
+     "count": 10
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      4680,
+      4300
+     ]
+    }
+   ]
+  }
+ ],
+ "units": [
+  {
+   "id": "keepalive",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    8000,
+    8000
+   ]
+  }
+ ]
+}
