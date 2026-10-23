@@ -982,9 +982,6 @@ the render thread.
 - **The hit map is one frame behind the HUD being built**, by design: it is the frame on screen.
   A control that moves between two frames (a row's buttons appearing under the pointer, the
   column scrolling) is clickable where the player saw it, not where the next frame draws it.
-- **Bookmarks do not survive a playing** [INFERRED from the code, not run]: `replays\index.dat`
-  keys them by the file's name and size, and every playing's end touches the file, which appends a
-  timeline table and so changes its size; a fork, a deletion and an export change it too.
 - **The replay's timeline click is mapped with the latest fill's span** (`seek_at`,
   `tagpu_hudinput.c`), not the drawn axis the hit map now carries (`t_first`, `t_last`, which the
   live strip's track maps on). That is exact while the span never changes inside a level; a
@@ -1000,9 +997,6 @@ the render thread.
   recording the harness cannot name before the file is closed; the "Playing on from" and "Cannot
   play from" toasts, which last 1.8 s of wall time; a verb refused at once with no level in play;
   and the arm's end when the timelines' serial moves, which no rewind path moves while armed.
-- **A multiplayer recording's fork may not play** [INFERRED from the code, not run]: the reader
-  refuses a chain whose segments differ in RT_HOLD, a multiplayer root has none, and its fork,
-  recorded by a live skirmish, writes one.
 - **A one-pixel Oswald residual.** At 26 of 7554 sizes swept, Chrome rounds Oswald's ascent or
   descent differently from the rule the DLL follows, and the line sits a pixel off the mockup's
   ([The replay HUD's layout](hud-layout.md), *Text*).
