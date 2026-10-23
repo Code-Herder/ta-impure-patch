@@ -1838,36 +1838,47 @@ reproduction recording:
   the same build, compare-fork EQUAL.
 
 MEASURED 2026-10-23 on the reference setup, internal speed 20, the coverage
-build, a four-actor recording of GameTime 1–1354
+build of `09ed62ec`, a four-actor recording of GameTime 1–1347
 (`recmp_create_begin_test.py --until 1277`):
 
 - **At 1081 as player 1**, which is 3·300 + 181 and no refresh: the takeover
   starts at 1081 itself, with no rounding line, and its line names 1081
-  (`at` 1081, timeline 1); 3 units killed, 36 made, orders 32 built and 2
-  adopted. The AI plays: seats 0, 2 and 3 issue 73, 19 and 23 orders in the
-  1,800-tick window, 100% of 26 mobile units move, all three build. The fork's
-  first iteration is EQUAL to the composed parent (36 units, 0 unscanned),
-  `tarec check --timeline 1` explains every change in 3,064 steps with 0
-  corrections, the live dump at 1201 (a refresh of the fork) is EQUAL to the
-  timeline's stream, `codectest verify` decodes all 117 sectioned blocks of
-  the mixed chain alike in C and Python, and the original's bytes are
-  untouched.
-- **The fork played across its boundary.** One playing crossed at 1081
-  ("sought from GameTime 1080", 0 refused) twice, around a seek from 1272 back
-  to 1050; another sought from 1010 to 1150; a fresh process sought to 1150.
-  Getter 75 answered 1 for seats 0 1 2 3 at every entry into the fork and for
-  seats 0 2 after the seek back into the multiplayer segment. Dumps EQUAL: at
-  1000, 1020 and 1050 in the multiplayer segment (`recmp_compare.py`); at
-  1140, 1150, 1170, 1201 and 1270 in the fork and the fresh seek's at 1150
-  (`tarec compare --puppet --seek --timeline 1`); the round trip at 1160 and
-  the fresh seek against the running one at 1150 (`tarec compare-dumps
-  --timeline 1 --seek`).
-- **A takeover inside the fork**, asked for at 1150: it rounds to 1082, the
-  fork's second iteration and a refresh (`a takeover asked for at GameTime
-  1150 takes over at 1082`), and the new timeline 2 is EQUAL to its parent
-  segment at 1082 (`tarec compare-fork … 2`, through the skirmish segment's
-  header); `tarec check --timeline 2` explains every change; the AI seats
-  issue 73, 18 and 23 orders and 100% of 26 mobile units move.
+  (`at` 1081, timeline 1); 3 units killed, 43 made, orders 39 built and 3
+  adopted. TK1 set getter 75's table to 1 for seats 0 1 2 3 (it held 0 2,
+  the recording machine's). The AI plays: seats 0, 2 and 3 issue 95, 32 and
+  13 orders in the 1,800-tick window, 86% of 28 mobile units move, seat 3
+  builds. The fork's first iteration is EQUAL to the composed parent (43
+  units, 0 unscanned), `tarec check --timeline 1` explains every change in
+  3,064 steps with 0 corrections, the live dump at 1201 (a refresh of the
+  fork) is EQUAL to the timeline's stream, `codectest verify` decodes all 116
+  sectioned blocks of the mixed chain alike in C and Python, and the
+  original's bytes are untouched.
+- **The fork played across its boundary**, crossing at 1081 twice (0
+  refused), around a seek from 1272 back to 1050. Getter 75's table was set to
+  1 for seats 0 1 2 3 at each entry into the fork and for seats 0 2 after the
+  seek back into the multiplayer segment (the table's own line; no COB trace
+  reads key 75). Dumps EQUAL: at 1050 in the multiplayer segment
+  (`recmp_compare.py`); at 1140, 1170 and 1201 in the fork (`tarec compare
+  --puppet --seek --timeline 1`); the round trip at 1160 (`tarec
+  compare-dumps --timeline 1 --seek`). The straight playing's dump at 1020,
+  in the multiplayer segment before any seek, has **1 difference**: cell (157,
+  82) of mobile unit 1503's footprint names unit 10, which overlaps it there
+  and carries the holder's mark. Main's build `b76515f9` gives the same
+  difference on the same recording played alone to 1020, so it does not come
+  from this landing; it is open (the multiplayer comparison checks the grid's
+  slots without the contest's rule).
+- On the build before the merge of format 25 (recording 1–1354): a seek from
+  1010 to 1150 and a fresh process at 1150 gave EQUAL dumps at 1000, 1150 and
+  1270, and the fresh seek EQUAL against the running one at 1150; those runs
+  were not repeated.
+- **A takeover inside the fork**, asked for at 1150: it starts at 1082, the
+  fork's second iteration and a refresh -- `tarec.takeover_at` gives 1082 and
+  the harness asks for it there; asked for at 1150 directly, on the build
+  before the merge, the DLL logged `a takeover asked for at GameTime 1150
+  takes over at 1082`. Timeline 2 is EQUAL to its parent segment at 1082
+  (`tarec compare-fork … 2`, through the skirmish segment's header); `tarec
+  check --timeline 2` explains every change in 3,062 steps; the AI seats issue
+  98, 30 and 13 orders and 89% of 28 mobile units move.
 
 **Not run:** a takeover at a multiplayer recording's first iteration (the
 refusal's exact-start text), a running playback taken over backwards (the
