@@ -88,11 +88,12 @@ and timeline ID under the worker publication lock. There are two claims (`recfil
 the timeline that plays, and the one a switch moves to while its second reader is open beside the
 first (*Watching another timeline in place*). A claim matches the timeline and either the
 canonical path or file identity, so replacement cannot lose protection. A deletion of a claimed
-timeline is refused, and a claim of a timeline whose deletion is queued is refused. Every reader
-of a playing claims its timeline before its metadata scan and releases it after it closes; a
-worker releases its reservation only after the operation ends. This protects the timelines a
-playing reads within this process, including requests through a differently spelled path to the
-same file.
+timeline is refused, and a claim of a timeline whose deletion is queued is refused. The timeline
+a playing chooses is claimed before the scan it is chosen from and released after its reader
+stops playing it; a worker releases its reservation only after the operation ends. This protects
+the timelines a playing plays within this process, including requests through a differently
+spelled path to the same file. A reader that only reads -- the HUD's walker -- claims nothing:
+what keeps its bytes is the file's lifetime (*Watching another timeline in place*).
 
 The bounded queue tracks eight worker thread handles. Exit seals publication and
 waits for all workers. Recording writers enqueue their close compaction before
@@ -152,9 +153,11 @@ seek, `tl_switch` takes it in one of two ways:
   where reading *leaves* a segment (`cover_end`); `recr_tick` consults the chain only in its
   boundary test before a read; and `w.tick` is at or before the new chain's end of the current
   segment. So afterwards the reader is one that had played `id` from the start. `recr_timeline`
-  and `recr_rechain` choose a chain through one walk, `chain_of`. A level held at a boundary is
-  not shared: the boundary's step played its iteration's events and read no images after them, so
-  the reader is not where a playing of the new chain stands, and the seek serves it. The line:
+  and `recr_rechain` choose a chain through one walk, `chain_of`. Two states are not shared, and
+  the seek serves them: a level held at a boundary, whose step played its iteration's events and
+  read no images after them, so the reader is not where a playing of the new chain stands; and a
+  playing that has stopped (`s_over`: a boundary's seek that failed, a read that failed), which
+  only a seek starts again. The line:
   `replay: NAME: watching timeline N from GameTime G (shared history: no rebuild)`.
 - **Sought**, otherwise: a second reader of the same file opened on `id`'s chain, and THE SEEK on
   it in SWITCH mode to the host's GameTime + 1, clamped to the chain (`seek_run` with `sw`). THE
@@ -163,18 +166,24 @@ seek, `tl_switch` takes it in one of two ways:
   write (R1), and in SWITCH mode it calls no `sk_back`; so a refused switch closes the second
   reader and puts the first back, and the playing goes on as before -- except what every refused
   seek leaves (the eye's lead, the cleared click overlay), and in a multiplayer playing the
-  materializer's rule, which `mp_follow` sets back from the first reader's segment. The request
+  materializer's rule, which `mp_follow` sets back from the first reader's segment. **The
+  residual:** in a multiplayer playing, a refusal from the second reader's materializer
+  (`mp_follow` on it failing) is sticky (`mp_fail`) and stops the playing, as it stops it after
+  any refused seek; restoring it would need the first reader's materializer rebuilt whole by
+  `mp_follow`, which is not shown. The request
   the switch's seek replaced (a boundary's, or the user's) is given back on a refusal, and the
   user's is asked again on the new chain when the switch is done. The line: `replay: NAME:
   watching timeline N at GameTime T (sought from G in M ms)`, after the seek's own.
 
 **The claims' order.** The new timeline is claimed before the re-chain's scan or the second
-reader opens, and the left one released after its reader closes (re-chained: after the reader
-stops reading it as its last timeline), so the timeline that plays is never deleted, through the
-window in which two readers are open. **The file's lifetime:** the second reader opens the
-playing's path while the first holds it open, and an open reader's file can be neither replaced
-nor deleted (readers share no DELETE; a compaction's replacement fails on an open file, above), so
-both name one file; `recr_same` checks the two handles.
+reader opens, and the left one released after its reader closes (re-chained: once the reader
+plays the new one), so the timeline that plays is never deleted, through the window in which two
+readers are open. **The file's lifetime:** the second reader opens the playing's path while the
+first holds it open, and an open reader's file can be neither replaced nor deleted (readers share
+no DELETE; a compaction's replacement fails on an open file, above), so both name one file;
+`recr_same` checks the two handles. A deletion writes only a metadata block after the file's
+last, so any reader of a deleted timeline, the walker's included, reads blocks nothing
+rewrites.
 
 **The in-level stamps.** A timeline's last use is stamped in the playing when it is left -- at a
 switch, and for the last one at the level's end (`used_stamp`, `s_used`, oldest first, at most 65
@@ -202,7 +211,9 @@ timelines 0, 2, 4 and 5), one launch held at fork 5's first iteration:
    the switch equals a rebuild of chain 2 in place), and `hud state` watching 2 on `[0, 2]`;
 2. a HUD seek before both forks, then 2 -> 4 re-chained with no seek line, watching 4 on `[0, 4]`;
 3. the dry run names timeline 5 for eviction where the file's own times would name 2;
-4. 4's boundary crossed on the re-chained reader, the dump past it EQUAL to a fresh seek of 4;
+4. the re-chained reader's own world at fork 2's GameTime + 30, before 4's fork -- where the chain
+   it left would have crossed into 2 -- and past 4's boundary, both dumps EQUAL to a fresh seek
+   of 4;
 5. a switch to the evicted timeline 1 refused, the dumps before and after it EQUAL;
 6. the deletion of the watched 4: the switch to 0 (a seek, past 4's fork), the worker's deletion,
    the HUD's outcome, live `[0, 2, 5]`;
@@ -216,17 +227,33 @@ dump at 1531 past 4's fork EQUAL to a fresh seek of 4; the refused switch's dump
 deletion of 4 by way of 0, sought at 1532 in 2987 ms, the deletion's compaction deferred while
 the playing held the file (error 5, the replacement refused, as *File ordering and lifetimes*
 says); the touch `touched timelines 0, 5, 2`, compacting to three segments once the playing had
-closed. Every function the switch adds or changes was reached by X2's coverage file.
+closed. Every function the switch adds or changes was reached by X2's coverage file. In the
+whole lane's run of the same day, whose GameTimes the commit picks (base 811, F2 1111, F4 1711):
+5 -> 2 sought in 2466 ms, 2 -> 4 re-chained from 810, the re-chained reader's dump at 1141 and
+the one past 4's fork both EQUAL to a fresh seek of 4, 4 -> 0 sought in 3333 ms, and every other
+check of the lane passing.
+`codectest outcomes` plays `recr_rechain`'s edges offline: a reader at a fork's `fork_at - 1`
+re-chains onto it and its next read is that fork's boundary; at `fork_at` it does not and reads on;
+a reader that has read nothing, one that has read its end, and one in a sibling fork's segment
+are not shared and stay as they were; an absent timeline is refused.
 
 **Gaps.** No test makes `seek_run` refuse after the second reader is in place (its refusals need
 an unreadable file or a level that is not the counts'), so the restoration is reached by no test;
-its argument is the structural one above. X2 plays a single-player file: the multiplayer lines of
+its argument is the structural one above. Of the refusals at the frame visit, X2 reaches none:
+a claim refused because the timeline's deletion is queued, and a re-chain or a second reader
+refused by the file (`k < 0`, a timeline the cache still lists live), each need a deletion to
+finish between the request's look at the cache and the visit, which no test can order; the
+refusal X2 plays is the request's own. X2 plays a single-player file: the multiplayer lines of
 the restoration (`mp_follow`) are reached by no test; a ten-seat X2 would reach them. Two things
 fixed from the first header stay as a switch finds them, as a boundary crossing leaves them:
 getter 75's `local[]` (`seat_level`) and the viewer's side art. The HUD's walker (markers, stats)
 of the left timeline is joined, with its bounded wait on the game thread, at the HUD's next fill
 after a switch, as at any timeline change, until the lanes' landing polls it; its reads are of
-blocks no deletion rewrites, in a file no compaction can replace while it is open.
+blocks no deletion rewrites, in a file no compaction can replace while it is open. A touch
+whose recording the prune has deleted since the playing ended leaves a `.lock` beside the
+missing file: `recfile_lock` opens the lock `OPEN_ALWAYS` before the recording is found absent.
+The lock is empty and harmless, and left: the touch could delete it through its own exclusive
+handle, as the prune deletes one, which it does not do.
 
 ## Driving it
 

@@ -649,7 +649,7 @@ What the HUD asks the recorder is declared in `inc/tagpu_replay.h`, *THE HUD'S R
 all on the game thread: the takeover's plan and request, the timelines of the playing's file with
 the axis they span, a fork's deletion and export, the live rewind's verbs and state, and the last
 request's outcome, whose serial lets a caller see each outcome once; and the switch to another
-timeline of the file, `tagpu_replay_watch_timeline`, which the fork lanes' click calls, with the
+timeline of the file, `tagpu_replay_watch_timeline`, which the fork lanes' click will call, with the
 deletion of the watched timeline as a switch first. All are called between two
 sim steps, never inside one. A call that changes anything queues it for the frame visit; the plan
 commits nothing but reads the file's block headers three times, so it answers a click and is never
