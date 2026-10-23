@@ -1833,6 +1833,7 @@ def watch_takeover(w, log, rec, stem, T, out, cover):
     log.wait_running(r"recorder: writer: .* closed", n)
     if not log.wait(rf"replay: forks .*\b{re.escape(stem)}\.imprec: (done|refused):", 120, n):
         raise CouldNotRun("the fork's level did not complete its file maintenance")
+    out.mkdir(parents=True, exist_ok=True)
     copy = out / "W-takeover.imprec"
     shutil.copy2(fork_file(w, log), copy)
     seg = next((s for s in tarec.file_segments(copy)[0] if s["id"] == tl), None)
