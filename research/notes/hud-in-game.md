@@ -177,7 +177,7 @@ The owner's decisions:
 
 - **One archive, embedded as a resource.** `tools/hudpak.py` packs `art/hud/` as it is —
   `layout.json`, `kit.json`, `parts/*.png`, `fonts/*.ttf` and the fonts' licence texts — behind
-  a directory, into `inc/tagpu_hudpak.bin` (26.7 MB with the 66 parts of 2026-10-15), which
+  a directory, into `inc/tagpu_hudpak.bin` (27.0 MB with the 66 parts of 2026-10-23), which
   `res.rc` embeds. Every offset is checked against the resource's size before it is read.
 - **The JSON is read at run time, not converted.** `tagpu_json.c` reads the same text the mockup
   reads, and `tagpu_hudlay_load` resolves it into structs once. A field missing or of the wrong
@@ -186,7 +186,7 @@ The owner's decisions:
 - **Decoding is off the frame.** The first frame that has a HUD to draw starts the loader
   (`tagpu_hudart_start`), a thread of its own that decodes the parts, premultiplies them and
   opens the faces, then publishes the result with one interlocked store; the HUD draws nothing
-  until then. MEASURED 2026-10-15: `hud: loaded 66 parts (21.5 Mpx) and 3 faces in ~830 ms`.
+  until then. MEASURED 2026-10-15, before the picker's re-cut (the kit is 21.2 Mpx since): `hud: loaded 66 parts (21.5 Mpx) and 3 faces in ~830 ms`.
 - **The decoded parts stay for the session**, 85 MB of RGBA. Every teardown and resize brings
   the pass down, and its images are uploaded again from these. Nothing writes or frees the
   loaded HUD afterwards, which is why any thread may read it without a lock.
@@ -717,6 +717,9 @@ the render thread.
 
 - **The HUD font** is not decided; Oswald and Barlow Condensed are the mockup's.
 - **Address space.** The decoded parts stay for the session, 85 MB of a 32-bit process, and
-  the archive stays mapped with the DLL, 26.7 MB. The parts are painted at about twice the
+  the archive stays mapped with the DLL, 27.0 MB. The parts are painted at about twice the
   4.5 pixels a unit the HUD is drawn at on a 4K screen at 150 %, so most of both is detail no
-  screen up to 4K shows.
+  screen up to 4K shows. The owner keeps the full resolution. 20 of the 66 parts (34.4 MB decoded,
+  10.7 MB of the archive) are the `proposed` section's: the Take over button and picker, the fork
+  lanes and the live rewind strip, which the DLL packs and decodes but draws only once their
+  landings make it read that section.

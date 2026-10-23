@@ -1191,6 +1191,7 @@ static int copies(double len, double period, int extra)
 {
     double n = period > 0 ? floor(len / period + 0.5) : 1;
     if (n < 1) n = 1;
+    if (extra < 0) extra = 0;   /* a cap below one quad a cell still draws every cell once */
     return n > 1 + extra ? 1 + extra : (int)n;
 }
 
