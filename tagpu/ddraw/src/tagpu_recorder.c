@@ -1755,6 +1755,8 @@ typedef struct Rec {
     struct { unsigned id; unsigned char open; } yhold[YHOLD_MAX];  /* a create's own yards */
     unsigned       nyhold;
     unsigned       ydropped;    /* yard events THE YARD RULE kept out of the file       */
+    unsigned       unordered;   /* footprint and chain calls a playing cannot put in their
+                                   order (THE CONTEST ORDER, tagpu_recfmt.h)               */
     unsigned       pshadow[REC_PLAYERS][REC_PLAYER_DWORDS];
     unsigned char  ctl[REC_PLAYERS];             /* the controllers and the two players */
     unsigned char  view[2];                      /* as the ring last carried them        */
@@ -2800,6 +2802,8 @@ static void rec_end(Rec* r, unsigned reason)
                s_smarks, s_sfulls, s_queries);
     tagpu_logf("recorder: %u yard events kept out of the file by THE YARD RULE (tagpu_recfmt.h)",
                r->ydropped + r->nyhold);
+    tagpu_logf("recorder: %u footprint calls a playing cannot put in their order (THE CONTEST "
+               "ORDER, tagpu_recfmt.h)", r->unordered);
     feat_log(r);
     tagpu_logf("recorder: the projectiles: %u record images; the pool's written extent reached %u "
                "of its %u records", r->jimages, r->jhw, (unsigned)TAGPU_LIM_PROJ);
@@ -4491,6 +4495,7 @@ static Rec* ev_rec(void)
 }
 
 static void yard_step(Rec* r, unsigned kind, const unsigned char* b);
+static int turn_put(Rec* r, unsigned kind, const unsigned char* b);
 
 static void ev_put(Rec* r, unsigned kind, const void* b, unsigned n)
 {
@@ -4498,8 +4503,12 @@ static void ev_put(Rec* r, unsigned kind, const void* b, unsigned n)
        contribution ledger, including this peer's publications. */
     if (r->mode==MODE_NETWORK &&
         (kind==RK_EV_START_NAMED || kind==RK_EV_REPLY || kind==RK_EV_SPRAY)) return;
+    /* a create's own yards first, then its key: nothing stands between the key and its event */
     if (kind == RK_EV_CREATE || kind == RK_EV_DEATH) yard_step(r, kind, (const unsigned char*)b);
-    if (r->ev_full || ring_put(r, kind, b, n, NULL, 0)) return;
+    if (!r->ev_full && turn_put(r, kind, (const unsigned char*)b) &&
+        ring_put(r, kind, b, n, NULL, 0))
+        return;
+    if (r->ev_full) return;
     r->ev_full = 1;
     tagpu_logf("recorder: an event did not fit in the ring after GameTime %d: the recording ends "
                "at the next iteration", r->tick);
@@ -6280,8 +6289,60 @@ static int yard_framed(unsigned id)
     return 0;
 }
 static unsigned char s_fphase;      /* the step's phase (tagpu_rec_phase), on the game thread    */
+static unsigned short s_turn;       /* the unit tick's turn: 0 before its first, a slot, then
+                                       REC_TURN_AFTER from the projectile tick on (THE CONTEST
+                                       ORDER, tagpu_recfmt.h); game thread                      */
+static unsigned short s_key;        /* the key a playing holds: the step's last footprint event's */
 
-void __cdecl tagpu_rec_phase(unsigned phase) { s_fphase = (unsigned char)phase; }
+/* Only a timing accumulator runs between the unit tick's return 0x4954F2 and the projectile
+   tick's call 0x495513 [DISASSEMBLED], so from the projectile phase on every call is after the
+   tick's last turn. */
+void __cdecl tagpu_rec_phase(unsigned phase)
+{
+    s_fphase = (unsigned char)phase;
+    if (phase >= REC_PHASE_PROJ) s_turn = REC_TURN_AFTER;
+}
+
+/* THE CONTEST ORDER's turn: the unit the unit tick's loop is on, at its slice site, before the
+   slice (tagpu_patches.c, unit_slice), for every unit the loop reaches. A skirmish's turns ascend
+   by slot (0x48AD30: each block ascending, the blocks with the records, 0x4854A0); one that does
+   not is counted, since a playing places by slot. */
+void tagpu_rec_turn(const char* unit)
+{
+    Rec* r = ev_rec();
+    unsigned id;
+    if (!r || r->mode == MODE_NETWORK) return;
+    if (!(id = ev_unit(r, unit))) {
+        r->unordered++;
+        return;
+    }
+    if (s_turn && (s_turn == REC_TURN_AFTER || id - 1u <= s_turn)) r->unordered++;
+    s_turn = (unsigned short)(id - 1u);
+}
+
+/* THE CONTEST ORDER on the recording machine: an RK_EV_TURN just before a top-level footprint
+   event whose key is not the one a reader infers (rec_turn_implicit). ev_put's ring_put follows
+   at once, so nothing stands between the two; yard_step has put a create's own yards before it,
+   and those are checks, not calls, which take no key. Top-level here is the readers' top level:
+   every frame on s_fstack is a recorded feature call or death, or nested in one. A turn that came
+   back below the step's last key was counted where it came (tagpu_rec_turn), and the key stays
+   where it was, so the stream never takes its keys back. 0: the record did not fit. */
+static int turn_put(Rec* r, unsigned kind, const unsigned char* b)
+{
+    unsigned id, imp, key;
+    if (r->mode == MODE_NETWORK || !(REC_SKIRMISH_HOLDS & RECL_CELLS) || s_fdepth ||
+        (kind != RK_EV_CREATE && kind != RK_EV_DEATH && kind != RK_EV_YARD && kind != RK_EV_LINK))
+        return 1;
+    memcpy(&id, b, 4);
+    imp = rec_turn_implicit(kind, id - 1u, s_key);
+    key = s_turn < s_key ? s_key : s_turn;
+    s_key = (unsigned short)key;
+    if (key != imp) {
+        unsigned char t[4] = { (unsigned char)key, (unsigned char)(key >> 8), 0, 0 };
+        if (!ring_put(r, RK_EV_TURN, t, 4, NULL, 0)) return 0;
+    }
+    return 1;
+}
 
 /* The root's arguments after its site, into `b`, and the cells it may write marked; the bytes
    written. A pointer argument is read no further than the function reads it. */
@@ -6535,6 +6596,36 @@ static int __cdecl ob_corpse(void* E)
     return feat_enter(E, FR_CORPSE);
 }
 
+/* THE CONTEST ORDER's closed list (tagpu_recfmt.h): every direct call of the three writers in the
+   file, by its return, and none of them is stored as an address anywhere in the file
+   (DISASSEMBLED, a call scan and a dword scan of the whole file). A playing orders a relink by
+   its unit's turn, and the rest by their events; anything else is counted. */
+static const struct { unsigned ra; unsigned char turn; } FOOT_SITES[] = {
+    { 0x0043DA14u, 1 },  /* the relink's clear 0x43DA0F (0x43D6D0, the movement pass's 0x43DD55)  */
+    { 0x0043DA46u, 1 },  /* the relink's stamp 0x43DA41                                         */
+    { 0x0048AA70u, 1 },  /* set-position's clear 0x48AA6B: the carried relink's 0x43D775 is the
+                            turn unit's; Teleport's 0x406BC0, on other units, is not            */
+    { 0x0048AA9Fu, 1 },  /* set-position's stamp 0x48AA9A                                      */
+    { 0x00486114u, 0 },  /* the create's stamp 0x48610F: its RK_EV_CREATE                      */
+    { 0x0047CBDBu, 0 },  /* the death's clear 0x47CBD6 (0x47CBD0, the destructor's 0x48682D)   */
+    { 0x0047DB02u, 0 },  /* YARD_OPEN's re-claim 0x47DAFD: its RK_EV_YARD                      */
+    { 0x0047ED3Au, 0 },  /* the walk's callback 0x47ED35, inside a clear's or a re-claim's walk */
+};
+
+/* One writer call by its return `ra`, on unit `id` (0: no slot). The returns the list does not
+   hold -- CreateFromNetwork's 0x486311 and the 0x2C receiver's 0x48B68A and 0x48B6BE among them --
+   run in no skirmish; a relink is ordered only as the turn unit's own. */
+static void foot_order(Rec* r, unsigned ra, unsigned id)
+{
+    unsigned i;
+    for (i = 0; i < sizeof FOOT_SITES / sizeof FOOT_SITES[0]; i++)
+        if (FOOT_SITES[i].ra == ra) break;
+    if (i == sizeof FOOT_SITES / sizeof FOOT_SITES[0] ||
+        (FOOT_SITES[i].turn &&
+         (!s_turn || s_turn == REC_TURN_AFTER || !id || id - 1u != s_turn)))
+        r->unordered++;
+}
+
 /* the stamp, the clear and the re-claim, each (unit): the unit's footprint, a cell wider. On a
    puppet level, where nothing records, the call's grid writes are undone at its return instead
    (tagpu_puppet.c, THE FOOTPRINT WRITERS), and foot_leave is that return. */
@@ -6542,12 +6633,14 @@ static int __cdecl ob_foot(void* E)
 {
     Rec* r = ev_rec();
     const char* u = PTR(ARG(E, 4));
-    if (r && r->feat && ev_unit(r, u)) {
+    unsigned id = r ? ev_unit(r, u) : 0;
+    if (r && r->feat && id) {
         int x = *(const short*)(u + U_FOOT_X), z = *(const short*)(u + U_FOOT_Z);
         int fw = clamp_foot(*(const short*)(u + U_FOOT_W));
         int fh = clamp_foot(*(const short*)(u + U_FOOT_H));
         mark(r->feat, x - 1, z - 1, x + fw + 1, z + fh + 1);
     }
+    if (r && r->mode != MODE_NETWORK) foot_order(r, ARG(E, 0), id);
     return tagpu_puppet_foot_enter(u, ARG(E, 0));
 }
 static int __cdecl ob_stamp(void* E) { cnt(0x0047CC30u, ARG(E, 0), 0); return ob_foot(E); }
@@ -6558,6 +6651,68 @@ static void* __cdecl foot_leave(unsigned* regs)
 {
     (void)regs;
     return (void*)(size_t)tagpu_puppet_foot_leave();
+}
+
+/* The attach 0x48AB70(record), stdcall `ret 4`: +1 the child's slot, +3 the parent's (0 a
+   detach), +5 the piece, +6 the layer, read no further than it reads them (0x48AB7D, 0x48ABA2,
+   0x48AC63, 0x48ACE3). Its callers are 0x48AAC0's at 0x48AB62 (returning to 0x48AB67), the 0x0A
+   receiver's 0x455403 and the 0x2C receiver's 0x48B58B and 0x48B5C5 -- in a skirmish 0x48AAC0's
+   alone, from the order handlers, the build finish 0x41B8D0, COB's ATTACH and DROP (0x4813A6,
+   0x481422) and the destructor (0x4867CB, 0x48681D, where tx_detach calls 0x48AB70 itself).
+   Every attach that acts changes a chain: onto a carrier it pushes the child at the chain's front
+   (0x48AC70..0x48AC82), and a detach puts it back at its bucket's front (0x47CB40 at 0x48ACDC),
+   a carried child unlinked from its carrier's chain first, any other from its bucket (0x47CB00
+   at 0x48AC5E). Inside a death it is the destructor's, which a playing's destructor makes again;
+   elsewhere it is RK_EV_LINK at its place, only when the attach acts: its refusals
+   (0x48ABC7..0x48AC1D) -- a zero child, a child not alive (+0x110 bit 28), a structure (bit 29)
+   or one with cargo (+0x8A), a parent not alive, the child itself or carried (+0x86) -- are
+   taken here on slots bounded first. Anything this cannot place is counted (THE CONTEST ORDER).
+   No count row: the playing's own attaches would enter the compare-counts. */
+static int __cdecl ob_link(void* E)
+{
+    Rec* r = ev_rec();
+    const unsigned char* rec = (const unsigned char*)PTR(ARG(E, 4));
+    unsigned short cs, ps;
+    unsigned cid, pid;
+    uint32_t c110, c8a, p110 = U_ALIVE, p86 = 0;
+    const char *c, *p;
+    unsigned char b[12];
+    if (!r || r->mode == MODE_NETWORK) return 0;
+    if (s_fdepth) {
+        if (s_fstack[s_fdepth - 1].root != FR_DEATH) r->unordered++;
+        return 0;
+    }
+    if (ARG(E, 0) != 0x0048AB67u) {
+        r->unordered++;
+        return 0;
+    }
+    memcpy(&cs, rec + 1, 2);
+    memcpy(&ps, rec + 3, 2);
+    if (!cs) return 0;
+    if (cs >= r->nslots || ps >= r->nslots) {
+        s_bad++;
+        r->unordered++;
+        return 0;
+    }
+    c = r->L.begin + (size_t)cs * REC_UNIT_BYTES;
+    memcpy(&c110, c + U_STATE, 4);
+    memcpy(&c8a, c + 0x8A, 4);
+    if (ps) {
+        p = r->L.begin + (size_t)ps * REC_UNIT_BYTES;
+        memcpy(&p110, p + U_STATE, 4);
+        memcpy(&p86, p + 0x86, 4);
+    }
+    if (!(c110 & U_ALIVE) || (c110 & 0x20000000u) || c8a || !(p110 & U_ALIVE) || ps == cs || p86)
+        return 0;
+    cid = cs + 1u;
+    pid = ps ? ps + 1u : 0;
+    memcpy(b, &cid, 4);
+    memcpy(b + 4, &pid, 4);
+    b[8] = rec[5];
+    b[9] = rec[6];
+    b[10] = b[11] = 0;
+    ev_put(r, RK_EV_LINK, b, sizeof b);
+    return 0;
 }
 
 /* THE DRAWS. The feature code's six calls of the simulation RNG go through feat_draw
@@ -6707,6 +6862,9 @@ static const ObserveSite OBSERVE_SITES[] = {
     { 0x0047D0E0u, 10, { 0x83, 0xEC, 0x08, 0x53, 0x8B, 0x1D, 0xE8, 0x1D, 0x51, 0x00 }, ob_clear,
       foot_leave },
     { 0x0047C790u, 7, { 0x53, 0x55, 0x56, 0x8B, 0x74, 0x24, 0x10 }, ob_reclaim, foot_leave },
+    /* the attach's `mov edx,[0x511DE8]`: no rel8/rel32 in the file branches into
+       0x48AB71..0x48AB75 (DISASSEMBLED) */
+    { 0x0048AB70u, 6, { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 }, ob_link, NULL },
     /* the COB start entries (THE SLICE MARKERS): no relative instruction in either span, and no
        branch into bytes 1-4 of either (DISASSEMBLED, a rel8/rel32 scan of the whole file) */
     { 0x004B0B00u, 5, { 0x8B, 0x44, 0x24, 0x04, 0x57 }, ob_cob_start, NULL },
@@ -7506,6 +7664,7 @@ void __cdecl tagpu_rec_capture(void)
     slice_epoch();                      /* every capture point's, recorded or not */
     if (s_suspended) return;
     s_fphase = 0;
+    s_turn = s_key = 0;                 /* the group's start: before 0x48AD30's first turn */
     if (!ta || !level_read(ta, &L)) return;
     masks_init();
     tick = *(int*)(ta + OFF_GAMETIME);

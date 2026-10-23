@@ -205,6 +205,8 @@ static struct {
     unsigned steps, late, made, refused, missing, lingering, other, bad_ids, links, unlinked;
     unsigned obuilt, ofreed, orefused, yards, yrefused, grefused;
     unsigned ychecked, ydiffer, yunchecked;         /* the yards a create opened (yard_check)   */
+    unsigned turned;                                /* units placed at their turn (THE CONTEST
+                                                       ORDER)                                  */
     unsigned played[EV_KINDS], skipped[EV_KINDS];   /* each event kind's, from RK_EV_CREATE    */
 } s_st;                             /* the level's counts, logged at its end                      */
 static struct {
@@ -242,6 +244,32 @@ static uint32_t   s_made[0x10000];  /* the capture point at which a slot's books
                                        the one after the step whose create made it, or the first
                                        step's own; the slot count is a u16 (THE UNITS'
                                        BOOKKEEPING)                                               */
+/* THE CONTEST ORDER's store (the section below): the step's events copied before the next
+   image is read, their yard facts and keys, and the units placed at their turn. Game thread. */
+#define CO_NOKEY 0xFFFFFFFFu        /* an event of no key: no footprint event                     */
+static struct {
+    RecWorld  W;                    /* ev and nev only: the step's events, as events_put reads
+                                       them                                                       */
+    RecEvent* ev;
+    unsigned  cap;
+    unsigned char* b;               /* their bodies, each at a dword                              */
+    size_t    bcap;
+    unsigned char* yin;             /* per event: a yard its create opened (yard_in_create)       */
+    uint16_t* ytype;                /* per event: a yard's unit's recorded type (ev_type_at)      */
+    uint32_t* key;                  /* per event: a footprint event's key, else CO_NOKEY          */
+    unsigned* dth;                  /* the copy's RK_EV_DEATH indices, in order                   */
+    unsigned  ndth, fcap;           /* ... how many; the per-event arrays' room                   */
+    int       facts;                /* yin and ytype hold the iteration events_put plays          */
+    const RecWorld* N;              /* image T+1 once read; NULL while it is not, or not read     */
+    unsigned  swept;                /* every slot below it is placed for the step                 */
+    unsigned  nplaced;              /* entries of s_coplaced                                      */
+    unsigned  full;                 /* steps played in the old order: no room for the store, or a
+                                       key the playing's own pass refused (counted)              */
+} s_co;
+static unsigned char  s_placed[0x10000];    /* placed at its turn this step (s_made's size)     */
+static int32_t        s_apre[0x10000];      /* ... with this altitude argument                  */
+static unsigned short s_coplaced[0x10000];  /* ... these slots, to clear at the step's end      */
+static void co_end(void);
 static unsigned   s_frame_tick;     /* the GameTime the frame visit last wrote at                 */
 enum { SK_SEEK, SK_TAKEOVER, SK_REWIND, SK_NOW, SK_SWITCH };
 enum { RW_IDLE, RW_FLUSH, RW_OPEN, RW_PAST, RW_ENDING };
@@ -579,6 +607,8 @@ static void replay_close(void)
     memset(&s_gst, 0, sizeof s_gst);
     memset(&s_rt, 0, sizeof s_rt);
     memset(s_made, 0, sizeof s_made);
+    co_end();
+    s_co.full = 0;
     memset(&s_seek, 0, sizeof s_seek);
     s_hold = 0;                         /* a boundary's hold ends with its playing */
     s_frame_tick = ~0u;
@@ -1417,14 +1447,15 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
 /* ---- the applier ---------------------------------------------------------------------------- */
 
 /* THE APPLY, at each step T, when the host's unit tick has returned (B2's stub at 0x4954ED): first
-   the events of step T, in recorded order -- the recording machine's unit tick T made them, from
-   the world of image T, which the host holds -- and then the image of T+1, the world that unit
-   tick and the rest of iteration T left there (demo-recorder-s2-events.md §1.0). The rest of the
-   host's iteration then reads what it read on the recording machine: the players phase re-stamps
-   every unit's sight from the positions the unit tick left (0x4827B0, 0x465046..0x465063), and a
-   seat's 30-tick pass runs at the GameTime it ran at there (A PLAYER'S IMAGE). At the next step's
-   capture point the host holds image T+1, which is where a dump (`dump <name>` in
-   tagpu_replay.trigger) is taken and compared.
+   the events of step T, in recorded order, each unit placed at its turn among them on a skirmish
+   segment that holds its cells (THE CONTEST ORDER) -- the recording machine's unit tick T made
+   them, from the world of image T, which the host holds -- and then the image of T+1, the world
+   that unit tick and the rest of iteration T left there (demo-recorder-s2-events.md §1.0). The
+   rest of the host's iteration then reads what it read on the recording machine: the players
+   phase re-stamps every unit's sight from the positions the unit tick left (0x4827B0,
+   0x465046..0x465063), and a seat's 30-tick pass runs at the GameTime it ran at there (A PLAYER'S
+   IMAGE). At the next step's capture point the host holds image T+1, which is where a dump
+   (`dump <name>` in tagpu_replay.trigger) is taken and compared.
    The first step comes in two parts. At the capture point of the level's first iteration T,
    before the host's unit tick, it makes the units the level started with -- recorded as images,
    with no create before them -- through the create, as the loader made them, writes image T and
@@ -1434,10 +1465,11 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
    T and image T+1, as every later step does.
 
    AN IMAGE goes in in this order: the carry links (links_put), which the placement reads; each
-   unit (units_put); the yards the step's events left differing from the image (yards_put);
-   +0x110 once more for every unit
-   (states_put), since the placement's and the yards' claims mark the incumbents of the cells they
-   contest; the players (players_put); and the order lists (orders_put).
+   unit (units_put) -- a unit THE CONTEST ORDER placed at its turn keeps that placement, and its
+   set-position here relinks nothing; the yards the step's events left differing from the image
+   (yards_put); +0x110 once more for every unit (states_put), since the placement's and the yards'
+   claims mark the incumbents of the cells they contest; the players (players_put); and the order
+   lists (orders_put).
 
    A UNIT'S IMAGE goes in by the movers note's recipe (demo-recorder-s2-movers.md §2.3), in
    ascending slot order as the unit tick runs:
@@ -2047,6 +2079,23 @@ static void water_put(char* u, const char* ib)
     else s_st.bad_ids++;
 }
 
+/* the movement pass's altitude before its fix-up, for image `ib` of the unit `u`: the carried
+   branch places the unit at its carrier's point, and otherwise adds the vertical velocity to the
+   altitude it has (0x43D80D..0x43D813) */
+static int32_t a_pre_of(const char* u, const char* ib)
+{
+    int32_t a, vy;
+    uint32_t carrier;
+    memcpy(&carrier, ib + U_CARRIER, 4);
+    if (carrier) {
+        memcpy(&a, ib + U_ALT, 4);
+        return a;
+    }
+    memcpy(&a, u + U_ALT, 4);
+    memcpy(&vy, ib + REC_MOVER_AT + MV_VALT, 4);
+    return a + vy;
+}
+
 static void unit_put(const Lv* L, unsigned slot, const uint32_t* img)
 {
     char* u = unit_at(L, slot);
@@ -2070,22 +2119,14 @@ static void unit_put(const Lv* L, unsigned slot, const uint32_t* img)
     }
     if (mover) {
         const char* ib = (const char*)img;
-        int32_t x, z, alt, a_pre, vy;
-        uint32_t carrier;
+        int32_t x, z, a_pre;
         put_masked(mover, img, s_raw1, REC_MOVER_AT, REC_MOVER_BYTES);
         memcpy(&x, ib + 0x6A, 4);
-        memcpy(&alt, ib + U_ALT, 4);
         memcpy(&z, ib + 0x72, 4);
-        memcpy(&carrier, ib + 0x86, 4);
-        /* the movement pass's altitude before the fix-up: the carried branch places the unit at
-           its carrier's point, and otherwise adds the vertical velocity (0x43D80D..0x43D813) */
-        if (carrier) {
-            a_pre = alt;
-        } else {
-            memcpy(&a_pre, u + U_ALT, 4);
-            memcpy(&vy, ib + REC_MOVER_AT + MV_VALT, 4);
-            a_pre += vy;
-        }
+        /* a unit THE CONTEST ORDER placed at its turn keeps that placement's altitude: its
+           set-position wrote +0x6E, from which a_pre is computed. The same x, z and layer take
+           set-position's unchanged branch (0x48AA43..0x48AA68): it relinks nothing here */
+        a_pre = s_placed[slot] ? s_apre[slot] : a_pre_of(u, ib);
         E_SetPos(u, x, a_pre, z, img[U_STATE / 4] & 3u);
         E_Walk(mover, u);
         water_put(u, ib);
@@ -2140,6 +2181,7 @@ static int make(const Lv* L, unsigned slot, unsigned owner, unsigned type, const
         return 0;
     }
     s_made[slot] = L->now + 1;
+    s_placed[slot] = 0;                 /* a new unit: nothing has placed it at its turn */
     return 1;
 }
 
@@ -2169,8 +2211,10 @@ static unsigned level_units(const Lv* L, const RecWorld* W, uint32_t books_at)
 }
 
 /* THE CARRY LINKS (demo-recorder-s2-movers.md §3.8), each step before the placement and after the
-   step's deaths and creates, whose own detaches (0x4867CB, 0x48681D) are then done: every chain is
-   made the recorded one through the attach 0x48AB70 alone. It is the one function that keeps a
+   step's events -- its deaths and creates, whose own detaches (0x4867CB, 0x48681D) are then done,
+   and on a segment that holds its cells the attaches at their place (RK_EV_LINK, ev_link), after
+   which this finds nothing to do unless one was refused: every chain is made the recorded one
+   through the attach 0x48AB70 alone. It is the one function that keeps a
    chain consistent -- its unlink walks the carrier's chain, or the child's bucket (0x47CB00), to
    the child and faults on one that does not hold it -- so the links, the piece and +0x110 bit 17
    are never written raw. A detach unlinks in place and an attach pushes at the front (0x48AC82):
@@ -2533,6 +2577,22 @@ static int yard_in_create(const RecWorld* W, unsigned i)
     return !ev_live_at(W, i, id - 1u);
 }
 
+/* THE YARD FACTS, one path for both orders: yard_in_create and ev_type_at read image T (W->live,
+   W->unit), which a playing in THE CONTEST ORDER has already replaced with image T+1 when it plays
+   the step's events. So co_facts takes both for every RK_EV_YARD of the iteration first, from the
+   world that still holds image T, and the step's yards read them here. Without them (no room) the
+   playing is in the old order, where W still holds image T, and they are read from it. */
+static int ev_yin(const RecWorld* W, unsigned i)
+{
+    return s_co.facts ? s_co.yin[i] : yard_in_create(W, i);
+}
+
+static unsigned ev_type_at(const RecWorld* W, unsigned i, unsigned slot);
+static unsigned ev_ytype(const RecWorld* W, unsigned i, unsigned slot)
+{
+    return s_co.facts ? s_co.ytype[i] : ev_type_at(W, i, slot);
+}
+
 /* A YARD ITS CREATE OPENS, once RK_EV_CREATE `i` has been played (`made` when the host's create
    made the unit): the yard the recording's create left against the one the host's create left,
    for every create. The init 0x485A40 clears +0x10F's low nibble (0x485B4A, 0x485B52) and nothing
@@ -2551,7 +2611,7 @@ static void yard_check(const Lv* L, const RecWorld* W, unsigned i, int made)
         if (k != RK_EV_CREATE && k != RK_EV_DEATH && k != RK_EV_YARD) continue;
         memcpy(&jd, W->ev[j].b, 4);
         if (jd != id) continue;
-        if (k == RK_EV_YARD && yard_in_create(W, j)) {
+        if (k == RK_EV_YARD && ev_yin(W, j)) {
             want = W->ev[j].b[4];
             held = 1;
         }
@@ -2597,7 +2657,7 @@ static int ev_yard(const Lv* L, const RecWorld* W, unsigned i)
     memcpy(&id, W->ev[i].b, 4);
     slot = id - 1u;
     if (slot < 1 || slot >= L->nslots || !host_live(L, slot) ||
-        *(const unsigned short*)(unit_at(L, slot) + U_TYPEIX) != ev_type_at(W, i, slot)) {
+        *(const unsigned short*)(unit_at(L, slot) + U_TYPEIX) != ev_ytype(W, i, slot)) {
         s_st.yrefused++;
         note("replay: GameTime %u: a yard of unit ID %u, not live here or of another type",
              L->now, (unsigned)id);
@@ -3108,6 +3168,7 @@ static int ev_death(const Lv* L, const unsigned char* b, unsigned len, int corps
        recording machine's own (THE KILLED SCRIPT OF A REPLAYED DEATH) */
     if (tagpu_tx_replay_death(rec, b[11], slice_own(slot))) {
         slice_died(slot);
+        s_placed[slot] = 0;             /* the slot's next unit is another (THE CONTEST ORDER) */
         return 1;
     }
     s_st.refused++;
@@ -4238,6 +4299,242 @@ void tagpu_replay_blast(const char* unit)
     }
 }
 
+/* THE CONTEST ORDER, on a skirmish segment that holds its cells (s_cells_held, a multiplayer
+   file's takeover timeline among them). A step's footprint calls go in the recording machine's
+   order (tagpu_recfmt.h, THE CONTEST ORDER), which needs image T+1's positions before step T's
+   events. So play() copies the step's events and the yard facts that read image T (co_facts,
+   co_take), reads iteration T+1, and plays the copy. Before each footprint event of key K it
+   places every unit below slot K whose next recorded position differs from the host's,
+   ascending, through set-position alone (turn_place). That next position is the unit's death
+   image when it dies later in the step, else image T+1's: a unit that dies later in the step
+   relinked in its turn to where its death found it, and nothing moves a unit after its turn in a
+   skirmish but Teleport, which the recording counts.
+   unit_put then finds those units in place, and its own set-position relinks nothing. It reuses
+   each one's altitude (s_apre): the movement pass's altitude before its fix-up is computed from
+   the host's +0x6E, which the early call has already written.
+   THE INVARIANT is an ordering, by induction from an exact image T. It holds because:
+   - every unit relinks at most once a step, in its own turn (0x43DD55, the movement pass's one
+     call of the relink 0x43D6D0);
+   - the turns ascend by slot;
+   - every other footprint and chain call is an event at its place: creates, deaths, live yards,
+     links;
+   - the reader refused any step whose keys decrease or whose RK_EV_TURN stands alone.
+   Given all that, the host makes the same writer and chain calls in the same order on the same
+   state:
+   - the positions are image T+1's or a death image;
+   - the yard bits are put at their place;
+   - the chains are exact by the same induction;
+   - the contest keeps the incumbent on both (tagpu_puppet.c, THE CONTEST'S RULE).
+   So every cell's holder, both marks and every chain at T+1 are the recording machine's. What the
+   recording machine did that this cannot order is counted in the recording (`recorder: ... a
+   playing cannot put in their order`), and the harness fails it. A seek makes its units in slot
+   order and is not this (the seek's residual, demo-recorder-completeness.md). */
+
+/* room for `n` events in the per-event arrays; 0 when there is none */
+static int co_room(unsigned n)
+{
+    unsigned c;
+    void *a, *b, *k, *d;
+    if (n <= s_co.fcap) return 1;
+    c = s_co.fcap ? s_co.fcap : 256;
+    while (c < n) c *= 2;
+    a = realloc(s_co.yin, c);
+    if (a) s_co.yin = (unsigned char*)a;
+    b = realloc(s_co.ytype, (size_t)c * sizeof *s_co.ytype);
+    if (b) s_co.ytype = (uint16_t*)b;
+    k = realloc(s_co.key, (size_t)c * sizeof *s_co.key);
+    if (k) s_co.key = (uint32_t*)k;
+    d = realloc(s_co.dth, (size_t)c * sizeof *s_co.dth);
+    if (d) s_co.dth = (unsigned*)d;
+    if (!a || !b || !k || !d) return 0;
+    s_co.fcap = c;
+    return 1;
+}
+
+/* THE YARD FACTS of iteration W, from the world while it holds image T: every RK_EV_YARD's
+   yard_in_create and its unit's recorded type. The reader bounded each yard's slot (event_take). */
+static void co_facts(const RecWorld* W)
+{
+    unsigned i;
+    s_co.facts = 0;
+    if (!co_room(W->nev)) return;
+    for (i = 0; i < W->nev; i++) {
+        uint32_t id;
+        s_co.yin[i] = 0;
+        s_co.ytype[i] = 0;
+        if (W->ev[i].kind != RK_EV_YARD) continue;
+        memcpy(&id, W->ev[i].b, 4);
+        s_co.yin[i] = (unsigned char)yard_in_create(W, i);
+        s_co.ytype[i] = (uint16_t)ev_type_at(W, i, id - 1u);
+    }
+    s_co.facts = 1;
+}
+
+/* The step's events into the store, each body at a dword, and each footprint event's key by the
+   readers' own rule (rec_turns_*), with the brackets as the reader keeps them; 1 copied. 0 when
+   there is no room, or the rule refuses what the reader took: the step then plays in the old
+   order, counted and named once. */
+static int co_take(const Lv* L, const RecWorld* W)
+{
+    RecTurns t;
+    size_t need = 0, at = 0;
+    unsigned i, fb = 0, nd = 0;
+    for (i = 0; i < W->nev; i++) need += (W->ev[i].len + 3u) & ~3u;
+    if (W->nev > s_co.cap) {
+        unsigned c = s_co.cap ? s_co.cap : 256;
+        void* e;
+        while (c < W->nev) c *= 2;
+        if (!(e = realloc(s_co.ev, (size_t)c * sizeof *s_co.ev))) goto refused;
+        s_co.ev = (RecEvent*)e;
+        s_co.cap = c;
+    }
+    if (need > s_co.bcap) {
+        size_t c = s_co.bcap ? s_co.bcap : 65536;
+        void* b;
+        while (c < need) c *= 2;
+        if (!(b = realloc(s_co.b, c))) goto refused;
+        s_co.b = (unsigned char*)b;
+        s_co.bcap = c;
+    }
+    rec_turns_reset(&t);
+    s_co.ndth = 0;
+    for (i = 0; i < W->nev; i++) {
+        const RecEvent* e = &W->ev[i];
+        uint32_t id = 0;
+        unsigned k = e->kind, key = CO_NOKEY;
+        int foot = 0, ok;
+        s_co.ev[i].kind = k;
+        s_co.ev[i].len = e->len;
+        s_co.ev[i].b = s_co.b + at;
+        memcpy(s_co.b + at, e->b, e->len);
+        at += (e->len + 3u) & ~3u;
+        if (e->len >= 4) memcpy(&id, e->b, 4);
+        switch (k) {
+        case RK_EV_TURN:
+            ok = rec_turns_turn(&t, (unsigned)e->b[0] | (unsigned)e->b[1] << 8, L->nslots);
+            break;
+        case RK_EV_FEATURE:     fb = 1; ok = rec_turns_event(&t, 0, k, 0, NULL); break;
+        case RK_EV_FEATURE_END: fb = 0; ok = rec_turns_event(&t, 0, k, 0, NULL); break;
+        case RK_EV_DEATH_END:   nd--;   ok = rec_turns_event(&t, 0, k, 0, NULL); break;
+        case RK_EV_DEATH:
+            s_co.dth[s_co.ndth++] = i;
+            foot = !fb && !nd;
+            nd++;
+            ok = rec_turns_event(&t, foot, k, id - 1u, &key);
+            break;
+        case RK_EV_CREATE:
+        case RK_EV_LINK:
+            foot = !fb && !nd;
+            ok = rec_turns_event(&t, foot, k, id - 1u, &key);
+            break;
+        case RK_EV_YARD:
+            foot = !fb && !nd && !s_co.yin[i];
+            ok = rec_turns_event(&t, foot, k, id - 1u, &key);
+            break;
+        default:
+            ok = rec_turns_event(&t, 0, k, 0, NULL);
+            break;
+        }
+        if (!ok) goto refused;
+        s_co.key[i] = foot ? key : CO_NOKEY;
+    }
+    if (!rec_turns_end(&t)) goto refused;
+    s_co.W.ev = s_co.ev;
+    s_co.W.nev = W->nev;
+    s_co.swept = 1;
+    s_co.nplaced = 0;
+    return 1;
+refused:
+    if (!s_co.full++)
+        note("replay: GameTime %u: the step's events cannot be held for THE CONTEST ORDER: "
+             "played in the old order", L->now);
+    return 0;
+}
+
+/* unit `s`, below the key of event `i`, placed at its turn: its next recorded position by
+   set-position, when it has one that differs from the host's */
+static void turn_place(const Lv* L, unsigned s, unsigned i)
+{
+    char* u = unit_at(L, s);
+    const uint32_t* img = NULL;
+    const char* ib;
+    int32_t x, z, hx, hz, a;
+    uint32_t hs;
+    unsigned j;
+    /* unit_put places only a unit with a mover; the create made it for a type with one */
+    if (s_placed[s] || !host_live(L, s) || !*(char**)u) return;
+    for (j = 0; j < s_co.ndth && !img; j++) {
+        const RecEvent* e = &s_co.ev[s_co.dth[j]];
+        uint32_t id;
+        memcpy(&id, e->b, 4);
+        if (s_co.dth[j] >= i && id - 1u == s) img = (const uint32_t*)(e->b + 12);
+    }
+    if (!img) {
+        if (!s_co.N->live[s]) return;
+        img = s_co.N->unit + (size_t)s * REC_UNIT_DWORDS;
+    }
+    if (!holds(L, s, img)) return;
+    ib = (const char*)img;
+    memcpy(&x, ib + U_POS, 4);
+    memcpy(&z, ib + U_POS + 8, 4);
+    memcpy(&hx, u + U_POS, 4);
+    memcpy(&hz, u + U_POS + 8, 4);
+    memcpy(&hs, u + U_STATE, 4);
+    /* not moved: image T+1's values pass writes it as it writes every other unit */
+    if (x == hx && z == hz && (img[U_STATE / 4] & 3u) == (hs & 3u)) return;
+    a = a_pre_of(u, ib);
+    E_SetPos(u, x, a, z, img[U_STATE / 4] & 3u);
+    s_placed[s] = 1;
+    s_apre[s] = a;
+    s_coplaced[s_co.nplaced++] = (unsigned short)s;
+    s_st.turned++;
+}
+
+/* Event `i` of the copy is the next call: every unit below slot K, its key, made its turn before
+   it on the recording machine, so it goes in first, ascending. THE BOUND: s stays below
+   L->nslots, which the first step checked equal to the recording's, and the sweep only moves
+   forward -- a key the reader passed never decreases, and one that did would only place less. */
+static void co_turn(const Lv* L, unsigned i)
+{
+    unsigned lim, s;
+    if (!s_co.N || s_co.key[i] == CO_NOKEY) return;
+    lim = s_co.key[i] < L->nslots ? s_co.key[i] : L->nslots;
+    for (s = s_co.swept; s < lim; s++) turn_place(L, s, i);
+    if (lim > s_co.swept) s_co.swept = lim;
+}
+
+/* the step's end in either order: no placement and no fact outlives it, so a seek's or a frame
+   visit's unit_put, and the next step's events, find none */
+static void co_end(void)
+{
+    while (s_co.nplaced) s_placed[s_coplaced[--s_co.nplaced]] = 0;
+    s_co.N = NULL;
+    s_co.facts = 0;
+}
+
+/* RK_EV_LINK: the attach at its place (THE CONTEST ORDER), through link(), bounded as links_put's
+   calls are: the child a slot below the count live here, the parent none or another slot below
+   it live here. 1 played. links_put still runs after the step's events, and finds nothing to do
+   unless one was refused. */
+static int ev_link(const Lv* L, const unsigned char* b, unsigned len)
+{
+    uint32_t cid, pid;
+    unsigned c, p;
+    if (len != 12) return 0;
+    memcpy(&cid, b, 4);
+    memcpy(&pid, b + 4, 4);
+    c = cid - 1u;
+    p = pid ? pid - 1u : 0;
+    if (c < 1 || c >= L->nslots || !host_live(L, c) ||
+        (pid && (p < 1 || p >= L->nslots || !host_live(L, p) || p == c))) {
+        s_st.unlinked++;
+        note("replay: GameTime %u: the recorded attach of ID %u onto ID %u finds no unit here",
+             L->now, (unsigned)cid, (unsigned)pid);
+        return 0;
+    }
+    return link(L, c, p, b[8], b[9] & 3u);
+}
+
 /* THE PHASES. The recording machine made each feature root at some point of its step 0x495490
    (REC_PHASE_*, recorded with the root): in the unit tick, in the projectile tick 0x49B720 -- an
    impact's damage burning or felling a tree -- or from the explosion tick 0x420F30 on, the
@@ -4297,6 +4594,7 @@ static int ev_play(const Lv* L, const RecEvent* e)
         ev_query(L, b, n);
         return 0;
     }
+    if (k == RK_EV_LINK) return ev_link(L, b, n);   /* counted as links_put's calls are */
     switch (k) {
     case RK_EV_CREATE:      done = ev_create(L, b, n); break;
     case RK_EV_SHOT:        done = ev_shot(L, b, n); break;
@@ -4307,7 +4605,8 @@ static int ev_play(const Lv* L, const RecEvent* e)
     case RK_EV_STATE:       done = ev_state(L, b, n); break;
     case RK_EV_REPLY:       done = ev_reply(L, b, n); break;
     case RK_EV_SPRAY:       done = ev_spray(L, b, n); break;
-    default:                return 0;   /* a bracket's draws, the tick's cells, a root's end */
+    default:                return 0;   /* a bracket's draws, the tick's cells, a root's end, a
+                                           contest key (co_take's) */
     }
     if (done) s_st.played[k - RK_EV_CREATE]++;
     else s_st.skipped[k - RK_EV_CREATE]++;
@@ -5228,7 +5527,8 @@ static int mp_owned_event(unsigned kind)
                        kind == RK_EV_BUILT);
 }
 
-/* The step's events in recorded order; with `defer`, the roots of a later phase into the store.
+/* The step's events in recorded order, each unit placed at its turn among them when the playing
+   is in THE CONTEST ORDER (co_turn); with `defer`, the roots of a later phase into the store.
    A skirmish recording's death is played whole by death_play, the roots inside it among them; a
    multiplayer recording's death is its owner's, and only its roots go in here, each at its own
    phase like any other (THE DEATHS ON A MULTIPLAYER LEVEL). */
@@ -5240,6 +5540,7 @@ static void events_put(const Lv* L, const RecWorld* W, int defer)
     for (i = 0; i < W->nev; i++) {
         unsigned k = W->ev[i].kind;
         if (mp_owned_event(k)) continue;
+        co_turn(L, i);
         switch (k) {
         case RK_EV_DEATH:
             if (s_mp.on) {
@@ -5279,7 +5580,7 @@ static void events_put(const Lv* L, const RecWorld* W, int defer)
                 break;
             }
             if (k == RK_EV_YARD) {
-                if (!yard_in_create(W, i)) ev_yard(L, W, i);        /* else yard_check's */
+                if (!ev_yin(W, i)) ev_yard(L, W, i);                /* else yard_check's */
                 break;
             }
             done = ev_play(L, &W->ev[i]);
@@ -9553,6 +9854,8 @@ static void counts_log(const char* when, unsigned now)
                s_sl.c.late, s_sl.c.remote);
     tagpu_logf("replay: %s: the owner's queries: %u made, %u not made (no live unit or no script)",
                s_name, s_q.made, s_q.unmade);
+    tagpu_logf("replay: %s: %u units placed at their turn, %u steps whose events the contest order "
+               "could not hold (THE CONTEST ORDER)", s_name, s_st.turned, s_co.full);
     tagpu_puppet_refusals(gates, sizeof gates);
     tagpu_logf("replay: %s: refused on puppets: %s", s_name, gates);
     tagpu_puppet_footprints(gates, sizeof gates);
@@ -9657,19 +9960,36 @@ static void play(const Lv* L)
        events are the only record of what they made and destroyed. */
     while (W->tick <= L->now) {
         int now = W->tick == L->now;        /* an iteration played late goes in whole */
+        int read;
         if (!now) {
             s_st.late++;
             note("replay: the events of GameTime %u played at GameTime %u", W->tick, L->now);
         }
-        events_put(L, W, now);
-        ov_clicks_take(W);
-        mp_step_events(L, W->tick);
-        if (now && s_sl.armed) slice_settle(L->now);   /* before image T+1 */
+        co_facts(W);                        /* image T's yard facts, in either order */
+        if (!s_cells_held || s_mp.on || !s_co.facts || !co_take(L, W)) {
+            events_put(L, W, now);
+            co_end();
+            ov_clicks_take(W);
+            mp_step_events(L, W->tick);
+            if (now && s_sl.armed) slice_settle(L->now);   /* before image T+1 */
+            s_st.steps++;
+            if (s_over || !iteration_read(L)) break;
+            mp_step_image(L, W->tick - 1);
+            if (s_over) break;
+            images_put(L, mp_world(W), now && !s_pend.full);
+            continue;
+        }
+        /* THE CONTEST ORDER: the copy's events against image T+1's positions; mp_step_events and
+           mp_step_image have nothing to do off a multiplayer segment */
+        ov_clicks_take(W);                  /* iteration T's clicks, before the read */
         s_st.steps++;
-        if (s_over || !iteration_read(L)) break;
-        mp_step_image(L, W->tick - 1);
-        if (s_over) break;
-        images_put(L, mp_world(W), now && !s_pend.full);
+        read = !s_over && iteration_read(L);
+        s_co.N = read ? W : NULL;           /* no placement without image T+1 */
+        events_put(L, &s_co.W, now);
+        if (now && s_sl.armed) slice_settle(L->now);   /* before image T+1 */
+        if (read && !s_over) images_put(L, W, now && !s_pend.full);
+        co_end();
+        if (!read || s_over) break;
     }
 }
 

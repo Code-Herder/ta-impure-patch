@@ -2795,6 +2795,91 @@ class YardEvent(unittest.TestCase):
         self.assertIn("unit 1 appears with its yard 0 and its last yard event at 1", lines[0])
 
 
+class ContestOrderEvent(unittest.TestCase):
+    """RK_EV_TURN and RK_EV_LINK in tarec's World, as the writer and the DLL's reader take them
+    (tagpu_recfmt.h, THE CONTEST ORDER): a key stands just before a top-level footprint event,
+    never gives the key the event has without it and never takes the step's keys back; a link
+    names a child slot and a parent that is none or another slot, inside no bracket."""
+
+    world = YardEvent.world
+    death, create = staticmethod(YardEvent.death), staticmethod(YardEvent.create)
+
+    @staticmethod
+    def turn(key):
+        return struct.pack("<HH", key, 0)
+
+    @staticmethod
+    def link(child, parent, pad=b"\0\0"):
+        return struct.pack("<IIBB", child, parent, 3, 1) + pad
+
+    def test_the_implicit_keys(self):
+        w = self.world()
+        w.apply(tarec.RK_EV_DEATH, self.death(3))           # key 2, its own slot
+        w.apply(tarec.RK_EV_DEATH_END, struct.pack("<I", 3))
+        self.assertEqual(w.turn_held, 2)
+        w.apply(tarec.RK_EV_CREATE, self.create(2))         # the step's last key
+        self.assertEqual(w.apply(tarec.RK_EV_TURN, self.turn(tarec.REC_TURN_AFTER))[0],
+                         tarec.RK_EV_TURN)
+        w.apply(tarec.RK_EV_LINK, self.link(2, 0))
+        self.assertEqual(w.turn_held, tarec.REC_TURN_AFTER)
+        YardEvent.end(self, w)
+        self.assertEqual(w.turn_held, 0)
+
+    def test_a_key_the_event_has_without_it(self):
+        w = self.world()
+        w.apply(tarec.RK_EV_TURN, self.turn(2))
+        with self.assertRaisesRegex(tarec.Unreadable, "one the event has without it"):
+            w.apply(tarec.RK_EV_DEATH, self.death(3))
+
+    def test_the_keys_never_go_back(self):
+        w = self.world()
+        w.apply(tarec.RK_EV_DEATH, self.death(3))
+        w.apply(tarec.RK_EV_DEATH_END, struct.pack("<I", 3))
+        w.apply(tarec.RK_EV_TURN, self.turn(1))
+        with self.assertRaisesRegex(tarec.Unreadable, "a contest key 1 after 2"):
+            w.apply(tarec.RK_EV_CREATE, self.create(2))
+
+    def test_a_key_with_no_footprint_event_after_it(self):
+        w = self.world()
+        w.apply(tarec.RK_EV_TURN, self.turn(3))
+        with self.assertRaisesRegex(tarec.Unreadable, "no footprint event"):
+            w.apply(tarec.RK_EV_SLICE, struct.pack("<I", 2))
+        w = self.world()
+        w.apply(tarec.RK_EV_TURN, self.turn(3))
+        with self.assertRaisesRegex(tarec.Unreadable, "no footprint event"):
+            YardEvent.end(self, w)
+        w = self.world()
+        w.apply(tarec.RK_EV_TURN, self.turn(3))
+        with self.assertRaisesRegex(tarec.Unreadable, "no footprint event"):
+            w.apply(tarec.RK_EV_TURN, self.turn(3))
+
+    def test_a_key_past_the_slots(self):
+        with self.assertRaisesRegex(tarec.Unreadable, "past the slots"):
+            self.world().apply(tarec.RK_EV_TURN, self.turn(4))
+        with self.assertRaisesRegex(tarec.Unreadable, "a contest key of"):
+            self.world().apply(tarec.RK_EV_TURN, struct.pack("<HH", 1, 1))
+
+    def test_a_key_or_link_inside_a_death_or_a_feature_call(self):
+        for kind, body in ((tarec.RK_EV_TURN, self.turn(3)), (tarec.RK_EV_LINK, self.link(2, 0))):
+            with self.subTest(kind=kind):
+                w = self.world()
+                w.apply(tarec.RK_EV_DEATH, self.death(3))
+                with self.assertRaisesRegex(tarec.Unreadable, "inside a feature call or a death"):
+                    w.apply(kind, body)
+                w = self.world()
+                w.apply(tarec.RK_EV_FEATURE, bytes([tarec.FR_TICK, 0, 0, 0]) + bytes(4))
+                with self.assertRaisesRegex(tarec.Unreadable, "inside a feature call or a death"):
+                    w.apply(kind, body)
+
+    def test_a_link_outside_the_array(self):
+        for child, parent in ((1, 0), (5, 0), (2, 2), (2, 5)):
+            with self.subTest(child=child, parent=parent):
+                with self.assertRaisesRegex(tarec.Unreadable, "outside the array"):
+                    self.world().apply(tarec.RK_EV_LINK, self.link(child, parent))
+        with self.assertRaisesRegex(tarec.Unreadable, "a carry link of"):
+            self.world().apply(tarec.RK_EV_LINK, self.link(2, 3, b"\0\1"))
+
+
 class YardChecks(unittest.TestCase):
     """The harness's verdict on the yards a recorded create opened (tagpu_replay.c, yard_check),
     from a lane's counts lines."""
@@ -2836,6 +2921,23 @@ class YardChecks(unittest.TestCase):
         self.assertEqual(verdict, tareplay.FAIL)
         self.assertIn("2 yard events kept out of 2 recordings", detail)
         (label, verdict, detail), = tareplay.yard_dropped_verdict("L", "recorder: nothing\n")
+        self.assertEqual(verdict, tareplay.UNRUN)
+
+    @staticmethod
+    def unordered(n):
+        return (f"recorder: {n} footprint calls a playing cannot put in their order (THE CONTEST "
+                f"ORDER, tagpu_recfmt.h)\n")
+
+    def test_no_unordered_call(self):
+        (label, verdict, detail), = tareplay.unordered_verdict("L", self.unordered(0))
+        self.assertEqual(verdict, tareplay.PASS)
+
+    def test_an_unordered_call_fails(self):
+        (label, verdict, detail), = tareplay.unordered_verdict(
+            "L", self.unordered(0) + self.unordered(3))
+        self.assertEqual(verdict, tareplay.FAIL)
+        self.assertIn("3 footprint calls no playing can order in 2 recordings", detail)
+        (label, verdict, detail), = tareplay.unordered_verdict("L", "recorder: nothing\n")
         self.assertEqual(verdict, tareplay.UNRUN)
 
 

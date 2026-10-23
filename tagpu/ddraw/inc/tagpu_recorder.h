@@ -30,6 +30,10 @@ void __cdecl tagpu_rec_phase(unsigned phase);
    recording level, RK_EV_SLICE when the COB had an engine start since the capture point. 1 when
    it wrote one. */
 int tagpu_rec_slice(const char* unit, const char* cob);
+/* The same stub, first, for every unit the unit tick's loop is on, COB or not: on a recording
+   level, the turn the footprint events that follow are made in (tagpu_recfmt.h, THE CONTEST
+   ORDER). Game thread. */
+void tagpu_rec_turn(const char* unit);
 /* A script slice was given (THE COUNTS): `where` 0 in the unit tick, 1 at the place the recording
    gives it, 2 at the end of a playing's step. Game thread. */
 void tagpu_rec_slice_given(unsigned where);

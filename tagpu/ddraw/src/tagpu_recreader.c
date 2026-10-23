@@ -105,6 +105,7 @@ struct RecReader {
     uint32_t           session_id;  /* the unit ID of the iteration's last RK_SPRAY_SESSION   */
     unsigned           death[REC_DEATHS_MAX];
     RecYardStep        yards;       /* the step's yards by THE YARD RULE (tagpu_recfmt.h)     */
+    RecTurns           turns;       /* the step's keys by THE CONTEST ORDER (tagpu_recfmt.h)  */
     struct { unsigned slot, list, total, next; } pend;   /* a list sent in several records   */
     unsigned long long first_off;   /* the file offset of the first block after the header    */
     unsigned char*     base;        /* the grid at the end of a segment's first iteration ...  */
@@ -819,6 +820,7 @@ static void world_reset(RecReader* r, int from_base)
     r->fbracket = 0;
     r->ndeaths = 0;
     rec_yard_end(&r->yards);
+    rec_turns_reset(&r->turns);
     memset(&r->pend, 0, sizeof r->pend);
     r->globals_in = 0;
     r->proj_in = 0;
@@ -953,14 +955,36 @@ static int sprays_on(const RecHeader* h)
    a segment whose playing keeps the engine's slots: a multiplayer one, or one that holds its
    cells (recr_holds_cells); a script slice and an owner's query are inside none, and name a slot
    of the level's; a yard names one too, outside every feature call, in a death or not, where THE
-   YARD RULE lets it stand (tagpu_recfmt.h), which the creates and deaths feed. 1 taken, 0
-   malformed. */
+   YARD RULE lets it stand (tagpu_recfmt.h), which the creates and deaths feed. A contest key and
+   a link are a stream's of a skirmish segment that holds its cells, inside no feature call and no
+   death, a key just before its footprint event (THE CONTEST ORDER), which the creates, the deaths,
+   the yards and the links feed. 1 taken, 0 malformed. */
 static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsigned len)
 {
     RecWorld* w = &r->w;
     const RecHeader* h = seg_header(r);   /* a takeover's segment is a skirmish's */
     unsigned id;
     switch (kind) {
+    case RK_EV_TURN:
+    case RK_EV_LINK: {
+        unsigned pid;
+        if (r->snap || r->fbracket || r->ndeaths || h->mode == 3 || !recr_holds_cells(h) ||
+            !rec_event_len(kind, len))
+            return 0;
+        if (kind == RK_EV_TURN) {
+            if (b[2] || b[3] || !rec_turns_turn(&r->turns, (unsigned)b[0] | (unsigned)b[1] << 8,
+                                                w->slots))
+                return 0;
+            break;
+        }
+        memcpy(&id, b, 4);
+        memcpy(&pid, b + 4, 4);
+        if (b[10] || b[11] || id - 1u < 1 || id - 1u >= w->slots ||
+            (pid && (pid - 1u < 1 || pid - 1u >= w->slots || pid == id)) ||
+            !rec_turns_event(&r->turns, 1, kind, id - 1u, NULL))
+            return 0;
+        break;
+    }
     case RK_EV_NET_CREATE: {
         RecNetCreate create;
         unsigned i, slot;
@@ -994,7 +1018,9 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
         if (r->fbracket || r->ndeaths == REC_DEATHS_MAX || !rec_event_len(kind, len) ||
             !rec_yard_take(&r->yards, kind, b, w->live, w->slots, r->death, r->ndeaths))
             return 0;
-        memcpy(&r->death[r->ndeaths++], b, 4);
+        memcpy(&id, b, 4);
+        if (!rec_turns_event(&r->turns, !r->ndeaths, kind, id - 1u, NULL)) return 0;
+        r->death[r->ndeaths++] = id;
         break;
     case RK_EV_DEATH_END:
         if (len != 4 || !r->ndeaths) return 0;
@@ -1027,12 +1053,16 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
         if (r->fbracket || len != 8 || b[4] > 1 || b[5] || b[6] || b[7]) return 0;
         memcpy(&id, b, 4);
         if (id - 1u < 1 || id - 1u >= w->slots ||
-            !rec_yard_take(&r->yards, kind, b, w->live, w->slots, r->death, r->ndeaths))
+            !rec_yard_take(&r->yards, kind, b, w->live, w->slots, r->death, r->ndeaths) ||
+            !rec_turns_event(&r->turns, !r->ndeaths && r->yards.st[id - 1u] != RYS_HELD, kind,
+                             id - 1u, NULL))
             return 0;
         break;
     default:
         if (kind < RK_EV_CREATE || kind > RK_EV_SPRAY || !rec_event_len(kind, len) ||
-            !rec_yard_take(&r->yards, kind, b, w->live, w->slots, r->death, r->ndeaths))
+            !rec_yard_take(&r->yards, kind, b, w->live, w->slots, r->death, r->ndeaths) ||
+            (kind == RK_EV_CREATE &&
+             !rec_turns_event(&r->turns, !r->fbracket && !r->ndeaths, kind, 0, NULL)))
             return 0;
         /* the images come before the events: the units are this iteration's */
         if (kind == RK_EV_SPRAY && sprays_on(h))
@@ -1153,7 +1183,14 @@ static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned l
     RecTable* t;
     if (r->pend.next < r->pend.total && kind != RK_ORDERS) return 0;
     if (*events == IT_SESSIONS && kind != RK_SPRAY_SESSION) return 0;
+    /* an RK_EV_TURN stands just before its footprint event (tagpu_recfmt.h, THE CONTEST ORDER) */
+    if (r->turns.pending && kind != RK_EV_CREATE && kind != RK_EV_DEATH && kind != RK_EV_YARD &&
+        kind != RK_EV_LINK)
+        return 0;
     if (len >= 2) memcpy(&id, b, 2);
+    /* the contest order's records stand among the events, in RCS_OTHER: they set no events flag,
+       by the writer's rule, rec_section_of */
+    if (kind == RK_EV_TURN || kind == RK_EV_LINK) return event_take(r, kind, b, len);
     /* a click follows the step's events, and may follow the images directly */
     if (kind == RK_CLICK) return pov_record(r, kind, b, len);
     /* an event by the writer's rule, rec_section_of: the same predicate sets its `evented` */
@@ -1361,6 +1398,11 @@ static int iteration_done(const RecReader* r, char* why, unsigned cap)
                  "in the block before byte %llu (tagpu_recfmt.h, THE YARD RULE)", r->off);
         return -1;
     }
+    if (!rec_turns_end(&r->turns)) {
+        snprintf(why, cap, "a contest key with no footprint event after it, in the block before "
+                 "byte %llu (tagpu_recfmt.h, THE CONTEST ORDER)", r->off);
+        return -1;
+    }
     return 1;
 }
 
@@ -1403,6 +1445,7 @@ static int tick_read(RecReader* r, char* why, unsigned cap)
     w->nfeat = 0;
     w->nclick = 0;
     rec_yard_end(&r->yards);            /* iteration_done has checked the last step's */
+    rec_turns_reset(&r->turns);
     for (;;) {
         RecHdr hd;
         const unsigned char* b;

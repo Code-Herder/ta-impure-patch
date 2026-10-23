@@ -52,6 +52,7 @@ GROUPS = {
     "explored map": [T.RK_MAPPED, T.RK_MAPPED_RUNS],
     "sight": [T.RK_SIGHT],
     "events": sorted(T.EVENTS),
+    "the contest order: keys and links": sorted(T.CONTEST),
     "self-verification": [T.RK_VERIFY_UNIT, T.RK_VERIFY_PLAYER, T.RK_VERIFY_TABLE,
                           T.RK_VERIFY_ORDERS, T.RK_VERIFY_GLOBALS, T.RK_VERIFY_PROJ],
     "perspective": [T.RK_POV, T.RK_CLICK, T.RK_SELECT, T.RK_POV_AT],

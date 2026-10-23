@@ -151,7 +151,7 @@ from pathlib import Path
 import reccache
 from recmp_file import Contributions, Seats, History
 
-REC_FORMAT = 25                           # the start's offset from UTC; the unit frame range-coded; transport and pad queries, BeginTransport and setSFXoccupy as owner starts; sprays against the last four, order nodes matched, projectile lanes; the unit listing from state; script slices, owner's queries, yards; the unit frame's type rules (RT_TYPES); kinds as patterns, ticks once a block; zstd runs and chains, hold rows, sprays as sessions, cells held
+REC_FORMAT = 26                           # the contest order's keys and the carry links at their place; the start's offset from UTC; the unit frame range-coded; transport and pad queries, BeginTransport and setSFXoccupy as owner starts; sprays against the last four, order nodes matched, projectile lanes; the unit listing from state; script slices, owner's queries, yards; the unit frame's type rules (RT_TYPES); kinds as patterns, ticks once a block; zstd runs and chains, hold rows, sprays as sessions, cells held
 REC_MAGIC = b"IMPREC\r\n"
 REC_BLOCK_MAGIC = 0x4B4C4249
 REC_UNIT_IMAGE = 0x148                    # a unit's record, then its mover's (tagpu_recfmt.h)
@@ -203,7 +203,7 @@ def mapped_bytes(w, h):
  RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ, RK_PROJ_DELTA, RK_VERIFY_GLOBALS,
  RK_VERIFY_PROJ, RK_IMAGE, RK_MAPPED, RK_MAPPED_RUNS, RK_SIGHT, RK_COUNTS,
  RK_COUNT_NAME, RK_MINIMAP, RK_EV_NET_CREATE, RK_POV, RK_CLICK, RK_SELECT, RK_POV_AT,
- RK_SPRAY_SESSION, RK_EV_SLICE, RK_EV_QUERY, RK_EV_YARD) = range(60)
+ RK_SPRAY_SESSION, RK_EV_SLICE, RK_EV_QUERY, RK_EV_YARD, RK_EV_TURN, RK_EV_LINK) = range(62)
 REC_QUERIES = 4                           # RK_EV_QUERY's queries: QueryBuildInfo, QueryNanoPiece, QueryTransport, QueryLandingPad
 
 # THE PERSPECTIVE's payloads (tagpu_recpov.h)
@@ -232,6 +232,19 @@ EVENTS = {RK_EV_CREATE: "create", RK_EV_NET_CREATE: "network create", RK_EV_DEAT
           RK_EV_FEATURE_END: "feature call's end", RK_EV_DRAW: "feature draw",
           RK_EV_DEATH_END: "death's end", RK_EV_SLICE: "script slice", RK_EV_QUERY: "owner's query",
           RK_EV_YARD: "yard"}
+# THE CONTEST ORDER's records (tagpu_recfmt.h): they stand among the events but are RCS_OTHER's, so
+# they are not in EVENTS, the events flag's kinds
+CONTEST = {RK_EV_TURN: "contest key", RK_EV_LINK: "carry link"}
+REC_TURN_AFTER = 0xFFFF                   # the key of a call after the unit tick
+
+
+def turn_implicit(kind, slot, held):
+    """THE CONTEST ORDER's key a reader infers for a top-level footprint event with no RK_EV_TURN
+    before it (tagpu_recfmt.h, rec_turn_implicit): a death's or a yard's is the later of its own
+    slot and the step's last key, a create's or a link's the step's last key."""
+    if kind in (RK_EV_DEATH, RK_EV_YARD):
+        return max(slot, held)
+    return held
 FR_TICK, FR_SPAWN, FR_DESTROY, FR_DIE, FR_BURN, FR_DAMAGE, FR_SWAP, FR_CORPSE = range(8)
 REC_PHASE_LATE = 2                        # RK_EV_FEATURE's phase byte at most (tagpu_recfmt.h)
 ROOT_ARGS = (0, 28, 8, 12, 12, 16, 12, 32)     # an RK_EV_FEATURE's arguments after its site
@@ -743,6 +756,8 @@ class World:
         self.ystep = {}                 # the step's creates and deaths, slot -> "made"/"gone",
         self.yheld = set()              # and the slots whose yard waits for their create
         self.evented = False            # an event has come since the iteration's RK_TICK
+        self.turn_held = 0              # THE CONTEST ORDER: the step's last key,
+        self.turn_key = None            # and an RK_EV_TURN's waiting for its event
         self.session = None             # the unit ID of the iteration's last RK_SPRAY_SESSION
         self.units = {}                                  # slot -> bytearray image, live only
         self.lists = {}                                  # (slot, list) -> bytearray, not empty
@@ -817,6 +832,23 @@ class World:
                              f"follow in its step")
         self.ystep.clear()
 
+    def turn_event(self, foot, kind, slot):
+        """THE CONTEST ORDER (tagpu_recfmt.h, rec_turns_event), as the writer and the DLL's
+        reader have it: an RK_EV_TURN stands just before its footprint event, never gives the key
+        the event has without it, and never takes the step's keys back. The event's key."""
+        if not foot:
+            if self.turn_key is not None:
+                raise Unreadable(f"a contest key before record kind {kind}, no footprint event")
+            return None
+        imp = turn_implicit(kind, slot, self.turn_held)
+        k = imp if self.turn_key is None else self.turn_key
+        if (self.turn_key is not None and k == imp) or k < self.turn_held:
+            raise Unreadable(f"a contest key {k} after {self.turn_held}, or one the event has "
+                             f"without it")
+        self.turn_key = None
+        self.turn_held = k
+        return k
+
     def bracket(self, kind, b):
         """The brackets' grammar, as the DLL's reader has it (tagpu_recreader.c, event_take): a
         feature call's holds no other and cells only when it is the tick's, which is inside none;
@@ -839,7 +871,9 @@ class World:
             if self.fbracket or len(self.deaths) == REC_DEATHS_MAX:
                 raise Unreadable("a death inside a feature call, or nested too deep")
             self.yard_rule(kind, b)
-            self.deaths.append(struct.unpack_from("<I", b)[0])
+            unit = struct.unpack_from("<I", b)[0]
+            self.turn_event(not self.deaths, kind, unit - 1)
+            self.deaths.append(unit)
         elif kind == RK_EV_DEATH_END:
             if len(b) != 4 or not self.deaths or self.deaths[-1] != struct.unpack_from("<I", b)[0]:
                 raise Unreadable("a death's end that closes no death")
@@ -916,7 +950,7 @@ class World:
         records come together and in order, as the DLL's reader has them (tagpu_recreader.c,
         list_record)."""
         if kind == RK_UNIT_DELTA and self.pend is None and not self.fbracket and not self.deaths \
-                and self.session is None:
+                and self.session is None and self.turn_key is None:
             # the stream's most common record: with no order list, feature call or death open,
             # nothing below refuses it
             self._delta(self.units[_U16(b)[0]], b[2:2 + REC_UNIT_BITS], REC_UNIT_DWORDS,
@@ -926,6 +960,33 @@ class World:
             raise Unreadable(f"slot {self.pend[0]}'s order list cut short by another record")
         if self.session is not None and kind not in (RK_SPRAY_SESSION, RK_TICK):
             raise Unreadable(f"record kind {kind} after the iteration's spray sessions")
+        if self.turn_key is not None and kind not in (RK_EV_CREATE, RK_EV_DEATH, RK_EV_YARD,
+                                                      RK_EV_LINK):
+            raise Unreadable(f"a contest key before record kind {kind}, no footprint event")
+        if kind in CONTEST:
+            # a skirmish stream's that holds its cells, inside no feature call and no death
+            # (tagpu_recreader.c, event_take)
+            h = self.header
+            if self.snap or self.fbracket or self.deaths or \
+                    (h is not None and (h.get("mode") == 3 or not holds_cells(h))):
+                raise Unreadable(f"a {CONTEST[kind]} outside a skirmish stream that holds its "
+                                 f"cells, or inside a feature call or a death")
+            if kind == RK_EV_TURN:
+                if len(b) != 4 or b[2] or b[3]:
+                    raise Unreadable(f"a contest key of {len(b)} bytes")
+                key = struct.unpack_from("<H", b)[0]
+                if self.turn_key is not None or (key >= self.slots and key != REC_TURN_AFTER):
+                    raise Unreadable(f"a contest key {key} after another, or past the slots")
+                self.turn_key = key
+                return kind, b
+            if len(b) != 12 or b[10] or b[11]:
+                raise Unreadable(f"a carry link of {len(b)} bytes")
+            child, parent = struct.unpack_from("<II", b)
+            if not 1 <= child - 1 < self.slots or \
+                    (parent and (not 1 <= parent - 1 < self.slots or parent == child)):
+                raise Unreadable(f"a carry link of ID {child} onto ID {parent}, outside the array")
+            self.turn_event(True, kind, child - 1)
+            return kind, b
         if kind in EVENTS:              # RCS_EVENTS's kinds (tagpu_recfmt.h, rec_section_of)
             self.evented = True
         if kind == RK_EV_NET_CREATE:
@@ -981,6 +1042,7 @@ class World:
             if not 1 <= slot < self.slots:
                 raise Unreadable(f"a yard of slot {slot}, outside the array")
             self.yard_rule(kind, b)
+            self.turn_event(not self.deaths and slot not in self.yheld, kind, slot)
             return kind, b
         if kind == RK_CELLS and (self.fbracket or self.deaths):
             if self.fbracket != FR_TICK + 1:
@@ -993,6 +1055,7 @@ class World:
             self.perspective(kind, b)
         elif kind == RK_TICK:
             self.yard_end()
+            self.turn_held, self.turn_key = 0, None
             self.tick = struct.unpack_from("<I", b)[0]
             self.clicks = []
             self.evented = False
@@ -1160,6 +1223,7 @@ class World:
             # the images come before the events: the units are this iteration's
             if kind == RK_EV_CREATE:
                 self.yard_rule(kind, b)
+                self.turn_event(not self.fbracket and not self.deaths, kind, 0)
             if kind == RK_EV_SPRAY and self.sprays_on():
                 self.sprays.spray(self.tick, b, self.unit_of)
             return kind, b
@@ -1182,6 +1246,9 @@ class World:
         if self.yheld:
             raise Unreadable(f"a yard of slot {min(self.yheld)}, not live, whose create does not "
                              f"follow in its iteration")
+        if self.turn_key is not None:
+            raise Unreadable("a contest key with no footprint event after it at the end of its "
+                             "iteration")
 
     def pov_differences(self, other):
         """Lines naming each seat whose last two samples, with their GameTimes, or whose selection
@@ -1725,6 +1792,8 @@ class EventCheck:
                 self.pending = (self.summary_now, self.events)
             self.open, self.in_events, self.events = True, False, []
             return
+        if kind in CONTEST:
+            self.counts[kind] = self.counts.get(kind, 0) + 1
         if kind in EVENTS:
             self.counts[kind] = self.counts.get(kind, 0) + 1
             if not self.in_events:
@@ -2212,7 +2281,8 @@ def cmd_check(path, timeline=0, exact=False):
           f"{seen} snapshots, {bad} differing" + (f"; stopped at {stop}" if stop else ""))
     print(f"  the events against the images: {ec.checked} steps, "
           + ("every change explained" if not ec.n else f"{ec.n} UNEXPLAINED") + "; "
-          + (", ".join(f"{ec.counts[k]} {EVENTS[k]}" for k in sorted(ec.counts)) or "no events"))
+          + (", ".join(f"{ec.counts[k]} {EVENTS.get(k) or CONTEST[k]}" for k in sorted(ec.counts))
+             or "no events"))
     for line in ec.lines:
         print("  " + line)
     return 1 if bad or w.corrections or ec.n else 0

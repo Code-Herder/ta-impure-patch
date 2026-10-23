@@ -3224,6 +3224,7 @@ def checks(fx):
         res.later(puppet_counts, proc, rec, d)
     if ran.get("L") == "ran":
         res.later(yard_dropped_check, out / "L" / "tagpu.log")
+        res.later(unordered_check, out / "L" / "tagpu.log")
     for proc in ("P", "R", "Q"):
         if ran.get(proc) == "ran":
             res.later(yard_check, proc, out / proc / "tagpu.log")
@@ -3368,6 +3369,34 @@ def yard_dropped_verdict(label, text):
     return [(label, FAIL if bad else PASS,
              f"{sum(bad)} yard events kept out of {len(counts)} recordings" if bad
              else f"none kept out of {len(counts)} recordings")]
+
+
+UNORDERED = re.compile(r"recorder: (\d+) footprint calls a playing cannot put in their order")
+
+
+def unordered_verdict(label, text):
+    """[(label, verdict, detail)]: the footprint and chain calls the recorder could not give a
+    place a playing makes them at (tagpu_recfmt.h, THE CONTEST ORDER: a Teleport's set-position on
+    another unit, a turn out of slot order), from every recording's end line of a lane's log: any
+    fails, since a playing of such a recording can decide a contested cell otherwise; could not
+    run with no such line."""
+    counts = [int(m.group(1)) for m in UNORDERED.finditer(text)]
+    if not counts:
+        return [(label, UNRUN, "no recording's end line with the footprint calls no playing can "
+                               "order")]
+    bad = [n for n in counts if n]
+    return [(label, FAIL if bad else PASS,
+             f"{sum(bad)} footprint calls no playing can order in {len(counts)} recordings" if bad
+             else f"none in {len(counts)} recordings")]
+
+
+def unordered_check(log_path):
+    label = "L: the footprint calls no playing can order"
+    try:
+        text = Path(log_path).read_text(errors="replace")
+    except OSError as e:
+        return [(label, UNRUN, str(e))]
+    return unordered_verdict(label, text)
 
 
 def yard_check(proc, log_path):

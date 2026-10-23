@@ -142,6 +142,7 @@ typedef struct Writer {
     unsigned       ndeaths;     /* the deaths whose RK_EV_DEATH_END is still to come      */
     unsigned       death[REC_DEATHS_MAX];   /* their units' IDs, innermost last          */
     RecYardStep    yards;       /* the step's yards by THE YARD RULE (tagpu_recfmt.h)     */
+    RecTurns       turns;       /* the step's keys by THE CONTEST ORDER (tagpu_recfmt.h)  */
     int            evented;     /* an RCS_EVENTS record has come since the iteration's RK_TICK */
 
     unsigned char* base;        /* the grid at the end of the first iteration (a snapshot's
@@ -1266,7 +1267,9 @@ static int feature_record(Writer* w, unsigned kind, const unsigned char* b, unsi
         if (!w->ticked || w->fbracket || w->ndeaths == REC_DEATHS_MAX || !rec_event_len(kind, len) ||
             !rec_yard_take(&w->yards, kind, b, w->live, w->nslots, w->death, w->ndeaths))
             return 0;
-        memcpy(&w->death[w->ndeaths++], b, 4);
+        memcpy(&id, b, 4);
+        if (!rec_turns_event(&w->turns, !w->ndeaths, kind, id - 1u, NULL)) return 0;
+        w->death[w->ndeaths++] = id;
         break;
     case RK_EV_DEATH_END:
         if (len != 4 || !w->ndeaths) return 0;
@@ -1445,6 +1448,11 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
     /* a list that has begun is followed by the rest of it and nothing else */
     if (w->pend.next < w->pend.total && kind != w->pend.kind) return 0;
     if (len >= 2) memcpy(&id, b, 2);
+    /* an RK_EV_TURN stands just before its footprint event (tagpu_recfmt.h, THE CONTEST ORDER):
+       a key waiting meets no other record, an iteration's end among them */
+    if (w->turns.pending && kind != RK_EV_CREATE && kind != RK_EV_DEATH && kind != RK_EV_YARD &&
+        kind != RK_EV_LINK)
+        return 0;
     /* the readers' events flag, by the same predicate (feature_record's INVARIANT); a record that
        sets it and is then refused abandons the file, so setting it first changes nothing */
     if (rec_section_of(kind) == RCS_EVENTS) w->evented = 1;
@@ -1454,6 +1462,7 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
         if (w->ticked) iteration_done(w);
         if (w->dead) return 1;
         w->evented = 0;
+        rec_turns_reset(&w->turns);
         memcpy(&w->tick, b, 4);
         if (!w->ticked) w->snap_tick = w->tick;
         w->ticked = 1;
@@ -1582,20 +1591,49 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
     case RK_MAPPED_RUNS:
         return globals_proj_record(w, kind, b, len);
     case RK_EV_YARD: {
-        /* where THE YARD RULE lets it stand (tagpu_recfmt.h): the recorder writes nothing else */
+        /* where THE YARD RULE lets it stand (tagpu_recfmt.h): the recorder writes nothing else; a
+           footprint event of THE CONTEST ORDER when top-level and not its create's */
         unsigned uid;
         if (!w->ticked || w->fbracket || len != 8 || b[4] > 1 || b[5] || b[6] || b[7]) return 0;
         memcpy(&uid, b, 4);
         if (!slot_ok(w, uid - 1u) ||
-            !rec_yard_take(&w->yards, kind, b, w->live, w->nslots, w->death, w->ndeaths))
+            !rec_yard_take(&w->yards, kind, b, w->live, w->nslots, w->death, w->ndeaths) ||
+            !rec_turns_event(&w->turns, !w->ndeaths && w->yards.st[uid - 1u] != RYS_HELD, kind,
+                             uid - 1u, NULL))
+            return 0;
+        break;
+    }
+    case RK_EV_TURN:
+    case RK_EV_LINK: {
+        /* THE CONTEST ORDER (tagpu_recfmt.h): a skirmish stream's that holds its cells, inside no
+           feature call and no death; a key stands just before its footprint event, a link names
+           a child slot and a parent that is no slot or another one */
+        unsigned cid, pid;
+        if (!w->ticked || w->fbracket || w->ndeaths || w->mp_in || !(w->hold_flags & RECL_CELLS) ||
+            !rec_event_len(kind, len))
+            return 0;
+        if (kind == RK_EV_TURN) {
+            memcpy(&id, b, 2);
+            if (b[2] || b[3] || !rec_turns_turn(&w->turns, id, w->nslots)) return 0;
+            break;
+        }
+        memcpy(&cid, b, 4);
+        memcpy(&pid, b + 4, 4);
+        if (b[10] || b[11] || !slot_ok(w, cid - 1u) ||
+            (pid && (!slot_ok(w, pid - 1u) || pid == cid)) ||
+            !rec_turns_event(&w->turns, 1, kind, cid - 1u, NULL))
             return 0;
         break;
     }
     default:
-        /* the events: nothing of the copy but a create's place in THE YARD RULE; RK_CORRECT and
-           RK_HEADER are never in the ring after the first record */
+        /* the events: nothing of the copy but a create's place in THE YARD RULE, and a top-level
+           create's key (THE CONTEST ORDER); RK_CORRECT and RK_HEADER are never in the ring after
+           the first record */
         if (!w->ticked || !rec_event_len(kind, len) ||
             !rec_yard_take(&w->yards, kind, b, w->live, w->nslots, w->death, w->ndeaths))
+            return 0;
+        if (kind == RK_EV_CREATE &&
+            !rec_turns_event(&w->turns, !w->fbracket && !w->ndeaths, kind, 0, NULL))
             return 0;
         break;
     }

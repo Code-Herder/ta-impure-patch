@@ -37,10 +37,11 @@
 #include "tagpu_recpov.h"
 #include "tagpu_reclanes.h"
 
-/* 25: format 24 with RT_WALLCLOCK's start carrying the local time's offset from UTC at that
-   instant beside it. 24 was format 23 with the unit frame's listing, lane masks and residuals as
-   one binary range coder's bytes a block, each decision under a context both sides keep
-   (RCS_UNITS below). 23 was
+/* 26: format 25 with the contest order's keys (RK_EV_TURN) and the carry links at their place
+   (RK_EV_LINK). 25 was format 24 with RT_WALLCLOCK's start carrying the local time's offset from
+   UTC at that instant beside it. 24 was format 23 with the unit frame's listing, lane masks and
+   residuals as one binary range coder's bytes a block, each decision under a context both sides
+   keep (RCS_UNITS below). 23 was
    format 22 with QueryTransport and QueryLandingPad among the owner's queries, and
    BeginTransport and setSFXoccupy as the owner's starts (RK_EV_START_NAMED) where the broadcast and
    the playing's own water-state call made them before. 22 was format 21 with three record
@@ -79,7 +80,7 @@
    frame carries the projectile pool coded by identity, and whose four record frames -- the cells,
    the orders, the events and the state -- carry the rest but RCS_OTHER's (THE SECTIONED CONTAINER
    below). */
-#define REC_FORMAT        25
+#define REC_FORMAT        26
 
 static __inline int rec_format_supported(unsigned format)
 {
@@ -381,6 +382,19 @@ enum RecKind {
                           live unit at its place, or of the create that follows it. A playing
                           writes the first at this place and checks the second at its create
                           (tagpu_replay.c, A RECORDED YARD_OPEN)                                   */
+    RK_EV_TURN,        /* u16 key, u16 0: the key of the footprint event that follows it at once
+                          (THE CONTEST ORDER, below): 1..slots-1 the unit tick's turn it was made
+                          in, REC_TURN_AFTER after the unit tick, 0 before the tick's first turn.
+                          A skirmish stream's only, in one that holds its cells; never inside a
+                          feature call or a death; written only where the key differs from the one
+                          rec_turn_implicit gives the event; in RCS_OTHER                         */
+    RK_EV_LINK,        /* u32 child ID, u32 parent ID (0 a detach), u8 piece, u8 layer, u16 0: the
+                          attach 0x48AB70 at its place, as its record (+1 the child's slot, +3 the
+                          parent's, +5, +6) asked it, made where the engine made it and only where
+                          it acted (tagpu_recorder.c, ob_link), outside every death -- a death's
+                          own detaches (0x4867CB, 0x48681D) are its destructor's, which the
+                          playing runs. A skirmish stream's only, in one that holds its cells; a
+                          footprint event of THE CONTEST ORDER; in RCS_OTHER                      */
     RK_KINDS
 };
 
@@ -396,8 +410,9 @@ typedef struct RecNetCreate {
 _Static_assert(sizeof(RecNetCreate) == 32, "network create event span");
 _Static_assert(RK_EV_NET_CREATE == 51 && RK_POV == 52 && RK_CLICK == 53 && RK_SELECT == 54 &&
                RK_POV_AT == 55 && RK_SPRAY_SESSION == 56, "existing record kinds retain their values");
-_Static_assert(RK_EV_SLICE == 57 && RK_EV_QUERY == 58 && RK_EV_YARD == 59 && RK_KINDS == 60,
-               "the script slice's, the owner's query's and the yard's kinds");
+_Static_assert(RK_EV_SLICE == 57 && RK_EV_QUERY == 58 && RK_EV_YARD == 59 && RK_EV_TURN == 60 &&
+               RK_EV_LINK == 61 && RK_KINDS == 62,
+               "the slice's, the query's, the yard's, the key's and the link's kinds");
 
 /* RK_EV_QUERY's query: the script's name and the values its arguments point to going in, as the
    engine's calls pass them, an argument it passes NULL marked - (the engine map, *The owner's COB
@@ -455,6 +470,8 @@ static __inline int rec_event_len(unsigned kind, unsigned len)
     case RK_EV_SLICE:       return len == 4;
     case RK_EV_QUERY:       return len == 8;
     case RK_EV_YARD:        return len == 8;
+    case RK_EV_TURN:        return len == 4;
+    case RK_EV_LINK:        return len == 12;
     default:                return 0;
     }
 }
@@ -550,6 +567,88 @@ static __inline int rec_yard_end(RecYardStep* y)
     y->held = 0;
     return ok;
 }
+
+/* THE CONTEST ORDER. A skirmish step's footprint calls decide each contested cell's holder and
+   the marks, the same for the writer, both readers and the playing [DISASSEMBLED]:
+   - the calls: the stamp 0x47CC30, the clear 0x47D0E0, the re-claim 0x47C790;
+   - the marks: +0x110 bit 26, the holder; bit 27, the loser;
+   - the chains: the re-claim walk 0x47E5C0 visits each bucket by its head and follows its chain
+     through +0x8E (0x47E652..0x47E6F8), re-claiming each unit and then its cargo, so the chains'
+     order decides which unit owed a re-claim gets a freed cell first; the stamp's re-file
+     (0x47CCD2..0x47CD31), the attach 0x48AB70 and the death's removal 0x47CBD0 write them.
+   The recording machine makes these calls in its unit tick's turns, ascending by slot (0x48AD30:
+   records 0..9, each block ascending, and a skirmish's blocks ascend with the records, 0x4854A0).
+   Within a turn the order is:
+   1. the slice's yard (YARD_OPEN 0x47DAC0, from the slice at 0x48ADEB);
+   2. the order runs' creates and attaches (0x43B7C0 at 0x48AF98, 0x43BAD0 at 0x48AF9E);
+   3. the unit's own relink, at most one a step: the movement pass's 0x43DD55 -> 0x43D6D0, only
+      on a cell or layer change (0x43D898..0x43D8BF);
+   4. its death (Send_UnitDeath at 0x48AFD1).
+   After the tick come the players phase's, the frame's and the levers' calls, in their order:
+   between the unit tick's return 0x4954F2 and the projectile tick's call 0x495513 there is only a
+   timing accumulator.
+   Every call but the relinks is an event at its place; the relinks are the next image's
+   positions. A top-level footprint event therefore has a KEY: the turn it was made in.
+   rec_turn_implicit gives the key a reader can infer:
+   - for a death or a yard, the later of the unit's own slot and the step's last key, since the
+     reaper kills a unit in its own turn and a slice opens its own unit's yard;
+   - for a create or a link, the step's last key.
+   An RK_EV_TURN just before an event gives any other key. The keys never decrease within a step.
+   A playing places each unit at its turn: before an event of key K, every unit below slot K the
+   step moves. So it makes the recording machine's calls, in its order, from the same world
+   (tagpu_replay.c, THE CONTEST ORDER).
+   The footprint events of a step:
+   - a top-level RK_EV_CREATE;
+   - a top-level RK_EV_DEATH;
+   - a top-level RK_EV_YARD of a unit live at its place (THE YARD RULE; the yard a create opens is
+     a check, not a call);
+   - an RK_EV_LINK.
+   "Top-level" means inside no feature call and no death; an event inside a death is that
+   death's. A call the recording machine made that no key orders -- a Teleport's set-position
+   0x406BC0 on another unit above all -- is counted by the recorder and failed by the harness
+   (tagpu_recorder.c, THE CONTEST ORDER). */
+#define REC_TURN_AFTER 0xFFFFu   /* the key of a call after the unit tick: a slot count is a u16 */
+
+/* the key of a top-level footprint event with no RK_EV_TURN before it */
+static __inline unsigned rec_turn_implicit(unsigned kind, unsigned slot, unsigned held)
+{
+    if (kind == RK_EV_DEATH || kind == RK_EV_YARD) return slot > held ? slot : held;
+    return held;
+}
+
+/* the step's keys: the last footprint event's, and an RK_EV_TURN waiting for its event */
+typedef struct RecTurns { unsigned held, key; unsigned char pending; } RecTurns;
+
+static __inline void rec_turns_reset(RecTurns* t) { t->held = 0; t->key = 0; t->pending = 0; }
+
+/* an RK_EV_TURN of a stream of `slots` slots: 1 well formed */
+static __inline int rec_turns_turn(RecTurns* t, unsigned key, unsigned slots)
+{
+    if (t->pending || (key >= slots && key != REC_TURN_AFTER)) return 0;
+    t->pending = 1;
+    t->key = key;
+    return 1;
+}
+
+/* any later record of the iteration; `foot` 1 for a footprint event (above), `slot` its ID's
+   slot. 1 well formed, and *key its key: an RK_EV_TURN stands just before its event, never gives
+   the key the event has without it, and never takes the keys back */
+static __inline int rec_turns_event(RecTurns* t, int foot, unsigned kind, unsigned slot,
+                                    unsigned* key)
+{
+    unsigned imp, k;
+    if (!foot) return !t->pending;
+    imp = rec_turn_implicit(kind, slot, t->held);
+    k = t->pending ? t->key : imp;
+    if ((t->pending && k == imp) || k < t->held) return 0;
+    t->pending = 0;
+    t->held = k;
+    if (key) *key = k;
+    return 1;
+}
+
+/* the iteration's end: 1 when no RK_EV_TURN waits for its event */
+static __inline int rec_turns_end(const RecTurns* t) { return !t->pending; }
 
 /* The feature code's inputs from outside the feature world: its calls of the simulation RNG
    0x4B6C30 -- every one from 0x4232F0 to 0x4251CA, which holds the feature functions, the spread

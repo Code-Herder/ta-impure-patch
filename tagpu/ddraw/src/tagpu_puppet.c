@@ -491,12 +491,11 @@ int tagpu_puppet_rebuilding(void) { return s_rebuild; }
    rw_prepare), and at the teardown's entry or a takeover's end. THE BOUND: each site is written
    only while it holds the bytes the pristine exe holds there or this module's NOPs, so a patch of
    another module at one of them refuses the playing that needs the NOPs instead of being
-   overwritten, and a write that fails midway undoes the call's others (contest_write). What
-   remains is the call order: a
-   puppet makes its writer calls as deaths, creates, then placements in slot order, where the
-   recording machine interleaved them in its unit tick, so where two contesting calls swap the
-   holder differs (MEASURED in emulation of the engine: 4 of an air war's 1,700 iterations, 3 of
-   them with deaths; in the game no slot-B impact differed in the air war or in a battle). */
+   overwritten, and a write that fails midway undoes the call's others (contest_write). A
+   straight playing makes the writers' calls in the recording machine's order (tagpu_replay.c,
+   THE CONTEST ORDER); a seek makes its units in slot order, and there a contest between two of
+   them can end the other way until they move (the seek's residual,
+   demo-recorder-completeness.md). */
 
 #define OFF_GRID     0x14287        /* the cells, 13 bytes each, row-major ... */
 #define OFF_GRID_W   0x14233        /* ... W columns ...                       */

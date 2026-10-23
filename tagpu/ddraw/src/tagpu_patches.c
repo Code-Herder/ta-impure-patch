@@ -4736,7 +4736,9 @@ SIM_FEATURE(script_slice, SIM_PUPPET_RUNS, "slice-walkers battle tenseat");
    cannot disagree.
    THE ORDERING it rests on: the stub runs in the engine's own turn order, and on a recording level
    the marker (tagpu_rec_slice) is written before the slice it names, so the events the slice makes
-   follow it in the stream and the marker's place there is the slice's place. On a level that plays
+   follow it in the stream and the marker's place there is the slice's place; and the recorder's
+   turn (tagpu_rec_turn) is set here for every unit the loop is on, so a footprint event of this
+   turn carries this slot (THE CONTEST ORDER, tagpu_recfmt.h). On a level that plays
    a recording, tagpu_replay_slice_defer skips the slices the iteration's markers name, and the
    replay gives each at its marker (tagpu_replay.c, THE SCRIPT SLICES).
    Deleting the stub deletes the recording's markers, the playing's deferral and the count root
@@ -4758,6 +4760,7 @@ static void __cdecl unit_slice(char* unit)
 {
     char* cob;
     int placed;
+    tagpu_rec_turn(unit);               /* every unit's turn, a script or none */
     memcpy(&cob, unit + 0x9A, 4);       /* 0x48ADDF's own read, of the unit 0x48AD30's loop is on */
     if (!cob) return;                   /* 0x48ADE5..0x48ADE7: no script, no slice */
     placed = tagpu_rec_slice(unit, cob);
