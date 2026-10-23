@@ -15058,10 +15058,23 @@ at `ctrls+0xEC`. Callers reject any result that differs from requested text.
   `main+0x2A3E`; the gate at `0x4640DE` reads `main+0x37EFE` (1, 2 or 3) against the flags' low
   nibble [INFERRED: which kinds of message the player's setting shows]. In engine pixels, so under
   HUD scale they move with the world region. Three callers: `0x469FCB` (DrawGameScreen),
-  `0x41F7A5`, `0x41F9D8`. **Patched at `0x4640D6`** (`mov dword [esp+0x14],0x34`, `C7 44 24 14 34
-  00 00 00`; the loop's back edge is `0x4640DE`, past it, and no jump lands inside it): the stub
-  stores the live HUD's value, `0x34` unless its strip is on the screen, when the lines start
-  under it (hud-in-game.md, *The top layer*).
+  `0x41F7A5`, `0x41F9D8` (both outside DrawGameScreen; they read the stub's value too, which is
+  `0x34` whenever the live HUD's strip is not on the screen). **Patched at `0x4640D6..0x4640DD`**,
+  the 8 bytes `C7 44 24 14 34 00 00 00` (`mov dword [esp+0x14],0x34`; `eax` = main from
+  `0x4640C0`, read again at `0x4640DE`). The loop's back edge is `0x46425E jne 0x4640DE`, past the
+  8 bytes, and nothing lands inside them (DISASSEMBLED: no direct branch or call in the exe
+  targets `0x4640D6..0x4640DD`, and the function's switch table at `0x464270` holds only
+  `0x46410F` and `0x464142`).
+  `chat_top_init` (`tagpu_replay.c`, from `tagpu_replay_init`) checks the 8 bytes with
+  `tagpu_detour_bytes_ok`; on a mismatch it logs `replay: DrawChatText's first line 0x4640D6
+  holds other bytes: the messages stay under the live HUD's strip` and writes nothing, and if no
+  stub memory is had or the landing fails it logs that and frees the stub. Otherwise it lands a
+  5-byte `jmp` and 3 `nop`s (`tagpu_detour_land`) to the stub: `50` push eax; `A1 <addr>` mov
+  eax,[`s_chatTop`]; `89 44 24 18` mov [esp+0x18],eax (the frame's `+0x14` past the push); `58`
+  pop eax; `E9` jmp `0x4640DE`. The flags are not read between, so none is kept. `s_chatTop`
+  (`tagpu_hudinput.c`) is written on the same game thread at the packet's fill and the level's
+  end: `0x34`, or, while the live HUD's strip was on the last frame drawn, `32 + live_clear ·
+  scale · gh / 720`, so the lines start under the strip (hud-in-game.md, *The top layer*).
 - **`0x467D70` the HUD panel painter**, `void (void)`, one caller `0x49842A`, prologue
   `A1 E8 1D 51 00` (5): `esi = *(main+0x37E1B)`; `0x4C69A0(esi)`; `0x4C6890(esi, 0)`; three
   side-specific GAF frames (`main + side·4 + 0x1481F / 0x14833 / 0x14847`, side from

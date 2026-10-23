@@ -375,10 +375,13 @@ At those sizes the game's line sits a pixel off the mockup's.
 ### The toast
 
 A short message (`toast` in the state) in a dark box centred across the screen, `toast.top` of
-its height down, above everything: a `toast.w` × `toast.h` box (150 × 18) in `toast.bg` at
-`toast.alpha`, an edge of `toast.edge` in `toast.edge_colour`, the text in the `toast` style,
-centred. The box is the layout's size, not the text's, since the DLL lays out without the faces'
-metrics. It shows for `toast.ms` (1800).
+its height down, above everything: a box `toast.h` (18) tall in `toast.bg` at `toast.alpha`, an
+edge of `toast.edge` in `toast.edge_colour`, the text in the `toast` style, centred. The box is as
+wide as the text and `toast.pad` (8) each side, never narrower than `toast.w` (150) nor wider than
+`toast.max_w` (260): the mockup measures the text in its face in a canvas, and the DLL with the
+faces it draws with (`tagpu_hudlay_measure`, `tagpu_hudtext_width`). On the live HUD, while the
+strip is open, it sits clear of the strip: `2·strip.t + strip.h` under the bar, or `toast.top`
+when that is lower. It shows for `toast.ms` (1800).
 
 ### The stats window
 

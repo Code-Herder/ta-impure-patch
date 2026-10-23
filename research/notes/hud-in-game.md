@@ -747,7 +747,14 @@ is held at the seek's target − 1, so `now + 1` is the T the fork would use:
   the second click sends FORK.
 - **The warning is the arm's**, and like every live toast it is drawn in the top layer and, while
   the strip is open, clear of it: at `top + live_clear` units, or the layout's `toast.top` when
-  that is lower (hud.js `toast` places it the same way; laycheck's live toast cases).
+  that is lower (hud.js `toast` places it the same way; laycheck's live toast cases). **Every toast
+  is as wide as its text**, `toast.pad` each side, never narrower than `toast.w` nor wider than
+  `toast.max_w` (150 and 260 units): "Click again to play from 0:30, replacing F2" sets 174 units
+  of Oswald 700 at 10, past the 150 the box used to be. The layout measures the text through the
+  measure tagpu_hudart.c gives it once the faces are open (`tagpu_hudlay_measure`,
+  `tagpu_hudtext_width`), the same advances and kerning tagpu_huddraw.c draws the text with
+  (`tagpu_hudtext_pens`); hud.js measures the same face in a canvas, and laycheck's native build
+  measures with the game's own code (its eviction case at 4K agrees within 0.005 units).
   "Click again to play from m:ss[, replacing F<n>]" starts when the
   arm is set, at R, and is held for as long as the arm holds, past the toast's 1.8 s. The snap's
   seek can outlast the toast (2341 ms measured 2026-10-23 on the battle test group), and the
@@ -805,14 +812,19 @@ are flagged `HOPF_TOP` and drawn after the composite:
   `replay: DrawChatText's first line 0x4640D6 holds other bytes: the messages stay under the live
   HUD's strip`, and the strip still covers them.
 - **The Config panel stays over the strip.** It hangs below the bar's right end (`panel_rect`,
-  `tagpu_menu.c`), over Play from here and Back to now. While it is open the game thread sets the
-  packet's `rw_panel` (`tagpu_menu_panel_open`); the render half places the panel's rect by the
-  rule `panel_rect` uses (`tagpu_menu_panel_screen`, pure, from this frame's width, HUD scale, bar
-  and shift), maps it to the attachment as the composite does, and the Vulkan pass draws the
-  whole composite again inside that rect's part of the top layer's rect
-  (`tagpu_vk_gui_record_whole`), after the top layer and before the cursor's redraw. In that
-  rect what the engine drew is the panel, so the panel is the last UI drawn there. A point the
-  sprocket or the panel owns is the menu's (`tagpu_menu_owns_point`).
+  `tagpu_menu.c`), over Play from here and Back to now. **Its box travels with the frame that drew
+  it**: at each flip the UI mirror's flip marker takes `tagpu_menu_panel_box` (the panel's box on
+  the screen while it is open, `panel_rect` moved by the world region's shift as the composite
+  moves it) into that flip's `PK_FRAME`, the drain keeps the last frame's box beside its presented
+  surface, and the hand-over carries both (`TAGPU_GUIHAND::panelL..panelB`). The panel opens and
+  closes only at DrawGameScreen's entry (`menu_tick`), before the frame draws, and the retained
+  GUI blit draws it on every frame it is open, so the box says whether the composite drawn holds
+  the panel. The Vulkan pass maps the box to the attachment as the composite maps the surface
+  (`tagpu_vk_gui_panel_rect`) and draws the whole composite again inside its part of the top
+  layer's rect (`tagpu_vk_gui_record_whole`), after the top layer and before the cursor's redraw.
+  In that rect what the engine drew is the panel, so the panel is the last UI drawn there, from
+  the frame it opens to the frame it closes: the box and the composite are one snapshot. A point
+  the sprocket or the panel owns is the menu's (`tagpu_menu_owns_point`).
 - **No other engine screen reaches the strip** (MEASURED on round 2's runs, 1080, HUD 100): the
   in-game menu is at x 10 to 112, inside the side panel; the Exit question is centred, below
   the strip; the chat's input field is in the bottom bar; with the strip open chat does not open,

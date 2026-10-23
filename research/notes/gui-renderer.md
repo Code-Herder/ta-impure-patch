@@ -4348,10 +4348,14 @@ the sharp layer too and never reaches the top layer's rect: it is in the side pa
 starts right of it. The runner's captures at 1080, HUD 100 show the cursor over the button and
 over the strip.
 
-**The Config panel**, which hangs over the strip's right end. While it is open,
-`tagpu_vk_gui_record_whole` draws the composite's own quad again, the same way, scissored to the
-panel's part of the top layer's rect, before the cursor's redraw. What the engine drew in that
-rect is the panel, so the panel is the last UI drawn there.
+**The Config panel**, which hangs over the strip's right end. Its box on the screen comes in the
+hand-over of the composite being drawn (`panelL..panelB`, from that flip's `PK_FRAME`: the flip
+marker takes `tagpu_menu_panel_box` on the game thread), so the box is open exactly when that
+composite holds the panel. `tagpu_vk_gui_panel_rect` maps it to the attachment as `lay_viewport`
+maps the surface, each edge to the pixel whose centre it passes, and `tagpu_vk_gui_record_whole`
+draws the composite's own quad again, the same way, scissored to the panel's part of the top
+layer's rect, before the cursor's redraw. What the engine drew in that rect is the panel, so the
+panel is the last UI drawn there.
 
 ## 25. The movie on the Vulkan lane — `PK_MOVIE`  [MEASURED 2026-09-26]
 
