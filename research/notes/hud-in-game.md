@@ -764,8 +764,9 @@ queues it for the frame visit; the plan only reads. The trigger's own commands r
 same calls, and `hud state` prints what they answer (`tagpu_replay.c`, the trigger's comment). The
 details: [the takeover](tadr-port/demo-recorder-s4-takeover.md#driving-it),
 [the forks](tadr-port/demo-recorder-s4-forks.md#tickets-and-the-huds-route) and
-[live rewind](tadr-port/demo-recorder-s4-rewind.md#the-verbs-as-a-queue-and-their-outcomes). No
-control of the HUD calls them yet.
+[live rewind](tadr-port/demo-recorder-s4-rewind.md#the-verbs-as-a-queue-and-their-outcomes). Take
+over and its picker call the plan, the request and the outcome, and the fill reads the timelines
+and the axis (*Take over*); the fork operations and the rewind's verbs are the fork lanes' and live rewind's.
 
 **The span is the chain's.** A playing of a fork seeks, clamps and starts over within its own
 chain: the span runs from the root's first GameTime to the chosen timeline's last, which the scan
@@ -857,9 +858,6 @@ the render thread.
 - **Bookmarks do not survive a playing** [INFERRED from the code, not run]: `replays\index.dat`
   keys them by the file's name and size, and every playing's end touches the file, which appends a
   timeline table and so changes its size; a fork, a deletion and an export change it too.
-- **The hit map does not carry the timeline axis it was drawn with**: a click on the timeline is
-  mapped with the latest fill's span (`seek_at`, `tagpu_hudinput.c`). That is exact while the span
-  never changes inside a level; a timeline switch would change it.
 - **A multiplayer recording's fork may not play** [INFERRED from the code, not run]: the reader
   refuses a chain whose segments differ in RT_HOLD, a multiplayer root has none, and its fork,
   recorded by a live skirmish, writes one.
