@@ -295,6 +295,29 @@ values. There Chrome rounds down an ascent or descent that lies just past a half
 arithmetic not identified: float32, FreeType 26.6 and 16.16 models were all tried and fit worse.
 At those sizes the game's line sits a pixel off the mockup's.
 
+**The glyphs are unhinted on both sides.** The DLL's rasteriser (stb_truetype) has no hinter, and
+the mockup draws its text with `text-rendering: geometricPrecision` (`hud.css`). Hinted, Chrome on
+Linux snaps a glyph's horizontal edges to whole pixels, which grows Oswald's cap height by up to
+1.3 px over its 0.81 em (43 px at 52 px against 42.12; MEASURED 2026-10-23, a T from 20 to 59.75
+px), so "TAKE OVER REPLAY" at 4K and HUD 150 stood 43 rows tall in the mockup and 42 in the game.
+Unhinted, Chrome's T is within a fifth of a pixel of 0.81 em.
+
+**The mockup keeps the line where the rule puts it.** With the glyphs unhinted Blink positions them
+by subpixel, and then lays the line out on other metrics: a descent that rounds down takes a pixel
+from the ascent, which puts the baseline a pixel higher at about half the sizes (MEASURED
+2026-10-23: 190 of 384 sizes from 4 to 60 px, all three faces, one CSS pixel each; a canvas's
+`textRendering` reports the two sets of metrics). That is further from the face's own metrics
+than the rule: against the unrounded baseline, the rule is off by 0.51 px on average over 4..60 px
+for Oswald and the borrowed metrics by 1.00. So the mockup, not the rule, moves: `lineShift` in
+`hud.js` takes the baseline offset A + floor((s − A − D) / 2) on the default metrics less the same
+on the unhinted ones, both read from a canvas, and pads the text box by twice that on one side,
+which moves the centred line by it and leaves the box and its clip where they were. laycheck's
+baselines are then the ones the hinted mockup gave, all 22 cases agreeing, and the game's text
+placement is unchanged. In the game-against-mockup capture at 4K and HUD 150, fed the game's own
+dump, "TAKE OVER REPLAY", the lane labels and "PLAYER" span the same rows in the mockup as in the
+game (42, 23 and 35), and the share of TAKE OVER REPLAY's pixels differing by more than 48 fell
+from 3.79 % (best at a one-pixel shift) to 1.25 % (at none).
+
 ### Buttons and controls
 
 - A button draws its `part`. While held, and while on for a toggle, it draws its `pressed` part

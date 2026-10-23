@@ -1000,17 +1000,6 @@ the render thread.
 - **A one-pixel Oswald residual.** At 26 of 7554 sizes swept, Chrome rounds Oswald's ascent or
   descent differently from the rule the DLL follows, and the line sits a pixel off the mockup's
   ([The replay HUD's layout](hud-layout.md), *Text*).
-- **Glyphs stand up to a pixel taller in the mockup.** Chrome on Linux hints the faces
-  vertically, snapping a glyph's horizontal edges to whole pixels; the DLL's rasteriser
-  (stb_truetype) does not hint. MEASURED 2026-10-23 in headless Chrome, a T of Oswald 500 from 20
-  to 59.75 px: the cap height is whole pixels and up to 1.3 px over the font's 0.81 em (43 px at
-  52 px against 42.12, 28 at 33 against 26.73), where the game draws 0.81 em exactly; in the
-  game-against-mockup capture at 4K and HUD 150 "TAKE OVER REPLAY" (51.75 px) is 43 rows in the
-  mockup and 42 in the game, its tops one row higher, which reads as the text sitting half a pixel
-  low, while "PLAYER" (42.75 px) and the lane labels (28.35 px) span the same rows in both. With
-  `text-rendering: geometricPrecision` Chrome draws the T unhinted, within a fifth of a pixel of
-  0.81 em, but it also moves Chrome's line layout, by up to 2.7 units in `laycheck.py`, so the
-  baseline rule would have to be derived again for it.
 
 ## Open
 

@@ -103,11 +103,35 @@ const HUD = (() => {
   }
   const icon = (name, b, cls = '') => art('i_' + name, b, '', cls);
   // text in style `st`: its size shrinks to the box's height / s.fit when the box is lower than the style's line
+  /* THE LINE AS THE DLL LAYS IT OUT. The text is drawn unhinted (hud.css), and Blink, which then positions glyphs by
+     subpixel, lays the line out on other metrics: a descent that rounds down borrows a pixel from the ascent (canvas
+     textRendering shows the two sets), which puts the baseline a pixel higher at about half the sizes. The text box
+     is padded by what moves the line back to where the default metrics put it, the ones tagpu_hudlay_baseline
+     follows: CSS pixels the line moves down, from the face, its weight and its size in CSS pixels. */
+  const shifts = {};
+  function lineShift(font, weight, px) {
+    const key = `${weight} ${px}px '${font}'`;
+    if (!(key in shifts)) {
+      const off = tr => {
+        const c = document.createElement('canvas').getContext('2d');
+        c.textRendering = tr;
+        c.font = key;
+        const m = c.measureText('M');
+        return m.fontBoundingBoxAscent + Math.floor((px - m.fontBoundingBoxAscent - m.fontBoundingBoxDescent) / 2);
+      };
+      shifts[key] = off('auto') - off('geometricPrecision');
+    }
+    return shifts[key];
+  }
+  let cssUnit = 1;      // CSS pixels a unit, the stage's --u, as draw() found it
   function text(html, b, st, s = {}, colour, data) {
     const S = L.styles[st], size = s.fit ? Math.min(S.size, b.h / s.fit) : S.size;
+    const dy = lineShift(S.font, S.weight, size * cssUnit);
+    // padding one side by twice the shift moves the centred line by it; the box and its clip stay
+    const pad = dy ? `;box-sizing:border-box;padding-${dy > 0 ? 'top' : 'bottom'}:${2 * Math.abs(dy)}px` : '';
     const shadow = S.outline ? (([px, py, nx, ny]) => [[px, py], [nx, ny], [px, ny], [nx, py]].map(([x, y]) => `${U(x)} ${U(y)} 0 #000`).join(','))(S.outline)
       : `0 ${U(S.shadow)} 0 rgba(0,0,0,.8)`;
-    return `<div class="t${s.align === 'c' ? ' c' : s.align === 'r' ? ' r' : ''}${s.face ? ' face' : ''}"${attrs(data)} style="${rect(b)};font:${S.weight} ${U(size)}/1 '${S.font}',sans-serif;`
+    return `<div class="t${s.align === 'c' ? ' c' : s.align === 'r' ? ' r' : ''}${s.face ? ' face' : ''}"${attrs(data)} style="${rect(b)}${pad};font:${S.weight} ${U(size)}/1 '${S.font}',sans-serif;`
       + `color:${colour || S.colour};text-transform:${S.upper ? 'uppercase' : 'none'};letter-spacing:${S.spacing}em;text-shadow:${shadow}">${html}</div>`;
   }
   const signed = (a, b) => { const g = L.signs; return `<b style="color:${g.pos};font-weight:${g.weight}">+${a}</b>&nbsp;/&nbsp;<b style="color:${g.neg};font-weight:${g.weight}">−${b}</b>`; };
@@ -499,6 +523,7 @@ const HUD = (() => {
 
   // the whole HUD for a state; see index.html for the state's fields
   function draw(el, st, px) {
+    cssUnit = parseFloat(getComputedStyle(el).getPropertyValue('--u')) || 1;
     el.style.setProperty('--press', L.press_shift);
     el.innerHTML = (st.live ? live(st) : dock(st) + column(st) + (st.stats.open ? windowHtml(st) : '') + (st.forks && st.picker ? picker(st) : ''))
       + (st.toast ? toast(st) : '');
