@@ -241,10 +241,12 @@ deletion of 4 by way of 0, sought at 1532 in 2987 ms, the deletion's compaction 
 the playing held the file (error 5, the replacement refused, as *File ordering and lifetimes*
 says); the touch `touched timelines 0, 5, 2`, compacting to three segments once the playing had
 closed. Every function the switch adds or changes was reached by X2's coverage file. In the
-whole lane's run of the same day, whose GameTimes the commit picks (base 811, F2 1111, F4 1711):
-5 -> 2 sought in 2466 ms, 2 -> 4 re-chained from 810, the re-chained reader's dump at 1141 and
-the one past 4's fork both EQUAL to a fresh seek of 4, 4 -> 0 sought in 3333 ms, and every other
-check of the lane passing.
+whole lane's run of the same day, on the build with main's exact-T takeovers merged, whose
+GameTimes the commit picks (base 781, F2 1081, F4 1681): 5 -> 2 sought at 1083 in 2396 ms, the
+bookmark set at 780, 2 -> 4 re-chained from 780, the re-chained reader's dump at 1111 and the one
+past 4's fork both EQUAL to a fresh seek of 4, 4 -> 0 sought at 1712 in 3240 ms, the bookmark
+listed on 2, 4 and 0 and kept on its index line under the root key, and every other check of the
+lane passing (25, in 5 min).
 `codectest outcomes` plays `recr_rechain`'s edges offline: a reader at a fork's `fork_at - 1`
 re-chains onto it and its next read is that fork's boundary; at `fork_at` it does not and reads on;
 a reader that has read nothing, one that has read its end, and one in a sibling fork's segment
