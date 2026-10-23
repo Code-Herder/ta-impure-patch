@@ -291,8 +291,9 @@ typedef struct RecTimeline {
                                           takeover's fork the seat it was played as. READ: the
                                           takeover's tk_live stores P there, then tk_end arms the
                                           fork, whose header header_build writes at its first
-                                          capture point (tagpu_recorder.c); the forks lane's
-                                          `hud state` check compares every fork's seat with P   */
+                                          capture point (tagpu_recorder.c). MEASURED 2026-10-23
+                                          by the forks lane's `hud state` check: forks 2, 4 and
+                                          5 of battle each name the player taken over as       */
     unsigned long long header_off;     /* its RB_HEADER's byte                                      */
     unsigned long long first_off;      /* the block after its header                                */
     unsigned long long end_off;        /* the byte after its last complete block                    */

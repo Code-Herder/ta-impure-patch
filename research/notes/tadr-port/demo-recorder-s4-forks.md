@@ -120,7 +120,8 @@ already wait; else queued with its ticket kept. The frame visit polls the ticket
 logs `replay: NAME: the HUD's fork request T done: <why>` (or `refused`), makes it the last
 outcome (`tagpu_replay_result`, kind FORK) and refreshes the HUD's timelines. The trigger's
 `hud fork delete <id>` and `hud fork export <id> "<stem>"` are the tests' way to it. Deleting the
-timeline that plays is refused as in use.
+timeline that plays is refused as in use. An export runs while a playing reads the file: MEASURED
+2026-10-23 on `battle`, the HUD's export of fork 4 during fork 5's playing holds `[0, 4]`.
 
 **The HUD's timelines** come from a cache the game thread refreshes at the first iteration, a
 rewind's open, a takeover's plan and the frame visit after any file job finished, never per frame:
@@ -130,8 +131,8 @@ RT_OPTIONS byte 18, which the recorder takes from `main+0x2A42`: in a fork, the 
 played as. `tagpu_replay_timelines_serial` grows by one at every change of the rows or the axis,
 the playing's end included, so a caller (the takeover's picker) knows when to read them and plan
 again. READ: the takeover's `tk_live` stores that seat in `+0x2A42`, then `tk_end` arms the
-fork, whose header `header_build` writes at its first capture point; the X lane's `hud state`
-check compares every fork's seat with the player it took over as. The axis runs from the root's first GameTime to the greatest last of a live timeline.
+fork, whose header `header_build` writes at its first capture point. MEASURED 2026-10-23 by the
+X lane's `hud state` check on `battle`: forks 2, 4 and 5 each name the player taken over as. The axis runs from the root's first GameTime to the greatest last of a live timeline.
 
 ## Driving it
 
