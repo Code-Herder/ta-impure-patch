@@ -66,6 +66,8 @@ typedef struct FileJob {
     char path[MAX_PATH], output[MAX_PATH], key[MAX_PATH], request[33];
     unsigned op, id, ticket;
     BY_HANDLE_FILE_INFORMATION identity;
+    RecTimelineState rows[REC_TIMELINE_ROWS];   /* a touch's stamps (recfile_touch) */
+    unsigned nrows;
 } FileJob;
 static FileJob* s_pending[FILE_JOBS];
 /* THE TICKETS. A request's outcome waits in a ring of REC_FILE_RESULTS slots, slot ticket % N.
@@ -80,10 +82,15 @@ _Static_assert(REC_FILE_RESULTS >= 2 * FILE_JOBS, "the results ring outlives the
 static unsigned s_ticket;           /* the last issued; 0 is never one */
 static struct { unsigned ticket; int ok; char why[160]; } s_done[REC_FILE_RESULTS];
 static volatile LONG s_completed;   /* requests finished, written under the lock */
-static BY_HANDLE_FILE_INFORMATION s_play_identity;
-static unsigned s_play_id;
-static char s_play_key[MAX_PATH];
-static int s_playing;
+/* THE CLAIMS (tagpu_recfile.h): the timeline that plays, and the one a switch moves to while
+   its reader is open beside the playing's (tagpu_replay.c, THE SWITCH) */
+#define REC_FILE_CLAIMS 2
+static struct {
+    int on;
+    unsigned id;
+    char key[MAX_PATH];
+    BY_HANDLE_FILE_INFORMATION identity;
+} s_claim[REC_FILE_CLAIMS];
 
 static void jobs_lock(void) { while (InterlockedExchange(&s_lock, 1)) Sleep(0); }
 static void jobs_unlock(void) { InterlockedExchange(&s_lock, 0); }
@@ -120,6 +127,29 @@ static int same_reservation(const char* akey, const BY_HANDLE_FILE_INFORMATION* 
     return !_stricmp(akey, bkey) || same_identity(a, b);
 }
 
+/* a deletion of timeline `id` of that file queued or running; under the lock */
+static int delete_pending(const char* key, const BY_HANDLE_FILE_INFORMATION* identity,
+                          unsigned id)
+{
+    unsigned i;
+    for (i = 0; i < FILE_JOBS; i++) {
+        const FileJob* j = s_pending[i];
+        if (j && j->op == REC_FILE_DELETE && j->id == id &&
+            same_reservation(key, identity, j->key, &j->identity)) return 1;
+    }
+    return 0;
+}
+
+/* claim `c` set to timeline `id` of that file; under the lock */
+static void claim_put(unsigned c, const char* key, const BY_HANDLE_FILE_INFORMATION* identity,
+                      unsigned id)
+{
+    s_claim[c].identity = *identity;
+    strcpy(s_claim[c].key, key);
+    s_claim[c].id = id;
+    s_claim[c].on = 1;
+}
+
 int recfile_play(const char* path, unsigned id)
 {
     BY_HANDLE_FILE_INFORMATION identity;
@@ -128,25 +158,48 @@ int recfile_play(const char* path, unsigned id)
     int ok = path_key(path, key) && file_identity(path, &identity);
     if (!ok) return 0;
     jobs_lock();
-    for (i = 0; i < FILE_JOBS; i++) {
-        FileJob* j = s_pending[i];
-        if (j && j->op == REC_FILE_DELETE && j->id == id &&
-            same_reservation(key, &identity, j->key, &j->identity)) ok = 0;
-    }
+    ok = !delete_pending(key, &identity, id);
     if (ok) {
-        s_play_identity = identity;
-        strcpy(s_play_key, key);
-        s_play_id = id;
-        s_playing = 1;
+        for (i = 0; i < REC_FILE_CLAIMS; i++) s_claim[i].on = 0;
+        claim_put(0, key, &identity, id);
     }
     jobs_unlock();
     return ok;
 }
 
+int recfile_claim(const char* path, unsigned id)
+{
+    BY_HANDLE_FILE_INFORMATION identity;
+    unsigned i, c = REC_FILE_CLAIMS;
+    char key[MAX_PATH];
+    int ok = path_key(path, key) && file_identity(path, &identity);
+    if (!ok) return 0;
+    jobs_lock();
+    for (i = 0; i < REC_FILE_CLAIMS && c == REC_FILE_CLAIMS; i++)
+        if (!s_claim[i].on) c = i;
+    ok = c < REC_FILE_CLAIMS && !delete_pending(key, &identity, id);
+    if (ok) claim_put(c, key, &identity, id);
+    jobs_unlock();
+    return ok;
+}
+
+void recfile_release(unsigned id)
+{
+    unsigned i;
+    jobs_lock();
+    for (i = 0; i < REC_FILE_CLAIMS; i++)
+        if (s_claim[i].on && s_claim[i].id == id) {
+            s_claim[i].on = 0;
+            break;
+        }
+    jobs_unlock();
+}
+
 void recfile_leave(void)
 {
+    unsigned i;
     jobs_lock();
-    s_playing = 0;
+    for (i = 0; i < REC_FILE_CLAIMS; i++) s_claim[i].on = 0;
     jobs_unlock();
 }
 
@@ -313,7 +366,8 @@ static DWORD WINAPI file_worker(void* arg)
         prune(j->path, j->id);
         snprintf(why, sizeof why, "pruned");
         ok = 1;
-    } else ok = recr_manage(j->path, j->op, j->id, j->output, why, sizeof why);
+    } else ok = recr_manage(j->path, j->op, j->id, j->output, j->nrows ? j->rows : NULL,
+                            j->nrows, why, sizeof why);
     if (j->op != REC_FILE_PRUNE)
         tagpu_logf("replay: forks %s: %s: %s [request=%s]", j->path,
                    ok ? "done" : "refused", why, j->request[0] ? j->request : "-");
@@ -329,44 +383,48 @@ static DWORD WINAPI file_worker(void* arg)
     return 0;
 }
 
-unsigned recfile_request(const char* path, unsigned op, unsigned id, const char* output,
-                         const char* request)
+/* a job for the worker, its paths copied, or NULL for a path or a request id too long or no
+   memory */
+static FileJob* job_new(const char* path, unsigned op, unsigned id, const char* output,
+                        const char* request)
 {
     FileJob* j;
-    int i, slot = -1;
-    unsigned ticket;
-    HANDLE t;
     if (strlen(path) >= MAX_PATH || (output && strlen(output) >= MAX_PATH) ||
-        (request && strlen(request) > 32)) return 0;
+        (request && strlen(request) > 32)) return NULL;
     j = (FileJob*)calloc(1, sizeof *j);
-    if (!j) return 0;
+    if (!j) return NULL;
     strcpy(j->path, path);
     if (output) strcpy(j->output, output);
     j->op = op;
     j->id = id;
     if (request) strcpy(j->request, request);
-    if (op == REC_FILE_DELETE &&
-        (!path_key(path, j->key) || !file_identity(path, &j->identity))) {
-        free(j);
-        return 0;
-    }
+    return j;
+}
+
+/* `j` handed to a worker, or refused: its ticket, or 0. The job is the worker's, or freed. */
+static unsigned job_queue(FileJob* j)
+{
+    int i, slot = -1;
+    unsigned ticket, c;
+    HANDLE t;
     /* Publication and exit use the same lock: every started worker is tracked before exit
        takes its handles, and exit seals the set before waiting. Nothing holds this lock while
        waiting for a worker, which may log or acquire the recording's file. */
     jobs_lock();
-    if (op == REC_FILE_DELETE && s_playing && s_play_id == id &&
-        same_reservation(s_play_key, &s_play_identity, j->key, &j->identity)) {
-        char why[40];
-        /* the refusal itself is the completed request, its outcome in the ring at once */
-        ticket = ticket_next();
-        snprintf(why, sizeof why, "timeline %u is in use", id);
-        result_put(ticket, -1, why);
-        jobs_unlock();
-        tagpu_logf("replay: forks %s: refused: timeline %u is in use [request=%s]", path, id,
-                   j->request[0] ? j->request : "-");
-        free(j);
-        return ticket;
-    }
+    for (c = 0; j->op == REC_FILE_DELETE && c < REC_FILE_CLAIMS; c++)
+        if (s_claim[c].on && s_claim[c].id == j->id &&
+            same_reservation(s_claim[c].key, &s_claim[c].identity, j->key, &j->identity)) {
+            char why[40];
+            /* the refusal itself is the completed request, its outcome in the ring at once */
+            ticket = ticket_next();
+            snprintf(why, sizeof why, "timeline %u is in use", j->id);
+            result_put(ticket, -1, why);
+            jobs_unlock();
+            tagpu_logf("replay: forks %s: refused: timeline %u is in use [request=%s]", j->path,
+                       j->id, j->request[0] ? j->request : "-");
+            free(j);
+            return ticket;
+        }
     for (i = 0; i < FILE_JOBS && !s_exiting; i++) {
         if (s_jobs[i] && WaitForSingleObject(s_jobs[i], 0) == WAIT_OBJECT_0) {
             CloseHandle(s_jobs[i]);
@@ -383,6 +441,30 @@ unsigned recfile_request(const char* path, unsigned op, unsigned id, const char*
     jobs_unlock();
     if (!t) free(j);
     return t ? ticket : 0;
+}
+
+unsigned recfile_request(const char* path, unsigned op, unsigned id, const char* output,
+                         const char* request)
+{
+    FileJob* j = job_new(path, op, id, output, request);
+    if (!j) return 0;
+    if (op == REC_FILE_DELETE &&
+        (!path_key(path, j->key) || !file_identity(path, &j->identity))) {
+        free(j);
+        return 0;
+    }
+    return job_queue(j);
+}
+
+unsigned recfile_touch(const char* path, const RecTimelineState* rows, unsigned n)
+{
+    FileJob* j;
+    if (!n || n > REC_TIMELINE_ROWS) return 0;
+    j = job_new(path, REC_FILE_TOUCH, rows[0].id, NULL, NULL);
+    if (!j) return 0;
+    memcpy(j->rows, rows, n * sizeof *rows);
+    j->nrows = n;
+    return job_queue(j);
 }
 
 int recfile_result(unsigned ticket, char* why, unsigned cap)

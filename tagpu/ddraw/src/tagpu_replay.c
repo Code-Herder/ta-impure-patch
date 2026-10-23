@@ -243,7 +243,7 @@ static uint32_t   s_made[0x10000];  /* the capture point at which a slot's books
                                        step's own; the slot count is a u16 (THE UNITS'
                                        BOOKKEEPING)                                               */
 static unsigned   s_frame_tick;     /* the GameTime the frame visit last wrote at                 */
-enum { SK_SEEK, SK_TAKEOVER, SK_REWIND, SK_NOW };
+enum { SK_SEEK, SK_TAKEOVER, SK_REWIND, SK_NOW, SK_SWITCH };
 enum { RW_IDLE, RW_FLUSH, RW_OPEN, RW_PAST, RW_ENDING };
 static struct {
     unsigned state, G, P, viewed, viewer, timeline, T, objective_armed;
@@ -273,18 +273,31 @@ static int rw_trigger(const char* line);
 static void rw_visit(void);
 static void rw_dispose(void);
 static int u32_word(const char* s, unsigned* v);
-static struct {
+typedef struct {
     int      pending;               /* a seek waits for the next frame visit after the first step */
     unsigned T;
     char     dump[40];              /* a dump to take at its capture point, or ""                 */
     int      poison;                /* R12 poisons the tables first (THE POISON CHECK)            */
-    int      mode;                  /* SK_SEEK or SK_TAKEOVER, consumed by seek_run               */
+    int      mode;                  /* SK_SEEK, SK_TAKEOVER or SK_SWITCH, consumed by seek_run   */
     int      boundary;              /* the seek to a timeline's first iteration (THE BOUNDARY)    */
     unsigned P;                     /* a takeover's player ...                                    */
     int      D;                     /* ... and difficulty, -1 for the default (tk_bound)          */
-} s_seek;
+} SeekRequest;
+static SeekRequest s_seek;
 static int      s_hold;             /* a boundary waits for its seek: the step plays nothing     */
-static unsigned s_tl;               /* the request's timeline; 0 the original                     */
+static unsigned s_tl;               /* the timeline that plays; 0 the original                    */
+/* THE SWITCH (tl_switch), game thread */
+static struct {
+    int        pending;
+    unsigned   id;                  /* the timeline asked for                                     */
+    unsigned   then_delete;         /* 0, or the timeline to delete once the switch is done       */
+    RecReader* prev;                /* the reader played before a switch's seek, while it runs   */
+} s_sw;
+/* THE IN-LEVEL STAMPS (used_stamp): the last-used times of the timelines this level has played,
+   oldest first, which the eviction reads (recr_append_point) and the level's end writes
+   (recfile_touch) */
+static RecTimelineState s_used[REC_TIMELINE_ROWS];
+static unsigned         s_nused;
 /* THE LAST REQUEST'S OUTCOME (tagpu_replay_result), game thread: nothing clears it, the serial
    alone tells a reader whether it is new */
 static TAGPU_REPLAY_RESULT s_res;
@@ -311,6 +324,7 @@ static struct {
     int      failed;                /* a scan failure is logged once a playing                   */
 } s_tlc;
 static void tlc_refresh(void);
+static int tlc_open(void);
 /* the HUD's fork requests the file worker has not answered yet (tagpu_replay_fork_op): four,
    since a click a frame cannot outrun the worker's eight jobs and the HUD shows one outcome at
    a time */
@@ -510,6 +524,9 @@ static void replay_close(void)
     overlay_close();
     mp_end();
     recr_close(s_rd);
+    /* a switch's earlier reader, open only inside its seek (tl_switch) */
+    recr_close(s_sw.prev);
+    memset(&s_sw, 0, sizeof s_sw);
     recfile_leave();
     s_rd = NULL;
     s_path[0] = 0;
@@ -1130,6 +1147,7 @@ static void __cdecl replay_fill(void)
     int k, view = -1;
     Refusal r = { 0, 0, 0 };
     replay_close();
+    s_nused = 0;                        /* a new playing's stamps (THE IN-LEVEL STAMPS) */
     tagpu_puppet_end();
     InterlockedExchange(&s_vbuf, VB_OFF);
     k = request_read(name, sizeof name, &view, why, sizeof why);
@@ -7502,7 +7520,7 @@ static unsigned takeover_point(unsigned T, RecAppend* a, char* why, unsigned cap
         if (next) *next = R + 1;
         return 0;
     }
-    if (!recr_append_point(s_rd, R - 1, a, w2, sizeof w2)) {
+    if (!recr_append_point(s_rd, R - 1, a, s_used, s_nused, w2, sizeof w2)) {
         snprintf(why, cap, "GameTime %u rounds to the refresh %u: %s", T, R, w2);
         return 0;
     }
@@ -7539,7 +7557,7 @@ static int tk_open(unsigned T, char* why, unsigned cap)
         snprintf(why, cap, "%s is no longer the file this level plays", path);
         return 0;
     }
-    if (!recr_append_point(s_rd, T - 1, &a, w2, sizeof w2)) {
+    if (!recr_append_point(s_rd, T - 1, &a, s_used, s_nused, w2, sizeof w2)) {
         CloseHandle(f);
         recfile_unlock(&lock);
         snprintf(why, cap, "%s", w2);
@@ -7785,6 +7803,15 @@ static int seek_run(char* ta)
                                                composed one (THE SEEK OF A MULTIPLAYER RECORDING) */
     const int back = s_seek.mode == SK_NOW, convert = s_seek.mode == SK_REWIND;
     const int tk = s_seek.mode == SK_TAKEOVER || back;
+    /* A SWITCH is a SEEK in every step, on a second reader (THE SWITCH). THE INVARIANT, an
+       ordering: every refusal comes before the first host write, R1 -- nothing of the host is
+       touched before TK0 returns -- and in this mode s_rd is the second reader, B, the playing's
+       own never moved. So a refusal leaves B to tl_switch, which closes it, and calls no
+       sk_back: putting s_rd back restores everything a playing reads, except what every refused
+       seek also leaves -- the eye's lead (eye_begin) and the cleared click overlay -- and, in a
+       multiplayer playing, the materializer's rule mp_follow set from B's segment, which
+       tl_switch sets back from the first reader's. */
+    const int sw = s_seek.mode == SK_SWITCH;
     unsigned T = s_seek.T, prev = W->tick, h, nheads = 0, refused0, built0, P = s_seek.P;
     int D = s_seek.D;
     LARGE_INTEGER hz, t0, t1, t2;
@@ -7828,7 +7855,7 @@ static int seek_run(char* ta)
         recr_seek(s_rd, T, EYE_LEAD, eye_visit, &L, why, sizeof why);
     if (k <= 0) {
         sk_refused(tk, T, why);
-        if (k < 0 && !back) sk_back(&L, prev);
+        if (k < 0 && !back && !sw) sk_back(&L, prev);
         return 0;
     }
     if (!mp_follow(&L, T)) {
@@ -7841,7 +7868,7 @@ static int seek_run(char* ta)
     masks_init();
     if (!sk_bound(&L, V, &nheads, why, sizeof why)) {
         sk_refused(tk, T, why);
-        if (!back) sk_back(&L, prev);
+        if (!back && !sw) sk_back(&L, prev);
         return 0;
     }
     if (convert && !rw_prepare(ta, why, sizeof why)) {
@@ -8541,7 +8568,12 @@ static void rw_visit(void)
      the HUD's seek at a GameTime of its choosing, which a click on the timeline cannot name
      exactly.
    - `hud fork delete <id>` and `hud fork export <id> "<stem>"`: the HUD's fork maintenance of the
-     playing's file (tagpu_replay_fork_op); the frame visit's fork_poll logs the outcome.
+     playing's file (tagpu_replay_fork_op); the frame visit's fork_poll logs the outcome. The
+     deletion of the timeline that plays is a switch first (THE SWITCH).
+   - `timeline <id>`: the playing goes on in timeline id of its file, at the next frame visit
+     (tagpu_replay_watch_timeline, THE SWITCH): `watching timeline N from GameTime G (shared
+     history: no rebuild)`, `watching timeline N at GameTime T (sought from G in M ms)`, or
+     `watching timeline N refused: <why>`; a refusal the request can see is logged at once.
    - `hud state`: what the HUD's recorder calls answer, on any level, with or without a
      recording, a rewind's included, in three lines a test parses:
      `replay: NAME: hud state timelines <rows>; axis A..B; span F..L; watched N`, each row
@@ -8550,8 +8582,8 @@ static void rw_visit(void)
      tagpu_replay_span, tagpu_replay_timeline);
      `... hud state rewind <idle|flush|open|past|ending> available <0|1> span F..L G g T t`
      (tagpu_replay_rewind_state);
-     `... hud state result <serial> <none|takeover|rewind|fork|seek> op <op> <ok|refused>: <why>`
-     (tagpu_replay_result). The replay harness parses them: their format is an interface.
+     `... hud state result <serial> <none|takeover|rewind|fork|seek|switch> op <op>
+     <ok|refused>: <why>` (tagpu_replay_result). The replay harness parses them: their format is an interface.
    - `takeover <P> at <T>` or `takeover <P> at <T> difficulty <D>`: on a level that plays a
      recording, the takeover waits for the next frame visit after the first step (THE TAKEOVER);
      it takes over at the refresh at or before T, and says so when that is not T (tk_bound). A
@@ -8793,6 +8825,10 @@ static void trigger_read(void)
         tagpu_replay_seek_request(T);
         return;
     }
+    if (!strncmp(line, "timeline ", 9) && u32_word(line + 9, &T)) {
+        tagpu_replay_watch_timeline(T);
+        return;
+    }
     /* The harness compares the rebuilt frame before a step can alter it. The dump and
        pause belong to this frame visit, so the caller's polling latency cannot move it. */
     if (!strncmp(line, "seek-frame ", 11) &&
@@ -9031,12 +9067,230 @@ static void viewer_frame(void)
     E_MinimapFog();
 }
 
+/* The span is the chain's (F1): a fork's playing seeks and clamps within its own chain. The
+   root's first GameTime stays the summary's (span_read), and a file whose summary could not be
+   read keeps no span; for the original the last is the summary's too, both the first RB_END's.
+   Set when the chain is chosen (first_iteration) and when a switch changes it (tl_switch). */
+static void span_chain(void)
+{
+    if (s_span.ok) {
+        s_span.last = recr_selected(s_rd)->last;
+        s_span.ok = s_span.last > s_span.first;
+    }
+}
+
+/* ---- THE SWITCH (tagpu_replay_watch_timeline) ------------------------------------------------
+   A playing goes on in another timeline of its file without leaving the level, at the frame visit
+   after the request, between two steps (THE SEEK's place), in one of two ways, each exact:
+   - RE-CHAINED, when the reader has read nothing that is not on both chains (recr_rechain, THE
+     RE-CHAIN'S INVARIANT): the reader is then exactly one that had played the new timeline from
+     the start, and the host holds its world at the GameTime it is at, so nothing on the host
+     moves. A level held at a boundary is not shared: the boundary's step played the iteration's
+     events and read no images after it, so the reader is not where a playing of the new chain
+     would stand, and its seek serves it.
+   - SOUGHT, otherwise: a second reader of the same file, chosen on the new chain, and THE SEEK on
+     it to the host's GameTime + 1, which THE SEEK's invariant makes what a playing of the new
+     timeline holds there. The first reader is not moved: every refusal of seek_run comes before
+     its first host write (R1), so a refused switch puts the first reader back and the playing
+     goes on as if it had not been asked (seek_run, at `sw`).
+   THE CLAIMS' ORDER (tagpu_recfile.h, THE CLAIMS): every timeline a reader of this playing reads
+   is claimed, under the file queue's lock, from before that reader's scan until after it closes
+   -- the new timeline claimed before the re-chain's scan or the second reader opens, the left one
+   released after its reader closes (or, re-chained, after the reader has stopped reading it as
+   its last timeline). So "the timeline that plays is never deleted" holds through the window in
+   which two readers are open.
+   THE FILE'S LIFETIME: the second reader opens the playing's path while the first holds it open,
+   and an open reader's file can be neither replaced nor deleted (recr_open shares no DELETE;
+   file_compact's replacement fails on an open file), so both name one file; recr_same checks it.
+   A deletion of the watched timeline is this switch first, to the nearest live timeline up its
+   chain, and the deletion queued once the switch has released the claim, so the worker's in-use
+   test passes by construction (tagpu_replay_fork_op). */
+
+/* Timeline `id`'s last use, now, at the end of THE IN-LEVEL STAMPS: taken when a timeline is
+   left -- at a switch, and for the last one at the level's end -- so the order is the one the
+   timelines were watched in, least recently first. Bounded by REC_TIMELINE_ROWS: a full table
+   drops its oldest row. */
+static void used_stamp(unsigned id)
+{
+    uint64_t now = recfile_now();
+    unsigned i;
+    for (i = 0; i < s_nused && s_used[i].id != id; i++) {}
+    if (i == s_nused && s_nused == REC_TIMELINE_ROWS) i = 0;
+    if (i < s_nused) {
+        memmove(&s_used[i], &s_used[i + 1], (s_nused - i - 1) * sizeof *s_used);
+        s_nused--;
+    }
+    s_used[s_nused++] = (RecTimelineState){id, REC_TL_LIVE, {0}, (uint32_t)now,
+                                           (uint32_t)(now >> 32)};
+}
+
+/* a switch's refusal, at the request or at the frame visit: its line and outcome, and a deletion
+   that waited for it refused */
+static void sw_refused(unsigned id, unsigned del, const char* why)
+{
+    tagpu_logf("replay: %s: watching timeline %u refused: %s", tlc_open() ? s_name : "-", id,
+               why);
+    result_set(TAGPU_REPLAY_RQ_SWITCH, 0, 0, 0, why);
+    if (del) {
+        char w2[48];
+        snprintf(w2, sizeof w2, "could not leave timeline %u", del);
+        tagpu_logf("replay: %s: the HUD's fork request refused: %s", s_name, w2);
+        result_set(TAGPU_REPLAY_RQ_FORK, TAGPU_REPLAY_FORK_DELETE, 0, 0, w2);
+    }
+}
+
+/* the switch's success: timeline `id` plays from here on, the left one stamped and released */
+static void sw_done(unsigned left, unsigned id)
+{
+    char done[40];
+    used_stamp(left);
+    s_tl = id;
+    span_chain();
+    tlc_refresh();
+    recfile_release(left);
+    snprintf(done, sizeof done, "watching timeline %u", id);
+    result_set(TAGPU_REPLAY_RQ_SWITCH, 0, 1, 0, done);
+}
+
+/* a deletion that waited for its switch, queued now that the switch released its claim; its
+   ticket waits in the slot tagpu_replay_fork_op kept for it */
+static void sw_delete(unsigned del)
+{
+    unsigned i, t;
+    for (i = 0; i < FORK_TICKETS && s_fk[i].ticket; i++) {}
+    t = i < FORK_TICKETS ? fork_request(s_path, REC_FILE_DELETE, del, NULL, NULL) : 0;
+    if (!t) {
+        result_set(TAGPU_REPLAY_RQ_FORK, TAGPU_REPLAY_FORK_DELETE, 0, 0, "file worker unavailable");
+        return;
+    }
+    s_fk[i].ticket = t;
+    s_fk[i].op = TAGPU_REPLAY_FORK_DELETE;
+}
+
+/* the seek path: a second reader on timeline `id`'s chain, THE SEEK on it; 1 done, 0 refused with
+   the first reader back */
+static int sw_seek(char* ta, unsigned left, unsigned id, unsigned del)
+{
+    const unsigned now = *(const unsigned*)(ta + OFF_GAMETIME);
+    const int held = s_hold;
+    /* every field seek_run reads at its entry is the switch's; the request it replaces, a
+       boundary's or the user's, is given back when the switch is refused, and the user's is
+       asked again on the new chain when it is done */
+    const SeekRequest saved = s_seek;
+    char why[200];
+    RecReader* B = recr_open(s_path, why, sizeof why);
+    unsigned T = now + 1, last;
+    LARGE_INTEGER hz, t0, t1;
+    int ok = B != NULL;
+    Lv L;
+    if (ok && !recr_same(B, s_rd)) {
+        snprintf(why, sizeof why, "%s is no longer the file this level plays", s_path);
+        ok = 0;
+    }
+    if (!ok || recr_timeline(B, id, why, sizeof why) != 1) {
+        recr_close(B);
+        recfile_release(id);
+        sw_refused(id, del, why);
+        return 0;
+    }
+    last = recr_selected(B)->last;
+    if (T < s_span.first + 1) T = s_span.first + 1;
+    if (T > last) T = last;
+    memset(&s_seek, 0, sizeof s_seek);
+    s_seek.T = T;
+    s_seek.mode = SK_SWITCH;
+    s_sw.prev = s_rd;
+    s_rd = B;
+    QueryPerformanceFrequency(&hz);
+    QueryPerformanceCounter(&t0);
+    ok = seek_run(ta);
+    QueryPerformanceCounter(&t1);
+    if (!ok) {
+        /* THE RESTORATION: seek_run moved B alone and wrote nothing to the host (seek_run, at
+           `sw`). A multiplayer playing's materializer follows the segment the reader stands in,
+           which a refusal after its mp_follow left as B's: A's is put back as sk_back puts it,
+           at A's GameTime, and a failure stops the playing there. */
+        s_rd = s_sw.prev;
+        s_sw.prev = NULL;
+        recr_close(B);
+        recfile_release(id);
+        if (s_mp.level && level_of(ta, &L)) mp_follow(&L, recr_world(s_rd)->tick);
+        s_seek = saved;
+        s_hold = held;
+        sw_refused(id, del, "the seek refused");
+        return 0;
+    }
+    recr_close(s_sw.prev);
+    s_sw.prev = NULL;
+    sw_done(left, id);
+    s_hold = 0;
+    if (saved.pending && !saved.boundary) {
+        s_seek = saved;
+        s_seek.mode = SK_SEEK;
+        if (s_span.ok && s_seek.T < s_span.first + 1) s_seek.T = s_span.first + 1;
+        if (s_span.ok && s_seek.T > s_span.last) s_seek.T = s_span.last;
+    }
+    tagpu_logf("replay: %s: watching timeline %u at GameTime %u (sought from %u in %u ms)",
+               s_name, id, T, now, sk_ms(t1.QuadPart - t0.QuadPart, hz.QuadPart));
+    return 1;
+}
+
+/* THE SWITCH, at the frame visit. pend_finish comes first, with s_rd still the first reader: its
+   images read recr_world(s_rd) for the step it holds, and a step of the new reader's world would
+   be another iteration's; with nothing held it only clears the empty store and logs counts a
+   recording's end left waiting, once, so seek_run's own call after it finds nothing. */
+static void tl_switch(char* ta)
+{
+    const unsigned left = s_tl, id = s_sw.id, del = s_sw.then_delete;
+    char why[200];
+    int k;
+    s_sw.pending = 0;
+    s_sw.then_delete = 0;
+    /* a takeover asked since replaces the switch, as the latest request does */
+    if (s_tk.on || (s_seek.pending && s_seek.mode == SK_TAKEOVER)) {
+        sw_refused(id, del, "a takeover was asked since");
+        return;
+    }
+    if (id == left) {
+        snprintf(why, sizeof why, "timeline %u plays already", id);
+        sw_refused(id, del, why);
+        return;
+    }
+    pend_finish();
+    if (!recfile_claim(s_path, id)) {
+        snprintf(why, sizeof why, "timeline %u is being deleted, or the file cannot be opened",
+                 id);
+        sw_refused(id, del, why);
+        return;
+    }
+    k = s_hold ? 0 : recr_rechain(s_rd, id, why, sizeof why);
+    if (k < 0) {
+        recfile_release(id);
+        sw_refused(id, del, why);
+        return;
+    }
+    if (k == 1) {
+        sw_done(left, id);
+        /* a seek the user asked for still runs, within the new chain */
+        if (s_seek.pending && s_span.ok) {
+            if (s_seek.T < s_span.first + 1) s_seek.T = s_span.first + 1;
+            if (s_seek.T > s_span.last) s_seek.T = s_span.last;
+        }
+        tagpu_logf("replay: %s: watching timeline %u from GameTime %u (shared history: no "
+                   "rebuild)", s_name, id, *(const unsigned*)(ta + OFF_GAMETIME));
+    } else if (!sw_seek(ta, left, id, del)) {
+        return;
+    }
+    if (del) sw_delete(del);
+}
+
 /* THE FRAME VISIT, before the in-play draw call 0x4969CD, on the game thread, between two sim
    steps and on paused frames too: the trigger, the queued rewind verb (THE REWIND'S VERBS), the
    HUD's finished fork requests and the rewind's own progress; then, on a level that plays a
    recording and has played its first step, the timelines cache when a file job has finished
-   (THE TIMELINES CACHE), and a pending seek (THE SEEK) or takeover (THE TAKEOVER), or else, once
-   a GameTime, what the draw after a step shows (THE GLOBALS AND THE PROJECTILES). A seek or a
+   (THE TIMELINES CACHE), a pending switch (THE SWITCH), and a pending seek (THE SEEK) or takeover
+   (THE TAKEOVER), or else, once a GameTime, what the draw after a step shows (THE GLOBALS AND THE
+   PROJECTILES). A seek or a
    takeover the trigger puts in place of a boundary's and that is refused leaves the reader at the
    boundary (sk_back), so the hold and its seek are put back. */
 static void frame_visit(void)
@@ -9055,6 +9309,7 @@ static void frame_visit(void)
     if (s_tlc.done != recfile_completed()) tlc_refresh();  /* a file job finished */
     ta = ta_main();
     if (!ta) return;
+    if (s_sw.pending) tl_switch(ta);     /* THE SWITCH, before the seek it may replace */
     if (s_seek.pending) {
         const int boundary = s_seek.boundary, held = s_hold, ok = seek_run(ta);
         s_hold = 0;
@@ -9232,14 +9487,7 @@ static int first_iteration(char* ta, Lv* L, char* why, unsigned cap)
         tagpu_logf("replay: %s: playing timeline %u (parent %u, forked at GameTime %u)", s_name,
                    t->id, t->parent, t->fork_at);
     }
-    /* the span is the chain's (F1): a fork's playing seeks and clamps within its own chain. The
-       root's first GameTime stays the summary's (span_read), and a file whose summary could not
-       be read keeps no span; for the original the last is the summary's too, both the first
-       RB_END's */
-    if (s_span.ok) {
-        s_span.last = recr_selected(s_rd)->last;
-        s_span.ok = s_span.last > s_span.first;
-    }
+    span_chain();
     tlc_refresh();
     return 1;
 }
@@ -9401,13 +9649,20 @@ void tagpu_replay_level_end(void)
                    s_name, ta ? *(const unsigned*)(ta + OFF_GAMETIME) : 0);
     pend_clear();
     if (s_rd && !s_dead) {
-        unsigned id = recr_selected(s_rd)->id;
+        RecTimelineState rows[REC_TIMELINE_ROWS];
+        unsigned id = recr_selected(s_rd)->id, i, n = 1;
         char path[MAX_PATH];
         snprintf(path, sizeof path, "%s", s_path);
         replay_close();
-        if (!recfile_request(path, REC_FILE_TOUCH, id, NULL, NULL))
+        /* one touch with every timeline the level played: the last first, then the others in
+           the order they were left (THE IN-LEVEL STAMPS) */
+        used_stamp(id);
+        rows[0] = s_used[s_nused - 1];
+        for (i = 0; i + 1 < s_nused; i++) rows[n++] = s_used[i];
+        if (!recfile_touch(path, rows, n))
             tagpu_logf("replay: forks %s: touch skipped: file worker unavailable", path);
     } else replay_close();
+    s_nused = 0;
     tagpu_puppet_end();
     /* the loader has exited (THE VIEWER'S BUFFERS' ORDERING), and from here no frame visit runs
        viewer_frame: the puppet mode is off */
@@ -9561,10 +9816,34 @@ int tagpu_replay_axis(unsigned* first, unsigned* last)
     return 1;
 }
 
+/* a live row of the cache with that id: the request's first filter, which the frame visit's
+   scan of the file then decides (tl_switch) */
+static int tlc_live(unsigned id)
+{
+    int i;
+    for (i = 0; i < s_tlc.n; i++)
+        if (s_tlc.row[i].id == id) return s_tlc.row[i].live;
+    return 0;
+}
+
+/* The deletion of the timeline that plays: the nearest live timeline up its chain, from the
+   leaf's parent toward the root, by the cache; UINT32_MAX for none. */
+static unsigned fork_fallback(void)
+{
+    unsigned ids[RECR_TIMELINES], n = recr_chain_ids(s_rd, ids, RECR_TIMELINES);
+    if (n > RECR_TIMELINES) n = RECR_TIMELINES;
+    while (n-- > 1)
+        if (tlc_live(ids[n - 1])) return ids[n - 1];
+    return UINT32_MAX;
+}
+
 int tagpu_replay_fork_op(int op, unsigned id, const char* stem)
 {
     char why[96], output[MAX_PATH];
-    unsigned i, t, slot = FORK_TICKETS;
+    unsigned i, t, slot = FORK_TICKETS, fallback = UINT32_MAX, nfree = 0;
+    /* a switch-then-delete waiting holds a ticket's slot for its deletion, so that one is free
+       when the switch is done (sw_delete): fork_poll, before it in the frame visit, only frees */
+    const unsigned held = s_sw.pending && s_sw.then_delete;
     why[0] = 0;
     if (!tagpu_replay_live())
         snprintf(why, sizeof why, "the level plays no recording");
@@ -9575,16 +9854,37 @@ int tagpu_replay_fork_op(int op, unsigned id, const char* stem)
     else if (op == TAGPU_REPLAY_FORK_EXPORT && (!stem || !fork_stem(stem)))
         snprintf(why, sizeof why, "the export's name is not a file name");
     else {
-        for (i = 0; i < FORK_TICKETS && slot == FORK_TICKETS; i++)
-            if (!s_fk[i].ticket) slot = i;
-        if (slot == FORK_TICKETS)
+        for (i = 0; i < FORK_TICKETS; i++)
+            if (!s_fk[i].ticket) {
+                if (slot == FORK_TICKETS) slot = i;
+                nfree++;
+            }
+        if (nfree <= held)
             snprintf(why, sizeof why, "four fork requests are already waiting");
+        else if (op == TAGPU_REPLAY_FORK_DELETE && id == s_tl) {
+            fallback = fork_fallback();
+            if (fallback == UINT32_MAX)
+                snprintf(why, sizeof why, "the last live timeline of this chain plays");
+            else if (s_sw.pending || (s_seek.pending && s_seek.mode == SK_TAKEOVER))
+                snprintf(why, sizeof why, "another request is waiting");
+        }
     }
     if (why[0]) {
         tagpu_logf("replay: %s: the HUD's fork request refused: %s", tlc_open() ? s_name : "-",
                    why);
         result_set(TAGPU_REPLAY_RQ_FORK, op, 0, 0, why);
         return 0;
+    }
+    /* the timeline that plays: a switch to its fallback first, the deletion once the switch has
+       released its claim (THE SWITCH) */
+    if (fallback != UINT32_MAX) {
+        s_sw.pending = 1;
+        s_sw.id = fallback;
+        s_sw.then_delete = id;
+        s_sw.prev = NULL;
+        tagpu_logf("replay: %s: the HUD's deletion of timeline %u waits for the switch to "
+                   "timeline %u", s_name, id, fallback);
+        return 1;
     }
     if (op == TAGPU_REPLAY_FORK_EXPORT)
         snprintf(output, sizeof output, "replays\\%s.imprec", stem);
@@ -9624,6 +9924,35 @@ static void fork_poll(void)
         s_fk[i].ticket = 0;
         s_tlc.done = ~recfile_completed();
     }
+}
+
+int tagpu_replay_watch_timeline(unsigned id)
+{
+    char why[96];
+    why[0] = 0;
+    if (!tagpu_replay_live())
+        snprintf(why, sizeof why, "this level plays no recording");
+    else if (s_rw.state)
+        snprintf(why, sizeof why, "live rewind owns the level");
+    else if (s_tk.on || (s_seek.pending && s_seek.mode == SK_TAKEOVER))
+        snprintf(why, sizeof why, "a takeover is waiting");
+    else if (s_sw.pending && s_sw.then_delete)
+        snprintf(why, sizeof why, "the deletion of timeline %u waits for its switch",
+                 s_sw.then_delete);
+    else if (id == s_tl)
+        snprintf(why, sizeof why, "timeline %u plays already", id);
+    else if (!tlc_live(id))
+        snprintf(why, sizeof why, "timeline %u is absent or deleted", id);
+    if (why[0]) {
+        sw_refused(id, 0, why);
+        return 0;
+    }
+    s_sw.pending = 1;
+    s_sw.id = id;
+    s_sw.then_delete = 0;
+    s_sw.prev = NULL;
+    tagpu_logf("replay: %s: watching timeline %u waits for the frame visit", s_name, id);
+    return 1;
 }
 
 int tagpu_replay_rewind(int op, unsigned T, const char* dump)
@@ -9674,7 +10003,7 @@ void tagpu_replay_result(TAGPU_REPLAY_RESULT* out)
 static void hud_state_log(void)
 {
     static const char* const states[] = {"idle", "flush", "open", "past", "ending"};
-    static const char* const kinds[] = {"none", "takeover", "rewind", "fork", "seek"};
+    static const char* const kinds[] = {"none", "takeover", "rewind", "fork", "seek", "switch"};
     TAGPU_REPLAY_TIMELINE tl[RECR_TIMELINES];
     TAGPU_REPLAY_RWSTATE rw;
     TAGPU_REPLAY_RESULT res;
@@ -9706,7 +10035,7 @@ static void hud_state_log(void)
                rw.G, rw.T);
     tagpu_replay_result(&res);
     tagpu_logf("replay: %s: hud state result %u %s op %d %s: %s", name, res.serial,
-               (unsigned)res.kind < 5 ? kinds[res.kind] : "?", res.op, res.ok ? "ok" : "refused",
+               (unsigned)res.kind < 6 ? kinds[res.kind] : "?", res.op, res.ok ? "ok" : "refused",
                res.why);
 }
 

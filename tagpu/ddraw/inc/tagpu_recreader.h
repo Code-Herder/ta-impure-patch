@@ -292,6 +292,12 @@ int recr_timelines(RecReader* r, RecTimeline* out, unsigned cap, char* why, unsi
    iterations, or a segment whose header differs in shape from the first's; -1 an iteration has
    been read already, or the file cannot be read. */
 int recr_timeline(RecReader* r, unsigned id, char* why, unsigned cap);
+/* Re-chains a reader that is playing onto timeline `id`, when every segment it has read and the
+   iteration it holds are on id's chain as well: 1 re-chained -- its world, its decoder, its
+   segment and its file position untouched, the chain after them replaced; 0 not shared, the
+   reader unchanged; -1 (why) the file cannot be read, or id is absent, deleted, or forks outside
+   its parent (recr_timeline's refusals), the reader unchanged. */
+int recr_rechain(RecReader* r, unsigned id, char* why, unsigned cap);
 /* the chosen timeline */
 const RecTimeline* recr_selected(const RecReader* r);
 /* The chain that plays, root first: its timelines' ids, at most `cap` into `ids`; their count.
@@ -308,10 +314,18 @@ int recr_segment_cells(const RecReader* r);
    TK0). A torn last block is not kept, an unfinished last segment with no complete iteration is
    cut whole, and the parent is the chosen chain's segment that holds `at`. 1, or 0 (why): `at` is
    outside the chain, `at + 1` is a chain segment's first iteration, the file holds
-   RECR_TIMELINES segments, a block is damaged with data after it, or the file cannot be read. */
-int recr_append_point(RecReader* r, unsigned at, RecAppend* a, char* why, unsigned cap);
+   RECR_TIMELINES segments, a block is damaged with data after it, or the file cannot be read.
+   The fork's eviction and the rows it writes (a->states) take each timeline's last-used time as
+   the later of the file's and `used`'s row for it. `used`: last-used times this process holds for
+   timelines it has played and not yet written (NULL, 0 for none). */
+int recr_append_point(RecReader* r, unsigned at, RecAppend* a, const RecTimelineState* used,
+                      unsigned nused, char* why, unsigned cap);
 /* 1 when the file HANDLE `f` is the file the reader holds open: one volume, one file index */
 int recr_same_file(const RecReader* r, void* f);
+/* 1 when both readers hold one file open: one volume, one file index. A value check of the two
+   handles as they are now; what keeps the answer true is the caller's, the file a reader holds
+   open, which no maintenance can replace or delete (recr_open's share mode, file_compact) */
+int recr_same(const RecReader* a, const RecReader* b);
 /* The last refresh iteration at or before T of the chosen chain, found afresh from the index: the
    largest `last` <= T of a stream block with RBF_REFRESH in the chain's segment that covers T, or
    that segment's first iteration (tagpu_reclossy.h, reclossy_refresh_at), and with `seg` that

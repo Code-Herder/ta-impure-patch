@@ -3997,7 +3997,7 @@ static int outcomes_reader(const RecCodecParams* p)
     got = rd_seeks(path, 1, 25, 3, 40, 25, why, sizeof why);
     if (got != 3) printf("  %s\n", why);
     ok &= expect("  and its own 3", got, 3);
-    k = recr_manage(path, REC_FILE_EXPORT, 1, out, why, sizeof why);
+    k = recr_manage(path, REC_FILE_EXPORT, 1, out, NULL, 0, why, sizeof why);
     if (!k) printf("  %s\n", why);
     {
         WIN32_FILE_ATTRIBUTE_DATA a;

@@ -46,8 +46,8 @@ enum RecFileOp { REC_FILE_TOUCH, REC_FILE_DELETE, REC_FILE_EXPORT, REC_FILE_COMP
 /* The worker owns copies of the paths. A full queue or an exiting process refuses the request;
    it never runs file maintenance on the caller's thread. The request's TICKET, never 0, whose
    outcome recfile_result gives; 0 when it is refused before it is queued (a bad argument, no
-   memory, every worker busy, the process exiting). A deletion refused because a playing holds
-   the timeline is a queued request whose outcome is that refusal. */
+   memory, every worker busy, the process exiting). A deletion refused because a playing claims
+   the timeline (THE CLAIMS) is a queued request whose outcome is that refusal. */
 unsigned recfile_request(const char* path, unsigned op, unsigned id, const char* output,
                          const char* request);
 /* A ticket's outcome: 0 still queued or running; 1 done; -1 refused, `why` filled; -2 unknown --
@@ -58,13 +58,28 @@ int recfile_result(unsigned ticket, char* why, unsigned cap);
    some file may have changed. Any thread, without the queue's lock. */
 unsigned recfile_completed(void);
 void recfile_exit(void);
-/* A playing and a queued deletion reserve canonical path, file identity and timeline under
-   the same lock; replacement of the file cannot erase its path reservation.
-   A playing cannot start while its deletion is pending, nor can its deletion be queued. */
+/* REC_FILE_TOUCH with every row a playing stamped, the first its last timeline: the ticket, or 0
+   as recfile_request refuses. */
+unsigned recfile_touch(const char* path, const RecTimelineState* rows, unsigned n);
+/* THE CLAIMS. A playing reserves the timeline it plays, and a switch the one it moves to, from
+   before its reader reads the file's metadata until after that reader closes. A deletion of a
+   reserved timeline is refused, and a claim of a timeline with a deletion queued is refused.
+   A claim and a queued deletion both name a canonical path, a file identity and a timeline,
+   under the queue's lock; replacement of the file cannot erase its path reservation.
+   recfile_play: the playing's claim, every other cleared; 0 when that timeline's deletion is
+   queued or the file cannot be opened. recfile_claim: one more claim, 0 refused as recfile_play
+   refuses or when both are taken. recfile_release: the first claim of timeline `id` cleared;
+   recfile_leave: every claim. Game thread. */
 int recfile_play(const char* path, unsigned id);
+int recfile_claim(const char* path, unsigned id);
+void recfile_release(unsigned id);
 void recfile_leave(void);
 
-/* File-only work, called by maintenance workers. No engine state is read. */
+/* File-only work, called by maintenance workers. No engine state is read. `rows`, a touch's
+   alone (NULL, 0 for every other op): the timelines a playing stamped, the first `id`, its last
+   timeline. A touch sets each row's live timeline's last-used time to the later of the file's and
+   the row's, skips a row whose timeline is absent or deleted, and refuses when the first row's
+   is. */
 int recr_manage(const char* path, unsigned op, unsigned id, const char* output,
-                char* why, unsigned cap);
+                const RecTimelineState* rows, unsigned nrows, char* why, unsigned cap);
 #endif

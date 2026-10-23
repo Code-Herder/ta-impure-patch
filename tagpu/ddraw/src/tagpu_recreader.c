@@ -2067,15 +2067,15 @@ static const char* shape_differs(const RecHeader* a, const RecHeader* b)
     return NULL;
 }
 
-int recr_timeline(RecReader* r, unsigned id, char* why, unsigned cap)
+/* Timeline `id`'s chain, root first, into path[0 .. *n) as segment indices: 1, or 0 (why) when
+   there is no such timeline, it is deleted, a segment of it forks outside its parent's
+   iterations, or its header differs in shape from the first's. It reads only the last scan's
+   tables. recr_timeline and recr_rechain both choose a chain through it, so the two cannot accept
+   different chains. */
+static int chain_of(RecReader* r, unsigned id, unsigned* path, unsigned* n, char* why,
+                    unsigned cap)
 {
-    unsigned path[RECR_TIMELINES], n = 0, i, s;
-    if (r->read_any) {
-        snprintf(why, cap, "a timeline is chosen before the first iteration");
-        return -1;
-    }
-    if (segs_scan(r, 0, why, cap) < 0) return -1;
-    s = seg_index(r, id);
+    unsigned up[RECR_TIMELINES], k = 0, i, s = seg_index(r, id);
     if (s == RECR_TIMELINES) {
         snprintf(why, cap, "the recording has no timeline %u", id);
         return 0;
@@ -2086,13 +2086,13 @@ int recr_timeline(RecReader* r, unsigned id, char* why, unsigned cap)
     }
     /* by parents to the original: each parent is an earlier segment (segs_scan's bounds) */
     for (;;) {
-        path[n++] = s;
+        up[k++] = s;
         if (!s) break;
         s = seg_index(r, r->seg[s].t.parent);
     }
-    for (i = 0; i + 1 < n; i++) {
-        const RecSeg* p = &r->seg[path[n - 1 - i]];
-        const RecSeg* c = &r->seg[path[n - 2 - i]];
+    for (i = 0; i + 1 < k; i++) {
+        const RecSeg* p = &r->seg[up[k - 1 - i]];
+        const RecSeg* c = &r->seg[up[k - 2 - i]];
         const char* field;
         if (!p->nstream || !c->nstream || p->t.first >= c->t.fork_at ||
             c->t.fork_at - 1 > p->t.last || c->t.first != c->t.fork_at) {
@@ -2107,9 +2107,23 @@ int recr_timeline(RecReader* r, unsigned id, char* why, unsigned cap)
             return 0;
         }
     }
+    for (i = 0; i < k; i++) path[i] = up[k - 1 - i];
+    *n = k;
+    return 1;
+}
+
+int recr_timeline(RecReader* r, unsigned id, char* why, unsigned cap)
+{
+    unsigned path[RECR_TIMELINES], n = 0, i;
+    if (r->read_any) {
+        snprintf(why, cap, "a timeline is chosen before the first iteration");
+        return -1;
+    }
+    if (segs_scan(r, 0, why, cap) < 0) return -1;
+    if (!chain_of(r, id, path, &n, why, cap)) return 0;
     for (i = 0; i < n; i++) {
-        r->chain[i] = path[n - 1 - i];
-        r->chain_id[i] = r->seg[r->chain[i]].t.id;
+        r->chain[i] = path[i];
+        r->chain_id[i] = r->seg[path[i]].t.id;
     }
     r->nchain = n;
     r->cur = 0;
@@ -2122,10 +2136,49 @@ int recr_timeline(RecReader* r, unsigned id, char* why, unsigned cap)
     return 1;
 }
 
-int recr_append_point(RecReader* r, unsigned at, RecAppend* a, char* why, unsigned cap)
+/* THE RE-CHAIN'S INVARIANT, structural. A reader's state is a function of the blocks of
+   chain[0 .. cur] it has applied, up to w.tick: two chains that share chain[0 .. cur] hold that
+   segment's iterations identically, and a chain decides only where reading LEAVES a segment
+   (cover_end). recr_tick consults the chain in its boundary test before each read and nowhere
+   else. So when the new chain shares chain[0 .. cur] and covers w.tick in its own chain[cur] --
+   w.tick <= its child's fork_at - 1, or its own last when it has no child -- the iteration
+   already read is inside the new chain's coverage, and afterwards the reader is exactly one that
+   had played `id` from the start. A reader that has read nothing, stands between segments or has
+   read its end is not shared: a seek serves it. */
+int recr_rechain(RecReader* r, unsigned id, char* why, unsigned cap)
+{
+    unsigned path[RECR_TIMELINES], n = 0, i, end;
+    if (segs_scan(r, 0, why, cap) < 0) return -1;
+    if (!chain_of(r, id, path, &n, why, cap)) return -1;
+    if (!r->read_any || !r->in_seg || r->ended || r->cur >= n) {
+        snprintf(why, cap, "the reader stands at no iteration timeline %u shares", id);
+        return 0;
+    }
+    for (i = 0; i <= r->cur; i++)
+        if (path[i] != r->chain[i]) {
+            snprintf(why, cap, "timeline %u does not share timeline %u's history", id,
+                     r->seg[r->chain[i]].t.id);
+            return 0;
+        }
+    end = r->cur + 1 < n ? r->seg[path[r->cur + 1]].t.fork_at - 1 : r->seg[path[r->cur]].t.last;
+    if (r->w.tick > end) {
+        snprintf(why, cap, "timeline %u leaves this history at GameTime %u, before %u", id,
+                 end + 1, r->w.tick);
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        r->chain[i] = path[i];
+        r->chain_id[i] = r->seg[path[i]].t.id;
+    }
+    r->nchain = n;
+    return 1;
+}
+
+int recr_append_point(RecReader* r, unsigned at, RecAppend* a, const RecTimelineState* used,
+                      unsigned nused, char* why, unsigned cap)
 {
     const RecSeg* last;
-    unsigned i, keep, hold;
+    unsigned i, k, keep, hold;
     int cut;
     memset(a, 0, sizeof *a);
     if (segs_scan(r, 1, why, cap) < 0) return 0;
@@ -2168,12 +2221,20 @@ int recr_append_point(RecReader* r, unsigned at, RecAppend* a, char* why, unsign
         for (i = 0; i < keep; i++) {
             const RecTimeline* t = &r->seg[i].t;
             RecTimelineState* row = &a->states[a->nstates++];
-            *row = (RecTimelineState){t->id, (uint8_t)t->state, {0},
-                                     (uint32_t)t->last_used, (uint32_t)(t->last_used >> 32)};
+            /* the later of the file's stamp and this process's: another process may have
+               stamped the file after this one played the timeline */
+            uint64_t lu = t->last_used;
+            for (k = 0; k < nused; k++)
+                if (used[k].id == t->id) {
+                    uint64_t u = ((uint64_t)used[k].used_high << 32) | used[k].used_low;
+                    if (u > lu) lu = u;
+                }
+            *row = (RecTimelineState){t->id, (uint8_t)t->state, {0}, (uint32_t)lu,
+                                     (uint32_t)(lu >> 32)};
             if (t->id && t->state == REC_TL_LIVE) {
                 live++;
-                if (t->id != selected && (a->evict == UINT32_MAX || t->last_used < oldest)) {
-                    oldest = t->last_used;
+                if (t->id != selected && (a->evict == UINT32_MAX || lu < oldest)) {
+                    oldest = lu;
                     a->evict = t->id;
                 }
             }
@@ -2238,6 +2299,11 @@ int recr_same_file(const RecReader* r, void* f)
     return GetFileInformationByHandle(r->f, &a) && GetFileInformationByHandle(f, &b) &&
            a.dwVolumeSerialNumber == b.dwVolumeSerialNumber &&
            a.nFileIndexHigh == b.nFileIndexHigh && a.nFileIndexLow == b.nFileIndexLow;
+}
+
+int recr_same(const RecReader* a, const RecReader* b)
+{
+    return recr_same_file(a, b->f);
 }
 
 static void mp_read_free(RecMpRead* m)
@@ -3203,13 +3269,19 @@ done:
 }
 
 int recr_manage(const char* path, unsigned op, unsigned id, const char* output,
-                char* why, unsigned cap)
+                const RecTimelineState* used, unsigned nused, char* why, unsigned cap)
 {
     HANDLE f, lock;
     RecReader* r;
     RecTimelineState rows[REC_TIMELINE_ROWS];
-    unsigned n, s;
+    unsigned n, s, i, nt = 0;
+    size_t k = 0;
+    char touched[96] = "";
     int ok = 0;
+    if (op == REC_FILE_TOUCH && (!used || !nused || used[0].id != id)) {
+        snprintf(why, cap, "a touch names its timelines, timeline %u first", id);
+        return 0;
+    }
     lock = recfile_lock(path, why, cap);
     if (!lock) return 0;
     f = CreateFileA(path, op == REC_FILE_EXPORT ? GENERIC_READ : GENERIC_READ | GENERIC_WRITE,
@@ -3233,10 +3305,22 @@ int recr_manage(const char* path, unsigned op, unsigned id, const char* output,
         ok = file_compact(r, path, output, id, why, cap);
         goto done;
     }
+    if (op == REC_FILE_DELETE) r->seg[s].t.state = REC_TL_DELETED;
+    if (op == REC_FILE_TOUCH) {
+        /* the later of each stamp: another process may have stamped the file after the playing
+           did; the touched ids are listed in the rows' order, the first the playing's last */
+        for (i = 0; i < nused; i++) {
+            unsigned j = seg_index(r, used[i].id);
+            uint64_t u = ((uint64_t)used[i].used_high << 32) | used[i].used_low;
+            if (j == RECR_TIMELINES || r->seg[j].t.state != REC_TL_LIVE) continue;
+            if (u > r->seg[j].t.last_used) r->seg[j].t.last_used = u;
+            if (k < sizeof touched)
+                k += (size_t)snprintf(touched + k, sizeof touched - k, "%s%u", nt ? ", " : "",
+                                      used[i].id);
+            nt++;
+        }
+    }
     if (op == REC_FILE_TOUCH || op == REC_FILE_DELETE) {
-        uint64_t now = recfile_now();
-        if (op == REC_FILE_DELETE) r->seg[s].t.state = REC_TL_DELETED;
-        else r->seg[s].t.last_used = now;
         n = metadata_rows(r, rows);
         if (!seek_to(f, r->file_end) || !SetEndOfFile(f) ||
             !stored_block(f, RB_TIMELINES, 0, rows, n * sizeof *rows) || !FlushFileBuffers(f)) {
@@ -3248,8 +3332,12 @@ int recr_manage(const char* path, unsigned op, unsigned id, const char* output,
     if (op == REC_FILE_TOUCH || op == REC_FILE_DELETE) {
         char detail[160];
         snprintf(detail, sizeof detail, "%s", why);
-        snprintf(why, cap, "%s timeline %u%s%s", op == REC_FILE_TOUCH ? "touched" : "deleted",
-                 id, ok ? "; " : "; compaction deferred: ", detail);
+        if (op == REC_FILE_DELETE)
+            snprintf(why, cap, "deleted timeline %u%s%s", id, ok ? "; " : "; compaction deferred: ",
+                     detail);
+        else
+            snprintf(why, cap, "touched timeline%s %s%s%s", nt > 1 ? "s" : "",
+                     touched, ok ? "; " : "; compaction deferred: ", detail);
         ok = 1;              /* the complete metadata block is already committed */
     }
 done:
