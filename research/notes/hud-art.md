@@ -548,24 +548,42 @@ The mockup (`hud.js`, `hud.css`) and the DLL (`tagpu_hudlay_expand` in
 `tagpu/ddraw/src/tagpu_hudlay.c`) draw a part by the same rules. The mockup composes images; the
 DLL emits textured quads.
 
+- **The box is snapped to whole device pixels,** each edge rounded half up, as Chrome snaps an
+  element. Every rule below works in the snapped box. The DLL snaps a part's box in
+  `tagpu_hudlay_expand`, and a solid's, a dot's and a clip's in `tagpu_huddraw.c` (`snap`): the
+  rasteriser's pixel-centre rule alone rounds an edge that falls exactly on a half pixel *down*.
+  At 1920 × 1080 and replay HUD 100, 1.5 pixels a unit, many edges fall on halves: the lanes
+  plate spans 874.5 to 958.5 and the Take over button 928.5 to 958.5. MEASURED 2026-10-23 on the
+  build before the snap: the game drew both a row higher than the mockup, the plate's light top
+  band from row 874 and its dark bottom band from 957, the mockup from 875 and 958.
 - **A grid part** is drawn through the **band map**. Drawn at a length T for a design length D
   with stretch bands of total length S:
     - every stretch band is multiplied by (T − (D − S)) / S;
     - everything outside the bands keeps its painted length;
     - drawn shorter than its fixed bands (T < D − S), the whole part scales uniformly instead;
-    - the mockup composes the part into one canvas per drawn size, cell by cell, the cells
-      sharing rounded pixel edges (`composeGrid`), and the DLL draws one quad per cell.
-- **A 9-slice part** is drawn as CSS `border-image` draws it. The slice's edges keep their size
-  in units, unless the box is smaller than two of them together; then all four shrink by one
-  factor f. The middle stretches.
+    - the cells share edges rounded to whole pixels from the box's corner.
+- **A 9-slice part** keeps its slice's edges at their size in units, unless the box is smaller
+  than two of them together; then all four shrink by one factor f. An edge is drawn a whole
+  number of pixels wide, floored, and a thinner one a pixel wide, as CSS snaps a border width. The
+  middle stretches.
 - **An `xtile` part's x band repeats.** It is drawn as n = max(1, round(drawn band length /
-  painted band length)) copies, each taking an equal share of the drawn band. Along y the band
-  still stretches.
+  painted band length)) copies, each taking an equal share of the drawn band, their edges rounded
+  to whole pixels. Along y the band still stretches.
     - **For a grid part,** the painted band length is the band's design length.
-    - **For a 9-slice,** it is the middle's painted width at the edges' scale (×f). This is how
-      CSS `border-image-repeat: round` sizes the tile from the top edge's scale, which the mockup
-      uses (`round stretch`).
+    - **For a 9-slice,** it is the middle's painted width at its row's edge scale: the top and
+      middle rows at the top edge's drawn width over its slice, the bottom row at the bottom
+      edge's. This is how CSS `border-image-repeat: round` sizes the tile.
     - In the DLL each copy is one more quad with the band's own texture coordinates.
+- **The mockup composes the grid and 9-slice parts and the tiled fills itself,** on a canvas of
+  the snapped box's size (`composeGrid`, `composeNine`, `composeTile`), and samples every piece
+  as the DLL's GPU does (`paint`): from the part's premultiplied texels and a mip chain made as
+  `blit_chain` makes it, through a linear filter between the two levels the piece's larger scale
+  falls between (`mk_sampler` in `tagpu_vk_hud.c`). Chrome's own resampling differs: its
+  `border-image` drew the Take over button's middle with no mip levels, so the scratches painted
+  into it showed as aliased "/" marks the game's minified middle does not have, and its canvas
+  `drawImage` gives the same picture at every `imageSmoothingQuality`, sharper than the game's
+  along the less-minified axis. A grid or 9-slice part keeps its pieces in `data-quads`, and
+  `tools/hudart/laycheck.py` compares them, edge for edge, with the DLL's.
 - **The DLL's bound.** The DLL draws a part into at most `HUD_MAXQUAD` = (2 · `HUD_MAXBAND` + 1)²
   = 289 quads, `HUD_MAXBAND` being 8 (`tagpu_hudlay.h`). That is every cell of the largest grid
   the loader accepts. The copies are fitted to what is left once every cell has its quad, so a
@@ -574,11 +592,10 @@ DLL emits textured quads.
       rest. `rail_one`, with 5 rows of 3 cells, allows 55 copies.
     - **A 9-slice's middle** allows 1 + 289 / 3 − 3 = 94 copies.
     - The mockup does not cap the copies.
-- **A tiled fill** is scaled to its drawn height and repeated along x at a whole-pixel period. The
-  mockup scales it inside a strip of three copies, so the resampling at its edges sees its
-  periodic neighbours.
+- **A tiled fill** is scaled to its drawn height and repeated along x at a whole-pixel period, one
+  piece whose texture coordinates run past 1 through a repeating sampler.
 - **An icon** is drawn whole inside its box, keeping its aspect, centred. **A whole part** is
-  stretched to its box.
+  stretched to its box. The mockup draws both as CSS backgrounds.
 
 **The timeline housing at 3840 × 2160,** with the game's HUD at 150 (a 192-pixel panel).
 It is 1216 / s − 310 units long, s being the replay HUD's scale; its fixed cells are 144.13 units

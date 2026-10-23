@@ -197,18 +197,20 @@ HUD unit. The kinds:
 A `grid` or `nine` part may carry **`xtile`**: its x stretch band (a grid's one `xs` band, a 9-slice's
 middle column) is one period of a seamless tile, painted to join its fixed neighbours, and it **repeats**
 along x instead of stretching: drawn n = max(1, round(drawn length / painted length)) times, each copy
-taking an equal share of the drawn band (CSS `border-image-repeat: round stretch` for a 9-slice). Along y it
-still stretches. A 9-slice's painted length is its middle at **its row's edge scale**, as CSS sizes a
-`round` tile: the top row and the middle row at the top edge's drawn width over its slice, the bottom row
-at the bottom edge's, so the rows may hold different counts. And the edges are drawn **whole device
-pixels** wide, as the browser snaps a border width (floored, a thinner one drawn one pixel): the Take
+taking an equal share of the drawn band, as CSS `border-image-repeat: round` repeats a 9-slice's middle.
+Along y it still stretches. A 9-slice's painted length is its middle at **its row's edge scale**, as CSS
+sizes a `round` tile: the top row and the middle row at the top edge's drawn width over its slice, the
+bottom row at the bottom edge's, so the rows may hold different counts. And the edges are drawn **whole
+device pixels** wide, as CSS snaps a border width (floored, a thinner one drawn one pixel): the Take
 over button at 4K and HUD 150 has a top edge of 8.81 px drawn 8, which makes its top and middle rows
 five copies of 199 px and its bottom row (10.67 px, drawn 10) four of 248 — MEASURED 2026-10-23 against
-the mockup's capture, where the exact widths gave four in every row and the scratches fell up to 55 px
-apart. A grid part's cell and copy edges are whole pixels from its corner, as `composeGrid` draws
-them on its canvas. A part drawn much wider than it was painted keeps its wear in proportion this way;
-`tools/hudart/seamband.py` makes the band and sets the flag. The mockup and the game
-(`tagpu_hudlay_expand`) draw it alike.
+Chrome's `border-image`, where the exact widths gave four in every row and the scratches fell up to
+55 px apart. Every edge — the box's own, rounded half up, a cell's and a copy's — is a whole pixel,
+counted from the snapped box's corner. A part drawn much wider than it was painted keeps its wear in
+proportion this way; `tools/hudart/seamband.py` makes the band and sets the flag. The game
+(`tagpu_hudlay_expand`) and the mockup (`composeGrid`, `composeNine`, which draw the part on a canvas
+of the snapped size) draw it alike, piece for piece, and sample it alike ([HUD art](hud-art.md),
+*How a part is drawn*).
 
 A grid part's fixed cells keep their painted length, so the room its band has to repeat in is the drawn
 length less everything outside the band. `seamband.py` therefore widens a grid part's band to the wells it
@@ -240,11 +242,12 @@ A **placement** names a box in its frame:
 
 ### Parts
 
-- **Grid-sliced parts** are composed into one image per drawn size, cell by cell. The cells share
-  rounded pixel edges, so no seam can show. An `xtile` part's x band cells are drawn as n copies of the band's
-  source cell, their edges rounded the same way.
-- **A tiled fill** is scaled to its drawn height inside a strip of three copies, so its edges
-  resample against their neighbours. It is then copied at whole-pixel steps.
+- **Grid-sliced and 9-slice parts and tiled fills** are composed into one image per snapped drawn size,
+  piece by piece, the pieces the DLL's and sampled as its GPU samples them ([HUD art](hud-art.md),
+  *How a part is drawn*). The pieces share rounded pixel edges, so no seam can show. An `xtile` part's
+  x band is drawn as n copies of the band's source cell, their edges rounded the same way. A hover's
+  controls are hidden by `visibility`, not `display`, so they are laid out and composed before they
+  show.
 
 ### Text
 
@@ -573,7 +576,7 @@ The rules:
 ## Checking the C against the mockup
 
 `tools/hudart/laycheck.py` opens the mockup headless at its default `prop=1` with two forks
-kept, the game's look, for twenty-two cases (4K at 150 with two
+kept, the game's look, for twenty-three cases (4K at 150 with two
 teams, 4K at Auto with the list too long, 1080p at 100 with one team, 1440p at 75 with a row
 hovered and a button held, 4K at 150 as a six-player free-for-all, 4K at 150 as a 2v1v1, 4K at
 150 with fourteen players scrolled to item 3 and a toast, 1440p at 75 with the first row hovered
@@ -588,7 +591,9 @@ groove past the original is shaded) and `4k-150-picker-held` (Take over held), a
 lanes open on the seed's three forks, the third by branch point a fork of the first:
 `4k-150-lanes` (its line rising to the first's lane), `1440-75-lanes-watched` (that fork watched:
 the chain filled along the first lane to its branch), `1080-100-lanes-picker` (the replace
-outline) and `4k-150-lanes-held` (a lane held)), takes the mockup's state and
+outline) and `4k-150-lanes-held` (a lane held), and `1080-100-lanes-dpr1`, the lanes at the
+game's own 1.5 pixels a unit with the browser at one device pixel to a CSS pixel, where the boxes
+fall on half pixels), takes the mockup's state and
 every element's box in HUD units, runs `tagpu_hudlay.c` compiled natively (`laycheck.c`) on the
 same state, and pairs the two element by element: every part by name and painted opacity (its own
 times its ancestors', as a disabled button's icon is dimmed), every text by its string and painted
@@ -599,12 +604,26 @@ chart's SVG it pairs the line ops by colour (with width and opacity), the SVG te
 shadow (offset, blur, opacity), and compares every group's colour, halo, points and cross, a
 point within a tenth of a unit, the precision both sides write. It also measures every text's baseline in the browser — a zero-size
 inline-block probe on the text's own line — against `tagpu_hudlay_baseline` from the faces'
-metrics. It exits 1 on a box or baseline more than its tolerance off, a part's or a text's opacity
-more than one level off, a dim that disagrees, or an element only one side has.
+metrics. And it compares every grid and 9-slice part's pieces — the destination edges in device
+pixels from the snapped corner, the source rectangle — with `tagpu_hudlay_expand`'s, which
+`laycheck.c` prints with the corner and far edges it snapped. It exits 1 on a box or baseline more
+than its tolerance off, a part's or a text's opacity more than one level off, a dim that disagrees,
+pieces that disagree, or an element only one side has.
+
+**A box edge on a half pixel can snap apart.** Chrome lays a box out in LayoutUnits, sixty-fourths
+of a CSS pixel summed down the element tree, and the DLL in floats, so an edge on an exact half
+can come out a hair below it in the browser and on it in the DLL, and the two round it to
+neighbouring pixels. The pieces of such a part cannot be compared; laycheck names how many snapped
+apart and holds each of their edges to the box tolerance instead. MEASURED 2026-10-23 on the
+twenty-three cases: 1 to 12 parts a case at the device scale factor of 2 the other cases use, and
+one in `1080-100-lanes-dpr1`, a bay button whose right edge is 496.5 pixels in the DLL and 496.484
+in Chrome (the button's 44.7 CSS pixels truncated to 44.6875). The game draws that edge a pixel
+right of the mockup.
 
 MEASURED 2026-10-08 on the first six cases, again on all eight once the controls were laid out
 for input, on all thirteen with the stats window (2026-10-09), on all eighteen at `prop=1`
-(2026-10-23), and on all twenty-two with the lanes (2026-10-23): the two agree. A halo
+(2026-10-23), on all twenty-two with the lanes (2026-10-23), and on all twenty-three with every
+grid and 9-slice part's pieces (2026-10-23): the two agree. A halo
 polyline is told from its line by its `stroke-opacity`, which only the halo carries. At 4K every
 box is within 0.018 units and every baseline within 0.0145 (the twenty-two cases, 2026-10-23). The Oswald residual above is named, not failed, and only where the same rule on
 Chrome's own rounded ascent and descent (`measureText`'s `fontBoundingBoxAscent`/`Descent`) gives
