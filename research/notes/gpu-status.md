@@ -2985,11 +2985,13 @@ comment above `prune_one`): the prune takes the recording's lock exclusively, as
 timelines, and a live fork keeps it; opens the recording itself exclusively with DELETE access,
 which fails while anything holds it open and, while held, lets no playing start, a playing being
 the only way a bookmark is added; and then, under the index's lock, which `index_save` also takes
-(`idx_lock`, `tagpu_replays.c`), reads the file's marks off the disk — its line of that name and
-of the root key read through that same handle (`recr_root_key`: no open by path can share it), or
-of that name with its key unknown (a line the version-1 conversion left) — and marks it for
-deletion on that handle (`tagpu_replays_unmarked_delete`); a version-1 index, or one that cannot be
-read, decides nothing, so every recording is kept. It goes when the handle closes, and a mark the
+(`idx_lock`, `tagpu_replays.c`), reads the file's marks off the disk — its line, found as the
+browser finds it (the name exactly, else the name in another case; a second line of the name
+merged in), counts when it is of the root key read through that same handle (`recr_root_key`: no
+open by path can share it), or has its key unknown (a line the version-1 conversion or a merge
+left) — and marks it for deletion on that handle (`tagpu_replays_unmarked_delete`); an index of
+any version but 3 (version 1 until its conversion, an earlier build's version 2), one that cannot
+be read, or one that is not text decides nothing, so every recording is kept. It goes when the handle closes, and a mark the
 index held before that read keeps it. The lock file goes with the recording, through the exclusive handle
 no other caller can share, and so does a lock file the prune created itself for a recording it
 keeps. `SetFileInformationByHandle` is resolved at run time, so the DLL still loads on XP; where it
