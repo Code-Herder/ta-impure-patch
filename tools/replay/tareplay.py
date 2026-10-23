@@ -2423,10 +2423,11 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     copy, = copies("X2 export", exported)
     exported.unlink()
     esegs, estop = tarec.file_segments(copy)
-    if estop or [s["id"] for s in esegs if s["state"] == 1] != [0, 2]:
+    if estop or [s["id"] for s in esegs] != [0, 2]:
         raise Failed(f"X2: the lane's export holds {[s['id'] for s in esegs]}, not the chain [0, 2]"
                      + (f" ({estop})" if estop else ""))
-    for s in esegs:
+    # the export keeps its chain's prefix as a deleted segment: the live one is the fork's
+    for s in (s for s in esegs if s["state"] == 1):
         results.later(check_or_fail, f"X2: the lane's export, timeline {s['id']}", "check", copy,
                       "--timeline", s["id"])
     # 7. the watched timeline deleted by its lane's Delete, the first click arming it: a switch to
