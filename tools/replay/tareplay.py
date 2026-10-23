@@ -1602,16 +1602,17 @@ def root_key(path):
 
 def keyed_line(rd, name, T, what):
     """The index's line of `name`, Failed unless the index is version 2's and the line carries
-    its file's root key, the favourite and the one bookmark at T: name size key format start last
-    end fav played map nseats seat... marks (tagpu_replays.c, the index). Returns a summary."""
+    its file's root key, the favourite and the one bookmark at T: name size key started format
+    start last end fav played map nseats seat... marks (tagpu_replays.c, the index). Returns a
+    summary."""
     f = rd / "index.dat"
     head = f.read_text(errors="replace").split("\n", 1)[0] if f.exists() else ""
     ln = index_lines(rd).get(name, "")
     c = ln.split("\t")
-    at = 11 + int(c[10]) if len(c) > 10 and c[10].isdigit() else len(c)
+    at = 12 + int(c[11]) if len(c) > 11 and c[11].isdigit() else len(c)
     marks = c[at] if at < len(c) else None
     key = root_key(rd / name)
-    if head != "IMPURE-REPLAYS-INDEX\t2" or len(c) < 12 or c[2] != key or c[7] != "1" or \
+    if head != "IMPURE-REPLAYS-INDEX\t2" or len(c) < 13 or c[2] != key or c[8] != "1" or \
             marks != str(T):
         raise Failed(f"{what}: index {head!r}, line {ln!r}; expected key {key}, the favourite and "
                      f"the bookmark {T}")
@@ -1899,13 +1900,13 @@ def prune_step(w, fx, out, forked):
         else:
             header_copy(rec, dst, start)
         os.utime(dst, (now - 600 * (len(seeds) - k),) * 2)
-    # index lines: name size key format start last end fav played map nseats marks
+    # index lines: name size key started format start last end fav played map nseats marks
     # (tagpu_replays.c, the index). Each copy's recorded start is its own, so each has its own
     # root key (root_key): the starred one's line has its key unknown, a favourite; the marked
     # one's its own key, a bookmark; plain-b's the starred one's key, a favourite of another file
 
     def line(name, k, fav, marks):
-        return (f"0000 {name}.imprec\t{(rd / f'0000 {name}.imprec').stat().st_size}\t{k}"
+        return (f"0000 {name}.imprec\t{(rd / f'0000 {name}.imprec').stat().st_size}\t{k}\t-"
                 f"\t0\t0\t0\t0\t{fav}\t0\t-\t0\t{marks}\n")
     marked, other = root_key(rd / "0000 marked.imprec"), root_key(rd / "0000 starred.imprec")
     if other == root_key(rd / "0000 plain-b.imprec"):
