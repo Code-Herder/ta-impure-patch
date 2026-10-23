@@ -322,19 +322,27 @@ The owner's decisions:
   its live count `+0x144` falls to 0, at most 256, and publishes each entry before the count that
   covers it. **It walks the timeline that plays** (`tagpu_replay_timeline`): it chooses it before
   its first read, as the playback does, and crosses each fork on its chain by a seek to the
-  iteration after the world's (`recr_tick` answers `RECR_BOUNDARY` there). When a rewind moves
-  the playback to another timeline, the next fill stops and joins it and starts it again. The
-  teardown wrap's entry (`tagpu_reclaim.c`) stops and joins it before `tagpu_replay_level_end`,
-  while the recording it reads is still the level's. A stop waits for the reader's open, which
-  reads every block header of the file, then for one iteration or one fork's crossing at most —
-  a seek that scans the headers again and rebuilds from the last snapshot before the fork
-  (`SNAPSHOT_TICKS`, 1,800, apart as written) plus the child's first iteration. Bounded by the
-  file and the format, not a timeout. **Open (LOW): that bound is up to about 1,800 iterations of
-  decode**, and `walk_stop` waits for it with `INFINITE` on the game thread
-  (`tagpu_hudmarks.c`, the LIFETIME comment and `walk_stop`): at the teardown's entry or on a
-  timeline change, a stop that lands in a crossing's rebuild holds the game thread for one seek's
-  read, 261–265 ms on a light four-player hour and 538–550 ms on a heavy one at worst, about 2.5 s in
-  a dense battle [INFERRED from the seek measurements in
+  iteration after the world's (`recr_tick` answers `RECR_BOUNDARY` there). **When the playback
+  moves to another timeline** — a rewind, a lane click, a switch — the next fill asks it to stop
+  (`walk_ask`) and every fill after polls the join (`walk_reap(0)`); until the worker has ended
+  the HUD shows no marker and no sample, only the bookmarks, and then the next fill starts the
+  walk of the new chain. The teardown wrap's entry (`tagpu_reclaim.c`) asks and waits
+  (`walk_reap(INFINITE)`) before `tagpu_replay_level_end`, while the recording it reads is still
+  the level's: the level's memory goes away after it. **The lifetime** (`tagpu_hudmarks.c`, the
+  LIFETIME comment): the worker's tables (`s_mk`, `s_sv`, `s_base`, `s_army`) are reset or freed
+  only once `WaitForSingleObject` has seen its thread end, never at the stop's request; while a
+  stop is pending the game thread reads none of them, since the worker may still publish into
+  them and a reset under it would let its next publication pass for the new walk's; and a new
+  walk starts only after the join. So at no instant do two workers, or a worker and a reset,
+  share the tables. A stop waits for the reader's open, which reads every block header of the
+  file, then for one iteration or one fork's crossing at most — a seek that scans the headers
+  again and rebuilds from the last snapshot before the fork (`SNAPSHOT_TICKS`, 1,800, apart as
+  written) plus the child's first iteration. Bounded by the file and the format, not a timeout.
+  After a switch that bound is how long the markers blank, not a stall. **Open (LOW): at the
+  teardown it is still a wait on the game thread of up to about 1,800 iterations of decode**: a
+  stop that lands in a crossing's rebuild holds the teardown for one seek's read, 261–265 ms on a
+  light four-player hour and 538–550 ms on a heavy one at worst, about 2.5 s in a dense battle
+  [INFERRED from the seek measurements in
   [making recordings smaller](tadr-port/demo-recorder-size.md#l4-the-measured-hours-the-snapshot-interval-and-r1)].
   The worker looks at its stop flag only between iterations and crossings. A marker outside the recording's span, or for a
   seat the HUD does not show, is dropped.
@@ -379,7 +387,7 @@ the recorder writes nothing for it.
   when it moves (`def+0x22F` = 1, the test `0x4862CF` gives a unit its mover by) and is not a
   commander (`def+0x245` bit `0x40000`), else 0. `tagpu_replay_army_values` copies the values out
   of the level's defs on the game thread, `malloc`'d before the walker's `CreateThread` and freed
-  by `walk_stop` after the join, so the walker never reads engine memory and never outlives its
+  by `walk_reap` after the join, so the walker never reads engine memory and never outlives its
   table. MEASURED: `279 unit types valued` on Two Continents.
 - **The period** is 30 · max(1, ⌈span / (30 · 511)⌉) GameTime, span being the recording's last
   GameTime less its first: whole seconds, at most `TAGPU_PK_HUD_POINTS` = 512 samples. The base
