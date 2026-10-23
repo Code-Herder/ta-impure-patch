@@ -297,8 +297,17 @@ at the font size; the half-leading, here negative, is floored to a pixel; the ba
 line's top plus the ascent plus that. Blink rounds these metrics in CSS pixels, which is why
 `capture.sh` lays the mockup out at device scale factor 1: at a factor of 2 the baselines fell on
 a two-pixel grid the game does not have. In the game the baseline is then painted on a whole
-pixel and the pen keeps its fraction, in quarters of a pixel in the atlas, as Skia draws
-horizontal text.
+pixel, and each glyph's origin on the nearest quarter of a pixel in the atlas, as Skia draws
+horizontal text. A drop shadow's or an outline's copy is the same glyphs moved by its offset: in
+x the moved origin goes to the nearest quarter, in y the offset is rounded to a whole pixel on its
+own, half up, and added to the whole-pixel baseline. MEASURED 2026-10-23 in Chrome at device scale
+1, Oswald 500 at 9.45 px, offsets stepped by sixteenths and eighths of a pixel: an origin at 0.125
+drew as 0.25, at 0.375 as 0.5 and at 0.875 on the next pixel, the same for a shadow's x offset; a
+shadow's y offset of 0.375 or −0.5 drew on the text's own rows and one of 0.5 or −0.625 a row off,
+for a text box whose top was on a whole pixel and for one 0.3 past it alike. The game drew a
+copy's y fraction through the atlas's filter instead, which spread the outline of the lane labels
+over the rows above and below their caps (at 1920 × 1080 and HUD 100 a cap's top row differed on
+every label).
 
 **One residual, MEASURED 2026-10-08.** A sweep of Chrome's rounded metrics (canvas
 `measureText`'s `fontBoundingBoxAscent` and `fontBoundingBoxDescent`) over 1 to 60 px in 1/64

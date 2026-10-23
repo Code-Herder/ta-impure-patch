@@ -379,19 +379,24 @@ static void text(B* c, const HUDOP* op)
     }
     off[copies][0] = off[copies][1] = 0;
     alpha[copies] = 1;
+    /* SKIA'S PLACEMENT, MEASURED in Chrome at device scale 1 (Oswald 500 at 9.45 px, offsets in
+       sixteenths of a pixel, 2026-10-23): a glyph's origin, and a copy's (the exact pen plus its
+       x offset), goes to the NEAREST quarter pixel -- 0.125 drew as 0.25, 0.375 as 0.5, 0.875 as
+       the next pixel -- and a copy's y offset is rounded to a whole pixel on its own, half up, from
+       the text's whole-pixel baseline: 0.375 and -0.5 drew on the text's rows, 0.5 and -0.625 a row
+       off, with the box's top on a whole pixel and 0.3 past one alike */
     for (k = 0; k <= copies; k++) {
+        const float cy = base + floorf(off[k][1] + 0.5f);
         for (i = 0; i < n; i++) {
-            float gx = x + pen[i] + off[k][0], whole = floorf(gx);
-            int q4 = (int)((gx - whole) * 4);
+            const float g4 = floorf((x + pen[i] + off[k][0]) * 4 + 0.5f), whole = floorf(g4 / 4);
+            const int q4 = (int)(g4 - whole * 4);
             const GLYPH* gl;
             HUDINST* q;
             float x0, y0;
-            if (q4 > 3) q4 = 3;
             if (!(gl = glyph(f, fi, size, gi[i], q4))) { c->dropped++; continue; }
             if (gl->w <= 0 || gl->h <= 0) continue;
             x0 = whole + gl->ox;
-            /* a copy keeps its vertical offset's fraction, which the atlas's filter carries */
-            y0 = base + off[k][1] + gl->oy;
+            y0 = cy + gl->oy;
             if (!(q = emit(c, HUD_TEX_ATLAS, HUDM_GLYPH, x0, y0, x0 + gl->w, y0 + gl->h, op))) return;
             q->uv[0] = (float)gl->x / HUD_ATLAS; q->uv[1] = (float)gl->y / HUD_ATLAS;
             q->uv[2] = (float)(gl->x + gl->w) / HUD_ATLAS; q->uv[3] = (float)(gl->y + gl->h) / HUD_ATLAS;

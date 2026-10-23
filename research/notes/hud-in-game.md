@@ -357,7 +357,9 @@ The owner's decisions:
   hyphen, which Oswald lacks, becomes `-`.
 - **Glyphs are rasterised at the exact pixel size each style needs** into the atlas, keyed by
   face, size in 1/64 px, glyph and the pen's fraction in quarters. The baseline is Chrome's and
-  painted on a whole pixel; the pen keeps its fraction (*Text* in the layout page). Upper case,
+  painted on a whole pixel, each glyph's origin on the nearest quarter, and a shadow's or an
+  outline copy's y offset is rounded to a whole pixel, as Skia places them (*Text* in the layout
+  page). Upper case,
   letter spacing, the drop shadow and the four-copy outline are done as the mockup does them.
 
 ### The data
