@@ -338,8 +338,10 @@ from 3.79 % (best at a one-pixel shift) to 1.25 % (at none).
   text composited first and the whole faded once, as CSS `opacity` on its element does; it has no
   clickable of its own: the TEAMS chip when the teams are not told apart (one team, or a free-for-all), at
   `split.off` (0.45).
-- **An inset edge** (a resource bar's) is flagged on its ops (`HOPF_EDGE`), so `laycheck` matches
-  it with the mockup's `box-shadow` by that flag, not by its colour.
+- **An inset edge** — a resource bar's, the toast's, the replace outline, a dark legend swatch's —
+  is a ring of four solids on both sides (`ring` in `tagpu_hudlay.c` and `hud.js`): the top and
+  bottom across the box, the sides between them, each snapped to whole pixels on its own. laycheck
+  pairs them as solids.
 
 ### The dock
 
@@ -478,8 +480,8 @@ track's x plus `ends` plus (w − 2 × `ends`) × t / T.
   `buttons.part`, keyed `<act>:k` (`export:k`, `delete:k`); Delete is drawn pressed while armed
   (`armed`).
 - **The replace outline**: on the lane a takeover would replace (`replace`, while the picker is
-  open), a ring `replace.width` wide outside the lane's box in `replace.colour` (the mockup's
-  inset box-shadow on a box grown by the width).
+  open), a ring `replace.width` wide outside the lane's box in `replace.colour` (an inset edge on a box
+  grown by the width).
 - **The branch lines**, after every lane, `branch.w` wide in `branch.colour`, centred at the
   branch: for a fork whose `parent` is the id of a lane drawn above it, from its lane's top up to
   that lane's bottom, its x held to that lane's span; for every other fork, from its lane's bottom
@@ -600,7 +602,7 @@ every element's box in HUD units, runs `tagpu_hudlay.c` compiled natively (`layc
 same state, and pairs the two element by element: every part by name and painted opacity (its own
 times its ancestors', as a disabled button's icon is dimmed), every text by its string and painted
 opacity, every
-solid by its colour, every clickable by its key; an inset edge is set aside by its flag. From the
+solid by its colour, an inset edge's four among them, every clickable by its key. From the
 chart's SVG it pairs the line ops by colour (with width and opacity), the SVG texts by string
 (with anchor, size and colour), the two chart ops by opacity (with their clip) and the drop
 shadow (offset, blur, opacity), and compares every group's colour, halo, points and cross, a

@@ -75,6 +75,10 @@ const HUD = (() => {
   // a fill's box (--fl): one that has begun spans at least one device pixel, so it always shows (tagpu_hudlay_clip,
   // the DLL's same floor)
   const frect = b => `${rect(b)};--fl:1`;
+  // an inset edge e wide on box b, drawn as the DLL draws it (ring in tagpu_hudlay.c): four solids, the top and bottom
+  // across the box and the sides between them, each pinned to whole pixels on its own
+  const ring = (b, e, col) => [[b.x, b.y, b.w, e], [b.x, b.y + b.h - e, b.w, e], [b.x, b.y + e, e, b.h - 2 * e], [b.x + b.w - e, b.y + e, e, b.h - 2 * e]]
+    .map(([x, y, w, h]) => `<div class="box" style="${rect({ x, y, w, h })};background:${col};pointer-events:none"></div>`).join('');
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
   const WB_GLYPH = { export: '⇩', delete: '✕', rewind: '⟲' };
   const attrs = a => Object.entries(a || {}).map(([k, v]) => ` data-${k}="${esc(v)}"`).join('');
@@ -244,7 +248,7 @@ const HUD = (() => {
         { x: btx + j * (bw + Bt.gap), y: Bt.pad, w: bw, h: Ln.h - 2 * Bt.pad }, st, st.armed === k && it.act === 'delete')).join('');
       h += art(on ? Ln.pressed : Ln.part, { x: x0, y: ly, w, h: Ln.h }, inner, `hot${on ? ' pressed' : ''}`, { act: 'lane', fork: k, up: Ln.part, down: Ln.pressed, ...(on ? { on: 1 } : {}) });
       if (st.replace === k) { const R = P.replace;
-        h += `<div class="box" style="${rect({ x: x0 - R.width, y: ly - R.width, w: w + 2 * R.width, h: Ln.h + 2 * R.width })};box-shadow:inset 0 0 0 ${U(R.width)} ${R.colour};pointer-events:none"></div>`; }
+        h += ring({ x: x0 - R.width, y: ly - R.width, w: w + 2 * R.width, h: Ln.h + 2 * R.width }, R.width, R.colour); }
       const B = P.branch, up = st.forks.findIndex(q => q.id === f.parent);
       if (up >= 0 && up < k) { const [ux0, ux1, uy] = span[up], x = Math.min(Math.max(bx, ux0), ux1);
         lines += `<div class="box" style="${rect({ x: x - B.w / 2, y: uy + Ln.h, w: B.w, h: ly - uy - Ln.h })};background:${B.colour};pointer-events:none"></div>`; }
@@ -374,7 +378,7 @@ const HUD = (() => {
       const bb = place(F, { ...Rw.bar, in: l.store }), lb = place(F, { ...Rw.letter, in: l.store });
       h += text(l.res.toUpperCase(), lb, Rw.letter.style, Rw.letter, L.resource[l.res])
         + text(`${k1(v)} / ${k1(max)}`, vb, Rw.value.style, fit)
-        + `<div class="box" style="${rect(bb)};background:${Rw.bar.bg};box-shadow:inset 0 0 0 ${U(Rw.bar.edge)} rgba(0,0,0,.8)">`
+        + `<div class="box" style="${rect(bb)};background:${Rw.bar.bg}">` + ring(zero(bb.w, bb.h), Rw.bar.edge, 'rgba(0,0,0,.8)')
         + `<div class="box" style="${rect(zero(bb.w * +(100 * (max > 0 ? Math.min(1, v / max) : 0)).toFixed(1) / 100, bb.h))};background:${L.resource[l.res]}"></div></div>`
         + text(signed(rate(r[l.res + 'i']), rate(r[l.res + 'o'])), place(F, { ...Rw.income, in: l.inc }), Rw.income.style, Rw.income);
     }
@@ -466,12 +470,12 @@ const HUD = (() => {
     const ranked = G.map(g => ({ g, v: NS ? g.v[now] : 0 })).sort((a, b) => b.v - a.v), rh = Math.min(Lg.row, lh / ranked.length), fs = Math.min(Lg.size, rh * Lg.text_h);
     // a swatch is a solid, and a dark one has a ring of four solids on its edge, half in and half out, as the DLL draws
     // them (ring in tagpu_hudlay.c), so pin() snaps each to whole pixels as the DLL's draw does
-    const box = (x, y, w, h, fill, edge) => `<rect${edge ? ' data-edge="1"' : ''} x="${x}" y="${y}" width="${w}" height="${h}" fill="${fill}"/>`;
+    const box = (x, y, w, h, fill) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${fill}"/>`;
     return h + ranked.map((e, k) => { const yy = ly + k * rh, sy = yy + rh * Lg.swatch_y, sw = Lg.swatch, sh = rh * Lg.swatch_h, t = Lg.swatch_edge_w;
       const bx = lx - t / 2, by = sy - t / 2, bw = sw + t, bh = sh + t;
       return box(lx, sy, sw, sh, e.g.col)
         + (dark(e.g.col) ? [[bx, by, bw, t], [bx, by + bh - t, bw, t], [bx, by + t, t, bh - 2 * t], [bx + bw - t, by + t, t, bh - 2 * t]]
-          .map(([x, y, w, h]) => box(x, y, w, h, Lg.swatch_edge, true)).join('') : '')
+          .map(([x, y, w, h]) => box(x, y, w, h, Lg.swatch_edge)).join('') : '')
         + tx(lx + Lg.text_x, yy + rh * Lg.text_y, e.g.name, `font-size="${fs}" fill="${Lg.name}"`)
         + tx(lx + lw, yy + rh * Lg.text_y, fv(e.v), `font-size="${fs}" fill="${Lg.value}" text-anchor="end"`); }).join('');
   }
@@ -681,7 +685,7 @@ const HUD = (() => {
      size, not the text's, since the DLL lays the HUD out without the faces' metrics ---- */
   function toast(st) {
     const Ts = L.toast, b = { x: (st.W - Ts.w) / 2, y: st.H * Ts.top, w: Ts.w, h: Ts.h }, n = parseInt(Ts.bg.slice(1), 16);
-    return `<div class="box" style="${rect(b)};background:rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${Ts.alpha});box-shadow:inset 0 0 0 ${U(Ts.edge)} ${Ts.edge_colour}">`
+    return `<div class="box" style="${rect(b)};background:rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${Ts.alpha})">` + ring(zero(b.w, b.h), Ts.edge, Ts.edge_colour)
       + text(esc(st.toast), zero(b.w, b.h), Ts.style, { align: 'c' }) + `</div>`;
   }
 

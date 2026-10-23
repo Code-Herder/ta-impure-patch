@@ -161,8 +161,8 @@ COLLECT = r"""() => {
     for (const t of svg.querySelectorAll(':scope > text'))
       els.push({ kind: 'svgtext', text: t.textContent, r: [o[0] + A(t, 'x'), o[1] + A(t, 'y'), 0, 0], size: A(t, 'font-size'),
                  anchor: { start: 0, middle: 1, end: 2 }[t.getAttribute('text-anchor') || 'start'], rgb: hex(t.getAttribute('fill')) });
-    // a solid by its own numbers (pinned, its attributes are snapped); a ring's edge is set aside, as the DLL's is
-    for (const r of svg.querySelectorAll(':scope > rect:not([data-edge])')) {
+    // a solid by its own numbers (pinned, its attributes are snapped)
+    for (const r of svg.querySelectorAll(':scope > rect')) {
       const [x, y, w, h] = r.dataset.r.split(' ').map(Number), b = r.getBoundingClientRect();
       els.push({ kind: 'solid', rgb: hex(r.getAttribute('fill')), r: [o[0] + x, o[1] + y, w, h], dim: false, dev: r.dataset.dev.split(' ').map(Number),
                  painted: [b.left - s.left, b.top - s.top, b.right - s.left, b.bottom - s.top].map(v => Math.round(v * d)) });
@@ -305,8 +305,6 @@ def main():
             cs = {"part": [], "text": [], "solid": [], "dot": [], "hot": [], "clip": [], "svgtext": [], "line": [], "chart": [], "shadow": []}
             for o in ops["ops"]:
                 o["r"] = [o["x"], o["y"], o["w"], o["h"]]
-                if o.get("edge"):
-                    continue                      # an inset edge: a box-shadow in the mockup
                 cs[o["kind"]].append(o)
                 if "clip" in o and o["kind"] != "chart":     # a chart's clip is compared with its op
                     cs["clip"].append({"r": o["clip"], "snap": o.get("csnap")})

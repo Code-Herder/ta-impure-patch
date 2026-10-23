@@ -127,7 +127,7 @@ typedef struct {
 enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART };
 #define HOPF_DIM    1u      /* the dim filter of a player who is out (layout.json `dim`) */
 #define HOPF_SHADE  2u      /* HOP_SOLID: an inner shadow `shade` units deep, black 55 % */
-#define HOPF_EDGE   4u      /* HOP_SOLID: one side of an inset edge, the mockup's box-shadow */
+#define HOPF_EDGE   4u      /* HOP_SOLID: one side of an inset edge (ring)                     */
 #define HOPF_DROP   8u      /* HOP_SOLID: CSS box-shadow 0 `size` `shade` round the box r, in the
                                op's colour, painted outside r only */
 #define HOPF_BASE   16u     /* HOP_TEXT: an SVG <text>, r.x its anchor and r.y its baseline;
