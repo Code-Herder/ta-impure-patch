@@ -131,9 +131,10 @@ queued, running or finished, and the fork's `tk_open` takes the lock after it, n
 In a live recorded skirmish on the Vulkan lane the HUD draws a rewind button beside the Impure
 Config sprocket and, while a rewind is open or in the past, a strip under the top bar
 ([the HUD in game](../hud-in-game.md), *Live rewind*). Its clicks are this queue's verbs, through
-`tagpu_replay_rewind`: the button OPEN, CLOSE (open, nothing moved) or NOW (in the past); rew and
-fwd a SEEK 300 GameTime either way, held to the span; the track a SEEK a frame while dragged; Back
-to now CLOSE or NOW; Play from here in the open strip a CLOSE. Each outcome of a verb the HUD sent
+`tagpu_replay_rewind`: the button OPEN, CLOSE (open, nothing moved) or NOW (in the past); rew a
+SEEK 300 GameTime back, held to the span; fwd, in the past only, a SEEK 300 GameTime forward, or
+NOW when that reaches the span's last GameTime, which is before G; the track a SEEK a frame while
+dragged; Back to now CLOSE or NOW; Play from here in the open strip a CLOSE. Each outcome of a verb the HUD sent
 is read once by its serial: a refusal toasts "Rewind refused". The strip's play is drawn
 disabled: the past is held paused (`rw_poll` sets the pause bit each frame) and no verb plays it
 toward now.

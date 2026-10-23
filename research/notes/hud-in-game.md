@@ -13,11 +13,25 @@ rules, so the two stay 1:1. It replaces the watching dock and the player cards o
 [S5](tadr-port/demo-recorder-s5-ui.md), which are deleted; on the GDI renderer a replay has no
 on-screen controls (*When it draws*).
 
-**The live rewind is built and not yet run in a game** (*Live rewind*): in a live recorded
-skirmish the HUD draws the mockup's live mode instead — a rewind button beside the Impure Config
-sprocket in the top bar and, while a rewind is open, its strip under the bar — and drives the
-rewind through its own verbs. Its layout agrees with the mockup's (laycheck); the game runs and
-the captures are owed.
+**The live rewind is built and run in game** (*Live rewind*): in a live recorded skirmish the HUD
+draws the mockup's live mode instead — a rewind button beside the Impure Config sprocket in the
+top bar and, while a rewind is open, its strip under the bar — and drives the rewind through its
+own verbs. Its layout agrees with the mockup's (laycheck). MEASURED 2026-10-23 by the runner's
+games, on the reference setup's private Xvfb:
+
+- **at 8056ef6a**: U's 36 checks with the HUD cycle, every comparison EQUAL; the W control, W's 10
+  checks (`tareplay.py run stock-limits --cover`); the button and the strip placed as the mockup
+  places them at 1080 with the HUD at 100 and at 4K with the HUD at 150; the cursor over the
+  button; the PAUSED rule; GDI unchanged;
+- **at b590bfd4**: U and U-E 40 of 40 (U-E armed with its toast, forked, the eviction said, the
+  fork EQUAL to its recording); the strip whole over nine message lines; the cursor over the
+  strip; the toast held while armed;
+- **at 54adfac8**: U and U-E 40 of 40 again (`tareplay.py rewind battle --cover`); the captures
+  against the mockup with message lines on screen, the strip open and closed, and the armed toast
+  with its eviction; a 250-frame recording of the Config panel opened and closed over the open
+  strip, in which no frame shows the strip over the panel.
+
+What is still owed is in *Gaps*.
 
 The word **dock** on this page and in `layout.json` is the HUD's own bottom part, the transport
 plate and the timeline housing; the engine GUI screen of the same name (`DOCK.GUI`,
@@ -176,9 +190,14 @@ The owner's decisions:
   and mipmaps cannot darken an edge.
 - **It blends in the swapchain's encoded values**, `B8G8R8A8_UNORM`, as the browser blends, so
   a translucent part composes in the game as it does in the mockup.
-- **It claims no A/B frame.** The census counts it among the passes that drew (`hud=N` on the
-  `vk: census` line) and not among those that claimed, so an A/B capture in a playing with the
-  HUD drawn stands down rather than comparing the wrong frame.
+- **It claims no A/B frame, and it is never in a world capture.** The census counts it among the
+  passes that drew (`hud=N` on the `vk: census` line) and not among those that claimed. Both its
+  layers record in the swapchain's render pass, after the world target is composited into it, so
+  it is one more pass in the captured image only when the capture reads the swapchain image: a UI
+  or FPS A/B with the HUD drawn stands down rather than comparing the wrong frame, while a world
+  A/B, which reads the world target, does not count it (`tagpu_vk.c`). A live recorded skirmish
+  always draws the rewind button and no lever turns the HUD off there, so counting it would refuse
+  every world A/B in one.
 - **The render thread builds its state in the overlay frame.** `tagpu_overlay.c` calls
   `tagpu_hudstate_present` after `tagpu_gui_present`, which turns the packet's record into the
   layout's state and stamps it with the frame's `frame_counter`; the pass takes it through
@@ -723,7 +742,8 @@ frame visit.
 | key | when | does |
 |---|---|---|
 | `rewind` | idle / OPEN / PAST | OPEN / CLOSE / NOW; nothing while the writer flushes or a fork ends the original, where the verb would be refused |
-| `rew`, `fwd` | OPEN, PAST | SEEK 300 GameTime back, held to `first + 1`, or forward, held to `last` |
+| `rew` | OPEN, PAST | SEEK 300 GameTime back, held to `first + 1` |
+| `fwd` | PAST | SEEK 300 GameTime forward; NOW when that reaches `last` (G − 1 or before), since a seek there stops short of the world the rewind opened at. Drawn disabled while the playhead is at the strip's end, which is the rewind OPEN and not yet moved (`off_at_end` in `layout.json`, the mockup too) |
 | `track` | OPEN, PAST | press and drag: a SEEK a frame at the pointer, the latest winning (the queue) |
 | `live_play` | OPEN | CLOSE, toast "Playing on from m:ss" |
 | `live_play` | PAST | **Play from here**, below |
@@ -747,12 +767,15 @@ is held at the seek's target − 1, so `now + 1` is the T the fork would use:
 - R is that T and nothing would be deleted: FORK, one click;
 - else the arm takes R and the fork it would delete and SEEKs to R when R is earlier (the snap
   back); the arm is *seeking* until the world on screen is R − 1, then *armed*, drawn pressed;
-  the second click sends FORK.
+  the second click sends FORK. The arm keeps the timelines' serial the plan left
+  (`tagpu_replay_timelines_serial`, read after the plan, which refreshes the cache): when it moves
+  before the second click the file's forks are no longer the ones the plan counted, so the arm ends
+  and the next click plans again, the rule the takeover's picker follows.
 - **The warning is the arm's**, and like every live toast it is drawn in the top layer and, while
   the strip is open, clear of it: at `top + live_clear` units, or the layout's `toast.top` when
   that is lower (hud.js `toast` places it the same way; laycheck's live toast cases). **Every toast
   is as wide as its text**, `toast.pad` each side, never narrower than `toast.w` nor wider than
-  `toast.max_w` (150 and 260 units): "Click again to play from 0:30, replacing F2" sets 174 units
+  `toast.max_w` (150 and 260 units), its text cut at the pad when longer: "Click again to play from 0:30, replacing F2" sets 174 units
   of Oswald 700 at 10, past the 150 the box used to be. The layout measures the text through the
   measure tagpu_hudart.c gives it once the faces are open (`tagpu_hudlay_measure`,
   `tagpu_hudtext_width`), the same advances and kerning tagpu_huddraw.c draws the text with
@@ -783,7 +806,8 @@ are flagged `HOPF_TOP` and drawn after the composite:
   both layers are one generation, which the upload rule covers.
 - **The record order** (`tagpu_vk.c`): the base layer, the UI composite, the top layer, the whole
   composite again inside the Config panel's part of the top layer's rect while the panel is open
-  (below), then the composite's **sharp layer again** inside the top layer's rect
+  (below), then the composite's **sharp layer again** inside the top layer's rect (the union of
+  the quads its instances emit, their `ndc`, held to the attachment)
   (`tagpu_vk_gui_record_sharp`): the
   composite's pipeline, set and viewport with a second quad whose vertices carry `a.z = 1`, which
   `LAY_FS` reads as `sharpOnly` and discards past its sharp-layer test. Draws in one render pass
@@ -794,26 +818,33 @@ are flagged `HOPF_TOP` and drawn after the composite:
 - **The hit map lists the top layer's controls first**, then the rest topmost-first.
 - **The strip and the live toast are the top layer too**, always, so nothing the engine draws
   into the composite can cover them. The engine's message lines are drawn in the world's top
-  left (`DrawChatText 0x464060`: x `0x8A`, the first line's top `0x34`, each next one a font
-  height down, DISASSEMBLED), under the strip's left end; with the strip in the base layer, the
-  runner's 1080 capture at HUD 100 showed four "Under Attack" lines hiding rew, play, fwd and the
-  track's start.
-- **The message lines start under the strip** while it is on the screen, so none is hidden under
-  it and none shows in the gap between the side panel (x 128 at 1080) and the strip's left end (x
-  146): with the strip in the top layer alone, the first glyphs of each line showed there (x 138
-  to 145, round 2's captures). A stub on DrawChatText's store of its first line's top (`0x4640D6`,
-  `chat_top_init`, `tagpu_replay.c`) stores `tagpu_hudinput_chat_top`'s value instead of `0x34`.
-  The game thread keeps that value at the packet's fill: `0x34`, or, while the last frame drawn
-  has the strip's plate (`live` in the hit map), the first engine row clear of the strip,
+  left (`DrawChatText 0x464060`, DISASSEMBLED: the first line's top `0x34`, each next one a font
+  height down; a line of kind `0x0A` has its text at x `0x8A`, any other kind an icon box at x
+  `0x8A`, `ftol(0.8 · h)` square with `h` the font height, and its text at `ftol(138 + 1.5 ·` that
+  side`)`), under the strip's left end; with the strip in the base layer, the runner's 1080 capture
+  at HUD 100 showed four "Under Attack" lines hiding rew, play, fwd and the track's start.
+- **The message lines start under the strip** while the last frame drawn had the strip, and only
+  for DrawGameScreen's call, so none is hidden under it and none shows in the gap between the side
+  panel (x 128 at 1080) and the strip's left end (x 146): with the strip in the top layer alone,
+  the first glyphs of each line showed there (x 138 to 145, round 2's captures). A stub on
+  DrawChatText's store of its first line's top (`0x4640D6`, `chat_top_init`, `tagpu_replay.c`)
+  stores `tagpu_hudinput_chat_top`'s value instead of `0x34` when its return address is
+  DrawGameScreen's (`0x469FD0`, after the call at `0x469FCB`), and `0x34` for the two other
+  callers, `0x41F7A5` and `0x41F9D8`, whose lines no strip covers. The game thread sets that value
+  at the hit map's take (`tagpu_hudinput_take`), which runs in DrawGameScreen's hook before the
+  draw that calls DrawChatText, so the lines' top and the controls a click is tested against are
+  one map's: `0x34` when the map is empty (no HUD, its pass refused, GDI), or, when it has the
+  strip's plate (`live`), the first engine row clear of the strip,
   `32 + live_clear · scale · gh / 720`. `live_clear` is the layout's `2·strip.t + strip.h`, the
   strip's gap under the bar again under it; `scale` the HUD's own; `gh` the engine's height. A
   HUD unit is the attachment's height / 720 times the scale, and the bar is the frame's `bh`
   scaled by the attachment's height over `gh`, so the window's size cancels out and the row is
   exact in the frame's pixels; the world region is drawn `bh − 32` lower than the engine draws
   it, which gives the engine's row. Back to `0x34` when the strip is not drawn, in a replay and at
-  the level's end. GDI draws no HUD, so its lines never move. If the bytes differ the log says
-  `replay: DrawChatText's first line 0x4640D6 holds other bytes: the messages stay under the live
-  HUD's strip`, and the strip still covers them.
+  the level's end. GDI draws no HUD, so its lines never move. If the bytes at `0x4640D6` or the
+  call at `0x469FCB` differ the log says `replay: DrawChatText's first line 0x4640D6 or its call
+  0x469FCB holds other bytes: the messages stay under the live HUD's strip`, and the strip still
+  covers them.
 - **The Config panel stays over the strip.** It hangs below the bar's right end (`panel_rect`,
   `tagpu_menu.c`), over Play from here and Back to now. **Its box travels with the frame that drew
   it**: at each flip the UI mirror's flip marker takes `tagpu_menu_panel_box` (the panel's box on
@@ -826,21 +857,30 @@ are flagged `HOPF_TOP` and drawn after the composite:
   (`tagpu_vk_gui_panel_rect`) and draws the whole composite again inside its part of the top
   layer's rect (`tagpu_vk_gui_record_whole`), after the top layer and before the cursor's redraw.
   In that rect what the engine drew is the panel, so the panel is the last UI drawn there, from
-  the frame it opens to the frame it closes: the box and the composite are one snapshot. A point
-  the sprocket or the panel owns is the menu's (`tagpu_menu_owns_point`).
-- **No other engine screen reaches the strip** (MEASURED on round 2's runs, 1080, HUD 100): the
+  the frame it opens to the frame it closes: the box and the composite are one snapshot. One
+  frame can still disagree: the engine pops `RENDER.GUI` itself inside DrawGameScreen
+  (`UpdateIngameGUI 0x491D70`, at 21 call sites, pops every screen the expected-name buffer does
+  not name), and the menu learns of it only at the next frame's entry, so that frame's box says
+  open over a composite with no panel. The outcome is harmless: `LAY_FS` writes only where the
+  mirror has coverage and discards elsewhere, so where the panel was the strip shows, and anything
+  the engine drew there instead is drawn over the strip as the panel would have been. A point the
+  sprocket or the panel owns is the menu's (`tagpu_menu_owns_point`).
+- **No other engine screen reaches the strip** (MEASURED on b590bfd4's runs, 1080, HUD 100): the
   in-game menu is at x 10 to 112, inside the side panel; the Exit question is centred, below
   the strip; the chat's input field is in the bottom bar; with the strip open chat does not open,
-  and with chat open the strip does not open. **Not measured**: the F4 or SPACE Kills/Losses box,
-  which the engine draws at the viewport's top right (`0x469F65`, `0x469F9F`), would sit under
-  the strip while it is open; and the window sizes the HUD supports below 1080.
-  [INFERRED] The engine draws no control in the bar under the button (`W − 75 s .. W − 47 s` at
-  the game's HUD scale s): owed, a check by eye at the smallest window the HUD supports.
+  and with chat open the strip does not open. The F4 or SPACE Kills/Losses box, which the engine
+  draws at the viewport's top right (`0x469F65`, `0x469F9F`), would sit under the strip while it
+  is open; not measured (*Gaps*).
 
 ### The tests
 
-U clicks the HUD's open, rew and Back to now on the live level before its fork (`tarewind.py`,
-`hud_cycle`); U-E, on a copy of the recording, takes over timeline 1, forks it by a rewind, and
+U clicks the HUD on the live level before its fork (`tarewind.py`, `hud_cycle`): the button
+opens the strip, with fwd not clickable there, and closes it unmoved; Play from here in the open
+strip closes it; in the past rew seeks back twice, fwd seeks 10 s forward, a drag on the track
+released at its right end seeks to the span's last GameTime, and from there fwd returns to now;
+the button and Back to now each return to now from the past. Play from here's "Playing on from"
+toast lasts the layout's 1.8 s of wall time, so no dump is sure to fall inside it, and the cycle
+does not check it. U-E, on a copy of the recording, takes over timeline 1, forks it by a rewind, and
 plays Play from here past a refresh of that fork: the snap back to the refresh, the eviction
 named in the toast, the second click's fork there with the named timeline deleted and the fork
 EQUAL to its recording (`play_from_here`, on a takeover fixture, whose refreshes are on the
@@ -936,9 +976,15 @@ the render thread.
   timeline switch would change it.
 - **The replay HUD no longer draws during a live rewind into the past**, where
   `tagpu_replay_live` is true: the mode asks the rewind first, and a rewind always shows the strip.
-- **The live rewind has not been run in a game**: the HUD cycle and U-E, the W control, the
-  captures against the mockup, the cursor over the button and the pause icon's rule by eye are
-  owed.
+- **The live rewind's owed checks** (the rest was run, *Status*): the window sizes the HUD
+  supports below 1080, the smallest above all; the F4 or SPACE Kills/Losses box under the open
+  strip; and [INFERRED] that the engine draws no control in the bar under the button
+  (`W − 75 s .. W − 47 s` at the game's HUD scale s), a check by eye at the smallest window.
+- **Live rewind paths no test drives**: Play from here's one-click fork (the plan's R is the
+  playhead's T and nothing would be deleted), which needs the past held on a refresh of the live
+  recording the harness cannot name before the file is closed; the "Playing on from" and "Cannot
+  play from" toasts, which last 1.8 s of wall time; a verb refused at once with no level in play;
+  and the arm's end when the timelines' serial moves, which no rewind path moves while armed.
 - **A multiplayer recording's fork may not play** [INFERRED from the code, not run]: the reader
   refuses a chain whose segments differ in RT_HOLD, a multiplayer root has none, and its fork,
   recorded by a live skirmish, writes one.

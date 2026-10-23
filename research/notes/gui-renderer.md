@@ -4327,7 +4327,7 @@ previous build shows no cursor over the minimap, and this one draws it on top.
 **The rule for a future client of the layer**: record it before `sharp_cursor`. Anything
 recorded after the cursor covers it.
 
-### 24.4 The UI drawn again over the HUD's top layer  [the cursor's redraw MEASURED 2026-10-23; the panel's SOURCE, not yet run]
+### 24.4 The UI drawn again over the HUD's top layer  [the cursor's and the panel's redraws MEASURED 2026-10-23]
 
 The composite is the UI's one full-screen quad, and it paints the whole top bar and the engine's
 message lines, so the live HUD's rewind button, which sits in the bar beside the Impure Config
@@ -4350,12 +4350,19 @@ over the strip.
 
 **The Config panel**, which hangs over the strip's right end. Its box on the screen comes in the
 hand-over of the composite being drawn (`panelL..panelB`, from that flip's `PK_FRAME`: the flip
-marker takes `tagpu_menu_panel_box` on the game thread), so the box is open exactly when that
-composite holds the panel. `tagpu_vk_gui_panel_rect` maps it to the attachment as `lay_viewport`
-maps the surface, each edge to the pixel whose centre it passes, and `tagpu_vk_gui_record_whole`
-draws the composite's own quad again, the same way, scissored to the panel's part of the top
-layer's rect, before the cursor's redraw. What the engine drew in that rect is the panel, so the
-panel is the last UI drawn there.
+marker takes `tagpu_menu_panel_box` on the game thread), so the box is open when that composite
+holds the panel. `tagpu_vk_gui_panel_rect` maps it to the attachment by the placement
+`lay_viewport` uses (`lay_place`, one function for both), each edge to the pixel whose centre it
+passes, and `tagpu_vk_gui_record_whole` draws the composite's own quad again, the same way,
+scissored to the panel's part of the top layer's rect, before the cursor's redraw. What the
+engine drew in that rect is the panel, so the panel is the last UI drawn there. One frame can
+disagree: the engine pops `RENDER.GUI` itself inside DrawGameScreen (`UpdateIngameGUI 0x491D70`),
+and the menu learns of it at the next frame's entry, so that frame's box says open over a
+composite with no panel; `LAY_FS` discards where the mirror has no coverage, so the strip shows
+there, which is what that frame drew. MEASURED 2026-10-23 at 54adfac8: a 250-frame recording at
+1080 of the panel opened and closed over the open strip, the pointer on Play from here, shows
+the panel whole over the strip from the frame it opens to the frame it closes, and no frame with
+the strip over it.
 
 ## 25. The movie on the Vulkan lane — `PK_MOVIE`  [MEASURED 2026-09-26]
 

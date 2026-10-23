@@ -145,7 +145,9 @@ dark edge, and an icon it lacks as a stand-in glyph.
   as the game draws it, where the bars repeat as the engine repeats them. The button opens a strip under the top bar over the paused game:
   the transport, a track up to NOW, the time, **Play from here** and **Back to now**. The strip
   reuses the bay buttons, the timeline fill and the playhead. Its play is drawn disabled (`off`):
-  the rewind holds the past paused and has no verb that plays it. Play from here is drawn pressed
+  the rewind holds the past paused and has no verb that plays it. Its fwd is drawn disabled while
+  the playhead is at the strip's end (`off_at_end`), the rewind open and not yet moved, with
+  nothing ahead of it; from the past, a fwd that reaches the end is Back to now. Play from here is drawn pressed
   while it is armed (the game's dump, `rw.arm` 2), and `?state=` draws the game's live dump.
 
 The shell screens of variation B (fork rows in the Replays browser, Delete and Play on there,
@@ -294,7 +296,7 @@ At those sizes the game's line sits a pixel off the mockup's.
   ([The replay HUD in game](hud-in-game.md), *Input*).
 - **A disabled control** is drawn at its `off` opacity, its icon too, and has no clickable of its
   own: the TEAMS chip when the teams are not told apart (one team, or a free-for-all), at
-  `split.off` (0.45).
+  `split.off` (0.45); the live strip's play, always, and its fwd at the strip's end, both at 0.45.
 - **An inset edge** (a resource bar's) is flagged on its ops (`HOPF_EDGE`), so `laycheck` matches
   it with the mockup's `box-shadow` by that flag, not by its colour.
 
@@ -379,7 +381,9 @@ its height down, above everything: a box `toast.h` (18) tall in `toast.bg` at `t
 edge of `toast.edge` in `toast.edge_colour`, the text in the `toast` style, centred. The box is as
 wide as the text and `toast.pad` (8) each side, never narrower than `toast.w` (150) nor wider than
 `toast.max_w` (260): the mockup measures the text in its face in a canvas, and the DLL with the
-faces it draws with (`tagpu_hudlay_measure`, `tagpu_hudtext_width`). On the live HUD, while the
+faces it draws with (`tagpu_hudlay_measure`, `tagpu_hudtext_width`). The text's box is the
+toast's less `toast.pad` each side, so a text longer than `toast.max_w` allows is cut there, never
+drawn over the edge or past the box. On the live HUD, while the
 strip is open, it sits clear of the strip: `2·strip.t + strip.h` under the bar, or `toast.top`
 when that is lower. It shows for `toast.ms` (1800).
 

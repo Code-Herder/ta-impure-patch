@@ -15052,31 +15052,46 @@ at `ctrls+0xEC`. Callers reject any result that differs from requested text.
   ×1, `0x4B7F30`. `DrawPopupButtomDialog 0x4689C0`: `DrawText` ×3, `0x4B7F90` ×1, `0x4C6AE0`.
   `DrawChatText 0x464060`: `DrawText` ×1, `0x467C00` ×1 (a message-box painter that also calls
   `0x4C6890`, `0x4C69A0` and the flip itself), `SetFont`/`SetTextColors`. **Where it draws**
-  (DISASSEMBLED): each line through `DrawText 0x4A50E0` at x `0x8A` (`ebx`, `0x464186`), the first
-  line's top `0x34` (`[esp+0x14]`, `0x4640D6`), each next one down by the font's height
-  (`0x4C1450`, `0x46423E`); nothing when `main+0x37F27` (the lines shown) is 0 (`0x464077`). The
+  (DISASSEMBLED): each line through `DrawText 0x4A50E0`, the first line's top `0x34`
+  (`[esp+0x14]`, `0x4640D6`), each next one down by the font's height (`0x4C1450`, `0x46423E`);
+  nothing when `main+0x37F27` (the lines shown) is 0 (`0x464077`). The text's x is `0x8A`
+  (`ebx`, `0x464186`) only for a line whose kind byte is `0x0A` (`0x464194` jumps straight to the
+  `DrawText` call). Any other kind first draws an icon box through `0x467C00` at x `0x8A`, the
+  line's top, `s = ftol(0.8 · h)` square, with `h` the font's height again (`0x464199`) and 0.8 the
+  double at `0x4FD520`; its text then goes at `ftol(138 + 1.5 · s)`: `s · −1.5` (`0x4FD528`)
+  subtracted from 138.0 (`0x4FD530`, `fsubr`), `ftol` `0x4E43A0`, and `ebx` rewritten at
+  `0x4641E6`. The
   lines are a ring of 30 records of `0x48` bytes (`edi` wraps at `0x1E`, `0x46424C`), the text at
   `main + 0x12EF + 0x48·i`, a kind byte at `+0x1335` and flags at `+0x1336`, from
   `main+0x2A3E`; the gate at `0x4640DE` reads `main+0x37EFE` (1, 2 or 3) against the flags' low
   nibble [INFERRED: which kinds of message the player's setting shows]. In engine pixels, so under
-  HUD scale they move with the world region. Three callers: `0x469FCB` (DrawGameScreen),
-  `0x41F7A5`, `0x41F9D8` (both outside DrawGameScreen; they read the stub's value too, which is
-  `0x34` whenever the live HUD's strip is not on the screen). **Patched at `0x4640D6..0x4640DD`**,
+  HUD scale they move with the world region. Three callers: `0x469FCB` (DrawGameScreen, return
+  address `0x469FD0`), `0x41F7A5` and `0x41F9D8` (both outside DrawGameScreen; return addresses
+  `0x41F7AA` and `0x41F9DD`). The frame at `0x4640D6`: `sub esp,0x20` and four pushes, `0x30`
+  bytes above the return address; the push of `0x4640B1` is the argument of `0x4C1420`, whose
+  `ret 4` pops it, so the return address is `[esp+0x30]` there (DISASSEMBLED). **Patched at
+  `0x4640D6..0x4640DD`**,
   the 8 bytes `C7 44 24 14 34 00 00 00` (`mov dword [esp+0x14],0x34`; `eax` = main from
   `0x4640C0`, read again at `0x4640DE`). The loop's back edge is `0x46425E jne 0x4640DE`, past the
   8 bytes, and nothing lands inside them (DISASSEMBLED: no direct branch or call in the exe
   targets `0x4640D6..0x4640DD`, and the function's switch table at `0x464270` holds only
   `0x46410F` and `0x464142`).
   `chat_top_init` (`tagpu_replay.c`, from `tagpu_replay_init`) checks the 8 bytes with
-  `tagpu_detour_bytes_ok`; on a mismatch it logs `replay: DrawChatText's first line 0x4640D6
-  holds other bytes: the messages stay under the live HUD's strip` and writes nothing, and if no
-  stub memory is had or the landing fails it logs that and frees the stub. Otherwise it lands a
-  5-byte `jmp` and 3 `nop`s (`tagpu_detour_land`) to the stub: `50` push eax; `A1 <addr>` mov
-  eax,[`s_chatTop`]; `89 44 24 18` mov [esp+0x18],eax (the frame's `+0x14` past the push); `58`
-  pop eax; `E9` jmp `0x4640DE`. The flags are not read between, so none is kept. `s_chatTop`
-  (`tagpu_hudinput.c`) is written on the same game thread at the packet's fill and the level's
-  end: `0x34`, or, while the live HUD's strip was on the last frame drawn, `32 + live_clear ·
-  scale · gh / 720`, so the lines start under the strip (hud-in-game.md, *The top layer*).
+  `tagpu_detour_bytes_ok` and that `0x469FCB` is still `E8` to `0x464060` (`call_is`); on a
+  mismatch it logs `replay: DrawChatText's first line 0x4640D6 or its call 0x469FCB holds other
+  bytes: the messages stay under the live HUD's strip` and writes nothing, and if no stub memory
+  is had or the landing fails it logs that and frees the stub. Otherwise it lands a 5-byte `jmp`
+  and 3 `nop`s (`tagpu_detour_land`) to the stub: `50` push eax; `B8 34 00 00 00` mov eax,0x34;
+  `81 7C 24 34 D0 9F 46 00` cmp dword [esp+0x34],0x469FD0 (the return address past the push);
+  `75 05` jne store; `A1 <addr>` mov eax,[`s_chatTop`]; store: `89 44 24 18` mov [esp+0x18],eax
+  (the frame's `+0x14` past the push); `58` pop eax; `E9` jmp `0x4640DE`. So only DrawGameScreen's
+  call reads `s_chatTop`; the other two store the engine's `0x34`. The `cmp` changes the flags,
+  and `0x4640E4 dec ecx` sets them again before any read (`je` at `0x4640E5` reads ZF only, and
+  no carry reader comes before a `cmp`). `s_chatTop` (`tagpu_hudinput.c`) is written on the same
+  game thread at the hit map's take (`tagpu_hudinput_take`, in DrawGameScreen's hook before the
+  draw) and the level's end: `0x34`, or, when that map has the live HUD's strip (the last frame
+  drawn had it), `32 + live_clear · scale · gh / 720`, so the lines start under the strip
+  (hud-in-game.md, *The top layer*).
 - **`0x467D70` the HUD panel painter**, `void (void)`, one caller `0x49842A`, prologue
   `A1 E8 1D 51 00` (5): `esi = *(main+0x37E1B)`; `0x4C69A0(esi)`; `0x4C6890(esi, 0)`; three
   side-specific GAF frames (`main + side·4 + 0x1481F / 0x14833 / 0x14847`, side from
