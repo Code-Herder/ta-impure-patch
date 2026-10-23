@@ -19,7 +19,8 @@ render**: it holds the style guide, the method, the tools and what each one meas
      writes `<out>.png` and `<out>.json` (the zones `gridslice.py` measures against);
    - a sheet of 9-slice parts from `PLAIN=1 tools/hudart/sheets.py <spec> <out dir>`, which writes
      `parts_<sheet>.png` and `sheets.json`.
-   The specs are in `tools/hudart/specs/`; a one-off spec may live beside the job's inputs.
+   The specs are in `tools/hudart/specs/`; a one-off spec may live beside the job's inputs. A job that lays
+   several parts on one canvas draws each whitebox from the same specs (the whole-HUD job's `make_sheets.py`).
    A recess drawn into a 9-slice's whitebox sits where `art/hud/layout.json` puts what the game draws in it:
    the picker's list area starts below its title band (`pad` + `title.h`, 20 units), and a list area
    painted higher puts the title on its edge.
@@ -29,8 +30,8 @@ render**: it holds the style guide, the method, the tools and what each one meas
    painting (an extra dock plate appeared above the parts) and the old paint is kept.
 3. **Every layout is drawn at an aspect the model takes exactly** (21:9, 16:9, 3:2, ...), so
    nothing is stretched to fit and back: a sheet holds several parts at their true aspect, each
-   whitebox at one scale, and is laid out to fill that aspect. Render with `pixel-forge gen --ref
-   <layout>.png:layout`. The model is **Nano Banana Pro**: it keeps a layout's recess widths (Nano
+   whitebox at one scale, and is laid out to fill that aspect. Render with `pixel-forge gen -s <session>
+   --ref <layout>.png:layout`. The model is **Nano Banana Pro**: it keeps a layout's recess widths (Nano
    Banana 2 and 2.1 paint them all equal), at the cost of 21:9 as its widest aspect. Test at
    `--size 1K`; render the kit at 4K, and look at each 4K render before cutting it: one in four
    reframed its sheet (the parts painted several times taller, the reference dropped), and a reroll
@@ -45,7 +46,8 @@ render**: it holds the style guide, the method, the tools and what each one meas
    **Paint a part at about the length it is drawn.** A 9-slice drawn far longer than any sheet cell
    (the live strip, 787 units at HUD 150) is painted 420 units long, so the period `seamband.py`
    learns from its middle is long enough that its wear does not read as a rhythm; one drawn at a
-   fixed size (the hover strip, 137 units) is painted at that size and does not repeat.
+   fixed size (the hover strip, drawn about 137 units) is cut to about that length (145.6 units: the 140 aimed
+   for and its join's overlap) and does not repeat.
    `.data/hud-art/work/m3all/` is the whole job: `make_sheets.py` draws the layouts, `cut_all.py`
    cuts, repeats and pins slices.
 4. **Before cutting**: key out a sheet's labels (everything outside its cells: `.data/hud-art/work/m3kit/unlabel.py`), and scale each painting

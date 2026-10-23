@@ -1,5 +1,5 @@
 """Files cut parts into art/hud/, the replay HUD's shared source: each part's PNG, lossless, and its entry
-in art/hud/kit.json. The mockup (tools/hudart/mockup/) draws from there, and the DLL is to bake from there.
+in art/hud/kit.json. The mockup (tools/hudart/mockup/) draws from there, and the DLL packs it with tools/hudpak.py.
 usage: file.py <kit dir> [--look <l1>,<l2>,...] <part>[=<name>] ...
 
 <kit dir> is a cutter's output (gridslice.py, cut.py, iconcut.py, tile.py) or a lookmerge.py kit. A part is

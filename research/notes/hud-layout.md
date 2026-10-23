@@ -107,8 +107,7 @@ mockup its query carries `stat=1`, so that the chips it captures are on screen.
 
 **A proposal, not the game.** The owner chose variation B of the replay UI's missing features
 on 2026-10-12, from a canvas of four whitebox variations: forks drawn as lanes on the timeline.
-Its art is the "stencil console" style (V3 of four painted by Codex, picked 2026-10-13): dark
-plates and near-black wells with khaki stencil text, warm-steel buttons.
+Its art is the worn painted steel of the rest of the HUD (`hud-art.md`).
 The mockup draws it from `layout.json`'s `proposed` section behind its **Proposed** switch (on
 by default, `prop=0` turns it off). The DLL does not read that section, and `laycheck.py` runs
 with `prop=0`. A part the kit has no art for yet is drawn as whitebox: a mid-grey plate with a

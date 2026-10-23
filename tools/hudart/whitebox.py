@@ -1,4 +1,4 @@
-"""Render the whitebox Codex paints a one-piece part from: the plate in grey, each recess dark and numbered,
+"""Render the whitebox a one-piece part is painted from: the plate in grey, each recess dark and numbered,
 each text zone (text written on the plate itself, optional `TEXT` in the spec) outlined, the legend under it,
 all on the flat magenta key.
 usage: whitebox.py <spec> <out base>    -> <out base>.png, and <out base>.json for gridslice.py
