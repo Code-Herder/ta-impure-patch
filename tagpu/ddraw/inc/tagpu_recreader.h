@@ -236,6 +236,10 @@ typedef struct RecSummary {
 
 /* 1 read; 0 the file cannot be read or is not a recording of this format (why). */
 int recr_summary(const char* path, RecSummary* s, char* why, unsigned cap);
+/* What `path` is to this build, for the prune (tagpu_recfile.h): 1 a recording it reads, 0 one of
+   our recordings in a format it does not (its magic, header block and format entry read), -1
+   anything else, a file it cannot open or read among them. */
+int recr_format_of(const char* path);
 
 /* A TIMELINE is a segment of the file (tagpu_recfmt.h): the original, id 0, or a fork recorded
    from a takeover. A CHAIN is a timeline and its ancestors, root first: segment s covers

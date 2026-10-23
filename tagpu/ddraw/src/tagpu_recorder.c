@@ -2491,6 +2491,7 @@ static Rec* rec_start(const Level* L, int tick, const RecMpConfig* mp)
     unsigned i, n = tagpu_simreg_count(), widest = 4;
     const SimDesc* wide = table_too_wide();
     char map[64];
+    int fresh;
     SYSTEMTIME lt;
     FILETIME now;
     Tlv t;
@@ -2633,13 +2634,16 @@ static Rec* rec_start(const Level* L, int tick, const RecMpConfig* mp)
         if (n && !ring_put(r, RK_MINIMAP, NULL, 0, hb, n)) goto fail;
     }
     ring_publish(r, 1);
+    fresh = !g->fork.file;
     if (!tagpu_recwriter_start(g)) {
         tagpu_logf("recorder: FAILED no writer thread (%lu): not recording", GetLastError());
         goto fail;
     }
     s_mp_file=g->mp;
-    /* a new file, never a fork's: the prune runs on a file worker, and keeps this one, the newest */
-    if (!g->fork.file && !recfile_request(g->path, REC_FILE_PRUNE, keep_count(), NULL, NULL))
+    /* a new file, never a fork's (`fresh`, read before the writer starts: it takes the fork's
+       handle and clears g->fork.file on its own thread): the prune runs on a file worker, and
+       keeps this one, the newest */
+    if (fresh && !recfile_request(g->path, REC_FILE_PRUNE, keep_count(), NULL, NULL))
         tagpu_logf("recorder: no prune at %s: no file worker", g->path);
     if (g->fork.id)
         tagpu_logf("recorder: recording timeline %u of %s from GameTime %d (parent %u): %u slots, "
@@ -7233,8 +7237,8 @@ fail:
 
 /* A level is recorded when this lever is on at its first iteration: a play default
    (tagpu_opt.c), so every skirmish and multiplayer game is, unless `tagpu_recorder.off` or
-   `tagpu_defaults.off` is in the game's folder (a tacli instance's bare launch writes the second;
-   `tacli arm <instance> recorder.on` records there). Its text may say `keep N`, how many
+   `tagpu_defaults.off` is in the game's folder and `tagpu_recorder.on` is not (a tacli
+   instance's bare launch writes the second; `tacli arm <instance> recorder.on` records there). Its text may say `keep N`, how many
    recordings the prune keeps (tagpu_recfile.h, THE PRUNE). It decides whether a game is recorded,
    not what the simulation runs, so it is not a simulation lever and not in the header's lever list. */
 #define REC_ON "tagpu_recorder.on"

@@ -409,10 +409,8 @@ class Worker:
                           "--private-registry", timeout=300)
             if rc:
                 raise CouldNotRun(f"tacli create {self.name}: {last(o)}")
-            # keep 2: from a worker's third recording on, every launch of L prunes its replays\ for
-            # real (tagpu_recfile.h, THE PRUNE), so the gate reaches the prune and every later test of
-            # the worker runs beside it. No test reads a recording out of the instance once its own
-            # test has collected it.
+            # keep 2: the prune keeps one recording besides the new one, which prune_step's
+            # expectations count on (tagpu_recfile.h, THE PRUNE)
             tacli("arm", self.name, "recorder.on=keep 2")
         except BaseException:
             stop_xvfb(self.xvfb)
@@ -1796,6 +1794,55 @@ def check_or_fail(why, *args):
     return []
 
 
+def prune_step(w, fx, out, forked):
+    """THE PRUNE (tagpu_recfile.h) on a recorded launch of the fixture's scenario, under the
+    instance's `keep 2` (Worker): replays\\ seeded, oldest last, with two plain copies of L's
+    recording, a favourite one, a recording with live forks (`forked`, the lane's own), one in the
+    format before this build's and a file that is not a recording. Besides the new recording the
+    newest is kept; of the rest the second plain copy and the older format go, and the favourite,
+    the forked one and the non-recording stay. Returns its check."""
+    w.place(fx["fix"], fx["dll"])
+    rd = w.gamedir / "replays"
+    rd.mkdir(exist_ok=True)
+    rec, now = Path(fx["rec"]), time.time()
+    seeds = ("plain-a", "plain-b", "starred", "forked", "older", "not-a-recording")
+    for k, name in enumerate(seeds):
+        dst = rd / f"0000 {name}.imprec"
+        if name == "forked":
+            shutil.copyfile(forked, dst)
+        elif name == "older":
+            header_copy(rec, dst, tarec.RT_FORMAT,
+                        lambda b: struct.pack("<I", struct.unpack("<I", b)[0] - 1))
+        elif name == "not-a-recording":
+            dst.write_bytes(b"not a recording")
+        else:
+            shutil.copyfile(rec, dst)
+        os.utime(dst, (now - 600 * (k + 1),) * 2)
+    star = rd / "0000 starred.imprec"
+    # an index line with the favourite flag set: name size format start last end fav played map
+    # nseats marks (tagpu_replays.c, the index)
+    (rd / "index.dat").write_text("IMPURE-REPLAYS-INDEX\t1\n"
+                                  f"{star.name}\t{star.stat().st_size}\t0\t0\t0\t0\t1\t0\t-\t0\t\n",
+                                  newline="\n")
+    log = Log(w)
+    rc, text = tacli("scenario", "load", w.name, SCENARIOS / fx["fix"]["load"], "--defaults",
+                     "--restart", "--keep-dll", "--json", timeout=300)
+    if rc:
+        raise CouldNotRun(f"prune: load: {last(text)}")
+    got = log.wait(r"recorder: prune at .*", ACK_S)
+    if fx["cover"]:
+        cover_ask(w, log, "prune")
+    left = sorted(p.name for p in rd.glob("0000 *.imprec"))
+    w.collect(out / "prune")
+    w.stop()
+    want = ("6 older recordings, the newest 1 kept; of the rest, 2 deleted, 2 kept (forked or "
+            "marked), 0 in use, 1 unreadable")
+    kept = sorted(f"0000 {n}.imprec" for n in ("plain-a", "starred", "forked", "not-a-recording"))
+    if not got or want not in got or left != kept:
+        raise Failed(f"prune: {got.strip() if got else f'no prune line in {ACK_S} s'}; left {left}")
+    return ("forks: the prune", PASS, f"{want}; left {', '.join(left)}")
+
+
 def fork_file(w, log):
     """The file a takeover's fork is recorded into, as the recorder's line names it relative to
     the game's folder: the line comes at the fork's first capture, the first step after a
@@ -2048,6 +2095,7 @@ def forks_steps(w, fx, out, results):
     fork(6, base + 600)
     results.add(("forks: two-boundary and exported puppet dumps", PASS,
                  "both EQUAL; highest deleted ID 5 followed by ID 6"))
+    results.add(prune_step(w, fx, out, source))
     # A read-only directory is a real writer refusal, without a DLL fault-injection lever.
     w.place(fx["fix"], fx["dll"])
     rd = w.gamedir / "replays"

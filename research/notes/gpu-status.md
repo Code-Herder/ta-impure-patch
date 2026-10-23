@@ -2957,11 +2957,13 @@ recording that has ended is closed ([*Its lifetime*](tadr-port/demo-recorder-ski
 fork's, asks a recording-file worker to prune `replays\` as its writer starts (`recfile_request`,
 `REC_FILE_PRUNE`); a full queue or an exiting process refuses the request, and the log says
 `recorder: no prune at <file>: no file worker`. The other `replays\*.imprec` are taken newest first
-by last write time and the first `REC_KEEP` − 1 = 49 are kept, so the newest 50 are kept counting
+by last write time (a replay copied in with its old date counts as old) and the first `REC_KEEP` − 1 = 49 are kept, so the newest 50 are kept counting
 the new one. The lever's text `keep N` changes the count (`keep_count`, `tagpu_recorder.c`): with no
 number, or `keep 0`, it is `REC_KEEP`; `keep 1` keeps the new one alone. Each older recording is
 deleted unless it is in use, has a live fork, is a favourite or bookmarked in `replays\index.dat`, or
-does not read as a recording. **Nothing in use or marked can be deleted, by an ordering** (the
+is not one of our recordings. One of ours in another format (`recr_format_of`) is deleted like any
+other unmarked one: this build can neither read its forks nor play it, and keeping them would leave
+every format change's recordings on disk for good. **Nothing in use or marked can be deleted, by an ordering** (the
 comment above `prune_one`): the prune takes the recording's lock exclusively, as every writer does
 (`recfile_lock`), so no append, fork, deletion or compaction runs on it from then on; reads its
 timelines, and a live fork keeps it; opens the recording itself exclusively with DELETE access,
@@ -2975,7 +2977,12 @@ keeps. `SetFileInformationByHandle` is resolved at run time, so the DLL still lo
 is absent the prune deletes nothing and counts every older recording as in use. One line per
 prune: `recorder: prune at <new>: N older recordings, the newest K kept; of the rest, D deleted, M
 kept (forked or marked), B in use, U unreadable`, where *in use* also counts a recording whose lock
-or file could not be opened exclusively and one whose index could not be read. MEASURED 2026-10-22
+or file could not be opened exclusively and one whose index could not be read. The process's exit
+waits for the worker (`recfile_exit`), so the prune stops at the next file once the exit has begun.
+**What the ordering does not cover:** a favourite given while a prune runs, after it has read that
+file's marks, or one the index could not save (`index_save` failing to write `index.tmp`, or the
+index over `INDEX_CAP`), does not keep its file. The tareplay forks test runs the prune on a seeded
+folder and checks its line and what is left (`prune_step`). MEASURED 2026-10-22
 on an instance with play defaults on and no lever file: 55 older recordings, the newest 49 kept
 beside the new one; of the other six, the 2 oldest plain copies deleted, a favourite, a bookmarked
 file and a file with a live fork (made by a real takeover) kept as forked or marked, and an

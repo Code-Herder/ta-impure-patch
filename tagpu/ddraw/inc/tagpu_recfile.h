@@ -20,8 +20,8 @@ int recmeta_parse(RecTimelineState* out, unsigned* count, const void* raw, unsig
 uint64_t recfile_now(void);
 /* Every recording writer holds this persistent file's exclusive handle until its last mutation.
    Never unlink the lock file while another may hold it: unlinking lets two callers lock different
-   objects at one path. The prune alone deletes one, through its own exclusive handle, with the
-   recording it locks. */
+   objects at one path. The prune alone deletes one, through its own exclusive handle: with the
+   recording it locks, or one it made itself for a recording it keeps. */
 HANDLE recfile_lock(const char* path, char* why, unsigned cap);
 void recfile_unlock(HANDLE* lock);
 
@@ -29,7 +29,9 @@ enum RecFileOp { REC_FILE_TOUCH, REC_FILE_DELETE, REC_FILE_EXPORT, REC_FILE_COMP
 /* THE PRUNE. REC_FILE_PRUNE, requested as a new recording starts (`id` = how many to keep, `path`
    the new recording, one of the `id`): the other replays\*.imprec newest first by last write, the
    first `id` - 1 kept, and each older one deleted unless it is in use, has a live fork, or is a
-   favourite or bookmarked in replays\index.dat. A file that does not read as a recording is kept.
+   favourite or bookmarked in replays\index.dat. A file that is not one of our recordings is kept;
+   one of another format is deleted like any other (this build can neither read its forks nor play
+   it). "Older" is by last write: a replay copied in with its old date counts as old.
    REC_KEEP is the count when the recorder's lever names none (`keep N`, tagpu_recorder.c). */
 #define REC_KEEP 50
 /* The worker owns copies of the paths. A full queue or an exiting process refuses the request;

@@ -142,13 +142,16 @@ void recfile_leave(void)
 
 enum { PRUNE_GONE, PRUNE_KEPT, PRUNE_BUSY, PRUNE_ODD };
 
-/* Has the recording a live timeline besides the original? -1 when it does not read as one. */
+/* Has the recording a live timeline besides the original? 0 for one of another format, whose
+   timelines this build cannot read and cannot play either; -1 when it is not one of ours. */
 static int forked(const char* path)
 {
     RecTimeline t[RECR_TIMELINES];
     char why[160];
-    RecReader* r = recr_open(path, why, sizeof why);
-    int n, i, f = 0;
+    RecReader* r;
+    int n, i, f = 0, k = recr_format_of(path);
+    if (k <= 0) return k;
+    r = recr_open(path, why, sizeof why);
     if (!r) return -1;
     n = recr_timelines(r, t, RECR_TIMELINES, why, sizeof why);
     recr_close(r);
@@ -161,7 +164,8 @@ static int forked(const char* path)
 /* One recording older than the kept ones. WHY NOTHING IN USE OR MARKED IS DELETED (an ordering):
    1. its lock, taken exclusively as every writer takes it (recfile_lock): no append, fork,
       deletion or compaction runs on it from here on, so what step 2 reads stays true;
-   2. its timelines read: one with a live fork is kept;
+   2. its timelines read: one with a live fork is kept, and so is a file that is not one of our
+      recordings; one in another format has none this build can read, so only step 4 keeps it;
    3. the recording itself opened exclusively, with DELETE access: it fails while anything holds
       it open (a playing, a reader, the writer), and while it is held nothing can open it, so no
       playing starts and no bookmark is added, a bookmark being added only by a playing of it;
@@ -206,6 +210,15 @@ static int newer_first(const void* a, const void* b)
     return CompareFileTime(&((const PruneFile*)b)->t, &((const PruneFile*)a)->t);
 }
 
+static int exiting(void)
+{
+    int e;
+    jobs_lock();
+    e = s_exiting;
+    jobs_unlock();
+    return e;
+}
+
 static void prune(const char* fresh, unsigned keep)
 {
     WIN32_FIND_DATAA fd;
@@ -215,21 +228,28 @@ static void prune(const char* fresh, unsigned keep)
     unsigned n = 0, cap = 0, i, c[4] = { 0 };
     /* the new recording is one of the `keep` whether or not its writer has made it yet */
     if (keep) keep--;
-    if (h == INVALID_HANDLE_VALUE) return;
-    do {
-        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || !_stricmp(fd.cFileName, own)) continue;
-        if (n == cap) {
-            PruneFile* g = (PruneFile*)realloc(all, (cap = cap ? 2 * cap : 256) * sizeof *all);
-            if (!g) break;
-            all = g;
-        }
-        snprintf(all[n].name, MAX_PATH, "replays\\%s", fd.cFileName);
-        all[n++].t = fd.ftLastWriteTime;
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || !_stricmp(fd.cFileName, own))
+                continue;
+            if (n == cap) {
+                PruneFile* g = (PruneFile*)realloc(all, (cap = cap ? 2 * cap : 256) * sizeof *all);
+                if (!g) break;
+                all = g;
+            }
+            /* a name too long for its path and its lock's is left alone, counted unreadable */
+            if (snprintf(all[n].name, MAX_PATH, "replays\\%s", fd.cFileName) >= MAX_PATH - 5) {
+                c[PRUNE_ODD]++;
+                continue;
+            }
+            all[n++].t = fd.ftLastWriteTime;
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
     if (n > keep) {
         qsort(all, n, sizeof *all, newer_first);
-        for (i = keep; i < n; i++) c[prune_one(all[i].name)]++;
+        /* the process's exit waits for this worker (recfile_exit): it stops at the next file */
+        for (i = keep; i < n && !exiting(); i++) c[prune_one(all[i].name)]++;
     }
     free(all);
     tagpu_logf("recorder: prune at %s: %u older recordings, the newest %u kept; of the rest, %u "
