@@ -869,8 +869,9 @@ rest, D deleted, M kept (forked or marked), B in use, U unreadable`. The log say
 the corrections, which must be 0; `recorder: N iterations captured: …` gives the capture's cost.
 A native file contains this peer's observed world plus the separate exact-owner
 contribution ledger. `tacli replay play` plays it with every actor a puppet beside the viewer,
-`replay seek` and the `seek` trigger seek it, and `replay takeover` takes it over into a skirmish
-timeline of the same file; it has no ten-seat hosting yet (the multiplayer slice note's
+`replay seek` and the `seek` trigger seek it, `replay timeline NAME N` moves a running playback to
+timeline N of its file in place (`replay timelines NAME` lists them as its HUD sees them), and
+`replay takeover` takes it over into a skirmish timeline of the same file; it has no ten-seat hosting yet (the multiplayer slice note's
 *Owner-authority materializer* and the sections after it).
 Mandatory contributions run with the recording switch off and continue after a
 local save failure. Live rewind is available only for a recorded skirmish.
