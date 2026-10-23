@@ -2186,17 +2186,22 @@ def forks_steps(w, fx, out, results):
         T = played["last"]
         try:
             R = tarec.takeover_at(str(copy), tl, T)
+            evict = tarec.fork_prediction(segs, tl, R)
+            want = "fork would delete " + ("no timeline" if evict is None else f"timeline {evict}")
         except tarec.Unreadable as e:
-            raise CouldNotRun(f"forks: the takeover at {T} of timeline {tl}: {e}")
-        evict = tarec.fork_prediction(segs, tl, R)
-        want = "fork would delete " + ("no timeline" if evict is None else f"timeline {evict}")
+            # a start that is a timeline's first iteration: the DLL refuses it, naming the same
+            # next GameTime (takeover_point)
+            nxt = re.search(r"the first GameTime one can is (\d+)", str(e))
+            if not nxt:
+                raise CouldNotRun(f"forks: the takeover at {T} of timeline {tl}: {e}")
+            R, want = None, f"fork prediction refused: .*the first GameTime one can is {nxt[1]}"
         n = len(log.lines)
         w.trigger(f"takeover {P} at {T} dry-run")
         said = log.wait(r"replay: .*: (fork would delete (no timeline|timeline \d+)|fork "
                         r"prediction refused: |takeover refused: )", ACK_S, n)
-        rounded = R == T or log.wait(rf"a takeover asked for at GameTime {T} takes over at {R}, ",
-                                     0, n)
-        if not said or want not in said or not rounded:
+        rounded = R is None or R == T or \
+            log.wait(rf"a takeover asked for at GameTime {T} takes over at {R}, ", 0, n)
+        if not said or not re.search(want, said) or not rounded:
             raise Failed(f"forks: the in-game prediction at {T}: "
                          f"{said.strip() if said else 'no answer'}; the file's: {want} from {R}")
         # a refused seek's outcome, the HUD's toast: GameTime 0 is outside every recording

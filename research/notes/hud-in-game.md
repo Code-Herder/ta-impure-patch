@@ -651,7 +651,8 @@ the axis they span, a fork's deletion and export, the live rewind's verbs and st
 request's outcome, whose serial lets a caller see each outcome once; the timelines carry a serial
 of their own, which moves when their rows or axis change. All are called between two
 sim steps, never inside one. A call that changes anything queues it for the frame visit; the plan
-commits nothing but reads the file's block headers three times, so it answers a click and is never
+commits nothing but reads the file's block headers three times (four where the segment holding
+T holds anything), so it answers a click and is never
 called per frame. The trigger's `takeover`, `rewind`, `hud seek` and `hud fork` run through the
 same calls, and `hud state` prints what they answer (`tagpu_replay.c`, the trigger's comment). The
 details: [the takeover](tadr-port/demo-recorder-s4-takeover.md#driving-it),

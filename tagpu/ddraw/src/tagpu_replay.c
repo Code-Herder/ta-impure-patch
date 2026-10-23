@@ -8633,7 +8633,7 @@ static void rw_visit(void)
    - `hud fork delete <id>` and `hud fork export <id> "<stem>"`: the HUD's fork maintenance of the
      playing's file (tagpu_replay_fork_op); the frame visit's fork_poll logs the outcome.
    - `hud state`: what the HUD's recorder calls answer, on any level, with or without a
-     recording, a rewind's included, in three lines a test parses:
+     recording, a rewind's included, in four lines a test parses:
      `replay: NAME: hud state timelines <rows>; axis A..B; span F..L; watched N`, each row
      `<id>:<parent>@<fork_at>..<last>/<L|D>/c<controlled>` with `*` after a row on the chain,
      `none` with NAME `-` when no recording is open (tagpu_replay_timelines, tagpu_replay_axis,
@@ -8892,6 +8892,12 @@ static void trigger_read(void)
         char* ta = ta_main();
         if (!ta || s_rw.state || !tagpu_puppet_on() || !s_rd || s_dead) {
             tagpu_logf("replay: frame seek refused: this level is not ordinary playback");
+            return;
+        }
+        /* a boundary's hold ends only with the seek the frame visit runs for it (THE BOUNDARY):
+           this seek, run here, would drop that one and leave the hold set */
+        if (s_hold) {
+            tagpu_logf("replay: frame seek refused: the playing waits at a timeline boundary");
             return;
         }
         s_seek.pending = 0;
@@ -9519,8 +9525,9 @@ void tagpu_replay_level_end(void)
    from the wndproc or the shield's mouse path, the trigger from the frame visit. A call that
    changes anything queues it and the frame visit runs it (THE SEEK, THE REWIND'S VERBS, the file
    worker's tickets). The plan answers at once, committing nothing, but it reads the file: its
-   scans read every block header three times (takeover_point's two, the cache's one), so it is
-   called for a click, never per frame. */
+   scans read every block header three times where the segment holding T holds nothing and four
+   times elsewhere (takeover_point's recr_exact_at, recr_refresh_at in the refresh form and
+   recr_append_point, then the cache's), so it is called for a click, never per frame. */
 
 /* the cache and its axis are given while a recording is open: a playing past its first step,
    or a live rewind's recording */
@@ -9810,7 +9817,7 @@ void tagpu_replay_result(TAGPU_REPLAY_RESULT* out)
     *out = s_res;
 }
 
-/* The trigger's `hud state`: what the HUD's calls answer, in three lines a test parses. */
+/* The trigger's `hud state`: what the HUD's calls answer, in four lines a test parses. */
 static void hud_state_log(void)
 {
     static const char* const states[] = {"idle", "flush", "open", "past", "ending"};

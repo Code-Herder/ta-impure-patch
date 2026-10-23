@@ -128,7 +128,8 @@ int  tagpu_replay_speed_set(unsigned gs);
 
    THE TAKEOVER'S PLAN: where a takeover asked for at T starts and what its fork would delete,
    found as the takeover finds them (takeover_point) and committing nothing. It reads the file's
-   block headers three times, so it answers a click and is never called per frame. R is where
+   block headers three times where the segment holding T holds nothing and four times elsewhere,
+   so it answers a click and is never called per frame. R is where
    tk_bound lets one start: T itself or the refresh at or before it -- T where the segment holding
    T holds nothing (recr_exact_at). `next` is set only when R is a timeline's first iteration,
    which no takeover starts at, and names the first GameTime one can (R + 1). 1 with
@@ -159,8 +160,8 @@ typedef struct TAGPU_REPLAY_TIMELINE {
 } TAGPU_REPLAY_TIMELINE;
 int tagpu_replay_timelines(TAGPU_REPLAY_TIMELINE* out, int cap);
 int tagpu_replay_axis(unsigned* first, unsigned* last);
-/* One more at every change of what those two give, the playing's end included: a caller that
-   remembers it knows when to read them, and to re-plan a takeover, again. */
+/* One more at every change of the cache's rows or axis, the playing's end emptying them included:
+   a caller that remembers it knows when to read them, and to re-plan a takeover, again. */
 unsigned tagpu_replay_timelines_serial(void);
 
 /* A fork of the playing's file deleted or exported (replays\<stem>.imprec), by the file worker:

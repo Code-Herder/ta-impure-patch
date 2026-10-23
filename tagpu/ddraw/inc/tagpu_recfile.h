@@ -61,7 +61,7 @@ unsigned recfile_request(const char* path, unsigned op, unsigned id, const char*
                          const char* request);
 /* A ticket's outcome: 0 still queued or running; 1 done; -1 refused, `why` filled; -2 unknown --
    never issued, or finished before the last REC_FILE_RESULTS completions: a result outlives
-   REC_FILE_RESULTS - 1 later ones. Any thread. */
+   REC_FILE_RESULTS - 1 completions after its own. Any thread. */
 #define REC_FILE_RESULTS 16
 int recfile_result(unsigned ticket, char* why, unsigned cap);
 /* 1 while a queued or running request names `path`, spelled as the request spelled it: for a

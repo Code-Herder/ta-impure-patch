@@ -107,7 +107,7 @@ unknown. A job is given a ticket only once it has a worker's slot; the deletion 
 playing holds is a queued request whose outcome, `timeline N is in use`, is in the ring at once.
 **The ordering, under the queue's lock:** the worker writes the result before its job leaves the
 pending set, so from its issue a ticket is pending or in the ring at every instant the lock is
-free, until 15 later requests have finished: a result outlives 15 later completions. Each slot
+free, until 15 completions after its own: a result outlives 15 completions after its own. Each slot
 names its ticket, so a ticket the ring no longer holds reads unknown, never another request's
 outcome. `recfile_completed` counts the finished requests without the lock, for a reader
 that wants to know some file may have changed.

@@ -70,13 +70,12 @@ typedef struct FileJob {
 static FileJob* s_pending[FILE_JOBS];
 /* THE TICKETS. A request's outcome waits in a ring of REC_FILE_RESULTS slots, filled in the order
    the requests finish: the k-th completion writes slot k % N with its ticket.
-   THE INVARIANT, an ordering under jobs_lock: from its issue until N - 1 later requests have
-   finished, a ticket is in s_pending or in the ring at every instant the lock is free -- the
-   worker writes the result before the job leaves s_pending, both under the lock, and the in-use
-   refusal writes its result in the same hold of the lock that issues the ticket. So a result
-   outlives N - 1 later completions, and a ticket the ring no longer holds reads unknown (-2),
+   THE INVARIANT, an ordering under jobs_lock: from its issue until N - 1 completions after its
+   own, a ticket is in s_pending or in the ring at every instant the lock is free -- the worker
+   writes the result before the job leaves s_pending, both under the lock, and the in-use refusal
+   writes its result in the same hold of the lock that issues the ticket. So a result outlives
+   N - 1 completions after its own, and a ticket the ring no longer holds reads unknown (-2),
    never another request's outcome: each slot names its ticket. */
-_Static_assert(REC_FILE_RESULTS >= 2 * FILE_JOBS, "the ring holds more outcomes than jobs run");
 static unsigned s_ticket;           /* the last issued; 0 is never one */
 static struct { unsigned ticket; int ok; char why[160]; } s_done[REC_FILE_RESULTS];
 static volatile LONG s_completed;   /* requests finished, written under the lock */
@@ -412,13 +411,16 @@ int recfile_result(unsigned ticket, char* why, unsigned cap)
     return r;
 }
 
+/* A prune is not counted: its `path` names the new recording it keeps, and it never opens that
+   file or its lock (prune skips it by name) -- it locks only older recordings. */
 int recfile_pending(const char* path)
 {
     unsigned i;
     int k = 0;
     jobs_lock();
     for (i = 0; i < FILE_JOBS; i++)
-        if (s_pending[i] && !_stricmp(s_pending[i]->path, path)) k = 1;
+        if (s_pending[i] && s_pending[i]->op != REC_FILE_PRUNE &&
+            !_stricmp(s_pending[i]->path, path)) k = 1;
     jobs_unlock();
     return k;
 }
