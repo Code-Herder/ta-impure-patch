@@ -55,9 +55,12 @@ fy_ = DHp / DH
 Z = {k: [x, y * fy_, w, h * fy_] for k, (x, y, w, h) in Z.items()}
 # each whitebox recess is matched to one dark region of the painting, all at once (one region per recess):
 # a painting that keeps the layout but shifts or resizes a recess still pairs with the right one. Regions come
-# from the dark mask eroded by one HUD unit, so grime or a shadow line along a rim cannot join two recesses
+# from the dark mask eroded by a unit, or by .3 of the smallest recess's short side when that is more, so grime
+# or a shadow line across a plate band cannot join two recesses (grime bridged the stats window's 3-unit bands
+# by more than a unit). Only these seeds are eroded; every edge is measured on `dark` itself
 from scipy.optimize import linear_sum_assignment
-rl, rn = ndimage.label(ndimage.binary_erosion(dark, iterations=max(2, int(round(sx)))))
+seed = max(2, int(round(sx)), int(.3 * min(min(w, h) for _, _, w, h in Z.values()) * sx))
+rl, rn = ndimage.label(ndimage.binary_erosion(dark, iterations=seed))
 regs = [(q, o) for q, o in enumerate(ndimage.find_objects(rl), 1) if o and (o[0].stop - o[0].start) * (o[1].stop - o[1].start) > 4 * sx * sx]
 keys = list(Z)
 cost = np.zeros((len(keys), len(regs)))

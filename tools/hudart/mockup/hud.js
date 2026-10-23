@@ -70,10 +70,13 @@ const HUD = (() => {
   const U = n => `calc(${+n.toFixed(4)} * var(--u))`;
   const rect = b => `left:${U(b.x)};top:${U(b.y)};width:${U(b.w)};height:${U(b.h)}`;
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const WB_GLYPH = { export: '⇩', delete: '✕', rewind: '⟲' };
   const attrs = a => Object.entries(a || {}).map(([k, v]) => ` data-${k}="${esc(v)}"`).join('');
   // a part at box b; `cls` adds classes (hot, pressed, off, face), `data` adds data- attributes
   function art(part, b, inner = '', cls = '', data, style = '') {
     const k = K[part];
+    // a part the kit lacks is drawn as whitebox; an icon it lacks, as its stand-in glyph
+    if (!k && part.startsWith('i_')) return `<div class="art noicon ${cls}" data-wb="${esc(WB_GLYPH[part.slice(2)] || part.slice(2))}" style="${rect(b)};--wbs:${+(b.h * .9).toFixed(3)}${style}"${attrs(data)}></div>`;
     if (!k) return `<div class="art noart ${cls}" style="${rect(b)}${style}"${attrs(data)}>${inner}</div>`;
     if (k.kind === 'grid' || k.kind === 'tile')
       return `<div class="art composed ${cls}" style="${rect(b)}${style}" data-${k.kind === 'grid' ? 'gp' : 'tile'}="${part}" data-w="${b.w}" data-h="${b.h}"${attrs(data)}>${inner}</div>`;
@@ -83,13 +86,14 @@ const HUD = (() => {
   function vars(part) {
     const k = K[part];
     let v = `--bi:url('${url(part)}')`;
-    if (k.kind === 'nine') { const [t, r, b, l] = k.slice; v += `;--bsl:${t} ${r} ${b} ${l};--bw:${[t, r, b, l].map(x => U(x / k.scale)).join(' ')}`; }
+    if (k.kind === 'nine') { const [t, r, b, l] = k.slice; v += `;--bsl:${t} ${r} ${b} ${l};--bw:${[t, r, b, l].map(x => U(x / k.scale)).join(' ')}`; v += `;--bir:${k.xtile ? 'round' : 'stretch'} stretch`; }
     return v;
   }
   // a held button shows its pressed part, and its face sinks; released, it shows its own part again
   function press(el, down) {
     const part = down ? el.dataset.down : el.dataset.up;
-    if (!part || !K[part]) return;
+    if (part && !K[part]) { el.classList.toggle('pressed', down); return; }
+    if (!part) return;
     for (const d of vars(part).split(';')) { const i = d.indexOf(':'); el.style.setProperty(d.slice(0, i), d.slice(i + 1)); }
     el.classList.toggle('pressed', down);
   }
@@ -99,7 +103,7 @@ const HUD = (() => {
     const S = L.styles[st], size = s.fit ? Math.min(S.size, b.h / s.fit) : S.size;
     const shadow = S.outline ? (([px, py, nx, ny]) => [[px, py], [nx, ny], [px, ny], [nx, py]].map(([x, y]) => `${U(x)} ${U(y)} 0 #000`).join(','))(S.outline)
       : `0 ${U(S.shadow)} 0 rgba(0,0,0,.8)`;
-    return `<div class="t${s.align === 'c' ? ' c' : ''}${s.face ? ' face' : ''}"${attrs(data)} style="${rect(b)};font:${S.weight} ${U(size)}/1 '${S.font}',sans-serif;`
+    return `<div class="t${s.align === 'c' ? ' c' : s.align === 'r' ? ' r' : ''}${s.face ? ' face' : ''}"${attrs(data)} style="${rect(b)};font:${S.weight} ${U(size)}/1 '${S.font}',sans-serif;`
       + `color:${colour || S.colour};text-transform:${S.upper ? 'uppercase' : 'none'};letter-spacing:${S.spacing}em;text-shadow:${shadow}">${html}</div>`;
   }
   const signed = (a, b) => { const g = L.signs; return `<b style="color:${g.pos};font-weight:${g.weight}">+${a}</b>&nbsp;/&nbsp;<b style="color:${g.neg};font-weight:${g.weight}">−${b}</b>`; };
@@ -129,24 +133,137 @@ const HUD = (() => {
     // the transport plate and the timeline housing are the HUD's whole: a click between their buttons is taken too
     let h = `<div class="box" data-act="${D.act}" style="${rect(tb)}">` + art(T.part, zero(T.w, D.h)) + T.buttons.map(s => button(
       { ...s, text: s.text && { ...s.text, html: bound[s.text.bind] } }, T.button, place(F, { in: s.in, pad: T.button.pad }), st)).join('') + `</div>`;
-    const rx = tb.x + T.w + R.gap, rw = st.W - R.r - rx, FR = frame(rw, D.h, R.part);
-    const lane = place(FR, R.markers), tr = place(FR, R.track), p = st.t / st.T, M = R.markers, B = M.badge;
+    // proposed: with forks the housing is the one painted with the Forks bay's pocket at its left end
+    const part = st.forks ? L.proposed.forks.rail : R.part;
+    const rx = tb.x + T.w + R.gap, rw = st.W - R.r - rx, FR = frame(rw, D.h, part);
+    const lane = place(FR, R.markers), tr = place(FR, R.track), p = st.t / st.T, pf = filled(st), M = R.markers, B = M.badge;
     const along = (w, e, f) => e + (w - 2 * e) * f;
-    const marks = st.markers.map(m => {
+    const bay = st.forks ? forksBay(st, FR) : '';
+    let marks = st.markers.map(m => {
       const cx = along(lane.w, M.ends, m.t / st.T), s = lane.h, bb = { x: cx - s / 2, y: 0, w: s, h: s };
-      const col = m.seat < 0 ? M.bookmark_dot : st.seats[m.seat].colour;
-      return `<div class="box" style="${rect(bb)}"><div class="box" style="${rect({ x: B.dot, y: B.dot, w: s - 2 * B.dot, h: s - 2 * B.dot })};border-radius:50%;background:${col}"></div>`
-        + art(B.part, zero(s, s)) + icon(M.icons[m.kind], { x: B.icon, y: B.icon, w: s - 2 * B.icon, h: s - 2 * B.icon }) + `</div>`;
+      const col = m.dot || (m.seat < 0 ? M.bookmark_dot : st.seats[m.seat].colour);
+      return `<div class="box${m.act ? ' hot' : ''}"${m.act ? ` data-act="${m.act}"` : ''} style="${rect(bb)}"><div class="box" style="${rect({ x: B.dot, y: B.dot, w: s - 2 * B.dot, h: s - 2 * B.dot })};border-radius:50%;background:${col}"></div>`
+        + art(B.part, zero(s, s)) + icon(M.icons[m.kind] || m.kind, { x: B.icon, y: B.icon, w: s - 2 * B.icon, h: s - 2 * B.icon }, 'on_dark') + `</div>`;
     }).join('');
     const fp = R.track.fill.pad, fb = { x: fp[0], y: fp[1], w: tr.w - fp[0] - fp[2], h: tr.h - fp[1] - fp[3] };
     const ph = R.track.playhead, phb = place(frame(tr.w, tr.h), { pad: ph.pad }), phx = along(tr.w, R.track.ends, p);
-    h += `<div class="box" data-act="${D.act}" style="${rect({ x: rx, y, w: rw, h: D.h })}">` + art(R.part, zero(rw, D.h))
+    h += `<div class="box" data-act="${D.act}" style="${rect({ x: rx, y, w: rw, h: D.h })}">` + art(part, zero(rw, D.h))
       + `<div class="box" style="${rect(lane)}">${marks}</div>`
       + `<div class="box" data-track data-ends="${R.track.ends}" style="${rect(tr)}">`
-      + `<div class="clip" data-fill="${fb.w}" style="${rect({ ...fb, w: fb.w * p })}">${art(R.track.fill.part, zero(fb.w, fb.h))}</div>`
+      + `<div class="clip" data-fill="${fb.w}" style="${rect({ ...fb, w: fb.w * pf })}">${art(R.track.fill.part, zero(fb.w, fb.h))}</div>`
+      + (st.ends < st.T ? after(fb, along(tr.w, R.track.ends, st.ends / st.T) - fb.x) : '')
       + art(ph.part, { x: phx - ph.w / 2, y: phb.y, w: ph.w, h: phb.h }, '', '', { playhead: `${tr.w} ${R.track.ends} ${ph.w}` }) + `</div>`
-      + text(`${clock(st.t)} / ${clock(st.T)}`, place(FR, R.time), R.time.style, R.time, null, { time: 1 }) + `</div>`;
+      + text(`${clock(st.t)} / ${clock(st.len ?? st.T)}`, place(FR, R.time), R.time.style, R.time, null, { time: 1 })
+      + bay + `</div>`;
+    if (st.forks) h += lanes(st, { x: rx, y, w: rw, tx: rx + tr.x, ty: y + tr.y, tw: tr.w, ends: R.track.ends }) + takeover(st, tb);
     return h;
+  }
+
+  // the share of the track filled: to the playhead, or to where the timeline watched branched off it (st.fillTo)
+  const filled = st => Math.min(st.t, st.fillTo ?? st.T) / st.T;
+  // the groove past the replay's end, when a fork runs longer than the replay: shaded, the replay has nothing there
+  function after(fb, x) {
+    const A = L.proposed.forks.after, n = parseInt(A.colour.slice(1), 16);
+    return `<div class="box" style="${rect({ x: fb.x + x, y: fb.y, w: fb.w - x, h: fb.h })};background:rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${A.alpha})"></div>`;
+  }
+
+  /* ---- proposed, variation B (layout.json's "proposed"): forks as lanes over the timeline housing, oldest branch on top.
+     A lane runs from its branch to its end on the track's own time axis, widened to its minimum to the right first; a
+     line drops from its branch to the track, and the playhead's line runs up through every lane. Clicking a lane watches
+     that timeline, clicking the watched one goes back to the replay. At the fork limit, while the picker is open, the
+     lane a take-over would replace is outlined (st.replace). The lanes show only while the Forks bay is open (st.lanesOpen).
+     g: the housing's box and its track's span, in units ---- */
+  /* the Forks bay at the housing's left end opens and closes the lanes and counts the forks; it sits in the pocket
+     painted for it in the housing (FR, the housing's frame), which spans the marker lane and the track */
+  function forksBay(st, FR) {
+    const B = L.proposed.forks.bay, n = st.forks.length, open = st.lanesOpen && n > 0, b = place(FR, B);
+    return button({ act: 'lanes', icon: { ...B.icon, name: open ? B.icon.open : B.icon.closed }, off: n ? 0 : B.off }, B, b, st, open)
+      + text(String(n), { x: b.x, y: b.y + b.h * B.count.y, w: b.w, h: b.h * (1 - B.count.y) }, B.count.style, { align: 'c' });
+  }
+
+  // the lane plate's height with its gap above the dock: the column stands on it, since the lanes run under the column
+  function lanesH(st) {
+    const P = L.proposed && L.proposed.forks, n = st.forks ? st.forks.length : 0;
+    return n && st.lanesOpen ? P.plate.gap + P.plate.pad[1] + n * P.lane.h + (n - 1) * P.lane.gap + P.plate.pad[3] : 0;
+  }
+  function lanes(st, g) {
+    const P = L.proposed.forks, Ln = P.lane, Bt = Ln.buttons, n = st.forks.length, pad = P.plate.pad;
+    if (!n || !st.lanesOpen) return '';
+    const py = g.y - lanesH(st), ph = lanesH(st) - P.plate.gap;
+    const X = t => g.tx + g.ends + (g.tw - 2 * g.ends) * t / st.T, lo = g.tx + g.ends, hi = g.tx + g.tw - g.ends;
+    let h = art(P.plate.part, { x: g.x, y: py, w: g.w, h: ph }, '', '', { act: 'dock' }), lines = '';
+    st.forks.forEach((f, k) => {
+      const ly = py + pad[1] + k * (Ln.h + Ln.gap), bx = X(f.from);
+      let x0 = bx, x1 = Math.max(X(f.end), bx + Ln.min_w);
+      if (x1 > hi) { x0 = Math.max(lo, x0 - (x1 - hi)); x1 = hi; }
+      const w = x1 - x0, on = st.timeline === k, F = frame(w, Ln.h), nb = Bt.items.length;
+      const bw = Bt.w, btx = w - Bt.pad - nb * bw - (nb - 1) * Bt.gap;
+      const fp = Ln.fill.pad, fw = w - fp[0] - fp[2], fx = bx - x0;
+      let inner = on ? `<div class="clip" data-lanefill="${bx} ${X(f.end)}" style="${rect({ x: fp[0] + fx, y: fp[1], w: Math.max(0, Math.min(X(st.t), X(f.end)) - bx), h: Ln.h - fp[1] - fp[3] })}">`
+        + art(Ln.fill.part, zero(fw, Ln.h - fp[1] - fp[3])) + `</div>` : '';
+      inner += text(`F${f.id} · ${esc(f.name)} from ${clock(f.from)}`, place(F, { pad: [fx + Ln.label.pad[0], 0, w - btx + Ln.label.pad[0], 0] }), Ln.label.style, Ln.label);
+      inner += Bt.items.map((it, j) => button({ act: it.act, icon: { name: it.icon, padf: Bt.icon.padf }, data: { fork: k } }, Bt,
+        { x: btx + j * (bw + Bt.gap), y: Bt.pad, w: bw, h: Ln.h - 2 * Bt.pad }, st, st.armed === k && it.act === 'delete')).join('');
+      h += art(on ? Ln.pressed : Ln.part, { x: x0, y: ly, w, h: Ln.h }, inner, `hot${on ? ' pressed' : ''}`, { act: 'lane', fork: k, up: Ln.part, down: Ln.pressed, ...(on ? { on: 1 } : {}) });
+      if (st.replace === k) { const R = P.replace;
+        h += `<div class="box" style="${rect({ x: x0 - R.width, y: ly - R.width, w: w + 2 * R.width, h: Ln.h + 2 * R.width })};box-shadow:inset 0 0 0 ${U(R.width)} ${R.colour};pointer-events:none"></div>`; }
+      const B = P.branch;
+      lines += `<div class="box" style="${rect({ x: bx - B.w / 2, y: ly + Ln.h, w: B.w, h: g.ty - ly - Ln.h })};background:${B.colour};pointer-events:none"></div>`;
+    });
+    const Hd = P.playhead;
+    return h + lines + `<div class="box" data-lanehead="${g.tx + g.ends} ${g.tw - 2 * g.ends} ${Hd.w}" style="${rect({ x: X(st.t) - Hd.w / 2, y: py, w: Hd.w, h: g.ty - py })};background:${Hd.colour};pointer-events:none"></div>`;
+  }
+
+  // Take over at the playhead: a button on the transport plate, as wide as it, level with the lanes; it opens the picker
+  function takeover(st, tb) {
+    const T = L.proposed.forks.takeover, b = { x: tb.x, y: tb.y - T.gap - T.h, w: tb.w, h: T.h };
+    return button({ act: 'takeover', text: { ...T.text, html: T.label } }, T, b, st, st.picker);
+  }
+
+  /* the player picker, opened by Take over: every player, the one taken over is played by you from the playhead and the
+     others by the computer; a player defeated by then cannot be taken. At the fork limit it says which fork goes */
+  function picker(st) {
+    const Pk = L.proposed.picker, R = Pk.row, D = L.dock, T = L.proposed.forks.takeover, full = st.forks.length >= L.proposed.forks.max;
+    const ty = st.H - st.frame.bottom - D.h - T.gap - T.h, ps = st.seats, wn = full ? 2 : 0;
+    const h = Pk.pad + Pk.title.h + ps.length * (R.h + R.gap) + (wn ? Pk.warn.pad[1] + wn * Pk.warn.line + Pk.warn.pad[3] : 0) + Pk.pad;
+    const b = { x: st.frame.panel + D.transport.l, y: ty - Pk.gap - h, w: Pk.w, h };
+    let inner = text(`Take over at&nbsp;<span data-tot>${clock(st.t)}</span>&nbsp;as`, { x: Pk.pad + Pk.title.pad[0], y: Pk.pad, w: Pk.w - 2 * Pk.pad - Pk.title.pad[0] - Pk.title.pad[2], h: Pk.title.h }, Pk.title.style);
+    ps.forEach((p, k) => {
+      const y = Pk.pad + Pk.title.h + k * (R.h + R.gap), rb = { x: Pk.pad, y, w: Pk.w - 2 * Pk.pad, h: R.h }, F = frame(rb.w, R.h);
+      const gone = p.lost && p.out && st.t >= p.death;
+      const row = `<div class="box" style="${rect(place(F, { pad: [R.stripe.pad, R.stripe.pad, 0, R.stripe.pad], w: R.stripe.w, ax: 'l' }))};background:${p.colour}"></div>`
+        + text(esc(p.name), place(F, { pad: R.name.pad }), R.name.style, R.name) + (gone ? text('defeated', place(F, { pad: R.note.pad }), R.note.style, { align: 'r' }) : '');
+      inner += art(R.part, rb, row, gone ? 'off' : 'hot', { act: 'takeas', seat: p.i, up: R.part, down: R.pressed }, gone ? `;opacity:${R.off}` : '');
+    });
+    if (wn) { const Wr = Pk.warn, y0 = Pk.pad + Pk.title.h + ps.length * (R.h + R.gap) + Wr.pad[1], r = st.forks[st.replace] || st.forks[0];
+      [`${L.proposed.forks.max} of ${L.proposed.forks.max} forks kept: this one`, `replaces F${r.id}, the one watched least recently`].forEach((s, k) =>
+        inner += text(s, { x: Pk.pad + Wr.pad[0], y: y0 + k * Wr.line, w: Pk.w - 2 * Pk.pad - Wr.pad[0] - Wr.pad[2], h: Wr.line }, Wr.style, {}, Wr.colour)); }
+    return `<div class="box" data-act="picker" style="${rect(b)}">` + art(Pk.part, zero(b.w, b.h)) + inner + `</div>`;
+  }
+
+  /* ---- proposed, live rewind: a button beside the Impure Config sprocket in the top bar, and the strip it opens under
+     the bar over the paused game: the transport, the track up to now, the time, Play from here and Back to now. The
+     sprocket and the button are placed in the top bar's own pixels (entry.bar tall), scaled with it ---- */
+  function live(st) {
+    const E = L.proposed.live.entry, S = L.proposed.live.strip, k = st.frame.top / E.bar, Sp = E.sprocket;
+    let h = `<div class="box ex" style="${rect({ x: st.W - (Sp.r + Sp.s) * k, y: Sp.t * k, w: Sp.s * k, h: Sp.s * k })};--wbs:${+(Sp.s * k * .75).toFixed(3)}" data-wb="⚙"></div>`;
+    h += button({ act: 'rewind', icon: { name: E.icon.name, padf: E.icon.padf } }, E, { x: st.W - (E.r + E.s) * k, y: E.t * k, w: E.s * k, h: E.s * k }, st, st.live.open);
+    if (!st.live.open) return h;
+    const x = st.frame.panel + S.l, w = st.W - S.r - x, y = st.frame.top + S.t, ih = S.h - 2 * S.pad;
+    let inner = '', cx = S.pad;
+    for (const t of S.transport) { inner += button({ act: t.act, icon: t.icon }, S.button, { x: cx, y: S.pad, w: t.w, h: ih }, st); cx += t.w + S.gap; }
+    const right = S.actions.reduce((a, q) => a + q.w + S.gap, 0) + S.time.w + S.now.w;
+    const tw = w - S.pad - right - cx, Tr = S.track, tb = { x: cx, y: (S.h - Tr.h) / 2, w: tw, h: Tr.h };
+    const fp = Tr.fill.pad, fb = { x: fp[0], y: fp[1], w: tw - fp[0] - fp[2], h: Tr.h - fp[1] - fp[3] }, p = st.t / st.T;
+    const phb = place(frame(tw, Tr.h), { pad: Tr.playhead.pad }), phx = Tr.ends + (tw - 2 * Tr.ends) * p;
+    inner += `<div class="box" data-track data-ends="${Tr.ends}" style="${rect(tb)}">` + art(Tr.part, zero(tw, Tr.h))
+      + `<div class="clip" data-fill="${fb.w}" style="${rect({ ...fb, w: fb.w * p })}">${art(Tr.fill.part, zero(fb.w, fb.h))}</div>`
+      + art(Tr.playhead.part, { x: phx - Tr.playhead.w / 2, y: phb.y, w: Tr.playhead.w, h: phb.h }, '', '', { playhead: `${tw} ${Tr.ends} ${Tr.playhead.w}` }) + `</div>`;
+    cx += tw;
+    inner += text('now', { x: cx, y: S.pad, w: S.now.w, h: ih }, S.now.style, S.now); cx += S.now.w;
+    inner += text(`${clock(st.t)} / ${clock(st.T)}`, { x: cx, y: S.pad, w: S.time.w, h: ih }, S.time.style, S.time, null, { time: 1 }); cx += S.time.w + S.gap;
+    for (const q of S.actions) { inner += button({ act: q.act, text: { ...S.text, html: q.text } }, S.button, { x: cx, y: S.pad, w: q.w, h: ih }, st); cx += q.w + S.gap; }
+    return h + `<div class="box" data-act="live" style="${rect({ x, y, w, h: S.h })}">` + art(S.part, zero(w, S.h)) + inner + `</div>`;
   }
 
   /* Teams are told apart only when one of them has two players: a free-for-all, every player alone, has no
@@ -157,7 +274,7 @@ const HUD = (() => {
      plate, from the first item the scroll shows ---- */
   function column(st) {
     const C = L.column, Fo = C.foot, x = st.W - C.r - C.w, top = st.frame.top + C.t;
-    const bottom = st.H - st.frame.bottom - L.dock.h - C.dock_gap, area = bottom - top - Fo.gap - Fo.h;
+    const bottom = st.H - st.frame.bottom - L.dock.h - lanesH(st) - C.dock_gap, area = bottom - top - Fo.gap - Fo.h;
     const items = [];
     const hd = headed(st);   // a team without a header cannot be folded, so its rows always show
     st.teams.forEach((m, t) => { if (hd) items.push({ team: t }); if (!hd || !st.folded.includes(t)) m.forEach(i => items.push({ seat: i })); });
@@ -324,7 +441,14 @@ const HUD = (() => {
     const g = c.getContext('2d'); g.imageSmoothingQuality = 'high';
     for (let i = 0; i + 1 < bx.length; i++) for (let j = 0; j + 1 < by.length; j++) {
       const dx0 = Math.round(fx(bx[i]) * px), dx1 = Math.round(fx(bx[i + 1]) * px), dy0 = Math.round(fy(by[j]) * px), dy1 = Math.round(fy(by[j + 1]) * px);
-      if (dx1 > dx0 && dy1 > dy0) g.drawImage(img, bx[i] * sx, by[j] * sy, (bx[i + 1] - bx[i]) * sx, (by[j + 1] - by[j]) * sy, dx0, dy0, dx1 - dx0, dy1 - dy0);
+      if (!(dx1 > dx0 && dy1 > dy0)) continue;
+      // an xtile part's x band (the odd cells) is one period of a seamless tile: repeated a whole number of times
+      // at its painted length in units, each copy taking an equal share of the drawn band
+      const n = k.xtile && i % 2 ? Math.max(1, Math.round((dx1 - dx0) / ((bx[i + 1] - bx[i]) * px))) : 1;
+      for (let c = 0; c < n; c++) {
+        const cx0 = dx0 + Math.round((dx1 - dx0) * c / n), cx1 = dx0 + Math.round((dx1 - dx0) * (c + 1) / n);
+        g.drawImage(img, bx[i] * sx, by[j] * sy, (bx[i + 1] - bx[i]) * sx, (by[j + 1] - by[j]) * sy, cx0, dy0, cx1 - cx0, dy1 - dy0);
+      }
     }
     return cache[key] = c.toDataURL();
   }
@@ -358,13 +482,20 @@ const HUD = (() => {
   // the whole HUD for a state; see index.html for the state's fields
   function draw(el, st, px) {
     el.style.setProperty('--press', L.press_shift);
-    el.innerHTML = dock(st) + column(st) + (st.stats.open ? windowHtml(st) : '') + (st.toast ? toast(st) : '');
+    el.innerHTML = (st.live ? live(st) : dock(st) + column(st) + (st.stats.open ? windowHtml(st) : '') + (st.forks && st.picker ? picker(st) : ''))
+      + (st.toast ? toast(st) : '');
     compose(el, px);
   }
   // what moves while the replay plays, without rebuilding: the fill, the playhead, the clocks and the chart
   function tick(el, st) {
-    const p = st.t / st.T, now = `${clock(st.t)} / ${clock(st.T)}`;
-    el.querySelectorAll('[data-fill]').forEach(e => { e.style.width = U(+e.dataset.fill * p); });
+    const p = st.t / st.T, pf = st.live ? p : filled(st), now = `${clock(st.t)} / ${clock(st.len ?? st.T)}`;
+    el.querySelectorAll('[data-fill]').forEach(e => { e.style.width = U(+e.dataset.fill * pf); });
+    // a watched lane fills from its branch to the playhead, in the screen units its data carries
+    const hd = el.querySelector('[data-lanehead]');
+    if (hd) { const [a, w] = hd.dataset.lanehead.split(' ').map(Number), x = a + w * p;
+      el.querySelectorAll('[data-lanefill]').forEach(e => { const [b0, b1] = e.dataset.lanefill.split(' ').map(Number); e.style.width = U(Math.max(0, Math.min(x, b1) - b0)); }); }
+    el.querySelectorAll('[data-lanehead]').forEach(e => { const [a, w, hw] = e.dataset.lanehead.split(' ').map(Number); e.style.left = U(a + w * p - hw / 2); });
+    el.querySelectorAll('[data-tot]').forEach(e => { const s = clock(st.t); if (e.textContent !== s) e.textContent = s; });
     el.querySelectorAll('[data-playhead]').forEach(e => { const [w, ends, pw] = e.dataset.playhead.split(' ').map(Number); e.style.left = U(ends + (w - 2 * ends) * p - pw / 2); });
     el.querySelectorAll('[data-time]').forEach(e => { if (e.textContent !== now) e.textContent = now; });
     el.querySelectorAll('[data-chart]').forEach(e => { const [w, h, R] = e.dataset.chart.split(' ').map(Number); e.innerHTML = chart(st, w, h, R); });
