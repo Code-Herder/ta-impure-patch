@@ -554,7 +554,14 @@ static void dock(C* c)
    scaled with it, as the engine places the sprocket (tagpu_menu.c, trigger_rect). The sprocket is
    the engine's art and the engine draws it, so the mockup's stand-in for it is not drawn here.
    THE BUTTON IS THE TOP LAYER (HOPF_TOP): the engine's UI paints the whole bar, so an op under it
-   would be painted over, and the Vulkan pass draws this layer after the UI composite. ---------- */
+   would be painted over, and the Vulkan pass draws this layer after the UI composite.
+   THE STRIP IS THE TOP LAYER TOO, unless an engine screen the player is using is up (live_under):
+   the engine draws its message lines at the world's top left (DrawChatText 0x464060, x 0x8A,
+   first line y 0x34, DISASSEMBLED), under the strip's left end, and they are in the composite,
+   so only a layer drawn after it keeps the strip whole. A modal screen (tagpu_menu_modal: a menu
+   over the world, Leave's question, the chat's input) and the Config panel, which hangs under the
+   bar's right end over the strip's actions, are the player's while they are up, so the strip then
+   draws under the composite with the rest of the HUD. ---------- */
 
 static void live(C* c)
 {
@@ -578,6 +585,7 @@ static void live(C* c)
     button(c, &b, E, box(st->W - (num(c, E, "r") + num(c, E, "s")) * k, num(c, E, "t") * k, es, es), st->rw_down);
     c->top = 0;
     if (!st->live_open) return;
+    c->top = !st->live_under;
 
     x = st->panel + num(c, S, "l");
     w = st->W - num(c, S, "r") - x;
@@ -645,6 +653,7 @@ static void live(C* c)
         button(c, &b, Sb, box(x + cx, y + pad, num(c, q, "w"), ih), !strcmp(b.key, "live_play") && st->rw_arm == 2);
         cx += num(c, q, "w") + gap;
     }
+    c->top = 0;
 }
 
 /* ---- the column: team headers and player rows from the top bar down, as many as fit above the

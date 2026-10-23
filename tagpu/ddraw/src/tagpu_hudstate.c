@@ -19,6 +19,7 @@
 #include "tagpu_recfile.h"
 #include "tagpu_pal.h"
 #include "tagpu_hud.h"
+#include "tagpu_menu.h"
 #include "tagpu_log.h"
 #include "dd.h"
 #include "render_vk.h"
@@ -70,6 +71,7 @@ static int fill_live(TAGPU_PK_HUD* h, unsigned now)
     h->last = rw.last;
     h->rw_state = (uint8_t)rw.state;
     h->rw_G = rw.G;
+    h->rw_under = (uint8_t)(tagpu_menu_modal() || tagpu_menu_panel_open());
     tagpu_hudinput_fill(h);
     return 1;
 }
@@ -246,6 +248,8 @@ static void dump(const HUDSTATE* st, int vw, int vh, float u, int q8)
     }
     fprintf(f, "\"W\":%.9g,\"H\":%.9g,\"frame\":{\"panel\":%.9g,\"top\":%.9g,\"bottom\":%.9g},",
             st->W, st->H, st->panel, st->top, st->bottom);
+    /* `hud` is the mockup's field: the replay HUD's own scale (its scale button, 0.75 to 1.5),
+       which the live HUD keeps too; the game's HUD scale is the engine frame's, `q8` above */
     fprintf(f, "\"t\":%.9g,\"T\":%.9g,\"playing\":%s,\"speed\":%.9g,\"hud\":%.9g,\"seats\":[",
             st->t, st->T, st->playing ? "true" : "false", st->speed, st->hud);
     for (i = 0; i < st->nseat; i++) {
@@ -382,6 +386,7 @@ static void present_live(const TAGPU_PK_HUD* h, HUDSTATE* st)
     st->live_open = h->rw_state == TAGPU_REPLAY_RWS_OPEN || h->rw_state == TAGPU_REPLAY_RWS_PAST;
     st->rw_down = h->rw_state != TAGPU_REPLAY_RWS_IDLE;
     st->rw_arm = h->rw_arm;
+    st->live_under = h->rw_under != 0;
     st->T = (float)(G - h->first) / TICKS;
     st->t = (float)((h->now < h->first ? h->first : h->now > G ? G : h->now) - h->first) / TICKS;
     st->playing = 0;

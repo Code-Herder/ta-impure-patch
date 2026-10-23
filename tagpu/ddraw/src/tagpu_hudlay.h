@@ -117,6 +117,8 @@ typedef struct {
     int      live_open;             /* the strip is drawn: the rewind is open or in the past  */
     int      rw_down;               /* the rewind button is down: a rewind owns the level     */
     int      rw_arm;                /* Play from here's arm, as the packet's                  */
+    int      live_under;            /* an engine screen the player uses is up: the strip draws
+                                       under the engine's UI, not in the top layer            */
 } HUDSTATE;
 
 /* What to draw, in paint order, and where a click lands.

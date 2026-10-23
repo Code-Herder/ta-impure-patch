@@ -284,12 +284,17 @@ static void live_fork(void)
    The snap's SEEK made R the rewind's seek target, so the fork verb's own takeover_point(R), on the
    same reader, answers R: the fork starts at the world shown, by the function the plan ran, and
    the eviction shown is the one the fork acts on. The plan reserves nothing.
+   THE WARNING SAYS WHAT THE SECOND CLICK DOES, so it is the arm's: live_fill starts it when the arm
+   is set, at R, and holds it for as long as the arm holds -- the snap's seek can outlast the
+   toast's time (2341 ms measured 2026-10-23 on the battle test group, against toast.ms 1800), and
+   a second click after the toast's time would otherwise delete a fork no line on the screen
+   named.
    THE PLAN SCANS THE FILE, so it is asked here, on a click, on the game thread between two steps,
    and nowhere per frame: neither live_fill nor the render half calls it. */
 static void live_play(void)
 {
     TAGPU_REPLAY_TKPLAN p;
-    char a[16], warn[24] = "";
+    char a[16];
     unsigned T = s_now + 1;
     if (s_rwState == TAGPU_REPLAY_RWS_OPEN) {
         s_arm = ARM_NONE;
@@ -307,8 +312,13 @@ static void live_play(void)
     s_armEvict = p.evict;
     if (p.R != T && !rw_send(TAGPU_REPLAY_RW_SEEK, p.R)) return;
     s_arm = ARM_SEEKING;
-    if (p.evict != UINT32_MAX) snprintf(warn, sizeof warn, ", replacing F%u", p.evict);
-    toast("Click again to play from %s%s", live_clock(a, sizeof a, p.R), warn);
+}
+
+static void arm_toast(void)
+{
+    char a[16], warn[24] = "";
+    if (s_armEvict != UINT32_MAX) snprintf(warn, sizeof warn, ", replacing F%u", s_armEvict);
+    toast("Click again to play from %s%s", live_clock(a, sizeof a, s_armR), warn);
 }
 
 /* A click on the live HUD's control, released over it: the rewind's verbs. The strip's plate is
@@ -368,7 +378,7 @@ static void live_fill(TAGPU_PK_HUD* h)
         }
     }
     if (s_rwState != TAGPU_REPLAY_RWS_PAST) s_arm = ARM_NONE;
-    else if (s_arm == ARM_SEEKING && s_now + 1 == s_armR) s_arm = ARM_ARMED;
+    else if (s_arm == ARM_SEEKING && s_now + 1 == s_armR) { s_arm = ARM_ARMED; arm_toast(); }
     else if (s_arm == ARM_ARMED && s_now + 1 != s_armR) s_arm = ARM_NONE;
     h->rw_arm = (uint8_t)s_arm;
     h->rw_R = s_arm ? s_armR : 0;
@@ -381,7 +391,9 @@ static void live_fill(TAGPU_PK_HUD* h)
     h->px = h->py = -1;
     if (mouse_last_client(&cx, &cy) && cx < SHRT_MAX && cy < SHRT_MAX) { h->px = (int16_t)cx; h->py = (int16_t)cy; }
     memcpy(h->held, s_held, sizeof h->held);
-    if (s_toast[0] && GetTickCount() - s_toastAt < ms) memcpy(h->toast, s_toast, sizeof h->toast);
+    /* while armed the toast is the arm's: every other toast on the live HUD ends the arm first */
+    if (s_toast[0] && (s_arm == ARM_ARMED || GetTickCount() - s_toastAt < ms))
+        memcpy(h->toast, s_toast, sizeof h->toast);
     else h->toast[0] = 0;
 }
 

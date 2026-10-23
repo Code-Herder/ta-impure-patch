@@ -2565,9 +2565,12 @@ def cmd_hud(args):
         d = _hud_dump(inst, tmo)
         st, hits = d["state"], d["hits"]
         sw = st.get("stats", {})
+        # two scales: `hud` is the replay HUD's own (its scale button), the mockup's field; the
+        # game's HUD scale is the engine frame's, q8 / 256
+        scales = f"its scale {round(st['hud'] * 100)}%, the game's HUD {round(d['q8'] * 100 / 256)}%"
         if st.get("mode") == "live":
             rw = st["rw"]
-            human = (f"live, rewind {rw['state']}, t {st['t']:.1f} of {st['T']:.1f} s, arm {rw['arm']}"
+            human = (f"live, rewind {rw['state']}, t {st['t']:.1f} of {st['T']:.1f} s, {scales}, arm {rw['arm']}"
                      + (f" at GameTime {rw['R']}" + (f", replacing F{rw['evict']}" if rw["evict"] is not None else "")
                         if rw["arm"] else "")
                      + (f", toast {st['toast']!r}" if st["toast"] else "") + "\n"
@@ -2575,7 +2578,7 @@ def cmd_hud(args):
             out(d, args.json, human=human)
             return
         human = (f"t {st['t']:.1f} of {st['T']:.1f} s, {'playing' if st['playing'] else 'paused'}, "
-                 f"{st['speed']:g}x, HUD {round(st['hud'] * 100)}%, sight {st['sight']}, "
+                 f"{st['speed']:g}x, {scales}, sight {st['sight']}, "
                  f"follow {st['follow']}, scroll {st['scroll']} (last {hits['last']})"
                  + (f", toast {st['toast']!r}" if st["toast"] else "")
                  + (f"\nstats: {sw['measure']} by {sw['split']} at {sw['x']:.1f},{sw['y']:.1f}, "

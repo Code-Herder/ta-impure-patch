@@ -7,7 +7,8 @@
 
    TWO LAYERS. The base layer is recorded after the world and before the engine's UI, so the
    engine's dialogs and the cursor draw over it. The top layer (HOPF_TOP, tagpu_hudlay.h: the live
-   rewind's button, which sits in the top bar the UI paints whole) is recorded after the UI, and
+   rewind's button, which sits in the top bar the UI paints whole, and its strip, which the
+   engine's message lines would cross; tagpu_hudlay.c, live) is recorded after the UI, and
    the UI's sharp layer -- the cursor -- is drawn again over it, inside its rect
    (tagpu_vk_gui_record_sharp), so the cursor stays the topmost thing on the screen. */
 #include "tagpu_vk_pass.h"

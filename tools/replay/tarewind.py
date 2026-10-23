@@ -189,14 +189,16 @@ def run(t, w, fx, out):
         command("open")
         command("seek", TE + 150)
         command("fork")
+        # the fork's recording line comes at its first capture, the first step after the resume:
+        # the level is held when the fork hands it back, so it runs before the line is read
+        t.adopt_held(w, log, "the rewind's fork")
+        t.run_to(w, log, log.at + 300, [])
         rx = r"recorder: recording timeline (\d+) of .* from GameTime (\d+) \(parent (\d+)\)"
         got = log.wait(rx, t.ACK_S, n)
         m = re.search(rx, got or "")
         if not m or int(m[1]) != 3 or int(m[3]) != 2:
             raise t.Failed(f"rewind-E: the rewind's fork: {got.strip() if got else 'no recording line'}")
         R3 = int(m[2])
-        t.adopt_held(w, log, "the rewind's fork")
-        t.run_to(w, log, log.at + 300, [])
 
         # a refresh of 3 past its first interval, and a moment half an interval after it
         R = R3 + 2 * t.TAKEOVER_REFRESH
@@ -212,16 +214,18 @@ def run(t, w, fx, out):
         d = hud_show(lambda d: d["state"]["rw"]["arm"] == 2, "Play from here armed")
         rw, toast = d["state"]["rw"], d["state"]["toast"]
         evict = rw["evict"]
-        # the toast lasts the layout's toast.ms from the click and the snap's seek can outlast it:
-        # its text is checked while it is shown, the arm whatever the pacing
+        # the warning is the arm's: it starts when the arm is set and holds while it holds
+        # (tagpu_hudinput.c, live_fill), so every dump that shows the arm shows it
         check("E armed", rw["R"] == R and evict in (1, 2) and
-              (not toast or re.fullmatch(rf"Click again to play from \d+:\d\d, replacing F{evict}",
-                                         toast) is not None),
+              re.fullmatch(rf"Click again to play from \d+:\d\d, replacing F{evict}",
+                           toast or "") is not None,
               f"R {rw['R']} (the refresh {R}), evict {evict}, toast {toast!r}")
         log.read()
         n = len(log.lines)
         hud_click("live_play", r"rewind: forked at GameTime \d+", "Play from here's fork")
         warned = log.wait(rf"fork would delete timeline {evict} \(least recently used\)", t.ACK_S, n)
+        t.adopt_held(w, log, "the HUD's fork")
+        t.run_to(w, log, log.at + 30, [])
         got = log.wait(rx, t.ACK_S, n)
         m = re.search(rx, got or "")
         if not m:
@@ -230,7 +234,6 @@ def run(t, w, fx, out):
         check("E fork", warned is not None and int(m[2]) == R and int(m[3]) == 3,
               f"timeline {fid} from GameTime {m[2]} (parent {m[3]}); "
               f"{'the eviction of ' + str(evict) + ' said' if warned else 'no eviction line'}")
-        t.adopt_held(w, log, "the HUD's fork")
         if fx["cover"]:
             t.cover_ask(w, log, "rewind-E")
         log.read()
