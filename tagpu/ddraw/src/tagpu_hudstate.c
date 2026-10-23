@@ -627,10 +627,12 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
     }
 }
 
-static int16_t dev(float v)
+/* a hit edge: the device pixel the draw puts the same edge on (tagpu_hud_snap, the draw's own
+   float products), from the game screen's corner at `o` */
+static int16_t dev(int o, double snapped)
 {
-    float r = floorf(v + 0.5f);
-    return (int16_t)(r < -32768.0f ? -32768 : r > 32767.0f ? 32767 : r);
+    double r = o + snapped;
+    return (int16_t)(r < -32768.0 ? -32768 : r > 32767.0 ? 32767 : r);
 }
 
 void tagpu_hudstate_drawn(const HUDOPS* ops)
@@ -648,10 +650,10 @@ void tagpu_hudstate_drawn(const HUDOPS* ops)
             if (p->kind != HOP_HOT || ((p->flags & HOPF_TOP) != 0) != top) continue;
             if (s_map.n >= TAGPU_CMD_HUDHITS) { cut++; continue; }
             t = &s_map.hit[s_map.n++];
-            t->x0 = dev((float)s_ox + p->r.x * s_px);
-            t->y0 = dev((float)s_oy + p->r.y * s_px);
-            t->x1 = dev((float)s_ox + (p->r.x + p->r.w) * s_px);
-            t->y1 = dev((float)s_oy + (p->r.y + p->r.h) * s_px);
+            t->x0 = dev(s_ox, tagpu_hud_snap(p->r.x * s_px));
+            t->y0 = dev(s_oy, tagpu_hud_snap(p->r.y * s_px));
+            t->x1 = dev(s_ox, tagpu_hud_edge(p->r.x, p->r.w, s_px));
+            t->y1 = dev(s_oy, tagpu_hud_edge(p->r.y, p->r.h, s_px));
             lstrcpynA(t->key, ops->text + p->run, sizeof t->key);
         }
     if (cut && !s_mapCut) {
@@ -664,10 +666,8 @@ void tagpu_hudstate_drawn(const HUDOPS* ops)
     s_map.t_last = s_tLast;
     s_map.W = s_st.W;
     s_map.H = s_st.H;
-    s_map.track_x0 = dev((float)s_ox + ops->track_x0 * s_px);
-    s_map.track_x1 = dev((float)s_ox + ops->track_x1 * s_px);
-    s_map.t_first = s_tFirst;
-    s_map.t_last = s_tLast;
+    s_map.track_x0 = dev(s_ox, tagpu_hud_snap(ops->track_x0 * s_px));
+    s_map.track_x1 = dev(s_ox, tagpu_hud_snap(ops->track_x1 * s_px));
     s_map.first = (uint8_t)(ops->first < 0 ? 0 : ops->first > 255 ? 255 : ops->first);
     s_map.last = (uint8_t)(ops->last < 0 ? 0 : ops->last > 255 ? 255 : ops->last);
     s_map.nseat = (uint8_t)(s_st.nseat < (int)TAGPU_PK_HUD_SEATS ? s_st.nseat : (int)TAGPU_PK_HUD_SEATS);
