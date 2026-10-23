@@ -42,6 +42,16 @@ int  tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
 int  tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                          uint32_t w, uint32_t h);
 
+/* The composite's sharp layer -- the cursor -- drawn again inside `r`, in the
+   attachment's pixels: the replay HUD's top layer is drawn after the
+   composite (tagpu_vk_hud.h), and this puts the cursor back over it. The
+   composite's pipeline, set and viewport with its sharp-only quad, whose
+   fragments outside the sharp layer are discarded (LAY_FS). Draws only when
+   `record` drew this slot's composite this frame; 1 when it drew. Inside the
+   seam's render pass, after the top layer. */
+int  tagpu_vk_gui_record_sharp(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                               uint32_t w, uint32_t h, VkRect2D r);
+
 /* 1 on the ONE frame `tagpu_gui.ab` latched its claim and the `_vk.ppm` target
    was unlinked, so the seam captures THAT frame. It does not mean a file was
    written. Consumed. */

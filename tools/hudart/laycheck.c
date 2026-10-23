@@ -125,6 +125,14 @@ int main(int argc, char** argv)
     st->follow = (int)tj_num(tj_get(S, "follow"), -1);
     st->scroll = (int)tj_num(tj_get(S, "scroll"), 0);
     snprintf(st->toast, sizeof st->toast, "%s", tj_str(tj_get(S, "toast"), ""));
+    /* the live HUD: the mockup's state carries `live` ({open}), the game's dump `mode` and `rw`
+       too; the mockup's button is down while its strip is open */
+    v = tj_get(S, "live");
+    if (v || !strcmp(tj_str(tj_get(S, "mode"), ""), "live")) {
+        st->live = 1;
+        st->live_open = st->rw_down = tj_is(tj_get(v, "open"), TJ_TRUE);
+        st->rw_arm = (int)tj_num(tj_get(tj_get(S, "rw"), "arm"), 0);
+    }
     v = tj_get(S, "stats");
     if (v) {
         HUDSTATS* x = &st->stats;

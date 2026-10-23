@@ -166,7 +166,7 @@
    "strip": {"part": "live_one", "l": 12, "r": 12, "t": 6, "h": 34, "pad": 5, "gap": 3,
              "button": {"part": "bay_button", "pressed": "bay_button_down"},
              "transport": [{"act": "rew", "icon": {"name": "rew", "w": 14, "h": 14}, "w": 24},
-                           {"act": "play", "icon": {"name": "play", "playing": "pause", "w": 14, "h": 14}, "w": 24},
+                           {"act": "play", "icon": {"name": "play", "w": 14, "h": 14}, "w": 24, "off": 0.45},
                            {"act": "fwd", "icon": {"name": "fwd", "w": 14, "h": 14}, "w": 24}],
              "track": {"part": "live_groove", "h": 14, "ends": 2, "fill": {"part": "track_fill", "pad": [2, 2, 2, 2]},
                        "playhead": {"part": "playhead", "w": 4, "pad": [0, -1, 0, -1]}},

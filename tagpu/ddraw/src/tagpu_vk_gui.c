@@ -409,6 +409,11 @@ static unsigned         s_presented;
 static int              s_surfW, s_surfH;
 static VkDeviceSize     s_uStride, s_fStride;
 static VkDeviceSize     s_layQuad;       /* the composite's quad in the vb    */
+static VkDeviceSize     s_laySharp;      /* the sharp-only quad, right after it */
+/* `record` drew this slot's composite this frame: what `record_sharp` redraws
+   the sharp layer of. Set after the composite's vkCmdDraw, cleared by
+   `prepare`. */
+static int              s_layDrew[TAGPU_VK_SLOTS];
 static int              s_layVp[4];      /* the frame's viewport, y from below */
 
 static void plog(const TAGPU_VKPASS* d, const char* fmt, ...)
@@ -2467,6 +2472,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     TWIN* pres;
 
     s_drawThis = 0; s_abFrame = 0;
+    if (slot < TAGPU_VK_SLOTS) s_layDrew[slot] = 0;
     if (s_state == ST_REFUSED) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
     s = &s_slot[slot];
@@ -2813,9 +2819,10 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (!grow(d, &s->stage, &s->stMem, &s->stMap, &s->stCap,
               stNeed ? stNeed : 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT)) goto refuse;
     /* +nsdraw: the sharp layer's quads share this slot's vertex buffer, and
-       +1 is still the composite's own quad at the very end of it */
+       +2 is the composite's own quad and its sharp-only twin at the very end
+       of it */
     if (!grow(d, &s->vb, &s->vbMem, &s->vbMap, &s->vbCap,
-              (VkDeviceSize)(nquad + nsd + 1) * 24 * sizeof(float),
+              (VkDeviceSize)(nquad + nsd + 2) * 24 * sizeof(float),
               VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) goto refuse;
     /* ndraw twin windows THEN nsdraw sharp ones: the sharp layer's quads take
        a QVS window each out of the same buffer, at `ndraw + q` */
@@ -3902,17 +3909,26 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
 
     /* THE COMPOSITE'S OWN QUAD, at the end of this frame's vertex buffer.
-       LAY_VS takes `a.xy` as both uv and position, so it is the unit square. */
+       LAY_VS takes `a.xy` as both uv and position, so it is the unit square,
+       and `a.z` as LAY_FS's sharpOnly: 0 here, so the composite draws whole.
+       THEN ITS SHARP-ONLY TWIN, a.z = 1 at every vertex: the same square, of
+       which LAY_FS keeps only the sharp layer's texels -- the cursor drawn
+       again over the HUD's top layer (tagpu_vk_gui_record_sharp). */
     {
         float qv[24];
         quadv(qv, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f);
         /* PAST THE SHARP LAYER'S QUADS TOO. They occupy `nquad .. nquad +
-           nsdraw - 1`, so the composite's own quad is at `nquad + nsdraw` --
-           which is what the `+ nsdraw + 1` in the grow above reserves. At
-           `nquad` it would sit on top of the layer's first quad. */
+           nsdraw - 1`, so the composite's own quad is at `nquad + nsdraw` and
+           its twin at `nquad + nsdraw + 1` -- which is what the `+ nsdraw + 2`
+           in the grow above reserves. At `nquad` it would sit on top of the
+           layer's first quad. */
         memcpy(s->vbMap + (VkDeviceSize)(nquad + nsd) * 24 * sizeof(float),
                qv, sizeof qv);
         s_layQuad = (VkDeviceSize)(nquad + nsd) * 24 * sizeof(float);
+        quadv(qv, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f, 0.0f);
+        memcpy(s->vbMap + (VkDeviceSize)(nquad + nsd + 1) * 24 * sizeof(float),
+               qv, sizeof qv);
+        s_laySharp = s_layQuad + 24 * sizeof(float);
     }
     s_layVp[0] = h.vpX; s_layVp[1] = h.vpY;
     s_layVp[2] = h.vpW_gl; s_layVp[3] = h.vpH_gl;
@@ -3946,13 +3962,35 @@ refuse:
     return 0;
 }
 
+/* THE FRAME'S VIEWPORT, turned over -- and this pass is one of the
+   THREE that turn it over. The viewport's y counts from the BOTTOM of the
+   window and Vulkan's from the top, and LAY_VS writes `1 - a.y*2`, a y-up
+   clip convention: so the negative height is what puts its row 0 back at
+   attachment row 0 (the file header). It is NOT a rule for every presented
+   pass on this lane. The world passes are presented too and write the
+   engine's screen-space y, which grows downward, so they take a positive
+   height. `gui`, `fps` and `scaffold` are the ones whose shaders need the
+   flip; tagpu_vk_pass.h's `flipok` has the table. */
+static void lay_viewport(VkCommandBuffer cb, uint32_t w, uint32_t h)
+{
+    VkViewport vp;
+    int x = s_layVp[0], vw = s_layVp[2], vh = s_layVp[3], ytop;
+    if (vw <= 0 || vh <= 0) { x = 0; vw = (int)w; vh = (int)h; ytop = 0; }
+    else ytop = (int)h - s_layVp[1] - vh;
+    if (ytop < 0) ytop = 0;
+    vp.x = (float)x;
+    vp.y = (float)(ytop + vh);
+    vp.width = (float)vw;
+    vp.height = -(float)vh;
+    vp.minDepth = 0.0f; vp.maxDepth = 1.0f;
+    vkCmdSetViewport(cb, 0, 1, &vp);
+}
+
 int tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                          uint32_t w, uint32_t h)
 {
     SLOT* s;
-    VkViewport vp;
     VkRect2D sc;
-    int x, ytop, vw, vh;
 
     if (s_state != ST_READY || !s_drawThis) return 0;
     s_drawThis = 0;
@@ -3972,25 +4010,7 @@ int tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         s_layRp = d->rp;
     }
 
-    /* THE FRAME'S VIEWPORT, turned over -- and this pass is one of the
-       THREE that turn it over. The viewport's y counts from the BOTTOM of the
-       window and Vulkan's from the top, and LAY_VS writes `1 - a.y*2`, a y-up
-       clip convention: so the negative height is what puts its row 0 back at
-       attachment row 0 (the file header). It is NOT a rule for every presented
-       pass on this lane. The world passes are presented too and write the
-       engine's screen-space y, which grows downward, so they take a positive
-       height. `gui`, `fps` and `scaffold` are the ones whose shaders need the
-       flip; tagpu_vk_pass.h's `flipok` has the table. */
-    x = s_layVp[0]; vw = s_layVp[2]; vh = s_layVp[3];
-    if (vw <= 0 || vh <= 0) { x = 0; vw = (int)w; vh = (int)h; ytop = 0; }
-    else ytop = (int)h - s_layVp[1] - vh;
-    if (ytop < 0) ytop = 0;
-    vp.x = (float)x;
-    vp.y = (float)(ytop + vh);
-    vp.width = (float)vw;
-    vp.height = -(float)vh;
-    vp.minDepth = 0.0f; vp.maxDepth = 1.0f;
-    vkCmdSetViewport(cb, 0, 1, &vp);
+    lay_viewport(cb, w, h);
     sc.offset.x = 0; sc.offset.y = 0;
     sc.extent.width = w; sc.extent.height = h;
     vkCmdSetScissor(cb, 0, 1, &sc);
@@ -4000,8 +4020,33 @@ int tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
                             0, 1, &s->laySet, 0, NULL);
     vkCmdBindVertexBuffers(cb, 0, 1, &s->vb, &s_layQuad);
     vkCmdDraw(cb, 6, 1, 0, 0);
+    s_layDrew[slot] = 1;
     /* AND ONLY HERE. The draw is in the buffer; see the header for why the
        caller must not infer this from having called us. */
+    return 1;
+}
+
+int tagpu_vk_gui_record_sharp(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                              uint32_t w, uint32_t h, VkRect2D r)
+{
+    SLOT* s;
+    if (slot >= d->slots || slot >= TAGPU_VK_SLOTS || !s_layDrew[slot]) return 0;
+    s = &s_slot[slot];
+    if (r.offset.x < 0) { r.extent.width -= (uint32_t)-r.offset.x; r.offset.x = 0; }
+    if (r.offset.y < 0) { r.extent.height -= (uint32_t)-r.offset.y; r.offset.y = 0; }
+    if ((uint32_t)r.offset.x >= w || (uint32_t)r.offset.y >= h) return 0;
+    if (r.extent.width > w - (uint32_t)r.offset.x) r.extent.width = w - (uint32_t)r.offset.x;
+    if (r.extent.height > h - (uint32_t)r.offset.y) r.extent.height = h - (uint32_t)r.offset.y;
+    if (!r.extent.width || !r.extent.height) return 0;
+    /* the composite's own pipeline, set and viewport: only the quad and the
+       scissor differ, so its sharp layer lands on the same pixels */
+    lay_viewport(cb, w, h);
+    vkCmdSetScissor(cb, 0, 1, &r);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeLay);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ploLay,
+                            0, 1, &s->laySet, 0, NULL);
+    vkCmdBindVertexBuffers(cb, 0, 1, &s->vb, &s_laySharp);
+    vkCmdDraw(cb, 6, 1, 0, 0);
     return 1;
 }
 
@@ -4020,6 +4065,7 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     int owed = s_downPaying;
     s_downOwed = 0;
     s_drawThis = 0; s_abFrame = 0;
+    memset(s_layDrew, 0, sizeof s_layDrew);
     s_presented = 0;
     /* nothing is kept once nothing asks for it -- the drain's copy of the op
        stream is the largest thing this lane costs when it is not drawing */

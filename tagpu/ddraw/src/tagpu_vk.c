@@ -2510,7 +2510,7 @@ static int vk_present(void)
         int draw_world = 0;
         uint32_t tw = 0, th = 0;    /* the world target's extent, when there is one */
         int draw_fps = 0, draw_scaf = 0, draw_feat = 0, draw_terr = 0, draw_fx = 0;
-        int draw_gui = 0, draw_hud = 0;
+        int draw_gui = 0, draw_hud = 0, gui_drew = 0;
         int draw_mark = 0, ab_mark = 0;
         int draw_unit = 0;
         int ab_fps = 0, ab_scaf = 0, ab_feat = 0, ab_terr = 0, ab_fx = 0;
@@ -2633,8 +2633,9 @@ static int vk_present(void)
                and render passes may not nest, so the whole op replay has to
                happen out here -- exactly as the shadow map records its map in
                `prepare`. */
-            /* THE REPLAY HUD, over the world and under the engine's UI. It claims no A/B frame,
-               so a capture with it drawn stands down (the census below). */
+            /* THE REPLAY HUD: its base layer over the world and under the engine's UI, its top
+               layer over the UI (the record, below). It claims no A/B frame, so a capture with
+               it drawn stands down (the census below). */
             draw_hud = tagpu_vk_hud_prepare(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             draw_gui = tagpu_vk_gui_prepare(&s_pass, cb, fi);
             ab_gui = tagpu_vk_gui_ab_frame();
@@ -2759,15 +2760,29 @@ static int vk_present(void)
             }
             /* THE UI GOES OVER THE WORLD AND UNDER THE READOUT: the readout
                has to sit above the side panel
-               and the dialogs or they hide it. The return is not kept: the
-               engine's own cursor blit reaches only the golden source, and
-               suppressing it would just put a hole in the reference. */
-            /* the replay HUD covers the world and nothing else: the engine's dialogs, its
-               messages and the cursor draw over it */
+               and the dialogs or they hide it. The engine's own cursor blit
+               reaches only the golden source, and suppressing it would just
+               put a hole in the reference; the return says only whether the
+               composite, and with it the sharp layer's cursor, was drawn. */
+            /* the replay HUD's base layer covers the world and nothing else: the engine's
+               dialogs, its messages and the cursor draw over it */
             if (draw_hud)
                 tagpu_vk_hud_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_gui)
-                tagpu_vk_gui_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
+                gui_drew = tagpu_vk_gui_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
+            /* THE HUD'S TOP LAYER, AND THE CURSOR BACK OVER IT. The top layer (the live
+               rewind's button, in the top bar the UI paints whole) is drawn after the UI's
+               composite, and the composite's sharp layer is then drawn again inside the top
+               layer's rect. In one command buffer and one render pass, draws land in record
+               order, so the sharp layer -- the only cursor (tagpu_gui_surf.c, LAY_FS) -- is the
+               last thing drawn at every pixel of that rect, as the composite's is everywhere
+               else, and the cursor stays topmost. */
+            if (draw_hud) {
+                VkRect2D top;
+                if (tagpu_vk_hud_record_top(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height) &&
+                    gui_drew && tagpu_vk_hud_top_rect(&top))
+                    tagpu_vk_gui_record_sharp(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height, top);
+            }
             if (draw_scaf)
                 tagpu_vk_scaffold_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_fps)

@@ -530,19 +530,25 @@ static void chart_prepare(const B* c)
     }
 }
 
-int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, float px, int ox, int oy, int w, int h,
-                        HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb, int* dropped)
+void tagpu_huddraw_begin(void)
+{
+    if (s_full) atlas_empty();
+}
+
+int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, int layer, float px, int ox, int oy,
+                        int w, int h, HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb,
+                        int* dropped)
 {
     B c;
     int i, j, n, charted = 0;
     HUDQUAD q[HUD_MAXQUAD];
-    if (s_full) atlas_empty();
     memset(&c, 0, sizeof c);
     c.art = art; c.ops = ops; c.px = px; c.ox = (float)ox; c.oy = (float)oy; c.W = (float)w; c.H = (float)h;
     c.inst = inst; c.cap = cap; c.b = b; c.bcap = bcap;
     for (i = 0; i < ops->n; i++) {
         const HUDOP* op = &ops->op[i];
         HUDINST* in;
+        if (((op->flags & HOPF_TOP) != 0) != (layer != 0)) continue;
         switch (op->kind) {
         case HOP_PART:
             n = tagpu_hudlay_expand(art->lay, op, px, q, HUD_MAXQUAD);

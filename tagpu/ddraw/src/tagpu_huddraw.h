@@ -30,12 +30,20 @@ enum { HUDM_PART, HUDM_SOLID, HUDM_SHADE, HUDM_DOT, HUDM_GLYPH, HUDM_LINE, HUDM_
 #define HUD_TEX_CHART (-3)
 typedef struct { int tex, first, count; } HUDBATCH;
 
-/* The instances for `ops` at `px` device pixels a unit, the game screen's top-left corner at
-   (`ox`, `oy`) on a `w` x `h` attachment. Returns the instance count; `*nb` batches. Glyphs the
-   atlas could not take are left out and counted in `*dropped` (the atlas is rebuilt on the next
-   call that needs room). */
-int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, float px, int ox, int oy, int w, int h,
-                        HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb, int* dropped);
+/* A frame's builds begin: the glyph atlas is emptied here, if a glyph did not fit, and nowhere
+   else. THE ORDERING THE TWO LAYERS REST ON: an atlas emptied between a frame's two builds would
+   leave the first build's glyphs naming emptied texels; emptied only before the frame's first
+   build, both layers' glyphs are of one generation, which the upload rule above covers. Once a
+   frame, before its first tagpu_huddraw_build. */
+void tagpu_huddraw_begin(void);
+
+/* The instances for layer `layer` of `ops` -- 0 the ops without HOPF_TOP, 1 those with it -- at
+   `px` device pixels a unit, the game screen's top-left corner at (`ox`, `oy`) on a `w` x `h`
+   attachment. Returns the instance count; `*nb` batches. Glyphs the atlas could not take are left
+   out and counted in `*dropped` (the atlas is rebuilt at the next frame's tagpu_huddraw_begin). */
+int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, int layer, float px, int ox, int oy,
+                        int w, int h, HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb,
+                        int* dropped);
 
 /* THE GLYPH ATLAS: one R8 coverage image. `gen` changes when it is emptied because a glyph did
    not fit; the rows [*y0, *y1) are the ones changed since tagpu_huddraw_atlas_sent last covered

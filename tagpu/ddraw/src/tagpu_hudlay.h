@@ -231,9 +231,9 @@ HUDLAY*           tagpu_hudlay_load(const char* layout, size_t nlayout, const ch
                                     HUDPNGSIZE png_size, void* ctx, char* err, size_t errn);
 void              tagpu_hudlay_free(HUDLAY* l);
 /* The most HOP_HOT ops any state can build with this layout: the sum, over every place the rules
-   emit one, of the most that place can emit -- the layout's lists and the code's fixed maxima.
-   The load refuses a layout whose bound is above HUD_MAXHOT, so every control a loaded layout
-   draws fits the hit map. */
+   emit one, of the most that place can emit -- the layout's lists and the code's fixed maxima --
+   for the replay's HUD and for the live one, whichever is larger. The load refuses a layout
+   whose bound is above HUD_MAXHOT, so every control a loaded layout draws fits the hit map. */
 int               tagpu_hudlay_max_hot(const HUDLAY* l);
 const HUDGLOBALS* tagpu_hudlay_globals(const HUDLAY* l);
 int               tagpu_hudlay_nparts(const HUDLAY* l);

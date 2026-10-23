@@ -516,12 +516,14 @@ static const char* TINT_FS =
     "  oIdx = vec4(texelFetch(uShade, ivec2(i, uRow), 0).r, g.g, 0.0, 0.0);\n"
     "  oCol = texelFetch(uShade, ivec2(i, uRow + textureSize(uShade, 0).y / 2), 0); }\n";
 /* the layer over the frame: uv.y = 0 at the top of the screen; the twin's
-   row 0 is the surface's row 0 */
+   row 0 is the surface's row 0. a.z is sharpOnly: 1 on the quad that draws
+   the sharp layer alone (LAY_FS) */
 static const char* LAY_VS =
     "#version 330 core\n"
     "layout(location=0) in vec4 a;\n"
     "out vec2 uv;\n"
-    "void main(){ uv = a.xy;\n"
+    "flat out float sharpOnly;\n"
+    "void main(){ uv = a.xy; sharpOnly = a.z;\n"
     "  gl_Position = vec4(a.x*2.0-1.0, 1.0-a.y*2.0, 0.0, 1.0); }\n";
 /* A CLIENT'S FILL IN THE SHARP LAYER: a constant colour over a quad given in
    sharp-layer pixels, y DOWN from the viewport's top row. It pairs with QVS,
@@ -562,6 +564,7 @@ static const char* CURS_FS =
 static const char* LAY_FS =
     "#version 330 core\n"
     "in vec2 uv; out vec4 frag;\n"
+    "flat in float sharpOnly;\n"
     /* NO SAMPLER OF THE ENGINE'S OWN FRAME IS DECLARED HERE: nothing of the
        engine's reaches the screen, and a pipeline that cannot name the image
        cannot sample it. */
@@ -646,6 +649,11 @@ static const char* LAY_FS =
     "    vec4 sh = texelFetch(uSharp, sp, 0);\n"
     "    if (sh.a > 0.5) { frag = vec4(sh.rgb, 1.0); return; }\n"
     "  }\n"
+    /* THE SHARP-ONLY QUAD ENDS HERE: it is the cursor drawn again over the
+       replay HUD's top layer, which is drawn after this composite
+       (tagpu_vk_gui_record_sharp), so it keeps the sharp layer's texels and
+       nothing else. The composite's own quad has sharpOnly 0 and goes on. */
+    "  if (sharpOnly > 0.5) discard;\n"
     /* THE CURSOR'S RECT IS NOT DISCARDED HERE, and the difference is a hole
        rather than a nicety: nothing of the engine's frame is underneath, so
        discarding here would punch the twin's own background out and leave the

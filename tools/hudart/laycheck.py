@@ -54,6 +54,10 @@ CASES = [
     ("1080-100-stats-ffa-army-held", "res=1920x1080&game=off&hud=100&np=6&nt=6&t=20&stat=1&sm=army&ss=team&paused", None, "close"),
     ("4k-auto-stats-16-excess-start", "res=3840x2160&game=auto&hud=150&np=16&nt=4&t=0&stat=1&sm=excess&ss=player&paused", None, ""),
     ("4k-150-stats-clamped-energy", "res=3840x2160&game=150&hud=100&np=4&nt=2&t=132&stat=1&sm=energy&ss=player&paused&sx=2000&sy=-40", None, ""),
+    # the live HUD: the rewind button alone, then its strip open
+    ("4k-150-live", "res=3840x2160&game=150&hud=150&mode=live", None, ""),
+    ("1080-100-live-rw", "res=1920x1080&game=off&hud=100&mode=live&rw", None, ""),
+    ("1440-75-live-rw", "res=2560x1440&game=200&hud=75&mode=live&rw", None, ""),
 ]
 # a chart point is a float in the game and a double in the mockup, and both write it to a tenth: one
 # within 1e-5 of a tenth's half can round either way, so a point may differ by that tenth
@@ -199,8 +203,9 @@ def mockup(port, query, hover, held, tmp):
     cfg = tmp / "pw.json"
     cfg.write_text(json.dumps({"browser": {"contextOptions": {"deviceScaleFactor": 2, "viewport": {"width": 2100, "height": 1400}}}}))
     pw = ["playwright-cli", f"-s=laycheck{os.getpid()}", f"--config={cfg}"]
-    # prop=0: the proposed features are the mockup's alone until the DLL draws them
-    url = f"http://127.0.0.1:{port}/tools/hudart/mockup/index.html?{query}&prop=0"
+    # prop=0: the proposed features are the mockup's alone until the DLL draws them, but for the
+    # live HUD, which it draws
+    url = f"http://127.0.0.1:{port}/tools/hudart/mockup/index.html?{query}&prop={int('mode=live' in query)}"
     run = lambda *a: subprocess.run(pw + list(a), capture_output=True, text=True, cwd=tmp)
     run("open", url)
     try:

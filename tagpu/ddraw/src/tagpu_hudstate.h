@@ -1,12 +1,13 @@
 #ifndef TAGPU_HUDSTATE_H
 #define TAGPU_HUDSTATE_H
-/* tagpu_hudstate -- the replay HUD's state, from the game thread to the render thread
-   (research/notes/hud-in-game.md). Two halves, one per thread, and the frame packet between them:
+/* tagpu_hudstate -- the HUD's state, from the game thread to the render thread
+   (research/notes/hud-in-game.md): a replay's controls, or a live skirmish's rewind. Two halves,
+   one per thread, and the frame packet between them:
 
      GAME THREAD     tagpu_hudstate_fill: the replay's clock, its players, the timeline's
-                     markers and the HUD's own state, taken through the replay's calls, the
-                     markers' walker and the HUD's input into the packet's TAGPU_PK_HUD
-                     (tagpu_packet.h), by the packet's publisher.
+                     markers and the HUD's own state -- or, live, the rewind's state -- taken
+                     through the replay's calls, the markers' walker and the HUD's input into the
+                     packet's TAGPU_PK_HUD (tagpu_packet.h), by the packet's publisher.
      RENDER THREAD   tagpu_hudstate_present: that record, the frame's viewport and the engine's
                      frame at HUD scale, as the HUDSTATE tagpu_hudlay.c lays out, for
                      tagpu_vk_hud.c to draw in the same frame; and the drawn frame's controls,
@@ -16,8 +17,8 @@
 
 struct TAGPU_FRAME;
 
-/* The replay HUD draws: on the Vulkan lane, until the pass refuses (`tagpu_hudstate_refuse`).
-   On GDI a replay has no on-screen controls. Game thread. */
+/* The HUD draws: on the Vulkan lane, until the pass refuses (`tagpu_hudstate_refuse`). On GDI a
+   replay has no on-screen controls and a live game no rewind button. Game thread. */
 int  tagpu_hudstate_on(void);
 
 /* The HUD cannot draw for the rest of the session -- its art did not load, its pass could not
@@ -25,12 +26,17 @@ int  tagpu_hudstate_on(void);
    now on. Render thread; published with a full barrier. */
 void tagpu_hudstate_refuse(const char* why);
 
-/* The HUD draws for the level in play: it is on and a recording plays, the fill's own test. Game
+/* What the HUD shows for the level in play, the fill's own test, while it is on: the live
+   rewind's controls while a rewind owns the level or one could open (a live, recorded,
+   single-player skirmish), else the replay's while a recording plays. A rewind into the past plays
+   the recording as puppets (tagpu_replay_live is true there), so the rewind is asked first. Game
    thread. */
-int  tagpu_hudstate_drawing(void);
+enum { HUD_MODE_NONE, HUD_MODE_REPLAY, HUD_MODE_LIVE };
+int  tagpu_hudstate_mode(void);
 
-/* The packet's HUD record for this draw, GameTime `now`: 1 when a recording plays and the HUD is
-   on, 0 (and `h` untouched) otherwise. Game thread, from the packet's fill. */
+/* The packet's HUD record for this draw, GameTime `now`: 1 when the HUD shows something
+   (tagpu_hudstate_mode), its `mode` saying which, 0 (and `h` untouched) otherwise. Game thread,
+   from the packet's fill. */
 int  tagpu_hudstate_fill(TAGPU_PK_HUD* h, unsigned now);
 
 /* The packet's stats area for the record `h` just filled: 1 while its window is open, with the

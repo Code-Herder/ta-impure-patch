@@ -75,6 +75,40 @@ def run(t, w, fx, out):
         t.say(data["detail"])
         return data
 
+    def hud(verb, *args):
+        """`tacli hud` on the level: a click is the device-space injection a player's is"""
+        rc, text = t.tacli("hud", w.name, verb, *args, "--json", timeout=t.INPUT_TIMEOUT)
+        if rc:
+            raise t.Failed(f"hud {verb} {' '.join(map(str, args))}: {text.strip()}")
+        return json.loads(text[text.index("{"):])
+
+    def hud_show(ready, what):
+        """The HUD's dump once `ready(dump)` holds: the frame on the screen is a frame or two
+        behind a verb's line, and the HUD's art loads on a thread of its own"""
+        deadline = time.time() + t.ACK_S
+        while True:
+            d = hud("show")
+            if ready(d):
+                return d
+            if time.time() >= deadline:
+                raise t.Failed(f"hud: {what} not shown in {t.ACK_S} s: {d['state'].get('rw')}, "
+                               f"{[h['key'] for h in d['hits']['at']]}")
+            time.sleep(0.5)
+
+    def hud_keys(d):
+        return {h["key"] for h in d["hits"]["at"]}
+
+    def hud_click(key, rx, what):
+        """a click on the HUD's control `key`, and the line `rx` it makes, or a Failed naming
+        what was asked"""
+        log.read()
+        n = len(log.lines)
+        hud("click", key)
+        got = log.wait(rx, t.ACK_S, n)
+        if not got:
+            raise t.Failed(f"hud: {what}: no `{rx}` in {t.ACK_S} s")
+        return got
+
     def until(G, judge=None):
         """held at GameTime G, the fixture's steps up to it run at theirs (tareplay's run_to)"""
         return t.run_to(w, log, G, steps, judge)
@@ -95,6 +129,128 @@ def run(t, w, fx, out):
             raise t.CouldNotRun(text)
         g1, g2 = w.gametime(), w.gametime()
         check(label, g1 == g2 == g, f"Pause key at GameTime {g}: {g1}, then {g2}")
+
+    def hud_cycle(G3):
+        """THE HUD'S REWIND, on the live level held at G3: the button opens the strip at now, its
+        rew seeks 10 s back and Back to now returns -- the open, a seek and the return to now of
+        the G1 cycle, sent by clicks through the HUD's route (tagpu_replay_rewind). The pause
+        icon's rule is checked by eye: neither a peek nor the dump can see the icon."""
+        d = hud_show(lambda d: "rewind" in hud_keys(d), "the rewind button")
+        st = d["state"]
+        check("hud idle", st.get("mode") == "live" and st["rw"]["state"] == "idle" and
+              not hud_keys(d) & {"live", "rew", "live_play"},
+              f"mode {st.get('mode')}, rewind {st['rw']['state']}, controls {sorted(hud_keys(d))}")
+        hud_click("rewind", rf"rewind: opened at GameTime {G3}\b", "the button's open")
+        d = hud_show(lambda d: d["state"]["rw"]["state"] == "open", "the open strip")
+        keys = hud_keys(d)
+        check("hud open", {"live", "rew", "fwd", "track", "live_play", "live_now"} <= keys and
+              "play" not in keys, f"controls {sorted(keys)}")
+        first = d["state"]["rw"]["first"]
+        T = max(first + 1, G3 - 300)
+        hud_click("rew", rf"rewind: seek {T} complete", f"rew's seek to {T}")
+        d = hud_show(lambda d: d["state"]["rw"]["state"] == "past", "the past")
+        check("hud rew", abs(d["state"]["t"] - (T - 1 - first) / 30) < 1e-3,
+              f"seek {T}: t {d['state']['t']:.3f} s from {first}")
+        hud_click("live_now", rf"rewind: returned to now at GameTime {G3}\b", "Back to now")
+        t.adopt_held(w, log, "the HUD's return to now")
+        d = hud_show(lambda d: d["state"]["rw"]["state"] == "idle", "the closed strip")
+        check("hud now", log.at == G3 and not hud_keys(d) & {"live", "rew", "live_play"},
+              f"held at GameTime {log.at}; controls {sorted(hud_keys(d))}")
+
+    def play_from_here(rec, header, AF, ue):
+        """U-E, PLAY FROM HERE ON THE HUD (owner decision 1-B), on a copy of the recording, which
+        holds {0, 1}: a takeover of timeline 1 makes 2 and a rewind's fork in it 3, so the file
+        keeps every fork it can; the HUD's Play from here at a moment past a refresh of 3 then
+        snaps back to that refresh with the eviction named, and its second click forks there,
+        deleting the fork it named."""
+        nonlocal log
+        ue.mkdir(parents=True, exist_ok=True)
+        src = ue.with_suffix(".imprec")
+        src.write_bytes(rec.read_bytes())
+        TE = t.tarec.refresh_at(str(src), 1, AF + 600)
+        w.place(fix, fx["dll"])
+        log = t.Log(w)
+        rc, text = t.tacli("replay", "takeover", w.name, src, "--timeline", 1, "--at", TE,
+                           "--player", header["options"]["controlled"], "--defaults", "--restart",
+                           "--keep-dll", "--json", "--timeout", t.ACK_S,
+                           timeout=t.LAUNCH_TIMEOUT + t.ACK_S)
+        if rc:
+            raise t.CouldNotRun(f"rewind-E: replay takeover: {t.last(text)}")
+        got = json.loads(text[text.index("{"):])
+        if got.get("timeline") != 2 or got.get("at") != TE:
+            raise t.Failed(f"rewind-E: the takeover made timeline {got.get('timeline')} at "
+                           f"{got.get('at')}, not 2 at {TE}")
+        t.held_start(w, log)
+        t.run_to(w, log, TE + 300, [])
+        # a level a takeover made live opens a rewind: rw_trigger's open needs no reader and no
+        # puppets, and tk_end closed the takeover's [INFERRED, measured here]
+        log.read()
+        n = len(log.lines)
+        command("open")
+        command("seek", TE + 150)
+        command("fork")
+        rx = r"recorder: recording timeline (\d+) of .* from GameTime (\d+) \(parent (\d+)\)"
+        got = log.wait(rx, t.ACK_S, n)
+        m = re.search(rx, got or "")
+        if not m or int(m[1]) != 3 or int(m[3]) != 2:
+            raise t.Failed(f"rewind-E: the rewind's fork: {got.strip() if got else 'no recording line'}")
+        R3 = int(m[2])
+        t.adopt_held(w, log, "the rewind's fork")
+        t.run_to(w, log, log.at + 300, [])
+
+        # a refresh of 3 past its first interval, and a moment half an interval after it
+        R = R3 + 2 * t.TAKEOVER_REFRESH
+        X = R + t.TAKEOVER_REFRESH // 2
+        hud_show(lambda d: "rewind" in hud_keys(d), "the rewind button")
+        hud_click("rewind", r"rewind: opened at GameTime \d+", "the button's open")
+        log.read()
+        n = len(log.lines)
+        w.trigger(f"rewind seek {X}")
+        if not log.wait(rf"rewind: seek {X} complete", t.ACK_S, n):
+            raise t.Failed(f"rewind-E: rewind seek {X}: not complete in {t.ACK_S} s")
+        hud_click("live_play", rf"rewind: seek {R} complete", "Play from here's snap back")
+        d = hud_show(lambda d: d["state"]["rw"]["arm"] == 2, "Play from here armed")
+        rw, toast = d["state"]["rw"], d["state"]["toast"]
+        evict = rw["evict"]
+        # the toast lasts the layout's toast.ms from the click and the snap's seek can outlast it:
+        # its text is checked while it is shown, the arm whatever the pacing
+        check("E armed", rw["R"] == R and evict in (1, 2) and
+              (not toast or re.fullmatch(rf"Click again to play from \d+:\d\d, replacing F{evict}",
+                                         toast) is not None),
+              f"R {rw['R']} (the refresh {R}), evict {evict}, toast {toast!r}")
+        log.read()
+        n = len(log.lines)
+        hud_click("live_play", r"rewind: forked at GameTime \d+", "Play from here's fork")
+        warned = log.wait(rf"fork would delete timeline {evict} \(least recently used\)", t.ACK_S, n)
+        got = log.wait(rx, t.ACK_S, n)
+        m = re.search(rx, got or "")
+        if not m:
+            raise t.Failed(f"rewind-E: the HUD's fork: {got.strip() if got else 'no recording line'}")
+        fid = int(m[1])
+        check("E fork", warned is not None and int(m[2]) == R and int(m[3]) == 3,
+              f"timeline {fid} from GameTime {m[2]} (parent {m[3]}); "
+              f"{'the eviction of ' + str(evict) + ' said' if warned else 'no eviction line'}")
+        t.adopt_held(w, log, "the HUD's fork")
+        if fx["cover"]:
+            t.cover_ask(w, log, "rewind-E")
+        log.read()
+        n = len(log.lines)
+        t.step(w, "apply", "replay-end.json")
+        t.resume(w, log)
+        log.wait_running(r"recorder: writer: .* closed", n)
+        w.collect(ue, recordings=True)
+        w.stop()
+        records = sorted(ue.glob("*.imprec"))
+        if len(records) != 1:
+            raise t.Failed(f"rewind-E: {len(records)} recordings collected, expected one")
+        segs, stop = t.tarec.file_segments(records[0])
+        by = {sg["id"]: sg for sg in segs}
+        new = by.get(fid)
+        check("E segments", not stop and evict in by and by[evict]["state"] == 2 and new is not None
+              and new["fork_at"] == R and new["parent"] == 3,
+              f"timeline {evict}: {'deleted' if evict in by and by[evict]['state'] == 2 else 'kept'}; "
+              f"timeline {fid}: fork_at {new and new['fork_at']}, parent {new and new['parent']}")
+        compare("E fork", "compare-fork", records[0], fid)
 
     def judge_span(label, ticks):
         """From the GameTime the level is held at, `ticks` of play watched -- the window, its
@@ -191,6 +347,7 @@ def run(t, w, fx, out):
             judge_span("now judge", JUDGE_SPAN)
             until(G1 + 1801)
             until(max(3000, G1 + 1800))
+            hud_cycle(log.at)
             opened = command("open", dump="fork-pre")
             G2 = opened["dump_at"]
             T2 = (G2 - 601) // 30 * 30 + 1
@@ -265,6 +422,10 @@ def run(t, w, fx, out):
                 compare(f"P {name}", "compare", "--puppet", rec, p / f"dump-{name}.bin")
             compare("counts across now", "compare-counts", rec, live / "dump-a.bin",
                     live / "dump-c.bin", p / "dump-a.bin", p / "dump-c.bin", "--rewind")
+            # U-E reads refreshes on the takeover's grid (TAKEOVER_REFRESH), which only a takeover
+            # fixture's processes record at
+            if fix.get("takeover"):
+                play_from_here(rec, header, AF, out / "E")
             return results.results()
     finally:
         (out / "rewind.json").write_text(json.dumps({**metadata, "results": results.settled()},
@@ -273,8 +434,9 @@ def run(t, w, fx, out):
 
 def rewind_works(t, lines):
     """The work lines (tareplay.work_lines) of the rewind's seeks, by what each was: the first
-    conversion's (`rewind seek` from the live level), the return to now's and the fork's -- each
-    the last work line before the line that ends it."""
+    conversion's (`rewind seek` from the live level), the first return to now's -- the G1
+    cycle's, whose 1800 ticks after it the AI checks read; the HUD's cycle returns again later --
+    and the fork's, each the last work line before the line that ends it."""
     works, last = {}, None
     for ln in lines:
         got = t.work_lines(ln)
@@ -282,7 +444,7 @@ def rewind_works(t, lines):
             last = got[0]
         elif last and re.search(r"rewind: seek \d+ complete", ln) and "conversion" not in works:
             works["conversion"] = last
-        elif last and "rewind: returned to now at GameTime" in ln:
+        elif last and "rewind: returned to now at GameTime" in ln and "now" not in works:
             works["now"] = last
         elif last and "rewind: forked at GameTime" in ln:
             works["fork"] = last

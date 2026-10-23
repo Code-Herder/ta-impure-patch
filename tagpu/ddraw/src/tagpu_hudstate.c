@@ -1,4 +1,4 @@
-/* tagpu_hudstate.c -- the replay HUD's state, from the game thread to the render thread.
+/* tagpu_hudstate.c -- the HUD's state, from the game thread to the render thread.
    Contract: tagpu_hudstate.h.
 
    NOTHING HERE NAMES ENGINE MEMORY. The game-thread half reads through the replay's calls
@@ -40,14 +40,38 @@ int tagpu_hudstate_on(void)
 void tagpu_hudstate_refuse(const char* why)
 {
     if (InterlockedExchange(&s_refused, 1) == 0)
-        tagpu_logf("hud: the replay HUD cannot draw (%s) - a replay has no on-screen controls this "
-                   "session", why);
+        tagpu_logf("hud: the HUD cannot draw (%s) - a replay has no on-screen controls and a live "
+                   "game no rewind button this session", why);
 }
 
-int tagpu_hudstate_drawing(void)
+int tagpu_hudstate_mode(void)
 {
+    TAGPU_REPLAY_RWSTATE rw;
     unsigned first, last;
-    return tagpu_hudstate_on() && tagpu_replay_live() && tagpu_replay_span(&first, &last);
+    if (!tagpu_hudstate_on()) return HUD_MODE_NONE;
+    tagpu_replay_rewind_state(&rw);
+    if (rw.state != TAGPU_REPLAY_RWS_IDLE || rw.available) return HUD_MODE_LIVE;
+    return tagpu_replay_live() && tagpu_replay_span(&first, &last) ? HUD_MODE_REPLAY : HUD_MODE_NONE;
+}
+
+/* THE LIVE HUD'S RECORD: the clock, the rewind's state and span, and the HUD's own state; no
+   seats, no markers, no stats. tagpu_hudmarks_get is never called here: during a rewind into the
+   past tagpu_replay_live is true, and the markers' walker would start on the live recording. */
+static int fill_live(TAGPU_PK_HUD* h, unsigned now)
+{
+    TAGPU_REPLAY_RWSTATE rw;
+    tagpu_replay_rewind_state(&rw);
+    memset(h, 0, sizeof *h);
+    h->mode = TAGPU_PK_HUD_LIVE;
+    h->now = now;
+    h->paused = (uint8_t)(tagpu_replay_paused() != 0);
+    h->scale = (uint16_t)tagpu_hudinput_scale();
+    h->first = rw.first;
+    h->last = rw.last;
+    h->rw_state = (uint8_t)rw.state;
+    h->rw_G = rw.G;
+    tagpu_hudinput_fill(h);
+    return 1;
 }
 
 int tagpu_hudstate_fill(TAGPU_PK_HUD* h, unsigned now)
@@ -55,10 +79,12 @@ int tagpu_hudstate_fill(TAGPU_PK_HUD* h, unsigned now)
     TAGPU_REPLAY_PLAYER pl[TAGPU_PK_HUD_SEATS];
     unsigned T[TAGPU_PK_HUD_MARKS], first, last;
     unsigned char kind[TAGPU_PK_HUD_MARKS], seat[TAGPU_PK_HUD_MARKS];
-    int n, i;
+    int n, i, mode = tagpu_hudstate_mode();
 
-    if (!tagpu_hudstate_drawing() || !tagpu_replay_span(&first, &last)) return 0;
+    if (mode == HUD_MODE_LIVE) return fill_live(h, now);
+    if (mode != HUD_MODE_REPLAY || !tagpu_replay_span(&first, &last)) return 0;
     memset(h, 0, sizeof *h);
+    h->mode = TAGPU_PK_HUD_REPLAY;
     h->now = now;
     h->first = first;
     h->last = last;
@@ -124,6 +150,9 @@ static unsigned s_frame;                /* the render-thread frame `s_st` is for
 static float    s_px;
 static int      s_ox, s_oy;
 static uint8_t  s_seatOf[TAGPU_PK_HUD_SEATS];   /* row i's recorded seat, this frame's   */
+static unsigned s_tFirst, s_tLast;      /* the GameTime span the track is drawn with, this frame's */
+/* the live rewind as this frame's record carries it, for the dump */
+static struct { unsigned state, arm, R, evict, G, first; } s_rw;
 /* THE HIT MAP OF THE LAST FRAME DRAWN: written by the Vulkan pass once it has built a frame it will
    draw (tagpu_hudstate_drawn), read by the dump and then by the next command record
    (tagpu_hudstate_cmd), which empties it, all on this thread. So each drawn frame's map is posted
@@ -201,10 +230,20 @@ static void jstr(FILE* f, const char* s)
 static void dump(const HUDSTATE* st, int vw, int vh, float u, int q8)
 {
     static const char* const KIND[3] = { "death", "defeat", "bookmark" };
+    static const char* const RWS[5] = { "idle", "flush", "open", "past", "ending" };
     FILE* f = fopen(DUMP_OUT ".tmp", "wb");
     int i, j;
     if (!f) { tagpu_logf("hud: the state dump could not open %s", DUMP_OUT ".tmp"); return; }
     fprintf(f, "{\"device\":{\"W\":%d,\"H\":%d},\"px\":%.9g,\"q8\":%d,\"state\":{", vw, vh, u, q8);
+    /* the live HUD under the mockup's own field (`live`), and the rewind's state for the tests */
+    fprintf(f, "\"mode\":\"%s\",", st->live ? "live" : "replay");
+    if (st->live) {
+        fprintf(f, "\"live\":{\"open\":%s},\"rw\":{\"state\":\"%s\",\"arm\":%u,\"R\":%u,\"evict\":",
+                st->live_open ? "true" : "false", RWS[s_rw.state < 5 ? s_rw.state : 0], s_rw.arm, s_rw.R);
+        if (s_rw.evict == UINT32_MAX) fprintf(f, "null");
+        else fprintf(f, "%u", s_rw.evict);
+        fprintf(f, ",\"G\":%u,\"first\":%u},", s_rw.G, s_rw.first);
+    }
     fprintf(f, "\"W\":%.9g,\"H\":%.9g,\"frame\":{\"panel\":%.9g,\"top\":%.9g,\"bottom\":%.9g},",
             st->W, st->H, st->panel, st->top, st->bottom);
     fprintf(f, "\"t\":%.9g,\"T\":%.9g,\"playing\":%s,\"speed\":%.9g,\"hud\":%.9g,\"seats\":[",
@@ -332,6 +371,30 @@ static void stats(const struct TAGPU_PACKET* pk, const TAGPU_PK_HUD* h, HUDSTATE
     }
 }
 
+/* THE LIVE HUD (hud.js `live`): its button down while a rewind owns the level, its strip while
+   the rewind is open or in the past, and the strip's track from the rewind's first GameTime to
+   now, where it opened -- `t` the playhead and `T` the strip's end, in seconds from `first`. Over
+   what the replay's half made of the same record, which carries no seats, markers or stats. */
+static void present_live(const TAGPU_PK_HUD* h, HUDSTATE* st)
+{
+    unsigned G = h->rw_G > h->first ? h->rw_G : h->first;
+    st->live = 1;
+    st->live_open = h->rw_state == TAGPU_REPLAY_RWS_OPEN || h->rw_state == TAGPU_REPLAY_RWS_PAST;
+    st->rw_down = h->rw_state != TAGPU_REPLAY_RWS_IDLE;
+    st->rw_arm = h->rw_arm;
+    st->T = (float)(G - h->first) / TICKS;
+    st->t = (float)((h->now < h->first ? h->first : h->now > G ? G : h->now) - h->first) / TICKS;
+    st->playing = 0;
+    s_tFirst = h->first;
+    s_tLast = G;
+    s_rw.state = h->rw_state;
+    s_rw.arm = h->rw_arm;
+    s_rw.R = h->rw_R;
+    s_rw.evict = h->rw_evict;
+    s_rw.G = h->rw_G;
+    s_rw.first = h->first;
+}
+
 void tagpu_hudstate_present(const TAGPU_FRAME* f)
 {
     const struct TAGPU_PACKET* pk = f->packet;
@@ -361,6 +424,8 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
 
     /* the playhead stops at the recording's end; GameTime runs on past it */
     end = h->last > h->first ? h->last : h->first;
+    s_tFirst = h->first;
+    s_tLast = end;
     st->T = (float)(end - h->first) / TICKS;
     st->t = (float)((h->now < h->first ? h->first : h->now > end ? end : h->now) - h->first) / TICKS;
     /* at the recording's end the button shows play, as the mockup's does: the playhead has
@@ -421,6 +486,7 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
     st->held[sizeof st->held - 1] = 0;
     memcpy(st->toast, h->toast, sizeof st->toast);
     st->toast[sizeof st->toast - 1] = 0;
+    if (h->mode == TAGPU_PK_HUD_LIVE) present_live(h, st);
     s_px = u;
     s_frame = f->frame_counter;
     s_have = 1;
@@ -438,22 +504,24 @@ static int16_t dev(float v)
 
 void tagpu_hudstate_drawn(const HUDOPS* ops)
 {
-    int i, cut = 0;
+    int i, top, cut = 0;
     s_map.n = 0;
     if (!ops || !s_have) return;
-    /* topmost first: the build paints in order, so the last control painted is on top */
-    for (i = ops->n - 1; i >= 0; i--) {
-        const HUDOP* p = &ops->op[i];
-        TAGPU_CMD_HUDHIT* t;
-        if (p->kind != HOP_HOT) continue;
-        if (s_map.n >= TAGPU_CMD_HUDHITS) { cut++; continue; }
-        t = &s_map.hit[s_map.n++];
-        t->x0 = dev((float)s_ox + p->r.x * s_px);
-        t->y0 = dev((float)s_oy + p->r.y * s_px);
-        t->x1 = dev((float)s_ox + (p->r.x + p->r.w) * s_px);
-        t->y1 = dev((float)s_oy + (p->r.y + p->r.h) * s_px);
-        lstrcpynA(t->key, ops->text + p->run, sizeof t->key);
-    }
+    /* topmost first: the top layer's controls (HOPF_TOP), which are drawn after everything else,
+       then the rest -- the build paints in order, so the last control painted is on top */
+    for (top = 1; top >= 0; top--)
+        for (i = ops->n - 1; i >= 0; i--) {
+            const HUDOP* p = &ops->op[i];
+            TAGPU_CMD_HUDHIT* t;
+            if (p->kind != HOP_HOT || ((p->flags & HOPF_TOP) != 0) != top) continue;
+            if (s_map.n >= TAGPU_CMD_HUDHITS) { cut++; continue; }
+            t = &s_map.hit[s_map.n++];
+            t->x0 = dev((float)s_ox + p->r.x * s_px);
+            t->y0 = dev((float)s_oy + p->r.y * s_px);
+            t->x1 = dev((float)s_ox + (p->r.x + p->r.w) * s_px);
+            t->y1 = dev((float)s_oy + (p->r.y + p->r.h) * s_px);
+            lstrcpynA(t->key, ops->text + p->run, sizeof t->key);
+        }
     if (cut && !s_mapCut) {
         s_mapCut = 1;
         tagpu_logf("hud: %d controls past the hit map's %u are not clickable (said once)", cut,
@@ -464,6 +532,8 @@ void tagpu_hudstate_drawn(const HUDOPS* ops)
     s_map.H = s_st.H;
     s_map.track_x0 = dev((float)s_ox + ops->track_x0 * s_px);
     s_map.track_x1 = dev((float)s_ox + ops->track_x1 * s_px);
+    s_map.t_first = s_tFirst;
+    s_map.t_last = s_tLast;
     s_map.first = (uint8_t)(ops->first < 0 ? 0 : ops->first > 255 ? 255 : ops->first);
     s_map.last = (uint8_t)(ops->last < 0 ? 0 : ops->last > 255 ? 255 : ops->last);
     s_map.nseat = (uint8_t)(s_st.nseat < (int)TAGPU_PK_HUD_SEATS ? s_st.nseat : (int)TAGPU_PK_HUD_SEATS);

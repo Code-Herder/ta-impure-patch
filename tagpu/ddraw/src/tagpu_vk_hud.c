@@ -34,6 +34,7 @@
 
 #include "tagpu_vk_pass.h"
 #include <windows.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -103,6 +104,8 @@ static TAGPU_VKSTAGE         s_stage[TAGPU_VK_SLOTS];
 static HUDOPS                s_ops;             /* render thread's; 400 KB, never on a stack  */
 static HUDBATCH              s_batch[HUD_MAXBATCH];
 static int                   s_nbatch, s_ninst;
+static int                   s_nbase;           /* the base layer's batches: s_batch[0, s_nbase) */
+static VkRect2D              s_top;             /* the top layer's device pixels; empty none   */
 static int                   s_saidDrop, s_saidMiss, s_saidChart;
 
 static void plog(const TAGPU_VKPASS* d, const char* fmt, ...)
@@ -674,6 +677,29 @@ static void hide_mode(HUDINST* in, int n, int mode)
         if (in[i].prm[0] == (float)mode) in[i].rgba[0] = in[i].rgba[1] = in[i].rgba[2] = in[i].rgba[3] = 0;
 }
 
+/* The device-pixel union of the top layer's `n` instances, held to the `w` x `h` attachment */
+static void top_rect(const HUDINST* in, int n, uint32_t w, uint32_t h)
+{
+    float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+    int i;
+    for (i = 0; i < n; i++) {
+        if (in[i].px[0] < x0) x0 = in[i].px[0];
+        if (in[i].px[1] < y0) y0 = in[i].px[1];
+        if (in[i].px[2] > x1) x1 = in[i].px[2];
+        if (in[i].px[3] > y1) y1 = in[i].px[3];
+    }
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > (float)w) x1 = (float)w;
+    if (y1 > (float)h) y1 = (float)h;
+    memset(&s_top, 0, sizeof s_top);
+    if (n <= 0 || x1 <= x0 || y1 <= y0) return;
+    s_top.offset.x = (int32_t)floorf(x0);
+    s_top.offset.y = (int32_t)floorf(y0);
+    s_top.extent.width = (uint32_t)ceilf(x1) - (uint32_t)s_top.offset.x;
+    s_top.extent.height = (uint32_t)ceilf(y1) - (uint32_t)s_top.offset.y;
+}
+
 int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                          uint32_t w, uint32_t h)
 {
@@ -684,7 +710,8 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     float px;
     int dropped = 0, r, due, ox, oy;
 
-    s_ninst = s_nbatch = 0;
+    s_ninst = s_nbatch = s_nbase = 0;
+    memset(&s_top, 0, sizeof s_top);
     tagpu_hudstate_drawn(NULL);
     if (s_state == ST_REFUSED || !tagpu_hudstate_frame(d->frame, &st, &px, &ox, &oy)) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS || w == 0 || h == 0 || !(px > 0)) return 0;
@@ -713,8 +740,23 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         tagpu_hudstate_refuse("its layout did not build");
         return 0;
     }
-    s_ninst = tagpu_huddraw_build(art, &s_ops, px, ox, oy, (int)w, (int)h, (HUDINST*)(s_imap + (size_t)slot * IBYTES),
-                                  HUD_MAXINST, s_batch, HUD_MAXBATCH, &s_nbatch, &dropped);
+    /* TWO LAYERS IN ONE RANGE: the base layer's instances and batches first, the top layer's
+       after them, each batch's `first` an index into the slot's whole range. One begin before
+       both builds keeps them on one glyph atlas (tagpu_huddraw.h, tagpu_huddraw_begin). */
+    {
+        HUDINST* in = (HUDINST*)(s_imap + (size_t)slot * IBYTES);
+        int n0, nb1 = 0, d1 = 0, i;
+        tagpu_huddraw_begin();
+        n0 = tagpu_huddraw_build(art, &s_ops, 0, px, ox, oy, (int)w, (int)h, in, HUD_MAXINST,
+                                 s_batch, HUD_MAXBATCH, &s_nbase, &dropped);
+        s_ninst = n0 + tagpu_huddraw_build(art, &s_ops, 1, px, ox, oy, (int)w, (int)h, in + n0,
+                                           HUD_MAXINST - n0, s_batch + s_nbase,
+                                           HUD_MAXBATCH - s_nbase, &nb1, &d1);
+        dropped += d1;
+        s_nbatch = s_nbase + nb1;
+        top_rect(in + n0, s_ninst - n0, w, h);
+        for (i = s_nbase; i < s_nbatch; i++) s_batch[i].first += n0;
+    }
     if ((dropped || s_ops.overflow) && !s_saidDrop) {
         s_saidDrop = 1;
         plog(d, "hud: %d glyphs did not fit the atlas this frame%s (said once)", dropped,
@@ -777,15 +819,15 @@ lost:
     return 0;
 }
 
-void tagpu_vk_hud_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
-                         uint32_t w, uint32_t h)
+/* batches [b0, b1) of this frame's, with the pass's pipeline, viewport, scissor and buffer;
+   0 when there is nothing to draw */
+static int draw_batches(VkCommandBuffer cb, uint32_t slot, uint32_t w, uint32_t h, int b0, int b1)
 {
     VkViewport vp;
     VkRect2D sc;
     VkDeviceSize off = (VkDeviceSize)slot * IBYTES;
-    int i;
-    (void)d;
-    if (s_state != ST_READY || !s_ninst) return;
+    int i, drew = 0;
+    if (s_state != ST_READY || !s_ninst || b1 <= b0) return 0;
     /* NO FLIP: the instances are in clip space with y down already (tagpu_huddraw.c) */
     vp.x = 0.0f; vp.y = 0.0f;
     vp.width = (float)w; vp.height = (float)h;
@@ -796,15 +838,39 @@ void tagpu_vk_hud_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     vkCmdSetScissor(cb, 0, 1, &sc);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipe);
     vkCmdBindVertexBuffers(cb, 0, 1, &s_ibuf, &off);
-    for (i = 0; i < s_nbatch; i++) {
+    for (i = b0; i < b1; i++) {
         const HUDBATCH* b = &s_batch[i];
         const TEX* t = b->tex == HUD_TEX_ATLAS ? &s_atlas : b->tex == HUD_TEX_CHART ? &s_chart
                      : b->tex >= 0 && b->tex < s_nparts ? &s_part[b->tex] : &s_atlas;
         if (!b->count) continue;
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_plo, 0, 1, &t->set, 0, NULL);
         vkCmdDraw(cb, 4, (uint32_t)b->count, 0, (uint32_t)b->first);
+        drew = 1;
     }
+    return drew;
+}
+
+void tagpu_vk_hud_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                         uint32_t w, uint32_t h)
+{
+    (void)d;
+    draw_batches(cb, slot, w, h, 0, s_nbase);
+}
+
+int tagpu_vk_hud_record_top(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                            uint32_t w, uint32_t h)
+{
+    int drew;
+    (void)d;
+    drew = draw_batches(cb, slot, w, h, s_nbase, s_nbatch);
     s_ninst = 0;
+    return drew;
+}
+
+int tagpu_vk_hud_top_rect(VkRect2D* r)
+{
+    *r = s_top;
+    return s_top.extent.width > 0 && s_top.extent.height > 0;
 }
 
 void tagpu_vk_hud_down(const TAGPU_VKPASS* d)
@@ -833,7 +899,8 @@ void tagpu_vk_hud_down(const TAGPU_VKPASS* d)
     s_agen = 0;
     s_cgen = 0;
     s_cclear = 0;
-    s_ninst = s_nbatch = 0;
+    s_ninst = s_nbatch = s_nbase = 0;
+    memset(&s_top, 0, sizeof s_top);
     /* UNBUILT, not REFUSED: a teardown or a resize must let the pass come back */
     s_state = ST_UNBUILT;
 }

@@ -10772,11 +10772,13 @@ static void watch_sites_init(void)
    0x46A140` at 0x46A10E, with eax = main from 0x46A102; 0x46A110 draws it and goes on at 0x46A14E,
    as 0x46A140 does after loading the same esi/edi. A recording played with the replay HUD shows no
    icon: the HUD's play button carries the pause (the mockup has none), and the icon sits in the
-   middle of the world, under the stats window. The stub takes the icon's branch only when the
-   pause bit is set and tagpu_hudinput_on_screen answers 0 -- the frame on the screen shows no HUD,
-   its art still loading or its pass down, so the icon is the pause's only sign; it keeps every
-   register, and neither continuation reads the flags before setting them. Game thread, inside the
-   draw, after the in-play draw's take of the command record. */
+   middle of the world, under the stats window; nor does a live rewind's strip, which holds the
+   game. The stub takes the icon's branch only when the pause bit is set and
+   tagpu_hudinput_on_screen answers 0 -- no control on the screen carries the pause: no HUD drawn,
+   its art still loading or its pass down, or the live HUD's one button with no rewind open -- so
+   the icon is the pause's only sign; it keeps every register, and neither continuation reads the
+   flags before setting them. Game thread, inside the draw, after the in-play draw's take of the
+   command record. */
 static void pause_icon_init(void)
 {
     enum { SITE = 0x0046A107u, DRAW = 0x0046A110u, SKIP = 0x0046A140u };

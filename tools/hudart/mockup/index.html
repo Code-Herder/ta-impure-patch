@@ -161,12 +161,14 @@ function state() {
     .concat(S.bm.map(t => ({ t, kind: 'bookmark', seat: -1 })));
   const sw = S.sw || { x: L.window.x, y: L.window.y };
   // the game's dump carries its stats whole: the window, its measure and split, and the groups as the game drew them
+  // and, live, its mode, the strip's state and the rewind's (`live` draws the live HUD, hud.js `draw`)
   if (GAME) { const g = GAME.state;
     return { W: g.W, H: g.H, frame: g.frame, t: g.t, T: g.T, playing: g.playing, speed: g.speed, hud: g.hud, seats: g.seats, teams: g.teams,
       folded: g.folded, markers: g.markers, toggles: g.toggles, sight: g.sight, follow: g.follow, scroll: g.scroll, toast: g.toast,
-      stats: g.stats }; }
+      stats: g.stats, mode: g.mode, ...(g.mode === 'live' ? { live: g.live, rw: g.rw } : {}) }; }
   const base = { W: w / u, H: h / u, frame: { panel: ef.panel / ud, top: ef.bar / ud, bottom: ef.bar / ud } };
-  if (S.prop && S.mode === 'live') return { ...base, t: S.t, T, playing: S.playing, speed: S.speed, hud: S.hud, live: { open: S.rw }, toast: S.toast, stats: { open: false } };
+  // the rewind holds the past paused, so the live strip never plays
+  if (S.prop && S.mode === 'live') return { ...base, t: S.t, T, playing: false, speed: S.speed, hud: S.hud, live: { open: S.rw }, toast: S.toast, stats: { open: false } };
   const fl = S.prop ? forkList() : null, lru = fl && fl.length >= FORK_MAX ? fl.indexOf(fl.reduce((a, f) => f.seen < a.seen ? f : a)) : -1;
   const prop = !S.prop ? {} : { T: axis(), ends: T, len: tlEnd(), fillTo: watched() ? watched().from : T, timeline: S.tl, lanesOpen: S.lo, picker: S.pick, armed: S.armed,
     replace: S.pick ? lru : -1, forks: fl.map(f => ({ id: f.id, name: ps[f.seat] ? ps[f.seat].name : NAMES[f.seat], from: f.from, end: f.from + f.len })) };

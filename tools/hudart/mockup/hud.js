@@ -251,7 +251,8 @@ const HUD = (() => {
     if (!st.live.open) return h;
     const x = st.frame.panel + S.l, w = st.W - S.r - x, y = st.frame.top + S.t, ih = S.h - 2 * S.pad;
     let inner = '', cx = S.pad;
-    for (const t of S.transport) { inner += button({ act: t.act, icon: t.icon }, S.button, { x: cx, y: S.pad, w: t.w, h: ih }, st); cx += t.w + S.gap; }
+    // a transport button with `off` is drawn disabled: play, since the rewind holds the past paused and has no verb to play it
+    for (const t of S.transport) { inner += button({ act: t.act, icon: t.icon, off: t.off }, S.button, { x: cx, y: S.pad, w: t.w, h: ih }, st); cx += t.w + S.gap; }
     const right = S.actions.reduce((a, q) => a + q.w + S.gap, 0) + S.time.w + S.now.w;
     const tw = w - S.pad - right - cx, Tr = S.track, tb = { x: cx, y: (S.h - Tr.h) / 2, w: tw, h: Tr.h };
     const fp = Tr.fill.pad, fb = { x: fp[0], y: fp[1], w: tw - fp[0] - fp[2], h: Tr.h - fp[1] - fp[3] }, p = st.t / st.T;
@@ -262,7 +263,9 @@ const HUD = (() => {
     cx += tw;
     inner += text('now', { x: cx, y: S.pad, w: S.now.w, h: ih }, S.now.style, S.now); cx += S.now.w;
     inner += text(`${clock(st.t)} / ${clock(st.T)}`, { x: cx, y: S.pad, w: S.time.w, h: ih }, S.time.style, S.time, null, { time: 1 }); cx += S.time.w + S.gap;
-    for (const q of S.actions) { inner += button({ act: q.act, text: { ...S.text, html: q.text } }, S.button, { x: cx, y: S.pad, w: q.w, h: ih }, st); cx += q.w + S.gap; }
+    // Play from here is held down while it is armed (the game's rw.arm 2): the next click plays
+    for (const q of S.actions) { inner += button({ act: q.act, text: { ...S.text, html: q.text } }, S.button, { x: cx, y: S.pad, w: q.w, h: ih }, st,
+      q.act === 'live_play' && !!st.rw && st.rw.arm === 2); cx += q.w + S.gap; }
     return h + `<div class="box" data-act="live" style="${rect({ x, y, w, h: S.h })}">` + art(S.part, zero(w, S.h)) + inner + `</div>`;
   }
 
