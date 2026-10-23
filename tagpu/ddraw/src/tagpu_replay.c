@@ -927,6 +927,20 @@ static void viewer_take(const char* ta)
    cob_get) */
 static unsigned char seat_local(unsigned controller) { return controller == 1 || controller == 2; }
 
+/* getter 75's table anew (tagpu_puppet_locals), and a line naming what it was set to when that
+   changed it: the seats answering 1 from GameTime T, and `whose` they are */
+static void locals_set(const unsigned char local[PUPPET_PLAYERS], unsigned T, const char* whose)
+{
+    char seats[3 * PUPPET_PLAYERS + 1];
+    unsigned i, n = 0;
+    if (!tagpu_puppet_locals(local)) return;
+    seats[0] = 0;
+    for (i = 0; i < PUPPET_PLAYERS; i++)
+        if (local[i]) n += (unsigned)snprintf(seats + n, sizeof seats - n, " %u", i);
+    tagpu_logf("replay: %s: from GameTime %u getter 75's table is set to 1 for seats%s, %s",
+               s_name, T, n ? seats : " none", whose);
+}
+
 /* §6.4's seating, after validate; `view` the viewed player, V or a recorded seat (§2.9) */
 static void seat_level(char* ta, const RecHeader* h, unsigned view)
 {
@@ -5080,34 +5094,31 @@ static unsigned mp_make_held(const Lv* L)
    (THE SEEK OF A MULTIPLAYER RECORDING). Called after every reader seek, before the seek writes
    anything, so the contest's rule a crossing changes is in before the seek's creates stamp, and
    getter 75's per-seat answers are the segment's controllers' (THE ORDERING in
-   tagpu_puppet_locals). 1, or 0 the playing stopped. */
+   tagpu_puppet_locals), set only once the segment is followed. A seek that fails after this
+   leaves them the target segment's; sk_back's read-back puts them back with the reader, and a
+   read-back that fails stops the playing, where they then show only in the stopped frame
+   (accepted: nothing runs on them). 1, or 0 the playing stopped. */
 static int mp_follow(const Lv* L, unsigned T)
 {
     _Static_assert(PUPPET_PLAYERS == REC_PLAYERS, "getter 75's answers are by recorded player");
     unsigned char ctl[REC_PLAYERS], local[PUPPET_PLAYERS];
-    int here, held;
+    int here, held, seg;
     unsigned i;
-    /* before the skirmish return: a skirmish chain's seeks follow it too, its answers staying 1;
-       a reader that stands in no segment leaves the answers as they are */
-    if (recr_segment_controllers(s_rd, ctl)) {
-        for (i = 0; i < REC_PLAYERS; i++) local[i] = seat_local(ctl[i]);
-        if (tagpu_puppet_locals(local)) {
-            char seats[3 * REC_PLAYERS + 1];
-            unsigned n = 0;
-            seats[0] = 0;
-            for (i = 0; i < REC_PLAYERS; i++)
-                if (local[i]) n += (unsigned)snprintf(seats + n, sizeof seats - n, " %u", i);
-            tagpu_logf("replay: %s: from GameTime %u getter 75 answers 1 for seats%s, the "
-                       "segment's own humans and AIs", s_name, T, n ? seats : " none");
-        }
+    /* a reader that stands in no segment leaves the answers as they are */
+    seg = recr_segment_controllers(s_rd, ctl);
+    for (i = 0; i < REC_PLAYERS; i++) local[i] = seat_local(ctl[i]);
+    /* a skirmish chain's seeks follow it too, its answers staying 1 */
+    if (!s_mp.level) {
+        if (seg) locals_set(local, T, "the segment's own humans and AIs");
+        return 1;
     }
-    if (!s_mp.level) return 1;
     here = recr_segment_mp(s_rd);
     held = !here && recr_segment_cells(s_rd);
     if (!tagpu_puppet_engine_cells(here || held, here)) {
         mp_fail("the cells' rule could not follow the segment at GameTime %u (tagpu_puppet.c)", T);
         return 0;
     }
+    if (seg) locals_set(local, T, "the segment's own humans and AIs");
     s_mp.on = here;
     s_engine_cells = here || held;
     s_cells_held = held;
@@ -7582,13 +7593,17 @@ static int tk_open(unsigned T, char* why, unsigned cap)
    +0x94. TK1 runs it before the creates; R8's players_put then writes each seat's PlayerInfo from
    the image, +0x94 included, and +0x73 not (replay-layout.tsv, `controller`), so it runs again
    after it and the two copies agree, as the setter leaves them in a live game. */
+static unsigned tk_type(unsigned seat, unsigned P)
+{
+    return s_rw.state ? s_rw.types[seat] : seat == P ? 1u : 2u;
+}
+
 static void tk_types(char* ta, unsigned P)
 {
     const RecHeader* h = recr_header(s_rd);
     unsigned i;
     for (i = 0; i < h->nseats; i++)
-        E_SetType(player_rec(ta, h->seats[i].index), s_rw.state ?
-                  s_rw.types[h->seats[i].index] : h->seats[i].index == P ? 1u : 2u);
+        E_SetType(player_rec(ta, h->seats[i].index), tk_type(h->seats[i].index, P));
 }
 
 static void tk_seats(char* ta, unsigned P, unsigned D)
@@ -7601,6 +7616,18 @@ static void tk_seats(char* ta, unsigned P, unsigned D)
     if (!s_rw.state) memcpy(ta + OFF_DIFFICULTY, &D, 4);
     QueryPerformanceCounter(&a);
     tk_types(ta, P);
+    /* getter 75's table for the new types, before R7: R7's creates run Create's first slice at
+       once -- the create 0x485F50 calls the COB setup 0x485D40 at 0x4860A6, which starts Create
+       run-now (push 1 at 0x485DDD; DISASSEMBLED, exe-reverse-engineering.md) -- so its GET 75
+       reads the table while the puppet mode is still on, and from here a type-1 or type-2 seat
+       is local (seat_local), as the live getter answers once the takeover ends the mode */
+    {
+        unsigned char local[PUPPET_PLAYERS] = { 0 };
+        for (i = 0; i < h->nseats; i++)
+            if (h->seats[i].index < PUPPET_PLAYERS)
+                local[h->seats[i].index] = seat_local(tk_type(h->seats[i].index, P));
+        locals_set(local, *(unsigned*)(ta + OFF_GAMETIME) + 1, "the takeover's humans and AIs");
+    }
     for (i = 0; i < h->nseats; i++) {
         unsigned st = h->seats[i].index;
         char* rec = player_rec(ta, st);

@@ -8,11 +8,12 @@
    module holds whether this level is a puppet level, which records are puppet seats, what
    getter 75 answers for each, and the gates that keep the recording the only writer.
 
-   THE TABLE is SIM_CONTENT (decision D3): derived from the recording's header at the seat fill,
-   constant for the level but for the mark of its first step (tagpu_puppet_play), and never
-   recorded or restored. The seat fill writes it on the game thread in the SKIRMISH Start or the
-   browser's, before the loader thread exists: CreateThread orders every write before the new
-   thread's first instruction. The level's teardown clears it on the game thread.
+   THE TABLE is SIM_CONTENT (decision D3): never recorded or restored, but rebuilt from the
+   header of the segment the reader stands in -- at the seat fill, and getter 75's answers again
+   at each seek's R0 and at a takeover's TK1 (tagpu_puppet_locals) -- and marked at the level's
+   first step (tagpu_puppet_play). The seat fill writes it on the game thread in the SKIRMISH
+   Start or the browser's, before the loader thread exists: CreateThread orders every write before
+   the new thread's first instruction. The level's teardown clears it on the game thread.
    Every reader runs between those two points, on the game thread or the loader thread. A Start
    always reaches the teardown: after the seat fill, the Start branch runs straight to the loading
    state (0x47B097..0x47B0B0) -- the Replays browser's Start too, whose commit refuses nothing
@@ -27,8 +28,9 @@
 int tagpu_puppet_on(void);
 /* 1 when `player` is below 10 and a puppet seat of this level */
 int tagpu_puppet_seat(unsigned player);
-/* getter 75 for a puppet seat's unit: the recording machine's answer, 1 for a seat that was
-   local there (type 1 or 2), 0 for any other record */
+/* getter 75 for a puppet seat's unit: the answer of the machine that recorded the segment being
+   read, 1 for a seat that was local there (type 1 or 2), 0 for any other record; from a
+   takeover's TK1, the taken-over level's own (tagpu_puppet_locals) */
 int tagpu_puppet_local(unsigned player);
 /* the mode as a byte that a stub can compare (tagpu_detour_cmp_flag) */
 const volatile unsigned char* tagpu_puppet_flag(void);
@@ -51,10 +53,10 @@ void tagpu_puppet_end(void);
    logged, inside a footprint writer. 1, or 0 when the contest's rule could not follow it, and
    then nothing changed. */
 int tagpu_puppet_engine_cells(int engine_cells, int mp_state);
-/* getter 75's answers anew, for the segment a playing's reader stands in after a seek
-   (tagpu_replay.c, mp_follow). On the game thread between steps, before the seek remakes every
-   unit, whose Create reads them first. 0 when this level plays no recording, else 1 when any
-   answer changed. */
+/* getter 75's answers anew: for the segment a playing's reader stands in after a seek
+   (tagpu_replay.c, mp_follow), and for the seats' new types at a takeover's TK1 (tk_seats). On
+   the game thread between steps, before the seek remakes every unit, whose Create reads them
+   first. 0 when this level plays no recording, else 1 when any answer changed. */
 int tagpu_puppet_locals(const unsigned char local[PUPPET_PLAYERS]);
 /* 1 when the six contest sites held the stock bytes at attach and none holds another module's
    bytes now (tagpu_contest.h): then the recording machine's rule goes in unless a page write
