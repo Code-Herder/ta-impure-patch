@@ -205,8 +205,8 @@ device pixels** wide, as CSS snaps a border width (floored, a thinner one drawn 
 over button at 4K and HUD 150 has a top edge of 8.81 px drawn 8, which makes its top and middle rows
 five copies of 199 px and its bottom row (10.67 px, drawn 10) four of 248 — MEASURED 2026-10-23 against
 Chrome's `border-image`, where the exact widths gave four in every row and the scratches fell up to
-55 px apart. Every edge — the box's own, rounded half up, a cell's and a copy's — is a whole pixel,
-counted from the snapped box's corner. A part drawn much wider than it was painted keeps its wear in
+55 px apart. Every edge — the box's own, a cell's and a copy's — is a whole pixel, rounded half up
+by one rule (`tagpu_hud_snap`, `snapPx` in `hud.js`), counted from the snapped box's corner. A part drawn much wider than it was painted keeps its wear in
 proportion this way; `tools/hudart/seamband.py` makes the band and sets the flag. The game
 (`tagpu_hudlay_expand`) and the mockup (`composeGrid`, `composeNine`, which draw the part on a canvas
 of the snapped size) draw it alike, piece for piece, and sample it alike ([HUD art](hud-art.md),
@@ -242,6 +242,8 @@ A **placement** names a box in its frame:
 
 ### Parts
 
+- **Every box is pinned to device pixels by `hud.js`** (`pin`), from the layout's own numbers, as
+  the DLL snaps it ([HUD art](hud-art.md), *How a part is drawn*).
 - **Grid-sliced and 9-slice parts and tiled fills** are composed into one image per snapped drawn size,
   piece by piece, the pieces the DLL's and sampled as its GPU samples them ([HUD art](hud-art.md),
   *How a part is drawn*). The pieces share rounded pixel edges, so no seam can show. An `xtile` part's
@@ -604,26 +606,21 @@ chart's SVG it pairs the line ops by colour (with width and opacity), the SVG te
 shadow (offset, blur, opacity), and compares every group's colour, halo, points and cross, a
 point within a tenth of a unit, the precision both sides write. It also measures every text's baseline in the browser — a zero-size
 inline-block probe on the text's own line — against `tagpu_hudlay_baseline` from the faces'
-metrics. And it compares every grid and 9-slice part's pieces — the destination edges in device
-pixels from the snapped corner, the source rectangle — with `tagpu_hudlay_expand`'s, which
-`laycheck.c` prints with the corner and far edges it snapped. It exits 1 on a box or baseline more
-than its tolerance off, a part's or a text's opacity more than one level off, a dim that disagrees,
-pieces that disagree, or an element only one side has.
-
-**A box edge on a half pixel can snap apart.** Chrome lays a box out in LayoutUnits, sixty-fourths
-of a CSS pixel summed down the element tree, and the DLL in floats, so an edge on an exact half
-can come out a hair below it in the browser and on it in the DLL, and the two round it to
-neighbouring pixels. The pieces of such a part cannot be compared; laycheck names how many snapped
-apart and holds each of their edges to the box tolerance instead. MEASURED 2026-10-23 on the
-twenty-three cases: 1 to 12 parts a case at the device scale factor of 2 the other cases use, and
-one in `1080-100-lanes-dpr1`, a bay button whose right edge is 496.5 pixels in the DLL and 496.484
-in Chrome (the button's 44.7 CSS pixels truncated to 44.6875). The game draws that edge a pixel
-right of the mockup.
+metrics. It compares every part's, solid's, dot's and clip's device pixels three ways: the box the
+DLL's draw snaps (`laycheck.c` prints it), the box `hud.js` pinned, and the box Chrome painted.
+And it compares every grid and 9-slice part's pieces — the destination edges in device pixels from
+the snapped corner, the source rectangle — with `tagpu_hudlay_expand`'s. A box is compared in
+units by the numbers `hud.js` pinned it from, a text's baseline as Chrome lays it out. It exits 1
+on a box or baseline more than its tolerance off, a part's or a text's opacity more than one level
+off, a dim that disagrees, a box snapped or painted on other pixels, pieces that disagree, a box
+the mockup did not pin, or an element only one side has.
 
 MEASURED 2026-10-08 on the first six cases, again on all eight once the controls were laid out
 for input, on all thirteen with the stats window (2026-10-09), on all eighteen at `prop=1`
 (2026-10-23), on all twenty-two with the lanes (2026-10-23), and on all twenty-three with every
-grid and 9-slice part's pieces (2026-10-23): the two agree. A halo
+box's device pixels and every grid and 9-slice part's pieces (2026-10-23): the two agree, and across
+the cases the 1615 parts, 974 solids, 173 dots and 25 clips are each on the same pixels in the
+DLL, pinned and painted. A halo
 polyline is told from its line by its `stroke-opacity`, which only the halo carries. At 4K every
 box is within 0.018 units and every baseline within 0.0145 (the twenty-two cases, 2026-10-23). The Oswald residual above is named, not failed, and only where the same rule on
 Chrome's own rounded ascent and descent (`measureText`'s `fontBoundingBoxAscent`/`Descent`) gives

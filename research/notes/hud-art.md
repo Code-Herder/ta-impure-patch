@@ -548,10 +548,31 @@ The mockup (`hud.js`, `hud.css`) and the DLL (`tagpu_hudlay_expand` in
 `tagpu/ddraw/src/tagpu_hudlay.c`) draw a part by the same rules. The mockup composes images; the
 DLL emits textured quads.
 
-- **The box is snapped to whole device pixels,** each edge rounded half up, as Chrome snaps an
-  element. Every rule below works in the snapped box. The DLL snaps a part's box in
-  `tagpu_hudlay_expand`, and a solid's, a dot's and a clip's in `tagpu_huddraw.c` (`snap`): the
-  rasteriser's pixel-centre rule alone rounds an edge that falls exactly on a half pixel *down*.
+- **The box is snapped to whole device pixels,** each edge rounded half up by `tagpu_hud_snap`
+  (`tagpu_hudlay.h`), and every edge below — a cell's, a copy's — by the same rule. Every rule
+  below works in the snapped box. The DLL snaps a part's box in `tagpu_hudlay_expand`, and a
+  solid's, a dot's and a clip's in `tagpu_huddraw.c` (`snap`): the rasteriser's pixel-centre rule
+  alone rounds an edge that falls exactly on a half pixel *down*.
+    - **An edge exactly on a half rounds up on both sides.** The layout computes in float and
+      `hud.js` in double, so such an edge comes out a hair either side of the half. The rule
+      counts an edge less than 1/64 px below a half as on it. Of the 16 728 snapped edges in
+      laycheck's twenty-three cases, 389 fall in that margin, most of them halves the float
+      arithmetic left a ten-thousandth short (MEASURED 2026-10-23 from the ops laycheck prints).
+      What the margin cannot close is an edge whose exact value lies within the arithmetic's
+      error of 1/64 px below a half; the nearest in those cases lies about 7 × 10⁻⁴ px from it,
+      and both sides round it alike.
+    - **The mockup pins every box itself** (`pin` in `hud.js`). It computes each box's edges from
+      the layout's own numbers, kept on the element as `--x`, `--y`, `--w` and `--h`, and gives the
+      element its offset from its parent's pinned corner in CSS pixels. Chrome's layout is never
+      read back: it keeps a position in LayoutUnits, sixty-fourths of a CSS pixel summed down the
+      element tree, which put an edge on a half a hair below it and painted a bay button's edge a
+      pixel left of the DLL's. Its truncation of each offset now leaves a pinned box under a tenth
+      of a device pixel off a whole one, which its own pixel snapping takes back out. A part, a
+      fill's clip, a solid and a dot are pinned. A text, the stats window (whose drop shadow the
+      DLL blurs from the exact box) and the chart's lines keep their exact place. The chart's SVG
+      is given a viewport on whole pixels and a view box offset to match, and its legend swatches
+      and their rings are four-solid rings as the DLL draws them, each snapped. A resource bar's
+      fill is a box of its own, as the DLL's is.
   At 1920 × 1080 and replay HUD 100, 1.5 pixels a unit, many edges fall on halves: the lanes
   plate spans 874.5 to 958.5 and the Take over button 928.5 to 958.5. MEASURED 2026-10-23 on the
   build before the snap: the game drew both a row higher than the mockup, the plate's light top
