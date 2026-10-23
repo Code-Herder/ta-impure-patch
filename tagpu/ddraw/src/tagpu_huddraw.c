@@ -27,6 +27,7 @@
 #include <math.h>
 #include <string.h>
 #include "tagpu_huddraw.h"
+#include "tagpu_hudtext.h"
 
 /* ---- the shaders ---------------------------------------------------------------------------
 
@@ -311,32 +312,7 @@ static void colour(HUDINST* q, uint32_t rgb, float a)
     q->rgba[3] = a;
 }
 
-/* the next code point of UTF-8, or U+FFFD for a bad sequence */
-static uint32_t utf8(const unsigned char** s, const unsigned char* e)
-{
-    const unsigned char* p = *s;
-    uint32_t c = *p++;
-    int n = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : 0;
-    if (c >= 0x80 && n == 0) { *s = p; return 0xFFFD; }
-    c &= n == 3 ? 0x07 : n == 2 ? 0x0F : n == 1 ? 0x1F : 0x7F;
-    while (n-- > 0) {
-        if (p >= e || (*p & 0xC0) != 0x80) { *s = p; return 0xFFFD; }
-        c = (c << 6) | (*p++ & 0x3F);
-    }
-    *s = p;
-    return c;
-}
-
-/* CSS `text-transform: uppercase` for what a HUD string can hold: ASCII and Latin-1. ß has no
-   one-letter capital and stays; ÿ becomes Ÿ, outside Latin-1. */
-static uint32_t upper(uint32_t c)
-{
-    if ((c >= 'a' && c <= 'z') || (c >= 0xE0 && c <= 0xFE && c != 0xF7)) return c - 32;
-    if (c == 0xFF) return 0x178;
-    return c;
-}
-
-#define MAXCH 160
+#define MAXCH TAGPU_HUDTEXT_MAX
 
 static void text(B* c, const HUDOP* op)
 {
@@ -345,7 +321,7 @@ static void text(B* c, const HUDOP* op)
     int fi = c->art->style_face[op->style];
     const HUDFACE* f = &c->art->face[fi];
     float size = op->size * c->px, sc = stbtt_ScaleForMappingEmToPixels(&f->info, size);
-    float sp = S->spacing * size, width = 0, x, base;
+    float sp = S->spacing * size, width, x, base;
     uint32_t cp[MAXCH], rgb[MAXCH];
     int gi[MAXCH], n = 0, i, k, r, copies;
     float pen[MAXCH];
@@ -356,20 +332,14 @@ static void text(B* c, const HUDOP* op)
         const HUDRUN* run = &c->ops->run[op->run + r];
         const unsigned char *s = (const unsigned char*)c->ops->text + run->off, *e = s + run->len;
         while (s < e && n < MAXCH) {
-            uint32_t ch = utf8(&s, e);
-            cp[n] = S->upper ? upper(ch) : ch;
+            uint32_t ch = tagpu_hudtext_utf8(&s, e);
+            cp[n] = S->upper ? tagpu_hudtext_upper(ch) : ch;
             rgb[n] = run->rgb ? run->rgb : S->rgb;
             gi[n] = stbtt_FindGlyphIndex(&f->info, (int)cp[n]);
             n++;
         }
     }
-    for (i = 0; i < n; i++) {
-        int adv, lsb;
-        stbtt_GetGlyphHMetrics(&f->info, gi[i], &adv, &lsb);
-        if (i) width += sc * (float)stbtt_GetGlyphKernAdvance(&f->info, gi[i - 1], gi[i]);
-        pen[i] = width;
-        width += sc * (float)adv + sp;
-    }
+    width = tagpu_hudtext_pens(&f->info, sc, sp, gi, n, pen);
     if (op->flags & HOPF_BASE) {
         /* an SVG <text>: its anchor at x, its baseline at y, painted on a whole pixel */
         x = op->r.x * c->px - (op->centre == 1 ? width / 2 : op->centre == 2 ? width : 0);

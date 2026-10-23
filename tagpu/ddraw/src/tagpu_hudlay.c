@@ -24,6 +24,8 @@ struct HUDLAY {
     int         live_hot;       /* the live HUD's part of it (live())                         */
     int         nparts;
     HUDPART     part[HUD_MAXPART];
+    HUDTEXTW    measure;        /* tagpu_hudlay_measure; NULL until given            */
+    void*       mctx;
 };
 
 typedef struct { double x, y, w, h; } R;
@@ -1246,19 +1248,27 @@ static void chart(C* c, R cb, double Rl)
 #undef Y
 }
 
-/* ---- the toast: a short message in a dark box centred across the screen, above everything; the box
-   is the layout's size, not the text's, since this file has no faces to measure text with. On the
-   live HUD it is the top layer, over the engine's message lines as the strip is, and while the
-   strip is drawn it sits clear of it (live_clear: the strip's gap under the bar again under it) */
+/* ---- the toast: a short message in a dark box centred across the screen, above everything. The
+   box is as wide as its text and `pad` each side of it, never narrower than `w` nor wider than
+   `max_w`: the text is measured in its face by the layout's measure (tagpu_hudlay_measure), as
+   hud.js measures it. On the live HUD it is the top layer, over the engine's message lines as the
+   strip is, and while the strip is drawn it sits clear of it (live_clear: the strip's gap under
+   the bar again under it) */
 
 static void toast(C* c)
 {
     const HUDSTATE* st = c->st;
+    const HUDGLOBALS* g = &c->l->g;
     const TJV* Ts = obj(c, c->L, "toast");
-    double w = num(c, Ts, "w"), h = num(c, Ts, "h"), e = num(c, Ts, "edge"), y = st->H * num(c, Ts, "top");
+    int si = style_index(c->l, str(c, Ts, "style"));
+    double w = g->toast_w, h = num(c, Ts, "h"), e = num(c, Ts, "edge"), y = st->H * num(c, Ts, "top");
     uint32_t ec = hexrgb(str(c, Ts, "edge_colour"));
     R b;
     PL p;
+    if (c->l->measure && si >= 0) {
+        double tw = c->l->measure(c->l->mctx, si, g->style[si].size, st->toast) + 2 * g->toast_pad;
+        w = fmin(fmax(tw, g->toast_w), g->toast_max_w);
+    }
     if (st->live_open && y < st->top + c->l->g.live_clear) y = st->top + c->l->g.live_clear;
     b = box((st->W - w) / 2, y, w, h);
     c->top = st->live;
@@ -1474,7 +1484,11 @@ static int load_globals(HUDLAY* l, char* err, size_t errn)
     l->g.pos_rgb = hexrgb(str(&c, v, "pos"));
     l->g.neg_rgb = hexrgb(str(&c, v, "neg"));
     l->g.track_ends = (float)num(&c, obj(&c, obj(&c, obj(&c, l->L, "dock"), "rail"), "track"), "ends");
-    l->g.toast_ms = (unsigned)num(&c, obj(&c, l->L, "toast"), "ms");
+    v = obj(&c, l->L, "toast");
+    l->g.toast_ms = (unsigned)num(&c, v, "ms");
+    l->g.toast_w = (float)num(&c, v, "w");
+    l->g.toast_max_w = (float)num(&c, v, "max_w");
+    l->g.toast_pad = (float)num(&c, v, "pad");
     v = obj(&c, obj(&c, obj(&c, l->L, "proposed"), "live"), "strip");
     l->g.live_clear = (float)(2 * num(&c, v, "t") + num(&c, v, "h"));
     v = arr(&c, obj(&c, l->L, "chart"), "teams");
@@ -1650,5 +1664,11 @@ void tagpu_hudlay_free(HUDLAY* l)
 }
 
 const HUDGLOBALS* tagpu_hudlay_globals(const HUDLAY* l) { return &l->g; }
+
+void tagpu_hudlay_measure(HUDLAY* l, HUDTEXTW measure, void* ctx)
+{
+    l->measure = measure;
+    l->mctx = ctx;
+}
 int tagpu_hudlay_nparts(const HUDLAY* l) { return l->nparts; }
 const HUDPART* tagpu_hudlay_part(const HUDLAY* l, int i) { return i >= 0 && i < l->nparts ? &l->part[i] : NULL; }

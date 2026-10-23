@@ -253,8 +253,9 @@ def main():
         keep = Path(sys.argv[2])
     tmp = Path(tempfile.mkdtemp(prefix="laycheck"))
     exe = tmp / "laycheck"
-    cc = subprocess.run(["gcc", "-O1", "-std=c99", "-Wall", f"-I{SRC}", str(ROOT / "tools/hudart/laycheck.c"),
-                         str(SRC / "tagpu_json.c"), str(SRC / "tagpu_hudlay.c"), "-lm", "-o", str(exe)],
+    cc = subprocess.run(["gcc", "-O1", "-std=c99", "-Wall", f"-I{SRC}", f"-I{SRC.parent / 'inc'}",
+                         str(ROOT / "tools/hudart/laycheck.c"), str(SRC / "tagpu_json.c"),
+                         str(SRC / "tagpu_hudlay.c"), str(SRC / "tagpu_hudtext.c"), "-lm", "-o", str(exe)],
                         capture_output=True, text=True)
     if cc.returncode:
         sys.exit("laycheck: the native build failed\n" + cc.stderr)

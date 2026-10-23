@@ -845,24 +845,14 @@ static void trigger_rect(int* x, int* y)
    arithmetic, to the character. */
 static void panel_rect(int* x, int* y)
 {
-    int q8 = 256, bh = BAR_H, dx = 0, dy = 0, w, h;
+    int q8 = 256, bh = BAR_H, w = (int)g_ddraw.width, dx = 0, dy = 0;
     tagpu_hud_live(NULL, &bh, &q8);
     tagpu_hud_shift(&dx, &dy);               /* (0,0) whenever the pass is inert */
-    tagpu_menu_panel_screen((int)g_ddraw.width, q8, bh, dx, x, y, &w, &h);
-    *x -= dx;
-    *y -= dy;                                /* screen bh, i.e. engine row 32 */
-}
-
-void tagpu_menu_panel_screen(int fw, int q8, int bh, int dx, int* x, int* y, int* w, int* h)
-{
-    int r = fw - MARGIN * q8 / 256;          /* the margin the sprocket leaves */
-    if (r < PANEL_W) r = PANEL_W;            /* never off the left */
-    *x = r - PANEL_W - dx;
+    w -= MARGIN * q8 / 256;                  /* the margin the sprocket leaves */
+    if (w < PANEL_W) w = PANEL_W;            /* never off the left */
+    *x = w - PANEL_W - dx;
     if (*x < 0) *x = 0;                      /* never off the left, again */
-    *x += dx;
-    *y = bh;
-    *w = PANEL_W;
-    *h = PANEL_H;
+    *y = bh - dy;                            /* screen bh, i.e. engine row 32 */
 }
 
 /* ---- generating the .GUI ------------------------------------------------- */
@@ -1629,9 +1619,17 @@ int tagpu_menu_leave_ready(void)
     return s_installed;
 }
 
-int tagpu_menu_panel_open(void)
+int tagpu_menu_panel_box(int* l, int* t, int* r, int* b)
 {
-    return s_gm != 0;
+    int x, y, dx = 0, dy = 0;
+    if (!s_installed || !s_gm) return 0;
+    panel_rect(&x, &y);
+    tagpu_hud_shift(&dx, &dy);
+    *l = x + dx;
+    *t = y + dy;
+    *r = *l + PANEL_W - 1;
+    *b = *t + PANEL_H - 1;
+    return 1;
 }
 
 /* THE LEAVE GUARD. Leave calls the engine's YESORNO opener and leaves the rest to its OnCommand

@@ -33,10 +33,6 @@ int  tagpu_vk_hud_record_top(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t
    is empty. */
 int  tagpu_vk_hud_top_rect(VkRect2D* r);
 
-/* The part of the top layer's rect the engine's UI goes back over this frame -- the Config
-   panel's, while the live HUD draws and the panel is open: 1 with the rect, 0 when it is empty. */
-int  tagpu_vk_hud_over_rect(VkRect2D* r);
-
 /* Give everything back: the seam calls it from `vk_down`, after its vkDeviceWaitIdle and
    before the device is destroyed. Safe when nothing was built. */
 void tagpu_vk_hud_down(const TAGPU_VKPASS* d);

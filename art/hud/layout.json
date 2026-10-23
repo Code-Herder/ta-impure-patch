@@ -24,7 +24,7 @@
   "chart":       {"font": "Barlow Condensed", "weight": 600, "size": 6.5,  "colour": "#8a93a8", "upper": true,  "spacing": 0.03, "shadow": 0}
  },
 
- "toast": {"top": 0.07, "w": 150, "h": 18, "bg": "#080a06", "alpha": 0.86, "edge": 0.25, "edge_colour": "#4a4c3c", "style": "toast", "ms": 1800},
+ "toast": {"top": 0.07, "w": 150, "max_w": 260, "pad": 8, "h": 18, "bg": "#080a06", "alpha": 0.86, "edge": 0.25, "edge_colour": "#4a4c3c", "style": "toast", "ms": 1800},
 
  "dock": {
   "h": 46, "act": "dock",

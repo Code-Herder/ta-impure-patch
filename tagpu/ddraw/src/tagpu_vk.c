@@ -2327,6 +2327,22 @@ static void world_records(VkCommandBuffer cb, uint32_t fi, uint32_t w, uint32_t 
     if (draw_mark) tagpu_vk_mark_record(&s_pass, cb, fi, s_vk.rp, w, h);
 }
 
+/* `a` cut to the part of it inside `b`: 1 when that part is not empty */
+static int rect_meet(VkRect2D* a, const VkRect2D* b)
+{
+    int32_t x0 = a->offset.x > b->offset.x ? a->offset.x : b->offset.x;
+    int32_t y0 = a->offset.y > b->offset.y ? a->offset.y : b->offset.y;
+    int32_t ax = a->offset.x + (int32_t)a->extent.width, bx = b->offset.x + (int32_t)b->extent.width;
+    int32_t ay = a->offset.y + (int32_t)a->extent.height, by = b->offset.y + (int32_t)b->extent.height;
+    int32_t x1 = ax < bx ? ax : bx, y1 = ay < by ? ay : by;
+    if (x1 <= x0 || y1 <= y0) return 0;
+    a->offset.x = x0;
+    a->offset.y = y0;
+    a->extent.width = (uint32_t)(x1 - x0);
+    a->extent.height = (uint32_t)(y1 - y0);
+    return 1;
+}
+
 static int vk_present(void)
 {
     uint32_t idx = 0, fi = s_vk.frame % s_vk.nimg;
@@ -2780,13 +2796,13 @@ static int vk_present(void)
                LAY_FS) -- is the last thing drawn at every pixel of the top layer's rect, as the
                composite's is everywhere else, and the cursor stays topmost. */
             if (draw_hud) {
-                VkRect2D top, over;
+                VkRect2D top, pan;
                 if (tagpu_vk_hud_record_top(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height) &&
-                    gui_drew) {
-                    if (tagpu_vk_hud_over_rect(&over))
-                        tagpu_vk_gui_record_whole(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height, over);
-                    if (tagpu_vk_hud_top_rect(&top))
-                        tagpu_vk_gui_record_sharp(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height, top);
+                    gui_drew && tagpu_vk_hud_top_rect(&top)) {
+                    if (tagpu_vk_gui_panel_rect(fi, s_vk.ext.width, s_vk.ext.height, &pan) &&
+                        rect_meet(&pan, &top))
+                        tagpu_vk_gui_record_whole(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height, pan);
+                    tagpu_vk_gui_record_sharp(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height, top);
                 }
             }
             if (draw_scaf)

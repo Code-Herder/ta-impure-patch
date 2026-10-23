@@ -58,6 +58,12 @@ int  tagpu_vk_gui_record_sharp(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32
 int  tagpu_vk_gui_record_whole(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                                uint32_t w, uint32_t h, VkRect2D r);
 
+/* The Config panel on the `w` x `h` attachment, as the composite `record` drew this frame for
+   `slot` places it: 1 with its rect when that composite's own hand-over says the panel was open
+   at its flip (TAGPU_GUIHAND::panelL..), 0 otherwise. The box and the composite are one
+   snapshot, so the rect names the panel exactly when the composite holds it. */
+int  tagpu_vk_gui_panel_rect(uint32_t slot, uint32_t w, uint32_t h, VkRect2D* r);
+
 /* 1 on the ONE frame `tagpu_gui.ab` latched its claim and the `_vk.ppm` target
    was unlinked, so the seam captures THAT frame. It does not mean a file was
    written. Consumed. */

@@ -106,7 +106,6 @@ static HUDBATCH              s_batch[HUD_MAXBATCH];
 static int                   s_nbatch, s_ninst;
 static int                   s_nbase;           /* the base layer's batches: s_batch[0, s_nbase) */
 static VkRect2D              s_top;             /* the top layer's device pixels; empty none   */
-static VkRect2D              s_over;            /* where the UI goes over it again; empty none */
 static int                   s_saidDrop, s_saidMiss, s_saidChart;
 
 static void plog(const TAGPU_VKPASS* d, const char* fmt, ...)
@@ -713,7 +712,6 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 
     s_ninst = s_nbatch = s_nbase = 0;
     memset(&s_top, 0, sizeof s_top);
-    memset(&s_over, 0, sizeof s_over);
     tagpu_hudstate_drawn(NULL);
     if (s_state == ST_REFUSED || !tagpu_hudstate_frame(d->frame, &st, &px, &ox, &oy)) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS || w == 0 || h == 0 || !(px > 0)) return 0;
@@ -758,23 +756,6 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         s_nbatch = s_nbase + nb1;
         top_rect(in + n0, s_ninst - n0, w, h);
         for (i = s_nbase; i < s_nbatch; i++) s_batch[i].first += n0;
-    }
-    /* the Config panel's rect within the top layer's: the UI is drawn again there, over it */
-    {
-        int x, y, pw, ph;
-        if (s_top.extent.width && tagpu_hudstate_panel(d->frame, &x, &y, &pw, &ph)) {
-            int x0 = x > s_top.offset.x ? x : s_top.offset.x;
-            int y0 = y > s_top.offset.y ? y : s_top.offset.y;
-            int x1 = s_top.offset.x + (int)s_top.extent.width, y1 = s_top.offset.y + (int)s_top.extent.height;
-            if (x + pw < x1) x1 = x + pw;
-            if (y + ph < y1) y1 = y + ph;
-            if (x1 > x0 && y1 > y0) {
-                s_over.offset.x = x0;
-                s_over.offset.y = y0;
-                s_over.extent.width = (uint32_t)(x1 - x0);
-                s_over.extent.height = (uint32_t)(y1 - y0);
-            }
-        }
     }
     if ((dropped || s_ops.overflow) && !s_saidDrop) {
         s_saidDrop = 1;
@@ -890,12 +871,6 @@ int tagpu_vk_hud_top_rect(VkRect2D* r)
 {
     *r = s_top;
     return s_top.extent.width > 0 && s_top.extent.height > 0;
-}
-
-int tagpu_vk_hud_over_rect(VkRect2D* r)
-{
-    *r = s_over;
-    return s_over.extent.width > 0 && s_over.extent.height > 0;
 }
 
 void tagpu_vk_hud_down(const TAGPU_VKPASS* d)

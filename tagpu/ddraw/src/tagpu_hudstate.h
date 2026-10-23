@@ -52,10 +52,6 @@ void tagpu_hudstate_present(const struct TAGPU_FRAME* f);
    `present` did not run in that frame. Render thread. */
 int  tagpu_hudstate_frame(unsigned frame, const HUDSTATE** st, float* px, int* ox, int* oy);
 
-/* Render-thread frame `frame`'s Config panel on the attachment, while the live HUD draws and the
-   panel is open: 1 with its rect, 0 otherwise. Render thread. */
-int  tagpu_hudstate_panel(unsigned frame, int* x, int* y, int* w, int* h);
-
 /* The Vulkan pass has built this frame's ops and will draw them: their controls become the hit
    map. NULL: this frame draws no HUD, and the map is empty. Render thread, after
    `tagpu_hudstate_frame` answered 1 for the same frame. */

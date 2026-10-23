@@ -4,12 +4,17 @@
 
    The state is the mockup's own (index.html `state()`), so the two sides lay out the same
    game; tools/hudart/laycheck.py compares this output with the mockup's element boxes.
-   Compiled natively by laycheck.py: tagpu_json.c and tagpu_hudlay.c are pure C99 for this. */
+   Compiled natively by laycheck.py: tagpu_json.c, tagpu_hudlay.c and tagpu_hudtext.c are pure
+   C99 for this, and stb_truetype is built here, so text the layout sizes to itself is measured
+   in its faces by the game's own rule. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_json.h"
 #include "tagpu_hudlay.h"
+#include "tagpu_hudtext.h"
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "stb_truetype.h"
 
 static char* slurp(const char* path, size_t* n)
 {
@@ -40,6 +45,38 @@ static int png_size(void* ctx, const char* part, int* w, int* h)
     *w = (b[16] << 24) | (b[17] << 16) | (b[18] << 8) | b[19];
     *h = (b[20] << 24) | (b[21] << 16) | (b[22] << 8) | b[23];
     return 1;
+}
+
+/* each style's face, as tagpu_hudart.c faces() opens it: fonts/<family, lower case, no
+   spaces>-<weight>.ttf */
+static stbtt_fontinfo s_face[24];
+static int s_faceOk[24];
+
+static void faces(const HUDLAY* l, const char* dir)
+{
+    const HUDGLOBALS* g = tagpu_hudlay_globals(l);
+    int i;
+    for (i = 0; i < g->nstyle && i < 24; i++) {
+        char path[1024], fam[32];
+        const char* s;
+        size_t n;
+        int k = 0;
+        unsigned char* b;
+        for (s = g->style[i].font; *s && k + 1 < (int)sizeof fam; s++)
+            if (*s != ' ') fam[k++] = (char)(*s >= 'A' && *s <= 'Z' ? *s + 32 : *s);
+        fam[k] = 0;
+        snprintf(path, sizeof path, "%s/fonts/%s-%d.ttf", dir, fam, g->style[i].weight);
+        if ((b = (unsigned char*)slurp(path, &n)))
+            s_faceOk[i] = stbtt_InitFont(&s_face[i], b, stbtt_GetFontOffsetForIndex(b, 0));
+    }
+}
+
+static double measure(void* ctx, int style, double size, const char* s)
+{
+    const HUDGLOBALS* g = tagpu_hudlay_globals((const HUDLAY*)ctx);
+    if (style < 0 || style >= 24 || !s_faceOk[style]) return 0;
+    return tagpu_hudtext_width(&s_face[style], (float)size, g->style[style].spacing, g->style[style].upper,
+                               s, strlen(s));
 }
 
 static void json_str(const char* s, int n)
@@ -73,6 +110,8 @@ int main(int argc, char** argv)
     snprintf(path, sizeof path, "%s/kit.json", argv[1]);
     if (!(kt = slurp(path, &nk))) { fprintf(stderr, "laycheck: cannot read %s\n", path); return 2; }
     if (!(l = tagpu_hudlay_load(lt, nl, kt, nk, png_size, argv[1], err, sizeof err))) { fprintf(stderr, "laycheck: %s\n", err); return 1; }
+    faces(l, argv[1]);
+    tagpu_hudlay_measure(l, measure, l);
     if (!(stt = slurp(argv[2], &ns)) || !(sd = tagpu_json_parse(stt, ns, err, sizeof err))) { fprintf(stderr, "laycheck: state: %s\n", err); return 2; }
 
     S = tagpu_json_root(sd);

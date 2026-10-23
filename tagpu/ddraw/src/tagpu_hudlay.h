@@ -198,6 +198,8 @@ typedef struct {
     float win_w, win_h, win_x, win_y;   /* the stats window's size and its first place       */
     float track_ends;               /* the playhead's inset at each end of the track      */
     unsigned toast_ms;              /* how long a toast shows                             */
+    float    toast_w, toast_max_w;  /* its box's least and most width, units              */
+    float    toast_pad;             /* the room each side of its text, units              */
     float    live_clear;            /* from the top bar's lower edge to the first row clear of
                                        the live strip, its gap under it as over it: units     */
     float dim_brightness, dim_saturate;
@@ -232,6 +234,12 @@ typedef int (*HUDPNGSIZE)(void* ctx, const char* part, int* w, int* h);
 HUDLAY*           tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, size_t nkit,
                                     HUDPNGSIZE png_size, void* ctx, char* err, size_t errn);
 void              tagpu_hudlay_free(HUDLAY* l);
+/* How wide a string is set in style `style` (HUDGLOBALS.style) at `size` units, in units: the
+   faces' measure (tagpu_hudtext_width), which the layout itself has no faces for. A box sized
+   to its text -- the toast -- asks it; until it is given one, such a box keeps its least width.
+   Set once, before the layout is published to the thread that builds with it. */
+typedef double (*HUDTEXTW)(void* ctx, int style, double size, const char* s);
+void              tagpu_hudlay_measure(HUDLAY* l, HUDTEXTW measure, void* ctx);
 /* The most HOP_HOT ops any state can build with this layout: the sum, over every place the rules
    emit one, of the most that place can emit -- the layout's lists and the code's fixed maxima --
    for the replay's HUD and for the live one, whichever is larger. The load refuses a layout

@@ -735,8 +735,7 @@ typedef struct TAGPU_PK_HUD {
     uint8_t  rw_state;          /* TAGPU_REPLAY_RWS_*                            */
     uint8_t  rw_arm;            /* Play from here: 0, 1 snapping back to rw_R,
                                    2 armed                                       */
-    uint8_t  rw_panel;          /* the Config panel is open: the UI is drawn
-                                   again over the strip inside the panel's rect  */
+    uint8_t  pad4;
     uint32_t rw_G;              /* the GameTime the rewind opened at: now, the
                                    strip's end                                   */
     uint32_t rw_R;              /* where Play from here starts                   */

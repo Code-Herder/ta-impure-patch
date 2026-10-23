@@ -19,7 +19,6 @@
 #include "tagpu_recfile.h"
 #include "tagpu_pal.h"
 #include "tagpu_hud.h"
-#include "tagpu_menu.h"
 #include "tagpu_log.h"
 #include "dd.h"
 #include "render_vk.h"
@@ -71,7 +70,6 @@ static int fill_live(TAGPU_PK_HUD* h, unsigned now)
     h->last = rw.last;
     h->rw_state = (uint8_t)rw.state;
     h->rw_G = rw.G;
-    h->rw_panel = (uint8_t)(tagpu_menu_panel_open() != 0);
     tagpu_hudinput_fill(h);
     return 1;
 }
@@ -155,9 +153,6 @@ static uint8_t  s_seatOf[TAGPU_PK_HUD_SEATS];   /* row i's recorded seat, this f
 static unsigned s_tFirst, s_tLast;      /* the GameTime span the track is drawn with, this frame's */
 /* the live rewind as this frame's record carries it, for the dump */
 static struct { unsigned state, arm, R, evict, G, first; } s_rw;
-/* the Config panel's rect on the attachment while the live HUD draws and the panel is open, this
-   frame's; w = 0 none */
-static int      s_panX, s_panY, s_panW, s_panH;
 /* THE HIT MAP OF THE LAST FRAME DRAWN: written by the Vulkan pass once it has built a frame it will
    draw (tagpu_hudstate_drawn), read by the dump and then by the next command record
    (tagpu_hudstate_cmd), which empties it, all on this thread. So each drawn frame's map is posted
@@ -413,7 +408,6 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
     float u;
 
     s_have = 0;
-    s_panW = 0;
     if (!pk || !pk->in_game || !(h = tagpu_pk_hud(pk))) return;
     if (vw > 0 && vh > 0) { s_ox = f->vp_x; s_oy = f->win_height - f->vp_y - vh; }
     else { vw = f->win_width; vh = f->win_height; s_ox = s_oy = 0; }
@@ -495,19 +489,6 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
     memcpy(st->toast, h->toast, sizeof st->toast);
     st->toast[sizeof st->toast - 1] = 0;
     if (h->mode == TAGPU_PK_HUD_LIVE) present_live(h, st);
-    /* THE CONFIG PANEL'S RECT, by the rule tagpu_menu.c places it with, from this frame's own
-       geometry: the frame's pixels to the attachment's as the composite maps them, each edge to
-       the pixel whose centre it passes */
-    if (h->mode == TAGPU_PK_HUD_LIVE && h->rw_panel) {
-        int x, y, w, ht, dx = 0;
-        float sx = (float)vw / (float)f->game_width, sy = (float)vh / (float)f->game_height;
-        tagpu_hud_shift(&dx, NULL);
-        tagpu_menu_panel_screen(f->game_width, q8, bh, dx, &x, &y, &w, &ht);
-        s_panX = s_ox + (int)floorf((float)x * sx + 0.5f);
-        s_panY = s_oy + (int)floorf((float)y * sy + 0.5f);
-        s_panW = s_ox + (int)floorf((float)(x + w) * sx + 0.5f) - s_panX;
-        s_panH = s_oy + (int)floorf((float)(y + ht) * sy + 0.5f) - s_panY;
-    }
     s_px = u;
     s_frame = f->frame_counter;
     s_have = 1;
@@ -565,16 +546,6 @@ void tagpu_hudstate_cmd(TAGPU_CMD_HUD* out)
 {
     *out = s_map;
     s_map.n = 0;
-}
-
-int tagpu_hudstate_panel(unsigned frame, int* x, int* y, int* w, int* h)
-{
-    if (!s_have || s_frame != frame || s_panW <= 0 || s_panH <= 0) return 0;
-    *x = s_panX;
-    *y = s_panY;
-    *w = s_panW;
-    *h = s_panH;
-    return 1;
 }
 
 int tagpu_hudstate_frame(unsigned frame, const HUDSTATE** st, float* px, int* ox, int* oy)

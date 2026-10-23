@@ -21,6 +21,7 @@
 
 #include "tagpu_vk_pass.h"
 #include <windows.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -415,6 +416,7 @@ static VkDeviceSize     s_laySharp;      /* the sharp-only quad, right after it 
    `prepare`. */
 static int              s_layDrew[TAGPU_VK_SLOTS];
 static int              s_layVp[4];      /* the frame's viewport, y from below */
+static int              s_layPanel[4];   /* the hand-over's Config panel box, r < l none */
 
 static void plog(const TAGPU_VKPASS* d, const char* fmt, ...)
 {
@@ -3933,6 +3935,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     s_layVp[0] = h.vpX; s_layVp[1] = h.vpY;
     s_layVp[2] = h.vpW_gl; s_layVp[3] = h.vpH_gl;
     s_presented = h.presented; s_surfW = h.surfW; s_surfH = h.surfH;
+    s_layPanel[0] = h.panelL; s_layPanel[1] = h.panelT;
+    s_layPanel[2] = h.panelR; s_layPanel[3] = h.panelB;
     s_uStride = uStride; s_fStride = fStride;
     s_abFrame = h.ab;
     s_drawThis = 1;
@@ -4048,6 +4052,30 @@ static int record_in(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot, u
                             0, 1, &s->laySet, 0, NULL);
     vkCmdBindVertexBuffers(cb, 0, 1, &s->vb, &quad);
     vkCmdDraw(cb, 6, 1, 0, 0);
+    return 1;
+}
+
+int tagpu_vk_gui_panel_rect(uint32_t slot, uint32_t w, uint32_t h, VkRect2D* r)
+{
+    int x = s_layVp[0], vw = s_layVp[2], vh = s_layVp[3], ytop, x0, y0, x1, y1;
+    float sx, sy;
+    if (slot >= TAGPU_VK_SLOTS || !s_layDrew[slot] || s_layPanel[2] < s_layPanel[0] ||
+        s_layPanel[3] < s_layPanel[1] || s_surfW <= 0 || s_surfH <= 0) return 0;
+    if (vw <= 0 || vh <= 0) { x = 0; vw = (int)w; vh = (int)h; ytop = 0; }
+    else ytop = (int)h - s_layVp[1] - vh;
+    /* the surface's pixels to the attachment's as lay_viewport maps the composite, each edge to
+       the pixel whose centre it passes */
+    sx = (float)vw / (float)s_surfW;
+    sy = (float)vh / (float)s_surfH;
+    x0 = x + (int)floorf((float)s_layPanel[0] * sx + 0.5f);
+    x1 = x + (int)floorf((float)(s_layPanel[2] + 1) * sx + 0.5f);
+    y0 = ytop + (int)floorf((float)s_layPanel[1] * sy + 0.5f);
+    y1 = ytop + (int)floorf((float)(s_layPanel[3] + 1) * sy + 0.5f);
+    if (x1 <= x0 || y1 <= y0) return 0;
+    r->offset.x = x0;
+    r->offset.y = y0;
+    r->extent.width = (uint32_t)(x1 - x0);
+    r->extent.height = (uint32_t)(y1 - y0);
     return 1;
 }
 
