@@ -754,6 +754,24 @@ start at R0 and its first iteration equal its parent's chain there (`compare-for
 drives the picker on its fork 5 (`forks_picker`): at a refresh it opens with no seek, its
 eviction is the dry run's, and from a timeline's first iteration it snaps one tick forward.
 
+## The recorder calls
+
+What the HUD asks the recorder is declared in `inc/tagpu_replay.h`, *THE HUD'S RECORDER CALLS*,
+all on the game thread: the takeover's plan and request, the timelines of the playing's file with
+the axis they span, a fork's deletion and export, the live rewind's verbs and state, and the last
+request's outcome, whose serial lets a caller see each outcome once. A call that changes anything
+queues it for the frame visit; the plan only reads. The trigger's own commands run through the
+same calls, and `hud state` prints what they answer (`tagpu_replay.c`, the trigger's comment). The
+details: [the takeover](tadr-port/demo-recorder-s4-takeover.md#driving-it),
+[the forks](tadr-port/demo-recorder-s4-forks.md#tickets-and-the-huds-route) and
+[live rewind](tadr-port/demo-recorder-s4-rewind.md#the-verbs-as-a-queue-and-their-outcomes). No
+control of the HUD calls them yet.
+
+**The span is the chain's.** A playing of a fork seeks, clamps and starts over within its own
+chain: the span runs from the root's first GameTime to the chosen timeline's last, which the scan
+that chose it found (`first_iteration`). For the original nothing changes, its last being the
+summary's.
+
 ## Checking it against the mockup
 
 - **Touch `tagpu_replayhud.dump` in the game folder.** The render thread looks for it every 30
@@ -836,6 +854,15 @@ the render thread.
 - **The hit map is one frame behind the HUD being built**, by design: it is the frame on screen.
   A control that moves between two frames (a row's buttons appearing under the pointer, the
   column scrolling) is clickable where the player saw it, not where the next frame draws it.
+- **Bookmarks do not survive a playing** [INFERRED from the code, not run]: `replays\index.dat`
+  keys them by the file's name and size, and every playing's end touches the file, which appends a
+  timeline table and so changes its size; a fork, a deletion and an export change it too.
+- **The hit map does not carry the timeline axis it was drawn with**: a click on the timeline is
+  mapped with the latest fill's span (`seek_at`, `tagpu_hudinput.c`). That is exact while the span
+  never changes inside a level; a timeline switch would change it.
+- **A multiplayer recording's fork may not play** [INFERRED from the code, not run]: the reader
+  refuses a chain whose segments differ in RT_HOLD, a multiplayer root has none, and its fork,
+  recorded by a live skirmish, writes one.
 - **A one-pixel Oswald residual.** At 26 of 7554 sizes swept, Chrome rounds Oswald's ascent or
   descent differently from the rule the DLL follows, and the line sits a pixel off the mockup's
   ([The replay HUD's layout](hud-layout.md), *Text*).

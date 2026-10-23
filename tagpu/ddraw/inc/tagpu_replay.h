@@ -105,7 +105,8 @@ void tagpu_replay_level_end(void);
 
 /* The replay HUD's requests (tagpu_hudinput.c), on the game thread.
    live: the level plays a recording and its first step has played, which was not refused.
-   span: the recording's first and last GameTime, from its summary at the open; 0 when none.
+   span: the chain that plays, its root's first GameTime and its last timeline's last (F1); 0
+   when none.
    path: "replays\\<file>" while a recording is open, else NULL; timeline: the timeline of it
    that plays, 0 the original -- a rewind into a fork changes it within the level.
    seek_request: a seek to T, clamped to [first + 1, last], for the next frame visit; 0 refused.
@@ -121,6 +122,76 @@ int  tagpu_replay_paused(void);
 void tagpu_replay_pause(int on);
 int  tagpu_replay_speed(void);
 int  tagpu_replay_speed_set(unsigned gs);
+
+/* THE HUD'S RECORDER CALLS (tagpu_replay.c, THE HUD'S RECORDER CALLS), game thread only.
+
+   THE TAKEOVER'S PLAN: where a takeover asked for at T starts and what its fork would delete,
+   found as the takeover finds them (takeover_point) and committing nothing. R is the refresh at
+   or before T (tk_bound's bound); `next` is set only when T rounds to a timeline's first
+   iteration, which no takeover starts at, and names the first GameTime one can (R + 1). 1 with
+   R, or 0 with `why` and R = 0. A replay playing, or a live rewind gone into the past
+   (TAGPU_REPLAY_RWS_PAST), whose fork the plan then predicts. */
+typedef struct TAGPU_REPLAY_TKPLAN {
+    unsigned R;
+    unsigned next;
+    unsigned evict;          /* the timeline the fork would delete, least recently used;
+                                UINT32_MAX none */
+    char     why[160];
+} TAGPU_REPLAY_TKPLAN;
+int tagpu_replay_takeover_plan(unsigned T, TAGPU_REPLAY_TKPLAN* out);
+/* The takeover as player P at T, for the next frame visit (THE TAKEOVER), D -1 for the
+   timeline's own difficulty: rounded to the refresh at or before T and refused at once when no
+   fork can be appended there (takeover_point). 1 queued; a later seek or takeover replaces it. */
+int tagpu_replay_takeover_request(unsigned P, unsigned T, int D);
+
+/* THE TIMELINES of the playing's file, as the last scan found them (THE TIMELINES CACHE): every
+   segment, root first, at most `cap`; their count, 0 when no recording is open. `on_chain`: a
+   segment of the chain that plays. `controlled`: the seat its header's RT_OPTIONS names, the
+   one a fork was played as. The axis: the root's first GameTime and the greatest last
+   GameTime of a live timeline. */
+typedef struct TAGPU_REPLAY_TIMELINE {
+    unsigned id, parent, fork_at, first, last, controlled;
+    int      live, on_chain;
+} TAGPU_REPLAY_TIMELINE;
+int tagpu_replay_timelines(TAGPU_REPLAY_TIMELINE* out, int cap);
+int tagpu_replay_axis(unsigned* first, unsigned* last);
+
+/* A fork of the playing's file deleted or exported (replays\<stem>.imprec), by the file worker:
+   1 accepted, its outcome reported later through tagpu_replay_result (kind FORK) once the frame
+   visit has taken it; 0 refused at once, with a line and that result. */
+enum { TAGPU_REPLAY_FORK_DELETE = 1, TAGPU_REPLAY_FORK_EXPORT };
+int tagpu_replay_fork_op(int op, unsigned id, const char* stem);
+
+/* LIVE REWIND (tagpu_replay.c, THE LIVE REWIND), the trigger's verbs: queued for the next frame
+   visit, the latest replacing an earlier one not yet taken. T is SEEK's; `dump` a frame dump
+   the operation's acknowledgement takes (a test's), NULL for none. 1 queued, 0 refused. */
+enum { TAGPU_REPLAY_RW_OPEN, TAGPU_REPLAY_RW_SEEK, TAGPU_REPLAY_RW_NOW, TAGPU_REPLAY_RW_FORK,
+       TAGPU_REPLAY_RW_CLOSE };
+int tagpu_replay_rewind(int op, unsigned T, const char* dump);
+enum { TAGPU_REPLAY_RWS_IDLE, TAGPU_REPLAY_RWS_FLUSH, TAGPU_REPLAY_RWS_OPEN,
+       TAGPU_REPLAY_RWS_PAST, TAGPU_REPLAY_RWS_ENDING };
+typedef struct TAGPU_REPLAY_RWSTATE {
+    int      state;          /* TAGPU_REPLAY_RWS_*                                          */
+    int      available;      /* idle, and OPEN would be taken: a live, recorded, non-network
+                                skirmish whose recorder is healthy                           */
+    unsigned first, last;    /* the live recording's span while one is open                 */
+    unsigned G;              /* the GameTime the rewind opened at: now                       */
+    unsigned T;              /* the last seek's target; 0 none yet                           */
+} TAGPU_REPLAY_RWSTATE;
+void tagpu_replay_rewind_state(TAGPU_REPLAY_RWSTATE* out);
+
+/* THE LAST REQUEST'S OUTCOME: of the seeks, the takeovers, the rewind verbs and the fork
+   operations, the one consumed last. `serial` grows by one at each, so a caller that remembers
+   it sees each outcome once. */
+enum { TAGPU_REPLAY_RQ_NONE, TAGPU_REPLAY_RQ_TAKEOVER, TAGPU_REPLAY_RQ_REWIND,
+       TAGPU_REPLAY_RQ_FORK, TAGPU_REPLAY_RQ_SEEK };
+typedef struct TAGPU_REPLAY_RESULT {
+    unsigned serial;
+    int      kind, op, ok;   /* op: the rewind verb or the fork op                          */
+    unsigned ticket;         /* a fork op's                                                  */
+    char     why[96];        /* the refusal's reason, or what was done                       */
+} TAGPU_REPLAY_RESULT;
+void tagpu_replay_result(TAGPU_REPLAY_RESULT* out);
 
 /* The replay HUD's rows, game thread only. Rows stay in the recording header's order, including defeated
    seats. Values come from the player's current recorded image, held after EOF -- in a multiplayer

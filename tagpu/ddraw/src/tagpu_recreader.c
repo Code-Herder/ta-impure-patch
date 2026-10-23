@@ -1794,6 +1794,7 @@ static int segs_scan(RecReader* r, int tail, char* why, unsigned cap)
             }
             ns++;
             s->t.difficulty = s->h->difficulty;
+            s->t.controlled = s->h->controlled;
             for (i = 0; i < s->h->nseats; i++)
                 if (s->h->seats[i].controller == 2) s->t.has_ai = 1;
             s->t.header_off = off;
@@ -2016,6 +2017,13 @@ int recr_timelines(RecReader* r, RecTimeline* out, unsigned cap, char* why, unsi
 const RecTimeline* recr_selected(const RecReader* r)
 {
     return &chain_seg(r, r->nchain - 1)->t;
+}
+
+unsigned recr_chain_ids(const RecReader* r, unsigned* ids, unsigned cap)
+{
+    unsigned i;
+    for (i = 0; i < r->nchain && i < cap; i++) ids[i] = r->chain_id[i];
+    return r->nchain;
 }
 
 /* the first field in which a segment's header differs from the first header, or NULL */

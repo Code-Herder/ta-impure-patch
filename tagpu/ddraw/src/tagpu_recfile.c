@@ -64,10 +64,22 @@ static volatile LONG s_lock;
 static int s_exiting;
 typedef struct FileJob {
     char path[MAX_PATH], output[MAX_PATH], key[MAX_PATH], request[33];
-    unsigned op, id;
+    unsigned op, id, ticket;
     BY_HANDLE_FILE_INFORMATION identity;
 } FileJob;
 static FileJob* s_pending[FILE_JOBS];
+/* THE TICKETS. A request's outcome waits in a ring of REC_FILE_RESULTS slots, slot ticket % N.
+   THE INVARIANT, an ordering under jobs_lock: a ticket is in s_pending or in its ring slot at
+   every instant the lock is free -- the worker writes the result before the job leaves
+   s_pending, both under the lock, and the in-use refusal writes its result in the same hold of
+   the lock that issues the ticket. A slot names its ticket, so a ticket a later one has displaced
+   reads unknown (-2), never another request's outcome. The ring is at least twice the jobs that
+   run at once: before the ticket that displaces a result can be issued, at least
+   REC_FILE_RESULTS - FILE_JOBS of the requests issued between the two have finished. */
+_Static_assert(REC_FILE_RESULTS >= 2 * FILE_JOBS, "the results ring outlives the jobs in flight");
+static unsigned s_ticket;           /* the last issued; 0 is never one */
+static struct { unsigned ticket; int ok; char why[160]; } s_done[REC_FILE_RESULTS];
+static volatile LONG s_completed;   /* requests finished, written under the lock */
 static BY_HANDLE_FILE_INFORMATION s_play_identity;
 static unsigned s_play_id;
 static char s_play_key[MAX_PATH];
@@ -275,18 +287,41 @@ static void prune(const char* fresh, unsigned keep)
                c[PRUNE_GONE], c[PRUNE_KEPT], c[PRUNE_BUSY], c[PRUNE_ODD]);
 }
 
+/* a ticket's result into its ring slot, and the count of finished requests; under the lock */
+static void result_put(unsigned ticket, int ok, const char* why)
+{
+    unsigned k = ticket % REC_FILE_RESULTS;
+    s_done[k].ticket = ticket;
+    s_done[k].ok = ok;
+    snprintf(s_done[k].why, sizeof s_done[k].why, "%s", why);
+    InterlockedIncrement(&s_completed);
+}
+
+/* the next ticket, under the lock: never 0, so a refused request's 0 is no ticket */
+static unsigned ticket_next(void)
+{
+    if (!++s_ticket) ++s_ticket;
+    return s_ticket;
+}
+
 static DWORD WINAPI file_worker(void* arg)
 {
     FileJob* j = (FileJob*)arg;
-    char why[256];
-    int ok = j->op == REC_FILE_PRUNE ? (prune(j->path, j->id), 1)
-           : recr_manage(j->path, j->op, j->id, j->output, why, sizeof why);
+    char why[256] = "";
+    int ok;
+    if (j->op == REC_FILE_PRUNE) {
+        prune(j->path, j->id);
+        snprintf(why, sizeof why, "pruned");
+        ok = 1;
+    } else ok = recr_manage(j->path, j->op, j->id, j->output, why, sizeof why);
     if (j->op != REC_FILE_PRUNE)
         tagpu_logf("replay: forks %s: %s: %s [request=%s]", j->path,
                    ok ? "done" : "refused", why, j->request[0] ? j->request : "-");
     jobs_lock();
     {
         unsigned i;
+        /* THE TICKETS' order: the result before the job leaves s_pending */
+        result_put(j->ticket, ok ? 1 : -1, why);
         for (i = 0; i < FILE_JOBS; i++) if (s_pending[i] == j) s_pending[i] = NULL;
     }
     jobs_unlock();
@@ -294,11 +329,12 @@ static DWORD WINAPI file_worker(void* arg)
     return 0;
 }
 
-int recfile_request(const char* path, unsigned op, unsigned id, const char* output,
-                    const char* request)
+unsigned recfile_request(const char* path, unsigned op, unsigned id, const char* output,
+                         const char* request)
 {
     FileJob* j;
     int i, slot = -1;
+    unsigned ticket;
     HANDLE t;
     if (strlen(path) >= MAX_PATH || (output && strlen(output) >= MAX_PATH) ||
         (request && strlen(request) > 32)) return 0;
@@ -320,11 +356,16 @@ int recfile_request(const char* path, unsigned op, unsigned id, const char* outp
     jobs_lock();
     if (op == REC_FILE_DELETE && s_playing && s_play_id == id &&
         same_reservation(s_play_key, &s_play_identity, j->key, &j->identity)) {
+        char why[40];
+        /* the refusal itself is the completed request, its outcome in the ring at once */
+        ticket = ticket_next();
+        snprintf(why, sizeof why, "timeline %u is in use", id);
+        result_put(ticket, -1, why);
         jobs_unlock();
         tagpu_logf("replay: forks %s: refused: timeline %u is in use [request=%s]", path, id,
                    j->request[0] ? j->request : "-");
         free(j);
-        return 1;                   /* the refusal itself is the completed request */
+        return ticket;
     }
     for (i = 0; i < FILE_JOBS && !s_exiting; i++) {
         if (s_jobs[i] && WaitForSingleObject(s_jobs[i], 0) == WAIT_OBJECT_0) {
@@ -333,13 +374,38 @@ int recfile_request(const char* path, unsigned op, unsigned id, const char* outp
         }
         if (!s_jobs[i] && slot < 0) slot = i;
     }
+    /* a ticket a failed CreateThread took is never handed out, so no caller asks for it */
+    ticket = j->ticket = ticket_next();
     if (slot >= 0) s_pending[slot] = j;
     t = slot >= 0 ? CreateThread(NULL, 0, file_worker, j, 0, NULL) : NULL;
     if (t) s_jobs[slot] = t;
     else if (slot >= 0) s_pending[slot] = NULL;
     jobs_unlock();
     if (!t) free(j);
-    return t != NULL;
+    return t ? ticket : 0;
+}
+
+int recfile_result(unsigned ticket, char* why, unsigned cap)
+{
+    unsigned i, k = ticket % REC_FILE_RESULTS;
+    int r = -2;
+    if (cap) why[0] = 0;
+    jobs_lock();
+    for (i = 0; i < FILE_JOBS; i++)
+        if (s_pending[i] && s_pending[i]->ticket == ticket) r = 0;
+    if (r && ticket && s_done[k].ticket == ticket) {
+        r = s_done[k].ok;
+        if (cap) snprintf(why, cap, "%s", s_done[k].why);
+    }
+    jobs_unlock();
+    return r;
+}
+
+/* without the lock: the frame visit asks every frame, and a count read one completion late only
+   delays its reader's next look by a frame -- the reader then reads the file, not the count */
+unsigned recfile_completed(void)
+{
+    return (unsigned)InterlockedCompareExchange(&s_completed, 0, 0);
 }
 
 void recfile_exit(void)
