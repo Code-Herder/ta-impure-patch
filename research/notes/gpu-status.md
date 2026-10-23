@@ -2995,7 +2995,9 @@ any version but 3 (version 1 until its conversion, an earlier build's version 2)
 be read, or one that is not text decides nothing, so every recording is kept. It goes when the handle closes, and a mark the
 index held before that read keeps it. The lock file goes with the recording, through the exclusive handle
 no other caller can share, and so does a lock file the prune created itself for a recording it
-keeps. `SetFileInformationByHandle` is resolved at run time, so the DLL still loads on XP; where it
+keeps; every other caller's lock goes at its release when its recording does not exist
+(`recfile_unlock`, [the forks note's *File ordering and lifetimes*](tadr-port/demo-recorder-s4-forks.md#file-ordering-and-lifetimes)),
+so a later touch or export of a pruned recording leaves no lock behind. `SetFileInformationByHandle` is resolved at run time, so the DLL still loads on XP; where it
 is absent the prune deletes nothing and counts every older recording as in use. One line per
 prune: `recorder: prune at <new>: N older recordings, the newest K kept; of the rest, D deleted, M
 kept (forked or marked), B in use, U unreadable`, where *in use* also counts a recording whose lock
@@ -3007,7 +3009,8 @@ date pass as in the deletion, and a date pass the exit cut short deletes nothing
 **What the ordering does not cover:** a favourite given while a prune runs, after it has read that
 file's marks, or one the index could not save (`index_save` failing to write `index.tmp`, or the
 index over `INDEX_CAP`), does not keep its file. The tareplay forks test runs the prune on a seeded
-folder and checks its line and what is left (`prune_step`); the seeded files' last-write times run
+folder and checks its line and what is left (`prune_step`), and that an export asked of the
+pruned plain copy is refused and leaves no lock of a deleted recording; the seeded files' last-write times run
 against their recorded starts, so a prune that ordered by last write would fail it. MEASURED
 2026-10-22, on the build that ordered by last write, on an instance with play defaults on and no lever file: 55 older recordings, the newest 49 kept
 beside the new one; of the other six, the 2 oldest plain copies deleted, a favourite, a bookmarked

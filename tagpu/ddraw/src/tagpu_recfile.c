@@ -33,6 +33,16 @@ uint64_t recfile_now(void)
     return ((uint64_t)t.dwHighDateTime << 32) | t.dwLowDateTime;
 }
 
+/* SetFileInformationByHandle, resolved at run time so that the DLL still loads on XP, which has
+   none: NULL there */
+typedef BOOL (WINAPI* SetInfoFn)(HANDLE, FILE_INFO_BY_HANDLE_CLASS, LPVOID, DWORD);
+static SetInfoFn set_info(void)
+{
+    return (SetInfoFn)(void*)GetProcAddress(GetModuleHandleA("kernel32.dll"),
+                                            "SetFileInformationByHandle");
+}
+
+/* DELETE access, so that recfile_unlock can mark the lock for deletion on this handle */
 HANDLE recfile_lock(const char* path, char* why, unsigned cap)
 {
     char name[MAX_PATH];
@@ -42,7 +52,7 @@ HANDLE recfile_lock(const char* path, char* why, unsigned cap)
         return NULL;
     }
     snprintf(name, sizeof name, "%s.lock", path);
-    f = CreateFileA(name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_ALWAYS,
+    f = CreateFileA(name, GENERIC_READ | GENERIC_WRITE | DELETE, 0, NULL, OPEN_ALWAYS,
                     FILE_ATTRIBUTE_HIDDEN, NULL);
     if (f == INVALID_HANDLE_VALUE) {
         snprintf(why, cap, "the recording is busy or its lock cannot be opened (%lu)",
@@ -52,9 +62,21 @@ HANDLE recfile_lock(const char* path, char* why, unsigned cap)
     return f;
 }
 
-void recfile_unlock(HANDLE* lock)
+/* THE LOCK'S END (tagpu_recfile.h, THE PATH LOCK): the recording's absence is read while the
+   lock is still held, when no Impure caller can change it, and only a definite "not found"
+   deletes; any other failure to read it keeps the lock, as a recording that exists does. */
+void recfile_unlock(HANDLE* lock, const char* path)
 {
-    if (*lock) CloseHandle(*lock);
+    FILE_DISPOSITION_INFO gone = { TRUE };
+    SetInfoFn set;
+    DWORD error;
+    if (!*lock) return;
+    if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) {
+        error = GetLastError();
+        if ((error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) && (set = set_info()))
+            set(*lock, FileDispositionInfo, &gone, sizeof gone);
+    }
+    CloseHandle(*lock);
     *lock = NULL;
 }
 
@@ -244,9 +266,7 @@ static int prune_one(const char* path)
     HANDLE lk, f;
     int made, fk, r;
     FILE_DISPOSITION_INFO gone = { TRUE };
-    typedef BOOL (WINAPI* SetInfoFn)(HANDLE, FILE_INFO_BY_HANDLE_CLASS, LPVOID, DWORD);
-    SetInfoFn set = (SetInfoFn)(void*)GetProcAddress(GetModuleHandleA("kernel32.dll"),
-                                                     "SetFileInformationByHandle");
+    SetInfoFn set = set_info();
     if (!set || snprintf(lock, sizeof lock, "%s.lock", path) >= (int)sizeof lock) return PRUNE_BUSY;
     lk = CreateFileA(lock, GENERIC_READ | GENERIC_WRITE | DELETE, 0, NULL, OPEN_ALWAYS,
                      FILE_ATTRIBUTE_HIDDEN, NULL);

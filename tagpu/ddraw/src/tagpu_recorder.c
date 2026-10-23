@@ -2484,7 +2484,7 @@ static void ring_free(RecRing* g)
         tagpu_recmp_file_free(g->mp);
     }
     if (g->fork.file) CloseHandle(g->fork.file);    /* THE FORK'S HANDLE: the ring owned it */
-    recfile_unlock(&g->fork.lock);
+    recfile_unlock(&g->fork.lock, g->fork.path);
     if (g->buf) VirtualFree(g->buf, 0, MEM_RELEASE);
     if (g->grid) VirtualFree(g->grid, 0, MEM_RELEASE);
     if (g->wake) CloseHandle(g->wake);
@@ -7532,13 +7532,13 @@ void __cdecl tagpu_rec_capture(void)
                        s_fork.path, why);
             CloseHandle(s_fork.file);
             s_fork.file = NULL;
-            recfile_unlock(&s_fork.lock);
+            recfile_unlock(&s_fork.lock, s_fork.path);
         } else {
             rec_begin(&L, tick, NULL);
             if (s_fork.file) {          /* rec_start failed before the ring took it */
                 CloseHandle(s_fork.file);
                 s_fork.file = NULL;
-                recfile_unlock(&s_fork.lock);
+                recfile_unlock(&s_fork.lock, s_fork.path);
             }
         }
     } else if (s_state == ST_IDLE) {
@@ -7697,7 +7697,7 @@ void tagpu_rec_level_end(void)
                    "iteration", s_fork.id, s_fork.path);
         CloseHandle(s_fork.file);
         s_fork.file = NULL;
-        recfile_unlock(&s_fork.lock);
+        recfile_unlock(&s_fork.lock, s_fork.path);
     }
     s_tid = 0;
     s_cnt.tid = 0;

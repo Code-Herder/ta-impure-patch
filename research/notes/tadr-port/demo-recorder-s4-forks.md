@@ -50,18 +50,36 @@ While the original is live, its header and simulation blocks remain byte-identic
 
 Export keeps only the chosen live timeline's chain, marks its ancestors deleted,
 and applies the same prefix rule. IDs stay the recording's IDs, so an exported
-fork is selected by its original ID. Export refuses to replace an existing file.
+fork is selected by its original ID. Export refuses to replace an existing file. It holds
+its output's path lock as well as its source's, from before its temporary file to after the move
+that makes the output; an output whose lock another caller holds refuses the export as busy.
 The root header and highest-ID tombstone are bookkeeping, even when not needed
 for playback.
 
 ## File ordering and lifetimes
 
-Every Impure recording writer opens the persistent `PATH.lock` file with share
-mode zero before opening the recording. This includes new recordings, takeovers
-and maintenance. The lock is never unlinked: two writers must not acquire two
-successive lock objects at the same path. A takeover moves this handle alongside
-its recording handle through the arm, ring and writer; each failure closes the
-recording before releasing its lock. The writer releases it after its last write.
+Every Impure recording writer opens the `PATH.lock` file with share mode zero
+and DELETE access before opening the recording. This includes new recordings,
+takeovers, maintenance, an export's output and the prune. **The invariant:** every
+caller in the program that creates, replaces or deletes a recording holds its
+lock from before it looks for the file until its last change of it, so while the
+lock is held no other caller can make the recording appear or go. A takeover
+moves this handle alongside its recording handle through the arm, ring and
+writer; each failure closes the recording before releasing its lock. The writer
+releases it after its last write.
+
+**A lock goes with its recording** (`recfile_unlock`, `tagpu_recfile.h` *THE PATH
+LOCK*). At its release the recording's absence is read while the lock is still
+held; a definite "not found" marks the lock for deletion through the held handle
+(`FileDispositionInfo`) before it closes, and any other answer keeps it. So a lock
+stays beside a recording that exists, and a touch, a takeover or an export asked
+of a recording the prune has deleted leaves no `.lock` behind. Deleting through
+the exclusive handle never lets two callers acquire two lock objects at one
+path: no other open can share the handle, and the name goes only at its close.
+A lock deleted while its recording exists costs the next caller a recreate,
+nothing more. Not covered: a recording made or deleted outside the program (a
+deletion leaves its lock until the next caller of that path releases it), and
+XP, which has no `SetFileInformationByHandle` and keeps every lock.
 
 Maintenance scans with a read/write source handle sharing READ, copies into
 `PATH.tmp`, flushes the completed temporary file, closes the source, then calls
@@ -267,10 +285,9 @@ fixed from the first header, stays as a switch finds it, as a boundary crossing 
 of the left timeline is joined, with its bounded wait on the game thread, at the HUD's next fill
 after a switch, as at any timeline change, until the lanes' landing polls it; its reads are of
 blocks no deletion rewrites, in a file no compaction can replace while it is open. A touch
-whose recording the prune has deleted since the playing ended leaves a `.lock` beside the
-missing file: `recfile_lock` opens the lock `OPEN_ALWAYS` before the recording is found absent.
-The lock is empty and harmless, and left: the touch could delete it through its own exclusive
-handle, as the prune deletes one, which it does not do.
+whose recording the prune has deleted since the playing ended opens the lock `OPEN_ALWAYS`
+before it finds the recording absent, and deletes it again at its release (*File ordering and
+lifetimes*).
 
 ## Driving it
 

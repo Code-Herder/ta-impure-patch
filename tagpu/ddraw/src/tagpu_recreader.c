@@ -3347,11 +3347,11 @@ int recr_manage(const char* path, unsigned op, unsigned id, const char* output,
                     FILE_FLAG_SEQUENTIAL_SCAN, NULL);
     if (f == INVALID_HANDLE_VALUE) {
         snprintf(why, cap, "maintenance skipped: cannot write %s (%lu)", path, GetLastError());
-        recfile_unlock(&lock);
+        recfile_unlock(&lock, path);
         return 0;
     }
     r = open_handle(f, path, why, cap, 0);       /* the reader owns the locked handle from here */
-    if (!r) { recfile_unlock(&lock); return 0; }
+    if (!r) { recfile_unlock(&lock, path); return 0; }
     if (segs_scan(r, 1, why, cap) < 0) goto done;
     s = seg_index(r, id);
     if (op != REC_FILE_COMPACT && op != REC_FILE_TOUCH &&
@@ -3360,8 +3360,15 @@ int recr_manage(const char* path, unsigned op, unsigned id, const char* output,
         goto done;
     }
     if (op == REC_FILE_EXPORT) {
+        /* the output is a recording this export makes: its lock is held from before the
+           temporary file to after the move (tagpu_recfile.h, THE PATH LOCK); busy, the export is
+           refused as a busy source is */
+        HANDLE out;
         if (recr_timeline(r, id, why, cap) != 1) goto done;
+        out = recfile_lock(output, why, cap);
+        if (!out) goto done;
         ok = file_compact(r, path, output, id, why, cap);
+        recfile_unlock(&out, output);
         goto done;
     }
     if (op == REC_FILE_DELETE) r->seg[s].t.state = REC_TL_DELETED;
@@ -3405,7 +3412,7 @@ int recr_manage(const char* path, unsigned op, unsigned id, const char* output,
     }
 done:
     recr_close(r);
-    recfile_unlock(&lock);
+    recfile_unlock(&lock, path);
     return ok;
 }
 

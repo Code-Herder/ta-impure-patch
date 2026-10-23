@@ -3949,6 +3949,45 @@ static unsigned rd_seeks(const char* path, unsigned tl, uint32_t t0, unsigned n,
     return i;
 }
 
+static int file_there(const char* path, const char* suffix)
+{
+    char name[MAX_PATH + 8];
+    snprintf(name, sizeof name, "%s%s", path, suffix);
+    return GetFileAttributesA(name) != INVALID_FILE_ATTRIBUTES;
+}
+
+/* THE PATH LOCK (tagpu_recfile.h) after `out` was exported from `path`: each lock stays beside the
+   recording it locks; an export whose output's lock another caller holds is refused as busy; and
+   once the recording and its lock are deleted, as the prune deletes them, a maintenance request
+   on the path finds no recording and leaves no lock behind. Deletes `out`. */
+static int outcomes_lock(const char* path, const char* out)
+{
+    char why[256];
+    HANDLE held;
+    int ok = 1, k;
+    ok &= expect("lock: the source's lock stays beside its recording", file_there(path, ".lock"), 1);
+    ok &= expect("lock: the export's output's lock stays beside it", file_there(out, ".lock"), 1);
+    held = recfile_lock(out, why, sizeof why);
+    ok &= expect("lock: the output's lock taken", held != NULL, 1);
+    k = recr_manage(path, REC_FILE_EXPORT, 1, out, NULL, 0, why, sizeof why);
+    ok &= expect("lock: an export to an output whose lock is held is refused as busy",
+                 !k && strstr(why, "busy") != NULL, 1);
+    recfile_unlock(&held, out);
+    ok &= expect("  and the held lock, its recording there, stays", file_there(out, ".lock"), 1);
+    k = recr_manage(path, REC_FILE_EXPORT, 1, out, NULL, 0, why, sizeof why);
+    ok &= expect("lock: an export to an output that exists is refused", k, 0);
+    ok &= expect("  and the output's lock stays", file_there(out, ".lock"), 1);
+    DeleteFileA(out);
+    snprintf(why, sizeof why, "%s.lock", out);
+    DeleteFileA(why);
+    snprintf(why, sizeof why, "%s.tmp", out);
+    DeleteFileA(why);
+    k = recr_manage(out, REC_FILE_DELETE, 1, NULL, NULL, 0, why, sizeof why);
+    ok &= expect("lock: a request on a deleted recording finds none", k, 0);
+    ok &= expect("  and leaves no lock behind", file_there(out, ".lock"), 0);
+    return ok;
+}
+
 /* The chain as tagpu_recreader.c reads it (tagpu_recfmt.h, THE RUN AND THE CHAIN): a segment of 21
    snapshots packed by the writer, keys at the 1st, 11th and 21st, so the seeks walk chains of 0 to
    9 links; a fork of it at GameTime 25 with a chain of its own; the fork exported, which keeps the
@@ -4010,6 +4049,7 @@ static int outcomes_reader(const RecCodecParams* p)
     got = rd_seeks(out, 1, 25, 3, 40, 25, why, sizeof why);
     if (got != 3) printf("  %s\n", why);
     ok &= expect("  and the fork's 3", got, 3);
+    ok &= outcomes_lock(path, out);
     /* a key and ten links: seeks to the first ten read, the eleventh is refused */
     f.n = 0;
     rb_put(&f, REC_MAGIC, 8);
