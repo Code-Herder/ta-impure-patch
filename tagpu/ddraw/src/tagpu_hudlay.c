@@ -555,13 +555,12 @@ static void dock(C* c)
    the engine's art and the engine draws it, so the mockup's stand-in for it is not drawn here.
    THE BUTTON IS THE TOP LAYER (HOPF_TOP): the engine's UI paints the whole bar, so an op under it
    would be painted over, and the Vulkan pass draws this layer after the UI composite.
-   THE STRIP IS THE TOP LAYER TOO, unless an engine screen the player is using is up (live_under):
-   the engine draws its message lines at the world's top left (DrawChatText 0x464060, x 0x8A,
-   first line y 0x34, DISASSEMBLED), under the strip's left end, and they are in the composite,
-   so only a layer drawn after it keeps the strip whole. A modal screen (tagpu_menu_modal: a menu
-   over the world, Leave's question, the chat's input) and the Config panel, which hangs under the
-   bar's right end over the strip's actions, are the player's while they are up, so the strip then
-   draws under the composite with the rest of the HUD. ---------- */
+   THE STRIP IS THE TOP LAYER TOO: the engine draws its message lines at the world's top left, in
+   the composite, and only a layer drawn after it keeps the strip whole whatever the engine draws
+   there (the lines themselves start under the strip while it is on screen: tagpu_hudinput.c,
+   chat_top). The Config panel, which hangs under the bar's right end over the strip's actions,
+   stays over it because the Vulkan pass draws the UI again inside the panel's rect after this
+   layer (tagpu_vk.c). ---------- */
 
 static void live(C* c)
 {
@@ -585,7 +584,7 @@ static void live(C* c)
     button(c, &b, E, box(st->W - (num(c, E, "r") + num(c, E, "s")) * k, num(c, E, "t") * k, es, es), st->rw_down);
     c->top = 0;
     if (!st->live_open) return;
-    c->top = !st->live_under;
+    c->top = 1;
 
     x = st->panel + num(c, S, "l");
     w = st->W - num(c, S, "r") - x;
@@ -1248,21 +1247,27 @@ static void chart(C* c, R cb, double Rl)
 }
 
 /* ---- the toast: a short message in a dark box centred across the screen, above everything; the box
-   is the layout's size, not the text's, since this file has no faces to measure text with ------- */
+   is the layout's size, not the text's, since this file has no faces to measure text with. On the
+   live HUD it is the top layer, over the engine's message lines as the strip is, and while the
+   strip is drawn it sits clear of it (live_clear: the strip's gap under the bar again under it) */
 
 static void toast(C* c)
 {
     const HUDSTATE* st = c->st;
     const TJV* Ts = obj(c, c->L, "toast");
-    double w = num(c, Ts, "w"), h = num(c, Ts, "h"), e = num(c, Ts, "edge");
-    R b = box((st->W - w) / 2, st->H * num(c, Ts, "top"), w, h);
+    double w = num(c, Ts, "w"), h = num(c, Ts, "h"), e = num(c, Ts, "edge"), y = st->H * num(c, Ts, "top");
     uint32_t ec = hexrgb(str(c, Ts, "edge_colour"));
+    R b;
     PL p;
+    if (st->live_open && y < st->top + c->l->g.live_clear) y = st->top + c->l->g.live_clear;
+    b = box((st->W - w) / 2, y, w, h);
+    c->top = st->live;
     solid(c, b, hexrgb(str(c, Ts, "bg")), num(c, Ts, "alpha"));
     ring(c, b, e, ec, 1);
     memset(&p, 0, sizeof p);
     p.centre = 1;
     text(c, st->toast, b, str(c, Ts, "style"), &p, 0, 0);
+    c->top = 0;
 }
 
 /* ---- the entry points ------------------------------------------------------------------------- */
@@ -1470,6 +1475,8 @@ static int load_globals(HUDLAY* l, char* err, size_t errn)
     l->g.neg_rgb = hexrgb(str(&c, v, "neg"));
     l->g.track_ends = (float)num(&c, obj(&c, obj(&c, obj(&c, l->L, "dock"), "rail"), "track"), "ends");
     l->g.toast_ms = (unsigned)num(&c, obj(&c, l->L, "toast"), "ms");
+    v = obj(&c, obj(&c, obj(&c, l->L, "proposed"), "live"), "strip");
+    l->g.live_clear = (float)(2 * num(&c, v, "t") + num(&c, v, "h"));
     v = arr(&c, obj(&c, l->L, "chart"), "teams");
     for (l->g.nteam_rgb = 0; v && l->g.nteam_rgb < v->n && l->g.nteam_rgb < 8; l->g.nteam_rgb++)
         l->g.team_rgb[l->g.nteam_rgb] = hexrgb(tj_str(tj_at(v, l->g.nteam_rgb), ""));

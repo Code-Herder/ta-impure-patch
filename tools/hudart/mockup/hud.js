@@ -475,9 +475,12 @@ const HUD = (() => {
   }
 
   /* ---- the toast: a short message in a dark box centred across the screen, above everything; the box is the layout's
-     size, not the text's, since the DLL lays the HUD out without the faces' metrics ---- */
+     size, not the text's, since the DLL lays the HUD out without the faces' metrics. While the live strip is drawn the
+     toast sits clear of it: the strip's gap under the bar, again under the strip ---- */
   function toast(st) {
-    const Ts = L.toast, b = { x: (st.W - Ts.w) / 2, y: st.H * Ts.top, w: Ts.w, h: Ts.h }, n = parseInt(Ts.bg.slice(1), 16);
+    const Ts = L.toast, S = L.proposed.live.strip, clear = st.frame.top + 2 * S.t + S.h;
+    const y = st.live && st.live.open ? Math.max(st.H * Ts.top, clear) : st.H * Ts.top;
+    const b = { x: (st.W - Ts.w) / 2, y, w: Ts.w, h: Ts.h }, n = parseInt(Ts.bg.slice(1), 16);
     return `<div class="box" style="${rect(b)};background:rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${Ts.alpha});box-shadow:inset 0 0 0 ${U(Ts.edge)} ${Ts.edge_colour}">`
       + text(esc(st.toast), zero(b.w, b.h), Ts.style, { align: 'c' }) + `</div>`;
   }

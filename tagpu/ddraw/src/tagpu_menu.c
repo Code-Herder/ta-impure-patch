@@ -845,14 +845,24 @@ static void trigger_rect(int* x, int* y)
    arithmetic, to the character. */
 static void panel_rect(int* x, int* y)
 {
-    int q8 = 256, bh = BAR_H, w = (int)g_ddraw.width, dx = 0, dy = 0;
+    int q8 = 256, bh = BAR_H, dx = 0, dy = 0, w, h;
     tagpu_hud_live(NULL, &bh, &q8);
     tagpu_hud_shift(&dx, &dy);               /* (0,0) whenever the pass is inert */
-    w -= MARGIN * q8 / 256;                  /* the margin the sprocket leaves */
-    if (w < PANEL_W) w = PANEL_W;            /* never off the left */
-    *x = w - PANEL_W - dx;
+    tagpu_menu_panel_screen((int)g_ddraw.width, q8, bh, dx, x, y, &w, &h);
+    *x -= dx;
+    *y -= dy;                                /* screen bh, i.e. engine row 32 */
+}
+
+void tagpu_menu_panel_screen(int fw, int q8, int bh, int dx, int* x, int* y, int* w, int* h)
+{
+    int r = fw - MARGIN * q8 / 256;          /* the margin the sprocket leaves */
+    if (r < PANEL_W) r = PANEL_W;            /* never off the left */
+    *x = r - PANEL_W - dx;
     if (*x < 0) *x = 0;                      /* never off the left, again */
-    *y = bh - dy;                            /* screen bh, i.e. engine row 32 */
+    *x += dx;
+    *y = bh;
+    *w = PANEL_W;
+    *h = PANEL_H;
 }
 
 /* ---- generating the .GUI ------------------------------------------------- */

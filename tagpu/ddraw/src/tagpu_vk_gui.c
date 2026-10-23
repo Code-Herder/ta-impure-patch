@@ -4026,8 +4026,9 @@ int tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     return 1;
 }
 
-int tagpu_vk_gui_record_sharp(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
-                              uint32_t w, uint32_t h, VkRect2D r)
+/* The composite's quad `quad` -- its own, or its sharp-only twin -- drawn again inside `r` */
+static int record_in(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot, uint32_t w,
+                     uint32_t h, VkRect2D r, VkDeviceSize quad)
 {
     SLOT* s;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS || !s_layDrew[slot]) return 0;
@@ -4045,9 +4046,21 @@ int tagpu_vk_gui_record_sharp(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeLay);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ploLay,
                             0, 1, &s->laySet, 0, NULL);
-    vkCmdBindVertexBuffers(cb, 0, 1, &s->vb, &s_laySharp);
+    vkCmdBindVertexBuffers(cb, 0, 1, &s->vb, &quad);
     vkCmdDraw(cb, 6, 1, 0, 0);
     return 1;
+}
+
+int tagpu_vk_gui_record_sharp(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                              uint32_t w, uint32_t h, VkRect2D r)
+{
+    return record_in(d, cb, slot, w, h, r, s_laySharp);
+}
+
+int tagpu_vk_gui_record_whole(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                              uint32_t w, uint32_t h, VkRect2D r)
+{
+    return record_in(d, cb, slot, w, h, r, s_layQuad);
 }
 
 int tagpu_vk_gui_ab_frame(void)

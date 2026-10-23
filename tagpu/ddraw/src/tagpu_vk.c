@@ -2770,19 +2770,24 @@ static int vk_present(void)
                 tagpu_vk_hud_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_gui)
                 gui_drew = tagpu_vk_gui_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
-            /* THE HUD'S TOP LAYER, AND THE CURSOR BACK OVER IT. The top layer (the live
-               rewind's button, in the top bar the UI paints whole, and its strip, under the
-               engine's message lines) is drawn after the UI's
-               composite, and the composite's sharp layer is then drawn again inside the top
-               layer's rect. In one command buffer and one render pass, draws land in record
-               order, so the sharp layer -- the only cursor (tagpu_gui_surf.c, LAY_FS) -- is the
-               last thing drawn at every pixel of that rect, as the composite's is everywhere
-               else, and the cursor stays topmost. */
+            /* THE HUD'S TOP LAYER, THE CONFIG PANEL AND THE CURSOR BACK OVER IT. The top
+               layer (the live rewind's button, in the top bar the UI paints whole, and its strip
+               and toast, over the engine's message lines) is drawn after the UI's composite;
+               then the whole composite again inside the Config panel's rect while the panel is
+               open, and the composite's sharp layer inside the top layer's rect. In one command
+               buffer and one render pass, draws land in record order, so the panel is over the
+               strip in its rect, and the sharp layer -- the only cursor (tagpu_gui_surf.c,
+               LAY_FS) -- is the last thing drawn at every pixel of the top layer's rect, as the
+               composite's is everywhere else, and the cursor stays topmost. */
             if (draw_hud) {
-                VkRect2D top;
+                VkRect2D top, over;
                 if (tagpu_vk_hud_record_top(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height) &&
-                    gui_drew && tagpu_vk_hud_top_rect(&top))
-                    tagpu_vk_gui_record_sharp(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height, top);
+                    gui_drew) {
+                    if (tagpu_vk_hud_over_rect(&over))
+                        tagpu_vk_gui_record_whole(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height, over);
+                    if (tagpu_vk_hud_top_rect(&top))
+                        tagpu_vk_gui_record_sharp(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height, top);
+                }
             }
             if (draw_scaf)
                 tagpu_vk_scaffold_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);

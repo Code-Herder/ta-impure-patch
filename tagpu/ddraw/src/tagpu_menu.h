@@ -49,8 +49,13 @@ int  tagpu_menu_click(int gx, int gy, int down);
    open; leave_ready -- the observer that opens Leave's question runs (the menu armed). */
 int  tagpu_menu_modal(void);
 int  tagpu_menu_leave_ready(void);
-/* The Config panel is open (the live HUD's strip draws under it), game thread. */
+/* The Config panel is open (the live HUD draws the UI again over its strip inside the panel's
+   rect), game thread. */
 int  tagpu_menu_panel_open(void);
+/* Where the Config panel lands on the composited frame, in the frame's pixels (fw wide, the HUD
+   scale q8, the bar bh tall, the world region shifted by dx): the one rule panel_rect places it
+   by, for the render thread too. Pure: it reads nothing but its arguments. */
+void tagpu_menu_panel_screen(int fw, int q8, int bh, int dx, int* x, int* y, int* w, int* h);
 
 /* tagpu_reclaim's teardown wrap, on entry to 0x491B60, on the game thread: the screen slot lets
    its screen go without a pop, so the engine's own pops after the teardown find the stack and

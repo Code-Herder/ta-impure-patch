@@ -52,6 +52,12 @@ int  tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 int  tagpu_vk_gui_record_sharp(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                                uint32_t w, uint32_t h, VkRect2D r);
 
+/* The whole composite drawn again inside `r`, as `record_sharp` draws its sharp layer: what the
+   engine drew there goes back over the HUD's top layer -- the Config panel, inside its rect, over
+   the live HUD's strip. The same conditions and the same place in the pass. */
+int  tagpu_vk_gui_record_whole(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                               uint32_t w, uint32_t h, VkRect2D r);
+
 /* 1 on the ONE frame `tagpu_gui.ab` latched its claim and the `_vk.ppm` target
    was unlinked, so the seam captures THAT frame. It does not mean a file was
    written. Consumed. */

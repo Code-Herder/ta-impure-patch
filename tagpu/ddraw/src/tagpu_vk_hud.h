@@ -7,10 +7,12 @@
 
    TWO LAYERS. The base layer is recorded after the world and before the engine's UI, so the
    engine's dialogs and the cursor draw over it. The top layer (HOPF_TOP, tagpu_hudlay.h: the live
-   rewind's button, which sits in the top bar the UI paints whole, and its strip, which the
-   engine's message lines would cross; tagpu_hudlay.c, live) is recorded after the UI, and
-   the UI's sharp layer -- the cursor -- is drawn again over it, inside its rect
-   (tagpu_vk_gui_record_sharp), so the cursor stays the topmost thing on the screen. */
+   rewind's button, which sits in the top bar the UI paints whole, and its strip and toast, which
+   the engine's message lines would cross; tagpu_hudlay.c, live) is recorded after the UI; then
+   the whole UI again inside the Config panel's rect while the panel is open
+   (tagpu_vk_gui_record_whole), and the UI's sharp layer -- the cursor -- inside the top layer's
+   rect (tagpu_vk_gui_record_sharp), so the panel stays over the strip and the cursor stays the
+   topmost thing on the screen. */
 #include "tagpu_vk_pass.h"
 
 /* Build or refresh what this frame needs and fill slot `slot`'s instances for this frame's HUD
@@ -30,6 +32,10 @@ int  tagpu_vk_hud_record_top(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t
 /* The device pixels the top layer drew this frame, on the attachment: 1 with the rect, 0 when it
    is empty. */
 int  tagpu_vk_hud_top_rect(VkRect2D* r);
+
+/* The part of the top layer's rect the engine's UI goes back over this frame -- the Config
+   panel's, while the live HUD draws and the panel is open: 1 with the rect, 0 when it is empty. */
+int  tagpu_vk_hud_over_rect(VkRect2D* r);
 
 /* Give everything back: the seam calls it from `vk_down`, after its vkDeviceWaitIdle and
    before the device is destroyed. Safe when nothing was built. */

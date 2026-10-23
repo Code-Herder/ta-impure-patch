@@ -6,6 +6,7 @@
    the command record's take, the DrawGameScreen observer and the teardown wrap's entry. */
 #include <windows.h>
 #include <limits.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +21,7 @@
 #include "tagpu_replay.h"
 #include "tagpu_settings.h"
 #include "tagpu_log.h"
+#include "dd.h"
 
 #define JUMP     300u                   /* rewind and forward: 10 s of GameTime at 30 a second   */
 #define BM_NEAR  90u                    /* the bookmark button removes one within 3 s of now      */
@@ -73,6 +75,12 @@ static unsigned s_armR, s_armEvict;     /* where Play from here starts, and the 
 static unsigned s_resSeen;              /* the last outcome's serial looked at                    */
 static int      s_rwAsked;              /* a verb the HUD sent has not had its outcome yet        */
 static unsigned s_forkAt;               /* the GameTime the HUD's fork starts at                  */
+/* THE ENGINE'S MESSAGE LINES, read by DrawChatText's stub (tagpu_replay.c, THE MESSAGE LINES):
+   the first line's top in the engine's own pixels, the engine's 0x34 unless the live strip is on
+   the screen */
+#define CHAT_TOP   0x34
+#define ENGINE_BAR 32                   /* the world region's top, engine pixels, at any HUD scale */
+static int      s_chatTop = CHAT_TOP;
 
 void tagpu_hudinput_take(const TAGPU_CMD_HUD* h)
 {
@@ -130,6 +138,15 @@ static int hit(int cx, int cy, char* key)
             return 1;
         }
     }
+    return 0;
+}
+
+/* the last frame drawn has the control `key` */
+static int drawn(const char* key)
+{
+    unsigned i;
+    for (i = 0; i < s_hit.n; i++)
+        if (!strcmp(s_hit.hit[i].key, key)) return 1;
     return 0;
 }
 
@@ -347,6 +364,31 @@ static void live_act(const char* key)
     }
 }
 
+/* WHERE THE MESSAGE LINES START: below the live strip while the last frame drew it, so no line is
+   under it or beside its left end. The strip ends live_clear units under the bar (the layout's
+   strip.t and strip.h, its gap under it as over it), and a unit is the attachment's height / 720
+   times the HUD's own scale while the bar is the frame's bh scaled by the same height / the
+   frame's height (tagpu_hudstate_present): in the frame's pixels the clear row is
+   bh + live_clear * scale * gh / 720, whatever the window, and the world region is drawn
+   bh - 32 lower than the engine draws it (tagpu_hud_shift), so in the engine's pixels it is
+   32 + live_clear * scale * gh / 720. Never above the engine's own 0x34. */
+static void chat_top(void)
+{
+    const HUDART* art = tagpu_hudart_get();
+    int y = CHAT_TOP;
+    if (art && drawn("live") && g_ddraw.height > 0) {
+        float clear = tagpu_hudlay_globals(art->lay)->live_clear * (float)tagpu_hudinput_scale() / 100.0f;
+        int at = ENGINE_BAR + (int)ceilf(clear * (float)g_ddraw.height / 720.0f);
+        if (at > y && at < (int)g_ddraw.height) y = at;
+    }
+    s_chatTop = y;
+}
+
+const int* tagpu_hudinput_chat_top(void)
+{
+    return &s_chatTop;
+}
+
 /* The packet's fill, live: the clock and the rewind's state, the outcome of the HUD's last verb,
    Play from here's arm, the track's drag, and the pointer, the held control and the toast. */
 static void live_fill(TAGPU_PK_HUD* h)
@@ -358,6 +400,7 @@ static void live_fill(TAGPU_PK_HUD* h)
     int cx, cy;
 
     s_live = 1;
+    chat_top();
     s_now = h->now;
     s_first = h->first;
     s_last = h->last;
@@ -548,6 +591,7 @@ void tagpu_hudinput_fill(TAGPU_PK_HUD* h)
 
     if (h->mode == TAGPU_PK_HUD_LIVE) { live_fill(h); return; }
     s_live = 0;
+    s_chatTop = CHAT_TOP;
     s_now = h->now;
     s_first = h->first;
     s_last = h->last;
@@ -633,4 +677,5 @@ void tagpu_hudinput_level_end(void)
     s_leaveWant = s_leaveAsked = 0;
     s_live = s_rwAsked = 0;
     s_arm = ARM_NONE;
+    s_chatTop = CHAT_TOP;
 }

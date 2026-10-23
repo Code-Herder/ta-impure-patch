@@ -11294,6 +11294,44 @@ static void pause_icon_init(void)
     tagpu_logf("replay: the pause icon's test 0x46A107 in");
 }
 
+/* THE MESSAGE LINES. DrawChatText 0x464060 draws each line of the engine's message ring through
+   DrawText 0x4A50E0 at x 0x8A, the first line's top 0x34, which `mov dword [esp+0x14],0x34` at
+   0x4640D6 stores in its frame before the loop (each next line a font height down, 0x46423E; the
+   loop's back edge is 0x4640DE, past these 8 bytes, and nothing jumps into them: DISASSEMBLED).
+   The live HUD's strip covers that corner, so while it is on the screen the lines start under it
+   (tagpu_hudinput_chat_top): the stub stores that value instead and goes on at 0x4640DE. eax
+   holds main there and 0x4640DE reads it, so the stub keeps it; nothing between reads the flags.
+   Game thread, inside the draw. */
+static void chat_top_init(void)
+{
+    enum { SITE = 0x004640D6u, BACK = 0x004640DEu };
+    static const unsigned char STOLEN[8] = { 0xC7, 0x44, 0x24, 0x14, 0x34, 0x00, 0x00, 0x00 };
+    const int* top = tagpu_hudinput_chat_top();
+    unsigned char *stub, *p;
+    if (!tagpu_detour_bytes_ok(SITE, STOLEN, (int)sizeof STOLEN)) {
+        tagpu_logf("replay: DrawChatText's first line 0x4640D6 holds other bytes: the messages stay "
+                   "under the live HUD's strip");
+        return;
+    }
+    if (!(stub = p = tagpu_detour_stub())) {
+        tagpu_logf("replay: no memory for the message lines' stub: they stay under the live HUD's "
+                   "strip");
+        return;
+    }
+    *p++ = 0x50;                                        /* push eax            */
+    *p++ = 0xA1; memcpy(p, &top, 4); p += 4;            /* mov eax,[top]       */
+    *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = 0x18; /* mov [esp+0x18],eax: the frame's +0x14 */
+    *p++ = 0x58;                                        /* pop eax             */
+    *p++ = 0xE9; tagpu_detour_rel(p, BACK); p += 4;
+    if (!tagpu_detour_land(SITE, stub, (int)sizeof STOLEN)) {
+        tagpu_detour_stub_free(stub);
+        tagpu_logf("replay: FAILED DrawChatText's first line 0x4640D6 could not be written: the "
+                   "messages stay under the live HUD's strip");
+        return;
+    }
+    tagpu_logf("replay: DrawChatText's first line 0x4640D6 in");
+}
+
 void tagpu_replay_init(void)
 {
     enum { FILL = 0x0047B092u, PERSIST = 0x0047B09Cu, START1 = 0x00497963u, START2 = 0x00497ACDu,
@@ -11303,6 +11341,7 @@ void tagpu_replay_init(void)
     int ok = 1;
     frame_site_init();
     pause_icon_init();
+    chat_top_init();
     rw_pause_init();
     rt_pace_init();
     mp_arena_init();

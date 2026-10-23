@@ -49,6 +49,11 @@ void tagpu_hudinput_fill(TAGPU_PK_HUD* h);
 /* The replay HUD's own scale, percent: its button's last choice, else the settings store's. */
 unsigned tagpu_hudinput_scale(void);
 
+/* The top of the engine's first message line, in its own pixels: the engine's 0x34, or below the
+   live strip while the last frame drew it. The game thread writes it at the packet's fill and at
+   the level's end; DrawChatText's stub reads it (tagpu_replay.c), on the same thread. */
+const int* tagpu_hudinput_chat_top(void);
+
 /* Leave, for tagpu_menu.c's observer, which opens the question where the engine's screens are
    opened: 1 when the button asked for it since the last call; `opened` says whether it was.
    leave_shown, every frame the observer runs, whatever the HUD's state: whether the question is on
