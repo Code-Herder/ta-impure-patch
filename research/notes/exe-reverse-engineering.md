@@ -1662,6 +1662,25 @@ through VTOL_Landing, which queries the pad once at `0x411A35` (state 1) and onc
 (state 3), the Atlas ending at the pad's position; a first answer with a free piece and a piece
 still free in state 5 leave `0x411AA6` and `0x411CF1` unreached there.
 
+**Teleport, order type 11** [DISASSEMBLED]. The mapper's table `0x4401EC` sends type 11 to
+`0x43F813`, which names `TELEPORT` (`push 0x505324`, `0x43F817`) through `0x438760` with no test of
+the unit, its def or a target; type 10 goes to `0x43F82C`, `STOP` (`0x502714`). `TELEPORT` is entry
+12 of the 22-entry action table `0x4FC6E8` (stride 25; `0x406BF0` passes it and its count to
+`0x43BC90`, which registers it [INFERRED]): name `Teleport`, gerund `Teleporting`, handler
+`0x406AA0`, second handler `0x439740`. The handler,
+`ret 0xC`, its unit the first argument and the order the second, forms the box `def+0x15E..+0x172`
+about the unit's position `+0x6A/+0x6E/+0x72` (x from `+0x15E` to `+0x16A`, altitude `+0x162` to
+`+0x16E`, z `+0x166` to `+0x172`), walks the unit array `main+0x14357..+0x1435B` inclusive with no
+alive test, and for each other unit inside the box calls the flare `0x471FD0(&pos, &target, 0x1E,
+5)` (`0x406B9F`) and set-position `0x48A9F0(unit, x, alt, z, 1)` (`0x406BC0`), the target being the
+order's position `+0x22/+0x26/+0x2A` plus the unit's offset from the teleporter; it returns 5.
+The handler table is its only reference and no stock button issues type 11
+(`deep-total-mayhem.md`); a scenario's `teleport` order does (`scenario-format.md`, *Order
+vocabulary*). MEASURED 2026-10-23 by the `teleport` test group: an
+ARMLAB ordered `teleport` three times moved the four ARMPW 16 wu either side of its centre by the
+order's position minus its own in the next step, and the counts named the flare live 8, puppet 0
+over [301, 751) (`sink 0x471FD0 from 0x406BA4`).
+
 `0x4B0BC0` reads the object at once (`mov eax,[ecx+8]`, `0x4B0BC1`), so a unit with no script
 (`+0x9A` NULL, `0x485DFF`) never reaches either call in a running game. It finds the script by
 name (`0x4B0BDE..0x4B0C11`; a missing one gives -1) and calls the query `0x4B0C40` (`0x4B0C2F`),

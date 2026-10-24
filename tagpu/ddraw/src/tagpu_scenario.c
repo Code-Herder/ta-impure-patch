@@ -431,11 +431,16 @@ static const struct { const char* name; unsigned bit; } SCN_SWITCHES[] = {
 };
 
 /* TA's own order table [TA_MemoryStructures.pas:6-21]. There is no attack-move;
-   the CLI rejects the word and offers `attack` at a coordinate instead. */
+   the CLI rejects the word and offers `attack` at a coordinate instead.
+   `teleport` (11) is the engine's own Teleport, which stock play never issues: Type2Index
+   0x43F0E0 jumps on the type (0x43F14D) to 0x43F813, which names the script action "TELEPORT"
+   for any unit with no test of the def (DISASSEMBLED), and the action's handler 0x406AA0 moves
+   every other unit inside the box the ordering unit's def gives about it (+0x15E..+0x172) to
+   the order's position, offset kept (scenario-format.md, *Order vocabulary*). */
 static const struct { const char* name; int id; } SCN_ORDERTYPES[] = {
     { "stop", 1 }, { "move", 2 }, { "attack", 3 }, { "blast", 4 }, { "unload", 5 },
-    { "load", 6 }, { "defend", 7 }, { "repair", 8 }, { "patrol", 9 }, { "reclaim", 12 },
-    { "capture", 13 }, { "mobilebuild", 14 }, { 0, 0 }
+    { "load", 6 }, { "defend", 7 }, { "repair", 8 }, { "patrol", 9 }, { "teleport", 11 },
+    { "reclaim", 12 }, { "capture", 13 }, { "mobilebuild", 14 }, { 0, 0 }
 };
 
 /* The stance column is a token, never a raw mask: (UnitStateMask & 0xC0000) >> 18

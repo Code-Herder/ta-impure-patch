@@ -1,0 +1,157 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The demo recorder's `teleport` test group (tools/replay/fixtures.json): an ARMLAB of the human seat, the teleporter, created first so that it takes slot 2 (the human's slot 1 is its commander's, which clear_existing removes and the same apply cannot reuse: MEASURED 2026-10-23, contest-waves' first group takes slots 2..161), which the fixture's orders name with `--expect ARMLAB`, with four ARMPW standing inside its box, and two lanes of ARMFAV patrolling across the point the group's teleports send them to, on Town & Country; an AI seat owns one CORSOLAR in the far corner and nothing else, so it never acts and the level keeps running, and shootall is off with every unit of one owner, so nothing fights. The engine's Teleport (script action TELEPORT, order type 11, handler 0x406AA0) moves every other unit inside the box the ordering unit's def gives about it (+0x15E..+0x172) to the order's position, offset kept, through set-position 0x48A9F0 at 0x406BC0, so a teleport here is a footprint call in the teleporter's own turn that the walkers' relinks follow in theirs.",
+ "setup": {
+  "map": "Town & Country",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "groups": [
+  {
+   "id": "gate",
+   "owner": 0,
+   "at": [
+    4320,
+    3800
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 90
+   },
+   "composition": [
+    {
+     "type": "ARMLAB",
+     "count": 1
+    }
+   ],
+   "facing": 0
+  },
+  {
+   "id": "lane_w",
+   "owner": 0,
+   "at": [
+    4776,
+    3800
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 100,
+    "angle": 90
+   },
+   "composition": [
+    {
+     "type": "ARMFAV",
+     "count": 6
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      4776,
+      4150
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lane_e",
+   "owner": 0,
+   "at": [
+    4824,
+    3800
+   ],
+   "pattern": {
+    "kind": "line",
+    "spacing": 100,
+    "angle": 90
+   },
+   "composition": [
+    {
+     "type": "ARMFAV",
+     "count": 6
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      4824,
+      3450
+     ]
+    }
+   ]
+  }
+ ],
+ "units": [
+  {
+   "id": "r0",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4304,
+    3784
+   ],
+   "facing": 0
+  },
+  {
+   "id": "r1",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4336,
+    3784
+   ],
+   "facing": 0
+  },
+  {
+   "id": "r2",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4304,
+    3816
+   ],
+   "facing": 0
+  },
+  {
+   "id": "r3",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4336,
+    3816
+   ],
+   "facing": 0
+  },
+  {
+   "id": "keepalive",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    8000,
+    8000
+   ]
+  }
+ ]
+}

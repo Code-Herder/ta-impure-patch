@@ -4407,8 +4407,8 @@ SCENARIOS = Path(__file__).resolve().parent.parent / "scenarios"
 # name through ScriptAction_Name2Index, against the live game, like everything else.
 # There is no attack-move in Total Annihilation; `attack` at a coordinate is the idiom.
 SCN_ORDERS = {"stop": 1, "move": 2, "attack": 3, "blast": 4, "unload": 5, "load": 6,
-              "defend": 7, "repair": 8, "patrol": 9, "reclaim": 12, "capture": 13,
-              "mobilebuild": 14}
+              "defend": 7, "repair": 8, "patrol": 9, "teleport": 11, "reclaim": 12,
+              "capture": 13, "mobilebuild": 14}
 SCN_ORDER_ALIASES = {"guard": "defend"}
 SCN_ORDERS_ALONE = {"stop"}                 # the only order that takes no target
 SCN_NO_ATTACK_MOVE = {"attack-move", "attackmove", "attack_move"}
@@ -7305,7 +7305,7 @@ def build_parser():
     add_common(od)
     od.add_argument("name")
     od.add_argument("cmd", help="move attack defend|guard repair patrol reclaim "
-                               "capture load unload blast stop mobilebuild")
+                               "capture load unload blast stop mobilebuild teleport")
     od.add_argument("target", nargs="*", metavar="TARGET",
                     help="pos <x> <y> (world units) | unit <engine_index> | "
                          "nothing, for stop")
