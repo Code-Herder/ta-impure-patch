@@ -1105,24 +1105,6 @@ static void snapshot(Writer* w)
    after world_reset(r, 0) and that iteration's tick_read; neither side applies a record of
    another segment, and both bound the index by the same pool and grid sizes (the headers' shape
    agrees across a chain). */
-/* The stream's records from `at` on: 1 when every RK_EV_TURN stands just before a footprint
-   event (tagpu_recfmt.h, THE CONTEST ORDER). The writer took the iteration by that rule; this asks
-   it of what the filter made of it, so a record the filter puts between a key and its event ends
-   the file here instead of in every reader. */
-static int keys_adjacent(const RecBytes* s, size_t at)
-{
-    int key = 0;
-    while (at + 4 <= s->n) {
-        unsigned short kind, len;
-        memcpy(&kind, s->p + at, 2);
-        memcpy(&len, s->p + at + 2, 2);
-        if (key && !rec_turn_follows(kind)) return 0;
-        key = kind == RK_EV_TURN;
-        at += (4u + len + 3) & ~3u;
-    }
-    return !key;
-}
-
 static void iteration_done(Writer* w)
 {
     int refresh = reclossy_is_refresh(w->iterations, w->tick, w->refresh_tick, w->refresh);
@@ -1154,7 +1136,7 @@ static void iteration_done(Writer* w)
              "iteration the writer took");
         return;
     }
-    if (!keys_adjacent(&w->stream, at)) {
+    if (!rec_keys_adjacent(w->stream.p + at, w->stream.n - at)) {
         fail(w, "the lossy filter put a record between a contest key and its event");
         return;
     }

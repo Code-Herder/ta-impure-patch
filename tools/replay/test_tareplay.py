@@ -2958,6 +2958,18 @@ class PlayingEnd(unittest.TestCase):
                                     r"round trip rt601 at 601(: | not run)", "rt601", 1)
         self.assertEqual(got, self.TRIP)
 
+    def test_a_playing_begins_after_its_seek(self):
+        """W: an end line of the playing a seek replaced, before the seek's answer, is not the
+        sought playing's"""
+        seek = "replay: tenseat: at GameTime 331, sought from 200"
+        dump = "recorder: dump w331 at GameTime 331: 24 units"
+        lines = [self.STOP, seek, dump]
+        start = tareplay.after_line(lines, seek, 0)
+        self.assertEqual(start, 2)
+        tareplay.wait_dumps(self.log(*lines), ["w331"], running=True, playing=start)
+        with self.assertRaises(tareplay.Failed):
+            tareplay.wait_dumps(self.log(*lines), ["w331"], running=True, playing=0)
+
     def test_a_dump_on_a_playing(self):
         log = self.log(self.STOP)
         with self.assertRaises(tareplay.Failed) as e:
@@ -3044,7 +3056,7 @@ class YardChecks(unittest.TestCase):
 
     def test_the_contest_order_played_whole(self):
         (label, verdict, detail), = tareplay.contest_verdict(
-            "P", self.played() + self.played(ordered=4), True)
+            "P", self.played() + self.played(ordered=4, applied=4), True)
         self.assertEqual(verdict, tareplay.PASS)
         self.assertIn("13 steps played in the order", detail)
         self.assertIn("2 playings", detail)
@@ -3069,6 +3081,16 @@ class YardChecks(unittest.TestCase):
             "P", self.played(ordered=0, applied=0), True)[0][1], tareplay.PASS)
         self.assertEqual(tareplay.contest_verdict(
             "P", self.played(ordered=0), False)[0][1], tareplay.PASS)
+
+    def test_every_step_played_or_counted(self):
+        """held: ordered + not held == applied, so a path around the order for some steps fails"""
+        self.assertEqual(tareplay.contest_verdict(
+            "P", self.played(ordered=7, full=2), True)[0][1], tareplay.FAIL)
+        (label, verdict, detail), = tareplay.contest_verdict("P", self.played(ordered=7), True)
+        self.assertEqual(verdict, tareplay.FAIL)
+        self.assertIn("2 steps applied that the contest order neither played nor counted", detail)
+        self.assertEqual(tareplay.contest_verdict(
+            "P", self.played(ordered=7), False)[0][1], tareplay.PASS)
 
     def test_a_contest_line_needs_its_counts_line(self):
         contest = self.played().splitlines(keepends=True)[1]

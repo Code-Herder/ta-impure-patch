@@ -972,6 +972,12 @@ PLAYING_STOPPED = (r"replay: .* (played to its end at|cannot be read on from|can
                    r"to) GameTime \d+")
 
 
+def after_line(lines, line, start):
+    """The index just past `line`, which a wait returned from `lines` at `start` or later: where
+    a wait for what follows it begins."""
+    return lines.index(line, start) + 1
+
+
 def wait_playing(log, rx, what, start):
     """The first line from `start` on that matches `rx`, on a playing that runs toward it, or the
     playing's end before it: the line that ends the playing is the bound of a wait for a GameTime
@@ -2156,10 +2162,13 @@ def watch_lane(w, fx, rec, out, T):
                    rf"refused)|a seek to {T} from the HUD refused", ACK_S, n)
     if not got or "sought from" not in got:
         raise Failed(f"the HUD's seek to {T}: {got.strip() if got else f'no line in {ACK_S} s'}")
+    # the seek begins the playing the dump waits on: an end line before its answer is the
+    # playing it replaced
+    sought = after_line(log.lines, got, n)
     res.append(watch_hud(w, log, rec))
     arm_dump(w, log, f"w{T}", T)
     hud(w, "click", "play")
-    wait_dumps(log, [f"w{T}"], running=True, playing=n)
+    wait_dumps(log, [f"w{T}"], running=True, playing=sought)
     if peek(w, PAUSE_WORD) & 1:
         raise Failed("the HUD's resume: the pause word still set")
     res.append(("W: the HUD's pause, seek and resume", PASS, got[got.index("replay:"):].strip()))
@@ -3471,9 +3480,11 @@ PLAYED_STEPS = re.compile(r"replay: .* GameTime \d+: (\d+) iterations applied .*
 def contest_verdict(label, text, held):
     """[(label, verdict, detail)]: the playing's side of THE CONTEST ORDER (tagpu_replay.c), from
     every playing's counts in a lane's log: a step whose events the order could not hold (its store
-    out of room, or its own pass refusing what the reader took), a Teleport move refused, or a
-    carry link refused, fails -- each leaves a contest the recording machine decided to the
-    host's order. Could not run: no contest line; a contest line without its counts line before
+    out of room, or its own pass refusing what the reader took), a Teleport move refused, a
+    carry link refused, or on a recording whose playing holds its cells (`held`: a skirmish one
+    with RECL_CELLS) a step applied that was neither played in the order nor counted out of it,
+    fails -- each leaves a contest the recording machine decided to the host's order. Could not
+    run: no contest line; a contest line without its counts line before
     it, whose carry links no verdict would then read; or, on a recording whose playing holds its
     cells (`held`: a skirmish one with RECL_CELLS), a playing that applied steps and played none
     in the order, which never engaged it."""
@@ -3487,13 +3498,20 @@ def contest_verdict(label, text, held):
     full = sum(int(m.group(2)) for m in rows)
     unmoved = sum(int(m.group(3)) for m in rows)
     links = sum(int(m.group(2)) for m in played)
+    # on a recording that holds its cells every step the playing applies is played in the order
+    # or counted as held out of it (tagpu_replay.c, co_engage): a step counted as neither went
+    # around it
+    around = 0
     if held:
-        idle = [int(p.group(1)) for p, r in zip(played, rows)
-                if int(p.group(1)) and not int(r.group(1)) and not int(r.group(2))]
-        if idle:
-            return [(label, UNRUN, f"a playing applied {idle[0]} steps and played none in the "
-                                   f"contest order on a recording that holds its cells")]
+        for p, r in zip(played, rows):
+            steps, done = int(p.group(1)), int(r.group(1)) + int(r.group(2))
+            if steps and not done:
+                return [(label, UNRUN, f"a playing applied {steps} steps and played none in the "
+                                       f"contest order on a recording that holds its cells")]
+            around += abs(steps - done)
     bad = [f"{n} {what}" for n, what in ((full, "steps the contest order could not hold"),
+                                         (around, "steps applied that the contest order neither "
+                                                  "played nor counted"),
                                          (unmoved, "Teleport moves refused"),
                                          (links, "carry links refused")) if n]
     return [(label, FAIL if bad else PASS,
