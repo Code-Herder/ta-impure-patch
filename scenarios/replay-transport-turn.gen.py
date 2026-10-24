@@ -46,6 +46,11 @@ bucket (0x47CCDB). So a playing that made the attach before the relink reaches t
 MEASURED 2026-10-24, a build with the keying at the next slot removed passes every check of the
 group. The order would show for a drop into the bucket its carrier has just entered, whose detach
 pushes the child at that bucket's front (0x47CB40 at 0x48ACDC); no group makes one.
+A drop comb built the same way (a transport 9 wu short of a cell row and past a 128-wu line it has
+not been stamped across, its unload order standing and its car leaving in the drop's window) did
+not make one: MEASURED 2026-10-24, its 22 drops all came without a relink of their carrier in
+the step, since a hover transport drifts sideways by up to 14 wu while it creeps to the car and
+pushes on it, so a sideways relink re-files its bucket before the row frees.
 """
 import json
 import sys
