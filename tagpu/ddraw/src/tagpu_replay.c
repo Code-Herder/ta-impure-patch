@@ -7629,9 +7629,10 @@ static int tk_open(unsigned T, char* why, unsigned cap)
     f = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_EXISTING,
                     FILE_ATTRIBUTE_NORMAL, NULL);
     if (f == INVALID_HANDLE_VALUE) {
+        DWORD error = GetLastError();          /* the open's, before the release makes calls */
         recfile_unlock(&lock, path);
         snprintf(why, cap, "the recording cannot be written (%lu): another program may have it "
-                 "open, or it is read-only", GetLastError());
+                 "open, or it is read-only", error);
         return 0;
     }
     /* the append point is found in the file the playing reads, so the handle must be that file,
