@@ -1401,7 +1401,9 @@ gate's recordings: `battle` (3,990 GameTimes, at most 1,444 live units, deaths i
 holds 5 keys and no link, 20 bytes of bodies -- a death in its own turn needs no key; `slice-walkers`
 (4,680 GameTimes) 48 keys and 10 links, 312 bytes of bodies, about 1,100 keys and 230 links an hour
 of game time at 30 GameTimes a second; `carry-links` 10 keys and 4 links, `transport-pad` 5 and 3,
-`yard-lab` 4 and 2. Below 0.01 % of either recording's stream raw, so the packed share is not
+`yard-lab` 4 and 2; `contest-waves` (1,980 GameTimes, at most 897 live units, a create wave
+before every drawn GameTime) 48 keys; `teleport` 7 keys and 12 moves, 412 bytes of bodies. Below
+0.01 % of any of these recordings' streams raw, so the packed share is not
 worth separating from the other records'.
 
 ## P1: the container, measured
