@@ -53,6 +53,8 @@ and applies the same prefix rule. IDs stay the recording's IDs, so an exported
 fork is selected by its original ID. Export refuses to replace an existing file. It holds
 its output's path lock as well as its source's, from before its temporary file to after the move
 that makes the output; an output whose lock another caller holds refuses the export as busy.
+An export onto its own recording, told by both full paths compared without case, is refused as
+that before either lock is taken.
 The root header and highest-ID tombstone are bookkeeping, even when not needed
 for playback.
 

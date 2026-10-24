@@ -3360,6 +3360,17 @@ int recr_manage(const char* path, unsigned op, unsigned id, const char* output,
         snprintf(why, cap, "a touch names its timelines, timeline %u first", id);
         return 0;
     }
+    /* an export onto its own recording, told by both full paths: the source's lock held, the
+       output's lock would read as busy, so it is refused here by what it is */
+    if (op == REC_FILE_EXPORT && output) {
+        char a[MAX_PATH], b[MAX_PATH];
+        DWORD na = GetFullPathNameA(path, MAX_PATH, a, NULL);
+        DWORD nb = GetFullPathNameA(output, MAX_PATH, b, NULL);
+        if (na && na < MAX_PATH && nb && nb < MAX_PATH && !_stricmp(a, b)) {
+            snprintf(why, cap, "an export cannot be written over the recording it exports from");
+            return 0;
+        }
+    }
     lock = recfile_lock(path, why, cap);
     if (!lock) return 0;
     f = CreateFileA(path, op == REC_FILE_EXPORT ? GENERIC_READ : GENERIC_READ | GENERIC_WRITE,
