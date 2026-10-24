@@ -46,7 +46,8 @@
                                              applies the existing fork_view comparison policy;
                                              --seek, OTHERDUMP a seek's, checks its unit slots,
                                              yard bits and contest marks by THE OCCUPANCY RULE in
-                                             a segment that holds its cells; the rules are those
+                                             a segment that holds its cells or a multiplayer one;
+                                             the rules are those
                                              of the segment that holds the dumps' GameTime
   tools/replay/tarec.py counts FILE DUMP     a dump's counts of roots, sinks and observed sites
   tools/replay/tarec.py compare-counts FILE LIVE_A LIVE_B PUPPET_A PUPPET_B [--absent TSV]
@@ -2896,12 +2897,15 @@ def known_names(h):
         return None
 
 
-# THE OCCUPANCY RULE: where a playing's grid is the engine's, its unit slots and yard bit are not
-# compared but checked, and then taken from the dump. The owner's decision for a multiplayer
-# recording (its units follow their owners, tagpu_puppet.c, THE FOOTPRINT WRITERS), and on
-# 2026-10-12 for a skirmish recording that holds its cells after a seek (`contest`): a seek's
-# creates and moves stamp in slot order, and a contested cell goes to whichever came first there,
-# not to the unit that came first in the game (demo-recorder-completeness.md, Decisions taken).
+# THE OCCUPANCY RULE: where a playing's grid is the engine's -- a multiplayer segment, and a
+# skirmish segment that holds its cells after a seek -- its unit slots, yard bits and contest marks
+# are not compared but checked, and then taken from the dump. The owner's decisions
+# (demo-recorder-completeness.md, Decisions taken): on a multiplayer segment the units follow
+# their owners while the recorder's grid names its own replicas at its own times (tagpu_puppet.c,
+# THE FOOTPRINT WRITERS), and the host's footprint writers alone write the marks there; after a
+# seek the creates and moves stamp in slot order, and a contested cell goes to whichever came first
+# there, not to the unit that came first in the game. Two units of one layer that overlap leave
+# one of them unnamed in their shared cell whatever the order, so the check is the contest's.
 STRUCTURE = 1 << 29     # unit +0x110: a structure, whose yard bits a footprint writer sets
 U_LOSER = 1 << 27       # unit +0x110: the contest's loser, which a holder's clear re-claims
 U_HOLDER = 1 << 26      # unit +0x110: the holder of a cell a loser contests
@@ -3003,48 +3007,40 @@ def sort_chains(w, dw):
     return out
 
 
-def occupancy(w, dw, contest=False):
-    """The dump's unit slots and yard bit checked by the engine's invariants instead of compared,
-    and then taken into the expected world `w`: each footprint cell of a live mobile unit names it;
-    each slot a cell names is a live unit whose footprint holds the cell; a yard bit lies inside a
-    live structure's footprint. With `contest`, a skirmish recording's after a seek, the checks are
-    the stamp's own, layer by layer: a mobile unit the stamp does not write (stamped) has no cell
-    to name it; a stamped unit's footprint cell names it in its layer's slot (A for layer 1, B for
-    layer 2), or, when it carries the loser's mark, bit 27, names there another live unit of the
-    same layer -- or a structure, for a layer-1 unit: the stamp files a structure in slot A
-    whatever its layer (0x47CD5A -> 0x47CDA5) -- whose footprint holds the cell and which carries
-    the holder's mark, bit 26 -- the engine's contest kept the cell for that one (the stamp's
-    contest, 0x47CDDB..0x47CE1D, sets 26 on the unit that keeps the cell and 27 on the other; a
-    unit's clear, 0x47D286..0x47D2C4, drops its 27 and, holding 26, drops that and re-claims for
-    the bit-27 units: DISASSEMBLED); a slot names a mobile unit of its own layer, or a structure
-    in slot A; and the contest's marks, +0x110 bits 26 and 27, are taken from the dump too. The
-    differences those checks find. Not checked: which cells of a structure's footprint name it --
-    the stamp files a structure only at the cells its yardmap sets under the current mask
-    (0x47CD82..0x47CD9F), which a dump does not carry -- nor, the marks being per unit, which
-    cell a mark was set for."""
+def occupancy(w, dw):
+    """The dump's unit slots, yard bits and contest marks checked by the engine's invariants
+    instead of compared, and then taken into the expected world `w`. The checks are the stamp's
+    own, layer by layer: a mobile unit the stamp does not write (stamped) has no cell to name it;
+    a stamped unit's footprint cell names it in its layer's slot (A for layer 1, B for layer 2),
+    or, when it carries the loser's mark, bit 27, names there another live unit of the same layer
+    -- or a structure, for a layer-1 unit: the stamp files a structure in slot A whatever its
+    layer (0x47CD5A -> 0x47CDA5) -- whose footprint holds the cell and which carries the holder's
+    mark, bit 26 -- the engine's contest kept the cell for that one (the stamp's contest,
+    0x47CDDB..0x47CE1D, sets 26 on the unit that keeps the cell and 27 on the other; a unit's
+    clear, 0x47D286..0x47D2C4, drops its 27 and, holding 26, drops that and re-claims for the
+    bit-27 units: DISASSEMBLED); each slot a cell names is a live unit whose footprint holds the
+    cell, a mobile unit of that slot's layer or a structure in slot A; a yard bit lies inside a
+    live structure's footprint; and the contest's marks, +0x110 bits 26 and 27, are taken from
+    the dump too. The differences those checks find. Not checked: which cells of a structure's
+    footprint name it -- the stamp files a structure only at the cells its yardmap sets under the
+    current mask (0x47CD82..0x47CD9F), which a dump does not carry -- nor, the marks being per
+    unit, which cell a mark was set for."""
     out = []
     cb = REC_CELL_BYTES
     yards = footprints(dw)
     rects = {slot: rect(u) for slot, u in dw.units.items()}
     state = {slot: struct.unpack_from("<I", u, U_STATE)[0] for slot, u in dw.units.items()}
     for slot, u in sorted(dw.units.items()):
-        if structure(u) or (contest and not stamped(u, w.gw, w.gh)):
+        if structure(u) or not stamped(u, w.gw, w.gh):
             continue
-        lost = contest and state[slot] & U_LOSER
+        lost = state[slot] & U_LOSER
         for cx, cz in sorted(rects[slot]):
             i = (cz * w.gw + cx) * cb
-            if not (0 <= cx < w.gw and 0 <= i < len(dw.grid)):
+            if i + 4 > len(dw.grid):
                 out.append(f"occupancy: cell {(cx, cz)} of mobile unit {slot}'s footprint "
-                           "does not name it")
+                           "is past the dump's grid")
                 continue
-            named = struct.unpack_from("<HH", dw.grid, i)
-            if not contest:
-                if slot in named:
-                    continue
-                out.append(f"occupancy: cell {(cx, cz)} of mobile unit {slot}'s footprint "
-                           "does not name it")
-                continue
-            want = named[layer(u) - 1]
+            want = struct.unpack_from("<HH", dw.grid, i)[layer(u) - 1]
             if want == slot:
                 continue
             if lost and want in dw.units and (cx, cz) in rects[want] and \
@@ -3067,19 +3063,17 @@ def occupancy(w, dw, contest=False):
                 out.append(f"occupancy: cell {xz} names slot {slot}, not live")
             elif slot and xz not in rects[slot]:
                 out.append(f"occupancy: cell {xz} names slot {slot}, outside its footprint")
-            elif slot and contest and structure(dw.units[slot]) and k:
+            elif slot and structure(dw.units[slot]) and k:
                 out.append(f"occupancy: cell {xz} names structure {slot} in slot B")
-            elif slot and contest and not structure(dw.units[slot]) and \
-                    layer(dw.units[slot]) != k + 1:
+            elif slot and not structure(dw.units[slot]) and layer(dw.units[slot]) != k + 1:
                 out.append(f"occupancy: cell {xz} names slot {slot} in slot {'AB'[k]}, "
                            f"a unit of layer {layer(dw.units[slot])}")
         if dw.grid[i + 0x0C] & 2 and xz not in yards:
             out.append(f"occupancy: cell {xz} holds a yard bit outside every live structure")
-    if contest:
-        for slot, img in w.units.items():
-            if slot in dw.units:
-                v = struct.unpack_from("<I", img, U_STATE)[0] & ~U_MARKS
-                struct.pack_into("<I", img, U_STATE, v | state[slot] & U_MARKS)
+    for slot, img in w.units.items():
+        if slot in dw.units:
+            v = struct.unpack_from("<I", img, U_STATE)[0] & ~U_MARKS
+            struct.pack_into("<I", img, U_STATE, v | state[slot] & U_MARKS)
     return out
 
 
@@ -3140,7 +3134,7 @@ def cmd_compare(path, dumps, puppet=False, timeline=0, exact=False, seek=False):
             globals_hold(w, gslots)
             globals_hold(dw, gslots)
             if holds_cells(w.header) and seek:
-                stale = occupancy(w, dw, contest=True)
+                stale = occupancy(w, dw)
         # the live game's grid and a straight playing's are the exact slots: the stream's held
         # ones are behind them between refreshes
         if holds_cells(w.header) and not exact and not (puppet and seek):
@@ -3260,10 +3254,12 @@ def cmd_compare_dumps(path, a_path, b_path, takeover=False, seek=False, timeline
     they carry, the players' sight counters included, equal byte for byte. FILE gives the
     dimensions and the globals' names from its first header; the rules below come from the
     header of `timeline`'s chain segment that holds the dumps' GameTime (segment_at), since a
-    multiplayer file's takeover timeline is a skirmish segment. With `seek`, B a seek's, in a
-    segment that holds its cells: B's unit slots, yard bits and contest marks by THE OCCUPANCY
-    RULE, and A's, the straight playing's, by the same rule on their own, since B's then stand
-    in for them in the comparison. With `seek` in a multiplayer segment, both dumps' sort buckets
+    multiplayer file's takeover timeline is a skirmish segment. With `seek`, B a seek's, where the
+    cells are the engine's (a segment that holds them, or a multiplayer one): B's unit slots, yard
+    bits and contest marks by THE OCCUPANCY RULE, and A's, the straight playing's, by the same rule
+    on their own, since B's then stand in for them in the comparison. Without `seek` two straight
+    playings of one multiplayer file are compared byte for byte: the host's order and rule there
+    are a function of the file. With `seek` in a multiplayer segment, both dumps' sort buckets
     by the engine's invariants and +0x8E of a unit not carried left out (sort_chains): a seek's
     order there is a function of T's composed world, a playing's of its history."""
     h = header_only(path)
@@ -3278,10 +3274,10 @@ def cmd_compare_dumps(path, a_path, b_path, takeover=False, seek=False, timeline
     if takeover:
         fork_view(a, b, hs, hs)
     stale = []
-    if seek and holds_cells(hs):
+    if seek and (holds_cells(hs) or hs.get("mode") == 3):
         # occupancy(a, a) writes A's own cells and marks over themselves
-        stale = ["A's " + line for line in occupancy(a, a, contest=True)]
-        stale += occupancy(a, b, contest=True)
+        stale = ["A's " + line for line in occupancy(a, a)]
+        stale += occupancy(a, b)
     if seek and hs.get("mode") == 3:
         stale += ["A's " + line for line in chain_faults(a)] + sort_chains(a, b)
     lines, n = a.differences(b, ah["tables"], bh["tables"], gnames=known_names(h), sight=True)
