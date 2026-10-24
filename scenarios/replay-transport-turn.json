@@ -1,0 +1,1190 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The demo recorder's `transport-turn` test group. Written by scenarios/replay-transport-turn.gen.py, whose header gives the design.",
+ "setup": {
+  "map": "Town & Country",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "car0",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    1304,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car1",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    1432,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car2",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    1560,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car3",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    1688,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car4",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    1816,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car5",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    1944,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car6",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    2072,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car7",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    2200,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car8",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    2328,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car9",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    2456,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car10",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    2584,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car11",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    2712,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car12",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    2840,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car13",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    2968,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car14",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    3096,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car15",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    3224,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car16",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    3352,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car17",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    3480,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car18",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    3608,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car19",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    3736,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car20",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    3864,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car21",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    3992,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car22",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    4120,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car23",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    4248,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car24",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    4376,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car25",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    4504,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car26",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    4632,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car27",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    4760,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car28",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    4888,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car29",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    5016,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car30",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    5144,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "car31",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    5272,
+    4055
+   ],
+   "facing": 180
+  },
+  {
+   "id": "bear0",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    1304,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw0"
+    }
+   ]
+  },
+  {
+   "id": "bear1",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    1432,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw1"
+    }
+   ]
+  },
+  {
+   "id": "bear2",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    1560,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw2"
+    }
+   ]
+  },
+  {
+   "id": "bear3",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    1688,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw3"
+    }
+   ]
+  },
+  {
+   "id": "bear4",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    1816,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw4"
+    }
+   ]
+  },
+  {
+   "id": "bear5",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    1944,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw5"
+    }
+   ]
+  },
+  {
+   "id": "bear6",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    2072,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw6"
+    }
+   ]
+  },
+  {
+   "id": "bear7",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    2200,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw7"
+    }
+   ]
+  },
+  {
+   "id": "bear8",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    2328,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw8"
+    }
+   ]
+  },
+  {
+   "id": "bear9",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    2456,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw9"
+    }
+   ]
+  },
+  {
+   "id": "bear10",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    2584,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw10"
+    }
+   ]
+  },
+  {
+   "id": "bear11",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    2712,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw11"
+    }
+   ]
+  },
+  {
+   "id": "bear12",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    2840,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw12"
+    }
+   ]
+  },
+  {
+   "id": "bear13",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    2968,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw13"
+    }
+   ]
+  },
+  {
+   "id": "bear14",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    3096,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw14"
+    }
+   ]
+  },
+  {
+   "id": "bear15",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    3224,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw15"
+    }
+   ]
+  },
+  {
+   "id": "bear16",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    3352,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw16"
+    }
+   ]
+  },
+  {
+   "id": "bear17",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    3480,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw17"
+    }
+   ]
+  },
+  {
+   "id": "bear18",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    3608,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw18"
+    }
+   ]
+  },
+  {
+   "id": "bear19",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    3736,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw19"
+    }
+   ]
+  },
+  {
+   "id": "bear20",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    3864,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw20"
+    }
+   ]
+  },
+  {
+   "id": "bear21",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    3992,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw21"
+    }
+   ]
+  },
+  {
+   "id": "bear22",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    4120,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw22"
+    }
+   ]
+  },
+  {
+   "id": "bear23",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    4248,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw23"
+    }
+   ]
+  },
+  {
+   "id": "bear24",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    4376,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw24"
+    }
+   ]
+  },
+  {
+   "id": "bear25",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    4504,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw25"
+    }
+   ]
+  },
+  {
+   "id": "bear26",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    4632,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw26"
+    }
+   ]
+  },
+  {
+   "id": "bear27",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    4760,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw27"
+    }
+   ]
+  },
+  {
+   "id": "bear28",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    4888,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw28"
+    }
+   ]
+  },
+  {
+   "id": "bear29",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    5016,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw29"
+    }
+   ]
+  },
+  {
+   "id": "bear30",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    5144,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw30"
+    }
+   ]
+  },
+  {
+   "id": "bear31",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    5272,
+    4007
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw31"
+    }
+   ]
+  },
+  {
+   "id": "pw0",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    1304,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw1",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    1432,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw2",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    1560,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw3",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    1688,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw4",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    1816,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw5",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    1944,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw6",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2072,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw7",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2200,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw8",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2328,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw9",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2456,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw10",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2584,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw11",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2712,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw12",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2840,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw13",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2968,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw14",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    3096,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw15",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    3224,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw16",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    3352,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw17",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    3480,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw18",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    3608,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw19",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    3736,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw20",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    3864,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw21",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    3992,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw22",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4120,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw23",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4248,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw24",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4376,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw25",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4504,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw26",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4632,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw27",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4760,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw28",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    4888,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw29",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    5016,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw30",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    5144,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "pw31",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    5272,
+    3935
+   ],
+   "facing": 180
+  },
+  {
+   "id": "keepalive",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    8000,
+    8000
+   ]
+  }
+ ]
+}
