@@ -2966,6 +2966,39 @@ class YardChecks(unittest.TestCase):
         (label, verdict, detail), = tareplay.unordered_verdict("L", "recorder: nothing\n")
         self.assertEqual(verdict, tareplay.UNRUN)
 
+    def test_a_lane_that_did_not_record_has_no_verdict(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "tagpu.log"
+            log.write_text("replay: x: nothing recorded here\n")
+            self.assertEqual(tareplay.unordered_check("P", log), [])
+            self.assertEqual(tareplay.unordered_check("L", log)[0][1], tareplay.UNRUN)
+            log.write_text(self.unordered(2))
+            self.assertEqual(tareplay.unordered_check("K", log)[0][1], tareplay.FAIL)
+
+    @staticmethod
+    def played(full=0, unmoved=0, unlinked=0):
+        return (f"replay: x at its level's end, GameTime 9: 9 iterations applied (0 late); 3 carry "
+                f"links made, {unlinked} refused; order nodes 1 built\n"
+                f"replay: x: 12 units placed at their turn, {full} steps whose events the contest "
+                f"order could not hold (THE CONTEST ORDER); 2 Teleport moves played, {unmoved} "
+                f"refused\n")
+
+    def test_the_contest_order_played_whole(self):
+        (label, verdict, detail), = tareplay.contest_verdict("P", self.played() + self.played())
+        self.assertEqual(verdict, tareplay.PASS)
+        self.assertIn("2 playings", detail)
+
+    def test_a_step_not_held_a_move_or_a_link_refused_fails(self):
+        for kw, what in (({"full": 1}, "steps the contest order could not hold"),
+                         ({"unmoved": 2}, "Teleport moves refused"),
+                         ({"unlinked": 3}, "carry links refused")):
+            with self.subTest(what=what):
+                (label, verdict, detail), = tareplay.contest_verdict("P", self.played(**kw))
+                self.assertEqual(verdict, tareplay.FAIL)
+                self.assertIn(what, detail)
+        (label, verdict, detail), = tareplay.contest_verdict("P", "replay: x: nothing\n")
+        self.assertEqual(verdict, tareplay.UNRUN)
+
 
 class TakeoverFixtures(unittest.TestCase):
     """fixtures.json's takeover entries, and the processes they make a fixture run."""

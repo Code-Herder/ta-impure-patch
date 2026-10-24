@@ -3224,10 +3224,13 @@ def checks(fx):
         res.later(puppet_counts, proc, rec, d)
     if ran.get("L") == "ran":
         res.later(yard_dropped_check, out / "L" / "tagpu.log")
-        res.later(unordered_check, out / "L" / "tagpu.log")
+    for proc, how in ran.items():
+        if how == "ran":
+            res.later(unordered_check, proc, out / proc / "tagpu.log")
     for proc in ("P", "R", "Q"):
         if ran.get(proc) == "ran":
             res.later(yard_check, proc, out / proc / "tagpu.log")
+            res.later(contest_check, proc, out / proc / "tagpu.log")
     for proc in ("R", "Q"):
         if ran.get(proc) == "ran":
             # Q's one seek is a fresh process's: a seek asked for before a playing's first step
@@ -3376,10 +3379,10 @@ UNORDERED = re.compile(r"recorder: (\d+) footprint calls a playing cannot put in
 
 def unordered_verdict(label, text):
     """[(label, verdict, detail)]: the footprint and chain calls the recorder could not give a
-    place a playing makes them at (tagpu_recfmt.h, THE CONTEST ORDER: a Teleport's set-position on
-    another unit, a turn out of slot order), from every recording's end line of a lane's log: any
-    fails, since a playing of such a recording can decide a contested cell otherwise; could not
-    run with no such line."""
+    place a playing makes them at (tagpu_recfmt.h, THE CONTEST ORDER: a call from a site the
+    recorder's list does not hold, a turn out of slot order, a Teleport move of a unit that is not
+    alive), from every recording's end line of a lane's log: any fails, since a playing of such a
+    recording can decide a contested cell otherwise; could not run with no such line."""
     counts = [int(m.group(1)) for m in UNORDERED.finditer(text)]
     if not counts:
         return [(label, UNRUN, "no recording's end line with the footprint calls no playing can "
@@ -3390,13 +3393,51 @@ def unordered_verdict(label, text):
              else f"none in {len(counts)} recordings")]
 
 
-def unordered_check(log_path):
-    label = "L: the footprint calls no playing can order"
+def unordered_check(proc, log_path):
+    """L's log, which records; and any other lane's that recorded too (a takeover's), by its
+    recorder's end line."""
+    label = f"{proc}: the footprint calls no playing can order"
+    try:
+        text = Path(log_path).read_text(errors="replace")
+    except OSError as e:
+        return [(label, UNRUN, str(e))] if proc == "L" else []
+    if proc != "L" and not UNORDERED.search(text):
+        return []
+    return unordered_verdict(label, text)
+
+
+CONTEST_PLAY = re.compile(r"replay: .*?: \d+ units placed at their turn, (\d+) steps whose events "
+                          r"the contest order could not hold \(THE CONTEST ORDER\); \d+ Teleport "
+                          r"moves played, (\d+) refused")
+LINKS_PLAY = re.compile(r"\d+ carry links made, (\d+) refused")
+
+
+def contest_verdict(label, text):
+    """[(label, verdict, detail)]: the playing's side of THE CONTEST ORDER (tagpu_replay.c), from
+    every playing's lines in a lane's log: a step whose events the order could not hold (its store
+    out of room, or its own pass refusing what the reader took), a Teleport move refused, or a
+    carry link refused, fails -- each leaves a contest the recording machine decided to the
+    host's order; could not run when the log holds no contest line."""
+    rows = [tuple(map(int, m.groups())) for m in CONTEST_PLAY.finditer(text)]
+    if not rows:
+        return [(label, UNRUN, "no playing's line with the contest order's counts")]
+    links = sum(int(m.group(1)) for m in LINKS_PLAY.finditer(text))
+    full, unmoved = sum(r[0] for r in rows), sum(r[1] for r in rows)
+    bad = [f"{n} {what}" for n, what in ((full, "steps the contest order could not hold"),
+                                         (unmoved, "Teleport moves refused"),
+                                         (links, "carry links refused")) if n]
+    return [(label, FAIL if bad else PASS,
+             "; ".join(bad) if bad else f"every step held, no move or link refused, "
+                                        f"{len(rows)} playings")]
+
+
+def contest_check(proc, log_path):
+    label = f"{proc}: the contest order played"
     try:
         text = Path(log_path).read_text(errors="replace")
     except OSError as e:
         return [(label, UNRUN, str(e))]
-    return unordered_verdict(label, text)
+    return contest_verdict(label, text)
 
 
 def yard_check(proc, log_path):

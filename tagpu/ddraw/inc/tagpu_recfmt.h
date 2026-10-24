@@ -39,9 +39,9 @@
 
 /* 26: format 25 with the contest order's keys (RK_EV_TURN), the carry links at their place
    (RK_EV_LINK) and Teleport's moves at theirs (RK_EV_PLACE). 25 was format 24 with
-   RT_WALLCLOCK's start carrying the local time's offset from UTC at that instant beside it. 24 was format 23 with the unit frame's listing, lane masks and
-   residuals as one binary range coder's bytes a block, each decision under a context both sides
-   keep (RCS_UNITS below). 23 was
+   RT_WALLCLOCK's start carrying the local time's offset from UTC at that instant beside it. 24
+   was format 23 with the unit frame's listing, lane masks and residuals as one binary range
+   coder's bytes a block, each decision under a context both sides keep (RCS_UNITS below). 23 was
    format 22 with QueryTransport and QueryLandingPad among the owner's queries, and
    BeginTransport and setSFXoccupy as the owner's starts (RK_EV_START_NAMED) where the broadcast and
    the playing's own water-state call made them before. 22 was format 21 with three record
@@ -592,12 +592,19 @@ static __inline int rec_yard_end(RecYardStep* y)
       0x48AF9E);
    3. the unit's own relink, at most one a step: the movement pass's 0x43DD55 -> 0x43D6D0, only
       on a cell or layer change (0x43D898..0x43D8BF);
+   3b. the walk class's run-now COB pass (0x43DD5D -> 0x43DA70: StartMoving and the like through
+      0x4B0940 with run-now 1, 0x43DAF2 and 0x43DB27) and the water state's setSFXoccupy start
+      (0x43DD65 -> 0x43DBE8, run-now 1), whose pass runs every thread of the unit's script -- a
+      TransportPickup's or a TransportDrop's started earlier in the turn among them -- so it can
+      attach, drop (COB 0x4813A6, 0x481422) or open a yard after the relink;
    4. its death (Send_UnitDeath at 0x48AFD1).
    After the tick come the players phase's, the frame's and the levers' calls, in their order:
    between the unit tick's return 0x4954F2 and the projectile tick's call 0x495513 there is only a
    timing accumulator.
    Every call but the relinks is an event at its place; the relinks are the next image's
-   positions, or a unit's position when a later event of the step moves it or kills it. A top-level footprint event therefore has a KEY: the turn it was made in.
+   positions, or a unit's position when a later event of the step moves it or kills it. A
+   top-level footprint event therefore has a KEY: the turn it was made in, and s+1 for one made in
+   turn s after s's own relink (REC_TURN_AFTER past the last slot), so a playing places s first.
    rec_turn_implicit gives the key a reader can infer:
    - for a death or a yard, the later of the unit's own slot and the step's last key, since the
      reaper kills a unit in its own turn and a slice opens its own unit's yard;

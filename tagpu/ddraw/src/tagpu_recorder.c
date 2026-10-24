@@ -1758,6 +1758,7 @@ typedef struct Rec {
     unsigned       ydropped;    /* yard events THE YARD RULE kept out of the file       */
     unsigned       unordered;   /* footprint and chain calls a playing cannot put in their
                                    order (THE CONTEST ORDER, tagpu_recfmt.h)               */
+    unsigned       afterlink;   /* footprint events keyed past their turn unit's relink     */
     unsigned       pshadow[REC_PLAYERS][REC_PLAYER_DWORDS];
     unsigned char  ctl[REC_PLAYERS];             /* the controllers and the two players */
     unsigned char  view[2];                      /* as the ring last carried them        */
@@ -2804,7 +2805,8 @@ static void rec_end(Rec* r, unsigned reason)
     tagpu_logf("recorder: %u yard events kept out of the file by THE YARD RULE (tagpu_recfmt.h)",
                r->ydropped + r->nyhold);
     tagpu_logf("recorder: %u footprint calls a playing cannot put in their order (THE CONTEST "
-               "ORDER, tagpu_recfmt.h)", r->unordered);
+               "ORDER, tagpu_recfmt.h); %u footprint events made after their turn unit's relink",
+               r->unordered, r->afterlink);
     feat_log(r);
     tagpu_logf("recorder: the projectiles: %u record images; the pool's written extent reached %u "
                "of its %u records", r->jimages, r->jhw, (unsigned)TAGPU_LIM_PROJ);
@@ -6295,6 +6297,7 @@ static unsigned short s_turn;       /* the unit tick's turn: 0 before its first,
                                        REC_TURN_AFTER from the projectile tick on (THE CONTEST
                                        ORDER, tagpu_recfmt.h); game thread                      */
 static unsigned short s_key;        /* the key a playing holds: the step's last footprint event's */
+static unsigned char s_relinked;    /* the turn unit has relinked in its turn (foot_order)       */
 
 /* Only a timing accumulator runs between the unit tick's return 0x4954F2 and the projectile
    tick's call 0x495513 [DISASSEMBLED], so from the projectile phase on every call is after the
@@ -6302,7 +6305,10 @@ static unsigned short s_key;        /* the key a playing holds: the step's last 
 void __cdecl tagpu_rec_phase(unsigned phase)
 {
     s_fphase = (unsigned char)phase;
-    if (phase >= REC_PHASE_PROJ) s_turn = REC_TURN_AFTER;
+    if (phase >= REC_PHASE_PROJ) {
+        s_turn = REC_TURN_AFTER;
+        s_relinked = 0;
+    }
 }
 
 /* THE CONTEST ORDER's turn: the unit the unit tick's loop is on, at its slice site, before the
@@ -6320,6 +6326,7 @@ void tagpu_rec_turn(const char* unit)
     }
     if (s_turn && (s_turn == REC_TURN_AFTER || id - 1u <= s_turn)) r->unordered++;
     s_turn = (unsigned short)(id - 1u);
+    s_relinked = 0;
 }
 
 /* THE CONTEST ORDER on the recording machine: an RK_EV_TURN just before a top-level footprint
@@ -6328,17 +6335,26 @@ void tagpu_rec_turn(const char* unit)
    and those are checks, not calls, which take no key. Top-level here is the readers' top level:
    every frame on s_fstack is a recorded feature call or death, or nested in one. A turn that came
    back below the step's last key was counted where it came (tagpu_rec_turn), and the key stays
-   where it was, so the stream never takes its keys back. 0: the record did not fit. */
+   where it was, so the stream never takes its keys back.
+   An event made after the turn unit's own relink -- its walk class's run-now COB pass (0x43DD5D)
+   or its water state's setSFXoccupy start (0x43DD65), whose threads can attach, drop or open a
+   yard, and its death -- is keyed s+1, or REC_TURN_AFTER past the last slot: the playing then
+   places s itself before it, where its relink put it, and no other unit, since none has a slot
+   between. The next turn is above s, so the keys still ascend. 0: the record did not fit. */
 static int turn_put(Rec* r, unsigned kind, const unsigned char* b)
 {
-    unsigned id, imp, key;
+    unsigned id, imp, key, turn = s_turn;
     if (r->mode == MODE_NETWORK || !(REC_SKIRMISH_HOLDS & RECL_CELLS) || s_fdepth ||
         (kind != RK_EV_CREATE && kind != RK_EV_DEATH && kind != RK_EV_YARD && kind != RK_EV_LINK &&
          kind != RK_EV_PLACE))
         return 1;
     memcpy(&id, b, 4);
     imp = rec_turn_implicit(kind, id - 1u, s_key);
-    key = s_turn < s_key ? s_key : s_turn;
+    if (s_relinked && turn != REC_TURN_AFTER) {
+        turn = turn + 1u < r->nslots ? turn + 1u : REC_TURN_AFTER;
+        r->afterlink++;
+    }
+    key = turn < s_key ? s_key : turn;
     s_key = (unsigned short)key;
     if (key != imp) {
         unsigned char t[4] = { (unsigned char)key, (unsigned char)(key >> 8), 0, 0 };
@@ -6630,6 +6646,8 @@ static void foot_order(Rec* r, unsigned ra, unsigned id)
         (FOOT_SITES[i].turn && !(s_place && id == s_place) &&
          (!s_turn || s_turn == REC_TURN_AFTER || !id || id - 1u != s_turn)))
         r->unordered++;
+    else if (FOOT_SITES[i].turn && !s_place)
+        s_relinked = 1;                 /* the turn unit's own relink (turn_put) */
 }
 
 /* the stamp, the clear and the re-claim, each (unit): the unit's footprint, a cell wider. On a
@@ -7767,6 +7785,7 @@ void __cdecl tagpu_rec_capture(void)
     if (s_suspended) return;
     s_fphase = 0;
     s_turn = s_key = 0;                 /* the group's start: before 0x48AD30's first turn */
+    s_relinked = 0;
     if (!ta || !level_read(ta, &L)) return;
     masks_init();
     tick = *(int*)(ta + OFF_GAMETIME);

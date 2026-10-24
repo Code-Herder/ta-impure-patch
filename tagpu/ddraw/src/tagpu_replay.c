@@ -4479,10 +4479,11 @@ static void turn_place(const Lv* L, unsigned s, unsigned i)
         if (e->kind == RK_EV_DEATH) img = (const uint32_t*)(e->b + 12);
         else mv = e->b;
     }
-    if (!img && s_co.N->live[s]) img = s_co.N->unit + (size_t)s * REC_UNIT_DWORDS;
+    if (!img && !mv && s_co.N->live[s]) img = s_co.N->unit + (size_t)s * REC_UNIT_DWORDS;
     if (img && !holds(L, s, img)) return;
     if (mv) {
         memcpy(&x, mv + 4, 4);
+        memcpy(&a, mv + 8, 4);
         memcpy(&z, mv + 12, 4);
         layer = mv[28];
     } else if (img) {
@@ -4497,10 +4498,8 @@ static void turn_place(const Lv* L, unsigned s, unsigned i)
     memcpy(&hs, u + U_STATE, 4);
     /* not moved: image T+1's values pass writes it as it writes every other unit */
     if (x == hx && z == hz && layer == (hs & 3u)) return;
-    /* a unit a later move takes away with no image after it: its altitude here is the move's to
-       replace, and the movement pass's formula has no vertical velocity to read */
-    if (img) a = a_pre_of(u, (const char*)img);
-    else memcpy(&a, u + U_ALT, 4);
+    /* a move's first point is the whole position the turn left: its altitude as recorded */
+    if (!mv) a = a_pre_of(u, (const char*)img);
     E_SetPos(u, x, a, z, layer);
     s_placed[s] = 1;
     s_apre[s] = a;
