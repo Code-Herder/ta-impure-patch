@@ -2249,8 +2249,11 @@ def prune_step(w, fx, out, forked):
     # recording and leaves no lock behind
     request = f"{random.getrandbits(128):032x}"
     w.trigger(f'forks @{request} "0000 plain-b" export 0 "pruned-export"')
-    asked = log.wait(rf"replay: forks replays\\0000 plain-b\.imprec: refused: .*"
-                     rf"\[request={request}\]", ACK_S)
+    # recr_manage's refusal alone, which comes after the lock; the queue's own ("file worker
+    # unavailable") takes none
+    asked = log.wait(rf"replay: forks replays\\0000 plain-b\.imprec: refused: maintenance skipped: "
+                     rf"cannot write replays\\0000 plain-b\.imprec \(2\) \[request={request}\]",
+                     ACK_S)
     locks = sorted(p.name for p in rd.glob("*.lock")
                    if p.name in ("0000 plain-b.imprec.lock", "0000 older.imprec.lock",
                                  "pruned-export.imprec.lock"))
