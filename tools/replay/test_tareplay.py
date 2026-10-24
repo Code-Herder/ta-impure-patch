@@ -1655,8 +1655,9 @@ class LossyCells(unittest.TestCase):
 
 
 class Occupancy(unittest.TestCase):
-    """tarec.occupancy on a 6 x 4 grid: the multiplayer rule as the owner decided it, and the
-    contest-aware one a skirmish recording that holds its cells takes after a seek."""
+    """tarec.occupancy on a 6 x 4 grid: THE OCCUPANCY RULE, the one rule wherever a playing's
+    grid is the engine's (a multiplayer segment, and a skirmish segment that holds its cells after
+    a seek)."""
 
     CB = tarec.REC_CELL_BYTES
 
@@ -1685,35 +1686,41 @@ class Occupancy(unittest.TestCase):
         self.assertEqual(tarec.occupancy(a, b), [])
         self.assertEqual(a.grid, b.grid)
 
-    def test_multiplayer_rule_is_unchanged(self):
-        # no stamp bound and no contest: a unit at the grid's last column must still be named
-        a, b = self.worlds({1: self.unit(5, 1)}, {})
-        self.assertEqual(len(tarec.occupancy(a, b)), 1)
-        a, b = self.worlds({1: self.unit(1, 1), 2: self.unit(1, 1, state=1 << 27 | 1)},
-                           {(1, 1): (1, 0)})
-        self.assertEqual(len(tarec.occupancy(a, b)), 1)
+    def test_overlap_names_the_holder(self):
+        # two layer-1 units overlapping at (2, 1), which names the holder: the contest's marks
+        # make it a state of the stamp's, and without them it is none (a contest unmarked)
+        units = {1: self.unit(1, 1, 2, 1, state=1 << 26 | 1),
+                 2: self.unit(2, 1, 2, 1, state=1 << 27 | 1)}
+        names = {(1, 1): (1, 0), (2, 1): (1, 0), (3, 1): (2, 0)}
+        a, b = self.worlds(units, names)
+        self.assertEqual(tarec.occupancy(a, b), [])
+        units = {1: self.unit(1, 1, 2, 1), 2: self.unit(2, 1, 2, 1)}
+        a, b = self.worlds(units, names)
+        out = tarec.occupancy(a, b)
+        self.assertEqual(len(out), 1, out)
+        self.assertIn("cell (2, 1) of mobile unit 2's footprint does not name it in slot A", out[0])
 
     def test_contest_the_stamp_bound(self):
         # parked: past the last column, past the last row, west of the first column
         a, b = self.worlds({1: self.unit(5, 1, 2), 2: self.unit(1, 3, 1, 2),
                             3: self.unit(-1, 0, 2)}, {})
-        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
+        self.assertEqual(tarec.occupancy(a, b), [])
         # the last column itself is stamped (fix_last_cell)
         a, b = self.worlds({1: self.unit(5, 1)}, {})
-        self.assertEqual(len(tarec.occupancy(a, b, contest=True)), 1)
+        self.assertEqual(len(tarec.occupancy(a, b)), 1)
         # a carried unit, layer 0, holds no cell
         a, b = self.worlds({1: self.unit(1, 1, state=0)}, {})
-        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
+        self.assertEqual(tarec.occupancy(a, b), [])
 
     def test_contest_a_loser_under_the_holder(self):
         units = {1: self.unit(1, 1, 2, 1, state=1 << 26 | 1), 2: self.unit(2, 1, state=1 << 27 | 1)}
         a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
-        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
+        self.assertEqual(tarec.occupancy(a, b), [])
 
     def test_contest_a_holder_without_its_mark_fails(self):
         units = {1: self.unit(1, 1, 2, 1), 2: self.unit(2, 1, state=1 << 27 | 1)}
         a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
-        out = tarec.occupancy(a, b, contest=True)
+        out = tarec.occupancy(a, b)
         self.assertEqual(len(out), 1, out)
         self.assertIn("without the holder's mark", out[0])
 
@@ -1721,7 +1728,7 @@ class Occupancy(unittest.TestCase):
         # ground unit 2 lost nothing in slot A; an aircraft overhead fills slot B
         units = {1: self.unit(2, 1, state=1 << 26 | 2), 2: self.unit(2, 1, state=1 << 27 | 1)}
         a, b = self.worlds(units, {(2, 1): (0, 1)})
-        out = tarec.occupancy(a, b, contest=True)
+        out = tarec.occupancy(a, b)
         self.assertEqual(len(out), 1, out)
         self.assertIn("does not name it in slot A", out[0])
 
@@ -1729,40 +1736,40 @@ class Occupancy(unittest.TestCase):
         structure = tarec.STRUCTURE | 1 << 26 | 2
         units = {1: self.unit(1, 1, 2, 1, state=structure), 2: self.unit(2, 1, state=1 << 27 | 1)}
         a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
-        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
+        self.assertEqual(tarec.occupancy(a, b), [])
         # a layer-2 unit never contests slot A
         units[2] = self.unit(2, 1, state=1 << 27 | 2)
         a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
-        self.assertEqual(len(tarec.occupancy(a, b, contest=True)), 1)
+        self.assertEqual(len(tarec.occupancy(a, b)), 1)
 
     def test_contest_a_structure_named_in_slot_b_fails(self):
         a, b = self.worlds({1: self.unit(1, 1, state=tarec.STRUCTURE | 1)}, {(1, 1): (0, 1)})
-        out = tarec.occupancy(a, b, contest=True)
+        out = tarec.occupancy(a, b)
         self.assertTrue(any("names structure 1 in slot B" in line for line in out), out)
 
     def test_contest_the_layer_s_slot(self):
         # layer 1 filed in slot B, and layer 2 in slot A
         a, b = self.worlds({1: self.unit(1, 1)}, {(1, 1): (0, 1)})
-        out = tarec.occupancy(a, b, contest=True)
+        out = tarec.occupancy(a, b)
         self.assertTrue(any("does not name it in slot A" in line for line in out), out)
         self.assertTrue(any("in slot B, a unit of layer 1" in line for line in out), out)
         a, b = self.worlds({1: self.unit(1, 1, state=2)}, {(1, 1): (1, 0)})
-        out = tarec.occupancy(a, b, contest=True)
+        out = tarec.occupancy(a, b)
         self.assertTrue(any("does not name it in slot B" in line for line in out), out)
         a, b = self.worlds({1: self.unit(1, 1, state=2)}, {(1, 1): (0, 1)})
-        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
+        self.assertEqual(tarec.occupancy(a, b), [])
 
     def test_contest_a_unit_not_marked_the_loser_fails(self):
         units = {1: self.unit(1, 1, 2, 1), 2: self.unit(2, 1)}
         a, b = self.worlds(units, {(1, 1): (1, 0), (2, 1): (1, 0)})
-        out = tarec.occupancy(a, b, contest=True)
+        out = tarec.occupancy(a, b)
         self.assertEqual(len(out), 1, out)
         self.assertIn("mobile unit 2's footprint does not name it in slot A", out[0])
 
     def test_contest_a_cell_naming_a_unit_elsewhere_fails(self):
         units = {1: self.unit(1, 1), 2: self.unit(3, 1, state=1 << 27 | 1)}
         a, b = self.worlds(units, {(1, 1): (1, 0), (3, 1): (1, 0)})
-        out = tarec.occupancy(a, b, contest=True)
+        out = tarec.occupancy(a, b)
         self.assertTrue(any("names slot 1, outside its footprint" in line for line in out), out)
         self.assertTrue(any("mobile unit 2's footprint" in line for line in out), out)
 
@@ -1770,7 +1777,7 @@ class Occupancy(unittest.TestCase):
         a, b = self.worlds({1: self.unit(1, 1)}, {(1, 1): (1, 0)})
         struct.pack_into("<I", b.units[1], tarec.U_STATE, 1 << 26 | 1)
         struct.pack_into("<I", a.units[1], tarec.U_STATE, 1 << 27 | 1)
-        self.assertEqual(tarec.occupancy(a, b, contest=True), [])
+        self.assertEqual(tarec.occupancy(a, b), [])
         self.assertEqual(a.units[1], b.units[1])
 
 

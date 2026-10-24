@@ -419,11 +419,12 @@ static int s_pause_taken;           /* the pause bit is set by THE PAUSE AT T or
 enum { LHOLD_OFF, LHOLD_ARMED, LHOLD_STEP, LHOLD_DONE };
 static struct { int state; unsigned g0; } s_lhold;
 static int s_mp_arena_in;           /* allocator's block-ownership boundary */
-static int s_engine_cells;          /* the grid's unit slots and yard bits are the engine's:
-                                       a multiplayer segment, or s_cells_held (tagpu_puppet_begin) */
+static int s_engine_cells;          /* the grid's unit slots and yard bits are the engine's, and
+                                       the marks are too: a multiplayer segment, or s_cells_held
+                                       (tagpu_puppet_begin) */
 static int s_cells_held;            /* a skirmish segment that holds its cells (recr_holds_cells):
-                                       the marks are the engine's too, and a takeover writes the
-                                       recording's cells (THE UNIT SLOTS AND THE YARD BIT) */
+                                       a takeover writes the recording's cells (THE UNIT SLOTS AND
+                                       THE YARD BIT) */
 enum { MP_ARENA_OFF, MP_ARENA_ARMED, MP_ARENA_WORKING, MP_ARENA_READY, MP_ARENA_FAILED };
 static struct { RecMpRoster roster; volatile LONG state; } s_mp_arena;
 #define MP_CREATE 29                /* a create's 28 argument bytes, then 1 once it returned     */
@@ -1621,7 +1622,7 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
    (17), and the create's 28-31 */
 #define U_ENGINE_BITS  0xF003170Fu
 /* +0x110 bits 26 and 27, the contest's marks: the holder's and the loser's (THE FOOTPRINT WRITERS,
-   tagpu_puppet.c). The footprint writers' alone where they write the cells (s_cells_held) */
+   tagpu_puppet.c). The footprint writers' alone where they write the cells (s_engine_cells) */
 #define U_MARKS        0x0C000000u
 #define NOTES_MAX      32           /* the log lines a level's anomalies may take                 */
 #define NOTES_PER_SITE 3            /* ... and one call site's: an anomaly that repeats every step
@@ -2105,7 +2106,7 @@ static void unit_put(const Lv* L, unsigned slot, const uint32_t* img)
     char* mover = *(char**)u;           /* the create made it for a type with one (def +0x22F) */
     float was, now;
     memcpy(&was, u + U_BUILT, 4);
-    put_masked(u, img, s_cells_held ? s_raw1h : s_raw1, 0, REC_UNIT_BYTES);
+    put_masked(u, img, s_engine_cells ? s_raw1h : s_raw1, 0, REC_UNIT_BYTES);
     memcpy(&now, u + U_BUILT, 4);
     if (s_mp.on && build_finished(was) != build_finished(now)) {
         char* model;
@@ -2456,8 +2457,8 @@ static void units_put(const Lv* L, const RecWorld* W)
    laid out for, and the footprint strictly inside the grid, as 0x47D970 tests it
    (0x47D991..0x47D9D8, 16-bit sums compared signed). The re-claim has no bound of its own and
    walks those cells. The contest it runs marks this unit and the incumbents with +0x110 bits 26
-   and 27, which states_put then writes as recorded -- but on a segment that holds its cells, where
-   the marks are the footprint writers' (U_MARKS).
+   and 27, which states_put then writes as recorded -- except where the cells are the engine's:
+   there the marks are the footprint writers' (U_MARKS).
    THE ORDER, the invariant this rests on: a yard goes in where the engine changed it, before the
    creates that came after it and after those that came before. The structure's re-claim releases
    a yard cell under the open mask (0x47C8AE..0x47C8B7), and YARD_OPEN re-claims for the structure
@@ -2671,12 +2672,12 @@ static int ev_yard(const Lv* L, const RecWorld* W, unsigned i)
 
 /* +0x110 as recorded, less the bits the engine functions own, for every unit once the placement
    and the yards are done: their contests mark bits 26 and 27 on incumbents too (0x47C828..0x47C89C).
-   On a segment that holds its cells the marks are those contests' own (U_MARKS): the grid they
-   mark is the engine's there, and a recorded mark beside it would name a contest the host's grid
-   never held. */
+   On a level whose cells are the engine's (s_engine_cells) the marks are those contests' own
+   (U_MARKS): the grid they mark is the engine's there, and a recorded mark beside it would name a
+   contest the host's grid never held. */
 static void states_put(const Lv* L, const RecWorld* W)
 {
-    const uint32_t* m = s_cells_held ? s_stateh : s_state;
+    const uint32_t* m = s_engine_cells ? s_stateh : s_state;
     unsigned slot;
     for (slot = 1; slot < L->nslots; slot++) {
         const uint32_t* img = W->unit + (size_t)slot * REC_UNIT_DWORDS;
@@ -3740,8 +3741,10 @@ static int ev_spray(const Lv* L, const unsigned char* b, unsigned len)
    skirmish segment that holds its cells (s_cells_held, RECL_CELLS), whose stream carries them
    exact only at a refresh (tagpu_reclossy.c): the stamp, the clear and the re-claim write them
    for the placements, creates, deaths and yard changes the images make, at the recorded
-   positions, and decide a contest by the recording machine's rule (tagpu_puppet.c, THE
-   FOOTPRINT WRITERS, THE CONTEST'S RULE). A takeover of such a segment, at a refresh, writes the
+   positions, and decide a contest by the recording machine's rule on a skirmish segment and by
+   the engine's own on a multiplayer one, where every puppet seat is type 3 and the newcomer takes
+   the cell (tagpu_puppet.c, THE FOOTPRINT WRITERS, THE CONTEST'S RULE). The contests' marks are
+   theirs on both (U_MARKS). A takeover of a segment that holds its cells, at a refresh, writes the
    recording's slots, yard bits and marks once and refreshes the passability over them, so the
    engine plays on from the recording machine's grid (sk_features, tk_cells). On a skirmish
    recording's segment that does not hold them they come from the images alone: every write the
@@ -7976,22 +7979,23 @@ static int tk_open(unsigned T, char* why, unsigned cap)
     f = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_EXISTING,
                     FILE_ATTRIBUTE_NORMAL, NULL);
     if (f == INVALID_HANDLE_VALUE) {
-        recfile_unlock(&lock);
+        DWORD error = GetLastError();          /* the open's, before the release makes calls */
+        recfile_unlock(&lock, path);
         snprintf(why, cap, "the recording cannot be written (%lu): another program may have it "
-                 "open, or it is read-only", GetLastError());
+                 "open, or it is read-only", error);
         return 0;
     }
     /* the append point is found in the file the playing reads, so the handle must be that file,
        not one put at its path since */
     if (!recr_same_file(s_rd, f)) {
         CloseHandle(f);
-        recfile_unlock(&lock);
+        recfile_unlock(&lock, path);
         snprintf(why, cap, "%s is no longer the file this level plays", path);
         return 0;
     }
     if (!recr_append_point(s_rd, T - 1, &a, s_used, s_nused, w2, sizeof w2)) {
         CloseHandle(f);
-        recfile_unlock(&lock);
+        recfile_unlock(&lock, path);
         snprintf(why, cap, "%s", w2);
         return 0;
     }
@@ -8163,7 +8167,7 @@ static void tk_end(unsigned T, unsigned P, unsigned D, unsigned ms, unsigned rea
                  parent, T);
     } else {
         CloseHandle(s_tk.fork.file);
-        recfile_unlock(&s_tk.fork.lock);
+        recfile_unlock(&s_tk.fork.lock, s_tk.fork.path);
         s_tk.fork.file = NULL;
         tagpu_logf("replay: %s: timeline %u is not recorded: the recorder refused the arm", s_name,
                    id);

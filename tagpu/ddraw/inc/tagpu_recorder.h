@@ -179,7 +179,7 @@ void tagpu_rec_exit(void);
    writer_main: one owner at each step, and each closes it on its own failure (tagpu_recorder.c,
    THE FORK'S HANDLE). */
 typedef struct RecFork {
-    HANDLE             lock;          /* its persistent file lock, held through the writer */
+    HANDLE             lock;          /* its path lock (tagpu_recfile.h), held through the writer */
     HANDLE             file;          /* NULL when none                                          */
     unsigned long long append_off;    /* where the fork's segment goes (recr_append_point)       */
     unsigned           id, parent, fork_at;

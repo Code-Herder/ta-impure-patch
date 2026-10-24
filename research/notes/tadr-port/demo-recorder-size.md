@@ -1345,9 +1345,11 @@ below): the recording carries each top-level footprint event's turn where a read
 and the acting attaches at their place, and the playing places every unit of an earlier turn
 before each footprint event, so a contest ends as it did on the recording machine. **What remains
 open**: a seek still makes its units in slot order, so after one the holder of a cell two units
-contest can differ until they move, which the occupancy rule accepts. A multiplayer recording is unchanged: its playing
-keeps the engine's slots already, its marks are still written from the recording, and its contest
-follows the puppet's type-3 rule (the owner has not decided the marks for it). Its takeover
+contest can differ until they move, which the occupancy rule accepts. A multiplayer recording holds no cells: its
+playing keeps the engine's slots and yard bits and, by the owner's decision of 2026-10-23, the
+footprint writers' marks, which it leaves out of every unit image write as here; its contests
+follow the puppet's type-3 rule, the engine's own, and its comparisons check the cells by the
+occupancy rule (the multiplayer slice note's *Cells' unit slots and the yard bit*). Its takeover
 timeline is a skirmish segment and holds its cells: the playing changes to the recording
 machine's rule where it crosses into one (`mp_follow`). MEASURED 2026-10-12 on a two-peer
 recording with reproducing trees taken over at 901 as player 1: timeline 1 played across its fork
