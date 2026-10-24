@@ -8512,11 +8512,29 @@ StopMoving or the like through `0x4B0940` with run-now 1 (`push 1` at `0x43DAD5`
 `0x43DB02`, `0x43DB0D`, `0x43DB18`; the calls at `0x43DAF2` and `0x43DB27`), and then the water
 state `0x43DB50` (`0x43DD65`), which starts setSFXoccupy through `0x4B0A70` with run-now 1
 (`0x43DBDD..0x43DBE8`). A run-now start runs the script's threads at once (`0x4B0B86..0x4B0BA6`:
-`0x4B0DA0(i, 0)` for i 0..7, then the pass at `0x4B0BA2`), every running thread of the unit among
-them [INFERRED: the loop's body is not mapped here] -- a
-TransportPickup or TransportDrop the order run started earlier in the turn (`0x406834`,
-`0x4069BF`) -- so the unit's COB can attach or drop (`0x4813A6`, `0x481422` -> `0x48AAC0`) or open
-a yard after its relink, and the reaper's death (`0x48AFD1`) comes after it too. The recorder keys
+`0x4B0DA0(i, 0)` for i 0..7, then the pass at `0x4B0BA2`), every runnable thread of the unit among
+them. The runner `0x4B0DA0(i, dt)` reads thread i's state (`+0x1C` of its 0xA4-byte record): high
+byte 2 is blocked -- on a wait-for-move while the piece's move flag (`+0x28` of its animation
+record) is set, on a wait-for-turn while its turn flag (`+0x10`) is, on a sleep until its counter,
+less `dt`, reaches 0 (`0x4B0DD1..0x4B0E37`) -- and high byte 1 runs (`0x4B0E3D`). The animation
+pass `0x4B1C00(dt)` clears those flags as each animation ends, and returns at once for `dt` 0 (`0x4B1C07`);
+DoScriptsNow `0x4B0D60` calls it after its threads (`0x4B0D75..0x4B0D88`). So a wait that ends in a
+unit's slice lets its thread run at the next pass of that unit's threads in the turn -- a run-now
+start such as the walk class's -- or else at the next slice (DISASSEMBLED). A TransportPickup or
+TransportDrop the order run started earlier (`0x406834`, `0x4069BF`, run-now 1 through `0x4B0A70`)
+blocks on its boom's waits, so the unit's COB can attach or drop (`0x4813A6`, `0x481422` ->
+`0x48AAC0`; the drop first asks `0x47DB70` at `0x481412`) or open a yard after its relink, and the
+reaper's death (`0x48AFD1`) comes after it too. A blocked unit makes the walk class's pass and
+the relink meet: when the relink finds the next cell taken (`0x47DB70` at `0x43D912`) it sets the
+mover's `+0x2E` bit 2 and clamps the position to its cell's edge (`0x43D917..0x43D9F7`); the walk
+class reads that bit as stopped (`0x43DA79`); the step the cell frees, the relink moves the unit
+into it and the walk class starts StartMoving. MEASURED 2026-10-24 with
+`scenarios/replay-transport-turn.gen.py`: hover transports blocked by scout cars attached their
+cargo in that pass in 6 of 40 combs. The attach `0x48AB70` calls no footprint writer (its calls:
+`0x47CB00`, `0x47CB40`, `0x4384A0`, `0x48C9B0`), and the stamp re-files its unit's bucket only on a
+change of it (`0x47CCDB`), so an attach commutes with its carrier's relink; a detach, which pushes
+the child at the front of its `+0x82` bucket (`0x48ACCC..0x48ACDC`), does not when that is the
+bucket the carrier has just entered. The recorder keys
 every footprint event made after the turn unit's own relink at the next slot, so a playing places
 that unit before it (`tagpu_recorder.c`, `turn_put`; `tagpu_recfmt.h`, *THE CONTEST ORDER*, step
 3b).

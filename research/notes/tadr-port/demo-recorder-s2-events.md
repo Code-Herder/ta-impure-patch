@@ -614,6 +614,11 @@ machine's order (`tagpu_recfmt.h`, *THE CONTEST ORDER*; [engine map](../exe-reve
   and a key stands before a footprint event or not at all; the writer and both readers refuse
   anything else. The recorder takes the turn at the slice stub (`tagpu_patches.c`, `unit_slice`),
   which every turn of the tick passes, and the phase after the units sets it to `0xFFFF`.
+  The slot after the turn's is MEASURED on two classes: a unit's death after its own relink
+  (`slice-walkers`, 2 events) and a transport's attach in its walk class's StartMoving pass
+  after its relink (`transport-turn`, 6 links keyed their carrier's slot + 1, 2026-10-24); both
+  groups' playings are EQUAL. For the attach the order is not observable: it commutes with
+  the carrier's relink (*the completeness note*'s 2026-10-23 row).
 - **`RK_EV_LINK {u32 child ID, u32 parent ID or 0, u8 the piece, u8 the layer, u16 0}`**: an attach
   or a detach `0x48AB70` that acts, written at its place from the observer at its entry. A
   playing makes it through `0x48AB70` there (`tagpu_replay.c`, `ev_link`), and the carry links'
