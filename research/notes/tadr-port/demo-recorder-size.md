@@ -1395,7 +1395,13 @@ whose turn a reader cannot infer, and `RK_EV_LINK`, 12 bytes, at every attach or
 outside a death ([the events note](demo-recorder-s2-events.md), §1.8e). A key is written for a create
 or a link made in a later turn than the step's last key, and for a death or a yard made in another
 turn than its own slot's (after the tick, above all); links follow transports, pads and every build finish.
-`recsize.py` reports both as *contest keys and links*.
+`recsize.py` reports both as *contest keys and links*. MEASURED 2026-10-23 on the replay
+gate's recordings: `battle` (3,990 GameTimes, at most 1,444 live units, deaths in nearly every step)
+holds 5 keys and no link, 20 bytes of bodies -- a death in its own turn needs no key; `slice-walkers`
+(4,680 GameTimes) 48 keys and 10 links, 312 bytes of bodies, about 1,100 keys and 230 links an hour
+of game time at 30 GameTimes a second; `carry-links` 10 keys and 4 links, `transport-pad` 5 and 3,
+`yard-lab` 4 and 2. Below 0.01 % of either recording's stream raw, so the packed share is not
+worth separating from the other records'.
 
 ## P1: the container, measured
 
