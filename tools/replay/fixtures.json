@@ -253,6 +253,16 @@
              [900, "run", ["tools/tacli", "order", "{instance}", "teleport", "pos", "4800", "3900", "--unit", "2", "--expect", "ARMLAB"]]],
    "end": 1500
   },
+  "stock-teleport": {
+   "load": "replay-teleport.json",
+   "dll": "stock",
+   "steps": [[300, "run", ["tools/tacli", "order", "{instance}", "teleport", "pos", "4800", "3800", "--unit", "2", "--expect", "ARMLAB"]],
+             [598, "apply", "replay-teleport-riders.json"],
+             [600, "run", ["tools/tacli", "order", "{instance}", "teleport", "pos", "4800", "3700", "--unit", "2", "--expect", "ARMLAB"]],
+             [898, "apply", "replay-teleport-riders.json"],
+             [900, "run", ["tools/tacli", "order", "{instance}", "teleport", "pos", "4800", "3900", "--unit", "2", "--expect", "ARMLAB"]]],
+   "end": 1500
+  },
   "randprobe": {
    "load": "replay-tenseat-load.json",
    "content": {"run": ["tools/randprobe_fixture.py", "{gamedir}"],

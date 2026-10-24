@@ -4381,16 +4381,7 @@ static void co_facts(const RecWorld* W)
 /* The step's events into the store, each body at a dword, and each footprint event's key by the
    readers' own rule (rec_turns_*), with the brackets as the reader keeps them; 1 copied. 0 when
    there is no room, or the rule refuses what the reader took: the step then plays in the old
-   order, counted and named once. */
-/* a step THE CONTEST ORDER cannot hold, which plays in the old order: counted, and noted once */
-static int co_refused(const Lv* L)
-{
-    if (!s_co.full++)
-        note("replay: GameTime %u: the step's events cannot be held for THE CONTEST ORDER: "
-             "played in the old order", L->now);
-    return 0;
-}
-
+   order (co_engage counts it). */
 static int co_take(const Lv* L, const RecWorld* W)
 {
     RecTurns t;
@@ -4465,7 +4456,7 @@ static int co_take(const Lv* L, const RecWorld* W)
     s_co.nplaced = 0;
     return 1;
 refused:
-    return co_refused(L);
+    return 0;
 }
 
 /* THE CONTEST ORDER for step W, on a skirmish segment that holds its cells: 1 when its store
@@ -4474,9 +4465,14 @@ refused:
    so the playing's counts say whether the order engaged at all. */
 static int co_engage(const Lv* L, const RecWorld* W)
 {
-    if (!(s_co.facts ? co_take(L, W) : co_refused(L))) return 0;
-    s_st.ordered++;
-    return 1;
+    if (s_co.facts && co_take(L, W)) {
+        s_st.ordered++;
+        return 1;
+    }
+    if (!s_co.full++)
+        note("replay: GameTime %u: the step's events cannot be held for THE CONTEST ORDER: "
+             "played in the old order", L->now);
+    return 0;
 }
 
 /* unit `s`, below the key of event `i`, placed at its turn: at the position its turn left it on
