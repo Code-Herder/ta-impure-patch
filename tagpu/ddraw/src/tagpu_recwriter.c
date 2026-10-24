@@ -1105,11 +1105,30 @@ static void snapshot(Writer* w)
    after world_reset(r, 0) and that iteration's tick_read; neither side applies a record of
    another segment, and both bound the index by the same pool and grid sizes (the headers' shape
    agrees across a chain). */
+/* The stream's records from `at` on: 1 when every RK_EV_TURN stands just before a footprint
+   event (tagpu_recfmt.h, THE CONTEST ORDER). The writer took the iteration by that rule; this asks
+   it of what the filter made of it, so a record the filter puts between a key and its event ends
+   the file here instead of in every reader. */
+static int keys_adjacent(const RecBytes* s, size_t at)
+{
+    int key = 0;
+    while (at + 4 <= s->n) {
+        unsigned short kind, len;
+        memcpy(&kind, s->p + at, 2);
+        memcpy(&len, s->p + at + 2, 2);
+        if (key && !rec_turn_follows(kind)) return 0;
+        key = kind == RK_EV_TURN;
+        at += (4u + len + 3) & ~3u;
+    }
+    return !key;
+}
+
 static void iteration_done(Writer* w)
 {
     int refresh = reclossy_is_refresh(w->iterations, w->tick, w->refresh_tick, w->refresh);
     int snap = refresh && w->tick - w->snap_tick >= SNAPSHOT_TICKS;
     RecLossyExact x;
+    size_t at;
     if (!w->wbase) {
         w->wbase = (unsigned char*)malloc((size_t)w->npool * REC_WRECK_BYTES);
         if (!w->wbase) { fail(w, "no memory for the snapshots' wreck base"); return; }
@@ -1123,6 +1142,7 @@ static void iteration_done(Writer* w)
     if (w->iter.oom) { fail(w, "no memory for an iteration"); return; }
     if (!w->stream.n) w->sfirst = w->tick;
     w->slast = w->tick;
+    at = w->stream.n;
     x.units = w->units;
     x.live = w->live;
     x.lists = w->lists;
@@ -1132,6 +1152,10 @@ static void iteration_done(Writer* w)
                  : !buf_put(&w->stream, w->iter.p, w->iter.n)) {
         fail(w, w->stream.oom ? "no memory for a stream block" : "the lossy filter refused an "
              "iteration the writer took");
+        return;
+    }
+    if (!keys_adjacent(&w->stream, at)) {
+        fail(w, "the lossy filter put a record between a contest key and its event");
         return;
     }
     if (w->ring->exact) buf_put(&w->exact, w->iter.p, w->iter.n);
@@ -1450,9 +1474,7 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
     if (len >= 2) memcpy(&id, b, 2);
     /* an RK_EV_TURN stands just before its footprint event (tagpu_recfmt.h, THE CONTEST ORDER):
        a key waiting meets no other record, an iteration's end among them */
-    if (w->turns.pending && kind != RK_EV_CREATE && kind != RK_EV_DEATH && kind != RK_EV_YARD &&
-        kind != RK_EV_LINK && kind != RK_EV_PLACE)
-        return 0;
+    if (w->turns.pending && !rec_turn_follows(kind)) return 0;
     /* the readers' events flag, by the same predicate (feature_record's INVARIANT); a record that
        sets it and is then refused abandons the file, so setting it first changes nothing */
     if (rec_section_of(kind) == RCS_EVENTS) w->evented = 1;

@@ -81,8 +81,9 @@
    A REFRESH'S WRITES go where a reader takes them as images, before the iteration's events: the
    deltas in the run of unit records the iteration begins with, in slot order among the input's
    (the unit frame lists an iteration's deltas by ascending slot), and the cells and the lists
-   before the iteration's first event or click (an RK_CELLS after an RCS_EVENTS record is the
-   tick's input, not an image, to every reader).
+   before the iteration's first event, contest record or click (an RK_CELLS after an RCS_EVENTS
+   record is the tick's input, not an image, to every reader, and an RK_EV_TURN stands just before
+   its footprint event, so nothing may come between the two: tagpu_recfmt.h, rec_contest_kind).
 
    THE SPRAY SESSIONS (RECL_SPRAYS). A nano spray's point is the piece position QueryNanoPiece
    0x43E400 gave, which the game shows and a playback host cannot make (its COB pose is not the
@@ -828,7 +829,8 @@ int reclossy_iteration(RecLossy* L, const unsigned char* recs, size_t n, int ref
             units = 0;
             refresh_units(L, out, &ucur, L->nslots, refresh, x);
         }
-        if (imaged && (rec_section_of(kind) == RCS_EVENTS || kind == RK_CLICK)) {
+        if (imaged && (rec_section_of(kind) == RCS_EVENTS || rec_contest_kind(kind) ||
+                       kind == RK_CLICK)) {
             imaged = 0;
             refresh_cells(L, out, refresh, x);
             if (!refresh_lists(L, out, refresh, x)) { ok = 0; break; }
