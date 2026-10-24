@@ -21,8 +21,8 @@ FIXTURE is a name in tools/replay/fixtures.json, or `all`. For each fixture four
 drawn (one more for each round trip a broad entry's `trips` asks for beyond three), each T = 1 (mod 30)
 -- the radar pass's step, where a seek's contact bits in any view but the recording's own, which
 its own pass makes, agree at once unless something the pass read changed later in its step (O14);
-a seek or a skirmish takeover in the recording's viewed player takes them from the recording and
-agrees at every T -- between 301 and 0.8 x its end, from
+a playing, a seek or a skirmish takeover in the recording's viewed player takes them from the
+recording and agrees at every T -- between 301 and 0.8 x its end, from
 a generator seeded by the fixture's name and HEAD, and
 printed: T1 the first, T2..T4 the round trips, Tlast = T4.
 An entry's `last_min` requires Tlast to reach a named completion checkpoint; it keeps late
@@ -965,13 +965,38 @@ def hud_state(w, log):
     return got
 
 
-def wait_dumps(log, names, running=False):
+# The lines that end a playing (tagpu_replay.c, iteration_read and sk_back): past one the level
+# runs on with its units stopped, so a stall never comes, and the DLL answers no GameTime armed
+# beyond it.
+PLAYING_STOPPED = (r"replay: .* (played to its end at|cannot be read on from|cannot be read back "
+                   r"to) GameTime \d+")
+
+
+def wait_playing(log, rx, what, start):
+    """The first line from `start` on that matches `rx`, on a playing that runs toward it, or the
+    playing's end before it: the line that ends the playing is the bound of a wait for a GameTime
+    armed on it. A recording that ends first could not run the check; one that cannot be read on
+    fails it."""
+    got = log.wait_running(rf"(?:{rx})|{PLAYING_STOPPED}", start)
+    if re.search(rx, got):
+        return got
+    line = got[got.index("replay:"):].strip()
+    if "played to its end" in got:
+        raise CouldNotRun(f"{what}: the recording ended before it: {line}")
+    raise Failed(f"{what}: the playing stopped before it: {line}")
+
+
+def wait_dumps(log, names, running=False, playing=None):
     """Every named dump taken, or the first that will not be: on a level that runs toward them
-    (`running`), bounded by a stall alone; else already taken, each line a frame's answer."""
+    (`running`), bounded by a stall alone, and on a playing begun at the log's line `playing` by
+    its end as well (wait_playing); else already taken, each line a frame's answer."""
     for name in names:
         rx = (rf"recorder: dump {name} (at GameTime|for GameTime \d+ not taken|refused)"
               rf"|recorder: dump {name}: ")
-        got = log.wait_running(rx) if running else log.wait(rx, ACK_S)
+        if running and playing is not None:
+            got = wait_playing(log, rx, f"dump {name}", playing)
+        else:
+            got = log.wait_running(rx) if running else log.wait(rx, ACK_S)
         if not got or "at GameTime" not in got or "not taken" in got:
             raise CouldNotRun(f"dump {name}: {got.strip() if got else f'not taken in {ACK_S} s'}")
 
@@ -1248,16 +1273,18 @@ def play(w, fx, rec, out, proc, arms, dumps, roundtrips=()):
     for name, T in roundtrips:
         arm(w, log, f"roundtrip {name} at {T}", rf"round trip {name} armed for GameTime {T}",
             rf"round trip {name}( at {T})? refused", f"roundtrip {name} at {T}")
+    n = len(log.lines)
     turbo_engage(w, log)
     if log.held:
         resume(w, log)
     lines = {}
     for name, T in roundtrips:
-        got = log.wait_running(rf"round trip {name} at {T}(: | not run)")
+        got = wait_playing(log, rf"round trip {name} at {T}(: | not run)",
+                           f"round trip {name} at {T}", n)
         if " not run" in got or "seek refused" in got:
             raise CouldNotRun(f"round trip {name}: {got.strip()}")
         lines[name] = got[got.index("replay:"):].strip()
-    wait_dumps(log, dumps, running=True)
+    wait_dumps(log, dumps, running=True, playing=n)
     if not dumps:
         got = log.wait_running(r"replay: .* (played to its end|cannot be read on|not playing)")
         if "played to its end" not in got:
@@ -1479,9 +1506,10 @@ def takeover_f(w, fx, out):
         raise CouldNotRun(f"replay seek {T - TAKEOVER_BACK} --timeline {tl}: {last(o)}")
     held_start(w, log)
     arm_dump(w, log, f"f{at}", at)
+    n = len(log.lines)
     turbo_engage(w, log)
     resume(w, log)
-    wait_dumps(log, [f"f{at}"], running=True)
+    wait_dumps(log, [f"f{at}"], running=True, playing=n)
     if fx["cover"]:
         cover_ask(w, log, "F")
     w.collect(out)
@@ -2131,7 +2159,7 @@ def watch_lane(w, fx, rec, out, T):
     res.append(watch_hud(w, log, rec))
     arm_dump(w, log, f"w{T}", T)
     hud(w, "click", "play")
-    wait_dumps(log, [f"w{T}"], running=True)
+    wait_dumps(log, [f"w{T}"], running=True, playing=n)
     if peek(w, PAUSE_WORD) & 1:
         raise Failed("the HUD's resume: the pause word still set")
     res.append(("W: the HUD's pause, seek and resume", PASS, got[got.index("replay:"):].strip()))
@@ -2899,9 +2927,10 @@ def forks_steps(w, fx, out, results):
     plays_checked("delete")
     log = start_play(5, base - 120, "the chain's playing")
     arm_dump(w, log, "chain5", T5 + 300)
+    n = len(log.lines)
     turbo_engage(w, log)
     resume(w, log)
-    wait_dumps(log, ["chain5"], running=True)
+    wait_dumps(log, ["chain5"], running=True, playing=n)
     rec, dump = copies("chain5", source, w.gamedir / "replays" / "dump-chain5.bin")
     results.later(check_or_fail, "forks: descendant across two boundaries", "compare", "--puppet",
                   "--seek", rec, dump, "--timeline", 5)
@@ -2927,9 +2956,10 @@ def forks_steps(w, fx, out, results):
     source = exported
     log = start_play(5, base - 120, "the export's playing")
     arm_dump(w, log, "export5", T5 + 300)
+    n = len(log.lines)
     turbo_engage(w, log)
     resume(w, log)
-    wait_dumps(log, ["export5"], running=True)
+    wait_dumps(log, ["export5"], running=True, playing=n)
     dump, = copies("export5", w.gamedir / "replays" / "dump-export5.bin")
     results.later(check_or_fail, "forks: exported chain playback", "compare", "--puppet",
                   "--seek", exported, dump, "--timeline", 5)
@@ -3254,7 +3284,7 @@ def checks(fx):
     for proc in ("P", "R", "Q"):
         if ran.get(proc) == "ran":
             res.later(yard_check, proc, out / proc / "tagpu.log")
-            res.later(contest_check, proc, out / proc / "tagpu.log")
+            res.later(contest_check, proc, out / proc / "tagpu.log", rec)
     for proc in ("R", "Q"):
         if ran.get(proc) == "ran":
             # Q's one seek is a fresh process's: a seek asked for before a playing's first step
@@ -3430,38 +3460,55 @@ def unordered_check(proc, log_path):
     return unordered_verdict(label, text)
 
 
-CONTEST_PLAY = re.compile(r"replay: .*?: \d+ units placed at their turn, (\d+) steps whose events "
-                          r"the contest order could not hold \(THE CONTEST ORDER\); \d+ Teleport "
-                          r"moves played, (\d+) refused")
-LINKS_PLAY = re.compile(r"\d+ carry links made, (\d+) refused")
+CONTEST_PLAY = re.compile(r"replay: .*?: (\d+) steps played in the contest order, \d+ units placed "
+                          r"at their turn, (\d+) steps whose events the contest order could not "
+                          r"hold \(THE CONTEST ORDER\); \d+ Teleport moves played, (\d+) refused")
+# the same counts_log's first line, which comes just before its contest line
+PLAYED_STEPS = re.compile(r"replay: .* GameTime \d+: (\d+) iterations applied .*?\d+ carry links "
+                          r"made, (\d+) refused")
 
 
-def contest_verdict(label, text):
+def contest_verdict(label, text, held):
     """[(label, verdict, detail)]: the playing's side of THE CONTEST ORDER (tagpu_replay.c), from
-    every playing's lines in a lane's log: a step whose events the order could not hold (its store
+    every playing's counts in a lane's log: a step whose events the order could not hold (its store
     out of room, or its own pass refusing what the reader took), a Teleport move refused, or a
     carry link refused, fails -- each leaves a contest the recording machine decided to the
-    host's order; could not run when the log holds no contest line."""
-    rows = [tuple(map(int, m.groups())) for m in CONTEST_PLAY.finditer(text)]
+    host's order. Could not run: no contest line; a contest line without its counts line before
+    it, whose carry links no verdict would then read; or, on a recording whose playing holds its
+    cells (`held`: a skirmish one with RECL_CELLS), a playing that applied steps and played none
+    in the order, which never engaged it."""
+    rows, played = list(CONTEST_PLAY.finditer(text)), list(PLAYED_STEPS.finditer(text))
     if not rows:
         return [(label, UNRUN, "no playing's line with the contest order's counts")]
-    links = sum(int(m.group(1)) for m in LINKS_PLAY.finditer(text))
-    full, unmoved = sum(r[0] for r in rows), sum(r[1] for r in rows)
+    if len(played) != len(rows):
+        return [(label, UNRUN, f"{len(rows)} contest lines and {len(played)} counts lines with "
+                               f"the carry links: not one each")]
+    ordered = sum(int(m.group(1)) for m in rows)
+    full = sum(int(m.group(2)) for m in rows)
+    unmoved = sum(int(m.group(3)) for m in rows)
+    links = sum(int(m.group(2)) for m in played)
+    if held:
+        idle = [int(p.group(1)) for p, r in zip(played, rows)
+                if int(p.group(1)) and not int(r.group(1)) and not int(r.group(2))]
+        if idle:
+            return [(label, UNRUN, f"a playing applied {idle[0]} steps and played none in the "
+                                   f"contest order on a recording that holds its cells")]
     bad = [f"{n} {what}" for n, what in ((full, "steps the contest order could not hold"),
                                          (unmoved, "Teleport moves refused"),
                                          (links, "carry links refused")) if n]
     return [(label, FAIL if bad else PASS,
-             "; ".join(bad) if bad else f"every step held, no move or link refused, "
-                                        f"{len(rows)} playings")]
+             "; ".join(bad) if bad else f"{ordered} steps played in the order, every step held, "
+                                        f"no move or link refused, {len(rows)} playings")]
 
 
-def contest_check(proc, log_path):
+def contest_check(proc, log_path, rec):
     label = f"{proc}: the contest order played"
     try:
         text = Path(log_path).read_text(errors="replace")
-    except OSError as e:
+        h = tarec.header_only(rec)
+    except (OSError, tarec.Unreadable) as e:
         return [(label, UNRUN, str(e))]
-    return contest_verdict(label, text)
+    return contest_verdict(label, text, "multiplayer" not in h and tarec.holds_cells(h))
 
 
 def yard_check(proc, log_path):

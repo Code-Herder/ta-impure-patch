@@ -1191,9 +1191,7 @@ static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned l
     if (r->pend.next < r->pend.total && kind != RK_ORDERS) return 0;
     if (*events == IT_SESSIONS && kind != RK_SPRAY_SESSION) return 0;
     /* an RK_EV_TURN stands just before its footprint event (tagpu_recfmt.h, THE CONTEST ORDER) */
-    if (r->turns.pending && kind != RK_EV_CREATE && kind != RK_EV_DEATH && kind != RK_EV_YARD &&
-        kind != RK_EV_LINK && kind != RK_EV_PLACE)
-        return 0;
+    if (r->turns.pending && !rec_turn_follows(kind)) return 0;
     if (len >= 2) memcpy(&id, b, 2);
     /* the contest order's records stand among the events, in RCS_OTHER: they set no events flag,
        by the writer's rule, rec_section_of */

@@ -269,6 +269,7 @@ to compare complete C/Python application delivery through reader world seek.
 These are native capture/reader tests. Saved multiplayer playback is measured with
 `python3 tools/replay/recmp_play_test.py FILE --out <directory> [--at T ...] [--to-end]
 [--perspective N] [--content ARCHIVE ...]`, which plays FILE on one tareplay worker at speed 20,
+launched held at its first step until every dump and round trip is armed (tareplay's launch hold),
 dumps at each T and exits through the game so the playing's counts are logged (`--content`
 copies an archive the recording was made with, such as the recording run's `zzrepro.ufo`, into
 the worker for the playing and removes it after). The same script seeks:

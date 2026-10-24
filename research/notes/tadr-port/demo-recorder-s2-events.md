@@ -608,11 +608,14 @@ machine's order (`tagpu_recfmt.h`, *THE CONTEST ORDER*; [engine map](../exe-reve
   `0xFFFF` after the tick -- that the next top-level footprint event (a create, a death, a live
   unit's yard, a link, a move) was made in, or the slot after the turn's when it was made after
   that turn's unit relinked (its walk class's run-now COB pass, its water state's start, its
-  death), written just before that event and only when its key differs
-  from the one a reader infers: a death's or a yard's own slot, or the step's last key, whichever
-  is later, and a create's or a link's the step's last key. The keys never go back within a step,
-  and a key stands before a footprint event or not at all; the writer and both readers refuse
-  anything else. The recorder takes the turn at the slice stub (`tagpu_patches.c`, `unit_slice`),
+  death) -- `0xFFFF` when that turn was the last slot's -- written just before that event and only
+  when its key differs from the one a reader infers: a death's or a yard's own slot, or the step's
+  last key, whichever is later, and a create's, a link's or a move's the step's last key. The keys
+  never go back within a step, and a key stands just before a footprint event or not at all; the
+  writer and both readers refuse anything else. Nothing the lossy filter adds stands between them
+  either: a refresh's images go before the step's first key, link or move as before its first event
+  (`tagpu_reclossy.c`, *A REFRESH'S WRITES*), and the writer ends the file at a stream block where
+  a record stands between a key and its event. The recorder takes the turn at the slice stub (`tagpu_patches.c`, `unit_slice`),
   which every turn of the tick passes, and the phase after the units sets it to `0xFFFF`.
   The slot after the turn's is MEASURED on two classes: a unit's death after its own relink
   (`slice-walkers`, 2 events) and a transport's attach in its walk class's StartMoving pass

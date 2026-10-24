@@ -2804,8 +2804,9 @@ def puppet_view(w, radar=False):
     """A world less what a puppet host keeps as its own (demo-recorder-s2-host.md §1.1, §2.3): the
     contact bits +0x110 8-10 and 12, which its radar pass computes for its own view (D1) -- bit 12
     only, with `radar`, when the host views the player the recording viewed, whose radar picture
-    it computes from the same inputs, and loop 4 of the pass, which sets bit 12, runs only for a
-    type 1 or 2 owner; and the controllers and the controlled and viewed players, which are the
+    a playing takes from the recording after every step, and a seek after its pass (tagpu_replay.c,
+    contacts_put, R14b), and loop 4 of the pass, which sets bit 12, runs only for a type 1 or 2
+    owner; and the controllers and the controlled and viewed players, which are the
     host's seating. Every recorded record is compared: the viewer's is record 10, which neither a
     recording nor a dump carries."""
     mask = 0x1000 if radar else 0x1700

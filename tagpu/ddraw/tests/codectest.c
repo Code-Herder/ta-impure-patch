@@ -5047,14 +5047,33 @@ static int outcomes_lossy_cells(void)
     ok &= expect("  writes the cells that differ, a run of a row, before the event",
                  n == 3 && k[1] == RK_CELLS && get16(out.p + 12) == 1 && get16(out.p + 14) == 0 &&
                  get16(out.p + 16) == 3 && k[2] == RK_EV_STATE, 1);
+    /* a held image, then a refresh whose first event is a contest key: the key stands just before
+       its footprint event (tagpu_recfmt.h, THE CONTEST ORDER), so the refresh's cells go before
+       the key, never between it and its event */
+    memcpy(run, e.grid + (size_t)GW * CB, CB);
+    run[CB - 1] ^= 0x02;
+    lo_tick(&in, 6);
+    lo_cells(&in, 0, 1, run, 1);
+    lo_event(&in);
+    ok &= expect("lossy cells: a held image before a keyed refresh", lo_step(L, &e, &in, 0, &out), 1);
+    {
+        unsigned char key[4] = { 1, 0, 0, 0 };
+        lo_tick(&in, 7);
+        tlv_put(&in, RK_EV_TURN, key, 4);
+        lo_event(&in);
+    }
+    ok &= expect("lossy cells: the keyed refresh", lo_step(L, &e, &in, 1, &out), 1);
+    n = lo_kinds(&out, k, s, 16);
+    ok &= expect("  writes the cell before the key, the key just before its event",
+                 n == 4 && k[1] == RK_CELLS && k[2] == RK_EV_TURN && k[3] == RK_EV_STATE, 1);
     {
         RecLossyExact x = { e.units, e.live, e.lists, e.grid };
         ok &= expect("  the lossy grid is the copy's", reclossy_equal(L, &x), 1);
-        lo_tick(&in, 6);
+        lo_tick(&in, 8);
         lo_cells(&in, 3, 1, row[1], 2);
         ok &= expect("lossy cells: refused: a run past the row",
                      reclossy_iteration(L, in.p, in.n, 0, 0, &x, &out), 0);
-        lo_tick(&in, 6);
+        lo_tick(&in, 8);
         lo_cells(&in, 0, GH, row[1], 1);
         ok &= expect("lossy cells: refused: a row past the grid",
                      reclossy_iteration(L, in.p, in.n, 0, 0, &x, &out), 0);

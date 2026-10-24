@@ -205,6 +205,7 @@ static struct {
     unsigned steps, late, made, refused, missing, lingering, other, bad_ids, links, unlinked;
     unsigned obuilt, ofreed, orefused, yards, yrefused, grefused;
     unsigned ychecked, ydiffer, yunchecked;         /* the yards a create opened (yard_check)   */
+    unsigned ordered;                               /* steps played in THE CONTEST ORDER       */
     unsigned turned;                                /* units placed at their turn (THE CONTEST
                                                        ORDER)                                  */
     unsigned moved, unmoved;                        /* Teleport's moves played and refused
@@ -1493,9 +1494,10 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
    the slot, the owner); the carry links and the attach piece (0x48AB70's); the state byte
    (0x48B090's); the yard's bit, +0x10F bit 2 (YARD_OPEN's); the create's +0x110 bits 28-31; and
    the contact bits 8-10 and 12, which the host's radar pass computes for its own view (D1),
-   except that a seek, a skirmish recording's takeover included, puts the recorded ones back
-   through rw_contacts: bits 8-10 when the host shows the recording's own viewed player, as a
-   change to that view does (sight_change), all four on return-to-now (R14b). The harness
+   except that the recorded ones are put back through rw_contacts: bits 8-10 when the host shows
+   the recording's own viewed player, after every step (THE RECORDED VIEW'S CONTACTS), by a seek,
+   a skirmish recording's takeover included, and by a change to that view (sight_change); all
+   four on return-to-now (R14b). The harness
    compares them all but the contact bits (tools/replay/tarec.py compare --puppet), and bits 8-10
    too when the host shows the recording's own viewed player. +0x110 bit 14, dying, is
    a value like the rest: the reaper's Send_UnitDeath is refused for a puppet (tagpu_puppet.c),
@@ -1534,8 +1536,10 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
 #define U_BUILT        0x104        /* the build left, a float: 0.0 when finished                  */
 #define U_STATE        0x110
 #define U_SELECTED     0x10u        /* +0x110 bit 4: the viewer's own selection (a drop row)      */
-#define CONTACT_VIEWED 0x700u       /* +0x110 bits 8-10: the viewed record's contacts, which only
-                                       0x467440 and its visitors write on a puppet host           */
+#define CONTACT_VIEWED 0x700u       /* +0x110 bits 8-10: the viewed record's contacts, which on a
+                                       puppet host the radar pass 0x467440 and its visitors write,
+                                       the create bits 8-9 (0x485C3E `and ah,0xfc`, 0x485C41
+                                       `shl ecx,9`, the store 0x485C48), and rw_contacts         */
 #define CONTACT_SCAN   0x1700u      /* ... and bit 12, which loop 1 clears and loop 4 sets for a
                                        type-1 or type-2 owner: the whole scan                     */
 #define U_MODEL        0x9E         /* the model instance (Object3do): the create 0x485D40 stores it
@@ -1617,8 +1621,9 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
 #define OFF_FXLAYERS   0x38D77      /* the particle layer table, FX_LAYERS of 16 bytes (0x471D90)  */
 #define FX_LAYERS      10
 /* +0x110 bits excluded from the general image writes: layer and walk class (0-3), contact bits
-   (8-10 and 12; R14b's rw_contacts restores 8-10 in a seek and a skirmish takeover in the
-   recording's viewed record, all four on return-to-now), the fix-up's bit (16, step 3), carried
+   (8-10 and 12; rw_contacts restores 8-10 in the recording's viewed record after every step,
+   contacts_put, and in a seek and a skirmish takeover there, R14b; all four on return-to-now),
+   the fix-up's bit (16, step 3), carried
    (17), and the create's 28-31 */
 #define U_ENGINE_BITS  0xF003170Fu
 /* +0x110 bits 26 and 27, the contest's marks: the holder's and the loser's (THE FOOTPRINT WRITERS,
@@ -4317,7 +4322,8 @@ void tagpu_replay_blast(const char* unit)
    moves a unit after its turn in a skirmish.
    unit_put then finds those units in place, and its own set-position relinks nothing. It reuses
    each one's altitude (s_apre): the movement pass's altitude before its fix-up is computed from
-   the host's +0x6E, which the early call has already written.
+   the host's +0x6E, which the early call has already written; for a unit placed at a Teleport
+   move's first point it is that point's recorded altitude, where the move found the unit.
    THE INVARIANT is an ordering, by induction from an exact image T. It holds because:
    - every unit relinks at most once a step, in its own turn (0x43DD55, the movement pass's one
      call of the relink 0x43D6D0);
@@ -4379,7 +4385,7 @@ static void co_facts(const RecWorld* W)
 /* The step's events into the store, each body at a dword, and each footprint event's key by the
    readers' own rule (rec_turns_*), with the brackets as the reader keeps them; 1 copied. 0 when
    there is no room, or the rule refuses what the reader took: the step then plays in the old
-   order, counted and named once. */
+   order (co_engage counts it). */
 static int co_take(const Lv* L, const RecWorld* W)
 {
     RecTurns t;
@@ -4454,6 +4460,19 @@ static int co_take(const Lv* L, const RecWorld* W)
     s_co.nplaced = 0;
     return 1;
 refused:
+    return 0;
+}
+
+/* THE CONTEST ORDER for step W, on a skirmish segment that holds its cells: 1 when its store
+   holds the step's events and their yard facts, and the step is counted as played in the order;
+   0, counted in s_co.full, when it plays in the old order. Every such step is one or the other,
+   so the playing's counts say whether the order engaged at all. */
+static int co_engage(const Lv* L, const RecWorld* W)
+{
+    if (s_co.facts && co_take(L, W)) {
+        s_st.ordered++;
+        return 1;
+    }
     if (!s_co.full++)
         note("replay: GameTime %u: the step's events cannot be held for THE CONTEST ORDER: "
              "played in the old order", L->now);
@@ -6318,6 +6337,53 @@ static void recorded_put(const Lv* L, const RecWorld* W)
     s_gst.puts++;
 }
 
+/* THE RECORDED VIEW'S CONTACTS. When the host views the recording's own viewed record
+   (W->view[1]), every unit's +0x110 bits 8-10 are written from W's image after every step: at the
+   capture point (capture_put) and at the frame visit, each right after recorded_put, through
+   rw_contacts. The host's radar pass 0x467440 alone does not give the recording's bits, for two
+   causes (DISASSEMBLED):
+   - The events after the players phase. The recording machine's pass of a pass step G runs in the
+     players phase 0x49555F (its call 0x46556D), and the scenario applier's creates and kills at
+     the frame tail 0x4969D2 and the SHARE give's create at 0x488700 come after it in the same
+     capture-to-capture group; their units keep the create's bits (0x485C1D..0x485C48) until the
+     pass of G+30. A playing plays every event of step G before the host's players phase, so the
+     host's pass of G covers those units a pass early.
+   - In multiplayer, the positions. mp_world holds each unit at its owner's image, where the
+     recording machine's pass tested its own copy of a remote unit, a fraction of a unit to several
+     units away. The sight loop tests a unit's 32-unit cell (0x46776B..0x467783), so a remote unit
+     near a cell edge at the edge of sight is tested in the next cell.
+   THE INVARIANT, an ordering: the write runs after the host's last writers of those bits in the
+   step -- the step's creates and kills (tagpu_replay_step) and the radar pass in its players
+   phase -- and before every reader the harness or a player has: the capture and the dump at the
+   capture point, the next unit tick, the draw (the visit's cull, THE DRAW'S UNIT LIST) and the
+   next players phase's minimap rebuild 0x466DC0, which runs before that step's pass. The source is
+   exact at every iteration: +0x110 has no row in replay-hold.tsv. The bound is rw_contacts': a
+   slot below the level's count, live in the image, whose host slot holds a live unit of the
+   image's type; any other slot keeps the pass's bits. The window: from the host's pass in step
+   G's players phase to the next visit or capture point the host holds its own pass's bits -- the
+   rest of step G (0x424050 and after) and the frame's first cull, whose list the visit's second
+   cull replaces before the draw.
+   In any other view nothing recorded is the truth, and the pass's bits stand (O14).
+   No simulation reads these bits on a puppet host (DISASSEMBLED): the acquisition scan 0x40AA40
+   runs only through 0x40B2C0 (its other call, 0x40AD3E, is in 0x40AD20, which nothing calls or
+   points to); 0x40B2C0 returns for a seat with no acquisition record (0x40B2C5..0x40B2CE), and
+   the player init makes none for an active type-3 record
+   (0x46489D..0x4648A5); loop 4 of the pass needs a type-1 or type-2 owner. What reads them is the
+   display: the minimap's unit dots bit 8 or 9 (0x466E6A), the cull's test 0x465AC0 and the unit
+   draw bit 9 (0x465B38, 0x45972A).
+   MEASURED 2026-10-23, with each write that changed a unit logged: contact-waves' playing changes
+   bits at iteration 1 (the load's two keepalives, whose create bits differ from image 1's) and at
+   each wave's GameTime 60, 90, ..., 1410 (11 units each), at no other; a four-seat multiplayer
+   recording played in view 0 changes them at iteration 1 (one unit) and at GameTime 600 on slot
+   1510, the one difference its dump p601 holds without the write. */
+static void rw_contacts(const Lv* L, const RecWorld* W, uint32_t mask);
+static void contacts_put(const Lv* L, const RecWorld* W)
+{
+    if (W->view[1] != (unsigned char)L->ta[OFF_VIEWED]) return;
+    s_cull_inputs++;                    /* the units' bit 9 (THE DRAW'S UNIT LIST) */
+    rw_contacts(L, W, CONTACT_VIEWED);
+}
+
 /* the capture point's write of the iteration the world holds, when it is the host's GameTime's */
 static void capture_put(const Lv* L)
 {
@@ -6330,6 +6396,7 @@ static void capture_put(const Lv* L)
         return;
     }
     recorded_put(L, W);
+    contacts_put(L, W);
     slice_plan(L, W);                   /* THE SCRIPT SLICES: this step's markers */
 }
 
@@ -6371,9 +6438,10 @@ void __cdecl tagpu_replay_capture(void)
      set from T (R15).
    So a seek in a fresh process, a seek forwards and a seek backwards to T agree.
    The contact bits +0x110 8-10 and 12 hold the viewed seat's scan history (D1). On a puppet
-   host only the viewed record's 30-tick pass writes the contact bits; R14b runs that pass and,
-   when the host views the recording's viewed record, puts the recorded bits 8-10 back, which
-   are what a playing in that view holds at T. The minimap's fog is composited by that pass when
+   host the viewed record's 30-tick pass writes the contact bits, and in the recorded view
+   contacts_put then puts the recording's bits 8-10 back after every step (THE RECORDED VIEW'S
+   CONTACTS); R14b runs that pass and, when the host views the recording's viewed record, takes
+   bits 8-10 from the recording too, so the seek holds what a playing holds at T. The minimap's fog is composited by that pass when
    a sight change has asked for it, by the sight rebuild 0x4816A0, and by sight_fill, so at a
    seek R14 composites it from T's counters. A playing holds its last pass's values until its
    next, so in any other view, and for the fog in every seat's view, the two hosts agree from the
@@ -6444,8 +6512,8 @@ typedef void (__cdecl* PFN_RadarPass)(void);
    sight_change), moves the eye (Follow, tagpu_zoom_follow where no apply runs), and writes what
    the cull's visibility test 0x465AC0 reads -- the viewed record's sight map +0x7C (bounded by
    +0x80/+0x84), LosType main+0x14281 and the units' +0x110 bit 9 (0x465B38..0x465BA3) -- through
-   sight_fill, minimap_fog, recorded_put (its LosType reaction and the units' books) and the
-   viewed record's radar pass. Each of those writers bumps s_cull_inputs, and a visit that saw it change ends with
+   sight_fill, minimap_fog, recorded_put (its LosType reaction and the units' books),
+   contacts_put and the viewed record's radar pass. Each of those writers bumps s_cull_inputs, and a visit that saw it change ends with
    the same cull, so the draw reads a list built after the visit's last write to anything the cull
    reads.
    ORDERING: between that call and the draw's reads lie only the stub's jump to 0x468CF0 and its
@@ -7645,16 +7713,15 @@ static void eye_put(const Lv* L, unsigned T)
    At EOF the host clock can outlive the file: expired deaths are omitted, never restamped.
    The contact bits follow R14b's rule: the new record's radar pass runs once, and when the new
    record is the recording's own viewed record, bits 8-10 are then taken from the image the host
-   holds, iteration GameTime+1 -- in that view a playing computes the same pass from the same
-   inputs at the same phase (D1), so the recording's bits are a playing's, where the pass alone
-   shows the world now instead of the last pass's. The bound is rw_contacts': a slot live in the
-   image whose host slot holds a live unit of its type; any other keeps the pass's bits. With no
-   whole image of GameTime+1 -- past the recording's end, or after a refused read -- nothing is
-   copied. The residuals, display state on a puppet host until the record's next pass: a
+   holds, iteration GameTime+1 -- in that view a playing holds the recording's bits after every
+   step (THE RECORDED VIEW'S CONTACTS), so the recording's bits are a playing's, where the pass
+   alone shows the world now instead of the last pass's. The bound is rw_contacts': a slot live
+   in the image whose host slot holds a live unit of its type; any other keeps the pass's bits.
+   With no whole image of GameTime+1 -- past the recording's end, or after a refused read --
+   nothing is copied. The residuals, display state on a puppet host until the record's next pass: a
    recording whose viewed record changed within the 30 ticks before holds the old record's
    scan; in any other view the pass's bits stand (O14); and in a multiplayer recording a slot
    rw_contacts lets through may carry an earlier unit's contacts (rw_contacts). */
-static void rw_contacts(const Lv* L, const RecWorld* W, uint32_t mask);
 static void sight_change(char* ta)
 {
     unsigned seat = s_viewPending - 1, i, j, T;
@@ -8187,22 +8254,24 @@ static void sk_refused(int tk, unsigned T, const char* why)
     if (s_sk_req) result_set(s_sk_req, 0, 0, 0, 0, why);
 }
 
-/* The recorded contact bits `mask` of +0x110, put back from W's images (R14b):
-   - return-to-now, CONTACT_SCAN: it keeps the viewed seat's scan history. The engine scans only
-     on its 30-tick deadline (DISASSEMBLED 0x46507D..0x465092, call 0x46556D); running 0x467440
-     between those deadlines would reveal newly created units early and rewrite +0xB0. The saved
-     image holds both, and R15 restores the seated records' deadlines;
-   - a seek, a skirmish recording's takeover, or a change of view (sight_change), in the
-     recording's own viewed record, CONTACT_VIEWED, after its radar pass.
+/* The recorded contact bits `mask` of +0x110, put back from W's images:
+   - return-to-now, CONTACT_SCAN (R14b): it keeps the viewed seat's scan history. The engine scans
+     only on its 30-tick deadline (DISASSEMBLED 0x46507D..0x465092, call 0x46556D); running
+     0x467440 between those deadlines would reveal newly created units early and rewrite +0xB0.
+     The saved image holds both, and R15 restores the seated records' deadlines;
+   - in the recording's own viewed record, CONTACT_VIEWED: a playing after every step
+     (contacts_put, THE RECORDED VIEW'S CONTACTS), and a seek, a skirmish recording's takeover or
+     a change of view (R14b, sight_change) after its radar pass.
    W is the primary stream: in a multiplayer recording it is the recording machine's own scan,
    where mp_world's owners' images carry their machines'. The bound, slot by slot: below the
    array's count, live in W's image, and on the host a live unit of the image's type (holds); a
-   slot that fails keeps what the host holds, and the next scheduled engine scan owns them all
-   again. That is not an identity check. In a skirmish recording W is the world the host's units
-   are written from; in a multiplayer one they are written from the composed world, so where W's
-   image of a slot still describes an earlier unit of the same type than the one the composed
-   world put there, the new unit takes that unit's contacts until the next scan: display state on
-   a puppet host. It is never a fork's AI input: a multiplayer takeover does not call this (R14b). */
+   slot that fails keeps what the host holds, the radar pass's bits. That is not an identity
+   check. In a skirmish recording W is the world the host's units are written from; in a
+   multiplayer one they are written from the composed world, so where W's image of a slot still
+   describes an earlier unit of the same type than the one the composed world put there, the new
+   unit takes that unit's contacts until W's image describes it in the recorded view, or until
+   the next scan in any other: display state on a puppet host. It is never a fork's AI input: a multiplayer takeover
+   does not call this (R14b). */
 static void rw_contacts(const Lv* L, const RecWorld* W, uint32_t mask)
 {
     unsigned slot;
@@ -8412,15 +8481,15 @@ static int seek_run(char* ta)
        pass at 930 and this pass, run on any image of 901..930, clears on every unit the viewed
        record's sight counters do not cover (19 at 901).
        So in a seek, and in a skirmish recording's takeover, when the host views the recording's
-       viewed record (a takeover views P from TK1 on), the recorded bits 8-10 replace the pass's. The invariant: in that
-       view a playing computes the same pass from the same inputs at the same phase (D1; R15 keeps
-       the phase), so what the recording holds at T is what a playing holds at T -- every
-       capture-point dump in that view compares the radar picture strictly and is EQUAL (tarec.py
-       compare --puppet), and so is a takeover's first iteration (tarec.py compare-fork; D2 masks
-       bits 8-10 only when the views differ). The bound: a slot live in the
-       image whose host slot holds a live unit of its type (rw_contacts); any other keeps the
-       pass's bits. The residual: a recording whose viewed record changed within the 30 ticks
-       before T holds the old record's scan, where a playing holds its own, until the next pass.
+       viewed record (a takeover views P from TK1 on), the recorded bits 8-10 replace the pass's.
+       The invariant: in that view a playing holds the recording's bits after every step (THE
+       RECORDED VIEW'S CONTACTS), so what the recording holds at T is what a playing holds at T --
+       every capture-point dump in that view compares the radar picture strictly and is EQUAL
+       (tarec.py compare --puppet), and so is a takeover's first iteration (tarec.py compare-fork;
+       D2 masks bits 8-10 only when the views differ). The bound: a slot live in the image whose
+       host slot holds a live unit of its type (rw_contacts); any other keeps the pass's bits. A
+       recording whose viewed record changed within the 30 ticks before T holds the old record's
+       scan until the next pass, and so do the seek and a playing in that view.
        With any other view nothing recorded is the truth: the seek shows the pass's contacts at
        T where a playing shows those of P+1, until the next pass at P+30, which R15 schedules on
        both (O14); display state on a puppet host. In a seat's view, the recording's viewed
@@ -8440,8 +8509,8 @@ static int seek_run(char* ta)
        and the radar lists the fork's AIs build from them at T stand until their next scan at
        T+30. A multiplayer recording's takeover keeps the pass's bits too: rw_contacts' bound
        is a live unit of the image's type, not its identity, and the primary stream's image of
-       a slot can lag a same-type reuse the composed world already holds, which a seek shows
-       for a few ticks but which would be the fork's AI input.
+       a slot can lag a same-type reuse the composed world already holds, which a seek or a
+       playing shows but which would be the fork's AI input.
        The pass's other call, the minimap fog 0x466C20, ran in R14 (sight_fill), and the radar
        pass asks for no other: neither it (0x467440..0x467836) nor its callees -- the unit walk
        0x47E890 with its visitors 0x467840, 0x467960 and 0x467980, 0x40B0D0, the math helpers
@@ -9818,6 +9887,7 @@ static void frame_visit(void)
     if (!s_over && now != s_frame_tick && W->tick == now + 1 && level_of(ta, &L)) {
         s_frame_tick = now;
         recorded_put(&L, W);
+        contacts_put(&L, W);
         if (!s_rt.tsaved) {
             tagpu_simreg_transient_save();
             s_rt.tsaved = 1;
@@ -9904,9 +9974,10 @@ static void counts_log(const char* when, unsigned now)
                s_sl.c.late, s_sl.c.remote);
     tagpu_logf("replay: %s: the owner's queries: %u made, %u not made (no live unit or no script)",
                s_name, s_q.made, s_q.unmade);
-    tagpu_logf("replay: %s: %u units placed at their turn, %u steps whose events the contest order "
-               "could not hold (THE CONTEST ORDER); %u Teleport moves played, %u refused", s_name,
-               s_st.turned, s_co.full, s_st.moved, s_st.unmoved);
+    tagpu_logf("replay: %s: %u steps played in the contest order, %u units placed at their turn, %u "
+               "steps whose events the contest order could not hold (THE CONTEST ORDER); %u Teleport "
+               "moves played, %u refused", s_name, s_st.ordered, s_st.turned, s_co.full, s_st.moved,
+               s_st.unmoved);
     tagpu_puppet_refusals(gates, sizeof gates);
     tagpu_logf("replay: %s: refused on puppets: %s", s_name, gates);
     tagpu_puppet_footprints(gates, sizeof gates);
@@ -10017,7 +10088,7 @@ static void play(const Lv* L)
             note("replay: the events of GameTime %u played at GameTime %u", W->tick, L->now);
         }
         co_facts(W);                        /* image T's yard facts, in either order */
-        if (!s_cells_held || s_mp.on || !s_co.facts || !co_take(L, W)) {
+        if (!s_cells_held || s_mp.on || !co_engage(L, W)) {
             events_put(L, W, now);
             co_end();
             ov_clicks_take(W);

@@ -628,6 +628,22 @@ static __inline int rec_yard_end(RecYardStep* y)
    CONTEST ORDER). */
 #define REC_TURN_AFTER 0xFFFFu   /* the key of a call after the unit tick: a slot count is a u16 */
 
+/* THE CONTEST ORDER's own records: RCS_OTHER's, so they set no events flag, yet they are the
+   step's -- the lossy filter writes a refresh's images before the first of them as before the first
+   RCS_EVENTS record, since nothing may stand between an RK_EV_TURN and its event (tagpu_reclossy.c,
+   A REFRESH'S WRITES) */
+static __inline int rec_contest_kind(unsigned kind)
+{
+    return kind == RK_EV_TURN || kind == RK_EV_LINK || kind == RK_EV_PLACE;
+}
+
+/* a record an RK_EV_TURN may stand just before: a footprint event's kind */
+static __inline int rec_turn_follows(unsigned kind)
+{
+    return kind == RK_EV_CREATE || kind == RK_EV_DEATH || kind == RK_EV_YARD ||
+           kind == RK_EV_LINK || kind == RK_EV_PLACE;
+}
+
 /* the key of a top-level footprint event with no RK_EV_TURN before it */
 static __inline unsigned rec_turn_implicit(unsigned kind, unsigned slot, unsigned held)
 {
