@@ -1389,13 +1389,14 @@ recording of the same test group at main, but the two are different games -- the
 is seeded per level, and main's run made 3,128 more broadcast starts -- so that difference
 measures the games, not the format.
 
-**The contest order: recording format 26** (2026-10-23). Two kinds of the events frame's other
+**The contest order: recording format 26** (2026-10-23). Three kinds of the events frame's other
 records (RCS_OTHER, no codec change): `RK_EV_TURN`, 4 bytes, before a top-level footprint event
-whose turn a reader cannot infer, and `RK_EV_LINK`, 12 bytes, at every attach or detach that acts
-outside a death ([the events note](demo-recorder-s2-events.md), §1.8e). A key is written for a create
+whose turn a reader cannot infer; `RK_EV_LINK`, 12 bytes, at every attach or detach that acts
+outside a death; and `RK_EV_PLACE`, 32 bytes, at every unit a Teleport order moves
+([the events note](demo-recorder-s2-events.md), §1.8e). A key is written for a create
 or a link made in a later turn than the step's last key, and for a death or a yard made in another
 turn than its own slot's (after the tick, above all); links follow transports, pads and every build finish.
-`recsize.py` reports both as *contest keys and links*. MEASURED 2026-10-23 on the replay
+`recsize.py` reports them as *contest keys, links, moves*. MEASURED 2026-10-23 on the replay
 gate's recordings: `battle` (3,990 GameTimes, at most 1,444 live units, deaths in nearly every step)
 holds 5 keys and no link, 20 bytes of bodies -- a death in its own turn needs no key; `slice-walkers`
 (4,680 GameTimes) 48 keys and 10 links, 312 bytes of bodies, about 1,100 keys and 230 links an hour

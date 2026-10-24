@@ -8466,8 +8466,11 @@ file). The walk's functor is a stack object whose first dword is `0x4FD660`, wri
 `+0x6A`/`+0x6E`/`+0x72` alone; changed, it calls the clear (`0x48AA6B`), writes the position, the
 cell and the layer bits, then the stamp (`0x48AA9A`) and the sight stamp `0x4827B0` (`0x48AAA0`).
 Either way it sets bit 16 (`0x48AAAC`). Its two callers: the relink's carried path `0x43D775` and
-**Teleport**'s `0x406BC0` (order 47, handler `0x406AA0`), which places *other* units in a box --
-the one footprint call of stock code that is made in one unit's turn on another unit.
+**Teleport**'s `0x406BC0` (order type 11, handler `0x406AA0`, *Teleport, order type 11* above),
+which places *other* units in a box -- the one footprint call of stock code that is made in one
+unit's turn on another unit. Just before it the handler makes the flare `0x471FD0(&unit+0x6A,
+&target, 0x1E, 5)` at `0x406B9F` (stdcall `ret 0x10`), which copies both points into its particle
+object (`0x4736F3..0x47371E`, the init at vtable `0x4FD588` + `0x18`) and keeps neither pointer.
 
 **The relink `0x43D6D0` has one caller**, `0x43DD55` in the movement pass `0x43DD20`, whose
 callers are the unit tick's `0x48AFAA` and the `0x2C` receiver's `0x48BA46`. It relinks only on a
@@ -8534,9 +8537,14 @@ unit, the build finish's included, re-files it at its bucket's head.
 record's seven bytes and, on slots bounded first, the refusals above, and writes an acting
 attach's `RK_EV_LINK` at its place unless it is a death's (`tagpu_recorder.c`, `ob_link`). The
 three writers' observers check each call's return against the table above
-(`FOOT_SITES`): a relink's or a set-position's call is ordered only as the turn unit's own; a
-return the table does not hold, a Teleport, or a turn out of slot order is counted
-(`recorder: N footprint calls a playing cannot put in their order`).
+(`FOOT_SITES`): a relink's or a set-position's call is ordered only as the turn unit's own, or as
+a Teleport move's. Teleport's call `0x406BC0` (`E8 2B 3E 08 00`) is redirected to a stub that
+writes `RK_EV_PLACE` -- the unit, its position and layer before, and the call's position and layer
+-- and then calls `0x48A9F0` itself (`tagpu_recorder.c`, `rec_teleport`); a playing makes the flare
+and the set-position at that place, the flare counted as the handler's call `0x406BA4`
+(`tagpu_recorder.c`, `tagpu_rec_teleport_flare`). A return the table does not hold, a turn out of
+slot order, or a move of a unit that is not alive -- the handler's walk has no alive test -- is
+counted (`recorder: N footprint calls a playing cannot put in their order`).
 
 ### Stacked aircraft in area damage — `0x49A664`, `0x49A415`, `0x47CF98`, `0x4954ED` [DISASSEMBLED + MEASURED 2026-09-25]
 

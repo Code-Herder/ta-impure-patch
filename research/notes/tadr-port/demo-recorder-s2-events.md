@@ -598,7 +598,7 @@ makes it again and the playing checks it. Anything else is malformed (THE YARD R
 `tagpu_recfmt.h`; [engine map](../exe-reverse-engineering.md), *An open yard gives nothing
 back*).
 
-### 1.8e The contest order — `RK_EV_TURN` and `RK_EV_LINK` (format 26)
+### 1.8e The contest order — `RK_EV_TURN`, `RK_EV_LINK` and `RK_EV_PLACE` (format 26)
 
 Not roots: what a playing needs to make a step's footprint and chain calls in the recording
 machine's order (`tagpu_recfmt.h`, *THE CONTEST ORDER*; [engine map](../exe-reverse-engineering.md),
@@ -617,9 +617,15 @@ machine's order (`tagpu_recfmt.h`, *THE CONTEST ORDER*; [engine map](../exe-reve
   playing makes it through `0x48AB70` there (`tagpu_replay.c`, `ev_link`), and the carry links'
   reconciliation after the step then finds nothing to do unless the host refused one. The
   destructor's own detaches are not written: the playing's destructor makes them again.
+- **`RK_EV_PLACE {u32 ID, i32 x, altitude, z before, i32 x, altitude, z after, u8 the layer
+  before, u8 the layer after, u16 0}`**: one unit Teleport's handler `0x406AA0` moves, written at
+  its set-position call `0x406BC0` (a stub that then makes the call). The handler makes the flare
+  `0x471FD0` from the first point to the second just before it; a playing makes both at the
+  record's place (`tagpu_replay.c`, `ev_place`), the flare counted as the handler's call. A puppet
+  runs no order handler, so these are its only Teleport calls.
 
 The recorder counts every footprint or attach call no key can order -- a call from a site its table
-does not hold, a Teleport's set-position on another unit, a turn out of slot order, an attach
+does not hold, a turn out of slot order, a Teleport move of a unit that is not alive, an attach
 inside any bracket but a death -- and logs the count at the recording's end (`recorder: N footprint calls a
 playing cannot put in their order`); the replay harness fails a recording whose count is not 0.
 
