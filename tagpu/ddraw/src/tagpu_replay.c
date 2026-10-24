@@ -207,6 +207,8 @@ static struct {
     unsigned ychecked, ydiffer, yunchecked;         /* the yards a create opened (yard_check)   */
     unsigned turned;                                /* units placed at their turn (THE CONTEST
                                                        ORDER)                                  */
+    unsigned moved, unmoved;                        /* Teleport's moves played and refused
+                                                       (ev_place)                              */
     unsigned played[EV_KINDS], skipped[EV_KINDS];   /* each event kind's, from RK_EV_CREATE    */
 } s_st;                             /* the level's counts, logged at its end                      */
 static struct {
@@ -257,8 +259,9 @@ static struct {
     unsigned char* yin;             /* per event: a yard its create opened (yard_in_create)       */
     uint16_t* ytype;                /* per event: a yard's unit's recorded type (ev_type_at)      */
     uint32_t* key;                  /* per event: a footprint event's key, else CO_NOKEY          */
-    unsigned* dth;                  /* the copy's RK_EV_DEATH indices, in order                   */
-    unsigned  ndth, fcap;           /* ... how many; the per-event arrays' room                   */
+    unsigned* nxt;                  /* the copy's RK_EV_DEATH and RK_EV_PLACE indices, in order:
+                                       the events that find a unit where its turn left it         */
+    unsigned  nnxt, fcap;           /* ... how many; the per-event arrays' room                   */
     int       facts;                /* yin and ytype hold the iteration events_put plays          */
     const RecWorld* N;              /* image T+1 once read; NULL while it is not, or not read     */
     unsigned  swept;                /* every slot below it is placed for the step                 */
@@ -4305,10 +4308,10 @@ void tagpu_replay_blast(const char* unit)
    events. So play() copies the step's events and the yard facts that read image T (co_facts,
    co_take), reads iteration T+1, and plays the copy. Before each footprint event of key K it
    places every unit below slot K whose next recorded position differs from the host's,
-   ascending, through set-position alone (turn_place). That next position is the unit's death
-   image when it dies later in the step, else image T+1's: a unit that dies later in the step
-   relinked in its turn to where its death found it, and nothing moves a unit after its turn in a
-   skirmish but Teleport, which the recording counts.
+   ascending, through set-position alone (turn_place). That next position is where the step's next
+   event of the unit finds it -- its death's image, or a Teleport move's first point (RK_EV_PLACE)
+   -- else image T+1's: a unit relinked in its turn to where that event found it, and nothing else
+   moves a unit after its turn in a skirmish.
    unit_put then finds those units in place, and its own set-position relinks nothing. It reuses
    each one's altitude (s_apre): the movement pass's altitude before its fix-up is computed from
    the host's +0x6E, which the early call has already written.
@@ -4317,11 +4320,11 @@ void tagpu_replay_blast(const char* unit)
      call of the relink 0x43D6D0);
    - the turns ascend by slot;
    - every other footprint and chain call is an event at its place: creates, deaths, live yards,
-     links;
+     links, Teleport's moves;
    - the reader refused any step whose keys decrease or whose RK_EV_TURN stands alone.
    Given all that, the host makes the same writer and chain calls in the same order on the same
    state:
-   - the positions are image T+1's or a death image;
+   - the positions are image T+1's, a death's image or a move's points;
    - the yard bits are put at their place;
    - the chains are exact by the same induction;
    - the contest keeps the incumbent on both (tagpu_puppet.c, THE CONTEST'S RULE).
@@ -4344,8 +4347,8 @@ static int co_room(unsigned n)
     if (b) s_co.ytype = (uint16_t*)b;
     k = realloc(s_co.key, (size_t)c * sizeof *s_co.key);
     if (k) s_co.key = (uint32_t*)k;
-    d = realloc(s_co.dth, (size_t)c * sizeof *s_co.dth);
-    if (d) s_co.dth = (unsigned*)d;
+    d = realloc(s_co.nxt, (size_t)c * sizeof *s_co.nxt);
+    if (d) s_co.nxt = (unsigned*)d;
     if (!a || !b || !k || !d) return 0;
     s_co.fcap = c;
     return 1;
@@ -4397,7 +4400,7 @@ static int co_take(const Lv* L, const RecWorld* W)
         s_co.bcap = c;
     }
     rec_turns_reset(&t);
-    s_co.ndth = 0;
+    s_co.nnxt = 0;
     for (i = 0; i < W->nev; i++) {
         const RecEvent* e = &W->ev[i];
         uint32_t id = 0;
@@ -4417,11 +4420,14 @@ static int co_take(const Lv* L, const RecWorld* W)
         case RK_EV_FEATURE_END: fb = 0; ok = rec_turns_event(&t, 0, k, 0, NULL); break;
         case RK_EV_DEATH_END:   nd--;   ok = rec_turns_event(&t, 0, k, 0, NULL); break;
         case RK_EV_DEATH:
-            s_co.dth[s_co.ndth++] = i;
+            s_co.nxt[s_co.nnxt++] = i;
             foot = !fb && !nd;
             nd++;
             ok = rec_turns_event(&t, foot, k, id - 1u, &key);
             break;
+        case RK_EV_PLACE:
+            s_co.nxt[s_co.nnxt++] = i;
+            /* fall through: a move is a footprint event as a link is */
         case RK_EV_CREATE:
         case RK_EV_LINK:
             foot = !fb && !nd;
@@ -4451,39 +4457,51 @@ refused:
     return 0;
 }
 
-/* unit `s`, below the key of event `i`, placed at its turn: its next recorded position by
-   set-position, when it has one that differs from the host's */
+/* unit `s`, below the key of event `i`, placed at its turn: at the position its turn left it on
+   the recording machine, by set-position, when that differs from the host's. That is where the
+   step's next event of the unit finds it -- its death's image, or a Teleport move's first point
+   (RK_EV_PLACE) -- or, when no later event of the step moves it or kills it, image T+1's. */
 static void turn_place(const Lv* L, unsigned s, unsigned i)
 {
     char* u = unit_at(L, s);
     const uint32_t* img = NULL;
-    const char* ib;
+    const unsigned char* mv = NULL;
     int32_t x, z, hx, hz, a;
     uint32_t hs;
-    unsigned j;
+    unsigned j, layer;
     /* unit_put places only a unit with a mover; the create made it for a type with one */
     if (s_placed[s] || !host_live(L, s) || !*(char**)u) return;
-    for (j = 0; j < s_co.ndth && !img; j++) {
-        const RecEvent* e = &s_co.ev[s_co.dth[j]];
+    for (j = 0; j < s_co.nnxt && !img && !mv; j++) {
+        const RecEvent* e = &s_co.ev[s_co.nxt[j]];
         uint32_t id;
         memcpy(&id, e->b, 4);
-        if (s_co.dth[j] >= i && id - 1u == s) img = (const uint32_t*)(e->b + 12);
+        if (s_co.nxt[j] < i || id - 1u != s) continue;
+        if (e->kind == RK_EV_DEATH) img = (const uint32_t*)(e->b + 12);
+        else mv = e->b;
     }
-    if (!img) {
-        if (!s_co.N->live[s]) return;
-        img = s_co.N->unit + (size_t)s * REC_UNIT_DWORDS;
+    if (!img && s_co.N->live[s]) img = s_co.N->unit + (size_t)s * REC_UNIT_DWORDS;
+    if (img && !holds(L, s, img)) return;
+    if (mv) {
+        memcpy(&x, mv + 4, 4);
+        memcpy(&z, mv + 12, 4);
+        layer = mv[28];
+    } else if (img) {
+        memcpy(&x, (const char*)img + U_POS, 4);
+        memcpy(&z, (const char*)img + U_POS + 8, 4);
+        layer = img[U_STATE / 4] & 3u;
+    } else {
+        return;
     }
-    if (!holds(L, s, img)) return;
-    ib = (const char*)img;
-    memcpy(&x, ib + U_POS, 4);
-    memcpy(&z, ib + U_POS + 8, 4);
     memcpy(&hx, u + U_POS, 4);
     memcpy(&hz, u + U_POS + 8, 4);
     memcpy(&hs, u + U_STATE, 4);
     /* not moved: image T+1's values pass writes it as it writes every other unit */
-    if (x == hx && z == hz && (img[U_STATE / 4] & 3u) == (hs & 3u)) return;
-    a = a_pre_of(u, ib);
-    E_SetPos(u, x, a, z, img[U_STATE / 4] & 3u);
+    if (x == hx && z == hz && layer == (hs & 3u)) return;
+    /* a unit a later move takes away with no image after it: its altitude here is the move's to
+       replace, and the movement pass's formula has no vertical velocity to read */
+    if (img) a = a_pre_of(u, (const char*)img);
+    else memcpy(&a, u + U_ALT, 4);
+    E_SetPos(u, x, a, z, layer);
     s_placed[s] = 1;
     s_apre[s] = a;
     s_coplaced[s_co.nplaced++] = (unsigned short)s;
@@ -4533,6 +4551,34 @@ static int ev_link(const Lv* L, const unsigned char* b, unsigned len)
         return 0;
     }
     return link(L, c, p, b[8], b[9] & 3u);
+}
+
+/* RK_EV_PLACE: one unit Teleport's handler moves, at its place (THE CONTEST ORDER), through the
+   handler's own two calls -- the flare 0x471FD0 from the first point to the second, counted as the
+   handler's call (tagpu_rec_teleport_flare), and the set-position 0x48A9F0 to the second -- the
+   unit a slot below the count live here, the layer within +0x110's two bits. A puppet's level runs
+   no order handler (the unit tick's order runs are an owner of type 1 or 2's, 0x48AEB5..0x48AECD),
+   so these are the step's only Teleport calls. 1 played. */
+static int ev_place(const Lv* L, const unsigned char* b, unsigned len)
+{
+    uint32_t id;
+    int32_t from[3], to[3];
+    unsigned s;
+    if (len != 32) return 0;
+    memcpy(&id, b, 4);
+    memcpy(from, b + 4, 12);
+    memcpy(to, b + 16, 12);
+    s = id - 1u;
+    if (s < 1 || s >= L->nslots || !host_live(L, s) || b[29] > 3) {
+        s_st.unmoved++;
+        note("replay: GameTime %u: the recorded Teleport move of ID %u finds no unit here",
+             L->now, (unsigned)id);
+        return 0;
+    }
+    tagpu_rec_teleport_flare(from, to);
+    E_SetPos(unit_at(L, s), to[0], to[1], to[2], b[29]);
+    s_st.moved++;
+    return 1;
 }
 
 /* THE PHASES. The recording machine made each feature root at some point of its step 0x495490
@@ -4595,6 +4641,7 @@ static int ev_play(const Lv* L, const RecEvent* e)
         return 0;
     }
     if (k == RK_EV_LINK) return ev_link(L, b, n);   /* counted as links_put's calls are */
+    if (k == RK_EV_PLACE) return ev_place(L, b, n);
     switch (k) {
     case RK_EV_CREATE:      done = ev_create(L, b, n); break;
     case RK_EV_SHOT:        done = ev_shot(L, b, n); break;
@@ -9855,7 +9902,8 @@ static void counts_log(const char* when, unsigned now)
     tagpu_logf("replay: %s: the owner's queries: %u made, %u not made (no live unit or no script)",
                s_name, s_q.made, s_q.unmade);
     tagpu_logf("replay: %s: %u units placed at their turn, %u steps whose events the contest order "
-               "could not hold (THE CONTEST ORDER)", s_name, s_st.turned, s_co.full);
+               "could not hold (THE CONTEST ORDER); %u Teleport moves played, %u refused", s_name,
+               s_st.turned, s_co.full, s_st.moved, s_st.unmoved);
     tagpu_puppet_refusals(gates, sizeof gates);
     tagpu_logf("replay: %s: refused on puppets: %s", s_name, gates);
     tagpu_puppet_footprints(gates, sizeof gates);

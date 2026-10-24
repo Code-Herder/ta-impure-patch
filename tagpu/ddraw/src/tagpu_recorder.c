@@ -193,6 +193,7 @@ _Static_assert(UD_PITCH + 4 <= UD_STRIDE && UD_AIRBITS + 4 <= UD_STRIDE && UD_MA
 #define U_STATE        0x110
 #define U_ALIVE        0x10000000u
 #define U_TYPE         0x92         /* the type row: its ID says whether a slot changed type      */
+#define U_POS          0x6A         /* x, altitude, z, as the set-position writes them (0x48AA5F) */
 #define ORD_VTABLE     0x4FD2C8u    /* every live node's (0x43A0DA, 0x43A131)                      */
 #define ORD_UNIT       0x0E
 #define ORD_FLAGS      0x42
@@ -4552,6 +4553,7 @@ static struct {
     unsigned rows, overflow;            /* rows used; keys that found none                    */
     CntRow   row[CNT_ROWS];
     unsigned child_caller;               /* game-thread START/CALL diagnostic context */
+    unsigned flare_caller;               /* a playing's teleport flare: the engine's call     */
     unsigned nnames;
     struct { unsigned aux; char name[REC_COUNT_NAME]; } name[CNT_NAMES];
 } s_cnt;
@@ -6331,7 +6333,8 @@ static int turn_put(Rec* r, unsigned kind, const unsigned char* b)
 {
     unsigned id, imp, key;
     if (r->mode == MODE_NETWORK || !(REC_SKIRMISH_HOLDS & RECL_CELLS) || s_fdepth ||
-        (kind != RK_EV_CREATE && kind != RK_EV_DEATH && kind != RK_EV_YARD && kind != RK_EV_LINK))
+        (kind != RK_EV_CREATE && kind != RK_EV_DEATH && kind != RK_EV_YARD && kind != RK_EV_LINK &&
+         kind != RK_EV_PLACE))
         return 1;
     memcpy(&id, b, 4);
     imp = rec_turn_implicit(kind, id - 1u, s_key);
@@ -6604,7 +6607,7 @@ static const struct { unsigned ra; unsigned char turn; } FOOT_SITES[] = {
     { 0x0043DA14u, 1 },  /* the relink's clear 0x43DA0F (0x43D6D0, the movement pass's 0x43DD55)  */
     { 0x0043DA46u, 1 },  /* the relink's stamp 0x43DA41                                         */
     { 0x0048AA70u, 1 },  /* set-position's clear 0x48AA6B: the carried relink's 0x43D775 is the
-                            turn unit's; Teleport's 0x406BC0, on other units, is not            */
+                            turn unit's; Teleport's 0x406BC0 is its RK_EV_PLACE's (s_place)     */
     { 0x0048AA9Fu, 1 },  /* set-position's stamp 0x48AA9A                                      */
     { 0x00486114u, 0 },  /* the create's stamp 0x48610F: its RK_EV_CREATE                      */
     { 0x0047CBDBu, 0 },  /* the death's clear 0x47CBD6 (0x47CBD0, the destructor's 0x48682D)   */
@@ -6612,16 +6615,19 @@ static const struct { unsigned ra; unsigned char turn; } FOOT_SITES[] = {
     { 0x0047ED3Au, 0 },  /* the walk's callback 0x47ED35, inside a clear's or a re-claim's walk */
 };
 
+static unsigned s_place;   /* the ID rec_teleport's set-position moves, while it runs; else 0 */
+
 /* One writer call by its return `ra`, on unit `id` (0: no slot). The returns the list does not
    hold -- CreateFromNetwork's 0x486311 and the 0x2C receiver's 0x48B68A and 0x48B6BE among them --
-   run in no skirmish; a relink is ordered only as the turn unit's own. */
+   run in no skirmish; a relink is ordered only as the turn unit's own, a set-position on another
+   unit only as the RK_EV_PLACE just written for it (THE TELEPORT). */
 static void foot_order(Rec* r, unsigned ra, unsigned id)
 {
     unsigned i;
     for (i = 0; i < sizeof FOOT_SITES / sizeof FOOT_SITES[0]; i++)
         if (FOOT_SITES[i].ra == ra) break;
     if (i == sizeof FOOT_SITES / sizeof FOOT_SITES[0] ||
-        (FOOT_SITES[i].turn &&
+        (FOOT_SITES[i].turn && !(s_place && id == s_place) &&
          (!s_turn || s_turn == REC_TURN_AFTER || !id || id - 1u != s_turn)))
         r->unordered++;
 }
@@ -6713,6 +6719,50 @@ static int __cdecl ob_link(void* E)
     b[10] = b[11] = 0;
     ev_put(r, RK_EV_LINK, b, sizeof b);
     return 0;
+}
+
+/* THE TELEPORT. Teleport's handler 0x406AA0 (order type 11, `ret 0xC`) runs in its unit's turn,
+   from the order run, and moves every other unit of the array whose position lies in the box its
+   def gives about it (+0x15E..+0x172), with no alive test (0x406B11..0x406B66): for each, the
+   flare 0x471FD0(&unit+0x6A, &target, 0x1E, 5) at 0x406B9F and then the set-position
+   0x48A9F0(unit, target, 1) at 0x406BC0, nothing between them (DISASSEMBLED). It is the one
+   set-position stock code makes in one unit's turn on another unit, so the call at 0x406BC0 comes
+   here (a 5-byte `call` redirected through a stub, tagpu_rec_init): the move is RK_EV_PLACE at its
+   place, before the engine's own call, whose clear and stamp foot_order then takes as that event's.
+   The record carries both points, so a playing makes the flare and the move there (tagpu_replay.c,
+   ev_place). A move this cannot put in order is counted (THE CONTEST ORDER): one inside a bracket,
+   one of a pointer that is not a slot, one of a unit that is not alive -- the walk's stale records
+   -- and a layer past +0x110's two bits. */
+#define TELE_CALL 0x00406BC0u
+typedef void (__stdcall* PFN_SetPos)(char* unit, int32_t x, int32_t alt, int32_t z,
+                                     unsigned layer);
+#define E_SetPos ((PFN_SetPos)0x0048A9F0u)
+
+static void __stdcall rec_teleport(char* u, int32_t x, int32_t alt, int32_t z, unsigned layer)
+{
+    Rec* r = ev_rec();
+    if (r && r->mode != MODE_NETWORK) {
+        unsigned id = ev_unit(r, u);
+        uint32_t st = 0;
+        if (id) memcpy(&st, u + U_STATE, 4);
+        if (s_fdepth || !id || !(st & U_ALIVE) || layer > 3) {
+            r->unordered++;
+        } else {
+            unsigned char b[32];
+            memcpy(b, &id, 4);
+            memcpy(b + 4, u + U_POS, 12);
+            memcpy(b + 16, &x, 4);
+            memcpy(b + 20, &alt, 4);
+            memcpy(b + 24, &z, 4);
+            b[28] = (unsigned char)(st & 3u);
+            b[29] = (unsigned char)layer;
+            b[30] = b[31] = 0;
+            ev_put(r, RK_EV_PLACE, b, sizeof b);
+            s_place = id;
+        }
+    }
+    E_SetPos(u, x, alt, z, layer);
+    s_place = 0;
 }
 
 /* THE DRAWS. The feature code's six calls of the simulation RNG go through feat_draw
@@ -6932,7 +6982,29 @@ static int __cdecl sink_49CDE0(void* E) { return sink_count(E, 0x0049CDE0u, 0); 
 static int __cdecl sink_49CC20(void* E) { return sink_count(E, 0x0049CC20u, 0); }
 static int __cdecl sink_49C9C0(void* E) { return sink_count(E, 0x0049C9C0u, 0); }
 static int __cdecl sink_499EB0(void* E) { return sink_count(E, 0x00499EB0u, 0); }
-static int __cdecl sink_471FD0(void* E) { return sink_count(E, 0x00471FD0u, 0); }
+/* A playing's flare of a recorded move (tagpu_rec_teleport_flare) is keyed by the engine call it
+   makes again, 0x406B9F's, as the COB children are by the VM's (tagpu_rec_cob_child) */
+static int __cdecl sink_471FD0(void* E)
+{
+    if (cnt_on()) cnt_add(0x00471FD0u, s_cnt.flare_caller ? s_cnt.flare_caller
+                                                          : cnt_caller(ARG(E, 0)), 0);
+    return 0;
+}
+
+/* 0x471FD0(point, target, 0x1E, layer): the flare, stdcall `ret 0x10`. It copies both points into
+   its particle object (0x4736F3..0x47371E, the init at vtable 0x4FD588 + 0x18), so they may be
+   the caller's own. */
+typedef void (__stdcall* PFN_Flare)(const int32_t* point, const int32_t* target, int size,
+                                    int layer);
+#define E_Flare ((PFN_Flare)0x00471FD0u)
+
+void tagpu_rec_teleport_flare(const int32_t from[3], const int32_t to[3])
+{
+    unsigned saved = s_cnt.flare_caller;
+    s_cnt.flare_caller = 0x00406BA4u;
+    E_Flare(from, to, 0x1E, 5);
+    s_cnt.flare_caller = saved;
+}
 static int __cdecl sink_472330(void* E) { return sink_count(E, 0x00472330u, 0); }
 static int __cdecl sink_472430(void* E) { return sink_count(E, 0x00472430u, 0); }
 static int __cdecl sink_472530(void* E) { return sink_count(E, 0x00472530u, 0); }
@@ -7171,6 +7243,7 @@ void tagpu_rec_init(void)
     unsigned char* queries[QUERY_SITE_COUNT] = { 0 };
     unsigned char* draws[FS_RNG_SITES] = { 0 };
     unsigned char* blast = NULL;
+    unsigned char* tele = NULL;
     unsigned char* source = NULL;
     unsigned char* clicks[2] = { 0 };
     unsigned i, k;
@@ -7252,6 +7325,17 @@ void tagpu_rec_init(void)
                    "and nothing will be recorded", SOURCE_TEST);
         return;
     }
+    {
+        unsigned char c[5];
+        int32_t rel = (int32_t)((unsigned)(size_t)E_SetPos - (TELE_CALL + 5));
+        c[0] = 0xE8;
+        memcpy(c + 1, &rel, 4);
+        if (!pristine(TELE_CALL, c, 5)) {
+            tagpu_logf("recorder: Teleport's set-position call 0x%06X holds other bytes: no event "
+                       "hooks, and nothing will be recorded", TELE_CALL);
+            return;
+        }
+    }
     for (i = 0; i < 2; i++) {
         unsigned char c[5];
         int32_t rel = (int32_t)((unsigned)(size_t)CLICK_ACTION[i] - (CLICK_CALL[i] + 5));
@@ -7318,6 +7402,15 @@ void tagpu_rec_init(void)
         *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x08;   /* push dword [esp+8]: the unit   */
         *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)rec_blast); p += 4;
         *p++ = 0xC2; *p++ = 0x08; *p++ = 0x00;          /* ret 8, the explosion's own           */
+    }
+    {
+        unsigned char* p = tele = tagpu_detour_stub();
+        if (!p) goto fail;
+        for (k = 0; k < 5; k++) {                       /* push dword [esp+0x14], five times:   */
+            *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x14;   /* layer, z, alt, x, the unit */
+        }
+        *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)rec_teleport); p += 4;
+        *p++ = 0xC2; *p++ = 0x14; *p++ = 0x00;          /* ret 0x14, the set-position's own      */
     }
     {
         unsigned char* p = source = tagpu_detour_stub();
@@ -7387,6 +7480,14 @@ void tagpu_rec_init(void)
         if (!tagpu_detour_write(BLAST_CALL, c, 5)) goto landfail;
         blast = NULL;
     }
+    {
+        unsigned char c[5];
+        int32_t rel = (int32_t)((unsigned)(size_t)tele - (TELE_CALL + 5));
+        c[0] = 0xE8;
+        memcpy(c + 1, &rel, 4);
+        if (!tagpu_detour_write(TELE_CALL, c, 5)) goto landfail;
+        tele = NULL;
+    }
     if (!tagpu_detour_land(SOURCE_TEST, source, sizeof SOURCE_BYTES)) goto landfail;
     source = NULL;
     for (k = 0; k < 2; k++) {
@@ -7400,7 +7501,7 @@ void tagpu_rec_init(void)
     s_sites = 1;
     tagpu_logf("recorder: %u event sites in",
                (unsigned)(OBSERVE_SITE_COUNT + 5 + START_SITE_COUNT + QUERY_SITE_COUNT +
-                          FS_RNG_SITES + 2 + 2));
+                          FS_RNG_SITES + 2 + 1 + 2));
     cnt_sinks_init();
     ai_hooks_init();
     return;
@@ -7414,6 +7515,7 @@ fail:
     for (i = 0; i < QUERY_SITE_COUNT; i++) tagpu_detour_stub_free(queries[i]);
     for (i = 0; i < FS_RNG_SITES; i++) tagpu_detour_stub_free(draws[i]);
     tagpu_detour_stub_free(blast);
+    tagpu_detour_stub_free(tele);
     tagpu_detour_stub_free(source);
     for (i = 0; i < 2; i++) tagpu_detour_stub_free(clicks[i]);
 }

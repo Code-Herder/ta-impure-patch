@@ -1451,7 +1451,7 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
     /* an RK_EV_TURN stands just before its footprint event (tagpu_recfmt.h, THE CONTEST ORDER):
        a key waiting meets no other record, an iteration's end among them */
     if (w->turns.pending && kind != RK_EV_CREATE && kind != RK_EV_DEATH && kind != RK_EV_YARD &&
-        kind != RK_EV_LINK)
+        kind != RK_EV_LINK && kind != RK_EV_PLACE)
         return 0;
     /* the readers' events flag, by the same predicate (feature_record's INVARIANT); a record that
        sets it and is then refused abandons the file, so setting it first changes nothing */
@@ -1604,10 +1604,11 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
         break;
     }
     case RK_EV_TURN:
-    case RK_EV_LINK: {
+    case RK_EV_LINK:
+    case RK_EV_PLACE: {
         /* THE CONTEST ORDER (tagpu_recfmt.h): a skirmish stream's that holds its cells, inside no
            feature call and no death; a key stands just before its footprint event, a link names
-           a child slot and a parent that is no slot or another one */
+           a child slot and a parent that is no slot or another one, a move a slot and two layers */
         unsigned cid, pid;
         if (!w->ticked || w->fbracket || w->ndeaths || w->mp_in || !(w->hold_flags & RECL_CELLS) ||
             !rec_event_len(kind, len))
@@ -1615,6 +1616,13 @@ static int apply(Writer* w, unsigned kind, const unsigned char* b, unsigned len)
         if (kind == RK_EV_TURN) {
             memcpy(&id, b, 2);
             if (b[2] || b[3] || !rec_turns_turn(&w->turns, id, w->nslots)) return 0;
+            break;
+        }
+        if (kind == RK_EV_PLACE) {
+            memcpy(&cid, b, 4);
+            if (b[28] > 3 || b[29] > 3 || b[30] || b[31] || !slot_ok(w, cid - 1u) ||
+                !rec_turns_event(&w->turns, 1, kind, cid - 1u, NULL))
+                return 0;
             break;
         }
         memcpy(&cid, b, 4);

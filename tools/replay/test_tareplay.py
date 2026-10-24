@@ -2796,10 +2796,11 @@ class YardEvent(unittest.TestCase):
 
 
 class ContestOrderEvent(unittest.TestCase):
-    """RK_EV_TURN and RK_EV_LINK in tarec's World, as the writer and the DLL's reader take them
-    (tagpu_recfmt.h, THE CONTEST ORDER): a key stands just before a top-level footprint event,
-    never gives the key the event has without it and never takes the step's keys back; a link
-    names a child slot and a parent that is none or another slot, inside no bracket."""
+    """RK_EV_TURN, RK_EV_LINK and RK_EV_PLACE in tarec's World, as the writer and the DLL's
+    reader take them (tagpu_recfmt.h, THE CONTEST ORDER): a key stands just before a top-level
+    footprint event, never gives the key the event has without it and never takes the step's
+    keys back; a link names a child slot and a parent that is none or another slot, a move a slot
+    and two layers, inside no bracket."""
 
     world = YardEvent.world
     death, create = staticmethod(YardEvent.death), staticmethod(YardEvent.create)
@@ -2811,6 +2812,30 @@ class ContestOrderEvent(unittest.TestCase):
     @staticmethod
     def link(child, parent, pad=b"\0\0"):
         return struct.pack("<IIBB", child, parent, 3, 1) + pad
+
+    @staticmethod
+    def place(unit, before=1, after=1, pad=b"\0\0"):
+        return struct.pack("<I3i3iBB", unit, 100, 5, 200, 900, 5, 800, before, after) + pad
+
+    def test_a_move_takes_the_key_of_its_turn(self):
+        w = self.world()
+        w.apply(tarec.RK_EV_TURN, self.turn(1))
+        self.assertEqual(w.apply(tarec.RK_EV_PLACE, self.place(3))[0], tarec.RK_EV_PLACE)
+        self.assertEqual(w.turn_held, 1)
+        with self.assertRaisesRegex(tarec.Unreadable, "one the event has without it"):
+            w.apply(tarec.RK_EV_TURN, self.turn(1))
+            w.apply(tarec.RK_EV_PLACE, self.place(2))
+
+    def test_a_move_outside_the_array_or_of_another_layer(self):
+        for unit in (1, 5):
+            with self.subTest(unit=unit):
+                with self.assertRaisesRegex(tarec.Unreadable, "outside the array"):
+                    self.world().apply(tarec.RK_EV_PLACE, self.place(unit))
+        for body in (self.place(2, before=4), self.place(2, after=4), self.place(2, pad=b"\1\0"),
+                     self.place(2)[:31]):
+            with self.subTest(body=body.hex()):
+                with self.assertRaisesRegex(tarec.Unreadable, "a teleport move of"):
+                    self.world().apply(tarec.RK_EV_PLACE, body)
 
     def test_the_implicit_keys(self):
         w = self.world()
@@ -2860,7 +2885,8 @@ class ContestOrderEvent(unittest.TestCase):
             self.world().apply(tarec.RK_EV_TURN, struct.pack("<HH", 1, 1))
 
     def test_a_key_or_link_inside_a_death_or_a_feature_call(self):
-        for kind, body in ((tarec.RK_EV_TURN, self.turn(3)), (tarec.RK_EV_LINK, self.link(2, 0))):
+        for kind, body in ((tarec.RK_EV_TURN, self.turn(3)), (tarec.RK_EV_LINK, self.link(2, 0)),
+                           (tarec.RK_EV_PLACE, self.place(2))):
             with self.subTest(kind=kind):
                 w = self.world()
                 w.apply(tarec.RK_EV_DEATH, self.death(3))

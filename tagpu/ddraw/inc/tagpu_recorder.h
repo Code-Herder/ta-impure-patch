@@ -34,6 +34,9 @@ int tagpu_rec_slice(const char* unit, const char* cob);
    level, the turn the footprint events that follow are made in (tagpu_recfmt.h, THE CONTEST
    ORDER). Game thread. */
 void tagpu_rec_turn(const char* unit);
+/* A playing's RK_EV_PLACE (tagpu_replay.c, ev_place): Teleport's flare 0x471FD0 from `from` to
+   `to`, as the handler makes it at 0x406B9F, counted as that call (THE COUNTS). Game thread. */
+void tagpu_rec_teleport_flare(const int32_t from[3], const int32_t to[3]);
 /* A script slice was given (THE COUNTS): `where` 0 in the unit tick, 1 at the place the recording
    gives it, 2 at the end of a playing's step. Game thread. */
 void tagpu_rec_slice_given(unsigned where);

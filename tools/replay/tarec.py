@@ -203,7 +203,8 @@ def mapped_bytes(w, h):
  RK_GLOBALS, RK_GLOBALS_DELTA, RK_PROJ_HEAD, RK_PROJ, RK_PROJ_DELTA, RK_VERIFY_GLOBALS,
  RK_VERIFY_PROJ, RK_IMAGE, RK_MAPPED, RK_MAPPED_RUNS, RK_SIGHT, RK_COUNTS,
  RK_COUNT_NAME, RK_MINIMAP, RK_EV_NET_CREATE, RK_POV, RK_CLICK, RK_SELECT, RK_POV_AT,
- RK_SPRAY_SESSION, RK_EV_SLICE, RK_EV_QUERY, RK_EV_YARD, RK_EV_TURN, RK_EV_LINK) = range(62)
+ RK_SPRAY_SESSION, RK_EV_SLICE, RK_EV_QUERY, RK_EV_YARD, RK_EV_TURN, RK_EV_LINK,
+ RK_EV_PLACE) = range(63)
 REC_QUERIES = 4                           # RK_EV_QUERY's queries: QueryBuildInfo, QueryNanoPiece, QueryTransport, QueryLandingPad
 
 # THE PERSPECTIVE's payloads (tagpu_recpov.h)
@@ -234,14 +235,14 @@ EVENTS = {RK_EV_CREATE: "create", RK_EV_NET_CREATE: "network create", RK_EV_DEAT
           RK_EV_YARD: "yard"}
 # THE CONTEST ORDER's records (tagpu_recfmt.h): they stand among the events but are RCS_OTHER's, so
 # they are not in EVENTS, the events flag's kinds
-CONTEST = {RK_EV_TURN: "contest key", RK_EV_LINK: "carry link"}
+CONTEST = {RK_EV_TURN: "contest key", RK_EV_LINK: "carry link", RK_EV_PLACE: "teleport move"}
 REC_TURN_AFTER = 0xFFFF                   # the key of a call after the unit tick
 
 
 def turn_implicit(kind, slot, held):
     """THE CONTEST ORDER's key a reader infers for a top-level footprint event with no RK_EV_TURN
     before it (tagpu_recfmt.h, rec_turn_implicit): a death's or a yard's is the later of its own
-    slot and the step's last key, a create's or a link's the step's last key."""
+    slot and the step's last key, a create's, a link's or a move's the step's last key."""
     if kind in (RK_EV_DEATH, RK_EV_YARD):
         return max(slot, held)
     return held
@@ -961,7 +962,7 @@ class World:
         if self.session is not None and kind not in (RK_SPRAY_SESSION, RK_TICK):
             raise Unreadable(f"record kind {kind} after the iteration's spray sessions")
         if self.turn_key is not None and kind not in (RK_EV_CREATE, RK_EV_DEATH, RK_EV_YARD,
-                                                      RK_EV_LINK):
+                                                      RK_EV_LINK, RK_EV_PLACE):
             raise Unreadable(f"a contest key before record kind {kind}, no footprint event")
         if kind in CONTEST:
             # a skirmish stream's that holds its cells, inside no feature call and no death
@@ -978,6 +979,14 @@ class World:
                 if self.turn_key is not None or (key >= self.slots and key != REC_TURN_AFTER):
                     raise Unreadable(f"a contest key {key} after another, or past the slots")
                 self.turn_key = key
+                return kind, b
+            if kind == RK_EV_PLACE:
+                if len(b) != 32 or b[28] > 3 or b[29] > 3 or b[30] or b[31]:
+                    raise Unreadable(f"a teleport move of {len(b)} bytes or of another layer")
+                unit = struct.unpack_from("<I", b)[0]
+                if not 1 <= unit - 1 < self.slots:
+                    raise Unreadable(f"a teleport move of ID {unit}, outside the array")
+                self.turn_event(True, kind, unit - 1)
                 return kind, b
             if len(b) != 12 or b[10] or b[11]:
                 raise Unreadable(f"a carry link of {len(b)} bytes")

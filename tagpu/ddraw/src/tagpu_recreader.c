@@ -955,10 +955,10 @@ static int sprays_on(const RecHeader* h)
    a segment whose playing keeps the engine's slots: a multiplayer one, or one that holds its
    cells (recr_holds_cells); a script slice and an owner's query are inside none, and name a slot
    of the level's; a yard names one too, outside every feature call, in a death or not, where THE
-   YARD RULE lets it stand (tagpu_recfmt.h), which the creates and deaths feed. A contest key and
-   a link are a stream's of a skirmish segment that holds its cells, inside no feature call and no
-   death, a key just before its footprint event (THE CONTEST ORDER), which the creates, the deaths,
-   the yards and the links feed. 1 taken, 0 malformed. */
+   YARD RULE lets it stand (tagpu_recfmt.h), which the creates and deaths feed. A contest key, a
+   link and a move are a stream's of a skirmish segment that holds its cells, inside no feature
+   call and no death, a key just before its footprint event (THE CONTEST ORDER), which the creates,
+   the deaths, the yards, the links and the moves feed. 1 taken, 0 malformed. */
 static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsigned len)
 {
     RecWorld* w = &r->w;
@@ -966,7 +966,8 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
     unsigned id;
     switch (kind) {
     case RK_EV_TURN:
-    case RK_EV_LINK: {
+    case RK_EV_LINK:
+    case RK_EV_PLACE: {
         unsigned pid;
         if (r->snap || r->fbracket || r->ndeaths || h->mode == 3 || !recr_holds_cells(h) ||
             !rec_event_len(kind, len))
@@ -978,6 +979,12 @@ static int event_take(RecReader* r, unsigned kind, const unsigned char* b, unsig
             break;
         }
         memcpy(&id, b, 4);
+        if (kind == RK_EV_PLACE) {
+            if (b[28] > 3 || b[29] > 3 || b[30] || b[31] || id - 1u < 1 || id - 1u >= w->slots ||
+                !rec_turns_event(&r->turns, 1, kind, id - 1u, NULL))
+                return 0;
+            break;
+        }
         memcpy(&pid, b + 4, 4);
         if (b[10] || b[11] || id - 1u < 1 || id - 1u >= w->slots ||
             (pid && (pid - 1u < 1 || pid - 1u >= w->slots || pid == id)) ||
@@ -1185,12 +1192,13 @@ static int apply(RecReader* r, unsigned kind, const unsigned char* b, unsigned l
     if (*events == IT_SESSIONS && kind != RK_SPRAY_SESSION) return 0;
     /* an RK_EV_TURN stands just before its footprint event (tagpu_recfmt.h, THE CONTEST ORDER) */
     if (r->turns.pending && kind != RK_EV_CREATE && kind != RK_EV_DEATH && kind != RK_EV_YARD &&
-        kind != RK_EV_LINK)
+        kind != RK_EV_LINK && kind != RK_EV_PLACE)
         return 0;
     if (len >= 2) memcpy(&id, b, 2);
     /* the contest order's records stand among the events, in RCS_OTHER: they set no events flag,
        by the writer's rule, rec_section_of */
-    if (kind == RK_EV_TURN || kind == RK_EV_LINK) return event_take(r, kind, b, len);
+    if (kind == RK_EV_TURN || kind == RK_EV_LINK || kind == RK_EV_PLACE)
+        return event_take(r, kind, b, len);
     /* a click follows the step's events, and may follow the images directly */
     if (kind == RK_CLICK) return pov_record(r, kind, b, len);
     /* an event by the writer's rule, rec_section_of: the same predicate sets its `evented` */

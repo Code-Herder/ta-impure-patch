@@ -4711,7 +4711,7 @@ static int fix_step_phases(void)
     return FIX_TABLE;
 }
 
-SIM_FEATURE(script_slice, SIM_PUPPET_RUNS, "slice-walkers battle tenseat contest-waves");
+SIM_FEATURE(script_slice, SIM_PUPPET_RUNS, "slice-walkers battle tenseat contest-waves teleport");
 
 /* THE SCRIPT SLICE. The unit tick 0x48AD30 gives each unit it reaches one script slice:
 
