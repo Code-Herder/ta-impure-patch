@@ -3241,7 +3241,7 @@ static int file_compact(RecReader* r, const char* path, const char* output, unsi
     unsigned i, j, n = 0, high = 0, dead = 0;
     char tmp[MAX_PATH];
     HANDLE f = INVALID_HANDLE_VALUE;
-    int exporting = output && output[0], ok = 0;
+    int exporting = output && output[0], ok = 0, marked = 0;
     const char* target = exporting ? output : path;
     for (i = 0; i < r->nseg; i++) {
         const RecTimeline* t = &r->seg[i].t;
@@ -3272,7 +3272,16 @@ static int file_compact(RecReader* r, const char* path, const char* output, unsi
     snprintf(tmp, sizeof tmp, "%s.tmp", target);
     f = CreateFileA(tmp, GENERIC_WRITE | DELETE, FILE_SHARE_DELETE, NULL, CREATE_ALWAYS,
                     FILE_ATTRIBUTE_NORMAL, NULL);
-    if (f == INVALID_HANDLE_VALUE || !write_all(f, REC_MAGIC, 8)) goto io_fail;
+    if (f == INVALID_HANDLE_VALUE) goto io_fail;
+    /* THE TEMPORARY FILE'S LIFETIME: marked for deletion on its own handle from its creation to
+       the move, so that every failure -- a block that will not copy, a write refused, the move
+       refused, the process ending -- deletes it when the handle closes. The mark is lifted for the
+       move alone, since a file whose deletion is pending cannot be opened to be moved, and set
+       again when the move fails. Where no mark can be set (XP), a failure deletes it by name at
+       the end: the name is this caller's alone, beside the recording whose lock it holds -- the
+       source's for a compaction, the output's for an export (tagpu_recfile.h, THE PATH LOCK). */
+    marked = recfile_delete_on_close(f, 1);
+    if (!write_all(f, REC_MAGIC, 8)) goto io_fail;
     for (i = 0; i < r->nseg; i++) {
         RecSeg* s = &r->seg[i];
         const RecTimeline* t = &s->t;
@@ -3304,16 +3313,24 @@ static int file_compact(RecReader* r, const char* path, const char* output, unsi
     if (high < r->max_id) rows[n++] = (RecTimelineState){r->max_id, REC_TL_DELETED, {0}, 0, 0};
     if (!stored_block(f, RB_TIMELINES, 0, rows, n * sizeof *rows) || !FlushFileBuffers(f))
         goto io_fail;
-    /* Every Impure writer holds the same persistent path lock from before its scan through
-       its last mutation. That ordering remains held when the source closes: MoveFileEx cannot
-       replace an open destination on Windows/Wine, even one sharing DELETE. No cooperating
-       writer can append in the close-to-replace interval. Other readers retain their ordinary
-       handles and refuse replacement; a later close retries compaction. The temp is complete
-       and flushed before the atomic replacement, so a crash leaves the old or the new file. */
+    /* Every Impure writer holds the same path lock (tagpu_recfile.h, THE PATH LOCK) from before
+       its scan through its last mutation. That ordering remains held when the source closes:
+       MoveFileEx cannot replace an open destination on Windows/Wine, even one sharing DELETE.
+       No cooperating writer can append in the close-to-replace interval. Other readers retain
+       their ordinary handles and refuse replacement; a later close retries compaction. The temp
+       is complete and flushed before the atomic replacement, so a crash leaves the old or the
+       new file. */
     CloseHandle(r->f);
     r->f = INVALID_HANDLE_VALUE;
+    if (marked && !recfile_delete_on_close(f, 0)) goto io_fail;
+    marked = 0;
     if (!MoveFileExA(tmp, target, MOVEFILE_WRITE_THROUGH |
-                    (exporting ? 0 : MOVEFILE_REPLACE_EXISTING))) goto io_fail;
+                    (exporting ? 0 : MOVEFILE_REPLACE_EXISTING))) {
+        DWORD error = GetLastError();
+        marked = recfile_delete_on_close(f, 1);
+        SetLastError(error);
+        goto io_fail;
+    }
     snprintf(why, cap, "%s %u; %u segments kept", exporting ? "exported timeline" :
              "compacted after timeline", chosen, n);
     ok = 1;
@@ -3322,7 +3339,10 @@ io_fail:
     snprintf(why, cap, "cannot %s the recording (%lu)", exporting ? "export" : "compact",
              GetLastError());
 done:
-    if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
+    if (f != INVALID_HANDLE_VALUE) {
+        CloseHandle(f);
+        if (!ok && !marked) DeleteFileA(tmp);
+    }
     return ok;
 }
 
@@ -3340,6 +3360,17 @@ int recr_manage(const char* path, unsigned op, unsigned id, const char* output,
         snprintf(why, cap, "a touch names its timelines, timeline %u first", id);
         return 0;
     }
+    /* an export onto its own recording, told by both full paths: the source's lock held, the
+       output's lock would read as busy, so it is refused here by what it is */
+    if (op == REC_FILE_EXPORT && output) {
+        char a[MAX_PATH], b[MAX_PATH];
+        DWORD na = GetFullPathNameA(path, MAX_PATH, a, NULL);
+        DWORD nb = GetFullPathNameA(output, MAX_PATH, b, NULL);
+        if (na && na < MAX_PATH && nb && nb < MAX_PATH && !_stricmp(a, b)) {
+            snprintf(why, cap, "an export cannot be written over the recording it exports from");
+            return 0;
+        }
+    }
     lock = recfile_lock(path, why, cap);
     if (!lock) return 0;
     f = CreateFileA(path, op == REC_FILE_EXPORT ? GENERIC_READ : GENERIC_READ | GENERIC_WRITE,
@@ -3347,11 +3378,11 @@ int recr_manage(const char* path, unsigned op, unsigned id, const char* output,
                     FILE_FLAG_SEQUENTIAL_SCAN, NULL);
     if (f == INVALID_HANDLE_VALUE) {
         snprintf(why, cap, "maintenance skipped: cannot write %s (%lu)", path, GetLastError());
-        recfile_unlock(&lock);
+        recfile_unlock(&lock, path);
         return 0;
     }
     r = open_handle(f, path, why, cap, 0);       /* the reader owns the locked handle from here */
-    if (!r) { recfile_unlock(&lock); return 0; }
+    if (!r) { recfile_unlock(&lock, path); return 0; }
     if (segs_scan(r, 1, why, cap) < 0) goto done;
     s = seg_index(r, id);
     if (op != REC_FILE_COMPACT && op != REC_FILE_TOUCH &&
@@ -3360,8 +3391,15 @@ int recr_manage(const char* path, unsigned op, unsigned id, const char* output,
         goto done;
     }
     if (op == REC_FILE_EXPORT) {
+        /* the output is a recording this export makes: its lock is held from before the
+           temporary file to after the move (tagpu_recfile.h, THE PATH LOCK); busy, the export is
+           refused as a busy source is */
+        HANDLE out;
         if (recr_timeline(r, id, why, cap) != 1) goto done;
+        out = recfile_lock(output, why, cap);
+        if (!out) goto done;
         ok = file_compact(r, path, output, id, why, cap);
+        recfile_unlock(&out, output);
         goto done;
     }
     if (op == REC_FILE_DELETE) r->seg[s].t.state = REC_TL_DELETED;
@@ -3405,7 +3443,7 @@ int recr_manage(const char* path, unsigned op, unsigned id, const char* output,
     }
 done:
     recr_close(r);
-    recfile_unlock(&lock);
+    recfile_unlock(&lock, path);
     return ok;
 }
 

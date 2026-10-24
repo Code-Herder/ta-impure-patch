@@ -18,12 +18,29 @@ _Static_assert(sizeof(RecTimelineState) == 16, "a timeline state row");
 
 int recmeta_parse(RecTimelineState* out, unsigned* count, const void* raw, unsigned bytes);
 uint64_t recfile_now(void);
-/* Every recording writer holds this persistent file's exclusive handle until its last mutation.
-   Never unlink the lock file while another may hold it: unlinking lets two callers lock different
-   objects at one path. The prune alone deletes one, through its own exclusive handle: with the
-   recording it locks, or one it made itself for a recording it keeps. */
+/* THE PATH LOCK: `path`.lock, opened with share mode 0, so one caller at a time holds it.
+   THE INVARIANT: every caller in this program that creates, replaces or deletes a recording holds
+   that recording's lock from before it looks for the file until its last change of it -- the
+   writer, which creates its file CREATE_NEW after the lock (tagpu_recwriter.c, file_open); a
+   takeover's fork, which appends to the file it opened under the lock, through the ring and the
+   writer; maintenance (recr_manage), whose compaction replaces the file; an export, which holds
+   its output's lock besides its source's from before its temporary file to after the move that
+   makes the output; and the prune (prune_one), which deletes a recording under its lock on its own
+   handle. So while the lock is held, no caller here can make its recording appear or go.
+   recfile_unlock(lock, path), `path` the path it was taken for: when the recording does not
+   exist, the lock is marked for deletion through the held handle before it closes, so no lock
+   outlives its recording -- a touch or a takeover asked of a recording the prune has deleted
+   leaves nothing behind. Deleting through the exclusive handle never lets two callers hold two
+   lock objects of one path: no other open can share the handle, and the name goes only at its
+   close; a lock deleted early costs the next caller a recreate, never a second lock object.
+   Not covered: a recording made or deleted outside the program (a deletion leaves its lock until
+   the next caller of that path releases it), and XP, which has no SetFileInformationByHandle and
+   keeps every lock. */
 HANDLE recfile_lock(const char* path, char* why, unsigned cap);
-void recfile_unlock(HANDLE* lock);
+void recfile_unlock(HANDLE* lock, const char* path);
+/* `f`, opened with DELETE access, marked for deletion at its close (`on`) or its mark lifted: 1
+   done, 0 refused, or where there is no SetFileInformationByHandle (XP) */
+int recfile_delete_on_close(HANDLE f, int on);
 
 /* THE PRUNE'S ORDER, which the Replays browser lists by too (tagpu_replays.c, scan): < 0 when the
    file named `x`, whose recorded start `tx` recr_wallclock_of read with answer `dx`, comes before

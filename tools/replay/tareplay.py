@@ -2244,6 +2244,19 @@ def prune_step(w, fx, out, forked):
     if rc:
         raise CouldNotRun(f"prune: load: {last(text)}")
     got = log.wait(r"recorder: prune at .*", ACK_S)
+    # THE PATH LOCK (tagpu_recfile.h): a request on a recording the prune has deleted -- an
+    # export here, a touch at a playing's end alike -- takes that recording's lock, finds no
+    # recording and leaves no lock behind
+    request = f"{random.getrandbits(128):032x}"
+    w.trigger(f'forks @{request} "0000 plain-b" export 0 "pruned-export"')
+    # recr_manage's refusal alone, which comes after the lock; the queue's own ("file worker
+    # unavailable") takes none
+    asked = log.wait(rf"replay: forks replays\\0000 plain-b\.imprec: refused: maintenance skipped: "
+                     rf"cannot write replays\\0000 plain-b\.imprec \(2\) \[request={request}\]",
+                     ACK_S)
+    locks = sorted(p.name for p in rd.glob("*.lock")
+                   if p.name in ("0000 plain-b.imprec.lock", "0000 older.imprec.lock",
+                                 "pruned-export.imprec.lock"))
     if fx["cover"]:
         cover_ask(w, log, "prune")
     left = sorted(p.name for p in rd.glob("0000 *.imprec"))
@@ -2257,7 +2270,11 @@ def prune_step(w, fx, out, forked):
                   for n in ("plain-a", "starred", "marked", "forked", "not-a-recording"))
     if not got or want not in got or left != kept:
         raise Failed(f"prune: {got.strip() if got else f'no prune line in {ACK_S} s'}; left {left}")
-    return ("forks: the prune", PASS, f"{want}; left {', '.join(left)}")
+    if not asked or locks:
+        raise Failed(f"prune: the export of the pruned plain-b: "
+                     f"{asked.strip() if asked else f'no refusal in {ACK_S} s'}; locks left {locks}")
+    return ("forks: the prune", PASS, f"{want}; left {', '.join(left)}; the export of the pruned "
+            f"plain-b refused, no lock left of a deleted recording")
 
 
 def fork_file(w, log):
@@ -2891,6 +2908,13 @@ def forks_steps(w, fx, out, results):
     finish_play(log, 5)
     command("export", 5, "export5")
     command("export", 5, "export5", expect=False)     # an existing export is never overwritten
+    # the export held its output's lock, which stays beside the recording it made
+    # (tagpu_recfile.h, THE PATH LOCK), and the refused one's temporary file went with its
+    # failure (tagpu_recreader.c, file_compact)
+    if not (w.gamedir / "replays" / "export5.imprec.lock").exists():
+        raise Failed("forks: the export's output has no lock beside it")
+    if (w.gamedir / "replays" / "export5.imprec.tmp").exists():
+        raise Failed("forks: the refused export left its temporary file")
     exported = out / "export5.imprec"
     shutil.copy2(w.gamedir / "replays" / "export5.imprec", exported)
     segs = check_file(exported, "exported chain")

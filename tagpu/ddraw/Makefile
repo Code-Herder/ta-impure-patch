@@ -88,8 +88,10 @@ endif
 SRCS     := $(wildcard src/*.c) $(wildcard src/*/*.c) res.rc
 OBJS     := $(addsuffix $(OBJEXT), $(basename $(SRCS)))
 DEPS     := $(filter %.d, $(OBJS:.o=.d))
+# Every build's object suffix: a rule that names one object names it in all four builds.
 # `clean` removes every build's objects, whichever LIMITS or COVER it is run with.
-ALLOBJS  := $(foreach e, .o .stock.o .cover.o .stock.cover.o, $(addsuffix $(e), $(basename $(SRCS))))
+ALLEXTS  := .o .stock.o .cover.o .stock.cover.o
+ALLOBJS  := $(foreach e, $(ALLEXTS), $(addsuffix $(e), $(basename $(SRCS))))
 
 .PHONY: clean all thread-split spirv log-check replay-layout logtest arttest windowtest vklifetime codectest
 all: $(TARGET)
@@ -165,7 +167,7 @@ ART_SRCS := $(shell find $(ART_DIR) -type d -o -name '*.png' 2>/dev/null)
 inc/tagpu_art_gen.h: ../../tools/artbake.py ../../unditherer/ta-palette.json $(ART_SRCS)
 	python3 ../../tools/artbake.py $(ART_DIR) ../../unditherer/ta-palette.json $@
 
-src/tagpu_art.o src/tagpu_art.stock.o tests/arttest.exe: inc/tagpu_art_gen.h
+$(addprefix src/tagpu_art, $(ALLEXTS)) tests/arttest.exe: inc/tagpu_art_gen.h
 
 # THE HUD ARCHIVE (tools/hudpak.py; src/tagpu_hudart.h): the replay HUD's files under art/hud/,
 # packed as they are -- JSON, PNG, TrueType -- into inc/tagpu_hudpak.bin, which res.rc embeds as
@@ -176,7 +178,7 @@ HUD_SRCS := $(shell find $(HUD_DIR) -type d -o -type f 2>/dev/null)
 inc/tagpu_hudpak.bin: ../../tools/hudpak.py $(HUD_SRCS)
 	python3 ../../tools/hudpak.py $(HUD_DIR) $@
 
-res.o res.stock.o res.cover.o res.stock.cover.o: inc/tagpu_hudpak.bin
+$(addprefix res, $(ALLEXTS)): inc/tagpu_hudpak.bin
 
 # THE SIMULATION-STATE RULE (inc/tagpu_simreg.h): every writable static of a file marked `sim`
 # in thread-split.allow is declared, and no `sim` object allocates, takes a TLS index, changes a
