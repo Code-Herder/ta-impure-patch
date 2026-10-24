@@ -1343,9 +1343,11 @@ engine map's *An open yard gives nothing back*). **What remains
 open**: where the playing makes two contesting footprint calls in another order than the game did
 (deaths, creates and placements in slot order against the game's interleaving in its unit tick),
 the holder can differ (MEASURED in emulation, 4 of an air war's 1,700 iterations; no slot-B impact
-differed in the game in an air war or a battle). A multiplayer recording is unchanged: its playing
-keeps the engine's slots already, its marks are still written from the recording, and its contest
-follows the puppet's type-3 rule (the owner has not decided the marks for it). Its takeover
+differed in the game in an air war or a battle). A multiplayer recording holds no cells: its
+playing keeps the engine's slots and yard bits and, by the owner's decision of 2026-10-23, the
+footprint writers' marks, which it leaves out of every unit image write as here; its contests
+follow the puppet's type-3 rule, the engine's own, and its comparisons check the cells by the
+occupancy rule (the multiplayer slice note's *Cells' unit slots and the yard bit*). Its takeover
 timeline is a skirmish segment and holds its cells: the playing changes to the recording
 machine's rule where it crosses into one (`mp_follow`). MEASURED 2026-10-12 on a two-peer
 recording with reproducing trees taken over at 901 as player 1: timeline 1 played across its fork

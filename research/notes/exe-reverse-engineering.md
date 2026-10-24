@@ -8293,7 +8293,8 @@ left without the cell gets `+0x110` bit 27 and the holder bit 26 (twelve `or` si
 `0x47C85E..0x47D028`). The full list of `cmp byte [reg+0x73],3` in `.text` has 29 entries; these six
 are the only ones in the footprint writers.
 
-**The marks keep the grid consistent.** The clear `0x47D0E0` clears bit 27 always (`0x47D28C`) and,
+**The marks keep the grid consistent.** The clear `0x47D0E0` clears bit 27 always, first
+(`0x47D286..0x47D294`, `and ebx,0xF7FFFFFF`) and,
 when bit 26 is set, clears it and walks the buckets around the footprint (`0x47D29C..0x47D2C4`; the
 walk `0x47E5C0` hands every unit of an 8-cell bucket from `(x >> 3) − 1` to `((x + w) >> 3) + 1`, z
 alike, whose footprint overlaps, to `0x47ED30`, which re-claims it). The re-claim acts only on bit
@@ -8312,6 +8313,28 @@ bit-27 units, or when its record is made anew -- the create's init clears both m
 `and eax,0xF3FFF7FF`) [DISASSEMBLED; MEASURED
 2026-10-12 with no exception in 776 dumps, 284 of them live, holding 2,042 stamped bit-27 units].
 Every clear ends with `0x440A70` (`0x47D2CA`).
+
+**One slot per layer, so an overlap leaves a unit unnamed** [DISASSEMBLED 2026-10-23]. A cell's
+slot A and slot B are one u16 each. A mobile unit's path tests the layer (`and eax,3` / `cmp eax,1`
+/ `jne` at `0x47CEBC..0x47CEC2`, reached from the structure test `0x47CD5A` with bit 29 clear),
+and the layer-1 loop reads the cell's slot A, `mov ax,word [edx]` at `0x47CEDA`: 0 takes the cell,
+anything else is the incumbent's slot, whose unit record (`*(0x511DE8)+0x14357`, `0x118` bytes a
+slot, `0x47CEE2..0x47CEFD`) gives its owner record `+0x96` at `0x47CF00`, tested at
+`0x47CF06..0x47CF0F` as above. The keep path marks the incumbent bit 26 and the newcomer bit 27
+and leaves the cell (`0x47CF11..0x47CF34`); the take path marks them the other way round and
+writes the newcomer's slot `+0xA8` (the structure path's twin is `0x47CE00..0x47CE2A`). So where two
+live mobile units of one layer overlap, one of the two is not named in the shared cell whatever
+the order of the stamps, and only the marks say which one lost it -- the reason the replay's
+occupancy check is the contest's (`tools/replay/tarec.py`, THE OCCUPANCY RULE). **On a playing
+whose cells are the engine's** -- a multiplayer segment, and a skirmish segment that holds its
+cells -- these writers are the marks' only writer: the playing's unit image writes leave `+0x110`
+bits 26 and 27 out (`tagpu_replay.c`, `U_MARKS`, `unit_put`, `states_put`). Each owner's image
+carries its own machine's marks, for its own grid at its own times: written beside the host's
+grid, they left a host contest unmarked (MEASURED 2026-10-23, the r2 four-seat recording at
+GameTime 1016: cell (157, 82) named unit 10, which overlapped unit 1503 there, and none of the 43
+units carried a mark); had the holder left first, its clear would have run no walk and the loser,
+with no bit 27, no re-claim, so the cell would have stayed empty under it [INFERRED from the
+writers above; not reached there, the loser left first, at 1025].
 
 **An open yard gives nothing back.** YARD_OPEN `0x47DAC0` sets `+0x10F` bit 2 and the structure's
 own bit 27 (`0x47DAD5..0x47DAF7`), re-claims for the structure alone (`0x47DAFD`) and refreshes the

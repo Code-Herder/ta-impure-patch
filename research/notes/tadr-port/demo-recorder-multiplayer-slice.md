@@ -1374,12 +1374,27 @@ on it, and the yard bit is a structure's. The recorder's grid names its replicas
 at its own times, while the host's units follow their owners. No recorded slot
 is the truth on such a level, so the footprint writers' writes stand
 (`tagpu_puppet_begin`'s `engine_cells`), and `cell_put`/`slots_put` write
-neither. Every slot the host's grid names is a live host unit: the engine writes
-it, and its destructor takes the unit off the grid (`0x48682D`) before it clears
-the alive bit (`0x486DCE`). `recmp_compare.py` checks that instead of comparing
-the slots, and checks that every set yard bit lies inside a live structure's
-footprint (`+0x76`/`+0x78` by `+0x7E`/`+0x80`, `+0x110` bit 29) instead of
-comparing the bit; the owner approved that check on 2026-10-06. The feature
+neither. The contests' marks, `+0x110` bits 26 and 27, are those writers' too:
+`unit_put` and `states_put` leave them out of every unit image write on such a
+level (`U_MARKS`; the owner's decision of 2026-10-23), so every mark names a
+contest the host's grid held, and the clear and the re-claim hand a cell back to
+exactly the units it marked. The contests follow the engine's own rule: every
+puppet seat is type 3, so the newcomer takes a held cell. Every slot the host's
+grid names is a live host unit: the engine writes it, and its destructor takes
+the unit off the grid (`0x48682D`) before it clears the alive bit (`0x486DCE`).
+`recmp_compare.py`, on its dumps and on `--fork`'s first iteration, and `tarec
+compare-dumps --seek` in a multiplayer segment check the slots, the yard bits and
+the marks instead of comparing them, by THE OCCUPANCY RULE (`tarec.occupancy`):
+the stamp's own checks layer by layer, a loser's cell naming the holder that took
+it, every named slot a live unit whose footprint holds the cell, and every set
+yard bit inside a live structure's footprint (`+0x76`/`+0x78` by `+0x7E`/`+0x80`,
+`+0x110` bit 29); the dump's marks are then taken into the expected world. The
+owner approved the slot and yard-bit check on 2026-10-06 and its contest form, a
+loosening, on 2026-10-23: two live mobile units of one layer that overlap share
+the cell's one slot of their layer (the engine map's *The footprint contest's
+rule*), so no order names both, and a seek's slot-order creates pick the other
+one than the playing's history. Two straight playings of one file are still
+compared byte for byte. The feature
 code reads one slot, reproduction's source test (`0x424189`); a multiplayer
 recording records the value the recorder's tick read there (`FS_SOURCE`, an
 `RK_EV_DRAW` inside the tick), and the host's stub at `0x424185` answers from it
@@ -1640,9 +1655,11 @@ multiplayer game has no rewind, so the rewind's return to now refuses one. *THE 
   already steps over every block that is not the stream's.
 
 `recmp_compare.py` checks the slots more strictly since this seek: a slot must
-lie inside the footprint of the live unit it names, and every cell of a live
-mobile unit's footprint must name it. A structure's yardmap leaves some of its
-cells open, such as the four corners of slot 4502's 6×6 footprint at 2070.
+lie inside the footprint of the live unit it names, and every cell of a mobile
+unit's footprint the stamp files must name it in its layer's slot, or, while the
+unit carries the loser's mark, name the holder that took the cell (THE OCCUPANCY
+RULE, *Cells' unit slots and the yard bit*). A structure's yardmap leaves some of
+its cells open, such as the four corners of slot 4502's 6×6 footprint at 2070.
 Without that check, a seek that wrote the recorder's slots compared EQUAL:
 unit 3006 stood in the recorder's cells, one row off its owner's, and its old
 row named it after its death.
@@ -1762,8 +1779,8 @@ no yard bit stands. R7 and R8 then stamp the composed world on an empty grid.
 
 **What the comparison expects.** `recmp_compare.py --fork N` compares the
 takeover's first iteration with the composed parent at `fork_at`, less D2's
-list (`tarec.fork_view`). The grid's slots and yard bits and the sort buckets'
-chains are checked on the fork's iteration, as on a dump. The contact bits `+0x110` 8–10 and 12 are the
+list (`tarec.fork_view`). The grid's slots, yard bits and contest marks and the
+sort buckets' chains are checked on the fork's iteration, as on a dump. The contact bits `+0x110` 8–10 and 12 are the
 viewed seat's scan (R14b), and an owner's image carries its own machine's: a
 player's own units are in contact on its own machine. So when both worlds view
 the same player, a composed unit takes the recorder's bits from the primary
