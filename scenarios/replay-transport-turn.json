@@ -33,7 +33,7 @@
     1304,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car1",
@@ -43,7 +43,7 @@
     1432,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car2",
@@ -53,7 +53,7 @@
     1560,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car3",
@@ -63,7 +63,7 @@
     1688,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car4",
@@ -73,7 +73,7 @@
     1816,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car5",
@@ -83,7 +83,7 @@
     1944,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car6",
@@ -93,7 +93,7 @@
     2072,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car7",
@@ -103,7 +103,7 @@
     2200,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car8",
@@ -113,7 +113,7 @@
     2328,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car9",
@@ -123,7 +123,7 @@
     2456,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car10",
@@ -133,7 +133,7 @@
     2584,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car11",
@@ -143,7 +143,7 @@
     2712,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car12",
@@ -153,7 +153,7 @@
     2840,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car13",
@@ -163,7 +163,7 @@
     2968,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car14",
@@ -173,7 +173,7 @@
     3096,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car15",
@@ -183,7 +183,7 @@
     3224,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car16",
@@ -193,7 +193,7 @@
     3352,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car17",
@@ -203,7 +203,7 @@
     3480,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car18",
@@ -213,7 +213,7 @@
     3608,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car19",
@@ -223,7 +223,7 @@
     3736,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car20",
@@ -233,7 +233,7 @@
     3864,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car21",
@@ -243,7 +243,7 @@
     3992,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car22",
@@ -253,7 +253,7 @@
     4120,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car23",
@@ -263,7 +263,7 @@
     4248,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car24",
@@ -273,7 +273,7 @@
     4376,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car25",
@@ -283,7 +283,7 @@
     4504,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car26",
@@ -293,7 +293,7 @@
     4632,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car27",
@@ -303,7 +303,7 @@
     4760,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car28",
@@ -313,7 +313,7 @@
     4888,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car29",
@@ -323,7 +323,7 @@
     5016,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car30",
@@ -333,7 +333,7 @@
     5144,
     4055
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "car31",
@@ -343,7 +343,87 @@
     5272,
     4055
    ],
-   "facing": 180
+   "facing": 0
+  },
+  {
+   "id": "car32",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    5400,
+    4055
+   ],
+   "facing": 0
+  },
+  {
+   "id": "car33",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    5528,
+    4055
+   ],
+   "facing": 0
+  },
+  {
+   "id": "car34",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    5656,
+    4055
+   ],
+   "facing": 0
+  },
+  {
+   "id": "car35",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    5784,
+    4055
+   ],
+   "facing": 0
+  },
+  {
+   "id": "car36",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    5912,
+    4055
+   ],
+   "facing": 0
+  },
+  {
+   "id": "car37",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    6040,
+    4055
+   ],
+   "facing": 0
+  },
+  {
+   "id": "car38",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    6168,
+    4055
+   ],
+   "facing": 0
+  },
+  {
+   "id": "car39",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    6296,
+    4055
+   ],
+   "facing": 0
   },
   {
    "id": "bear0",
@@ -353,7 +433,7 @@
     1304,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -369,7 +449,7 @@
     1432,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -385,7 +465,7 @@
     1560,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -401,7 +481,7 @@
     1688,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -417,7 +497,7 @@
     1816,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -433,7 +513,7 @@
     1944,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -449,7 +529,7 @@
     2072,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -465,7 +545,7 @@
     2200,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -481,7 +561,7 @@
     2328,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -497,7 +577,7 @@
     2456,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -513,7 +593,7 @@
     2584,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -529,7 +609,7 @@
     2712,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -545,7 +625,7 @@
     2840,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -561,7 +641,7 @@
     2968,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -577,7 +657,7 @@
     3096,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -593,7 +673,7 @@
     3224,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -609,7 +689,7 @@
     3352,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -625,7 +705,7 @@
     3480,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -641,7 +721,7 @@
     3608,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -657,7 +737,7 @@
     3736,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -673,7 +753,7 @@
     3864,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -689,7 +769,7 @@
     3992,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -705,7 +785,7 @@
     4120,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -721,7 +801,7 @@
     4248,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -737,7 +817,7 @@
     4376,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -753,7 +833,7 @@
     4504,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -769,7 +849,7 @@
     4632,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -785,7 +865,7 @@
     4760,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -801,7 +881,7 @@
     4888,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -817,7 +897,7 @@
     5016,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -833,7 +913,7 @@
     5144,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
@@ -849,11 +929,139 @@
     5272,
     4007
    ],
-   "facing": 180,
+   "facing": 0,
    "orders": [
     {
      "cmd": "load",
      "target": "pw31"
+    }
+   ]
+  },
+  {
+   "id": "bear32",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    5400,
+    4007
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw32"
+    }
+   ]
+  },
+  {
+   "id": "bear33",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    5528,
+    4007
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw33"
+    }
+   ]
+  },
+  {
+   "id": "bear34",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    5656,
+    4007
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw34"
+    }
+   ]
+  },
+  {
+   "id": "bear35",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    5784,
+    4007
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw35"
+    }
+   ]
+  },
+  {
+   "id": "bear36",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    5912,
+    4007
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw36"
+    }
+   ]
+  },
+  {
+   "id": "bear37",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    6040,
+    4007
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw37"
+    }
+   ]
+  },
+  {
+   "id": "bear38",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    6168,
+    4007
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw38"
+    }
+   ]
+  },
+  {
+   "id": "bear39",
+   "type": "ARMTHOVR",
+   "owner": 0,
+   "pos": [
+    6296,
+    4007
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "load",
+     "target": "pw39"
     }
    ]
   },
@@ -865,7 +1073,7 @@
     1304,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw1",
@@ -875,7 +1083,7 @@
     1432,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw2",
@@ -885,7 +1093,7 @@
     1560,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw3",
@@ -895,7 +1103,7 @@
     1688,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw4",
@@ -905,7 +1113,7 @@
     1816,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw5",
@@ -915,7 +1123,7 @@
     1944,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw6",
@@ -925,7 +1133,7 @@
     2072,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw7",
@@ -935,7 +1143,7 @@
     2200,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw8",
@@ -945,7 +1153,7 @@
     2328,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw9",
@@ -955,7 +1163,7 @@
     2456,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw10",
@@ -965,7 +1173,7 @@
     2584,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw11",
@@ -975,7 +1183,7 @@
     2712,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw12",
@@ -985,7 +1193,7 @@
     2840,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw13",
@@ -995,7 +1203,7 @@
     2968,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw14",
@@ -1005,7 +1213,7 @@
     3096,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw15",
@@ -1015,7 +1223,7 @@
     3224,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw16",
@@ -1025,7 +1233,7 @@
     3352,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw17",
@@ -1035,7 +1243,7 @@
     3480,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw18",
@@ -1045,7 +1253,7 @@
     3608,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw19",
@@ -1055,7 +1263,7 @@
     3736,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw20",
@@ -1065,7 +1273,7 @@
     3864,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw21",
@@ -1075,7 +1283,7 @@
     3992,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw22",
@@ -1085,7 +1293,7 @@
     4120,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw23",
@@ -1095,7 +1303,7 @@
     4248,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw24",
@@ -1105,7 +1313,7 @@
     4376,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw25",
@@ -1115,7 +1323,7 @@
     4504,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw26",
@@ -1125,7 +1333,7 @@
     4632,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw27",
@@ -1135,7 +1343,7 @@
     4760,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw28",
@@ -1145,7 +1353,7 @@
     4888,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw29",
@@ -1155,7 +1363,7 @@
     5016,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw30",
@@ -1165,7 +1373,7 @@
     5144,
     3935
    ],
-   "facing": 180
+   "facing": 0
   },
   {
    "id": "pw31",
@@ -1175,7 +1383,87 @@
     5272,
     3935
    ],
-   "facing": 180
+   "facing": 0
+  },
+  {
+   "id": "pw32",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    5400,
+    3935
+   ],
+   "facing": 0
+  },
+  {
+   "id": "pw33",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    5528,
+    3935
+   ],
+   "facing": 0
+  },
+  {
+   "id": "pw34",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    5656,
+    3935
+   ],
+   "facing": 0
+  },
+  {
+   "id": "pw35",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    5784,
+    3935
+   ],
+   "facing": 0
+  },
+  {
+   "id": "pw36",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    5912,
+    3935
+   ],
+   "facing": 0
+  },
+  {
+   "id": "pw37",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    6040,
+    3935
+   ],
+   "facing": 0
+  },
+  {
+   "id": "pw38",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    6168,
+    3935
+   ],
+   "facing": 0
+  },
+  {
+   "id": "pw39",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    6296,
+    3935
+   ],
+   "facing": 0
   },
   {
    "id": "keepalive",

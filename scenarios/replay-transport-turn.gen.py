@@ -11,14 +11,15 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-COMBS = 32
+COMBS = 40
 X0, X_STEP = 1304, 128          # comb i's centre x: 16k + 8, on a cell centre for every footprint
 Z_H = 4007                      # the transport's z: 1 wu short of its next cell row (16k + 8)
 Z_B = Z_H + 48                  # the car's: its rear row the transport's next, 1 wu short of its own
 Z_C = Z_H - 72                  # the cargo's, behind the transport
 Z_GO_H, Z_GO_B = 4500, 4900     # where each moves
 H_MOVE_AT = 12                  # the transports' move order
-B_MOVE_AT = 34                  # comb 0's car's; comb i's at B_MOVE_AT + i
+B_MOVE_AT, B_SPREAD = 60, 5      # comb i's car's move order: B_MOVE_AT + i mod B_SPREAD
+SLOT0 = 2                       # the first unit's slot: clear_existing frees the commander's 1
 
 
 def x_of(i):
@@ -26,12 +27,12 @@ def x_of(i):
 
 
 def scenario():
-    units = [{"id": f"car{i}", "type": "ARMFAV", "owner": 0, "pos": [x_of(i), Z_B], "facing": 180}
+    units = [{"id": f"car{i}", "type": "ARMFAV", "owner": 0, "pos": [x_of(i), Z_B], "facing": 0}
              for i in range(COMBS)]
     units += [{"id": f"bear{i}", "type": "ARMTHOVR", "owner": 0, "pos": [x_of(i), Z_H],
-               "facing": 180, "orders": [{"cmd": "load", "target": f"pw{i}"}]}
+               "facing": 0, "orders": [{"cmd": "load", "target": f"pw{i}"}]}
               for i in range(COMBS)]
-    units += [{"id": f"pw{i}", "type": "ARMPW", "owner": 0, "pos": [x_of(i), Z_C], "facing": 180}
+    units += [{"id": f"pw{i}", "type": "ARMPW", "owner": 0, "pos": [x_of(i), Z_C], "facing": 0}
               for i in range(COMBS)]
     units.append({"id": "keepalive", "type": "CORSOLAR", "owner": 1, "pos": [8000, 8000]})
     return {
@@ -52,14 +53,15 @@ def scenario():
     }
 
 
+def order(at, slot, kind, x, z):
+    return [at, "run", ["tools/tacli", "order", "{instance}", "move", "pos", str(x), str(z),
+                        "--unit", str(slot), "--expect", kind]]
+
+
 def steps():
-    out = [[H_MOVE_AT, "order", {"unit": ["ARMTHOVR", i],
-                                 "args": ["move", "pos", str(x_of(i)), str(Z_GO_H)]}]
-           for i in range(COMBS)]
-    out += [[B_MOVE_AT + i, "order", {"unit": ["ARMFAV", i],
-                                      "args": ["move", "pos", str(x_of(i)), str(Z_GO_B)]}]
-            for i in range(COMBS)]
-    return out
+    out = [order(H_MOVE_AT, SLOT0 + COMBS + i, "ARMTHOVR", x_of(i), Z_GO_H) for i in range(COMBS)]
+    out += [order(B_MOVE_AT + i % B_SPREAD, SLOT0 + i, "ARMFAV", x_of(i), Z_GO_B) for i in range(COMBS)]
+    return sorted(out, key=lambda s: s[0])
 
 
 if __name__ == "__main__":
