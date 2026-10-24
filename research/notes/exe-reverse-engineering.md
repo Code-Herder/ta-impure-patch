@@ -8293,8 +8293,8 @@ left without the cell gets `+0x110` bit 27 and the holder bit 26 (twelve `or` si
 `0x47C85E..0x47D028`). The full list of `cmp byte [reg+0x73],3` in `.text` has 29 entries; these six
 are the only ones in the footprint writers.
 
-**The marks keep the grid consistent.** The clear `0x47D0E0` clears bit 27 always, first
-(`0x47D286..0x47D294`, `and ebx,0xF7FFFFFF`) and,
+**The marks keep the grid consistent.** The clear `0x47D0E0` clears bit 27 always, before its
+bit-26 test (`0x47D286..0x47D294`, `and ebx,0xF7FFFFFF`) and,
 when bit 26 is set, clears it and walks the buckets around the footprint (`0x47D29C..0x47D2C4`; the
 walk `0x47E5C0` hands every unit of an 8-cell bucket from `(x >> 3) − 1` to `((x + w) >> 3) + 1`, z
 alike, whose footprint overlaps, to `0x47ED30`, which re-claims it). The re-claim acts only on bit
@@ -8327,7 +8327,9 @@ live mobile units of one layer overlap, one of the two is not named in the share
 the order of the stamps, and only the marks say which one lost it -- the reason the replay's
 occupancy check is the contest's (`tools/replay/tarec.py`, THE OCCUPANCY RULE). **On a playing
 whose cells are the engine's** -- a multiplayer segment, and a skirmish segment that holds its
-cells -- these writers are the marks' only writer: the playing's unit image writes leave `+0x110`
+cells -- these writers are the marks' only writer but once: a takeover of a segment that holds its
+cells writes the recording's marks at its refresh, beside the recording's slots and yard bits
+(`tagpu_replay.c`, `tk_cells`). Otherwise the playing's unit image writes leave `+0x110`
 bits 26 and 27 out (`tagpu_replay.c`, `U_MARKS`, `unit_put`, `states_put`). Each owner's image
 carries its own machine's marks, for its own grid at its own times: written beside the host's
 grid, they left a host contest unmarked (MEASURED 2026-10-23, the r2 four-seat recording at

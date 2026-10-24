@@ -47,8 +47,8 @@
                                              --seek, OTHERDUMP a seek's, checks its unit slots,
                                              yard bits and contest marks by THE OCCUPANCY RULE in
                                              a segment that holds its cells or a multiplayer one;
-                                             the rules are those
-                                             of the segment that holds the dumps' GameTime
+                                             the rules are those of the segment that holds the
+                                             dumps' GameTime
   tools/replay/tarec.py counts FILE DUMP     a dump's counts of roots, sinks and observed sites
   tools/replay/tarec.py compare-counts FILE LIVE_A LIVE_B PUPPET_A PUPPET_B [--absent TSV]
                                              [--rewind | --cob-exact]
@@ -3024,7 +3024,13 @@ def occupancy(w, dw):
     the dump too. The differences those checks find. Not checked: which cells of a structure's
     footprint name it -- the stamp files a structure only at the cells its yardmap sets under the
     current mask (0x47CD82..0x47CD9F), which a dump does not carry -- nor, the marks being per
-    unit, which cell a mark was set for."""
+    unit, which cell a mark was set for. So a mark no present contest explains passes: an extra
+    bit 26, or bit 27 on a unit every cell of which names it. A mark outlives the contest that
+    set it: a unit's clear drops only its own marks (0x47D286..0x47D2A7) and a re-claim only its
+    own unit's bit 27 (0x47C7AF), so a holder keeps bit 26 after its loser has left, until its own
+    clear (DISASSEMBLED; MEASURED in the r2 four-seat recording's primary stream, the recording
+    machine's own world: unit 10 kept bit 26 from 1029, when 1503's replica left the shared cell,
+    to its own move at 1030), and the dump says nothing of the past contest a mark stands for."""
     out = []
     cb = REC_CELL_BYTES
     yards = footprints(dw)

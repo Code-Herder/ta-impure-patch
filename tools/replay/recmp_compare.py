@@ -17,8 +17,8 @@ so are the contests' marks, +0x110 bits 26 and 27, which the footprint writers a
 they are checked instead of compared, by THE OCCUPANCY RULE (tarec.occupancy) -- the stamp's own
 checks layer by layer, a loser's cell naming the holder that took it, every slot a dump cell names
 a live unit whose footprint holds the cell, every set yard bit inside a live structure's
-footprint -- and the dump's marks are then taken into the expected world. The sort buckets' order is the engine's own too (tagpu_replay.c, THE SORT BUCKETS ON A
-MULTIPLAYER LEVEL): each unit's bucket +0x82 is compared, and its next +0x8E, when it is not
+footprint -- and the dump's marks are then taken into the expected world. The sort buckets'
+order is the engine's own too (tagpu_replay.c, THE SORT BUCKETS ON A MULTIPLAYER LEVEL): each unit's bucket +0x82 is compared, and its next +0x8E, when it is not
 carried, is checked instead (tarec.sort_chains). An order whose target its owner has
 already destroyed names no target: a unit's death keeps its owner's clock, so another owner's
 image can still name it, and the host cannot link a unit it no longer holds (ord_target); the

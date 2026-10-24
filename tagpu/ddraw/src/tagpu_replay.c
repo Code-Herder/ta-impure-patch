@@ -2410,8 +2410,8 @@ static void units_put(const Lv* L, const RecWorld* W)
    laid out for, and the footprint strictly inside the grid, as 0x47D970 tests it
    (0x47D991..0x47D9D8, 16-bit sums compared signed). The re-claim has no bound of its own and
    walks those cells. The contest it runs marks this unit and the incumbents with +0x110 bits 26
-   and 27, which states_put then writes as recorded -- but where the cells are the engine's, where
-   the marks are the footprint writers' (U_MARKS).
+   and 27, which states_put then writes as recorded -- except where the cells are the engine's:
+   there the marks are the footprint writers' (U_MARKS).
    THE ORDER, the invariant this rests on: a yard goes in where the engine changed it, before the
    creates that came after it and after those that came before. The structure's re-claim releases
    a yard cell under the open mask (0x47C8AE..0x47C8B7), and YARD_OPEN re-claims for the structure
