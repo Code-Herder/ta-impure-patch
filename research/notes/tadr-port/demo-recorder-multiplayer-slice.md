@@ -1768,14 +1768,15 @@ viewed seat's scan (R14b), and an owner's image carries its own machine's: a
 player's own units are in contact on its own machine. So when both worlds view
 the same player, a composed unit takes the recorder's bits from the primary
 stream. A unit that stream does not hold yet is compared without them and
-counted. Both measured forks counted 0. A seek in that view, and a change of
-view to it, take bits 8–10 from the primary stream itself (R14b,
+counted. Both measured forks counted 0. A playing in that view, after every
+step (`contacts_put`), a seek in it and a change of view to it take bits 8–10
+from the primary stream itself (THE RECORDED VIEW'S CONTACTS, R14b,
 `sight_change`), on every slot live in the primary's image whose host slot holds
 a live unit of its type: that is all `rw_contacts` checks, not the unit's
 identity. The host's unit comes from the composed world and the bits from the
 primary, so where the primary's image of a slot still describes an earlier unit
 of the same type than the one the composed world put there, the new unit shows
-that unit's contacts until the viewed record's next radar pass — display state
+that unit's contacts until the primary's image describes it — display state
 on a puppet host. **A multiplayer recording's takeover does not take them**: it
 keeps its own radar pass's bits, computed on the composed world at T, because
 in a takeover the bits are the fork's AIs' input (the acquisition scan
@@ -1802,13 +1803,18 @@ recording differed in 18, 11, 10 and 9 units at 300, 600, 900 and 1200. With
 the rule all are EQUAL with 0 units unscanned, and a contact bit cleared in one
 dumped unit is found as exactly one difference.
 
-The residual: the expectation is the recorder's scan, but the host's radar pass
-reads the composed world -- each remote unit at its owner's image position --
-while the recorder's read its replicas, which in the two-peer recording sat up
-to 10.3 world units away (1 to 6 remote units per sampled tick). A unit or a
-jammer straddling a sight, radar or jammer edge at a pass would differ with no
-playback bug. None was seen in six dumps; the owner chose to keep the
-comparison strict and investigate one if it appears.
+The host's radar pass reads the composed world -- each remote unit at its
+owner's image position -- while the recorder's read its replicas, which in the
+two-peer recording sat up to 10.3 world units away (1 to 6 remote units per
+sampled tick), so a unit or a jammer straddling a sight, radar or jammer edge at
+a pass gets other bits from the pass. That is why a playing in the recorder's
+view writes the primary's bits after every step: the dump's expectation is
+then met by construction. MEASURED 2026-10-23 on a four-seat Two Continents
+recording, `--perspective 0`, dumps at 301, 601 and 901: without the write p601
+differed in one unit, slot 1510's bit 8, the unit 0.21 units from its owner's
+image at the edge of a 32-unit sight cell (row 42 on the recording machine, 43
+on the host); with it all three are EQUAL. In full view, or from another seat,
+the pass's bits stand and are not compared.
 
 MEASURED 2026-10-06 on the reference setup, internal speed 20, the
 reproduction recording:
