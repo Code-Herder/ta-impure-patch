@@ -181,7 +181,20 @@ TA's own order names, from the engine's button/order table [VERIFIED,
 `TA_MemoryStructures.pas:6-21`]:
 
 `stop`(1) `move`(2) `attack`(3) `blast`(4) `unload`(5) `load`(6) `defend`(7) `repair`(8)
-`patrol`(9) `reclaim`(12) `capture`(13) `mobilebuild`(14)
+`patrol`(9) `teleport`(11) `reclaim`(12) `capture`(13) `mobilebuild`(14)
+
+`teleport` is the engine's own Teleport, which no stock button issues (the order buttons' click
+handler names `ATTACK` alone, [deep-total-mayhem.md](deep-total-mayhem.md)). For type 11
+`ScriptAction_Type2Index` jumps (`0x43F14D`, table `0x4401EC`) to `0x43F813`, which names the
+script action `"TELEPORT"` for any unit and tests nothing of its def, so no `teleporter` FBI tag
+is needed. The action's handler `0x406AA0` walks every unit slot and moves each unit other than
+the ordering one whose position lies inside the box its def's dwords `+0x15E..+0x172` give about
+the ordering unit: to the order's position plus the unit's offset from the ordering unit, through
+set-position `0x48A9F0` (`0x406BC0`, layer 1), after the teleport flare `0x471FD0` (`0x406B9F`).
+It tests no alive bit and returns 5 [DISASSEMBLED]. MEASURED 2026-10-23 with
+`scenarios/replay-teleport.json`: an ARMLAB ordered three times moved the four ARMPW standing
+16 wu either side of its centre by exactly the order's position minus its own, in the next step, and
+itself not at all (`tools/replay/fixtures.json`'s `teleport`).
 
 `blast` is the commander's D-gun (the order panel's `ARMBLAST`, key `d`): `blast unit <n>` fires it
 at that unit [MEASURED 2026-09-26, `scenarios/b7-dgun.json`]. A unit without a D-gun ignores it; it

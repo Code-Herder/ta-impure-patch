@@ -1,0 +1,11 @@
+{
+ "format": "ta-scenario/1",
+ "description": "Riders for the demo recorder's `teleport` test group: four ARMPW of the human seat inside the box of the group's ARMLAB at (4320, 3800), for its next teleport.",
+ "setup": {"clear_existing": false},
+ "units": [
+  {"id": "r0", "type": "ARMPW", "owner": 0, "pos": [4304, 3784], "facing": 0},
+  {"id": "r1", "type": "ARMPW", "owner": 0, "pos": [4336, 3784], "facing": 0},
+  {"id": "r2", "type": "ARMPW", "owner": 0, "pos": [4304, 3816], "facing": 0},
+  {"id": "r3", "type": "ARMPW", "owner": 0, "pos": [4336, 3816], "facing": 0}
+ ]
+}
