@@ -205,6 +205,7 @@ static struct {
     unsigned steps, late, made, refused, missing, lingering, other, bad_ids, links, unlinked;
     unsigned obuilt, ofreed, orefused, yards, yrefused, grefused;
     unsigned ychecked, ydiffer, yunchecked;         /* the yards a create opened (yard_check)   */
+    unsigned ordered;                               /* steps played in THE CONTEST ORDER       */
     unsigned turned;                                /* units placed at their turn (THE CONTEST
                                                        ORDER)                                  */
     unsigned moved, unmoved;                        /* Teleport's moves played and refused
@@ -4317,7 +4318,8 @@ void tagpu_replay_blast(const char* unit)
    moves a unit after its turn in a skirmish.
    unit_put then finds those units in place, and its own set-position relinks nothing. It reuses
    each one's altitude (s_apre): the movement pass's altitude before its fix-up is computed from
-   the host's +0x6E, which the early call has already written.
+   the host's +0x6E, which the early call has already written; for a unit placed at a Teleport
+   move's first point it is that point's recorded altitude, where the move found the unit.
    THE INVARIANT is an ordering, by induction from an exact image T. It holds because:
    - every unit relinks at most once a step, in its own turn (0x43DD55, the movement pass's one
      call of the relink 0x43D6D0);
@@ -4380,6 +4382,15 @@ static void co_facts(const RecWorld* W)
    readers' own rule (rec_turns_*), with the brackets as the reader keeps them; 1 copied. 0 when
    there is no room, or the rule refuses what the reader took: the step then plays in the old
    order, counted and named once. */
+/* a step THE CONTEST ORDER cannot hold, which plays in the old order: counted, and noted once */
+static int co_refused(const Lv* L)
+{
+    if (!s_co.full++)
+        note("replay: GameTime %u: the step's events cannot be held for THE CONTEST ORDER: "
+             "played in the old order", L->now);
+    return 0;
+}
+
 static int co_take(const Lv* L, const RecWorld* W)
 {
     RecTurns t;
@@ -4454,10 +4465,18 @@ static int co_take(const Lv* L, const RecWorld* W)
     s_co.nplaced = 0;
     return 1;
 refused:
-    if (!s_co.full++)
-        note("replay: GameTime %u: the step's events cannot be held for THE CONTEST ORDER: "
-             "played in the old order", L->now);
-    return 0;
+    return co_refused(L);
+}
+
+/* THE CONTEST ORDER for step W, on a skirmish segment that holds its cells: 1 when its store
+   holds the step's events and their yard facts, and the step is counted as played in the order;
+   0, counted in s_co.full, when it plays in the old order. Every such step is one or the other,
+   so the playing's counts say whether the order engaged at all. */
+static int co_engage(const Lv* L, const RecWorld* W)
+{
+    if (!(s_co.facts ? co_take(L, W) : co_refused(L))) return 0;
+    s_st.ordered++;
+    return 1;
 }
 
 /* unit `s`, below the key of event `i`, placed at its turn: at the position its turn left it on
@@ -9904,9 +9923,10 @@ static void counts_log(const char* when, unsigned now)
                s_sl.c.late, s_sl.c.remote);
     tagpu_logf("replay: %s: the owner's queries: %u made, %u not made (no live unit or no script)",
                s_name, s_q.made, s_q.unmade);
-    tagpu_logf("replay: %s: %u units placed at their turn, %u steps whose events the contest order "
-               "could not hold (THE CONTEST ORDER); %u Teleport moves played, %u refused", s_name,
-               s_st.turned, s_co.full, s_st.moved, s_st.unmoved);
+    tagpu_logf("replay: %s: %u steps played in the contest order, %u units placed at their turn, %u "
+               "steps whose events the contest order could not hold (THE CONTEST ORDER); %u Teleport "
+               "moves played, %u refused", s_name, s_st.ordered, s_st.turned, s_co.full, s_st.moved,
+               s_st.unmoved);
     tagpu_puppet_refusals(gates, sizeof gates);
     tagpu_logf("replay: %s: refused on puppets: %s", s_name, gates);
     tagpu_puppet_footprints(gates, sizeof gates);
@@ -10017,7 +10037,7 @@ static void play(const Lv* L)
             note("replay: the events of GameTime %u played at GameTime %u", W->tick, L->now);
         }
         co_facts(W);                        /* image T's yard facts, in either order */
-        if (!s_cells_held || s_mp.on || !s_co.facts || !co_take(L, W)) {
+        if (!s_cells_held || s_mp.on || !co_engage(L, W)) {
             events_put(L, W, now);
             co_end();
             ov_clicks_take(W);

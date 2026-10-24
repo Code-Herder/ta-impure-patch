@@ -3035,16 +3035,18 @@ class YardChecks(unittest.TestCase):
             self.assertEqual(tareplay.unordered_check("K", log)[0][1], tareplay.FAIL)
 
     @staticmethod
-    def played(full=0, unmoved=0, unlinked=0):
-        return (f"replay: x at its level's end, GameTime 9: 9 iterations applied (0 late); 3 carry "
-                f"links made, {unlinked} refused; order nodes 1 built\n"
-                f"replay: x: 12 units placed at their turn, {full} steps whose events the contest "
-                f"order could not hold (THE CONTEST ORDER); 2 Teleport moves played, {unmoved} "
-                f"refused\n")
+    def played(full=0, unmoved=0, unlinked=0, ordered=9, applied=9):
+        return (f"replay: x at its level's end, GameTime 9: {applied} iterations applied (0 late); 3 "
+                f"carry links made, {unlinked} refused; order nodes 1 built\n"
+                f"replay: x: {ordered} steps played in the contest order, 12 units placed at their "
+                f"turn, {full} steps whose events the contest order could not hold (THE CONTEST "
+                f"ORDER); 2 Teleport moves played, {unmoved} refused\n")
 
     def test_the_contest_order_played_whole(self):
-        (label, verdict, detail), = tareplay.contest_verdict("P", self.played() + self.played())
+        (label, verdict, detail), = tareplay.contest_verdict(
+            "P", self.played() + self.played(ordered=4), True)
         self.assertEqual(verdict, tareplay.PASS)
+        self.assertIn("13 steps played in the order", detail)
         self.assertIn("2 playings", detail)
 
     def test_a_step_not_held_a_move_or_a_link_refused_fails(self):
@@ -3052,11 +3054,28 @@ class YardChecks(unittest.TestCase):
                          ({"unmoved": 2}, "Teleport moves refused"),
                          ({"unlinked": 3}, "carry links refused")):
             with self.subTest(what=what):
-                (label, verdict, detail), = tareplay.contest_verdict("P", self.played(**kw))
+                (label, verdict, detail), = tareplay.contest_verdict("P", self.played(**kw), True)
                 self.assertEqual(verdict, tareplay.FAIL)
                 self.assertIn(what, detail)
-        (label, verdict, detail), = tareplay.contest_verdict("P", "replay: x: nothing\n")
+        (label, verdict, detail), = tareplay.contest_verdict("P", "replay: x: nothing\n", True)
         self.assertEqual(verdict, tareplay.UNRUN)
+
+    def test_an_order_that_never_engaged_could_not_run(self):
+        (label, verdict, detail), = tareplay.contest_verdict("P", self.played(ordered=0), True)
+        self.assertEqual(verdict, tareplay.UNRUN)
+        self.assertIn("applied 9 steps and played none", detail)
+        # a playing that applied nothing, and a recording whose playing keeps no cells, engage none
+        self.assertEqual(tareplay.contest_verdict(
+            "P", self.played(ordered=0, applied=0), True)[0][1], tareplay.PASS)
+        self.assertEqual(tareplay.contest_verdict(
+            "P", self.played(ordered=0), False)[0][1], tareplay.PASS)
+
+    def test_a_contest_line_needs_its_counts_line(self):
+        contest = self.played().splitlines(keepends=True)[1]
+        (label, verdict, detail), = tareplay.contest_verdict(
+            "P", self.played() + contest, True)
+        self.assertEqual(verdict, tareplay.UNRUN)
+        self.assertIn("2 contest lines and 1 counts lines", detail)
 
 
 class TakeoverFixtures(unittest.TestCase):

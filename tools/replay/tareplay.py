@@ -3284,7 +3284,7 @@ def checks(fx):
     for proc in ("P", "R", "Q"):
         if ran.get(proc) == "ran":
             res.later(yard_check, proc, out / proc / "tagpu.log")
-            res.later(contest_check, proc, out / proc / "tagpu.log")
+            res.later(contest_check, proc, out / proc / "tagpu.log", rec)
     for proc in ("R", "Q"):
         if ran.get(proc) == "ran":
             # Q's one seek is a fresh process's: a seek asked for before a playing's first step
@@ -3460,38 +3460,55 @@ def unordered_check(proc, log_path):
     return unordered_verdict(label, text)
 
 
-CONTEST_PLAY = re.compile(r"replay: .*?: \d+ units placed at their turn, (\d+) steps whose events "
-                          r"the contest order could not hold \(THE CONTEST ORDER\); \d+ Teleport "
-                          r"moves played, (\d+) refused")
-LINKS_PLAY = re.compile(r"\d+ carry links made, (\d+) refused")
+CONTEST_PLAY = re.compile(r"replay: .*?: (\d+) steps played in the contest order, \d+ units placed "
+                          r"at their turn, (\d+) steps whose events the contest order could not "
+                          r"hold \(THE CONTEST ORDER\); \d+ Teleport moves played, (\d+) refused")
+# the same counts_log's first line, which comes just before its contest line
+PLAYED_STEPS = re.compile(r"replay: .* GameTime \d+: (\d+) iterations applied .*?\d+ carry links "
+                          r"made, (\d+) refused")
 
 
-def contest_verdict(label, text):
+def contest_verdict(label, text, held):
     """[(label, verdict, detail)]: the playing's side of THE CONTEST ORDER (tagpu_replay.c), from
-    every playing's lines in a lane's log: a step whose events the order could not hold (its store
+    every playing's counts in a lane's log: a step whose events the order could not hold (its store
     out of room, or its own pass refusing what the reader took), a Teleport move refused, or a
     carry link refused, fails -- each leaves a contest the recording machine decided to the
-    host's order; could not run when the log holds no contest line."""
-    rows = [tuple(map(int, m.groups())) for m in CONTEST_PLAY.finditer(text)]
+    host's order. Could not run: no contest line; a contest line without its counts line before
+    it, whose carry links no verdict would then read; or, on a recording whose playing holds its
+    cells (`held`: a skirmish one with RECL_CELLS), a playing that applied steps and played none
+    in the order, which never engaged it."""
+    rows, played = list(CONTEST_PLAY.finditer(text)), list(PLAYED_STEPS.finditer(text))
     if not rows:
         return [(label, UNRUN, "no playing's line with the contest order's counts")]
-    links = sum(int(m.group(1)) for m in LINKS_PLAY.finditer(text))
-    full, unmoved = sum(r[0] for r in rows), sum(r[1] for r in rows)
+    if len(played) != len(rows):
+        return [(label, UNRUN, f"{len(rows)} contest lines and {len(played)} counts lines with "
+                               f"the carry links: not one each")]
+    ordered = sum(int(m.group(1)) for m in rows)
+    full = sum(int(m.group(2)) for m in rows)
+    unmoved = sum(int(m.group(3)) for m in rows)
+    links = sum(int(m.group(2)) for m in played)
+    if held:
+        idle = [int(p.group(1)) for p, r in zip(played, rows)
+                if int(p.group(1)) and not int(r.group(1)) and not int(r.group(2))]
+        if idle:
+            return [(label, UNRUN, f"a playing applied {idle[0]} steps and played none in the "
+                                   f"contest order on a recording that holds its cells")]
     bad = [f"{n} {what}" for n, what in ((full, "steps the contest order could not hold"),
                                          (unmoved, "Teleport moves refused"),
                                          (links, "carry links refused")) if n]
     return [(label, FAIL if bad else PASS,
-             "; ".join(bad) if bad else f"every step held, no move or link refused, "
-                                        f"{len(rows)} playings")]
+             "; ".join(bad) if bad else f"{ordered} steps played in the order, every step held, "
+                                        f"no move or link refused, {len(rows)} playings")]
 
 
-def contest_check(proc, log_path):
+def contest_check(proc, log_path, rec):
     label = f"{proc}: the contest order played"
     try:
         text = Path(log_path).read_text(errors="replace")
-    except OSError as e:
+        h = tarec.header_only(rec)
+    except (OSError, tarec.Unreadable) as e:
         return [(label, UNRUN, str(e))]
-    return contest_verdict(label, text)
+    return contest_verdict(label, text, "multiplayer" not in h and tarec.holds_cells(h))
 
 
 def yard_check(proc, log_path):

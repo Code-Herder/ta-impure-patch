@@ -6320,13 +6320,14 @@ void tagpu_rec_turn(const char* unit)
     Rec* r = ev_rec();
     unsigned id;
     if (!r || r->mode == MODE_NETWORK) return;
+    /* a new turn: the last one's relink no longer keys anything, whatever this unit is */
+    s_relinked = 0;
     if (!(id = ev_unit(r, unit))) {
         r->unordered++;
         return;
     }
     if (s_turn && (s_turn == REC_TURN_AFTER || id - 1u <= s_turn)) r->unordered++;
     s_turn = (unsigned short)(id - 1u);
-    s_relinked = 0;
 }
 
 /* THE CONTEST ORDER on the recording machine: an RK_EV_TURN just before a top-level footprint
