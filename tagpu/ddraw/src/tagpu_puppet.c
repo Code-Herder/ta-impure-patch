@@ -440,8 +440,9 @@ int tagpu_puppet_rebuilding(void) { return s_rebuild; }
    every recorded mobile unit's footprint cell is the set-position's rounding of its recorded
    position (0x48AA00..0x48AA32; MEASURED 2026-10-12, 3,640,526 of 3,640,526 unit-iterations of
    two recordings), so the playing's stamp at the image's position is the recording machine's.
-   On a skirmish one the replay leaves the marks to them (tagpu_replay.c, unit_put), and the
-   contests are decided by the recording machine's rule (THE CONTEST'S RULE, below).
+   On both the replay leaves the marks to them (tagpu_replay.c, unit_put, states_put). On a
+   skirmish one the contests are decided by the recording machine's rule (THE CONTEST'S RULE,
+   below), on a multiplayer one by the engine's own.
 
    On any other puppet level the cell images carry the slots and the yard bit (tagpu_replay.c,
    THE FEATURES), and the writers' own would differ from them: every puppet seat is type 3, so a

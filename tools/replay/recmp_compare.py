@@ -12,12 +12,13 @@ applied by the recorder's capture of T (tagpu_replay.c, THE CLOCK), and each act
 explored map from its owner's bitmap. A unit, player or list no
 owner has described yet holds its level-start image. The features are the primary stream's at
 every dump, corpses included (tagpu_replay.c, THE DEATHS ON A MULTIPLAYER LEVEL). The grid's unit
-slots and yard bits are the engine's own on such a level, its units following their owners: they
-are checked instead of compared -- every slot a dump cell names is a live unit there whose
-footprint holds the cell, every cell of a live mobile unit's footprint names it (a structure's
-yardmap leaves some of its cells open), and every set yard bit lies inside a live structure's
-footprint. The sort buckets' order is the engine's own too (tagpu_replay.c, THE SORT BUCKETS ON A
-MULTIPLAYER LEVEL): each unit's bucket +0x82 is compared, and its next +0x8E, when it is not
+slots and yard bits are the engine's own on such a level, its units following their owners, and
+so are the contests' marks, +0x110 bits 26 and 27, which the footprint writers alone write there:
+they are checked instead of compared, by THE OCCUPANCY RULE (tarec.occupancy) -- the stamp's own
+checks layer by layer, a loser's cell naming the holder that took it, every slot a dump cell names
+a live unit whose footprint holds the cell, every set yard bit inside a live structure's
+footprint -- and the dump's marks are then taken into the expected world. The sort buckets'
+order is the engine's own too (tagpu_replay.c, THE SORT BUCKETS ON A MULTIPLAYER LEVEL): each unit's bucket +0x82 is compared, and its next +0x8E, when it is not
 carried, is checked instead (tarec.sort_chains). An order whose target its owner has
 already destroyed names no target: a unit's death keeps its owner's clock, so another owner's
 image can still name it, and the host cannot link a unit it no longer holds (ord_target); the
@@ -27,8 +28,8 @@ as --fork takes them (contacts). The puppet holds of `tarec compare --puppet` ap
 
 --fork N compares timeline N's first iteration, the world a takeover made, with the expected world
 at its fork_at as above, less what `tarec compare-fork` takes off (decision D2, tarec.fork_view);
-the grid's unit slots and yard bits and the sort buckets' chains are checked on the fork's
-iteration, which the host's engine made. Exit 0 EQUAL, 1 otherwise.
+the grid's unit slots, yard bits and contest marks (THE OCCUPANCY RULE) and the sort buckets'
+chains are checked on the fork's iteration, which the host's engine made. Exit 0 EQUAL, 1 otherwise.
 
 --chat checks each dump's message log (main+0x12EF, a leave row the comparison does not read)
 against the chat its viewer should see (tagpu_replay.c, THE CHAT OF A MULTIPLAYER RECORDING):

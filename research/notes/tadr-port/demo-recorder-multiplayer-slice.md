@@ -1374,12 +1374,27 @@ on it, and the yard bit is a structure's. The recorder's grid names its replicas
 at its own times, while the host's units follow their owners. No recorded slot
 is the truth on such a level, so the footprint writers' writes stand
 (`tagpu_puppet_begin`'s `engine_cells`), and `cell_put`/`slots_put` write
-neither. Every slot the host's grid names is a live host unit: the engine writes
-it, and its destructor takes the unit off the grid (`0x48682D`) before it clears
-the alive bit (`0x486DCE`). `recmp_compare.py` checks that instead of comparing
-the slots, and checks that every set yard bit lies inside a live structure's
-footprint (`+0x76`/`+0x78` by `+0x7E`/`+0x80`, `+0x110` bit 29) instead of
-comparing the bit; the owner approved that check on 2026-10-06. The feature
+neither. The contests' marks, `+0x110` bits 26 and 27, are those writers' too:
+`unit_put` and `states_put` leave them out of every unit image write on such a
+level (`U_MARKS`; the owner's decision of 2026-10-23), so every mark names a
+contest the host's grid held, and the clear and the re-claim hand a cell back to
+exactly the units it marked. The contests follow the engine's own rule: every
+puppet seat is type 3, so the newcomer takes a held cell. Every slot the host's
+grid names is a live host unit: the engine writes it, and its destructor takes
+the unit off the grid (`0x48682D`) before it clears the alive bit (`0x486DCE`).
+`recmp_compare.py`, on its dumps and on `--fork`'s first iteration, and `tarec
+compare-dumps --seek` in a multiplayer segment check the slots, the yard bits and
+the marks instead of comparing them, by THE OCCUPANCY RULE (`tarec.occupancy`):
+the stamp's own checks layer by layer, a loser's cell naming the holder that took
+it, every named slot a live unit whose footprint holds the cell, and every set
+yard bit inside a live structure's footprint (`+0x76`/`+0x78` by `+0x7E`/`+0x80`,
+`+0x110` bit 29); the dump's marks are then taken into the expected world. The
+owner approved the slot and yard-bit check on 2026-10-06 and its contest form, a
+loosening, on 2026-10-23: two live mobile units of one layer that overlap share
+the cell's one slot of their layer (the engine map's *The footprint contest's
+rule*), so no order names both, and a seek's slot-order creates pick the other
+one than the playing's history. Two straight playings of one file are still
+compared byte for byte. The feature
 code reads one slot, reproduction's source test (`0x424189`); a multiplayer
 recording records the value the recorder's tick read there (`FS_SOURCE`, an
 `RK_EV_DRAW` inside the tick), and the host's stub at `0x424185` answers from it
@@ -1640,9 +1655,11 @@ multiplayer game has no rewind, so the rewind's return to now refuses one. *THE 
   already steps over every block that is not the stream's.
 
 `recmp_compare.py` checks the slots more strictly since this seek: a slot must
-lie inside the footprint of the live unit it names, and every cell of a live
-mobile unit's footprint must name it. A structure's yardmap leaves some of its
-cells open, such as the four corners of slot 4502's 6×6 footprint at 2070.
+lie inside the footprint of the live unit it names, and every cell of a mobile
+unit's footprint the stamp files must name it in its layer's slot, or, while the
+unit carries the loser's mark, name the holder that took the cell (THE OCCUPANCY
+RULE, *Cells' unit slots and the yard bit*). A structure's yardmap leaves some of
+its cells open, such as the four corners of slot 4502's 6×6 footprint at 2070.
 Without that check, a seek that wrote the recorder's slots compared EQUAL:
 unit 3006 stood in the recorder's cells, one row off its owner's, and its old
 row named it after its death.
@@ -1762,8 +1779,8 @@ no yard bit stands. R7 and R8 then stamp the composed world on an empty grid.
 
 **What the comparison expects.** `recmp_compare.py --fork N` compares the
 takeover's first iteration with the composed parent at `fork_at`, less D2's
-list (`tarec.fork_view`). The grid's slots and yard bits and the sort buckets'
-chains are checked on the fork's iteration, as on a dump. The contact bits `+0x110` 8–10 and 12 are the
+list (`tarec.fork_view`). The grid's slots, yard bits and contest marks and the
+sort buckets' chains are checked on the fork's iteration, as on a dump. The contact bits `+0x110` 8–10 and 12 are the
 viewed seat's scan (R14b), and an owner's image carries its own machine's: a
 player's own units are in contact on its own machine. So when both worlds view
 the same player, a composed unit takes the recorder's bits from the primary
@@ -1867,12 +1884,51 @@ build of `09ed62ec`, a four-actor recording of GameTime 1–1347
   (`recmp_compare.py`); at 1140, 1170 and 1201 in the fork (`tarec compare
   --puppet --seek --timeline 1`); the round trip at 1160 (`tarec
   compare-dumps --timeline 1 --seek`). The straight playing's dump at 1020,
-  in the multiplayer segment before any seek, has **1 difference**: cell (157,
-  82) of mobile unit 1503's footprint names unit 10, which overlaps it there
-  and carries the holder's mark. Main's build `b76515f9` gives the same
-  difference on the same recording played alone to 1020, so it does not come
-  from this landing; it is open (the multiplayer comparison checks the grid's
-  slots without the contest's rule).
+  in the multiplayer segment before any seek, had **1 difference** on that
+  build and on main's `b76515f9`: cell (157, 82) of mobile unit 1503's
+  footprint names unit 10. That one is closed below.
+
+**The cell at 1020.** Units 10 and 1503 are two layer-1 units of different
+owners (the recording machine's AI and a remote one) whose footprints overlap
+at (157, 82) from GameTime 1015 to 1024: 10 of the recording's 1,346
+iterations, and its only same-layer overlap of two mobile units in the composed
+world (MEASURED offline, 485 s). The stamp files a layer-1 unit in the cell's
+one slot A, so one of the two is unnamed there whatever the order of the
+stamps, and the comparison's clause "every cell of a live mobile unit's
+footprint names it" could not hold; every earlier dump was armed outside the
+window. Beneath it the playing wrote the owners' marks beside the host's grid:
+on `361ed8f1` the host's contest of 1015 gave the cell to 10 by the type-3 rule,
+and at 1016 none of the 43 units carried a mark, a contest the engine's writers
+never leave unmarked. A round trip at 1020 differed in the cell itself: the
+seek's slot-order creates gave it to 1503, the playing's history to 10. The
+owner's decision of 2026-10-23 closes both (*Cells' unit slots and the yard
+bit*): the marks are the footprint writers' alone, and the comparisons check
+the cells by the occupancy rule.
+
+MEASURED 2026-10-23 on the reference setup, internal speed 20, the build of
+`9ff70ee6`, the same four-actor recording (format 25):
+
+- **Played and sought inside the window**: dumps at 1016, 1020 and 1030, a
+  seek from 1056 back to 1018 (dumps at 1018 and 1138; 43 killed, 43 made,
+  0 refused) and a round trip at 1022 (0 refused). Every dump is EQUAL by
+  `recmp_compare.py` and the round trip EQUAL by `tarec compare-dumps
+  --seek`; the log names no stop. The host's contest is the marks': at 1016
+  and 1020 cell (157, 82) names 10, which carries bit 26, and 1503 bit 27;
+  at 1018 after the seek it names 1503, which carries bit 26, and 10 bit 27;
+  the round trip's A names 10 and its B 1503. Those two are the only marked
+  units in each dump, and at 1030, with the pair apart, none is marked.
+- **Taken over at 1020 as player 1**: the fork's first iteration is EQUAL to
+  the composed parent (43 units, 0 unscanned) and names 10 in the cell with
+  10's bit 26 and 1503's bit 27 -- after the takeover 10's owner is an AI seat,
+  no longer type 3, so the incumbent keeps the cell [INFERRED from the rule];
+  `tarec check --timeline 1` explains every change in 3,013 steps with 0
+  corrections; the AI seats 0, 2 and 3 issue 96, 26 and 6 orders in the
+  1,800-tick window and 81% of 27 mobile units move.
+- **The check still names the old state**: on the earlier builds' dumps,
+  which carry the owners' marks, `recmp_compare.py` finds 1 difference in the
+  straight playing's dump at 1020 (1503's cell names 10 and 1503 carries no
+  loser's mark) and none in its dump at 1050, and `361ed8f1`'s round trip at
+  1020 has 2 differences, A's 1503 and B's 10 each without bit 27.
 - On the build before the merge of format 25 (recording 1–1354): a seek from
   1010 to 1150 and a fresh process at 1150 gave EQUAL dumps at 1000, 1150 and
   1270, and the fresh seek EQUAL against the running one at 1150; those runs

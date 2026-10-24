@@ -16,8 +16,9 @@ the playing started, every dump was taken, the log names no stop and, when it pl
 it reached it; 1 otherwise. The dumps are
 compared separately: this only drives the game. --roundtrip T arms the playing's round trip at T
 (dump A, the tables poisoned, a seek to T, dump B: rt<T>-a and rt<T>-b, frame dumps compared with
-`tarec.py compare-dumps FILE A B --seek`, which checks the sort buckets' chains of a multiplayer
-file instead of comparing their order; with `--timeline N` for a round trip in timeline N's
+`tarec.py compare-dumps FILE A B --seek`, which checks the unit slots, yard bits and contest
+marks of a multiplayer file by THE OCCUPANCY RULE and its sort buckets' chains instead of
+comparing them; with `--timeline N` for a round trip in timeline N's
 segments). --seek A:T, when the playing reaches GameTime A (its dump pA), seeks
 to T in the same process, dumping s<T> at T and s<T+120> 120 ticks on (when the recording
 reaches it; at speed 20 a nearer dump cannot be armed in time). --fresh T instead
