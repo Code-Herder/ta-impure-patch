@@ -2913,6 +2913,58 @@ class ContestOrderEvent(unittest.TestCase):
             self.world().apply(tarec.RK_EV_LINK, self.link(2, 3, b"\0\1"))
 
 
+class PlayingEnd(unittest.TestCase):
+    """A wait for a GameTime armed on a playing ends at the playing's end line (wait_playing):
+    past it the level runs on with its units stopped, and the DLL answers nothing armed beyond."""
+
+    STOP = ("replay: tenseat cannot be read on from GameTime 180: a malformed record of kind 33 "
+            "at GameTime 181, in the block before byte 255260; the units stop here")
+    END = "replay: tenseat played to its end at GameTime 1980: the end block"
+    TRIP = "replay: tenseat: round trip rt601 at 601: TRANSIENT 0 bytes reset"
+
+    @staticmethod
+    def log(*lines):
+        """a log whose running wait returns the first of `lines` from `start` that matches"""
+        def wait_running(rx, start=0):
+            return next(ln for ln in lines[start:] if re.search(rx, ln))
+        log = Mock()
+        log.wait_running.side_effect = wait_running
+        return log
+
+    def wait(self, *lines):
+        return tareplay.wait_playing(self.log(*lines), r"round trip rt601 at 601(: | not run)",
+                                     "round trip rt601 at 601", 0)
+
+    def test_the_armed_line(self):
+        self.assertEqual(self.wait(self.TRIP, self.STOP), self.TRIP)
+
+    def test_a_playing_that_cannot_be_read_on_fails(self):
+        with self.assertRaises(tareplay.Failed) as e:
+            self.wait(self.STOP, self.TRIP)
+        self.assertIn("round trip rt601 at 601: the playing stopped before it", str(e.exception))
+        self.assertIn("kind 33", str(e.exception))
+
+    def test_a_refused_seek_back_fails(self):
+        with self.assertRaises(tareplay.Failed):
+            self.wait("replay: tenseat cannot be read back to GameTime 181: why; the units stop here")
+
+    def test_a_recording_that_ends_first_could_not_run(self):
+        with self.assertRaises(tareplay.CouldNotRun) as e:
+            self.wait(self.END)
+        self.assertIn("the recording ended before it", str(e.exception))
+
+    def test_lines_before_the_start_are_not_read(self):
+        got = tareplay.wait_playing(self.log(self.STOP, self.TRIP),
+                                    r"round trip rt601 at 601(: | not run)", "rt601", 1)
+        self.assertEqual(got, self.TRIP)
+
+    def test_a_dump_on_a_playing(self):
+        log = self.log(self.STOP)
+        with self.assertRaises(tareplay.Failed) as e:
+            tareplay.wait_dumps(log, ["p331"], running=True, playing=0)
+        self.assertIn("dump p331", str(e.exception))
+
+
 class YardChecks(unittest.TestCase):
     """The harness's verdict on the yards a recorded create opened (tagpu_replay.c, yard_check),
     from a lane's counts lines."""

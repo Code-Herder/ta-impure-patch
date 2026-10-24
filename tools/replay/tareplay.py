@@ -965,13 +965,38 @@ def hud_state(w, log):
     return got
 
 
-def wait_dumps(log, names, running=False):
+# The lines that end a playing (tagpu_replay.c, iteration_read and sk_back): past one the level
+# runs on with its units stopped, so a stall never comes, and the DLL answers no GameTime armed
+# beyond it.
+PLAYING_STOPPED = (r"replay: .* (played to its end at|cannot be read on from|cannot be read back "
+                   r"to) GameTime \d+")
+
+
+def wait_playing(log, rx, what, start):
+    """The first line from `start` on that matches `rx`, on a playing that runs toward it, or the
+    playing's end before it: the line that ends the playing is the bound of a wait for a GameTime
+    armed on it. A recording that ends first could not run the check; one that cannot be read on
+    fails it."""
+    got = log.wait_running(rf"(?:{rx})|{PLAYING_STOPPED}", start)
+    if re.search(rx, got):
+        return got
+    line = got[got.index("replay:"):].strip()
+    if "played to its end" in got:
+        raise CouldNotRun(f"{what}: the recording ended before it: {line}")
+    raise Failed(f"{what}: the playing stopped before it: {line}")
+
+
+def wait_dumps(log, names, running=False, playing=None):
     """Every named dump taken, or the first that will not be: on a level that runs toward them
-    (`running`), bounded by a stall alone; else already taken, each line a frame's answer."""
+    (`running`), bounded by a stall alone, and on a playing begun at the log's line `playing` by
+    its end as well (wait_playing); else already taken, each line a frame's answer."""
     for name in names:
         rx = (rf"recorder: dump {name} (at GameTime|for GameTime \d+ not taken|refused)"
               rf"|recorder: dump {name}: ")
-        got = log.wait_running(rx) if running else log.wait(rx, ACK_S)
+        if running and playing is not None:
+            got = wait_playing(log, rx, f"dump {name}", playing)
+        else:
+            got = log.wait_running(rx) if running else log.wait(rx, ACK_S)
         if not got or "at GameTime" not in got or "not taken" in got:
             raise CouldNotRun(f"dump {name}: {got.strip() if got else f'not taken in {ACK_S} s'}")
 
@@ -1248,16 +1273,18 @@ def play(w, fx, rec, out, proc, arms, dumps, roundtrips=()):
     for name, T in roundtrips:
         arm(w, log, f"roundtrip {name} at {T}", rf"round trip {name} armed for GameTime {T}",
             rf"round trip {name}( at {T})? refused", f"roundtrip {name} at {T}")
+    n = len(log.lines)
     turbo_engage(w, log)
     if log.held:
         resume(w, log)
     lines = {}
     for name, T in roundtrips:
-        got = log.wait_running(rf"round trip {name} at {T}(: | not run)")
+        got = wait_playing(log, rf"round trip {name} at {T}(: | not run)",
+                           f"round trip {name} at {T}", n)
         if " not run" in got or "seek refused" in got:
             raise CouldNotRun(f"round trip {name}: {got.strip()}")
         lines[name] = got[got.index("replay:"):].strip()
-    wait_dumps(log, dumps, running=True)
+    wait_dumps(log, dumps, running=True, playing=n)
     if not dumps:
         got = log.wait_running(r"replay: .* (played to its end|cannot be read on|not playing)")
         if "played to its end" not in got:
@@ -1479,9 +1506,10 @@ def takeover_f(w, fx, out):
         raise CouldNotRun(f"replay seek {T - TAKEOVER_BACK} --timeline {tl}: {last(o)}")
     held_start(w, log)
     arm_dump(w, log, f"f{at}", at)
+    n = len(log.lines)
     turbo_engage(w, log)
     resume(w, log)
-    wait_dumps(log, [f"f{at}"], running=True)
+    wait_dumps(log, [f"f{at}"], running=True, playing=n)
     if fx["cover"]:
         cover_ask(w, log, "F")
     w.collect(out)
@@ -2131,7 +2159,7 @@ def watch_lane(w, fx, rec, out, T):
     res.append(watch_hud(w, log, rec))
     arm_dump(w, log, f"w{T}", T)
     hud(w, "click", "play")
-    wait_dumps(log, [f"w{T}"], running=True)
+    wait_dumps(log, [f"w{T}"], running=True, playing=n)
     if peek(w, PAUSE_WORD) & 1:
         raise Failed("the HUD's resume: the pause word still set")
     res.append(("W: the HUD's pause, seek and resume", PASS, got[got.index("replay:"):].strip()))
@@ -2899,9 +2927,10 @@ def forks_steps(w, fx, out, results):
     plays_checked("delete")
     log = start_play(5, base - 120, "the chain's playing")
     arm_dump(w, log, "chain5", T5 + 300)
+    n = len(log.lines)
     turbo_engage(w, log)
     resume(w, log)
-    wait_dumps(log, ["chain5"], running=True)
+    wait_dumps(log, ["chain5"], running=True, playing=n)
     rec, dump = copies("chain5", source, w.gamedir / "replays" / "dump-chain5.bin")
     results.later(check_or_fail, "forks: descendant across two boundaries", "compare", "--puppet",
                   "--seek", rec, dump, "--timeline", 5)
@@ -2927,9 +2956,10 @@ def forks_steps(w, fx, out, results):
     source = exported
     log = start_play(5, base - 120, "the export's playing")
     arm_dump(w, log, "export5", T5 + 300)
+    n = len(log.lines)
     turbo_engage(w, log)
     resume(w, log)
-    wait_dumps(log, ["export5"], running=True)
+    wait_dumps(log, ["export5"], running=True, playing=n)
     dump, = copies("export5", w.gamedir / "replays" / "dump-export5.bin")
     results.later(check_or_fail, "forks: exported chain playback", "compare", "--puppet",
                   "--seek", exported, dump, "--timeline", 5)
