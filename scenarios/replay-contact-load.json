@@ -1,0 +1,8 @@
+{"format": "ta-scenario/1",
+ "description": "contact-waves: a still world (no unit moves), for waves at the frame tail of pass steps",
+ "setup": {"map": "Town & Country", "res": "1024x768", "clear_existing": true,
+           "switches": {"shootall": false, "noshake": true},
+           "players": [{"slot": 0, "controller": "human", "side": "arm", "color": 0},
+                       {"slot": 1, "controller": "ai", "side": "core", "color": 1}]},
+ "units": [{"id": "keep0", "type": "ARMSOLAR", "owner": 0, "pos": [3200, 3800]},
+           {"id": "keep1", "type": "CORSOLAR", "owner": 1, "pos": [8000, 8000]}]}
