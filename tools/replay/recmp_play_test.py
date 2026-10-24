@@ -7,7 +7,9 @@
     tools/replay/recmp_play_test.py RECORDING --out DIR --takeover T:P [--from A] [--dll PATH] [--content FILE ...]
 
 One tareplay worker (its own tacli instance on its own Xvfb) plays RECORDING through
-`tacli replay play` at the standard internal speed 20, takes `dump p<T>` at each --at T, plays to
+`tacli replay play` at the standard internal speed 20, launched held at its first step until its
+dumps and round trips are armed (tareplay.py, THE LAUNCH'S HOLD), so no GameTime it arms can pass
+before the arm's answer; takes `dump p<T>` at each --at T, plays to
 the end with --to-end or when no dump is asked, exits the game so that its teardown logs the
 playing's counts, and keeps the dumps and the run's log in DIR. Exit 0 when
 the playing started, every dump was taken, the log names no stop and, when it plays to the end,
@@ -44,7 +46,8 @@ import devpy
 import tarec
 import tareplay
 import tarewind
-from tareplay import Log, Worker, arm, arm_dump, tacli, wait_dumps, last, LAUNCH_TIMEOUT
+from tareplay import (Log, Worker, arm, arm_dump, held_start, resume, tacli, wait_dumps, last,
+                      LAUNCH_TIMEOUT)
 
 HERE = Path(__file__).resolve().parent
 
@@ -82,6 +85,9 @@ def main():
     if rec.resolve() != a.recording.resolve():
         shutil.copy2(a.recording, rec)
     w = Worker(a.out)
+    # held, the launches that play from the start; a takeover or a seek in a fresh process arms
+    # its one dump in its own request
+    w.held = a.fresh is None and (a.takeover is None or a.from_ is not None)
     ok = False
     try:
         w.place({}, a.dll)
@@ -110,7 +116,9 @@ def main():
                 print(o.strip())
                 if rc:
                     raise tareplay.CouldNotRun(f"replay play: {last(o)}")
+                held_start(w, log)
                 arm_dump(w, log, f"p{a.from_}", a.from_)
+                resume(w, log)
                 wait_dumps(log, [f"p{a.from_}"], 900)
                 src = []
             rc, o = tacli("replay", "takeover", w.name, *src, "--at", R, "--player", P,
@@ -179,6 +187,7 @@ def main():
         print(o.strip())
         if rc:
             raise tareplay.CouldNotRun(f"replay play: {last(o)}")
+        held_start(w, log)
         if a.hide_chat:
             n = len(log.lines)
             w.trigger("chat hide")
@@ -193,6 +202,7 @@ def main():
         for T in a.roundtrip:
             arm(w, log, f"roundtrip rt{T} at {T}", rf"round trip rt{T} armed for GameTime {T}",
                 rf"round trip rt{T}( at {T})? refused", f"roundtrip rt{T} at {T}")
+        resume(w, log)
         for A, T in sorted(seeks):
             wait_dumps(log, [f"p{A}"], 900)
             n = len(log.lines)

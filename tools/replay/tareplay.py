@@ -21,8 +21,8 @@ FIXTURE is a name in tools/replay/fixtures.json, or `all`. For each fixture four
 drawn (one more for each round trip a broad entry's `trips` asks for beyond three), each T = 1 (mod 30)
 -- the radar pass's step, where a seek's contact bits in any view but the recording's own, which
 its own pass makes, agree at once unless something the pass read changed later in its step (O14);
-a seek or a skirmish takeover in the recording's viewed player takes them from the recording and
-agrees at every T -- between 301 and 0.8 x its end, from
+a playing, a seek or a skirmish takeover in the recording's viewed player takes them from the
+recording and agrees at every T -- between 301 and 0.8 x its end, from
 a generator seeded by the fixture's name and HEAD, and
 printed: T1 the first, T2..T4 the round trips, Tlast = T4.
 An entry's `last_min` requires Tlast to reach a named completion checkpoint; it keeps late

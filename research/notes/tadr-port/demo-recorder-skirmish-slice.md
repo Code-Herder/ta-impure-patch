@@ -1045,8 +1045,11 @@ build compared the wrong tables; a dump now carries a header naming them.
 - **On a puppet host the engine computes the contact bits for the viewed player.** The host's
   radar pass runs for `+0x2A43`. The recorded bits are kept for a takeover, and compared when the
   recording viewer's perspective is shown. This amends 2026-09-29's "a replay shows the recording
-  viewer's radar picture": that perspective still shows it, computed by the engine from the same
-  inputs, and every other perspective shows its own player's radar, as the product page has it.
+  viewer's radar picture": that perspective still shows it, and every other perspective shows its
+  own player's radar, as the product page has it. In that perspective a playing writes the
+  recording's bits 8–10 after every step (the owner's amendment of 2026-10-23, THE RECORDED VIEW'S
+  CONTACTS in `tagpu_replay.c`): the engine's pass there does not have the recording machine's
+  inputs (*The recorded view's contacts*, below).
 
 - **`tagpu_replay.c` is `presentation`, `tagpu_puppet.c` `sim` and `tagpu_recreader.c`
   unlisted** (the owner, "two files"). The replay writes engine state only through the
@@ -1660,17 +1663,17 @@ jobs; each game ten minutes or less. The landing's build is `adaaf366`; its reco
   recording's viewed record the seek and the takeover then take bits 8–10 from the recording** (a
   takeover views P from TK1 on; a multiplayer recording's takeover keeps the pass's, the
   multiplayer slice's *The takeover of a multiplayer recording*), on every slot live
-  in the image whose host slot holds a live unit of its type: in that view a playing computes the
-  same pass from the same inputs at the same phase (D1), so what the recording holds at T is what a
-  playing holds — every capture-point dump in that view compares the radar picture strictly and is
-  EQUAL. That closes O14 for the contact bits in that view at every T, T = P+1 included, where the
+  in the image whose host slot holds a live unit of its type: in that view a playing holds the
+  recording's bits after every step (*The recorded view's contacts*, below), so what the recording
+  holds at T is what a playing holds — every capture-point dump in that view compares the radar
+  picture strictly and is EQUAL. That closes O14 for the contact bits in that view at every T, T = P+1 included, where the
   pass alone is wrong whenever something the pass read changed later in its step: MEASURED
   2026-10-09, the tenseat fixture's LOS command typed at GameTime 900 leaves images 901..930 with
   LosType 6 and the bit 8 a LosType-4 pass set on its 19 enemy units; the pass alone cleared them,
   and the round trip at 901 differed A against B in exactly those 19 `+0x110` (and at 911 in a
   process with no round trip before it); with the recorded bits the round trips at 901, 911 and 931
-  are EQUAL. Its residual: a recording whose viewed record changed within the 30 ticks before T
-  holds the old record's scan until its next pass, where a playing holds its own. In any other view
+  are EQUAL. A recording whose viewed record changed within the 30 ticks before T holds the old
+  record's scan until its next pass, and so do the seek and a playing in that view. In any other view
   nothing recorded is the truth, and the seek shows the pass's contacts at T until the next pass:
   in V's view only `+0x110` bits 8 and 9 of a unit the recording makes in steps P+1..T−1 (set after
   the seek, clear on the playing, unless the unit's def sets bit 9) and bit 12 where such a unit's
@@ -1710,6 +1713,47 @@ jobs; each game ten minutes or less. The landing's build is `adaaf366`; its reco
   dialog lists an AI ally, the one stock way to make such a unit without a cheat, is not established
   (the code accepts any active type-1–3 record without the watcher bit; not run); `books_put`
   covers it either way, since it keys on the replay's create, not on its cause.
+- **The recorded view's contacts.** When the host views the recording's own viewed record, a
+  playing writes every unit's `+0x110` bits 8–10 from the image it holds after every step, at the
+  capture point and at the frame visit, right after `recorded_put` (`contacts_put`, through
+  `rw_contacts` and its bound; `tagpu_replay.c`, THE RECORDED VIEW'S CONTACTS). The host's radar
+  pass alone gives other bits there, in two measured ways:
+  - **Events after the players phase.** The recording machine's pass of a pass step G runs in the
+    players phase `0x49555F`; the scenario applier's creates and kills at the frame tail
+    `0x4969D2`, the harness's end scenario among them, and the SHARE give's create at `0x488700`
+    come after it, and their units keep the create's bits (`0x485C1D..0x485C48`) until the pass of
+    G+30. A playing plays all of step G's events before the host's players phase, so its pass of G
+    covers them at once. MEASURED 2026-10-23: with waves made at the frame tail of step 540 the
+    recording's 8 ARMPW of the viewed seat hold `+0x111` = `02` at 541 and 570 and `03` at 571, the
+    AI seat's CORSOLAR `00`, `00`, `01`; on the playing's dump p541 they held `03` and `01`, 9
+    differences, and every round trip differed A against B in the same 9.
+  - **In multiplayer, the owners' positions.** A multiplayer playing holds each unit at its owner's
+    image (`mp_world`), where the recording machine's pass tested its own copy of a remote unit, a
+    fraction of a unit to several units away; the sight loop tests a 32-unit cell
+    (`0x46776B..0x467783`), so a remote unit near a cell edge at the edge of sight is tested in the
+    next cell. MEASURED 2026-10-23 on a four-seat Two Continents recording played in view 0: slot
+    1510 (record 3's) at iteration 600 sat at z 1417.87 in the primary stream and 1418.08 in its
+    owner's image, row 42 against 43, and dump p601 differed in its bit 8 alone.
+
+  The write comes after the host's last writers of those bits in the step (the step's events, the
+  radar pass) and before every reader the harness or a player has (the capture and dump, the next
+  unit tick, the draw through the visit's second cull, the next players phase's minimap rebuild
+  `0x466DC0`, which runs before that step's pass). No simulation reads the bits on a puppet host:
+  a type-3 seat has no acquisition record (`0x46489D..0x4648A5`, `0x40B2CC`); the display does
+  (the minimap's dots, bit 8 or 9; the cull and the unit draw, bit 9). In every other perspective
+  the pass's bits stand (D1, O14). **The residual the owner accepted on 2026-10-23**, a known
+  display gap: in any other perspective the radar picture covers a unit made after a pass step's
+  players phase up to 30 ticks early, and in multiplayer it follows the owners' positions; and under
+  true LOS the minimap's fog shows such a unit's sight one pass early in every view [INFERRED: the
+  host's players phase stamps it before that pass's fog composite `0x466C20`; the fog image is in no
+  dump]. Closing those by construction would play the step's later events after the host's players
+  phase, a marker record and a format change; it was not taken.
+  The test group **`contact-waves`** (`scenarios/replay-contact-load.json`, a still world of an arm
+  human seat and a core AI seat on Town & Country, no unit moving; `replay-contact-wave.json`,
+  applied at every G = 60, 90, ..., 1410, kills every unit and makes the two keepalives, 8 ARMPW of
+  seat 0 and a CORSOLAR of seat 1 again) puts creates and deaths of the viewed seat's units and of
+  another owner's at the frame tail of a pass step, G = 0 mod 30, the step whose pass the wave
+  follows, so every harness dump at T = 1 mod 30 before 1411 follows a wave.
 - **Two dumps of one GameTime can differ in the engine mouse thread's bytes**: its tagged lock, the
   lock's owner tag and the cursor's two positions, which the recording does not carry. How long the
   thread holds its lock, and what Wine's own DirectPlay and DirectSound threads write, are not
