@@ -1,5 +1,6 @@
-/* Recording metadata and file maintenance. A persistent path lock orders cooperating writers
-   from the scan through closing the source and atomically replacing it; see recr_manage. */
+/* Recording metadata and file maintenance. The path lock (tagpu_recfile.h, THE PATH LOCK) orders
+   cooperating writers from the scan through closing the source and atomically replacing it; see
+   recr_manage. */
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>

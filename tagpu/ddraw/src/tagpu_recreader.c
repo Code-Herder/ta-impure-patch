@@ -3313,12 +3313,13 @@ static int file_compact(RecReader* r, const char* path, const char* output, unsi
     if (high < r->max_id) rows[n++] = (RecTimelineState){r->max_id, REC_TL_DELETED, {0}, 0, 0};
     if (!stored_block(f, RB_TIMELINES, 0, rows, n * sizeof *rows) || !FlushFileBuffers(f))
         goto io_fail;
-    /* Every Impure writer holds the same persistent path lock from before its scan through
-       its last mutation. That ordering remains held when the source closes: MoveFileEx cannot
-       replace an open destination on Windows/Wine, even one sharing DELETE. No cooperating
-       writer can append in the close-to-replace interval. Other readers retain their ordinary
-       handles and refuse replacement; a later close retries compaction. The temp is complete
-       and flushed before the atomic replacement, so a crash leaves the old or the new file. */
+    /* Every Impure writer holds the same path lock (tagpu_recfile.h, THE PATH LOCK) from before
+       its scan through its last mutation. That ordering remains held when the source closes:
+       MoveFileEx cannot replace an open destination on Windows/Wine, even one sharing DELETE.
+       No cooperating writer can append in the close-to-replace interval. Other readers retain
+       their ordinary handles and refuse replacement; a later close retries compaction. The temp
+       is complete and flushed before the atomic replacement, so a crash leaves the old or the
+       new file. */
     CloseHandle(r->f);
     r->f = INVALID_HANDLE_VALUE;
     if (marked && !recfile_delete_on_close(f, 0)) goto io_fail;

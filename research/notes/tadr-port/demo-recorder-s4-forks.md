@@ -113,9 +113,10 @@ lifted and moved succeeds, and the refused export to an existing output leaves n
 `.tmp`; with the re-mark and the fallback both removed, it leaves one. Where no
 mark can be set (XP), a failure deletes the file by name at the end, safe because
 the name is that caller's alone under the lock it holds (the source's for a
-compaction, the output's for an export). A crash before the move leaves none
-either, the handle closing with the process [INFERRED: not measured]; a crash
-between lifting the mark and the move can.
+compaction, the output's for an export). Outside XP, a crash before the move leaves
+none either, the handle closing with the process [INFERRED: not measured]; a
+crash between lifting the mark and the move can. On XP no mark is set, so a crash
+before the move can leave one too.
 
 **The claims.** A playing and a queued deletion reserve the canonical path, kernel file identity
 and timeline ID under the worker publication lock. There are two claims (`recfile.c`, `s_claim`):
