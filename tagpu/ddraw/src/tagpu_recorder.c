@@ -6346,8 +6346,7 @@ static int turn_put(Rec* r, unsigned kind, const unsigned char* b)
 {
     unsigned id, imp, key, turn = s_turn;
     if (r->mode == MODE_NETWORK || !(REC_SKIRMISH_HOLDS & RECL_CELLS) || s_fdepth ||
-        (kind != RK_EV_CREATE && kind != RK_EV_DEATH && kind != RK_EV_YARD && kind != RK_EV_LINK &&
-         kind != RK_EV_PLACE))
+        !rec_turn_follows(kind))
         return 1;
     memcpy(&id, b, 4);
     imp = rec_turn_implicit(kind, id - 1u, s_key);

@@ -5050,30 +5050,65 @@ static int outcomes_lossy_cells(void)
     /* a held image, then a refresh whose first event is a contest key: the key stands just before
        its footprint event (tagpu_recfmt.h, THE CONTEST ORDER), so the refresh's cells go before
        the key, never between it and its event */
-    memcpy(run, e.grid + (size_t)GW * CB, CB);
-    run[CB - 1] ^= 0x02;
-    lo_tick(&in, 6);
-    lo_cells(&in, 0, 1, run, 1);
-    lo_event(&in);
-    ok &= expect("lossy cells: a held image before a keyed refresh", lo_step(L, &e, &in, 0, &out), 1);
     {
         unsigned char key[4] = { 1, 0, 0, 0 };
+        unsigned char link[12] = { 2, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0 };   /* 2 onto 1, piece 0 */
+        memcpy(run, e.grid + (size_t)GW * CB, CB);
+        run[CB - 1] ^= 0x02;
+        lo_tick(&in, 6);
+        lo_cells(&in, 0, 1, run, 1);
+        lo_event(&in);
+        ok &= expect("lossy cells: a held image before a keyed refresh",
+                     lo_step(L, &e, &in, 0, &out), 1);
         lo_tick(&in, 7);
         tlv_put(&in, RK_EV_TURN, key, 4);
+        tlv_put(&in, RK_EV_LINK, link, 12);
         lo_event(&in);
+        ok &= expect("lossy cells: the keyed refresh", lo_step(L, &e, &in, 1, &out), 1);
+        n = lo_kinds(&out, k, s, 16);
+        ok &= expect("  writes the cell before the key, the key just before its link",
+                     n == 5 && k[1] == RK_CELLS && k[2] == RK_EV_TURN && k[3] == RK_EV_LINK &&
+                     k[4] == RK_EV_STATE && rec_keys_adjacent(out.p, out.n), 1);
+        /* a link with no key before it is the step's too: the images end before it */
+        run[CB - 1] ^= 0x02;
+        lo_tick(&in, 8);
+        lo_cells(&in, 0, 1, run, 1);
+        lo_event(&in);
+        ok &= expect("lossy cells: a held image before a linked refresh",
+                     lo_step(L, &e, &in, 0, &out), 1);
+        lo_tick(&in, 9);
+        tlv_put(&in, RK_EV_LINK, link, 12);
+        lo_event(&in);
+        ok &= expect("lossy cells: the linked refresh", lo_step(L, &e, &in, 1, &out), 1);
+        n = lo_kinds(&out, k, s, 16);
+        ok &= expect("  writes the cell before the link",
+                     n == 4 && k[1] == RK_CELLS && k[2] == RK_EV_LINK && k[3] == RK_EV_STATE, 1);
+        /* the writer's check of what the filter made (rec_keys_adjacent) */
+        in.n = 0;
+        tlv_put(&in, RK_EV_TURN, key, 4);
+        tlv_put(&in, RK_EV_LINK, link, 12);
+        ok &= expect("keys: a key just before its link", rec_keys_adjacent(in.p, in.n), 1);
+        in.n = 0;
+        tlv_put(&in, RK_EV_TURN, key, 4);
+        lo_cells(&in, 0, 1, run, 1);
+        tlv_put(&in, RK_EV_LINK, link, 12);
+        ok &= expect("keys: refused: a record between a key and its event",
+                     rec_keys_adjacent(in.p, in.n), 0);
+        in.n = 0;
+        lo_event(&in);
+        tlv_put(&in, RK_EV_TURN, key, 4);
+        ok &= expect("keys: refused: a key open at the iteration's end",
+                     rec_keys_adjacent(in.p, in.n), 0);
+        ok &= expect("keys: no key at all", rec_keys_adjacent(out.p, out.n), 1);
     }
-    ok &= expect("lossy cells: the keyed refresh", lo_step(L, &e, &in, 1, &out), 1);
-    n = lo_kinds(&out, k, s, 16);
-    ok &= expect("  writes the cell before the key, the key just before its event",
-                 n == 4 && k[1] == RK_CELLS && k[2] == RK_EV_TURN && k[3] == RK_EV_STATE, 1);
     {
         RecLossyExact x = { e.units, e.live, e.lists, e.grid };
         ok &= expect("  the lossy grid is the copy's", reclossy_equal(L, &x), 1);
-        lo_tick(&in, 8);
+        lo_tick(&in, 10);
         lo_cells(&in, 3, 1, row[1], 2);
         ok &= expect("lossy cells: refused: a run past the row",
                      reclossy_iteration(L, in.p, in.n, 0, 0, &x, &out), 0);
-        lo_tick(&in, 8);
+        lo_tick(&in, 10);
         lo_cells(&in, 0, GH, row[1], 1);
         ok &= expect("lossy cells: refused: a row past the grid",
                      reclossy_iteration(L, in.p, in.n, 0, 0, &x, &out), 0);

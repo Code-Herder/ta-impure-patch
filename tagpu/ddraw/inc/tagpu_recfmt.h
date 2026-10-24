@@ -32,6 +32,7 @@
    SIMF_TARGET field of a declared table holds the engine's index or slot as it is
    (tagpu_simreg.h). An event names a unit by its ID, the slot's ID. */
 
+#include <stddef.h>
 #include <stdint.h>
 #include "tagpu_replay_globals.h"
 #include "tagpu_recpov.h"
@@ -642,6 +643,25 @@ static __inline int rec_turn_follows(unsigned kind)
 {
     return kind == RK_EV_CREATE || kind == RK_EV_DEATH || kind == RK_EV_YARD ||
            kind == RK_EV_LINK || kind == RK_EV_PLACE;
+}
+
+/* The `n` bytes of whole records at `p`: 1 when every RK_EV_TURN among them stands just before a
+   footprint event (rec_turn_follows), none left open at their end. The writer asks it of each
+   iteration the lossy filter makes, so a record the filter puts between a key and its event ends
+   the file at the writer instead of in every reader (tagpu_recwriter.c, iteration_done). */
+static __inline int rec_keys_adjacent(const unsigned char* p, size_t n)
+{
+    size_t at = 0;
+    int key = 0;
+    while (n - at >= 4) {
+        unsigned kind = (unsigned)p[at] | (unsigned)p[at + 1] << 8;
+        unsigned len = (unsigned)p[at + 2] | (unsigned)p[at + 3] << 8;
+        if (key && !rec_turn_follows(kind)) return 0;
+        key = kind == RK_EV_TURN;
+        at += (4u + len + 3) & ~3u;
+        if (at > n) return 0;
+    }
+    return !key;
 }
 
 /* the key of a top-level footprint event with no RK_EV_TURN before it */
