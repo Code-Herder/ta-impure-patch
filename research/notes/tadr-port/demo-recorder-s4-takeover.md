@@ -219,7 +219,7 @@ the boundary's seek in place, since the reader still stands at the boundary.
 ## The fork's handle
 
 The fork is written into the file it was played from, through the handle TK0 opened.
-[S4c's persistent path lock](demo-recorder-s4-forks.md#file-ordering-and-lifetimes)
+[S4c's path lock](demo-recorder-s4-forks.md#file-ordering-and-lifetimes) (`tagpu_recfile.h`, THE PATH LOCK)
 travels with that handle and orders its mutation against compaction's replacement. **TK0 opens the
 handle first and finds the append point after**: while it is held no other writer can open the file
 (its share mode is `FILE_SHARE_READ`), and an earlier one would have made the open fail, so the point

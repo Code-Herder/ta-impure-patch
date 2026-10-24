@@ -229,7 +229,7 @@ static void fail(Writer* w, const char* why)
     tagpu_logf("recorder: writer: %s: %s is abandoned at its last complete block", why, w->path);
     if (w->file != INVALID_HANDLE_VALUE) CloseHandle(w->file);
     w->file = INVALID_HANDLE_VALUE;
-    recfile_unlock(&w->lock);
+    recfile_unlock(&w->lock, w->path);
 }
 
 static void put(Writer* w, const void* p, DWORD n)
@@ -303,7 +303,7 @@ static int file_open(Writer* w)
         }
         {
             DWORD error = GetLastError();
-            recfile_unlock(&w->lock);
+            recfile_unlock(&w->lock, w->path);
             if (error != ERROR_FILE_EXISTS || !dot) break;
         }
     }
@@ -1746,7 +1746,7 @@ static void finish(Writer* w)
                    w->ring_high >> 10, w->nsnap, w->codec_on ? w->codec.keys : w->nsnap,
                    (unsigned)(w->snap_qpc * 1000 / hz), (unsigned)(w->snap_max * 1000 / hz));
     }
-    recfile_unlock(&w->lock);
+    recfile_unlock(&w->lock, w->path);
     free(e.p);
     reccodec_stream_end(&w->codec);
     ZSTD_freeCCtx((ZSTD_CCtx*)w->cctx);
@@ -1798,7 +1798,7 @@ static DWORD WINAPI writer_main(void* arg)
         tagpu_logf("recorder: writer: no memory: %s is not written", g->path);
         if (g->fork.file) CloseHandle(g->fork.file);
         g->fork.file = NULL;
-        recfile_unlock(&g->fork.lock);
+        recfile_unlock(&g->fork.lock, g->fork.path);
     }
     while (!stop) {
         unsigned wp;

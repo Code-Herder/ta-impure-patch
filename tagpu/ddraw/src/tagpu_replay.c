@@ -7678,22 +7678,23 @@ static int tk_open(unsigned T, char* why, unsigned cap)
     f = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_EXISTING,
                     FILE_ATTRIBUTE_NORMAL, NULL);
     if (f == INVALID_HANDLE_VALUE) {
-        recfile_unlock(&lock);
+        DWORD error = GetLastError();          /* the open's, before the release makes calls */
+        recfile_unlock(&lock, path);
         snprintf(why, cap, "the recording cannot be written (%lu): another program may have it "
-                 "open, or it is read-only", GetLastError());
+                 "open, or it is read-only", error);
         return 0;
     }
     /* the append point is found in the file the playing reads, so the handle must be that file,
        not one put at its path since */
     if (!recr_same_file(s_rd, f)) {
         CloseHandle(f);
-        recfile_unlock(&lock);
+        recfile_unlock(&lock, path);
         snprintf(why, cap, "%s is no longer the file this level plays", path);
         return 0;
     }
     if (!recr_append_point(s_rd, T - 1, &a, s_used, s_nused, w2, sizeof w2)) {
         CloseHandle(f);
-        recfile_unlock(&lock);
+        recfile_unlock(&lock, path);
         snprintf(why, cap, "%s", w2);
         return 0;
     }
@@ -7865,7 +7866,7 @@ static void tk_end(unsigned T, unsigned P, unsigned D, unsigned ms, unsigned rea
                  parent, T);
     } else {
         CloseHandle(s_tk.fork.file);
-        recfile_unlock(&s_tk.fork.lock);
+        recfile_unlock(&s_tk.fork.lock, s_tk.fork.path);
         s_tk.fork.file = NULL;
         tagpu_logf("replay: %s: timeline %u is not recorded: the recorder refused the arm", s_name,
                    id);
