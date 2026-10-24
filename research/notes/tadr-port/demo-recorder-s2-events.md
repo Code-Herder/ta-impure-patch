@@ -606,7 +606,9 @@ machine's order (`tagpu_recfmt.h`, *THE CONTEST ORDER*; [engine map](../exe-reve
 
 - **`RK_EV_TURN {u16 key, u16 0}`**: the turn of the unit tick -- the slot whose turn it was, or
   `0xFFFF` after the tick -- that the next top-level footprint event (a create, a death, a live
-  unit's yard, a link) was made in, written just before that event and only when its key differs
+  unit's yard, a link, a move) was made in, or the slot after the turn's when it was made after
+  that turn's unit relinked (its walk class's run-now COB pass, its water state's start, its
+  death), written just before that event and only when its key differs
   from the one a reader infers: a death's or a yard's own slot, or the step's last key, whichever
   is later, and a create's or a link's the step's last key. The keys never go back within a step,
   and a key stands before a footprint event or not at all; the writer and both readers refuse

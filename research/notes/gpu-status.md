@@ -3027,9 +3027,11 @@ entry), a file that is not a recording and a 3-byte file, −1 for a missing fil
 harness held open exclusively. A name too long
 for its lock path is counted unreadable before the sort, outside N.
 
-**Its events have 67 sites of their own** (the attach log's `recorder: 67 event sites in`, MEASURED 2026-10-23),
-byte-matched and built at `DllMain` by `tagpu_rec_init`, all before any lands; no recording starts
-without them. Thirty-one observers run a handler and then the stolen bytes: the COB start entries
+**Its events have 68 sites of their own** (the attach log's `recorder: 68 event sites in`,
+MEASURED 2026-10-23), byte-matched and built at `DllMain` by `tagpu_rec_init`, all before any
+lands; no recording starts without them, so a patch or mod holding other bytes at any of them --
+Teleport's set-position call `0x406BC0` among them -- leaves the recorder off, the log naming the
+site. Thirty-one observers run a handler and then the stolen bytes: the COB start entries
 `0x4B0B00` and `0x4B0940` (the slice markers' start set, below), the constructor
 reservation `0x486075` (the multiplayer begin root, below), the create's success exit `0x4861B3`,
 the destructor `0x4866D0`, the corpse helper `0x486360` (`FR_CORPSE`), the build done
@@ -3043,11 +3045,12 @@ destroy `0x4246B0`, FeatureDie `0x423550`, the burn `0x4233A0`, the damage `0x42
 `0x423710`, each with an `after` at its return and chained onto its puppet gate (§2.6f), the
 footprint writers `0x47CC30`, `0x47D0E0` and `0x47C790`, whose `after` runs only on a puppet level
 (§2.6f) and which also check each call's place in the step's order, and the attach `0x48AB70`,
-its acting attaches recorded as `RK_EV_LINK` (`tagpu_recfmt.h`, *THE CONTEST ORDER*). Nine more `call`s go through stubs that
+its acting attaches recorded as `RK_EV_LINK` (`tagpu_recfmt.h`, *THE CONTEST ORDER*). Ten more `call`s go through stubs that
 call the engine's own function: the feature code's six calls of the simulation RNG `0x4B6C30`
 (`0x4234C2`, `0x423A38`, `0x423B40`, `0x424113`, `0x424159`, `0x424167`), the destructor's
 explosion `0x49B000` at `0x486D50` ([the engine map](exe-reverse-engineering.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)),
-and the two click actions' only call sites, the left action `0x498F70` at `0x4995B3` and the right
+Teleport's set-position `0x48A9F0` at `0x406BC0`, its move recorded as `RK_EV_PLACE` before the
+call, and the two click actions' only call sites, the left action `0x498F70` at `0x4995B3` and the right
 button's press `0x499100` at `0x4993AC`, each a 17-byte stub that records the click
 (`RK_CLICK` in a skirmish recording, `RECMP_CLICK` from a multiplayer game's contributing game
 thread) and then calls the action with the same argument

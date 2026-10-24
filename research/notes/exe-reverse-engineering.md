@@ -2407,10 +2407,13 @@ S2a of the [skirmish slice](tadr-port/demo-recorder-skirmish-slice.md#s2a-what-w
 cannot say, where the engine does it and in the order it does it; the research is
 [the events note](tadr-port/demo-recorder-s2-events.md). `tagpu_rec_init`, at DllMain's attach,
 byte-matches every site and builds every stub before any lands; no recording starts without all of
-them (`recorder: 67 event sites in`: thirty-one observers -- the attach `0x48AB70`'s among them
+them (`recorder: 68 event sites in`: thirty-one observers -- the attach `0x48AB70`'s among them
 (*The order of a step's footprint and chain calls*) -- five network tests, fifteen named-start
-calls, six query calls, six feature draws, the destructor's explosion call, reproduction's source
-test and the two click calls; MEASURED in slice-walkers' logs, 2026-10-23).
+calls, six query calls, six feature draws, the destructor's explosion call, Teleport's
+set-position call `0x406BC0`, reproduction's source test and the two click calls; MEASURED in the
+replay gate's logs, 2026-10-23). A patch or mod that holds other bytes at any of them --
+`0x406BC0` among them -- leaves every event hook out and nothing is recorded; the log names the
+site.
 Each hook reads only a recording's game thread; a call from another thread is refused and counted
 (`RK_END`'s off-thread count). An observer's handler sees the site's `esp` as `E` and the
 registers `pushad` saved under it (EDI at `E−0x24` up to EAX at `E−0x08`), so at a function's
@@ -8477,6 +8480,21 @@ callers are the unit tick's `0x48AFAA` and the `0x2C` receiver's `0x48BA46`. It 
 cell or layer change (`0x43D898..0x43D8BF`: the clear `0x43DA0F` and the stamp `0x43DA41`, or the
 set-position at `0x43D775` for a carried unit). So a unit relinks at most once a step, in its own
 turn.
+
+**After the relink, in the same turn, the unit's own scripts run.** The movement pass calls the
+walk class `0x43DA70` next (`0x43DD5D`), which on a change of its walk state starts StartMoving,
+StopMoving or the like through `0x4B0940` with run-now 1 (`push 1` at `0x43DAD5`, `0x43DAE3`,
+`0x43DB02`, `0x43DB0D`, `0x43DB18`; the calls at `0x43DAF2` and `0x43DB27`), and then the water
+state `0x43DB50` (`0x43DD65`), which starts setSFXoccupy through `0x4B0A70` with run-now 1
+(`0x43DBDD..0x43DBE8`). A run-now start runs the script's threads at once (`0x4B0B86..0x4B0BA6`:
+`0x4B0DA0(i, 0)` for i 0..7, then the pass at `0x4B0BA2`), every running thread of the unit among
+them [INFERRED: the loop's body is not mapped here] -- a
+TransportPickup or TransportDrop the order run started earlier in the turn (`0x406834`,
+`0x4069BF`) -- so the unit's COB can attach or drop (`0x4813A6`, `0x481422` -> `0x48AAC0`) or open
+a yard after its relink, and the reaper's death (`0x48AFD1`) comes after it too. The recorder keys
+every footprint event made after the turn unit's own relink at the next slot, so a playing places
+that unit before it (`tagpu_recorder.c`, `turn_put`; `tagpu_recfmt.h`, *THE CONTEST ORDER*, step
+3b).
 
 **The unit tick's turns** (`0x48AD30..0x48B022`): records 0..9 in order (`al` counts 0..9, `edx`
 steps `0x14B`, `0x48B008..0x48B022`); for each active record of type 1, 2 or 3 with `+0x146` ≠ 10
