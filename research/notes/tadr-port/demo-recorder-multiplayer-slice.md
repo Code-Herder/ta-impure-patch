@@ -1826,7 +1826,8 @@ two-peer recording sat up to 10.3 world units away (1 to 6 remote units per
 sampled tick), so a unit or a jammer straddling a sight, radar or jammer edge at
 a pass gets other bits from the pass. That is why a playing in the recorder's
 view writes the primary's bits after every step: the dump's expectation is
-then met by construction. MEASURED 2026-10-23 on a four-seat Two Continents
+then met by construction for every slot `rw_contacts`' bound lets through (a slot whose host
+unit is dead or of another type keeps the pass's bits). MEASURED 2026-10-23 on a four-seat Two Continents
 recording, `--perspective 0`, dumps at 301, 601 and 901: without the write p601
 differed in one unit, slot 1510's bit 8, the unit 0.21 units from its owner's
 image at the edge of a 32-unit sight cell (row 42 on the recording machine, 43

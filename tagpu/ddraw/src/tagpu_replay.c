@@ -1500,8 +1500,10 @@ static int first_checks(const char* ta, const RecHeader* h, char* why, unsigned 
 #define U_BUILT        0x104        /* the build left, a float: 0.0 when finished                  */
 #define U_STATE        0x110
 #define U_SELECTED     0x10u        /* +0x110 bit 4: the viewer's own selection (a drop row)      */
-#define CONTACT_VIEWED 0x700u       /* +0x110 bits 8-10: the viewed record's contacts, which only
-                                       0x467440 and its visitors write on a puppet host           */
+#define CONTACT_VIEWED 0x700u       /* +0x110 bits 8-10: the viewed record's contacts, which on a
+                                       puppet host the radar pass 0x467440 and its visitors write,
+                                       the create bits 8-9 (0x485C3E `and ah,0xfc`, 0x485C41
+                                       `shl ecx,9`, the store 0x485C48), and rw_contacts         */
 #define CONTACT_SCAN   0x1700u      /* ... and bit 12, which loop 1 clears and loop 4 sets for a
                                        type-1 or type-2 owner: the whole scan                     */
 #define U_MODEL        0x9E         /* the model instance (Object3do): the create 0x485D40 stores it
@@ -6001,8 +6003,9 @@ static void recorded_put(const Lv* L, const RecWorld* W)
    cull replaces before the draw.
    In any other view nothing recorded is the truth, and the pass's bits stand (O14).
    No simulation reads these bits on a puppet host (DISASSEMBLED): the acquisition scan 0x40AA40
-   runs only through 0x40B2C0, which returns for a seat with no acquisition record
-   (0x40B2C5..0x40B2CE), and the player init makes none for an active type-3 record
+   runs only through 0x40B2C0 (its other call, 0x40AD3E, is in 0x40AD20, which nothing calls or
+   points to); 0x40B2C0 returns for a seat with no acquisition record (0x40B2C5..0x40B2CE), and
+   the player init makes none for an active type-3 record
    (0x46489D..0x4648A5); loop 4 of the pass needs a type-1 or type-2 owner. What reads them is the
    display: the minimap's unit dots bit 8 or 9 (0x466E6A), the cull's test 0x465AC0 and the unit
    draw bit 9 (0x465B38, 0x45972A).
