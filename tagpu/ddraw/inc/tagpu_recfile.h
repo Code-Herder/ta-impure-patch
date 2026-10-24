@@ -38,6 +38,9 @@ uint64_t recfile_now(void);
    keeps every lock. */
 HANDLE recfile_lock(const char* path, char* why, unsigned cap);
 void recfile_unlock(HANDLE* lock, const char* path);
+/* `f`, opened with DELETE access, marked for deletion at its close (`on`) or its mark lifted: 1
+   done, 0 refused, or where there is no SetFileInformationByHandle (XP) */
+int recfile_delete_on_close(HANDLE f, int on);
 
 /* THE PRUNE'S ORDER, which the Replays browser lists by too (tagpu_replays.c, scan): < 0 when the
    file named `x`, whose recorded start `tx` recr_wallclock_of read with answer `dx`, comes before

@@ -98,8 +98,24 @@ protect the close-to-replace interval.
 Other readers deny deletion sharing and can refuse replacement. Touch or delete
 may still commit its metadata table; the result then explicitly says compaction
 is deferred. A later playing-end touch or append-writer close retries. A failed
-replacement leaves the old recording intact; a crash can leave a temporary file.
+replacement leaves the old recording intact.
 A source that cannot be written skips the touch with a log line (D5).
+
+**A failure leaves no temporary file** (`file_compact`, *THE TEMPORARY FILE'S
+LIFETIME*). The `PATH.tmp` of a compaction or an export is marked for deletion on
+its own handle (`FileDispositionInfo`) from its creation until the move, so a
+block that will not copy, a refused write and a refused move -- an export to an
+output that exists among them -- delete it when the handle closes. The mark is
+lifted for the move alone, because a file whose deletion is pending cannot be
+opened to be moved, and set again when the move fails. MEASURED 2026-10-23 under
+Wine on the reference setup by codectest's outcomes: the export with the mark
+lifted and moved succeeds, and the refused export to an existing output leaves no
+`.tmp`; with the re-mark and the fallback both removed, it leaves one. Where no
+mark can be set (XP), a failure deletes the file by name at the end, safe because
+the name is that caller's alone under the lock it holds (the source's for a
+compaction, the output's for an export). A crash before the move leaves none
+either, the handle closing with the process [INFERRED: not measured]; a crash
+between lifting the mark and the move can.
 
 **The claims.** A playing and a queued deletion reserve the canonical path, kernel file identity
 and timeline ID under the worker publication lock. There are two claims (`recfile.c`, `s_claim`):

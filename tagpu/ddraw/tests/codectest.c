@@ -3957,7 +3957,8 @@ static int file_there(const char* path, const char* suffix)
 }
 
 /* THE PATH LOCK (tagpu_recfile.h) after `out` was exported from `path`: each lock stays beside the
-   recording it locks; an export whose output's lock another caller holds is refused as busy; and
+   recording it locks; an export whose output's lock another caller holds is refused as busy; one
+   to an output that exists is refused and leaves no temporary file (file_compact); and
    once the recording and its lock are deleted, as the prune deletes them, a maintenance request
    on the path finds no recording and leaves no lock behind. Deletes `out`. */
 static int outcomes_lock(const char* path, const char* out)
@@ -3977,10 +3978,9 @@ static int outcomes_lock(const char* path, const char* out)
     k = recr_manage(path, REC_FILE_EXPORT, 1, out, NULL, 0, why, sizeof why);
     ok &= expect("lock: an export to an output that exists is refused", k, 0);
     ok &= expect("  and the output's lock stays", file_there(out, ".lock"), 1);
+    ok &= expect("  and its temporary file is gone", file_there(out, ".tmp"), 0);
     DeleteFileA(out);
     snprintf(why, sizeof why, "%s.lock", out);
-    DeleteFileA(why);
-    snprintf(why, sizeof why, "%s.tmp", out);
     DeleteFileA(why);
     k = recr_manage(out, REC_FILE_DELETE, 1, NULL, NULL, 0, why, sizeof why);
     ok &= expect("lock: a request on a deleted recording finds none", k, 0);

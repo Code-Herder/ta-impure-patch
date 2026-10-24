@@ -62,19 +62,24 @@ HANDLE recfile_lock(const char* path, char* why, unsigned cap)
     return f;
 }
 
+int recfile_delete_on_close(HANDLE f, int on)
+{
+    FILE_DISPOSITION_INFO gone = { on ? TRUE : FALSE };
+    SetInfoFn set = set_info();
+    return set && set(f, FileDispositionInfo, &gone, sizeof gone);
+}
+
 /* THE LOCK'S END (tagpu_recfile.h, THE PATH LOCK): the recording's absence is read while the
    lock is still held, when no Impure caller can change it, and only a definite "not found"
    deletes; any other failure to read it keeps the lock, as a recording that exists does. */
 void recfile_unlock(HANDLE* lock, const char* path)
 {
-    FILE_DISPOSITION_INFO gone = { TRUE };
-    SetInfoFn set;
     DWORD error;
     if (!*lock) return;
     if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) {
         error = GetLastError();
-        if ((error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) && (set = set_info()))
-            set(*lock, FileDispositionInfo, &gone, sizeof gone);
+        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
+            recfile_delete_on_close(*lock, 1);
     }
     CloseHandle(*lock);
     *lock = NULL;

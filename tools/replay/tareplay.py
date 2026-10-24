@@ -2906,9 +2906,12 @@ def forks_steps(w, fx, out, results):
     command("export", 5, "export5")
     command("export", 5, "export5", expect=False)     # an existing export is never overwritten
     # the export held its output's lock, which stays beside the recording it made
-    # (tagpu_recfile.h, THE PATH LOCK)
+    # (tagpu_recfile.h, THE PATH LOCK), and the refused one's temporary file went with its
+    # failure (tagpu_recreader.c, file_compact)
     if not (w.gamedir / "replays" / "export5.imprec.lock").exists():
         raise Failed("forks: the export's output has no lock beside it")
+    if (w.gamedir / "replays" / "export5.imprec.tmp").exists():
+        raise Failed("forks: the refused export left its temporary file")
     exported = out / "export5.imprec"
     shutil.copy2(w.gamedir / "replays" / "export5.imprec", exported)
     segs = check_file(exported, "exported chain")

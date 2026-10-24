@@ -3241,7 +3241,7 @@ static int file_compact(RecReader* r, const char* path, const char* output, unsi
     unsigned i, j, n = 0, high = 0, dead = 0;
     char tmp[MAX_PATH];
     HANDLE f = INVALID_HANDLE_VALUE;
-    int exporting = output && output[0], ok = 0;
+    int exporting = output && output[0], ok = 0, marked = 0;
     const char* target = exporting ? output : path;
     for (i = 0; i < r->nseg; i++) {
         const RecTimeline* t = &r->seg[i].t;
@@ -3272,7 +3272,16 @@ static int file_compact(RecReader* r, const char* path, const char* output, unsi
     snprintf(tmp, sizeof tmp, "%s.tmp", target);
     f = CreateFileA(tmp, GENERIC_WRITE | DELETE, FILE_SHARE_DELETE, NULL, CREATE_ALWAYS,
                     FILE_ATTRIBUTE_NORMAL, NULL);
-    if (f == INVALID_HANDLE_VALUE || !write_all(f, REC_MAGIC, 8)) goto io_fail;
+    if (f == INVALID_HANDLE_VALUE) goto io_fail;
+    /* THE TEMPORARY FILE'S LIFETIME: marked for deletion on its own handle from its creation to
+       the move, so that every failure -- a block that will not copy, a write refused, the move
+       refused, the process ending -- deletes it when the handle closes. The mark is lifted for the
+       move alone, since a file whose deletion is pending cannot be opened to be moved, and set
+       again when the move fails. Where no mark can be set (XP), a failure deletes it by name at
+       the end: the name is this caller's alone, beside the recording whose lock it holds -- the
+       source's for a compaction, the output's for an export (tagpu_recfile.h, THE PATH LOCK). */
+    marked = recfile_delete_on_close(f, 1);
+    if (!write_all(f, REC_MAGIC, 8)) goto io_fail;
     for (i = 0; i < r->nseg; i++) {
         RecSeg* s = &r->seg[i];
         const RecTimeline* t = &s->t;
@@ -3312,8 +3321,15 @@ static int file_compact(RecReader* r, const char* path, const char* output, unsi
        and flushed before the atomic replacement, so a crash leaves the old or the new file. */
     CloseHandle(r->f);
     r->f = INVALID_HANDLE_VALUE;
+    if (marked && !recfile_delete_on_close(f, 0)) goto io_fail;
+    marked = 0;
     if (!MoveFileExA(tmp, target, MOVEFILE_WRITE_THROUGH |
-                    (exporting ? 0 : MOVEFILE_REPLACE_EXISTING))) goto io_fail;
+                    (exporting ? 0 : MOVEFILE_REPLACE_EXISTING))) {
+        DWORD error = GetLastError();
+        marked = recfile_delete_on_close(f, 1);
+        SetLastError(error);
+        goto io_fail;
+    }
     snprintf(why, cap, "%s %u; %u segments kept", exporting ? "exported timeline" :
              "compacted after timeline", chosen, n);
     ok = 1;
@@ -3322,7 +3338,10 @@ io_fail:
     snprintf(why, cap, "cannot %s the recording (%lu)", exporting ? "export" : "compact",
              GetLastError());
 done:
-    if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
+    if (f != INVALID_HANDLE_VALUE) {
+        CloseHandle(f);
+        if (!ok && !marked) DeleteFileA(tmp);
+    }
     return ok;
 }
 
