@@ -96,6 +96,84 @@ enable both resource features for Stock TA, M/P/T and lock them off for E/Z and 
 Those are Impure choices; this table continues to audit native bundled TADR behavior. Quick Build
 is an Impure addition and is not evidence of another feature in any bundled TADR DLL.
 
+### Queue editing and line building: TADR beside BAR
+
+What BAR players call "shift-drag building" is two features in both games: **moving an order
+already in the queue**, and **laying out several buildings in one gesture** (line, box, ring,
+spacing). TADR and BAR each have both, but they split them differently. The biggest difference:
+**TADR can drag a queued building and BAR cannot.**
+
+Read from source on 2026-10-25: TADR
+[`v2026.8.6` `tahook.cpp`](https://github.com/tanvanman/TADR/blob/v2026.8.6/src/DDraw/tahook.cpp)
+(TA Hook; the `v2024.3.31` code that the native bundles carry has the same drag, line and ring
+logic, without the rotation handling); BAR
+[`9c250d7`](https://github.com/beyond-all-reason/Beyond-All-Reason/tree/9c250d7c561df89875aca3ae8d06fb8c0607b4c5)
+widgets and keybind defaults; the Recoil engine
+[`b988c72`](https://github.com/beyond-all-reason/RecoilEngine/tree/b988c729a7f570fa71c16feff9d54a354184c7f0)
+`CGuiHandler`. No gameplay test was run on either side.
+
+#### Moving a queued order
+
+TADR: [`FindUnitOrdersUnderMouse`](https://github.com/tanvanman/TADR/blob/v2026.8.6/src/DDraw/tahook.cpp#L1696)
+and [`DragUnitOrders`](https://github.com/tanvanman/TADR/blob/v2026.8.6/src/DDraw/tahook.cpp#L1849).
+BAR: the [Waypoint Dragger](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/unit_waypoint_dragger_2.lua)
+widget, enabled by default. The engine itself has no queue drag.
+
+| | TADR | BAR |
+|---|---|---|
+| Gesture | Shift + left-drag on a queued order of a selected unit, with no command armed. A press without movement is posted back to the engine as an ordinary click | Shift + left-drag within 15 screen px of a waypoint of a selected unit. Refused while a build or an area command is armed |
+| **Queued buildings** | **Yes**: the main case. The grab box is the building's footprint | **No**: build commands are not in the widget's command table |
+| Other orders | Move, patrol, unload | Move, patrol, fight, attack-ground, and the area orders (reclaim, repair, resurrect, restore, load, unload, area attack), which keep their radius |
+| Orders with a unit target | Excluded | Excluded (they have no position parameter) |
+| How many move | **One**: the first match across the selected units. Builders that share a queued building leave every copy but one behind | **All** waypoints under the cursor, across every selected unit. Ctrl while dragging adds the waypoints the cursor passes over |
+| Placement check | Every move snaps to the build grid and runs the engine's `TestBuildSpot`, under the order's own rotation. A blocked spot keeps the old position and draws a red footprint at the cursor | None (no build orders) |
+| Feedback while dragging | The order itself moves: the stock queue line and ghost follow | An animated dashed line from the old position to the new one, plus a ground circle. The order does not change until release |
+| When the order changes | **On every mouse move, in place**: the code writes the unit's order record directly and issues no command | **On release**: `CMD.INSERT` before the next command, then `CMD.REMOVE` of the old one. These are ordinary synced commands, so a demo carries them |
+| Current order | Moving the unit's head order re-issues the move from the unit's own position | Handled like any other command |
+| Copy instead of move | No | Alt at release keeps the original |
+| Cancel | No: releasing Shift ends the drag and leaves the order where it is | Releasing Shift drops the grab; nothing changes |
+| Queue depth searched | The whole queue | The first 20 commands per unit |
+
+#### Placing several buildings in one gesture
+
+TADR: [`CalculateLine`](https://github.com/tanvanman/TADR/blob/v2026.8.6/src/DDraw/tahook.cpp#L1035),
+[`CalculateRing`](https://github.com/tanvanman/TADR/blob/v2026.8.6/src/DDraw/tahook.cpp#L1522),
+[`OptimizeDTRows`](https://github.com/tanvanman/TADR/blob/v2026.8.6/src/DDraw/tahook.cpp#L1146).
+BAR: the engine's [`GetBuildPositions`](https://github.com/beyond-all-reason/RecoilEngine/blob/b988c729a7f570fa71c16feff9d54a354184c7f0/rts/Game/UI/GuiHandler.cpp#L2513)
+plus the BAR widgets named in the table.
+
+| | TADR (TA Hook key, default **X**) | BAR (Shift-drag, engine) |
+|---|---|---|
+| Gesture | Hold X with a build armed and click the start point. Each further click commits the segment and starts the next one there, so one hold lays a polyline. Releasing X drops the uncommitted segment | Shift + left-press with a build armed, drag, and release to commit |
+| Free-angle line | Yes, but it advances along the dominant axis by footprint + spacing and steps the other axis in 16 px cells (Bresenham), so a diagonal comes out as a staircase | Yes. The minor-axis step is proportional, and each site snaps to the build grid on its own |
+| Axis-locked line | No | Shift + Ctrl |
+| **Filled rectangle** | No | Shift + Alt, laid out in a serpentine order |
+| **Hollow rectangle** | No | Shift + Alt + Ctrl |
+| **Ring around a building** | Yes: hold X with the cursor over a unit. The ring sits outside its footprint, pushed out by the spacing. *Full rings* (on by default) adds the corner pieces for footprints up to 2×2 | Yes: Shift + Ctrl over a unit **or over a queued build**. Each side faces outward. Sites that would cancel an existing queued build are skipped. Spacing is not applied |
+| **Spacing** | X + PageUp/PageDown or X + wheel, 0..10 cells. One global value, with no on-screen readout | `buildspacing inc/dec`: Alt+Z / Alt+X in all four default keybind profiles, plus mouse buttons 4/5 ([Mouse Buildspacing](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/gui_buildspacing.lua)). No engine maximum; [Limit Build Spacing](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/cmd_limit_build_spacing.lua) clamps it to 16 |
+| Spacing remembered per building | No | Yes ([Persistent Build Spacing](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/cmd_persistent_build_spacing.lua)) |
+| Preview | A footprint rectangle at each site, coloured green/yellow/red by `TestBuildSpot`. The engine's own build rectangle is suppressed | The unit model at each site, tinted cyan (can build) or red, with its range circles |
+| Dragon's-teeth special case | *Optimized DT rows* (on by default) reorders the queue entries of a line of 2×2 pieces, swapping neighbours that share a row. Why that order helps is not established [INFERRED: the builder's path] | None |
+| Split across builders | No: each selected builder gets every site | [Build Split](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/cmd_buildsplit.lua) (Space): the sites are divided among the selected builders |
+| Insert instead of append | No | [CommandInsert](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/cmd_commandinsert.lua) (Space): before the current order, or between two orders |
+| Facing | Only in E/T's rotation module (Alt + wheel); no supported mod has rotatable content (see the rotation row above) | `[` / `]`. The ring also turns each side to face outward |
+| How sites are issued | One synthetic shift map-click per site, through the engine's own click handler | One build command per site, through the normal command path |
+
+#### What each side is missing, for Impure's port
+
+- **TADR has and BAR lacks:** dragging a queued *building* with a live placement check, a polyline
+  built from repeated clicks, and the dragon's-teeth reordering.
+- **BAR has and TADR lacks:** dragging several waypoints at once (and sweeping more up with Ctrl),
+  copy with Alt, cancel by releasing Shift, the order committed once on release as an ordinary
+  command, filled and hollow rectangles, axis-locked lines, a ring around a *queued* build, a
+  ring that skips sites that would cancel a queued build, spacing remembered per building, the
+  split across builders, and insertion.
+- **Open for the Impure design** (questions, not findings): TADR writes order memory on every
+  mouse move without issuing a command. *Simulation changes stay replayable* (CLAUDE.md)
+  requires the recorder to see the edit, so the design has to say whether an edit is a commit
+  on release or a live write. Which builders' copies of a shared building move together is a
+  behaviour choice that neither implementation settles.
+
 ## Activation evidence for older conveniences
 
 The historical releases use spare exe bytes as configuration; newer build configurations use
