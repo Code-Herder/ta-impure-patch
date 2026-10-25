@@ -370,8 +370,10 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
 - **Orders**: a right-click with nothing to build is a move.
 
 **The placement gesture**, following `tagpu_place.c` function for function (`evaluate`,
-`toggles`, `classify`, `ring_target`, `remove_toggled` and `append_sites` as `commit`,
-`place_button` as the press and the release), with `tagpu_placegeo.c`'s `place_shape` and
+`toggles`, `take_offs`, `classify`, `ring_target`, `remove_taken` and `append_sites` as `commit`,
+`place_button` as the press and the release; `take_offs` and `remove_taken`, which replaces
+`remove_toggled`, as they stand on the branch `worktree-agent-ac37d55e26a5e56f3` until that branch
+lands), with `tagpu_placegeo.c`'s `place_shape` and
 `place_ring` ported line for line, integer arithmetic included (checked against the compiled C on
 20,000 random cases, 2026-10-25: identical):
 
@@ -388,16 +390,23 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
 - **A ring target** is the unit under the cursor, any unit, else a selected builder's build order
   whose footprint holds the cursor's cell, first in selection order then queue order. A ring is
   `place_ring`'s: no spacing; its sites that would take an order off are left out.
-- **A site's colour**: red where the site test refuses it; yellow where some selected builder has
-  a build order of any building within 16 world units of the site's centre on both axes
-  (`0x43AFC0`'s predicate, inclusive); green otherwise.
+- **The take-off rule** (`take_offs`) settles what each site does, and both the preview's colours
+  and the release read it. Per selected builder, each queued build order is taken off by at most
+  one site, judged against the queue as it stood before the gesture: first every site not red
+  takes the build order at its own position, then each site that took none takes the first build
+  order within 16 world units of its centre on both axes (`0x43AFC0`'s predicate, inclusive; any
+  building) that no site has taken — both passes in the shape's order, orders in queue order. A
+  ring takes nothing off: its sites with a build order of some selected builder within 16 world
+  units are left out.
+- **A site's colour**: red where the site test refuses it; yellow where it takes an order off
+  from some selected builder; green otherwise.
 - **The release with Shift held** commits. A one-site gesture ending at the cursor site is the
   stock Shift-click itself: the first build order within 16 world units is taken off instead of
-  adding one, otherwise the site is appended. Any other gesture is classified afresh, then per
-  selected builder: each site not red takes off one build order no earlier site took — the one at
-  its own position first, else the first within 16 world units — and adds nothing; the rest are
-  appended in the shape's order while the queue is shorter than 1024 orders. Every selected
-  builder gets them, its build list not consulted, as `0x419670` orders.
+  adding one, otherwise the site is appended. Any other gesture is classified afresh by the same
+  rule, then per selected builder: the orders the rule gave a site are taken off, and each of
+  those sites adds nothing for that builder; the rest that are not red are appended in the
+  shape's order while the queue is shorter than 1024 orders. Every selected builder gets them,
+  its build list not consulted, as `0x419670` orders.
 - **Shift released before the button** drops the gesture, orders nothing and keeps the building
   armed. A placement or a commit that changed a queue sets the Shift-placement bit (`main+0x2CC6`
   bit 5), and **Shift released afterwards disarms**, as after a stock Shift-click (`0x4992D8`).
@@ -469,7 +478,7 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
 ## Open issues in the placement code
 
 Porting `tagpu_place.c` and `tagpu_placegeo.c` into `sim.js` turned up three behaviours of the
-game's placement worth stating; the first is the specified rule. They were found by reading
+game's placement worth stating; the first is the specified rule and the second is fixed. They were found by reading
 and porting the code (the port matches `tagpu_placegeo.c` on 20 000 random cases); none has been
 reproduced in game yet. The sim mirrors the code as it is, so the Build Lines entry's demos route
 round them; when the code changes, `sim.js` and the demos follow it.
@@ -483,11 +492,19 @@ round them; when the code changes, `sim.js` and the demos follow it.
    takes the ring target from the live mouse ray, all do the same. Demo 3 routes its cursor round
    the solar collector for that reason. Deciding the shape at the press instead is a change of
    the rule, the owner's to make.
-2. **The yellow preview can promise more than the release does.** Dragging back over a queued
-   row of 1 × 1 sites takes off every one only when the drag starts on the row: with 10, 11 and 12
-   queued, a drag from 9 to 12 previews four yellow sites, and the release removes three, queues a
-   fresh building at the last and places nothing at 9. The feature's own rule is that the preview
-   shows exactly what the release does. To fix: one rule, shared by the preview and the commit.
+2. **The yellow preview promised more than the release did — fixed in the game.** Dragging back
+   over a queued row of 1 × 1 sites took off every one only when the drag started on the row:
+   with 10, 11 and 12 queued, a drag from 9 to 12 previewed four yellow sites, and the release
+   removed three, queued a fresh building at the last and placed nothing at 9. `tagpu_place.c`
+   `take_offs` now settles every site's action once, and the preview's colours and the commit
+   both read it: per builder each queued order is taken off by at most one site, first every site
+   taking the order at its own position, then each site still without one the first order within
+   16 world units that no site has taken, both passes in the shape's order and orders in queue
+   order; a site that takes one is yellow, every other site not red is appended, and the ring is
+   unchanged. The same drag now previews 9 green and 10 to 12 yellow, and the release takes the
+   three off and queues one at 9, from either end. The fix is on the branch
+   `worktree-agent-ac37d55e26a5e56f3` and reaches `main` with that branch's landing; `sim.js`
+   already follows it, and `simcheck.mjs` checks this case as a rule.
 3. **A hollow rectangle is ordered from beside the press round to the press.** Its first site is
    the one next to the pressed corner and its last is the pressed corner itself. Nothing breaks;
    it is undocumented, and stays as it is.

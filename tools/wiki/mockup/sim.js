@@ -382,11 +382,43 @@ const WikiSim = (() => {
       return s ? { cx: s.ox, cz: s.oz } : { cx: origin(x, fx), cz: origin(z, fz) };
     }
     const siteCentre = (t, s) => centre(t, s.cx, s.cz);
+    const orderAt = o => centre(o.type, o.ox, o.oz);
     // TOGGLES: some selected builder has a build order within 16 world units of the site; it compares no building type
-    const toggles = (t, s) => builders().some(u => u.orders.some(o => o.k === 'build' && within(siteCentre(t, s), centre(o.type, o.ox, o.oz))));
-    // CLASSIFY: refused where the site test refuses, else 'remove' where a Shift-click would take an order off
-    const classify = (t, sites) => sites.map(s => ({ cx: s.cx, cz: s.cz,
-      state: !siteOk(t, s.cx, s.cz, null) ? 'refused' : toggles(t, s) ? 'remove' : 'place' }));
+    const toggles = (t, s) => builders().some(u => u.orders.some(o => o.k === 'build' && within(siteCentre(t, s), orderAt(o))));
+    /* TAKE_OFFS, the take-off rule, the one place a site's action is decided: the preview's colours and the commit's
+       removals and appends are both read from what it leaves, so for the same queues the preview shows what the release
+       does. A ring takes nothing off: a site a Shift-click would toggle is 'remove', and left out. Every other shape is
+       the Shift-click per site against each builder's queue as it stood before the gesture, each queued order taken off
+       by at most one site: per builder, every site not refused first takes the build order at its own position, then
+       each site that took none takes the first build order within 16 world units that no site has taken -- both in
+       shape order, each in queue order. A site that takes an order off from some builder is 'remove'. Own positions go
+       first over the whole shape because neighbouring 1 x 1 sites are 16 world units apart: whichever end a drag over a
+       queued row starts from, every order of the row is taken off by the site that stands on it. Returns, per selected
+       builder, the site that takes each of its orders off (-1 for none); for a ring, no order. */
+    function takeOffs(t, sites, ring) {
+      const bs = builders();
+      if (ring) {
+        for (const s of sites) if (s.state !== 'refused' && toggles(t, s)) s.state = 'remove';
+        return bs.map(() => []);
+      }
+      return bs.map(u => {
+        const by = u.orders.map(() => -1);
+        for (const own of [true, false]) sites.forEach((s, i) => {
+          if (s.state === 'refused' || (!own && by.includes(i))) return;
+          const at = siteCentre(t, s);
+          const k = u.orders.findIndex((o, j) => o.k === 'build' && by[j] < 0 &&
+            (own ? orderAt(o).x === at.x && orderAt(o).z === at.z : within(at, orderAt(o))));
+          if (k >= 0) { by[k] = i; s.state = 'remove'; }
+        });
+        return by;
+      });
+    }
+    // CLASSIFY: refused where the site test refuses, else 'place', and then the take-off rule's 'remove'. The sites, and
+    // per selected builder the site that takes each order off
+    function classify(t, cells, ring) {
+      const sites = cells.map(s => ({ cx: s.cx, cz: s.cz, state: siteOk(t, s.cx, s.cz, null) ? 'place' : 'refused' }));
+      return { sites, by: takeOffs(t, sites, ring) };
+    }
     /* RING_TARGET: the unit under the cursor, any unit (0x48CD80), else a selected builder's queued build whose
        footprint holds the cursor's cell, first in selection order then queue order. As cells. */
     function ringTarget() {
@@ -416,35 +448,27 @@ const WikiSim = (() => {
         cells = placeShape(kind, fx, fz, st.spacing[t] || 0, st.gesture, cursorSite(), PLACE_MAX_SITES);
       } else return null;
       cells = cells.slice(0, Math.floor(PLACE_ORDER_BUDGET / (builders().length || 1)));
-      let sites = classify(t, cells);
+      let { sites } = classify(t, cells, kind === 'ring');
       if (kind === 'ring') sites = sites.filter(s => s.state !== 'remove');
       return { kind, type: t, sites };
     }
     /* COMMIT: the stock Shift-clicks of the sites, judged against each builder's queue as it stood before the gesture,
-       the sites classified afresh. Per builder, phase 1: each site not refused takes off one build order no earlier site
-       took -- the one at its own position, else the first within 16 world units -- and adds nothing for that builder;
-       a ring takes nothing off, its removing sites skipped. Phase 2: the rest are appended in the shape's order while
-       the queue is shorter than PLACE_LIST_CAP. Every selected builder gets them, its build list not consulted, as
-       0x419670 orders. A changed queue sets the Shift-placement bit, so releasing Shift disarms. */
+       the sites classified afresh by the same take-off rule the preview's colours come from. Per builder, phase 1: the
+       orders the rule gave a site are taken off, and each of those sites adds nothing for that builder; a ring takes
+       nothing off, its removing sites skipped. Phase 2: the rest are appended in the shape's order while the queue is
+       shorter than PLACE_LIST_CAP. Every selected builder gets them, its build list not consulted, as 0x419670 orders.
+       A changed queue sets the Shift-placement bit, so releasing Shift disarms. */
     function commit(p) {
-      const t = p.type, sites = classify(t, p.sites);
+      const t = p.type, ring = p.kind === 'ring', { sites, by } = classify(t, p.sites, ring);
       let changed = 0;
-      for (const u of builders()) {
-        const toggled = sites.map(s => p.kind === 'ring' && s.state === 'remove');
-        if (p.kind !== 'ring') sites.forEach((s, i) => {
-          if (s.state === 'refused') return;
-          const at = siteCentre(t, s), pos = o => centre(o.type, o.ox, o.oz);
-          for (const exact of [true, false]) {
-            if (toggled[i]) break;
-            const k = u.orders.findIndex(o => o.k === 'build' && (exact ? pos(o).x === at.x && pos(o).z === at.z : within(at, pos(o))));
-            if (k >= 0) { u.orders.splice(k, 1); toggled[i] = true; changed++; }
-          }
-        });
+      builders().forEach((u, b) => {
+        const toggled = sites.map((s, i) => ring ? s.state === 'remove' : by[b].includes(i));
+        for (let j = by[b].length; j-- > 0;) if (by[b][j] >= 0) { u.orders.splice(j, 1); changed++; }
         sites.forEach((s, i) => {
           if (s.state === 'refused' || toggled[i] || u.orders.length >= PLACE_LIST_CAP) return;
           u.orders.push({ k: 'build', type: t, ox: s.cx, oz: s.cz }); changed++;
         });
-      }
+      });
       if (changed) st.shiftPlaced = true;
     }
     /* THE RELEASE: Shift up first drops the gesture and the building stays armed; a one-site gesture ending at the

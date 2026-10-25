@@ -276,7 +276,30 @@ function gesture(s, keys, from, to) {
   const v = s.view(); s.input({ up: 'lmb' }); for (const k of keys) s.input({ up: k });
   return v;
 }
+// the entry with a 1 x 1 stand-in ARMCK can build: the entry's buildings are all 2 x 2 or larger, and neighbouring 1 x 1
+// sites are the ones 16 world units apart, inside 0x43AFC0's reach of each other
+function withTiny(entry, scene = entry.scene) {
+  const e = { ...entry, units: { ...entry.units, TINY: { footprint: [1, 1], buildTime: 10, from: 'a 1 x 1 stand-in' } }, scene };
+  e.units.ARMCK = { ...e.units.ARMCK, builds: [...e.units.ARMCK.builds, 'TINY'] };
+  return e;
+}
+// a queued row of 1 x 1 at cells 10..12 of row 5, then a Shift-drag over it from `from` to `to` on that row: the preview
+// before the release as 'cell:state', and ck's build orders after it
+function overRow(entry, from, to) {
+  const s = WikiSim.create(withTiny(entry), { scene: {} }); s.input({ build: 'TINY' });
+  gesture(s, ['shift'], S2(10, 5, 1), S2(12, 5, 1));
+  const queued = builds(s.orders('ck')).map(b => key(b.c));
+  s.input({ build: 'TINY' });                                 // letting go of Shift after placing disarmed
+  const v = gesture(s, ['shift'], S2(from, 5, 1), S2(to, 5, 1));
+  return { queued, preview: v.sites.map(x => `${cellOf(x)[0]}:${x.state}`), after: builds(s.orders('ck')).map(b => key(b.c)) };
+}
 const BUILDSHAPES_RULES = {
+  'a drag from beside a queued 1 x 1 row takes off each order at its own site and places the site beside it'(entry) {
+    const a = overRow(entry, 9, 12), b = overRow(entry, 12, 9);
+    return same(a.queued, ['10,5', '11,5', '12,5']) &&
+      same(a.preview, ['9:place', '10:remove', '11:remove', '12:remove']) && same(a.after, ['9,5']) &&
+      same(b.preview, ['12:remove', '11:remove', '10:remove', '9:place']) && same(b.after, ['9,5']);
+  },
   'Shift+Ctrl over a building takes the ring before the drag, as tagpu_place.c evaluates'(entry) {
     const s = WikiSim.create(entry, entry.demos[0]); s.input({ build: 'ARMDRAG' });
     s.input({ move: S2(12, 10) }); s.input({ down: 'shift' }); s.input({ down: 'ctrl' }); s.input({ down: 'lmb' });
@@ -307,9 +330,7 @@ const BUILDSHAPES_RULES = {
     return cs.length === 11 && !cs.some(c => same(c, [25, 9])) && q.length === 12 && q[0] === '25,9';
   },
   'a gesture places at most 256 sites'(entry) {
-    const e = { ...entry, units: { ...entry.units, TINY: { footprint: [1, 1], buildTime: 10, from: 'a 1 x 1 stand-in' } },
-      scene: { ...entry.scene, map: { w: 64, h: 64, surfaceMetal: 0 } } };
-    e.units.ARMCK = { ...e.units.ARMCK, builds: [...e.units.ARMCK.builds, 'TINY'] };
+    const e = withTiny(entry, { ...entry.scene, map: { w: 64, h: 64, surfaceMetal: 0 } });
     const s = WikiSim.create(e, { scene: {} }); s.input({ build: 'TINY' });
     const v = gesture(s, ['shift', 'alt'], [24, 24], [62 * 16, 62 * 16]);
     return v.sites.length === 256 && builds(s.orders('ck')).length === 256;
