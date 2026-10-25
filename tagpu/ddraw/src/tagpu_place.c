@@ -32,6 +32,7 @@
 #include "tagpu_detour.h"
 #include "tagpu_puppet.h"
 #include "tagpu_log.h"
+#include "tagpu_settings.h"
 
 #define D_STRIDE 0x249u
 #define D_BASE   0x1439B
@@ -103,6 +104,15 @@ typedef struct { int16_t cx, cz; int32_t alt; uint8_t colour; } Site;
 typedef struct { int32_t x, z; uint16_t type; uint8_t match, build; } Plan;
 
 static int s_armed;
+
+/* Spacing per building type: the game thread's table, the one the placement reads. Loaded from
+   the store at attach; a change is handed to the store whole (tagpu_settings_put_spacing),
+   without waiting in play: while the lock is busy it stays pending and is offered again at the
+   next step and evaluation, and waited for at the level's end, outside play. A type at 0 has no
+   entry. */
+static TsSpacing s_spc[TS_SPACING_SAVED];
+static int s_nspc, s_spcPending;
+_Static_assert(TS_SPACING_MAX == PLACE_SPACING_MAX, "the store keeps what the shapes lay");
 static SiteTest s_test;
 
 static struct {
@@ -420,6 +430,77 @@ static void stale_move(int out[6])
     else memset(out, 0, 6 * sizeof(int));
 }
 
+/* The type's UnitName (def +0x20, 32 bytes inline, the FBI's own name such as ARMSOLAR):
+   copied and NUL-checked inside the field, 0 when it has none. */
+static int unit_name(const char* def, char out[TS_SPACING_NAME])
+{
+    memcpy(out, def + UD_NAME, TS_SPACING_NAME);
+    return out[0] && memchr(out, 0, TS_SPACING_NAME) != NULL;
+}
+
+static void spacing_offer(int wait)
+{
+    if (s_spcPending && tagpu_settings_put_spacing(s_spc, s_nspc, wait)) s_spcPending = 0;
+}
+
+static int spacing_slot(const char* name)
+{
+    int i;
+    for (i = 0; i < s_nspc; i++)
+        if (!lstrcmpiA(s_spc[i].name, name)) return i;
+    return -1;
+}
+
+/* Empty cells between neighbouring sites of a line or a rectangle; the ring takes none */
+static int spacing_of(const char* def)
+{
+    char name[TS_SPACING_NAME];
+    int i;
+    if (!unit_name(def, name) || (i = spacing_slot(name)) < 0) return 0;
+    return s_spc[i].cells;
+}
+
+static void spacing_step(const char* def, int step)
+{
+    char name[TS_SPACING_NAME];
+    int i, was, now;
+    if (!unit_name(def, name)) return;
+    i = spacing_slot(name);
+    was = i < 0 ? 0 : s_spc[i].cells;
+    now = was + step < 0 ? 0 : was + step > TS_SPACING_MAX ? TS_SPACING_MAX : was + step;
+    if (now == was) return;
+    if (!now) {
+        memmove(&s_spc[i], &s_spc[i + 1], (size_t)(s_nspc - i - 1) * sizeof *s_spc);
+        s_nspc--;
+    } else if (i >= 0) {
+        s_spc[i].cells = now;
+    } else if (s_nspc < TS_SPACING_SAVED) {
+        memset(&s_spc[s_nspc], 0, sizeof s_spc[s_nspc]);
+        lstrcpynA(s_spc[s_nspc].name, name, TS_SPACING_NAME);
+        s_spc[s_nspc].cells = now;
+        s_nspc++;
+    } else {
+        tagpu_logf("place: spacing kept for %d types already; %s stays at 0", TS_SPACING_SAVED, name);
+        return;
+    }
+    s_spcPending = 1;
+    spacing_offer(0);
+    tagpu_logf("place: spacing %s=%d", name, now);
+    if (!tagpu_settings_spacing_name_ok(name, strlen(name)))
+        tagpu_logf("place: %s's spacing is not saved: impure.cfg keeps names of [A-Za-z0-9_-] only",
+                   name);
+}
+
+int tagpu_place_key(unsigned vk, int alt_known)
+{
+    Ctx c;
+    if (!s_armed || (vk != 'Z' && vk != 'X')) return 0;
+    if (!alt_known && !key_down(KEY_MENU)) return 0;
+    if (!context(&c, 0)) return 0;
+    spacing_step(c.def, vk == 'Z' ? 1 : -1);
+    return 1;
+}
+
 static void evaluate(void)
 {
     Ctx c;
@@ -429,6 +510,7 @@ static void evaluate(void)
     s_eval.valid = 0; s_eval.n = 0; s_eval.shape = PLACE_NONE;
     if (!context(&c, 0)) { end_gesture(); return; }
     s_cEval++;
+    spacing_offer(0);
     memcpy(s_eval.rec, c.w.ta + M_RECORD, sizeof s_eval.rec);
     s_eval.type = (uint16_t)c.type; s_eval.fx = c.fx; s_eval.fz = c.fz;
     /* A move without the button, made after the press: a release the handler never saw. With
@@ -463,8 +545,8 @@ static void evaluate(void)
         from.cx = s_gesture.cx; from.cz = s_gesture.cz;
         to.cx = (int16_t)s_eval.cur_cx; to.cz = (int16_t)s_eval.cur_cz;
         s_eval.shape = alt ? (ctrl ? PLACE_HOLLOW : PLACE_RECT) : (ctrl ? PLACE_AXIS : PLACE_LINE);
-        /* no empty cells between neighbours */
-        n = place_shape(s_eval.shape, c.fx, c.fz, 0, from, to, cells, PLACE_MAX_SITES);
+        n = place_shape(s_eval.shape, c.fx, c.fz, spacing_of(c.def), from, to, cells,
+                        PLACE_MAX_SITES);
     } else return;
     n = budget(n, c.nb);
     for (i = 0; i < n; i++) { s_eval.site[i].cx = cells[i].cx; s_eval.site[i].cz = cells[i].cz; }
@@ -743,6 +825,8 @@ unsigned tagpu_place_gdi_rects(const int engine[4], int out[][4], unsigned char*
 
 void tagpu_place_level_end(void)
 {
+    /* outside play: a change still pending may wait for the store's lock here */
+    spacing_offer(1);
     if (s_armed)
         tagpu_logf("place: level end evals=%u commits=%u issued=%u removed=%u red=%u "
                    "mismatch=%u trunc=%u listcap=%u plancap=%u", s_cEval, s_cCommit, s_cIssued,
@@ -844,6 +928,8 @@ void tagpu_place_init(void)
         tagpu_logf("place: observer on the build cursor (0x4197D0) refused; not armed");
         return;
     }
+    /* the store attached in cfg_load, before this; the render thread does not exist yet */
+    s_nspc = tagpu_settings_spacing_load(s_spc, TS_SPACING_SAVED);
     s_armed = 1;
     tagpu_logf("place: armed (build cursor 0x4197D0 observed on return, click route 0x4993BF, "
                "handler entry 0x499200 observed, site test 0x%08X)", (unsigned)(uintptr_t)s_test);

@@ -550,11 +550,13 @@ class Worker:
             hold.unlink(missing_ok=True)
 
     def test_render(self):
-        """The test render profile (TEST_RENDER) in the instance's store, every other line kept,
-        and the present cap's lever."""
+        """The test render profile (TEST_RENDER) in the instance's store, with no placement
+        spacing (a test group's gestures lay touching sites), every other line kept, and the
+        present cap's lever."""
         store = self.gamedir / "impure.cfg"
         lines = store.read_text().splitlines() if store.exists() else []
-        keep = [ln for ln in lines if ln.partition("=")[0].strip().lower() not in TEST_RENDER]
+        keep = [ln for ln in lines
+                if ln.partition("=")[0].strip().lower() not in (*TEST_RENDER, "placespacing")]
         store.write_text("\n".join(keep + [f"{k}={v}" for k, v in TEST_RENDER.items()]) + "\n")
         (self.gamedir / "tagpu_presentcap.on").write_text(f"{PRESENT_CAP}\n")
 
