@@ -180,15 +180,22 @@ release with Shift held orders it.
 
 **What a site does to the queue is TA's Shift-click.** The gesture is the stock Shift-clicks of its
 sites, judged against each builder's queue as it stood before the gesture: a site within 16 world
-units of an order of the builder's own build action takes that order off and adds nothing — the
-order at the site's own position if there is one, else the first such order, whatever building
-it is, as the engine's own click does — and every other site is appended in the shape's order.
-Three things differ from clicking each site by hand, by design: a site never takes off an order
-the same gesture added (the engine's inclusive 16 units would make a line of 1×1 buildings
-alternate add and remove); a site prefers the order at its own position, so that dragging back
-over a queued row of 1×1 buildings takes off every one of them rather than shifting each removal
-by one; and a ring leaves its taking-off sites out rather than ordering them. With Shift released
-mid-drag nothing previews, since the release then orders nothing. A site the engine's own test refuses is red and skipped: the module calls the
+units of an order of the builder's own build action takes that order off and adds nothing,
+whatever building the order is, as the engine's own click does, and every other site is appended
+in the shape's order. Each queued order is taken off by one site at most, chosen in two passes
+per builder: first every site takes the order at its own position, then each site still without
+one takes the first order within 16 world units that no site has taken (both passes in the
+shape's order, each order in the queue's order). Three things differ from clicking each site by
+hand, by design: a site never takes off an order the same gesture added (the engine's inclusive
+16 units would make a line of 1×1 buildings alternate add and remove); the orders at the sites'
+own positions go first, so that a drag over a queued row of 1×1 buildings takes off every one of
+them, each by the site standing on it, from whichever end or cell beside the row it starts — a
+site beside the row whose neighbouring orders are all taken by their own sites is placed (three
+mines queued side by side and a drag from the empty cell before them over all three: three
+taken off, one placed at the empty cell); and a ring leaves its taking-off sites out rather than
+ordering them. **The preview and the release are one decision**: a single function settles each
+site's action, and both the colours and the commit read its result. With Shift released mid-drag
+nothing previews, since the release then orders nothing. A site the engine's own test refuses is red and skipped: the module calls the
 call the build cursor judges its site with, so a gesture's site is refused exactly when a single
 click there would be, queued sites included. One stock *ok* sound plays per gesture that changed a
 queue, and releasing Shift afterwards disarms the building as after a stock Shift-click. A one-site
@@ -219,18 +226,22 @@ puppet: the owner-approved `replay-absent.tsv` row `0x47F1A0 dll * absent`.
 
 **Verified on the reference setup, 2026-10-25:**
 
-- `tools/place_regression.py --launch <instance> core`, on `place-basic.json`, passed cases (a)–(l):
+- `tools/place_regression.py --launch <instance> core`, on `place-basic.json`, passed cases (a)–(m) and (o):
   a line of 5 ARMLLT; a diagonal; the Ctrl axis line; a 3 × 2 Alt rectangle in serpentine order;
   a 4 × 3 hollow of 10 sites; the ring round the ARMSOLAR; a line across the solar with its 3 sites
   there skipped; a line over a queued build that takes it off and adds the rest, and ARMMLV's line of
   six 1 × 1 mines that adds six; a Shift-click without a drag (stock's toggle); a plain click (stock's
   place and disarm); Shift released before the button (nothing ordered, still armed); a right press
-  mid-drag (nothing ordered, disarmed). Each builder's queue is compared with what the script
+  mid-drag (nothing ordered, disarmed); and (o), ARMMLV's line from an empty cell over a queued row
+  of three 1 × 1 mines, whose preview held mid-drag (the marker pass's counts: 4 sites, 3 yellow,
+  1 green) equals the release (`removed=3 issued=1`, the new mine at the empty cell). Each builder's
+  queue is compared with what the script
   computes from its own port of the shapes (checked against the native one by `--selftest`) and
-  of the rule above. The level ended with `evals 253645, commits 9,
-  issued 60, removed 1, red 3, mismatch 0, plancap 0`: at every evaluation the module's verdict at
+  of the rule above. The level ended with `evals 303859, commits 11,
+  issued 64, removed 4, red 3, mismatch 0, plancap 0`: at every evaluation the module's verdict at
   the cursor site agreed with the engine's own (bit 6), and no queue snapshot overflowed.
-- `preview`: the Vulkan marker pass drew 5 sites with a 5-site line held mid-drag.
+- `preview`: the Vulkan marker pass drew 5 green sites with a 5-site line held mid-drag
+  (`mark: … place=N placered=R placetake=T` under `tagpu_mark.on=log`).
 - Under `tagpu_gdi.on`, a held line and an Alt rectangle drew the engine's green square at every
   site. The camera hold `tagpu_eye.txt` does not apply under GDI: it is applied from
   `tagpu_overlay_draw`, which the GDI lane never calls (`tagpu_input.c`).
@@ -247,8 +258,11 @@ puppet: the owner-approved `replay-absent.tsv` row `0x47F1A0 dll * absent`.
 - No facing: TA has no build facing, so a ring's sides do not turn as BAR's do, and BAR's ring
   equals this one only for square footprints [INFERRED: a turned side swaps a non-square
   footprint's sizes].
-- Not run in a network game. The yellow preview and the take-off rule are the module's reading of
-  the engine's toggle, checked by case (h), not the engine's own call.
+- Not run in a network game. The take-off rule is the module's reading of the engine's toggle,
+  checked by cases (h) and (o), not the engine's own call. The preview and the release read the
+  one rule's result; they can still part only if the engine changes a builder's queue inside the
+  commit itself, between the snapshot and a removal: the commit then leaves that order queued and
+  counts it (`stale=` on its log line).
 
 #### What each side is missing, for Impure's port
 

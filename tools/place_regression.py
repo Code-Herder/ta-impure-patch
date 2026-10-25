@@ -24,7 +24,9 @@ The cases (core), each from a builder with no build order, ARMCK selected unless
   (i) a Shift-click without a drag is stock's (a second one takes the order back off);
   (j) a plain click is stock's (one order, the building disarmed); (k) Shift released before the
   button orders nothing and keeps the building armed; (l) a right press mid-drag orders nothing
-  and disarms; (m) the level's counters: no self-check mismatch, no plan-table overflow.
+  and disarms; (m) the level's counters: no self-check mismatch, no plan-table overflow; (o) with
+  ARMMLV, a line from an empty cell across a queued row of three 1 x 1 mines: the preview held
+  mid-drag (the marker pass's green, red and yellow counts) is what the release orders.
 
 What each case expects is computed here from the rules the DLL implements: the shapes by a port
 of tagpu_placegeo.c (checked against the native one by --selftest), and the queue by the commit's
@@ -32,6 +34,7 @@ TA semantics (`after_commit`). The orders are read out of the engine (Check.orde
 own account of each commit from its log (`place_line`).
 """
 import argparse
+import contextlib
 import random
 import re
 import struct
@@ -137,25 +140,28 @@ TOGGLE = 0x100000    # 0x43AFC0's reach: a same-action order within 16 wu on bot
 def after_commit(before, sites, red, fx, fz, type_id):
     """A builder's build orders after a commit of `sites` (red: the indices skipped), from its
     build orders `before`, each (x, z, type) in chain order. Every site that is not red is the
-    builder's stock Shift-click judged against the queue as it stood before the gesture: the order
-    at its own position, else the first within TOGGLE of it, that no earlier site took is removed
-    (tagpu_place.c, remove_toggled); a site that removes
-    none is appended, in shape order, after every order kept. Returns (orders, appended, removed)."""
-    kept, added, removed = list(before), [], 0
-    for i, cell in enumerate(sites):
-        if i in red:
-            continue
-        x, z = order_pos(cell, fx, fz)
-        hit = next((j for j, o in enumerate(kept) if o[0] == x and o[1] == z), None)
-        if hit is None:
-            hit = next((j for j, o in enumerate(kept)
-                        if abs(o[0] - x) <= TOGGLE and abs(o[1] - z) <= TOGGLE), None)
-        if hit is None:
-            added.append((x, z, type_id))
-        else:
-            del kept[hit]
-            removed += 1
-    return kept + added, len(added), removed
+    builder's stock Shift-click judged against the queue as it stood before the gesture, each
+    order taken off by one site at most (tagpu_place.c, take_offs): first every site takes the
+    order at its own position, then each site that took none the first within TOGGLE of it that
+    no site took, both in shape order; a site that takes none is appended, in shape order, after
+    every order kept. Returns (orders, appended, removed)."""
+    taken, by = set(), {}
+    for own in (True, False):
+        for i, cell in enumerate(sites):
+            if i in red or i in by:
+                continue
+            x, z = order_pos(cell, fx, fz)
+            by[i] = next((j for j, o in enumerate(before) if j not in taken and (
+                (o[0], o[1]) == (x, z) if own
+                else abs(o[0] - x) <= TOGGLE and abs(o[1] - z) <= TOGGLE)), None)
+            if by[i] is None:
+                del by[i]
+            else:
+                taken.add(by[i])
+    kept = [o for j, o in enumerate(before) if j not in taken]
+    added = [(*order_pos(cell, fx, fz), type_id) for i, cell in enumerate(sites)
+             if i not in red and i not in by]
+    return kept + added, len(added), len(taken)
 
 
 # -- the DLL's account: tagpu_place.c's log lines -------------------------------------------------
@@ -166,9 +172,10 @@ NOTES_RX = r"place: (mismatch type=|more than \d+ queued orders to check)"
 
 def place_line(line):
     """One of tagpu_place.c's lines as (kind, fields), or None. A commit,
-        place: commit shape=line sites=5 red=0 builders=2 issued=10 removed=0 split=0 trunc=0 listcap=0
-    (`sites` after the order budget's cut; `issued`, the orders appended, and `removed`, the
-    Shift-toggle removals, summed over the builders), and the counters a level's real end (the
+        place: commit shape=line sites=5 red=0 builders=2 issued=10 removed=0 split=0 trunc=0 listcap=0 stale=0
+    (`sites` after the order budget's cut; `issued`, the orders appended, `removed`, the
+    Shift-toggle removals, and `stale`, the orders a site took whose place in the list no longer
+    held them, summed over the builders), and the counters a level's real end (the
     quit to the menu) writes,
         place: level end evals=.. commits=.. issued=.. removed=.. red=.. mismatch=.. trunc=.. listcap=.. plancap=..
     Fields are `key=value`; a value of digits is an int. With ARMED_RX (the install's verdict) and
@@ -193,16 +200,19 @@ def place_line(line):
     return kind, fields
 
 
-def mark_place_count(line):
-    """The marker pass's count of placement sites drawn, from its status line (tagpu_mark.c,
-    `mark: bars=.. ... place=N ...`, every 120 frames under mark.on=log), or None."""
+def mark_place(line):
+    """The marker pass's placement sites drawn, from its status line (tagpu_mark.c,
+    `mark: bars=.. ... place=N placered=R placetake=T ...`, every 120 frames under mark.on=log):
+    (N, R, T), the sites drawn, of them red (refused) and yellow (take a queued build off); or
+    None."""
     if not line.lstrip().startswith("mark: bars="):
         return None
+    got = {}
     for w in line.split():
         k, eq, v = w.partition("=")
-        if eq and k == "place" and v.isdigit():
-            return int(v)
-    return None
+        if eq and k in ("place", "placered", "placetake") and v.isdigit():
+            got[k] = int(v)
+    return (got["place"], got["placered"], got["placetake"]) if len(got) == 3 else None
 
 
 # -- driving the game -----------------------------------------------------------------------------
@@ -360,7 +370,7 @@ class Place(Check):
     def commit(self, start, what, **want):
         got = self.place_lines(start, "commit")
         assert len(got) == 1, f"{what}: {len(got)} commit lines, want 1: {got}"
-        want = {"split": 0, "trunc": 0, "listcap": 0, **want}
+        want = {"split": 0, "trunc": 0, "listcap": 0, "stale": 0, **want}
         wrong = {k: (got[0].get(k), v) for k, v in want.items() if got[0].get(k) != v}
         assert not wrong, f"{what}: commit line {got[0]}: (got, want) {wrong}"
 
@@ -379,6 +389,8 @@ SHAPES = {
 }
 TOGGLE_LINE = ((70, 380), (78, 380))
 MINE_LINE = ((70, 386), (75, 386))
+QUEUED_ROW = ((81, 389), (83, 389))     # (o): three 1 x 1 mines queued side by side
+ACROSS_ROW = ((80, 389), (83, 389))     # (o): a drag from the empty cell before them over all three
 
 
 def expect(p, what, building, kinds, before, sites, start, shape):
@@ -496,6 +508,46 @@ def mines_case(p):
     p.select(*BUILDERS)
 
 
+def across_row_case(p, gamedir):
+    """(o) A drag that starts on an empty cell beside a queued row of 1 x 1 sites and crosses it:
+    the preview held mid-drag (the marker pass's counts) is what the release orders. Neighbouring
+    1 x 1 sites lie within each other's toggle reach, so the empty first site has a queued order
+    within reach too."""
+    what = "(o) a line from an empty cell across a queued row of 1x1 mines"
+    p.select("ARMMLV")
+    p.clear("ARMMLV")
+    p.arm("ARMMINE1")
+    tid = p.types["ARMMINE1"]
+    fx, fz = p.footprint(tid)
+    row = place_shape(LINE, fx, fz, 0, *QUEUED_ROW)
+    start = drag(p, *QUEUED_ROW)
+    expect(p, f"{what}: queueing the row", "ARMMINE1", ("ARMMLV",), {"ARMMLV": []}, row, start,
+           "line")
+    p.arm("ARMMINE1")
+    before = p.builds("ARMMLV")
+    sites = place_shape(LINE, fx, fz, 0, *ACROSS_ROW)
+    assert len(sites) == 4, f"{what}: the layout makes {len(sites)} sites, not 4"
+    with mark_log(gamedir):
+        start = p.mark()
+        p.press("shift")
+        p.aim(ACROSS_ROW[0])
+        p.press("lbutton")
+        p.aim(ACROSS_ROW[1])
+        drawn, red, take = held_preview(p)
+        p.lift("lbutton")
+        p.lift("shift")
+    got = p.place_lines(start, "commit")
+    assert len(got) == 1, f"{what}: {len(got)} commit lines, want 1: {got}"
+    shown = {"sites": drawn, "red": red, "removed": take, "issued": drawn - red - take}
+    done = {k: got[0].get(k) for k in shown}
+    assert drawn == len(sites) and shown == done and got[0].get("stale") == 0, \
+        f"{what}: the preview showed {shown} ({len(sites)} sites laid), the release did {got[0]}"
+    want, _, _ = after_commit(before, sites, set(), fx, fz, tid)
+    assert p.builds("ARMMLV") == want, f"{what}: ARMMLV's build orders {p.builds('ARMMLV')}, want {want}"
+    p.select(*BUILDERS)
+    return shown
+
+
 def stock_shift_case(p, kinds=BUILDERS):
     """(i) Shift-click, Shift-click again, then Shift up: stock's toggle, and stock's disarm."""
     what = "(i) a Shift-click without a drag"
@@ -611,13 +663,14 @@ def core(p):
     assert red == 3, f"(g) {red} sites of the line lie on the solar, the layout wants 3"
     toggle_case(p)
     mines_case(p)
+    shown = across_row_case(p, p.gamedir)
     stock_shift_case(p)
     plain_case(p)
     shift_first_case(p)
     right_case(p)
     p.notes()
     f = level_end(p)
-    print(f"place-core: (a)-(l) passed; (m) level end {f}")
+    print(f"place-core: (a)-(l) and (o) passed; (o) previewed and ordered {shown}; (m) level end {f}")
 
 
 def replay(p):
@@ -637,14 +690,42 @@ def replay(p):
     print(f"place-replay: line, rect, hollow, ring and toggle committed; build orders {total}")
 
 
-def preview(p, gamedir):
-    """V3's count: a 5-site line held mid-drag is what the marker pass draws (its status line
-    under mark.on=log), then dropped by releasing Shift first."""
+@contextlib.contextmanager
+def mark_log(gamedir):
+    """The marker pass's status line on (`log` added to tagpu_mark.on, read live), the lever put
+    back as it was afterwards."""
     lever = gamedir / "tagpu_mark.on"
     old = lever.read_text() if lever.exists() else None
     words = (old or "").split()
     lever.write_text(" ".join(words + ([] if "log" in (w.lower() for w in words) else ["log"])) + "\n")
     try:
+        yield
+    finally:
+        if old is None:
+            lever.unlink(missing_ok=True)
+        else:
+            lever.write_text(old)
+
+
+def held_preview(p):
+    """The marker pass's (drawn, red, yellow) for the shape held now: the second status line from
+    here, which comes 120 frames after the first, which may have drawn a packet filled before the
+    last move was handled."""
+    start = p.mark()
+    end = time.monotonic() + 3 * ACK_S
+    while True:
+        p.mark()
+        counts = [c for c in map(mark_place, p.log[start:]) if c is not None]
+        if len(counts) >= 2:
+            return counts[1]
+        assert time.monotonic() < end, f"no two `mark:` status lines with place= in {3 * ACK_S} s"
+        time.sleep(0.2)
+
+
+def preview(p, gamedir):
+    """V3's count: a 5-site line held mid-drag is what the marker pass draws (its status line
+    under mark.on=log), all green, then dropped by releasing Shift first."""
+    with mark_log(gamedir):
         p.hold()
         p.eye(*EYE)
         p.select(*BUILDERS)
@@ -655,28 +736,14 @@ def preview(p, gamedir):
         p.aim(frm)
         p.press("lbutton")
         p.aim(to)
-        # The second status line after the drag stopped: it comes 120 frames after the first,
-        # which may have drawn a packet filled before the last move was handled.
-        start = p.mark()
-        end = time.monotonic() + 3 * ACK_S
-        while True:
-            p.mark()
-            counts = [c for c in map(mark_place_count, p.log[start:]) if c is not None]
-            if len(counts) >= 2:
-                break
-            assert time.monotonic() < end, f"no two `mark:` status lines with place= in {3 * ACK_S} s"
-            time.sleep(0.2)
-        assert counts[1] == n, f"V3: the marker pass drew {counts[1]} sites mid-drag, want {n}"
+        drawn, red, take = held_preview(p)
+        assert (drawn, red, take) == (n, 0, 0), \
+            f"V3: the marker pass drew {drawn} sites mid-drag ({red} red, {take} yellow), want {n} green"
         p.lift("shift")
         p.lift("lbutton")
         for k in BUILDERS:
             assert p.builds(k) == [], f"V3: the dropped drag left {k} with {p.builds(k)}"
         print(f"place-preview: the marker pass drew {n} sites mid-drag")
-    finally:
-        if old is None:
-            lever.unlink(missing_ok=True)
-        else:
-            lever.write_text(old)
 
 
 SPACING_RX = r"place: spacing "
