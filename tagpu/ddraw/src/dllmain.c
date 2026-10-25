@@ -26,6 +26,7 @@
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_resource.h"
+#include "tagpu_place.h"
 #include "tagpu_datakeys.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_recorder.h"
@@ -343,6 +344,8 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            disjoint from every detour above; `tagpu_menu.off` disables it. */
         tagpu_menu_init();
         tagpu_resource_init();
+        /* after the resource module: its observer on 0x4197D0 must come first (tagpu_place.h) */
+        tagpu_place_init();
 
         /* tagpu: the frame packet's publisher (tagpu_packet_pub.h): ONE more
            observer on DrawGameScreen 0x468CF0, chained AFTER the menu's -- its

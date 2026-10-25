@@ -92,6 +92,7 @@
 #include "tagpu_reclaim.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_resource.h"
+#include "tagpu_place.h"
 #include "tagpu_profiles.h"
 #include "tagpu_zoom.h"
 #include "tagpu_gui.h"
@@ -3064,6 +3065,7 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
     if (s_installed && !s_countOnly) {
         char* ta = (char*)ta_main();
         tagpu_resource_level_end();
+        tagpu_place_level_end();
         if (ta) { tagpu_zoom_level_end(ta); tagpu_vpwide_level_end(ta); }
         /* and the terrain latch with it: the shell, the next level's loading
            draws and any screenshot draw before its first in-play one never
