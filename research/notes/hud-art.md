@@ -25,7 +25,7 @@ this page gives a reason or a number, `pixel-forge.md` gives the step.
 4. Make the middle of every long part repeat instead of stretch (`xtile`).
 5. File the parts into `art/hud/` and check them in the mockup and the game.
 
-**What is in the look and what is not.** These 35 parts were painted in worn painted steel:
+**What is in the look and what is not.** These 37 parts were painted in worn painted steel:
 
 - the one-piece plates `tp_one`, `rail_one`, `rail_forks`, `row_one`, `head_one`, `foot_one`
   and `win_one`;
@@ -51,11 +51,15 @@ history (`git log -- research/notes/hud-art.md`).
 which `.gitignore` ignores:
 
 - `.data/pixel-forge/`: pixel-forge's store, with each session's references and renders
-  (`m3-kit`, the dock; `m3-all`, the rest of the HUD);
+  (`m3-kit`, the dock; `m3-all`, the rest of the HUD; `lane-wide`, the Back to main recording
+  button);
 - `.data/hud-art/work/m3kit/`: the dock job's layouts, prompts and scripts
   (`compose_housing.py`, `unlabel.py`, `level.py`);
 - `.data/hud-art/work/m3all/`: the whole-HUD job, with `make_sheets.py`, which draws its layouts,
-  `cut_all.py`, which cuts them, and the four prompts (`pf_*.txt`).
+  `cut_all.py`, which cuts them, and the four prompts (`pf_*.txt`);
+- `.data/hud-art/work/lanewide/`: the Back to main recording button's job, with `make_layout.py`,
+  which places `PLAIN=1 sheets.py parts_lane_wide`'s sheet on a 21:9 canvas beside the lane button
+  it is painted after, and its prompt `pf_wide.txt`.
 
 Only the cut parts filed into `art/hud/` are committed. **Total Annihilation's own interface art**
 (crops of the game's screens, palette samples) may be shown to a painter as a reference, but it
@@ -193,6 +197,12 @@ whole-HUD job's four layouts this way, at 6 px a unit, with the recesses dark an
       `cut_all.py` cuts it from the 420-unit painting and joins its two ends with a
       minimum-error seam. The filed PNG is 145.6 units long, because the 60-pixel overlap of the
       join is kept on top of the 140 units the script aims for.
+    - The watched lane's Back to main recording is drawn 78.9 × 12 units at every scale, as wide
+      as its label. Drawn from the 13-unit square `lane_button`, its highlight stretched six times
+      into a streak, and the button is too short for `seamband.py` to learn a period from. It has
+      its own part, `lane_wide_button` and `lane_wide_button_down`, painted 79 × 12
+      (`specs/parts_lane_wide.py`) with the lane button and its pressed twin on the canvas as the
+      reference, so it matches Export and Delete beside it. It does not repeat.
 
 ### 2. The render
 
@@ -753,6 +763,15 @@ as it was before the fit: `fit.py` resamples down only.
   would compact it. It is the housing the game draws: `tagpu_hudlay.c` takes the housing from the
   proposed section, which the game always draws, and `rail_one` is drawn only by the mockup's
   `prop=0`. Its copy at n = 1 is what the 1.5 × bound in the fit is for.
+- **The Back button's parts were painted taller than their cells.** The kept render (`lane-wide`
+  n2, version 2) held the layout's widths but painted the raised part 12 % and the pressed one 26 %
+  taller than 12 units. `cut.py` scales each across its short side, so they measure 70.5 and 63
+  units long (MEASURED, the cut's 793 × 135 and 793 × 151 px), and drawn 78.9 units wide their
+  middles stretch 1.25 × and 1.28 ×. Every other 4K render of the session reframed its sheet.
+- **`lane_wide_button_down` has a thin light rim round its sunk face,** which `lane_button_down`
+  lacks. All three 4K renders painted that rim, and so did two of three 1K tests of a prompt that
+  forbade it.
+  At the sizes it is drawn it reads as pressed beside Export and Delete.
 - **The hover strip is 145.6 units, not 140.** `cut_all.py` keeps its join's 60-pixel overlap on
   top of the 140 units it aims for. The strip is drawn about 137 units long and does not repeat,
   so the 9-slice absorbs the difference.

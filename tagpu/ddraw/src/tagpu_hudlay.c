@@ -689,7 +689,9 @@ static void lanes(C* c, R g, R tr, double ends)
         const HUDFORK* f = &st->fork[k];
         int on = st->timeline == k, pressed;
         /* the watched lane carries the way back to the main recording: a button before its others,
-           as wide as its label, by which the lane widens to keep its minimum */
+           as wide as its label, by which the lane widens to keep its minimum, in its own wide part
+           (back.part): the square lane button drawn six times its width stretches its highlight
+           into a streak */
         const char* bkl = on ? str(c, Bk, "label") : "";
         double bkw = on ? text_w(c, str(c, Lb, "style"), bkl) + 2 * num(c, Bk, "pad") : 0, bkx = on ? bkw + bg : 0;
         double ly = py + tj_num(tj_at(pad, 1), 0) + k * (lh + lg), bx = X(f->from), x0 = bx, x1 = fmax(X(f->end), bx + min_w + bkx);
@@ -734,7 +736,7 @@ static void lanes(C* c, R g, R tr, double ends)
             b.key = str(c, Bk, "act");
             b.text = bkl;
             b.style = str(c, Lb, "style");
-            button(c, &b, Bt, box(x0 + btx, ly + bp, bkw, lh - 2 * bp), 0);
+            button(c, &b, Bk, box(x0 + btx, ly + bp, bkw, lh - 2 * bp), 0);
         }
         for (j = 0; j < nb; j++) {
             const TJV* it = tj_at(items, j);

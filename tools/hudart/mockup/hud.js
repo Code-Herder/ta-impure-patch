@@ -231,7 +231,8 @@ const HUD = (() => {
     const span = [];
     st.forks.forEach((f, k) => {
       const ly = py + pad[1] + k * (Ln.h + Ln.gap), bx = X(f.from), on = st.timeline === k;
-      // the watched lane carries the way back to the main recording, a button before its others as wide as its label
+      // the watched lane carries the way back to the main recording, a button before its others as wide as its label,
+      // in its own wide part: the square lane button drawn six times its width stretches its highlight into a streak
       const Bk = Bt.back, bkw = on ? textWidth(Bk.label, Ln.label.style) + 2 * Bk.pad : 0, bkx = on ? bkw + Bt.gap : 0;
       let x0 = bx, x1 = Math.max(X(f.end), bx + Ln.min_w + bkx);
       if (x1 > hi) { x0 = Math.max(lo, x0 - (x1 - hi)); x1 = hi; }
@@ -244,7 +245,7 @@ const HUD = (() => {
       let inner = on || f.chain ? `<div class="clip" data-lanefill="${bx} ${stop}" style="${frect({ x: fp[0] + fx, y: fp[1], w: Math.max(0, Math.min(X(st.t), stop) - bx), h: Ln.h - fp[1] - fp[3] })}">`
         + art(Ln.fill.part, zero(fw, Ln.h - fp[1] - fp[3])) + `</div>` : '';
       inner += text(`F${f.id} · ${esc(f.name)} from ${clock(f.from)}`, place(F, { pad: [fx + Ln.label.pad[0], 0, w - btx + Ln.label.pad[0], 0] }), Ln.label.style, Ln.label);
-      if (on) inner += button({ act: Bk.act, text: { html: esc(Bk.label), style: Ln.label.style, align: 'c' } }, Bt,
+      if (on) inner += button({ act: Bk.act, text: { html: esc(Bk.label), style: Ln.label.style, align: 'c' } }, Bk,
         { x: btx, y: Bt.pad, w: bkw, h: Ln.h - 2 * Bt.pad }, st, false);
       inner += Bt.items.map((it, j) => button({ act: it.act, tip: it.tip, icon: { name: it.icon, padf: Bt.icon.padf }, data: { fork: k } }, Bt,
         { x: btx + bkx + j * (bw + Bt.gap), y: Bt.pad, w: bw, h: Ln.h - 2 * Bt.pad }, st, st.armed === k && it.act === 'delete')).join('');

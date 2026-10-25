@@ -500,7 +500,9 @@ track's x plus `ends` plus (w − 2 × `ends`) × t / T.
   centre, and one pixel in the browser, which snaps the box's edges.
 - **The way back** (`lane.buttons.back`): the watched lane carries a button keyed `main`, before
   its others, `buttons.gap` before the first of them and `buttons.pad` in from the top and
-  bottom, in `buttons.part`. It is as wide as its label, `back.label` ("Back to main recording")
+  bottom, in its own part, `back.part` (`lane_wide_button`, pressed `lane_wide_button_down` while
+  held), painted about as long as it is drawn: `buttons.part` is a 13-unit square, and drawn
+  79 units wide its highlight stretched into a streak. It is as wide as its label, `back.label` ("Back to main recording")
   in `lane.label.style` (`face_xs`, upper case), centred, and `back.pad` each side — the label
   measured in its face, as the toast's is. The watched lane's least width grows by the button and
   the gap, so its minimum is kept: it runs to max(X(`end`), X(`from`) + `lane.min_w` + that).
