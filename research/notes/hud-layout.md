@@ -130,15 +130,17 @@ glyph.
   the fork branched to where it ends, on the track's own time axis. A lane narrower than
   `lane.min_w` widens to the right first. A line drops from the branch to the track — or, for a
   fork of a fork, rises to its parent's lane — and the playhead's line runs up through every lane. The lane's label names the player taken over and
-  the branch time. Its right end carries Export and Delete; a first click on Delete arms it,
-  and a second deletes the fork.
+  the branch time. Its right end carries Export and Delete, each with its hint; a first click on
+  Delete arms it, and a second deletes the fork.
 - **The axis.** A fork can run longer than the replay. While the lanes are open or a fork is
   watched, the track's axis is therefore the longest timeline kept, and the groove past the
   replay's end is shaded (`forks.after`). Closed, the timeline is the replay's own, as today.
 - **Watching a fork.** Clicking a lane watches that timeline and presses the lane in. Its played
   part fills to the playhead, the main track stays filled only to where the chain leaves the
   replay, each lane between them on the chain fills to where the next one branches off it, and
-  the clock shows the fork's length. Clicking the pressed lane goes back to the replay.
+  the clock shows the fork's length. The pressed lane carries a **Back to main recording**
+  button before Export and Delete, which goes back to the replay; clicking the pressed lane
+  itself keeps it.
 - **The column.** The column stands on the lane plate, because the lanes run under it, so fewer
   rows fit while forks are kept.
 - **Take over.** A button as wide as the transport plate sits on top of it, level with the lanes,
@@ -344,6 +346,8 @@ from 3.79 % (best at a one-pixel shift) to 1.25 % (at none).
 - A button draws its `part`. While held, and while on for a toggle, it draws its `pressed` part
   instead.
 - The content on a pressed face sinks by `press_shift` units.
+- **A button with a `tip`** draws no hint itself: it hands the hint to the hint layer
+  (*The hints*), which draws it last, over everything.
 - **A control is its `act`.** Every enabled button, and every plate that takes a click, is a
   clickable op (`HOP_HOT` in the DLL, `data-act` in the mockup) keyed by its `act`; a row's, a
   team's and a hover button's key adds the row's or the team's index in the frame, `jump:2`,
@@ -368,7 +372,8 @@ from 3.79 % (best at a one-pixel shift) to 1.25 % (at none).
   (`dock`) under its buttons, so a click between them is the HUD's.
 - **The transport plate** starts `transport.l` right of the side panel and is `transport.w`
   wide. Each button fills its well, padded by `transport.button.pad`. The play button shows
-  `playing`'s icon while the replay plays.
+  `playing`'s icon while the replay plays. Speed, bookmark, the scale button and leave carry a
+  hint (`tip`: "Playback speed", "Add or remove a bookmark", "UI size", "Exit the replay").
 - **The timeline housing** runs from `rail.gap` right of the plate to `rail.r` from the screen's
   right. Its part is `proposed.forks.rail`, the housing painted with the Forks bay's pocket.
     - **The track** is its `track` well, and the clickable `track`. Its axis T is the state's:
@@ -422,8 +427,9 @@ from 3.79 % (best at a one-pixel shift) to 1.25 % (at none).
 - **The foot plate** sits right-aligned, `foot.gap` below the list: five bays, `foot.w` × `foot.h`
   (204 × 35). Their buttons are `stats`, which opens and closes the stats window, then the four
   switches `cursors`, `clicks`, `selections` and `chat`; each of the five is a toggle drawn
-  pressed while on. A `toggle` name the DLL does not know stops the build (`layout: no toggle
-  '…'`).
+  pressed while on, with a hint (`tip`: "Stats", "Players' cursors", "Players' clicks",
+  "Players' selections", "Chat"). A `toggle` name the DLL does not know stops the build (`layout:
+  no toggle '…'`).
 
 ### The header, the row and the hover strip
 
@@ -492,12 +498,19 @@ track's x plus `ends` plus (w − 2 × `ends`) × t / T.
   span at least one device pixel (`tagpu_hudlay_clip`; hud.js `UF`, a CSS `max()` with one device
   pixel). Without the floor a chain fill 0.44 px wide drew nothing in the game, which clips by pixel
   centre, and one pixel in the browser, which snaps the box's edges.
+- **The way back** (`lane.buttons.back`): the watched lane carries a button keyed `main`, before
+  its others, `buttons.gap` before the first of them and `buttons.pad` in from the top and
+  bottom, in `buttons.part`. It is as wide as its label, `back.label` ("Back to main recording")
+  in `lane.label.style` (`face_xs`, upper case), centred, and `back.pad` each side — the label
+  measured in its face, as the toast's is. The watched lane's least width grows by the button and
+  the gap, so its minimum is kept: it runs to max(X(`end`), X(`from`) + `lane.min_w` + that).
+  Clicking it watches timeline 0, the replay; clicking the watched lane itself keeps it.
 - **The label** `F<id> · NAME from m:ss` in `lane.label.style`, from `lane.label.pad`'s left of
   the branch to the buttons less the same pad.
 - **The buttons**, `lane.buttons.items` in order at the lane's right end, `buttons.w` wide,
   `buttons.gap` apart and `buttons.pad` in from the right, top and bottom: the item's icon in
-  `buttons.part`, keyed `<act>:k` (`export:k`, `delete:k`); Delete is drawn pressed while armed
-  (`armed`).
+  `buttons.part`, keyed `<act>:k` (`export:k`, `delete:k`), each with its hint (`tip`: "Save as a
+  replay of its own", "Delete this fork"); Delete is drawn pressed while armed (`armed`).
 - **The replace outline**: on the lane a takeover would replace (`replace`, while the picker is
   open), a ring `replace.width` wide outside the lane's box in `replace.colour` (an inset edge on a box
   grown by the width).
@@ -520,6 +533,34 @@ toast's less `toast.pad` each side, so a text longer than `toast.max_w` allows i
 drawn over the edge or past the box. On the live HUD, while the
 strip is open, it sits clear of the strip: `2·strip.t + strip.h` under the bar, or `toast.top`
 when that is lower. It shows for `toast.ms` (1800).
+
+### The hints
+
+A button with a `tip` — the transport's speed, bookmark, scale and leave, the five foot buttons,
+a lane's Export and Delete — shows it while the pointer is on it. **The hint layer draws it last,
+over everything the HUD draws**, the toast included (hud.js `hint`, `tagpu_hudlay.c` `hint`), so
+no control or window drawn after the button — Take over over the transport, the lanes, the
+picker, the stats window — can cover it. It is over the toast because it answers where the
+pointer is now and sits beside the button it names; the toast is centred `toast.top` down the
+screen. On the live HUD it would be the top layer, as the toast is there; no live control has a
+hint.
+
+- **The button it is for** is the control the pointer is on: the topmost enabled clickable
+  whose box holds the pointer, as the hit test finds it (last painted first; in game the top
+  layer's first). A control drawn over a button hides its hint as it takes its click, and a
+  disabled button, which has no clickable, has no hint.
+- **The box** is `tip.h` (11) tall in `tip.bg` at `tip.alpha`, with an edge of `tip.edge` in
+  `tip.edge_colour` (a ring), as wide as its text and `tip.pad` (4) each side — the text measured
+  in its face, as the toast's is — and `tip.gap` (2) above the button, centred on it and held
+  `tip.margin` (2) inside the screen's left and right edges.
+- **The text** fills the box, centred, in `tip.style` (`face_xs`, upper case).
+- **No hint of today's layout reaches the hold**: in every laycheck case (1080p, 1440p and 4K, HUD
+  75, 100 and 150) each is drawn centred, since the controls that carry one stand a fixed number of
+  units from the screen's edges — the transport `transport.l` right of the side panel, the column
+  `r` from the right, the lanes inside the track, which ends at the clock — and a hint's overhang
+  past its button is a few units. laycheck checked the hold itself on a copy of the layout with
+  `tip.margin` at 100 and 200 units (2026-10-25): Chat held at the right edge, Speed at the left,
+  Stats centred, the two sides agreeing.
 
 ### The stats window
 
@@ -604,7 +645,7 @@ The rules:
 ## Checking the C against the mockup
 
 `tools/hudart/laycheck.py` opens the mockup headless at its default `prop=1` with two forks
-kept, the game's look, for thirty cases (4K at 150 with two
+kept, the game's look, for forty-two cases (4K at 150 with two
 teams, 4K at Auto with the list too long, 1080p at 100 with one team, 1440p at 75 with a row
 hovered and a button held, 4K at 150 as a six-player free-for-all, 4K at 150 as a 2v1v1, 4K at
 150 with fourteen players scrolled to item 3 and a toast, 1440p at 75 with the first row hovered
@@ -625,7 +666,13 @@ fall on half pixels, and seven of the live HUD: `4k-150-live` (the rewind button
 `1080-100-live-rw` and `1440-75-live-rw` (its strip open), `1080-100-live-open` (the strip just
 opened, fwd disabled at its end), and the toast clear of the open strip and where it is closed,
 `1080-100-live-rw-toast`, `4k-150-live-rw-toast` (the eviction's warning) and
-`1440-75-live-toast`), takes the mockup's state and
+`1440-75-live-toast`), and twelve of the way back and the hints: `1080-100-lanes-back` and
+`4k-150-lanes-back-right` (the watched lane's Back to main recording, the second on the lane at the
+track's right end), the pointer on a foot button (`4k-150-hint-stats`, `1440-75-hint-chat`,
+`1080-100-hint-chat`), on the transport (`4k-150-hint-uiscale`, `4k-150-hint-speed`,
+`1080-100-hint-bookmark`, `1440-75-hint-leave`, and `1080-100-hint-bookmark-lanes`, with the lanes
+open and Take over above it, under the hint), and on a lane's button (`4k-150-hint-export`,
+`1080-100-hint-delete-watched`)), takes the mockup's state and
 every element's box in HUD units, runs `tagpu_hudlay.c` compiled natively (`laycheck.c`) on the
 same state, and pairs the two element by element: every part by name and painted opacity (its own
 times its ancestors', as a disabled button's icon is dimmed), every text by its string and painted
@@ -656,7 +703,9 @@ the cases the 1615 parts, 974 solids, 173 dots and 25 clips are each on the same
 DLL, pinned and painted; and on all thirty with the live HUD and every inset edge a ring
 (2026-10-23): 1689 parts, 977 solids, 358 rings (inner edges and sides too), 173 dots and 30
 clips, each on the same pixels in the DLL, pinned and painted, and the pieces of all 1659 parts
-that are not tiled fills, icons and whole parts among them, the same. A halo
+that are not tiled fills, icons and whole parts among them, the same; and on all forty-two with
+the way back and the hints (2026-10-25). A hint case puts the pointer at the control's centre:
+the mockup's hint layer draws for it (`HUD.hint`) and the DLL's build gets it as `mx`, `my`. A halo
 polyline is told from its line by its `stroke-opacity`, which only the halo carries. At 4K every
 box is within 0.018 units and every baseline within 0.0145 (the twenty-two cases, 2026-10-23). The Oswald residual above is named, not failed, and only where the same rule on
 Chrome's own rounded ascent and descent (`measureText`'s `fontBoundingBoxAscent`/`Descent`) gives

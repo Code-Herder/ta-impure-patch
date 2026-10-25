@@ -344,6 +344,18 @@ The owner's decisions:
   the ten-seat column matches, thumb included.
 - **`tools/hudart/laycheck.py`** compares this file's rectangles and baselines with the mockup's
   ([The replay HUD's layout](hud-layout.md), *Text*).
+- **The hints are the build's last ops** (`hint`, after the toast; [The replay HUD's
+  layout](hud-layout.md), *The hints*). `button()` draws no hint: an enabled button with a `tip`
+  records its `HOP_HOT` op and its text in the build's context, one slot for every clickable a
+  build can make (`HUD_MAXHOT`, which `tagpu_hudlay_max_hot` bounds the layout to), so the record
+  cannot overflow. At the end the build finds the topmost `HOP_HOT` op holding the pointer
+  (`mx`, `my`: the input's pointer in units, the same the hovered row reads), in the hit map's
+  order — the top layer's first, then the rest, last first — and draws that control's hint when it
+  has one. The hit map and the hint therefore agree on which control the pointer is on, and a hint
+  never takes a click. The `tip` block is read at the load with the toast's (`HUDGLOBALS`), its
+  style resolved to an index there, so a layout that loads has every field the hint reads; the
+  load's self-test also builds once with the pointer on the first foot button that has a hint and
+  fails the load if no hint is drawn.
 
 ### The text
 
@@ -352,6 +364,10 @@ The owner's decisions:
   inside the archive with their OFL texts: Oswald 500 and 700 and Barlow Condensed 600.
 - **No sigma.** Neither family carries Greek, so the team header's unit sum is the bare number,
   in `hud.js` and in `tagpu_hudlay.c` alike.
+- **The hints and Back to main recording are ASCII**, the apostrophe U+0027 included, and every
+  character of them is in Oswald 500 as cut (each upper-cased character's glyph index nonzero
+  through stb_truetype's `stbtt_FindGlyphIndex`, 2026-10-25). The atlas rasterises any glyph the
+  face has on first use, so it needs no list of them.
 - **The players' names** are the engine's 8-bit text read as Latin-1 (`latin1_utf8`,
   `tagpu_hudstate.c`): a control code — below 0x20, or 0x80..0x9F — becomes `?`, and the soft
   hyphen, which Oswald lacks, becomes `-`.
@@ -622,8 +638,8 @@ then. The new fork's lane is there the next time the file is watched.
 **What is drawn** ([The replay HUD's layout](hud-layout.md), *The lanes*): while the Forks bay is
 open and the file keeps a fork, a plate over the timeline housing with a lane for each live fork,
 oldest branch on top, from its branch to its end on the track's own axis; its label `F<id> · NAME
-from m:ss`, NAME the seat it was played as; Export and Delete at its right end; the watched lane
-pressed; a line from each lane's branch; the playhead's line up through every lane; and, while the
+from m:ss`, NAME the seat it was played as; Export and Delete at its right end, each with its
+hint; the watched lane pressed, with Back to main recording before its Export; a line from each lane's branch; the playhead's line up through every lane; and, while the
 picker is open, the lane its takeover would replace outlined. The column stands on the plate.
 Two rules are new in the mockup and the game alike:
 
@@ -649,8 +665,12 @@ lanes' timeline ids into the hit map (`nlane`, `lane_id[]`, in `fork[]`'s order)
 has. A lane whose fork has gone since the draw is the replay's to refuse.
 
 - `lane:k` watches lane k's timeline (`tagpu_replay_watch_timeline`, *The switch* in
-  [S4c](tadr-port/demo-recorder-s4-forks.md#watching-another-timeline-in-place)); on the watched
-  lane it asks for 0, the original: the mockup's "back to the replay". It disarms Delete.
+  [S4c](tadr-port/demo-recorder-s4-forks.md#watching-another-timeline-in-place)). On the watched
+  lane it asks for nothing and the lane stays watched: the switch refuses the timeline that plays
+  already ("timeline N plays already"), so asking would only toast a refusal. It disarms Delete.
+- `main`, the watched lane's **Back to main recording**, asks for timeline 0, the original, and
+  disarms Delete; refused at once it toasts "Cannot go back to the replay". It carries no index:
+  it names the original whichever lane drew it, so a press and a release on it always agree.
 - `export:k` saves the fork as `replays\<name>-F<id>.imprec`, `<name>` the playing's own
   (`tagpu_replay_fork_op(EXPORT, id, stem)`). An existing export is never overwritten, and a name
   `fork_stem` refuses is refused; the log has the worker's reason. A recording whose name leaves
@@ -679,6 +699,14 @@ read them.
 (`held_lane`), and the release acts only when its own frame's lane at that index is the same fork:
 a list that changed between them (a deletion, a fork made) does not send the click to the fork
 that moved into its place.
+
+**The way back and the hints, verified in game** (MEASURED 2026-10-25, the reference setup: a
+private 1920 × 1080 Xvfb, a two-seat recording with one fork taken over at GameTime 301, driven
+with `tacli hud`): `lane:0` logged `watching timeline 1 at GameTime 385`; a second `lane:0` on the
+watched lane logged no switch and no toast and the lane stayed watched; `main` logged `watching
+timeline 0 at GameTime 385`. At HUD 100 and 150 each of the eleven hints showed above its button
+in the window grab, Bookmark's over Take over replay. The world draws black on that display; the
+HUD is the Vulkan pass's own and draws as on a live one.
 
 **The markers after a switch.** The walker walks the chain that plays, so a switch restarts it.
 The fill asks the old walk to stop and polls its join at every fill after, showing no marker and
