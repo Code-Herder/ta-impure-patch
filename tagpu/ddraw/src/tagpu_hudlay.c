@@ -1611,22 +1611,29 @@ static void toast(C* c)
 
 /* ---- THE HINT LAYER (hud.js `hint`): the last thing a build draws, over everything the HUD draws,
    the toast included, so no control or window drawn after a button can cover its hint. It is the
-   hint of the control the pointer is on -- the topmost HOP_HOT op whose box holds (mx, my), the top
-   layer's first and then the rest, last first, as tagpu_hudstate_drawn orders the hit map -- when
-   that control has one: a control drawn over a button hides its hint as it takes its click. Over
-   the toast because the hint answers where the pointer is now, beside the button it names, and is
-   gone with the pointer; the toast is centred `toast.top` down the screen and names something done.
-   On the live HUD it is the top layer, as the toast is there. ---- */
+   hint of the control the pointer is on, when that control has one: a control drawn over a button
+   hides its hint as it takes its click. Over the toast because the hint answers where the pointer
+   is now, beside the button it names, and is gone with the pointer; the toast is centred
+   `toast.top` down the screen and names something done. On the live HUD it is the top layer, as
+   the toast is there.
+   THE CONTROL IS THE HIT MAP'S, by construction: the topmost HOP_HOT op holding the pointer, the
+   top layer's first and then the rest, last first, as tagpu_hudstate_drawn orders the map, each
+   box's edges the device pixels the map gives it -- tagpu_hud_snap and tagpu_hud_edge of the same
+   float products at `px` -- and the pointer the device pixel it came from, (mx, my) x px rounded
+   to the nearest whole one. So on a control's edge pixel the hint and a click name the same
+   control. ---- */
 
 static void hint(C* c)
 {
     const HUDSTATE* st = c->st;
+    const double X = floor((double)st->mx * st->px + 0.5), Y = floor((double)st->my * st->px + 0.5);
     int top, i, j;
     for (top = 1; top >= 0; top--)
         for (i = c->o->n - 1; i >= 0; i--) {
             const HUDOP* p = &c->o->op[i];
             if (p->kind != HOP_HOT || ((p->flags & HOPF_TOP) != 0) != top) continue;
-            if (!(st->mx >= p->r.x && st->mx < p->r.x + p->r.w && st->my >= p->r.y && st->my < p->r.y + p->r.h)) continue;
+            if (!(X >= tagpu_hud_snap(p->r.x * st->px) && X < tagpu_hud_edge(p->r.x, p->r.w, st->px) &&
+                  Y >= tagpu_hud_snap(p->r.y * st->px) && Y < tagpu_hud_edge(p->r.y, p->r.h, st->px))) continue;
             for (j = 0; j < c->ntip && c->tip[j].op != i; j++) {}
             if (j < c->ntip) {
                 R b = box(p->r.x, p->r.y, p->r.w, p->r.h);
@@ -2023,7 +2030,7 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
        forks, one watched and the limit reached, the axis past the original's end, the Take over
        button down and the picker open with a row that cannot be taken; then the forks' lanes open,
        the watched one with its way back. */
-    st->W = 1280; st->H = 720; st->panel = 128; st->top = 32; st->bottom = 32;
+    st->W = 1280; st->H = 720; st->panel = 128; st->top = 32; st->bottom = 32; st->px = 1.5f;
     st->t = 30; st->T = 60; st->playing = 1; st->speed = 1; st->hud = 1;
     st->ends = st->len = st->fill_to = 60;
     st->fork_max = HUD_MAXFORK;
@@ -2059,28 +2066,34 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
         g->v[0] = 1; g->v[1] = 2; g->v[2] = 3;
     }
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->max_hot, "first build", err, errn)) goto done;
-    /* the pointer on the first foot button with a hint, where the first build drew it, the stats
-       window closed so that nothing covers it: the hint layer draws its hint */
+    /* the pointer on the first foot or transport button with a hint, where the first build drew
+       it, the stats window closed so that nothing covers it: the hint layer draws its hint. A
+       layout with no such button fails here, so the hint's rule is always run once at the load. */
     {
-        const TJV* fb = tj_get(tj_get(tj_get(l->L, "column"), "foot"), "buttons");
+        const TJV* lists[2];
         const char *act = NULL, *ts = NULL;
         float mx = st->mx, my = st->my;
-        int at = -1, k, drawn = 0;
-        for (k = 0; fb && k < fb->n && !act; k++)
-            if ((ts = tj_str(tj_get(tj_at(fb, k), "tip"), NULL))) act = tj_str(tj_get(tj_at(fb, k), "act"), NULL);
+        int at = -1, k, m, drawn = 0;
+        lists[0] = tj_get(tj_get(tj_get(l->L, "column"), "foot"), "buttons");
+        lists[1] = tj_get(tj_get(tj_get(l->L, "dock"), "transport"), "buttons");
+        for (m = 0; m < 2 && !act; m++)
+            for (k = 0; lists[m] && k < lists[m]->n && !act; k++)
+                if ((ts = tj_str(tj_get(tj_at(lists[m], k), "tip"), NULL))) act = tj_str(tj_get(tj_at(lists[m], k), "act"), NULL);
         for (k = 0; act && k < o->n && at < 0; k++)
             if (o->op[k].kind == HOP_HOT && !strcmp(o->text + o->op[k].run, act)) at = k;
-        if (at >= 0) {
-            st->mx = o->op[at].r.x + o->op[at].r.w / 2;
-            st->my = o->op[at].r.y + o->op[at].r.h / 2;
-            st->stats.open = 0;
-            if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->max_hot, "hint's build", err, errn)) goto done;
-            for (k = 0; k < o->n && !drawn; k++)
-                drawn = o->op[k].kind == HOP_TEXT && o->op[k].nrun == 1 && !strcmp(o->text + o->run[o->op[k].run].off, ts);
-            if (!drawn) { snprintf(err, errn, "hudlay: the self-test's hint build drew no hint for '%s'", act); goto done; }
-            st->mx = mx; st->my = my;
-            st->stats.open = 1;
+        if (at < 0) {
+            snprintf(err, errn, "hudlay: the self-test found no foot or transport button with a hint to point at");
+            goto done;
         }
+        st->mx = o->op[at].r.x + o->op[at].r.w / 2;
+        st->my = o->op[at].r.y + o->op[at].r.h / 2;
+        st->stats.open = 0;
+        if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->max_hot, "hint's build", err, errn)) goto done;
+        for (k = 0; k < o->n && !drawn; k++)
+            drawn = o->op[k].kind == HOP_TEXT && o->op[k].nrun == 1 && !strcmp(o->text + o->run[o->op[k].run].off, ts);
+        if (!drawn) { snprintf(err, errn, "hudlay: the self-test's hint build drew no hint for '%s'", act); goto done; }
+        st->mx = mx; st->my = my;
+        st->stats.open = 1;
     }
     st->H = 300; st->scroll = 1;    /* the scroll bar */
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->max_hot, "scrolled build", err, errn)) goto done;

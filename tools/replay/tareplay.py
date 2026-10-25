@@ -2403,23 +2403,25 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
                       f"{what}: the markers drawn again")
         return f"{m[1]} deaths, {m[2]} defeats"
 
-    def switch(tid, by_lane=None):
-        """Timeline tid asked for -- by a click on lane `by_lane`, else by the trigger's
-        `timeline tid` -- and the switch's line: (the line, the log index before the ask)."""
+    def switch(tid, key=None):
+        """Timeline tid asked for -- by a click on the HUD's control `key` (`lane:k`, or `main`,
+        the watched lane's Back to main recording), else by the trigger's `timeline tid` -- and
+        the switch's line: (the line, the log index before the ask)."""
         n = len(log.lines)
-        if by_lane is None:
+        if key is None:
             w.trigger(f"timeline {tid}")
         else:
-            hud(w, "click", f"lane:{by_lane}")
+            hud(w, "click", key)
         got = log.wait(rf"replay: .*: watching timeline {tid} (at GameTime|from GameTime|"
                        rf"refused)", ACK_S, n)
         if not got:
             raise Failed(f"X2: no answer to timeline {tid}'s "
-                         f"{'trigger' if by_lane is None else f'lane {by_lane}'} in {ACK_S} s")
+                         f"{'trigger' if key is None else key} in {ACK_S} s")
         return got, n
 
     # the lanes opened by the Forks bay: by branch point 2, 5 and 4, 5 a fork of 2, each lane the
-    # file's segment, 5 watched; every lane's three controls clickable
+    # file's segment, 5 watched; every lane's three controls clickable, and the watched one's Back
+    # to main recording
     hud(w, "click", "lanes")
     d = hud_until(lambda d: d["state"]["lanesOpen"], "the Forks bay opened")
     lanes = d["state"]["forks"]
@@ -2433,7 +2435,7 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
         raise Failed(f"X2: the watched lane is {d['state']['timeline']}, not 5's, 1")
     keys_on = {h["key"] for h in d["hits"]["at"]}
     lost = [f"{a}:{k}" for k in range(3) for a in ("lane", "export", "delete")
-            if f"{a}:{k}" not in keys_on]
+            if f"{a}:{k}" not in keys_on] + [k for k in ("main",) if k not in keys_on]
     if lost:
         raise Failed(f"X2: the lanes' controls {lost} are not in the hit map")
     walks = []
@@ -2458,7 +2460,7 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
         return copies(f"X2 {dname}", w.gamedir / "replays" / f"dump-{dname}.bin")[0]
 
     # 2. the seek path, 5 -> 2: GameTime T5 + 1 is in 5's own segment, which 2's chain lacks
-    got, n = switch(2, lane(2))
+    got, n = switch(2, f"lane:{lane(2)}")
     want = f"watching timeline 2 at GameTime {T5 + 1} (sought from {T5} in "
     if want not in got or not log.wait(rf"replay: .*: at GameTime {T5 + 1}, sought from GameTime "
                                        rf"{T5} in ", 0, n):
@@ -2495,19 +2497,33 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     if len(marked) != 1:
         raise Failed(f"X2: the HUD lists bookmarks at {marked} s on 2; wanted the one at "
                      f"GameTime {BT}")
-    got, n = switch(4, lane(4))
+    got, n = switch(4, f"lane:{lane(4)}")
     want = f"watching timeline 4 from GameTime {base - 1} (shared history: no rebuild)"
     if want not in got or log.wait(r"replay: .*: at GameTime \d+, sought from ", 0, n):
         raise Failed(f"X2: 2 -> 4: {got.strip()}; wanted `{want}` and no seek")
     walks.append(f"4: {markers_back(n, '2 -> 4')}")
     watched(4, [0, 4])
-    # the watched lane clicked goes back to the replay, and clicked again watches 4 once more
-    got, n = switch(0, lane(4))
+    # the watched lane clicked keeps it and asks nothing. THE FENCE: tacli returns once the game
+    # has handled the click (tools/tacli, _write_tokens), and a refused or queued switch is logged
+    # while it is handled (tagpu_replay_watch_timeline), so a state dump asked for after it is
+    # logged after any line the click made
+    n = len(log.lines)
+    hud(w, "click", f"lane:{lane(4)}")
+    hud(w, "show", timeout=ACK_S)
+    if not log.wait(r"hud: state dumped to ", ACK_S, n):
+        raise Failed("X2: the watched lane's click: no state dump after it")
+    fence = next(i for i in range(n, len(log.lines)) if "hud: state dumped to " in log.lines[i])
+    asked = [ln.strip() for ln in log.lines[n:fence] if re.search(r"replay: .*: watching timeline", ln)]
+    if asked:
+        raise Failed(f"X2: the watched lane's click asked for a switch: {asked}")
+    watched(4, [0, 4])
+    # Back to main recording goes back to the replay, and the lane clicked again watches 4 once more
+    got, n = switch(0, "main")
     if "refused" in got:
-        raise Failed(f"X2: the watched lane back to the replay: {got.strip()}")
+        raise Failed(f"X2: Back to main recording: {got.strip()}")
     walks.append(f"0: {markers_back(n, '4 -> 0')}")
     hud_until(lambda d: d["state"]["timeline"] == -1, "back to the replay")
-    got, n = switch(4, lane(4))
+    got, n = switch(4, f"lane:{lane(4)}")
     if "refused" in got:
         raise Failed(f"X2: 0 -> 4: {got.strip()}")
     walks.append(f"4: {markers_back(n, '0 -> 4')}")
@@ -2631,8 +2647,8 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
     w.collect(out / "X2")
     w.stop()
     results.add(("forks: X2, watching another timeline in place", PASS,
-                 f"by the lanes: 5 -> 2 sought at {T5 + 1}; 2 -> 4 re-chained at {base - 1}, back to 0 "
-                 f"and to 4; the stamps evict 5; 4 at {F2 + 30} and past {F4}; 1 refused; 2 "
+                 f"by the lanes: 5 -> 2 sought at {T5 + 1}; 2 -> 4 re-chained at {base - 1}, kept by its "
+                 f"lane, back to 0 by Back to main recording and to 4; the stamps evict 5; 4 at {F2 + 30} and past {F4}; 1 refused; 2 "
                  f"exported; delete 4 by way of 0; the bookmark at {BT} listed on 2, 4 and 0, keyed "
                  f"{key}; touched 0, 5, 2; walks {'; '.join(walks)}"))
 

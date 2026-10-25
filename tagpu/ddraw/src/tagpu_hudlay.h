@@ -92,6 +92,8 @@ typedef struct {
     int      nmark;
     HUDMARK  mark[HUD_MAXMARK];
     float    mx, my;                /* the pointer, for the hovered row; < 0: none           */
+    float    px;                    /* the device pixels a unit: the hint's hit test snaps the
+                                       controls' edges at it as the hit map does (hint)      */
     char     held[HUD_KEYLEN];      /* the key of the button held down; "" = none            */
     int      sight, follow;         /* the seat Sight and Follow are set to; < 0: none, the
                                        full map and the free camera                          */

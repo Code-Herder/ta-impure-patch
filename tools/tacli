@@ -2534,6 +2534,22 @@ def _hud_centre(r):
     return (r[0] + r[2]) // 2, (r[1] + r[3]) // 2
 
 
+def _hud_spot(dump: dict, key: str, r):
+    """A client pixel of `key`'s rect r where `key` is the topmost control, as the game's hit test
+    finds it: its centre when nothing drawn over it covers that, else the nearest pixel to the
+    centre that nothing covers -- the watched lane's centre can lie under its own Back to main
+    recording button. None when the controls over it cover it whole."""
+    hits = dump["hits"]["at"]
+
+    def top(x, y):
+        return next((h["key"] for h in hits
+                     if h["r"][0] <= x < h["r"][2] and h["r"][1] <= y < h["r"][3]), None)
+    cx, cy = _hud_centre(r)
+    spots = sorted(((x, y) for y in range(r[1], r[3]) for x in range(r[0], r[2])),
+                   key=lambda p: (abs(p[0] - cx) + abs(p[1] - cy), p))
+    return next(((x, y) for x, y in spots if top(x, y) == key), None)
+
+
 def _hud_find(inst: Instance, key: str, timeout: float):
     """`key`'s rect, hovering its row first when it is one of a row's buttons ("jump:2" is on
     "row:2", and shows only while the pointer is over that row)."""
@@ -2551,6 +2567,14 @@ def _hud_find(inst: Instance, key: str, timeout: float):
         die(f"the HUD shows no control {key!r}: "
             + " ".join(h["key"] for h in d["hits"]["at"]))
     return d, r
+
+
+def _hud_point(d: dict, key: str, r):
+    """`_hud_spot`, or the reason it has none."""
+    at = _hud_spot(d, key, r)
+    if at is None:
+        die(f"the HUD's control {key!r} is covered whole by the controls drawn over it")
+    return at
 
 
 def cmd_hud(args):
@@ -2599,7 +2623,7 @@ def cmd_hud(args):
         if len(rest) != (2 if verb == "wheel" else 1):
             die(f"usage: hud <name> {verb} <key>" + (" <notches>" if verb == "wheel" else ""))
         d, r = _hud_find(inst, rest[0], tmo)
-        x, y = _hud_centre(r)
+        x, y = _hud_point(d, rest[0], r)
         if verb == "wheel":
             token = " ".join(_dwheel_tokens(x, y, int(rest[1])))
         else:
@@ -2637,7 +2661,7 @@ def cmd_hud(args):
         if len(rest) != 3:
             die("usage: hud <name> drag <key> <dx> <dy>")
         d, r = _hud_find(inst, rest[0], tmo)
-        x, y = _hud_centre(r)
+        x, y = _hud_point(d, rest[0], r)
         dx, dy = int(rest[1]), int(rest[2])
         _write_tokens(inst, f"ddown:{x},{y}")
         for k in range(1, args.steps + 1):

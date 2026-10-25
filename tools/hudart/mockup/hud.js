@@ -759,19 +759,22 @@ const HUD = (() => {
     compose(el, px);
   }
   /* THE HINT LAYER: drawn last, over everything the HUD draws, the toast included, and gone with the next draw. It
-     shows the hint of the control the pointer is on -- the topmost enabled control whose box holds (x, y), in units
-     from the screen's top left, as the game's hit test finds it, so a control drawn over a button hides its hint as
-     it takes its click -- when that control carries one (data-tip). The hint is its text in a dark box `tip.gap`
-     above the button, centred on it, held `tip.margin` inside the screen's left and right edges and as wide as the
-     text and `tip.pad` each side. tagpu_hudlay.c `hint` draws it by the same rules */
+     shows the hint of the control the pointer is on -- the topmost enabled control holding (x, y), in units from the
+     screen's top left, as the game's hit test finds it: the pointer's device pixel against each box's edges snapped
+     to device pixels (snapPx), so a control drawn over a button hides its hint as it takes its click -- when that
+     control carries one (data-tip). The hint is its text in a dark box `tip.gap` above the button, centred on it,
+     held `tip.margin` inside the screen's left and right edges and as wide as the text and `tip.pad` each side.
+     tagpu_hudlay.c `hint` draws it by the same rules */
   let hintOn = null;    // the control the hint drawn is for; reset by every draw
   function hint(el, x, y, st) {
     let on = null;
-    if (x != null)
+    if (x != null) {
+      const px = layerPx, X = Math.floor(x * px + 0.5), Y = Math.floor(y * px + 0.5);
       for (const e of el.querySelectorAll('[data-act]:not(.off), [data-track]')) {
         const [bx, by, bw, bh] = (e.dataset.ub || '').split(' ').map(Number);
-        if (x >= bx && x < bx + bw && y >= by && y < by + bh) on = e;
+        if (X >= snapPx(bx * px) && X < snapPx((bx + bw) * px) && Y >= snapPx(by * px) && Y < snapPx((by + bh) * px)) on = e;
       }
+    }
     if (on && !on.dataset.tip) on = null;
     if (on === hintOn) return;
     hintOn = on;

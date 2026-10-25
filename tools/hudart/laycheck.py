@@ -24,6 +24,7 @@ import http.server
 import json
 import math
 import os
+import re
 import shutil
 import socketserver
 import struct
@@ -226,7 +227,8 @@ COLLECT = r"""() => {
       }
     }
   }
-  return JSON.stringify({ state: st, els, u, d, chart });
+  const hints = [...document.querySelectorAll('#hud-layer > .hint')].map(e => e.textContent);
+  return JSON.stringify({ state: st, els, u, d, chart, hints });
 }"""
 
 
@@ -365,6 +367,15 @@ def main():
                     "chart": lambda e: e["alpha"] if "alpha" in e else int(e["rgba"][6:8], 16)}
             TOL = TOL_CSS / dom["u"]
             print(f"{name}: {len(ops['ops'])} ops, {len(dom['els'])} mockup elements, tolerance {TOL:.3f} units")
+            # the pointer on a control by its key: the mockup drew one hint, and the DLL one text op of that hint
+            if hover is not None and not re.fullmatch(r"row\d+", hover):
+                hs = dom.get("hints", [])
+                cn = sum(1 for o in ops["ops"] if o["kind"] == "text" and hs and o["text"] == hs[0])
+                if len(hs) != 1 or cn != 1:
+                    bad += 1
+                    print(f"  hint  the mockup drew {hs}, the DLL {cn} text op(s) of it <-- DIFFERS")
+                else:
+                    print(f"  hint  {hs[0]!r} drawn by both")
             for k in cs:
                 pairs, oc, od = pair(cs[k], ds[k], keys[k])
                 worst = max((max(abs(a - b) for a, b in zip(c["r"], d["r"])) for c, d in pairs), default=0)

@@ -256,6 +256,9 @@ timelines 0, 2, 4 and 5), one launch held at fork 5's first iteration:
 1. 5 -> 2 by the seek path, then a round trip at +30 whose dumps compare EQUAL (the playing after
    the switch equals a rebuild of chain 2 in place), and `hud state` watching 2 on `[0, 2]`;
 2. a HUD seek before both forks, then 2 -> 4 re-chained with no seek line, watching 4 on `[0, 4]`;
+   4's lane clicked again logs no switch and 4 stays watched (the state dump asked after the
+   click is the fence: tacli returns once the game has handled it); Back to main recording
+   (`main`) goes to 0, and 4's lane watches 4 once more;
 3. the dry run names timeline 5 for eviction where the file's own times would name 2;
 4. the re-chained reader's own world at fork 2's GameTime + 30, before 4's fork -- where the chain
    it left would have crossed into 2 -- and past 4's boundary, both dumps EQUAL to a fresh seek

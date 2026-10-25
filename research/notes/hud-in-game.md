@@ -348,14 +348,18 @@ The owner's decisions:
   layout](hud-layout.md), *The hints*). `button()` draws no hint: an enabled button with a `tip`
   records its `HOP_HOT` op and its text in the build's context, one slot for every clickable a
   build can make (`HUD_MAXHOT`, which `tagpu_hudlay_max_hot` bounds the layout to), so the record
-  cannot overflow. At the end the build finds the topmost `HOP_HOT` op holding the pointer
-  (`mx`, `my`: the input's pointer in units, the same the hovered row reads), in the hit map's
-  order — the top layer's first, then the rest, last first — and draws that control's hint when it
-  has one. The hit map and the hint therefore agree on which control the pointer is on, and a hint
-  never takes a click. The `tip` block is read at the load with the toast's (`HUDGLOBALS`), its
-  style resolved to an index there, so a layout that loads has every field the hint reads; the
-  load's self-test also builds once with the pointer on the first foot button that has a hint and
-  fails the load if no hint is drawn.
+  cannot overflow. At the end the build finds the topmost `HOP_HOT` op holding the pointer, in the
+  hit map's order — the top layer's first, then the rest, last first — and draws that control's
+  hint when it has one. It tests as the hit map does: the pointer (`mx`, `my`, the input's pointer
+  in units, the same the hovered row reads) times `HUDSTATE.px`, the device pixels a unit, rounded
+  back to the client pixel it came from, against each box's edges snapped by `tagpu_hud_snap` and
+  `tagpu_hud_edge` of the same float products `tagpu_hudstate_drawn` snaps. So the hint and a
+  click name the same control on every pixel, a control's edge pixel included, and a hint never
+  takes a click. `hud.js` tests the same way, the pointer's device pixel against `snapPx` of each
+  box's edges. The `tip` block is read at the load with the toast's (`HUDGLOBALS`), its style
+  resolved to an index there, so a layout that loads has every field the hint reads; the load's
+  self-test also builds once with the pointer on the first foot or transport button that has a
+  hint, and fails the load when there is none or no hint is drawn.
 
 ### The text
 
@@ -782,7 +786,8 @@ over the world, is `tagpu_menu_modal`'s.
 | `takeas:i` | the picker | with the picker open, row i's seat taken over at the picker's start (`tagpu_replay_takeover_request`), the toast "Taking over NAME at m:ss"; the picker closes. No hot for a row whose player has no unit left |
 | `picker` | the picker's plate | taken, and nothing done |
 | `lanes` | the Forks bay | the lanes opened or closed, while the file keeps a fork; no hot with none (the bay drawn off) |
-| `lane:k` | a fork's lane | lane k's timeline watched (`tagpu_replay_watch_timeline`); on the watched lane, the original (*The lanes*) |
+| `lane:k` | a fork's lane | lane k's timeline watched (`tagpu_replay_watch_timeline`); on the watched lane, nothing: it stays watched (*The lanes*) |
+| `main` | the watched lane's Back to main recording | timeline 0, the original, watched; Delete disarmed; "Cannot go back to the replay" on a refusal |
 | `export:k` | a lane's Export | the fork saved as `replays\<name>-F<id>.imprec`; the toast "F<id> saved as a replay of its own" |
 | `delete:k` | a lane's Delete | first click: armed, "Click again to delete F<id>"; second: the fork deleted, the watched one by a switch up its chain first |
 | `stats` | foot plate | the stats window opened or closed; drawn pressed while open |
@@ -929,11 +934,14 @@ control's place in the frame on screen — and never calls the replay's API:
   `show` adds `picker R` to its line while it is open.
 - **`click`** writes `dclick:` (`drclick:` with `--right`) at the control's centre, **`hover`**
   `dmove:`, and **`wheel`** `dwheel:x,y,n`, n notches (positive: away from the player, and the
-  column scrolls up). A row's button (`jump:2`) shows only under the pointer, so tacli hovers its
+  column scrolls up). Where a control drawn over it covers the centre — the watched lane's centre
+  can lie under its Back to main recording — the three go to the nearest pixel to the centre
+  where the hit map's topmost control is the one named (`_hud_spot`), so they reach the control
+  asked for. A row's button (`jump:2`) shows only under the pointer, so tacli hovers its
   row (`row:2`) first and waits for the button to appear in the dump.
 - **`scrub`** presses on the track at one fraction of the track's axis (`ddown:`), moves in
   `--steps` steps `--step-ms` apart (`dmove:`), and releases at the other (`dup:`).
-- **`drag`** presses at a control's centre (`ddown:`), moves by (dx, dy) client pixels in
+- **`drag`** presses at a control's centre, or `click`'s nearest uncovered pixel (`ddown:`), moves by (dx, dy) client pixels in
   `--steps` steps `--step-ms` apart, and releases there: `tacli hud <i> drag drag 200 -80` drags
   the stats window by its title. The window follows the pointer once a frame, so on a slow
   display a drag whose later steps leave the picture ends where the last frame sampled an

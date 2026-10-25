@@ -547,7 +547,8 @@ hint.
 
 - **The button it is for** is the control the pointer is on: the topmost enabled clickable
   whose box holds the pointer, as the hit test finds it (last painted first; in game the top
-  layer's first). A control drawn over a button hides its hint as it takes its click, and a
+  layer's first), the pointer's device pixel tested against each box's edges snapped to device
+  pixels as the hit map snaps them. A control drawn over a button hides its hint as it takes its click, and a
   disabled button, which has no clickable, has no hint.
 - **The box** is `tip.h` (11) tall in `tip.bg` at `tip.alpha`, with an edge of `tip.edge` in
   `tip.edge_colour` (a ring), as wide as its text and `tip.pad` (4) each side — the text measured
