@@ -5,7 +5,7 @@
    press site to the cursor site; the release orders it. Shift + Ctrl over a unit, or over a
    queued build of a selected builder, previews a ring round it, ordered by a press and release.
 
-   Two hooks, both on the GAME thread inside the in-play mouse handler 0x499200, which copies the
+   Three hooks, all on the GAME thread inside the in-play mouse handler 0x499200, which copies the
    record main+0x2C76 to its stack (0x499210..0x49921A), lets 0x498DA0 make the world point, runs
    the build cursor 0x4197D0 (0x499241, mode 14 in the viewport) and then routes the click:
 
@@ -15,6 +15,8 @@
      module's before-observer when that applies).
    - a stub at 0x4993BF, the mode != 1 branch of the click routing, takes the press and the
      release.
+   - a before-observer on the handler's entry ends the gesture when a record is handled in any
+     other mode (handler_entry).
 
    Everything here is game-thread state and UI: the simulation never reads it, and what a commit
    causes -- order nodes made and removed through the engine's own roots -- is engine state the
@@ -45,6 +47,7 @@
 #define M_GUICOL 0x0DCB      /* the GUI colour byte array, the build square's colours */
 
 #define VA_CURSOR      0x004197D0u
+#define VA_HANDLER     0x00499200u
 #define VA_SITE_CALL   0x004198C6u
 #define VA_ROUTE       0x004993BFu
 #define VA_ROUTE_CLICK 0x004993CBu
@@ -446,7 +449,9 @@ static void evaluate(void)
     /* Live keys, not the record's wParam: a modifier pressed without moving the mouse changes
        the shape at once. */
     shift = key_down(KEY_SHIFT); ctrl = key_down(KEY_CONTROL); alt = key_down(KEY_MENU);
-    if (!(shift && ctrl) && !s_gesture.active) return;
+    /* Shift up: nothing previews -- a release now drops the gesture (place_button) -- but the
+       gesture lives on, so that release is still consumed rather than placing on stock's path */
+    if (!shift || (!ctrl && !s_gesture.active)) return;
     if (!context(&c, 1)) return;
     planned = snapshot(&c);
     if (!planned) plans_overflowed();
@@ -471,9 +476,12 @@ static void evaluate(void)
     s_eval.n = k;
 }
 
-/* PHASE 1, per builder: each non-red site, in shape order, removes the first node of the
-   builder's build action within 16 world units that no earlier site matched -- 0x43AFC0's
-   toggle -- and the site then adds nothing for this builder. A node flagged 0x40000 matches but
+/* PHASE 1, per builder: each non-red site, in shape order, removes a node of the builder's
+   build action that no earlier site matched -- the one at the site's own position, else the
+   first within 16 world units, 0x43AFC0's toggle -- and the site then adds nothing for this
+   builder. The own position comes first because neighbouring 1x1 sites are 16 world units
+   apart: with the first match alone, dragging back over a queued row would shift every removal
+   by one and leave the row's last order standing. A node flagged 0x40000 matches but
    is not removed, as 0x43AFC0 looks for it in the +0x60 list and finds nothing
    (0x43B034..0x43B058); such nodes are remembered by their place among the flagged nodes, which
    removing an unflagged one does not change. NO NODE POINTER OUTLIVES 0x439F80: it destructs
@@ -486,23 +494,26 @@ static unsigned remove_toggled(const Ctx* c, unsigned b, const Site* s, unsigned
     memset(s_matched, 0, sizeof s_matched);
     for (i = 0; i < n; i++) {
         const char *u, *node, *found = NULL;
-        unsigned steps = 0, flagged = 0;
-        int x = site_x(c, &s[i]), z = site_z(c, &s[i]);
+        int x = site_x(c, &s[i]), z = site_z(c, &s[i]), exact;
         if (s[i].colour == PLACE_BLOCKED) continue;
         if (!(u = live_builder(c, b))) return removed;
-        for (node = *(const char* const*)(u + U_ORDERS); node && steps++ < LIST_WALK;
-             node = *(const char* const*)(node + 0x4A)) {
-            unsigned place = flagged, is40 = *(const unsigned*)(node + 0x42) & 0x40000u;
-            if (*(const char* const*)(node + 0x0E) != u) break;
-            if (is40) flagged++;
-            if ((unsigned char)node[4] != c->action[b] ||
-                !within(x, z, *(const int*)(node + 0x22), *(const int*)(node + 0x2A))) continue;
-            if (is40) {
-                if (s_matched[place >> 3] & (1u << (place & 7))) continue;
-                s_matched[place >> 3] |= (unsigned char)(1u << (place & 7));
-            } else found = node;
-            toggled[i] = 1;
-            break;
+        for (exact = 1; exact >= 0 && !toggled[i]; exact--) {
+            unsigned steps = 0, flagged = 0;
+            for (node = *(const char* const*)(u + U_ORDERS); node && steps++ < LIST_WALK;
+                 node = *(const char* const*)(node + 0x4A)) {
+                unsigned place = flagged, is40 = *(const unsigned*)(node + 0x42) & 0x40000u;
+                int nx = *(const int*)(node + 0x22), nz = *(const int*)(node + 0x2A);
+                if (*(const char* const*)(node + 0x0E) != u) break;
+                if (is40) flagged++;
+                if ((unsigned char)node[4] != c->action[b] ||
+                    !(exact ? nx == x && nz == z : within(x, z, nx, nz))) continue;
+                if (is40) {
+                    if (s_matched[place >> 3] & (1u << (place & 7))) continue;
+                    s_matched[place >> 3] |= (unsigned char)(1u << (place & 7));
+                } else found = node;
+                toggled[i] = 1;
+                break;
+            }
         }
         if (found) { ((RemoveOrder)0x00439F80u)((void*)u, found); removed++; }
     }
@@ -639,7 +650,10 @@ static int __cdecl place_button(const int* rec, unsigned msg)
     }
     if (msg != WM_LBUTTONUP || !s_gesture.active) return 0;
     end_gesture();
-    /* Shift released before the button: the gesture is dropped, the building stays armed */
+    /* Shift released before the button: the gesture is dropped, the building stays armed --
+       unless an earlier placement of this Shift hold set main+0x2CC6 bit 5, when 0x4992D8
+       disarms at the first record that finds Shift up, as stock does; that record's handler
+       entry then ends the gesture (handler_entry) */
     if (!key_down(KEY_SHIFT)) return 1;
     /* one site at this release's own cursor: stock's Shift-click, byte for byte -- its toggle,
        its sound, its recorded click (0x4995B3), its 0x20 bit; 0x419670 reads its Shift from
@@ -739,6 +753,23 @@ void tagpu_place_level_end(void)
         s_cListCap = s_cPlanCap = 0;
 }
 
+/* THE IN-PLAY HANDLER'S ENTRY, 0x499200 (IdleTick's per-mode call at 0x499A1C, through
+   main+0x391F5): a record handled in any mode but 14 ends the gesture. In mode 1 the routing
+   skips the route (0x4993BD) and 0x4197D0 is not called, so neither of the other hooks sees a
+   disarm -- a right press (0x499100), Shift up after a Shift placement (0x4992D8), a group
+   recall (0x48D9A0 -> 0x495860) or the order check -- nor the release that follows it. Every
+   disarm is followed by this entry in mode 1 before any re-arm: arming again takes a left click
+   on the build menu, which cannot come while the gesture's own button is held, so the
+   gesture's release (or, over the panel, the next record) is handled in mode 1 first. A
+   before-observer: the handler runs unchanged. */
+static int __cdecl handler_entry(void* entry_esp)
+{
+    const char* ta = *(const char* const*)TA_MAIN_PP;
+    (void)entry_esp;
+    if (s_gesture.active && (!ta || *(const unsigned char*)(ta + M_MODE) != 14)) end_gesture();
+    return 0;
+}
+
 /* THE ROUTE AT 0x4993BF. The click routing's mode != 1 branch, DISASSEMBLED:
        0x4993BF  81 FA 01 02 00 00   cmp edx,0x201        ; edx: the record's message
        0x4993C5  0F 85 ED 01 00 00   jne 0x4995B8         ; the frame: anything but a press
@@ -787,6 +818,8 @@ static int install_route(void)
 void tagpu_place_init(void)
 {
     static const unsigned char build[] = {0x83,0xEC,0x14,0x8B,0x15,0xE8,0x1D,0x51,0x00};
+    /* mov eax,[0x511DE8]; sub esp,0x18 */
+    static const unsigned char handler[] = {0xA1,0xE8,0x1D,0x51,0x00,0x83,0xEC,0x18};
     const unsigned char* call = (const unsigned char*)(uintptr_t)VA_SITE_CALL;
     if (call[0] != 0xE8) {
         tagpu_logf("place: the build cursor's site test (0x4198C6) is not a call; not armed");
@@ -802,11 +835,16 @@ void tagpu_place_init(void)
         tagpu_logf("place: incompatible click routing (0x4993BF); not armed");
         return;
     }
+    if (!tagpu_detour_bytes_ok(VA_HANDLER, handler, sizeof handler) ||
+        !tagpu_detour_observe(VA_HANDLER, handler, sizeof handler, handler_entry, NULL)) {
+        tagpu_logf("place: observer on the in-play handler (0x499200) refused; not armed");
+        return;
+    }
     if (!tagpu_detour_observe(VA_CURSOR, build, sizeof build, cursor_before, cursor_after)) {
         tagpu_logf("place: observer on the build cursor (0x4197D0) refused; not armed");
         return;
     }
     s_armed = 1;
     tagpu_logf("place: armed (build cursor 0x4197D0 observed on return, click route 0x4993BF, "
-               "site test 0x%08X)", (unsigned)(uintptr_t)s_test);
+               "handler entry 0x499200 observed, site test 0x%08X)", (unsigned)(uintptr_t)s_test);
 }

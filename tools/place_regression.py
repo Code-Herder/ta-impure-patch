@@ -134,16 +134,19 @@ TOGGLE = 0x100000    # 0x43AFC0's reach: a same-action order within 16 wu on bot
 def after_commit(before, sites, red, fx, fz, type_id):
     """A builder's build orders after a commit of `sites` (red: the indices skipped), from its
     build orders `before`, each (x, z, type) in chain order. Every site that is not red is the
-    builder's stock Shift-click judged against the queue as it stood before the gesture: the first
-    order within TOGGLE of its position that no earlier site took is removed; a site that removes
+    builder's stock Shift-click judged against the queue as it stood before the gesture: the order
+    at its own position, else the first within TOGGLE of it, that no earlier site took is removed
+    (tagpu_place.c, remove_toggled); a site that removes
     none is appended, in shape order, after every order kept. Returns (orders, appended, removed)."""
     kept, added, removed = list(before), [], 0
     for i, cell in enumerate(sites):
         if i in red:
             continue
         x, z = order_pos(cell, fx, fz)
-        hit = next((j for j, o in enumerate(kept)
-                    if abs(o[0] - x) <= TOGGLE and abs(o[1] - z) <= TOGGLE), None)
+        hit = next((j for j, o in enumerate(kept) if o[0] == x and o[1] == z), None)
+        if hit is None:
+            hit = next((j for j, o in enumerate(kept)
+                        if abs(o[0] - x) <= TOGGLE and abs(o[1] - z) <= TOGGLE), None)
         if hit is None:
             added.append((x, z, type_id))
         else:

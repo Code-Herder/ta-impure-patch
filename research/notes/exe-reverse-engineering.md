@@ -13292,8 +13292,13 @@ and the double click (`0x203`, which Windows sends in place of the second press)
 in `.text` lands on `0x4993BF..0x4993D4` and no absolute reference in the file names an address
 there (an instruction-level scan and a literal scan, 2026-10-25).
 
-**Impure's two hooks** (`tagpu_place.c`, both on the game thread inside this handler, written at
-attach): an after-observer on `0x4197D0`, chained after the resource module's before-observer,
+**Impure's three hooks** (`tagpu_place.c`, all on the game thread inside this handler, written at
+attach): a before-observer on the handler's entry `0x499200` (stolen `A1 E8 1D 51 00 83 EC 18`)
+that ends a gesture whenever a record is handled in a mode other than 14 — in mode 1 the routing
+skips the route (`0x4993BD`) and `0x4197D0` is not called, so neither other hook sees a disarm
+(the right press `0x499100`, Shift up after a Shift placement `0x4992D8`, a group recall
+`0x48D9A0` → `0x495860`, the order check) or the release after it, and re-arming takes a left
+click on the build menu, which cannot come while the gesture's own button is held; an after-observer on `0x4197D0`, chained after the resource module's before-observer,
 which evaluates the gesture once the engine has written the rectangle, the altitude and bit 6
 for the record; and a 12-byte stub over `0x4993BF` (`E9 rel32` and seven `90`, written after all
 22 bytes above match) that asks the module about each press and release and takes one of three

@@ -181,11 +181,14 @@ release with Shift held orders it.
 **What a site does to the queue is TA's Shift-click.** The gesture is the stock Shift-clicks of its
 sites, judged against each builder's queue as it stood before the gesture: a site within 16 world
 units of an order of the builder's own build action takes that order off and adds nothing — the
-first such order, whatever building it is, as the engine's own click does — and every other site
-is appended in the shape's order. Two things differ from clicking each site by hand, by design: a
-site never takes off an order the same gesture added (the engine's inclusive 16 units would make a
-line of 1×1 buildings alternate add and remove), and a ring leaves its taking-off sites out rather
-than ordering them. A site the engine's own test refuses is red and skipped: the module calls the
+order at the site's own position if there is one, else the first such order, whatever building
+it is, as the engine's own click does — and every other site is appended in the shape's order.
+Three things differ from clicking each site by hand, by design: a site never takes off an order
+the same gesture added (the engine's inclusive 16 units would make a line of 1×1 buildings
+alternate add and remove); a site prefers the order at its own position, so that dragging back
+over a queued row of 1×1 buildings takes off every one of them rather than shifting each removal
+by one; and a ring leaves its taking-off sites out rather than ordering them. With Shift released
+mid-drag nothing previews, since the release then orders nothing. A site the engine's own test refuses is red and skipped: the module calls the
 call the build cursor judges its site with, so a gesture's site is refused exactly when a single
 click there would be, queued sites included. One stock *ok* sound plays per gesture that changed a
 queue, and releasing Shift afterwards disarms the building as after a stock Shift-click. A one-site
