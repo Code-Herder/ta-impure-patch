@@ -2031,7 +2031,7 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
        for its items and scrolled, so the scroll bar is drawn; then the proposed features: three
        forks, one watched and the limit reached, the axis past the original's end, the Take over
        button down and the picker open with a row that cannot be taken; then the forks' lanes open,
-       the watched one with its way back. */
+       the watched one with its way back, held. */
     st->W = 1280; st->H = 720; st->panel = 128; st->top = 32; st->bottom = 32; st->px = 1.5f;
     st->t = 30; st->T = 60; st->playing = 1; st->speed = 1; st->hud = 1;
     st->ends = st->len = st->fill_to = 60;
@@ -2068,21 +2068,24 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
         g->v[0] = 1; g->v[1] = 2; g->v[2] = 3;
     }
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->max_hot, "first build", err, errn)) goto done;
-    /* the pointer on the first foot or transport button with a hint, where the first build drew
-       it, the stats window closed so that nothing covers it: the hint layer draws its hint. A
-       layout with no such button fails here, so the hint's rule is always run once at the load. */
+    /* the pointer on the first foot or transport button with a hint that the first build drew
+       enabled -- a disabled one has no clickable, so no hint -- the stats window closed so that
+       nothing covers it: the hint layer draws its hint. A layout with no such button fails here,
+       so the hint's rule is always run once at the load. */
     {
         const TJV* lists[2];
         const char *act = NULL, *ts = NULL;
         float mx = st->mx, my = st->my;
-        int at = -1, k, m, drawn = 0;
+        int at = -1, k, j, m, drawn = 0;
         lists[0] = tj_get(tj_get(tj_get(l->L, "column"), "foot"), "buttons");
         lists[1] = tj_get(tj_get(tj_get(l->L, "dock"), "transport"), "buttons");
-        for (m = 0; m < 2 && !act; m++)
-            for (k = 0; lists[m] && k < lists[m]->n && !act; k++)
-                if ((ts = tj_str(tj_get(tj_at(lists[m], k), "tip"), NULL))) act = tj_str(tj_get(tj_at(lists[m], k), "act"), NULL);
-        for (k = 0; act && k < o->n && at < 0; k++)
-            if (o->op[k].kind == HOP_HOT && !strcmp(o->text + o->op[k].run, act)) at = k;
+        for (m = 0; m < 2 && at < 0; m++)
+            for (k = 0; lists[m] && k < lists[m]->n && at < 0; k++) {
+                ts = tj_str(tj_get(tj_at(lists[m], k), "tip"), NULL);
+                act = tj_str(tj_get(tj_at(lists[m], k), "act"), NULL);
+                for (j = 0; ts && act && j < o->n && at < 0; j++)
+                    if (o->op[j].kind == HOP_HOT && !strcmp(o->text + o->op[j].run, act)) at = j;
+            }
         if (at < 0) {
             snprintf(err, errn, "hudlay: the self-test found no foot or transport button with a hint to point at");
             goto done;
@@ -2136,6 +2139,9 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     st->armed = st->replace = 2;
     strcpy(st->held, "lane:0");
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->max_hot, "lanes build", err, errn)) goto done;
+    /* the watched lane's Back to main recording held: its pressed part */
+    strcpy(st->held, "main");
+    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->max_hot, "held way back's build", err, errn)) goto done;
     /* the live HUD: the button alone, then the strip open with Play from here armed */
     st->H = 720; st->live = 1;
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->live_hot, "live build", err, errn)) goto done;
