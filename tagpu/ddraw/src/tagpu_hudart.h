@@ -11,8 +11,8 @@
    frees it for the life of the process. So any thread may read a HUDART it was given -- the
    render thread draws from it and the game thread hit-tests with it -- without a lock. The
    decoded parts stay for the session because every teardown and resize brings the HUD pass
-   down, and its images are uploaded again from these (22.9 MB of RGBA, MEASURED for the
-   44 parts of 2026-10-08). */
+   down, and its images are uploaded again from these (35.2 MB of RGBA, MEASURED for the
+   66 parts of 2026-10-25, fitted by tools/hudart/fit.py). */
 #include "tagpu_hudlay.h"
 #include "stb_truetype.h"
 

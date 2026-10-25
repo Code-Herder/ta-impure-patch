@@ -196,7 +196,7 @@ HUD unit. The kinds:
 | Kind | Drawn | Fields |
 |---|---|---|
 | `grid` | Composed at its drawn size, its stretch bands taking the change | `design` [w, h] in units; `xs`, `ys`: the stretch bands; `wells`: the measured recesses [x, y, w, h]; `text`: the wells that are text zones on the plate |
-| `nine` | 9-slice: the slice's edges keep their size in units, the middle stretches | `slice` [top, right, bottom, left] in pixels |
+| `nine` | 9-slice: the slice's edges keep their size in units, the middle stretches | `slice` [top, right, bottom, left] in pixels, fractional where `fit.py` resampled the part whole |
 | `tile` | Scaled to its drawn height and repeated along x | |
 | `whole` | Stretched to its box | |
 | `icon` | Whole inside its box, keeping its aspect, centred | |
