@@ -87,6 +87,9 @@ CASES = [
     ("1080-100-hint-bookmark", "res=1920x1080&game=off&hud=100&np=6&nt=1&t=20&stat=0", "bookmark", ""),
     ("1440-75-hint-leave", "res=2560x1440&game=200&hud=75&np=8&nt=2&t=90&stat=0&paused", "leave", ""),
     ("1080-100-hint-delete-watched", "res=1920x1080&game=off&hud=100&np=6&nt=1&t=40&nf=3&lo&tl=2&paused", "delete:2", ""),
+    # a lane's button and a picker row held: their pressed parts, which tools/hudart/fit.py measures by these cases
+    ("4k-150-lane-button-held", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&nf=3&lo&paused", None, "export:0"),
+    ("4k-150-picker-row-held", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&nf=3&pick&paused", None, "takeas:0"),
     # at device scale factor 1, the game's 1.5 pixels a unit: boxes on half pixels, which each side snaps
     ("1080-100-lanes-dpr1", "res=1920x1080&game=150&hud=100&np=4&nt=4&t=70&nf=3&lo&paused", None, "", 1),
     # the live HUD: the rewind button alone, then its strip open

@@ -248,7 +248,7 @@ The owner's decisions:
 
 - **One archive, embedded as a resource.** `tools/hudpak.py` packs `art/hud/` as it is —
   `layout.json`, `kit.json`, `parts/*.png`, `fonts/*.ttf` and the fonts' licence texts — behind
-  a directory, into `inc/tagpu_hudpak.bin` (27.0 MB with the 66 parts of 2026-10-23), which
+  a directory, into `inc/tagpu_hudpak.bin` (11.9 MB with the 66 parts of 2026-10-25), which
   `res.rc` embeds. Every offset is checked against the resource's size before it is read.
 - **The JSON is read at run time, not converted.** `tagpu_json.c` reads the same text the mockup
   reads, and `tagpu_hudlay_load` resolves it into structs once. A field missing or of the wrong
@@ -257,17 +257,20 @@ The owner's decisions:
 - **Decoding is off the frame.** The first frame that has a HUD to draw starts the loader
   (`tagpu_hudart_start`), a thread of its own that decodes the parts, premultiplies them and
   opens the faces, then publishes the result with one interlocked store; the HUD draws nothing
-  until then. MEASURED 2026-10-15, before the picker's re-cut (the kit is 21.2 Mpx since): `hud: loaded 66 parts (21.5 Mpx) and 3 faces in ~830 ms`.
-- **The decoded parts stay for the session**, 85 MB of RGBA. Every teardown and resize brings
+  until then. MEASURED 2026-10-25 on the reference setup, the fitted kit: `hud: loaded 66 parts
+  (8.8 Mpx) and 3 faces in 343 ms`, against 21.2 Mpx in 862 ms for the same build with the parts
+  as cut.
+- **The decoded parts stay for the session**, 35.2 MB of RGBA. Every teardown and resize brings
   the pass down, and its images are uploaded again from these. Nothing writes or frees the
   loaded HUD afterwards, which is why any thread may read it without a lock.
-- **Each part is its own image, with mipmaps.** The parts are painted at 4.2 to 12.5 pixels a unit,
-  mostly about 10, and drawn at 1.1 (1080p, 75 %) to 4.5 (4K, 150 %), so most are minified 2 to 9
-  times. One descriptor set per part is bound per run of quads.
+- **Each part is its own image, with mipmaps.** The parts are drawn at 1.1 (1080p, 75 %) to 4.5
+  (4K, 150 %) pixels a unit and filed at what each needs at 4.5: no more than 0.9 device pixel to a
+  texel there (`tools/hudart/fit.py`; [Replay HUD art](hud-art.md), *How sharp the art is*). One
+  descriptor set per part is bound per run of quads.
 
 ### The uploads
 
-- **The parts go once per build, across frames.** Their level 0 totals 85 MB against a slot's
+- **The parts go once per build, across frames.** Their level 0 totals 35.2 MB against a slot's
   2 MiB staging cap (`TAGPU_VK_STAGE_CAP`, `tagpu_vk_stage.h`), so they take several frames:
   each frame resumes where the last stopped (`s_nsent`), a banded part uses none of a frame's
   room, and the rest go as many as fit it.
@@ -1305,12 +1308,10 @@ the render thread.
 ## Open
 
 - **The HUD font** is not decided; Oswald and Barlow Condensed are the mockup's.
-- **Address space.** The decoded parts stay for the session, 85 MB of a 32-bit process, and
-  the archive stays mapped with the DLL, 27.0 MB. The art loads on the first frame with a HUD
+- **Address space.** The decoded parts stay for the session, 35.2 MB of a 32-bit process, and
+  the archive stays mapped with the DLL, 11.9 MB. The art loads on the first frame with a HUD
   state, which since the live rewind is the first frame of a live recorded skirmish on the Vulkan
-  lane too, not only of a replay. The parts are painted at about twice the
-  4.5 pixels a unit the HUD is drawn at on a 4K screen at 150 %, so most of both is detail no
-  screen up to 4K shows. The owner keeps the full resolution. 20 of the 66 parts (34.4 MB decoded,
-  10.7 MB of the archive) are the `proposed` section's: the Take over button and picker and the
-  forks housing and bay and the fork lanes, and the live rewind's button and strip, all of which
-  the DLL draws.
+  lane too, not only of a replay.
+- **`rail_one` is packed but never drawn.** The DLL draws the housing as `rail_forks` (the
+  `proposed` section, which the game always draws); `rail_one` is the mockup's `prop=0` housing,
+  1.2 MB of the archive and 0.9 Mpx decoded.

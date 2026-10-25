@@ -198,7 +198,7 @@ HUD unit. The kinds:
 | Kind | Drawn | Fields |
 |---|---|---|
 | `grid` | Composed at its drawn size, its stretch bands taking the change | `design` [w, h] in units; `xs`, `ys`: the stretch bands; `wells`: the measured recesses [x, y, w, h]; `text`: the wells that are text zones on the plate |
-| `nine` | 9-slice: the slice's edges keep their size in units, the middle stretches | `slice` [top, right, bottom, left] in pixels |
+| `nine` | 9-slice: the slice's edges keep their size in units, the middle stretches | `slice` [top, right, bottom, left] in pixels, fractional where `fit.py` resampled the part whole |
 | `tile` | Scaled to its drawn height and repeated along x | |
 | `whole` | Stretched to its box | |
 | `icon` | Whole inside its box, keeping its aspect, centred | |
@@ -646,7 +646,7 @@ The rules:
 ## Checking the C against the mockup
 
 `tools/hudart/laycheck.py` opens the mockup headless at its default `prop=1` with two forks
-kept, the game's look, for forty-two cases (4K at 150 with two
+kept, the game's look, for forty-four cases (4K at 150 with two
 teams, 4K at Auto with the list too long, 1080p at 100 with one team, 1440p at 75 with a row
 hovered and a button held, 4K at 150 as a six-player free-for-all, 4K at 150 as a 2v1v1, 4K at
 150 with fourteen players scrolled to item 3 and a toast, 1440p at 75 with the first row hovered
@@ -667,7 +667,9 @@ fall on half pixels, and seven of the live HUD: `4k-150-live` (the rewind button
 `1080-100-live-rw` and `1440-75-live-rw` (its strip open), `1080-100-live-open` (the strip just
 opened, fwd disabled at its end), and the toast clear of the open strip and where it is closed,
 `1080-100-live-rw-toast`, `4k-150-live-rw-toast` (the eviction's warning) and
-`1440-75-live-toast`), and twelve of the way back and the hints: `1080-100-lanes-back` and
+`1440-75-live-toast`), two held for `tools/hudart/fit.py` to measure their pressed parts,
+`4k-150-lane-button-held` (a lane's Export) and `4k-150-picker-row-held` (a picker row), and
+twelve of the way back and the hints: `1080-100-lanes-back` and
 `4k-150-lanes-back-right` (the watched lane's Back to main recording, the second on the lane at the
 track's right end), the pointer on a foot button (`4k-150-hint-stats`, `1440-75-hint-chat`,
 `1080-100-hint-chat`), on the transport (`4k-150-hint-uiscale`, `4k-150-hint-speed`,
@@ -704,8 +706,8 @@ the cases the 1615 parts, 974 solids, 173 dots and 25 clips are each on the same
 DLL, pinned and painted; and on all thirty with the live HUD and every inset edge a ring
 (2026-10-23): 1689 parts, 977 solids, 358 rings (inner edges and sides too), 173 dots and 30
 clips, each on the same pixels in the DLL, pinned and painted, and the pieces of all 1659 parts
-that are not tiled fills, icons and whole parts among them, the same; and on all forty-two with
-the way back and the hints (2026-10-25). A hint case puts the pointer at the control's centre:
+that are not tiled fills, icons and whole parts among them, the same; and on all forty-four with
+the fitted art, the way back and the hints (2026-10-25). A hint case puts the pointer at the control's centre:
 the mockup's hint layer draws for it (`HUD.hint`) and the DLL's build gets it as `mx`, `my`. A halo
 polyline is told from its line by its `stroke-opacity`, which only the halo carries. At 4K every
 box is within 0.018 units and every baseline within 0.0145 (the twenty-two cases, 2026-10-23). The Oswald residual above is named, not failed, and only where the same rule on
