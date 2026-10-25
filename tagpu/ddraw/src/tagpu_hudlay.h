@@ -92,6 +92,8 @@ typedef struct {
     int      nmark;
     HUDMARK  mark[HUD_MAXMARK];
     float    mx, my;                /* the pointer, for the hovered row; < 0: none           */
+    float    px;                    /* the device pixels a unit: the hint's hit test snaps the
+                                       controls' edges at it as the hit map does (hint)      */
     char     held[HUD_KEYLEN];      /* the key of the button held down; "" = none            */
     int      sight, follow;         /* the seat Sight and Follow are set to; < 0: none, the
                                        full map and the free camera                          */
@@ -213,6 +215,11 @@ typedef struct {
     unsigned toast_ms;              /* how long a toast shows                             */
     float    toast_w, toast_max_w;  /* its box's least and most width, units              */
     float    toast_pad;             /* the room each side of its text, units              */
+    /* a button's hint (layout.json `tip`): its box's height, the room each side of its text, its
+       gap above the button and its hold inside the screen's edges, units; its fill and edge */
+    float    tip_h, tip_pad, tip_gap, tip_margin, tip_alpha, tip_edge;
+    uint32_t tip_rgb, tip_edge_rgb;
+    int      tip_style;             /* its text's style, an index into `style`            */
     float    live_clear;            /* from the top bar's lower edge to the first row clear of
                                        the live strip, its gap under it as over it: units     */
     float dim_brightness, dim_saturate;

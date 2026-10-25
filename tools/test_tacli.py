@@ -373,6 +373,27 @@ class Batching(unittest.TestCase):
                          ["dwheel:1,2,64", "dwheel:1,2,64", "dwheel:1,2,22"])
         self.assertEqual(tacli._dwheel_tokens(1, 2, -128), ["dwheel:1,2,-64"] * 2)
         self.assertEqual(tacli._dwheel_tokens(1, 2, -3), ["dwheel:1,2,-3"])
+
+
+class HudSpot(unittest.TestCase):
+    """Where `tacli hud click` aims: a pixel of the control's rect where the hit map, topmost
+    first, finds the control itself."""
+    LANE = {"key": "lane:1", "r": [100, 50, 140, 62]}
+
+    def spot(self, *over):
+        return tacli._hud_spot({"hits": {"at": [*over, self.LANE]}}, "lane:1", self.LANE["r"])
+
+    def test_an_uncovered_centre_is_the_spot(self):
+        self.assertEqual(self.spot(), (120, 56))
+
+    def test_a_covered_centre_gives_the_nearest_uncovered_ring(self):
+        back = {"key": "main", "r": [110, 50, 125, 62]}     # the lane's centre column, whole height
+        x, y = self.spot(back)
+        self.assertEqual((x, y), (125, 56))
+        self.assertFalse(110 <= x < 125)
+
+    def test_a_control_covered_everywhere_has_no_spot(self):
+        self.assertIsNone(self.spot({"key": "toast", "r": [90, 40, 150, 70]}))
         self.assertEqual(tacli._dwheel_tokens(1, 2, 0), ["dwheel:1,2,0"])
 
     def test_events_are_counted_as_the_dll_parses_them(self):

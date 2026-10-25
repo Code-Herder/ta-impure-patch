@@ -30,3 +30,6 @@ art/ui/*
 # The replay HUD's painted parts, lossless: painted for Impure from our whiteboxes and cut by
 # tools/hudart/ (research/notes/hud-art.md); the mockup draws them, the DLL is to bake them
 art/hud/*
+
+# The same parts at the resolution they were cut at, which tools/hudart/fit.py fits into art/hud/
+art/hud-full/*

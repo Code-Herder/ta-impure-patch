@@ -76,6 +76,8 @@ const save = () => { try { localStorage.setItem('hud-mockup', JSON.stringify({ h
   for (const k of ['prop', 'nf', 'tl']) if (q.get(k)) S[k] = +q.get(k);
   if (q.has('pick')) S.pick = true; if (q.has('lo')) S.lo = true; if (q.get('mode')) S.mode = q.get('mode'); if (q.has('rw')) S.rw = true;
   if (q.has('sx')) S.sw = { x: +q.get('sx'), y: +(q.get('sy') || 0) }; }
+// parts=hud-full: the kit and parts of art/hud-full/, the full resolution tools/hudart/fit.py measures
+const PARTS = new URLSearchParams(location.search).get('parts') === 'hud-full' ? 'hud-full' : 'hud';
 
 /* ---- the game's own state: state=<url> loads what the game dumped (tagpu_replayhud.dump, tagpu_hudstate.c) -- the screen,
    the engine frame's scale and the HUD's state in units -- and draws that instead of the made-up game below, still ---- */
@@ -191,7 +193,10 @@ function state() {
     stats: { open: S.stat, x: sw.x, y: sw.y, measure: m.k, split: byTeam ? 'team' : 'player', groups, dt: DT, t0: 0 }, ...prop };
 }
 const px = () => unit() * (window.devicePixelRatio || 1);
-function build() { HUD.draw(layer, state(), px()); }
+// the pointer in units from the screen's top left, for the hint layer, which every build draws again; null off the HUD
+let ptr = null;
+const hintAt = () => HUD.hint(layer, ptr && ptr.x, ptr && ptr.y, { W: parseFloat(stage.style.width) / unit() });
+function build() { HUD.draw(layer, state(), px()); hintAt(); }
 
 /* ---- the backdrop: a 1280 x 720 replay frame from our renderer, whose own side panel is 128 pixels and bars 32, recut so that
    the panel and bars are drawn at the engine's magnification and the world fills what they leave. Past the bars' first
@@ -245,6 +250,9 @@ layer.addEventListener('pointerdown', e => {
     drag = { x: e.clientX, y: e.clientY, ox: Math.max(0, Math.min(s.W - W.w, s.stats.x)), oy: Math.max(0, Math.min(s.H - W.h, s.stats.y)) }; e.target.setPointerCapture(e.pointerId); }
 });
 layer.addEventListener('pointermove', e => {
+  const r = layer.getBoundingClientRect(), u = unit();
+  ptr = { x: (e.clientX - r.left) / u, y: (e.clientY - r.top) / u };
+  hintAt();
   if (seek) seekTo(seek, e.clientX);
   if (drag) {
     const u = unit(), st = state(), W = HUD.layout.window, win = $('#statwin');
@@ -252,6 +260,7 @@ layer.addEventListener('pointermove', e => {
     win.style.setProperty('--x', S.sw.x); win.style.setProperty('--y', S.sw.y); HUD.pin(layer);
   }
 });
+layer.addEventListener('pointerleave', () => { ptr = null; hintAt(); });
 window.addEventListener('pointerup', () => { if (drag) save(); seek = drag = null; });
 // the wheel over the column scrolls it an item a notch
 layer.addEventListener('wheel', e => {
@@ -275,7 +284,9 @@ layer.addEventListener('click', e => {
       const f = { seat: p.i, from: Math.round(S.t), len: 45, id: Math.max(0, ...S.forks.map(f => f.id)) + 1, seen: ++seen, parent: own ? own.id : 0 };
       S.forks.push(f); S.pick = false; S.tl = forkList().indexOf(f);
       toast(`Taking over ${p.name} at ${clock(f.from)}`); break; }
-    case 'lane': { const k = +a.dataset.fork; S.tl = S.tl === k ? -1 : k; if (S.tl >= 0) watched().seen = ++seen; S.t = Math.min(S.t, tlEnd()); S.armed = -1; break; }
+    // the watched lane stays watched and asks nothing, as in game: its Back to main recording button is the way back
+    case 'lane': { const k = +a.dataset.fork; S.armed = -1; if (S.tl === k) break; S.tl = k; watched().seen = ++seen; S.t = Math.min(S.t, tlEnd()); break; }
+    case 'main': S.tl = -1; S.armed = -1; S.t = Math.min(S.t, tlEnd()); break;
     case 'export': toast(`F${forkList()[+a.dataset.fork].id} saved as a replay of its own`); break;
     case 'delete': { const k = +a.dataset.fork, f = forkList()[k];
       if (S.armed !== k) { S.armed = k; toast(`Click again to delete F${f.id}`); break; }
@@ -325,7 +336,7 @@ window.addEventListener('resize', resize);
 document.addEventListener('keydown', e => { if (e.key === ' ' && e.target === document.body) { e.preventDefault(); S.playing = !S.playing; build(); } });
 // the faces are loaded before the first layout, so no text is measured in a fallback
 const FACES = ['500 10px Oswald', '700 10px Oswald', '600 10px "Barlow Condensed"'].map(f => document.fonts.load(f));
-Promise.all([HUD.load('../../../art/hud/'), GAME_URL ? fetch(GAME_URL).then(r => r.json()) : null, ...FACES]).then(([, g]) => {
+Promise.all([HUD.load('../../../art/hud/', `../../../art/${PARTS}/`), GAME_URL ? fetch(GAME_URL).then(r => r.json()) : null, ...FACES]).then(([, g]) => {
   if (g) { GAME = g; S.res = `${g.device.W}x${g.device.H}`; S.hud = g.state.hud; S.playing = false; }
   resize(); requestAnimationFrame(frame); })
   .catch(err => { layer.innerHTML = `<p class="err" style="padding:16px">Could not load art/hud/: ${err}. Serve the repository root over HTTP and open /tools/hudart/mockup/.</p>`; });

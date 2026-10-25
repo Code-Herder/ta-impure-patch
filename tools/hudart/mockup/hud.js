@@ -13,9 +13,11 @@ const HUD = (() => {
   let L, K, root;
   const IMG = {}, cache = {};
 
-  async function load(base) {
-    root = base;
-    [L, K] = await Promise.all([fetch(base + 'layout.json').then(r => r.json()), fetch(base + 'kit.json').then(r => r.json()).then(j => j.parts)]);
+  // the layout from `base`, the kit and its parts from `parts`: art/hud/ for both but in tools/hudart/fit.py, which
+  // measures the full-resolution parts of art/hud-full/
+  async function load(base, parts = base) {
+    root = parts;
+    [L, K] = await Promise.all([fetch(base + 'layout.json').then(r => r.json()), fetch(parts + 'kit.json').then(r => r.json()).then(j => j.parts)]);
     await Promise.all(Object.keys(K).map(n => {
       const im = new Image(); im.src = url(n); IMG[n] = im; return im.decode();
     }));
@@ -143,14 +145,16 @@ const HUD = (() => {
   const clock = t => { t = Math.max(0, Math.round(t)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
   const zero = (w, h) => ({ x: 0, y: 0, w, h });
 
-  // a button: its part, pressed while held (and while on, for a toggle), its icon and text placed on its face
+  // a button: its part, pressed while held (and while on, for a toggle), its icon and text placed on its face; one with
+  // a hint (spec.tip) carries it for the hint layer (`hint`) and draws none itself
   function button(spec, kind, b, st, on) {
     const F = frame(b.w, b.h);
     let inner = '';
     if (spec.icon) { const n = spec.icon.playing && st.playing ? spec.icon.playing : spec.icon.name; inner += icon(n, place(F, spec.icon), 'face'); }
     if (spec.text) inner += text(spec.text.html, place(F, spec.text), spec.text.style, { ...spec.text, face: true });
     return art(on ? kind.pressed : kind.part, b, inner, `hot${on ? ' pressed' : ''}${spec.off ? ' off' : ''}`,
-      { act: spec.act, up: kind.part, down: kind.pressed, ...(on ? { on: 1 } : {}), ...(spec.data || {}) }, spec.off ? `;opacity:${spec.off}` : '');
+      { act: spec.act, up: kind.part, down: kind.pressed, ...(on ? { on: 1 } : {}), ...(spec.data || {}), ...(spec.tip ? { tip: spec.tip } : {}) },
+      spec.off ? `;opacity:${spec.off}` : '');
   }
 
   /* ---- the dock: the transport plate from the side panel's edge, the timeline housing to the screen's right ---- */
@@ -203,8 +207,8 @@ const HUD = (() => {
      lane's branch says where its history before the branch is: a fork whose parent is a lane drawn above it rises to
      that lane; every other fork, of the replay or of a deleted fork, drops to the track. The parent is always above,
      since a fork branches after its parent does; the line is held to the parent's lane, which a lane clamped at the
-     track's right end may not reach. Clicking a lane watches that timeline, clicking the watched one goes back to the
-     replay. At the fork limit, while the picker is open, the lane a take-over would replace is outlined (st.replace).
+     track's right end may not reach. Clicking a lane watches that timeline; the watched one carries a Back to main recording button, the way
+     back to the replay, and clicking the watched lane itself keeps it. At the fork limit, while the picker is open, the lane a take-over would replace is outlined (st.replace).
      The lanes show only while the Forks bay is open (st.lanesOpen). The game draws them by the same rules
      (tagpu_hudlay.c, lanes). g: the housing's box and its track's span, in units ---- */
   /* the Forks bay at the housing's left end opens and closes the lanes and counts the forks; it sits in the pocket
@@ -228,20 +232,25 @@ const HUD = (() => {
     let h = art(P.plate.part, { x: g.x, y: py, w: g.w, h: ph }, '', '', { act: 'dock' }), lines = '';
     const span = [];
     st.forks.forEach((f, k) => {
-      const ly = py + pad[1] + k * (Ln.h + Ln.gap), bx = X(f.from);
-      let x0 = bx, x1 = Math.max(X(f.end), bx + Ln.min_w);
+      const ly = py + pad[1] + k * (Ln.h + Ln.gap), bx = X(f.from), on = st.timeline === k;
+      // the watched lane carries the way back to the main recording, a button before its others as wide as its label,
+      // in its own wide part: the square lane button drawn six times its width stretches its highlight into a streak
+      const Bk = Bt.back, bkw = on ? textWidth(Bk.label, Ln.label.style) + 2 * Bk.pad : 0, bkx = on ? bkw + Bt.gap : 0;
+      let x0 = bx, x1 = Math.max(X(f.end), bx + Ln.min_w + bkx);
       if (x1 > hi) { x0 = Math.max(lo, x0 - (x1 - hi)); x1 = hi; }
       span.push([x0, x1, ly]);
-      const w = x1 - x0, on = st.timeline === k, F = frame(w, Ln.h), nb = Bt.items.length;
-      const bw = Bt.w, btx = w - Bt.pad - nb * bw - (nb - 1) * Bt.gap;
+      const w = x1 - x0, F = frame(w, Ln.h), nb = Bt.items.length;
+      const bw = Bt.w, btx = w - Bt.pad - nb * bw - (nb - 1) * Bt.gap - bkx;
       const fp = Ln.fill.pad, fw = w - fp[0] - fp[2], fx = bx - x0;
       // the watched lane fills to the playhead, a lane before it on the chain to where the next one on the chain branches off it
       const next = on ? null : st.forks.find(q => q.chain && q.parent === f.id), stop = next ? X(next.from) : X(f.end);
       let inner = on || f.chain ? `<div class="clip" data-lanefill="${bx} ${stop}" style="${frect({ x: fp[0] + fx, y: fp[1], w: Math.max(0, Math.min(X(st.t), stop) - bx), h: Ln.h - fp[1] - fp[3] })}">`
         + art(Ln.fill.part, zero(fw, Ln.h - fp[1] - fp[3])) + `</div>` : '';
       inner += text(`F${f.id} · ${esc(f.name)} from ${clock(f.from)}`, place(F, { pad: [fx + Ln.label.pad[0], 0, w - btx + Ln.label.pad[0], 0] }), Ln.label.style, Ln.label);
-      inner += Bt.items.map((it, j) => button({ act: it.act, icon: { name: it.icon, padf: Bt.icon.padf }, data: { fork: k } }, Bt,
-        { x: btx + j * (bw + Bt.gap), y: Bt.pad, w: bw, h: Ln.h - 2 * Bt.pad }, st, st.armed === k && it.act === 'delete')).join('');
+      if (on) inner += button({ act: Bk.act, text: { html: esc(Bk.label), style: Ln.label.style, align: 'c' } }, Bk,
+        { x: btx, y: Bt.pad, w: bkw, h: Ln.h - 2 * Bt.pad }, st, false);
+      inner += Bt.items.map((it, j) => button({ act: it.act, tip: it.tip, icon: { name: it.icon, padf: Bt.icon.padf }, data: { fork: k } }, Bt,
+        { x: btx + bkx + j * (bw + Bt.gap), y: Bt.pad, w: bw, h: Ln.h - 2 * Bt.pad }, st, st.armed === k && it.act === 'delete')).join('');
       h += art(on ? Ln.pressed : Ln.part, { x: x0, y: ly, w, h: Ln.h }, inner, `hot${on ? ' pressed' : ''}`, { act: 'lane', fork: k, up: Ln.part, down: Ln.pressed, ...(on ? { on: 1 } : {}) });
       if (st.replace === k) { const R = P.replace;
         h += ring({ x: x0 - R.width, y: ly - R.width, w: w + 2 * R.width, h: Ln.h + 2 * R.width }, R.width, R.colour); }
@@ -747,9 +756,39 @@ const HUD = (() => {
   function draw(el, st, px) {
     cssUnit = parseFloat(getComputedStyle(el).getPropertyValue('--u')) || 1;
     el.style.setProperty('--press', L.press_shift);
+    hintOn = null;
     el.innerHTML = (st.live ? live(st) : dock(st) + column(st) + (st.stats.open ? windowHtml(st) : '') + (st.forks && st.picker ? picker(st) : ''))
       + (st.toast ? toast(st) : '');
     compose(el, px);
+  }
+  /* THE HINT LAYER: drawn last, over everything the HUD draws, the toast included, and gone with the next draw. It
+     shows the hint of the control the pointer is on -- the topmost enabled control holding (x, y), in units from the
+     screen's top left, as the game's hit test finds it: the pointer's device pixel against each box's edges snapped
+     to device pixels (snapPx), so a control drawn over a button hides its hint as it takes its click -- when that
+     control carries one (data-tip). The hint is its text in a dark box `tip.gap` above the button, centred on it,
+     held `tip.margin` inside the screen's left and right edges and as wide as the text and `tip.pad` each side.
+     tagpu_hudlay.c `hint` draws it by the same rules */
+  let hintOn = null;    // the control the hint drawn is for; reset by every draw
+  function hint(el, x, y, st) {
+    let on = null;
+    if (x != null) {
+      const px = layerPx, X = Math.floor(x * px + 0.5), Y = Math.floor(y * px + 0.5);
+      for (const e of el.querySelectorAll('[data-act]:not(.off), [data-track]')) {
+        const [bx, by, bw, bh] = (e.dataset.ub || '').split(' ').map(Number);
+        if (X >= snapPx(bx * px) && X < snapPx((bx + bw) * px) && Y >= snapPx(by * px) && Y < snapPx((by + bh) * px)) on = e;
+      }
+    }
+    if (on && !on.dataset.tip) on = null;
+    if (on === hintOn) return;
+    hintOn = on;
+    el.querySelectorAll(':scope > .hint').forEach(e => e.remove());
+    if (!on) return;
+    const [bx, by, bw] = on.dataset.ub.split(' ').map(Number), s = on.dataset.tip;
+    const Tp = L.tip, w = textWidth(s, Tp.style) + 2 * Tp.pad, n = parseInt(Tp.bg.slice(1), 16);
+    const b = { x: Math.min(Math.max(bx + (bw - w) / 2, Tp.margin), st.W - Tp.margin - w), y: by - Tp.gap - Tp.h, w, h: Tp.h };
+    el.insertAdjacentHTML('beforeend', `<div class="box hint" style="${rect(b)};background:rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${Tp.alpha});pointer-events:none">`
+      + ring(zero(w, Tp.h), Tp.edge, Tp.edge_colour) + text(esc(s), zero(w, Tp.h), Tp.style, { align: 'c' }) + `</div>`);
+    pin(el);
   }
   // what moves while the replay plays, without rebuilding: the fill, the playhead, the clocks and the chart
   function tick(el, st) {
@@ -766,5 +805,5 @@ const HUD = (() => {
     el.querySelectorAll('[data-chart]').forEach(e => { const [w, h, R] = e.dataset.chart.split(' ').map(Number); e.innerHTML = chart(st, w, h, R); });
     pin(el);
   }
-  return { load, draw, tick, press, pin, get layout() { return L; } };
+  return { load, draw, tick, press, pin, hint, get layout() { return L; } };
 })();

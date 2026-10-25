@@ -41,6 +41,8 @@ typedef struct {
     unsigned        flags;      /* given to every op: HOPF_DIM inside an out player's row */
     uint8_t         grp;        /* given to every op: the group it is drawn in, 0 none      */
     int             top;        /* every op is the top layer's (HOPF_TOP)                     */
+    int             ntip;       /* the controls with a hint, by their HOP_HOT op (hint)       */
+    struct { int op; const char* s; } tip[HUD_MAXHOT];
 } C;
 
 /* ---- reading the layout ---------------------------------------------------------------------- */
@@ -432,15 +434,44 @@ const char* tagpu_hudlay_toggle_name(unsigned bit)
 }
 
 /* a button: its part, pressed while held (and while on, for a toggle), its icon and text placed
-   on its face, which sinks by press_shift while pressed */
+   on its face, which sinks by press_shift while pressed; one with a hint names it for the hint
+   layer (hint) and draws none itself */
 typedef struct {
     const char* key;
     const TJV*  icon;       /* {name | playing, pad, w, h, ax, padf} or NULL */
     const char* icon_name;  /* overrides icon.name */
     const TJV*  textspec;   /* {style, pad, align} or NULL */
     const char* text;
+    const char* style;      /* with no textspec: `text` over the whole face, centred, in this style */
+    const char* tip;        /* its hint, or NULL */
     double      off;        /* 0: enabled; else the opacity of a disabled control */
 } BTN;
+
+/* the width of `s` in style `style` at the style's size, by the layout's measure; 0 until it is
+   given one (tagpu_hudlay_measure), so a box sized to its text keeps only its padding */
+static double text_w(C* c, const char* style, const char* s)
+{
+    int si = style_index(c->l, style);
+    return c->l->measure && si >= 0 ? c->l->measure(c->l->mctx, si, c->l->g.style[si].size, s) : 0;
+}
+
+/* A button's hint: its text in a dark box `tip.gap` above the button b, centred on it and held
+   `tip.margin` inside the screen's left and right edges, as wide as the text and `tip.pad` each
+   side. It takes no click, so the hit map is the controls' alone. */
+static void tip(C* c, const char* s, R b)
+{
+    const HUDGLOBALS* g = &c->l->g;
+    const char* style = g->style[g->tip_style].name;
+    double h = g->tip_h, m = g->tip_margin, w = text_w(c, style, s) + 2 * g->tip_pad;
+    double x = fmin(fmax(b.x + (b.w - w) / 2, m), c->st->W - m - w);
+    R t = box(x, b.y - g->tip_gap - h, w, h);
+    PL p;
+    solid(c, t, g->tip_rgb, g->tip_alpha);
+    ring(c, t, g->tip_edge, g->tip_edge_rgb, 1);
+    memset(&p, 0, sizeof p);
+    p.centre = 1;
+    text(c, s, t, style, &p, 0, 0);
+}
 
 static void button(C* c, const BTN* s, const TJV* kind, R b, int on)
 {
@@ -449,7 +480,17 @@ static void button(C* c, const BTN* s, const TJV* kind, R b, int on)
     double dy = pressed ? c->l->g.press_shift : 0;
     if (s->off) group_begin(c, s->off);
     art(c, str(c, kind, pressed ? "pressed" : "part"), b, 1);
-    if (!s->off) hot(c, b, s->key);
+    if (!s->off) {
+        /* the hint is the control's: one a disabled button has no click for has none either.
+           c->tip has a slot for every HOP_HOT op a build can make (tagpu_hudlay_max_hot). */
+        int at0 = c->o->n;
+        hot(c, b, s->key);
+        if (s->tip && c->o->n > at0 && c->ntip < HUD_MAXHOT) {
+            c->tip[c->ntip].op = at0;
+            c->tip[c->ntip].s = s->tip;
+            c->ntip++;
+        }
+    }
     if (s->icon) {
         PL p = spec(s->icon);
         const char* n = s->icon_name ? s->icon_name
@@ -460,6 +501,11 @@ static void button(C* c, const BTN* s, const TJV* kind, R b, int on)
     if (s->textspec) {
         PL p = spec(s->textspec);
         text(c, s->text, at(place(c, &f, &p), b.x, b.y), str(c, s->textspec, "style"), &p, 0, dy);
+    } else if (s->style) {
+        PL p;
+        memset(&p, 0, sizeof p);
+        p.centre = 1;
+        text(c, s->text, b, s->style, &p, 0, dy);
     }
     if (s->off) group_end(c);
 }
@@ -507,6 +553,7 @@ static void dock(C* c)
         memset(&b, 0, sizeof b);
         b.key = str(c, s, "act");
         b.icon = tj_get(s, "icon");
+        b.tip = tj_str(tj_get(s, "tip"), NULL);
         if (ts) {
             const char* bind = str(c, ts, "bind");
             b.textspec = ts;
@@ -622,6 +669,7 @@ static void lanes(C* c, R g, R tr, double ends)
     const HUDSTATE* st = c->st;
     const TJV *P = obj(c, obj(c, c->L, "proposed"), "forks"), *Pl = obj(c, P, "plate"), *Ln = obj(c, P, "lane");
     const TJV *Bt = obj(c, Ln, "buttons"), *items = arr(c, Bt, "items"), *Lb = obj(c, Ln, "label"), *Fl = obj(c, Ln, "fill");
+    const TJV* Bk = obj(c, Bt, "back");
     const TJV *Br = obj(c, P, "branch"), *Hd = obj(c, P, "playhead"), *Rp = obj(c, P, "replace");
     const TJV *pad = arr(c, Pl, "pad"), *fp = arr(c, Fl, "pad"), *lp = arr(c, Lb, "pad");
     int n = st->nfork < HUD_MAXFORK ? st->nfork : HUD_MAXFORK, nb = items ? items->n : 0, k, j;
@@ -639,14 +687,20 @@ static void lanes(C* c, R g, R tr, double ends)
     art(c, str(c, Pl, "part"), box(g.x, py, g.w, H - num(c, Pl, "gap")), 1);
     for (k = 0; k < n; k++) {
         const HUDFORK* f = &st->fork[k];
-        double ly = py + tj_num(tj_at(pad, 1), 0) + k * (lh + lg), bx = X(f->from), x0 = bx, x1 = fmax(X(f->end), bx + min_w);
-        double w, btx, fx;
         int on = st->timeline == k, pressed;
+        /* the watched lane carries the way back to the main recording: a button before its others,
+           as wide as its label, by which the lane widens to keep its minimum, in its own wide part
+           (back.part): the square lane button drawn six times its width stretches its highlight
+           into a streak */
+        const char* bkl = on ? str(c, Bk, "label") : "";
+        double bkw = on ? text_w(c, str(c, Lb, "style"), bkl) + 2 * num(c, Bk, "pad") : 0, bkx = on ? bkw + bg : 0;
+        double ly = py + tj_num(tj_at(pad, 1), 0) + k * (lh + lg), bx = X(f->from), x0 = bx, x1 = fmax(X(f->end), bx + min_w + bkx);
+        double w, btx, fx;
         R lb;
         PL p;
         if (x1 > hi) { x0 = fmax(lo, x0 - (x1 - hi)); x1 = hi; }
         w = x1 - x0;
-        btx = w - bp - nb * bw - (nb - 1) * bg;
+        btx = w - bp - nb * bw - (nb - 1) * bg - bkx;
         fx = bx - x0;
         x0s[k] = x0; x1s[k] = x1; lys[k] = ly; bxs[k] = bx;
         lb = box(x0, ly, w, lh);
@@ -676,6 +730,14 @@ static void lanes(C* c, R g, R tr, double ends)
             F lf = frame(c->l, w, lh, NULL);
             text(c, s, at(place(c, &lf, &p), x0, ly), str(c, Lb, "style"), &ls, 0, 0);
         }
+        if (on) {
+            BTN b;
+            memset(&b, 0, sizeof b);
+            b.key = str(c, Bk, "act");
+            b.text = bkl;
+            b.style = str(c, Lb, "style");
+            button(c, &b, Bk, box(x0 + btx, ly + bp, bkw, lh - 2 * bp), 0);
+        }
         for (j = 0; j < nb; j++) {
             const TJV* it = tj_at(items, j);
             const char* act = str(c, it, "act");
@@ -686,7 +748,8 @@ static void lanes(C* c, R g, R tr, double ends)
             b.key = bk;
             b.icon = obj(c, Bt, "icon");
             b.icon_name = str(c, it, "icon");
-            button(c, &b, Bt, box(x0 + btx + j * (bw + bg), ly + bp, bw, lh - 2 * bp), st->armed == k && !strcmp(act, "delete"));
+            b.tip = tj_str(tj_get(it, "tip"), NULL);
+            button(c, &b, Bt, box(x0 + btx + bkx + j * (bw + bg), ly + bp, bw, lh - 2 * bp), st->armed == k && !strcmp(act, "delete"));
         }
         /* the lane a takeover would replace: outlined round its box (hud.js, an inset box-shadow) */
         if (st->replace == k) ring(c, box(x0 - rpw, ly - rpw, w + 2 * rpw, lh + 2 * rpw), rpw, hexrgb(str(c, Rp, "colour")), 1);
@@ -964,6 +1027,7 @@ static void column(C* c)
             memset(&b, 0, sizeof b);
             b.key = str(c, s, "act");
             b.icon = tj_get(s, "icon");
+            b.tip = tj_str(tj_get(s, "tip"), NULL);
             b.off = tj_num(tj_get(s, "off"), 0);
             memset(&p, 0, sizeof p);
             pl_in(&p, tj_get(s, "in"));
@@ -1547,6 +1611,42 @@ static void toast(C* c)
     c->top = 0;
 }
 
+/* ---- THE HINT LAYER (hud.js `hint`): the last thing a build draws, over everything the HUD draws,
+   the toast included, so no control or window drawn after a button can cover its hint. It is the
+   hint of the control the pointer is on, when that control has one: a control drawn over a button
+   hides its hint as it takes its click. Over the toast because the hint answers where the pointer
+   is now, beside the button it names, and is gone with the pointer; the toast is centred
+   `toast.top` down the screen and names something done. On the live HUD it is the top layer, as
+   the toast is there.
+   THE CONTROL IS THE HIT MAP'S, by construction: the topmost HOP_HOT op holding the pointer, the
+   top layer's first and then the rest, last first, as tagpu_hudstate_drawn orders the map, each
+   box's edges the device pixels the map gives it -- tagpu_hud_snap and tagpu_hud_edge of the same
+   float products at `px` -- and the pointer the device pixel it came from, (mx, my) x px rounded
+   to the nearest whole one. So on a control's edge pixel the hint and a click name the same
+   control. ---- */
+
+static void hint(C* c)
+{
+    const HUDSTATE* st = c->st;
+    const double X = floor((double)st->mx * st->px + 0.5), Y = floor((double)st->my * st->px + 0.5);
+    int top, i, j;
+    for (top = 1; top >= 0; top--)
+        for (i = c->o->n - 1; i >= 0; i--) {
+            const HUDOP* p = &c->o->op[i];
+            if (p->kind != HOP_HOT || ((p->flags & HOPF_TOP) != 0) != top) continue;
+            if (!(X >= tagpu_hud_snap(p->r.x * st->px) && X < tagpu_hud_edge(p->r.x, p->r.w, st->px) &&
+                  Y >= tagpu_hud_snap(p->r.y * st->px) && Y < tagpu_hud_edge(p->r.y, p->r.h, st->px))) continue;
+            for (j = 0; j < c->ntip && c->tip[j].op != i; j++) {}
+            if (j < c->ntip) {
+                R b = box(p->r.x, p->r.y, p->r.w, p->r.h);
+                c->top = st->live;
+                tip(c, c->tip[j].s, b);
+                c->top = 0;
+            }
+            return;
+        }
+}
+
 /* ---- the entry points ------------------------------------------------------------------------- */
 
 int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* err, size_t errn)
@@ -1567,6 +1667,7 @@ int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* e
         if (st->picker) picker(&c);
     }
     if (st->toast[0]) toast(&c);
+    hint(&c);
     return !c.bad;
 }
 
@@ -1796,6 +1897,15 @@ static int load_globals(HUDLAY* l, char* err, size_t errn)
     l->g.toast_w = (float)num(&c, v, "w");
     l->g.toast_max_w = (float)num(&c, v, "max_w");
     l->g.toast_pad = (float)num(&c, v, "pad");
+    v = obj(&c, l->L, "tip");
+    l->g.tip_h = (float)num(&c, v, "h");
+    l->g.tip_pad = (float)num(&c, v, "pad");
+    l->g.tip_gap = (float)num(&c, v, "gap");
+    l->g.tip_margin = (float)num(&c, v, "margin");
+    l->g.tip_alpha = (float)num(&c, v, "alpha");
+    l->g.tip_edge = (float)num(&c, v, "edge");
+    l->g.tip_rgb = hexrgb(str(&c, v, "bg"));
+    l->g.tip_edge_rgb = hexrgb(str(&c, v, "edge_colour"));
     v = obj(&c, obj(&c, obj(&c, l->L, "proposed"), "live"), "strip");
     l->g.live_clear = (float)(2 * num(&c, v, "t") + num(&c, v, "h"));
     v = arr(&c, obj(&c, l->L, "chart"), "teams");
@@ -1828,6 +1938,10 @@ static int load_globals(HUDLAY* l, char* err, size_t errn)
             for (i = 0; i < 4; i++) y->ol[i] = (float)tj_num(tj_at(v, i), 0);
         } else
             y->shadow = (float)num(&c, s, "shadow");
+    }
+    if (!c.bad) {
+        const char* ts = str(&c, obj(&c, l->L, "tip"), "style");
+        if ((l->g.tip_style = style_index(l, ts)) < 0) { snprintf(err, errn, "layout: tip.style '%s' is no style", ts); return 0; }
     }
     return !c.bad;
 }
@@ -1867,9 +1981,9 @@ static int max_hot(HUDLAY* l, char* err, size_t errn)
         if (tj_is(tj_get(tr, "split"), TJ_TRUE) && sp) n += sp->n;
     }
     n += 1 + HUD_MAXSEAT;                                       /* picker(): the plate, a row a seat */
-    /* lanes(): the plate, and for each fork a lane and its buttons */
+    /* lanes(): the plate, for each fork a lane and its buttons, and the watched one's way back */
     if ((v = arr(&c, obj(&c, obj(&c, obj(&c, obj(&c, l->L, "proposed"), "forks"), "lane"), "buttons"), "items")))
-        n += 1 + HUD_MAXFORK * (1 + v->n);
+        n += 1 + HUD_MAXFORK * (1 + v->n) + 1;
     /* live(): the button, the strip's plate, its transport, its track and its actions; a build
        is one HUD or the other, so the bound is the larger */
     Ls = obj(&c, obj(&c, obj(&c, l->L, "proposed"), "live"), "strip");
@@ -1912,12 +2026,13 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     }
 
     /* Every branch once: teams with headers, a folded team, a lost commander, a player out of
-       the game, each marker kind, a hovered row with Sight on, a held button, every toggle, a
-       toast, the stats window with a dark line and a commander's cross, and a column too short
+       the game, each marker kind, a hovered row with Sight on, a hovered foot button's hint, a
+       held button, every toggle, a toast, the stats window with a dark line and a commander's cross, and a column too short
        for its items and scrolled, so the scroll bar is drawn; then the proposed features: three
        forks, one watched and the limit reached, the axis past the original's end, the Take over
-       button down and the picker open with a row that cannot be taken; then the forks' lanes open. */
-    st->W = 1280; st->H = 720; st->panel = 128; st->top = 32; st->bottom = 32;
+       button down and the picker open with a row that cannot be taken; then the forks' lanes open,
+       the watched one with its way back, held. */
+    st->W = 1280; st->H = 720; st->panel = 128; st->top = 32; st->bottom = 32; st->px = 1.5f;
     st->t = 30; st->T = 60; st->playing = 1; st->speed = 1; st->hud = 1;
     st->ends = st->len = st->fill_to = 60;
     st->fork_max = HUD_MAXFORK;
@@ -1953,6 +2068,38 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
         g->v[0] = 1; g->v[1] = 2; g->v[2] = 3;
     }
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->max_hot, "first build", err, errn)) goto done;
+    /* the pointer on the first foot or transport button with a hint that the first build drew
+       enabled -- a disabled one has no clickable, so no hint -- the stats window closed so that
+       nothing covers it: the hint layer draws its hint. A layout with no such button fails here,
+       so the hint's rule is always run once at the load. */
+    {
+        const TJV* lists[2];
+        const char *act = NULL, *ts = NULL;
+        float mx = st->mx, my = st->my;
+        int at = -1, k, j, m, drawn = 0;
+        lists[0] = tj_get(tj_get(tj_get(l->L, "column"), "foot"), "buttons");
+        lists[1] = tj_get(tj_get(tj_get(l->L, "dock"), "transport"), "buttons");
+        for (m = 0; m < 2 && at < 0; m++)
+            for (k = 0; lists[m] && k < lists[m]->n && at < 0; k++) {
+                ts = tj_str(tj_get(tj_at(lists[m], k), "tip"), NULL);
+                act = tj_str(tj_get(tj_at(lists[m], k), "act"), NULL);
+                for (j = 0; ts && act && j < o->n && at < 0; j++)
+                    if (o->op[j].kind == HOP_HOT && !strcmp(o->text + o->op[j].run, act)) at = j;
+            }
+        if (at < 0) {
+            snprintf(err, errn, "hudlay: the self-test found no foot or transport button with a hint to point at");
+            goto done;
+        }
+        st->mx = o->op[at].r.x + o->op[at].r.w / 2;
+        st->my = o->op[at].r.y + o->op[at].r.h / 2;
+        st->stats.open = 0;
+        if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->max_hot, "hint's build", err, errn)) goto done;
+        for (k = 0; k < o->n && !drawn; k++)
+            drawn = o->op[k].kind == HOP_TEXT && o->op[k].nrun == 1 && !strcmp(o->text + o->run[o->op[k].run].off, ts);
+        if (!drawn) { snprintf(err, errn, "hudlay: the self-test's hint build drew no hint for '%s'", act); goto done; }
+        st->mx = mx; st->my = my;
+        st->stats.open = 1;
+    }
     st->H = 300; st->scroll = 1;    /* the scroll bar */
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->max_hot, "scrolled build", err, errn)) goto done;
     st->H = 720; st->scroll = 0;
@@ -1992,6 +2139,9 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     st->armed = st->replace = 2;
     strcpy(st->held, "lane:0");
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->max_hot, "lanes build", err, errn)) goto done;
+    /* the watched lane's Back to main recording held: its pressed part */
+    strcpy(st->held, "main");
+    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->max_hot, "held way back's build", err, errn)) goto done;
     /* the live HUD: the button alone, then the strip open with Play from here armed */
     st->H = 720; st->live = 1;
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->live_hot, "live build", err, errn)) goto done;

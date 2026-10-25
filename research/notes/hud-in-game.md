@@ -248,7 +248,7 @@ The owner's decisions:
 
 - **One archive, embedded as a resource.** `tools/hudpak.py` packs `art/hud/` as it is —
   `layout.json`, `kit.json`, `parts/*.png`, `fonts/*.ttf` and the fonts' licence texts — behind
-  a directory, into `inc/tagpu_hudpak.bin` (27.0 MB with the 66 parts of 2026-10-23), which
+  a directory, into `inc/tagpu_hudpak.bin` (11.9 MB with the 66 parts of 2026-10-25), which
   `res.rc` embeds. Every offset is checked against the resource's size before it is read.
 - **The JSON is read at run time, not converted.** `tagpu_json.c` reads the same text the mockup
   reads, and `tagpu_hudlay_load` resolves it into structs once. A field missing or of the wrong
@@ -257,17 +257,21 @@ The owner's decisions:
 - **Decoding is off the frame.** The first frame that has a HUD to draw starts the loader
   (`tagpu_hudart_start`), a thread of its own that decodes the parts, premultiplies them and
   opens the faces, then publishes the result with one interlocked store; the HUD draws nothing
-  until then. MEASURED 2026-10-15, before the picker's re-cut (the kit is 21.2 Mpx since): `hud: loaded 66 parts (21.5 Mpx) and 3 faces in ~830 ms`.
-- **The decoded parts stay for the session**, 85 MB of RGBA. Every teardown and resize brings
+  until then. MEASURED 2026-10-25 on the reference setup, the fitted kit: `hud: loaded 66 parts
+  (8.8 Mpx) and 3 faces in 343 ms`, against 21.2 Mpx in 862 ms for the same build with the parts
+  as cut.
+- **The decoded parts stay for the session**, 35.2 MB of RGBA. Every teardown and resize brings
   the pass down, and its images are uploaded again from these. Nothing writes or frees the
   loaded HUD afterwards, which is why any thread may read it without a lock.
-- **Each part is its own image, with mipmaps.** The parts are painted at 4.2 to 12.5 pixels a unit,
-  mostly about 10, and drawn at 1.1 (1080p, 75 %) to 4.5 (4K, 150 %), so most are minified 2 to 9
-  times. One descriptor set per part is bound per run of quads.
+- **Each part is its own image, with mipmaps.** The parts are drawn at 1.1 (1080p, 75 %) to 4.5
+  (4K, 150 %) pixels a unit and packed at what each needs at 4.5: no more than 0.9 device pixel to
+  a texel there. `tools/hudart/fit.py` makes `art/hud/`'s parts so from the full-resolution cuts in
+  `art/hud-full/`, which are not packed ([Replay HUD art](hud-art.md), *How sharp the art is*). One
+  descriptor set per part is bound per run of quads.
 
 ### The uploads
 
-- **The parts go once per build, across frames.** Their level 0 totals 85 MB against a slot's
+- **The parts go once per build, across frames.** Their level 0 totals 35.2 MB against a slot's
   2 MiB staging cap (`TAGPU_VK_STAGE_CAP`, `tagpu_vk_stage.h`), so they take several frames:
   each frame resumes where the last stopped (`s_nsent`), a banded part uses none of a frame's
   room, and the rest go as many as fit it.
@@ -344,6 +348,22 @@ The owner's decisions:
   the ten-seat column matches, thumb included.
 - **`tools/hudart/laycheck.py`** compares this file's rectangles and baselines with the mockup's
   ([The replay HUD's layout](hud-layout.md), *Text*).
+- **The hints are the build's last ops** (`hint`, after the toast; [The replay HUD's
+  layout](hud-layout.md), *The hints*). `button()` draws no hint: an enabled button with a `tip`
+  records its `HOP_HOT` op and its text in the build's context, one slot for every clickable a
+  build can make (`HUD_MAXHOT`, which `tagpu_hudlay_max_hot` bounds the layout to), so the record
+  cannot overflow. At the end the build finds the topmost `HOP_HOT` op holding the pointer, in the
+  hit map's order — the top layer's first, then the rest, last first — and draws that control's
+  hint when it has one. It tests as the hit map does: the pointer (`mx`, `my`, the input's pointer
+  in units, the same the hovered row reads) times `HUDSTATE.px`, the device pixels a unit, rounded
+  back to the client pixel it came from, against each box's edges snapped by `tagpu_hud_snap` and
+  `tagpu_hud_edge` of the same float products `tagpu_hudstate_drawn` snaps. So the hint and a
+  click name the same control on every pixel, a control's edge pixel included, and a hint never
+  takes a click. `hud.js` tests the same way, the pointer's device pixel against `snapPx` of each
+  box's edges. The `tip` block is read at the load with the toast's (`HUDGLOBALS`), its style
+  resolved to an index there, so a layout that loads has every field the hint reads; the load's
+  self-test also builds once with the pointer on the first foot or transport button that has a
+  hint, and fails the load when there is none or no hint is drawn.
 
 ### The text
 
@@ -352,6 +372,10 @@ The owner's decisions:
   inside the archive with their OFL texts: Oswald 500 and 700 and Barlow Condensed 600.
 - **No sigma.** Neither family carries Greek, so the team header's unit sum is the bare number,
   in `hud.js` and in `tagpu_hudlay.c` alike.
+- **The hints and Back to main recording are ASCII**, the apostrophe U+0027 included, and every
+  character of them is in Oswald 500 as cut (each upper-cased character's glyph index nonzero
+  through stb_truetype's `stbtt_FindGlyphIndex`, 2026-10-25). The atlas rasterises any glyph the
+  face has on first use, so it needs no list of them.
 - **The players' names** are the engine's 8-bit text read as Latin-1 (`latin1_utf8`,
   `tagpu_hudstate.c`): a control code — below 0x20, or 0x80..0x9F — becomes `?`, and the soft
   hyphen, which Oswald lacks, becomes `-`.
@@ -622,8 +646,8 @@ then. The new fork's lane is there the next time the file is watched.
 **What is drawn** ([The replay HUD's layout](hud-layout.md), *The lanes*): while the Forks bay is
 open and the file keeps a fork, a plate over the timeline housing with a lane for each live fork,
 oldest branch on top, from its branch to its end on the track's own axis; its label `F<id> · NAME
-from m:ss`, NAME the seat it was played as; Export and Delete at its right end; the watched lane
-pressed; a line from each lane's branch; the playhead's line up through every lane; and, while the
+from m:ss`, NAME the seat it was played as; Export and Delete at its right end, each with its
+hint; the watched lane pressed, with Back to main recording before its Export; a line from each lane's branch; the playhead's line up through every lane; and, while the
 picker is open, the lane its takeover would replace outlined. The column stands on the plate.
 Two rules are new in the mockup and the game alike:
 
@@ -649,8 +673,12 @@ lanes' timeline ids into the hit map (`nlane`, `lane_id[]`, in `fork[]`'s order)
 has. A lane whose fork has gone since the draw is the replay's to refuse.
 
 - `lane:k` watches lane k's timeline (`tagpu_replay_watch_timeline`, *The switch* in
-  [S4c](tadr-port/demo-recorder-s4-forks.md#watching-another-timeline-in-place)); on the watched
-  lane it asks for 0, the original: the mockup's "back to the replay". It disarms Delete.
+  [S4c](tadr-port/demo-recorder-s4-forks.md#watching-another-timeline-in-place)). On the watched
+  lane it asks for nothing and the lane stays watched: the switch refuses the timeline that plays
+  already ("timeline N plays already"), so asking would only toast a refusal. It disarms Delete.
+- `main`, the watched lane's **Back to main recording**, asks for timeline 0, the original, and
+  disarms Delete; refused at once it toasts "Cannot go back to the replay". It carries no index:
+  it names the original whichever lane drew it, so a press and a release on it always agree.
 - `export:k` saves the fork as `replays\<name>-F<id>.imprec`, `<name>` the playing's own
   (`tagpu_replay_fork_op(EXPORT, id, stem)`). An existing export is never overwritten, and a name
   `fork_stem` refuses is refused; the log has the worker's reason. A recording whose name leaves
@@ -679,6 +707,14 @@ read them.
 (`held_lane`), and the release acts only when its own frame's lane at that index is the same fork:
 a list that changed between them (a deletion, a fork made) does not send the click to the fork
 that moved into its place.
+
+**The way back and the hints, verified in game** (MEASURED 2026-10-25, the reference setup: a
+private 1920 × 1080 Xvfb, a two-seat recording with one fork taken over at GameTime 301, driven
+with `tacli hud`): `lane:0` logged `watching timeline 1 at GameTime 385`; a second `lane:0` on the
+watched lane logged no switch and no toast and the lane stayed watched; `main` logged `watching
+timeline 0 at GameTime 385`. At HUD 100 and 150 each of the eleven hints showed above its button
+in the window grab, Bookmark's over Take over replay. The world draws black on that display; the
+HUD is the Vulkan pass's own and draws as on a live one.
 
 **The markers after a switch.** The walker walks the chain that plays, so a switch restarts it.
 The fill asks the old walk to stop and polls its join at every fill after, showing no marker and
@@ -754,7 +790,8 @@ over the world, is `tagpu_menu_modal`'s.
 | `takeas:i` | the picker | with the picker open, row i's seat taken over at the picker's start (`tagpu_replay_takeover_request`), the toast "Taking over NAME at m:ss"; the picker closes. No hot for a row whose player has no unit left |
 | `picker` | the picker's plate | taken, and nothing done |
 | `lanes` | the Forks bay | the lanes opened or closed, while the file keeps a fork; no hot with none (the bay drawn off) |
-| `lane:k` | a fork's lane | lane k's timeline watched (`tagpu_replay_watch_timeline`); on the watched lane, the original (*The lanes*) |
+| `lane:k` | a fork's lane | lane k's timeline watched (`tagpu_replay_watch_timeline`); on the watched lane, nothing: it stays watched (*The lanes*) |
+| `main` | the watched lane's Back to main recording | timeline 0, the original, watched; Delete disarmed; "Cannot go back to the replay" on a refusal |
 | `export:k` | a lane's Export | the fork saved as `replays\<name>-F<id>.imprec`; the toast "F<id> saved as a replay of its own" |
 | `delete:k` | a lane's Delete | first click: armed, "Click again to delete F<id>"; second: the fork deleted, the watched one by a switch up its chain first |
 | `stats` | foot plate | the stats window opened or closed; drawn pressed while open |
@@ -901,11 +938,15 @@ control's place in the frame on screen — and never calls the replay's API:
   `show` adds `picker R` to its line while it is open.
 - **`click`** writes `dclick:` (`drclick:` with `--right`) at the control's centre, **`hover`**
   `dmove:`, and **`wheel`** `dwheel:x,y,n`, n notches (positive: away from the player, and the
-  column scrolls up). A row's button (`jump:2`) shows only under the pointer, so tacli hovers its
+  column scrolls up). Where a control drawn over it covers the centre — the watched lane's centre
+  can lie under its Back to main recording — the three go to the first pixel, in square rings
+  walked outward from the centre and each ring from its middles to its corners, where the hit
+  map's topmost control is the one named (`_hud_spot`), so they reach the control asked for; a
+  control covered everywhere is refused by name. A row's button (`jump:2`) shows only under the pointer, so tacli hovers its
   row (`row:2`) first and waits for the button to appear in the dump.
 - **`scrub`** presses on the track at one fraction of the track's axis (`ddown:`), moves in
   `--steps` steps `--step-ms` apart (`dmove:`), and releases at the other (`dup:`).
-- **`drag`** presses at a control's centre (`ddown:`), moves by (dx, dy) client pixels in
+- **`drag`** presses at a control's centre, or `click`'s nearest uncovered pixel (`ddown:`), moves by (dx, dy) client pixels in
   `--steps` steps `--step-ms` apart, and releases there: `tacli hud <i> drag drag 200 -80` drags
   the stats window by its title. The window follows the pointer once a frame, so on a slow
   display a drag whose later steps leave the picture ends where the last frame sampled an
@@ -1269,12 +1310,10 @@ the render thread.
 ## Open
 
 - **The HUD font** is not decided; Oswald and Barlow Condensed are the mockup's.
-- **Address space.** The decoded parts stay for the session, 85 MB of a 32-bit process, and
-  the archive stays mapped with the DLL, 27.0 MB. The art loads on the first frame with a HUD
+- **Address space.** The decoded parts stay for the session, 35.2 MB of a 32-bit process, and
+  the archive stays mapped with the DLL, 11.9 MB. The art loads on the first frame with a HUD
   state, which since the live rewind is the first frame of a live recorded skirmish on the Vulkan
-  lane too, not only of a replay. The parts are painted at about twice the
-  4.5 pixels a unit the HUD is drawn at on a 4K screen at 150 %, so most of both is detail no
-  screen up to 4K shows. The owner keeps the full resolution. 20 of the 66 parts (34.4 MB decoded,
-  10.7 MB of the archive) are the `proposed` section's: the Take over button and picker and the
-  forks housing and bay and the fork lanes, and the live rewind's button and strip, all of which
-  the DLL draws.
+  lane too, not only of a replay.
+- **`rail_one` is packed but never drawn.** The DLL draws the housing as `rail_forks` (the
+  `proposed` section, which the game always draws); `rail_one` is the mockup's `prop=0` housing,
+  1.2 MB of the archive and 0.9 Mpx decoded.

@@ -5,8 +5,9 @@
 **The replay HUD is painted in worn painted steel.** The owner picked this look, M3, from four
 re-imaginations of the dock in old metal. The dock was painted in it first, and then, from a
 concept the owner approved, every other plate and button was repainted to match. The parts are
-filed losslessly in `art/hud/`, with their measurements in `art/hud/kit.json`. Two programs draw
-them by the same rules:
+filed losslessly as cut in `art/hud-full/`, with their measurements in `art/hud-full/kit.json`,
+and `tools/hudart/fit.py` makes `art/hud/` from them: each part resampled to the most the game
+draws of it, its kit entry rescaled to match. Two programs draw `art/hud/` by the same rules:
 
 - the mockup in `tools/hudart/mockup/` ([The replay HUD's layout](hud-layout.md));
 - the DLL, through `tools/hudpak.py`, which packs `art/hud/` into `inc/tagpu_hudpak.bin` at build
@@ -23,9 +24,10 @@ this page gives a reason or a number, `pixel-forge.md` gives the step.
 2. Paint it with **pixel-forge** on **Nano Banana Pro** (model `gemini-3-pro-image`).
 3. Cut the painting with the repository's cutters.
 4. Make the middle of every long part repeat instead of stretch (`xtile`).
-5. File the parts into `art/hud/` and check them in the mockup and the game.
+5. File the parts into `art/hud-full/`, fit them into `art/hud/`, and check them in the mockup
+   and the game.
 
-**What is in the look and what is not.** These 35 parts were painted in worn painted steel:
+**What is in the look and what is not.** These 37 parts were painted in worn painted steel:
 
 - the one-piece plates `tp_one`, `rail_one`, `rail_forks`, `row_one`, `head_one`, `foot_one`
   and `win_one`;
@@ -38,7 +40,8 @@ history (`git log -- research/notes/hud-art.md`).
 
 | What | Where |
 |---|---|
-| The parts, lossless; their kit; the layout | `art/hud/` ([The replay HUD's layout](hud-layout.md)) |
+| The parts as cut, lossless, and their kit | `art/hud-full/` |
+| The parts fitted, their kit; the layout and the faces | `art/hud/` ([The replay HUD's layout](hud-layout.md)) |
 | The mockup, drawn from `art/hud/` | `tools/hudart/mockup/` |
 | The specs: each part's size and recesses in HUD units | `tools/hudart/specs/` |
 | The tools: layouts, cutters, repeats, filing, checks | `tools/hudart/` (*The tools*) |
@@ -51,13 +54,18 @@ history (`git log -- research/notes/hud-art.md`).
 which `.gitignore` ignores:
 
 - `.data/pixel-forge/`: pixel-forge's store, with each session's references and renders
-  (`m3-kit`, the dock; `m3-all`, the rest of the HUD);
+  (`m3-kit`, the dock; `m3-all`, the rest of the HUD; `lane-wide`, the Back to main recording
+  button);
 - `.data/hud-art/work/m3kit/`: the dock job's layouts, prompts and scripts
   (`compose_housing.py`, `unlabel.py`, `level.py`);
 - `.data/hud-art/work/m3all/`: the whole-HUD job, with `make_sheets.py`, which draws its layouts,
-  `cut_all.py`, which cuts them, and the four prompts (`pf_*.txt`).
+  `cut_all.py`, which cuts them, and the four prompts (`pf_*.txt`);
+- `.data/hud-art/work/lanewide/`: the Back to main recording button's job, with `make_layout.py`,
+  which places `PLAIN=1 sheets.py parts_lane_wide`'s sheet on a 21:9 canvas beside the lane button
+  it is painted after, and its prompt `pf_wide.txt`.
 
-Only the cut parts filed into `art/hud/` are committed. **Total Annihilation's own interface art**
+Only the cut parts filed into `art/hud-full/`, and the fitted copies `fit.py` makes of them in
+`art/hud/`, are committed. **Total Annihilation's own interface art**
 (crops of the game's screens, palette samples) may be shown to a painter as a reference, but it
 is original game art: it stays under `.data/` and is never committed (CLAUDE.md, *Publishing*).
 
@@ -126,7 +134,7 @@ the same rules:
 | 3 | Prepare it: labels keyed out, scaled to 10 px a unit, an uneven flat recess levelled | `unlabel.py`, `cut_all.py`, `level.py` (job scripts) |
 | 4 | Cut it | `gridslice.py`, `cut.py`, `iconcut.py` |
 | 5 | Make long middles repeat | `seamband.py` (`xtile`); `tile.py` for a fill |
-| 6 | File it into `art/hud/` | `file.py` |
+| 6 | File it into `art/hud-full/`, then fit it into `art/hud/` | `file.py`, `fit.py` |
 | 7 | Check it: the rules agree, the mockup at native 4K, the game | `laycheck.py`, `serve.py` + `capture.sh`, a DLL build |
 
 ### 1. The layout
@@ -160,7 +168,7 @@ whole-HUD job's four layouts this way, at 6 px a unit, with the recesses dark an
 - **At an aspect the model takes exactly** (21:9, 16:9, 3:2, …), so nothing is stretched to fit
   and back. A sheet holds several parts at their true aspect, all at one scale. 21:9 is the
   widest aspect Nano Banana Pro takes.
-- **The reference is on the canvas.** A piece of a finished part, cut from `art/hud/parts/`,
+- **The reference is on the canvas.** A piece of a finished part, cut from `art/hud-full/parts/`,
   sits beside the whiteboxes. The prompt names it as finished art to keep exactly as it is
   ("REF"). Passed as a separate style reference instead, its content was copied into the
   painting: an extra dock plate appeared above the parts.
@@ -193,6 +201,12 @@ whole-HUD job's four layouts this way, at 6 px a unit, with the recesses dark an
       `cut_all.py` cuts it from the 420-unit painting and joins its two ends with a
       minimum-error seam. The filed PNG is 145.6 units long, because the 60-pixel overlap of the
       join is kept on top of the 140 units the script aims for.
+    - The watched lane's Back to main recording is drawn 78.9 × 12 units at every scale, as wide
+      as its label. Drawn from the 13-unit square `lane_button`, its highlight stretched six times
+      into a streak, and the button is too short for `seamband.py` to learn a period from. It has
+      its own part, `lane_wide_button` and `lane_wide_button_down`, painted 79 × 12
+      (`specs/parts_lane_wide.py`) with the lane button and its pressed twin on the canvas as the
+      reference, so it matches Export and Delete beside it. It does not repeat.
 
 ### 2. The render
 
@@ -212,7 +226,7 @@ With a layout, the layout decides the aspect.
       pocket, lanes and time recess, are each within 1.3 HUD units of the whitebox, with no
       re-proportioning.
 - **Test at 1K and render the kit at 4K.** Every 4K render is above the 10 px a unit the kit is
-  filed at (*The sizes Pro paints*, below).
+  cut at (*The sizes Pro paints*, below).
 - **Look at every 4K render before cutting it.** In one render in four, the model reframed its
   sheet: it painted the parts several times taller and dropped the reference. A reroll kept the
   layout.
@@ -308,7 +322,7 @@ repeat that band a whole number of times instead of stretching it (*How a part i
 ### 6. File
 
 ```
-$PY $H/file.py kit/ row_one head_one        # replaces art/hud/parts/<part>.png and its kit.json entry
+$PY $H/file.py kit/ row_one head_one        # replaces art/hud-full/parts/<part>.png and its kit.json entry
 ```
 
 `file.py` rewrites each PNG with zlib's best compression and checks it pixel for pixel against
@@ -328,6 +342,23 @@ Either `grid` or `nine` may also carry `xtile`. [The replay HUD's layout](hud-la
 
 **A repainted grid part brings its own measured wells,** and the layout places everything
 through them. A well renamed or removed must be renamed in `layout.json` too.
+
+**Then fit it.** The cut is about twice as dense as anything the game draws, and the DLL embeds
+every part, so the game and the mockup draw `art/hud/`, which `fit.py` makes from
+`art/hud-full/`:
+
+```
+$PY $H/fit.py                               # art/hud/'s parts and kit.json, whole; ~2.5 min
+```
+
+`fit.py` has the mockup draw the full-resolution parts (its `parts=hud-full` switch), measures
+what each part needs and resamples it down to that (*How sharp the art is*), rescaling its kit
+entry: `scale` always, a 9-slice's `slice`, a repeating grid band's `xs`. A part within 3 % of
+its need is copied as cut. It rewrites every part and `kit.json` and removes a part
+`art/hud-full/` no longer has; `layout.json` and `fonts/` live in `art/hud/` only. Its output
+depends on its inputs only: run on unchanged inputs, it rewrites `art/hud/` byte for byte. A part
+that no case draws stops it: give it a case in `laycheck.py` first. Never edit `art/hud/parts/`
+or `art/hud/kit.json` by hand: the next fit replaces them.
 
 ### 7. Check
 
@@ -361,7 +392,8 @@ tools/hudart/capture.sh 'http://127.0.0.1:8000/tools/hudart/mockup/?paused&res=3
 | `keying.py` | `despill`, which every cutter runs |
 | `seamband.py <kit dir> <part>...` | Makes a part's x band one period of a seamless tile and sets `xtile` |
 | `tile.py <kit dir> <part>...` | Makes a fill strip repeat along x without a seam |
-| `file.py <kit dir> [--look <l>,...] <part>[=<name>]...` | Files cut parts into `art/hud/`, losslessly, replacing old ones |
+| `file.py <kit dir> [--look <l>,...] <part>[=<name>]...` | Files cut parts into `art/hud-full/`, losslessly, replacing old ones |
+| `fit.py` | Makes `art/hud/`'s parts and kit from `art/hud-full/`: each part resampled to the most the game draws of it |
 | `laycheck.py` | The DLL's layout rules against the mockup's |
 | `serve.py` | Serves the repository for the mockup, with no-cache headers |
 | `capture.sh <url> <out.png>` | The mockup's stage in device pixels, once all its art is composed |
@@ -371,7 +403,7 @@ tools/hudart/capture.sh 'http://127.0.0.1:8000/tools/hudart/mockup/?paused&res=3
 | `tools/hudpak.py <art/hud> <out.bin>` | Packs `art/hud/` as it is into the archive the DLL embeds |
 
 The tools need the shared venv's Python (numpy, scipy, Pillow) and DejaVu Sans Bold for the
-labels. The captures need `playwright-cli`; `laycheck.py` needs it and gcc.
+labels. The captures need `playwright-cli`; `laycheck.py` needs it and gcc, `fit.py` needs it.
 
 ## How the cutters measure
 
@@ -653,32 +685,47 @@ differed in 1.50 % of its pixels, from the world above it and the clock's text e
 ## How sharp the art is
 
 A HUD unit is screen height / 720 × the replay HUD's scale. At 3840 × 2160 that is 2.25, 3, 3.75
-and 4.5 device pixels at HUD 75, 100, 125 and 150. At 1920 × 1080 it is half that. The art stays
-sharp while it is painted at more pixels per unit than it is drawn at. The DLL draws every part
-from a mip chain, so it minifies cleanly.
+and 4.5 device pixels at HUD 75, 100, 125 and 150. At 1920 × 1080 it is half that. The DLL draws
+every part from a mip chain, so it minifies cleanly; a part stays sharp while it has at least one
+texel for each device pixel it covers.
 
-The table gives painted pixels per unit at each part's drawn size, and in the four right-hand
-columns how many times the part is **minified** at 3840 × 2160. MEASURED from `kit.json`, the
-PNGs' sizes and the boxes `layout.json` draws them in:
+**Every part is fitted to the densest the game draws it** (`fit.py`, *6. File*): resampled down
+until no more than 0.9 device pixel falls on one of its texels at 4.5 px a unit. What a part
+needs is measured, not derived from its `scale`:
 
-| Part | Painted px per unit | HUD 75 | HUD 100 | HUD 125 | HUD 150 |
-|---|---|---|---|---|---|
-| Plates, strips and buttons (`scale` 9.4–10.9) | 9.4 – 10.9 | 4.2 – 4.9 | 3.1 – 3.6 | 2.5 – 2.9 | 2.1 – 2.4 |
-| Stats window (`win_one`) | 7.0 | 3.1 | 2.3 | 1.9 | 1.56 |
-| Timeline fill, at its height of about 9.8 units | 7.9 | 3.5 | 2.6 | 2.1 | 1.75 |
-| Icons, at their boxes | 7.5 – 26 | 3.3 – 11.6 | 2.5 – 8.7 | 2.0 – 6.9 | 1.7 – 5.8 |
-| Marker badge, 12 units | 5.9 | 2.6 | 2.0 | 1.6 | 1.3 |
-| Playhead, along its height of about 15.8 units | 5.2 | 2.3 | 1.7 | 1.4 | 1.15 |
+- **From the drawn pieces.** The mockup draws `laycheck.py`'s cases and the housing without the
+  proposed features; every piece of every part is taken at its device pixels against its texels
+  and scaled to 4.5 px a unit from its case's density. laycheck proves the game draws the same
+  pieces.
+- **A stretch band is not counted along its stretch.** A 9-slice's middle and a grid's xs and ys
+  bands are uniform along that axis by construction, so drawing one longer than it was painted
+  shows nothing new. The team header, drawn 25 units tall from a 23.29-unit painting, is
+  magnified along its two y bands only.
+- **A repeating band is counted at its bound.** An `xtile` copy is the nearest whole number of
+  periods, at least one (`copies`, `tagpu_hudlay.c`), so it is drawn at most 1.5 × its painted
+  length (n = 1) and between 0.75 × and 1.25 × for n ≥ 2. The fit takes 1.5 × the part's
+  fixed-cell density, not whatever lengths the cases happen to draw.
 
-**No part is magnified at any of the four scales.** The least margin is the playhead's, 1.15 at
-HUD 150.
+MEASURED 2026-10-25 by `fit.py` over laycheck's 45 cases and the no-proposed housing. "Need" is
+device pixels per texel at 4.5 px a unit, of the part as cut; its copy in `art/hud/` is need / 0.9
+of the cut in `art/hud-full/`:
 
-A stretch band or a repeat changes this along its own axis only:
+| Parts | Need | In `art/hud/`, px a unit |
+|---|---|---|
+| Plates, strips and buttons that do not repeat | 0.36 – 0.47 | about 5 |
+| Parts that repeat (`xtile`), at the 1.5 × bound | 0.62 – 0.72 | 7.4 – 7.6 |
+| Stats window (`win_one`) | 0.64 | 5.0 |
+| Timeline fill, marker badge | 0.76 | 5.4, 5.0 |
+| Icons, at their boxes | 0.18 – 0.60 | from 1.9 |
+| Playhead | 1.04 | 4.17, kept |
 
-- The team header is drawn 25 units tall from a 23.29-unit painting, so its two y bands are drawn
-  1.30 × their painted height: 7.7 px a unit there.
-- An `xtile` copy is drawn at most 1.5 × its painted length, which happens when n rounds down to
-  1; for n ≥ 2 a copy is drawn between 0.75 × and 1.25 ×.
+The 68 parts are 21.4 Mpx and 27.3 MB of PNG as cut, 8.8 Mpx and 11.9 MB fitted. For the 66
+of them fitted first, the mockup at 4K and HUD 150 against the cut it came from: 43.7 to 46.2 dB, 0.07 to 0.23 % of pixels more than 16
+levels apart; the game's HUD at the same settings against the same build with the cut art: 39.4
+to 47.0 dB per region, the world identical.
+
+**The playhead is the one part magnified**, 1.04 × along its height at HUD 150 on a 4K screen,
+as it was before the fit: `fit.py` resamples down only.
 
 ## Recipes
 
@@ -686,7 +733,7 @@ A stretch band or a repeat changes this along its own axis only:
   about the paint changes, so this is the cheapest change.
     1. Run `cut_all.py` again on the archived renders, or the single cutter on one painting.
     2. Run `seamband.py` on the parts that repeat.
-    3. File with `file.py` and check (*7. Check*).
+    3. File with `file.py`, fit with `fit.py` and check (*7. Check*).
     4. Start from the cutter's output, never from an already-banded kit: `seamband.py` rewrites
        a part in place.
 - **Repaint one part in the look:**
@@ -711,7 +758,7 @@ A stretch band or a repeat changes this along its own axis only:
   render, one render per part, with the render as the canvas's reference and the one change named.
   Cut each with the cutter that made it and compare its wells and insets with the kit's.
 
-**After any change:** `laycheck.py` ends "the two agree", a capture at native 4K shows
+**After any change:** `fit.py` has run on what was filed, `laycheck.py` ends "the two agree", a capture at native 4K shows
 `missing art 0`, and the DLL is rebuilt so that `inc/tagpu_hudpak.bin` carries the new kit.
 
 ## Gaps
@@ -722,13 +769,28 @@ A stretch band or a repeat changes this along its own axis only:
   not repainted in worn painted steel.
 - **`rail_forks` keeps a 94-unit period.** It was banded before `seamband.py` learned to compact a
   grid part, and its fixed cells are 361.9 of its 456 units. Re-running `seamband.py` on its cut
-  would compact it. It is drawn only by the mockup's proposed section, which the DLL does not
-  read.
+  would compact it. It is the housing the game draws: `tagpu_hudlay.c` takes the housing from the
+  proposed section, which the game always draws, and `rail_one` is drawn only by the mockup's
+  `prop=0`. Its copy at n = 1 is what the 1.5 × bound in the fit is for.
+- **The Back button's parts were painted taller than their cells.** The kept render (`lane-wide`
+  n2, version 2) held the layout's widths but painted the raised part 12 % and the pressed one 26 %
+  taller than 12 units. `cut.py` scales each across its short side, so they measure 70.5 and 63
+  units long (MEASURED, the cut's 793 × 135 and 793 × 151 px), and drawn 78.9 units wide their
+  middles stretch 1.25 × and 1.28 ×. Every other 4K render of the session reframed its sheet.
+- **`lane_wide_button_down` has a thin light rim round its sunk face,** which `lane_button_down`
+  lacks. All three 4K renders painted that rim, and so did two of three 1K tests of a prompt that
+  forbade it.
+  At the sizes it is drawn it reads as pressed beside Export and Delete.
 - **The hover strip is 145.6 units, not 140.** `cut_all.py` keeps its join's 60-pixel overlap on
   top of the 140 units it aims for. The strip is drawn about 137 units long and does not repeat,
   so the 9-slice absorbs the difference.
-- **The stats window is filed at 7 px a unit,** under the commit size limit. It is still minified
-  1.56 × at 4K and HUD 150, but it has the least margin of the plates.
+- **`fit.py` resamples down only.** A layout change that draws a part larger is fitted from its
+  cut in `art/hud-full/` up to that cut's own density, about 10 px a unit; past it, as the
+  playhead already is, the part is copied as cut, and sharper needs a re-cut or a repaint.
+- **A screen taller than 2160 rows magnifies the art at HUD 150**, by rows / 2160 × 0.9: 1.2 × on a
+  2880-row screen.
+- **`rail_one` is in the archive though the game never draws it** (1.2 MB): `tools/hudpak.py`
+  packs every part the kit lists.
 - **A painting cannot be reproduced.** The renders exist only in `.data/pixel-forge/`. A reroll
   of the same prompt and layout paints different wear, so a lost render means a repaint, not a
   re-cut.

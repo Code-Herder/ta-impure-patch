@@ -176,6 +176,8 @@ int main(int argc, char** argv)
         m->kind = !strcmp(k, "defeat") ? HUD_MK_DEFEAT : !strcmp(k, "bookmark") ? HUD_MK_BOOKMARK : HUD_MK_DEATH;
         m->seat = (int)tj_num(tj_get(e, "seat"), -1);
     }
+    /* the hint's hit test snaps at the device pixels a unit, as the mockup's pins its boxes */
+    st->px = argc == 5 ? (float)atof(argv[4]) : 1.0f;
     st->mx = (float)tj_num(tj_get(S, "mx"), -1);
     st->my = (float)tj_num(tj_get(S, "my"), -1);
     snprintf(st->held, sizeof st->held, "%s", tj_str(tj_get(S, "held"), ""));
