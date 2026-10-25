@@ -465,3 +465,26 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
   engine's particles. `gfx=game` shows the vent's frame 0, without a plume.
 - **The deposit and ground art are one lush map's.** A demo's map has no world, and a patch
   larger than the 3 × 3 feature stretches its sprite.
+
+## Open issues in the placement code
+
+Porting `tagpu_place.c` and `tagpu_placegeo.c` into `sim.js` turned up three behaviours of the
+game's placement that `tadr-port/quality-of-life.md` does not describe. They were found by reading
+and porting the code (the port matches `tagpu_placegeo.c` on 20 000 random cases); none has been
+reproduced in game yet. The sim mirrors the code as it is, so the Build Lines entry's demos route
+round them; when the code changes, `sim.js` and the demos follow it.
+
+1. **A Shift+Ctrl line drag turns into a ring over a unit or a queued build.** `evaluate()` asks
+   `ring_target()` first on every evaluation while Shift and Ctrl are held (`if (shift && ctrl &&
+   ring_target(...))`), so a straight-line drag whose cursor crosses any unit or queued build
+   previews a ring round it, and a release there orders the ring. Demo 3 routes its cursor round
+   the solar collector for that reason. To fix: decide ring or line once, from what is under the
+   press.
+2. **The yellow preview can promise more than the release does.** Dragging back over a queued
+   row of 1 × 1 sites takes off every one only when the drag starts on the row: with 10, 11 and 12
+   queued, a drag from 9 to 12 previews four yellow sites, and the release removes three, queues a
+   fresh building at the last and places nothing at 9. The feature's own rule is that the preview
+   shows exactly what the release does. To fix: one rule, shared by the preview and the commit.
+3. **A hollow rectangle is ordered from beside the press round to the press.** Its first site is
+   the one next to the pressed corner and its last is the pressed corner itself. Nothing breaks;
+   it is undocumented, and stays as it is.
