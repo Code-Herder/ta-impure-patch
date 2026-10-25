@@ -390,6 +390,26 @@
    ],
    "xtile": true
   },
+  "lane_wide_button": {
+   "kind": "nine",
+   "scale": 11.25,
+   "slice": [
+    19,
+    205,
+    19,
+    205
+   ]
+  },
+  "lane_wide_button_down": {
+   "kind": "nine",
+   "scale": 12.583,
+   "slice": [
+    31,
+    44,
+    22,
+    44
+   ]
+  },
   "lanes_plate": {
    "kind": "nine",
    "scale": 9.391,

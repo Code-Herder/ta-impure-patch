@@ -706,21 +706,21 @@ needs is measured, not derived from its `scale`:
   length (n = 1) and between 0.75 × and 1.25 × for n ≥ 2. The fit takes 1.5 × the part's
   fixed-cell density, not whatever lengths the cases happen to draw.
 
-MEASURED 2026-10-25 by `fit.py` over laycheck's 32 cases and the no-proposed housing. "Need" is
+MEASURED 2026-10-25 by `fit.py` over laycheck's 45 cases and the no-proposed housing. "Need" is
 device pixels per texel at 4.5 px a unit, of the part as cut; its copy in `art/hud/` is need / 0.9
 of the cut in `art/hud-full/`:
 
 | Parts | Need | In `art/hud/`, px a unit |
 |---|---|---|
-| Plates, strips and buttons that do not repeat | 0.40 – 0.47 | about 5 (half the cut) |
+| Plates, strips and buttons that do not repeat | 0.36 – 0.47 | about 5 |
 | Parts that repeat (`xtile`), at the 1.5 × bound | 0.62 – 0.72 | 7.4 – 7.6 |
 | Stats window (`win_one`) | 0.64 | 5.0 |
 | Timeline fill, marker badge | 0.76 | 5.4, 5.0 |
 | Icons, at their boxes | 0.18 – 0.60 | from 1.9 |
 | Playhead | 1.04 | 4.17, kept |
 
-The 66 parts went from 21.2 to 8.8 Mpx, and from 26.9 to 11.8 MB of PNG. The mockup at 4K and
-HUD 150 against the cut it came from: 43.7 to 46.2 dB, 0.07 to 0.23 % of pixels more than 16
+The 68 parts are 21.4 Mpx and 27.3 MB of PNG as cut, 8.8 Mpx and 11.9 MB fitted. For the 66
+of them fitted first, the mockup at 4K and HUD 150 against the cut it came from: 43.7 to 46.2 dB, 0.07 to 0.23 % of pixels more than 16
 levels apart; the game's HUD at the same settings against the same build with the cut art: 39.4
 to 47.0 dB per region, the world identical.
 
