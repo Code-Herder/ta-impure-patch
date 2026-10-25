@@ -648,7 +648,7 @@ The rules:
 ## Checking the C against the mockup
 
 `tools/hudart/laycheck.py` opens the mockup headless at its default `prop=1` with two forks
-kept, the game's look, for forty-four cases (4K at 150 with two
+kept, the game's look, for forty-five cases (4K at 150 with two
 teams, 4K at Auto with the list too long, 1080p at 100 with one team, 1440p at 75 with a row
 hovered and a button held, 4K at 150 as a six-player free-for-all, 4K at 150 as a 2v1v1, 4K at
 150 with fourteen players scrolled to item 3 and a toast, 1440p at 75 with the first row hovered
@@ -669,8 +669,9 @@ fall on half pixels, and seven of the live HUD: `4k-150-live` (the rewind button
 `1080-100-live-rw` and `1440-75-live-rw` (its strip open), `1080-100-live-open` (the strip just
 opened, fwd disabled at its end), and the toast clear of the open strip and where it is closed,
 `1080-100-live-rw-toast`, `4k-150-live-rw-toast` (the eviction's warning) and
-`1440-75-live-toast`), two held for `tools/hudart/fit.py` to measure their pressed parts,
-`4k-150-lane-button-held` (a lane's Export) and `4k-150-picker-row-held` (a picker row), and
+`1440-75-live-toast`), three held for `tools/hudart/fit.py` to measure their pressed parts,
+`4k-150-lane-button-held` (a lane's Export), `4k-150-lanes-back-held` (the watched lane's Back to
+main recording) and `4k-150-picker-row-held` (a picker row), and
 twelve of the way back and the hints: `1080-100-lanes-back` and
 `4k-150-lanes-back-right` (the watched lane's Back to main recording, the second on the lane at the
 track's right end), the pointer on a foot button (`4k-150-hint-stats`, `1440-75-hint-chat`,
@@ -708,7 +709,7 @@ the cases the 1615 parts, 974 solids, 173 dots and 25 clips are each on the same
 DLL, pinned and painted; and on all thirty with the live HUD and every inset edge a ring
 (2026-10-23): 1689 parts, 977 solids, 358 rings (inner edges and sides too), 173 dots and 30
 clips, each on the same pixels in the DLL, pinned and painted, and the pieces of all 1659 parts
-that are not tiled fills, icons and whole parts among them, the same; and on all forty-four with
+that are not tiled fills, icons and whole parts among them, the same; and on all forty-five with
 the fitted art, the way back and the hints (2026-10-25). A hint case puts the pointer at the control's centre:
 the mockup's hint layer draws for it (`HUD.hint`) and the DLL's build gets it as `mx`, `my`. A halo
 polyline is told from its line by its `stroke-opacity`, which only the halo carries. At 4K every
