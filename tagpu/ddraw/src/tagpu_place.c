@@ -60,7 +60,7 @@
 #define LIST_WALK          16384u
 #define NOTE_LOGS          8u
 
-/* 0x4C1B80's ids (its table at 0x4C1C48 maps them onto GetKeyState) */
+/* 0x4C1B80's ids (its table at 0x4C1C48 maps them onto GetAsyncKeyState, import 0x4FC350) */
 enum { KEY_SHIFT = 0xF9, KEY_CONTROL = 0xFA, KEY_MENU = 0xFB };
 
 typedef unsigned (__stdcall* SiteTest)(const void* def, unsigned cell, unsigned zero, const void* player);
