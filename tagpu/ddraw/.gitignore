@@ -2,6 +2,7 @@
 inc/git.h
 inc/tagpu_art_gen.h
 inc/tagpu_hudpak.bin
+inc/tagpu_rmodel_*.zst
 
 # C++ Builder
 

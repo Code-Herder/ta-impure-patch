@@ -60,8 +60,9 @@ shaders are `tagpu_restore_comp.h`, compiled by `tools/spirv-gen.py`:
   (FILL, a layer's last band, OUT) from compute writes to every later reader, and one at the head
   of each slice whose first scope is every earlier submission on the queue, which is what lets
   the activations and the table be shared across slices instead of copied per frame slot.
-- **The weights** are the same `<model>.w32.bin` (`unditherer/weights.py`), repacked once at
-  bring-up into the conv kernel's layout and uploaded to one storage buffer.
+- **The weights** are the same `<model>.w32.bin` (`unditherer/weights.py`), embedded in the DLL
+  (below, *The models are in the DLL*), repacked once at bring-up into the conv kernel's layout and
+  uploaded to one storage buffer.
 - **Settings.** `tagpu_restoreglsl.on` takes `log` and `budget=<ms>` (0.5 to 100) and nothing
   else (D11).
 
@@ -246,8 +247,21 @@ carries landing 1.
 The core loads `full.w32.bin` and `tiny.w32.bin`, and a job names its model (`TAGPU_RM_FULL`,
 `TAGPU_RM_TINY`, `tagpu_restoreglsl.h`): the terrain's job is tiny, every other job full, and a job
 whose model is not loaded runs full. The backend repacks both into one weights buffer, keeps a
-conv pipeline per layer of each model, and sizes the activations for the wider. Both files ship in
-the release folder (`tagpu/release/package.sh`).
+conv pipeline per layer of each model, and sizes the activations for the wider.
+
+**The models are in the DLL.** The Makefile compresses `unditherer/models/full.w32.bin` and
+`tiny.w32.bin` with `zstd -19` into `inc/tagpu_rmodel_<name>.zst` (generated, gitignored), and
+`res.rc` embeds them as the `RCDATA` resources `RMODEL_FULL` and `RMODEL_TINY`. `load_weights`
+(`tagpu_restore_core.c`) decompresses each with the zstd the recorder already links, after
+bounding the frame's recorded content size by what the header format allows, and checks that the
+size is exactly the header, the layer table and the body before it reads any of them. Nothing is
+read from the game's folder, and the release ships `ddraw.dll` and `README.txt` alone. MEASURED
+2026-10-25: `full` 1,537,488 bytes packed to 1,388,961, `tiny` 94,320 to 83,723 (float weights
+compress by about a tenth); the DLL grew from 15.42 to 16.96 MB. A fresh instance with no weight
+file beside the exe logged `RMODEL_FULL: 12x64, 96080 vec4 (1501 KB, 1356 KB packed)` and
+`RMODEL_TINY: 6x24, 5888 vec4 (92 KB, 81 KB packed)`, its self-test passed (22,696 bytes within 0
+levels of the CPU reference), and a skirmish's terrain, features and UI restored. The build needs
+the `zstd` command (`.github/workflows/build.yml` installs it).
 
 ### The neighbourhood frame
 

@@ -53,8 +53,8 @@
 /* the scheduler, one per backend; its fields are below */
 typedef struct TAGPU_RSCHED_s TAGPU_RSCHED;
 
-/* ---- the models, read from <name>.w32.bin (unditherer/weights.py); their
-   ids, TAGPU_RM_*, are tagpu_restoreglsl.h's ---- */
+/* ---- the models, <name>.w32.bin (unditherer/weights.py) embedded in the DLL
+   zstd-compressed (res.rc); their ids, TAGPU_RM_*, are tagpu_restoreglsl.h's ---- */
 
 /* one layer, in vec4 texels: output tile k's block starts at offset + k x
    kstride, the bias first, then a mat4 per (tap, input tile) */
@@ -72,7 +72,7 @@ typedef struct { int log; double budget; } TAGPU_ROPT;
 
 /* Re-read the options and the models, from a backend's own init, so that all
    are picked up once per DEVICE. 0 with the reason in tagpu.log when the full
-   model's file is unusable -- Classic++ then stays indexed, which is the
+   model's resource is unusable -- Classic++ then stays indexed, which is the
    shipped fallback and not a failure. tiny is not required: a job that asks
    for it without it runs full. */
 int                tagpu_rcore_reload(const char* who);

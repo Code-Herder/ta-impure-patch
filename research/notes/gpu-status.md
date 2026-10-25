@@ -10474,7 +10474,7 @@ correctness is never demonstrated is exactly the kind of silent wrongness this s
 
 | file | what it owns |
 |---|---|
-| `tagpu_restore_core.{h,c}` | the weight file, the options, the size-class ladder, `tileable`, the job table and its queues, batch formation, the **pass sequencer**, the cost model, the budget arithmetic, every counter, and every log line but two (below). Names no rendering API. |
+| `tagpu_restore_core.{h,c}` | the weight files (embedded since 2026-10-25: `res.rc` `RMODEL_FULL` / `RMODEL_TINY`, zstd; [compute-restorer](compute-restorer.html), *A model per job*), the options, the size-class ladder, `tileable`, the job table and its queues, batch formation, the **pass sequencer**, the cost model, the budget arithmetic, every counter, and every log line but two (below). Names no rendering API. |
 | `tagpu_restoreglsl.c` | device resources and the three draws, behind a twelve-entry backend interface. |
 
 **The backend is TOLD which draw to make rather than working it out.** `issue_draw` in the core
@@ -16061,8 +16061,10 @@ section was written; §2.77 below is why it does not now, and the narrow one is 
   and `tagpu_r3d_atlas_mirror_rgb`'s remaining siblings — waits on the GUI for the same reason.
 - **`tools/spirv-gen.py` raises `NameError: name 'die' is not defined`** when
   `unditherer/models/*.w32.bin` is absent: `die` is defined below its first use in
-  `restore_kmax`. It surfaced building `main`'s DLL from a `git archive` (the weight tables are
-  gitignored) and turns a clear diagnostic into a traceback. Not this landing's file; recorded
+  `restore_kmax`. It surfaced building `main`'s DLL from a tree without them (they are tracked,
+  so a full checkout or `git archive` has them; the DLL's build also embeds them,
+  [compute-restorer](compute-restorer.html), *A model per job*) and turns a clear diagnostic into a
+  traceback. Not this landing's file; recorded
   so the next person building outside a full checkout does not re-diagnose it.
 - **No engine address was touched or read**: the diff's added lines carry no `0x4…`/`0x5…`
   constant, so `exe-reverse-engineering.md` takes nothing from this landing.

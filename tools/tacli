@@ -560,7 +560,6 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=T
     write_nowarp(inst)
     set_shield(inst, shield)
     deploy_dll(inst)
-    link_restorer_files(inst)
 
 
 def set_shield(inst: Instance, on: bool):
@@ -805,51 +804,6 @@ def write_totala_ini(inst: Instance, sound: bool, unit_limit=None):
         return
     path.write_text("[Preferences]\r\n"
                     + "".join(f"{k}={v}\r\n" for k, v in prefs))
-
-
-# The Classic++ restorer's weights (unditherer export-weights): the DLL runs the
-# model as Vulkan compute and reads <model>.w32.bin beside TotalA.exe, so the two files are linked from the package that owns them rather
-# than copied into every gamedir. mirror_gamedir() runs only at create, so an
-# instance made before a file existed would never see it -- they are re-linked
-# at launch instead, alongside deploy_dll and so, deliberately, under the same
-# --keep-dll guard. Absent is fine: the DLL logs why and the terrain stays
-# indexed under Classic++.
-WEIGHT_FILES = ("full.w32.bin", "tiny.w32.bin")
-
-
-def weight_dir() -> Path:
-    """The tree this tacli runs from first (a worktree exports its own weights
-    beside its own DLL, as built_dll() reasons), then the main checkout."""
-    local = Path(__file__).resolve().parent.parent / "unditherer" / "models"
-    return local if (local / WEIGHT_FILES[0]).exists() else ROOT / "unditherer" / "models"
-
-
-def _relink(src: Path, dst: Path):
-    """Point dst at src, repairing a symlink that has gone stale.
-
-    A REAL file at dst is left alone: a build someone dropped in by hand beats
-    anything we would resolve, and silently replacing it would be a mystery.
-    """
-    if not src.is_file():
-        return
-    src = src.resolve()
-    if dst.is_symlink():
-        if dst.resolve() == src:
-            return
-        dst.unlink()
-    elif dst.exists():
-        return
-    dst.symlink_to(src)
-
-
-def link_restorer_files(inst: Instance):
-    """Give the instance the restorer's weight files (linked, not copied).
-
-    Separate from deploy_dll because these are not the fork. Called from the
-    same places, so --keep-dll skips this too, by design.
-    """
-    for name in WEIGHT_FILES:
-        _relink(weight_dir() / name, inst.gamedir / name)
 
 
 def deploy_dll(inst: Instance):
@@ -1992,7 +1946,6 @@ def _launch(args) -> dict:
             else f"no stale dplaysvr.exe on port {port}")
     if not args.keep_dll:
         deploy_dll(inst)
-        link_restorer_files(inst)
     apply_prefix_settings(inst)
     # after deploy_dll: which DLL will run decides where TA's values are read
     registry = local_registry(inst, meta, regstore_values(meta.get("sound", False),

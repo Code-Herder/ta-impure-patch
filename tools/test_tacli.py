@@ -3434,8 +3434,7 @@ class LocalRegistry(unittest.TestCase):
                 ("default_display", lambda: ":99"),
                 ("screen_size", lambda display=None: (3840, 2160)),
                 ("pointer_pos", lambda display: None),
-                ("place_window", lambda inst, display: inst.window()),
-                ("weight_dir", lambda: root / "no-weights")):
+                ("place_window", lambda inst, display: inst.window())):
             self.addCleanup(setattr, tacli, name, getattr(tacli, name))
             setattr(tacli, name, value)
         for name, value in (("pid", lambda inst: 4242 if test.running else None),
