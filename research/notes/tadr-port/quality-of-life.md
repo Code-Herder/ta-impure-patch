@@ -175,7 +175,7 @@ release with Shift held orders it.
 | Shift | a line at any angle: the dominant axis steps by the footprint, the other proportionally, each site snapped as the build cursor snaps |
 | Shift + Ctrl | the same line, held to its dominant axis |
 | Shift + Alt | a filled rectangle, in serpentine order |
-| Shift + Alt + Ctrl | a hollow rectangle |
+| Shift + Alt + Ctrl | a hollow rectangle, its border only. With both sides longer than one site, the first site is the one next to the pressed corner along the first column (the press's column, one site toward the cursor's row); the order runs down that column, along the far row, up the far column and back along the first row, and the last site is the pressed corner itself (`place_shape`, `tagpu_placegeo.c`). With one side a single site, it is a plain line from the pressed corner |
 | Shift + Ctrl over a unit, or over a queued build of a selected builder | a ring round it, unrotated; a press and release with no drag orders it |
 
 **What a site does to the queue is TA's Shift-click.** The gesture is the stock Shift-clicks of its
