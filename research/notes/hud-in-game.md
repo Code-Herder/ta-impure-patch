@@ -264,8 +264,9 @@ The owner's decisions:
   the pass down, and its images are uploaded again from these. Nothing writes or frees the
   loaded HUD afterwards, which is why any thread may read it without a lock.
 - **Each part is its own image, with mipmaps.** The parts are drawn at 1.1 (1080p, 75 %) to 4.5
-  (4K, 150 %) pixels a unit and filed at what each needs at 4.5: no more than 0.9 device pixel to a
-  texel there (`tools/hudart/fit.py`; [Replay HUD art](hud-art.md), *How sharp the art is*). One
+  (4K, 150 %) pixels a unit and packed at what each needs at 4.5: no more than 0.9 device pixel to
+  a texel there. `tools/hudart/fit.py` makes `art/hud/`'s parts so from the full-resolution cuts in
+  `art/hud-full/`, which are not packed ([Replay HUD art](hud-art.md), *How sharp the art is*). One
   descriptor set per part is bound per run of quads.
 
 ### The uploads

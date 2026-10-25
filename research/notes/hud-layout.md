@@ -5,7 +5,9 @@
 **The chosen design is in the repository since 2026-10-07.** The replay HUD whose art
 [HUD art](hud-art.md) describes is kept in `art/hud/`: its parts as lossless PNGs, a kit file
 with what drawing each part needs, and a layout file holding every size, position, gap and text
-style. The mockup in `tools/hudart/mockup/` draws the HUD from those files and nothing else.
+style. The mockup in `tools/hudart/mockup/` draws the HUD from those files and nothing else. The
+parts and the kit there are made by `tools/hudart/fit.py` from the full-resolution ones filed in
+`art/hud-full/` ([HUD art](hud-art.md), *6. File*); the layout and the faces are edited in place.
 
 - **The DLL draws it in game** on every Vulkan replay, and takes its input there
   ([The replay HUD in game](hud-in-game.md)). It embeds the same files, packed as they are by
@@ -35,15 +37,16 @@ style. The mockup in `tools/hudart/mockup/` draws the HUD from those files and n
 
 | What | Where |
 |---|---|
-| The parts, lossless | `art/hud/parts/<name>.png` |
-| What drawing each part needs | `art/hud/kit.json` |
+| The parts, lossless, as the game draws them (made by `fit.py`) | `art/hud/parts/<name>.png` |
+| What drawing each part needs (made by `fit.py`) | `art/hud/kit.json` |
+| The parts and their kit as cut, which `fit.py` reads | `art/hud-full/` |
 | Every size, position, gap and text style | `art/hud/layout.json` |
 | The rules, for the browser | `tools/hudart/mockup/hud.js`, `hud.css` |
 | The rules, for the DLL | `tagpu/ddraw/src/tagpu_hudlay.c` |
 | The faces, cut down, and their licences | `art/hud/fonts/`, cut by `tools/hudart/fonts.py` |
 | The mockup: a synthetic game, the controls, the input | `tools/hudart/mockup/index.html` |
 | The rules checked against each other | `tools/hudart/laycheck.py`, `laycheck.c` |
-| Filing cut parts into `art/hud/` | `tools/hudart/file.py` |
+| Filing cut parts into `art/hud-full/`, fitting them into `art/hud/` | `tools/hudart/file.py`, `fit.py` |
 | The replay frame drawn behind the mockup | `research/notes/assets/hud-art/backdrop.png` |
 
 ## Viewing it
@@ -88,10 +91,11 @@ mockup its query carries `stat=1`, so that the chips it captures are on screen.
   changes.
 
 - **A part's art:** repaint it ([HUD art](hud-art.md), *Recipes*), cut it, then file it, which
-    replaces the old one:
+    replaces the old one in `art/hud-full/`, and fit, which makes `art/hud/` from there:
 
         $PY tools/hudart/file.py <cut dir> head_one
         $PY tools/hudart/file.py <kit dir> --look h6,c3,c,gm row_one   # from a kit of looks
+        $PY tools/hudart/fit.py
 
     A repainted grid-sliced part brings its own measured wells and bands, and the layout places
     everything through them, so its text follows its recesses. A well renamed or removed must be

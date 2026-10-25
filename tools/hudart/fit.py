@@ -1,11 +1,13 @@
-"""Fits every part of art/hud/ to the most the game ever draws of it: each PNG resampled down until no more than
-0.9 device pixel falls on one of its texels at the HUD's densest, a 3840x2160 screen at HUD 150 (4.5 device pixels a
-unit), and never up. The parts are cut at about 10 px a unit, more than twice what any of them is drawn at, and the
-DLL embeds them all (tools/hudpak.py).
+"""Makes art/hud/'s parts and kit from the full-resolution ones of art/hud-full/, each part fitted to the most the
+game ever draws of it: resampled down until no more than 0.9 device pixel falls on one of its texels at the HUD's
+densest, a 3840x2160 screen at HUD 150 (4.5 device pixels a unit), and never up. The parts are filed at about 10 px a
+unit (file.py), more than twice what any of them is drawn at; art/hud/ is what the game embeds (tools/hudpak.py) and
+the mockup draws, so it is rewritten whole, a part art/hud-full/ no longer has removed. art/hud/layout.json and
+art/hud/fonts/ are not fitted and live in art/hud/ only.
 usage: fit.py
 
 THE DENSITY A PART NEEDS IS MEASURED, not assumed: the mockup draws laycheck.py's cases and the housing without the
-proposed features (which only the mockup draws), and every piece of every part is taken at its device pixels against
+proposed features (which only the mockup draws) from art/hud-full/ (its `parts=hud-full` switch), and every piece of every part is taken at its device pixels against
 its texels, scaled to 4.5 px a unit from the case's own density. laycheck.py proves the game draws the same pieces.
   - Along a stretch band -- a 9-slice's middle, a grid's xs or ys band -- a piece is uniform by construction, so
     that axis is not counted.
@@ -17,15 +19,17 @@ its texels, scaled to 4.5 px a unit from the case's own density. laycheck.py pro
 Each part with a need under 0.97 x 0.9 is resampled by f = need / 0.9 (Lanczos, which Pillow applies to RGBA on
 premultiplied colour) and its kit entry rescaled with it: `scale` always, a 9-slice's `slice`, a repeating grid
 band's `xs`. A repeating band is resampled on its own, wrapped, so its copies still meet without a seam, and a
-repeating 9-slice's end slices are made to land on whole texels. A fitted part measures 0.9 again, so a second run
-changes nothing; a part filed again by file.py is fitted again from its new painting."""
-import json, sys, tempfile
+repeating 9-slice's end slices are made to land on whole texels. Any other part is copied as filed: resampling
+blurs it, for 3 % of its size at most. The output depends on art/hud-full/, the layout and the mockup only, so a run
+on unchanged inputs rewrites art/hud/ byte for byte."""
+import json, shutil, sys, tempfile
 from pathlib import Path
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import laycheck
 
+FULL = laycheck.ROOT / 'art' / 'hud-full'
 ART = laycheck.ROOT / 'art' / 'hud'
 DENSEST = 4.5           # device px a unit: 2160 / 720 x 150 %, tagpu_hudstate.c
 FILL = 0.9              # the most device pixels a texel may cover there
@@ -58,7 +62,7 @@ def measure(kit, size):
     try:
         with tempfile.TemporaryDirectory(prefix='hudfit') as tmp:
             for name, query, hover, held, *dpr in laycheck.CASES + EXTRA:
-                dom = laycheck.mockup(httpd.server_address[1], query, hover, held, Path(tmp), *dpr)
+                dom = laycheck.mockup(httpd.server_address[1], query + '&parts=hud-full', hover, held, Path(tmp), *dpr)
                 norm = DENSEST / (dom['u'] * dom['d'])
                 for el in dom['els']:
                     if el['kind'] != 'part' or el['part'] not in kit: continue
@@ -107,8 +111,8 @@ def columns(im, cuts, widths, h, rep):
 
 
 def whole_texels(f, lengths):
-    """The factor from f up to 2 % above it that lands every length nearest a whole number of texels. No more
-    than 2 %: the part then measures at least FILL / 1.02, which the next run's 0.97 keeps as it is."""
+    """The factor from f up to 2 % above it that lands every length nearest a whole number of texels: no more
+    than 2 % larger for it."""
     cands = [f * (1 + i / 2000) for i in range(41)]
     return min(cands, key=lambda c: (round(max(abs(L * c - round(L * c)) for L in lengths), 3), c))
 
@@ -148,27 +152,31 @@ def fit(im, e, f):
 
 
 def main():
-    kp = ART / 'kit.json'
-    K = json.load(open(kp))
+    K = json.load(open(FULL / 'kit.json'))
     kit = K['parts']
-    size = {n: Image.open(ART / 'parts' / f'{n}.png').size for n in kit}
+    size = {n: Image.open(FULL / 'parts' / f'{n}.png').size for n in kit}
     need, where = measure(kit, size)
     missing = sorted(set(kit) - set(need))
     if missing: sys.exit(f'fit: no case draws {", ".join(missing)}; add one to laycheck.py CASES or EXTRA here')
+    (ART / 'parts').mkdir(parents=True, exist_ok=True)
+    for p in (ART / 'parts').glob('*.png'):
+        if p.stem not in kit: p.unlink(); print(f'{p.stem:22s} removed: not in art/hud-full/')
     before = after = 0
     for n in sorted(kit, key=lambda n: -need[n]):
-        p = ART / 'parts' / f'{n}.png'
-        before += p.stat().st_size
+        src, dst = FULL / 'parts' / f'{n}.png', ART / 'parts' / f'{n}.png'
+        before += src.stat().st_size
         f = need[n] / FILL
-        note = 'kept'
+        note = 'copied'
         if f < 0.97:
-            im = Image.open(p).convert('RGBA')
+            im = Image.open(src).convert('RGBA')
             out, kit[n] = fit(im, kit[n], f)
-            out.save(p, optimize=True, compress_level=9)
+            out.save(dst, optimize=True, compress_level=9)
             note = f'{im.width}x{im.height} -> {out.width}x{out.height}'
-        after += p.stat().st_size
+        else:
+            shutil.copyfile(src, dst)
+        after += dst.stat().st_size
         print(f'{n:22s} {kit[n]["kind"]:5s} need {need[n]:5.3f} ({where[n]}) {note}')
-    json.dump(K, open(kp, 'w'), indent=1)
+    json.dump(K, open(ART / 'kit.json', 'w'), indent=1)
     print(f'{len(kit)} parts, {before / 1e6:.2f} MB -> {after / 1e6:.2f} MB')
 
 

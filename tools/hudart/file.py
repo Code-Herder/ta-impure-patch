@@ -1,5 +1,6 @@
-"""Files cut parts into art/hud/, the replay HUD's shared source: each part's PNG, lossless, and its entry
-in art/hud/kit.json. The mockup (tools/hudart/mockup/) draws from there, and the DLL packs it with tools/hudpak.py.
+"""Files cut parts into art/hud-full/, the replay HUD's parts at the resolution they were cut at: each part's PNG,
+lossless, and its entry in art/hud-full/kit.json. fit.py makes art/hud/ from there, which the mockup
+(tools/hudart/mockup/) draws and the DLL packs with tools/hudpak.py: run it after filing.
 usage: file.py <kit dir> [--look <l1>,<l2>,...] <part>[=<name>] ...
 
 <kit dir> is a cutter's output (gridslice.py, cut.py, iconcut.py, tile.py) or a lookmerge.py kit. A part is
@@ -22,7 +23,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-OUT = Path(__file__).resolve().parents[2] / 'art' / 'hud'
+OUT = Path(__file__).resolve().parents[2] / 'art' / 'hud-full'
 
 
 def entry(e, name):

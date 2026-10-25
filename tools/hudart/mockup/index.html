@@ -76,6 +76,8 @@ const save = () => { try { localStorage.setItem('hud-mockup', JSON.stringify({ h
   for (const k of ['prop', 'nf', 'tl']) if (q.get(k)) S[k] = +q.get(k);
   if (q.has('pick')) S.pick = true; if (q.has('lo')) S.lo = true; if (q.get('mode')) S.mode = q.get('mode'); if (q.has('rw')) S.rw = true;
   if (q.has('sx')) S.sw = { x: +q.get('sx'), y: +(q.get('sy') || 0) }; }
+// parts=hud-full: the kit and parts of art/hud-full/, the full resolution tools/hudart/fit.py measures
+const PARTS = new URLSearchParams(location.search).get('parts') === 'hud-full' ? 'hud-full' : 'hud';
 
 /* ---- the game's own state: state=<url> loads what the game dumped (tagpu_replayhud.dump, tagpu_hudstate.c) -- the screen,
    the engine frame's scale and the HUD's state in units -- and draws that instead of the made-up game below, still ---- */
@@ -325,7 +327,7 @@ window.addEventListener('resize', resize);
 document.addEventListener('keydown', e => { if (e.key === ' ' && e.target === document.body) { e.preventDefault(); S.playing = !S.playing; build(); } });
 // the faces are loaded before the first layout, so no text is measured in a fallback
 const FACES = ['500 10px Oswald', '700 10px Oswald', '600 10px "Barlow Condensed"'].map(f => document.fonts.load(f));
-Promise.all([HUD.load('../../../art/hud/'), GAME_URL ? fetch(GAME_URL).then(r => r.json()) : null, ...FACES]).then(([, g]) => {
+Promise.all([HUD.load('../../../art/hud/', `../../../art/${PARTS}/`), GAME_URL ? fetch(GAME_URL).then(r => r.json()) : null, ...FACES]).then(([, g]) => {
   if (g) { GAME = g; S.res = `${g.device.W}x${g.device.H}`; S.hud = g.state.hud; S.playing = false; }
   resize(); requestAnimationFrame(frame); })
   .catch(err => { layer.innerHTML = `<p class="err" style="padding:16px">Could not load art/hud/: ${err}. Serve the repository root over HTTP and open /tools/hudart/mockup/.</p>`; });

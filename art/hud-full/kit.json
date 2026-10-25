@@ -1,0 +1,847 @@
+{
+ "format": 1,
+ "parts": {
+  "act_button_wide": {
+   "kind": "nine",
+   "scale": 9.944,
+   "slice": [
+    31,
+    38,
+    27,
+    158
+   ]
+  },
+  "act_button_wide_down": {
+   "kind": "nine",
+   "scale": 9.944,
+   "slice": [
+    10,
+    21,
+    12,
+    26
+   ]
+  },
+  "bay_button": {
+   "kind": "nine",
+   "scale": 9.679,
+   "slice": [
+    29,
+    29,
+    29,
+    29
+   ]
+  },
+  "bay_button_down": {
+   "kind": "nine",
+   "scale": 9.714,
+   "slice": [
+    29,
+    29,
+    29,
+    29
+   ]
+  },
+  "chip_face": {
+   "kind": "nine",
+   "scale": 10.133,
+   "slice": [
+    17,
+    24,
+    20,
+    145
+   ]
+  },
+  "chip_face_down": {
+   "kind": "nine",
+   "scale": 10.133,
+   "slice": [
+    10,
+    19,
+    16,
+    32
+   ]
+  },
+  "close_face": {
+   "kind": "nine",
+   "scale": 9.913,
+   "slice": [
+    57,
+    81,
+    27,
+    25
+   ]
+  },
+  "close_face_down": {
+   "kind": "nine",
+   "scale": 9.957,
+   "slice": [
+    36,
+    22,
+    13,
+    32
+   ]
+  },
+  "foot_one": {
+   "kind": "grid",
+   "scale": 10.005,
+   "design": [
+    204,
+    36.48
+   ],
+   "xs": [
+    [
+     14.62,
+     27.86
+    ],
+    [
+     54.67,
+     67.87
+    ],
+    [
+     94.79,
+     107.91
+    ],
+    [
+     134.63,
+     147.83
+    ],
+    [
+     174.75,
+     187.87
+    ]
+   ],
+   "ys": [
+    [
+     11.77,
+     23.32
+    ]
+   ],
+   "wells": {
+    "bay_stats": [
+     4.7,
+     3.1,
+     33.08,
+     28.89
+    ],
+    "bay_cursors": [
+     44.78,
+     3.1,
+     32.98,
+     28.89
+    ],
+    "bay_clicks": [
+     84.96,
+     3.1,
+     32.78,
+     28.89
+    ],
+    "bay_selections": [
+     124.74,
+     3.1,
+     32.98,
+     28.89
+    ],
+    "bay_chat": [
+     164.92,
+     3.0,
+     32.78,
+     28.99
+    ]
+   }
+  },
+  "forks_bay": {
+   "kind": "nine",
+   "scale": 9.657,
+   "slice": [
+    29,
+    20,
+    22,
+    27
+   ]
+  },
+  "forks_bay_down": {
+   "kind": "nine",
+   "scale": 9.543,
+   "slice": [
+    30,
+    19,
+    35,
+    28
+   ]
+  },
+  "head_one": {
+   "kind": "grid",
+   "scale": 10.004,
+   "design": [
+    250,
+    23.29
+   ],
+   "xs": [
+    [
+     36.6,
+     81.4
+    ],
+    [
+     185.03,
+     219.82
+    ]
+   ],
+   "ys": [
+    [
+     5.39,
+     8.31
+    ],
+    [
+     14.27,
+     17.02
+    ]
+   ],
+   "wells": {
+    "sum": [
+     118.15,
+     3.1,
+     36.69,
+     15.99
+    ],
+    "m_inc": [
+     158.94,
+     3.2,
+     86.97,
+     7.3
+    ],
+    "e_inc": [
+     158.94,
+     12.2,
+     86.97,
+     7.3
+    ],
+    "title": [
+     3,
+     3.04,
+     112,
+     17.21
+    ]
+   },
+   "text": [
+    "title"
+   ]
+  },
+  "hover_strip": {
+   "kind": "nine",
+   "scale": 10.708,
+   "slice": [
+    46,
+    41,
+    42,
+    45
+   ]
+  },
+  "i_arrow_down": {
+   "kind": "icon",
+   "scale": 10.0
+  },
+  "i_arrow_up": {
+   "kind": "icon",
+   "scale": 9.438
+  },
+  "i_bookmark": {
+   "kind": "icon",
+   "scale": 8.312
+  },
+  "i_chat": {
+   "kind": "icon",
+   "scale": 10.438
+  },
+  "i_clicks": {
+   "kind": "icon",
+   "scale": 11.75
+  },
+  "i_close": {
+   "kind": "icon",
+   "scale": 8.938
+  },
+  "i_cursors": {
+   "kind": "icon",
+   "scale": 10.625
+  },
+  "i_death": {
+   "kind": "icon",
+   "scale": 9.125
+  },
+  "i_defeat": {
+   "kind": "icon",
+   "scale": 8.688
+  },
+  "i_delete": {
+   "kind": "icon",
+   "scale": 6.562
+  },
+  "i_export": {
+   "kind": "icon",
+   "scale": 6.562
+  },
+  "i_flag": {
+   "kind": "icon",
+   "scale": 9.125
+  },
+  "i_fold_closed": {
+   "kind": "icon",
+   "scale": 7.938
+  },
+  "i_fold_open": {
+   "kind": "icon",
+   "scale": 9.188
+  },
+  "i_follow": {
+   "kind": "icon",
+   "scale": 11.188
+  },
+  "i_fwd": {
+   "kind": "icon",
+   "scale": 9.125
+  },
+  "i_grip": {
+   "kind": "icon",
+   "scale": 8.875
+  },
+  "i_jump": {
+   "kind": "icon",
+   "scale": 9.25
+  },
+  "i_leave": {
+   "kind": "icon",
+   "scale": 9.938
+  },
+  "i_pause": {
+   "kind": "icon",
+   "scale": 7.5
+  },
+  "i_play": {
+   "kind": "icon",
+   "scale": 8.0
+  },
+  "i_rew": {
+   "kind": "icon",
+   "scale": 8.75
+  },
+  "i_rewind": {
+   "kind": "icon",
+   "scale": 12.0
+  },
+  "i_selections": {
+   "kind": "icon",
+   "scale": 12.5
+  },
+  "i_sight": {
+   "kind": "icon",
+   "scale": 9.562
+  },
+  "i_skull": {
+   "kind": "icon",
+   "scale": 9.125
+  },
+  "i_stats": {
+   "kind": "icon",
+   "scale": 8.938
+  },
+  "i_uiscale": {
+   "kind": "icon",
+   "scale": 8.812
+  },
+  "lane": {
+   "kind": "nine",
+   "scale": 9.714,
+   "slice": [
+    24,
+    107,
+    22,
+    107
+   ],
+   "xtile": true
+  },
+  "lane_button": {
+   "kind": "nine",
+   "scale": 10.0,
+   "slice": [
+    21,
+    21,
+    21,
+    20
+   ]
+  },
+  "lane_button_down": {
+   "kind": "nine",
+   "scale": 9.333,
+   "slice": [
+    16,
+    9,
+    9,
+    19
+   ]
+  },
+  "lane_down": {
+   "kind": "nine",
+   "scale": 9.429,
+   "slice": [
+    12,
+    104,
+    20,
+    104
+   ],
+   "xtile": true
+  },
+  "lanes_plate": {
+   "kind": "nine",
+   "scale": 9.391,
+   "slice": [
+    23,
+    136,
+    23,
+    154
+   ],
+   "xtile": true
+  },
+  "live_groove": {
+   "kind": "nine",
+   "scale": 10.929,
+   "slice": [
+    36,
+    801,
+    34,
+    801
+   ],
+   "xtile": true
+  },
+  "live_one": {
+   "kind": "nine",
+   "scale": 10.265,
+   "slice": [
+    47,
+    354,
+    42,
+    398
+   ],
+   "xtile": true
+  },
+  "marker_badge": {
+   "kind": "whole",
+   "scale": 5.917
+  },
+  "pick_row": {
+   "kind": "nine",
+   "scale": 10.067,
+   "slice": [
+    12,
+    139,
+    14,
+    154
+   ],
+   "xtile": true
+  },
+  "pick_row_down": {
+   "kind": "nine",
+   "scale": 10.0,
+   "slice": [
+    10,
+    142,
+    14,
+    137
+   ],
+   "xtile": true
+  },
+  "picker_one": {
+   "kind": "nine",
+   "scale": 10.012,
+   "slice": [
+    195,
+    37,
+    27,
+    37
+   ]
+  },
+  "playhead": {
+   "kind": "whole",
+   "scale": 4.167
+  },
+  "rail_forks": {
+   "kind": "grid",
+   "scale": 10.002,
+   "design": [
+    456,
+    43.99
+   ],
+   "xs": [
+    [
+     144.77,
+     238.85
+    ]
+   ],
+   "ys": [
+    [
+     9.2,
+     14.0
+    ],
+    [
+     25.61,
+     31.88
+    ]
+   ],
+   "wells": {
+    "bay": [
+     7.9,
+     5.6,
+     17.4,
+     30.99
+    ],
+    "markers": [
+     27.29,
+     5.5,
+     352.42,
+     12.1
+    ],
+    "track": [
+     27.39,
+     20.9,
+     352.32,
+     15.7
+    ],
+    "time": [
+     385.62,
+     5.6,
+     61.19,
+     30.99
+    ]
+   },
+   "xtile": true
+  },
+  "rail_one": {
+   "kind": "grid",
+   "scale": 9.998,
+   "design": [
+    338.88,
+    46.51
+   ],
+   "xs": [
+    [
+     40.31,
+     235.06
+    ]
+   ],
+   "ys": [
+    [
+     11.09,
+     14.81
+    ],
+    [
+     26.35,
+     31.87
+    ]
+   ],
+   "wells": {
+    "markers": [
+     7.6,
+     5.0,
+     260.06,
+     12.6
+    ],
+    "track": [
+     7.8,
+     22.21,
+     259.76,
+     13.8
+    ],
+    "time": [
+     274.86,
+     8.3,
+     54.61,
+     28.71
+    ]
+   },
+   "xtile": true
+  },
+  "rewind_button": {
+   "kind": "nine",
+   "scale": 9.75,
+   "slice": [
+    20,
+    21,
+    20,
+    16
+   ]
+  },
+  "rewind_button_down": {
+   "kind": "nine",
+   "scale": 9.917,
+   "slice": [
+    27,
+    15,
+    10,
+    24
+   ]
+  },
+  "row_one": {
+   "kind": "grid",
+   "scale": 10.004,
+   "design": [
+    250,
+    27.49
+   ],
+   "xs": [
+    [
+     32.08,
+     57.67
+    ],
+    [
+     135.21,
+     167.68
+    ],
+    [
+     210.55,
+     230.07
+    ]
+   ],
+   "ys": [
+    [
+     5.91,
+     9.39
+    ],
+    [
+     17.0,
+     20.48
+    ]
+   ],
+   "wells": {
+    "stripe": [
+     3.7,
+     3.3,
+     5.4,
+     19.89
+    ],
+    "name": [
+     12.89,
+     3.0,
+     63.97,
+     20.09
+    ],
+    "units": [
+     81.07,
+     3.2,
+     25.79,
+     20.09
+    ],
+    "m_store": [
+     110.86,
+     3.1,
+     81.17,
+     8.9
+    ],
+    "m_inc": [
+     195.92,
+     3.2,
+     48.78,
+     8.9
+    ],
+    "e_store": [
+     110.86,
+     14.39,
+     81.17,
+     8.7
+    ],
+    "e_inc": [
+     195.92,
+     14.29,
+     48.78,
+     8.9
+    ]
+   }
+  },
+  "scroll_button": {
+   "kind": "nine",
+   "scale": 9.667,
+   "slice": [
+    13,
+    29,
+    18,
+    15
+   ]
+  },
+  "scroll_thumb": {
+   "kind": "nine",
+   "scale": 10.0,
+   "slice": [
+    30,
+    14,
+    30,
+    20
+   ]
+  },
+  "scroll_track": {
+   "kind": "nine",
+   "scale": 10.111,
+   "slice": [
+    94,
+    21,
+    205,
+    10
+   ]
+  },
+  "takeover_button": {
+   "kind": "nine",
+   "scale": 9.7,
+   "slice": [
+    19,
+    133,
+    23,
+    476
+   ],
+   "xtile": true
+  },
+  "takeover_button_down": {
+   "kind": "nine",
+   "scale": 9.65,
+   "slice": [
+    19,
+    133,
+    22,
+    467
+   ],
+   "xtile": true
+  },
+  "tp_one": {
+   "kind": "grid",
+   "scale": 10.0,
+   "design": [
+    284,
+    46.6
+   ],
+   "xs": [
+    [
+     129.46,
+     147.94
+    ],
+    [
+     211.55,
+     228.95
+    ]
+   ],
+   "ys": [
+    [
+     16.17,
+     29.73
+    ]
+   ],
+   "wells": {
+    "rew": [
+     7.0,
+     5.9,
+     30.4,
+     34.1
+    ],
+    "play": [
+     40.5,
+     5.9,
+     38.0,
+     34.1
+    ],
+    "fwd": [
+     81.5,
+     6.0,
+     30.3,
+     33.9
+    ],
+    "speed": [
+     115.6,
+     5.9,
+     46.2,
+     34.1
+    ],
+    "bookmark": [
+     164.7,
+     5.8,
+     30.8,
+     34.2
+    ],
+    "uiscale": [
+     198.5,
+     5.9,
+     43.5,
+     34.1
+    ],
+    "leave": [
+     245.1,
+     5.9,
+     30.7,
+     34.1
+    ]
+   }
+  },
+  "track_fill": {
+   "kind": "tile",
+   "scale": 6.417
+  },
+  "win_one": {
+   "kind": "grid",
+   "scale": 7.005,
+   "design": [
+    428,
+    274.1
+   ],
+   "xs": [
+    [
+     105.46,
+     237.88
+    ]
+   ],
+   "ys": [
+    [
+     121.8,
+     194.56
+    ]
+   ],
+   "wells": {
+    "title": [
+     5.71,
+     4.14,
+     392.6,
+     12.85
+    ],
+    "close": [
+     404.02,
+     3.71,
+     16.85,
+     14.42
+    ],
+    "tray_eco": [
+     5.71,
+     24.7,
+     415.29,
+     16.27
+    ],
+    "tray_army": [
+     5.57,
+     45.54,
+     415.44,
+     16.42
+    ],
+    "chart": [
+     6.14,
+     67.24,
+     331.06,
+     181.88
+    ],
+    "legend": [
+     344.06,
+     67.24,
+     75.24,
+     182.31
+    ],
+    "foot": [
+     5.71,
+     255.97,
+     415.72,
+     12.56
+    ]
+   }
+  }
+ }
+}

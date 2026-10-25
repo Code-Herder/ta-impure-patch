@@ -13,9 +13,11 @@ const HUD = (() => {
   let L, K, root;
   const IMG = {}, cache = {};
 
-  async function load(base) {
-    root = base;
-    [L, K] = await Promise.all([fetch(base + 'layout.json').then(r => r.json()), fetch(base + 'kit.json').then(r => r.json()).then(j => j.parts)]);
+  // the layout from `base`, the kit and its parts from `parts`: art/hud/ for both but in tools/hudart/fit.py, which
+  // measures the full-resolution parts of art/hud-full/
+  async function load(base, parts = base) {
+    root = parts;
+    [L, K] = await Promise.all([fetch(base + 'layout.json').then(r => r.json()), fetch(parts + 'kit.json').then(r => r.json()).then(j => j.parts)]);
     await Promise.all(Object.keys(K).map(n => {
       const im = new Image(); im.src = url(n); IMG[n] = im; return im.decode();
     }));
