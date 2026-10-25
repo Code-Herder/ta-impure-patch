@@ -12,12 +12,12 @@ reason. Nothing of the wiki is in the DLL yet.
 | The tree of categories and entries | `art/wiki/tree.json` |
 | One entry: its text, its mods, its demos | `art/wiki/entries/<id>.json` |
 | The mockup, which reads only those files | `tools/wiki/mockup/` (`index.html`, `wiki.js`, `wiki.css`, `sim.js`) |
-| The demos' generator; the headless check of every demo | `tools/wiki/gen-quickbuild.mjs`; `tools/wiki/simcheck.mjs` |
+| The demos' generators; the headless check of every demo | `tools/wiki/gen-quickbuild.mjs`, `tools/wiki/gen-buildshapes.mjs`; `tools/wiki/simcheck.mjs` |
 | Serving it | `python3 tools/hudart/serve.py`, then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
 
-The first and only entry is **Quick Build: Resource Extractors** (Quality of Life → Building).
-The Shift-drag placement family, landed on `main` at `90c67078`, is the next entry to add.
+Two entries, both under Quality of Life → Building: **Quick Build: Resource Extractors** and
+**Build Lines, Grids and Rings** (the Shift-drag placement family, landed on `main` at `90c67078`).
 
 ## The decisions
 
@@ -104,7 +104,11 @@ A whitebox of the game's own view, so a demo reads as what the player will see:
 - units and buildings as grey boxes at their footprint size with a team-coloured edge and their
   unit name (`ARMCK`, `ARMMEX`); the selected ones in the game's selection box;
 - the cursor, the green or red placement ghost, queued build squares, order lines, and
-  construction as a fill.
+  construction as a fill;
+- a placement gesture's sites as TA's build square in the site's colour (green placed, red refused,
+  yellow takes a queued order off) over a translucent ghost of the building, as the game's Vulkan
+  path draws a ghost at each site, with the site's place among the orders the release adds small in
+  its corner (the game draws no number; the mockup does, so the queue order can be read).
 
 Real assets replace the boxes later; the layout and the simulation do not change for them.
 
@@ -175,6 +179,43 @@ for the same ideas are *Quick Build Extractor* (its widget) and *Upgrade T1 » T
 **Mods that lock it off:** Escalation, TA Zero and an unidentified mod (the resource profiles,
 `resource-snapping.md` *Scope and defaults*). Stock, Total Mayhem, ProTA and Twilight allow it.
 
+## The second entry: Build Lines, Grids and Rings
+
+The feature is [several buildings in one gesture](tadr-port/quality-of-life.md) (*Placing several
+buildings in one gesture*, *What Impure does*), `tagpu_place.c` with its shapes in
+`tagpu_placegeo.c`. Only what the game does today is shown: spacing is shown following the design
+(below), and Build Split, which is not built, is not.
+
+| # | Demo | What the player sees |
+|---|---|---|
+| 1 | Click and Shift-click | a plain click places one ARMLLT and disarms; Shift-clicks queue two more and stay armed; letting go of Shift disarms |
+| 2 | Line | Shift+drag lays seven ARMLLT at a shallow angle, each site snapped; letting go of Shift disarms. Then a second drag with Shift released before the button: the preview goes, nothing is ordered, ARMLLT stays armed |
+| 3 | Straight line | Shift+Ctrl+drag: ten sites held to the press's row while the cursor wanders off it; the three over the ARMSOLAR are red and skipped |
+| 4 | Filled rectangle | Shift+Alt+drag: a 4 × 3 block of ARMDRAG numbered in serpentine order, then built in that order |
+| 5 | Hollow rectangle | Shift+Alt+Ctrl+drag from bottom right to top left: fourteen ARMDRAG round the edge, from beside the press back to it |
+| 6 | Spacing | a Shift-drag line of seven ARMDRAG; Alt+Z twice mid-drag spreads it to five, then four, at once; released; armed again the next line starts spread, and Alt+X twice brings it back to seven |
+| 7 | Ring around a building | Shift+Ctrl over the ARMSOLAR previews twelve ARMDRAG round it; a press and release orders them |
+| 8 | Ring around a queued build | two ARMSOLAR queued by Shift-click; Shift+Ctrl over the second, still only a queued square, rings it |
+| 9 | Placing it again removes it | a row of five ARMLLT; dragging back over three shows them yellow and the release takes them off, adding nothing; a Shift-click on a fourth takes it off too |
+| 10 | Change the shape mid-drag | one drag: a line, Alt makes it a filled rectangle, Ctrl hollow, and the release orders the hollow one; a second drag is cancelled by a right press, which also disarms |
+
+**Mods that lock it off:** none. `tagpu_place_init` (`dllmain.c`) arms it whatever the mod, and no
+resource profile reads it.
+
+**The units**, stock ARM, read from the retail unit files as for Quick Build (rev31.gp3's copy,
+the one loaded):
+
+| Unit | Footprint | BuildTime | Role |
+|---|---|---|---|
+| ARMCK | 2 × 2 | 5597 | the one selected builder (WorkerTime 80, BuildDistance 40, MaxVelocity 0.8) |
+| ARMLLT | 2 × 2 | 4662 | lines and the toggle |
+| ARMDRAG | 2 × 2 | 520 | rectangles, walls, spacing and rings |
+| ARMSOLAR | 5 × 5 | 2495 | the finished building to ring and to be refused over, and the queued one to ring |
+
+Every demo has exactly one ARMCK selected: the stock interface arms a building only with one unit
+selected (`quality-of-life.md` *Who builds*). The entry's `pace` is 24: an ARMLLT takes ARMCK
+2.4 s on the stage (58 s in the game), an ARMDRAG 0.27 s.
+
 ## The data format
 
 ### `art/wiki/tree.json`
@@ -207,11 +248,12 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
 - **Time is in simulation ticks**, 30 a second, so a demo plays the same at any frame rate and the
   game's version can be compared tick by tick.
 - **Positions are world units** (a cell is 16), the game's own.
-- **Keys and buttons**: `shift`, `alt`, `ctrl`, `lmb`, `rmb`; `{ "build": "ARMMEX" }` picks a
-  build-menu button (the manual placement mode); `{ "build": null }` leaves it.
+- **Keys and buttons**: `shift`, `alt`, `ctrl`, `z`, `x`, `lmb`, `rmb`; `{ "build": "ARMMEX" }`
+  picks a build-menu button (the manual placement mode); `{ "build": null }` leaves it. A `z` or
+  `x` down steps again while the key is held, as an auto-repeat does.
 - **The scene**: the map's size in cells, its `surfaceMetal`, its metal as rectangles of a value,
   its vents, its fog rectangles (`grey` or `black`), the units (type, owner, position, finished or
-  not), and which are selected.
+  not, and optionally move orders), and which are selected.
 
 ## The simulation's contract
 
@@ -244,6 +286,46 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
 - **Selection**: left-click a unit, left-drag a box, left-click empty ground to deselect.
 - **Orders**: a right-click with nothing to build is a move.
 
+**The placement gesture**, following `tagpu_place.c` function for function (`evaluate`,
+`toggles`, `classify`, `ring_target`, `remove_toggled` and `append_sites` as `commit`,
+`place_button` as the press and the release), with `tagpu_placegeo.c`'s `place_shape` and
+`place_ring` ported line for line, integer arithmetic included (checked against the compiled C on
+20,000 random cases, 2026-10-25: identical):
+
+- **The cursor site** is the build cursor's (`0x4197D0`): a footprint of f cells centred on world x
+  starts at cell floor((x − 8f + 8) / 16), half up, after manual snapping for a resource building.
+- **A plain click** in the build-menu mode places one at the cursor site and disarms. **A left
+  press with Shift** starts a gesture at the cursor site instead of placing.
+- **The preview** (`evaluate`) reads Shift, Ctrl and Alt live. Without Shift nothing previews;
+  Shift + Ctrl over a ring target is a ring, before any drag shape, mid-drag included; otherwise,
+  while a gesture lives, the shape from the press site to the cursor site: a line, Ctrl held to
+  its axis, Alt a filled rectangle in serpentine order, Alt + Ctrl a hollow one. At most 256 sites
+  (`PLACE_MAX_SITES`), cut to 4096 orders over the selected builders. With no shape the
+  engine's single square stands.
+- **A ring target** is the unit under the cursor, any unit, else a selected builder's build order
+  whose footprint holds the cursor's cell, first in selection order then queue order. A ring is
+  `place_ring`'s: no spacing; its sites that would take an order off are left out.
+- **A site's colour**: red where the site test refuses it; yellow where some selected builder has
+  a build order of any building within 16 world units of the site's centre on both axes
+  (`0x43AFC0`'s predicate, inclusive); green otherwise.
+- **The release with Shift held** commits. A one-site gesture ending at the cursor site is the
+  stock Shift-click itself: the first build order within 16 world units is taken off instead of
+  adding one, otherwise the site is appended. Any other gesture is classified afresh, then per
+  selected builder: each site not red takes off one build order no earlier site took — the one at
+  its own position first, else the first within 16 world units — and adds nothing; the rest are
+  appended in the shape's order while the queue is shorter than 1024 orders. Every selected
+  builder gets them, its build list not consulted, as `0x419670` orders.
+- **Shift released before the button** drops the gesture, orders nothing and keeps the building
+  armed. A placement or a commit that changed a queue sets the Shift-placement bit (`main+0x2CC6`
+  bit 5), and **Shift released afterwards disarms**, as after a stock Shift-click (`0x4992D8`).
+  **A right press** disarms and ends the gesture.
+- **Spacing**, following the design (`.data/qol-shift/bar-placement-design.md` §6 and §17.1) until
+  the key handler lands; recheck against `tagpu_place.c` then: with a building armed and Alt down,
+  Z adds one empty cell between neighbours and X takes one away, 0..16, kept per building type for
+  the sim's life (the game saves it in `impure.cfg`); every Z or X down steps, an auto-repeat
+  included, and the next evaluation shows it, mid-drag too. The pitch is footprint + spacing cells.
+  The page's "Spacing: N" readout is the mockup's; the game has none specified yet.
+
 **What it simplifies, on purpose and in both places:**
 
 - units walk in a straight line at their speed and stop within their build distance;
@@ -255,16 +337,24 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
 - no pathfinding, collisions, terrain height, enemies or other orders;
 - the engine's own site test (`0x47D2E0`) as: inside the map's interior cells, clear of
   structures, a geothermal plant with a vent under it; a mobile unit never blocks a site, where
-  the engine's test refuses one standing on it.
+  the engine's test refuses one standing on it;
+- the gesture: Shift released after a placement disarms at once, where the engine disarms at the
+  first mouse record that finds Shift up; arming a building clears the Shift-placement bit
+  [INFERRED: when the engine clears it is not established]; order nodes flagged `0x40000`, which
+  the engine's toggle matches but does not remove, do not exist in the sim; the one-site Shift-click
+  orders only builders whose build list has the building, where the engine orders every selected
+  builder (the same under stock input, which arms a building for one unit only).
 
-**The demos are generated**: `node tools/wiki/gen-quickbuild.mjs` writes
-`art/wiki/entries/quickbuild.json` (its cursor paths are hundreds of small moves), and
-`node tools/wiki/simcheck.mjs` plays every demo headless and checks its claim on the
-simulation's state, plus the rules no demo shows.
+**The demos are generated**: `node tools/wiki/gen-quickbuild.mjs` and
+`node tools/wiki/gen-buildshapes.mjs` write `art/wiki/entries/<id>.json` (their cursor paths are
+hundreds of small moves), and `node tools/wiki/simcheck.mjs` plays every demo headless and checks
+its claim on the simulation's state, plus the rules no demo shows.
 
 **What it draws** (its view): the cells, metal, vents and fog; the units with their selection and
 progress; the ghost and its colour; the queued sites; the order lines; the cursor and its shape;
-the keys held; the caption.
+the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `state` `place`,
+`refused` or `remove`, and `order`, the site's place among the orders the release adds), its
+`shape`, and the armed building's `spacing`.
 
 ## Gaps
 
@@ -275,4 +365,7 @@ the keys held; the caption.
 - **The figures are the stock game's.** A mod with other extractors or other build lists shows the
   stock demos.
 - **No hotkey** opens the wiki.
-- **The Shift-drag placement family** is not an entry yet.
+- **Spacing is the design's, not the game's**: the Alt+Z / Alt+X handler is not in `tagpu_place.c`
+  yet (`place_shape` is called with spacing 0). The spacing demo and rule follow
+  `bar-placement-design.md` §6 and §17.1 and are to be rechecked against the code when it lands.
+- **Build Split is not shown**: it is not built.

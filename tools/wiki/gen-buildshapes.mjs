@@ -1,0 +1,171 @@
+/* gen-buildshapes.mjs -- writes art/wiki/entries/buildshapes.json: the units table, the entry scene and its demos.
+
+   usage: node tools/wiki/gen-buildshapes.mjs        then node tools/wiki/simcheck.mjs
+
+   The demos are the placement gesture of tagpu/ddraw/src/tagpu_place.c (research/notes/tadr-port/quality-of-life.md,
+   "What Impure does") played through sim.js. A demo's cursor glides with a move every two ticks, so its inputs are
+   generated here; change a demo here and regenerate. The unit figures are the stock game's, read once from the retail
+   unit files (each row's `from`); nothing of the game is copied. */
+import fs from 'node:fs';
+const ROOT = new URL('../../', import.meta.url).pathname;
+// the cursor that puts a footprint of f cells on the site whose first cell is (cx, cz): its centre, which the build
+// cursor rounds back to that cell
+const S = (cx, cz, f = 2) => [(cx + f / 2) * 16, (cz + f / 2) * 16];
+
+const units = {
+  ARMCK: { footprint: [2, 2], buildTime: 5597, workerTime: 80, buildDistance: 40, maxVelocity: 0.8,
+    builds: ['ARMSOLAR', 'ARMWIN', 'ARMESTOR', 'ARMMSTOR', 'ARMMEX', 'ARMMAKR', 'ARMLAB', 'ARMVP', 'ARMAP', 'ARMSY', 'ARMLLT', 'ARMRAD',
+      'ARMALAB', 'ARMGEO', 'ARMHLT', 'ARMRL', 'ARMDRAG', 'ARMGUARD', 'ARMHP'],
+    name: 'Construction KBot', from: 'ARMCK.fbi; build list gamedata/sidedata.tdf [CANBUILD]' },
+  ARMLLT: { footprint: [2, 2], buildTime: 4662, name: 'L.L.T.', from: 'ARMLLT.fbi' },
+  ARMDRAG: { footprint: [2, 2], buildTime: 520, name: "Dragon's Teeth", from: 'ARMDRAG.fbi' },
+  ARMSOLAR: { footprint: [5, 5], buildTime: 2495, name: 'Solar Collector', from: 'ARMSOLAR.fbi' },
+};
+
+/* the map, 40 x 24 cells of plain ground. ARMCK stands left of centre; a finished ARMSOLAR (cells 20..24 x 9..13) is
+   the building to ring and the obstacle a line is refused on. */
+const scene = {
+  map: { w: 40, h: 24, surfaceMetal: 0 },
+  units: [
+    { id: 'ck', type: 'ARMCK', at: [120, 200] },
+    { id: 'sol', type: 'ARMSOLAR', at: [360, 184] },
+  ],
+  selected: ['ck'],
+  cursor: [240, 120],
+};
+
+// a timeline: the cursor glides with a move every 2 ticks, eased at both ends
+function TL(start) {
+  const inputs = []; let t = 0, cur = start.slice();
+  const T = {
+    inputs, get t() { return t; },
+    wait(n) { t += n; return T; },
+    to(p, n) {
+      const [x0, z0] = cur, steps = Math.max(1, Math.round(n / 2));
+      for (let i = 1; i <= steps; i++) {
+        const u = i / steps, e = u * u * (3 - 2 * u);
+        inputs.push({ at: t + Math.round(i * n / steps), move: [Math.round(x0 + (p[0] - x0) * e), Math.round(z0 + (p[1] - z0) * e)] });
+      }
+      t += n; cur = p.slice(); return T;
+    },
+    down(k) { inputs.push({ at: t, down: k }); return T; },
+    up(k) { inputs.push({ at: t, up: k }); return T; },
+    click(k) { T.down(k); t += 3; return T.up(k); },
+    build(b) { inputs.push({ at: t, build: b }); return T; },
+    say(s) { inputs.push({ at: t, caption: s }); return T; },
+  };
+  return T;
+}
+
+const demos = [];
+function demo(id, title, add, fn, tail) {
+  const T = TL(add.cursor || scene.cursor);
+  fn(T);
+  demos.push({ id, title, scene: add, inputs: T.inputs, end: T.t + tail });
+}
+
+demo('clicks', 'Click and Shift-click', {}, T => T
+  .say('One ARMCK selected. Pick the light laser tower, ARMLLT, in the build menu.').wait(20).build('ARMLLT').wait(15)
+  .to(S(10, 5), 40).wait(10).click('lmb').say('A plain click places one and puts the building away.').wait(45)
+  .build('ARMLLT').say('Pick it again and hold Shift.').wait(15).down('shift')
+  .to(S(13, 5), 30).wait(8).click('lmb').say('Shift-click: queued, and the building stays armed.').wait(20)
+  .to(S(16, 5), 25).wait(8).click('lmb').wait(35)
+  .up('shift').say('Let go of Shift: the building is put away, as in TA.'), 150);
+
+demo('line', 'Line', {}, T => T
+  .say('ARMLLT armed. Hold Shift, press the left button and drag.').build('ARMLLT').wait(15).to(S(4, 3), 40)
+  .down('shift').wait(10).down('lmb')
+  .to(S(16, 6), 70).say('A line at any angle: each site steps one footprint along and snaps to the grid on its own.').wait(45)
+  .up('lmb').say('Release with Shift held: seven towers queued, in order.').wait(30)
+  .up('shift').say('Letting go of Shift afterwards puts the building away.').wait(35)
+  .build('ARMLLT').say('Armed again: start another line...').wait(10).to(S(4, 17), 40).down('shift').wait(8).down('lmb')
+  .to(S(14, 17), 45).wait(15).up('shift').say('...and let go of Shift before the button: the line is gone.').wait(35)
+  .up('lmb').say('Released: nothing is ordered, and the building is still armed.'), 60);
+
+demo('axis', 'Straight line', {}, T => T
+  .say('ARMLLT armed. Hold Shift and Ctrl, press and drag.').build('ARMLLT').wait(15).to(S(12, 10), 40)
+  .down('shift').down('ctrl').wait(10).down('lmb')
+  .to(S(30, 20), 90).say('Ctrl holds the line to its longer axis, wherever the cursor wanders.').wait(35)
+  .say('Red: the solar collector stands there. Those sites are skipped.').wait(45)
+  .up('lmb').up('ctrl').up('shift').say('Released: the green sites are queued, the red ones are not.'), 120);
+
+demo('rect', 'Filled rectangle', {}, T => T
+  .say("Dragon's teeth armed. Hold Shift and Alt, press and drag.").build('ARMDRAG').wait(15).to(S(6, 3), 40)
+  .down('shift').down('alt').wait(10).down('lmb')
+  .to(S(12, 7), 60).say('A filled rectangle. The numbers are the order: rows alternate, so the builder snakes through.').wait(55)
+  .up('lmb').up('alt').up('shift').say('Released: twelve queued. ARMCK builds them in that order.'), 330);
+
+demo('hollow', 'Hollow rectangle', { cursor: [300, 330] }, T => T
+  .say("Dragon's teeth armed. Shift, Alt and Ctrl: a hollow rectangle.").build('ARMDRAG').wait(15).to(S(12, 21), 30)
+  .down('shift').down('alt').down('ctrl').wait(10).down('lmb')
+  .to(S(4, 15), 60).say('Only the edge: a wall, started at the press and walked round in order.').wait(55)
+  .up('lmb').up('ctrl').up('alt').up('shift').say('Released: fourteen pieces queued.'), 200);
+
+demo('spacing', 'Spacing', {}, T => T
+  .say("Dragon's teeth armed. Shift-drag a line: the pieces touch.").build('ARMDRAG').wait(15).to(S(4, 4), 40)
+  .down('shift').wait(8).down('lmb').to(S(16, 4), 50).wait(30)
+  .down('alt').wait(8).click('z').say('Hold Alt and press Z: one more empty square between neighbours, at once.').wait(35)
+  .click('z').say('Z again: two empty squares. Fewer pieces cover the same drag.').wait(30).up('alt').wait(20)
+  .up('lmb').say('Released: four pieces, two squares apart.').wait(15).up('shift').wait(20)
+  .build('ARMDRAG').say("The spacing is kept for dragon's teeth: the next line starts spread.").wait(10).to(S(4, 7), 35)
+  .down('shift').wait(8).down('lmb').to(S(16, 7), 45).wait(25)
+  .down('alt').wait(8).click('x').say('Alt+X takes one away...').wait(30).click('x').say('...and again: back to touching.').wait(25)
+  .up('alt').wait(15).up('lmb').say('Released: seven pieces, touching.').wait(10).up('shift'), 150);
+
+demo('ring', 'Ring around a building', {}, T => T
+  .say("Dragon's teeth armed. Point at the solar collector.").build('ARMDRAG').wait(15).to([360, 184], 45).wait(10)
+  .down('shift').down('ctrl').say('Hold Shift and Ctrl over a building: a ring round it.').wait(45)
+  .click('lmb').up('ctrl').up('shift').say('Press and release without dragging: the ring is ordered.'), 330);
+
+demo('ringqueued', 'Ring around a queued build', {}, T => T
+  .say('Queue two solar collectors with Shift-clicks: one far away, then one near.').build('ARMSOLAR').wait(10).down('shift')
+  .to(S(30, 3, 5), 40).wait(5).click('lmb').wait(10).to(S(10, 15, 5), 40).wait(5).click('lmb').wait(15).up('shift')
+  .say('ARMCK walks to the first. The second is only a queued square.').wait(30)
+  .build('ARMDRAG').say("Dragon's teeth armed: Shift and Ctrl over the queued solar collector.").wait(10)
+  .to(S(10, 15, 5), 25).down('shift').down('ctrl').wait(40)
+  .click('lmb').up('ctrl').up('shift').say('Click: the ring is queued round it, before it is even started.'), 90);
+
+demo('toggle', 'Placing it again removes it', {}, T => T
+  .say('ARMLLT armed. Shift-drag a row of five.').build('ARMLLT').wait(15).to(S(22, 3), 45)
+  .down('shift').wait(8).down('lmb').to(S(30, 3), 45).wait(10).up('lmb').say('Queued. Keep Shift held.').wait(25)
+  .down('lmb').to(S(26, 3), 40).say('Drag back over the queue: yellow sites take a queued tower off.').wait(40)
+  .up('lmb').say('Released: those three are gone; nothing is added.').wait(35)
+  .to(S(24, 3), 20).wait(10).click('lmb').say('A Shift-click on a queued site takes it off too, as in TA.').wait(35)
+  .up('shift'), 120);
+
+demo('reshape', 'Change the shape mid-drag', {}, T => T
+  .say("Dragon's teeth armed. Shift-drag: a line.").build('ARMDRAG').wait(15).to(S(4, 4), 40)
+  .down('shift').wait(8).down('lmb').to(S(12, 9), 50).wait(30)
+  .down('alt').say('Press Alt while dragging: a filled rectangle.').wait(45)
+  .down('ctrl').say('Add Ctrl: hollow. The keys are read as you drag.').wait(45)
+  .up('lmb').up('ctrl').up('alt').say('Release: what is held then is what is ordered.').wait(30)
+  .to(S(28, 17), 40).down('lmb').to(S(36, 20), 40).say('Another drag...').wait(20)
+  .click('rmb').say('...and a right-click cancels it and puts the building away.').wait(20).up('lmb').wait(10).up('shift'), 180);
+
+const entry = {
+  format: 1, id: 'buildshapes',
+  title: 'Build Lines, Grids and Rings',
+  subtitle: 'With a building armed, Shift-drag lays a whole line, rectangle or wall of it, and Shift+Ctrl rings a building.',
+  text: [
+    'With a building picked from the build menu, a plain click places one and puts the building away; a Shift-click queues one and keeps the building armed until you let go of Shift.',
+    'Hold Shift, press the left button and drag to place a row: each site steps one footprint along the longer axis, follows the slope on the other and snaps to the grid. Add Ctrl to hold the line to its axis, Alt for a filled rectangle, laid out in a snake so the builder never walks back across it, and Alt+Ctrl for a hollow one. The keys are read while you drag, so the shape changes the moment you press or let go of one. Release the button with Shift still held to order it.',
+    "Hold Shift+Ctrl over a building, or over a building your constructor has queued, to ring it; a press and release orders the ring.",
+    "Every site shows TA's build square: green is placed, red is refused there and skipped, yellow takes off a building already queued at that spot, as a Shift-click on a queued site does in TA. Dragging back over a queued row takes off every one of them. A ring leaves its yellow sites out.",
+    'Hold Alt and press Z for one more empty square between neighbours, X for one fewer, from 0 to 16; each building remembers its own. A ring ignores it.',
+    'Let go of Shift before the button and nothing is ordered; the building stays armed. A right-click cancels the drag and puts the building away. A gesture places at most 256 sites. TA arms a building only with one unit selected, so the order goes to that constructor.',
+  ],
+  lockedIn: [],
+  pace: { build: 24 },
+  units, scene, demos,
+};
+fs.mkdirSync(`${ROOT}art/wiki/entries`, { recursive: true });
+// small values on one line, the rest expanded: an input per line
+function fmt(v, ind = '') {
+  const one = JSON.stringify(v);
+  if (one.length <= 110 || v === null || typeof v !== 'object') return one;
+  const ni = ind + '  ';
+  if (Array.isArray(v)) return `[\n${v.map(x => ni + fmt(x, ni)).join(',\n')}\n${ind}]`;
+  return `{\n${Object.entries(v).map(([k, x]) => `${ni}${JSON.stringify(k)}: ${fmt(x, ni)}`).join(',\n')}\n${ind}}`;
+}
+fs.writeFileSync(`${ROOT}art/wiki/entries/buildshapes.json`, fmt(entry) + '\n');
+console.log(demos.map(d => `${d.id}: ${d.inputs.length} inputs, end ${d.end}`).join('\n'));

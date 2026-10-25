@@ -10,7 +10,9 @@ const MODS = ['stock', 'mayhem', 'prota', 'twilight', 'escalation', 'tazero', 'u
 const RES = [...$('#res').options].map(o => o.value);
 // stand-ins for TA's player colours, by owner
 const TEAM = ['#2348e0', '#d32b00', '#f4f4f4', '#2f8a1b', '#7a3fb0', '#e8d200', '#2a2a2a', '#e07018'];
-const KEYCAP = { shift: 'Shift', alt: 'Alt', ctrl: 'Ctrl', lmb: 'Left-click', rmb: 'Right-click' };
+const KEYCAP = { shift: 'Shift', alt: 'Alt', ctrl: 'Ctrl', z: 'Z', x: 'X', lmb: 'Left-click', rmb: 'Right-click' };
+// TA's build square colours for a placement site: green placed, red refused (skipped), yellow takes a queued order off
+const SITE = { place: '#2bd248', refused: '#e62828', remove: '#f0d020' };
 const LINE = { move: '#3ccf3c', build: '#f0cc10', guard: '#3a86f0', reclaim: '#e23030' };
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
@@ -288,6 +290,19 @@ function draw() {
       g.stroke();
     }
   }
+  // a placement gesture's sites: a translucent ghost of the building, TA's build square in the site's colour, and its
+  // place among the orders the release adds, small in the corner
+  for (const st of v.sites || []) {
+    if (!pt(st)) continue;
+    const b = box(st), col = SITE[st.state] || SITE.place, lw = Math.max(1, 1.5 * U);
+    g.fillStyle = 'rgba(138,138,132,.45)'; g.fillRect(b.x + lw, b.y + lw, b.w - 2 * lw, b.h - 2 * lw);
+    g.strokeStyle = col; g.lineWidth = lw; g.strokeRect(b.x + lw / 2, b.y + lw / 2, b.w - lw, b.h - lw);
+    if (st.order != null) {
+      g.font = `700 ${Math.max(5 * U, Math.min(7.5 * U, b.h * .32))}px 'DejaVu Sans', sans-serif`;
+      g.textAlign = 'left'; g.textBaseline = 'top'; g.fillStyle = '#101010';
+      g.fillText(String(st.order), b.x + 2.5 * lw, b.y + 2 * lw);
+    }
+  }
   // the placement ghost: translucent green where it may go, red where it may not
   if (v.ghost && pt(v.ghost)) {
     const b = box(v.ghost), ok = v.ghost.ok !== false;
@@ -306,6 +321,13 @@ function draw() {
     const t = `construction \u00d7${+v.pace}`, tw = g.measureText(t).width, h = 12 * U;
     g.fillStyle = 'rgba(30,30,28,.7)'; g.fillRect(W - tw - 8 * U, H - h - 2 * U, tw + 6 * U, h);
     g.fillStyle = '#f0f0ea'; g.fillText(t, W - 5 * U, H - 4 * U);
+  }
+  // the armed building's spacing: the mockup's readout, at the stage's bottom left; the game specifies none yet
+  if (+v.spacing > 0) {
+    g.font = `${Math.round(8.5 * U)}px 'DejaVu Sans', sans-serif`; g.textAlign = 'left'; g.textBaseline = 'bottom';
+    const t = `Spacing: ${+v.spacing}`, tw = g.measureText(t).width, h = 12 * U;
+    g.fillStyle = 'rgba(30,30,28,.7)'; g.fillRect(2 * U, H - h - 2 * U, tw + 6 * U, h);
+    g.fillStyle = '#f0f0ea'; g.fillText(t, 5 * U, H - 4 * U);
   }
   return v;
 }
@@ -364,13 +386,20 @@ stage.addEventListener('mousedown', e => {
 window.addEventListener('mouseup', e => { const b = BTN[e.button]; if (b && down.has(b)) { down.delete(b); send({ up: b }); } });
 stage.addEventListener('contextmenu', e => e.preventDefault());
 const MOD = { Shift: 'shift', Alt: 'alt', Control: 'ctrl' };
+// Z and X with Alt step the armed building's spacing; every down is sent, an auto-repeat included, as the game steps again
+const STEP = { KeyZ: 'z', KeyX: 'x' };
 window.addEventListener('keydown', e => {
   if (e.key === 'Escape' && S.open) { e.preventDefault(); setOpen(false); return; }
+  const z = STEP[e.code];
+  if (z && e.altKey && S.open && S.try) { e.preventDefault(); down.add(z); send({ down: z }); return; }
   const m = MOD[e.key]; if (!m || !S.open || !S.try) return;
   e.preventDefault();                  // Alt would otherwise open the browser's menu and keep the key
   if (!down.has(m)) { down.add(m); send({ down: m }); }
 });
-window.addEventListener('keyup', e => { const m = MOD[e.key]; if (m && down.has(m)) { e.preventDefault(); down.delete(m); send({ up: m }); } });
+window.addEventListener('keyup', e => {
+  const m = MOD[e.key] || STEP[e.code];
+  if (m && down.has(m)) { e.preventDefault(); down.delete(m); send({ up: m }); }
+});
 window.addEventListener('blur', releaseAll);
 
 /* the build menu lists what the selection can build among the entry's own units -- a stock build list names the whole

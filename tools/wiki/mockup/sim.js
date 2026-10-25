@@ -4,7 +4,9 @@
    same rules over the same entry files, tick for tick. The resource rules mirror the DLL's own code,
    tagpu/ddraw/src/tagpu_resource.c, function for function (research/notes/tadr-port/resource-snapping.md describes
    them); what the engine decides (the site test, orders, movement, construction) is simplified. A demo is its scene and its inputs played through this file, so a demo cannot show what
-   the rules would not do, and Try it yourself is the same sim taking the player's inputs instead.
+   the rules would not do, and Try it yourself is the same sim taking the player's inputs instead. The placement
+   gesture (several buildings in one Shift-drag) mirrors tagpu/ddraw/src/tagpu_place.c, and its shapes are
+   tagpu_placegeo.c ported line for line, integer arithmetic included.
 
    Positions are world units (a footprint cell is 16) and time is ticks, 30 a second. The player is owner 0. It is
    deterministic: no clock, no randomness, units visited in creation order, and only + - * / and Math.sqrt on
@@ -13,8 +15,67 @@
    Runs in a page (the global WikiSim) and under node (module.exports). */
 const WikiSim = (() => {
   const CELL = 16, TPS = 30, RADIUS = 3, ARENA = 64, DRAG = 4, FOLLOW = 48, SPACING = 24;
-  const KEYS = ['shift', 'alt', 'ctrl', 'lmb', 'rmb'];
+  // tagpu_placegeo.h and tagpu_place.c's caps
+  const PLACE_MAX_SITES = 256, PLACE_SPACING_MAX = 16, PLACE_ORDER_BUDGET = 4096, PLACE_LIST_CAP = 1024;
+  const KEYS = ['shift', 'alt', 'ctrl', 'z', 'x', 'lmb', 'rmb'];
   const sq = v => v * v;
+
+  /* ---- tagpu_placegeo.c, line for line. Sites are footprint first cells {cx, cz}. Every value is a small integer,
+     so JS doubles hold the C's int64 arithmetic exactly; tdiv and fdiv are C's truncating and its floor division. ---- */
+  const tdiv = (a, b) => Math.trunc(a / b);
+  const fdiv = (a, b) => { const q = tdiv(a, b); return (a % b !== 0 && a < 0) ? q - 1 : q; };
+  // Recoil's (|delta| + 1.4 size) / size, with the delta and the pitch in cells
+  const countAlong = (d, pitch) => tdiv(10 * Math.abs(d) + 14 * pitch, 10 * pitch);
+  function placeShape(kind, fx, fz, spacing, from, to, cap) {
+    const px = fx + spacing, pz = fz + spacing, dx = to.cx - from.cx, dz = to.cz - from.cz;
+    const xnum = countAlong(dx, px), znum = countAlong(dz, pz);
+    // Recoil's `0 < delta ? size : -size`: a zero delta steps backwards, over one site only
+    const sx = dx > 0 ? px : -px, sz = dz > 0 ? pz : -pz, out = [];
+    const put = (cx, cz) => { if (out.length < cap) out.push({ cx, cz }); };
+    if (kind === 'line' || kind === 'axis') {
+      // the other axis follows the slope, each site snapped half up: floor((|D| + 2 i p d) / 2|D|)
+      if (Math.abs(dx) > Math.abs(dz)) {
+        for (let i = 0; i < xnum && out.length < cap; i++)
+          put(from.cx + i * sx, kind === 'axis' ? from.cz : from.cz + fdiv(Math.abs(dx) + 2 * i * px * dz, 2 * Math.abs(dx)));
+      } else {
+        // dz == 0 here means dx == 0 too: znum is 1 and the one site is `from`
+        for (let i = 0; i < znum && out.length < cap; i++)
+          put(kind === 'axis' || dz === 0 ? from.cx : from.cx + fdiv(Math.abs(dz) + 2 * i * pz * dx, 2 * Math.abs(dz)), from.cz + i * sz);
+      }
+      return out;
+    }
+    if (kind === 'rect') {
+      for (let j = 0; j < znum && out.length < cap; j++)
+        for (let i = 0; i < xnum && out.length < cap; i++) put(from.cx + ((j & 1) ? xnum - 1 - i : i) * sx, from.cz + j * sz);
+      return out;
+    }
+    if (kind === 'hollow') {
+      if (xnum > 1 && znum > 1) {
+        for (let j = 0; j < znum - 1; j++) put(from.cx, from.cz + (1 + j) * sz);                    // down the first column
+        for (let j = 0; j < xnum - 1; j++) put(from.cx + (1 + j) * sx, from.cz + (znum - 1) * sz);  // along the far row
+        for (let j = 0; j < znum - 1; j++) put(from.cx + (xnum - 1) * sx, from.cz + (znum - 2 - j) * sz);  // up the far column
+        for (let j = 0; j < xnum - 1; j++) put(from.cx + (xnum - 2 - j) * sx, from.cz);              // back along the first row
+      } else if (xnum === 1) { for (let j = 0; j < znum; j++) put(from.cx, from.cz + j * sz); }
+      else { for (let j = 0; j < xnum; j++) put(from.cx + j * sx, from.cz); }
+      return out;
+    }
+    return out;
+  }
+  // a ring of fx x fz sites round the cells [tx, tx+tw) x [tz, tz+th): right side down, bottom left, left side up, top
+  // right, each side from a corner, the corners shared one per side; no spacing
+  function placeRing(fx, fz, tx, tz, tw, th, cap) {
+    const down = 1 + tdiv(th, fz), across = 1 + tdiv(tw, fx), out = [];
+    const put = (cx, cz) => { if (out.length < cap) out.push({ cx, cz }); };
+    for (let k = 0; k < down; k++) put(tx + tw, tz + k * fz);
+    for (let k = 0; k < across; k++) put(tx + tw - fx - k * fx, tz + th);
+    for (let k = 0; k < down; k++) put(tx - fx, tz + th - fz - k * fz);
+    for (let k = 0; k < across; k++) put(tx + k * fx, tz - fz);
+    return out;
+  }
+  // the footprint's first cell for a centre at world v: 0x4197D0's rounding, floor((v - 8f + 8) / 16), half up
+  const origin = (v, f) => Math.floor((v - 8 * f + 8) / CELL);
+  // 0x43AFC0's predicate: within 16 world units of the node on both axes, inclusive
+  const within = (p, q) => Math.abs(p.x - q.x) <= 16 && Math.abs(p.z - q.z) <= 16;
 
   /* the entry's scene with the demo's additions: units, metal, vents and fog appended; selected and cursor
      replaced when the demo gives them */
@@ -284,7 +345,11 @@ const WikiSim = (() => {
     }
 
     /* ---- what the cursor is over ---- */
-    const st = { cursor: { x: S.cursor[0], z: S.cursor[1] }, held: new Set(), mode: null, drag: null, caption: null, hover: null };
+    /* gesture: the placement gesture's press site while it lives; shiftPlaced: main+0x2CC6 bit 5, a placement made in
+       this Shift hold, so releasing Shift disarms; spacing: empty cells between neighbours, per building type;
+       place: the last evaluation of the gesture (tagpu_place.c's s_eval) */
+    const st = { cursor: { x: S.cursor[0], z: S.cursor[1] }, held: new Set(), mode: null, drag: null, caption: null, hover: null,
+      gesture: null, shiftPlaced: false, spacing: {}, place: null };
     function unitAt(x, z) {
       let hit = null;
       for (const u of units) {
@@ -293,12 +358,14 @@ const WikiSim = (() => {
       }
       return hit;
     }
-    // the build-menu mode: the ghost is manual_cursor's snapped site (no legality), or where the cursor is
+    // the build-menu mode: the ghost is manual_cursor's snapped site (no legality), or where the cursor is, as the build
+    // cursor 0x4197D0 rounds it
     function hover() {
       const { x, z } = st.cursor, shift = st.held.has('shift');
+      st.place = evaluate();
       if (st.mode) {
         const t = st.mode, [fx, fz] = fp(t), s = st.held.has('alt') ? null : snappedSite(t, x, z, false, shift);
-        const ox = s ? s.ox : cellOf(x) - (fx >> 1), oz = s ? s.oz : cellOf(z) - (fz >> 1);
+        const ox = s ? s.ox : origin(x, fx), oz = s ? s.oz : origin(z, fz);
         return { kind: 'place', type: t, ox, oz, ok: siteOk(t, ox, oz, null) };
       }
       const c = quickChoice(shift);
@@ -307,8 +374,93 @@ const WikiSim = (() => {
       return u ? { kind: 'unit', unit: u } : { kind: 'ground' };
     }
 
+    /* ---- the placement gesture, tagpu_place.c function for function ---- */
+    // the engine's cursor site: the build cursor's rectangle, snapped as the ghost is
+    function cursorSite() {
+      const t = st.mode, [fx, fz] = fp(t), { x, z } = st.cursor;
+      const s = st.held.has('alt') ? null : snappedSite(t, x, z, false, st.held.has('shift'));
+      return s ? { cx: s.ox, cz: s.oz } : { cx: origin(x, fx), cz: origin(z, fz) };
+    }
+    const siteCentre = (t, s) => centre(t, s.cx, s.cz);
+    // TOGGLES: some selected builder has a build order within 16 world units of the site; it compares no building type
+    const toggles = (t, s) => builders().some(u => u.orders.some(o => o.k === 'build' && within(siteCentre(t, s), centre(o.type, o.ox, o.oz))));
+    // CLASSIFY: refused where the site test refuses, else 'remove' where a Shift-click would take an order off
+    const classify = (t, sites) => sites.map(s => ({ cx: s.cx, cz: s.cz,
+      state: !siteOk(t, s.cx, s.cz, null) ? 'refused' : toggles(t, s) ? 'remove' : 'place' }));
+    /* RING_TARGET: the unit under the cursor, any unit (0x48CD80), else a selected builder's queued build whose
+       footprint holds the cursor's cell, first in selection order then queue order. As cells. */
+    function ringTarget() {
+      const { x, z } = st.cursor, u = unitAt(x, z);
+      if (u) { const [tw, th] = fp(u.type); return { tx: origin(u.x, tw), tz: origin(u.z, th), tw, th }; }
+      const px = cellOf(x), pz = cellOf(z);
+      for (const b of builders()) for (const o of b.orders) {
+        if (o.k !== 'build') continue;
+        const [tw, th] = fp(o.type);
+        if (px >= o.ox && px < o.ox + tw && pz >= o.oz && pz < o.oz + th) return { tx: o.ox, tz: o.oz, tw, th };
+      }
+      return null;
+    }
+    /* EVALUATE: the shape the cursor shows, with the modifiers read live. Nothing without Shift (the release would order
+       nothing); Shift + Ctrl over a ring target is a ring, before any drag shape; otherwise the gesture's shape from the
+       press site to the cursor site: Alt a rectangle, Ctrl held to its axis or hollow. Cut to the order budget; a ring
+       leaves out the sites that would take an order off. null: the engine's single square stands. */
+    function evaluate() {
+      if (!st.mode) return null;
+      const shift = st.held.has('shift'), ctrl = st.held.has('ctrl'), alt = st.held.has('alt');
+      if (!shift || (!ctrl && !st.gesture)) return null;
+      const t = st.mode, [fx, fz] = fp(t), r = ctrl ? ringTarget() : null;
+      let kind, cells;
+      if (r) { kind = 'ring'; cells = placeRing(fx, fz, r.tx, r.tz, r.tw, r.th, PLACE_MAX_SITES); }
+      else if (st.gesture) {
+        kind = alt ? (ctrl ? 'hollow' : 'rect') : (ctrl ? 'axis' : 'line');
+        cells = placeShape(kind, fx, fz, st.spacing[t] || 0, st.gesture, cursorSite(), PLACE_MAX_SITES);
+      } else return null;
+      cells = cells.slice(0, Math.floor(PLACE_ORDER_BUDGET / (builders().length || 1)));
+      let sites = classify(t, cells);
+      if (kind === 'ring') sites = sites.filter(s => s.state !== 'remove');
+      return { kind, type: t, sites };
+    }
+    /* COMMIT: the stock Shift-clicks of the sites, judged against each builder's queue as it stood before the gesture,
+       the sites classified afresh. Per builder, phase 1: each site not refused takes off one build order no earlier site
+       took -- the one at its own position, else the first within 16 world units -- and adds nothing for that builder;
+       a ring takes nothing off, its removing sites skipped. Phase 2: the rest are appended in the shape's order while
+       the queue is shorter than PLACE_LIST_CAP. Every selected builder gets them, its build list not consulted, as
+       0x419670 orders. A changed queue sets the Shift-placement bit, so releasing Shift disarms. */
+    function commit(p) {
+      const t = p.type, sites = classify(t, p.sites);
+      let changed = 0;
+      for (const u of builders()) {
+        const toggled = sites.map(s => p.kind === 'ring' && s.state === 'remove');
+        if (p.kind !== 'ring') sites.forEach((s, i) => {
+          if (s.state === 'refused') return;
+          const at = siteCentre(t, s), pos = o => centre(o.type, o.ox, o.oz);
+          for (const exact of [true, false]) {
+            if (toggled[i]) break;
+            const k = u.orders.findIndex(o => o.k === 'build' && (exact ? pos(o).x === at.x && pos(o).z === at.z : within(at, pos(o))));
+            if (k >= 0) { u.orders.splice(k, 1); toggled[i] = true; changed++; }
+          }
+        });
+        sites.forEach((s, i) => {
+          if (s.state === 'refused' || toggled[i] || u.orders.length >= PLACE_LIST_CAP) return;
+          u.orders.push({ k: 'build', type: t, ox: s.cx, oz: s.cz }); changed++;
+        });
+      }
+      if (changed) st.shiftPlaced = true;
+    }
+    /* THE RELEASE: Shift up first drops the gesture and the building stays armed; a one-site gesture ending at the
+       cursor is the stock Shift-click itself; anything else commits the last evaluation. */
+    function release() {
+      st.gesture = null;
+      if (!st.held.has('shift')) return;
+      const p = st.place, cur = cursorSite();
+      if (p && p.kind !== 'ring' && p.sites.length === 1 && p.sites[0].cx === cur.cx && p.sites[0].cz === cur.cz) return placeClick(true);
+      if (p) commit(p);
+    }
+
     /* ---- orders ---- */
-    const assign = (u, os, shift) => { u.orders = shift ? u.orders.concat(os) : os; };
+    // leaving the build-menu mode ends the gesture and clears the Shift-placement bit with it
+    const disarm = () => { st.mode = null; st.gesture = null; st.shiftPlaced = false; };
+    const assign =(u, os, shift) => { u.orders = shift ? u.orders.concat(os) : os; };
     /* a Quick Build click (click()): the builders that can build it get the order (an upgrade's reclaim first), the
        other selected builders guard them, shared out in turn, and units that cannot build keep their orders. Shift
        appends, and never adds a Guard to a helper already guarding one of them. */
@@ -335,7 +487,7 @@ const WikiSim = (() => {
     // a right-click: Quick Build's when it has a choice -- on a queued site Shift cancels and a plain click is consumed
     // unchanged -- otherwise the game's own: assist an unfinished building of the player's, or move
     function rightClick(shift) {
-      if (st.mode) { st.mode = null; return; }
+      if (st.mode) { disarm(); return; }
       const c = quickChoice(shift);
       if (c) {
         if (c.queued) { if (shift && c.queued === 2) unqueue(c); return; }
@@ -348,12 +500,20 @@ const WikiSim = (() => {
       }
       moveOrder(shift);
     }
-    // a build-menu placement: the selected builders with that button get it; without Shift the menu mode ends
+    /* a build-menu placement, stock's click: the selected builders with that button get it; without Shift the menu mode
+       ends. With Shift (0x43AFC0) the first build order of the builder's within 16 world units of the site is taken off
+       instead of adding one, and the placement sets the Shift-placement bit: releasing Shift then disarms. */
     function placeClick(shift) {
       const h = hover();
       if (!h.ok) return;
-      for (const u of builders()) if (canBuild(u, h.type)) assign(u, [{ k: 'build', type: h.type, ox: h.ox, oz: h.oz }], shift);
-      if (!shift) st.mode = null;
+      const at = centre(h.type, h.ox, h.oz);
+      for (const u of builders()) if (canBuild(u, h.type)) {
+        const k = shift ? u.orders.findIndex(o => o.k === 'build' && within(at, centre(o.type, o.ox, o.oz))) : -1;
+        if (k >= 0) u.orders.splice(k, 1);
+        else assign(u, [{ k: 'build', type: h.type, ox: h.ox, oz: h.oz }], shift);
+      }
+      if (!shift) disarm();
+      else st.shiftPlaced = true;
     }
     function select(shift) {
       const d = st.drag, { x, z } = st.cursor;
@@ -373,22 +533,38 @@ const WikiSim = (() => {
     }
 
     /* ---- input ---- */
+    /* Spacing follows the design (bar-placement-design.md section 6 and 17.1) until the game's key handler lands: with a
+       building armed and Alt down, Z adds one empty cell between neighbours and X takes one away, 0..16, kept per
+       building type; every down steps, an auto-repeat included, and the next evaluation shows it. */
+    function stepSpacing(k) {
+      if (!st.mode || !st.held.has('alt')) return;
+      st.spacing[st.mode] = Math.max(0, Math.min(PLACE_SPACING_MAX, (st.spacing[st.mode] || 0) + (k === 'z' ? 1 : -1)));
+    }
     function input(ev) {
       if ('caption' in ev) st.caption = ev.caption || null;
-      if ('build' in ev) { st.mode = ev.build || null; st.drag = null; }
+      if ('build' in ev) { disarm(); st.mode = ev.build || null; st.drag = null; }
       if (ev.move) {
         st.cursor = { x: ev.move[0], z: ev.move[1] };
         if (st.drag && sq(st.cursor.x - st.drag.x0) + sq(st.cursor.z - st.drag.z0) > DRAG * DRAG) st.drag.active = true;
       }
-      if (ev.down && !st.held.has(ev.down)) {
+      if (ev.down === 'z' || ev.down === 'x') { st.held.add(ev.down); stepSpacing(ev.down); }
+      else if (ev.down && !st.held.has(ev.down)) {
         st.held.add(ev.down);
         const shift = st.held.has('shift');
-        if (ev.down === 'lmb') { if (st.mode) placeClick(shift); else st.drag = { x0: st.cursor.x, z0: st.cursor.z, active: false }; }
+        // with a building armed a left press carrying Shift starts a gesture at the cursor site instead of placing
+        if (ev.down === 'lmb') {
+          if (st.mode && shift) st.gesture = cursorSite();
+          else if (st.mode) placeClick(false);
+          else st.drag = { x0: st.cursor.x, z0: st.cursor.z, active: false };
+        }
         if (ev.down === 'rmb') { st.drag = null; rightClick(shift); }
       }
       if (ev.up && st.held.has(ev.up)) {
         st.held.delete(ev.up);
-        if (ev.up === 'lmb' && st.drag) { select(st.held.has('shift')); st.drag = null; }
+        if (ev.up === 'lmb' && st.gesture) release();
+        else if (ev.up === 'lmb' && st.drag) { select(st.held.has('shift')); st.drag = null; }
+        // 0x4992D8: Shift found up after a placement in this hold disarms, as after a stock Shift-click
+        if (ev.up === 'shift') { if (st.shiftPlaced) disarm(); st.shiftPlaced = false; }
       }
       st.hover = hover();
     }
@@ -480,7 +656,11 @@ const WikiSim = (() => {
     // a unit's orders, for a check: kind, building and site, or the target's id
     sim.orders = id => { const u = byId(id); return u ? u.orders.map(o => ({ ...o })) : null; };
     sim.view = () => {
-      const h = st.hover, gh = h && (h.kind === 'place' ? h : h.kind === 'quick' ? { ...h, ok: true } : null);
+      // the gesture's sites replace the cursor's single square; none (an empty ring) leaves the square standing
+      const p = st.place && st.place.sites.length ? st.place : null;
+      const h = st.hover, gh = !p && h && (h.kind === 'place' ? h : h.kind === 'quick' ? { ...h, ok: true } : null);
+      let n = 0;
+      const sites = p ? p.sites.map(s => ({ ...siteCentre(p.type, s), state: s.state, order: s.state === 'place' ? ++n : null })) : [];
       const lines = [];
       for (const u of units) if (u.sel) {
         let from = [u.x, u.z];
@@ -499,6 +679,11 @@ const WikiSim = (() => {
         units: units.map(u => ({ id: u.id, type: u.type, owner: u.owner, x: u.x, z: u.z, fx: fp(u.type)[0], fz: fp(u.type)[1],
           selected: u.sel, built: u.built, reclaimed: u.reclaimed, label: u.label })),
         ghost: gh ? { ...centre(gh.type, gh.ox, gh.oz), ok: gh.ok } : null,
+        // the gesture's preview: each site's centre and footprint, 'place' (green), 'refused' (red, skipped) or 'remove'
+        // (yellow, takes a queued order off), and its place among the orders the release would add
+        sites,
+        shape: p ? p.kind : null,
+        spacing: st.mode ? st.spacing[st.mode] || 0 : null,
         queued: plans().map(p => ({ ...centre(p.type, p.ox, p.oz), owner: owners.get(`${p.type}@${p.ox},${p.oz}`) })),
         lines,
         cursor: { x: st.cursor.x, z: st.cursor.z, shape },
@@ -518,6 +703,8 @@ const WikiSim = (() => {
   return {
     create: (entry, demo) => make(entry, demo, false),
     play: (entry, demo) => make(entry, demo, true),
+    // the shapes alone, for checks against tagpu_placegeo.c
+    shapes: { placeShape, placeRing },
   };
 })();
 if (typeof module !== 'undefined') module.exports = WikiSim;

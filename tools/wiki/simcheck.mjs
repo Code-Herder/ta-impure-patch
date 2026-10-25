@@ -28,7 +28,7 @@ const holds = (u, [cx, cz]) => covers(u, [cx, cz, 1, 1]) === 1;
 const cellIn = (x, z, r) => x >= r[0] * 16 && x < (r[0] + r[2]) * 16 && z >= r[1] * 16 && z < (r[1] + r[3]) * 16;
 
 function run(entry, demo) {
-  const sim = WikiSim.play(entry, demo), ids = entry.scene.units.map(u => u.id);
+  const sim = WikiSim.play(entry, demo), ids = [...entry.scene.units, ...((demo.scene && demo.scene.units) || [])].map(u => u.id);
   const frames = [];
   const snap = () => frames.push({ t: sim.tick, v: sim.view(), o: Object.fromEntries(ids.map(id => [id, sim.orders(id)])) });
   snap();
@@ -40,7 +40,7 @@ const clicks = (demo, k) => demo.inputs.filter(e => e.down === k).map(e => e.at)
 const fresh = (v, type) => v.units.filter(u => u.type === type && !['mex', 'geo'].includes(u.id));
 const kinds = os => (os || []).map(o => o.k + (o.type ? ':' + o.type : o.target ? ':' + o.target : '')).join(' ');
 
-const CHECKS = {
+const QUICKBUILD = {
   snap(r, d, ok) {
     ok(r.frames.some(f => f.v.ghost && f.v.ghost.type === 'ARMMEX' && whole(f.v.ghost, DEP.B) && !cellIn(f.v.cursor.x, f.v.cursor.z, DEP.B)),
       'the ghost covered deposit B while the cursor was off it');
@@ -127,7 +127,7 @@ const CHECKS = {
   },
 };
 
-/* rules no demo shows, checked on the quickbuild entry's scene: the classifier compares with SurfaceMetal alone
+/* rules no quickbuild demo shows, checked on its entry's scene: the classifier compares with SurfaceMetal alone
    (tagpu_resource.c distinct), so a richer patch joined to broad metal ground is refused like the ground; and only a
    played demo ends */
 const RULES = {
@@ -143,17 +143,201 @@ const RULES = {
   },
 };
 
+/* ---- buildshapes: the placement gesture (tagpu_place.c). Its checks read the queue of ARMCK ('ck') around each
+   release and the preview just before it; the expected sites are tagpu_placegeo.c's for the demo's press and release
+   cells, written out here by hand from its formulas so that a change to the port shows as a failure. ---- */
+const cellOf = s => [s.x / 16 - s.fx / 2, s.z / 16 - s.fz / 2];
+const key = c => c.join(',');
+const builds = os => (os || []).filter(o => o.k === 'build').map(o => ({ type: o.type, c: [o.ox, o.oz] }));
+const ups = (d, k) => d.inputs.filter(e => e.up === k).map(e => e.at);
+const downs = (d, k) => d.inputs.filter(e => e.down === k).map(e => e.at);
+// the build orders the inputs of tick u added to ck's queue, in order: the entries of the queue after them that were not
+// in it before (a head that finished on that tick only shortens the queue)
+function added(r, u, id = 'ck') {
+  const before = new Set(builds(r.frames[u - 1].o[id]).map(b => b.type + key(b.c)));
+  return builds(r.frames[u].o[id]).filter(b => !before.has(b.type + key(b.c))).map(b => b.c);
+}
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const show = cs => cs.map(key).join(' ');
+const preview = f => f.v.sites.map(cellOf);
+// a site of f x f cells at c overlapping the rectangle r = [x, z, w, h]
+const hits = (c, f, r) => c[0] < r[0] + r[2] && r[0] < c[0] + f && c[1] < r[1] + r[3] && r[1] < c[1] + f;
+const SOLAR = [20, 9, 5, 5];
+// place_ring(2, 2, tx, tz, 5, 5): three a side, right side down, bottom left, left side up, top right
+const ring5 = (tx, tz) => [[tx + 5, tz], [tx + 5, tz + 2], [tx + 5, tz + 4], [tx + 3, tz + 5], [tx + 1, tz + 5], [tx - 1, tz + 5],
+  [tx - 2, tz + 3], [tx - 2, tz + 1], [tx - 2, tz - 1], [tx, tz - 2], [tx + 2, tz - 2], [tx + 4, tz - 2]];
+
+const BUILDSHAPES = {
+  clicks(r, d, ok) {
+    const [plain, s1, s2] = downs(d, 'lmb'), f = t => r.frames[t];
+    ok(f(plain).v.mode === 'contextual' && same(added(r, plain), [[10, 5]]), `a plain click placed ARMLLT at 10,5 and disarmed (${f(plain).v.mode})`);
+    ok(f(s1 + 3).v.mode === 'build:ARMLLT' && same(added(r, s1 + 3), [[13, 5]]), 'the first Shift-click queued 13,5 and stayed armed');
+    ok(f(s2 + 3).v.mode === 'build:ARMLLT' && same(added(r, s2 + 3), [[16, 5]]), 'the second Shift-click queued 16,5 and stayed armed');
+    const off = ups(d, 'shift')[0];
+    ok(f(off - 1).v.mode === 'build:ARMLLT' && f(off).v.mode === 'contextual', 'letting go of Shift after placing disarmed');
+    ok(r.log.filter(e => e.what === 'finished' && e.type === 'ARMLLT').length >= 2, 'ARMCK built at least two of them');
+  },
+  line(r, d, ok) {
+    const [u1, u2] = ups(d, 'lmb'), want = [[4, 3], [6, 4], [8, 4], [10, 5], [12, 5], [14, 6], [16, 6]];
+    const p = r.frames[u1 - 1];
+    ok(p.v.shape === 'line' && same(preview(p), want) && p.v.sites.every(s => s.state === 'place'), `the preview is the line 4,3..16,6 (${show(preview(p))})`);
+    ok(want.every((c, i) => !i || c[0] - want[i - 1][0] === 2) && new Set(want.map(c => c[1])).size > 1, 'one footprint along x, the slope followed on z');
+    ok(same(added(r, u1), want), `the release queued those seven in order (${show(added(r, u1))})`);
+    const off = ups(d, 'shift')[0];
+    ok(r.frames[off].v.mode === 'contextual', 'letting go of Shift after the line disarmed');
+    const g = r.frames.filter(f => f.t > downs(d, 'lmb')[1] && f.t < u2 && f.v.keys.includes('lmb') && !f.v.keys.includes('shift'));
+    ok(g.length && g.every(f => !f.v.sites.length && f.v.ghost), 'with Shift up mid-drag nothing previews but the single square');
+    ok(added(r, u2).length === 0 && r.last.v.mode === 'build:ARMLLT', 'releasing after Shift ordered nothing and kept ARMLLT armed');
+  },
+  axis(r, d, ok) {
+    const u = ups(d, 'lmb')[0], p = r.frames[u - 1], cs = preview(p);
+    ok(p.v.shape === 'axis' && cs.length === 10 && cs.every((c, i) => c[1] === 10 && c[0] === 12 + 2 * i), `ten sites held to row 10 (${show(cs)})`);
+    ok(Math.floor(p.v.cursor.z / 16) !== 10, 'while the cursor stood off that row');
+    const red = p.v.sites.filter(s => s.state === 'refused').map(cellOf);
+    ok(same(red, [[20, 10], [22, 10], [24, 10]]), `the three over the solar collector are red (${show(red)})`);
+    const a = added(r, u);
+    ok(same(a, [[12, 10], [14, 10], [16, 10], [18, 10], [26, 10], [28, 10], [30, 10]]) && !a.some(c => hits(c, 2, SOLAR)), `the red sites were skipped (${show(a)})`);
+  },
+  rect(r, d, ok) {
+    const u = ups(d, 'lmb')[0], p = r.frames[u - 1];
+    const want = [[6, 3], [8, 3], [10, 3], [12, 3], [12, 5], [10, 5], [8, 5], [6, 5], [6, 7], [8, 7], [10, 7], [12, 7]];
+    ok(p.v.shape === 'rect' && same(preview(p), want), `the preview is a 4 x 3 serpentine (${show(preview(p))})`);
+    ok(p.v.sites.every((s, i) => s.order === i + 1), 'the preview numbers the sites 1..12 in that order');
+    ok(same(added(r, u), want), 'the release queued them in serpentine order');
+    const done = r.log.filter(e => e.what === 'finished').map(e => [e.ox, e.oz]);
+    ok(done.length >= 6 && same(done, want.slice(0, done.length)), `ARMCK built them in that order (${done.length} done)`);
+  },
+  hollow(r, d, ok) {
+    const u = ups(d, 'lmb')[0], p = r.frames[u - 1], a = added(r, u);
+    ok(p.v.shape === 'hollow' && a.length === 14 && new Set(a.map(key)).size === 14, `fourteen sites queued (${a.length})`);
+    ok(a.every(c => c[0] === 4 || c[0] === 12 || c[1] === 15 || c[1] === 21) && a.every(c => c[0] >= 4 && c[0] <= 12 && c[1] >= 15 && c[1] <= 21),
+      'all on the edge of 4,15..12,21, none inside');
+    ok(same(a[0], [12, 19]) && same(a[a.length - 1], [12, 21]), 'walked round from beside the press back to it');
+  },
+  spacing(r, d, ok) {
+    const [u1, u2] = ups(d, 'lmb'), arm2 = d.inputs.filter(e => 'build' in e)[1].at;
+    const pitch = cs => cs.slice(1).map((c, i) => c[0] - cs[i][0]);
+    const steps = [];
+    for (const f of r.frames.filter(f => f.t < u1 && f.v.sites.length)) {
+      const k = `${f.v.spacing}:${f.v.sites.length}`;
+      if (steps[steps.length - 1] !== k) steps.push(k);
+    }
+    ok(same(steps.slice(-3), ['0:7', '1:5', '2:4']), `mid-drag Alt+Z spread the line at once: 7, 5, 4 sites (${steps.join(' ')})`);
+    const a1 = added(r, u1);
+    ok(same(a1, [[4, 4], [8, 4], [12, 4], [16, 4]]) && pitch(a1).every(p => p === 2 + 2), `queued at pitch footprint + 2 (${show(a1)})`);
+    ok(r.frames[arm2].v.spacing === 2, 'armed again, ARMDRAG kept its spacing');
+    const p2 = r.frames[u2 - 1];
+    ok(p2.v.spacing === 0 && p2.v.sites.length === 7, 'Alt+X twice brought it back to 0');
+    const a2 = added(r, u2);
+    ok(a2.length === 7 && pitch(a2).every(p => p === 2) && a2.every(c => c[1] === 7), `then queued at pitch footprint + 0 (${show(a2)})`);
+  },
+  ring(r, d, ok) {
+    const c = downs(d, 'lmb')[0], p = r.frames[c - 1], want = ring5(20, 9);
+    ok(p.v.shape === 'ring' && same(preview(p), want) && p.v.sites.every(s => s.state === 'place'), `Shift+Ctrl over the solar collector previews its ring (${show(preview(p))})`);
+    ok(same(added(r, c + 3), want), 'a press and release without a drag ordered it');
+    ok(r.log.some(e => e.what === 'finished' && e.type === 'ARMDRAG'), 'ARMCK started on the ring');
+  },
+  ringqueued(r, d, ok) {
+    const c = downs(d, 'lmb')[2], p = r.frames[c - 1], want = ring5(10, 15);
+    ok(builds(p.o.ck).some(b => b.type === 'ARMSOLAR' && same(b.c, [10, 15])) && !p.v.units.some(u => u.type === 'ARMSOLAR' && u.id !== 'sol'),
+      'the solar collector at 10,15 is queued and not started');
+    ok(p.v.shape === 'ring' && same(preview(p), want), `Shift+Ctrl over it previews its ring (${show(preview(p))})`);
+    const q = builds(r.frames[c + 3].o.ck);
+    ok(same(added(r, c + 3), want) && q.length === 14 && q[0].type === 'ARMSOLAR' && q[1].type === 'ARMSOLAR',
+      'the click queued the ring after the two solar collectors');
+  },
+  toggle(r, d, ok) {
+    const [u1, u2, u3] = ups(d, 'lmb');
+    ok(same(added(r, u1), [[22, 3], [24, 3], [26, 3], [28, 3], [30, 3]]), 'a row of five queued');
+    const p = r.frames[u2 - 1];
+    ok(same(preview(p), [[30, 3], [28, 3], [26, 3]]) && p.v.sites.every(s => s.state === 'remove' && s.order === null), 'dragging back over three of them shows them yellow');
+    ok(same(builds(r.frames[u2].o.ck).map(b => b.c), [[22, 3], [24, 3]]), 'the release took those three off and added nothing');
+    ok(same(builds(r.frames[u3].o.ck).map(b => b.c), [[22, 3]]), 'a Shift-click on 24,3 took it off too');
+  },
+  reshape(r, d, ok) {
+    const p0 = downs(d, 'lmb')[0], u = ups(d, 'lmb')[0], seen = [];
+    for (const f of r.frames.filter(f => f.t > p0 && f.t < u)) {
+      const k = `${f.v.shape}:${f.v.sites.length}`;
+      if (seen[seen.length - 1] !== k) seen.push(k);
+    }
+    ok(same(seen.slice(-3), ['line:5', 'rect:15', 'hollow:12']), `one drag: a line, Alt a rectangle, Ctrl hollow (${seen.slice(-3).join(' ')})`);
+    ok(added(r, u).length === 12, 'the hollow one was ordered');
+    const rmb = downs(d, 'rmb')[0];
+    ok(r.frames[rmb - 1].v.sites.length > 0 && r.frames[rmb].v.mode === 'contextual' && !r.frames[rmb].v.sites.length, 'the right-click ended the drag and disarmed');
+    ok(!r.frames.some(f => builds(f.o.ck).some(b => b.c[1] >= 17)), 'the cancelled drag ordered nothing');
+  },
+};
+
+/* rules no buildshapes demo shows, on its entry's scene */
+const S2 = (cx, cz, f = 2) => [(cx + f / 2) * 16, (cz + f / 2) * 16];
+function gesture(s, keys, from, to) {
+  s.input({ move: from }); for (const k of keys) s.input({ down: k });
+  s.input({ down: 'lmb' }); s.input({ move: to });
+  const v = s.view(); s.input({ up: 'lmb' }); for (const k of keys) s.input({ up: k });
+  return v;
+}
+const BUILDSHAPES_RULES = {
+  'Shift+Ctrl over a building takes the ring before the drag, as tagpu_place.c evaluates'(entry) {
+    const s = WikiSim.create(entry, entry.demos[0]); s.input({ build: 'ARMDRAG' });
+    s.input({ move: S2(12, 10) }); s.input({ down: 'shift' }); s.input({ down: 'ctrl' }); s.input({ down: 'lmb' });
+    s.input({ move: S2(16, 10) }); const before = s.view().shape;
+    s.input({ move: [360, 184] }); return before === 'axis' && s.view().shape === 'ring';
+  },
+  'the ring ignores spacing; spacing clamps to 0..16 and needs a building armed and Alt'(entry) {
+    const s = WikiSim.create(entry, entry.demos[0]);
+    s.input({ down: 'alt' }); s.input({ down: 'z' }); s.input({ up: 'z' });
+    if (s.view().spacing !== null) return false;
+    s.input({ build: 'ARMDRAG' });
+    for (let i = 0; i < 20; i++) s.input({ down: 'z' });      // an auto-repeat: downs without ups
+    if (s.view().spacing !== 16) return false;
+    s.input({ up: 'z' }); s.input({ up: 'alt' }); s.input({ down: 'z' }); s.input({ up: 'z' });
+    if (s.view().spacing !== 16) return false;
+    s.input({ move: [360, 184] }); s.input({ down: 'shift' }); s.input({ down: 'ctrl' });
+    const ring = s.view().sites.map(cellOf);
+    s.input({ down: 'alt' }); for (let i = 0; i < 20; i++) s.input({ down: 'x' });
+    return s.view().spacing === 0 && same(ring, ring5(20, 9));
+  },
+  'a ring leaves out the sites that would take a queued order off, and takes nothing off'(entry) {
+    const s = WikiSim.create(entry, entry.demos[0]); s.input({ build: 'ARMDRAG' });
+    s.input({ down: 'shift' }); s.input({ move: S2(25, 9) }); s.input({ down: 'lmb' }); s.input({ up: 'lmb' });
+    s.input({ move: [360, 184] }); s.input({ down: 'ctrl' });
+    const cs = s.view().sites.map(cellOf);
+    s.input({ down: 'lmb' }); s.input({ up: 'lmb' });
+    const q = builds(s.orders('ck')).map(b => key(b.c));
+    return cs.length === 11 && !cs.some(c => same(c, [25, 9])) && q.length === 12 && q[0] === '25,9';
+  },
+  'a gesture places at most 256 sites'(entry) {
+    const e = { ...entry, units: { ...entry.units, TINY: { footprint: [1, 1], buildTime: 10, from: 'a 1 x 1 stand-in' } },
+      scene: { ...entry.scene, map: { w: 64, h: 64, surfaceMetal: 0 } } };
+    e.units.ARMCK = { ...e.units.ARMCK, builds: [...e.units.ARMCK.builds, 'TINY'] };
+    const s = WikiSim.create(e, { scene: {} }); s.input({ build: 'TINY' });
+    const v = gesture(s, ['shift', 'alt'], [24, 24], [62 * 16, 62 * 16]);
+    return v.sites.length === 256 && builds(s.orders('ck')).length === 256;
+  },
+  'a queue stops growing at 1024 orders'(entry) {
+    const e = { ...entry, scene: { ...entry.scene, units: entry.scene.units.map(u => u.id !== 'ck' ? u
+      : { ...u, orders: Array.from({ length: 1020 }, () => ({ move: [120, 200] })) }) } };
+    const s = WikiSim.create(e, { scene: {} }); s.input({ build: 'ARMDRAG' });
+    gesture(s, ['shift'], S2(4, 3), S2(16, 3));
+    return s.orders('ck').length === 1024 && builds(s.orders('ck')).length === 4;
+  },
+};
+
+const CHECKS = { quickbuild: QUICKBUILD, buildshapes: BUILDSHAPES };
+const ENTRY_RULES = { quickbuild: RULES, buildshapes: BUILDSHAPES_RULES };
+
 const tree = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/tree.json`, 'utf8'));
 const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
+const ids = tree.tree.flatMap(leaves);
 let failed = 0;
-for (const id of tree.tree.flatMap(leaves)) {
+for (const id of ids) {
   const entry = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/entries/${id}.json`, 'utf8'));
   for (const d of entry.demos) {
     const notes = [], ok = (c, what) => notes.push([!!c, what]);
     try {
       const r = run(entry, d);
       if (TRACE) console.log(`  ${d.id} log:`, r.log.map(e => `${e.t} ${e.what} ${e.type}@${e.ox},${e.oz}`).join('; '));
-      const check = CHECKS[d.id];
+      const check = (CHECKS[id] || {})[d.id];
       if (!check) ok(false, 'no check for this demo');
       else check(r, d, ok);
     } catch (e) { ok(false, `threw: ${e.stack}`); }
@@ -163,9 +347,9 @@ for (const id of tree.tree.flatMap(leaves)) {
     for (const [c, what] of notes) if (!c || TRACE) console.log(`     ${c ? 'ok  ' : 'FAIL'} ${what}`);
   }
 }
-{
-  const entry = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/entries/quickbuild.json`, 'utf8'));
-  for (const [what, check] of Object.entries(RULES)) {
+for (const id of ids) {
+  const entry = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/entries/${id}.json`, 'utf8'));
+  for (const [what, check] of Object.entries(ENTRY_RULES[id] || {})) {
     let pass = false;
     try { pass = check(entry); } catch (e) { console.log(e.stack); }
     if (!pass) failed++;
