@@ -130,6 +130,11 @@
 #define CURSBASE     0
 #define MAXCURSV     (8 * QUADV)             /* two rects, four edges each    */
 #define BARBASE      (CURSBASE + MAXCURSV)   /* and the bars after those      */
+/* The placement's sites (tagpu_place.c, the packet's PK_PLACE): each the
+   square's two rects. A bucket of its own, pushed only on a frame that has
+   sites, rather than a larger MAXCURSV: the cursor region is pushed whole
+   every frame, so a 256-site budget there would be uploaded every frame. */
+#define MAXPLACEV    ((int)TAGPU_PK_MAX_PLACE * MAXCURSV)
 /* The order-marker buckets (tagpu_order.c). Separate arrays rather than more
    regions of s_verts: the bar region's length is decided at gather time, so
    anything at a FIXED offset behind it would have to be uploaded across the
@@ -245,10 +250,11 @@ int tagpu_mark_armed(unsigned frame_counter)
    rects (four line records per selected unit). `tagpu_mark_gather` grows both to
    the packet's unit count before anything is emitted into them, and only the
    render thread touches either, so no pointer into one outlives a realloc.
-   The vertex INDEX space is unchanged: the cursor rects are 0..BARBASE-1 in
-   `s_verts`, the bars BARBASE.. in `s_barv`, and the render pushes the two
-   back to back. */
+   Each bucket is written from its own index 0; the render pushes the cursor
+   rects' whole BARBASE vertices and then the bars, so in the pushed block
+   the bars begin at BARBASE. */
 static float  s_verts[BARBASE * MVST];  /* the cursor rects                   */
+static float  s_place[MAXPLACEV * MVST]; /* the placement's sites' rects      */
 static float* s_barv;  static unsigned s_barvCap;  /* bars, in vertices       */
 static float  s_ordt[MAXORDT * MVST];   /* order markers: filled triangles    */
 static float  s_ordl[MAXORDL * MVST];   /* order markers: line records        */
@@ -260,6 +266,8 @@ static int   s_lfar;                   /* lines past TAGPU_LINE_FAR           */
 static int   s_nbar;                   /* bars gathered (2 quads each)        */
 static int   s_cBar;                   /* counted, whether emitted or not     */
 static int   s_ncurs;                  /* build cursor / band box verts       */
+static int   s_nplace;                 /* placement site verts, this frame    */
+static int   s_cPlace;                 /* placement sites drawn, this frame   */
 static int   s_nordt, s_nordl;         /* order tri verts / lines, this frame */
 static int   s_nordx;                  /* text verts, this frame              */
 /* Where the ShowRanges labels end and the group digits begin. The engine draws
@@ -424,22 +432,13 @@ static const char* LFS =
 
 /* ---- the health-bar gather ---- */
 
-static void put_vert(int i, float x, float y, float u, float v, float wx, float wz,
-                     float col)
-{
-    float* o = i < BARBASE ? s_verts + (size_t)i * MVST
-                           : s_barv + (size_t)(i - BARBASE) * MVST;
-    o[0] = x; o[1] = y; o[2] = u; o[3] = v; o[4] = wx; o[5] = wz; o[6] = col;
-    o[7] = 0.0f;                       /* the top layer: no depth test reads it */
-}
-
-/* the order buckets' own writer: same vertex, a different array */
+/* one vertex at index `i` of the bucket `base` */
 static void put_at(float* base, int i, float x, float y, float u, float v,
                    float wx, float wz, float col)
 {
     float* o = base + (size_t)i * MVST;
     o[0] = x; o[1] = y; o[2] = u; o[3] = v; o[4] = wx; o[5] = wz; o[6] = col;
-    o[7] = 0.0f;
+    o[7] = 0.0f;                       /* the top layer: no depth test reads it */
 }
 
 static void put_ord(float* base, int i, float x, float y, float wx, float wz,
@@ -632,41 +631,41 @@ int tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
    game-frame units at any zoom but 1x. `put_bar` keeps the integer signature
    for the rects that are the engine's own — the build-cursor footprint and the
    drag band — whose positions come from engine integers and stay bit-exact. */
-static void put_barf(int* nv, float l, float t, float r, float b, int colidx,
-                     float wx, float wz)
+static void put_barf(float* base, int* nv, float l, float t, float r, float b,
+                     int colidx, float wx, float wz)
 {
     float x0 = l, y0 = t, x1 = r + 1.0f, y1 = b + 1.0f;
     float c = (float)colidx / 255.0f;
     int i = *nv;
-    put_vert(i + 0, x0, y0, -1.0f, -1.0f, wx, wz, c);
-    put_vert(i + 1, x1, y0, -1.0f, -1.0f, wx, wz, c);
-    put_vert(i + 2, x0, y1, -1.0f, -1.0f, wx, wz, c);
-    put_vert(i + 3, x1, y0, -1.0f, -1.0f, wx, wz, c);
-    put_vert(i + 4, x1, y1, -1.0f, -1.0f, wx, wz, c);
-    put_vert(i + 5, x0, y1, -1.0f, -1.0f, wx, wz, c);
+    put_at(base, i + 0, x0, y0, -1.0f, -1.0f, wx, wz, c);
+    put_at(base, i + 1, x1, y0, -1.0f, -1.0f, wx, wz, c);
+    put_at(base, i + 2, x0, y1, -1.0f, -1.0f, wx, wz, c);
+    put_at(base, i + 3, x1, y0, -1.0f, -1.0f, wx, wz, c);
+    put_at(base, i + 4, x1, y1, -1.0f, -1.0f, wx, wz, c);
+    put_at(base, i + 5, x0, y1, -1.0f, -1.0f, wx, wz, c);
     *nv = i + QUADV;
 }
 
-static void put_bar(int* nv, int l, int t, int r, int b, int colidx,
+static void put_bar(float* base, int* nv, int l, int t, int r, int b, int colidx,
                     float wx, float wz)
 {
-    put_barf(nv, (float)l, (float)t, (float)r, (float)b, colidx, wx, wz);
+    put_barf(base, nv, (float)l, (float)t, (float)r, (float)b, colidx, wx, wz);
 }
 
 /* one DrawTranspRectangle: the four 1-px edges of the rect in one flat colour,
    every corner inclusive. Normalised because the inner rect is the outer inset
    by 1 and a footprint under 3 px across inverts it — which the engine's own
    line drawer also resolves by swapping the endpoints. */
-static void put_outline(int* nv, int l, int t, int r, int b, int col,
+static void put_outline(float* base, int* nv, int l, int t, int r, int b, int col,
                         float wx, float wz)
 {
     int k;
     if (r < l) { k = l; l = r; r = k; }
     if (b < t) { k = t; t = b; b = k; }
-    put_bar(nv, l, t, r, t, col, wx, wz);          /* top    */
-    put_bar(nv, l, b, r, b, col, wx, wz);          /* bottom */
-    put_bar(nv, l, t, l, b, col, wx, wz);          /* left   */
-    put_bar(nv, r, t, r, b, col, wx, wz);          /* right  */
+    put_bar(base, nv, l, t, r, t, col, wx, wz);          /* top    */
+    put_bar(base, nv, l, b, r, b, col, wx, wz);          /* bottom */
+    put_bar(base, nv, l, t, l, b, col, wx, wz);          /* left   */
+    put_bar(base, nv, r, t, r, b, col, wx, wz);          /* right  */
 }
 
 /* Does the cursor layer belong to US this frame? This is the ONE place that
@@ -683,72 +682,38 @@ int tagpu_mark_cursor_ours(void)
     return s_armed == 1 && s_cursor && !s_passive;
 }
 
-/* the build-cursor footprint and the drag band box — the whole of
-   `0x469DB4..0x469F23`, transcribed in the header comment */
-static void gather_cursor(const TAGPU_FXVIEW* v)
+/* The square's gate, the head of `0x469DB4..0x469F23`: the band box bit, or
+   cursor mode 14 with the dispatched mouse inside the rect the engine can NAME
+   (the packet's vp_addr, the field 0x37E27 as the game thread left it after its
+   own widening — inclusive L, T, R, B, exactly what IsPositionInRect 0x4B6720
+   tests against). Not the true viewport: while zoomed out that rect is
+   deliberately wider, and it is exactly that width which lets a placement in
+   the outer ring pass the gate at all. */
+static int square_gate(const TAGPU_PACKET* pk)
 {
-    /* EVERY WORD HERE IS THE PACKET'S: the
-       GUI colour bytes, the two mode bytes, the dispatched mouse point and the
-       build cursor's two world corners, all copied by the game thread inside
-       the draw that is about to use them. The rect the engine can NAME comes
-       from the packet too: the field 0x37E27 as the game thread
-       left it after its own widening — inclusive L, T, R, B, exactly what
-       IsPositionInRect tests against.
+    const int* vp = pk->vp_addr;
+    int mx = pk->mouse[0], my = pk->mouse[1];
+    if (pk->region_flags & 8) return 1;
+    if (pk->cursor_mode != CUR_BUILD) return 0;
+    return mx >= vp[0] && mx <= vp[2] && my >= vp[1] && my <= vp[3];
+}
 
-       THE GATE IS tagpu_mark_cursor_ours(), NOT AN OPEN-CODED COPY OF IT, so
-       that a client drawing a twin of the build square cannot arm on a
-       different answer than the square itself. The build ghost is that client
-       (tagpu_native.c, ghost_pass): on a different answer -- the marker pass
-       off, or `mark.on=nocursor` -- the translucent building would track the
-       pointer while our square did not, and the engine's own square is drawn
-       at its UNZOOMED 1x projection, so at any zoom != 1 the two would be in
-       different places. */
-    const TAGPU_PACKET* pk = v->packet;
-    const unsigned char* gui;
-    const int* vp = pk ? pk->vp_addr : NULL;
-    int mode, fl, l, t, r, b, idx, outer, inner, nv = CURSBASE;
+/* One square, the rest of `0x469DB4..0x469F23`: the rect `rect` (two corners as {x,
+   altitude, z}, the engine's own order at 0x2C92..0x2CA6) projected as the
+   engine projects it, then the outer outline and the inner one inset by 1.
+   0 for a rect that could not be one, which is dropped rather than turned into
+   a quad. */
+static int square_emit(const TAGPU_FXVIEW* v, float* base, int* nv, const int32_t* rect,
+                       int outer, int inner)
+{
+    int l, t, r, b;
     float wx, wz;
-
-    s_ncurs = 0;
-    if (!tagpu_mark_cursor_ours()) return;
-    if (!pk || !vp) return;
-    gui = pk->gui_col;
-
-    fl   = pk->region_flags;
-    mode = pk->cursor_mode;
-    if (!(fl & 8)) {
-        int mx, my;
-        if (mode != CUR_BUILD) return;
-        mx = pk->mouse[0];
-        my = pk->mouse[1];
-        /* IsPositionInRect 0x4B6720 — inclusive on all four edges. The rect
-           the engine can NAME (the packet's vp_addr, the field as the game
-           thread left it), not the true viewport: while zoomed out that rect
-           is deliberately wider, and it is exactly that width which lets a
-           placement in the outer ring pass the gate at all. */
-        if (mx < vp[0] || mx > vp[2] || my < vp[1] || my > vp[3]) return;
-    }
-
-    /* build_rect is the two corners as {x, altitude, z}, in the engine's own
-       order at 0x2C92..0x2CA6 */
-    l = pk->build_rect[0] - v->eyeX + 0x80;
-    r = pk->build_rect[3] - v->eyeX + 0x80;
-    t = pk->build_rect[2] - (pk->build_rect[1] >> 1) - v->eyeY + 0x20;
-    b = pk->build_rect[5] - (pk->build_rect[4] >> 1) - v->eyeY + 0x20;
-    /* a rect that could not be one is dropped rather than turned into a quad */
+    l = rect[0] - v->eyeX + 0x80;
+    r = rect[3] - v->eyeX + 0x80;
+    t = rect[2] - (rect[1] >> 1) - v->eyeY + 0x20;
+    b = rect[5] - (rect[4] >> 1) - v->eyeY + 0x20;
     if (l < -0x100000 || l > 0x100000 || r < -0x100000 || r > 0x100000 ||
-        t < -0x100000 || t > 0x100000 || b < -0x100000 || b > 0x100000) return;
-
-    /* the colour pair keys off the MODE, not off which arm of the gate let it
-       through — the engine picks it from main+0x2CC3 both times */
-    if (mode == CUR_BUILD) {
-        idx   = (fl & 0x40) ? GUI_GREEN : GUI_BLOCKED;
-        outer = gui[idx];
-        inner = outer;
-    } else {
-        outer = gui[GUI_WHITE];
-        inner = gui[GUI_BLACK];
-    }
+        t < -0x100000 || t > 0x100000 || b < -0x100000 || b > 0x100000) return 0;
 
     /* NORMALISE FIRST, THEN INSET — the engine's order, and the two are not
        interchangeable. `0x469E92`/`0x469EA0` swap the pairs and only then does
@@ -764,9 +729,77 @@ static void gather_cursor(const TAGPU_FXVIEW* v)
        rect's own corner maps to — the same projection layer_quad uses */
     wx = (float)(l - v->vpL + v->eyeX);
     wz = (float)(t - v->vpT + v->eyeY);
-    put_outline(&nv, l, t, r, b, outer, wx, wz);
-    put_outline(&nv, l + 1, t + 1, r - 1, b - 1, inner, wx, wz);
-    s_ncurs = nv - CURSBASE;
+    put_outline(base, nv, l, t, r, b, outer, wx, wz);
+    put_outline(base, nv, l + 1, t + 1, r - 1, b - 1, inner, wx, wz);
+    return 1;
+}
+
+/* the build-cursor footprint and the drag band box — the whole of
+   `0x469DB4..0x469F23`, transcribed in the header comment */
+static void gather_cursor(const TAGPU_FXVIEW* v)
+{
+    /* EVERY WORD HERE IS THE PACKET'S: the
+       GUI colour bytes, the two mode bytes, the dispatched mouse point and the
+       build cursor's two world corners, all copied by the game thread inside
+       the draw that is about to use them.
+
+       THE GATE IS tagpu_mark_cursor_ours(), NOT AN OPEN-CODED COPY OF IT, so
+       that a client drawing a twin of the build square cannot arm on a
+       different answer than the square itself. The build ghost is that client
+       (tagpu_native.c, ghost_pass): on a different answer -- the marker pass
+       off, or `mark.on=nocursor` -- the translucent building would track the
+       pointer while our square did not, and the engine's own square is drawn
+       at its UNZOOMED 1x projection, so at any zoom != 1 the two would be in
+       different places. */
+    const TAGPU_PACKET* pk = v->packet;
+    const unsigned char* gui;
+    int mode, outer, inner, nv = CURSBASE;
+
+    s_ncurs = 0;
+    if (!tagpu_mark_cursor_ours()) return;
+    if (!pk || !square_gate(pk)) return;
+    gui = pk->gui_col;
+    mode = pk->cursor_mode;
+
+    /* the colour pair keys off the MODE, not off which arm of the gate let it
+       through — the engine picks it from main+0x2CC3 both times */
+    if (mode == CUR_BUILD) {
+        /* a multi-building placement's sites replace the square (gather_place) */
+        if (tagpu_pk_place_replaces(pk)) return;
+        outer = gui[(pk->region_flags & 0x40) ? GUI_GREEN : GUI_BLOCKED];
+        inner = outer;
+    } else {
+        outer = gui[GUI_WHITE];
+        inner = gui[GUI_BLACK];
+    }
+    if (square_emit(v, s_verts, &nv, pk->build_rect, outer, inner))
+        s_ncurs = nv - CURSBASE;
+}
+
+/* A MULTI-BUILDING PLACEMENT'S SITES, each drawn exactly as the build square
+   would be drawn there: the square's own gate in mode 14, its projection, its
+   drop, its normalise-then-inset, and both outlines in the GUI colour the site
+   carries (green, red or yellow — tagpu_place.h), as the engine's mode-14 pair
+   takes one colour for both. The packet's acquire bounds every site's colour
+   to those three indices, its coordinates to +-TAGPU_PK_PLACE_COORD and the
+   count to the bucket's TAGPU_PK_MAX_PLACE. */
+static void gather_place(const TAGPU_FXVIEW* v)
+{
+    const TAGPU_PACKET* pk = v->packet;
+    const TAGPU_PK_PLACE* pl;
+    unsigned i;
+    int nv = 0;
+
+    s_nplace = 0; s_cPlace = 0;
+    if (!tagpu_mark_cursor_ours()) return;
+    if (!pk || pk->cursor_mode != CUR_BUILD || !square_gate(pk)) return;
+    pl = tagpu_pk_place(pk);
+    if (!pl) return;
+    for (i = 0; i < pk->n_place && nv + MAXCURSV <= MAXPLACEV; i++) {
+        int c = pk->gui_col[pl[i].colour];
+        if (square_emit(v, s_place, &nv, pl[i].rect, c, c)) s_cPlace++;
+    }
+    s_nplace = nv;
 }
 
 /* ---- THE REPLAY'S OVERLAYS ----------------------------------------------
@@ -902,12 +935,13 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     const TAGPU_PK_UNIT* uu;
     const unsigned char* gui;
     unsigned ui;
-    int watched, nv = BARBASE;
+    int watched, nv = 0;
 
     s_nbar = 0; s_cBar = 0; s_nordt = 0; s_nordl = 0; s_nordx = 0;
     s_nsel = 0; s_selover = 0; s_lfar = 0;
     s_nordxOrd = 0; s_ntext = 0; s_xover = 0;
     s_novt = 0; s_novl = 0; s_novlRing = 0;
+    s_nplace = 0; s_cPlace = 0;
     if (!pk || !pk->in_game) return 0;
     /* BEFORE ANYTHING EMITS: a bar per unit at most, a selection rect per unit
        at most, and the unit count is bounded by the packet's own table. A
@@ -941,6 +975,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
        markers are health bars, and neither `damagebars` nor `nobars` has
        anything to say about them */
     gather_cursor(v);
+    gather_place(v);
     if (s_armed == 1 && !s_passive) gather_overlay(v);
     if (s_armed == 1 && !s_passive) tagpu_order_gather(v);
     else if (s_passive) tagpu_markown_set_orders(0);
@@ -1077,7 +1112,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
         s_cBar++;
         if (s_passive) continue;      /* the A/B lever: count, let the engine draw */
 
-        put_barf(&nv, x - 17.0f, y - 2.0f, x + 17.0f, y + 2.0f, gui[GUI_BLACK],
+        put_barf(s_barv, &nv, x - 17.0f, y - 2.0f, x + 17.0f, y + 2.0f, gui[GUI_BLACK],
                  wx, wz);
         /* (Health << 5) / maxHP as an UNSIGNED divide, and the thirds through
            the same maxHP/3 the engine's reciprocal multiply produces */
@@ -1086,10 +1121,10 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
         col = hp > 2 * third ? gui[GUI_GREEN]
             : hp > third     ? gui[GUI_YELLOW]
             :                  gui[GUI_RED];
-        put_barf(&nv, x - 16.0f, y - 1.0f, x - 16.0f + (float)w, y + 1.0f, col,
+        put_barf(s_barv, &nv, x - 16.0f, y - 1.0f, x - 16.0f + (float)w, y + 1.0f, col,
                  wx, wz);
     }
-    s_nbar = nv - BARBASE;
+    s_nbar = nv;
     return s_cBar;
 }
 
@@ -1166,7 +1201,7 @@ int tagpu_mark_handover(TAGPU_MKHAND* out, unsigned now)
 
 void tagpu_mark_render(const TAGPU_FXVIEW* v)
 {
-    int total, textBase = 0, selBase = 0, ovtBase, ovlBase;
+    int total, textBase = 0, selBase = 0, ovtBase, ovlBase, placeBase;
 
     /* THIS PASS BUILDS THE RECORD THE TWIN DRAWS FROM, and nothing else:
        `mk_push` and `mk_draw` are the record and are pure CPU. */
@@ -1185,7 +1220,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
         tagpu_markown_set_digits(s_digits);
     }
 
-    if (s_nbar == 0 && s_ncurs == 0 && s_nsel == 0 &&
+    if (s_nbar == 0 && s_ncurs == 0 && s_nplace == 0 && s_nsel == 0 &&
         s_nordt == 0 && s_nordl == 0 && s_nordx == 0 && s_novt == 0 && s_novl == 0) return;
 
     /* ---- the A/B's lever ---- */
@@ -1218,6 +1253,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     if (s_novt) mk_push(s_ovt, s_novt);
     ovlBase = ovtBase + s_novt;
     if (s_novl) mk_push(s_ovl, s_novl);
+    placeBase = ovlBase + s_novl;
+    if (s_nplace) mk_push(s_place, s_nplace);
 
     /* THE SELECTION RECTS FIRST, and depth-tested: the engine draws each one
        inside the unit sweep, immediately before its own unit (`0x4699EB`,
@@ -1264,9 +1301,13 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
                 v->fogMode & 1, TAGPU_MK_TEX_TEXT, 0);
     }
     /* last, and with the fog off: the engine draws these two rects after its
-       fog overlay and never darkens them */
+       fog overlay and never darkens them, and a placement's sites are the
+       squares that replace its build square */
     if (s_ncurs) {
         mk_draw(CURSBASE, s_ncurs, 0, 0, 0, TAGPU_MK_TEX_NONE, 0);
+    }
+    if (s_nplace) {
+        mk_draw(placeBase, s_nplace, 0, 0, 0, TAGPU_MK_TEX_NONE, 0);
     }
     /* the replay's overlays, over everything and with the fog off: the click rings, then the
        cursor arrows' fills, then their outlines */
@@ -1325,11 +1366,11 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
             last = v->frame_counter;
             tagpu_text_stats(&nstr, &ndrop);
             _snprintf(b, sizeof b,
-                "mark: bars=%d sel=%d selover=%d cursor=%d ordtri=%d "
+                "mark: bars=%d sel=%d selover=%d cursor=%d place=%d ordtri=%d "
                 "ordline=%d far=%d text=%d(lab=%d) "
                 "atlas=%d/%d over=%d key=%d vp=(%d,%d %dx%d) "
                 "zoom=%.2f%s",
-                s_cBar, s_nsel / 4, s_selover, s_ncurs / QUADV, s_nordt / 3,
+                s_cBar, s_nsel / 4, s_selover, s_ncurs / QUADV, s_cPlace, s_nordt / 3,
                 s_nordl, s_lfar,
                 s_ntext, s_nordxOrd / QUADV, nstr, ndrop, s_xover,
                 tagpu_markown_key(), v->vpL, v->vpT, v->vw, v->vh, v->zoom,

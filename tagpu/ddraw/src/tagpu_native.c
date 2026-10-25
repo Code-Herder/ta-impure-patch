@@ -1421,6 +1421,7 @@ static float s_ghostAlpha = 0.40f;
 static unsigned s_ghostCheck = 0;
 static int   s_ghostLogged = -1;     /* the armed state the log last named */
 static unsigned s_ghostCurs = 0, s_ghostQueue = 0, s_ghostDrawn = 0;
+static unsigned s_ghostSites = 0;    /* placement sites' ghosts recorded      */
 static unsigned s_ghostNoBake = 0, s_ghostTrunc = 0;
 static unsigned s_ghostMasked = 0;   /* ghosts drawn with a mask row          */
 static unsigned s_ghostMaskMiss = 0; /* rows refused: another root or count   */
@@ -1745,6 +1746,41 @@ static int ghost_one(const TAGPU_PACKET* pk, unsigned mid,
 
 static int ghost_offscreen(float ax, float ay, int evpL, int evpT, int evw, int evh);
 
+/* The anchor of the ghost that stands on a build square `br` (two corners as
+   {x, altitude, z}, world px, 0x4197D0's layout): 0 when the square is dropped
+   or the anchor is off screen.
+
+   THE SQUARE'S OWN SANITY BOUND, and its own halving. The marker pass
+   (tagpu_mark.c, square_emit) projects the two corners and drops the rect when
+   any of them lands past ±0x100000; a
+   ghost averaged from a rect the square refuses would draw where the square
+   does not. The same projection here also bounds the midpoint adds below, so a
+   sentinel rect cannot overflow them. And the altitude is halved the way the
+   square halves it — `>> 1` per corner, engine truncation, not the unit pass's
+   float — so the ghost sits ON its square rather than up to half a world pixel
+   above it. */
+static int ghost_square_anchor(const int32_t* br, int eyeX, int eyeY, int vpL, int vpT,
+                               int evpL, int evpT, int evw, int evh,
+                               float* fx, float* fz, float* ay)
+{
+    float l = (float)br[0] - (float)eyeX + (float)vpL;
+    float r = (float)br[3] - (float)eyeX + (float)vpL;
+    float t = (float)(br[2] - (br[1] >> 1)) - (float)eyeY + (float)vpT;
+    float b = (float)(br[5] - (br[4] >> 1)) - (float)eyeY + (float)vpT;
+    if (!(l >= -1048576.0f && l <= 1048576.0f &&
+          r >= -1048576.0f && r <= 1048576.0f &&
+          t >= -1048576.0f && t <= 1048576.0f &&
+          b >= -1048576.0f && b <= 1048576.0f)) return 0;
+    *fx = (float)(br[0] + br[3]) * 0.5f;
+    *fz = (float)(br[2] + br[5]) * 0.5f;
+    /* the square's centre, in the WORLD-space half of the anchor (the part
+       that has not had the eye subtracted yet): the mean of its two edges,
+       each with the engine's own truncating halving */
+    *ay = *fz - (float)((br[1] >> 1) + (br[4] >> 1)) * 0.5f;
+    return !ghost_offscreen(*fx - (float)eyeX + (float)vpL, *ay - (float)eyeY + (float)vpT,
+                            evpL, evpT, evw, evh);
+}
+
 /* THE BUILD GHOST'S RECORD, called once per frame from tagpu_native_frame
    after the units: collect the cursor ghost and the queue ghosts and record
    them. `ghost_pieces` walks the 3DO tree, `ghost_offscreen` is a cull in
@@ -1758,8 +1794,9 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
                        int evpL, int evpT, int evw, int evh)
 {
     const TAGPU_PK_BUILD* bs;
-    unsigned nb, k;
-    int haveCursor = 0;
+    const TAGPU_PK_PLACE* pl = NULL;
+    unsigned nb, np = 0, k;
+    int haveCursor = 0, square;
     float cfx = 0.0f, cfz = 0.0f, cay = 0.0f;
 
     if (!s_ghostOn || !pk || !pk->in_game) return;
@@ -1786,9 +1823,9 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
     if ((frame_counter % 300) == 0) {
         char b[224];
         _snprintf(b, sizeof b,
-                  "ghost: curs=%u queue=%u drawn=%u built=%u nobake=%u trunc=%u"
+                  "ghost: curs=%u sites=%u queue=%u drawn=%u built=%u nobake=%u trunc=%u"
                   " masked=%u maskmiss=%u maskcut=%u alpha=%.2f",
-                  s_ghostCurs, s_ghostQueue, s_ghostDrawn, s_ghostBuilt,
+                  s_ghostCurs, s_ghostSites, s_ghostQueue, s_ghostDrawn, s_ghostBuilt,
                   s_ghostNoBake, s_ghostTrunc, s_ghostMasked, s_ghostMaskMiss,
                   s_ghostMaskCut, s_ghostAlpha);
         nlog(b);
@@ -1799,8 +1836,7 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
        draws from it rather than one drawing its hidden pieces. */
     if (pk->truncated & TAGPU_PK_TRUNC_GHOSTMASK) { s_ghostMaskCut++; return; }
     /* the cursor: the square's own gate — mode 14, and either the band bit or
-       the mouse inside the rect the engine can NAME (gather_cursor's test) —
-       plus a build type the udef bound accepts.
+       the mouse inside the rect the engine can NAME (gather_cursor's test).
 
        AND THE SQUARE MUST BE OURS AT ALL. This ghost is the twin of the build
        placement square, which lives in the marker pass's cursor layer, so it
@@ -1812,44 +1848,26 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
        and the engine's own square is drawn at its UNZOOMED 1x projection, so
        at any zoom != 1 the building and its square would be in different
        places. */
-    if (tagpu_mark_cursor_ours() &&
-        pk->cursor_mode == 0x0E && pk->build_unit_id != 0 &&
-        pk->build_unit_id < pk->udef_count &&
-        (pk->region_flags & 8 ||
-         (pk->mouse[0] >= pk->vp_addr[0] && pk->mouse[0] <= pk->vp_addr[2] &&
-          pk->mouse[1] >= pk->vp_addr[1] && pk->mouse[1] <= pk->vp_addr[3]))) {
-        const int* br = pk->build_rect;   /* the corners, world px: x, altitude, z */
-        /* THE SQUARE'S OWN SANITY BOUND, and its own halving. gather_cursor
-           projects the two corners and drops the rect when any of them lands
-           past ±0x100000; a ghost averaged from a rect the square refuses
-           would draw where the square does not. The same projection here also
-           bounds the midpoint adds below, so a sentinel rect cannot overflow
-           them. And the altitude is halved the way the square halves it —
-           `>> 1` per corner, engine truncation, not the unit pass's float —
-           so the ghost sits ON its square rather than up to half a world
-           pixel above it. */
-        float l = (float)br[0] - (float)eyeX + (float)vpL;
-        float r = (float)br[3] - (float)eyeX + (float)vpL;
-        float t = (float)(br[2] - (br[1] >> 1)) - (float)eyeY + (float)vpT;
-        float b = (float)(br[5] - (br[4] >> 1)) - (float)eyeY + (float)vpT;
-        if (l >= -1048576.0f && l <= 1048576.0f &&
-            r >= -1048576.0f && r <= 1048576.0f &&
-            t >= -1048576.0f && t <= 1048576.0f &&
-            b >= -1048576.0f && b <= 1048576.0f) {
-            cfx = (float)(br[0] + br[3]) * 0.5f;
-            cfz = (float)(br[2] + br[5]) * 0.5f;
-            /* the square's centre, in the WORLD-space half of the anchor (the
-               part that has not had the eye subtracted yet): the mean of its
-               two edges, each with the engine's own truncating halving */
-            cay = cfz - (float)((br[1] >> 1) + (br[4] >> 1)) * 0.5f;
-            haveCursor = !ghost_offscreen(cfx - (float)eyeX + (float)vpL,
-                                          cay - (float)eyeY + (float)vpT,
-                                          evpL, evpT, evw, evh);
-        }
+    square = tagpu_mark_cursor_ours() && pk->cursor_mode == 0x0E &&
+             (pk->region_flags & 8 ||
+              (pk->mouse[0] >= pk->vp_addr[0] && pk->mouse[0] <= pk->vp_addr[2] &&
+               pk->mouse[1] >= pk->vp_addr[1] && pk->mouse[1] <= pk->vp_addr[3]));
+    /* A MULTI-BUILDING PLACEMENT'S SITES replace the cursor's square, so they
+       replace its ghost too: one ghost per site, each on its own square exactly
+       as the cursor ghost stands on the cursor's (gather_place draws the
+       squares). Every site gets one, whatever its colour, as the cursor ghost
+       does whatever bit 6 says. The acquire bounds `n_place` to its cap and
+       every site's type under udef_count, the model id's own bound. */
+    if (square && tagpu_pk_place_replaces(pk)) {
+        pl = tagpu_pk_place(pk);
+        np = pl ? pk->n_place : 0u;
+    } else if (square && pk->build_unit_id != 0 && pk->build_unit_id < pk->udef_count) {
+        haveCursor = ghost_square_anchor(pk->build_rect, eyeX, eyeY, vpL, vpT,
+                                         evpL, evpT, evw, evh, &cfx, &cfz, &cay);
     }
     bs = tagpu_pk_builds(pk);
     nb = pk->n_builds;
-    if (!haveCursor && (!bs || !nb)) return;
+    if (!haveCursor && !np && (!bs || !nb)) return;
 
     /* THE GHOST'S OWN WINDOW, and it says so: the A/B's capture must never be
        bracketed around it (tagpu_posedraw.h), and this window is not always the
@@ -1866,6 +1884,14 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
         s_ghostCurs++;
         s_ghostDrawn += ghost_one(pk, pk->build_unit_id, cfx, cfz, cay,
                   &s_pv, eyeX, eyeY, vpL, vpT, r0);
+    }
+    for (k = 0; k < np; k++) {
+        float fx, fz, ay;
+        if (!pl[k].type) continue;
+        if (!ghost_square_anchor(pl[k].rect, eyeX, eyeY, vpL, vpT, evpL, evpT, evw, evh,
+                                 &fx, &fz, &ay)) continue;
+        s_ghostSites++;
+        s_ghostDrawn += ghost_one(pk, pl[k].type, fx, fz, ay, &s_pv, eyeX, eyeY, vpL, vpT, r0);
     }
     for (k = 0; k < nb; k++) {
         float fx, fz;
