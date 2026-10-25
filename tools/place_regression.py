@@ -790,6 +790,15 @@ def selftest(cases=3000, seed=20261025):
     print(f"place selftest: {len(ours)} shapes and rings equal tagpu_placegeo.c's")
 
 
+def no_spacing(gamedir):
+    """The instance's store without its `placespacing=` line, every other line kept."""
+    store = gamedir / "impure.cfg"
+    if store.exists():
+        kept = [ln for ln in store.read_text().splitlines(keepends=True)
+                if not ln.strip().lower().startswith("placespacing=")]
+        store.write_text("".join(kept))
+
+
 def launched(instance, mode):
     """The instance launched on the scenario with the launch's hold, under the run lock; the
     callable that stops it and takes the hold lever back."""
@@ -799,18 +808,16 @@ def launched(instance, mode):
     had = lever.exists()
     lever.write_text("")
     # Every case lays its sites with no spacing but `spacing`'s own, which a store the instance
-    # keeps between launches (tacli ensure_store leaves an existing one alone) would carry over.
-    store = gamedir / "impure.cfg"
-    if store.exists():
-        kept = [ln for ln in store.read_text().splitlines(keepends=True)
-                if not ln.strip().lower().startswith("placespacing=")]
-        store.write_text("".join(kept))
+    # keeps between launches (tacli ensure_store leaves an existing one alone) would carry over:
+    # cleared before the launch and again after it.
+    no_spacing(gamedir)
     tacli("scenario", "load", instance, SCENARIO, "--defaults", timeout=900)
 
     def stop():
         try:
             tacli("stop", instance, timeout=300)
         finally:
+            no_spacing(gamedir)
             if not had:
                 lever.unlink(missing_ok=True)
     return stop

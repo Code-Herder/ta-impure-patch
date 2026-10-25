@@ -105,11 +105,14 @@ typedef struct { int32_t x, z; uint16_t type; uint8_t match, build; } Plan;
 
 static int s_armed;
 
-/* Spacing per building type: a game-thread copy of the store's table (tagpu_settings.h), read
-   at the first use and written through on a change, so an evaluation never takes the store's
-   lock. A type at 0 has no entry. */
+/* Spacing per building type: the game thread's table, the one the placement reads. Loaded from
+   the store at attach; a change is handed to the store whole (tagpu_settings_put_spacing),
+   without waiting in play: while the lock is busy it stays pending and is offered again at the
+   next step and evaluation, and waited for at the level's end, outside play. A type at 0 has no
+   entry. */
 static TsSpacing s_spc[TS_SPACING_SAVED];
-static int s_nspc, s_spcLoaded, s_spcChanged;
+static int s_nspc, s_spcPending;
+_Static_assert(TS_SPACING_MAX == PLACE_SPACING_MAX, "the store keeps what the shapes lay");
 static SiteTest s_test;
 
 static struct {
@@ -435,13 +438,14 @@ static int unit_name(const char* def, char out[TS_SPACING_NAME])
     return out[0] && memchr(out, 0, TS_SPACING_NAME) != NULL;
 }
 
+static void spacing_offer(int wait)
+{
+    if (s_spcPending && tagpu_settings_put_spacing(s_spc, s_nspc, wait)) s_spcPending = 0;
+}
+
 static int spacing_slot(const char* name)
 {
     int i;
-    if (!s_spcLoaded) {
-        s_nspc = tagpu_settings_spacing_load(s_spc, TS_SPACING_SAVED);
-        s_spcLoaded = 1;
-    }
     for (i = 0; i < s_nspc; i++)
         if (!lstrcmpiA(s_spc[i].name, name)) return i;
     return -1;
@@ -471,6 +475,7 @@ static void spacing_step(const char* def, int step)
     } else if (i >= 0) {
         s_spc[i].cells = now;
     } else if (s_nspc < TS_SPACING_SAVED) {
+        memset(&s_spc[s_nspc], 0, sizeof s_spc[s_nspc]);
         lstrcpynA(s_spc[s_nspc].name, name, TS_SPACING_NAME);
         s_spc[s_nspc].cells = now;
         s_nspc++;
@@ -478,9 +483,12 @@ static void spacing_step(const char* def, int step)
         tagpu_logf("place: spacing kept for %d types already; %s stays at 0", TS_SPACING_SAVED, name);
         return;
     }
-    tagpu_settings_set_spacing(name, now);
-    s_spcChanged = 1;
+    s_spcPending = 1;
+    spacing_offer(0);
     tagpu_logf("place: spacing %s=%d", name, now);
+    if (!tagpu_settings_spacing_name_ok(name, strlen(name)))
+        tagpu_logf("place: %s's spacing is not saved: impure.cfg keeps names of [A-Za-z0-9_-] only",
+                   name);
 }
 
 int tagpu_place_key(unsigned vk, int alt_known)
@@ -502,6 +510,7 @@ static void evaluate(void)
     s_eval.valid = 0; s_eval.n = 0; s_eval.shape = PLACE_NONE;
     if (!context(&c, 0)) { end_gesture(); return; }
     s_cEval++;
+    spacing_offer(0);
     memcpy(s_eval.rec, c.w.ta + M_RECORD, sizeof s_eval.rec);
     s_eval.type = (uint16_t)c.type; s_eval.fx = c.fx; s_eval.fz = c.fz;
     /* A move without the button, made after the press: a release the handler never saw. With
@@ -816,9 +825,8 @@ unsigned tagpu_place_gdi_rects(const int engine[4], int out[][4], unsigned char*
 
 void tagpu_place_level_end(void)
 {
-    /* the level's spacing changes reach the file now, outside play, rather than only at exit:
-       a crash later in the session keeps them */
-    if (s_spcChanged) { s_spcChanged = 0; tagpu_settings_flush(); }
+    /* outside play: a change still pending may wait for the store's lock here */
+    spacing_offer(1);
     if (s_armed)
         tagpu_logf("place: level end evals=%u commits=%u issued=%u removed=%u red=%u "
                    "mismatch=%u trunc=%u listcap=%u plancap=%u", s_cEval, s_cCommit, s_cIssued,
@@ -920,6 +928,8 @@ void tagpu_place_init(void)
         tagpu_logf("place: observer on the build cursor (0x4197D0) refused; not armed");
         return;
     }
+    /* the store attached in cfg_load, before this; the render thread does not exist yet */
+    s_nspc = tagpu_settings_spacing_load(s_spc, TS_SPACING_SAVED);
     s_armed = 1;
     tagpu_logf("place: armed (build cursor 0x4197D0 observed on return, click route 0x4993BF, "
                "handler entry 0x499200 observed, site test 0x%08X)", (unsigned)(uintptr_t)s_test);

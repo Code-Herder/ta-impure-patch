@@ -163,7 +163,7 @@ static char s_extra[EXTRA_LEN];
 /* The placement's spacing per building type (tagpu_place.c), `placespacing=NAME:n,...`: only
    types stepped above 0, in the order first stepped. Under s_io like the strings above. */
 static TsSpacing s_spacing[TS_SPACING_SAVED];
-static int s_nspacing, s_spacingFull;
+static int s_nspacing;
 static int  s_extraLen;
 
 /* A windowed frame: a position, and a client size that is either 0,0 -- the
@@ -430,7 +430,7 @@ static char* trim(char* s)
 /* A unit name as the placement keys it: 1..TS_SPACING_NAME-1 bytes of [A-Za-z0-9_-], the
    characters TA's unit names use; anything else is not one, so a hand-edited line cannot put a
    separator or a control byte into the store. */
-static int spacing_name_ok(const char* n, size_t len)
+int tagpu_settings_spacing_name_ok(const char* n, size_t len)
 {
     size_t i;
     if (!len || len >= TS_SPACING_NAME) return 0;
@@ -455,7 +455,7 @@ static void parse_spacing(char* v)
         v = trim(v);
         colon = strchr(v, ':');
         n = colon ? strtol(colon + 1, NULL, 10) : 0;
-        if (!colon || !spacing_name_ok(v, (size_t)(colon - v)) || n < 1 || n > TS_SPACING_MAX ||
+        if (!colon || !tagpu_settings_spacing_name_ok(v, (size_t)(colon - v)) || n < 1 || n > TS_SPACING_MAX ||
             s_nspacing >= TS_SPACING_SAVED) {
             slog("placespacing entry \"%s\" skipped", v);
             continue;
@@ -466,6 +466,7 @@ static void parse_spacing(char* v)
             for (j = 0; j < s_nspacing && lstrcmpiA(s_spacing[j].name, v); j++) {}
             if (j < s_nspacing) { slog("placespacing names %s twice: the first stands", v); continue; }
         }
+        memset(&s_spacing[s_nspacing], 0, sizeof s_spacing[s_nspacing]);
         lstrcpynA(s_spacing[s_nspacing].name, v, TS_SPACING_NAME);
         s_spacing[s_nspacing].cells = (int)n;
         s_nspacing++;
@@ -842,34 +843,32 @@ int tagpu_settings_spacing_load(TsSpacing* out, int max)
     return n;
 }
 
-void tagpu_settings_set_spacing(const char* name, int cells)
+int tagpu_settings_put_spacing(const TsSpacing* table, int n, int wait)
 {
-    int i;
-    if (!s_attached || s_ignored || !name || !spacing_name_ok(name, strlen(name)) ||
-        cells < 0 || cells > TS_SPACING_MAX) return;
-    EnterCriticalSection(&s_io);
-    for (i = 0; i < s_nspacing && lstrcmpiA(s_spacing[i].name, name); i++) {}
-    if (i < s_nspacing) {
-        if (!cells) {
-            memmove(&s_spacing[i], &s_spacing[i + 1], (size_t)(s_nspacing - i - 1) * sizeof *s_spacing);
-            s_nspacing--;
-            InterlockedIncrement(&s_dirty);
-        } else if (s_spacing[i].cells != cells) {
-            s_spacing[i].cells = cells;
-            InterlockedIncrement(&s_dirty);
-        }
-    } else if (cells) {
-        if (s_nspacing < TS_SPACING_SAVED) {
-            lstrcpynA(s_spacing[s_nspacing].name, name, TS_SPACING_NAME);
-            s_spacing[s_nspacing].cells = cells;
-            s_nspacing++;
-            InterlockedIncrement(&s_dirty);
-        } else if (!s_spacingFull) {
-            s_spacingFull = 1;
-            slog("placespacing holds %d types: %s's spacing is not kept", TS_SPACING_SAVED, name);
+    TsSpacing kept[TS_SPACING_SAVED];
+    int i, k = 0;
+    if (!s_attached || s_ignored) return 1;            /* no say, nothing to hand over */
+    for (i = 0; i < n && k < TS_SPACING_SAVED; i++) {
+        const char* end = memchr(table[i].name, 0, TS_SPACING_NAME);
+        size_t len = end ? (size_t)(end - table[i].name) : TS_SPACING_NAME;
+        if (len < TS_SPACING_NAME && tagpu_settings_spacing_name_ok(table[i].name, len) &&
+            table[i].cells >= 1 && table[i].cells <= TS_SPACING_MAX) {
+            memset(&kept[k], 0, sizeof kept[k]);
+            memcpy(kept[k].name, table[i].name, len);
+            kept[k].cells = table[i].cells;
+            k++;
         }
     }
+    if (wait) EnterCriticalSection(&s_io);
+    else if (!TryEnterCriticalSection(&s_io)) return 0;
+    if (k != s_nspacing || memcmp(kept, s_spacing, (size_t)k * sizeof *kept)) {
+        memset(s_spacing, 0, sizeof s_spacing);
+        memcpy(s_spacing, kept, (size_t)k * sizeof *kept);
+        s_nspacing = k;
+        InterlockedIncrement(&s_dirty);
+    }
     LeaveCriticalSection(&s_io);
+    return 1;
 }
 
 int tagpu_settings_window(int* x, int* y, int* w, int* h)

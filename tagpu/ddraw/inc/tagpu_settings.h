@@ -140,14 +140,20 @@ int  tagpu_settings_restoreoff_saved(const char* key);
 
 /* The placement's spacing per building type, keyed by unit name (case-insensitive): empty cells
    between neighbouring sites, 1..TS_SPACING_MAX; a type at 0 has no entry. At most
-   TS_SPACING_SAVED types. Both are no-ops under tagpu_defaults.off. Game thread (tagpu_place.c),
-   under the store's lock; a change reaches the file at the next flush. */
+   TS_SPACING_SAVED types, each name of [A-Za-z0-9_-]. Nothing is loaded or kept under
+   tagpu_defaults.off. GAME THREAD (tagpu_place.c), under the store's lock: the load at attach,
+   before the render thread exists; `put` hands over the module's whole table and, with `wait`
+   0, never waits -- the render thread holds the lock across its file writes, and the game
+   thread must not wait on one in play -- answering 0 when the lock was busy, for a later try.
+   The render thread writes the change at its next flush. */
+#include <stddef.h>
 #define TS_SPACING_NAME  32
 #define TS_SPACING_MAX   16
 #define TS_SPACING_SAVED 64
 typedef struct { char name[TS_SPACING_NAME]; int cells; } TsSpacing;
 int  tagpu_settings_spacing_load(TsSpacing* out, int max);
-void tagpu_settings_set_spacing(const char* name, int cells);
+int  tagpu_settings_put_spacing(const TsSpacing* table, int n, int wait);
+int  tagpu_settings_spacing_name_ok(const char* name, size_t len);
 
 /* The windowed frame: x, y and the client size, 0,0 for the size the game
    asks for. 0 when the store has none; answered under tagpu_defaults.off too.

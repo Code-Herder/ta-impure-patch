@@ -1373,9 +1373,13 @@ MEASURED 2026-09-23 on a hand-staged v0.2 gamedir:
 every file renamed, `penumbra=0.1` kept alone in the cfg, the game up borderless-fullscreen from
 the store.
 
-**The placement's spacing is saved to the store** when a level ends after it changed (the game
-thread, outside play, `tagpu_place_level_end`), and with everything else at exit; the place module
-keeps a game-thread copy, read at its first use, so a placement never takes the store's lock.
+**The placement's spacing is written by the render thread at its next flush**, as a menu change
+is. The place module keeps the game thread's own table, loaded from the store at attach, and
+hands a changed table over with `TryEnterCriticalSection`: the render thread holds the store's
+lock across its file write, and the game thread never waits on it in play. A hand-over that finds
+the lock busy is offered again at the next step or evaluation, and at the level's end, outside
+play, it waits. A unit name outside `[A-Za-z0-9_-]` steps in play but is not saved, and the log
+says so.
 
 **The windowed frame is saved to the store**, by `cfg_save` on the way out: `window=x,y,w,h`,
 where `w,h = 0,0` is cnc-ddraw's "the size the game asks for". A frame that a mode would leave
