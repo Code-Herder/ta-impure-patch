@@ -316,7 +316,7 @@ class Place(Check):
         placed = self.placed(self.orders(kind))
         for o in placed:
             name = self.action_name(o["action"])
-            assert name == "MOBILEBUILD", f"{kind}'s build order has action {o['action']} ({name})"
+            assert name.upper() == "MOBILEBUILD", f"{kind}'s build order has action {o['action']} ({name})"
         return [(o["pos"][0], o["pos"][2], o["type"]) for o in placed]
 
     def clear(self, *kinds):
