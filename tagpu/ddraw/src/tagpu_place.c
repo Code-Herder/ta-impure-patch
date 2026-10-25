@@ -112,7 +112,7 @@ static struct {
     unsigned n;
     Site site[PLACE_MAX_SITES];
 } s_eval;
-static struct { int active; uint16_t type; int16_t cx, cz; } s_gesture;
+static struct { int active; uint16_t type; int16_t cx, cz; int stale[6]; } s_gesture;
 
 static Plan s_plan[PLACE_PLANS];
 static unsigned s_nplan;
@@ -407,6 +407,16 @@ static unsigned budget(unsigned n, unsigned builders)
 
 static void end_gesture(void) { s_gesture.active = 0; }
 
+/* The mouse object's current move record, six dwords at +0x196: the one an empty ring's peek and
+   pop hand IdleTick. The object is the static 0x51F320 WinMain gives 0x4B5990, so it lives as long
+   as the process; the window procedure writes the record on this thread (0x4C2360). */
+static void stale_move(int out[6])
+{
+    const char* mouse = *(const char* const*)0x0051FBD0u;
+    if (mouse) memcpy(out, mouse + 0x196, 6 * sizeof(int));
+    else memset(out, 0, 6 * sizeof(int));
+}
+
 static void evaluate(void)
 {
     Ctx c;
@@ -418,8 +428,15 @@ static void evaluate(void)
     s_cEval++;
     memcpy(s_eval.rec, c.w.ta + M_RECORD, sizeof s_eval.rec);
     s_eval.type = (uint16_t)c.type; s_eval.fx = c.fx; s_eval.fz = c.fz;
-    /* a move without the button: a release the handler never saw */
-    if (s_eval.rec[4] == WM_MOUSEMOVE && !(s_eval.rec[2] & MK_LBUTTON)) end_gesture();
+    /* A move without the button, made after the press: a release the handler never saw. With
+       its ring empty IdleTick copies the mouse object's current move record (+0x196, 0x4C2D73)
+       to main+0x2C76, so every IdleTick between the press and the next move reads the move made
+       BEFORE the press -- Shift alone in wParam (MEASURED 2026-10-25, the button held) -- and
+       that one must not end the gesture. It is the record the press saw (stale_move); only a
+       later move rewrites +0x196 (0x4C2360, from the window procedure's WM_MOUSEMOVE). Identity,
+       not time: the records' clock ticks at 30 Hz (0x4B6340) and wraps short of 2^32. */
+    if (s_eval.rec[4] == WM_MOUSEMOVE && !(s_eval.rec[2] & MK_LBUTTON) &&
+        memcmp(s_eval.rec, s_gesture.stale, sizeof s_gesture.stale)) end_gesture();
     if (s_gesture.type != c.type) end_gesture();
     /* the engine's rectangle is already snapped: x0 = 16 * the site's first cell (0x419849) */
     s_eval.cur_cx = *(const int*)(c.w.ta + M_RECT) >> 4;
@@ -617,6 +634,7 @@ static int __cdecl place_button(const int* rec, unsigned msg)
             memcmp(s_eval.rec, rec, sizeof s_eval.rec)) return 0;
         s_gesture.active = 1; s_gesture.type = s_eval.type;
         s_gesture.cx = (int16_t)s_eval.cur_cx; s_gesture.cz = (int16_t)s_eval.cur_cz;
+        stale_move(s_gesture.stale);
         return 1;
     }
     if (msg != WM_LBUTTONUP || !s_gesture.active) return 0;
