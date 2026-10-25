@@ -275,7 +275,9 @@ layer.addEventListener('click', e => {
       const f = { seat: p.i, from: Math.round(S.t), len: 45, id: Math.max(0, ...S.forks.map(f => f.id)) + 1, seen: ++seen, parent: own ? own.id : 0 };
       S.forks.push(f); S.pick = false; S.tl = forkList().indexOf(f);
       toast(`Taking over ${p.name} at ${clock(f.from)}`); break; }
-    case 'lane': { const k = +a.dataset.fork; S.tl = S.tl === k ? -1 : k; if (S.tl >= 0) watched().seen = ++seen; S.t = Math.min(S.t, tlEnd()); S.armed = -1; break; }
+    // the watched lane stays watched: its Back to main recording button is the way back
+    case 'lane': { const k = +a.dataset.fork; S.tl = k; if (S.tl >= 0) watched().seen = ++seen; S.t = Math.min(S.t, tlEnd()); S.armed = -1; break; }
+    case 'main': S.tl = -1; S.armed = -1; S.t = Math.min(S.t, tlEnd()); break;
     case 'export': toast(`F${forkList()[+a.dataset.fork].id} saved as a replay of its own`); break;
     case 'delete': { const k = +a.dataset.fork, f = forkList()[k];
       if (S.armed !== k) { S.armed = k; toast(`Click again to delete F${f.id}`); break; }

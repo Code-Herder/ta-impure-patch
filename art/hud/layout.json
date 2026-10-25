@@ -24,6 +24,8 @@
   "chart":       {"font": "Barlow Condensed", "weight": 600, "size": 6.5,  "colour": "#8a93a8", "upper": true,  "spacing": 0.03, "shadow": 0}
  },
 
+ "tip": {"h": 11, "pad": 4, "gap": 2, "margin": 2, "bg": "#080a06", "alpha": 0.86, "edge": 0.25, "edge_colour": "#4a4c3c", "style": "face_xs"},
+
  "toast": {"top": 0.07, "w": 150, "max_w": 260, "pad": 8, "h": 18, "bg": "#080a06", "alpha": 0.86, "edge": 0.25, "edge_colour": "#4a4c3c", "style": "toast", "ms": 1800},
 
  "dock": {
@@ -58,11 +60,11 @@
   "foot": {"part": "foot_one", "w": 204, "h": 35, "gap": 6,
    "button": {"pad": [0.5, 0.5, 0.5, 0.5], "part": "bay_button", "pressed": "bay_button_down"},
    "buttons": [
-    {"in": "bay_stats",      "act": "stats",      "toggle": "stats",      "icon": {"name": "stats", "w": 17, "h": 17}},
-    {"in": "bay_cursors",    "act": "cursors",    "toggle": "cursors",    "icon": {"name": "cursors", "w": 17, "h": 17}},
-    {"in": "bay_clicks",     "act": "clicks",     "toggle": "clicks",     "icon": {"name": "clicks", "w": 17, "h": 17}},
-    {"in": "bay_selections", "act": "selections", "toggle": "selections", "icon": {"name": "selections", "w": 17, "h": 17}},
-    {"in": "bay_chat",       "act": "chat",       "toggle": "chat",       "icon": {"name": "chat", "w": 17, "h": 17}}
+    {"in": "bay_stats",      "act": "stats",      "toggle": "stats",      "tip": "Stats",               "icon": {"name": "stats", "w": 17, "h": 17}},
+    {"in": "bay_cursors",    "act": "cursors",    "toggle": "cursors",    "tip": "Players' cursors",    "icon": {"name": "cursors", "w": 17, "h": 17}},
+    {"in": "bay_clicks",     "act": "clicks",     "toggle": "clicks",     "tip": "Players' clicks",     "icon": {"name": "clicks", "w": 17, "h": 17}},
+    {"in": "bay_selections", "act": "selections", "toggle": "selections", "tip": "Players' selections", "icon": {"name": "selections", "w": 17, "h": 17}},
+    {"in": "bay_chat",       "act": "chat",       "toggle": "chat",       "tip": "Chat",                "icon": {"name": "chat", "w": 17, "h": 17}}
    ]},
   "scroll": {
    "button": {"x": -15, "w": 11, "h": 11, "part": "scroll_button", "icon_padf": 0.22, "up": "arrow_up", "down": "arrow_down", "acts": ["scroll_up", "scroll_down"]},
@@ -142,7 +144,8 @@
             "fill": {"part": "track_fill", "pad": [1.5, 1.5, 1.5, 1.5]},
             "buttons": {"part": "lane_button", "pressed": "lane_button_down", "w": 13, "gap": 1.5, "pad": 1,
                         "icon": {"padf": 0.18},
-                        "items": [{"act": "export", "icon": "export"}, {"act": "delete", "icon": "delete"}]}},
+                        "items": [{"act": "export", "icon": "export"}, {"act": "delete", "icon": "delete"}],
+                        "back": {"act": "main", "label": "Back to main recording", "pad": 3}}},
    "rail": "rail_forks",
    "bay": {"part": "forks_bay", "pressed": "forks_bay_down", "in": "bay", "pad": [0.5, 0.5, 0.5, 0.5], "off": 0.45,
            "icon": {"pad": [0, 4, 0, 0], "w": 8, "h": 8, "ax": "c", "ay": "t", "open": "fold_open", "closed": "fold_closed"},
