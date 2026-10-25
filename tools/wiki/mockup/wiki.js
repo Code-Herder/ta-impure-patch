@@ -18,11 +18,8 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
 
 /* ---- the state, from the URL; the URL is kept up to date so a view can be shared ---- */
-const SKINS = ['plate', 'panels', 'slim', 'whitebox'];
-/* the list rows under trial on the chosen skin: whose row parts they are drawn with (its own, or plate's), and how the
-   selected one shows -- `raised`, the kit's row_selected part; the rest keep the plain row and mark it without a button */
-const ROWS = ['own', 'plate'], SELS = ['raised', 'marker', 'glow', 'underline', 'sunk', 'text'];
-const S = { res: '1920x1080', size: 90, mode: 'sp', mod: 'stock', skin: 'slim', rows: 'plate', sel: 'marker', rewind: true, open: false, entry: null, demo: 0, try: false,
+const SKINS = ['kit', 'whitebox'];
+const S = { res: '1920x1080', size: 90, mode: 'sp', mod: 'stock', skin: 'kit', rewind: true, open: false, entry: null, demo: 0, try: false,
   playing: true, speed: 1, fold: new Set() };
 { const q = new URLSearchParams(location.search);
   if (RES.includes(q.get('res'))) S.res = q.get('res');
@@ -31,12 +28,10 @@ const S = { res: '1920x1080', size: 90, mode: 'sp', mod: 'stock', skin: 'slim', 
   if (MODS.includes(q.get('mod'))) S.mod = q.get('mod');
   if (q.get('rewind') === '0') S.rewind = false;
   if (SKINS.includes(q.get('skin'))) S.skin = q.get('skin');
-  if (ROWS.includes(q.get('rows'))) S.rows = q.get('rows');
-  if (SELS.includes(q.get('sel'))) S.sel = q.get('sel');
   S.open = q.has('open'); S.entry = q.get('entry'); S.try = q.has('try');
   if (q.get('demo')) S.demo = Math.max(0, (+q.get('demo') || 1) - 1); }
 function syncURL() {
-  const q = new URLSearchParams({ res: S.res, size: S.size, mode: S.mode, mod: S.mod, skin: S.skin, rows: S.rows, sel: S.sel, rewind: +S.rewind });
+  const q = new URLSearchParams({ res: S.res, size: S.size, mode: S.mode, mod: S.mod, skin: S.skin, rewind: +S.rewind });
   if (S.open) { q.set('open', ''); if (S.entry) { q.set('entry', S.entry); q.set('demo', S.demo + 1); } if (S.try) q.set('try', ''); }
   if (window.WikiGfx) WikiGfx.url(q);
   history.replaceState(null, '', '?' + q.toString().replace(/=(?=&|$)/g, ''));
@@ -435,18 +430,16 @@ function buildMenu(v) {
 }
 $('#bmenu').onclick = e => { const b = e.target.closest('[data-build]'); if (!b) return; picked = b.dataset.build || null; send({ build: picked }); menuKey = null; };
 
-/* ---- skins: the whitebox, or a kit of art/wiki/skins/<name>/ -- kit.json in art/hud/kit.json's format and its parts as
-   PNGs. GEOM places what each kit's window art leaves room for, in units: the title in its dark title groove (wt: left,
+/* ---- skins: the whitebox, or the kit of art/wiki/kit/ -- kit.json in art/hud/kit.json's format and its parts as
+   PNGs. GEOM places what the kit's window art leaves room for, in units: the title in its dark title groove (wt: left,
    right, top, height), the close button centred in its close bay (wx: right, top, width, height), the body inside its
    frame (wb), and how deep its panels' frame (pn) and its bezel's (bz) are, each [top, right, bottom, left]. MEASURED
-   2026-10-25 from each kit's window.png, panel.png and bezel.png at the kit's scale: the groove's and the bay's dark
-   spans across the title band, and the frames' inner edges where the face's tone begins; the body keeps 3 to 6 units
-   more off the frame (panels' title band has a lip under its groove). ---- */
+   2026-10-25 from the kit's window.png, panel.png and bezel.png at its scale: the groove's and the bay's dark spans
+   across the title band, and the frames' inner edges where the face's tone begins; the body keeps 3 units more off
+   the frame. ---- */
 const GEOM = {
   whitebox: { wt: [0, 22, 0, 20], wx: [0, 0, 22, 20], wb: [20, 0, 0, 0], gap: 0, pn: [0, 0, 0, 0], bz: [0, 0, 0, 0] },
-  plate: { wt: [9.1, 50.6, 7.1, 18.7], wx: [20.3, 9.5, 14, 14], wb: [32, 9, 8, 13], gap: 3, pn: [7, 12, 12, 8], bz: [6.7, 13.4, 8.2, 7.6] },
-  panels: { wt: [4.9, 26, 2.5, 15.6], wx: [6.7, 3.4, 14, 14], wb: [30, 9, 9, 10], gap: 3, pn: [4.5, 4.7, 3.3, 5.9], bz: [6.6, 13.8, 13.6, 14.1] },
-  slim: { wt: [2.6, 20.4, 2.4, 15.7], wx: [3.5, 3.2, 14, 14], wb: [23, 5.6, 5.6, 5.5], gap: 3, pn: [2.5, 2.6, 2.1, 2.5], bz: [4.1, 4.0, 3.7, 4.1] },
+  kit: { wt: [2.6, 20.4, 2.4, 15.7], wx: [3.5, 3.2, 14, 14], wb: [23, 5.6, 5.6, 5.5], gap: 3, pn: [2.5, 2.6, 2.1, 2.5], bz: [4.1, 4.0, 3.7, 4.1] },
 };
 const KITS = {};                      // name -> { parts, img, light } once loaded
 function applySkin() {
@@ -460,15 +453,13 @@ function applySkin() {
     const cv = el.firstElementChild; if (cv && cv.classList.contains('skin')) cv.remove();
     el._pk = null; el.style.removeProperty('--ink'); el.style.removeProperty('--shade');
   }
-  frame.dataset.sel = S.sel;
   if (S.skin !== 'whitebox' && !KITS[S.skin]) loadKit(S.skin);
-  if (S.skin !== 'whitebox' && S.rows === 'plate' && !KITS.plate) loadKit('plate');
   sizeStage();
 }
 function loadKit(name) {
-  const base = `${ART}skins/${name}/`;
+  const base = `${ART}${name}/`;
   KITS[name] = { loading: true };
-  fetch(base + 'kit.json').then(r => { if (!r.ok) throw new Error(`skins/${name}/kit.json: ${r.status}`); return r.json(); }).then(async j => {
+  fetch(base + 'kit.json').then(r => { if (!r.ok) throw new Error(`${name}/kit.json: ${r.status}`); return r.json(); }).then(async j => {
     const parts = j.parts, img = {}, light = {};
     await Promise.all(Object.keys(parts).map(n => { const im = new Image(); im.src = `${base}parts/${n}.png`; img[n] = im; return im.decode(); }));
     for (const n in parts) light[n] = faceLight(parts[n], img[n]);
@@ -477,7 +468,7 @@ function loadKit(name) {
 }
 /* a part's face is light when its middle (inside the slices) averages above a grey of 120: its text is then dark. 120 is
    where dark ink (#1d1d1b) out-contrasts the HUD styles' light colours (about #e2dcb0) by more than the light text's
-   shadow makes up, put at 15 %: plate's window (114) keeps light text, panels' buttons (128) take dark */
+   shadow makes up, put at 15 % */
 function faceLight(k, im) {
   const w = im.naturalWidth, h = im.naturalHeight, [t, r, b, l] = k.slice || [h / 4, w / 4, h / 4, w / 4];
   const c = document.createElement('canvas'); c.width = c.height = 8;
@@ -530,21 +521,19 @@ function paintParts() {
   const px = G.gh / 720;
   for (const el of document.querySelectorAll('[data-part]')) {
     const w = el.offsetWidth, h = el.offsetHeight; if (!w || !h) continue;
-    const base = el.dataset.part, row = base === 'row', from = row && S.rows === 'plate' ? 'plate' : S.skin;
-    const R = row ? KITS[from] : K; if (!R || !R.parts) continue;
-    const alt = row ? 'row_selected' : base + '_down', on = el.matches('.on, .sel, .pressed') && (!row || S.sel === 'raised');
-    const n = on && R.parts[alt] ? alt : base, k = R.parts[n]; if (!k) continue;
-    const W = Math.max(1, Math.round(w * G.k)), H = Math.max(1, Math.round(h * G.k)), key = `${from}|${n}|${W}|${H}`;
+    const base = el.dataset.part, alt = base === 'row' ? 'row_selected' : base + '_down';
+    const n = el.matches('.on, .sel, .pressed') && K.parts[alt] ? alt : base, k = K.parts[n]; if (!k) continue;
+    const W = Math.max(1, Math.round(w * G.k)), H = Math.max(1, Math.round(h * G.k)), key = `${S.skin}|${n}|${W}|${H}`;
     let cv = el.firstElementChild;
     if (!cv || !cv.classList.contains('skin')) { cv = document.createElement('canvas'); cv.className = 'skin'; el.prepend(cv); el._pk = null; }
     if (el._pk === key) continue;
     el._pk = key; cv.width = W; cv.height = H;
     const g = cv.getContext('2d'); g.imageSmoothingQuality = 'high';
-    drawPart(g, k, R.img[n], W, H, px);
+    drawPart(g, k, K.img[n], W, H, px);
     const gl = (el.dataset.glyph || '').split(' ').find(q => K.parts[q]);
     if (gl && k.kind !== 'whole') drawIcon(g, K.img[gl], W, H, .6);
-    el.style.setProperty('--ink', R.light[n] ? '#1d1d1b' : 'initial');
-    el.style.setProperty('--shade', R.light[n] ? 'none' : 'initial');
+    el.style.setProperty('--ink', K.light[n] ? '#1d1d1b' : 'initial');
+    el.style.setProperty('--shade', K.light[n] ? 'none' : 'initial');
   }
 }
 document.addEventListener('pointerdown', e => { const b = e.target.closest('button[data-part]'); if (b) b.classList.add('pressed'); });
@@ -600,8 +589,6 @@ $('#mode').value = S.mode; $('#mode').onchange = e => { S.mode = e.target.value;
 $('#rewind').value = +S.rewind; $('#rewind').onchange = e => { S.rewind = e.target.value === '1'; frame.classList.toggle('norewind', !S.rewind); syncURL(); };
 frame.classList.toggle('norewind', !S.rewind);
 $('#skin').value = S.skin; $('#skin').onchange = e => { S.skin = e.target.value; applySkin(); syncURL(); };
-$('#rows').value = S.rows; $('#rows').onchange = e => { S.rows = e.target.value; applySkin(); syncURL(); };
-$('#sel').value = S.sel; $('#sel').onchange = e => { S.sel = e.target.value; applySkin(); syncURL(); };
 $('#mod').value = S.mod; $('#mod').onchange = e => { S.mod = e.target.value; renderTree(); renderEntry(); syncURL(); };
 window.addEventListener('resize', layout);
 

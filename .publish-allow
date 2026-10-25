@@ -33,3 +33,7 @@ art/hud/*
 
 # The same parts at the resolution they were cut at, which tools/hudart/fit.py fits into art/hud/
 art/hud-full/*
+
+# The in-game wiki's painted parts, lossless: painted for Impure in the replay HUD's look and cut by
+# tools/hudart/ (research/notes/ingame-wiki.md, The art); the wiki mockup draws them
+art/wiki/kit/*

@@ -19,12 +19,7 @@
   <label>Game <select id="mode"><option value="sp">single player (pauses)</option><option value="mp">multiplayer (keeps running)</option></select></label>
   <label>Detected mod <select id="mod"><option value="stock">Stock</option><option value="mayhem">Total Mayhem</option><option value="prota">ProTA</option>
     <option value="twilight">Twilight</option><option value="escalation">Escalation</option><option value="tazero">TA Zero</option><option value="unknown">unknown</option></select></label>
-  <label>Skin <select id="skin"><option value="plate">plate</option><option value="panels">panels</option><option value="slim">slim</option>
-    <option value="whitebox">whitebox</option></select></label>
-  <label>Rows <select id="rows"><option value="own">the skin's own</option><option value="plate">plate's</option></select></label>
-  <label>Selected row <select id="sel"><option value="raised">raised (a lit row)</option><option value="marker">marker bar</option>
-    <option value="glow">glow</option><option value="underline">underline</option><option value="sunk">sunk groove</option>
-    <option value="text">text only</option></select></label>
+  <label>Skin <select id="skin"><option value="kit">kit</option><option value="whitebox">whitebox</option></select></label>
   <label>Rewind button <select id="rewind"><option value="1">shown (live recorded skirmish)</option><option value="0">absent</option></select></label>
   <label>Graphics <select id="gfx"><option value="whitebox">whitebox</option><option value="game">game (gfx/)</option></select><output id="gfx-note"></output></label>
 </header>
@@ -71,9 +66,9 @@
 </div>
 <p class="note">The game frame is the chosen resolution fitted into the browser, its canvases drawn at the resolution's own pixels; every
 length in the window is in units of the frame's height / 720. The window, its tree, the entry and its demos come from <code>art/wiki/</code>;
-what the stage shows comes from <code>sim.js</code>; a skin's parts from <code>art/wiki/skins/</code>, the text styles from the replay
+what the stage shows comes from <code>sim.js</code>; the kit's parts from <code>art/wiki/kit/</code>, the text styles from the replay
 HUD's <code>art/hud/layout.json</code>. URL switches: <code>res=</code>, <code>size=</code>, <code>mode=sp|mp</code>,
-<code>mod=</code>, <code>skin=plate|panels|slim|whitebox</code>, <code>rewind=0|1</code>, <code>open</code>, <code>entry=</code>, <code>demo=</code> (from 1), <code>try</code>, <code>gfx=whitebox|game</code> (the game's own graphics, rendered into the gitignored
+<code>mod=</code>, <code>skin=kit|whitebox</code>, <code>rewind=0|1</code>, <code>open</code>, <code>entry=</code>, <code>demo=</code> (from 1), <code>try</code>, <code>gfx=whitebox|game</code> (the game's own graphics, rendered into the gitignored
 <code>gfx/</code> by <code>tools/wiki/gfx.py</code> from the local install).</p>
 <script src="sim.js"></script>
 <script src="gfx.js"></script>

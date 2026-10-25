@@ -12,6 +12,7 @@ reason. Nothing of the wiki is in the DLL yet.
 | The tree of categories and entries | `art/wiki/tree.json` |
 | One entry: its text, its mods, its demos | `art/wiki/entries/<id>.json` |
 | The mockup, which reads only those files | `tools/wiki/mockup/` (`index.html`, `wiki.js`, `wiki.css`, `sim.js`) |
+| The window's art kit | `art/wiki/kit/` (`kit.json` and `parts/`), in `art/hud/kit.json`'s format |
 | The stage in the game's own graphics | `tools/wiki/gfx.py` writes the gitignored `tools/wiki/mockup/gfx/` from the local install; `gfx.js` draws it under `gfx=game` |
 | The demos' generators; the headless check of every demo | `tools/wiki/gen-quickbuild.mjs`, `tools/wiki/gen-buildshapes.mjs`; `tools/wiki/simcheck.mjs` |
 | Serving it | `python3 tools/hudart/serve.py`, then `http://127.0.0.1:8000/tools/wiki/mockup/` |
@@ -95,6 +96,18 @@ Two entries, both under Quality of Life → Building: **Quick Build: Resource Ex
 - **A mod that turns the feature off**: a red circle with "Turned off in this mod" on the entry's
   page, and the same mark on its row in the tree. Its demos still play.
 
+### The art
+
+**The window is drawn from one kit, `art/wiki/kit/`, chosen 2026-10-25** from three looks painted
+in the replay HUD's style (`research/notes/hud-art.md`): **slim**'s window, panels, bezel, buttons,
+keycaps, badge, close and wiki buttons (thin worn rims round dark screen faces), with **plate**'s
+two row parts — a framed steel row, and for the selected row its lit, raised twin. Each part is a
+nine-slice drawn by the replay HUD's rules; their specs are `tools/hudart/specs/parts_wiki_slim.py`
+and, for the rows, `parts_wiki_plate.py`. Every text role takes a style of `art/hud/layout.json`
+in the replay HUD's faces (`art/hud/fonts/`). The parts are filed as cut, about 10 px a unit; they
+are fitted to what the game draws, as `tools/hudart/fit.py` does for the HUD, when the DLL draws
+them.
+
 ### The stage
 
 A whitebox of the game's own view, so a demo reads as what the player will see:
@@ -155,6 +168,7 @@ A strip above the stage, outside the game frame:
 | Open, entry, demo | the wiki open on an entry and a demo | `open&entry=quickbuild&demo=3` |
 | Try it | Try it yourself on that demo's scene | `try` |
 | Rewind button | shown (a live recorded skirmish) or absent | `rewind=1` / `rewind=0` |
+| Skin | the kit, or the flat whitebox | `skin=kit` / `skin=whitebox` |
 | Graphics | the stage's whitebox, or the game's own graphics from `gfx/` | `gfx=whitebox` / `gfx=game` |
 
 Behind the window: the replay HUD mockup's backdrop (`research/notes/assets/hud-art/backdrop.png`),
