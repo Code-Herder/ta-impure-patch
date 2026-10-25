@@ -2538,16 +2538,25 @@ def _hud_spot(dump: dict, key: str, r):
     """A client pixel of `key`'s rect r where `key` is the topmost control, as the game's hit test
     finds it: its centre when nothing drawn over it covers that, else the nearest pixel to the
     centre that nothing covers -- the watched lane's centre can lie under its own Back to main
-    recording button. None when the controls over it cover it whole."""
+    recording button. None when the controls over it cover it whole. The centre is tested alone
+    first and the search then walks square rings outward, each ring from its middles to its corners,
+    so an uncovered control costs one test."""
     hits = dump["hits"]["at"]
 
     def top(x, y):
         return next((h["key"] for h in hits
                      if h["r"][0] <= x < h["r"][2] and h["r"][1] <= y < h["r"][3]), None)
     cx, cy = _hud_centre(r)
-    spots = sorted(((x, y) for y in range(r[1], r[3]) for x in range(r[0], r[2])),
-                   key=lambda p: (abs(p[0] - cx) + abs(p[1] - cy), p))
-    return next(((x, y) for x, y in spots if top(x, y) == key), None)
+    x0, y0, x1, y1 = r[0], r[1], r[2] - 1, r[3] - 1
+    for d in range(max(cx - x0, x1 - cx, cy - y0, y1 - cy) + 1):
+        ring = [(x, y) for y in range(max(cy - d, y0), min(cy + d, y1) + 1)
+                for x in (range(max(cx - d, x0), min(cx + d, x1) + 1) if abs(y - cy) == d
+                          else (cx - d, cx + d)) if x0 <= x <= x1]
+        ring.sort(key=lambda p: (abs(p[0] - cx) + abs(p[1] - cy), p[1], p[0]))
+        spot = next(((x, y) for x, y in ring if top(x, y) == key), None)
+        if spot:
+            return spot
+    return None
 
 
 def _hud_find(inst: Instance, key: str, timeout: float):

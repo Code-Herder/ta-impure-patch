@@ -938,9 +938,10 @@ control's place in the frame on screen — and never calls the replay's API:
 - **`click`** writes `dclick:` (`drclick:` with `--right`) at the control's centre, **`hover`**
   `dmove:`, and **`wheel`** `dwheel:x,y,n`, n notches (positive: away from the player, and the
   column scrolls up). Where a control drawn over it covers the centre — the watched lane's centre
-  can lie under its Back to main recording — the three go to the nearest pixel to the centre
-  where the hit map's topmost control is the one named (`_hud_spot`), so they reach the control
-  asked for. A row's button (`jump:2`) shows only under the pointer, so tacli hovers its
+  can lie under its Back to main recording — the three go to the first pixel, in square rings
+  walked outward from the centre and each ring from its middles to its corners, where the hit
+  map's topmost control is the one named (`_hud_spot`), so they reach the control asked for; a
+  control covered everywhere is refused by name. A row's button (`jump:2`) shows only under the pointer, so tacli hovers its
   row (`row:2`) first and waits for the button to appear in the dump.
 - **`scrub`** presses on the track at one fraction of the track's axis (`ddown:`), moves in
   `--steps` steps `--step-ms` apart (`dmove:`), and releases at the other (`dup:`).
