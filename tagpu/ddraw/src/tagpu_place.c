@@ -358,7 +358,14 @@ static int toggles(const Ctx* c, const Site* s)
 
 /* THE TAKE-OFF RULE, the one place a site's action is decided: the preview's colours and the
    commit's removals and appends are both read from what this leaves -- each plan's `by` and
-   each site's colour -- so the preview cannot promise what the release does not do.
+   each site's colour -- so for the same queues the preview shows what the release does. The
+   release judges again, against the queues as they stand at the release (commit), so a change
+   since the last drawn frame changes its result: a tick finishing or starting a queued build, a
+   builder dying or the selection changing (and with it the order budget), a nanoframe turning a
+   site red. A release over the side panel acts on a snapshot newer than any preview, since this
+   evaluation runs only from 0x4197D0, which the handler calls only with main+0x2CC6 bit 1 (the
+   cursor in the viewport, 0x499236..0x499241), while the route at 0x4993BF and the release reach
+   place_button wherever the cursor is.
 
    A ring takes nothing off: a site a stock Shift-click would toggle is yellow, and left out.
 
@@ -633,14 +640,20 @@ static void evaluate(void)
 
 /* PHASE 1, per builder: the orders the take-off rule gave a site (take_offs, plans s_plan[first
    .. end) of builder `b`) are taken off, and each of those sites adds nothing for this builder.
-   An order flagged 0x40000 is taken but not removed, as 0x43AFC0 looks for it in the +0x60
-   list and finds nothing (0x43B034..0x43B058). NO NODE POINTER OUTLIVES 0x439F80: it destructs
-   the node and may re-enter engine handlers (0x43A1F0: the StopMoving script, and 0x489800 for
-   the head), so every removal walks the list afresh to the order's place. The orders go in
-   descending place: a removal moves none of the places still to come, and the head, the one
-   removal 0x489800 follows, goes last. A node is removed only when it still carries the order's
-   action, position and flag -- `*stale` counts an order whose place holds anything else, which
-   then stays queued. */
+   No node on the +0x5C list carries 0x40000: the constructor is the one writer of that bit
+   (copied from the descriptor's +0x11, 0x43A18F..0x43A196; every other store into +0x42 ORs in
+   0x10000, 0x400000, 0x2000 or 0x8000), and both linkers put such a node on +0x60 (0x43A07D..
+   0x43A09D in 0x43A020, 0x43AEF0..0x43AF2B in 0x43ADC0). `held` is read from engine memory all
+   the same and bounds what is removed: an order carrying it is taken but not removed, as
+   0x43AFC0 would look for it in the +0x60 list and find nothing (0x43B034..0x43B058).
+   NO NODE POINTER OUTLIVES 0x439F80: its destructor 0x43A1F0 runs the action's handler with
+   event 2 when the node's +6 bit 2 is set, starts the StopBuilding script (0x505104) when +0x42
+   bit 0x400000 is set, and for the head calls 0x489800(unit, 3), which resets the unit's three
+   slots and queues a COB start of TargetCleared (0x508D58, through 0x4B0A70) -- so every removal
+   walks the list afresh to the order's place. The orders go in descending place: a removal moves
+   none of the places still to come, and the head goes last. A node is removed only when it still
+   carries the order's action, position and flag -- `*stale` counts an order whose place holds
+   anything else (the queue changed inside this commit), which then stays queued. */
 static unsigned remove_taken(const Ctx* c, unsigned b, unsigned first, unsigned end,
                              unsigned char* toggled, unsigned* stale)
 {

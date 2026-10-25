@@ -24,7 +24,7 @@ The cases (core), each from a builder with no build order, ARMCK selected unless
   (i) a Shift-click without a drag is stock's (a second one takes the order back off);
   (j) a plain click is stock's (one order, the building disarmed); (k) Shift released before the
   button orders nothing and keeps the building armed; (l) a right press mid-drag orders nothing
-  and disarms; (m) the level's counters: no self-check mismatch, no plan-table overflow; (o) with
+  and disarms; (m) the level's counters: no self-check mismatch, no plan-table overflow; (n) with
   ARMMLV, a line from an empty cell across a queued row of three 1 x 1 mines: the preview held
   mid-drag (the marker pass's green, red and yellow counts) is what the release orders.
 
@@ -144,7 +144,8 @@ def after_commit(before, sites, red, fx, fz, type_id):
     order taken off by one site at most (tagpu_place.c, take_offs): first every site takes the
     order at its own position, then each site that took none the first within TOGGLE of it that
     no site took, both in shape order; a site that takes none is appended, in shape order, after
-    every order kept. Returns (orders, appended, removed)."""
+    every order kept. `before` holds no order flagged 0x40000 (Place.builds asserts it). Returns
+    (orders, appended, removed)."""
     taken, by = set(), {}
     for own in (True, False):
         for i, cell in enumerate(sites):
@@ -328,7 +329,11 @@ class Place(Check):
 
     def builds(self, kind):
         """`kind`'s build orders in chain order, (x, z, type) with x and z in 16.16, each checked
-        to be a MOBILEBUILD: the action 0x419670 gives a ground builder's click."""
+        to be a MOBILEBUILD: the action 0x419670 gives a ground builder's click. No node of the
+        chain carries +0x42 bit 0x40000 (the commit takes such an order without removing it, a
+        case after_commit does not model; the engine links those nodes on +0x60 only)."""
+        held = [n for n in self.chain(kind) if struct.unpack_from("<I", n, 0x42)[0] & 0x40000]
+        assert not held, f"{kind}'s +0x5C chain holds {len(held)} node(s) flagged 0x40000"
         placed = self.placed(self.orders(kind))
         for o in placed:
             name = self.action_name(o["action"])
@@ -389,8 +394,8 @@ SHAPES = {
 }
 TOGGLE_LINE = ((70, 380), (78, 380))
 MINE_LINE = ((70, 386), (75, 386))
-QUEUED_ROW = ((81, 389), (83, 389))     # (o): three 1 x 1 mines queued side by side
-ACROSS_ROW = ((80, 389), (83, 389))     # (o): a drag from the empty cell before them over all three
+QUEUED_ROW = ((81, 389), (83, 389))     # (n): three 1 x 1 mines queued side by side
+ACROSS_ROW = ((80, 389), (83, 389))     # (n): a drag from the empty cell before them over all three
 
 
 def expect(p, what, building, kinds, before, sites, start, shape):
@@ -509,11 +514,11 @@ def mines_case(p):
 
 
 def across_row_case(p, gamedir):
-    """(o) A drag that starts on an empty cell beside a queued row of 1 x 1 sites and crosses it:
+    """(n) A drag that starts on an empty cell beside a queued row of 1 x 1 sites and crosses it:
     the preview held mid-drag (the marker pass's counts) is what the release orders. Neighbouring
     1 x 1 sites lie within each other's toggle reach, so the empty first site has a queued order
     within reach too."""
-    what = "(o) a line from an empty cell across a queued row of 1x1 mines"
+    what = "(n) a line from an empty cell across a queued row of 1x1 mines"
     p.select("ARMMLV")
     p.clear("ARMMLV")
     p.arm("ARMMINE1")
@@ -670,7 +675,7 @@ def core(p):
     right_case(p)
     p.notes()
     f = level_end(p)
-    print(f"place-core: (a)-(l) and (o) passed; (o) previewed and ordered {shown}; (m) level end {f}")
+    print(f"place-core: (a)-(n) passed; (n) previewed and ordered {shown}; (m) level end {f}")
 
 
 def replay(p):

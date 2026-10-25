@@ -21154,5 +21154,12 @@ completeness](tadr-port/demo-recorder-completeness.html)). Test group `place-bas
 **Open:** spacing and Build Split are not built; GDI shows the sites only with `tagpu_markown.on`
 (without it the engine's one square); the replay overlay shows no click for a multi-site gesture;
 no facing. The take-off rule (yellow) is the module's reading of `0x43AFC0`, not the engine's
-call, and is checked only by the regression (cases (h) and (o)); the preview and the commit read
-the one rule's result, so they cannot disagree with each other.
+call, and is checked only by the regression (cases (h) and (n)). The preview and the commit
+apply the one rule (`take_offs`) and agree for the same queues; the release judges again against
+the queues as they stand at the release, so a change since the last drawn frame — a tick
+finishing or starting a queued build, a builder dying or the selection changing (the order
+budget), a nanoframe turning a site red — changes its result, and a release over the side panel
+acts on a snapshot newer than the preview: the evaluation runs only from `0x4197D0`, which the
+handler calls only with `main+0x2CC6` bit 1 set (`0x499236..0x499241`), while the route at
+`0x4993BF` and the release reach `place_button` anywhere. `stale=` counts only a queue that changed
+inside the commit itself.

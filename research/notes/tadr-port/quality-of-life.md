@@ -193,8 +193,9 @@ them, each by the site standing on it, from whichever end or cell beside the row
 site beside the row whose neighbouring orders are all taken by their own sites is placed (three
 mines queued side by side and a drag from the empty cell before them over all three: three
 taken off, one placed at the empty cell); and a ring leaves its taking-off sites out rather than
-ordering them. **The preview and the release are one decision**: a single function settles each
-site's action, and both the colours and the commit read its result. With Shift released mid-drag
+ordering them. **The preview and the release apply one rule**: a single function settles each
+site's action, and both the colours and the commit read its result, so for the same queues the
+preview shows what the release does. With Shift released mid-drag
 nothing previews, since the release then orders nothing. A site the engine's own test refuses is red and skipped: the module calls the
 call the build cursor judges its site with, so a gesture's site is refused exactly when a single
 click there would be, queued sites included. One stock *ok* sound plays per gesture that changed a
@@ -226,13 +227,13 @@ puppet: the owner-approved `replay-absent.tsv` row `0x47F1A0 dll * absent`.
 
 **Verified on the reference setup, 2026-10-25:**
 
-- `tools/place_regression.py --launch <instance> core`, on `place-basic.json`, passed cases (a)–(m) and (o):
+- `tools/place_regression.py --launch <instance> core`, on `place-basic.json`, passed cases (a)–(n):
   a line of 5 ARMLLT; a diagonal; the Ctrl axis line; a 3 × 2 Alt rectangle in serpentine order;
   a 4 × 3 hollow of 10 sites; the ring round the ARMSOLAR; a line across the solar with its 3 sites
   there skipped; a line over a queued build that takes it off and adds the rest, and ARMMLV's line of
   six 1 × 1 mines that adds six; a Shift-click without a drag (stock's toggle); a plain click (stock's
   place and disarm); Shift released before the button (nothing ordered, still armed); a right press
-  mid-drag (nothing ordered, disarmed); and (o), ARMMLV's line from an empty cell over a queued row
+  mid-drag (nothing ordered, disarmed); and (n), ARMMLV's line from an empty cell over a queued row
   of three 1 × 1 mines, whose preview held mid-drag (the marker pass's counts: 4 sites, 3 yellow,
   1 green) equals the release (`removed=3 issued=1`, the new mine at the empty cell). Each builder's
   queue is compared with what the script
@@ -259,10 +260,15 @@ puppet: the owner-approved `replay-absent.tsv` row `0x47F1A0 dll * absent`.
   equals this one only for square footprints [INFERRED: a turned side swaps a non-square
   footprint's sizes].
 - Not run in a network game. The take-off rule is the module's reading of the engine's toggle,
-  checked by cases (h) and (o), not the engine's own call. The preview and the release read the
-  one rule's result; they can still part only if the engine changes a builder's queue inside the
-  commit itself, between the snapshot and a removal: the commit then leaves that order queued and
-  counts it (`stale=` on its log line).
+  checked by cases (h) and (n), not the engine's own call.
+- The release judges every site again against the queues as they stand at the release, so
+  whatever changed since the last drawn frame changes its result: a game tick finishing or
+  starting a queued build, a builder dying or the selection changing (and with it the order
+  budget), a nanoframe turning a site red. A release over the side panel acts on a snapshot newer
+  than the preview, because the evaluation runs only when the build cursor `0x4197D0` is called,
+  which the handler does only with the cursor in the viewport (`main+0x2CC6` bit 1,
+  `0x499236..0x499241`), while the release reaches the module wherever the cursor is. `stale=` on
+  the commit line counts only a queue that changed inside the commit itself.
 
 #### What each side is missing, for Impure's port
 
