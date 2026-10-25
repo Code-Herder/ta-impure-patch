@@ -145,3 +145,26 @@ canvas.skin { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 
 #frame.kit #win { border: 0; background: none; }
 #frame.kit #win .wt { --ink: initial; --shade: initial; }
 #frame.kit #b-wiki { border: 0; }
+
+/* ---- the selected row without a button (sel=): the row keeps its plain part and is marked over it, in the khaki of the
+   HUD's icons (i_rewind) -- a lit bar at its left edge, a glow from that edge, its bottom line lit, the row sunk into the
+   panel, or its text alone. `raised` draws the kit's row_selected part instead ---- */
+#frame.kit { --hl: #e2d9a8; }
+#frame.kit:not([data-sel="raised"]) #tree .leaf.sel, #frame.kit:not([data-sel="raised"]) #demos li.sel { --ink: var(--hl); }
+#frame.kit[data-sel="marker"] .sel::before { content: ''; position: absolute; left: calc(1 * var(--u)); top: 18%; bottom: 18%;
+  width: calc(2 * var(--u)); background: var(--hl); box-shadow: 0 0 calc(3 * var(--u)) rgba(226, 217, 168, .45); }
+#frame.kit[data-sel="glow"] .sel::before { content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(90deg, rgba(226, 217, 168, .30), rgba(226, 217, 168, .10) 55%, rgba(226, 217, 168, 0)); }
+#frame.kit[data-sel="underline"] .sel::before { content: ''; position: absolute; left: calc(4 * var(--u)); right: calc(4 * var(--u));
+  bottom: calc(1.5 * var(--u)); height: calc(1 * var(--u)); background: var(--hl); box-shadow: 0 0 calc(2.5 * var(--u)) rgba(226, 217, 168, .5); }
+#frame.kit[data-sel="sunk"] .sel::before { content: ''; position: absolute; inset: calc(1 * var(--u)); pointer-events: none;
+  background: rgba(0, 0, 0, .45); box-shadow: inset 0 calc(1.5 * var(--u)) calc(2 * var(--u)) rgba(0, 0, 0, .8),
+  inset 0 calc(-.5 * var(--u)) 0 rgba(255, 255, 255, .08); }
+/* the mark sits between the row's part and its text */
+#frame.kit .sel { isolation: isolate; }
+#frame.kit .sel::before { z-index: 0; }
+#frame.kit .sel > :not(canvas) { position: relative; z-index: 1; }
+/* text only: the HUD's own text is already the highlight's colour, so the other rows dim and the selected one gets a mark */
+#frame.kit[data-sel="text"] #tree .leaf:not(.sel) > span, #frame.kit[data-sel="text"] #demos li:not(.sel) > span { opacity: .55; }
+#frame.kit[data-sel="text"] .sel::before { content: '▸'; position: absolute; left: calc(.5 * var(--u)); top: 50%;
+  transform: translateY(-50%); color: var(--hl); font-size: calc(8 * var(--u)); }

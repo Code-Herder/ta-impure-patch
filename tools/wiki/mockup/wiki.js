@@ -19,7 +19,10 @@ const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
 
 /* ---- the state, from the URL; the URL is kept up to date so a view can be shared ---- */
 const SKINS = ['plate', 'panels', 'slim', 'whitebox'];
-const S = { res: '1920x1080', size: 90, mode: 'sp', mod: 'stock', skin: 'plate', rewind: true, open: false, entry: null, demo: 0, try: false,
+/* the list rows under trial on the chosen skin: whose row parts they are drawn with (its own, or plate's), and how the
+   selected one shows -- `raised`, the kit's row_selected part; the rest keep the plain row and mark it without a button */
+const ROWS = ['own', 'plate'], SELS = ['raised', 'marker', 'glow', 'underline', 'sunk', 'text'];
+const S = { res: '1920x1080', size: 90, mode: 'sp', mod: 'stock', skin: 'slim', rows: 'plate', sel: 'marker', rewind: true, open: false, entry: null, demo: 0, try: false,
   playing: true, speed: 1, fold: new Set() };
 { const q = new URLSearchParams(location.search);
   if (RES.includes(q.get('res'))) S.res = q.get('res');
@@ -28,10 +31,12 @@ const S = { res: '1920x1080', size: 90, mode: 'sp', mod: 'stock', skin: 'plate',
   if (MODS.includes(q.get('mod'))) S.mod = q.get('mod');
   if (q.get('rewind') === '0') S.rewind = false;
   if (SKINS.includes(q.get('skin'))) S.skin = q.get('skin');
+  if (ROWS.includes(q.get('rows'))) S.rows = q.get('rows');
+  if (SELS.includes(q.get('sel'))) S.sel = q.get('sel');
   S.open = q.has('open'); S.entry = q.get('entry'); S.try = q.has('try');
   if (q.get('demo')) S.demo = Math.max(0, (+q.get('demo') || 1) - 1); }
 function syncURL() {
-  const q = new URLSearchParams({ res: S.res, size: S.size, mode: S.mode, mod: S.mod, skin: S.skin, rewind: +S.rewind });
+  const q = new URLSearchParams({ res: S.res, size: S.size, mode: S.mode, mod: S.mod, skin: S.skin, rows: S.rows, sel: S.sel, rewind: +S.rewind });
   if (S.open) { q.set('open', ''); if (S.entry) { q.set('entry', S.entry); q.set('demo', S.demo + 1); } if (S.try) q.set('try', ''); }
   history.replaceState(null, '', '?' + q.toString().replace(/=(?=&|$)/g, ''));
 }
@@ -448,7 +453,9 @@ function applySkin() {
     const cv = el.firstElementChild; if (cv && cv.classList.contains('skin')) cv.remove();
     el._pk = null; el.style.removeProperty('--ink'); el.style.removeProperty('--shade');
   }
+  frame.dataset.sel = S.sel;
   if (S.skin !== 'whitebox' && !KITS[S.skin]) loadKit(S.skin);
+  if (S.skin !== 'whitebox' && S.rows === 'plate' && !KITS.plate) loadKit('plate');
   sizeStage();
 }
 function loadKit(name) {
@@ -516,19 +523,21 @@ function paintParts() {
   const px = G.gh / 720;
   for (const el of document.querySelectorAll('[data-part]')) {
     const w = el.offsetWidth, h = el.offsetHeight; if (!w || !h) continue;
-    const base = el.dataset.part, alt = base === 'row' ? 'row_selected' : base + '_down';
-    const n = el.matches('.on, .sel, .pressed') && K.parts[alt] ? alt : base, k = K.parts[n]; if (!k) continue;
-    const W = Math.max(1, Math.round(w * G.k)), H = Math.max(1, Math.round(h * G.k)), key = `${S.skin}|${n}|${W}|${H}`;
+    const base = el.dataset.part, row = base === 'row', from = row && S.rows === 'plate' ? 'plate' : S.skin;
+    const R = row ? KITS[from] : K; if (!R || !R.parts) continue;
+    const alt = row ? 'row_selected' : base + '_down', on = el.matches('.on, .sel, .pressed') && (!row || S.sel === 'raised');
+    const n = on && R.parts[alt] ? alt : base, k = R.parts[n]; if (!k) continue;
+    const W = Math.max(1, Math.round(w * G.k)), H = Math.max(1, Math.round(h * G.k)), key = `${from}|${n}|${W}|${H}`;
     let cv = el.firstElementChild;
     if (!cv || !cv.classList.contains('skin')) { cv = document.createElement('canvas'); cv.className = 'skin'; el.prepend(cv); el._pk = null; }
     if (el._pk === key) continue;
     el._pk = key; cv.width = W; cv.height = H;
     const g = cv.getContext('2d'); g.imageSmoothingQuality = 'high';
-    drawPart(g, k, K.img[n], W, H, px);
+    drawPart(g, k, R.img[n], W, H, px);
     const gl = (el.dataset.glyph || '').split(' ').find(q => K.parts[q]);
     if (gl && k.kind !== 'whole') drawIcon(g, K.img[gl], W, H, .6);
-    el.style.setProperty('--ink', K.light[n] ? '#1d1d1b' : 'initial');
-    el.style.setProperty('--shade', K.light[n] ? 'none' : 'initial');
+    el.style.setProperty('--ink', R.light[n] ? '#1d1d1b' : 'initial');
+    el.style.setProperty('--shade', R.light[n] ? 'none' : 'initial');
   }
 }
 document.addEventListener('pointerdown', e => { const b = e.target.closest('button[data-part]'); if (b) b.classList.add('pressed'); });
@@ -584,6 +593,8 @@ $('#mode').value = S.mode; $('#mode').onchange = e => { S.mode = e.target.value;
 $('#rewind').value = +S.rewind; $('#rewind').onchange = e => { S.rewind = e.target.value === '1'; frame.classList.toggle('norewind', !S.rewind); syncURL(); };
 frame.classList.toggle('norewind', !S.rewind);
 $('#skin').value = S.skin; $('#skin').onchange = e => { S.skin = e.target.value; applySkin(); syncURL(); };
+$('#rows').value = S.rows; $('#rows').onchange = e => { S.rows = e.target.value; applySkin(); syncURL(); };
+$('#sel').value = S.sel; $('#sel').onchange = e => { S.sel = e.target.value; applySkin(); syncURL(); };
 $('#mod').value = S.mod; $('#mod').onchange = e => { S.mod = e.target.value; renderTree(); renderEntry(); syncURL(); };
 window.addEventListener('resize', layout);
 

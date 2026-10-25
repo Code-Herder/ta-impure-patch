@@ -183,8 +183,8 @@ for the same ideas are *Quick Build Extractor* (its widget) and *Upgrade T1 » T
 
 The feature is [several buildings in one gesture](tadr-port/quality-of-life.md) (*Placing several
 buildings in one gesture*, *What Impure does*), `tagpu_place.c` with its shapes in
-`tagpu_placegeo.c`. Only what the game does today is shown: spacing is shown following the design
-(below), and Build Split, which is not built, is not.
+`tagpu_placegeo.c`. Only what the game does today is shown: Build Split, which is not built, is
+not.
 
 | # | Demo | What the player sees |
 |---|---|---|
@@ -319,12 +319,13 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
   armed. A placement or a commit that changed a queue sets the Shift-placement bit (`main+0x2CC6`
   bit 5), and **Shift released afterwards disarms**, as after a stock Shift-click (`0x4992D8`).
   **A right press** disarms and ends the gesture.
-- **Spacing**, following the design (`.data/qol-shift/bar-placement-design.md` §6 and §17.1) until
-  the key handler lands; recheck against `tagpu_place.c` then: with a building armed and Alt down,
-  Z adds one empty cell between neighbours and X takes one away, 0..16, kept per building type for
-  the sim's life (the game saves it in `impure.cfg`); every Z or X down steps, an auto-repeat
-  included, and the next evaluation shows it, mid-drag too. The pitch is footprint + spacing cells.
-  The page's "Spacing: N" readout is the mockup's; the game has none specified yet.
+- **Spacing** (`tagpu_place.c` `tagpu_place_key`, `spacing_step`, `spacing_of`): with a building
+  armed and Alt down, Z adds one empty cell between neighbours and X takes one away, clamped to
+  0..16, kept per building type by its unit name (the game saves it in `impure.cfg` as
+  `placespacing=`; the sim keeps it for its life); every Z or X down steps, an auto-repeat
+  included, and the next evaluation shows it, mid-drag too. The pitch is footprint + spacing cells;
+  the ring takes none. The page's "Spacing: N" readout is the mockup's: the game shows the spacing
+  only in the sites it lays.
 
 **What it simplifies, on purpose and in both places:**
 
@@ -365,7 +366,5 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
 - **The figures are the stock game's.** A mod with other extractors or other build lists shows the
   stock demos.
 - **No hotkey** opens the wiki.
-- **Spacing is the design's, not the game's**: the Alt+Z / Alt+X handler is not in `tagpu_place.c`
-  yet (`place_shape` is called with spacing 0). The spacing demo and rule follow
-  `bar-placement-design.md` §6 and §17.1 and are to be rechecked against the code when it lands.
+- **The spacing readout is the mockup's**: the game has no on-screen spacing value.
 - **Build Split is not shown**: it is not built.
