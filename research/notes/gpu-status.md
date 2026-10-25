@@ -10471,7 +10471,7 @@ correctness is never demonstrated is exactly the kind of silent wrongness this s
 
 | file | what it owns |
 |---|---|
-| `tagpu_restore_core.{h,c}` | the weight file, the options, the size-class ladder, `tileable`, the job table and its queues, batch formation, the **pass sequencer**, the cost model, the budget arithmetic, every counter, and every log line but two (below). Names no rendering API. |
+| `tagpu_restore_core.{h,c}` | the weight files (embedded since 2026-10-25: `res.rc` `RMODEL_FULL` / `RMODEL_TINY`, zstd; [compute-restorer](compute-restorer.html), *A model per job*), the options, the size-class ladder, `tileable`, the job table and its queues, batch formation, the **pass sequencer**, the cost model, the budget arithmetic, every counter, and every log line but two (below). Names no rendering API. |
 | `tagpu_restoreglsl.c` | device resources and the three draws, behind a twelve-entry backend interface. |
 
 **The backend is TOLD which draw to make rather than working it out.** `issue_draw` in the core

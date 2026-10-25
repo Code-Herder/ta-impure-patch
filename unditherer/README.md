@@ -138,8 +138,9 @@ anything that disagrees: the ONNX initializers are checked against an
 independent fold of the `.pt` checkpoint, and the packed blocks are run through
 `weights.run_reference` (numpy, tap by tap) against onnxruntime on a random
 tile in both padding classes, square and not — 2.7e-7 for `full`. Both files
-are committed beside the models they came from; `tools/tacli` links them into
-a game's directory.
+are committed beside the models they came from; the DLL's build compresses them
+and embeds them as resources (`tagpu/ddraw/res.rc`), so a model exported again
+reaches the game with the next `make`.
 
 The torch backend runs **strict fp32**: cuDNN's default TF32 convolutions
 flip about 0.6 % of the rounded bytes by one level against an fp32 run, which

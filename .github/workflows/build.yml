@@ -31,11 +31,13 @@ jobs:
       # is a BUILD dependency rather than a convenience. A build that silently
       # relied on the image having it would fail with "no python3" the day the
       # image changed. (It does NOT need glslang -- the SPIR-V headers are
-      # committed and the check only verifies them.)
+      # committed and the check only verifies them.) zstd is a build dependency
+      # too: it compresses the Classic++ restorer's models the DLL embeds (the
+      # Makefile's THE RESTORER'S MODELS).
       - name: mingw cross compiler
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 make zip python3
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 make zip python3 zstd
           i686-w64-mingw32-gcc --version | head -1
           python3 --version
 

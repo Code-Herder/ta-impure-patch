@@ -180,6 +180,16 @@ inc/tagpu_hudpak.bin: ../../tools/hudpak.py $(HUD_SRCS)
 
 $(addprefix res, $(ALLEXTS)): inc/tagpu_hudpak.bin
 
+# THE RESTORER'S MODELS (src/tagpu_restore_core.c load_weights): unditherer/models/<name>.w32.bin,
+# compressed by zstd into inc/tagpu_rmodel_<name>.zst, which res.rc embeds as RMODEL_<NAME>.
+# Generated and never committed, like the HUD archive. The frame records its content size, which
+# the loader bounds before it decompresses.
+RMODELS := full tiny
+inc/tagpu_rmodel_%.zst: ../../unditherer/models/%.w32.bin
+	zstd -q -19 -f $< -o $@
+
+$(addprefix res, $(ALLEXTS)): $(RMODELS:%=inc/tagpu_rmodel_%.zst)
+
 # THE SIMULATION-STATE RULE (inc/tagpu_simreg.h): every writable static of a file marked `sim`
 # in thread-split.allow is declared, and no `sim` object allocates, takes a TLS index, changes a
 # page or names a lever itself. It reads the objects this link uses, so it runs in the link's own
@@ -248,6 +258,6 @@ tests/codectest.exe: tests/codectest.c src/tagpu_reccodec.c $(RECFRAMES) src/tag
 	$(CC) -Iinc -Isrc -DRECF_TEST_COPY -O2 -Wall -std=c99 -static -o $@ tests/codectest.c $(RECFRAMES) src/tagpu_reclossy.c $(RECREAD) src/zstd.c
 
 clean:
-	$(RM) ddraw.dll ddraw-stocklimits.dll ddraw-cover.dll ddraw-cover.map ddraw-stocklimits-cover.dll ddraw-stocklimits-cover.map $(ALLOBJS) $(ALLOBJS:.o=.d) tests/logtest.exe tests/arttest.exe tests/windowtest.exe tests/vklifetime.exe tests/codectest.exe tests/codectest-asan.exe inc/tagpu_art_gen.h || del ddraw.dll ddraw-stocklimits.dll $(subst /,\\,$(ALLOBJS))
+	$(RM) ddraw.dll ddraw-stocklimits.dll ddraw-cover.dll ddraw-cover.map ddraw-stocklimits-cover.dll ddraw-stocklimits-cover.map $(ALLOBJS) $(ALLOBJS:.o=.d) tests/logtest.exe tests/arttest.exe tests/windowtest.exe tests/vklifetime.exe tests/codectest.exe tests/codectest-asan.exe inc/tagpu_art_gen.h $(RMODELS:%=inc/tagpu_rmodel_%.zst) || del ddraw.dll ddraw-stocklimits.dll $(subst /,\\,$(ALLOBJS))
 
 -include $(DEPS)

@@ -32,12 +32,12 @@ INSTALL
   Copy every file of this folder next to TotalA.exe, then start the game as usual:
 
     ddraw.dll       the patch
-    full.w32.bin    the Classic++ restorer's weights (the DLL reads them beside
-    tiny.w32.bin    the exe; without them Classic++ keeps the indexed colours)
 
   If another ddraw.dll is already there (an older cnc-ddraw, a resolution fix),
   this one replaces it. The patch reads no ddraw.ini: one left there by an
-  earlier version, or by cnc-ddraw, is ignored and can be deleted.
+  earlier version, or by cnc-ddraw, is ignored and can be deleted. The same goes
+  for full.w32.bin and tiny.w32.bin from an earlier version: the restorer's
+  models are inside ddraw.dll now.
 
 
 OPTIONS -- UNTIL THE GAME HAS A MENU FOR THEM

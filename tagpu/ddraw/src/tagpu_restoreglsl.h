@@ -25,8 +25,9 @@
    elsewhere, which is how the progressive reveal and the mixed-mode atlases
    both work with no flag texture.
 
-   gamedir files it reads: full.w32.bin and tiny.w32.bin beside TotalA.exe
-   (unditherer export-weights), and the options trigger tagpu_restoreglsl.on -- tokens,
+   the models are embedded in the DLL (res.rc: full.w32.bin and tiny.w32.bin,
+   from unditherer export-weights, zstd-compressed by the Makefile); the one
+   gamedir file it reads is the options trigger tagpu_restoreglsl.on -- tokens,
    read at each restorer bring-up (tagpu_rcore_reload):
      budget=MS   GPU milliseconds per frame (default 12)
      log         a line per batch in tagpu.log */
@@ -81,8 +82,8 @@ int tagpu_rcore_nb_frame(TAGPU_RNBFRAME* o, int c, int r, int w, int h,
                          int tw, int th, int dx, int dy, int border);
 
 /* THE MODEL A JOB RUNS: full for every job but the terrain's, which is tiny
-   (research/notes/compute-restorer.md D3). Each is <name>.w32.bin beside
-   TotalA.exe; a job whose model is missing runs full. */
+   (research/notes/compute-restorer.md D3). Each is embedded in the DLL
+   (res.rc); a job whose model did not load runs full. */
 enum { TAGPU_RM_FULL, TAGPU_RM_TINY, TAGPU_RM_N };
 
 /* WHAT THIS HEADER HOLDS. `TAGPU_RGLSL_FRAME` above -- a plain CPU struct

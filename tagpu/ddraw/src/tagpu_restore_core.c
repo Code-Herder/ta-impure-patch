@@ -7,9 +7,11 @@
    64->64 + BatchNorm + ReLU), 3x3 conv 64->3, out = in - net(in), RGB in
    [0,1]. BatchNorm is folded into the weight file (unditherer/weights.py),
    which lays every layer out in blocks of mat4 per output channel-tile k: the
-   bias first, then a mat4 per (tap, input tile). The backend repacks that
-   into the compute kernel's layout at bring-up; the file is the one format
-   the exporter writes and the CPU reference (tagpu_restore_ref.c) reads.
+   bias first, then a mat4 per (tap, input tile). The DLL carries each model's
+   file zstd-compressed as a resource (res.rc, RMODEL_FULL and RMODEL_TINY).
+   The backend repacks it into the compute kernel's layout at bring-up; the
+   file is the one format the exporter writes and the CPU reference
+   (tagpu_restore_ref.c) reads.
 
    THE PADDING RULE, the thing that defines the pixels. The unditherer runs a
    tile whose opposite edges agree within 12 levels wrap-padded by 12 to 56x56
@@ -41,10 +43,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "dllmain.h"
+#include "zstd.h"
 #include "tagpu_restore_core.h"
 #include "tagpu_log.h"
 
-#define MAX_PATH_B        260
 #define TILEABLE_THR      12.0
 #define OPT_FILE          "tagpu_restoreglsl.on"
 #define DEFAULT_BUDGET_MS 12.0
@@ -77,60 +80,72 @@ static double now_ms(void)
     return 1000.0 * (double)c.QuadPart / (double)f.QuadPart;
 }
 
-/* ---- the weight files (unditherer/weights.py) ---- */
+/* ---- the weight files (unditherer/weights.py), embedded (res.rc) ---- */
 static TAGPU_RMODEL s_w[TAGPU_RM_N];
 static int          s_wOk[TAGPU_RM_N];
 static const char* const s_wName[TAGPU_RM_N] = { "full", "tiny" };
-/* what a missing file costs, for its log line */
+static const char* const s_wRes[TAGPU_RM_N]  = { "RMODEL_FULL", "RMODEL_TINY" };
+/* what an unusable model costs, for its log line */
 static const char* const s_wWithout[TAGPU_RM_N] = {
     "Classic++ stays indexed", "the terrain restores with full" };
+/* the largest file the header's own bounds allow: the header, TAGPU_R_MAXLAYERS
+   layer rows and 1 << 24 vec4s */
+#define WEIGHT_MAX_BYTES  (16ull + 16ull * TAGPU_R_MAXLAYERS + 16ull * (1ull << 24))
 static TAGPU_ROPT   s_opt;
 static int          s_optRead;
 
-/* `which`'s file into s_w[which]; 1 when it is usable. A model that fails
-   keeps no body, and its s_wOk says so. */
+/* `which`'s embedded file into s_w[which]; 1 when it is usable. A model that
+   fails keeps no body, and its s_wOk says so. Every size below is checked
+   against the bytes actually decompressed before it is read. */
 static int load_weights(const char* who, int which)
 {
     TAGPU_RMODEL* w = &s_w[which];
     const char* model = s_wName[which];
-    char path[MAX_PATH_B], b[300];
-    FILE* f;
-    unsigned char hdr[16];
+    char b[300];
+    HRSRC r; HGLOBAL g;
+    const void* packed = NULL;
+    DWORD npacked = 0;
+    unsigned long long raw;
+    unsigned char* file;
     unsigned depth, ch, ntex, l;
     size_t want;
 
     if (w->body && !strcmp(w->name, model)) return 1;
     free(w->body); w->body = NULL;
-    /* beside TotalA.exe, where tacli links it */
-    path[0] = 0;
-    if (GetModuleFileNameA(NULL, path, sizeof path)) {
-        char* p = strrchr(path, '\\');
-        if (p && (size_t)(p - path) + 24 < sizeof path) _snprintf(p + 1, 24, "%s.w32.bin", model);
-        else path[0] = 0;
+    if ((r = FindResourceA(g_ddraw_module, s_wRes[which], MAKEINTRESOURCEA(10))) && (g = LoadResource(g_ddraw_module, r)))
+        { packed = LockResource(g); npacked = SizeofResource(g_ddraw_module, r); }
+    if (!packed || !npacked) { _snprintf(b, sizeof b, "%s: no %s resource -- %s", who, s_wRes[which], s_wWithout[which]); rlog(b); return 0; }
+    raw = ZSTD_getFrameContentSize(packed, npacked);
+    if (raw == ZSTD_CONTENTSIZE_UNKNOWN || raw == ZSTD_CONTENTSIZE_ERROR || raw < 16 || raw > WEIGHT_MAX_BYTES) {
+        _snprintf(b, sizeof b, "%s: %s is not a zstd frame of a weight file -- %s", who, s_wRes[which], s_wWithout[which]); rlog(b); return 0;
     }
-    if (!path[0]) _snprintf(path, sizeof path, "%s.w32.bin", model);
-    f = fopen(path, "rb");
-    if (!f) { _snprintf(b, sizeof b, "%s: no %s -- %s", who, path, s_wWithout[which]); rlog(b); return 0; }
-    if (fread(hdr, 1, 16, f) != 16 || memcmp(hdr, "TAW1", 4)) { rlog_2(who, "weight file is not TAW1"); fclose(f); return 0; }
-    memcpy(&depth, hdr + 4, 4); memcpy(&ch, hdr + 8, 4); memcpy(&ntex, hdr + 12, 4);
+    if (!(file = (unsigned char*)malloc((size_t)raw))) { rlog_2(who, "no memory for the weights"); return 0; }
+    if (ZSTD_decompress(file, (size_t)raw, packed, npacked) != (size_t)raw) {
+        _snprintf(b, sizeof b, "%s: %s does not decompress -- %s", who, s_wRes[which], s_wWithout[which]); rlog(b); free(file); return 0;
+    }
+    if (memcmp(file, "TAW1", 4)) { rlog_2(who, "weight file is not TAW1"); free(file); return 0; }
+    memcpy(&depth, file + 4, 4); memcpy(&ch, file + 8, 4); memcpy(&ntex, file + 12, 4);
     if (depth < 2 || depth > TAGPU_R_MAXLAYERS || ch < 4 || ch > 256 || (ch & 3) || ntex == 0 || ntex > (1u << 24)) {
-        rlog_2(who, "weight header out of range"); fclose(f); return 0;
+        rlog_2(who, "weight header out of range"); free(file); return 0;
     }
+    /* depth and ntex are bounded above, so this cannot wrap */
+    want = (size_t)ntex * 16;
+    if (raw != 16ull + 16ull * depth + want) { rlog_2(who, "weight file size disagrees with its header"); free(file); return 0; }
     w->depth = (int)depth; w->ch = (int)ch; w->ntex = (int)ntex;
     for (l = 0; l < depth; l++) {
-        if (fread(&w->layer[l], 1, 16, f) != 16) { rlog_2(who, "weight header truncated"); fclose(f); return 0; }
+        memcpy(&w->layer[l], file + 16 + 16 * l, 16);
         {
             const TAGPU_RLAYER* L = &w->layer[l];
             /* every product in 64 bits: a corrupt header must not wrap its way past the bound */
             unsigned long long end = (unsigned long long)L->offset + (unsigned long long)L->kout * L->kstride;
-            /* THE BOUNDS THE REPACK AND THE KERNEL INDEX WITH, on values read
-               from a FILE. A block holds the bias and 9 x jin mat4s, so
-               `kstride` covers 4 + 36 x jin vec4s or the repack would read
-               the next block as this one's weights. Layer l reads what l-1
-               wrote, so its input tiles are the previous layer's output
-               tiles; the first layer reads FILL's one tile (RGB and a zero);
-               the last writes one tile, the kernel's LAST output; and no
-               layer is wider than `ch`, which sizes the activations. */
+            /* THE BOUNDS THE REPACK AND THE KERNEL INDEX WITH. A block holds
+               the bias and 9 x jin mat4s, so `kstride` covers 4 + 36 x jin
+               vec4s or the repack would read the next block as this one's
+               weights. Layer l reads what l-1 wrote, so its input tiles are
+               the previous layer's output tiles; the first layer reads FILL's
+               one tile (RGB and a zero); the last writes one tile, the
+               kernel's LAST output; and no layer is wider than `ch`, which
+               sizes the activations. */
             int first = l == 0, last = l + 1 == depth;
             if (L->jin == 0 || L->kout == 0 || L->kstride == 0 ||
                 (unsigned long long)L->kstride < 4ull + 36ull * L->jin ||
@@ -138,18 +153,16 @@ static int load_weights(const char* who, int which)
                 4u * L->jin > ch || 4u * L->kout > ch ||
                 (first && L->jin != 1) || (last && L->kout != 1) ||
                 (!first && L->jin != w->layer[l - 1].kout)) {
-                rlog_2(who, "weight layer table inconsistent"); fclose(f); return 0;
+                rlog_2(who, "weight layer table inconsistent"); free(file); return 0;
             }
         }
     }
-    want = (size_t)ntex * 16;
-    w->body = (float*)malloc(want);
-    if (!w->body || fread(w->body, 1, want, f) != want) {
-        rlog_2(who, "weight body truncated"); free(w->body); w->body = NULL; fclose(f); return 0;
-    }
-    fclose(f);
+    if (!(w->body = (float*)malloc(want))) { rlog_2(who, "no memory for the weights"); free(file); return 0; }
+    memcpy(w->body, file + 16 + 16 * depth, want);
+    free(file);
     strncpy(w->name, model, sizeof w->name - 1); w->name[sizeof w->name - 1] = 0;
-    _snprintf(b, sizeof b, "%s: %s: %dx%d, %d vec4 (%u KB)", who, path, w->depth, w->ch, w->ntex, (unsigned)(want >> 10));
+    _snprintf(b, sizeof b, "%s: %s: %dx%d, %d vec4 (%u KB, %u KB packed)", who, s_wRes[which], w->depth, w->ch, w->ntex,
+              (unsigned)(want >> 10), (unsigned)(npacked >> 10));
     rlog(b);
     return 1;
 }
@@ -184,7 +197,7 @@ static void read_options(void)
 /* RE-READ ALL, which the backend does from its own init -- so the options
    are picked up once per bring-up, not once per process: a `budget=` edited
    between two bring-ups takes effect. `load_weights` keeps a body it already
-   holds, so a reload does not touch the 4 MB file again. */
+   holds, so a reload does not decompress it again. */
 int tagpu_rcore_reload(const char* who)
 {
     int m;
