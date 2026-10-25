@@ -1,0 +1,3 @@
+landing-review: model=claude-opus-5-5 effort=high reviewers=2 range=main..8d8d573b findings=6 acted=4 rejected=2 date=2026-10-25
+acted (33eea13d): gesture outliving a disarm in mode 1 (MEDIUM, both reviewers) -> before-observer on 0x499200; 1x1 drag-back direction dependence -> own-position match first; preview after Shift up -> none; Shift-release comment with bit 5 corrected.
+not acted: level-end reset coupled to the publisher being installed (shared with tagpu_resource_level_end, values-only state, commit re-derives everything); 0x40000-flagged node bookkeeping vs repeated stock clicks (not shown reachable on the +0x5C chain); replay-absent dll row also covering menu/replays sounds (documented, narrowest stable form).
