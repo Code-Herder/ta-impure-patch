@@ -1,0 +1,5 @@
+landing-review: medium, fresh read-only reviewer, commit 03e380ad (restorer models embedded, zstd)
+findings: 1 LOW (gpu-status.md said the weight files are gitignored; they are tracked)
+acted: corrected in the next commit
+rejected: none
+date: 2026-10-25
