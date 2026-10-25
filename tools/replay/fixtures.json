@@ -1277,6 +1277,29 @@
     "--gamedir",
     "{gamedir}"
    ]
+  },
+  "place-basic": {
+   "load": "place-basic.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_place.c",
+    "tagpu/ddraw/src/tagpu_place.h",
+    "tagpu/ddraw/src/tagpu_placegeo.c",
+    "tagpu/ddraw/src/tagpu_placegeo.h",
+    "tools/place_regression.py",
+    "tools/resource_regression.py"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/place_regression.py",
+      "{instance}",
+      "replay"
+     ]
+    ]
+   ],
+   "end": 2400
   }
  },
  "broad": {
