@@ -2503,17 +2503,24 @@ def x2_switch(w, fx, out, x2, P, base, results, copies):
         raise Failed(f"X2: 2 -> 4: {got.strip()}; wanted `{want}` and no seek")
     walks.append(f"4: {markers_back(n, '2 -> 4')}")
     watched(4, [0, 4])
-    # the watched lane clicked keeps it and asks nothing. THE FENCE: tacli returns once the game
-    # has handled the click (tools/tacli, _write_tokens), and a refused or queued switch is logged
-    # while it is handled (tagpu_replay_watch_timeline), so a state dump asked for after it is
-    # logged after any line the click made
+    # the watched lane clicked keeps it and asks nothing. THE FENCE is the click's own input batch:
+    # tacli aims by a state dump of its own and then writes the click as one batch; the HUD acts on
+    # the release while the shield delivers it (tagpu_hudinput_button, lane_act), where a refused
+    # or queued switch is logged (tagpu_replay_watch_timeline), and the game logs the batch's
+    # `done` only at a later trigger tick, once that release is consumed (tagpu_input.c, advance).
+    # So every line the click made lies between the first batch taken after the aiming dump and
+    # that batch's `done`.
+    def line_at(rx, start, what):
+        if not log.wait(rx, ACK_S, start):
+            raise Failed(f"X2: the watched lane's click: no {what} in {ACK_S} s")
+        return next(i for i in range(start, len(log.lines)) if re.search(rx, log.lines[i]))
     n = len(log.lines)
     hud(w, "click", f"lane:{lane(4)}")
-    hud(w, "show", timeout=ACK_S)
-    if not log.wait(r"hud: state dumped to ", ACK_S, n):
-        raise Failed("X2: the watched lane's click: no state dump after it")
-    fence = next(i for i in range(n, len(log.lines)) if "hud: state dumped to " in log.lines[i])
-    asked = [ln.strip() for ln in log.lines[n:fence] if re.search(r"replay: .*: watching timeline", ln)]
+    aim = line_at(r"hud: state dumped to ", n, "aiming dump")
+    taken = line_at(r"input: batch [0-9A-Fa-f]+ taken", aim, "input batch")
+    batch = re.search(r"input: batch ([0-9A-Fa-f]+) taken", log.lines[taken]).group(1)
+    fence = line_at(rf"input: batch {batch} done\b", taken, f"`done` for its batch {batch}")
+    asked = [ln.strip() for ln in log.lines[taken:fence] if re.search(r"replay: .*: watching timeline", ln)]
     if asked:
         raise Failed(f"X2: the watched lane's click asked for a switch: {asked}")
     watched(4, [0, 4])
