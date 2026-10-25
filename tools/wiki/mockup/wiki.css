@@ -1,0 +1,121 @@
+/* The page around the game, and the game frame's whitebox: Impure's top bar and the wiki window. Inside the frame every
+   length is in units through --u, the CSS pixels of the frame's height / 720, so the window reads the same at every
+   resolution of one aspect; lines stay 1 CSS pixel. */
+:root { --bg: #111310; --fg: #d8d8c8; --muted: #8f9384; --line: #34372e; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; padding: 12px 16px 24px; }
+header { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; margin-bottom: 10px; }
+header h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 600; }
+header label { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+header select { background: #1c1e19; color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; font: inherit; }
+header output { min-width: 3.2em; color: var(--fg); }
+#view { display: flex; justify-content: center; }
+p.note { color: var(--muted); max-width: 90ch; margin: 12px auto 0; }
+
+/* ---- the game frame ---- */
+#frame { --u: 1px; --s: 90; position: relative; isolation: isolate; overflow: hidden; background: #000; user-select: none;
+  -webkit-user-select: none; font-family: 'DejaVu Sans', 'Helvetica Neue', Arial, sans-serif; outline: 1px solid var(--line); }
+#bg { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+/* Impure's top bar, 32 bar pixels tall at 720 (a bar pixel is a unit): the readouts on the left, its own buttons at the
+   right -- wiki, rewind, gear -- each 28 square at y 2 */
+#topbar { position: absolute; left: calc(128 * var(--u)); right: 0; top: 0; height: calc(32 * var(--u)); box-sizing: border-box;
+  display: flex; align-items: center; gap: calc(14 * var(--u)); padding: 0 calc(8 * var(--u)); background: #3b3c39;
+  border-bottom: 1px solid #151514; color: #e2e2da; font-size: calc(10.5 * var(--u)); white-space: nowrap; }
+#topbar .rd { display: flex; align-items: center; gap: calc(5 * var(--u)); width: calc(220 * var(--u)); }
+#topbar .rd b { text-transform: uppercase; width: calc(46 * var(--u)); font-weight: 700; }
+#topbar .rd span { width: calc(40 * var(--u)); text-align: right; font-variant-numeric: tabular-nums; }
+#topbar .rd i { position: relative; flex: 1; height: calc(5 * var(--u)); background: #1e1f1d; border: 1px solid #6e6e68; }
+#topbar .rd i s { position: absolute; left: 0; top: 0; bottom: 0; background: #b8b8b0; }
+#topbar .rd em { font-style: normal; width: calc(40 * var(--u)); color: #b7b7ae; font-variant-numeric: tabular-nums; }
+#clock { font-variant-numeric: tabular-nums; color: #b7b7ae; }
+#paused { visibility: hidden; font-weight: 700; letter-spacing: .08em; padding: 0 calc(5 * var(--u)); border: 1px solid #e2e2da; }
+#frame.paused #paused { visibility: visible; }
+/* the gear at x W-44..W-16 (tagpu_menu.c, trigger_rect); the rewind button 3 left of it, shown only in a live
+   single-player recorded skirmish; the wiki button 3 left of the rewind button, or in its slot when it is absent */
+.tb { position: absolute; top: calc(2 * var(--u)); width: calc(28 * var(--u)); height: calc(28 * var(--u)); padding: 0; box-sizing: border-box;
+  background: #94948c; color: #1d1d1b; border: 1px solid #1d1d1b; font: 700 calc(16 * var(--u))/1 'DejaVu Sans', sans-serif; cursor: pointer; }
+.tb:active, .tb.on { background: #5c5c56; color: #e2e2da; }
+#b-gear { right: calc(16 * var(--u)); }
+#b-rewind { right: calc(47 * var(--u)); }
+#b-wiki { right: calc(78 * var(--u)); }
+#frame.norewind #b-rewind { display: none; }
+#frame.norewind #b-wiki { right: calc(47 * var(--u)); }
+/* the wiki button closes the window too, so it stays above the layer that takes the game's input */
+#b-wiki { z-index: 7; }
+
+/* while the window is open it takes all input: the margin of game around it swallows every click */
+#capture { position: absolute; inset: 0; z-index: 5; display: none; }
+#frame.open #capture { display: block; }
+
+/* ---- the window: --s per cent of the frame, centred ---- */
+#win { position: absolute; z-index: 6; left: calc((100% - var(--s) * 1%) / 2); top: calc((100% - var(--s) * 1%) / 2);
+  width: calc(var(--s) * 1%); height: calc(var(--s) * 1%); box-sizing: border-box; display: flex; flex-direction: column;
+  background: #d3d3ce; color: #1d1d1b; border: 1px solid #1d1d1b; font-size: calc(10 * var(--u)); line-height: 1.35; }
+#win[hidden] { display: none; }
+#win button { font: inherit; color: inherit; cursor: pointer; }
+#win .wt { flex: none; height: calc(20 * var(--u)); display: flex; align-items: center; justify-content: space-between;
+  padding-left: calc(8 * var(--u)); background: #a7a7a1; border-bottom: 1px solid #1d1d1b; font-weight: 700; font-size: calc(11 * var(--u)); }
+#wx { width: calc(22 * var(--u)); height: 100%; padding: 0; border: 0; border-left: 1px solid #1d1d1b; background: #bcbcb6; }
+#wx:hover { background: #8e8e88; }
+/* the columns take fixed shares of the window and scale with it; long names wrap */
+#win .wb { flex: 1; min-height: 0; display: grid; grid-template-columns: 17% 20% minmax(0, 1fr); }
+#tree, #demos { margin: 0; overflow: auto; border-right: 1px solid #1d1d1b; padding: calc(5 * var(--u)) 0; }
+#win ::-webkit-scrollbar { width: calc(6 * var(--u)); height: calc(6 * var(--u)); }
+#win ::-webkit-scrollbar-thumb { background: #8e8e88; }
+#win ::-webkit-scrollbar-track { background: #c4c4bf; }
+
+/* the tree: categories nest to any depth, their leaves are entries */
+#tree ul { list-style: none; margin: 0; padding: 0 0 0 calc(9 * var(--u)); }
+#tree > ul { padding-left: calc(3 * var(--u)); }
+#tree .row { display: flex; gap: calc(3 * var(--u)); align-items: baseline; padding: calc(1.5 * var(--u)) calc(4 * var(--u)); cursor: pointer; }
+#tree .row:hover { background: #c2c2bd; }
+#tree .cat { font-weight: 700; }
+#tree .tw { flex: none; width: calc(8 * var(--u)); }
+#tree .leaf.sel, #demos li.sel { background: #9d9d97; font-weight: 700; }
+#tree .leaf .dot { flex: none; width: calc(8 * var(--u)); text-align: center; }
+#tree .missing { color: #6a6a64; font-style: italic; }
+.lock { flex: none; display: inline-block; width: calc(7 * var(--u)); height: calc(7 * var(--u)); border-radius: 50%;
+  background: #d01818; border: 1px solid #5a0808; box-sizing: border-box; align-self: center; }
+#demos { list-style: none; }
+#demos li { display: flex; gap: calc(5 * var(--u)); padding: calc(2 * var(--u)) calc(6 * var(--u)); cursor: pointer; }
+#demos li:hover { background: #c2c2bd; }
+#demos li .n { flex: none; width: calc(13 * var(--u)); text-align: right; color: #4a4a46; }
+#demos .none { padding: 0 calc(6 * var(--u)); color: #5a5a55; }
+
+/* the entry: title, subtitle, the lock badge, the stage, caption, keys, controls, and the text scrolling below */
+#entry { display: flex; flex-direction: column; gap: calc(3 * var(--u)); min-width: 0; min-height: 0; padding: calc(6 * var(--u)) calc(8 * var(--u)); }
+#e-title { margin: 0; font-size: calc(15 * var(--u)); line-height: 1.2; }
+#e-sub { color: #46463f; }
+#badge { align-self: flex-start; display: flex; align-items: center; gap: calc(4 * var(--u)); padding: calc(1 * var(--u)) calc(6 * var(--u));
+  border: 1px solid #8a1010; background: #ecd3d0; color: #8a1010; font-weight: 700; }
+#badge[hidden] { display: none; }
+#badge i { width: calc(9 * var(--u)); height: calc(9 * var(--u)); border-radius: 50%; background: #d01818; border: 1px solid #5a0808; box-sizing: border-box; }
+.srow { flex: 1 1 0; min-height: calc(60 * var(--u)); display: flex; gap: calc(5 * var(--u)); }
+#sbox { flex: 1; min-width: 0; position: relative; background: #6e6e68; border: 1px solid #1d1d1b; }
+#stage { position: absolute; inset: 0; width: 100%; height: 100%; }
+#stage.try { cursor: none; }
+/* Try it yourself: the build menu of the selection, as the game's build buttons */
+#bmenu { flex: none; width: calc(66 * var(--u)); display: flex; flex-direction: column; gap: calc(3 * var(--u)); }
+#bmenu[hidden] { display: none; }
+#bmenu .h { font-weight: 700; font-size: calc(9 * var(--u)); }
+#bmenu .e { color: #5a5a55; font-size: calc(9 * var(--u)); }
+#bmenu button { padding: calc(4 * var(--u)) calc(3 * var(--u)); background: #b3b3ad; border: 1px solid #1d1d1b; font-size: calc(9 * var(--u)); font-weight: 700; }
+#bmenu button.on { background: #5c5c56; color: #f0f0ea; }
+/* the caption and the keys strip keep fixed heights: a caption or a keycap appearing must not resize the stage under the
+   player's cursor */
+#caption { flex: none; height: calc(27 * var(--u)); overflow: hidden; font-style: italic; }
+#keys { flex: none; display: flex; flex-wrap: nowrap; overflow: hidden; gap: calc(4 * var(--u)); align-items: center; height: calc(19 * var(--u)); color: #46463f; }
+.kc { display: inline-block; box-sizing: border-box; height: calc(16 * var(--u)); padding: 0 calc(6 * var(--u)); background: #f2f2ee; color: #1d1d1b;
+  border: 1px solid #1d1d1b; border-bottom-width: calc(2.5 * var(--u)); border-radius: calc(2.5 * var(--u)); font-weight: 700;
+  font-size: calc(9.5 * var(--u)); line-height: calc(12.5 * var(--u)); }
+#ctl { display: flex; gap: calc(5 * var(--u)); align-items: center; }
+#ctl button { min-width: calc(24 * var(--u)); height: calc(19 * var(--u)); padding: 0 calc(6 * var(--u)); background: #b3b3ad; border: 1px solid #1d1d1b; }
+#ctl button:hover { background: #a2a29c; }
+#ctl button.on { background: #5c5c56; color: #f0f0ea; }
+#ctl button:disabled { opacity: .45; cursor: default; }
+#ctl .sp { display: flex; }
+#ctl .sp button + button { border-left: 0; }
+#c-try { margin-left: calc(6 * var(--u)); font-weight: 700; }
+#text { flex: 0 0 24%; overflow: auto; border-top: 1px solid #8a8a86; padding: calc(4 * var(--u)) calc(4 * var(--u)) 0 0; }
+#text p { margin: 0 0 calc(6 * var(--u)); }
+#text .err { color: #8a1010; }
