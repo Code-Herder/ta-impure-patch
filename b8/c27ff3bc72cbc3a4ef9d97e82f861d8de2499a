@@ -1,4 +1,4 @@
-landing-review: high (two read-only ta-reviewers, main...70b2d197, the placement spacing).
-Fixed in b8c27ff3: game-thread wait on s_io during the render thread's file write (try-lock hand-over, pending retry, wait only at level end; load at attach); the game-thread level-end flush removed; docs on who writes and when; unsavable names logged; cap assert; placespacing cleared by the regression and tareplay's test render.
-Not acted on: an older build's 1024-byte s_extra can drop a placespacing line over ~1 KB (only unit names near 31 characters; stock names keep it near 720 bytes); strtol accepts trailing junk (the next write puts it back clean).
-Verified: spacing (s1)-(s7), core (a)-(m) on place1.
+landing-review: model=claude-opus-5-5 effort=high reviewers=2 range=main..70b2d197 findings=7 acted=5 rejected=2 date=2026-10-25
+acted (b8c27ff3): game thread waiting on s_io across the render thread's file write (MEDIUM, both reviewers) -> try-lock hand-over of the whole table, pending retry at the next step or evaluation, wait only at level end, load at attach; game-thread level-end flush removed (redundant, broke the render-thread-writes contract); docs on who writes and when; unsavable unit names logged; TS_SPACING_MAX == PLACE_SPACING_MAX asserted; placespacing cleared by the regression after its run and by tareplay's test render; thread-split.allow names the window-procedure entry.
+not acted: an older build's 1024-byte s_extra can drop a placespacing line over ~1 KB (needs unit names near 31 characters; stock names keep it near 720 bytes); strtol accepts trailing junk (the next write puts it back clean).
+verified: place_regression spacing (s1)-(s7) and core (a)-(m) on place1 after the fixes.
