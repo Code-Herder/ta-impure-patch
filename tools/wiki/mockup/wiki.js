@@ -38,6 +38,7 @@ const S = { res: '1920x1080', size: 90, mode: 'sp', mod: 'stock', skin: 'slim', 
 function syncURL() {
   const q = new URLSearchParams({ res: S.res, size: S.size, mode: S.mode, mod: S.mod, skin: S.skin, rows: S.rows, sel: S.sel, rewind: +S.rewind });
   if (S.open) { q.set('open', ''); if (S.entry) { q.set('entry', S.entry); q.set('demo', S.demo + 1); } if (S.try) q.set('try', ''); }
+  if (window.WikiGfx) WikiGfx.url(q);
   history.replaceState(null, '', '?' + q.toString().replace(/=(?=&|$)/g, ''));
 }
 
@@ -218,25 +219,27 @@ function draw() {
   const ox = (W - mw * cell * s) / 2, oz = (H - mh * cell * s) / 2;
   FIT = { s, ox, oz, cell, mw, mh };
   const X = x => ox + x * s, Z = z => oz + z * s, cp = cell * s;
+  // gfx=game: gfx.js draws an element in the game's own graphics and returns true, or false and the whitebox stands
+  const gx = (phase, ...a) => !!(window.WikiGfx && WikiGfx.draw(phase, g, { v, X, Z, s, cp, cell, U, W, H }, ...a));
 
   // the ground: plain cells light, metal darker by how far it stands above surfaceMetal; metal ground at surfaceMetal is
   // tinted once, so a metal map reads as metal everywhere and its richer patch as darker still
   const metal = M.metal || [], sm = +M.surfaceMetal || 0, top = Math.max(sm, ...metal.filter(Number.isFinite));
-  for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) {
+  if (!gx('ground')) for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) {
     const m = +metal[z * mw + x] || 0;
     let L = m > 0 ? 188 : 204;
     if (m > sm && top > sm) L = 176 - 108 * (m - sm) / (top - sm);
     g.fillStyle = `rgb(${L},${L},${L - 4})`;
     g.fillRect(Math.floor(X(x * cell)), Math.floor(Z(z * cell)), Math.ceil(cp) + 1, Math.ceil(cp) + 1);
   }
-  if (cp >= 5) {
+  if (cp >= 5 && !gx('grid')) {
     g.strokeStyle = 'rgba(0,0,0,.12)'; g.lineWidth = 1; g.beginPath();
     for (let x = 0; x <= mw; x++) { const px = Math.round(X(x * cell)) + .5; g.moveTo(px, Z(0)); g.lineTo(px, Z(mh * cell)); }
     for (let z = 0; z <= mh; z++) { const pz = Math.round(Z(z * cell)) + .5; g.moveTo(X(0), pz); g.lineTo(X(mw * cell), pz); }
     g.stroke();
   }
   // a geothermal vent: a ringed circle with a cross
-  for (const vt of M.vents || []) {
+  if (!gx('vents')) for (const vt of M.vents || []) {
     const p = pt(vt); if (!p) continue;
     const r = cp * .8; g.lineWidth = Math.max(1, 1.5 * U);
     g.fillStyle = '#9a9a94'; g.strokeStyle = '#2a2a28';
@@ -272,21 +275,24 @@ function draw() {
   for (const q of v.queued || []) {
     const b = box(q); g.lineWidth = Math.max(1, 1.5 * U); g.strokeStyle = TEAM[q.owner | 0] || '#ccc';
     g.setLineDash([3 * U, 2 * U]); g.strokeRect(b.x, b.y, b.w, b.h); g.setLineDash([]);
-    label(q.type || '', b, 'rgba(20,20,20,.75)');
+    if (!gx('label')) label(q.type || '', b, 'rgba(20,20,20,.75)');
   }
   // units: grey boxes at their footprint, a team-coloured edge; construction fills up from the bottom, a reclaim empties
+  gx('units');                          // the game's sprites, back to front, under every selection box
   for (const u of v.units || []) {
     const b = box(u), built = u.built == null ? 1 : clamp(+u.built, 0, 1), rec = clamp(+u.reclaimed || 0, 0, 1);
     const bw = Math.max(1.5, 2 * U);
-    if (built < 1) {
-      g.fillStyle = 'rgba(150,150,144,.35)'; g.fillRect(b.x, b.y, b.w, b.h);
-      g.fillStyle = '#8a8a84'; g.fillRect(b.x, b.y + b.h * (1 - built), b.w, b.h * built);
-    } else if (rec > 0) {
-      g.fillStyle = 'rgba(150,150,144,.35)'; g.fillRect(b.x, b.y, b.w, b.h);
-      g.fillStyle = '#9a7c78'; g.fillRect(b.x, b.y + b.h * rec, b.w, b.h * (1 - rec));
-    } else { g.fillStyle = '#8a8a84'; g.fillRect(b.x, b.y, b.w, b.h); }
-    g.lineWidth = bw; g.strokeStyle = TEAM[u.owner | 0] || '#ccc'; g.strokeRect(b.x + bw / 2, b.y + bw / 2, b.w - bw, b.h - bw);
-    label(u.label || u.type || '', b, '#141414');
+    if (!gx('unit')) {
+      if (built < 1) {
+        g.fillStyle = 'rgba(150,150,144,.35)'; g.fillRect(b.x, b.y, b.w, b.h);
+        g.fillStyle = '#8a8a84'; g.fillRect(b.x, b.y + b.h * (1 - built), b.w, b.h * built);
+      } else if (rec > 0) {
+        g.fillStyle = 'rgba(150,150,144,.35)'; g.fillRect(b.x, b.y, b.w, b.h);
+        g.fillStyle = '#9a7c78'; g.fillRect(b.x, b.y + b.h * rec, b.w, b.h * (1 - rec));
+      } else { g.fillStyle = '#8a8a84'; g.fillRect(b.x, b.y, b.w, b.h); }
+      g.lineWidth = bw; g.strokeStyle = TEAM[u.owner | 0] || '#ccc'; g.strokeRect(b.x + bw / 2, b.y + bw / 2, b.w - bw, b.h - bw);
+      label(u.label || u.type || '', b, '#141414');
+    }
     if (u.selected) {
       // the selection box: corner brackets just outside the footprint
       const m = 3 * U, x0 = b.x - m, y0 = b.y - m, x1 = b.x + b.w + m, y1 = b.y + b.h + m, c = Math.min(b.w, b.h) * .35 + m;
@@ -302,7 +308,7 @@ function draw() {
   for (const st of v.sites || []) {
     if (!pt(st)) continue;
     const b = box(st), col = SITE[st.state] || SITE.place, lw = Math.max(1, 1.5 * U);
-    g.fillStyle = 'rgba(138,138,132,.45)'; g.fillRect(b.x + lw, b.y + lw, b.w - 2 * lw, b.h - 2 * lw);
+    if (!gx('site', st)) { g.fillStyle = 'rgba(138,138,132,.45)'; g.fillRect(b.x + lw, b.y + lw, b.w - 2 * lw, b.h - 2 * lw); }
     g.strokeStyle = col; g.lineWidth = lw; g.strokeRect(b.x + lw / 2, b.y + lw / 2, b.w - lw, b.h - lw);
     if (st.order != null) {
       g.font = `700 ${Math.max(5 * U, Math.min(7.5 * U, b.h * .32))}px 'DejaVu Sans', sans-serif`;
@@ -313,15 +319,16 @@ function draw() {
   // the placement ghost: translucent green where it may go, red where it may not
   if (v.ghost && pt(v.ghost)) {
     const b = box(v.ghost), ok = v.ghost.ok !== false;
-    g.fillStyle = ok ? 'rgba(40,210,70,.35)' : 'rgba(230,40,40,.35)'; g.fillRect(b.x, b.y, b.w, b.h);
+    if (!gx('ghost', v.ghost)) { g.fillStyle = ok ? 'rgba(40,210,70,.35)' : 'rgba(230,40,40,.35)'; g.fillRect(b.x, b.y, b.w, b.h); }
     g.strokeStyle = ok ? '#2bd248' : '#e62828'; g.lineWidth = Math.max(1, 1.5 * U); g.strokeRect(b.x, b.y, b.w, b.h);
-    label(v.ghost.type || '', b, ok ? '#0c3a12' : '#4a0a0a');
+    if (!gx('label')) label(v.ghost.type || '', b, ok ? '#0c3a12' : '#4a0a0a');
   }
   if (v.drag) {
     const d = v.drag, x0 = X(Math.min(d.x0, d.x1)), y0 = Z(Math.min(d.z0, d.z1));
     g.strokeStyle = '#f2f6e8'; g.lineWidth = Math.max(1, U); g.strokeRect(x0, y0, Math.abs(d.x1 - d.x0) * s, Math.abs(d.z1 - d.z0) * s);
   }
-  if (v.cursor && pt(v.cursor)) cursor(g, X(pt(v.cursor).x), Z(pt(v.cursor).z), v.cursor.shape, U);
+  if (v.cursor && pt(v.cursor) && !gx('cursor', X(pt(v.cursor).x), Z(pt(v.cursor).z), v.cursor.shape))
+    cursor(g, X(pt(v.cursor).x), Z(pt(v.cursor).z), v.cursor.shape, U);
   // construction runs faster than the game's (the entry's pace), and the stage says so
   if (+v.pace > 1) {
     g.font = `${Math.round(8.5 * U)}px 'DejaVu Sans', sans-serif`; g.textAlign = 'right'; g.textBaseline = 'bottom';

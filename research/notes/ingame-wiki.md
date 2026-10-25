@@ -12,6 +12,7 @@ reason. Nothing of the wiki is in the DLL yet.
 | The tree of categories and entries | `art/wiki/tree.json` |
 | One entry: its text, its mods, its demos | `art/wiki/entries/<id>.json` |
 | The mockup, which reads only those files | `tools/wiki/mockup/` (`index.html`, `wiki.js`, `wiki.css`, `sim.js`) |
+| The stage in the game's own graphics | `tools/wiki/gfx.py` writes the gitignored `tools/wiki/mockup/gfx/` from the local install; `gfx.js` draws it under `gfx=game` |
 | The demos' generators; the headless check of every demo | `tools/wiki/gen-quickbuild.mjs`, `tools/wiki/gen-buildshapes.mjs`; `tools/wiki/simcheck.mjs` |
 | Serving it | `python3 tools/hudart/serve.py`, then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
@@ -110,7 +111,9 @@ A whitebox of the game's own view, so a demo reads as what the player will see:
   path draws a ghost at each site, with the site's place among the orders the release adds small in
   its corner (the game draws no number; the mockup does, so the queue order can be read).
 
-Real assets replace the boxes later; the layout and the simulation do not change for them.
+The mockup's `gfx=game` draws the same stage in the game's own graphics, rendered from the local
+install (*In game: what each element is drawn with*, below); the layout and the simulation do not
+change for it.
 
 ### The units and their figures
 
@@ -152,10 +155,76 @@ A strip above the stage, outside the game frame:
 | Open, entry, demo | the wiki open on an entry and a demo | `open&entry=quickbuild&demo=3` |
 | Try it | Try it yourself on that demo's scene | `try` |
 | Rewind button | shown (a live recorded skirmish) or absent | `rewind=1` / `rewind=0` |
+| Graphics | the stage's whitebox, or the game's own graphics from `gfx/` | `gfx=whitebox` / `gfx=game` |
 
 Behind the window: the replay HUD mockup's backdrop (`research/notes/assets/hud-art/backdrop.png`),
 scaled to the resolution, under a whitebox of Impure's top bar: metal and energy on the left, and
 the wiki, record/replay and gear buttons at the right.
+
+## In game: what each element is drawn with
+
+The stage is a whitebox of the game's view. In the game, each of its elements is drawn by the
+asset and the Impure code below. On Vulkan, the engine's own 8-bpp frame never reaches the screen
+(`tagpu_native.c`, the comment above the unit ownership test; `tagpu_vk.c`, above
+`world_records`), so every element is Impure's redraw. The engine draws it only on GDI. The world
+passes record in this order: terrain, features, units, effects, build ghosts, markers
+(`tagpu_vk.c` `world_records`). The UI comes after them, and the cursor last. Every reference was
+read in the source on 2026-10-25. The engine addresses are those the source and the notes cite;
+they were not re-disassembled for this table.
+
+| Stage element | Game asset | Impure code that draws it in game | `gfx=game` in the mockup |
+|---|---|---|---|
+| Ground | The map's TNT tiles: the tile set `*(main+0x14283)`, 32 × 32 8-bpp, and the tile map `*(main+0x1428B)`, one u16 per 32-pixel cell | `tagpu_terr.c` `ensure_atlas` (the R8 atlas, 64 tiles a row, 34-texel pitch) and `tagpu_terr_gather`; `tagpu_vk_terr.c` `tagpu_vk_terr_record`. `tagpu_terrown.c` `terr_fill` suppresses the engine's blit `0x483FA0`. | `ground.png`: the most used tileable tile under flat, featureless ground of the first lush map in archive order (Crossing Two Rivers, tile 13), repeated |
+| Metal deposit | A map **feature** with `metal=` and footprint 3 × 3: on lush maps `lushmetal1..3` (`metals.gaf`, `seqname` frame 0). The metal a mex reads is the feature-grid byte `+7`, which `0x422040` writes from the definition; the sprite is only the picture. | The feature pass, which has no metal case: `tagpu_feat.c` `tagpu_feat_gather` → `draw_feature`; `tagpu_vk_feat.c` `tagpu_vk_feat_record`. `tagpu_featown.c` skips the engine leaf `0x46A610`. | `metal.png`: `lushmetal3` (metal 223) at its hotspot, stretched over each patch above SurfaceMetal of at most 6 × 6 cells. Broad metal ground and cells at SurfaceMetal get `metalground.png` (a metal-world map's tile) |
+| Geothermal vent | A map feature with `geothermal=1`, footprint 1 × 1: on lush maps `lushvent01..03` (`lushvents.gaf`, `geovent0N`) | The feature pass, as for metal | `vent.png`: `lushvent01` frame 0, at its hotspot |
+| Grey fog, unexplored ground | The engine's fog grid, built by `0x4843C0` from the line-of-sight counters and the mapped bits | No separate pass. Each world pass applies `tagpu_glsl.h`: `TAGPU_GLSL_FOG_TERRAIN` paints unexplored ground palette index 0 (black), `TAGPU_GLSL_FOG_GREY_RGB` turns a fogged pixel into its R+G+B mean, and `TAGPU_GLSL_FOG_DISCARD` hides units and effects outside sight. The grid is rebuilt by `tagpu_terrown.c` `terr_fogtick` and, zoomed out, by `tagpu_fogwide.c`. | Unchanged: the whitebox overlays |
+| Units and buildings | Each unit's 3DO, posed by its COB script. Faces are textured with GAF frames; a team-coloured face takes frame *k* = the player's logo colour. | The pose is copied by `tagpu_packet_pub.c` `fill_pieces` and composed by `tagpu_native.c` `posed_pose`. `tagpu_posebake.c` `tagpu_posebake_unit` bakes it, `tagpu_posedraw.c` `tagpu_posedraw_unit` hands it over, and `tagpu_vk_unit.c` `tagpu_vk_unit_record` draws it. Team colour: `tagpu_packet_pub.c` `player_logo` reads PlayerInfo `+0x96`; `tagpu_render3do.c` `face_texframe` takes that frame of a team-coloured face's sequence. | `units/<name>.png`: the 3DO in its rest pose, facing 0, at TA's oblique camera, flat-shaded by the PALETTE.SHD rows, with player 0's frames (the ARM blue); labels off, drawn back to front by world z |
+| Selection | The engine's box `0x46A530`, in GUI colour `0x0A` | `tagpu_native.c` `selbox_emit` → `tagpu_mark.c` `tagpu_mark_emit_selbox` → `tagpu_vk_mark.c` `tagpu_vk_mark_record`. `tagpu_markown.c` `mark_selbox` redirects the engine's box. | Unchanged: the whitebox brackets |
+| Placement ghost | The armed building's 3DO, `build_unit_id` at `main+0x2CC4`, at rest, heading `0x8000`, alpha 0.40 | `tagpu_native.c` `ghost_record` → `ghost_one` (alpha set in `ghost_armed`) → `tagpu_vk_unit.c` `tagpu_vk_unit_record_ghosts`. The square under it is the next row's. | The building's sprite tinted green or red |
+| The build square, and a gesture's sites | Outlines in the GUI colour table at `main+0xDCB`. `0x0A` is green, `0x04` red (refused), `0x0E` yellow (takes a queued order off). These are table indices, not palette indices: stock reads them as palette `0xE9`, `0xD5` and `0xC2` (`terrain-depth.md`, the live read on Two Continents). | `tagpu_mark.c` `gather_cursor` (the single square, coloured by `region_flags` bit 6) and `gather_place` (one square per site), both through `square_emit`. The site colours are `tagpu_place.h` `PLACE_OK`, `PLACE_BLOCKED` and `PLACE_TOGGLE`, assigned by `tagpu_place.c` `classify`. `ghost_record` adds a ghost at each site. | The sites' squares unchanged, over the building's sprite at 45 % |
+| Queued build squares | The engine's queued-build outline `0x438C00`, drawn while Shift is held | `tagpu_order.c` `draw_build`, a port with the engine's ten-tick sweep, gathered into the marker pass. `ghost_record` adds a translucent 3DO on each queued site not yet started. | Unchanged: the whitebox's dashed squares, in the owner's colour |
+| Order lines | TA draws no lines. It draws marching route dots in the `pathicon` ink, a waypoint sprite, target circles and range circles. | `tagpu_order.c` `draw_dots`, `draw_sprite` (a crosshair in place of the GAF sprite), `draw_circle`, `draw_ranges` | Unchanged: the whitebox's dashed lines |
+| Construction progress | The unit's build fraction: unit `+0x104`, the fraction remaining, staged as the engine's nano frame (`0x458D30` / `0x458DD0`) | `tagpu_render3do.c` `tagpu_r3d_nano_state` stages it; the unit shader in `tagpu_native.c` applies it, and the wire is `tagpu_posedraw.c` `pd_record`. | The unbuilt share a faint green sprite, the built share filling from the bottom in full colour; a reclaim the reverse, in faint red |
+| Cursor | `anims/cursors.gaf`, chosen by the engine's picker `0x43E490` into `main+0x2CBE` from `cursor_ary` (`exe-reverse-engineering.md`, the cursor table): `cursornormal`, `cursormove`, `cursorselect`, … | `tagpu_gui_surf.c` `tagpu_gui_cursor_frame` takes the frame from the packet; `sharp_cursor` draws it last in the UI's sharp layer. | `cursornormal` and `cursormove`, frame 0, at their hotspots, nearest-scaled by round(height / 720) |
+| Keys strip | None: the game has no such strip | Nothing in the DLL draws one. A wiki window would draw it with the replay HUD's stack (`tagpu_hudlay.c`, `tagpu_huddraw.c`, `tagpu_hudtext.c`, `tagpu_vk_hud.c`), or with TA's font through `tagpu_text.c`. | Unchanged |
+
+**The generator.** `tools/wiki/gfx.py` writes `tools/wiki/mockup/gfx/`, which is gitignored:
+everything in it is derived from the game's files. Run it with the shared venv
+(`.venv-undither/bin/python tools/wiki/gfx.py`); it takes `--gamedir`, else `TA3DO_GAMEDIR`,
+else Steam's default library. It reads the install with `tools/ta3do`'s HPI, palette, GAF and 3DO
+readers and its COB Create-hide scan, and with `tools/tascene`'s TNT, feature definitions, GAF
+hotspots and SHD calibration. The archives load in `ta3do`'s order, then `rev31.gp3` again, so its
+copy wins over any `.ufo`.
+
+- **The units.** Every unit an entry's `units` names is rendered at 3 pixels a world unit, with
+  ×3 supersampling. The rest pose is tascene's: pieces at their offsets, what the script hides at
+  Create left out, the selection primitive skipped. Facing 0 is TA's default heading `0x8000`.
+  The camera maps screen y to world z − height / 2, the shear of 0.5. Each face is flat-shaded by
+  `tagpu_render3do.c`'s rule as tascene's parity lane ports it (the SHD row's RGB multiplier).
+  Quads take per-pixel bilinear texture coordinates; other faces are fanned. `anchor` is the
+  pixel of the unit's world position.
+- **The other graphics.** The ground and metal-ground tiles, the deposit and the vent at their
+  GAF hotspots, and the cursors at their own pixels. All are written to `gfx/index.json` with
+  their sizes and anchors.
+- **Colour.** Palette colour throughout: no restorer runs.
+
+The page draws all of this with `tools/wiki/mockup/gfx.js`. `wiki.js`'s stage hands it each
+element, and keeps its whitebox wherever `gfx.js` declines one. Without `gfx/index.json`,
+`gfx=game` falls back to the whitebox, and the controls strip says "game graphics: run
+tools/wiki/gfx.py".
+
+**What the simplified simulation cannot drive.** No COB script runs, so:
+
+- every unit stands in its rest pose;
+- a kbot does not walk and a constructor does not aim its nano-lathe;
+- an extractor's arms do not turn, and a building's doors and panels stay as the 3DO has them
+  at rest.
+
+The nano spray is the engine's particles (`PK_PART` kind 5, drawn by `tagpu_fx.c`
+`tagpu_fx_gather`), and it starts at the point COB `QueryNanoPiece` returns, so the mockup has
+none. Units do not turn to face where they walk: the sim keeps no heading, and every sprite faces
+0. The engine's nano-frame staging (bands in the palette's blues, the wire) is replaced by the
+green fill above.
 
 ## The first entry: Quick Build: Resource Extractors
 
@@ -368,3 +437,17 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
 - **No hotkey** opens the wiki.
 - **The spacing readout is the mockup's**: the game has no on-screen spacing value.
 - **Build Split is not shown**: it is not built.
+- **`gfx=game` keeps whitebox elements the game draws differently.** These stay as they are:
+  - the order lines (the game draws route dots and a waypoint crosshair);
+  - the queued squares (the game shows them only while Shift is held, with a ghost on each);
+  - the fog overlays (the game paints unexplored ground black and turns grey fog into its RGB
+    mean; the mockup's translucent per-cell fills also show a seam where neighbouring cells
+    overlap);
+  - the order numbers on a gesture's sites, in dark ink that reads poorly over the sprites.
+- **The cursor during build placement is not established.** No source names the `cursors.gaf`
+  index the engine shows in mode `0x0E`, and there is no `cursorbuild`. `gfx=game` shows
+  `cursornormal` there [INFERRED].
+- **What draws the geothermal steam plume is not established**: a feature animation or the
+  engine's particles. `gfx=game` shows the vent's frame 0, without a plume.
+- **The deposit and ground art are one lush map's.** A demo's map has no world, and a patch
+  larger than the 3 × 3 feature stretches its sprite.

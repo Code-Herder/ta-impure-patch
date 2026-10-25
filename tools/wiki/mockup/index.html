@@ -26,6 +26,7 @@
     <option value="glow">glow</option><option value="underline">underline</option><option value="sunk">sunk groove</option>
     <option value="text">text only</option></select></label>
   <label>Rewind button <select id="rewind"><option value="1">shown (live recorded skirmish)</option><option value="0">absent</option></select></label>
+  <label>Graphics <select id="gfx"><option value="whitebox">whitebox</option><option value="game">game (gfx/)</option></select><output id="gfx-note"></output></label>
 </header>
 <div id="view">
   <div id="frame">
@@ -72,8 +73,10 @@
 length in the window is in units of the frame's height / 720. The window, its tree, the entry and its demos come from <code>art/wiki/</code>;
 what the stage shows comes from <code>sim.js</code>; a skin's parts from <code>art/wiki/skins/</code>, the text styles from the replay
 HUD's <code>art/hud/layout.json</code>. URL switches: <code>res=</code>, <code>size=</code>, <code>mode=sp|mp</code>,
-<code>mod=</code>, <code>skin=plate|panels|slim|whitebox</code>, <code>rewind=0|1</code>, <code>open</code>, <code>entry=</code>, <code>demo=</code> (from 1), <code>try</code>.</p>
+<code>mod=</code>, <code>skin=plate|panels|slim|whitebox</code>, <code>rewind=0|1</code>, <code>open</code>, <code>entry=</code>, <code>demo=</code> (from 1), <code>try</code>, <code>gfx=whitebox|game</code> (the game's own graphics, rendered into the gitignored
+<code>gfx/</code> by <code>tools/wiki/gfx.py</code> from the local install).</p>
 <script src="sim.js"></script>
+<script src="gfx.js"></script>
 <script src="wiki.js"></script>
 </body>
 </html>
