@@ -1,0 +1,4 @@
+landing-review: high (two read-only ta-reviewers, main...70b2d197, the placement spacing).
+Fixed in b8c27ff3: game-thread wait on s_io during the render thread's file write (try-lock hand-over, pending retry, wait only at level end; load at attach); the game-thread level-end flush removed; docs on who writes and when; unsavable names logged; cap assert; placespacing cleared by the regression and tareplay's test render.
+Not acted on: an older build's 1024-byte s_extra can drop a placespacing line over ~1 KB (only unit names near 31 characters; stock names keep it near 720 bytes); strtol accepts trailing junk (the next write puts it back clean).
+Verified: spacing (s1)-(s7), core (a)-(m) on place1.
