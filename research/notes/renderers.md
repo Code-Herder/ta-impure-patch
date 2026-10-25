@@ -1341,7 +1341,7 @@ exception: nothing but the menu ever wrote it and it was never released, so it i
 | `edge` | `mirror` | `mirror` or `black`: what the view shows past the map ([GPU status](gpu-status.html) §2.90). Not a render key, so the preset never rewrites it; `tagpu_mirror.on`/`.off` are its levers |
 | `mixingbuffers` | 32 | 8, 16, 24 or 32: the sounds the engine plays at once. No row; not a Visuals value, but the same loader reads it |
 | `vsync` | 1 | on: the present waits for the vertical blank, and the frame limiter keeps a backstop just above the monitor's rate; off: nothing holds the frame rate. The only pacing there is (§2.10c) |
-| `placespacing` | none | `NAME:n,NAME:n`: the multi-building placement's spacing per building type, by its unit name (`ARMSOLAR:2`), `n` 1..16 empty cells between neighbouring sites; a type at 0 has no entry, at most 64 types, a name of `[A-Za-z0-9_-]` only. No row: Alt+Z / Alt+X with a building armed step it ([quality of life](quality-of-life.html#what-impure-does)) |
+| `placespacing` | none | `NAME:n,NAME:n`: the multi-building placement's spacing per building type, by its unit name (`ARMSOLAR:2`), `n` 1..16 empty cells between neighbouring sites; a type at 0 has no entry, at most 64 types, a name of `[A-Za-z0-9_-]` only. No row: Alt+Z / Alt+X with a building armed step it ([quality of life](tadr-port/quality-of-life.html#what-impure-does)) |
 | `replayhud` | 100 | 75, 100, 125 or 150: the replay HUD's own scale, in percent; one HUD unit is the screen height / 720 times it, whatever `hudscale` is ([The replay HUD in game](hud-in-game.html)). No settings row: the HUD's own scale button writes it, cycling the four |
 
 **The preset is derived, so Classic++ can improve under a player.** While `style` is `classic`
