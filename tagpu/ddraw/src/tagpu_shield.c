@@ -19,6 +19,7 @@
 #include "tagpu_hudinput.h"
 #include "mouse.h"
 #include "tagpu_zoom.h"
+#include "tagpu_place.h"
 #include "tagpu_gui.h"
 #include "tagpu_input.h"
 #include "tagpu_log.h"
@@ -186,6 +187,11 @@ static void deliver_key(HWND hwnd, int vk, BOOL up)
     LPARAM lparam = 1 | ((LPARAM)scan << 16) | (up ? ((LPARAM)3 << 30) : 0);
 
     set_key(vk, !up);
+
+    /* Alt+Z / Alt+X with a building armed step the placement's spacing and reach the game no
+       further, as on the real path below; Alt is virtual here, so the module asks for it */
+    if (!up && tagpu_place_key((unsigned)vk, 0))
+        return;
 
     to_game(hwnd, up ? WM_KEYUP : WM_KEYDOWN, (WPARAM)vk, lparam);
 
@@ -391,7 +397,17 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
         tagpu_hudinput_cancel();
 
     if (!tagpu_shield_on())
+    {
+        /* Alt+Z / Alt+X with a building armed: the placement's spacing, the player's keys only
+           while the shield lets them through. A letter under Alt is WM_SYSKEYDOWN. */
+        if ((msg == WM_SYSKEYDOWN || msg == WM_KEYDOWN) &&
+            tagpu_place_key((unsigned)wparam, msg == WM_SYSKEYDOWN))
+        {
+            *result = 0;
+            return TRUE;
+        }
         return FALSE;
+    }
 
     switch (msg)
     {

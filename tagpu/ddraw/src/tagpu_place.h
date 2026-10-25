@@ -24,6 +24,13 @@ typedef struct {
 void tagpu_place_init(void);          /* after tagpu_resource_init: chains on its observer */
 void tagpu_place_level_end(void);
 
+/* Alt+Z / Alt+X with a building armed: one more / one less empty cell between the armed type's
+   neighbouring sites (0..16, kept per type in impure.cfg). 1 when the key was taken -- the
+   caller then drops it, which stock does nothing with (TA's key table has no Alt+Z or Alt+X).
+   `alt_known`: the message itself says Alt is down (WM_SYSKEYDOWN). From the window procedure,
+   on the game thread. */
+int tagpu_place_key(unsigned vk, int alt_known);
+
 /* The sites that replace the cursor's single square this frame, at most `max`; 0 when the stock
    square stands (no gesture and no ring under the cursor). For the packet's fill. */
 unsigned tagpu_place_sites(TagpuPlaceSite* out, unsigned max);

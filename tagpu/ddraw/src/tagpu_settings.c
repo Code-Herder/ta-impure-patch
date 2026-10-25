@@ -160,6 +160,10 @@ static int  s_win[4], s_winSet;
 /* Keys this build does not know, verbatim, so a file an other build wrote
    keeps them. Filled at attach, read by serialise under s_io. */
 static char s_extra[EXTRA_LEN];
+/* The placement's spacing per building type (tagpu_place.c), `placespacing=NAME:n,...`: only
+   types stepped above 0, in the order first stepped. Under s_io like the strings above. */
+static TsSpacing s_spacing[TS_SPACING_SAVED];
+static int s_nspacing, s_spacingFull;
 static int  s_extraLen;
 
 /* A windowed frame: a position, and a client size that is either 0,0 -- the
@@ -304,6 +308,21 @@ static int serialise(char* b, int cap)
         if (k < 0 || k >= cap - at) return -1;
         at += k;
     }
+    if (s_nspacing) {
+        int i;
+        k = _snprintf(b + at, cap - at, "placespacing=");
+        if (k < 0 || k >= cap - at) return -1;
+        at += k;
+        for (i = 0; i < s_nspacing; i++) {
+            k = _snprintf(b + at, cap - at, "%s%s:%d", i ? "," : "", s_spacing[i].name,
+                          s_spacing[i].cells);
+            if (k < 0 || k >= cap - at) return -1;
+            at += k;
+        }
+        k = _snprintf(b + at, cap - at, "\r\n");
+        if (k < 0 || k >= cap - at) return -1;
+        at += k;
+    }
     if (s_winSet) {
         k = _snprintf(b + at, cap - at, "window=%d,%d,%d,%d\r\n",
                       s_win[0], s_win[1], s_win[2], s_win[3]);
@@ -324,7 +343,7 @@ static int serialise(char* b, int cap)
    run of them, since the caller retries. */
 static int write_store(void)
 {
-    char b[3072];
+    char b[8192];
     HANDLE h;
     DWORD wrote = 0;
     const char* why = NULL;
@@ -408,6 +427,51 @@ static char* trim(char* s)
     return s;
 }
 
+/* A unit name as the placement keys it: 1..TS_SPACING_NAME-1 bytes of [A-Za-z0-9_-], the
+   characters TA's unit names use; anything else is not one, so a hand-edited line cannot put a
+   separator or a control byte into the store. */
+static int spacing_name_ok(const char* n, size_t len)
+{
+    size_t i;
+    if (!len || len >= TS_SPACING_NAME) return 0;
+    for (i = 0; i < len; i++) {
+        char c = n[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+              c == '_' || c == '-')) return 0;
+    }
+    return 1;
+}
+
+/* `NAME:n,NAME:n`: each entry that is not a name and a spacing 1..TS_SPACING_MAX is skipped and
+   named in the log; the rest stand. Attach only, before any other thread reads the table. */
+static void parse_spacing(char* v)
+{
+    char* e;
+    for (; v && *v; v = e) {
+        char* colon;
+        long n;
+        e = strchr(v, ',');
+        if (e) *e++ = 0;
+        v = trim(v);
+        colon = strchr(v, ':');
+        n = colon ? strtol(colon + 1, NULL, 10) : 0;
+        if (!colon || !spacing_name_ok(v, (size_t)(colon - v)) || n < 1 || n > TS_SPACING_MAX ||
+            s_nspacing >= TS_SPACING_SAVED) {
+            slog("placespacing entry \"%s\" skipped", v);
+            continue;
+        }
+        *colon = 0;
+        {
+            int j;
+            for (j = 0; j < s_nspacing && lstrcmpiA(s_spacing[j].name, v); j++) {}
+            if (j < s_nspacing) { slog("placespacing names %s twice: the first stands", v); continue; }
+        }
+        lstrcpynA(s_spacing[s_nspacing].name, v, TS_SPACING_NAME);
+        s_spacing[s_nspacing].cells = (int)n;
+        s_nspacing++;
+    }
+}
+
 static void parse_line(char* line)
 {
     char* eq = strchr(line, '=');
@@ -428,6 +492,7 @@ static void parse_line(char* line)
         return;
     }
     if (!lstrcmpiA(k, "monitor")) { lstrcpynA(s_monStored, v, sizeof s_monStored); return; }
+    if (!lstrcmpiA(k, "placespacing")) { parse_spacing(v); return; }
     if (!lstrcmpiA(k, "window")) {
         int w[4];
         /* refused when it is not a frame, so the fork's default placement
@@ -477,7 +542,7 @@ static void parse_line(char* line)
 
 static void load(void)
 {
-    char buf[4096];
+    char buf[8192];
     HANDLE h;
     DWORD n = 0;
     char* p;
@@ -762,6 +827,47 @@ void tagpu_settings_set_restoreoff(const char* key)
     if (lstrcmpiA(s_restoreOff, key)) {
         lstrcpynA(s_restoreOff, key, sizeof s_restoreOff);
         InterlockedIncrement(&s_dirty);
+    }
+    LeaveCriticalSection(&s_io);
+}
+
+int tagpu_settings_spacing_load(TsSpacing* out, int max)
+{
+    int n;
+    if (!s_attached || s_ignored || !out || max <= 0) return 0;
+    EnterCriticalSection(&s_io);
+    n = s_nspacing < max ? s_nspacing : max;
+    memcpy(out, s_spacing, (size_t)n * sizeof *out);
+    LeaveCriticalSection(&s_io);
+    return n;
+}
+
+void tagpu_settings_set_spacing(const char* name, int cells)
+{
+    int i;
+    if (!s_attached || s_ignored || !name || !spacing_name_ok(name, strlen(name)) ||
+        cells < 0 || cells > TS_SPACING_MAX) return;
+    EnterCriticalSection(&s_io);
+    for (i = 0; i < s_nspacing && lstrcmpiA(s_spacing[i].name, name); i++) {}
+    if (i < s_nspacing) {
+        if (!cells) {
+            memmove(&s_spacing[i], &s_spacing[i + 1], (size_t)(s_nspacing - i - 1) * sizeof *s_spacing);
+            s_nspacing--;
+            InterlockedIncrement(&s_dirty);
+        } else if (s_spacing[i].cells != cells) {
+            s_spacing[i].cells = cells;
+            InterlockedIncrement(&s_dirty);
+        }
+    } else if (cells) {
+        if (s_nspacing < TS_SPACING_SAVED) {
+            lstrcpynA(s_spacing[s_nspacing].name, name, TS_SPACING_NAME);
+            s_spacing[s_nspacing].cells = cells;
+            s_nspacing++;
+            InterlockedIncrement(&s_dirty);
+        } else if (!s_spacingFull) {
+            s_spacingFull = 1;
+            slog("placespacing holds %d types: %s's spacing is not kept", TS_SPACING_SAVED, name);
+        }
     }
     LeaveCriticalSection(&s_io);
 }

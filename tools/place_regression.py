@@ -6,6 +6,8 @@ Shift + Ctrl over a unit a ring round it.
     place_regression.py <instance> core      every case below, then the level ended for (m)
     place_regression.py <instance> replay    the place-basic test group's gestures
     place_regression.py <instance> preview   a 5-site line held mid-drag: the marker pass's count
+    place_regression.py <instance> spacing   Alt+Z / Alt+X, the spacing in a line, impure.cfg and a
+                                             relaunch (takes --launch)
     place_regression.py --selftest           the Python geometry against placetest.py dump
 
 Each mode plays on scenarios/place-basic.json, handed the level held (resource_regression.py,
@@ -31,6 +33,7 @@ own account of each commit from its log (`place_line`).
 """
 import argparse
 import random
+import re
 import struct
 import subprocess
 import sys
@@ -676,6 +679,82 @@ def preview(p, gamedir):
             lever.write_text(old)
 
 
+SPACING_RX = r"place: spacing "
+
+
+def alt_step(p, letter, times):
+    """Alt + `letter`, `times` times: Alt+Z one more empty cell, Alt+X one less."""
+    for _ in range(times):
+        p.press("alt")
+        p.keys(f"down:{letter}", f"up:{letter}")
+        p.lift("alt")
+
+
+def spacing_is(p, start, name, want, what):
+    """The last `place: spacing` line from log index `start` names `name` at `want`."""
+    p.mark()
+    got = [ln.split("place: spacing ", 1)[1].strip() for ln in p.log[start:]
+           if "place: spacing " in ln]
+    assert got and got[-1].upper() == f"{name}={want}".upper(), \
+        f"{what}: the spacing lines {got}, want the last to be {name}={want}"
+
+
+def spacing_line(p, frm, to, spacing, what):
+    """A Shift-drag line of ARMLLT laid at `spacing` empty cells, against the model's sites."""
+    fx, fz = p.footprint(p.types["ARMLLT"])
+    sites = place_shape(LINE, fx, fz, spacing, frm, to)
+    before = {k: p.builds(k) for k in BUILDERS}
+    start = drag(p, frm, to)
+    expect(p, what, "ARMLLT", BUILDERS, before, sites, start, "line")
+    return sites
+
+
+def spacing(p):
+    """Alt+Z / Alt+X step the armed type's spacing, a line uses it, it stops at 0, and it is
+    in impure.cfg after the level ends and in force after a relaunch."""
+    p.hold()
+    p.eye(*EYE)
+    p.select(*BUILDERS)
+    p.clear(*BUILDERS)
+    p.arm("ARMLLT")
+    start = p.mark()
+    alt_step(p, "z", 2)
+    spacing_is(p, start, "ARMLLT", 2, "(s1) Alt+Z twice")
+    assert p.mode() == 14, "(s1) Alt+Z disarmed the building"
+    sites = spacing_line(p, (70, 356), (78, 356), 2, "(s2) a line at spacing 2")
+    assert [c for c, _ in sites] == [70, 74, 78], f"(s2) the layout {sites}"
+    p.clear(*BUILDERS)
+    p.arm("ARMLLT")
+    start = p.mark()
+    alt_step(p, "x", 3)
+    spacing_is(p, start, "ARMLLT", 0, "(s3) Alt+X three times stops at 0")
+    spacing_line(p, (70, 362), (78, 362), 0, "(s4) a line at spacing 0")
+    p.clear(*BUILDERS)
+    p.arm("ARMLLT")
+    start = p.mark()
+    alt_step(p, "z", 1)
+    spacing_is(p, start, "ARMLLT", 1, "(s5) Alt+Z once")
+    p.notes()
+    level_end(p)
+    text = (p.gamedir / "impure.cfg").read_text()
+    assert re.search(r"(?im)^placespacing=(.*,)?ARMLLT:1(,|$)", text), \
+        f"(s6) impure.cfg after the level end has no ARMLLT:1: {[ln for ln in text.splitlines() if 'spacing' in ln.lower()]}"
+    print("place-spacing: (s1)-(s6) passed")
+
+
+def spacing_relaunch(p):
+    """(s7) After a relaunch the saved spacing is in force: ARMLLT:1 lays a line at pitch 3."""
+    p.hold()
+    p.eye(*EYE)
+    p.select(*BUILDERS)
+    p.clear(*BUILDERS)
+    p.arm("ARMLLT")
+    sites = spacing_line(p, (70, 368), (79, 368), 1, "(s7) a line at the saved spacing 1")
+    assert [c for c, _ in sites] == [70, 73, 76, 79], f"(s7) the layout {sites}"
+    p.notes()
+    print("place-spacing: (s7) the saved spacing holds after a relaunch")
+
+
 # -- offline --------------------------------------------------------------------------------------
 
 def selftest(cases=3000, seed=20261025):
@@ -719,6 +798,13 @@ def launched(instance, mode):
     lever = gamedir / "tagpu_hold.on"
     had = lever.exists()
     lever.write_text("")
+    # Every case lays its sites with no spacing but `spacing`'s own, which a store the instance
+    # keeps between launches (tacli ensure_store leaves an existing one alone) would carry over.
+    store = gamedir / "impure.cfg"
+    if store.exists():
+        kept = [ln for ln in store.read_text().splitlines(keepends=True)
+                if not ln.strip().lower().startswith("placespacing=")]
+        store.write_text("".join(kept))
     tacli("scenario", "load", instance, SCENARIO, "--defaults", timeout=900)
 
     def stop():
@@ -733,7 +819,7 @@ def launched(instance, mode):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("instance", nargs="?")
-    p.add_argument("mode", nargs="?", choices=("core", "replay", "preview"))
+    p.add_argument("mode", nargs="?", choices=("core", "replay", "preview", "spacing"))
     p.add_argument("--launch", action="store_true",
                    help="core/preview: launch the instance on place-basic.json first (run lock)")
     p.add_argument("--selftest", action="store_true", help="geometry against placetest.py, no game")
@@ -747,6 +833,8 @@ def main():
         return 0
     if not a.instance or not a.mode:
         p.error("an instance and a mode, or --selftest")
+    if a.mode == "spacing" and not a.launch:
+        p.error("spacing relaunches the instance: it takes --launch")
     if a.launch and a.mode == "replay":
         p.error("replay runs inside its test group (tools/replay/fixtures.json, place-basic)")
     stop = None
@@ -754,7 +842,15 @@ def main():
         if a.launch:
             stop = launched(a.instance, a.mode)
         check = Place(a.instance)
-        run = {"core": core, "replay": replay,
+        def spacing_both(c):
+            spacing(c)
+            # the second launch keeps the store: only the hold lever and the scenario again
+            tacli("stop", a.instance, timeout=300)
+            lever = c.gamedir / "tagpu_hold.on"
+            lever.write_text("")
+            tacli("scenario", "load", a.instance, SCENARIO, "--defaults", timeout=900)
+            spacing_relaunch(Place(a.instance))
+        run = {"core": core, "replay": replay, "spacing": spacing_both,
                "preview": lambda c: preview(c, c.gamedir)}[a.mode]
         # As resource_regression.py: the case's own failure is the exit reason and is printed
         # first; a cleanup step that fails after it is reported beside it, never in its place.
