@@ -191,7 +191,10 @@ function state() {
     stats: { open: S.stat, x: sw.x, y: sw.y, measure: m.k, split: byTeam ? 'team' : 'player', groups, dt: DT, t0: 0 }, ...prop };
 }
 const px = () => unit() * (window.devicePixelRatio || 1);
-function build() { HUD.draw(layer, state(), px()); }
+// the pointer in units from the screen's top left, for the hint layer, which every build draws again; null off the HUD
+let ptr = null;
+const hintAt = () => HUD.hint(layer, ptr && ptr.x, ptr && ptr.y, { W: parseFloat(stage.style.width) / unit() });
+function build() { HUD.draw(layer, state(), px()); hintAt(); }
 
 /* ---- the backdrop: a 1280 x 720 replay frame from our renderer, whose own side panel is 128 pixels and bars 32, recut so that
    the panel and bars are drawn at the engine's magnification and the world fills what they leave. Past the bars' first
@@ -245,6 +248,9 @@ layer.addEventListener('pointerdown', e => {
     drag = { x: e.clientX, y: e.clientY, ox: Math.max(0, Math.min(s.W - W.w, s.stats.x)), oy: Math.max(0, Math.min(s.H - W.h, s.stats.y)) }; e.target.setPointerCapture(e.pointerId); }
 });
 layer.addEventListener('pointermove', e => {
+  const r = layer.getBoundingClientRect(), u = unit();
+  ptr = { x: (e.clientX - r.left) / u, y: (e.clientY - r.top) / u };
+  hintAt();
   if (seek) seekTo(seek, e.clientX);
   if (drag) {
     const u = unit(), st = state(), W = HUD.layout.window, win = $('#statwin');
@@ -252,6 +258,7 @@ layer.addEventListener('pointermove', e => {
     win.style.setProperty('--x', S.sw.x); win.style.setProperty('--y', S.sw.y); HUD.pin(layer);
   }
 });
+layer.addEventListener('pointerleave', () => { ptr = null; hintAt(); });
 window.addEventListener('pointerup', () => { if (drag) save(); seek = drag = null; });
 // the wheel over the column scrolls it an item a notch
 layer.addEventListener('wheel', e => {

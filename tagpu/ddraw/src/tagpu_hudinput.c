@@ -379,24 +379,32 @@ static void fork_asked(unsigned ticket)
 /* THE LANES' KEYS: 1 when the key is one of them. A lane's index is the drawn frame's, which
    lane_id turns into the timeline it showed, as a row's index is turned into its seat: an index
    past the lanes that frame drew is refused, and a lane whose fork has gone since is the replay's
-   to refuse (tagpu_replay_watch_timeline, tagpu_replay_fork_op). A request refused at once is
-   toasted at once; one accepted waits for its outcome (lane_fill). */
+   to refuse (tagpu_replay_watch_timeline, tagpu_replay_fork_op). `main`, the watched lane's Back
+   to main recording, has no index: it names timeline 0, the original, whichever lane drew it. A
+   request refused at once is toasted at once; one accepted waits for its outcome (lane_fill). */
 static int lane_act(const char* key, size_t k, int n)
 {
     unsigned id, t;
+    if (IS("main")) {
+        s_armed = 0;
+        s_watchAsked = tagpu_replay_watch_timeline(0);
+        s_watchId = 0;
+        if (!s_watchAsked) toast("Cannot go back to the replay");
+        return 1;
+    }
     if (!IS("lane") && !IS("export") && !IS("delete")) return 0;
     if (n < 0 || n >= s_hit.nlane) return 1;
     id = s_hit.lane_id[n];
     /* a lane is a fork's: id 0, the original, never is one, and is s_armed's "none" */
     if (!id) return 1;
     if (IS("lane")) {
-        /* the watched lane goes back to the replay, the original */
-        unsigned to = id == tagpu_replay_timeline() ? 0 : id;
+        /* the watched lane stays watched: the switch refuses the timeline that plays already, so
+           it is not asked, and `main` is the way back */
         s_armed = 0;
-        s_watchAsked = tagpu_replay_watch_timeline(to);
-        s_watchId = to;
-        if (!s_watchAsked && to) toast("Cannot watch F%u", to);
-        else if (!s_watchAsked) toast("Cannot go back to the replay");
+        if (id == tagpu_replay_timeline()) return 1;
+        s_watchAsked = tagpu_replay_watch_timeline(id);
+        s_watchId = id;
+        if (!s_watchAsked) toast("Cannot watch F%u", id);
     } else if (IS("export")) {
         /* the playing's own name with -F<id>: replays\<name>-F<id>.imprec. A name too long for
            that is refused here: a cut one would save under a name the toast does not give. */

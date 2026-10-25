@@ -37,11 +37,11 @@
     {"in": "rew",      "act": "rew",      "icon": {"name": "rew", "w": 16, "h": 16}},
     {"in": "play",     "act": "play",     "icon": {"name": "play", "playing": "pause", "w": 16, "h": 16}},
     {"in": "fwd",      "act": "fwd",      "icon": {"name": "fwd", "w": 16, "h": 16}},
-    {"in": "speed",    "act": "speed",    "text": {"bind": "speed", "style": "face_big", "align": "c"}},
-    {"in": "bookmark", "act": "bookmark", "icon": {"name": "bookmark", "w": 16, "h": 16}},
-    {"in": "uiscale",  "act": "uiscale",  "icon": {"name": "uiscale", "pad": [4, 0, 0, 0], "w": 12, "h": 12, "ax": "l"},
-                                          "text": {"bind": "hud", "pad": [16, 0, 2, 0], "style": "face_num_sm", "align": "c"}},
-    {"in": "leave",    "act": "leave",    "icon": {"name": "leave", "w": 16, "h": 16}}
+    {"in": "speed",    "act": "speed",    "tip": "Playback speed",           "text": {"bind": "speed", "style": "face_big", "align": "c"}},
+    {"in": "bookmark", "act": "bookmark", "tip": "Add or remove a bookmark", "icon": {"name": "bookmark", "w": 16, "h": 16}},
+    {"in": "uiscale",  "act": "uiscale",  "tip": "UI size",                  "icon": {"name": "uiscale", "pad": [4, 0, 0, 0], "w": 12, "h": 12, "ax": "l"},
+                                                                             "text": {"bind": "hud", "pad": [16, 0, 2, 0], "style": "face_num_sm", "align": "c"}},
+    {"in": "leave",    "act": "leave",    "tip": "Exit the replay",          "icon": {"name": "leave", "w": 16, "h": 16}}
    ]
   },
   "rail": {
@@ -144,7 +144,7 @@
             "fill": {"part": "track_fill", "pad": [1.5, 1.5, 1.5, 1.5]},
             "buttons": {"part": "lane_button", "pressed": "lane_button_down", "w": 13, "gap": 1.5, "pad": 1,
                         "icon": {"padf": 0.18},
-                        "items": [{"act": "export", "icon": "export"}, {"act": "delete", "icon": "delete"}],
+                        "items": [{"act": "export", "icon": "export", "tip": "Save as a replay of its own"}, {"act": "delete", "icon": "delete", "tip": "Delete this fork"}],
                         "back": {"act": "main", "label": "Back to main recording", "pad": 3}}},
    "rail": "rail_forks",
    "bay": {"part": "forks_bay", "pressed": "forks_bay_down", "in": "bay", "pad": [0.5, 0.5, 0.5, 0.5], "off": 0.45,

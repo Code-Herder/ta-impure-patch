@@ -2498,9 +2498,9 @@ def cmd_wheel(args):
 # the trigger the replay HUD answers (tagpu_hudstate.c). Its controls are keyed as the layout makes
 # them, and `hud show` lists the frame's; the takeover's are takeover (the Take over button), picker
 # (the picker's plate), takeas:<row> (take over that row's player) and lanes (the Forks bay); the
-# fork lanes' are lane:<k> (watch lane k's fork, or the replay from the watched one), export:<k> and
-# delete:<k> (two clicks: the first arms it); the live HUD's are rewind, rew, fwd, track, live_play
-# and live_now
+# fork lanes' are lane:<k> (watch lane k's fork; the watched lane stays watched), main (the watched
+# lane's Back to main recording: the replay), export:<k> and delete:<k> (two clicks: the first arms
+# it); the live HUD's are rewind, rew, fwd, track, live_play and live_now
 HUD_ASK = "tagpu_replayhud.dump"
 HUD_OUT = "tagpu_replayhud.json"
 
@@ -7340,7 +7340,7 @@ def build_parser():
                     help="show | wait | click <key> | hover <key> | wheel <key> <notches> | "
                          "scrub <from> <to> | drag <key> <dx> <dy> -- a key as `show` lists it "
                          "(play, speed, track, jump:2, fold:0, cursors, stats, chip:army, drag, "
-                         "takeover, takeas:<row>, lanes, picker, lane:<k>, export:<k>, delete:<k>, "
+                         "takeover, takeas:<row>, lanes, picker, lane:<k>, main, export:<k>, delete:<k>, "
                          "...; live: rewind, rew, fwd, track, live_play, live_now); a row's "
                          "button hovers its row first")
     hd.add_argument("rest", nargs="*")

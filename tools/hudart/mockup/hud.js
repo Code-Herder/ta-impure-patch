@@ -143,24 +143,16 @@ const HUD = (() => {
   const clock = t => { t = Math.max(0, Math.round(t)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
   const zero = (w, h) => ({ x: 0, y: 0, w, h });
 
-  /* a button's hint while hovered: its text in a dark box `gap` above the button, centred on it and held `margin` inside
-     the screen. `ax` is the button's left edge on the screen; the box is placed relative to the button */
-  function tip(s, b, ax, st) {
-    const Tp = L.tip, w = textWidth(s, Tp.style) + 2 * Tp.pad, n = parseInt(Tp.bg.slice(1), 16);
-    const x = Math.min(Math.max((b.w - w) / 2, Tp.margin - ax), st.W - Tp.margin - w - ax);
-    return `<div class="box hov" style="${rect({ x, y: -Tp.h - Tp.gap, w, h: Tp.h })};background:rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${Tp.alpha});pointer-events:none">`
-      + ring(zero(w, Tp.h), Tp.edge, Tp.edge_colour) + text(esc(s), { x: 0, y: 0, w, h: Tp.h }, Tp.style, { align: 'c' }) + `</div>`;
-  }
-  // a button: its part, pressed while held (and while on, for a toggle), its icon and text placed on its face, and
-  // its hint while hovered when it has one (spec.tip, with ax its left edge on the screen)
-  function button(spec, kind, b, st, on, ax) {
+  // a button: its part, pressed while held (and while on, for a toggle), its icon and text placed on its face; one with
+  // a hint (spec.tip) carries it for the hint layer (`hint`) and draws none itself
+  function button(spec, kind, b, st, on) {
     const F = frame(b.w, b.h);
     let inner = '';
     if (spec.icon) { const n = spec.icon.playing && st.playing ? spec.icon.playing : spec.icon.name; inner += icon(n, place(F, spec.icon), 'face'); }
     if (spec.text) inner += text(spec.text.html, place(F, spec.text), spec.text.style, { ...spec.text, face: true });
-    if (spec.tip) inner += tip(spec.tip, b, ax, st);
-    return art(on ? kind.pressed : kind.part, b, inner, `hot${on ? ' pressed' : ''}${spec.off ? ' off' : ''}${spec.tip ? ' row' : ''}`,
-      { act: spec.act, up: kind.part, down: kind.pressed, ...(on ? { on: 1 } : {}), ...(spec.data || {}) }, spec.off ? `;opacity:${spec.off}` : '');
+    return art(on ? kind.pressed : kind.part, b, inner, `hot${on ? ' pressed' : ''}${spec.off ? ' off' : ''}`,
+      { act: spec.act, up: kind.part, down: kind.pressed, ...(on ? { on: 1 } : {}), ...(spec.data || {}), ...(spec.tip ? { tip: spec.tip } : {}) },
+      spec.off ? `;opacity:${spec.off}` : '');
   }
 
   /* ---- the dock: the transport plate from the side panel's edge, the timeline housing to the screen's right ---- */
@@ -254,7 +246,7 @@ const HUD = (() => {
       inner += text(`F${f.id} · ${esc(f.name)} from ${clock(f.from)}`, place(F, { pad: [fx + Ln.label.pad[0], 0, w - btx + Ln.label.pad[0], 0] }), Ln.label.style, Ln.label);
       if (on) inner += button({ act: Bk.act, text: { html: esc(Bk.label), style: Ln.label.style, align: 'c' } }, Bt,
         { x: btx, y: Bt.pad, w: bkw, h: Ln.h - 2 * Bt.pad }, st, false);
-      inner += Bt.items.map((it, j) => button({ act: it.act, icon: { name: it.icon, padf: Bt.icon.padf }, data: { fork: k } }, Bt,
+      inner += Bt.items.map((it, j) => button({ act: it.act, tip: it.tip, icon: { name: it.icon, padf: Bt.icon.padf }, data: { fork: k } }, Bt,
         { x: btx + bkx + j * (bw + Bt.gap), y: Bt.pad, w: bw, h: Ln.h - 2 * Bt.pad }, st, st.armed === k && it.act === 'delete')).join('');
       h += art(on ? Ln.pressed : Ln.part, { x: x0, y: ly, w, h: Ln.h }, inner, `hot${on ? ' pressed' : ''}`, { act: 'lane', fork: k, up: Ln.part, down: Ln.pressed, ...(on ? { on: 1 } : {}) });
       if (st.replace === k) { const R = P.replace;
@@ -362,8 +354,7 @@ const HUD = (() => {
     }
     const FF = frame(Fo.w, Fo.h, Fo.part), fy = used + Fo.gap;
     h += `<div class="box" style="${rect({ x: C.w - Fo.w, y: fy, w: Fo.w, h: Fo.h })}">` + art(Fo.part, zero(Fo.w, Fo.h))
-      + Fo.buttons.map(s => { const b = place(FF, { in: s.in, pad: Fo.button.pad });
-        return button(s, Fo.button, b, st, s.toggle && st.toggles[s.toggle], x + C.w - Fo.w + b.x); }).join('') + `</div>`;
+      + Fo.buttons.map(s => button(s, Fo.button, place(FF, { in: s.in, pad: Fo.button.pad }), st, s.toggle && st.toggles[s.toggle])).join('') + `</div>`;
     // the whole column is the HUD's: a click on a row's body is taken and does nothing, and the wheel scrolls it
     return `<div class="box" data-act="${C.act}" data-first="${first}" data-last="${last}" style="${rect({ x, y: top, w: C.w, h: fy + Fo.h })}">${h}</div>`;
   }
@@ -762,9 +753,36 @@ const HUD = (() => {
   function draw(el, st, px) {
     cssUnit = parseFloat(getComputedStyle(el).getPropertyValue('--u')) || 1;
     el.style.setProperty('--press', L.press_shift);
+    hintOn = null;
     el.innerHTML = (st.live ? live(st) : dock(st) + column(st) + (st.stats.open ? windowHtml(st) : '') + (st.forks && st.picker ? picker(st) : ''))
       + (st.toast ? toast(st) : '');
     compose(el, px);
+  }
+  /* THE HINT LAYER: drawn last, over everything the HUD draws, the toast included, and gone with the next draw. It
+     shows the hint of the control the pointer is on -- the topmost enabled control whose box holds (x, y), in units
+     from the screen's top left, as the game's hit test finds it, so a control drawn over a button hides its hint as
+     it takes its click -- when that control carries one (data-tip). The hint is its text in a dark box `tip.gap`
+     above the button, centred on it, held `tip.margin` inside the screen's left and right edges and as wide as the
+     text and `tip.pad` each side. tagpu_hudlay.c `hint` draws it by the same rules */
+  let hintOn = null;    // the control the hint drawn is for; reset by every draw
+  function hint(el, x, y, st) {
+    let on = null;
+    if (x != null)
+      for (const e of el.querySelectorAll('[data-act]:not(.off), [data-track]')) {
+        const [bx, by, bw, bh] = (e.dataset.ub || '').split(' ').map(Number);
+        if (x >= bx && x < bx + bw && y >= by && y < by + bh) on = e;
+      }
+    if (on && !on.dataset.tip) on = null;
+    if (on === hintOn) return;
+    hintOn = on;
+    el.querySelectorAll(':scope > .hint').forEach(e => e.remove());
+    if (!on) return;
+    const [bx, by, bw] = on.dataset.ub.split(' ').map(Number), s = on.dataset.tip;
+    const Tp = L.tip, w = textWidth(s, Tp.style) + 2 * Tp.pad, n = parseInt(Tp.bg.slice(1), 16);
+    const b = { x: Math.min(Math.max(bx + (bw - w) / 2, Tp.margin), st.W - Tp.margin - w), y: by - Tp.gap - Tp.h, w, h: Tp.h };
+    el.insertAdjacentHTML('beforeend', `<div class="box hint" style="${rect(b)};background:rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${Tp.alpha});pointer-events:none">`
+      + ring(zero(w, Tp.h), Tp.edge, Tp.edge_colour) + text(esc(s), zero(w, Tp.h), Tp.style, { align: 'c' }) + `</div>`);
+    pin(el);
   }
   // what moves while the replay plays, without rebuilding: the fill, the playhead, the clocks and the chart
   function tick(el, st) {
@@ -781,5 +799,5 @@ const HUD = (() => {
     el.querySelectorAll('[data-chart]').forEach(e => { const [w, h, R] = e.dataset.chart.split(' ').map(Number); e.innerHTML = chart(st, w, h, R); });
     pin(el);
   }
-  return { load, draw, tick, press, pin, get layout() { return L; } };
+  return { load, draw, tick, press, pin, hint, get layout() { return L; } };
 })();
