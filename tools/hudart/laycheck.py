@@ -24,6 +24,7 @@ import http.server
 import json
 import math
 import os
+import re
 import shutil
 import socketserver
 import struct
@@ -39,7 +40,8 @@ SRC = ROOT / "tagpu" / "ddraw" / "src"
 # carry up to a few 1/64ths of rounding; past that, a difference is a rule disagreeing.
 TOL_CSS = 0.07
 
-# (name, the mockup's URL switches, the pointer in units or None, the button held or "")
+# (name, the mockup's URL switches, the element hovered or None -- a column row by its place, "row2",
+# or a button with a hint by its key, "chat" -- the button held or "")
 CASES = [
     ("4k-150-teams", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&stat=0&paused", None, ""),
     ("4k-auto-scroll", "res=3840x2160&game=auto&hud=150&np=16&nt=4&t=100&stat=0&paused", None, ""),
@@ -69,8 +71,26 @@ CASES = [
     ("1440-75-lanes-watched", "res=2560x1440&game=200&hud=75&np=8&nt=2&t=90&nf=3&lo&tl=1&paused", None, ""),
     ("1080-100-lanes-picker", "res=1920x1080&game=off&hud=100&np=6&nt=1&t=40&nf=3&lo&pick&paused", None, ""),
     ("4k-150-lanes-held", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&nf=3&lo&paused", None, "lane:0"),
-    # a lane's button and a picker row held: their pressed parts, which tools/hudart/fit.py measures by these cases
+    # the watched lane's Back to main recording, its lane widened by it; and the hints: the foot's first and last
+    # buttons (Stats, Chat, the one nearest the screen's right edge), the transport plate's, nearest its left edge,
+    # and a lane's buttons, on the lane at the track's right end
+    ("1080-100-lanes-back", "res=1920x1080&game=off&hud=100&np=6&nt=1&t=40&nf=3&lo&tl=0&paused", None, ""),
+    ("4k-150-lanes-back-right", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&nf=3&lo&tl=2&paused", None, ""),
+    ("4k-150-hint-stats", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&stat=0&paused", "stats", ""),
+    ("1440-75-hint-chat", "res=2560x1440&game=200&hud=75&np=8&nt=2&t=90&stat=0&paused", "chat", ""),
+    ("1080-100-hint-chat", "res=1920x1080&game=off&hud=100&np=6&nt=1&t=20&stat=0", "chat", ""),
+    ("4k-150-hint-export", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&nf=3&lo&paused", "export:2", ""),
+    ("4k-150-hint-uiscale", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&stat=0&paused", "uiscale", ""),
+    # over Take over and the lanes, which are drawn after the transport plate: the hint is drawn last
+    ("1080-100-hint-bookmark-lanes", "res=1920x1080&game=off&hud=100&np=6&nt=1&t=40&nf=3&lo&tl=1&paused", "bookmark", ""),
+    ("4k-150-hint-speed", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&stat=0&paused", "speed", ""),
+    ("1080-100-hint-bookmark", "res=1920x1080&game=off&hud=100&np=6&nt=1&t=20&stat=0", "bookmark", ""),
+    ("1440-75-hint-leave", "res=2560x1440&game=200&hud=75&np=8&nt=2&t=90&stat=0&paused", "leave", ""),
+    ("1080-100-hint-delete-watched", "res=1920x1080&game=off&hud=100&np=6&nt=1&t=40&nf=3&lo&tl=2&paused", "delete:2", ""),
+    # a lane's button, Back to main recording and a picker row held: their pressed parts, which tools/hudart/fit.py
+    # measures by these cases
     ("4k-150-lane-button-held", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&nf=3&lo&paused", None, "export:0"),
+    ("4k-150-lanes-back-held", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&nf=3&lo&tl=0&paused", None, "main"),
     ("4k-150-picker-row-held", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&nf=3&pick&paused", None, "takeas:0"),
     # at device scale factor 1, the game's 1.5 pixels a unit: boxes on half pixels, which each side snaps
     ("1080-100-lanes-dpr1", "res=1920x1080&game=150&hud=100&np=4&nt=4&t=70&nf=3&lo&paused", None, "", 1),
@@ -106,10 +126,17 @@ COLLECT = r"""() => {
   if (held) { const [act, ix] = held.split(':');
     const b = [...document.querySelectorAll(`.art.hot[data-act="${act}"]`)].find(e => ix == null || [e.dataset.fork, e.dataset.seat, e.dataset.team, e.dataset.val].includes(ix));
     HUD.press(b, true); st.held = held; }
-  if (hoverRow != null) {
-    const row = document.querySelectorAll('#hud-layer .row')[hoverRow], r = R(row);
+  // the pointer: on the column's row by its place ("row2"), its hover strip shown, or on a control by its key ("chat",
+  // "delete:2"), its hint drawn by the hint layer, as the game draws it for the pointer
+  if (hoverRow != null && /^row\d+$/.test(hoverRow)) {
+    const row = document.querySelectorAll('#hud-layer .row')[+hoverRow.slice(3)], r = R(row);
     row.querySelector('.hov').style.visibility = 'visible';
     st.mx = r[0] + r[2] / 2; st.my = r[1] + r[3] / 2;
+  } else if (hoverRow != null) {
+    const [act, ix] = hoverRow.split(':');
+    const r = R([...document.querySelectorAll(`#hud-layer [data-act="${act}"]`)].find(e => ix == null || [e.dataset.fork, e.dataset.seat].includes(ix)));
+    st.mx = r[0] + r[2] / 2; st.my = r[1] + r[3] / 2;
+    HUD.hint(document.querySelector('#hud-layer'), st.mx, st.my, st);
   }
   const els = [], ctx = document.createElement('canvas').getContext('2d');
   // the opacity an element is painted with: its own times every ancestor's, as a disabled
@@ -205,7 +232,8 @@ COLLECT = r"""() => {
       }
     }
   }
-  return JSON.stringify({ state: st, els, u, d, chart });
+  const hints = [...document.querySelectorAll('#hud-layer > .hint')].map(e => e.textContent);
+  return JSON.stringify({ state: st, els, u, d, chart, hints });
 }"""
 
 
@@ -268,7 +296,7 @@ def mockup(port, query, hover, held, tmp, dpr=2):
             n = result(run("eval", "() => typeof HUD !== 'undefined' && HUD.layout ? document.querySelectorAll('#hud-layer .art').length : 0").stdout)
             if n:
                 break
-        code = COLLECT.replace("HOVER", "null" if hover is None else str(int(hover[3:]))).replace("HELD", json.dumps(held))
+        code = COLLECT.replace("HOVER", json.dumps(hover)).replace("HELD", json.dumps(held))
         r = run("eval", code)
         v = result(r.stdout)
         if not v:
@@ -344,6 +372,15 @@ def main():
                     "chart": lambda e: e["alpha"] if "alpha" in e else int(e["rgba"][6:8], 16)}
             TOL = TOL_CSS / dom["u"]
             print(f"{name}: {len(ops['ops'])} ops, {len(dom['els'])} mockup elements, tolerance {TOL:.3f} units")
+            # the pointer on a control by its key: the mockup drew one hint, and the DLL one text op of that hint
+            if hover is not None and not re.fullmatch(r"row\d+", hover):
+                hs = dom.get("hints", [])
+                cn = sum(1 for o in ops["ops"] if o["kind"] == "text" and hs and o["text"] == hs[0])
+                if len(hs) != 1 or cn != 1:
+                    bad += 1
+                    print(f"  hint  the mockup drew {hs}, the DLL {cn} text op(s) of it <-- DIFFERS")
+                else:
+                    print(f"  hint  {hs[0]!r} drawn by both")
             for k in cs:
                 pairs, oc, od = pair(cs[k], ds[k], keys[k])
                 worst = max((max(abs(a - b) for a, b in zip(c["r"], d["r"])) for c, d in pairs), default=0)

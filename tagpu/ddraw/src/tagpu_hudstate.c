@@ -594,6 +594,7 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
     /* THE HUD'S OWN STATE, as its input keeps it (tagpu_hudinput.c): the pointer in units, and
        Sight and Follow from recorded seats to rows */
     st->mx = st->my = -1;
+    st->px = u;
     if (h->px >= 0) {
         st->mx = (float)(h->px - s_ox) / u;
         st->my = (float)(h->py - s_oy) / u;
