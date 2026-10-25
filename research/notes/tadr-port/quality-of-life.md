@@ -53,7 +53,7 @@ listed as a deliberate port exclusion, not planned work.
 | Metal/geo placement snapping | **Yes** | M/P/T | Code present in M/P/Z/T; Z's gate disables it; E build disables support |
 | Reclaim cursor snapping to wrecks/features | **Yes** | E/M/P/T | Code present in all five; Z's gate disables it |
 | Drag queued build/move orders to edit positions | **Yes** | All | All |
-| Line/ring building — **partial**: spacing and optimized DT rows; lines, rectangles and rings [are built](#what-impure-does) | **Yes** | All; TA Hook placement gesture | All |
+| Line/ring building — **partial**: optimized DT rows and Build Split; lines, rectangles, rings and spacing [are built](#what-impure-does) | **Yes** | All; TA Hook placement gesture | All |
 | Reclaim-only construction patrol on Hold Position | **Yes** | All | All |
 | Configurable assist-only construction patrol | **No by default** | E/P/T offer it; defaults are reclaim-only or both | E/P/T; absent M/Z |
 | Constructors stay put/scatter while guarding factories | **No by default** | E/P/T offer choices; defaults remain Cavedog behavior | E/P/T; absent M/Z |
@@ -152,8 +152,8 @@ plus the BAR widgets named in the table.
 | **Filled rectangle** | No | Shift + Alt, laid out in a serpentine order | Shift + Alt, serpentine |
 | **Hollow rectangle** | No | Shift + Alt + Ctrl | Shift + Alt + Ctrl |
 | **Ring around a building** | Yes: hold X with the cursor over a unit. The ring sits outside its footprint, pushed out by the spacing. *Full rings* (on by default) adds the corner pieces for footprints up to 2×2 | Yes: Shift + Ctrl over a unit **or over a queued build**. Each side is turned to face the building (facings West/North/East/South on the right/bottom/left/top sides). Sites that would cancel an existing queued build are skipped. Spacing is not applied | Shift + Ctrl over a unit or over a selected builder's queued build: BAR's sites, unrotated. Sites that would take a queued build off are left out. No spacing |
-| **Spacing** | X + PageUp/PageDown or X + wheel, 0..10 cells. One global value, with no on-screen readout | `buildspacing inc/dec`: Alt+Z / Alt+X in all four default keybind profiles, plus mouse buttons 4/5 ([Mouse Buildspacing](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/gui_buildspacing.lua)). No engine maximum; [Limit Build Spacing](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/cmd_limit_build_spacing.lua) clamps it to 16 | No: neighbours touch. Planned: Alt+Z / Alt+X, which do nothing in stock play |
-| Spacing remembered per building | No | Yes ([Persistent Build Spacing](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/cmd_persistent_build_spacing.lua)) | Planned, saved in `impure.cfg` |
+| **Spacing** | X + PageUp/PageDown or X + wheel, 0..10 cells. One global value, with no on-screen readout | `buildspacing inc/dec`: Alt+Z / Alt+X in all four default keybind profiles, plus mouse buttons 4/5 ([Mouse Buildspacing](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/gui_buildspacing.lua)). No engine maximum; [Limit Build Spacing](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/cmd_limit_build_spacing.lua) clamps it to 16 | Alt+Z / Alt+X with a building armed, 0..16 empty cells (stock does nothing with either key in play); the ring takes none |
+| Spacing remembered per building | No | Yes ([Persistent Build Spacing](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/cmd_persistent_build_spacing.lua)) | Yes, per unit name, saved in `impure.cfg` as `placespacing=` ([renderers](renderers.html) §2.10b) |
 | Preview | A footprint rectangle at each site, coloured green/yellow/red by `TestBuildSpot`. The engine's own build rectangle is suppressed | The unit model at each site, tinted cyan (can build) or red, with its range circles | TA's build square at each site, in its GUI colours: green placed, red refused as a single click there would be, yellow takes a queued build off. On Vulkan a build ghost at each site too. On GDI with `tagpu_markown.on` |
 | Dragon's-teeth special case | *Optimized DT rows* (on by default) reorders the queue entries of a line of 2×2 pieces, swapping neighbours that share a row. Why that order helps is not established [INFERRED: the builder's path] | None | None |
 | Split across builders | No: each selected builder gets every site | [Build Split](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/cmd_buildsplit.lua) (Space): the sites are divided among the selected builders | No: each selected builder gets every site (below: stock arms a building for one unit only) |
@@ -237,11 +237,10 @@ puppet: the owner-approved `replay-absent.tsv` row `0x47F1A0 dll * absent`.
 
 **Not done, or open:**
 
-- **Spacing is not built**: neighbours touch. Planned: Alt+Z / Alt+X per building, which do nothing
-  in stock play (the engine map's *Alt+Z and Alt+X do nothing in play*), saved in `impure.cfg`.
 - **Build Split is not built, and its premise is open**: it divides the sites among several
   selected builders, and the stock interface does not arm a building with more than one unit
   selected (above).
+- Spacing has no on-screen readout; the log names each step (`place: spacing ARMLLT=2`).
 - GDI shows the sites only with `tagpu_markown.on`; without it the engine draws its one square.
 - A multi-site gesture leaves no click marker in the replay overlay; its orders replay exactly. A
   one-site gesture records its click as stock's.

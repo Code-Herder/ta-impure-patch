@@ -11217,7 +11217,9 @@ default `0x4965CE`, which calls the debug keys `0x4956C0(key)` (`gpu-status.md` 
 on a puppet) only while `main+0x3923B` bit 1 is set [not traced further]. The GUI dispatch zeroes the key it
 hands its gadgets while Alt is down (`0x4AA219..0x4AA232`: `0x4C1B80(0xFB)`, then `not` and `and`),
 and the window procedure returns 0 for `WM_SYSCOMMAND` with `SC_KEYMENU` (`0x4B5D9C` → `0x4B5DFC`,
-`cmp eax,0xF100`), so the system menu never opens.
+`cmp eax,0xF100`), so the system menu never opens. Impure takes the two keys with a building armed
+(mode 14) for the placement's spacing, before TA's window procedure sees them (`tagpu_shield.c`,
+`tagpu_place_key`); outside mode 14 they reach the game as before.
 
 ## The order-marker chain — mapped by us
 
