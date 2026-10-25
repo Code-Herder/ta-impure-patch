@@ -102,6 +102,7 @@ PAGES = [
     ("hud-art",                    "HUD art: painted, cut, sliced", "Tooling"),
     ("hud-layout",                 "HUD layout: one source",      "Tooling"),
     ("hud-in-game",                "HUD in game: the plan",       "Tooling"),
+    ("ingame-wiki",                "In-game wiki: the design",    "Tooling"),
     ("windowed-mode",              "Windowed mode",               "Tooling"),
 
     ("binary-patches",            "The core mechanism",        "Mechanism"),
