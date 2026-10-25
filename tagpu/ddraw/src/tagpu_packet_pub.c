@@ -364,6 +364,14 @@ typedef char pk_unit_size  [(sizeof(TAGPU_PK_UNIT)   == 104) ? 1 : -1];
 typedef char pk_unit_rsel  [(offsetof(TAGPU_PK_UNIT, pad0) == 85 &&
                              offsetof(TAGPU_PK_UNIT, rsel) == 86) ? 1 : -1];
 typedef char pk_overlay_size[(sizeof(TAGPU_PK_OVERLAY) == 16) ? 1 : -1];
+/* the place table is tagpu_place.h's site byte for byte: fill_place hands the
+   module's own array to append_table as the packet's rows */
+typedef char pk_place_size [(sizeof(TAGPU_PK_PLACE) == 28 &&
+                             sizeof(TagpuPlaceSite) == sizeof(TAGPU_PK_PLACE)) ? 1 : -1];
+typedef char pk_place_layout[(offsetof(TagpuPlaceSite, rect) == offsetof(TAGPU_PK_PLACE, rect) &&
+                              offsetof(TagpuPlaceSite, type) == offsetof(TAGPU_PK_PLACE, type) &&
+                              offsetof(TagpuPlaceSite, colour) == offsetof(TAGPU_PK_PLACE, colour) &&
+                              offsetof(TagpuPlaceSite, pad) == offsetof(TAGPU_PK_PLACE, pad)) ? 1 : -1];
 typedef char pk_piece_size [(sizeof(TAGPU_PK_PIECE)  ==  24) ? 1 : -1];
 typedef char pk_wreck_size [(sizeof(TAGPU_PK_WRECK)  ==  44) ? 1 : -1];
 typedef char pk_anchor_size[(sizeof(TAGPU_PK_ANCHOR) ==  16) ? 1 : -1];
@@ -2407,6 +2415,24 @@ static void fill_cursor(TAGPU_PACKET* p)
     p->cur_rec = (unsigned)(size_t)rec;
 }
 
+/* THE PLACEMENT'S SITES, COPIED BY VALUE. tagpu_place.c answers on this game
+   thread from its own game-thread state, checked against the cursor mode and
+   type the engine holds at this fill (tagpu_place.h); the rows carry no
+   pointer. At most TAGPU_PK_MAX_PLACE, the cap the acquire checks again with
+   every site's colour, coordinates and type. A table that does not fit sets
+   its bit, and the render thread then draws neither the sites nor the square
+   they replace (tagpu_pk_place_replaces). */
+static TagpuPlaceSite s_plScratch[TAGPU_PK_MAX_PLACE];
+
+static unsigned fill_place(TAGPU_PACKET* p, unsigned* cursor, unsigned* nsites)
+{
+    unsigned n = tagpu_place_sites(s_plScratch, TAGPU_PK_MAX_PLACE);
+    if (n > TAGPU_PK_MAX_PLACE) n = TAGPU_PK_MAX_PLACE;
+    *nsites = n;
+    return append_table(p, cursor, s_plScratch, n, (unsigned)sizeof(TAGPU_PK_PLACE),
+                        &p->off_place, &p->n_place, TAGPU_PK_TRUNC_PLACE);
+}
+
 /* THE BUILD-ORDERS TABLE — the queued builds the order pass is showing site
    rects for, copied out of that pass's own game-thread snapshot (the one the
    squares are drawn from), so the ghost pass and the squares can never drift.
@@ -2415,11 +2441,11 @@ static void fill_cursor(TAGPU_PACKET* p)
 static TAGPU_PK_BUILD s_builds[TAGPU_PK_MAX_BUILDS];
 
 /* THE GHOSTS' PIECE MASKS: one row per type a ghost may be drawn for this
-   frame that hides a piece — the build cursor's type and every type in the
-   table above whose site is not started yet — sorted by type, because the
-   consumer binary-searches it per ghost. tagpu_datakeys computes each type
-   once a level, so a frame costs a pass over the builds and a cache hit per
-   distinct type. A type is taken ONCE through `s_gmSeen`, which is cleared
+   frame that hides a piece — the build cursor's type, every placement site's
+   and every type in the table above whose site is not started yet — sorted by
+   type, because the consumer binary-searches it per ghost. tagpu_datakeys
+   computes each type once a level, so a frame costs a pass over the sites and
+   the builds and a cache hit per distinct type. A type is taken ONCE through `s_gmSeen`, which is cleared
    again from the collected list rather than wholesale. */
 static TAGPU_PK_GHOSTMASK s_gmask[TAGPU_PK_MAX_GHOSTMASK];
 static unsigned           s_gmSeen[TAGPU_LIM_TYPES / 32];
@@ -2433,14 +2459,21 @@ static int gmask_type_cmp(const void* a, const void* b)
    thread's own test for drawing it (cursor mode 0x0E), so every packet the
    cursor ghost is drawn from carries that type's row, or the table's
    TAGPU_PK_TRUNC_GHOSTMASK bit, on which the ghost pass draws nothing. */
-static unsigned fill_ghostmask(TAGPU_PACKET* p, unsigned* cursor, int nb)
+static unsigned fill_ghostmask(TAGPU_PACKET* p, unsigned* cursor, int nb, unsigned nplace)
 {
-    static unsigned short types[TAGPU_PK_MAX_BUILDS + 1];
+    static unsigned short types[TAGPU_PK_MAX_BUILDS + 1 + TAGPU_PK_MAX_PLACE];
     unsigned nt = 0, nm = 0, k, over = 0;
     unsigned cur = p->cursor_mode == 0x0E ? p->build_unit_id : 0u;
     if (cur && cur < TAGPU_LIM_TYPES) {
         s_gmSeen[cur >> 5] |= 1u << (cur & 31);
         types[nt++] = (unsigned short)cur;
+    }
+    for (k = 0; k < nplace; k++) {
+        unsigned t = s_plScratch[k].type;
+        if (!t || t >= TAGPU_LIM_TYPES) continue;
+        if (s_gmSeen[t >> 5] >> (t & 31) & 1) continue;
+        s_gmSeen[t >> 5] |= 1u << (t & 31);
+        types[nt++] = (unsigned short)t;
     }
     for (k = 0; k < (unsigned)nb; k++) {
         unsigned t = s_builds[k].type;
@@ -2463,7 +2496,7 @@ static unsigned fill_ghostmask(TAGPU_PACKET* p, unsigned* cursor, int nb)
                         &p->off_ghostmask, &p->n_ghostmask, TAGPU_PK_TRUNC_GHOSTMASK);
 }
 
-static unsigned fill_builds(TAGPU_PACKET* p, unsigned* cursor)
+static unsigned fill_builds(TAGPU_PACKET* p, unsigned* cursor, unsigned nplace)
 {
     unsigned e, need = *cursor;
     int n = 0;
@@ -2486,7 +2519,7 @@ static unsigned fill_builds(TAGPU_PACKET* p, unsigned* cursor)
        that carries its type (a cut table sets its bit, and the ghost pass
        then draws nothing). What that costs a session with no ghost is one
        cached lookup a frame while a build is on the cursor. */
-    e = fill_ghostmask(p, cursor, n);
+    e = fill_ghostmask(p, cursor, n, nplace);
     if (e > need) need = e;
     return need;
 }
@@ -2647,7 +2680,7 @@ static uint32_t s_fillHead;
 static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
 {
     const char* ta = ta_main();
-    unsigned cursor = sizeof(TAGPU_PACKET), need = sizeof(TAGPU_PACKET), e;
+    unsigned cursor = sizeof(TAGPU_PACKET), need = sizeof(TAGPU_PACKET), e, nplace = 0;
     int L, T, W, H;
     (void)ctx;
 
@@ -2742,8 +2775,9 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
        world tables straight after them, and then the map's own features while
        the mirror is taking them -- the reserve holds all of those at the
        design point (tagpu_packet.c, PK_RESERVE) -- and what an overflow can
-       reach is what follows: the build orders, the replay's overlays, the
-       effects, the UI's render half, the font, and last the effects models' five tables, the one layer
+       reach is what follows: the placement's sites, the build orders, the
+       replay's overlays, the effects, the UI's render half, the font, and last
+       the effects models' five tables, the one layer
        an engine count can drive past the design point (fill_fxmodels). A
        frame below 1x without its fog grids is drawn bare, one without its
        unit tables drops its whole unit hand-over, and one without its
@@ -2774,8 +2808,12 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
        packets ---- */
     e = fill_mapfeat(p, &cursor);
     if (e > need) need = e;
+    /* ---- the placement's sites: 7 KB at most, before the builds table
+       because the ghost masks fill_builds writes cover the sites' types ---- */
+    e = fill_place(p, &cursor, &nplace);
+    if (e > need) need = e;
     /* ---- the build-orders table (the ghost pass) ---- */
-    e = fill_builds(p, &cursor);
+    e = fill_builds(p, &cursor, nplace);
     if (e > need) need = e;
     /* ---- the replay's overlays: 2 KB at most ---- */
     e = fill_overlay(p, &cursor);

@@ -585,6 +585,25 @@ static const char* frame_valid(const void* rec)
             if (ov[k].kind > TAGPU_PK_OV_CLICK || ov[k].player >= TAGPU_PK_OV_PLAYERS)
                 return "overlay item kind or player";
     }
+    /* the placement's sites: the marker pass sizes its bucket from the cap,
+       indexes gui_col with `colour`, projects `rect` with int arithmetic that
+       the coordinate bound keeps from overflowing, and the ghost pass takes
+       `type` as a model id, which every model id is bounded by */
+    if (!table_ok(p, p->off_place, p->n_place, sizeof(TAGPU_PK_PLACE))) return "place table";
+    if (p->n_place > TAGPU_PK_MAX_PLACE) return "more place sites than the table holds";
+    {
+        const TAGPU_PK_PLACE* pl = tagpu_pk_place(p);
+        unsigned k, c;
+        for (k = 0; k < p->n_place; k++) {
+            if (pl[k].colour != TAGPU_PK_PLACE_BLOCKED && pl[k].colour != TAGPU_PK_PLACE_OK &&
+                pl[k].colour != TAGPU_PK_PLACE_TOGGLE)
+                return "place site colour";
+            for (c = 0; c < 6; c++)
+                if (pl[k].rect[c] < -TAGPU_PK_PLACE_COORD || pl[k].rect[c] > TAGPU_PK_PLACE_COORD)
+                    return "place site coordinate";
+            if (pl[k].type >= p->udef_count) return "place site type";
+        }
+    }
     if (p->n_units && p->unit_slots && p->n_units > p->unit_slots) return "more units than slots";
     /* the publisher's own table caps, which the render thread sizes its
        per-frame arrays from -- a count past them is not a packet it wrote */

@@ -41,7 +41,8 @@
    layers' sub-particles — with the LHT ramp, the ALP/LHT capability bits and
    the whole 256-byte GUI colour LUT they need; the two fog grids; the UI
    layer's render half; and a playback's overlays, its recorded cursors and
-   clicks with each recorded player's colour. Every table has its `off`/`n` here. The acquire is
+   clicks with each recorded player's colour; and the sites a multi-building
+   placement previews. Every table has its `off`/`n` here. The acquire is
    tick-aware, so the two packets the consumer holds always span two distinct
    sim ticks. The effect tables' gather is CACHED PER SIM TICK in the
    publisher: the engine's two effect passes read their arrays and write
@@ -310,6 +311,28 @@ typedef struct TAGPU_PK_OVERLAY {
 #define TAGPU_PK_OV_CLICK     1u    /* a recorded click, as a ring that shrinks     */
 #define TAGPU_PK_MAX_OVERLAY  128u
 #define TAGPU_PK_OV_PLAYERS   10u   /* ov_col's rows and the players rsel names    */
+
+/* 28 B, one per site of a multi-building placement, at most TAGPU_PK_MAX_PLACE:
+   the sites that replace the build cursor's single square and its ghost this
+   frame (tagpu_place.c, on the game thread, copied BY VALUE). The layout is
+   tagpu_place.h's TagpuPlaceSite, which the publisher asserts field by field.
+   `rect` is 0x4197D0's build rectangle (x0, altitude, z0, x1, altitude, z1,
+   world px), data the marker pass projects as it projects the square. The
+   acquire bounds every coordinate to +-TAGPU_PK_PLACE_COORD, `colour` to the
+   three indices below and `type` under udef_count, so a consumer reads all
+   three as given. */
+typedef struct TAGPU_PK_PLACE {
+    int32_t  rect[6];
+    uint16_t type;            /* the UnitDef index the site's ghost draws       */
+    uint8_t  colour;          /* an index into gui_col: TAGPU_PK_PLACE_*        */
+    uint8_t  pad;
+} TAGPU_PK_PLACE;
+
+#define TAGPU_PK_PLACE_BLOCKED 0x04u   /* refused as a single click would be  */
+#define TAGPU_PK_PLACE_OK      0x0Au   /* placed: the engine's green           */
+#define TAGPU_PK_PLACE_TOGGLE  0x0Eu   /* removes a queued build instead       */
+#define TAGPU_PK_MAX_PLACE     256u
+#define TAGPU_PK_PLACE_COORD   0x100000  /* a world coordinate's sanity bound    */
 
 /* ---- THE EFFECTS AND THE PARTICLE LAYERS --------------------------------
    The engine's four per-frame effect arrays, copied by the thread that owns
@@ -617,6 +640,8 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_TRUNC_LHT     0x800u
 #define TAGPU_PK_TRUNC_FOG     0x1000u
 #define TAGPU_PK_TRUNC_FOGW    0x2000u
+#define TAGPU_PK_TRUNC_PLACE   0x4000u    /* the placement's sites did not fit:
+                                             they still replace the square   */
 #define TAGPU_PK_TRUNC_MM      0x8000u
 #define TAGPU_PK_TRUNC_MMPIC   0x10000u
 #define TAGPU_PK_TRUNC_BUILDS  0x20000u
@@ -964,6 +989,12 @@ typedef struct TAGPU_PACKET {
                                          rectangles take                        */
     uint8_t  ov_pad[2];
 
+    /* ---- the multi-building placement (tagpu_place.c) ---- */
+    uint32_t n_place, off_place;      /* PK_PLACE: the sites that replace the
+                                         build cursor's square and its ghost,
+                                         at most TAGPU_PK_MAX_PLACE; 0 when the
+                                         square stands (tagpu_pk_place_replaces) */
+
     /* ---- the effects and the particle layers ---- */
     uint32_t n_proj,   off_proj;      /* PK_PROJ,   the live projectiles        */
     uint32_t n_expl,   off_expl;      /* PK_EXPL,   the live explosions         */
@@ -1199,6 +1230,14 @@ static __inline const TAGPU_PK_GHOSTMASK* tagpu_pk_ghostmask(const TAGPU_PACKET*
 /* the replay's cursor and click overlay items, or NULL */
 static __inline const TAGPU_PK_OVERLAY* tagpu_pk_overlay(const TAGPU_PACKET* p)
 { return p->n_overlay ? (const TAGPU_PK_OVERLAY*)(const void*)((const unsigned char*)p + p->off_overlay) : (const TAGPU_PK_OVERLAY*)0; }
+/* the placement's sites, or NULL */
+static __inline const TAGPU_PK_PLACE* tagpu_pk_place(const TAGPU_PACKET* p)
+{ return p->n_place ? (const TAGPU_PK_PLACE*)(const void*)((const unsigned char*)p + p->off_place) : (const TAGPU_PK_PLACE*)0; }
+/* Do the placement's sites replace the build cursor's square and its ghost?
+   Also when their table was cut: the sites existed, and the square would
+   preview one building where the release lays several. */
+static __inline int tagpu_pk_place_replaces(const TAGPU_PACKET* p)
+{ return p->n_place != 0 || (p->truncated & TAGPU_PK_TRUNC_PLACE) != 0; }
 /* the map's own features, or NULL: see TAGPU_PK_MAPFEAT for when it rides */
 static __inline const TAGPU_PK_MAPFEAT* tagpu_pk_mapfeat(const TAGPU_PACKET* p)
 { return p->n_mapfeat ? (const TAGPU_PK_MAPFEAT*)(const void*)((const unsigned char*)p + p->off_mapfeat) : (const TAGPU_PK_MAPFEAT*)0; }
