@@ -1750,8 +1750,7 @@ counts the selected units other than the one under the pointer, returns when the
 (`0x48CFDF..0x48D011`), and asks the order resolver `0x43F0E0` per unit with the click's target
 and position (`0x48D0A0`). Stock leaves the byte armed when that set empties: when the selection
 dies (the frame check `0x4995C3` drops the tracked unit through `0x491D70(0)`, which writes
-neither byte), when a key recalls a group without such a unit (the keys' one writer of the byte
-is their cancel `0x495F36`), and when a button arms from a menu `0x491D70` left up because it
+neither byte), and when a button arms from a menu `0x491D70` left up because it
 deferred the drop (it only sets `0x37EBE` bit `0x10` while `0x37EBE & 0x865` or `0x2BEE & 0xE0`
 holds, `0x491D86..0x491DA2`). Every left press then goes to the order (`0x4993B6` → `0x498F70`)
 and orders nobody: a placement keeps its square and our build ghost on the pointer, and a command
@@ -1823,9 +1822,9 @@ the set is covered where it happens to be written:
   `0x4886A4`), to a local one after creating the receiver's (`0x488700`, the kill at `0x4887D0`).
 - **Loaded into a transport:** the unit keeps its slot; whether it stays in the set is the walk's
   own answer.
-- **A selection change while armed** (a group recalled by a key): the set is the new selection's.
-  Stock leaves the order armed over it, and a click orders the units that can take it; with
-  nobody, B9 disarms.
+- **A group recalled by a key:** stock disarms. The recall `0x48D9A0` ends in `0x495860`
+  (`0x48DBE2`), which writes the byte 1 whatever the mode (DISASSEMBLED and MEASURED 2026-10-25,
+  the engine map's *A build placement and the units it orders*), so B9 never sees that case.
 - **The deferred drop:** a button armed while the menu stays up for a dead unit arms with nobody
   to order, and the first check after the deferral's test clears disarms it (`0x499226` before
   the head reads the byte, or `0x49697B` before the frame runs the drop).
@@ -1834,9 +1833,9 @@ the set is covered where it happens to be written:
 **The group case** (a placement with several builders selected) was not reached in a run. With
 several units selected the engine tracks none (`main+0x37E9C` 0) and shows the generic orders menu
 `CORGEN.GUI`, whose `CORBUILD` tab is greyed — read back in the game with three CORCK selected
-through a click and two shift-clicks (`+0x110` bit `0x10` on all three). By the disassembly a
-key's group recall after arming from one builder reaches it (the keys leave the byte); the
-harness's recall of a `ctrl+1` group read back one unit selected of three. The predicate is the
+through a click and two shift-clicks (`+0x110` bit `0x10` on all three). A key's group recall
+cannot reach it, since the recall disarms (above); the harness's recall of a `ctrl+1` group read
+back one unit selected of three. The predicate is the
 click's own walk, so B9 matches stock whenever the case arises.
 
 *Verification* (single player, private Xvfb, one script invocation per run), on the final build

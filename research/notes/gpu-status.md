@@ -15,9 +15,9 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5
 
 The [28-row QoL audit](tadr-port/quality-of-life.md) compares current Impure functions with the
 actual DLLs and opt-ins shipped by supported mods. Our build ghosts/`PreviewPieces`, health/
-group/order/range markers, world zoom, HUD scaling and replay playback/seeking already cover
-part of the interface. Native snapping, queue editing, construction controls and allied panels
-remain missing. Escalation/Twilight ship rotation support but no checked content enables it; Escalation's
+group/order/range markers, world zoom, HUD scaling, replay playback/seeking and BAR-style line,
+rectangle and ring placement (§2.109) already cover part of the interface. Native snapping, queue
+editing, build spacing, construction controls and allied panels remain missing. Escalation/Twilight ship rotation support but no checked content enables it; Escalation's
 opponent-facing preview key remains unsupported. Newer development modules are distinguished
 from native bundle features. This is a documentation audit, not a new hook or engine write.
 
@@ -2065,6 +2065,9 @@ and [the engine map](exe-reverse-engineering.html#cob-guarded-runtime-integratio
 | `main+0x2CAA` | Resource input restores the repaired raw point, then writes the chosen manual snap point before `0x4197D0` computes its rectangle/flags. Game/input thread only; does not arm a command (§2.108) |
 | `0x51E684` / `0x51E688` | Site-test scratch: Quick preview/click queries save and restore both words. Manual placement leaves their normal native ownership (§2.108) |
 | Order nodes through `0x43ADC0`, `0x43AFC0`, `0x439F80` | Resource clicks append/replace build and reclaim orders through `0x43ADC0`; helpers use `0x43AFC0` for Guard; queued-plan cancellation removes exact nodes through `0x439F80`. No direct unit/grid mutation. Recorded and replayed by the existing recorder (§2.108) |
+| Order nodes through `0x439F80`, `0x43ADC0` (placement) | A multi-building gesture's commit, on the game thread inside the click routing: each site removes at most one node of the builder's own build action queued before the gesture (`0x439F80`, the chain re-walked after every removal), the rest are appended with Shift through `0x43ADC0`, under a 1024-node chain cap. No direct unit or grid write. Recorded and replayed by the existing recorder (§2.109) |
+| `main+0x2CC6` bit 5 | Set by the placement commit, only when it added or removed an order — `0x498FB4`'s own store after a Shift-click, so releasing Shift disarms as after one (`0x4992D8`). Game thread, inside the in-play handler (§2.109) |
+| `0x51E684` / `0x51E688` (placement) | The site test's scratch, saved before and restored after each loop of per-site tests (§2.109) |
 | `profiles/*.ini`, per-mod resource keys in `impure.cfg` | Missing general profiles are created at attach; existing files preserved. Complete validated rules publish on the game thread in menus, frozen for the match. Personal toggles/radius are independent and retain their saved values under locks (§2.108) |
 | Win32 HWND property `Impure.WindowLifetime`; `tagpu_window.c` | Window owner attaches a positive process-unique ID and destruction subclass before proxy subclassing. Survives final DirectDraw Release; removed before engine WM_DESTROY. The ID counter saturates rather than wrapping. No engine field is written (§2.107) |
 | Vulkan `s_ownerGeneration`, `s_ownGone`, lane state | Bound and destroyed generation IDs published with Interlocked operations; a delayed old-window notification cannot veto its replacement. Ready GPU objects transfer between joined renderers; the window owner tears down only after joining the active renderer, or after final Release already joined it. An unfinished worker retains its own cleanup (§2.107) |
@@ -2081,7 +2084,7 @@ and [the engine map](exe-reverse-engineering.html#cob-guarded-runtime-integratio
 | `main+0x2C76` / `+0x2C7A` | mouse position, two dwords (`+0x2C78` is the high half of x, not the y) — the x and y of the 6-dword record the dispatch fills. **WRITTEN by `vpw_mouse_world()` while the zoom transform is live** (§2.3d): the engine is polled with the true pointer now, so the unzoomed `u` is put back here, where `GetUnitAtMouse 0x48CD80` and the routing test at `0x469DE1` read it. Untouched at zoom 1, on the screen-space UI, and for a record that came off the event ring. **Local, but NOT inert:** all three fillers (`0x4999C4`, `0x4999E7`, `0x4999F9`) and our write sit inside one game-thread tick, before the first reader, so nothing races — but the readers include the order dispatchers `0x419BE0`/`0x41A490`, so a wrong value here becomes a wrong **replicated order**, not just a wrong highlight. That is why the ring test above has to be exact |
 | DrawChatText's frame local `[esp+0x14]`, the first message line's top | **WRITTEN, on the GAME thread inside `DrawChatText 0x464060`, by the stub at `0x4640D6`** (`chat_top_init`, `tagpu_replay.c`), in place of the engine's own store of `0x34`: `*tagpu_hudinput_chat_top()` for DrawGameScreen's call (return address `0x469FD0`), which is `0x34` unless the last frame drawn had the live HUD's strip, when it is the first engine row clear of the strip; `0x34` for the two other callers, `0x41F7A5` and `0x41F9D8`. The value is set at the hit map's take (`tagpu_hudinput_take`), in DrawGameScreen's hook before the draw, from a map whose HUD pass ran only (its `pass`), so a render frame with no prepare keeps the last drawn frame's verdict. A local of the call, so nothing outlives it; the engine's ring and its count are read only by the engine ([the HUD in game](hud-in-game.html), *The top layer*) |
 | `main+0x0DCB` | GUI colour byte array (`gui[i]` is an INDEX INTO this, not a palette index). `DrawGameScreen` caches it in a local at `0x468D49`/`0x468D51`, which is the `[esp+0x74]` the build-cursor block indexes |
-| `main+0x2CC3` / `+0x2CC6` | cursor/order mode byte and the mouse-region flags. Read only. The build-cursor draw keys off `0x2CC3 == 0x0E` (placement) or `0x2CC6 & 8` (band drag), and picks green vs blocked from `0x2CC6 & 0x40` |
+| `main+0x2CC3` / `+0x2CC6` | cursor/order mode byte and the mouse-region flags. Read only, but for the placement's bit 5 (above). The build-cursor draw keys off `0x2CC3 == 0x0E` (placement) or `0x2CC6 & 8` (band drag), and picks green vs blocked from `0x2CC6 & 0x40` |
 | `main+0x2C92`, `+0x2C96`, `+0x2C9A`, `+0x2C9E`, `+0x2CA2`, `+0x2CA6` | the build-cursor / band-box rect: two corners as (world x, altitude, world z) DWORDs. Read only, once a frame on the render thread, and projected with the engine's own baked `+0x80`/`+0x20` origin — **not** `main+0x37E27`'s L/T, which `vpwide` widens |
 | `main+0x1B63` (+ watched × `0x14B`) | PlayerStruct; `+0x67`/`+0x6B` its first/last unit pointer — the range the order-marker driver walks. Read only, game thread |
 | `main+0x37E9C` / `main+0x2CBA` | tracked / hovered unit id. Read only; with `viewStruct+0` (`CameraToUnit`) these are the three units the order-marker driver's selection rules key off |
@@ -21102,3 +21105,48 @@ what the engine reports, which may be shorter than an installed package version.
 Resource regression preflights also check Visuals Undo against raw per-mod preferences and
 refresh the engine catalogue for privately derived capability-refusal constructors. The
 no-zoom fixture exercises pristine conversion with both zoom and widening disabled.
+
+### 2.109 Several buildings in one gesture (`tagpu_place.c`, `tagpu_placegeo.c`) — 2026-10-25
+
+With a building armed, Shift + left-drag lays a line of it (Ctrl: held to the dominant axis),
+Shift + Alt a filled rectangle in serpentine order (Ctrl: hollow), and Shift + Ctrl over a unit, or
+over a queued build of a selected builder, a ring round it; the release with Shift held orders it.
+The shapes are BAR's (Recoil's `GetBuildPositions`) in TA build cells, ported to exact integers
+(`tagpu_placegeo.c`, engine-free, self-tested by `tests/placetest.py`). Behaviour, semantics and
+gaps: [quality-of-life](tadr-port/quality-of-life.html), *What Impure does*. The engine side: the
+engine map's *The placement's mouse path, and several buildings in one gesture*.
+
+| Seam | Mechanism |
+|---|---|
+| `0x4197D0` | **After-observer** (`tagpu_detour_observe` with a `before` that keeps the return address and an `after`), the same nine stolen bytes `83 EC 14 8B 15 E8 1D 51 00` as the resource module's before-observer, **chained after it and last on the site** (the chain rule, `tagpu_detour.h`): `tagpu_place_init` runs right after `tagpu_resource_init` (`dllmain.c`). After the engine has written the rectangle, the altitude and bit 6 for the current record, it evaluates the shape from the press site to the engine's cursor site and judges each site |
+| `0x4198C6`, `0x47C780`, `0x47D820` | Read at install: the `E8` at `0x4198C6` and its target, which is stock `0x47D2E0` or queued_site's `build_site_test`. Each site is judged by calling that target with the build cursor's own arguments, so a site is red exactly when a single click there would be refused; altitude from `0x47C780` (free) or `0x47D820` (refused). `0x51E684`/`0x51E688` saved and restored around every loop. A self-check compares the call's verdict at the cursor site with bit 6 (`place: mismatch`, counted at level end) |
+| `0x4993BF` | **12-byte route stub** (`E9 rel32` + seven `90`), written through `tagpu_detour_write` after all 22 bytes `0x4993BF..0x4993D4` match. `pushad`, `place_button(record copy, message)`, `popad`; 1 → the frame `0x4995B8` (a Shift press starts a gesture instead of placing; a release commits it), 2 → `0x4993CB`, stock's click on this record (a one-site gesture at the release cursor is stock's own Shift-click: its toggle, sound, recorded click and bit 5), 0 → the two original instructions |
+| `0x48CD80` | Called by the evaluation, with Shift and Ctrl held, for the ring's unit: the engine's hover query, which the handler skips in build placement; its answer is bounded as a unit slot |
+| `0x438760` | The two build actions `MOBILEBUILD` / `VTOL_MOBILEBUILD` by the engine's own name strings (`0x502654`, `0x502640`), as `0x419670` asks |
+| `0x439F80`, `0x43ADC0` | The commit (inside the click routing, where the stock click calls its root): per builder, each non-red site removes the first node of the builder's build action within 16 units that was queued before the gesture (`0x439F80`, re-walking after every removal, at most one per site), then every other non-red site is appended with Shift (`0x43ADC0`) while the builder's chain holds fewer than 1024 nodes |
+| `0x47F1A0` | `oktobuild` (`0x509660`) once a committed gesture that added or removed an order, as `0x498FA4` plays it per click |
+| `tagpu_packet_pub.c` → `PK_PLACE` | The sites copied by value (≤ 256 × 28 bytes: the build rectangle in `0x4197D0`'s layout, the type, the GUI colour index `0x0A` placed / `0x04` refused / `0x0E` toggles a queued build off). The acquire bounds the count, each colour, each coordinate (±`0x100000`) and each type (`< udef_count`). An overflow sets `TAGPU_PK_TRUNC_PLACE` (`0x4000`) and the square stays replaced |
+| `tagpu_mark.c`, `tagpu_native.c` (Vulkan) | The marker pass draws each site as the build square (its gate, projection, ±`0x100000` drop, normalise-then-inset; `square_gate`/`square_emit`, shared with the cursor's square) from a bucket of its own, and skips the one square; the ghost pass draws one build ghost per site instead of the cursor's. Counters: `mark: … place=N` under `tagpu_mark.on=log`, `ghost: … sites=N` |
+| `0x469EC5`, `0x469F1E` (GDI, `tagpu_markown.c`) | The existing redirect of the square's two `0x4BF8C0` calls draws each site's rectangle instead: the engine's rectangle moved by the site's offset from `main+0x2C92..0x2CA6`, so the projection and vpwide's widening stay the engine's. Needs `tagpu_markown.on` |
+
+**Threads and lifetimes.** All of the module's state is game-thread state, written and read inside
+the in-play handler and DrawGameScreen; the render thread sees only the packet's values. The unit
+array, the player's block, slots and def indices are bounded against their engine counts; every
+order-chain walk is bounded (16384) and stops at a node another unit owns; builders are held as
+slot indices and re-derived before every root call, and no node pointer survives `0x439F80`. The
+builder set is `0x419670`'s (selected, builder def) narrowed to alive, not excluded and owned; like
+`0x419670` it does not consult CANBUILD. A commit is capped at 4096 orders (sites × builders); the
+preview shows the cut shape. A puppet seat refuses every hook. `thread-split.allow` lists the file
+`publisher presentation` (the owner's decision).
+
+**Replay.** The module is presentation: it declares no simulation state, and a commit's effects are
+ordinary order nodes the recorder keeps. A one-site gesture goes through `0x4995B3` and records its
+click as stock's; a multi-site gesture records none. Its sound has the owner-approved
+`replay-absent.tsv` row `0x47F1A0 dll * absent` ([recorder
+completeness](tadr-port/demo-recorder-completeness.html)). Test group `place-basic`
+(`scenarios/place-basic.json`, `tools/place_regression.py replay`).
+
+**Open:** spacing and Build Split are not built; GDI shows the sites only with `tagpu_markown.on`
+(without it the engine's one square); the replay overlay shows no click for a multi-site gesture;
+no facing. The classification's toggle rule (yellow) is the module's reading of `0x43AFC0`, not
+the engine's call, and is checked only by the regression.

@@ -1,7 +1,7 @@
 # D. Quality-of-life coverage in supported mods
 
 Several conveniences enabled by native supported mods remain missing from Impure: placement and
-reclaim snapping, editing queued orders, line/ring construction, construction behavior controls,
+reclaim snapping, editing queued orders, build spacing, construction behavior controls,
 and allied information. Other gaps require a preference change, or belong to newer TADR builds
 that none of those mods bundles. **Rotation support ships with Escalation and Twilight, but no
 checked mod enables rotation in its unit definitions.**
@@ -53,7 +53,7 @@ listed as a deliberate port exclusion, not planned work.
 | Metal/geo placement snapping | **Yes** | M/P/T | Code present in M/P/Z/T; Z's gate disables it; E build disables support |
 | Reclaim cursor snapping to wrecks/features | **Yes** | E/M/P/T | Code present in all five; Z's gate disables it |
 | Drag queued build/move orders to edit positions | **Yes** | All | All |
-| Line/ring building, spacing and optimized DT rows | **Yes** | All; TA Hook placement gesture | All |
+| Line/ring building — **partial**: spacing and optimized DT rows; lines, rectangles and rings [are built](#what-impure-does) | **Yes** | All; TA Hook placement gesture | All |
 | Reclaim-only construction patrol on Hold Position | **Yes** | All | All |
 | Configurable assist-only construction patrol | **No by default** | E/P/T offer it; defaults are reclaim-only or both | E/P/T; absent M/Z |
 | Constructors stay put/scatter while guarding factories | **No by default** | E/P/T offer choices; defaults remain Cavedog behavior | E/P/T; absent M/Z |
@@ -101,7 +101,9 @@ is an Impure addition and is not evidence of another feature in any bundled TADR
 What BAR players call "shift-drag building" is two features in both games: **moving an order
 already in the queue**, and **laying out several buildings in one gesture** (line, box, ring,
 spacing). TADR and BAR each have both, but they split them differently. The biggest difference:
-**TADR can drag a queued building and BAR cannot.**
+**TADR can drag a queued building and BAR cannot.** Impure lays out lines, rectangles and rings
+as BAR does, with TA's own Shift-click rule for what a site does to the queue
+([What Impure does](#what-impure-does)); it does not move queued orders.
 
 Read from source on 2026-10-25: TADR
 [`v2026.8.6` `tahook.cpp`](https://github.com/tanvanman/TADR/blob/v2026.8.6/src/DDraw/tahook.cpp)
@@ -142,22 +144,109 @@ TADR: [`CalculateLine`](https://github.com/tanvanman/TADR/blob/v2026.8.6/src/DDr
 BAR: the engine's [`GetBuildPositions`](https://github.com/beyond-all-reason/RecoilEngine/blob/b988c729a7f570fa71c16feff9d54a354184c7f0/rts/Game/UI/GuiHandler.cpp#L2513)
 plus the BAR widgets named in the table.
 
-| | TADR (TA Hook key, default **X**) | BAR (Shift-drag, engine) |
-|---|---|---|
-| Gesture | Hold X with a build armed and click the start point. Each further click commits the segment and starts the next one there, so one hold lays a polyline. Releasing X drops the uncommitted segment | Shift + left-press with a build armed, drag, and release to commit |
-| Free-angle line | Yes, but it advances along the dominant axis by footprint + spacing and steps the other axis in 16 px cells (Bresenham), so a diagonal comes out as a staircase | Yes. The minor-axis step is proportional, and each site snaps to the build grid on its own |
-| Axis-locked line | No | Shift + Ctrl |
-| **Filled rectangle** | No | Shift + Alt, laid out in a serpentine order |
-| **Hollow rectangle** | No | Shift + Alt + Ctrl |
-| **Ring around a building** | Yes: hold X with the cursor over a unit. The ring sits outside its footprint, pushed out by the spacing. *Full rings* (on by default) adds the corner pieces for footprints up to 2×2 | Yes: Shift + Ctrl over a unit **or over a queued build**. Each side is turned to face the building (facings West/North/East/South on the right/bottom/left/top sides). Sites that would cancel an existing queued build are skipped. Spacing is not applied |
-| **Spacing** | X + PageUp/PageDown or X + wheel, 0..10 cells. One global value, with no on-screen readout | `buildspacing inc/dec`: Alt+Z / Alt+X in all four default keybind profiles, plus mouse buttons 4/5 ([Mouse Buildspacing](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/gui_buildspacing.lua)). No engine maximum; [Limit Build Spacing](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/cmd_limit_build_spacing.lua) clamps it to 16 |
-| Spacing remembered per building | No | Yes ([Persistent Build Spacing](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/cmd_persistent_build_spacing.lua)) |
-| Preview | A footprint rectangle at each site, coloured green/yellow/red by `TestBuildSpot`. The engine's own build rectangle is suppressed | The unit model at each site, tinted cyan (can build) or red, with its range circles |
-| Dragon's-teeth special case | *Optimized DT rows* (on by default) reorders the queue entries of a line of 2×2 pieces, swapping neighbours that share a row. Why that order helps is not established [INFERRED: the builder's path] | None |
-| Split across builders | No: each selected builder gets every site | [Build Split](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/cmd_buildsplit.lua) (Space): the sites are divided among the selected builders |
-| Insert instead of append | No | [CommandInsert](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/cmd_commandinsert.lua) (Space): before the current order, or between two orders |
-| Facing | Only in E/T's rotation module (Alt + wheel); no supported mod has rotatable content (see the rotation row above) | `[` / `]`. The ring also turns each side to face the building |
-| How sites are issued | One synthetic shift map-click per site, through the engine's own click handler | One build command per site, through the normal command path |
+| | TADR (TA Hook key, default **X**) | BAR (Shift-drag, engine) | Impure |
+|---|---|---|---|
+| Gesture | Hold X with a build armed and click the start point. Each further click commits the segment and starts the next one there, so one hold lays a polyline. Releasing X drops the uncommitted segment | Shift + left-press with a build armed, drag, and release to commit | BAR's: Shift + left-press with a building armed, drag, release with Shift held. A press without Shift places on the press as stock does; Shift released before the button drops the drag and keeps the building armed; a right press cancels as stock's does |
+| Free-angle line | Yes, but it advances along the dominant axis by footprint + spacing and steps the other axis in 16 px cells (Bresenham), so a diagonal comes out as a staircase | Yes. The minor-axis step is proportional, and each site snaps to the build grid on its own | Yes, BAR's: proportional minor axis, every site snapped as the build cursor snaps |
+| Axis-locked line | No | Shift + Ctrl | Shift + Ctrl |
+| **Filled rectangle** | No | Shift + Alt, laid out in a serpentine order | Shift + Alt, serpentine |
+| **Hollow rectangle** | No | Shift + Alt + Ctrl | Shift + Alt + Ctrl |
+| **Ring around a building** | Yes: hold X with the cursor over a unit. The ring sits outside its footprint, pushed out by the spacing. *Full rings* (on by default) adds the corner pieces for footprints up to 2×2 | Yes: Shift + Ctrl over a unit **or over a queued build**. Each side is turned to face the building (facings West/North/East/South on the right/bottom/left/top sides). Sites that would cancel an existing queued build are skipped. Spacing is not applied | Shift + Ctrl over a unit or over a selected builder's queued build: BAR's sites, unrotated. Sites that would take a queued build off are left out. No spacing |
+| **Spacing** | X + PageUp/PageDown or X + wheel, 0..10 cells. One global value, with no on-screen readout | `buildspacing inc/dec`: Alt+Z / Alt+X in all four default keybind profiles, plus mouse buttons 4/5 ([Mouse Buildspacing](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/gui_buildspacing.lua)). No engine maximum; [Limit Build Spacing](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/cmd_limit_build_spacing.lua) clamps it to 16 | No: neighbours touch. Planned: Alt+Z / Alt+X, which do nothing in stock play |
+| Spacing remembered per building | No | Yes ([Persistent Build Spacing](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/cmd_persistent_build_spacing.lua)) | Planned, saved in `impure.cfg` |
+| Preview | A footprint rectangle at each site, coloured green/yellow/red by `TestBuildSpot`. The engine's own build rectangle is suppressed | The unit model at each site, tinted cyan (can build) or red, with its range circles | TA's build square at each site, in its GUI colours: green placed, red refused as a single click there would be, yellow takes a queued build off. On Vulkan a build ghost at each site too. On GDI with `tagpu_markown.on` |
+| Dragon's-teeth special case | *Optimized DT rows* (on by default) reorders the queue entries of a line of 2×2 pieces, swapping neighbours that share a row. Why that order helps is not established [INFERRED: the builder's path] | None | None |
+| Split across builders | No: each selected builder gets every site | [Build Split](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/cmd_buildsplit.lua) (Space): the sites are divided among the selected builders | No: each selected builder gets every site (below: stock arms a building for one unit only) |
+| Insert instead of append | No | [CommandInsert](https://github.com/beyond-all-reason/Beyond-All-Reason/blob/9c250d7c561df89875aca3ae8d06fb8c0607b4c5/luaui/Widgets/cmd_commandinsert.lua) (Space): before the current order, or between two orders | No |
+| Facing | Only in E/T's rotation module (Alt + wheel); no supported mod has rotatable content (see the rotation row above) | `[` / `]`. The ring also turns each side to face the building | None: TA has no build facing |
+| How sites are issued | One synthetic shift map-click per site, through the engine's own click handler | One build command per site, through the normal command path | At the click's own place in the engine's mouse handler, through its order roots: TA's Shift-toggle per site, then the rest appended; one stock *ok* sound a gesture. A one-site gesture is stock's own Shift-click |
+
+#### What Impure does
+
+`tagpu_place.c`, with the shapes in `tagpu_placegeo.c`; the hooks are in
+[gpu-status §2.109](../gpu-status.md), the engine side in the [engine
+map](../exe-reverse-engineering.md), *The placement's mouse path, and several buildings in one
+gesture*. With a building armed, a left press that carries Shift starts a gesture instead of
+placing; the shape follows the cursor while the button is held, with the modifiers read live; the
+release with Shift held orders it.
+
+| Held at release | Shape |
+|---|---|
+| Shift | a line at any angle: the dominant axis steps by the footprint, the other proportionally, each site snapped as the build cursor snaps |
+| Shift + Ctrl | the same line, held to its dominant axis |
+| Shift + Alt | a filled rectangle, in serpentine order |
+| Shift + Alt + Ctrl | a hollow rectangle |
+| Shift + Ctrl over a unit, or over a queued build of a selected builder | a ring round it, unrotated; a press and release with no drag orders it |
+
+**What a site does to the queue is TA's Shift-click.** The gesture is the stock Shift-clicks of its
+sites, judged against each builder's queue as it stood before the gesture: a site within 16 world
+units of an order of the builder's own build action takes that order off and adds nothing — the
+first such order, whatever building it is, as the engine's own click does — and every other site
+is appended in the shape's order. Two things differ from clicking each site by hand, by design: a
+site never takes off an order the same gesture added (the engine's inclusive 16 units would make a
+line of 1×1 buildings alternate add and remove), and a ring leaves its taking-off sites out rather
+than ordering them. A site the engine's own test refuses is red and skipped: the module calls the
+call the build cursor judges its site with, so a gesture's site is refused exactly when a single
+click there would be, queued sites included. One stock *ok* sound plays per gesture that changed a
+queue, and releasing Shift afterwards disarms the building as after a stock Shift-click. A one-site
+gesture ending at the cursor is the stock Shift-click itself. A press without Shift places on the
+press as in stock; Shift released before the button drops the gesture and keeps the building armed;
+a right press cancels as in stock.
+
+**Preview, in TA's colours.** Each site is drawn as TA's build square in its GUI palette colour:
+green (`0x0A`) placed, red (`0x04`) refused, yellow (`0x0E`) takes a queued order off. On Vulkan a
+build ghost stands at each site too. On GDI the squares need `tagpu_markown.on` (a play default).
+
+**Who builds.** Every selected builder gets every site, as the stock click orders every selected
+builder (and, like it, without looking at its build list). Under stock input that is one unit: the
+interface arms a building only with exactly one unit selected (MEASURED 2026-10-25: ARMCK and ARMCV
+together, or two ARMCK, show `ARMGEN.GUI` with ARMBUILD greyed; one ARMCK shows `ARMCK1.GUI` with
+ARMBUILD enabled), and recalling a group disarms the building (the engine map's *A build placement
+and the units it orders*).
+
+**Limits.** At most 256 sites, and at most 4096 orders a gesture (sites × builders; the preview
+shows the shape cut to it). A builder's queue stops growing at 1024 orders, below the 4096 a
+recorded queue holds.
+
+**Replay.** A gesture's effect is ordinary order nodes, which the recorder keeps. The test group
+`place-basic` (`tools/replay/fixtures.json`, `scenarios/place-basic.json`: ARMCK and ARMMLV beside
+an ARMSOLAR on a flat part of Comet Catcher) commits a line, a rectangle, a hollow rectangle, a ring
+and a toggle (`tools/place_regression.py <instance> replay`). The gesture's sound is absent on a
+puppet: the owner-approved `replay-absent.tsv` row `0x47F1A0 dll * absent`.
+
+**Verified on the reference setup, 2026-10-25:**
+
+- `tools/place_regression.py --launch <instance> core`, on `place-basic.json`, passed cases (a)–(l):
+  a line of 5 ARMLLT; a diagonal; the Ctrl axis line; a 3 × 2 Alt rectangle in serpentine order;
+  a 4 × 3 hollow of 10 sites; the ring round the ARMSOLAR; a line across the solar with its 3 sites
+  there skipped; a line over a queued build that takes it off and adds the rest, and ARMMLV's line of
+  six 1 × 1 mines that adds six; a Shift-click without a drag (stock's toggle); a plain click (stock's
+  place and disarm); Shift released before the button (nothing ordered, still armed); a right press
+  mid-drag (nothing ordered, disarmed). Each builder's queue is compared with what the script
+  computes from its own port of the shapes (checked against the native one by `--selftest`) and
+  of the rule above. The level ended with `evals 253645, commits 9,
+  issued 60, removed 1, red 3, mismatch 0, plancap 0`: at every evaluation the module's verdict at
+  the cursor site agreed with the engine's own (bit 6), and no queue snapshot overflowed.
+- `preview`: the Vulkan marker pass drew 5 sites with a 5-site line held mid-drag.
+- Under `tagpu_gdi.on`, a held line and an Alt rectangle drew the engine's green square at every
+  site. The camera hold `tagpu_eye.txt` does not apply under GDI: it is applied from
+  `tagpu_overlay_draw`, which the GDI lane never calls (`tagpu_input.c`).
+
+**Not done, or open:**
+
+- **Spacing is not built**: neighbours touch. Planned: Alt+Z / Alt+X per building, which do nothing
+  in stock play (the engine map's *Alt+Z and Alt+X do nothing in play*), saved in `impure.cfg`.
+- **Build Split is not built, and its premise is open**: it divides the sites among several
+  selected builders, and the stock interface does not arm a building with more than one unit
+  selected (above).
+- GDI shows the sites only with `tagpu_markown.on`; without it the engine draws its one square.
+- A multi-site gesture leaves no click marker in the replay overlay; its orders replay exactly. A
+  one-site gesture records its click as stock's.
+- No facing: TA has no build facing, so a ring's sides do not turn as BAR's do, and BAR's ring
+  equals this one only for square footprints [INFERRED: a turned side swaps a non-square
+  footprint's sizes].
+- Not run in a network game. The yellow preview and the take-off rule are the module's reading of
+  the engine's toggle, checked by case (h), not the engine's own call.
 
 #### What each side is missing, for Impure's port
 
@@ -284,8 +373,9 @@ examined together rather than inferring absence from module names:
   `PreviewFaceOpponent`. COB getters 32 and 69–75 are [implemented](cob.md); those script getters
   do not implement the preview-key reader.
 - `tagpu_order.c` draws stock SHIFT orders/ranges/queued ghosts; `tagpu_resource.c` implements
-  manual mex/geo snapping and contextual Quick Build. Reclaim snapping, dragging, line/ring
-  placement, blocker kickout and other construction behavior controls remain unimplemented.
+  manual mex/geo snapping and contextual Quick Build; `tagpu_place.c` (2026-10-25) lays lines,
+  rectangles and rings ([What Impure does](#what-impure-does)). Reclaim snapping, dragging, build
+  spacing, blocker kickout and other construction behavior controls remain unimplemented.
 - `tagpu_mark.c` draws health/group markers, without reload bars or stockpile/transport counters.
   Team-coloured models and ghosts are separate from construction/reclaim effect colouring.
 - `tagpu_menu.c` exposes renderer/display and resource settings, without the other listed TADR options/panels.

@@ -10833,7 +10833,14 @@ is latched here, not in any `.GUI` gadget record. The frame packet carries it as
 **`0x4197D0` — who fills `0x2C92..0x2CA6`: the footprint snapped around the world point
 [DISASSEMBLED 2026-09-23; MEASURED the same day].** `cdecl()`, no arguments, `ret`. Two call
 sites, both behind "pointer on the world (`0x2CC6` bit 1) and mode `0x0E`": `0x499241` in the
-mode-6 mouse handler, right after `0x498DA0`, and `0x491CDB` inside `0x491CC0` (`ret 4`). It
+mode-6 mouse handler, right after `0x498DA0`, and `0x491CDB` inside `0x491CC0` (`ret 4`).
+`0x491CC0` itself has no `call` and no jump in `.text` and no absolute reference anywhere in the
+file [DISASSEMBLED 2026-10-25: an instruction-level scan and a scan for the four-byte literal], so
+in the engine `0x499241` is the one caller that runs; Impure's resource gate on `0x498F70` calls
+it once more before a mode-14 left click (`tagpu_resource.c`, `click`). **It is not
+re-entrant**: its only calls are the site test at `0x4198C6`, `0x47C780` (`0x4198F5`) and
+`0x47D820` (`0x4198FE`); stock `0x47D2E0` calls only `0x485010`, which calls nothing, and the other
+two call nothing, so nothing under it reaches either caller. It
 reads nothing about the screen — only the world point `main+0x2CAA` that `0x498DA0` just
 left there (x, y, z in 16.16) — so **the square follows the world point, and every question of
 where it lands relative to the pointer is a question about `0x498DA0`'s input and about where
@@ -10856,14 +10863,19 @@ return ok
 So the square's centre is within **8 world px** of the world point on each axis, at every zoom:
 that is the snap, and at 7.7× it is up to 62 screen px. Measured at 1920×1080 on `ARMSOLAR`
 (5×5 cells), the pointer's engine point at world x 1940: corners `1904..1984`, centre 1944. `0x47D2E0` is the site
-test (disassembled, *A queued site is taken ground*, below); `0x47C780` / `0x47D820` are the
-placement altitude for a valid and a blocked site *[INFERRED]* — neither was disassembled.
+test (disassembled, *A queued site is taken ground*, below); `0x47C780` is `mov eax,[0x51E684];
+ret`, the altitude the site test left in its scratch for a valid site, and `0x47D820` the
+altitude of a blocked one (both DISASSEMBLED; `0x47D820`'s walk is in the table of *Resource
+placement and contextual order contracts*).
 
 **A queued site is taken ground — `0x47D2E0`, the stamp `0x47CC30` and the click's orders
 [DISASSEMBLED 2026-09-29; MEASURED the same day].** The build cursor asks `0x47D2E0` (stdcall
 `(def, cell, 0, player)`, `ret 0x10`, the call at `0x4198C6`) and shows its answer as `main+0x2CC6`
 bit 6; a click on red plays `notoktobuild` (`0x509650`) and orders nothing (`0x498F86` →
-`0x499016`), on green `0x419670` issues the order. The test walks the footprint's cells and, per cell,
+`0x499016`), on green `0x419670` issues the order. The test is `0x498F86 test byte
+[main+0x2CC6],0x40 / je 0x499016`: bit 6 **set** means the site is free, and the click falls
+through to `0x419670` (`0x498F98`) and `oktobuild` (`0x509660`, `0x47F1A0` at `0x498FA4`); bit 6
+clear takes the refusal, which keeps the mode. The test walks the footprint's cells and, per cell,
 takes the def's yardmap byte (`def+0x14E`, `fx·fz` bytes, row-major): a byte with bit 2 or 4 whose
 cell's unit word (`+0x00`) is non-zero and not the caller's own id refuses the site (`0x47D54C..0x47D561`).
 That word is written by the stamp `0x47CC30` of a unit that exists, into the cells whose byte has bit 4
@@ -10877,15 +10889,25 @@ What a click orders, for the queue's sake. `0x419670` orders each unit of the co
 (`main+0x2A42`) that is selected (`+0x110` bit 4) and whose def has `+0x241` bit 6, with the action name
 `MOBILEBUILD` (`0x502654`) or, when the def's `+0x241` bit 11 is set, `VTOL_MOBILEBUILD` (`0x502640`),
 through `0x438760` and `0x43AFC0`; the position is `((2·cx + fx) << 19, alt << 16, (2·cz + fz) << 19)`
-with `cx`, `cz` the footprint's first cell. `0x43AFC0` with Shift (the click's `+8` bit 2, the mouse
+with `cx`, `cz` the footprint's first cell. Those two flag tests (`0x419755`, `0x41976A`) are the
+only tests of a unit in `0x419670..0x4197C2`: **no alive (`+0x110` bit 28) or excluded (bit 14) test
+and no CANBUILD test**, so every selected builder of the block gets the order whatever its build
+list [DISASSEMBLED 2026-10-25]. Under stock input that set is one unit: the interface arms a
+building only with exactly one unit selected — MEASURED 2026-10-25, ARMCK and ARMCV selected
+together, or two ARMCK, give `ARMGEN.GUI` with ARMBUILD greyed, one ARMCK gives `ARMCK1.GUI` with
+ARMBUILD enabled — and a group recall disarms (*A build placement and the units it orders*,
+below). `0x438760` finds the descriptor through `0x4F8A70`, the C runtime's case-insensitive
+compare (it tests the locale at `0x52A010` first, `0x4F8A7C`), so `MOBILEBUILD` matches the
+descriptor named `MobileBuild`. `0x43AFC0` with Shift (the click's `+8` bit 2, the mouse
 message's `MK_SHIFT`) first scans the unit's `+0x5C` list for a node of the same action whose x and z lie
 within ±`0x100000` (16 world units) of the new position (`0x43B00F..0x43B029`) and, on a match,
-destroys it instead of adding one; without Shift `0x43ADC0` destroys every order of the unit whose flags
-`+0x42` lack bit 4. The descriptors (`0x4FC6E8` family, `+0x0C` mask, `+0x11` flags): MobileBuild mask `0x13`
+destroys it instead of adding one (the full predicate and the `0x40000` case: *Contextual
+cancellation through the native order roots*); without Shift `0x43ADC0` destroys every order of the
+unit whose flags `+0x42` lack bit 4. The descriptors (`0x4FC6E8` family, `+0x0C` mask, `+0x11` flags): MobileBuild mask `0x13`
 flags `0x100508`, VTOL_MobileBuild `0x03` / `0x100508`, HelpBuild `0x18` / `0x100208`, BuildingBuild `0x00` /
 `0x10010C` (bit 4 set: a factory's queue survives the wipe), BuildWeapon `0x00` / `0x0C0140`. A factory's or
 a mobile factory's queue is count nodes made with a NULL position, which `0x43A0C0` zeroes (`0x43A14E`).
-`0x4C1B80(0xF9)` (stdcall, `ret 4`) is `GetKeyState(VK_SHIFT)` through the table at `0x4C1C48` (`0x4C1BB5`),
+`0x4C1B80(0xF9)` (stdcall, `ret 4`) is `GetAsyncKeyState(VK_SHIFT)` (IAT `0x4FC350`) through the table at `0x4C1C48` (`0x4C1BB5`),
 the modifier test of the order mode's release (`0x4992E6`) and of the menu's ±5.
 
 **The fix** (`build_site_test`, `tagpu_patches.c`, local): the call at `0x4198C6` goes to a wrapper that
@@ -10940,6 +10962,13 @@ otherwise:    0xF
 and the inner rect, `{l+1, t+1, r-1, b-1}`, re-tests `main[0x2CC3]` at `0x469EF4`: build mode
 reuses the same colour byte, anything else takes `gui[0]`. So build placement is a 2 px
 single-colour outline and the band box is white over black.
+
+**One square, or one per site.** While a multi-building placement previews several sites
+(`tagpu_place.c`, [gpu-status §2.109](gpu-status.html)), every site is drawn as this block draws
+its one square, in the site's GUI colour: on Vulkan the marker pass applies this gate and this
+projection to each site's rectangle; on GDI the redirect of both `0x4BF8C0` calls (`0x469EC5`,
+`0x469F1E`, `tagpu_markown.c`) draws, for each site, the engine's own rectangle moved by the
+site's offset from `main+0x2C92..0x2CA6`, so the engine's projection and inset stand.
 
 **`DrawTranspRectangle 0x4BF8C0`** — `stdcall(ctx, RECT*, colour) ret 0xC`. Two paths on
 `ctx == NULL` (`0x4BF8C6`): the null path fetches a global draw context through `0x4C5E70`
@@ -11169,8 +11198,26 @@ disassembly and re-measured: an up-left drag now diffs to 0 px against the engin
 (`0x4C1C48`, index bytes at `0x4C1C6C`); the SHIFT entry `0xF9` lands at `0x4C1BB5`, which is
 `push 0x10; call ds:0x4FC350` (`GetAsyncKeyState`) then **`and al,0xfe`** — masking off bit 0,
 the "pressed since last call" bit — before `neg ax; sbb eax,eax; neg eax` normalises to 0/1.
-All nine stubs in the `0x4C1BA1..0x4C1D56` block do the same mask, so nothing in the engine
+All eight key stubs (`0x4C1BA1..0x4C1C3E`) do the same mask, as does the keydown translator's own
+Ctrl poll at `0x4C1D56` (`0x4C1D5C`); the ninth entry, `0x4C1C41`, answers 0. So nothing in the engine
 reads the consumable bit and an extra poll of our own cannot steal an edge.
+
+**The ids [DISASSEMBLED 2026-10-25].** `id − 0x20` above `0xDB` answers 0 (`0x4C1B87`); the index
+bytes map exactly eight ids onto a key, the rest onto the zero entry: `0x20` SPACE, `0xF4`..`0xF7`
+LEFT, UP, RIGHT, DOWN, `0xF9` SHIFT, `0xFA` CONTROL, `0xFB` MENU (Alt). 17 direct callers. Every
+key goes to `GetAsyncKeyState` (IAT `0x4FC350`), so the answer is the key's state at the call, not
+the state carried by the message being handled; cnc-ddraw's `fake_GetAsyncKeyState` answers the
+input Impure injects.
+
+**Alt+Z and Alt+X do nothing in play [DISASSEMBLED 2026-10-25].** The keydown translator
+`0x4C1D50` (which takes `WM_SYSKEYDOWN` too, `0x4B5DC3`) pushes a letter lower-cased (`0x4C213D`),
+or as `letter + 0x69` with Ctrl held (`0x4C212D`); Alt changes nothing there. The in-game key switch
+`0x495E90` (index bytes `0x496694`, jump table `0x4965F4`) sends `z` and `x`, and `Z` and `X`, to its
+default `0x4965CE`, which calls the debug keys `0x4956C0(key)` (`gpu-status.md` §2.6f gates them
+on a puppet) only while `main+0x3923B` bit 1 is set [not traced further]. The GUI dispatch zeroes the key it
+hands its gadgets while Alt is down (`0x4AA219..0x4AA232`: `0x4C1B80(0xFB)`, then `not` and `and`),
+and the window procedure returns 0 for `WM_SYSCOMMAND` with `SC_KEYMENU` (`0x4B5D9C` → `0x4B5DFC`,
+`cmp eax,0xF100`), so the system menu never opens.
 
 ## The order-marker chain — mapped by us
 
@@ -12440,6 +12487,17 @@ differently on the input path (`gpu-status.md` §2.3d).
 | `0x4C2DE0(rec*)` | the same **without** advancing the tail — a peek. Returns 1 when it took a real ring entry, 0 when it fell back to `[obj+0x196]` |
 | `0x4C2340(rec*)` | copy 6 dwords **out of** `[obj+0x196]`, no ring, no poll. 5 call sites |
 
+**After a press, IdleTick re-reads the move made before it.** With the ring empty, IdleTick's peek
+and pop copy `[obj+0x196]` (`0x4C2D73`, `0x4C2DF3`) into `main+0x2C76`, and only a later
+`WM_MOUSEMOVE` rewrites it (`0x4C2360` from `0x4B5EA4`). So once the press has been popped, every
+IdleTick until the pointer moves hands the in-play handler the move record from **before** the
+press, without `MK_LBUTTON` in its wParam. MEASURED 2026-10-25: `msg 0x200 wParam 0x4` (Shift
+alone) for a second with Shift and the left button held. The records' times cannot tell the two
+apart reliably: a move's (`0x4B5E70`), a press or release's (`0x4B5ED1`) and a double-click's
+(`0x4B5F1D`) are each `GetTickCount() · [obj+0xE8] / 1000` inline, `0x4B6340`'s formula, at 30 a
+second (`+0xE8` reads 30, *The scheduler, the clock and the test pacing*), and wrap short of 2^32; the placement
+module tells them apart by the record's identity (`tagpu_place.c`, `stale_move`).
+
 **The lParam unpack, per arm.** Each of the three arms above unpacks the position with the same
 two instructions, and they are the bytes `vpwide` patches to `MOVSX ECX,CX` / `SAR EAX,0x10`:
 
@@ -12695,7 +12753,7 @@ off `objdump` in this session unless a row says otherwise.]
 | `0x490B30` | `SetInputMode(mode)` *[INFERRED]*. Stores `mode` at `main+0x391F1` and installs the matching per-event handler into `main+0x391F5`, off a jump table at `0x490C14` (modes 0–7). 11 call sites. **Mode 6 is in-game** — the value a dozen sites elsewhere test for (`0x4289F1`, `0x45053A`, `0x476C75`, `0x476CA5`, `0x476E5B`, `0x478DB6`) | disassembly |
 | `0x499200` | the **mode-6 (in-game) mouse handler**: `rep movsd` six dwords from `main+0x2C76` onto the stack, `call 0x498DA0`, then choose and set the cursor. **No `call` site anywhere**: the 4-byte literal `0x00499200` occurs in the image only as the immediate of the two `mov dword [main+0x391F5],0x499200` stores at `0x490BC5` (mode 6’s arm) and `0x498455` | disassembly + a scan for the literal across all sections |
 | `0x498DA0` | mouse → world point, map cell and hovered feature. One call site, `0x499221` — the one `vpwide` redirects (`gpu-status.md` §2.3b) | disassembly |
-| `0x48CD80` | the unit-under-cursor lookup *[INFERRED]*; its return is stored as a WORD to `main+0x2CBA` at `0x499283`. **Not disassembled** — known only by that call site and by the field's live behaviour | call site + live read |
+| `0x48CD80` | `GetUnitAtMouse`, no arguments, `ret`; its return is stored as a WORD to `main+0x2CBA` at `0x499283`. Callers `0x491D18` and `0x499278`; **in build placement the handler skips it** (`0x499241` jumps past `0x499278`). It reads the dispatched point `main+0x2C76`/`+0x2C7A`. Inside the viewport rect `main+0x37E27` (`0x4B6720`) it walks the HotUnits ids (`main+0x1435F`, count `+0x14367`), skips a unit whose `+0xA6` is 0, hit-tests each through `0x48C6A0(unit, &point)`, ranks the hits by a key computed from the `+0x92` record's `+0x176`..`+0x17E` [the key's meaning not traced], and returns the winner's `+0xA8` word. Inside the minimap rect `main+0x142BB` it returns the id of the nearest 10-byte entry of `main+0x14363` (count `+0x1436B`) whose squared distance from the point is below 4. Otherwise 0. Its own stores go to its stack frame | disassembly, 2026-10-25 |
 | `0x48D220` | `CorretCursor_InGame(orderByte)` — returns the cursor index to show. Two call sites: `0x491D36` and `0x499297`. `ret 4` | name [CORPUS] (TADR, `tools/ta_symbols.txt`); body from disassembly |
 | `0x43E490` | the per-candidate cursor mapper: `(orderByte, candidate, hoveredUnit, &worldPos)` → cursor index, `ret 0x10`. **Exactly one caller, `0x48D3E4`**, and the literal `0x0043E490` appears nowhere in the image — no dispatch table, no indirect call | disassembly + literal scan |
 | `0x4AB400` | `SetUICursor(uiCtx, gafSequence)` — 12 call sites, of which **five are inside `0x499200`**: `0x4992C8` (the cursor block below) plus `0x499560`, `0x4995A3`, `0x49966D`, `0x4997F7` in its button handling | name [CORPUS]; call sites from disassembly |
@@ -13083,7 +13141,7 @@ record `main+0x1B63 + 0x14B·main+0x2A42`, units
 (`0x41975E..0x41976A`), through `0x438760` and `0x43AFC0` (`0x4197A4`, `0x4197A9`). The free clears
 bits 4 and 5 of `+0x110` (`0x486DE8`), so a freed unit leaves that set.
 
-The engine ends an order mode in five places, each writing `0x2CC3` = 1, clearing `0x2CC6` bit 5
+The engine ends an order mode in six places, each writing `0x2CC3` = 1, clearing `0x2CC6` bit 5
 (`0x20`, the order kept while a modifier is held; the release test is `0x4992D8`) and resetting
 the radio group of the menu's STOP gadget — `0x49FE60(menu, "STOP")` (the name at `0x502714`)
 finds it and `0x4A6A40` resets it: the right button `0x499110` (in `0x499100`, called at
@@ -13093,7 +13151,8 @@ handler `0x498F70`, after `0x48CF30` has issued the command at `0x499087`, for a
 `main+0x2CBE` below `0x11` other than `0x0F`; type `0x0F` hands the click to `0x48C7F0` and returns at `0x49903E`,
 and from `0x11` up it returns at `0x4990F6` unless `0x37EFA` is 1 and the byte 1), and the placement's
 own left click on a clear site `0x498FC0`, after `0x419670` has issued the build
-(`0x498F93..0x498FA4`). In both clicks a press whose record has `+8` bit 2 keeps the mode and
+(`0x498F93..0x498FA4`); and the helper `0x495860` (the write at `0x49586A`), whose six callers include
+the group recall (below). In both clicks a press whose record has `+8` bit 2 keeps the mode and
 sets the flag instead (`0x498FB4`, `0x499097`). A left click on a blocked site plays the refusal and keeps it
 (`0x499016`). `0x4958D7`, in `0x4958C0`, writes the byte too and is dead: `0x4958C0` has no
 caller and its address is stored nowhere; so is the setter `0x419BC0`, which stores its argument
@@ -13120,7 +13179,15 @@ always drop the unit**: when `0x37EBE & 0x865` or `0x2BEE & 0xE0` is set and the
 leaving the tracked unit and its menu up; the frame drops it later (`0x496986..0x4969C9`: through
 `0x41B2E0` once the flags clear, or by zeroing `0x37E9C` while they hold). Otherwise it clears
 `0x37E9C` (`0x491DA5`) and pops the GUI. The keys `0x495E90` write the byte only at their cancel
-`0x495F36`, so recalling a group leaves the placement armed over the new selection. **In stock a
+`0x495F36`, and **recalling a group disarms the placement**: the recall `0x48D9A0` (one caller,
+`0x495FFD` in the key switch) ends with an unconditional `call 0x495860` at `0x48DBE2` (every
+branch of the function rejoins before it; its one `ret` is `0x48DC10`), and `0x495860` writes
+`0x2CC3` = 1, clears `0x2CC6` bit 5 and resets the STOP radio as the cancels above do
+[DISASSEMBLED 2026-10-25]. MEASURED 2026-10-25: with a building armed for one ARMCK, `alt+3`
+recalled a group and `0x2CC3` went from 14 to 1. On that instance the plain digits were weapon keys
+(`main+0x37F07` bit 0 clear) and the groups went through Alt. `0x495860` has six callers
+(`0x48BDE6`, `0x48BF09`, `0x48C00A`, `0x48C11E`, `0x48D721`, `0x48DBE2`); the other five were not
+traced. **In stock a
 placement outlives the units it would order** — MEASURED 2026-09-26 with
 `tools/b6-tracked-death.sh` on main `8d033d1`: after the CORCK's death `0x2CC3` stayed `0x0E`
 and `0x2CC4` 246, and the square and our build ghost stayed on the pointer.
@@ -13177,6 +13244,78 @@ and the engine's deferred drop took the dead unit's menu down (`CORMAIN2.GUI` on
 (`0x488603`), sends it (`0x451DF0` at `0x488693`) and kills the unit at `0x4886A4` (`0x489BB0`)
 over `0x4885E9..0x4886A4`; to a local player it creates the unit for the receiver (`0x488700`)
 and kills the old one with 30 000 damage (`0x4887D0`). The capture reaches it at `0x4046C5`.
+
+### The placement's mouse path, and several buildings in one gesture [DISASSEMBLED + MEASURED 2026-10-25]
+
+What a build placement (order byte `0x0E`) does with one mouse record, in the order the in-play
+handler `0x499200` runs it, and where `tagpu_place.c` hooks it ([gpu-status
+§2.109](gpu-status.html)).
+
+**The record and the world point.** The head copies the six dwords of `main+0x2C76` to its stack
+(`0x499210..0x49921A`, `rep movsd` into `[esp+0xc]`) and passes the copy to `0x498DA0`
+(`0x499221`). `0x498DA0` reads only the copy's x and y, through `ebp` (`[ebp+0]`, `[ebp+4]`), and
+writes no dword through it; its own stores into the main block are `+0x2CC6` (the region bits),
+`+0x2C8E` (the cell, `0x498F2E`) and `+0x2CBC` (the feature, `0x498F5D`), and it hands `+0x2CAA` to
+`0x484B50` as the out-parameter for the world point (`0x498EF1`). Nothing between the copy and the
+build cursor writes `main+0x2C76`, so the record the build cursor's call sees and the copy the
+click routing hands on hold the same six dwords: an observer of `0x4197D0` can tell the record it
+evaluated by value. With region bit 1 and the byte `0x0E` the head calls `0x4197D0` (`0x499241`)
+and jumps to `0x4992CD`, past the hover query `0x48CD80` and the cursor choice `0x48D220`. The
+Shift-release test `0x4992D8` (bit 5 set and `0x4C1B80(0xF9)` up → the cancel at `0x4992FA`) runs
+next, on the same record, before the click routing.
+
+**The red test is the engine's own call.** The build cursor judges its site with whatever the
+call at `0x4198C6` targets — stock `0x47D2E0`, or `build_site_test` when queued_site is armed
+(`tagpu_patches.c`) — with the arguments `0x4198A0..0x4198C6` push: the def, the cell word, 0 and
+the controlled player's record `main + 0x1B63 + main[0x2A42] · 0x14B` (`0x4198BA`, `lea
+ecx,[ecx+eax*2+0x1b63]` with `ecx = main + p` and `eax = 165·p`). Its bit 0 becomes `0x2CC6` bit 6
+(`0x4198D1..0x4198E1`), the bit the click tests at `0x498F86`.
+
+**The click routing, byte for byte.** The message is the copy's fifth dword, `[esp+0x1C]`
+(`0x49939B`). A right press is taken first (`0x49939F` → `0x499100`, the cancel). Then:
+
+```
+0x4993B6  80 B9 C3 2C 00 00 01   cmp byte [ecx+0x2CC3],1
+0x4993BD  74 16                  je  0x4993D5            ; no order armed: the contextual path
+0x4993BF  81 FA 01 02 00 00      cmp edx,0x201
+0x4993C5  0F 85 ED 01 00 00      jne 0x4995B8            ; anything but a press: the frame
+0x4993CB  8D 4C 24 0C            lea ecx,[esp+0xC]       ; the handler's copy of the record
+0x4993CF  51                     push ecx
+0x4993D0  E9 DE 01 00 00         jmp 0x4995B3            ; call 0x498F70, the click
+```
+
+So **stock places on the press** (`WM_LBUTTONDOWN`) and ignores the moves, the release (`0x202`)
+and the double click (`0x203`, which Windows sends in place of the second press): each fails the
+`cmp` and goes straight to the frame. `0x4995B3` is `call 0x498F70`, the click's one call site
+(the demo recorder redirects it, `tagpu_recorder.c` `CLICK_LEFT_CALL`); `0x4995B8` is `call
+0x496790`, the frame, and reads no flag before it; nor does `0x4993CB` before its call. No branch
+in `.text` lands on `0x4993BF..0x4993D4` and no absolute reference in the file names an address
+there (an instruction-level scan and a literal scan, 2026-10-25).
+
+**Impure's two hooks** (`tagpu_place.c`, both on the game thread inside this handler, written at
+attach): an after-observer on `0x4197D0`, chained after the resource module's before-observer,
+which evaluates the gesture once the engine has written the rectangle, the altitude and bit 6
+for the record; and a 12-byte stub over `0x4993BF` (`E9 rel32` and seven `90`, written after all
+22 bytes above match) that asks the module about each press and release and takes one of three
+ways: consumed (to `0x4995B8`), stock's click on this record (to `0x4993CB`), or the two original
+instructions. The stub keeps every register (`pushad`/`popad`); only EFLAGS differ on the first
+two ways, and neither target reads a flag. What the commit then calls is the order roots of
+*Contextual cancellation through the native order roots* (`0x439F80`, `0x43ADC0`), the sound
+`0x47F1A0("oktobuild", 0)` and the bit-5 store of `0x498FB4`.
+
+**What the module reads for it.** `0x4C1B80` for Shift, Ctrl and Alt at each evaluation (the ids:
+*`KeyboardHotkeySampler 0x4C1B80`*); `0x48CD80` for the ring's unit, asked on the same record that
+the handler skipped it for; `0x438760` for the two build actions, with the engine's own names at
+`0x502654` and `0x502640`; each selected builder's order chain, bounded and owner-checked; the
+site test, `0x47C780` and `0x47D820` per site, with `0x51E684`/`0x51E688` saved and put back
+(`0x47C770` is `mov eax,[0x51E688]; ret`, called at `0x40A4D6`, `0x40A4E5` and `0x40A76A`, AI code
+that runs from the frame's ticks after the handler [INFERRED: not traced to the tick]). The record
+re-read after a press is the mouse object's (*After a press, IdleTick re-reads the move made
+before it*); the module recognises it by its six dwords.
+
+**Gaps.** The other five callers of the disarm `0x495860` were not identified, and `0x4956C0`'s
+debug keys were not traced (*Alt+Z and Alt+X do nothing in play*). The ranking key of `0x48CD80`'s
+hits is not established.
 
 ## The UI surfaces and their writers — mapped by us (Phase E, G15a, 2026-09-07)
 
@@ -19444,7 +19583,13 @@ the target comparison. With no match, `0x43B08A`..`0x43B09D` appends through `0x
 `[esp+0x24]`; a non-head removal sets `+0x42 & 0x10000` at `0x43B068`. The calls at
 `0x43B075` and `0x43B07B` destruct (`0x43A1F0`) and free (`0x4B4F20`) it, then return
 without creating an order. The root is used by manual placement `0x4197A9`, contextual orders
-`0x48D1F4` and the resource input path.
+`0x48D1F4` and the resource input path. A match flagged `0x40000` removes nothing and adds
+nothing: the node was found on the main chain, the unlink searches the `+0x60` chain for it, and
+the call returns at `0x43B054` (or `0x43B044` → `0x43B0A2` when that chain is empty)
+[INFERRED: a node is on one chain only]. **The consequence for repeated Shift-clicks**: the match
+is the first node of the action within ±16 inclusive, whatever its build type, so two 1×1 sites
+16 world units apart toggle each other, and a run of stock Shift-clicks along a line of 1×1
+buildings alternates add and remove [DISASSEMBLED 2026-10-25, `0x43AFC0..0x43B0A6`].
 
 The destructor calls the action handler with flags 2 at `0x43A21A` when node byte `+6 & 2`
 is set. Flags `+0x42 & 0x400000` run the native `StopMoving` script lookup/start at
@@ -19477,7 +19622,15 @@ proof. After reclaim removal no node pointer is used. Helpers' Guards remain int
 stdcall layout and `ret 28` as `0x43AFC0`. It constructs a `0x56`-byte node through
 `0x4B4F10`/`0x43A0C0` at `0x43ADC4`..`0x43ADF4`, preserves existing non-temporary work with
 Shift, and replaces removable work without Shift (`0x43AE02`..`0x43AE59`). The native temporary
-head cleanup and linking retain their normal descriptor flags (`0x43AE5B`..`0x43AFB1`). It does
+head cleanup and linking retain their normal descriptor flags (`0x43AE5B`..`0x43AFB1`). In
+detail [DISASSEMBLED 2026-10-25]: without Shift, and when the new node lacks `+0x42` bit `0x40`,
+every main-chain node lacking bit 4 is destroyed; then, on every call unless the new node has
+`0x40000`, the chain's head is destroyed while it carries `0x4000` (`0x43AE72..0x43AECE`). The new
+node gets `+0x42 |= 1`, and `|= 0x2000` without Shift (`0x43AEE7`). A node with `0x40020` is linked
+at the head of its chain (`+0x60` for `0x40000`, else `+0x5C`) and takes the old head's `0x4000`.
+Any other node gets `0x1000` and is linked **after the node carrying `0x1000`**, whose bit is
+cleared (`0x43AF84`), or at the tail when none does, or as the head of an empty chain
+(`0x43AFA4`). So consecutive appends land in call order, each after the one before. It does
 not run the mouse root's proximity toggle. New Quick reclaim/build orders use this root, ensuring
 that Shift can append a distinct adjacent site. Its 27 direct callers are `0x4029A5`, `0x402E5E`,
 `0x402EFA`, `0x403DC5`, `0x408064`, `0x4082B0`, `0x408421`, `0x408453`, `0x4085A1`, `0x4140F3`,

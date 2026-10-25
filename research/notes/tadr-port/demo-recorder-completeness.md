@@ -1046,6 +1046,15 @@ immediate-command click (`0x41A0F1` → `0x47F1A0("immediateorders", 0)`, return
 including Stop. The recording player's click is absent on puppets, as the console click already
 is. Command orders, reclaim/build effects and carried simulation state remain checked.
 
+The owner approved another on 2026-10-25: the multi-building placement's `oktobuild`
+(`tagpu_place.c`, its commit plays `0x47F1A0(0x509660, 0)` once a gesture that added or removed an
+order, as the stock click plays it at `0x498FA4`). The row is `0x47F1A0 dll * absent`: the
+recording player's own mouse, which a puppet host never makes. Its caller column `dll` matches
+every caller inside Impure's DLL, so the menu's and the Replays browser's sounds (`tagpu_menu.c`,
+`tagpu_replays.c`) fall under it too. The orders the gesture makes are recorded and checked; the
+test group that carries them is `place-basic` ([quality-of-life](quality-of-life.md), *What
+Impure does*).
+
 Resource fixtures may name a `preflight` command before the live recording: native frontend
 Undo assertions or an engine catalogue refresh for changed private test content. Its failure
 fails the fixture; the match is then recorded and checked through the usual L/P/R/Q lanes.
