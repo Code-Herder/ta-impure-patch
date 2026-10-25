@@ -19,6 +19,8 @@
   <label>Game <select id="mode"><option value="sp">single player (pauses)</option><option value="mp">multiplayer (keeps running)</option></select></label>
   <label>Detected mod <select id="mod"><option value="stock">Stock</option><option value="mayhem">Total Mayhem</option><option value="prota">ProTA</option>
     <option value="twilight">Twilight</option><option value="escalation">Escalation</option><option value="tazero">TA Zero</option><option value="unknown">unknown</option></select></label>
+  <label>Skin <select id="skin"><option value="plate">plate</option><option value="panels">panels</option><option value="slim">slim</option>
+    <option value="whitebox">whitebox</option></select></label>
   <label>Rewind button <select id="rewind"><option value="1">shown (live recorded skirmish)</option><option value="0">absent</option></select></label>
 </header>
 <div id="view">
@@ -29,33 +31,34 @@
       <div class="rd"><b>Energy</b><span id="e-v"></span><i id="e-f"><s></s></i><em id="e-r"></em></div>
       <div id="clock"></div>
       <div id="paused">PAUSED</div>
-      <button id="b-wiki" class="tb" title="Wiki">?</button>
+      <button id="b-wiki" class="tb" title="Wiki" data-part="wikibtn" data-glyph="i_wiki"><i class="gl">?</i></button>
       <button id="b-rewind" class="tb" title="Rewind">&#10226;</button>
       <button id="b-gear" class="tb" title="Impure settings">&#9881;&#xFE0E;</button>
     </div>
     <div id="capture"></div>
-    <div id="win" hidden>
-      <div class="wt"><span>Wiki</span><button id="wx" title="Close (Esc)">&#10005;</button></div>
+    <div id="win" hidden data-part="window">
+      <div class="wt">Wiki</div>
+      <button id="wx" title="Close (Esc)" data-part="close" data-glyph="i_close i_x"><i class="gl">&#10005;</i></button>
       <div class="wb">
-        <nav id="tree"></nav>
-        <ol id="demos"></ol>
+        <div class="pnl" data-part="panel"><nav id="tree" class="scr"></nav></div>
+        <div class="pnl" data-part="panel"><ol id="demos" class="scr"></ol></div>
         <section id="entry">
           <h2 id="e-title"></h2>
           <div id="e-sub"></div>
-          <div id="badge" hidden><i></i>Turned off in this mod</div>
+          <div id="badge" hidden data-part="badge"><i></i>Turned off in this mod</div>
           <div class="srow">
             <div id="bmenu" hidden></div>
-            <div id="sbox"><canvas id="stage"></canvas></div>
+            <div id="sbox" data-part="bezel"><canvas id="stage"></canvas></div>
           </div>
           <div id="caption"></div>
           <div id="keys"></div>
           <div id="ctl">
-            <button id="c-play" title="Play / pause"></button>
-            <button id="c-replay" title="Replay">&#10226;</button>
-            <span class="sp"><button id="c-x1">1&times;</button><button id="c-x2">2&times;</button></span>
-            <button id="c-try"></button>
+            <button id="c-play" title="Play / pause" data-part="button"></button>
+            <button id="c-replay" title="Replay" data-part="button">&#10226;</button>
+            <span class="sp"><button id="c-x1" data-part="button">1&times;</button><button id="c-x2" data-part="button">2&times;</button></span>
+            <button id="c-try" data-part="button"></button>
           </div>
-          <div id="text"></div>
+          <div class="pnl" id="p-text" data-part="panel"><div id="text" class="scr"></div></div>
         </section>
       </div>
     </div>
@@ -63,8 +66,9 @@
 </div>
 <p class="note">The game frame is the chosen resolution fitted into the browser, its canvases drawn at the resolution's own pixels; every
 length in the window is in units of the frame's height / 720. The window, its tree, the entry and its demos come from <code>art/wiki/</code>;
-what the stage shows comes from <code>sim.js</code>. URL switches: <code>res=</code>, <code>size=</code>, <code>mode=sp|mp</code>,
-<code>mod=</code>, <code>rewind=0|1</code>, <code>open</code>, <code>entry=</code>, <code>demo=</code> (from 1), <code>try</code>.</p>
+what the stage shows comes from <code>sim.js</code>; a skin's parts from <code>art/wiki/skins/</code>, the text styles from the replay
+HUD's <code>art/hud/layout.json</code>. URL switches: <code>res=</code>, <code>size=</code>, <code>mode=sp|mp</code>,
+<code>mod=</code>, <code>skin=plate|panels|slim|whitebox</code>, <code>rewind=0|1</code>, <code>open</code>, <code>entry=</code>, <code>demo=</code> (from 1), <code>try</code>.</p>
 <script src="sim.js"></script>
 <script src="wiki.js"></script>
 </body>

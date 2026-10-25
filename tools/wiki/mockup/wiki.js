@@ -18,7 +18,8 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
 
 /* ---- the state, from the URL; the URL is kept up to date so a view can be shared ---- */
-const S = { res: '1920x1080', size: 90, mode: 'sp', mod: 'stock', rewind: true, open: false, entry: null, demo: 0, try: false,
+const SKINS = ['plate', 'panels', 'slim', 'whitebox'];
+const S = { res: '1920x1080', size: 90, mode: 'sp', mod: 'stock', skin: 'plate', rewind: true, open: false, entry: null, demo: 0, try: false,
   playing: true, speed: 1, fold: new Set() };
 { const q = new URLSearchParams(location.search);
   if (RES.includes(q.get('res'))) S.res = q.get('res');
@@ -26,10 +27,11 @@ const S = { res: '1920x1080', size: 90, mode: 'sp', mod: 'stock', rewind: true, 
   if (q.get('mode') === 'mp') S.mode = 'mp';
   if (MODS.includes(q.get('mod'))) S.mod = q.get('mod');
   if (q.get('rewind') === '0') S.rewind = false;
+  if (SKINS.includes(q.get('skin'))) S.skin = q.get('skin');
   S.open = q.has('open'); S.entry = q.get('entry'); S.try = q.has('try');
   if (q.get('demo')) S.demo = Math.max(0, (+q.get('demo') || 1) - 1); }
 function syncURL() {
-  const q = new URLSearchParams({ res: S.res, size: S.size, mode: S.mode, mod: S.mod, rewind: +S.rewind });
+  const q = new URLSearchParams({ res: S.res, size: S.size, mode: S.mode, mod: S.mod, skin: S.skin, rewind: +S.rewind });
   if (S.open) { q.set('open', ''); if (S.entry) { q.set('entry', S.entry); q.set('demo', S.demo + 1); } if (S.try) q.set('try', ''); }
   history.replaceState(null, '', '?' + q.toString().replace(/=(?=&|$)/g, ''));
 }
@@ -102,11 +104,11 @@ function renderTree() {
     const p = `${path}.${i}`;
     if (n.entry) {
       const e = ENT[n.entry], title = e && !e.error ? e.title || n.entry : n.entry;
-      return `<li><div class="row leaf${S.entry === n.entry ? ' sel' : ''}${e && e.error ? ' missing' : ''}" data-entry="${esc(n.entry)}">`
+      return `<li><div class="row leaf${S.entry === n.entry ? ' sel' : ''}${e && e.error ? ' missing' : ''}" data-part="row" data-entry="${esc(n.entry)}">`
         + `<span class="dot">•</span><span>${esc(title)}</span>${locked(e) ? '<span class="lock" title="Turned off in this mod"></span>' : ''}</div></li>`;
     }
     const shut = S.fold.has(p);
-    return `<li><div class="row cat" data-fold="${p}"><span class="tw">${shut ? '▸' : '▾'}</span><span>${esc(n.title)}</span></div>`
+    return `<li><div class="row cat" data-part="row" data-fold="${p}"><span class="tw">${shut ? '▸' : '▾'}</span><span>${esc(n.title)}</span></div>`
       + (shut ? '' : walk(n.children, p)) + '</li>';
   }).join('') + '</ul>';
   el.innerHTML = walk(TREE.tree, 't');
@@ -117,7 +119,7 @@ function renderEntry() {
   $('#e-sub').textContent = e ? e.subtitle || '' : '';
   $('#badge').hidden = !locked(e);
   $('#demos').innerHTML = e && Array.isArray(e.demos) && e.demos.length
-    ? e.demos.map((d, i) => `<li data-demo="${i}"${i === S.demo ? ' class="sel"' : ''}><span class="n">${i + 1}</span><span>${esc(d.title || d.id)}</span></li>`).join('')
+    ? e.demos.map((d, i) => `<li data-part="row" data-demo="${i}"${i === S.demo ? ' class="sel"' : ''}><span class="n">${i + 1}</span><span>${esc(d.title || d.id)}</span></li>`).join('')
     : `<li class="none">${e ? 'No demos' : ''}</li>`;
   $('#text').innerHTML = err ? `<p class="err">${esc(err)}</p>` : e ? (e.text || []).map(p => `<p>${esc(p)}</p>`).join('') : '';
 }
@@ -362,7 +364,7 @@ function strip(v) {
   const ks = keysOf(v).join('+');
   if (ks !== shownKeys) {
     shownKeys = ks;
-    $('#keys').innerHTML = ks ? ks.split('+').map(n => `<span class="kc">${esc(KEYCAP[n] || n)}</span>`).join('<span>+</span>') : '';
+    $('#keys').innerHTML = ks ? ks.split('+').map(n => `<span class="kc" data-part="keycap">${esc(KEYCAP[n] || n)}</span>`).join('<span>+</span>') : '';
   }
 }
 
@@ -415,11 +417,150 @@ function buildMenu(v) {
   if (key === menuKey) return;
   menuKey = key;
   $('#bmenu').innerHTML = '<div class="h">Build</div>' + (opts.length
-    ? opts.map(t => `<button data-build="${esc(t)}"${t === cur ? ' class="on"' : ''}>${esc(t)}</button>`).join('')
-      + `<button data-build=""${cur == null ? ' class="on"' : ''}>none</button>`
+    ? opts.map(t => `<button data-part="button" data-build="${esc(t)}"${t === cur ? ' class="on"' : ''}>${esc(t)}</button>`).join('')
+      + `<button data-part="button" data-build=""${cur == null ? ' class="on"' : ''}>none</button>`
     : '<div class="e">Select a constructor</div>');
 }
 $('#bmenu').onclick = e => { const b = e.target.closest('[data-build]'); if (!b) return; picked = b.dataset.build || null; send({ build: picked }); menuKey = null; };
+
+/* ---- skins: the whitebox, or a kit of art/wiki/skins/<name>/ -- kit.json in art/hud/kit.json's format and its parts as
+   PNGs. GEOM places what each kit's window art leaves room for, in units: the title in its dark title groove (wt: left,
+   right, top, height), the close button centred in its close bay (wx: right, top, width, height), the body inside its
+   frame (wb), and how deep its panels' frame (pn) and its bezel's (bz) are, each [top, right, bottom, left]. MEASURED
+   2026-10-25 from each kit's window.png, panel.png and bezel.png at the kit's scale: the groove's and the bay's dark
+   spans across the title band, and the frames' inner edges where the face's tone begins; the body keeps 3 to 6 units
+   more off the frame (panels' title band has a lip under its groove). ---- */
+const GEOM = {
+  whitebox: { wt: [0, 22, 0, 20], wx: [0, 0, 22, 20], wb: [20, 0, 0, 0], gap: 0, pn: [0, 0, 0, 0], bz: [0, 0, 0, 0] },
+  plate: { wt: [9.1, 50.6, 7.1, 18.7], wx: [20.3, 9.5, 14, 14], wb: [32, 9, 8, 13], gap: 3, pn: [7, 12, 12, 8], bz: [6.7, 13.4, 8.2, 7.6] },
+  panels: { wt: [4.9, 26, 2.5, 15.6], wx: [6.7, 3.4, 14, 14], wb: [30, 9, 9, 10], gap: 3, pn: [4.5, 4.7, 3.3, 5.9], bz: [6.6, 13.8, 13.6, 14.1] },
+  slim: { wt: [2.6, 20.4, 2.4, 15.7], wx: [3.5, 3.2, 14, 14], wb: [23, 5.6, 5.6, 5.5], gap: 3, pn: [2.5, 2.6, 2.1, 2.5], bz: [4.1, 4.0, 3.7, 4.1] },
+};
+const KITS = {};                      // name -> { parts, img, light } once loaded
+function applySkin() {
+  const g = GEOM[S.skin], set = (n, v) => frame.style.setProperty(n, v);
+  frame.classList.toggle('kit', S.skin !== 'whitebox');
+  ['l', 'r', 't', 'h'].forEach((k, i) => set('--wt-' + k, g.wt[i]));
+  ['r', 't', 'w', 'h'].forEach((k, i) => set('--wx-' + k, g.wx[i]));
+  for (const n of ['wb', 'pn', 'bz']) ['t', 'r', 'b', 'l'].forEach((k, i) => set(`--${n}-${k}`, g[n][i]));
+  set('--gap', g.gap);
+  for (const el of document.querySelectorAll('[data-part]')) {
+    const cv = el.firstElementChild; if (cv && cv.classList.contains('skin')) cv.remove();
+    el._pk = null; el.style.removeProperty('--ink'); el.style.removeProperty('--shade');
+  }
+  if (S.skin !== 'whitebox' && !KITS[S.skin]) loadKit(S.skin);
+  sizeStage();
+}
+function loadKit(name) {
+  const base = `${ART}skins/${name}/`;
+  KITS[name] = { loading: true };
+  fetch(base + 'kit.json').then(r => { if (!r.ok) throw new Error(`skins/${name}/kit.json: ${r.status}`); return r.json(); }).then(async j => {
+    const parts = j.parts, img = {}, light = {};
+    await Promise.all(Object.keys(parts).map(n => { const im = new Image(); im.src = `${base}parts/${n}.png`; img[n] = im; return im.decode(); }));
+    for (const n in parts) light[n] = faceLight(parts[n], img[n]);
+    KITS[name] = { parts, img, light };
+  }).catch(x => { console.error('wiki skin:', x); KITS[name] = { error: x.message }; });
+}
+/* a part's face is light when its middle (inside the slices) averages above a grey of 120: its text is then dark. 120 is
+   where dark ink (#1d1d1b) out-contrasts the HUD styles' light colours (about #e2dcb0) by more than the light text's
+   shadow makes up, put at 15 %: plate's window (114) keeps light text, panels' buttons (128) take dark */
+function faceLight(k, im) {
+  const w = im.naturalWidth, h = im.naturalHeight, [t, r, b, l] = k.slice || [h / 4, w / 4, h / 4, w / 4];
+  const c = document.createElement('canvas'); c.width = c.height = 8;
+  const g = c.getContext('2d'); g.drawImage(im, l, t, Math.max(1, w - l - r), Math.max(1, h - t - b), 0, 0, 8, 8);
+  const d = g.getImageData(0, 0, 8, 8).data; let s = 0, n = 0;
+  for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 128) { s += .3 * d[i] + .59 * d[i + 1] + .11 * d[i + 2]; n++; }
+  return n > 0 && s / n > 120;
+}
+/* A part drawn into a box of W x H pixels, px pixels a unit, by hud.js's rules: a nine-slice's edges kept at their size
+   in units (whole pixels, floored, never under one) unless the box is smaller than two opposite edges, when all four
+   shrink by one factor, its middle stretched; an xtile part's middle column one period of a seamless tile, repeated a
+   whole number of times at about its painted length (min 1), each row at its edge's scale; a whole part over the box;
+   an icon as large as fits, centred. Sampled bilinearly by the canvas, not texel for texel as hud.js's paint() does. */
+const copies = (len, period) => period > 0 ? Math.max(1, Math.round(len / period)) : 1;
+function drawPart(g, k, im, W, H, px) {
+  if (k.kind === 'icon') return drawIcon(g, im, W, H, 1);
+  if (k.kind !== 'nine') return g.drawImage(im, 0, 0, W, H);
+  const pw = im.naturalWidth, ph = im.naturalHeight, [st, sr, sb, sl] = k.slice, mw = pw - sr - sl;
+  const edge = v => v >= 1 ? Math.floor(v) : v > 0 ? 1 : 0;
+  let t = st / k.scale * px, r = sr / k.scale * px, b = sb / k.scale * px, l = sl / k.scale * px, f = 1;
+  if (l + r > 0) f = Math.min(f, W / (l + r));
+  if (t + b > 0) f = Math.min(f, H / (t + b));
+  t = edge(t * f); r = edge(r * f); b = edge(b * f); l = edge(l * f);
+  const dx = [0, l, W - r, W], dy = [0, t, H - b, H], sx = [0, sl, pw - sr, pw], sy = [0, st, ph - sb, ph];
+  let m = [1, 1, 1];
+  if (k.xtile) {
+    const ts = st > 0 && t > 0 ? t / st : 0, bs = sb > 0 && b > 0 ? b / sb : 0, ms = ts > 0 ? ts : bs > 0 ? bs : px * f / k.scale;
+    m = [ts > 0 ? ts : ms, ms, bs > 0 ? bs : ms].map(sc => copies(dx[2] - dx[1], mw * sc));
+  }
+  for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) {
+    if (!(dx[i + 1] > dx[i] && dy[j + 1] > dy[j] && sx[i + 1] > sx[i] && sy[j + 1] > sy[j])) continue;
+    const n = i === 1 ? m[j] : 1;
+    for (let e = 0; e < n; e++) {
+      const x0 = dx[i] + Math.round((dx[i + 1] - dx[i]) * e / n), x1 = dx[i] + Math.round((dx[i + 1] - dx[i]) * (e + 1) / n);
+      g.drawImage(im, sx[i], sy[j], sx[i + 1] - sx[i], sy[j + 1] - sy[j], x0, dy[j], x1 - x0, dy[j + 1] - dy[j]);
+    }
+  }
+}
+function drawIcon(g, im, W, H, f) {
+  const s = Math.min(W / im.naturalWidth, H / im.naturalHeight) * f, w = im.naturalWidth * s, h = im.naturalHeight * s;
+  g.drawImage(im, (W - w) / 2, (H - h) / 2, w, h);
+}
+/* every [data-part] box painted with its part at the resolution's pixels, again only when its part or size changes. A
+   pressed or active box (.on, .sel, .pressed) shows its _down part, a selected row row_selected; a box with data-glyph
+   gets the first of its icons the kit has, unless its part is a whole one with the glyph painted on. The box's text
+   ink follows its face: dark on a light face, the style's own colour on a dark one */
+function paintParts() {
+  const K = KITS[S.skin];
+  if (S.skin === 'whitebox' || !K || !K.parts) return;
+  const px = G.gh / 720;
+  for (const el of document.querySelectorAll('[data-part]')) {
+    const w = el.offsetWidth, h = el.offsetHeight; if (!w || !h) continue;
+    const base = el.dataset.part, alt = base === 'row' ? 'row_selected' : base + '_down';
+    const n = el.matches('.on, .sel, .pressed') && K.parts[alt] ? alt : base, k = K.parts[n]; if (!k) continue;
+    const W = Math.max(1, Math.round(w * G.k)), H = Math.max(1, Math.round(h * G.k)), key = `${S.skin}|${n}|${W}|${H}`;
+    let cv = el.firstElementChild;
+    if (!cv || !cv.classList.contains('skin')) { cv = document.createElement('canvas'); cv.className = 'skin'; el.prepend(cv); el._pk = null; }
+    if (el._pk === key) continue;
+    el._pk = key; cv.width = W; cv.height = H;
+    const g = cv.getContext('2d'); g.imageSmoothingQuality = 'high';
+    drawPart(g, k, K.img[n], W, H, px);
+    const gl = (el.dataset.glyph || '').split(' ').find(q => K.parts[q]);
+    if (gl && k.kind !== 'whole') drawIcon(g, K.img[gl], W, H, .6);
+    el.style.setProperty('--ink', K.light[n] ? '#1d1d1b' : 'initial');
+    el.style.setProperty('--shade', K.light[n] ? 'none' : 'initial');
+  }
+}
+document.addEventListener('pointerdown', e => { const b = e.target.closest('button[data-part]'); if (b) b.classList.add('pressed'); });
+window.addEventListener('pointerup', () => { for (const b of document.querySelectorAll('.pressed')) b.classList.remove('pressed'); });
+
+/* ---- text: each of the wiki's text roles in the replay HUD's style nearest it (art/hud/layout.json `styles`: face,
+   weight, size in units, colour, letter spacing, case, shadow or outline). The colour and the shadow give way to a
+   face's own ink (--ink, --shade) where the skin's face is light ---- */
+const ROLE = {
+  title: ['#win .wt', '#e-title'],                    // the window's title and the entry's: the stats window's title
+  header: ['#tree .cat'],                             // a category: the HUD's team header (and the picker's title)
+  name: ['#tree .leaf', '#demos li'],                 // an entry or a demo: a player row's name
+  num: ['#demos li .n'],                              // a demo's number: the HUD's numbers
+  window_foot: ['#e-sub', '#text'],                   // the subtitle and the body text: the stats window's foot, its one mixed-case style
+  toast: ['#caption'],                                // the caption, a line written at a moment: the HUD's toast
+  face_big: ['#ctl button'],                          // play, replay, 1x/2x, Try it yourself: the transport's labels and Take over replay
+  face_chip: ['#bmenu button', '#badge'],             // the build menu's buttons and the badge: the stats window's chips
+  face_num_sm: ['.kc'],                               // a keycap: a transport button's small label
+  label: ['#bmenu .h', '#bmenu .e', '#keys'],         // the build menu's heading, the keys strip's '+': the HUD's labels
+};
+fetch('../../../art/hud/layout.json').then(r => r.json()).then(L => {
+  const U = n => `calc(${n} * var(--u))`;
+  const css = Object.entries(ROLE).map(([n, sel]) => {
+    const s = L.styles[n];
+    const shade = s.outline ? (([a, b, c, d]) => [[a, b], [c, d], [a, d], [c, b]].map(([x, y]) => `${U(x)} ${U(y)} 0 #000`).join(','))(s.outline)
+      : s.shadow ? `0 ${U(s.shadow)} 0 rgba(0,0,0,.8)` : 'none';
+    return `${sel.join(', ')} { font-family: '${s.font}', sans-serif; font-weight: ${s.weight}; font-size: ${U(s.size)}; font-style: normal;`
+      + ` letter-spacing: ${s.spacing}em; text-transform: ${s.upper ? 'uppercase' : 'none'}; color: var(--ink, ${s.colour});`
+      + ` text-shadow: var(--shade, ${shade}); }`;
+  }).join('\n');
+  const st = document.createElement('style'); st.textContent = css; document.head.append(st);
+}).catch(x => console.error('wiki styles:', x));
 
 /* ---- the frame loop ---- */
 let last = 0;
@@ -431,6 +572,7 @@ function loop(t) {
     const v = draw(); strip(v); buildMenu(v);
     if (held() !== loop.held) { loop.held = held(); controls(); }
   }
+  paintParts();                       // last, so a keycap or button made this frame shows its part in it
   requestAnimationFrame(loop);
 }
 
@@ -441,10 +583,11 @@ $('#size').oninput = e => { S.size = +e.target.value; $('#sizev').textContent = 
 $('#mode').value = S.mode; $('#mode').onchange = e => { S.mode = e.target.value; syncURL(); };
 $('#rewind').value = +S.rewind; $('#rewind').onchange = e => { S.rewind = e.target.value === '1'; frame.classList.toggle('norewind', !S.rewind); syncURL(); };
 frame.classList.toggle('norewind', !S.rewind);
+$('#skin').value = S.skin; $('#skin').onchange = e => { S.skin = e.target.value; applySkin(); syncURL(); };
 $('#mod').value = S.mod; $('#mod').onchange = e => { S.mod = e.target.value; renderTree(); renderEntry(); syncURL(); };
 window.addEventListener('resize', layout);
 
-layout(); renderTree(); renderEntry(); controls();
+applySkin(); layout(); renderTree(); renderEntry(); controls();
 load().then(() => {
   if (S.entry && !(S.entry in ENT)) S.entry = null;
   if (S.open && !S.entry && TREE) S.entry = leaves(TREE.tree)[0] || null;
