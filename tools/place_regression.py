@@ -13,7 +13,7 @@ IN LOCKSTEP): tareplay's `run` step hands `replay` over at its GameTime; `core` 
 take `--launch`, which holds the run lock (tools/runlock.py), launches the instance with the
 launch's hold (tagpu_hold.on) on the scenario and stops it afterwards.
 
-The cases (core), each from builders with no build order, ARMCK and ARMCV selected unless named:
+The cases (core), each from a builder with no build order, ARMCK selected unless named:
   (a) a line of 5 ARMLLT; (b) a diagonal line; (c) Ctrl, the line held to its axis; (d) Alt, a
   3 x 2 rectangle in serpentine order; (e) Alt + Ctrl, a hollow 4 x 3 of 10 sites; (f) Shift +
   Ctrl on the ARMSOLAR, the ring round it; (g) a line across the solar, its 3 sites there
@@ -201,8 +201,12 @@ def mark_place_count(line):
 
 # -- driving the game -----------------------------------------------------------------------------
 
-PLACE_UNITS = {"ARMCK", "ARMCV", "ARMMLV", "ARMSOLAR"}
-BUILDERS = ("ARMCK", "ARMCV")
+PLACE_UNITS = {"ARMCK", "ARMMLV", "ARMSOLAR"}
+# One builder: the stock interface arms a building only for a single selected unit. With two or
+# more selected, of one type or several, the panel is ARMGEN.GUI with ARMBUILD greyed (MEASURED
+# 2026-10-25 on place1), and recalling a control group disarms: the recall 0x48D9A0 ends in
+# 0x495860 (0x48DBE2), which writes main+0x2CC3 = 1 and clears 0x2CC6 bit 5 (DISASSEMBLED).
+BUILDERS = ("ARMCK",)
 EYE = (1000, 5630)      # the scenario's flat plateau, cells 66..124 x 350..415 at height 55
 MAIN = "*0x511DE8"
 
@@ -612,7 +616,7 @@ def core(p):
 
 def replay(p):
     """The test group's gestures, on the queue each leaves: a line, a rectangle, a hollow, a ring
-    and a toggle, all on ARMCK and ARMCV, so the recording carries the orders of each and the
+    and a toggle, all on ARMCK, so the recording carries the orders of each and the
     builders work through them for the rest of the level."""
     p.hold()
     p.eye(*EYE)

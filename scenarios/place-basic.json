@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "Multi-building placement (tools/place_regression.py): ARMCK, ARMCV and ARMMLV beside an ARMSOLAR on Comet Catcher's plateau west of the centre, cells 66..124 x 350..415 all at height 55 with no feature but one at cell 111,379 (read from the map's TNT). The shapes are laid out north of the builders (rows 356..387), the ring round the solar. The commanders stay, so the seats keep their storage; the nearest start position lies over 1100 world units from the plateau.",
+ "description": "Multi-building placement (tools/place_regression.py): ARMCK and ARMMLV beside an ARMSOLAR on Comet Catcher's plateau west of the centre, cells 66..124 x 350..415 all at height 55 with no feature but one at cell 111,379 (read from the map's TNT). The shapes are laid out north of the builders (rows 356..387), the ring round the solar. The commanders stay, so the seats keep their storage; the nearest start position lies over 1100 world units from the plateau.",
  "seed": 20261025,
  "on_error": "abort",
  "setup": {
@@ -34,15 +34,6 @@
    "owner": 0,
    "pos": [
     1120,
-    6320
-   ]
-  },
-  {
-   "id": "vehicle",
-   "type": "ARMCV",
-   "owner": 0,
-   "pos": [
-    1220,
     6320
    ]
   },
