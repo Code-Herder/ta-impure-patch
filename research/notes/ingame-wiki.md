@@ -469,17 +469,20 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
 ## Open issues in the placement code
 
 Porting `tagpu_place.c` and `tagpu_placegeo.c` into `sim.js` turned up three behaviours of the
-game's placement that `tadr-port/quality-of-life.md` does not describe. They were found by reading
+game's placement worth stating; the first is the specified rule. They were found by reading
 and porting the code (the port matches `tagpu_placegeo.c` on 20 000 random cases); none has been
 reproduced in game yet. The sim mirrors the code as it is, so the Build Lines entry's demos route
 round them; when the code changes, `sim.js` and the demos follow it.
 
-1. **A Shift+Ctrl line drag turns into a ring over a unit or a queued build.** `evaluate()` asks
-   `ring_target()` first on every evaluation while Shift and Ctrl are held (`if (shift && ctrl &&
-   ring_target(...))`), so a straight-line drag whose cursor crosses any unit or queued build
-   previews a ring round it, and a release there orders the ring. Demo 3 routes its cursor round
-   the solar collector for that reason. To fix: decide ring or line once, from what is under the
-   press.
+1. **A Shift+Ctrl line drag turns into a ring over a unit or a queued build — by design.**
+   `evaluate()` asks `ring_target()` first on every evaluation while Shift and Ctrl are held, so a
+   line (or, with Alt, a hollow rectangle) whose cursor crosses any unit or queued build previews
+   a ring round it, and a release there orders the ring. That is the specified rule: the design
+   (`bar-placement-design.md` §2.2, "ring wins over line/rect when Shift + Ctrl and a target is
+   under the cursor, as in Recoil"), the approved lab mockup and Recoil's `GuiHandler`, which
+   takes the ring target from the live mouse ray, all do the same. Demo 3 routes its cursor round
+   the solar collector for that reason. Deciding the shape at the press instead is a change of
+   the rule, the owner's to make.
 2. **The yellow preview can promise more than the release does.** Dragging back over a queued
    row of 1 × 1 sites takes off every one only when the drag starts on the row: with 10, 11 and 12
    queued, a drag from 9 to 12 previews four yellow sites, and the release removes three, queues a
