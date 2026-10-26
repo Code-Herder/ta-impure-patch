@@ -404,18 +404,16 @@ static const char* FS =
        ground under it (tagpu_terr.c). EACH COPY OF THE MAP DRAWS ONLY IN ITS
        OWN COLUMNS, as the ground does: a turned copy is its source reflected,
        and a quad that reached across a fold would lay one copy's feature over
-       the next copy's reflection of it. And a copy of rows past the top or
-       bottom never draws on the map's own rows: there it would cover the map
-       -- a mirrored tree just south of the edge stands in FRONT of the last
-       rows by the painter's order -- or, in a corner, the side copy that is
-       the reflection of that map. vWorld is the sample's own point on the tile
+       the next copy's reflection of it. A copy past the top or bottom stands
+       upright and is drawn whole: a mirrored tree just south of the edge
+       reaches up over the map's last rows, in front of them by the painter's
+       order, as the forest it continues would. vWorld is the sample's own point on the tile
        grid (the gather moves the quad, not the point), and `s` is it moved to
        the ground's side of a fold (above). The hole is the base atlas's, as
        below. */
     "  if ((m & " FEAT_S(TAGPU_FEAT_MIRROR) ") != 0) {\n"
     "    float x0 = float((m >> " FEAT_S(TAGPU_FEAT_COPY_SHIFT) ") - " FEAT_S(TAGPU_FEAT_COPY_BIAS) ") * uMapPx.x;\n"
     "    if (s.x < x0 || s.x >= x0 + uMapPx.x) discard;\n"
-    "    if ((m & " FEAT_S(TAGPU_FEAT_OFFROW) ") != 0 && s.y >= 0.0 && s.y < uMapPx.y) discard;\n"
     "    vec4 mb = texture(uBase, vUV);\n"
     "    if (mb.a < 0.5) discard;\n"
     "    vec4 mt = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
@@ -425,18 +423,19 @@ static const char* FS =
     "  }\n"
     /* THE MAP'S OWN, IN THE MAP'S OWN COLUMNS while the mirror draws: past a
        side edge the picture is the map reflected, and a tree's overhang there
-       would cover the reflection of the tree itself. Past the top the copies
-       stand upright, not reflected, so the painter's order stands there and
-       the overhang is kept.
-       PAST THE ENGINE'S AREA ON THE RIGHT AND AT THE BOTTOM, NOTHING OF THE
-       MAP'S OWN DRAWS, under either edge. The engine's sweep reaches anchors
+       would cover the reflection of the tree itself. Past the top and bottom
+       the copies stand upright, not reflected, so the painter's order stands
+       there and the overhang is kept.
+       UNDER A BLACK EDGE, NOTHING OF THE MAP'S OWN DRAWS PAST THE ENGINE'S
+       AREA ON THE RIGHT OR AT THE BOTTOM. The engine's sweep reaches anchors
        in the strip between that area and the tile map (rows and columns up to
        the map's last but one), so a tree there would otherwise stand on the
-       mirror or on the black; clipping the pixel rather than dropping the
-       anchor keeps the part of such a tree that reaches up into the area,
-       which is what stock's viewport, cut at the same line, showed. */
-    "  if (uClip == 1 && s.x < 0.0) discard;\n"
-    "  if (s.x >= uMapPx.x || s.y >= uMapPx.y) discard;\n"
+       black; clipping the pixel rather than dropping the anchor keeps the part
+       of such a tree that reaches up into the area, which is what stock's
+       viewport, cut at the same line, showed. Under the mirror the anchor
+       loop drops those trees instead (draw_feature). */
+    "  if (uClip == 1 ? (s.x < 0.0 || s.x >= uMapPx.x)\n"
+    "                 : (s.x >= uMapPx.x || s.y >= uMapPx.y)) discard;\n"
     /* features are terrain furniture: the engine draws them under the fog
        overlay, so they stay visible in grey */
     TAGPU_GLSL_FOG_DISCARD
@@ -531,8 +530,7 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
                        int wax, int waz, int mode, float lam, int flip, int depth)
 {
     int b = s_bucketCur, w, h;
-    const int flipX = flip & 1, flipY = (flip & 2) != 0;
-    float x0, y0, x1, y1, c, ua, ub, va, vb;
+    float x0, y0, x1, y1, c, ua, ub;
     const TAGPU_GAFENT* e;
     if (depth > 4) return;                       /* sub-frame recursion guard */
     g = tagpu_gaf_frame_sane(g);
@@ -565,10 +563,9 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
     h = *(const unsigned short*)(g + TAGPU_GF_H);
     {
         int hx = *(const short*)(g + TAGPU_GF_HOTX);
-        int hy = *(const short*)(g + TAGPU_GF_HOTY);
-        x0 = (float)(sx - (flipX ? w - hx : hx));
-        y0 = (float)(sy - (flipY ? h - hy : hy));
+        x0 = (float)(sx - (flip ? w - hx : hx));
     }
+    y0 = (float)(sy - *(const short*)(g + TAGPU_GF_HOTY));
     x1 = x0 + (float)w; y1 = y0 + (float)h;
     if (x1 < (float)v->evpL || x0 > (float)(v->evpL + v->evw) ||
         y1 < (float)v->evpT || y0 > (float)(v->evpT + v->evh)) return;
@@ -580,10 +577,8 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
         if (!e) { if (s_atlas.deferN == dN) s_cAtlasFail++; return; }
     }
     c = (float)e->ck / 255.0f;
-    ua = flipX ? e->u1 : e->u0;
-    ub = flipX ? e->u0 : e->u1;
-    va = flipY ? e->v1 : e->v0;
-    vb = flipY ? e->v0 : e->v1;
+    ua = flip ? e->u1 : e->u0;
+    ub = flip ? e->u0 : e->u1;
     /* ONE TIE RULE FOR EVERY SPRITE, BY ITS OWN TEXEL GRID. The corners lie on
        whole game px, so a sample centre can fall exactly on a texel boundary --
        at the 0.25x floor every sample centre is a whole world px -- and there
@@ -610,19 +605,19 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
        stays the sample's own point for the fog lookup and the edge's clips. */
     {
         const float nu = TAGPU_EDGE_NUDGE_PX / (v->zoom > 0.0f ? v->zoom : 1.0f);
-        const float dx = flipX ? nu : -nu, dy = flipY ? nu : -nu;
-        x0 += dx; x1 += dx; y0 += dy; y1 += dy;
+        const float dx = flip ? nu : -nu;
+        x0 += dx; x1 += dx; y0 -= nu; y1 -= nu;
     }
     {   /* world position of each corner: the anchor plus the corner's offset
            from the projected anchor (screen px and world px are 1:1 here) */
         float wx0 = (float)wax + (x0 - (float)sx), wx1 = (float)wax + (x1 - (float)sx);
         float wz0 = (float)waz + (y0 - (float)sy), wz1 = (float)waz + (y1 - (float)sy);
-        put_vert(b, x0, y0, ua, va, c, mode, wx0, wz0, lam);
-        put_vert(b, x1, y0, ub, va, c, mode, wx1, wz0, lam);
-        put_vert(b, x0, y1, ua, vb, c, mode, wx0, wz1, lam);
-        put_vert(b, x1, y0, ub, va, c, mode, wx1, wz0, lam);
-        put_vert(b, x1, y1, ub, vb, c, mode, wx1, wz1, lam);
-        put_vert(b, x0, y1, ua, vb, c, mode, wx0, wz1, lam);
+        put_vert(b, x0, y0, ua, e->v0, c, mode, wx0, wz0, lam);
+        put_vert(b, x1, y0, ub, e->v0, c, mode, wx1, wz0, lam);
+        put_vert(b, x0, y1, ua, e->v1, c, mode, wx0, wz1, lam);
+        put_vert(b, x1, y0, ub, e->v0, c, mode, wx1, wz0, lam);
+        put_vert(b, x1, y1, ub, e->v1, c, mode, wx1, wz1, lam);
+        put_vert(b, x0, y1, ua, e->v1, c, mode, wx0, wz1, lam);
     }
 }
 
@@ -1053,8 +1048,8 @@ static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
        own draw puts it at (draw_feature's wax, waz) inside the engine's area,
        the test the anchor loop makes, so every feature the map shows has its
        copies and none it hides has one. A band above or below the map takes
-       only sources drawn below the map's top: one drawn above it has its copy
-       on the map's rows, which the fragment stage refuses anyway. */
+       only sources drawn below the map's top: one drawn above it would have
+       its copy's base on the map's rows. */
     {
         const int swax = m->col * 16 + hx, swaz = m->row * 16 + hz - m->lift;
         if (swax >= s_areaW * 16 || swaz >= s_areaH * 16 || (offRow && swaz < 0)) return;
@@ -1075,6 +1070,17 @@ static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
     shadSeq = *(const char* const*)(def + FD_SHADSEQ);
     bodySeq = *(const char* const*)(def + FD_BODYSEQ);
     animating = (mask & 2) != 0;
+    /* PROTOTYPE (variant 4): a copy above or below the map whose body would
+       reach across the map's border is not drawn */
+    if (offRow && bodySeq) {
+        const unsigned char* bg = tagpu_gaf_frame_sane(animating ? tagpu_gaf_state_frame(def + FD_BODYANIM)
+                                                                 : tagpu_gaf_seq_frame(bodySeq, 0));
+        if (bg) {
+            const int top = waz - *(const short*)(bg + TAGPU_GF_HOTY);
+            const int bot = top + *(const unsigned short*)(bg + TAGPU_GF_H);
+            if (waz >= 0 ? top < s_areaH * 16 : bot > 0) return;
+        }
+    }
     {
         /* WHOLE OR NOT AT ALL, as for the map's own (the gather's loop) */
         const int nSh = s_nv[B_MSHADOW], nBo = s_nv[B_MBODY];
@@ -1087,7 +1093,7 @@ static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
                 s_encCur = enc - (flat ? 0.03f : 0.3f);
                 emit_frame(v, g, sx, sy, wax, waz,
                            ((mask & 8) ? MODE_ALPHA : MODE_OPAQUE) | copy,
-                           1.0f, flipX | (flipY ? 2 : 0), 0);
+                           1.0f, flipX, 0);
             }
         }
         /* the engine gates both body paths on the static sequence pointer */
@@ -1098,7 +1104,7 @@ static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
                 s_bucketCur = B_MBODY; s_encCur = enc;
                 emit_frame(v, g, sx, sy, wax, waz,
                            ((mask & 4) ? MODE_ALPHA : MODE_OPAQUE) | copy,
-                           1.0f, flipX | (flipY ? 2 : 0), 0);
+                           1.0f, flipX, 0);
             }
         }
         if (s_atlas.deferN != dN) {
@@ -1163,7 +1169,6 @@ static void mirror_gather(const TAGPU_FXVIEW* v, const char* fdefs, int nDefs,
     const int s0 = c0 < t0 ? c0 : t0, s1 = c1 > t1 ? c1 : t1;
     /* the view, the gather's rect in world px */
     const int vx0 = v->eyeX + (v->evpL - v->vpL), vx1 = vx0 + v->evw;
-    const int vy0 = v->eyeY + (v->evpT - v->vpT), vy1 = vy0 + v->evh;
     int row;
     if (k->ucols <= 0 || k->ucols > MF_DIM || k->urows <= 0 || mapW <= 0 || mapH <= 0) return;
     for (row = k->ur0; row < k->ur0 + k->urows; row++) {
@@ -1187,12 +1192,6 @@ static void mirror_gather(const TAGPU_FXVIEW* v, const char* fdefs, int nDefs,
             const int band = bands[i], flipY = band & 1, offRow = band != 0;
             const int srow = flipY ? (band + 1) * mapH - 1 - row : row - band * mapH;
             int a0, a1, q;
-            /* A COPY THE VIEW CANNOT SHOW IS NOT EMITTED: the fragment stage keeps
-               every copy inside its own columns, and a band past the top or bottom
-               off the map's rows, so a copy whose region misses the view draws
-               nothing. The copies left are the ones whose sources the view holds
-               (mirror_key). */
-            if (band < 0 ? vy0 >= 0 : band > 0 && vy1 <= mapH * 16) continue;
             /* the table's bound: s_mfRow has a start for every row under s_mfH */
             if (srow < 0 || srow >= srcRows) continue;
             a0 = s_mfRow[srow]; a1 = s_mfRow[srow + 1];
@@ -1208,8 +1207,7 @@ static void mirror_gather(const TAGPU_FXVIEW* v, const char* fdefs, int nDefs,
                 /* THE MODE'S COPY FIELD IS BOUNDED BEFORE IT IS BUILT (tagpu_feat.h):
                    q + COPY_BIAS is in [0, 2 COPY_BIAS), so the mode stays under 2^15 */
                 if (q < -TAGPU_FEAT_COPY_BIAS || q >= TAGPU_FEAT_COPY_BIAS) continue;
-                copy = TAGPU_FEAT_MIRROR | (offRow ? TAGPU_FEAT_OFFROW : 0) |
-                       ((q + TAGPU_FEAT_COPY_BIAS) << TAGPU_FEAT_COPY_SHIFT);
+                copy = TAGPU_FEAT_MIRROR | ((q + TAGPU_FEAT_COPY_BIAS) << TAGPU_FEAT_COPY_SHIFT);
                 if (!turned) {
                     for (j = a0; j < a1; j++) {
                         const int scol = s_mf[j].col, col = base + scol;
