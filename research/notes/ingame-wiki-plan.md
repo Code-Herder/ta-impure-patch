@@ -263,6 +263,12 @@ by a test. GDI is [the reference for the original game](vulkan-only-plan.html), 
 and the rewind button already have nothing there. **The recommendation is no button on GDI**
 (question 1).
 
+**A kit the shell cannot draw is refused at its load, and at a frame too.** The art loader checks
+every part and style the shell's layout names in any state (`tagpu_wikiframe_check`), so a kit
+missing one never publishes and no button is drawn. Should a frame's layout refuse the kit all the
+same, the render thread publishes it (`tagpu_wikistate_refused`), and the fill closes the window as
+it does when the HUD's pass stops: the wiki is never open where it cannot be seen.
+
 ### Replay and simulation classification
 
 - **Every wiki file is `presentation`.** None is marked `sim`, and none declares `SIM_*` state. The

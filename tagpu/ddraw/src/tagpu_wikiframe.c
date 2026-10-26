@@ -171,3 +171,19 @@ int tagpu_wikiframe_build(const HUDLAY* kit, const WIKIFRAME* in, HUDOPS* out, H
     button(&c, in);
     return !c.bad;
 }
+
+int tagpu_wikiframe_check(const HUDLAY* kit, HUDOPS* scratch, char* err, size_t errn)
+{
+    /* every part and style build names is named in one of these: the button up and pressed, the
+       window with the close button up and pressed */
+    static const WIKIFRAME STATES[3] = {
+        { .W = 1280, .H = 720, .bar = 1 },
+        { .W = 1280, .H = 720, .bar = 1, .open = 1 },
+        { .W = 1280, .H = 720, .bar = 1, .open = 1, .x_down = 1 },
+    };
+    HUDRECT body;
+    int i;
+    for (i = 0; i < 3; i++)
+        if (!tagpu_wikiframe_build(kit, &STATES[i], scratch, &body, err, errn)) return 0;
+    return 1;
+}

@@ -31,4 +31,9 @@ typedef struct {
 int tagpu_wikiframe_build(const HUDLAY* kit, const WIKIFRAME* in, HUDOPS* out, HUDRECT* body,
                           char* err, size_t errn);
 
+/* The kit checked at its load, so a frame never refuses it: 1 when `kit` holds every part and
+   style tagpu_wikiframe_build names in any state, else 0 with the first missing one in `err`.
+   `scratch` takes the ops of the states tried. */
+int tagpu_wikiframe_check(const HUDLAY* kit, HUDOPS* scratch, char* err, size_t errn);
+
 #endif

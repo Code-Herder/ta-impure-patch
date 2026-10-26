@@ -62,6 +62,7 @@
 #include "tagpu_replay.h"
 #include "tagpu_log.h"
 #include "tagpu_wiki.h"
+#include "tagpu_wikistate.h"
 
 #define DUMP_ASK "tagpu_wiki.dump"
 #define DUMP_OUT "tagpu_wiki.json"
@@ -483,11 +484,16 @@ int tagpu_wiki_fill(TAGPU_PK_WIKI* w)
 {
     static unsigned calls;
     int cx, cy;
-    if (!tagpu_hudstate_on()) {
-        /* THE WIKI IS OPEN ONLY WHERE IT CAN BE SEEN AND CLOSED: the lane fell back to GDI or the
-           HUD's pass refused, so no frame will draw the window again */
+    if (!tagpu_hudstate_on() || tagpu_wikistate_refused()) {
+        /* THE WIKI IS OPEN ONLY WHERE IT CAN BE SEEN AND CLOSED: the lane fell back to GDI, the
+           HUD's pass refused, or the wiki's layout refused its kit, so no frame will draw the
+           window again */
         if (s_open) wiki_close("the wiki can no longer be drawn");
-        if (!s_saidOff) { s_saidOff = 1; tagpu_logf("wiki: not drawn - the replay HUD's pass is off"); }
+        if (!s_saidOff) {
+            s_saidOff = 1;
+            tagpu_logf("wiki: not drawn - %s", tagpu_wikistate_refused() ? "its layout refused the kit"
+                                                                          : "the replay HUD's pass is off");
+        }
         return 0;
     }
     memset(w, 0, sizeof *w);

@@ -15,7 +15,8 @@ static unsigned s_frame;                /* the render-thread frame s_ops is for 
 static float    s_px;
 static int      s_ox, s_oy;
 static int      s_open, s_ptr;          /* the record's: the window open, a pointer in the picture */
-static int      s_refused;              /* the layout refused the kit: said once, drawn never   */
+static volatile LONG s_refused;         /* the layout refused the kit: said once, drawn never;
+                                           read by the game thread (tagpu_wikistate_refused)    */
 static int      s_drew;                 /* this frame's layer was drawn                         */
 static TAGPU_CMD_WIKI s_map;
 static int      s_mapCut;
@@ -59,7 +60,7 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
     in.btn_down = w->btn_down;
     in.x_down = w->x_down;
     if (!tagpu_wikiframe_build(art->draw.lay, &in, &s_ops, &body, err, sizeof err)) {
-        s_refused = 1;
+        InterlockedExchange(&s_refused, 1);
         tagpu_logf("wiki: the shell's layout refused the kit (%s) - the wiki is not drawn this session", err);
         return;
     }
@@ -68,6 +69,11 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
     s_px = u;
     s_frame = f->frame_counter;
     s_have = 1;
+}
+
+int tagpu_wikistate_refused(void)
+{
+    return InterlockedCompareExchange(&s_refused, 0, 0) != 0;
 }
 
 int tagpu_wikistate_frame(unsigned frame, const HUDOPS** ops, float* px, int* ox, int* oy)

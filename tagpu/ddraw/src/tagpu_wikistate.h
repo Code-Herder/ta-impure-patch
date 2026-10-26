@@ -4,7 +4,7 @@
    viewport and the engine's frame at HUD scale, laid out by tagpu_wikiframe.c for tagpu_vk_hud.c
    to draw in the same frame; and the drawn frame's controls handed back in the command record.
 
-   RENDER THREAD, every entry point. It reads the packet's copy, the HUD scale's published word
+   RENDER THREAD, every entry point but tagpu_wikistate_refused. It reads the packet's copy, the HUD scale's published word
    (tagpu_hud_live) and the same frame's replay HUD state (tagpu_hudstate_frame), and names no
    engine memory. */
 #include "tagpu_hudlay.h"
@@ -32,6 +32,10 @@ void tagpu_wikistate_drawn(const HUDOPS* ops);
    pointer in the picture the UI layer's cursor stands at the frozen point, on the wiki button,
    which is not where the player's pointer is, so none is drawn. */
 int  tagpu_wikistate_cursor(unsigned frame);
+
+/* ANY THREAD: 1 once the layout has refused the kit, for the rest of the session -- no frame
+   draws the wiki again, so tagpu_wiki_fill closes the window and the button is gone. */
+int  tagpu_wikistate_refused(void);
 
 /* The command record's wiki part: the hit map of the last frame drawn. */
 void tagpu_wikistate_cmd(TAGPU_CMD_WIKI* out);

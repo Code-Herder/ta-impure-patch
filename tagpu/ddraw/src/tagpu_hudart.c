@@ -13,6 +13,7 @@
 #include "tagpu_hudtext.h"
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "tagpu_hudart.h"
+#include "tagpu_wikiframe.h"
 
 static volatile LONG s_started;
 static volatile LONG s_ready;           /* 1: s_art is complete; 2: the load failed */
@@ -163,7 +164,10 @@ static int parts(HUDART* a, const PARTS* at, char* err, size_t errn, double* mpx
 /* THE WIKI'S ART, after the HUD's on the same thread: its tree and entries (tagpu_wikidata.c) and
    its window's kit, kit/kit.json and kit/parts/ of WIKIPAK (tools/hudart/fit.py --set wiki). The
    kit's text is set in the HUD's faces and styles, so its HUDART shares the HUD's faces, which are
-   immutable once the HUD is published. A failure here is the wiki's alone: the HUD stands. */
+   immutable once the HUD is published. A failure here is the wiki's alone: the HUD stands.
+   THE KIT IS CHECKED WHOLE HERE, every part and style the shell's layout names in any state
+   (tagpu_wikiframe_check), so no frame can refuse it later: a kit that would leave the window open
+   but undrawn is refused before the button is ever drawn. */
 static void wiki_load(void)
 {
     char err[256];
@@ -174,6 +178,7 @@ static void wiki_load(void)
     DWORD t0 = GetTickCount();
     double mpx = 0;
     HUDLAY* lay = NULL;
+    HUDOPS* scratch = NULL;
     PARTS at;
     err[0] = 0;
     if (!(s_wiki.data = tagpu_wikidata_load_resource(err, sizeof err))) {}
@@ -184,6 +189,10 @@ static void wiki_load(void)
     else if (at.pak = wpak, at.npak = nwpak, at.dir = "kit/parts/",
              !(lay = tagpu_hudlay_load_kit(s_art.lay, kt, nk, png_size, &at, err, sizeof err))) {}
     else if ((s_wiki.draw.lay = lay), !parts(&s_wiki.draw, &at, err, sizeof err, &mpx)) {}
+    else if (!(scratch = (HUDOPS*)malloc(sizeof *scratch))) snprintf(err, sizeof err, "out of memory");
+    else if (!tagpu_wikiframe_check(lay, scratch, err, sizeof err) && !err[0])
+        snprintf(err, sizeof err, "the shell's layout refused the kit");
+    free(scratch);
     if (err[0]) {
         tagpu_logf("wiki: NOT loaded - %s", err);
         InterlockedExchange(&s_wready, 2);

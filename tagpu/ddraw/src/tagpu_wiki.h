@@ -53,8 +53,9 @@ int  tagpu_wiki_cursor_store(int x, int y, int outside, LONG* ax, LONG* ay);
 void tagpu_wiki_init(void);
 
 /* The packet's fill, game thread: 1 with the record while the wiki can be drawn -- in a level, on
-   the Vulkan lane, while the replay HUD's pass stands (tagpu_hudstate_on) -- else 0, and an open
-   window closes, so the wiki is never open where it cannot be seen or closed. */
+   the Vulkan lane, while the replay HUD's pass stands (tagpu_hudstate_on) and the wiki's layout has
+   not refused its kit (tagpu_wikistate_refused) -- else 0, and an open window closes, so the wiki
+   is never open where it cannot be seen or closed. */
 int  tagpu_wiki_fill(TAGPU_PK_WIKI* w);
 
 /* The command record's take: the hit map of the last frame the wiki was drawn on, copied, so a

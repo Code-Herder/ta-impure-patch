@@ -23,7 +23,8 @@
 #define TAGPU_CMD_WIKIHITS 160u     /* the hit map: every control a frame of the wiki draws   */
 
 /* What the wiki shows this draw. Present in a packet exactly while the wiki can be drawn: in a
-   level, on the Vulkan lane, while the replay HUD's pass stands (tagpu_hudstate_on). */
+   level, on the Vulkan lane, while the replay HUD's pass stands (tagpu_hudstate_on) and the
+   wiki's layout has not refused its kit (tagpu_wikistate_refused). */
 typedef struct TAGPU_PK_WIKI {
     uint8_t  open;              /* the window is open: the game takes no input              */
     uint8_t  btn_down;          /* the wiki button's press was taken and its release is owed */
