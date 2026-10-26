@@ -792,6 +792,11 @@ also extends: integrate in order. QUESTIONS batches A to D are 6e's inputs and d
 
 ## Questions for the owner
 
+**Answered 2026-10-26: the owner took every recommendation.** The loosenings of questions 2 and 3
+are approved (`tagpu_replays.c`'s argument grows by the mount-list copy; `tagpu_posebake.c`'s and
+`tagpu_render3do.c`'s arguments are reworded to cover their wiki copy), the tolerances of
+question 8 are accepted, and questions 1, 4 to 7 and 9 to 11 proceed on their recommendations.
+
 Each with the recommended answer. Questions 2, 3 and 8 are loosenings in CLAUDE.md's sense; the
 rest are design choices the specification leaves open. None is an escalation: every verification
 above can run, and no fix depends on timing.
