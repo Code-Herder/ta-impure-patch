@@ -12500,6 +12500,19 @@ apart reliably: a move's (`0x4B5E70`), a press or release's (`0x4B5ED1`) and a d
 second (`+0xE8` reads 30, *The scheduler, the clock and the test pacing*), and wrap short of 2^32; the placement
 module tells them apart by the record's identity (`tagpu_place.c`, `stale_move`).
 
+**That identity is dwords 2..5, never x and y.** `0x4C2360` is the only writer of the record's
+wParam, clock, message and double-click flag (`[obj+0x19E..0x1AD]`); its x and y are rewritten
+without them, on the game thread, by each drawing poll from `GetCursorPos` — `0x4C24F2`/`0x4C24F8`
+in `0x4C24B0`, `0x4C2624`/`0x4C262A` in `0x4C25E0`, `0x4C28C0`/`0x4C28C6` in `0x4C2870` [DISASSEMBLED]
+— and by vpwide's repair of `main+0x2C76` (`tagpu_vpwide.c`, `vpw_mouse_world_impl`). The other
+`+0x196` stores in the image (`0x42B52A..0x42B566`, `0x42C165..0x42C1E0`, `0x42CDC7`) are a struct
+copy and the weapon parser on other objects, not the mouse object. Zoomed, the two writers disagree:
+the move message carries the unzoomed position (`tagpu_zoom_mouse_lparam`), the poll the screen one,
+so a copy taken at the press and IdleTick's copy a frame later differ in x and y alone. MEASURED
+2026-10-25 on the reference setup at about zoom 0.35: `1573,1382` at the press, `1841,1185` after,
+the same clock `0x85E53`; a whole-record compare took 25 of 38 Shift-clicks for a lost release and
+ordered nothing.
+
 **The lParam unpack, per arm.** Each of the three arms above unpacks the position with the same
 two instructions, and they are the bytes `vpwide` patches to `MOVSX ECX,CX` / `SAR EAX,0x10`:
 

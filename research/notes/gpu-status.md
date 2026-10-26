@@ -21151,7 +21151,16 @@ click as stock's; a multi-site gesture records none. Its sound has the owner-app
 completeness](tadr-port/demo-recorder-completeness.html)). Test group `place-basic`
 (`scenarios/place-basic.json`, `tools/place_regression.py replay`).
 
-**Open:** spacing and Build Split are not built; GDI shows the sites only with `tagpu_markown.on`
+**A zoomed Shift-click.** Between the press and its release IdleTick hands the handler the move
+made before the press (the ring is empty), and the gesture ends on a move without the button that is
+not that one. The comparison skips x and y: zoomed, the cursor polls rewrite them in screen space
+under a move message that carried the unzoomed position (engine map, *After a press, IdleTick
+re-reads the move made before it*). Compared whole, 25 of 38 Shift-clicks at about zoom 0.35 lost
+their release and ordered nothing on the reference setup; none of 8 do with dwords 2..5 compared.
+Nothing else reproduced it: neither tacli's injected input nor X-level clicks on a private Xvfb
+display at zoom 0.35 and 0.6 (16 presses, none lost), so no regression case covers it.
+
+**Open:** Build Split is not built; GDI shows the sites only with `tagpu_markown.on`
 (without it the engine's one square); the replay overlay shows no click for a multi-site gesture;
 no facing. The classification's toggle rule (yellow) is the module's reading of `0x43AFC0`, not
 the engine's call, and is checked only by the regression.
