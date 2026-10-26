@@ -38,9 +38,13 @@ sp, in order:
       GameTime runs; an arrow held 1 s now moves the eye (the control for (d));
   (f) reopened, a press on the close button released over the ARMCK closes it and leaves the
       selection as it was;
-  (g) reopened on a world the test's own hold keeps paused (the wiki takes no pause then, and
-      gives none back), the level is ended with scenarios/replay-end.json: the log says the window
-      closed at the level's end, and an injected key reaches the engine's key ring in the front end.
+  (g) reopened on a world the test's own hold keeps paused (the wiki holds the pause it finds and
+      will give nothing back: `pause_was`), the level is ended with scenarios/replay-end.json: the
+      log says the window closed at the level's end, and an injected key reaches the engine's key
+      ring at the results screen.
+
+--shot PATH grabs the presented frame with the window open, at (b), for the owner: the whole
+window by its id on the instance's display (`import -window`, the ta-capture skill's window grab).
 recorded:
   (r) the button sits 3 bar pixels left of the rewind button (the two frames' hit maps); the rewind
       button opens the rewind and closes it; the wiki button opens the wiki and Esc closes it.
@@ -146,7 +150,9 @@ class Wiki(Check):
         return self.values(PAUSE)[0] & 1
 
     def eye_at(self):
-        return tuple(self.values(*EYE))
+        """The eye, signed: peek answers the dword unsigned, and the camera goes past the map's
+        north and west edges (the view centre stays on the map, gpu-status.md §2.3c)."""
+        return tuple(v - (1 << 32) if v >= 1 << 31 else v for v in self.values(*EYE))
 
     def selected(self, kind):
         return bool(self.values(f"0x{self.address(kind) + 0x110:x}")[0] & 0x10)
@@ -167,12 +173,18 @@ class Wiki(Check):
         return len(self.log)
 
     def settle_eye(self, x, z):
-        """The camera held at (x, z), or as near as the map's edge lets it come: the eye read until
-        two reads 0.5 s apart agree."""
+        """The camera held at (x, z), or as near as the map's edge lets it come. The hold is taken
+        at a later frame, so the eye is read until it reads (x, z); one the edge stops short of it
+        is taken once two reads 2 s apart agree after that wait."""
         self.call("eye", x, z)
-        last, end = None, time.monotonic() + 30
+        end = time.monotonic() + 15
+        while time.monotonic() < end:
+            if self.eye_at() == (x, z):
+                return (x, z)
+            time.sleep(0.2)
+        last, end = self.eye_at(), time.monotonic() + 30
         while True:
-            time.sleep(0.5)
+            time.sleep(2.0)
             now = self.eye_at()
             if now == last:
                 return now
@@ -227,7 +239,16 @@ def held_at(c, T):
     c.held = False
 
 
-def sp(c):
+def grab(c, path):
+    """The presented frame: the game window grabbed by its id on the instance's display."""
+    me = next(i for i in json.loads(tacli("ls", "--json")) if i["name"] == c.name)
+    r = subprocess.run(["import", "-display", me["display"], "-window", str(me["window"][0]), str(path)],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, f"import: {r.stderr.strip()}"
+    print(f"wiki: the open window grabbed to {path}")
+
+
+def sp(c, shot=None):
     held_at(c, HELD_AT)
     d = c.dump()
     vx, vy, vw, vh = d["viewport"]
@@ -260,6 +281,8 @@ def sp(c):
     assert not d["pause_was"], "(b) single player was paused before the wiki"
     c.once(c.paused(), "(b) the pause bit is clear with the window open")
     c.once(not c.runs(2.0), "(b) GameTime ran with the window open")
+    if shot:
+        grab(c, shot)
     print("wiki sp: (b) open; paused, GameTime stands")
 
     # (c) the margin's clicks, open
@@ -325,7 +348,7 @@ def sp(c):
     T = c.gametime() + 30
     start = c._pause_at(T)
     c._taken(T, start)
-    d = c.open_wiki(expect_pause=False)
+    d = c.open_wiki(expect_pause=True)
     assert d["pause_was"] == 1, f"(g) the wiki did not see the hold's pause: {d}"
     start = c.mark()
     tacli("scenario", "apply", c.name, END_SCENARIO, timeout=300)
@@ -338,10 +361,9 @@ def sp(c):
     while "ENDMSN" not in c.call("ui", "--json")["gui"].upper():
         assert time.monotonic() < end, "(g) the results screen never came up"
         time.sleep(1)
-    d = c.dump()
-    assert not d["open"] and not d["holds"], f"(g) the dump says open at the front end: {d}"
+    # no dump here: the fill runs on in-play frames only, and the log line above is the close
     ring = c.ring()
-    c.keys("k:a")
+    c.keys("a")
     c.once(c.ring()[0] != ring[0], "(g) an injected key did not reach the engine's key ring at the results screen")
     print("wiki sp: (g) the window closed at the level's end; the results screen takes keys")
 
@@ -489,6 +511,7 @@ def main():
     p.add_argument("--launch", action="store_true",
                    help="sp/recorded: launch on place-basic.json first, under the run lock")
     p.add_argument("--res", default="1920x1080", help="sp/recorded: the game's resolution")
+    p.add_argument("--shot", help="sp: grab the presented frame with the window open to this PNG")
     a = p.parse_args()
     t0 = time.monotonic()
     stop = None
@@ -500,7 +523,10 @@ def main():
                 stop = launched(a.instance, a.mode, a.res)
             c = Wiki(a.instance, {"ARMCK"})
             try:
-                {"sp": sp, "recorded": recorded}[a.mode](c)
+                if a.mode == "sp":
+                    sp(c, a.shot)
+                else:
+                    recorded(c)
             finally:
                 c.call("eye", "--release")
     except CHECK_FAILURES as e:
