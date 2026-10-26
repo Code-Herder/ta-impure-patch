@@ -821,11 +821,15 @@ of landings 3 and 4*). Track C, the stage offline, committed before it (`978ac43
   in the game; `wikilaycheck` pairs them as parts and now fails on any text set in the browser's
   fallback face.
 
-MEASURED 2026-10-25 on the development runs (the final runs: the verification below):
-`wiki_regression.py page` (p1)–(p6) passed; `demos`: all 21 `tagpu_wiki.check` hashes equal
-`simparity.mjs --hash`, the 21 demos played in 12 ms on the game thread; a demo ran 30.4 ticks a
-second at 1x and 60.2 at 2x; the open page cost the game thread at most 0.054 ms in one frame over
-2456 frames, against the plan's 0.5 ms.
+MEASURED 2026-10-26 on the merged branch (the review fixes included), on Wine under a private
+Xvfb: `wiki_regression.py` sp passed at 1920 × 1080 and at 3840 × 2160, its step (h) included,
+and page, recorded and mp passed. `demos` passed at both sizes: all 21 `tagpu_wiki.check` hashes
+equal `simparity.mjs --hash`, the 21 demos played to their ends in 12–13 ms on the game thread; a
+demo ran 30.4 ticks a second at 1x and 58.9 at 2x at 1920 × 1080, 30.0 and 55.8 at 3840 × 2160;
+the open page cost the game thread at most 0.063 ms in one frame over 2782 frames at 1920 × 1080
+and 0.197 ms over 1285 at 3840 × 2160, against the plan's 0.5 ms, and 0.018 ms on the mp host.
+The captures at both sizes, each entry with a demo paused mid-play beside the mockup at the same
+state, agree but for the game's own top bar. `tareplay.py landing` passed its 34 test groups.
 
 **What the player sees.** Selecting a demo plays it on the stage, as the mockup's whitebox:
 - the cells, metal, vents and fog;
