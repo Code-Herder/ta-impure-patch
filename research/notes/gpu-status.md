@@ -4515,9 +4515,13 @@ above, and nothing calls the wiki's copies yet.
   `tagpu_settings_ss`, `tagpu_user_top_bound`). MEASURED 2026-10-26 by planting a call to
   `tagpu_vk_shadow_prepare` in a wiki copy: `scene-check: src/tagpu_vk_world.wiki.o calls
   tagpu_vk_shadow_prepare, which a module of the game's world defines`.
-- **The game's path is the same code.** MEASURED 2026-10-26: six of the seven game objects are
+- **The game's path is unchanged.** MEASURED 2026-10-26: six of the seven game objects are
   byte-identical to the base commit's; `tagpu_posebake.o` differs only in that its scratch has
-  external linkage, which moves `.bss` offsets and one register choice.
+  external linkage, which moves `.bss` offsets and one register choice. On `tascene-parity`,
+  paused, the base commit's DLL and this one give byte-identical terrain, feature and unit
+  captures (`tacli ab`, each pass armed alone), and a presented window under the whole play set
+  that differs by 0 px below the message band (whose "forces obliterated" wording is random per
+  boot), the cursor's pulsing hotspot pixel aside.
 - **What it costs**, MEASURED 2026-10-26 with `size` and `objdump -h` on the i686 build:
   `ddraw.dll` 17 778 688 → 18 040 832 bytes (+262 144: `.text` +115 424, `.rdata` +126 592, the
   shaders' SPIR-V arrays included twice); `.bss` +363 296. The wiki objects' `.bss`:
