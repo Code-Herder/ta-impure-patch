@@ -5,10 +5,11 @@
    render thread. Design: research/notes/ingame-wiki-plan.md (*The design*, *Landing 2*); the
    specification is the mockup, tools/wiki/mockup/ (research/notes/ingame-wiki.md).
 
-   GAME THREAD, every entry point but two: the shield's two input paths and the window procedure
+   GAME THREAD, every entry point but four: the shield's two input paths and the window procedure
    TA pumps on that thread, the packet's fill, the command record's take and the teardown wrap's
-   entry. tagpu_wiki_holds_input and tagpu_wiki_frozen are the exceptions: any thread, the engine's
-   mouse thread among them, reads them through the polls (winapi_hooks.c). */
+   entry. tagpu_wiki_holds_input, tagpu_wiki_frozen and tagpu_wiki_cursor_store are any thread's,
+   the engine's mouse thread among them, through the polls (winapi_hooks.c); tagpu_wiki_init is
+   DllMain's. */
 #include <windows.h>
 #include "tagpu_wikipk.h"
 
@@ -36,10 +37,20 @@ int  tagpu_wiki_char(void);
 void tagpu_wiki_cancel(void);
 
 /* ANY THREAD. 1 while the wiki holds the input; then the polls answer a player who let go, and
-   GetCursorPos the frozen point, which tagpu_wiki_frozen gives (stored before the capture word,
-   so a reader that saw the word set reads the point of that open). */
+   GetCursorPos the frozen point, which tagpu_wiki_frozen gives as one pair, under the cursor lock
+   the open and the close store under. */
 LONG tagpu_wiki_holds_input(void);
 void tagpu_wiki_frozen(LONG* x, LONG* y);
+
+/* ANY THREAD: GetCursorPos's store of the live engine point (x, y) in g_ddraw.cursor, tested
+   against the capture word under the cursor lock, so the poll and the open are ordered: while the
+   wiki holds the input nothing is stored and the frozen point is the answer. `outside`: the
+   pointer is not over the picture, and the UI layer's point is forgotten with the store. The
+   answer goes to (*ax, *ay); 1 when the wiki held the input. */
+int  tagpu_wiki_cursor_store(int x, int y, int outside, LONG* ax, LONG* ay);
+
+/* DllMain's attach, before any DirectDraw object exists: the cursor lock. */
+void tagpu_wiki_init(void);
 
 /* The packet's fill, game thread: 1 with the record while the wiki can be drawn -- in a level, on
    the Vulkan lane, while the replay HUD's pass stands (tagpu_hudstate_on) -- else 0, and an open

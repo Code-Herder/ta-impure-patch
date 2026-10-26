@@ -167,11 +167,17 @@ go of every key and button and left the pointer where it was when the wiki opene
 - `GetAsyncKeyState` and `GetKeyState` answer 0 for every key;
 - `GetCursorPos` answers the game point of the opening press, and `g_ddraw.cursor` stays there.
 
-**Why this is an ordering.** The open and the close are each one interlocked store of the capture
-word, on the game thread, which is the window procedure's thread. Every poll, including the engine
-mouse thread's, comes before or after that store. Before it, a poll answers the live device; after
-it, the frozen one. Input given before the open reaches the game and input given after it does not,
-so there is no window to lose.
+**Why this is an ordering.** The open and the close are each one store of the capture word, on the
+game thread, which is the window procedure's thread. They are made under the wiki's cursor lock,
+together with the frozen point and, at the open, `g_ddraw.cursor`. `GetCursorPos` is the one poll
+that stores what it reads: the engine mouse thread calls it about every 33 ms, and it writes the
+live point into `g_ddraw.cursor`, which `tagpu_vpwide.c` hands the engine at zoom ≠ 1. So it tests
+the word and makes that store under the same lock (`tagpu_wiki_cursor_store`). A poll preempted
+between its read of the device and its store therefore either stores before the open, which then
+overwrites the point, or finds the word set and stores nothing. The frozen pair is read under the
+lock too, so a close and a reopen never mix two points. The key polls store nothing, so an
+interlocked read of the word orders each of them before or after the store. Input given before the
+open reaches the game and input given after it does not, so there is no window to lose.
 
 **What follows, each by construction:**
 - **No order, selection, hotkey, chat line or wheel notch** reaches the engine, in multiplayer as in
@@ -237,7 +243,7 @@ untouched: a pause steps nothing, as a Pause key steps nothing.
 
 | State | Owner | Written by | Read by |
 |---|---|---|---|
-| open, the opening point, the paired press and key, the pause taken | game thread (`tagpu_wiki.c`) | input hooks and the fill | the fill; the capture word and the frozen point are also read by **any thread**, through interlocked words |
+| open, the opening point, the paired press and key, the pause taken | game thread (`tagpu_wiki.c`) | input hooks and the fill | the fill; **any thread** reads the capture word through an interlocked read, and the frozen point, with `GetCursorPos`'s store, under the cursor lock |
 | entry, demo, folds, scroll, playing, speed, try | game thread | input hooks against the last drawn frame's hit map | the fill |
 | the `WIKISIM` and its clock | game thread | the fill (`step`) and Try-it input (`input`) | the fill, which copies its view |
 | the loaded wiki: `WIKIDATA`, the kit, the faces | published once by the art loader thread, then immutable and never freed | the loader | the game thread (the simulation) and the render thread (layout, text) |
@@ -467,9 +473,11 @@ The window closes on the X, on the wiki button, and on the release of Esc.
     `tagpu_place_key`, and `int tagpu_wiki_char(void)` for `WM_TAGPU_CHAR`.
   - `void tagpu_wiki_cancel(void)`, on `WM_KILLFOCUS`, `WM_CAPTURECHANGED` and `WM_ACTIVATEAPP`
     off: the paired press stays owed.
-  - `LONG tagpu_wiki_holds_input(void)` and `void tagpu_wiki_frozen(LONG* x, LONG* y)`: **any
-    thread**. Interlocked reads of the capture word and the opening point; the point is stored
-    before the word.
+  - `LONG tagpu_wiki_holds_input(void)`, `void tagpu_wiki_frozen(LONG* x, LONG* y)` and
+    `int tagpu_wiki_cursor_store(int x, int y, int outside, LONG* ax, LONG* ay)`: **any thread**.
+    An interlocked read of the capture word; the opening point as one pair, and `GetCursorPos`'s
+    store of a live point, both under the cursor lock the open and the close hold
+    (`tagpu_wiki_init`, at attach, makes it).
   - `int tagpu_wiki_fill(TAGPU_PK_WIKI*)`, `void tagpu_wiki_take(const TAGPU_CMD_WIKI*)` and
     `void tagpu_wiki_level_end(void)`.
   - The trigger `tagpu_wiki.dump` → `tagpu_wiki.json`: open, the pause taken, the hit map, the
@@ -507,7 +515,8 @@ The window closes on the X, on the wiki button, and on the release of Esc.
 - **`src/tagpu_shield.c`**: the four hooks above, and the cancel.
 - **`src/winapi_hooks.c`**: `fake_GetCursorPos`, `fake_GetKeyState` and `fake_GetAsyncKeyState`
   check the capture word first. While it is set, the cursor answer is the frozen point (no store
-  to `g_ddraw.cursor`) and every key reads 0.
+  to `g_ddraw.cursor`) and every key reads 0. `fake_GetCursorPos` makes its store through
+  `tagpu_wiki_cursor_store`, which tests the word again under the cursor lock.
 - **`src/tagpu_menu.c`/`.h`**: `int tagpu_menu_single_player(void)` (`main+0x2A44` bit 0 clear)
   and `int tagpu_menu_pause_hold(int on, int* was)` (the Pause key's read-modify-write of bit 0,
   without `0x19`). Its `thread-split.allow` argument grows by that read and that write
@@ -561,7 +570,7 @@ The window closes on the X, on the wiki button, and on the release of Esc.
   `0x2A44` bit 0 (set only in the front end, cleared only in play); why no other writer can undo
   the pause while the wiki is open; and that level end forgets the pause without writing.
 - **`winapi_hooks.c`, at the gate**: the engine's mouse thread calls `fake_GetCursorPos`, and the
-  interlocked word orders each poll before or after the open.
+  cursor lock orders each poll's store before or after the open.
 - **`tagpu_menu.c`'s two accessors**: the DISASSEMBLED facts, with addresses.
 - **`tagpu_wikipk.h`**: values only; appended last; the bound of every array.
 - **`tagpu_vk_gui.c`'s cursor record**: it draws this frame's resolved cursor quad and never reads

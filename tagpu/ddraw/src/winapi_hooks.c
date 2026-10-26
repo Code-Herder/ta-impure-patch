@@ -54,10 +54,10 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
 
     /* THE IN-GAME WIKI'S CAPTURE (tagpu_wiki.c): while its window is open this answers the point
        of the press that opened it, and stores nothing in g_ddraw.cursor. The engine's mouse thread
-       0x4C2990 calls this through 0x4C2610 about every 33 ms, beside the game thread's polls; the
-       capture word is read with an interlocked read, and the wiki's open and close are each one
-       interlocked store of it, so every poll is ordered wholly before or after them: the live
-       answer, or the frozen one, never a mixture. */
+       0x4C2990 calls this through 0x4C2610 about every 33 ms, beside the game thread's polls. This
+       test is the quick answer; the one the store rests on is tagpu_wiki_cursor_store's, below,
+       made under the lock the wiki's open and close hold, so a poll that read the word clear and
+       was preempted before its store stores nothing once the window has opened. */
     if (tagpu_wiki_holds_input())
     {
         LONG fx, fy;
@@ -82,7 +82,8 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
         !tagpu_shield_on() &&
         (!g_config.windowed || real_ScreenToClient(g_ddraw.hwnd, &pt)))
     {
-        int x, y;
+        int x, y, outside = 0;
+        LONG ax, ay;
 
         /* THE POINTER THAT IS NOT OVER THE PICTURE. TA polls this ~700
            times a launch and its edge-scroll test `0x41CE90` fires on an EXACT
@@ -106,7 +107,7 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
         {
             x = (int)g_ddraw.width / 2;
             y = (int)g_ddraw.height / 2;
-            mouse_forget_client();      /* our cursor must not be drawn there */
+            outside = 1;                /* our cursor must not be drawn there */
         }
         else
         {
@@ -131,13 +132,12 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
             tagpu_hud_to_engine(&x, &y);
         }
 
-        InterlockedExchange((LONG*)&g_ddraw.cursor.x, x);
-        InterlockedExchange((LONG*)&g_ddraw.cursor.y, y);
+        tagpu_wiki_cursor_store(x, y, outside, &ax, &ay);
 
         if (lpPoint)
         {
-            lpPoint->x = x;
-            lpPoint->y = y;
+            lpPoint->x = ax;
+            lpPoint->y = ay;
         }
 
         return TRUE;

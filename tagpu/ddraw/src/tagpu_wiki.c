@@ -25,12 +25,16 @@
    mouse record after the region test and disarms the building, exactly as letting go of Shift
    would. That is the invariant's own consequence, not a defect.
 
-   THE ORDERING. The open and the close are each one interlocked store of the capture word, here
-   on the game thread. Every poll -- the engine mouse thread's GetCursorPos every ~33 ms among them
-   -- reads the word with an interlocked read and comes wholly before or after that store: before,
-   it answers the live device; after, the frozen one. The frozen point is stored before the word,
-   so a poll that sees the word set reads that open's point. Input given before the open reached
-   the game; input given after it does not; there is no moment that is both.
+   THE ORDERING. The open and the close are each one store of the capture word, here on the game
+   thread, made under s_cursorLock together with the frozen point and, at the open, g_ddraw.cursor.
+   GetCursorPos is the one poll that stores what it reads: the engine mouse thread calls it every
+   ~33 ms, and it writes the live point into g_ddraw.cursor (winapi_hooks.c). It tests the word and
+   makes that store under the same lock (tagpu_wiki_cursor_store), so it comes wholly before the
+   open -- its live point is then overwritten by the open's -- or wholly after it, and stores
+   nothing; the frozen pair is read under the lock too, so it never mixes two opens. The key polls
+   store nothing: an interlocked read of the word orders each before or after the store, the live
+   device before and every key up after. Input given before the open reached the game; input given
+   after it does not; there is no moment that is both.
 
    THE PAIRED PRESS AND THE PAIRED KEY. A press the wiki takes has its release taken too, whether
    the wiki is still open or not (s_owedBtn, s_owedKey), so the engine is never handed a release
@@ -63,10 +67,20 @@
 
 enum { B_L = 1, B_R = 2, B_M = 4, B_X = 8 };
 
-/* ---- the two words any thread reads ---------------------------------------------------------- */
+/* ---- what any thread reads ------------------------------------------------------------------- */
 
-static volatile LONG s_hold;            /* the capture word: 1 while the window is open         */
-static volatile LONG s_fx, s_fy;        /* the frozen game point, stored before s_hold          */
+/* THE CURSOR LOCK, initialised at attach (tagpu_wiki_init) before any DirectDraw object exists, so
+   before fake_GetCursorPos can reach it. It is held over a few loads and stores and no call that
+   takes another lock or waits on a thread, so it cannot deadlock. */
+static CRITICAL_SECTION s_cursorLock;
+static volatile LONG s_hold;            /* the capture word: 1 while the window is open; written
+                                           under the lock, read without it by the key polls     */
+static LONG s_fx, s_fy;                 /* the frozen game point, under the lock                 */
+
+void tagpu_wiki_init(void)
+{
+    InitializeCriticalSection(&s_cursorLock);
+}
 
 LONG tagpu_wiki_holds_input(void)
 {
@@ -75,8 +89,29 @@ LONG tagpu_wiki_holds_input(void)
 
 void tagpu_wiki_frozen(LONG* x, LONG* y)
 {
-    *x = InterlockedCompareExchange(&s_fx, 0, 0);
-    *y = InterlockedCompareExchange(&s_fy, 0, 0);
+    EnterCriticalSection(&s_cursorLock);
+    *x = s_fx;
+    *y = s_fy;
+    LeaveCriticalSection(&s_cursorLock);
+}
+
+int tagpu_wiki_cursor_store(int x, int y, int outside, LONG* ax, LONG* ay)
+{
+    int held;
+    EnterCriticalSection(&s_cursorLock);
+    held = s_hold != 0;
+    if (held) {
+        *ax = s_fx;
+        *ay = s_fy;
+    } else {
+        if (outside) mouse_forget_client();
+        InterlockedExchange((LONG*)&g_ddraw.cursor.x, x);
+        InterlockedExchange((LONG*)&g_ddraw.cursor.y, y);
+        *ax = x;
+        *ay = y;
+    }
+    LeaveCriticalSection(&s_cursorLock);
+    return held;
 }
 
 /* ---- the game thread's own ------------------------------------------------------------------- */
@@ -143,11 +178,13 @@ static const char* pause_in_flight(void)
 static void wiki_open(int gx, int gy)
 {
     int was = 0;
-    InterlockedExchange(&s_fx, gx);
-    InterlockedExchange(&s_fy, gy);
+    EnterCriticalSection(&s_cursorLock);
+    s_fx = gx;
+    s_fy = gy;
     InterlockedExchange((LONG*)&g_ddraw.cursor.x, gx);
     InterlockedExchange((LONG*)&g_ddraw.cursor.y, gy);
     InterlockedExchange(&s_hold, 1);
+    LeaveCriticalSection(&s_cursorLock);
     s_open = 1;
     s_paused = 0;
     if (tagpu_menu_single_player() && tagpu_menu_pause_hold(1, &was)) {
@@ -163,7 +200,9 @@ static void wiki_close(const char* how)
     s_paused = 0;
     s_open = 0;
     s_escClose = 0;
+    EnterCriticalSection(&s_cursorLock);
     InterlockedExchange(&s_hold, 0);
+    LeaveCriticalSection(&s_cursorLock);
     tagpu_logf("wiki: closed (%s)", how);
 }
 
