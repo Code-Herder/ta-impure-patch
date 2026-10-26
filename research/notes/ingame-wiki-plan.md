@@ -815,7 +815,16 @@ of landings 3 and 4*). Track C, the stage offline, committed before it (`978ac43
   `replay`; `x1`, `x2`. `try` shows pressed and does nothing (landing 5). The wheel scrolls the
   panel under the pointer 48 units a notch; a press on a thumb drags it by the drawn frame's ratio
   of scroll to travel, and a press on a track off its thumb pages by seven eighths of the panel.
-  Every scroll is clamped to the limit the drawn frame posted.
+  Every scroll is clamped to the limit the drawn frame posted. A notch or a page steps from the
+  scroll asked, so several between two hit maps each count; a hit map that drew no wiki moves no
+  scroll; a real move with the left button up ends a drag a real press began (its release can be
+  lost outside the window). The hit map names the entry its frame drew, and `demo:`, `play`,
+  `replay` and `try` count only when it is the entry selected now. After a close, a press of any
+  button on a control of a hit map still drawn open (a double-click on X) is taken and owed its
+  release, and does nothing.
+- **The record's area when the slot cannot grow**: the whole record cut is placed as its head, the
+  stage showing a message; a head cut too closes the window at the next publish's first fill, so
+  the window is never open past one frame that cannot show it.
 - **The simulation's lifetime and clock**: made at a selection, a replay and an open (the tree's
   first entry when none is chosen), freed at a change, a close and the level's end, all on the game
   thread; stepped inside the fill by `wiki.js` `advance` -- the `QueryPerformanceCounter` delta,
