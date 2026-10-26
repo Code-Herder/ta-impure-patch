@@ -430,6 +430,20 @@ static void stale_move(int out[6])
     else memset(out, 0, 6 * sizeof(int));
 }
 
+/* THE SAME MOVE, WHEREVER IT NOW SAYS THE POINTER IS. Only the move arm's copy 0x4C2360 writes
+   dwords 2..5 of +0x196 (wParam, the clock, the message, the double-click flag). Its x and y
+   are rewritten without them, on this thread: by the three cursor polls from GetCursorPos
+   (0x4C24F2, 0x4C2624, 0x4C28C0), and by vpwide's repair of main+0x2C76 under zoom
+   (tagpu_vpwide.c). Zoomed, those disagree -- the move message carries the unzoomed position,
+   the poll the screen one -- so a copy taken at the press and IdleTick's copy a frame later
+   differ in x and y alone (MEASURED 2026-10-25 on the reference setup at about zoom 0.35:
+   1573,1382 at the press, 1841,1185 after, the same clock 0x85E53). A new move message
+   rewrites all six, the input reset 0x4B5A88 zeroes wParam; either differs here. */
+static int same_move(const int a[6], const int b[6])
+{
+    return !memcmp(a + 2, b + 2, 4 * sizeof(int));
+}
+
 /* The type's UnitName (def +0x20, 32 bytes inline, the FBI's own name such as ARMSOLAR):
    copied and NUL-checked inside the field, 0 when it has none. */
 static int unit_name(const char* def, char out[TS_SPACING_NAME])
@@ -517,11 +531,15 @@ static void evaluate(void)
        its ring empty IdleTick copies the mouse object's current move record (+0x196, 0x4C2D73)
        to main+0x2C76, so every IdleTick between the press and the next move reads the move made
        BEFORE the press -- Shift alone in wParam (MEASURED 2026-10-25, the button held) -- and
-       that one must not end the gesture. It is the record the press saw (stale_move); only a
-       later move rewrites +0x196 (0x4C2360, from the window procedure's WM_MOUSEMOVE). Identity,
-       not time: the records' clock ticks at 30 Hz (0x4B6340) and wraps short of 2^32. */
+       that one must not end the gesture. It is the record the press saw (stale_move), its x and
+       y aside (same_move); only a later move rewrites the rest (0x4C2360, from the window
+       procedure's WM_MOUSEMOVE). Identity, not time: the records' clock ticks at 30 Hz (0x4B6340)
+       and wraps short of 2^32. A move message in the press's own clock tick that repeats the
+       stale one's wParam is not told apart: the gesture then outlives a release the handler never
+       saw until the next move or press, which shows a preview and orders nothing -- an order
+       needs a release this route takes, and a press ends the gesture first. */
     if (s_eval.rec[4] == WM_MOUSEMOVE && !(s_eval.rec[2] & MK_LBUTTON) &&
-        memcmp(s_eval.rec, s_gesture.stale, sizeof s_gesture.stale)) end_gesture();
+        !same_move(s_eval.rec, s_gesture.stale)) end_gesture();
     if (s_gesture.type != c.type) end_gesture();
     /* the engine's rectangle is already snapped: x0 = 16 * the site's first cell (0x419849) */
     s_eval.cur_cx = *(const int*)(c.w.ta + M_RECT) >> 4;
