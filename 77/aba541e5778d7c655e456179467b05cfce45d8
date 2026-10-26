@@ -1,0 +1,1 @@
+replay-roundtrip: dll=v0.3.1.1-907-g77aba541 range=main..77aba541 features=- fixtures=place-basic seeds=place-basic:721 reached=0/0 game_speed=20 turbo=1 result=pass date=2026-10-25
