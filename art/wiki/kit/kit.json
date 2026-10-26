@@ -65,15 +65,15 @@
   },
   "cursor_arrow": {
    "kind": "icon",
-   "scale": 6
+   "scale": 3.333
   },
   "cursor_build": {
    "kind": "icon",
-   "scale": 6
+   "scale": 3.346
   },
   "cursor_move": {
    "kind": "icon",
-   "scale": 6
+   "scale": 3.333
   },
   "i_close": {
    "kind": "icon",

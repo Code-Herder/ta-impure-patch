@@ -169,6 +169,10 @@ def fit(im, e, f):
 def wiki_need(n, e, size):
     """A wiki part's need: the most device pixels one of its texels covers, at the density it is drawn at."""
     density = WIKI_BAR if n in WIKI_ON_BAR else WIKI_UNIT
+    if e['kind'] == 'icon' and n.startswith('cursor_'):
+        # the stage's cursors are drawn at their own scale, centred on the pointer, not fitted to a box
+        # (stage.js ICON_BOX, tagpu_wikistage.c)
+        return density / e['scale']
     if e['kind'] == 'icon':
         if n not in WIKI_ICON: sys.exit(f'fit: the wiki icon {n} has no box in WIKI_ICON')
         (bw, bh), (pw, ph) = WIKI_ICON[n], size
