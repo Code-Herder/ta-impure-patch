@@ -66,9 +66,10 @@ typedef struct {
    are NULL in the game, which sets every text in its own faces at its own size; the check gives
    the browser's, so the layout's rules are compared on what the mockup sets, and the two gaps are
    named (research/notes/ingame-wiki.md, "Gaps"):
-     missing  the advance of a code point no face has. The mockup sets the control glyphs (play,
-              pause, replay) and the tree's marks in the browser's fallback face, which the DLL
-              does not carry; NULL measures it as its face's .notdef, as the game draws it.
+     missing  the advance of a code point no face has, which the mockup sets in the browser's
+              fallback face and the DLL does not carry; NULL measures it as its face's .notdef, as
+              the game draws it. The check fails on any text that needs it: the control glyphs and
+              the tree's marks, which no face has, are kit icons.
      size     the size a face is set at for a font size, both in pixels. Chrome sets a face at a
               size of whole sixty-fourths of a pixel near the CSS one, by a rule not identified
               (MEASURED 2026-10-25: 9.0667 px is set at 579/64, 9.07 at 580/64, 10.6667 at

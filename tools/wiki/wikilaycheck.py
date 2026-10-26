@@ -18,10 +18,11 @@ A baseline that differs where Chrome rounds the face's ascent or descent to anot
 than round(em x size) does, and that the same rule on Chrome's own metrics reproduces, is named,
 not failed, as laycheck.py does.
 
-The glyphs no HUD face has (the controls' play, pause and replay, the tree's marks) are set by the
-mockup in the browser's fallback face; the check gives the C layout that face's advances, so the
-rules are compared on what the mockup sets, and it names those strings: the game has no face for
-them (research/notes/ingame-wiki.md, "Gaps").
+A character no HUD face has would be set by the mockup in the browser's fallback face and by the
+game as its face's .notdef: the check gives the C layout the fallback face's advances, so the rules
+are still compared on what the mockup sets, and it fails naming every such string. The controls'
+play, pause and replay and the tree's marks, which no face has, are kit icons (glyphs.js) for that
+reason, paired as parts.
 
 The standard library, gcc and playwright-cli; it serves the repository root itself.
 """
@@ -501,8 +502,9 @@ def main():
         httpd.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)
     if glyphs:
+        bad += 1
         print(f"the mockup sets {sorted(glyphs)} in the browser's fallback face, which the DLL does not carry: "
-              f"compared at the browser's advances (research/notes/ingame-wiki.md, \"Gaps\")")
+              f"the game draws no glyph for them <-- DIFFERS")
     print(f"wikilaycheck: {len(CASES)} cases in {time.time() - t0:.0f} s: "
           + ("the DLL and the mockup agree, every box, line and baseline" if not bad else f"{bad} disagreement(s)"))
     return 1 if bad else 0

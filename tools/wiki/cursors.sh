@@ -1,8 +1,11 @@
 #!/bin/bash
-# cursors.sh [kit dir]: the wiki stage's three cursor icons, rasterised once by Chromium from stage.js's own cursorShape
-# (tools/wiki/cursors.html) and written into the kit as icons -- parts/cursor_{arrow,move,build}.png and their kit.json
-# entries -- so the mockup's stage and the DLL draw the same pixels. The kit is art/wiki/kit/ unless given. Run it after
-# a change to cursorShape, SCALE or ICON_BOX; the icons are committed, as the kit's other parts are.
+# cursors.sh [kit dir]: the wiki's drawn kit icons, rasterised once by Chromium from the mockup's own shapes
+# (tools/wiki/cursors.html) and written into the kit as icons with their kit.json entries, so the mockup and the DLL
+# draw the same pixels: the stage's three cursors from stage.js cursorShape (parts/cursor_{arrow,move,build}.png) and
+# the window's control glyphs and tree marks from glyphs.js shape (parts/i_{play,pause,replay,open,shut,dot}.png). The
+# kit is art/wiki/kit/ unless given; give art/wiki-full/kit, the kit as cut, and refit with tools/hudart/fit.py --set
+# wiki, which rewrites art/wiki/kit/ from it. Run it after a change to a shape, SCALE, ICON_BOX or BOX; the icons are
+# committed, as the kit's other parts are.
 set -e
 here=$(cd "$(dirname "$0")" && pwd); kit=$(realpath -m "${1:-$here/../../art/wiki/kit}"); tmp=$(mktemp -d)
 # the browser refuses file: URLs, so the page is served, from a port nothing holds
@@ -13,7 +16,7 @@ cd "$tmp"   # playwright-cli writes its console logs into the working directory
 P="playwright-cli -s=wikicursors$$"
 for t in $(seq 1 50); do curl -sf -o /dev/null "http://127.0.0.1:$port/tools/wiki/cursors.html" && break; sleep 0.1; done
 $P open "http://127.0.0.1:$port/tools/wiki/cursors.html" >/dev/null 2>&1
-$P eval "() => JSON.stringify(window.CURSORS)" 2>&1 | sed -n '/Result/,/^###/p' | sed -n 2p > cursors.json
+$P eval "() => JSON.stringify(window.ICONS)" 2>&1 | sed -n '/Result/,/^###/p' | sed -n 2p > cursors.json
 $P close >/dev/null 2>&1
 python3 - "$kit" cursors.json <<'EOF'
 import base64, json, sys

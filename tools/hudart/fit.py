@@ -48,8 +48,11 @@ WIKI_ART = laycheck.ROOT / 'art' / 'wiki' / 'kit'
 WIKI_UNIT = 3.0         # device px a wiki unit at 3840x2160: 2160 / 720
 WIKI_BAR = 4.5          # device px a top-bar pixel at 3840x2160 and HUD 150
 WIKI_ON_BAR = {'wikibtn', 'wikibtn_down', 'i_wiki'}
-# each icon's box, in the units of where it is drawn: the wiki button's 28 bar pixels, the close button's 14 units
-WIKI_ICON = {'i_wiki': (28, 28), 'i_close': (14, 14)}
+# each icon's box, in the units of where it is drawn, at 0.6 of it: the wiki button's 28 bar pixels, the close
+# button's 14 units, a control's least box (layout.json controls.min x controls.h) for its play, pause and replay
+WIKI_ICON = {'i_wiki': (28, 28), 'i_close': (14, 14), 'i_play': (24, 17), 'i_pause': (24, 17), 'i_replay': (24, 17)}
+# a tree row's marks fill their whole box, layout.json tree.mark square
+WIKI_MARK = {'i_open': (7, 7), 'i_shut': (7, 7), 'i_dot': (7, 7)}
 
 
 def bands(e, pw, ph):
@@ -173,6 +176,9 @@ def wiki_need(n, e, size):
         # the stage's cursors are drawn at their own scale, centred on the pointer, not fitted to a box
         # (stage.js ICON_BOX, tagpu_wikistage.c)
         return density / e['scale']
+    if e['kind'] == 'icon' and n in WIKI_MARK:
+        (bw, bh), (pw, ph) = WIKI_MARK[n], size
+        return min(bw / pw, bh / ph) * density
     if e['kind'] == 'icon':
         if n not in WIKI_ICON: sys.exit(f'fit: the wiki icon {n} has no box in WIKI_ICON')
         (bw, bh), (pw, ph) = WIKI_ICON[n], size

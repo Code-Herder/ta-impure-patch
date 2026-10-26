@@ -79,6 +79,30 @@
    "kind": "icon",
    "scale": 8.375
   },
+  "i_dot": {
+   "kind": "icon",
+   "scale": 6
+  },
+  "i_open": {
+   "kind": "icon",
+   "scale": 6
+  },
+  "i_pause": {
+   "kind": "icon",
+   "scale": 6
+  },
+  "i_play": {
+   "kind": "icon",
+   "scale": 6
+  },
+  "i_replay": {
+   "kind": "icon",
+   "scale": 6
+  },
+  "i_shut": {
+   "kind": "icon",
+   "scale": 6
+  },
   "i_wiki": {
    "kind": "icon",
    "scale": 10.125
