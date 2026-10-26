@@ -3,9 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "dllmain.h"
 #include "lodepng.h"
 #include "tagpu_log.h"
+#include "tagpu_pak.h"
 
 /* the declarations first: the implementation below is included once, and stb_truetype guards
    only its declarations against a second inclusion */
@@ -17,28 +17,15 @@ static volatile LONG s_started;
 static volatile LONG s_ready;           /* 1: s_art is complete; 2: the load failed */
 static HUDART s_art;
 
-/* ---- the archive (tools/hudpak.py, THE FORMAT) --------------------------------------------- */
+/* ---- the archive (tools/hudpak.py, THE FORMAT; tagpu_pak.h) ------------------------------------ */
 
 static const unsigned char* s_pak;
-static DWORD s_npak;
+static size_t s_npak;
 
-static uint32_t rd32(const unsigned char* p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24); }
-
-/* A file of the archive by its path under art/hud/. Every offset is checked against the
-   archive's size, so a short or damaged resource names nothing rather than reading past it. */
+/* a file of the archive by its path under art/hud/ */
 static const unsigned char* pak_file(const char* path, size_t* n)
 {
-    uint32_t count, i, plen = (uint32_t)strlen(path);
-    if (!s_pak || s_npak < 12 || memcmp(s_pak, "HPAK", 4) || rd32(s_pak + 4) != 1) return NULL;
-    count = rd32(s_pak + 8);
-    if (count > (s_npak - 12) / 16) return NULL;
-    for (i = 0; i < count; i++) {
-        const unsigned char* e = s_pak + 12 + 16 * i;
-        uint32_t no = rd32(e), nl = rd32(e + 4), off = rd32(e + 8), len = rd32(e + 12);
-        if (no > s_npak || nl > s_npak - no || off > s_npak || len > s_npak - off) return NULL;
-        if (nl == plen && !memcmp(s_pak + no, path, plen)) { *n = len; return s_pak + off; }
-    }
-    return NULL;
+    return tagpu_pak_file(s_pak, s_npak, path, n);
 }
 
 /* a PNG's size from its IHDR, which is always the first chunk */
@@ -171,15 +158,12 @@ static DWORD WINAPI loader(LPVOID unused)
     char err[256];
     size_t nl, nk;
     const char *lt, *kt;
-    HRSRC r;
-    HGLOBAL g;
     DWORD t0 = GetTickCount();
     double mpx = 0;
     HUDLAY* lay = NULL;
     (void)unused;
     err[0] = 0;
-    if (!(r = FindResourceA(g_ddraw_module, "HUDPAK", MAKEINTRESOURCEA(10))) || !(g = LoadResource(g_ddraw_module, r))
-        || !(s_pak = (const unsigned char*)LockResource(g)) || !(s_npak = SizeofResource(g_ddraw_module, r)))
+    if (!(s_pak = tagpu_pak_resource("HUDPAK", &s_npak)))
         snprintf(err, sizeof err, "no HUDPAK resource");
     else if (!(lt = (const char*)pak_file("layout.json", &nl)) || !(kt = (const char*)pak_file("kit.json", &nk)))
         snprintf(err, sizeof err, "the archive lacks layout.json or kit.json");

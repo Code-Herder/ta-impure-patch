@@ -3,11 +3,15 @@
 
    usage: node tools/wiki/simcheck.mjs [--trace]     exit 0 when every demo and rule passes, 1 otherwise
 
+   Imported, it runs nothing and exports ENTRY_RULES, the rule cases per entry id, which call WikiSim.create through
+   the module object sim.js exports; tools/wiki/simparity.mjs plays them through the DLL's sim that way.
+
    A demo is a scene and inputs, so a change to the rules, the figures or the map can quietly turn a demo into one
    that no longer shows its claim; this is what notices. The checks name the entry's deposits by their cell
    rectangles, so moving a deposit in the entry means moving it here too. */
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 const WikiSim = createRequire(import.meta.url)('./mockup/sim.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const TRACE = process.argv.includes('--trace');
@@ -345,8 +349,9 @@ const BUILDSHAPES_RULES = {
 };
 
 const CHECKS = { quickbuild: QUICKBUILD, buildshapes: BUILDSHAPES };
-const ENTRY_RULES = { quickbuild: RULES, buildshapes: BUILDSHAPES_RULES };
+export const ENTRY_RULES = { quickbuild: RULES, buildshapes: BUILDSHAPES_RULES };
 
+function main() {
 const tree = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/tree.json`, 'utf8'));
 const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
 const ids = tree.tree.flatMap(leaves);
@@ -379,3 +384,6 @@ for (const id of ids) {
 }
 console.log(failed ? `${failed} check(s) failed` : 'all demos and rules pass');
 process.exit(failed ? 1 : 0);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();

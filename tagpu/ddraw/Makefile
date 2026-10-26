@@ -180,6 +180,24 @@ inc/tagpu_hudpak.bin: ../../tools/hudpak.py $(HUD_SRCS)
 
 $(addprefix res, $(ALLEXTS)): inc/tagpu_hudpak.bin
 
+# THE WIKI ARCHIVE (tools/hudpak.py --set wiki; src/tagpu_wikidata.h): the in-game wiki's tree and
+# entries under art/wiki/, packed by the same tool in the same format into inc/tagpu_wikipak.bin,
+# which res.rc embeds as the RCDATA resource WIKIPAK. Generated and never committed, as the HUD's.
+WIKI_DIR  := ../../art/wiki
+WIKI_SRCS := $(shell find $(WIKI_DIR) -type d -o -type f 2>/dev/null)
+inc/tagpu_wikipak.bin: ../../tools/hudpak.py $(WIKI_SRCS)
+	python3 ../../tools/hudpak.py --set wiki $(WIKI_DIR) $@
+
+$(addprefix res, $(ALLEXTS)): inc/tagpu_wikipak.bin
+
+# THE WIKI'S SIMULATION (src/tagpu_wikisim.h) agrees with the mockup's sim.js bit for bit, which
+# needs every double rounded once per operation, as JavaScript rounds it. The x87 unit this build
+# otherwise computes on keeps 80-bit intermediates (MEASURED 2026-10-25: built for x87, 1196 of the
+# 9298 frames of the demos differ from sim.js in a last bit; built so, none), so this one file
+# computes on SSE2 instead. The game's threads align the stack to 4 bytes only, so it realigns
+# where SSE needs more. tools/wiki/simparity.mjs --wine checks the build under Wine.
+$(addprefix src/tagpu_wikisim, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
+
 # THE RESTORER'S MODELS (src/tagpu_restore_core.c load_weights): unditherer/models/<name>.w32.bin,
 # compressed by zstd into inc/tagpu_rmodel_<name>.zst, which res.rc embeds as RMODEL_<NAME>.
 # Generated and never committed, like the HUD archive. The frame records its content size, which
