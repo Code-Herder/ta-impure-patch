@@ -2,9 +2,11 @@
    entry, and the stage, which draws what sim.js's view() says. The content is art/wiki/ (tree.json, entries/<id>.json) and
    the behaviour is sim.js's; this file lays out, draws and forwards input. research/notes/ingame-wiki.md is the
    specification the game copies. */
-(() => {
+(async () => {
 const $ = s => document.querySelector(s);
 const ART = '../../../art/wiki/', BACKDROP = '../../../research/notes/assets/hud-art/backdrop.png';
+// the layout's numbers, in units, which the DLL reads too (tagpu_wikilay.c): everything below waits for them
+const LAY = await fetch(ART + 'layout.json').then(r => { if (!r.ok) throw new Error(`layout.json: ${r.status}`); return r.json(); });
 const TICK = 30;                      // simulation ticks a second, the game's
 const MODS = ['stock', 'mayhem', 'prota', 'twilight', 'escalation', 'tazero', 'unknown'];
 const RES = [...$('#res').options].map(o => o.value);
@@ -19,11 +21,11 @@ const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
 
 /* ---- the state, from the URL; the URL is kept up to date so a view can be shared ---- */
 const SKINS = ['kit', 'whitebox'];
-const S = { res: '1920x1080', size: 90, mode: 'sp', mod: 'stock', skin: 'kit', rewind: true, open: false, entry: null, demo: 0, try: false,
+const S = { res: '1920x1080', size: LAY.window.share, mode: 'sp', mod: 'stock', skin: 'kit', rewind: true, open: false, entry: null, demo: 0, try: false,
   playing: true, speed: 1, fold: new Set() };
 { const q = new URLSearchParams(location.search);
   if (RES.includes(q.get('res'))) S.res = q.get('res');
-  if (q.get('size')) S.size = clamp(Math.round(+q.get('size')) || 90, 50, 100);
+  if (q.get('size')) S.size = clamp(Math.round(+q.get('size')) || LAY.window.share, 50, 100);
   if (q.get('mode') === 'mp') S.mode = 'mp';
   if (MODS.includes(q.get('mod'))) S.mod = q.get('mod');
   if (q.get('rewind') === '0') S.rewind = false;
@@ -431,16 +433,13 @@ function buildMenu(v) {
 $('#bmenu').onclick = e => { const b = e.target.closest('[data-build]'); if (!b) return; picked = b.dataset.build || null; send({ build: picked }); menuKey = null; };
 
 /* ---- skins: the whitebox, or the kit of art/wiki/kit/ -- kit.json in art/hud/kit.json's format and its parts as
-   PNGs. GEOM places what the kit's window art leaves room for, in units: the title in its dark title groove (wt: left,
-   right, top, height), the close button centred in its close bay (wx: right, top, width, height), the body inside its
-   frame (wb), and how deep its panels' frame (pn) and its bezel's (bz) are, each [top, right, bottom, left]. MEASURED
-   2026-10-25 from the kit's window.png, panel.png and bezel.png at its scale: the groove's and the bay's dark spans
-   across the title band, and the frames' inner edges where the face's tone begins; the body keeps 3 units more off
-   the frame. ---- */
-const GEOM = {
-  whitebox: { wt: [0, 22, 0, 20], wx: [0, 0, 22, 20], wb: [20, 0, 0, 0], gap: 0, pn: [0, 0, 0, 0], bz: [0, 0, 0, 0] },
-  kit: { wt: [2.6, 20.4, 2.4, 15.7], wx: [3.5, 3.2, 14, 14], wb: [23, 5.6, 5.6, 5.5], gap: 3, pn: [2.5, 2.6, 2.1, 2.5], bz: [4.1, 4.0, 3.7, 4.1] },
-};
+   PNGs. The layout's `geom` places what the kit's window art leaves room for, in units: the title in its dark title
+   groove (wt: left, right, top, height), the close button centred in its close bay (wx: right, top, width, height),
+   the body inside its frame (wb), and how deep its panels' frame (pn) and its bezel's (bz) are, each [top, right,
+   bottom, left]. MEASURED 2026-10-25 from the kit's window.png, panel.png and bezel.png at its scale: the groove's and
+   the bay's dark spans across the title band, and the frames' inner edges where the face's tone begins; the body keeps
+   3 units more off the frame. ---- */
+const GEOM = LAY.geom;
 const KITS = {};                      // name -> { parts, img, light } once loaded
 function applySkin() {
   const g = GEOM[S.skin], set = (n, v) => frame.style.setProperty(n, v);
@@ -540,24 +539,29 @@ document.addEventListener('pointerdown', e => { const b = e.target.closest('butt
 window.addEventListener('pointerup', () => { for (const b of document.querySelectorAll('.pressed')) b.classList.remove('pressed'); });
 
 /* ---- text: each of the wiki's text roles in the replay HUD's style nearest it (art/hud/layout.json `styles`: face,
-   weight, size in units, colour, letter spacing, case, shadow or outline). The colour and the shadow give way to a
-   face's own ink (--ink, --shade) where the skin's face is light ---- */
+   weight, size in units, colour, letter spacing, case, shadow or outline), the layout's `roles` naming the style. The
+   colour and the shadow give way to a face's own ink (--ink, --shade) where the skin's face is light. The elements
+   of each role: ---- */
 const ROLE = {
-  title: ['#win .wt', '#e-title'],                    // the window's title and the entry's: the stats window's title
-  header: ['#tree .cat'],                             // a category: the HUD's team header (and the picker's title)
-  name: ['#tree .leaf', '#demos li'],                 // an entry or a demo: a player row's name
-  num: ['#demos li .n'],                              // a demo's number: the HUD's numbers
-  window_foot: ['#e-sub', '#text'],                   // the subtitle and the body text: the stats window's foot, its one mixed-case style
-  toast: ['#caption'],                                // the caption, a line written at a moment: the HUD's toast
-  face_big: ['#ctl button'],                          // play, replay, 1x/2x, Try it yourself: the transport's labels and Take over replay
-  face_chip: ['#bmenu button', '#badge'],             // the build menu's buttons and the badge: the stats window's chips
-  face_num_sm: ['.kc'],                               // a keycap: a transport button's small label
-  label: ['#bmenu .h', '#bmenu .e', '#keys'],         // the build menu's heading, the keys strip's '+': the HUD's labels
+  window_title: ['#win .wt'], entry_title: ['#e-title'],
+  category: ['#tree .cat'], entry: ['#tree .leaf'], demo: ['#demos li'], demo_num: ['#demos li .n'],
+  subtitle: ['#e-sub'], text: ['#text'], caption: ['#caption'],
+  control: ['#ctl button'], build: ['#bmenu button'], badge: ['#badge'], keycap: ['.kc'],
+  build_head: ['#bmenu .h', '#bmenu .e'], keys: ['#keys'],
 };
+/* the layout's other numbers as custom properties of the frame, which wiki.css reads: `--w-` and the number's path,
+   a list's items by their index (row.pad -> --w-row-pad-0, --w-row-pad-1) */
+(function vars(o, path) {
+  for (const [k, v] of Object.entries(o)) {
+    const p = [...path, k];
+    if (typeof v === 'number') frame.style.setProperty('--w-' + p.join('-'), v);
+    else if (v && typeof v === 'object' && !(path.length === 0 && (k === 'geom' || k === 'roles'))) vars(v, p);
+  }
+})(LAY, []);
 fetch('../../../art/hud/layout.json').then(r => r.json()).then(L => {
   const U = n => `calc(${n} * var(--u))`;
   const css = Object.entries(ROLE).map(([n, sel]) => {
-    const s = L.styles[n];
+    const s = L.styles[LAY.roles[n]];
     const shade = s.outline ? (([a, b, c, d]) => [[a, b], [c, d], [a, d], [c, b]].map(([x, y]) => `${U(x)} ${U(y)} 0 #000`).join(','))(s.outline)
       : s.shadow ? `0 ${U(s.shadow)} 0 rgba(0,0,0,.8)` : 'none';
     return `${sel.join(', ')} { font-family: '${s.font}', sans-serif; font-weight: ${s.weight}; font-size: ${U(s.size)}; font-style: normal;`
