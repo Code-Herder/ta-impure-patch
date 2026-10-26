@@ -889,7 +889,7 @@ static void apply_scroll_rate(char* ta)
 #define OFF_EYEX         0x1431F
 #define OFF_EYEY         0x14323
 #define OFF_EXTENT_W     0x1422B       /* the SCROLL EXTENT: the map less 32 px   */
-#define OFF_EXTENT_H     0x1422F       /* ...and less 128 px ("two sizes")        */
+#define OFF_EXTENT_H     0x1422F       /* ...and less 128 px: where the map ends  */
 #define OFF_MAPPX_W      0x14223       /* the map's own pixel size, which         */
 #define OFF_MAPPX_H      0x14227       /* GetTPosition clamps to (0x484B67)       */
 #define OFF_FIELD_W      0x37E37       /* the true viewport size: the W and H of  */

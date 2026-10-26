@@ -1373,8 +1373,9 @@ against the extent refused the grid the engine builds there and drew those frame
 column is the viewport's right column, so a contracted pointer could never satisfy it.
 
 **MEASURED 2026-10-25, the far ends at the extent** (1024x768, `W = 896`, `H = 704`): on Painted Desert (extent 9216 × 9216; the terrain heartbeat `terr: … map=289x292
-area=288x288`) the eye settles at `x = 8768` and `y = 8864` against the right and bottom edges,
-`extent − W/2` and `extent − H/2`; on Assault on Suburbia (extent 8064 tall) at `y = 7712`.
+area=288x288`) the eye settles at `x = 8768` (at 1×) and `y = 8864` (at 0.5×) against the right
+and bottom edges, `extent − W/2` and `extent − H/2`; on Assault on Suburbia (extent 8064 tall) at
+`y = 7712` (at 1×).
 
 **MEASURED 2026-09-23** (G20a build, 1024x768, the play defaults, `selbox-facings` on Two
 Continents: map 10752 × 12800, extent 10720 × 12672, `W = 896`, `H = 704`). The range's far ends
@@ -19496,9 +19497,9 @@ built leaves the level with none, and the sync keeps the edge black.
 **MEASURED 2026-10-25, the fold at the area:**
 
 - **The picture reads as its reflection about the fold.** The correlation of the picture with its
-  own reflection about the fold line: Painted Desert's right fold 0.927 folded at the tile map's
-  edge, 0.972 folded at the area, features drawn; its bottom fold 0.93 (terrain); Assault on
-  Suburbia's bottom fold 0.79 (terrain only).
+  own reflection about the fold line, all at the area's fold: Painted Desert's right fold 0.972
+  at 1× (terrain and its rocks), and in its bottom-right corner at 0.5× 0.927 on the right fold
+  and 0.93 on the bottom one; Assault on Suburbia's bottom fold 0.79 with the terrain alone.
 - **The lab mirrors as the game does**: on Assault on Suburbia's bottom edge the lab's mirror
   and the game's differ by more than 8 levels at 0.04 % of the pixels.
 - **The camera's far ends** are in §2.3c (Painted Desert, Assault on Suburbia).

@@ -185,8 +185,8 @@ five changes. C1–C4 are camera changes (G20a); C5 draws (G20b).
   between it and the tile map (the PLOT grid `main+0x14233`/`+0x14237` × 16) is unbuildable and
   on 9 stock maps holds the editor's blank tile, so the view centre stops at the extent's edge,
   in the game and in the lab, and the mirror (C5) folds there (gpu-status §2.90, "Where the map
-  ends"). MEASURED 2026-10-25 at 1024x768: the eye settles at `(8768, 8864)` against Painted
-  Desert's right and bottom edges (extent 9216 × 9216). The pointer's guards are on the extent
+  ends"). MEASURED 2026-10-25 at 1024x768: the eye settles at `x = 8768` (at 1×) and `y = 8864`
+  (at 0.5×) against Painted Desert's right and bottom edges (extent 9216 × 9216). The pointer's guards are on the extent
   too, the bound they are built on: the 128-px bottom margin is `GetTPosition`'s search window
   (engine map, "Engine defects we patch").
 * **Which range is in force.** The centre range holds only on a draw whose ground is ours
