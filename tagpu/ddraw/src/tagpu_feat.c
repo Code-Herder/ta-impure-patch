@@ -1018,14 +1018,37 @@ static float mirror_key(const TAGPU_FXVIEW* v, const KEYRECT* k, int row, int co
     }
 }
 
-/* one of the map's anchors, mirrored to sweep cell (row, col); `offRow`
-   says the copy is in a band above or below the map, and `copy` is its mode
-   bits past the plain mode (TAGPU_FEAT_MIRROR and the copy it belongs to,
-   tagpu_feat.h) */
+/* Whether frame `g`, placed with its hotspot at tile-grid row `waz` as
+   emit_frame places it (each sub-frame at its own hotspot, to the same depth),
+   reaches across the map's top (`top`) or bottom border. A frame the reader
+   refuses draws nothing and crosses nothing. */
+static int frame_crosses(const unsigned char* g, int waz, int top, int depth)
+{
+    int sub, k;
+    if (depth > 4) return 0;
+    g = tagpu_gaf_frame_sane(g);
+    if (!g) return 0;
+    sub = g[TAGPU_GF_SUBN];
+    if (sub) {
+        for (k = 0; k < sub; k++)
+            if (frame_crosses(tagpu_gaf_subframe(g, k), waz, top, depth + 1)) return 1;
+        return 0;
+    }
+    {
+        const int y0 = waz - *(const short*)(g + TAGPU_GF_HOTY);
+        const int y1 = y0 + *(const unsigned short*)(g + TAGPU_GF_H);
+        return top ? y1 > 0 : y0 < s_areaH * 16;
+    }
+}
+
+/* one of the map's anchors, mirrored to sweep cell (row, col) in `band` of
+   the picture (mirror_gather: 0 is the map's, below 0 above it, above 0 below
+   it), and `copy` is its mode bits past the plain mode (TAGPU_FEAT_MIRROR and
+   the copy it belongs to, tagpu_feat.h) */
 static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
                            const char* fdefs, int nDefs, int shadowsOn,
                            const KEYRECT* k, int row, int col,
-                           int flipX, int flipY, int offRow, int copy)
+                           int flipX, int flipY, int band, int copy)
 {
     const char* def;
     const char* shadSeq;
@@ -1052,7 +1075,7 @@ static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
        its copy's base on the map's rows. */
     {
         const int swax = m->col * 16 + hx, swaz = m->row * 16 + hz - m->lift;
-        if (swax >= s_areaW * 16 || swaz >= s_areaH * 16 || (offRow && swaz < 0)) return;
+        if (swax >= s_areaW * 16 || swaz >= s_areaH * 16 || (band != 0 && swaz < 0)) return;
     }
     s_c.mirrored++;
     /* THE PROJECTION, REFLECTED (the lab's buildFeatures). A reflection
@@ -1070,16 +1093,20 @@ static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
     shadSeq = *(const char* const*)(def + FD_SHADSEQ);
     bodySeq = *(const char* const*)(def + FD_BODYSEQ);
     animating = (mask & 2) != 0;
-    /* PROTOTYPE (variant 4): a copy above or below the map whose body would
-       reach across the map's border is not drawn */
-    if (offRow && bodySeq) {
-        const unsigned char* bg = tagpu_gaf_frame_sane(animating ? tagpu_gaf_state_frame(def + FD_BODYANIM)
-                                                                 : tagpu_gaf_seq_frame(bodySeq, 0));
-        if (bg) {
-            const int top = waz - *(const short*)(bg + TAGPU_GF_HOTY);
-            const int bot = top + *(const unsigned short*)(bg + TAGPU_GF_H);
-            if (waz >= 0 ? top < s_areaH * 16 : bot > 0) return;
-        }
+    /* A COPY ABOVE OR BELOW THE MAP THAT WOULD REACH ACROSS ITS BORDER IS NOT
+       DRAWN. The copies stand upright, so the one nearest the line would lay
+       its crown over the map's last rows (below) or its foot over the first
+       (above), and a copy cut at the line is a tree without a top. Every frame
+       the copy would emit is tested, shadow and body, as emit_frame will place
+       it, so nothing of a copy that is drawn crosses the line. */
+    if (band != 0) {
+        const int top = band < 0;
+        if (shadSeq && shadowsOn && s_shadow &&
+            frame_crosses(animating ? tagpu_gaf_state_frame(def + FD_SHADANIM)
+                                    : tagpu_gaf_seq_frame(shadSeq, 0), waz, top, 0)) return;
+        if (bodySeq &&
+            frame_crosses(animating ? tagpu_gaf_state_frame(def + FD_BODYANIM)
+                                    : tagpu_gaf_seq_frame(bodySeq, 0), waz, top, 0)) return;
     }
     {
         /* WHOLE OR NOT AT ALL, as for the map's own (the gather's loop) */
@@ -1214,7 +1241,7 @@ static void mirror_gather(const TAGPU_FXVIEW* v, const char* fdefs, int nDefs,
                         if (scol >= lastCol || col >= hi) break;
                         if (col < lo) continue;
                         mirror_feature(v, &s_mf[j], fdefs, nDefs, shadowsOn, k, row, col,
-                                       0, flipY, offRow, copy);
+                                       0, flipY, band, copy);
                     }
                 } else {
                     for (j = a0; j < a1; j++) {
@@ -1222,7 +1249,7 @@ static void mirror_gather(const TAGPU_FXVIEW* v, const char* fdefs, int nDefs,
                         if (scol >= lastCol || col < lo) break;
                         if (col >= hi) continue;
                         mirror_feature(v, &s_mf[j], fdefs, nDefs, shadowsOn, k, row, col,
-                                       1, flipY, offRow, copy);
+                                       1, flipY, band, copy);
                     }
                 }
             }

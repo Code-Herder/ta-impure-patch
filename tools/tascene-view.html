@@ -226,7 +226,8 @@
        the clamp     the point at the screen centre is clamped to the map
                      (Recoil's SpringController Update), so the map's edge
                      can reach the middle of the screen at every zoom:
-                     eye in [-W/2, map - W/2]
+                     eye in [-W/2, extent - W/2], the extent the
+                     engine's own (the map less 32 and 128 px)
        zoom in       holds the world point under the pointer
        zoom out      the camera pulls straight back: the centre holds
        the notch     14 % of the camera's distance 1/z per notch (BAR's
@@ -1041,9 +1042,9 @@ uniform sampler2D uRGB;
 uniform int uUndither;
 ${EDGE_TONE}
 void main(){
-  // the mirror is scenery beyond the map and never covers the map itself: a
-  // mirrored tree just south of the edge stands IN FRONT of the last rows by
-  // the painter's order, and its top would hide their own features
+  // a side copy stays off the map's own columns, where its overhang would lay
+  // a reflected tree over the tree it reflects; a copy above or below crosses
+  // nothing here, since buildFeatures drops any that would
   if (all(greaterThanEqual(vWorld, vec2(0.0))) && all(lessThan(vWorld, uMapPx))) discard;
   vec3 rgb;
   if (uUndither == 1) {
@@ -1145,6 +1146,17 @@ async function main() {
   }
 
   const view = scene.view, map = scene.map;
+  // WHERE THE MAP ENDS (tagpu_fx.h tagpu_edge_area): the engine's scroll
+  // extent, the tile map less 32 px wide and 128 px tall, in 32-px tile cells.
+  // Stock never shows a pixel past it, so the camera stops there and the mirror
+  // folds there; the strip between it and the tile map is drawn as the
+  // reflection. At most the tile map's own size, so a folded cell indexes it.
+  const edgeArea = (extent, n) => {
+    const a = Math.floor(extent / 32);
+    return a > 0 && a < n ? a : n;
+  };
+  const areaC = edgeArea(map.w16 * 16 - 32, map.tilemap.w);
+  const areaR = edgeArea(map.h16 * 16 - 128, map.tilemap.h);
   const [GW, GH] = view.res;
   const [vpL, vpT, vw, vh] = view.vp;
   // THE ZOOMED VIEW. The viewport shows vw/zoom x vh/zoom world units centred
@@ -1434,7 +1446,7 @@ async function main() {
   // EDGE_TONE's uniforms, on whichever mirror program is in use
   function edgeTone(U, L) {
     gl.uniform1i(U.uPal, 1);
-    gl.uniform2f(U.uMapPx, map.tilemap.w * 32, map.tilemap.h * 32);
+    gl.uniform2f(U.uMapPx, areaC * 32, areaR * 32);
     gl.uniform4f(U.uEdge, L.edgeDim, L.edgeGrey, L.edgeFade, L.edgeSteps);
     gl.uniform1i(U.uDither, L.edgeDither ? 1 : 0);
   }
@@ -1882,10 +1894,10 @@ async function main() {
     let n = 0, skipped = 0, junk = 0;
     for (let r = 0; r < rows; r++) {
       const my = ty0 + r;
-      if (my < 0 || my >= mrows) { skipped += cols; continue; }
+      if (my < 0 || my >= areaR) { skipped += cols; continue; }
       for (let c = 0; c < cols; c++) {
         const mx = tx0 + c;
-        if (mx < 0 || mx >= stride) { skipped++; continue; }
+        if (mx < 0 || mx >= areaC) { skipped++; continue; }
         const idx = tilemap[my * stride + mx];
         if (idx >= map.atlas.tiles) { junk++; continue; }
         // the quad still spans exactly TILE_PX texels, and its far edge lands
@@ -1951,8 +1963,8 @@ async function main() {
     const rAbove = L.relief > 0 && L.datum > 0
                  ? Math.ceil(L.relief * L.datum * 0.5 / 32) + 1 : 0;
     // the view's tiles, half-open, clipped to the map
-    const x0 = Math.max(0, tx0), x1 = Math.min(stride, tx0 + cols);
-    const y0 = Math.max(0, ty0 - rAbove), y1 = Math.min(mrows, ty0 + rows);
+    const x0 = Math.max(0, tx0), x1 = Math.min(areaC, tx0 + cols);
+    const y0 = Math.max(0, ty0 - rAbove), y1 = Math.min(areaR, ty0 + rows);
     const D = scene.depth;
     // Per-row keys only when relief can lift a southern cell over a northern
     // unit. With relief=0 nothing rises, and per-row keys would put the ground
@@ -2009,8 +2021,8 @@ async function main() {
   }
   function emitChunk(L, cx, cy) {
     const stride = map.tilemap.w, mrows = map.tilemap.h;
-    const x0 = cx * LT_CHUNK, x1 = Math.min(stride, x0 + LT_CHUNK);
-    const y0 = cy * LT_CHUNK, y1 = Math.min(mrows, y0 + LT_CHUNK);
+    const x0 = cx * LT_CHUNK, x1 = Math.min(areaC, x0 + LT_CHUNK);
+    const y0 = cy * LT_CHUNK, y1 = Math.min(areaR, y0 + LT_CHUNK);
     const vb = new Float32Array((x1 - x0) * (y1 - y0) * 9 * LTVST);
     const ib = new Uint16Array((x1 - x0) * (y1 - y0) * 24);
     const iw = 1 / map.atlas.w, ih = 1 / map.atlas.h;
@@ -2102,11 +2114,11 @@ async function main() {
       edgeVerts[o + 3] = v; edgeVerts[o + 4] = wx; edgeVerts[o + 5] = wz; n++;
     };
     for (let r = 0; r < rows; r++) {
-      const my = ty0 + r, [sy, flipY] = reflect(my, mrows);
+      const my = ty0 + r, [sy, flipY] = reflect(my, areaR);
       for (let c = 0; c < cols; c++) {
         const mx = tx0 + c;
-        if (mx >= 0 && mx < stride && my >= 0 && my < mrows) continue;
-        const [sx, flipX] = reflect(mx, stride);
+        if (mx >= 0 && mx < areaC && my >= 0 && my < areaR) continue;
+        const [sx, flipX] = reflect(mx, areaC);
         const idx = tilemap[sy * stride + sx];
         if (idx >= map.atlas.tiles) continue;
         const cx = idx % map.atlas.cols, cy = (idx / map.atlas.cols) | 0;
@@ -2166,13 +2178,16 @@ async function main() {
     // features take their depth keys from the SAME base and formula as the
     // map's own and sort against them; without it, the engine's own rect.
     const mirror = L.edge === "mirror";
+    // the map ends at the engine's area (areaC, areaR), two 16-px cells to a
+    // tile; the engine's sweep never reaches the tile map's last row or column
+    const aW = Math.min(2 * areaC, w16 - 1), aH = Math.min(2 * areaR, h16 - 1);
     let r0 = rowBase(), nRows = (W[1] >> 4) + 32;
     let c0 = (E[0] >> 4) - 10, nCols = (W[0] >> 4) + 12;
     if (!mirror) {
       if (r0 < 0) { nRows += r0; r0 = 0; }
-      if (r0 + nRows > h16 - 1) nRows = h16 - r0 - 1;
+      if (r0 + nRows > aH) nRows = aH - r0;
       if (c0 < 0) { nCols += c0; c0 = 0; }
-      if (c0 + nCols > w16 - 1) nCols = w16 - c0 - 1;
+      if (c0 + nCols > aW) nCols = aW - c0;
     }
     L.edgeFeat = null;
     if (nRows <= 0 || nCols <= 0) return [0, 0];
@@ -2206,64 +2221,101 @@ async function main() {
                                   [x1, y0, u1, v0], [x1, y1, u1, v1], [x0, y1, u0, v1]])
         into.push(x, y, enc, u, v, ck, mode, x - vpL + E[0], y - vpT + E[1]);
     };
-    for (let row = r0; row < r0 + nRows; row++) {
-      const offRow = row < 0 || row >= h16;
-      const [srow, flipY] = offRow ? reflect(row, h16) : [row, false];
-      for (let col = c0; col < c0 + nCols; col++) {
-        const off = offRow || col < 0 || col >= w16;
-        const [scol, flipX] = off ? reflect(col, w16) : [col, false];
-        // the engine's sweep never reaches the last row or column (the clamps
-        // above), so nothing anchored there is drawn — nor mirrored
-        if (srow >= h16 - 1 || scol >= w16 - 1) continue;
-        // off the map, the MAP's anchor at the cell this one mirrors
-        const idx = off ? mapAnchors[srow * w16 + scol] : anchors[row * w16 + col];
+    // the four height bytes' projection term at a cell, the engine's own
+    const liftAt = (r, c) => {
+      const h00 = heightBuf[r * w16 + c];
+      const h01 = (c + 1 < w16) ? heightBuf[r * w16 + c + 1] : h00;
+      let h10 = h00, h11 = h01;
+      if (r + 1 < h16) {
+        h10 = heightBuf[(r + 1) * w16 + c];
+        h11 = (c + 1 < w16) ? heightBuf[(r + 1) * w16 + c + 1] : h10;
+      }
+      return (h00 + h01 + h10 + h11) >> 3;
+    };
+    const keyAt = (d, row, col) => {
+      const rel0 = row - r0;
+      if (d.flat)
+        return lab ? labD.flat + rel0 * D.rowStep
+                   : D.flat0 + D.flatSpan * (rel0 * nCols + (col - c0)) / flatSpan;
+      let rel = rel0;
+      if (rel < 0) rel = 0;
+      if (rel > nRows + 8) rel = nRows + 8;
+      // the column term breaks ties inside a row. The lab narrows it so a
+      // tall feature cannot reach past the NEXT row's ground (rowStep-0.1).
+      return D.tall0 + rel * D.rowStep + (lab ? labD.tallCol : 1.5) * ((col - c0) / nCols);
+    };
+    // the engine area's edges on the tile grid, px (tagpu_feat.c s_areaW/H)
+    const areaPxW = areaC * 32, areaPxH = areaR * 32;
+    // THE MAP'S OWN: the engine's sweep. Under the mirror a feature DRAWN past
+    // the area is past the map, and the mirror takes exactly the ones this
+    // keeps as its sources.
+    for (let row = Math.max(r0, 0); row < Math.min(r0 + nRows, h16 - 1); row++) {
+      for (let col = Math.max(c0, 0); col < Math.min(c0 + nCols, w16 - 1); col++) {
+        const idx = anchors[row * w16 + col];
         if (idx === undefined) continue;
         const d = defs[idx];
         if (!d) continue;
-        const h00 = heightBuf[srow * w16 + scol];
-        const h01 = (scol + 1 < w16) ? heightBuf[srow * w16 + scol + 1] : h00;
-        let h10 = h00, h11 = h01;
-        if (srow + 1 < h16) {
-          h10 = heightBuf[(srow + 1) * w16 + scol];
-          h11 = (scol + 1 < w16) ? heightBuf[(srow + 1) * w16 + scol + 1] : h10;
-        }
-        // the engine's projection: screenY is worldZ minus half the height.
-        // A reflection reverses the cells a footprint spans, so a mirrored
-        // feature ENDS on the cell its source begins on. The mirrored terrain
-        // is the tile ART reflected, and the art has the height baked in, so a
-        // y reflection mirrors where the source is DRAWN: the half height is
-        // added, not taken off (taken off, a tree on a hill lands the hill's
-        // height short of the art it stood on)
         const hx = (d.footx * 16) / 2 | 0, hz = (d.footz * 16) / 2 | 0;
-        const lift = (h00 + h01 + h10 + h11) >> 3;
-        const wax = flipX ? (col + 1) * 16 - hx : col * 16 + hx;
-        const waz = flipY ? (row + 1) * 16 - hz + lift : row * 16 + hz - lift;
+        const wax = col * 16 + hx, waz = row * 16 + hz - liftAt(row, col);
+        if (mirror && (wax >= areaPxW || waz >= areaPxH)) continue;
         const sx = wax + 128 - E[0], sy = waz + 32 - E[1];
-        const rel0 = row - r0;
-        let enc;
-        if (d.flat) {
-          enc = lab ? labD.flat + rel0 * D.rowStep
-                    : D.flat0 + D.flatSpan * (rel0 * nCols + (col - c0)) / flatSpan;
-        } else {
-          let rel = rel0;
-          if (rel < 0) rel = 0;
-          if (rel > nRows + 8) rel = nRows + 8;
-          // the column term breaks ties inside a row. The lab narrows it so a
-          // tall feature cannot reach past the NEXT row's ground (rowStep-0.1).
-          enc = D.tall0 + rel * D.rowStep +
-                (lab ? labD.tallCol : 1.5) * ((col - c0) / nCols);
-        }
+        const enc = keyAt(d, row, col);
         const shEnc = enc - (d.flat ? D.shadowFlat : D.shadowTall);
-        if (off) {
-          if (d.shadow) mquad(mshadow, d.shadow, sx, sy, shEnc, d.shadtrans ? 2 : 1, flipX);
-          if (d.body) mquad(mbody, d.body, sx, sy, enc, d.animtrans ? 2 : 1, flipX);
-          continue;
-        }
         const lam = lab ? lambertAt(col, row, L) : 1;
         if (d.shadow)
           quad(shadow, d.shadow, sx, sy, shEnc, d.shadtrans ? 2 : 1, wax, waz, lam);
         if (d.body)
           quad(body, d.body, sx, sy, enc, d.animtrans ? 2 : 1, wax, waz, lam);
+      }
+    }
+    // THE MIRROR (tagpu_feat.c mirror_gather). Band b of the picture is the map
+    // (0), the map turned over (b odd) or the right way round (b even) b maps
+    // away; a copy in band b sits on row b H + srow, or (b + 1) H - 1 - srow
+    // turned over. A source is the map's when it is DRAWN on the map, and a
+    // feature is drawn under 8 rows above its anchor, so each row is asked of
+    // its own band and of a neighbour it is that near. A copy past the top or
+    // bottom stands upright and is drawn whole, or — when any of it would reach
+    // across the map's border — not at all. The engine's projection: screenY is
+    // worldZ minus half the height. A reflection reverses the cells a footprint
+    // spans, so a mirrored feature ENDS on the cell its source begins on. The
+    // mirrored terrain is the tile ART reflected, and the art has the height
+    // baked in, so a y reflection mirrors where the source is DRAWN: the half
+    // height is added, not taken off.
+    const crosses = (rect, waz, top) => {
+      const y0 = waz - rect.hy, y1 = y0 + rect.h;
+      return top ? y1 > 0 : y0 < areaPxH;
+    };
+    const H = 2 * areaR, Wc = 2 * areaC, LIFT_ROWS = 8;
+    if (mirror) for (let row = r0; row < r0 + nRows; row++) {
+      const b0 = Math.floor(row / H), bands = [b0];
+      if (((b0 + 1) & 1) && row >= (b0 + 1) * H - LIFT_ROWS) bands.push(b0 + 1);
+      if (!((b0 - 1) & 1) && row < b0 * H + LIFT_ROWS) bands.push(b0 - 1);
+      for (const band of bands) {
+        const flipY = (band & 1) !== 0;
+        const srow = flipY ? (band + 1) * H - 1 - row : row - band * H;
+        if (srow < 0 || srow >= h16 - 1) continue;
+        for (let col = c0; col < c0 + nCols; col++) {
+          if (band === 0 && col >= 0 && col < Wc) continue;      // the map's own
+          const [scol, flipX] = reflect(col, Wc);
+          if (scol >= aW) continue;
+          const idx = mapAnchors[srow * w16 + scol];
+          if (idx === undefined) continue;
+          const d = defs[idx];
+          if (!d) continue;
+          const hx = (d.footx * 16) / 2 | 0, hz = (d.footz * 16) / 2 | 0;
+          const lift = liftAt(srow, scol);
+          const swaz = srow * 16 + hz - lift;
+          if (scol * 16 + hx >= areaPxW || swaz >= areaPxH || (band !== 0 && swaz < 0)) continue;
+          const wax = flipX ? (col + 1) * 16 - hx : col * 16 + hx;
+          const waz = flipY ? (row + 1) * 16 - hz + lift : row * 16 + hz - lift;
+          if (band !== 0 && ((d.shadow && crosses(d.shadow, waz, band < 0)) ||
+                             (d.body && crosses(d.body, waz, band < 0)))) continue;
+          const sx = wax + 128 - E[0], sy = waz + 32 - E[1];
+          const enc = keyAt(d, row, col);
+          const shEnc = enc - (d.flat ? D.shadowFlat : D.shadowTall);
+          if (d.shadow) mquad(mshadow, d.shadow, sx, sy, shEnc, d.shadtrans ? 2 : 1, flipX);
+          if (d.body) mquad(mbody, d.body, sx, sy, enc, d.animtrans ? 2 : 1, flipX);
+        }
       }
     }
     const all = shadow.concat(body);
@@ -2873,10 +2925,10 @@ async function main() {
     // an integer eye and carries the remainder, which is the same thing — and
     // `eye` its rounding, which is all the builders ever see.
     const cam = eye.slice();
-    const mapW = map.w16 * 16, mapH = map.h16 * 16;
+    const mapW = map.w16 * 16 - 32, mapH = map.h16 * 16 - 128;
     // The range the eye may take, [loX, hiX, loY, hiY]: the centre clamp
     // (tagpu_zoom.c camera_range) — the ground point at the screen centre is
-    // clamped to the map, the same at every zoom.
+    // clamped to the engine's scroll extent, the same at every zoom.
     const range = () => [-vw / 2, mapW - vw / 2, -vh / 2, mapH - vh / 2];
     const clamp = () => {
       const [loX, hiX, loY, hiY] = range();
