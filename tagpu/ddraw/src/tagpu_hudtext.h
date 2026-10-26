@@ -8,8 +8,11 @@
 #include <stdint.h>
 #include "stb_truetype.h"
 
-/* the glyphs one line sets at most; the rest of a longer string is not drawn */
-#define TAGPU_HUDTEXT_MAX 160
+/* the glyphs one line sets at most; the rest of a longer string is not drawn. The in-game wiki's
+   text sets a line as long as its panel is wide -- some 200 glyphs at 16:9, twice that on a 32:9
+   screen -- so the cap is the most one wiki text holds (tagpu_wikilay.c MAXGLYPH, which refuses
+   to build past it): no line of one is cut. The draw keeps four arrays of it on its stack, 32 KB */
+#define TAGPU_HUDTEXT_MAX 2048
 
 /* the next code point of UTF-8, or U+FFFD for a bad sequence */
 uint32_t tagpu_hudtext_utf8(const unsigned char** s, const unsigned char* e);

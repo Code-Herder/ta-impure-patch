@@ -67,6 +67,9 @@ static const char* const KEYCAP[WIKI_NKEYS] = { "Shift", "Alt", "Ctrl", "Z", "X"
 #define MAXGLYPH    2048                    /* the code points of one text the rules break; the
                                                rest of a longer one is not set                    */
 #define MAXLINE     256                     /* the lines of one text; the rest is not set         */
+#if MAXGLYPH > TAGPU_HUDTEXT_MAX
+#error a line of one text must fit the glyphs the HUD draw sets of one op
+#endif
 
 /* layout.json's numbers, in units unless named */
 typedef struct {
