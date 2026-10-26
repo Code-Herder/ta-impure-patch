@@ -1,6 +1,10 @@
 /* tagpu_vk_terr.c -- the terrain pass (the 32x32 pre-rendered map tiles)
    drawn by Vulkan. Contract: tagpu_vk_terr.h.
 
+   TWO INSTANCES: compiled for the game's world and, under TAGPU_SCENE_WIKI, for
+   the wiki's stage, each with its own statics; tagpu_scene.h names where the
+   wiki's draws its hand-over from and what it may call.
+
    IT IS NOT A SECOND IMPLEMENTATION OF THE PASS. Everything arrives through
    `tagpu_terr_handover` (tagpu_terr.h): the instances are the array the
    gather filled, the uniforms are the numbers the gather computed, the texels
@@ -113,6 +117,7 @@
    A PASS READS NO ENGINE STATE: every value comes from the hand-over, so this
    file is not on thread-split.allow and must never be. */
 
+#include "tagpu_scene.h"            /* first: the wiki instance's names and sizes */
 #include "tagpu_vk_pass.h"
 #include <windows.h>
 #include <stdarg.h>

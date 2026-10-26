@@ -4,6 +4,10 @@
    contract and research/notes/gpu-posing.md §4 for the design; what follows is
    what the code does rather than why the design is what it is.
 
+   TWO INSTANCES: compiled for the game's world and, under TAGPU_SCENE_WIKI, for
+   the wiki's stage, each with its own statics; tagpu_scene.h names where the
+   wiki's draws its hand-over from and what it may call.
+
    THE VERTEX SHADER IS TRANSCRIBED FROM THE ENGINE'S RASTER, expression by
    expression:
 
@@ -90,6 +94,7 @@
 
    RENDER THREAD ONLY. */
 
+#include "tagpu_scene.h"            /* first: the wiki instance's names and sizes */
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>

@@ -1,7 +1,12 @@
 /* tagpu_render3do.c — the material layer the native and posed passes share:
    the unit texture atlas, the face-shade calibration and its multipliers, the
-   face material helpers, and the build-state staging formulas. */
+   face material helpers, and the build-state staging formulas.
 
+   TWO INSTANCES: compiled for the game's world and, under TAGPU_SCENE_WIKI, for
+   the wiki's stage, each with its own statics; tagpu_scene.h names where the
+   wiki's draws its hand-over from and what it may call. */
+
+#include "tagpu_scene.h"            /* first: the wiki instance's names and sizes */
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
