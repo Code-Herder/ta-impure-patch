@@ -260,8 +260,8 @@ static const GLYPH* glyph(const HUDFACE* f, int fi, float size, int g, int quart
 /* ---- the instances ------------------------------------------------------------------------- */
 
 typedef struct {
-    const HUDART* art;
-    const HUDOPS* ops;
+    const HUDART*    art;
+    const HUDOPLIST* ops;
     float         px;
     float         ox, oy;       /* the game screen's top-left on the attachment      */
     float         W, H;         /* the attachment                                    */
@@ -338,17 +338,24 @@ static void colour(HUDINST* q, uint32_t rgb, float a)
 static void text(B* c, const HUDOP* op)
 {
     const HUDGLOBALS* g = tagpu_hudlay_globals(c->art->lay);
-    const struct HUDSTYLE* S = &g->style[op->style];
-    int fi = c->art->style_face[op->style];
-    const HUDFACE* f = &c->art->face[fi];
-    float size = op->size * c->px, sc = stbtt_ScaleForMappingEmToPixels(&f->info, size);
-    float sp = S->spacing * size, width, x, base, opacity = (float)(op->rgba & 0xFF) / 255.0f;
+    const struct HUDSTYLE* S;
+    const HUDFACE* f;
+    float size = op->size * c->px, sc;
+    float sp, width, x, base, opacity = (float)(op->rgba & 0xFF) / 255.0f;
     uint32_t cp[MAXCH], rgb[MAXCH];
-    int gi[MAXCH], n = 0, i, k, r, copies;
+    int gi[MAXCH], n = 0, i, k, r, copies, fi;
     float pen[MAXCH];
     float off[5][2];
     float alpha[5];
 
+    /* the runs and their bytes inside the list's counts, or nothing is set */
+    if ((int)op->run + (int)op->nrun > c->ops->nrun || op->style < 0 || op->style >= g->nstyle) return;
+    for (r = 0; r < op->nrun; r++)
+        if ((int)c->ops->run[op->run + r].off + (int)c->ops->run[op->run + r].len > c->ops->ntext) return;
+    S = &g->style[op->style];
+    fi = c->art->style_face[op->style];
+    f = &c->art->face[fi];
+    sp = S->spacing * size;
     for (r = 0; r < op->nrun; r++) {
         const HUDRUN* run = &c->ops->run[op->run + r];
         const unsigned char *s = (const unsigned char*)c->ops->text + run->off, *e = s + run->len;
@@ -360,6 +367,7 @@ static void text(B* c, const HUDOP* op)
             n++;
         }
     }
+    sc = stbtt_ScaleForMappingEmToPixels(&f->info, size);
     width = tagpu_hudtext_pens(&f->info, sc, sp, gi, n, pen);
     if (op->flags & HOPF_BASE) {
         /* an SVG <text>: its anchor at x, its baseline at y, painted on a whole pixel */
@@ -373,7 +381,9 @@ static void text(B* c, const HUDOP* op)
 
     /* the copies under the text, then the text */
     copies = 0;
-    if (S->outline) {
+    if (op->flags & HOPF_INK) {
+        /* dark ink on a light face: the runs' colour alone, neither the shadow nor the outline */
+    } else if (S->outline) {
         static const int pick[4][2] = { { 0, 1 }, { 2, 3 }, { 0, 3 }, { 2, 1 } };
         for (k = 0; k < 4; k++) {
             off[copies][0] = S->ol[pick[k][0]] * c->px;
@@ -445,7 +455,7 @@ static void rgba4(float* t, uint32_t rgb, float a)
 
 static void chart_prepare(const B* c)
 {
-    const HUDCHART* K = &c->ops->chart;
+    const HUDCHART* K = c->ops->chart;
     float px = c->px, hw = K->w * px / 2, hh = K->halo_w * px / 2, cr = K->cross * px, cw = K->cross_w * px / 2;
     float reach = (hw > hh ? hw : hh) + 1, ce = cr + cw + 1, ends = reach > ce ? reach : ce;
     int n = K->n < HUD_MAXSEAT ? K->n : HUD_MAXSEAT, np = K->npt < HUD_MAXPT ? K->npt : HUD_MAXPT;
@@ -598,6 +608,7 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
         break;
     }
     case HOP_CHART:
+        if (!c->ops->chart) break;
         if (!*charted) { chart_prepare(c); *charted = 1; }
         for (j = 0; j < s_nband; j++) {
             const BAND* bd = &s_band[j];
@@ -654,7 +665,7 @@ static void group_box(const B* c, int i0, int* x0, int* y0, int* x1, int* y1)
 
 /* group k's ops [i0, i1) drawn into its region; its composite at index `at` (-1 none) set. 0 when
    the region does not fit the attachment. */
-static int draw_group(B* c, const HUDOPS* ops, int k, int i0, int i1, int at, int* charted,
+static int draw_group(B* c, const HUDOPLIST* ops, int k, int i0, int i1, int at, int* charted,
                       HUDSHELF* sh, HUDLAYREG* g)
 {
     int j0 = c->n, i, x0, y0, x1, y1, w, h;
@@ -705,10 +716,35 @@ void tagpu_huddraw_begin(void)
     if (s_full) atlas_empty();
 }
 
+HUDOPLIST tagpu_huddraw_list(const HUDOPS* ops)
+{
+    HUDOPLIST l;
+    l.op = ops->op;
+    l.n = ops->n < HUD_MAXOP ? ops->n : HUD_MAXOP;
+    l.run = ops->run;
+    l.nrun = ops->nrun < HUD_MAXRUN ? ops->nrun : HUD_MAXRUN;
+    l.text = ops->text;
+    l.ntext = ops->ntext < HUD_TEXTMAX ? ops->ntext : HUD_TEXTMAX;
+    l.grp = ops->grp;
+    l.ngrp = ops->ngrp < HUD_MAXGRP ? ops->ngrp : HUD_MAXGRP;
+    l.chart = &ops->chart;
+    return l;
+}
+
 int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, int layer, float px, int ox, int oy,
                         int w, int h, HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb,
                         int* nmain, int* nminst, HUDLAYREG* g, int* ng, HUDSHELF* shelf,
                         int* dropped, int* unfit)
+{
+    const HUDOPLIST l = tagpu_huddraw_list(ops);
+    return tagpu_huddraw_build_list(art, &l, layer, px, ox, oy, w, h, inst, cap, b, bcap, nb, nmain, nminst,
+                                    g, ng, shelf, dropped, unfit);
+}
+
+int tagpu_huddraw_build_list(const HUDART* art, const HUDOPLIST* ops, int layer, float px, int ox, int oy,
+                             int w, int h, HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb,
+                             int* nmain, int* nminst, HUDLAYREG* g, int* ng, HUDSHELF* shelf,
+                             int* dropped, int* unfit)
 {
     B c;
     HUDOP none;

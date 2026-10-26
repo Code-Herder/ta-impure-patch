@@ -2,22 +2,31 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>The wiki stage's cursor icons</title>
-<!-- The three cursors of the wiki's stage drawn by stage.js's own cursorShape, each on a canvas of its ICON_BOX at SCALE
-     pixels a unit with the pointer at the middle, for tools/wiki/cursors.sh to save as kit icons. -->
+<title>The wiki's kit icons drawn from the mockup's shapes</title>
+<!-- The three cursors of the wiki's stage, drawn by stage.js's own cursorShape, each on a canvas of its ICON_BOX at SCALE
+     pixels a unit with the pointer at the middle; and the window's control glyphs and tree marks, drawn by glyphs.js's
+     shape on a canvas of its BOX. tools/wiki/cursors.sh saves them as kit icons. -->
 <link rel="icon" href="data:,">
 </head>
 <body style="background:#444">
 <script src="mockup/stage.js"></script>
+<script src="mockup/glyphs.js"></script>
 <script>
-const SCALE = 6;                      // pixels a unit: the wiki unit at 4K is 3, so the icon minifies everywhere it is drawn
-window.CURSORS = { scale: SCALE, png: {} };
+const SCALE = 6;                      // pixels a unit: the wiki unit at 4K is 3, so an icon minifies everywhere it is drawn
+window.ICONS = { scale: SCALE, png: {} };
 for (const [shape, name] of Object.entries(WikiStage.CURSOR)) {
   const [bw, bh] = WikiStage.ICON_BOX[shape], cv = document.createElement('canvas');
   cv.width = bw * SCALE; cv.height = bh * SCALE;
   WikiStage.cursorShape(cv.getContext('2d'), cv.width / 2, cv.height / 2, shape, SCALE);
   document.body.append(cv);
-  CURSORS.png[name] = cv.toDataURL('image/png');
+  ICONS.png[name] = cv.toDataURL('image/png');
+}
+for (const [name, [bw, bh]] of Object.entries(WikiGlyphs.BOX)) {
+  const cv = document.createElement('canvas');
+  cv.width = bw * SCALE; cv.height = bh * SCALE;
+  WikiGlyphs.shape(cv.getContext('2d'), name, SCALE);
+  document.body.append(cv);
+  ICONS.png[name] = cv.toDataURL('image/png');
 }
 </script>
 </body>

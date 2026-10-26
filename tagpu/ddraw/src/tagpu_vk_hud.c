@@ -30,10 +30,11 @@
    it draws no chart lines (hide_chart), and the next sends it. Its first generation goes before
    the HUD draws at all, so every draw that binds it binds a written image.
 
-   THE IN-GAME WIKI IS A THIRD LAYER of the same pass (tagpu_vk_hud_record_wiki): its ops are
-   tagpu_wikiframe.c's, built by the same tagpu_huddraw into the same instance range after the HUD's
-   two layers, on the same glyph atlas, with its kit's parts uploaded after the HUD's and numbered
-   after them (a wiki batch's texture is its part's index plus s_nparts).
+   THE IN-GAME WIKI IS A THIRD LAYER of the same pass (tagpu_vk_hud_record_wiki): its two op lists,
+   the page's (tagpu_wikilay.c) and the stage's (tagpu_wikistage.c), are built by the same
+   tagpu_huddraw into the same instance range after the HUD's two layers, on the same glyph atlas,
+   with its kit's parts uploaded after the HUD's and numbered after them (a wiki batch's texture is
+   its part's index plus s_nparts).
 
    IT KNOWS NOTHING ABOUT A WINDOW, and reads no engine state: everything arrives in its
    arguments or in the loaded HUD and wiki (tagpu_hudart.h), which are immutable. */
@@ -52,7 +53,9 @@
 #include "tagpu_wikistate.h"
 #include "spirv/tagpu_huddraw.spv.h"
 
-#define HUD_MAXINST   8192
+/* a slot's quads: the HUD's two layers (a few thousand), and the wiki's page and stage, whose own
+   op budget is WIKI_MAXOP; a quad past the range is dropped by the build, never written past it */
+#define HUD_MAXINST   32768
 #define HUD_MAXBATCH  1024
 #define IBYTES        ((VkDeviceSize)HUD_MAXINST * sizeof(HUDINST))
 #define MAXPART       160           /* the HUD's kit, at most 128, then the wiki's */
@@ -982,7 +985,7 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     const HUDART* art;
     const WIKIART* wart;
     const HUDSTATE* st = NULL;
-    const HUDOPS* wops = NULL;
+    HUDOPLIST wpage, wstage;
     TAGPU_VKSTAGE* sg;
     char err[160];
     float px = 0, wpx = 0;
@@ -991,10 +994,10 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_wb0 = s_wb1 = s_ngroup = 0;
     memset(&s_top, 0, sizeof s_top);
     tagpu_hudstate_drawn(NULL);
-    tagpu_wikistate_drawn(NULL);
+    tagpu_wikistate_drawn(0);
     if (s_state == ST_REFUSED) return 0;
     hud = tagpu_hudstate_frame(d->frame, &st, &px, &ox, &oy) && px > 0;
-    wiki = tagpu_wikistate_frame(d->frame, &wops, &wpx, &wox, &woy) && wpx > 0;
+    wiki = tagpu_wikistate_frame(d->frame, &wpage, &wstage, &wpx, &wox, &woy) && wpx > 0;
     if (!hud && !wiki) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS || w == 0 || h == 0) return 0;
 
@@ -1060,23 +1063,42 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         s_tb1 = nb0 + m1;
         s_wb0 = s_wb1 = s_nbatch;
         /* THE WIKI'S LAYER, in its own unit and from its own kit: a batch's texture is its kit
-           index, which the pass holds after the HUD's parts */
+           index, which the pass holds after the HUD's parts. The page, then the stage inside its
+           bezel; the stage has no groups, so every batch it adds is the attachment's and the
+           layer's batches stay one run [s_wb0, s_wb1) when the page's groups' come after it */
         if (wiki) {
-            int nw, nbw = 0, mw = 0, miw = 0, gw = s_ngroup, dw = 0, uw = 0;
-            nw = tagpu_huddraw_build(&wart->draw, wops, 0, wpx, wox, woy, (int)w, (int)h, in + s_ninst,
-                                     HUD_MAXINST - s_ninst, s_batch + s_nbatch, HUD_MAXBATCH - s_nbatch,
-                                     &nbw, &mw, &miw, s_group, &s_ngroup, &sh, &dw, &uw);
-            dropped += dw;
-            unfit += uw;
-            for (i = s_nbatch; i < s_nbatch + nbw; i++) {
-                s_batch[i].first += s_ninst;
-                if (s_batch[i].tex >= 0) s_batch[i].tex += s_nparts;
-            }
-            for (i = gw; i < s_ngroup; i++) s_group[i].b0 += s_nbatch;
+            const HUDOPLIST* list[2] = { &wpage, &wstage };
+            int k, mw[2] = { 0, 0 }, nbw[2] = { 0, 0 }, nb_at[2] = { 0, 0 };
             s_wb0 = s_nbatch;
-            s_wb1 = s_nbatch + mw;
-            s_nbatch += nbw;
-            s_ninst += nw;
+            for (k = 0; k < 2; k++) {
+                int nw, miw = 0, gw = s_ngroup, dw = 0, uw = 0;
+                if (!list[k]->n) continue;
+                nb_at[k] = s_nbatch;
+                nw = tagpu_huddraw_build_list(&wart->draw, list[k], 0, wpx, wox, woy, (int)w, (int)h, in + s_ninst,
+                                              HUD_MAXINST - s_ninst, s_batch + s_nbatch, HUD_MAXBATCH - s_nbatch,
+                                              &nbw[k], &mw[k], &miw, s_group, &s_ngroup, &sh, &dw, &uw);
+                dropped += dw;
+                unfit += uw;
+                for (i = s_nbatch; i < s_nbatch + nbw[k]; i++) {
+                    s_batch[i].first += s_ninst;
+                    if (s_batch[i].tex >= 0) s_batch[i].tex += s_nparts;
+                }
+                for (i = gw; i < s_ngroup; i++) s_group[i].b0 += s_nbatch;
+                s_nbatch += nbw[k];
+                s_ninst += nw;
+            }
+            /* the page's attachment batches, its groups' batches, then the stage's: the groups'
+               are moved past the stage's so the attachment's batches are one run */
+            if (nbw[0] > mw[0] && nbw[1] > 0) {
+                const int g0 = nb_at[0] + mw[0], ng = nbw[0] - mw[0], ns = nbw[1];
+                HUDBATCH tmp[HUD_MAXBATCH];
+                memcpy(tmp, s_batch + g0, (size_t)ng * sizeof *tmp);
+                memmove(s_batch + g0, s_batch + nb_at[1], (size_t)ns * sizeof *tmp);
+                memcpy(s_batch + g0 + ns, tmp, (size_t)ng * sizeof *tmp);
+                for (i = 0; i < s_ngroup; i++)
+                    if (s_group[i].b0 >= g0 && s_group[i].b0 < g0 + ng) s_group[i].b0 += ns;
+            }
+            s_wb1 = s_wb0 + mw[0] + (wstage.n ? nbw[1] : 0);
         }
         s_layW = sh.w_used;
         s_layH = sh.h_used;
@@ -1143,7 +1165,7 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     /* what this frame draws is what a click is tested against */
     if (s_ninst > 0) {
         if (hud) tagpu_hudstate_drawn(&s_ops);
-        if (wiki) tagpu_wikistate_drawn(wops);
+        if (wiki) tagpu_wikistate_drawn(1);
     }
     return s_ninst > 0;
 lost:

@@ -29,7 +29,8 @@
 #include "tagpu_mod.h"
 
 /* the kit's parts the rules draw, by name; the icons are looked up as the mockup's data-glyph
-   lists them, the first the kit has */
+   and data-part list them, the first the kit has. The control glyphs and the tree's marks are
+   icons because no HUD face has their characters (tools/wiki/mockup/glyphs.js draws them) */
 enum { P_WINDOW, P_CLOSE, P_CLOSE_DOWN, P_PANEL, P_ROW, P_ROW_SEL, P_BEZEL, P_BUTTON, P_BUTTON_DOWN,
        P_BADGE, P_KEYCAP, P_WIKIBTN, P_WIKIBTN_DOWN, P_N };
 static const char* const PART[P_N] = { "window", "close", "close_down", "panel", "row", "row_selected",
@@ -47,12 +48,6 @@ static const char* const ROLE[R_N] = { "window_title", "entry_title", "category"
 #define S_CHOOSE    "Choose an entry"
 #define S_NODEMOS   "No demos"
 #define S_BADGE     "Turned off in this mod"
-#define S_OPEN      "\xE2\x96\xBE"          /* ▾ a category shown */
-#define S_SHUT      "\xE2\x96\xB8"          /* ▸ a category folded */
-#define S_DOT       "\xE2\x80\xA2"          /* • an entry */
-#define S_PLAY      "\xE2\x96\xB6"          /* ▶ */
-#define S_PAUSE     "\xE2\x9D\x9A\xE2\x9D\x9A"  /* ❚❚ */
-#define S_REPLAY    "\xE2\x9F\xB2"          /* ⟲ */
 #define S_X1        "1\xC3\x97"             /* 1× */
 #define S_X2        "2\xC3\x97"             /* 2× */
 #define S_TRY       "Try it yourself"
@@ -72,6 +67,9 @@ static const char* const KEYCAP[WIKI_NKEYS] = { "Shift", "Alt", "Ctrl", "Z", "X"
 #define MAXGLYPH    2048                    /* the code points of one text the rules break; the
                                                rest of a longer one is not set                    */
 #define MAXLINE     256                     /* the lines of one text; the rest is not set         */
+#if MAXGLYPH > TAGPU_HUDTEXT_MAX
+#error a line of one text must fit the glyphs the HUD draw sets of one op
+#endif
 
 /* layout.json's numbers, in units unless named */
 typedef struct {
@@ -100,6 +98,7 @@ struct WIKILAY {
     WG               g;
     int              part[P_N];
     int              icon_close, icon_wiki;     /* -1: the kit has none */
+    int              icon_play, icon_pause, icon_replay, icon_open, icon_shut, icon_dot;
     int              role[R_N];                 /* a style index */
     int              nstyle;
     struct HUDSTYLE  style[24];
@@ -464,6 +463,12 @@ static void panel_thumb(C* c, const PANEL* p)
     pos = p->scroll * (track - len) / (total - vis);
     pos = pos > 0 && pos < 1 ? 1 : floor(pos);
     solid(c, HOP_SOLID, rect(p->scr.x + p->scr.w - p->sb, floor(p->scr.y + 0.5) + pos, p->sb, len), THUMB_RGB, THUMB_A, NULL);
+    c->fr->track[p->which].x = (float)((p->scr.x + p->scr.w - p->sb) / c->px);
+    c->fr->track[p->which].y = (float)(floor(p->scr.y + 0.5) / c->px);
+    c->fr->track[p->which].w = (float)(p->sb / c->px);
+    c->fr->track[p->which].h = (float)(track / c->px);
+    c->fr->thumb_y[p->which] = (float)((floor(p->scr.y + 0.5) + pos) / c->px);
+    c->fr->thumb_h[p->which] = (float)(len / c->px);
 }
 
 /* ---- the rows: .row and #demos li, a flex row of a mark, its text and (a tree's entry) the lock - */
@@ -472,8 +477,9 @@ typedef struct {
     int         part;       /* -1: none (li.none) */
     int         role;       /* the text's */
     const char* text;
-    int         mark_role;  /* the mark's: a tree row's mark, a demo's number */
+    int         mark_role;  /* the mark's: a demo's number */
     const char* mark;       /* "" none */
+    int         mark_icon;  /* a tree row's mark, a kit icon filling its square box; -1 none */
     double      mark_w;
     int         mark_right; /* the mark's text to its box's right (a demo's number), else centred */
     int         locked;
@@ -491,7 +497,8 @@ static double row(C* c, const ROW* rw, double x, double y, double w, const R* cl
     double fixed = (rw->mark_w > 0 ? rw->mark_w + gap : 0) + (rw->locked ? gap + lock : 0), maxc = 0, minc = 0, sw, h, ih, mh = 0, th;
     int n = pens(c, &t, rw->text, strlen(rw->text)), nl = 0, i, ink = rw->part >= 0 ? light(c, rw->part) : rw->ink;
     R b, ty;
-    if (rw->mark[0] || rw->mark_w > 0) { tm = ts(c, rw->mark_role, g->line); mh = rw->mark[0] ? tm.L : 0; }
+    if (rw->mark_icon >= 0) mh = rw->mark_w;
+    else if (rw->mark[0] || rw->mark_w > 0) { tm = ts(c, rw->mark_role, g->line); mh = rw->mark[0] ? tm.L : 0; }
     intrinsic(c, n, &maxc, &minc);
     sw = maxc <= inner_w - fixed ? maxc : fmax(inner_w - fixed, minc);
     if (n) nl = wrap(c, n, sw);
@@ -503,7 +510,11 @@ static double row(C* c, const ROW* rw, double x, double y, double w, const R* cl
         double mx = x + pxx, tx = mx + (rw->mark_w > 0 ? rw->mark_w + gap : 0);
         art(c, rw->part, b, clip);
         if (rw->key) hot(c, b, clip, rw->key);
-        if (rw->mark[0]) {
+        if (rw->mark_icon >= 0) {
+            /* the mark's box is as tall as it is wide, centred in the row's height */
+            R mb = rect(mx, y + py + half(ih - mh), rw->mark_w, mh);
+            if (meets(mb, *clip)) art(c, rw->mark_icon, mb, clip);
+        } else if (rw->mark[0]) {
             int m = pens(c, &tm, rw->mark, strlen(rw->mark));
             double mw = c->pen[m];
             double lx = rw->mark_right ? mx + rw->mark_w - ceil64(mw) : mx + half(rw->mark_w - ceil64(mw));
@@ -550,18 +561,19 @@ static double tree_rows(C* c, const PANEL* p, double w, int emit)
         shut = -1;
         memset(&rw, 0, sizeof rw);
         rw.part = c->l->part[P_ROW];
-        rw.mark_role = rw.role = nd->entry >= 0 ? R_ENTRY : R_CATEGORY;
+        rw.role = nd->entry >= 0 ? R_ENTRY : R_CATEGORY;
+        rw.mark = "";
         rw.mark_w = U(c, g->mark);
         if (nd->entry >= 0) {
             const WIKIENTRY* e = &c->d->entry[nd->entry];
             rw.text = e->title ? e->title : e->id;
-            rw.mark = S_DOT;
+            rw.mark_icon = c->l->icon_dot;
             rw.locked = locked(c, nd->entry);
             if (nd->entry == c->st->entry) rw.part = c->l->part[P_ROW_SEL];
             snprintf(key, sizeof key, "entry:%d", i);
         } else {
             rw.text = nd->title ? nd->title : "";
-            rw.mark = folded(c->st, i) ? S_SHUT : S_OPEN;
+            rw.mark_icon = folded(c->st, i) ? c->l->icon_shut : c->l->icon_open;
             if (folded(c->st, i)) shut = nd->depth;
             snprintf(key, sizeof key, "fold:%d", i);
         }
@@ -598,6 +610,7 @@ static double demo_rows(C* c, const PANEL* p, double w, int emit)
         rw.role = R_DEMO;
         rw.text = e ? S_NODEMOS : "";
         rw.mark = "";
+        rw.mark_icon = -1;
         rw.ink = light(c, c->l->part[P_PANEL]);
         return row(c, &rw, p->cx, p->cy, w, &p->view, emit);
     }
@@ -609,6 +622,7 @@ static double demo_rows(C* c, const PANEL* p, double w, int emit)
         snprintf(num, sizeof num, "%d", i + 1);
         rw.mark = num;
         rw.mark_role = R_DEMO_NUM;
+        rw.mark_icon = -1;
         rw.mark_w = U(c, g->demo_num);
         rw.mark_right = 1;
         snprintf(key, sizeof key, "demo:%d", i);
@@ -655,10 +669,11 @@ static void panel(C* c, int which, R box, LIST list, const char* key)
 
 /* ---- the controls (#ctl): play, replay, 1x and 2x, Try it yourself ----------------------------- */
 
-/* A button: its part, down while on or held; its text centred; a disabled one faded as one layer
-   and given no control. Chrome's default style gives a button a 2 px border, which the kit skin
-   makes transparent and keeps, so it stands inside the box. */
-static double button(C* c, double x, double y, const char* key, const char* label, int on, int off)
+/* A button: its part, down while on or held; its text centred, or its kit glyph (`icon`, -1 none)
+   over it with no text; a disabled one faded as one layer and given no control. Chrome's default
+   style gives a button a 2 px border, which the kit skin makes transparent and keeps, so it
+   stands inside the box. */
+static double button(C* c, double x, double y, const char* key, const char* label, int icon, int on, int off)
 {
     const WG* g = &c->l->g;
     TS t = ts(c, R_CONTROL, g->line);
@@ -669,6 +684,7 @@ static double button(C* c, double x, double y, const char* key, const char* labe
     if (off) group_begin(c, OFF_A);
     art(c, part, b, NULL);
     if (!off) hot(c, b, NULL, key);
+    glyph(c, icon, b);
     line(c, &t, label, 0, n, x + 2 + U(c, g->ctl_pad) + half(w - 4 - 2 * U(c, g->ctl_pad) - tw), y + 2 + half(h - 4 - t.L),
          light(c, part), NULL);
     if (off) group_end(c);
@@ -761,14 +777,14 @@ static void entry_col(C* c, R col)
     }
     /* the controls, centred in the row's height (all are ctl_h tall) */
     {
-        const char* play = c->st->playing && !c->st->done ? S_PAUSE : S_PLAY;
+        const int play = c->st->playing && !c->st->done ? c->l->icon_pause : c->l->icon_play;
         double bx = x, cg = U(c, g->ctl_gap);
-        bx += button(c, bx, y, "play", play, 0, off) + cg;
-        bx += button(c, bx, y, "replay", S_REPLAY, 0, off) + cg;
-        bx += button(c, bx, y, "x1", S_X1, c->st->speed == 1, off) + U(c, g->ctl_pair);
-        bx += button(c, bx, y, "x2", S_X2, c->st->speed == 2, off) + cg;
+        bx += button(c, bx, y, "play", "", play, 0, off) + cg;
+        bx += button(c, bx, y, "replay", "", c->l->icon_replay, 0, off) + cg;
+        bx += button(c, bx, y, "x1", S_X1, -1, c->st->speed == 1, off) + U(c, g->ctl_pair);
+        bx += button(c, bx, y, "x2", S_X2, -1, c->st->speed == 2, off) + cg;
         bx += U(c, g->ctl_try);
-        button(c, bx, y, "try", c->st->try_it ? S_BACK : S_TRY, c->st->try_it, off);
+        button(c, bx, y, "try", c->st->try_it ? S_BACK : S_TRY, -1, c->st->try_it, off);
         y += ctl_h + gap;
     }
     panel(c, WIKI_SCROLL_TEXT, rect(x, y, w, ph), text_rows, "scroll:text");
@@ -868,6 +884,58 @@ int tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
     return 1;
 }
 
+static int find_part(const HUDLAY* k, const char* name);
+
+int tagpu_wikilay_check(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f, HUDOPS* scratch,
+                        char* err, size_t errn)
+{
+    /* the icons the window and the stage draw: the build draws a button without an icon it lacks,
+       so their absence is refused here rather than drawn as a blank control */
+    static const char* const ICON[] = { "i_wiki", "i_play", "i_pause", "i_replay", "i_open", "i_shut",
+                                        "i_dot", "cursor_arrow", "cursor_move", "cursor_build" };
+    WIKIPAGE st;
+    WIKIFRAME fr;
+    int i, e, k, pass;
+    if (err && errn) err[0] = 0;
+    if (!l || !d || !f || !scratch) {
+        if (err && errn) snprintf(err, errn, "wikilay: no layout, data, faces or scratch to check");
+        return 0;
+    }
+    if (l->icon_close < 0) { if (err && errn) snprintf(err, errn, "wiki kit: no icon 'i_close' or 'i_x'"); return 0; }
+    for (i = 0; i < (int)(sizeof ICON / sizeof *ICON); i++)
+        if (find_part(l->kit, ICON[i]) < 0) {
+            if (err && errn) snprintf(err, errn, "wiki kit: no icon '%s'", ICON[i]);
+            return 0;
+        }
+    if (tagpu_hudlay_style_index(l->kit, "toast") < 0) {
+        if (err && errn) snprintf(err, errn, "wiki kit: no `toast` style for the stage");
+        return 0;
+    }
+    memset(&st, 0, sizeof st);
+    st.W = 1280;
+    st.H = 720;
+    st.bar = 24;
+    st.entry = -1;
+    st.speed = 1;
+    snprintf(st.held, sizeof st.held, "wiki");
+    if (!tagpu_wikilay_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
+    st.open = 1;
+    snprintf(st.held, sizeof st.held, "close");
+    if (!tagpu_wikilay_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
+    snprintf(st.held, sizeof st.held, "try");
+    for (e = 0; e < d->nentry; e++)
+        for (k = 0; k < (d->entry[e].ndemo > 0 ? d->entry[e].ndemo : 1); k++)
+            for (pass = 0; pass < 2; pass++) {
+                st.entry = e;
+                st.demo = k;
+                st.playing = !pass;
+                st.done = pass;
+                st.speed = 1 + pass;
+                if (!tagpu_wikilay_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
+            }
+    return 1;
+}
+
 /* ---- loading ----------------------------------------------------------------------------------- */
 
 typedef struct { const TJV* L; int bad; char* err; size_t errn; } LD;
@@ -955,23 +1023,30 @@ static int find_part(const HUDLAY* k, const char* name)
 }
 
 WIKILAY* tagpu_wikilay_load(const char* layout, size_t nlayout, const char* kit, size_t nkit,
-                            HUDPNGSIZE png_size, void* ctx, const HUDGLOBALS* styles, char* err, size_t errn)
+                            HUDPNGSIZE png_size, void* ctx, const HUDLAY* hud, char* err, size_t errn)
 {
     WIKILAY* l = (WIKILAY*)calloc(1, sizeof(WIKILAY));
     TJDOC* doc = NULL;
     const TJV* roles;
+    const HUDGLOBALS* styles = hud ? tagpu_hudlay_globals(hud) : NULL;
     char e2[200];
     int i, j, ok = 0;
     if (err && errn) err[0] = 0;
     if (!l || !styles) { snprintf(err, errn, "wikilay: out of memory or no styles"); goto done; }
     if (!(doc = tagpu_json_parse(layout, nlayout, e2, sizeof e2))) { snprintf(err, errn, "wiki layout.json: %s", e2); goto done; }
     if (!read_layout(l, tagpu_json_root(doc), err, errn)) goto done;
-    if (!(l->kit = tagpu_hudlay_load_kit(NULL, kit, nkit, png_size, ctx, e2, sizeof e2))) { snprintf(err, errn, "wiki %s", e2); goto done; }
+    if (!(l->kit = tagpu_hudlay_load_kit(hud, kit, nkit, png_size, ctx, e2, sizeof e2))) { snprintf(err, errn, "wiki %s", e2); goto done; }
     for (i = 0; i < P_N; i++)
         if ((l->part[i] = find_part(l->kit, PART[i])) < 0) { snprintf(err, errn, "wiki kit: no part '%s'", PART[i]); goto done; }
     l->icon_close = find_part(l->kit, "i_close");
     if (l->icon_close < 0) l->icon_close = find_part(l->kit, "i_x");
     l->icon_wiki = find_part(l->kit, "i_wiki");
+    l->icon_play = find_part(l->kit, "i_play");
+    l->icon_pause = find_part(l->kit, "i_pause");
+    l->icon_replay = find_part(l->kit, "i_replay");
+    l->icon_open = find_part(l->kit, "i_open");
+    l->icon_shut = find_part(l->kit, "i_shut");
+    l->icon_dot = find_part(l->kit, "i_dot");
     l->nstyle = styles->nstyle;
     memcpy(l->style, styles->style, sizeof l->style);
     roles = tj_get(tagpu_json_root(doc), "roles");

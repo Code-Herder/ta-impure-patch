@@ -103,10 +103,10 @@ function renderTree() {
     if (n.entry) {
       const e = ENT[n.entry], title = e && !e.error ? e.title || n.entry : n.entry;
       return `<li><div class="row leaf${S.entry === n.entry ? ' sel' : ''}${e && e.error ? ' missing' : ''}" data-part="row" data-entry="${esc(n.entry)}">`
-        + `<span class="dot">•</span><span>${esc(title)}</span>${locked(e) ? '<span class="lock" title="Turned off in this mod"></span>' : ''}</div></li>`;
+        + `<span class="dot" data-part="i_dot"><i class="gl">•</i></span><span>${esc(title)}</span>${locked(e) ? '<span class="lock" title="Turned off in this mod"></span>' : ''}</div></li>`;
     }
     const shut = S.fold.has(p);
-    return `<li><div class="row cat" data-part="row" data-fold="${p}"><span class="tw">${shut ? '▸' : '▾'}</span><span>${esc(n.title)}</span></div>`
+    return `<li><div class="row cat" data-part="row" data-fold="${p}"><span class="tw" data-part="${shut ? 'i_shut' : 'i_open'}"><i class="gl">${shut ? '▸' : '▾'}</i></span><span>${esc(n.title)}</span></div>`
       + (shut ? '' : walk(n.children, p)) + '</li>';
   }).join('') + '</ul>';
   el.innerHTML = walk(TREE.tree, 't');
@@ -171,7 +171,9 @@ $('#c-x2').onclick = () => { S.speed = 2; controls(); };
 $('#c-try').onclick = () => { S.try = !S.try; S.playing = true; start(); };
 function controls() {
   const has = !!demo(), set = (id, v) => { const el = $(id); if (el.textContent !== v) el.textContent = v; };
-  set('#c-play', S.playing && !held() ? '❚❚' : '▶');
+  const pause = S.playing && !held();
+  $('#c-play').dataset.glyph = pause ? 'i_pause' : 'i_play';
+  set('#c-play .gl', pause ? '❚❚' : '▶');
   set('#c-try', S.try ? 'Back to demo' : 'Try it yourself');
   for (const id of ['#c-play', '#c-replay', '#c-x1', '#c-x2', '#c-try']) $(id).disabled = !has;
   $('#c-x1').classList.toggle('on', S.speed === 1); $('#c-x2').classList.toggle('on', S.speed === 2);
@@ -356,10 +358,12 @@ function drawIcon(g, im, W, H, f) {
   const s = Math.min(W / im.naturalWidth, H / im.naturalHeight) * f, w = im.naturalWidth * s, h = im.naturalHeight * s;
   g.drawImage(im, (W - w) / 2, (H - h) / 2, w, h);
 }
-/* every [data-part] box painted with its part at the resolution's pixels, again only when its part or size changes. A
-   pressed or active box (.on, .sel, .pressed) shows its _down part, a selected row row_selected; a box with data-glyph
-   gets the first of its icons the kit has, unless its part is a whole one with the glyph painted on. The box's text
-   ink follows its face: dark on a light face, the style's own colour on a dark one */
+/* every [data-part] box painted with its part at the resolution's pixels, again only when its part, its glyph or its
+   size changes. A pressed or active box (.on, .sel, .pressed) shows its _down part, a selected row row_selected; a box
+   with data-glyph gets the first of its icons the kit has, unless its part is a whole one with the glyph painted on --
+   the controls' play, pause and replay, and the close and wiki buttons -- and a tree row's mark is an icon part of its
+   own: no HUD face has these characters, so glyphs.js draws them all as kit icons. The box's text ink follows its
+   face: dark on a light face, the style's own colour on a dark one */
 function paintParts() {
   const K = KITS[S.skin];
   if (S.skin === 'whitebox' || !K || !K.parts) return;
@@ -368,14 +372,14 @@ function paintParts() {
     const w = el.offsetWidth, h = el.offsetHeight; if (!w || !h) continue;
     const base = el.dataset.part, alt = base === 'row' ? 'row_selected' : base + '_down';
     const n = el.matches('.on, .sel, .pressed') && K.parts[alt] ? alt : base, k = K.parts[n]; if (!k) continue;
-    const W = Math.max(1, Math.round(w * G.k)), H = Math.max(1, Math.round(h * G.k)), key = `${S.skin}|${n}|${W}|${H}`;
+    const gl = (el.dataset.glyph || '').split(' ').find(q => K.parts[q]);
+    const W = Math.max(1, Math.round(w * G.k)), H = Math.max(1, Math.round(h * G.k)), key = `${S.skin}|${n}|${gl}|${W}|${H}`;
     let cv = el.firstElementChild;
     if (!cv || !cv.classList.contains('skin')) { cv = document.createElement('canvas'); cv.className = 'skin'; el.prepend(cv); el._pk = null; }
     if (el._pk === key) continue;
     el._pk = key; cv.width = W; cv.height = H;
     const g = cv.getContext('2d'); g.imageSmoothingQuality = 'high';
     drawPart(g, k, K.img[n], W, H, px);
-    const gl = (el.dataset.glyph || '').split(' ').find(q => K.parts[q]);
     if (gl && k.kind !== 'whole') drawIcon(g, K.img[gl], W, H, .6);
     el.style.setProperty('--ink', K.light[n] ? '#1d1d1b' : 'initial');
     el.style.setProperty('--shade', K.light[n] ? 'none' : 'initial');

@@ -2683,6 +2683,7 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
 {
     const char* ta = ta_main();
     unsigned cursor = sizeof(TAGPU_PACKET), need = sizeof(TAGPU_PACKET), e, nplace = 0;
+    uint32_t wlen = 0;
     int L, T, W, H;
     (void)ctx;
 
@@ -2866,9 +2867,8 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     if (e > need) need = e;
     /* ---- the in-game wiki's record, LAST: it can grow without moving or cutting a table
        before it (tagpu_wikipk.h) ---- */
-    if (tagpu_wiki_fill(&s_wiki)) {
-        e = append_area(p, &cursor, &s_wiki, (unsigned)sizeof s_wiki, &p->wiki_off, &p->wiki_len,
-                        TAGPU_PK_TRUNC_WIKI);
+    if (tagpu_wiki_fill(&s_wiki, &wlen)) {
+        e = append_area(p, &cursor, &s_wiki, wlen, &p->wiki_off, &p->wiki_len, TAGPU_PK_TRUNC_WIKI);
         if (e > need) need = e;
     }
     p->used_bytes = cursor;

@@ -272,11 +272,14 @@ by a test. GDI is [the reference for the original game](vulkan-only-plan.html), 
 and the rewind button already have nothing there. **The recommendation is no button on GDI**
 (question 1).
 
-**A kit the shell cannot draw is refused at its load, and at a frame too.** The art loader checks
-every part and style the shell's layout names in any state (`tagpu_wikiframe_check`), so a kit
-missing one never publishes and no button is drawn. Should a frame's layout refuse the kit all the
-same, the render thread publishes it (`tagpu_wikistate_refused`), and the fill closes the window as
-it does when the HUD's pass stops: the wiki is never open where it cannot be seen.
+**A kit the window cannot draw is refused at its load, and at a frame too.** `tagpu_wikilay_load`
+refuses a kit missing any part or a role's style, and the art loader then checks the icons and the
+`toast` style the window and the stage draw and builds the page in every state -- closed, open with
+its close button held, every entry's every demo playing and paused (`tagpu_wikilay_check`) -- so a
+kit or data the page cannot draw never publishes and no button is drawn. Should a frame's layout
+refuse all the same (its build's own memory), the render thread publishes it
+(`tagpu_wikistate_refused`), and the fill closes the window as it does when the HUD's pass stops:
+the wiki is never open where it cannot be seen.
 
 ### Replay and simulation classification
 
@@ -435,10 +438,10 @@ check failed, its `replay-roundtrip:` note on `e5b39388`. The high review is not
 **Status: built and verified 2026-10-25 on its worktree branch, not landed.** As built, against the
 list below:
 
-- **The shell's layout is `src/tagpu_wikiframe.c`/`.h`, not `tagpu_wikilay.c`**, which the page
-  landing owns: the window, the title groove, the close bay, the body and the button, with the hot
-  keys `window`, `close` and `wiki`. Pure C99 like `tagpu_hudlay.c` (it compiles natively with
-  `gcc -std=c99`); no native check runs it yet.
+- **The shell was laid out by a file of its own**, `tagpu_wikiframe.c`, while the page's
+  `tagpu_wikilay.c` was built offline. The integration of landings 3 and 4 retired it:
+  `tagpu_wikilay.c`, the layout `wikilaycheck` covers, lays out the window, its title and close
+  button, the button and the page, with the hot keys `window`, `close` and `wiki`.
 - **`tagpu_wiki_mouse` takes the game point as well** (`code, cx, cy, gx, gy`): the open stores the
   frozen point from it, so `g_ddraw.cursor` is the opening press on the injected path too. On the
   real path the open converts the press's own `lParam` with `mouse_client_to_game`, because
@@ -637,7 +640,8 @@ packet area and a part of the command record, and touches the input path.
 
 ### Landing 3 — the page
 
-**Status: track B is done; the rest waits for landing 2.** Committed, offline:
+**Status: integrated with landing 4 on its worktree branch, not landed** (below, *The integration
+of landings 3 and 4*). Track B, committed offline before it:
 - the pre-step: `art/wiki/layout.json` holds `GEOM` (as `geom`), the shares, the strips, rows,
   paddings, the scrollbar, the controls' and the badge's numbers, the window's share and font,
   and `roles`, element by element. `wiki.js` sets each number as a custom property of the frame
@@ -657,11 +661,13 @@ packet area and a part of the command record, and touches the input path.
   baseline) and scroll limit agree within 0.07 CSS px, and every thumb Chrome paints to the
   pixel, in about 65 s.
 
-**What integration owes it**: `tagpu_wikistate.c` fills `WIKIFACES` from `HUDART` and sets each
-part's light from its decoded image (premultiplied); `tagpu_huddraw.c` honours `HOPF_INK`; the
-record carries `WIKIPAGE`'s fields and `TAGPU_CMD_WIKI` the frame's hit map and `WIKIFRAME`. Two
-gaps the check names stay open ([the note](ingame-wiki.html), *Gaps*): no HUD face has the control
-glyphs or the tree's marks, and Chrome sets a face at a quantized size.
+**What the integration did for it**: `tagpu_wikistate.c` fills `WIKIFACES` from the wiki's
+`HUDART`, and the art's loader sets each part's light from its decoded image (premultiplied) before
+the publishing store; `tagpu_huddraw.c` honours `HOPF_INK`; the record carries `WIKIPAGE`'s fields
+and `TAGPU_CMD_WIKI` the frame's hit map, scrolls, limits and scrollbars (`WIKIFRAME` gained each
+panel's track and thumb). The control glyphs and the tree's marks are kit icons now (below). One
+gap the check names stays open ([the note](ingame-wiki.html), *Gaps*): Chrome sets a face at a
+quantized size.
 
 **What the player sees.** The tree, with its folds, and each entry's demo list. The entry column:
 - the title, the subtitle, and the red badge with "Turned off in this mod";
@@ -728,9 +734,9 @@ state and no engine memory. No file names an engine address.
 
 ### Landing 4 — the stage, and the demos playing
 
-**Status: track C, the stage offline, is committed on the branch** (`978ac43e`, `8ba9a6d0`,
-`a8222dd0`). Nothing calls it yet; `tagpu_wiki.c`, the record and the game run are the rest of the
-landing. What it holds, and where it settles what the text below left open:
+**Status: integrated with landing 3 on its worktree branch, not landed** (below, *The integration
+of landings 3 and 4*). Track C, the stage offline, committed before it (`978ac43e`, `8ba9a6d0`,
+`a8222dd0`), and where it settles what the text below left open:
 
 - **The pre-steps are done.** `stage.js` draws the stage (`wiki.js` only calls it), in the face of
   `art/hud/layout.json`'s `toast` style (Oswald 700, no spacing, no case change, no shadow) with
@@ -756,11 +762,10 @@ landing. What it holds, and where it settles what the text below left open:
   mockup's at 1920 × 1080 and 1024 × 768, and a small one with no grid where every label shrinks),
   1 852 765 ops paired call for op within 1/64 px, in about 10 s.
 
-**Left for the integration:**
+**What track C left for the integration**, now done (below), but for the budget:
 
-- **`tagpu_huddraw_build` takes a `HUDOPS`**, whose arrays are `HUD_MAXOP` long. `WIKISTAGEOPS`
-  has the wiki's own `WIKI_MAXOP` and the same `HUDOP`/`HUDRUN`/text layout, so the wiki layer
-  needs `tagpu_huddraw_build` to take an op list (pointer and count), not a new drawer.
+- **`tagpu_huddraw_build` takes a `HUDOPS`**, whose arrays are `HUD_MAXOP` long: the draw now takes
+  an op list (`tagpu_huddraw_build_list`, a pointer and a count).
 - **A large map does not fit the budget.** Cells and fog are one op a cell each, as the canvas
   calls them: a 128 × 128 map's alone would take 32 768 ops. The data's map is 40 × 24, under
   3000 ops a frame with its grid (1816 on average over the check's frames); a square map past about
@@ -768,6 +773,63 @@ landing. What it holds, and where it settles what the text below left open:
 - **The cursor icons are in `art/wiki/kit/` as fitted.** Track D's fit rewrites that directory
   from `art/wiki-full/kit/`; the icons go there too (run `cursors.sh art/wiki-full/kit`), or the
   fit drops them.
+
+#### The integration of landings 3 and 4
+
+**Built 2026-10-25 on its worktree branch, not landed.** Against the two landings' lists:
+
+- **One layout.** `tagpu_wikistate_present` lays the window out with `tagpu_wikilay_build`, the
+  layout `wikilaycheck` pairs with the mockup, and builds the stage with `tagpu_wikistage_build`
+  inside the bezel that layout placed, from the record's view. `tagpu_wikiframe.c`, which laid out
+  the window, title, close button and wiki button a second time, is deleted, and its load-time
+  check of the kit is `tagpu_wikilay_check`, which builds the page in every state. The wiki's art loads
+  the page's `WIKILAY` (`layout.json` and the kit, the kit carrying the HUD's styles, which
+  `tagpu_wikilay_load` now takes as the HUD's `HUDLAY`).
+- **The draw takes an op list.** `HUDOPLIST` is a pointer and a count for each of the ops, runs,
+  text and groups; `tagpu_huddraw_build_list` draws one and checks every index an op carries
+  against those counts, and `tagpu_huddraw_build` wraps it for the HUD's own `HUDOPS` unchanged
+  (`laycheck.py` agrees). The wiki layer draws two lists, the page and then the stage: nothing of
+  the page after the bezel overlaps the stage, so the paint order is the mockup's. A slot holds
+  32 768 quads (8192 before), and one text op sets up to 2048 glyphs (`TAGPU_HUDTEXT_MAX`, 160
+  before, which cut every line of the text panel short): the layout's own `MAXGLYPH`, tied to it
+  at compile time.
+- **The record.** `TAGPU_PK_WIKI` carries `WIKIPAGE`'s state and, last, the stage's
+  `WIKISTAGEVIEW`; its area is `TAGPU_PK_WIKI_HEAD` bytes with no demo shown and the whole record
+  with one, so the 60 KB view travels only while the window shows it. The render thread copies the
+  view out of the packet and bounds every count and string before building from it.
+- **The command record** carries, beside the hit map, each panel's scroll as drawn, its limit and
+  its scrollbar's track and thumb in client pixels; the take bounds each number as data.
+- **The controls**, on a left press against the last drawn frame: `fold:<node>` flips the node's
+  bit; `entry:<node>` picks an entry other than the selected one, its first demo, playing;
+  `demo:<i>` picks a demo afresh; `play` pauses or plays, and on an ended demo starts it again;
+  `replay`; `x1`, `x2`. `try` shows pressed and does nothing (landing 5). The wheel scrolls the
+  panel under the pointer 48 units a notch; a press on a thumb drags it by the drawn frame's ratio
+  of scroll to travel, and a press on a track off its thumb pages by seven eighths of the panel.
+  Every scroll is clamped to the limit the drawn frame posted.
+- **The simulation's lifetime and clock**: made at a selection, a replay and an open (the tree's
+  first entry when none is chosen), freed at a change, a close and the level's end, all on the game
+  thread; stepped inside the fill by `wiki.js` `advance` -- the `QueryPerformanceCounter` delta,
+  capped at 0.25 s, times 30 times the speed, at most 8 ticks a frame -- and copied with
+  `tagpu_wikistage_copy`, a truncation logged once a demo.
+- **`tagpu_wiki.check`** plays every demo of every entry to its end in the fill and logs
+  `wiki check: <entry>/<demo> <hash>`, the form `simparity.mjs --hash` prints, then a summary line.
+- **The dump** adds the selection by id, the folds, the scrolls asked, drawn and their limits, the
+  scrollbars, the demo's tick, `done`, its state hash, and the most one fill of the open page has
+  cost the game thread (`cost_max_ms`, also logged at each close).
+- **The glyphs** (a commit of its own, the recommended fix pending the owner): play, pause, replay
+  and the tree's marks are kit icons drawn from `tools/wiki/mockup/glyphs.js`, in the mockup and
+  in the game; `wikilaycheck` pairs them as parts and now fails on any text set in the browser's
+  fallback face.
+
+MEASURED 2026-10-26 on the merged branch (the review fixes included), on Wine under a private
+Xvfb: `wiki_regression.py` sp passed at 1920 × 1080 and at 3840 × 2160, its step (h) included,
+and page, recorded and mp passed. `demos` passed at both sizes: all 21 `tagpu_wiki.check` hashes
+equal `simparity.mjs --hash`, the 21 demos played to their ends in 12–13 ms on the game thread; a
+demo ran 30.4 ticks a second at 1x and 58.9 at 2x at 1920 × 1080, 30.0 and 55.8 at 3840 × 2160;
+the open page cost the game thread at most 0.063 ms in one frame over 2782 frames at 1920 × 1080
+and 0.197 ms over 1285 at 3840 × 2160, against the plan's 0.5 ms, and 0.018 ms on the mp host.
+The captures at both sizes, each entry with a demo paused mid-play beside the mockup at the same
+state, agree but for the game's own top bar. `tareplay.py landing` passed its 34 test groups.
 
 **What the player sees.** Selecting a demo plays it on the stage, as the mockup's whitebox:
 - the cells, metal, vents and fog;

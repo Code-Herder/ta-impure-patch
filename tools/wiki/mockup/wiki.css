@@ -56,10 +56,10 @@ p.note { color: var(--muted); max-width: 90ch; margin: 12px auto 0; }
 #frame.open #capture { display: block; }
 
 /* ---- a kit's parts: each painted on a canvas (canvas.skin) behind its box's content, the box's own fill and lines
-   dropped; a kit's glyph replaces the whitebox's text glyph ---- */
+   dropped; a kit's glyph icon replaces the whitebox's text glyph, which then takes no room ---- */
 canvas.skin { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; }
 #frame.kit [data-part] { isolation: isolate; background: none; border-color: transparent; }
-#frame.kit .gl { visibility: hidden; }
+#frame.kit .gl { display: none; }
 
 /* ---- the window: --s per cent of the frame, centred. The skin places its title (--wt-*), close button (--wx-*) and
    body (--wb-*) and says how deep its panels' and bezel's frames are (--pn-*, --bz-*); wiki.js sets them ---- */
@@ -87,7 +87,9 @@ canvas.skin { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 
 #tree > ul { padding-left: 0; }
 #tree .row, #demos li { position: relative; display: flex; gap: calc(var(--w-row-gap) * var(--u)); align-items: center; cursor: pointer;
   min-height: calc(var(--w-row-h) * var(--u)); box-sizing: border-box; padding: calc(var(--w-row-pad-0) * var(--u)) calc(var(--w-row-pad-1) * var(--u)); margin-bottom: calc(var(--w-row-after) * var(--u)); }
-#tree .tw, #tree .leaf .dot { flex: none; width: calc(var(--w-tree-mark) * var(--u)); text-align: center; }
+/* a mark is a square box, its kit icon as large as fits it */
+#tree .tw, #tree .leaf .dot { position: relative; flex: none; width: calc(var(--w-tree-mark) * var(--u)); height: calc(var(--w-tree-mark) * var(--u));
+  line-height: calc(var(--w-tree-mark) * var(--u)); text-align: center; }
 #tree .missing { font-style: italic; opacity: .7; }
 .lock { flex: none; display: inline-block; width: calc(var(--w-lock) * var(--u)); height: calc(var(--w-lock) * var(--u)); border-radius: 50%; margin-left: auto;
   background: #d01818; border: 1px solid #5a0808; box-sizing: border-box; }

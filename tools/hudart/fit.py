@@ -7,12 +7,12 @@ art/hud/fonts/ are not fitted and live in art/hud/ only.
 usage: fit.py [--set hud|wiki]
 
 THE WIKI'S KIT (--set wiki) is fitted the same way from art/wiki-full/kit/ into art/wiki/kit/, at densities stated
-rather than measured: the wiki has no laycheck yet, and what it draws is fixed by its unit. The window and everything
-in it are drawn at the wiki unit, the screen's height / 720 device pixels whatever the HUD scale
-(tagpu_wikiframe.c), so 3 at 3840x2160; the wiki button sits in the top bar at the bar's own pixels, 4.5 at
-3840x2160 and HUD 150 (WIKI_BAR below). A part's need there is its density over its `scale`, 1.5 times that for an
-`xtile` part (COPY_STRETCH); an icon is drawn as large as fits its box and then at 0.6 of that (wiki.js drawIcon,
-tagpu_wikiframe.c), so its need is the device pixels one of its texels covers in the box it is drawn in (WIKI_ICON).
+rather than measured: what the wiki draws is fixed by its unit. The window and everything in it are drawn at the wiki
+unit, the screen's height / 720 device pixels whatever the HUD scale (tagpu_wikilay.c), so 3 at 3840x2160; the wiki
+button sits in the top bar at the bar's own pixels, 4.5 at 3840x2160 and HUD 150 (WIKI_BAR below). A part's need there
+is its density over its `scale`, 1.5 times that for an `xtile` part (COPY_STRETCH); an icon is drawn as large as fits
+its box and then at 0.6 of that (wiki.js drawIcon, tagpu_wikilay.c glyph), so its need is the device pixels one of its
+texels covers in the box it is drawn in (WIKI_ICON).
 
 THE DENSITY A PART NEEDS IS MEASURED, not assumed: the mockup draws laycheck.py's cases and the housing without the
 proposed features (which only the mockup draws) from art/hud-full/ (its `parts=hud-full` switch), and every piece of every part is taken at its device pixels against
@@ -48,8 +48,11 @@ WIKI_ART = laycheck.ROOT / 'art' / 'wiki' / 'kit'
 WIKI_UNIT = 3.0         # device px a wiki unit at 3840x2160: 2160 / 720
 WIKI_BAR = 4.5          # device px a top-bar pixel at 3840x2160 and HUD 150
 WIKI_ON_BAR = {'wikibtn', 'wikibtn_down', 'i_wiki'}
-# each icon's box, in the units of where it is drawn: the wiki button's 28 bar pixels, the close button's 14 units
-WIKI_ICON = {'i_wiki': (28, 28), 'i_close': (14, 14)}
+# each icon's box, in the units of where it is drawn, at 0.6 of it: the wiki button's 28 bar pixels, the close
+# button's 14 units, a control's least box (layout.json controls.min x controls.h) for its play, pause and replay
+WIKI_ICON = {'i_wiki': (28, 28), 'i_close': (14, 14), 'i_play': (24, 17), 'i_pause': (24, 17), 'i_replay': (24, 17)}
+# a tree row's marks fill their whole box, layout.json tree.mark square
+WIKI_MARK = {'i_open': (7, 7), 'i_shut': (7, 7), 'i_dot': (7, 7)}
 
 
 def bands(e, pw, ph):
@@ -173,6 +176,9 @@ def wiki_need(n, e, size):
         # the stage's cursors are drawn at their own scale, centred on the pointer, not fitted to a box
         # (stage.js ICON_BOX, tagpu_wikistage.c)
         return density / e['scale']
+    if e['kind'] == 'icon' and n in WIKI_MARK:
+        (bw, bh), (pw, ph) = WIKI_MARK[n], size
+        return min(bw / pw, bh / ph) * density
     if e['kind'] == 'icon':
         if n not in WIKI_ICON: sys.exit(f'fit: the wiki icon {n} has no box in WIKI_ICON')
         (bw, bh), (pw, ph) = WIKI_ICON[n], size

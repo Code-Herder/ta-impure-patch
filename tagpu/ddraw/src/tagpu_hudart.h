@@ -53,11 +53,14 @@ int           tagpu_hudart_failed(void);
    the game thread (its simulation) and the render thread (its layout and text) read them without
    a lock. `draw` is the window's kit as tagpu_huddraw draws it -- draw.lay holds the kit's parts
    with the HUD's styles (tagpu_hudlay_load_kit), draw.img the parts decoded, draw.face the HUD's
-   faces -- and `data` the tree and the entries (tagpu_wikidata.h). It fails on its own while the
-   HUD stands, and with the HUD, whose faces it draws in. */
+   faces -- `data` the tree and the entries (tagpu_wikidata.h), and `lay` the page's layout
+   (tagpu_wikilay.h) over art/wiki/layout.json, whose kit draw.lay is and whose parts' face
+   lightness is set from draw.img before the store. It fails on its own while the HUD stands, and
+   with the HUD, whose faces it draws in. */
 typedef struct {
-    HUDART         draw;
-    WIKIDATA*      data;
+    HUDART          draw;
+    WIKIDATA*       data;
+    struct WIKILAY* lay;
 } WIKIART;
 
 /* The loaded wiki, or NULL while it loads and for good when it failed. Any thread. */

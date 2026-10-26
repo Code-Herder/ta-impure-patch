@@ -66,9 +66,10 @@ typedef struct {
    are NULL in the game, which sets every text in its own faces at its own size; the check gives
    the browser's, so the layout's rules are compared on what the mockup sets, and the two gaps are
    named (research/notes/ingame-wiki.md, "Gaps"):
-     missing  the advance of a code point no face has. The mockup sets the control glyphs (play,
-              pause, replay) and the tree's marks in the browser's fallback face, which the DLL
-              does not carry; NULL measures it as its face's .notdef, as the game draws it.
+     missing  the advance of a code point no face has, which the mockup sets in the browser's
+              fallback face and the DLL does not carry; NULL measures it as its face's .notdef, as
+              the game draws it. The check fails on any text that needs it: the control glyphs and
+              the tree's marks, which no face has, are kit icons.
      size     the size a face is set at for a font size, both in pixels. Chrome sets a face at a
               size of whole sixty-fourths of a pixel near the CSS one, by a rule not identified
               (MEASURED 2026-10-25: 9.0667 px is set at 579/64, 9.07 at 580/64, 10.6667 at
@@ -82,23 +83,29 @@ typedef struct {
     void*    ctx;
 } WIKIFACES;
 
-/* What one build answers besides its ops: each panel's scroll as drawn and its limit, the
-   stage's rect inside its bezel (the stage draws there and a click on it is read there), and the
-   window. A closed window answers zeros. */
+/* What one build answers besides its ops: each panel's scroll as drawn and its limit, its
+   scrollbar as drawn (the track, h 0 when the panel shows none, and the thumb's top and length on
+   it, so a press is read against the thumb the player saw), the stage's rect inside its bezel (the
+   stage draws there and a click on it is read there), and the window. A closed window answers
+   zeros. */
 typedef struct {
     float   scroll[WIKI_NSCROLL];
     float   scroll_max[WIKI_NSCROLL];
+    HUDRECT track[WIKI_NSCROLL];
+    float   thumb_y[WIKI_NSCROLL], thumb_h[WIKI_NSCROLL];
     HUDRECT stage;
     HUDRECT window;
 } WIKIFRAME;
 
 typedef struct WIKILAY WIKILAY;
 
-/* layout.json and kit.json, parsed and resolved against the HUD's text styles: every number the
-   rules read, every part they draw, every role's style. NULL with the reason in `err`. `png_size`
-   is tagpu_hudlay_load's. */
+/* layout.json and kit.json, parsed and resolved against the replay HUD's layout `hud`, whose text
+   styles and measure the kit then carries (tagpu_hudlay_load_kit), so the draw sets the wiki's text
+   in the HUD's faces by the same rules: every number the rules read, every part they draw, every
+   role's style. NULL with the reason in `err`. `png_size` is tagpu_hudlay_load's. `hud` must
+   outlive the layout. */
 WIKILAY*      tagpu_wikilay_load(const char* layout, size_t nlayout, const char* kit, size_t nkit,
-                                 HUDPNGSIZE png_size, void* ctx, const HUDGLOBALS* styles,
+                                 HUDPNGSIZE png_size, void* ctx, const HUDLAY* hud,
                                  char* err, size_t errn);
 void          tagpu_wikilay_free(WIKILAY* l);
 /* The kit, for the draw: HOP_PART ops index its parts. */
@@ -126,5 +133,14 @@ const char*   tagpu_wikilay_mod_name(int mod);
    op, a text or a hit did not fit and was dropped. */
 int           tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
                                   const WIKIPAGE* st, HUDOPS* out, WIKIFRAME* fr, char* err, size_t errn);
+
+/* The kit and the data checked at the load, so no frame can refuse them later and leave the
+   window open but undrawn: 1 when the kit holds every icon the window and the stage draw and the
+   stage's `toast` style, and the build answers every state -- the window closed and its button
+   held, open with its close button held, and every entry's every demo, playing and paused, with
+   Try it yourself held -- else 0 with the first failure in `err`. `scratch` takes the ops of the
+   states tried. A load-time call: any thread, before the layout is published. */
+int           tagpu_wikilay_check(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
+                                  HUDOPS* scratch, char* err, size_t errn);
 
 #endif

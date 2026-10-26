@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""The in-game wiki's shell in the game (tagpu_wiki.c; research/notes/ingame-wiki-plan.md, landing 2):
-its button, its window, the input it takes while open and the pause it holds in single player.
+"""The in-game wiki in the game (tagpu_wiki.c; research/notes/ingame-wiki-plan.md, landings 2 to 4):
+its button, its window, the input it takes while open, the pause it holds in single player, the
+page's controls and the demos playing on the stage.
 
     wiki_regression.py <instance> sp --launch         a single-player skirmish, not recorded
+    wiki_regression.py <instance> page --launch       the page's controls, single player
+    wiki_regression.py <instance> demos --launch      the demos: parity, clock, controls, captures
     wiki_regression.py <instance> recorded --launch   a live recorded skirmish: the rewind button
     wiki_regression.py <name> mp                      a two-player network game on Wine, started by
                                                       tools/compat/tacompat.py's launcher
@@ -48,6 +51,23 @@ sp, in order:
 
 --shot PATH grabs the presented frame with the window open, at (b), for the owner: the whole
 window by its id on the instance's display (`import -window`, the ta-capture skill's window grab).
+page, on the same launch as sp:
+  (p1) the open picks the tree's first entry and its first demo, playing, and draws every control;
+  (p2) entry:3 selects the second entry, demo:1 its second demo, afresh;
+  (p3) fold:1 folds the Building category (no entry row drawn) and unfolds it;
+  (p4) two wheel notches down over the text scroll it two steps, one up one back, each held to
+       the limit the drawn frame posted;
+  (p5) the text's thumb dragged 12 px scrolls it by the travel the drawn frame gave it;
+  (p6) Esc closes and frees the demo; reopened, the selection stands and the demo starts afresh.
+demos, on the same launch as sp:
+  (d1) tagpu_wiki.check plays every demo to its end in the game, and every logged hash equals
+       `node tools/wiki/simparity.mjs --hash`;
+  (d2) a demo runs about 30 ticks a second at 1x and twice that at 2x;
+  (d3) play pauses (the tick stands), replay restarts, an ended demo holds its last frame and
+       play starts it again;
+  (d4) each entry with a demo paused mid-play; with --shots DIR the game's frame and the mockup's
+       at the same screen, entry, demo and tick, side by side (`<res>-<entry>-<demo>-t<tick>`);
+  (d5) the most one fill of the open page cost the game thread, logged.
 recorded:
   (r) the button sits 3 bar pixels left of the rewind button (the two frames' hit maps); the rewind
       button opens the rewind; while it is open a click on the wiki button opens nothing and the log
@@ -55,17 +75,21 @@ recorded:
       FLUSH it passes through is refused by the same test, but no step can hold the game in FLUSH);
       the rewind button closes it; the wiki button opens the wiki and Esc closes it.
 mp:
-  (m) the wiki opened on the host takes no pause: both peers' GameTime advances over 3 s; a right
-      and a left click on the margin leave the host's selected commander's orders and selection as
-      they were; Esc closes it, and both peers still run, with no desync line in either log.
+  (m) the wiki opened on the host takes no pause: both peers' GameTime advances over 3 s, and so
+      does the host's demo, whose cost to the game thread is logged; a right and a left click on
+      the margin leave the host's selected commander's orders and selection as they were; Esc
+      closes it, and both peers still run, with no desync line in either log.
 """
 import argparse
 import json
+import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from resource_regression import CHECK_FAILURES, TACLI, TREE, Check, tacli_api
 import runlock
@@ -392,6 +416,248 @@ def sp(c, shot=None):
     print("wiki sp: (g) the window closed at the level's end; the results screen takes keys")
 
 
+# ---- the page and the demos (landings 3 and 4) ----------------------------------------------------
+
+TEXT = 2                                 # WIKI_SCROLL_TEXT: the panels are tree, demos, text
+WHEEL_UNITS = 48                         # tagpu_wiki.c: a notch scrolls three of the tree's rows
+
+
+def wait_dump(c, pred, what, seconds=20):
+    """The state dump until `pred` holds of it: a press is the game thread's at once, but what a
+    frame drew (the hit map, a scroll as drawn) is the next frame's."""
+    end = time.monotonic() + seconds
+    while True:
+        d = c.dump()
+        if pred(d):
+            return d
+        assert time.monotonic() < end, f"{what}: {json.dumps({k: d[k] for k in d if k != 'hits'})[:600]}"
+        time.sleep(0.3)
+
+
+def press(c, d, key):
+    """A click on the drawn frame's control `key`; returns the time just before it."""
+    t0 = time.monotonic()
+    c.keys("dclick:%d,%d" % c.centre(c.hit(d, key)))
+    return t0
+
+
+def fresh(d, t0):
+    """Whether the dump's demo can have started after `t0`: the clock steps at most 30 ticks a
+    second times the speed, plus the 8 one frame may carry, so a demo that ran on from before is
+    told apart by its tick however slowly the game answers the dump."""
+    return d["tick"] <= 30 * d["speed"] * (time.monotonic() - t0) + 9
+
+
+def keys_of(d, prefix):
+    return sorted(h["key"] for h in d["hits"] if h["key"].startswith(prefix))
+
+
+def page(c):
+    """(p1)..(p6): the page's controls, against the dump's state."""
+    held_at(c, HELD_AT)
+    d = c.open_wiki(expect_pause=True)
+    d = wait_dump(c, lambda d: d["drawn_open"] and "entry:3" in keys_of(d, "entry:"), "(p1) the page was not drawn")
+    assert (d["entry"], d["demo"], d["sim"], d["stage"]) == ("quickbuild", "snap", 1, 1), \
+        f"(p1) the open did not pick the tree's first entry and its first demo, playing: {d['entry']}/{d['demo']}"
+    for k in ("fold:0", "fold:1", "entry:2", "entry:3", "demo:0", "play", "replay", "x1", "x2", "try",
+              "stage", "scroll:tree", "scroll:demos", "scroll:text", "close", "wiki", "window"):
+        c.hit(d, k)
+    print(f"wiki page: (p1) open on quickbuild/snap, {len(d['hits'])} controls drawn")
+
+    press(c, d, "entry:3")
+    d = wait_dump(c, lambda d: d["entry"] == "buildshapes" and d["demo"] == "clicks", "(p2) entry:3 did not select buildshapes")
+    d = wait_dump(c, lambda d: "demo:9" in keys_of(d, "demo:"), "(p2) buildshapes' ten demos were not drawn")
+    t0 = press(c, d, "demo:1")
+    d = wait_dump(c, lambda d: d["demo"] == "line" and fresh(d, t0), "(p2) demo:1 did not start buildshapes/line")
+    print("wiki page: (p2) the second entry and its second demo selected")
+
+    press(c, d, "fold:1")
+    d = wait_dump(c, lambda d: d["folds"] == [1] and not keys_of(d, "entry:"), "(p3) fold:1 did not fold Building")
+    press(c, d, "fold:1")
+    d = wait_dump(c, lambda d: d["folds"] == [] and keys_of(d, "entry:") == ["entry:2", "entry:3"],
+                  "(p3) fold:1 did not unfold Building")
+    print("wiki page: (p3) Building folded and unfolded")
+
+    mx = d["scroll_max"][TEXT]
+    assert mx > 0, f"(p4) the text does not scroll at this resolution: {d['scroll_max']}"
+    x, y = c.centre(c.hit(d, "scroll:text"))
+    c.keys(f"dwheel:{x},{y},-2")
+    want = min(2 * WHEEL_UNITS, mx)
+    d = wait_dump(c, lambda d: abs(d["scroll_drawn"][TEXT] - want) < 0.02, f"(p4) two notches down did not scroll the text to {want}")
+    c.keys(f"dwheel:{x},{y},1")
+    want -= WHEEL_UNITS
+    d = wait_dump(c, lambda d: abs(d["scroll_drawn"][TEXT] - max(0, want)) < 0.02, "(p4) a notch up did not scroll back")
+    print(f"wiki page: (p4) the wheel scrolled the text to {d['scroll_drawn'][TEXT]:g} of {mx:g} units")
+
+    b = d["bars"][TEXT]
+    assert b["track"][3] > b["track"][1] and b["thumb"][1] > 0, f"(p5) the text panel shows no scrollbar: {b}"
+    tx, ty = (b["track"][0] + b["track"][2]) // 2, b["thumb"][0] + b["thumb"][1] // 2
+    before, dy = d["scroll_drawn"][TEXT], 12
+    c.keys(f"ddown:{tx},{ty}", f"dmove:{tx},{ty + dy}", f"dup:{tx},{ty + dy}")
+    want = min(mx, before + dy * b["per_px"])
+    d = wait_dump(c, lambda d: abs(d["scroll_drawn"][TEXT] - want) < 0.05,
+                  f"(p5) a {dy} px drag of the thumb did not scroll the text from {before:g} to {want:g}")
+    print(f"wiki page: (p5) the thumb dragged {dy} px scrolled the text {before:g} -> {d['scroll_drawn'][TEXT]:g}")
+
+    c.keys("esc")
+    d = wait_dump(c, lambda d: not d["open"] and not d["sim"], "(p6) Esc did not close the window and free the demo")
+    t0 = time.monotonic()
+    d = c.open_wiki(expect_pause=True)
+    d = wait_dump(c, lambda d: d["drawn_open"] and d["sim"], "(p6) the reopened page was not drawn")
+    assert (d["entry"], d["demo"], d["folds"]) == ("buildshapes", "line", []), \
+        f"(p6) the reopened page lost its selection: {d['entry']}/{d['demo']} folds {d['folds']}"
+    assert fresh(d, t0), f"(p6) the demo did not start afresh at the open: tick {d['tick']}"
+    c.keys("esc")
+    wait_dump(c, lambda d: not d["open"], "(p6) Esc did not close it again")
+    print("wiki page: (p6) closed and reopened on the same entry and demo, the demo afresh")
+
+
+def simparity_hashes():
+    r = subprocess.run(["node", str(TREE / "tools/wiki/simparity.mjs"), "--hash"], capture_output=True, text=True,
+                       timeout=300)
+    assert r.returncode == 0, f"simparity --hash: {r.stderr.strip()}"
+    return dict(ln.split() for ln in r.stdout.splitlines() if ln.strip())
+
+
+def tick_rate(c, seconds=4.0):
+    a, t0 = c.dump(), time.monotonic()
+    time.sleep(seconds)
+    b = c.dump()
+    assert not b["done"], f"(d2) the demo ended inside the rate's window, at tick {b['tick']}"
+    return (b["tick"] - a["tick"]) / (time.monotonic() - t0), b
+
+
+def mockup_shot(state, path):
+    """The mockup at the same state -- the screen, the entry, the demo paused at the tick -- grabbed
+    headless by playwright-cli, one CSS pixel a device pixel, as wikilaycheck.py opens it."""
+    sys.path.insert(0, str(TREE / "tools/wiki"))
+    import wikilaycheck as wl
+    from PIL import Image
+    gw, gh = state["res"]
+    httpd = wl.serve()
+    tmp = path.parent / f".mock{os.getpid()}"
+    tmp.mkdir(parents=True, exist_ok=True)
+    cfg = tmp / "pw.json"
+    cfg.write_text(json.dumps({"browser": {"contextOptions": {"deviceScaleFactor": 1, "viewport": {"width": 1200, "height": 900}},
+                                           "launchOptions": {"ignoreDefaultArgs": ["--hide-scrollbars"]}}}))
+    pw = ["playwright-cli", f"-s=wikishot{os.getpid()}", f"--config={cfg}"]
+    run = lambda *a: subprocess.run(pw + list(a), capture_output=True, text=True, cwd=tmp)
+    try:
+        run("open", "about:blank")
+        run("resize", str(gw + 34), str(gh + 900))
+        run("goto", f"http://127.0.0.1:{httpd.server_address[1]}/tools/wiki/mockup/index.html?res={gw}x{gh}&open&skin=kit"
+                    f"&mod=stock&rewind=0&entry={state['entry']}&demo={state['demo_n'] + 1}")
+        for _ in range(100):
+            if wl.result(run("eval", "() => !!(window.WikiPage && WikiPage.sim() && document.fonts.status === 'loaded'"
+                                     " && document.querySelector('#win canvas.skin'))").stdout):
+                break
+            time.sleep(0.1)
+        v = wl.result(run("eval", "async () => { const S = WikiPage.state, $ = s => document.querySelector(s);"
+                                  " if (S.playing) $('#c-play').click(); const sim = WikiPage.sim();"
+                                  f" while (sim.tick < {state['tick']} && !sim.done) sim.step();"
+                                  " for (let i = 0; i < 4; i++) await new Promise(r => requestAnimationFrame(r));"
+                                  " const f = $('#frame').getBoundingClientRect();"
+                                  " return JSON.stringify([f.left, f.top, f.width, f.height, sim.tick]); }").stdout)
+        fx, fy, fw, fh, tick = json.loads(v)
+        assert (round(fw), round(fh)) == (gw, gh) and tick == state["tick"], \
+            f"the mockup's frame is {fw} x {fh} at tick {tick}, not {gw} x {gh} at {state['tick']}"
+        run("screenshot", f"--filename={tmp / 'page.png'}")
+        Image.open(tmp / "page.png").crop((round(fx), round(fy), round(fx) + gw, round(fy) + gh)).save(path)
+        print(f"wiki: the mockup at the same state grabbed to {path}")
+    finally:
+        run("close")
+        httpd.shutdown()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def demos(c, shots, res):
+    """(d1)..(d6): the demos' parity in the game, their clock, the controls, captures beside the
+    mockup's, and what the page costs the game thread."""
+    held_at(c, HELD_AT)
+    want = simparity_hashes()
+    start = c.mark()
+    (c.gamedir / "tagpu_wiki.check").write_text("")
+    end = time.monotonic() + 120
+    while not (line := c.found(start, r"wiki check: \d+ demos played")):
+        assert time.monotonic() < end, "(d1) no `wiki check: N demos played` line in 120 s"
+        time.sleep(0.5)
+    got = dict(m.groups() for ln in c.log[start:] if (m := re.search(r"wiki check: (\S+/\S+) ([0-9a-f]{16})$", ln)))
+    differ = sorted(k for k in want if got.get(k) != want[k])
+    assert not differ and len(got) == len(want), \
+        f"(d1) the game's hashes differ from simparity --hash for {differ or sorted(set(got) ^ set(want))}"
+    print(f"wiki demos: (d1) {line.split('wiki check: ', 1)[1]}; all {len(want)} hashes equal simparity --hash")
+
+    d = c.open_wiki(expect_pause=True)
+    d = wait_dump(c, lambda d: d["drawn_open"] and d["sim"], "(d2) the page was not drawn")
+    t0 = press(c, d, "demo:3")
+    wait_dump(c, lambda d: d["demo"] == "bestfit" and fresh(d, t0), "(d2) demo:3 did not start quickbuild/bestfit")
+    r1, d = tick_rate(c)
+    press(c, d, "x2")
+    d = wait_dump(c, lambda d: d["speed"] == 2, "(d2) x2 did not set 2x")
+    # from the start again, so the window at 2x ends inside the demo's 722 ticks however long the
+    # dumps take to come back
+    t0 = press(c, d, "replay")
+    wait_dump(c, lambda d: d["playing"] and fresh(d, t0), "(d2) replay did not restart the demo at 2x")
+    r2, d = tick_rate(c)
+    assert 15 <= r1 <= 45 and 1.5 <= r2 / r1 <= 2.5, f"(d2) the demo ran {r1:.1f} ticks/s at 1x and {r2:.1f} at 2x"
+    print(f"wiki demos: (d2) quickbuild/bestfit at {r1:.1f} ticks/s at 1x, {r2:.1f} at 2x")
+
+    # from the start again, so the pause lands inside the demo however long the dumps take
+    t0 = press(c, d, "replay")
+    d = wait_dump(c, lambda d: d["playing"] and fresh(d, t0), "(d3) replay did not restart the demo")
+    press(c, d, "play")
+    d = wait_dump(c, lambda d: not d["playing"], "(d3) play did not pause the demo")
+    assert not d["done"], f"(d3) the demo ended before play paused it, at tick {d['tick']}"
+    t = d["tick"]
+    time.sleep(1.5)
+    d = c.dump()
+    assert d["tick"] == t, f"(d3) the paused demo ran from tick {t} to {d['tick']}"
+    t0 = press(c, d, "replay")
+    d = wait_dump(c, lambda d: d["playing"] and fresh(d, t0), "(d3) replay did not restart the demo, playing")
+    press(c, d, "demo:5")
+    d = wait_dump(c, lambda d: d["demo"] == "cancel", "(d3) demo:5 did not select quickbuild/cancel")
+    d = wait_dump(c, lambda d: d["done"], "(d3) quickbuild/cancel did not end at 2x", seconds=40)
+    t = d["tick"]
+    time.sleep(1.0)
+    d = c.dump()
+    assert d["done"] and d["tick"] == t, f"(d3) the ended demo did not hold its last frame: {t} -> {d['tick']}"
+    t0 = press(c, d, "play")
+    d = wait_dump(c, lambda d: not d["done"] and fresh(d, t0), "(d3) play on an ended demo did not start it again")
+    press(c, d, "x1")
+    wait_dump(c, lambda d: d["speed"] == 1, "(d3) x1 did not set 1x")
+    print("wiki demos: (d3) pause, replay, the last frame held and played again")
+
+    # (d4) each entry with a demo paused mid-play, grabbed beside the mockup at the same state; past
+    # tick 150, which leaves some nine seconds of either demo for the pause to land in
+    for node, entry, k, demo, at in ((2, "quickbuild", 0, "snap", 150), (3, "buildshapes", 1, "line", 150)):
+        d = c.dump()
+        if d["entry"] != entry:
+            press(c, d, f"entry:{node}")
+        d = wait_dump(c, lambda d: d["entry"] == entry and f"demo:{k}" in keys_of(d, "demo:"),
+                      f"(d4) entry:{node} did not select {entry} and draw its demos")
+        press(c, d, f"demo:{k}")
+        d = wait_dump(c, lambda d: d["demo"] == demo and d["tick"] >= at, f"(d4) {entry}/{demo} did not reach tick {at}", seconds=60)
+        press(c, d, "play")
+        d = wait_dump(c, lambda d: not d["playing"], f"(d4) play did not pause {entry}/{demo}")
+        assert not d["done"], f"(d4) {entry}/{demo} ended before play paused it"
+        time.sleep(1.0)          # the paused frame presented
+        if shots:
+            shots.mkdir(parents=True, exist_ok=True)
+            base = shots / f"{res}-{entry}-{demo}-t{d['tick']}"
+            grab(c, base.with_suffix(".game.png"))
+            mockup_shot({"res": [int(v) for v in res.split("x")], "entry": entry, "demo_n": k, "tick": d["tick"]},
+                        base.with_suffix(".mockup.png"))
+        press(c, d, "play")
+        print(f"wiki demos: (d4) {entry}/{demo} paused at tick {d['tick']}")
+
+    # (d5) the game thread's cost: the most one fill of the open page took, the demos above playing
+    d = c.dump()
+    print(f"wiki demos: (d5) the page cost the game thread at most {d['cost_max_ms']:.3f} ms in one frame "
+          f"over {d['cost_frames']} frames (the plan's target is under 0.5 ms)")
+    c.keys("esc")
+    wait_dump(c, lambda d: not d["open"], "(d5) Esc did not close the window")
+
+
 def hud(c):
     return json.loads(tacli("hud", c.name, "show", "--json", timeout=180))
 
@@ -438,7 +704,7 @@ def launched(instance, mode, res):
     stops it and puts its levers back."""
     runlock.hold(TREE, f"wiki_regression {mode} on {instance}")
     gamedir = tacli_api().Instance(instance).gamedir
-    levers = {"tagpu_hold.on": True, "tagpu_recorder.off": mode == "sp"}
+    levers = {"tagpu_hold.on": True, "tagpu_recorder.off": mode != "recorded"}
     had = {n: (gamedir / n).exists() for n in levers}
     for n, want in levers.items():
         if want:
@@ -512,6 +778,10 @@ def mp(name):
         for r, p in peers.items():
             now = p.gametime()
             assert now > t0[r], f"(m) the {r}'s GameTime stood at {now} over 3 s with the host's wiki open"
+        d2 = c.dump()
+        assert d2["sim"] and d2["tick"] > d["tick"], f"(m) the host's demo did not play: tick {d['tick']} -> {d2['tick']}"
+        print(f"wiki mp: (m) the host's demo played {d2['tick'] - d['tick']} ticks; the page cost the game thread "
+              f"at most {d2['cost_max_ms']:.3f} ms in one frame over {d2['cost_frames']} frames")
         before = c.orders("COM")
         for tok in ("drclick:%d,%d" % ground, "dclick:%d,%d" % ground):
             c.keys(tok)
@@ -539,11 +809,12 @@ def mp(name):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("instance")
-    p.add_argument("mode", choices=("sp", "recorded", "mp"))
+    p.add_argument("mode", choices=("sp", "page", "demos", "recorded", "mp"))
     p.add_argument("--launch", action="store_true",
                    help="sp/recorded: launch on place-basic.json first, under the run lock")
     p.add_argument("--res", default="1920x1080", help="sp/recorded: the game's resolution")
     p.add_argument("--shot", help="sp: grab the presented frame with the window open to this PNG")
+    p.add_argument("--shots", type=Path, help="demos: grab each entry's demo mid-play, and the mockup's, into this folder")
     a = p.parse_args()
     t0 = time.monotonic()
     stop = None
@@ -557,6 +828,10 @@ def main():
             try:
                 if a.mode == "sp":
                     sp(c, a.shot)
+                elif a.mode == "page":
+                    page(c)
+                elif a.mode == "demos":
+                    demos(c, a.shots, a.res)
                 else:
                     recorded(c)
             finally:

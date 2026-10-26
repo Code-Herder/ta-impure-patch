@@ -9,9 +9,11 @@ can watch and try. The decisions below came out of a design interview with the o
 simplified simulation in C, equal to the mockup's tick for tick on every demo, lays the window out
 in C, equal to the mockup's boxes, lines and baselines, and builds the stage's picture as the
 replay HUD's ops, equal to the mockup's canvas call for op. On the Vulkan lane the game draws the
-wiki button and opens the window frame over the game, takes every input while it is open and
-pauses single player ([the plan](ingame-wiki-plan.html), landing 2); the window's body is empty:
-nothing in the DLL draws the page or the stage into it yet.
+wiki button and opens the window over the game, takes every input while it is open and pauses
+single player; the window holds the page -- the tree, the demo list, the entry's column -- and the
+stage with the selected demo playing, driven by the page's controls, the wheel and the scrollbars
+([the plan](ingame-wiki-plan.html), landings 2 to 4). Try it yourself is drawn and does nothing
+yet (landing 5).
 
 | What | Where |
 |---|---|
@@ -19,7 +21,7 @@ nothing in the DLL draws the page or the stage into it yet.
 | One entry: its text, its mods, its demos | `art/wiki/entries/<id>.json` |
 | The mockup, which reads only those files | `tools/wiki/mockup/` (`index.html`, `wiki.js`, `wiki.css`, `sim.js`, `stage.js`) |
 | The window's art kit | `art/wiki/kit/` (`kit.json` and `parts/`), in `art/hud/kit.json`'s format, fitted by `tools/hudart/fit.py --set wiki` from the parts as cut in `art/wiki-full/kit/` |
-| The stage's cursor icons | `cursor_*.png` in the kit, written by `tools/wiki/cursors.sh` from `stage.js` `cursorShape` |
+| The stage's cursor icons, the controls' glyphs and the tree's marks | `cursor_*.png`, `i_play`, `i_pause`, `i_replay`, `i_open`, `i_shut` and `i_dot` in the kit, written by `tools/wiki/cursors.sh` from `stage.js` `cursorShape` and `tools/wiki/mockup/glyphs.js` |
 | The window's layout numbers and its text roles | `art/wiki/layout.json`, which `wiki.js` sets as custom properties of the frame (`--w-` and the number's path) for `wiki.css`, and which the DLL reads |
 | The stage in the game's own graphics | `tools/wiki/gfx.py` writes the gitignored `tools/wiki/mockup/gfx/` from the local install; `gfx.js` draws it under `gfx=game` |
 | The demos' generators; the headless check of every demo | `tools/wiki/gen-quickbuild.mjs`, `tools/wiki/gen-buildshapes.mjs`; `tools/wiki/simcheck.mjs` |
@@ -30,8 +32,8 @@ nothing in the DLL draws the page or the stage into it yet.
 | The parity check, C against `sim.js` | `node tools/wiki/simparity.mjs [--wine]`, with `tagpu/ddraw/tests/wikitest.c`; `--hash` prints each demo's final state hash from `sim.js` |
 | The stage in the DLL | `tagpu/ddraw/src/tagpu_wikistage.c`: a view copied by value, built into HUD ops |
 | The stage's check, C against `stage.js` | `node tools/wiki/stagecheck.mjs`, with `tagpu/ddraw/tests/wikistagetest.c` |
-| The window and the button in the DLL | `tagpu_wiki.c` (input, pause; game thread), `tagpu_wikiframe.c` (the layout), `tagpu_wikistate.c` and `tagpu_vk_hud.c` (drawing; render thread) — [GPU status](gpu-status.html) §2.12c |
-| The game test of the window | `tools/wiki_regression.py <instance> sp --launch` (or `recorded`), `tools/wiki_regression.py <name> mp` |
+| The window in the game | `tagpu_wiki.c` (input, pause, the page's state and the demo's simulation; game thread), `tagpu_wikistate.c` (`tagpu_wikilay.c` and `tagpu_wikistage.c` on the record) and `tagpu_vk_hud.c` (drawing; render thread) — [GPU status](gpu-status.html) §2.12c |
+| The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|recorded --launch`, `tools/wiki_regression.py <name> mp`; `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's |
 | Serving it | `python3 tools/hudart/serve.py`, then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
 
@@ -242,7 +244,7 @@ they were not re-disassembled for this table.
 | Order lines | TA draws no lines. It draws marching route dots in the `pathicon` ink, a waypoint sprite, target circles and range circles. | `tagpu_order.c` `draw_dots`, `draw_sprite` (a crosshair in place of the GAF sprite), `draw_circle`, `draw_ranges` | Unchanged: the whitebox's dashed lines |
 | Construction progress | The unit's build fraction: unit `+0x104`, the fraction remaining, staged as the engine's nano frame (`0x458D30` / `0x458DD0`) | `tagpu_render3do.c` `tagpu_r3d_nano_state` stages it; the unit shader in `tagpu_native.c` applies it, and the wire is `tagpu_posedraw.c` `pd_record`. | The unbuilt share a faint green sprite, the built share filling from the bottom in full colour; a reclaim the reverse, in faint red |
 | Cursor | `anims/cursors.gaf`, chosen by the engine's picker `0x43E490` into `main+0x2CBE` from `cursor_ary` (`exe-reverse-engineering.md`, the cursor table): `cursornormal`, `cursormove`, `cursorselect`, … | `tagpu_gui_surf.c` `tagpu_gui_cursor_frame` takes the frame from the packet; `sharp_cursor` draws it last in the UI's sharp layer. | `cursornormal` and `cursormove`, frame 0, at their hotspots, nearest-scaled by round(height / 720) |
-| Keys strip | None: the game has no such strip | Nothing in the DLL draws one. A wiki window would draw it with the replay HUD's stack (`tagpu_hudlay.c`, `tagpu_huddraw.c`, `tagpu_hudtext.c`, `tagpu_vk_hud.c`), or with TA's font through `tagpu_text.c`. | Unchanged |
+| Keys strip | None: the game has no such strip | Only the wiki draws one, under its own stage: `tagpu_wikilay.c` lays out the keycaps of the keys the demo's view holds, drawn by the replay HUD's stack (`tagpu_huddraw.c`, `tagpu_hudtext.c`, `tagpu_vk_hud.c`). | Unchanged |
 
 **The generator.** `tools/wiki/gfx.py` writes `tools/wiki/mockup/gfx/`, which is gitignored:
 everything in it is derived from the game's files. Run it with the shared venv
@@ -553,24 +555,24 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
 
 - **No wiki on GDI** (the owner's decision, 2026-10-25): the button and the window are drawn by the
   Vulkan HUD pass only, as the rewind button is, so on GDI the wiki cannot open.
-- **The window is empty.** The button, the window frame, the input capture and the pause are in
-  the DLL; the page, the stage and Try it yourself are the plan's landings 3 to 5.
-  `tagpu_wikilay_build`, the simulation and `tagpu_wikistage_build` link into the DLL unused.
-  `tagpu_huddraw_build` takes the replay HUD's `HUDOPS`, so the stage's own, larger op list needs
-  it to take an op list before the stage can be drawn. The draw must honour `HOPF_INK` (a text in
-  its run's colour with no shadow or outline: dark ink on a light face), which `tagpu_huddraw.c`
-  does not yet test.
+- **Try it yourself does nothing.** Its button is drawn, enabled with a demo, shows pressed and
+  takes no action: the player's input on the stage is the plan's landing 5.
+- **The demo restarts at every open.** The plan frees the simulation at a close and makes it at an
+  open, so a reopened window plays the selected demo from its start, where the mockup, which keeps
+  its simulation, carries on.
+- **The wheel's step and a track's page are the DLL's.** The mockup leaves both to the browser: the
+  game scrolls 48 units a notch (three of the tree's rows) and a press on a track off its thumb
+  pages by seven eighths of the panel, as Chrome does.
 - **The stage's budget holds the data's map, not the largest.** Cells and fog are one op a cell,
   as the canvas calls them: 2587 ops at most over the demos (40 × 24 cells), against
   `WIKI_MAXOP` 16384. A square map past about 70 cells a side, fogged everywhere, drops ops and
   edges the stage in red.
-- **No HUD face has the mockup's control glyphs or the tree's marks**: play ▶, pause ❚❚, replay ⟲,
-  the folds ▾ ▸ and the entry's dot •. The browser sets them in its fallback face, which the DLL
-  does not carry, so the game would draw each as its face's `.notdef`, and the play and replay
-  buttons, which are sized to their glyphs (37.1 and 29.3 units wide at 1920 × 1080 while play
-  shows pause), would take the `.notdef`'s width. `wikilaycheck.py` gives the C layout the
-  browser's advances for them and names them. Kit icons, as question 5 proposes for the stage's
-  cursors, or the glyphs in a HUD face would close it; the mockup changes first.
+- **The controls' glyphs and the tree's marks are kit icons, pending the owner.** No HUD face has
+  play, pause, replay, the folds' triangles or the entry's dot, so both the mockup and the game
+  draw them as icons rasterised from `glyphs.js`, in the kit icons' pale fill and black edge; the
+  play and replay buttons are therefore their least width (`controls.min`, 24 units), where the
+  browser's fallback glyphs made them 37.1 and 29.3 units wide at 1920 × 1080. The other fix, the
+  glyphs added to a HUD face, is the owner's to choose; the icons are one commit.
 - **Chrome sets a face at a size of whole sixty-fourths of a pixel**, by a rule not identified:
   9.0667 px is set at 579/64 and 9.07 at 580/64 (MEASURED 2026-10-25 against stb_truetype's
   widths, which equal Chrome's at those sizes to the sixty-fourth). Where a font size is not a whole
@@ -578,20 +580,19 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
   resolution -- the mockup's lines are up to 0.2 % narrower than the game's, and a line that just
   fits in the mockup can wrap one word earlier in the game. `wikilaycheck.py` gives the C layout
   the browser's set size and compares the rules on it. The game sets every face at its own size.
-- **The stage's cursor icons must be in the kit as cut.** `fit.py --set wiki` rewrites
-  `art/wiki/kit/` from `art/wiki-full/kit/` and drops parts that are not there, so
-  `tools/wiki/cursors.sh` writes the icons into both.
+- **The drawn icons must be in the kit as cut.** `fit.py --set wiki` rewrites `art/wiki/kit/` from
+  `art/wiki-full/kit/` and drops parts that are not there, so `tools/wiki/cursors.sh` is run on
+  `art/wiki-full/kit` and the fit carries its icons over.
 - **The resource rules are copies.** The C sim calls the game's shapes and take-off rule
   (`tagpu_placegeo.c`), but its resource rules and the rest of the gesture's port `sim.js`'s
   mirrors of `tagpu_resource.c` and `tagpu_place.c` rather than calling them. `simparity.mjs`
   holds the C to `sim.js`, and so `sim.js`'s take-off port to the game's function; nothing holds
   the resource rules to the game's code, so a change there is followed by hand in `sim.js` and
   `tagpu_wikisim.c` (the plan's `rulecheck.py` would notice it; it is not built).
-- **The state hash is not checked in the game yet.** `tagpu_wikisim_hash` and its `sim.js` twin
-  agree on every tick natively and under Wine; the DLL's own i686 build on the game thread logs it
-  only once landing 4's `tagpu_wiki.check` exists.
 - **No build gate runs the parity checks.** They need node and gcc (and Wine for `--wine`); `make`
-  compiles and links the simulation and the stage but runs neither check. `stagecheck.mjs` builds
+  compiles and links the simulation and the stage but runs neither check. The game's own build is
+  checked by `wiki_regression.py demos`, whose `tagpu_wiki.check` hashes must equal
+  `simparity.mjs --hash`. `stagecheck.mjs` builds
   the stage natively (x86-64, SSE); the DLL compiles it for SSE2, but no check runs the i686 build.
 - **The figures are the stock game's.** A mod with other extractors or other build lists shows the
   stock demos.

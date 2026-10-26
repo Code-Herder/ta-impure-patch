@@ -4438,40 +4438,43 @@ the level's unit defs as listed above, on the game thread; and, in the walker, n
 engine's — the recording's player images (`+0x90`, `+0x9C`, `+0xD4`, `+0xFC`, `+0xFE`, `+0x144`,
 with `+0x106` for the markers) and unit images (`+0xA6`, `+0xFF`, `+0x104`, `+0x110` bit 28).
 
-### 2.12c The in-game wiki's shell (`tagpu_wiki.c`, `tagpu_wikistate.c`, `tagpu_wikiframe.c`, `tagpu_vk_hud.c`; every Vulkan level)
+### 2.12c The in-game wiki (`tagpu_wiki.c`, `tagpu_wikistate.c`, `tagpu_wikilay.c`, `tagpu_wikistage.c`, `tagpu_vk_hud.c`; every Vulkan level)
 
-The wiki button in the top bar's right-hand row and, when it is pressed, the kit's window frame
-over the game (90 % of the screen, centred, the title "Wiki", its close button and an empty body
-until the page lands), drawn from `art/wiki/kit/` at the device's resolution on the Vulkan lane
-in every level, a replay's included. While the window is open the engine takes no input, and a
-single-player level is paused. Design and status: [the in-game wiki plan](ingame-wiki-plan.html),
-landing 2; the engine facts: [engine map](exe-reverse-engineering.html), *The in-game wiki's engine
+The wiki button in the top bar's right-hand row and, when it is pressed, the kit's window over the
+game (90 % of the screen, centred): the title "Wiki" and its close button, the tree, the selected
+entry's demos, and the entry's column -- title, subtitle, badge, the stage with its demo playing,
+the caption and keys strips, the controls and the text -- drawn from `art/wiki/kit/` at the
+device's resolution on the Vulkan lane in every level, a replay's included. While the window is
+open the engine takes no input, and a single-player level is paused. Try it yourself is drawn and
+does nothing yet. Design and status: [the in-game wiki plan](ingame-wiki-plan.html), landings 2 to
+4; the engine facts: [engine map](exe-reverse-engineering.html), *The in-game wiki's engine
 questions*. **No byte patch and no detour**: the input is taken in hooks Impure already owns, the
 pause through `tagpu_menu.c`. GDI draws neither the button nor the window, so the wiki cannot open
 there.
 
 | site | what we do there | thread |
 |---|---|---|
-| `fill_frame` (`tagpu_packet_pub.c`), after the effects' models | `tagpu_wiki_fill`: one `TAGPU_PK_WIKI` record (open, the two pressed faces, the pause taken, the pointer's client point) into the packet's last area `wiki_off`/`wiki_len`; none, and the window closed, when the HUD's pass is off (GDI, or the pass refused) or the wiki's layout refused its kit (`tagpu_wikistate_refused`). A record that does not fit sets `TAGPU_PK_TRUNC_WIKI` (`0x1000000`). The trigger `tagpu_wiki.dump` writes `tagpu_wiki.json` from here | game |
-| `frame_valid` (`tagpu_packet.c`) | refuses a wiki area whose length is not `sizeof(TAGPU_PK_WIKI)` or that lies outside the slot | render |
-| `tagpu_overlay_draw`, after `tagpu_hudstate_present` | `tagpu_wikistate_present`: the record laid out by `tagpu_wikiframe_build` in the wiki unit (screen height / 720), the button in the bar's own pixels from `tagpu_hud_live`, in the rewind button's slot unless the same frame's live HUD draws that button | render |
-| `vk_present` (`tagpu_vk.c`) | `tagpu_vk_hud_prepare` builds the wiki's ops as a third layer of the HUD's pass (one instance range, one glyph atlas, the kit's parts uploaded after the HUD's); after the HUD's top layer and the UI drawn again inside it, `tagpu_vk_hud_record_wiki` draws it, and `tagpu_vk_gui_record_cursor` draws this frame's cursor quad once more over it when the window is closed, or open with the pointer in the picture | render |
-| `tagpu_zoom_frame_end` | `tagpu_wikistate_cmd`: the drawn frame's hit map (up to 160 controls, client pixels, topmost first) into the command record's `TAGPU_CMD_WIKI`, emptied as it is copied | render |
-| the command record's take (`tagpu_packet_pub.c`) | `tagpu_wiki_take`: the map copied for the game thread's hit tests | game |
-| `tagpu_shield_wndproc`, after the `WM_TAGPU_*` cases | `tagpu_wiki_message`: open, every input message on the shield's swallow list plus `WM_SYSKEYDOWN`/`UP`; closed, a left press on the button and the paired release, which goes on when it re-locks the mouse (unlocked, closed). The press opens nothing while a rewind or Leave's question holds the pause (`tagpu_replay_rewind_state`, `tagpu_hudinput_leave_pending`). The frozen point is the press's `lParam` through `mouse_client_to_game`. A release of a button the engine holds (`TAGPU_WIKI_FROZEN`) goes to the engine at the frozen point through `deliver_engine`, unless the shield is armed; `tagpu_wiki_cancel` on `WM_KILLFOCUS`, `WM_CAPTURECHANGED` and a deactivating `WM_ACTIVATEAPP` | game |
+| `fill_frame` (`tagpu_packet_pub.c`), after the effects' models | `tagpu_wiki_fill`: one `TAGPU_PK_WIKI` record (open, the pause taken, the pointer's client point, the held control, the page's selection, folds, scrolls and playback) into the packet's last area `wiki_off`/`wiki_len`; while open, the demo's `WIKISIM` stepped by the clock (at most 8 ticks) and its view copied by value into the record's `stage` (`tagpu_wikistage_copy`), the area then 60 KB longer; none, and the window closed, when the HUD's pass is off (GDI, or the pass refused) or the wiki's layout refused (`tagpu_wikistate_refused`). A record that does not fit sets `TAGPU_PK_TRUNC_WIKI` (`0x1000000`). The triggers `tagpu_wiki.dump` (writes `tagpu_wiki.json`) and `tagpu_wiki.check` (every demo played to its end, each `tagpu_wikisim_hash` logged) are answered from here | game |
+| `frame_valid` (`tagpu_packet.c`) | refuses a wiki area whose length is neither `TAGPU_PK_WIKI_HEAD` (no stage) nor `sizeof(TAGPU_PK_WIKI)`, or that lies outside the slot | render |
+| `tagpu_overlay_draw`, after `tagpu_hudstate_present` | `tagpu_wikistate_present`: the record laid out by `tagpu_wikilay_build` in the wiki unit (screen height / 720), the button in the bar's own pixels from `tagpu_hud_live`, in the rewind button's slot unless the same frame's live HUD draws that button; the stage's view copied out of the packet, every count bounded and every string ended, and built by `tagpu_wikistage_build` inside the page's bezel | render |
+| `vk_present` (`tagpu_vk.c`) | `tagpu_vk_hud_prepare` builds the wiki's two op lists, the page then the stage, through `tagpu_huddraw_build_list` as a third layer of the HUD's pass (one instance range of 32 768 quads a slot, one glyph atlas, the kit's parts uploaded after the HUD's); after the HUD's top layer and the UI drawn again inside it, `tagpu_vk_hud_record_wiki` draws it, and `tagpu_vk_gui_record_cursor` draws this frame's cursor quad once more over it when the window is closed, or open with the pointer in the picture | render |
+| `tagpu_zoom_frame_end` | `tagpu_wikistate_cmd`: the drawn frame's hit map (up to 160 controls, client pixels, topmost first), each panel's scroll as drawn and its limit, and each scrollbar's track and thumb, into the command record's `TAGPU_CMD_WIKI`, emptied as it is copied | render |
+| the command record's take (`tagpu_packet_pub.c`) | `tagpu_wiki_take`: the map copied, every number bounded, for the game thread's hit tests and scroll limits | game |
+| `tagpu_shield_wndproc`, after the `WM_TAGPU_*` cases | `tagpu_wiki_message`: open, every input message on the shield's swallow list plus `WM_SYSKEYDOWN`/`UP` -- a left press acting on the drawn frame's control or scrollbar, the wheel scrolling the panel under the pointer, a move dragging a held thumb; closed, a left press on the button and the paired release, which goes on when it re-locks the mouse (unlocked, closed). The press opens nothing while a rewind or Leave's question holds the pause (`tagpu_replay_rewind_state`, `tagpu_hudinput_leave_pending`). The frozen point is the press's `lParam` through `mouse_client_to_game`. A release of a button the engine holds (`TAGPU_WIKI_FROZEN`) goes to the engine at the frozen point through `deliver_engine`, unless the shield is armed; `tagpu_wiki_cancel` on `WM_KILLFOCUS`, `WM_CAPTURECHANGED` and a deactivating `WM_ACTIVATEAPP` | game |
 | `deliver_mouse`, `deliver_key`, `WM_TAGPU_CHAR` (`tagpu_shield.c`) | `tagpu_wiki_mouse` (before the store to `g_ddraw.cursor`; `TAGPU_WIKI_FROZEN` delivers the release at the frozen point), `tagpu_wiki_key` (before `set_key`), `tagpu_wiki_char`: the injected path, the same rules | game |
 | the two doors into TA's window procedure: `fake_WndProc`'s tail (`wndproc.c`) and `to_game` (`tagpu_shield.c`), past the display-only ring's drop | `tagpu_wiki_engine_got`: the left, right and middle buttons and the keys the engine is handed down and not yet up, whose releases the wiki never keeps | game |
 | `WM_MOUSELEAVE` (`wndproc.c`) | while the wiki holds input, the leave forgets the client point and goes no further, so the engine is not told the pointer left | game |
 | `fake_GetCursorPos`, `fake_GetKeyState`, `fake_GetAsyncKeyState` (`winapi_hooks.c`) | while the capture word is set: the frozen opening point (no store) and 0 for every key. `fake_GetCursorPos` stores its live point through `tagpu_wiki_cursor_store`, under the critical section the open and the close hold (`tagpu_wiki_init` makes it in `DllMain`'s attach) | any, the engine's mouse thread included |
-| the art loader's thread (`tagpu_hudart.c`, `wiki_load`) | `tagpu_wikiframe_check`: the kit refused, and the wiki not published, when it lacks a part or style the shell names in any state | the loader |
+| the art loader's thread (`tagpu_hudart.c`, `wiki_load`) | `tagpu_wikilay_check`: the kit and the data refused, and the wiki not published, when the kit lacks an icon or the `toast` style the window and the stage draw, or the page's build refuses any state (closed, open, every entry's every demo); the parts and the roles' styles are refused by `tagpu_wikilay_load` itself | the loader |
 | teardown wrap's entry (`tagpu_reclaim.c`) | `tagpu_wiki_level_end` after `tagpu_hudinput_level_end`: the window closed, its pause forgotten without a write, the hit map emptied | game |
 
 **Fields we write**, on the game thread, through `tagpu_menu_pause_hold`: bit 0 of `main+0x38A51`
 (the pause), only when `main+0x2A44` bit 0 is clear (a single-player level), set at the open only
 when it was clear and cleared at the close only when the open set it. Of our own: the game
-folder's `tagpu_wiki.json` (and its `.tmp`) and the deletion of `tagpu_wiki.dump`. **Fields we
-read**: `main+0x2A44` bit 0 and `main+0x38A51` bit 0, there and nowhere else. Nothing the
-recording carries; the wiki has no simulation state in this landing.
+folder's `tagpu_wiki.json` (and its `.tmp`) and the deletion of `tagpu_wiki.dump` and
+`tagpu_wiki.check`. **Fields we read**: `main+0x2A44` bit 0 and `main+0x38A51` bit 0, there and
+nowhere else. Nothing the recording carries: the demo's simulation is the wiki's own, a `WIKISIM`
+on the game thread that TA's simulation never reads, and every wiki file is `presentation`.
 
 ### 2.13 Sub-tick pose interpolation (`tagpu_lerp.c`, OFF by default, `tagpu_lerp.on`) — 2026-09-09
 
