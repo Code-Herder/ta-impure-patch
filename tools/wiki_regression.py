@@ -44,13 +44,17 @@ sp, in order:
   (h) a right button pressed on the margin before the open and released while it is open: the
       press reaches the engine, and so does the release (the batch's `engine` count, the shield
       delivering it at the frozen point), with the window still open and the frozen point unmoved;
+  (i) a real double-click on the close button (xdotool on the instance's own X server, the four
+      messages sent at once) closes the window with nothing owed, and the log says the second
+      press, which meets the hit map that drew the window open, was taken;
   (g) reopened on a world the test's own hold keeps paused (the wiki holds the pause it finds and
       will give nothing back: `pause_was`), the level is ended with scenarios/replay-end.json: the
       log says the window closed at the level's end, and an injected key reaches the engine's key
       ring at the results screen.
 
---shot PATH grabs the presented frame with the window open, at (b), for the owner: the whole
-window by its id on the instance's display (`import -window`, the ta-capture skill's window grab).
+--shot PATH grabs the presented frame with the window open, at (b) and in page at (p2), for the
+owner: the whole window by its id on the instance's display (`import -window`, the ta-capture
+skill's window grab).
 page, on the same launch as sp:
   (p1) the open picks the tree's first entry and its first demo, playing, and draws every control;
   (p2) entry:3 selects the second entry, demo:1 its second demo, afresh;
@@ -58,6 +62,9 @@ page, on the same launch as sp:
   (p4) two wheel notches down over the text scroll it two steps, one up one back, each held to
        the limit the drawn frame posted;
   (p5) the text's thumb dragged 12 px scrolls it by the travel the drawn frame gave it;
+  (p7) four real wheel notches sent at once through the instance's X server (xdotool), which the
+       window procedure pumps between two frames, scroll the text four steps, not one -- run where
+       the text scrolls past two notches; (p4), (p5) and (p7) are not run where it does not scroll;
   (p6) Esc closes and frees the demo; reopened, the selection stands and the demo starts afresh.
 demos, on the same launch as sp:
   (d1) tagpu_wiki.check plays every demo to its end in the game, and every logged hash equals
@@ -392,6 +399,25 @@ def sp(c, shot=None):
     c.call("order", "stop", "--unit", c.units["ARMCK"], "--expect", "ARMCK")
     print("wiki sp: (h) a right button held across the open was released to the engine, at the frozen point")
 
+    # (i) a double-click on the close button: the second press is the wiki's while the window is
+    # still drawn. REAL CLICKS, sent at once through the instance's X server: the window procedure
+    # pumps all four messages before the game thread draws again, and the hit map changes only in
+    # that draw (tagpu_wiki_take), so the second press meets the hit map that drew the window open.
+    # An injected batch posts one event a flip and never reaches that gap. The shield swallows a
+    # real press the wiki does not take, so what the wiki did is read from its log.
+    d = c.open_wiki(expect_pause=True)
+    x = c.centre(c.hit(d, "close"))
+    real_pointer(c, *x)
+    start = c.mark()
+    xdo(c, "click", "--repeat", 2, "--delay", 0, 1)
+    d = wait_dump(c, lambda d: not d["open"], "(i) a real double-click on X did not close the window")
+    assert not d["owed_buttons"], f"(i) the double-click left a button owed: {d['owed_buttons']}"
+    assert c.found(start, r"wiki: closed \(the close button\)"), "(i) no `wiki: closed (the close button)` line"
+    assert c.found(start, r"wiki: a press on 'close' of the window still drawn after its close was taken"), \
+        "(i) the second press of the double-click was not taken on the window still drawn"
+    print("wiki sp: (i) a real double-click on X closed the window, and the second press, on the window "
+          "still drawn, was taken")
+
     # (g) the level ends with the window open, on the test's own hold
     T = c.gametime() + 30
     start = c._pause_at(T)
@@ -420,6 +446,7 @@ def sp(c, shot=None):
 
 TEXT = 2                                 # WIKI_SCROLL_TEXT: the panels are tree, demos, text
 WHEEL_UNITS = 48                         # tagpu_wiki.c: a notch scrolls three of the tree's rows
+BURST = 4                                # (p7): real wheel notches sent at once
 
 
 def wait_dump(c, pred, what, seconds=20):
@@ -452,34 +479,13 @@ def keys_of(d, prefix):
     return sorted(h["key"] for h in d["hits"] if h["key"].startswith(prefix))
 
 
-def page(c):
-    """(p1)..(p6): the page's controls, against the dump's state."""
-    held_at(c, HELD_AT)
-    d = c.open_wiki(expect_pause=True)
-    d = wait_dump(c, lambda d: d["drawn_open"] and "entry:3" in keys_of(d, "entry:"), "(p1) the page was not drawn")
-    assert (d["entry"], d["demo"], d["sim"], d["stage"]) == ("quickbuild", "snap", 1, 1), \
-        f"(p1) the open did not pick the tree's first entry and its first demo, playing: {d['entry']}/{d['demo']}"
-    for k in ("fold:0", "fold:1", "entry:2", "entry:3", "demo:0", "play", "replay", "x1", "x2", "try",
-              "stage", "scroll:tree", "scroll:demos", "scroll:text", "close", "wiki", "window"):
-        c.hit(d, k)
-    print(f"wiki page: (p1) open on quickbuild/snap, {len(d['hits'])} controls drawn")
-
-    press(c, d, "entry:3")
-    d = wait_dump(c, lambda d: d["entry"] == "buildshapes" and d["demo"] == "clicks", "(p2) entry:3 did not select buildshapes")
-    d = wait_dump(c, lambda d: "demo:9" in keys_of(d, "demo:"), "(p2) buildshapes' ten demos were not drawn")
-    t0 = press(c, d, "demo:1")
-    d = wait_dump(c, lambda d: d["demo"] == "line" and fresh(d, t0), "(p2) demo:1 did not start buildshapes/line")
-    print("wiki page: (p2) the second entry and its second demo selected")
-
-    press(c, d, "fold:1")
-    d = wait_dump(c, lambda d: d["folds"] == [1] and not keys_of(d, "entry:"), "(p3) fold:1 did not fold Building")
-    press(c, d, "fold:1")
-    d = wait_dump(c, lambda d: d["folds"] == [] and keys_of(d, "entry:") == ["entry:2", "entry:3"],
-                  "(p3) fold:1 did not unfold Building")
-    print("wiki page: (p3) Building folded and unfolded")
-
+def text_scroll(c, d):
+    """(p4), (p5) and (p7) on the text panel, as far as its scroll range lets each be told apart;
+    the dump after them."""
     mx = d["scroll_max"][TEXT]
-    assert mx > 0, f"(p4) the text does not scroll at this resolution: {d['scroll_max']}"
+    if mx <= 0:
+        print(f"wiki page: (p4), (p5), (p7) not run: the text does not scroll at {d['viewport'][2]}x{d['viewport'][3]}")
+        return d
     x, y = c.centre(c.hit(d, "scroll:text"))
     c.keys(f"dwheel:{x},{y},-2")
     want = min(2 * WHEEL_UNITS, mx)
@@ -499,6 +505,55 @@ def page(c):
                   f"(p5) a {dy} px drag of the thumb did not scroll the text from {before:g} to {want:g}")
     print(f"wiki page: (p5) the thumb dragged {dy} px scrolled the text {before:g} -> {d['scroll_drawn'][TEXT]:g}")
 
+    # (p7) several notches in one frame: real wheel clicks, which the window procedure pumps in one
+    # go, where an injected batch posts one event a flip. Told apart from one notch only where the
+    # text scrolls past two
+    n = min(BURST, int(mx // WHEEL_UNITS))
+    if n < 2:
+        print(f"wiki page: (p7) not run: the text scrolls {mx:g} units, under two {WHEEL_UNITS}-unit notches, "
+              "so one notch and a burst reach the same limit")
+        return d
+    c.keys(f"dwheel:{x},{y},64")
+    d = wait_dump(c, lambda d: d["scroll_drawn"][TEXT] == 0, "(p7) 64 notches up did not bring the text to the top")
+    real_pointer(c, x, y)
+    xdo(c, "click", "--repeat", n, "--delay", 1, 5)
+    want = n * WHEEL_UNITS
+    d = wait_dump(c, lambda d: abs(d["scroll_drawn"][TEXT] - want) < 0.02,
+                  f"(p7) {n} real notches down did not scroll the text to {want}")
+    print(f"wiki page: (p7) {n} real wheel notches in a burst scrolled the text {n} steps, to {want:g}")
+    return d
+
+
+def page(c, shot=None):
+    """(p1)..(p6): the page's controls, against the dump's state."""
+    held_at(c, HELD_AT)
+    d = c.open_wiki(expect_pause=True)
+    d = wait_dump(c, lambda d: d["drawn_open"] and "entry:3" in keys_of(d, "entry:"), "(p1) the page was not drawn")
+    assert (d["entry"], d["demo"], d["sim"], d["stage"]) == ("quickbuild", "snap", 1, 1), \
+        f"(p1) the open did not pick the tree's first entry and its first demo, playing: {d['entry']}/{d['demo']}"
+    for k in ("fold:0", "fold:1", "entry:2", "entry:3", "demo:0", "play", "replay", "x1", "x2", "try",
+              "stage", "scroll:tree", "scroll:demos", "scroll:text", "close", "wiki", "window"):
+        c.hit(d, k)
+    print(f"wiki page: (p1) open on quickbuild/snap, {len(d['hits'])} controls drawn")
+
+    press(c, d, "entry:3")
+    d = wait_dump(c, lambda d: d["entry"] == "buildshapes" and d["demo"] == "clicks", "(p2) entry:3 did not select buildshapes")
+    d = wait_dump(c, lambda d: "demo:9" in keys_of(d, "demo:"), "(p2) buildshapes' ten demos were not drawn")
+    t0 = press(c, d, "demo:1")
+    d = wait_dump(c, lambda d: d["demo"] == "line" and fresh(d, t0), "(p2) demo:1 did not start buildshapes/line")
+    print("wiki page: (p2) the second entry and its second demo selected")
+    if shot:
+        grab(c, shot)
+
+    press(c, d, "fold:1")
+    d = wait_dump(c, lambda d: d["folds"] == [1] and not keys_of(d, "entry:"), "(p3) fold:1 did not fold Building")
+    press(c, d, "fold:1")
+    d = wait_dump(c, lambda d: d["folds"] == [] and keys_of(d, "entry:") == ["entry:2", "entry:3"],
+                  "(p3) fold:1 did not unfold Building")
+    print("wiki page: (p3) Building folded and unfolded")
+
+    d = text_scroll(c, d)
+
     c.keys("esc")
     d = wait_dump(c, lambda d: not d["open"] and not d["sim"], "(p6) Esc did not close the window and free the demo")
     t0 = time.monotonic()
@@ -510,6 +565,37 @@ def page(c):
     c.keys("esc")
     wait_dump(c, lambda d: not d["open"], "(p6) Esc did not close it again")
     print("wiki page: (p6) closed and reopened on the same entry and demo, the demo afresh")
+
+
+def xdo(c, *args):
+    """xdotool on the instance's own display -- a private X server, never the owner's (the instance
+    is created with `--display`): the device as a player's hand drives it, through the X server."""
+    me = next(i for i in json.loads(tacli("ls", "--json")) if i["name"] == c.name)
+    r = subprocess.run(["xdotool", *map(str, args)], capture_output=True, text=True, timeout=30,
+                       env={**os.environ, "DISPLAY": me["display"]})
+    assert r.returncode == 0, f"xdotool {' '.join(map(str, args))}: {r.stderr.strip()}"
+    return me
+
+
+def real_pointer(c, x, y):
+    """The X pointer brought over client point (x, y) of the game's window, as the window open
+    notes it (the dump's `ptr`, the client point of the last move the wiki took): moved to the
+    point in the X window's own pixels, then by what that point read as, which is the client
+    area's offset in the X window."""
+    me = next(i for i in json.loads(tacli("ls", "--json")) if i["name"] == c.name)
+    wid = me["window"][0]
+    want = [x, y]
+    at = [x, y]
+    d = None
+    for _ in range(3):
+        xdo(c, "mousemove", "--window", wid, at[0], at[1])
+        time.sleep(0.3)
+        d = c.dump()
+        if d["ptr"] == want:
+            return
+        if d["ptr"] != [-1, -1]:
+            at = [at[0] + want[0] - d["ptr"][0], at[1] + want[1] - d["ptr"][1]]
+    raise AssertionError(f"the real pointer reads {d['ptr'] if d else None}, not {want}")
 
 
 def simparity_hashes():
@@ -813,7 +899,8 @@ def main():
     p.add_argument("--launch", action="store_true",
                    help="sp/recorded: launch on place-basic.json first, under the run lock")
     p.add_argument("--res", default="1920x1080", help="sp/recorded: the game's resolution")
-    p.add_argument("--shot", help="sp: grab the presented frame with the window open to this PNG")
+    p.add_argument("--shot", help="sp, page: grab the presented frame with the window open to this PNG "
+                                  "(page: on the second entry and its second demo, at (p2))")
     p.add_argument("--shots", type=Path, help="demos: grab each entry's demo mid-play, and the mockup's, into this folder")
     a = p.parse_args()
     t0 = time.monotonic()
@@ -829,7 +916,7 @@ def main():
                 if a.mode == "sp":
                     sp(c, a.shot)
                 elif a.mode == "page":
-                    page(c)
+                    page(c, a.shot)
                 elif a.mode == "demos":
                     demos(c, a.shots, a.res)
                 else:
