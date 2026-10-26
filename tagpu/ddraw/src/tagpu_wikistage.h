@@ -1,0 +1,160 @@
+#ifndef TAGPU_WIKISTAGE_H
+#define TAGPU_WIKISTAGE_H
+/* tagpu_wikistage -- the in-game wiki's stage: one view of the wiki's simulation drawn as the
+   replay HUD's ops, as the mockup's tools/wiki/mockup/stage.js draws it into a canvas. stage.js
+   is the specification, call for op and in its paint order: tools/wiki/stagecheck.mjs plays every
+   demo through sim.js and stage.js and through tagpu_wikisim.c and this file, and pairs each
+   canvas call with its op within 1/64 of a pixel.
+
+   PURE. It names no engine address, holds no global and reads only its arguments: the view by
+   value (WIKISTAGEVIEW), the stage's rect in HUD units and u, the device pixels a unit. So the
+   render thread can build the picture from a packet record while the game thread steps the
+   simulation that made it, and a native build of this file is the check's.
+
+   Every op is in HUD units from the screen's top left, as tagpu_huddraw.c draws them, and clips
+   to the stage's canvas as the canvas clips what is drawn on it. The canvas is the stage's rect
+   snapped to device pixels as Chrome snaps an element (tagpu_wikistage_canvas); every position
+   inside it is computed in device pixels from its corner, in double, by stage.js's arithmetic.
+
+   Pure C99 and the C library, so tools/wiki/stagecheck.mjs compiles it natively. */
+#include <stdint.h>
+#include "tagpu_hudlay.h"
+#include "tagpu_wikisim.h"
+
+/* ---- the view by value: WIKIVIEW with every array bounded ---------------------------------- */
+
+#define WIKISTAGE_MAP     128                   /* cells a side                               */
+#define WIKISTAGE_VENTS   256
+#define WIKISTAGE_UNITS   128
+#define WIKISTAGE_SITES   PLACE_MAX_SITES       /* a gesture never has more                   */
+#define WIKISTAGE_QUEUED  256
+#define WIKISTAGE_LINES   512
+#define WIKISTAGE_CAPTION 256                   /* 255 bytes and the terminator               */
+#define WIKISTAGE_LABEL   WIKI_ID_MAX           /* 23 bytes and the terminator                */
+
+/* what the copy could not carry, one bit for each bound */
+#define WIKISTAGE_TRUNC_MAP     0x001u          /* the map is wider or taller: its top left    */
+#define WIKISTAGE_TRUNC_METAL   0x002u          /* a metal value is not a whole number 0..255  */
+#define WIKISTAGE_TRUNC_VENTS   0x004u
+#define WIKISTAGE_TRUNC_UNITS   0x008u
+#define WIKISTAGE_TRUNC_SITES   0x010u
+#define WIKISTAGE_TRUNC_QUEUED  0x020u
+#define WIKISTAGE_TRUNC_LINES   0x040u
+#define WIKISTAGE_TRUNC_CAPTION 0x080u
+#define WIKISTAGE_TRUNC_LABEL   0x100u          /* a label or a type's name, cut at a character */
+
+typedef struct {
+    float   x, z;                       /* its centre, world units                         */
+    float   built, reclaimed;           /* fractions                                       */
+    uint8_t fx, fz;                     /* footprint, cells                                */
+    uint8_t owner;                      /* 255: none of the eight players                  */
+    uint8_t selected;
+    char    label[WIKISTAGE_LABEL];     /* its label, else its type's name                 */
+} WIKISTAGEUNIT;
+
+/* the ghost, a gesture's site or a queued site: a building's centre and footprint */
+typedef struct {
+    float    x, z;
+    uint8_t  type, fx, fz;
+    uint8_t  ok;                        /* the ghost: green, else red                      */
+    uint8_t  state;                     /* a gesture's site: WIKI_SITE_*                   */
+    uint8_t  owner;                     /* a queued site: its order's owner; 255 none      */
+    uint16_t order;                     /* a gesture's site: its place among the orders the
+                                           release adds, 0 for none                        */
+} WIKISTAGESITE;
+
+typedef struct { float from_x, from_z, to_x, to_z; uint8_t kind; } WIKISTAGELINE;
+
+typedef struct {
+    uint32_t       trunc;               /* WIKISTAGE_TRUNC_*                               */
+    int16_t        w, h;                /* cells; 0 when there is no view                  */
+    double         surface_metal;
+    uint8_t        metal[WIKISTAGE_MAP * WIKISTAGE_MAP];    /* w * h, row-major            */
+    uint8_t        fog[WIKISTAGE_MAP * WIKISTAGE_MAP];      /* 0 clear, 1 grey, 2 black    */
+    int16_t        nvent, nunit, nsite, nqueued, nline;
+    float          vent[WIKISTAGE_VENTS][2];                /* each vent cell's centre     */
+    WIKISTAGEUNIT  unit[WIKISTAGE_UNITS];
+    uint8_t        has_ghost;
+    WIKISTAGESITE  ghost;
+    WIKISTAGESITE  site[WIKISTAGE_SITES];
+    int8_t         shape;               /* PLACE_*, PLACE_NONE for none                    */
+    int16_t        spacing;             /* the armed building's, -1 when none is armed     */
+    WIKISTAGESITE  queued[WIKISTAGE_QUEUED];
+    WIKISTAGELINE  line[WIKISTAGE_LINES];
+    double         cursor_x, cursor_z;  /* double: the cursor's icon box is snapped to a
+                                           pixel, which a float's error could move        */
+    uint8_t        cursor_shape;        /* WIKI_CURSOR_*                                   */
+    uint8_t        held[WIKI_NKEYS];
+    uint8_t        has_drag;
+    float          drag_x0, drag_z0, drag_x1, drag_z1;
+    uint8_t        has_caption;
+    char           caption[WIKISTAGE_CAPTION];
+    double         pace;
+    int16_t        mode;                /* the armed type, or -1: contextual               */
+    int16_t        ntype;
+    char           type[WIKI_MAX_DEFS][WIKISTAGE_LABEL];    /* the types' names: a queued
+                                           site's and the ghost's label                    */
+} WIKISTAGEVIEW;
+
+/* THE COPY. `v` (NULL for none) and the entry `e` it was made from into `out`, every array to its
+   bound and every string cut at a character, by value: a WIKIVIEW's arrays live in its WIKISIM
+   and hold only until the next call on it, so nothing that outlives the call may point into
+   them. Returns the WIKISTAGE_TRUNC_* bits, which are also out->trunc. */
+uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIENTRY* e);
+
+/* ---- the picture ---------------------------------------------------------------------------- */
+
+/* The wiki's own op budget, apart from the replay HUD's HUD_MAXOP: a 40 x 24 map's cells, fog and
+   grid come to about 3000, and a 128 x 128 map's cells and fog alone would take every op. */
+#define WIKI_MAXOP   16384
+#define WIKI_MAXRUN  1024
+#define WIKI_TEXTMAX 16384
+
+typedef struct {
+    int     n, nrun, ntext;
+    int     dropped;                    /* the ops this build had no room for              */
+    int     logged;                     /* kept across builds: a dropping build was logged */
+    HUDOP   op[WIKI_MAXOP];
+    HUDRUN  run[WIKI_MAXRUN];
+    char    text[WIKI_TEXTMAX];
+} WIKISTAGEOPS;                         /* about 0.9 MB: never on a stack                  */
+
+/* A string's advance in the stage's text style at `size` device pixels, in device pixels: the
+   faces' measure (tagpu_hudtext_width), which this file has no faces for. */
+typedef double (*WIKISTAGEMEASURE)(void* ctx, double size, const char* s);
+typedef void   (*WIKISTAGELOG)(void* ctx, const char* line);
+
+/* What the picture needs of the loaded art, by the caller. */
+typedef struct {
+    int16_t          style;             /* layout.json's `toast` style: the stage's text   */
+    WIKISTAGEMEASURE measure;           /* never NULL                                      */
+    void*            measure_ctx;
+    int16_t          cursor[3];         /* the kit's cursor_arrow, cursor_move and
+                                           cursor_build, by WIKI_CURSOR_*; -1 absent      */
+    float            cursor_w[3], cursor_h[3];  /* their sizes in units: pw / scale        */
+    WIKISTAGELOG     log;               /* NULL: none                                      */
+    void*            log_ctx;
+} WIKISTAGEART;
+
+/* THE CANVAS: the stage's rect `stage`, in units, at `u` device pixels a unit, snapped to whole
+   device pixels as Chrome snaps the canvas element (tagpu_hud_snap, tagpu_hud_edge): its top left
+   (`*x0`, `*y0`) and its size, in device pixels. */
+void tagpu_wikistage_canvas(HUDRECT stage, double u, double* x0, double* y0, double* w, double* h);
+
+/* THE FIT, stage.js `fit`: a map of `w` x `h` cells in a canvas `stage_w` x `stage_h` device pixels
+   at `u` pixels a unit, letterboxed with a pad of 6 units. `s` is device pixels a world unit and
+   (`ox`, `oz`) the map's corner from the canvas's top left. ONE FUNCTION ON BOTH THREADS: the
+   render thread draws the stage with it and the game thread turns a click on the stage into a
+   world point with it, from the same frame's canvas, so the two cannot disagree. */
+typedef struct { double s, ox, oz; } WIKISTAGEFIT;
+void tagpu_wikistage_fit(int w, int h, double stage_w, double stage_h, double u, WIKISTAGEFIT* out);
+
+/* The stage's ops for `v` into `out`, in stage.js's paint order, on the canvas of `stage` at `u`.
+   A view with no map draws the stage's ground and `msg` (NULL for none). WIKI_MAXOP BOUNDS IT: an
+   op past the budget is dropped and counted in out->dropped; the build that first drops is
+   logged through art->log, once while out->logged stays set; and a frame that dropped any is
+   edged in red, in a slot the budget keeps for it, so the loss shows. Returns out->n. */
+int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage, double u,
+                          const WIKISTAGEART* art, WIKISTAGEOPS* out);
+
+#endif

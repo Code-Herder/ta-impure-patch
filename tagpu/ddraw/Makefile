@@ -198,6 +198,12 @@ $(addprefix res, $(ALLEXTS)): inc/tagpu_wikipak.bin
 # where SSE needs more. tools/wiki/simparity.mjs --wine checks the build under Wine.
 $(addprefix src/tagpu_wikisim, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
 
+# THE WIKI'S STAGE (src/tagpu_wikistage.h) computes its pixels in double by the mockup's stage.js
+# arithmetic, and floors and snaps some of them, so it computes on SSE2 for the same reason: an
+# 80-bit intermediate can carry a value across a pixel edge stage.js does not cross.
+# tools/wiki/stagecheck.mjs checks a native build of it.
+$(addprefix src/tagpu_wikistage, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
+
 # THE RESTORER'S MODELS (src/tagpu_restore_core.c load_weights): unditherer/models/<name>.w32.bin,
 # compressed by zstd into inc/tagpu_rmodel_<name>.zst, which res.rc embeds as RMODEL_<NAME>.
 # Generated and never committed, like the HUD archive. The frame records its content size, which
