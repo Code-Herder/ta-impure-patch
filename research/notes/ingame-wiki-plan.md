@@ -848,10 +848,24 @@ Xvfb: `wiki_regression.py` sp passed at 1920 × 1080 and at 3840 × 2160, its st
 and page, recorded and mp passed. `demos` passed at both sizes: all 21 `tagpu_wiki.check` hashes
 equal `simparity.mjs --hash`, the 21 demos played to their ends in 12–13 ms on the game thread; a
 demo ran 30.4 ticks a second at 1x and 58.9 at 2x at 1920 × 1080, 30.0 and 55.8 at 3840 × 2160;
-the open page cost the game thread at most 0.063 ms in one frame over 2782 frames at 1920 × 1080
-and 0.197 ms over 1285 at 3840 × 2160, against the plan's 0.5 ms, and 0.018 ms on the mp host.
-The captures at both sizes, each entry with a demo paused mid-play beside the mockup at the same
-state, agree but for the game's own top bar. `tareplay.py landing` passed its 34 test groups.
+the open page's `page_fill` alone (the demo's steps and the view's copy into the record, not the
+record's copy into the slot) cost the game thread at most 0.063 ms in one frame over 2782 frames at
+1920 × 1080 and 0.197 ms over 1285 at 3840 × 2160, against the plan's 0.5 ms, and 0.018 ms on the
+mp host. The captures at both sizes, each entry with a demo paused mid-play beside the mockup at
+the same state, agree but for the game's own top bar. `tareplay.py landing` passed its 34 test
+groups.
+
+MEASURED 2026-10-26 after the landing review's fixes, the same way, with the cost timed over the
+whole fill -- the record's start to its placing in the packet, the 60 KB copy into the slot
+included (`tagpu_wiki_carried`): at 1920 × 1080 sp (its new step (i), a real double-click on X),
+page, recorded and mp passed, and `demos` passed twice, all 21 hashes equal; the whole fill cost at
+most 0.098 ms in one frame over 1375 frames in one `demos` run and 0.053 ms over 105 in `recorded`,
+0.056 ms over 233 on the mp host -- and in the other `demos` run 2.279 ms in one frame of 2723, the
+next highest of that run not logged (the dump keeps the maximum alone), so whether that frame was
+the fill or the thread preempted inside it is not known. `page` passed at 1024 × 768 and at
+3440 × 1440, the first runs at either: at 1024 × 768 the text scrolls 20.6 units and (p4) and (p5)
+ran; at 3440 × 1440 nothing on the page scrolls, so they did not. (p7), several wheel notches in one
+frame, has not run: no panel of today's data scrolls past one 48-unit notch at any size measured.
 
 **What the player sees.** Selecting a demo plays it on the stage, as the mockup's whitebox:
 - the cells, metal, vents and fog;
