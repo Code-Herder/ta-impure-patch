@@ -268,6 +268,7 @@ static int   s_cBar;                   /* counted, whether emitted or not     */
 static int   s_ncurs;                  /* build cursor / band box verts       */
 static int   s_nplace;                 /* placement site verts, this frame    */
 static int   s_cPlace;                 /* placement sites drawn, this frame   */
+static int   s_cPlaceRed, s_cPlaceTake; /* of them red, and yellow (tagpu_place.h) */
 static int   s_nordt, s_nordl;         /* order tri verts / lines, this frame */
 static int   s_nordx;                  /* text verts, this frame              */
 /* Where the ShowRanges labels end and the group digits begin. The engine draws
@@ -790,14 +791,17 @@ static void gather_place(const TAGPU_FXVIEW* v)
     unsigned i;
     int nv = 0;
 
-    s_nplace = 0; s_cPlace = 0;
+    s_nplace = 0; s_cPlace = 0; s_cPlaceRed = 0; s_cPlaceTake = 0;
     if (!tagpu_mark_cursor_ours()) return;
     if (!pk || pk->cursor_mode != CUR_BUILD || !square_gate(pk)) return;
     pl = tagpu_pk_place(pk);
     if (!pl) return;
     for (i = 0; i < pk->n_place && nv + MAXCURSV <= MAXPLACEV; i++) {
         int c = pk->gui_col[pl[i].colour];
-        if (square_emit(v, s_place, &nv, pl[i].rect, c, c)) s_cPlace++;
+        if (!square_emit(v, s_place, &nv, pl[i].rect, c, c)) continue;
+        s_cPlace++;
+        s_cPlaceRed += pl[i].colour == TAGPU_PK_PLACE_BLOCKED;
+        s_cPlaceTake += pl[i].colour == TAGPU_PK_PLACE_TOGGLE;
     }
     s_nplace = nv;
 }
@@ -941,7 +945,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     s_nsel = 0; s_selover = 0; s_lfar = 0;
     s_nordxOrd = 0; s_ntext = 0; s_xover = 0;
     s_novt = 0; s_novl = 0; s_novlRing = 0;
-    s_nplace = 0; s_cPlace = 0;
+    s_nplace = 0; s_cPlace = 0; s_cPlaceRed = 0; s_cPlaceTake = 0;
     if (!pk || !pk->in_game) return 0;
     /* BEFORE ANYTHING EMITS: a bar per unit at most, a selection rect per unit
        at most, and the unit count is bounded by the packet's own table. A
@@ -1366,11 +1370,11 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
             last = v->frame_counter;
             tagpu_text_stats(&nstr, &ndrop);
             _snprintf(b, sizeof b,
-                "mark: bars=%d sel=%d selover=%d cursor=%d place=%d ordtri=%d "
+                "mark: bars=%d sel=%d selover=%d cursor=%d place=%d placered=%d placetake=%d ordtri=%d "
                 "ordline=%d far=%d text=%d(lab=%d) "
                 "atlas=%d/%d over=%d key=%d vp=(%d,%d %dx%d) "
                 "zoom=%.2f%s",
-                s_cBar, s_nsel / 4, s_selover, s_ncurs / QUADV, s_cPlace, s_nordt / 3,
+                s_cBar, s_nsel / 4, s_selover, s_ncurs / QUADV, s_cPlace, s_cPlaceRed, s_cPlaceTake, s_nordt / 3,
                 s_nordl, s_lfar,
                 s_ntext, s_nordxOrd / QUADV, nstr, ndrop, s_xover,
                 tagpu_markown_key(), v->vpL, v->vpT, v->vw, v->vh, v->zoom,

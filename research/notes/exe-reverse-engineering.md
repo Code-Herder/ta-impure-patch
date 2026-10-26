@@ -19599,10 +19599,17 @@ is the first node of the action within ±16 inclusive, whatever its build type, 
 buildings alternates add and remove [DISASSEMBLED 2026-10-25, `0x43AFC0..0x43B0A6`].
 
 The destructor calls the action handler with flags 2 at `0x43A21A` when node byte `+6 & 2`
-is set. Flags `+0x42 & 0x400000` run the native `StopMoving` script lookup/start at
-`0x43A227`..`0x43A258` (`0x4B07C0`, `0x4B0B00`, `0x456190`). Its `+0x52` object cleanup
-at `0x43A264`..`0x43A2A4` can invoke virtual destructors. A head removal also calls
-`0x489800(unit,3)` at `0x43A2B9`; the `0x10000` flag skips that call for non-heads.
+is set. Flags `+0x42 & 0x400000` run the native `StopBuilding` script (`0x505104`) lookup/start at
+`0x43A227`..`0x43A258` (`0x4B07C0`, `0x4B0B00`, `0x456190`) and clear the bit (`0x43A25D`). Its
+`+0x52` object cleanup at `0x43A264`..`0x43A2A4` can invoke virtual destructors. A head removal
+also calls `0x489800(unit,3)` at `0x43A2B9`, which resets the unit's slots 0..2 and queues a COB
+start of `TargetCleared` (`0x508D58`, `push` at `0x489893`, through `0x4B0A70`) for each slot it
+resets; the `0x10000` flag skips that call for non-heads [DISASSEMBLED 2026-10-25]. **Flag
+`0x40000` is never on a `+0x5C` node:** the constructor is its one writer (from the descriptor's
+`+0x11`, `0x43A18F..0x43A196`; every immediate OR into `+0x42` in `.text` is `0x10000`,
+`0x400000`, `0x2000` or `0x8000`), and both linkers put a node carrying it on `+0x60` —
+`0x43A020` (`0x43A07D..0x43A09D`) and `0x43ADC0` (`0x43AEF0..0x43AF2B`) [DISASSEMBLED
+2026-10-25]. So `0x43AFC0`'s `0x40000` case, a match on the `+0x5C` scan, is never reached.
 `0x489650` at `0x43A2C1` releases the target reference at `node+0x12`. Thus cancellation
 can re-enter engine handlers, and retaining an order-node pointer across the root is unsafe.
 

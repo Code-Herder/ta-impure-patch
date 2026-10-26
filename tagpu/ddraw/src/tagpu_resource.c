@@ -544,7 +544,7 @@ static int find_cancel(const World* w, const char* u, const Choice* c, Cancel* o
                 resolve(u, 12, target, pos) != (unsigned char)previous[4] ||
                 memcmp(previous + 0x22, pos, sizeof pos)) continue;
             /* DISASSEMBLED 0x43A1F0: an unstarted, non-head build with no
-               StopMoving flag or owned object cannot call a handler/script/
+               StopBuilding flag or owned object cannot call a handler/script/
                object destructor. Exact removal sets 0x10000 for non-heads,
                skipping 0x489800 too. Only this build's reference is unlinked;
                the preceding reclaim stays live until its own removal. */

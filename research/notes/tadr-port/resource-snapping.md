@@ -320,7 +320,7 @@ New Quick plans use `0x43ADC0` so a Shift append never toggles a neighboring pla
 Geo reservations compare a unique geothermal feature anchor touched by the G yard, normalizing
 bounded footprint aliases; footprints spanning multiple distinct vents have no cancellation identity.
 Upgrade pairs require an adjacent resolved reclaim and an unstarted non-head build with no handler,
-StopMoving flag or owned object. Its destructor only unlinks its reference, so the preceding reclaim
+StopBuilding flag (`+0x42` bit `0x400000`) or owned object. Its destructor only unlinks its reference, so the preceding reclaim
 remains live across build removal and can then be removed exactly. No destroyed node is reused,
 and cancellation never appends an order. Only selected constructors are cancelled; persistent
 helper Guards remain ordinary orders.
