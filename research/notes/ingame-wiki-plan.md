@@ -13,8 +13,8 @@ the DLL gets there, and where the engine bounds what can be done.
 
 ## Where it starts
 
-**Landing 1, the core, is committed on the wiki branch** (`d695bed3`, with its note `286adaa3`),
-not yet on `main`:
+**Landing 1, the core, is committed on the wiki branch** (`d695bed3`, with its note `286adaa3`,
+and the three fixes below in `d3e9d5ac`), not yet on `main`:
 - `tagpu_wikidata.c` turns `art/wiki/` into C structs (`tagpu_wikidata_load_resource`). The data
   is the resource `WIKIPAK`, packed by `tools/hudpak.py --set wiki`. `tagpu_pak.c` is the archive
   reader it shares with the HUD's art.
@@ -23,13 +23,17 @@ not yet on `main`:
   `-msse2 -mfpmath=sse`: an x87 build differed from `sim.js` in 1196 of 9298 frames (the commit's
   numbers).
 - `tools/wiki/simparity.mjs` plays every demo through both simulations and compares them tick by
-  tick, natively and as the i686 build under Wine: all 21 demos and 8 rule cases equal.
+  tick, the state hash included, natively and as the i686 build under Wine: all 21 demos and 9
+  rule cases equal.
 - The kit is left for the landing that draws it, and nothing in the DLL calls the simulation yet.
 
 It names no engine address and touches no engine-facing file. **Its shape is right** and the plan
-below builds on it unchanged, with the five requests in *What the core must hold*. Two of them,
-the order cap and the state digest, are not in the commit (read 2026-10-25: `push_order` grows
-without a bound, and `tagpu_wikisim.h` declares no digest).
+below builds on it unchanged, with the five requests in *What the core must hold*. Requests 2, 3
+and 4 -- the map bound, the order cap and the state hash -- are in `d3e9d5ac`; 1 and 5 are
+contracts the landings that call the core keep.
+
+**Landing 1b, the take-off rule shared, is committed on the wiki branch** (`e5b39388`): the game
+and the core both call `place_take_offs_one` in `tagpu_placegeo.c`.
 
 ## The engine facts this rests on
 
@@ -330,8 +334,20 @@ state). It also changes `tagpu_hudart.c` to read through `tagpu_pak.c`, so the r
 the HUD's art still loads. **No replay gate is expected**: neither the Makefile nor `res.rc` is a
 fixture source, and nothing calls the code yet; `tareplay.py landing --check` confirms.
 
-**Before it lands, it gains two of the requests below**: the order cap (3) and the digest (4). Both
-are offline changes to the core's own files and to `sim.js`, checked by the same parity run.
+**Status: the order cap (3), the map bound (2) and the state hash (4) are in, `d3e9d5ac`.**
+- The cap: every append to a unit's orders goes through `push_order`, which refuses past
+  `PLACE_LIST_CAP`; a click's orders go in whole or not at all, so an upgrade's reclaim never goes
+  in without its build. `sim.js` caps the same appends, a scene's own orders included, and
+  `simcheck.mjs` has the rule case *every Shift append stops at 1024 orders* (it fails on the
+  `sim.js` before the change).
+- The bound: `WIKI_MAP_MAX` 128 in `tagpu_wikidata.h`, refused by the loader.
+- The hash: `tagpu_wikisim_hash`, 64-bit FNV-1a, its fields, order and encoding stated in
+  `tagpu_wikisim.h`; `simparity.mjs` has its twin, compares it on every tick and after every view
+  of a rule case, and `--hash` prints each demo's final hash.
+
+MEASURED 2026-10-25: `simparity.mjs` native and `--wine`, all 21 demos and 9 rule cases equal;
+`simcheck.mjs`, every demo and rule passes; `make` and `make LIMITS=stock` clean. The launch with
+the replay HUD showing (the third check below) is not run.
 
 **Verification:**
 - `node tools/wiki/simparity.mjs`, natively and with `--wine`;
@@ -356,6 +372,22 @@ the commit's removals both read what it leaves.
 - `simparity.mjs`.
 
 **Review: high.** It can run beside landings 2 to 4.
+
+**Status: committed on the wiki branch, `e5b39388`.** `tagpu_place.c` keeps its snapshot in three
+arrays indexed alike (`s_plan`, `s_order`, `s_by`), so one builder's orders are the contiguous run
+the function reads, and `take_offs` calls it per builder; `place_within` and `PLACE_LIST_CAP`
+moved to `tagpu_placegeo.h` with it. The core converts its double positions to 16.16 exactly and
+clamps an order to ±8192 world units, which changes no answer since a site the rule compares is
+inside the map (a `_Static_assert` on `WIKI_MAP_MAX` holds it); its scratch is fixed arrays of
+`PLACE_LIST_CAP`. `placetest.c` has the rule's table cases.
+
+MEASURED 2026-10-25: `placetest.py` 657302 checks, 0 failed; `place_regression.py --selftest`;
+`simparity.mjs` native and `--wine` equal; `make` and `make LIMITS=stock` clean;
+`place_regression.py <instance> core --launch` on a private Xvfb, (a)–(n) passed with the same
+orders and counters as before the move (`commits 11, issued 64, removed 4, red 3, mismatch 0`);
+`tareplay.py landing` over `main..e5b39388` passed, 18 test groups (`place-basic`, the sixteen
+`resource-*` and `stock-resource-mex` -- the branch's range carries more than this landing), no
+check failed, its `replay-roundtrip:` note on `e5b39388`. The high review is not run.
 
 ### Landing 2 — the button, the window, the capture and the pause
 

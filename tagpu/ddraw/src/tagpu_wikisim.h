@@ -15,10 +15,16 @@
 
    ENGINE-FREE, WIN32-FREE AND WITHOUT GLOBALS. It reads no engine memory and names no engine
    address: where sim.js mirrors the rule code of tagpu_resource.c or tagpu_place.c, this file
-   ports sim.js's version, and says which function each piece mirrors. Every piece of its state
-   lives in the WIKISIM its caller owns (and on the heap that WIKISIM owns), so it runs on
-   whichever thread owns the wiki window; one WIKISIM is used by one thread at a time. The
-   WIKIENTRY (and the WIKIDEMO) it was made from must outlive it: it points into them.
+   ports sim.js's version, and says which function each piece mirrors -- except what the game
+   keeps engine-free in tagpu_placegeo.c, the shapes and the take-off rule, which it calls
+   directly as the game does. Every piece of its state lives in the WIKISIM its caller owns
+   (and on the heap that WIKISIM owns), so it runs on whichever thread owns the wiki window;
+   one WIKISIM is used by one thread at a time. The WIKIENTRY (and the WIKIDEMO) it was made
+   from must outlive it: it points into them.
+
+   BOUNDED BY CONSTRUCTION: a unit's orders stop at PLACE_LIST_CAP (every append goes through
+   one function that refuses past it), and the map at WIKI_MAP_MAX cells a side (the loader
+   refuses a larger one), so a player's clicks cannot grow the heap without bound.
 
    Time is ticks, 30 a second; positions are world units, a footprint cell 16. The player is
    owner 0. */
@@ -160,12 +166,13 @@ typedef struct {
     const WIKIINPUT** script;
     double           end;           /* the tick it is done on; never for Try it yourself */
 
-    /* scratch: distinct's flood, take_offs' per-order sites, the view's arrays */
+    /* scratch: distinct's flood; take_offs' one builder's orders and the site taking each off,
+       sized for any list since push_order holds every list to PLACE_LIST_CAP; the view's arrays */
     uint32_t*        mark;
     uint32_t         gen;
     int*             todo;
-    int*             by;
-    int              cby;
+    PlaceOrder       q[PLACE_LIST_CAP];
+    uint16_t         by[PLACE_LIST_CAP];
     WIKIVIEW         view;
     WIKIVUNIT*       vunit;
     WIKIVSITE*       vqueued;
@@ -192,7 +199,31 @@ void tagpu_wikisim_step(WIKISIM* s);
 const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s);
 
 /* A unit's orders by id into `*o`, valid until the next call on `s`, and their count; -1 when
-   there is no such unit. */
+   there is no such unit. At most PLACE_LIST_CAP: every append stops there. */
 int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
+
+/* The state hash: 64-bit FNV-1a (offset basis 0xCBF29CE484222325, prime 0x100000001B3) over what
+   the view and tagpu_wikisim_orders show, so tools/wiki/simparity.mjs computes the same number
+   from sim.js's view() and orders() alone. It reads `s` and changes nothing, so it may be taken
+   at any point, the view taken or not. Fed in this order, an integer as 4 bytes little-endian
+   (two's complement), a double as its 8 IEEE-754 bytes little-endian, a string as its byte
+   length (an integer) and then its bytes, "" for none:
+     1. tick, done (0 or 1);
+     2. the map: w, h, SurfaceMetal (double); every cell's metal (double) and then every cell's
+        fog (integer 0..2), row-major; the vent count and each vent's centre x, z (doubles);
+     3. the unit count, and for each unit in the view's order: id, type name, owner, x, z,
+        selected (0 or 1), built, reclaimed, label; then the orders tagpu_wikisim_orders answers
+        for its id: their count, and each one's kind (WIKI_ORDER_*), then for a move x, z
+        (doubles), for a build the type name and ox, oz, for a reclaim or a guard the target id;
+     4. the ghost: 1 and its type name, x, z (doubles) and ok (0 or 1), or 0;
+     5. the gesture's sites: the shape (PLACE_*, PLACE_NONE without sites), the count, and each
+        site's x, z (doubles) and state (WIKI_SITE_*);
+     6. the cursor's x, z (doubles); each key in WIKI_KEY_* order, 1 held or 0; the armed type's
+        name ("" in the contextual mode); the spacing (-1 when nothing is armed); the drag: 1 and
+        x0, z0 (doubles), or 0; the caption.
+   The view's other fields follow from these: queued sites and order lines from the units and
+   their orders, the cursor's shape from the mode, the ghost and the selection, a site's order
+   number from the states, footprints from the types, the pace from the entry. */
+uint64_t tagpu_wikisim_hash(const WIKISIM* s);
 
 #endif

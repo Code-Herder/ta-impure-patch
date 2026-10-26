@@ -145,6 +145,34 @@ const RULES = {
     for (let i = 0; i <= entry.demos[0].end + 10; i++) s.step();
     return s.done === false;
   },
+  /* tagpu_place.c's PLACE_LIST_CAP holds for every append, not only a gesture's: a Shift move, a Shift Quick Build
+     and a Shift assist each stop at 1024 orders, and an upgrade's reclaim and build go in together or not at all */
+  'every Shift append stops at 1024 orders'(entry) {
+    // each sim is done with before the next is made: simparity.mjs replays one at a time
+    const full = (id, n, extra = {}) => WikiSim.create({ ...entry, scene: { ...entry.scene,
+      units: entry.scene.units.map(u => u.id !== id ? u : { ...u, orders: Array.from({ length: n }, () => ({ move: [304, 176] })) }) } },
+      { scene: { selected: [id], ...extra } });
+    const rmb = (s, at) => { s.input({ move: at }); s.input({ down: 'shift' }); s.input({ down: 'rmb' }); s.input({ up: 'rmb' }); s.input({ up: 'shift' }); };
+    const last = s => s.orders(s.view().units.find(u => u.selected).id).slice(-1)[0];
+    const n = s => s.orders(s.view().units.find(u => u.selected).id).length;
+    // over the broad metal band: no Quick Build choice, a move
+    const move = full('ck', 1023);
+    rmb(move, [568, 184]); const m1 = n(move) === 1024 && last(move).k === 'move' && last(move).x === 568;
+    rmb(move, [584, 200]); const m2 = n(move) === 1024 && last(move).x === 568;
+    // over deposit B: Quick Build's ARMMEX
+    const quick = full('ck', 1023);
+    rmb(quick, [376, 72]); const q1 = n(quick) === 1024 && last(quick).k === 'build' && last(quick).type === 'ARMMEX';
+    // over an unfinished extractor of the player's: assist it
+    const assist = full('ck', 1023, { units: [{ id: 'half', type: 'ARMMEX', at: [120, 248], built: 0.5 }] });
+    rmb(assist, [120, 248]); const a1 = n(assist) === 1024 && last(assist).k === 'build';
+    rmb(assist, [120, 248]); const a2 = n(assist) === 1024;
+    // over the finished extractor: ARMACK's upgrade, two orders
+    const tight = full('ack', 1023);
+    rmb(tight, [440, 264]); const u1 = n(tight) === 1023 && last(tight).k === 'move';
+    const roomy = full('ack', 1022);
+    rmb(roomy, [440, 264]); const u2 = n(roomy) === 1024 && kinds(roomy.orders('ack').slice(-2)) === 'reclaim:mex build:ARMMOHO';
+    return m1 && m2 && q1 && a1 && a2 && u1 && u2;
+  },
 };
 
 /* ---- buildshapes: the placement gesture (tagpu_place.c). Its checks read the queue of ARMCK ('ck') around each

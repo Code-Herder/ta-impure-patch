@@ -15,7 +15,7 @@
    Runs in a page (the global WikiSim) and under node (module.exports). */
 const WikiSim = (() => {
   const CELL = 16, TPS = 30, RADIUS = 3, ARENA = 64, DRAG = 4, FOLLOW = 48, SPACING = 24;
-  // tagpu_placegeo.h and tagpu_place.c's caps
+  // tagpu_placegeo.h's caps, and tagpu_place.c's on one commit; a unit's list never holds more than PLACE_LIST_CAP
   const PLACE_MAX_SITES = 256, PLACE_SPACING_MAX = 16, PLACE_ORDER_BUDGET = 4096, PLACE_LIST_CAP = 1024;
   const KEYS = ['shift', 'alt', 'ctrl', 'z', 'x', 'lmb', 'rmb'];
   const sq = v => v * v;
@@ -129,7 +129,7 @@ const WikiSim = (() => {
     const structureAt = (t, ox, oz) => units.find(u => u.type === t && u.ox === ox && u.oz === oz);
     for (const s of S.units) {
       const u = add(s.type, s.owner ?? 0, s.at[0], s.at[1], s.built ?? 1, s.id, s.label);
-      u.orders = (s.orders || []).map(o => ({ k: 'move', x: o.move[0], z: o.move[1] }));
+      u.orders = (s.orders || []).slice(0, PLACE_LIST_CAP).map(o => ({ k: 'move', x: o.move[0], z: o.move[1] }));
     }
     for (const id of S.selected) byId(id).sel = true;
     const selected = () => units.filter(u => u.sel);
@@ -484,7 +484,12 @@ const WikiSim = (() => {
     /* ---- orders ---- */
     // leaving the build-menu mode ends the gesture and clears the Shift-placement bit with it
     const disarm = () => { st.mode = null; st.gesture = null; st.shiftPlaced = false; };
-    const assign =(u, os, shift) => { u.orders = shift ? u.orders.concat(os) : os; };
+    /* a click's orders for one unit: they replace its list, or with Shift are appended to it -- all of them or, when
+       they would take the list past PLACE_LIST_CAP, none, so an upgrade's reclaim never goes in without its build */
+    const assign = (u, os, shift) => {
+      if (!shift) u.orders = os;
+      else if (u.orders.length + os.length <= PLACE_LIST_CAP) u.orders = u.orders.concat(os);
+    };
     /* a Quick Build click (click()): the builders that can build it get the order (an upgrade's reclaim first), the
        other selected builders guard them, shared out in turn, and units that cannot build keep their orders. Shift
        appends, and never adds a Guard to a helper already guarding one of them. */

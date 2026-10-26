@@ -56,10 +56,9 @@
 
 /* The caps. A commit makes at most PLACE_ORDER_BUDGET orders (sites x builders): the preview
    cuts the shape to what would be ordered. A builder's list stops growing at PLACE_LIST_CAP
-   nodes, below the 4096 nodes a recorded list holds (REC_ORDERS_MAX, tagpu_recfmt.h), so no
-   gesture makes a list the recorder would cut. LIST_WALK bounds every walk of a list. */
+   nodes (tagpu_placegeo.h, shared with the in-game wiki's simulation), below the 4096 nodes a
+   recorded list holds. LIST_WALK bounds every walk of a list. */
 #define PLACE_ORDER_BUDGET 4096u
-#define PLACE_LIST_CAP     1024u
 #define PLACE_PLANS        16384u
 #define LIST_WALK          16384u
 #define NOTE_LOGS          8u
@@ -99,18 +98,19 @@ typedef struct {
 
 typedef struct { int16_t cx, cz; int32_t alt; uint8_t colour; } Site;
 
-/* A node of a builder's list, copied as values: the take-off rule reads `match` nodes (the
-   builder's own build action), the ring target `build` nodes (a placed build with a type).
-   `b` is the builder, `place` the node's position in its list, `held` its +0x42 bit 0x40000,
-   `by` the site that takes it off (NO_SITE: none). */
+/* A node of a builder's list, copied as values, in three arrays indexed alike so that one
+   builder's orders are a contiguous run the take-off rule (place_take_offs_one) reads as given:
+   s_order[p] holds the node's position and `match` (the builder's own build action, the nodes
+   the take-off rule reads), s_by[p] the site that takes it off (PLACE_NO_SITE: none), and
+   s_plan[p] the rest -- `build` for a placed build with a type (the nodes the ring target
+   reads), `b` the builder, `place` the node's position in its list, `held` its +0x42 bit
+   0x40000. */
 typedef struct {
-    int32_t x, z;
-    uint16_t type, b, place, by;
-    uint8_t match, build, held;
+    uint16_t type, b, place;
+    uint8_t build, held;
 } Plan;
-#define NO_SITE 0xFFFFu
-_Static_assert(LIST_WALK <= NO_SITE && PLACE_MAX_SITES < NO_SITE && TAGPU_LIM_UNITS <= NO_SITE,
-               "a plan's builder, place and site fit its fields");
+_Static_assert(LIST_WALK <= PLACE_NO_SITE && PLACE_MAX_SITES < PLACE_NO_SITE &&
+               TAGPU_LIM_UNITS <= PLACE_NO_SITE, "a plan's builder, place and site fit its fields");
 
 static int s_armed;
 
@@ -137,6 +137,8 @@ static struct {
 static struct { int active; uint16_t type; int16_t cx, cz; int stale[6]; } s_gesture;
 
 static Plan s_plan[PLACE_PLANS];
+static PlaceOrder s_order[PLACE_PLANS];
+static uint16_t s_by[PLACE_PLANS];
 static unsigned s_nplan;
 
 static void* s_ret[4];
@@ -219,14 +221,6 @@ static int site_z(const Ctx* c, const Site* s) { return (int)((unsigned)(2 * s->
 static unsigned cell_word(int cx, int cz)
 {
     return (unsigned)(uint16_t)cx | (unsigned)(uint16_t)cz << 16;
-}
-
-/* 0x43AFC0's predicate, DISASSEMBLED 0x43B004..0x43B029: the position within 16 world units of
-   the node on both axes, inclusive, as an unsigned compare of the wrapped difference. */
-static int within(int px, int pz, int nx, int nz)
-{
-    return (unsigned)px - (unsigned)nx + 0x100000u <= 0x200000u &&
-           (unsigned)pz - (unsigned)nz + 0x100000u <= 0x200000u;
 }
 
 static int key_down(int id) { return ((KeyDown)0x004C1B80u)(id) != 0; }
@@ -318,14 +312,14 @@ static int snapshot(const Ctx* c)
             build = build_node(&c->w, n);
             if (!match && !build) continue;
             if (s_nplan >= PLACE_PLANS) return 0;
+            s_order[s_nplan].x = *(const int*)(n + 0x22);
+            s_order[s_nplan].z = *(const int*)(n + 0x2A);
+            s_order[s_nplan].match = (uint8_t)match;
+            s_by[s_nplan] = PLACE_NO_SITE;
             p = &s_plan[s_nplan++];
-            p->x = *(const int*)(n + 0x22);
-            p->z = *(const int*)(n + 0x2A);
             p->type = build ? *(const unsigned short*)(n + 0x36) : 0;
             p->b = (uint16_t)b;
             p->place = (uint16_t)place;
-            p->by = NO_SITE;
-            p->match = (uint8_t)match;
             p->build = (uint8_t)build;
             p->held = (*(const unsigned*)(n + 0x42) & 0x40000u) != 0;
         }
@@ -352,12 +346,12 @@ static int toggles(const Ctx* c, const Site* s)
     int x = site_x(c, s), z = site_z(c, s);
     unsigned i;
     for (i = 0; i < s_nplan; i++)
-        if (s_plan[i].match && within(x, z, s_plan[i].x, s_plan[i].z)) return 1;
+        if (s_order[i].match && place_within(x, z, s_order[i].x, s_order[i].z)) return 1;
     return 0;
 }
 
 /* THE TAKE-OFF RULE, the one place a site's action is decided: the preview's colours and the
-   commit's removals and appends are both read from what this leaves -- each plan's `by` and
+   commit's removals and appends are both read from what this leaves -- each plan's s_by and
    each site's colour -- so for the same queues the preview shows what the release does. The
    release judges again, against the queues as they stand at the release (commit), so a change
    since the last drawn frame changes its result: a tick finishing or starting a queued build, a
@@ -370,43 +364,32 @@ static int toggles(const Ctx* c, const Site* s)
    A ring takes nothing off: a site a stock Shift-click would toggle is yellow, and left out.
 
    Every other shape is TA's Shift-click per site, judged against each builder's queue as it
-   stood before the gesture, with each queued order taken off by at most one site: per builder,
-   every non-red site first takes the order of the builder's build action at its own position,
-   then each site that took none takes the first order within 16 world units (0x43AFC0's reach,
-   `within`) that no site has taken -- both in shape order, each order in list order. A site
-   that takes an order off from some builder is yellow. Own positions go first, over the whole
-   shape, because neighbouring 1x1 sites are 16 world units apart: a site beside a queued row
-   would otherwise take its neighbour's order, and each later site the next one's, leaving the
-   row's last site ordered afresh -- whichever end the drag starts from, every order of the row
-   is taken off by the site that stands on it, and a site that stands beside it is placed. */
+   stood before the gesture: place_take_offs_one (tagpu_placegeo.h) per builder, over its run of
+   the snapshot, with the red sites refused. A site that takes an order off from some builder is
+   yellow. The in-game wiki's simulation calls the same function. */
 static void take_offs(const Ctx* c, Site* s, unsigned n, int ring)
 {
-    unsigned i, p, first, end, b, own;
-    for (p = 0; p < s_nplan; p++) s_plan[p].by = NO_SITE;
+    PlaceSitePos pos[PLACE_MAX_SITES];
+    uint8_t took[PLACE_MAX_SITES];
+    unsigned i, p, first, end, b;
+    for (p = 0; p < s_nplan; p++) s_by[p] = PLACE_NO_SITE;
     if (ring) {
         for (i = 0; i < n; i++)
             if (s[i].colour != PLACE_BLOCKED && toggles(c, &s[i])) s[i].colour = PLACE_TOGGLE;
         return;
     }
+    /* a site turns only from green to yellow below, never to or from red, so the refused set
+       holds for every builder */
+    for (i = 0; i < n; i++) {
+        pos[i].x = site_x(c, &s[i]);
+        pos[i].z = site_z(c, &s[i]);
+        pos[i].refused = s[i].colour == PLACE_BLOCKED;
+    }
     for (b = end = 0; b < c->nb; b++) {
         end = plans_of(b, end, &first);
-        for (own = 2; own-- > 0;)
-            for (i = 0; i < n; i++) {
-                int x = site_x(c, &s[i]), z = site_z(c, &s[i]);
-                if (s[i].colour == PLACE_BLOCKED) continue;
-                if (!own) {
-                    for (p = first; p < end && s_plan[p].by != i; p++) {}
-                    if (p < end) continue;
-                }
-                for (p = first; p < end; p++) {
-                    const Plan* q = &s_plan[p];
-                    if (!q->match || q->by != NO_SITE ||
-                        !(own ? q->x == x && q->z == z : within(x, z, q->x, q->z))) continue;
-                    s_plan[p].by = (uint16_t)i;
-                    s[i].colour = PLACE_TOGGLE;
-                    break;
-                }
-            }
+        place_take_offs_one(s_order + first, end - first, pos, n, s_by + first, took);
+        for (i = 0; i < n; i++)
+            if (took[i]) s[i].colour = PLACE_TOGGLE;
     }
 }
 
@@ -433,7 +416,7 @@ static int ring_target(const Ctx* c, int* tx, int* tz, int* tw, int* th)
         int ox, oz;
         if (!s_plan[i].build ||
             !footprint(c->w.defs + s_plan[i].type * D_STRIDE, tw, th)) continue;
-        ox = origin(s_plan[i].x, *tw); oz = origin(s_plan[i].z, *th);
+        ox = origin(s_order[i].x, *tw); oz = origin(s_order[i].z, *th);
         if (px >= ox && px < ox + *tw && pz >= oz && pz < oz + *th) {
             *tx = ox; *tz = oz;
             return 1;
@@ -659,19 +642,20 @@ static unsigned remove_taken(const Ctx* c, unsigned b, unsigned first, unsigned 
 {
     unsigned p, removed = 0;
     for (p = first; p < end; p++)
-        if (s_plan[p].by != NO_SITE) toggled[s_plan[p].by] = 1;
+        if (s_by[p] != PLACE_NO_SITE) toggled[s_by[p]] = 1;
     for (p = end; p-- > first;) {
         const Plan* q = &s_plan[p];
+        const PlaceOrder* o = &s_order[p];
         const char *u, *node;
         unsigned place;
-        if (q->by == NO_SITE || q->held) continue;
+        if (s_by[p] == PLACE_NO_SITE || q->held) continue;
         if (!(u = live_builder(c, b))) break;
         for (node = *(const char* const*)(u + U_ORDERS), place = 0;
              node && place < q->place && *(const char* const*)(node + 0x0E) == u;
              node = *(const char* const*)(node + 0x4A), place++) {}
         if (!node || *(const char* const*)(node + 0x0E) != u ||
-            (unsigned char)node[4] != c->action[b] || *(const int*)(node + 0x22) != q->x ||
-            *(const int*)(node + 0x2A) != q->z || (*(const unsigned*)(node + 0x42) & 0x40000u)) {
+            (unsigned char)node[4] != c->action[b] || *(const int*)(node + 0x22) != o->x ||
+            *(const int*)(node + 0x2A) != o->z || (*(const unsigned*)(node + 0x42) & 0x40000u)) {
             ++*stale;
             continue;
         }

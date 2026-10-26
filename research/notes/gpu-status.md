@@ -21115,7 +21115,8 @@ With a building armed, Shift + left-drag lays a line of it (Ctrl: held to the do
 Shift + Alt a filled rectangle in serpentine order (Ctrl: hollow), and Shift + Ctrl over a unit, or
 over a queued build of a selected builder, a ring round it; the release with Shift held orders it.
 The shapes are BAR's (Recoil's `GetBuildPositions`) in TA build cells, ported to exact integers
-(`tagpu_placegeo.c`, engine-free, self-tested by `tests/placetest.py`). Behaviour, semantics and
+(`tagpu_placegeo.c`, engine-free, self-tested by `tests/placetest.py`). The take-off rule is there
+too, as `place_take_offs_one`, which the in-game wiki's simulation (`tagpu_wikisim.c`) also calls. Behaviour, semantics and
 gaps: [quality-of-life](tadr-port/quality-of-life.html), *What Impure does*. The engine side: the
 engine map's *The placement's mouse path, and several buildings in one gesture*.
 
@@ -21128,7 +21129,7 @@ engine map's *The placement's mouse path, and several buildings in one gesture*.
 | `0x4993BF` | **12-byte route stub** (`E9 rel32` + seven `90`), written through `tagpu_detour_write` after all 22 bytes `0x4993BF..0x4993D4` match. `pushad`, `place_button(record copy, message)`, `popad`; 1 → the frame `0x4995B8` (a Shift press starts a gesture instead of placing; a release commits it), 2 → `0x4993CB`, stock's click on this record (a one-site gesture at the release cursor is stock's own Shift-click: its toggle, sound, recorded click and bit 5), 0 → the two original instructions |
 | `0x48CD80` | Called by the evaluation, with Shift and Ctrl held, for the ring's unit: the engine's hover query, which the handler skips in build placement; its answer is bounded as a unit slot |
 | `0x438760` | The two build actions `MOBILEBUILD` / `VTOL_MOBILEBUILD` by the engine's own name strings (`0x502654`, `0x502640`), as `0x419670` asks |
-| `0x439F80`, `0x43ADC0` | The commit (inside the click routing, where the stock click calls its root), from the same take-off rule the preview's colours come from (`take_offs`): per builder, each queued node of the builder's build action is taken by one non-red site at most — first every site takes the node at its own position, then each site without one the first within 16 units that no site took. The taken nodes are removed through `0x439F80` in descending place in the chain, the head last, each re-found by its place and removed only if it still carries the snapshot's action, position and flag (else counted `stale=` and left queued); then every other non-red site is appended with Shift (`0x43ADC0`) while the builder's chain holds fewer than 1024 nodes |
+| `0x439F80`, `0x43ADC0` | The commit (inside the click routing, where the stock click calls its root), from the same take-off rule the preview's colours come from (`take_offs`, which calls `place_take_offs_one` once per builder over its run of the snapshot): per builder, each queued node of the builder's build action is taken by one non-red site at most — first every site takes the node at its own position, then each site without one the first within 16 units that no site took. The taken nodes are removed through `0x439F80` in descending place in the chain, the head last, each re-found by its place and removed only if it still carries the snapshot's action, position and flag (else counted `stale=` and left queued); then every other non-red site is appended with Shift (`0x43ADC0`) while the builder's chain holds fewer than 1024 nodes |
 | `0x47F1A0` | `oktobuild` (`0x509660`) once a committed gesture that added or removed an order, as `0x498FA4` plays it per click |
 | `tagpu_packet_pub.c` → `PK_PLACE` | The sites copied by value (≤ 256 × 28 bytes: the build rectangle in `0x4197D0`'s layout, the type, the GUI colour index `0x0A` placed / `0x04` refused / `0x0E` toggles a queued build off). The acquire bounds the count, each colour, each coordinate (±`0x100000`) and each type (`< udef_count`). An overflow sets `TAGPU_PK_TRUNC_PLACE` (`0x4000`) and the square stays replaced |
 | `tagpu_mark.c`, `tagpu_native.c` (Vulkan) | The marker pass draws each site as the build square (its gate, projection, ±`0x100000` drop, normalise-then-inset; `square_gate`/`square_emit`, shared with the cursor's square) from a bucket of its own, and skips the one square; the ghost pass draws one build ghost per site instead of the cursor's. Counters: `mark: … place=N placered=R placetake=T` (sites drawn, of them red and yellow) under `tagpu_mark.on=log`, `ghost: … sites=N` |
@@ -21154,7 +21155,8 @@ completeness](tadr-port/demo-recorder-completeness.html)). Test group `place-bas
 **Open:** spacing and Build Split are not built; GDI shows the sites only with `tagpu_markown.on`
 (without it the engine's one square); the replay overlay shows no click for a multi-site gesture;
 no facing. The take-off rule (yellow) is the module's reading of `0x43AFC0`, not the engine's
-call, and is checked only by the regression (cases (h) and (n)). The preview and the commit
+call, and is checked only by the regression (cases (h) and (n)) and by `placetest.py`'s table
+cases of `place_take_offs_one`. The preview and the commit
 apply the one rule (`take_offs`) and agree for the same queues; the release judges again against
 the queues as they stand at the release, so a change since the last drawn frame — a tick
 finishing or starting a queued build, a builder dying or the selection changing (the order

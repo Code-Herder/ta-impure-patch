@@ -195,7 +195,10 @@ mines queued side by side and a drag from the empty cell before them over all th
 taken off, one placed at the empty cell); and a ring leaves its taking-off sites out rather than
 ordering them. **The preview and the release apply one rule**: a single function settles each
 site's action, and both the colours and the commit read its result, so for the same queues the
-preview shows what the release does. With Shift released mid-drag
+preview shows what the release does. That function, `place_take_offs_one` in `tagpu_placegeo.c`,
+reads only its arguments (one builder's orders and the sites, each with its order position), and
+the in-game wiki's simulation calls the same one, so the wiki in the DLL plays the game's own
+rule; the browser mockup's `sim.js` ports it, and `tools/wiki/simparity.mjs` holds the port to it. With Shift released mid-drag
 nothing previews, since the release then orders nothing. A site the engine's own test refuses is red and skipped: the module calls the
 call the build cursor judges its site with, so a gesture's site is refused exactly when a single
 click there would be, queued sites included. One stock *ok* sound plays per gesture that changed a
@@ -240,7 +243,11 @@ puppet: the owner-approved `replay-absent.tsv` row `0x47F1A0 dll * absent`.
   computes from its own port of the shapes (checked against the native one by `--selftest`) and
   of the rule above. The level ended with `evals 303859, commits 11,
   issued 64, removed 4, red 3, mismatch 0, plancap 0`: at every evaluation the module's verdict at
-  the cursor site agreed with the engine's own (bit 6), and no queue snapshot overflowed.
+  the cursor site agreed with the engine's own (bit 6), and no queue snapshot overflowed. Run again
+  after the take-off rule moved into `tagpu_placegeo.c` (`place_take_offs_one`), on a private Xvfb:
+  (a)–(n) passed, (n) again 4 sites, 0 red, `removed=3 issued=1`, and the level ended with
+  `commits 11, issued 64, removed 4, red 3, mismatch 0, trunc 0, listcap 0, plancap 0`: the same
+  orders as before the move.
 - `preview`: the Vulkan marker pass drew 5 green sites with a 5-site line held mid-drag
   (`mark: … place=N placered=R placetake=T` under `tagpu_mark.on=log`).
 - Under `tagpu_gdi.on`, a held line and an Alt rectangle drew the engine's green square at every
