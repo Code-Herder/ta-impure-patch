@@ -53,6 +53,8 @@
 #include "tagpu_shield.h"
 #include "tagpu_menu.h"
 #include "tagpu_hudstate.h"
+#include "tagpu_hudinput.h"
+#include "tagpu_replay.h"
 #include "tagpu_log.h"
 #include "tagpu_wiki.h"
 
@@ -105,15 +107,39 @@ static void say_open(int gx, int gy)
    is not a network game -- and front-end code alone sets that bit while play only ever clears it
    (tagpu_menu.c names the stores), so a level single player at the open is single player at the
    close.
-   NOTHING ELSE UNDOES IT WHILE THE WINDOW IS OPEN. Every in-play writer of bit 0 is reached only
-   through input the wiki holds: the Pause key (0x4960AA), the in-game menu (0x460E00, 0x460A33),
-   key 0xE3 (0x49990E), the options opener's callers, and the replay HUD's pause button
-   (tagpu_replay_pause). Impure's other writers set the bit and never clear it (the rewind's and
-   the launch hold's keeper on 0x496920) or run at a level's first tick (fix_load_unpaused, before
-   any window can open). The replay trigger's `resume` clears a pause its own `pause at` took: a
+   NOTHING ELSE WRITES THE BIT WHILE THE WINDOW IS OPEN, because the window does not open while
+   another pause is in flight (pause_in_flight). Two of Impure's writers put a pause back later
+   and without input: the live rewind, whose open saves bit 0 and sets it, and whose end restores
+   what it saved -- from the frame visit, unasked, when its FLUSH or ENDING state finishes or is
+   refused (tagpu_replay.c rw_finish, rw_close_unmoved) -- and the replay HUD's Leave, whose
+   question the next frame's observer opens, putting the pause back when it cannot or once the
+   question is gone (tagpu_hudinput.c). Neither starts while the window is open: their buttons are
+   the replay HUD's, which no input reaches then. The one verb that can be queued before the open
+   and run after it is a rewind's open (every other verb is refused in idle without a write); it
+   saves the wiki's pause and gives it back at its own end, so the game stays paused after both
+   have closed, until the Pause key -- a pause outliving the window, never a game running under it.
+   Every engine writer of bit 0 in play is reached only through input the wiki holds -- the Pause
+   key (0x4960BC), the in-game menu (0x460E00, 0x460A33) and its LOADGAME screens (0x49306D,
+   0x493330), key 0xE3 (0x49990E), the options opener 0x45CFC0 (0x45D0A1), the chat command
+   MakePoster (0x495B7E, put back at 0x495DD2 within the same call) -- or through a peer's message
+   0x19 (0x45597A), which a single-player level never receives; the rest run in the front end or
+   the level's load (exe-reverse-engineering.md, *A level starts paused*). Impure's other writers
+   set the bit and never clear it (the rewind's and the launch hold's keeper on 0x496920), run at a
+   level's first tick (fix_load_unpaused, before any window can open), or are input (the replay
+   HUD's pause button). The replay trigger's `resume` clears a pause its own `pause at` took: a
    test's command, which no player reaches.
    ON CLOSE the bit is cleared only if it was clear at the open, so a game paused before the wiki
    stays paused after it. AT LEVEL END the pause is forgotten and nothing is written. */
+/* The pause another writer will put back on its own, or NULL (THE PAUSE, above) */
+static const char* pause_in_flight(void)
+{
+    TAGPU_REPLAY_RWSTATE rw;
+    tagpu_replay_rewind_state(&rw);
+    if (rw.state != TAGPU_REPLAY_RWS_IDLE) return "a rewind holds the pause";
+    if (tagpu_hudinput_leave_pending()) return "Leave's question holds the pause";
+    return NULL;
+}
+
 static void wiki_open(int gx, int gy)
 {
     int was = 0;
@@ -181,7 +207,12 @@ static int press(unsigned bit, int cx, int cy, int gx, int gy)
         return 1;
     }
     if (bit == B_L && hit(cx, cy, key) && !strcmp(key, "wiki")) {
+        const char* busy = pause_in_flight();
         s_owedBtn |= bit;
+        if (busy) {
+            tagpu_logf("wiki: not opened - %s", busy);
+            return 1;
+        }
         s_btnDown = 1;
         wiki_open(gx, gy);
         return 1;

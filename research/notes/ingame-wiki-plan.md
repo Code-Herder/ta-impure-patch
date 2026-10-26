@@ -210,10 +210,25 @@ cursor is drawn; the packet record says so.
 - **On close**: clear the bit only if it was clear at the open.
 - **At level end**: forget it and write nothing.
 
-Nothing else writes the bit while the wiki is open: every in-play writer is behind input the wiki
-holds (the census above). So there is no need for the `0x496920` observer, which lives in
-`tagpu_replay.c`. Changing that file would also run every replay test group, since the gate treats
-it as the recorder's own.
+Nothing else writes the bit while the wiki is open, because **the window does not open while
+another pause is in flight**. Every engine writer in play is behind input the wiki holds, or is a
+peer's message `0x19`, which a single-player level never receives (the census in
+`exe-reverse-engineering.md`, *A level starts paused*). Two of Impure's writers put a pause back
+later without input:
+- **The live rewind.** Its open saves bit 0 and sets it; its end restores what it saved. In the
+  `FLUSH` and `ENDING` states that end comes from the frame visit, unasked, when the writer
+  finishes or the open is refused (for example "no complete seek interval yet").
+- **The replay HUD's Leave.** The next frame's observer opens its question, and puts the pause back
+  when it cannot, or once the question is gone.
+
+So the wiki refuses to open while `tagpu_replay_rewind_state` is not idle or
+`tagpu_hudinput_leave_pending` is set, and logs `wiki: not opened - ...`. Neither starts while the
+window is open, since their buttons are the replay HUD's. The one verb that can be queued before
+the open and run after it is a rewind's open; it saves the wiki's pause and gives it back at its
+own end, so the game stays paused after both have closed, until the Pause key: a pause outliving
+the window, never a game running under it. This needs no `0x496920` observer, which lives in
+`tagpu_replay.c`; changing that file would run every replay test group, since the gate treats it as
+the recorder's own.
 
 A replay is a skirmish, so the wiki pauses the playback there too (question 6). The recording is
 untouched: a pause steps nothing, as a Pause key steps nothing.
