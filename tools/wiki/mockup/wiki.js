@@ -1,6 +1,6 @@
 /* wiki.js -- the in-game wiki's mockup: the game frame and Impure's top bar, the wiki window with its tree, demo list and
-   entry, and the stage, which draws what sim.js's view() says. The content is art/wiki/ (tree.json, entries/<id>.json) and
-   the behaviour is sim.js's; this file lays out, draws and forwards input. research/notes/ingame-wiki.md is the
+   entry, and the stage, where stage.js draws what sim.js's view() says. The content is art/wiki/ (tree.json,
+   entries/<id>.json) and the behaviour is sim.js's; this file lays out, draws and forwards input. research/notes/ingame-wiki.md is the
    specification the game copies. */
 (() => {
 const $ = s => document.querySelector(s);
@@ -8,12 +8,7 @@ const ART = '../../../art/wiki/', BACKDROP = '../../../research/notes/assets/hud
 const TICK = 30;                      // simulation ticks a second, the game's
 const MODS = ['stock', 'mayhem', 'prota', 'twilight', 'escalation', 'tazero', 'unknown'];
 const RES = [...$('#res').options].map(o => o.value);
-// stand-ins for TA's player colours, by owner
-const TEAM = ['#2348e0', '#d32b00', '#f4f4f4', '#2f8a1b', '#7a3fb0', '#e8d200', '#2a2a2a', '#e07018'];
 const KEYCAP = { shift: 'Shift', alt: 'Alt', ctrl: 'Ctrl', z: 'Z', x: 'X', lmb: 'Left-click', rmb: 'Right-click' };
-// TA's build square colours for a placement site: green placed, red refused (skipped), yellow takes a queued order off
-const SITE = { place: '#2bd248', refused: '#e62828', remove: '#f0d020' };
-const LINE = { move: '#3ccf3c', build: '#f0cc10', guard: '#3a86f0', reclaim: '#e23030' };
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
 
@@ -194,167 +189,18 @@ function sizeStage() {
 }
 new ResizeObserver(sizeStage).observe($('#sbox'));
 
-// a view's fields, read defensively: sim.js owns the shape and the stage draws whatever it can find
-const pt = p => Array.isArray(p) ? { x: +p[0], z: +p[1] } : p ? { x: +p.x, z: +p.z } : null;
 function view() {
   if (!sim) return null;
   try { return sim.view(); } catch (x) { fail(x); return null; }
 }
+// the stage's drawing is stage.js's; gfx=game hands an element to gfx.js, and where that returns false the whitebox stands
+const ICONS = WikiStage.loadIcons(ART + 'kit/');
 function draw() {
-  const g = stage.getContext('2d'), W = stage.width, H = stage.height, U = G.gh / 720;   // U: the resolution's pixels a unit
-  g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = '#6e6e68'; g.fillRect(0, 0, W, H);
-  const v = view();
-  if (!v || !v.map) {
-    g.fillStyle = '#e8e8e2'; g.font = `${Math.round(11 * U)}px 'DejaVu Sans', sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.fillText(simErr || (demo() ? 'loading…' : entry() ? 'no demo' : ''), W / 2, H / 2);
-    FIT = null; return v;
-  }
-  const M = v.map, cell = +M.cell || 16, mw = +M.w || 1, mh = +M.h || 1, pad = 6 * U;
-  const s = Math.min((W - 2 * pad) / (mw * cell), (H - 2 * pad) / (mh * cell));
-  const ox = (W - mw * cell * s) / 2, oz = (H - mh * cell * s) / 2;
-  FIT = { s, ox, oz, cell, mw, mh };
-  const X = x => ox + x * s, Z = z => oz + z * s, cp = cell * s;
-  // gfx=game: gfx.js draws an element in the game's own graphics and returns true, or false and the whitebox stands
-  const gx = (phase, ...a) => !!(window.WikiGfx && WikiGfx.draw(phase, g, { v, X, Z, s, cp, cell, U, W, H }, ...a));
-
-  // the ground: plain cells light, metal darker by how far it stands above surfaceMetal; metal ground at surfaceMetal is
-  // tinted once, so a metal map reads as metal everywhere and its richer patch as darker still
-  const metal = M.metal || [], sm = +M.surfaceMetal || 0, top = Math.max(sm, ...metal.filter(Number.isFinite));
-  if (!gx('ground')) for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) {
-    const m = +metal[z * mw + x] || 0;
-    let L = m > 0 ? 188 : 204;
-    if (m > sm && top > sm) L = 176 - 108 * (m - sm) / (top - sm);
-    g.fillStyle = `rgb(${L},${L},${L - 4})`;
-    g.fillRect(Math.floor(X(x * cell)), Math.floor(Z(z * cell)), Math.ceil(cp) + 1, Math.ceil(cp) + 1);
-  }
-  if (cp >= 5 && !gx('grid')) {
-    g.strokeStyle = 'rgba(0,0,0,.12)'; g.lineWidth = 1; g.beginPath();
-    for (let x = 0; x <= mw; x++) { const px = Math.round(X(x * cell)) + .5; g.moveTo(px, Z(0)); g.lineTo(px, Z(mh * cell)); }
-    for (let z = 0; z <= mh; z++) { const pz = Math.round(Z(z * cell)) + .5; g.moveTo(X(0), pz); g.lineTo(X(mw * cell), pz); }
-    g.stroke();
-  }
-  // a geothermal vent: a ringed circle with a cross
-  if (!gx('vents')) for (const vt of M.vents || []) {
-    const p = pt(vt); if (!p) continue;
-    const r = cp * .8; g.lineWidth = Math.max(1, 1.5 * U);
-    g.fillStyle = '#9a9a94'; g.strokeStyle = '#2a2a28';
-    g.beginPath(); g.arc(X(p.x), Z(p.z), r, 0, 2 * Math.PI); g.fill(); g.stroke();
-    g.beginPath(); g.arc(X(p.x), Z(p.z), r * .5, 0, 2 * Math.PI); g.stroke();
-    g.beginPath(); g.moveTo(X(p.x) - r, Z(p.z)); g.lineTo(X(p.x) + r, Z(p.z)); g.moveTo(X(p.x), Z(p.z) - r); g.lineTo(X(p.x), Z(p.z) + r); g.stroke();
-  }
-  // fog: grey half over seen-before ground, black over unexplored
-  const fog = M.fog || [];
-  for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) {
-    const f = fog[z * mw + x]; if (!f) continue;
-    g.fillStyle = f === 2 || f === 'black' ? 'rgba(0,0,0,.9)' : 'rgba(128,128,128,.5)';
-    g.fillRect(Math.floor(X(x * cell)), Math.floor(Z(z * cell)), Math.ceil(cp) + 1, Math.ceil(cp) + 1);
-  }
-
-  const box = (o, f = 1) => { const p = pt(o), fx = +(o.fx ?? (o.footprint || [])[0]) || 1, fz = +(o.fz ?? (o.footprint || [])[1]) || 1;
-    const w = fx * cp * f, h = fz * cp * f; return { x: X(p.x) - w / 2, y: Z(p.z) - h / 2, w, h, cx: X(p.x), cy: Z(p.z) }; };
-  const label = (t, b, col) => {
-    const sz = Math.max(6 * U, Math.min(9 * U, b.h * .3));
-    g.font = `700 ${sz}px 'DejaVu Sans', sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = col;
-    g.fillText(String(t), b.cx, b.cy, b.w * 1.5);         // a small unit's name may overhang its box rather than shrink
-  };
-  // order lines, dashed, coloured by kind
-  g.setLineDash([5 * U, 3.5 * U]); g.lineWidth = Math.max(1, 1.4 * U);
-  for (const l of v.lines || []) {
-    const a = pt(l.from), b = pt(l.to); if (!a || !b) continue;
-    g.strokeStyle = LINE[l.kind] || '#d8d8d8';
-    g.beginPath(); g.moveTo(X(a.x), Z(a.z)); g.lineTo(X(b.x), Z(b.z)); g.stroke();
-    g.fillStyle = g.strokeStyle; g.beginPath(); g.arc(X(b.x), Z(b.z), 2 * U, 0, 2 * Math.PI); g.fill();
-  }
-  g.setLineDash([]);
-  // queued build sites: an outlined square in the owner's colour
-  for (const q of v.queued || []) {
-    const b = box(q); g.lineWidth = Math.max(1, 1.5 * U); g.strokeStyle = TEAM[q.owner | 0] || '#ccc';
-    g.setLineDash([3 * U, 2 * U]); g.strokeRect(b.x, b.y, b.w, b.h); g.setLineDash([]);
-    if (!gx('label')) label(q.type || '', b, 'rgba(20,20,20,.75)');
-  }
-  // units: grey boxes at their footprint, a team-coloured edge; construction fills up from the bottom, a reclaim empties
-  gx('units');                          // the game's sprites, back to front, under every selection box
-  for (const u of v.units || []) {
-    const b = box(u), built = u.built == null ? 1 : clamp(+u.built, 0, 1), rec = clamp(+u.reclaimed || 0, 0, 1);
-    const bw = Math.max(1.5, 2 * U);
-    if (!gx('unit')) {
-      if (built < 1) {
-        g.fillStyle = 'rgba(150,150,144,.35)'; g.fillRect(b.x, b.y, b.w, b.h);
-        g.fillStyle = '#8a8a84'; g.fillRect(b.x, b.y + b.h * (1 - built), b.w, b.h * built);
-      } else if (rec > 0) {
-        g.fillStyle = 'rgba(150,150,144,.35)'; g.fillRect(b.x, b.y, b.w, b.h);
-        g.fillStyle = '#9a7c78'; g.fillRect(b.x, b.y + b.h * rec, b.w, b.h * (1 - rec));
-      } else { g.fillStyle = '#8a8a84'; g.fillRect(b.x, b.y, b.w, b.h); }
-      g.lineWidth = bw; g.strokeStyle = TEAM[u.owner | 0] || '#ccc'; g.strokeRect(b.x + bw / 2, b.y + bw / 2, b.w - bw, b.h - bw);
-      label(u.label || u.type || '', b, '#141414');
-    }
-    if (u.selected) {
-      // the selection box: corner brackets just outside the footprint
-      const m = 3 * U, x0 = b.x - m, y0 = b.y - m, x1 = b.x + b.w + m, y1 = b.y + b.h + m, c = Math.min(b.w, b.h) * .35 + m;
-      g.strokeStyle = '#f2f6e8'; g.lineWidth = Math.max(1, 1.5 * U); g.beginPath();
-      for (const [x, y, dx, dy] of [[x0, y0, 1, 1], [x1, y0, -1, 1], [x0, y1, 1, -1], [x1, y1, -1, -1]]) {
-        g.moveTo(x + dx * c, y); g.lineTo(x, y); g.lineTo(x, y + dy * c);
-      }
-      g.stroke();
-    }
-  }
-  // a placement gesture's sites: a translucent ghost of the building, TA's build square in the site's colour, and its
-  // place among the orders the release adds, small in the corner
-  for (const st of v.sites || []) {
-    if (!pt(st)) continue;
-    const b = box(st), col = SITE[st.state] || SITE.place, lw = Math.max(1, 1.5 * U);
-    if (!gx('site', st)) { g.fillStyle = 'rgba(138,138,132,.45)'; g.fillRect(b.x + lw, b.y + lw, b.w - 2 * lw, b.h - 2 * lw); }
-    g.strokeStyle = col; g.lineWidth = lw; g.strokeRect(b.x + lw / 2, b.y + lw / 2, b.w - lw, b.h - lw);
-    if (st.order != null) {
-      g.font = `700 ${Math.max(5 * U, Math.min(7.5 * U, b.h * .32))}px 'DejaVu Sans', sans-serif`;
-      g.textAlign = 'left'; g.textBaseline = 'top'; g.fillStyle = '#101010';
-      g.fillText(String(st.order), b.x + 2.5 * lw, b.y + 2 * lw);
-    }
-  }
-  // the placement ghost: translucent green where it may go, red where it may not
-  if (v.ghost && pt(v.ghost)) {
-    const b = box(v.ghost), ok = v.ghost.ok !== false;
-    if (!gx('ghost', v.ghost)) { g.fillStyle = ok ? 'rgba(40,210,70,.35)' : 'rgba(230,40,40,.35)'; g.fillRect(b.x, b.y, b.w, b.h); }
-    g.strokeStyle = ok ? '#2bd248' : '#e62828'; g.lineWidth = Math.max(1, 1.5 * U); g.strokeRect(b.x, b.y, b.w, b.h);
-    if (!gx('label')) label(v.ghost.type || '', b, ok ? '#0c3a12' : '#4a0a0a');
-  }
-  if (v.drag) {
-    const d = v.drag, x0 = X(Math.min(d.x0, d.x1)), y0 = Z(Math.min(d.z0, d.z1));
-    g.strokeStyle = '#f2f6e8'; g.lineWidth = Math.max(1, U); g.strokeRect(x0, y0, Math.abs(d.x1 - d.x0) * s, Math.abs(d.z1 - d.z0) * s);
-  }
-  if (v.cursor && pt(v.cursor) && !gx('cursor', X(pt(v.cursor).x), Z(pt(v.cursor).z), v.cursor.shape))
-    cursor(g, X(pt(v.cursor).x), Z(pt(v.cursor).z), v.cursor.shape, U);
-  // construction runs faster than the game's (the entry's pace), and the stage says so
-  if (+v.pace > 1) {
-    g.font = `${Math.round(8.5 * U)}px 'DejaVu Sans', sans-serif`; g.textAlign = 'right'; g.textBaseline = 'bottom';
-    const t = `construction \u00d7${+v.pace}`, tw = g.measureText(t).width, h = 12 * U;
-    g.fillStyle = 'rgba(30,30,28,.7)'; g.fillRect(W - tw - 8 * U, H - h - 2 * U, tw + 6 * U, h);
-    g.fillStyle = '#f0f0ea'; g.fillText(t, W - 5 * U, H - 4 * U);
-  }
-  // the armed building's spacing: the mockup's readout, at the stage's bottom left; the game specifies none yet
-  if (+v.spacing > 0) {
-    g.font = `${Math.round(8.5 * U)}px 'DejaVu Sans', sans-serif`; g.textAlign = 'left'; g.textBaseline = 'bottom';
-    const t = `Spacing: ${+v.spacing}`, tw = g.measureText(t).width, h = 12 * U;
-    g.fillStyle = 'rgba(30,30,28,.7)'; g.fillRect(2 * U, H - h - 2 * U, tw + 6 * U, h);
-    g.fillStyle = '#f0f0ea'; g.fillText(t, 5 * U, H - 4 * U);
-  }
+  const g = stage.getContext('2d'), v = view();
+  FIT = WikiStage.draw(g, v, { W: stage.width, H: stage.height, U: G.gh / 720, icons: ICONS,
+    msg: simErr || (demo() ? 'loading…' : entry() ? 'no demo' : ''),
+    gx: (phase, c, ...a) => !!(window.WikiGfx && WikiGfx.draw(phase, g, c, ...a)) });
   return v;
-}
-// the cursor at screen size, whatever the map's scale: an arrow, a build crosshair, or the move arrow with its green mark
-function cursor(g, x, y, shape, U) {
-  const k = 1.15 * U;
-  g.lineWidth = Math.max(1, U); g.strokeStyle = '#000';
-  if (shape === 'build') {
-    g.strokeStyle = '#f0f0e8'; g.lineWidth = Math.max(1, 1.5 * U);
-    g.beginPath(); g.arc(x, y, 6 * k, 0, 2 * Math.PI);
-    g.moveTo(x - 10 * k, y); g.lineTo(x - 3 * k, y); g.moveTo(x + 3 * k, y); g.lineTo(x + 10 * k, y);
-    g.moveTo(x, y - 10 * k); g.lineTo(x, y - 3 * k); g.moveTo(x, y + 3 * k); g.lineTo(x, y + 10 * k);
-    g.stroke(); return;
-  }
-  g.fillStyle = shape === 'move' ? '#3ccf3c' : '#f0f0e8';
-  g.beginPath(); g.moveTo(x, y); g.lineTo(x, y + 15 * k); g.lineTo(x + 4 * k, y + 11.5 * k); g.lineTo(x + 7 * k, y + 17.5 * k);
-  g.lineTo(x + 9.5 * k, y + 16.5 * k); g.lineTo(x + 6.5 * k, y + 10.5 * k); g.lineTo(x + 11 * k, y + 10.5 * k); g.closePath();
-  g.fill(); g.stroke();
 }
 
 /* ---- the strip under the stage: caption and the keys and buttons held ---- */

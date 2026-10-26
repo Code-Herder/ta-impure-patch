@@ -1,8 +1,8 @@
 /* gfx.js -- the stage in the game's own graphics (gfx=game): the ground and metal from map tiles, the vent and deposit
    features, the units' 3DO sprites, TA's cursors. Everything it draws is in gfx/, which tools/wiki/gfx.py renders from
    the local install and .gitignore keeps out of the repository; without gfx/index.json the stage stays on the whitebox.
-   wiki.js's draw() calls WikiGfx.draw(phase, ...) at each element it can hand over and draws its whitebox when the call
-   returns false. What each element is in the game: research/notes/ingame-wiki.md, *In game: what each element is
+   stage.js's draw() calls WikiGfx.draw(phase, ...), through the hook wiki.js gives it, at each element it can hand over,
+   and draws its whitebox when the call returns false. What each element is in the game: research/notes/ingame-wiki.md, *In game: what each element is
    drawn with*. */
 window.WikiGfx = (() => {
   const BASE = 'gfx/';

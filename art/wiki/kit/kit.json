@@ -63,6 +63,18 @@
     34
    ]
   },
+  "cursor_arrow": {
+   "kind": "icon",
+   "scale": 6
+  },
+  "cursor_build": {
+   "kind": "icon",
+   "scale": 6
+  },
+  "cursor_move": {
+   "kind": "icon",
+   "scale": 6
+  },
   "i_close": {
    "kind": "icon",
    "scale": 8.375
