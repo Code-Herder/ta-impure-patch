@@ -616,6 +616,7 @@ static int press(unsigned bit, int cx, int cy, int gx, int gy)
        world under that window never sees it. */
     if (s_hit.open && hit(cx, cy, key)) {
         s_owedBtn |= bit;
+        tagpu_logf("wiki: a press on '%s' of the window still drawn after its close was taken", key);
         return 1;
     }
     if (bit == B_L && hit(cx, cy, key) && !strcmp(key, "wiki")) {
