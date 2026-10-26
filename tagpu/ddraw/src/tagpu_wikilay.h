@@ -134,12 +134,16 @@ const char*   tagpu_wikilay_mod_name(int mod);
 int           tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
                                   const WIKIPAGE* st, HUDOPS* out, WIKIFRAME* fr, char* err, size_t errn);
 
-/* The kit and the data checked at the load, so no frame can refuse them later and leave the
-   window open but undrawn: 1 when the kit holds every icon the window and the stage draw and the
-   stage's `toast` style, and the build answers every state -- the window closed and its button
-   held, open with its close button held, and every entry's every demo, playing and paused, with
-   Try it yourself held -- else 0 with the first failure in `err`. `scratch` takes the ops of the
-   states tried. A load-time call: any thread, before the layout is published. */
+/* The kit and the data checked at the load: 1 when the kit holds every icon the window and the
+   stage draw and the stage's `toast` style, and the page builds whole -- nothing dropped, no
+   `overflow` -- in each of these states on each of three screens, 1024 x 768, 1280 x 720 and
+   3840 x 1080, every scroll at 0: the window closed with its button held, open with its close
+   button held, and every entry's every demo playing at 1x and ended at 2x with Try it yourself
+   held. Else 0 with the first failure in `err`. The build itself refuses only a missing argument
+   or its memory, so the states test the op, run, text, hit and group bounds; another scroll, a
+   held key, a caption or another screen is not built here, and a frame that overflows all the
+   same is drawn with the ops that fit (tagpu_wikistate.c says so once). `scratch` takes the ops
+   of the states tried. A load-time call: any thread, before the layout is published. */
 int           tagpu_wikilay_check(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
                                   HUDOPS* scratch, char* err, size_t errn);
 

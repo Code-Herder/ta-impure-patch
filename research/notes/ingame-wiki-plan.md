@@ -274,10 +274,18 @@ and the rewind button already have nothing there. **The recommendation is no but
 
 **A kit the window cannot draw is refused at its load, and at a frame too.** `tagpu_wikilay_load`
 refuses a kit missing any part or a role's style, and the art loader then checks the icons and the
-`toast` style the window and the stage draw and builds the page in every state -- closed, open with
-its close button held, every entry's every demo playing and paused (`tagpu_wikilay_check`) -- so a
-kit or data the page cannot draw never publishes and no button is drawn. Should a frame's layout
-refuse all the same (its build's own memory), the render thread publishes it
+`toast` style the window and the stage draw (`tagpu_wikilay_check`), so a kit the page cannot draw
+never publishes and no button is drawn. The same check builds the page closed, open with its close
+button held, and in every entry's every demo playing at 1× and ended at 2×, at 1024 × 768,
+1280 × 720 and 3840 × 1080 with every scroll at 0, and refuses the data if any of those builds drops
+an op, run, text, hit or group (`HUDOPS.overflow`). The build itself refuses nothing but a missing
+argument or its memory, so the overflow is what those states test; other scrolls, captions, held
+keys and screens are not built, and a frame that overflows all the same draws the ops that fit and
+says so once. MEASURED 2026-10-26 with `tagpu_wikilay.c` compiled natively over the archive the DLL
+embeds, the window open on every entry's every demo at 1024 × 768, 1280 × 720, 1920 × 1080,
+3440 × 1440 and 3840 × 1080: the fullest page takes at most 115 of the 4096 ops (at 1024 × 768),
+47 of the 2048 runs and 2133 of the 32 768 text bytes. Should a frame's layout refuse all the same (its build's own memory), the render
+thread publishes it
 (`tagpu_wikistate_refused`), and the fill closes the window as it does when the HUD's pass stops:
 the wiki is never open where it cannot be seen.
 
@@ -782,7 +790,8 @@ of landings 3 and 4*). Track C, the stage offline, committed before it (`978ac43
   layout `wikilaycheck` pairs with the mockup, and builds the stage with `tagpu_wikistage_build`
   inside the bezel that layout placed, from the record's view. `tagpu_wikiframe.c`, which laid out
   the window, title, close button and wiki button a second time, is deleted, and its load-time
-  check of the kit is `tagpu_wikilay_check`, which builds the page in every state. The wiki's art loads
+  check of the kit is `tagpu_wikilay_check` (the icons, the `toast` style, and the page built whole
+  in its closed, open and every-demo states at 4:3, 16:9 and 32:9, *Renderer coverage*). The wiki's art loads
   the page's `WIKILAY` (`layout.json` and the kit, the kit carrying the HUD's styles, which
   `tagpu_wikilay_load` now takes as the HUD's `HUDLAY`).
 - **The draw takes an op list.** `HUDOPLIST` is a pointer and a count for each of the ops, runs,

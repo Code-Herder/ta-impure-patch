@@ -166,10 +166,9 @@ static int parts(HUDART* a, const PARTS* at, char* err, size_t errn, double* mpx
    WIKIPAK (tools/hudart/fit.py --set wiki). The kit's text is set in the HUD's faces and styles,
    so its HUDART shares the HUD's faces, which are immutable once the HUD is published. A failure
    here is the wiki's alone: the HUD stands.
-   THE KIT AND THE DATA ARE CHECKED WHOLE HERE, every icon and style the window and the stage draw
-   and every state the page can be built in (tagpu_wikilay_check), so no frame can refuse them
-   later: a kit that would leave the window open but undrawn is refused before the button is ever
-   drawn. */
+   THE KIT AND THE DATA ARE CHECKED HERE, before the button is ever drawn (tagpu_wikilay_check):
+   every icon and style the window and the stage draw, and the page built in its closed, open and
+   every entry's every demo states at 4:3, 16:9 and 32:9 with nothing dropped. */
 static void wiki_load(void)
 {
     char err[256];

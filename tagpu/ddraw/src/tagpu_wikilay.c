@@ -886,6 +886,21 @@ int tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
 
 static int find_part(const HUDLAY* k, const char* name);
 
+/* one state of the check built: 0, with the state named in `err`, when the build refuses or drops
+   an op, a run, a text, a hit or a group (HUDOPS.overflow) */
+static int check_build(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f, const WIKIPAGE* st,
+                       HUDOPS* scratch, WIKIFRAME* fr, char* err, size_t errn)
+{
+    if (!tagpu_wikilay_build(l, d, f, st, scratch, fr, err, errn)) return 0;
+    if (scratch->overflow) {
+        if (err && errn)
+            snprintf(err, errn, "wiki layout: the page overflows its ops at %.0fx%.0f (%s, entry %d, demo %d)",
+                     st->W, st->H, st->open ? "open" : "closed", st->entry, st->demo);
+        return 0;
+    }
+    return 1;
+}
+
 int tagpu_wikilay_check(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f, HUDOPS* scratch,
                         char* err, size_t errn)
 {
@@ -893,9 +908,14 @@ int tagpu_wikilay_check(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
        so their absence is refused here rather than drawn as a blank control */
     static const char* const ICON[] = { "i_wiki", "i_play", "i_pause", "i_replay", "i_open", "i_shut",
                                         "i_dot", "cursor_arrow", "cursor_move", "cursor_build" };
+    /* THE SCREENS, in device pixels: 4:3, 16:9 and 32:9. The unit is the height / 720, so the
+       window's width in units -- what the text wraps to, and so how many lines and ops a page
+       makes -- follows the aspect; these are the common aspects at either end and the one
+       between. */
+    static const float SCREEN[][2] = { { 1024, 768 }, { 1280, 720 }, { 3840, 1080 } };
     WIKIPAGE st;
     WIKIFRAME fr;
-    int i, e, k, pass;
+    int i, e, k, pass, s;
     if (err && errn) err[0] = 0;
     if (!l || !d || !f || !scratch) {
         if (err && errn) snprintf(err, errn, "wikilay: no layout, data, faces or scratch to check");
@@ -911,28 +931,30 @@ int tagpu_wikilay_check(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
         if (err && errn) snprintf(err, errn, "wiki kit: no `toast` style for the stage");
         return 0;
     }
-    memset(&st, 0, sizeof st);
-    st.W = 1280;
-    st.H = 720;
-    st.bar = 24;
-    st.entry = -1;
-    st.speed = 1;
-    snprintf(st.held, sizeof st.held, "wiki");
-    if (!tagpu_wikilay_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
-    st.open = 1;
-    snprintf(st.held, sizeof st.held, "close");
-    if (!tagpu_wikilay_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
-    snprintf(st.held, sizeof st.held, "try");
-    for (e = 0; e < d->nentry; e++)
-        for (k = 0; k < (d->entry[e].ndemo > 0 ? d->entry[e].ndemo : 1); k++)
-            for (pass = 0; pass < 2; pass++) {
-                st.entry = e;
-                st.demo = k;
-                st.playing = !pass;
-                st.done = pass;
-                st.speed = 1 + pass;
-                if (!tagpu_wikilay_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
-            }
+    for (s = 0; s < (int)(sizeof SCREEN / sizeof *SCREEN); s++) {
+        memset(&st, 0, sizeof st);
+        st.W = SCREEN[s][0];
+        st.H = SCREEN[s][1];
+        st.bar = 24;
+        st.entry = -1;
+        st.speed = 1;
+        snprintf(st.held, sizeof st.held, "wiki");
+        if (!check_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
+        st.open = 1;
+        snprintf(st.held, sizeof st.held, "close");
+        if (!check_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
+        snprintf(st.held, sizeof st.held, "try");
+        for (e = 0; e < d->nentry; e++)
+            for (k = 0; k < (d->entry[e].ndemo > 0 ? d->entry[e].ndemo : 1); k++)
+                for (pass = 0; pass < 2; pass++) {
+                    st.entry = e;
+                    st.demo = k;
+                    st.playing = !pass;
+                    st.done = pass;
+                    st.speed = 1 + pass;
+                    if (!check_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
+                }
+    }
     return 1;
 }
 

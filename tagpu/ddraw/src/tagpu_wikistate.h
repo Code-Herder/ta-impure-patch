@@ -40,9 +40,9 @@ void tagpu_wikistate_drawn(int drew);
 int  tagpu_wikistate_cursor(unsigned frame);
 
 /* ANY THREAD: 1 once the layout has refused, for the rest of the session -- no frame draws the
-   wiki again, so tagpu_wiki_fill closes the window and the button is gone. The kit and the data
-   are checked whole at the load (tagpu_wikilay_check), so what is left to refuse is the build's
-   own memory. */
+   wiki again, so tagpu_wiki_fill closes the window and the button is gone. The kit's icons and
+   style are checked at the load (tagpu_wikilay_check), and the build refuses nothing else but a
+   missing argument or its own memory, so that memory is what is left to refuse. */
 int  tagpu_wikistate_refused(void);
 
 /* The command record's wiki part: what the last frame drawn answered. */
