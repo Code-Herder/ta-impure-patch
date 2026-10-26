@@ -139,6 +139,7 @@
 #include "tagpu_vk_gui.h"
 #include "tagpu_vk_fps.h"
 #include "tagpu_vk_hud.h"
+#include "tagpu_wikistate.h"
 #include "tagpu_vk_scaffold.h"
 #include "tagpu_vk_surf.h"
 #include "tagpu_vk_world.h"
@@ -2805,6 +2806,14 @@ static int vk_present(void)
                         tagpu_vk_gui_record_whole(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height, pan);
                     tagpu_vk_gui_record_sharp(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height, top);
                 }
+                /* THE IN-GAME WIKI OVER ALL OF IT, AND THE CURSOR BACK OVER THE WIKI. Its button and
+                   window are the last layer of the HUD's pass; the cursor is then this frame's cursor
+                   quad drawn once more, alone, when the wiki says the player's pointer is to be shown
+                   (tagpu_wikistate_cursor) -- the same quad the composite drew, so outside the window
+                   it lands on its own pixels. */
+                if (tagpu_vk_hud_record_wiki(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height) &&
+                    gui_drew && tagpu_wikistate_cursor(s_pass.frame))
+                    tagpu_vk_gui_record_cursor(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             }
             if (draw_scaf)
                 tagpu_vk_scaffold_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);

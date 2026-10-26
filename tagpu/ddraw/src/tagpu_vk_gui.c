@@ -251,6 +251,14 @@ static VkDescriptorSetLayout s_dslSharp;
 static VkPipelineLayout s_ploSharp;
 static VkPipeline       s_pipeCurs, s_pipeMM, s_pipeFlat;
 static VkRenderPass     s_layRp;         /* what s_pipeLay was built against  */
+/* THE CURSOR AGAIN, OVER THE IN-GAME WIKI (tagpu_vk_gui_record_cursor): CURS_FS built against the
+   seam's render pass, and where this frame's cursor quad was recorded in the sharp layer -- its
+   vertices and its two uniform windows, which stay this frame's for the slot until `record` of the
+   next frame on it */
+static VkPipeline       s_pipeCursMain;
+static VkRenderPass     s_cursRp;        /* what s_pipeCursMain was built against */
+static int              s_saidCurs;
+static struct { int ok; VkDeviceSize vbo; uint32_t dyn[2]; } s_curs[TAGPU_VK_SLOTS];
 static VkDescriptorPool s_dpool;
 static VkSampler        s_samp;
 /* the one exception: the minimap picture, minified LINEAR (MM_FS says why) */
@@ -1303,9 +1311,20 @@ static int build_lay_pipe(const TAGPU_VKPASS* d, VkRenderPass rp)
    one's ALPHA), it is built against the sharp render pass, and it takes the
    three-sampler layout. Blending stays OFF, as for the twins: a draw writes
    its texels whole, and the composite gates on the layer's alpha. */
+static int build_sharp_pipe_in(const TAGPU_VKPASS* d, const uint32_t* fs, size_t fsw,
+                               VkRenderPass rp, int depth, VkPipeline* out);
 static int build_sharp_pipe(const TAGPU_VKPASS* d, const uint32_t* fs, size_t fsw,
                             VkPipeline* out)
 {
+    return build_sharp_pipe_in(d, fs, fsw, s_sharpRp, 0, out);
+}
+
+/* the same against render pass `rp`; `depth` when that pass has a depth attachment, which then
+   needs a depth state declared, testing and writing nothing (as build_lay_pipe declares it) */
+static int build_sharp_pipe_in(const TAGPU_VKPASS* d, const uint32_t* fs, size_t fsw,
+                               VkRenderPass rp, int depth, VkPipeline* out)
+{
+    VkPipelineDepthStencilStateCreateInfo dss = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
     VkPipelineShaderStageCreateInfo st[2];
     VkVertexInputBindingDescription vb;
     VkVertexInputAttributeDescription at;
@@ -1351,7 +1370,10 @@ static int build_sharp_pipe(const TAGPU_VKPASS* d, const uint32_t* fs, size_t fs
     gp.pViewportState = &vp; gp.pRasterizationState = &rs;
     gp.pMultisampleState = &ms; gp.pColorBlendState = &cb;
     gp.pDynamicState = &ds; gp.layout = s_ploSharp;
-    gp.renderPass = s_sharpRp; gp.subpass = 0;
+    dss.depthTestEnable = VK_FALSE; dss.depthWriteEnable = VK_FALSE;
+    dss.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+    gp.pDepthStencilState = depth ? &dss : NULL;
+    gp.renderPass = rp; gp.subpass = 0;
     r = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, out);
     vkDestroyShaderModule(d->dev, vm, NULL);
     vkDestroyShaderModule(d->dev, fm, NULL);
@@ -2475,6 +2497,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 
     s_drawThis = 0; s_abFrame = 0;
     if (slot < TAGPU_VK_SLOTS) s_layDrew[slot] = 0;
+    if (slot < TAGPU_VK_SLOTS) s_curs[slot].ok = 0;
     if (s_state == ST_REFUSED) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
     s = &s_slot[slot];
@@ -3848,6 +3871,12 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                                     s_ploSharp, 0, 1, &s->shSet[si], 2, dyn);
             vkCmdBindVertexBuffers(cb, 0, 1, &s->vb, &vbo);
             vkCmdDraw(cb, 6, 1, 0, 0);
+            if (sd->kind == TAGPU_GUISK_CURSOR) {
+                s_curs[slot].ok = 1;
+                s_curs[slot].vbo = vbo;
+                s_curs[slot].dyn[0] = dyn[0];
+                s_curs[slot].dyn[1] = dyn[1];
+            }
         }
         vkCmdEndRenderPass(cb);
     }
@@ -4106,6 +4135,53 @@ int tagpu_vk_gui_record_whole(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_
     return record_in(d, cb, slot, w, h, r, s_layQuad);
 }
 
+/* THE CURSOR QUAD THIS FRAME RESOLVED, drawn again straight onto the attachment: the very
+   vertices, uniform windows and descriptor set the sharp layer drew it with, through CURS_FS, so
+   it never reads the pointer live and lands where the composite's copy of it does. QVS maps the
+   quad in sharp-layer pixels, y down, onto the viewport, so the viewport is the composite's place
+   (lay_place) the right way up -- the composite's own viewport is flipped only because LAY_VS
+   writes a y-up clip. Redrawing the sharp layer inside a rect instead, as record_sharp does, would
+   bring its minimap and strings back over whatever covers them. */
+int tagpu_vk_gui_record_cursor(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                               uint32_t w, uint32_t h)
+{
+    SLOT* s;
+    VkViewport vp;
+    VkRect2D sc;
+    int x, vw, vh, ytop;
+    if (slot >= d->slots || slot >= TAGPU_VK_SLOTS || !s_layDrew[slot] || !s_curs[slot].ok) return 0;
+    if (!s_pipeCursMain || s_cursRp != d->rp) {
+        if (s_pipeCursMain) { vkDestroyPipeline(d->dev, s_pipeCursMain, NULL); s_pipeCursMain = VK_NULL_HANDLE; }
+        if (!build_sharp_pipe_in(d, tagpu_spv_tagpu_gui_surf_CURS_FS, sizeof tagpu_spv_tagpu_gui_surf_CURS_FS / 4,
+                                 d->rp, d->dfmt != VK_FORMAT_UNDEFINED, &s_pipeCursMain)) {
+            s_pipeCursMain = VK_NULL_HANDLE;
+            s_cursRp = VK_NULL_HANDLE;
+            if (!s_saidCurs++)
+                plog(d, "gui: the cursor pipeline would not build against the seam's render pass - "
+                        "no cursor over the wiki (said once)");
+            return 0;
+        }
+        s_cursRp = d->rp;
+    }
+    s = &s_slot[slot];
+    lay_place(w, h, &x, &ytop, &vw, &vh);
+    vp.x = (float)x;
+    vp.y = (float)ytop;
+    vp.width = (float)vw;
+    vp.height = (float)vh;
+    vp.minDepth = 0.0f; vp.maxDepth = 1.0f;
+    vkCmdSetViewport(cb, 0, 1, &vp);
+    sc.offset.x = 0; sc.offset.y = 0;
+    sc.extent.width = w; sc.extent.height = h;
+    vkCmdSetScissor(cb, 0, 1, &sc);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeCursMain);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ploSharp, 0, 1,
+                            &s->shSet[SDSET_CURS], 2, s_curs[slot].dyn);
+    vkCmdBindVertexBuffers(cb, 0, 1, &s->vb, &s_curs[slot].vbo);
+    vkCmdDraw(cb, 6, 1, 0, 0);
+    return 1;
+}
+
 int tagpu_vk_gui_ab_frame(void)
 {
     int a = s_abFrame;
@@ -4199,6 +4275,9 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     if (s_pipeFlat) { vkDestroyPipeline(d->dev, s_pipeFlat, NULL); s_pipeFlat = VK_NULL_HANDLE; }
     if (s_pipeLay) { vkDestroyPipeline(d->dev, s_pipeLay, NULL); s_pipeLay = VK_NULL_HANDLE; }
     s_layRp = VK_NULL_HANDLE;
+    if (s_pipeCursMain) { vkDestroyPipeline(d->dev, s_pipeCursMain, NULL); s_pipeCursMain = VK_NULL_HANDLE; }
+    s_cursRp = VK_NULL_HANDLE;
+    memset(s_curs, 0, sizeof s_curs);
     if (s_ploSharp) { vkDestroyPipelineLayout(d->dev, s_ploSharp, NULL); s_ploSharp = VK_NULL_HANDLE; }
     if (s_dslSharp) { vkDestroyDescriptorSetLayout(d->dev, s_dslSharp, NULL); s_dslSharp = VK_NULL_HANDLE; }
     if (s_sharpRp) { vkDestroyRenderPass(d->dev, s_sharpRp, NULL); s_sharpRp = VK_NULL_HANDLE; }

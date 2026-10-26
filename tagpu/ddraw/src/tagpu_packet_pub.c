@@ -112,6 +112,7 @@
                                 THIS thread at the one point it is finished      */
 #include "tagpu_feat.h"      /* whether the mirror wants the map's own features */
 #include "tagpu_hudstate.h"   /* the replay HUD's record, through the replay's own calls */
+#include "tagpu_wiki.h"       /* the in-game wiki's record: Impure's own state, no engine read */
 #include "tagpu_hudinput.h"   /* ...and the controls it drew, handed back */
 #include "tagpu_datakeys.h"  /* the build ghost's piece masks, computed on THIS thread */
 #include "tagpu_replay.h"    /* the replay's overlays, built at its frame visit on THIS thread */
@@ -305,6 +306,7 @@ static int      s_fillAgain;
 /* the replay HUD's record, built here and copied into the area: 3.4 KB, off the stack */
 static TAGPU_PK_HUD s_hud;
 static TAGPU_PK_HUDSTAT s_hudstat;
+static TAGPU_PK_WIKI s_wiki;
 
 static unsigned append_area(TAGPU_PACKET* p, unsigned* cursor, const void* src, unsigned len,
                             unsigned* off_out, unsigned* len_out, unsigned trunc_bit)
@@ -2859,9 +2861,16 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
         e = append_area(p, &cursor, NULL, 6144u, &p->stress_off, &p->stress_len, TAGPU_PK_TRUNC_STRESS);
         if (e > need) need = e;
     }
-    /* ---- the effects models, last ---- */
+    /* ---- the effects models ---- */
     e = fill_fxmodels(p, &cursor);
     if (e > need) need = e;
+    /* ---- the in-game wiki's record, LAST: it can grow without moving or cutting a table
+       before it (tagpu_wikipk.h) ---- */
+    if (tagpu_wiki_fill(&s_wiki)) {
+        e = append_area(p, &cursor, &s_wiki, (unsigned)sizeof s_wiki, &p->wiki_off, &p->wiki_len,
+                        TAGPU_PK_TRUNC_WIKI);
+        if (e > need) need = e;
+    }
     p->used_bytes = cursor;
     /* the whole fill's size when a table did not fit (s_fillShort) */
     if (s_fillShort && PKT_ALIGN4(cursor) + s_fillShort > need) need = PKT_ALIGN4(cursor) + s_fillShort;
@@ -3177,6 +3186,7 @@ static int __cdecl before_draw(void* entry_esp)
         c = tagpu_cmd_take();
         /* the replay HUD's controls as the player last saw them, for a click before the next take */
         tagpu_hudinput_take(c ? &c->hud : NULL);
+        tagpu_wiki_take(c ? &c->wiki : NULL);
         /* THE CAMERA AND THE RECT, THEN THE TERRAIN LATCH: the eye may only
            be off the engine's range, and the rect only wide, on a draw whose
            ground is ours. The render thread's request is read ONCE, the camera

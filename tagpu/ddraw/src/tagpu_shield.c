@@ -17,6 +17,7 @@
 #include "tagpu_shield.h"
 #include "tagpu_menu.h"
 #include "tagpu_hudinput.h"
+#include "tagpu_wiki.h"
 #include "mouse.h"
 #include "tagpu_zoom.h"
 #include "tagpu_place.h"
@@ -186,6 +187,15 @@ static void deliver_key(HWND hwnd, int vk, BOOL up)
     UINT scan = MapVirtualKeyA((UINT)vk, 0 /* MAPVK_VK_TO_VSC */);
     LPARAM lparam = 1 | ((LPARAM)scan << 16) | (up ? ((LPARAM)3 << 30) : 0);
 
+    /* the in-game wiki first: while it is open it takes every key, and a key-down it took has its
+       key-up taken too, which still lets the virtual key go so the engine is never left holding
+       it (tagpu_wiki.c, THE PAIRED PRESS) */
+    if (tagpu_wiki_key((unsigned)vk, up))
+    {
+        if (up) set_key(vk, FALSE);
+        return;
+    }
+
     set_key(vk, !up);
 
     /* Alt+Z / Alt+X with a building armed step the placement's spacing and reach the game no
@@ -265,6 +275,18 @@ static int deliver_mouse(HWND hwnd, int code, int gx, int gy)
     {
         gx = min(max(gx, 0), (int)g_ddraw.width - 1);
         gy = min(max(gy, 0), (int)g_ddraw.height - 1);
+    }
+
+    /* THE IN-GAME WIKI, BEFORE THE ENGINE'S POINT IS STORED: while it is open the engine's point
+       stays where the opening press left it, so a move it takes stores nothing, and a press or a
+       wheel notch it takes is dropped whole; a release it takes still lets the virtual button go
+       (tagpu_wiki.c). Closed, it takes a press on its button and the release of a press it took. */
+    if (tagpu_wiki_mouse(code, dev_x, dev_y, gx, gy))
+    {
+        if (code == TAGPU_M_LUP) set_key(VK_LBUTTON, FALSE);
+        else if (code == TAGPU_M_RUP) set_key(VK_RBUTTON, FALSE);
+        else if (code == TAGPU_M_MUP) set_key(VK_MBUTTON, FALSE);
+        return TAGPU_DELIVER_MENU;
     }
 
     InterlockedExchange((LONG*)&g_ddraw.cursor.x, gx);
@@ -351,6 +373,12 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
         return TRUE;
 
     case WM_TAGPU_CHAR:
+        if (tagpu_wiki_char())
+        {
+            tagpu_input_delivered((unsigned)lparam, TAGPU_DELIVER_MENU);
+            *result = 0;
+            return TRUE;
+        }
         to_game(hwnd, WM_CHAR, wparam, 1);
         tagpu_input_delivered((unsigned)lparam, TAGPU_DELIVER_ENGINE);
         *result = 0;
@@ -360,6 +388,15 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
         tagpu_input_delivered(TAGPU_SEQ(wparam),
                               deliver_mouse(hwnd, (int)(wparam & TAGPU_M_CODE),
                                             (short)LOWORD(lparam), (short)HIWORD(lparam)));
+        *result = 0;
+        return TRUE;
+    }
+
+    /* The in-game wiki, on the REAL path, before the sprocket and the replay HUD and before the
+       shield's own gate: while its window is open it takes every input message, so neither the
+       engine nor the controls under the window see one (tagpu_wiki.c, THE CAPTURE). */
+    if (tagpu_wiki_message(msg, wparam, lparam))
+    {
         *result = 0;
         return TRUE;
     }
@@ -394,7 +431,10 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
     /* The window lost the mouse: a release may never come, so the HUD's drag ends here. The
        messages go on as before. */
     if (msg == WM_KILLFOCUS || msg == WM_CAPTURECHANGED || (msg == WM_ACTIVATEAPP && !wparam))
+    {
         tagpu_hudinput_cancel();
+        tagpu_wiki_cancel();
+    }
 
     if (!tagpu_shield_on())
     {

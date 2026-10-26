@@ -2155,6 +2155,33 @@ done:
     return l;
 }
 
+HUDLAY* tagpu_hudlay_load_kit(const HUDLAY* styles, const char* kit, size_t nkit, HUDPNGSIZE png_size,
+                              void* ctx, char* err, size_t errn)
+{
+    HUDLAY* l = (HUDLAY*)calloc(1, sizeof(HUDLAY));
+    char e2[200];
+    if (err && errn) err[0] = 0;
+    if (!l) { snprintf(err, errn, "hudlay: out of memory"); return NULL; }
+    if (!(l->kdoc = tagpu_json_parse(kit, nkit, e2, sizeof e2))) {
+        snprintf(err, errn, "kit.json: %s", e2);
+        tagpu_hudlay_free(l);
+        return NULL;
+    }
+    if (!load_kit(l, tj_get(tagpu_json_root(l->kdoc), "parts"), png_size, ctx, err, errn)) {
+        tagpu_hudlay_free(l);
+        return NULL;
+    }
+    /* the styles and the measure are the HUD's, so the wiki's text is set in the HUD's faces by
+       the same rules; there is no layout, so tagpu_hudlay_build is never called on this one */
+    l->g = styles->g;
+    l->measure = styles->measure;
+    l->mctx = styles->mctx;
+    return l;
+}
+
+int tagpu_hudlay_part_index(const HUDLAY* l, const char* name) { return part_index(l, name); }
+int tagpu_hudlay_style_index(const HUDLAY* l, const char* name) { return style_index(l, name); }
+
 int tagpu_hudlay_max_hot(const HUDLAY* l) { return l->max_hot; }
 
 void tagpu_hudlay_free(HUDLAY* l)

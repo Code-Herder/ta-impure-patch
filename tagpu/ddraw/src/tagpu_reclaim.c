@@ -69,6 +69,7 @@
 #include "tagpu_menu.h"
 #include "tagpu_hudmarks.h"
 #include "tagpu_hudinput.h"
+#include "tagpu_wiki.h"
 
 #define FREEOBJ_VA    0x0045AAA0u          /* FreeObjectState: stdcall, 1 arg, ret 4      */
 #define FREEOBJ_RESUME (FREEOBJ_VA + 5u)
@@ -317,11 +318,14 @@ static void __cdecl reclaim_teardown_pre(void)
        thread too, and the teardown is entered only from the engine's state handlers on that
        thread, so the two never overlap. Between them the screen slot lets its screen go before
        the engine's pops that follow the teardown (tagpu_menu.c, tagpu_menu_level_end), and the
-       replay HUD's marker walker is joined while the recording it reads is still the level's. */
+       replay HUD's marker walker is joined while the recording it reads is still the level's. The
+       in-game wiki closes here too, forgetting its pause without writing it: the level the pause
+       was taken in is going (tagpu_wiki.c). */
     tagpu_rec_level_end();
     tagpu_menu_level_end();
     tagpu_hudmarks_level_end();
     tagpu_hudinput_level_end();
+    tagpu_wiki_level_end();
     tagpu_replay_level_end();
 
     /* THE BASELINE HAS TO BE KNOWN BEFORE A MISMATCH MEANS ANYTHING. `gui_thread_id`
