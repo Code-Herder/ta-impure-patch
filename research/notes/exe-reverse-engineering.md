@@ -6137,7 +6137,8 @@ plot over.
 
 **What keeps stock off it.** `main+0x1422B`/`+0x1422F` is not the map's size. It is the **scroll
 extent**, the map's pixel width less 32 and its height less 128, written at the level load
-(`0x4833C4`, `0x4833E0`) — and the end of the map as stock shows it: no stock view reaches a pixel
+(`0x4833B8..0x4833E0` [DISASSEMBLED]: `mov ecx,[main+0x14223]; sub ecx,0x20`, stored at `0x4833C4`;
+`mov edx,[main+0x14227]; sub edx,0x80`, stored at `0x4833E0`) — and the end of the map as stock shows it: no stock view reaches a pixel
 past it, which is why our camera's centre range and the mirrored map edge end there too
 (`gpu-status.md` §2.3c, §2.90). The engine's camera clamp `0x41C3C0` holds the eye in
 `[0, extent − view]`, the viewport arm clamps the pointer to the rect, and the minimap's click
