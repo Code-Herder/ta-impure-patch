@@ -42,8 +42,6 @@
    the whole size (tagpu_pk_wiki_stage). */
 typedef struct TAGPU_PK_WIKI {
     uint8_t  open;              /* the window is open: the game takes no input              */
-    uint8_t  btn_down;          /* the wiki button's press was taken and its release is owed */
-    uint8_t  x_down;            /* the close button's, likewise                              */
     uint8_t  paused;            /* the wiki holds single player's pause                      */
     int16_t  ptr_x, ptr_y;      /* the pointer's client point, as the last move noted it
                                    (mouse_last_client); -1 for none or outside the picture  */

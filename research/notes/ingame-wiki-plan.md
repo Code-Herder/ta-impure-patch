@@ -520,7 +520,8 @@ The window closes on the X, on the wiki button, and on the release of Esc.
     state. It is written from the fill on the game thread, as the HUD's `tagpu_replayhud.dump`
     is, and it is what the test reads.
 - **`src/tagpu_wikipk.h`**: `TAGPU_PK_WIKI` and `TAGPU_CMD_WIKI`, values only. In this landing:
-  - `open`, `btn_down` and `x_down`;
+  - `open`, `paused`, and `held`: the control a left press holds down, which the layout draws
+    pressed (the wiki button and the close button among them);
   - `ptr_x`, `ptr_y`: the client point of the fill's last move, −1 for none or outside the
     picture;
   - the hit map, 160 hits of {`x0`, `y0`, `x1`, `y1`, `key[24]`}, and `drawn`.
