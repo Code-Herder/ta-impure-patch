@@ -22,8 +22,9 @@
 #define WIKI_ID_MAX   24    /* a unit id or a unit type, with its terminator */
 #define WIKI_MAX_DEFS 64    /* the unit types of one entry: a build list is a mask over them */
 /* Cells a side of an entry's map; the loader refuses a larger one. The DLL's packet carries the
-   map by value, at most 128 x 128 cells, and a 700-pixel stage still gives 5 px a cell. The
-   data's map is 40 x 24. */
+   map by value, at most 128 x 128 cells, and a 700-pixel stage still gives 5 px a cell; the
+   simulation's take-off rule rests on it too (tagpu_wikisim.c, fixed16). The data's map is
+   40 x 24. */
 #define WIKI_MAP_MAX  128
 
 /* sim.js's KEYS, in its order, which is the order the view lists the held ones in */

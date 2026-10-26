@@ -15,10 +15,12 @@
 
    ENGINE-FREE, WIN32-FREE AND WITHOUT GLOBALS. It reads no engine memory and names no engine
    address: where sim.js mirrors the rule code of tagpu_resource.c or tagpu_place.c, this file
-   ports sim.js's version, and says which function each piece mirrors. Every piece of its state
-   lives in the WIKISIM its caller owns (and on the heap that WIKISIM owns), so it runs on
-   whichever thread owns the wiki window; one WIKISIM is used by one thread at a time. The
-   WIKIENTRY (and the WIKIDEMO) it was made from must outlive it: it points into them.
+   ports sim.js's version, and says which function each piece mirrors -- except what the game
+   keeps engine-free in tagpu_placegeo.c, the shapes and the take-off rule, which it calls
+   directly as the game does. Every piece of its state lives in the WIKISIM its caller owns
+   (and on the heap that WIKISIM owns), so it runs on whichever thread owns the wiki window;
+   one WIKISIM is used by one thread at a time. The WIKIENTRY (and the WIKIDEMO) it was made
+   from must outlive it: it points into them.
 
    BOUNDED BY CONSTRUCTION: a unit's orders stop at PLACE_LIST_CAP (every append goes through
    one function that refuses past it), and the map at WIKI_MAP_MAX cells a side (the loader
@@ -164,12 +166,13 @@ typedef struct {
     const WIKIINPUT** script;
     double           end;           /* the tick it is done on; never for Try it yourself */
 
-    /* scratch: distinct's flood, take_offs' per-order sites, the view's arrays */
+    /* scratch: distinct's flood; take_offs' one builder's orders and the site taking each off,
+       sized for any list since push_order holds every list to PLACE_LIST_CAP; the view's arrays */
     uint32_t*        mark;
     uint32_t         gen;
     int*             todo;
-    int*             by;
-    int              cby;
+    PlaceOrder       q[PLACE_LIST_CAP];
+    uint16_t         by[PLACE_LIST_CAP];
     WIKIVIEW         view;
     WIKIVUNIT*       vunit;
     WIKIVSITE*       vqueued;

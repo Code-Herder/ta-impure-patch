@@ -17,9 +17,9 @@
 #define DRAG    4
 #define FOLLOW  48
 #define SPACING 24
-/* tagpu_place.c's caps */
+/* tagpu_place.c's cap on one commit's orders; its cap on a list, PLACE_LIST_CAP, is
+   tagpu_placegeo.h's */
 #define PLACE_ORDER_BUDGET 4096
-#define PLACE_LIST_CAP     1024
 /* a cell far enough off any map for every test to refuse it, and small enough that no cell
    arithmetic below can overflow: a wild cursor answers as off the map */
 #define CELL_BOUND (1 << 20)
@@ -51,7 +51,7 @@ static int bound_cell(double c)
     return c < -CELL_BOUND ? -CELL_BOUND : c > CELL_BOUND ? CELL_BOUND : (int)c;
 }
 
-/* ---- the shapes are tagpu_placegeo.c's own, called directly; sim.js ports them line for line ---- */
+/* ---- tagpu_placegeo.c's shapes and take-off rule, called directly; sim.js ports each one ---- */
 
 /* the footprint's first cell for a centre at world v: 0x4197D0's rounding, floor((v - 8f + 8) / 16), half up */
 static int origin(double v, int f) { return bound_cell(floor((v - 8 * f + 8) / CELL)); }
@@ -109,8 +109,9 @@ static BOX box(const WIKISIM* s, int t, int ox, int oz)
 
 /* THE ONE APPEND to a unit's orders, so a list never holds more than PLACE_LIST_CAP: an order
    past it is dropped, as sim.js's append drops it. Every order a player's clicks add comes
-   through here, so they cannot grow a list until realloc fails. 1 when the order went in; 0
-   when the list was full or memory ran out, which sets `oom`. */
+   through here, so they cannot grow a list until realloc fails, and take_offs' scratch
+   (WIKISIM's q and by) holds any list. 1 when the order went in; 0 when the list was full or
+   memory ran out, which sets `oom`. */
 static int push_order(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* o)
 {
     if (u->norder >= PLACE_LIST_CAP) return 0;
@@ -654,72 +655,69 @@ static int toggles(const WIKISIM* s, int t, const WIKISITE* w)
     return 0;
 }
 
-/* scratch for take_offs_one: one index per order of the builder, never NULL for none; NULL when
-   it cannot be had */
-static int* by_buffer(WIKISIM* s, int n)
+/* A world position as tagpu_place.c's order positions hold it, 16.16 fixed point, for the shared
+   take-off rule. Exact for every position that rule compares, so it answers as sim.js's doubles
+   do: a footprint's centre is (cx + f/2) * 16, a multiple of 8, exact in 16.16 within the
+   clamp. The clamp changes no answer: the rule only ever compares a site that is not refused --
+   inside the map, so its centre lies within 0..WIKI_MAP_MAX * 16 = 2048 (the loader refuses a
+   larger map) -- with an order, and an order clamped to +-8192 is still further than 16 from
+   every such site, as it was before the clamp. Within the clamp no difference reaches 2^31, so
+   place_within's wrapped compare never wraps. */
+_Static_assert(WIKI_MAP_MAX * WIKI_CELL + 16 < 8192
+               && (8192LL + WIKI_MAP_MAX * WIKI_CELL) * 65536 < 0x80000000LL,
+               "a clamped order lies beyond the reach of every site on the map, and no difference wraps");
+static int32_t fixed16(double v)
 {
-    if (n < 1) n = 1;
-    if (n > s->cby) {
-        int* p = (int*)realloc(s->by, (size_t)n * sizeof *p);
-        if (!p) { s->oom = 1; return NULL; }
-        s->by = p;
-        s->cby = n;
-    }
-    return s->by;
+    return (int32_t)((v < -8192 ? -8192 : v > 8192 ? 8192 : v) * 65536);
 }
 
-/* mirrors tagpu_place.c take_offs for one builder: the Shift-click per site against its queue as it
-   stands, each queued order taken off by at most one site -- every site not refused first takes
-   the build order at its own position, then each site that took none takes the first build order
-   within 16 world units that no site has taken, both in shape order, each in queue order. A site
-   that takes one becomes WIKI_SITE_REMOVE. `by[j]` is the site that takes order j off, -1 for
-   none; `took[i]` says site i took one. Own positions go first over the whole shape because
-   neighbouring 1 x 1 sites are 16 world units apart: whichever end a drag over a queued row starts
-   from, every order of the row is taken off by the site that stands on it. A builder's answer
-   reads only its own queue and which sites are refused, so a builder's orders may be changed once
-   its own answer is used. */
-static void take_offs_one(const WIKISIM* s, int t, WIKISITE* sites, int n, const WIKIUNIT* u, int* by, char* took)
+/* mirrors tagpu_place.c take_offs for one builder: place_take_offs_one (tagpu_placegeo.h), the
+   game's own function, over the builder's queue as it stands -- its build orders are the ones
+   the rule reads -- and the sites, whose positions and refused flags `pos` holds. A site that
+   takes one becomes WIKI_SITE_REMOVE. Leaves in s->by the site that takes each order off
+   (PLACE_NO_SITE for none) and in `took` whether each site took one. */
+static void take_offs_one(WIKISIM* s, const PlaceSitePos* pos, WIKISITE* sites, int n, const WIKIUNIT* u, uint8_t* took)
 {
-    int own, i, j;
-    for (j = 0; j < u->norder; j++) by[j] = -1;
-    memset(took, 0, (size_t)n);
-    for (own = 1; own >= 0; own--)
-        for (i = 0; i < n; i++) {
-            XZ at;
-            if (sites[i].state == WIKI_SITE_REFUSED || (!own && took[i])) continue;
-            at = site_centre(s, t, &sites[i]);
-            for (j = 0; j < u->norder; j++) {
-                const WIKIORDER* o = &u->order[j];
-                XZ q;
-                if (o->k != WIKI_ORDER_BUILD || by[j] >= 0) continue;
-                q = order_at(s, o);
-                if (own ? q.x == at.x && q.z == at.z : within(at, q)) break;
-            }
-            if (j < u->norder) {
-                by[j] = i;
-                took[i] = 1;
-                sites[i].state = WIKI_SITE_REMOVE;
-            }
-        }
+    int i, j;
+    for (j = 0; j < u->norder; j++) {
+        const XZ q = order_at(s, &u->order[j]);
+        s->q[j].x = fixed16(q.x);
+        s->q[j].z = fixed16(q.z);
+        s->q[j].match = u->order[j].k == WIKI_ORDER_BUILD;
+    }
+    place_take_offs_one(s->q, (unsigned)u->norder, pos, (unsigned)n, s->by, took);
+    for (i = 0; i < n; i++)
+        if (took[i]) sites[i].state = WIKI_SITE_REMOVE;
+}
+
+/* the sites as the take-off rule reads them. A site turns only from WIKI_SITE_PLACE to
+   WIKI_SITE_REMOVE after this, never to or from refused, so `pos` holds for every builder. */
+static void site_positions(const WIKISIM* s, int t, const WIKISITE* sites, int n, PlaceSitePos* pos)
+{
+    int i;
+    for (i = 0; i < n; i++) {
+        const XZ at = site_centre(s, t, &sites[i]);
+        pos[i].x = fixed16(at.x);
+        pos[i].z = fixed16(at.z);
+        pos[i].refused = sites[i].state == WIKI_SITE_REFUSED;
+    }
 }
 
 /* mirrors tagpu_place.c take_offs over every selected builder, for the sites' states. A ring takes
    nothing off: a site a Shift-click would toggle is WIKI_SITE_REMOVE, and left out. */
 static void take_offs(WIKISIM* s, int t, WIKISITE* sites, int n, int ring)
 {
-    char took[PLACE_MAX_SITES];
+    PlaceSitePos pos[PLACE_MAX_SITES];
+    uint8_t took[PLACE_MAX_SITES];
     int i;
     if (ring) {
         for (i = 0; i < n; i++)
             if (sites[i].state != WIKI_SITE_REFUSED && toggles(s, t, &sites[i])) sites[i].state = WIKI_SITE_REMOVE;
         return;
     }
-    for (i = 0; i < s->nunit; i++) {
-        const WIKIUNIT* u = s->unit[i];
-        int* by;
-        if (!is_builder(s, u) || !(by = by_buffer(s, u->norder))) continue;
-        take_offs_one(s, t, sites, n, u, by, took);
-    }
+    site_positions(s, t, sites, n, pos);
+    for (i = 0; i < s->nunit; i++)
+        if (is_builder(s, s->unit[i])) take_offs_one(s, pos, sites, n, s->unit[i], took);
 }
 
 /* mirrors tagpu_place.c classify: refused where the site test refuses, else WIKI_SITE_PLACE, and
@@ -819,7 +817,8 @@ static void commit(WIKISIM* s, const WIKIPLACE* p)
 {
     PlaceCell cells[PLACE_MAX_SITES];
     WIKISITE sites[PLACE_MAX_SITES];
-    char took[PLACE_MAX_SITES];
+    PlaceSitePos pos[PLACE_MAX_SITES];
+    uint8_t took[PLACE_MAX_SITES];
     const int t = p->type, ring = p->kind == PLACE_RING;
     int i, j, b, changed = 0;
     for (i = 0; i < p->n; i++) {
@@ -827,24 +826,21 @@ static void commit(WIKISIM* s, const WIKIPLACE* p)
         cells[i].cz = (int16_t)p->site[i].cz;
     }
     classify(s, t, cells, p->n, ring, sites);
+    site_positions(s, t, sites, p->n, pos);
     for (b = 0; b < s->nunit; b++) {
         WIKIUNIT* u = s->unit[b];
-        int* by = NULL;
         if (!is_builder(s, u)) continue;
-        if (!ring) {
-            if (!(by = by_buffer(s, u->norder))) continue;
-            take_offs_one(s, t, sites, p->n, u, by, took);
-        }
+        if (!ring) take_offs_one(s, pos, sites, p->n, u, took);
         for (i = 0; i < p->n; i++)
             if (ring) took[i] = sites[i].state == WIKI_SITE_REMOVE;
         for (j = ring ? 0 : u->norder; j-- > 0;)
-            if (by[j] >= 0) {
+            if (s->by[j] != PLACE_NO_SITE) {
                 splice_orders(u, j, 1);
                 changed++;
             }
         for (i = 0; i < p->n; i++) {
             WIKIORDER o;
-            if (sites[i].state == WIKI_SITE_REFUSED || took[i] || u->norder >= PLACE_LIST_CAP) continue;
+            if (sites[i].state == WIKI_SITE_REFUSED || took[i]) continue;
             memset(&o, 0, sizeof o);
             o.k = WIKI_ORDER_BUILD;
             o.type = t;
@@ -1585,7 +1581,6 @@ void tagpu_wikisim_free(WIKISIM* s)
     free((void*)s->script);
     free(s->mark);
     free(s->todo);
-    free(s->by);
     free(s->vunit);
     free(s->vqueued);
     free(s->vline);

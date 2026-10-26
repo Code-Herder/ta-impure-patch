@@ -281,6 +281,77 @@ static void properties(void)
     }
 }
 
+/* ---- the take-off rule, place_take_offs_one ---- */
+
+/* the order position of a 1 x 1 footprint at cell (cx, 5): (2cx + 1) << 19 */
+static int32_t at1(int cx) { return (int32_t)((uint32_t)(2 * cx + 1) << 19); }
+
+static void expect_take(const char* what, const PlaceOrder* q, unsigned nq, const PlaceSitePos* s,
+                        unsigned n, const int* want_by, int want_count)
+{
+    uint16_t by[8];
+    uint8_t took[8];
+    unsigned j;
+    int count = place_take_offs_one(q, nq, s, n, by, took);
+    s_checks++;
+    if (count != want_count) { fail(what, "%d sites took one, want %d%c%c", count, want_count, ' ', ' '); return; }
+    for (j = 0; j < nq; j++) {
+        const int got = by[j] == PLACE_NO_SITE ? -1 : by[j];
+        if (got != want_by[j]) { fail(what, "order %d taken by %d, want %d%c", (int)j, got, want_by[j], ' '); return; }
+    }
+    for (j = 0; j < n; j++) {
+        unsigned k;
+        int any = 0;
+        for (k = 0; k < nq; k++) any |= want_by[k] == (int)j;
+        if (took[j] != any) { fail(what, "site %d took %d, want %d%c", (int)j, took[j], any, ' '); return; }
+    }
+}
+
+static void take_tables(void)
+{
+    PlaceOrder q[3];
+    PlaceSitePos s[4];
+    unsigned i;
+    /* a queued 1 x 1 row at cells 10..12, neighbours 16 world units apart */
+    for (i = 0; i < 3; i++) { q[i].x = at1(10 + (int)i); q[i].z = at1(5); q[i].match = 1; }
+    {
+        /* dragged over from 9: each order goes to the site on it, and 9, beside the row, takes none */
+        static const int by[] = { 1, 2, 3 };
+        for (i = 0; i < 4; i++) { s[i].x = at1(9 + (int)i); s[i].z = at1(5); s[i].refused = 0; }
+        expect_take("take: drag 9..12 over a queued row", q, 3, s, 4, by, 3);
+    }
+    {
+        /* dragged from 12 back to 9: the same orders taken by the same cells */
+        static const int by[] = { 2, 1, 0 };
+        for (i = 0; i < 4; i++) { s[i].x = at1(12 - (int)i); s[i].z = at1(5); s[i].refused = 0; }
+        expect_take("take: drag 12..9 over a queued row", q, 3, s, 4, by, 3);
+    }
+    {
+        /* a refused site takes nothing, and the site beside it takes that order within reach */
+        static const int by[] = { 0, -1, -1 };
+        s[0].x = at1(9); s[1].x = at1(10);
+        s[0].z = s[1].z = at1(5);
+        s[0].refused = 0; s[1].refused = 1;
+        expect_take("take: a refused site", q, 3, s, 2, by, 1);
+    }
+    {
+        /* an order of another action is never taken, even at a site's own position */
+        static const int by[] = { -1, 0, -1 };
+        q[0].match = 0;
+        s[0].x = at1(10); s[0].z = at1(5); s[0].refused = 0;
+        expect_take("take: an order of another action", q, 3, s, 1, by, 1);
+        q[0].match = 1;
+    }
+    {
+        /* 0x43AFC0's reach is 16 world units, inclusive: 0x100000 in 16.16 reaches, one more does not */
+        static const int reach[] = { 0, -1, -1 }, beyond[] = { -1, -1, -1 };
+        s[0].x = q[0].x - 0x100000; s[0].z = q[0].z + 0x100000; s[0].refused = 0;
+        expect_take("take: at the reach", q, 1, s, 1, reach, 1);
+        s[0].x = q[0].x - 0x100001;
+        expect_take("take: past the reach", q, 1, s, 1, beyond, 0);
+    }
+}
+
 static int dump(void)
 {
     char line[256];
@@ -332,6 +403,7 @@ int main(int argc, char** argv)
     if (argc > 1 && !strcmp(argv[1], "dump")) return dump();
     tables();
     split_tables();
+    take_tables();
     properties();
     printf("placetest: %u checks, %u failed\n", s_checks, s_failed);
     return s_failed ? 1 : 0;

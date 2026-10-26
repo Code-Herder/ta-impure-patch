@@ -1,6 +1,7 @@
-/* tagpu_placegeo.c -- the shapes of a placement gesture and Build Split's shares
-   (tagpu_placegeo.h). Pure arithmetic: the callers bound every input (footprint 1..64,
-   spacing 0..PLACE_SPACING_MAX, cells within the map), and every product below fits int64. */
+/* tagpu_placegeo.c -- the shapes of a placement gesture, Build Split's shares and the take-off
+   rule (tagpu_placegeo.h). Pure arithmetic: the callers bound every input (footprint 1..64,
+   spacing 0..PLACE_SPACING_MAX, cells within the map, at most PLACE_MAX_SITES sites, so a site
+   index fits `by`'s uint16_t), and every product below fits int64. */
 #include "tagpu_placegeo.h"
 
 static int64_t iabs64(int64_t v) { return v < 0 ? -v : v; }
@@ -141,4 +142,33 @@ void place_split_order(const PlaceChunk* c, unsigned n, uint16_t* out)
         if (s >= c->first && s < (unsigned)c->first + c->count) continue;
         out[at++] = (uint16_t)s;
     }
+}
+
+int place_within(int32_t px, int32_t pz, int32_t nx, int32_t nz)
+{
+    return (uint32_t)px - (uint32_t)nx + 0x100000u <= 0x200000u &&
+           (uint32_t)pz - (uint32_t)nz + 0x100000u <= 0x200000u;
+}
+
+int place_take_offs_one(const PlaceOrder* q, unsigned nq, const PlaceSitePos* s, unsigned n,
+                        uint16_t* by, uint8_t* took)
+{
+    unsigned i, j, own;
+    int count = 0;
+    for (j = 0; j < nq; j++) by[j] = PLACE_NO_SITE;
+    for (i = 0; i < n; i++) took[i] = 0;
+    for (own = 2; own-- > 0;)
+        for (i = 0; i < n; i++) {
+            if (s[i].refused || (!own && took[i])) continue;
+            for (j = 0; j < nq; j++) {
+                if (!q[j].match || by[j] != PLACE_NO_SITE ||
+                    !(own ? q[j].x == s[i].x && q[j].z == s[i].z
+                          : place_within(s[i].x, s[i].z, q[j].x, q[j].z))) continue;
+                by[j] = (uint16_t)i;
+                took[i] = 1;
+                count++;
+                break;
+            }
+        }
+    return count;
 }
