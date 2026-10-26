@@ -8,16 +8,18 @@ can watch and try. The decisions below came out of a design interview with the o
 2026-10-25; each is recorded with its reason. The DLL carries the tree and the entries, runs the
 simplified simulation in C, equal to the mockup's tick for tick on every demo, lays the window out
 in C, equal to the mockup's boxes, lines and baselines, and builds the stage's picture as the
-replay HUD's ops, equal to the mockup's canvas call for op; nothing in the DLL calls any of it
-yet, so the game shows no wiki.
+replay HUD's ops, equal to the mockup's canvas call for op. On the Vulkan lane the game draws the
+wiki button and opens the window frame over the game, takes every input while it is open and
+pauses single player ([the plan](ingame-wiki-plan.html), landing 2); the window's body is empty:
+nothing in the DLL draws the page or the stage into it yet.
 
 | What | Where |
 |---|---|
 | The tree of categories and entries | `art/wiki/tree.json` |
 | One entry: its text, its mods, its demos | `art/wiki/entries/<id>.json` |
 | The mockup, which reads only those files | `tools/wiki/mockup/` (`index.html`, `wiki.js`, `wiki.css`, `sim.js`, `stage.js`) |
-| The window's art kit | `art/wiki/kit/` (`kit.json` and `parts/`), in `art/hud/kit.json`'s format |
-| The stage's cursor icons | `art/wiki/kit/parts/cursor_*.png`, written by `tools/wiki/cursors.sh` from `stage.js` `cursorShape` |
+| The window's art kit | `art/wiki/kit/` (`kit.json` and `parts/`), in `art/hud/kit.json`'s format, fitted by `tools/hudart/fit.py --set wiki` from the parts as cut in `art/wiki-full/kit/` |
+| The stage's cursor icons | `cursor_*.png` in the kit, written by `tools/wiki/cursors.sh` from `stage.js` `cursorShape` |
 | The window's layout numbers and its text roles | `art/wiki/layout.json`, which `wiki.js` sets as custom properties of the frame (`--w-` and the number's path) for `wiki.css`, and which the DLL reads |
 | The stage in the game's own graphics | `tools/wiki/gfx.py` writes the gitignored `tools/wiki/mockup/gfx/` from the local install; `gfx.js` draws it under `gfx=game` |
 | The demos' generators; the headless check of every demo | `tools/wiki/gen-quickbuild.mjs`, `tools/wiki/gen-buildshapes.mjs`; `tools/wiki/simcheck.mjs` |
@@ -28,6 +30,8 @@ yet, so the game shows no wiki.
 | The parity check, C against `sim.js` | `node tools/wiki/simparity.mjs [--wine]`, with `tagpu/ddraw/tests/wikitest.c`; `--hash` prints each demo's final state hash from `sim.js` |
 | The stage in the DLL | `tagpu/ddraw/src/tagpu_wikistage.c`: a view copied by value, built into HUD ops |
 | The stage's check, C against `stage.js` | `node tools/wiki/stagecheck.mjs`, with `tagpu/ddraw/tests/wikistagetest.c` |
+| The window and the button in the DLL | `tagpu_wiki.c` (input, pause; game thread), `tagpu_wikiframe.c` (the layout), `tagpu_wikistate.c` and `tagpu_vk_hud.c` (drawing; render thread) — [GPU status](gpu-status.html) §2.12c |
+| The game test of the window | `tools/wiki_regression.py <instance> sp --launch` (or `recorded`), `tools/wiki_regression.py <name> mp` |
 | Serving it | `python3 tools/hudart/serve.py`, then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
 
@@ -62,8 +66,8 @@ Two entries, both under Quality of Life → Building: **Quick Build: Resource Ex
   and a demo and Try it yourself cannot disagree. The one scripted extra is a caption, written at
   a given tick.
 - `art/wiki/` mirrors `art/hud/`, and the DLL embeds it the same way: `tools/hudpak.py --set wiki`
-  packs `tree.json` and `entries/*.json` into the resource `WIKIPAK`. The kit is not packed yet
-  (*Gaps*).
+  packs `tree.json`, `entries/*.json`, `kit/kit.json` and `kit/parts/*.png` into the resource
+  `WIKIPAK`.
 
 ### The window
 
@@ -122,9 +126,10 @@ nine-slice drawn by the replay HUD's rules; their specs are `tools/hudart/specs/
 and, for the rows, `parts_wiki_plate.py`. Every text role takes a style of `art/hud/layout.json`
 in the replay HUD's faces (`art/hud/fonts/`); `art/wiki/layout.json` `roles` names each role's
 style, and its other numbers place what the kit leaves room for (`geom`), the columns, rows,
-strips, controls and panels. The parts are filed as cut, about 10 px a unit; they
-are fitted to what the game draws, as `tools/hudart/fit.py` does for the HUD, when the DLL draws
-them.
+strips, controls and panels. The parts as cut, about 10 px a unit, are filed in
+`art/wiki-full/kit/`; `tools/hudart/fit.py --set wiki` fits them into `art/wiki/kit/` at what the
+game draws at most: 3 device pixels a unit for the window's parts (a 2160-row screen) and 4.5 for
+the button's (the top bar at 4K and a 150 % HUD), 0.59 MB of parts against 2.75 as cut.
 
 ### The stage
 
@@ -546,15 +551,15 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
 
 ## Gaps
 
-- **The top-right row is drawn by two renderers today**: the sprocket on every renderer, the
-  rewind button by the Vulkan HUD pass only. Where the wiki button is drawn on GDI is not decided.
-- **The DLL has the data, the simulation, the layout and the stage's ops, and nothing calls them.**
-  The drawing, the pausing and the input capture are specified here and in the mockup only;
-  `tagpu_wikidata_load_resource`, the simulation, `tagpu_wikilay_build` and `tagpu_wikistage_build`
-  link into the DLL unused. `tagpu_huddraw_build` takes the replay HUD's `HUDOPS`, so the stage's
-  own, larger op list needs it to take an op list before the stage can be drawn. The draw must
-  honour `HOPF_INK` (a text in its run's colour with no shadow or outline: dark ink on a light
-  face), which `tagpu_huddraw.c` does not yet test.
+- **No wiki on GDI** (the owner's decision, 2026-10-25): the button and the window are drawn by the
+  Vulkan HUD pass only, as the rewind button is, so on GDI the wiki cannot open.
+- **The window is empty.** The button, the window frame, the input capture and the pause are in
+  the DLL; the page, the stage and Try it yourself are the plan's landings 3 to 5.
+  `tagpu_wikilay_build`, the simulation and `tagpu_wikistage_build` link into the DLL unused.
+  `tagpu_huddraw_build` takes the replay HUD's `HUDOPS`, so the stage's own, larger op list needs
+  it to take an op list before the stage can be drawn. The draw must honour `HOPF_INK` (a text in
+  its run's colour with no shadow or outline: dark ink on a light face), which `tagpu_huddraw.c`
+  does not yet test.
 - **The stage's budget holds the data's map, not the largest.** Cells and fog are one op a cell,
   as the canvas calls them: 2587 ops at most over the demos (40 × 24 cells), against
   `WIKI_MAXOP` 16384. A square map past about 70 cells a side, fogged everywhere, drops ops and
@@ -573,12 +578,9 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
   resolution -- the mockup's lines are up to 0.2 % narrower than the game's, and a line that just
   fits in the mockup can wrap one word earlier in the game. `wikilaycheck.py` gives the C layout
   the browser's set size and compares the rules on it. The game sets every face at its own size.
-- **The kit is not in the DLL.** `art/wiki/kit/` (2.7 MB of parts) is not packed. The HUD's parts
-  are fitted to what the game draws (`tools/hudart/fit.py`), which rewrites each part and its
-  `kit.json` entry together, so the kit goes in with the landing that draws the window. The
-  stage's three cursor icons are written straight into `art/wiki/kit/` at 6 pixels a unit; a fit
-  that rewrites that directory from another source carries them only if they are written there
-  too (`tools/wiki/cursors.sh <kit dir>`).
+- **The stage's cursor icons must be in the kit as cut.** `fit.py --set wiki` rewrites
+  `art/wiki/kit/` from `art/wiki-full/kit/` and drops parts that are not there, so
+  `tools/wiki/cursors.sh` writes the icons into both.
 - **The resource rules are copies.** The C sim calls the game's shapes and take-off rule
   (`tagpu_placegeo.c`), but its resource rules and the rest of the gesture's port `sim.js`'s
   mirrors of `tagpu_resource.c` and `tagpu_place.c` rather than calling them. `simparity.mjs`

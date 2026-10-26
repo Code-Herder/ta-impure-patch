@@ -38,6 +38,7 @@
 #include "tagpu_surf.h"
 #include "tagpu_fps.h"
 #include "tagpu_hudstate.h"
+#include "tagpu_wikistate.h"
 #include "tagpu_log.h"
 
 static int   s_said;        /* the one-shot below has logged */
@@ -202,6 +203,11 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     /* The replay HUD's state for this frame, from the packet's record: tagpu_vk_hud.c draws it,
        between the world and the UI layer. Nothing without a recording playing. */
     tagpu_hudstate_present(f);
+
+    /* The in-game wiki's button and window for this frame, from the packet's record, after the
+       HUD's: the button takes the rewind button's slot when this frame's live HUD draws none.
+       tagpu_vk_hud.c draws it as a third layer, over everything but the cursor. */
+    tagpu_wikistate_present(f);
 
     /* The frame-rate readout, ABOVE the UI layer: it is a diagnostic drawn over
        the finished frame and must not be hidden by the side panel or a dialog.

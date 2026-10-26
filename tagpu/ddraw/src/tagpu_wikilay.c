@@ -966,7 +966,7 @@ WIKILAY* tagpu_wikilay_load(const char* layout, size_t nlayout, const char* kit,
     if (!l || !styles) { snprintf(err, errn, "wikilay: out of memory or no styles"); goto done; }
     if (!(doc = tagpu_json_parse(layout, nlayout, e2, sizeof e2))) { snprintf(err, errn, "wiki layout.json: %s", e2); goto done; }
     if (!read_layout(l, tagpu_json_root(doc), err, errn)) goto done;
-    if (!(l->kit = tagpu_hudlay_load_kit(kit, nkit, png_size, ctx, e2, sizeof e2))) { snprintf(err, errn, "wiki %s", e2); goto done; }
+    if (!(l->kit = tagpu_hudlay_load_kit(NULL, kit, nkit, png_size, ctx, e2, sizeof e2))) { snprintf(err, errn, "wiki %s", e2); goto done; }
     for (i = 0; i < P_N; i++)
         if ((l->part[i] = find_part(l->kit, PART[i])) < 0) { snprintf(err, errn, "wiki kit: no part '%s'", PART[i]); goto done; }
     l->icon_close = find_part(l->kit, "i_close");

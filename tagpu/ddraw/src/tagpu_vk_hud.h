@@ -13,7 +13,12 @@
    the whole UI again inside the Config panel's rect while the panel is open
    (tagpu_vk_gui_record_whole), and the UI's sharp layer -- the cursor -- inside the top layer's
    rect (tagpu_vk_gui_record_sharp), so the panel stays over the strip and the cursor stays the
-   topmost thing on the screen. Both layers' groups are drawn into the one groups' layer. */
+   topmost thing on the screen. Both layers' groups are drawn into the one groups' layer.
+
+   THE WIKI'S LAYER is a third (tagpu_vk_hud_record_wiki), after the top layer and the UI drawn
+   again inside it: the in-game wiki's button and window over everything, the cursor alone put
+   back over it (tagpu_vk_gui_record_cursor, tagpu_vk.c). `prepare` answers 1 when the HUD or the
+   wiki draws. */
 #include "tagpu_vk_pass.h"
 
 /* Build or refresh what this frame needs and fill slot `slot`'s instances for this frame's HUD
@@ -26,9 +31,14 @@ void tagpu_vk_hud_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                          uint32_t w, uint32_t h);
 
 /* Draw the top layer, inside the render pass, after the engine's UI: the same pipeline,
-   viewport, scissor and buffer as `record`. 1 when it drew. The frame's last HUD call. */
+   viewport, scissor and buffer as `record`. 1 when it drew. */
 int  tagpu_vk_hud_record_top(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                              uint32_t w, uint32_t h);
+
+/* Draw the wiki's layer, the same way, after the top layer and what is drawn again over it. 1 when
+   it drew. The frame's last call of this pass. */
+int  tagpu_vk_hud_record_wiki(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                              uint32_t w, uint32_t h);
 
 /* The device pixels the top layer drew this frame, on the attachment: 1 with the rect, 0 when it
    is empty. */

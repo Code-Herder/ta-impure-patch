@@ -52,6 +52,14 @@ int  tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 int  tagpu_vk_gui_record_sharp(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                                uint32_t w, uint32_t h, VkRect2D r);
 
+/* This frame's cursor -- the quad the sharp layer drew it with, as resolved for this frame, never
+   the pointer read live -- drawn again straight onto the attachment, over the in-game wiki's layer
+   (tagpu_vk_hud_record_wiki), which covers the composite's copy of it. CURS_FS against the seam's
+   render pass. Draws only when `record` drew this slot's composite this frame and its sharp layer
+   held a cursor; 1 when it drew. Inside the seam's render pass, after the wiki's layer. */
+int  tagpu_vk_gui_record_cursor(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                                uint32_t w, uint32_t h);
+
 /* The whole composite drawn again inside `r`, as `record_sharp` draws its sharp layer: what the
    engine drew there goes back over the HUD's top layer -- the Config panel, inside its rect, over
    the live HUD's strip. The same conditions and the same place in the pass. */

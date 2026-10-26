@@ -26,6 +26,7 @@
 #include "ddpalette.h"
 #include "palette.h"
 #include "tagpu_shield.h"
+#include "tagpu_wiki.h"
 #include "tagpu_recorder.h"
 #include "tagpu_window.h"
 
@@ -50,6 +51,24 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
 {
     if (!g_ddraw.ref || !g_ddraw.hwnd || !g_ddraw.width)
         return real_GetCursorPos(lpPoint);
+
+    /* THE IN-GAME WIKI'S CAPTURE (tagpu_wiki.c): while its window is open this answers the point
+       of the press that opened it, and stores nothing in g_ddraw.cursor. The engine's mouse thread
+       0x4C2990 calls this through 0x4C2610 about every 33 ms, beside the game thread's polls; the
+       capture word is read with an interlocked read, and the wiki's open and close are each one
+       interlocked store of it, so every poll is ordered wholly before or after them: the live
+       answer, or the frozen one, never a mixture. */
+    if (tagpu_wiki_holds_input())
+    {
+        LONG fx, fy;
+        tagpu_wiki_frozen(&fx, &fy);
+        if (lpPoint)
+        {
+            lpPoint->x = fx;
+            lpPoint->y = fy;
+        }
+        return TRUE;
+    }
 
     POINT pt;
 
@@ -1002,6 +1021,12 @@ SHORT WINAPI fake_GetKeyState(int nVirtKey)
 {
     SHORT injected;
 
+    /* the in-game wiki's capture: every key reads up while its window is open (tagpu_wiki.c) */
+    if (tagpu_wiki_holds_input())
+    {
+        return 0;
+    }
+
     /* the armed shield answers every poll from the injected state — this is what
        makes ctrl/shift combos land, and it holds whether or not we have focus */
     if (tagpu_shield_key_state(nVirtKey, FALSE, &injected))
@@ -1020,6 +1045,13 @@ SHORT WINAPI fake_GetKeyState(int nVirtKey)
 SHORT WINAPI fake_GetAsyncKeyState(int vKey)
 {
     SHORT injected;
+
+    /* the in-game wiki's capture, as fake_GetKeyState: the hotkey sampler 0x4C1B80 and the
+       keydown translator's Ctrl test 0x4C1D56 read every key up while its window is open */
+    if (tagpu_wiki_holds_input())
+    {
+        return 0;
+    }
 
     if (tagpu_shield_key_state(vKey, TRUE, &injected))
     {

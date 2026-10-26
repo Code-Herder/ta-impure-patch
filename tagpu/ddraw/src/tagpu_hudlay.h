@@ -260,11 +260,16 @@ typedef int (*HUDPNGSIZE)(void* ctx, const char* part, int* w, int* h);
 HUDLAY*           tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, size_t nkit,
                                     HUDPNGSIZE png_size, void* ctx, char* err, size_t errn);
 void              tagpu_hudlay_free(HUDLAY* l);
-/* A kit.json alone, for a layer whose layout is its own (tagpu_wikilay.c): the parts, which
-   tagpu_hudlay_expand, _nparts and _part read, and nothing else: tagpu_hudlay_build and
-   tagpu_hudlay_globals do not test for one and must never be given it. */
-HUDLAY*           tagpu_hudlay_load_kit(const char* kit, size_t nkit, HUDPNGSIZE png_size, void* ctx,
-                                        char* err, size_t errn);
+/* A kit with no layout -- the in-game wiki's (tagpu_hudart.c, tagpu_wikilay.c) -- parsed by the
+   same part reader: its parts, and, when `styles` is not NULL, the styles and the measure of that
+   loaded layout, whose faces draw its text and which must outlive this one. NULL with the reason
+   in `err`. Never built with: it has no layout to build, so tagpu_hudlay_build must never be given
+   it; tagpu_hudlay_expand, _nparts and _part read only the parts. */
+HUDLAY*           tagpu_hudlay_load_kit(const HUDLAY* styles, const char* kit, size_t nkit,
+                                        HUDPNGSIZE png_size, void* ctx, char* err, size_t errn);
+/* A part's index in the kit, a style's in `styles` (HUDGLOBALS.style), by name; -1 when absent. */
+int               tagpu_hudlay_part_index(const HUDLAY* l, const char* name);
+int               tagpu_hudlay_style_index(const HUDLAY* l, const char* name);
 /* How wide a string is set in style `style` (HUDGLOBALS.style) at `size` units, in units: the
    faces' measure (tagpu_hudtext_width), which the layout itself has no faces for. A box sized
    to its text -- the toast -- asks it; until it is given one, such a box keeps its least width.

@@ -7003,7 +7003,8 @@ outside mode 3), `0x460E00` (the in-game menu's open, outside mode 3), `0x49306D
 (the LOADGAME screens); clear it at `0x44B6F0` (in the battle room's code [INFERRED from its
 neighbours]), `0x460A33` (the in-game menu's close, outside mode 3), `0x49720A` (the loader's
 network branch) and `0x49990E` (key `0xE3` in state 7's handler `0x499880`); `0x495B6D` clears it
-for a step and `0x495DC2` puts back the bit `0x495B85` saved.
+for a step and `0x495DC2` puts back the bit `0x495B85` saved. Impure's in-game wiki writes bit 0 in a
+single-player level (*The in-game wiki's engine questions*, below).
 
 **The defect.** Leaving a level through the in-game menu (EXIT, MAINMENU, yes) opens the menu,
 which sets the bit, and never closes it, so the bit outlives the level. The loader `0x497180`
@@ -7044,6 +7045,64 @@ LoadGame ran (568 → 835), and so did the same save loaded from the in-game men
 skirmish (796 → 1053); campaign mission 1 (Arm) ran (35 → 294). The pause key inside a level
 still pauses (GameTime held at 293, bit 1) and resumes (328 → 431, bit 0). A network game was
 not run.
+
+### The in-game wiki's engine questions: the four input channels, the network bit `main+0x2A44` and the pause [DISASSEMBLED 2026-10-25]
+
+The in-game wiki (`tagpu_wiki.c`, [the plan](ingame-wiki-plan.html), landing 2) holds every input
+channel while its window is open and pauses single player. It reads two engine bits and writes one,
+all on the game thread through `tagpu_menu.c` (`tagpu_menu_single_player`,
+`tagpu_menu_pause_hold`); everything else it does is outside engine memory.
+
+**The four channels TA reads input through, and only these.** The import table names no
+DirectInput library (`objdump -p` of `pristine/TotalA.exe.pristine`).
+
+| Channel | Engine sites | What it drives |
+|---|---|---|
+| Messages to TA's window procedure | The only pushers of the key and mouse rings: `WM_KEYDOWN` → `0x4C1D50` at `0x4B5D8E`, `WM_SYSKEYDOWN` at `0x4B5DC3`, `WM_CHAR` → `0x4C1B20` at `0x4B5DEA`, the buttons → `0x4C2E30` at `0x4B5F51` (*Who pushes the two rings*). `WM_MOUSEMOVE` pushes nothing but writes the mouse object's `+0x196`/`+0x19A` (`0x51F4B6`/`0x51F4BA`) | orders, selection, hotkeys, chat |
+| `GetCursorPos`, IAT `0x4FC2E4` | `0x4C2610`, where the mouse thread `0x4C2990` stores `+0x196` every ~33 ms (*The engine's mouse thread*); `0x41CEE7` (the scroll poll's warp-back), `0x4C24DE`, `0x4C28AA`, and the wrapper `0x4C2310`, which no `call` names. Every `call [0x4FC2E4]` | the scroll poll's edge test (an exact equality on the outermost pixel, `0x4C2340` at `0x41CEC5`), the in-play handler `0x499200`'s region test and hover, the recorder's cursor sample `main+0x2CAA` |
+| `GetAsyncKeyState`, IAT `0x4FC350` | the hotkey sampler `0x4C1B80` (`0x4C1BA3..0x4C1C2F`, eight sites); the keydown translator's Ctrl test `0x4C1D56` | the arrow scroll (hotkeys `0xF4..0xF7` in `0x41CE90`); the Shift test `0x4992D8` |
+| `GetKeyState`, IAT `0x4FC2EC` | one site, `0x425F6E` (`VK_SHIFT`, front end), and the thunk `0x49F7D6` | the front end only |
+
+The three polls reach cnc-ddraw's `fake_GetCursorPos`, `fake_GetAsyncKeyState` and
+`fake_GetKeyState` (`winapi_hooks.c`), which answer the frozen point and 0 while the wiki holds
+input. The mouse thread's poll is the one caller on another thread; the capture word is read with
+an interlocked read there, so each poll falls wholly before or after the open's store.
+
+**Where the frozen pointer leaves the in-play handler.** The frozen point is the opening press, on
+the wiki button in the top bar. `0x499200` finds it on neither the minimap nor the viewport
+(`0x49922C..0x499252`), sets `cursornormal` (`0x49925D`) and jumps past the build cursor
+`0x4197D0` and the hover query `0x48CD80`: no placement ghost, no hover tooltip. The button spans
+bar rows 2..29, never the outermost row the scroll poll's edge test asks for. **Shift reads up**:
+after a Shift placement (`main+0x2CC6` bit 5) the test at `0x4992D8` runs for every mouse record
+after the region test and disarms the building, as letting go of Shift would.
+
+**The network bit, `main+0x2A44` bit 0.** The frame callback takes its network branch on it at
+`0x4967E7` (`test [eax+0x2a44],bl; je 0x496918`), which calls the scheduler (`0x4967F3`) and the
+step (`0x49680C`) and never reaches the pause test `0x496920`. Every store whose operand carries
+the displacement `0x2A44`: bit 0 set only in the front end (`0x426D34`, `0x42700C`, `0x4277DF`,
+`0x427B02`, `0x427C0F`, `0x428478`), cleared only in play or its teardown (`0x41EFEC`, `0x450E10`,
+`0x4523D2`, `0x496AB4`, `0x496B38`); the `or word, di` at `0x49982F` stores 4 (`edi = 4` at
+`0x499603`), bit 2. So a level single player at the wiki's open is single player at its close.
+A pause bit set locally in a network game would stall only this player [INFERRED: the scheduler
+tests it, `0x4953D9`, and the Pause key keeps the peers together only through its `0x19`
+broadcast], so the wiki writes the bit only with bit 0 of `0x2A44` clear.
+
+**The pause, `main+0x38A51` bit 0** (the section above has every store). The wiki's write is the
+Pause key's read-modify-write of bit 0 (`0x4960AA..0x4960BC`) without the `0x19` message: set at
+the open when clear, cleared at the close only when it set it, and at the level's end
+(`tagpu_reclaim`'s teardown wrap) forgotten without a write. Every in-play writer that could undo
+it is reached only through input the wiki holds (the Pause key, the in-game menu `0x460E00` /
+`0x460A33`, key `0xE3` at `0x49990E`, the options opener `0x45CFC0`'s five callers).
+
+**What the PAUSED icon does under the window.** `igpaused` is drawn at `0x46A107..0x46A13E` in the
+middle of the world while bit 0 is set (*The frame's HUD extras*); the wiki's window, drawn after
+the engine's frame and its UI, covers the middle of the screen, so the icon is drawn but not seen
+while the window is open. MEASURED 2026-10-25 on the Vulkan lane at 1920 × 1080 (Xvfb,
+`place-basic.json`, single player paused by the wiki): a window grab with the window open shows no
+`PAUSED` anywhere; the engine's top bar, side panel and bottom bar show round the window.
+
+**The key ring's indices** `0x51F48E` (enqueue) and `0x51F492` (dequeue) are what the game test
+reads to show no key reached the engine while the window was open (`tools/wiki_regression.py`).
 
 ### The download menus' records — `0x42DCF0` [DISASSEMBLED + MEASURED 2026-09-24]
 

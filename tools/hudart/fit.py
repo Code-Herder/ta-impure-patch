@@ -4,7 +4,15 @@ densest, a 3840x2160 screen at HUD 150 (4.5 device pixels a unit), and never up.
 unit (file.py), more than twice what any of them is drawn at; art/hud/ is what the game embeds (tools/hudpak.py) and
 the mockup draws, so it is rewritten whole, a part art/hud-full/ no longer has removed. art/hud/layout.json and
 art/hud/fonts/ are not fitted and live in art/hud/ only.
-usage: fit.py
+usage: fit.py [--set hud|wiki]
+
+THE WIKI'S KIT (--set wiki) is fitted the same way from art/wiki-full/kit/ into art/wiki/kit/, at densities stated
+rather than measured: the wiki has no laycheck yet, and what it draws is fixed by its unit. The window and everything
+in it are drawn at the wiki unit, the screen's height / 720 device pixels whatever the HUD scale
+(tagpu_wikiframe.c), so 3 at 3840x2160; the wiki button sits in the top bar at the bar's own pixels, 4.5 at
+3840x2160 and HUD 150 (WIKI_BAR below). A part's need there is its density over its `scale`, 1.5 times that for an
+`xtile` part (COPY_STRETCH); an icon is drawn as large as fits its box and then at 0.6 of that (wiki.js drawIcon,
+tagpu_wikiframe.c), so its need is the device pixels one of its texels covers in the box it is drawn in (WIKI_ICON).
 
 THE DENSITY A PART NEEDS IS MEASURED, not assumed: the mockup draws laycheck.py's cases and the housing without the
 proposed features (which only the mockup draws) from art/hud-full/ (its `parts=hud-full` switch), and every piece of every part is taken at its device pixels against
@@ -35,6 +43,13 @@ DENSEST = 4.5           # device px a unit: 2160 / 720 x 150 %, tagpu_hudstate.c
 FILL = 0.9              # the most device pixels a texel may cover there
 COPY_STRETCH = 1.5      # the most an xtile copy is drawn over its painted length
 EXTRA = [("4k-150-no-proposed", "res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&prop=0&paused", None, "")]
+WIKI_FULL = laycheck.ROOT / 'art' / 'wiki-full' / 'kit'
+WIKI_ART = laycheck.ROOT / 'art' / 'wiki' / 'kit'
+WIKI_UNIT = 3.0         # device px a wiki unit at 3840x2160: 2160 / 720
+WIKI_BAR = 4.5          # device px a top-bar pixel at 3840x2160 and HUD 150
+WIKI_ON_BAR = {'wikibtn', 'wikibtn_down', 'i_wiki'}
+# each icon's box, in the units of where it is drawn: the wiki button's 28 bar pixels, the close button's 14 units
+WIKI_ICON = {'i_wiki': (28, 28), 'i_close': (14, 14)}
 
 
 def bands(e, pw, ph):
@@ -151,7 +166,47 @@ def fit(im, e, f):
     return out, e
 
 
+def wiki_need(n, e, size):
+    """A wiki part's need: the most device pixels one of its texels covers, at the density it is drawn at."""
+    density = WIKI_BAR if n in WIKI_ON_BAR else WIKI_UNIT
+    if e['kind'] == 'icon':
+        if n not in WIKI_ICON: sys.exit(f'fit: the wiki icon {n} has no box in WIKI_ICON')
+        (bw, bh), (pw, ph) = WIKI_ICON[n], size
+        return min(bw / pw, bh / ph) * 0.6 * density
+    return density / e['scale'] * (COPY_STRETCH if e.get('xtile') else 1)
+
+
+def main_wiki():
+    K = json.load(open(WIKI_FULL / 'kit.json'))
+    kit = K['parts']
+    (WIKI_ART / 'parts').mkdir(parents=True, exist_ok=True)
+    for p in (WIKI_ART / 'parts').glob('*.png'):
+        if p.stem not in kit: p.unlink(); print(f'{p.stem:22s} removed: not in art/wiki-full/kit/')
+    before = after = 0
+    for n in sorted(kit):
+        src, dst = WIKI_FULL / 'parts' / f'{n}.png', WIKI_ART / 'parts' / f'{n}.png'
+        need = wiki_need(n, kit[n], Image.open(src).size)
+        before += src.stat().st_size
+        f = need / FILL
+        note = 'copied'
+        if f < 0.97:
+            im = Image.open(src).convert('RGBA')
+            out, kit[n] = fit(im, kit[n], f)
+            out.save(dst, optimize=True, compress_level=9)
+            note = f'{im.width}x{im.height} -> {out.width}x{out.height}'
+        else:
+            shutil.copyfile(src, dst)
+        after += dst.stat().st_size
+        print(f'{n:22s} {kit[n]["kind"]:5s} need {need:5.3f} {note}')
+    json.dump(K, open(WIKI_ART / 'kit.json', 'w'), indent=1)
+    print(f'{len(kit)} parts, {before / 1e6:.2f} MB -> {after / 1e6:.2f} MB')
+
+
 def main():
+    if sys.argv[1:] == ['--set', 'wiki']:
+        return main_wiki()
+    if sys.argv[1:] not in ([], ['--set', 'hud']):
+        sys.exit(__doc__)
     K = json.load(open(FULL / 'kit.json'))
     kit = K['parts']
     size = {n: Image.open(FULL / 'parts' / f'{n}.png').size for n in kit}

@@ -30,8 +30,13 @@
    it draws no chart lines (hide_chart), and the next sends it. Its first generation goes before
    the HUD draws at all, so every draw that binds it binds a written image.
 
+   THE IN-GAME WIKI IS A THIRD LAYER of the same pass (tagpu_vk_hud_record_wiki): its ops are
+   tagpu_wikiframe.c's, built by the same tagpu_huddraw into the same instance range after the HUD's
+   two layers, on the same glyph atlas, with its kit's parts uploaded after the HUD's and numbered
+   after them (a wiki batch's texture is its part's index plus s_nparts).
+
    IT KNOWS NOTHING ABOUT A WINDOW, and reads no engine state: everything arrives in its
-   arguments or in the loaded HUD (tagpu_hudart.h), which is immutable. */
+   arguments or in the loaded HUD and wiki (tagpu_hudart.h), which are immutable. */
 
 #include "tagpu_vk_pass.h"
 #include <windows.h>
@@ -44,12 +49,13 @@
 #include "tagpu_vk_stage.h"
 #include "tagpu_huddraw.h"
 #include "tagpu_hudstate.h"
+#include "tagpu_wikistate.h"
 #include "spirv/tagpu_huddraw.spv.h"
 
 #define HUD_MAXINST   8192
 #define HUD_MAXBATCH  1024
 #define IBYTES        ((VkDeviceSize)HUD_MAXINST * sizeof(HUDINST))
-#define MAXPART       128
+#define MAXPART       160           /* the HUD's kit, at most 128, then the wiki's */
 
 #define IFNS(X) \
     X(vkGetPhysicalDeviceMemoryProperties) X(vkGetPhysicalDeviceFormatProperties)
@@ -96,7 +102,8 @@ static TEX                   s_part[MAXPART], s_atlas, s_chart;
 static VkSampler             s_near;
 static unsigned              s_cgen;            /* the chart generation the device holds; 0 none */
 static int                   s_cclear;          /* the chart's image cleared since the build      */
-static int                   s_nparts;
+static int                   s_nparts;          /* the HUD's parts: s_part[0, s_nparts)       */
+static int                   s_nwparts;         /* the wiki's, after them; 0 when it failed    */
 static int                   s_nsent;           /* the parts uploaded and their chains blitted */
 static int                   s_sent;            /* all of them                                 */
 static unsigned              s_agen;            /* the atlas generation the device holds; 0 none */
@@ -111,6 +118,7 @@ static int                   s_saidDrop, s_saidMiss, s_saidChart, s_saidUnfit;
 static int                   s_nbase;           /* the base layer's batches: s_batch[0, s_nbase) */
 static int                   s_tb0, s_tb1;      /* the top layer's: s_batch[s_tb0, s_tb1); the
                                                    groups' batches lie outside both          */
+static int                   s_wb0, s_wb1;      /* the wiki layer's: s_batch[s_wb0, s_wb1)     */
 static VkRect2D              s_top;             /* the top layer's device pixels; empty none   */
 
 /* THE GROUPS' LAYER (tagpu_huddraw.c, THE GROUPS): an image a frame slot, cleared and drawn by
@@ -325,7 +333,7 @@ static void draw_batch(VkCommandBuffer cb, const HUDBATCH* b, uint32_t slot)
 {
     VkDescriptorSet set = b->tex == HUD_TEX_LAYER ? s_layer[slot].set
                         : b->tex == HUD_TEX_ATLAS ? s_atlas.set : b->tex == HUD_TEX_CHART ? s_chart.set
-                        : b->tex >= 0 && b->tex < s_nparts ? s_part[b->tex].set : s_atlas.set;
+                        : b->tex >= 0 && b->tex < s_nparts + s_nwparts ? s_part[b->tex].set : s_atlas.set;
     if (!b->count) return;
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_plo, 0, 1, &set, 0, NULL);
     vkCmdDraw(cb, 4, (uint32_t)b->count, 0, (uint32_t)b->first);
@@ -496,10 +504,11 @@ static int layer_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     VkDeviceSize off = (VkDeviceSize)slot * IBYTES;
     int i, j, k;
     if (!layer_size(d, L, s_layW > 0 ? s_layW : 1, s_layH > 0 ? s_layH : 1, (int)w, (int)h)) return 0;
-    /* the composites stand in the two layers' own batches */
-    for (i = 0; i < s_tb1; i++) {
+    /* the composites stand in the three layers' own batches, never in the groups' */
+    for (i = 0; i < s_nbatch; i++) {
         const HUDBATCH* b = &s_batch[i];
-        if (b->tex != HUD_TEX_LAYER || (i >= s_nbase && i < s_tb0)) continue;
+        if (b->tex != HUD_TEX_LAYER || !(i < s_nbase || (i >= s_tb0 && i < s_tb1) || (i >= s_wb0 && i < s_wb1)))
+            continue;
         for (j = b->first; j < b->first + b->count; j++) {
             in[j].uv[0] /= (float)L->w; in[j].uv[2] /= (float)L->w;
             in[j].uv[1] /= (float)L->h; in[j].uv[3] /= (float)L->h;
@@ -648,7 +657,7 @@ static int format_ok(const TAGPU_VKPASS* d, VkFormat f, VkFormatFeatureFlags nee
     return (fp.optimalTilingFeatures & need) == need;
 }
 
-static int build(const TAGPU_VKPASS* d, const HUDART* art)
+static int build(const TAGPU_VKPASS* d, const HUDART* art, const WIKIART* wart)
 {
     VkBufferCreateInfo bci = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
     VkMemoryAllocateInfo mai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
@@ -681,6 +690,13 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art)
     }
     s_nparts = tagpu_hudlay_nparts(art->lay);
     if (s_nparts > MAXPART) { plog(d, "hud: %d parts, more than the pass holds", s_nparts); return 0; }
+    /* the wiki's kit after the HUD's; one that does not fit leaves the wiki undrawn, not the HUD */
+    s_nwparts = wart ? tagpu_hudlay_nparts(wart->draw.lay) : 0;
+    if (s_nparts + s_nwparts > MAXPART) {
+        plog(d, "wiki: %d kit parts past the HUD's %d, more than the pass holds - the wiki is not drawn",
+             s_nwparts, s_nparts);
+        s_nwparts = 0;
+    }
 
     if (!build_pipeline(d)) return 0;
     if (!mk_sampler(d, &s_clamp, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, 1)
@@ -698,15 +714,17 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art)
 
     memset(&ps, 0, sizeof ps);
     ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps.descriptorCount = (uint32_t)s_nparts + 2 + TAGPU_VK_SLOTS;
-    dpi.maxSets = (uint32_t)s_nparts + 2 + TAGPU_VK_SLOTS;
+    ps.descriptorCount = (uint32_t)(s_nparts + s_nwparts) + 2 + TAGPU_VK_SLOTS;
+    dpi.maxSets = (uint32_t)(s_nparts + s_nwparts) + 2 + TAGPU_VK_SLOTS;
     dpi.poolSizeCount = 1;
     dpi.pPoolSizes = &ps;
     if (vkCreateDescriptorPool(d->dev, &dpi, NULL, &s_dpool) != VK_SUCCESS) return 0;
 
-    for (i = 0; i < s_nparts; i++) {
-        const HUDIMG* im = &art->img[i];
-        const HUDPART* k = tagpu_hudlay_part(art->lay, i);
+    for (i = 0; i < s_nparts + s_nwparts; i++) {
+        const HUDART* a = i < s_nparts ? art : &wart->draw;
+        int j = i < s_nparts ? i : i - s_nparts;
+        const HUDIMG* im = &a->img[j];
+        const HUDPART* k = tagpu_hudlay_part(a->lay, j);
         if (!mk_tex(d, &s_part[i], VK_FORMAT_R8G8B8A8_UNORM, im->w, im->h, levels_for(im->w, im->h),
                     k->kind == HK_TILE ? s_repeat : s_clamp)) {
             plog(d, "hud: the image of part %s was refused", k->name);
@@ -734,8 +752,8 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art)
     s_agen = 0;
     s_cgen = 0;
     s_cclear = 0;
-    plog(d, "hud: the pass is up - %d parts, a %dx%d glyph atlas, %u frame slots",
-         s_nparts, HUD_ATLAS, HUD_ATLAS, (unsigned)d->slots);
+    plog(d, "hud: the pass is up - %d parts and the wiki's %d, a %dx%d glyph atlas, %u frame slots",
+         s_nparts, s_nwparts, HUD_ATLAS, HUD_ATLAS, (unsigned)d->slots);
     return 1;
 }
 
@@ -748,10 +766,11 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art)
    buffer, banded when it does not -- the parts larger than the cap, uploaded once after the pass is
    built, which is the banded path's own event (tagpu_vk_stage.h). 1 all sent, 0 more next
    frame, -1 the device. */
-static int send_parts(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* st, const HUDART* art)
+static int send_parts(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* st, const HUDART* art,
+                      const WIKIART* wart)
 {
-    for (; s_nsent < s_nparts; s_nsent++) {
-        const HUDIMG* im = &art->img[s_nsent];
+    for (; s_nsent < s_nparts + s_nwparts; s_nsent++) {
+        const HUDIMG* im = s_nsent < s_nparts ? &art->img[s_nsent] : &wart->draw.img[s_nsent - s_nparts];
         int r;
         if (st->used && !tagpu_vk_stage_fits(st, (VkDeviceSize)im->w * im->h * 4)) return 0;
         r = tagpu_vk_stage_copy(d, cb, st, s_part[s_nsent].img, 0, im->rgba, im->w * 4, im->w, im->h, 4);
@@ -961,17 +980,23 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                          uint32_t w, uint32_t h)
 {
     const HUDART* art;
-    const HUDSTATE* st;
+    const WIKIART* wart;
+    const HUDSTATE* st = NULL;
+    const HUDOPS* wops = NULL;
     TAGPU_VKSTAGE* sg;
     char err[160];
-    float px;
-    int dropped = 0, unfit = 0, r, due, ox, oy;
+    float px = 0, wpx = 0;
+    int dropped = 0, unfit = 0, r, due, ox = 0, oy = 0, wox = 0, woy = 0, hud, wiki;
 
-    s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_ngroup = 0;
+    s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_wb0 = s_wb1 = s_ngroup = 0;
     memset(&s_top, 0, sizeof s_top);
     tagpu_hudstate_drawn(NULL);
-    if (s_state == ST_REFUSED || !tagpu_hudstate_frame(d->frame, &st, &px, &ox, &oy)) return 0;
-    if (slot >= d->slots || slot >= TAGPU_VK_SLOTS || w == 0 || h == 0 || !(px > 0)) return 0;
+    tagpu_wikistate_drawn(NULL);
+    if (s_state == ST_REFUSED) return 0;
+    hud = tagpu_hudstate_frame(d->frame, &st, &px, &ox, &oy) && px > 0;
+    wiki = tagpu_wikistate_frame(d->frame, &wops, &wpx, &wox, &woy) && wpx > 0;
+    if (!hud && !wiki) return 0;
+    if (slot >= d->slots || slot >= TAGPU_VK_SLOTS || w == 0 || h == 0) return 0;
 
     /* NOTHING IS BUILT UNTIL THE HUD HAS LOADED: tagpu_hudart decodes the parts on a thread of
        its own, and the HUD appears on the first frame after it has published them. Every way the
@@ -981,9 +1006,13 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         else tagpu_hudart_start();
         return 0;
     }
+    /* THE PASS IS BUILT ONCE THE WIKI'S LOAD HAS ENDED TOO, loaded or failed: it follows the HUD's
+       on the same thread, and its parts are textures of the same pass */
+    if (!tagpu_wikiart_done()) return 0;
+    wart = tagpu_wikiart_get();
 
     if (s_state == ST_UNBUILT) {
-        if (!build(d, art)) {
+        if (!build(d, art, wart)) {
             tagpu_vk_hud_down(d);
             s_state = ST_REFUSED;
             tagpu_hudstate_refuse("its pass could not be built");
@@ -992,39 +1021,65 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         s_state = ST_READY;
     }
 
-    if (!tagpu_hudlay_build(art->lay, st, &s_ops, err, sizeof err)) {
+    if (!s_nwparts) wiki = 0;
+    if (hud && !tagpu_hudlay_build(art->lay, st, &s_ops, err, sizeof err)) {
         if (!s_saidMiss) { s_saidMiss = 1; plog(d, "hud: %s", err); }
         tagpu_hudstate_refuse("its layout did not build");
         return 0;
     }
-    /* TWO LAYERS IN ONE RANGE: the base layer's instances and batches first, the top layer's
-       after them, each batch's `first` an index into the slot's whole range and each group's b0
-       an index into s_batch. One begin before both builds keeps them on one glyph atlas, and one
-       shelf carried through both packs both layers' groups on one layer image (tagpu_huddraw.h). */
+    if (!hud && !wiki) return 0;
+    /* THREE LAYERS IN ONE RANGE: the HUD's base layer's instances and batches first, its top
+       layer's after them, the wiki's last, each batch's `first` an index into the slot's whole
+       range and each group's b0 an index into s_batch. One begin before every build keeps them on
+       one glyph atlas, and one shelf carried through all of them packs every layer's groups on one
+       layer image (tagpu_huddraw.h). */
     {
         HUDINST* in = (HUDINST*)(s_imap + (size_t)slot * IBYTES);
         HUDSHELF sh;
-        int n0, nb0 = 0, nb1 = 0, m1 = 0, mi0 = 0, mi1 = 0, g0, d1 = 0, u1 = 0, i;
+        int n0 = 0, n1 = 0, nb0 = 0, nb1 = 0, m1 = 0, mi0 = 0, mi1 = 0, g0, d1 = 0, u1 = 0, i;
         memset(&sh, 0, sizeof sh);
         tagpu_huddraw_begin();
-        n0 = tagpu_huddraw_build(art, &s_ops, 0, px, ox, oy, (int)w, (int)h, in, HUD_MAXINST,
-                                 s_batch, HUD_MAXBATCH, &nb0, &s_nbase, &mi0, s_group, &s_ngroup,
-                                 &sh, &dropped, &unfit);
-        g0 = s_ngroup;
-        s_ninst = n0 + tagpu_huddraw_build(art, &s_ops, 1, px, ox, oy, (int)w, (int)h, in + n0,
-                                           HUD_MAXINST - n0, s_batch + nb0, HUD_MAXBATCH - nb0,
-                                           &nb1, &m1, &mi1, s_group, &s_ngroup, &sh, &d1, &u1);
-        dropped += d1;
-        unfit += u1;
+        if (hud) {
+            n0 = tagpu_huddraw_build(art, &s_ops, 0, px, ox, oy, (int)w, (int)h, in, HUD_MAXINST,
+                                     s_batch, HUD_MAXBATCH, &nb0, &s_nbase, &mi0, s_group, &s_ngroup,
+                                     &sh, &dropped, &unfit);
+            g0 = s_ngroup;
+            n1 = tagpu_huddraw_build(art, &s_ops, 1, px, ox, oy, (int)w, (int)h, in + n0,
+                                     HUD_MAXINST - n0, s_batch + nb0, HUD_MAXBATCH - nb0,
+                                     &nb1, &m1, &mi1, s_group, &s_ngroup, &sh, &d1, &u1);
+            dropped += d1;
+            unfit += u1;
+            for (i = nb0; i < nb0 + nb1; i++) s_batch[i].first += n0;
+            for (i = g0; i < s_ngroup; i++) s_group[i].b0 += nb0;
+            /* the top layer's own quads: its groups' are drawn into the layer image, not here */
+            top_rect(in + n0, mi1, w, h);
+        }
+        s_ninst = n0 + n1;
         s_nbatch = nb0 + nb1;
         s_tb0 = nb0;
         s_tb1 = nb0 + m1;
-        for (i = nb0; i < s_nbatch; i++) s_batch[i].first += n0;
-        for (i = g0; i < s_ngroup; i++) s_group[i].b0 += nb0;
+        s_wb0 = s_wb1 = s_nbatch;
+        /* THE WIKI'S LAYER, in its own unit and from its own kit: a batch's texture is its kit
+           index, which the pass holds after the HUD's parts */
+        if (wiki) {
+            int nw, nbw = 0, mw = 0, miw = 0, gw = s_ngroup, dw = 0, uw = 0;
+            nw = tagpu_huddraw_build(&wart->draw, wops, 0, wpx, wox, woy, (int)w, (int)h, in + s_ninst,
+                                     HUD_MAXINST - s_ninst, s_batch + s_nbatch, HUD_MAXBATCH - s_nbatch,
+                                     &nbw, &mw, &miw, s_group, &s_ngroup, &sh, &dw, &uw);
+            dropped += dw;
+            unfit += uw;
+            for (i = s_nbatch; i < s_nbatch + nbw; i++) {
+                s_batch[i].first += s_ninst;
+                if (s_batch[i].tex >= 0) s_batch[i].tex += s_nparts;
+            }
+            for (i = gw; i < s_ngroup; i++) s_group[i].b0 += s_nbatch;
+            s_wb0 = s_nbatch;
+            s_wb1 = s_nbatch + mw;
+            s_nbatch += nbw;
+            s_ninst += nw;
+        }
         s_layW = sh.w_used;
         s_layH = sh.h_used;
-        /* the top layer's own quads: its groups' are drawn into the layer image, not here */
-        top_rect(in + n0, mi1, w, h);
     }
     if (unfit && !s_saidUnfit) {
         s_saidUnfit = 1;
@@ -1055,7 +1110,7 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (sg->buf) tagpu_vk_stage_drop(d, sg);
     } else if (tagpu_vk_stage_begin(d, sg, TAGPU_VK_STAGE_CAP, (VkDeviceSize)4096 * 4)) {
         if (!s_sent) {
-            if ((r = send_parts(d, cb, sg, art)) < 0) goto lost;
+            if ((r = send_parts(d, cb, sg, art, wart)) < 0) goto lost;
             if (r > 0) {
                 s_sent = 1;
                 plog(d, "hud: the parts are on the device");
@@ -1086,7 +1141,10 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         return 0;
     }
     /* what this frame draws is what a click is tested against */
-    if (s_ninst > 0) tagpu_hudstate_drawn(&s_ops);
+    if (s_ninst > 0) {
+        if (hud) tagpu_hudstate_drawn(&s_ops);
+        if (wiki) tagpu_wikistate_drawn(wops);
+    }
     return s_ninst > 0;
 lost:
     /* THE DEVICE FAILED A SUBMIT OR A FENCE partway (tagpu_vk_stage.h): an image is half written
@@ -1139,9 +1197,16 @@ void tagpu_vk_hud_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 int tagpu_vk_hud_record_top(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                             uint32_t w, uint32_t h)
 {
+    (void)d;
+    return draw_batches(cb, slot, w, h, s_tb0, s_tb1);
+}
+
+int tagpu_vk_hud_record_wiki(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                             uint32_t w, uint32_t h)
+{
     int drew;
     (void)d;
-    drew = draw_batches(cb, slot, w, h, s_tb0, s_tb1);
+    drew = draw_batches(cb, slot, w, h, s_wb0, s_wb1);
     s_ninst = 0;
     return drew;
 }
@@ -1184,7 +1249,8 @@ void tagpu_vk_hud_down(const TAGPU_VKPASS* d)
     s_agen = 0;
     s_cgen = 0;
     s_cclear = 0;
-    s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_ngroup = 0;
+    s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_wb0 = s_wb1 = s_ngroup = 0;
+    s_nwparts = 0;
     memset(&s_top, 0, sizeof s_top);
     /* UNBUILT, not REFUSED: a teardown or a resize must let the pass come back */
     s_state = ST_UNBUILT;

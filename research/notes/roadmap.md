@@ -4032,3 +4032,19 @@ See [resource snapping](tadr-port/resource-snapping.html) for the contracts and 
 Still open: multiplayer feature-policy parity chat warnings, future mod activation/download,
 and the targeted test gaps named on that page. Other TADR construction conveniences remain in
 the [quality-of-life inventory](tadr-port/quality-of-life.html).
+
+## The in-game wiki (planned 2026-10-25)
+
+A window inside the game that explains Impure's own features with demos a player can watch and
+try. The specification is [the in-game wiki](ingame-wiki.html) and its browser mockup; how the DLL
+gets there, the engine facts it rests on and the owner's answers are
+[the plan](ingame-wiki-plan.html).
+
+| gate | state | scope |
+|---|---|---|
+| Landing 1: the core | built on the wiki branch, not landed | the tree, the entries and the kit packed into `WIKIPAK`; the simplified simulation in C, equal to the mockup's tick for tick on every demo (`simparity.mjs`, natively and under Wine) |
+| Landing 2: the button, the window, the capture and the pause | built and verified 2026-10-25 on its worktree branch, not landed | the wiki button in the top bar (3 bar pixels left of the rewind button, or in its slot), the window frame over the game (90 %, centred, an empty body), every input held while it is open, single player paused, Vulkan only; the kit fitted (`fit.py --set wiki`). `wiki_regression.py` sp at 1920 × 1080 (and its checks (a)–(f) at 3840 × 2160), recorded and mp on Wine; the replay gate's 34 test groups pass ([GPU status](gpu-status.html) §2.12c) |
+| Landing 3: the page | planned | the tree, the demo list, the entry column and its text, by the mockup's layout |
+| Landing 4: the stage | planned | the demos playing on the stage, the simulation stepped on the game thread |
+| Landing 5: Try it yourself | planned | the player's own input on the stage |
+| Landing 6: the stage in the game's graphics | scoped, not designed | the owner decides after the whitebox wiki ships |
