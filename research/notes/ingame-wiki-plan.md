@@ -773,6 +773,11 @@ Integrate them in order, and keep each track's pure file its own.
 
 ## Questions for the owner
 
+**Answered 2026-10-25:** the owner took the recommendation on questions 1, 2, 3 and 6: no wiki
+on GDI; the pause bit written from `tagpu_menu.c`'s grown argument; the take-off rule shared
+(landing 1b) and `tagpu_resource.c` not shared; the wiki available during a replay, pausing the
+playback. The other questions proceed on their recommendations until the owner says otherwise.
+
 Each comes with the recommended answer. Questions 2 and 3 are loosenings or changes to what was
 asked; the rest are design choices the specification leaves open. None is one of the escalation
 reasons: every verification above can run, and no fix depends on timing.
