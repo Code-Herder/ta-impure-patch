@@ -175,7 +175,7 @@ int main(int argc, char** argv)
     snprintf(path, sizeof path, "%s/kit/kit.json", argv[2]);
     if (!(kt = slurp(path, &nk))) { fprintf(stderr, "wikilaycheck: cannot read %s\n", path); return 2; }
     snprintf(path, sizeof path, "%s/kit", argv[2]);
-    if (!(l = tagpu_wikilay_load(lt, nl, kt, nk, png_size, path, s_g, err, sizeof err))) { fprintf(stderr, "wikilaycheck: %s\n", err); return 1; }
+    if (!(l = tagpu_wikilay_load(lt, nl, kt, nk, png_size, path, hud, err, sizeof err))) { fprintf(stderr, "wikilaycheck: %s\n", err); return 1; }
     kit = tagpu_wikilay_kit(l);
     printf("{\"lights\":{");
     for (i = 0; i < tagpu_hudlay_nparts(kit); i++) {

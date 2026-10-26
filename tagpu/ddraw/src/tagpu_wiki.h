@@ -43,11 +43,15 @@ void tagpu_wiki_frozen(LONG* x, LONG* y);
 
 /* The packet's fill, game thread: 1 with the record while the wiki can be drawn -- in a level, on
    the Vulkan lane, while the replay HUD's pass stands (tagpu_hudstate_on) -- else 0, and an open
-   window closes, so the wiki is never open where it cannot be seen or closed. */
-int  tagpu_wiki_fill(TAGPU_PK_WIKI* w);
+   window closes, so the wiki is never open where it cannot be seen or closed. `*len` is the
+   record's length to carry: TAGPU_PK_WIKI_HEAD, or the whole record with the stage. While the
+   window is open the fill steps the demo (at most 8 ticks) and copies its view into the record.
+   It also answers the triggers tagpu_wiki.dump and tagpu_wiki.check. */
+int  tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len);
 
-/* The command record's take: the hit map of the last frame the wiki was drawn on, copied, so a
-   press between two takes reads this thread's own copy. NULL is no controls. */
+/* The command record's take: the hit map, the scrolls and the scrollbars of the last frame the
+   wiki was drawn on, copied and bounded as data, so a press between two takes reads this thread's
+   own copy. NULL is no controls. */
 void tagpu_wiki_take(const TAGPU_CMD_WIKI* c);
 
 /* tagpu_reclaim's teardown wrap, on entry to 0x491B60: the window closes and the pause is

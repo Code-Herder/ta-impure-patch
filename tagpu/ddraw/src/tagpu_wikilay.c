@@ -464,6 +464,12 @@ static void panel_thumb(C* c, const PANEL* p)
     pos = p->scroll * (track - len) / (total - vis);
     pos = pos > 0 && pos < 1 ? 1 : floor(pos);
     solid(c, HOP_SOLID, rect(p->scr.x + p->scr.w - p->sb, floor(p->scr.y + 0.5) + pos, p->sb, len), THUMB_RGB, THUMB_A, NULL);
+    c->fr->track[p->which].x = (float)((p->scr.x + p->scr.w - p->sb) / c->px);
+    c->fr->track[p->which].y = (float)(floor(p->scr.y + 0.5) / c->px);
+    c->fr->track[p->which].w = (float)(p->sb / c->px);
+    c->fr->track[p->which].h = (float)(track / c->px);
+    c->fr->thumb_y[p->which] = (float)((floor(p->scr.y + 0.5) + pos) / c->px);
+    c->fr->thumb_h[p->which] = (float)(len / c->px);
 }
 
 /* ---- the rows: .row and #demos li, a flex row of a mark, its text and (a tree's entry) the lock - */
@@ -955,18 +961,19 @@ static int find_part(const HUDLAY* k, const char* name)
 }
 
 WIKILAY* tagpu_wikilay_load(const char* layout, size_t nlayout, const char* kit, size_t nkit,
-                            HUDPNGSIZE png_size, void* ctx, const HUDGLOBALS* styles, char* err, size_t errn)
+                            HUDPNGSIZE png_size, void* ctx, const HUDLAY* hud, char* err, size_t errn)
 {
     WIKILAY* l = (WIKILAY*)calloc(1, sizeof(WIKILAY));
     TJDOC* doc = NULL;
     const TJV* roles;
+    const HUDGLOBALS* styles = hud ? tagpu_hudlay_globals(hud) : NULL;
     char e2[200];
     int i, j, ok = 0;
     if (err && errn) err[0] = 0;
     if (!l || !styles) { snprintf(err, errn, "wikilay: out of memory or no styles"); goto done; }
     if (!(doc = tagpu_json_parse(layout, nlayout, e2, sizeof e2))) { snprintf(err, errn, "wiki layout.json: %s", e2); goto done; }
     if (!read_layout(l, tagpu_json_root(doc), err, errn)) goto done;
-    if (!(l->kit = tagpu_hudlay_load_kit(NULL, kit, nkit, png_size, ctx, e2, sizeof e2))) { snprintf(err, errn, "wiki %s", e2); goto done; }
+    if (!(l->kit = tagpu_hudlay_load_kit(hud, kit, nkit, png_size, ctx, e2, sizeof e2))) { snprintf(err, errn, "wiki %s", e2); goto done; }
     for (i = 0; i < P_N; i++)
         if ((l->part[i] = find_part(l->kit, PART[i])) < 0) { snprintf(err, errn, "wiki kit: no part '%s'", PART[i]); goto done; }
     l->icon_close = find_part(l->kit, "i_close");

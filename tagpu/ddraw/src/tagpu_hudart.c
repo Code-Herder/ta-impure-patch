@@ -7,6 +7,7 @@
 #include "lodepng.h"
 #include "tagpu_log.h"
 #include "tagpu_pak.h"
+#include "tagpu_wikilay.h"
 
 /* the declarations first: the implementation below is included once, and stb_truetype guards
    only its declarations against a second inclusion */
@@ -160,40 +161,51 @@ static int parts(HUDART* a, const PARTS* at, char* err, size_t errn, double* mpx
     return 1;
 }
 
-/* THE WIKI'S ART, after the HUD's on the same thread: its tree and entries (tagpu_wikidata.c) and
-   its window's kit, kit/kit.json and kit/parts/ of WIKIPAK (tools/hudart/fit.py --set wiki). The
-   kit's text is set in the HUD's faces and styles, so its HUDART shares the HUD's faces, which are
-   immutable once the HUD is published. A failure here is the wiki's alone: the HUD stands. */
+/* THE WIKI'S ART, after the HUD's on the same thread: its tree and entries (tagpu_wikidata.c), its
+   page's layout (layout.json, tagpu_wikilay.c) and its window's kit, kit/kit.json and kit/parts/ of
+   WIKIPAK (tools/hudart/fit.py --set wiki). The kit's text is set in the HUD's faces and styles,
+   so its HUDART shares the HUD's faces, which are immutable once the HUD is published. A failure
+   here is the wiki's alone: the HUD stands. */
 static void wiki_load(void)
 {
     char err[256];
-    size_t nk;
-    const char* kt;
+    size_t nk, nl;
+    const char *kt, *lt;
     const unsigned char* wpak;
     size_t nwpak;
     DWORD t0 = GetTickCount();
     double mpx = 0;
-    HUDLAY* lay = NULL;
+    WIKILAY* wl = NULL;
     PARTS at;
+    int i;
     err[0] = 0;
     if (!(s_wiki.data = tagpu_wikidata_load_resource(err, sizeof err))) {}
     else if (!(wpak = tagpu_pak_resource("WIKIPAK", &nwpak)))
         snprintf(err, sizeof err, "no WIKIPAK resource");
-    else if (!(kt = (const char*)tagpu_pak_file(wpak, nwpak, "kit/kit.json", &nk)))
-        snprintf(err, sizeof err, "the archive lacks kit/kit.json");
+    else if (!(kt = (const char*)tagpu_pak_file(wpak, nwpak, "kit/kit.json", &nk)) ||
+             !(lt = (const char*)tagpu_pak_file(wpak, nwpak, "layout.json", &nl)))
+        snprintf(err, sizeof err, "the archive lacks kit/kit.json or layout.json");
     else if (at.pak = wpak, at.npak = nwpak, at.dir = "kit/parts/",
-             !(lay = tagpu_hudlay_load_kit(s_art.lay, kt, nk, png_size, &at, err, sizeof err))) {}
-    else if ((s_wiki.draw.lay = lay), !parts(&s_wiki.draw, &at, err, sizeof err, &mpx)) {}
+             !(wl = tagpu_wikilay_load(lt, nl, kt, nk, png_size, &at, s_art.lay, err, sizeof err))) {}
+    else if ((s_wiki.draw.lay = tagpu_wikilay_kit(wl)), !parts(&s_wiki.draw, &at, err, sizeof err, &mpx)) {}
     if (err[0]) {
         tagpu_logf("wiki: NOT loaded - %s", err);
         InterlockedExchange(&s_wready, 2);
         return;
     }
+    /* THE FACE LIGHTNESS, once, from the parts as decoded (premultiplied), before the store that
+       publishes the layout: the ink of every text on a part follows it (wiki.js faceLight) */
+    for (i = 0; i < tagpu_hudlay_nparts(s_wiki.draw.lay); i++) {
+        const HUDPART* k = tagpu_hudlay_part(s_wiki.draw.lay, i);
+        tagpu_wikilay_light(wl, i, tagpu_wikilay_face_light(s_wiki.draw.img[i].rgba, s_wiki.draw.img[i].w,
+                                                            s_wiki.draw.img[i].h, k->kind == HK_NINE ? k->slice : NULL, 1));
+    }
+    s_wiki.lay = wl;
     s_wiki.draw.nface = s_art.nface;
     memcpy(s_wiki.draw.face, s_art.face, sizeof s_wiki.draw.face);
     memcpy(s_wiki.draw.style_face, s_art.style_face, sizeof s_wiki.draw.style_face);
     tagpu_logf("wiki: loaded %d entries and %d kit parts (%.2f Mpx) in %lu ms", s_wiki.data->nentry,
-               tagpu_hudlay_nparts(lay), mpx, (unsigned long)(GetTickCount() - t0));
+               tagpu_hudlay_nparts(s_wiki.draw.lay), mpx, (unsigned long)(GetTickCount() - t0));
     InterlockedExchange(&s_wready, 1);
 }
 

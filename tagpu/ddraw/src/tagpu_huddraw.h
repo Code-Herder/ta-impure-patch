@@ -64,6 +64,32 @@ int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, int layer, float p
                         int* nmain, int* nminst, HUDLAYREG* g, int* ng, HUDSHELF* shelf,
                         int* dropped, int* unfit);
 
+/* AN OP LIST BY POINTER AND COUNT: the arrays a build reads, which a HUDOPS holds at the replay
+   HUD's bounds (HUD_MAXOP) and another list of the same HUDOP/HUDRUN/text layout holds at its own
+   -- the in-game wiki's stage, WIKISTAGEOPS, at WIKI_MAXOP. Read only during the build. Every
+   index an op carries is checked against these counts: a text whose runs or bytes fall outside
+   them, a group past `ngrp` and a HOP_CHART with no `chart` draw nothing. */
+typedef struct {
+    const HUDOP*    op;
+    int             n;
+    const HUDRUN*   run;
+    int             nrun;
+    const char*     text;
+    int             ntext;
+    const float*    grp;        /* each group's opacity; NULL with ngrp 0: none              */
+    int             ngrp;
+    const HUDCHART* chart;      /* NULL: no chart                                            */
+} HUDOPLIST;
+
+/* `ops` as a list. */
+HUDOPLIST tagpu_huddraw_list(const HUDOPS* ops);
+
+/* tagpu_huddraw_build, of a list. */
+int tagpu_huddraw_build_list(const HUDART* art, const HUDOPLIST* ops, int layer, float px, int ox, int oy,
+                             int w, int h, HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb,
+                             int* nmain, int* nminst, HUDLAYREG* g, int* ng, HUDSHELF* shelf,
+                             int* dropped, int* unfit);
+
 /* THE GLYPH ATLAS: one R8 coverage image. `gen` changes when it is emptied because a glyph did
    not fit; the rows [*y0, *y1) are the ones changed since tagpu_huddraw_atlas_sent last covered
    them. An emptied atlas is all zeros and every glyph it then takes lies, with the empty texels

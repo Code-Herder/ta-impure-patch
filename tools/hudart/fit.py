@@ -7,12 +7,12 @@ art/hud/fonts/ are not fitted and live in art/hud/ only.
 usage: fit.py [--set hud|wiki]
 
 THE WIKI'S KIT (--set wiki) is fitted the same way from art/wiki-full/kit/ into art/wiki/kit/, at densities stated
-rather than measured: the wiki has no laycheck yet, and what it draws is fixed by its unit. The window and everything
-in it are drawn at the wiki unit, the screen's height / 720 device pixels whatever the HUD scale
-(tagpu_wikiframe.c), so 3 at 3840x2160; the wiki button sits in the top bar at the bar's own pixels, 4.5 at
-3840x2160 and HUD 150 (WIKI_BAR below). A part's need there is its density over its `scale`, 1.5 times that for an
-`xtile` part (COPY_STRETCH); an icon is drawn as large as fits its box and then at 0.6 of that (wiki.js drawIcon,
-tagpu_wikiframe.c), so its need is the device pixels one of its texels covers in the box it is drawn in (WIKI_ICON).
+rather than measured: what the wiki draws is fixed by its unit. The window and everything in it are drawn at the wiki
+unit, the screen's height / 720 device pixels whatever the HUD scale (tagpu_wikilay.c), so 3 at 3840x2160; the wiki
+button sits in the top bar at the bar's own pixels, 4.5 at 3840x2160 and HUD 150 (WIKI_BAR below). A part's need there
+is its density over its `scale`, 1.5 times that for an `xtile` part (COPY_STRETCH); an icon is drawn as large as fits
+its box and then at 0.6 of that (wiki.js drawIcon, tagpu_wikilay.c glyph), so its need is the device pixels one of its
+texels covers in the box it is drawn in (WIKI_ICON).
 
 THE DENSITY A PART NEEDS IS MEASURED, not assumed: the mockup draws laycheck.py's cases and the housing without the
 proposed features (which only the mockup draws) from art/hud-full/ (its `parts=hud-full` switch), and every piece of every part is taken at its device pixels against

@@ -82,23 +82,29 @@ typedef struct {
     void*    ctx;
 } WIKIFACES;
 
-/* What one build answers besides its ops: each panel's scroll as drawn and its limit, the
-   stage's rect inside its bezel (the stage draws there and a click on it is read there), and the
-   window. A closed window answers zeros. */
+/* What one build answers besides its ops: each panel's scroll as drawn and its limit, its
+   scrollbar as drawn (the track, h 0 when the panel shows none, and the thumb's top and length on
+   it, so a press is read against the thumb the player saw), the stage's rect inside its bezel (the
+   stage draws there and a click on it is read there), and the window. A closed window answers
+   zeros. */
 typedef struct {
     float   scroll[WIKI_NSCROLL];
     float   scroll_max[WIKI_NSCROLL];
+    HUDRECT track[WIKI_NSCROLL];
+    float   thumb_y[WIKI_NSCROLL], thumb_h[WIKI_NSCROLL];
     HUDRECT stage;
     HUDRECT window;
 } WIKIFRAME;
 
 typedef struct WIKILAY WIKILAY;
 
-/* layout.json and kit.json, parsed and resolved against the HUD's text styles: every number the
-   rules read, every part they draw, every role's style. NULL with the reason in `err`. `png_size`
-   is tagpu_hudlay_load's. */
+/* layout.json and kit.json, parsed and resolved against the replay HUD's layout `hud`, whose text
+   styles and measure the kit then carries (tagpu_hudlay_load_kit), so the draw sets the wiki's text
+   in the HUD's faces by the same rules: every number the rules read, every part they draw, every
+   role's style. NULL with the reason in `err`. `png_size` is tagpu_hudlay_load's. `hud` must
+   outlive the layout. */
 WIKILAY*      tagpu_wikilay_load(const char* layout, size_t nlayout, const char* kit, size_t nkit,
-                                 HUDPNGSIZE png_size, void* ctx, const HUDGLOBALS* styles,
+                                 HUDPNGSIZE png_size, void* ctx, const HUDLAY* hud,
                                  char* err, size_t errn);
 void          tagpu_wikilay_free(WIKILAY* l);
 /* The kit, for the draw: HOP_PART ops index its parts. */

@@ -1255,6 +1255,9 @@ static __inline const TAGPU_PK_HUDSTAT* tagpu_pk_hudstat(const TAGPU_PACKET* p)
 /* the in-game wiki's record, or NULL: see TAGPU_PK_WIKI */
 static __inline const TAGPU_PK_WIKI* tagpu_pk_wiki(const TAGPU_PACKET* p)
 { return p->wiki_len ? (const TAGPU_PK_WIKI*)(const void*)((const unsigned char*)p + p->wiki_off) : (const TAGPU_PK_WIKI*)0; }
+/* its stage, or NULL: carried only by a record of the whole length (TAGPU_PK_WIKI_HEAD) */
+static __inline const WIKISTAGEVIEW* tagpu_pk_wiki_stage(const TAGPU_PACKET* p)
+{ return p->wiki_len == sizeof(TAGPU_PK_WIKI) ? &tagpu_pk_wiki(p)->stage : (const WIKISTAGEVIEW*)0; }
 
 /* ---- lifetime ---- */
 /* DLL attach, before either thread exists — never lazily: reserves the slots
