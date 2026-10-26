@@ -170,8 +170,9 @@ static void say_open(int gx, int gy)
    key (0x4960BC), the in-game menu (0x460E00, 0x460A33) and its LOADGAME screens (0x49306D,
    0x493330), key 0xE3 (0x49990E), the options opener 0x45CFC0 (0x45D0A1), the chat command
    MakePoster (0x495B7E, put back at 0x495DD2 within the same call) -- or through a peer's message
-   0x19 (0x45597A), which a single-player level never receives; the rest run in the front end or
-   the level's load (exe-reverse-engineering.md, *A level starts paused*). Impure's other writers
+   0x19 (0x45597A), which a single-player level never receives; the rest run in the front end
+   (0x44B6F0, 0x44BE61: the unit-restrictions screen's save lists) or the level's load (0x49720A)
+   (exe-reverse-engineering.md, *A level starts paused*). Impure's other writers
    set the bit and never clear it (the rewind's and the launch hold's keeper on 0x496920), run at a
    level's first tick (fix_load_unpaused, before any window can open), or are input (the replay
    HUD's pause button). The replay trigger's `resume` clears a pause its own `pause at` took: a

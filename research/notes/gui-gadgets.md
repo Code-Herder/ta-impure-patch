@@ -754,9 +754,11 @@ an actionability check needs both tests. `SINGLE.GUI`'s `AnyMsn` is the `active=
   `GAMES`, the scrollbar `SLIDER`, the textfield `GAMENAME` and `LOAD` / `CANCEL` /
   `DELETE`. It is the only screen reachable without multiplayer that carries all three
   deferred surfaces at once, which makes it the test bed for them.
-  `SAVEGAME.GUI`, `SAVELIST.GUI`, `OPTION.GUI` and `CMENU.GUI` ship in `totala1.hpi` but
+  `SAVEGAME.GUI`, `OPTION.GUI` and `CMENU.GUI` ship in `totala1.hpi` but
   **no string in the exe names them** — they are dead files, and reading them as the live
-  save UI wastes a session. The same is true of `SELCAMP` / `SELCAMPX` / `NEWCAMP` /
+  save UI wastes a session. `SAVELIST.GUI` is named (`0x505F64`), but by the unit-restrictions
+  screen `RESTRICT2.GUI`'s `Save` button (`0x44B990`, from `0x44C5D9`), not by the save game
+  (exe map, *A level starts paused*) [DISASSEMBLED 2026-10-26]. The same is true of `SELCAMP` / `SELCAMPX` / `NEWCAMP` /
   `MISSION` / `MISSIONX` / `SIDESEL` / `SELSIDE` / `METAL` / `ENERGY` / `GAMMA`: the
   campaign screen this binary loads is `NEWGAME.GUI`, and the gamma slider lives in
   `VISUALS.GUI`. Check a `.GUI` name against the exe's string table before spending a

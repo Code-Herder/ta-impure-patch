@@ -47,7 +47,7 @@ and the core both call `place_take_offs_one` in `tagpu_placegeo.c`.
 | **Messages to TA's window procedure** | The only thing that pushes the key ring and the mouse ring: `WM_KEYDOWN` → `0x4C1D50` at `0x4B5D8E`, `WM_SYSKEYDOWN` at `0x4B5DC3`, `WM_CHAR` → `0x4C1B20` at `0x4B5DEA`, button messages → `0x4C2E30` at `0x4B5F51`. A move pushes no ring entry, but on `WM_MOUSEMOVE` the game thread writes the mouse object's position `+0x196`/`+0x19A` (`0x51F4B6`/`0x51F4BA`) | cited: *Who pushes the two rings* (DISASSEMBLED 2026-10-09) and *The engine's mouse thread* |
 | **`GetCursorPos`** (IAT `0x4FC2E4`) | `0x4C2610`: the mouse thread `0x4C2990` stores the result in `+0x196` about every 33 ms. Also `0x41CEE7` (the scroll poll's warp-back), `0x4C24DE` and `0x4C28AA`, plus the wrapper `0x4C2310`, which no `call` names | DISASSEMBLED 2026-10-25: every `call [0x4FC2E4]` |
 | **`GetAsyncKeyState`** (IAT `0x4FC350`) | The hotkey sampler `0x4C1B80` (`0x4C1BA3`..`0x4C1C2F`, eight sites) and the keydown translator's Ctrl test at `0x4C1D56` | DISASSEMBLED 2026-10-25 |
-| **`GetKeyState`** (IAT `0x4FC2EC`) | One site, `0x425F6E` (`VK_SHIFT`, in the front end), and the thunk `0x49F7D6` | DISASSEMBLED 2026-10-25 |
+| **`GetKeyState`** (IAT `0x4FC2EC`) | One site, `0x425F6E` (`VK_SHIFT`, in the front end), and the thunk `0x49F7D6`; the `GetCursorPos` thunk `0x49F7CA` (`jmp [0x4FC2E4]`) sits beside it, and no `call`, `jmp` or pointer names either | DISASSEMBLED 2026-10-25, the thunks 2026-10-26 |
 
 The import table names no DirectInput library (`objdump -p`). The three polls reach cnc-ddraw's
 `fake_GetCursorPos`, `fake_GetAsyncKeyState` and `fake_GetKeyState` (`winapi_hooks.c`). The armed
@@ -361,7 +361,9 @@ without coupling the two.
 **The boundaries come from the engine.** Landing 2 carries every engine-facing piece: the capture,
 the pause, the packet hook and the cursor's redraw. After it, the wiki grows in files that name no
 engine address. The packet record's contents live in `src/tagpu_wikipk.h`, which no test group
-names as a source and no `sim` file includes. Its area is appended **last** in the packet, after
+names as a source. Three `sim` files include it through `tagpu_packet.h` (`tagpu_patches.c`,
+`tagpu_weapons.c`, `tagpu_datakeys.c`) and none reads a type of it, so what the wiki draws and
+takes changes nothing they read. Its area is appended **last** in the packet, after
 the font area, so it cannot truncate or move any table before it. Changing the record therefore
 affects nothing earlier in the packet. Confirm with `tareplay.py landing --check` before each
 commit.

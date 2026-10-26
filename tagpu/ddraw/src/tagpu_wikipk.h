@@ -15,8 +15,9 @@
    can grow without moving or cutting any table before it. Every array below carries its bound
    here, and every count is checked against it where the record is read.
 
-   No test group names this file as a source and no simulation file includes it: what the wiki
-   draws and takes changes nothing the recorder carries. */
+   No test group names this file as a source. Three simulation files include it through
+   tagpu_packet.h (tagpu_patches.c, tagpu_weapons.c, tagpu_datakeys.c), and none reads a type of
+   it: what the wiki draws and takes changes nothing they read, and nothing the recorder carries. */
 #include <stdint.h>
 
 #define TAGPU_WIKI_KEY    24u       /* a control's key, NUL-terminated                       */
