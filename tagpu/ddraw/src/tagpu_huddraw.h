@@ -12,16 +12,16 @@
 typedef struct {
     float ndc[4];       /* x0, y0, x1, y1 in clip space (y down: no viewport flip)            */
     float px[4];        /* the same, in device pixels: the dot's circle, the shade's box; a
-                           line's two ends; a drop shadow's box; a chart band's segments j0, j1
-                           and its column                                                     */
+                           line's two ends; a drop shadow's box; a ring's circle, unsnapped; a
+                           chart band's segments j0, j1 and its column                        */
     float uv[4];        /* u0, v0, u1, v1; a drop shadow's offset down, in u0 and u1          */
     float rgba[4];      /* premultiplied; a part's opacity in all four                        */
     float clip[4];      /* x0, y0, x1, y1 in device pixels; x1 < x0: none                     */
-    float prm[4];       /* mode (HUDM_*), the shade's or the drop's sigma or a line's half
-                           width in pixels, dim brightness, saturate                          */
+    float prm[4];       /* mode (HUDM_*), the shade's or the drop's sigma, a line's half
+                           width or a ring's depth in pixels, dim brightness, saturate        */
 } HUDINST;
 
-enum { HUDM_PART, HUDM_SOLID, HUDM_SHADE, HUDM_DOT, HUDM_GLYPH, HUDM_LINE, HUDM_CHART, HUDM_DROP };
+enum { HUDM_PART, HUDM_SOLID, HUDM_SHADE, HUDM_DOT, HUDM_GLYPH, HUDM_LINE, HUDM_CHART, HUDM_DROP, HUDM_RING };
 
 /* A run of instances drawn with one texture bound: a part's index, HUD_TEX_ATLAS,
    HUD_TEX_CHART or HUD_TEX_LAYER. A fill samples nothing, so it joins whatever run it falls in
