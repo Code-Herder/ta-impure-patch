@@ -821,10 +821,14 @@ repack. `.ccx`/`.ufo` open with the same tools by extension-agnostic sniffing of
 Learned while writing `tools/hpipack.py` (a writer *and* reader for this container),
 by watching which archives `InitTAHPIAry` (`0x41D4C0`) accepts:
 
-- **The last 36 bytes of the file must be the literal
-  `Copyright 1997 Cavedog Entertainment`** (`1998` in the later packs; the year is
-  patched in from a 4-byte string at `0x50390C` before the compare). The open routine
-  (`0x4BDD70`) seeks to the end and `strcmp`s; anything else is not an archive, silently.
+- **The last 36 bytes of the file must read `Copyright <year> Cavedog Entertainment`, for
+  any four year bytes.** The retail archives carry `1997`, `1998`, `1999` (`corplas.ufo`) and
+  `2000` (`CorNecro.ufo`). The open routine (`0x4BDD70`) seeks to the end and reads the 36
+  bytes, finds `"0000"` (`0x50390C`) in its template `"Copyright 0000 Cavedog Entertainment"`
+  (`0x4FDBF0`) with `0x4E49B0`, copies those four bytes over the same place in what it read
+  (`0x4E4760`, `0x4BDE72..0x4BDE98`) and compares the two inline (`0x4BDEA0..0x4BDED4`):
+  so the year is never compared [DISASSEMBLED 2026-10-26]. Anything else is not an archive,
+  silently.
   It is read raw — outside the whole-file XOR. Every third-party HPI tool appends it;
   a hand-rolled writer that forgets it produces a file every *reader* accepts and the
   *engine* ignores.
