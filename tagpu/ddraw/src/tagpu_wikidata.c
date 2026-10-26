@@ -82,6 +82,25 @@ static int point(R* r, const TJV* v, WIKIPOINT* p, const char* what)
     return number(r, tj_at(v, 0), &p->x, what) && number(r, tj_at(v, 1), &p->z, what);
 }
 
+/* a scene unit's "facing": [x, z] as a unit vector, (0, 1) when absent or null; sim.js facing() */
+static int facing(R* r, const TJV* v, double* hx, double* hz)
+{
+    double x, z, d;
+    *hx = 0;
+    *hz = 1;
+    if (!v || tj_is(v, TJ_NULL)) return 1;
+    if (!tj_is(v, TJ_ARR) || v->n != 2 || !tj_is(tj_at(v, 0), TJ_NUM) || !tj_is(tj_at(v, 1), TJ_NUM))
+        return refuse(r, "a facing", "is not two numbers");
+    x = tj_at(v, 0)->num;
+    z = tj_at(v, 1)->num;
+    d = sqrt(x * x + z * z);
+    /* zero, or a square that underflows to 0 or overflows to infinity: no direction */
+    if (!(d > 0 && d < INFINITY)) return refuse(r, "a facing", "has no length");
+    *hx = x / d;
+    *hz = z / d;
+    return 1;
+}
+
 static int rect(R* r, const TJV* v, int* x, int* z, int* w, int* h)
 {
     return integer(r, tj_at(v, 0), -1000000, 1000000, x, "a rectangle")
@@ -177,6 +196,7 @@ static int scene_unit(R* r, const TJV* v, WIKISCENEUNIT* u)
     if (tj_get(v, "built") && !tj_is(tj_get(v, "built"), TJ_NULL) && !number(r, tj_get(v, "built"), &u->built, "built"))
         return 0;
     u->label = text_or_null(tj_get(v, "label"));
+    if (!facing(r, tj_get(v, "facing"), &u->hx, &u->hz)) return 0;
     u->nmove = count(orders);
     if (!(u->move = (WIKIPOINT*)zalloc(r, (size_t)u->nmove, sizeof *u->move))) return 0;
     for (o = tj_is(orders, TJ_ARR) ? orders->first : NULL; o; o = o->next)

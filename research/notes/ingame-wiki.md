@@ -378,7 +378,9 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
   `x` down steps again while the key is held, as an auto-repeat does.
 - **The scene**: the map's size in cells, its `surfaceMetal`, its metal as rectangles of a value,
   its vents, its fog rectangles (`grey` or `black`), the units (type, owner, position, finished or
-  not, and optionally move orders), and which are selected.
+  not, and optionally move orders and a `facing`), and which are selected. `"facing": [x, z]` is
+  any vector with a length, normalised on load; without it a unit faces `(0, 1)`, and a building
+  faces `(0, 1)` whatever it gives.
 
 ## The simulation's contract
 
@@ -390,16 +392,33 @@ hash on every tick, then replays `simcheck.mjs`'s rule cases (the rules no demo 
 C sim from a recording of their calls on `sim.js`, and compares every answer they read, the state
 hash after every view included. A rule case must finish with one sim before it makes the next: the
 recording replays one at a time. For each demo and case it names the first differing tick or call
-and field. MEASURED 2026-10-25: all 21 demos (9298 frames) and 9 rule cases equal, both natively
-(gcc, with AddressSanitizer and UndefinedBehaviorSanitizer) and with `--wine` (the DLL's compiler
-and flags, run under Wine).
+and field. Last, it loads data the loader must survive or refuse (`wikitest.c`'s `malformed`
+cases). MEASURED 2026-10-26: all 21 demos (9298 frames) and 13 rule cases equal, and all 13
+malformed-data cases as stated, both natively (gcc, with AddressSanitizer and
+UndefinedBehaviorSanitizer) and with `--wine` (the DLL's compiler and flags, run under Wine).
 
 - **Bit for bit, by construction.** Both visit units in creation order, use no clock and no
   randomness, and compute on doubles with + − × ÷ and sqrt only, each rounded once. The DLL
-  compiles `tagpu_wikisim.c` alone for SSE2 (`-msse2 -mfpmath=sse`, the stack realigned, as the
-  game's threads align it to 4 bytes), so the wiki's simulation needs an SSE2 processor: built for
-  x87, whose intermediates keep 80 bits, 1196 of the 9298 frames differ from `sim.js` in a last
-  bit (MEASURED 2026-10-25).
+  compiles `tagpu_wikisim.c`, and `tagpu_wikidata.c`, which normalises the scenes' facings, for
+  SSE2 (`-msse2 -mfpmath=sse`, the stack realigned, as the game's threads align it to 4 bytes), so
+  the wiki's simulation needs an SSE2 processor: built for x87, whose intermediates keep 80 bits,
+  1196 of the 9298 frames differ from `sim.js` in a last bit (MEASURED 2026-10-25), and 1804 of
+  3720 facings normalised as the loader does (MEASURED 2026-10-26; none built for SSE2).
+- **The heading is a vector, not an angle.** Each unit faces along a unit vector `(hx, hz)`, which
+  the view carries and the state hash takes after its position. An angle would need `atan2`,
+  which no standard rounds correctly, so its last bit differs between C libraries and JavaScript
+  engines; the vector needs only ÷ and sqrt. Nothing draws it yet: the stage's whitebox
+  (`stage.js`, `tagpu_wikistage.c`) ignores it, and `tagpu_wikistage_copy`'s by-value view does
+  not carry it until the 3D stage's units do. Units turn at once, with no turn rate (the owner's
+  answer of 2026-10-26, [the 3D stage's plan](ingame-wiki-3d-stage-plan.html) question 9):
+  - a walk step faces along the step, `dx / d`, `dz / d`, the numbers the step itself moves by;
+    the tick a unit arrives, with no step, keeps the last one's facing;
+  - a builder in range of what it builds or reclaims, its own order or a guarded unit's, faces
+    that building's centre every tick it works (unchanged if it stands on the centre);
+  - a building faces `(0, 1)`, toward the viewer, a scene's `facing` included: TA's default
+    heading `0x8000` is the centre of the spawn's `0x8000 − BuildAngle/2 + rand(BuildAngle)`
+    (`0x485A40`, cited in `tagpu_native.c` `ghost_one`), and the simulation has no randomness;
+  - a mobile scene unit takes its `facing`, normalised, or `(0, 1)`.
 - **Engine-free, and owned by its caller.** It reads no engine memory and names no engine address,
   so `thread-split.allow` has no line for it. Every piece of its state lives in the `WIKISIM` its
   caller owns and on the heap it owns, so a later landing runs it on whichever thread owns the
@@ -429,8 +448,10 @@ and flags, run under Wine).
   the DLL's JSON reader from `WIKIPAK`. Where `sim.js` would throw or read `undefined`, the loader
   refuses the file instead: a unit type the entry does not define, a key it does not name, a
   rectangle or a map size that is not an integer, a missing footprint, a BuildTime that is not
-  positive. Every other absent figure reads as 0, which every rule treats as it treats
-  `undefined`. It also refuses a map larger than 128 × 128 cells, which `sim.js` would play.
+  positive, a `facing` that is not two numbers or whose length is not a positive finite double
+  (zero, or a square that underflows or overflows: `sim.js`'s `facing()` throws on the same).
+  Every other absent figure reads as 0, which every rule treats as it treats `undefined`. It also
+  refuses a map larger than 128 × 128 cells, which `sim.js` would play.
 - **Where the C cannot throw.** A scene that selects a unit it does not have makes
   `tagpu_wikisim_init` refuse it, where `sim.js` throws; an allocation that fails leaves out what
   it would have added and sets `oom`. Cells beyond ±2²⁰ (positions far off any map) are held
@@ -520,7 +541,8 @@ three:
 
 **What it simplifies, on purpose and in both places:**
 
-- units walk in a straight line at their speed and stop within their build distance;
+- units walk in a straight line at their speed and stop within their build distance, and turn at
+  once, with no turn rate;
 - construction fills at the builders' total worker time over the building's build time, with no
   resource cost and no economy; a reclaim takes as long as building it would;
 - construction and reclaim run at the entry's `pace` (`"pace": {"build": N}`), N times faster
@@ -543,8 +565,8 @@ hundreds of small moves), and `node tools/wiki/simcheck.mjs` plays every demo he
 its claim on the simulation's state, plus the rules no demo shows; `simparity.mjs` then holds the
 DLL's simulation to `sim.js` on the same demos and rules.
 
-**What it draws** (its view): the cells, metal, vents and fog; the units with their selection and
-progress; the ghost and its colour; the queued sites; the order lines; the cursor and its shape;
+**What it draws** (its view): the cells, metal, vents and fog; the units with their selection,
+progress and facing (`hx`, `hz`, not drawn yet); the ghost and its colour; the queued sites; the order lines; the cursor and its shape;
 the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `state` `place`,
 `refused` or `remove`, and `order`, the site's place among the orders the release adds), its
 `shape`, and the armed building's `spacing`.

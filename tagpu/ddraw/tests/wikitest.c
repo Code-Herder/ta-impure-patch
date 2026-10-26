@@ -153,6 +153,8 @@ static void view(WIKISIM* s, int map)
         key("owner", 0); printf("%d", u->owner);
         key("x", 0); num(u->x);
         key("z", 0); num(u->z);
+        key("hx", 0); num(u->hx);
+        key("hz", 0); num(u->hz);
         key("fx", 0); printf("%d", u->fx);
         key("fz", 0); printf("%d", u->fz);
         key("selected", 0); fputs(u->selected ? "true" : "false", stdout);
@@ -463,6 +465,28 @@ static int entry_case(void)
     return said(ok, "entry-lists-as-objects", why);
 }
 
+/* a unit whose "facing" is the JSON `facing` (NULL: none): refused when `refused`, else loaded
+   as the unit vector (hx, hz), compared exactly */
+static int facing_case(const char* name, const char* facing, int refused, double hx, double hz)
+{
+    char text[512], err[256], why[512];
+    WIKIENTRY e;
+    int loaded, ok;
+    snprintf(text, sizeof text,
+             "{\"format\":1,\"id\":\"f\",\"units\":{\"ARMCK\":{\"footprint\":[2,2],\"buildTime\":10,"
+             "\"maxVelocity\":1}},\"scene\":{\"map\":{\"w\":8,\"h\":8},\"units\":[{\"type\":\"ARMCK\","
+             "\"at\":[40,40]%s%s}]}}", facing ? ",\"facing\":" : "", facing ? facing : "");
+    err[0] = 0;
+    loaded = tagpu_wikidata_entry(&e, text, strlen(text), err, sizeof err);
+    if (loaded && e.scene.nunit != 1) snprintf(err, sizeof err, "loaded %d units", e.scene.nunit);
+    ok = loaded && e.scene.nunit == 1;
+    snprintf(why, sizeof why, "%s: (%.17g, %.17g), expected %s(%.17g, %.17g)", ok ? "loaded" : err,
+             ok ? e.scene.unit[0].hx : 0.0, ok ? e.scene.unit[0].hz : 0.0, refused ? "a refusal, not " : "", hx, hz);
+    ok = refused ? !loaded : ok && e.scene.unit[0].hx == hx && e.scene.unit[0].hz == hz;
+    if (loaded) tagpu_wikidata_entry_free(&e);
+    return said(ok, name, why);
+}
+
 static int malformed(void)
 {
     int ok = 1;
@@ -474,6 +498,16 @@ static int malformed(void)
                     "{\"format\":1,\"tree\":[{\"entry\":{\"id\":\"x\"},\"children\":[{\"title\":\"a\","
                     "\"children\":[{\"title\":\"b\"}]}]}]}", 3);
     ok &= entry_case();
+    ok &= facing_case("facing-absent", NULL, 0, 0, 1);
+    ok &= facing_case("facing-null", "null", 0, 0, 1);
+    ok &= facing_case("facing-normalised", "[3,4]", 0, 3.0 / 5.0, 4.0 / 5.0);
+    ok &= facing_case("facing-zero", "[0,0]", 1, 0, 0);
+    ok &= facing_case("facing-one-number", "[1]", 1, 0, 0);
+    ok &= facing_case("facing-three-numbers", "[1,2,3]", 1, 0, 0);
+    ok &= facing_case("facing-not-a-number", "[1,\"a\"]", 1, 0, 0);
+    ok &= facing_case("facing-an-object", "{\"x\":1,\"z\":0}", 1, 0, 0);
+    ok &= facing_case("facing-square-underflows", "[1e-200,0]", 1, 0, 0);
+    ok &= facing_case("facing-square-overflows", "[1e200,0]", 1, 0, 0);
     (void)ok;
     return 0;
 }

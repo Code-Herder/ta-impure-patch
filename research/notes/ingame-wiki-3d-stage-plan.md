@@ -495,6 +495,23 @@ groups.
 
 ### Landing 6a — the heading, in both simulations
 
+**Status: built 2026-10-26, not landed.** As specified, with three points the plan did not settle,
+each in [the wiki's note](ingame-wiki.html) *The simulation's contract*:
+
+- **`tagpu_wikidata.c` now computes on SSE2 too** (the Makefile's rule for the simulation names
+  it, and `simparity.mjs --wine` builds it so): normalising a facing on x87 differs from `sim.js`
+  in a bit for 1804 of 3720 vectors (MEASURED 2026-10-26; none on SSE2), so the invariant below
+  needs it.
+- **A building faces (0, 1) even when its scene gives a `facing`**; only a mobile unit takes one.
+- **The loader refuses a facing whose length is not a positive finite double**, which takes in
+  zero and a square that underflows or overflows; `sim.js` throws on the same. `wikitest.c`'s
+  `malformed` cases hold ten readings of a facing.
+
+`WIKISTAGEVIEW` and `tagpu_wikistage_copy` do not carry the facing: the record's facings are 6g's,
+in `tagpu_wikipk.h`. Results: `simparity.mjs` native and `--wine`, all 21 demos and 13 rule cases
+equal and 13 malformed-data cases as stated; `simcheck.mjs` all pass, the four new cases included;
+`stagecheck.mjs` all equal; `make` clean with and without `LIMITS=stock`.
+
 **What changes**: nothing on screen yet; every view and the state hash carry each unit's facing.
 
 **Files:**

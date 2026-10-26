@@ -173,6 +173,51 @@ const RULES = {
     rmb(roomy, [440, 264]); const u2 = n(roomy) === 1024 && kinds(roomy.orders('ack').slice(-2)) === 'reclaim:mex build:ARMMOHO';
     return m1 && m2 && q1 && a1 && a2 && u1 && u2;
   },
+  /* the heading (research/notes/ingame-wiki.md, "The simulation's contract"): a unit vector, turned at once, computed
+     with + - * / and sqrt only. Each expectation is the rule's own arithmetic, so it is exact. */
+  'a step faces its direction'(entry) {
+    // every step of a move faces from where it starts to the target, and the tick it arrives on (no step) keeps the
+    // last step's facing
+    const s = WikiSim.create(entry, { scene: { selected: ['pw'] } }), pw = () => s.view().units.find(u => u.id === 'pw');
+    let p = pw(), ok = p.hx === 0 && p.hz === 1, steps = 0, arrived = 0;
+    s.input({ move: [496, 296] }); s.input({ down: 'rmb' }); s.input({ up: 'rmb' });
+    while (s.orders('pw').length && steps < 400) {
+      const dx = 496 - p.x, dz = 296 - p.z, d = Math.sqrt(dx * dx + dz * dz);
+      s.step(); steps++;
+      const q = pw();
+      if (d > 0) ok = ok && q.hx === dx / d && q.hz === dz / d;
+      else { arrived++; ok = ok && q.hx === p.hx && q.hz === p.hz; }
+      p = q;
+    }
+    return ok && steps > 100 && arrived === 1 && p.x === 496 && p.z === 296;
+  },
+  'a builder in range faces its target'(entry) {
+    // ARMCK stands 32 world units from the unfinished extractor's footprint, inside its BuildDistance of 40
+    const s = WikiSim.create(entry, { scene: { selected: ['b'], units: [{ id: 'half', type: 'ARMMEX', at: [120, 248], built: 0.5 },
+      { id: 'b', type: 'ARMCK', at: [170, 290] }] } });
+    const b = () => s.view().units.find(u => u.id === 'b'), dx = 120 - 170, dz = 248 - 290, d = Math.sqrt(dx * dx + dz * dz);
+    s.input({ move: [120, 248] }); s.input({ down: 'rmb' }); s.input({ up: 'rmb' });
+    const before = b();
+    s.step();
+    const after = b(), half = s.view().units.find(u => u.id === 'half');
+    return before.hx === 0 && before.hz === 1 && after.x === 170 && after.z === 290 && half.built > 0.5 &&
+      after.hx === dx / d && after.hz === dz / d;
+  },
+  'a building faces (0, 1)'(entry) {
+    // a scene's facing turns a mobile unit only
+    const s = WikiSim.create(entry, { scene: { selected: ['ck'], units: [{ id: 'turned', type: 'ARMMEX', at: [120, 248], facing: [1, 0] }] } });
+    s.input({ move: [376, 72] }); s.input({ down: 'rmb' }); s.input({ up: 'rmb' });
+    let raised = null;
+    for (let i = 0; i < 400 && !raised; i++) { s.step(); raised = fresh(s.view(), 'ARMMEX').find(u => u.id !== 'turned'); }
+    const turned = s.view().units.find(u => u.id === 'turned'), scene = s.view().units.filter(u => u.id === 'geo' || u.id === 'mex');
+    return !!raised && raised.hx === 0 && raised.hz === 1 && turned.hx === 0 && turned.hz === 1 &&
+      scene.length === 2 && scene.every(u => u.hx === 0 && u.hz === 1);
+  },
+  "a scene's facing is normalised"(entry) {
+    const s = WikiSim.create(entry, { scene: { units: [{ id: 'f', type: 'ARMPW', at: [200, 200], facing: [-2, 7] }] } });
+    const f = s.view().units.find(u => u.id === 'f'), d = Math.sqrt(53);
+    return f.hx === -2 / d && f.hz === 7 / d;
+  },
 };
 
 /* ---- buildshapes: the placement gesture (tagpu_place.c). Its checks read the queue of ARMCK ('ck') around each
