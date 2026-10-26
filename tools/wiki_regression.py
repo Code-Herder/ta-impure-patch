@@ -586,11 +586,11 @@ def demos(c, shots, res):
     # (d4) each entry with a demo paused mid-play, grabbed beside the mockup at the same state
     for node, entry, k, demo, at in ((2, "quickbuild", 0, "snap", 230), (3, "buildshapes", 1, "line", 250)):
         d = c.dump()
-        press(c, d, f"entry:{node}")
-        d = wait_dump(c, lambda d: d["entry"] == entry and d["drawn_open"], f"(d4) entry:{node} did not select {entry}")
-        if k:
-            d = wait_dump(c, lambda d: f"demo:{k}" in keys_of(d, "demo:"), f"(d4) {entry}'s demos were not drawn")
-            press(c, d, f"demo:{k}")
+        if d["entry"] != entry:
+            press(c, d, f"entry:{node}")
+        d = wait_dump(c, lambda d: d["entry"] == entry and f"demo:{k}" in keys_of(d, "demo:"),
+                      f"(d4) entry:{node} did not select {entry} and draw its demos")
+        press(c, d, f"demo:{k}")
         d = wait_dump(c, lambda d: d["demo"] == demo and d["tick"] >= at, f"(d4) {entry}/{demo} did not reach tick {at}", seconds=60)
         press(c, d, "play")
         d = wait_dump(c, lambda d: not d["playing"], f"(d4) play did not pause {entry}/{demo}")
