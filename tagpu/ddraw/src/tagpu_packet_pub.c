@@ -2867,9 +2867,21 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     if (e > need) need = e;
     /* ---- the in-game wiki's record, LAST: it can grow without moving or cutting a table
        before it (tagpu_wikipk.h) ---- */
-    if (tagpu_wiki_fill(&s_wiki, &wlen)) {
+    if (tagpu_wiki_fill(&s_wiki, &wlen, s_fillAgain)) {
         e = append_area(p, &cursor, &s_wiki, wlen, &p->wiki_off, &p->wiki_len, TAGPU_PK_TRUNC_WIKI);
         if (e > need) need = e;
+        /* THE STAGE IS CUT BEFORE THE PAGE: a whole record that does not fit is placed as its head,
+           so the window is still drawn and can be closed. The shortfall stays the whole record's,
+           so the growth aims at the stage; the head's own refusal adds nothing to it. A head that
+           does not fit either carries no record, and the wiki closes the window at the next
+           publish's fill (tagpu_wiki.h). */
+        if (!p->wiki_len && wlen > TAGPU_PK_WIKI_HEAD) {
+            const unsigned short_was = s_fillShort;
+            append_area(p, &cursor, &s_wiki, tagpu_wiki_head_only(&s_wiki), &p->wiki_off, &p->wiki_len,
+                        TAGPU_PK_TRUNC_WIKI);
+            s_fillShort = short_was;
+        }
+        tagpu_wiki_carried(&s_wiki, p->wiki_len);
     }
     p->used_bytes = cursor;
     /* the whole fill's size when a table did not fit (s_fillShort) */

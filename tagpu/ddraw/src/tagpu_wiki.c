@@ -296,6 +296,7 @@ static double   s_costMax;                      /* the most one fill cost this t
                                                    the open                                     */
 static unsigned s_costFrames;
 static uint32_t s_trunc;                        /* the copy's WIKISTAGE_TRUNC_* already said     */
+static int      s_saidHead;                     /* a stage the packet could not carry, said      */
 
 static const WIKIDATA* data(void)
 {
@@ -366,6 +367,7 @@ static void page_open(void)
     s_costMax = 0;
     s_costFrames = 0;
     s_drag = -1;
+    s_saidHead = 0;
     if (d && s_entry < 0)
         for (i = 0; i < d->nnode; i++)
             if (d->node[i].entry >= 0) { pick(d->node[i].entry, 0); return; }
@@ -824,10 +826,11 @@ static void jstr(FILE* f, const char* s, size_t n)
     fputc('"', f);
 }
 
-/* THE STATE, FOR THE TESTS (tools/wiki_regression.py): written when tagpu_wiki.dump appears, from
-   the fill, on this thread, as the replay HUD's tagpu_replayhud.dump is. The engine screen's size
+/* THE STATE, FOR THE TESTS (tools/wiki_regression.py): written when tagpu_wiki.dump appears, after
+   the fill's record is placed in the packet (`carried`: the bytes of it the packet holds), on this
+   thread, as the replay HUD's tagpu_replayhud.dump is. The engine screen's size
    and the viewport let a test turn an engine point into the client point a device click needs. */
-static void dump(const TAGPU_PK_WIKI* w)
+static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
 {
     FILE* f = fopen(DUMP_OUT ".tmp", "wb");
     const WIKIDATA* d = data();
@@ -839,8 +842,8 @@ static void dump(const TAGPU_PK_WIKI* w)
     fprintf(f, "{\"open\":%d,\"holds\":%ld,\"paused\":%d,\"pause_was\":%d,\"single_player\":%d,"
                "\"held\":", s_open, (long)tagpu_wiki_holds_input(), s_paused, s_pauseWas, tagpu_menu_single_player());
     jstr(f, s_held, sizeof s_held);
-    fprintf(f, ",\"frozen\":[%ld,%ld],\"ptr\":[%d,%d],\"owed_buttons\":%u,",
-            (long)fx, (long)fy, w->ptr_x, w->ptr_y, s_owedBtn);
+    fprintf(f, ",\"frozen\":[%ld,%ld],\"ptr\":[%d,%d],\"owed_buttons\":%u,\"carried\":%u,",
+            (long)fx, (long)fy, w->ptr_x, w->ptr_y, s_owedBtn, (unsigned)carried);
     fprintf(f, "\"owed_keys\":[");
     for (i = k = 0; i < 256; i++)
         if (s_owedKey[i]) fprintf(f, "%s%u", k++ ? "," : "", i);
@@ -886,15 +889,31 @@ static void dump(const TAGPU_PK_WIKI* w)
     tagpu_logf("wiki: state dumped to %s - open=%d paused=%d hits=%u", DUMP_OUT, s_open, s_paused, s_hit.n);
 }
 
-int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len)
+/* THE RECORD THE PACKET CARRIED, from the last fill tagpu_wiki_carried was told of: 0 when not even
+   the head fitted, so the frame drawn from it shows no wiki and posts an empty hit map */
+static int s_cut;
+static int s_ask;                       /* this fill answers the triggers                        */
+
+int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again)
 {
     static unsigned calls;
     LARGE_INTEGER t0, t1;
-    int cx, cy, ask = (calls++ % 30u) == 0u;
+    int cx, cy;
+    s_ask = (calls++ % 30u) == 0u;
     if (!s_qpf.QuadPart) QueryPerformanceFrequency(&s_qpf);
-    if (ask && GetFileAttributesA(CHECK_ASK) != INVALID_FILE_ATTRIBUTES) {
+    if (s_ask && GetFileAttributesA(CHECK_ASK) != INVALID_FILE_ATTRIBUTES) {
         DeleteFileA(CHECK_ASK);
         check();
+    }
+    /* A WINDOW THE LAST PUBLISHED PACKET COULD NOT CARRY CLOSES HERE, the first fill after it: that
+       frame drew no wiki and took no input to it, so the window held the input with nothing to see
+       or to close. A fill done again for the same publish (`again`, the slot grew under it) follows
+       one that was discarded, never published, so it does not count; the fill kept for a publish
+       is the last one told to tagpu_wiki_carried. */
+    if (!again) {
+        const int cut = s_cut;
+        s_cut = 0;
+        if (cut && s_open) wiki_close("its record did not fit the frame packet");
     }
     if (!tagpu_hudstate_on() || tagpu_wikistate_refused()) {
         /* THE WIKI IS OPEN ONLY WHERE IT CAN BE SEEN AND CLOSED: the lane fell back to GDI, the
@@ -929,11 +948,27 @@ int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len)
         }
     }
     *len = w->has_stage ? (uint32_t)sizeof *w : TAGPU_PK_WIKI_HEAD;
-    if (ask && GetFileAttributesA(DUMP_ASK) != INVALID_FILE_ATTRIBUTES) {
-        DeleteFileA(DUMP_ASK);
-        dump(w);
-    }
     return 1;
+}
+
+uint32_t tagpu_wiki_head_only(TAGPU_PK_WIKI* w)
+{
+    w->has_stage = 0;
+    if (!w->msg[0]) lstrcpynA(w->msg, "the demo did not fit", sizeof w->msg);
+    if (!s_saidHead) {
+        s_saidHead = 1;
+        tagpu_logf("wiki: the frame packet could not carry the demo's view - the page is drawn without it (said once an open)");
+    }
+    return TAGPU_PK_WIKI_HEAD;
+}
+
+void tagpu_wiki_carried(const TAGPU_PK_WIKI* w, uint32_t carried)
+{
+    s_cut = carried == 0;
+    if (s_ask && GetFileAttributesA(DUMP_ASK) != INVALID_FILE_ATTRIBUTES) {
+        DeleteFileA(DUMP_ASK);
+        dump(w, carried);
+    }
 }
 
 void tagpu_wiki_level_end(void)

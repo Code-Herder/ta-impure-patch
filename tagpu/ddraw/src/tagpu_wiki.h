@@ -70,9 +70,20 @@ void tagpu_wiki_init(void);
    has not refused (tagpu_wikistate_refused) -- else 0, and an open window closes, so the wiki is
    never open where it cannot be seen or closed. `*len` is the record's length to carry:
    TAGPU_PK_WIKI_HEAD, or the whole record with the stage. While the window is open the fill steps
-   the demo (at most 8 ticks) and copies its view into the record. It also answers the triggers
-   tagpu_wiki.dump and tagpu_wiki.check. */
-int  tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len);
+   the demo (at most 8 ticks) and copies its view into the record. It answers the trigger
+   tagpu_wiki.check. `again`: this fill redoes one made for the same publish, which the slot's
+   growth discarded. The first fill of a publish closes a window the last published packet carried
+   no record of (tagpu_wiki_carried), so the wiki is never open past one frame that cannot show it.
+   Every fill that returns 1 is followed by one tagpu_wiki_carried. */
+int  tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again);
+
+/* The whole record did not fit the packet: `w` made a head without the stage -- has_stage 0, and
+   a message on the stage instead -- and the head's length returned, for the caller to place. */
+uint32_t tagpu_wiki_head_only(TAGPU_PK_WIKI* w);
+
+/* After the fill's record is placed: `carried` the bytes of it the packet holds, 0 for none. It
+   answers the trigger tagpu_wiki.dump with the record as placed. */
+void tagpu_wiki_carried(const TAGPU_PK_WIKI* w, uint32_t carried);
 
 /* The command record's take: the hit map, the scrolls and the scrollbars of the last frame the
    wiki was drawn on, copied and bounded as data, so a press between two takes reads this thread's
