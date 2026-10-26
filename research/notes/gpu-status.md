@@ -1224,7 +1224,11 @@ eye ∈ [−W/2, extent − W/2]         the same at every zoom
 ```
 
 and a map edge can reach the middle of the screen, zoomed in or out. The engine's own `0x41C3C0`
-clamps to `[0, extent − W]`, the range that keeps the viewport's edges on the extent at 1×.
+clamps to `[0, extent − W]`, the range that keeps the viewport's edges on the extent at 1×. The
+centre range's far end takes the smaller of the extent and the tile map's own size (the PLOT grid
+× 16, the packet's `map_w16/h16`): the debug-level `Edge` command writes the extent as the map's
+pixel size less an argument it never clamps (`0x416730`), so a negative one names an extent past
+the tile map, past the far end the eye's readers were audited for.
 
 **The map is the scroll extent.** `extent` is `main+0x1422B`/`+0x1422F`: the map's pixel size
 `main+0x14223`/`+0x14227` less 32 px wide and 128 px tall, written at the level load
@@ -1233,8 +1237,8 @@ debug-level `Edge` command [DISASSEMBLED]. On Two Continents: PLOT 672 × 800 (s
 10752 × 12800, which `main+0x14223`/`+0x14227` also read), extent 10720 × 12672 [MEASURED].
 **Stock never shows a pixel past the extent** — its clamp holds the viewport inside it — so the
 strip between the extent and the tile map's own size is art no player saw, often left unpainted
-by the map's author, and ground the load-time mask makes unbuildable (§2.90, "Where the map
-ends"). The view centre therefore stops at the extent, and the terrain and feature passes fold the
+by the map's author; the load-time mask makes its right strip unbuildable, and its bottom strip
+wherever the ground's projected y lies past the extent (§2.90, "Where the map ends"). The view centre therefore stops at the extent, and the terrain and feature passes fold the
 mirrored edge at the same line (`tagpu_fx.h` `tagpu_edge_area`, §2.90). **The pointer's guards
 are on the extent too**, the bound they were built on: the 128-px bottom margin is
 `GetTPosition`'s search window (engine map, "Engine defects we patch"; "The pointer" below).
@@ -19215,9 +19219,11 @@ and 128 px tall, written by `0x4833B0` at the level load ([engine map](exe-rever
 "LoadMap's feature placement, and a saved game") and carried in the packet as `map_pxw/h` — in
 32-px tile cells, not at the tile map's own size (the PLOT grid × 16). Stock's camera clamp
 `0x41C3C0` holds the eye in `[0, extent − view]`, so stock never shows a pixel past the extent,
-and the strip between the two is art no player saw and ground nobody can build on: pass 1 of
-`0x4833B0` masks the last two 16-px columns of every row, and pass 3 the bottom rows whose
-projected y is past the extent's height. **The strip is often unpainted.** Painted Desert's last
+and the strip between the two is art no player saw. Not all of it is unbuildable: pass 1 of
+`0x4833B0` masks the last two 16-px columns of every row, but pass 3 walks up each column only
+while `row·16 − h/2` is past the extent's height (`0x48354D..0x483557`, `jle` out at the first row
+that is not) and masks the cell above the one it tested, so on raised ground at the bottom edge
+some of the bottom strip stays buildable (at `h ≥ 32` its top row, at `h = 64` two rows). **The strip is often unpainted.** Painted Desert's last
 tile column holds the editor's blank tile 0, flat palette blue (123, 151, 255), in rows 32..63; a
 survey of the 275 stock TNTs found flat blank tiles in that strip on 9 maps — Yerrot Mountains
 204 cells, Plains and Passes 118, Ring Atoll 96, Painted Desert 32, exp1cc02 14, Metal Maze 12,
@@ -19397,7 +19403,10 @@ TNT feature that one of those spawns destroys still is.
     line is a tree without a top. Every frame the copy would emit, its shadow (when shadows draw)
     and its body, is tested as `emit_frame` places it — each sub-frame at its own hotspot, `y0 =
     waz − hotY`, `y1 = y0 + h` — and the copy is dropped when `y1 > 0` above the map or `y0 <
-    s_areaH·16` below it, so nothing of a drawn copy crosses the line. **The owner's choice
+    s_areaH·16` below it. The frames are resolved once (`copy_frame`) and those are the frames
+    emitted; an animating feature's state is read once (`tagpu_gaf_state_seq`: its sequence and
+    frame index together) and the copy is judged on every frame of that sequence, so the decision
+    holds while it animates and nothing of a drawn copy crosses the line. **The owner's choice
     (2026-10-25)** among four drawings — copies clipped at the line, unclipped over the map, the
     crossing ones dropped, or turned upside down; the upside-down and the clipped upright ones
     were rejected.
@@ -19740,8 +19749,9 @@ launch a mode:
 - **Under the GDI renderer nothing is built**, since nothing would draw it.
 - **The mirror carries no fog of war, no light and no units** — by the owner's call, as in the lab.
 - **Units and 3D wrecks are not clipped or dropped at the area.** Only the terrain and the GAF
-  features end at the extent; the unit pass draws whatever stands in the hidden strip. Whether a
-  unit can enter that strip at all is unchecked.
+  features end at the extent; the unit pass draws whatever stands in the hidden strip. Units can
+  stand in part of it: the load mask leaves the bottom strip buildable on raised ground (above),
+  so a structure there is drawn over the mirror.
 - **A map whose 16-px dimensions are odd folds a tile short.** `tagpu_edge_area` rounds the
   extent down to a whole tile, so on such a map (no stock one: all 275 TNTs are even) the last
   16 px of the map that stock shows are drawn as mirror.
@@ -19750,6 +19760,19 @@ launch a mode:
   the hidden column's and rows' texels, which the mirror no longer draws beside them.
 - **The lab draws none of Assault on Suburbia's own trees**, at any eye tried, under either fold —
   a lab gap, not the game's, and open.
+- **The lab's black edge is not the game's.** The lab clamps the feature sweep to the area and
+  has no fragment-stage cut (its sprites carry no per-pixel world point), so under a black edge a
+  tree anchored in the hidden strip but drawn above the line is drawn in the game and not in the
+  lab, and an on-map tree's overhang past the line is cut in the game and not in the lab.
+- **Under a black edge the cut holds while the engine draws the ground.** The feature pass cuts
+  the map's own features at the area whenever the mirror is off, including frames whose terrain
+  the engine draws (the terrain pass handed back: its watchdog, `passive`). At zoom below 1 the
+  engine's pass then draws the hidden strip's ground and the trees standing on it are cut.
+- **A map whose area is under 8 rows tall** (`MF_LIFT_ROWS`; no stock map) misses the mirror
+  copies of a source two bands away; no index is affected.
+- **Under the debug `Edge` command** the extent can name less than the tile map or more; the
+  camera's far end takes the smaller of the extent and the tile map, and `tagpu_edge_area` answers
+  the whole tile map for an extent past it.
 
 **Risky spots for a review.** The LoadMap stub: its stolen bytes, the frame offsets it reads
 through `regs + 8`, and that every path joins there; `mapfeat_at_load`'s emulation of the spawn

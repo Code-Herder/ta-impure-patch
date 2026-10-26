@@ -182,8 +182,9 @@ five changes. C1–C4 are camera changes (G20a); C5 draws (G20b).
 * **The map is the scroll extent.** `extent` is `main+0x1422B`/`+0x1422F`, the map's pixel size
   less 32 px wide and 128 px tall, written by `0x4833B0` at the load, and read by the engine's
   clamp `0x41C3C0` and its inline target clamps. Stock never shows a pixel past it, and the strip
-  between it and the tile map (the PLOT grid `main+0x14233`/`+0x14237` × 16) is unbuildable and
-  on 9 stock maps holds the editor's blank tile, so the view centre stops at the extent's edge,
+  between it and the tile map (the PLOT grid `main+0x14233`/`+0x14237` × 16) is unbuildable on the
+  right, unbuildable at the bottom wherever its projected y lies past the extent, and on 9 stock
+  maps holds the editor's blank tile, so the view centre stops at the extent's edge,
   in the game and in the lab, and the mirror (C5) folds there (gpu-status §2.90, "Where the map
   ends"). MEASURED 2026-10-25 at 1024x768: the eye settles at `x = 8768` (at 1×) and `y = 8864`
   (at 0.5×) against Painted Desert's right and bottom edges (extent 9216 × 9216). The pointer's guards are on the extent

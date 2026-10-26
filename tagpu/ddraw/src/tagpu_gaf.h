@@ -452,6 +452,11 @@ int                  tagpu_gaf_seq_nframes(const char* seq);
    engine draws a frame" from "this cannot say". */
 int                  tagpu_gaf_seq_entry(const char* seq, int idx, const void** frame);
 const unsigned char* tagpu_gaf_state_frame(const char* animstate);
+/* An animation state's sequence and current frame index, the two read ONCE
+   (the sim tick advances the index): what tagpu_gaf_state_frame resolves, for
+   a caller that must name the frame it draws and the sequence it came from
+   together. NULL, and *frame 0, when the state is not readable. */
+const char*          tagpu_gaf_state_seq(const char* animstate, int* frame);
 
 /* THE HEADER FIELDS A CALLER NEEDS TO PLACE A SPRITE, read inside this module
    so that a pass which only places sprites dereferences no engine byte of its

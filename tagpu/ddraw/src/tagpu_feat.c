@@ -1041,6 +1041,30 @@ static int frame_crosses(const unsigned char* g, int waz, int top, int depth)
     }
 }
 
+/* The frame a copy draws -- frame 0 of `seq`, or, animating, the current frame
+   of the animation state `st` -- and in *crosses whether a copy in `band` at
+   tile-grid row `waz` would reach across the map's border with any frame it
+   can show: that one frame, or every frame of the animation's sequence. The
+   state's sequence and index are read once (tagpu_gaf_state_seq), so the
+   frame returned is one of the frames tested. The walk is bounded by the
+   sequence's own count, which tagpu_gaf_seq_frame refuses past 4096. */
+static const unsigned char* copy_frame(const char* st, const char* seq, int animating,
+                                       int band, int waz, int* crosses)
+{
+    const unsigned char* g;
+    int frame = 0, n, i;
+    *crosses = 0;
+    if (animating) seq = tagpu_gaf_state_seq(st, &frame);
+    g = tagpu_gaf_seq_frame(seq, frame);
+    if (!g || band == 0) return g;
+    if (!animating) { *crosses = frame_crosses(g, waz, band < 0, 0); return g; }
+    n = tagpu_gaf_seq_nframes(seq);
+    if (n > 4096) n = 0;
+    for (i = 0; i < n && !*crosses; i++)
+        *crosses = frame_crosses(tagpu_gaf_seq_frame(seq, i), waz, band < 0, 0);
+    return g;
+}
+
 /* one of the map's anchors, mirrored to sweep cell (row, col) in `band` of
    the picture (mirror_gather: 0 is the map's, below 0 above it, above 0 below
    it), and `copy` is its mode bits past the plain mode (TAGPU_FEAT_MIRROR and
@@ -1053,7 +1077,7 @@ static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
     const char* def;
     const char* shadSeq;
     const char* bodySeq;
-    const unsigned char* g;
+    const unsigned char *shG, *boG;
     unsigned mask;
     int fx, fz, hx, hz, wax, waz, sx, sy, flat, animating;
     float enc;
@@ -1096,43 +1120,35 @@ static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
     /* A COPY ABOVE OR BELOW THE MAP THAT WOULD REACH ACROSS ITS BORDER IS NOT
        DRAWN. The copies stand upright, so the one nearest the line would lay
        its crown over the map's last rows (below) or its foot over the first
-       (above), and a copy cut at the line is a tree without a top. Every frame
-       the copy would emit is tested, shadow and body, as emit_frame will place
-       it, so nothing of a copy that is drawn crosses the line. */
-    if (band != 0) {
-        const int top = band < 0;
-        if (shadSeq && shadowsOn && s_shadow &&
-            frame_crosses(animating ? tagpu_gaf_state_frame(def + FD_SHADANIM)
-                                    : tagpu_gaf_seq_frame(shadSeq, 0), waz, top, 0)) return;
-        if (bodySeq &&
-            frame_crosses(animating ? tagpu_gaf_state_frame(def + FD_BODYANIM)
-                                    : tagpu_gaf_seq_frame(bodySeq, 0), waz, top, 0)) return;
+       (above), and a copy cut at the line is a tree without a top. The frames
+       are resolved once (copy_frame) and those are the frames emitted, and an
+       animating feature is judged on every frame of its sequence, so the
+       decision does not change as it animates and nothing of a copy that is
+       drawn crosses the line. */
+    {
+        const int wantSh = shadSeq && shadowsOn && s_shadow;
+        int xs = 0, xb = 0;
+        shG = wantSh ? copy_frame(def + FD_SHADANIM, shadSeq, animating, band, waz, &xs) : NULL;
+        boG = bodySeq ? copy_frame(def + FD_BODYANIM, bodySeq, animating, band, waz, &xb) : NULL;
+        if (xs || xb) return;
     }
     {
         /* WHOLE OR NOT AT ALL, as for the map's own (the gather's loop) */
         const int nSh = s_nv[B_MSHADOW], nBo = s_nv[B_MBODY];
         const unsigned dN = s_atlas.deferN;
-        if (shadSeq && shadowsOn && s_shadow) {
-            g = animating ? tagpu_gaf_state_frame(def + FD_SHADANIM)
-                          : tagpu_gaf_seq_frame(shadSeq, 0);
-            if (g) {
-                s_bucketCur = B_MSHADOW;
-                s_encCur = enc - (flat ? 0.03f : 0.3f);
-                emit_frame(v, g, sx, sy, wax, waz,
-                           ((mask & 8) ? MODE_ALPHA : MODE_OPAQUE) | copy,
-                           1.0f, flipX, 0);
-            }
+        if (shG) {
+            s_bucketCur = B_MSHADOW;
+            s_encCur = enc - (flat ? 0.03f : 0.3f);
+            emit_frame(v, shG, sx, sy, wax, waz,
+                       ((mask & 8) ? MODE_ALPHA : MODE_OPAQUE) | copy,
+                       1.0f, flipX, 0);
         }
         /* the engine gates both body paths on the static sequence pointer */
-        if (bodySeq) {
-            g = animating ? tagpu_gaf_state_frame(def + FD_BODYANIM)
-                          : tagpu_gaf_seq_frame(bodySeq, 0);
-            if (g) {
-                s_bucketCur = B_MBODY; s_encCur = enc;
-                emit_frame(v, g, sx, sy, wax, waz,
-                           ((mask & 4) ? MODE_ALPHA : MODE_OPAQUE) | copy,
-                           1.0f, flipX, 0);
-            }
+        if (boG) {
+            s_bucketCur = B_MBODY; s_encCur = enc;
+            emit_frame(v, boG, sx, sy, wax, waz,
+                       ((mask & 4) ? MODE_ALPHA : MODE_OPAQUE) | copy,
+                       1.0f, flipX, 0);
         }
         if (s_atlas.deferN != dN) {
             s_nv[B_MSHADOW] = nSh; s_nv[B_MBODY] = nBo;
@@ -1161,8 +1177,8 @@ static int floor_div(int a, int b)
    odd), so each run is one pass over the row's bucket (ordered by `mf_keep`)
    and a cell with no anchor costs nothing -- at a 3840 x 2160 corner at 0.25x
    the sweep is 944 x 560 cells and a map row has a handful of anchors. Every
-   index is bounded: a row by the fold into [0, mapH), a bucket by `s_mfRow`,
-   and every column from the bucket is under mapW.
+   index is bounded: a source row by the table's own rows (`srcRows`), a
+   bucket by `s_mfRow`, and every column from the bucket is under the map's.
    EVERY RUN IS EMITTED IN ITS SOURCE ROW'S ORDER, a turned one right to left
    on the screen: the runs follow the rows down, and each run takes the
    bucket in the order the map's own anchors come (row-major, the engine's
@@ -1209,7 +1225,10 @@ static void mirror_gather(const TAGPU_FXVIEW* v, const char* fdefs, int nDefs,
            area is still the map's, and its copy's row lies up to that far
            inside the neighbouring band: each row is asked of its own band and
            of a neighbour it is that near. Every (row, band) pair names one
-           source row, so no copy is emitted twice. */
+           source row, so no copy is emitted twice. The neighbours are enough
+           for an area at least MF_LIFT_ROWS rows tall, every stock map's; a
+           shorter one misses the copies of a source two bands away, and
+           indexes nothing it should not. */
         const int b0 = floor_div(row, mapH);
         int bands[3], nb = 0, i;
         bands[nb++] = b0;

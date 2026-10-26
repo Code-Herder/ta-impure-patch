@@ -10251,7 +10251,8 @@ the eye, and they do not agree:
 The audit behind the camera's centre range (`gpu-status.md` §2.3c): every function in `.text`
 that loads `main+0x1431F`/`+0x14323`, asked whether an eye anywhere in `[−W/2, map − W/2]` — `map` the map's own size (the PLOT grid ×
 16), whose far edges lie 32 px right of and 128 px below the scroll extent's, a range that holds
-the centre range in force, `[−W/2, extent − W/2]`; W the true
+the centre range in force, `[−W/2, min(extent, map) − W/2]` (the debug `Edge` command can name an
+extent past the map, and the far end takes the map's then); W the true
 viewport, up to 1792x1016 — with, below 1x, `vpwide`'s rect widened to four times the
 true one about its centre, can make it index memory out of bounds. A value used only to project
 onto the screen and then clipped or tested against a rect is **projection only**. Grouped by
@@ -13926,7 +13927,9 @@ its `0xFFFE` compare (`0x483439`, `0x483455`, `0x4834CC`, `0x483572`, `0x4835E8`
 **The extent written here is where our edge passes end the map.** Pass 1 masks exactly the 32 px
 the extent's width leaves off (`edi = [main+0x14233] − 2`, `0x4833EC..0x4833F8`, then the cell
 and the one after it, `+0x08` and `+0x15` of a 13-byte cell), so the strip between the extent and
-the tile map is ground nobody can build on as well as ground no stock view shows. `tagpu_fx.h`
+the tile map's right strip is ground nobody can build on as well as ground no stock view shows;
+its bottom strip is masked only while pass 3's projected test holds, so on raised ground at the
+bottom edge some of it stays buildable. `tagpu_fx.h`
 `tagpu_edge_area` turns the extent (the packet's `map_pxw/h`, copied from these two words) into
 32-px tile cells, bounded to the tile map's own count, and the terrain pass, the feature pass and
 the lab fold the mirrored map edge there; the camera's centre range ends at the same words

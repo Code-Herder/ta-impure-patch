@@ -73,8 +73,10 @@ static __inline int tagpu_edge_reflect(int m, int n, int* flip)
    never shows a pixel past it: its camera clamp `0x41C3C0` holds the eye in
    `[0, extent - view]`. The strip between the extent and the tile map's own
    size is therefore art no player saw -- often the map editor's blank tile
-   (Painted Desert's blue column) -- and the load-time mask makes it unbuildable
-   as well (exe map, "A saved game's features"). So the mirror folds HERE, and
+   (Painted Desert's blue column) -- and the load-time mask makes its right
+   strip unbuildable, and its bottom strip wherever the ground's projected y
+   lies past the extent (exe map, "A saved game's features"). So the mirror
+   folds HERE, and
    that strip is drawn as the reflection of the map beside it.
    Every stock map's extent is a whole number of tiles (all 275 TNTs have even
    16-px dimensions); a custom map whose extent is not rounds down to the tile.
