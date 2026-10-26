@@ -17,14 +17,26 @@
    its WM_TAGPU_* cases and before the sprocket and the replay HUD. 1 = taken: nothing of it
    reaches the engine. While the window is open every key, character, raw-input, move, button and
    wheel message is taken; while it is closed, a left press on the wiki button of the last frame
-   drawn (the client point in lParam), and the release or the repeats of a press the wiki took. */
+   drawn (the client point in lParam), and the release or the repeats of a press the wiki took.
+   TAGPU_WIKI_FROZEN: not taken, but handed to the engine at the frozen point by the caller. */
 int  tagpu_wiki_message(UINT msg, WPARAM wp, LPARAM lp);
+
+/* The answer of tagpu_wiki_message and tagpu_wiki_mouse for the release of a button the engine
+   holds down, made while the window is open: the caller hands it to the engine at the frozen point
+   (tagpu_wiki_frozen), with no client point, as an injected release there is handed. */
+#define TAGPU_WIKI_FROZEN 2
+
+/* Every message handed to TA's window procedure, at both its doors (the tail of cnc-ddraw's
+   window procedure and the shield's to_game): the buttons and keys the engine holds down, which
+   the wiki never keeps a release of. */
+void tagpu_wiki_engine_got(UINT msg, WPARAM wp);
 
 /* THE INJECTED PATH: a TAGPU_M_* event from the shield's deliver_mouse, after the device point is
    converted and before the engine's point is stored in g_ddraw.cursor: (cx, cy) the client point,
    cx < 0 when the injection named none, and (gx, gy) the engine's point the event carries. 1 =
    taken: the caller stores no point, sets no virtual button and sends no message -- except that a
-   taken release still clears its virtual button. */
+   taken release still clears its virtual button. TAGPU_WIKI_FROZEN: deliver it at the frozen
+   point instead. */
 int  tagpu_wiki_mouse(int code, int cx, int cy, int gx, int gy);
 
 /* An injected key, from deliver_key before its virtual state is set: 1 = taken, as above (a taken

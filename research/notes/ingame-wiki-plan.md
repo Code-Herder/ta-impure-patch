@@ -198,7 +198,16 @@ open reaches the game and input given after it does not, so there is no window t
   which the engine's translator also reads (`0x4B5DC3`).
 
 **The paired press and the paired key.**
-- **A press the wiki takes has its release taken too**, whether the wiki is still open or not.
+- **The engine never misses the release of a press it saw.** What it saw is recorded where it is
+  handed a message: both doors into TA's window procedure (the tail of cnc-ddraw's and the shield's
+  `to_game`) call `tagpu_wiki_engine_got`, which keeps the left, right and middle buttons and the
+  keys the engine holds down. A release of one of those goes to the engine whatever the wiki's
+  state: a key's as it is, and a button's, while the window is open, at the frozen point, through
+  the injected path's own delivery (`TAGPU_WIKI_FROZEN`; cnc-ddraw's would store the release's live
+  point). So a button held across the open is let go where the engine last saw the pointer. The
+  auto-repeats of a key the engine holds are taken while the window is open, and owe nothing.
+- **A press the wiki takes has its release taken too**, whether the wiki is still open or not,
+  unless the engine holds that button or key from an earlier press.
 - **The wiki button and the X act on the press**, as the sprocket does.
 - **Esc closes on its release, and only the release of an Esc whose press the wiki took.** So the
   press, its auto-repeats and the `WM_CHAR` that `TranslateMessage` posts for it all arrive while

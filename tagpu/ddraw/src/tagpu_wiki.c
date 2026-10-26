@@ -36,14 +36,23 @@
    device before and every key up after. Input given before the open reached the game; input given
    after it does not; there is no moment that is both.
 
-   THE PAIRED PRESS AND THE PAIRED KEY. A press the wiki takes has its release taken too, whether
-   the wiki is still open or not (s_owedBtn, s_owedKey), so the engine is never handed a release
-   whose press it never saw, nor misses one for a press it did. The wiki button and the close
-   button act on the press, as the sprocket does. Esc closes on its RELEASE, and only the release
-   of an Esc whose press the wiki took: the press, its auto-repeats and the WM_CHAR TranslateMessage
-   posts for it all arrive while the window is still open, and none reaches the engine. A press
-   the wiki does not take of a button or key it is owed ends that debt, as tagpu_menu_click's does:
-   its release was lost (dragged off the window, focus taken), and the next one is the engine's.
+   THE PAIRED PRESS AND THE PAIRED KEY. The engine is never handed a release whose press it never
+   saw, nor misses one for a press it did. What it saw is a fact recorded where it is handed a
+   message: both doors into TA's window procedure, the tail of cnc-ddraw's and the shield's to_game,
+   call tagpu_wiki_engine_got, which keeps the left, right and middle buttons and the keys the
+   engine holds down (s_engBtn, s_engKey). A release of one of those goes to the engine whatever
+   the wiki's state: a key's as it is, and a button's, while the window is open, at the frozen point
+   (TAGPU_WIKI_FROZEN: the caller delivers it as an injected release at that point is delivered), so
+   a button held across the open is let go where the engine last saw the pointer. Every other release
+   of a press the wiki took is taken too, whether the window is still open or not (s_owedBtn,
+   s_owedKey). The wiki button and the close button act on the press, as the sprocket does. Esc
+   closes on its RELEASE, and only the release of an Esc whose press the wiki took: the press, its
+   auto-repeats and the WM_CHAR TranslateMessage posts for it all arrive while the window is still
+   open, and none reaches the engine; the auto-repeats of a key the engine holds are taken too, and
+   owe nothing. A press the wiki does not take of a button or key it is owed ends that debt, as
+   tagpu_menu_click's does: its release was lost (dragged off the window, focus taken), and the next
+   one is the engine's. The fourth and fifth buttons are not followed: TA's window procedure's jump
+   table stops at 0x206 (tagpu_zoom.h), so their messages carry nothing to it.
 
    THE PAUSE (below, above wiki_open) is held in single player and nowhere else.
 
@@ -120,6 +129,8 @@ int tagpu_wiki_cursor_store(int x, int y, int outside, LONG* ax, LONG* ay)
 
 static int  s_open;                     /* this thread's copy of s_hold                          */
 static unsigned s_owedBtn;              /* B_*: buttons whose press was taken                    */
+static unsigned s_engBtn;               /* B_L/B_R/B_M: buttons the engine was handed down, not up */
+static BYTE s_engKey[256];              /* keys the engine was handed down, not up               */
 static BYTE s_owedKey[256];             /* keys whose press was taken                            */
 static int  s_charOwed;                 /* the last key-down was taken: so is the character the
                                            window's TranslateMessage posts for it               */
@@ -270,21 +281,25 @@ static int relocks(void)
     return !s_open && !g_mouse_locked && !g_config.devmode;
 }
 
-/* A release of button `bit`, from either path: 1 = taken. */
+/* A release of button `bit`, from either path: 1 = taken, TAGPU_WIKI_FROZEN = the engine's, at
+   the frozen point. */
 static int release(unsigned bit)
 {
-    if (s_owedBtn & bit) {
-        s_owedBtn &= ~bit;
-        if (bit == B_L) s_btnDown = s_xDown = 0;
-        return 1;
-    }
-    return s_open;
+    int owed = (s_owedBtn & bit) != 0;
+    s_owedBtn &= ~bit;
+    if (owed && bit == B_L) s_btnDown = s_xDown = 0;
+    if (s_engBtn & bit) return s_open ? TAGPU_WIKI_FROZEN : 0;
+    return owed || s_open;
 }
 
 /* A key-down of `vk`; `repeat` when the key was already down (lParam bit 30): 1 = taken. */
 static int key_down(unsigned vk, int repeat)
 {
     vk &= 0xFF;
+    if (s_open && repeat && s_engKey[vk] && !s_owedKey[vk]) {
+        s_charOwed = 1;
+        return 1;
+    }
     if (s_open) {
         s_owedKey[vk] = 1;
         if (vk == VK_ESCAPE) s_escClose = 1;
@@ -302,16 +317,30 @@ static int key_down(unsigned vk, int repeat)
 
 static int key_up(unsigned vk)
 {
+    int owed;
     vk &= 0xFF;
-    if (s_owedKey[vk]) {
-        s_owedKey[vk] = 0;
-        if (vk == VK_ESCAPE && s_escClose) {
-            s_escClose = 0;
-            if (s_open) wiki_close("Esc");
-        }
-        return 1;
+    owed = s_owedKey[vk];
+    s_owedKey[vk] = 0;
+    if (owed && vk == VK_ESCAPE && s_escClose) {
+        s_escClose = 0;
+        if (s_open) wiki_close("Esc");
     }
-    return s_open;
+    if (s_engKey[vk]) return 0;
+    return owed || s_open;
+}
+
+void tagpu_wiki_engine_got(UINT msg, WPARAM wp)
+{
+    switch (msg) {
+    case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK: s_engBtn |= B_L; break;
+    case WM_RBUTTONDOWN: case WM_RBUTTONDBLCLK: s_engBtn |= B_R; break;
+    case WM_MBUTTONDOWN: case WM_MBUTTONDBLCLK: s_engBtn |= B_M; break;
+    case WM_LBUTTONUP: s_engBtn &= ~B_L; break;
+    case WM_RBUTTONUP: s_engBtn &= ~B_R; break;
+    case WM_MBUTTONUP: s_engBtn &= ~B_M; break;
+    case WM_KEYDOWN: case WM_SYSKEYDOWN: s_engKey[wp & 0xFF] = 1; break;
+    case WM_KEYUP: case WM_SYSKEYUP: s_engKey[wp & 0xFF] = 0; break;
+    }
 }
 
 static int character(void)
@@ -319,6 +348,12 @@ static int character(void)
     int owed = s_charOwed;
     s_charOwed = 0;
     return s_open || owed;
+}
+
+/* a real release's answer: a taken one goes on when it re-locks the mouse */
+static int paired_up(int took)
+{
+    return took == 1 && relocks() ? 0 : took;
 }
 
 int tagpu_wiki_message(UINT msg, WPARAM wp, LPARAM lp)
@@ -368,13 +403,13 @@ int tagpu_wiki_message(UINT msg, WPARAM wp, LPARAM lp)
        taken all the same, since the lock's store of the release's point would move g_ddraw.cursor
        off the frozen one; the next click after the close locks it, as any click does unlocked. */
     case WM_LBUTTONUP:
-        return release(B_L) && !relocks();
+        return paired_up(release(B_L));
     case WM_RBUTTONUP:
-        return release(B_R) && !relocks();
+        return paired_up(release(B_R));
     case WM_MBUTTONUP:
-        return release(B_M) && !relocks();
+        return paired_up(release(B_M));
     case WM_XBUTTONUP:
-        return release(B_X) && !relocks();
+        return paired_up(release(B_X));
     }
     return 0;
 }
