@@ -434,6 +434,16 @@ static void scroll_to(int i, float v)
     s_scroll[i] = v < 0 ? 0 : v > mx ? mx : v;
 }
 
+/* A STEP STARTS FROM THE SCROLL ASKED, not the scroll drawn: several wheel notches or track pages
+   between two hit maps each move it, where starting from the drawn one would count them as one.
+   The asked scroll is held to the drawn limit first, since that limit can have shrunk under it (a
+   shorter entry, a taller screen), so the step moves what the player sees from its first notch. */
+static void scroll_by(int i, float d)
+{
+    scroll_to(i, s_scroll[i]);
+    scroll_to(i, s_scroll[i] + d);
+}
+
 /* `notches` of the wheel over the panel under the pointer */
 static void wheel(double notches)
 {
@@ -445,7 +455,7 @@ static void wheel(double notches)
         if (cx < h->x0 || cx >= h->x1 || cy < h->y0 || cy >= h->y1) continue;
         for (k = 0; k < (int)TAGPU_WIKI_NSCROLL; k++)
             if (!strncmp(h->key, PANEL[k], TAGPU_WIKI_KEY)) {
-                scroll_to(k, s_hit.scroll[k] + (float)notches * WHEEL_UNITS);
+                scroll_by(k, (float)notches * WHEEL_UNITS);
                 return;
             }
     }
@@ -466,7 +476,7 @@ static int bar_press(int cx, int cy)
             s_dragFrom = s_hit.scroll[i];
         } else {
             const float page = TRACK_PAGE * (float)(b->y1 - b->y0) / (s_hit.u > 0 ? s_hit.u : 1);
-            scroll_to(i, s_hit.scroll[i] + (cy < b->thumb_y ? -page : page));
+            scroll_by(i, cy < b->thumb_y ? -page : page);
         }
         return 1;
     }
