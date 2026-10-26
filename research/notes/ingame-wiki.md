@@ -19,7 +19,7 @@ DLL calls either yet, so the game shows no wiki.
 | The demos' generators; the headless check of every demo | `tools/wiki/gen-quickbuild.mjs`, `tools/wiki/gen-buildshapes.mjs`; `tools/wiki/simcheck.mjs` |
 | The data in the DLL | `art/wiki/` packed by `tools/hudpak.py --set wiki` into the resource `WIKIPAK`; read by `tagpu/ddraw/src/tagpu_wikidata.c` (through `tagpu_pak.c`, the archive reader the HUD shares) |
 | The simulation in the DLL | `tagpu/ddraw/src/tagpu_wikisim.c` |
-| The parity check, C against `sim.js` | `node tools/wiki/simparity.mjs [--wine]`, with `tagpu/ddraw/tests/wikitest.c` |
+| The parity check, C against `sim.js` | `node tools/wiki/simparity.mjs [--wine]`, with `tagpu/ddraw/tests/wikitest.c`; `--hash` prints each demo's final state hash from `sim.js` |
 | Serving it | `python3 tools/hudart/serve.py`, then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
 
@@ -351,12 +351,14 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
 `sim.js` is the mockup's and `tagpu/ddraw/src/tagpu_wikisim.c` the DLL's: a port of `sim.js`
 function for function, under its names in C's spelling (`siteOk` is `site_ok`). They agree tick
 for tick on the same inputs, and `node tools/wiki/simparity.mjs` checks it: it plays every demo of
-every entry through both and compares every field of the view and every unit's orders on every
-tick, then replays `simcheck.mjs`'s rule cases (the rules no demo shows) through the C sim from a
-recording of their calls on `sim.js`, and compares every answer they read. For each demo and case
-it names the first differing tick or call and field. MEASURED 2026-10-25: all 21 demos (9298
-frames) and 8 rule cases equal, both natively (gcc, with AddressSanitizer and
-UndefinedBehaviorSanitizer) and with `--wine` (the DLL's compiler and flags, run under Wine).
+every entry through both and compares every field of the view, every unit's orders and the state
+hash on every tick, then replays `simcheck.mjs`'s rule cases (the rules no demo shows) through the
+C sim from a recording of their calls on `sim.js`, and compares every answer they read, the state
+hash after every view included. A rule case must finish with one sim before it makes the next: the
+recording replays one at a time. For each demo and case it names the first differing tick or call
+and field. MEASURED 2026-10-25: all 21 demos (9298 frames) and 9 rule cases equal, both natively
+(gcc, with AddressSanitizer and UndefinedBehaviorSanitizer) and with `--wine` (the DLL's compiler
+and flags, run under Wine).
 
 - **Bit for bit, by construction.** Both visit units in creation order, use no clock and no
   randomness, and compute on doubles with + − × ÷ and sqrt only, each rounded once. The DLL
@@ -367,18 +369,34 @@ UndefinedBehaviorSanitizer) and with `--wine` (the DLL's compiler and flags, run
 - **Engine-free, and owned by its caller.** It reads no engine memory and names no engine address,
   so `thread-split.allow` has no line for it. Every piece of its state lives in the `WIKISIM` its
   caller owns and on the heap it owns, so a later landing runs it on whichever thread owns the
-  window. The shapes are `tagpu_placegeo.c`'s own; where `sim.js` mirrors `tagpu_resource.c` or
+  window. The shapes and the take-off rule (`place_take_offs_one`) are `tagpu_placegeo.c`'s own,
+  called as the game calls them; where `sim.js` mirrors anything else of `tagpu_resource.c` or
   `tagpu_place.c`, the C ports `sim.js`'s version and names the function it mirrors above each.
+  The take-off rule compares 16.16 positions, as the game's order nodes hold them; the C converts
+  its doubles exactly, and clamps an order position to ±8192 world units, which changes no answer
+  because a site the rule compares is never refused and so lies inside the map (a
+  `_Static_assert` holds the bound).
+- **Bounded by construction.** Every append to a unit's orders goes through one function that
+  refuses past 1024 (`PLACE_LIST_CAP`, `tagpu_placegeo.h`, the game's own cap on a list): a
+  gesture's commit, a Shift move, a Shift Quick Build, a Shift assist, a scene's own orders. A
+  click's orders go in whole or not at all, so an upgrade's reclaim never goes in without its
+  build. The loader refuses a map wider or taller than 128 cells (`WIKI_MAP_MAX`), which bounds
+  every per-cell array and the map a packet will carry by value. `sim.js` caps the same appends
+  in the same way, and `simcheck.mjs` checks it as a rule case.
 - **Its calls** (`tagpu_wikisim.h`): `tagpu_wikisim_init` from an entry and a demo, scripted (the
   demo plays, `sim.js`'s `play`) or not (Try it yourself on the demo's scene, `create`);
   `tagpu_wikisim_input`; `tagpu_wikisim_step`, one tick; `tagpu_wikisim_view`, `sim.js`'s
-  `view()` field for field; `tagpu_wikisim_orders`.
+  `view()` field for field; `tagpu_wikisim_orders`; `tagpu_wikisim_hash`, a 64-bit FNV-1a over
+  what the view and the orders show, in the order and encoding the header states, so that the
+  in-game check can compare one number per demo with `simparity.mjs --hash`. It reads the
+  `WIKISIM` and changes nothing; the view's derived fields (queued sites, order lines, the cursor's
+  shape, order numbers, footprints, the pace) follow from the hashed ones and are left out.
 - **The data** (`tagpu_wikidata.h`): the tree in preorder and each entry as C structs, read with
   the DLL's JSON reader from `WIKIPAK`. Where `sim.js` would throw or read `undefined`, the loader
   refuses the file instead: a unit type the entry does not define, a key it does not name, a
   rectangle or a map size that is not an integer, a missing footprint, a BuildTime that is not
   positive. Every other absent figure reads as 0, which every rule treats as it treats
-  `undefined`.
+  `undefined`. It also refuses a map larger than 128 × 128 cells, which `sim.js` would play.
 - **Where the C cannot throw.** A scene that selects a unit it does not have makes
   `tagpu_wikisim_init` refuse it, where `sim.js` throws; an allocation that fails leaves out what
   it would have added and sets `oom`. Cells beyond ±2²⁰ (positions far off any map) are held
@@ -417,10 +435,11 @@ UndefinedBehaviorSanitizer) and with `--wine` (the DLL's compiler and flags, run
 **The placement gesture**, following `tagpu_place.c` function for function (`evaluate`,
 `toggles`, `take_offs`, `classify`, `ring_target`, `remove_taken` and `append_sites` as `commit`,
 `place_button` as the press and the release; `take_offs` and `remove_taken`, which replaces
-`remove_toggled`, as they stand on the branch `worktree-agent-ac37d55e26a5e56f3` until that branch
-lands), with `tagpu_placegeo.c`'s `place_shape` and
-`place_ring` ported line for line, integer arithmetic included (checked against the compiled C on
-20,000 random cases, 2026-10-25: identical):
+`remove_toggled`, as they stand on the wiki branch, which carries the take-off fix
+`34b1b586` that `main` does not have yet). In `sim.js`, `tagpu_placegeo.c`'s `place_shape` and
+`place_ring` are ported line for line, integer arithmetic included (checked against the compiled C
+on 20,000 random cases, 2026-10-25: identical), and so is its take-off rule; the C sim calls all
+three:
 
 - **The cursor site** is the build cursor's (`0x4197D0`): a footprint of f cells centred on world x
   starts at cell floor((x − 8f + 8) / 16), half up, after manual snapping for a resource building.
@@ -435,8 +454,8 @@ lands), with `tagpu_placegeo.c`'s `place_shape` and
 - **A ring target** is the unit under the cursor, any unit, else a selected builder's build order
   whose footprint holds the cursor's cell, first in selection order then queue order. A ring is
   `place_ring`'s: no spacing; its sites that would take an order off are left out.
-- **The take-off rule** (`take_offs`) settles what each site does, and both the preview's colours
-  and the release read it. Per selected builder, each queued build order is taken off by at most
+- **The take-off rule** (`take_offs`, one call of `place_take_offs_one` per selected builder)
+  settles what each site does, and both the preview's colours and the release read it. Per selected builder, each queued build order is taken off by at most
   one site, judged against the queue as it stood before the gesture: first every site not red
   takes the build order at its own position, then each site that took none takes the first build
   order within 16 world units of its centre on both axes (`0x43AFC0`'s predicate, inclusive; any
@@ -450,7 +469,8 @@ lands), with `tagpu_placegeo.c`'s `place_shape` and
   adding one, otherwise the site is appended. Any other gesture is classified afresh by the same
   rule, then per selected builder: the orders the rule gave a site are taken off, and each of
   those sites adds nothing for that builder; the rest that are not red are appended in the
-  shape's order while the queue is shorter than 1024 orders. Every selected builder gets them,
+  shape's order while the queue is shorter than 1024 orders (every other append stops there
+  too). Every selected builder gets them,
   its build list not consulted, as `0x419670` orders.
 - **Shift released before the button** drops the gesture, orders nothing and keeps the building
   armed. A placement or a commit that changed a queue sets the Shift-placement bit (`main+0x2CC6`
@@ -505,10 +525,15 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
 - **The kit is not in the DLL.** `art/wiki/kit/` (2.7 MB of parts) is not packed. The HUD's parts
   are fitted to what the game draws (`tools/hudart/fit.py`), which rewrites each part and its
   `kit.json` entry together, so the kit goes in with the landing that draws the window.
-- **The rules are copies.** The C's resource and gesture rules port `sim.js`'s mirrors of
-  `tagpu_resource.c` and `tagpu_place.c` rather than calling them. `simparity.mjs` holds the C to
-  `sim.js`; nothing holds either to the game's code, so a change there is followed by hand in
-  `sim.js` and `tagpu_wikisim.c`.
+- **The resource rules are copies.** The C sim calls the game's shapes and take-off rule
+  (`tagpu_placegeo.c`), but its resource rules and the rest of the gesture's port `sim.js`'s
+  mirrors of `tagpu_resource.c` and `tagpu_place.c` rather than calling them. `simparity.mjs`
+  holds the C to `sim.js`, and so `sim.js`'s take-off port to the game's function; nothing holds
+  the resource rules to the game's code, so a change there is followed by hand in `sim.js` and
+  `tagpu_wikisim.c` (the plan's `rulecheck.py` would notice it; it is not built).
+- **The state hash is not checked in the game yet.** `tagpu_wikisim_hash` and its `sim.js` twin
+  agree on every tick natively and under Wine; the DLL's own i686 build on the game thread logs it
+  only once landing 4's `tagpu_wiki.check` exists.
 - **No build gate runs the parity check.** It needs node and gcc (and Wine for `--wine`); `make`
   compiles and links the simulation but does not run it.
 - **The figures are the stock game's.** A mod with other extractors or other build lists shows the
