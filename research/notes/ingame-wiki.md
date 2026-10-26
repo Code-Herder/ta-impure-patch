@@ -5,21 +5,25 @@
 **Designed 2026-10-25; the browser mockup is the first build, and the DLL has the wiki's core.**
 The owner wants a wiki inside the game that explains Impure's own features with examples a player
 can watch and try. The decisions below came out of a design interview with the owner on
-2026-10-25; each is recorded with its reason. The DLL carries the tree and the entries and runs
-the simplified simulation in C, equal to the mockup's tick for tick on every demo; nothing in the
-DLL calls either yet, so the game shows no wiki.
+2026-10-25; each is recorded with its reason. The DLL carries the tree and the entries, runs the
+simplified simulation in C, equal to the mockup's tick for tick on every demo, and builds the
+stage's picture as the replay HUD's ops, equal to the mockup's canvas call for op; nothing in the
+DLL calls any of it yet, so the game shows no wiki.
 
 | What | Where |
 |---|---|
 | The tree of categories and entries | `art/wiki/tree.json` |
 | One entry: its text, its mods, its demos | `art/wiki/entries/<id>.json` |
-| The mockup, which reads only those files | `tools/wiki/mockup/` (`index.html`, `wiki.js`, `wiki.css`, `sim.js`) |
+| The mockup, which reads only those files | `tools/wiki/mockup/` (`index.html`, `wiki.js`, `wiki.css`, `sim.js`, `stage.js`) |
 | The window's art kit | `art/wiki/kit/` (`kit.json` and `parts/`), in `art/hud/kit.json`'s format |
+| The stage's cursor icons | `art/wiki/kit/parts/cursor_*.png`, written by `tools/wiki/cursors.sh` from `stage.js` `cursorShape` |
 | The stage in the game's own graphics | `tools/wiki/gfx.py` writes the gitignored `tools/wiki/mockup/gfx/` from the local install; `gfx.js` draws it under `gfx=game` |
 | The demos' generators; the headless check of every demo | `tools/wiki/gen-quickbuild.mjs`, `tools/wiki/gen-buildshapes.mjs`; `tools/wiki/simcheck.mjs` |
 | The data in the DLL | `art/wiki/` packed by `tools/hudpak.py --set wiki` into the resource `WIKIPAK`; read by `tagpu/ddraw/src/tagpu_wikidata.c` (through `tagpu_pak.c`, the archive reader the HUD shares) |
 | The simulation in the DLL | `tagpu/ddraw/src/tagpu_wikisim.c` |
 | The parity check, C against `sim.js` | `node tools/wiki/simparity.mjs [--wine]`, with `tagpu/ddraw/tests/wikitest.c` |
+| The stage in the DLL | `tagpu/ddraw/src/tagpu_wikistage.c`: a view copied by value, built into HUD ops |
+| The stage's check, C against `stage.js` | `node tools/wiki/stagecheck.mjs`, with `tagpu/ddraw/tests/wikistagetest.c` |
 | Serving it | `python3 tools/hudart/serve.py`, then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
 
@@ -132,6 +136,25 @@ A whitebox of the game's own view, so a demo reads as what the player will see:
   path draws a ghost at each site, with the site's place among the orders the release adds small in
   its corner (the game draws no number; the mockup does, so the queue order can be read).
 
+**How it is drawn.** `tools/wiki/mockup/stage.js` draws one view of `sim.js` into a 2D canvas; it
+runs in the page, where `wiki.js` calls it, and under node. The DLL's `tagpu_wikistage.c` builds the
+same picture as the replay HUD's ops, and `tools/wiki/stagecheck.mjs` pairs the two call for op on
+every demo, so a change to the stage is made in `stage.js` first. Everything it draws has an op to
+be:
+
+- rectangles, a rectangle's stroke, straight strokes (dashed by the canvas's dash rule), circles and
+  their strokes;
+- text in one face of the replay HUD, the `toast` style's Oswald 700 with no letter-spacing, each
+  line centred on its point. A name longer than 1.5 times its box shrinks until it fits, as the HUD
+  fits its text;
+- the cursor, one of three kit icons (`cursor_arrow`, `cursor_move`, `cursor_build`), drawn at
+  screen size centred on the pointer. `tools/wiki/cursors.sh` rasterises them once, in Chromium,
+  from `stage.js`'s own `cursorShape`, so the mockup and the game draw the same pixels.
+
+The map is fitted into the stage with a pad of 6 units (`stage.js` `fit`, `tagpu_wikistage_fit`):
+the one function the game's render thread draws with and its game thread will turn a click into a
+world point with.
+
 The mockup's `gfx=game` draws the same stage in the game's own graphics, rendered from the local
 install (*In game: what each element is drawn with*, below); the layout and the simulation do not
 change for it.
@@ -230,8 +253,8 @@ copy wins over any `.ufo`.
   their sizes and anchors.
 - **Colour.** Palette colour throughout: no restorer runs.
 
-The page draws all of this with `tools/wiki/mockup/gfx.js`. `wiki.js`'s stage hands it each
-element, and keeps its whitebox wherever `gfx.js` declines one. Without `gfx/index.json`,
+The page draws all of this with `tools/wiki/mockup/gfx.js`. `stage.js` hands it each element,
+through the hook `wiki.js` passes, and keeps its whitebox wherever `gfx.js` declines one. Without `gfx/index.json`,
 `gfx=game` falls back to the whitebox, and the controls strip says "game graphics: run
 tools/wiki/gfx.py".
 
@@ -499,18 +522,28 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
 
 - **The top-right row is drawn by two renderers today**: the sprocket on every renderer, the
   rewind button by the Vulkan HUD pass only. Where the wiki button is drawn on GDI is not decided.
-- **The DLL has the data and the simulation, and nothing calls them.** The window, the button, the
-  drawing, the pausing and the input capture are specified here and in the mockup only;
-  `tagpu_wikidata_load_resource` and the simulation link into the DLL unused.
+- **The DLL has the data, the simulation and the stage's ops, and nothing calls them.** The window,
+  the button, the page's drawing, the pausing and the input capture are specified here and in the
+  mockup only; `tagpu_wikidata_load_resource`, the simulation and `tagpu_wikistage_build` link into
+  the DLL unused. `tagpu_huddraw_build` takes the replay HUD's `HUDOPS`, so the stage's own,
+  larger op list needs it to take an op list before the stage can be drawn.
+- **The stage's budget holds the data's map, not the largest.** Cells and fog are one op a cell,
+  as the canvas calls them: 2587 ops at most over the demos (40 × 24 cells), against
+  `WIKI_MAXOP` 16384. A square map past about 70 cells a side, fogged everywhere, drops ops and
+  edges the stage in red.
 - **The kit is not in the DLL.** `art/wiki/kit/` (2.7 MB of parts) is not packed. The HUD's parts
   are fitted to what the game draws (`tools/hudart/fit.py`), which rewrites each part and its
-  `kit.json` entry together, so the kit goes in with the landing that draws the window.
+  `kit.json` entry together, so the kit goes in with the landing that draws the window. The
+  stage's three cursor icons are written straight into `art/wiki/kit/` at 6 pixels a unit; a fit
+  that rewrites that directory from another source carries them only if they are written there
+  too (`tools/wiki/cursors.sh <kit dir>`).
 - **The rules are copies.** The C's resource and gesture rules port `sim.js`'s mirrors of
   `tagpu_resource.c` and `tagpu_place.c` rather than calling them. `simparity.mjs` holds the C to
   `sim.js`; nothing holds either to the game's code, so a change there is followed by hand in
   `sim.js` and `tagpu_wikisim.c`.
-- **No build gate runs the parity check.** It needs node and gcc (and Wine for `--wine`); `make`
-  compiles and links the simulation but does not run it.
+- **No build gate runs the parity checks.** They need node and gcc (and Wine for `--wine`); `make`
+  compiles and links the simulation and the stage but runs neither check. `stagecheck.mjs` builds
+  the stage natively (x86-64, SSE); the DLL compiles it for SSE2, but no check runs the i686 build.
 - **The figures are the stock game's.** A mod with other extractors or other build lists shows the
   stock demos.
 - **No hotkey** opens the wiki.

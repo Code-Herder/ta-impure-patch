@@ -588,6 +588,47 @@ state and no engine memory. No file names an engine address.
 
 ### Landing 4 — the stage, and the demos playing
 
+**Status: track C, the stage offline, is committed on the branch** (`978ac43e`, `8ba9a6d0`,
+`a8222dd0`). Nothing calls it yet; `tagpu_wiki.c`, the record and the game run are the rest of the
+landing. What it holds, and where it settles what the text below left open:
+
+- **The pre-steps are done.** `stage.js` draws the stage (`wiki.js` only calls it), in the face of
+  `art/hud/layout.json`'s `toast` style (Oswald 700, no spacing, no case change, no shadow) with
+  each line centred on its point as the HUD centres a line box, and a name longer than 1.5 times its
+  box shrinks to fit (the HUD's rule) where the canvas used to squash it. The cursors are the kit's
+  `cursor_arrow`, `cursor_move` and `cursor_build`, rasterised by `tools/wiki/cursors.sh` from
+  `stage.js` `cursorShape` at 6 pixels a unit, each drawn centred on the pointer, so no hotspot
+  needs a field in `kit.json`.
+- **The copy is `tagpu_wikistage_copy`**, in the pure file beside the struct it fills, so
+  `tagpu_wiki.c`'s fill calls it rather than writing its own; the record carries a
+  `WIKISTAGEVIEW`. The bounds are the ones above, plus 256 vents; positions are floats except the
+  cursor's, a double, because the cursor's icon box is snapped to a pixel. **It is 60 792 bytes**
+  (i686), not about 40 KB: the map's 32 KB, the units, sites, queued and lines at their bounds, and
+  the entry's 64 type names.
+- **The ops.** A canvas arc is `HOP_DOT` with `HOPF_RING` (`HUDM_RING`, unsnapped): stroked, a
+  ring; filled, a ring as deep as its radius. A `HOP_TEXT` op's opacity is its `rgba` low byte, for
+  the queued sites' translucent labels; the HUD's own text ops hold it at `0xFF`. Every op clips to
+  the stage's canvas. The art comes in as `WIKISTAGEART`: the `toast` style's index, the faces'
+  measure, the three cursor parts and their sizes, and a log hook.
+- **The overflow** is counted in `WIKISTAGEOPS.dropped`, logged once through the art's hook while
+  `logged` stays set, and shown as a red edge round the stage in an op the budget keeps for it.
+- **`stagecheck.mjs` passes:** all 340 frames of the 21 demos at each of three stages (the
+  mockup's at 1920 × 1080 and 1024 × 768, and a small one with no grid where every label shrinks),
+  1 852 765 ops paired call for op within 1/64 px, in about 10 s.
+
+**Left for the integration:**
+
+- **`tagpu_huddraw_build` takes a `HUDOPS`**, whose arrays are `HUD_MAXOP` long. `WIKISTAGEOPS`
+  has the wiki's own `WIKI_MAXOP` and the same `HUDOP`/`HUDRUN`/text layout, so the wiki layer
+  needs `tagpu_huddraw_build` to take an op list (pointer and count), not a new drawer.
+- **A large map does not fit the budget.** Cells and fog are one op a cell each, as the canvas
+  calls them: a 128 × 128 map's alone would take 32 768 ops. The data's map is 40 × 24, under
+  3000 ops a frame with its grid (1816 on average over the check's frames); a square map past about
+  70 cells a side with fog everywhere and its grid drops ops.
+- **The cursor icons are in `art/wiki/kit/` as fitted.** Track D's fit rewrites that directory
+  from `art/wiki-full/kit/`; the icons go there too (run `cursors.sh art/wiki-full/kit`), or the
+  fit drops them.
+
 **What the player sees.** Selecting a demo plays it on the stage, as the mockup's whitebox:
 - the cells, metal, vents and fog;
 - units, the selection, construction and reclaim;
@@ -735,7 +776,7 @@ Once the core is in, four tracks touch no common file until they integrate:
 |---|---|---|
 | A — the engine-facing shell | input hooks, polls, pause, packet hook, Vulkan wiki layer, cursor record | landing 2 |
 | B — the page, offline | `art/wiki/layout.json`, `tagpu_wikilay.c`'s columns, `wikilaycheck` | landing 3, after A |
-| C — the stage, offline | `stage.js`, `tagpu_wikistage.c`, `HUDM_RING`, `stagecheck` | landing 4, after A and B |
+| C — the stage, offline (**committed**) | `stage.js`, `tagpu_wikistage.c`, `HUDM_RING`, `stagecheck` | landing 4, after A and B |
 | D — the kit fitted | `art/wiki-full/`, `fit.py --set wiki` | inside landing 2 (A needs the button and frame parts) |
 
 Landing 1b runs beside any of them. Landing 5 follows 4. Landing 6 waits for the owner.
