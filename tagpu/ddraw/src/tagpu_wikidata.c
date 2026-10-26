@@ -7,7 +7,6 @@
 #include "tagpu_wikidata.h"
 
 #define FOOTPRINT_MAX 64    /* tagpu_placegeo.c's bound on a footprint, which its arithmetic rests on */
-#define MAP_MAX       512   /* cells a side: the sim keeps a value per cell */
 #define TREE_MAX      1024  /* nodes of the tree */
 
 static const char* const KEY_NAMES[WIKI_NKEYS] = { "shift", "alt", "ctrl", "z", "x", "lmb", "rmb" };
@@ -190,8 +189,8 @@ static int scene(R* r, const TJV* v, WIKISCENE* s, int entry)
     int i;
     if (entry) {
         const TJV* map = tj_get(v, "map");
-        if (!integer(r, tj_get(map, "w"), 1, MAP_MAX, &s->w, "the map's width")
-            || !integer(r, tj_get(map, "h"), 1, MAP_MAX, &s->h, "the map's height"))
+        if (!integer(r, tj_get(map, "w"), 1, WIKI_MAP_MAX, &s->w, "the map's width")
+            || !integer(r, tj_get(map, "h"), 1, WIKI_MAP_MAX, &s->h, "the map's height"))
             return 0;
         s->surface_metal = tj_num(tj_get(map, "surfaceMetal"), 0);
     }

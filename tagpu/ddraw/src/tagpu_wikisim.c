@@ -107,8 +107,13 @@ static BOX box(const WIKISIM* s, int t, int ox, int oz)
 
 /* ---- units: each one on the heap, so a pointer to it holds while the list grows ---- */
 
+/* THE ONE APPEND to a unit's orders, so a list never holds more than PLACE_LIST_CAP: an order
+   past it is dropped, as sim.js's append drops it. Every order a player's clicks add comes
+   through here, so they cannot grow a list until realloc fails. 1 when the order went in; 0
+   when the list was full or memory ran out, which sets `oom`. */
 static int push_order(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* o)
 {
+    if (u->norder >= PLACE_LIST_CAP) return 0;
     if (u->norder == u->corder) {
         int c = u->corder ? u->corder * 2 : 8;
         WIKIORDER* p = (WIKIORDER*)realloc(u->order, (size_t)c * sizeof *p);
@@ -878,10 +883,14 @@ static void disarm(WIKISIM* s)
     s->shift_placed = 0;
 }
 
+/* a click's orders for one unit: they replace its list, or with Shift are appended to it -- all
+   of them or, when they would take the list past PLACE_LIST_CAP, none, so an upgrade's reclaim
+   never goes in without its build */
 static void assign(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* os, int n, int shift)
 {
     int i;
     if (!shift) u->norder = 0;
+    else if (u->norder + n > PLACE_LIST_CAP) return;
     for (i = 0; i < n; i++) push_order(s, u, &os[i]);
 }
 
@@ -1439,6 +1448,128 @@ const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s)
     return v;
 }
 
+/* ---- the state hash, in tagpu_wikisim.h's order ---- */
+
+static void fnv_bytes(uint64_t* h, const void* p, size_t n)
+{
+    const unsigned char* b = (const unsigned char*)p;
+    while (n--) {
+        *h ^= *b++;
+        *h *= 0x100000001B3ull;
+    }
+}
+
+static void fnv_int(uint64_t* h, int v)
+{
+    const uint32_t u = (uint32_t)v;
+    unsigned char b[4];
+    int i;
+    for (i = 0; i < 4; i++) b[i] = (unsigned char)(u >> (8 * i));
+    fnv_bytes(h, b, 4);
+}
+
+static void fnv_double(uint64_t* h, double v)
+{
+    uint64_t u;
+    unsigned char b[8];
+    int i;
+    memcpy(&u, &v, sizeof u);
+    for (i = 0; i < 8; i++) b[i] = (unsigned char)(u >> (8 * i));
+    fnv_bytes(h, b, 8);
+}
+
+static void fnv_str(uint64_t* h, const char* str)
+{
+    const size_t n = str ? strlen(str) : 0;
+    fnv_int(h, (int)n);
+    fnv_bytes(h, str, n);
+}
+
+uint64_t tagpu_wikisim_hash(const WIKISIM* s)
+{
+    /* the view's own rule: the gesture's sites stand in for the ghost (tagpu_wikisim_view) */
+    const WIKIPLACE* p = s->place.kind != PLACE_NONE && s->place.n ? &s->place : NULL;
+    const WIKIHOVER* g = &s->hover;
+    const int ghost = !p && (g->kind == WIKI_HOVER_PLACE || g->kind == WIKI_HOVER_QUICK);
+    const int cells = s->W * s->H;
+    uint64_t h = 0xCBF29CE484222325ull;
+    int i, j;
+
+    fnv_int(&h, s->tick);
+    fnv_int(&h, s->done ? 1 : 0);
+
+    fnv_int(&h, s->W);
+    fnv_int(&h, s->H);
+    fnv_double(&h, s->SM);
+    for (i = 0; i < cells; i++) fnv_double(&h, s->metal[i]);
+    for (i = 0; i < cells; i++) fnv_int(&h, s->fog[i]);
+    fnv_int(&h, s->nvent);
+    for (i = 0; i < s->nvent; i++) {
+        fnv_double(&h, s->vent_centre[i].x);
+        fnv_double(&h, s->vent_centre[i].z);
+    }
+
+    fnv_int(&h, s->nunit);
+    for (i = 0; i < s->nunit; i++) {
+        const WIKIUNIT* u = s->unit[i];
+        /* sim.js's orders(id) answers the first unit of that id, so this does too */
+        const WIKIUNIT* by = by_id(s, u->id);
+        fnv_str(&h, u->id);
+        fnv_str(&h, def(s, u->type)->name);
+        fnv_int(&h, u->owner);
+        fnv_double(&h, u->x);
+        fnv_double(&h, u->z);
+        fnv_int(&h, u->sel ? 1 : 0);
+        fnv_double(&h, u->built);
+        fnv_double(&h, u->reclaimed);
+        fnv_str(&h, u->label);
+        fnv_int(&h, by->norder);
+        for (j = 0; j < by->norder; j++) {
+            const WIKIORDER* o = &by->order[j];
+            fnv_int(&h, o->k);
+            if (o->k == WIKI_ORDER_MOVE) {
+                fnv_double(&h, o->x);
+                fnv_double(&h, o->z);
+            } else if (o->k == WIKI_ORDER_BUILD) {
+                fnv_str(&h, def(s, o->type)->name);
+                fnv_int(&h, o->ox);
+                fnv_int(&h, o->oz);
+            } else fnv_str(&h, o->target);
+        }
+    }
+
+    fnv_int(&h, ghost);
+    if (ghost) {
+        const XZ c = centre(s, g->type, g->ox, g->oz);
+        fnv_str(&h, def(s, g->type)->name);
+        fnv_double(&h, c.x);
+        fnv_double(&h, c.z);
+        fnv_int(&h, g->ok ? 1 : 0);
+    }
+
+    fnv_int(&h, p ? p->kind : PLACE_NONE);
+    fnv_int(&h, p ? p->n : 0);
+    for (i = 0; p && i < p->n; i++) {
+        const XZ c = site_centre(s, p->type, &p->site[i]);
+        fnv_double(&h, c.x);
+        fnv_double(&h, c.z);
+        fnv_int(&h, p->site[i].state);
+    }
+
+    fnv_double(&h, s->cursor_x);
+    fnv_double(&h, s->cursor_z);
+    for (i = 0; i < WIKI_NKEYS; i++) fnv_int(&h, s->held[i] ? 1 : 0);
+    fnv_str(&h, s->mode >= 0 ? def(s, s->mode)->name : "");
+    fnv_int(&h, s->mode >= 0 ? s->spacing[s->mode] : -1);
+    fnv_int(&h, s->has_drag && s->drag_active);
+    if (s->has_drag && s->drag_active) {
+        fnv_double(&h, s->drag_x0);
+        fnv_double(&h, s->drag_z0);
+    }
+    fnv_str(&h, s->caption);
+    return h;
+}
+
 void tagpu_wikisim_free(WIKISIM* s)
 {
     int i;
@@ -1496,7 +1627,8 @@ static int scene_units(WIKISIM* s, const WIKISCENE* sc)
             o.k = WIKI_ORDER_MOVE;
             o.x = d->move[j].x;
             o.z = d->move[j].z;
-            if (!push_order(s, u, &o)) return 0;
+            push_order(s, u, &o);
+            if (s->oom) return 0;
         }
     }
     return 1;

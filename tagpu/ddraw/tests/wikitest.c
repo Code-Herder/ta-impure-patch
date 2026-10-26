@@ -4,14 +4,15 @@
 
    `wikitest demos PAK` loads PAK, an archive of art/wiki/ (tools/hudpak.py --set wiki), as the DLL
    loads WIKIPAK, plays every demo of every entry to its end, and prints one line per tick from 0:
-   {"entry", "demo", "t", "v": the view, "o": every unit's orders by id}. The view carries the map
-   on the first and the last tick only: nothing writes it after the scene is laid out.
+   {"entry", "demo", "t", "h": tagpu_wikisim_hash as 16 hex digits, "v": the view, "o": every
+   unit's orders by id}. The view carries the map on the first and the last tick only: nothing
+   writes it after the scene is laid out.
 
    `wikitest trace FILE` replays a recording of sim.js calls (simparity.mjs makes it from
    simcheck.mjs's rule cases), one JSON line per call: {"op": "create", "scripted": 0|1} followed
    by a line holding the entry, whose only demo is the one the sim is made from; {"op": "input",
    "ev": the input}; {"op": "step"}; and the queries {"op": "view"}, {"op": "orders", "id"},
-   {"op": "done"} and {"op": "tick"}, each answered by one line.
+   {"op": "done"}, {"op": "tick"} and {"op": "hash"}, each answered by one line.
 
    Exit 0 when everything loaded and ran; the comparison is simparity.mjs's. */
 #include <stdio.h>
@@ -232,6 +233,13 @@ static void view(WIKISIM* s, int map)
     putchar('}');
 }
 
+/* the state hash as 16 hex digits, in two halves: mingw's printf need not know %llx */
+static void hash(const WIKISIM* s)
+{
+    const uint64_t h = tagpu_wikisim_hash(s);
+    printf("\"%08lx%08lx\"", (unsigned long)(h >> 32), (unsigned long)(h & 0xFFFFFFFFu));
+}
+
 static void frame(WIKISIM* s, const char* entry, const char* demo, int map)
 {
     const WIKIVIEW* v;
@@ -240,6 +248,7 @@ static void frame(WIKISIM* s, const char* entry, const char* demo, int map)
     key("entry", 1); str(entry);
     key("demo", 0); str(demo);
     key("t", 0); printf("%d", s->tick);
+    key("h", 0); hash(s);
     key("v", 0); view(s, map);
     key("o", 0);
     putchar('{');
@@ -350,6 +359,7 @@ static int trace(const char* path)
         else if (!strcmp(op, "orders")) { orders(&c.s, tj_str(tj_get(v, "id"), "")); putchar('\n'); }
         else if (!strcmp(op, "done")) puts(c.s.done ? "true" : "false");
         else if (!strcmp(op, "tick")) printf("%d\n", c.s.tick);
+        else if (!strcmp(op, "hash")) { hash(&c.s); putchar('\n'); }
         else { fprintf(stderr, "wikitest: no op %s\n", op); return 2; }
     }
     case_end(&c);
