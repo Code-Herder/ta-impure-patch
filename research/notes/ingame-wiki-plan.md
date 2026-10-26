@@ -27,6 +27,9 @@ and the three fixes below in `d3e9d5ac`), not yet on `main`:
   rule cases equal.
 - The kit is left for the landing that draws it, and nothing in the DLL calls the simulation yet.
 
+**Track B, the page offline, is committed on its own branch** (landing 3's pure half, below): the
+layout numbers in `art/wiki/layout.json`, `tagpu_wikilay.c` and `wikilaycheck.py`.
+
 It names no engine address and touches no engine-facing file. **Its shape is right** and the plan
 below builds on it unchanged, with the five requests in *What the core must hold*. Requests 2, 3
 and 4 -- the map bound, the order cap and the state hash -- are in `d3e9d5ac`; 1 and 5 are
@@ -555,6 +558,32 @@ packet area and a part of the command record, and touches the input path.
 
 ### Landing 3 — the page
 
+**Status: track B is done; the rest waits for landing 2.** Committed, offline:
+- the pre-step: `art/wiki/layout.json` holds `GEOM` (as `geom`), the shares, the strips, rows,
+  paddings, the scrollbar, the controls' and the badge's numbers, the window's share and font,
+  and `roles`, element by element. `wiki.js` sets each number as a custom property of the frame
+  (`--w-` and its path) and `wiki.css` reads those. Every element's box, computed text style and
+  painted-part canvas size, dumped headless at 1920 × 1080 and 3840 × 2160 in both skins, is
+  byte-identical before and after the move. `WIKIPAK` packs `layout.json`.
+- `tagpu_wikilay.c`/`.h`, pure: the state is `WIKIPAGE` (screen, bar, rewind, open, entry, demo,
+  folds, three scrolls, playing, done, speed, try, `MOD_*`, the held control, the caption and the
+  held keys); the faces are `WIKIFACES` (HUDART's faces by HUD style); the output is `HUDOPS` and a
+  `WIKIFRAME` (each scroll as drawn and its limit, the stage rect, the window). It also lays out
+  landing 2's window, title, close button and wiki button, with the keys `window`, `close` and
+  `wiki`. The face lightness is `tagpu_wikilay_face_light`, set per part with
+  `tagpu_wikilay_light`. The kit is read by `tagpu_hudlay_load_kit`, added to `tagpu_hudlay.c`.
+- `tools/wiki/wikilaycheck.py` with `wikilaycheck.c`: ten cases over the five resolutions, stock,
+  Escalation and TA Zero, both entries, folded and unfolded, the text scrolled (part way and to its end),
+  captions and keys shown, a control held, 2×. Every part, control, disc, text line (start, width,
+  baseline) and scroll limit agree within 0.07 CSS px, and every thumb Chrome paints to the
+  pixel, in about 65 s.
+
+**What integration owes it**: `tagpu_wikistate.c` fills `WIKIFACES` from `HUDART` and sets each
+part's light from its decoded image (premultiplied); `tagpu_huddraw.c` honours `HOPF_INK`; the
+record carries `WIKIPAGE`'s fields and `TAGPU_CMD_WIKI` the frame's hit map and `WIKIFRAME`. Two
+gaps the check names stay open ([the note](ingame-wiki.html), *Gaps*): no HUD face has the control
+glyphs or the tree's marks, and Chrome sets a face at a quantized size.
+
 **What the player sees.** The tree, with its folds, and each entry's demo list. The entry column:
 - the title, the subtitle, and the red badge with "Turned off in this mod";
 - the stage's bezel, grey until landing 4;
@@ -818,10 +847,10 @@ Integrate them in order, and keep each track's pure file its own.
 
 ## Risks
 
-1. **Wrapping parity.** Chrome breaks lines by UAX #14; the C layout breaks greedily at spaces.
-   Today's text breaks only at spaces; the CSS states `overflow-wrap: normal; hyphens: none`, and
-   `wikilaycheck` compares every line's text. A new entry with a hyphen or a slash may need the
-   rule extended.
+1. **Wrapping parity.** Chrome breaks lines by UAX #14; the C layout breaks greedily after spaces
+   and after a hyphen between a letter and anything but a digit (UAX #14's HY), which today's text
+   needs: "right-click", "Shift-drag" and "Shift-click" are in both entries. `wikilaycheck`
+   compares every line's text. A new entry with a slash or a dash may need the rule extended.
 2. **The cursor record** is a new pipeline in `tagpu_vk_gui.c`. Drawn through `lay_viewport` it
    lands on the composite's pixels. A one-pixel offset from the copy beneath would show as a
    doubled edge in the margin, so landing 2's capture checks it.

@@ -2155,6 +2155,19 @@ done:
     return l;
 }
 
+/* The kit alone: no layout, no globals, no self-test, so tagpu_hudlay_build must never be given
+   it; tagpu_hudlay_expand, tagpu_hudlay_nparts and tagpu_hudlay_part read only the parts. */
+HUDLAY* tagpu_hudlay_load_kit(const char* kit, size_t nkit, HUDPNGSIZE png_size, void* ctx, char* err, size_t errn)
+{
+    HUDLAY* l = (HUDLAY*)calloc(1, sizeof(HUDLAY));
+    char e2[200];
+    if (err && errn) err[0] = 0;
+    if (!l) { snprintf(err, errn, "hudlay: out of memory"); return NULL; }
+    if (!(l->kdoc = tagpu_json_parse(kit, nkit, e2, sizeof e2))) { snprintf(err, errn, "kit.json: %s", e2); tagpu_hudlay_free(l); return NULL; }
+    if (!load_kit(l, tj_get(tagpu_json_root(l->kdoc), "parts"), png_size, ctx, err, errn)) { tagpu_hudlay_free(l); return NULL; }
+    return l;
+}
+
 int tagpu_hudlay_max_hot(const HUDLAY* l) { return l->max_hot; }
 
 void tagpu_hudlay_free(HUDLAY* l)

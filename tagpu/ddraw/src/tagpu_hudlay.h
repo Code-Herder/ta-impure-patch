@@ -140,6 +140,8 @@ enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART };
 #define HOPF_BASE   16u     /* HOP_TEXT: an SVG <text>, r.x its anchor and r.y its baseline;
                                `centre` is its text-anchor, 0 start, 1 middle, 2 end */
 #define HOPF_TOP    32u     /* an op of the top layer, drawn after the engine's UI */
+#define HOPF_INK    64u     /* HOP_TEXT: in its runs' colour with neither the style's shadow nor
+                               its outline: the dark ink of text on a light face (tagpu_wikilay.c) */
 
 typedef struct {
     uint8_t  kind, flags;
@@ -258,6 +260,11 @@ typedef int (*HUDPNGSIZE)(void* ctx, const char* part, int* w, int* h);
 HUDLAY*           tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, size_t nkit,
                                     HUDPNGSIZE png_size, void* ctx, char* err, size_t errn);
 void              tagpu_hudlay_free(HUDLAY* l);
+/* A kit.json alone, for a layer whose layout is its own (tagpu_wikilay.c): the parts, which
+   tagpu_hudlay_expand, _nparts and _part read, and nothing else: tagpu_hudlay_build and
+   tagpu_hudlay_globals do not test for one and must never be given it. */
+HUDLAY*           tagpu_hudlay_load_kit(const char* kit, size_t nkit, HUDPNGSIZE png_size, void* ctx,
+                                        char* err, size_t errn);
 /* How wide a string is set in style `style` (HUDGLOBALS.style) at `size` units, in units: the
    faces' measure (tagpu_hudtext_width), which the layout itself has no faces for. A box sized
    to its text -- the toast -- asks it; until it is given one, such a box keeps its least width.

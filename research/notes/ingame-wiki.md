@@ -6,9 +6,10 @@
 The owner wants a wiki inside the game that explains Impure's own features with examples a player
 can watch and try. The decisions below came out of a design interview with the owner on
 2026-10-25; each is recorded with its reason. The DLL carries the tree and the entries, runs the
-simplified simulation in C, equal to the mockup's tick for tick on every demo, and builds the
-stage's picture as the replay HUD's ops, equal to the mockup's canvas call for op; nothing in the
-DLL calls any of it yet, so the game shows no wiki.
+simplified simulation in C, equal to the mockup's tick for tick on every demo, lays the window out
+in C, equal to the mockup's boxes, lines and baselines, and builds the stage's picture as the
+replay HUD's ops, equal to the mockup's canvas call for op; nothing in the DLL calls any of it
+yet, so the game shows no wiki.
 
 | What | Where |
 |---|---|
@@ -17,9 +18,12 @@ DLL calls any of it yet, so the game shows no wiki.
 | The mockup, which reads only those files | `tools/wiki/mockup/` (`index.html`, `wiki.js`, `wiki.css`, `sim.js`, `stage.js`) |
 | The window's art kit | `art/wiki/kit/` (`kit.json` and `parts/`), in `art/hud/kit.json`'s format |
 | The stage's cursor icons | `art/wiki/kit/parts/cursor_*.png`, written by `tools/wiki/cursors.sh` from `stage.js` `cursorShape` |
+| The window's layout numbers and its text roles | `art/wiki/layout.json`, which `wiki.js` sets as custom properties of the frame (`--w-` and the number's path) for `wiki.css`, and which the DLL reads |
 | The stage in the game's own graphics | `tools/wiki/gfx.py` writes the gitignored `tools/wiki/mockup/gfx/` from the local install; `gfx.js` draws it under `gfx=game` |
 | The demos' generators; the headless check of every demo | `tools/wiki/gen-quickbuild.mjs`, `tools/wiki/gen-buildshapes.mjs`; `tools/wiki/simcheck.mjs` |
-| The data in the DLL | `art/wiki/` packed by `tools/hudpak.py --set wiki` into the resource `WIKIPAK`; read by `tagpu/ddraw/src/tagpu_wikidata.c` (through `tagpu_pak.c`, the archive reader the HUD shares) |
+| The data in the DLL | `art/wiki/` (`tree.json`, `layout.json`, the entries) packed by `tools/hudpak.py --set wiki` into the resource `WIKIPAK`; read by `tagpu/ddraw/src/tagpu_wikidata.c` (through `tagpu_pak.c`, the archive reader the HUD shares) |
+| The window's layout in the DLL | `tagpu/ddraw/src/tagpu_wikilay.c`: pure, the HUD stack's ops, text and hit boxes for a page state (`WIKIPAGE`) |
+| The layout check, C against the mockup | `python3 tools/wiki/wikilaycheck.py`, with `tools/wiki/wikilaycheck.c` |
 | The simulation in the DLL | `tagpu/ddraw/src/tagpu_wikisim.c` |
 | The parity check, C against `sim.js` | `node tools/wiki/simparity.mjs [--wine]`, with `tagpu/ddraw/tests/wikitest.c`; `--hash` prints each demo's final state hash from `sim.js` |
 | The stage in the DLL | `tagpu/ddraw/src/tagpu_wikistage.c`: a view copied by value, built into HUD ops |
@@ -116,7 +120,9 @@ keycaps, badge, close and wiki buttons (thin worn rims round dark screen faces),
 two row parts — a framed steel row, and for the selected row its lit, raised twin. Each part is a
 nine-slice drawn by the replay HUD's rules; their specs are `tools/hudart/specs/parts_wiki_slim.py`
 and, for the rows, `parts_wiki_plate.py`. Every text role takes a style of `art/hud/layout.json`
-in the replay HUD's faces (`art/hud/fonts/`). The parts are filed as cut, about 10 px a unit; they
+in the replay HUD's faces (`art/hud/fonts/`); `art/wiki/layout.json` `roles` names each role's
+style, and its other numbers place what the kit leaves room for (`geom`), the columns, rows,
+strips, controls and panels. The parts are filed as cut, about 10 px a unit; they
 are fitted to what the game draws, as `tools/hudart/fit.py` does for the HUD, when the DLL draws
 them.
 
@@ -542,15 +548,31 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
 
 - **The top-right row is drawn by two renderers today**: the sprocket on every renderer, the
   rewind button by the Vulkan HUD pass only. Where the wiki button is drawn on GDI is not decided.
-- **The DLL has the data, the simulation and the stage's ops, and nothing calls them.** The window,
-  the button, the page's drawing, the pausing and the input capture are specified here and in the
-  mockup only; `tagpu_wikidata_load_resource`, the simulation and `tagpu_wikistage_build` link into
-  the DLL unused. `tagpu_huddraw_build` takes the replay HUD's `HUDOPS`, so the stage's own,
-  larger op list needs it to take an op list before the stage can be drawn.
+- **The DLL has the data, the simulation, the layout and the stage's ops, and nothing calls them.**
+  The drawing, the pausing and the input capture are specified here and in the mockup only;
+  `tagpu_wikidata_load_resource`, the simulation, `tagpu_wikilay_build` and `tagpu_wikistage_build`
+  link into the DLL unused. `tagpu_huddraw_build` takes the replay HUD's `HUDOPS`, so the stage's
+  own, larger op list needs it to take an op list before the stage can be drawn. The draw must
+  honour `HOPF_INK` (a text in its run's colour with no shadow or outline: dark ink on a light
+  face), which `tagpu_huddraw.c` does not yet test.
 - **The stage's budget holds the data's map, not the largest.** Cells and fog are one op a cell,
   as the canvas calls them: 2587 ops at most over the demos (40 × 24 cells), against
   `WIKI_MAXOP` 16384. A square map past about 70 cells a side, fogged everywhere, drops ops and
   edges the stage in red.
+- **No HUD face has the mockup's control glyphs or the tree's marks**: play ▶, pause ❚❚, replay ⟲,
+  the folds ▾ ▸ and the entry's dot •. The browser sets them in its fallback face, which the DLL
+  does not carry, so the game would draw each as its face's `.notdef`, and the play and replay
+  buttons, which are sized to their glyphs (37.1 and 29.3 units wide at 1920 × 1080 while play
+  shows pause), would take the `.notdef`'s width. `wikilaycheck.py` gives the C layout the
+  browser's advances for them and names them. Kit icons, as question 5 proposes for the stage's
+  cursors, or the glyphs in a HUD face would close it; the mockup changes first.
+- **Chrome sets a face at a size of whole sixty-fourths of a pixel**, by a rule not identified:
+  9.0667 px is set at 579/64 and 9.07 at 580/64 (MEASURED 2026-10-25 against stb_truetype's
+  widths, which equal Chrome's at those sizes to the sixty-fourth). Where a font size is not a whole
+  number of sixty-fourths -- every style at 1024 × 768, and the chips' 6.8 units at every
+  resolution -- the mockup's lines are up to 0.2 % narrower than the game's, and a line that just
+  fits in the mockup can wrap one word earlier in the game. `wikilaycheck.py` gives the C layout
+  the browser's set size and compares the rules on it. The game sets every face at its own size.
 - **The kit is not in the DLL.** `art/wiki/kit/` (2.7 MB of parts) is not packed. The HUD's parts
   are fitted to what the game draws (`tools/hudart/fit.py`), which rewrites each part and its
   `kit.json` entry together, so the kit goes in with the landing that draws the window. The

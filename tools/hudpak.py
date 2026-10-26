@@ -10,8 +10,8 @@ A set names the files of one folder:
     hud   art/hud/, the resource HUDPAK (src/tagpu_hudart.c): layout.json and kit.json as JSON,
           the parts as PNG, the faces as TrueType, and the licence texts, so the faces never
           travel without them. The default.
-    wiki  art/wiki/, the resource WIKIPAK (src/tagpu_wikidata.c): tree.json and the entries.
-          The window's kit is not packed yet: tools/hudart/fit.py-style fitting rewrites a kit's
+    wiki  art/wiki/, the resource WIKIPAK (src/tagpu_wikidata.c): tree.json and the entries, and
+          layout.json, the window's numbers (src/tagpu_wikilay.c). The window's kit is not packed yet: tools/hudart/fit.py-style fitting rewrites a kit's
           parts and its kit.json together, so they go in with the landing that draws them.
 
 THE STANDARD LIBRARY ONLY, like tools/artbake.py: the build's Python is the bare python3 CI has.
@@ -30,7 +30,7 @@ VERSION = 1
 # per set: the globs it keeps, and the files it cannot do without
 SETS = {
     "hud": (("layout.json", "kit.json", "parts/*.png", "fonts/*.ttf", "fonts/*.txt"), ("layout.json", "kit.json")),
-    "wiki": (("tree.json", "entries/*.json"), ("tree.json",)),
+    "wiki": (("tree.json", "layout.json", "entries/*.json"), ("tree.json", "layout.json")),
 }
 
 
