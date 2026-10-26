@@ -20,7 +20,8 @@ static unsigned s_frame;                /* the render-thread frame the ops are f
 static float    s_px;
 static int      s_ox, s_oy;
 static int      s_open, s_ptr;          /* the record's: the window open, a pointer in the picture */
-static int      s_refused;              /* the layout refused: said once, drawn never          */
+static volatile LONG s_refused;         /* the layout refused: said once, drawn never; read by the
+                                           game thread (tagpu_wikistate_refused)                */
 static int      s_saidOver;             /* the page's ops overflowed: said once                 */
 static int      s_drew;                 /* this frame's layer was drawn                         */
 static TAGPU_CMD_WIKI s_map;
@@ -143,7 +144,7 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
         return;
     }
     if (art != s_art && !art_bind(art)) {
-        s_refused = 1;
+        InterlockedExchange(&s_refused, 1);
         tagpu_logf("wiki: the kit has no `toast` style for the stage - the wiki is not drawn this session");
         return;
     }
@@ -171,7 +172,7 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
     s_page.rewind = tagpu_hudstate_frame(f->frame_counter, &hs, &hpx, &hox, &hoy) && hs->live;
     page_of(&s_page, w, sv);
     if (!tagpu_wikilay_build(art->lay, art->data, &s_faces, &s_page, &s_ops, &s_fr, err, sizeof err)) {
-        s_refused = 1;
+        InterlockedExchange(&s_refused, 1);
         tagpu_logf("wiki: the page's layout refused (%s) - the wiki is not drawn this session", err);
         return;
     }
@@ -204,6 +205,11 @@ static HUDOPLIST stage_list(void)
     l.text = s_stage.text;
     l.ntext = s_stage.ntext < WIKI_TEXTMAX ? s_stage.ntext : WIKI_TEXTMAX;
     return l;
+}
+
+int tagpu_wikistate_refused(void)
+{
+    return InterlockedCompareExchange(&s_refused, 0, 0) != 0;
 }
 
 int tagpu_wikistate_frame(unsigned frame, HUDOPLIST* page, HUDOPLIST* stage, float* px, int* ox, int* oy)

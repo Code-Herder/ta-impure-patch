@@ -51,7 +51,9 @@ static void* zalloc(R* r, size_t n, size_t size)
     return p;
 }
 
-static int count(const TJV* v) { return tj_is(v, TJ_ARR) || tj_is(v, TJ_OBJ) ? v->n : 0; }
+/* the elements of a list, and 0 for anything else: every caller then walks the list alone, so an
+   object's members would be counted and never read */
+static int count(const TJV* v) { return tj_is(v, TJ_ARR) ? v->n : 0; }
 
 /* a non-empty string, or NULL: the mockup's `x || null` */
 static const char* text_or_null(const TJV* v)
@@ -340,30 +342,44 @@ int tagpu_wikidata_entry(WIKIENTRY* e, const char* text, size_t len, char* err, 
 
 /* ---- the tree ------------------------------------------------------------------------------- */
 
+/* A node's entry: a leaf names one as a string, and anything else is a folder whose children are
+   read. tree_count and tree_flatten both ask this one question, so the nodes the second writes are
+   the nodes the first counted and allocated. */
+static const char* node_entry(const TJV* node)
+{
+    return tj_str(tj_get(node, "entry"), NULL);
+}
+
 static int tree_count(const TJV* nodes, int depth)
 {
     const TJV* c;
     int n = 0;
     if (depth > 32) return TREE_MAX + 1;
     for (c = tj_is(nodes, TJ_ARR) ? nodes->first : NULL; c && n <= TREE_MAX; c = c->next)
-        n += 1 + (tj_get(c, "entry") ? 0 : tree_count(tj_get(c, "children"), depth + 1));
+        n += 1 + (node_entry(c) ? 0 : tree_count(tj_get(c, "children"), depth + 1));
     return n;
 }
 
-/* the nodes in preorder, each leaf's entry read from the archive; an entry named twice is read once */
-static int tree_flatten(WIKIDATA* d, const TJV* nodes, int depth, const unsigned char* pak, size_t npak,
-                        char* err, size_t errn)
+/* the nodes in preorder, each leaf's entry read from the archive; an entry named twice is read once.
+   THE BOUND: `cap` is the nodes allocated, and no node is written past it */
+static int tree_flatten(WIKIDATA* d, int cap, const TJV* nodes, int depth, const unsigned char* pak,
+                        size_t npak, char* err, size_t errn)
 {
     const TJV* c;
     for (c = tj_is(nodes, TJ_ARR) ? nodes->first : NULL; c; c = c->next) {
-        WIKINODE* n = &d->node[d->nnode++];
-        const char* id = tj_str(tj_get(c, "entry"), NULL);
+        WIKINODE* n;
+        const char* id = node_entry(c);
         int j;
+        if (d->nnode >= cap) {
+            snprintf(err, errn, "wiki: the tree has more nodes than it counted");
+            return 0;
+        }
+        n = &d->node[d->nnode++];
         n->depth = depth;
         n->entry = -1;
         if (!id) {
             n->title = tj_str(tj_get(c, "title"), NULL);
-            if (!tree_flatten(d, tj_get(c, "children"), depth + 1, pak, npak, err, errn)) return 0;
+            if (!tree_flatten(d, cap, tj_get(c, "children"), depth + 1, pak, npak, err, errn)) return 0;
             continue;
         }
         for (j = 0; j < d->nentry && strcmp(d->entry[j].id ? d->entry[j].id : "", id); j++) {}
@@ -422,7 +438,7 @@ WIKIDATA* tagpu_wikidata_load(const unsigned char* pak, size_t npak, char* err, 
         snprintf(err, errn, "wiki: out of memory");
         goto fail;
     }
-    if (!tree_flatten(d, tj_get(root, "tree"), 0, pak, npak, err, errn)) goto fail;
+    if (!tree_flatten(d, nodes, tj_get(root, "tree"), 0, pak, npak, err, errn)) goto fail;
     return d;
 fail:
     tagpu_wikidata_free(d);

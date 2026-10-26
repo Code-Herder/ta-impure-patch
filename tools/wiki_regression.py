@@ -41,6 +41,9 @@ sp, in order:
       GameTime runs; an arrow held 1 s now moves the eye (the control for (d));
   (f) reopened, a press on the close button released over the ARMCK closes it and leaves the
       selection as it was;
+  (h) a right button pressed on the margin before the open and released while it is open: the
+      press reaches the engine, and so does the release (the batch's `engine` count, the shield
+      delivering it at the frozen point), with the window still open and the frozen point unmoved;
   (g) reopened on a world the test's own hold keeps paused (the wiki holds the pause it finds and
       will give nothing back: `pause_was`), the level is ended with scenarios/replay-end.json: the
       log says the window closed at the level's end, and an injected key reaches the engine's key
@@ -67,7 +70,10 @@ demos, on the same launch as sp:
   (d5) the most one fill of the open page cost the game thread, logged.
 recorded:
   (r) the button sits 3 bar pixels left of the rewind button (the two frames' hit maps); the rewind
-      button opens the rewind and closes it; the wiki button opens the wiki and Esc closes it.
+      button opens the rewind; while it is open a click on the wiki button opens nothing and the log
+      says `wiki: not opened - a rewind holds the pause` (the refusal tests the rewind's state, so the
+      FLUSH it passes through is refused by the same test, but no step can hold the game in FLUSH);
+      the rewind button closes it; the wiki button opens the wiki and Esc closes it.
 mp:
   (m) the wiki opened on the host takes no pause: both peers' GameTime advances over 3 s, and so
       does the host's demo, whose cost to the game thread is logged; a right and a left click on
@@ -368,6 +374,24 @@ def sp(c, shot=None):
     c.once(not c.paused(), "(f) the pause bit is still set after the close")
     print("wiki sp: (f) the close button closed it; its release took nothing")
 
+    # (h) a button held across the open: the engine gets the release of the press it saw
+    c.keys("dmove:%d,%d" % ground)
+    got = c.call("keys", "down:rbutton", "--json")
+    assert got["engine"] == 1, f"(h) the right press on the margin did not reach the engine: {got}"
+    d = c.open_wiki(expect_pause=True)
+    frozen = d["frozen"]
+    got = c.call("keys", "up:rbutton", "--json")
+    assert got["engine"] == 1 and got["menu"] == 0, \
+        f"(h) the release of a press the engine saw did not reach it with the window open: {got}"
+    d = c.dump()
+    assert d["open"] and d["frozen"] == frozen and not d["owed_buttons"], \
+        f"(h) the release moved the window's state: {d} (frozen at the open {frozen})"
+    c.keys("esc")
+    d = c.dump()
+    assert not d["open"], f"(h) Esc did not close the window: {d}"
+    c.call("order", "stop", "--unit", c.units["ARMCK"], "--expect", "ARMCK")
+    print("wiki sp: (h) a right button held across the open was released to the engine, at the frozen point")
+
     # (g) the level ends with the window open, on the test's own hold
     T = c.gametime() + 30
     start = c._pause_at(T)
@@ -655,6 +679,13 @@ def recorded(c):
         f"(r) the wiki button {w} is not 3 bar pixels left of the rewind button {rw}"
     tacli("hud", c.name, "click", "rewind", timeout=180)
     c.until(lambda: rewind_state(c) == "open", "(r) the rewind button did not open the rewind", seconds=120)
+    d = c.dump()
+    start = c.mark()
+    c.keys("dclick:%d,%d" % c.centre(c.hit(d, "wiki")))
+    c.until(lambda: c.found(start, r"wiki: not opened - a rewind holds the pause"),
+            "(r) no `wiki: not opened - a rewind holds the pause` line", seconds=30)
+    d = c.dump()
+    assert not d["open"] and not d["holds"], f"(r) the wiki opened over an open rewind: {d}"
     tacli("hud", c.name, "click", "rewind", timeout=180)
     c.until(lambda: rewind_state(c) == "idle", "(r) the rewind button did not close the rewind", seconds=120)
     c.until(lambda: c.runs(1.0), "(r) the game does not run after the rewind closed", seconds=120)
@@ -664,7 +695,8 @@ def recorded(c):
     d = c.dump()
     assert not d["open"] and not d["paused"], f"(r) Esc did not close the wiki: {d}"
     c.once(c.runs(2.0), "(r) GameTime stands after the close")
-    print(f"wiki recorded: (r) the wiki button {w}, the rewind button {rw}; each opens what it should")
+    print(f"wiki recorded: (r) the wiki button {w}, the rewind button {rw}; each opens what it should, "
+          "and the wiki does not open over an open rewind")
 
 
 def launched(instance, mode, res):

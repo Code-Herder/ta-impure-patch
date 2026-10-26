@@ -14,6 +14,10 @@
    "ev": the input}; {"op": "step"}; and the queries {"op": "view"}, {"op": "orders", "id"},
    {"op": "done"}, {"op": "tick"} and {"op": "hash"}, each answered by one line.
 
+   `wikitest malformed` loads data the loader must survive -- each case an archive or an entry
+   built here -- and prints one line per case, "ok <case>" or "FAILED <case>: why". The native
+   build runs under AddressSanitizer, so a write past an allocation fails the run as well.
+
    Exit 0 when everything loaded and ran; the comparison is simparity.mjs's. */
 #include <stdio.h>
 #include <stdlib.h>
@@ -367,10 +371,118 @@ static int trace(const char* path)
     return 0;
 }
 
+/* ---- malformed data ---- */
+
+static void put32(unsigned char* p, size_t v)
+{
+    p[0] = (unsigned char)v;
+    p[1] = (unsigned char)(v >> 8);
+    p[2] = (unsigned char)(v >> 16);
+    p[3] = (unsigned char)(v >> 24);
+}
+
+/* an archive in tools/hudpak.py's format of `n` files, names[i] holding texts[i]; `*len` its size */
+static unsigned char* pack(const char* const* names, const char* const* texts, int n, size_t* len)
+{
+    size_t head = 12 + 16 * (size_t)n, at = head, noff = head, i;
+    unsigned char* p;
+    for (i = 0; i < (size_t)n; i++) at += strlen(names[i]);
+    for (i = 0; i < (size_t)n; i++) at = ((at + 3) & ~(size_t)3) + strlen(texts[i]);
+    if (!(p = (unsigned char*)calloc(1, at))) return NULL;
+    memcpy(p, "HPAK", 4);
+    put32(p + 4, 1);
+    put32(p + 8, (size_t)n);
+    at = head;
+    for (i = 0; i < (size_t)n; i++) at += strlen(names[i]);
+    for (i = 0; i < (size_t)n; i++) {
+        size_t nl = strlen(names[i]), tl = strlen(texts[i]);
+        at = (at + 3) & ~(size_t)3;
+        put32(p + 12 + 16 * i, noff);
+        put32(p + 16 + 16 * i, nl);
+        put32(p + 20 + 16 * i, at);
+        put32(p + 24 + 16 * i, tl);
+        memcpy(p + noff, names[i], nl);
+        memcpy(p + at, texts[i], tl);
+        noff += nl;
+        at += tl;
+    }
+    *len = at;
+    return p;
+}
+
+static int said(int ok, const char* name, const char* why)
+{
+    if (ok) printf("ok %s\n", name);
+    else printf("FAILED %s: %s\n", name, why);
+    return ok;
+}
+
+/* a tree whose `tree.json` is `tree`: it loads, as `nodes` nodes, the folders without an entry */
+static int tree_case(const char* name, const char* tree, int nodes)
+{
+    const char* names[1] = { "tree.json" };
+    const char* texts[1];
+    char err[256], why[320];
+    size_t n;
+    unsigned char* pak;
+    WIKIDATA* d;
+    int ok;
+    texts[0] = tree;
+    if (!(pak = pack(names, texts, 1, &n))) return said(0, name, "out of memory");
+    err[0] = 0;
+    d = tagpu_wikidata_load(pak, n, err, sizeof err);
+    snprintf(why, sizeof why, "loaded %d nodes and %d entries (%s), expected %d nodes", d ? d->nnode : -1,
+             d ? d->nentry : -1, d ? "" : err, nodes);
+    ok = d && d->nnode == nodes && d->nentry == 0;
+    tagpu_wikidata_free(d);
+    free(pak);
+    return said(ok, name, why);
+}
+
+/* every case, its verdict in its line: the count is simparity.mjs's, as the comparison is */
+/* lists given as objects: each reads as empty, never as as many unread elements as members */
+static int entry_case(void)
+{
+    static const char TEXT[] =
+        "{\"format\":1,\"id\":\"m\",\"text\":{\"a\":\"x\",\"b\":\"y\"},"
+        "\"units\":{\"ARMMEX\":{\"footprint\":[2,2],\"buildTime\":10}},"
+        "\"scene\":{\"map\":{\"w\":8,\"h\":8},\"metal\":{\"r\":1},\"vents\":{\"v\":[1,1]},"
+        "\"units\":{\"u\":{\"type\":\"ARMMEX\",\"at\":[1,1]}},\"selected\":{\"s\":\"u\"}},"
+        "\"demos\":{\"d\":{}}}";
+    WIKIENTRY e;
+    char err[256], why[320];
+    int ok;
+    err[0] = 0;
+    ok = tagpu_wikidata_entry(&e, TEXT, sizeof TEXT - 1, err, sizeof err);
+    snprintf(why, sizeof why, "%s: text %d, metal %d, vents %d, units %d, selected %d, demos %d",
+             ok ? "loaded" : err, ok ? e.ntext : -1, ok ? e.scene.nmetal : -1, ok ? e.scene.nvent : -1,
+             ok ? e.scene.nunit : -1, ok ? e.scene.nselected : -1, ok ? e.ndemo : -1);
+    ok = ok && !e.ntext && !e.scene.nmetal && !e.scene.nvent && !e.scene.nunit && !e.scene.nselected
+         && !e.ndemo;
+    tagpu_wikidata_entry_free(&e);
+    return said(ok, "entry-lists-as-objects", why);
+}
+
+static int malformed(void)
+{
+    int ok = 1;
+    /* an `entry` that is not a string is a folder, counted and read as one: its children too */
+    ok &= tree_case("tree-entry-number",
+                    "{\"format\":1,\"tree\":[{\"entry\":5,\"children\":[{\"title\":\"a\"},"
+                    "{\"title\":\"b\"},{\"title\":\"c\"}]}]}", 4);
+    ok &= tree_case("tree-entry-object",
+                    "{\"format\":1,\"tree\":[{\"entry\":{\"id\":\"x\"},\"children\":[{\"title\":\"a\","
+                    "\"children\":[{\"title\":\"b\"}]}]}]}", 3);
+    ok &= entry_case();
+    (void)ok;
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     if (argc == 3 && !strcmp(argv[1], "demos")) return demos(argv[2]);
     if (argc == 3 && !strcmp(argv[1], "trace")) return trace(argv[2]);
-    fprintf(stderr, "usage: wikitest demos PAK | wikitest trace FILE\n");
+    if (argc == 2 && !strcmp(argv[1], "malformed")) return malformed();
+    fprintf(stderr, "usage: wikitest demos PAK | wikitest trace FILE | wikitest malformed\n");
     return 2;
 }

@@ -884,6 +884,58 @@ int tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
     return 1;
 }
 
+static int find_part(const HUDLAY* k, const char* name);
+
+int tagpu_wikilay_check(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f, HUDOPS* scratch,
+                        char* err, size_t errn)
+{
+    /* the icons the window and the stage draw: the build draws a button without an icon it lacks,
+       so their absence is refused here rather than drawn as a blank control */
+    static const char* const ICON[] = { "i_wiki", "i_play", "i_pause", "i_replay", "i_open", "i_shut",
+                                        "i_dot", "cursor_arrow", "cursor_move", "cursor_build" };
+    WIKIPAGE st;
+    WIKIFRAME fr;
+    int i, e, k, pass;
+    if (err && errn) err[0] = 0;
+    if (!l || !d || !f || !scratch) {
+        if (err && errn) snprintf(err, errn, "wikilay: no layout, data, faces or scratch to check");
+        return 0;
+    }
+    if (l->icon_close < 0) { if (err && errn) snprintf(err, errn, "wiki kit: no icon 'i_close' or 'i_x'"); return 0; }
+    for (i = 0; i < (int)(sizeof ICON / sizeof *ICON); i++)
+        if (find_part(l->kit, ICON[i]) < 0) {
+            if (err && errn) snprintf(err, errn, "wiki kit: no icon '%s'", ICON[i]);
+            return 0;
+        }
+    if (tagpu_hudlay_style_index(l->kit, "toast") < 0) {
+        if (err && errn) snprintf(err, errn, "wiki kit: no `toast` style for the stage");
+        return 0;
+    }
+    memset(&st, 0, sizeof st);
+    st.W = 1280;
+    st.H = 720;
+    st.bar = 24;
+    st.entry = -1;
+    st.speed = 1;
+    snprintf(st.held, sizeof st.held, "wiki");
+    if (!tagpu_wikilay_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
+    st.open = 1;
+    snprintf(st.held, sizeof st.held, "close");
+    if (!tagpu_wikilay_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
+    snprintf(st.held, sizeof st.held, "try");
+    for (e = 0; e < d->nentry; e++)
+        for (k = 0; k < (d->entry[e].ndemo > 0 ? d->entry[e].ndemo : 1); k++)
+            for (pass = 0; pass < 2; pass++) {
+                st.entry = e;
+                st.demo = k;
+                st.playing = !pass;
+                st.done = pass;
+                st.speed = 1 + pass;
+                if (!tagpu_wikilay_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
+            }
+    return 1;
+}
+
 /* ---- loading ----------------------------------------------------------------------------------- */
 
 typedef struct { const TJV* L; int bad; char* err; size_t errn; } LD;

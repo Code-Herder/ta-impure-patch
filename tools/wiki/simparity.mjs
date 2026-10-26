@@ -3,7 +3,7 @@
    tick and field by field.
 
    usage: node tools/wiki/simparity.mjs [--wine]
-     exit 0 when every demo and every rule case agrees, 1 when one differs, 2 when the C side cannot be built or run
+     exit 0 when every demo and every rule case agrees and every malformed case loads, 1 when one does not, 2 when the C side cannot be built or run
    usage: node tools/wiki/simparity.mjs --hash
      prints `<entry>/<demo> <hash>` for every demo: sim.js's state hash on its last tick, 16 hex digits, the number
      the DLL's tagpu_wikisim_hash must give for the same demo played to its end. Builds nothing.
@@ -14,7 +14,8 @@
    the first and the last tick. It then plays simcheck.mjs's rule cases -- the rules no demo shows -- through both:
    each case is run against sim.js with every call recorded, the recording is replayed through the C sim, and every
    answer the case read (each view, with the state hash after it, orders, done) is compared. For each demo and case
-   it names the first differing tick or call and field.
+   it names the first differing tick or call and field. Last, wikitest's `malformed` cases load data the loader must
+   survive -- a tree or an entry built wrong on purpose -- and each must load as stated.
 
    stateHash is tagpu_wikisim_hash's twin, fed from view() and orders() in the order and the encoding
    tagpu_wikisim.h states.
@@ -146,7 +147,7 @@ if (process.argv.includes('--hash')) {
 }
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'simparity-'));
-let failed = 0, demos = 0, cases = 0, differ = 0;
+let failed = 0, demos = 0, cases = 0, differ = 0, malformed = 0, bad = 0;
 try {
   const wikitest = build(tmp);
   run('python3', [path.join(ROOT, 'tools/hudpak.py'), '--set', 'wiki', path.join(ROOT, 'art/wiki'), path.join(tmp, 'wiki.bin')]);
@@ -223,6 +224,13 @@ try {
     }
   }
   WikiSim.create = create;
+
+  /* ---- data the loader must survive, built by tests/wikitest.c's `malformed` ---- */
+  for (const l of lines(wikitest(['malformed']))) {
+    malformed++;
+    if (l.startsWith('ok ')) console.log(`equal  malformed -- ${l.slice(3)}`);
+    else { failed++; bad++; console.log(`DIFFER malformed -- ${l}`); }
+  }
 } catch (e) {
   if (!(e instanceof CannotRun)) throw e;
   console.error(`simparity: ${e.message}`);
@@ -232,7 +240,7 @@ try {
 }
 if (process.exitCode !== 2) {
   const variant = WINE ? 'i686 under Wine' : 'native';
-  console.log(failed ? `${differ} of ${demos} demos and ${failed - differ} of ${cases} rule cases differ (C sim: ${variant})`
-    : `all ${demos} demos and ${cases} rule cases equal, tick for tick (C sim: ${variant})`);
+  console.log(failed ? `${differ} of ${demos} demos, ${failed - differ - bad} of ${cases} rule cases and ${bad} of ${malformed} malformed-data cases differ (C sim: ${variant})`
+    : `all ${demos} demos and ${cases} rule cases equal, tick for tick, and all ${malformed} malformed-data cases loaded (C sim: ${variant})`);
   process.exitCode = failed ? 1 : 0;
 }

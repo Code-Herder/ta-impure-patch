@@ -1116,6 +1116,9 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     if (tagpu_zoom_drop_mouse(uMsg, lParam))
         return 0;
 
+    /* tagpu: what the engine is handed down and up, for the in-game wiki's paired releases */
+    tagpu_wiki_engine_got(uMsg, wParam);
+
     return CallWindowProcA(g_ddraw.wndproc, hWnd, uMsg, wParam,
                            tagpu_zoom_mouse_lparam(uMsg, lParam));
 }

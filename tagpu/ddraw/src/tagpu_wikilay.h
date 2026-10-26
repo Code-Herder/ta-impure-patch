@@ -134,4 +134,13 @@ const char*   tagpu_wikilay_mod_name(int mod);
 int           tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
                                   const WIKIPAGE* st, HUDOPS* out, WIKIFRAME* fr, char* err, size_t errn);
 
+/* The kit and the data checked at the load, so no frame can refuse them later and leave the
+   window open but undrawn: 1 when the kit holds every icon the window and the stage draw and the
+   stage's `toast` style, and the build answers every state -- the window closed and its button
+   held, open with its close button held, and every entry's every demo, playing and paused, with
+   Try it yourself held -- else 0 with the first failure in `err`. `scratch` takes the ops of the
+   states tried. A load-time call: any thread, before the layout is published. */
+int           tagpu_wikilay_check(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
+                                  HUDOPS* scratch, char* err, size_t errn);
+
 #endif

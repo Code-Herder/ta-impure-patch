@@ -25,21 +25,34 @@
    mouse record after the region test and disarms the building, exactly as letting go of Shift
    would. That is the invariant's own consequence, not a defect.
 
-   THE ORDERING. The open and the close are each one interlocked store of the capture word, here
-   on the game thread. Every poll -- the engine mouse thread's GetCursorPos every ~33 ms among them
-   -- reads the word with an interlocked read and comes wholly before or after that store: before,
-   it answers the live device; after, the frozen one. The frozen point is stored before the word,
-   so a poll that sees the word set reads that open's point. Input given before the open reached
-   the game; input given after it does not; there is no moment that is both.
+   THE ORDERING. The open and the close are each one store of the capture word, here on the game
+   thread, made under s_cursorLock together with the frozen point and, at the open, g_ddraw.cursor.
+   GetCursorPos is the one poll that stores what it reads: the engine mouse thread calls it every
+   ~33 ms, and it writes the live point into g_ddraw.cursor (winapi_hooks.c). It tests the word and
+   makes that store under the same lock (tagpu_wiki_cursor_store), so it comes wholly before the
+   open -- its live point is then overwritten by the open's -- or wholly after it, and stores
+   nothing; the frozen pair is read under the lock too, so it never mixes two opens. The key polls
+   store nothing: an interlocked read of the word orders each before or after the store, the live
+   device before and every key up after. Input given before the open reached the game; input given
+   after it does not; there is no moment that is both.
 
-   THE PAIRED PRESS AND THE PAIRED KEY. A press the wiki takes has its release taken too, whether
-   the wiki is still open or not (s_owedBtn, s_owedKey), so the engine is never handed a release
-   whose press it never saw, nor misses one for a press it did. The wiki button and the close
-   button act on the press, as the sprocket does. Esc closes on its RELEASE, and only the release
-   of an Esc whose press the wiki took: the press, its auto-repeats and the WM_CHAR TranslateMessage
-   posts for it all arrive while the window is still open, and none reaches the engine. A press
-   the wiki does not take of a button or key it is owed ends that debt, as tagpu_menu_click's does:
-   its release was lost (dragged off the window, focus taken), and the next one is the engine's.
+   THE PAIRED PRESS AND THE PAIRED KEY. The engine is never handed a release whose press it never
+   saw, nor misses one for a press it did. What it saw is a fact recorded where it is handed a
+   message: both doors into TA's window procedure, the tail of cnc-ddraw's and the shield's to_game,
+   call tagpu_wiki_engine_got, which keeps the left, right and middle buttons and the keys the
+   engine holds down (s_engBtn, s_engKey). A release of one of those goes to the engine whatever
+   the wiki's state: a key's as it is, and a button's, while the window is open, at the frozen point
+   (TAGPU_WIKI_FROZEN: the caller delivers it as an injected release at that point is delivered), so
+   a button held across the open is let go where the engine last saw the pointer. Every other release
+   of a press the wiki took is taken too, whether the window is still open or not (s_owedBtn,
+   s_owedKey). The wiki button and the close button act on the press, as the sprocket does. Esc
+   closes on its RELEASE, and only the release of an Esc whose press the wiki took: the press, its
+   auto-repeats and the WM_CHAR TranslateMessage posts for it all arrive while the window is still
+   open, and none reaches the engine; the auto-repeats of a key the engine holds are taken too, and
+   owe nothing. A press the wiki does not take of a button or key it is owed ends that debt, as
+   tagpu_menu_click's does: its release was lost (dragged off the window, focus taken), and the next
+   one is the engine's. The fourth and fifth buttons are not followed: TA's window procedure's jump
+   table stops at 0x206 (tagpu_zoom.h), so their messages carry nothing to it.
 
    THE PAUSE (below, above wiki_open) is held in single player and nowhere else.
 
@@ -56,14 +69,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include "dd.h"
+#include "config.h"
 #include "mouse.h"
 #include "tagpu_shield.h"
 #include "tagpu_menu.h"
 #include "tagpu_hudstate.h"
 #include "tagpu_hudart.h"
+#include "tagpu_hudinput.h"
 #include "tagpu_profiles.h"
+#include "tagpu_replay.h"
 #include "tagpu_log.h"
 #include "tagpu_wiki.h"
+#include "tagpu_wikistate.h"
 
 #define DUMP_ASK  "tagpu_wiki.dump"
 #define DUMP_OUT  "tagpu_wiki.json"
@@ -71,10 +88,20 @@
 
 enum { B_L = 1, B_R = 2, B_M = 4, B_X = 8 };
 
-/* ---- the two words any thread reads ---------------------------------------------------------- */
+/* ---- what any thread reads ------------------------------------------------------------------- */
 
-static volatile LONG s_hold;            /* the capture word: 1 while the window is open         */
-static volatile LONG s_fx, s_fy;        /* the frozen game point, stored before s_hold          */
+/* THE CURSOR LOCK, initialised at attach (tagpu_wiki_init) before any DirectDraw object exists, so
+   before fake_GetCursorPos can reach it. It is held over a few loads and stores and no call that
+   takes another lock or waits on a thread, so it cannot deadlock. */
+static CRITICAL_SECTION s_cursorLock;
+static volatile LONG s_hold;            /* the capture word: 1 while the window is open; written
+                                           under the lock, read without it by the key polls     */
+static LONG s_fx, s_fy;                 /* the frozen game point, under the lock                 */
+
+void tagpu_wiki_init(void)
+{
+    InitializeCriticalSection(&s_cursorLock);
+}
 
 LONG tagpu_wiki_holds_input(void)
 {
@@ -83,14 +110,37 @@ LONG tagpu_wiki_holds_input(void)
 
 void tagpu_wiki_frozen(LONG* x, LONG* y)
 {
-    *x = InterlockedCompareExchange(&s_fx, 0, 0);
-    *y = InterlockedCompareExchange(&s_fy, 0, 0);
+    EnterCriticalSection(&s_cursorLock);
+    *x = s_fx;
+    *y = s_fy;
+    LeaveCriticalSection(&s_cursorLock);
+}
+
+int tagpu_wiki_cursor_store(int x, int y, int outside, LONG* ax, LONG* ay)
+{
+    int held;
+    EnterCriticalSection(&s_cursorLock);
+    held = s_hold != 0;
+    if (held) {
+        *ax = s_fx;
+        *ay = s_fy;
+    } else {
+        if (outside) mouse_forget_client();
+        InterlockedExchange((LONG*)&g_ddraw.cursor.x, x);
+        InterlockedExchange((LONG*)&g_ddraw.cursor.y, y);
+        *ax = x;
+        *ay = y;
+    }
+    LeaveCriticalSection(&s_cursorLock);
+    return held;
 }
 
 /* ---- the game thread's own ------------------------------------------------------------------- */
 
 static int  s_open;                     /* this thread's copy of s_hold                          */
 static unsigned s_owedBtn;              /* B_*: buttons whose press was taken                    */
+static unsigned s_engBtn;               /* B_L/B_R/B_M: buttons the engine was handed down, not up */
+static BYTE s_engKey[256];              /* keys the engine was handed down, not up               */
 static BYTE s_owedKey[256];             /* keys whose press was taken                            */
 static int  s_charOwed;                 /* the last key-down was taken: so is the character the
                                            window's TranslateMessage posts for it               */
@@ -118,23 +168,50 @@ static void say_open(int gx, int gy)
    is not a network game -- and front-end code alone sets that bit while play only ever clears it
    (tagpu_menu.c names the stores), so a level single player at the open is single player at the
    close.
-   NOTHING ELSE UNDOES IT WHILE THE WINDOW IS OPEN. Every in-play writer of bit 0 is reached only
-   through input the wiki holds: the Pause key (0x4960AA), the in-game menu (0x460E00, 0x460A33),
-   key 0xE3 (0x49990E), the options opener's callers, and the replay HUD's pause button
-   (tagpu_replay_pause). Impure's other writers set the bit and never clear it (the rewind's and
-   the launch hold's keeper on 0x496920) or run at a level's first tick (fix_load_unpaused, before
-   any window can open). The replay trigger's `resume` clears a pause its own `pause at` took: a
+   NOTHING ELSE WRITES THE BIT WHILE THE WINDOW IS OPEN, because the window does not open while
+   another pause is in flight (pause_in_flight). Two of Impure's writers put a pause back later
+   and without input: the live rewind, whose open saves bit 0 and sets it, and whose end restores
+   what it saved -- from the frame visit, unasked, when its FLUSH or ENDING state finishes or is
+   refused (tagpu_replay.c rw_finish, rw_close_unmoved) -- and the replay HUD's Leave, whose
+   question the next frame's observer opens, putting the pause back when it cannot or once the
+   question is gone (tagpu_hudinput.c). Neither starts while the window is open: their buttons are
+   the replay HUD's, which no input reaches then. The one verb that can be queued before the open
+   and run after it is a rewind's open (every other verb is refused in idle without a write); it
+   saves the wiki's pause and gives it back at its own end, so the game stays paused after both
+   have closed, until the Pause key -- a pause outliving the window, never a game running under it.
+   Every engine writer of bit 0 in play is reached only through input the wiki holds -- the Pause
+   key (0x4960BC), the in-game menu (0x460E00, 0x460A33) and its LOADGAME screens (0x49306D,
+   0x493330), key 0xE3 (0x49990E), the options opener 0x45CFC0 (0x45D0A1), the chat command
+   MakePoster (0x495B7E, put back at 0x495DD2 within the same call) -- or through a peer's message
+   0x19 (0x45597A), which a single-player level never receives; the rest run in the front end
+   (0x44B6F0, 0x44BE61: the unit-restrictions screen's save lists) or the level's load (0x49720A)
+   (exe-reverse-engineering.md, *A level starts paused*). Impure's other writers
+   set the bit and never clear it (the rewind's and the launch hold's keeper on 0x496920), run at a
+   level's first tick (fix_load_unpaused, before any window can open), or are input (the replay
+   HUD's pause button). The replay trigger's `resume` clears a pause its own `pause at` took: a
    test's command, which no player reaches.
    ON CLOSE the bit is cleared only if it was clear at the open, so a game paused before the wiki
    stays paused after it. AT LEVEL END the pause is forgotten and nothing is written. */
+/* The pause another writer will put back on its own, or NULL (THE PAUSE, above) */
+static const char* pause_in_flight(void)
+{
+    TAGPU_REPLAY_RWSTATE rw;
+    tagpu_replay_rewind_state(&rw);
+    if (rw.state != TAGPU_REPLAY_RWS_IDLE) return "a rewind holds the pause";
+    if (tagpu_hudinput_leave_pending()) return "Leave's question holds the pause";
+    return NULL;
+}
+
 static void wiki_open(int gx, int gy)
 {
     int was = 0;
-    InterlockedExchange(&s_fx, gx);
-    InterlockedExchange(&s_fy, gy);
+    EnterCriticalSection(&s_cursorLock);
+    s_fx = gx;
+    s_fy = gy;
     InterlockedExchange((LONG*)&g_ddraw.cursor.x, gx);
     InterlockedExchange((LONG*)&g_ddraw.cursor.y, gy);
     InterlockedExchange(&s_hold, 1);
+    LeaveCriticalSection(&s_cursorLock);
     s_open = 1;
     s_paused = 0;
     if (tagpu_menu_single_player() && tagpu_menu_pause_hold(1, &was)) {
@@ -151,7 +228,9 @@ static void wiki_close(const char* how)
     s_paused = 0;
     s_open = 0;
     s_escClose = 0;
+    EnterCriticalSection(&s_cursorLock);
     InterlockedExchange(&s_hold, 0);
+    LeaveCriticalSection(&s_cursorLock);
     page_close();
     tagpu_logf("wiki: closed (%s)", how);
 }
@@ -484,7 +563,7 @@ static void check(void)
 }
 
 /* A press of button `bit` at client point (cx, cy), engine point (gx, gy), from either path:
-   1 = taken. */
+   1 = taken. gx < 0: the engine point is the client point's, converted here (the real path). */
 static int press(unsigned bit, int cx, int cy, int gx, int gy)
 {
     char key[TAGPU_WIKI_KEY];
@@ -498,8 +577,14 @@ static int press(unsigned bit, int cx, int cy, int gx, int gy)
         return 1;
     }
     if (bit == B_L && hit(cx, cy, key) && !strcmp(key, "wiki")) {
+        const char* busy = pause_in_flight();
         s_owedBtn |= bit;
+        if (busy) {
+            tagpu_logf("wiki: not opened - %s", busy);
+            return 1;
+        }
         held(key);
+        if (gx < 0) mouse_client_to_game(cx, cy, &gx, &gy);
         wiki_open(gx, gy);
         return 1;
     }
@@ -507,21 +592,32 @@ static int press(unsigned bit, int cx, int cy, int gx, int gy)
     return 0;
 }
 
-/* A release of button `bit`, from either path: 1 = taken. */
+/* cnc-ddraw's window procedure takes a real button's release, locking the mouse, and gives the
+   engine nothing of it: the mouse is unlocked and the window closed */
+static int relocks(void)
+{
+    return !s_open && !g_mouse_locked && !g_config.devmode;
+}
+
+/* A release of button `bit`, from either path: 1 = taken, TAGPU_WIKI_FROZEN = the engine's, at
+   the frozen point. */
 static int release(unsigned bit)
 {
-    if (bit == B_L) { s_held[0] = 0; s_drag = -1; }
-    if (s_owedBtn & bit) {
-        s_owedBtn &= ~bit;
-        return 1;
-    }
-    return s_open;
+    int owed = (s_owedBtn & bit) != 0;
+    s_owedBtn &= ~bit;
+    if (owed && bit == B_L) { s_held[0] = 0; s_drag = -1; }
+    if (s_engBtn & bit) return s_open ? TAGPU_WIKI_FROZEN : 0;
+    return owed || s_open;
 }
 
 /* A key-down of `vk`; `repeat` when the key was already down (lParam bit 30): 1 = taken. */
 static int key_down(unsigned vk, int repeat)
 {
     vk &= 0xFF;
+    if (s_open && repeat && s_engKey[vk] && !s_owedKey[vk]) {
+        s_charOwed = 1;
+        return 1;
+    }
     if (s_open) {
         s_owedKey[vk] = 1;
         if (vk == VK_ESCAPE) s_escClose = 1;
@@ -539,16 +635,30 @@ static int key_down(unsigned vk, int repeat)
 
 static int key_up(unsigned vk)
 {
+    int owed;
     vk &= 0xFF;
-    if (s_owedKey[vk]) {
-        s_owedKey[vk] = 0;
-        if (vk == VK_ESCAPE && s_escClose) {
-            s_escClose = 0;
-            if (s_open) wiki_close("Esc");
-        }
-        return 1;
+    owed = s_owedKey[vk];
+    s_owedKey[vk] = 0;
+    if (owed && vk == VK_ESCAPE && s_escClose) {
+        s_escClose = 0;
+        if (s_open) wiki_close("Esc");
     }
-    return s_open;
+    if (s_engKey[vk]) return 0;
+    return owed || s_open;
+}
+
+void tagpu_wiki_engine_got(UINT msg, WPARAM wp)
+{
+    switch (msg) {
+    case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK: s_engBtn |= B_L; break;
+    case WM_RBUTTONDOWN: case WM_RBUTTONDBLCLK: s_engBtn |= B_R; break;
+    case WM_MBUTTONDOWN: case WM_MBUTTONDBLCLK: s_engBtn |= B_M; break;
+    case WM_LBUTTONUP: s_engBtn &= ~B_L; break;
+    case WM_RBUTTONUP: s_engBtn &= ~B_R; break;
+    case WM_MBUTTONUP: s_engBtn &= ~B_M; break;
+    case WM_KEYDOWN: case WM_SYSKEYDOWN: s_engKey[wp & 0xFF] = 1; break;
+    case WM_KEYUP: case WM_SYSKEYUP: s_engKey[wp & 0xFF] = 0; break;
+    }
 }
 
 static int character(void)
@@ -556,6 +666,12 @@ static int character(void)
     int owed = s_charOwed;
     s_charOwed = 0;
     return s_open || owed;
+}
+
+/* a real release's answer: a taken one goes on when it re-locks the mouse */
+static int paired_up(int took)
+{
+    return took == 1 && relocks() ? 0 : took;
 }
 
 int tagpu_wiki_message(UINT msg, WPARAM wp, LPARAM lp)
@@ -583,9 +699,10 @@ int tagpu_wiki_message(UINT msg, WPARAM wp, LPARAM lp)
     case WM_INPUT:
     case WM_MOUSEHOVER:
         return s_open;
-    /* THE ENGINE'S POINT OF A REAL PRESS is g_ddraw.cursor: this runs at the top of the window
-       procedure, before cnc-ddraw has unscaled the message, and the preceding WM_MOUSEMOVE has put
-       the game point there -- the point tagpu_menu_click is handed on this path too */
+    /* THE ENGINE'S POINT OF A REAL PRESS is its client point in lParam converted as cnc-ddraw
+       converts one (mouse_client_to_game, in press): this runs at the top of the window procedure,
+       before cnc-ddraw has unscaled the message, and g_ddraw.cursor is not that point while the
+       mouse is unlocked -- windowed, after the focus came back -- since no move reaches it then */
     case WM_LBUTTONDOWN:
     case WM_LBUTTONDBLCLK:
     case WM_RBUTTONDOWN:
@@ -597,19 +714,23 @@ int tagpu_wiki_message(UINT msg, WPARAM wp, LPARAM lp)
         unsigned bit = msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK ? B_L
                      : msg == WM_RBUTTONDOWN || msg == WM_RBUTTONDBLCLK ? B_R
                      : msg == WM_MBUTTONDOWN || msg == WM_MBUTTONDBLCLK ? B_M : B_X;
-        int gx = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
-        int gy = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
         if (s_open) note_client(cx, cy);
-        return press(bit, cx, cy, gx, gy);
+        return press(bit, cx, cy, -1, -1);
     }
+    /* THE RELEASE THAT RE-LOCKS THE MOUSE goes on once the window is closed: with the mouse
+       unlocked, cnc-ddraw's window procedure takes every button's release, the left, right and
+       middle one's to lock it, and hands the engine none (wndproc.c, "button up messages
+       reactivate cursor lock"). While the window is open it is taken all the same, since the
+       lock's store of the release's point would move g_ddraw.cursor off the frozen one; the next
+       click after the close locks it, as any click does unlocked. */
     case WM_LBUTTONUP:
-        return release(B_L);
+        return paired_up(release(B_L));
     case WM_RBUTTONUP:
-        return release(B_R);
+        return paired_up(release(B_R));
     case WM_MBUTTONUP:
-        return release(B_M);
+        return paired_up(release(B_M));
     case WM_XBUTTONUP:
-        return release(B_X);
+        return paired_up(release(B_X));
     }
     return 0;
 }
@@ -766,11 +887,16 @@ int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len)
         DeleteFileA(CHECK_ASK);
         check();
     }
-    if (!tagpu_hudstate_on()) {
-        /* THE WIKI IS OPEN ONLY WHERE IT CAN BE SEEN AND CLOSED: the lane fell back to GDI or the
-           HUD's pass refused, so no frame will draw the window again */
+    if (!tagpu_hudstate_on() || tagpu_wikistate_refused()) {
+        /* THE WIKI IS OPEN ONLY WHERE IT CAN BE SEEN AND CLOSED: the lane fell back to GDI, the
+           HUD's pass refused, or the wiki's layout refused, so no frame will draw the window
+           again */
         if (s_open) wiki_close("the wiki can no longer be drawn");
-        if (!s_saidOff) { s_saidOff = 1; tagpu_logf("wiki: not drawn - the replay HUD's pass is off"); }
+        if (!s_saidOff) {
+            s_saidOff = 1;
+            tagpu_logf("wiki: not drawn - %s", tagpu_wikistate_refused() ? "its layout refused the kit"
+                                                                          : "the replay HUD's pass is off");
+        }
         return 0;
     }
     QueryPerformanceCounter(&t0);

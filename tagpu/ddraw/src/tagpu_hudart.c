@@ -165,7 +165,11 @@ static int parts(HUDART* a, const PARTS* at, char* err, size_t errn, double* mpx
    page's layout (layout.json, tagpu_wikilay.c) and its window's kit, kit/kit.json and kit/parts/ of
    WIKIPAK (tools/hudart/fit.py --set wiki). The kit's text is set in the HUD's faces and styles,
    so its HUDART shares the HUD's faces, which are immutable once the HUD is published. A failure
-   here is the wiki's alone: the HUD stands. */
+   here is the wiki's alone: the HUD stands.
+   THE KIT AND THE DATA ARE CHECKED WHOLE HERE, every icon and style the window and the stage draw
+   and every state the page can be built in (tagpu_wikilay_check), so no frame can refuse them
+   later: a kit that would leave the window open but undrawn is refused before the button is ever
+   drawn. */
 static void wiki_load(void)
 {
     char err[256];
@@ -176,6 +180,8 @@ static void wiki_load(void)
     DWORD t0 = GetTickCount();
     double mpx = 0;
     WIKILAY* wl = NULL;
+    HUDOPS* scratch = NULL;
+    WIKIFACES faces;
     PARTS at;
     int i;
     err[0] = 0;
@@ -204,6 +210,23 @@ static void wiki_load(void)
     s_wiki.draw.nface = s_art.nface;
     memcpy(s_wiki.draw.face, s_art.face, sizeof s_wiki.draw.face);
     memcpy(s_wiki.draw.style_face, s_art.style_face, sizeof s_wiki.draw.style_face);
+    /* the check measures with the faces the render thread binds (tagpu_wikistate.c art_bind) */
+    memset(&faces, 0, sizeof faces);
+    for (i = 0; i < tagpu_hudlay_globals(s_wiki.draw.lay)->nstyle && i < 24; i++) {
+        const HUDFACE* f = &s_wiki.draw.face[s_wiki.draw.style_face[i]];
+        faces.face[i].info = &f->info;
+        faces.face[i].ascent = f->ascent;
+        faces.face[i].descent = f->descent;
+    }
+    if (!(scratch = (HUDOPS*)malloc(sizeof *scratch))) snprintf(err, sizeof err, "out of memory");
+    else if (!tagpu_wikilay_check(wl, s_wiki.data, &faces, scratch, err, sizeof err) && !err[0])
+        snprintf(err, sizeof err, "the page's layout refused the kit");
+    free(scratch);
+    if (err[0]) {
+        tagpu_logf("wiki: NOT loaded - %s", err);
+        InterlockedExchange(&s_wready, 2);
+        return;
+    }
     tagpu_logf("wiki: loaded %d entries and %d kit parts (%.2f Mpx) in %lu ms", s_wiki.data->nentry,
                tagpu_hudlay_nparts(s_wiki.draw.lay), mpx, (unsigned long)(GetTickCount() - t0));
     InterlockedExchange(&s_wready, 1);

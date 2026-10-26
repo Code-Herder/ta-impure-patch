@@ -175,6 +175,7 @@ static LRESULT to_game(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
         tagpu_gui_wheel(msg, wparam, lparam);
         if (tagpu_zoom_drop_mouse(msg, lparam))
             return 0;
+        tagpu_wiki_engine_got(msg, wparam);
         return CallWindowProcA(g_ddraw.wndproc, hwnd, msg, wparam,
                                tagpu_zoom_mouse_lparam(msg, lparam));
     }
@@ -220,6 +221,8 @@ static void deliver_key(HWND hwnd, int vk, BOOL up)
             to_game(hwnd, WM_CHAR, (WPARAM)(ch & 0xFF), lparam);
     }
 }
+
+static int deliver_engine(HWND hwnd, int code, int gx, int gy, int dev_x, int dev_y, const WPARAM* real_wp);
 
 /* What became of an injected mouse event: TAGPU_DELIVER_*, for its acknowledgement. */
 static int deliver_mouse(HWND hwnd, int code, int gx, int gy)
@@ -280,15 +283,34 @@ static int deliver_mouse(HWND hwnd, int code, int gx, int gy)
     /* THE IN-GAME WIKI, BEFORE THE ENGINE'S POINT IS STORED: while it is open the engine's point
        stays where the opening press left it, so a move it takes stores nothing, and a press or a
        wheel notch it takes is dropped whole; a release it takes still lets the virtual button go
-       (tagpu_wiki.c). Closed, it takes a press on its button and the release of a press it took. */
-    if (tagpu_wiki_mouse(code, dev_x, dev_y, gx, gy))
+       (tagpu_wiki.c). Closed, it takes a press on its button and the release of a press it took.
+       The release of a button the engine holds, made while it is open, goes on at the frozen
+       point, which g_ddraw.cursor already holds, with no client point. */
+    switch (tagpu_wiki_mouse(code, dev_x, dev_y, gx, gy))
     {
+    case 0:
+        break;
+    case TAGPU_WIKI_FROZEN:
+    {
+        LONG fx, fy;
+        tagpu_wiki_frozen(&fx, &fy);
+        return deliver_engine(hwnd, code, (int)fx, (int)fy, -1, -1, NULL);
+    }
+    default:
         if (code == TAGPU_M_LUP) set_key(VK_LBUTTON, FALSE);
         else if (code == TAGPU_M_RUP) set_key(VK_RBUTTON, FALSE);
         else if (code == TAGPU_M_MUP) set_key(VK_MBUTTON, FALSE);
         return TAGPU_DELIVER_MENU;
     }
+    return deliver_engine(hwnd, code, gx, gy, dev_x, dev_y, NULL);
+}
 
+/* The engine's half of a mouse event at engine point (gx, gy), client point (dev_x, dev_y) or -1:
+   the point stored, the sprocket and the replay HUD offered it, the display-only ring's drop, and
+   the message. `real_wp` is a hardware message's own wParam, or NULL to build it from the virtual
+   state. TAGPU_DELIVER_*. */
+static int deliver_engine(HWND hwnd, int code, int gx, int gy, int dev_x, int dev_y, const WPARAM* real_wp)
+{
     InterlockedExchange((LONG*)&g_ddraw.cursor.x, gx);
     InterlockedExchange((LONG*)&g_ddraw.cursor.y, gy);
 
@@ -350,6 +372,7 @@ static int deliver_mouse(HWND hwnd, int code, int gx, int gy)
     if (s_down[VK_MBUTTON]) wparam |= MK_MBUTTON;
     if (s_down[VK_SHIFT])   wparam |= MK_SHIFT;
     if (s_down[VK_CONTROL]) wparam |= MK_CONTROL;
+    if (real_wp) wparam = *real_wp;
 
     if (wheel) wparam = MAKEWPARAM((WORD)wparam, (WORD)(short)wheel);
 
@@ -394,9 +417,26 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
 
     /* The in-game wiki, on the REAL path, before the sprocket and the replay HUD and before the
        shield's own gate: while its window is open it takes every input message, so neither the
-       engine nor the controls under the window see one (tagpu_wiki.c, THE CAPTURE). */
-    if (tagpu_wiki_message(msg, wparam, lparam))
+       engine nor the controls under the window see one (tagpu_wiki.c, THE CAPTURE). The release
+       of a button the engine holds goes to the engine at the frozen point, by the injected path's
+       own delivery -- cnc-ddraw's would store the release's live point in g_ddraw.cursor -- unless
+       the shield is armed, which swallows every hardware message anyway. */
+    switch (tagpu_wiki_message(msg, wparam, lparam))
     {
+    case 0:
+        break;
+    case TAGPU_WIKI_FROZEN:
+        if (!tagpu_shield_on())
+        {
+            LONG fx, fy;
+            tagpu_wiki_frozen(&fx, &fy);
+            deliver_engine(hwnd, msg == WM_LBUTTONUP ? TAGPU_M_LUP : msg == WM_RBUTTONUP ? TAGPU_M_RUP
+                                                                                       : TAGPU_M_MUP,
+                           (int)fx, (int)fy, -1, -1, &wparam);
+        }
+        *result = 0;
+        return TRUE;
+    default:
         *result = 0;
         return TRUE;
     }

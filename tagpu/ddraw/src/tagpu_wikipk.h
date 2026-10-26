@@ -18,9 +18,10 @@
    can grow without moving or cutting any table before it. Every array below carries its bound
    here, and every count is checked against it where the record is read.
 
-   What the wiki draws and takes changes nothing the recorder carries, and no test group names this
-   file as a source; but tagpu_packet.h includes it, and three simulation files include that, so a
-   change here runs their test groups (ingame-wiki-plan.md, landing 2). */
+   No test group names this file as a source. Three simulation files include it through
+   tagpu_packet.h (tagpu_patches.c, tagpu_weapons.c, tagpu_datakeys.c), and none reads a type of
+   it: what the wiki draws and takes changes nothing they read, and nothing the recorder carries;
+   but a change here runs their test groups (ingame-wiki-plan.md, landing 2). */
 #include <stddef.h>
 #include <stdint.h>
 #include "tagpu_wikistage.h"
@@ -32,7 +33,8 @@
 #define TAGPU_WIKI_NSCROLL 3u       /* the panels that scroll: tree, demos, text (WIKI_SCROLL_*) */
 
 /* What the wiki shows this draw. Present in a packet exactly while the wiki can be drawn: in a
-   level, on the Vulkan lane, while the replay HUD's pass stands (tagpu_hudstate_on).
+   level, on the Vulkan lane, while the replay HUD's pass stands (tagpu_hudstate_on) and the
+   wiki's layout has not refused (tagpu_wikistate_refused).
 
    TWO LENGTHS. The area is TAGPU_PK_WIKI_HEAD bytes -- everything before `stage` -- while there is
    no stage to draw (the window closed, or no demo), and sizeof(TAGPU_PK_WIKI) with the stage, so

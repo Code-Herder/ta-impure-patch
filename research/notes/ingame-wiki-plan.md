@@ -47,7 +47,7 @@ and the core both call `place_take_offs_one` in `tagpu_placegeo.c`.
 | **Messages to TA's window procedure** | The only thing that pushes the key ring and the mouse ring: `WM_KEYDOWN` → `0x4C1D50` at `0x4B5D8E`, `WM_SYSKEYDOWN` at `0x4B5DC3`, `WM_CHAR` → `0x4C1B20` at `0x4B5DEA`, button messages → `0x4C2E30` at `0x4B5F51`. A move pushes no ring entry, but on `WM_MOUSEMOVE` the game thread writes the mouse object's position `+0x196`/`+0x19A` (`0x51F4B6`/`0x51F4BA`) | cited: *Who pushes the two rings* (DISASSEMBLED 2026-10-09) and *The engine's mouse thread* |
 | **`GetCursorPos`** (IAT `0x4FC2E4`) | `0x4C2610`: the mouse thread `0x4C2990` stores the result in `+0x196` about every 33 ms. Also `0x41CEE7` (the scroll poll's warp-back), `0x4C24DE` and `0x4C28AA`, plus the wrapper `0x4C2310`, which no `call` names | DISASSEMBLED 2026-10-25: every `call [0x4FC2E4]` |
 | **`GetAsyncKeyState`** (IAT `0x4FC350`) | The hotkey sampler `0x4C1B80` (`0x4C1BA3`..`0x4C1C2F`, eight sites) and the keydown translator's Ctrl test at `0x4C1D56` | DISASSEMBLED 2026-10-25 |
-| **`GetKeyState`** (IAT `0x4FC2EC`) | One site, `0x425F6E` (`VK_SHIFT`, in the front end), and the thunk `0x49F7D6` | DISASSEMBLED 2026-10-25 |
+| **`GetKeyState`** (IAT `0x4FC2EC`) | One site, `0x425F6E` (`VK_SHIFT`, in the front end), and the thunk `0x49F7D6`; the `GetCursorPos` thunk `0x49F7CA` (`jmp [0x4FC2E4]`) sits beside it, and no `call`, `jmp` or pointer names either | DISASSEMBLED 2026-10-25, the thunks 2026-10-26 |
 
 The import table names no DirectInput library (`objdump -p`). The three polls reach cnc-ddraw's
 `fake_GetCursorPos`, `fake_GetAsyncKeyState` and `fake_GetKeyState` (`winapi_hooks.c`). The armed
@@ -167,11 +167,17 @@ go of every key and button and left the pointer where it was when the wiki opene
 - `GetAsyncKeyState` and `GetKeyState` answer 0 for every key;
 - `GetCursorPos` answers the game point of the opening press, and `g_ddraw.cursor` stays there.
 
-**Why this is an ordering.** The open and the close are each one interlocked store of the capture
-word, on the game thread, which is the window procedure's thread. Every poll, including the engine
-mouse thread's, comes before or after that store. Before it, a poll answers the live device; after
-it, the frozen one. Input given before the open reaches the game and input given after it does not,
-so there is no window to lose.
+**Why this is an ordering.** The open and the close are each one store of the capture word, on the
+game thread, which is the window procedure's thread. They are made under the wiki's cursor lock,
+together with the frozen point and, at the open, `g_ddraw.cursor`. `GetCursorPos` is the one poll
+that stores what it reads: the engine mouse thread calls it about every 33 ms, and it writes the
+live point into `g_ddraw.cursor`, which `tagpu_vpwide.c` hands the engine at zoom ≠ 1. So it tests
+the word and makes that store under the same lock (`tagpu_wiki_cursor_store`). A poll preempted
+between its read of the device and its store therefore either stores before the open, which then
+overwrites the point, or finds the word set and stores nothing. The frozen pair is read under the
+lock too, so a close and a reopen never mix two points. The key polls store nothing, so an
+interlocked read of the word orders each of them before or after the store. Input given before the
+open reaches the game and input given after it does not, so there is no window to lose.
 
 **What follows, each by construction:**
 - **No order, selection, hotkey, chat line or wheel notch** reaches the engine, in multiplayer as in
@@ -192,7 +198,16 @@ so there is no window to lose.
   which the engine's translator also reads (`0x4B5DC3`).
 
 **The paired press and the paired key.**
-- **A press the wiki takes has its release taken too**, whether the wiki is still open or not.
+- **The engine never misses the release of a press it saw.** What it saw is recorded where it is
+  handed a message: both doors into TA's window procedure (the tail of cnc-ddraw's and the shield's
+  `to_game`) call `tagpu_wiki_engine_got`, which keeps the left, right and middle buttons and the
+  keys the engine holds down. A release of one of those goes to the engine whatever the wiki's
+  state: a key's as it is, and a button's, while the window is open, at the frozen point, through
+  the injected path's own delivery (`TAGPU_WIKI_FROZEN`; cnc-ddraw's would store the release's live
+  point). So a button held across the open is let go where the engine last saw the pointer. The
+  auto-repeats of a key the engine holds are taken while the window is open, and owe nothing.
+- **A press the wiki takes has its release taken too**, whether the wiki is still open or not,
+  unless the engine holds that button or key from an earlier press.
 - **The wiki button and the X act on the press**, as the sprocket does.
 - **Esc closes on its release, and only the release of an Esc whose press the wiki took.** So the
   press, its auto-repeats and the `WM_CHAR` that `TranslateMessage` posts for it all arrive while
@@ -210,10 +225,25 @@ cursor is drawn; the packet record says so.
 - **On close**: clear the bit only if it was clear at the open.
 - **At level end**: forget it and write nothing.
 
-Nothing else writes the bit while the wiki is open: every in-play writer is behind input the wiki
-holds (the census above). So there is no need for the `0x496920` observer, which lives in
-`tagpu_replay.c`. Changing that file would also run every replay test group, since the gate treats
-it as the recorder's own.
+Nothing else writes the bit while the wiki is open, because **the window does not open while
+another pause is in flight**. Every engine writer in play is behind input the wiki holds, or is a
+peer's message `0x19`, which a single-player level never receives (the census in
+`exe-reverse-engineering.md`, *A level starts paused*). Two of Impure's writers put a pause back
+later without input:
+- **The live rewind.** Its open saves bit 0 and sets it; its end restores what it saved. In the
+  `FLUSH` and `ENDING` states that end comes from the frame visit, unasked, when the writer
+  finishes or the open is refused (for example "no complete seek interval yet").
+- **The replay HUD's Leave.** The next frame's observer opens its question, and puts the pause back
+  when it cannot, or once the question is gone.
+
+So the wiki refuses to open while `tagpu_replay_rewind_state` is not idle or
+`tagpu_hudinput_leave_pending` is set, and logs `wiki: not opened - ...`. Neither starts while the
+window is open, since their buttons are the replay HUD's. The one verb that can be queued before
+the open and run after it is a rewind's open; it saves the wiki's pause and gives it back at its
+own end, so the game stays paused after both have closed, until the Pause key: a pause outliving
+the window, never a game running under it. This needs no `0x496920` observer, which lives in
+`tagpu_replay.c`; changing that file would run every replay test group, since the gate treats it as
+the recorder's own.
 
 A replay is a skirmish, so the wiki pauses the playback there too (question 6). The recording is
 untouched: a pause steps nothing, as a Pause key steps nothing.
@@ -222,7 +252,7 @@ untouched: a pause steps nothing, as a Pause key steps nothing.
 
 | State | Owner | Written by | Read by |
 |---|---|---|---|
-| open, the opening point, the paired press and key, the pause taken | game thread (`tagpu_wiki.c`) | input hooks and the fill | the fill; the capture word and the frozen point are also read by **any thread**, through interlocked words |
+| open, the opening point, the paired press and key, the pause taken | game thread (`tagpu_wiki.c`) | input hooks and the fill | the fill; **any thread** reads the capture word through an interlocked read, and the frozen point, with `GetCursorPos`'s store, under the cursor lock |
 | entry, demo, folds, scroll, playing, speed, try | game thread | input hooks against the last drawn frame's hit map | the fill |
 | the `WIKISIM` and its clock | game thread | the fill (`step`) and Try-it input (`input`) | the fill, which copies its view |
 | the loaded wiki: `WIKIDATA`, the kit, the faces | published once by the art loader thread, then immutable and never freed | the loader | the game thread (the simulation) and the render thread (layout, text) |
@@ -241,6 +271,15 @@ never drawn, so there is no hit map to open it from, and the wiki cannot open: b
 by a test. GDI is [the reference for the original game](vulkan-only-plan.html), and the replay HUD
 and the rewind button already have nothing there. **The recommendation is no button on GDI**
 (question 1).
+
+**A kit the window cannot draw is refused at its load, and at a frame too.** `tagpu_wikilay_load`
+refuses a kit missing any part or a role's style, and the art loader then checks the icons and the
+`toast` style the window and the stage draw and builds the page in every state -- closed, open with
+its close button held, every entry's every demo playing and paused (`tagpu_wikilay_check`) -- so a
+kit or data the page cannot draw never publishes and no button is drawn. Should a frame's layout
+refuse all the same (its build's own memory), the render thread publishes it
+(`tagpu_wikistate_refused`), and the fill closes the window as it does when the HUD's pass stops:
+the wiki is never open where it cannot be seen.
 
 ### Replay and simulation classification
 
@@ -325,7 +364,9 @@ without coupling the two.
 **The boundaries come from the engine.** Landing 2 carries every engine-facing piece: the capture,
 the pause, the packet hook and the cursor's redraw. After it, the wiki grows in files that name no
 engine address. The packet record's contents live in `src/tagpu_wikipk.h`, which no test group
-names as a source and no `sim` file includes. Its area is appended **last** in the packet, after
+names as a source. Three `sim` files include it through `tagpu_packet.h` (`tagpu_patches.c`,
+`tagpu_weapons.c`, `tagpu_datakeys.c`) and none reads a type of it, so what the wiki draws and
+takes changes nothing they read. Its area is appended **last** in the packet, after
 the font area, so it cannot truncate or move any table before it. Changing the record therefore
 affects nothing earlier in the packet. Confirm with `tareplay.py landing --check` before each
 commit.
@@ -402,7 +443,15 @@ list below:
   `tagpu_wikilay.c`, the layout `wikilaycheck` covers, lays out the window, its title and close
   button, the button and the page, with the hot keys `window`, `close` and `wiki`.
 - **`tagpu_wiki_mouse` takes the game point as well** (`code, cx, cy, gx, gy`): the open stores the
-  frozen point from it, so `g_ddraw.cursor` is the opening press on the injected path too.
+  frozen point from it, so `g_ddraw.cursor` is the opening press on the injected path too. On the
+  real path the open converts the press's own `lParam` with `mouse_client_to_game`, because
+  `g_ddraw.cursor` is not the pointer while the mouse is unlocked (windowed, after the focus came
+  back: no move reaches it then).
+- **The release that re-locks the mouse goes on once the window is closed.** With the mouse
+  unlocked, cnc-ddraw's window procedure takes a button's release to lock it and hands the engine
+  nothing, so the wiki lets a paired release through then. While the window is open it takes it all
+  the same, since the lock would store the release's point in `g_ddraw.cursor`; the next click after
+  the close locks the mouse, as any click does while it is unlocked.
 - **The window also takes `WM_SYSKEYDOWN`/`WM_SYSKEYUP`** (question 9), and **`WM_MOUSELEAVE`**
   goes no further than forgetting the client point while the wiki holds input.
 - **The record's `paused` means the wiki holds the pause**, and `pause_was` that the bit was
@@ -452,9 +501,11 @@ The window closes on the X, on the wiki button, and on the release of Esc.
     `tagpu_place_key`, and `int tagpu_wiki_char(void)` for `WM_TAGPU_CHAR`.
   - `void tagpu_wiki_cancel(void)`, on `WM_KILLFOCUS`, `WM_CAPTURECHANGED` and `WM_ACTIVATEAPP`
     off: the paired press stays owed.
-  - `LONG tagpu_wiki_holds_input(void)` and `void tagpu_wiki_frozen(LONG* x, LONG* y)`: **any
-    thread**. Interlocked reads of the capture word and the opening point; the point is stored
-    before the word.
+  - `LONG tagpu_wiki_holds_input(void)`, `void tagpu_wiki_frozen(LONG* x, LONG* y)` and
+    `int tagpu_wiki_cursor_store(int x, int y, int outside, LONG* ax, LONG* ay)`: **any thread**.
+    An interlocked read of the capture word; the opening point as one pair, and `GetCursorPos`'s
+    store of a live point, both under the cursor lock the open and the close hold
+    (`tagpu_wiki_init`, at attach, makes it).
   - `int tagpu_wiki_fill(TAGPU_PK_WIKI*)`, `void tagpu_wiki_take(const TAGPU_CMD_WIKI*)` and
     `void tagpu_wiki_level_end(void)`.
   - The trigger `tagpu_wiki.dump` → `tagpu_wiki.json`: open, the pause taken, the hit map, the
@@ -492,7 +543,8 @@ The window closes on the X, on the wiki button, and on the release of Esc.
 - **`src/tagpu_shield.c`**: the four hooks above, and the cancel.
 - **`src/winapi_hooks.c`**: `fake_GetCursorPos`, `fake_GetKeyState` and `fake_GetAsyncKeyState`
   check the capture word first. While it is set, the cursor answer is the frozen point (no store
-  to `g_ddraw.cursor`) and every key reads 0.
+  to `g_ddraw.cursor`) and every key reads 0. `fake_GetCursorPos` makes its store through
+  `tagpu_wiki_cursor_store`, which tests the word again under the cursor lock.
 - **`src/tagpu_menu.c`/`.h`**: `int tagpu_menu_single_player(void)` (`main+0x2A44` bit 0 clear)
   and `int tagpu_menu_pause_hold(int on, int* was)` (the Pause key's read-modify-write of bit 0,
   without `0x19`). Its `thread-split.allow` argument grows by that read and that write
@@ -546,7 +598,7 @@ The window closes on the X, on the wiki button, and on the release of Esc.
   `0x2A44` bit 0 (set only in the front end, cleared only in play); why no other writer can undo
   the pause while the wiki is open; and that level end forgets the pause without writing.
 - **`winapi_hooks.c`, at the gate**: the engine's mouse thread calls `fake_GetCursorPos`, and the
-  interlocked word orders each poll before or after the open.
+  cursor lock orders each poll's store before or after the open.
 - **`tagpu_menu.c`'s two accessors**: the DISASSEMBLED facts, with addresses.
 - **`tagpu_wikipk.h`**: values only; appended last; the bound of every array.
 - **`tagpu_vk_gui.c`'s cursor record**: it draws this frame's resolved cursor quad and never reads
@@ -729,7 +781,8 @@ of landings 3 and 4*). Track C, the stage offline, committed before it (`978ac43
 - **One layout.** `tagpu_wikistate_present` lays the window out with `tagpu_wikilay_build`, the
   layout `wikilaycheck` pairs with the mockup, and builds the stage with `tagpu_wikistage_build`
   inside the bezel that layout placed, from the record's view. `tagpu_wikiframe.c`, which laid out
-  the window, title, close button and wiki button a second time, is deleted. The wiki's art loads
+  the window, title, close button and wiki button a second time, is deleted, and its load-time
+  check of the kit is `tagpu_wikilay_check`, which builds the page in every state. The wiki's art loads
   the page's `WIKILAY` (`layout.json` and the kit, the kit carrying the HUD's styles, which
   `tagpu_wikilay_load` now takes as the HUD's `HUDLAY`).
 - **The draw takes an op list.** `HUDOPLIST` is a pointer and a count for each of the ops, runs,

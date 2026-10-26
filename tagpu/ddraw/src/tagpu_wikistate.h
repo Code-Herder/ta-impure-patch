@@ -6,9 +6,9 @@
    view) for tagpu_vk_hud.c to draw in the same frame; and the drawn frame's controls, scrolls and
    scrollbars handed back in the command record.
 
-   RENDER THREAD, every entry point. It reads the packet's copy, the published art (tagpu_hudart.h),
-   the HUD scale's published word (tagpu_hud_live) and the same frame's replay HUD state
-   (tagpu_hudstate_frame), and names no engine memory. */
+   RENDER THREAD, every entry point but tagpu_wikistate_refused. It reads the packet's copy, the
+   published art (tagpu_hudart.h), the HUD scale's published word (tagpu_hud_live) and the same
+   frame's replay HUD state (tagpu_hudstate_frame), and names no engine memory. */
 #include "tagpu_huddraw.h"
 #include "tagpu_packet.h"
 
@@ -38,6 +38,12 @@ void tagpu_wikistate_drawn(int drew);
    pointer in the picture the UI layer's cursor stands at the frozen point, on the wiki button,
    which is not where the player's pointer is, so none is drawn. */
 int  tagpu_wikistate_cursor(unsigned frame);
+
+/* ANY THREAD: 1 once the layout has refused, for the rest of the session -- no frame draws the
+   wiki again, so tagpu_wiki_fill closes the window and the button is gone. The kit and the data
+   are checked whole at the load (tagpu_wikilay_check), so what is left to refuse is the build's
+   own memory. */
+int  tagpu_wikistate_refused(void);
 
 /* The command record's wiki part: what the last frame drawn answered. */
 void tagpu_wikistate_cmd(TAGPU_CMD_WIKI* out);

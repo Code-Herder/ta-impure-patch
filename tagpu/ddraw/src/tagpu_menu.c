@@ -1643,13 +1643,13 @@ int tagpu_menu_single_player(void)
    the step 0x495490; the draw at 0x4969CD still runs. The Pause key flips it with a word
    read-modify-write at 0x4960AA..0x4960BC and broadcasts message 0x19; the in-game menu's open sets
    it with `or byte [eax+0x38a51],1` at 0x460E00. DISASSEMBLED 2026-10-25. This is that byte's
-   read-modify-write, bit 0 alone, without the 0x19 broadcast: the wiki writes it only in single
-   player, where there is no peer to tell. */
+   read-modify-write, bit 0 alone, without the 0x19 broadcast, so it is made only in single
+   player, where there is no peer to tell: the test is here, beside the write. */
 int tagpu_menu_pause_hold(int on, int* was)
 {
     char* main_p = *(char**)TA_MAIN;
     unsigned char* b;
-    if (!main_p) return 0;
+    if (!main_p || !tagpu_menu_single_player()) return 0;
     b = (unsigned char*)(main_p + OFF_PAUSE);
     if (was) *was = *b & 1;
     if (on) *b = (unsigned char)(*b | 1u);

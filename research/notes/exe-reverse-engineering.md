@@ -6988,7 +6988,9 @@ function `0x496790` skips the scheduler `0x495230` and the tick `0x495490` (`0x4
 `0x49693E`). The scheduler tests it as well (`0x4953D9`), the pause icon `igpaused` shows it (`0x46A107`;
 `0x46A2A8` beside it tests bit 1, not the pause), and the pause key flips it and puts the new bit into a message `0x19`
 (`0x4960AA..0x4960E0`) [INFERRED: `0x451DF0` sends it to the peers]; the `0x19` receiver stores a
-peer's bit (`0x455967..0x45597A`). Bits 1 and 2 are the scheduler's: bit 1 its lag flag
+peer's bit (`0x455967..0x45597A`, when the message's byte 1 is 0; the packet dispatcher's switch at
+`0x45486D` indexes the table `0x455F84` by the type minus 2, and entry 23, at `0x455FE0`, is
+`0x45593D`) [DISASSEMBLED 2026-10-26]. Bits 1 and 2 are the scheduler's: bit 1 its lag flag
 (`0x49535C`, `0x495367`), tested only by the corner icon `0x46A2A8`; bit 2 the live speed below the
 chosen one, stored on every call (`0x49527A..0x495299`); **bit 2 has no reader**
 [DISASSEMBLED 2026-10-12: every instruction carrying the displacement `0x38A51` but the
@@ -7000,10 +7002,19 @@ state, bit 2 following the wall clock through the trim and bit 1 the peers' lag,
 recorder leaves them (`replay-globals.tsv`, `pacingbits`, the owner's decision 2026-10-12): MEASURED 2026-10-12 under a load average of 63–87, a live
 recording held bit 2 set at GameTime 721 where its playings held it clear. Every other store of the word: set bit 0 at `0x44BE61`, `0x45D0A1` (in `0x45CFC0`,
 outside mode 3), `0x460E00` (the in-game menu's open, outside mode 3), `0x49306D` and `0x493330`
-(the LOADGAME screens); clear it at `0x44B6F0` (in the battle room's code [INFERRED from its
-neighbours]), `0x460A33` (the in-game menu's close, outside mode 3), `0x49720A` (the loader's
-network branch) and `0x49990E` (key `0xE3` in state 7's handler `0x499880`); `0x495B6D` clears it
-for a step and `0x495DC2` puts back the bit `0x495B85` saved. Impure's in-game wiki writes bit 0 in a
+(the LOADGAME screens, `LOADGAME.GUI` `0x50936C`); clear it at `0x44B6F0`, `0x460A33` (the in-game
+menu's close, outside mode 3), `0x49720A` (the loader's network branch) and `0x49990E` (key `0xE3`
+in state 7's handler `0x499880`). **`0x44B6F0` and `0x44BE61` are the unit-restrictions screen's
+save lists**, not the battle room's: `0x44B6F0` is in `0x44B690`, the handler that `0x44B990`
+installs at `0x44B9B9` on the screen it opens from `SAVELIST.GUI` (`0x505F64`), and `0x44BE61` is
+in `0x44BC10`; `RESTRICT2.GUI`'s handler `0x44C420` (installed at `0x44C834`, the screen named at
+`0x50608C`) calls `0x44BC10` at `0x44C5AC` for its control `Load` (`0x506000`) and `0x44B990` at
+`0x44C5D9` for `Save` (`0x50218C`). **`0x495A30` clears it and puts it back within one call**: it
+saves bit 0 at `0x495B85` and clears it at `0x495B7E`, and stores the saved bit back at `0x495DD2`.
+Its one caller is `0x417738`, in `0x417600` with the string `BIGSHOT` (`0x5024F4`), and `0x417600`
+is the chat command `MakePoster`, the row `{0x502254 "MakePoster", 0x417600, 2}` at `0x501FB4` of
+the command table `0x501F48` [DISASSEMBLED 2026-10-26: every instruction storing to the
+displacement `0x38A51`, the stores read at their addresses]. Impure's in-game wiki writes bit 0 in a
 single-player level (*The in-game wiki's engine questions*, below).
 
 **The defect.** Leaving a level through the in-game menu (EXIT, MAINMENU, yes) opens the menu,
@@ -7063,10 +7074,16 @@ DirectInput library (`objdump -p` of `pristine/TotalA.exe.pristine`).
 | `GetAsyncKeyState`, IAT `0x4FC350` | the hotkey sampler `0x4C1B80` (`0x4C1BA3..0x4C1C2F`, eight sites); the keydown translator's Ctrl test `0x4C1D56` | the arrow scroll (hotkeys `0xF4..0xF7` in `0x41CE90`); the Shift test `0x4992D8` |
 | `GetKeyState`, IAT `0x4FC2EC` | one site, `0x425F6E` (`VK_SHIFT`, front end), and the thunk `0x49F7D6` | the front end only |
 
+Beside the `GetKeyState` thunk `0x49F7D6` (`jmp [0x4FC2EC]`) sits the `GetCursorPos` thunk
+`0x49F7CA` (`jmp [0x4FC2E4]`); neither is named by a `call`, a `jmp` or an absolute pointer in the
+image (*`GetCursorPos` is the IAT slot*, below) [DISASSEMBLED 2026-10-26].
+
 The three polls reach cnc-ddraw's `fake_GetCursorPos`, `fake_GetAsyncKeyState` and
 `fake_GetKeyState` (`winapi_hooks.c`), which answer the frozen point and 0 while the wiki holds
-input. The mouse thread's poll is the one caller on another thread; the capture word is read with
-an interlocked read there, so each poll falls wholly before or after the open's store.
+input. The mouse thread's poll is the one caller on another thread, and the one poll that stores
+what it reads (the live point, in `g_ddraw.cursor`): it tests the capture word and makes that store
+under the lock the wiki's open and close hold, so each poll's store falls wholly before or after the
+open. The key polls store nothing, and an interlocked read of the word orders them.
 
 **Where the frozen pointer leaves the in-play handler.** The frozen point is the opening press, on
 the wiki button in the top bar. `0x499200` finds it on neither the minimap nor the viewport
@@ -7090,9 +7107,15 @@ broadcast], so the wiki writes the bit only with bit 0 of `0x2A44` clear.
 **The pause, `main+0x38A51` bit 0** (the section above has every store). The wiki's write is the
 Pause key's read-modify-write of bit 0 (`0x4960AA..0x4960BC`) without the `0x19` message: set at
 the open when clear, cleared at the close only when it set it, and at the level's end
-(`tagpu_reclaim`'s teardown wrap) forgotten without a write. Every in-play writer that could undo
-it is reached only through input the wiki holds (the Pause key, the in-game menu `0x460E00` /
-`0x460A33`, key `0xE3` at `0x49990E`, the options opener `0x45CFC0`'s five callers).
+(`tagpu_reclaim`'s teardown wrap) forgotten without a write. Every engine writer in play is reached
+only through input the wiki holds -- the Pause key (`0x4960BC`), the in-game menu (`0x460E00`,
+`0x460A33`) and its LOADGAME screens (`0x49306D`, `0x493330`), key `0xE3` (`0x49990E`), the options
+opener `0x45CFC0` (`0x45D0A1`), the chat command `MakePoster` (`0x495B7E`, put back at `0x495DD2`
+in the same call) -- or through a peer's message `0x19` (`0x45597A`), which a single-player level
+never receives. The rest are the front end's (`0x44B6F0`, `0x44BE61`) or the load's (`0x49720A`).
+Impure's own writers that put a pause back later without input -- the live rewind's end and the
+replay HUD's Leave -- are kept off by the wiki refusing to open while either is in flight
+([the plan](ingame-wiki-plan.html), *The pause*).
 
 **What the PAUSED icon does under the window.** `igpaused` is drawn at `0x46A107..0x46A13E` in the
 middle of the world while bit 0 is set (*The frame's HUD extras*); the wiki's window, drawn after

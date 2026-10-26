@@ -10,6 +10,7 @@
 #include "config.h"
 #include "hook.h"
 #include "indeo.h"
+#include "tagpu_wiki.h"
 #include "tagpu_takeover.h"
 #include "tagpu_patches.h"
 #include "tagpu_limits.h"
@@ -98,6 +99,10 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            After the config tool's return above, so opening the tool never rotates the
            player's logs. */
         tagpu_log_init();
+
+        /* tagpu: the in-game wiki's cursor lock (tagpu_wiki.h), which fake_GetCursorPos takes
+           once a DirectDraw object exists -- long after this. */
+        tagpu_wiki_init();
 
         /* tagpu: in a tacli test launch, TotalA.exe's registry is a file (tagpu_regstore.h).
            Before anything else of ours, and long before TotalA.exe's entry point: the
