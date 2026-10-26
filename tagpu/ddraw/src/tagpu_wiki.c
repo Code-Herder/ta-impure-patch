@@ -53,6 +53,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "dd.h"
+#include "config.h"
 #include "mouse.h"
 #include "tagpu_shield.h"
 #include "tagpu_menu.h"
@@ -233,7 +234,7 @@ static void note_client(int cx, int cy)
 }
 
 /* A press of button `bit` at client point (cx, cy), engine point (gx, gy), from either path:
-   1 = taken. */
+   1 = taken. gx < 0: the engine point is the client point's, converted here (the real path). */
 static int press(unsigned bit, int cx, int cy, int gx, int gy)
 {
     char key[TAGPU_WIKI_KEY];
@@ -253,11 +254,19 @@ static int press(unsigned bit, int cx, int cy, int gx, int gy)
             return 1;
         }
         s_btnDown = 1;
+        if (gx < 0) mouse_client_to_game(cx, cy, &gx, &gy);
         wiki_open(gx, gy);
         return 1;
     }
     s_owedBtn &= ~bit;
     return 0;
+}
+
+/* cnc-ddraw's window procedure takes a real button's release, locking the mouse, and gives the
+   engine nothing of it: the mouse is unlocked and the window closed */
+static int relocks(void)
+{
+    return !s_open && !g_mouse_locked && !g_config.devmode;
 }
 
 /* A release of button `bit`, from either path: 1 = taken. */
@@ -333,9 +342,10 @@ int tagpu_wiki_message(UINT msg, WPARAM wp, LPARAM lp)
     case WM_MOUSEWHEEL:
     case WM_MOUSEHOVER:
         return s_open;
-    /* THE ENGINE'S POINT OF A REAL PRESS is g_ddraw.cursor: this runs at the top of the window
-       procedure, before cnc-ddraw has unscaled the message, and the preceding WM_MOUSEMOVE has put
-       the game point there -- the point tagpu_menu_click is handed on this path too */
+    /* THE ENGINE'S POINT OF A REAL PRESS is its client point in lParam converted as cnc-ddraw
+       converts one (mouse_client_to_game, in press): this runs at the top of the window procedure,
+       before cnc-ddraw has unscaled the message, and g_ddraw.cursor is not that point while the
+       mouse is unlocked -- windowed, after the focus came back -- since no move reaches it then */
     case WM_LBUTTONDOWN:
     case WM_LBUTTONDBLCLK:
     case WM_RBUTTONDOWN:
@@ -347,19 +357,23 @@ int tagpu_wiki_message(UINT msg, WPARAM wp, LPARAM lp)
         unsigned bit = msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK ? B_L
                      : msg == WM_RBUTTONDOWN || msg == WM_RBUTTONDBLCLK ? B_R
                      : msg == WM_MBUTTONDOWN || msg == WM_MBUTTONDBLCLK ? B_M : B_X;
-        int gx = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
-        int gy = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
         if (s_open) note_client(cx, cy);
-        return press(bit, cx, cy, gx, gy);
+        return press(bit, cx, cy, -1, -1);
     }
+    /* THE RELEASE THAT RE-LOCKS THE MOUSE goes on once the window is closed: with the mouse
+       unlocked, cnc-ddraw's window procedure takes every button's release, the left, right and
+       middle one's to lock it, and hands the engine none (wndproc.c, "button up messages
+       reactivate cursor lock"). While the window is open it is
+       taken all the same, since the lock's store of the release's point would move g_ddraw.cursor
+       off the frozen one; the next click after the close locks it, as any click does unlocked. */
     case WM_LBUTTONUP:
-        return release(B_L);
+        return release(B_L) && !relocks();
     case WM_RBUTTONUP:
-        return release(B_R);
+        return release(B_R) && !relocks();
     case WM_MBUTTONUP:
-        return release(B_M);
+        return release(B_M) && !relocks();
     case WM_XBUTTONUP:
-        return release(B_X);
+        return release(B_X) && !relocks();
     }
     return 0;
 }

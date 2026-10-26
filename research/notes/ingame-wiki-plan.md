@@ -423,7 +423,15 @@ list below:
   keys `window`, `close` and `wiki`. Pure C99 like `tagpu_hudlay.c` (it compiles natively with
   `gcc -std=c99`); no native check runs it yet.
 - **`tagpu_wiki_mouse` takes the game point as well** (`code, cx, cy, gx, gy`): the open stores the
-  frozen point from it, so `g_ddraw.cursor` is the opening press on the injected path too.
+  frozen point from it, so `g_ddraw.cursor` is the opening press on the injected path too. On the
+  real path the open converts the press's own `lParam` with `mouse_client_to_game`, because
+  `g_ddraw.cursor` is not the pointer while the mouse is unlocked (windowed, after the focus came
+  back: no move reaches it then).
+- **The release that re-locks the mouse goes on once the window is closed.** With the mouse
+  unlocked, cnc-ddraw's window procedure takes a button's release to lock it and hands the engine
+  nothing, so the wiki lets a paired release through then. While the window is open it takes it all
+  the same, since the lock would store the release's point in `g_ddraw.cursor`; the next click after
+  the close locks the mouse, as any click does while it is unlocked.
 - **The window also takes `WM_SYSKEYDOWN`/`WM_SYSKEYUP`** (question 9), and **`WM_MOUSELEAVE`**
   goes no further than forgetting the client point while the wiki holds input.
 - **The record's `paused` means the wiki holds the pause**, and `pause_was` that the bit was
