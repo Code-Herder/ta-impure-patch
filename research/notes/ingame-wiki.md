@@ -2,10 +2,12 @@
 
 ## Status
 
-**Designed 2026-10-25; the browser mockup is the first build.** The owner wants a wiki inside the
-game that explains Impure's own features with examples a player can watch and try. The decisions
-below came out of a design interview with the owner on 2026-10-25; each is recorded with its
-reason. Nothing of the wiki is in the DLL yet.
+**Designed 2026-10-25; the browser mockup is the first build, and the DLL has the wiki's core.**
+The owner wants a wiki inside the game that explains Impure's own features with examples a player
+can watch and try. The decisions below came out of a design interview with the owner on
+2026-10-25; each is recorded with its reason. The DLL carries the tree and the entries and runs
+the simplified simulation in C, equal to the mockup's tick for tick on every demo; nothing in the
+DLL calls either yet, so the game shows no wiki.
 
 | What | Where |
 |---|---|
@@ -15,6 +17,9 @@ reason. Nothing of the wiki is in the DLL yet.
 | The window's art kit | `art/wiki/kit/` (`kit.json` and `parts/`), in `art/hud/kit.json`'s format |
 | The stage in the game's own graphics | `tools/wiki/gfx.py` writes the gitignored `tools/wiki/mockup/gfx/` from the local install; `gfx.js` draws it under `gfx=game` |
 | The demos' generators; the headless check of every demo | `tools/wiki/gen-quickbuild.mjs`, `tools/wiki/gen-buildshapes.mjs`; `tools/wiki/simcheck.mjs` |
+| The data in the DLL | `art/wiki/` packed by `tools/hudpak.py --set wiki` into the resource `WIKIPAK`; read by `tagpu/ddraw/src/tagpu_wikidata.c` (through `tagpu_pak.c`, the archive reader the HUD shares) |
+| The simulation in the DLL | `tagpu/ddraw/src/tagpu_wikisim.c` |
+| The parity check, C against `sim.js` | `node tools/wiki/simparity.mjs [--wine]`, with `tagpu/ddraw/tests/wikitest.c` |
 | Serving it | `python3 tools/hudart/serve.py`, then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
 
@@ -29,13 +34,14 @@ Two entries, both under Quality of Life → Building: **Quick Build: Resource Ex
   not a throwaway: it is where the wiki is designed and changed first.
 - **It is a 1:1 specification of the in-game wiki.** The DLL copies it: the same layout, the same
   data, the same simplified simulation, the same drawing. Nothing goes into the game that the
-  mockup does not show. A parity check like `laycheck.py` (the game's simulation against the
-  mockup's, on a demo's inputs) is the way to keep them equal once the DLL has it.
+  mockup does not show. `tools/wiki/simparity.mjs` keeps the two simulations equal (*The
+  simulation's contract*, below), as `laycheck.py` keeps the HUD's layouts equal.
 - **Try it yourself is a simplified simulation in the game too.** A second hidden game instance,
   or swapping the running game out for a practice scene and back, were considered and declined
-  (2026-10-25): the simplified simulation is enough, and the mockup can then be exact. Where it
-  can, the DLL's version calls the real feature's rule code (the snap scorer, the best-fit
-  choice) instead of a copy.
+  (2026-10-25): the simplified simulation is enough, and the mockup can then be exact. The DLL's
+  version calls the real shapes, `tagpu_placegeo.c`'s `place_shape` and `place_ring`, which read
+  nothing but their arguments. The snap scorer, the best-fit choice and the gesture's rules it
+  ports from `sim.js` instead, because `tagpu_resource.c` and `tagpu_place.c` read the engine.
 
 ### Content is data
 
@@ -47,7 +53,9 @@ Two entries, both under Quality of Life → Building: **Quick Build: Resource Ex
   draws whatever follows from them. A demo therefore cannot show something the rules would not do,
   and a demo and Try it yourself cannot disagree. The one scripted extra is a caption, written at
   a given tick.
-- `art/wiki/` mirrors `art/hud/`, which the DLL already embeds (`tools/hudpak.py`).
+- `art/wiki/` mirrors `art/hud/`, and the DLL embeds it the same way: `tools/hudpak.py --set wiki`
+  packs `tree.json` and `entries/*.json` into the resource `WIKIPAK`. The kit is not packed yet
+  (*Gaps*).
 
 ### The window
 
@@ -340,7 +348,44 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
 
 ## The simulation's contract
 
-`sim.js` is the mockup's; the DLL's must agree with it tick for tick on the same inputs.
+`sim.js` is the mockup's and `tagpu/ddraw/src/tagpu_wikisim.c` the DLL's: a port of `sim.js`
+function for function, under its names in C's spelling (`siteOk` is `site_ok`). They agree tick
+for tick on the same inputs, and `node tools/wiki/simparity.mjs` checks it: it plays every demo of
+every entry through both and compares every field of the view and every unit's orders on every
+tick, then replays `simcheck.mjs`'s rule cases (the rules no demo shows) through the C sim from a
+recording of their calls on `sim.js`, and compares every answer they read. For each demo and case
+it names the first differing tick or call and field. MEASURED 2026-10-25: all 21 demos (9298
+frames) and 8 rule cases equal, both natively (gcc, with AddressSanitizer and
+UndefinedBehaviorSanitizer) and with `--wine` (the DLL's compiler and flags, run under Wine).
+
+- **Bit for bit, by construction.** Both visit units in creation order, use no clock and no
+  randomness, and compute on doubles with + − × ÷ and sqrt only, each rounded once. The DLL
+  compiles `tagpu_wikisim.c` alone for SSE2 (`-msse2 -mfpmath=sse`, the stack realigned, as the
+  game's threads align it to 4 bytes), so the wiki's simulation needs an SSE2 processor: built for
+  x87, whose intermediates keep 80 bits, 1196 of the 9298 frames differ from `sim.js` in a last
+  bit (MEASURED 2026-10-25).
+- **Engine-free, and owned by its caller.** It reads no engine memory and names no engine address,
+  so `thread-split.allow` has no line for it. Every piece of its state lives in the `WIKISIM` its
+  caller owns and on the heap it owns, so a later landing runs it on whichever thread owns the
+  window. The shapes are `tagpu_placegeo.c`'s own; where `sim.js` mirrors `tagpu_resource.c` or
+  `tagpu_place.c`, the C ports `sim.js`'s version and names the function it mirrors above each.
+- **Its calls** (`tagpu_wikisim.h`): `tagpu_wikisim_init` from an entry and a demo, scripted (the
+  demo plays, `sim.js`'s `play`) or not (Try it yourself on the demo's scene, `create`);
+  `tagpu_wikisim_input`; `tagpu_wikisim_step`, one tick; `tagpu_wikisim_view`, `sim.js`'s
+  `view()` field for field; `tagpu_wikisim_orders`.
+- **The data** (`tagpu_wikidata.h`): the tree in preorder and each entry as C structs, read with
+  the DLL's JSON reader from `WIKIPAK`. Where `sim.js` would throw or read `undefined`, the loader
+  refuses the file instead: a unit type the entry does not define, a key it does not name, a
+  rectangle or a map size that is not an integer, a missing footprint, a BuildTime that is not
+  positive. Every other absent figure reads as 0, which every rule treats as it treats
+  `undefined`.
+- **Where the C cannot throw.** A scene that selects a unit it does not have makes
+  `tagpu_wikisim_init` refuse it, where `sim.js` throws; an allocation that fails leaves out what
+  it would have added and sets `oom`. Cells beyond ±2²⁰ (positions far off any map) are held
+  there, and a gesture's cells to the int16 `place_shape` takes, where `sim.js` keeps the number;
+  every test refuses such a cell in both.
+- **Not ported:** `sim.log`, the construction events `simcheck.mjs`'s checks read. The view and
+  the orders carry the state they follow from, and the parity check compares those.
 
 **What it implements, from the feature's own rules** (`resource-snapping.md`), following
 `tagpu_resource.c` function for function (`site`, `snapped_site`, `distinct`, `same_plan`,
@@ -441,7 +486,8 @@ lands), with `tagpu_placegeo.c`'s `place_shape` and
 **The demos are generated**: `node tools/wiki/gen-quickbuild.mjs` and
 `node tools/wiki/gen-buildshapes.mjs` write `art/wiki/entries/<id>.json` (their cursor paths are
 hundreds of small moves), and `node tools/wiki/simcheck.mjs` plays every demo headless and checks
-its claim on the simulation's state, plus the rules no demo shows.
+its claim on the simulation's state, plus the rules no demo shows; `simparity.mjs` then holds the
+DLL's simulation to `sim.js` on the same demos and rules.
 
 **What it draws** (its view): the cells, metal, vents and fog; the units with their selection and
 progress; the ghost and its colour; the queued sites; the order lines; the cursor and its shape;
@@ -453,8 +499,18 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
 
 - **The top-right row is drawn by two renderers today**: the sprocket on every renderer, the
   rewind button by the Vulkan HUD pass only. Where the wiki button is drawn on GDI is not decided.
-- **Nothing of the wiki is in the DLL.** The window, the button, the pausing and the input capture
-  are specified here and in the mockup only.
+- **The DLL has the data and the simulation, and nothing calls them.** The window, the button, the
+  drawing, the pausing and the input capture are specified here and in the mockup only;
+  `tagpu_wikidata_load_resource` and the simulation link into the DLL unused.
+- **The kit is not in the DLL.** `art/wiki/kit/` (2.7 MB of parts) is not packed. The HUD's parts
+  are fitted to what the game draws (`tools/hudart/fit.py`), which rewrites each part and its
+  `kit.json` entry together, so the kit goes in with the landing that draws the window.
+- **The rules are copies.** The C's resource and gesture rules port `sim.js`'s mirrors of
+  `tagpu_resource.c` and `tagpu_place.c` rather than calling them. `simparity.mjs` holds the C to
+  `sim.js`; nothing holds either to the game's code, so a change there is followed by hand in
+  `sim.js` and `tagpu_wikisim.c`.
+- **No build gate runs the parity check.** It needs node and gcc (and Wine for `--wine`); `make`
+  compiles and links the simulation but does not run it.
 - **The figures are the stock game's.** A mod with other extractors or other build lists shows the
   stock demos.
 - **No hotkey** opens the wiki.
