@@ -825,7 +825,10 @@ of landings 3 and 4*). Track C, the stage offline, committed before it (`978ac43
   `wiki check: <entry>/<demo> <hash>`, the form `simparity.mjs --hash` prints, then a summary line.
 - **The dump** adds the selection by id, the folds, the scrolls asked, drawn and their limits, the
   scrollbars, the demo's tick, `done`, its state hash, and the most one fill of the open page has
-  cost the game thread (`cost_max_ms`, also logged at each close).
+  cost the game thread (`cost_max_ms`, also logged at each close): timed from the record's start in
+  `tagpu_wiki_fill` to its placing in the packet (`tagpu_wiki_carried`), so the demo's steps, the
+  view's copy into the record and the record's 60 KB copy into the slot (`append_area`), and not
+  the check or the dump.
 - **The glyphs** (a commit of its own, the recommended fix pending the owner): play, pause, replay
   and the tree's marks are kit icons drawn from `tools/wiki/mockup/glyphs.js`, in the mockup and
   in the game; `wikilaycheck` pairs them as parts and now fails on any text set in the browser's

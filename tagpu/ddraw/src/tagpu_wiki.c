@@ -294,7 +294,12 @@ static int      s_dragReal;                     /* that press came by the real p
 static int      s_dragY;
 static float    s_dragFrom;
 static double   s_costMax;                      /* the most one fill cost this thread, ms, since
-                                                   the open                                     */
+                                                   the open: from the record's start in
+                                                   tagpu_wiki_fill to its placing in the packet
+                                                   (tagpu_wiki_carried) -- the demo's steps, the
+                                                   view's copy into the record and the record's
+                                                   copy into the slot; not the check or the dump */
+static LARGE_INTEGER s_costT0;                  /* the open fill's start; 0 = no fill timed     */
 static unsigned s_costFrames;
 static uint32_t s_trunc;                        /* the copy's WIKISTAGE_TRUNC_* already said     */
 static int      s_saidHead;                     /* a stage the packet could not carry, said      */
@@ -930,7 +935,6 @@ static int s_ask;                       /* this fill answers the triggers       
 int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again)
 {
     static unsigned calls;
-    LARGE_INTEGER t0, t1;
     int cx, cy;
     s_ask = (calls++ % 30u) == 0u;
     if (!s_qpf.QuadPart) QueryPerformanceFrequency(&s_qpf);
@@ -960,7 +964,8 @@ int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again)
         }
         return 0;
     }
-    QueryPerformanceCounter(&t0);
+    if (s_open) QueryPerformanceCounter(&s_costT0);
+    else s_costT0.QuadPart = 0;
     memset(w, 0, TAGPU_PK_WIKI_HEAD);
     w->open = (uint8_t)s_open;
     w->paused = (uint8_t)s_paused;
@@ -971,15 +976,7 @@ int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again)
         w->ptr_y = (int16_t)(cy < -32768 ? -32768 : cy > 32767 ? 32767 : cy);
     }
     lstrcpynA(w->held, s_held, sizeof w->held);
-    if (s_open) {
-        page_fill(w);
-        QueryPerformanceCounter(&t1);
-        {
-            const double ms = (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)s_qpf.QuadPart;
-            if (ms > s_costMax) s_costMax = ms;
-            s_costFrames++;
-        }
-    }
+    if (s_open) page_fill(w);
     *len = w->has_stage ? (uint32_t)sizeof *w : TAGPU_PK_WIKI_HEAD;
     return 1;
 }
@@ -997,6 +994,15 @@ uint32_t tagpu_wiki_head_only(TAGPU_PK_WIKI* w)
 
 void tagpu_wiki_carried(const TAGPU_PK_WIKI* w, uint32_t carried)
 {
+    if (s_costT0.QuadPart) {
+        LARGE_INTEGER t1;
+        double ms;
+        QueryPerformanceCounter(&t1);
+        ms = (double)(t1.QuadPart - s_costT0.QuadPart) * 1000.0 / (double)s_qpf.QuadPart;
+        if (ms > s_costMax) s_costMax = ms;
+        s_costFrames++;
+        s_costT0.QuadPart = 0;
+    }
     s_cut = carried == 0;
     if (s_ask && GetFileAttributesA(DUMP_ASK) != INVALID_FILE_ATTRIBUTES) {
         DeleteFileA(DUMP_ASK);
