@@ -411,7 +411,17 @@ def wait_dump(c, pred, what, seconds=20):
 
 
 def press(c, d, key):
+    """A click on the drawn frame's control `key`; returns the time just before it."""
+    t0 = time.monotonic()
     c.keys("dclick:%d,%d" % c.centre(c.hit(d, key)))
+    return t0
+
+
+def fresh(d, t0):
+    """Whether the dump's demo can have started after `t0`: the clock steps at most 30 ticks a
+    second times the speed, plus the 8 one frame may carry, so a demo that ran on from before is
+    told apart by its tick however slowly the game answers the dump."""
+    return d["tick"] <= 30 * d["speed"] * (time.monotonic() - t0) + 9
 
 
 def keys_of(d, prefix):
@@ -433,8 +443,8 @@ def page(c):
     press(c, d, "entry:3")
     d = wait_dump(c, lambda d: d["entry"] == "buildshapes" and d["demo"] == "clicks", "(p2) entry:3 did not select buildshapes")
     d = wait_dump(c, lambda d: "demo:9" in keys_of(d, "demo:"), "(p2) buildshapes' ten demos were not drawn")
-    press(c, d, "demo:1")
-    d = wait_dump(c, lambda d: d["demo"] == "line" and d["tick"] < 200, "(p2) demo:1 did not start buildshapes/line")
+    t0 = press(c, d, "demo:1")
+    d = wait_dump(c, lambda d: d["demo"] == "line" and fresh(d, t0), "(p2) demo:1 did not start buildshapes/line")
     print("wiki page: (p2) the second entry and its second demo selected")
 
     press(c, d, "fold:1")
@@ -467,11 +477,12 @@ def page(c):
 
     c.keys("esc")
     d = wait_dump(c, lambda d: not d["open"] and not d["sim"], "(p6) Esc did not close the window and free the demo")
+    t0 = time.monotonic()
     d = c.open_wiki(expect_pause=True)
     d = wait_dump(c, lambda d: d["drawn_open"] and d["sim"], "(p6) the reopened page was not drawn")
     assert (d["entry"], d["demo"], d["folds"]) == ("buildshapes", "line", []), \
         f"(p6) the reopened page lost its selection: {d['entry']}/{d['demo']} folds {d['folds']}"
-    assert d["tick"] < 200, f"(p6) the demo did not start afresh at the open: tick {d['tick']}"
+    assert fresh(d, t0), f"(p6) the demo did not start afresh at the open: tick {d['tick']}"
     c.keys("esc")
     wait_dump(c, lambda d: not d["open"], "(p6) Esc did not close it again")
     print("wiki page: (p6) closed and reopened on the same entry and demo, the demo afresh")
@@ -488,6 +499,7 @@ def tick_rate(c, seconds=4.0):
     a, t0 = c.dump(), time.monotonic()
     time.sleep(seconds)
     b = c.dump()
+    assert not b["done"], f"(d2) the demo ended inside the rate's window, at tick {b['tick']}"
     return (b["tick"] - a["tick"]) / (time.monotonic() - t0), b
 
 
@@ -553,23 +565,31 @@ def demos(c, shots, res):
 
     d = c.open_wiki(expect_pause=True)
     d = wait_dump(c, lambda d: d["drawn_open"] and d["sim"], "(d2) the page was not drawn")
-    press(c, d, "demo:3")
-    wait_dump(c, lambda d: d["demo"] == "bestfit" and d["tick"] < 100, "(d2) demo:3 did not start quickbuild/bestfit")
+    t0 = press(c, d, "demo:3")
+    wait_dump(c, lambda d: d["demo"] == "bestfit" and fresh(d, t0), "(d2) demo:3 did not start quickbuild/bestfit")
     r1, d = tick_rate(c)
     press(c, d, "x2")
-    wait_dump(c, lambda d: d["speed"] == 2, "(d2) x2 did not set 2x")
+    d = wait_dump(c, lambda d: d["speed"] == 2, "(d2) x2 did not set 2x")
+    # from the start again, so the window at 2x ends inside the demo's 722 ticks however long the
+    # dumps take to come back
+    t0 = press(c, d, "replay")
+    wait_dump(c, lambda d: d["playing"] and fresh(d, t0), "(d2) replay did not restart the demo at 2x")
     r2, d = tick_rate(c)
     assert 15 <= r1 <= 45 and 1.5 <= r2 / r1 <= 2.5, f"(d2) the demo ran {r1:.1f} ticks/s at 1x and {r2:.1f} at 2x"
     print(f"wiki demos: (d2) quickbuild/bestfit at {r1:.1f} ticks/s at 1x, {r2:.1f} at 2x")
 
+    # from the start again, so the pause lands inside the demo however long the dumps take
+    t0 = press(c, d, "replay")
+    d = wait_dump(c, lambda d: d["playing"] and fresh(d, t0), "(d3) replay did not restart the demo")
     press(c, d, "play")
     d = wait_dump(c, lambda d: not d["playing"], "(d3) play did not pause the demo")
+    assert not d["done"], f"(d3) the demo ended before play paused it, at tick {d['tick']}"
     t = d["tick"]
     time.sleep(1.5)
     d = c.dump()
     assert d["tick"] == t, f"(d3) the paused demo ran from tick {t} to {d['tick']}"
-    press(c, d, "replay")
-    d = wait_dump(c, lambda d: d["playing"] and d["tick"] < t, "(d3) replay did not restart the demo, playing")
+    t0 = press(c, d, "replay")
+    d = wait_dump(c, lambda d: d["playing"] and fresh(d, t0), "(d3) replay did not restart the demo, playing")
     press(c, d, "demo:5")
     d = wait_dump(c, lambda d: d["demo"] == "cancel", "(d3) demo:5 did not select quickbuild/cancel")
     d = wait_dump(c, lambda d: d["done"], "(d3) quickbuild/cancel did not end at 2x", seconds=40)
@@ -577,14 +597,15 @@ def demos(c, shots, res):
     time.sleep(1.0)
     d = c.dump()
     assert d["done"] and d["tick"] == t, f"(d3) the ended demo did not hold its last frame: {t} -> {d['tick']}"
-    press(c, d, "play")
-    d = wait_dump(c, lambda d: not d["done"] and d["tick"] < t, "(d3) play on an ended demo did not start it again")
+    t0 = press(c, d, "play")
+    d = wait_dump(c, lambda d: not d["done"] and fresh(d, t0), "(d3) play on an ended demo did not start it again")
     press(c, d, "x1")
     wait_dump(c, lambda d: d["speed"] == 1, "(d3) x1 did not set 1x")
     print("wiki demos: (d3) pause, replay, the last frame held and played again")
 
-    # (d4) each entry with a demo paused mid-play, grabbed beside the mockup at the same state
-    for node, entry, k, demo, at in ((2, "quickbuild", 0, "snap", 230), (3, "buildshapes", 1, "line", 250)):
+    # (d4) each entry with a demo paused mid-play, grabbed beside the mockup at the same state; past
+    # tick 150, which leaves some nine seconds of either demo for the pause to land in
+    for node, entry, k, demo, at in ((2, "quickbuild", 0, "snap", 150), (3, "buildshapes", 1, "line", 150)):
         d = c.dump()
         if d["entry"] != entry:
             press(c, d, f"entry:{node}")
@@ -594,6 +615,7 @@ def demos(c, shots, res):
         d = wait_dump(c, lambda d: d["demo"] == demo and d["tick"] >= at, f"(d4) {entry}/{demo} did not reach tick {at}", seconds=60)
         press(c, d, "play")
         d = wait_dump(c, lambda d: not d["playing"], f"(d4) play did not pause {entry}/{demo}")
+        assert not d["done"], f"(d4) {entry}/{demo} ended before play paused it"
         time.sleep(1.0)          # the paused frame presented
         if shots:
             shots.mkdir(parents=True, exist_ok=True)
