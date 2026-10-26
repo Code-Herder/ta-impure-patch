@@ -51,7 +51,9 @@ static void* zalloc(R* r, size_t n, size_t size)
     return p;
 }
 
-static int count(const TJV* v) { return tj_is(v, TJ_ARR) || tj_is(v, TJ_OBJ) ? v->n : 0; }
+/* the elements of a list, and 0 for anything else: every caller then walks the list alone, so an
+   object's members would be counted and never read */
+static int count(const TJV* v) { return tj_is(v, TJ_ARR) ? v->n : 0; }
 
 /* a non-empty string, or NULL: the mockup's `x || null` */
 static const char* text_or_null(const TJV* v)

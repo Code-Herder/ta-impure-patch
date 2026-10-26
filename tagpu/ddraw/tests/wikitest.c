@@ -440,6 +440,29 @@ static int tree_case(const char* name, const char* tree, int nodes)
 }
 
 /* every case, its verdict in its line: the count is simparity.mjs's, as the comparison is */
+/* lists given as objects: each reads as empty, never as as many unread elements as members */
+static int entry_case(void)
+{
+    static const char TEXT[] =
+        "{\"format\":1,\"id\":\"m\",\"text\":{\"a\":\"x\",\"b\":\"y\"},"
+        "\"units\":{\"ARMMEX\":{\"footprint\":[2,2],\"buildTime\":10}},"
+        "\"scene\":{\"map\":{\"w\":8,\"h\":8},\"metal\":{\"r\":1},\"vents\":{\"v\":[1,1]},"
+        "\"units\":{\"u\":{\"type\":\"ARMMEX\",\"at\":[1,1]}},\"selected\":{\"s\":\"u\"}},"
+        "\"demos\":{\"d\":{}}}";
+    WIKIENTRY e;
+    char err[256], why[320];
+    int ok;
+    err[0] = 0;
+    ok = tagpu_wikidata_entry(&e, TEXT, sizeof TEXT - 1, err, sizeof err);
+    snprintf(why, sizeof why, "%s: text %d, metal %d, vents %d, units %d, selected %d, demos %d",
+             ok ? "loaded" : err, ok ? e.ntext : -1, ok ? e.scene.nmetal : -1, ok ? e.scene.nvent : -1,
+             ok ? e.scene.nunit : -1, ok ? e.scene.nselected : -1, ok ? e.ndemo : -1);
+    ok = ok && !e.ntext && !e.scene.nmetal && !e.scene.nvent && !e.scene.nunit && !e.scene.nselected
+         && !e.ndemo;
+    tagpu_wikidata_entry_free(&e);
+    return said(ok, "entry-lists-as-objects", why);
+}
+
 static int malformed(void)
 {
     int ok = 1;
@@ -450,6 +473,7 @@ static int malformed(void)
     ok &= tree_case("tree-entry-object",
                     "{\"format\":1,\"tree\":[{\"entry\":{\"id\":\"x\"},\"children\":[{\"title\":\"a\","
                     "\"children\":[{\"title\":\"b\"}]}]}]}", 3);
+    ok &= entry_case();
     (void)ok;
     return 0;
 }
