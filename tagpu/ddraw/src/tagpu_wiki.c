@@ -290,6 +290,7 @@ static char     s_msg[32];                      /* what the stage shows with no 
 static LARGE_INTEGER s_qpf, s_last;
 static double   s_acc;                          /* ticks owed, wiki.js `acc`                     */
 static int      s_drag = -1;                    /* the panel whose thumb a left press holds      */
+static int      s_dragReal;                     /* that press came by the real path              */
 static int      s_dragY;
 static float    s_dragFrom;
 static double   s_costMax;                      /* the most one fill cost this thread, ms, since
@@ -427,10 +428,13 @@ static void page_press(const char* key)
 }
 
 /* EVERY SCROLL IS CLAMPED TO THE LIMITS OF THE FRAME THE PLAYER SAW: the hit map's, taken from
-   the last frame drawn. The layout holds it to its own limit again when it draws. */
+   the last frame drawn. The layout holds it to its own limit again when it draws. A hit map that
+   drew no wiki (a frame without the layer, or no command record) has no limits and no thumb, and
+   the scroll stays where it is: a drag held across one does not jump to the top. */
 static void scroll_to(int i, float v)
 {
-    float mx = s_hit.drawn ? s_hit.scroll_max[i] : 0;
+    const float mx = s_hit.scroll_max[i];
+    if (!s_hit.drawn) return;
     s_scroll[i] = v < 0 ? 0 : v > mx ? mx : v;
 }
 
@@ -461,9 +465,9 @@ static void wheel(double notches)
     }
 }
 
-/* A left press on a scrollbar of the last frame drawn: 1 = taken. On the thumb it holds it for a
-   drag; elsewhere on the track it pages toward the press. */
-static int bar_press(int cx, int cy)
+/* A left press on a scrollbar of the last frame drawn, `real` when by the real path: 1 = taken. On
+   the thumb it holds it for a drag; elsewhere on the track it pages toward the press. */
+static int bar_press(int cx, int cy, int real)
 {
     int i;
     if (cx < 0 || !s_hit.drawn) return 0;
@@ -472,6 +476,7 @@ static int bar_press(int cx, int cy)
         if (b->y1 <= b->y0 || cx < b->x0 || cx >= b->x1 || cy < b->y0 || cy >= b->y1) continue;
         if (cy >= b->thumb_y && cy < b->thumb_y + b->thumb_h) {
             s_drag = i;
+            s_dragReal = real;
             s_dragY = cy;
             s_dragFrom = s_hit.scroll[i];
         } else {
@@ -581,7 +586,7 @@ static int press(unsigned bit, int cx, int cy, int gx, int gy)
     char key[TAGPU_WIKI_KEY];
     if (s_open) {
         s_owedBtn |= bit;
-        if (bit == B_L && !bar_press(cx, cy) && hit(cx, cy, key)) {
+        if (bit == B_L && !bar_press(cx, cy, gx < 0) && hit(cx, cy, key)) {
             if (!strcmp(key, "close")) { held(key); wiki_close("the close button"); }
             else if (!strcmp(key, "wiki")) { held(key); wiki_close("the wiki button"); }
             else page_press(key);
@@ -711,6 +716,12 @@ int tagpu_wiki_message(UINT msg, WPARAM wp, LPARAM lp)
     case WM_SYSDEADCHAR:
         return character();
     case WM_MOUSEMOVE:
+        /* THE DRAG ENDS WITH ITS BUTTON. A real press's release can be lost -- made outside the
+           window with the mouse unlocked, it is never sent here -- but every real move carries the
+           button's state, so the first move with the left button up ends a drag a real press
+           began. An injected press's release always comes by the injected path (deliver_mouse
+           hands every TAGPU_M_LUP to tagpu_wiki_mouse), which ends its drag in release(). */
+        if (s_drag >= 0 && s_dragReal && !(wp & MK_LBUTTON)) s_drag = -1;
         if (s_open) { note_client(cx, cy); bar_drag(cy); }
         return s_open;
     case WM_MOUSEWHEEL:
