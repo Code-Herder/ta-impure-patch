@@ -359,6 +359,36 @@ the commit's removals both read what it leaves.
 
 ### Landing 2 — the button, the window, the capture and the pause
 
+**Status: built and verified 2026-10-25 on its worktree branch, not landed.** As built, against the
+list below:
+
+- **The shell's layout is `src/tagpu_wikiframe.c`/`.h`, not `tagpu_wikilay.c`**, which the page
+  landing owns: the window, the title groove, the close bay, the body and the button, with the hot
+  keys `window`, `close` and `wiki`. Pure C99 like `tagpu_hudlay.c` (it compiles natively with
+  `gcc -std=c99`); no native check runs it yet.
+- **`tagpu_wiki_mouse` takes the game point as well** (`code, cx, cy, gx, gy`): the open stores the
+  frozen point from it, so `g_ddraw.cursor` is the opening press on the injected path too.
+- **The window also takes `WM_SYSKEYDOWN`/`WM_SYSKEYUP`** (question 9), and **`WM_MOUSELEAVE`**
+  goes no further than forgetting the client point while the wiki holds input.
+- **The record's `paused` means the wiki holds the pause**, and `pause_was` that the bit was
+  already set at the open: the close clears it only when `pause_was` is 0.
+- **The wiki's area is the packet's last**, after the effects' models.
+- **The PAUSED icon (risk 8, question 10)**: in single player at 1920 × 1080 and 3840 × 2160 the
+  engine's `PAUSED` is under the window and does not show in the capture. Question 10's
+  recommendation (a "Paused" chip in the title groove, in the mockup first) is the owner's call;
+  nothing of it is built.
+- **Verified** with `tools/wiki_regression.py`: sp on Xvfb at 1920 × 1080 (every check, 78 s) and
+  at 3840 × 2160 ((a) to (f)); recorded (31 s); mp, two retail peers on Wine on their own DirectPlay port (122 s); `make` and
+  `make LIMITS=stock` clean; the replay gate, `tareplay.py landing`, passed on `c96cf852` with
+  34 test groups in 14 minutes, every check passing.
+- **The gate is broader than verification 5 expected.** `tagpu_packet.h` is included by three `sim`
+  files (`tagpu_patches.c`, `tagpu_weapons.c`, `tagpu_datakeys.c`), so the header's change names
+  every feature of theirs, and with the wiki branch's own changes against `main` the gate ran
+  34 groups, not the `resource-*` ones alone. `tagpu_wikipk.h` reaches the same files through it.
+  A later landing that changes only `tagpu_wikipk.h` therefore runs the same groups.
+- **Not run**: the wiki in a replay (question 6) has no test; the real input path is the owner's
+  hand-over (risk 3); 3440 × 1440 and 1024 × 768.
+
 **What the player sees.** A 28 × 28 wiki button sits in the top bar's right-hand row, 3 bar pixels
 left of the rewind button, or in the rewind button's slot when that is absent. A press opens the
 kit's window frame (90 % of the game screen, centred), with the title "Wiki" and its close button.
@@ -769,7 +799,7 @@ Integrate them in order, and keep each track's pure file its own.
    resource rules, `rulecheck.py` notices drift without closing it.
 8. **The engine's `PAUSED` icon may lie under the window.** It is drawn at DrawGameScreen locals
    `[esp+0xAC]`/`[esp+0xB0]` (`0x46A110`), a place not established. The mockup's top-bar `PAUSED`
-   is a stand-in. Landing 2's capture shows where the icon lands (question 10).
+   is a stand-in. Landing 2's captures put it under the window, unseen (question 10).
 
 ## Questions for the owner
 
@@ -820,7 +850,6 @@ reasons: every verification above can run, and no fix depends on timing.
 
 ## What this plan does not know yet
 
-- **Where the engine's `PAUSED` icon is drawn** (risk 8).
 - **Whether the fitted kit holds up at 3440 × 1440 and 1024 × 768.** The xtile repeats and the
   window part's slices of 231 and 416 units at small sizes. `wikilaycheck`'s cases include both.
 - **The game thread's cost for the heaviest demo.** `bestfit`, at 721 ticks, runs `quick_choice`

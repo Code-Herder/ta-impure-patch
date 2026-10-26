@@ -6,19 +6,23 @@
 The owner wants a wiki inside the game that explains Impure's own features with examples a player
 can watch and try. The decisions below came out of a design interview with the owner on
 2026-10-25; each is recorded with its reason. The DLL carries the tree and the entries and runs
-the simplified simulation in C, equal to the mockup's tick for tick on every demo; nothing in the
-DLL calls either yet, so the game shows no wiki.
+the simplified simulation in C, equal to the mockup's tick for tick on every demo. On the Vulkan
+lane the game draws the wiki button and opens the window frame over the game, takes every input
+while it is open and pauses single player ([the plan](ingame-wiki-plan.html), landing 2); the
+window's body is empty, and nothing in the DLL calls the tree, the entries or the simulation yet.
 
 | What | Where |
 |---|---|
 | The tree of categories and entries | `art/wiki/tree.json` |
 | One entry: its text, its mods, its demos | `art/wiki/entries/<id>.json` |
 | The mockup, which reads only those files | `tools/wiki/mockup/` (`index.html`, `wiki.js`, `wiki.css`, `sim.js`) |
-| The window's art kit | `art/wiki/kit/` (`kit.json` and `parts/`), in `art/hud/kit.json`'s format |
+| The window's art kit | `art/wiki/kit/` (`kit.json` and `parts/`), in `art/hud/kit.json`'s format, fitted by `tools/hudart/fit.py --set wiki` from the parts as cut in `art/wiki-full/kit/` |
 | The stage in the game's own graphics | `tools/wiki/gfx.py` writes the gitignored `tools/wiki/mockup/gfx/` from the local install; `gfx.js` draws it under `gfx=game` |
 | The demos' generators; the headless check of every demo | `tools/wiki/gen-quickbuild.mjs`, `tools/wiki/gen-buildshapes.mjs`; `tools/wiki/simcheck.mjs` |
 | The data in the DLL | `art/wiki/` packed by `tools/hudpak.py --set wiki` into the resource `WIKIPAK`; read by `tagpu/ddraw/src/tagpu_wikidata.c` (through `tagpu_pak.c`, the archive reader the HUD shares) |
 | The simulation in the DLL | `tagpu/ddraw/src/tagpu_wikisim.c` |
+| The window and the button in the DLL | `tagpu_wiki.c` (input, pause; game thread), `tagpu_wikiframe.c` (the layout), `tagpu_wikistate.c` and `tagpu_vk_hud.c` (drawing; render thread) — [GPU status](gpu-status.html) §2.12c |
+| The game test of the window | `tools/wiki_regression.py <instance> sp --launch` (or `recorded`), `tools/wiki_regression.py <name> mp` |
 | The parity check, C against `sim.js` | `node tools/wiki/simparity.mjs [--wine]`, with `tagpu/ddraw/tests/wikitest.c` |
 | Serving it | `python3 tools/hudart/serve.py`, then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
@@ -54,8 +58,8 @@ Two entries, both under Quality of Life → Building: **Quick Build: Resource Ex
   and a demo and Try it yourself cannot disagree. The one scripted extra is a caption, written at
   a given tick.
 - `art/wiki/` mirrors `art/hud/`, and the DLL embeds it the same way: `tools/hudpak.py --set wiki`
-  packs `tree.json` and `entries/*.json` into the resource `WIKIPAK`. The kit is not packed yet
-  (*Gaps*).
+  packs `tree.json`, `entries/*.json`, `kit/kit.json` and `kit/parts/*.png` into the resource
+  `WIKIPAK`.
 
 ### The window
 
@@ -112,9 +116,10 @@ keycaps, badge, close and wiki buttons (thin worn rims round dark screen faces),
 two row parts — a framed steel row, and for the selected row its lit, raised twin. Each part is a
 nine-slice drawn by the replay HUD's rules; their specs are `tools/hudart/specs/parts_wiki_slim.py`
 and, for the rows, `parts_wiki_plate.py`. Every text role takes a style of `art/hud/layout.json`
-in the replay HUD's faces (`art/hud/fonts/`). The parts are filed as cut, about 10 px a unit; they
-are fitted to what the game draws, as `tools/hudart/fit.py` does for the HUD, when the DLL draws
-them.
+in the replay HUD's faces (`art/hud/fonts/`). The parts as cut, about 10 px a unit, are filed in
+`art/wiki-full/kit/`; `tools/hudart/fit.py --set wiki` fits them into `art/wiki/kit/` at what the
+game draws at most: 3 device pixels a unit for the window's parts (a 2160-row screen) and 4.5 for
+the button's (the top bar at 4K and a 150 % HUD), 0.59 MB of parts against 2.75 as cut.
 
 ### The stage
 
@@ -497,14 +502,11 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
 
 ## Gaps
 
-- **The top-right row is drawn by two renderers today**: the sprocket on every renderer, the
-  rewind button by the Vulkan HUD pass only. Where the wiki button is drawn on GDI is not decided.
-- **The DLL has the data and the simulation, and nothing calls them.** The window, the button, the
-  drawing, the pausing and the input capture are specified here and in the mockup only;
-  `tagpu_wikidata_load_resource` and the simulation link into the DLL unused.
-- **The kit is not in the DLL.** `art/wiki/kit/` (2.7 MB of parts) is not packed. The HUD's parts
-  are fitted to what the game draws (`tools/hudart/fit.py`), which rewrites each part and its
-  `kit.json` entry together, so the kit goes in with the landing that draws the window.
+- **No wiki on GDI** (the owner's decision, 2026-10-25): the button and the window are drawn by the
+  Vulkan HUD pass only, as the rewind button is, so on GDI the wiki cannot open.
+- **The window is empty.** The button, the window frame, the input capture and the pause are in
+  the DLL; the page, the stage and Try it yourself are the plan's landings 3 to 5, and
+  `tagpu_wikidata_load_resource`'s tree and entries and the simulation are loaded but not drawn.
 - **The rules are copies.** The C's resource and gesture rules port `sim.js`'s mirrors of
   `tagpu_resource.c` and `tagpu_place.c` rather than calling them. `simparity.mjs` holds the C to
   `sim.js`; nothing holds either to the game's code, so a change there is followed by hand in
