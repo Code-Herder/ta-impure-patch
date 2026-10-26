@@ -4,7 +4,7 @@
 /* The replay HUD: art/hud/ packed by tools/hudpak.py (Makefile, THE HUD ARCHIVE). */
 HUDPAK RCDATA "inc/tagpu_hudpak.bin"
 
-/* The in-game wiki's tree and entries: art/wiki/ packed by tools/hudpak.py --set wiki
+/* The in-game wiki's tree, entries and window kit: art/wiki/ packed by tools/hudpak.py --set wiki
    (Makefile, THE WIKI ARCHIVE). */
 WIKIPAK RCDATA "inc/tagpu_wikipak.bin"
 

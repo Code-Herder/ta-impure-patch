@@ -180,9 +180,10 @@ inc/tagpu_hudpak.bin: ../../tools/hudpak.py $(HUD_SRCS)
 
 $(addprefix res, $(ALLEXTS)): inc/tagpu_hudpak.bin
 
-# THE WIKI ARCHIVE (tools/hudpak.py --set wiki; src/tagpu_wikidata.h): the in-game wiki's tree and
-# entries under art/wiki/, packed by the same tool in the same format into inc/tagpu_wikipak.bin,
-# which res.rc embeds as the RCDATA resource WIKIPAK. Generated and never committed, as the HUD's.
+# THE WIKI ARCHIVE (tools/hudpak.py --set wiki; src/tagpu_wikidata.h, src/tagpu_hudart.h): the
+# in-game wiki's tree, entries and fitted window kit under art/wiki/, packed by the same tool in the
+# same format into inc/tagpu_wikipak.bin, which res.rc embeds as the RCDATA resource WIKIPAK.
+# Generated and never committed, as the HUD's.
 WIKI_DIR  := ../../art/wiki
 WIKI_SRCS := $(shell find $(WIKI_DIR) -type d -o -type f 2>/dev/null)
 inc/tagpu_wikipak.bin: ../../tools/hudpak.py $(WIKI_SRCS)
