@@ -278,6 +278,7 @@ void tagpu_wikistate_drawn(int drew)
     }
     s_map.drawn = 1;
     s_map.open = (uint8_t)s_open;
+    s_map.entry = (int16_t)s_page.entry;
     s_drew = 1;
 }
 

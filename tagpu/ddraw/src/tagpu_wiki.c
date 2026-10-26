@@ -398,13 +398,24 @@ static int key_index(const char* key, const char* prefix, int n)
     return v < n ? v : -1;
 }
 
+/* the control acts on the selected entry's demo: its meaning is the entry it was drawn for */
+static int entry_relative(const char* key)
+{
+    return !strncmp(key, "demo:", 5) || !strcmp(key, "play") || !strcmp(key, "replay") || !strcmp(key, "try");
+}
+
 /* A left press on control `key` of the last frame drawn (wiki.js's handlers). Try it yourself is
-   the next landing's: its button shows pressed and does nothing. */
+   the next landing's: its button shows pressed and does nothing.
+   A PRESS ON AN ENTRY'S CONTROL COUNTS ONLY ON A FRAME DRAWN FOR THE ENTRY SELECTED NOW: the hit
+   map lags a selection by the frames the render thread has not drawn yet, and `demo:1` of the
+   entry the player saw is not `demo:1` of the one just picked. The hit map names the entry its
+   frame drew (TAGPU_CMD_WIKI.entry, the record's), compared with what page_fill writes. */
 static void page_press(const char* key)
 {
     const WIKIDATA* d = data();
     const int folds = (int)(TAGPU_WIKI_FOLDS * 32);
     int i;
+    if (entry_relative(key) && s_hit.entry != (entry_of(d) ? s_entry : -1)) return;
     if (!strcmp(key, "play") || !strcmp(key, "replay") || !strcmp(key, "x1") || !strcmp(key, "x2") ||
         !strcmp(key, "try"))
         held(key);
@@ -895,7 +906,8 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
         fprintf(f, "%s{\"track\":[%d,%d,%d,%d],\"thumb\":[%d,%d],\"per_px\":%.5f}", i ? "," : "",
                 b->x0, b->y0, b->x1, b->y1, b->thumb_y, b->thumb_h, b->per_px);
     }
-    fprintf(f, "],\"drawn\":%u,\"drawn_open\":%u,\"hits\":[", (unsigned)s_hit.drawn, (unsigned)s_hit.open);
+    fprintf(f, "],\"drawn\":%u,\"drawn_open\":%u,\"drawn_entry\":%d,\"hits\":[", (unsigned)s_hit.drawn,
+            (unsigned)s_hit.open, (int)s_hit.entry);
     for (i = 0; i < s_hit.n; i++) {
         const TAGPU_CMD_WIKIHIT* h = &s_hit.hit[i];
         fprintf(f, "%s{\"key\":", i ? "," : "");

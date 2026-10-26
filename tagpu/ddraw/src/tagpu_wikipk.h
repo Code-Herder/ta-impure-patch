@@ -87,7 +87,7 @@ typedef struct TAGPU_CMD_WIKI {
     uint32_t n;                 /* <= TAGPU_CMD_WIKIHITS                                      */
     uint8_t  drawn;             /* the frame this map is drew the wiki layer                  */
     uint8_t  open;              /* that frame drew the window, not the button alone           */
-    uint8_t  pad[2];
+    int16_t  entry;             /* the entry that frame drew, TAGPU_PK_WIKI.entry's value      */
     float    u;                 /* the client pixels a wiki unit was on that frame            */
     float    scroll[TAGPU_WIKI_NSCROLL];     /* each panel's scroll as drawn, units           */
     float    scroll_max[TAGPU_WIKI_NSCROLL]; /* and its limit                                 */
