@@ -17,7 +17,8 @@
    its WM_TAGPU_* cases and before the sprocket and the replay HUD. 1 = taken: nothing of it
    reaches the engine. While the window is open every key, character, raw-input, move, button and
    wheel message is taken; while it is closed, a left press on the wiki button of the last frame
-   drawn (the client point in lParam), and the release or the repeats of a press the wiki took.
+   drawn (the client point in lParam), any press on a control of a last frame that still drew the
+   window open, and the release or the repeats of a press the wiki took.
    TAGPU_WIKI_FROZEN: not taken, but handed to the engine at the frozen point by the caller. */
 int  tagpu_wiki_message(UINT msg, WPARAM wp, LPARAM lp);
 

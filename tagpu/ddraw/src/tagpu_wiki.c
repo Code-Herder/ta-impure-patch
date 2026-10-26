@@ -576,6 +576,15 @@ static int press(unsigned bit, int cx, int cy, int gx, int gy)
         }
         return 1;
     }
+    /* A PRESS ON A WINDOW STILL DRAWN IS THE WIKI'S, whatever the button: after a close the render
+       thread draws the open page for a frame or two more and its hit map lags one more, so the
+       second click of a double-click on X lands on the window the player still sees. Taken and
+       owed its release, it does nothing -- the window it was aimed at is already closed -- and the
+       world under that window never sees it. */
+    if (s_hit.open && hit(cx, cy, key)) {
+        s_owedBtn |= bit;
+        return 1;
+    }
     if (bit == B_L && hit(cx, cy, key) && !strcmp(key, "wiki")) {
         const char* busy = pause_in_flight();
         s_owedBtn |= bit;
