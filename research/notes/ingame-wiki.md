@@ -478,7 +478,7 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
 ## Open issues in the placement code
 
 Porting `tagpu_place.c` and `tagpu_placegeo.c` into `sim.js` turned up three behaviours of the
-game's placement worth stating; the first is the specified rule and the second is fixed. They were found by reading
+game's placement worth stating; the first is the specified rule, kept, and the second is fixed. They were found by reading
 and porting the code (the port matches `tagpu_placegeo.c` on 20 000 random cases); none has been
 reproduced in game yet. The sim mirrors the code as it is, so the Build Lines entry's demos route
 round them; when the code changes, `sim.js` and the demos follow it.
@@ -490,8 +490,8 @@ round them; when the code changes, `sim.js` and the demos follow it.
    (`bar-placement-design.md` §2.2, "ring wins over line/rect when Shift + Ctrl and a target is
    under the cursor, as in Recoil"), the approved lab mockup and Recoil's `GuiHandler`, which
    takes the ring target from the live mouse ray, all do the same. Demo 3 routes its cursor round
-   the solar collector for that reason. Deciding the shape at the press instead is a change of
-   the rule, the owner's to make.
+   the solar collector for that reason. The owner chose to keep it (2026-10-25): the shape is
+   decided live, as in BAR, not at the press.
 2. **The yellow preview promised more than the release did — fixed in the game.** Dragging back
    over a queued row of 1 × 1 sites took off every one only when the drag started on the row:
    with 10, 11 and 12 queued, a drag from 9 to 12 previewed four yellow sites, and the release
