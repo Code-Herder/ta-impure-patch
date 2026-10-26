@@ -927,8 +927,8 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
     tagpu_logf("wiki: state dumped to %s - open=%d paused=%d hits=%u", DUMP_OUT, s_open, s_paused, s_hit.n);
 }
 
-/* THE RECORD THE PACKET CARRIED, from the last fill tagpu_wiki_carried was told of: 0 when not even
-   the head fitted, so the frame drawn from it shows no wiki and posts an empty hit map */
+/* 1 when the packet carried nothing of the last fill tagpu_wiki_carried was told of, not even its
+   head, so the frame drawn from it shows no wiki and posts an empty hit map */
 static int s_cut;
 static int s_ask;                       /* this fill answers the triggers                        */
 
