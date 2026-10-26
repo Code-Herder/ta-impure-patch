@@ -67,6 +67,27 @@ static __inline int tagpu_edge_reflect(int m, int n, int* flip)
     return 2 * n - 1 - p;
 }
 
+/* WHERE THE MAP ENDS FOR EVERY EDGE PASS: the engine's scroll extent
+   (`main+0x1422B`/`+0x1422F`, the packet's `map_pxw/h`), in 32-px tile cells.
+   The extent is the map's pixel size less 32 and 128 (`0x4833B0`), and stock
+   never shows a pixel past it: its camera clamp `0x41C3C0` holds the eye in
+   `[0, extent - view]`. The strip between the extent and the tile map's own
+   size is therefore art no player saw -- often the map editor's blank tile
+   (Painted Desert's blue column) -- and the load-time mask makes it unbuildable
+   as well (exe map, "A saved game's features"). So the mirror folds HERE, and
+   that strip is drawn as the reflection of the map beside it.
+   Every stock map's extent is a whole number of tiles (all 275 TNTs have even
+   16-px dimensions); a custom map whose extent is not rounds down to the tile.
+   THE BOUND: the answer is in [1, cells32], `cells32` being the tile map's own
+   width or height that the caller indexes with, so a cell folded into
+   [0, answer) by tagpu_edge_reflect indexes the tile map. An extent that is not
+   positive, or not inside the map, answers the whole map. */
+static __inline int tagpu_edge_area(int extent_px, int cells32)
+{
+    int n = extent_px > 0 ? extent_px / 32 : 0;
+    return n > 0 && n < cells32 ? n : cells32;
+}
+
 /* ONE EFFECTS MODEL, already rasterised: its runs are `nrun` entries of
    tagpu_fxmodel.c's arena from `run0` (tagpu_fxmodel_runs), in frame pixels,
    and the unit pass draws them (tagpu_native.c hands each model to

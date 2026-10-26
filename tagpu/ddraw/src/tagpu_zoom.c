@@ -738,26 +738,23 @@ static void apply_scroll_rate(char* ta)
    `eye + W/2` at every zoom, W being the TRUE viewport, so the range that keeps
    that centre on the map is
 
-       eye in [-W/2, map - W/2]            the same at every zoom
+       eye in [-W/2, extent - W/2]         the same at every zoom
 
    and the map's edge can reach the middle of the screen, zoomed in or out.
    The engine's own `0x41C3C0` clamps to `[0, extent - W]` instead, the range
-   that keeps the VIEWPORT's edges on the scroll extent's at 1x.
+   that keeps the VIEWPORT's edges on the extent at 1x.
 
-   TWO SIZES, AND ONLY ONE IS THE MAP. `map` is the map's own size, the PLOT
-   grid main+0x14233/0x14237 (16-px cells) x 16 — the tile map's extent, the
-   one the lab and the terrain pass draw. `extent` is the SCROLL EXTENT
-   main+0x1422B/0x1422F, the map less 32 px wide and 128 px tall, written at
-   the level load from the map's pixel size main+0x14223/0x14227
-   (`0x4833B8..0x4833E0`: `sub 0x20`, `sub 0x80`) and rewritten after that only
-   by the debug-level `Edge` command [DISASSEMBLED]. MEASURED 2026-09-23 on Two
-   Continents: PLOT 672 x 800, main+0x14223/0x14227 10752 x 12800, extent
-   10720 x 12672. The view centre stops at the MAP's edge, as the lab's does;
-   the engine's range and the pointer's guards stay on the extent, the bound
-   they are built on (zoom_tpos_guard). The PLOT grid and not
-   main+0x14223 is read for the map because the packet carries it
-   (`map_w16/h16`): the two threads then compute the range from the same
-   words, and agree by construction.
+   THE MAP IS THE SCROLL EXTENT, main+0x1422B/0x1422F: the map's pixel size
+   main+0x14223/0x14227 less 32 px wide and 128 px tall, written at the level
+   load (`0x4833B8..0x4833E0`: `sub 0x20`, `sub 0x80`) and rewritten after that
+   only by the debug-level `Edge` command [DISASSEMBLED]. MEASURED 2026-09-23 on
+   Two Continents: PLOT 672 x 800, main+0x14223/0x14227 10752 x 12800, extent
+   10720 x 12672. Stock never shows a pixel past it, and the strip between it
+   and the tile map is art no player saw and ground nobody can build on; the
+   terrain and feature passes fold the mirror at the same line (tagpu_fx.h
+   `tagpu_edge_area`). The packet carries the same two words (`map_pxw/h`), so
+   the two threads compute the range from the same words and agree by
+   construction.
 
    THE CENTRE RANGE IS IN FORCE ONLY WHILE THE GROUND IS OURS, and that is the
    bound the whole range rests on. The engine's terrain pass `0x483FA0` indexes
@@ -895,8 +892,6 @@ static void apply_scroll_rate(char* ta)
 #define OFF_EXTENT_H     0x1422F       /* ...and less 128 px ("two sizes")        */
 #define OFF_MAPPX_W      0x14223       /* the map's own pixel size, which         */
 #define OFF_MAPPX_H      0x14227       /* GetTPosition clamps to (0x484B67)       */
-#define OFF_PLOT_C       0x14233       /* the map in 16-px cells: the map is 16x  */
-#define OFF_PLOT_R       0x14237
 #define OFF_FIELD_W      0x37E37       /* the true viewport size: the W and H of  */
 #define OFF_FIELD_H      0x37E3B       /* 0x41C3C0's [0, extent - W]; vpwide never writes them */
 #define OFF_SCRTX        0x14327       /* MapXScrollingTo — the eye eases to here */
@@ -958,13 +953,14 @@ static int iround(float v)
    scale the RESULT about its own centre by 1/z: at 0.5x the box on the minimap
    doubles, which is what the player is actually looking at.
 
-   THE BOX CANNOT INVERT, BY CONSTRUCTION. The engine places it by the EXTENT,
-   and the centre range lets the view centre reach the MAP's edge, 32 px right
-   of and 128 px below the extent's ("two sizes") — so near the far edges the
-   box's centre lies past the minimap, and at a high zoom the whole shrunken box
-   does: an edge clamped on one side only then leaves top below bottom (at z 6
-   on Two Continents), a box the GUI renderer drops and the engine's own drawer
-   would put on the panel below the minimap. So the centre is clamped into the
+   THE BOX CANNOT INVERT, BY CONSTRUCTION. The engine places it by the EXTENT
+   from the viewport's top-left, and the centre range lets that top-left reach
+   W/2 (H/2) past the engine's own `extent - W` — so near the far edges the
+   box runs up to half its 1x size past the minimap, its centre onto the
+   minimap's edge, and at a high zoom the whole shrunken box lies past: an
+   edge clamped on one side only then leaves top below bottom, a box the GUI
+   renderer drops and the engine's own drawer would put on the panel below the
+   minimap. So the centre is clamped into the
    minimap FIRST, then each edge on BOTH sides. `hw`, `hh` >= 0, so the two
    edges leave `iround` in order, and a clamp to one interval is monotone, so
    they stay in order: left <= right and top <= bottom on every path. For an
@@ -1019,35 +1015,26 @@ static void __stdcall zoom_minimap_rect(int* r)
 }
 
 /* THE CAMERA'S RANGE, the one arithmetic both threads use: the centre range
-   `[-W/2, map - W/2]` when `centre`, else the engine's own `[0, extent - W]`
-   ("two sizes"). Returns 0 — and leaves the outputs alone — when the inputs
-   the chosen range needs are not sane enough to compute it. The centre range
-   cannot invert (its width is the map's); the engine's inverts on a map
-   smaller than the viewport, where the engine alternates between 0 and a
-   negative bound on every call, and this one holds at 0. */
-static int camera_range(int W, int H, int extW, int extH, int mapW, int mapH,
+   `[-W/2, extent - W/2]` when `centre`, else the engine's own
+   `[0, extent - W]`. Returns 0 — and leaves the outputs alone — when the
+   inputs are not sane enough to compute it. The centre range cannot invert
+   (its width is the extent's); the engine's inverts on a map smaller than the
+   viewport, where the engine alternates between 0 and a negative bound on
+   every call, and this one holds at 0. */
+static int camera_range(int W, int H, int extW, int extH,
                         int centre, int* loX, int* hiX, int* loY, int* hiY)
 {
-    if (W <= 0 || H <= 0) return 0;
+    if (W <= 0 || H <= 0 || extW <= 0 || extH <= 0) return 0;
     if (centre) {
-        if (mapW <= 0 || mapH <= 0) return 0;
-        *loX = -(W / 2); *hiX = mapW - W / 2;
-        *loY = -(H / 2); *hiY = mapH - H / 2;
+        *loX = -(W / 2); *hiX = extW - W / 2;
+        *loY = -(H / 2); *hiY = extH - H / 2;
     } else {
-        if (extW <= 0 || extH <= 0) return 0;
         *loX = 0; *hiX = extW - W;
         *loY = 0; *hiY = extH - H;
         if (*hiX < 0) *hiX = 0;
         if (*hiY < 0) *hiY = 0;
     }
     return 1;
-}
-
-/* The map in world px from its size in 16-px PLOT cells; 0 (no centre range)
-   for a count no map has, so the multiply cannot overflow. */
-static int plot_px(int cells)
-{
-    return cells > 0 && cells < 65536 ? cells * 16 : 0;
 }
 
 /* The range in force on the GAME thread: the TRUE viewport (never the field:
@@ -1061,8 +1048,6 @@ static int zoom_eye_range(const char* ta, int* loX, int* hiX, int* loY, int* hiY
     if (!ta_ok(ta)) return 0;
     tagpu_vpwide_true_rect(ta, &L, &T, &W, &H);
     return camera_range(W, H, *(const int*)(ta + OFF_EXTENT_W), *(const int*)(ta + OFF_EXTENT_H),
-                        plot_px(*(const int*)(ta + OFF_PLOT_C)),
-                        plot_px(*(const int*)(ta + OFF_PLOT_R)),
                         s_gCentre, loX, hiX, loY, hiY);
 }
 
@@ -1095,14 +1080,12 @@ static int clamp_range(const char* ta, int* loX, int* hiX, int* loY, int* hiY)
 /* The same range from the packet's copies of the same inputs — the render
    thread's, for the cursor anchor's pre-clamp and the predicted eye. The
    packet's `vp` IS tagpu_vpwide_true_rect's answer, its `map_pxw/h` the
-   scroll extent's two words, its `map_w16/h16` the PLOT grid's and its
-   `cam_centre` the apply's own choice for the draw it was published from, so
+   scroll extent's two words and its `cam_centre` the apply's own choice for the draw it was published from, so
    the two agree by construction and a step the render thread pre-clamps is
    accepted there. */
 static int range_pk(const TAGPU_PACKET* p, int* loX, int* hiX, int* loY, int* hiY)
 {
     return camera_range(p->vp[2], p->vp[3], p->map_pxw, p->map_pxh,
-                        plot_px(p->map_w16), plot_px(p->map_h16),
                         p->cam_centre != 0, loX, hiX, loY, hiY);
 }
 
@@ -1224,7 +1207,7 @@ static void __stdcall zoom_debug_overlay(void* ctx)
     if (!ta_ok(ta)) return;
     tagpu_vpwide_true_rect(ta, &L, &T, &W, &H);
     if (!camera_range(W, H, *(const int*)(ta + OFF_EXTENT_W), *(const int*)(ta + OFF_EXTENT_H),
-                      0, 0, 0, &loX, &hiX, &loY, &hiY))
+                      0, &loX, &hiX, &loY, &hiY))
         return;
     ex = *(const int*)(ta + OFF_EYEX);
     ey = *(const int*)(ta + OFF_EYEY);

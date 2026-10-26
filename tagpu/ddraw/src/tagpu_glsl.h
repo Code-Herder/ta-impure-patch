@@ -128,8 +128,9 @@
    drift apart.
 
    `w` is the point the fragment DRAWS, on the tile grid (world px, the space
-   the terrain's cells are laid out in), and uMapPx is the map's extent on that
-   grid: its 32-px cell count times 32. `o` is how far past the map the point
+   the terrain's cells are laid out in), and uMapPx is the engine's area on that
+   grid (tagpu_fx.h `tagpu_edge_area`): its 32-px cell count times 32. `o` is
+   how far past the map the point
    is on each axis, so the fade runs from the nearest map edge and rounds the
    corners, exactly as the lab measures it. The colour is mixed toward its RGB
    mean -- the fog of war's grey rule (TAGPU_GLSL_FOG_GREY_RGB), in full colour

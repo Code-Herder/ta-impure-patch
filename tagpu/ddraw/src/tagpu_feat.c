@@ -283,6 +283,10 @@ int tagpu_feat_armed(unsigned frame_counter)
 /* the map the atlas's entries belong to (see tagpu_feat_gather) */
 static const char* s_mapGrid;
 static int         s_mapW, s_mapH;
+/* the engine's area in 16-px cells, this frame's (tagpu_edge_area): where the
+   mirror folds and the map's own pixels stop. Two per tile cell, so the two
+   passes fold at the same line; at most s_mapW / s_mapH. */
+static int         s_areaW, s_areaH;
 
 /* the map's own features, then the map edge's mirror of them (B_MSHADOW,
    B_MBODY): drawn in this order, so the mirror's two are the last */
@@ -421,10 +425,18 @@ static const char* FS =
     "  }\n"
     /* THE MAP'S OWN, IN THE MAP'S OWN COLUMNS while the mirror draws: past a
        side edge the picture is the map reflected, and a tree's overhang there
-       would cover the reflection of the tree itself. Past the top and bottom
-       the copies stand upright, not reflected, so the painter's order stands
-       there and the overhang is kept. Under a black edge nothing is clipped. */
-    "  if (uClip == 1 && (s.x < 0.0 || s.x >= uMapPx.x)) discard;\n"
+       would cover the reflection of the tree itself. Past the top the copies
+       stand upright, not reflected, so the painter's order stands there and
+       the overhang is kept.
+       PAST THE ENGINE'S AREA ON THE RIGHT AND AT THE BOTTOM, NOTHING OF THE
+       MAP'S OWN DRAWS, under either edge. The engine's sweep reaches anchors
+       in the strip between that area and the tile map (rows and columns up to
+       the map's last but one), so a tree there would otherwise stand on the
+       mirror or on the black; clipping the pixel rather than dropping the
+       anchor keeps the part of such a tree that reaches up into the area,
+       which is what stock's viewport, cut at the same line, showed. */
+    "  if (uClip == 1 && s.x < 0.0) discard;\n"
+    "  if (s.x >= uMapPx.x || s.y >= uMapPx.y) discard;\n"
     /* features are terrain furniture: the engine draws them under the fog
        overlay, so they stay visible in grey */
     TAGPU_GLSL_FOG_DISCARD
@@ -1111,7 +1123,14 @@ static int floor_div(int a, int b)
 static void mirror_gather(const TAGPU_FXVIEW* v, const char* fdefs, int nDefs,
                           int shadowsOn, const KEYRECT* k)
 {
-    const int mapW = s_mfW, mapH = s_mfH;
+    /* THE FOLD IS THE ENGINE'S AREA, the table's own dimensions the bound:
+       s_areaW/H are at most the map's (tagpu_edge_area), which the gather has
+       checked are the table's, so a row folded into [0, mapH) indexes
+       s_mfRow. A source the engine's sweep never reaches -- the map's last
+       row and column -- is not mirrored either (`lastRow`, `lastCol`). */
+    const int mapW = s_areaW, mapH = s_areaH;
+    const int lastRow = mapH < s_mfH - 1 ? mapH : s_mfH - 1;
+    const int lastCol = mapW < s_mfW - 1 ? mapW : s_mfW - 1;
     const int c0 = k->uc0, c1 = k->uc0 + k->ucols;
     const int t0 = k->tuc0, t1 = k->tuc0 + k->ucols;
     const int s0 = c0 < t0 ? c0 : t0, s1 = c1 > t1 ? c1 : t1;
@@ -1129,7 +1148,7 @@ static void mirror_gather(const TAGPU_FXVIEW* v, const char* fdefs, int nDefs,
            (mirror_key). */
         if (row < 0 ? vy0 >= 0 : row >= mapH && vy1 <= mapH * 16) continue;
         if (offRow) srow = tagpu_edge_reflect(row, mapH, &flipY);
-        if (srow >= mapH - 1) continue;
+        if (srow >= lastRow) continue;
         a0 = s_mfRow[srow]; a1 = s_mfRow[srow + 1];
         if (a0 == a1) continue;
         for (q = floor_div(s0, mapW); q * mapW < s1; q++) {
@@ -1148,7 +1167,7 @@ static void mirror_gather(const TAGPU_FXVIEW* v, const char* fdefs, int nDefs,
             if (!turned) {
                 for (j = a0; j < a1; j++) {
                     const int scol = s_mf[j].col, col = base + scol;
-                    if (scol >= mapW - 1 || col >= hi) break;
+                    if (scol >= lastCol || col >= hi) break;
                     if (col < lo) continue;
                     mirror_feature(v, &s_mf[j], fdefs, nDefs, shadowsOn, k, row, col,
                                    0, flipY, copy);
@@ -1156,7 +1175,7 @@ static void mirror_gather(const TAGPU_FXVIEW* v, const char* fdefs, int nDefs,
             } else {
                 for (j = a0; j < a1; j++) {
                     const int scol = s_mf[j].col, col = base + mapW - 1 - scol;
-                    if (scol >= mapW - 1 || col < lo) break;
+                    if (scol >= lastCol || col < lo) break;
                     if (col >= hi) continue;
                     mirror_feature(v, &s_mf[j], fdefs, nDefs, shadowsOn, k, row, col,
                                    1, flipY, copy);
@@ -1238,6 +1257,9 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
         if (s_mapGrid) tagpu_gaf_atlas_forget(&s_atlas);
         s_mapGrid = fdefs; s_mapW = mapW; s_mapH = mapH;
     }
+    s_areaW = 2 * tagpu_edge_area(pk->map_pxw, mapW / 2);
+    s_areaH = 2 * tagpu_edge_area(pk->map_pxh, mapH / 2);
+    if (s_areaW <= 0 || s_areaH <= 0) return feat_bail();     /* a map under 32 px */
 
     /* The engine's own sweep rect and its edge clamps (DrawGameScreen), run
        over the ZOOM's viewport rather than the engine's (TAGPU_FXVIEW.evpL):
@@ -1457,9 +1479,9 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.body   = s_verts[B_BODY];   s_pub.nBody   = s_nv[B_BODY];
     s_pub.mshadow = s_verts[B_MSHADOW]; s_pub.nMShadow = s_nv[B_MSHADOW];
     s_pub.mbody   = s_verts[B_MBODY];   s_pub.nMBody   = s_nv[B_MBODY];
-    /* the map on the TILE grid, as the terrain's uMapPx (tagpu_terr.c): the
-       two passes test the one edge */
-    s_pub.mapPxW = (float)((s_mapW / 2) * 32); s_pub.mapPxH = (float)((s_mapH / 2) * 32);
+    /* the engine's area on the TILE grid, as the terrain's uMapPx
+       (tagpu_terr.c): the two passes test the one edge */
+    s_pub.mapPxW = (float)(s_areaW * 16); s_pub.mapPxH = (float)(s_areaH * 16);
     s_pub.clip = s_clip;
     s_pub.gw = (float)v->gw; s_pub.gh = (float)v->gh;
     s_pub.zoom = v->zoom > 0.0f ? v->zoom : 1.0f;
