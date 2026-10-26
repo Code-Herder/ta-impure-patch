@@ -52,8 +52,9 @@ int  tagpu_menu_leave_ready(void);
 /* The in-game wiki's two engine facts (tagpu_wiki.c), game thread. single_player: the level in
    play is not a network game (main+0x2A44 bit 0 clear), which stays so for the rest of the level.
    pause_hold: single player's pause bit (main+0x38A51 bit 0) set (`on`) or cleared, its value
-   before in `*was`; 0 when there is no main block to write. Only the wiki calls it, and only in a
-   single-player level. */
+   before in `*was`; 0, writing nothing, when there is no main block or the level is a network
+   game -- it tests single_player itself, so no caller can write the bit in one. Only the wiki
+   calls it. */
 int  tagpu_menu_single_player(void);
 int  tagpu_menu_pause_hold(int on, int* was);
 /* The Config panel, while it is open: 1 with its box on the screen the composite draws, in the
