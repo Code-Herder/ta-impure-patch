@@ -400,9 +400,9 @@ int tagpu_wiki_message(UINT msg, WPARAM wp, LPARAM lp)
     /* THE RELEASE THAT RE-LOCKS THE MOUSE goes on once the window is closed: with the mouse
        unlocked, cnc-ddraw's window procedure takes every button's release, the left, right and
        middle one's to lock it, and hands the engine none (wndproc.c, "button up messages
-       reactivate cursor lock"). While the window is open it is
-       taken all the same, since the lock's store of the release's point would move g_ddraw.cursor
-       off the frozen one; the next click after the close locks it, as any click does unlocked. */
+       reactivate cursor lock"). While the window is open it is taken all the same, since the
+       lock's store of the release's point would move g_ddraw.cursor off the frozen one; the next
+       click after the close locks it, as any click does unlocked. */
     case WM_LBUTTONUP:
         return paired_up(release(B_L));
     case WM_RBUTTONUP:
