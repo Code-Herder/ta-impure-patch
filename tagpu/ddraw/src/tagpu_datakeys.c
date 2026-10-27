@@ -15,7 +15,6 @@
 #include "tagpu_log.h"
 #include "tagpu_simreg.h"
 #include "tagpu_model3do.h"
-#include "tagpu_cobscan.h"
 #include "tagpu_packet_pub.h"
 
 SIM_FEATURE(keys_records, SIM_PUPPET_RUNS, "battle");
@@ -537,6 +536,7 @@ void tagpu_datakeys_init(void)
 
 SIM_FEATURE(keys_ghost_mask, SIM_PUPPET_RUNS, "battle resource-core-upgrade");
 #include "tagpu_puppet.h"
+#include "tagpu_cobscan.h"
 
 /* =========================================================================
    3. The build ghost's piece mask
