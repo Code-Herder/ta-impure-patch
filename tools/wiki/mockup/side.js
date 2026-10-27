@@ -12,7 +12,6 @@
 const WikiSide = (() => {
   const COL = 128;                 // the engine's panel width, whatever the HUD scale
   const MINIMAP = 126;             // 0x466780: the minimap picture's long side
-  const PRESSED_DX = 1;            // GUI_ButtonDraw 0x4A5F40 moves a pressed button's text one pixel right and down
   /* What lies where nothing else is painted -- under and below a screen shorter than the column, in a panel
      picture's transparent pixels: palette index 0. The HUD pass 0x467D70 fills its whole surface with 0
      (SurfaceFill 0x4C6890 at 0x467D87) before PANELSIDE, DISASSEMBLED; all six compat setups' captures show (0, 0, 0)
@@ -113,11 +112,10 @@ const WikiSide = (() => {
         const st = sv.state[i], pic = sa.pics[i];
         if (st === -1 || st == null || !pic || pic.from === 'label' || !pic.frames || !pic.frames.length) return;
         const F = pic.frames, n = F.length, [gx, gy, gw, gh] = g.rect;
-        // INTERIM (spec 2.3), pressed with one frame: frame 0 moved one pixel right and down. The engine draws no
-        // picture there (frame 1 is past the sequence: 0x4B7F30 returns none and 0x4A6176 skips the blit)
-        const d = n === 1 && st === 1 ? PRESSED_DX : 0;
-        const f = n === 1 ? F[0] : st === 0 ? F[0] : st === 1 ? F[1] : (pic.attribs & 0x100) ? F[n - 1] : F[Math.min(2, n - 1)];
-        blit(f, gx + d, y0 + gy + d, pic.key, ALL);
+        /* Pressed asks for frame 1 (0x4A6110..0x4A614B), which a one-frame sequence does not have: 0x4B7F30 returns
+           none past the count and 0x4A6176 skips the blit, so a held one-frame button shows the panel under it. */
+        const f = st === 0 ? F[0] : st === 1 ? F[1] : (pic.attribs & 0x100) ? F[n - 1] : F[Math.min(2, n - 1)];
+        if (f) blit(f, gx, y0 + gy, pic.key, ALL);
         /* GREYED, the engine tints the gadget's whole rect once its frame is drawn, what lies under the frame's
            transparent pixels included (0x4A699B..0x4A69BA, DISASSEMBLED): the grey remap, then the box shader at
            level -20, which the pack composes into one table (gfx.py greyed_table). Not for attribs 0x100, whose last
