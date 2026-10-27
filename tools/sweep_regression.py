@@ -8,8 +8,8 @@ the chosen kind inside it, shared nearest-first; the RECLAIM gadget's quickkey c
     sweep_regression.py <instance> preview   a ring held mid-drag: the marker pass's count; then
                                              the zoom lever's 0.5: (c) again, the drag's radius and the
                                              drag threshold
-    sweep_regression.py <instance> markers   the queue markers' count after a ring, deselected,
-                                             one builder selected, and with Shift held
+    sweep_regression.py <instance> markers   the queue markers' count after a ring, with and
+                                             without Shift, deselected and one builder selected
     sweep_regression.py <instance> popup     the popup's anchor and drawn rect, a row click, the
                                              cursor over it, the same at the zoom lever's 0.5; at
                                              whatever HUD scale the instance runs
@@ -871,9 +871,19 @@ def queued(s, names):
 
 
 def markers(s, gamedir):
-    """L2a: after an ALL ring the queue markers bracket every selected builder's reclaim orders;
-    none with nothing selected; one builder's alone when it alone is selected; still drawn with
-    Shift held."""
+    """L2a: the queue markers show only while Shift is held, as the engine's own queued-order
+    markers do. After an ALL ring, none without Shift; with it, every selected builder's reclaim
+    orders; none with nothing selected; one builder's alone when it alone is selected."""
+    def shifted(what, picture=None):
+        s.press("shift")
+        try:
+            got = held_count(s, what, "sweepq")
+            if picture:
+                capture(picture)
+            return got
+        finally:
+            s.lift("shift")
+
     with MarkLog(gamedir):
         setup(s)
         s.clear()
@@ -883,23 +893,22 @@ def markers(s, gamedir):
         s.commit_line(start, "the ALL ring")
         want = queued(s, s.builders)
         assert want > 0, "the ALL ring queued nothing"
-        got = held_count(s, "(L2a) all selected", "sweepq")
+        got = held_count(s, "(L2a) all selected, no Shift", "sweepq")
+        assert got == 0, f"(L2a) sweepq={got} without Shift, want 0"
+        got = shifted("(L2a) all selected, Shift held", "the queue markers of three builders")
         assert got == want, f"(L2a) sweepq={got} with every builder selected, want {want}"
-        capture("the queue markers of three builders")
         s.keys("esc")
         s.once(not any(s.values(f"0x{s.address(b) + 0x110:x}")[0] & 0x10 for b in s.builders),
                "(L2a) Esc left a builder selected")
-        got = held_count(s, "(L2a) none selected", "sweepq")
+        got = shifted("(L2a) none selected, Shift held")
         assert got == 0, f"(L2a) sweepq={got} with nothing selected"
         s.select("CK1")
         want = queued(s, ["CK1"])
-        got = held_count(s, "(L2a) one selected", "sweepq")
+        got = held_count(s, "(L2a) one selected, no Shift", "sweepq")
+        assert got == 0, f"(L2a) sweepq={got} with CK1 alone selected and no Shift, want 0"
+        got = shifted("(L2a) one selected, Shift held")
         assert got == want, f"(L2a) sweepq={got} with CK1 alone selected, want {want}"
-        s.press("shift")
-        got = held_count(s, "(L2a) Shift held", "sweepq")
-        s.lift("shift")
-        assert got == want, f"(L2a) sweepq={got} with Shift held, want {want}"
-        print(f"sweep-markers: sweepq follows the selection ({want} for CK1 alone)")
+        print(f"sweep-markers: sweepq only under Shift, following the selection ({want} for CK1 alone)")
 
 
 def engine_point(sx, sy, q8):

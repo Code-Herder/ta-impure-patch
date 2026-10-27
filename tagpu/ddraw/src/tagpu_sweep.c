@@ -16,8 +16,8 @@
 
    Keys and buttons come from the window procedure (tagpu_shield.c), on the same thread. While
    armed a popup off the RECLAIM gadget's row picks the kind, and a tag beside the cursor names it;
-   whether or not reclaim is armed, every selected builder's reclaim queue is drawn as a path
-   through its features.
+   while Shift is held, as the engine's own queued-order markers are, every selected builder's
+   reclaim queue is drawn as a path through its features.
 
    Everything here is game-thread UI state: the simulation never reads it, and what a commit
    causes -- order nodes made through the engine's own root 0x43ADC0, and the click's own tail
@@ -104,6 +104,7 @@
 typedef const unsigned char* (__stdcall* Resolve)(int*, unsigned, void*, void*, const void*);
 typedef void (__stdcall* Order)(int, int, void*, void*, const void*, int, int);
 typedef void (__stdcall* ClickTail)(int);
+typedef int (__stdcall* KeyDown)(int);
 typedef int (__stdcall* GroundHeight)(const int*);
 typedef int (__stdcall* Mapped)(const void*, const int*);
 typedef unsigned char* (__attribute__((thiscall))* Action)(void*, const char*);
@@ -933,10 +934,12 @@ static void ring_items(const int c[3], int r, unsigned char colour, TAGPU_PK_SWE
     }
 }
 
-/* THE QUEUE MARKERS: for each selected unit of the player, in slot order, whose list holds
-   reclaim-family nodes, a QPATH start at the unit's position (top 1, n its slot), then for each
-   such node whose feature still stands a QPATH point at the feature's centre and a QBOX framing
-   it. A node whose feature has gone is skipped: the Reclaim handler unlinks it itself at its
+/* THE QUEUE MARKERS, only while Shift is held: the test is the engine's own for its queued-order
+   markers, 0x4C1B80(0xF9) at 0x469BE1 (GetAsyncKeyState(VK_SHIFT) through its table at 0x4C1C48),
+   so the reclaim queue shows and hides with every other queue. For each selected unit of the
+   player, in slot order, whose list holds reclaim-family nodes, a QPATH start at the unit's
+   position (top 1, n its slot), then for each such node whose feature still stands a QPATH point
+   at the feature's centre and a QBOX framing it. A node whose feature has gone is skipped: the Reclaim handler unlinks it itself at its
    next call (0x404AD0, "Reclamation failed"). The walks are this thread's, the one that links and
    frees nodes, bounded at LIST_WALK a list and FILL_WALK a fill and stopped at a node another unit
    owns; at most TAGPU_PK_SWEEP_QUEUE items and 1024 features a builder. */
@@ -944,7 +947,7 @@ static void markers(const TagpuWorld* w, const Grid* g, unsigned char colour,
                     TAGPU_PK_SWEEPITEM* it, unsigned max, unsigned* n, int* cut)
 {
     unsigned slot, walked = 0, used = 0;
-    if (!actions()) return;
+    if (!((KeyDown)0x004C1B80u)(0xF9) || !actions()) return;
     for (slot = w->first; slot <= w->last; slot++) {
         const char* u = tagpu_route_unit(w, slot);
         const char* node;
