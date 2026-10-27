@@ -4048,3 +4048,5 @@ gets there, the engine facts it rests on and the owner's answers are
 | Landing 4: the stage | built 2026-10-25 with landing 3 on its worktree branch, not landed | the demos playing on the stage, the simulation stepped on the game thread; `tagpu_wiki.check`'s 21 hashes equal `simparity.mjs --hash` in the game |
 | Landing 5: Try it yourself | planned | the player's own input on the stage |
 | Landing 6: the stage in the game's graphics | scoped, not designed | the owner decides after the whitebox wiki ships |
+| COB L1: the VM core | built 2026-10-27 on worktree-wiki-anim | `tagpu_cobvm.c`, the one COB VM outside the engine, on Impure's COB object layout and safe on several threads; tacob runs it; the game's getters and guarded rules shared with it; the nine cobtrace fixtures byte-exact ([the plan](ingame-wiki-cob-plan.html)) |
+| COB L2–L5: the wiki's units animated | planned | live fixtures for the wiki's units; scripts gate the wiki's simulation; the nano spray and `emit-sfx`; sound. L3–L5 after the sidebar lands |

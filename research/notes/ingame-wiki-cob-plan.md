@@ -1,6 +1,7 @@
 # Our own COB VM, and the in-game wiki's units animated by it, planned
 
-**Written** 2026-10-27, before any of it is built. The wiki's specification is still
+**Written** 2026-10-27. **L1 is built** (the core, tacob on it, the shared rules; see *The
+landings*); L2 to L5 are not. The wiki's specification is still
 [the in-game wiki](ingame-wiki.html) and its mockup, which stays the 1:1 spec of the DLL wiki. The
 engine facts below carry their address and are the engine map's
 ([*The COB engine — mapped by us*](exe-reverse-engineering.html)); a fact this plan needs and the map
@@ -94,7 +95,9 @@ the flag, then MOVE target, MOVE speed, TURN target, TURN speed, SPIN target spe
 three axes each). The piece positions and angles themselves are not in the object: MOVE, TURN and the
 stepper read and write them through `vt+0x00/0x04/0x14/0x18` in the posed model's
 `PrimitiveStruct` (`o3 + 0x22 + piece × 0x36`, `file-formats.md` §2.6), and SHOW, HIDE, CACHE and
-SHADE flip that structure's flag bits.
+SHADE flip that structure's flag bits. Those setters also write three words of the model's header
+(`+0x04`, `+0x08`, `+0x10`: the engine map's vtable table), so the core's fourth block is the
+model from its first byte, not the `PrimitiveStruct` array alone.
 
 The core's state is therefore four blocks, each in exactly that layout:
 
@@ -103,7 +106,7 @@ The core's state is therefore four blocks, each in exactly that layout:
 | records + count | `TagpuCobRecord[TAGPU_COB_THREADS]` and the count dword, as at `cob+0x1C` | one per unit, in the WIKISIM's heap | the engine's object, at `cob+0x1C` |
 | statics | `int32[nstatics]` | idem | `*(cob+0x10)` |
 | animation | `int32[npieces × 19]` | idem | `*(cob+0x14)` |
-| pieces | `PrimitiveStruct[npieces]`, stride `0x36` | the wiki's own model arena (it already builds models in the engine's layout, `tagpu_wikiasset.c`) | the posed model `*(cob+0x540)` |
+| model | the posed model's header and its `PrimitiveStruct`s from `+0x22`, stride `0x36` (`TAGPU_COBVM_MODEL_BYTES`) | a block per unit beside its COB object, read by the stage's pose composition | the posed model `*(cob+0x540)` |
 
 The object's pointer fields (`+0x00` vtable, `+0x08` the script, `+0x10`, `+0x14`, `+0x540`) are
 **not** read by the core: a 64-bit host (tacob, the mockup's server) cannot store a pointer in a
@@ -127,18 +130,18 @@ adapter calls at `0x4B0E5D`: one bound for both, and a fault is the core's refus
 ### The host interface
 
 ```
-reads (callbacks, answered from the host's world):
-    get(id, a, b, c, d)          GET_UNIT_VALUE and GET, every id; the port-F getters through the
-                                 shared function the game's handler uses
-    rand(n)                      RAND's draw; the host owns the generator
-    piece_world(piece)           what vt+0x14/0x18 cannot answer from the PrimitiveStruct alone
-                                 [if L1's audit finds one]
+reads (callbacks, answered from the host's world; TAGPU_COBVM_HOST in tagpu_cobvm.h):
+    get(id, a, b, c, d)          GET_UNIT_VALUE and GET, every id; the port-F getters through
+                                 tagpu_cob_getter, the function the game's cob_get calls
+    rand(n, lo)                  RAND's draw; the host owns the generator (lo only for replays)
+    cargo(id), carrier()         0x10044000 and 0x10045000 (vt+0x48, vt+0x4C)
+    alive(id)                    IMPURE: an ATTACH or DROP naming a dead unit is skipped
+    callback(cb, value)          a RETURN with a completion object, a refused 0x4B0B00 start
 the object's own state (written directly):
-    records, statics, animation, the PrimitiveStructs' positions, angles and flags
+    records, statics, animation, the model's header words and PrimitiveStructs
 everything else (appended to the object's effect log, with the record and the pc):
-    SET id value, EMIT_SFX piece type, EXPLODE piece flags, ATTACH_UNIT, DROP_UNIT, and every
-    vtable slot the opcodes reach whose effect leaves the object (vt+0x28, vt+0x2C, vt+0x48,
-    vt+0x4C: identified in L1). EXPLODE without flag 0x20 draws the sim RNG six times
+    SET id value, EMIT_SFX piece type, EXPLODE piece flags, ATTACH_UNIT, DROP_UNIT. (vt+0x28
+    and vt+0x2C, the other two slots an opcode reaches, are bare returns.) EXPLODE without flag 0x20 draws the sim RNG six times
     (0x48116F..0x4811B9) as it commits, and EMIT_SFX emits only for a unit in the viewed player's
     sight (0x465AC0): both are the host's to reproduce when it commits.
 an observer (optional):
@@ -201,7 +204,7 @@ The mockup does the same in `tools/tascene-render.js`.
 
 | | What | Gate |
 |---|---|---|
-| **L1** | `tagpu_cobvm.{c,h}`: the core on the layout above, the host interface, the effect log, the observer; the shared extension functions factored out of `tagpu_patches.c`; tacob on the core through ctypes, **its Python VM deleted**, `tacob-build.py` cross-compiling it; the reentrancy check | the nine fixtures byte-exact through tacob on the core; `test_tacob.py`; native tests of the core under UBSan and ASan; the layout's static asserts; the DLL builds |
+| **L1** — built 2026-10-27 | `tagpu_cobvm.{c,h}`: the core on the layout above, the host interface, the effect log, the observer; the shared extension functions factored out of `tagpu_patches.c`; tacob on the core through ctypes, **its Python VM deleted**, `tacob-build.py` cross-compiling it; the reentrancy check | the nine fixtures byte-exact through tacob on the core; `test_tacob.py`; native tests of the core under UBSan and ASan; the layout's static asserts; the DLL builds |
 | **L2** | live cobtrace + posedump fixtures for the wiki's units doing the wiki's actions — ARMCK and ARMACK walking, starting, assisting and stopping a build, reclaiming; ARMMEX and ARMMOHO built, activated, spinning at a set metal value; ARMGEO activating; ARMPW walking — and one exercising the extensions (records 9 and 10, the getters) | each fixture byte-exact through the core |
 | **L3** | the wiki host: the calls, the gating, `until` waits and the 11 demos converted, the quarantine, the corpus gate, poses drawn in the C stage and the mockup, the mockup's server | `simparity.mjs`, `simcheck.mjs`, `wiki_regression.py`, the corpus gate over every compatibility setup, a look at every demo in game and in the mockup |
 | **L4** | the nano spray and `emit-sfx`: the engine's emitters ported, the wiki generator, drawn through the stage's instance of the particle draw | the spray's look against a game capture of the same build |
@@ -212,10 +215,9 @@ fixtures — no file the sidebar's landing touches.
 
 ## Research each landing owes
 
-- **L1**: the slots `vt+0x28`, `vt+0x2C`, `vt+0x48`, `vt+0x4C` that opcodes `0x10009000`, `0x1000A000`,
-  `0x10044000`, `0x10045000` reach (tacob treats them as unknown); the PrimitiveStruct flag bits
-  SHOW/HIDE/CACHE/SHADE write; `0x10063000`'s use; the getter handler's split into its engine-free
-  part.
+- **L1** (answered 2026-10-27): every vtable slot the opcodes reach, the flag bits and the model's
+  header words — the engine map's vtable table. `0x10063000` is refused by the program validator,
+  as the guarded game refuses it. The getters are `tagpu_cob_getter`.
 - **L2**: a scripted scenario per fixture, in game, under the run lock.
 - **L3**: `StartBuilding`'s arguments (the map lists `0x48B14E` as a no-argument start through
   `0x4B0940`; tacob's director passes heading and pitch — one of them is wrong); when the engine calls

@@ -18142,6 +18142,11 @@ engine data; its line contract is [tacob-design](tacob-design.html) §"The
 trace contract", and `extra-weapons.md` snag 10 is the story that led here. Names marked
 `[INFERRED]` are ours; `COBEngine_*` names come from the community symbol file.*
 
+**The VM that reproduces it is `tagpu_cobvm.c`** — engine-free, on Impure's layout of this object,
+run by tacob, the in-game wiki and (planned) the game itself; [its plan](ingame-wiki-cob-plan.html)
+says why there is exactly one. Every rule this section states is one of its code paths, and the
+cobtrace fixtures below are its gate.
+
 ### The object — `unit+0x9A`, 0x544 bytes, vtable `0x4FD698`
 
 Built by `UNITS_CreateModelScripts 0x485D40` (`stdcall(unit)`, one caller each from the two
@@ -18182,8 +18187,32 @@ reaching the effect handlers" gap: **`EMIT_SFX` → `vt+0x30` = `0x480EB0`, `EXP
 `0x480AC4` on `id-1`, so value ids run 1..20), `vt+0x14` = `0x480C30` = a piece's current
 position, `o3 + 0x22 + piece × 0x36 + axis × 4 + 4` (the `PrimitiveStruct` stride), read by
 MOVE/TURN for the sign of the travel; `vt+0x50` = `0x485E30` `FreeUnitScriptData`, the deleting
-destructor path (`call [vt+0x50]` at `0x486D8A`). Only the handlers named with an offset were
-read; the other slot addresses are from the table dump.
+destructor path (`call [vt+0x50]` at `0x486D8A`).
+
+**Every slot the VM reaches, read** [DISASSEMBLED 2026-10-27, `0x480C30..0x4814B0`, for
+`tagpu_cobvm.c`]. Each opens with the posed model `o3 = [cob+0x540]`; a piece's
+`PrimitiveStruct` is `o3 + 0x22 + piece × 0x36` (`lea eax,[eax+eax*2]; lea eax,[eax+eax*8];
+shl eax,1` = `piece × 0x36`), its flags word at `+0x28` (bit 0 visible, bit 1 cached, bit 2
+shaded) and a word at `+0x26` that every pose change clears `[role unknown]`.
+
+| Slot | Handler | Reached by | What it does |
+|---|---|---|---|
+| `vt+0x00` | `0x480C50` `(piece, axis, value)` | MOVE_NOW, the stepper | when the position `+0x04 + axis × 4` differs: writes it, clears the piece's `+0x26`, sets `o3+0x08 = 1`, and for a cached piece zeroes `o3+0x04` (`0x480C7B..0x480CA7`) |
+| `vt+0x04` | `0x480CE0` `(piece, axis, value)` | TURN_NOW, the stepper | the same for the angle word `+0x10 + axis × 2`, compared and written as 16 bits |
+| `vt+0x08` | `0x480D50` `(piece, on)` | SHOW (1), HIDE (0) | when bit 0 differs: sets it to `on`, clears `+0x26`, and for a cached piece zeroes `o3+0x04`; `o3+0x08` is **not** set |
+| `vt+0x0C` | `0x480DB0` `(piece, on)` | CACHE (1), DONT_CACHE (0) | bit 1 = `on & 1`, always written; `o3+0x10 = 0` (`0x480DE3`) |
+| `vt+0x10` | `0x480DF0` `(piece, on)` | SHADE (1), DONT_SHADE (0) | bit 2 = `on & 1`, always written; `o3+0x10 = 0` (`0x480E24`) |
+| `vt+0x14` / `vt+0x18` | `0x480C30` / `0x480CB0` `(piece, axis)` | MOVE, TURN | read the position / the angle (zero-extended) |
+| `vt+0x1C` / `+0x20` / `+0x24` | `0x480E30` / `0x480E50` / `0x480E70` `(piece)` | — | read bit 0 / 1 / 2 |
+| `vt+0x28` | `0x480E90` | `0x10009000` (two pops and an inline piece) | **a bare `ret 0xC`**: the opcode only pops |
+| `vt+0x2C` | `0x480EA0` | `0x1000A000` (an inline piece) | **a bare `ret 4`** |
+| `vt+0x48` | `0x481430` `(id)` | `0x10044000` (one pop, the answer pushed) | walks the unit's list from `unit+0x8A` through each entry's `+0x8E` and returns 1 when an entry's `+0xA8` id equals `id`, else 0 [INFERRED: the transport's cargo] |
+| `vt+0x4C` | `0x481470` `()` | `0x10045000` (the answer pushed) | the `+0xA8` id of the unit at `unit+0x86`, 0 when none [INFERRED: the unit carrying this one] |
+
+So a pose change also touches three words of the model's header: `+0x08` (set when a position
+or angle changes), `+0x04` (zeroed when a cached piece changes) and `+0x10` (zeroed by CACHE and
+SHADE) — the same `+0x10` composite the build-state notes above follow. `tagpu_cobvm.c` writes
+all three exactly so, which is what lets it run on the engine's own model.
 
 **The "COB thread handle" the weapon slots preset to `0x4FD6F0` is a vtable pointer, not a
 thread.** `0x4FD6F0` holds two slots: `0x481490` `thiscall(this = &slot->thread, value)` —
@@ -18484,7 +18513,9 @@ integer division here; and `BITWISE_NOT 0x10038000` and the logical `NOT 0x1005A
 nor push — they rewrite the top of the stack in place (`0x4B159E`, `0x4B1896`). `0x10009000`
 (two pops → `vt+0x28`), `0x1000A000` (`vt+0x2C`), `0x10044000` (one pop → `vt+0x48`),
 `0x10045000` (no pops → `vt+0x4C`) and `0x10063000` (pops `[pc+2]` words into the runner's own
-frame) are handled but unused by the stock corpus and their vtable slots are unread.
+frame) are handled but unused by the stock corpus; the four slots are read in the vtable table
+above (`vt+0x28` and `vt+0x2C` do nothing, `vt+0x48` and `vt+0x4C` read the unit's transport
+links).
 
 **Handler bodies the VM had to match** (the table above lists each opcode's `cmp`; these are the
 bodies whose stack effect is not obvious from it): the two-operand arithmetic and comparison
