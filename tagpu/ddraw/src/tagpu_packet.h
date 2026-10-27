@@ -344,9 +344,9 @@ typedef struct TAGPU_PK_PLACE {
    given: the header's kind, style, hot row and flags to their enums, its rects
    ordered and within +-TAGPU_PK_SWEEP_RECT, its centre and radius within
    +-TAGPU_PK_PLACE_COORD and its sums finite and within [0, 1e9]; every item's
-   kind to its enum, its point within +-TAGPU_PK_PLACE_COORD, its footprint
-   within [16, 256] world px, its top within [0, 255] and its `n` to its kind's
-   range; an item table only beside a header. */
+   kind to its enum, its point within +-TAGPU_PK_PLACE_COORD, its size within
+   [1, TAGPU_PK_SWEEP_BOXMAX] world px, its top within [0, 255] and its `n` to
+   its kind's range; an item table only beside a header. */
 typedef struct TAGPU_PK_SWEEP {
     uint8_t  flags;           /* TAGPU_PK_SW_*                                  */
     uint8_t  kind;            /* 0 METAL, 1 ENERGY, 2 ALL                       */
@@ -370,27 +370,33 @@ typedef struct TAGPU_PK_SWEEP {
 #define TAGPU_PK_SW_ARMED  8u   /* RECLAIM is armed                              */
 #define TAGPU_PK_SWEEP_RECT 8192  /* a popup rect's sanity bound, screen px      */
 
-/* 24 B, at most TAGPU_PK_MAX_SWEEP. A point is world x, altitude, z; a
-   footprint is its first corner x0, altitude, z0 with its size w x d and the
-   feature's height `top` (FeatureDef +0xFA). */
+/* 24 B, at most TAGPU_PK_MAX_SWEEP. A point (RINGPT, QPATH) is world x,
+   altitude, z. A box (BOX, HOVER, QBOX) is the rect a bracket frames, on the
+   projected plane the marker pass draws on: its corner x, z with the
+   altitude's half already taken (h 0) and its size w x d (tagpu_sweep.c
+   `box_item`). */
 typedef struct TAGPU_PK_SWEEPITEM {
     uint8_t  kind;            /* TAGPU_PK_SWI_*                                 */
     uint8_t  colour;          /* a palette index                                */
-    uint16_t n;               /* QBOX: the ordinal, 1..1024; QPATH: the builder's
-                                 slot on its start, 0 on a point                */
-    int32_t  x, h, z;         /* a point, or a footprint's corner (world px)    */
-    int16_t  w, d;            /* the footprint's size, world px: 16..256        */
-    int16_t  top;             /* the feature's height, 0..255; QPATH: 1 on the
-                                 path's start (slot 0 is a slot), 0 on a point  */
+    uint16_t n;               /* QPATH: the builder's slot on its start, 0 on a
+                                 point; 0 on every other kind                   */
+    int32_t  x, h, z;         /* a point, or a box's corner (world px)          */
+    int16_t  w, d;            /* a box's size, world px: 1..BOXMAX; 16 a point  */
+    int16_t  top;             /* QPATH: 1 on the path's start (slot 0 is a
+                                 slot), 0 on a point; 0 on every other kind     */
     int16_t  pad;
 } TAGPU_PK_SWEEPITEM;
 
 #define TAGPU_PK_SWI_RINGPT 0u  /* one point of the ring, in order              */
-#define TAGPU_PK_SWI_BOX    1u  /* a target inside the ring: a footprint        */
+#define TAGPU_PK_SWI_BOX    1u  /* a target inside the ring                     */
 #define TAGPU_PK_SWI_HOVER  2u  /* the feature of the kind under the cursor     */
 #define TAGPU_PK_SWI_QPATH  3u  /* a builder's queue path: its start, at the unit's
                                    position, then a point per queued feature    */
-#define TAGPU_PK_SWI_QBOX   4u  /* a queued feature, with its ordinal           */
+#define TAGPU_PK_SWI_QBOX   4u  /* a queued feature                             */
+/* a box's size bound, world px: a GAF frame's edge is at most 640
+   (TAGPU_GAF_DECMAX), and a sub-frame list's union past this is framed by
+   its footprint instead */
+#define TAGPU_PK_SWEEP_BOXMAX 1024
 /* THE ITEM BUDGET: the ring's points, the targets (SWEEP_MAX_TARGETS), the
    hovered feature and the queue markers' own cap, each cut on its own, so
    one never starves another and the table never passes its sum. 256 points

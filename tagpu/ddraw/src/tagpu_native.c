@@ -2826,6 +2826,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         fv.vpL = vpL; fv.vpT = vpT; fv.vw = vw; fv.vh = vh; fv.scafOn = scafOn;
         fv.evpL = evpL; fv.evpT = evpT; fv.evw = evw; fv.evh = evh;
         fv.gw = gw; fv.gh = gh; fv.ss = ss; fv.fogMode = fogMode;
+        fv.devPx = (gw > 0 && f->vp_w > 0) ? (float)f->vp_w / (float)gw : 1.0f;
+        fv.devres = devres;
         /* THE MAP EDGE, one answer for every gather in the frame, and
            mirrored only while the feature pass holds the level's features
            when it draws features at all (tagpu_feat_mapfeat_sync): ground and

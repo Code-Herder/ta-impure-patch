@@ -818,37 +818,76 @@ static void gather_place(const TAGPU_FXVIEW* v)
    OFF, as the build cursor is: the ring is the player's own gesture.
 
    THE PROJECTION is the overlays' and the selection rect's: x - eyeX + vpL and
-   z - floor(h / 2) - eyeY + vpT, in the frame's pre-zoom units. Lengths that
-   belong to the screen -- the dashes, a bracket's arms, the readout's offsets --
-   are screen px times `s_px`, so they keep their size at every zoom. Every line
-   is the pass's one-game-pixel line (put_line, which bounds and clips it); the
-   outline is the same line moved one game pixel each way across its minor axis
-   (tagpu_line_nudge) in black, all of it drawn before any colour.
+   z - floor(h / 2) - eyeY + vpT, in the frame's pre-zoom units. A bracket's
+   item is already a rect on that plane, the altitude taken: the feature's
+   visible sprite, or a 3-D wreck's footprint and height (tagpu_sweep.c,
+   `box_item`).
+
+   THE STROKES BELONG TO THE DEVICE. Every bracket, the ring and the queue
+   paths are SW_COLOUR device px of colour with SW_EDGE device px of black on
+   each side, fully opaque, at every zoom, resolution, HUD scale and ss: the
+   owner's ruling, the reclaim UI mockup's HEAVY style. They are drawn with
+   the one line rule of this pass (tagpu_line.h): records on the line grid,
+   each `ss` line-grid px across its minor axis, decided per pixel by LFS. A
+   wider stroke is several records side by side, each moved by a whole
+   record across that axis, and the copies of one walk moved by `ss` abut
+   exactly -- copy k covers [r + k ss - floor(ss/2), r + k ss - floor(ss/2) +
+   ss - 1] -- so the stroke is solid by construction; the last copy overlaps
+   the one before it when the width is no multiple of ss. Along the walk a
+   record reaches floor(ss/2) before its first end and ss - 1 - floor(ss/2)
+   past its last (tagpu_line.h, the major-axis window), so a dash stops
+   within a game px of where it is cut, as the mockup's butt-capped dashes
+   do; a bracket arm, which the mockup square-caps, is a filled rect that
+   carries its cap itself.
+
+   OPAQUE MEANS WHOLE QUANTA. Without devres the target is box-resolved to
+   the game resolution before the composite stretches it by devPx, so a band
+   that starts on an odd line-grid px at ss 2 resolves to two half-covered
+   game px: a line that reads half transparent. So the widths are whole
+   quanta -- `ss` line-grid px, one game px, without devres; one line-grid px
+   with it, where the composite reads the target itself -- and every band
+   starts on a quantum. A quantum is devPx * q / ss device px, so the widths
+   are the nearest whole quanta to SW_COLOUR and SW_EDGE device px, at least
+   one each: exact wherever a device px is a whole number of quanta, and the
+   nearest the frame can carry where it is not (at a devPx of 1.5, two game
+   px of colour are 3 device px and the one of black is 1.5). The colour is
+   never narrower than one record.
+
+   THE DASHES AND THE ARMS are device px as well: ring 6 on / 4 off, paths 3 /
+   3, and an arm 30 % of the box's shorter side on the screen, clamped to 7..20.
 
    THE QUEUE MARKERS are the same pass's: each selected builder's path from the
-   unit through its queued features, dashed 3 on / 3 off, each feature
-   bracketed in the green with its ordinal at the bracket's top-right. The
+   unit through its queued features, each feature bracketed in the green. The
    path starts where the unit is drawn (tagpu_native_unit_pos, the body's own
    sample), else at the packet's position for it.
 
-   BOUND: the acquire bounds every coordinate to +-TAGPU_PK_PLACE_COORD, the
-   footprints to 16..256 and the counts to TAGPU_PK_MAX_SWEEP, so the int and
-   double arithmetic below cannot overflow; a footprint past SW_REACH screen px
+   BOUND: the acquire bounds every coordinate to +-TAGPU_PK_PLACE_COORD, a box
+   to 1..TAGPU_PK_SWEEP_BOXMAX and the counts to TAGPU_PK_MAX_SWEEP, and
+   devPx is clamped to [0.25, 16]. A line-grid end past SW_FAR is refused
+   (sw_near), which leaves the copies' offsets, a few dozen px, far inside
+   TAGPU_LINE_FAR, the bound tagpu_line_clip's arithmetic holds to. A box past SW_REACH screen px
    outside the zoom's effective rect makes no line, and a bucket that is full
    refuses the rest, counted in `s_swover`. */
+#define SW_COLOUR    3.0                       /* device px of colour        */
+#define SW_EDGE      1.0                       /* ...and of black each side   */
+#define SW_MAXCOLQ   6                         /* quanta, at a devPx below 1  */
+#define SW_MAXEDGEQ  2
 #define SW_DASH_ON   6.0                       /* the ring: 6 px on, 4 off   */
 #define SW_DASH_OFF  4.0
-#define SW_ARM       6.0                       /* a bracket's corner arm, px */
-#define SW_REACH     32
 #define SW_QDASH     3.0                       /* a queue path: 3 px on, 3 off */
-/* colour lines: 1024 targets' and 1024 queued features' brackets (8 each),
-   the ring's dashes (about 2600 on screen for a 4096-px ring at zoom 1) and
-   the paths' dashes; what the cap refuses is counted in `s_swover` */
-#define MAXSWC       24576
+#define SW_ARM_SHARE 0.3                       /* a bracket's arm, of the box's */
+#define SW_ARM_MIN   7.0                       /* shorter side, device px     */
+#define SW_ARM_MAX   20.0
+#define SW_REACH     32
+#define SW_FAR       (TAGPU_LINE_FAR - 65536)
+/* records: a bracket is 8 rects, each about W / ss colour and (W + 2B) / ss
+   black records -- 24 and 40 at ss 2 and a devPx of 1 -- for 1024 targets and
+   1024 queued features, then the ring's and the paths' dashes; what the cap
+   refuses is counted in `s_swover` */
+#define MAXSWC       65536
 #define MAXSWK       (2 * MAXSWC)              /* their black outline        */
 #define MAXSWQ       (2 * QUADV)               /* the centre dot and its edge */
-#define MAXSWX       ((160 + 4 * 1024) * QUADV) /* the readout's glyphs and
-                                                  up to four digits an ordinal */
+#define MAXSWX       (160 * QUADV)             /* the readout's glyphs       */
 static float s_swc[MAXSWC * MVST];
 static float s_swk[MAXSWK * MVST];
 static float s_swq[MAXSWQ * MVST];
@@ -858,43 +897,130 @@ static int   s_cSweep;                  /* targets bracketed, this frame      */
 static int   s_cSweepQ;                 /* queued features bracketed           */
 static double s_qx[TAGPU_PK_SWEEP_QUEUE + 1], s_qy[TAGPU_PK_SWEEP_QUEUE + 1];
 static int   s_swover;                  /* lines or glyphs refused, a frame   */
+static int   s_swQ, s_swW, s_swB;       /* the quantum, the colour, the edge: line-grid px */
+static double s_swDev;                  /* line-grid px a device px            */
 
-static void sw_line(double x0, double y0, double x1, double y1, int col, int black,
-                    float wx, float wz)
+/* this frame's widths, from the composite's scale (the header above) */
+static void sw_widths(const TAGPU_FXVIEW* v)
 {
-    /* across the minor axis, in whole game pixels of the zoomed frame */
-    static const int across_y[2][4] = { { 0, -1, 0, -1 }, { 0, 1, 0, 1 } };
-    static const int across_x[2][4] = { { -1, 0, -1, 0 }, { 1, 0, 1, 0 } };
-    const int (*n)[4] = fabs(x1 - x0) >= fabs(y1 - y0) ? across_y : across_x;
-    int k;
-    if (s_nswc >= MAXSWC || s_nswk + 2 > MAXSWK) { s_swover++; return; }
-    for (k = 0; k < 2; k++)
-        if (put_line(s_swk + (size_t)s_nswk * MVST, x0, y0, x1, y1, n[k], wx, wz,
-                     (float)black / 255.0f, 0.0f))
-            s_nswk++;
-    if (put_line(s_swc + (size_t)s_nswc * MVST, x0, y0, x1, y1, NULL, wx, wz,
-                 (float)col / 255.0f, 0.0f))
-        s_nswc++;
+    double k = v->devPx >= 0.25f && v->devPx <= 16.0f ? (double)v->devPx : 1.0;
+    double cell;
+    int wq, bq;
+    s_swQ = v->devres ? 1 : s_ss;
+    cell = k * s_swQ / s_ss;
+    wq = (int)floor(SW_COLOUR / cell + 0.5);
+    bq = (int)floor(SW_EDGE / cell + 0.5);
+    wq = wq < 1 ? 1 : wq > SW_MAXCOLQ ? SW_MAXCOLQ : wq;
+    bq = bq < 1 ? 1 : bq > SW_MAXEDGEQ ? SW_MAXEDGEQ : bq;
+    s_swW = wq * s_swQ;
+    if (s_swW < s_ss) s_swW = s_ss;
+    s_swB = bq * s_swQ;
+    s_swDev = (double)s_ss / k;
 }
 
-/* a polyline, closed or open, dashed `on` / `off` screen px along its length */
-static void sw_dashed(const double* xs, const double* ys, int n, int closed, double on, double off,
-                      int col, int black, float wx, float wz)
+/* a pre-zoom point on the line grid, unrounded: ss * Z(p), tagpu_line_px's value before its floor */
+static void sw_grid(double x, double y, double* gx, double* gy)
 {
-    double phase = 0.0, period = on + off;
+    *gx = ((x - s_zcx) * s_zoom + s_zcx) * s_ss;
+    *gy = ((y - s_zcy) * s_zoom + s_zcy) * s_ss;
+}
+
+static int sw_near(double v) { return v >= -SW_FAR && v <= SW_FAR; }
+
+/* ONE RECORD between two line-grid ends, put_line's tail: the A/B oracle's copy before the
+   clip, DrawLine's clip, then the ends' centres. 0 when the bucket is full. */
+static int sw_rec(float* bucket, int* n, int cap, int ax, int ay, int bx, int by, int col)
+{
+    float* o;
+    if (*n >= cap) { s_swover++; return 0; }
+    tagpu_line_ab_add(&s_lab, ax, ay, bx, by, col);
+    if (!tagpu_line_clip(&ax, &ay, &bx, &by, s_clipL, s_clipT, s_clipR, s_clipB,
+                         s_clipW, s_clipH))
+        return 1;
+    o = bucket + (size_t)*n * MVST;
+    o[0] = tagpu_line_centre(ax, s_ss); o[1] = tagpu_line_centre(ay, s_ss);
+    o[2] = tagpu_line_centre(bx, s_ss); o[3] = tagpu_line_centre(by, s_ss);
+    o[4] = 0.0f; o[5] = 0.0f; o[6] = (float)col / 255.0f; o[7] = 0.0f;
+    (*n)++;
+    return 1;
+}
+
+/* A band `width` line-grid px across the minor axis of the walk from a to b (x-major when
+   `xmajor`), its first px `rel` px from the walk's: copies of the walk moved by whole records, the
+   last pulled back to end on the band's edge. A record whose walk is at r covers
+   [r - floor(ss/2), r - floor(ss/2) + ss - 1] across it, hence the floor(ss/2). `width` >= ss. */
+static void sw_copies(float* bucket, int* n, int cap, int ax, int ay, int bx, int by, int xmajor,
+                      int rel, int width, int col)
+{
+    int off = 0;
+    for (;;) {
+        int d;
+        if (off > width - s_ss) off = width - s_ss;
+        d = rel + off + s_ss / 2;
+        if (!(xmajor ? sw_rec(bucket, n, cap, ax, ay + d, bx, by + d, col)
+                     : sw_rec(bucket, n, cap, ax + d, ay, bx + d, by, col)))
+            return;
+        if (off == width - s_ss) return;
+        off += s_ss;
+    }
+}
+
+/* a rect of line-grid px, [x0, x1] x [y0, y1] inclusive, filled with records along its longer
+   side, each walk on its first row or column; each side is at least ss */
+static void sw_fill(float* bucket, int* n, int cap, int x0, int y0, int x1, int y1, int col)
+{
+    int lo = s_ss / 2, hi = s_ss - 1 - s_ss / 2;
+    if (x1 - x0 >= y1 - y0) sw_copies(bucket, n, cap, x0 + lo, y0, x1 - hi, y0, 1, 0, y1 - y0 + 1, col);
+    else                    sw_copies(bucket, n, cap, x0, y0 + lo, x0, y1 - hi, 0, 0, x1 - x0 + 1, col);
+}
+
+/* a rect's black, grown by the edge on every side, then its colour */
+static void sw_rect(int x0, int y0, int x1, int y1, int col, int black)
+{
+    sw_fill(s_swk, &s_nswk, MAXSWK, x0 - s_swB, y0 - s_swB, x1 + s_swB, y1 + s_swB, black);
+    sw_fill(s_swc, &s_nswc, MAXSWC, x0, y0, x1, y1, col);
+}
+
+/* the band start nearest `c` - W / 2 that lies on a quantum: a band centred on `c` */
+static int sw_start(double c)
+{
+    return s_swQ * (int)floor((c - s_swW * 0.5) / s_swQ + 0.5);
+}
+
+/* One stroke between two line-grid ends, centred on the walk across its minor axis, its band
+   starting on a quantum at each end: the black, the colour over it. */
+static void sw_stroke(int ax, int ay, int bx, int by, int col, int black)
+{
+    int xmajor = abs(by - ay) <= abs(bx - ax), h = s_swW / 2;
+    if (xmajor) { ay = sw_start(ay + 0.5) + h; by = sw_start(by + 0.5) + h; }
+    else        { ax = sw_start(ax + 0.5) + h; bx = sw_start(bx + 0.5) + h; }
+    sw_copies(s_swk, &s_nswk, MAXSWK, ax, ay, bx, by, xmajor, -h - s_swB, s_swW + 2 * s_swB, black);
+    sw_copies(s_swc, &s_nswc, MAXSWC, ax, ay, bx, by, xmajor, -h, s_swW, col);
+}
+
+/* a polyline of pre-zoom points, closed or open, dashed `on` / `off` device px along its length
+   on the line grid */
+static void sw_dashed(const double* xs, const double* ys, int n, int closed, double on, double off,
+                      int col, int black)
+{
+    double phase = 0.0, lon = on * s_swDev, period = (on + off) * s_swDev;
     int i;
     for (i = 0; i < (closed ? n : n - 1); i++) {
         int j = (i + 1) % n;
-        double dx = xs[j] - xs[i], dy = ys[j] - ys[i];
-        double len = sqrt(dx * dx + dy * dy) * s_zoom, t = 0.0;
+        double x0, y0, x1, y1, dx, dy, len, t = 0.0;
+        sw_grid(xs[i], ys[i], &x0, &y0);
+        sw_grid(xs[j], ys[j], &x1, &y1);
+        if (!sw_near(x0) || !sw_near(y0) || !sw_near(x1) || !sw_near(y1)) continue;
+        dx = x1 - x0; dy = y1 - y0;
+        len = sqrt(dx * dx + dy * dy);
         if (!(len > 0.0)) continue;
         while (t < len) {
-            double step = phase < on ? on - phase : period - phase;
+            double step = phase < lon ? lon - phase : period - phase;
             if (step > len - t) step = len - t;
-            if (phase < on)
-                sw_line(xs[i] + dx * t / len, ys[i] + dy * t / len,
-                        xs[i] + dx * (t + step) / len, ys[i] + dy * (t + step) / len,
-                        col, black, wx, wz);
+            if (phase < lon)
+                sw_stroke((int)floor(x0 + dx * t / len), (int)floor(y0 + dy * t / len),
+                          (int)floor(x0 + dx * (t + step) / len),
+                          (int)floor(y0 + dy * (t + step) / len), col, black);
             t += step;
             phase += step;
             if (phase >= period) phase -= period;
@@ -902,33 +1028,34 @@ static void sw_dashed(const double* xs, const double* ys, int n, int closed, dou
     }
 }
 
-/* a footprint's brackets: four L corners round [x0, x0+w] x [z0 - (alt + top) / 2,
-   z0 + d - alt / 2], its body as the engine stands it on the ground. 1 when drawn, with its
-   top-right corner in `*rx, *ty` when asked for. */
-static int sw_bracket(const TAGPU_FXVIEW* v, const TAGPU_PK_SWEEPITEM* e, int col, int black,
-                      double* rx, double* ty)
+/* A box's brackets: four L corners on the rect [x, x + w] x [z, z + d] of the item, each arm a
+   filled rect from the corner's outer edge, square-capped as the mockup's. 1 when drawn. */
+static int sw_bracket(const TAGPU_FXVIEW* v, const TAGPU_PK_SWEEPITEM* e, int col, int black)
 {
     const double reach = SW_REACH * s_px;
     double l = (double)e->x - v->eyeX + v->vpL, r = l + e->w;
-    double t = (double)e->z - floor(((double)e->h + e->top) * 0.5) - v->eyeY + v->vpT;
-    double b = (double)e->z + e->d - floor((double)e->h * 0.5) - v->eyeY + v->vpT;
-    double ax = SW_ARM * s_px, ay = SW_ARM * s_px;
-    float wx = (float)e->x, wz = (float)e->z;
+    double t = (double)e->z - v->eyeY + v->vpT, b = t + e->d;
+    double gl, gt, gr, gb, side, arm;
+    int L, T, R, B, W = s_swW, A;
     if (r < v->evpL - reach || l > v->evpL + v->evw + reach ||
         b < v->evpT - reach || t > v->evpT + v->evh + reach) return 0;
-    if (rx) *rx = r;
-    if (ty) *ty = t;
-    if (ax > (r - l) / 2) ax = (r - l) / 2;
-    if (ay > (b - t) / 2) ay = (b - t) / 2;
-    sw_line(l, t, l + ax, t, col, black, wx, wz); sw_line(l, t, l, t + ay, col, black, wx, wz);
-    sw_line(r, t, r - ax, t, col, black, wx, wz); sw_line(r, t, r, t + ay, col, black, wx, wz);
-    sw_line(l, b, l + ax, b, col, black, wx, wz); sw_line(l, b, l, b - ay, col, black, wx, wz);
-    sw_line(r, b, r - ax, b, col, black, wx, wz); sw_line(r, b, r, b - ay, col, black, wx, wz);
+    sw_grid(l, t, &gl, &gt);
+    sw_grid(r, b, &gr, &gb);
+    if (!sw_near(gl) || !sw_near(gt) || !sw_near(gr) || !sw_near(gb)) return 0;
+    L = sw_start(gl); R = sw_start(gr); T = sw_start(gt); B = sw_start(gb);
+    side = (gr - gl < gb - gt ? gr - gl : gb - gt) / s_swDev;
+    arm = side * SW_ARM_SHARE;
+    arm = arm < SW_ARM_MIN ? SW_ARM_MIN : arm > SW_ARM_MAX ? SW_ARM_MAX : arm;
+    A = s_swQ * (int)floor(arm * s_swDev / s_swQ + 0.5) + W;
+    sw_rect(L, T, L + A - 1, T + W - 1, col, black);         sw_rect(L, T, L + W - 1, T + A - 1, col, black);
+    sw_rect(R + W - A, T, R + W - 1, T + W - 1, col, black); sw_rect(R, T, R + W - 1, T + A - 1, col, black);
+    sw_rect(L, B, L + A - 1, B + W - 1, col, black);         sw_rect(L, B + W - A, L + W - 1, B + W - 1, col, black);
+    sw_rect(R + W - A, B, R + W - 1, B + W - 1, col, black); sw_rect(R, B + W - A, R + W - 1, B + W - 1, col, black);
     return 1;
 }
 
 /* a string starting at x, glyph by glyph: each is its own atlas entry, so a readout whose
-   numbers change every frame, or a thousand ordinals, never fill the atlas with strings; the
+   numbers change every frame never fills the atlas with strings; the
    glyphs sit where the blitter's own loop puts them, each at the sum of the widths before it */
 static void sw_text_at(double x, double y, const char* str, int col)
 {
@@ -972,9 +1099,9 @@ static int sw_unit_at(const TAGPU_PACKET* pk, unsigned slot, double* x, double* 
 }
 
 /* one builder's queue path, through `n` projected points from its start */
-static void sw_path(int n, int col, int black, float wx, float wz)
+static void sw_path(int n, int col, int black)
 {
-    if (n >= 2) sw_dashed(s_qx, s_qy, n, 0, SW_QDASH, SW_QDASH, col, black, wx, wz);
+    if (n >= 2) sw_dashed(s_qx, s_qy, n, 0, SW_QDASH, SW_QDASH, col, black);
 }
 
 static void sw_square(double x, double y, double half, int col)
@@ -1038,19 +1165,19 @@ static void gather_sweep(const TAGPU_FXVIEW* v)
     int npt = 0;
     unsigned i;
     int nq = 0, qcol = 0;
-    float qwx = 0.0f, qwz = 0.0f;
     s_nswc = s_nswk = s_nswq = s_nswx = 0;
     s_cSweep = 0; s_cSweepQ = 0; s_swover = 0;
     if (!h) return;
+    sw_widths(v);
     for (i = 0; i < pk->n_sweepitem; i++) {
         const TAGPU_PK_SWEEPITEM* e = &it[i];
         if (e->kind == TAGPU_PK_SWI_QPATH) {
             double x = e->x, a = e->h, z = e->z;
             if (e->top) {
                 /* a builder's path starts: the last one is drawn */
-                sw_path(nq, qcol, h->col[3], qwx, qwz);
+                sw_path(nq, qcol, h->col[3]);
                 nq = 0;
-                qcol = e->colour; qwx = (float)e->x; qwz = (float)e->z;
+                qcol = e->colour;
                 sw_unit_at(pk, e->n, &x, &a, &z);
             }
             if (nq <= (int)TAGPU_PK_SWEEP_QUEUE) {
@@ -1061,14 +1188,7 @@ static void gather_sweep(const TAGPU_FXVIEW* v)
             continue;
         }
         if (e->kind == TAGPU_PK_SWI_QBOX) {
-            double rx, ty;
-            if (sw_bracket(v, e, e->colour, h->col[3], &rx, &ty)) {
-                char num[8];
-                _snprintf(num, sizeof num, "%u", (unsigned)e->n);
-                num[sizeof num - 1] = 0;
-                sw_text_at(rx + 2.0 * s_px, ty, num, h->col[2]);
-                s_cSweepQ++;
-            }
+            if (sw_bracket(v, e, e->colour, h->col[3])) s_cSweepQ++;
             continue;
         }
         if (e->kind == TAGPU_PK_SWI_RINGPT && npt < (int)TAGPU_PK_SWEEP_RINGPTS) {
@@ -1078,18 +1198,17 @@ static void gather_sweep(const TAGPU_FXVIEW* v)
             if (!npt || ys[npt] > bottom) bottom = ys[npt];
             npt++;
         } else if (e->kind == TAGPU_PK_SWI_BOX) {
-            if (sw_bracket(v, e, e->colour, h->col[3], NULL, NULL)) s_cSweep++;
+            if (sw_bracket(v, e, e->colour, h->col[3])) s_cSweep++;
         } else if (e->kind == TAGPU_PK_SWI_HOVER) {
-            sw_bracket(v, e, e->colour, h->col[3], NULL, NULL);
+            sw_bracket(v, e, e->colour, h->col[3]);
         }
     }
-    sw_path(nq, qcol, h->col[3], qwx, qwz);
+    sw_path(nq, qcol, h->col[3]);
     if (!(h->flags & TAGPU_PK_SW_RING)) return;
     {
         double cx = (double)h->c[0] - v->eyeX + v->vpL;
         double cy = (double)h->c[2] - floor((double)h->c[1] * 0.5) - v->eyeY + v->vpT;
-        if (npt >= 3) sw_dashed(xs, ys, npt, 1, SW_DASH_ON, SW_DASH_OFF, h->col[1], h->col[3],
-                                (float)h->c[0], (float)h->c[2]);
+        if (npt >= 3) sw_dashed(xs, ys, npt, 1, SW_DASH_ON, SW_DASH_OFF, h->col[1], h->col[3]);
         sw_square(cx, cy, 2.5 * s_px, h->col[3]);
         sw_square(cx, cy, 1.5 * s_px, h->col[1]);
         if (!npt) top = bottom = cy;

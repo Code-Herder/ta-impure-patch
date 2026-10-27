@@ -43,6 +43,7 @@
 #include "tagpu_hud.h"
 #include "tagpu_replays.h"
 #include "tagpu_settings.h"
+#include "tagpu_gaf.h"
 #include "dd.h"
 #include "render_vk.h"
 
@@ -69,6 +70,10 @@
 #define FD_METAL  0xF0        /* float                                                        */
 #define FD_TOP    0xFA        /* u8 the feature's height                                      */
 #define FD_RECL   0x80        /* FD_MASK's bit 7: reclaimable (0x43E75A, 0x440167)            */
+#define FD_BODYSEQ  0xAC      /* GAF sequence: the static body (tagpu_feat.c, the feature pass) */
+#define FD_BODYANIM 0xCC      /* anim state: the animating body, FD_MASK bit 1                */
+#define WR_BODYANIM 0x04      /* a GAF wreck record's anim state: its body                    */
+#define SUB_DEPTH   4         /* sub-frame lists followed, the feature pass's own guard        */
 #define G_STRIDE  0x15B       /* a gadget record                                              */
 #define G_NAME    0x02        /* char[16], not always terminated                              */
 #define G_X       0x13        /* i16, relative to ControlsAry[0]'s own +0x13 / +0x15          */
@@ -104,7 +109,7 @@ typedef int (__stdcall* Mapped)(const void*, const int*);
 typedef unsigned char* (__attribute__((thiscall))* Action)(void*, const char*);
 
 typedef struct {
-    const unsigned char *cells, *defs;
+    const unsigned char *cells, *defs, *wrecks;
     int w, h, ndefs;
 } Grid;
 
@@ -216,6 +221,7 @@ static int grid(const char* ta, Grid* g)
 {
     g->cells = *(const unsigned char* const*)(ta + OFF_FEATMAP);
     g->defs = *(const unsigned char* const*)(ta + OFF_FEATDEF);
+    g->wrecks = *(const unsigned char* const*)(ta + OFF_WRECKS);
     g->w = *(const int*)(ta + OFF_MAP_W16);
     g->h = *(const int*)(ta + OFF_MAP_H16);
     g->ndefs = *(const int*)(ta + OFF_FEATCOUNT);
@@ -806,14 +812,99 @@ static int push_item(TAGPU_PK_SWEEPITEM* it, unsigned max, unsigned* n, int* cut
     return 1;
 }
 
-static void foot_item(TAGPU_PK_SWEEPITEM* e, unsigned kind, unsigned char colour, const Feat* f,
-                      int alt)
+static int floor_half(int v) { return v >= 0 ? v / 2 : -((1 - v) / 2); }
+
+/* a frame's rect about its anchor, grown over its sub-frames: x0, y0 inclusive, x1, y1 exclusive */
+static int frame_rect(const void* fr, int r[4], int depth)
 {
+    TAGPU_GAFGEOM g;
+    int k, any = 0;
+    if (depth > SUB_DEPTH || !tagpu_gaf_frame_geom(fr, &g)) return 0;
+    if (!g.subn) {
+        r[0] = -g.hotx; r[1] = -g.hoty; r[2] = g.w - g.hotx; r[3] = g.h - g.hoty;
+        return 1;
+    }
+    for (k = 0; k < g.subn; k++) {
+        int q[4];
+        if (!frame_rect(tagpu_gaf_subframe(fr, k), q, depth + 1)) continue;
+        if (!any) { r[0] = q[0]; r[1] = q[1]; r[2] = q[2]; r[3] = q[3]; any = 1; continue; }
+        if (q[0] < r[0]) r[0] = q[0];
+        if (q[1] < r[1]) r[1] = q[1];
+        if (q[2] > r[2]) r[2] = q[2];
+        if (q[3] > r[3]) r[3] = q[3];
+    }
+    return any;
+}
+
+/* THE BODY FRAME THE FEATURE PASS DRAWS for this anchor (tagpu_feat.c `draw_feature`, after
+   0x46A610): a GAF wreck's record body, an animating feature's current frame, else its static
+   sequence's frame 0. NULL for a 3-D wreck, which the unit pass draws as a model, and for a
+   feature with no body sequence, which the engine does not draw (both body paths are gated on
+   the static sequence pointer).
+   THE READS ARE BOUNDED AND CANNOT OUTLIVE THEIR MEMORY. The def row is bounded by the def count
+   (feature_of); the wreck index by WR_COUNT, the fixed pool the level allocates; the frame index
+   by its sequence's own count and each frame's size by the decoder's (tagpu_gaf_seq_frame,
+   tagpu_gaf_frame_sane), and the sub-frame lists by their u8 count and SUB_DEPTH. The defs, their
+   GAF sequences and the wreck pool are the level's: loaded by LoadMap and freed by its teardown,
+   both on this thread, so none of it goes while this call reads it. */
+static const void* body_frame(const Grid* g, const Feat* f)
+{
+    const unsigned char* c = g->cells + (size_t)f->cell * FT_STRIDE;
+    if (c[FT_FLAGS] & 1u) {
+        unsigned rec = *(const uint16_t*)(c + FT_WIDX);
+        if (!(f->def[FD_MASK] & 1u) || !g->wrecks || rec >= WR_COUNT) return NULL;
+        return tagpu_gaf_state_frame((const char*)g->wrecks + (size_t)rec * WR_STRIDE + WR_BODYANIM);
+    }
+    if (!*(const char* const*)(f->def + FD_BODYSEQ)) return NULL;
+    if (f->def[FD_MASK] & 2u) return tagpu_gaf_state_frame((const char*)f->def + FD_BODYANIM);
+    return tagpu_gaf_seq_frame(*(const char* const*)(f->def + FD_BODYSEQ), 0);
+}
+
+/* the feature-grid height of the cell `dc` columns and `dr` rows from the anchor, the anchor's
+   own past the map's edge, as the publisher clamps the anchor's neighbours */
+static int cell_height(const Grid* g, const Feat* f, int dc, int dr)
+{
+    if (f->ax + dc >= g->w) dc = 0;
+    if (f->az + dr >= g->h) dr = 0;
+    return g->cells[(size_t)(f->cell + dr * g->w + dc) * FT_STRIDE + FT_HEIGHT];
+}
+
+/* WHAT A BRACKET FRAMES, as a rect on the projected plane (world x; z with the altitude's half
+   taken, as the marker pass projects): the feature's visible sprite, one px outside it on each
+   side -- the owner's ruling, the mockup's `f.box`. The sprite is placed as the feature pass
+   places it: anchored at the footprint's centre, (col + fx / 2) * 16 and (row + fz / 2) * 16
+   less an eighth of the anchor cell's four corner heights, and offset by the frame's hotspot.
+   A 3-D wreck has no frame, and its projected model bounds would want the posed walk of its
+   whole template tree; it keeps its footprint, from the ground at its centre `alt` to the def's
+   height above it. */
+static void box_item(TAGPU_PK_SWEEPITEM* e, unsigned kind, unsigned char colour, const Grid* g,
+                     const Feat* f, int alt)
+{
+    const void* fr = body_frame(g, f);
+    int r[4];
     memset(e, 0, sizeof *e);
     e->kind = (uint8_t)kind; e->colour = colour;
-    e->x = 16 * f->ax; e->h = alt; e->z = 16 * f->az;
-    e->w = (int16_t)(16 * f->fx); e->d = (int16_t)(16 * f->fz);
-    e->top = f->def[FD_TOP];
+    if (fr && frame_rect(fr, r, 0) && r[2] - r[0] + 2 <= TAGPU_PK_SWEEP_BOXMAX &&
+        r[3] - r[1] + 2 <= TAGPU_PK_SWEEP_BOXMAX) {
+        int fx = *(const int16_t*)(f->def + FD_FOOTX), fz = *(const int16_t*)(f->def + FD_FOOTZ);
+        int hs = cell_height(g, f, 0, 0) + cell_height(g, f, 1, 0) + cell_height(g, f, 0, 1) +
+                 cell_height(g, f, 1, 1);
+        /* the feature pass's junk-def guard, so the anchor is the one it draws at */
+        if (fx < 0 || fx > FOOT_MAX) fx = 1;
+        if (fz < 0 || fz > FOOT_MAX) fz = 1;
+        e->x = 16 * f->ax + (fx * 16) / 2 + r[0] - 1;
+        e->z = 16 * f->az + (fz * 16) / 2 - (hs >> 3) + r[1] - 1;
+        e->w = (int16_t)(r[2] - r[0] + 2);
+        e->d = (int16_t)(r[3] - r[1] + 2);
+        return;
+    }
+    {
+        int top = f->def[FD_TOP];
+        e->x = 16 * f->ax;
+        e->z = 16 * f->az - floor_half(alt + top);
+        e->w = (int16_t)(16 * f->fx);
+        e->d = (int16_t)(16 * f->fz - floor_half(alt) + floor_half(alt + top));
+    }
 }
 
 /* The ring's points: at most TAGPU_PK_SWEEP_RINGPTS, about one every 8 screen px, each at the
@@ -844,11 +935,11 @@ static void ring_items(const int c[3], int r, unsigned char colour, TAGPU_PK_SWE
 
 /* THE QUEUE MARKERS: for each selected unit of the player, in slot order, whose list holds
    reclaim-family nodes, a QPATH start at the unit's position (top 1, n its slot), then for each
-   such node whose feature still stands a QPATH point at the feature's centre and a QBOX with its
-   ordinal. A node whose feature has gone is skipped: the Reclaim handler unlinks it itself at its
+   such node whose feature still stands a QPATH point at the feature's centre and a QBOX framing
+   it. A node whose feature has gone is skipped: the Reclaim handler unlinks it itself at its
    next call (0x404AD0, "Reclamation failed"). The walks are this thread's, the one that links and
    frees nodes, bounded at LIST_WALK a list and FILL_WALK a fill and stopped at a node another unit
-   owns; at most TAGPU_PK_SWEEP_QUEUE items and 1024 ordinals a builder. */
+   owns; at most TAGPU_PK_SWEEP_QUEUE items and 1024 features a builder. */
 static void markers(const TagpuWorld* w, const Grid* g, unsigned char colour,
                     TAGPU_PK_SWEEPITEM* it, unsigned max, unsigned* n, int* cut)
 {
@@ -857,7 +948,7 @@ static void markers(const TagpuWorld* w, const Grid* g, unsigned char colour,
     for (slot = w->first; slot <= w->last; slot++) {
         const char* u = tagpu_route_unit(w, slot);
         const char* node;
-        unsigned steps = 0, ord = 0;
+        unsigned steps = 0, queued = 0;
         if (!u || *(const unsigned char*)(u + U_OWNER) != (unsigned)w->player ||
             !(*(const unsigned*)(u + U_FLAGS) & 0x10u)) continue;
         for (node = *(const char* const*)(u + U_ORDERS); node && steps < LIST_WALK;
@@ -870,9 +961,9 @@ static void markers(const TagpuWorld* w, const Grid* g, unsigned char colour,
             steps++;
             if (!family((unsigned char)node[4]) || !feature_at(g, (const int*)(node + N_POS), &f))
                 continue;
-            if (ord >= 1024u) break;
-            if (used + (ord ? 2u : 3u) > TAGPU_PK_SWEEP_QUEUE) { *cut = 1; return; }
-            if (!ord) {
+            if (queued >= 1024u) break;
+            if (used + (queued ? 2u : 3u) > TAGPU_PK_SWEEP_QUEUE) { *cut = 1; return; }
+            if (!queued) {
                 memset(&e, 0, sizeof e);
                 e.kind = TAGPU_PK_SWI_QPATH; e.colour = colour; e.n = (uint16_t)slot; e.top = 1;
                 e.x = *(const int*)(u + U_XFIX) >> 16;
@@ -888,8 +979,8 @@ static void markers(const TagpuWorld* w, const Grid* g, unsigned char colour,
             e.x = f.cx; e.h = pos[1] >> 16; e.z = f.cz;
             e.w = e.d = 16;
             if (!push_item(it, max, n, cut, &e)) break;
-            foot_item(&e, TAGPU_PK_SWI_QBOX, colour, &f, pos[1] >> 16);
-            e.n = (uint16_t)++ord;
+            box_item(&e, TAGPU_PK_SWI_QBOX, colour, g, &f, pos[1] >> 16);
+            queued++;
             if (!push_item(it, max, n, cut, &e)) break;
             used += 2;
         }
@@ -1062,7 +1153,7 @@ int tagpu_sweep_fill(TAGPU_PK_SWEEP* h, TAGPU_PK_SWEEPITEM* it, unsigned max, un
                     else if (fe > 0.0f) h->ntree++;
                     if (fm > 0.0f && fm < 1e7f) metal += fm;
                     if (fe > 0.0f && fe < 1e7f) energy += fe;
-                    foot_item(&e, TAGPU_PK_SWI_BOX, h->col[0], &s_t[k].f, s_t[k].alt);
+                    box_item(&e, TAGPU_PK_SWI_BOX, h->col[0], &g, &s_t[k].f, s_t[k].alt);
                     push_item(it, max, n, cut, &e);
                 }
                 h->metal = metal < 1e9f ? metal : 1e9f;
@@ -1074,7 +1165,7 @@ int tagpu_sweep_fill(TAGPU_PK_SWEEP* h, TAGPU_PK_SWEEPITEM* it, unsigned max, un
             int pos[3];
             if (feature_at(&g, (const int*)(w.ta + M_POINT), &f) && takes(&f, player, s_kind, pos)) {
                 TAGPU_PK_SWEEPITEM e;
-                foot_item(&e, TAGPU_PK_SWI_HOVER, h->col[0], &f, pos[1] >> 16);
+                box_item(&e, TAGPU_PK_SWI_HOVER, h->col[0], &g, &f, pos[1] >> 16);
                 if (push_item(it, max, n, cut, &e)) h->flags |= TAGPU_PK_SW_HOVER;
             }
         }
