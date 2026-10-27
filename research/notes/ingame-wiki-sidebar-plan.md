@@ -45,9 +45,32 @@ closes, and then deleted.
     re-timed once by hand to make room; the data's ticks stay exactly what plays, in the mockup and
     in the game. Demos without the sidebar keep today's instant arming.
 
+11. **Build buttons the entry does not define are greyed** (2026-10-27, the same rule as decision 7):
+    a later entry that defines more units brings their buttons alive.
+12. **A demo whose build has no equivalent in the mod stops at that tick with the entry's badge.**
+    It stops only when the mod truly has no equivalent (decision 13).
+
+## Per-mod tutorials (the owner's decisions, 2026-10-27; the landing after the sidebar)
+
+13. **Each mod gets a tutorial that works in it**, built from the mod's own equivalents of the stock
+    units the entry uses (its construction kbot, its metal extractor, ...), wherever the feature is on.
+14. **Equivalents come from a general rule over each unit's own data**, never a list of mod names
+    and no override files: for example the mex is the structure the builder can build that extracts
+    metal, on the player's side, the lowest tech level; the builder a mobile unit of that side that
+    builds it, of the demo's movement class. Two equal candidates resolve to the alphabetically
+    first unit name. The in-game check per mod shows what the rule picked.
+15. **The mod's own figures**: footprint, extraction, build time, speed and build distance come from
+    the mod's unit files, so the demo shows what really happens in that mod.
+16. **Captions and the entry's text name roles** (`{builder}`, `{mex}`), filled in with the unit's
+    in-game display name in the running mod, never its internal name.
+17. **The tutorial uses the player's own side in the current game**; the mockup gets a side
+    selector beside its mod selector.
+
 **Settled from the engine, not asked:** the page shown follows the engine's own router (nothing
-selected: the mod's `MAIN2` screen; one builder type: its numbered pages; anything else: the side's
-`GEN` page). A queued build shows the engine's `+N` caption on its button. The side's art (ARM or
+selected: the mod's `MAIN2` screen; exactly one unit selected, a builder: its numbered pages; anything
+else: the side's `GEN` page). A build arms when its button is released inside it. A constructor's queued
+build carries no `+N` caption (its count is 0), and the main screen's KILLS/LOSSES/TOTALUNITS labels
+have no writer. The side's art (ARM or
 CORE) follows the side of the player's units.
 
 ## The engine facts this rests on (scout, to re-verify)
