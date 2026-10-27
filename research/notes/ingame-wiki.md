@@ -17,7 +17,9 @@ description's tiles, its deposits and vents and the engine's fog, drawn by Impur
 feature passes; its units are the game's models, drawn by Impure's own unit pass, facing where they
 walk or work, buildings rising in the nanoframe, translucent ghosts at the cursor and the gesture's
 sites; a type the running game does not have stays the whitebox's box ([the 3D stage's
-plan](ingame-wiki-3d-stage-plan.html), landings 6g and 6h). Try it yourself is drawn and does nothing yet
+plan](ingame-wiki-3d-stage-plan.html), landings 6g and 6h). Under each supported mod the stage
+draws the mod's own files, read in the running game's order ([below](#the-3d-stage-under-the-mods),
+landing 6i). Try it yourself is drawn and does nothing yet
 (landing 5).
 
 | What | Where |
@@ -40,7 +42,7 @@ plan](ingame-wiki-3d-stage-plan.html), landings 6g and 6h). Try it yourself is d
 | The 3D ground's check, C against the mockup | `node tools/wiki/scenecheck.mjs`, with `tagpu/ddraw/tests/wikiscenetest.c`; in the game, `tools/wiki/stage3dcheck.py` over `wiki_regression.py stage3d`'s captures |
 | The stage's check, C against `stage.js` | `node tools/wiki/stagecheck.mjs`, with `tagpu/ddraw/tests/wikistagetest.c` |
 | The window in the game | `tagpu_wiki.c` (input, pause, the page's state and the demo's simulation; game thread), `tagpu_wikistate.c` (`tagpu_wikilay.c` and `tagpu_wikistage.c` on the record) and `tagpu_vk_hud.c` (drawing; render thread) — [GPU status](gpu-status.html) §2.12c |
-| The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|recorded|asset|stage3d|units --launch`, `tools/wiki_regression.py <name> mp`; `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's; `units --shots DIR` does the same with the units, then the facing, the `nounit=` lever, the render thread's time and a reclaim in the game |
+| The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|recorded|asset|stage3d|units --launch`, `tools/wiki_regression.py <name> mp`, `tools/wiki_regression.py all mods --shots DIR` (the 3D stage under each supported setup: [below](#the-3d-stage-under-the-mods)); `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's; `units --shots DIR` does the same with the units, then the facing, the `nounit=` lever, the render thread's time and a reclaim in the game |
 | Serving it | `python3 tools/hudart/serve.py`, then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
 
@@ -319,6 +321,54 @@ stays on the whitebox and the controls strip says "game graphics: run tools/wiki
 The nano spray is the engine's particles (`PK_PART` kind 5, drawn by `tagpu_fx.c`
 `tagpu_fx_gather`), and it starts at the point COB `QueryNanoPiece` returns, so the mockup has
 none.
+
+## The 3D stage under the mods
+
+**What each supported setup shows** (MEASURED 2026-10-27 on the reference setup, Wine, each setup
+of `tools/compat/setups.json` built as the compatibility suite builds it, on a private Xvfb with the
+RTX presenting, at 1280 × 1024 and ss 2; `tools/wiki_regression.py all mods --shots DIR`, one setup
+at a time under the run lock, about a minute each). Each run: a skirmish on Two Continents, the wiki
+opened, its asset report `tagpu_wiki3d.json` read, Quick Build demo 3 at tick 180 and Build Lines
+demo 2 at tick 100 captured through `tagpu_wiki.shot` with the whole display grabbed beside each,
+a whole 300-frame line of each stage, and the display polled for any window that is not the game's
+own, an `ErrorLog.txt` and the process at every step. The stage resolves through the engine's own
+mount list in the engine's order (the plan's section 5), so the archive named is the one the
+running game reads that file from.
+
+| Setup | First archive; units folder | Ground: the two TNTs; the deposit and vent | Units: FBI and COB; 3DO; textures | Fell back | Error boxes | Pass |
+|---|---|---|---|---|---|---|
+| retail | `rev31.gp3`; `units` | `tactics6.hpi` (Crossing Two Rivers), `totala2.hpi` (Metal Heck); TDFs `rev31.gp3`, frames `btdata.ccx` | `rev31.gp3`; `totala1.hpi`; `rev31.gp3` | nothing | none | yes |
+| Escalation (`escalation`) | `taesc.gp3`; `unitsE` | the same TNTs; TDFs `taesc.gp3`, frames `btdata.ccx` | `taesc.gp3` for all nine; `taesc.gp3` for all nine (every shape its own); `btdata.ccx`, the team faces `taesc.gp3`, one animated face of ARMGEO `txesc.ufo` | nothing | none | yes |
+| Total Mayhem (`mayhem-11.3.0`) | `mayhem.gp3`; `units` | the same TNTs; TDFs `mayhem.gp3`, frames `btdata.ccx` | `mayhem.gp3`; `mayhem.gp3` but ARMLLT and ARMSOLAR, `totala1.hpi` (Mayhem ships their FBIs, not their models); `mayhem.gp3` | nothing | none | yes |
+| ProTA (`prota-4.8`) | `prota.gp3`; `units` | the same TNTs; TDFs `prota.gp3`, frames `btdata.ccx` | `prota.gp3` for all nine, file and model alike; `prota.gp3` | nothing | none | yes |
+| TA Zero (`tazero-alpha5`) | `taz31.gp3`; `ZUnits` | the same TNTs; TDFs `taz31.gp3`, frames `btdata.ccx` | none: `ZUnits\` holds none of the nine (its 270 FBIs are TA Zero's own sides) | all nine types are the whitebox's boxes; the ground is 3D | none | yes |
+| Twilight (`twilight-2.0b98`) | its own `rev31.gp3`; `units` | the same TNTs; TDFs and frames `rev31.gp3` | `rev31.gp3`; `totala1.hpi` but ARMLLT, `rev31.gp3` (the stock shape); `rev31.gp3` | nothing | none | yes |
+
+- **Every setup drew both stages' ground in 3D on 300 of 300 frames**, the image whole: the ground
+  in 3D on the five setups whose units resolved, and under TA Zero the ground in 3D with every unit
+  a box over it (R2), as the plan's section 3 says a type the running game does not have is drawn.
+- **The units are the mod's own.** Every unit model a mod ships is the one drawn: Escalation's nine
+  (every shape hash differs from stock's; its ARMMOHO is visibly larger, the plan's risk 9), Mayhem's
+  seven, and ProTA's nine, four of them a different shape from stock's. Create()'s hides follow the
+  mod's scripts: Escalation hides a `shield` piece on five types, Mayhem hides the turrets, sleeves and
+  barrels of its armed extractors and geothermal (ARMMEX, ARMMOHO, ARMGEO).
+- **Against retail's captures at the same tick**: Twilight's are identical, pixel for pixel (its
+  models and textures are retail's). Escalation's differ in 13 203 and 435 of 983 040 pixels,
+  ProTA's in 25 286 and 17 663, Mayhem's in 27 671 and 14 902, all over units, and under Mayhem
+  also over the deposits' highlights: the same frame of the same `btdata.ccx`, drawn in another
+  colour of the same ramp. The stage takes the engine's live palette table
+  (`tagpu_pal_engine`), and `palettes\PALETTE.PAL` resolves to the same `totala1.hpi` entry in all
+  six setups, so Mayhem's running game holds another table for that ramp [INFERRED: the table was
+  not read].
+- **The load**: 42 ms retail (31 archives, an arena of 249 124 bytes), 71 ms Escalation (38,
+  295 825), 57 ms Mayhem (32, 369 453), 80 ms ProTA (31, 286 563), 107 ms TA Zero (33, 19 392),
+  152 ms Twilight (27, 253 711). The render thread's stage, over a line of a stage already built:
+  the producer 0.062 to 0.074 ms and the passes 0.013 to 0.037 ms a frame on average under every
+  setup; the line that spans the change of entry averages up to 0.064 ms in the passes, one frame
+  of it 2.9 to 4.2 ms (the new stage built).
+- **Not measured**: Windows; a network game under a mod; any setup at another resolution. The
+  figures are the stock game's whatever the mod (see *Gaps*), so under TA Zero the demos are
+  whitebox units on the game's ground.
 
 ## The first entry: Quick Build: Resource Extractors
 

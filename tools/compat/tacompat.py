@@ -1125,12 +1125,9 @@ def hud_misses(hud: "dict | None", exp: dict) -> list:
     return []
 
 
-def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario) -> dict:
-    """From the main menu into a skirmish and a 200-a-side fight, then watch it: two
-    patchers that both started can still collide in play, where the limits are used.
-    The menus are driven by tacli's gadget layer and the units placed by its scenario
-    applier (scenarios/200v200.json), as in any tacli run."""
-    name = inst["name"]
+def wine_skirmish(name, proc) -> "str | None":
+    """From the main menu into a skirmish on the saved map (BATTLE_MAP), through tacli's gadget
+    layer; None once the game screen is up, else why it did not come up."""
     # A CLICK WAITS FOR ITS SCREEN. A mod with more content than stock takes longer between
     # these screens than a click's own patience allows, and Escalation goes from Skirmish
     # straight towards a load: both read as "no active gui" or a gadget that is not there yet,
@@ -1155,18 +1152,28 @@ def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario
                 in_game = True
                 break
             if time.time() >= end or not re.search(r"no active gui|is not on|no gadget", last):
-                return {"ok": False, "why": f"ui click {gadget}: {last}"}
+                return f"ui click {gadget}: {last}"
             time.sleep(3)
     deadline = time.time() + POLL_S
     while time.time() < deadline:
         time.sleep(3)
         if proc.poll() is not None:
-            return {"ok": False, "why": "the game exited while loading the skirmish"}
+            return "the game exited while loading the skirmish"
         first = (tacli("ui", name, timeout=20).stdout.splitlines() or [""])[0]
         if IN_GAME_PANEL.search(first):
-            break
-    else:
-        return {"ok": False, "why": "the skirmish never reached the game screen"}
+            return None
+    return "the skirmish never reached the game screen"
+
+
+def wine_battle(inst, proc, display, gamedir, seen, boxes, t0, seconds, scenario) -> dict:
+    """From the main menu into a skirmish and a 200-a-side fight, then watch it: two
+    patchers that both started can still collide in play, where the limits are used.
+    The menus are driven by tacli's gadget layer and the units placed by its scenario
+    applier (scenarios/200v200.json), as in any tacli run."""
+    name = inst["name"]
+    why = wine_skirmish(name, proc)
+    if why:
+        return {"ok": False, "why": why}
     # Before the scenario: it clears the map (clear_existing), commanders and all. The commander
     # check comes first, since the side-panel step below selects the commander.
     cmd = commanders(name)
