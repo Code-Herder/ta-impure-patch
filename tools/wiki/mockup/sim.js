@@ -196,6 +196,9 @@ const WikiSim = (() => {
     const def = t => { const d = D[t]; if (!d) throw new Error(`no unit ${t} in the entry`); return d; };
     const fp = t => def(t).footprint;
     const mobile = t => def(t).maxVelocity > 0;
+    /* FBI canstop, def+0x245 bit 3: the FBI reader 0x42BF40 stores the key's `and 1` at 0x42C90B..0x42C936 with a
+       default of 0, so a type whose FBI has no canstop has none (DISASSEMBLED); an entry's absent key reads the same */
+    const canStop = t => (def(t).canstop & 1) === 1;
     // a resource building: a mex extracts metal, a geothermal plant needs a vent under its yard
     const kind = t => def(t).extracts > 0 ? 'mex' : def(t).vent ? 'geo' : null;
     const strength = t => kind(t) === 'mex' ? def(t).extracts : def(t).energyMake || 0;
@@ -508,7 +511,9 @@ const WikiSim = (() => {
     const screenOf = n => LAY.screens[n];
     // a point of the stage in the column's own pixels is (x + 128, z); the minimap's 128 x 128 there takes no click
     const onMinimap = (x, z) => x + SIDE_W >= 0 && x + SIDE_W < MINIMAP && z >= 0 && z < MINIMAP;
-    // half-open, as the stage's own hit rects are [INFERRED that the engine's are too, Q3]
+    /* the engine's hit tests (the pump's 0x4AA1F6..0x4AA216, the button handler's 0x4A6B79..0x4A6B95 on the press
+       and 0x4A6E84..0x4A6EAC on the release) take the whole pixels x .. x + w - 1 and y .. y + h - 1, DISASSEMBLED.
+       The cursor here is a double, and the pixel it stands in is its floor, so that is half-open on the doubles. */
     const inRect = ([gx, gy, gw, gh], px, pz) => px >= gx && px < gx + gw && pz >= gy && pz < gy + gh;
     const inside = (s, g, x, z) => x < 0 && !onMinimap(x, z) && inRect(g.rect, x + SIDE_W, z - s.y);
     /* OWNER QUESTION Q-O1, the recommended answer: a build button is live only when the entry defines its unit and the
@@ -526,17 +531,37 @@ const WikiSim = (() => {
         case 'orders': return n >= 1 ? (shown.bp ? 0 : 1) : 2;
         case 'buildtab': return n >= 1 ? (shown.bp ? 1 : 0) : 2;
         case 'build': return buildLive(g, shown) ? +pressed : 2;
-        // [INFERRED] a selected mobile unit stands in for FBI canstop (Q4; capture C7, ARMSOLAR selected alone)
-        case 'stop': return selected().some(u => u.owner === 0 && mobile(u.type)) ? +pressed : 2;
+        /* STOP is live while some selected unit of the player's has canstop: the router 0x41B2E0 ORs def+0x245 bit 3
+           over the controlled player's selected units (0x41B4AC) and 0x41A120 greys STOP when the OR is clear
+           (0x41A2F3), DISASSEMBLED. The router's other branch, taken while the shown unit lives, keeps the flags it
+           finds; they are this selection's, because a selection change clears the shown unit and so routes through
+           the branch that computes them. 0x41A120 never un-greys: that a route to the screen already shown reloads it,
+           so a STOP greyed for one selection is live again for the next, is [INFERRED]. */
+        case 'stop': return selected().some(u => u.owner === 0 && canStop(u.type)) ? +pressed : 2;
         case 'order': return 2;
         default: return +pressed;
       }
     }
     const live = s => s === 0 || s === 1;
-    // the gadget a press at (x, z) lands on: the first in screen order that is drawn, not greyed and holds the point
+    // a tab (commonattribs 0x10) acts on its press; every other button on its release
+    const pressActs = g => g.role === 'orders' || g.role === 'buildtab';
+    /* THE GADGET A PRESS AT (x, z) LANDS ON, as the GUI pump 0x4A9FD0 finds it, DISASSEMBLED: it offers the press to
+       the gadgets in file order and stops at the first whose handler acts. An inactive gadget is skipped
+       (0x4AA1CE..0x4AA1D3) and a greyed one's handler refuses at once (0x4A6B10..0x4A6B19), so neither takes it. A
+       button that acts on the release takes the capture and lets the scan go on (0x4A6BAC, 0x49FC50 at 0x4A6BB3), so
+       where buttons overlap the LAST one holds it. A tab acts during its own turn: it drops the capture an earlier
+       button took (0x4A6C28) and returns 1 (0x4A6CD4), which ends the scan (0x4AA549..0x4AA54E), so the FIRST tab
+       holding the point wins over any button before or after it. -1: none. */
     function gadgetAt(name, shown, x, z) {
       const s = screenOf(name);
-      return s.gadgets.findIndex(g => live(gadgetState(g, shown, false)) && inside(s, g, x, z));
+      let last = -1;
+      for (let i = 0; i < s.gadgets.length; i++) {
+        const g = s.gadgets[i];
+        if (!live(gadgetState(g, shown, false)) || !inside(s, g, x, z)) continue;
+        if (pressActs(g)) return i;
+        last = i;
+      }
+      return last;
     }
     const sideStates = () => {
       const s = screenOf(sb.screen), { x, z } = st.cursor;
@@ -561,9 +586,16 @@ const WikiSim = (() => {
     /* A BUTTON ACTS ON THE RELEASE INSIDE IT, as the engine's: 0x4A6AE0 returns 1 for a release inside a captured
        button, 0x4A9E98 stores its index and 0x4AA797 calls the screen's handler 0x41AA00. The tabs, which act on the
        press, come here too. PREV and NEXT step the shown unit's page as 0x41BF10 and 0x41BDE0 do, wrapping within
-       1..n, and set bit 22; ORDERS and BUILD clear and set bit 22 (0x41C180). STOP empties the selected units' orders
-       and leaves the armed building armed [INFERRED, Q7]. A build button arms its building, the old `build` input's
-       effect; a mobile unit's button would queue it at a factory (0x419B00), which no entry has, so it does nothing. */
+       1..n, and set bit 22; ORDERS and BUILD clear and set bit 22 (0x41C180). A build button arms its building, the
+       old `build` input's effect; a mobile unit's button would queue it at a factory (0x419B00), which no entry has,
+       so it does nothing.
+
+       STOP is 0x419BE0's STOP branch (0x419CB6..0x419CF2, called from 0x41AA00 at 0x41ABCC), DISASSEMBLED: it writes
+       main+0x2CC3 = 1 (0x419CC2), which replaces an armed build's mode 0x0E, so it disarms; then the order issuer
+       0x48CF30 gives every selected unit of the controlled player the STOP order through 0x43AFC0 (0x48D1F4), which
+       replaces its orders. The path tests no canstop, so a unit without it is stopped along with the selection's
+       others. With Shift held the issuer passes shift = 1 to 0x43AFC0, whose effect on STOP is not established; the
+       sim empties the orders either way [INFERRED]. */
     function act(g) {
       const u = sb.shown, n = u ? npages(u.type) : 0;
       if ((g.role === 'prev' || g.role === 'next') && n) {
@@ -571,17 +603,20 @@ const WikiSim = (() => {
         u.bp = true;
       } else if (g.role === 'orders' && n) u.bp = false;
       else if (g.role === 'buildtab' && n) u.bp = true;
-      else if (g.role === 'stop') { for (const v of selected()) if (v.owner === 0) v.orders = []; }
+      else if (g.role === 'stop') {
+        disarm();
+        for (const v of selected()) if (v.owner === 0) v.orders = [];
+      }
       else if (g.role === 'build' && defined(g.unit) && !mobile(g.unit)) { disarm(); st.mode = g.unit; st.drag = null; }
       route();
     }
-    // a press over the column: a tab acts now (attribs 0x10); any other button is captured, either mouse button alike
-    // (0x41AA00 never tests which one arms a structure)
+    /* a press over the column: a tab drops the capture (0x4A6C28) and acts now; any other button is captured, either
+       mouse button alike (0x41AA00 never tests which one arms a structure) */
     function pressSide(b) {
       const { x, z } = st.cursor, i = gadgetAt(sb.screen, sb.shown, x, z);
       if (i < 0) return;
       const g = screenOf(sb.screen).gadgets[i];
-      if (g.role === 'orders' || g.role === 'buildtab') act(g);
+      if (pressActs(g)) { sb.cap = null; act(g); }
       else sb.cap = { i, b };
     }
     // the release of the captured button: inside its gadget, still live, it acts; outside, nothing

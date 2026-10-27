@@ -511,6 +511,19 @@ const selIds = v => v.units.filter(u => u.selected).map(u => u.id).join(' ');
 const fixtureWith = (types, screens) => ({ ...FIXTURE, types: { ...FIXTURE.types, ...types }, screens: { ...FIXTURE.screens, ...screens } });
 const withOrders = (entry, ids) => ({ ...entry, scene: { ...entry.scene,
   units: entry.scene.units.map(u => ids.includes(u.id) ? { ...u, orders: [{ move: [120, 120] }, { move: [200, 120] }] } : u) } });
+/* stand-ins for STOP's rules: a static unit with canstop, as turrets and factories have it, and a mobile one without,
+   neither a builder */
+const withStoppers = entry => ({ ...entry, units: { ...entry.units,
+  TURRET: { footprint: [2, 2], buildTime: 10, canstop: 1, from: 'a static stand-in with canstop' },
+  ROVER: { footprint: [2, 2], buildTime: 10, maxVelocity: 1, from: 'a mobile stand-in without canstop' } } });
+const STOPPERS = [{ id: 'tur', type: 'TURRET', at: [120, 136] }, { id: 'rov', type: 'ROVER', at: [200, 136] }];
+// ARMCK1 of the fixture with its gadgets replaced, and a gadget put just before or after the one named n
+const G1 = FIXTURE.screens.ARMCK1.gadgets;
+const ck1With = gadgets => fixtureWith({}, { ARMCK1: { ...FIXTURE.screens.ARMCK1, gadgets } });
+const beside = (n, g, first) => G1.flatMap(x => x.name !== n ? [x] : first ? [g, x] : [x, g]);
+const rectOf = n => G1.find(g => g.name === n).rect;
+const rectCentre = r => [-SIDE_W + r[0] + r[2] / 2, FIXTURE.screens.ARMCK1.y + r[1] + r[3] / 2];
+const geoAt = (rect, extra = {}) => ({ name: 'ARMGEO', role: 'build', unit: 'ARMGEO', rect, ...extra });
 const SIDE_RULES = {
   'the page router: nothing selected shows MAIN2, one ARMCK its page 1, ARMCK with ARMACK or a Peewee alone GEN'(entry) {
     const side = sel => WikiSim.create(entry, { scene: { selected: sel } }, FIXTURE).view().side;
@@ -584,13 +597,75 @@ const SIDE_RULES = {
     return same(v.side.state, before.side.state) && v.side.screen === 'ARMCK1' && selIds(v) === 'ck' && v.mode === 'contextual' &&
       !v.drag && s.orders('ck').length === 0 && v.cursor.shape === 'arrow';
   },
-  'STOP empties the selected units\' orders, and is greyed with no mobile unit selected'(entry) {
-    const s = WikiSim.create(withOrders(entry, ['ck', 'pw', 'ack']), { scene: { selected: ['ck', 'pw'] } }, FIXTURE);
-    const gen = s.view(), had = s.orders('ck').length + s.orders('pw').length;
+  /* STOP's greyed state is the OR of FBI canstop over the selection (0x41B2E0, 0x41A120), not mobility: the stand-ins
+     are a static unit with canstop, as a turret or a factory has it, and a mobile one without */
+  'STOP is live while a selected unit has canstop, greyed otherwise, and a greyed STOP takes no click'(entry) {
+    // each sim is done with before the next is made: simparity.mjs replays one at a time
+    const e = withStoppers(entry), sim = sel => WikiSim.create(e, { scene: { selected: sel, units: STOPPERS } }, FIXTURE);
+    const stop = v => v.side && v.side.screen === 'ARMGEN' ? stateOf(v, 'ARMSTOP') : null;
+    const ck = sim(['ck']);
+    press(ck, centre(FIXTURE, 'ARMCK1', 'ARMORDERS'));
+    const ckStop = stop(ck.view());
+    const geo = sim(['geo']);
+    geo.input({ build: 'ARMMEX' });
+    press(geo, centre(FIXTURE, 'ARMGEN', 'ARMSTOP'));
+    const greyed = geo.view();
+    const states = [['geo'], ['tur'], ['rov'], ['geo', 'rov'], ['geo', 'tur'], ['rov', 'ck']].map(sel => stop(sim(sel).view()));
+    return ckStop === 0 && same(states, [2, 0, 2, 2, 0, 0]) && greyed.mode === 'build:ARMMEX' && stop(greyed) === 2;
+  },
+  // 0x419BE0's STOP branch: main+0x2CC3 = 1 leaves the build mode, and 0x48CF30 stops every selected unit
+  'STOP disarms an armed build and empties every selected unit\'s orders, canstop or not'(entry) {
+    const e = withOrders(withStoppers(entry), ['ck', 'pw', 'ack']);
+    const units = STOPPERS.map(u => ({ ...u, orders: [{ move: [120, 120] }] }));
+    const s = WikiSim.create(e, { scene: { selected: ['ck'], units } }, FIXTURE);
+    press(s, centre(FIXTURE, 'ARMCK1', 'ARMMEX'));
+    const armed = s.view();
+    press(s, centre(FIXTURE, 'ARMCK1', 'ARMORDERS'));
+    const gen = s.view(), had = s.orders('ck').length;
     press(s, centre(FIXTURE, 'ARMGEN', 'ARMSTOP'));
-    const geo = WikiSim.create(entry, { scene: { selected: ['geo'] } }, FIXTURE).view();
-    return gen.side.screen === 'ARMGEN' && stateOf(gen, 'ARMSTOP') === 0 && had === 4 && s.orders('ck').length === 0 &&
-      s.orders('pw').length === 0 && s.orders('ack').length === 2 && geo.side.screen === 'ARMGEN' && stateOf(geo, 'ARMSTOP') === 2;
+    const stopped = s.view(), left = ['ck', 'pw', 'ack'].map(id => s.orders(id).length);
+    // a mixed selection: the Peewee and the stand-in without canstop are stopped with the rest
+    const m = WikiSim.create(e, { scene: { selected: ['ck', 'pw', 'rov'], units } }, FIXTURE);
+    press(m, centre(FIXTURE, 'ARMGEN', 'ARMSTOP'));
+    const mixed = ['ck', 'pw', 'rov', 'ack', 'tur'].map(id => m.orders(id).length);
+    return armed.mode === 'build:ARMMEX' && gen.side && gen.side.screen === 'ARMGEN' && gen.mode === 'build:ARMMEX' && had === 2 &&
+      stopped.mode === 'contextual' && same(left, [0, 2, 2]) && same(mixed, [0, 0, 0, 2, 1]);
+  },
+  /* the pump 0x4A9FD0 offers a press in file order: a button acting on the release lets the scan go on, so the LAST
+     one holding the point takes it; a greyed or an inactive one takes none */
+  'where buttons overlap the last one takes the press, and a greyed or inactive one takes none'(entry) {
+    const mex = rectOf('ARMMEX'), armOver = gadgets => {
+      const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, ck1With(gadgets));
+      s.input({ move: rectCentre(mex) }); s.input({ down: 'lmb' });
+      const held = s.view().side.state;
+      s.input({ up: 'lmb' });
+      return { mode: s.view().mode, held: gadgets.filter((g, i) => g.role === 'build' && held[i] === 1).map(g => g.name).join(' ') };
+    };
+    const after = armOver(beside('ARMMEX', geoAt(mex), false)), before = armOver(beside('ARMMEX', geoAt(mex), true));
+    const grey = armOver(beside('ARMMEX', { name: 'IGPATCH', role: 'build', unit: null, grey: true, rect: mex }, false));
+    const hidden = armOver(beside('ARMMEX', geoAt(mex, { hidden: true }), false));
+    return after.mode === 'build:ARMGEO' && after.held === 'ARMGEO' && before.mode === 'build:ARMMEX' && before.held === 'ARMMEX' &&
+      grey.mode === 'build:ARMMEX' && grey.held === 'ARMMEX' && hidden.mode === 'build:ARMMEX' && hidden.held === 'ARMMEX';
+  },
+  /* a tab acts on its own press and ends the scan, dropping an earlier button's capture: the FIRST tab holding the
+     point wins, over a button before or after it */
+  'where a tab overlaps, the first tab takes the press, over any button'(entry) {
+    const tab = (gadgets, at) => {
+      const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, ck1With(gadgets));
+      s.input({ move: rectCentre(at) }); s.input({ down: 'lmb' });
+      const down = s.view().side.screen;
+      s.input({ up: 'lmb' });
+      return { down, screen: s.view().side.screen, mode: s.view().mode };
+    };
+    const ord = rectOf('ARMORDERS'), bld = rectOf('ARMBUILD');
+    // both tabs on ORDERS' rect: ORDERS first shows GEN on the press; BUILD first keeps the page
+    const [orders, build, ...rest] = G1;
+    const ordersFirst = tab([orders, { ...build, rect: ord }, ...rest], ord);
+    const buildFirst = tab([{ ...build, rect: ord }, orders, ...rest], ord);
+    // a live build button on BUILD's rect, before or after it: BUILD acts and drops any capture, so nothing arms
+    const btnBefore = tab(beside('ARMBUILD', geoAt(bld), true), bld), btnAfter = tab(beside('ARMBUILD', geoAt(bld), false), bld);
+    return ordersFirst.down === 'ARMGEN' && buildFirst.down === 'ARMCK1' && buildFirst.screen === 'ARMCK1' &&
+      btnBefore.screen === 'ARMCK1' && btnBefore.mode === 'contextual' && btnAfter.screen === 'ARMCK1' && btnAfter.mode === 'contextual';
   },
   'a map drag released over the sidebar selects with the box clamped to the map'(entry) {
     const s = WikiSim.create(entry, { scene: { selected: [] } }, FIXTURE);

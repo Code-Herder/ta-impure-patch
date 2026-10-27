@@ -20,6 +20,7 @@
       "workerTime": 80,
       "buildDistance": 40,
       "maxVelocity": 0.8,
+      "canstop": 1,
       "builds": [
         "ARMSOLAR",
         "ARMWIN",
@@ -44,7 +45,7 @@
       "name": "Construction KBot",
       "from": "ARMCK.fbi; build list gamedata/sidedata.tdf [CANBUILD]"
     },
-    "ARMLLT": {"footprint":[2,2],"buildTime":4662,"name":"L.L.T.","from":"ARMLLT.fbi"},
+    "ARMLLT": {"footprint":[2,2],"buildTime":4662,"canstop":1,"name":"L.L.T.","from":"ARMLLT.fbi"},
     "ARMDRAG": {"footprint":[2,2],"buildTime":520,"name":"Dragon's Teeth","from":"ARMDRAG.fbi"},
     "ARMSOLAR": {"footprint":[5,5],"buildTime":2495,"name":"Solar Collector","from":"ARMSOLAR.fbi"}
   },

@@ -4,7 +4,8 @@
 
    A demo's cursor glides with a move every two ticks, so its inputs are generated here rather than written by hand;
    change a demo here and regenerate. The unit figures are the stock game's, read once from the retail unit files
-   (each row's `from`); nothing of the game is copied.
+   (each row's `from`); nothing of the game is copied. `canstop` is written only for the types whose FBI sets it:
+   the engine reads a missing key as 0 (sim.js canStop), and so does the sim.
 
    No demo writes `sidebar`, so each takes sim.js's default, decision 2 of
    research/notes/ingame-wiki-sidebar-plan.md: the sidebar is shown when the scene gives the player a mobile builder.
@@ -17,18 +18,18 @@ const C = c => c * 16 + 8;                  // a cell's centre in world units
 const at = (cx, cz) => [C(cx), C(cz)];
 
 const units = {
-  ARMCK: { footprint: [2, 2], buildTime: 5597, workerTime: 80, buildDistance: 40, maxVelocity: 0.8,
+  ARMCK: { footprint: [2, 2], buildTime: 5597, workerTime: 80, buildDistance: 40, maxVelocity: 0.8, canstop: 1,
     builds: ['ARMSOLAR', 'ARMWIN', 'ARMESTOR', 'ARMMSTOR', 'ARMMEX', 'ARMMAKR', 'ARMLAB', 'ARMVP', 'ARMAP', 'ARMSY', 'ARMLLT', 'ARMRAD',
       'ARMALAB', 'ARMGEO', 'ARMHLT', 'ARMRL', 'ARMDRAG', 'ARMGUARD', 'ARMHP'],
     name: 'Construction KBot', from: 'ARMCK.fbi; build list gamedata/sidedata.tdf [CANBUILD]' },
-  ARMACK: { footprint: [2, 2], buildTime: 13432, workerTime: 160, buildDistance: 60, maxVelocity: 0.6,
+  ARMACK: { footprint: [2, 2], buildTime: 13432, workerTime: 160, buildDistance: 60, maxVelocity: 0.6, canstop: 1,
     builds: ['ARMLAB', 'ARMARAD', 'ARMFUS', 'ARMMOHO', 'ARMBRTHA', 'ARMSILO', 'ARMANNI', 'ARMAMD', 'ARMASP'],
     name: 'Adv. Construction Kbot', from: 'ARMACK.fbi; build list gamedata/sidedata.tdf [CANBUILD]' },
   ARMMEX: { footprint: [3, 3], extracts: 0.001, buildTime: 1800, name: 'Metal Extractor', from: 'ARMMEX.fbi' },
   ARMMOHO: { footprint: [5, 5], extracts: 0.003, buildTime: 35750, name: 'Moho Mine', from: 'ARMMOHO.fbi' },
   ARMGEO: { footprint: [4, 4], energyMake: 250, vent: true, buildTime: 13078, name: 'Geothermal Powerplant',
     from: 'ARMGEO.fbi (YardMap all G: one cell on a geothermal feature)' },
-  ARMPW: { footprint: [2, 2], buildTime: 1452, maxVelocity: 1.8, name: 'Peewee', from: 'ARMPW.fbi' },
+  ARMPW: { footprint: [2, 2], buildTime: 1452, maxVelocity: 1.8, canstop: 1, name: 'Peewee', from: 'ARMPW.fbi' },
 };
 
 /* the map, 40 x 30 cells, 480 rows: as tall as stock TA's sidebar beside it (decision 9 of

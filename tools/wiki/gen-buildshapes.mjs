@@ -5,7 +5,8 @@
    The demos are the placement gesture of tagpu/ddraw/src/tagpu_place.c (research/notes/tadr-port/quality-of-life.md,
    "What Impure does") played through sim.js. A demo's cursor glides with a move every two ticks, so its inputs are
    generated here; change a demo here and regenerate. The unit figures are the stock game's, read once from the retail
-   unit files (each row's `from`); nothing of the game is copied.
+   unit files (each row's `from`); nothing of the game is copied. `canstop` is written only for the types whose FBI
+   sets it: the engine reads a missing key as 0 (sim.js canStop), and so does the sim.
 
    No demo writes `sidebar`, so each takes sim.js's default, decision 2 of
    research/notes/ingame-wiki-sidebar-plan.md: the sidebar is shown when the scene gives the player a mobile builder.
@@ -19,11 +20,11 @@ const ROOT = new URL('../../', import.meta.url).pathname;
 const S = (cx, cz, f = 2) => [(cx + f / 2) * 16, (cz + f / 2) * 16];
 
 const units = {
-  ARMCK: { footprint: [2, 2], buildTime: 5597, workerTime: 80, buildDistance: 40, maxVelocity: 0.8,
+  ARMCK: { footprint: [2, 2], buildTime: 5597, workerTime: 80, buildDistance: 40, maxVelocity: 0.8, canstop: 1,
     builds: ['ARMSOLAR', 'ARMWIN', 'ARMESTOR', 'ARMMSTOR', 'ARMMEX', 'ARMMAKR', 'ARMLAB', 'ARMVP', 'ARMAP', 'ARMSY', 'ARMLLT', 'ARMRAD',
       'ARMALAB', 'ARMGEO', 'ARMHLT', 'ARMRL', 'ARMDRAG', 'ARMGUARD', 'ARMHP'],
     name: 'Construction KBot', from: 'ARMCK.fbi; build list gamedata/sidedata.tdf [CANBUILD]' },
-  ARMLLT: { footprint: [2, 2], buildTime: 4662, name: 'L.L.T.', from: 'ARMLLT.fbi' },
+  ARMLLT: { footprint: [2, 2], buildTime: 4662, canstop: 1, name: 'L.L.T.', from: 'ARMLLT.fbi' },
   ARMDRAG: { footprint: [2, 2], buildTime: 520, name: "Dragon's Teeth", from: 'ARMDRAG.fbi' },
   ARMSOLAR: { footprint: [5, 5], buildTime: 2495, name: 'Solar Collector', from: 'ARMSOLAR.fbi' },
 };

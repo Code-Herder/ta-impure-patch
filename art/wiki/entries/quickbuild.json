@@ -19,6 +19,7 @@
       "workerTime": 80,
       "buildDistance": 40,
       "maxVelocity": 0.8,
+      "canstop": 1,
       "builds": [
         "ARMSOLAR",
         "ARMWIN",
@@ -49,6 +50,7 @@
       "workerTime": 160,
       "buildDistance": 60,
       "maxVelocity": 0.6,
+      "canstop": 1,
       "builds": ["ARMLAB","ARMARAD","ARMFUS","ARMMOHO","ARMBRTHA","ARMSILO","ARMANNI","ARMAMD","ARMASP"],
       "name": "Adv. Construction Kbot",
       "from": "ARMACK.fbi; build list gamedata/sidedata.tdf [CANBUILD]"
@@ -63,7 +65,7 @@
       "name": "Geothermal Powerplant",
       "from": "ARMGEO.fbi (YardMap all G: one cell on a geothermal feature)"
     },
-    "ARMPW": {"footprint":[2,2],"buildTime":1452,"maxVelocity":1.8,"name":"Peewee","from":"ARMPW.fbi"}
+    "ARMPW": {"footprint":[2,2],"buildTime":1452,"maxVelocity":1.8,"canstop":1,"name":"Peewee","from":"ARMPW.fbi"}
   },
   "scene": {
     "map": {"w":40,"h":30,"surfaceMetal":0},
