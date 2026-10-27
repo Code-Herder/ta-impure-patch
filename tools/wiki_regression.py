@@ -7,6 +7,7 @@ page's controls and the demos playing on the stage.
     wiki_regression.py <instance> page --launch       the page's controls, single player
     wiki_regression.py <instance> demos --launch      the demos: parity, clock, controls, captures
     wiki_regression.py <instance> recorded --launch   a live recorded skirmish: the rewind button
+    wiki_regression.py <instance> asset --launch      the 3D asset load, against the native one
     wiki_regression.py <name> mp                      a two-player network game on Wine, started by
                                                       tools/compat/tacompat.py's launcher
 
@@ -81,6 +82,12 @@ recorded:
       says `wiki: not opened - a rewind holds the pause` (the refusal tests the rewind's state, so the
       FLUSH it passes through is refused by the same test, but no step can hold the game in FLUSH);
       the rewind button closes it; the wiki button opens the wiki and Esc closes it.
+asset, on the same launch as sp:
+  (a1) the open starts the 3D asset load (tagpu_wikiasset.c); the trigger tagpu_wiki3d.dump writes
+       its report, and the log's `wiki3d: loaded in` line gives its time and its arena's size;
+  (a2) the report equals, field for field, the load tests/wikiassettest.c runs natively over the
+       instance's folder with the game's own mount list and language (tools/wiki/assetcheck.py);
+  (a3) every stage's ground and every unit type resolved.
 mp:
   (m) the wiki opened on the host takes no pause: both peers' GameTime advances over 3 s, and so
       does the host's demo, whose cost to the game thread is logged; a right and a left click on
@@ -785,6 +792,47 @@ def recorded(c):
           "and the wiki does not open over an open rewind")
 
 
+def asset(c):
+    """(a1)..(a3): the 3D asset load in the game, against the same load run natively."""
+    sys.path.insert(0, str(TREE / "tools/wiki"))
+    import assetcheck
+    held_at(c, HELD_AT)
+    gamedir = tacli_api().Instance(c.name).gamedir
+    out, ask = gamedir / "tagpu_wiki3d.json", gamedir / "tagpu_wiki3d.dump"
+    out.unlink(missing_ok=True)
+    start = c.mark()
+    c.open_wiki(expect_pause=True)
+    ask.write_text("")
+    end = time.monotonic() + 60
+    while not out.exists():
+        assert time.monotonic() < end, "(a1) no tagpu_wiki3d.json within 60 s of the open"
+        time.sleep(0.5)
+    game = json.loads(out.read_text())
+    line = c.found(start, r"wiki3d: loaded in")
+    assert line, "(a1) no `wiki3d: loaded in` line"
+    m = re.search(r"loaded in ([\d.]+) ms - arena (\d+) bytes", line)
+    print(f"wiki asset: (a1) the game's load: {line.split('wiki3d: ', 1)[1]}")
+    c.keys("esc")
+    wait_dump(c, lambda d: not d["open"], "(a1) Esc did not close the window")
+
+    assetcheck.build()
+    mounts = gamedir / "tagpu_wiki3d.mounts"
+    mounts.write_text("".join(f"{x['archive']}\n" for x in game["mounts"]))
+    try:
+        native, log = assetcheck.run_load(gamedir, assetcheck.pak_of_tree(), mounts, None, game["language"])
+    finally:
+        mounts.unlink(missing_ok=True)
+    bad = assetcheck.diff(game, native, exact=True)
+    assert not bad, f"(a2) the game's report and the native load differ in {len(bad)} place(s): {bad[:8]}"
+    print(f"wiki asset: (a2) the game's report equals the native load over the instance's {len(game['mounts'])} "
+          f"mounts: {sum(s['ok'] for s in game['stages'])} of {len(game['stages'])} grounds, "
+          f"{sum(u['ok'] for u in game['units'])} of {len(game['units'])} unit types; native {log.splitlines()[-1]}")
+    assert all(s["ok"] for s in game["stages"]) and all(u["ok"] for u in game["units"]), \
+        "(a3) a ground or a unit type did not resolve on the retail setup"
+    print(f"wiki asset: (a3) every ground and unit type resolved; the game's load took {m.group(1)} ms, "
+          f"its arena {int(m.group(2))} bytes")
+
+
 def launched(instance, mode, res):
     """The instance on the scenario with the launch's hold, under the run lock; the callable that
     stops it and puts its levers back."""
@@ -895,7 +943,7 @@ def mp(name):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("instance")
-    p.add_argument("mode", choices=("sp", "page", "demos", "recorded", "mp"))
+    p.add_argument("mode", choices=("sp", "page", "demos", "recorded", "asset", "mp"))
     p.add_argument("--launch", action="store_true",
                    help="sp/recorded: launch on place-basic.json first, under the run lock")
     p.add_argument("--res", default="1920x1080", help="sp/recorded: the game's resolution")
@@ -919,6 +967,8 @@ def main():
                     page(c, a.shot)
                 elif a.mode == "demos":
                     demos(c, a.shots, a.res)
+                elif a.mode == "asset":
+                    asset(c)
                 else:
                     recorded(c)
             finally:

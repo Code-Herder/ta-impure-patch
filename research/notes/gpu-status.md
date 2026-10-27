@@ -4467,13 +4467,21 @@ there.
 | `fake_GetCursorPos`, `fake_GetKeyState`, `fake_GetAsyncKeyState` (`winapi_hooks.c`) | while the capture word is set: the frozen opening point (no store) and 0 for every key. `fake_GetCursorPos` stores its live point through `tagpu_wiki_cursor_store`, under the critical section the open and the close hold (`tagpu_wiki_init` makes it in `DllMain`'s attach) | any, the engine's mouse thread included |
 | the art loader's thread (`tagpu_hudart.c`, `wiki_load`) | `tagpu_wikilay_check`: the kit and the data refused, and the wiki not published, when the kit lacks an icon or the `toast` style the window and the stage draw, or the page drops an op, run, text, hit or group (`HUDOPS.overflow`) in any of its checked states -- closed with its button held, open with its close button held, every entry's every demo playing at 1× and ended at 2× -- at 1024 × 768, 1280 × 720 or 3840 × 1080, every scroll at 0. The build itself refuses only a missing argument or its memory, so the overflow is what the states test; other scrolls, captions, held keys and screens are not built. The parts and the roles' styles are refused by `tagpu_wikilay_load` itself | the loader |
 | teardown wrap's entry (`tagpu_reclaim.c`) | `tagpu_wiki_level_end` after `tagpu_hudinput_level_end`: the window closed, its pause forgotten without a write, the hit map emptied | game |
+| `tagpu_wiki_fill`, the first fill of an open window once the wiki's data is loaded, once a process | `assets_start`: the 3D asset load's inputs copied by value -- the mount list's paths (`tagpu_replays_archive_paths`, the list `running_mod` reads), the `language` value and the asset folders' names (`tagpu_replays_asset_names`), `GetCurrentDirectoryA`, the wiki's data and WIKIPAK -- and `tagpu_wikiasset_start`, which starts the loader below; nothing waits for it | game |
+| the 3D asset loader's thread (`tagpu_wikiasset.c`, below-normal priority, started once under an interlocked compare) | the stage descriptions' TNT tiles and their hashes, their feature sections with their sequences or models, and every entry's unit types' FBI, 3DO and script, resolved by the engine's rules (`tagpu_vfs.c` over `tagpu_hpi.c` and `tagpu_tdf.c`, its own read-only handles) into one arena reserved `MEM_TOP_DOWN` and refused unless both ends pass `tagpu_m3_ptr_ok`; published by one `InterlockedExchangePointer` (`tagpu_wiki3d_get`), immutable and never freed. It reads no engine memory and paints nothing; the log line `wiki3d: loaded in N ms - arena B bytes ...` | the loader |
+| `tagpu_wiki_carried`, every 30th fill | `tagpu_wikiasset_poll`: the trigger `tagpu_wiki3d.dump` writes the published load's report to `tagpu_wiki3d.json` (through its `.tmp`); it waits while the load runs | game |
 
 **Fields we write**, on the game thread, through `tagpu_menu_pause_hold`: bit 0 of `main+0x38A51`
 (the pause), only when `main+0x2A44` bit 0 is clear (a single-player level), set at the open only
 when it was clear and cleared at the close only when the open set it. Of our own: the game
-folder's `tagpu_wiki.json` (and its `.tmp`) and the deletion of `tagpu_wiki.dump` and
-`tagpu_wiki.check`. **Fields we read**: `main+0x2A44` bit 0 and `main+0x38A51` bit 0, there and
-nowhere else. Nothing the recording carries: the demo's simulation is the wiki's own, a `WIKISIM`
+folder's `tagpu_wiki.json` and `tagpu_wiki3d.json` (and their `.tmp`) and the deletion of
+`tagpu_wiki.dump`, `tagpu_wiki3d.dump` and `tagpu_wiki.check`. **Fields we read**: `main+0x2A44`
+bit 0 and `main+0x38A51` bit 0; and, once, at the asset load's start, through `tagpu_replays.c`:
+the mount list (the graphics globals `*0x51FBD0`'s `+0x618` bounded by `+0x61C`, 0x104 bytes a
+path), the `language` value `0x51FB50` and the folder names in `.data` (`0x503920`, `0x503720`,
+`0x504734`, `0x503704`, `0x5036E4`, `0x503740`, `0x502E30`, `0x502C7C`), each bounded to its
+buffer. The rules the loader repeats: [engine map](exe-reverse-engineering.html), *How the engine
+resolves a path, a unit's files and a model's textures*. Nothing the recording carries: the demo's simulation is the wiki's own, a `WIKISIM`
 on the game thread that TA's simulation never reads, and every wiki file is `presentation`.
 
 ### 2.12d The world passes, compiled twice (`tagpu_scene.h`, `tagpu_wikiworld.c`, `tools/scene-check.sh`; built, not called)

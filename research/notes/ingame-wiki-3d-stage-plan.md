@@ -353,7 +353,8 @@ engine's loader.**
   engine structures with level lifetimes. And it needs new `publisher` lines in
   `thread-split.allow`.
 - **Why the reader is safe.** It opens its own read-only handles, on its own thread, of the files
-  the engine mounted. It reads nothing of the engine's but one copied list.
+  the engine mounted. It reads nothing of the engine's but what the game thread copies for it:
+  the mount list, the `language` value and the asset folders' names.
 - **The DLL has no archive reader today**: `tagpu_ufo.c` writes one; `tools/ta3do` has the Python
   reader to port; `lodepng.c`'s `lodepng_zlib_decompress` covers SQSH mode 2.
 
@@ -361,20 +362,28 @@ engine's loader.**
 batch A, and the reader implements whatever the scouts establish without changing this design):
 - **A path** opens loose first, relative to the process's current directory as the engine's
   `fopen` would, then from the first archive in mount order whose directory holds it as a file,
-  the path split at `\` and compared without case [INFERRED for `0x4F8A70`; A1].
+  the path split at `\` and each level scanned last to first with `_stricmp`, which folds `A`..`Z`
+  alone (A1, DISASSEMBLED). A path the engine builds tries `<dir>-<language>\` first (`0x4290F0`).
+  An enumeration lists each path once, from the first source holding it (the shadow mark
+  `0x4BE320` sets).
 - **The archive list** is the engine's own: at the wiki's first open, on the game thread, the open
   copies every mounted archive's full path (handle `+0x14`, bounded by `+0x61C` and by `0x104`
-  bytes each) and the current directory by value, and hands them to the loader thread. The read is
-  `tagpu_replays.c`'s, which already reads the same list in `running_mod` (question 2).
-- **A unit name** is matched against `UnitName` over `units\*.fbi`, in the engine's enumeration
-  order with its rule for duplicates (A1, A2). The FBI's `Objectname` names
-  `objects3d\<objectname>.3do` (A2). The script `scripts\<name>.cob` gives Create()'s hides (A3).
+  bytes each), the `language` value, the asset folders' names as the running executable spells
+  them (Escalation's `unitsE`, TA Zero's `ZUnits` and `logoz`) and the current directory by value,
+  and hands them to the loader thread. The reads are `tagpu_replays.c`'s, which already reads the
+  same list in `running_mod` (question 2).
+- **A unit type** is found as a level finds it, `units\<UnitName>.FBI` **by path**, not by
+  enumerating every FBI (A2: the enumeration only decides which names exist). The FBI's
+  `Objectname`, else its `UnitName`, names `objects3d\<name>.3DO` (A2). The script
+  `scripts\<UnitName>.COB` gives Create()'s hides (A3).
 - **Textures** are bound by the engine's rule (A4, A5) from the texture GAFs, read in the engine's
   order; the frames a model's faces name are copied into the arena, not whole GAFs.
-- **The model is loaded as the engine holds it**: the 3DO blob copied into the arena, every offset
-  bounded inside the blob and rebased to a pointer, every face's texture bound to a rebased GAF
-  frame or sequence with its flags, the tree walked once with `tagpu_model_walk`'s bounds
-  (`TAGPU_PBMAXPIECE`, `PB_MAXNODEV`, faces ≤ 512, a cycle refused).
+- **The model is loaded as the engine holds it**, which is not the file rebased (A4): every
+  offset bounded inside the blob and rebased to a pointer, the selection face swapped to 0 and
+  faces 1.. bubble-sorted by mean Y (`0x4CB370`), X and Z negated (`0x4CB590`), every face's
+  texture bound by `0x42A140`'s rule to a copied GAF frame or sequence with its flags, the tree
+  walked once with the walk's bounds (256 pieces, 4 096 vertices and 512 faces a piece, a piece
+  reached twice refused).
 - **The arena** is one `VirtualAlloc(MEM_TOP_DOWN)` block, refused whole unless it lies inside
   (0x600000, `tagpu_user_top()`], so every pointer in it passes the readers' range filters by
   construction. It is published by one interlocked store and never freed.
@@ -441,7 +450,7 @@ its length; TNT offsets and tile indices against the file and its count; GAF dim
 
 | State | Owner | Written by | Read by |
 |---|---|---|---|
-| the mount-list copy and the current directory | game thread, at the first open | `tagpu_wiki.c` through `tagpu_replays.c` | handed by value to the 3D loader thread, then its own |
+| the mount-list copy, the `language` value, the folder names and the current directory | game thread, at the first open | `tagpu_wiki.c` through `tagpu_replays.c` | handed by value to the 3D loader thread, then its own |
 | the 3D arena: tiles, the stage's R8 terrain atlas, feature frames and definitions, models with bound textures, Create() masks, the resolution report | published once by the 3D loader thread, immutable, never freed | the loader | the render thread (`tagpu_wikiworld.c`, the wiki instances) |
 | the record's stage part, with types, facings, tick and entry | the packet | the game thread's fill | the render thread |
 | the wiki atlases (a `TAGPU_GAFATLAS` for features, the wiki render3do's unit atlas), the wiki bake caches, the wiki posedraw arenas, the three hand-overs, the target's geometry | render thread | `tagpu_wikiworld.c` | the wiki pass instances, in the same render-loop iteration |

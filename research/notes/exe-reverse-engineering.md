@@ -16871,6 +16871,102 @@ Patch Loader write it at run time (ProTA `4.8`, Mayhem `11.3.0`). Twilight leave
 its own text in a gadget of its `mainmenu.gui`. [DISASSEMBLED, and read from the compatibility
 fixtures, 2026-10-02.]
 
+### How the engine resolves a path, a unit's files and a model's textures: the rules the wiki's asset loader repeats [DISASSEMBLED 2026-10-26, MEASURED on retail]
+
+The in-game wiki's 3D asset loader (`tagpu_wikiasset.c`, over `tagpu_vfs.c`, `tagpu_hpi.c` and
+`tagpu_tdf.c`; [the 3D stage plan](ingame-wiki-3d-stage-plan.md), landing 6e) reads the player's
+archives on a thread of its own and must find the copy the running game draws. These are the
+rules it repeats; it calls none of these functions and reads no engine memory but what
+`tagpu_replays.c` copies on the game thread (the mount list above, `language` and the folder
+names). Established by the landing's scouts' disassembly, with the points marked re-read for the
+landing; MEASURED by the native load's equality with an independent Python resolution on retail
+(`tools/wiki/assetcheck.py`).
+
+**Opening a path, `0x4BB2E0(path, mode)`.** The loose file first (`0x4E4990`, the CRT open,
+relative to the current directory), then the first archive of the mount list whose directory
+holds the path as a file. The archive lookup `0x4BB4E0` splits the path at `\` and scans each
+directory level's 9-byte entries **last to first** with `_stricmp 0x4F8A70`, which folds `A`..`Z`
+alone while the C locale handle `[0x52A018]` is 0 (no reference sets the locale). So of two
+entries of one name in one directory, the later wins.
+
+**The path builder `0x4290F0(out, dir, name, ext)`** (re-read for the landing at `0x429114`): it
+tries `"<dir>-<language>\<name>"` (`0x503378`) first and keeps it if `0x4BB5B0` opens it, else
+`"<dir>\<name>"`; with an `ext`, the name is cut at its last `.` (`0x4BB0F0`) and `"." + ext`
+appended. `0x435430`, the map builder, does the same (`0x4354E3`).
+
+**Enumerations list each path once, from the first source that has it.**
+- `0x4BC4B0`/`0x4BC640` walk the loose files (`_findfirst`/`_findnext`) and then the archives in
+  mount order, each directory's entries **forwards**, skipping an entry that fails the wildcard
+  match `0x4BC370` (`*` and `?`, both sides upper-cased by `0x4E71C0`) or whose flag byte has
+  bit 1 (`test byte [edi+8],2` at `0x4BC735`).
+- **Bit 1 is the shadow mark**, written only by `0x4BE320`, which `InitTAHPIAry 0x41D4C0` calls
+  last (`0x41D688`): it clears the bit everywhere, then `0x4BE400("", -1, 1)` walks every source
+  (the loose files as source −1) and, for each **file** of source *k*, looks the same path up in
+  every later archive and marks a non-directory hit (`0x4BE658..0x4BE65B`). Directories are never
+  marked. The marks are as current as the last `0x41D4C0` call.
+- `0x4BCA30(pattern, dirsOnly, vec)` stores bare names; `0x4BCB50(dir, filter, vec, start, flag)`
+  stores `"<dir>\<name>"` (`0x504594`) and recurses into a subdirectory **at once, within the
+  source it was found in** (`start = k, flag = 0`; re-read for the landing at
+  `0x4BCC1F..0x4BCC5B`).
+- MEASURED (retail, 30 archives): `units\*.FBI` lists 821 entries without the mark and 278 with
+  it, the measured `UNITINFOCount` less `None`.
+
+**A unit type in a level** (`0x42D2E0`'s per-type loop): `units\<UnitName>.FBI` **by path**
+(`0x4290F0(buf, "units", def+0x20, "FBI")` at `0x42D709`), not by enumeration; the model
+`objects3d\<Objectname, else UnitName>.3DO` (`def+0x80`, 0x20 bytes, the default copied at
+`0x42C0D1..0x42C0EA`; built at `0x42D759`, loaded by `0x4CB560` at `0x42D766`, a missing model
+fatal through `0x4B6290`); the script `scripts\<UnitName>.COB` (`0x42D8E5`), never by
+`Objectname`. Two FBIs sharing a `UnitName` give two types, both read from the file of that name.
+
+**The 3DO in memory is the file reshaped** (`0x4CB560` → `0x4CB4C0`, `0x4CB370`, then the caller's
+`0x4CB590` and `0x42A140`):
+- `0x4CB4C0` rebases the node's `+0x1C` name and `+0x20` (when nonzero), `+0x24` vertices and
+  `+0x28` faces (always), `+0x2C` sibling and `+0x30` child (when nonzero, each recursed), and each
+  face's `+0x08` (when nonzero), `+0x0C` indices (always) and `+0x10` texture name (when nonzero).
+  Nothing is bounded.
+- `0x4CB370`, at the end of every node: when the selection primitive `+0x0C` is not −1 and there
+  are faces, face `[sel]` and face 0 swap their 32 bytes and `+0x0C` becomes 0; faces `[1, n)` are
+  then bubble-sorted ascending by `Σ y / vcount` (a 32-bit sum, `idiv` truncating), equal keys
+  keeping their order. A face of 0 vertices divides by zero (no stock face has one: MEASURED).
+- `0x4CB590`: every vertex's X and Z and the node's `+0x10`/`+0x18` negated, recursively.
+- **The binder `0x42A140(node, name)`** (re-read for the landing at `0x42A195..0x42A295`): for each
+  face with a texture name it clears FF_TEAM (bit 2); takes the **first GAF of the texture bank**
+  holding the name (`0x4B8D40`, `_stricmp`, the first sequence of that name); else `logos.GAF`,
+  setting FF_TEAM only for exactly 10 frames (`0x42A1F2`); else writes `+0x00 = 0xD1` and FF_FLAT
+  and stops. A sequence of more than one frame gets the anim state `0x4B8B30` writes (u16 `+0x10`
+  = 0, u16 `+0x12` = `[seq+0x2C]`, byte `+0x14` = `[seq+2]`, `+0x18` = the sequence) and FF_ANIM;
+  otherwise `+0x10` = `[seq+0x28]` and FF_ANIM cleared. A face with no texture name is not touched.
+  A sequence of 0 frames reads past its table (the loader takes such a sequence as a miss).
+
+**The texture bank `0x42A440`**, per level on the loader thread (`0x49189D`): it enumerates
+`"textures\*.GAF"` (`0x503720`, `0x50372C`, `0x502E38`), counts the listing with `0x4BC930`, sets
+the bank count to **count − 1** (`0x42A480`), skips `logos.GAF` (`0x503704`, `_stricmp` at
+`0x42A4CD`) and loads every other entry through the builder and `0x4B8C60`. With no `logos.GAF` in
+the folder the last GAF loaded is never searched. `logos.GAF` is a second bank, `textures\logos`
+(`0x504734`) loaded once at init by `0x4318C0` (`0x491486`). MEASURED: 10 bank GAFs on retail.
+
+**The GAF in memory, `0x4B8C60`**: the file rebased in place, nothing decoded. The sequence count
+is the **signed** i16 at `+4`; each sequence's frame entries (`+0x28`, stride 8) have only their
+first dword rebased; each frame's `+0x10`, and, when its sub-frame count is nonzero, each
+sub-frame offset and that sub-frame's `+0x10`. The sub-frame count is the **byte** at `+0x0A`
+(re-read for the landing at `0x4B8CC0`).
+
+**A feature**, `LoadFeature 0x4224B0`: the first TDF of `0x4BCB50("features", "*.tdf")`
+(`0x502C7C`, `0x502C88`) that holds the section; its GAF `anims\<filename>.GAF` (`0x502E30`), its
+model `objects3d\<object>.3DO` through `0x42A2C0`.
+
+**The folder names a mod renames in place** (`.data`, every reference passes them as a path or
+pattern [INFERRED: none writes them]): `units` `0x503920`, `textures` `0x503720`, `logos`
+`0x504734`, `logos.GAF` `0x503704`, `objects3d` `0x5036E4`, `scripts` `0x503740`, `anims`
+`0x502E30`, `features` `0x502C7C`. Escalation renames `units` to `unitsE`; TA Zero `units`,
+`textures`, `logos` and `logos.GAF` to `ZUnits`, `Textures`, `logoz`, `logoz.GAF` (MEASURED on
+the compatibility fixtures' executables). The `language` value `0x51FB50` (above, the path
+builder) is set once by WinMain's init.
+
+**Not established**: run-time patches of these strings by a DLL (TADR's, the loaders); whether a
+mod adds a file layer of its own. The loader reads what the engine mounted at the wiki's first
+open: an archive mounted later in the process (a RESTART's `0x41D4C0`) is not seen.
+
 ### The palette the screen is presented with, the way out of a game, and the loading screen [VERIFIED 2026-09-07, Phase E G15d]
 
 Read for [the GL UI renderer](gui-renderer.html) §12. The twin resolves its indices through a
@@ -19190,13 +19286,11 @@ wrote 32).
   handled: `.hpi`, `.ufo`, `.ccx`, `.gp3`. The engine's hardcoded top-level directory
   names live in `.data`: `units` `0x503920`, `weapons` `0x50392C`, `features`
   `0x502C7C`, `scripts` `0x503740`. [VERIFIED]
-- **Whether the loader is table-driven — and thus whether a *new* archive type could
-  be registered — is NOT established.** Nobody has published the mount/enumeration
-  routine. The precise **override precedence order between archive types is also
-  unverified**: the definitive TAU thread on the subject
-  (`tauniverse.com/forum/showthread.php?t=39737`, "Requesting help about hpi, ccx,
-  gp3, ufo priorities") is behind Cloudflare and could not be read. Do not trust any
-  ordering rule you have not tested. [GAP]
+- **The mount routine and the precedence are now disassembled**: *Where the engine looks for
+  archives* (the mount order, `InitTAHPIAry 0x41D4C0`) and *How the engine resolves a path, a
+  unit's files and a model's textures* (loose first, then the first archive in mount order; each
+  path listed once in an enumeration). Whether a *new* archive type could be registered is not
+  established.
 - TA registers itself with DirectPlay under the exe name `totala.exe`
   (`ta-forever/gpgnet4ta`). [VERIFIED]
 
@@ -19211,8 +19305,8 @@ effect-pool limits; the HPI/SQSH format.
 **Folklore, or unverified** — the 0x90A50/0x90A60 unit-cap offsets (repeated
 everywhere, never with a disassembly justification); the semantics of most `+debug`
 commands; the "5000 unit patch" family, circulating as prebuilt binaries with no
-published byte tables; the ini keys' availability on retail v3.1; all archive
-precedence claims.
+published byte tables; the ini keys' availability on retail v3.1. (The archive precedence, once folklore, is
+disassembled: *How the engine resolves a path*.)
 
 **Heuristic:** a claim tracing to TADR source is testable and probably right — the code
 refuses to apply a patch whose `expected` bytes don't match. A forum post quoting a
@@ -19225,8 +19319,9 @@ file offset with no disassembly should be verified before you build on it.
    loadable into a disassembler. Reconstructing a symbol table from
    `HardCodeFunctions.cpp` + `tamem.h` would be a genuinely valuable, and quite
    mechanical, first contribution.
-2. **The archive mount routine and override precedence.** The highest-value unknown
-   for a modding project, and it is blocked partly by TAU being unreachable.
+2. **The archive mount routine and override precedence** — no longer a gap here: both are
+   disassembled in *Where the engine looks for archives* and *How the engine resolves a path, a
+   unit's files and a model's textures*.
 3. **The command table's own base address and length.** We know entries are
    `{name, fn, level}`, we know one entry's run-level byte is at `0x501DF4`, and we
    know how to *append* a table — but the built-in table's start address and entry

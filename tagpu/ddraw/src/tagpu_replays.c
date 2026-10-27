@@ -1718,9 +1718,11 @@ int tagpu_replays_archive_paths(char (*out)[ARC_PATHMAX], int max)
    0x51FB50 that the path builder 0x4290F0 puts in "<dir>-<language>\" (WinMain's init sets it once,
    from the registry, "english" when empty: 0x49E9FC..0x49EA27), and the asset folders' names in
    the running executable's .data, which a mod renames in place (Escalation's `unitsE`, TA Zero's
-   `ZUnits` and `logoz`: the 3D stage plan's batch D2). Neither is written after the init, so the
-   copy is the engine's. BOUND: each string within its buffer; one that is not terminated there is
-   given as "", which resolves nothing. */
+   `ZUnits` and `logoz`: the 3D stage plan's batch D2). Every engine instruction that names one of
+   the folders passes it as a path or pattern [INFERRED: none writes it]; a DLL patching them at
+   run time is not checked. The game thread, which runs the engine's own loads, is the one copying.
+   BOUND: each string within its buffer; one that is not terminated there is given as "", which
+   resolves nothing. */
 #define VA_LANGUAGE   0x0051FB50u
 static void engine_name(char* out, size_t cap, uintptr_t va)
 {

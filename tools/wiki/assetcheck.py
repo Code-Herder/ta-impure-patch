@@ -27,9 +27,11 @@ against an independent Python resolution of the same install.
 No game is run and nothing is written into the repository but the test's executable, which `*.exe` ignores.
 """
 import argparse
+import atexit
 import json
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -490,9 +492,21 @@ def reference(gamedir, exe, language, mounts=None):
 
 # --------------------------------------------------------------------------- the comparison
 
-def diff(a, b, path="", out=None):
+def pak_of_tree():
+    """art/wiki/ packed as the DLL packs it, into a file that lasts the process."""
+    tmp = Path(tempfile.mkdtemp(prefix="assetcheck-"))
+    atexit.register(shutil.rmtree, tmp, True)
+    pak = tmp / "wiki.bin"
+    subprocess.run([sys.executable, str(REPO / "tools/hudpak.py"), "--set", "wiki", str(REPO / "art/wiki"), str(pak)], check=True)
+    return pak
+
+
+def diff(a, b, path="", out=None, exact=False):
+    """Where two reports differ, `arena_bytes` aside (the arena's own structs hold pointers, 4 bytes
+    in the DLL and 8 natively). Between two runs of the C load (`exact`) a refusal's words must
+    agree as well; against the Python reference only whether there is one."""
     out = [] if out is None else out
-    if path.endswith(".why") or path.endswith(".refused"):
+    if not exact and (path.endswith(".why") or path.endswith(".refused")):
         if (a is None) != (b is None):
             out.append(f"{path}: {a!r} != {b!r}")
         return out
@@ -503,12 +517,12 @@ def diff(a, b, path="", out=None):
             if k not in a or k not in b:
                 out.append(f"{path}.{k}: only in {'C' if k in a else 'Python'}")
             else:
-                diff(a[k], b[k], f"{path}.{k}", out)
+                diff(a[k], b[k], f"{path}.{k}", out, exact)
     elif isinstance(a, list) and isinstance(b, list):
         if len(a) != len(b):
             out.append(f"{path}: {len(a)} items != {len(b)}")
         for i, (x, y) in enumerate(zip(a, b)):
-            diff(x, y, f"{path}[{i}]", out)
+            diff(x, y, f"{path}[{i}]", out, exact)
     elif a != b:
         out.append(f"{path}: {a!r} != {b!r}")
     return out
@@ -541,14 +555,11 @@ def main():
     exe = Path(a.exe) if a.exe else None
     if not a.no_build:
         build()
-    with tempfile.TemporaryDirectory() as tmp:
-        pak = Path(tmp) / "wiki.bin"
-        subprocess.run([sys.executable, str(REPO / "tools/hudpak.py"), "--set", "wiki", str(REPO / "art/wiki"), str(pak)], check=True)
-        native, log = run_load(gamedir, pak, a.mounts, exe, a.language)
-        print(f"assetcheck: native {log.splitlines()[-1] if log else ''}")
-        if a.report:
-            Path(a.report).write_text(json.dumps(native, indent=1) + "\n")
-            return 0
+    native, log = run_load(gamedir, pak_of_tree(), a.mounts, exe, a.language)
+    print(f"assetcheck: native {log.splitlines()[-1] if log else ''}")
+    if a.report:
+        Path(a.report).write_text(json.dumps(native, indent=1) + "\n")
+        return 0
     mounts = None
     if a.mounts:
         mounts = [ln.strip() for ln in Path(a.mounts).read_text().splitlines() if ln.strip()]
