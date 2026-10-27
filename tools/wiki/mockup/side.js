@@ -13,6 +13,11 @@ const WikiSide = (() => {
   const COL = 128;                 // the engine's panel width, whatever the HUD scale
   const MINIMAP = 126;             // 0x466780: the minimap picture's long side
   const PRESSED_DX = 1;            // GUI_ButtonDraw 0x4A5F40 moves a pressed button's text one pixel right and down
+  /* What lies where nothing else is painted -- under and below a screen shorter than the column, in a panel
+     picture's transparent pixels: palette index 0. The HUD pass 0x467D70 fills its whole surface with 0
+     (SurfaceFill 0x4C6890 at 0x467D87) before PANELSIDE, DISASSEMBLED; all six compat setups' captures show (0, 0, 0)
+     there, index 0 of each install's palette (MEASURED 2026-10-27). */
+  const CLEAR = 0;
 
   /* THE MINIMAP'S PICTURE, 0x466780: the long side 126 pixels, the short one trunc(126 * short / long), centred on the
      short axis inside the 128 x 128 square. The extent is THE STAGE MAP (W, H world units), where the engine uses its
@@ -26,9 +31,7 @@ const WikiSide = (() => {
   // extent, each step truncated as the engine's integer arithmetic does
   const dotAt = (x, z, m, W, H) => [Math.trunc(Math.trunc(x) * m.w / W), Math.trunc(Math.trunc(z) * m.h / H)];
 
-  /* INTERIM (spec 2.3, until capture C2 shows how Mayhem and ProTA draw a one-frame picture): pressed is frame 0 moved
-     one pixel right and down, greyed is frame 0 under 50 % black. In palette indices, 50 % black is this remap: each
-     index to the palette entry nearest (squared RGB distance, the first index on a tie) to half its colour. */
+  // the palette entry nearest (squared RGB distance, the first index on a tie) to a colour
   function nearest(pal, r, g, b) {
     let best = 0, bd = Infinity;
     for (let j = 0; j < 256; j++) {
@@ -37,24 +40,18 @@ const WikiSide = (() => {
     }
     return best;
   }
-  function halfTable(pal) {
-    const t = new Uint8Array(256);
-    for (let i = 0; i < 256; i++) t[i] = nearest(pal, pal[i * 4] >> 1, pal[i * 4 + 1] >> 1, pal[i * 4 + 2] >> 1);
-    return t;
-  }
-
   /* THE COLUMN, 128 x layout.height, for one view (spec 5.2). `art` is a pack read by read(); `base` the minimap's base
      picture (geometry's w x h palette indices: the pack's art.minimap.bases[entry]) or null, when the minimap is left to the
-     whitebox (the result's `minimap` false); mapW and mapH the stage map's extent in world units. In order:
-     PANELSIDE; the minimap -- the base under the fog, the dots, the camera box; the routed screen -- its panel
-     picture, then each drawn gadget's frame for its state. Returns { idx, a, h, minimap }, a pixel painted where a
-     is 1. */
+     whitebox (the result's `minimap` false); mapW and mapH the stage map's extent in world units. In order: the
+     engine's black (CLEAR) over the whole column; PANELSIDE; the minimap -- the base under the fog, the dots, the
+     camera box; the routed screen -- its panel picture, then each drawn gadget's frame for its state. Returns
+     { idx, a, h, minimap }, a pixel painted where a is 1, which the black clear makes every pixel. */
   function compose(art, layout, view, base, mapW, mapH) {
-    const sv = view.side, H = sv.h, idx = new Uint8Array(COL * H), a = new Uint8Array(COL * H);
+    const sv = view.side, H = sv.h, idx = new Uint8Array(COL * H).fill(CLEAR), a = new Uint8Array(COL * H).fill(1);
     const S = art.sheet;
     // a frame [sx, sy, w, h, hx, hy] with its top left at (dx, dy), clipped to clip = [x0, y0, x1, y1) and the
-    // column, skipping the key index (-1: none); `map` remaps each index (the one-frame greyed state)
-    const blit = (f, dx, dy, key, clip, map) => {
+    // column, skipping the key index (-1: none)
+    const blit = (f, dx, dy, key, clip) => {
       const [sx, sy, w, h] = f;
       const x0 = Math.max(dx, clip[0], 0), x1 = Math.min(dx + w, clip[2], COL);
       const y0 = Math.max(dy, clip[1], 0), y1 = Math.min(dy + h, clip[3], H);
@@ -63,14 +60,15 @@ const WikiSide = (() => {
         for (let x = x0; x < x1; x++) {
           const p = S.px[src + x];
           if (p === key) continue;
-          idx[dst + x] = map ? map[p] : p; a[dst + x] = 1;
+          idx[dst + x] = p; a[dst + x] = 1;
         }
       }
     };
     const ALL = [0, 0, COL, H];
-    // a panel picture and PANELSIDE land at their origin minus the hotspot (0x4B0230 passes the origin and
-    // CopyGafToContext 0x4B7F90 subtracts the hotspot)
-    if (art.panelside) { const f = art.panelside.f; blit(f, -f[4], -f[5], art.panelside.key, ALL); }
+    /* PANELSIDE lands with its top left at (0, 0) whatever its hotspot: 0x467D70 passes the frame's own hotspot as
+       the point (0x467E30..0x467E3C) and CopyGafToContext 0x4B7F90 subtracts it again, DISASSEMBLED. TA Zero's is
+       128 x 128 with its hotspot at (64, 64), and its capture shows it at (0, 0) (MEASURED 2026-10-27). */
+    if (art.panelside) blit(art.panelside.f, 0, 0, art.panelside.key, ALL);
 
     let minimap = false;
     const m = geometry(mapW, mapH), M = view.map;
@@ -114,15 +112,21 @@ const WikiSide = (() => {
       scr.gadgets.forEach((g, i) => {
         const st = sv.state[i], pic = sa.pics[i];
         if (st === -1 || st == null || !pic || pic.from === 'label' || !pic.frames || !pic.frames.length) return;
-        const F = pic.frames, n = F.length, [gx, gy] = g.rect;
-        if (n === 1) {
-          // INTERIM, one frame (see halfTable)
-          const d = st === 1 ? PRESSED_DX : 0;
-          blit(F[0], gx + d, y0 + gy + d, pic.key, ALL, st === 2 ? art.half : null);
-          return;
+        const F = pic.frames, n = F.length, [gx, gy, gw, gh] = g.rect;
+        // INTERIM (spec 2.3), pressed with one frame: frame 0 moved one pixel right and down. The engine draws no
+        // picture there (frame 1 is past the sequence: 0x4B7F30 returns none and 0x4A6176 skips the blit)
+        const d = n === 1 && st === 1 ? PRESSED_DX : 0;
+        const f = n === 1 ? F[0] : st === 0 ? F[0] : st === 1 ? F[1] : (pic.attribs & 0x100) ? F[n - 1] : F[Math.min(2, n - 1)];
+        blit(f, gx + d, y0 + gy + d, pic.key, ALL);
+        /* GREYED, the engine tints the gadget's whole rect once its frame is drawn, what lies under the frame's
+           transparent pixels included (0x4A699B..0x4A69BA, DISASSEMBLED): the grey remap, then the box shader at
+           level -20, which the pack composes into one table (gfx.py greyed_table). Not for attribs 0x100, whose last
+           frame is the greyed picture, nor for a checkbox (attribs 0x80), as GUI_ButtonDraw decides at
+           0x4A607E..0x4A6106. Without the table (the install has no PALETTE.SHD) the frame stands untinted. */
+        if (st === 2 && art.greyed && !(pic.attribs & 0x180)) {
+          for (let y = Math.max(y0 + gy, 0); y < Math.min(y0 + gy + gh, H); y++)
+            for (let x = Math.max(gx, 0); x < Math.min(gx + gw, COL); x++) idx[y * COL + x] = art.greyed[idx[y * COL + x]];
         }
-        const f = st === 0 ? F[0] : st === 1 ? F[1] : (pic.attribs & 0x100) ? F[n - 1] : F[Math.min(2, n - 1)];
-        blit(f, gx, y0 + gy, pic.key, ALL);
       });
     }
     return { idx, a, h: H, minimap };
@@ -138,13 +142,14 @@ const WikiSide = (() => {
     return out;
   }
 
-  /* A PACK READ AND CHECKED (spec 2.4): side.json with its sheet, palette and seen remap, each a file beside it.
+  /* A PACK READ AND CHECKED (spec 2.4): side.json with its sheet, palette, seen remap and greyed tint, each a file
+     beside it.
      Every number is data until checked: a frame whose rect leaves the sheet, a picture list that does not match its
      screen's gadgets, a palette or remap of the wrong size refuses that element, which is reported in `problems`
      and falls back as the spec says (a picture to a labelled button; a missing PANELSIDE or panel to nothing; a
      pack without its sheet or palette has no art at all). The layout is returned as found: the caller checks it
      with WikiSim.checkLayout and falls back to the fixture. */
-  function read(json, sheet, pal, seen) {
+  function read(json, sheet, pal, seen, greyed) {
     const problems = [], art = { screens: {} };
     if (!json || json.format !== 1) return { layout: null, art: null, minimap: {}, problems: ['side.json: format is not 1'] };
     const A = json.art || {}, sh = A.sheet || {};
@@ -157,7 +162,9 @@ const WikiSide = (() => {
     if (!pal || pal.length !== 1024) return { layout: json.layout || null, art: null, minimap, problems: ['the palette is not 256 x RGBA'] };
     art.sheet = { px: sheet, w: sh.w, h: sh.h };
     art.pal = pal;
-    art.half = halfTable(pal);
+    // without its tint a greyed button is its frame alone (compose)
+    if (greyed && greyed.length === 256) art.greyed = greyed;
+    else problems.push('greyed.bin: not 256 bytes; greyed buttons are drawn untinted');
     // a panel with no picture, INTERIM (compose): stage.js's whitebox panel, #3a3a36, in the mod's palette
     art.panelFill = nearest(pal, 0x3a, 0x3a, 0x36);
     const okFrame = f => Array.isArray(f) && f.length === 6 && f.every(Number.isInteger) && f[0] >= 0 && f[1] >= 0 &&
@@ -200,10 +207,11 @@ const WikiSide = (() => {
     if (!r.ok) throw new Error(`${base}side.json: ${r.status}`);
     const j = await r.json(), A = j.art || {};
     const bin = f => f ? fetch(base + f).then(q => q.ok ? q.arrayBuffer().then(b => new Uint8Array(b)) : null, () => null) : Promise.resolve(null);
-    const [sheet, pal, seen] = await Promise.all([bin(A.sheet && A.sheet.file), bin(A.palette), bin(A.minimap && A.minimap.seen)]);
-    return { ...read(j, sheet, pal, seen), report: j.report || [], mod: j.mod };
+    const [sheet, pal, seen, greyed] = await Promise.all([bin(A.sheet && A.sheet.file), bin(A.palette),
+      bin(A.minimap && A.minimap.seen), bin(A.greyed)]);
+    return { ...read(j, sheet, pal, seen, greyed), report: j.report || [], mod: j.mod };
   }
 
-  return { compose, rgba, read, load, geometry, dotAt, halfTable, COL };
+  return { compose, rgba, read, load, geometry, dotAt, COL };
 })();
 if (typeof module !== 'undefined') module.exports = WikiSide;

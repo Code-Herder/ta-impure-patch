@@ -62,7 +62,8 @@ sidebar as the stage draws it: `gfx/side/<m>/side.json` and its binaries (spec: 
            player's side, each player type's pages, and every screen's buttons with their roles and rects
   art      `sheet.bin` (u8 palette indices, 1024 wide; every frame [sx, sy, w, h, hx, hy] with its GAF key),
            `pal.bin` (PALETTE.PAL as 256 RGBA), PANELSIDE, each screen's panel picture, one picture a button (`pics[i]`
-           belongs to `layout.screens[S].gadgets[i]`) and its labels, the minimap dots, and the minimap's colours:
+           belongs to `layout.screens[S].gadgets[i]`) and its labels, `greyed.bin` (the tint over a greyed button,
+           greyed_table), the minimap dots, and the minimap's colours:
            `unexplored` and `box` (GUI colours 0 and 0x0E), `seen.bin` (the grey remap) and one base per entry,
            `minimap/<entry>.bin`, shrunk with that install's own PALETTE.ALP
   defs     each player type's `canstop` (STOP's greyed state)
@@ -223,6 +224,56 @@ class Gaf:
         off = hit[1][k]
         hx, hy = struct.unpack_from("<hh", self.blob, off + 4)
         return ta3do.gaf_frame(self.blob, off), hx, hy
+
+    def drawn(self, seq, k=0):
+        """(GafFrame, hotspot x, hotspot y, pixels outside the frame) of frame k of `seq` as CopyGafToContext
+        0x4B7F90 draws it, or None. A frame with subframes (the byte at +0xA) draws none of its own pixels: the blit
+        calls itself for each subframe in order with the SAME destination point (0x4B7FC8..0x4B801A), and each lands
+        at that point minus its own hotspot (0x4B804A..0x4B805A), skipping its own transparent index; DISASSEMBLED.
+        The commongui order, tab and pager buttons are such stacks (a body and its lettering). The layers are
+        composed here into the frame's own w x h box, which stands at the point minus the frame's hotspot; a layer
+        pixel outside the box is counted, not drawn. The key is the frame's transparent index unless a layer draws
+        that index, then the lowest index none draws."""
+        hit = self.seqs.get(seq.lower())
+        if not hit or not 0 <= k < len(hit[1]):
+            return None
+        off = hit[1][k]
+        w, h, hx, hy, key = struct.unpack_from("<HHhhB", self.blob, off)
+        layers = []
+
+        def leaves(o, depth):
+            n, ptr = self.blob[o + 10], struct.unpack_from("<I", self.blob, o + 16)[0]
+            if not n:
+                lx, ly = struct.unpack_from("<hh", self.blob, o + 4)
+                layers.append((ta3do.gaf_frame(self.blob, o), lx, ly))
+                return
+            if depth > 8:
+                raise ValueError("subframes nested past 8 levels")
+            for sub in struct.unpack_from(f"<{n}I", self.blob, ptr):
+                leaves(sub, depth + 1)
+        leaves(off, 0)
+        if len(layers) == 1 and layers[0][1:] == (hx, hy) and (layers[0][0].width, layers[0][0].height) == (w, h):
+            return layers[0][0], hx, hy, 0
+        px, drawn, outside = bytearray(w * h), bytearray(w * h), 0
+        for f, lx, ly in layers:
+            ox, oy = hx - lx, hy - ly
+            for r in range(f.height):
+                for c in range(f.width):
+                    v = f.pixels[r * f.width + c]
+                    if v == f.transparent:
+                        continue
+                    x, y = ox + c, oy + r
+                    if 0 <= x < w and 0 <= y < h:
+                        px[y * w + x], drawn[y * w + x] = v, 1
+                    else:
+                        outside += 1
+        used = {px[i] for i in range(w * h) if drawn[i]}
+        if key in used:
+            key = next((i for i in range(256) if i not in used), key)
+        for i in range(w * h):
+            if not drawn[i]:
+                px[i] = key
+        return ta3do.GafFrame(w, h, px, key), hx, hy, outside
 
 
 # --------------------------------------------------------------------------- the game's cursors
@@ -807,6 +858,20 @@ def grey_table(pal):
     return bytes(pal_nearest(pal, ordered, (v, v, v)) for v in (sum(c) // 3 for c in pal))
 
 
+GREY_LEVEL = -0x14         # GUI_ButtonDraw's box-shader level over a greyed button (push 0xffffffec at 0x4A69B6)
+
+
+def greyed_table(grey, shd):
+    """The tint GUI_ButtonDraw 0x4A5F40 lays over a greyed button's whole rect once its frame is drawn
+    (0x4A699B..0x4A69BA, DISASSEMBLED): the grey remap 0x4BFE10 through globals+0xCC (grey_table, the table the
+    minimap's seen fog reads too), then the box shader 0x4BF4D0 at level -20, which reads globals+0xC4, PALETTE.SHD
+    (32 rows of 256), at row level + 32 = 12 with a SIGNED index (movsx at 0x4BF5E8), so an index of 0x80..0xFF
+    reads the row before. Two remaps of every pixel in a row are one table: T[p] = SHD[(12 - (g >= 128)) * 256 + g]
+    with g = grey[p]."""
+    row = GREY_LEVEL + 32
+    return bytes(shd[(row - (g >= 128)) * 256 + g] for g in grey)
+
+
 def gui_table(pal, guipal):
     """0x4AC7D0: guipal.PAL's 256 colours matched into the running palette, each to the first entry of least L1
     distance. main+0xDCB, the GUI colour table."""
@@ -1034,14 +1099,17 @@ class SideArt:
 
     def seq(self, got, name):
         """[(frame key, Pixels, hx, hy)] of sequence `name` in bank `got` (first of the name without case,
-        0x4B8D40), or None."""
+        0x4B8D40), each frame as the blit draws it (Gaf.drawn), or None."""
         if got is None or name.lower() not in got[0].seqs:
             return None
         gaf, path, where = got
         out = []
         for k in range(len(gaf.seqs[name.lower()][1])):
             key = f"{path.lower()}:{where}:{name.upper()}:{k}"
-            fr, hx, hy = gaf.frame(name, k)
+            fr, hx, hy, outside = gaf.drawn(name, k)
+            if outside and key not in self.frames:
+                self.report.append({"element": f"{path}:{name.upper()}#{k}", "note": f"{outside} subframe pixels "
+                                    f"fall outside the frame's {fr.width} x {fr.height} box and are left out"})
             self.frames.setdefault(key, fr)
             out.append((key, fr, hx, hy))
         return out
@@ -1064,8 +1132,10 @@ class SideArt:
 
 def button_frames(n, base, attribs):
     """The frames GUI_ButtonDraw 0x4A5F40 shows at rest, pressed and greyed: base; base + status (1); attribs 0x100
-    the last frame, else min(status + 2, n − 1) + base. Clipped to the sequence. A one-frame sequence gives one,
-    which the stage draws in every state by the section 2.3 interim (INTERIM until capture C2)."""
+    the last frame, else min(status + 2, n − 1) + base, under the greyed tint (greyed_table) unless attribs 0x100 or
+    0x80. Clipped to the sequence. A one-frame sequence gives one: greyed, the engine draws it under the tint like
+    any other; pressed, frame 1 is past the sequence, 0x4B7F30 returns no frame and the engine draws no picture
+    (0x4A6172, DISASSEMBLED), where the stage keeps the section 2.3 interim (frame 0 moved one pixel)."""
     if n <= 1:
         return [0]
     last = n - 1
@@ -1327,13 +1397,15 @@ def fill_downloads(recs, page, entries, name, report):
         report.append({"element": f"{name} download {unitname}", "slot": slot, "from": path})
 
 
-def side_pack(eng, mod, entries, descs, out, pal, report):
-    """The sidebar pack of one install (spec section 2.4): side.json, sheet.bin, pal.bin, seen.bin and the minimap
-    bases. Returns the side.json object; raises SideError when no layout can be made."""
+def side_pack(eng, mod, entries, descs, out, pal, report, player=None):
+    """The sidebar pack of one install (spec section 2.4): side.json, sheet.bin, pal.bin, seen.bin, greyed.bin and
+    the minimap bases. `player`, a list of unit types, stands for the player's units of the entries' scenes (the
+    first deciding the player's side), so a pack can be made for another scene's player, a capture's. Returns the
+    side.json object; raises SideError when no layout can be made."""
     units = unit_index(eng, report)
     sides = read_sides(eng, report)
     downloads = read_downloads(eng, report)
-    types_seen, first = player_units(entries)
+    types_seen, first = (list(player), list(player)) if player else player_units(entries)
     ps, why = player_side(sides, first, units)
     report.append({"element": "player side", "side": sides[ps]["name"], "rule": why})
     art = SideArt(eng, report)
@@ -1422,6 +1494,13 @@ def side_pack(eng, mod, entries, descs, out, pal, report):
         gui, gui_from = None, {"refused": f"no {eng.dirs['palettes']}\\{eng.dirs['guipal']}.PAL"}
     alp, alp_from = install_alp(eng, pal)
     seen = grey_table(pal)
+    # PALETTE.SHD as 0x42E1D0 opens it (palettes\<palette>.SHD); without it the engine generates the table
+    # (0x4BADF0), which this pack does not reproduce, and a greyed button is drawn untinted
+    shd = eng.load(eng.dirs["palettes"], eng.dirs["palette"], "SHD")
+    greyed = greyed_table(seen, shd[0]) if shd and len(shd[0]) >= 32 * 256 else None
+    report.append({"element": "greyed tint", **({"path": shd[1], "where": shd[2]} if greyed else
+                   {"refused": f"no {eng.dirs['palettes']}\\{eng.dirs['palette']}.SHD of 32 rows: greyed buttons "
+                               "are drawn untinted"})})
     bases = {}
     for eid, desc in descs.items():
         if desc is None:
@@ -1470,10 +1549,13 @@ def side_pack(eng, mod, entries, descs, out, pal, report):
                        "high": rect(*d["high"]) if d["high"] else None, "key": d["key"]}
     art_out["minimap"] = {"unexplored": gui[GUI_UNEXPLORED] if gui else None, "box": gui[GUI_BOX] if gui else None,
                           "seen": "seen.bin", "bases": bases}
+    art_out["greyed"] = "greyed.bin" if greyed else None
     out.mkdir(parents=True, exist_ok=True)
     (out / "sheet.bin").write_bytes(sheet)
     (out / "pal.bin").write_bytes(bytes(b for c in pal for b in (*c, 255)))
     (out / "seen.bin").write_bytes(seen)
+    if greyed:
+        (out / "greyed.bin").write_bytes(greyed)
     pack = {"format": FORMAT, "note": "derived from the local install by tools/wiki/gfx.py; gitignored, never "
             "committed", "mod": mod,
             "folders": {**{k: eng.dirs[k] for k in FOLDERS + ("anims", "commongui", "units")},
@@ -1533,6 +1615,9 @@ def main(argv=None):
                     help="gui=..,unitpics=..,gamedata=..,download=..: folder names that replace the executable's, "
                          "for a mod whose loader renames them in memory")
     ap.add_argument("--archive", help="the first archive pattern, replacing the executable's (same reason)")
+    ap.add_argument("--player-units", dest="player_units", default="",
+                    help="T1,T2,...: with --side-only, the player's unit types in place of the entries' (the first "
+                         "decides the player's side), to make a pack for a capture's own scene")
     args = ap.parse_args(argv)
 
     root = tavfs.find_install(args.gamedir)
@@ -1568,7 +1653,8 @@ def main(argv=None):
         out = out_root / "side" / args.mod
         report = []
         try:
-            pack = side_pack(eng, args.mod, entries, descs, out, palette, report)
+            pack = side_pack(eng, args.mod, entries, descs, out, palette, report,
+                             [t for t in args.player_units.split(",") if t] or None)
         except SideError as e:
             print(f"gfx.py: no sidebar pack for {args.mod}: {e}", file=sys.stderr)
             return 1

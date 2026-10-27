@@ -4,6 +4,8 @@
     .venv-undither/bin/python tools/wiki/sidepacks.py                 # every pack
     .venv-undither/bin/python tools/wiki/sidepacks.py stock prota     # these ones
     .venv-undither/bin/python tools/wiki/sidepacks.py --gamedir <retail TA install> [--out <folder>]
+    .venv-undither/bin/python tools/wiki/sidepacks.py tazero --player-units GOKCOMMANDER,ARMT1FEKBOT --out <folder>
+                                                       # another scene's player, a capture's (tools/wiki/sidedump.mjs)
 
 For each mod it lays out the setup's game folder as tools/compat/tacompat.py's `overlay` gives it -- the retail
 install's files, then the setup's on top, a later name replacing an earlier one without case -- as symlinks in a
@@ -35,11 +37,14 @@ import tacompat  # noqa: E402
 SETUPS = {"stock": "retail", "mayhem": "mayhem-11.3.0", "prota": "prota-4.8", "twilight": "twilight-2.0b98",
           "escalation": "escalation", "tazero": "tazero-alpha5"}
 
-# INTERIM (owner question Q-O5): what a mod's Community Patch Loader rewrites in the engine's memory at DllMain,
-# before the engine reads it (the Q6 scout answer), and which the executable file therefore does not show. Each
-# value is copied from the loader's resource list in the setup's dplayx.dll (MEASURED, `strings`); peek P1 reads the
-# live strings in game, and this record must equal them. TA Zero and Escalation rename their folders in the
-# executable file itself, which gfx.py reads.
+# What a mod's Community Patch Loader rewrites in the engine's memory at DllMain, before the engine reads it (the Q6
+# scout answer), and which the executable file therefore does not show (owner question Q-O5). Each value is copied
+# from the loader's resource list in the setup's dplayx.dll (MEASURED, `strings`). CHECKED 2026-10-27 against peek
+# P1, the live strings at 0x502820, 0x503360, 0x505FE4 and 0x503730 read at the main menu of each setup: Mayhem
+# guiM, gamedata, unitpicM, downloadsM; ProTA guiP, gamedatP, unitpicsP, downloadP; equal to this record, and
+# commongui (0x50925C) unrenamed in both. P1 did not read the archive pattern at 0x5028CC, so `archive` is still the
+# loader's list alone. TA Zero (ZGui, ZGameDat, ZUnitPic, ZBuildMenu) and Escalation (guiE, gamedatE, unitpicE,
+# downloadsE) rename their folders in the executable file itself, which gfx.py reads; P1 read the same names live.
 RECORDS = {
     "mayhem": {
         "folders": {"gui": "guiM",              # [00100E23] patch=4D: 0x502823, "guis" -> "guiM"
@@ -118,6 +123,8 @@ def main(argv=None):
     ap.add_argument("--gamedir", help="the retail install the setups lay their files over (default: TA3DO_GAMEDIR, "
                                       "else Steam's default library)")
     ap.add_argument("--out", help=f"write here instead of {OUT.relative_to(REPO)}/")
+    ap.add_argument("--player-units", dest="player_units", help="T1,T2,...: the player's unit types in place of the "
+                    "wiki entries' (gfx.py --player-units), for a pack of a capture's own scene")
     args = ap.parse_args(argv)
     mods = args.mods or list(SETUPS)
     unknown = [m for m in mods if m not in SETUPS]
@@ -145,6 +152,8 @@ def main(argv=None):
             if rec:
                 cmd += ["--folders", ",".join(f"{k}={v}" for k, v in rec["folders"].items()), "--archive",
                         rec["archive"]]
+            if args.player_units:
+                cmd += ["--player-units", args.player_units]
             r = subprocess.run(cmd, capture_output=True, text=True)
         print(f"{mod} ({setup['name']}): " + (r.stdout + r.stderr).strip().replace(str(out_root), "gfx"))
         if r.returncode != 0:
