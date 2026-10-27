@@ -10,7 +10,11 @@
 
    Positions are world units (a footprint cell is 16) and time is ticks, 30 a second. The player is owner 0. It is
    deterministic: no clock, no randomness, units visited in creation order, and only + - * / and Math.sqrt on
-   doubles (all correctly rounded), so another implementation can agree with it bit for bit.
+   doubles (all correctly rounded) plus Math.trunc (exact), so another implementation can agree with it bit for bit.
+
+   With a sidebar layout (the running mod's left sidebar, or art/wiki/side/fixture.json) the stage also holds the
+   game's 128-pixel column left of the map, x in [-128, 0): its page router, its buttons, and a demo's `build` input
+   played out as the cursor's trip to the button (research/notes/ingame-wiki-sidebar-plan.md, the owner's decisions).
 
    Runs in a page (the global WikiSim) and under node (module.exports). */
 const WikiSim = (() => {
@@ -19,6 +23,97 @@ const WikiSim = (() => {
   const PLACE_MAX_SITES = 256, PLACE_SPACING_MAX = 16, PLACE_ORDER_BUDGET = 4096, PLACE_LIST_CAP = 1024;
   const KEYS = ['shift', 'alt', 'ctrl', 'z', 'x', 'lmb', 'rmb'];
   const sq = v => v * v;
+  const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+
+  /* ---- the sidebar's layout ----
+     The column is the engine's panel width, 128 game pixels, whatever the HUD scale; it is at least 480 rows (the
+     PANELSIDE picture) and as tall as its tallest screen. The minimap fills its top 128 x 128 and is never
+     clickable. Every bound below is one tagpu_wikisim.h's WIKILAYOUT holds: a layout breaking any of them is refused
+     whole (this throws; the caller then gives the fixture), so no index read out of a layout addresses past it.
+
+     The layout: {format: 1, width: 128, height, sides: [{name, prefix, main2, gen}], player_side,
+     types: {TYPE: {pages: [screen of page 1, ...], orders: screen or null}},
+     screens: {NAME: {y, w, h, gadgets: [{name, role, rect: [x, y, w, h], unit, grey, hidden}]}}}.
+     A screen's y is its row in the column and a gadget's rect is in its screen's pixels. role is orders, buildtab,
+     build, prev, next, stop or order, as 0x41AA00 tells them apart by name; a build button's unit is its unit type,
+     or null (greyed) when the name is none; hidden marks an inactive gadget. Labels, fonts and the panel picture
+     are not gadgets here: they are the art's. types holds only the types with a page (def+0x22E != 0). */
+  const SIDE_W = 128, SIDE_MIN_H = 480, MINIMAP = 128;
+  const SIDE_SCREENS = 48, SIDE_GADGETS = 64, SIDE_PAGES = 7, SIDE_TYPES = 64, SIDE_ROWS = 1024;
+  const ROLES = ['orders', 'buildtab', 'build', 'prev', 'next', 'stop', 'order'];
+  function checkLayout(L) {
+    const no = what => { throw new Error(`the sidebar layout is refused: ${what}`); };
+    const obj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+    const name = v => typeof v === 'string' && v.length > 0;
+    const int = Number.isInteger;
+    if (!obj(L) || L.format !== 1) no('format is not 1');
+    if (L.width !== SIDE_W) no(`width is not ${SIDE_W}`);
+    if (!obj(L.screens)) no('screens is not an object');
+    const names = Object.keys(L.screens);
+    // SIDE_SCREENS: WIKILAYOUT's screen table
+    if (names.length > SIDE_SCREENS) no(`more than ${SIDE_SCREENS} screens`);
+    let rows = SIDE_MIN_H;
+    for (const n of names) {
+      const s = L.screens[n];
+      if (!obj(s) || !int(s.y) || !int(s.w) || !int(s.h) || s.y < 0 || s.w < 1 || s.w > SIDE_W || s.h < 1)
+        no(`screen ${n} has no integer y, w and h within the column`);
+      // SIDE_ROWS: the composed column's texture is 128 x 1024
+      if (s.y + s.h > SIDE_ROWS) no(`screen ${n} ends below row ${SIDE_ROWS}`);
+      rows = Math.max(rows, s.y + s.h);
+      // SIDE_GADGETS: a screen's gadget table, and view.side.state's length
+      if (!Array.isArray(s.gadgets) || s.gadgets.length > SIDE_GADGETS) no(`screen ${n} has no list of at most ${SIDE_GADGETS} gadgets`);
+      s.gadgets.forEach((g, i) => {
+        const at = `screen ${n} gadget ${i}`;
+        if (!obj(g) || !name(g.name) || !ROLES.includes(g.role)) no(`${at} has no name or no known role`);
+        // a rect inside its screen: a hit or a pressed frame never reads outside the screen it belongs to
+        const r = g.rect;
+        if (!Array.isArray(r) || r.length !== 4 || !r.every(int) || r[0] < 0 || r[1] < 0 || r[2] < 1 || r[3] < 1 ||
+            r[0] + r[2] > s.w || r[1] + r[3] > s.h) no(`${at}: the rect is not inside the screen`);
+        if (g.role === 'build' && !(g.unit === null || name(g.unit))) no(`${at}: a build button's unit is not a name or null`);
+        for (const k of ['grey', 'hidden']) if (k in g && typeof g[k] !== 'boolean') no(`${at}: ${k} is not a boolean`);
+      });
+    }
+    if (L.height !== rows) no(`height is not ${rows}, the column's rows`);
+    const screen = v => name(v) && own(L.screens, v);
+    if (!Array.isArray(L.sides) || !L.sides.length) no('sides is not a non-empty list');
+    L.sides.forEach((s, i) => {
+      if (!obj(s) || !name(s.name) || typeof s.prefix !== 'string' || !screen(s.main2) || !screen(s.gen))
+        no(`side ${i} has no name, prefix, or MAIN2 and GEN screens`);
+    });
+    if (!int(L.player_side) || L.player_side < 0 || L.player_side >= L.sides.length) no('player_side is not one of the sides');
+    if (!obj(L.types)) no('types is not an object');
+    // SIDE_TYPES: WIKI_MAX_DEFS, the unit types one entry can name
+    if (Object.keys(L.types).length > SIDE_TYPES) no(`more than ${SIDE_TYPES} types`);
+    for (const [t, T] of Object.entries(L.types)) {
+      // SIDE_PAGES: the page is unit+0x110 bits 23..25, a 3-bit field, so the engine reaches at most 7 numbered pages
+      if (!obj(T) || !Array.isArray(T.pages) || T.pages.length > SIDE_PAGES || !T.pages.every(screen))
+        no(`type ${t} has no list of at most ${SIDE_PAGES} page screens`);
+      if (!(T.orders === null || screen(T.orders))) no(`type ${t}: orders is not a screen or null`);
+      // def+0x22E != 0: a type with neither a numbered page nor an orders page is not in `types`
+      if (!T.pages.length && T.orders === null) no(`type ${t} has no page`);
+    }
+    return L;
+  }
+
+  /* ---- the build trip: a scripted `build` input played out through the sidebar ----
+     FIXED BUDGET: the trip takes TRIP ticks whatever the page, the pagers or the mod; the build button goes down at
+     t + TRIP_DOWN and is released at t + TRIP_UP, which is where it arms. Because the arm tick is fixed, `mode` and
+     everything else in the world are the same in every mod at every tick; only the cursor and the sidebar differ.
+     Row k is the trip through k pager presses (k <= 3, since the nearer way round 7 pages is at most 3): the glide
+     to the pager (to the button itself for k = 0), each press held `hold` ticks then `gap` ticks before the next,
+     the glide from the pager to the button, and the hover on it until TRIP_DOWN. tagpu_wikisim.h #defines the same
+     table; simparity compares them. */
+  const TRIP = 90, TRIP_DOWN = 45, TRIP_UP = 60;
+  const TRIP_ROWS = [
+    { glide: 30, hold: 0, gap: 0, back: 0, hover: 15 },
+    { glide: 12, hold: 15, gap: 3, back: 12, hover: 3 },
+    { glide: 9, hold: 10, gap: 3, back: 10, hover: 0 },
+    { glide: 6, hold: 8, gap: 3, back: 6, hover: 0 },
+  ];
+  // every row ends on the button's down: a row that does not would arm at another tick in another mod
+  TRIP_ROWS.forEach((r, k) => {
+    if (r.glide + k * (r.hold + r.gap) + r.back + r.hover !== TRIP_DOWN) throw new Error(`trip row ${k} does not end at ${TRIP_DOWN}`);
+  });
 
   /* ---- tagpu_placegeo.c, line for line. Sites are footprint first cells {cx, cz}. Every value is a small integer,
      so JS doubles hold the C's int64 arithmetic exactly; tdiv and fdiv are C's truncating and its floor division. ---- */
@@ -86,7 +181,7 @@ const WikiSim = (() => {
       units: cat('units'), selected: b.selected ?? a.selected ?? [], cursor: b.cursor ?? a.cursor ?? [0, 0] };
   }
 
-  function make(entry, demo, scripted) {
+  function make(entry, demo, scripted, layout) {
     const S = merge(entry, demo), D = entry.units, defIndex = Object.keys(D);
     const W = S.map.w, H = S.map.h, SM = S.map.surfaceMetal || 0, PACE = (entry.pace && entry.pace.build) || 1;
     const metal = new Array(W * H).fill(SM), fog = new Array(W * H).fill(0);
@@ -105,6 +200,21 @@ const WikiSim = (() => {
     const kind = t => def(t).extracts > 0 ? 'mex' : def(t).vent ? 'geo' : null;
     const strength = t => kind(t) === 'mex' ? def(t).extracts : def(t).energyMake || 0;
     const canBuild = (u, t) => (def(u.type).builds || []).includes(t);
+    const defined = t => typeof t === 'string' && own(D, t);
+
+    /* ---- the sidebar: on or off for the sim's whole life ----
+       A demo shows it when its `sidebar` says so, by default when the scene gives the player a mobile builder; Try it
+       shows it whenever the scene does, whatever the demo said. Off, nothing below the map rules runs: no column,
+       the cursor unclamped, and `build` arms at once. */
+    if (scripted && demo && 'sidebar' in demo && typeof demo.sidebar !== 'boolean')
+      throw new Error(`demo ${demo.id}: sidebar is not a boolean`);
+    const ON = !!layout && (() => {
+      const builder = S.units.some(s => (s.owner ?? 0) === 0 && mobile(s.type) && def(s.type).workerTime > 0);
+      return scripted && demo && typeof demo.sidebar === 'boolean' ? demo.sidebar : builder;
+    })();
+    const LAY = ON ? layout : null;
+    const typePages = t => ON && own(LAY.types, t) ? LAY.types[t] : null;
+    const npages = t => { const T = typePages(t); return T ? T.pages.length : 0; };
 
     /* ---- the grid ---- */
     const cellOf = v => Math.floor(v / CELL);
@@ -114,6 +224,14 @@ const WikiSim = (() => {
 
     /* ---- units. Each faces along a unit vector (hx, hz); walk says why a vector. ---- */
     let units = [], nextId = 1;
+    /* a unit joins the world. With the sidebar it carries its page state, unit+0x110: bp (bit 22, a numbered page
+       is shown rather than the orders page) and page (bits 23..25, 1..n). 0x485CD5 creates a unit whose type has
+       numbered pages with bit 22 set and page 1; any other unit has neither. */
+    function enter(u) {
+      if (ON) { const n = npages(u.type); u.bp = n >= 1; u.page = n >= 1 ? 1 : 0; }
+      units.push(u);
+      return u;
+    }
     // a scene unit's "facing": [x, z] as a unit vector, (0, 1) when absent; tagpu_wikidata.c refuses what this throws on
     function facing(f) {
       if (f == null) return [0, 1];
@@ -124,7 +242,7 @@ const WikiSim = (() => {
     }
     function add(type, owner, x, z, built, id, label, [hx, hz]) {
       const [fx, fz] = fp(type), u = { id: id || `u${nextId++}`, type, owner, built, reclaimed: 0, orders: [], sel: false, label: label || type };
-      if (mobile(type)) { Object.assign(u, { x, z, hx, hz }); return units.push(u), u; }
+      if (mobile(type)) { Object.assign(u, { x, z, hx, hz }); return enter(u); }
       return place(u, Math.round(x / CELL - fx / 2), Math.round(z / CELL - fz / 2));
     }
     /* a structure at its site. It faces (0, 1), toward the viewer, whatever its scene gives: TA's default heading
@@ -133,7 +251,7 @@ const WikiSim = (() => {
     function place(u, ox, oz) {
       const [fx, fz] = fp(u.type);
       Object.assign(u, { ox, oz, x: (ox + fx / 2) * CELL, z: (oz + fz / 2) * CELL, hx: 0, hz: 1 });
-      return units.push(u), u;
+      return enter(u);
     }
     const byId = id => units.find(u => u.id === id);
     const structures = () => units.filter(u => !mobile(u.type));
@@ -322,7 +440,7 @@ const WikiSim = (() => {
        one whose centre is nearer the cursor. */
     function quickChoice(shift) {
       if (st.mode || st.held.has('alt')) return null;
-      const { x, z } = st.cursor, target = unitAt(x, z);
+      const { x, z } = mapCursor(), target = unitAt(x, z);
       let desired = null, old = 0;
       if (target) {
         if (target.owner !== 0 || mobile(target.type) || target.built < 1 || !(desired = kind(target.type))) return null;
@@ -369,10 +487,203 @@ const WikiSim = (() => {
       }
       return hit;
     }
+
+    /* ---- the sidebar's rules; none of them runs with the sidebar off ---- */
+    const MW = W * CELL, MH = H * CELL;
+    /* where the cursor is: the column left of x = 0, the map, or the dead band under a map shorter than the column.
+       The map is closed at its far edges because the stage clamps a pointer beyond them onto exactly W x 16 or
+       H x 16, which the map rules have always read as the map. */
+    function over() {
+      if (!ON) return 'map';
+      const { x, z } = st.cursor;
+      return x < 0 ? 'side' : x <= MW && z <= MH ? 'map' : 'dead';
+    }
+    // the cursor the map rules read: clamped onto the map, so a drag released over the column selects up to its edge
+    const mapCursor = () => ON ? { x: Math.min(Math.max(st.cursor.x, 0), MW), z: Math.min(Math.max(st.cursor.z, 0), MH) } : st.cursor;
+    /* screen: the routed screen's name; shown: the shown unit (main+0x37E9C); cap: the gadget a press captured and the
+       button that pressed it (gi+0x64, one slot, so a second press takes it over); downOn: where each mouse button
+       went down, which decides whether its release runs the map rules; locked: the type a scripted build could not
+       reach in this layout */
+    const sb = { screen: null, shown: null, cap: null, downOn: {}, locked: null };
+    const screenOf = n => LAY.screens[n];
+    // a point of the stage in the column's own pixels is (x + 128, z); the minimap's 128 x 128 there takes no click
+    const onMinimap = (x, z) => x + SIDE_W >= 0 && x + SIDE_W < MINIMAP && z >= 0 && z < MINIMAP;
+    // half-open, as the stage's own hit rects are [INFERRED that the engine's are too, Q3]
+    const inRect = ([gx, gy, gw, gh], px, pz) => px >= gx && px < gx + gw && pz >= gy && pz < gy + gh;
+    const inside = (s, g, x, z) => x < 0 && !onMinimap(x, z) && inRect(g.rect, x + SIDE_W, z - s.y);
+    /* OWNER QUESTION Q-O1, the recommended answer: a build button is live only when the entry defines its unit and the
+       shown builder's list holds it, and greyed otherwise, so a button "comes alive" when an entry adds its unit
+       (decision 7's principle). Drawn normal and inert instead would be this function answering true for any named
+       unit and act() refusing the undefined ones. */
+    const buildLive = (g, shown) => !g.grey && defined(g.unit) && !!shown && canBuild(shown, g.unit);
+    /* A gadget's state as the stage draws it: -1 not drawn, 0 normal, 1 pressed or the current tab, 2 greyed (frame 2
+       at rest, GUI_ButtonDraw 0x4A5F40). The tabs follow bit 22 as 0x41A120 sets them; every order button but STOP is
+       greyed (decision 7: an entry that needs an order adds it to the simulation). */
+    function gadgetState(g, shown, pressed) {
+      if (g.hidden) return -1;
+      const n = shown ? npages(shown.type) : 0;
+      switch (g.role) {
+        case 'orders': return n >= 1 ? (shown.bp ? 0 : 1) : 2;
+        case 'buildtab': return n >= 1 ? (shown.bp ? 1 : 0) : 2;
+        case 'build': return buildLive(g, shown) ? +pressed : 2;
+        // [INFERRED] a selected mobile unit stands in for FBI canstop (Q4; capture C7, ARMSOLAR selected alone)
+        case 'stop': return selected().some(u => u.owner === 0 && mobile(u.type)) ? +pressed : 2;
+        case 'order': return 2;
+        default: return +pressed;
+      }
+    }
+    const live = s => s === 0 || s === 1;
+    // the gadget a press at (x, z) lands on: the first in screen order that is drawn, not greyed and holds the point
+    function gadgetAt(name, shown, x, z) {
+      const s = screenOf(name);
+      return s.gadgets.findIndex(g => live(gadgetState(g, shown, false)) && inside(s, g, x, z));
+    }
+    const sideStates = () => {
+      const s = screenOf(sb.screen), { x, z } = st.cursor;
+      return s.gadgets.map((g, i) => gadgetState(g, sb.shown, !!sb.cap && sb.cap.i === i && inside(s, g, x, z)));
+    };
+    /* THE PAGE ROUTER, 0x41B2E0, run from the frame loop at 0x4969B4: nothing of the player's selected shows the side's
+       MAIN2; EXACTLY ONE selected unit whose type has pages shows its numbered page while bit 22 is set, else its
+       orders page (<NAME>0.GUI) when the type has one; anything else, two builders of one type included, shows the
+       side's GEN, with the unit shown when there is exactly one. GEN and MAIN2 are the player's side's. The sim routes
+       after every input and every tick, where the engine re-routes a frame or more later: a known difference of at
+       most a frame. A screen change drops the capture, as the engine's page swap reloads the screen and its gadgets. */
+    function route() {
+      const sel = selected().filter(u => u.owner === 0), side = LAY.sides[LAY.player_side];
+      const u = sel.length === 1 ? sel[0] : null, T = u && typePages(u.type);
+      // u.page is 1..n for a type with n pages: enter() starts it at 1 and act() is its only other writer, wrapping
+      // within 1..n, so T.pages[u.page - 1] is always a page
+      const screen = !sel.length ? side.main2 : T && u.bp && u.page > 0 ? T.pages[u.page - 1] : T && T.orders ? T.orders : side.gen;
+      if (screen !== sb.screen) sb.cap = null;
+      sb.screen = screen;
+      sb.shown = u;
+    }
+    /* A BUTTON ACTS ON THE RELEASE INSIDE IT, as the engine's: 0x4A6AE0 returns 1 for a release inside a captured
+       button, 0x4A9E98 stores its index and 0x4AA797 calls the screen's handler 0x41AA00. The tabs, which act on the
+       press, come here too. PREV and NEXT step the shown unit's page as 0x41BF10 and 0x41BDE0 do, wrapping within
+       1..n, and set bit 22; ORDERS and BUILD clear and set bit 22 (0x41C180). STOP empties the selected units' orders
+       and leaves the armed building armed [INFERRED, Q7]. A build button arms its building, the old `build` input's
+       effect; a mobile unit's button would queue it at a factory (0x419B00), which no entry has, so it does nothing. */
+    function act(g) {
+      const u = sb.shown, n = u ? npages(u.type) : 0;
+      if ((g.role === 'prev' || g.role === 'next') && n) {
+        u.page = g.role === 'next' ? (u.page === n ? 1 : u.page + 1) : (u.page < 2 ? n : u.page - 1);
+        u.bp = true;
+      } else if (g.role === 'orders' && n) u.bp = false;
+      else if (g.role === 'buildtab' && n) u.bp = true;
+      else if (g.role === 'stop') { for (const v of selected()) if (v.owner === 0) v.orders = []; }
+      else if (g.role === 'build' && defined(g.unit) && !mobile(g.unit)) { disarm(); st.mode = g.unit; st.drag = null; }
+      route();
+    }
+    // a press over the column: a tab acts now (attribs 0x10); any other button is captured, either mouse button alike
+    // (0x41AA00 never tests which one arms a structure)
+    function pressSide(b) {
+      const { x, z } = st.cursor, i = gadgetAt(sb.screen, sb.shown, x, z);
+      if (i < 0) return;
+      const g = screenOf(sb.screen).gadgets[i];
+      if (g.role === 'orders' || g.role === 'buildtab') act(g);
+      else sb.cap = { i, b };
+    }
+    // the release of the captured button: inside its gadget, still live, it acts; outside, nothing
+    function releaseSide() {
+      const c = sb.cap, s = screenOf(sb.screen), g = s.gadgets[c.i], { x, z } = st.cursor;
+      sb.cap = null;
+      if (live(gadgetState(g, sb.shown, false)) && inside(s, g, x, z)) act(g);
+    }
+
+    /* THE BUILD TRIP. A data input {build: T} at tick t arms nothing itself: it becomes generated inputs, a glide, the
+       pager presses and the button's own press, that go through exactly the path the player's clicks take in Try it.
+       They are made when tick t is fed, from the state at t, and the arm is the release at t + TRIP_UP whatever the
+       route (TRIP_ROWS says why it is fixed). */
+    const gen = [];
+    let genNext = 0, feeding = 0;
+    const centreOf = (s, g) => ({ x: -SIDE_W + g.rect[0] + g.rect[2] / 2, z: s.y + g.rect[1] + g.rect[3] / 2 });
+    /* the plan: the shown unit's first page holding a live T button, the pagers the nearer way round (a tie goes to
+       NEXT), and each press's point. Each point is the pager on the page it is pressed on, and every point is
+       checked to land on its gadget, so the release at t + TRIP_UP arms T in any layout this accepts. null: T
+       cannot be reached here. */
+    function planTrip(T) {
+      const u = sb.shown, TP = u && typePages(u.type), n = TP ? TP.pages.length : 0;
+      // no data input presses a tab, so bp is set in a scripted demo; a build met on the orders page is locked
+      if (!n || !u.bp) return null;
+      let p = 0, gi = -1;
+      for (let k = 1; k <= n && !p; k++) {
+        const i = screenOf(TP.pages[k - 1]).gadgets.findIndex(g => g.role === 'build' && g.unit === T && live(gadgetState(g, u, false)));
+        if (i >= 0) { p = k; gi = i; }
+      }
+      if (!p) return null;
+      const c = u.page, kNext = ((p - c) % n + n) % n, kPrev = ((c - p) % n + n) % n;
+      const dir = kNext <= kPrev ? 'next' : 'prev', k = Math.min(kNext, kPrev), presses = [];
+      for (let j = 0, page = c; j < k; j++) {
+        const name = TP.pages[page - 1], s = screenOf(name), i = s.gadgets.findIndex(g => g.role === dir && live(gadgetState(g, u, false)));
+        if (i < 0) return null;
+        const at = centreOf(s, s.gadgets[i]);
+        if (gadgetAt(name, u, at.x, at.z) !== i) return null;
+        presses.push(at);
+        page = dir === 'next' ? (page === n ? 1 : page + 1) : (page < 2 ? n : page - 1);
+      }
+      const s = screenOf(TP.pages[p - 1]), at = centreOf(s, s.gadgets[gi]);
+      if (gadgetAt(TP.pages[p - 1], u, at.x, at.z) !== gi) return null;
+      return { k, presses, button: at };
+    }
+    /* THE GLIDE, exact in both languages: step i of n from a to b is a + trunc((b - a) * (i*i*(3n - 2i)) / (n*n*n)),
+       each axis, evaluated in that order. Step n is b itself: the formula reaches b only when b - a is a whole
+       number, and the cursor must stand exactly on the button and exactly back where it started. */
+    const glideAt = (a, b, i, n) => i === n ? b : a + Math.trunc((b - a) * (i * i * (3 * n - 2 * i)) / (n * n * n));
+    function trip(T) {
+      const t = feeding, plan = planTrip(T);
+      /* OWNER QUESTION Q-O2, the recommended answer: a build this layout cannot reach stops the demo here, holding the
+         frame under the entry's "Turned off in this mod" badge (decision 4), rather than playing on unarmed */
+      if (!plan) { sb.locked = T; return; }
+      const a = { x: st.cursor.x, z: st.cursor.z }, R = TRIP_ROWS[plan.k], B = plan.button;
+      const push = (dt, ev) => gen.push({ at: t + dt, ev });
+      const glide = (from, to, n, t0) => {
+        for (let i = 1; i <= n; i++) push(t0 + i, { move: [glideAt(from.x, to.x, i, n), glideAt(from.z, to.z, i, n)] });
+      };
+      let cur = a;
+      if (plan.k) {
+        glide(a, plan.presses[0], R.glide, 0);
+        cur = plan.presses[0];
+        plan.presses.forEach((p, j) => {
+          const d = R.glide + j * (R.hold + R.gap);
+          // a mod whose pages move the pager: the cursor steps onto it, before the press of the same tick
+          if (p.x !== cur.x || p.z !== cur.z) push(d, { move: [p.x, p.z] });
+          push(d, { down: 'lmb' });
+          push(d + R.hold, { up: 'lmb' });
+          cur = p;
+        });
+      }
+      glide(cur, B, plan.k ? R.back : R.glide, plan.k ? R.glide + plan.k * (R.hold + R.gap) : 0);
+      push(TRIP_DOWN, { down: 'lmb' });
+      push(TRIP_UP, { up: 'lmb' });
+      glide(B, a, TRIP - TRIP_UP, TRIP_UP);
+    }
+    /* THE DATA RULE, refused here as tagpu_wikidata.c's loader refuses it: with the sidebar on, a build names a type;
+       nothing but a caption stands in its trip, the ticks (t, t + TRIP), nor after it in tick t; the demo lasts the
+       whole trip; and the left button is up when it starts, as the trip's own presses need it. */
+    function checkTrips(script, end) {
+      const captionOnly = e => Object.keys(e).every(k => k === 'at' || k === 'caption');
+      let lmb = false;
+      script.forEach((e, i) => {
+        if ('build' in e) {
+          const at = `demo ${demo.id}: the build at tick ${e.at}`;
+          if (typeof e.build !== 'string' || !e.build) throw new Error(`${at} names no type`);
+          if (!Object.keys(e).every(k => k === 'at' || k === 'build' || k === 'caption')) throw new Error(`${at} carries another input`);
+          if (lmb) throw new Error(`${at} starts with the left button held`);
+          const f = script.slice(i + 1).find(f => f.at < e.at + TRIP && !captionOnly(f));
+          if (f) throw new Error(`${at}: an input at tick ${f.at} stands in its trip, which ends at ${e.at + TRIP}`);
+          if (!(end >= e.at + TRIP)) throw new Error(`${at}: the demo ends at ${end}, inside its trip`);
+        }
+        if (e.down === 'lmb') lmb = true;
+        if (e.up === 'lmb') lmb = false;
+      });
+    }
+
     // the build-menu mode: the ghost is manual_cursor's snapped site (no legality), or where the cursor is, as the build
-    // cursor 0x4197D0 rounds it
-    function hover() {
-      const { x, z } = st.cursor, shift = st.held.has('shift');
+    // cursor 0x4197D0 rounds it. None while the cursor is off the map, though the gesture's evaluation goes on.
+    function hover() { const h = mapHover(); return over() === 'map' ? h : null; }
+    function mapHover() {
+      const { x, z } = mapCursor(), shift = st.held.has('shift');
       st.place = evaluate();
       if (st.mode) {
         const t = st.mode, [fx, fz] = fp(t), s = st.held.has('alt') ? null : snappedSite(t, x, z, false, shift);
@@ -388,7 +699,7 @@ const WikiSim = (() => {
     /* ---- the placement gesture, tagpu_place.c function for function ---- */
     // the engine's cursor site: the build cursor's rectangle, snapped as the ghost is
     function cursorSite() {
-      const t = st.mode, [fx, fz] = fp(t), { x, z } = st.cursor;
+      const t = st.mode, [fx, fz] = fp(t), { x, z } = mapCursor();
       const s = st.held.has('alt') ? null : snappedSite(t, x, z, false, st.held.has('shift'));
       return s ? { cx: s.ox, cz: s.oz } : { cx: origin(x, fx), cz: origin(z, fz) };
     }
@@ -433,7 +744,7 @@ const WikiSim = (() => {
     /* RING_TARGET: the unit under the cursor, any unit (0x48CD80), else a selected builder's queued build whose
        footprint holds the cursor's cell, first in selection order then queue order. As cells. */
     function ringTarget() {
-      const { x, z } = st.cursor, u = unitAt(x, z);
+      const { x, z } = mapCursor(), u = unitAt(x, z);
       if (u) { const [tw, th] = fp(u.type); return { tx: origin(u.x, tw), tz: origin(u.z, th), tw, th }; }
       const px = cellOf(x), pz = cellOf(z);
       for (const b of builders()) for (const o of b.orders) {
@@ -522,7 +833,8 @@ const WikiSim = (() => {
     // a move: the selected mobile units to points SPACING apart across the cursor, in selection order
     function moveOrder(shift) {
       const ms = selected().filter(u => u.owner === 0 && mobile(u.type));
-      ms.forEach((u, i) => assign(u, [{ k: 'move', x: st.cursor.x + (i - (ms.length - 1) / 2) * SPACING, z: st.cursor.z }], shift));
+      const c = mapCursor();
+      ms.forEach((u, i) => assign(u, [{ k: 'move', x: c.x + (i - (ms.length - 1) / 2) * SPACING, z: c.z }], shift));
     }
     // a right-click: Quick Build's when it has a choice -- on a queued site Shift cancels and a plain click is consumed
     // unchanged -- otherwise the game's own: assist an unfinished building of the player's, or move
@@ -533,7 +845,7 @@ const WikiSim = (() => {
         if (c.queued) { if (shift && c.queued === 2) unqueue(c); return; }
         return quickOrder(c, shift);
       }
-      const u = unitAt(st.cursor.x, st.cursor.z);
+      const { x, z } = mapCursor(), u = unitAt(x, z);
       if (u && u.owner === 0 && !mobile(u.type) && u.built < 1) {
         for (const b of builders()) assign(b, [{ k: 'build', type: u.type, ox: u.ox, oz: u.oz }], shift);
         return;
@@ -544,7 +856,7 @@ const WikiSim = (() => {
        ends. With Shift (0x43AFC0) the first build order of the builder's within 16 world units of the site is taken off
        instead of adding one, and the placement sets the Shift-placement bit: releasing Shift then disarms. */
     function placeClick(shift) {
-      const h = hover();
+      const h = mapHover();
       if (!h.ok) return;
       const at = centre(h.type, h.ox, h.oz);
       for (const u of builders()) if (canBuild(u, h.type)) {
@@ -556,7 +868,7 @@ const WikiSim = (() => {
       else st.shiftPlaced = true;
     }
     function select(shift) {
-      const d = st.drag, { x, z } = st.cursor;
+      const d = st.drag, { x, z } = mapCursor();
       if (d && d.active) {
         const x0 = Math.min(d.x0, x), x1 = Math.max(d.x0, x), z0 = Math.min(d.z0, z), z1 = Math.max(d.z0, z);
         const inBox = units.filter(u => u.owner === 0 && u.x >= x0 && u.x <= x1 && u.z >= z0 && u.z <= z1);
@@ -580,32 +892,49 @@ const WikiSim = (() => {
       if (!st.mode || !st.held.has('alt')) return;
       st.spacing[st.mode] = Math.max(0, Math.min(PLACE_SPACING_MAX, (st.spacing[st.mode] || 0) + (k === 'z' ? 1 : -1)));
     }
+    /* A scripted demo with the sidebar on plays a `build` out as its trip; Try it, and a demo without the sidebar, arm
+       at once (the wiki never sends `build`, and the rule cases use it as their shortcut). */
+    const TRIPS = scripted && ON;
     function input(ev) {
       if ('caption' in ev) st.caption = ev.caption || null;
-      if ('build' in ev) { disarm(); st.mode = ev.build || null; st.drag = null; }
+      if ('build' in ev) {
+        if (TRIPS) trip(ev.build);
+        else { disarm(); st.mode = ev.build || null; st.drag = null; }
+      }
       if (ev.move) {
         st.cursor = { x: ev.move[0], z: ev.move[1] };
-        if (st.drag && sq(st.cursor.x - st.drag.x0) + sq(st.cursor.z - st.drag.z0) > DRAG * DRAG) st.drag.active = true;
+        const c = mapCursor();
+        if (st.drag && sq(c.x - st.drag.x0) + sq(c.z - st.drag.z0) > DRAG * DRAG) st.drag.active = true;
       }
       if (ev.down === 'z' || ev.down === 'x') { st.held.add(ev.down); stepSpacing(ev.down); }
       else if (ev.down && !st.held.has(ev.down)) {
         st.held.add(ev.down);
-        const shift = st.held.has('shift');
-        // with a building armed a left press carrying Shift starts a gesture at the cursor site instead of placing
-        if (ev.down === 'lmb') {
-          if (st.mode && shift) st.gesture = cursorSite();
-          else if (st.mode) placeClick(false);
-          else st.drag = { x0: st.cursor.x, z0: st.cursor.z, active: false };
+        const shift = st.held.has('shift'), where = over();
+        // a mouse button's press over the column is the column's; over the dead band it is nobody's
+        if (ev.down === 'lmb' || ev.down === 'rmb') sb.downOn[ev.down] = where;
+        if (where === 'side' && (ev.down === 'lmb' || ev.down === 'rmb')) pressSide(ev.down);
+        else if (where === 'map') {
+          // with a building armed a left press carrying Shift starts a gesture at the cursor site instead of placing
+          if (ev.down === 'lmb') {
+            if (st.mode && shift) st.gesture = cursorSite();
+            else if (st.mode) placeClick(false);
+            else { const c = mapCursor(); st.drag = { x0: c.x, z0: c.z, active: false }; }
+          }
+          if (ev.down === 'rmb') { st.drag = null; rightClick(shift); }
         }
-        if (ev.down === 'rmb') { st.drag = null; rightClick(shift); }
       }
       if (ev.up && st.held.has(ev.up)) {
         st.held.delete(ev.up);
-        if (ev.up === 'lmb' && st.gesture) release();
-        else if (ev.up === 'lmb' && st.drag) { select(st.held.has('shift')); st.drag = null; }
+        // a release runs the map rules only for a press that went down on the map
+        if (sb.cap && sb.cap.b === ev.up) releaseSide();
+        else if (sb.downOn[ev.up] === 'map') {
+          if (ev.up === 'lmb' && st.gesture) release();
+          else if (ev.up === 'lmb' && st.drag) { select(st.held.has('shift')); st.drag = null; }
+        }
         // 0x4992D8: Shift found up after a placement in this hold disarms, as after a stock Shift-click
         if (ev.up === 'shift') { if (st.shiftPlaced) disarm(); st.shiftPlaced = false; }
       }
+      if (ON) route();
       st.hover = hover();
     }
 
@@ -692,13 +1021,20 @@ const WikiSim = (() => {
     const log = (what, u, type) => sim.log.push({ t: sim.tick, what, id: u.id, type: type || u.type, ox: u.ox, oz: u.oz });
     const script = scripted && demo ? demo.inputs.map((e, i) => [e, i]).sort((a, b) => a[0].at - b[0].at || a[1] - b[1]).map(p => p[0]) : [];
     let next = 0;
-    const feed = t => { while (next < script.length && script[next].at === t) input(script[next++]); };
+    // a tick's generated inputs come before its data inputs; within a trip's tick a move comes before a press
+    const feed = t => {
+      feeding = t;
+      while (genNext < gen.length && gen[genNext].at <= t) input(gen[genNext++].ev);
+      while (next < script.length && script[next].at === t) input(script[next++]);
+    };
     const end = scripted && demo && demo.end != null ? demo.end : Infinity;  // a Try-it sim is never done
+    if (TRIPS) checkTrips(script, end);
 
     /* THE CURSOR'S SHAPE, each the cursor the game shows there (tagpu_wikisim.h, WIKI_CURSOR_*): the build-menu mode,
        else a selection holding a mobile unit of the player's, else none. Quick Build's ghost changes nothing here: it
-       is drawn from the packet and leaves the engine's cursor as the selection has it. */
-    const cursorShape = () => st.mode ? 'build' : selected().some(u => u.owner === 0 && mobile(u.type)) ? 'move' : 'arrow';
+       is drawn from the packet and leaves the engine's cursor as the selection has it. Off the map it is the arrow:
+       the GUI shows cursornormal [INFERRED, capture C5]. */
+    const cursorShape = () => over() !== 'map' ? 'arrow' : st.mode ? 'build' : selected().some(u => u.owner === 0 && mobile(u.type)) ? 'move' : 'arrow';
     // the sequence a shape shows: the build cursor is the arrow's cursornormal
     const cursorSeq = k => k === 'build' ? 'arrow' : k;
     /* THE SHAPE AFTER EVERY CHANGE, and `now`, the first tick that shows it, as the tick its animation began when it
@@ -718,7 +1054,9 @@ const WikiSim = (() => {
       feed(t);
       advance();
       sim.tick = t;
-      sim.done = sim.tick >= end;
+      // a locked build ends the demo on its own tick, which then holds under the entry's badge
+      sim.done = sim.tick >= end || sb.locked !== null;
+      if (ON) route();
       st.hover = hover();
       cursorTick(t);
     };
@@ -758,23 +1096,38 @@ const WikiSim = (() => {
         lines,
         cursor: { x: st.cursor.x, z: st.cursor.z, shape, since },
         keys: KEYS.filter(k => st.held.has(k)),
-        drag: st.drag && st.drag.active ? { x0: st.drag.x0, z0: st.drag.z0, x1: st.cursor.x, z1: st.cursor.z } : null,
+        drag: st.drag && st.drag.active ? { x0: st.drag.x0, z0: st.drag.z0, x1: mapCursor().x, z1: mapCursor().z } : null,
         caption: st.caption,
         pace: PACE,
         mode: st.mode ? `build:${st.mode}` : 'contextual',
+        // the column, only with the sidebar on: its rows, the routed screen, the shown unit and its page, each gadget's
+        // state, the unit under the cursor over the map (the minimap's high dot); then the build a demo could not reach
+        ...(ON ? {
+          side: { h: LAY.height, screen: sb.screen, unit: sb.shown ? sb.shown.id : null, page: sb.shown ? sb.shown.page : 0,
+            state: sideStates(), under: over() === 'map' ? (unitAt(st.cursor.x, st.cursor.z) || { id: null }).id : null },
+          locked: sb.locked,
+        } : {}),
       };
     };
 
+    if (ON) route();
     feed(0);
+    sim.done = sb.locked !== null;
     st.hover = hover();
     st.cursorShape = cursorShape();
     st.cursorSince = 0;
     return sim;
   }
 
+  // a layout is checked whole before any sim reads it; null or absent is no sidebar, today's stage
+  const checked = layout => layout == null ? null : checkLayout(layout);
   return {
-    create: (entry, demo) => make(entry, demo, false),
-    play: (entry, demo) => make(entry, demo, true),
+    create: (entry, demo, layout) => make(entry, demo, false, checked(layout)),
+    play: (entry, demo, layout) => make(entry, demo, true, checked(layout)),
+    // the bounds, for the caller that falls back to the fixture on a refused layout
+    checkLayout,
+    // the trip's fixed budget and its table, which tagpu_wikisim.h #defines and simparity compares
+    TRIP, TRIP_DOWN, TRIP_UP, TRIP_ROWS,
     // the shapes alone, for checks against tagpu_placegeo.c
     shapes: { placeShape, placeRing },
   };
