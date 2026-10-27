@@ -4572,7 +4572,7 @@ renderer draw its units and ghosts.
   in the frame's pass, between `tagpu_vk_hud_record_wiki` and `tagpu_vk_hud_record_wiki_over`,
   the wiki's `tagpu_vkw_world_record` composites the target, LINEAR, under the Gamma curve. Its
   teardown is the game's: `tagpu_vkw_*_down` in `vk_down` and `passes_down` behind their
-  `vkDeviceWaitIdle`, and the three passes' `_down_owed` in the owed list, paid behind the same
+  `vkDeviceWaitIdle`, and the four passes' (terrain, features, units, world) `_down_owed` in the owed list, paid behind the same
   wait. The trigger `tagpu_wiki.shot` (`ENTRY DEMO TICK`: the demo played to the tick and paused on
   the game thread, the record numbering the capture) is taken through the A/B's one capture buffer
   on the first frame of that view whose image was drawn, and only while no capture is in flight
@@ -4635,10 +4635,12 @@ renderer draw its units and ghosts.
   over the unit pixels a mean difference of 0.03 to 0.38 / 255 a channel with 0.003 to 0.19 % of
   them past 40 (the tolerance: 2 / 255 and 0.5 %). Under `nounit=ARMCK` the types line names
   ARMCK alone among the boxes and 300 of 300 frames still drew the image.
-- **The invariants at the units' hand-over.** *Every node pointer handed to the wiki bake lies
-  inside the arena*: `types_build` walks each type's run and checks every node against the
-  arena's bounds before a run is kept, a bound on the value, so the bake reads the arena only and
-  never game memory. *The arena outlives every hand-over*: it is immutable and never freed. *The
+- **The invariants at the units' hand-over.** *The wiki bake reads the arena only, never game
+  memory*: the loader wrote every pointer in the arena, each inside it, and copies no word of a
+  file that a reader follows as a pointer (a face's texture state past its name starts at 0 and
+  only the binder writes it). `types_build` then re-checks every node of a type's run against the
+  arena's used extent (`WIKI3D.base`, `bytes`) on its value before the run is kept, so a loader
+  that broke that rule makes a box. *The arena outlives every hand-over*: it is immutable and never freed. *The
   pose is a function of the record*: the rest pose and the record's yaw, nothing read from a unit
   of the game.
 - **Not done here**: 3D features in the image (a stage whose description names one falls back to

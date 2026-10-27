@@ -189,8 +189,10 @@ static int scene_unit(R* r, const TJV* v, WIKISCENEUNIT* u)
     u->x = at.x;
     u->z = at.z;
     u->owner = 0;
+    /* one of the eight players: the 3D stage makes a record only for one, and hides the box of every
+       type it resolved (tagpu_wikistage.c `owner8`, tagpu_wikistage_keep) */
     if (tj_get(v, "owner") && !tj_is(tj_get(v, "owner"), TJ_NULL)
-        && !integer(r, tj_get(v, "owner"), 0, 255, &u->owner, "an owner"))
+        && !integer(r, tj_get(v, "owner"), 0, 7, &u->owner, "an owner (a player of the eight)"))
         return 0;
     u->built = 1;
     if (tj_get(v, "built") && !tj_is(tj_get(v, "built"), TJ_NULL) && !number(r, tj_get(v, "built"), &u->built, "built"))

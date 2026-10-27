@@ -93,6 +93,7 @@
    plays it here to the tick, pauses it and numbers the capture in the record; the render thread
    writes the first frame of that view whose image is drawn (tagpu_wikiworld.h) */
 #define SHOT_ASK  "tagpu_wiki.shot"
+#define SHOT_TICK_MAX (30 * 60 * 10)   /* ten minutes of a demo: the steps run on the game thread */
 
 enum { B_L = 1, B_R = 2, B_M = 4, B_X = 8 };
 
@@ -958,8 +959,9 @@ static void shot(void)
     }
     for (i = 0; i < d->nentry; i++)
         if (!strcmp(d->entry[i].id, id)) e = i;
-    if (e < 0 || demo < 1 || demo > d->entry[e].ndemo || tick < 0) {
-        tagpu_logf("wiki: shot: no entry %s with a demo %d - nothing asked", id, demo);
+    if (e < 0 || demo < 1 || demo > d->entry[e].ndemo || tick < 0 || tick > SHOT_TICK_MAX) {
+        tagpu_logf("wiki: shot: no entry %s with a demo %d, or tick %d is past %d - nothing asked", id, demo, tick,
+                   SHOT_TICK_MAX);
         return;
     }
     pick(e, demo - 1);

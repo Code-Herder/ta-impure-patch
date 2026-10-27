@@ -33,7 +33,9 @@
        named in the report, and logged.
      - THE ARENA IS ONE BLOCK, IMMUTABLE ONCE PUBLISHED AND NEVER FREED. It is reserved whole and
        refused unless it lies inside (0x600000, tagpu_user_top()], the readers' range filter
-       (tagpu_m3_ptr_ok), so every pointer in it passes that filter by construction. Everything the
+       (tagpu_m3_ptr_ok), so every pointer in it passes that filter by construction. Every pointer
+       field in it is one the loader wrote, to a place inside it: a word of a file that a reader
+       follows as a pointer (a face's texture state) is never copied. Everything the
        render thread may read -- the WIKI3D below, the stages, the models, the frames, the report --
        lives in it, written by the loader alone before the one interlocked store that publishes it.
      - THE LOADER READS NO ENGINE MEMORY AND PAINTS NOTHING. Its inputs arrive by value (the mount
@@ -133,7 +135,8 @@ typedef struct {
     const WIKI3DSTAGE* stage;
     const WIKI3DUNIT*  unit;
     const char*        report;          /* the JSON tagpu_wiki3d.dump writes, NUL-terminated     */
-    uint32_t           bytes;           /* the arena's bytes in use                              */
+    uint32_t           base;            /* the arena's address as its pointer fields hold it     */
+    uint32_t           bytes;           /* the arena's bytes in use, from `base`                 */
 } WIKI3D;
 
 #ifdef _WIN32
@@ -154,8 +157,8 @@ void          tagpu_wikiasset_poll(void);
    fields hold `base32` + offset: the DLL passes its reserved block and its own address; the native
    test passes host memory and a stand-in address, since its pointers are not 32-bit. `commit`
    makes the block usable up to `upto` bytes and answers how far it now is, 0 when it cannot; NULL
-   when the whole block already is. Returns the WIKI3D at the arena's start, or NULL when not even
-   the report fit. */
+   when the whole block already is. Returns the WIKI3D, which lies inside the arena past its first
+   bytes, or NULL when not even the report fit. */
 const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, unsigned char* base, uint32_t base32, uint32_t cap,
                                 uint32_t (*commit)(unsigned char* base, uint32_t upto));
 

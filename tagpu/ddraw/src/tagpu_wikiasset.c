@@ -540,6 +540,9 @@ static uint32_t build_node(BUILD* m, uint32_t off)
         d = AT(a, faces) + PR_SIZE * i;
         memcpy(d, p, PR_SIZE);
         wr32(d + PR_ZERO, 0);        /* as O_ZERO */
+        /* the texture state past the name: the file's words there are data, and the material layer
+           follows +0x18 as a pointer, so they start at 0 and only bind_all writes them */
+        memset(d + PR_TEX + 4, 0, PR_FLAGS - (PR_TEX + 4));
         wr32(d + PR_IDX, PTR(a, idx));
         if (to) {
             uint32_t s;
@@ -1590,6 +1593,7 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, unsigned char* base, uint32_
         w->nunit = nunit;
         w->unit = nunit ? (const WIKI3DUNIT*)AT(&L.a, un_at) : NULL;
         w->report = (const char*)AT(&L.a, rep_at);
+        w->base = base32;
         w->bytes = L.a.used;
     }
     for (i = 0; srec && i < nstage; i++) stage_free(&srec[i]);
@@ -1651,6 +1655,7 @@ static DWORD WINAPI loader(LPVOID p)
     QueryPerformanceCounter(&t1);
     if (!w) {
         LOG("wiki3d: NOT loaded - the arena could not hold the report");
+        VirtualFree(base, 0, MEM_RELEASE);      /* never published, so no reader holds it */
         free(in);
         return 0;
     }

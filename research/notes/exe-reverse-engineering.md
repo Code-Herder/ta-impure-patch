@@ -16943,7 +16943,7 @@ fatal through `0x4B6290`); the script `scripts\<UnitName>.COB` (`0x42D8E5`), nev
   keeping their order. A face of 0 vertices divides by zero (no stock face has one: MEASURED).
 - `0x4CB590`: every vertex's X and Z and the node's `+0x10`/`+0x18` negated, recursively.
   [DISASSEMBLED 2026-10-27, `0x4CB590..0x4CB5EC`: `neg` of each vertex's `+0` and `+8` over `+0x04` vertices
-  at `+0x24`, then of `+0x10` and `+0x18`, recursing into the child `+0x2C` and looping on the sibling `+0x30`.]
+  at `+0x24`, then of `+0x10` and `+0x18`, recursing into the sibling `+0x2C` and looping into the child `+0x30`.]
   The negation is a half turn about Y, so a model the engine holds is the file's turned by `0x8000`, and
   a body turn of heading `h` (`piece_local`'s Y rotation, `(c, -s; s, c)` on (x, z)) draws the file's
   model turned by `h + 0x8000`. MEASURED in a skirmish 2026-10-27: an ARMCK walking toward +x reads

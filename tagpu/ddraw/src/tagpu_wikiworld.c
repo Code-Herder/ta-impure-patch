@@ -91,7 +91,7 @@ static int      s_nNoUnit;
 static void lever(unsigned frame)
 {
     char buf[256], said[64 + NOUNIT_MAX * (WIKI_ID_MAX + 8)], nu[NOUNIT_MAX][WIKI_ID_MAX];
-    int n, off = 0, nomap = 0, nofeat = 0, nounits = 0, nn = 0, now, k;
+    int n, off = 0, nomap = 0, nofeat = 0, nounits = 0, nn = 0, now, k, changed;
     if (s_leverSeen >= 0 && frame - s_leverAt < 30) return;
     s_leverAt = frame;
     n = tagpu_opt_read("tagpu_wiki3d.on", buf, sizeof buf);
@@ -118,14 +118,11 @@ static void lever(unsigned frame)
             p = q + 1;
         }
     }
-    /* the state as one number: the four switches, and the names folded in, so a changed name is
-       a change */
+    /* a change is the switches or the names themselves, compared in full */
     now = off | nomap << 1 | nofeat << 2 | nounits << 3 | nn << 4;
-    for (k = 0; k < nn; k++) {
-        const char* c;
-        for (c = nu[k]; *c; c++) now = (int)(((unsigned)now * 31u + (unsigned char)*c) & 0x7FFFFFFFu);
-    }
-    if (now != s_leverSeen) {
+    changed = now != s_leverSeen;
+    for (k = 0; k < nn && !changed; k++) changed = strcmp(nu[k], s_noUnit[k]) != 0;
+    if (changed) {
         int o = snprintf(said, sizeof said, "%s%s%s%s", off ? " off" : "", nomap ? " nomap" : "",
                          nofeat ? " nofeat" : "", nounits ? " nounits" : "");
         for (k = 0; k < nn && o >= 0 && o < (int)sizeof said; k++)
@@ -349,14 +346,15 @@ static TYPERUN       s_run[WIKI_MAX_DEFS];
 static uint32_t      s_resolved[(WIKI_MAX_DEFS + 31) / 32];
 static WSCENEMODEL   s_rec[WIKISCENE_MODELS];
 
-/* THE BOUND THE WIKI'S BAKE RESTS ON: node `p`'s bytes lie inside the arena. The arena is one
-   block, published whole and never freed, and its loader wrote every pointer in it to point inside
-   it (tagpu_wikiasset.h); this checks that a run handed to the bake names only that block, on the
-   pointer's value, before the call. */
+/* Node `p`'s bytes lie inside the arena's used extent, [base, base + bytes). What makes the bake read
+   the arena only is the loader's construction: it wrote every pointer in the arena, each to point
+   inside it, and copies no pointer-sized word of a file that a reader follows (tagpu_wikiasset.h).
+   The walk that made the run already followed those pointers; this re-checks the run's nodes, on
+   their values, before the bake is handed them, so a loader that broke its rule makes a box. */
 static int in_arena(const WIKI3D* a, const char* p)
 {
-    const char* base = (const char*)a;
-    return p >= base && a->bytes >= NODE_BYTES && (size_t)(p - base) <= (size_t)a->bytes - NODE_BYTES;
+    const uint32_t v = (uint32_t)(size_t)p;
+    return v >= a->base && a->bytes >= NODE_BYTES && v - a->base <= a->bytes - NODE_BYTES;
 }
 
 static int unit_levered(const char* name)
@@ -591,7 +589,9 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     /* THE GROUND FALLS BACK WHOLE (the plan's section 3): a stage the loader could not resolve, or
        whose cells are not this view's map, is the whitebox's, and the units are drawn over it */
     if (!st || !st->ok || st->w != v->w || st->h != v->h) st = NULL;
-    if (st && st != s_stage) {
+    /* a device with no image size yet (bring-up, a re-pick) builds nothing and latches nothing:
+       the stage is built on the first frame that has one */
+    if (st && st != s_stage && tagpu_vk_max_image_dim() > 0) {
         const char* why = ground_build(st);
         s_stage = st;
         s_groundOk = why == NULL;
@@ -602,7 +602,7 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
                        "shadow(s), a %dx%d terrain atlas, %d feature frame(s)", st->entry, st->ntile,
                        s_scene.ncell, s_scene.nbody, s_scene.nshadow, ATLAS_W, s_tatlasH, s_fatlas.n);
     }
-    s_ground = st && s_groundOk;
+    s_ground = st && st == s_stage && s_groundOk;
 
     /* THE MODEL RECORDS, of the types the arena resolved for this entry */
     if (a != s_tA || entry != s_tEntry || s_leverSerial != s_tLever) types_build(a, v, entry, art->data->entry[entry].id);

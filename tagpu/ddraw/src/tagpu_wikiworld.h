@@ -21,10 +21,11 @@
    posed-draw hand-over the wiki's unit pass draws from, in the game's order (the units, then the
    ghosts' window). The bake, the material layer and the posed program take their `_frame` calls
    in tagpu_native.c's order, under one constant level generation (the arena is never freed).
-   EVERY NODE HANDED TO THE BAKE LIES INSIDE THE ARENA: each type's piece run is the readers' walk
-   of its model, and every node of it is bounded against the arena's extent before the run is
-   kept -- a bound on the pointer's value, not a probe -- so the wiki's bake reads the arena and
-   nothing else. A type whose walk does not stay inside is a box.
+   THE WIKI'S BAKE READS THE ARENA AND NOTHING ELSE because the loader wrote every pointer in it,
+   each inside it, and left no word of a file that a reader follows (tagpu_wikiasset.h). Each type's
+   piece run is the readers' walk of its model, and every node of it is re-checked against the
+   arena's used extent before the run is kept -- a bound on the pointer's value, not a probe -- so
+   a type whose walk does not stay inside is a box.
 
    A stage whose ground did not resolve still draws its units: the image then carries no ground
    (`ground` 0), and the whitebox's ground is drawn under it (tagpu_wikistate_image).
@@ -61,10 +62,14 @@
    stage description's reader refuses a description with more. */
 #define WIKIWORLD_FEAT3D   64u
 
-/* THE MOST POSED OBJECTS ONE FRAME OF THE STAGE DRAWS: every unit, the ghost of every gesture
-   site, the placement ghost and every 3D feature. It is the wiki instances' TAGPU_PB_FRAMEMAX
-   (tagpu_scene.h), which sizes the bake's caches and the unit pass's vertex-buffer table, so a
-   frame of the stage can never evict an entry it has asked for (tagpu_posebake.h). */
+/* THE WIKI INSTANCES' TAGPU_PB_FRAMEMAX (tagpu_scene.h): the entries one frame of the stage may ask
+   the bake for, which sizes its caches and the unit pass's vertex-buffer table. The bake keys an
+   entry by model (and ghost) and a material by (model, owner), never by record, so a frame asks for
+   at most one of each per type the entry names (WIKI_MAX_DEFS) and 3D feature, a material once per
+   owner of the eight: within this bound on every stage description written so far, not on every
+   one the data could hold. An entry this frame asked for is never evicted (tagpu_posebake.c
+   `geom_slot`); a frame that needs one more is refused by the bake, which hands nothing over, so
+   that frame is the whitebox whole. */
 #define WIKIWORLD_FRAMEMAX ((unsigned)WIKISTAGE_UNITS + (unsigned)WIKISTAGE_SITES + 1u + \
                             WIKIWORLD_FEAT3D)
 
