@@ -556,6 +556,39 @@ hold indices, names, counts and hashes only, and the pre-commit hook's provenanc
 **Gate**: none expected. **Review**: none (data and a tool; the regenerated demo data is held by
 the parity checks).
 
+**Status (2026-10-26): built on the wiki branch, not landed.**
+- **The rects**: the metal-ground strip is now `[34, 0, 6, 24]`, the black fog `[0, 0, 8, 8]`. The
+  strip shrinks rather than grows because at `[32, 0, 8, 24]` deposit R (`[29, 19, 3, 3]`) would
+  touch it and join the band, and *Metal maps* would lose its deposit; the fog grows by one row,
+  over nothing a demo uses. No input of any demo changed.
+- **The descriptions**: `art/wiki/stage/quickbuild.json` (two sources, two tiles, nine deposit
+  features and two vent features) and `buildshapes.json` (one tile, no features). The ground is
+  Crossing Two Rivers' tile 13 (`tactics6.hpi`, 4 792 tiles), the metal ground Metal Heck's tile
+  170 (`totala2.hpi`, 583 tiles), each the first `stagemap.py tiles` lists; the metal worlds'
+  most used flat tiles are the dark void between their plates, so Metal Heck's plate stands in.
+  The deposit is `lushmetal3` and the vent `lushvent01`, both from `features\lush\*.tdf` in
+  `rev31.gp3`.
+- **`tavfs.py`** mounts the patterns in the engine's order, the first read out of the executable at
+  `0x5028CC`/`0x5028D8`, and takes an archive by the engine's trailer rule: any four year bytes,
+  because OpenHAPIFile overwrites the file's year with `"0000"` before comparing with
+  `"Copyright 0000 Cavedog Entertainment"` (`0x4BDE72..0x4BDED4`, DISASSEMBLED 2026-10-26; the
+  retail archives carry 1997 to 2000). On the reference setup's retail install it mounts all 30
+  archives: `rev31.gp3`, the five `.ccx`, the eleven `.ufo`, the thirteen `.hpi`.
+- **`stagemap.py check` beyond the list above**: it also refuses a demo that adds metal, a vent or
+  fog (the stage's ground is the entry's), requires each deposit and each vent to carry its
+  feature, not only each feature to sit on its rule, and compares each file with what `build`
+  writes now.
+- **Verified**: `stagemap.py check` exits 0 in under a second; with a tile hash, a tile count, a
+  vent's cell and a feature name altered by hand it names all four and exits 1, and with the old
+  rects restored in a copy of the entry it names both. `simcheck.mjs` passes every demo and rule,
+  `simparity.mjs` natively and `--wine` finds all 21 demos and 9 rule cases equal, `stagecheck.mjs`
+  pairs every op, `wikilaycheck.py` agrees, and the pre-commit hook's provenance check passes on
+  the new files.
+- **Open for 6d and 6e**: the order of the loose files and of one archive's files within an
+  enumeration, and what an enumeration does with one path held by two sources, are still
+  QUESTIONS batch A1; `tavfs.py` lists loose files by name without case and an archive's in its
+  directory order, and every source's copy of a path.
+
 ### Landing 6c — Create()'s hides, one function for the ghost and the wiki
 
 **What changes**: nothing visible. `create_hides` and `create_mask` move out of

@@ -24,6 +24,7 @@ yet (landing 5).
 | The stage's cursor icons, the controls' glyphs and the tree's marks | `cursor_*.png`, `i_play`, `i_pause`, `i_replay`, `i_open`, `i_shut` and `i_dot` in the kit, written by `tools/wiki/cursors.sh` from `stage.js` `cursorShape` and `tools/wiki/mockup/glyphs.js` |
 | The window's layout numbers and its text roles | `art/wiki/layout.json`, which `wiki.js` sets as custom properties of the frame (`--w-` and the number's path) for `wiki.css`, and which the DLL reads |
 | The stage in the game's own graphics | `tools/wiki/gfx.py` writes the gitignored `tools/wiki/mockup/gfx/` from the local install; `gfx.js` draws it under `gfx=game` |
+| The stage's ground as references: which tile of which map in each square, which feature on which cell | `art/wiki/stage/<entry>.json`, written and checked against the local install by `tools/wiki/stagemap.py` (`tiles`, `build`, `check`) through `tools/wiki/tavfs.py`, the engine's file precedence in Python; not packed yet |
 | The demos' generators; the headless check of every demo | `tools/wiki/gen-quickbuild.mjs`, `tools/wiki/gen-buildshapes.mjs`; `tools/wiki/simcheck.mjs` |
 | The data in the DLL | `art/wiki/` (`tree.json`, `layout.json`, the entries) packed by `tools/hudpak.py --set wiki` into the resource `WIKIPAK`; read by `tagpu/ddraw/src/tagpu_wikidata.c` (through `tagpu_pak.c`, the archive reader the HUD shares) |
 | The window's layout in the DLL | `tagpu/ddraw/src/tagpu_wikilay.c`: pure, the HUD stack's ops, text and hit boxes for a page state (`WIKIPAGE`) |
@@ -383,6 +384,55 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
   not, and optionally move orders and a `facing`), and which are selected. `"facing": [x, z]` is
   any vector with a length, normalised on load; without it a unit faces `(0, 1)`, and a building
   faces `(0, 1)` whatever it gives.
+- **The ground's grid**: the map's size, every fog rectangle and every broad metal rectangle (one
+  that touches both opposite edges of the map on an axis) are whole tiles, even numbers of cells,
+  because the stage's ground is drawn in the map's 32-unit tiles and its fog in the engine's 32-unit
+  blocks. A demo adds no metal, vent or fog: the stage's ground is the entry's. `stagemap.py check`
+  refuses both.
+
+### `art/wiki/stage/<entry>.json`
+
+The stage's ground for one entry's scene, by reference to the player's own files; written by
+`tools/wiki/stagemap.py build`, never by hand.
+
+```json
+{ "format": 1, "entry": "quickbuild",
+  "cells": [40, 24],
+  "sources": [ { "map": "maps\\crossing two rivers.tnt", "tiles": 4792 },
+               { "map": "maps\\metal heck.tnt", "tiles": 583 } ],
+  "tileset": [ [0, 13, "04e02f02"], [1, 170, "8cb0058f"] ],
+  "tilemap": [ 0, 0, 0, 1, "…" ],
+  "features": [ { "name": "lushmetal3", "cell": [14, 16] },
+                { "name": "lushvent01", "cell": [28, 9] } ] }
+```
+
+- **`cells`** is the scene's map; **`tilemap`** is `cells / 2` tiles a side, row-major, each an
+  index into `tileset`.
+- **A `tileset` row** is `[source, tile index in that TNT, FNV-1a 32 of the tile's 1024 bytes]`,
+  and a **source**'s `tiles` is its TNT's tile count. The map path is the engine's (`\` between
+  components, compared without case). The hash and the count are identity checks: a map of the same
+  name with other tiles is refused, never drawn as a patchwork.
+- **A feature** is a TDF section name at its anchor cell, the footprint's top-left cell, as the TNT
+  and LoadFeature `0x4224B0` place it; its definition comes from the first `features\*.tdf` that
+  holds the section.
+- **Nothing of the game is in it**: indices, names, counts and hashes only. A file opened, a tile
+  read and a section found all follow the engine's precedence: loose first, then the first archive
+  in mount order, the first pattern read out of the player's executable (`tools/wiki/tavfs.py`;
+  [the 3D stage's plan](ingame-wiki-3d-stage-plan.html), section 5).
+- **`stagemap.py build`** derives it from the entry's scene and the recipe the script holds: the
+  ground tile everywhere, the metal-ground tile over each broad metal rectangle, a deposit feature
+  centred on each deposit (the bounding box of the other metal rectangles that touch), and a vent
+  feature on each vent's cell. Each recipe tile is its map's most used tileable tile under flat,
+  featureless ground, the first `stagemap.py tiles <map>` lists; that command also draws a contact
+  sheet into the gitignored `tools/wiki/mockup/gfx/`.
+- **`stagemap.py check`** exits 0 when every entry's description resolves on the local install —
+  every map with its tile count, every tile with its hash, every feature section — fits its scene
+  (each deposit carries a deposit feature over its metal, each vent a vent feature on its cell,
+  every feature inside the map, the grid of the bullet above), and is what `build` writes now; 1
+  naming each failure, 2 when it finds no install or executable.
+- **A miss in the game** — no such map, another tile count, another hash, no such section — makes
+  the whole ground fall back to the whitebox ([the plan](ingame-wiki-3d-stage-plan.html),
+  section 3), never part of it.
 
 ## The simulation's contract
 

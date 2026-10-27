@@ -16819,9 +16819,13 @@ FIRST argument — stores the `FILE*` at `+0x00` and `-1` at `+0x04`, and fills 
 `GetFullPathNameA(name, 0x104, handle+0x14, …)`, i.e. the **resolved absolute path**, not a
 copy of the name it was given. The
 36-byte trailer test that decides whether the file counts as an archive at all — the last 36
-bytes must be `Copyright 1997 Cavedog Entertainment`, and anything else is skipped silently —
-is documented with the rest of the container in [file formats](file-formats.html) §5
-(measured 2026-09-02). `tagpu_ufo.c` writes that trailer for exactly this reason.
+bytes must read `Copyright <year> Cavedog Entertainment` for any four year bytes, and anything
+else is skipped silently — is documented with the rest of the container in
+[file formats](file-formats.html) §5 (measured 2026-09-02). The year is never compared: the open
+seeks 36 bytes from the end and reads them, copies `"0000"` (`0x50390C`) over the read year at the
+place `0x4E49B0` finds it in the template `"Copyright 0000 Cavedog Entertainment"` (`0x4FDBF0`;
+the copy is `0x4E4760`, `0x4BDE72..0x4BDE98`), and compares the two inline
+(`0x4BDEA0..0x4BDED4`) [DISASSEMBLED 2026-10-26; the retail archives carry 1997 to 2000]. `tagpu_ufo.c` writes that trailer for exactly this reason.
 
 **The mount list** [DISASSEMBLED 2026-10-02, for the recorder's `RT_ARCHIVE`]:
 - **Where it is.** The graphics globals `*(0x51FBD0)` (`0x4B6220` returns it) hold the list at

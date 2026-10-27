@@ -28,7 +28,10 @@ const units = {
 /* the map, 40 x 24 cells. Deposits: A 5x5 (a Moho fits), B C E 3x3, S 3x3 between the map's unbuildable top row and
    a finished ARMGEO (no Moho site over it is legal), D 3x3 under the player's finished ARMMEX, R 3x3 beside the broad
    metal band, one deposit in the black corner and one under grey fog. Vents: a free one, and the one under the
-   ARMGEO. */
+   ARMGEO. The metal ground and the fog cover whole tiles (even cells): the stage's ground is drawn in the map's
+   2 x 2-cell tiles and its fog in the engine's 32-unit blocks, so a rect off that grid has no picture
+   (research/notes/ingame-wiki-3d-stage-plan.md, section 4; tools/wiki/stagemap.py check refuses one). R keeps two
+   background columns between it and the band, so it stays a deposit of its own. */
 const scene = {
   map: { w: 40, h: 24, surfaceMetal: 0 },
   metal: [
@@ -38,13 +41,13 @@ const scene = {
     { rect: [3, 10, 3, 3], v: 120 },                                     // E
     { rect: [15, 1, 3, 3], v: 130 },                                     // S
     { rect: [26, 15, 3, 3], v: 150 },                                    // D
-    { rect: [33, 0, 7, 24], v: 40 },                                     // broad metal ground, edge to edge
+    { rect: [34, 0, 6, 24], v: 40 },                                     // broad metal ground, edge to edge
     { rect: [29, 19, 3, 3], v: 160 },                                    // R, closed by background cells
     { rect: [2, 2, 3, 3], v: 120 },                                      // in the black corner
     { rect: [3, 18, 3, 3], v: 110 },                                     // under grey fog
   ],
   vents: [at(28, 9), at(16, 5)],
-  fog: [{ rect: [0, 0, 8, 7], kind: 'black' }, { rect: [0, 16, 10, 8], kind: 'grey' }],
+  fog: [{ rect: [0, 0, 8, 8], kind: 'black' }, { rect: [0, 16, 10, 8], kind: 'grey' }],
   units: [
     { id: 'pw', type: 'ARMPW', at: [256, 176] },
     { id: 'ck', type: 'ARMCK', at: [304, 176] },
