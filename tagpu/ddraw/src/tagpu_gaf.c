@@ -667,10 +667,17 @@ int tagpu_gaf_seq_nframes(const char* seq)
    read, it does not advance the frame (the sim tick does) */
 const unsigned char* tagpu_gaf_state_frame(const char* st)
 {
-    const char* seq;
+    int frame;
+    const char* seq = tagpu_gaf_state_seq(st, &frame);
+    return seq ? tagpu_gaf_seq_frame(seq, frame) : NULL;
+}
+
+const char* tagpu_gaf_state_seq(const char* st, int* frame)
+{
+    *frame = 0;
     if (!ptr_ok(st) || IsBadReadPtr(st, 0x0C)) return NULL;
-    seq = *(const char* const*)(st + TAGPU_AS_SEQ);
-    return tagpu_gaf_seq_frame(seq, *(const unsigned short*)(st + TAGPU_AS_FRAME));
+    *frame = *(const unsigned short*)(st + TAGPU_AS_FRAME);
+    return *(const char* const*)(st + TAGPU_AS_SEQ);
 }
 
 static int gaf_decode(const unsigned char* g, int w, int h, unsigned char* out, unsigned char* cov);

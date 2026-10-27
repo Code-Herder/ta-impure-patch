@@ -6150,7 +6150,10 @@ plot over.
 
 **What keeps stock off it.** `main+0x1422B`/`+0x1422F` is not the map's size. It is the **scroll
 extent**, the map's pixel width less 32 and its height less 128, written at the level load
-(`0x4833C4`, `0x4833E0`). The engine's camera clamp `0x41C3C0` holds the eye in
+(`0x4833B8..0x4833E0` [DISASSEMBLED]: `mov ecx,[main+0x14223]; sub ecx,0x20`, stored at `0x4833C4`;
+`mov edx,[main+0x14227]; sub edx,0x80`, stored at `0x4833E0`) — and the end of the map as stock shows it: no stock view reaches a pixel
+past it, which is why our camera's centre range and the mirrored map edge end there too
+(`gpu-status.md` §2.3c, §2.90). The engine's camera clamp `0x41C3C0` holds the eye in
 `[0, extent − view]`, the viewport arm clamps the pointer to the rect, and the minimap's click
 rect ends at `mmY + mmH − 1`. So every point `0x498DA0` produces has `y ≤ mapH − 129`, and
 GetTPosition's answer is below `(mapH − 144) + 144 = mapH`, on the map. **The 128-px bottom margin
@@ -6337,7 +6340,7 @@ the BAR camera replaced.
   in-play draw. The pass then sees the eye at 0, so its window leaves the map only where the view
   is larger than the map, off the far edge, and no strip arises. Without `tagpu_zoom.on` the
   engine's clamp alternates as in stock.
-- **Our camera's centre range** `[−W/2, map − W/2]` takes the eye below 0 at every left and top
+- **Our camera's centre range** `[−W/2, extent − W/2]` takes the eye below 0 at every left and top
   edge of any map, at any zoom, but it is in force only on draws whose terrain latch is up, and
   terrown takes the pass away on exactly those draws ([gpu-status](gpu-status.html) §2.3c). Every
   other draw starts from an eye the apply clamped into `[0, extent − W]`, so the centre range
@@ -10241,7 +10244,7 @@ centre-ons and the stepper's follow source write it, and `0x41C3C0` never touch 
 
 | VA | What it is |
 | --- | --- |
-| **`0x41C3C0`** | **The eye clamp.** `eyeX = clamp(eyeX, 0, extentW − W)`, the same for Y, `extent` the **scroll extent** `main+0x1422B`/`+0x1422F` (read at `0x41C3C6`/`0x41C3DA`) — the map less 32 and 128 px, not the map's size ("Engine defects we patch") — then `0x466B70(main+0x142CB)` to refill the minimap's view rect — every path through it ends in that one call. TADR calls it `ScrollMinimap`, which describes the tail rather than the job. **12 call sites:** `0x41C59F`, `0x41C898`, `0x41C9CC`, `0x41CC16`, `0x41CC37`, `0x41CC52`, `0x41CDE1`, `0x41D054`, `0x41D184`, `0x41D26B`, `0x41D319`, `0x41D459`. **With `zoom.on` it never runs:** `tagpu_zoom`'s `leaf_call` replaces it on every call, and the replacement clamps to the camera's centre range `[−W/2, map − W/2]`, `map` the PLOT grid × 16, on draws whose ground is ours and to this function's own `[0, extent − W]` otherwise (`gpu-status.md` §2.3c). **Measured live 2026-09-23**, 1024x768, `W = 896`, `H = 704`, Two Continents (map 10752 x 12800, extent 10720 x 12672), each edge scrolled into (`keys mouse:1023,400` and the other three): the eye settles at `x = −448` and `x = 10304`, `y = −352` and `y = 12448`, at 0.25x, 1x and 8x alike — the map's own corners on the view-centre pixel. |
+| **`0x41C3C0`** | **The eye clamp.** `eyeX = clamp(eyeX, 0, extentW − W)`, the same for Y, `extent` the **scroll extent** `main+0x1422B`/`+0x1422F` (read at `0x41C3C6`/`0x41C3DA`) — the map less 32 and 128 px, not the map's size ("Engine defects we patch") — then `0x466B70(main+0x142CB)` to refill the minimap's view rect — every path through it ends in that one call. TADR calls it `ScrollMinimap`, which describes the tail rather than the job. **12 call sites:** `0x41C59F`, `0x41C898`, `0x41C9CC`, `0x41CC16`, `0x41CC37`, `0x41CC52`, `0x41CDE1`, `0x41D054`, `0x41D184`, `0x41D26B`, `0x41D319`, `0x41D459`. **With `zoom.on` it never runs:** `tagpu_zoom`'s `leaf_call` replaces it on every call, and the replacement clamps to the camera's centre range `[−W/2, extent − W/2]` on draws whose ground is ours and to this function's own `[0, extent − W]` otherwise (`gpu-status.md` §2.3c). Both end at the extent because stock never shows a pixel past it: the strip between the extent and the tile map's own size is unbuildable (`0x4833B0`, "LoadMap's feature placement, and a saved game") and on 9 stock maps holds the editor's blank tile, and our edge passes fold the mirrored map edge at the same line (`gpu-status.md` §2.90, "Where the map ends"). **Measured live**, 1024x768, `W = 896`, `H = 704`: 2026-09-23 on Two Continents (map 10752 x 12800, extent 10720 x 12672), each edge scrolled into (`keys mouse:1023,400` and the other three), the eye settles at `x = −448` and `y = −352` against the left and top edges at 0.25x, 1x and 8x alike — the map's corner on the view-centre pixel; 2026-10-25 on Painted Desert (extent 9216 x 9216) at `x = 8768` and `y = 8864` against the right and bottom edges, `extent − W/2` and `extent − H/2`, and on Assault on Suburbia (extent 8064 tall) at `y = 7712`. |
 | `0x41C450` | The same clamp shape for the *target* pair — and it has **no callers**. Dead code; an `E8`/`E9` scan of `.text` finds nothing pointing at it. |
 | `0x41C4C0` | `SetCamera(x, y, smooth)`, stdcall, `ret 0xC`. **Two arms** [DISASSEMBLED 2026-09-23]: with `smooth == 0` (`0x41C4C7 je 0x41C574`) it writes the **eye**, calls `0x41C3C0` (`0x41C59F`) and copies the clamped eye into the target; with `smooth != 0` it writes the **target** (`0x41C4D6`, `0x41C4E6`) and clamps it **inline** against `[0, extent − view]` (`0x41C4F1`, `0x41C505`) in the block `0x41C4EC..0x41C5C5`, never calling `0x41C3C0`. The eye arm falls into the tail `0x41C5C6`: `mov eax, ds:0x511DE8`, clear fog bit 3 (`and word [eax+0x14281], 0xFFF7`), `pop esi`, `ret 0xC`. The smooth block leaves by three routes with the same clear and the same `pop esi; ret 0xC`: its own early exits at `0x41C554` and `0x41C570`, and `0x41C55A`'s `jle 0x41C5CB`, which enters the tail past its `mov`. Callers: `0x495C68`, `0x495E11` (the screenshot tiler `0x495A30`), `0x497060`, `0x4978C9` (game-screen entry / load). **The smooth arm is unreachable** [VERIFIED 2026-09-23]: all four callers push `smooth = 0` (`push 0` at `0x495C5E`, `0x495DCB`, `0x49703E`, `0x4978C5`, each the first of the three pushes), and `0x41C4C0` occurs nowhere in the image as a 32-bit value — no function pointer, no table — so `0x41C4C7`'s `je` is always taken. `tagpu_zoom` therefore leaves the block alone. |
 | **`0x41CA10`** | **The per-frame camera stepper.** One caller, `0x495599`. It first picks a follow source (next row); with none it takes `je 0x41CB4A`. Where eye ≠ target it sets bit 1 of `main+0x142F1` ("camera moved"), **clears bit 3 of `main+0x14281`** — the screen fog grid's own is-current flag — then moves the eye *halfway* toward the target, capped at ±`0x140` (320 px) per axis per frame, and hands the result to `0x41C3C0`. It never writes the target. *[CORRECTED 2026-09-10: this row said `0x41CA30`, which is mid-function — the byte there is the LAST byte of the 7-byte `mov WORD PTR [ecx+0x1434B], ax` at `0x41CA2A`, and an `E8`/`E9` scan of `.text` finds nothing calling it. `0x41CA10` is the prologue (`mov ecx, ds:0x511DE8; push ebp; push esi; xor ebp, ebp`).]* |
@@ -10343,7 +10346,9 @@ the eye, and they do not agree:
 
 The audit behind the camera's centre range (`gpu-status.md` §2.3c): every function in `.text`
 that loads `main+0x1431F`/`+0x14323`, asked whether an eye anywhere in `[−W/2, map − W/2]` — `map` the map's own size (the PLOT grid ×
-16), whose far edges lie 32 px right of and 128 px below the scroll extent's; W the true
+16), whose far edges lie 32 px right of and 128 px below the scroll extent's, a range that holds
+the centre range in force, `[−W/2, min(extent, map) − W/2]` (the debug `Edge` command can name an
+extent past the map, and the far end takes the map's then); W the true
 viewport, up to 1792x1016 — with, below 1x, `vpwide`'s rect widened to four times the
 true one about its centre, can make it index memory out of bounds. A value used only to project
 onto the screen and then clipped or tested against a rect is **projection only**. Grouped by
@@ -12595,6 +12600,19 @@ apart reliably: a move's (`0x4B5E70`), a press or release's (`0x4B5ED1`) and a d
 second (`+0xE8` reads 30, *The scheduler, the clock and the test pacing*), and wrap short of 2^32; the placement
 module tells them apart by the record's identity (`tagpu_place.c`, `stale_move`).
 
+**That identity is dwords 2..5, never x and y.** `0x4C2360` is the only writer of the record's
+wParam, clock, message and double-click flag (`[obj+0x19E..0x1AD]`); its x and y are rewritten
+without them, on the game thread, by each drawing poll from `GetCursorPos` — `0x4C24F2`/`0x4C24F8`
+in `0x4C24B0`, `0x4C2624`/`0x4C262A` in `0x4C25E0`, `0x4C28C0`/`0x4C28C6` in `0x4C2870` [DISASSEMBLED]
+— and by vpwide's repair of `main+0x2C76` (`tagpu_vpwide.c`, `vpw_mouse_world_impl`). The other
+`+0x196` stores in the image (`0x42B52A..0x42B566`, `0x42C165..0x42C1E0`, `0x42CDC7`) are a struct
+copy and the weapon parser on other objects, not the mouse object. Zoomed, the two writers disagree:
+the move message carries the unzoomed position (`tagpu_zoom_mouse_lparam`), the poll the screen one,
+so a copy taken at the press and IdleTick's copy a frame later differ in x and y alone. MEASURED
+2026-10-25 on the reference setup at about zoom 0.35: `1573,1382` at the press, `1841,1185` after,
+the same clock `0x85E53`; a whole-record compare took 25 of 38 Shift-clicks for a lost release and
+ordered nothing.
+
 **The lParam unpack, per arm.** Each of the three arms above unpacks the position with the same
 two instructions, and they are the bytes `vpwide` patches to `MOVSX ECX,CX` / `SAR EAX,0x10`:
 
@@ -14014,6 +14032,18 @@ its `0xFFFE` compare (`0x483439`, `0x483455`, `0x4834CC`, `0x483572`, `0x4835E8`
 | 2 | down each column from the top, while the projected y, row·16 − height/2, is negative | `0x4834D3` |
 | 3 | up each column from the bottom, while row·16 − height/2 is past the extent's height `main+0x1422F` — the cell ONE ROW ABOVE the one tested (`sub eax, W·13`) | `0x483579` |
 | 4 | only when `[main+0x391E9]+0xD44` is set (a lava world [INFERRED]): every cell whose 2×2 minimum height `+0x06` is at or below the sea level `main+0x1427F` | `0x4835EF` |
+
+**The extent written here is where our edge passes end the map.** Pass 1 masks exactly the 32 px
+the extent's width leaves off (`edi = [main+0x14233] − 2`, `0x4833EC..0x4833F8`, then the cell
+and the one after it, `+0x08` and `+0x15` of a 13-byte cell), so the strip between the extent and
+the tile map's right strip is ground nobody can build on as well as ground no stock view shows;
+its bottom strip is masked only while pass 3's projected test holds, so on raised ground at the
+bottom edge some of it stays buildable. `tagpu_fx.h`
+`tagpu_edge_area` turns the extent (the packet's `map_pxw/h`, copied from these two words) into
+32-px tile cells, bounded to the tile map's own count, and the terrain pass, the feature pass and
+the lab fold the mirrored map edge there; the camera's centre range ends at the same words
+(`gpu-status.md` §2.3c, §2.90). A survey of the 275 stock TNTs found the editor's blank tile in
+that strip on 9 maps and inside the playable area on none.
 
 A spawn onto `0xFFFD` is refused by `FEATURES_Destroy` (a def at `0xFFFB` and up). A new game's TNT
 features are down when the mask runs, so their ANCHORS survive it, but a footprint cell of theirs

@@ -200,14 +200,15 @@ need `damagebars`, and the damaged tank smokes, so turn `fx`/`sfx` off for a pix
 Driving the camera at a zoom other than 1:
 
 - **The camera keeps the view centre on the map, at every zoom**: the eye ranges over
-  `[−W/2, map − W/2]` (W, H the true viewport, 896x704 at 1024x768; `map` the PLOT grid × 16),
-  so a map edge can reach the middle of the screen. That range holds only while `terr.on` draws
-  the ground; without it the eye stays in the engine's own `[0, extent − W]`, `extent` the scroll
-  extent `main+0x1422B`/`+0x1422F` — the map less 32 px wide and 128 px tall, and **not** the
-  map's size (Two Continents: map 10752x12800, extent 10720x12672). `tacli eye` is clamped into
-  the range in force, so `tacli eye <i> -99999 -99999` puts the map's NW corner at the view
-  centre and `99999 99999` its SE corner. A right-click past the edge orders a move to the nearest
-  point of the extent.
+  `[−W/2, extent − W/2]` (W, H the true viewport, 896x704 at 1024x768), so a map edge can reach
+  the middle of the screen. `extent` is the scroll extent `main+0x1422B`/`+0x1422F` — the tile
+  map less 32 px wide and 128 px tall (Two Continents: tile map 10752x12800, extent 10720x12672),
+  where stock's view ends and where the mirrored edge folds. That range holds only while `terr.on`
+  draws the ground; without it the eye stays in the engine's own `[0, extent − W]`. `tacli eye`
+  is clamped into the range in force, so `tacli eye <i> -99999 -99999` puts the map's NW corner at
+  the view centre and `99999 99999` the extent's SE corner (`8768 8864` on Painted Desert at
+  1024x768). The terrain heartbeat prints both sizes, in 32-px tiles: `terr: … map=289x292
+  area=288x288 …`. A right-click past the edge orders a move to the nearest point of the extent.
 - **A wheel round trip does not land on 1x** (x1.163 then x0.877 is 1.020). Re-anchor by writing
   `1.0` to `tagpu_zoom.txt`, then deleting it. Deleting the file hands over, it does not reset;
   notches sent while the file is present are dropped and logged (`zoom: wheel … ignored -

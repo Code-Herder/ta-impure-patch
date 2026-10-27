@@ -334,8 +334,8 @@ static int    s_ncell;                 /* what this frame put in it           */
    top-left corner sits on, and the atlas's texel size. The map cell it is,
    the other half of the rebuild, is s_rectTx0/s_rectTy0. */
 static float s_origX, s_origY, s_iw, s_ih;
-/* the map on the tile grid, in 32-px cells: what the mirror reflects about
-   (uMapPx, published) */
+/* the engine's area on the tile grid, in 32-px cells (tagpu_edge_area): what
+   the mirror reflects about (uMapPx, published) */
 static int   s_mapCellsW, s_mapCellsH;
 /* The shader spells CELL_PITCH, CELL_BORDER and TILE_PX as literals — GLSL
    cannot see a C macro — so a change to any of the three must not silently
@@ -1176,7 +1176,7 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
 {
     const char* ta = *(const char* const*)TA_MAINPP;
     const unsigned short* tmap;
-    int mapW16, mapH16, stride, mrows;
+    int mapW16, mapH16, stride, mrows, areaC, areaR;
     int tx0, ty0, fx, fy, cols, rows, r, c;
     int skipped = 0, junk = 0, mirrored = 0, own, keysOn;
     int eyeX, eyeY, vpL, vpT, evw, evh;
@@ -1252,6 +1252,13 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     stride = mapW16 / 2;                       /* TILE_MAP width in 32-px cells */
     mrows  = mapH16 / 2;
     if (stride <= 0 || mrows <= 0) return terr_bail();
+    /* THE MAP IS THE ENGINE'S AREA, not the tile map (tagpu_edge_area): a cell
+       past it is past the map, mirrored or skipped like any other, and only
+       the row stride stays the tile map's own. Read off the packet, the words
+       the camera's range is computed from (tagpu_zoom.c `camera_range`), so the
+       view centre and the fold stop at the same place. */
+    areaC = tagpu_edge_area(v->packet->map_pxw, stride);
+    areaR = tagpu_edge_area(v->packet->map_pxh, mrows);
 
     /* Run the engine's own algorithm over the ZOOM's viewport, not the
        engine's. Screen and world differ by a pure translation, so widening the
@@ -1281,26 +1288,26 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
        floats. The map cell is s_rectTx0/s_rectTy0, set just above. */
     s_origX = (float)(vpL - fx); s_origY = (float)(vpT - fy);
     s_iw = iw; s_ih = ih;
-    s_mapCellsW = stride; s_mapCellsH = mrows;
+    s_mapCellsW = areaC; s_mapCellsH = areaR;
     /* THE KEYS ARE THIS MAP'S OR NOT USED: built over a map of these very
        dimensions, which the drop on a new tile set keeps true, and checked
        here because the index below is a bound only while they are */
     keysOn = s_cellKey && s_nbFrames && s_keyW == stride && s_keyH == mrows;
     s_nbKeysOn = keysOn;
     for (r = 0; r < rows; r++) {
-        int my = ty0 + r, sy = my, flipY = 0, offY = (my < 0 || my >= mrows), foldY = 0;
+        int my = ty0 + r, sy = my, flipY = 0, offY = (my < 0 || my >= areaR), foldY = 0;
         if (offY) {
             if (!v->mirror) { skipped += cols; continue; }
-            sy = tagpu_edge_reflect(my, mrows, &flipY);
-            if (flipY) foldY = edge_folds(my, mrows);
+            sy = tagpu_edge_reflect(my, areaR, &flipY);
+            if (flipY) foldY = edge_folds(my, areaR);
         }
         for (c = 0; c < cols; c++) {
             int mx = tx0 + c, sx = mx, flipX = 0, off = offY, foldX = 0;
             int idx, key;
-            if (mx < 0 || mx >= stride) {
+            if (mx < 0 || mx >= areaC) {
                 if (!v->mirror) { skipped++; continue; }
-                sx = tagpu_edge_reflect(mx, stride, &flipX);
-                if (flipX) foldX = edge_folds(mx, stride);
+                sx = tagpu_edge_reflect(mx, areaC, &flipX);
+                if (flipX) foldX = edge_folds(mx, areaC);
                 off = 1;
             }
             idx = tmap[(size_t)sy * stride + sx];
@@ -1338,9 +1345,9 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
             char b[280];
             last = v->frame_counter;
             _snprintf(b, sizeof b,
-                "terr: grid=%dx%d tile0=(%d,%d) frac=(%d,%d) map=%dx%d cells=%d"
+                "terr: grid=%dx%d tile0=(%d,%d) frac=(%d,%d) map=%dx%d area=%dx%d cells=%d"
                 " zoomvp=%dx%d off-map=%d mirror=%d junk=%d atlas=%dx%d/%d%s%s",
-                cols, rows, tx0, ty0, fx, fy, stride, mrows, s_ncell, evw, evh,
+                cols, rows, tx0, ty0, fx, fy, stride, mrows, areaC, areaR, s_ncell, evw, evh,
                 skipped, mirrored, junk, ATLAS_W, s_atlasH, s_setCount,
                 s_over ? " (over: engine still drawing)"
                        : (s_passive ? " (passive: engine still drawing)" : ""),

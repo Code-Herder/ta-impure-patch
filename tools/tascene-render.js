@@ -178,8 +178,12 @@ function classicTerrain(gl, vs, fs, atlas, r8, pal) {
     // tagpu_terr.c's gather, line for line: one instance per visible cell.
     // `tm` is the pack's map.tilemap (w, h) and `tiles` its u16 indices; E and W
     // the swept world rect, (vpL, vpT) the viewport's game-pixel corner.
-    gather(tiles, tm, E, W, vpL, vpT) {
-      const stride = tm.w, mrows = tm.h;
+    // `area` [cols, rows] is where the map ends, in 32-px cells (tagpu_fx.h
+    // tagpu_edge_area: the engine's scroll extent, at most the tile map); a
+    // cell past it is skipped. Without one the map is the whole tile map.
+    gather(tiles, tm, E, W, vpL, vpT, area) {
+      const stride = tm.w;
+      const [areaC, areaR] = area || [tm.w, tm.h];
       const tx0 = div32trunc(E[0]), fx = E[0] - tx0 * 32;
       const ty0 = div32trunc(E[1]), fy = E[1] - ty0 * 32;
       const cols = ceil32(W[0] + fx), rows = ceil32(W[1] + fy);
@@ -187,10 +191,10 @@ function classicTerrain(gl, vs, fs, atlas, r8, pal) {
       let n = 0, skipped = 0, junk = 0;
       for (let r = 0; r < rows; r++) {
         const my = ty0 + r;
-        if (my < 0 || my >= mrows) { skipped += cols; continue; }
+        if (my < 0 || my >= areaR) { skipped += cols; continue; }
         for (let c = 0; c < cols; c++) {
           const mx = tx0 + c;
-          if (mx < 0 || mx >= stride) { skipped++; continue; }
+          if (mx < 0 || mx >= areaC) { skipped++; continue; }
           const idx = tiles[my * stride + mx];
           if (idx >= atlas.tiles) { junk++; continue; }
           // the quad still spans exactly TILE_PX texels, and its far edge lands
@@ -260,19 +264,26 @@ const reflect = (m, n) => {
 //   defs, atlas        the pack's feature defs and atlas (w, h)
 //   D, labD            the pack's depth keys and the lab's
 //   lambertAt(col,row) the lab's ground lambert at an anchor
+//   area               [cols, rows], where the map ends in 32-px tile cells
+//                      (tagpu_fx.h tagpu_edge_area); without one, the tile
+//                      map's own, w16 and h16 halved
 // Returns { shadow, body, mshadow, mbody } (vertex arrays) or null when the
 // sweep is empty.
 function gatherFeatures(p) {
   const lab = p.lab, D = p.D, labD = p.labD, defs = p.defs, E = p.E, W = p.W;
   const w16 = p.w16, h16 = p.h16, heightBuf = p.heights, vpL = p.vpL, vpT = p.vpT;
   const mirror = p.mirror;
+  const [areaC, areaR] = p.area || [w16 >> 1, h16 >> 1];
+  // the map ends at the engine's area (areaC, areaR), two 16-px cells to a
+  // tile; the engine's sweep never reaches the tile map's last row or column
+  const aW = Math.min(2 * areaC, w16 - 1), aH = Math.min(2 * areaR, h16 - 1);
   let r0 = p.r0, nRows = (W[1] >> 4) + 32;
   let c0 = (E[0] >> 4) - 10, nCols = (W[0] >> 4) + 12;
   if (!mirror) {
     if (r0 < 0) { nRows += r0; r0 = 0; }
-    if (r0 + nRows > h16 - 1) nRows = h16 - r0 - 1;
+    if (r0 + nRows > aH) nRows = aH - r0;
     if (c0 < 0) { nCols += c0; c0 = 0; }
-    if (c0 + nCols > w16 - 1) nCols = w16 - c0 - 1;
+    if (c0 + nCols > aW) nCols = aW - c0;
   }
   if (nRows <= 0 || nCols <= 0) return null;
   const flatSpan = nRows * nCols;
@@ -305,64 +316,101 @@ function gatherFeatures(p) {
                                 [x1, y0, u1, v0], [x1, y1, u1, v1], [x0, y1, u0, v1]])
       into.push(x, y, enc, u, v, ck, mode, x - vpL + E[0], y - vpT + E[1]);
   };
-  for (let row = r0; row < r0 + nRows; row++) {
-    const offRow = row < 0 || row >= h16;
-    const [srow, flipY] = offRow ? reflect(row, h16) : [row, false];
-    for (let col = c0; col < c0 + nCols; col++) {
-      const off = offRow || col < 0 || col >= w16;
-      const [scol, flipX] = off ? reflect(col, w16) : [col, false];
-      // the engine's sweep never reaches the last row or column (the clamps
-      // above), so nothing anchored there is drawn — nor mirrored
-      if (srow >= h16 - 1 || scol >= w16 - 1) continue;
-      // off the map, the MAP's anchor at the cell this one mirrors
-      const idx = off ? p.mapAnchors[srow * w16 + scol] : p.anchors[row * w16 + col];
+  // the four height bytes' projection term at a cell, the engine's own
+  const liftAt = (r, c) => {
+    const h00 = heightBuf[r * w16 + c];
+    const h01 = (c + 1 < w16) ? heightBuf[r * w16 + c + 1] : h00;
+    let h10 = h00, h11 = h01;
+    if (r + 1 < h16) {
+      h10 = heightBuf[(r + 1) * w16 + c];
+      h11 = (c + 1 < w16) ? heightBuf[(r + 1) * w16 + c + 1] : h10;
+    }
+    return (h00 + h01 + h10 + h11) >> 3;
+  };
+  const keyAt = (d, row, col) => {
+    const rel0 = row - r0;
+    if (d.flat)
+      return lab ? labD.flat + rel0 * D.rowStep
+                 : D.flat0 + D.flatSpan * (rel0 * nCols + (col - c0)) / flatSpan;
+    let rel = rel0;
+    if (rel < 0) rel = 0;
+    if (rel > nRows + 8) rel = nRows + 8;
+    // the column term breaks ties inside a row. The lab narrows it so a
+    // tall feature cannot reach past the NEXT row's ground (rowStep-0.1).
+    return D.tall0 + rel * D.rowStep + (lab ? labD.tallCol : 1.5) * ((col - c0) / nCols);
+  };
+  // the engine area's edges on the tile grid, px (tagpu_feat.c s_areaW/H)
+  const areaPxW = areaC * 32, areaPxH = areaR * 32;
+  // THE MAP'S OWN: the engine's sweep, and its projection -- screenY is worldZ
+  // minus half the height. Under the mirror a feature DRAWN past the area is
+  // past the map, and the mirror takes exactly the ones this keeps as its
+  // sources.
+  for (let row = Math.max(r0, 0); row < Math.min(r0 + nRows, h16 - 1); row++) {
+    for (let col = Math.max(c0, 0); col < Math.min(c0 + nCols, w16 - 1); col++) {
+      const idx = p.anchors[row * w16 + col];
       if (idx === undefined) continue;
       const d = defs[idx];
       if (!d) continue;
-      const h00 = heightBuf[srow * w16 + scol];
-      const h01 = (scol + 1 < w16) ? heightBuf[srow * w16 + scol + 1] : h00;
-      let h10 = h00, h11 = h01;
-      if (srow + 1 < h16) {
-        h10 = heightBuf[(srow + 1) * w16 + scol];
-        h11 = (scol + 1 < w16) ? heightBuf[(srow + 1) * w16 + scol + 1] : h10;
-      }
-      // the engine's projection: screenY is worldZ minus half the height.
-      // A reflection reverses the cells a footprint spans, so a mirrored
-      // feature ENDS on the cell its source begins on. The mirrored terrain
-      // is the tile ART reflected, and the art has the height baked in, so a
-      // y reflection mirrors where the source is DRAWN: the half height is
-      // added, not taken off (taken off, a tree on a hill lands the hill's
-      // height short of the art it stood on)
       const hx = (d.footx * 16) / 2 | 0, hz = (d.footz * 16) / 2 | 0;
-      const lift = (h00 + h01 + h10 + h11) >> 3;
-      const wax = flipX ? (col + 1) * 16 - hx : col * 16 + hx;
-      const waz = flipY ? (row + 1) * 16 - hz + lift : row * 16 + hz - lift;
+      const wax = col * 16 + hx, waz = row * 16 + hz - liftAt(row, col);
+      if (mirror && (wax >= areaPxW || waz >= areaPxH)) continue;
       const sx = wax + vpL - E[0], sy = waz + vpT - E[1];
-      const rel0 = row - r0;
-      let enc;
-      if (d.flat) {
-        enc = lab ? labD.flat + rel0 * D.rowStep
-                  : D.flat0 + D.flatSpan * (rel0 * nCols + (col - c0)) / flatSpan;
-      } else {
-        let rel = rel0;
-        if (rel < 0) rel = 0;
-        if (rel > nRows + 8) rel = nRows + 8;
-        // the column term breaks ties inside a row. The lab narrows it so a
-        // tall feature cannot reach past the NEXT row's ground (rowStep-0.1).
-        enc = D.tall0 + rel * D.rowStep +
-              (lab ? labD.tallCol : 1.5) * ((col - c0) / nCols);
-      }
+      const enc = keyAt(d, row, col);
       const shEnc = enc - (d.flat ? D.shadowFlat : D.shadowTall);
-      if (off) {
-        if (d.shadow) mquad(mshadow, d.shadow, sx, sy, shEnc, d.shadtrans ? 2 : 1, flipX);
-        if (d.body) mquad(mbody, d.body, sx, sy, enc, d.animtrans ? 2 : 1, flipX);
-        continue;
-      }
       const lam = lab ? p.lambertAt(col, row) : 1;
       if (d.shadow)
         quad(shadow, d.shadow, sx, sy, shEnc, d.shadtrans ? 2 : 1, wax, waz, lam);
       if (d.body)
         quad(body, d.body, sx, sy, enc, d.animtrans ? 2 : 1, wax, waz, lam);
+    }
+  }
+  // THE MIRROR (tagpu_feat.c mirror_gather). Band b of the picture is the map
+  // (0), the map turned over (b odd) or the right way round (b even) b maps
+  // away; a copy in band b sits on row b H + srow, or (b + 1) H - 1 - srow
+  // turned over. A source is the map's when it is DRAWN on the map, and a
+  // feature is drawn under 8 rows above its anchor, so each row is asked of
+  // its own band and of a neighbour it is that near. A copy past the top or
+  // bottom stands upright and is drawn whole, or -- when any of it would reach
+  // across the map's border -- not at all. A reflection reverses the cells a
+  // footprint spans, so a mirrored feature ENDS on the cell its source begins
+  // on. The mirrored terrain is the tile ART reflected, and the art has the
+  // height baked in, so a y reflection mirrors where the source is DRAWN: the
+  // half height is added, not taken off.
+  const crosses = (rect, waz, top) => {
+    const y0 = waz - rect.hy, y1 = y0 + rect.h;
+    return top ? y1 > 0 : y0 < areaPxH;
+  };
+  const H = 2 * areaR, Wc = 2 * areaC, LIFT_ROWS = 8;
+  if (mirror) for (let row = r0; row < r0 + nRows; row++) {
+    const b0 = Math.floor(row / H), bands = [b0];
+    if (((b0 + 1) & 1) && row >= (b0 + 1) * H - LIFT_ROWS) bands.push(b0 + 1);
+    if (!((b0 - 1) & 1) && row < b0 * H + LIFT_ROWS) bands.push(b0 - 1);
+    for (const band of bands) {
+      const flipY = (band & 1) !== 0;
+      const srow = flipY ? (band + 1) * H - 1 - row : row - band * H;
+      if (srow < 0 || srow >= h16 - 1) continue;
+      for (let col = c0; col < c0 + nCols; col++) {
+        if (band === 0 && col >= 0 && col < Wc) continue;      // the map's own
+        const [scol, flipX] = reflect(col, Wc);
+        if (scol >= aW) continue;
+        const idx = p.mapAnchors[srow * w16 + scol];
+        if (idx === undefined) continue;
+        const d = defs[idx];
+        if (!d) continue;
+        const hx = (d.footx * 16) / 2 | 0, hz = (d.footz * 16) / 2 | 0;
+        const lift = liftAt(srow, scol);
+        const swaz = srow * 16 + hz - lift;
+        if (scol * 16 + hx >= areaPxW || swaz >= areaPxH || (band !== 0 && swaz < 0)) continue;
+        const wax = flipX ? (col + 1) * 16 - hx : col * 16 + hx;
+        const waz = flipY ? (row + 1) * 16 - hz + lift : row * 16 + hz - lift;
+        if (band !== 0 && ((d.shadow && crosses(d.shadow, waz, band < 0)) ||
+                           (d.body && crosses(d.body, waz, band < 0)))) continue;
+        const sx = wax + vpL - E[0], sy = waz + vpT - E[1];
+        const enc = keyAt(d, row, col);
+        const shEnc = enc - (d.flat ? D.shadowFlat : D.shadowTall);
+        if (d.shadow) mquad(mshadow, d.shadow, sx, sy, shEnc, d.shadtrans ? 2 : 1, flipX);
+        if (d.body) mquad(mbody, d.body, sx, sy, enc, d.animtrans ? 2 : 1, flipX);
+      }
     }
   }
   return { shadow, body, mshadow, mbody };

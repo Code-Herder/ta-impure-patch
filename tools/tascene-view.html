@@ -226,7 +226,8 @@
        the clamp     the point at the screen centre is clamped to the map
                      (Recoil's SpringController Update), so the map's edge
                      can reach the middle of the screen at every zoom:
-                     eye in [-W/2, map - W/2]
+                     eye in [-W/2, extent - W/2], the extent the
+                     engine's own (the map less 32 and 128 px)
        zoom in       holds the world point under the pointer
        zoom out      the camera pulls straight back: the centre holds
        the notch     14 % of the camera's distance 1/z per notch (BAR's
@@ -992,9 +993,9 @@ uniform sampler2D uRGB;
 uniform int uUndither;
 ${EDGE_TONE}
 void main(){
-  // the mirror is scenery beyond the map and never covers the map itself: a
-  // mirrored tree just south of the edge stands IN FRONT of the last rows by
-  // the painter's order, and its top would hide their own features
+  // a side copy stays off the map's own columns, where its overhang would lay
+  // a reflected tree over the tree it reflects; a copy above or below crosses
+  // nothing here, since buildFeatures drops any that would
   if (all(greaterThanEqual(vWorld, vec2(0.0))) && all(lessThan(vWorld, uMapPx))) discard;
   vec3 rgb;
   if (uUndither == 1) {
@@ -1096,6 +1097,17 @@ async function main() {
   }
 
   const view = scene.view, map = scene.map;
+  // WHERE THE MAP ENDS (tagpu_fx.h tagpu_edge_area): the engine's scroll
+  // extent, the tile map less 32 px wide and 128 px tall, in 32-px tile cells.
+  // Stock never shows a pixel past it, so the camera stops there and the mirror
+  // folds there; the strip between it and the tile map is drawn as the
+  // reflection. At most the tile map's own size, so a folded cell indexes it.
+  const edgeArea = (extent, n) => {
+    const a = Math.floor(extent / 32);
+    return a > 0 && a < n ? a : n;
+  };
+  const areaC = edgeArea(map.w16 * 16 - 32, map.tilemap.w);
+  const areaR = edgeArea(map.h16 * 16 - 128, map.tilemap.h);
   const [GW, GH] = view.res;
   const [vpL, vpT, vw, vh] = view.vp;
   // THE ZOOMED VIEW. The viewport shows vw/zoom x vh/zoom world units centred
@@ -1309,7 +1321,7 @@ async function main() {
   // EDGE_TONE's uniforms, on whichever mirror program is in use
   function edgeTone(U, L) {
     gl.uniform1i(U.uPal, 1);
-    gl.uniform2f(U.uMapPx, map.tilemap.w * 32, map.tilemap.h * 32);
+    gl.uniform2f(U.uMapPx, areaC * 32, areaR * 32);
     gl.uniform4f(U.uEdge, L.edgeDim, L.edgeGrey, L.edgeFade, L.edgeSteps);
     gl.uniform1i(U.uDither, L.edgeDither ? 1 : 0);
   }
@@ -1700,7 +1712,7 @@ async function main() {
 
   // tagpu_terr.c's gather (tascene-render.js), one instance per visible cell
   function buildTerrain(L) {
-    const g = terr.gather(tilemap, map.tilemap, E, W, vpL, vpT);
+    const g = terr.gather(tilemap, map.tilemap, E, W, vpL, vpT, [areaC, areaR]);
     L.stats = g.stats;
     return g.n;
   }
@@ -1755,8 +1767,8 @@ async function main() {
     const rAbove = L.relief > 0 && L.datum > 0
                  ? Math.ceil(L.relief * L.datum * 0.5 / 32) + 1 : 0;
     // the view's tiles, half-open, clipped to the map
-    const x0 = Math.max(0, tx0), x1 = Math.min(stride, tx0 + cols);
-    const y0 = Math.max(0, ty0 - rAbove), y1 = Math.min(mrows, ty0 + rows);
+    const x0 = Math.max(0, tx0), x1 = Math.min(areaC, tx0 + cols);
+    const y0 = Math.max(0, ty0 - rAbove), y1 = Math.min(areaR, ty0 + rows);
     const D = scene.depth;
     // Per-row keys only when relief can lift a southern cell over a northern
     // unit. With relief=0 nothing rises, and per-row keys would put the ground
@@ -1813,8 +1825,8 @@ async function main() {
   }
   function emitChunk(L, cx, cy) {
     const stride = map.tilemap.w, mrows = map.tilemap.h;
-    const x0 = cx * LT_CHUNK, x1 = Math.min(stride, x0 + LT_CHUNK);
-    const y0 = cy * LT_CHUNK, y1 = Math.min(mrows, y0 + LT_CHUNK);
+    const x0 = cx * LT_CHUNK, x1 = Math.min(areaC, x0 + LT_CHUNK);
+    const y0 = cy * LT_CHUNK, y1 = Math.min(areaR, y0 + LT_CHUNK);
     const vb = new Float32Array((x1 - x0) * (y1 - y0) * 9 * LTVST);
     const ib = new Uint16Array((x1 - x0) * (y1 - y0) * 24);
     const iw = 1 / map.atlas.w, ih = 1 / map.atlas.h;
@@ -1906,11 +1918,11 @@ async function main() {
       edgeVerts[o + 3] = v; edgeVerts[o + 4] = wx; edgeVerts[o + 5] = wz; n++;
     };
     for (let r = 0; r < rows; r++) {
-      const my = ty0 + r, [sy, flipY] = reflect(my, mrows);
+      const my = ty0 + r, [sy, flipY] = reflect(my, areaR);
       for (let c = 0; c < cols; c++) {
         const mx = tx0 + c;
-        if (mx >= 0 && mx < stride && my >= 0 && my < mrows) continue;
-        const [sx, flipX] = reflect(mx, stride);
+        if (mx >= 0 && mx < areaC && my >= 0 && my < areaR) continue;
+        const [sx, flipX] = reflect(mx, areaC);
         const idx = tilemap[sy * stride + sx];
         if (idx >= map.atlas.tiles) continue;
         const cx = idx % map.atlas.cols, cy = (idx / map.atlas.cols) | 0;
@@ -1965,6 +1977,7 @@ async function main() {
     L.edgeFeat = null;
     const got = TR.gatherFeatures({
       lab, mirror, r0: rowBase(), E, W, vpL, vpT, w16, h16, heights: heightBuf,
+      area: [areaC, areaR],
       anchors, mapAnchors, defs: scene.features.defs, atlas: scene.features.atlas,
       D: scene.depth, labD, lambertAt: (col, row) => lambertAt(col, row, L) });
     if (!got) return [0, 0];
@@ -2289,10 +2302,10 @@ async function main() {
     // an integer eye and carries the remainder, which is the same thing — and
     // `eye` its rounding, which is all the builders ever see.
     const cam = eye.slice();
-    const mapW = map.w16 * 16, mapH = map.h16 * 16;
+    const mapW = map.w16 * 16 - 32, mapH = map.h16 * 16 - 128;
     // The range the eye may take, [loX, hiX, loY, hiY]: the centre clamp
     // (tagpu_zoom.c camera_range) — the ground point at the screen centre is
-    // clamped to the map, the same at every zoom.
+    // clamped to the engine's scroll extent, the same at every zoom.
     const range = () => [-vw / 2, mapW - vw / 2, -vh / 2, mapH - vh / 2];
     const clamp = () => {
       const [loX, hiX, loY, hiY] = range();

@@ -196,9 +196,10 @@ typedef struct TAGPU_TERRHAND {
     float fogOrgX, fogOrgY, fogCols, fogRows;
     float hDimW, hDimH;       /* uHDim: 0 while there is no usable grid */
     float sun[3], amb, norm;
-    /* uMapPx: the map on the tile grid, its 32-px cell count times 32 -- the
-       extent the mirrored cells reflect about and the edge tone fades from
-       (TAGPU_GLSL_EDGE_FN). Published whether or not a cell is mirrored. */
+    /* uMapPx: the engine's area on the tile grid (tagpu_edge_area), its 32-px
+       cell count times 32 -- where the mirrored cells reflect and the edge tone
+       fades from (TAGPU_GLSL_EDGE_FN). Published whether or not a cell is
+       mirrored. */
     float mapPxW, mapPxH;
 
     /* The texels, as bytes: the Vulkan pass uploads them into images of its
