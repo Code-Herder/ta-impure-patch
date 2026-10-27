@@ -53,7 +53,8 @@ TOL_THUMB_PX = 1.0
 # (name, resolution, the mockup's URL switches, what is done to the page before it is read):
 # fold -- category rows clicked, by their path in the tree; speed -- 1x or 2x pressed; held -- a
 # control held down; tick -- the demo paused and stepped to that tick, so its caption and keys
-# show; scroll -- each panel's scroll, in pixels, or "max" or "half" of its limit
+# show; scroll -- each panel's scroll, in pixels, or "max" or "half" of its limit; try -- Try it
+# yourself pressed; build -- that type's build menu button pressed after it
 CASES = [
     ("1080-stock-quickbuild", (1920, 1080), "mod=stock&entry=quickbuild", {}),
     ("1080-esc-quickbuild-locked", (1920, 1080), "mod=escalation&entry=quickbuild", {"tick": 75}),
@@ -66,6 +67,10 @@ CASES = [
     ("1024-stock-buildshapes-scrolled", (1024, 768), "mod=stock&entry=buildshapes&demo=2",
      {"scroll": {"text": "max"}, "tick": 30}),
     ("1024-esc-quickbuild-scrolled", (1024, 768), "mod=escalation&entry=quickbuild", {"scroll": {"text": 37}}),
+    # Try it yourself: the build menu beside the stage, contextual and then with a type armed
+    ("1080-stock-quickbuild-try", (1920, 1080), "mod=stock&entry=quickbuild", {"try": True}),
+    ("4k-stock-buildshapes-try-armed", (3840, 2160), "mod=stock&entry=buildshapes&demo=2", {"try": True, "build": "ARMLLT"}),
+    ("1024-stock-quickbuild-try-armed", (1024, 768), "mod=stock&entry=quickbuild", {"try": True, "build": "ARMGEO"}),
 ]
 
 KEYNAME = {"Shift": "shift", "Alt": "alt", "Ctrl": "ctrl", "Z": "z", "X": "x", "Left-click": "lmb", "Right-click": "rmb"}
@@ -84,6 +89,9 @@ COLLECT = r"""async () => {
     if (n.entry) leaves.push(n.entry); else walk(n.children, p, depth + 1); }); })(tree.tree, 't', 0);
   for (const p of A.fold || []) $(`[data-fold="${p}"]`).click();
   if (A.speed) $(A.speed === 2 ? '#c-x2' : '#c-x1').click();
+  // Try it yourself, and a type of its build menu armed: the menu is made in the frame loop
+  if (A.try) { $('#c-try').click(); await raf(); await raf(); }
+  if (A.build) { $(`#bmenu [data-build="${A.build}"]`).click(); await raf(); await raf(); }
   if (A.tick != null) {
     if (S.playing) $('#c-play').click();
     const sim = WikiPage.sim();
@@ -128,6 +136,7 @@ COLLECT = r"""async () => {
   for (const [id, key] of [['c-play', 'play'], ['c-replay', 'replay'], ['c-x1', 'x1'], ['c-x2', 'x2'], ['c-try', 'try']])
     if (!$('#' + id).disabled) hot($('#' + id), key);
   hot($('#stage'), 'stage');
+  for (const e of document.querySelectorAll('#bmenu [data-build]')) hot(e, 'build:' + (e.dataset.build || 'none'));
   // the discs: a 1 px border round a fill
   for (const e of document.querySelectorAll('#win .lock, #badge i')) {
     if (!shown(e)) continue;
@@ -184,10 +193,12 @@ COLLECT = r"""async () => {
     scroll[k] = { top: e.scrollTop / u, max: (e.scrollHeight - e.clientHeight) / u, bar: e.offsetWidth - e.clientWidth,
                   track: [...client(e).slice(0, 2), (e.offsetWidth - e.clientWidth) / u, e.clientHeight / u],
                   page: [e.getBoundingClientRect().right - (e.offsetWidth - e.clientWidth), e.getBoundingClientRect().top, e.clientHeight] }; }
-  const sim = WikiPage.sim();
+  const sim = WikiPage.sim(), view = sim && sim.view();
   const state = { W: f.width, H: f.height, bar: 32, rewind: S.rewind, open: S.open, entry: leaves.indexOf(S.entry), demo: S.demo,
     fold: [...S.fold].map(p => nodes.findIndex(n => n.p === p)), scroll: ['tree', 'demos', 'text'].map(k => scroll[k].top),
     playing: S.playing, done: !!(sim && sim.done && !S.try), speed: S.speed, try: S.try, mod: S.mod, held: A.held ? A.held.replace('c-', '') : '',
+    sel: view ? view.units.filter(u => u.selected).map(u => u.type) : [],
+    armed: view && view.mode.startsWith('build:') ? view.mode.slice(6) : '',
     caption: $('#caption').textContent, keys: [...document.querySelectorAll('#keys .kc')].map(e => e.textContent), fallback, sizes };
   return JSON.stringify({ state, els, u, scroll, frame: [f.left, f.top] });
 }"""

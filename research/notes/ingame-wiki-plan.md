@@ -947,37 +947,76 @@ writes the record. The render thread reads the record. No engine memory is touch
 
 ### Landing 5 — Try it yourself
 
+**Status: built on its worktree branch, not landed.**
+
 **What the player sees.** Try it yourself takes over the stage from the demo's scene, with the
-build menu column beside it. The pointer, the buttons, Shift, Alt and Ctrl, and Alt+Z or Alt+X
-drive the simulation as in the mockup. Back to demo returns.
+build menu's column beside it. The pointer, the left and right buttons, Shift, Alt and Ctrl, and
+Alt+Z or Alt+X drive the simulation as in the mockup; over the stage the player's cursor is the
+simulation's own. Back to demo returns, and so does picking an entry or a demo.
 
-**Files: `src/tagpu_wiki.c`.** In Try it:
-- **The pointer.** Over the stage, it goes to the world through `tagpu_wikistage_fit` on the last
-  drawn frame's stage rect (from the command record), clamped to the map, and becomes
-  `input({move})`.
-- **The buttons.** A left or right press on the stage gives a move and then a down; a release
-  anywhere gives the up of a held button.
-- **The keys.** Shift, Alt and Ctrl give down and up; Z and X with Alt give a down, an auto-repeat
-  included.
-- **Release all** on leaving Try it, on replay, on close and on focus loss, as `wiki.js` does.
+**The game thread, `src/tagpu_wiki.c`.** Try it is `start` with the scene unscripted
+(`tagpu_wikisim_init`'s `scripted` 0, sim.js `create`); its button swaps `s_try` and starts again,
+playing. In Try it, from the same messages the window already takes while open (so nothing new
+reaches or is withheld from the engine):
+- **The pointer.** Over the stage, its client point goes to the world through
+  `tagpu_wikistage_fit` on the last drawn frame's canvas -- that frame's `stage` hit, which is the
+  canvas's own snapped rect -- and unit, clamped to the map, and becomes `input({move})`. The map is
+  the entry's scene's, and the frame must have drawn the window open for the entry selected now.
+- **The buttons.** A left or right press on the stage gives a move and then a down, once while it
+  is held; a release anywhere gives the up of a held button. A real press's release made off the
+  window is never sent; the first real move whose wParam carries that button up sends it.
+- **The keys.** Shift, Alt and Ctrl give a down once and an up; Z and X give a down every time,
+  an auto-repeat included, while Alt is down as the key events say -- its press handed to the
+  engine or taken by the wiki, and no release since (the mockup's `e.altKey`).
+- **Release all**: what was sent down and not up is one ordered set, as `wiki.js` `down`. On
+  close and on focus loss (`tagpu_wiki_cancel`) every member's up is sent in the order it went
+  down -- a close at the level's end included; on leaving Try it, a replay, or a new entry or demo,
+  the set is emptied with the simulation it belonged to, which takes no up, as `wiki.js` `start`
+  nulls `sim` before its `releaseAll`.
+- **The build menu's press**: `build:<type>` (a type of the entry, by name) or `build:none` gives
+  `input({build})`; the key counts only on a frame drawn for the entry selected now.
+- **The dump** (`tagpu_wiki.json`) carries `try`, `try_down`, `try_log` -- every input given the
+  simulation, with the tick it was given at, at most 4096 a Try it, `try_cut` counting what did not
+  fit -- `u`, the hit map frame's unit, and `map`, the entry's cells.
 
-**The build menu.** `tagpu_wikilay.c` lays out a 66u column: the selection's build options among
-the entry's units, plus "none", in `face_chip`, with the keys `build:<type>` and `build:none`. A
-press gives `input({build})`.
+**The build menu, `src/tagpu_wikilay.c`.** A column `stage.menu` (66u) wide before the bezel: the
+heading "Build", then a button for each type the selection can build among the entry's own, and
+"none", each `controls.h` tall and `stage.menu_gap` apart, in `face_chip`, down when its type is
+armed ("none" in the contextual mode) or it is held; with nothing to build, "Select a constructor"
+in the heading's style. `tagpu_wikilay_menu` makes the list as `buildMenu` does: each selected
+unit's `builds` in the entry's JSON, in the selection's order and then the list's, every type
+once. The render thread fills `WIKIPAGE.build` from the frame's own view (`tagpu_wikistate.c`
+`page_of`), so the menu and the stage beside it are of one state. The load's check builds every
+entry in Try it with all its types in the menu.
 
-**The cursor.** The render thread hides it, with no cursor record, when the frame is in Try it
-and the record's pointer lies inside that same frame's stage rect. Both facts are of one frame, so
-there is no one-frame flicker. The stage draws the simulation's own cursor there.
+**The cursor, `src/tagpu_wikistate.c`.** `tagpu_wikistate_cursor` answers 0 -- no cursor record
+over the wiki -- when the frame is in Try it with a view and the record's pointer lies inside that
+same frame's stage canvas. Both facts are of one frame, so no frame shows both cursors or neither.
+The stage draws the simulation's own cursor there, as every demo does.
 
-**Who reads and writes what.** Game thread only. Nothing new crosses threads, beyond the record's
-`try` flag and the hit map's stage rect.
+**Who reads and writes what.** Game thread only. Nothing new crosses threads: the record's
+`try_it` flag existed, and the stage rect is the hit map's `stage` control, which landing 3
+already posted. `tagpu_wikipk.h` and `tagpu_wikidata.h`, which the simulation files reach through
+`tagpu_packet.h`, are unchanged.
 
-**The comment that must stand.** The world point comes from the frame the player saw.
+**The comment that must stand** (`stage_world`): the world point comes from the frame the player
+saw.
 
-**Verification:** `wiki_regression.py <instance> try --launch`, about 4 minutes. It replays one
-demo's inputs (`snap`, then `line`) as device input on the stage, inverting the fit from the
-dump's stage rect. The final hash must equal `sim.js` fed the world inputs the dump logged. Then
-captures.
+**Where the plan and the mockup disagreed, the mockup was followed:**
+- *Release all on leaving Try it and on replay* sends no ups in the mockup: its `start` nulls the
+  simulation before `releaseAll`. The game empties the set with the simulation.
+- *The build options* need the build list's order, which the loader's `builds` mask drops: the
+  order comes from the entry's JSON, which the loaded data keeps.
+- *The stage rect from the command record*: the hit map's `stage` control is that rect already; no
+  field was added.
+- The mockup keeps its simulation across a close and an open; the game frees it at the close, as
+  landing 4 decided for the demos, so a reopened window is in Try it again on a fresh scene.
+
+**Verification:** `wiki_regression.py <instance> try --launch` replays `snap` and then `line` as
+device input on the stage, inverting the fit from the dump's `stage` hit and unit, and compares
+the paused simulation's hash with `simparity.mjs --try` (sim.js fed the inputs the dump logged at
+their ticks); then the releases on Back to demo and on close, and the reopen. Captures of Try it
+with the build column at 1080p and 4K.
 
 **Review: medium.**
 

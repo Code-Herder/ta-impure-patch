@@ -7,6 +7,9 @@
    usage: node tools/wiki/simparity.mjs --hash
      prints `<entry>/<demo> <hash>` for every demo: sim.js's state hash on its last tick, 16 hex digits, the number
      the DLL's tagpu_wikisim_hash must give for the same demo played to its end. Builds nothing.
+   usage: node tools/wiki/simparity.mjs --try DUMP
+     prints sim.js's state hash of Try it yourself fed the inputs the game's state dump logged (tools/wiki_regression.py
+     try), the number the dump's own hash must equal. Builds nothing.
 
    It packs art/wiki/ as the Makefile does (tools/hudpak.py --set wiki), builds tagpu/ddraw/tests/wikitest.c with the
    real sources, and plays every demo of every entry the tree names through both, comparing every field of the view,
@@ -147,6 +150,26 @@ if (process.argv.includes('--hash')) {
       console.log(`${id}/${demo.id} ${stateHash(sim, sim.view())}`);
     }
   }
+  process.exit(0);
+}
+
+/* --try FILE: Try it yourself as the game played it. FILE is the wiki's state dump (tagpu_wiki.json): the entry, the
+   demo whose scene Try it took, the tick, and `try_log`, every input the game thread gave its simulation with the
+   tick it was given at. sim.js's create() on the same scene is fed the same inputs at the same ticks and stepped to
+   the dump's tick; its state hash is printed, the number the dump's `hash` must equal. */
+const tryAt = process.argv.indexOf('--try');
+if (tryAt >= 0) {
+  const dump = JSON.parse(fs.readFileSync(process.argv[tryAt + 1], 'utf8'));
+  const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${dump.entry}.json`), 'utf8'));
+  const demo = entry.demos.find(d => d.id === dump.demo);
+  if (!demo) { console.error(`simparity --try: no demo ${dump.entry}/${dump.demo}`); process.exit(2); }
+  const sim = WikiSim.create(entry, demo);
+  for (const [t, kind, a, b] of dump.try_log) {
+    while (sim.tick < t) sim.step();
+    sim.input(kind === 'move' ? { move: [a, b] } : { [kind]: a });
+  }
+  while (sim.tick < dump.tick) sim.step();
+  console.log(stateHash(sim, sim.view()));
   process.exit(0);
 }
 

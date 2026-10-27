@@ -51,9 +51,10 @@ void tagpu_wikistate_drawn(int drew);
 
 /* The cursor goes back over the wiki layer this frame (tagpu_vk_gui_record_cursor): the layer drew,
    and either the window is closed -- the cursor is where the engine's own would be, which the
-   button may cover -- or the record's pointer is in the picture. While the window is open with no
-   pointer in the picture the UI layer's cursor stands at the frozen point, on the wiki button,
-   which is not where the player's pointer is, so none is drawn. */
+   button may cover -- or the record's pointer is in the picture and not over the stage of a frame
+   in Try it yourself, where the stage draws the simulation's own cursor instead. While the window
+   is open with no pointer in the picture the UI layer's cursor stands at the frozen point, on the
+   wiki button, which is not where the player's pointer is, so none is drawn. */
 int  tagpu_wikistate_cursor(unsigned frame);
 
 /* ANY THREAD: 1 once the layout has refused, for the rest of the session -- no frame draws the

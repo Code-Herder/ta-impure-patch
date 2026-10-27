@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""The in-game wiki in the game (tagpu_wiki.c; research/notes/ingame-wiki-plan.md, landings 2 to 4):
+"""The in-game wiki in the game (tagpu_wiki.c; research/notes/ingame-wiki-plan.md, landings 2 to 5):
 its button, its window, the input it takes while open, the pause it holds in single player, the
 page's controls and the demos playing on the stage.
 
     wiki_regression.py <instance> sp --launch         a single-player skirmish, not recorded
     wiki_regression.py <instance> page --launch       the page's controls, single player
     wiki_regression.py <instance> demos --launch      the demos: parity, clock, controls, captures
+    wiki_regression.py <instance> try --launch        Try it yourself, driven through the stage
     wiki_regression.py <instance> recorded --launch   a live recorded skirmish: the rewind button
     wiki_regression.py <instance> asset --launch      the 3D asset load, against the native one
     wiki_regression.py <instance> stage3d --launch --shots DIR
@@ -84,6 +85,22 @@ demos, on the same launch as sp:
   (d4) each entry with a demo paused mid-play; with --shots DIR the game's frame and the mockup's
        at the same screen, entry, demo and tick, side by side (`<res>-<entry>-<demo>-t<tick>`);
   (d5) the most one fill of the open page cost the game thread, logged.
+try, on the same launch as sp:
+  (t1) Quick Build's `snap` and then Build Lines' `line` selected, and Try it yourself pressed: the
+       stage is the player's, and the drawn frame shows its build menu (`build:<type>` controls);
+  (t2) the demo's inputs given as device input: each world point turned into the client point the
+       dump's stage draws it at (tagpu_wikistage_fit inverted, from the `stage` hit and the frame's
+       unit), moves as `dmove:`, the left button as `ddown:`/`dup:` there, Shift as `down:`/`up:`,
+       a build as a click on the menu's button. Paused, the dump's log of what the game gave its
+       simulation holds the demo's presses, releases and builds in order, every move within a
+       pixel of the demo's point, and its state hash equals sim.js fed the same logged inputs at
+       the same ticks (`simparity.mjs --try`). With --shot, the presented frame is grabbed before
+       `snap`'s click and before `line`'s first release, the line's sites on the stage;
+  (t3) Shift and the left button held on the stage when Back to demo is pressed are let go in the
+       simulation, and their late releases are taken, nothing owed;
+  (t4) Ctrl and the left button held when Esc closes the window: let go, nothing owed after their
+       releases, and the engine's key ring unmoved over the whole mode;
+  (t5) reopened, the window is in Try it, afresh; Back to demo, and Esc.
 recorded:
   (r) the button sits 3 bar pixels left of the rewind button (the two frames' hit maps); the rewind
       button opens the rewind; while it is open a click on the wiki button opens nothing and the log
@@ -149,6 +166,7 @@ mp:
 """
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -804,6 +822,163 @@ def demos(c, shots, res):
     wait_dump(c, lambda d: not d["open"], "(d5) Esc did not close the window")
 
 
+TRY_DEMOS = (("quickbuild", 2, "snap", 83), ("buildshapes", 3, "line", 60))   # (entry, its tree node,
+                                         # the demo, the input before which the stage is grabbed)
+TRY_KEYS = {"shift": "shift", "alt": "alt", "ctrl": "ctrl", "z": "z", "x": "x"}
+
+
+def demo_inputs(entry, demo_id):
+    return next(x for x in json.loads((TREE / f"art/wiki/entries/{entry}.json").read_text())["demos"]
+                if x["id"] == demo_id)["inputs"]
+
+
+def stage_fit(d):
+    """tagpu_wikistage_fit on the stage the dump's hit map drew: the map's scale and corner in client
+    pixels, from the stage's canvas -- its `stage` hit -- and the frame's unit, as both of the
+    game's threads fit it."""
+    x0, y0, x1, y1 = Wiki.hit(d, "stage")
+    u, (mw, mh), cell = d["u"], d["map"], 16
+    pad = 6 * u
+    s = min((x1 - x0 - 2 * pad) / (mw * cell), (y1 - y0 - 2 * pad) / (mh * cell))
+    return s, x0 + (x1 - x0 - mw * cell * s) / 2, y0 + (y1 - y0 - mh * cell * s) / 2
+
+
+def replay_try(c, d, entry, demo_id, grab_at=None, shot=None):
+    """One demo's inputs (art/wiki/entries/<entry>.json) given to Try it yourself as device input:
+    each world point turned into the client point the dump's stage shows it at (stage_fit
+    inverted), a move as `dmove:`, the left button as `ddown:`/`dup:` there, the right as
+    `down:rbutton`/`up:rbutton` where the pointer is, a key as `down:`/`up:`, a build as a click on
+    the build menu's button the drawn frame shows; captions are the demo's own and are skipped. With
+    `grab_at`, the presented frame is grabbed to `shot` before that input is given. The world inputs
+    the demo would give, in order, without its moves."""
+    s, ox, oz = stage_fit(d)
+    at = None
+    pending, want = [], []
+
+    def flush():
+        if pending:
+            c.keys(*pending)
+        pending.clear()
+
+    for i, ev in sorted(enumerate(demo_inputs(entry, demo_id)), key=lambda p: (p[1]["at"], p[0])):
+        if shot and grab_at is not None and i == grab_at:
+            flush()
+            time.sleep(1.0)
+            grab(c, shot)
+        if "move" in ev:
+            at = (round(ox + ev["move"][0] * s), round(oz + ev["move"][1] * s))
+            pending.append("dmove:%d,%d" % at)
+        for kind in ("down", "up"):
+            k = ev.get(kind)
+            if k is None:
+                continue
+            want.append([kind, k])
+            if k in ("lmb", "rmb"):
+                assert at, f"{entry}/{demo_id}: a button before any move"
+                pending.append(("ddown:%d,%d" if kind == "down" else "dup:%d,%d") % at if k == "lmb"
+                               else f"{kind}:rbutton")
+            else:
+                pending.append(f"{kind}:{TRY_KEYS[k]}")
+        if "build" in ev:
+            want.append(["build", ev["build"]])
+            key = "build:" + (ev["build"] or "none")
+            flush()
+            d = wait_dump(c, lambda d: key in keys_of(d, "build:"), f"the build menu shows no {key}")
+            x, y = c.centre(c.hit(d, key))
+            c.keys(f"ddown:{x},{y}", f"dup:{x},{y}")
+    flush()
+    return want, s
+
+
+def try_it(c, shot=None):
+    """(t1)..(t5): Try it yourself driven by device input on the stage, its simulation against
+    sim.js fed what the game logged."""
+    held_at(c, HELD_AT)
+    d = c.open_wiki(expect_pause=True)
+    d = wait_dump(c, lambda d: d["drawn_open"] and d["sim"], "(t1) the page was not drawn")
+    ring = c.ring()
+    for entry, node, demo, grab_at in TRY_DEMOS:
+        if d["entry"] != entry:
+            press(c, d, f"entry:{node}")
+            d = wait_dump(c, lambda d: d["entry"] == entry and "demo:1" in keys_of(d, "demo:"), f"(t1) entry:{node} did not select {entry}")
+        if d["demo"] != demo:
+            k = [x["id"] for x in json.loads((TREE / f"art/wiki/entries/{entry}.json").read_text())["demos"]].index(demo)
+            press(c, d, f"demo:{k}")
+            d = wait_dump(c, lambda d: d["demo"] == demo, f"(t1) demo:{k} did not select {entry}/{demo}")
+        press(c, d, "try")
+        d = wait_dump(c, lambda d: d["try"] and keys_of(d, "build:"), "(t1) Try it yourself did not take the stage")
+        print(f"wiki try: (t1) {entry}/{demo}: Try it took the stage, its build menu {keys_of(d, 'build:')}")
+
+        shot_n = shot and Path(shot).with_name(f"{Path(shot).stem}-{entry}-{demo}{Path(shot).suffix}")
+        if shot:
+            # the control for the hidden cursor: the pointer over the build menu, off the stage
+            c.keys("dmove:%d,%d" % c.centre(c.hit(d, "build:none")))
+            time.sleep(1.0)
+            grab(c, Path(shot).with_name(f"{Path(shot).stem}-{entry}-{demo}-menu{Path(shot).suffix}"))
+        want, s = replay_try(c, d, entry, demo, grab_at, shot_n)
+        press(c, wait_dump(c, lambda d: d["playing"], "(t2) Try it is not playing"), "play")
+        d = wait_dump(c, lambda d: not d["playing"], "(t2) play did not pause Try it")
+        got = [[k, a] for _, k, a, *_ in d["try_log"] if k != "move"]
+        assert got == want, f"(t2) {entry}/{demo}: the game gave its simulation {got}, the demo {want}"
+        assert not d["try_cut"], f"(t2) the dump's log of Try it was cut ({d['try_cut']} inputs)"
+        moves = [(x, z) for _, k, x, z in (e for e in d["try_log"] if e[1] == "move")]
+        demo_pts = [tuple(ev["move"]) for ev in demo_inputs(entry, demo) if "move" in ev]
+        far = [m for m in moves if min(math.hypot(m[0] - p[0], m[1] - p[1]) for p in demo_pts) > 0.75 / s]
+        assert not far, f"(t2) {len(far)} of {len(moves)} moves landed more than a pixel off the demo's points: {far[:4]}"
+        dumpf = c.gamedir / "tagpu_wiki.try.json"
+        dumpf.write_text(json.dumps(d))
+        r = subprocess.run(["node", str(TREE / "tools/wiki/simparity.mjs"), "--try", str(dumpf)], capture_output=True,
+                           text=True, timeout=300)
+        dumpf.unlink(missing_ok=True)
+        assert r.returncode == 0, f"simparity --try: {r.stderr.strip()}"
+        assert r.stdout.strip() == d["hash"], \
+            f"(t2) {entry}/{demo}: the game's Try it hashes {d['hash']} at tick {d['tick']}, sim.js fed its inputs {r.stdout.strip()}"
+        print(f"wiki try: (t2) {entry}/{demo} replayed through the stage: {len(d['try_log'])} inputs "
+              f"({len(moves)} moves, every one within a pixel of the demo's point), tick {d['tick']}, "
+              f"hash {d['hash']} equal to sim.js's")
+        press(c, d, "play")
+        d = wait_dump(c, lambda d: d["playing"], "(t2) play did not start Try it again")
+
+    # (t3) a button and a key held when Try it is left: both let go in the simulation, and their late
+    # releases are taken -- nothing reaches the engine
+    s, ox, oz = stage_fit(d)
+    x0, y0, x1, y1 = c.hit(d, "stage")
+    cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+    c.keys("down:shift", f"ddown:{cx},{cy}")
+    d = wait_dump(c, lambda d: d["try_down"] == ["shift", "lmb"], "(t3) the held Shift and left button are not in Try it's set")
+    press(c, d, "try")
+    d = wait_dump(c, lambda d: not d["try"] and not keys_of(d, "build:"), "(t3) Back to demo did not return the demo")
+    assert d["try_down"] == [], f"(t3) leaving Try it left {d['try_down']} held"
+    c.keys("up:shift", f"dup:{cx},{cy}")
+    d = c.dump()
+    assert not d["owed_keys"] and not d["owed_buttons"], f"(t3) owed after the late releases: {d['owed_keys']} {d['owed_buttons']}"
+    print("wiki try: (t3) Back to demo let Shift and the left button go; their late releases were taken")
+
+    # (t4) held when the window closes (Esc): released, and nothing owed once let go
+    press(c, d, "try")
+    d = wait_dump(c, lambda d: d["try"] and keys_of(d, "build:"), "(t4) Try it did not take the stage again")
+    c.keys("down:ctrl", f"ddown:{cx},{cy}")
+    d = wait_dump(c, lambda d: d["try_down"] == ["ctrl", "lmb"], "(t4) the held Ctrl and left button are not in Try it's set")
+    c.keys("esc")
+    d = wait_dump(c, lambda d: not d["open"], "(t4) Esc did not close the window")
+    assert d["try_down"] == [] and not d["sim"], f"(t4) the close left {d['try_down']} held, sim {d['sim']}"
+    c.keys("up:ctrl", f"dup:{cx},{cy}")
+    d = c.dump()
+    assert not d["owed_keys"] and not d["owed_buttons"], f"(t4) owed after the late releases: {d['owed_keys']} {d['owed_buttons']}"
+    assert c.ring() == ring, f"(t4) a key reached the engine's ring: {ring} -> {c.ring()}"
+    print("wiki try: (t4) the close let Ctrl and the left button go; nothing reached the engine's key ring")
+
+    # (t5) reopened in Try it, afresh
+    d = c.open_wiki(expect_pause=True)
+    d = wait_dump(c, lambda d: d["drawn_open"] and d["sim"], "(t5) the reopened page was not drawn")
+    assert d["try"] and d["try_log"] == [] and d["try_down"] == [], f"(t5) reopened: try {d['try']}, log {len(d['try_log'])}"
+    press(c, d, "try")
+    d = wait_dump(c, lambda d: not d["try"], "(t5) Back to demo")
+    c.keys("esc")
+    wait_dump(c, lambda d: not d["open"], "(t5) Esc did not close the window")
+    print("wiki try: (t5) the window reopens in Try it, afresh; Back to demo and Esc close it")
+
+
 STAGE3D_SHOTS = (("quickbuild", 1), ("quickbuild", 11), ("buildshapes", 1))
 STAGE3D_TICKS = (30, 180, 330)
 DRAWN = r"wiki3d: frame \d+: .*; (\d+) of (\d+) frame\(s\) drew the image; .*render thread: the producer ([\d.]+) ms " \
@@ -1408,12 +1583,13 @@ def mods(names, shots):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("instance")
-    p.add_argument("mode", choices=("sp", "page", "demos", "recorded", "asset", "stage3d", "units", "mp", "mods"))
+    p.add_argument("mode", choices=("sp", "page", "demos", "try", "recorded", "asset", "stage3d", "units", "mp", "mods"))
     p.add_argument("--launch", action="store_true",
                    help="sp/recorded: launch on place-basic.json first, under the run lock")
     p.add_argument("--res", default="1920x1080", help="sp/recorded: the game's resolution")
-    p.add_argument("--shot", help="sp, page: grab the presented frame with the window open to this PNG "
-                                  "(page: on the second entry and its second demo, at (p2))")
+    p.add_argument("--shot", help="sp, page, try: grab the presented frame with the window open to this PNG "
+                                  "(page: on the second entry and its second demo, at (p2); try: one a demo, "
+                                  "named <stem>-<entry>-<demo>, mid-replay)")
     p.add_argument("--shots", type=Path, help="demos: grab each entry's demo mid-play, and the mockup's, into this folder; "
                                               "stage3d, units: the captures of the wiki's target and the presented frames")
     a = p.parse_args()
@@ -1435,6 +1611,8 @@ def main():
                     page(c, a.shot)
                 elif a.mode == "demos":
                     demos(c, a.shots, a.res)
+                elif a.mode == "try":
+                    try_it(c, a.shot)
                 elif a.mode == "asset":
                     asset(c)
                 elif a.mode == "stage3d":

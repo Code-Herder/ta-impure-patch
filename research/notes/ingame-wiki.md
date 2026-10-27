@@ -11,16 +11,16 @@ in C, equal to the mockup's boxes, lines and baselines, and builds the stage's p
 replay HUD's ops, equal to the mockup's canvas call for op. On the Vulkan lane the game draws the
 wiki button and opens the window over the game, takes every input while it is open and pauses
 single player; the window holds the page -- the tree, the demo list, the entry's column -- and the
-stage with the selected demo playing, driven by the page's controls, the wheel and the scrollbars
-([the plan](ingame-wiki-plan.html), landings 2 to 4). The stage's ground is the game's own: the
+stage with the selected demo playing, driven by the page's controls, the wheel and the scrollbars,
+or Try it yourself, the demo's scene handed to the player with the build menu beside it
+([the plan](ingame-wiki-plan.html), landings 2 to 5). The stage's ground is the game's own: the
 description's tiles, its deposits and vents and the engine's fog, drawn by Impure's own terrain and
 feature passes; its units are the game's models, drawn by Impure's own unit pass, facing where they
 walk or work, buildings rising in the nanoframe, translucent ghosts at the cursor and the gesture's
 sites; a type the running game does not have stays the whitebox's box ([the 3D stage's
 plan](ingame-wiki-3d-stage-plan.html), landings 6g and 6h). Under each supported mod the stage
 draws the mod's own files, read in the running game's order ([below](#the-3d-stage-under-the-mods),
-landing 6i). Try it yourself is drawn and does nothing yet
-(landing 5).
+landing 6i).
 
 | What | Where |
 |---|---|
@@ -42,7 +42,7 @@ landing 6i). Try it yourself is drawn and does nothing yet
 | The 3D ground's check, C against the mockup | `node tools/wiki/scenecheck.mjs`, with `tagpu/ddraw/tests/wikiscenetest.c`; in the game, `tools/wiki/stage3dcheck.py` over `wiki_regression.py stage3d`'s captures |
 | The stage's check, C against `stage.js` | `node tools/wiki/stagecheck.mjs`, with `tagpu/ddraw/tests/wikistagetest.c` |
 | The window in the game | `tagpu_wiki.c` (input, pause, the page's state and the demo's simulation; game thread), `tagpu_wikistate.c` (`tagpu_wikilay.c` and `tagpu_wikistage.c` on the record) and `tagpu_vk_hud.c` (drawing; render thread) — [GPU status](gpu-status.html) §2.12c |
-| The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|recorded|asset|stage3d|units --launch`, `tools/wiki_regression.py <name> mp`, `tools/wiki_regression.py all mods --shots DIR` (the 3D stage under each supported setup: [below](#the-3d-stage-under-the-mods)); `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's; `units --shots DIR` does the same with the units, then the facing, the `nounit=` lever, the render thread's time and a reclaim in the game |
+| The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|try|recorded|asset|stage3d|units --launch`, `tools/wiki_regression.py <name> mp`, `tools/wiki_regression.py all mods --shots DIR` (the 3D stage under each supported setup: [below](#the-3d-stage-under-the-mods)); `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's; `units --shots DIR` does the same with the units, then the facing, the `nounit=` lever, the render thread's time and a reclaim in the game; `try` replays two demos through Try it yourself's stage as device input and holds the game's simulation to `simparity.mjs --try` |
 | Serving it | `python3 tools/hudart/serve.py`, then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
 
@@ -321,6 +321,40 @@ stays on the whitebox and the controls strip says "game graphics: run tools/wiki
 The nano spray is the engine's particles (`PK_PART` kind 5, drawn by `tagpu_fx.c`
 `tagpu_fx_gather`), and it starts at the point COB `QueryNanoPiece` returns, so the mockup has
 none.
+
+## Try it yourself in the game
+
+Try it yourself is `wiki.js`'s, on the game thread (`tagpu_wiki.c`, *Try it yourself*); the
+specification is the mockup's handlers, and [the plan](ingame-wiki-plan.html), landing 5, says
+where the plan's first version and the mockup differed.
+
+- **The simulation** is `sim.js` `create` on the selected demo's scene (`tagpu_wikisim_init` with no
+  script): never done, the controls' play and replay acting on it as on a demo. Its button swaps the
+  stage between Try it and the demo; picking an entry or a demo leaves Try it.
+- **Input**, from the messages the window already takes while it is open, so the engine sees no
+  more and no less than with the demo on the stage:
+  - the pointer over the stage becomes `input({move})` through `tagpu_wikistage_fit` on the last
+    drawn frame's canvas (its `stage` control) and unit, clamped to the map: the world point comes
+    from the frame the player saw;
+  - a left or right press on the stage gives a move there and then the button's down; a release
+    anywhere gives its up;
+  - Shift, Alt and Ctrl give a down and an up; Z and X with Alt down give a down every time, an
+    auto-repeat included;
+  - a build menu button gives `input({build})`, its type or none.
+- **Nothing is left held.** What went down and not up is one ordered set; a close or a focus loss
+  sends every member's up in that order; leaving Try it, a replay or a new selection empties it
+  with the simulation it belonged to. A real press released off the window is let go at the first
+  real move that carries its button up.
+- **The build menu** is a 66-unit column before the stage: "Build", a button for each type the
+  selection can build among the entry's own, in the selection's order and then each build list's,
+  and "none"; the armed type's button (or "none") is down. With no constructor selected it says
+  "Select a constructor". The render thread makes it from the frame's own view.
+- **The cursor**: over the stage, in a frame in Try it, the player's cursor is not drawn over the
+  wiki and the stage draws the simulation's, both decided from one frame's record.
+- **The test**: `wiki_regression.py <instance> try --launch` gives `snap` and `line`'s inputs as
+  device input on the stage, compares the paused simulation's state hash with `sim.js` fed the
+  inputs the game logged (`simparity.mjs --try`), and checks the releases on Back to demo and on
+  close. `wikilaycheck.py` holds the menu to the mockup's (three Try it cases).
 
 ## The 3D stage under the mods
 
@@ -712,11 +746,16 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
 
 - **No wiki on GDI** (the owner's decision, 2026-10-25): the button and the window are drawn by the
   Vulkan HUD pass only, as the rewind button is, so on GDI the wiki cannot open.
-- **Try it yourself does nothing.** Its button is drawn, enabled with a demo, shows pressed and
-  takes no action: the player's input on the stage is the plan's landing 5.
 - **The demo restarts at every open.** The plan frees the simulation at a close and makes it at an
-  open, so a reopened window plays the selected demo from its start, where the mockup, which keeps
-  its simulation, carries on.
+  open, so a reopened window plays the selected demo from its start, or is in Try it yourself on a
+  fresh scene, where the mockup, which keeps its simulation, carries on.
+- **Try it yourself's Alt is the key events'.** Alt+Z and Alt+X step while the last Alt key event
+  the window had was a press, as the browser's `altKey` reads the keyboard. An Alt let go while the
+  window had no focus reads down until its release is seen.
+- **Try it yourself on the real input path is the owner's hand-over.** The test drives the stage
+  through the shield's injected device path; the real messages share every rule but the lost
+  release (a real move with the button up), which no test runs, and neither the focus loss's
+  release nor Try it in a network game or a replay has a test.
 - **The wheel's step and a track's page are the DLL's.** The mockup leaves both to the browser: the
   game scrolls 48 units a notch (three of the tree's rows) and a press on a track off its thumb
   pages by seven eighths of the panel, as Chrome does.

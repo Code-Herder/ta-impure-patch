@@ -52,6 +52,9 @@ static const char* const ROLE[R_N] = { "window_title", "entry_title", "category"
 #define S_X2        "2\xC3\x97"             /* 2× */
 #define S_TRY       "Try it yourself"
 #define S_BACK      "Back to demo"
+#define S_BUILD     "Build"
+#define S_NOBUILD   "Select a constructor"
+#define S_NONE      "none"
 static const char* const KEYCAP[WIKI_NKEYS] = { "Shift", "Alt", "Ctrl", "Z", "X", "Left-click", "Right-click" };
 
 /* the colours the CSS gives outright */
@@ -86,7 +89,7 @@ typedef struct {
     double demo_num;
     double entry_pad[2], entry_gap, title_line;
     double badge_h, badge_pad, badge_gap, badge_dot;
-    double stage_min, stage_gap, stage_menu;
+    double stage_min, stage_gap, stage_menu, stage_menu_gap;
     double caption_h, keys_h, keys_gap;
     double keycap_h, keycap_pad;
     double ctl_gap, ctl_pair, ctl_try, ctl_h, ctl_pad, ctl_min;
@@ -213,9 +216,11 @@ static void disc(C* c, R b, const R* clip)
 /* A control, given only where it is on screen: the part of its box inside `clip`. The bound: H is
    720 units, so a list's scroller is under 720 units tall, and a row with its gap after it is at
    least layout.json's row.h + row.after, 17.5 today, which puts at most 42 rows of each list on
-   screen -- 84 -- beside the window's own 11 controls and the button: under WIKI_MAXHOT, so no
-   control on screen goes without its hit. A layout that broke the bound drops the rest and sets
-   the overflow, visibly. */
+   screen -- 84 -- beside the window's own 11 controls and the button, and Try it yourself's build
+   menu, a button for each of the entry's types and "none": under WIKI_MAXHOT for an entry of up to
+   63 types, so no control on screen goes without its hit; the data's entries have 6 at most. A
+   layout that broke the bound drops the rest and sets the overflow, visibly, and the load's check
+   (tagpu_wikilay_check) builds every entry's fullest menu. */
 static void hot(C* c, R b, const R* clip, const char* key)
 {
     HUDOP* p;
@@ -691,6 +696,67 @@ static double button(C* c, double x, double y, const char* key, const char* labe
     return w;
 }
 
+/* ---- Try it yourself's build menu (#bmenu): a column the layout's stage.menu wide before the
+   bezel, its heading, then a button for each type the selection can build and "none", or a line
+   saying there is nothing to build; stacked stage.menu_gap apart from the top ------------------- */
+
+/* A build button: as wide as the column (a flex column stretches it), its text centred in the
+   chips' style and overflowing both sides when wider (justify-content: center), down when its type
+   is the one armed or the button is held */
+static void menu_button(C* c, R b, const char* key, const char* label, int on)
+{
+    const WG* g = &c->l->g;
+    TS t = ts(c, R_BUILD, g->line);
+    int n = pens(c, &t, label, strlen(label));
+    double tw = ceil64(c->pen[n]);
+    int down = on || !strcmp(c->st->held, key), part = c->l->part[down ? P_BUTTON_DOWN : P_BUTTON];
+    art(c, part, b, NULL);
+    hot(c, b, NULL, key);
+    line(c, &t, label, 0, n, b.x + 2 + U(c, g->ctl_pad) + half(b.w - 4 - 2 * U(c, g->ctl_pad) - tw),
+         b.y + 2 + half(b.h - 4 - t.L), light(c, part), NULL);
+}
+
+static void build_menu(C* c, R col, int ink)
+{
+    const WG* g = &c->l->g;
+    const WIKIENTRY* e = c->st->entry >= 0 && c->st->entry < c->d->nentry ? &c->d->entry[c->st->entry] : NULL;
+    const double gap = U(c, g->stage_menu_gap), bh = U(c, g->ctl_h);
+    double y = col.y;
+    char key[HUD_KEYLEN];
+    int i, n = 0;
+    y += block(c, R_BUILD_HEAD, g->line, S_BUILD, col.x, y, col.w, ink, NULL, 1) + gap;
+    for (i = 0; e && i < c->st->nbuild && i < WIKI_MAX_DEFS; i++) {
+        const int t = c->st->build[i];
+        if (t < 0 || t >= e->ndef) continue;
+        snprintf(key, sizeof key, "build:%s", e->def[t].name);
+        menu_button(c, rect(col.x, y, col.w, bh), key, e->def[t].name, c->st->armed == t + 1);
+        y += bh + gap;
+        n++;
+    }
+    if (n) menu_button(c, rect(col.x, y, col.w, bh), "build:" S_NONE, S_NONE, c->st->armed == 0);
+    else block(c, R_BUILD_HEAD, g->line, S_NOBUILD, col.x, y, col.w, ink, NULL, 1);
+}
+
+int tagpu_wikilay_menu(const WIKIENTRY* e, const int* sel, int nsel, int* out)
+{
+    const TJV* units = e && e->doc ? tj_get(tagpu_json_root(e->doc), "units") : NULL;
+    uint64_t seen = 0;
+    int i, n = 0;
+    for (i = 0; units && i < nsel; i++) {
+        const TJV *u, *b;
+        if (sel[i] < 0 || sel[i] >= e->ndef) continue;
+        for (u = units->first; u && strcmp(u->key ? u->key : "", e->def[sel[i]].name); u = u->next) {}
+        b = u ? tj_get(u, "builds") : NULL;
+        for (b = tj_is(b, TJ_ARR) ? b->first : NULL; b; b = b->next) {
+            const int t = b->type == TJ_STR ? tagpu_wikidata_def(e, b->str) : -1;
+            if (t < 0 || t >= WIKI_MAX_DEFS || (seen >> t & 1u)) continue;
+            seen |= (uint64_t)1 << t;
+            out[n++] = t;
+        }
+    }
+    return n;
+}
+
 /* ---- the entry (#entry): a flex column of title, subtitle, badge, the stage row, caption, keys,
    controls and the text, the stage row taking what the others leave ---------------------------- */
 
@@ -731,10 +797,13 @@ static void entry_col(C* c, R col)
         line(c, &t, S_BADGE, 0, n, b.x + pad + dot + U(c, g->badge_gap), y + half(bh - t.L), light(c, c->l->part[P_BADGE]), NULL);
         y += bh + gap;
     }
-    /* the stage row: the bezel, and in Try it yourself the build menu's column before it (its
-       buttons are landing 5's) */
+    /* the stage row: the bezel, and in Try it yourself the build menu's column before it */
     sbox = rect(x, y, w, srow);
-    if (c->st->try_it) { sbox.x += U(c, g->stage_menu) + U(c, g->stage_gap); sbox.w -= U(c, g->stage_menu) + U(c, g->stage_gap); }
+    if (c->st->try_it) {
+        build_menu(c, rect(x, y, U(c, g->stage_menu), srow), wink);
+        sbox.x += U(c, g->stage_menu) + U(c, g->stage_gap);
+        sbox.w -= U(c, g->stage_menu) + U(c, g->stage_gap);
+    }
     art(c, c->l->part[P_BEZEL], sbox, NULL);
     stage = rect(sbox.x + U(c, g->bz[3]), sbox.y + U(c, g->bz[0]), lu(sbox.w - (g->bz[3] + g->bz[1]) * c->px),
                  lu(sbox.h - (g->bz[0] + g->bz[2]) * c->px));
@@ -954,6 +1023,22 @@ int tagpu_wikilay_check(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
                     st.speed = 1 + pass;
                     if (!check_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
                 }
+        /* Try it yourself's fullest menu: every type of the entry, the last one armed */
+        st.held[0] = 0;
+        st.try_it = 1;
+        st.playing = 1;
+        st.done = 0;
+        st.speed = 1;
+        for (e = 0; e < d->nentry; e++) {
+            st.entry = e;
+            st.demo = 0;
+            st.nbuild = d->entry[e].ndef < WIKI_MAX_DEFS ? d->entry[e].ndef : WIKI_MAX_DEFS;
+            for (k = 0; k < st.nbuild; k++) st.build[k] = k;
+            st.armed = st.nbuild;
+            if (!check_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
+        }
+        st.try_it = 0;
+        st.nbuild = st.armed = 0;
     }
     return 1;
 }
@@ -1020,6 +1105,7 @@ static int read_layout(WIKILAY* l, const TJV* L, char* err, size_t errn)
     g->stage_min = rd(&x, "stage", "min", -1);
     g->stage_gap = rd(&x, "stage", "gap", -1);
     g->stage_menu = rd(&x, "stage", "menu", -1);
+    g->stage_menu_gap = rd(&x, "stage", "menu_gap", -1);
     g->caption_h = rd(&x, "strips", "caption", -1);
     g->keys_h = rd(&x, "strips", "keys", -1);
     g->keys_gap = rd(&x, "keys", "gap", -1);

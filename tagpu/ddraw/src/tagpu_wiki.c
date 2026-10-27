@@ -60,7 +60,9 @@
    demo's playback are this thread's, changed only by a press on a control of the last frame drawn
    (the hit map tagpu_wiki_take copied), so a click lands on what the player saw. The demo's
    simulation (tagpu_wikisim.c) lives here too and is stepped inside the packet's fill; the render
-   thread gets a view of it by value in the record and never touches a WIKISIM.
+   thread gets a view of it by value in the record and never touches a WIKISIM. In Try it yourself
+   (below, *Try it yourself*) the stage's pointer, buttons and keys are the simulation's input,
+   read against the same hit map.
 
    Nothing here names engine memory: the two engine facts the pause needs are tagpu_menu.c's. */
 #include <windows.h>
@@ -336,12 +338,209 @@ static void sim_free(void)
     s_simOn = 0;
 }
 
-/* wiki.js `start`: the selected demo afresh, scripted, its clock from now */
+/* ---- Try it yourself -------------------------------------------------------------------------
+
+   wiki.js's Try it yourself: the simulation made on the demo's scene with no script (sim.js
+   create), and the player's pointer over the stage, the left and right buttons pressed on it and
+   Shift, Alt, Ctrl and Alt+Z / Alt+X given to it as sim.js `input` -- here, on this thread, from
+   the same messages the window takes while it is open. The engine is handed none of them: every
+   one is taken by the capture above, Try it or not, so nothing here changes what the engine sees.
+
+   NO BUTTON OR KEY IS LEFT HELD IN THE SIMULATION, NONE DROPPED. What was sent down and not yet up
+   is one set (wiki.js `down`, in the order sent), and an up is sent for exactly its members: the
+   release of a held button wherever it is made, the key-up of a held key, and the whole set, in
+   its order, when the window closes (the level's end included) or loses the focus (wiki.js
+   releaseAll). Leaving Try it, a replay or a new entry or demo empties the set with the
+   simulation it belonged to (start), which takes no up, as wiki.js `start` nulls `sim` before its
+   releaseAll. A real button's release made off the window is never sent here; the first real move
+   that carries the button up sends it instead, as the scrollbar's drag ends (THE DRAG ENDS WITH
+   ITS BUTTON, below). A press already held sends no second down, as the browser sends none. */
+#define TRY_LOG 4096                            /* the inputs the dump can give, per Try it      */
+enum { TRY_MOVE, TRY_DOWN, TRY_UP, TRY_BUILD };
+typedef struct { int32_t tick; uint8_t kind; int8_t key; int16_t build; double x, z; } TRYIN;
+
+static int      s_try;                          /* wiki.js S.try: the stage is the player's      */
+static int      s_down[WIKI_NKEYS], s_ndown;    /* wiki.js `down`: WIKI_KEY_*, in the order sent */
+static unsigned s_downReal;                     /* B_L/B_R: held by a press of the real path     */
+static TRYIN    s_log[TRY_LOG];                 /* this Try it's inputs, for the state dump      */
+static int      s_nlog, s_logCut;
+
+static int try_on(void)
+{
+    return s_try && s_simOn;
+}
+
+/* one input to Try it's simulation, and its line in the log */
+static void try_send(int kind, int key, int build, double x, double z)
+{
+    WIKIINPUT in;
+    memset(&in, 0, sizeof in);
+    in.down = in.up = in.build = -1;
+    switch (kind) {
+    case TRY_MOVE:  in.has = WIKI_IN_MOVE; in.move.x = x; in.move.z = z; break;
+    case TRY_DOWN:  in.down = key; break;
+    case TRY_UP:    in.up = key; break;
+    case TRY_BUILD: in.has = WIKI_IN_BUILD; in.build = build; break;
+    }
+    tagpu_wikisim_input(&s_sim, &in);
+    if (s_nlog >= TRY_LOG) { s_logCut++; return; }
+    s_log[s_nlog].tick = s_sim.tick;
+    s_log[s_nlog].kind = (uint8_t)kind;
+    s_log[s_nlog].key = (int8_t)key;
+    s_log[s_nlog].build = (int16_t)build;
+    s_log[s_nlog].x = x;
+    s_log[s_nlog].z = z;
+    s_nlog++;
+}
+
+static int try_held(int k)
+{
+    int i;
+    for (i = 0; i < s_ndown; i++)
+        if (s_down[i] == k) return i;
+    return -1;
+}
+
+/* `k` sent down: once while it is held, or every time for Z and X, which step on each down */
+static void try_down(int k)
+{
+    if (!try_on()) return;
+    if (try_held(k) < 0) {
+        if (s_ndown >= WIKI_NKEYS) return;
+        s_down[s_ndown++] = k;
+    } else if (k != WIKI_KEY_Z && k != WIKI_KEY_X)
+        return;
+    try_send(TRY_DOWN, k, -1, 0, 0);
+}
+
+/* `k`'s up, if it is held */
+static void try_up(int k)
+{
+    int i = try_held(k);
+    if (i < 0) return;
+    memmove(&s_down[i], &s_down[i + 1], (size_t)(s_ndown - i - 1) * sizeof *s_down);
+    s_ndown--;
+    if (k == WIKI_KEY_LMB) s_downReal &= ~B_L;
+    if (k == WIKI_KEY_RMB) s_downReal &= ~B_R;
+    if (try_on()) try_send(TRY_UP, k, -1, 0, 0);
+}
+
+/* wiki.js releaseAll: every held key's up in the order they went down, `send` 0 when the
+   simulation is being replaced and takes none (start: wiki.js nulls `sim` before it) */
+static void try_release_all(int send)
+{
+    int i;
+    for (i = 0; send && try_on() && i < s_ndown; i++) try_send(TRY_UP, s_down[i], -1, 0, 0);
+    s_ndown = 0;
+    s_downReal = 0;
+}
+
+/* THE WORLD POINT COMES FROM THE FRAME THE PLAYER SAW: client point (cx, cy) on the stage of the
+   last frame drawn, read through that frame's own `stage` hit -- the stage's canvas, the same
+   snapped rect the render thread fitted the map into (tagpu_wikistage_canvas) -- and its unit,
+   with tagpu_wikistage_fit, the one function both threads fit with; clamped to the map, as
+   wiki.js `world`. The map is the entry's scene's, the simulation's only map, and the frame must
+   have drawn the window open for the entry selected now. 0 when the point is not on that stage. */
+static int stage_world(int cx, int cy, double* wx, double* wz)
+{
+    const WIKIENTRY* e = entry_of(data());
+    const TAGPU_CMD_WIKIHIT* h = NULL;
+    WIKISTAGEFIT f;
+    double w, hh, x, z;
+    unsigned i;
+    if (!e || cx < 0 || !s_hit.drawn || !s_hit.open || s_hit.entry != s_entry) return 0;
+    for (i = 0; i < s_hit.n && !h; i++)
+        if (!strncmp(s_hit.hit[i].key, "stage", TAGPU_WIKI_KEY)) h = &s_hit.hit[i];
+    if (!h || cx < h->x0 || cx >= h->x1 || cy < h->y0 || cy >= h->y1) return 0;
+    tagpu_wikistage_fit(e->scene.w, e->scene.h, h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &f);
+    if (!(f.s > 0)) return 0;
+    w = (e->scene.w > 0 ? e->scene.w : 1) * (double)WIKI_CELL;
+    hh = (e->scene.h > 0 ? e->scene.h : 1) * (double)WIKI_CELL;
+    x = (cx - h->x0 - f.ox) / f.s;
+    z = (cy - h->y0 - f.oz) / f.s;
+    *wx = x < 0 ? 0 : x > w ? w : x;
+    *wz = z < 0 ? 0 : z > hh ? hh : z;
+    return 1;
+}
+
+/* The pointer at client point (cx, cy): over the stage, a move. `real`: a message of the real path,
+   whose wParam `wp` says which buttons are down -- one held here that it carries up was released
+   where this window never heard it, and is let go now. */
+static void try_pointer(int cx, int cy, int real, WPARAM wp)
+{
+    double x, z;
+    if (real && (s_downReal & B_L) && !(wp & MK_LBUTTON)) try_up(WIKI_KEY_LMB);
+    if (real && (s_downReal & B_R) && !(wp & MK_RBUTTON)) try_up(WIKI_KEY_RMB);
+    if (try_on() && stage_world(cx, cy, &x, &z)) try_send(TRY_MOVE, -1, -1, x, z);
+}
+
+/* A left or right press at client point (cx, cy), or where the pointer is when the injection named
+   none: on the stage, a move there and then the button's down. 1 = it was on the stage. */
+static int try_press(unsigned bit, int cx, int cy, int real)
+{
+    const int k = bit == B_L ? WIKI_KEY_LMB : WIKI_KEY_RMB;
+    double x, z;
+    if (!try_on() || (bit != B_L && bit != B_R)) return 0;
+    if (cx < 0 && !mouse_last_client(&cx, &cy)) return 0;
+    if (!stage_world(cx, cy, &x, &z)) return 0;
+    try_send(TRY_MOVE, -1, -1, x, z);
+    if (try_held(k) < 0) {
+        if (real) s_downReal |= bit;
+        else s_downReal &= ~bit;
+        try_down(k);
+    }
+    return 1;
+}
+
+/* the release of button `bit`, wherever it is made */
+static void try_release(unsigned bit)
+{
+    if (bit == B_L) try_up(WIKI_KEY_LMB);
+    if (bit == B_R) try_up(WIKI_KEY_RMB);
+}
+
+static int try_modifier(unsigned vk)
+{
+    switch (vk) {
+    case VK_SHIFT: case VK_LSHIFT: case VK_RSHIFT:     return WIKI_KEY_SHIFT;
+    case VK_MENU: case VK_LMENU: case VK_RMENU:        return WIKI_KEY_ALT;
+    case VK_CONTROL: case VK_LCONTROL: case VK_RCONTROL: return WIKI_KEY_CTRL;
+    }
+    return -1;
+}
+
+/* Alt is down as a key event says (wiki.js e.altKey): its press was handed to the engine or taken
+   here, and its release has not come */
+static int alt_held(void)
+{
+    return s_engKey[VK_MENU] || s_owedKey[VK_MENU] || s_engKey[VK_LMENU] || s_owedKey[VK_LMENU] ||
+           s_engKey[VK_RMENU] || s_owedKey[VK_RMENU];
+}
+
+/* a key-down (`down`) or key-up of `vk` while the window is open: Z and X with Alt step the armed
+   building's spacing, every down, an auto-repeat included, as the game steps again; Shift, Alt and
+   Ctrl go down once and up */
+static void try_key(unsigned vk, int down)
+{
+    const int m = try_modifier(vk), z = vk == 'Z' ? WIKI_KEY_Z : vk == 'X' ? WIKI_KEY_X : -1;
+    if (!down) {
+        if (m >= 0) try_up(m);
+        if (z >= 0) try_up(z);
+    } else if (z >= 0 && alt_held())
+        try_down(z);
+    else if (m >= 0)
+        try_down(m);
+}
+
+/* wiki.js `start`: the selected demo afresh, scripted, its clock from now; in Try it yourself its
+   scene with no script, the player's */
 static void start(void)
 {
     const WIKIDATA* d = data();
     const WIKIENTRY* e = entry_of(d);
     char err[160];
+    try_release_all(0);
+    s_nlog = s_logCut = 0;
     sim_free();
     s_acc = 0;
     s_want = 0;
@@ -351,7 +550,7 @@ static void start(void)
     if (!d) { s_want = 1; return; }                  /* the data loads on its own thread       */
     if (!e) return;
     if (s_demo < 0 || s_demo >= e->ndemo) { lstrcpynA(s_msg, "no demo", sizeof s_msg); return; }
-    if (!tagpu_wikisim_init(&s_sim, e, &e->demo[s_demo], 1, err, sizeof err)) {
+    if (!tagpu_wikisim_init(&s_sim, e, &e->demo[s_demo], !s_try, err, sizeof err)) {
         tagpu_logf("wiki: the demo %s/%s did not start - %s", e->id, e->demo[s_demo].id, err);
         lstrcpynA(s_msg, "the demo did not start", sizeof s_msg);
         return;
@@ -392,6 +591,7 @@ static void page_open(void)
 
 static void page_close(void)
 {
+    try_release_all(1);
     sim_free();
     s_want = 0;
     s_drag = -1;
@@ -416,11 +616,13 @@ static int key_index(const char* key, const char* prefix, int n)
 /* the control acts on the selected entry's demo: its meaning is the entry it was drawn for */
 static int entry_relative(const char* key)
 {
-    return !strncmp(key, "demo:", 5) || !strcmp(key, "play") || !strcmp(key, "replay") || !strcmp(key, "try");
+    return !strncmp(key, "demo:", 5) || !strcmp(key, "play") || !strcmp(key, "replay") || !strcmp(key, "try") ||
+           !strncmp(key, "build:", 6);
 }
 
-/* A left press on control `key` of the last frame drawn (wiki.js's handlers). Try it yourself is
-   the next landing's: its button shows pressed and does nothing.
+/* A left press on control `key` of the last frame drawn (wiki.js's handlers). Selecting an entry
+   or a demo leaves Try it yourself, as the tree's and the demo list's handlers do; its button
+   swaps the demo for Try it and back; a build menu button arms its type, or none.
    A PRESS ON AN ENTRY'S CONTROL COUNTS ONLY ON A FRAME DRAWN FOR THE ENTRY SELECTED NOW: the hit
    map lags a selection by the frames the render thread has not drawn yet, and `demo:1` of the
    entry the player saw is not `demo:1` of the one just picked. The hit map names the entry its
@@ -432,16 +634,31 @@ static void page_press(const char* key)
     int i;
     if (entry_relative(key) && s_hit.entry != (entry_of(d) ? s_entry : -1)) return;
     if (!strcmp(key, "play") || !strcmp(key, "replay") || !strcmp(key, "x1") || !strcmp(key, "x2") ||
-        !strcmp(key, "try"))
+        !strcmp(key, "try") || !strncmp(key, "build:", 6))
         held(key);
     if (!d) return;
     if ((i = key_index(key, "fold:", d->nnode < folds ? d->nnode : folds)) >= 0)
         s_fold[i >> 5] ^= 1u << (i & 31);
     else if ((i = key_index(key, "entry:", d->nnode)) >= 0) {
-        if (d->node[i].entry >= 0 && d->node[i].entry != s_entry) pick(d->node[i].entry, 0);
-    } else if (entry_of(d) && (i = key_index(key, "demo:", entry_of(d)->ndemo)) >= 0)
+        if (d->node[i].entry >= 0 && d->node[i].entry != s_entry) {
+            s_try = 0;
+            pick(d->node[i].entry, 0);
+        }
+    } else if (entry_of(d) && (i = key_index(key, "demo:", entry_of(d)->ndemo)) >= 0) {
+        s_try = 0;
         pick(s_entry, i);
-    else if (!strcmp(key, "play")) {
+    } else if (!strcmp(key, "try")) {
+        if (entry_of(d) && s_demo >= 0 && s_demo < entry_of(d)->ndemo) {
+            s_try = !s_try;
+            s_playing = 1;
+            start();
+        }
+    } else if (!strncmp(key, "build:", 6)) {
+        /* a type of the entry by its name, or none: the menu names only the entry's types */
+        const int none = !strcmp(key + 6, "none");
+        const int t = none || !entry_of(d) ? -1 : tagpu_wikidata_def(entry_of(d), key + 6);
+        if (try_on() && (t >= 0 || none)) try_send(TRY_BUILD, -1, t, 0, 0);
+    } else if (!strcmp(key, "play")) {
         if (done()) start();
         else s_playing = !s_playing;
     } else if (!strcmp(key, "replay")) {
@@ -553,7 +770,7 @@ static void page_fill(TAGPU_PK_WIKI* w)
     w->playing = (uint8_t)s_playing;
     w->done = (uint8_t)done();
     w->speed = (uint8_t)s_speed;
-    w->try_it = 0;
+    w->try_it = (uint8_t)s_try;
     w->mod = (int16_t)tagpu_profiles_mod();
     lstrcpynA(w->held, s_held, sizeof w->held);
     memcpy(w->fold, s_fold, sizeof w->fold);
@@ -614,6 +831,7 @@ static int press(unsigned bit, int cx, int cy, int gx, int gy)
     char key[TAGPU_WIKI_KEY];
     if (s_open) {
         s_owedBtn |= bit;
+        if (try_press(bit, cx, cy, gx < 0)) return 1;
         if (bit == B_L && !bar_press(cx, cy, gx < 0) && hit(cx, cy, key)) {
             if (!strcmp(key, "close")) { held(key); wiki_close("the close button"); }
             else if (!strcmp(key, "wiki")) { held(key); wiki_close("the wiki button"); }
@@ -660,6 +878,7 @@ static int release(unsigned bit)
 {
     int owed = (s_owedBtn & bit) != 0;
     s_owedBtn &= ~bit;
+    try_release(bit);
     if (owed && bit == B_L) { s_held[0] = 0; s_drag = -1; }
     if (s_engBtn & bit) return s_open ? TAGPU_WIKI_FROZEN : 0;
     return owed || s_open;
@@ -669,6 +888,7 @@ static int release(unsigned bit)
 static int key_down(unsigned vk, int repeat)
 {
     vk &= 0xFF;
+    if (s_open) try_key(vk, 1);
     if (s_open && repeat && s_engKey[vk] && !s_owedKey[vk]) {
         s_charOwed = 1;
         return 1;
@@ -692,6 +912,7 @@ static int key_up(unsigned vk)
 {
     int owed;
     vk &= 0xFF;
+    try_key(vk, 0);
     owed = s_owedKey[vk];
     s_owedKey[vk] = 0;
     if (owed && vk == VK_ESCAPE && s_escClose) {
@@ -751,7 +972,7 @@ int tagpu_wiki_message(UINT msg, WPARAM wp, LPARAM lp)
            began. An injected press's release always comes by the injected path (deliver_mouse
            hands every TAGPU_M_LUP to tagpu_wiki_mouse), which ends its drag in release(). */
         if (s_drag >= 0 && s_dragReal && !(wp & MK_LBUTTON)) s_drag = -1;
-        if (s_open) { note_client(cx, cy); bar_drag(cy); }
+        if (s_open) { note_client(cx, cy); bar_drag(cy); try_pointer(cx, cy, 1, wp); }
         return s_open;
     case WM_MOUSEWHEEL:
         /* a notch is WHEEL_DELTA; up scrolls toward the top */
@@ -800,7 +1021,7 @@ int tagpu_wiki_mouse(int code, int cx, int cy, int gx, int gy)
 {
     switch (code) {
     case TAGPU_M_MOVE:
-        if (s_open) { note_client(cx, cy); if (cx >= 0) bar_drag(cy); }
+        if (s_open) { note_client(cx, cy); if (cx >= 0) bar_drag(cy); try_pointer(cx, cy, 0, 0); }
         return s_open;
     case TAGPU_M_WHEELUP:
     case TAGPU_M_WHEELDN:
@@ -839,6 +1060,7 @@ void tagpu_wiki_cancel(void)
 {
     s_held[0] = 0;
     s_drag = -1;
+    try_release_all(1);
 }
 
 /* a number the render thread posted, as data: finite and in [0, hi], else 0 */
@@ -874,6 +1096,13 @@ static void jstr(FILE* f, const char* s, size_t n)
         else fputc(ch, f);
     }
     fputc('"', f);
+}
+
+/* sim.js's name of a WIKI_KEY_*, "" for none */
+static const char* key_name(int k)
+{
+    const char* s = tagpu_wikidata_key_name(k);
+    return s ? s : "";
 }
 
 /* THE STATE, FOR THE TESTS (tools/wiki_regression.py): written when tagpu_wiki.dump appears, after
@@ -918,6 +1147,30 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
             s_playing, s_speed, s_simOn, s_simOn ? s_sim.tick : -1, done(),
             s_simOn ? (unsigned long long)tagpu_wikisim_hash(&s_sim) : 0ull, w->has_stage, s_costMax, s_costFrames);
     jstr(f, s_msg, sizeof s_msg);
+    /* Try it yourself: its held keys, every input given its simulation with its tick (the form
+       tools/wiki/simparity.mjs --try reads), and the unit the hit map's frame was drawn at */
+    fprintf(f, ",\"try\":%d,\"try_down\":[", s_try);
+    for (i = 0; i < (unsigned)s_ndown; i++) {
+        fprintf(f, "%s", i ? "," : "");
+        jstr(f, key_name(s_down[i]), 16);
+    }
+    fprintf(f, "],\"try_cut\":%d,\"try_log\":[", s_logCut);
+    for (i = 0; i < (unsigned)s_nlog; i++) {
+        const TRYIN* t = &s_log[i];
+        fprintf(f, "%s[%ld,", i ? "," : "", (long)t->tick);
+        if (t->kind == TRY_MOVE) fprintf(f, "\"move\",%.17g,%.17g]", t->x, t->z);
+        else if (t->kind == TRY_BUILD) {
+            fprintf(f, "\"build\",");
+            if (t->build >= 0 && e && t->build < e->ndef) jstr(f, e->def[t->build].name, WIKI_ID_MAX);
+            else fprintf(f, "null");
+            fprintf(f, "]");
+        } else {
+            fprintf(f, "\"%s\",", t->kind == TRY_DOWN ? "down" : "up");
+            jstr(f, key_name(t->key), 16);
+            fprintf(f, "]");
+        }
+    }
+    fprintf(f, "],\"u\":%.17g,\"map\":[%d,%d]", (double)s_hit.u, e ? e->scene.w : 0, e ? e->scene.h : 0);
     fprintf(f, ",\"bars\":[");
     for (i = 0; i < TAGPU_WIKI_NSCROLL; i++) {
         const TAGPU_CMD_WIKIBAR* b = &s_hit.bar[i];
@@ -964,6 +1217,7 @@ static void shot(void)
                    SHOT_TICK_MAX);
         return;
     }
+    s_try = 0;
     pick(e, demo - 1);
     while (s_simOn && !s_sim.done && s_sim.tick < tick) tagpu_wikisim_step(&s_sim);
     s_playing = 0;
@@ -1097,6 +1351,7 @@ void tagpu_wiki_level_end(void)
         s_paused = 0;           /* the level it was taken in is ending: nothing is written */
         wiki_close("the level ended");
     }
+    try_release_all(0);
     sim_free();
     s_held[0] = 0;
     s_drag = -1;

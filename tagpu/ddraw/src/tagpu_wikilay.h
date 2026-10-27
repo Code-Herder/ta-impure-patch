@@ -53,6 +53,11 @@ typedef struct {
     char     held[HUD_KEYLEN];  /* the key of the control held down; "" none                    */
     char     caption[WIKI_CAPTION]; /* the demo's caption, UTF-8; "" none                       */
     unsigned keys;              /* bit WIKI_KEY_* (tagpu_wikidata.h): held in the demo's view   */
+    /* TRY IT YOURSELF'S BUILD MENU (#bmenu), drawn while try_it: what the selection can build
+       among the entry's own types, in tagpu_wikilay_menu's order, and the type armed */
+    int      nbuild;
+    int      build[WIKI_MAX_DEFS];  /* types of the entry, WIKIENTRY.def indices                  */
+    int      armed;             /* the armed type + 1; 0 the contextual mode, whose "none" is down */
 } WIKIPAGE;
 
 /* A text style's face (art/hud/layout.json `styles`, by index): tagpu_hudart.c's HUDFACE. */
@@ -126,6 +131,14 @@ void          tagpu_wikilay_light(WIKILAY* l, int part, int light);
 /* The data's name of a MOD_* (an entry's `lockedIn` names): "stock", "escalation", ... */
 const char*   tagpu_wikilay_mod_name(int mod);
 
+/* TRY IT YOURSELF'S BUILD MENU, wiki.js `buildMenu`: the types the selected units of a view can
+   build among entry `e`'s own -- each selected unit's build list as the entry's JSON gives it, in
+   the selection's order and then the list's, every type once and only a type the entry defines --
+   into `out` (WIKI_MAX_DEFS), and their count. `sel` is the selected units' types (WIKIENTRY.def
+   indices; one out of range is skipped). A stock build list names the whole side, the entry only
+   the buildings it shows. Reads the entry's immutable document only. */
+int           tagpu_wikilay_menu(const WIKIENTRY* e, const int* sel, int nsel, int* out);
+
 /* The ops for page `st` over the wiki `d`, into `out` (about 500 KB: never on a stack), and what
    the frame answers into `fr`. The state's indices are bounded against the data: an entry or a
    demo it does not have reads as none. Returns 0 with the reason in `err` only for a missing
@@ -138,8 +151,9 @@ int           tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const WIK
    stage draw and the stage's `toast` style, and the page builds whole -- nothing dropped, no
    `overflow` -- in each of these states on each of three screens, 1024 x 768, 1280 x 720 and
    3840 x 1080, every scroll at 0: the window closed with its button held, open with its close
-   button held, and every entry's every demo playing at 1x and ended at 2x with Try it yourself
-   held. Else 0 with the first failure in `err`. The build itself refuses only a missing argument
+   button held, every entry's every demo playing at 1x and ended at 2x with Try it yourself
+   held, and every entry in Try it yourself with every one of its types in the build menu, the
+   last armed. Else 0 with the first failure in `err`. The build itself refuses only a missing argument
    or its memory, so the states test the op, run, text, hit and group bounds; another scroll, a
    held key, a caption or another screen is not built here, and a frame that overflows all the
    same is drawn with the ops that fit (tagpu_wikistate.c says so once). `scratch` takes the ops

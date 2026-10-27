@@ -18,7 +18,9 @@
    reaches the engine. While the window is open every key, character, raw-input, move, button and
    wheel message is taken; while it is closed, a left press on the wiki button of the last frame
    drawn (the client point in lParam), any press on a control of a last frame that still drew the
-   window open, and the release or the repeats of a press the wiki took.
+   window open, and the release or the repeats of a press the wiki took. In Try it yourself the
+   moves, presses and releases on the stage and the keys Shift, Alt, Ctrl and Alt+Z / Alt+X of
+   those it takes are also the simulation's input (tagpu_wiki.c, *Try it yourself*).
    TAGPU_WIKI_FROZEN: not taken, but handed to the engine at the frozen point by the caller. */
 int  tagpu_wiki_message(UINT msg, WPARAM wp, LPARAM lp);
 
@@ -45,8 +47,9 @@ int  tagpu_wiki_mouse(int code, int cx, int cy, int gx, int gy);
 int  tagpu_wiki_key(unsigned vk, int up);
 int  tagpu_wiki_char(void);
 
-/* The window lost the mouse or the keyboard: the controls stop showing pressed. A press the wiki
-   took stays owed its release. */
+/* The window lost the mouse or the keyboard: the controls stop showing pressed, and Try it
+   yourself's simulation is given the up of every button and key it holds. A press the wiki took
+   stays owed its release. */
 void tagpu_wiki_cancel(void);
 
 /* ANY THREAD. 1 while the wiki holds the input; then the polls answer a player who let go, and

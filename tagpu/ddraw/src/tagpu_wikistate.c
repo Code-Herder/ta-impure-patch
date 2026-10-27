@@ -20,6 +20,8 @@ static unsigned s_frame;                /* the render-thread frame the ops are f
 static float    s_px;
 static int      s_ox, s_oy;
 static int      s_open, s_ptr;          /* the record's: the window open, a pointer in the picture */
+static int      s_tryPtr;               /* this frame is in Try it yourself with a view, and the
+                                           record's pointer lies inside its stage               */
 static volatile LONG s_refused;         /* the layout refused: said once, drawn never; read by the
                                            game thread (tagpu_wikistate_refused)                */
 static int      s_saidOver;             /* the page's ops overflowed: said once                 */
@@ -107,10 +109,11 @@ static void view_bound(WIKISTAGEVIEW* v)
 }
 
 /* the record into the layout's page state: the page's fields, the caption and the keys the demo's
-   view holds */
-static void page_of(WIKIPAGE* st, const TAGPU_PK_WIKI* w, const WIKISTAGEVIEW* v)
+   view holds, and in Try it yourself the build menu of the view's selection (wiki.js buildMenu,
+   from the frame's own view, so the menu and the stage beside it are of one state) */
+static void page_of(WIKIPAGE* st, const TAGPU_PK_WIKI* w, const WIKISTAGEVIEW* v, const WIKIDATA* d)
 {
-    int i;
+    int i, n = 0, sel[WIKISTAGE_UNITS];
     st->open = w->open;
     st->entry = w->entry;
     st->demo = w->demo;
@@ -129,6 +132,13 @@ static void page_of(WIKIPAGE* st, const TAGPU_PK_WIKI* w, const WIKISTAGEVIEW* v
         if (v->has_caption) lstrcpynA(st->caption, v->caption, sizeof st->caption);
         for (i = 0; i < WIKI_NKEYS; i++)
             if (v->held[i]) st->keys |= 1u << i;
+    }
+    st->nbuild = st->armed = 0;
+    if (w->try_it && v && d && w->entry >= 0 && w->entry < d->nentry) {
+        for (i = 0; i < v->nunit && i < WIKISTAGE_UNITS; i++)
+            if (v->unit[i].selected) sel[n++] = v->unit[i].type;
+        st->nbuild = tagpu_wikilay_menu(&d->entry[w->entry], sel, n, st->build);
+        st->armed = v->mode >= 0 && v->mode < d->entry[w->entry].ndef ? v->mode + 1 : 0;
     }
 }
 
@@ -178,7 +188,7 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
     s_page.bar = (float)bh * (float)vh / (float)f->game_height / u;
     /* the rewind button's slot is taken when the same frame's live HUD draws its button */
     s_page.rewind = tagpu_hudstate_frame(f->frame_counter, &hs, &hpx, &hox, &hoy) && hs->live;
-    page_of(&s_page, w, sv);
+    page_of(&s_page, w, sv, art->data);
     if (!tagpu_wikilay_build(art->lay, art->data, &s_faces, &s_page, &s_ops, &s_fr, err, sizeof err)) {
         InterlockedExchange(&s_refused, 1);
         tagpu_logf("wiki: the page's layout refused (%s) - the wiki is not drawn this session", err);
@@ -202,6 +212,19 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
     s_shot = w->shot;
     s_open = w->open;
     s_ptr = w->ptr_x >= 0 && w->ptr_y >= 0;
+    /* THE PLAYER'S CURSOR IS THE STAGE'S OWN OVER THE STAGE IN TRY IT YOURSELF (wiki.css
+       #stage.try): this frame is in Try it with a view, and the record's pointer -- the same
+       record's -- lies inside the stage's canvas as this frame places it, the client pixels of
+       the stage's hit rect (tagpu_wikistate_drawn). Both facts are of one frame, so no frame
+       shows both cursors or neither. */
+    s_tryPtr = 0;
+    if (w->try_it && s_viewOk && s_ptr) {
+        double cx, cy, cw, ch;
+        tagpu_wikistage_canvas(s_stageRect, u, &cx, &cy, &cw, &ch);
+        cx += s_ox;
+        cy += s_oy;
+        s_tryPtr = w->ptr_x >= cx && w->ptr_x < cx + cw && w->ptr_y >= cy && w->ptr_y < cy + ch;
+    }
     s_px = u;
     s_frame = f->frame_counter;
     s_have = 1;
@@ -340,7 +363,7 @@ void tagpu_wikistate_drawn(int drew)
 
 int tagpu_wikistate_cursor(unsigned frame)
 {
-    return s_have && s_frame == frame && s_drew && (!s_open || s_ptr);
+    return s_have && s_frame == frame && s_drew && (!s_open || (s_ptr && !s_tryPtr));
 }
 
 void tagpu_wikistate_cmd(TAGPU_CMD_WIKI* out)
