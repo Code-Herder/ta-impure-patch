@@ -432,7 +432,7 @@ function classicSprites(gl, vs, fs, vbo, feat, r8, pal) {
   gl.bindVertexArray(null);
   const U = uniforms(gl, prog, ["uGame", "uZoom", "uZoomC", "uDepthScale",
                                 "uFogGrid", "uFogOrg", "uFogDim", "uFog",
-                                "uRestored", "uBase"]);
+                                "uRestored", "uBase", "uMapPx", "uClip"]);
   const rects = [];
   for (const d of Object.values(feat.defs))
     for (const r of [d.body, d.shadow]) if (r) rects.push({ ...r, key: r.ck });
@@ -442,9 +442,18 @@ function classicSprites(gl, vs, fs, vbo, feat, r8, pal) {
   gl.activeTexture(gl.TEXTURE0);
   return {
     prog, vao, U,
-    // the uniforms of a draw; `f` as classicTerrain's draw takes it
+    // the uniforms of a draw; `f` as classicTerrain's draw takes it, and
+    // f.mapPx, f.clip: tagpu_feat.c's uMapPx and uClip, which its fragment
+    // stage tests on every sample of the map's own features. uMapPx is the
+    // engine's area on the tile grid (tagpu_edge_area x 32); with uClip 0 (a
+    // black edge) nothing is drawn at or past it on the right or at the
+    // bottom, with uClip 1 (the mirror) nothing outside its columns. Left
+    // unset, uMapPx is (0, 0) and every sample is discarded, so it is required.
     use(f) {
+      if (!f.mapPx) throw new Error("classicSprites.use: no mapPx, which would discard every feature");
       gl.useProgram(prog);
+      gl.uniform2f(U.uMapPx, f.mapPx[0], f.mapPx[1]);
+      gl.uniform1i(U.uClip, f.clip ? 1 : 0);
       gl.uniform2f(U.uGame, f.GW, f.GH);
       gl.uniform1f(U.uZoom, f.zoom);
       gl.uniform2f(U.uZoomC, f.zoomC[0], f.zoomC[1]);

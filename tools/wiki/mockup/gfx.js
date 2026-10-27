@@ -228,7 +228,10 @@ window.WikiGfx = (() => {
           const all = got.shadow.concat(got.body);
           gl.bindBuffer(gl.ARRAY_BUFFER, sprVBO);
           gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(all), gl.DYNAMIC_DRAW);
-          spr.use(f);
+          // the map on the tile grid and a black edge, as tagpu_wikiworld.c hands them over: the stage's
+          // cells are even (the loader refuses odd ones), so this is the target's own size and the
+          // clip at it discards no sample the target holds
+          spr.use({ ...f, mapPx: [(mw >> 1) * 32, (mh >> 1) * 32], clip: 0 });
           spr.draw(got.shadow.length / TR.SVST, got.body.length / TR.SVST, got.shadow.length / TR.SVST);
         }
       }

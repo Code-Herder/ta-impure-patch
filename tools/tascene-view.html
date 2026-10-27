@@ -2032,7 +2032,9 @@ async function main() {
       gl.uniform1i(LSU.uPal, 1); gl.uniform1i(LSU.uUndither, L.undither ? 1 : 0);
       gl.uniform1f(LSU.uZoom, zoom); gl.uniform2f(LSU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
     } else {
-      spr.use(frameNow());
+      // the engine's area, and the clip to the map's columns under the mirror,
+      // as tagpu_feat.c publishes them (s_pub.mapPxW/H, s_clip)
+      spr.use({ ...frameNow(), mapPx: [areaC * 32, areaR * 32], clip: L.edge === "mirror" });
       spr.draw(nShadow, nBody, bodyBase);
       return;
     }
