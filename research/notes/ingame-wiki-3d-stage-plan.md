@@ -1004,7 +1004,12 @@ presenting; `wiki_regression.py <instance> units --launch`, about 11 minutes):
   of the four functions names `+0x104`; in a skirmish an ARMCK reclaimed an ARMSOLAR from HP 326
   to its death with `+0x104` reading 0.0 at every read (101 reads in one run, 46 in another). The stage draws a unit being
   reclaimed finished, as the game does (the engine map, *A reclaimed unit is never a nanoframe*).
-- `mp` with a demo playing, `sp`, `page`, `demos`, `recorded` and `stage3d`: the hand-over's report.
+- `mp` with the host's demo playing: both peers ran on with no desync line; the host's stage drew
+  300 of 300 frames, the render thread 0.069 ms producer and 0.083 ms passes a frame on average, the
+  passes at most 2.566 ms in one frame.
+- `stage3d`, now over the units as well: all 18 captures within the tolerances, every terrain and
+  feature pixel equal, the unit pixels' mean 0.11 to 0.63 / 255 and 0 to 0.46 % past 40 (ss 1 and
+  2); `sp`, `page`, `demos` and `recorded` pass as before.
 
 **What it found on the way**: the mockup turned its models half a turn from the game's -- the
 pack's meshes are in the file's axes and the record's yaw turns the model as the engine holds it,
@@ -1014,7 +1019,8 @@ structure by vertex and a mobile unit not at all; and its quads and wire were th
 approximations. Each is now the game's rule, and the comparison went from a mean of 50 to 70 / 255
 over the unit pixels to under 0.4.
 
-**Gate**: the 34 groups, as 6g. **Review: high.**
+**Gate**: `tareplay.py landing` (from `main`): pass, 35 groups, noted on `43102b9c` (MEASURED
+2026-10-27). **Review: high.**
 
 ### Landing 6i — the 3D stage under the mods
 
