@@ -44,6 +44,7 @@
 #include "tagpu_replay.h"
 #include "tagpu_gaf.h"        /* TAGPU_GAF_EXACT: the badges are drawn as drawn */
 #include "tagpu_gui.h"        /* tagpu_gui_asset_exact: so are the ground and the plate */
+#include "tagpu_wikiasset.h"  /* WIKI3DNAMES: tagpu_replays_asset_names */
 
 /* ---- engine addresses ------------------------------------------------------------------------ */
 #define TA_MAIN          0x00511DE8u    /* TAdynmemStruct**                                     */
@@ -1690,6 +1691,56 @@ static const char* running_mod(void)
         if ((m = mod_by_archive(name)) != NULL) return m;
     }
     return s_mods[MOD_RETAIL].name;
+}
+
+/* THE MOUNT LIST FOR THE IN-GAME WIKI'S ASSET LOADER (tagpu_wikiasset.h), copied by value at the
+   wiki's first open, on the game thread: the same list running_mod reads, every archive's full
+   path in mount order. BOUND: the count, capped at `max`; a path read within its 0x104 bytes, one
+   the mount left unterminated given as "" (the loader names it refused). */
+int tagpu_replays_archive_paths(char (*out)[ARC_PATHMAX], int max)
+{
+    const char* gfx = *(const char* const*)VA_GFX_PP;
+    const char* const* list;
+    int n, i;
+    if (!gfx || !(list = *(const char* const* const*)(gfx + GFX_ARC_LIST))) return 0;
+    n = *(const int*)(gfx + GFX_ARC_COUNT);
+    if (n > max) n = max;
+    for (i = 0; i < n; i++) {
+        const char* path = list[i] ? list[i] + ARC_PATH : NULL;
+        const size_t k = path ? strnlen(path, ARC_PATHMAX) : ARC_PATHMAX;
+        if (k == ARC_PATHMAX) out[i][0] = 0;
+        else memcpy(out[i], path, k + 1);
+    }
+    return n < 0 ? 0 : n;
+}
+
+/* THE NAMES THE ASSET LOADER RESOLVES WITH, copied beside the list: the `language` value
+   0x51FB50 that the path builder 0x4290F0 puts in "<dir>-<language>\" (WinMain's init sets it once,
+   from the registry, "english" when empty: 0x49E9FC..0x49EA27), and the asset folders' names in
+   the running executable's .data, which a mod renames in place (Escalation's `unitsE`, TA Zero's
+   `ZUnits` and `logoz`: the 3D stage plan's batch D2). Neither is written after the init, so the
+   copy is the engine's. BOUND: each string within its buffer; one that is not terminated there is
+   given as "", which resolves nothing. */
+#define VA_LANGUAGE   0x0051FB50u
+static void engine_name(char* out, size_t cap, uintptr_t va)
+{
+    const char* s = (const char*)va;
+    const size_t k = strnlen(s, cap);
+    if (k == cap) out[0] = 0;
+    else memcpy(out, s, k + 1);
+}
+
+void tagpu_replays_asset_names(struct WIKI3DNAMES* n)
+{
+    engine_name(n->language, sizeof n->language, VA_LANGUAGE);
+    engine_name(n->units, sizeof n->units, 0x00503920u);
+    engine_name(n->textures, sizeof n->textures, 0x00503720u);
+    engine_name(n->logos, sizeof n->logos, 0x00504734u);
+    engine_name(n->logos_gaf, sizeof n->logos_gaf, 0x00503704u);
+    engine_name(n->objects3d, sizeof n->objects3d, 0x005036E4u);
+    engine_name(n->scripts, sizeof n->scripts, 0x00503740u);
+    engine_name(n->anims, sizeof n->anims, 0x00502E30u);
+    engine_name(n->features, sizeof n->features, 0x00502C7Cu);
 }
 
 /* The main menu's version text as RT_GAME_VERSION takes it: printable, 1 to 7 characters, else

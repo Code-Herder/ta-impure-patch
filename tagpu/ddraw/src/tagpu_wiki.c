@@ -81,6 +81,9 @@
 #include "tagpu_log.h"
 #include "tagpu_wiki.h"
 #include "tagpu_wikistate.h"
+#include "tagpu_wikiasset.h"
+#include "tagpu_replays.h"
+#include "tagpu_pak.h"
 
 #define DUMP_ASK  "tagpu_wiki.dump"
 #define DUMP_OUT  "tagpu_wiki.json"
@@ -928,6 +931,37 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
     tagpu_logf("wiki: state dumped to %s - open=%d paused=%d hits=%u", DUMP_OUT, s_open, s_paused, s_hit.n);
 }
 
+/* THE 3D ASSET LOAD (tagpu_wikiasset.h), started once a process, by the first fill of an open
+   window once the wiki's data is loaded: the engine's mount list, its language and folder names
+   (tagpu_replays.c, which reads the same list for running_mod) and the current directory are
+   copied here, on the game thread that owns them, and handed to the loader thread by value with
+   the data and WIKIPAK, both immutable for the process. Nothing here waits for the load. */
+static int s_assets;
+
+static void assets_start(void)
+{
+    const WIKIDATA* d = data();
+    WIKI3DIN* in;
+    DWORD n;
+    if (s_assets || !d) return;
+    s_assets = 1;
+    if (!(in = (WIKI3DIN*)calloc(1, sizeof *in))) {
+        tagpu_logf("wiki3d: NOT loaded - out of memory for its input");
+        return;
+    }
+    in->narc = tagpu_replays_archive_paths(in->arc, TAGPU_VFS_ARCMAX);
+    tagpu_replays_asset_names(&in->names);
+    n = GetCurrentDirectoryA(sizeof in->cwd, in->cwd);
+    if (!n || n >= sizeof in->cwd) {
+        in->cwd[0] = 0;
+        tagpu_logf("wiki3d: the current directory is not one the loader can name - only archives are read");
+    }
+    in->data = d;
+    in->pak = tagpu_pak_resource("WIKIPAK", &in->npak);
+    tagpu_logf("wiki3d: loading from %d archives on a thread of its own", in->narc);
+    tagpu_wikiasset_start(in);
+}
+
 /* 1 when the packet carried nothing of the last fill tagpu_wiki_carried was told of, not even its
    head, so the frame drawn from it shows no wiki and posts an empty hit map */
 static int s_cut;
@@ -977,7 +1011,10 @@ int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again)
         w->ptr_y = (int16_t)(cy < -32768 ? -32768 : cy > 32767 ? 32767 : cy);
     }
     lstrcpynA(w->held, s_held, sizeof w->held);
-    if (s_open) page_fill(w);
+    if (s_open) {
+        assets_start();
+        page_fill(w);
+    }
     *len = w->has_stage ? (uint32_t)sizeof *w : TAGPU_PK_WIKI_HEAD;
     return 1;
 }
@@ -1009,6 +1046,7 @@ void tagpu_wiki_carried(const TAGPU_PK_WIKI* w, uint32_t carried)
         DeleteFileA(DUMP_ASK);
         dump(w, carried);
     }
+    if (s_ask) tagpu_wikiasset_poll();
 }
 
 void tagpu_wiki_level_end(void)

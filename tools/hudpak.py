@@ -11,7 +11,9 @@ A set names the files of one folder:
           the parts as PNG, the faces as TrueType, and the licence texts, so the faces never
           travel without them. The default.
     wiki  art/wiki/, the resource WIKIPAK: tree.json and the entries (src/tagpu_wikidata.c),
-          layout.json, the window's numbers (src/tagpu_wikilay.c), and the window's kit,
+          the stage descriptions stage/<entry>.json (src/tagpu_wikiasset.c, which resolves them
+          against the player's archives), layout.json, the window's numbers
+          (src/tagpu_wikilay.c), and the window's kit,
           kit/kit.json and its parts as PNG (src/tagpu_hudart.c), as tools/hudart/fit.py --set
           wiki fits them from art/wiki-full/kit/.
 
@@ -31,7 +33,7 @@ VERSION = 1
 # per set: the globs it keeps, and the files it cannot do without
 SETS = {
     "hud": (("layout.json", "kit.json", "parts/*.png", "fonts/*.ttf", "fonts/*.txt"), ("layout.json", "kit.json")),
-    "wiki": (("tree.json", "layout.json", "entries/*.json", "kit/kit.json", "kit/parts/*.png"), ("tree.json", "layout.json", "kit/kit.json")),
+    "wiki": (("tree.json", "layout.json", "entries/*.json", "stage/*.json", "kit/kit.json", "kit/parts/*.png"), ("tree.json", "layout.json", "kit/kit.json")),
 }
 
 
