@@ -393,7 +393,7 @@ against the file size; directory depth ≤ 16 and entries against the directory 
 ≤ `0x10000` out with the declared size checked after LZ77 or zlib; TDF and FBI text parsed within
 its length; TNT offsets and tile indices against the file and its count; GAF dimensions ≤
 `TAGPU_GAF_DECMAX`, RLE rows within the blob, sub-frame counts against the table; COB reads by
-`create_hides`'s own bounds.
+`tagpu_cobscan_hides`' own bounds (6c), on the file's bytes at base 0.
 
 ### 6. Model records and the heading
 
@@ -607,6 +607,43 @@ the parity checks).
   directory order, and every source's copy of a path.
 
 ### Landing 6c — Create()'s hides, one function for the ghost and the wiki
+
+**Status: built 2026-10-26, not landed.** As specified, with what the plan did not settle:
+
+- **A COB block is read through a base.** `tagpu_cobscan_hides(cob, size, base, hid)` and
+  `tagpu_cobscan_mask` read every header offset and name-table entry as a 32-bit value minus
+  `base`, bounded by `size`: the ghost passes the block's own address (the engine's loader
+  relocated it in place), the wiki's loader (6e) passes 0 for the file's bytes and need not
+  relocate. The same arithmetic makes the file build natively on a 64-bit host.
+- **The engine's piece order moved to `tagpu_model3do.h`** as `tagpu_model_engine_order(root,
+  prim, name)`, beside the ghost's `tagpu_model_walk`: it is the one part of the old
+  `engine_prims` that reads the template tree, and the wiki's arena models are in the engine's
+  form, so both callers take it from there. `tagpu_cobscan_mask` takes its output (the nodes, their
+  names, the count) and the caller's walk, and runs the swap and the mapping; it compares node
+  addresses and never follows one. The ghost now walks the engine order before reading the
+  script, where `engine_prims` walked it after; the answer is the same, the walk being the same
+  bounded read of the same template.
+- **`tagpu_cobscan_piece`** names COB piece k, for the test and for the wiki's report.
+- **`tagpu_cobscan.c` is not on `thread-split.allow`**: it names no engine memory and has no
+  writable static (its scratch is on the stack). Like `tagpu_placegeo.c` it is therefore not a
+  `sim` file, so a change to it alone gates no test group and is not instrumented; a change to
+  `tagpu_cobscan.h` gates every feature of `tagpu_datakeys.c`, which includes it. The gap is the
+  same one landing 1b left.
+
+Results: `tagpu/ddraw/tests/cobscantest.py` (new; `cobscantest.c` built with gcc, ASan and UBSan,
+about 1 s): all 278 stock unit scripts (`scripts\<UnitName>.cob` of every `units\*.fbi`; 90 hide a
+piece at `Create()`) hide the same pieces as `tools/ta3do`'s `hidden_at_create`; relocated at two
+bases (one that wraps) each answers as the file's bytes do; the mask over each unit's model in the
+engine's order hides `hidden_at_create`'s pieces for all 278, every hidden piece's name being
+carried by exactly one node; the truncation and overwrite pass ran with no sanitizer error. A
+mutation that dropped the swap failed 85 units. A scratch differential under Wine of the old
+`create_mask` against the new pair, with real 32-bit pointers, over the same 278 scripts and
+models with truncations, overwritten dwords, a NULL script, a zero length and a renamed node: 0
+differences in 345 862 calls. `make` clean with and without `LIMITS=stock`. `tareplay.py landing`
+over `main..598cbb6f` passed: 35 test groups (the branch's range carries more than this landing;
+`keys_ghost_mask`'s are `battle` and `resource-core-upgrade`), no check failed, 2 of 2 changed
+functions and regions reached, its `replay-roundtrip:` note on `598cbb6f`. The high review is not
+run.
 
 **What changes**: nothing visible. `create_hides` and `create_mask` move out of
 `tagpu_datakeys.c` into `tagpu/ddraw/src/tagpu_cobscan.c`/`.h`, pure (a COB blob and its size, a
