@@ -99,6 +99,9 @@ try, on the same launch as sp:
        pixel of the demo's point, and its state hash equals sim.js fed the same logged inputs at
        the same ticks (`simparity.mjs --try`). With --shot, the presented frame is grabbed before
        `snap`'s click and before `line`'s first release, the line's sites on the stage;
+  (t2b) exactly one cursor: the pointer over the build menu, the frame holds one of the game's cursor
+       frames, none on the stage; over the stage's centre, one, on the stage (needs tools/wiki/gfx.py's
+       pack, as cursor does);
   (t3) Shift and the left button held on the stage when Back to demo is pressed are let go in the
        simulation, and their late releases are taken, nothing owed;
   (t4) Ctrl and the left button held when Esc closes the window: let go, nothing owed after their
@@ -904,6 +907,30 @@ def replay_try(c, d, entry, demo_id, grab_at=None, shot=None):
     return want, s
 
 
+def one_cursor(c, d):
+    """(t2b) Try it shows exactly one cursor: with the pointer over the build menu the player's alone
+    and none on the stage, over the stage's centre one, on the stage -- the stage's, the player's
+    hidden. Found against the game's own frames (tools/wiki/gfx.py's pack), as cursor's (c2)."""
+    import numpy as np
+    from PIL import Image
+    frames = sprite_frames()
+    x0, y0, x1, y1 = c.hit(d, "stage")
+    path = c.gamedir / "tagpu_wiki.cursor.png"
+    for where, at, on_stage in (("the build menu", c.centre(c.hit(d, "build:none")), 0),
+                                ("the stage", ((x0 + x1) // 2, (y0 + y1) // 2), 1)):
+        c.keys("dmove:%d,%d" % at)
+        time.sleep(1.0)
+        grab(c, path)
+        img = np.asarray(Image.open(path).convert("RGB"))
+        hits = [(name, p) for name, _f, rgba in frames for p in find_sprite(img, rgba)]
+        on = [h for h in hits if x0 <= h[1][0] < x1 and y0 <= h[1][1] < y1]
+        assert len(hits) == 1 and len(on) == on_stage, \
+            f"(t2b) the pointer over {where} at {at}: the frame holds {hits}, {len(on)} on the stage"
+        print(f"wiki try: (t2b) the pointer over {where}: one cursor, {hits[0][0]} at {hits[0][1]}, "
+              f"{'on' if on_stage else 'off'} the stage")
+    path.unlink(missing_ok=True)
+
+
 def try_it(c, shot=None):
     """(t1)..(t5): Try it yourself driven by device input on the stage, its simulation against
     sim.js fed what the game logged."""
@@ -952,6 +979,8 @@ def try_it(c, shot=None):
               f"hash {d['hash']} equal to sim.js's")
         press(c, d, "play")
         d = wait_dump(c, lambda d: d["playing"], "(t2) play did not start Try it again")
+
+    one_cursor(c, d)
 
     # (t3) a button and a key held when Try it is left: both let go in the simulation, and their late
     # releases are taken -- nothing reaches the engine
