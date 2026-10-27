@@ -4476,6 +4476,65 @@ folder's `tagpu_wiki.json` (and its `.tmp`) and the deletion of `tagpu_wiki.dump
 nowhere else. Nothing the recording carries: the demo's simulation is the wiki's own, a `WIKISIM`
 on the game thread that TA's simulation never reads, and every wiki file is `presentation`.
 
+### 2.12d The world passes, compiled twice (`tagpu_scene.h`, `tagpu_wikiworld.c`, `tools/scene-check.sh`; built, not called)
+
+The seven files that draw one world scene — `tagpu_vk_world.c`, `tagpu_vk_terr.c`,
+`tagpu_vk_feat.c`, `tagpu_vk_unit.c`, `tagpu_posedraw.c`, `tagpu_posebake.c` and
+`tagpu_render3do.c` — are compiled **twice**: `src/<name>.o` is the game's world, and
+`src/<name>.wiki.o`, built with `-DTAGPU_SCENE_WIKI`, is the in-game wiki's stage, each with its
+own statics. Both are linked. Design: [the 3D stage plan](ingame-wiki-3d-stage-plan.html),
+section 1 and landing 6f. **No engine address, no hook, no byte patch**: nothing for the tables
+above, and nothing calls the wiki's copies yet.
+
+- **What `tagpu_scene.h` does under the macro**, included first by each of the seven: renames
+  every external symbol they define (`tagpu_vk_*` → `tagpu_vkw_*`, `tagpu_r3d_*` → `tagpu_r3dw_*`,
+  `tagpu_posedraw_*` → `tagpu_pdw_*`, `tagpu_posebake_*` → `tagpu_pbw_*`); points their hand-over
+  sources (`tagpu_terr_handover`, `tagpu_feat_handover`, `tagpu_feat_atlas_hand/owed/ack`,
+  `tagpu_native_worldtgt`, `tagpu_native_foggrid`, `tagpu_native_scissor_on`) at
+  `tagpu_wikiworld_*`; points every call into a game-only module (the cast-shadow map, the
+  scaffold, the effects pass, the Classic++ restorer, `tagpu_classicpp_assets`/`_light`, the fault
+  lever, `tagpu_vk_ab_arm`, `tagpu_grow_stress`) at an inert answer in `tagpu_wikiworld.c`; and
+  sizes the bake's caches, the unit pass's vertex-buffer table and their lookup hashes from the
+  stage's bound, `WIKIWORLD_FRAMEMAX` = 128 units + 256 gesture-site ghosts + the placement ghost +
+  64 3D features = 449 (the keeps at the bound too: `tagpu_posebake.h` asserts that no keep exceeds
+  its table, which would undo the bound). Without the macro it does nothing.
+- **Today every wiki source answers "nothing this frame"** (0, a null view, `VK_FORMAT_UNDEFINED`
+  for the shadow format, the restorer down), each the answer the passes already take from the
+  game's own module on a frame with nothing to give. `tagpu_wikiworld.c` defines them with
+  `TAGPU_SCENE_WIKI` set, so each definition is checked against the very prototype the wiki copy
+  calls.
+- **The invariants.** *No static of the wiki's stage is a static of the game's world*: two
+  translation units share no file-scope state, which C's linkage guarantees for every static
+  these files hold and every one a later edit adds. The one deliberate exception is the bake's
+  scratch (`tagpu_pb_scratch_*`: the two vertex streams, the skip flags and the normal sums,
+  5.3 MB), defined by the game's object and `extern` in the wiki's (`PB_SCRATCH`); it holds one
+  model during one `tagpu_posebake_unit` call, both copies run on the render thread only, and
+  neither calls the other. *Every external symbol is renamed*: a missed one is defined twice and
+  the link fails naming it (checked by planting one). *No wiki copy reaches a game-only module*:
+  `tools/scene-check.sh`, a prerequisite of the link that depends on every object, fails on any
+  undefined symbol of a wiki object that another object of ours defines and its allow list does
+  not name (stateless or read-only helpers: `tagpu_vk_stage_*`, `tagpu_gaf_atlas_*`/`_frame_*`/
+  `_seq_*`/`_rects_*`, four `tagpu_pal_*` reads, the device queries, `tagpu_log`/`_logf`,
+  `tagpu_settings_ss`, `tagpu_user_top_bound`). MEASURED 2026-10-26 by planting a call to
+  `tagpu_vk_shadow_prepare` in a wiki copy: `scene-check: src/tagpu_vk_world.wiki.o calls
+  tagpu_vk_shadow_prepare, which a module of the game's world defines`.
+- **The game's path is unchanged.** MEASURED 2026-10-26: six of the seven game objects are
+  byte-identical to the base commit's; `tagpu_posebake.o` differs only in that its scratch has
+  external linkage, which moves `.bss` offsets and one register choice. On `tascene-parity`,
+  paused, the base commit's DLL and this one give byte-identical terrain, feature and unit
+  captures (`tacli ab`, each pass armed alone), and a presented window under the whole play set
+  that differs by 0 px below the message band (whose "forces obliterated" wording is random per
+  boot), the cursor's pulsing hotspot pixel aside.
+- **What it costs**, MEASURED 2026-10-26 with `size` and `objdump -h` on the i686 build:
+  `ddraw.dll` 17 778 688 → 18 040 832 bytes (+262 144: `.text` +115 424, `.rdata` +126 592, the
+  shaders' SPIR-V arrays included twice); `.bss` +363 296. The wiki objects' `.bss`:
+  `tagpu_render3do` 188 928 (its 2 048-entry atlas table, not resized), `tagpu_posebake` 70 464,
+  `tagpu_vk_unit` 63 168, `tagpu_vk_feat` 34 400, `tagpu_posedraw` 2 656, `tagpu_vk_terr` 2 304,
+  `tagpu_vk_world` 1 408. The stock-limits build's are the same.
+- **Not done here**: the producer that fills the hand-overs, the seam's calls into the wiki's
+  copies and their declarations for a caller outside the seven (`tagpu_scene.h` declares none),
+  and the device memory the wiki's atlases and slot buffers will take — landing 6g.
+
 ### 2.13 Sub-tick pose interpolation (`tagpu_lerp.c`, OFF by default, `tagpu_lerp.on`) — 2026-09-09
 
 The design, the invariants and the gate results are [smooth motion](smooth-motion.html); this is

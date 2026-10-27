@@ -1,6 +1,10 @@
 /* tagpu_vk_unit.c -- the posed unit bodies and their cast-shadow depth twins,
    drawn by Vulkan. Contract: tagpu_vk_unit.h.
 
+   TWO INSTANCES: compiled for the game's world and, under TAGPU_SCENE_WIKI, for
+   the wiki's stage, each with its own statics; tagpu_scene.h names where the
+   wiki's draws its hand-over from and what it may call.
+
    IT IS NOT A SECOND IMPLEMENTATION OF THE PASS. Everything arrives through
    `tagpu_posedraw_handover` (tagpu_posedraw.h): the vertices are the bake's
    two streams, reached through tagpu_posebake.h's mirrors; the draw ranges are
@@ -147,6 +151,7 @@
    A PASS READS NO ENGINE STATE: every value comes from the gather's
    hand-over, so this file is not on thread-split.allow and must never be. */
 
+#include "tagpu_scene.h"            /* first: the wiki instance's names and sizes */
 #include "tagpu_vk_pass.h"
 #include "tagpu_vk_restore.h"   /* this lane restores the twin itself */
 #include "tagpu_vk_stage.h"     /* the bounded upload of the base atlas */
@@ -359,7 +364,9 @@ static VBENT s_vb[VB_MAX];
    frame, so a scan is O(units x table). Chains hold index + 1, so 0 ends one
    and a zeroed table is empty. Beside it the free slots below the high-water
    mark `s_vbTop` and the live count the keep is tested on. */
+#ifndef VB_HBITS                     /* the wiki's instance sets its own (tagpu_scene.h) */
 #define VB_HBITS 16
+#endif
 #define VB_HSIZE (1u << VB_HBITS)
 typedef char vb_chain_fits[(VB_MAX < 0xFFFF) ? 1 : -1];
 static unsigned short s_vbHead[VB_HSIZE], s_vbNext[VB_MAX], s_vbFree[VB_MAX];

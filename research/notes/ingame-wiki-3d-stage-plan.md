@@ -178,10 +178,14 @@ each of the seven, does four things under `TAGPU_SCENE_WIKI` and nothing otherwi
    instances therefore bind no image a game pass writes and queue no restorer job.
 4. **Sizes the wiki instances for the wiki**: `TAGPU_PB_FRAMEMAX` and the arrays it sizes in
    `tagpu_posebake.c` and `tagpu_vk_unit.c` come from the stage's bounds
-   (`WIKISTAGE_UNITS` + `WIKISTAGE_SITES` + 1 + the description's 3D features). posebake's two
-   scratch streams and its normal scratch are defined in the game's object only and are `extern` in
-   the wiki's (a `PB_SCRATCH` macro): one bake runs to completion inside one call and both
-   instances run on the render thread, so they never use it at once.
+   (`WIKIWORLD_FRAMEMAX` = `WIKISTAGE_UNITS` + `WIKISTAGE_SITES` + 1 + `WIKIWORLD_FEAT3D`, the
+   description's 3D features, 64, which the description's reader refuses to exceed: 449). The two
+   keeps are set to the bound as well, since a keep above its table would let the table fill
+   without ever recycling (`tagpu_posebake.h` asserts `keep <= table`), and the two lookup hashes
+   over those tables (`PB_HBITS`, `VB_HBITS`) to 2 048 chains. posebake's two scratch streams, its
+   skip flags and its normal scratch (`tagpu_pb_scratch_*`) are defined in the game's object only
+   and are `extern` in the wiki's (a `PB_SCRATCH` macro): one bake runs to completion inside one
+   call and both instances run on the render thread, so they never use it at once.
 
 **The invariant, stated where it is enforced.** *No static of the wiki's stage is a static of the
 game's world*: two translation units share no file-scope state, which C's linkage guarantees for
@@ -192,22 +196,35 @@ outside an allow list of stateless or read-only helpers (`tagpu_vk_stage_*` over
 `TAGPU_VKSTAGE`, `tagpu_gaf_*` frame readers and atlas functions over a caller's atlas, `tagpu_pal_*`
 reads, the device queries `tagpu_vk_armed`, `tagpu_vk_owns_present`, `tagpu_vk_max_image_dim` and
 `tagpu_vk_max_storage_range`, `tagpu_line_*`, `tagpu_log*`, `tagpu_settings_ss`, the C library and
-the Win32 and Vulkan imports), naming the symbol. The rename list is proven complete by the link
-itself: a symbol left unrenamed is defined twice. `tagpu_scene.h` also declares the renamed entry
-points for the seam, by including the seven files' headers once more under the renames, so
-`tagpu_vk.c` calls the wiki's instance by name and cannot reach it by accident.
+the Win32 and Vulkan imports), naming the symbol. As built (6f): the C library and the imports are
+recognised as the undefined symbols no object of ours defines, the `tagpu_gaf_*` and `tagpu_pal_*`
+entries are the precise families and reads the passes call, `tagpu_user_top_bound` (the range
+filters' top, written once at attach) is on the list, and the bake's shared scratch is too. The
+check reads objects, so it is a phony target that depends on every object of the link and the link
+waits on it (order-only), which cannot race the compiler. The shadow map's format query is not a
+device query to allow but one of the stubs: its `VK_FORMAT_UNDEFINED` is an answer both passes
+already take, giving their dummy their own depth format. The rename list is proven complete by
+the link itself: a symbol left unrenamed is defined twice. **The seam's declarations of the
+renamed entry points are 6g's, and not by re-including the headers**: each of the seven headers
+is include-guarded and defines types (`TAGPU_PDHAND`, `TAGPU_R3DTEX`, the unit pass's records)
+beside its prototypes, so a second inclusion in `tagpu_vk.c` under the renames is either skipped
+by the guard or redefines the types. 6g separates each header's prototypes from its types, or
+declares the wiki's entry points by another construction that keeps their signatures the
+originals', so `tagpu_vk.c` still calls the wiki's instance by name only.
 
 **What each instanced file gains**: the include, and a paragraph at the top of its header comment —
 "TWO INSTANCES: compiled for the game's world and, under `TAGPU_SCENE_WIKI`, for the wiki's stage,
 each with its own statics; `tagpu_scene.h` names where the wiki's draws its hand-over from and
-what it may call". Nothing in the bodies changes, except posebake's scratch macro. Four of the
+what it may call". Nothing in the bodies changes, except posebake's scratch macro and the two
+hash sizes' `#ifndef` (posebake's paragraph adds that the scratch is the one shared state). Four of the
 seven carry GLSL that `tools/spirv-gen.py` extracts (`tagpu_posedraw.c`, `tagpu_vk_terr.c`,
 `tagpu_vk_unit.c`, `tagpu_vk_world.c`): the build's `spirv-check` says whether the header edit
 needs a regeneration.
 
 **What it costs**: about 250 KB more code in the DLL; the wiki instances' `.bss` small once
-resized (to be MEASURED with `size`; the target is under 400 KB together); device memory for the
-wiki's own atlases and per-slot buffers, sized by its content (a few MB).
+resized; device memory for the wiki's own atlases and per-slot buffers, sized by its content (a
+few MB). MEASURED 2026-10-26 (6f): the DLL +262 144 bytes, `.bss` +363 296, under the 400 KB
+target (`gpu-status.md` §2.12d has the per-object figures); device memory is 6g's to measure.
 
 **Considered and declined:**
 - *A per-scene state struct in each file.* About 170 statics across the seven files and every
@@ -703,6 +720,29 @@ proven isolated; the game's are byte for byte what they were.
 
 **Gate**: none expected (no fixture names these files); `--check` confirms. **Review: high** (it
 touches every world pass file and the build). It can run beside 6e.
+
+**Status (2026-10-26): built and verified on its branch, not reviewed or landed.** Every
+verification above ran:
+- `make -C tagpu/ddraw -j$(nproc)`, `LIMITS=stock` and `COVER=1`: clean, `scene-check: clean -- 7
+  wiki object(s), 175 undefined symbol(s)`; thread-split, sim-state, sim-features and spirv clean,
+  and no shader header needed regenerating.
+- The planted call: `scene-check: src/tagpu_vk_world.wiki.o calls tagpu_vk_shadow_prepare, which a
+  module of the game's world defines`; a planted unrenamed function fails the link with `multiple
+  definition`.
+- The game's objects: six of the seven byte-identical to the base commit's; `tagpu_posebake.o`
+  differs because its scratch has external linkage (`.bss` offsets and one register choice).
+- Sizes: `gpu-status.md` §2.12d.
+- The A/B on `tascene-parity`, the base commit's DLL against this one, each launched on a private
+  Xvfb and paused (`keys pause`, the tick read twice): the terrain, feature and unit captures
+  (`tacli ab terr|feat|posedraw`, each pass armed alone) are byte-identical, md5 for md5; the
+  presented window under the whole play set (seven passes in the census, 1 966 colours) differs by
+  0 px below the message band, the cursor's pulsing hotspot pixel aside, which also differs
+  between two grabs of one run. The band's 2 902 px are the "forces obliterated" lines, whose
+  wording is random per boot (seen in a crop of both).
+- `tareplay.py landing --check`: pass, the note on `848309b7` covering every gated file; no group.
+
+What 6f did not settle and 6g takes: the seam's declarations of the wiki's entry points (section 1
+says why the header cannot simply be included again), and the wiki instances' device memory.
 
 ### Landing 6g — the ground in 3D
 
