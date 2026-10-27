@@ -15,6 +15,7 @@
 #include "tagpu_log.h"
 #include "tagpu_simreg.h"
 #include "tagpu_model3do.h"
+#include "tagpu_cobscan.h"
 #include "tagpu_packet_pub.h"
 
 SIM_FEATURE(keys_records, SIM_PUPPET_RUNS, "battle");
@@ -541,220 +542,22 @@ SIM_FEATURE(keys_ghost_mask, SIM_PUPPET_RUNS, "battle resource-core-upgrade");
    3. The build ghost's piece mask
    ========================================================================= */
 
-/* THE COB AS 0x4B2450 LEAVES IT: the file read whole, its header's offsets
-   turned into pointers in place (0x4B24A7..0x4B2527, DISASSEMBLED). The two
-   name tables have every entry relocated too; the entry-point table does not,
-   its entries being code offsets in dwords. Nothing in the loader checks a
-   count or an offset, so every one of them is DATA here, and every read below
-   is bounded by the block's recorded length (section 1): the header, each
-   table whole, each name to its NUL. */
-#define COB_VERSION   0x00
-#define COB_NSCRIPTS  0x04
-#define COB_NPIECES   0x08
-#define COB_CODELEN   0x0C      /* dwords                                      */
-#define COB_ENTRIES   0x18      /* int32[nscripts]: code offsets, dwords       */
-#define COB_SNAMES    0x1C      /* char*[nscripts]                             */
-#define COB_PNAMES    0x20      /* char*[npieces]                              */
-#define COB_CODE      0x24      /* int32[codelen]                              */
-#define COB_HEADER    0x2C      /* the last header word the loader reads, +4   */
-
-/* the piece bits a script can carry, an order of magnitude above stock (the
-   largest stock model has 36 pieces); a script past it gets no mask rather
-   than part of one */
-#define DK_MAX_COBPIECES 1024
-#define DK_NAMECMP       256    /* the longest name a compare reads            */
-
-/* the bytes from `p` to the end of the block at `cob`, 0 when `p` is outside
-   it (a `p` below `cob` wraps past `size`) */
-static unsigned cob_room(const char* cob, unsigned size, const void* p)
-{
-    size_t o = (size_t)p - (size_t)cob;
-    return o < size ? (unsigned)(size - o) : 0u;
-}
-
-#define OP_SHOW 0x10005000u
-#define OP_HIDE 0x10006000u
-
-/* The opcodes whose length is certain, with their inline operand counts: the
-   prologue walk stops at the first opcode not here. The same table as
-   tools/ta3do's COB_PROLOGUE, which measured the stock hides with it. */
-static const struct { unsigned op; unsigned char inl; } PROLOGUE[] = {
-    { OP_SHOW, 1 }, { OP_HIDE, 1 },
-    { 0x10007000u, 1 }, { 0x10008000u, 1 },                   /* CACHE, DONT_CACHE      */
-    { 0x1000D000u, 1 }, { 0x1000E000u, 1 },                   /* SHADE, DONT_SHADE      */
-    { 0x10001000u, 2 }, { 0x10002000u, 2 },                   /* MOVE, TURN             */
-    { 0x1000B000u, 2 }, { 0x1000C000u, 2 },                   /* MOVE_NOW, TURN_NOW     */
-    { 0x10021001u, 1 }, { 0x10021002u, 1 }, { 0x10021004u, 1 }, /* PUSH_CONSTANT/LOCAL/STATIC */
-    { 0x10023002u, 1 }, { 0x10023004u, 1 },                   /* POP_LOCAL_VAR, POP_STATIC */
-    { 0x10022000u, 0 }, { 0x10024000u, 0 },                   /* CREATE_LOCAL_VAR, POP_STACK */
-    { 0x10031000u, 0 }, { 0x10032000u, 0 }, { 0x10033000u, 0 },
-    { 0x10034000u, 0 }, { 0x10034001u, 0 },
-};
-
-static int op_inline(unsigned op)
-{
-    unsigned i;
-    for (i = 0; i < sizeof PROLOGUE / sizeof PROLOGUE[0]; i++)
-        if (PROLOGUE[i].op == op) return PROLOGUE[i].inl;
-    return -1;
-}
-
-/* _stricmp's answer (0x4F8A70, the engine's piece and script matcher: A-Z
-   fold) for a COB name `a`, which has `room` bytes before its block ends, and
-   a model node's name `b`: 1 equal, 0 not. -1 when the two agree until `a`'s
-   room or DK_NAMECMP runs out without ending, or `b` fails the range test:
-   the caller then refuses the mask rather than guess what the engine's
-   unbounded compare said. */
-static int name_eq(const char* a, unsigned room, const char* b)
-{
-    unsigned i, lim = room < DK_NAMECMP ? room : DK_NAMECMP;
-    if (!ptr_ok(b)) return -1;
-    for (i = 0; i < lim; i++) {
-        int ca = (unsigned char)a[i], cb = (unsigned char)b[i];
-        if (ca >= 'A' && ca <= 'Z') ca += 32;
-        if (cb >= 'A' && cb <= 'Z') cb += 32;
-        if (ca != cb) return 0;
-        if (!ca) return 1;
-    }
-    return -1;
-}
-
-/* the same, against a lower-case literal of ours */
-static int name_is(const char* a, unsigned room, const char* lit)
-{
-    unsigned i, lim = room < DK_NAMECMP ? room : DK_NAMECMP;
-    for (i = 0; i < lim; i++) {
-        int ca = (unsigned char)a[i];
-        if (ca >= 'A' && ca <= 'Z') ca += 32;
-        if (ca != (unsigned char)lit[i]) return 0;
-        if (!ca) return 1;
-    }
-    return -1;
-}
-
-/* WHAT Create() HIDES, READ AND NOT RUN: from its entry point, through the
-   opcodes of certain length, HIDE sets a COB piece's bit and SHOW clears it;
-   the walk stops at the first opcode it cannot size. Conservative by
-   construction — a hide behind a branch, a call or a sleep is not seen, and
-   the ghost shows that piece, as it did before this mask existed.
-
-   Returns the COB's piece count with `hid` filled (bits past it clear), 0 for
-   a script with no Create(), -1 for a script the block's bounds refuse. */
-static int create_hides(const char* cob, unsigned size, unsigned* hid)
-{
-    int ns, np, cl, i, ci = -1, pc;
-    const int* entries;
-    const char* const* snames;
-    const int* code;
-    if (size < COB_HEADER || *(const int*)(cob + COB_VERSION) != 4) return -1;
-    ns = *(const int*)(cob + COB_NSCRIPTS);
-    np = *(const int*)(cob + COB_NPIECES);
-    cl = *(const int*)(cob + COB_CODELEN);
-    if (ns <= 0 || np < 0 || np > DK_MAX_COBPIECES || cl <= 0) return -1;
-    entries = *(const int* const*)(cob + COB_ENTRIES);
-    snames  = *(const char* const* const*)(cob + COB_SNAMES);
-    code    = *(const int* const*)(cob + COB_CODE);
-    if (cob_room(cob, size, entries) / 4 < (unsigned)ns ||
-        cob_room(cob, size, snames)  / 4 < (unsigned)ns ||
-        cob_room(cob, size, code)    / 4 < (unsigned)cl) return -1;
-    for (i = 0; i < ns; i++) {
-        int e = name_is(snames[i], cob_room(cob, size, snames[i]), "create");
-        if (e < 0) return -1;
-        if (e) { ci = i; break; }
-    }
-    if (ci < 0) return 0;
-    memset(hid, 0, (size_t)(DK_MAX_COBPIECES / 32) * sizeof *hid);
-    pc = entries[ci];
-    while (pc >= 0 && pc < cl) {
-        unsigned op = (unsigned)code[pc];
-        int inl = op_inline(op);
-        if (inl < 0) break;
-        if ((op == OP_HIDE || op == OP_SHOW) && pc + 1 < cl) {
-            int k = code[pc + 1];
-            if (k >= 0 && k < np) {
-                if (op == OP_HIDE) hid[k >> 5] |= 1u << (k & 31);
-                else               hid[k >> 5] &= ~(1u << (k & 31));
-            }
-        }
-        pc += 1 + inl;
-    }
-    return np;
-}
-
-/* THE ENGINE'S PIECE ORDER FOR A NEW UNIT, reproduced so that COB piece k
-   names the node the engine will hide. 0x45A950 builds the unit's
-   primitives with 0x45AEC0 — a node, then its child's whole subtree, then
-   its sibling's (the root's siblings included, as 0x45AE80 counts them) —
-   and then, for each COB piece i below the primitive count, swaps into
-   position i the FIRST primitive at an index >= i whose node name _stricmp
-   matches COB piece i's (0x45A9E3..0x45AA70; the relink 0x45AF90 follows).
-   COB piece i then drives primitive i whether or not a name matched.
-   DISASSEMBLED.
-
-   Only positions up to `upto` are settled: a later swap never moves a
-   position below its own index. `pnames` holds `ncob` names, checked whole
-   against the block by the caller. Returns the primitive count, -1 when the
-   tree exceeds TAGPU_PBMAXPIECE or a compare cannot be answered. */
-static int engine_prims(const char* root, const char* cob, unsigned size,
-                        const char* const* pnames, int ncob, int upto, const char** prim)
-{
-    const char* stack[TAGPU_PBMAXPIECE + 2];
-    int sp = 0, n = 0, i, j;
-    stack[sp++] = root;
-    while (sp > 0) {
-        const char* nd = stack[--sp];
-        const char* sib;
-        const char* ch;
-        if (n >= TAGPU_PBMAXPIECE) return -1;
-        prim[n++] = nd;
-        sib = *(const char* const*)(nd + N_SIB);
-        ch  = *(const char* const*)(nd + N_CHILD);
-        if (ptr_ok(sib)) stack[sp++] = sib;           /* popped after the child's subtree */
-        if (ptr_ok(ch))  stack[sp++] = ch;
-        if (sp > TAGPU_PBMAXPIECE) return -1;
-    }
-    for (i = 0; i < ncob && i < n && i <= upto; i++) {
-        for (j = i; j < n; j++) {
-            int e = name_eq(pnames[i], cob_room(cob, size, pnames[i]),
-                            *(const char* const*)(prim[j] + N_NAME));
-            if (e < 0) return -1;
-            if (e) break;
-        }
-        if (j < n && j != i) { const char* t = prim[i]; prim[i] = prim[j]; prim[j] = t; }
-    }
-    return n;
-}
-
 /* the Create() mask, as bits over the ghost's walk: 1 with bits set, 0 when
    nothing is hidden, -1 when the script or the model is refused, -2 when the
-   script's length was not recorded. `size` is cob_size(cob). */
+   script's length was not recorded. `size` is cob_size(cob). The rule is
+   tagpu_cobscan.c's, which the in-game wiki's models read too; the script is
+   the block 0x4B2450 loaded, its offsets relocated to its own address, so
+   that address is the base, and every read of it is bounded by `size`. */
 static int create_mask(const char* root, const char* cob, unsigned size,
                        const char* const* walk, int np, uint32_t* bits)
 {
-    static unsigned    hid[DK_MAX_COBPIECES / 32];
     static const char* prim[TAGPU_PBMAXPIECE];
-    SIM_VAR(hid, SIM_TRANSIENT);
+    static const char* pname[TAGPU_PBMAXPIECE];
     SIM_VAR(prim, SIM_TRANSIENT);
-    const char*        hnode[TAGPU_PBMAXPIECE];
-    const char* const* pnames;
-    int ncob, nprim, k, g, nh = 0, upto = -1;
-
-    if (!cob) return 0;                                /* no script: nothing hidden */
-    if (!size) return -2;
-    ncob = create_hides(cob, size, hid);
-    if (ncob <= 0) return ncob;
-    for (k = 0; k < ncob; k++) if (hid[k >> 5] >> (k & 31) & 1) upto = k;
-    if (upto < 0) return 0;
-    pnames = *(const char* const* const*)(cob + COB_PNAMES);
-    if (cob_room(cob, size, pnames) / 4 < (unsigned)ncob) return -1;
-    nprim = engine_prims(root, cob, size, pnames, ncob, upto, prim);
-    if (nprim <= 0) return -1;
-    for (k = 0; k <= upto && k < nprim; k++)
-        if (hid[k >> 5] >> (k & 31) & 1) hnode[nh++] = prim[k];
-    for (g = 0; g < np; g++)
-        for (k = 0; k < nh; k++)
-            if (walk[g] == hnode[k]) { bits[g >> 5] |= 1u << (g & 31); break; }
-    return nh > 0;
+    SIM_VAR(pname, SIM_TRANSIENT);
+    int nprim = tagpu_model_engine_order(root, prim, pname);
+    return tagpu_cobscan_mask(cob, size, (uint32_t)(size_t)cob, prim, pname, nprim,
+                              walk, np, bits);
 }
 
 /* is this node named in the list? TADR's rule: the node's name folded to
