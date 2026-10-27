@@ -235,7 +235,7 @@ static int pb_walk(const char* const* nd, int nparts, int range,
    (a face repeating an index gets (0,1,0)), adds it to every vertex the face
    names, and divides each vertex's sum by its count -- no renormalisation, so a
    vertex between differing faces has a normal shorter than 1
-   (0x45A0A0..0x45A22C, DISASSEMBLED; exe-reverse-engineering.md "The unit
+   (0x45A0FD..0x45A22A, DISASSEMBLED; exe-reverse-engineering.md "The unit
    shade"). Face 0 is left out of the sums when the piece carries a selection
    primitive, as it is left out of the raster (0x45A13D).
 

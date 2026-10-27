@@ -404,7 +404,7 @@ def engine_faces(piece):
 
 
 def vertex_normals(piece, faces, skip0):
-    """The engine's vertex normal of every vertex of a node (tagpu_posebake.c `piece_vnormals`, 0x45A0A0..0x45A22C):
+    """The engine's vertex normal of every vertex of a node (tagpu_posebake.c `piece_vnormals`, 0x45A0FD..0x45A22A):
     each face's unit normal from its first three indices, against the winding ((V1-V0)x(V2-V0) negated), (0, 1, 0)
     for a face repeating one of them or of no length; added to every vertex the face names and divided by the count,
     not renormalised; (0, 0, 0) for a vertex no face names. Face 0 is left out when it is the selection face. In the

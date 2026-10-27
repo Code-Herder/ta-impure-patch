@@ -5095,6 +5095,11 @@ is `0x4996FB`); otherwise `0x460898..0x46089F` passes the
 message on through `0x4AB0A0`. The replay's RESTART gate answers 0 for this one test on a puppet
 level, so the menu stays open (`tagpu_replay.c`, THE RESTART GATE).
 
+**The main menu's backdrop call, `0x426447`** [DISASSEMBLED 2026-10-27]. Inside the builder
+`0x4263B0`, `call 0x4288D0` at `0x426447` loads the backdrop; the next instruction, `0x42644C`
+(`push 0`, `push 0x5031D4`, seven bytes), is the Replays screen's site S2 (`tagpu_replays.c`), after
+the builder has written the screen's OnCommand slot `+0x08` at `0x426432`.
+
 **The main menu's return `0x4270A9` and `0x512C80`** [DISASSEMBLED 2026-10-06]. After the main
 menu's builder `0x4263B0` returns at `0x4270A9`, the shell reads the dword `0x512C80`
 (`0x4270AE`): nonzero takes `0x4270F0`, which sets the shell's sub-state `main+0x2BBF` = 6 instead
@@ -10933,7 +10938,7 @@ is latched here, not in any `.GUI` gadget record. The frame packet carries it as
 **`0x4197D0` — who fills `0x2C92..0x2CA6`: the footprint snapped around the world point
 [DISASSEMBLED 2026-09-23; MEASURED the same day].** `cdecl()`, no arguments, `ret`. Two call
 sites, both behind "pointer on the world (`0x2CC6` bit 1) and mode `0x0E`": `0x499241` in the
-mode-6 mouse handler, right after `0x498DA0`, and `0x491CDB` inside `0x491CC0` (`ret 4`).
+mode-6 mouse handler, right after `0x498DA0` (the bit tested at `0x499236`, the mode at `0x499238`), and `0x491CDB` inside `0x491CC0` (`ret 4`).
 `0x491CC0` itself has no `call` and no jump in `.text` and no absolute reference anywhere in the
 file [DISASSEMBLED 2026-10-25: an instruction-level scan and a scan for the four-byte literal], so
 in the engine `0x499241` is the one caller that runs; Impure's resource gate on `0x498F70` calls
@@ -13263,7 +13268,9 @@ and only these three sources can be what `0x499027` reads.
 - **`main+0x2CBE` has exactly one behavioural reader.** It has **28** `.text` references: 13
   stores, 13 store-if-changed tests immediately in front of one (`0x491C8A`, `0x491CEC`,
   `0x491D41`, `0x49258B`, `0x496A67`, `0x497F94`, `0x4991AC`, `0x499254`, `0x4992A2`,
-  `0x49953E`, `0x499581`, `0x49964B`, `0x4997D5`), the save at `0x443702` that `0x4437B5`
+  `0x49953E`, `0x499581`, `0x49964B`, `0x4997D5`; `0x499254` compares with 19 directly, while
+  `0x4992A2` loads the byte with `movsx` and `0x4992A9` compares it with the index `0x48D220` returned
+  for the mode `main+0x2CC3`), the save at `0x443702` that `0x4437B5`
   restores through `0x491C80`, and `0x499027` — the one place the value decides anything.
   **Two of the 13 stores take a caller's index rather than a literal** (`0x491C95`,
   `0x491D4C`, both inside `SetCursor 0x491C80`), so the set of *values* is not closed by this
@@ -16963,7 +16970,9 @@ landing; MEASURED by the native load's equality with an independent Python resol
 
 **Opening a path, `0x4BB2E0(path, mode)`.** The loose file first (`0x4E4990`, the CRT open,
 relative to the current directory), then the first archive of the mount list whose directory
-holds the path as a file. The archive lookup `0x4BB4E0` splits the path at `\` and scans each
+holds the path as a file (an entry whose flag byte `+8` has bit 0, the directory bit, clear: `test
+byte [edi+8],1` at `0x4BB378`). The archive lookup `0x4BB4E0` splits the path at `\` (`push 0x5C`
+before the `strchr` call at `0x4BB4EA`) and scans each
 directory level's 9-byte entries **last to first** with `_stricmp 0x4F8A70`, which folds `A`..`Z`
 alone while the C locale handle `[0x52A018]` is 0 (no reference sets the locale). So of two
 entries of one name in one directory, the later wins.
@@ -16975,7 +16984,8 @@ appended. `0x435430`, the map builder, does the same (`0x4354E3`).
 
 **Enumerations list each path once, from the first source that has it.**
 - `0x4BC4B0`/`0x4BC640` walk the loose files (`_findfirst`/`_findnext`) and then the archives in
-  mount order, each directory's entries **forwards**, skipping an entry that fails the wildcard
+  mount order, each directory's entries **forwards** (in `0x4BC640`, `0x4BC6FF..0x4BC754`: the
+  index `+0x209` is incremented and compared with the directory's count, `jl` back at `0x4BC754`), skipping an entry that fails the wildcard
   match `0x4BC370` (`*` and `?`, both sides upper-cased by `0x4E71C0`) or whose flag byte has
   bit 1 (`test byte [edi+8],2` at `0x4BC735`).
 - **Bit 1 is the shadow mark**, written only by `0x4BE320`, which `InitTAHPIAry 0x41D4C0` calls
@@ -17022,7 +17032,7 @@ fatal through `0x4B6290`); the script `scripts\<UnitName>.COB` (`0x42D8E5`), nev
   face with a texture name it clears FF_TEAM (bit 2); takes the **first GAF of the texture bank**
   holding the name (`0x4B8D40`, `_stricmp`, the first sequence of that name); else `logos.GAF`,
   setting FF_TEAM only for exactly 10 frames (`0x42A1F2`); else writes `+0x00 = 0xD1` and FF_FLAT
-  and stops. A sequence of more than one frame gets the anim state `0x4B8B30` writes (u16 `+0x10`
+  and stops (`0x42A204..0x42A20F`: the store of `0xD1` is `0x42A207`, FF_FLAT bit 0 is OR-ed into `+0x1C`). A sequence of more than one frame gets the anim state `0x4B8B30` writes (u16 `+0x10`
   = 0, u16 `+0x12` = `[seq+0x2C]`, byte `+0x14` = `[seq+2]`, `+0x18` = the sequence) and FF_ANIM;
   otherwise `+0x10` = `[seq+0x28]` and FF_ANIM cleared. A face with no texture name is not touched.
   A sequence of 0 frames reads past its table (the loader takes such a sequence as a miss).
@@ -17041,7 +17051,9 @@ sub-frame offset and that sub-frame's `+0x10`. The sub-frame count is the **byte
 (re-read for the landing at `0x4B8CC0`).
 
 **A feature**, `LoadFeature 0x4224B0`: the first TDF of `0x4BCB50("features", "*.tdf")`
-(`0x502C7C`, `0x502C88`) that holds the section; its GAF `anims\<filename>.GAF` (`0x502E30`), its
+(`0x502C7C`, `0x502C88`) that holds the section (the loop `0x4224C9..0x4224F3` walks the TDF
+pointers from `[0x511FB4]+4` to `+8` and asks each `0x4C3410(section)`; a hit leaves for
+`0x422DBB`); its GAF `anims\<filename>.GAF` (`0x502E30`), its
 model `objects3d\<object>.3DO` through `0x42A2C0`.
 
 **The folder names a mod renames in place** (`.data`, every reference passes them as a path or
@@ -17269,7 +17281,7 @@ The full protocol, captures, controls and unresolved compositor timing are in
 | `0x4B6700`, `0x4B6710` | Current **logical** mode width/height getters [INFERRED names], no arguments, plain `ret`. Read `TAProgram*` at `0x51FBD0`, then `+0xD4` / `+0xD8`; no Win32 screen-size query. The loading comparisons therefore read shell 640×480, not the actual 1280×1024 borderless client. Width's 14 direct callers: `0x41CCE9`, `0x46BCA5`, `0x49121B`, `0x491A8F`, `0x494A47`, `0x498044`, `0x498362`, `0x4A823E`, `0x4A826C`, `0x4A82A0`, `0x4A82B3`, `0x4A833E`, `0x4ABF06`, `0x4C648F`. Height's 17: `0x41CCF6`, `0x467DE4`, `0x46A284`, `0x46A8E0`, `0x46AD69`, `0x49122C`, `0x491A9B`, `0x498050`, `0x498375`, `0x4A8252`, `0x4A828C`, `0x4A82C7`, `0x4A82DA`, `0x4A834F`, `0x4A84F9`, `0x4ABF1A`, `0x4C649C`. Full-image direct call/jump scan found no direct jumps to either. |
 | `0x498342..0x4983EA` | The loading handler tests `main+0x38D75` bit 1; clear goes to the loading-frame path `0x4984DD`. Set compares current width/height through `0x4B6700` / `0x4B6710` against desired `main+0x37F1B/+0x37F1F` at `0x49836D` / `0x498380`. A mismatch frees `main+0x37E1B`, calls the surface restore helpers `0x4C61F0` / `0x4C62C0`, requests a resize at `0x4983D1`, then calls `NewTAScreen` at `0x4983EA`. Both resizes are now blocked through the actual window-lifetime property; the inner resize escaped the old ref/hwnd guard. Matching 640×480 skips recreation: measured no long end-of-load presentation gap. |
 
-**The loading screen.** Game entry, `0x498109..0x498156`: `0x4290F0(&path, "palettes",
+**The loading screen.** Game entry, `0x498109..0x498156`: `0x4290F0(&path, "palettes" (`0x5031BC`),
 "guipal", …)`, `0x4BBE50(path)` loads the file, then **`0x4AC7D0(GUIInfo, main+0x143A7, data)`**
 (`ret 0xC`) copies its 256 entries to `GUIInfo+0xB2` (`main+0x5CB`) and rebuilds the 256-byte
 LUT at `GUIInfo+0x8B2` (**`main+0xDCB`**) by nearest RGB match of each `guipal` entry against the
@@ -19869,7 +19881,7 @@ the target comparison. With no match, `0x43B08A`..`0x43B09D` appends through `0x
 without creating an order. The root is used by manual placement `0x4197A9`, contextual orders
 `0x48D1F4` and the resource input path. A match flagged `0x40000` removes nothing and adds
 nothing: the node was found on the main chain, the unlink searches the `+0x60` chain for it, and
-the call returns at `0x43B054` (or `0x43B044` → `0x43B0A2` when that chain is empty)
+the call returns at `0x43B054..0x43B058` (`ret 0x1C`; or `0x43B044` → `0x43B0A2` when that chain is empty)
 [INFERRED: a node is on one chain only]. **The consequence for repeated Shift-clicks**: the match
 is the first node of the action within ±16 inclusive, whatever its build type, so two 1×1 sites
 16 world units apart toggle each other, and a run of stock Shift-clicks along a line of 1×1
