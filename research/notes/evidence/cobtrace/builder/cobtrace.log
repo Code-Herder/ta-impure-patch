@@ -1,0 +1,959 @@
+# log: run 20261027-193332-268 part 1 of tagpu_cobtrace.log, started 2026-10-27 19:33:32
+# tagpu_cobtrace v1	filter=,ARMCK,	columns: S tick unit type script slot source args… | R tick unit slot script value | X tick unit script source | K tick unit slot script by | D tick unit slot value | H tick unit slot script pc depth
+S	27	2	ARMCK	Create	0	E	
+S	27	2	ARMCK	InitState	1	L:0	
+R	27	2	1	InitState	0
+S	28	2	ARMCK	MotionControl	1	C:0	
+S	28	2	ARMCK	SmokeUnit	2	C:0	
+R	28	2	0	Create	0
+S	28	2	ARMCK	stand	0	L:1	
+S	28	2	ARMCK	StartMoving	3	E	
+R	28	2	3	StartMoving	0
+R	34	2	0	stand	0
+S	34	2	ARMCK	walk	0	L:1	
+R	63	2	0	walk	0
+S	63	2	ARMCK	walk	0	L:1	
+R	92	2	0	walk	0
+S	92	2	ARMCK	walk	0	L:1	
+R	121	2	0	walk	0
+S	121	2	ARMCK	walk	0	L:1	
+R	150	2	0	walk	0
+S	150	2	ARMCK	walk	0	L:1	
+R	179	2	0	walk	0
+S	179	2	ARMCK	walk	0	L:1	
+S	198	2	ARMCK	StartBuilding	3	E	1266
+S	199	2	ARMCK	RequestState	4	C:3	0
+R	199	2	3	StartBuilding	0
+S	199	2	ARMCK	Go	3	L:4	
+S	200	2	ARMCK	open	5	L:3	
+S	200	2	ARMCK	StopMoving	6	E	
+R	200	2	6	StopMoving	0
+R	208	2	0	walk	0
+S	208	2	ARMCK	stand	0	L:1	
+R	215	2	0	stand	0
+S	215	2	ARMCK	stand	0	L:1	
+R	222	2	0	stand	0
+S	222	2	ARMCK	stand	0	L:1	
+R	229	2	0	stand	0
+S	229	2	ARMCK	stand	0	L:1	
+R	236	2	0	stand	0
+S	236	2	ARMCK	stand	0	L:1	
+R	243	2	0	stand	0
+S	243	2	ARMCK	stand	0	L:1	
+R	250	2	0	stand	0
+S	250	2	ARMCK	stand	0	L:1	
+R	257	2	0	stand	0
+S	257	2	ARMCK	stand	0	L:1	
+R	264	2	0	stand	0
+S	264	2	ARMCK	stand	0	L:1	
+R	271	2	0	stand	0
+S	271	2	ARMCK	stand	0	L:1	
+R	275	2	5	open	0
+R	278	2	0	stand	0
+S	278	2	ARMCK	stand	0	L:1	
+R	278	2	3	Go	0
+R	278	2	4	RequestState	0
+S	278	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	278	2	3	QueryNanoPiece	0
+S	279	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	279	2	3	QueryNanoPiece	0
+S	280	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	280	2	3	QueryNanoPiece	0
+S	281	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	281	2	3	QueryNanoPiece	0
+S	282	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	282	2	3	QueryNanoPiece	0
+S	283	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	283	2	3	QueryNanoPiece	0
+S	284	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	284	2	3	QueryNanoPiece	0
+R	285	2	0	stand	0
+S	285	2	ARMCK	stand	0	L:1	
+S	285	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	285	2	3	QueryNanoPiece	0
+S	286	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	286	2	3	QueryNanoPiece	0
+S	287	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	287	2	3	QueryNanoPiece	0
+S	288	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	288	2	3	QueryNanoPiece	0
+S	289	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	289	2	3	QueryNanoPiece	0
+S	290	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	290	2	3	QueryNanoPiece	0
+S	291	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	291	2	3	QueryNanoPiece	0
+R	292	2	0	stand	0
+S	292	2	ARMCK	stand	0	L:1	
+S	292	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	292	2	3	QueryNanoPiece	0
+S	293	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	293	2	3	QueryNanoPiece	0
+S	294	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	294	2	3	QueryNanoPiece	0
+S	295	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	295	2	3	QueryNanoPiece	0
+S	296	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	296	2	3	QueryNanoPiece	0
+S	297	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	297	2	3	QueryNanoPiece	0
+S	298	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	298	2	3	QueryNanoPiece	0
+R	299	2	0	stand	0
+S	299	2	ARMCK	stand	0	L:1	
+S	299	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	299	2	3	QueryNanoPiece	0
+S	300	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	300	2	3	QueryNanoPiece	0
+S	301	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	301	2	3	QueryNanoPiece	0
+S	302	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	302	2	3	QueryNanoPiece	0
+S	303	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	303	2	3	QueryNanoPiece	0
+S	304	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	304	2	3	QueryNanoPiece	0
+S	305	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	305	2	3	QueryNanoPiece	0
+R	306	2	0	stand	0
+S	306	2	ARMCK	stand	0	L:1	
+S	306	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	306	2	3	QueryNanoPiece	0
+S	307	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	307	2	3	QueryNanoPiece	0
+S	308	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	308	2	3	QueryNanoPiece	0
+S	309	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	309	2	3	QueryNanoPiece	0
+S	310	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	310	2	3	QueryNanoPiece	0
+S	311	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	311	2	3	QueryNanoPiece	0
+S	312	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	312	2	3	QueryNanoPiece	0
+R	313	2	0	stand	0
+S	313	2	ARMCK	stand	0	L:1	
+S	313	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	313	2	3	QueryNanoPiece	0
+S	314	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	314	2	3	QueryNanoPiece	0
+S	315	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	315	2	3	QueryNanoPiece	0
+S	316	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	316	2	3	QueryNanoPiece	0
+S	317	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	317	2	3	QueryNanoPiece	0
+S	318	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	318	2	3	QueryNanoPiece	0
+S	319	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	319	2	3	QueryNanoPiece	0
+R	320	2	0	stand	0
+S	320	2	ARMCK	stand	0	L:1	
+S	320	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	320	2	3	QueryNanoPiece	0
+S	321	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	321	2	3	QueryNanoPiece	0
+S	322	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	322	2	3	QueryNanoPiece	0
+S	323	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	323	2	3	QueryNanoPiece	0
+S	324	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	324	2	3	QueryNanoPiece	0
+S	325	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	325	2	3	QueryNanoPiece	0
+S	326	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	326	2	3	QueryNanoPiece	0
+R	327	2	0	stand	0
+S	327	2	ARMCK	stand	0	L:1	
+S	327	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	327	2	3	QueryNanoPiece	0
+S	328	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	328	2	3	QueryNanoPiece	0
+S	329	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	329	2	3	QueryNanoPiece	0
+S	330	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	330	2	3	QueryNanoPiece	0
+S	331	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	331	2	3	QueryNanoPiece	0
+S	332	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	332	2	3	QueryNanoPiece	0
+S	333	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	333	2	3	QueryNanoPiece	0
+R	334	2	0	stand	0
+S	334	2	ARMCK	stand	0	L:1	
+S	334	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	334	2	3	QueryNanoPiece	0
+S	335	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	335	2	3	QueryNanoPiece	0
+S	336	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	336	2	3	QueryNanoPiece	0
+S	337	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	337	2	3	QueryNanoPiece	0
+S	338	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	338	2	3	QueryNanoPiece	0
+S	339	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	339	2	3	QueryNanoPiece	0
+S	340	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	340	2	3	QueryNanoPiece	0
+R	341	2	0	stand	0
+S	341	2	ARMCK	stand	0	L:1	
+S	341	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	341	2	3	QueryNanoPiece	0
+S	342	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	342	2	3	QueryNanoPiece	0
+S	343	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	343	2	3	QueryNanoPiece	0
+S	344	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	344	2	3	QueryNanoPiece	0
+S	345	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	345	2	3	QueryNanoPiece	0
+S	346	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	346	2	3	QueryNanoPiece	0
+S	347	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	347	2	3	QueryNanoPiece	0
+R	348	2	0	stand	0
+S	348	2	ARMCK	stand	0	L:1	
+S	348	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	348	2	3	QueryNanoPiece	0
+S	349	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	349	2	3	QueryNanoPiece	0
+S	350	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	350	2	3	QueryNanoPiece	0
+S	351	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	351	2	3	QueryNanoPiece	0
+S	352	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	352	2	3	QueryNanoPiece	0
+S	353	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	353	2	3	QueryNanoPiece	0
+S	354	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	354	2	3	QueryNanoPiece	0
+R	355	2	0	stand	0
+S	355	2	ARMCK	stand	0	L:1	
+S	355	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	355	2	3	QueryNanoPiece	0
+S	356	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	356	2	3	QueryNanoPiece	0
+S	357	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	357	2	3	QueryNanoPiece	0
+S	358	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	358	2	3	QueryNanoPiece	0
+S	359	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	359	2	3	QueryNanoPiece	0
+S	360	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	360	2	3	QueryNanoPiece	0
+S	361	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	361	2	3	QueryNanoPiece	0
+R	362	2	0	stand	0
+S	362	2	ARMCK	stand	0	L:1	
+S	362	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	362	2	3	QueryNanoPiece	0
+S	363	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	363	2	3	QueryNanoPiece	0
+S	364	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	364	2	3	QueryNanoPiece	0
+S	365	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	365	2	3	QueryNanoPiece	0
+S	366	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	366	2	3	QueryNanoPiece	0
+S	367	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	367	2	3	QueryNanoPiece	0
+S	368	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	368	2	3	QueryNanoPiece	0
+R	369	2	0	stand	0
+S	369	2	ARMCK	stand	0	L:1	
+S	369	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	369	2	3	QueryNanoPiece	0
+S	370	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	370	2	3	QueryNanoPiece	0
+S	371	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	371	2	3	QueryNanoPiece	0
+S	372	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	372	2	3	QueryNanoPiece	0
+S	373	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	373	2	3	QueryNanoPiece	0
+S	374	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	374	2	3	QueryNanoPiece	0
+S	375	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	375	2	3	QueryNanoPiece	0
+R	376	2	0	stand	0
+S	376	2	ARMCK	stand	0	L:1	
+S	376	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	376	2	3	QueryNanoPiece	0
+S	377	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	377	2	3	QueryNanoPiece	0
+S	378	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	378	2	3	QueryNanoPiece	0
+S	379	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	379	2	3	QueryNanoPiece	0
+S	380	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	380	2	3	QueryNanoPiece	0
+S	381	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	381	2	3	QueryNanoPiece	0
+S	382	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	382	2	3	QueryNanoPiece	0
+R	383	2	0	stand	0
+S	383	2	ARMCK	stand	0	L:1	
+S	383	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	383	2	3	QueryNanoPiece	0
+S	384	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	384	2	3	QueryNanoPiece	0
+S	385	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	385	2	3	QueryNanoPiece	0
+S	386	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	386	2	3	QueryNanoPiece	0
+S	387	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	387	2	3	QueryNanoPiece	0
+S	388	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	388	2	3	QueryNanoPiece	0
+S	389	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	389	2	3	QueryNanoPiece	0
+R	390	2	0	stand	0
+S	390	2	ARMCK	stand	0	L:1	
+S	390	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	390	2	3	QueryNanoPiece	0
+S	391	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	391	2	3	QueryNanoPiece	0
+S	392	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	392	2	3	QueryNanoPiece	0
+S	393	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	393	2	3	QueryNanoPiece	0
+S	394	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	394	2	3	QueryNanoPiece	0
+S	395	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	395	2	3	QueryNanoPiece	0
+S	396	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	396	2	3	QueryNanoPiece	0
+R	397	2	0	stand	0
+S	397	2	ARMCK	stand	0	L:1	
+S	397	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	397	2	3	QueryNanoPiece	0
+S	398	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	398	2	3	QueryNanoPiece	0
+S	399	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	399	2	3	QueryNanoPiece	0
+S	400	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	400	2	3	QueryNanoPiece	0
+S	401	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	401	2	3	QueryNanoPiece	0
+S	402	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	402	2	3	QueryNanoPiece	0
+S	403	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	403	2	3	QueryNanoPiece	0
+R	404	2	0	stand	0
+S	404	2	ARMCK	stand	0	L:1	
+S	404	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	404	2	3	QueryNanoPiece	0
+S	405	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	405	2	3	QueryNanoPiece	0
+S	406	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	406	2	3	QueryNanoPiece	0
+S	407	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	407	2	3	QueryNanoPiece	0
+S	408	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	408	2	3	QueryNanoPiece	0
+S	409	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	409	2	3	QueryNanoPiece	0
+S	410	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	410	2	3	QueryNanoPiece	0
+R	411	2	0	stand	0
+S	411	2	ARMCK	stand	0	L:1	
+S	411	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	411	2	3	QueryNanoPiece	0
+S	412	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	412	2	3	QueryNanoPiece	0
+S	413	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	413	2	3	QueryNanoPiece	0
+S	414	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	414	2	3	QueryNanoPiece	0
+S	415	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	415	2	3	QueryNanoPiece	0
+S	416	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	416	2	3	QueryNanoPiece	0
+S	417	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	417	2	3	QueryNanoPiece	0
+R	418	2	0	stand	0
+S	418	2	ARMCK	stand	0	L:1	
+S	418	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	418	2	3	QueryNanoPiece	0
+S	419	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	419	2	3	QueryNanoPiece	0
+S	420	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	420	2	3	QueryNanoPiece	0
+S	421	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	421	2	3	QueryNanoPiece	0
+S	422	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	422	2	3	QueryNanoPiece	0
+S	423	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	423	2	3	QueryNanoPiece	0
+S	424	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	424	2	3	QueryNanoPiece	0
+R	425	2	0	stand	0
+S	425	2	ARMCK	stand	0	L:1	
+S	425	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	425	2	3	QueryNanoPiece	0
+S	426	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	426	2	3	QueryNanoPiece	0
+S	427	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	427	2	3	QueryNanoPiece	0
+S	428	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	428	2	3	QueryNanoPiece	0
+S	429	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	429	2	3	QueryNanoPiece	0
+S	430	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	430	2	3	QueryNanoPiece	0
+S	431	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	431	2	3	QueryNanoPiece	0
+R	432	2	0	stand	0
+S	432	2	ARMCK	stand	0	L:1	
+S	432	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	432	2	3	QueryNanoPiece	0
+S	433	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	433	2	3	QueryNanoPiece	0
+S	434	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	434	2	3	QueryNanoPiece	0
+S	435	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	435	2	3	QueryNanoPiece	0
+S	436	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	436	2	3	QueryNanoPiece	0
+S	437	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	437	2	3	QueryNanoPiece	0
+S	438	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	438	2	3	QueryNanoPiece	0
+R	439	2	0	stand	0
+S	439	2	ARMCK	stand	0	L:1	
+S	439	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	439	2	3	QueryNanoPiece	0
+S	440	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	440	2	3	QueryNanoPiece	0
+S	441	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	441	2	3	QueryNanoPiece	0
+S	442	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	442	2	3	QueryNanoPiece	0
+S	443	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	443	2	3	QueryNanoPiece	0
+S	444	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	444	2	3	QueryNanoPiece	0
+S	445	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	445	2	3	QueryNanoPiece	0
+R	446	2	0	stand	0
+S	446	2	ARMCK	stand	0	L:1	
+S	446	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	446	2	3	QueryNanoPiece	0
+S	447	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	447	2	3	QueryNanoPiece	0
+S	448	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	448	2	3	QueryNanoPiece	0
+S	449	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	449	2	3	QueryNanoPiece	0
+S	450	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	450	2	3	QueryNanoPiece	0
+S	451	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	451	2	3	QueryNanoPiece	0
+S	452	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	452	2	3	QueryNanoPiece	0
+R	453	2	0	stand	0
+S	453	2	ARMCK	stand	0	L:1	
+S	453	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	453	2	3	QueryNanoPiece	0
+S	454	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	454	2	3	QueryNanoPiece	0
+S	455	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	455	2	3	QueryNanoPiece	0
+S	456	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	456	2	3	QueryNanoPiece	0
+S	457	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	457	2	3	QueryNanoPiece	0
+S	458	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	458	2	3	QueryNanoPiece	0
+S	459	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	459	2	3	QueryNanoPiece	0
+R	460	2	0	stand	0
+S	460	2	ARMCK	stand	0	L:1	
+S	460	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	460	2	3	QueryNanoPiece	0
+S	461	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	461	2	3	QueryNanoPiece	0
+S	462	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	462	2	3	QueryNanoPiece	0
+S	463	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	463	2	3	QueryNanoPiece	0
+S	464	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	464	2	3	QueryNanoPiece	0
+S	465	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	465	2	3	QueryNanoPiece	0
+S	466	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	466	2	3	QueryNanoPiece	0
+R	467	2	0	stand	0
+S	467	2	ARMCK	stand	0	L:1	
+S	467	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	467	2	3	QueryNanoPiece	0
+S	468	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	468	2	3	QueryNanoPiece	0
+S	469	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	469	2	3	QueryNanoPiece	0
+S	470	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	470	2	3	QueryNanoPiece	0
+S	471	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	471	2	3	QueryNanoPiece	0
+S	472	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	472	2	3	QueryNanoPiece	0
+S	473	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	473	2	3	QueryNanoPiece	0
+R	474	2	0	stand	0
+S	474	2	ARMCK	stand	0	L:1	
+S	474	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	474	2	3	QueryNanoPiece	0
+S	475	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	475	2	3	QueryNanoPiece	0
+S	476	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	476	2	3	QueryNanoPiece	0
+S	477	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	477	2	3	QueryNanoPiece	0
+S	478	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	478	2	3	QueryNanoPiece	0
+S	479	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	479	2	3	QueryNanoPiece	0
+S	480	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	480	2	3	QueryNanoPiece	0
+R	481	2	0	stand	0
+S	481	2	ARMCK	stand	0	L:1	
+S	481	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	481	2	3	QueryNanoPiece	0
+S	482	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	482	2	3	QueryNanoPiece	0
+S	483	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	483	2	3	QueryNanoPiece	0
+S	484	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	484	2	3	QueryNanoPiece	0
+S	485	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	485	2	3	QueryNanoPiece	0
+S	486	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	486	2	3	QueryNanoPiece	0
+S	487	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	487	2	3	QueryNanoPiece	0
+R	488	2	0	stand	0
+S	488	2	ARMCK	stand	0	L:1	
+S	488	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	488	2	3	QueryNanoPiece	0
+S	489	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	489	2	3	QueryNanoPiece	0
+S	490	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	490	2	3	QueryNanoPiece	0
+S	491	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	491	2	3	QueryNanoPiece	0
+S	492	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	492	2	3	QueryNanoPiece	0
+S	493	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	493	2	3	QueryNanoPiece	0
+S	494	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	494	2	3	QueryNanoPiece	0
+R	495	2	0	stand	0
+S	495	2	ARMCK	stand	0	L:1	
+S	495	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	495	2	3	QueryNanoPiece	0
+S	496	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	496	2	3	QueryNanoPiece	0
+S	497	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	497	2	3	QueryNanoPiece	0
+S	498	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	498	2	3	QueryNanoPiece	0
+S	499	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	499	2	3	QueryNanoPiece	0
+S	500	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	500	2	3	QueryNanoPiece	0
+S	501	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	501	2	3	QueryNanoPiece	0
+R	502	2	0	stand	0
+S	502	2	ARMCK	stand	0	L:1	
+S	502	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	502	2	3	QueryNanoPiece	0
+S	503	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	503	2	3	QueryNanoPiece	0
+S	504	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	504	2	3	QueryNanoPiece	0
+S	505	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	505	2	3	QueryNanoPiece	0
+S	506	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	506	2	3	QueryNanoPiece	0
+S	507	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	507	2	3	QueryNanoPiece	0
+S	508	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	508	2	3	QueryNanoPiece	0
+R	509	2	0	stand	0
+S	509	2	ARMCK	stand	0	L:1	
+S	509	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	509	2	3	QueryNanoPiece	0
+S	510	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	510	2	3	QueryNanoPiece	0
+S	511	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	511	2	3	QueryNanoPiece	0
+S	512	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	512	2	3	QueryNanoPiece	0
+S	513	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	513	2	3	QueryNanoPiece	0
+S	514	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	514	2	3	QueryNanoPiece	0
+S	515	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	515	2	3	QueryNanoPiece	0
+R	516	2	0	stand	0
+S	516	2	ARMCK	stand	0	L:1	
+S	516	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	516	2	3	QueryNanoPiece	0
+S	517	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	517	2	3	QueryNanoPiece	0
+S	518	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	518	2	3	QueryNanoPiece	0
+S	519	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	519	2	3	QueryNanoPiece	0
+S	520	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	520	2	3	QueryNanoPiece	0
+S	521	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	521	2	3	QueryNanoPiece	0
+S	522	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	522	2	3	QueryNanoPiece	0
+R	523	2	0	stand	0
+S	523	2	ARMCK	stand	0	L:1	
+S	523	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	523	2	3	QueryNanoPiece	0
+S	524	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	524	2	3	QueryNanoPiece	0
+S	525	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	525	2	3	QueryNanoPiece	0
+S	526	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	526	2	3	QueryNanoPiece	0
+S	527	2	ARMCK	QueryNanoPiece	3	E	0,0,0,0
+R	527	2	3	QueryNanoPiece	0
+S	527	2	ARMCK	StopBuilding	3	E	
+S	528	2	ARMCK	RequestState	4	C:3	1
+R	528	2	3	StopBuilding	0
+S	528	2	ARMCK	Stop	3	L:4	
+R	530	2	0	stand	0
+S	530	2	ARMCK	stand	0	L:1	
+S	531	2	ARMCK	close	5	L:3	
+R	537	2	0	stand	0
+S	537	2	ARMCK	stand	0	L:1	
+R	544	2	0	stand	0
+S	544	2	ARMCK	stand	0	L:1	
+R	551	2	0	stand	0
+S	551	2	ARMCK	stand	0	L:1	
+R	558	2	0	stand	0
+S	558	2	ARMCK	stand	0	L:1	
+R	565	2	0	stand	0
+S	565	2	ARMCK	stand	0	L:1	
+R	572	2	0	stand	0
+S	572	2	ARMCK	stand	0	L:1	
+R	579	2	0	stand	0
+S	579	2	ARMCK	stand	0	L:1	
+R	586	2	0	stand	0
+S	586	2	ARMCK	stand	0	L:1	
+R	593	2	0	stand	0
+S	593	2	ARMCK	stand	0	L:1	
+R	600	2	0	stand	0
+S	600	2	ARMCK	stand	0	L:1	
+R	607	2	0	stand	0
+S	607	2	ARMCK	stand	0	L:1	
+R	614	2	0	stand	0
+S	614	2	ARMCK	stand	0	L:1	
+R	621	2	0	stand	0
+S	621	2	ARMCK	stand	0	L:1	
+R	628	2	0	stand	0
+S	628	2	ARMCK	stand	0	L:1	
+R	635	2	0	stand	0
+S	635	2	ARMCK	stand	0	L:1	
+R	642	2	0	stand	0
+S	642	2	ARMCK	stand	0	L:1	
+R	649	2	0	stand	0
+S	649	2	ARMCK	stand	0	L:1	
+R	656	2	0	stand	0
+S	656	2	ARMCK	stand	0	L:1	
+R	663	2	0	stand	0
+S	663	2	ARMCK	stand	0	L:1	
+R	670	2	0	stand	0
+S	670	2	ARMCK	stand	0	L:1	
+R	677	2	0	stand	0
+S	677	2	ARMCK	stand	0	L:1	
+R	684	2	0	stand	0
+S	684	2	ARMCK	stand	0	L:1	
+R	691	2	0	stand	0
+S	691	2	ARMCK	stand	0	L:1	
+R	698	2	0	stand	0
+S	698	2	ARMCK	stand	0	L:1	
+R	705	2	0	stand	0
+S	705	2	ARMCK	stand	0	L:1	
+R	710	2	5	close	0
+R	711	2	3	Stop	0
+R	711	2	4	RequestState	0
+R	712	2	0	stand	0
+S	712	2	ARMCK	stand	0	L:1	
+R	719	2	0	stand	0
+S	719	2	ARMCK	stand	0	L:1	
+R	726	2	0	stand	0
+S	726	2	ARMCK	stand	0	L:1	
+R	733	2	0	stand	0
+S	733	2	ARMCK	stand	0	L:1	
+R	740	2	0	stand	0
+S	740	2	ARMCK	stand	0	L:1	
+R	747	2	0	stand	0
+S	747	2	ARMCK	stand	0	L:1	
+R	754	2	0	stand	0
+S	754	2	ARMCK	stand	0	L:1	
+R	761	2	0	stand	0
+S	761	2	ARMCK	stand	0	L:1	
+R	768	2	0	stand	0
+S	768	2	ARMCK	stand	0	L:1	
+R	775	2	0	stand	0
+S	775	2	ARMCK	stand	0	L:1	
+R	782	2	0	stand	0
+S	782	2	ARMCK	stand	0	L:1	
+R	789	2	0	stand	0
+S	789	2	ARMCK	stand	0	L:1	
+R	796	2	0	stand	0
+S	796	2	ARMCK	stand	0	L:1	
+R	803	2	0	stand	0
+S	803	2	ARMCK	stand	0	L:1	
+R	810	2	0	stand	0
+S	810	2	ARMCK	stand	0	L:1	
+R	817	2	0	stand	0
+S	817	2	ARMCK	stand	0	L:1	
+R	824	2	0	stand	0
+S	824	2	ARMCK	stand	0	L:1	
+R	831	2	0	stand	0
+S	831	2	ARMCK	stand	0	L:1	
+R	838	2	0	stand	0
+S	838	2	ARMCK	stand	0	L:1	
+R	845	2	0	stand	0
+S	845	2	ARMCK	stand	0	L:1	
+R	852	2	0	stand	0
+S	852	2	ARMCK	stand	0	L:1	
+R	859	2	0	stand	0
+S	859	2	ARMCK	stand	0	L:1	
+R	866	2	0	stand	0
+S	866	2	ARMCK	stand	0	L:1	
+R	873	2	0	stand	0
+S	873	2	ARMCK	stand	0	L:1	
+R	880	2	0	stand	0
+S	880	2	ARMCK	stand	0	L:1	
+R	887	2	0	stand	0
+S	887	2	ARMCK	stand	0	L:1	
+R	894	2	0	stand	0
+S	894	2	ARMCK	stand	0	L:1	
+R	901	2	0	stand	0
+S	901	2	ARMCK	stand	0	L:1	
+R	908	2	0	stand	0
+S	908	2	ARMCK	stand	0	L:1	
+R	915	2	0	stand	0
+S	915	2	ARMCK	stand	0	L:1	
+R	922	2	0	stand	0
+S	922	2	ARMCK	stand	0	L:1	
+R	929	2	0	stand	0
+S	929	2	ARMCK	stand	0	L:1	
+R	936	2	0	stand	0
+S	936	2	ARMCK	stand	0	L:1	
+R	943	2	0	stand	0
+S	943	2	ARMCK	stand	0	L:1	
+R	950	2	0	stand	0
+S	950	2	ARMCK	stand	0	L:1	
+R	957	2	0	stand	0
+S	957	2	ARMCK	stand	0	L:1	
+R	964	2	0	stand	0
+S	964	2	ARMCK	stand	0	L:1	
+R	971	2	0	stand	0
+S	971	2	ARMCK	stand	0	L:1	
+R	978	2	0	stand	0
+S	978	2	ARMCK	stand	0	L:1	
+R	985	2	0	stand	0
+S	985	2	ARMCK	stand	0	L:1	
+R	992	2	0	stand	0
+S	992	2	ARMCK	stand	0	L:1	
+R	999	2	0	stand	0
+S	999	2	ARMCK	stand	0	L:1	
+R	1006	2	0	stand	0
+S	1006	2	ARMCK	stand	0	L:1	
+R	1013	2	0	stand	0
+S	1013	2	ARMCK	stand	0	L:1	
+R	1020	2	0	stand	0
+S	1020	2	ARMCK	stand	0	L:1	
+R	1027	2	0	stand	0
+S	1027	2	ARMCK	stand	0	L:1	
+R	1034	2	0	stand	0
+S	1034	2	ARMCK	stand	0	L:1	
+R	1041	2	0	stand	0
+S	1041	2	ARMCK	stand	0	L:1	
+R	1048	2	0	stand	0
+S	1048	2	ARMCK	stand	0	L:1	
+R	1055	2	0	stand	0
+S	1055	2	ARMCK	stand	0	L:1	
+R	1062	2	0	stand	0
+S	1062	2	ARMCK	stand	0	L:1	
+R	1069	2	0	stand	0
+S	1069	2	ARMCK	stand	0	L:1	
+R	1076	2	0	stand	0
+S	1076	2	ARMCK	stand	0	L:1	
+R	1083	2	0	stand	0
+S	1083	2	ARMCK	stand	0	L:1	
+R	1090	2	0	stand	0
+S	1090	2	ARMCK	stand	0	L:1	
+R	1097	2	0	stand	0
+S	1097	2	ARMCK	stand	0	L:1	
+R	1104	2	0	stand	0
+S	1104	2	ARMCK	stand	0	L:1	
+R	1111	2	0	stand	0
+S	1111	2	ARMCK	stand	0	L:1	
+R	1118	2	0	stand	0
+S	1118	2	ARMCK	stand	0	L:1	
+R	1125	2	0	stand	0
+S	1125	2	ARMCK	stand	0	L:1	
+R	1132	2	0	stand	0
+S	1132	2	ARMCK	stand	0	L:1	
+R	1139	2	0	stand	0
+S	1139	2	ARMCK	stand	0	L:1	
+R	1146	2	0	stand	0
+S	1146	2	ARMCK	stand	0	L:1	
+R	1153	2	0	stand	0
+S	1153	2	ARMCK	stand	0	L:1	
+R	1160	2	0	stand	0
+S	1160	2	ARMCK	stand	0	L:1	
+R	1167	2	0	stand	0
+S	1167	2	ARMCK	stand	0	L:1	
+R	1174	2	0	stand	0
+S	1174	2	ARMCK	stand	0	L:1	
+R	1181	2	0	stand	0
+S	1181	2	ARMCK	stand	0	L:1	
+R	1188	2	0	stand	0
+S	1188	2	ARMCK	stand	0	L:1	
+R	1195	2	0	stand	0
+S	1195	2	ARMCK	stand	0	L:1	
+R	1202	2	0	stand	0
+S	1202	2	ARMCK	stand	0	L:1	
+R	1209	2	0	stand	0
+S	1209	2	ARMCK	stand	0	L:1	
+R	1216	2	0	stand	0
+S	1216	2	ARMCK	stand	0	L:1	
+R	1223	2	0	stand	0
+S	1223	2	ARMCK	stand	0	L:1	
+R	1230	2	0	stand	0
+S	1230	2	ARMCK	stand	0	L:1	
+R	1237	2	0	stand	0
+S	1237	2	ARMCK	stand	0	L:1	
+R	1244	2	0	stand	0
+S	1244	2	ARMCK	stand	0	L:1	
+R	1251	2	0	stand	0
+S	1251	2	ARMCK	stand	0	L:1	
+R	1258	2	0	stand	0
+S	1258	2	ARMCK	stand	0	L:1	
+R	1265	2	0	stand	0
+S	1265	2	ARMCK	stand	0	L:1	
+R	1272	2	0	stand	0
+S	1272	2	ARMCK	stand	0	L:1	
+R	1279	2	0	stand	0
+S	1279	2	ARMCK	stand	0	L:1	
+R	1286	2	0	stand	0
+S	1286	2	ARMCK	stand	0	L:1	
+R	1293	2	0	stand	0
+S	1293	2	ARMCK	stand	0	L:1	
+R	1300	2	0	stand	0
+S	1300	2	ARMCK	stand	0	L:1	
+R	1307	2	0	stand	0
+S	1307	2	ARMCK	stand	0	L:1	
+R	1314	2	0	stand	0
+S	1314	2	ARMCK	stand	0	L:1	
+R	1321	2	0	stand	0
+S	1321	2	ARMCK	stand	0	L:1	
+R	1328	2	0	stand	0
+S	1328	2	ARMCK	stand	0	L:1	
+R	1335	2	0	stand	0
+S	1335	2	ARMCK	stand	0	L:1	
+R	1342	2	0	stand	0
+S	1342	2	ARMCK	stand	0	L:1	
+R	1349	2	0	stand	0
+S	1349	2	ARMCK	stand	0	L:1	
+R	1356	2	0	stand	0
+S	1356	2	ARMCK	stand	0	L:1	
+R	1363	2	0	stand	0
+S	1363	2	ARMCK	stand	0	L:1	
+R	1370	2	0	stand	0
+S	1370	2	ARMCK	stand	0	L:1	
+R	1377	2	0	stand	0
+S	1377	2	ARMCK	stand	0	L:1	
+R	1384	2	0	stand	0
+S	1384	2	ARMCK	stand	0	L:1	
+R	1391	2	0	stand	0
+S	1391	2	ARMCK	stand	0	L:1	
+R	1398	2	0	stand	0
+S	1398	2	ARMCK	stand	0	L:1	
+R	1405	2	0	stand	0
+S	1405	2	ARMCK	stand	0	L:1	
+R	1412	2	0	stand	0
+S	1412	2	ARMCK	stand	0	L:1	
+R	1419	2	0	stand	0
+S	1419	2	ARMCK	stand	0	L:1	
+R	1426	2	0	stand	0
+S	1426	2	ARMCK	stand	0	L:1	
+R	1433	2	0	stand	0
+S	1433	2	ARMCK	stand	0	L:1	
+R	1440	2	0	stand	0
+S	1440	2	ARMCK	stand	0	L:1	
+R	1447	2	0	stand	0
+S	1447	2	ARMCK	stand	0	L:1	
+R	1454	2	0	stand	0
+S	1454	2	ARMCK	stand	0	L:1	
+R	1461	2	0	stand	0
+S	1461	2	ARMCK	stand	0	L:1	
+R	1468	2	0	stand	0
+S	1468	2	ARMCK	stand	0	L:1	
+R	1475	2	0	stand	0
+S	1475	2	ARMCK	stand	0	L:1	
+R	1482	2	0	stand	0
+S	1482	2	ARMCK	stand	0	L:1	
+R	1489	2	0	stand	0
+S	1489	2	ARMCK	stand	0	L:1	
+R	1496	2	0	stand	0
+S	1496	2	ARMCK	stand	0	L:1	
+R	1503	2	0	stand	0
+S	1503	2	ARMCK	stand	0	L:1	
+R	1510	2	0	stand	0
+S	1510	2	ARMCK	stand	0	L:1	
+R	1517	2	0	stand	0
+S	1517	2	ARMCK	stand	0	L:1	
+R	1524	2	0	stand	0
+S	1524	2	ARMCK	stand	0	L:1	
+R	1531	2	0	stand	0
+S	1531	2	ARMCK	stand	0	L:1	
+R	1538	2	0	stand	0
+S	1538	2	ARMCK	stand	0	L:1	
+R	1545	2	0	stand	0
+S	1545	2	ARMCK	stand	0	L:1	
+R	1552	2	0	stand	0
+S	1552	2	ARMCK	stand	0	L:1	
+R	1559	2	0	stand	0
+S	1559	2	ARMCK	stand	0	L:1	
+R	1566	2	0	stand	0
+S	1566	2	ARMCK	stand	0	L:1	
+R	1573	2	0	stand	0
+S	1573	2	ARMCK	stand	0	L:1	
+R	1580	2	0	stand	0
+S	1580	2	ARMCK	stand	0	L:1	
+R	1587	2	0	stand	0
+S	1587	2	ARMCK	stand	0	L:1	
+R	1594	2	0	stand	0
+S	1594	2	ARMCK	stand	0	L:1	
+R	1601	2	0	stand	0
+S	1601	2	ARMCK	stand	0	L:1	
+R	1608	2	0	stand	0
+S	1608	2	ARMCK	stand	0	L:1	
+R	1615	2	0	stand	0
+S	1615	2	ARMCK	stand	0	L:1	
+R	1622	2	0	stand	0
+S	1622	2	ARMCK	stand	0	L:1	
+R	1629	2	0	stand	0
+S	1629	2	ARMCK	stand	0	L:1	
+R	1636	2	0	stand	0
+S	1636	2	ARMCK	stand	0	L:1	
+R	1643	2	0	stand	0
+S	1643	2	ARMCK	stand	0	L:1	
+R	1650	2	0	stand	0
+S	1650	2	ARMCK	stand	0	L:1	
+R	1657	2	0	stand	0
+S	1657	2	ARMCK	stand	0	L:1	
+R	1664	2	0	stand	0
+S	1664	2	ARMCK	stand	0	L:1	

@@ -18465,6 +18465,7 @@ runs either way (and returns at once on `dt == 0`).
 | `setSFXoccupy` | `0x43DBE8` | `0x4B0A70` | **1** | 1 |
 | `Killed` (the second death path) | `0x486877` | `0x4B0A70` | **1** | 1 |
 | `Activate`, `Deactivate`, `StartBuilding`, `StopBuilding` | `0x48B106`, `0x48B12B`, `0x48B14E`, `0x48B169` | `0x4B0940` | 0 | – |
+| `StartBuilding` (the build orders) | `0x4385C7`, in `0x438590`: `0x4B0B00(index, cb 0, runNow 0, argc 1, heading & 0xFFFF, 0, 0)` | `0x4B0B00` | 0 | 1 |
 | `FirePrimary/Secondary/Tertiary` (table `0x509678`) | `0x49CB94`, `0x49CD4F`, `0x49CF73` | `0x4B0940` | 0 | – |
 | `AimPrimary/Secondary/Tertiary` (table `0x509688`) | `0x49E31C` (heading, pitch, with the aim callback), `0x49E386` (`AutoAim`, all four words 0) | `0x4B0A70` | 0 | 2 |
 | `SetMaxReloadTime` | `0x49E186` | `0x4B0A70` | 0 | 1 |

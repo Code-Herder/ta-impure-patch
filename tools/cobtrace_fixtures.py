@@ -25,6 +25,7 @@ import argparse
 import json
 import pathlib
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -55,6 +56,9 @@ CLASSES = [("kbot",     "ARMPW",     8,  3),
            # the extensions: tools/cob_ext_fixture.py's generated unit, in this instance only
            ("extension", "COBEXT",   8,  3)]
 RS_MAP = {"builder", "advbuilder", "reclaim", "mex", "moho", "geo"}
+# replayed by tacob on Impure's rules, over the facts world_facts records (world.json)
+IMPURE_CLASSES = RS_MAP | {"extension"}
+EXTENSION_BOS = ROOT / "research/notes/evidence/cobtrace/extension.bos"
 
 
 def install_extension(inst):
@@ -141,6 +145,29 @@ def run_one(inst, name, utype, run_s, after_s, out):
             override.unlink()
 
 
+def world_facts(inst, idx):
+    """The facts tagpu_cob_getter answers from, as they stand now, for tacob's IMPURE replay
+    (tagpu_cobvm.h, TAGPU_COBVM_HOST.world): the slot count main+0x14351, and the traced unit's
+    id, owner, kills and build fraction (unit +0xA8, +0xFF, +0xB8, +0x104; the array main+0x14357,
+    stride 0x118), its seat's kind and its own alliance byte (the player record main+0x1B63 +
+    owner * 0x14B: +0x73, +0x108 + owner)."""
+    ta = peek(inst, "0x511DE8:4")["0x511DE8:4"]
+    sl, ba = f"0x{ta + 0x14351:X}:2", f"0x{ta + 0x14357:X}:4"
+    r = peek(inst, sl, ba)
+    u = r[ba] + idx * 0x118
+    sid, sown, skill, sleft = (f"0x{u + o:X}:{n}" for o, n in ((0xA8, 2), (0xFF, 1), (0xB8, 2), (0x104, 4)))
+    v = peek(inst, sid, sown, skill, sleft)
+    owner = v[sown]
+    player = ta + 0x1B63 + owner * 0x14B
+    skind, sally = f"0x{player + 0x73:X}:1", f"0x{player + 0x108 + owner:X}:1"
+    p = peek(inst, skind, sally)
+    if v[sid] != idx:
+        raise SystemExit(f"slot {idx} holds unit {v[sid]}, not the traced unit")
+    return {"slots": r[sl], "caller": idx,
+            "units": {str(idx): [owner, v[skill], struct.unpack("<f", struct.pack("<I", v[sleft]))[0]]},
+            "allied": [[owner, owner]] if p[sally] else [], "local": [owner] if p[skind] in (1, 2) else []}
+
+
 def record(inst, name, utype, run_s, after_s, out):
     tacli("arm", inst, f"cobtrace.on={utype}", "native.on=all", "posedump.on=off")
     report = tacli("scenario", "load", inst, f"cob-{name}", "--restart", "--json")
@@ -155,6 +182,11 @@ def record(inst, name, utype, run_s, after_s, out):
     follow(inst, utype, idx)
     tacli("arm", inst, "posedump.on")
     time.sleep(after_s)
+    world = None
+    if name in IMPURE_CLASSES:
+        world = {"rules": "impure", "facts": world_facts(inst, idx)}
+        if name == "extension":
+            world.update(source=str(EXTENSION_BOS.relative_to(ROOT)), model="armsolar")
     g = gamedir(inst)
     trace = talog.run_text(g, "tagpu_cobtrace")      # every part of this run
     pose = last_posedump(talog.run_text(g))
@@ -164,6 +196,8 @@ def record(inst, name, utype, run_s, after_s, out):
     (d / "cobtrace.log").write_text(trace)
     (d / "posedump.txt").write_text(pose)
     (d / "apply.json").write_text(report)
+    if world:
+        (d / "world.json").write_text(json.dumps(world, indent=1, sort_keys=True) + "\n")
     kinds = {}
     for l in trace.splitlines():
         kinds[l[:1]] = kinds.get(l[:1], 0) + 1

@@ -2287,7 +2287,10 @@ ENGINE_STARTS = {
     "aimfromprimary":   ("query", "pre"),    # 0x43E32C/0x43E370
     "aimfromsecondary": ("query", "pre"),
     "aimfromtertiary":  ("query", "pre"),
-    "querynanopiece":   ("query", "pre"),    # 0x43E427 UNITS_CallAimScripts
+    # 0x43E400 (its query at 0x43E427), called by the order handlers 0x40252E..0x405855 (build,
+    # repair, reclaim), which run after DoScriptsNow; MEASURED in the builder, advbuilder and
+    # reclaim fixtures: every query lands after the unit's own slice of that tick
+    "querynanopiece":   ("query", "post"),
     "querybuildinfo":   ("query", "pre"),    # 0x4027FB
     "querytransport":   ("query", "pre"),    # 0x4113B1
     "querylandingpad":  ("query", "pre"),    # 0x41189C and four more
@@ -3439,7 +3442,9 @@ class Director:
 # --------------------------------------------------------------------------- the gate
 
 FIXTURES = HERE.parent / "research/notes/evidence/cobtrace"
-CLASSES = ["kbot", "tank", "building", "death", "fighter", "gunship", "bomber", "ship", "sub"]
+CLASSES = ["kbot", "tank", "building", "death", "fighter", "gunship", "bomber", "ship", "sub",
+           # the in-game wiki's units and the extensions, on Impure's raised build (COB L2)
+           "builder", "advbuilder", "reclaim", "mex", "moho", "geo", "extension"]
 
 
 def fixtures_dir() -> Path:
@@ -3507,7 +3512,9 @@ def run_class(cls, pose=True):
         raise TacobError(f"{cls}: the fixture's cobtrace.log has no lines")
     type_name = lines[0].fields[3] if lines[0].kind == "S" else "?"
     unit = lines[0].unit
-    spec = replay_inputs(cls)
+    spec = dict(replay_inputs(cls))
+    if (folder / "world.json").is_file():       # the rules and facts the recording took (COB L2)
+        spec.update(json.loads((folder / "world.json").read_text()))
     if spec.get("source"):
         # a generated unit's script, compiled from the BOS in the repository; its model is a stock one
         src = HERE.parent / spec["source"]

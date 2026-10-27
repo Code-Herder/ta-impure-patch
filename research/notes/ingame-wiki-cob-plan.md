@@ -214,7 +214,7 @@ The mockup does the same in `tools/tascene-render.js`.
 | | What | Gate |
 |---|---|---|
 | **L1** — built 2026-10-27 | `tagpu_cobvm.{c,h}`: the core on the layout above, the host interface, the effect log, the observer; the shared extension functions factored out of `tagpu_patches.c`; tacob on the core through ctypes, **its Python VM deleted**, `tacob-build.py` cross-compiling it; the reentrancy check | the nine fixtures byte-exact through tacob on the core; `test_tacob.py`; native tests of the core under UBSan and ASan; the layout's static asserts; the DLL builds |
-| **L2** | live cobtrace + posedump fixtures for the wiki's units doing the wiki's actions — ARMCK and ARMACK walking, starting, assisting and stopping a build, reclaiming; ARMMEX and ARMMOHO built, activated, spinning at a set metal value; ARMGEO activating; ARMPW walking — and one exercising the extensions (records 9 and 10, the getters) | each fixture byte-exact through the core |
+| **L2** — built 2026-10-27 | live cobtrace + posedump fixtures for the wiki's units doing the wiki's actions — ARMCK and ARMACK walking, starting, assisting and stopping a build, reclaiming; ARMMEX and ARMMOHO built, activated, spinning at a set metal value; ARMGEO activating; ARMPW walking — and one exercising the extensions (records 9 and 10, the getters) | each fixture byte-exact through the core |
 | **L3** | the wiki host: the calls, the gating, `until` waits and the 11 demos converted, the quarantine, the corpus gate, poses drawn in the C stage and the mockup, the mockup's server | `simparity.mjs`, `simcheck.mjs`, `wiki_regression.py`, the corpus gate over every compatibility setup, a look at every demo in game and in the mockup |
 | **L4** | the nano spray and `emit-sfx`: the engine's emitters ported, the wiki generator, drawn through the stage's instance of the particle draw | the spray's look against a game capture of the same build |
 | **L5** | sound: the mixer, the triggers, the cooldowns, WebAudio in the mockup | a demo heard in game and in the mockup; the player's settings honoured; an MP game's own sounds unchanged with the wiki open |
@@ -241,11 +241,19 @@ fixtures — no file the sidebar's landing touches.
   the retail engine runs (`0x4B1984`). No stock script carries the opcode; the difference is
   accepted, not modelled. The getters are `tagpu_cob_getter`, which the core calls itself under
   IMPURE.
-- **L2**: a scripted scenario per fixture, in game, under the run lock.
-- **L3**: `StartBuilding`'s arguments (the map lists `0x48B14E` as a no-argument start through
-  `0x4B0940`; tacob's director passes heading and pitch — one of them is wrong); when the engine calls
-  `StopBuilding` on an assist and on a reclaim; the MoveRate thresholds; the extractor's `SetSpeed`
-  value; the order in which the builder's code reads INBUILDSTANCE against its own tick.
+- **L2** (answered 2026-10-27, `research/notes/evidence/cobtrace/README.md`, classes 10–16): a
+  scripted scenario per fixture, recorded in game under the run lock on Impure's raised build and
+  replayed through the core on IMPURE rules, all byte for byte. What the recordings settled:
+  `StartBuilding` from the build orders is `0x4385C7`, a `0x4B0B00` start with **one** word, the
+  heading `& 0xFFFF` (the map's `0x48B14E` is the other, argument-free site in
+  `UNITS_SetStateMask`), so tacob's director, which passes heading and pitch, is wrong and L3
+  corrects it; a reclaim runs the same script traffic as a build, `StopBuilding` included;
+  `QueryNanoPiece` runs after the unit's own script slice (its callers are the order handlers),
+  which tacob's replay table had wrong. The extractor's `SetSpeed` value is in the traces (`2016`
+  ARMMEX, `2352` ARMMOHO on the 223-metal patch) but not yet derived.
+- **L3**: when the engine calls `StopBuilding` on an assist; the MoveRate thresholds; the
+  extractor's `SetSpeed` value as a function of the metal under it; the order in which the
+  builder's code reads INBUILDSTANCE against its own tick.
 - **L4**: the nano emitter (spawn rate, velocity, lifetime, colour, how its randomness is drawn) and
   `emit-sfx`'s types, from `effects.md` and `build-state.md` and disassembly.
 - **L5**: every caller of `0x47F0C0` / `0x47F1A0` / `0x47F300` for the events the wiki has, the

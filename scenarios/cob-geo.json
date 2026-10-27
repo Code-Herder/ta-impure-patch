@@ -1,6 +1,6 @@
 {
   "format": "ta-scenario/1",
-  "description": "An ARMGEO nanoframe 90 % built on the vent, finished by an ARMCK: Create and SmokeUnit. COB L2 fixture (research/notes/ingame-wiki-cob-plan.md): one unit type traced with tagpu_cobtrace.on=<type> and one posedump, on the generated map tools/resource_fixture.py installs (RS mixed: SurfaceMetal 20, a 223-metal patch at cells 22..24, the vent at cell 40,24). Run with tools/cobtrace_fixtures.py.",
+  "description": "An ARMGEO on the vent, spawned as a 90 % nanoframe with an ARMCK repairing it: Create and SmokeUnit, the whole of its script's traffic (it has no Activate); the repair adds no COB event. COB L2 fixture (research/notes/ingame-wiki-cob-plan.md): one unit type traced with tagpu_cobtrace.on=<type> and one posedump, on the generated map tools/resource_fixture.py installs (RS mixed: SurfaceMetal 20, a 223-metal patch at cells 22..24, the vent at cell 40,24). Run with tools/cobtrace_fixtures.py.",
   "seed": 7,
   "on_error": "abort",
   "setup": {
