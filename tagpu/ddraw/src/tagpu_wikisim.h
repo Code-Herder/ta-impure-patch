@@ -132,8 +132,9 @@ typedef struct {
     const WIKIVLINE* line;
     double           cursor_x, cursor_z;
     int              cursor_shape;  /* WIKI_CURSOR_* */
-    int              cursor_since;  /* the tick the shape began: the game restarts a cursor's
-                                       animation when it installs one (SetUICursor 0x4AB400) */
+    int              cursor_since;  /* the tick its sequence began: the game restarts a cursor's
+                                       animation when it installs another (SetUICursor
+                                       0x4AB400), and the build shape's is the arrow's */
     int              held[WIKI_NKEYS];
     int              has_drag;
     double           drag_x0, drag_z0, drag_x1, drag_z1;
@@ -160,8 +161,8 @@ typedef struct {
 
     /* sim.js's st */
     double           cursor_x, cursor_z;
-    int              cursor_shape, cursor_since;    /* the shape the last tick ended on, and the
-                                                       tick it began                            */
+    int              cursor_shape, cursor_since;    /* the shape shown, and the tick its
+                                                       sequence began                           */
     int              held[WIKI_NKEYS];
     int              mode;
     int              has_drag, drag_active;
@@ -202,7 +203,8 @@ typedef struct {
 int  tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int scripted, char* err, size_t errn);
 void tagpu_wikisim_free(WIKISIM* s);
 
-/* One input now, as the player gives it. */
+/* One input now, as the player gives it, between two ticks: a cursor sequence it changes begins
+   on the tick the sim stands at, the one the next view shows. */
 void tagpu_wikisim_input(WIKISIM* s, const WIKIINPUT* ev);
 
 /* One tick: the script's inputs of the next tick, then the units' work. */

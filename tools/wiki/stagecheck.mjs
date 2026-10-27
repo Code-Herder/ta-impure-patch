@@ -268,10 +268,13 @@ try {
       }
     }
   }
+  // the cursor left out of every frame whose tick / 30 is odd, as Try it yourself leaves it while the pointer is off
+  // the stage (wikistagetest.c draws the same frames without it)
   const draw = (v, sz, em, asked, image, tick, cursors) => {
     const r = recorder(em, asked);
     const im = image && { ...image, draw: (g, rect) => r.out.push({ k: 'image', ...rect }) };
-    WikiStage.draw(r.g, v, { W: sz.w, H: sz.h, U: sz.u, icons, cursors, tick, layer: r.layer, image: im });
+    r.fit = WikiStage.draw(r.g, v, { W: sz.w, H: sz.h, U: sz.u, icons, cursors, tick, cursor: Math.floor((+tick || 0) / 30) % 2 === 0,
+      layer: r.layer, image: im });
     return r;
   };
   // the stand-in images: what a complete 3D frame may carry
@@ -302,7 +305,7 @@ try {
   const em = new Map(strings.map((s, i) => [s, ems[i]]));
 
   /* ---- each size, with the kit's cursors and then the game's: the C side's frames, paired with stage.js's ---- */
-  let nframes = 0, nops = 0, ndiffer = 0, nsplit = 0, nimage = 0, nsprite = 0;
+  let nframes = 0, nops = 0, ndiffer = 0, nsplit = 0, nimage = 0, nsprite = 0, ncur = 0;
   const PASSES = [false, true].flatMap(sprites => SIZES.map((sz, k) => ({ sprites, k,
     sz: { ...sz, name: sprites ? `${sz.name} game cursors x${SCALE[k]}` : sz.name } })));
   for (const { sprites, k: si, sz } of PASSES) {
@@ -323,6 +326,12 @@ try {
       nframes++; nops += c.length; nsprite += c.filter(sh => sh.k === 'sprite').length;
       let bad = pair(r1.out, c, 'R1');
       if (!bad && r1.tags.some(t => !t)) bad = 'R1: a call drawn before stage.js named its range';
+      // the op the DLL names as the cursor's (tagpu_wikistate_cursor shows the player's when none is drawn): one exactly
+      // when stage.js drew a cursor, and a cursor's
+      const jsCur = !!(r1.fit && r1.fit.cursor);
+      if (!bad && ((fr.cur >= 0) !== jsCur || (fr.cur >= 0 && !c[fr.cur]) || (fr.cur >= 0 && !['sprite', 'icon'].includes(c[fr.cur].k))))
+        bad = `the cursor: C names op ${fr.cur}${fr.cur >= 0 && c[fr.cur] ? ` (${c[fr.cur].k})` : ''}, stage.js ${jsCur ? 'drew one' : 'drew none'}`;
+      if (jsCur) ncur++;
       // the C ops' own ranges, which the DLL draws R0 and R2 by: each the range of the call it paired with, a box's
       // with its type
       for (let i = 0; !bad && i < c.length; i++) {
@@ -355,7 +364,7 @@ try {
   }
   const s = ((Date.now() - t0) / 1000).toFixed(1);
   if (code) console.log(`stagecheck: ${ndiffer} of ${frames.length * PASSES.length} frames DIFFER (${s} s)`);
-  else console.log(`stagecheck: all equal -- ${nframes} frames (${frames.length} at each of ${SIZES.length} sizes, with the kit's cursors and with the game's), ${nops} ops of R1 paired call for op within 1/64 px, ${nsprite} of them game cursor frames; R0 and R2 over ${nsplit} stand-in images, ${nimage} ops (${s} s)`);
+  else console.log(`stagecheck: all equal -- ${nframes} frames (${frames.length} at each of ${SIZES.length} sizes, with the kit's cursors and with the game's), ${nops} ops of R1 paired call for op within 1/64 px, ${nsprite} of them game cursor frames; a cursor in ${ncur} frames and its op named in each; R0 and R2 over ${nsplit} stand-in images, ${nimage} ops (${s} s)`);
 } catch (x) {
   if (!(x instanceof CannotRun)) throw x;
   console.log(`stagecheck: cannot run: ${x.message}`);

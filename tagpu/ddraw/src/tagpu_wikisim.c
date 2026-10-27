@@ -1082,7 +1082,7 @@ static void step_spacing(WIKISIM* s, int key)
     s->spacing[s->mode] = v < 0 ? 0 : v > PLACE_SPACING_MAX ? PLACE_SPACING_MAX : v;
 }
 
-void tagpu_wikisim_input(WIKISIM* s, const WIKIINPUT* ev)
+static void input(WIKISIM* s, const WIKIINPUT* ev)
 {
     if (ev->has & WIKI_IN_CAPTION) s->caption = ev->caption;
     if (ev->has & WIKI_IN_BUILD) {
@@ -1302,19 +1302,31 @@ static int cursor_shape(const WIKISIM* s)
     return WIKI_CURSOR_ARROW;
 }
 
-/* the shape a tick ends on, and the tick it began when it is new */
-static void cursor_tick(WIKISIM* s)
+/* the sequence a shape shows: the build cursor is the arrow's cursornormal (tagpu_wikisim.h) */
+static int cursor_seq(int shape) { return shape == WIKI_CURSOR_BUILD ? WIKI_CURSOR_ARROW : shape; }
+
+/* THE SHAPE AFTER EVERY CHANGE, and `now`, the first tick that shows it, as the tick its animation
+   began when it shows another sequence. The engine installs a cursor only when its index differs
+   from the installed one (0x499254, 0x4992A9 compare main+0x2CBE first), so the arrow and the
+   build cursor, both cursornormal, run on through each other. */
+static void cursor_tick(WIKISIM* s, int now)
 {
     const int k = cursor_shape(s);
-    if (k != s->cursor_shape) {
-        s->cursor_shape = k;
-        s->cursor_since = s->tick;
-    }
+    if (cursor_seq(k) != cursor_seq(s->cursor_shape)) s->cursor_since = now;
+    s->cursor_shape = k;
 }
 
+/* a script's inputs of tick `t` are shown first by tick t, which the step's cursor_tick records */
 static void feed(WIKISIM* s, int t)
 {
-    while (s->next < s->nscript && s->script[s->next]->at == t) tagpu_wikisim_input(s, s->script[s->next++]);
+    while (s->next < s->nscript && s->script[s->next]->at == t) input(s, s->script[s->next++]);
+}
+
+/* the player's input stands between two ticks: the view of the tick the sim stands at shows it */
+void tagpu_wikisim_input(WIKISIM* s, const WIKIINPUT* ev)
+{
+    input(s, ev);
+    cursor_tick(s, s->tick);
 }
 
 void tagpu_wikisim_step(WIKISIM* s)
@@ -1325,7 +1337,7 @@ void tagpu_wikisim_step(WIKISIM* s)
     s->tick = t;
     s->done = s->tick >= s->end;
     s->hover = hover(s);
-    cursor_tick(s);
+    cursor_tick(s, t);
 }
 
 int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o)
@@ -1477,9 +1489,9 @@ const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s)
 
     v->cursor_x = s->cursor_x;
     v->cursor_z = s->cursor_z;
-    v->cursor_shape = cursor_shape(s);
-    /* an input since the last tick may have changed the shape: then it begins now */
-    v->cursor_since = v->cursor_shape == s->cursor_shape ? s->cursor_since : s->tick;
+    /* every change of the shape -- an input, a tick, the scene -- records it (cursor_tick) */
+    v->cursor_shape = s->cursor_shape;
+    v->cursor_since = s->cursor_since;
     memcpy(v->held, s->held, sizeof v->held);
     if ((v->has_drag = s->has_drag && s->drag_active)) {
         v->drag_x0 = s->drag_x0;

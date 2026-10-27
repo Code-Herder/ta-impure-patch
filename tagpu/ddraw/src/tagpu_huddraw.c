@@ -270,6 +270,7 @@ typedef struct {
     HUDBATCH*     b;
     int           nb, bcap;
     int           dropped;
+    int           watched;      /* the instances ops->watch was given                        */
     int           fresh;        /* the next instance opens a batch: a group's first          */
 } B;
 
@@ -742,6 +743,7 @@ HUDOPLIST tagpu_huddraw_list(const HUDOPS* ops)
     l.grp = ops->grp;
     l.ngrp = ops->ngrp < HUD_MAXGRP ? ops->ngrp : HUD_MAXGRP;
     l.chart = &ops->chart;
+    l.watch = -1;
     return l;
 }
 
@@ -752,13 +754,13 @@ int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, int layer, float p
 {
     const HUDOPLIST l = tagpu_huddraw_list(ops);
     return tagpu_huddraw_build_list(art, &l, layer, px, ox, oy, w, h, inst, cap, b, bcap, nb, nmain, nminst,
-                                    g, ng, shelf, dropped, unfit);
+                                    g, ng, shelf, dropped, unfit, NULL);
 }
 
 int tagpu_huddraw_build_list(const HUDART* art, const HUDOPLIST* ops, int layer, float px, int ox, int oy,
                              int w, int h, HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb,
                              int* nmain, int* nminst, HUDLAYREG* g, int* ng, HUDSHELF* shelf,
-                             int* dropped, int* unfit)
+                             int* dropped, int* unfit, int* watched)
 {
     B c;
     HUDOP none;
@@ -791,6 +793,7 @@ int tagpu_huddraw_build_list(const HUDART* art, const HUDOPLIST* ops, int layer,
                 float a = op->grp && op->grp <= ops->ngrp ? ops->grp[op->grp - 1] : 1.0f;
                 if (op->grp > ops->ngrp) continue;
                 draw_op(&c, op, &charted);
+                if (i == ops->watch) c.watched = c.n - n0;
                 for (j = n0; j < c.n && a != 1.0f; j++) {
                     c.inst[j].rgba[0] *= a; c.inst[j].rgba[1] *= a; c.inst[j].rgba[2] *= a; c.inst[j].rgba[3] *= a;
                 }
@@ -822,5 +825,6 @@ int tagpu_huddraw_build_list(const HUDART* art, const HUDOPLIST* ops, int layer,
     *shelf = sh;
     *nb = c.nb;
     *dropped = c.dropped;
+    if (watched) *watched = c.watched;
     return c.n;
 }

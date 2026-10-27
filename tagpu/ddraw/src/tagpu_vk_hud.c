@@ -1050,11 +1050,12 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     char err[160];
     float px = 0, wpx = 0;
     int dropped = 0, unfit = 0, r, due, ox = 0, oy = 0, wox = 0, woy = 0, hud, wiki;
+    int wcur = 0, wcurSprite = 0;   /* the stage's cursor's instances, and whether they are sprites */
 
     s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_wb0 = s_wbm = s_wb1 = s_ngroup = 0;
     memset(&s_top, 0, sizeof s_top);
     tagpu_hudstate_drawn(NULL);
-    tagpu_wikistate_drawn(0);
+    tagpu_wikistate_drawn(0, 0);
     if (s_state == ST_REFUSED) return 0;
     hud = tagpu_hudstate_frame(d->frame, &st, &px, &ox, &oy) && px > 0;
     wiki = tagpu_wikistate_frame(d->frame, &wpage, &wstage, &wover, &wpx, &wox, &woy) && wpx > 0;
@@ -1132,12 +1133,16 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             int k, mw[3] = { 0, 0, 0 }, nbw[3] = { 0, 0, 0 }, nb_at[3] = { 0, 0, 0 };
             s_wb0 = s_nbatch;
             for (k = 0; k < 3; k++) {
-                int nw, miw = 0, gw = s_ngroup, dw = 0, uw = 0;
+                int nw, miw = 0, gw = s_ngroup, dw = 0, uw = 0, cw = 0;
                 if (!list[k]->n) continue;
                 nb_at[k] = s_nbatch;
                 nw = tagpu_huddraw_build_list(&wart->draw, list[k], 0, wpx, wox, woy, (int)w, (int)h, in + s_ninst,
                                               HUD_MAXINST - s_ninst, s_batch + s_nbatch, HUD_MAXBATCH - s_nbatch,
-                                              &nbw[k], &mw[k], &miw, s_group, &s_ngroup, &sh, &dw, &uw);
+                                              &nbw[k], &mw[k], &miw, s_group, &s_ngroup, &sh, &dw, &uw, &cw);
+                if (list[k]->watch >= 0 && list[k]->watch < list[k]->n) {
+                    wcur = cw;
+                    wcurSprite = (list[k]->op[list[k]->watch].flags & HOPF_SPRITE) != 0;
+                }
                 dropped += dw;
                 unfit += uw;
                 for (i = s_nbatch; i < s_nbatch + nbw[k]; i++) {
@@ -1220,7 +1225,10 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (gen != s_cgen) hide_mode((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_ninst, HUDM_CHART);
         /* and the stage's cursor only from the sheet this frame's ops were built against */
         tagpu_wikistate_sprites(&gen);
-        if (gen != s_sgen) hide_sprites((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_batch, s_nbatch);
+        if (gen != s_sgen) {
+            hide_sprites((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_batch, s_nbatch);
+            if (wcurSprite) wcur = 0;
+        }
     }
     /* a frame with a group has its composites, which bind the layer: it is made whenever there is
        one, even if every region is empty */
@@ -1234,7 +1242,9 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     /* what this frame draws is what a click is tested against */
     if (s_ninst > 0) {
         if (hud) tagpu_hudstate_drawn(&s_ops);
-        if (wiki) tagpu_wikistate_drawn(1);
+        /* the stage's cursor is drawn when its op was given instances and they were not hidden:
+           the player's is shown instead in a frame where it is not (tagpu_wikistate_cursor) */
+        if (wiki) tagpu_wikistate_drawn(1, wcur > 0);
     }
     return s_ninst > 0;
 lost:

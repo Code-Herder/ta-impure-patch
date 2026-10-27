@@ -140,6 +140,26 @@ const RULES = {
     s.input({ move: [36 * 16 + 8, 11 * 16 + 8] });
     return !s.view().ghost && s.view().cursor.shape === 'move';
   },
+  /* the cursor's animation (tagpu_wikisim.h): it begins on the first tick that shows its sequence -- for a change the
+     player makes between two ticks, the tick the sim stands at -- and arming a building over the arrow installs no
+     cursor, both being cursornormal (0x499254, 0x4992A9), so the arrow's animation runs on */
+  'a cursor the player changes between ticks begins on the tick the view shows'(entry) {
+    const s = WikiSim.create(entry, { scene: { selected: ['ck'] } });
+    for (let i = 0; i < 3; i++) s.step();
+    const before = s.view().cursor;
+    s.input({ build: 'ARMMEX' });
+    const now = s.view().cursor; s.step(); const next = s.view().cursor;
+    return before.shape === 'move' && now.shape === 'build' && now.since === 3 && next.since === 3;
+  },
+  'arming a building over the arrow runs the arrow on'(entry) {
+    const s = WikiSim.create(entry, { scene: { selected: [] } });
+    for (let i = 0; i < 3; i++) s.step();
+    s.input({ build: 'ARMMEX' }); s.step();
+    const armed = s.view().cursor;
+    s.input({ build: null }); s.step();
+    const back = s.view().cursor;
+    return armed.shape === 'build' && armed.since === 0 && back.shape === 'arrow' && back.since === 0;
+  },
   'a Try-it sim is never done'(entry) {
     const s = WikiSim.create(entry, entry.demos[0]);
     for (let i = 0; i <= entry.demos[0].end + 10; i++) s.step();

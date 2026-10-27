@@ -38,9 +38,11 @@ const WikiStage = (() => {
   }
 
   /* The view `v` into the context `g` of a W x H canvas, at U pixels a unit; o = { W, H, U, msg, icons, cursors, tick,
-     image, layer }. `msg` is what an absent view shows; `icons` the kit's cursor icons by name, each { img, pw, ph, w,
-     h } with w and h in units (loadIcons); `cursors` the game's (loadCursors), and `tick` the simulation's, which its
-     animation runs from. Returns the fit, with the map's cell and size, or null without a map.
+     cursor, image, layer }. `msg` is what an absent view shows; `icons` the kit's cursor icons by name, each { img, pw,
+     ph, w, h } with w and h in units (loadIcons); `cursors` the game's (loadCursors), and `tick` the simulation's, which
+     its animation runs from; `cursor` false leaves the cursor out (Try it yourself while the player's pointer is off
+     the stage: the player's own is the one on screen). Returns the fit, with the map's cell and size and `cursor`, true
+     when a cursor was drawn, or null without a map.
 
      THE THREE OP RANGES (research/notes/ingame-wiki-3d-stage-plan.md, section 3). Everything drawn here belongs to one:
      - R0, under the image: the stage's background (and the message of an absent view);
@@ -217,8 +219,9 @@ const WikiStage = (() => {
        pointer's device pixel, the floats as the C side's. Else, for a shape whose frames did not load, its kit icon at
        screen size centred on the point, in a box snapped as the game snaps a part's, and the icon as large as fits in
        it, centred (tagpu_hudlay_expand's icon) */
-    const cur = pt(v.cursor), cs = cur && o.cursors && o.cursors.sheet ? o.cursors.seq[v.cursor.shape] : null;
+    const cur = o.cursor !== false && pt(v.cursor), cs = cur && o.cursors && o.cursors.sheet ? o.cursors.seq[v.cursor.shape] : null;
     const ic = cur && !(cs && cs.n > 0) && o.icons && o.icons[CURSOR[v.cursor.shape] || CURSOR.arrow];
+    let drew = false;
     if (cs && cs.n > 0) {
       const F = o.cursors.frames, f = cursorFrame(F.slice(cs.first, cs.first + cs.n), cs.n, cs.loop, (+o.tick || 0) - (+v.cursor.since || 0));
       if (f >= 0) {
@@ -228,6 +231,7 @@ const WikiStage = (() => {
           const sm = g.imageSmoothingEnabled; g.imageSmoothingEnabled = false;
           g.drawImage(o.cursors.sheet, q.sx, 0, q.w, q.h, dx - Math.trunc(Math.fround(q.hx * k)), dy - Math.trunc(Math.fround(q.hy * k)), w, h);
           g.imageSmoothingEnabled = sm;
+          drew = true;
         }
       }
     } else if (cur && ic && ic.img) {
@@ -237,6 +241,7 @@ const WikiStage = (() => {
       const q = g.imageSmoothingQuality; g.imageSmoothingQuality = 'high';
       g.drawImage(ic.img, x0 + (bw - iw) / 2, y0 + (bh - ih) / 2, iw, ih);
       g.imageSmoothingQuality = q;
+      drew = true;
     }
     // a readout on a dark plate at the stage's bottom, its text centred in the plate's height
     const readout = (t, right) => {
@@ -249,7 +254,7 @@ const WikiStage = (() => {
     if (+v.pace > 1) readout(`construction ×${+v.pace}`, true);
     // the armed building's spacing: the mockup's readout, at the stage's bottom left; the game specifies none yet
     if (+v.spacing > 0) readout(`Spacing: ${+v.spacing}`, false);
-    return { s, ox, oz, cell, mw, mh };
+    return { s, ox, oz, cell, mw, mh, cursor: drew };
   }
 
   /* THE CURSOR SHAPES the icons are rasterised from (tools/wiki/cursors.sh), at U pixels a unit with the pointer at

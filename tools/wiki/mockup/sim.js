@@ -699,11 +699,20 @@ const WikiSim = (() => {
        else a selection holding a mobile unit of the player's, else none. Quick Build's ghost changes nothing here: it
        is drawn from the packet and leaves the engine's cursor as the selection has it. */
     const cursorShape = () => st.mode ? 'build' : selected().some(u => u.owner === 0 && mobile(u.type)) ? 'move' : 'arrow';
-    // the shape a tick ends on, and the tick it began when it is new: the game restarts a cursor's animation when it
-    // installs one (SetUICursor 0x4AB400)
-    const cursorTick = () => { const k = cursorShape(); if (k !== st.cursorShape) { st.cursorShape = k; st.cursorSince = sim.tick; } };
+    // the sequence a shape shows: the build cursor is the arrow's cursornormal
+    const cursorSeq = k => k === 'build' ? 'arrow' : k;
+    /* THE SHAPE AFTER EVERY CHANGE, and `now`, the first tick that shows it, as the tick its animation began when it
+       shows another sequence. The engine installs a cursor only when its index differs from the installed one
+       (0x499254, 0x4992A9 compare main+0x2CBE first), so the arrow and the build cursor, both cursornormal, run on
+       through each other. A script's inputs of tick t are shown first by tick t, which the step records; the player's
+       stand between two ticks, and the view of the tick the sim stands at shows them. */
+    const cursorTick = now => {
+      const k = cursorShape();
+      if (cursorSeq(k) !== cursorSeq(st.cursorShape)) st.cursorSince = now;
+      st.cursorShape = k;
+    };
 
-    sim.input = input;
+    sim.input = ev => { input(ev); cursorTick(sim.tick); };
     sim.step = () => {
       const t = sim.tick + 1;
       feed(t);
@@ -711,7 +720,7 @@ const WikiSim = (() => {
       sim.tick = t;
       sim.done = sim.tick >= end;
       st.hover = hover();
-      cursorTick();
+      cursorTick(t);
     };
     // a unit's orders, for a check: kind, building and site, or the target's id
     sim.orders = id => { const u = byId(id); return u ? u.orders.map(o => ({ ...o })) : null; };
@@ -733,8 +742,8 @@ const WikiSim = (() => {
       }
       const owners = new Map();
       for (const u of units) for (const o of u.orders) if (o.k === 'build') owners.set(`${o.type}@${o.ox},${o.oz}`, u.owner);
-      // an input since the last tick may have changed the shape: then it begins now
-      const shape = cursorShape(), since = shape === st.cursorShape ? st.cursorSince : sim.tick;
+      // every change of the shape -- an input, a tick, the scene -- records it (cursorTick)
+      const shape = st.cursorShape, since = st.cursorSince;
       return {
         map: { w: W, h: H, cell: CELL, surfaceMetal: SM, metal: metal.slice(), fog: fog.slice(), vents: vents.map(v => ({ x: (v.cx + 0.5) * CELL, z: (v.cz + 0.5) * CELL })) },
         units: units.map(u => ({ id: u.id, type: u.type, owner: u.owner, x: u.x, z: u.z, hx: u.hx, hz: u.hz, fx: fp(u.type)[0], fz: fp(u.type)[1],

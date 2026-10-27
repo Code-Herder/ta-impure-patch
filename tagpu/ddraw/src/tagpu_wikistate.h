@@ -44,17 +44,20 @@ int  tagpu_wikistate_scene(unsigned frame, const WIKISTAGEVIEW** v, int* entry, 
 void tagpu_wikistate_image(unsigned frame, int image, int ground, const uint32_t* resolved);
 
 /* The Vulkan pass has built this frame's wiki ops and will draw them (`drew` 1): the page's
-   controls become the hit map, and its scrolls and scrollbars the command record's. 0: this frame
-   draws no wiki, and the map is empty. After tagpu_wikistate_frame answered 1 for the same frame,
-   or with 0 on any frame. */
-void tagpu_wikistate_drawn(int drew);
+   controls become the hit map, and its scrolls and scrollbars the command record's; `cursor` 1
+   when the stage's cursor is among what it draws -- its op (the list's `watch`) was given
+   instances and none of them is hidden. 0: this frame draws no wiki, and the map is empty. After
+   tagpu_wikistate_frame answered 1 for the same frame, or with 0 on any frame. */
+void tagpu_wikistate_drawn(int drew, int cursor);
 
 /* The cursor goes back over the wiki layer this frame (tagpu_vk_gui_record_cursor): the layer drew,
    and either the window is closed -- the cursor is where the engine's own would be, which the
-   button may cover -- or the record's pointer is in the picture and not over the stage of a frame
-   in Try it yourself, where the stage draws the simulation's own cursor instead. While the window
-   is open with no pointer in the picture the UI layer's cursor stands at the frozen point, on the
-   wiki button, which is not where the player's pointer is, so none is drawn. */
+   button may cover -- or the record's pointer is in the picture and the stage did not draw its
+   cursor in its place: in Try it yourself the stage draws the simulation's cursor only while the
+   pointer is over it, and tagpu_wikistate_drawn says whether that frame's pass drew it, so the
+   screen shows exactly one. While the window is open with no pointer in the picture the UI
+   layer's cursor stands at the frozen point, on the wiki button, which is not where the player's
+   pointer is, so none is drawn. */
 int  tagpu_wikistate_cursor(unsigned frame);
 
 /* ANY THREAD: 1 once the layout has refused, for the rest of the session -- no frame draws the

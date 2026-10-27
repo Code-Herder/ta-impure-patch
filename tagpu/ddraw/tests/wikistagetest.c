@@ -9,10 +9,12 @@
    `wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD AW AH MW MH BW BH SPRITES X Y W H U`
    plays every demo of every entry in PAK (tools/hudpak.py --set wiki) to its end, and at tick 0,
    every 30th tick and the last copies the view (tagpu_wikistage_copy) and builds the stage on the
-   rect X Y W H, in units, at U device pixels a unit: the text in style STYLE, measured in FONT;
+   rect X Y W H, in units, at U device pixels a unit, with the cursor left out of every frame whose
+   tick / 30 is odd (as Try it yourself leaves it while the pointer is off the stage): the text in
+   style STYLE, measured in FONT;
    the kit's cursors the parts ARROW, MOVE and BUILD, AW x AH, MW x MH and BW x BH units; the game
    cursors' frames those of SPRITES (`sprites` below). One line a frame: {"e", "d", "t", "x0",
-   "y0", "w", "h", "dropped", "trunc", "ops": [[kind, flags, part, x, y, w, h, clip x, y, w, h,
+   "y0", "w", "h", "dropped", "trunc", "cur" (the op drawing the cursor, -1 none), "ops": [[kind, flags, part, x, y, w, h, clip x, y, w, h,
    rgba, size, style, centre, text, rgb, shade], ...]}, every position in units as the op holds
    it.
 
@@ -87,7 +89,8 @@ static void frame(const WIKISTAGEOPS* o, const WIKISTAGEVIEW* v, const char* e, 
     int i;
     tagpu_wikistage_canvas(r, u, &x0, &y0, &w, &h);
     printf("{\"e\":\"%s\",\"d\":\"%s\",\"t\":%d,\"x0\":%.17g,\"y0\":%.17g,\"w\":%.17g,\"h\":%.17g,"
-           "\"dropped\":%d,\"trunc\":%u,", e, d, t, x0, y0, w, h, o->dropped, (unsigned)v->trunc);
+           "\"dropped\":%d,\"trunc\":%u,\"cur\":%d,", e, d, t, x0, y0, w, h, o->dropped, (unsigned)v->trunc,
+           o->cursor);
     /* each op's range and, for a box, its type's name (WIKISTAGE_IN_*); then where it is drawn
        (tagpu_wikistage_keep) under three images -- every type resolved with the ground in the image,
        none resolved, and the ground fallen back -- one digit an op; and the image's rect */
@@ -208,7 +211,7 @@ static int ops(char** a)
                 if (s.tick % 30 == 0 || s.done) {
                     tagpu_wikistage_copy(&v, tagpu_wikisim_view(&s), e);
                     v.tick = s.tick;            /* the copy leaves it: tagpu_wiki.c sets it so */
-                    tagpu_wikistage_build(&v, NULL, r, u, &art, &o);
+                    tagpu_wikistage_build(&v, NULL, r, u, (s.tick / 30) % 2 == 0, &art, &o);
                     frame(&o, &v, e->id, e->demo[j].id, s.tick, r, u);
                 }
                 if (s.done) break;

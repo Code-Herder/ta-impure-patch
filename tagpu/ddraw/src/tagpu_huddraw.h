@@ -80,16 +80,19 @@ typedef struct {
     const float*    grp;        /* each group's opacity; NULL with ngrp 0: none              */
     int             ngrp;
     const HUDCHART* chart;      /* NULL: no chart                                            */
+    int             watch;      /* an op whose instances the build counts; -1: none          */
 } HUDOPLIST;
 
 /* `ops` as a list. */
 HUDOPLIST tagpu_huddraw_list(const HUDOPS* ops);
 
-/* tagpu_huddraw_build, of a list. */
+/* tagpu_huddraw_build, of a list; `*watched` (NULL: not asked) the instances op `ops->watch`, one
+   of no group, was given on the attachment -- 0 when the cap or the batches had no room left for
+   it, or it draws nothing. */
 int tagpu_huddraw_build_list(const HUDART* art, const HUDOPLIST* ops, int layer, float px, int ox, int oy,
                              int w, int h, HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb,
                              int* nmain, int* nminst, HUDLAYREG* g, int* ng, HUDSHELF* shelf,
-                             int* dropped, int* unfit);
+                             int* dropped, int* unfit, int* watched);
 
 /* THE GLYPH ATLAS: one R8 coverage image. `gen` changes when it is emptied because a glyph did
    not fit; the rows [*y0, *y1) are the ones changed since tagpu_huddraw_atlas_sent last covered

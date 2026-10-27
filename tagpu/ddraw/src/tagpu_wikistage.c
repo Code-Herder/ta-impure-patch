@@ -431,7 +431,7 @@ static void readout(B* c, const char* t, int right)
     text(c, t, right ? c->W - 5 * U : 5 * U, c->H - 2 * U - h / 2, sz, right ? 2 : 0, HEX(0xf0f0ea));
 }
 
-int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage, double u,
+int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage, double u, int cursor,
                           const WIKISTAGEART* art, WIKISTAGEOPS* out)
 {
     static const uint32_t SITE[3] = { 0x2bd248, 0xe62828, 0xf0d020 };
@@ -441,6 +441,7 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
     int i, x, z;
     out->n = out->nrun = out->ntext = 0;
     out->dropped = 0;
+    out->cursor = -1;
     memset(&c, 0, sizeof c);
     c.art = art;
     c.o = out;
@@ -600,8 +601,9 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
         /* THE CURSOR: the game's own, as sharp_cursor (tagpu_gui_surf.c) draws the player's -- the
            frame its animation shows, at `spr_scale` device pixels an art pixel whatever the map's
            scale or the HUD's, the hotspot on the pointer's device pixel. Else, for a shape whose
-           frames did not load, its kit icon centred on the point, in the box stage.js snaps. */
-        const WIKISTAGESEQ* sq = v->cursor_shape < 3 ? &art->seq[v->cursor_shape] : NULL;
+           frames did not load, its kit icon centred on the point, in the box stage.js snaps. Neither
+           when the caller leaves the cursor out. */
+        const WIKISTAGESEQ* sq = cursor && v->cursor_shape < 3 ? &art->seq[v->cursor_shape] : NULL;
         if (sq && sq->n > 0) {
             const int f = tagpu_wikistage_cursor_frame(art->spr + sq->first, sq->n, sq->loop,
                                                        (long)v->tick - v->cursor_since);
@@ -616,15 +618,19 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
                     p->part = (int16_t)(sq->first + f);
                     p->size = q->w;
                     p->shade = q->h;
+                    out->cursor = (int)(p - out->op);
                 }
             }
-        } else if (v->cursor_shape < 3 && art->cursor[v->cursor_shape] >= 0) {
+        } else if (cursor && v->cursor_shape < 3 && art->cursor[v->cursor_shape] >= 0) {
             const int k = v->cursor_shape;
             const double w = art->cursor_w[k] * U, h = art->cursor_h[k] * U;
             const double a = X(v->cursor_x) - w / 2, b = Z(v->cursor_z) - h / 2;
             const double x0 = snapd(a), y0 = snapd(b);
             HUDOP* p = op(&c, HOP_PART, x0, y0, snapd(a + w) - x0, snapd(b + h) - y0);
-            if (p) p->part = art->cursor[k];
+            if (p) {
+                p->part = art->cursor[k];
+                out->cursor = (int)(p - out->op);
+            }
         }
         if (v->pace > 1) {
             char t[64], n[32];

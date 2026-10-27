@@ -128,6 +128,7 @@ typedef struct {
     int     n, nrun, ntext;
     int     dropped;                    /* the ops this build had no room for              */
     int     logged;                     /* kept across builds: a dropping build was logged */
+    int     cursor;                     /* the op that draws the cursor, -1 when none does */
     HUDOP   op[WIKI_MAXOP];
     uint8_t range[WIKI_MAXOP];          /* each op's WIKISTAGE_IN_*          */
     uint8_t rtype[WIKI_MAXOP];          /* a WIKISTAGE_IN_BOX op's unit type, an index into the
@@ -217,8 +218,9 @@ int tagpu_wikistage_keep(const WIKISTAGEOPS* o, int i, int image, int ground, co
    A view with no map draws the stage's ground and `msg` (NULL for none). WIKI_MAXOP BOUNDS IT: an
    op past the budget is dropped and counted in out->dropped; the build that first drops is
    logged through art->log, once while out->logged stays set; and a frame that dropped any is
-   edged in red, in a slot the budget keeps for it, so the loss shows. Returns out->n. */
-int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage, double u,
+   edged in red, in a slot the budget keeps for it, so the loss shows. `cursor` 0 leaves the cursor
+   out (stage.js's o.cursor false); out->cursor names the op that draws it. Returns out->n. */
+int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage, double u, int cursor,
                           const WIKISTAGEART* art, WIKISTAGEOPS* out);
 
 #endif

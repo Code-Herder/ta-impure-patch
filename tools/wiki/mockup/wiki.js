@@ -178,13 +178,13 @@ function controls() {
   for (const id of ['#c-play', '#c-replay', '#c-x1', '#c-x2', '#c-try']) $(id).disabled = !has;
   $('#c-x1').classList.toggle('on', S.speed === 1); $('#c-x2').classList.toggle('on', S.speed === 2);
   $('#c-try').classList.toggle('on', S.try);
-  $('#stage').classList.toggle('try', S.try && !!sim);
   $('#bmenu').hidden = !S.try;
 }
 
 /* ---- the stage: a canvas at the resolution's pixels; the map fitted inside it, letterboxed ---- */
 const stage = $('#stage');
 let FIT = null;                       // the last fit: canvas pixels a world unit, and the map's offset
+let overStage = false;                // the player's pointer is over the stage's canvas
 function sizeStage() {
   const r = stage.getBoundingClientRect();
   if (!r.width || !r.height) return;                     // the window is closed: keep the last size
@@ -212,9 +212,14 @@ function draw() {
     ground: r.ground, resolved: t => r.resolved.has(t),
     draw: (c, b) => { c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'low'; c.drawImage(r.canvas, b.x, b.y, b.w, b.h); },
   } : null;
+  /* EXACTLY ONE CURSOR IN TRY IT YOURSELF: the stage draws its cursor only while the player's pointer is over the
+     stage, and hides the player's (#stage.try) only in a frame whose cursor it drew -- a game sequence that ended, or an
+     icon not loaded yet, leaves the player's. A demo's scripted cursor is drawn whatever the pointer does. */
+  const tryIt = S.try && !!sim;
   FIT = WikiStage.draw(g, v, { W: stage.width, H: stage.height, U: G.gh / 720, icons: ICONS, cursors: CURSORS,
-    tick: sim ? sim.tick : 0, image,
+    tick: sim ? sim.tick : 0, cursor: !tryIt || overStage, image,
     msg: simErr || (demo() ? 'loading…' : entry() ? 'no demo' : '') });
+  stage.classList.toggle('try', tryIt && !!FIT && FIT.cursor);
   return v;
 }
 
@@ -247,6 +252,8 @@ function world(e) {
   return [clamp((px - FIT.ox) / FIT.s, 0, W), clamp((pz - FIT.oz) / FIT.s, 0, H)];
 }
 const BTN = { 0: 'lmb', 2: 'rmb' };
+stage.addEventListener('mouseenter', () => { overStage = true; });
+stage.addEventListener('mouseleave', () => { overStage = false; });
 stage.addEventListener('mousemove', e => { if (S.try) { const w = world(e); if (w) send({ move: w }); } });
 stage.addEventListener('mousedown', e => {
   const b = BTN[e.button]; if (!S.try || !b) return;

@@ -26,6 +26,9 @@ static int      s_ox, s_oy;
 static int      s_open, s_ptr;          /* the record's: the window open, a pointer in the picture */
 static int      s_tryPtr;               /* this frame is in Try it yourself with a view, and the
                                            record's pointer lies inside its stage               */
+static int      s_curList, s_curAt;     /* the op that draws the stage's cursor: its list, 1 the
+                                           stage's or 2 the ops over the image, 0 none; its index */
+static int      s_stageCursor;          /* the HUD pass drew the stage's cursor this frame      */
 static volatile LONG s_refused;         /* the layout refused: said once, drawn never; read by the
                                            game thread (tagpu_wikistate_refused)                */
 static int      s_saidOver;             /* the page's ops overflowed: said once                 */
@@ -112,6 +115,8 @@ static unsigned       s_spritePal;      /* the palette serial it was decoded thr
 static const WIKI3D*  s_spriteOf;       /* the load it was decoded from                          */
 static WIKISTAGESEQ   s_seq[3];
 static WIKISTAGESPR   s_spr[HUD_SPRITE_CELLS];
+static int            s_saidUnfit;      /* a shape that does not fit was logged: said once, as each
+                                           palette change decodes the same frames again          */
 
 /* sequence `sq`'s frames into the sheet from cell `*cell`: 1 with `out` filled, 0 when one does not
    fit or does not decode (the cells it wrote are left to the next shape, which overwrites them) */
@@ -165,8 +170,12 @@ static void sprites_bind(void)
         for (k = 0; k < 3; k++) {
             for (j = 0; j < k && w3->cursor[j] != w3->cursor[k]; j++) {}
             if (j < k) s_seq[k] = s_seq[j];
-            else if (w3->cursor[k] && !sprite_seq((const unsigned char*)w3->cursor[k], pal, &cell, &s_seq[k]))
-                tagpu_logf("wiki: the game's cursor for shape %d does not fit the sprite sheet - its kit icon is drawn", k);
+            else if (w3->cursor[k] && !sprite_seq((const unsigned char*)w3->cursor[k], pal, &cell, &s_seq[k]) &&
+                     !s_saidUnfit) {
+                s_saidUnfit = 1;
+                tagpu_logf("wiki: the game's cursor for shape %d does not fit the sprite sheet - its kit icon is "
+                           "drawn (said once)", k);
+            }
         }
         s_spriteOf = w3;
         s_spritePal = serial;
@@ -248,7 +257,7 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
     float u, hpx;
     int vw = f->vp_w, vh = f->vp_h, pw = 128, bh = 32, q8 = 256, hox, hoy;
 
-    s_have = s_haveStage = s_viewOk = s_split = s_nover = 0;
+    s_have = s_haveStage = s_viewOk = s_split = s_nover = s_curList = 0;
     if (s_refused || !pk || !pk->in_game || !(w = tagpu_pk_wiki(pk))) return;
     /* THE ART LOADS ON ITS OWN THREAD (tagpu_hudart.c), started by whichever half asks first; the
        wiki draws from the first frame after it is published */
@@ -293,33 +302,37 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
         s_saidOver = 1;
         tagpu_logf("wiki: the page's ops overflowed and some were dropped (said once)");
     }
-    /* THE STAGE, inside the bezel the page placed, from the record's view or its message */
-    if (w->open && s_fr.stage.w > 0 && s_fr.stage.h > 0) {
-        memcpy(msg, w->msg, sizeof msg);
-        msg[sizeof msg - 1] = 0;
-        sprites_bind();
-        tagpu_wikistage_build(sv, msg[0] ? msg : NULL, s_fr.stage, u, &s_sart, &s_stage);
-        s_haveStage = 1;
-        s_viewOk = sv && sv->w > 0 && sv->h > 0;
-        s_stageRect = s_fr.stage;
-    }
     s_entry = w->entry;
     s_demo = w->demo;
     s_shot = w->shot;
     s_open = w->open;
     s_ptr = w->ptr_x >= 0 && w->ptr_y >= 0;
-    /* THE PLAYER'S CURSOR IS THE STAGE'S OWN OVER THE STAGE IN TRY IT YOURSELF (wiki.css
-       #stage.try): this frame is in Try it with a view, and the record's pointer -- the same
-       record's -- lies inside the stage's canvas as this frame places it, the client pixels of
-       the stage's hit rect (tagpu_wikistate_drawn). Both facts are of one frame, so no frame
-       shows both cursors or neither. */
+    /* EXACTLY ONE CURSOR IN TRY IT YOURSELF (wiki.js draw): the stage draws the simulation's
+       cursor only while the record's pointer lies inside the stage's canvas as this frame places
+       it, the client pixels of the stage's hit rect (tagpu_wikistate_drawn), and the player's is
+       hidden only in a frame whose HUD pass drew the stage's (tagpu_wikistate_cursor). Every fact
+       is of this one frame, so none shows both cursors or neither. A demo draws its scripted
+       cursor wherever the pointer is. */
     s_tryPtr = 0;
-    if (w->try_it && s_viewOk && s_ptr) {
+    if (w->open && s_fr.stage.w > 0 && s_fr.stage.h > 0) {
         double cx, cy, cw, ch;
-        tagpu_wikistage_canvas(s_stageRect, u, &cx, &cy, &cw, &ch);
+        tagpu_wikistage_canvas(s_fr.stage, u, &cx, &cy, &cw, &ch);
         cx += s_ox;
         cy += s_oy;
-        s_tryPtr = w->ptr_x >= cx && w->ptr_x < cx + cw && w->ptr_y >= cy && w->ptr_y < cy + ch;
+        s_viewOk = sv && sv->w > 0 && sv->h > 0;
+        s_tryPtr = w->try_it && s_viewOk && s_ptr && w->ptr_x >= cx && w->ptr_x < cx + cw &&
+                   w->ptr_y >= cy && w->ptr_y < cy + ch;
+        /* THE STAGE, inside the bezel the page placed, from the record's view or its message */
+        memcpy(msg, w->msg, sizeof msg);
+        msg[sizeof msg - 1] = 0;
+        sprites_bind();
+        tagpu_wikistage_build(sv, msg[0] ? msg : NULL, s_fr.stage, u, !w->try_it || s_tryPtr, &s_sart, &s_stage);
+        s_haveStage = 1;
+        s_stageRect = s_fr.stage;
+        if (s_stage.cursor >= 0 && s_stage.cursor < s_stage.n && s_stage.cursor < WIKI_MAXOP) {
+            s_curList = 1;
+            s_curAt = s_stage.cursor;
+        }
     }
     s_px = u;
     s_frame = f->frame_counter;
@@ -367,6 +380,10 @@ void tagpu_wikistate_image(unsigned frame, int image, int ground, const uint32_t
     n = s_stage.n < WIKI_MAXOP ? s_stage.n : WIKI_MAXOP;
     for (i = 0; i < n; i++) {
         const int k = tagpu_wikistage_keep(&s_stage, i, 1, ground, resolved);
+        if (i == s_curAt && s_curList) {
+            s_curList = k;
+            s_curAt = k == 1 ? under : s_nover;
+        }
         if (k == 1) s_stage.op[under++] = s_stage.op[i];
         else if (k == 2) s_over[s_nover++] = s_stage.op[i];
     }
@@ -385,12 +402,15 @@ int tagpu_wikistate_frame(unsigned frame, HUDOPLIST* page, HUDOPLIST* stage, HUD
     *page = tagpu_huddraw_list(&s_ops);
     memset(stage, 0, sizeof *stage);
     memset(over, 0, sizeof *over);
+    stage->watch = over->watch = -1;
     if (s_haveStage) {
         *stage = stage_list();
+        stage->watch = s_curList == 1 ? s_curAt : -1;
         if (s_nover) {
             *over = *stage;
             over->op = s_over;
             over->n = s_nover;
+            over->watch = s_curList == 2 ? s_curAt : -1;
         }
     }
     *px = s_px;
@@ -406,13 +426,14 @@ static int16_t dev(int o, double snapped)
     return (int16_t)(r < -32768.0 ? -32768 : r > 32767.0 ? 32767 : r);
 }
 
-void tagpu_wikistate_drawn(int drew)
+void tagpu_wikistate_drawn(int drew, int cursor)
 {
     int i, cut = 0;
     memset(&s_map, 0, offsetof(TAGPU_CMD_WIKI, hit));
     s_map.n = 0;
-    s_drew = 0;
+    s_drew = s_stageCursor = 0;
     if (!drew || !s_have) return;
+    s_stageCursor = cursor;
     /* topmost first: the build paints in order, so the last control painted is on top. The
        stage holds no control */
     for (i = s_ops.n - 1; i >= 0; i--) {
@@ -459,7 +480,7 @@ void tagpu_wikistate_drawn(int drew)
 
 int tagpu_wikistate_cursor(unsigned frame)
 {
-    return s_have && s_frame == frame && s_drew && (!s_open || (s_ptr && !s_tryPtr));
+    return s_have && s_frame == frame && s_drew && (!s_open || (s_ptr && !(s_tryPtr && s_stageCursor)));
 }
 
 void tagpu_wikistate_cmd(TAGPU_CMD_WIKI* out)

@@ -208,13 +208,23 @@ else none (`cursor_shape` in both); Quick Build's ghost no longer makes it a bui
 - **The animation** is the engine's (`tagpu_wikistage_cursor_frame`, `stage.js` `cursorFrame`):
   `SetUICursor 0x4AB400` starts a sequence at frame 0 when it installs one, and the UI's update
   `0x4AB5D0` counts each frame's ticks down on a 30 Hz clock (`0x4B6340`), looping when the
-  sequence's byte `+2` says so, else drawing nothing past the end. The stage counts the
-  simulation's ticks since the shape began (`cursor_since` in both sims and their views), so at 2x
-  the move cursor pulses twice as fast, with the demo.
+  sequence's byte `+2` says so, else drawing nothing past the end. The engine installs a cursor
+  only when its index differs from the installed one (`0x499254`, `0x4992A9` compare `main+0x2CBE`
+  first, DISASSEMBLED), so arming a building over the arrow, both `cursornormal`, runs the arrow's
+  animation on; both sims restart it only when the shape's sequence changes. The stage counts the
+  simulation's ticks since the sequence began (`cursor_since` in both sims and their views): a
+  scripted input's change begins on its own tick, and a change the player makes in Try it, between
+  two ticks, on the tick the sim stands at, the one the next view shows. So at 2x the move cursor
+  pulses twice as fast, with the demo. In the game the cursor runs on that wall clock
+  (`0x4B6340` is GetTickCount × the 30 Hz rate / 1000), so it keeps pulsing while the game is paused
+  and ignores the game speed; the stage's runs on simulation ticks, so it stands still while a demo
+  is paused or has ended.
 
 `stagecheck.mjs` draws every frame twice, with the kit's icons and with stand-ins carrying
 `cursors.gaf`'s own sizes, hotspots and ticks and a third, negative-hotspot sequence that does not
-loop, each size at its own `cursorscale` (1, 1.5, 2). `assetcheck.py` holds the `cursors` element
+loop, each size at its own `cursorscale` (1, 1.5, 2); every frame whose tick / 30 is odd leaves the
+cursor out, as Try it does off the stage, and each frame's `WIKISTAGEOPS.cursor` must name a cursor
+op exactly when `stage.js` drew one. `assetcheck.py` holds the `cursors` element
 to its Python reference and to `gfx.py --resolve-json`. `gfx.py` writes the mockup's copy,
 `gfx/cursors.json` and the sheet `gfx/cursors.rgba`, gitignored with the rest of `gfx/`, and the
 mockup draws them in either look.
@@ -395,8 +405,16 @@ where the plan's first version and the mockup differed.
   selection can build among the entry's own, in the selection's order and then each build list's,
   and "none"; the armed type's button (or "none") is down. With no constructor selected it says
   "Select a constructor". The render thread makes it from the frame's own view.
-- **The cursor**: over the stage, in a frame in Try it, the player's cursor is not drawn over the
-  wiki and the stage draws the simulation's, both decided from one frame's record.
+- **The cursor**: exactly one on screen. In Try it the stage draws the simulation's cursor only
+  while the player's pointer is over its canvas (`tagpu_wikistage_build`'s `cursor`, `stage.js`'s
+  `o.cursor`), and the player's is hidden only in a frame whose stage cursor was drawn: the HUD pass
+  reports whether the op the build named (`WIKISTAGEOPS.cursor`) was given instances that were not
+  hidden for a sprite sheet the device does not hold yet (`tagpu_wikistate_drawn`), so a sequence
+  that ended, a sheet waiting for staging or an instance cap that was full leaves the player's own.
+  The pointer's place, the build and the pass are one frame's (`tagpu_wikistate_cursor`). The
+  mockup does the same: the stage's cursor while the pointer is over the canvas, and `#stage.try`
+  (`cursor: none`) only in a frame that drew it. A demo draws its scripted cursor wherever the
+  pointer is.
 - **The test**: `wiki_regression.py <instance> try --launch` gives `snap` and `line`'s inputs as
   device input on the stage, compares the paused simulation's state hash with `sim.js` fed the
   inputs the game logged (`simparity.mjs --try`), and checks the releases on Back to demo and on
