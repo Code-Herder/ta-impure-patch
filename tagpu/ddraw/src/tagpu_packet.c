@@ -620,7 +620,8 @@ static const char* frame_valid(const void* rec)
             return "sweep header enums";
         for (c = 0; c < 2; c++) {
             const int16_t* r = c ? h->tongue : h->pop;
-            if (r[0] > r[2] || r[1] > r[3] || r[0] < -TAGPU_PK_SWEEP_RECT || r[3] > TAGPU_PK_SWEEP_RECT)
+            if (r[0] > r[2] || r[1] > r[3] || r[0] < -TAGPU_PK_SWEEP_RECT || r[1] < -TAGPU_PK_SWEEP_RECT ||
+                r[2] > TAGPU_PK_SWEEP_RECT || r[3] > TAGPU_PK_SWEEP_RECT)
                 return "sweep popup rect";
         }
         for (c = 0; c < 3; c++)

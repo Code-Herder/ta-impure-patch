@@ -164,6 +164,10 @@ static char s_extra[EXTRA_LEN];
    types stepped above 0, in the order first stepped. Under s_io like the strings above. */
 static TsSpacing s_spacing[TS_SPACING_SAVED];
 static int s_nspacing;
+/* The reclaim sweep's kind, 0..2, and whether the store carries it: only a kind the file named
+   or the player chose is written. Under s_io like the spacing. */
+static const char* const s_rkindName[3] = { "metal", "energy", "all" };
+static int s_rkind = 2, s_rkindSet;
 static int  s_extraLen;
 
 /* A windowed frame: a position, and a client size that is either 0,0 -- the
@@ -320,6 +324,11 @@ static int serialise(char* b, int cap)
             at += k;
         }
         k = _snprintf(b + at, cap - at, "\r\n");
+        if (k < 0 || k >= cap - at) return -1;
+        at += k;
+    }
+    if (s_rkindSet) {
+        k = _snprintf(b + at, cap - at, "reclaimkind=%s\r\n", s_rkindName[s_rkind]);
         if (k < 0 || k >= cap - at) return -1;
         at += k;
     }
@@ -494,6 +503,12 @@ static void parse_line(char* line)
     }
     if (!lstrcmpiA(k, "monitor")) { lstrcpynA(s_monStored, v, sizeof s_monStored); return; }
     if (!lstrcmpiA(k, "placespacing")) { parse_spacing(v); return; }
+    if (!lstrcmpiA(k, "reclaimkind")) {
+        for (i = 0; i < 3 && lstrcmpiA(v, s_rkindName[i]); i++) {}
+        if (i < 3) { s_rkind = i; s_rkindSet = 1; }
+        else slog("reclaimkind=%s is not metal, energy or all: the sweep starts at all", v);
+        return;
+    }
     if (!lstrcmpiA(k, "window")) {
         int w[4];
         /* refused when it is not a frame, so the fork's default placement
@@ -865,6 +880,30 @@ int tagpu_settings_put_spacing(const TsSpacing* table, int n, int wait)
         memset(s_spacing, 0, sizeof s_spacing);
         memcpy(s_spacing, kept, (size_t)k * sizeof *kept);
         s_nspacing = k;
+        InterlockedIncrement(&s_dirty);
+    }
+    LeaveCriticalSection(&s_io);
+    return 1;
+}
+
+int tagpu_settings_reclaim_kind(void)
+{
+    int k;
+    if (!s_attached || s_ignored) return 2;
+    EnterCriticalSection(&s_io);
+    k = s_rkind;
+    LeaveCriticalSection(&s_io);
+    return k >= 0 && k <= 2 ? k : 2;
+}
+
+int tagpu_settings_put_reclaim_kind(int kind, int wait)
+{
+    if (!s_attached || s_ignored || kind < 0 || kind > 2) return 1;  /* no say, nothing to hand over */
+    if (wait) EnterCriticalSection(&s_io);
+    else if (!TryEnterCriticalSection(&s_io)) return 0;
+    if (!s_rkindSet || s_rkind != kind) {
+        s_rkind = kind;
+        s_rkindSet = 1;
         InterlockedIncrement(&s_dirty);
     }
     LeaveCriticalSection(&s_io);

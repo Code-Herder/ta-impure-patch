@@ -4,11 +4,13 @@
    ground draws a ring; its release orders the selected reclaimers to take the features of the
    chosen kind inside it, shared nearest-first (tagpu_sweepgeo.h); a click below the drag's
    threshold is stock's click. The cursor shows a feature of the other kind as ground, and a click
-   on it orders nothing. The RECLAIM gadget's quickkey cycles the kind while armed; a right press
-   or Esc ends a drag. Off on GDI, on a puppet seat and outside mode 12.
+   on it orders nothing. A popup off the RECLAIM gadget's row picks the kind, and its quickkey
+   cycles it, while armed; a right press or Esc ends a drag. Every selected builder's reclaim
+   queue is drawn whether or not reclaim is armed. Off on GDI and on a puppet seat; the ring, the
+   filter and the popup outside mode 12 too. The kind is kept in the settings store.
 
-   Every function here runs on the GAME thread; the render thread sees the ring only as the
-   packet's copied table (PK_SWEEP). */
+   Every function here runs on the GAME thread; the render thread sees all of it only as the
+   packet's copied table (PK_SWEEP) and hands back the popup it drew (TAGPU_CMD_SWEEP). */
 #include "tagpu_packet.h"
 
 /* the kind of feature a ring takes; the first is ALL */
@@ -39,10 +41,15 @@ int tagpu_sweep_mouse(int gx, int gy, int down, int right);
 /* the window lost the mouse: the drag ends and no release is waited for */
 void tagpu_sweep_cancel(void);
 
-/* The packet's sweep header and items, from the publisher; no side effect, so it may run more
-   than once a frame. Returns 1 with the header filled when the sweep has something to show; `*n`
-   items written, at most `max`, and `*cut` set when more would have been. */
+/* The packet's sweep header and items, from the publisher; it may run more than once a frame,
+   and its one side effect is offering a pending kind to the settings store. Returns 1 with the
+   header filled when the sweep has something to show; `*n` items written, at most `max`, and
+   `*cut` set when more would have been. */
 int tagpu_sweep_fill(TAGPU_PK_SWEEP* h, TAGPU_PK_SWEEPITEM* items, unsigned max, unsigned* n,
                      int* cut);
+
+/* The command record's popup as drawn, where the record is applied (tagpu_packet_pub.c); NULL
+   when no record stands. */
+void tagpu_sweep_take(const TAGPU_CMD_SWEEP* c);
 
 #endif

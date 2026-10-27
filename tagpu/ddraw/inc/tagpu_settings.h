@@ -155,6 +155,14 @@ int  tagpu_settings_spacing_load(TsSpacing* out, int max);
 int  tagpu_settings_put_spacing(const TsSpacing* table, int n, int wait);
 int  tagpu_settings_spacing_name_ok(const char* name, size_t len);
 
+/* The reclaim sweep's kind (tagpu_sweep.c), `reclaimkind=metal|energy|all`: 0 METAL, 1 ENERGY,
+   2 ALL, the default. A malformed value leaves ALL and is logged once; nothing is loaded or kept
+   under tagpu_defaults.off. GAME THREAD, as the spacing: the load at attach, before the render
+   thread exists; `put` with `wait` 0 never waits and answers 0 when the lock was busy, for a
+   later try; the render thread writes the change at its next flush. */
+int  tagpu_settings_reclaim_kind(void);
+int  tagpu_settings_put_reclaim_kind(int kind, int wait);
+
 /* The windowed frame: x, y and the client size, 0,0 for the size the game
    asks for. 0 when the store has none; answered under tagpu_defaults.off too.
    Read at attach (tagpu_cfg.c). */

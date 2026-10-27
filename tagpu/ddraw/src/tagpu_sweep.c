@@ -14,14 +14,20 @@
      below it is handed back to stock's click on that record (tagpu_sweep_button);
    - the handler's entry ends the gesture when a record is handled in another mode.
 
-   Keys and buttons come from the window procedure (tagpu_shield.c), on the same thread.
+   Keys and buttons come from the window procedure (tagpu_shield.c), on the same thread. While
+   armed a popup off the RECLAIM gadget's row picks the kind, and a tag beside the cursor names it;
+   whether or not reclaim is armed, every selected builder's reclaim queue is drawn as a path
+   through its features.
 
    Everything here is game-thread UI state: the simulation never reads it, and what a commit
    causes -- order nodes made through the engine's own root 0x43ADC0, and the click's own tail
-   0x4958C0 -- is engine state the demo recorder keeps. The render thread sees the ring only as
-   the packet's copied values (tagpu_sweep_fill). */
+   0x4958C0 -- is engine state the demo recorder keeps. The render thread sees the ring, the
+   queues and the popup only as the packet's copied values (tagpu_sweep_fill), and hands back
+   what it drew of the popup in the command record (tagpu_sweep_take). The kind is kept in the
+   settings store (`reclaimkind=`). */
 #include <windows.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -34,6 +40,9 @@
 #include "tagpu_packet.h"
 #include "tagpu_zoom.h"
 #include "tagpu_log.h"
+#include "tagpu_hud.h"
+#include "tagpu_replays.h"
+#include "tagpu_settings.h"
 #include "dd.h"
 #include "render_vk.h"
 
@@ -62,6 +71,11 @@
 #define FD_RECL   0x80        /* FD_MASK's bit 7: reclaimable (0x43E75A, 0x440167)            */
 #define G_STRIDE  0x15B       /* a gadget record                                              */
 #define G_NAME    0x02        /* char[16], not always terminated                              */
+#define G_X       0x13        /* i16, relative to ControlsAry[0]'s own +0x13 / +0x15          */
+#define G_Y       0x15
+#define G_W       0x17        /* i16, rewritten at the load from the face frame (0x4A812E)    */
+#define G_H       0x19
+#define G_ACTIVE  0x29        /* u8                                                           */
 #define G_QUICKKEY 0x13A      /* u8                                                           */
 #define G_GREY    0x13C       /* u16, bit 0                                                   */
 #define C_COUNT   0xB6        /* i16 on ControlsAry[0]: the gadget count (0x49FE67)           */
@@ -76,6 +90,7 @@
    bounds every walk of a list. */
 #define SWEEP_LIST_CAP 1024u
 #define LIST_WALK      16384u
+#define FILL_WALK      24576u   /* the queue markers' nodes a fill, tagpu_order.c's MAXWALK */
 /* the gadget records a top screen may have: a count past it is not a screen's */
 #define GADGETS_MAX    512
 /* the reach of a footprint below its anchor's cell: a centre is at most 8 cells from it */
@@ -118,6 +133,8 @@ static Gesture s_g;
 static unsigned char s_taken[2];     /* a press the window procedure consumed, per button */
 /* The order bytes of RECLAIM, VTOL_RECLAIM and RESURRECT, by the engine's own names. The order
    descriptor array they index is fixed for a level, so they are found once a level. */
+static TAGPU_CMD_SWEEP s_drawn;      /* the popup the render thread last drew (tagpu_sweep_take) */
+static int s_kindPending;            /* a kind the settings store has not taken yet */
 static unsigned char s_act[3];
 static int s_actOk;
 
@@ -132,9 +149,34 @@ static unsigned char s_started[TAGPU_LIM_UNITS];
 /* the level's counters, logged at level end */
 static unsigned s_cCommit, s_cIssued, s_cClick, s_cMismatch, s_cListCap, s_cUnassigned, s_cTrunc;
 
+_Static_assert(TAGPU_PK_SWEEP_TARGETS == SWEEP_MAX_TARGETS, "the packet's targets are the ring's");
+
+static int pointer_on_popup(void);
+static int inside(const int16_t r[4], int x, int y);
+static int row_at(int x, int y);
+static void pointer_screen(int* x, int* y);
+static int live(TagpuWorld* w);
+
 static const char* kind_name(unsigned k)
 {
     return k == SWEEP_METAL ? "METAL" : k == SWEEP_ENERGY ? "ENERGY" : "ALL";
+}
+
+/* THE KIND IS KEPT in the settings store, as the placement's spacing is: handed over whole and,
+   in play, without waiting -- the render thread holds the store's lock across its file writes --
+   so a change the lock refused stays pending, is offered again at every fill and is waited for
+   at the level's end (tagpu_settings.h). */
+static void kind_offer(int wait)
+{
+    if (s_kindPending && tagpu_settings_put_reclaim_kind(s_kind, wait)) s_kindPending = 0;
+}
+
+static void set_kind(unsigned k)
+{
+    s_kind = (unsigned char)k;
+    s_kindPending = 1;
+    kind_offer(0);
+    tagpu_logf("sweep: kind %s", kind_name(s_kind));
 }
 
 static void end(void) { s_g.active = 0; s_g.drag = 0; }
@@ -586,6 +628,9 @@ int tagpu_sweep_cursor(int mode, int idx, int handler)
     const int* point;
     if (mode != 12 || !live(&w)) return idx;
     if (handler) gesture_update(&w);
+    /* the popup lies over the world: a click there picks a row (tagpu_sweep_mouse) and must read
+       as no order to the engine's click, which the window procedure keeps it from anyway */
+    if (pointer_on_popup()) return CURSOR_NONE;
     if (s_kind == SWEEP_ALL) return idx;
     point = (const int*)(w.ta + M_POINT);
     if (!grid(w.ta, &g) || !feature_at(&g, point, &f) || !(rep = representative(&w))) return idx;
@@ -649,8 +694,9 @@ int tagpu_sweep_button(const int* rec, unsigned msg)
    any gadget whose name holds it (strstr 0x4E49B0 at 0x419F56) and finds gadgets by substring
    (0x49FE60, 0x49FE7D..0x49FEA2). The top screen [main+0x531] and its ControlsAry +4 are loaded
    and freed on this thread, never while a hook here runs; the count is ControlsAry[0]'s i16
-   +0xB6, bounded. Found again every time, never kept. */
-static const unsigned char* reclaim_gadget(const char* ta)
+   +0xB6, bounded. Found again every time, never kept. `*ctrls0`, when asked for, is ControlsAry[0],
+   the screen's own record, whose +0x13 / +0x15 the gadgets' positions are relative to. */
+static const unsigned char* reclaim_gadget(const char* ta, const unsigned char** ctrls0)
 {
     const char* top = *(const char* const*)(ta + M_TOP);
     const unsigned char* ctrls;
@@ -658,6 +704,7 @@ static const unsigned char* reclaim_gadget(const char* ta)
     if (!top || !(ctrls = *(const unsigned char* const*)(top + 4))) return NULL;
     count = *(const int16_t*)(ctrls + C_COUNT);
     if (count < 1 || count > GADGETS_MAX) return NULL;
+    if (ctrls0) *ctrls0 = ctrls;
     for (i = 1; i <= count; i++) {
         const unsigned char* g = ctrls + (size_t)i * G_STRIDE;
         char name[17];
@@ -703,28 +750,42 @@ int tagpu_sweep_char(unsigned ch)
         end();
         return 1;
     }
-    if (!(g = reclaim_gadget(w.ta)) || (*(const uint16_t*)(g + G_GREY) & 1) || !(qk = g[G_QUICKKEY]))
+    if (!(g = reclaim_gadget(w.ta, NULL)) || (*(const uint16_t*)(g + G_GREY) & 1) ||
+        !(qk = g[G_QUICKKEY]))
         return 0;
     if (ch != ascii_lower(qk) && ch != ascii_upper(qk)) return 0;
-    s_kind = (unsigned char)((s_kind + 1) % 3);
-    tagpu_logf("sweep: kind %s", kind_name(s_kind));
+    set_kind((s_kind + 1u) % 3u);
     return 1;
 }
 
 /* A right press during a drag cannot go through the engine's cancel: its one call site 0x4993AC
    is the recorder's (tagpu_recorder.c, CLICK_RIGHT_CALL), and the engine's cancel disarms. So
-   it is taken here, before the engine has a record of it, and its release with it. */
+   it is taken here, before the engine has a record of it, and its release with it.
+   A left press on the popup is taken the same way: the popup lies over the world, where the
+   engine would read the press as a reclaim click on the ground under it. THE POPUP IS HIT-TESTED
+   WHERE IT WAS DRAWN: against the rects the render thread last drew it at (tagpu_sweep_take),
+   never the ones the fill has only published, so the row a click picks is the row under the
+   pointer in the picture the player saw. A press on the plate between rows is taken and picks
+   nothing. */
 int tagpu_sweep_mouse(int gx, int gy, int down, int right)
 {
-    int b = right ? 1 : 0;
-    (void)gx; (void)gy;
+    TagpuWorld w;
+    int b = right ? 1 : 0, row;
     if (!down) {
         if (s_taken[b]) { s_taken[b] = 0; return 1; }
         return 0;
     }
-    if (!right || !s_g.active) return 0;
-    end();
-    s_taken[1] = 1;
+    if (right) {
+        if (!s_g.active) return 0;
+        end();
+        s_taken[1] = 1;
+        return 1;
+    }
+    if (!s_drawn.drawn || !live(&w)) return 0;
+    tagpu_hud_to_screen(&gx, &gy);
+    if (!inside(s_drawn.pop, gx, gy)) return 0;
+    if ((row = row_at(gx, gy)) >= 0 && (unsigned)row != s_kind) set_kind((unsigned)row);
+    s_taken[0] = 1;
     return 1;
 }
 
@@ -781,6 +842,170 @@ static void ring_items(const int c[3], int r, unsigned char colour, TAGPU_PK_SWE
     }
 }
 
+/* THE QUEUE MARKERS: for each selected unit of the player, in slot order, whose list holds
+   reclaim-family nodes, a QPATH start at the unit's position (top 1, n its slot), then for each
+   such node whose feature still stands a QPATH point at the feature's centre and a QBOX with its
+   ordinal. A node whose feature has gone is skipped: the Reclaim handler unlinks it itself at its
+   next call (0x404AD0, "Reclamation failed"). The walks are this thread's, the one that links and
+   frees nodes, bounded at LIST_WALK a list and FILL_WALK a fill and stopped at a node another unit
+   owns; at most TAGPU_PK_SWEEP_QUEUE items and 1024 ordinals a builder. */
+static void markers(const TagpuWorld* w, const Grid* g, unsigned char colour,
+                    TAGPU_PK_SWEEPITEM* it, unsigned max, unsigned* n, int* cut)
+{
+    unsigned slot, walked = 0, used = 0;
+    if (!actions()) return;
+    for (slot = w->first; slot <= w->last; slot++) {
+        const char* u = tagpu_route_unit(w, slot);
+        const char* node;
+        unsigned steps = 0, ord = 0;
+        if (!u || *(const unsigned char*)(u + U_OWNER) != (unsigned)w->player ||
+            !(*(const unsigned*)(u + U_FLAGS) & 0x10u)) continue;
+        for (node = *(const char* const*)(u + U_ORDERS); node && steps < LIST_WALK;
+             node = *(const char* const*)(node + N_NEXT)) {
+            TAGPU_PK_SWEEPITEM e;
+            Feat f;
+            int pos[3];
+            if (*(const char* const*)(node + N_OWNER) != u) break;
+            if (++walked > FILL_WALK) { *cut = 1; return; }
+            steps++;
+            if (!family((unsigned char)node[4]) || !feature_at(g, (const int*)(node + N_POS), &f))
+                continue;
+            if (ord >= 1024u) break;
+            if (used + (ord ? 2u : 3u) > TAGPU_PK_SWEEP_QUEUE) { *cut = 1; return; }
+            if (!ord) {
+                memset(&e, 0, sizeof e);
+                e.kind = TAGPU_PK_SWI_QPATH; e.colour = colour; e.n = (uint16_t)slot; e.top = 1;
+                e.x = *(const int*)(u + U_XFIX) >> 16;
+                e.h = *(const int*)(u + U_ZFIX) >> 16;
+                e.z = *(const int*)(u + U_YFIX) >> 16;
+                e.w = e.d = 16;
+                if (!push_item(it, max, n, cut, &e)) break;
+                used++;
+            }
+            feature_pos(&f, pos);
+            memset(&e, 0, sizeof e);
+            e.kind = TAGPU_PK_SWI_QPATH; e.colour = colour;
+            e.x = f.cx; e.h = pos[1] >> 16; e.z = f.cz;
+            e.w = e.d = 16;
+            if (!push_item(it, max, n, cut, &e)) break;
+            foot_item(&e, TAGPU_PK_SWI_QBOX, colour, &f, pos[1] >> 16);
+            e.n = (uint16_t)++ord;
+            if (!push_item(it, max, n, cut, &e)) break;
+            used += 2;
+        }
+    }
+}
+
+/* THE POPUP'S GEOMETRY, in the engine's 1x units off the RECLAIM gadget's absolute rect
+   (bx, by, bw, bh): shown only while the gadget is active and not greyed, and only when the
+   button lies on the panel the player sees -- inside the 128-px column, below the top bar and
+   above the bottom one at the HUD scale in force (the panel is magnified about the origin, E28,
+   so its rows below H/s - 32 are under the bar or off the screen). The plate, 124 x 72, opens at
+   x 129, its middle row centred on the button, clamped into the world band; the rows are 112 x 18,
+   21 apart; the tongue ties the plate to the button's row. Each rect is then magnified about the
+   origin as the panel is, x q8 / 256, and rounded once. */
+#define POP_X 129
+#define POP_W 124
+#define POP_H 72
+
+typedef struct {
+    const unsigned char* g;
+    int b[4];                 /* the gadget's absolute rect, x, y, w, h */
+    int q8;
+    int pop[4], tongue[4], row[3][4];
+} Popup;
+
+static int scaled(int v, int q8) { return (int)(((int64_t)v * q8 + 128) >> 8); }
+
+static void to_screen(const int r[4], int q8, int out[4])
+{
+    out[0] = scaled(r[0], q8); out[1] = scaled(r[1], q8);
+    out[2] = scaled(r[0] + r[2], q8); out[3] = scaled(r[1] + r[3], q8);
+}
+
+static int popup_rect(const char* ta, Popup* P)
+{
+    const unsigned char* c0;
+    int H = (int)g_ddraw.height, y0, lo, hi, i, r[4];
+    memset(P, 0, sizeof *P);
+    P->q8 = 256;
+    if (!(P->g = reclaim_gadget(ta, &c0)) || !P->g[G_ACTIVE] || (*(const uint16_t*)(P->g + G_GREY) & 1))
+        return 0;
+    tagpu_hud_live(NULL, NULL, &P->q8);
+    P->b[0] = *(const int16_t*)(c0 + G_X) + *(const int16_t*)(P->g + G_X);
+    P->b[1] = *(const int16_t*)(c0 + G_Y) + *(const int16_t*)(P->g + G_Y);
+    P->b[2] = *(const int16_t*)(P->g + G_W);
+    P->b[3] = *(const int16_t*)(P->g + G_H);
+    if (H < 240 || H > 8192 || P->q8 < 256 || P->q8 > 4096 || P->b[2] < 1 || P->b[3] < 1 ||
+        P->b[0] < 0 || P->b[0] + P->b[2] > 128 || P->b[1] < 32 ||
+        (int64_t)(P->b[1] + P->b[3] + 32) * P->q8 > (int64_t)H * 256)
+        return 0;
+    lo = 34;
+    hi = (int)((int64_t)H * 256 / P->q8) - 32 - POP_H - 2;
+    if (hi < lo) return 0;
+    y0 = P->b[1] + P->b[3] / 2 - POP_H / 2;
+    y0 = y0 < lo ? lo : y0 > hi ? hi : y0;
+    r[0] = POP_X; r[1] = y0; r[2] = POP_W; r[3] = POP_H;
+    to_screen(r, P->q8, P->pop);
+    for (i = 0; i < 3; i++) {
+        r[0] = POP_X + 6; r[1] = y0 + 6 + 21 * i; r[2] = 112; r[3] = 18;
+        to_screen(r, P->q8, P->row[i]);
+    }
+    r[0] = 124; r[1] = P->b[1] + 4; r[2] = 6; r[3] = 18;
+    r[1] = r[1] < y0 + 6 ? y0 + 6 : r[1] > y0 + POP_H - 24 ? y0 + POP_H - 24 : r[1];
+    to_screen(r, P->q8, P->tongue);
+    return 1;
+}
+
+/* the anchor, logged when it changes: which gadget, its rect, the popup's screen rect, the scale;
+   NULL when no popup is shown, so the next one is logged again */
+static void anchor_log(const Popup* P)
+{
+    static char last[160];
+    char name[17], line[160];
+    if (!P) { last[0] = 0; return; }
+    if (P->g) { memcpy(name, P->g + G_NAME, 16); name[16] = 0; } else strcpy(name, "-");
+    _snprintf(line, sizeof line, "sweep: anchor gadget=%s rect=%d,%d,%d,%d popup=%d,%d,%d,%d q8=%d",
+              name, P->b[0], P->b[1], P->b[2], P->b[3], P->pop[0], P->pop[1], P->pop[2], P->pop[3],
+              P->q8);
+    line[sizeof line - 1] = 0;
+    if (strcmp(line, last)) {
+        strcpy(last, line);
+        tagpu_logf("%s", line);
+    }
+}
+
+/* the pointer in the game frame's screen px, with the HUD scale applied (E28) */
+static void pointer_screen(int* x, int* y)
+{
+    *x = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
+    *y = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
+    tagpu_hud_to_screen(x, y);
+}
+
+static int inside(const int16_t r[4], int x, int y)
+{
+    return x >= r[0] && x < r[2] && y >= r[1] && y < r[3];
+}
+
+/* the popup row of the popup last drawn under the screen point, or -1 */
+static int row_at(int x, int y)
+{
+    int i;
+    if (!s_drawn.drawn) return -1;
+    for (i = 0; i < 3; i++)
+        if (inside(s_drawn.row[i], x, y)) return i;
+    return -1;
+}
+
+static int pointer_on_popup(void)
+{
+    int x, y;
+    if (!s_drawn.drawn) return 0;
+    pointer_screen(&x, &y);
+    return inside(s_drawn.pop, x, y);
+}
+
 int tagpu_sweep_fill(TAGPU_PK_SWEEP* h, TAGPU_PK_SWEEPITEM* it, unsigned max, unsigned* n,
                      int* cut)
 {
@@ -788,53 +1013,118 @@ int tagpu_sweep_fill(TAGPU_PK_SWEEP* h, TAGPU_PK_SWEEPITEM* it, unsigned max, un
     Grid g;
     const char *rep, *player;
     const unsigned char* gui;
+    int armed;
     *n = 0; *cut = 0;
-    if (!live(&w)) return 0;
+    if (!s_armed || g_ddraw.renderer != vk_render_main || !tagpu_route_world(&w)) return 0;
+    kind_offer(0);
+    armed = *(const unsigned char*)(w.ta + M_MODE) == 12;
     gui = (const unsigned char*)w.ta + M_GUICOL;
     memset(h, 0, sizeof *h);
-    h->flags = TAGPU_PK_SW_ARMED;
     h->kind = s_kind;
     h->hot = -1;
+    h->style = (uint8_t)tagpu_replays_style_index();
     /* the kind's colour: METAL bar's 224, ENERGY's 208 (the resource bars' palette indices), ALL
        the GUI green */
     h->col[0] = s_kind == SWEEP_METAL ? 224 : s_kind == SWEEP_ENERGY ? 208 : gui[0x0A];
     h->col[1] = gui[0x0A]; h->col[2] = gui[0x0F]; h->col[3] = gui[0x00];
-    if (!grid(w.ta, &g) || !(rep = representative(&w)) || !(player = player_of(&w, rep))) return 1;
-    if (s_g.active && s_g.drag) {
-        int c[3], r = radius(&s_g);
-        unsigned more, nt, k;
-        float metal = 0.0f, energy = 0.0f;
-        centre_px(&s_g, c);
-        if (!coord_ok(c[0]) || !coord_ok(c[1]) || !coord_ok(c[2])) return 1;
-        h->flags |= TAGPU_PK_SW_RING;
-        h->c[0] = c[0]; h->c[1] = c[1]; h->c[2] = c[2]; h->r = r;
-        ring_items(c, r, h->col[1], it, max, n, cut);
-        nt = enumerate(&g, player, c, r, s_kind, s_t, SWEEP_MAX_TARGETS, &more);
-        for (k = 0; k < nt; k++) {
-            TAGPU_PK_SWEEPITEM e;
-            float fm = *(const float*)(s_t[k].f.def + FD_METAL);
-            float fe = *(const float*)(s_t[k].f.def + FD_ENERGY);
-            /* a wreck returns metal (a metal rock counts as one), a tree energy alone; the sums
-               are display only, and an amount that is not a sane one adds nothing */
-            if (fm > 0.0f) h->nwreck++;
-            else if (fe > 0.0f) h->ntree++;
-            if (fm > 0.0f && fm < 1e7f) metal += fm;
-            if (fe > 0.0f && fe < 1e7f) energy += fe;
-            foot_item(&e, TAGPU_PK_SWI_BOX, h->col[0], &s_t[k].f, s_t[k].alt);
-            push_item(it, max, n, cut, &e);
-        }
-        h->metal = metal < 1e9f ? metal : 1e9f;
-        h->energy = energy < 1e9f ? energy : 1e9f;
-    } else if (!s_g.active && (*(const unsigned char*)(w.ta + M_REGION) & 2)) {
-        Feat f;
-        int pos[3];
-        if (feature_at(&g, (const int*)(w.ta + M_POINT), &f) && takes(&f, player, s_kind, pos)) {
-            TAGPU_PK_SWEEPITEM e;
-            foot_item(&e, TAGPU_PK_SWI_HOVER, h->col[0], &f, pos[1] >> 16);
-            if (push_item(it, max, n, cut, &e)) h->flags |= TAGPU_PK_SW_HOVER;
+    if (armed) {
+        Popup P;
+        h->flags = TAGPU_PK_SW_ARMED;
+        if (popup_rect(w.ta, &P)) {
+            int i, px, py;
+            h->flags |= TAGPU_PK_SW_POPUP;
+            for (i = 0; i < 4; i++) { h->pop[i] = (int16_t)P.pop[i]; h->tongue[i] = (int16_t)P.tongue[i]; }
+            pointer_screen(&px, &py);
+            h->hot = (int8_t)row_at(px, py);
+            anchor_log(&P);
+        } else anchor_log(NULL);
+    } else anchor_log(NULL);
+    if (!grid(w.ta, &g)) return armed;
+    if (armed && (rep = representative(&w)) && (player = player_of(&w, rep))) {
+        if (s_g.active && s_g.drag) {
+            int c[3], r = radius(&s_g);
+            unsigned more, nt, k;
+            float metal = 0.0f, energy = 0.0f;
+            centre_px(&s_g, c);
+            if (coord_ok(c[0]) && coord_ok(c[1]) && coord_ok(c[2])) {
+                h->flags |= TAGPU_PK_SW_RING;
+                h->c[0] = c[0]; h->c[1] = c[1]; h->c[2] = c[2]; h->r = r;
+                ring_items(c, r, h->col[1], it, max, n, cut);
+                nt = enumerate(&g, player, c, r, s_kind, s_t, SWEEP_MAX_TARGETS, &more);
+                for (k = 0; k < nt; k++) {
+                    TAGPU_PK_SWEEPITEM e;
+                    float fm = *(const float*)(s_t[k].f.def + FD_METAL);
+                    float fe = *(const float*)(s_t[k].f.def + FD_ENERGY);
+                    /* a wreck returns metal (a metal rock counts as one), a tree energy alone;
+                       the sums are display only, and an amount that is not a sane one adds
+                       nothing */
+                    if (fm > 0.0f) h->nwreck++;
+                    else if (fe > 0.0f) h->ntree++;
+                    if (fm > 0.0f && fm < 1e7f) metal += fm;
+                    if (fe > 0.0f && fe < 1e7f) energy += fe;
+                    foot_item(&e, TAGPU_PK_SWI_BOX, h->col[0], &s_t[k].f, s_t[k].alt);
+                    push_item(it, max, n, cut, &e);
+                }
+                h->metal = metal < 1e9f ? metal : 1e9f;
+                h->energy = energy < 1e9f ? energy : 1e9f;
+            }
+        } else if (!s_g.active && (*(const unsigned char*)(w.ta + M_REGION) & 2) &&
+                   !pointer_on_popup()) {
+            Feat f;
+            int pos[3];
+            if (feature_at(&g, (const int*)(w.ta + M_POINT), &f) && takes(&f, player, s_kind, pos)) {
+                TAGPU_PK_SWEEPITEM e;
+                foot_item(&e, TAGPU_PK_SWI_HOVER, h->col[0], &f, pos[1] >> 16);
+                if (push_item(it, max, n, cut, &e)) h->flags |= TAGPU_PK_SW_HOVER;
+            }
         }
     }
-    return 1;
+    markers(&w, &g, h->col[1], it, max, n, cut);
+    return armed || *n > 0;
+}
+
+/* THE POPUP AS THE PLAYER LAST SAW IT, from the command record (tagpu_packet_pub.c, where the
+   record is applied, before the in-play draw). The render thread wrote it from what its sharp
+   layer drew for one packet, and the record primitive hands it over whole (its prefix and suffix
+   sequence and the slot rotation) as a LEVEL: a later record replaces it, so the hit test below
+   is against the last popup drawn, never one this thread has only published. A record whose
+   sharp layer did not run (`pass` 0) says nothing about the screen and keeps the last verdict.
+   Every value is bounded here, so a wild one costs a missed click, never a wrong row: the rects
+   ordered and within +-TAGPU_PK_SWEEP_RECT, `drawn` 0 or 1. */
+static int rect_sane(const int16_t r[4])
+{
+    return r[0] <= r[2] && r[1] <= r[3] && r[0] >= -TAGPU_PK_SWEEP_RECT && r[1] >= -TAGPU_PK_SWEEP_RECT &&
+           r[2] <= TAGPU_PK_SWEEP_RECT && r[3] <= TAGPU_PK_SWEEP_RECT;
+}
+
+/* what the player sees of the popup, logged when it changes: the rect drawn, or none */
+static void drawn_log(void)
+{
+    static int16_t last[5] = { -1, 0, 0, 0, 0 };
+    int16_t now[5];
+    now[0] = s_drawn.drawn;
+    memcpy(now + 1, s_drawn.pop, sizeof s_drawn.pop);
+    if (!s_drawn.drawn) memset(now + 1, 0, sizeof s_drawn.pop);
+    if (!memcmp(now, last, sizeof now)) return;
+    memcpy(last, now, sizeof now);
+    if (s_drawn.drawn)
+        tagpu_logf("sweep: drawn popup=%d,%d,%d,%d", s_drawn.pop[0], s_drawn.pop[1], s_drawn.pop[2],
+                   s_drawn.pop[3]);
+    else
+        tagpu_logf("sweep: drawn none");
+}
+
+void tagpu_sweep_take(const TAGPU_CMD_SWEEP* c)
+{
+    int i, ok;
+    if (!c) memset(&s_drawn, 0, sizeof s_drawn);
+    else if (c->pass) {
+        ok = c->drawn == 1 && rect_sane(c->pop);
+        for (i = 0; i < 3 && ok; i++) ok = rect_sane(c->row[i]);
+        if (ok) s_drawn = *c;
+        else memset(&s_drawn, 0, sizeof s_drawn);
+    }
+    if (s_armed) drawn_log();
 }
 
 void tagpu_sweep_level_end(void)
@@ -843,7 +1133,10 @@ void tagpu_sweep_level_end(void)
         tagpu_logf("sweep: level end commits=%u issued=%u clicks=%u mismatch=%u listcap=%u "
                    "unassigned=%u trunc=%u", s_cCommit, s_cIssued, s_cClick, s_cMismatch,
                    s_cListCap, s_cUnassigned, s_cTrunc);
+    /* outside play: a kind still pending may wait for the store's lock here */
+    kind_offer(1);
     memset(&s_g, 0, sizeof s_g);
+    memset(&s_drawn, 0, sizeof s_drawn);
     s_taken[0] = s_taken[1] = 0;
     s_actOk = 0;
     s_cCommit = s_cIssued = s_cClick = s_cMismatch = s_cListCap = s_cUnassigned = s_cTrunc = 0;
@@ -856,6 +1149,9 @@ void tagpu_sweep_init(void)
                    "installed; not armed");
         return;
     }
+    /* the store attached in cfg_load, before this; the render thread does not exist yet */
+    s_kind = (unsigned char)tagpu_settings_reclaim_kind();
     s_armed = 1;
     tagpu_logf("sweep: armed");
+    tagpu_logf("sweep: kind %s", kind_name(s_kind));
 }

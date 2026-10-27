@@ -357,6 +357,11 @@ static const char* mod_style(void)
     return s_mods[s_mod < 0 ? MOD_UNKNOWN : s_mod].style;
 }
 
+int tagpu_replays_style_index(void)
+{
+    return style_index(mod_style());
+}
+
 /* ================================================================================================
    The archive's files
    ================================================================================================ */

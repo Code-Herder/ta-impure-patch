@@ -295,7 +295,7 @@ static int deliver_mouse(HWND hwnd, int code, int gx, int gy)
 
     /* The render-options sprocket owns its own 28x28 of the top bar, the
        replay HUD its controls, and the reclaim sweep a right press during its
-       drag; all three are hit-tested HERE as well as on the real-message path
+       drag and a left press on its popup; all three are hit-tested HERE as well as on the real-message path
        below: with the shield armed this is the ONLY path a tacli instance's
        clicks take, and with it disarmed it is the only path a player's do not.
        A press one consumes is dropped whole -- no message and
@@ -387,7 +387,8 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
         int right = msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_RBUTTONDBLCLK;
         int down = msg != WM_LBUTTONUP && msg != WM_RBUTTONUP;
         /* the reclaim sweep follows the engine's view of the mouse: with the shield armed the
-           player's buttons never reach the engine, so they never end its drag either */
+           player's buttons never reach the engine, so they neither end its drag nor pick a row
+           of its popup */
         int took = (!right && msg != WM_LBUTTONDBLCLK && tagpu_menu_click(cx, cy, down)) ||
                    tagpu_hudinput_button(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), cx, cy, down, right) ||
                    (!tagpu_shield_on() && tagpu_sweep_mouse(cx, cy, down, right));

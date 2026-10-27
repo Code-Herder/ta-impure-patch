@@ -80,6 +80,8 @@
 #include "tagpu_surf.h"                    /* the one resolution of the presented palette */
 #include "tagpu_vk.h"                 /* tagpu_vk_ab_arm: the A/B's arming */
 #include "tagpu_log.h"
+#include "tagpu_art.h"                  /* Impure's own art: the reclaim popup and tag */
+#include "tagpu_packet.h"               /* the sweep's header, and its part of the command record */
 #include "dd.h"                         /* g_ddraw.cursor: the pointer the fork last saw (13.5) */
 #include "mouse.h"                      /* mouse_last_client: the pointer at the DEVICE's resolution (13.5) */
 
@@ -1876,7 +1878,8 @@ void tagpu_gui_cursor_frame(const TAGPU_PACKET* pk)
    2026-09-09 on the OpenGL layer this replaced: a quad through a shader that
    adds a flip comes out at the foot of the screen.] There is no flip.
 
-   Its clients are the cursor (13.5) and the minimap (13.6). `sharptest` is
+   Its clients are the cursor (13.5), the minimap (13.6) and the reclaim popup
+   and tag (sharp_sweep). `sharptest` is
    what makes an empty layer testable — without it the gate cannot tell a
    wired layer from a dead one. */
 /* THE CURSOR INTO THE SHARP LAYER, at 1x DEVICE size whatever k is (13.5).
@@ -1896,11 +1899,41 @@ void tagpu_gui_cursor_frame(const TAGPU_PACKET* pk)
    Called from sharp_begin, which records into a layer the consumer clears
    at every present. It runs on the warm-up frame too, one frame BEFORE it may draw, because atlasing the
    shape here is what lets the next tagpu_gui_cursor_frame own it. */
+/* THE POINTER'S DEVICE POINT IN THE LAYER, for the cursor and the reclaim tag beside it: the
+   true client point where one is known, else the engine's own position at the centre of its
+   logical pixel. 1 when it is the client point. */
+static int cursor_point(const TAGPU_FRAME* f, int* dxo, int* dyo)
+{
+    float kx = (f->game_width  > 0) ? (float)f->vp_w / (float)f->game_width  : 1.0f;
+    float ky = (f->game_height > 0) ? (float)f->vp_h / (float)f->game_height : 1.0f;
+    int cx = 0, cy = 0, dx, dy, dev;
+    if (mouse_last_client(&cx, &cy)) {
+        dx = cx - f->vp_x; dy = cy - f->vp_y; dev = 1;
+    } else {
+        int gx = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
+        int gy = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
+        /* HUD SCALE (20): this is the ENGINE's point, and over a HUD region
+           the pointer chain divided it by s on the way in. Put it back before
+           it becomes device pixels, or our cursor sits at a fraction of where
+           the player is pointing. The client-point branch above needs none of
+           this -- it never left device space. */
+        tagpu_hud_to_screen(&gx, &gy);
+        dx = (int)(((float)gx + 0.5f) * kx);
+        dy = (int)(((float)gy + 0.5f) * ky);
+        dev = 0;
+    }
+    /* clamped to the layer, which is the letterboxed viewport: the same edge
+       clamp wndproc applies to the engine's own copy of the point */
+    if (dx < 0) dx = 0; else if (dx > s_sharpW - 1) dx = s_sharpW - 1;
+    if (dy < 0) dy = 0; else if (dy > s_sharpH - 1) dy = s_sharpH - 1;
+    *dxo = dx; *dyo = dy;
+    return dev;
+}
+
 static void sharp_cursor(const TAGPU_FRAME* f)
 {
     const TAGPU_GAFENT* e;
-    float kx, ky;
-    int cx = 0, cy = 0, dx, dy, x0, y0, w, h;
+    int dx, dy, x0, y0, w, h;
     /* THIS IS A CLIENT OF THE SHARP LAYER: it resolves the cursor's rect from
        a mouse position read on THIS thread at THIS instant and records it with
        `mir_sdraw` for tagpu_vk_gui.c, which is the only copy of that answer
@@ -1916,27 +1949,7 @@ static void sharp_cursor(const TAGPU_FRAME* f)
         return;
     }
     if (!s_curOwn) return;               /* the warm-up frame: atlased above, drawn from the next */
-    kx = (f->game_width  > 0) ? (float)f->vp_w / (float)f->game_width  : 1.0f;
-    ky = (f->game_height > 0) ? (float)f->vp_h / (float)f->game_height : 1.0f;
-    if (mouse_last_client(&cx, &cy)) {
-        dx = cx - f->vp_x; dy = cy - f->vp_y; s_curDev = 1;
-    } else {
-        int gx = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
-        int gy = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
-        /* HUD SCALE (20): this is the ENGINE's point, and over a HUD region
-           the pointer chain divided it by s on the way in. Put it back before
-           it becomes device pixels, or our cursor sits at a fraction of where
-           the player is pointing. The client-point branch above needs none of
-           this -- it never left device space. */
-        tagpu_hud_to_screen(&gx, &gy);
-        dx = (int)(((float)gx + 0.5f) * kx);
-        dy = (int)(((float)gy + 0.5f) * ky);
-        s_curDev = 0;
-    }
-    /* clamped to the layer, which is the letterboxed viewport: the same edge
-       clamp wndproc applies to the engine's own copy of the point */
-    if (dx < 0) dx = 0; else if (dx > s_sharpW - 1) dx = s_sharpW - 1;
-    if (dy < 0) dy = 0; else if (dy > s_sharpH - 1) dy = s_sharpH - 1;
+    s_curDev = cursor_point(f, &dx, &dy);
     w = (int)((float)s_curW * s_cursorScale + 0.5f);
     h = (int)((float)s_curH * s_cursorScale + 0.5f);
     if (w <= 0 || h <= 0) return;
@@ -1983,6 +1996,120 @@ static void sharp_cursor(const TAGPU_FRAME* f)
               (float)(x0 + w), (float)(y0 + h),
               e->u0, e->v0, e->u1, e->v1, NULL, (int)e->ck);
     s_curDrawn++;
+}
+
+/* THE RECLAIM SWEEP'S POPUP AND TAG (tagpu_sweep.c), from this frame's packet: the popup off the
+   RECLAIM gadget's row -- the plate, the tongue, a bar per kind with its pip lit for the kind in
+   force and its label lit under the pointer -- and the kind's tag beside the cursor, while armed.
+   Every part is a frame of Impure's own art (tagpu_art.h: immutable for the process, any thread
+   may read it), put into the UI atlas when it is not there and drawn as a quad of the cursor's
+   kind, the atlas through the presented palette with its colour key. A part that is not in the
+   atlas yet draws none of the popup this frame, so a popup is never half drawn and the next frame
+   draws it whole. `tagpu_gaf_atlas_put` never moves the atlas's generation (an atlas that fills
+   answers NULL and flags itself for the next drain's reset), so the rects resolved here stand
+   until `mir_finish`, which `mir_atlas_seen` holds it to.
+
+   The popup's rects are the packet's, game-frame screen px with the HUD scale applied, so a
+   device rect is that times the layer's (vp_w / game_width, vp_h / game_height); the tag is
+   drawn at the cursor's device size and offset (13, 20) from its point, both times `cursorscale=`
+   as the cursor is.
+
+   WHAT WAS DRAWN GOES BACK TO THE GAME THREAD, which hit-tests a click against it rather than
+   against what it has published since (tagpu_sweep_mouse): `s_swCmd` is written here, read and
+   emptied by the command record at the end of this same render frame (tagpu_gui_sweep_cmd,
+   from tagpu_zoom_frame_end), all on this thread. */
+static TAGPU_CMD_SWEEP s_swCmd;
+static unsigned s_swDrawn;              /* popups and tags drawn, for the layer's ink */
+
+static const char* const SWEEP_STYLES[3] = { "retail", "escalation", "twilight" };
+
+/* the atlas entry of `fr`, put there from Impure's art when it is absent */
+static const TAGPU_GAFENT* sweep_ent(const TAGPU_ART_FRAME* fr)
+{
+    const TAGPU_GAFENT* e;
+    if (!fr || !fr->w || !fr->h) return NULL;
+    e = tagpu_gaf_atlas_find(&s_atlas, fr, fr->pix, fr->w, fr->h);
+    if (!e) e = tagpu_gaf_atlas_put(&s_atlas, fr, fr->pix, fr->w, fr->h, fr->key, fr->pix, 1);
+    return e;
+}
+
+static const TAGPU_ART_FRAME* sweep_frame(const char* style, const char* name, int i)
+{
+    const TAGPU_ART_ENTRY* a = tagpu_art_entry(style, name);
+    return a && i >= 0 && i < a->nframes ? &a->frames[i] : NULL;
+}
+
+static void sweep_quad(const TAGPU_GAFENT* e, float x0, float y0, float x1, float y1)
+{
+    mir_sdraw(TAGPU_GUISK_CURSOR, x0, y0, x1, y1, e->u0, e->v0, e->u1, e->v1, NULL, (int)e->ck);
+}
+
+static void sharp_sweep(const TAGPU_FRAME* f)
+{
+    const TAGPU_PACKET* pk = f->packet;
+    const TAGPU_PK_SWEEP* h = pk ? tagpu_pk_sweep(pk) : NULL;
+    const char* style;
+    float kx, ky;
+    memset(&s_swCmd, 0, sizeof s_swCmd);
+    s_swCmd.pass = 1;
+    if (!h || !(h->flags & TAGPU_PK_SW_ARMED) || !s_atlas.made || !s_sharpW || !s_sharpH) return;
+    style = SWEEP_STYLES[h->style < 3 ? h->style : 0];
+    kx = (f->game_width  > 0) ? (float)f->vp_w / (float)f->game_width  : 1.0f;
+    ky = (f->game_height > 0) ? (float)f->vp_h / (float)f->game_height : 1.0f;
+    if (h->flags & TAGPU_PK_SW_POPUP) {
+        const TAGPU_GAFENT *plate, *tongue, *bar[3], *label[3];
+        int i, ok;
+        int16_t row[3][4];
+        /* the rows inside the plate as the fill laid them: 6 px in, 21 apart, 112 x 18 (scaled) */
+        float s = (float)(h->pop[2] - h->pop[0]) / 124.0f;
+        plate  = sweep_ent(sweep_frame(style, "sweep-plate", 0));
+        tongue = sweep_ent(sweep_frame(style, "sweep-tongue", 0));
+        ok = plate && tongue;
+        for (i = 0; i < 3; i++) {
+            bar[i]   = sweep_ent(sweep_frame(style, "sweep-bar", i == h->kind ? 1 : 0));
+            label[i] = sweep_ent(sweep_frame(style, "sweep-label", 2 * i + (i == h->hot ? 1 : 0)));
+            ok = ok && bar[i] && label[i];
+            row[i][0] = (int16_t)(h->pop[0] + (int)(6.0f * s + 0.5f));
+            row[i][1] = (int16_t)(h->pop[1] + (int)((6.0f + 21.0f * (float)i) * s + 0.5f));
+            row[i][2] = (int16_t)(row[i][0] + (int)(112.0f * s + 0.5f));
+            row[i][3] = (int16_t)(row[i][1] + (int)(18.0f * s + 0.5f));
+        }
+        /* only a frame the mirror records puts the popup on the screen, and only such a frame
+           may tell the game thread it is there */
+        if (ok && s > 0.0f && s_mirRec) {
+            mir_atlas_seen();
+            sweep_quad(plate, h->pop[0] * kx, h->pop[1] * ky, h->pop[2] * kx, h->pop[3] * ky);
+            sweep_quad(tongue, h->tongue[0] * kx, h->tongue[1] * ky, h->tongue[2] * kx, h->tongue[3] * ky);
+            for (i = 0; i < 3; i++) {
+                sweep_quad(bar[i], row[i][0] * kx, row[i][1] * ky, row[i][2] * kx, row[i][3] * ky);
+                sweep_quad(label[i], row[i][0] * kx, row[i][1] * ky, row[i][2] * kx, row[i][3] * ky);
+            }
+            s_swCmd.drawn = 1;
+            memcpy(s_swCmd.pop, h->pop, sizeof s_swCmd.pop);
+            memcpy(s_swCmd.row, row, sizeof s_swCmd.row);
+            s_swDrawn++;
+        }
+    }
+    {
+        const TAGPU_ART_FRAME* fr = sweep_frame(style, "sweep-tag", h->kind);
+        const TAGPU_GAFENT* e = sweep_ent(fr);
+        int dx, dy;
+        if (e) {
+            float x0, y0;
+            cursor_point(f, &dx, &dy);
+            x0 = (float)dx + 13.0f * s_cursorScale;
+            y0 = (float)dy + 20.0f * s_cursorScale;
+            mir_atlas_seen();
+            sweep_quad(e, x0, y0, x0 + (float)fr->w * s_cursorScale, y0 + (float)fr->h * s_cursorScale);
+            s_swDrawn++;
+        }
+    }
+}
+
+void tagpu_gui_sweep_cmd(TAGPU_CMD_SWEEP* out)
+{
+    *out = s_swCmd;
+    memset(&s_swCmd, 0, sizeof s_swCmd);
 }
 
 /* THE MINIMAP'S BASE AT ITS NATIVE SIZE (13.6).
@@ -2309,7 +2436,7 @@ static void sharp_begin(const TAGPU_FRAME* f)
 {
     /* THIS FUNCTION IS THE SHARP LAYER'S FRAME. It decides
        `s_sharpOn`/`s_sharpInk` -- which draw_layer and mir_finish hand to
-       tagpu_vk_gui.c -- and it runs the two clients whose `mir_sdraw` records
+       tagpu_vk_gui.c -- and it runs the clients whose `mir_sdraw` records
        ARE the layer. The image and its clear are the consumer's. */
     int w = f->vp_w, h = f->vp_h;
     s_sharpOn = 0;
@@ -2317,7 +2444,7 @@ static void sharp_begin(const TAGPU_FRAME* f)
        had coverage and then took the early return below would publish
        `sharpOn = 1` with no quads for ever -- which tagpu_vk_gui.c reads as
        "coverage I was given no quad for" and composites nothing on every such
-       frame. Re-decided from the two clients' own counters at the tail. */
+       frame. Re-decided from the clients' own counters at the tail. */
     s_sharpInk = 0;
     if (w <= 0 || h <= 0 || w > 8192 || h > 8192) return;
     /* the layer's SPACE is the frame's viewport, and that is true with no
@@ -2341,18 +2468,19 @@ static void sharp_begin(const TAGPU_FRAME* f)
             mir_sdraw(TAGPU_GUISK_FLAT, 100.0f, 0.0f, 101.0f, (float)h, 0, 0, 0, 0, white, 0);
         }
     }
-    /* the two clients, and whether either of them put anything there. Their
-       own counters answer it, so neither function grows a flag of its own. */
+    /* the clients, and whether any of them put anything there. Their own
+       counters answer it, so no function grows a flag of its own. */
     {
-        unsigned c0 = s_curDrawn, m0 = s_mmDrawn;
+        unsigned c0 = s_curDrawn, m0 = s_mmDrawn, w0 = s_swDrawn;
         /* THE CURSOR LAST, because that is where the engine puts it: its own
            draw is inside the flip (0x4C67C0), after every surface the frame
            composed. Recorded before the minimap, the minimap's quad covered it
            and the pointer vanished whenever it crossed the minimap.
            [FOUND 2026-09-23, the owner's report.] */
         sharp_minimap(f);               /* 13.6's base, behind `mmbase` while it is alone */
+        sharp_sweep(f);                 /* the reclaim popup and tag, under the cursor */
         sharp_cursor(f);                /* 13.5's cursor: the layer's first real client */
-        s_sharpInk = (s_sharptest || s_curDrawn != c0 || s_mmDrawn != m0) ? 1 : 0;
+        s_sharpInk = (s_sharptest || s_curDrawn != c0 || s_mmDrawn != m0 || s_swDrawn != w0) ? 1 : 0;
     }
     /* a future client recording here must not assume draw_layer ran: it can
        return early */

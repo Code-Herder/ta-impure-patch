@@ -335,9 +335,11 @@ typedef struct TAGPU_PK_PLACE {
 #define TAGPU_PK_PLACE_COORD   0x100000  /* a world coordinate's sanity bound    */
 
 /* THE RECLAIM SWEEP (tagpu_sweep.c, on the game thread, copied BY VALUE): at
-   most one header, while RECLAIM is armed, and its items. The ring is drawn
-   through its points, each target and the feature under the cursor bracketed,
-   and the readout written from the header's counts and sums. The acquire
+   most one header, while RECLAIM is armed or a selected builder has reclaim
+   orders, and its items. The ring is drawn through its points, each target and
+   the feature under the cursor bracketed, the readout written from the
+   header's counts and sums, each builder's queue drawn as a path through its
+   features, and the popup and the cursor's tag drawn from the header. The acquire
    bounds every field below (tagpu_packet.c), so a consumer reads them as
    given: the header's kind, style, hot row and flags to their enums, its rects
    ordered and within +-TAGPU_PK_SWEEP_RECT, its centre and radius within
@@ -375,21 +377,31 @@ typedef struct TAGPU_PK_SWEEPITEM {
     uint8_t  kind;            /* TAGPU_PK_SWI_*                                 */
     uint8_t  colour;          /* a palette index                                */
     uint16_t n;               /* QBOX: the ordinal, 1..1024; QPATH: the builder's
-                                 slot, or 0                                     */
+                                 slot on its start, 0 on a point                */
     int32_t  x, h, z;         /* a point, or a footprint's corner (world px)    */
     int16_t  w, d;            /* the footprint's size, world px: 16..256        */
-    int16_t  top;             /* the feature's height, 0..255                   */
+    int16_t  top;             /* the feature's height, 0..255; QPATH: 1 on the
+                                 path's start (slot 0 is a slot), 0 on a point  */
     int16_t  pad;
 } TAGPU_PK_SWEEPITEM;
 
 #define TAGPU_PK_SWI_RINGPT 0u  /* one point of the ring, in order              */
 #define TAGPU_PK_SWI_BOX    1u  /* a target inside the ring: a footprint        */
 #define TAGPU_PK_SWI_HOVER  2u  /* the feature of the kind under the cursor     */
-#define TAGPU_PK_SWI_QPATH  3u  /* a builder's queue path: its start, then a
-                                   point per queued feature                     */
+#define TAGPU_PK_SWI_QPATH  3u  /* a builder's queue path: its start, at the unit's
+                                   position, then a point per queued feature    */
 #define TAGPU_PK_SWI_QBOX   4u  /* a queued feature, with its ordinal           */
-#define TAGPU_PK_MAX_SWEEP  3200u
-#define TAGPU_PK_SWEEP_RINGPTS 128u   /* the ring's points, at most              */
+/* THE ITEM BUDGET: the ring's points, the targets (SWEEP_MAX_TARGETS), the
+   hovered feature and the queue markers' own cap, each cut on its own, so
+   one never starves another and the table never passes its sum. 256 points
+   keep a ring of 4096 world px, the scan's bound, within a third of a pixel of
+   round at zoom 2 (the sagitta r(1 - cos(pi/256)) = 0.3 px at r = 8192 screen
+   px), the case a 3840 x 2160 screen reaches. */
+#define TAGPU_PK_SWEEP_RINGPTS 256u   /* the ring's points, at most              */
+#define TAGPU_PK_SWEEP_TARGETS 1024u  /* the targets bracketed, at most          */
+#define TAGPU_PK_SWEEP_QUEUE   2048u  /* the queue markers' items, at most       */
+#define TAGPU_PK_MAX_SWEEP  (TAGPU_PK_SWEEP_RINGPTS + TAGPU_PK_SWEEP_TARGETS + 1u + \
+                             TAGPU_PK_SWEEP_QUEUE)
 
 /* ---- THE EFFECTS AND THE PARTICLE LAYERS --------------------------------
    The engine's four per-frame effect arrays, copied by the thread that owns
@@ -1190,6 +1202,21 @@ typedef struct TAGPU_CMD_HUD {
     TAGPU_CMD_HUDHIT hit[TAGPU_CMD_HUDHITS];
 } TAGPU_CMD_HUD;
 
+/* THE RECLAIM SWEEP'S POPUP AS IT WAS DRAWN, in the command record: the rects
+   the sharp layer drew it at (tagpu_gui_surf.c, sharp_sweep), in the game
+   frame's screen px with the HUD scale applied, for the game thread to
+   hit-test a click against what the player saw (tagpu_sweep.c). A LEVEL, as
+   the HUD's hit map is: a frame that drew no popup posts drawn = 0, and `pass`
+   tells a frame whose sharp layer ran from one where none ran since the last
+   record, whose rects say nothing about the screen. */
+typedef struct TAGPU_CMD_SWEEP {
+    uint8_t  drawn;             /* the popup was drawn, at the rects below      */
+    uint8_t  pass;              /* the sharp layer ran for this record          */
+    uint8_t  pad[2];
+    int16_t  pop[4];            /* x0, y0, x1, y1: [x0, x1) x [y0, y1)          */
+    int16_t  row[3][4];         /* METAL, ENERGY, ALL                           */
+} TAGPU_CMD_SWEEP;
+
 /* THE COMMAND RECORD — render thread to game thread. One record
    per render frame, latest wins: every quantity in it is either a LEVEL (the
    game thread re-applies it before every in-play draw for as long as it
@@ -1225,6 +1252,7 @@ typedef struct TAGPU_CMD {
     uint32_t follow_seen;       /* the latest follow epoch the render thread
                                    drew at its level: a Jump ends there       */
     TAGPU_CMD_HUD hud;          /* the replay HUD's controls, a level         */
+    TAGPU_CMD_SWEEP sweep;      /* the reclaim popup as drawn, a level        */
     uint32_t crc;               /* the primitive's suffix, as above            */
     uint32_t tail_seq;
 } TAGPU_CMD;

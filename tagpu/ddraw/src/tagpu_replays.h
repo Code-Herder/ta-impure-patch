@@ -61,4 +61,8 @@ int  tagpu_replays_unmarked_delete(const char* file, HANDLE recording);
    Watch's header check with the browser on top, or on the level, at its first step. */
 void tagpu_replays_refused(const char* file, unsigned code, unsigned a, unsigned b);
 
+/* The art style of the mod the main menu identified, as tagpu_art.h names them: 0 retail,
+   1 escalation, 2 twilight; retail's until the first main-menu visit. GAME THREAD. */
+int  tagpu_replays_style_index(void);
+
 #endif

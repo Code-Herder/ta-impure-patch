@@ -3235,6 +3235,8 @@ static int __cdecl before_draw(void* entry_esp)
         c = tagpu_cmd_take();
         /* the replay HUD's controls as the player last saw them, for a click before the next take */
         tagpu_hudinput_take(c ? &c->hud : NULL);
+        /* the reclaim popup as last drawn, for a click before the next take */
+        tagpu_sweep_take(c ? &c->sweep : NULL);
         /* THE CAMERA AND THE RECT, THEN THE TERRAIN LATCH: the eye may only
            be off the engine's range, and the rect only wide, on a draw whose
            ground is ours. The render thread's request is read ONCE, the camera

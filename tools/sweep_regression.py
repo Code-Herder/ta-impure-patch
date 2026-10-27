@@ -8,6 +8,17 @@ the chosen kind inside it, shared nearest-first; the RECLAIM gadget's quickkey c
     sweep_regression.py <instance> preview   a ring held mid-drag: the marker pass's count; then
                                              the zoom lever's 0.5: (c) again, the drag's radius and the
                                              drag threshold
+    sweep_regression.py <instance> markers   the queue markers' count after a ring, deselected,
+                                             one builder selected, and with Shift held
+    sweep_regression.py <instance> popup     the popup's anchor and drawn rect, a row click, the
+                                             cursor over it, the same at the zoom lever's 0.5; at
+                                             whatever HUD scale the instance runs
+    sweep_regression.py <instance> kindsave  ENERGY chosen, the level ended and the instance
+                                             relaunched: impure.cfg and the first arming carry it
+                                             (takes --launch)
+
+`--hold-for S` keeps each state the owner wants a picture of for S seconds, printing a
+`sweep-capture:` line as it starts, for the runner to capture from the live display.
 
 Each mode plays on scenarios/sweep-basic.json, handed the level held (resource_regression.py,
 IN LOCKSTEP): tareplay's `run` step hands `replay` over at its GameTime; `core` and `preview`
@@ -38,6 +49,7 @@ list alone, so a native feature in the ring joins the expectation instead of fai
 import argparse
 import importlib.util
 import math
+import re
 import struct
 import subprocess
 import sys
@@ -111,16 +123,56 @@ def sweep_line(line):
     return kind, fields
 
 
-def mark_sweep_count(line):
+def mark_sweep_count(line, key="sweep"):
     """The marker pass's count of sweep brackets drawn, from its status line (tagpu_mark.c,
-    `mark: bars=.. ... sweep=N ...`, every 120 frames under mark.on=log), or None."""
+    `mark: bars=.. ... sweep=N sweepq=Q ...`, every 120 frames under mark.on=log): `sweep` the
+    ring's targets, `sweepq` the queued features; None for any other line."""
     if not line.lstrip().startswith("mark: bars="):
         return None
     for w in line.split():
         k, eq, v = w.partition("=")
-        if eq and k == "sweep" and v.isdigit():
+        if eq and k == key and v.isdigit():
             return int(v)
     return None
+
+
+def anchor_line(line):
+    """tagpu_sweep.c's anchor line as a dict, or None:
+        sweep: anchor gadget=ARMRECLAIM rect=5,300,55,31 popup=129,279,253,351 q8=256
+    `rect` the gadget's x, y, w, h in the engine's 1x units, `popup` the screen rect x0, y0, x1, y1."""
+    at = line.find("sweep: anchor ")
+    if at < 0:
+        return None
+    out = {}
+    for w in line[at + len("sweep: anchor "):].split():
+        k, _, v = w.partition("=")
+        out[k] = v if k == "gadget" else [int(x) for x in v.split(",")]
+    return out
+
+
+def drawn_line(line):
+    """tagpu_sweep.c's drawn line: the popup rect the render thread drew, [] for none, or None."""
+    at = line.find("sweep: drawn ")
+    if at < 0:
+        return None
+    rest = line[at + len("sweep: drawn "):].strip()
+    return [] if rest == "none" else [int(x) for x in rest.partition("=")[2].split(",")]
+
+
+def popup_geometry(b, q8, H):
+    """tagpu_sweep.c's popup_rect for the gadget rect `b` (x, y, w, h), the HUD scale `q8` and the
+    engine's screen height `H`: (pop, rows), screen rects x0, y0, x1, y1; None when not shown."""
+    if (b[0] < 0 or b[0] + b[2] > 128 or b[1] < 32 or (b[1] + b[3] + 32) * q8 > H * 256):
+        return None
+    lo, hi = 34, H * 256 // q8 - 32 - 72 - 2
+    if hi < lo:
+        return None
+    y0 = min(max(b[1] + b[3] // 2 - 36, lo), hi)
+
+    def scr(x, y, w, h):
+        f = lambda v: (v * q8 + 128) >> 8
+        return [f(x), f(y), f(x + w), f(y + h)]
+    return scr(129, y0, 124, 72), [scr(135, y0 + 6 + 21 * i, 112, 18) for i in range(3)]
 
 
 def tacli(*args, timeout=600):
@@ -771,18 +823,176 @@ def replay(s):
     print(f"sweep-replay: METAL and Shift ENERGY rings committed; reclaim orders {total}")
 
 
-def held_count(s, what):
-    """The second marker-pass status line's sweep= after the pointer stopped (the first may have
+def held_count(s, what, key="sweep"):
+    """The second marker-pass status line's `key`= after the pointer stopped (the first may have
     drawn a packet filled before the last move was handled)."""
     start = s.mark()
     end = time.monotonic() + 3 * ACK_S
     while True:
         s.mark()
-        counts = [c for c in map(mark_sweep_count, s.log[start:]) if c is not None]
+        counts = [c for c in (mark_sweep_count(ln, key) for ln in s.log[start:]) if c is not None]
         if len(counts) >= 2:
             return counts[1]
-        assert time.monotonic() < end, f"{what}: no two `mark:` status lines with sweep= in {3 * ACK_S} s"
+        assert time.monotonic() < end, f"{what}: no two `mark:` status lines with {key}= in {3 * ACK_S} s"
         time.sleep(0.2)
+
+
+HOLD_FOR = 0.0          # --hold-for: seconds each picture's state is held for the runner
+
+
+def capture(what):
+    """A state the owner wants a picture of: announced, then held for --hold-for seconds."""
+    if HOLD_FOR > 0:
+        print(f"sweep-capture: {what} (held {HOLD_FOR:g} s)", flush=True)
+        time.sleep(HOLD_FOR)
+
+
+class MarkLog:
+    """tagpu_mark.on with `log` for the marker pass's status line, put back afterwards."""
+    def __init__(self, gamedir):
+        self.lever = gamedir / "tagpu_mark.on"
+        self.old = self.lever.read_text() if self.lever.exists() else None
+
+    def __enter__(self):
+        words = (self.old or "").split()
+        self.lever.write_text(" ".join(words + ([] if "log" in (w.lower() for w in words) else ["log"])) + "\n")
+        return self
+
+    def __exit__(self, *exc):
+        if self.old is None:
+            self.lever.unlink(missing_ok=True)
+        else:
+            self.lever.write_text(self.old)
+
+
+def queued(s, names):
+    """The reclaim-family orders of `names`, whose features stand: what the markers bracket."""
+    return sum(len(s.targets(b)) for b in names)
+
+
+def markers(s, gamedir):
+    """L2a: after an ALL ring the queue markers bracket every selected builder's reclaim orders;
+    none with nothing selected; one builder's alone when it alone is selected; still drawn with
+    Shift held."""
+    with MarkLog(gamedir):
+        setup(s)
+        s.clear()
+        s.arm()
+        s.set_kind("ALL")
+        pc, pe, start = s.drag(*BIG)
+        s.commit_line(start, "the ALL ring")
+        want = queued(s, s.builders)
+        assert want > 0, "the ALL ring queued nothing"
+        got = held_count(s, "(L2a) all selected", "sweepq")
+        assert got == want, f"(L2a) sweepq={got} with every builder selected, want {want}"
+        capture("the queue markers of three builders")
+        s.keys("esc")
+        s.once(not any(s.values(f"0x{s.address(b) + 0x110:x}")[0] & 0x10 for b in s.builders),
+               "(L2a) Esc left a builder selected")
+        got = held_count(s, "(L2a) none selected", "sweepq")
+        assert got == 0, f"(L2a) sweepq={got} with nothing selected"
+        s.select("CK1")
+        want = queued(s, ["CK1"])
+        got = held_count(s, "(L2a) one selected", "sweepq")
+        assert got == want, f"(L2a) sweepq={got} with CK1 alone selected, want {want}"
+        s.press("shift")
+        got = held_count(s, "(L2a) Shift held", "sweepq")
+        s.lift("shift")
+        assert got == want, f"(L2a) sweepq={got} with Shift held, want {want}"
+        print(f"sweep-markers: sweepq follows the selection ({want} for CK1 alone)")
+
+
+def engine_point(sx, sy, q8):
+    """The engine's point for a screen point in the world region at HUD scale q8: the screen point
+    less (128s - 128, 32s - 32) (tagpu_hud.h, the pointer map's world branch) [ASSUMED: the
+    rounding of 128s and 32s is tagpu_hud_bands'; exact at q8 256]."""
+    pw, bh = (128 * q8 + 128) >> 8, (32 * q8 + 128) >> 8
+    return sx - (pw - 128), sy - (bh - 32)
+
+
+def popup(s, gamedir):
+    """L3a/L3b: armed, the anchor line names the RECLAIM gadget and the popup rect popup_geometry
+    gives for it; the render thread drew it there; a click on the ENERGY row's centre picks
+    ENERGY with no order, no gesture and the mode kept; the pointer over the popup is the engine's
+    nothing; then at the zoom lever's 0.5 a click on the METAL row picks METAL."""
+    zoomfile, ztmp = gamedir / "tagpu_zoom.txt", gamedir / "tagpu_zoom.txt.tmp"
+    with MarkLog(gamedir):
+        try:
+            popup_cases(s, zoomfile, ztmp)
+        finally:
+            zoomfile.unlink(missing_ok=True)
+
+
+def popup_cases(s, zoomfile, ztmp):
+    setup(s)
+    s.clear()
+    start = s.mark()
+    s.arm()
+    s.set_kind("ALL")
+    end = time.monotonic() + ACK_S
+    while True:
+        s.mark()
+        anchors = [a for a in map(anchor_line, s.log[start:]) if a]
+        drawn = [d for d in map(drawn_line, s.log[start:]) if d is not None]
+        if anchors and drawn and drawn[-1]:
+            break
+        assert time.monotonic() < end, f"(L3a) no anchor and drawn popup lines in {ACK_S} s: {anchors} {drawn}"
+        time.sleep(0.2)
+    a = anchors[-1]
+    H = s.values(f"{MAIN}+0x37e23")[0]
+    geo = popup_geometry(a["rect"], a["q8"][0], H)
+    assert "RECLAIM" in a["gadget"] and geo, f"(L3a) the anchor {a} (screen height {H})"
+    pop, rows = geo
+    assert a["popup"] == pop and drawn[-1] == pop, \
+        f"(L3a) the popup at {a['popup']}, drawn at {drawn[-1]}, the geometry gives {pop}"
+    q8 = a["q8"][0]
+    capture(f"the armed popup at q8 {q8}")
+    for zoom, row, kind in ((None, 1, "ENERGY"), ("0.5", 0, "METAL")):
+        what = f"(L3{'a' if zoom is None else 'b'}) a click on the {kind} row" + \
+               (f" at zoom {zoom}" if zoom else "")
+        if zoom:
+            ztmp.write_text(zoom)
+            ztmp.replace(zoomfile)
+            # two marker-pass status lines: frames drawn at the lever's level since
+            held_count(s, "the zoom lever's 0.5")
+        before = s.lists()
+        r = rows[row]
+        x, y = engine_point((r[0] + r[2]) // 2, (r[1] + r[3]) // 2, q8)
+        start = s.mark()
+        s.keys(f"pmove:{x},{y}")
+        assert s.cursor() == NOTHING, f"{what}: the cursor over the popup is 0x{s.cursor():x}, want 0x13"
+        s.press("lbutton")
+        s.lift("lbutton")
+        got = s.lines(start, "kind")
+        assert got and got[-1]["kind"] == kind, f"{what}: the kind lines {got}"
+        s.no_commit(start, what)
+        assert s.lists() == before and s.mode() == 12, f"{what}: mode {s.mode()}, lists {s.lists()}"
+    print(f"sweep-popup: anchored at {a['gadget']} {a['rect']}, drawn at {pop} (q8 {q8}); "
+          f"the ENERGY and, at zoom 0.5, the METAL row picked")
+
+
+def kindsave(s, instance):
+    """L3c: ENERGY chosen and the level ended -- the store takes a pending kind there -- then the
+    instance stopped: impure.cfg holds reclaimkind=energy; relaunched, the first arming is ENERGY."""
+    setup(s)
+    s.arm()
+    s.set_kind("ENERGY")
+    s.clear()
+    level_end(s)
+    tacli("stop", instance, timeout=300)
+    text = (s.gamedir / "impure.cfg").read_text()
+    assert re.search(r"(?im)^reclaimkind=energy$", text), \
+        f"(L3c) impure.cfg after the stop: {[ln for ln in text.splitlines() if 'reclaim' in ln.lower()]}"
+    (s.gamedir / "tagpu_hold.on").write_text("")
+    tacli("scenario", "load", instance, SCENARIO, "--defaults", timeout=900)
+    t = Sweep(instance)
+    t.hold()
+    t.eye(*EYE)
+    t.select(*t.builders)
+    t.arm()
+    assert t.kind() == "ENERGY", f"(L3c) the first arming after the relaunch is {t.kind()}"
+    t.release()
+    print("sweep-kindsave: reclaimkind=energy in impure.cfg, and the relaunch arms ENERGY")
 
 
 def threshold(s, zoom):
@@ -873,18 +1083,26 @@ def launched(instance, mode):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("instance")
-    p.add_argument("mode", choices=("core", "replay", "preview"))
+    p.add_argument("mode", choices=("core", "replay", "preview", "markers", "popup", "kindsave"))
     p.add_argument("--launch", action="store_true",
-                   help="core/preview: launch the instance on sweep-basic.json first (run lock)")
+                   help="launch the instance on sweep-basic.json first (run lock); not for replay")
+    p.add_argument("--hold-for", type=float, default=0.0,
+                   help="seconds to hold each state the owner wants a picture of")
     a = p.parse_args()
+    global HOLD_FOR
+    HOLD_FOR = a.hold_for
     if a.launch and a.mode == "replay":
         p.error("replay runs inside its test group (tools/replay/fixtures.json, sweep-basic)")
+    if a.mode == "kindsave" and not a.launch:
+        p.error("kindsave relaunches the instance: it takes --launch")
     stop = None
     try:
         if a.launch:
             stop = launched(a.instance, a.mode)
         check = Sweep(a.instance)
-        run = {"core": core, "replay": replay, "preview": lambda c: preview(c, c.gamedir)}[a.mode]
+        run = {"core": core, "replay": replay, "preview": lambda c: preview(c, c.gamedir),
+               "markers": lambda c: markers(c, c.gamedir), "popup": lambda c: popup(c, c.gamedir),
+               "kindsave": lambda c: kindsave(c, a.instance)}[a.mode]
         # As place_regression.py: the case's own failure is the exit reason and is printed first;
         # a cleanup step that fails after it is reported beside it, never in its place.
         failures, raised = [], True
