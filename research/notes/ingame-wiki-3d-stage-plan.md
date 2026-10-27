@@ -946,7 +946,7 @@ whole pixels, so the image may sit up to half a pixel from the fit; the mockup s
 way, and the ops are drawn from the unsnapped fit in both.
 
 **Gate**: `tagpu_wikipk.h` reaches three sim files through `tagpu_packet.h`; `tareplay.py
-landing`: GATE_RESULT. **Review: high** (a render pass and a composite added to the frame, per-slot
+landing` (from `main`): pass, 35 groups, noted on `2e8fad37` (MEASURED 2026-10-27). **Review: high** (a render pass and a composite added to the frame, per-slot
 resources, the record's growth).
 
 ### Landing 6h — units in 3D
