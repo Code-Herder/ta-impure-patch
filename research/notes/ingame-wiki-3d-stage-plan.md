@@ -778,8 +778,9 @@ until bounded against that file; the loader reads no engine memory and paints no
   unnamed: `AFark.ufo` (keyed, LZ77) 67 read whole, 933 refused; `CorNecro.ufo` (plain, zlib) 13
   and 987; `objects3d\armck.3do` 95 built, 905 refused (18, 14 and 10 kinds of refusal).
 - `tools/wiki_regression.py <instance> asset --launch` on a private Xvfb: the game's report equals
-  the native load over the instance's 31 mounts field for field, refusals' words included;
-  `wiki3d: loaded in 49.8 ms - arena 246059 bytes`, 2 of 2 grounds and 9 of 9 unit types.
+  the native load over the instance's 31 mounts field for field, refusals' words and hidden
+  pieces included; `wiki3d: loaded in 57.4 ms - arena 247255 bytes`, 2 of 2 grounds and 9 of 9
+  unit types.
 
 **Not done here**: the mount list is read once a process, so an archive a RESTART mounts later is
 not seen. The native build walks the arena's two piece orders by offset (its arena holds stand-in
