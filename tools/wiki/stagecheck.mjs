@@ -22,7 +22,15 @@
    THE TEXT'S MEASURE is the DLL's: the C side measures with tagpu_hudtext_width over the face of layout.json's `toast`
    style, and the recording's measureText answers that face's advance at a size of one, which the C side measures
    first for every string a dry run of the recording asks for, times the size. stage.js's choices -- a label shrunk
-   to its box, a readout's plate -- are thus checked against the same widths the game will set. */
+   to its box, a readout's plate -- are thus checked against the same widths the game will set.
+
+   THE THREE RANGES (research/notes/ingame-wiki-3d-stage-plan.md, section 3). The pairing above is R1, the whitebox
+   stage. stage.js names the range of every call (o.layer), so each C op, paired with its call, carries the same name;
+   then each frame is drawn again over a stand-in 3D image, three ways -- every model resolved with the ground in the
+   image, none resolved, and the ground fallen back -- and that recording, R0 and R2 with the image between them, must
+   pair op for op with R1's ops kept by the same rule: R0 and the overlays always, the ground when the image has none,
+   a box when its type did not resolve, a whitebox label never. R0 and R2 are thus R1's own ops, in R1's order, and a
+   DLL that builds R1 builds them by the names alone. */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -65,8 +73,11 @@ function colour(s) {
 
 /* ---- the recording context ---- */
 function recorder(em, asked) {
-  const out = [];
-  let path = [], dash = [];
+  const out = [], tags = [];
+  let path = [], dash = [], tag = null;
+  // every shape recorded carries the range the call that made it was drawn in
+  const push = out.push.bind(out);
+  out.push = sh => { tags.push(tag); return push(sh); };
   const g = {
     fillStyle: '#000', strokeStyle: '#000', lineWidth: 1, font: '10px sans-serif', textAlign: 'start', textBaseline: 'alphabetic',
     imageSmoothingQuality: 'low', imageSmoothingEnabled: true,
@@ -120,6 +131,7 @@ function recorder(em, asked) {
     },
     drawImage(img, x, y, w, h) { out.push({ k: 'icon', name: img.name, x, y, w, h }); },
   };
+  const layer = (range, type) => { tag = { range, type }; };
   const font = s => { const m = /^(\d+) ([\d.e+-]+)px (.+)$/.exec(s); if (!m) throw new Error(`a font the check does not read: ${s}`);
     return { weight: +m[1], size: +m[2], family: m[3] }; };
   /* a polyline stroked by the canvas dash rule: the pattern from its first point, running on round its corners */
@@ -148,7 +160,7 @@ function recorder(em, asked) {
     }
     if (open) carry(open);
   }
-  return { g, out };
+  return { g, out, tags, layer };
 }
 
 /* ---- the ops read back as the same shapes, in the canvas's device pixels ---- */
@@ -229,10 +241,26 @@ try {
       }
     }
   }
-  const draw = (v, sz, em, asked) => {
+  const draw = (v, sz, em, asked, image) => {
     const r = recorder(em, asked);
-    WikiStage.draw(r.g, v, { W: sz.w, H: sz.h, U: sz.u, icons });
-    return r.out;
+    const im = image && { ...image, draw: () => r.out.push({ k: 'image' }) };
+    WikiStage.draw(r.g, v, { W: sz.w, H: sz.h, U: sz.u, icons, layer: r.layer, image: im });
+    return r;
+  };
+  // the stand-in images: what a complete 3D frame may carry
+  const IMAGES = [
+    { name: 'all resolved', ground: true, resolved: () => true },
+    { name: 'none resolved', ground: true, resolved: () => false },
+    { name: 'ground fallen back', ground: false, resolved: () => true },
+  ];
+  const kept = (t, im) => t.range === 'r0' || t.range === 'over' || (t.range === 'ground' && !im.ground) ||
+    (t.range === 'box' && !im.resolved(t.type));
+  const pair = (js, c, what) => {
+    for (let i = 0; i < Math.max(js.length, c.length); i++) {
+      const d = differ(js[i], c[i]);
+      if (d) return `${what} call ${i} of ${js.length} (C ops ${c.length}), ${d}:\n  stage.js ${show(js[i])}\n  C        ${show(c[i])}`;
+    }
+    return null;
   };
 
   /* ---- the measure: every string a dry run asks for, measured by the C side ---- */
@@ -246,7 +274,7 @@ try {
   const em = new Map(strings.map((s, i) => [s, ems[i]]));
 
   /* ---- each size: the C side's frames, paired with stage.js's ---- */
-  let nframes = 0, nops = 0, ndiffer = 0;
+  let nframes = 0, nops = 0, ndiffer = 0, nsplit = 0, nimage = 0;
   for (const sz of SIZES) {
     const rect = [sz.x0 / sz.u, sz.y0 / sz.u, sz.w / sz.u, sz.h / sz.u].map(v => v.toPrecision(17));
     const cout = run(exe, ['ops', pak, ttf, String(S.spacing || 0), S.upper ? '1' : '0', String(style), ...cursorArgs, ...sizeArgs,
@@ -260,21 +288,26 @@ try {
         code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${f.key}: the canvas is ${fr.w}x${fr.h} at ${fr.x0},${fr.y0}`); continue;
       }
       if (fr.dropped || fr.trunc) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${f.key}: dropped ${fr.dropped} ops, truncated ${fr.trunc}`); continue; }
-      const js = draw(f.v, sz, em, null), c = shapes(fr, sz, face, part, icons);
+      const r1 = draw(f.v, sz, em, null), c = shapes(fr, sz, face, part, icons);
       nframes++; nops += c.length;
-      for (let i = 0; i < Math.max(js.length, c.length); i++) {
-        const d = differ(js[i], c[i]);
-        if (d) {
-          code = 1; ndiffer++;
-          console.log(`DIFFER ${sz.name} ${f.key} call ${i} of ${js.length} (C ops ${c.length}), ${d}:\n  stage.js ${show(js[i])}\n  C        ${show(c[i])}`);
-          break;
-        }
+      let bad = pair(r1.out, c, 'R1');
+      if (!bad && r1.tags.some(t => !t)) bad = 'R1: a call drawn before stage.js named its range';
+      // R0, the image, R2: R1's ops kept by the rule, the image after R0 and the ground
+      for (const im of bad || !f.v || !f.v.map ? [] : IMAGES) {
+        const r = draw(f.v, sz, em, null, im), at = r.out.findIndex(sh => sh.k === 'image');
+        if (at < 0 || r.out.filter(sh => sh.k === 'image').length !== 1) { bad = `${im.name}: the image is drawn ${at < 0 ? 'never' : 'twice'}`; break; }
+        const js = r.out.filter(sh => sh.k !== 'image'), want = c.filter((_, i) => kept(r1.tags[i], im));
+        const under = r.tags.slice(0, at).every(t => t.range === 'r0' || t.range === 'ground');
+        bad = !under ? `${im.name}: an overlay drawn under the image` : pair(js, want, `R0+R2 (${im.name})`);
+        if (bad) break;
+        nsplit++; nimage += want.length;
       }
+      if (bad) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${f.key} ${bad}`); }
     }
   }
   const s = ((Date.now() - t0) / 1000).toFixed(1);
   if (code) console.log(`stagecheck: ${ndiffer} of ${frames.length * SIZES.length} frames DIFFER (${s} s)`);
-  else console.log(`stagecheck: all equal -- ${nframes} frames (${frames.length} at each of ${SIZES.length} sizes), ${nops} ops paired call for op within 1/64 px (${s} s)`);
+  else console.log(`stagecheck: all equal -- ${nframes} frames (${frames.length} at each of ${SIZES.length} sizes), ${nops} ops of R1 paired call for op within 1/64 px; R0 and R2 over ${nsplit} stand-in images, ${nimage} ops (${s} s)`);
 } catch (x) {
   if (!(x instanceof CannotRun)) throw x;
   console.log(`stagecheck: cannot run: ${x.message}`);

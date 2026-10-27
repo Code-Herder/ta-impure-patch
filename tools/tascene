@@ -1259,6 +1259,7 @@ def scenario_centre(scenario, tnt):
 # --------------------------------------------------------------------------- serve / shot
 
 VIEWER = HERE / "tascene-view.html"
+RENDERER = HERE / "tascene-render.js"    # the Classic lane, which the viewer loads
 PRESETS = HERE / "tascene-presets.json"
 
 
@@ -1295,7 +1296,7 @@ RELOAD_TOKEN = "__reload"
 def _source_token() -> str:
     """mtime+size of every checked-in file the served page is built from."""
     parts = []
-    for f in (VIEWER, PRESETS):
+    for f in (VIEWER, RENDERER, PRESETS):
         st = f.stat() if f.exists() else None
         parts.append(f"{f.name}:{st.st_mtime_ns}:{st.st_size}" if st else f"{f.name}:-")
     return " ".join(parts)
@@ -1320,14 +1321,17 @@ def _watch_sources(pack: Path, interval: float = 0.5):
 
 
 def _stage_viewer(pack: Path):
-    """The viewer and its presets are served from the pack: same-origin fetches.
+    """The viewer, its renderer and its presets are served from the pack: same-origin fetches.
 
-    Both are checked-in lab files, not pack contents — `pack/` is generated and
+    All are checked-in lab files, not pack contents — `pack/` is generated and
     disposable, so nothing here may be the only copy of anything.
     """
     if not VIEWER.exists():
         die(f"viewer missing: {VIEWER}")
+    if not RENDERER.exists():
+        die(f"renderer missing: {RENDERER}")
     (pack / VIEWER.name).write_text(VIEWER.read_text())
+    (pack / RENDERER.name).write_text(RENDERER.read_text())
     if PRESETS.exists():
         (pack / PRESETS.name).write_text(PRESETS.read_text())
 

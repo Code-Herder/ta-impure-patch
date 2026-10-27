@@ -402,7 +402,7 @@ against the file size; directory depth ≤ 16 and entries against the directory 
 ≤ `0x10000` out with the declared size checked after LZ77 or zlib; TDF and FBI text parsed within
 its length; TNT offsets and tile indices against the file and its count; GAF dimensions ≤
 `TAGPU_GAF_DECMAX`, RLE rows within the blob, sub-frame counts against the table; COB reads by
-`create_hides`'s own bounds.
+`tagpu_cobscan_hides`' own bounds (6c), on the file's bytes at base 0.
 
 ### 6. Model records and the heading
 
@@ -610,12 +610,49 @@ the parity checks).
   `simparity.mjs` natively and `--wine` finds all 21 demos and 9 rule cases equal, `stagecheck.mjs`
   pairs every op, `wikilaycheck.py` agrees, and the pre-commit hook's provenance check passes on
   the new files.
-- **Open for 6d and 6e**: the order of the loose files and of one archive's files within an
-  enumeration, and what an enumeration does with one path held by two sources, are still
-  QUESTIONS batch A1; `tavfs.py` lists loose files by name without case and an archive's in its
-  directory order, and every source's copy of a path.
+- **Settled for 6d and 6e** (the scout's answer A1): an enumeration lists each path once, from
+  its first source in the engine's precedence. `tavfs.py` lists loose files by name without case
+  and an archive's in its directory order; since 6d it drops a path an earlier source already
+  listed.
 
 ### Landing 6c — Create()'s hides, one function for the ghost and the wiki
+
+**Status: built 2026-10-26, not landed.** As specified, with what the plan did not settle:
+
+- **A COB block is read through a base.** `tagpu_cobscan_hides(cob, size, base, hid)` and
+  `tagpu_cobscan_mask` read every header offset and name-table entry as a 32-bit value minus
+  `base`, bounded by `size`: the ghost passes the block's own address (the engine's loader
+  relocated it in place), the wiki's loader (6e) passes 0 for the file's bytes and need not
+  relocate. The same arithmetic makes the file build natively on a 64-bit host.
+- **The engine's piece order moved to `tagpu_model3do.h`** as `tagpu_model_engine_order(root,
+  prim, name)`, beside the ghost's `tagpu_model_walk`: it is the one part of the old
+  `engine_prims` that reads the template tree, and the wiki's arena models are in the engine's
+  form, so both callers take it from there. `tagpu_cobscan_mask` takes its output (the nodes, their
+  names, the count) and the caller's walk, and runs the swap and the mapping; it compares node
+  addresses and never follows one. The ghost now walks the engine order before reading the
+  script, where `engine_prims` walked it after; the answer is the same, the walk being the same
+  bounded read of the same template.
+- **`tagpu_cobscan_piece`** names COB piece k, for the test and for the wiki's report.
+- **`tagpu_cobscan.c` is not on `thread-split.allow`**: it names no engine memory and has no
+  writable static (its scratch is on the stack). Like `tagpu_placegeo.c` it is therefore not a
+  `sim` file, so a change to it alone gates no test group and is not instrumented; a change to
+  `tagpu_cobscan.h` gates every feature of `tagpu_datakeys.c`, which includes it. The gap is the
+  same one landing 1b left.
+
+Results: `tagpu/ddraw/tests/cobscantest.py` (new; `cobscantest.c` built with gcc, ASan and UBSan,
+about 1 s): all 278 stock unit scripts (`scripts\<UnitName>.cob` of every `units\*.fbi`; 90 hide a
+piece at `Create()`) hide the same pieces as `tools/ta3do`'s `hidden_at_create`; relocated at two
+bases (one that wraps) each answers as the file's bytes do; the mask over each unit's model in the
+engine's order hides `hidden_at_create`'s pieces for all 278, every hidden piece's name being
+carried by exactly one node; the truncation and overwrite pass ran with no sanitizer error. A
+mutation that dropped the swap failed 85 units. A scratch differential under Wine of the old
+`create_mask` against the new pair, with real 32-bit pointers, over the same 278 scripts and
+models with truncations, overwritten dwords, a NULL script, a zero length and a renamed node: 0
+differences in 345 862 calls. `make` clean with and without `LIMITS=stock`. `tareplay.py landing`
+over `main..598cbb6f` passed: 35 test groups (the branch's range carries more than this landing;
+`keys_ghost_mask`'s are `battle` and `resource-core-upgrade`), no check failed, 2 of 2 changed
+functions and regions reached, its `replay-roundtrip:` note on `598cbb6f`. The high review is not
+run.
 
 **What changes**: nothing visible. `create_hides` and `create_mask` move out of
 `tagpu_datakeys.c` into `tagpu/ddraw/src/tagpu_cobscan.c`/`.h`, pure (a COB blob and its size, a
@@ -656,6 +693,29 @@ the whitebox and the strip's notice; a run with one tile hash altered by hand in
 description shows the whole ground fall back.
 
 **Gate**: none. **Review**: none (no engine code). It can run beside 6e and 6f.
+
+**Status (2026-10-26): built and verified on its branch, not landed.** Every verification above
+ran:
+- `tools/tascene shot`: 40 shots (4 fixtures × 10 option sets, the mirror edge among them),
+  md5-identical before and after the factoring into `tools/tascene-render.js`.
+- `stagecheck.mjs`: `all equal -- 1020 frames (340 at each of 3 sizes), 1856917 ops of R1 paired
+  call for op within 1/64 px; R0 and R2 over 3060 stand-in images, 1999257 ops`. A planted change
+  that drew a whitebox label in R2 failed 420 of the 1020 frames. `simparity.mjs` still finds all
+  21 demos and 13 rule cases equal; `stagemap.py check` still resolves both descriptions.
+- `gfx.py` resolves both entries on the stock install: both grounds, every unit (ARMACK, ARMCK,
+  ARMGEO, ARMMEX, ARMMOHO, ARMPW; ARMDRAG, ARMLLT, ARMSOLAR), the deposit `lushmetal3` from
+  `anims\metals.GAF` and the vent `lushvent01`.
+- The captures, headless Chromium on ANGLE-Vulkan at 1920 × 1080: every frame complete, nothing
+  refused. A walking constructor faces along its line, buildings stand at their sites at the
+  game's scale, a nanoframe rises through the engine's staging with its wire, the ghosts stand on
+  the sites and queued builds, and fog paints unexplored ground black and seen ground grey.
+- With `gfx/` moved away the stage is the whitebox and the strip reads "game graphics: run
+  tools/wiki/gfx.py"; with tile 13's hash altered in a scratch copy of Quick Build's description,
+  `gfx.py` reports `ground FALLS BACK` and the stage draws the 3D units over the whitebox ground and
+  fog.
+
+What 6d did not settle: nothing compares the image with the game's (`stage3dcheck.py` needs 6g);
+the differences the lab's parity lane carries are listed in `ingame-wiki.md` *Gaps*.
 
 ### Landing 6e — the archive reader and the 3D asset load
 

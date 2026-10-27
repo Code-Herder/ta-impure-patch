@@ -68,9 +68,11 @@
 length in the window is in units of the frame's height / 720. The window, its tree, the entry and its demos come from <code>art/wiki/</code>;
 what the stage shows comes from <code>sim.js</code>; the kit's parts from <code>art/wiki/kit/</code>, the text styles from the replay
 HUD's <code>art/hud/layout.json</code>. URL switches: <code>res=</code>, <code>size=</code>, <code>mode=sp|mp</code>,
-<code>mod=</code>, <code>skin=kit|whitebox</code>, <code>rewind=0|1</code>, <code>open</code>, <code>entry=</code>, <code>demo=</code> (from 1), <code>try</code>, <code>gfx=whitebox|game</code> (the game's own graphics, rendered into the gitignored
-<code>gfx/</code> by <code>tools/wiki/gfx.py</code> from the local install).</p>
+<code>mod=</code>, <code>skin=kit|whitebox</code>, <code>rewind=0|1</code>, <code>open</code>, <code>entry=</code>, <code>demo=</code> (from 1), <code>try</code>, <code>gfx=whitebox|game</code> (the stage in 3D, as the game draws it, from the packs <code>tools/wiki/gfx.py</code>
+resolves from the local install into the gitignored <code>gfx/</code>), <code>ss=</code> (its supersampling, default 2).</p>
 <script src="sim.js"></script>
+<script src="../../tascene-render.js"></script>
+<script src="scene.js"></script>
 <script src="gfx.js"></script>
 <script src="stage.js"></script>
 <script src="wiki.js"></script>

@@ -102,8 +102,9 @@
 
    A stack walk of the template tree: a node, then its children in sibling
    order pushed, so the LAST child is visited first. It is not the engine's
-   own piece order (0x45AEC0 recurses child before sibling), and nothing may
-   assume it is. The root's own siblings are not visited.
+   own piece order (0x45AEC0 recurses child before sibling; that one is
+   tagpu_model_engine_order, below), and nothing may assume it is. The root's
+   own siblings are not visited.
 
    Returns the node count, 0 for a root the range test refuses, and -1 when
    the tree exceeds `max` nodes or the stack's TAGPU_PBMAXPIECE: a DATA bound
@@ -131,6 +132,39 @@ static __inline int tagpu_model_walk(const char* root, const char** nodes, int m
             if (sp >= TAGPU_PBMAXPIECE) return -1;
             stack[sp++] = ch;
         }
+    }
+    return n;
+}
+
+/* THE ENGINE'S PIECE ORDER FOR A NEW UNIT, the order tagpu_cobscan_mask names COB pieces in.
+   0x45A950 builds a unit's primitives with 0x45AEC0: a node, then its child's whole subtree,
+   then its sibling's, the root's siblings included (as 0x45AE80 counts them). DISASSEMBLED.
+
+   Writes the nodes to `prim` and each node's name to `name`, NULL for a name the range test
+   refuses, at most TAGPU_PBMAXPIECE of each. Returns the node count, 0 for a root the range
+   test refuses, -1 when the tree exceeds TAGPU_PBMAXPIECE nodes or its stack: a DATA bound,
+   and the caller refuses the model. The same range-test argument as tagpu_model_walk's. */
+static __inline int tagpu_model_engine_order(const char* root, const char** prim,
+                                             const char** name)
+{
+    const char* stack[TAGPU_PBMAXPIECE + 2];
+    int sp = 0, n = 0;
+    if (!tagpu_m3_ptr_ok(root)) return 0;
+    stack[sp++] = root;
+    while (sp > 0) {
+        const char* nd = stack[--sp];
+        const char* sib;
+        const char* ch;
+        const char* nm;
+        if (n >= TAGPU_PBMAXPIECE) return -1;
+        nm = *(const char* const*)(nd + N_NAME);
+        name[n] = tagpu_m3_ptr_ok(nm) ? nm : NULL;
+        prim[n++] = nd;
+        sib = *(const char* const*)(nd + N_SIB);
+        ch  = *(const char* const*)(nd + N_CHILD);
+        if (tagpu_m3_ptr_ok(sib)) stack[sp++] = sib;  /* popped after the child's subtree */
+        if (tagpu_m3_ptr_ok(ch))  stack[sp++] = ch;
+        if (sp > TAGPU_PBMAXPIECE) return -1;
     }
     return n;
 }
