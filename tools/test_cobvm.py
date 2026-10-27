@@ -52,19 +52,27 @@ class Core(unittest.TestCase):
         cls.lib = tacob.bind_cobvm(C.CDLL(str(lib)))
         cls.saved = tacob._LIB
         tacob._LIB = cls.lib
-        obj = Path(cls.temp.name) / "tagpu_cobvm.o"
-        subprocess.run(["cc", "-std=c99", "-O2", "-c", "-I", str(DDRAW / "inc"),
-                        str(DDRAW / "src" / "tagpu_cobvm.c"), "-o", str(obj)], check=True)
-        cls.symbols = subprocess.run(["nm", str(obj)], check=True, capture_output=True, text=True).stdout
+        cls.symbols = ""
+        for name in ("tagpu_cobvm", "tagpu_cob_safe"):        # the core and the rules it runs
+            obj = Path(cls.temp.name) / f"{name}.o"
+            subprocess.run(["cc", "-std=c99", "-O2", "-c", "-I", str(DDRAW / "inc"),
+                            str(DDRAW / "src" / f"{name}.c"), "-o", str(obj)], check=True)
+            cls.symbols += subprocess.run(["nm", str(obj)], check=True, capture_output=True,
+                                          text=True).stdout
 
     @classmethod
     def tearDownClass(cls):
         tacob._LIB = cls.saved
         cls.temp.cleanup()
 
+    # unit 1, owner 0, a finished veteran of three kills, on a peer where seat 0 is local
+    FACTS = {"slots": 100, "caller": 1, "units": {1: [0, 3, 0.0], 2: [1, 0, 0.5]},
+             "allied": [[0, 0]], "local": [0]}
+
     def vm(self, source, rules=tacob.RULES_RETAIL, world=None, trace=None):
         cob = tacob.compile_bos(PRELUDE + source, "test.bos")
-        vm = tacob.CobVM(cob, world or tacob.UnitWorld(), trace, unit=1, type_name="T", rules=rules)
+        vm = tacob.CobVM(cob, world or tacob.UnitWorld(facts=self.FACTS), trace, unit=1,
+                         type_name="T", rules=rules)
         vm.tick = 1
         return vm
 
@@ -174,6 +182,10 @@ class Core(unittest.TestCase):
             self.assertTrue(lib.tagpu_cobvm_init(C.byref(vm), program, tacob.RULES_IMPURE, obj, statics,
                                                  anim, model, reason, 256))
             host = tacob._Host()
+            world = tacob._World(None, 100, 0, 0, tacob._W_UNIT(lambda c, i, o: 0),
+                                 tacob._W_CALLER(lambda c, o: 0), tacob._W_ALLIED(lambda c, a, b: 0),
+                                 tacob._W_LOCAL(lambda c, o: 0))
+            host.world = C.pointer(world)
             log = (tacob._Effect * 2)()
             run = tacob._Run()
             run.host = C.pointer(host)
@@ -247,6 +259,34 @@ class Core(unittest.TestCase):
         self.assertEqual(get(9, 3), None)
         self.assertEqual(get(7, 3), 0)                       # past the model's pieces
         self.assertEqual(get(7, 2), None)
+
+    def test_under_impure_the_core_answers_the_extended_ids_itself(self):
+        class World(tacob.UnitWorld):
+            def get(self, vid, a, b, c, d):         # a host that would answer every id its own way
+                return 777
+        source = ("Create() { g1 = get 71; g2 = get 69; g3 = get 32; g4 = get 72(2, 0, 0, 0); "
+                  "g5 = get 73(2, 0, 0, 0); g6 = get 74(1, 0, 0, 0); g7 = get 75(2, 0, 0, 0); "
+                  "g8 = get HEALTH; }")
+        statics = "static-var g1, g2, g3, g4, g5, g6, g7, g8;\n"
+        impure = self.vm(statics + source, rules=tacob.RULES_IMPURE, world=World(facts=self.FACTS))
+        impure.start_script("Create", run_now=True)
+        self.assertEqual(impure.statics[2:10], [1, 1, 300, 1, self.lib.tagpu_cob_build_left(C.c_float(0.5)),
+                                                1, 0, 777])
+        retail = self.vm(statics + source, world=World())
+        retail.start_script("Create", run_now=True)
+        self.assertEqual(retail.statics[2:10], [777] * 8)
+
+    def test_impure_needs_the_worlds_facts(self):
+        with self.assertRaises(tacob.TacobError):
+            self.vm("Create() { }", rules=tacob.RULES_IMPURE, world=tacob.UnitWorld())
+
+    def test_too_many_start_words_is_the_callers_error_not_a_fault(self):
+        vm = self.vm("Go(a) { s1 = a; }")
+        words = (C.c_int32 * 4)(5, 0, 0, 0)
+        script = vm.index_of("Go")
+        self.assertEqual(self.lib.tagpu_cobvm_start(C.byref(vm._vm), C.byref(vm._run), script, 0, 1, 1, 5, words), -1)
+        self.assertEqual(self.lib.tagpu_cobvm_start(C.byref(vm._vm), C.byref(vm._run), script, 0, 1, 1, 1, words), 1)
+        self.assertEqual(vm.statics[0], 5)
 
     # -- the layout and the threads ------------------------------------------------------
     def test_the_layout_is_impures_object(self):

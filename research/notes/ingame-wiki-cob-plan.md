@@ -106,9 +106,9 @@ The core's state is therefore four blocks, each in exactly that layout:
 | records + count | `TagpuCobRecord[TAGPU_COB_THREADS]` and the count dword, as at `cob+0x1C` | one per unit, in the WIKISIM's heap | the engine's object, at `cob+0x1C` |
 | statics | `int32[nstatics]` | idem | `*(cob+0x10)` |
 | animation | `int32[npieces × 19]` | idem | `*(cob+0x14)` |
-| model | the posed model's header and its `PrimitiveStruct`s from `+0x22`, stride `0x36` (`TAGPU_COBVM_MODEL_BYTES`) | a block per unit beside its COB object, read by the stage's pose composition | the posed model `*(cob+0x540)` |
+| model | the posed model's header and its `PrimitiveStruct`s from `+0x22`, stride `0x36` (`TAGPU_COBVM_MODEL_BYTES`) | a block per unit beside its COB object, read by the stage's pose composition | the posed model at `TAGPU_COB_MODEL_OFFSET` (`+0x540` of the retail object, which Impure relocates) |
 
-The object's pointer fields (`+0x00` vtable, `+0x08` the script, `+0x10`, `+0x14`, `+0x540`) are
+The object's pointer fields (`+0x00` vtable, `+0x08` the script, `+0x10`, `+0x14`, `TAGPU_COB_MODEL_OFFSET`) are
 **not** read by the core: a 64-bit host (tacob, the mockup's server) cannot store a pointer in a
 32-bit field. The core takes the four blocks and the program as arguments; the host keeps whatever
 pointers its world needs. Static asserts pin every offset against `tagpu_cob_safe.h` and the engine
@@ -131,8 +131,12 @@ adapter calls at `0x4B0E5D`: one bound for both, and a fault is the core's refus
 
 ```
 reads (callbacks, answered from the host's world; TAGPU_COBVM_HOST in tagpu_cobvm.h):
-    get(id, a, b, c, d)          GET_UNIT_VALUE and GET, every id; the port-F getters through
-                                 tagpu_cob_getter, the function the game's cob_get calls
+    get(id, a, b, c, d)          GET_UNIT_VALUE and GET: every id under RETAIL; under IMPURE
+                                 only those tagpu_cob_getter leaves to the stock handler
+    world                        IMPURE, required: the units, the caller, the alliances and the
+                                 local seats tagpu_cob_getter answers the port-F ids from. The
+                                 core calls it itself (the function the game's cob_get calls)
+                                 and fills the piece counts from its program
     rand(n, lo)                  RAND's draw; the host owns the generator (lo only for replays)
     cargo(id), carrier()         0x10044000 and 0x10045000 (vt+0x48, vt+0x4C)
     alive(id)                    IMPURE: an ATTACH or DROP naming a dead unit is skipped
@@ -156,8 +160,10 @@ its `get` answers from the tick's start. That host — and the draw order of `ra
 in parallel, which is its hardest problem — belongs to the swap program, not to this one. The core's
 obligation now is only that it never needs anything else.
 
-Thread safety is by construction: no global, no `static` that is written, no TLS. The build checks
-it the way `tools/sim-state-check.sh` checks a `sim` file.
+Thread safety is by construction: no global, no `static` that is written, no TLS.
+`tools/test_cobvm.py` checks it with `nm` on both objects the core is built from,
+`tagpu_cobvm.o` and `tagpu_cob_safe.o`; the DLL's build does not check it yet, because neither file
+is marked `sim` (*Gaps*, below).
 
 ## Drift control
 
@@ -165,8 +171,11 @@ it the way `tools/sim-state-check.sh` checks a `sim` file.
   oracle. The nine existing fixtures (`research/notes/evidence/cobtrace/`) replay through the core
   byte for byte, and their posedumps match piece for piece — tacob's landing-3 gate, on the C core.
 - **Impure's extensions** — the record count, the stack bound, the guarded faults, the getters — are
-  each one engine-free function in shared C, called by `tagpu_patches.c`'s adapter and by the core.
-  An extension cannot be added to one and not the other without a function signature changing.
+  each one engine-free function in shared C, called by `tagpu_patches.c`'s adapter and by the core
+  (the getters under the core's IMPURE rules, before its host's own handler). An extension cannot
+  be added to one and not the other without a function signature changing. The replay test group
+  `cob-getters` judges the game's getter answers against the engine's own state, and binds
+  `tagpu_cob_safe.c` so that any change to the rules runs it.
 - **A landing that adds a COB feature to the game** adds a cobtrace fixture that exercises it. Until
   the core matches, that fixture fails by name.
 - **The swap program's entry gate** is the recorder as oracle: load a recorded COB object into the
@@ -213,11 +222,25 @@ The mockup does the same in `tools/tascene-render.js`.
 L1 and L2 touch `tagpu_cobvm.*`, `tagpu_cob_safe.*`, `tagpu_patches.c`, `tools/tacob*` and the
 fixtures — no file the sidebar's landing touches.
 
+### Gaps L1 leaves open
+
+- **The core's files are not `sim`.** `tagpu_cob_safe.c` holds rules the game's simulation runs
+  (the step guard, the getters, the parent's pops, the attachment bound), but `thread-split.allow`
+  does not mark it `sim`, so the replay gate checks no function of it for coverage, and the build's
+  writable-static check does not reach it or `tagpu_cobvm.c`. The `sources` binding of
+  `cob-getters` and `resource-core-upgrade` makes any change to it run those groups, and
+  `test_cobvm.py` checks both objects for written statics. Marking them `sim` needs the program
+  validator's `malloc`/`free` routed through the registry's wrappers, which the swap program does
+  when the core becomes the game's interpreter.
+
 ## Research each landing owes
 
 - **L1** (answered 2026-10-27): every vtable slot the opcodes reach, the flag bits and the model's
   header words — the engine map's vtable table. `0x10063000` is refused by the program validator,
-  as the guarded game refuses it. The getters are `tagpu_cob_getter`.
+  as the guarded game refuses it, **under both rules**: a RETAIL VM therefore refuses a script that
+  the retail engine runs (`0x4B1984`). No stock script carries the opcode; the difference is
+  accepted, not modelled. The getters are `tagpu_cob_getter`, which the core calls itself under
+  IMPURE.
 - **L2**: a scripted scenario per fixture, in game, under the run lock.
 - **L3**: `StartBuilding`'s arguments (the map lists `0x48B14E` as a no-argument start through
   `0x4B0940`; tacob's director passes heading and pitch — one of them is wrong); when the engine calls

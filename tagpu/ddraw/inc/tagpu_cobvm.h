@@ -3,8 +3,9 @@
 /* tagpu_cobvm -- the COB virtual machine, engine-free: the engine's runner 0x4B0DA0, its stepper
    0x4B1C00 and its entries 0x4B0940 / 0x4B0B00 / 0x4B0C40 / 0x4B0D60, opcode for opcode, on memory
    laid out as Impure's game lays it out (research/notes/ingame-wiki-cob-plan.md, "The core";
-   exe-reverse-engineering.md, "The COB engine"). The one COB VM outside the engine: the in-game
-   wiki, tools/tacob and the wiki mockup's server all run this file.
+   exe-reverse-engineering.md, "The COB engine"). The one COB VM outside the engine: tools/tacob
+   runs it; the in-game wiki and its mockup's server (L3) are to, and the game's own interpreter is
+   to be replaced by it.
 
    ITS MEMORY IS THE ENGINE'S, in four blocks the caller owns:
      object   TAGPU_COB_OBJECT_BYTES, the COB object (tagpu_cob_safe.h): +0x04 the sim rate (30),
@@ -14,7 +15,8 @@
      statics  int32 a static variable (the block at *(cob+0x10))
      anim     TAGPU_COBVM_ANIM int32s a piece (the block at *(cob+0x14))
      model    TAGPU_COBVM_MODEL_BYTES(pieces): the posed model's header and its PrimitiveStructs
-              (the Object3do at *(cob+0x540)), which MOVE, TURN, SHOW, CACHE and SHADE write
+              (the Object3do the object points to at TAGPU_COB_MODEL_OFFSET, +0x540 in the retail
+              object), which MOVE, TURN, SHOW, CACHE and SHADE write
    so a block the game holds can be handed to it as it is.
 
    SAFE ON SEVERAL THREADS BY CONSTRUCTION: no global and no written static. Everything one call
@@ -83,8 +85,12 @@ typedef struct TAGPU_COBVM_TRACE {
 
 typedef struct TAGPU_COBVM_HOST {
     void* ctx;
-    /* GET_UNIT_VALUE and GET (vt+0x44, 0x480770), every value id */
+    /* GET_UNIT_VALUE and GET (vt+0x44, 0x480770): every value id under RETAIL; under IMPURE every
+       id tagpu_cob_getter leaves to the stock handler */
     int32_t (*get)(void* ctx, int32_t id, int32_t a, int32_t b, int32_t c, int32_t d);
+    /* IMPURE: the world tagpu_cob_getter answers its ids from, required. The core sets the piece
+       counts from its program, so a host cannot hand it others; the rest is the host's */
+    const TagpuCobWorld* world;
     /* RAND's draw (0x4B6C30): 0 .. n-1, and 0 for n < 2. `lo` is the script's lower bound, which
        the engine does not pass: an oracle replay hands back the logged `lo + r` through it. */
     int32_t (*rand)(void* ctx, int32_t n, int32_t lo);
@@ -138,7 +144,8 @@ int tagpu_cobvm_index(const TagpuCobProgram* program, const char* name);
 
 /* 0x4B0940 (`argwords` 0: no arguments, sp stays -1) or 0x4B0B00 (`argwords` 1: args[0..3]
    written whatever argc says, sp = argc - 1, and a refusal calls `cb` with 0). `run_now` runs
-   every record at dt 0, then the stepper. Returns 1 started, 0 refused, -1 fault. */
+   every record at dt 0, then the stepper. Returns 1 started, 0 refused, -1 fault; an argc outside
+   0..4 is the caller's error, -1 with the VM left as it was. */
 int tagpu_cobvm_start(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int script, uint32_t cb, int run_now,
                       int argwords, int argc, const int32_t args[4]);
 

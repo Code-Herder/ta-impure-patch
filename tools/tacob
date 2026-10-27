@@ -1783,6 +1783,23 @@ class _Trace(_C.Structure):
                 ("args", _C.POINTER(_C.c_int32)), ("value", _C.c_int32), ("has_value", _C.c_int)]
 
 
+class _Facts(_C.Structure):
+    _fields_ = [("id", _C.c_uint32), ("owner", _C.c_uint32), ("kills", _C.c_uint32),
+                ("remaining", _C.c_float)]
+
+
+_W_UNIT = _C.CFUNCTYPE(_C.c_int, _C.c_void_p, _C.c_int32, _C.POINTER(_Facts))
+_W_CALLER = _C.CFUNCTYPE(_C.c_int, _C.c_void_p, _C.POINTER(_Facts))
+_W_ALLIED = _C.CFUNCTYPE(_C.c_int, _C.c_void_p, _C.c_uint32, _C.c_uint32)
+_W_LOCAL = _C.CFUNCTYPE(_C.c_int, _C.c_void_p, _C.c_uint32)
+
+
+class _World(_C.Structure):
+    _fields_ = [("ctx", _C.c_void_p), ("slots", _C.c_uint32), ("script_pieces", _C.c_uint32),
+                ("model_pieces", _C.c_uint32), ("unit", _W_UNIT), ("caller", _W_CALLER),
+                ("allied", _W_ALLIED), ("local", _W_LOCAL)]
+
+
 _GET = _C.CFUNCTYPE(_C.c_int32, _C.c_void_p, _C.c_int32, _C.c_int32, _C.c_int32, _C.c_int32, _C.c_int32)
 _RAND = _C.CFUNCTYPE(_C.c_int32, _C.c_void_p, _C.c_int32, _C.c_int32)
 _CARGO = _C.CFUNCTYPE(_C.c_int32, _C.c_void_p, _C.c_int32)
@@ -1794,7 +1811,8 @@ _TRACE = _C.CFUNCTYPE(None, _C.c_void_p, _C.POINTER(_Trace))
 
 
 class _Host(_C.Structure):
-    _fields_ = [("ctx", _C.c_void_p), ("get", _GET), ("rand", _RAND), ("cargo", _CARGO),
+    _fields_ = [("ctx", _C.c_void_p), ("get", _GET), ("world", _C.POINTER(_World)),
+                ("rand", _RAND), ("cargo", _CARGO),
                 ("carrier", _CARRIER), ("alive", _ALIVE), ("callback", _CALLBACK),
                 ("commit", _COMMIT), ("trace", _TRACE)]
 
@@ -1937,9 +1955,13 @@ class UnitWorld:
     ids (file-formats.md §2.5), the RNG, and a log of the effects the script asks for.
     The cobtrace oracle carries none of this traffic, so it is the replay's input."""
 
-    def __init__(self, values=None, rands=None):
+    def __init__(self, values=None, rands=None, facts=None):
         self.values = {VALUE_IDS["ACTIVATION"]: 0, VALUE_IDS["HEALTH"]: 100,
                        VALUE_IDS["BUILD_PERCENT_LEFT"]: 0}
+        # the facts tagpu_cob_getter answers the extended ids from, which RULES_IMPURE needs:
+        # {"slots": n, "caller": id, "units": {id: [owner, kills, remaining]},
+        #  "allied": [[own, owner], ...], "local": [owner, ...]}
+        self.facts = facts
         if values:
             self.values.update(values)
         self.rands = list(rands or ())      # the draws to hand back, in order
@@ -2017,7 +2039,12 @@ class CobVM:
         self._callbacks = {}
         self._next_cb = 1
         self._error = None
-        self._host = _Host(None, _GET(self._get), _RAND(self._rand), _CARGO(), _CARRIER(),
+        self._world = None
+        if rules == RULES_IMPURE:
+            self._world = self._getter_world(getattr(self.world, "facts", None))
+        self._host = _Host(None, _GET(self._get),
+                           _C.pointer(self._world) if self._world is not None else None,
+                           _RAND(self._rand), _CARGO(), _CARRIER(),
                            _ALIVE(), _CALLBACK(self._callback), _COMMIT(self._commit),
                            _TRACE(self._trace) if trace is not None else _TRACE())
         self._run = _Run()
@@ -2090,6 +2117,34 @@ class CobVM:
                 self._error = e
             return 0
 
+    def _getter_world(self, facts):
+        """The core's getter world over the world's facts: under RULES_IMPURE the extended ids are
+        tagpu_cob_getter's, the rule the game's handler takes, never this world's own `get`."""
+        if not facts:
+            raise TacobError("RULES_IMPURE answers the extended getters from the world's facts "
+                             "(slots, caller, units, allied, local), and this world has none")
+        units = {int(k): v for k, v in facts.get("units", {}).items()}
+        allied = {tuple(p) for p in facts.get("allied", ())}
+        local = set(facts.get("local", ()))
+
+        def fill(out, uid):
+            owner, kills, remaining = units[uid]
+            out.contents.id, out.contents.owner = uid, owner
+            out.contents.kills, out.contents.remaining = kills, remaining
+            return 1
+
+        def unit(ctx, uid, out):
+            return self._guard(lambda: fill(out, uid) if uid in units else 0)
+
+        def caller(ctx, out):
+            uid = facts.get("caller")
+            return self._guard(lambda: fill(out, uid) if uid in units else 0)
+
+        self._world_fns = (_W_UNIT(unit), _W_CALLER(caller),
+                           _W_ALLIED(lambda ctx, own, owner: int((own, owner) in allied)),
+                           _W_LOCAL(lambda ctx, owner: int(owner in local)))
+        return _World(None, int(facts["slots"]), 0, 0, *self._world_fns)
+
     def _get(self, ctx, vid, a, b, c, d):
         return self._guard(lambda: i32(self.world.get(vid, a, b, c, d)))
 
@@ -2097,7 +2152,7 @@ class CobVM:
         return self._guard(lambda: i32(self.world.rand(n, lo)))
 
     def _callback(self, ctx, token, value):
-        cb = self._callbacks.get(token)
+        cb = self._callbacks.pop(token, None)      # a completion fires once: RETURN or a refusal
         if cb is not None:
             self._guard(lambda: cb(value))
 
@@ -2306,7 +2361,7 @@ def events_from_trace(lines):
 
 
 def replay(cob, lines, world_values=None, type_name="?", unit=1, until=None, snap=(),
-           visible=None):
+           visible=None, rules=RULES_RETAIL, facts=None):
     """Run the VM through the fixture's engine events and return the lines it writes.
 
     The replay supplies exactly what the trace cannot: which engine entry issued each
@@ -2320,8 +2375,8 @@ def replay(cob, lines, world_values=None, type_name="?", unit=1, until=None, sna
     # the D line is `lo + r`; the lo is the script's, so the VM asks for r and the
     # world hands back what the engine's RNG gave, in draw order
     out = []
-    world = ReplayWorld(world_values, rands)
-    vm = CobVM(cob, world, out.append, unit=unit, type_name=type_name, visible=visible)
+    world = ReplayWorld(world_values, rands, facts)
+    vm = CobVM(cob, world, out.append, unit=unit, type_name=type_name, visible=visible, rules=rules)
     by_tick = {}
     for ev in events:
         by_tick.setdefault(ev.tick, []).append(ev)
@@ -2361,8 +2416,8 @@ class ReplayWorld(UnitWorld):
     no `get` traffic, so these are the replay's inputs — see the note beside the
     fixture's replay.json for where each timeline came from."""
 
-    def __init__(self, timelines=None, rands=None):
-        UnitWorld.__init__(self, rands=rands)
+    def __init__(self, timelines=None, rands=None, facts=None):
+        UnitWorld.__init__(self, rands=rands, facts=facts)
         self.timelines = {int(k): sorted(v) for k, v in (timelines or {}).items()}
         self.tick = 0
 
@@ -3453,9 +3508,15 @@ def run_class(cls, pose=True):
     type_name = lines[0].fields[3] if lines[0].kind == "S" else "?"
     unit = lines[0].unit
     spec = replay_inputs(cls)
-    blob, _ = read_cob_source(type_name.lower())
-    cob = read_cob(blob)
-    visible = piece_visibility(type_name.lower(), cob.pieces)
+    if spec.get("source"):
+        # a generated unit's script, compiled from the BOS in the repository; its model is a stock one
+        src = HERE.parent / spec["source"]
+        cob = compile_bos(src.read_text(encoding="latin-1"), str(src))
+        visible = piece_visibility(spec["model"], cob.pieces)
+    else:
+        blob, _ = read_cob_source(type_name.lower())
+        cob = read_cob(blob)
+        visible = piece_visibility(type_name.lower(), cob.pieces)
     pose_tick, pose_unit, pieces = (None, None, [])
     if pose and (folder / "posedump.txt").is_file():
         pose_tick, pose_unit, pieces = read_posedump(folder / "posedump.txt")
@@ -3470,8 +3531,11 @@ def run_class(cls, pose=True):
     # the pose is sampled on the render thread, so the dump's tick may name the sim
     # tick before or after the pass that filled it (tagpu_native.c, the posedump header)
     want_ticks = [pose_tick + d for d in (0, -1, 1)] if pose_tick else []
+    # a fixture recorded on Impure's raised build says so in replay.json; the first nine are retail's
+    rules = RULES_IMPURE if spec.get("rules") == "impure" else RULES_RETAIL
     vm, out, unknown, snaps = replay(cob, lines, timelines, type_name, unit,
-                                     until=until, snap=want_ticks, visible=visible)
+                                     until=until, snap=want_ticks, visible=visible, rules=rules,
+                                     facts=spec.get("facts"))
     out.insert(0, header if header else TRACE_HEADER % (",%s," % type_name))
     report = {"class": cls, "unit": type_name, "lines": len(lines), "unknown_starts": unknown}
     if report_note:

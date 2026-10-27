@@ -18143,7 +18143,7 @@ trace contract", and `extra-weapons.md` snag 10 is the story that led here. Name
 `[INFERRED]` are ours; `COBEngine_*` names come from the community symbol file.*
 
 **The VM that reproduces it is `tagpu_cobvm.c`** — engine-free, on Impure's layout of this object,
-run by tacob, the in-game wiki and (planned) the game itself; [its plan](ingame-wiki-cob-plan.html)
+run by tacob today, and (planned) by the in-game wiki and the game itself; [its plan](ingame-wiki-cob-plan.html)
 says why there is exactly one. Every rule this section states is one of its code paths, and the
 cobtrace fixtures below are its gate.
 

@@ -283,8 +283,19 @@ static void arith(TagpuCobRecord* r, uint32_t op)
     r->stack[r->sp] = v;
 }
 
-static int32_t host_get(TAGPU_COBVM_RUN* run, int32_t id, int32_t a, int32_t b, int32_t c, int32_t d)
+/* Under IMPURE the extended getters are tagpu_cob_getter's, the rule the game's handler takes
+   (tagpu_patches.c, cob_get): an id it answers never reaches the host's own handler, so no host
+   can answer one differently. entered() has checked the world is there. */
+static int32_t host_get(const TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int32_t id,
+                        int32_t a, int32_t b, int32_t c, int32_t d)
 {
+    if (vm->rules == TAGPU_COBVM_IMPURE) {
+        TagpuCobWorld w = *run->host->world;
+        int32_t value;
+        w.script_pieces = vm->program->pieces;
+        w.model_pieces = vm->program->model_pieces;
+        if (tagpu_cob_getter(&w, id, a, &value)) return value;
+    }
     return run->host && run->host->get ? run->host->get(run->host->ctx, id, a, b, c, d) : 0;
 }
 
@@ -457,12 +468,12 @@ static int exec_thread(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, unsigned slot)
         }
         case 0x10042000u: {                 /* GET_UNIT_VALUE: pops the id */
             int32_t id = POP();
-            PUSH(host_get(run, id, 0, 0, 0, 0));
+            PUSH(host_get(vm, run, id, 0, 0, 0, 0));
             break;
         }
         case 0x10043000u: {                 /* GET id a b c d */
             int32_t d = POP(), c = POP(), b = POP(), a = POP(), id = POP();
-            PUSH(host_get(run, id, a, b, c, d));
+            PUSH(host_get(vm, run, id, a, b, c, d));
             break;
         }
         case 0x10044000u: {                 /* vt+0x48 0x481430: one pop, the answer pushed */
@@ -641,7 +652,7 @@ static void step_anim(TAGPU_COBVM* vm, int32_t dt)
                 if (((target - cur + 0x10000) & 0xFFFF) > step) a[F_FLAG] = 1;
                 else { value = target; a[F_TURN_SPEED + axis] = 0; }
             } else {
-                if (((cur - target + 0x10000) & 0xFFFF) > -step) a[F_FLAG] = 1;
+                if (((cur - target + 0x10000) & 0xFFFF) > wrap_sub(0, step)) a[F_FLAG] = 1;   /* 0x4B1DAB: neg wraps */
                 else { value = target; a[F_TURN_SPEED + axis] = 0; }
             }
             turn_set(vm, (int)piece, axis, value & 0xFFFF);
@@ -692,6 +703,8 @@ static int entered(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run)
         return 0;
     }
     if ((int32_t)obj32(vm, OBJ_RATE) <= 0) return fail(vm, run, "the object's sim rate is not positive") + 1;
+    if (vm->rules == TAGPU_COBVM_IMPURE && !(run->host && run->host->world))
+        return fail(vm, run, "an IMPURE host gives no getter world") + 1;
     return 1;
 }
 
@@ -701,7 +714,10 @@ int tagpu_cobvm_start(TAGPU_COBVM* vm, TAGPU_COBVM_RUN* run, int script, uint32_
     TagpuCobRecord* r;
     int slot, i;
     if (!entered(vm, run)) return -1;
-    if (argwords && (argc < 0 || argc > 4 || !args)) return fail(vm, run, "an engine start passes 0 to 4 words");
+    if (argwords && (argc < 0 || argc > 4 || !args)) {
+        snprintf(run->reason, sizeof run->reason, "%s", "an engine start passes 0 to 4 words");
+        return -1;
+    }
     slot = alloc(vm, run, script, TAGPU_COBVM_FROM_ENGINE, -1, argwords ? argc : -1);
     if (slot < 0) {
         /* 0x4B0B11: a refused 0x4B0B00 start reports 0 at once; 0x4B0940 calls nothing */

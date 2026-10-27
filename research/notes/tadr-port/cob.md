@@ -150,9 +150,11 @@ about an earlier implementation slice are historical, not the current feature st
 | 75 | `UNIT_IS_ON_THIS_COMP` | queried unit controlled by a human or AI on this peer |
 
 The rule is one engine-free function, `tagpu_cob_getter` (`tagpu_cob_safe.c`): the game's
-`cob_get` hands it the engine's units, and every other host of the COB VM `tagpu_cobvm.c` (the
-in-game wiki, tacob) hands it its own world, so the ids answer alike wherever a script runs
-([the VM's plan](../ingame-wiki-cob-plan.html)). The guarded interpreter's two other rules — what a
+`cob_get` hands it the engine's units, and the COB VM `tagpu_cobvm.c` calls it itself under its
+IMPURE rules, over the world its host describes (tacob's, from a fixture's recorded facts), before
+the host's own handler sees the id, so no host can answer one differently
+([the VM's plan](../ingame-wiki-cob-plan.html)). The replay test group `cob-getters` judges the
+game's answers against the engine's state (`tools/cob_ext_fixture.py`). The guarded interpreter's two other rules — what a
 START or CALL takes off its parent's stack, and the attachment piece's bound — are
 `tagpu_cob_parent_pops` and `tagpu_cob_attach_piece_ok` there for the same reason.
 
