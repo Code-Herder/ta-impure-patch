@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the nine tacob gate scenarios and keep their traces as fixtures.
+"""Run the tacob gate scenarios and keep their traces as fixtures.
 
 For each class scenario (scenarios/cob-*.json) this arms `tagpu_cobtrace.on`
 with the class's unit type as the filter and `tagpu_native.on=all` (the pose
@@ -11,11 +11,13 @@ little more, stops the game and copies out:
     <out>/<name>/posedump.txt   the one posedump block (tick= idx= header first)
     <out>/<name>/apply.json     tacli's load report (engine indices, positions)
 
-The trace contract and the nine scenarios: research/notes/tacob-design.md.
+The trace contract and the nine scenarios: research/notes/tacob-design.md. The six after them are
+the in-game wiki's units doing the wiki's actions, on the generated map tools/resource_fixture.py
+installs into the instance first (research/notes/ingame-wiki-cob-plan.md, L2).
 Run from the tree whose ddraw.dll you want measured (tacli pins that tree's
 build). Usage:
 
-    tools/cobtrace_fixtures.py                 # all nine, instance `cobfx`
+    tools/cobtrace_fixtures.py                 # all fifteen, instance `cobfx`
     tools/cobtrace_fixtures.py kbot death      # a subset
     tools/cobtrace_fixtures.py --instance c2 --out /tmp/fx --keep
 """
@@ -42,7 +44,23 @@ CLASSES = [("kbot",     "ARMPW",     8,  3),
            ("gunship",  "ARMBRAWL", 10,  3),
            ("bomber",   "ARMTHUND", 12,  3),
            ("ship",     "CORBATS",   7,  3),
-           ("sub",      "CORSUB",   10,  3)]
+           ("sub",      "CORSUB",   10,  3),
+           # the wiki's units, on RS mixed (RS_MAP)
+           ("builder",  "ARMCK",    25,  3),
+           ("advbuilder", "ARMACK", 25,  3),
+           ("reclaim",  "ARMCK",    25,  3),
+           ("mex",      "ARMMEX",   20,  3),
+           ("moho",     "ARMMOHO",  20,  3),
+           ("geo",      "ARMGEO",   15,  3),
+           # the extensions: tools/cob_ext_fixture.py's generated unit, in this instance only
+           ("extension", "COBEXT",   8,  3)]
+RS_MAP = {"builder", "advbuilder", "reclaim", "mex", "moho", "geo"}
+
+
+def install_extension(inst):
+    """COBEXT's archive in this instance's game folder; returns the path to remove after."""
+    subprocess.run([sys.executable, str(HERE / "cob_ext_fixture.py"), str(gamedir(inst))], check=True)
+    return gamedir(inst) / "cobext.ufo"
 
 
 def tacli(*args, timeout=400):
@@ -113,6 +131,17 @@ def follow(inst, utype, engine_index):
 
 def run_one(inst, name, utype, run_s, after_s, out):
     print(f"== {name} ({utype})", flush=True)
+    if name in RS_MAP:
+        subprocess.run([sys.executable, str(HERE / "resource_fixture.py"), str(gamedir(inst))], check=True)
+    override = install_extension(inst) if name == "extension" else None
+    try:
+        record(inst, name, utype, run_s, after_s, out)
+    finally:
+        if override:
+            override.unlink()
+
+
+def record(inst, name, utype, run_s, after_s, out):
     tacli("arm", inst, f"cobtrace.on={utype}", "native.on=all", "posedump.on=off")
     report = tacli("scenario", "load", inst, f"cob-{name}", "--restart", "--json")
     idx = None
@@ -145,7 +174,7 @@ def run_one(inst, name, utype, run_s, after_s, out):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("names", nargs="*", help="class names to run (default: all nine)")
+    ap.add_argument("names", nargs="*", help="class names to run (default: all)")
     ap.add_argument("--instance", default="cobfx")
     ap.add_argument("--out", default=str(ROOT / "research/notes/evidence/cobtrace"))
     ap.add_argument("--keep", action="store_true", help="leave the instance's arm files in place")
