@@ -1713,21 +1713,24 @@ def _piece(cob, index):
 
 # --------------------------------------------------------------------------- the virtual machine
 
-# Every constant and rule below was read out of the retail binary; the addresses
-# are in research/notes/exe-reverse-engineering.md §"The COB engine". The engine
-# is the reference, not Spring: where the two differ this follows the engine.
+# tacob runs the one COB VM there is outside the engine: `tagpu/ddraw/src/tagpu_cobvm.c`,
+# the file the in-game wiki links and the game will run (research/notes/ingame-wiki-cob-plan.md).
+# It is loaded through ctypes: compiled on first use from the checkout into build/cobvm/,
+# keyed by the hash of its sources, or shipped beside the executable in the packaged folder
+# (`tools/tacob-build.py` cross-compiles it). The constants below are the engine's facts the
+# rest of this tool reasons with; the rules themselves live in the C file only.
 
 SIM_RATE = 30                 # cob+0x04 (0x4B0641); sleep ticks and MOVE/TURN speeds divide by it
 
-ST_FREE      = 0x00000000     # the eight status words (alloc 0x4B08F9, dispatch 0x4B0DBF)
+ST_FREE      = 0x00000000     # the record's status words (alloc 0x4B08F9, dispatch 0x4B0DBF)
 ST_RUN       = 0x01000000
 ST_WAIT_TURN = 0x02100000
 ST_WAIT_MOVE = 0x02200000
 ST_SLEEP     = 0x02400000
 ST_CALL      = 0x02800000
 
-REC_WORDS = 32                # the record's stack, +0x24 to the end of the 0xA4 bytes
-NRECORDS = 8
+REC_WORDS = 128               # a record's stack in Impure's layout (TAGPU_COB_WORDS)
+NRECORDS = 8                  # the retail engine's records; Impure's raised build has ten
 
 # the piece animation array (cob+0x14): 19 dwords per piece, three axes per group
 PIECE_FIELDS = 19
@@ -1746,23 +1749,173 @@ def idiv(a, b):
     return -q if (a < 0) != (b < 0) else q
 
 
-class Thread:
-    """One 0xA4-byte record. Nothing clears it on free — an unwritten local reads
-    whatever the record last held there (CREATE_LOCAL_VAR only bumps the index)."""
+import ctypes as _C
+import hashlib as _hashlib
+import subprocess as _subprocess
 
-    __slots__ = ("status", "pc", "sp", "sleep", "piece", "axis", "child", "mask", "cb", "stack")
+RULES_RETAIL, RULES_IMPURE = 0, 1     # tagpu_cobvm.h: the retail engine, Impure's raised build
+COB_THREADS = 10                      # TAGPU_COB_THREADS
+RECORD_BYTES = 36 + 4 * REC_WORDS     # TAGPU_COB_RECORD_BYTES
+OBJECT_BYTES = 28 + COB_THREADS * RECORD_BYTES + 8     # TAGPU_COB_OBJECT_BYTES
+COUNT_OFFSET = 28 + COB_THREADS * RECORD_BYTES         # TAGPU_COB_COUNT_OFFSET
+PRIM_BASE, PRIM_BYTES = 0x22, 0x36    # the posed model's PrimitiveStructs
+PRIM_POS, PRIM_TURN, PRIM_FLAGS = 0x04, 0x10, 0x28
+VISIBLE, CACHED, SHADED = 1, 2, 4
+COB_SOURCES = ("src/tagpu_cobvm.c", "src/tagpu_cob_safe.c", "inc/tagpu_cobvm.h", "inc/tagpu_cob_safe.h")
 
-    def __init__(self):
-        self.status = ST_FREE
-        self.pc = 0
-        self.sp = -1
-        self.sleep = 0
-        self.piece = 0
-        self.axis = 0
-        self.child = -1
-        self.mask = 1
-        self.cb = None
-        self.stack = [0] * REC_WORDS
+
+class _Record(_C.Structure):
+    _fields_ = [("status", _C.c_uint32), ("pc", _C.c_uint32), ("sp", _C.c_int32),
+                ("sleep", _C.c_int32), ("piece", _C.c_int32), ("axis", _C.c_int32),
+                ("child", _C.c_int32), ("mask", _C.c_uint32), ("callback", _C.c_uint32),
+                ("stack", _C.c_int32 * REC_WORDS)]
+
+
+class _Effect(_C.Structure):
+    _fields_ = [("op", _C.c_uint32), ("slot", _C.c_int32), ("pc", _C.c_int32),
+                ("piece", _C.c_int32), ("v", _C.c_int32 * 3)]
+
+
+class _Trace(_C.Structure):
+    _fields_ = [("kind", _C.c_char), ("tick", _C.c_uint32), ("slot", _C.c_int32),
+                ("script", _C.c_int32), ("pc", _C.c_int32), ("frm", _C.c_char),
+                ("parent", _C.c_int32), ("argc", _C.c_int32),
+                ("args", _C.POINTER(_C.c_int32)), ("value", _C.c_int32), ("has_value", _C.c_int)]
+
+
+_GET = _C.CFUNCTYPE(_C.c_int32, _C.c_void_p, _C.c_int32, _C.c_int32, _C.c_int32, _C.c_int32, _C.c_int32)
+_RAND = _C.CFUNCTYPE(_C.c_int32, _C.c_void_p, _C.c_int32, _C.c_int32)
+_CARGO = _C.CFUNCTYPE(_C.c_int32, _C.c_void_p, _C.c_int32)
+_CARRIER = _C.CFUNCTYPE(_C.c_int32, _C.c_void_p)
+_ALIVE = _C.CFUNCTYPE(_C.c_int, _C.c_void_p, _C.c_int32)
+_CALLBACK = _C.CFUNCTYPE(None, _C.c_void_p, _C.c_uint32, _C.c_int32)
+_COMMIT = _C.CFUNCTYPE(None, _C.c_void_p, _C.POINTER(_Effect))
+_TRACE = _C.CFUNCTYPE(None, _C.c_void_p, _C.POINTER(_Trace))
+
+
+class _Host(_C.Structure):
+    _fields_ = [("ctx", _C.c_void_p), ("get", _GET), ("rand", _RAND), ("cargo", _CARGO),
+                ("carrier", _CARRIER), ("alive", _ALIVE), ("callback", _CALLBACK),
+                ("commit", _COMMIT), ("trace", _TRACE)]
+
+
+class _Run(_C.Structure):
+    _fields_ = [("host", _C.POINTER(_Host)), ("log", _C.POINTER(_Effect)), ("cap", _C.c_uint),
+                ("n", _C.c_uint), ("tick", _C.c_uint32), ("reason", _C.c_char * 160)]
+
+
+class _Pend(_C.Structure):
+    _fields_ = [("on", _C.c_int), ("slot", _C.c_int), ("script", _C.c_int), ("parent", _C.c_int),
+                ("argc", _C.c_int), ("frm", _C.c_char), ("tick", _C.c_uint32)]
+
+
+class _Vm(_C.Structure):
+    _fields_ = [("program", _C.c_void_p), ("object", _C.c_void_p), ("statics", _C.c_void_p),
+                ("anim", _C.c_void_p), ("model", _C.c_void_p), ("threads", _C.c_uint),
+                ("rules", _C.c_uint), ("faulted", _C.c_int), ("pend", _Pend)]
+
+
+def _cob_source_root():
+    """The directory holding src/ and inc/ of the DLL — the checkout's tagpu/ddraw."""
+    return HERE.parent / "tagpu" / "ddraw"
+
+
+def _build_cobvm(out: Path, sources, cc=None, target_flags=()):
+    """Compile the core into a shared library at `out`. Returns `out`."""
+    cc = cc or os.environ.get("CC") or "cc"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(out.suffix + ".tmp")
+    cmd = [cc, "-std=c99", "-O2", "-Wall", "-Werror", "-shared", *target_flags,
+           "-I", str(sources / "inc"), *[str(sources / s) for s in COB_SOURCES if s.endswith(".c")],
+           "-o", str(tmp)]
+    if not sys.platform.startswith("win") and "mingw" not in cc:
+        cmd.insert(5, "-fPIC")
+    try:
+        _subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except FileNotFoundError:
+        raise TacobError(f"the COB VM is C (tagpu_cobvm.c) and needs a C compiler: {cc} was not found")
+    except _subprocess.CalledProcessError as e:
+        raise TacobError(f"compiling the COB VM failed:\n{e.stderr}")
+    os.replace(tmp, out)
+    return out
+
+
+_LIB = None
+
+
+def cobvm_lib():
+    """The core, loaded once: the packaged folder's copy, or the checkout's, built on demand."""
+    global _LIB
+    if _LIB is not None:
+        return _LIB
+    if BUNDLED:
+        path = HERE / ("cobvm.dll" if sys.platform.startswith("win") else "libcobvm.so")
+        if not path.is_file():
+            raise TacobError(f"the packaged COB VM is missing: {path}")
+    else:
+        src = _cob_source_root()
+        h = _hashlib.sha256()
+        for s in COB_SOURCES:
+            h.update(s.encode() + b"\0" + (src / s).read_bytes())
+        name = "cobvm.dll" if sys.platform.startswith("win") else "libcobvm.so"
+        path = HERE.parent / "build" / "cobvm" / h.hexdigest()[:16] / name
+        if not path.is_file():
+            _build_cobvm(path, src)
+    _LIB = bind_cobvm(_C.CDLL(str(path)))
+    return _LIB
+
+
+def bind_cobvm(lib):
+    """Declare the core's entries on a loaded copy of it (a sanitizer build in the tests too)."""
+    lib.tagpu_cob_program.restype = _C.c_void_p
+    lib.tagpu_cob_program.argtypes = [_C.c_void_p, _C.c_size_t, _C.c_char_p, _C.c_size_t]
+    lib.tagpu_cob_program_free.argtypes = [_C.c_void_p]
+    lib.tagpu_cob_bind_model.argtypes = [_C.c_void_p, _C.c_uint32, _C.c_char_p, _C.c_size_t]
+    lib.tagpu_cobvm_init.argtypes = [_C.POINTER(_Vm), _C.c_void_p, _C.c_uint, _C.c_void_p, _C.c_void_p,
+                                     _C.c_void_p, _C.c_void_p, _C.c_char_p, _C.c_uint]
+    lib.tagpu_cobvm_index.argtypes = [_C.c_void_p, _C.c_char_p]
+    lib.tagpu_cobvm_start.argtypes = [_C.POINTER(_Vm), _C.POINTER(_Run), _C.c_int, _C.c_uint32, _C.c_int,
+                                      _C.c_int, _C.c_int, _C.POINTER(_C.c_int32)]
+    lib.tagpu_cobvm_query.argtypes = [_C.POINTER(_Vm), _C.POINTER(_Run), _C.c_int, _C.POINTER(_C.c_int32)]
+    lib.tagpu_cobvm_tick.argtypes = [_C.POINTER(_Vm), _C.POINTER(_Run), _C.c_int32]
+    lib.tagpu_cobvm_flush.argtypes = [_C.POINTER(_Vm), _C.POINTER(_Run)]
+    lib.tagpu_cobvm_flush.restype = None
+    return lib
+
+
+class _ThreadView:
+    """One record of the object, read where the core keeps it."""
+
+    def __init__(self, vm, slot):
+        self._rec = _Record.from_buffer(vm._object, 28 + slot * RECORD_BYTES)
+        self._vm = vm
+
+    def __getattr__(self, name):
+        if name == "cb":
+            return self._vm._callbacks.get(self._rec.callback)
+        if name == "stack":
+            return list(self._rec.stack)
+        return getattr(self._rec, name)
+
+
+class _PieceAxes:
+    """vm.pos / vm.ang: per piece, three values read from the posed model."""
+
+    def __init__(self, vm, off, width):
+        self._vm, self._off, self._width = vm, off, width
+
+    def __len__(self):
+        return self._vm._npieces
+
+    def __getitem__(self, piece):
+        if not 0 <= piece < self._vm._npieces:
+            raise IndexError(piece)
+        base = PRIM_BASE + piece * PRIM_BYTES + self._off
+        fmt = "<3i" if self._width == 4 else "<3H"
+        return list(struct.unpack_from(fmt, self._vm._model, base))
+
+    def __iter__(self):
+        return (self[p] for p in range(len(self)))
 
 
 class AimCallback:
@@ -1818,41 +1971,106 @@ class UnitWorld:
 
 
 class CobVM:
-    """The eight-record thread pool of one unit, running its COB the way
-    0x4B0DA0 and 0x4B1C00 do. `tick` is set by whoever drives it."""
+    """One unit's COB object, run by tagpu_cobvm.c. `tick` is set by whoever drives it.
+    `rules` picks the game build the run reproduces: RULES_RETAIL (eight records, the
+    retail engine the cobtrace fixtures were recorded on) or RULES_IMPURE (Impure's
+    raised build). Faults raise TacobError with the core's reason."""
 
-    def __init__(self, cob, world=None, trace=None, unit=1, type_name="?", visible=None):
+    def __init__(self, cob, world=None, trace=None, unit=1, type_name="?", visible=None,
+                 rules=RULES_RETAIL):
+        lib = cobvm_lib()
         self.cob = cob
-        self.code = [w & 0xFFFFFFFF for w in cob.code]
         self.names = [n for n, _ in cob.scripts]
         self.entries = [e for _, e in cob.scripts]
         self.world = world if world is not None else UnitWorld()
         self.trace = trace
         self.unit = unit
         self.type = type_name
-        self.tick = 0
-        self.threads = [Thread() for _ in range(NRECORDS)]
-        self.running = 0                                  # cob+0x53C
-        self.statics = [0] * cob.statics                  # cob+0x10, zero-filled
-        self.anim = [0] * (PIECE_FIELDS * len(cob.pieces))  # cob+0x14, zero-filled
-        self.dirty = 0                                    # cob+0x18
-        self.pos = [[0, 0, 0] for _ in cob.pieces]        # PrimitiveStruct XPos/ZPos/YPos, 16.16
-        self.ang = [[0, 0, 0] for _ in cob.pieces]        # XTurn/ZTurn/YTurn, uint16
+        self._lib = lib
+        self._npieces = len(cob.pieces)
+        blob = write_cob(cob)
+        self._blob = _C.create_string_buffer(blob, len(blob))
+        reason = _C.create_string_buffer(256)
+        self._program = lib.tagpu_cob_program(self._blob, len(blob), reason, 256)
+        if not self._program:
+            raise TacobError(f"the COB VM refuses this script: {reason.value.decode('latin-1')}")
+        if not lib.tagpu_cob_bind_model(self._program, self._npieces, reason, 256):
+            lib.tagpu_cob_program_free(self._program)
+            self._program = None
+            raise TacobError(f"the COB VM refuses this script: {reason.value.decode('latin-1')}")
+        self._object = (_C.c_ubyte * OBJECT_BYTES)()
+        self._statics = (_C.c_int32 * max(1, cob.statics))()
+        self.anim = (_C.c_int32 * max(1, PIECE_FIELDS * self._npieces))()
+        self._model = (_C.c_ubyte * (PRIM_BASE + PRIM_BYTES * max(1, self._npieces)))()
+        self._vm = _Vm()
+        if not lib.tagpu_cobvm_init(_C.byref(self._vm), self._program, rules, self._object,
+                                    self._statics, self.anim, self._model, reason, 256):
+            raise TacobError(f"the COB VM refuses its blocks: {reason.value.decode('latin-1')}")
         # 0x45AF1B: the model builder clears PrimitiveStruct+0x28 bit 0 for a piece
         # whose 3DO node has fewer than three vertices — every flare, wake, tube and
-        # thrust anchor starts invisible without the script hiding it
-        self.visible = list(visible) if visible else [True] * len(cob.pieces)
-        self.cached = [True] * len(cob.pieces)
-        self.shaded = [True] * len(cob.pieces)
-        self._pend = None                                 # the latched start, as the oracle latches it
+        # thrust anchor starts invisible without the script hiding it; every piece
+        # starts cached and shaded
+        vis = list(visible) if visible else [True] * self._npieces
+        for p in range(self._npieces):
+            flags = CACHED | SHADED | (VISIBLE if p >= len(vis) or vis[p] else 0)
+            struct.pack_into("<H", self._model, PRIM_BASE + p * PRIM_BYTES + PRIM_FLAGS, flags)
+        self._callbacks = {}
+        self._next_cb = 1
+        self._error = None
+        self._host = _Host(None, _GET(self._get), _RAND(self._rand), _CARGO(), _CARRIER(),
+                           _ALIVE(), _CALLBACK(self._callback), _COMMIT(self._commit),
+                           _TRACE(self._trace) if trace is not None else _TRACE())
+        self._run = _Run()
+        self._run.host = _C.pointer(self._host)
+        self.pos = _PieceAxes(self, PRIM_POS, 4)
+        self.ang = _PieceAxes(self, PRIM_TURN, 2)
+
+    def __del__(self):
+        if getattr(self, "_program", None):
+            self._lib.tagpu_cob_program_free(self._program)
+            self._program = None
+
+    # -- the state, read where the core keeps it ---------------------------
+    @property
+    def tick(self):
+        return self._run.tick
+
+    @tick.setter
+    def tick(self, value):
+        self._run.tick = value & 0xFFFFFFFF
+
+    @property
+    def threads(self):
+        return [_ThreadView(self, s) for s in range(self._vm.threads)]
+
+    @property
+    def running(self):
+        return struct.unpack_from("<I", self._object, COUNT_OFFSET)[0]
+
+    @property
+    def statics(self):
+        return list(self._statics[:self.cob.statics])
+
+    def _flags(self, bit):
+        return [bool(self._model[PRIM_BASE + p * PRIM_BYTES + PRIM_FLAGS] & bit)
+                for p in range(self._npieces)]
+
+    @property
+    def visible(self):
+        return self._flags(VISIBLE)
+
+    @property
+    def cached(self):
+        return self._flags(CACHED)
+
+    @property
+    def shaded(self):
+        return self._flags(SHADED)
 
     # -- names ------------------------------------------------------------
     def index_of(self, name):
         """Name2Index 0x4B07C0: the first entry whose name matches."""
-        try:
-            return self.names.index(name)
-        except ValueError:
-            return -1
+        return self._lib.tagpu_cobvm_index(self._program, name.encode("latin-1"))
 
     def script_of_pc(self, pc):
         """The script whose body holds pc — the largest entry <= pc, ties to the
@@ -1863,476 +2081,104 @@ class CobVM:
                 best = i
         return self.names[best] if best >= 0 else "?"
 
-    # -- the trace's latch ------------------------------------------------
-    def flush_start(self):
-        """The oracle writes a start at the next hook event, reading the record's
-        stack then: the callers write the arguments only after the allocator returns."""
-        p = self._pend
-        if p is None:
-            return
-        self._pend = None
-        if self.trace is None:
-            return
-        slot, idx, tick, src, parent, argc = p
-        rec = self.threads[slot]
-        if argc < 0:
-            argc = rec.sp + 1
-        argc = max(0, min(argc, REC_WORDS))
-        args = ",".join(str(i32(rec.stack[i])) for i in range(argc))
-        where = "E" if src == "E" else "%s:%d" % (src, parent)
-        self.trace("S\t%d\t%d\t%s\t%s\t%d\t%s\t%s"
-                   % (tick, self.unit, self.type, self.names[idx], slot, where, args))
+    # -- the host -----------------------------------------------------------
+    def _guard(self, fn):
+        try:
+            return fn()
+        except BaseException as e:          # a ctypes callback cannot raise: hold it for the caller
+            if self._error is None:
+                self._error = e
+            return 0
 
-    def _emit(self, line):
-        if self.trace is not None:
-            self.trace(line)
+    def _get(self, ctx, vid, a, b, c, d):
+        return self._guard(lambda: i32(self.world.get(vid, a, b, c, d)))
 
-    # -- the pool ---------------------------------------------------------
-    def alloc(self, idx, src="E", parent=-1, argc=-1):
-        """COBEngine_AllocThread 0x4B08C0. -1 for a script the file lacks and for a
-        full pool alike; the first free slot from 0, and the record is not cleared."""
-        self.flush_start()
-        if idx < 0 or idx >= len(self.names):
-            return -1
-        for slot in range(NRECORDS):
-            rec = self.threads[slot]
-            if rec.status == ST_FREE:
-                rec.status = ST_RUN
-                rec.pc = self.entries[idx]
-                rec.sp = -1
-                rec.cb = None
-                rec.mask = 1
-                self.running += 1
-                self._pend = (slot, idx, self.tick, src, parent, argc)
-                return slot
-        self._emit("X\t%d\t%d\t%s\t%s" % (self.tick, self.unit, self.names[idx], src))
-        return -1
+    def _rand(self, ctx, n, lo):
+        return self._guard(lambda: i32(self.world.rand(n, lo)))
 
-    def free(self, slot):
-        self.threads[slot].status = ST_FREE
-        self.running -= 1
+    def _callback(self, ctx, token, value):
+        cb = self._callbacks.get(token)
+        if cb is not None:
+            self._guard(lambda: cb(value))
 
-    def wake_callers(self, slot):
-        """Every record blocked in a call on `slot` goes runnable (0x4B19FF, 0x4B1AB1)."""
-        for rec in self.threads:
-            if (rec.status & 0xFFF00000) == ST_CALL and rec.child == slot:
-                rec.status = ST_RUN
+    def _commit(self, ctx, e):
+        e = e.contents
+        op, piece, v = e.op, e.piece, list(e.v)
+        tick = self.tick
+
+        def apply():
+            if op == 0x10082000:
+                self.world.set(v[0], v[1])
+            elif op == 0x1000F000:
+                self.world.effect(tick, "emit-sfx", piece, v[0])
+            elif op == 0x10071000:
+                self.world.effect(tick, "explode", piece, v[0])
+            elif op == 0x10083000:
+                self.world.effect(tick, "attach-unit", None, (v[0], v[1], v[2]))
+            elif op == 0x10084000:
+                self.world.effect(tick, "drop-unit", None, v[0])
+        self._guard(apply)
+
+    def _trace(self, ctx, t):
+        t = t.contents
+        kind = t.kind.decode("latin-1")
+
+        def line():
+            if kind == "S":
+                args = ",".join(str(t.args[i]) for i in range(t.argc))
+                frm = t.frm.decode("latin-1")
+                where = "E" if frm == "E" else "%s:%d" % (frm, t.parent)
+                return "S\t%d\t%d\t%s\t%s\t%d\t%s\t%s" % (t.tick, self.unit, self.type,
+                                                           self.names[t.script], t.slot, where, args)
+            if kind == "R":
+                value = str(t.value) if t.has_value else "?"
+                return "R\t%d\t%d\t%d\t%s\t%s" % (t.tick, self.unit, t.slot, self.script_of_pc(t.pc), value)
+            if kind == "K":
+                return "K\t%d\t%d\t%d\t%s\t%d" % (t.tick, self.unit, t.slot, self.script_of_pc(t.pc), t.parent)
+            if kind == "D":
+                return "D\t%d\t%d\t%d\t%d" % (t.tick, self.unit, t.slot, t.value)
+            return "X\t%d\t%d\t%s\t%s" % (t.tick, self.unit, self.names[t.script], t.frm.decode("latin-1"))
+        self._guard(lambda: self.trace(line()))
+
+    def _call(self, result):
+        """Re-raise what a callback raised, then a fault; else the core's answer."""
+        if self._error is not None:
+            e, self._error = self._error, None
+            raise e
+        if result < 0:
+            raise TacobError(f"the COB VM refused {self.type}: {self._run.reason.decode('latin-1')}")
+        return result
 
     # -- the engine's entries ---------------------------------------------
+    def flush_start(self):
+        """The oracle writes a start at the next hook event; this writes a held one now."""
+        self._lib.tagpu_cobvm_flush(_C.byref(self._vm), _C.byref(self._run))
+        self._call(0)
+
     def start_script(self, name, run_now=False, args=(), cb=None, argwords=False):
         """0x4B0B00 (by index, four argument words, `sp = argc-1`) when `argwords`,
         else 0x4B0940 (no arguments at all, `sp` stays -1)."""
-        slot = self.alloc(self.index_of(name), argc=len(args) if argwords else -1)
-        if slot < 0:
-            if argwords and cb is not None:
-                cb(0)                       # 0x4B0B11: a refused Aim* reports "not aimed" at once
-            return 0
-        rec = self.threads[slot]
-        rec.cb = cb
-        if argwords:
-            for i in range(4):              # a0..a3 land on the record whatever argc says
-                rec.stack[i] = i32(args[i]) if i < len(args) else 0
-            rec.sp = len(args) - 1
-        if run_now:
-            if self.running:
-                for s in range(NRECORDS):
-                    self.run_thread(s, 0)
-            self.step_anim(0)
-        return 1
+        token = 0
+        if cb is not None:
+            token = self._next_cb
+            self._next_cb += 1
+            self._callbacks[token] = cb
+        words = (_C.c_int32 * 4)(*[i32(args[i]) if i < len(args) else 0 for i in range(4)])
+        return self._call(self._lib.tagpu_cobvm_start(
+            _C.byref(self._vm), _C.byref(self._run), self.index_of(name), token, 1 if run_now else 0,
+            1 if argwords else 0, len(args) if argwords else 0, words))
 
     def query_script(self, name, args):
         """COBEngine_QueryScript 0x4B0C40: four words in, `sp = 3`, the thread runs
         to its first block inside the call, then stack[0..3] comes back out."""
-        slot = self.alloc(self.index_of(name))
-        if slot < 0:
-            return None                     # the silent failure: the out-slots stay untouched
-        rec = self.threads[slot]
-        rec.cb = None
-        for i in range(4):
-            rec.stack[i] = i32(args[i]) if i < len(args) else 0
-        rec.sp = 3
-        self.run_thread(slot, 0)
-        return [i32(rec.stack[i]) for i in range(4)]
+        io = (_C.c_int32 * 4)(*[i32(args[i]) if i < len(args) else 0 for i in range(4)])
+        got = self._call(self._lib.tagpu_cobvm_query(_C.byref(self._vm), _C.byref(self._run),
+                                                     self.index_of(name), io))
+        return list(io) if got else None
 
     def do_scripts_now(self, dt):
         """COBEngine_DoScriptsNow 0x4B0D60 — the per-unit tick, called with dt = 1."""
-        for slot in range(NRECORDS):
-            self.run_thread(slot, dt)
-        self.step_anim(dt)
-
-    # -- the runner -------------------------------------------------------
-    def run_thread(self, slot, dt):
-        """0x4B0DA0: wake the record if its block has cleared, then execute
-        opcodes back to back until one blocks it or ends it."""
-        self.flush_start()
-        rec = self.threads[slot]
-        top = rec.status & 0xFF000000
-        if top == 0:
-            return
-        if top == 0x02000000:
-            sub = rec.status & 0x00F00000
-            if sub == 0x100000:                     # wait-for-turn
-                base = rec.piece * PIECE_FIELDS
-                if self.anim[base + F_TURN_SPEED + rec.axis] == 0:
-                    rec.status = ST_RUN
-            elif sub == 0x200000:                   # wait-for-move
-                base = rec.piece * PIECE_FIELDS
-                if self.anim[base + F_MOVE_SPEED + rec.axis] == 0:
-                    rec.status = ST_RUN
-            elif sub == 0x400000:                   # sleeping
-                rec.sleep -= dt
-                if rec.sleep <= 0:
-                    rec.status = ST_RUN
-            # 0x800000 (blocked in a call) is never woken here — only the child's
-            # RETURN or a signal that kills the child does that
-        if (rec.status & 0xFF000000) != ST_RUN:
-            return
-        self.exec_thread(slot)
-
-    def exec_thread(self, slot):
-        """The opcode loop. `pc` stays on the executing word until the tail advances
-        it (0x4B1BD5/0x4B1BD9), which is the pc a K line reports."""
-        rec = self.threads[slot]
-        code, anim = self.code, self.anim
-        while True:
-            pc = rec.pc
-            word = code[pc]
-            op = word & 0x100FF000
-            nxt = None                      # None = the tail's pc+1; False = stop
-
-            if op == 0x10001000:            # MOVE piece axis; pops target then speed
-                piece, axis = code[pc + 1], code[pc + 2]
-                base = piece * PIECE_FIELDS
-                target = i32(rec.stack[rec.sp]); rec.sp -= 1
-                anim[base + F_MOVE_TARGET + axis] = target
-                speed = i32(rec.stack[rec.sp]); rec.sp -= 1
-                speed = idiv(speed, SIM_RATE)
-                if target < self.pos[piece][axis]:
-                    speed = -speed
-                anim[base + F_MOVE_SPEED + axis] = speed
-                anim[base + F_DIRTY] = 1
-                self.dirty = 1
-                nxt = pc + 3
-            elif op == 0x10002000:          # TURN piece axis; the short way round
-                piece, axis = code[pc + 1], code[pc + 2]
-                base = piece * PIECE_FIELDS
-                target = i32(rec.stack[rec.sp]) & 0xFFFF; rec.sp -= 1
-                anim[base + F_TURN_TARGET + axis] = target
-                anim[base + F_SPIN_ACCEL + axis] = 0
-                speed = idiv(i32(rec.stack[rec.sp]), SIM_RATE); rec.sp -= 1
-                delta = target - self.ang[piece][axis]
-                if delta == 0:
-                    speed = 0
-                elif (abs(delta) > 0x8000) != (delta < 0):
-                    speed = -speed
-                anim[base + F_TURN_SPEED + axis] = speed
-                anim[base + F_DIRTY] = 1
-                self.dirty = 1
-                nxt = pc + 3
-            elif op == 0x10003000:          # SPIN piece axis; pops speed then acceleration
-                piece, axis = code[pc + 1], code[pc + 2]
-                base = piece * PIECE_FIELDS
-                anim[base + F_TURN_TARGET + axis] = -1     # "no target": the stepper never arrives
-                anim[base + F_SPIN_TARGET + axis] = idiv(i32(rec.stack[rec.sp]), SIM_RATE); rec.sp -= 1
-                anim[base + F_SPIN_ACCEL + axis] = idiv(i32(rec.stack[rec.sp]), SIM_RATE); rec.sp -= 1
-                if anim[base + F_SPIN_ACCEL + axis] == 0:
-                    anim[base + F_TURN_SPEED + axis] = anim[base + F_SPIN_TARGET + axis]
-                anim[base + F_DIRTY] = 1
-                self.dirty = 1
-                nxt = pc + 3
-            elif op == 0x10004000:          # STOP_SPIN piece axis; pops the deceleration
-                piece, axis = code[pc + 1], code[pc + 2]
-                base = piece * PIECE_FIELDS
-                anim[base + F_SPIN_TARGET + axis] = 0
-                accel = -idiv(i32(rec.stack[rec.sp]), SIM_RATE); rec.sp -= 1
-                anim[base + F_SPIN_ACCEL + axis] = accel
-                if accel == 0:
-                    anim[base + F_TURN_SPEED + axis] = 0
-                nxt = pc + 3                # 0x4B18F8: neither the dirty flag nor cob+0x18 is set
-            elif op in (0x10005000, 0x10006000):    # SHOW / HIDE
-                self.visible[code[pc + 1]] = (op == 0x10005000)
-                nxt = pc + 2
-            elif op in (0x10007000, 0x10008000):    # CACHE / DONT_CACHE
-                self.cached[code[pc + 1]] = (op == 0x10007000)
-                nxt = pc + 2
-            elif op == 0x10009000:          # two pops through vt+0x28 [unknown]
-                rec.sp -= 2
-                nxt = pc + 2
-            elif op == 0x1000A000:          # vt+0x2C(piece) [unknown]
-                nxt = pc + 2
-            elif op == 0x1000B000:          # MOVE_NOW piece axis
-                piece, axis = code[pc + 1], code[pc + 2]
-                base = piece * PIECE_FIELDS
-                target = i32(rec.stack[rec.sp]); rec.sp -= 1
-                anim[base + F_MOVE_TARGET + axis] = target
-                anim[base + F_MOVE_SPEED + axis] = 0
-                self.pos[piece][axis] = target
-                nxt = pc + 3
-            elif op == 0x1000C000:          # TURN_NOW piece axis
-                piece, axis = code[pc + 1], code[pc + 2]
-                base = piece * PIECE_FIELDS
-                angle = i32(rec.stack[rec.sp]) & 0xFFFF; rec.sp -= 1
-                anim[base + F_TURN_TARGET + axis] = angle
-                anim[base + F_SPIN_ACCEL + axis] = 0
-                anim[base + F_TURN_SPEED + axis] = 0
-                self.ang[piece][axis] = angle
-                nxt = pc + 3
-            elif op in (0x1000D000, 0x1000E000):    # SHADE / DONT_SHADE
-                self.shaded[code[pc + 1]] = (op == 0x1000D000)
-                nxt = pc + 2
-            elif op == 0x1000F000:          # EMIT_SFX piece; pops the type
-                sfx = i32(rec.stack[rec.sp]); rec.sp -= 1
-                self.world.effect(self.tick, "emit-sfx", code[pc + 1], sfx)
-                nxt = pc + 2
-            elif op == 0x10011000:          # WAIT_FOR_TURN piece axis
-                rec.piece, rec.axis = code[pc + 1], code[pc + 2]
-                rec.status = ST_WAIT_TURN
-                rec.pc = pc + 3
-                return
-            elif op == 0x10012000:          # WAIT_FOR_MOVE piece axis
-                rec.piece, rec.axis = code[pc + 1], code[pc + 2]
-                rec.status = ST_WAIT_MOVE
-                rec.pc = pc + 3
-                return
-            elif op == 0x10013000:          # SLEEP; ms x rate / 1000, truncated
-                ms = i32(rec.stack[rec.sp]); rec.sp -= 1
-                rec.sleep = idiv(ms * SIM_RATE, 1000)
-                rec.status = ST_SLEEP
-                rec.pc = pc + 1
-                return
-            elif op == 0x10021000:          # PUSH constant / local / static
-                sel = word & 7
-                if sel == 1:
-                    value = i32(code[pc + 1])
-                elif sel == 2:
-                    value = rec.stack[code[pc + 1]]
-                elif sel == 4:
-                    value = self.statics[code[pc + 1]]
-                else:
-                    value = 0
-                rec.sp += 1
-                rec.stack[rec.sp] = value
-                nxt = pc + 2
-            elif op == 0x10022000:          # CREATE_LOCAL_VAR: the index moves, nothing is written
-                rec.sp += 1
-                rec.pc = pc + 1
-                continue
-            elif op == 0x10023000:          # POP into a local or a static
-                value = rec.stack[rec.sp]; rec.sp -= 1
-                sel = word & 7
-                if sel == 2:
-                    rec.stack[code[pc + 1]] = value
-                elif sel == 4:
-                    self.statics[code[pc + 1]] = value
-                nxt = pc + 2
-            elif op == 0x10024000:          # POP_STACK
-                rec.sp -= 1
-                rec.pc = pc + 1
-                continue
-            elif 0x10031000 <= op <= 0x10038000 or 0x10051000 <= op <= 0x1005A000:
-                self.arith(rec, op)
-            elif op == 0x10041000:          # RAND: pops hi then lo, pushes lo + rng(hi-lo+1)
-                hi = i32(rec.stack[rec.sp]); rec.sp -= 1
-                lo = i32(rec.stack[rec.sp]); rec.sp -= 1
-                self.flush_start()
-                r = self.world.rand(hi - lo + 1, lo)
-                value = i32(lo + r)
-                rec.sp += 1
-                rec.stack[rec.sp] = value
-                self._emit("D\t%d\t%d\t%d\t%d" % (self.tick, self.unit, slot, value))
-            elif op == 0x10042000:          # GET_UNIT_VALUE: pops the id
-                vid = i32(rec.stack[rec.sp]); rec.sp -= 1
-                rec.sp += 1
-                rec.stack[rec.sp] = i32(self.world.get(vid, 0, 0, 0, 0))
-            elif op == 0x10044000:          # vt+0x48(x) [unknown], one pop
-                rec.stack[rec.sp] = 0
-            elif op == 0x10045000:          # vt+0x4C() [unknown], no pops
-                rec.sp += 1
-                rec.stack[rec.sp] = 0
-            elif op == 0x10043000:          # GET id, a, b, c, d
-                d = i32(rec.stack[rec.sp]); rec.sp -= 1
-                c = i32(rec.stack[rec.sp]); rec.sp -= 1
-                b = i32(rec.stack[rec.sp]); rec.sp -= 1
-                a = i32(rec.stack[rec.sp]); rec.sp -= 1
-                vid = i32(rec.stack[rec.sp]); rec.sp -= 1
-                rec.sp += 1
-                rec.stack[rec.sp] = i32(self.world.get(vid, a, b, c, d))
-            elif op == 0x10061000:          # START_SCRIPT index argc
-                idx, argc = code[pc + 1], i32(code[pc + 2])
-                child = self.alloc(idx, "C", slot, argc)
-                if child >= 0:
-                    ch = self.threads[child]
-                    for k in range(argc - 1, -1, -1):
-                        ch.stack[k] = rec.stack[rec.sp]
-                        rec.sp -= 1
-                    ch.mask = rec.mask
-                nxt = pc + 3                # a refused start leaves the argc words on our stack
-            elif op == 0x10062000:          # CALL_SCRIPT index argc
-                idx, argc = code[pc + 1], i32(code[pc + 2])
-                child = self.alloc(idx, "L", slot, argc)
-                if child >= 0:
-                    ch = self.threads[child]
-                    for k in range(argc - 1, -1, -1):
-                        ch.stack[k] = rec.stack[rec.sp]
-                        rec.sp -= 1
-                    ch.mask = rec.mask
-                rec.child = child           # written even when it is -1: nothing wakes that caller
-                rec.pc = pc + 3
-                rec.status = ST_CALL
-                return
-            elif op == 0x10063000:          # pops [pc+2] words into the runner's frame [unknown]
-                rec.sp -= i32(code[pc + 2])
-                rec.pc = pc + 3
-                continue
-            elif op == 0x10064000:          # JUMP
-                nxt = code[pc + 1]
-            elif op == 0x10065000:          # RETURN
-                self.flush_start()
-                sp = rec.sp
-                value = str(i32(rec.stack[sp])) if 0 <= sp < REC_WORDS else "?"
-                self._emit("R\t%d\t%d\t%d\t%s\t%s"
-                           % (self.tick, self.unit, slot, self.script_of_pc(pc), value))
-                if rec.cb is not None:
-                    rec.cb(i32(rec.stack[rec.sp]))
-                    rec.sp -= 1
-                self.free(slot)
-                self.wake_callers(slot)
-                return
-            elif op == 0x10066000:          # JUMP_NOT_EQUAL: jumps when the value is zero
-                value = rec.stack[rec.sp]; rec.sp -= 1
-                nxt = code[pc + 1] if value == 0 else pc + 2
-            elif op == 0x10067000:          # SIGNAL
-                mask = i32(rec.stack[rec.sp]); rec.sp -= 1
-                stop = False
-                for k in range(NRECORDS):
-                    other = self.threads[k]
-                    if other.status == ST_FREE or not (other.mask & mask):
-                        continue
-                    self.flush_start()
-                    self._emit("K\t%d\t%d\t%d\t%s\t%d"
-                               % (self.tick, self.unit, k, self.script_of_pc(other.pc), slot))
-                    self.free(k)            # its RETURN never runs, so no callback either
-                    self.wake_callers(k)
-                    if k == slot:
-                        stop = True
-                if stop:
-                    rec.pc = pc + 1
-                    return
-                nxt = pc + 1
-            elif op == 0x10068000:          # SET_SIGNAL_MASK
-                rec.mask = i32(rec.stack[rec.sp]); rec.sp -= 1
-                rec.pc = pc + 1
-                continue
-            elif op == 0x10071000:          # EXPLODE piece; pops the flags
-                flags = i32(rec.stack[rec.sp]); rec.sp -= 1
-                self.world.effect(self.tick, "explode", code[pc + 1], flags)
-                nxt = pc + 2
-            elif op == 0x10082000:          # SET id value
-                value = i32(rec.stack[rec.sp]); rec.sp -= 1
-                vid = i32(rec.stack[rec.sp]); rec.sp -= 1
-                self.world.set(vid, value)
-            elif op == 0x10083000:          # ATTACH_UNIT: three pops
-                a = i32(rec.stack[rec.sp]); rec.sp -= 1
-                b = i32(rec.stack[rec.sp]); rec.sp -= 1
-                c = i32(rec.stack[rec.sp]); rec.sp -= 1
-                self.world.effect(self.tick, "attach-unit", None, (c, b, a))
-            elif op == 0x10084000:          # DROP_UNIT: one pop
-                a = i32(rec.stack[rec.sp]); rec.sp -= 1
-                self.world.effect(self.tick, "drop-unit", None, a)
-            else:                           # 0x4B1B60: an unknown opcode kills the thread silently
-                self.free(slot)
-                return
-
-            rec.pc = (pc + 1) if nxt is None else nxt
-
-    def arith(self, rec, op):
-        """The two-operand words (0x4B1479..0x4B18AB). `b` is the top of the stack."""
-        if op == 0x10038000:                # BITWISE_NOT: neither pops nor pushes
-            rec.stack[rec.sp] = i32(~rec.stack[rec.sp])
-            return
-        if op == 0x1005A000:                # NOT (logical): the same, as a 0/1
-            rec.stack[rec.sp] = 1 if rec.stack[rec.sp] == 0 else 0
-            return
-        b = i32(rec.stack[rec.sp]); rec.sp -= 1
-        a = i32(rec.stack[rec.sp])
-        if op == 0x10031000:   v = a + b
-        elif op == 0x10032000: v = a - b
-        elif op == 0x10033000: v = a * b
-        elif op == 0x10034000: v = idiv(a, b) if b else 0   # MOD shares this handler: op & mask
-        elif op == 0x10035000: v = a & b
-        elif op == 0x10036000: v = a | b
-        elif op == 0x10037000: v = a ^ b
-        elif op == 0x10051000: v = 1 if a < b else 0
-        elif op == 0x10052000: v = 1 if a <= b else 0
-        elif op == 0x10053000: v = 1 if a > b else 0
-        elif op == 0x10054000: v = 1 if a >= b else 0
-        elif op == 0x10055000: v = 1 if a == b else 0
-        elif op == 0x10056000: v = 1 if a != b else 0
-        elif op == 0x10057000: v = 1 if (a and b) else 0
-        elif op == 0x10058000: v = 1 if (a or b) else 0     # 0x4B1829 pushes a, which is 0 there
-        elif op == 0x10059000: v = a ^ b                    # 0x4B1875: XOR is the bitwise word
-        else: v = a
-        rec.stack[rec.sp] = i32(v)
-
-    # -- the animation stepper --------------------------------------------
-    def step_anim(self, dt):
-        """0x4B1C00. Returns at once on dt == 0 or with nothing animating; else clears
-        each piece's flag, advances its three axes, and re-sets the flag if any is
-        still travelling — which is exactly what wait-for-turn/-move test."""
-        if dt == 0 or not self.dirty:
-            return
-        self.dirty = 0
-        anim = self.anim
-        for piece in range(len(self.pos)):
-            base = piece * PIECE_FIELDS
-            if anim[base + F_DIRTY] == 0:
-                continue
-            anim[base + F_DIRTY] = 0
-            for axis in range(3):
-                speed = anim[base + F_MOVE_SPEED + axis]
-                if speed:
-                    target = anim[base + F_MOVE_TARGET + axis]
-                    value = self.pos[piece][axis] + dt * speed
-                    if (speed > 0 and value >= target) or (speed < 0 and value <= target):
-                        value = target
-                        anim[base + F_MOVE_SPEED + axis] = 0
-                    else:
-                        anim[base + F_DIRTY] = 1
-                    self.pos[piece][axis] = i32(value)
-                accel = anim[base + F_SPIN_ACCEL + axis]
-                if accel:
-                    anim[base + F_TURN_SPEED + axis] += accel
-                    target = anim[base + F_SPIN_TARGET + axis]
-                    speed = anim[base + F_TURN_SPEED + axis]
-                    if (accel > 0 and speed >= target) or (accel < 0 and speed <= target):
-                        anim[base + F_TURN_SPEED + axis] = target
-                        anim[base + F_SPIN_ACCEL + axis] = 0
-                speed = anim[base + F_TURN_SPEED + axis]
-                if speed == 0:
-                    continue
-                cur = self.ang[piece][axis]
-                step = dt * speed
-                value = cur + step
-                target = anim[base + F_TURN_TARGET + axis]
-                if target == -1:                        # a spin: it never arrives
-                    anim[base + F_DIRTY] = 1
-                elif speed > 0:
-                    left = (target - cur + 0x10000) & 0xFFFF
-                    if left > step:
-                        anim[base + F_DIRTY] = 1
-                    else:
-                        value = target
-                        anim[base + F_TURN_SPEED + axis] = 0
-                else:
-                    left = (cur - target + 0x10000) & 0xFFFF
-                    if left > -step:
-                        anim[base + F_DIRTY] = 1
-                    else:
-                        value = target
-                        anim[base + F_TURN_SPEED + axis] = 0
-                self.ang[piece][axis] = value & 0xFFFF
-            if anim[base + F_DIRTY]:
-                self.dirty = 1
+        self._call(self._lib.tagpu_cobvm_tick(_C.byref(self._vm), _C.byref(self._run), dt))
 
 
 # --------------------------------------------------------------------------- the director

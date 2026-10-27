@@ -44,10 +44,16 @@ if VENDOR.is_dir():
 else:
     print("tacob.spec: no tools/vendor/ — the packaged page will need a network")
 
+# The COB VM (tagpu/ddraw/src/tagpu_cobvm.c), cross-compiled by `tacob-build.py build` before
+# PyInstaller runs; tacob loads it from beside the executable.
+COBVM = ROOT / "build" / "cobvm-win64" / "cobvm.dll"
+if not COBVM.is_file():
+    raise SystemExit("tacob.spec: no build/cobvm-win64/cobvm.dll — run `tools/tacob-build.py build`")
+
 a = Analysis(                                            # noqa: F821
     [str(TOOLS / "tacob_app.py")],
     pathex=[str(TOOLS)],
-    binaries=[],
+    binaries=[(str(COBVM), ".")],
     datas=datas,
     # pywebview is optional at run time (`tacob.open_window` falls back to the
     # browser), but when it is installed in the build environment we want its

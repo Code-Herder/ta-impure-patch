@@ -237,6 +237,7 @@ def cmd_build(args):
     dist = ROOT / "dist"
     if args.clean and (dist / "tacob").is_dir():
         shutil.rmtree(dist / "tacob")
+    build_cobvm()
     # Relative paths, run from the checkout root: Wine maps the working directory,
     # so no absolute path of whoever built it reaches the build log or the spec.
     wine(WINE_PY, "-m", "PyInstaller", "--noconfirm", "--distpath", "dist",
@@ -248,6 +249,25 @@ def cmd_build(args):
     size = sum(p.stat().st_size for p in folder.rglob("*") if p.is_file())
     count = sum(1 for p in folder.rglob("*") if p.is_file())
     print(f"{folder}: {count} files, {size / 1e6:.1f} MB")
+
+
+# The COB VM tacob runs is C (tagpu/ddraw/src/tagpu_cobvm.c), loaded through ctypes; the
+# packaged folder ships it beside tacob.exe, built for the Windows Python's width (amd64).
+COBVM_DLL = ROOT / "build/cobvm-win64/cobvm.dll"
+COBVM_CC = "x86_64-w64-mingw32-gcc"
+
+
+def build_cobvm():
+    src = ROOT / "tagpu/ddraw"
+    COBVM_DLL.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [COBVM_CC, "-std=c99", "-O2", "-Wall", "-Werror", "-shared", "-static-libgcc",
+           "-I", str(src / "inc"), str(src / "src/tagpu_cobvm.c"), str(src / "src/tagpu_cob_safe.c"),
+           "-o", str(COBVM_DLL)]
+    try:
+        subprocess.run(cmd, check=True)
+    except FileNotFoundError:
+        raise SystemExit(f"tacob-build: {COBVM_CC} is needed to build the COB VM")
+    print(f"{COBVM_DLL.relative_to(ROOT)}: the COB VM, {COBVM_DLL.stat().st_size} bytes")
 
 
 def load_ta3do():
