@@ -61,6 +61,9 @@ typedef struct TAGPU_PK_WIKI {
     float    scroll[TAGPU_WIKI_NSCROLL];    /* each panel's offset, units, as asked: the layout
                                                holds it to the limit                         */
     char     msg[32];           /* what the stage shows with no view: "no demo", a failure   */
+    uint32_t shot;              /* the last capture the trigger tagpu_wiki.shot asked for, 0
+                                   none: the first frame of this view whose 3D image is drawn
+                                   writes it (tagpu_wikiworld.h)                             */
     WIKISTAGEVIEW stage;        /* the demo's view by value: last, carried only with has_stage */
 } TAGPU_PK_WIKI;
 #define TAGPU_PK_WIKI_HEAD ((uint32_t)offsetof(TAGPU_PK_WIKI, stage))

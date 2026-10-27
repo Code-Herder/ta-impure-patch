@@ -98,6 +98,9 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
                          : s->type >= 0 && s->type < e->ndef ? e->def[s->type].name : "";
         d->x = (float)s->x;
         d->z = (float)s->z;
+        d->hx = (float)s->hx;
+        d->hz = (float)s->hz;
+        d->type = (uint8_t)(s->type >= 0 && s->type < WIKI_MAX_DEFS ? s->type : 0);
         d->built = (float)s->built;
         d->reclaimed = (float)s->reclaimed;
         d->fx = (uint8_t)(s->fx > 0 && s->fx < 256 ? s->fx : 1);
@@ -173,6 +176,38 @@ void tagpu_wikistage_fit(int w, int h, double stage_w, double stage_h, double u,
     out->oz = (stage_h - mh * cell * out->s) / 2;
 }
 
+static double snapd(double v) { return floor(v + 0.5 + 1.0 / 64); }
+
+void tagpu_wikistage_image(int w, int h, HUDRECT stage, double u, int* x0, int* y0, int* x1, int* y1)
+{
+    double cx, cy, cw, ch;
+    WIKISTAGEFIT f;
+    tagpu_wikistage_canvas(stage, u, &cx, &cy, &cw, &ch);
+    tagpu_wikistage_fit(w, h, cw, ch, u, &f);
+    /* the canvas's corner is a whole device pixel (tagpu_wikistage_canvas), so snapping each edge
+       from the canvas, as stage.js does, snaps it from the screen too */
+    *x0 = (int)(cx + snapd(f.ox));
+    *y0 = (int)(cy + snapd(f.oz));
+    *x1 = (int)(cx + snapd(f.ox + (w > 0 ? w : 1) * WIKI_CELL * f.s));
+    *y1 = (int)(cy + snapd(f.oz + (h > 0 ? h : 1) * WIKI_CELL * f.s));
+}
+
+int tagpu_wikistage_keep(const WIKISTAGEOPS* o, int i, int image, int ground, const uint32_t* resolved)
+{
+    int t;
+    if (i < 0 || i >= o->n || i >= WIKI_MAXOP) return 0;
+    if (!image) return 1;
+    switch (o->range[i]) {
+    case WIKISTAGE_IN_R0:     return 1;
+    case WIKISTAGE_IN_GROUND: return ground ? 0 : 1;
+    case WIKISTAGE_IN_BOX:
+        t = o->rtype[i];
+        return t < WIKI_MAX_DEFS && resolved && (resolved[t >> 5] >> (t & 31) & 1u) ? 0 : 2;
+    case WIKISTAGE_IN_LABEL:  return 0;
+    default:               return 2;
+    }
+}
+
 /* ---- the ops ------------------------------------------------------------------------------- */
 
 typedef struct {
@@ -181,7 +216,15 @@ typedef struct {
     double              u, X0, Y0, W, H;    /* the canvas in device pixels             */
     HUDRECT             clip;               /* the canvas in units                     */
     int                 room;               /* ops the frame may use before the edge's  */
+    uint8_t             range, rtype;       /* the range every op made now belongs to: stage.js's
+                                               `mark` before the calls that follow it      */
 } B;
+
+static void mark(B* c, int range, int type)
+{
+    c->range = (uint8_t)range;
+    c->rtype = (uint8_t)(type >= 0 && type < WIKI_MAX_DEFS ? type : 0);
+}
 
 /* a colour as the canvas parses one: each channel rounded, the alpha in 1/255ths, rounded */
 static uint32_t rgba(double r, double g, double b, double a)
@@ -195,6 +238,8 @@ static HUDOP* op(B* c, int kind, double x, double y, double w, double h)
 {
     HUDOP* p;
     if (c->o->n >= c->room) { c->o->dropped++; return NULL; }
+    c->o->range[c->o->n] = c->range;
+    c->o->rtype[c->o->n] = c->rtype;
     p = &c->o->op[c->o->n++];
     memset(p, 0, sizeof *p);
     p->kind = (uint8_t)kind;
@@ -359,8 +404,6 @@ static void readout(B* c, const char* t, int right)
     text(c, t, right ? c->W - 5 * U : 5 * U, c->H - 2 * U - h / 2, sz, right ? 2 : 0, HEX(0xf0f0ea));
 }
 
-static double snapd(double v) { return floor(v + 0.5 + 1.0 / 64); }
-
 int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage, double u,
                           const WIKISTAGEART* art, WIKISTAGEOPS* out)
 {
@@ -382,6 +425,7 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
     c.clip.w = (float)(c.W / u);
     c.clip.h = (float)(c.H / u);
 
+    mark(&c, WIKISTAGE_IN_R0, 0);
     rect(&c, 0, 0, c.W, c.H, HEX(0x6e6e68));
     if (!v || v->w <= 0 || v->h <= 0) {
         if (msg) text(&c, msg, c.W / 2, c.H / 2, floor(11 * U + 0.5), 1, HEX(0xe8e8e2));
@@ -397,6 +441,7 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
         cp = cell * s;
 
         /* the ground: plain cells light, metal darker by how far it stands above surfaceMetal */
+        mark(&c, WIKISTAGE_IN_GROUND, 0);
         for (i = 0; i < mw * mh; i++)
             if (v->metal[i] > top) top = v->metal[i];
         for (z = 0; z < mh; z++)
@@ -445,6 +490,7 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
             }
 
         /* order lines, dashed, coloured by kind, each ending on a dot */
+        mark(&c, WIKISTAGE_IN_OVER, 0);
         for (i = 0; i < v->nline; i++) {
             const WIKISTAGELINE* l = &v->line[i];
             const uint32_t col = HEX(l->kind < 4 ? LINE[l->kind] : 0xd8d8d8);
@@ -456,7 +502,9 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
         for (i = 0; i < v->nqueued; i++) {
             const WIKISTAGESITE* q = &v->queued[i];
             const double w = q->fx * cp, h = q->fz * cp, bx = X(q->x) - w / 2, by = Z(q->z) - h / 2;
+            mark(&c, WIKISTAGE_IN_OVER, 0);
             dashed_rect(&c, bx, by, w, h, fmax(1, 1.5 * U), team(q->owner), 3 * U, 2 * U);
+            mark(&c, WIKISTAGE_IN_LABEL, 0);
             label(&c, q->type < v->ntype ? v->type[q->type] : "", w, h, X(q->x), Z(q->z), rgba(20, 20, 20, .75));
         }
         /* units: grey boxes at their footprint, a team-coloured edge; construction fills up from
@@ -466,6 +514,7 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
             const double w = un->fx * cp, h = un->fz * cp, bx = X(un->x) - w / 2, by = Z(un->z) - h / 2;
             const double built = fmin(fmax(un->built, 0), 1), rec = fmin(fmax(un->reclaimed, 0), 1);
             const double bw = fmax(1.5, 2 * U);
+            mark(&c, WIKISTAGE_IN_BOX, un->type);
             if (built < 1) {
                 rect(&c, bx, by, w, h, rgba(150, 150, 144, .35));
                 rect(&c, bx, by + h * (1 - built), w, h * built, HEX(0x8a8a84));
@@ -481,6 +530,7 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
                 const double m = 3 * U, x0 = bx - m, y0 = by - m, x1 = bx + w + m, y1 = by + h + m, k = fmin(w, h) * .35 + m;
                 const double cn[4][4] = { { x0, y0, 1, 1 }, { x1, y0, -1, 1 }, { x0, y1, 1, -1 }, { x1, y1, -1, -1 } };
                 int j;
+                mark(&c, WIKISTAGE_IN_OVER, 0);
                 for (j = 0; j < 4; j++) {
                     const double pt[6] = { cn[j][0] + cn[j][2] * k, cn[j][1], cn[j][0], cn[j][1], cn[j][0], cn[j][1] + cn[j][3] * k };
                     poly(&c, pt, 3, 0, fmax(1, 1.5 * U), HEX(0xf2f6e8), HUGE_VAL, 0);
@@ -492,7 +542,9 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
         for (i = 0; i < v->nsite; i++) {
             const WIKISTAGESITE* st = &v->site[i];
             const double w = st->fx * cp, h = st->fz * cp, bx = X(st->x) - w / 2, by = Z(st->z) - h / 2, lw = fmax(1, 1.5 * U);
+            mark(&c, WIKISTAGE_IN_BOX, st->type);
             rect(&c, bx + lw, by + lw, w - 2 * lw, h - 2 * lw, rgba(138, 138, 132, .45));
+            mark(&c, WIKISTAGE_IN_OVER, 0);
             ring(&c, bx + lw / 2, by + lw / 2, w - lw, h - lw, lw, HEX(st->state < 3 ? SITE[st->state] : SITE[0]));
             if (st->order) {
                 const double sz = fmax(5 * U, fmin(7.5 * U, h * .32));
@@ -505,11 +557,15 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
         if (v->has_ghost) {
             const WIKISTAGESITE* gh = &v->ghost;
             const double w = gh->fx * cp, h = gh->fz * cp, bx = X(gh->x) - w / 2, by = Z(gh->z) - h / 2;
+            mark(&c, WIKISTAGE_IN_BOX, gh->type);
             rect(&c, bx, by, w, h, gh->ok ? rgba(40, 210, 70, .35) : rgba(230, 40, 40, .35));
+            mark(&c, WIKISTAGE_IN_OVER, 0);
             ring(&c, bx, by, w, h, fmax(1, 1.5 * U), HEX(gh->ok ? 0x2bd248 : 0xe62828));
+            mark(&c, WIKISTAGE_IN_BOX, gh->type);
             label(&c, gh->type < v->ntype ? v->type[gh->type] : "", w, h, X(gh->x), Z(gh->z),
                   gh->ok ? rgba(12, 58, 18, 1) : rgba(74, 10, 10, 1));
         }
+        mark(&c, WIKISTAGE_IN_OVER, 0);
         if (v->has_drag) {
             const double x0 = X(fmin(v->drag_x0, v->drag_x1)), y0 = Z(fmin(v->drag_z0, v->drag_z1));
             ring(&c, x0, y0, fabs((double)v->drag_x1 - v->drag_x0) * s, fabs((double)v->drag_z1 - v->drag_z0) * s, fmax(1, U), HEX(0xf2f6e8));
@@ -541,6 +597,7 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
     if (out->dropped) {
         HUDOP* p;
         c.room = WIKI_MAXOP;
+        mark(&c, WIKISTAGE_IN_OVER, 0);
         if ((p = op(&c, HOP_SOLID, 0, 0, c.W, c.H))) {
             p->flags = HOPF_RING;
             p->size = 2;

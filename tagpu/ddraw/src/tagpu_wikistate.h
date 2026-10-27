@@ -18,13 +18,30 @@ struct TAGPU_FRAME;
    none (no record, its art not loaded, its layout refused). */
 void tagpu_wikistate_present(const struct TAGPU_FRAME* f);
 
-/* Render-thread frame `frame`'s wiki: 1 with its two op lists -- the page, then the stage, which
-   lies inside the page's bezel where no later op of the page reaches, so drawing it after the
-   whole page paints as the mockup does; an empty stage list while the window is closed -- the
-   device pixels a wiki unit is and the game screen's top-left corner on the attachment; 0 when
-   there is nothing to draw, or when `present` did not run in that frame. The lists point into
-   this module's buffers, which hold until the next `present`. */
-int  tagpu_wikistate_frame(unsigned frame, HUDOPLIST* page, HUDOPLIST* stage, float* px, int* ox, int* oy);
+/* Render-thread frame `frame`'s wiki: 1 with its three op lists -- the page, then the stage's ops
+   under its 3D image, then those over it (tagpu_wikistage_keep; an empty `over` and every op of
+   the stage under when the frame draws the whitebox) -- the stage lying inside the page's bezel
+   where no later op of the page reaches, so drawing it after the whole page paints as the mockup
+   does; empty stage lists while the window is closed -- the device pixels a wiki unit is and the
+   game screen's top-left corner on the attachment; 0 when there is nothing to draw, or when
+   `present` did not run in that frame. The lists point into this module's buffers, which hold
+   until the next `present`. */
+int  tagpu_wikistate_frame(unsigned frame, HUDOPLIST* page, HUDOPLIST* stage, HUDOPLIST* over, float* px,
+                           int* ox, int* oy);
+
+/* THE STAGE THIS FRAME DRAWS, for the 3D stage's producer (tagpu_wikiworld.h): 1 when frame
+   `frame` draws a demo's view -- the record's copy, bounded (`*v`, which holds until the next
+   `present`), the entry's and the demo's indices, the record's shot number, the stage's rect in
+   units, the device pixels a unit is and the screen's corner on the attachment; 0 otherwise. */
+int  tagpu_wikistate_scene(unsigned frame, const WIKISTAGEVIEW** v, int* entry, int* demo, uint32_t* shot,
+                           HUDRECT* stage, float* px, int* ox, int* oy);
+
+/* WHICH PICTURE OF THE STAGE frame `frame` DRAWS, decided once by the seam before the HUD's pass
+   builds it: `image` 1 when the stage's 3D image is composited whole this frame -- its ops are
+   then split under and over it by tagpu_wikistage_keep, with `ground` 1 (the image carries the
+   ground) and `resolved` the unit types the image draws (NULL: none) -- and 0 for the whitebox,
+   every op under. Once a frame; a second call for the same frame changes nothing. */
+void tagpu_wikistate_image(unsigned frame, int image, int ground, const uint32_t* resolved);
 
 /* The Vulkan pass has built this frame's wiki ops and will draw them (`drew` 1): the page's
    controls become the hit map, and its scrolls and scrollbars the command record's. 0: this frame

@@ -88,6 +88,11 @@
 #define DUMP_ASK  "tagpu_wiki.dump"
 #define DUMP_OUT  "tagpu_wiki.json"
 #define CHECK_ASK "tagpu_wiki.check"
+/* THE 3D STAGE'S CAPTURE (tools/wiki_regression.py stage3d): the file holds `ENTRY DEMO TICK` -- an
+   entry's id, its demo's number from 1, a tick -- and the fill that reads it picks that demo,
+   plays it here to the tick, pauses it and numbers the capture in the record; the render thread
+   writes the first frame of that view whose image is drawn (tagpu_wikiworld.h) */
+#define SHOT_ASK  "tagpu_wiki.shot"
 
 enum { B_L = 1, B_R = 2, B_M = 4, B_X = 8 };
 
@@ -306,6 +311,7 @@ static LARGE_INTEGER s_costT0;                  /* the open fill's start; 0 = no
 static unsigned s_costFrames;
 static uint32_t s_trunc;                        /* the copy's WIKISTAGE_TRUNC_* already said     */
 static int      s_saidHead;                     /* a stage the packet could not carry, said      */
+static uint32_t s_shot;                         /* the last capture asked for, 0 none            */
 
 static const WIKIDATA* data(void)
 {
@@ -552,8 +558,10 @@ static void page_fill(TAGPU_PK_WIKI* w)
     memcpy(w->fold, s_fold, sizeof w->fold);
     memcpy(w->scroll, s_scroll, sizeof w->scroll);
     lstrcpynA(w->msg, s_msg, sizeof w->msg);
+    w->shot = s_shot;
     if (s_simOn && e) {
         t = tagpu_wikistage_copy(&w->stage, tagpu_wikisim_view(&s_sim), e);
+        w->stage.tick = s_sim.tick;
         w->has_stage = 1;
         if (t & ~s_trunc) {
             s_trunc |= t;
@@ -931,6 +939,37 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
     tagpu_logf("wiki: state dumped to %s - open=%d paused=%d hits=%u", DUMP_OUT, s_open, s_paused, s_hit.n);
 }
 
+/* the capture SHOT_ASK asks for: its demo picked, played to its tick and paused */
+static void shot(void)
+{
+    const WIKIDATA* d = data();
+    char buf[128], id[64];
+    DWORD n = 0;
+    HANDLE h = CreateFileA(SHOT_ASK, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    int i, demo = 0, tick = 0, e = -1;
+    if (h == INVALID_HANDLE_VALUE) return;
+    if (!ReadFile(h, buf, sizeof buf - 1, &n, NULL)) n = 0;
+    CloseHandle(h);
+    DeleteFileA(SHOT_ASK);
+    buf[n] = 0;
+    if (!d || sscanf(buf, "%63s %d %d", id, &demo, &tick) != 3) {
+        tagpu_logf("wiki: shot: `%s` is not `ENTRY DEMO TICK`, or the data is not loaded - nothing asked", buf);
+        return;
+    }
+    for (i = 0; i < d->nentry; i++)
+        if (!strcmp(d->entry[i].id, id)) e = i;
+    if (e < 0 || demo < 1 || demo > d->entry[e].ndemo || tick < 0) {
+        tagpu_logf("wiki: shot: no entry %s with a demo %d - nothing asked", id, demo);
+        return;
+    }
+    pick(e, demo - 1);
+    while (s_simOn && !s_sim.done && s_sim.tick < tick) tagpu_wikisim_step(&s_sim);
+    s_playing = 0;
+    s_shot++;
+    tagpu_logf("wiki: shot %u asked: %s demo %d held at tick %d", (unsigned)s_shot, id, demo,
+               s_simOn ? s_sim.tick : -1);
+}
+
 /* THE 3D ASSET LOAD (tagpu_wikiasset.h), started once a process, by the first fill of an open
    window once the wiki's data is loaded: the engine's mount list, its language and folder names
    (tagpu_replays.c, which reads the same list for running_mod) and the current directory are
@@ -1013,6 +1052,7 @@ int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again)
     lstrcpynA(w->held, s_held, sizeof w->held);
     if (s_open) {
         assets_start();
+        if (s_ask && GetFileAttributesA(SHOT_ASK) != INVALID_FILE_ATTRIBUTES) shot();
         page_fill(w);
     }
     *len = w->has_stage ? (uint32_t)sizeof *w : TAGPU_PK_WIKI_HEAD;

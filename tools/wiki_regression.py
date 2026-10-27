@@ -8,6 +8,8 @@ page's controls and the demos playing on the stage.
     wiki_regression.py <instance> demos --launch      the demos: parity, clock, controls, captures
     wiki_regression.py <instance> recorded --launch   a live recorded skirmish: the rewind button
     wiki_regression.py <instance> asset --launch      the 3D asset load, against the native one
+    wiki_regression.py <instance> stage3d --launch --shots DIR
+                                                      the stage's ground in 3D, against the mockup
     wiki_regression.py <name> mp                      a two-player network game on Wine, started by
                                                       tools/compat/tacompat.py's launcher
 
@@ -88,6 +90,19 @@ asset, on the same launch as sp:
   (a2) the report equals, field for field, the load tests/wikiassettest.c runs natively over the
        instance's folder with the game's own mount list and language (tools/wiki/assetcheck.py);
   (a3) every stage's ground and every unit type resolved.
+stage3d, on the same launch as sp (research/notes/ingame-wiki-3d-stage-plan.md, landing 6g):
+  (s1) the open's 3D asset load ends (`wiki3d: loaded in`) and the first stage drawn says its ground
+       is in 3D (`wiki3d: stage ... the ground in 3D`);
+  (s2) at ss 2 and then at ss 1 (tagpu_ss.off), quickbuild's demos 1 and 11 and buildshapes' demo 1
+       held at ticks 30, 180 and 330 through the trigger tagpu_wiki.shot, each frame's capture of the
+       wiki's target written to DIR as `<entry>-d<demo>-t<tick>-ss<ss>.game.ppm`, and the presented
+       frame at ss 2 grabbed beside it (`<res>-<entry>-d<demo>-t<tick>.window.png`);
+  (s3) tools/wiki/stage3dcheck.py over DIR: every terrain pixel equal to the mockup's, at most
+       0.05 % of the feature pixels differing;
+  (s4) the lever tagpu_wiki3d.on `nomap` and then `nofeat`: no frame draws the image (the stage is
+       the whitebox, R1 whole: `0 of N frame(s) drew the image`), each grabbed; the lever gone, every
+       frame draws it again;
+  (s5) the stage's render-thread time, as its periodic line gives it.
 mp:
   (m) the wiki opened on the host takes no pause: both peers' GameTime advances over 3 s, and so
       does the host's demo, whose cost to the game thread is logged; a right and a left click on
@@ -751,6 +766,105 @@ def demos(c, shots, res):
     wait_dump(c, lambda d: not d["open"], "(d5) Esc did not close the window")
 
 
+STAGE3D_SHOTS = (("quickbuild", 1), ("quickbuild", 11), ("buildshapes", 1))
+STAGE3D_TICKS = (30, 180, 330)
+DRAWN = r"wiki3d: frame \d+: .*; (\d+) of (\d+) frame\(s\) drew the image; render thread: the producer ([\d.]+) ms " \
+        r"and the passes ([\d.]+) ms a frame on average, the passes at most ([\d.]+) ms"
+
+
+def wait_line(c, start, rx, what, seconds=30):
+    end = time.monotonic() + seconds
+    while True:
+        c.mark()
+        hit = [ln for ln in c.log[start:] if re.search(rx, ln)]
+        if hit:
+            return hit[-1]
+        assert time.monotonic() < end, f"{what}: no line matching `{rx}` in {seconds} s"
+        time.sleep(0.3)
+
+
+def drawn_window(c, what, want_all):
+    """The next whole periodic line of the stage's frames: (drew, of, producer ms, passes ms, max ms)."""
+    start = c.mark()
+    wait_line(c, start, DRAWN, what, 30)      # a window that may have begun before the change
+    start = c.mark()
+    ln = wait_line(c, start, DRAWN, what, 30)
+    m = re.search(DRAWN, ln)
+    drew, of = int(m.group(1)), int(m.group(2))
+    assert (drew == of) if want_all else (drew == 0), f"{what}: {drew} of {of} frame(s) drew the image"
+    return drew, of, float(m.group(3)), float(m.group(4)), float(m.group(5))
+
+
+def stage3d(c, shots, res):
+    """(s1)..(s5): the stage's ground in 3D, against the mockup."""
+    assert shots, "stage3d needs --shots DIR"
+    shots.mkdir(parents=True, exist_ok=True)
+    held_at(c, HELD_AT)
+    gamedir = c.gamedir
+    ss_off, lever, ppm = gamedir / "tagpu_ss.off", gamedir / "tagpu_wiki3d.on", gamedir / "tagpu_wiki3d_shot.ppm"
+    had_ss = ss_off.exists()
+    lever.unlink(missing_ok=True)
+    start = c.mark()
+    c.open_wiki(expect_pause=True)
+    line = wait_line(c, start, r"wiki3d: loaded in", "(s1) the 3D asset load", 120)
+    print(f"wiki stage3d: (s1) {line.split('wiki3d: ', 1)[1]}")
+    line = wait_line(c, start, r"wiki3d: stage \S+: the ground", "(s1) the first stage's ground", 30)
+    assert "the ground in 3D" in line, f"(s1) {line}"
+    print(f"wiki stage3d: (s1) {line.split('wiki3d: ', 1)[1]}")
+    try:
+        for ss in (2, 1):
+            if ss == 1:
+                ss_off.write_text("")
+            else:
+                ss_off.unlink(missing_ok=True)
+            time.sleep(1.5)
+            for entry, demo in STAGE3D_SHOTS:
+                for tick in STAGE3D_TICKS:
+                    start = c.mark()
+                    ppm.unlink(missing_ok=True)
+                    (gamedir / "tagpu_wiki.shot").write_text(f"{entry} {demo} {tick}\n")
+                    asked = wait_line(c, start, r"wiki: shot \d+ (asked|: )|wiki: shot: ", f"(s2) {entry} {demo} {tick}")
+                    assert " asked: " in asked, f"(s2) {asked}"
+                    n = re.search(r"wiki: shot (\d+) asked", asked).group(1)
+                    armed = wait_line(c, start, rf"wiki3d: shot {n}: ", f"(s2) shot {n} was never armed")
+                    m = re.search(r"the (\d+)x(\d+) target at ss (\d+)", armed)
+                    assert m and int(m.group(3)) == ss, f"(s2) {armed}"
+                    wait_line(c, start, r"shot: wrote tagpu_wiki3d_shot\.ppm", f"(s2) shot {n} was never written")
+                    out = shots / f"{entry}-d{demo}-t{tick}-ss{ss}.game.ppm"
+                    shutil.copyfile(ppm, out)
+                    if ss == 2:
+                        time.sleep(0.5)
+                        grab(c, shots / f"{res}-{entry}-d{demo}-t{tick}.window.png")
+                    print(f"wiki stage3d: (s2) {out.name}: {armed.split('wiki3d: ', 1)[1]}")
+    finally:
+        if had_ss:
+            ss_off.write_text("")
+        else:
+            ss_off.unlink(missing_ok=True)
+
+    r = subprocess.run([sys.executable, str(TREE / "tools/wiki/stage3dcheck.py"), str(shots), "--out", str(shots / "check")],
+                       capture_output=True, text=True, timeout=1800)
+    print(r.stdout.rstrip())
+    assert r.returncode == 0, f"(s3) stage3dcheck exited {r.returncode}: {r.stderr.strip()[-600:]}"
+
+    try:
+        for tok in ("nomap", "nofeat"):
+            start = c.mark()
+            lever.write_text(tok)
+            wait_line(c, start, rf"wiki3d: tagpu_wiki3d\.on: {tok}", f"(s4) the lever {tok} was not read")
+            got = drawn_window(c, f"(s4) under {tok}", want_all=False)
+            grab(c, shots / f"{res}-lever-{tok}.window.png")
+            print(f"wiki stage3d: (s4) {tok}: {got[0]} of {got[1]} frames drew the image - the whitebox whole")
+    finally:
+        lever.unlink(missing_ok=True)
+    got = drawn_window(c, "(s4) the lever gone", want_all=True)
+    print(f"wiki stage3d: (s4) the lever gone: {got[0]} of {got[1]} frames drew the image")
+    print(f"wiki stage3d: (s5) render thread: the producer {got[2]:.3f} ms and the passes {got[3]:.3f} ms a frame "
+          f"on average, the passes at most {got[4]:.3f} ms ({res})")
+    c.keys("esc")
+    wait_dump(c, lambda d: not d["open"], "(s5) Esc did not close the window")
+
+
 def hud(c):
     return json.loads(tacli("hud", c.name, "show", "--json", timeout=180))
 
@@ -943,13 +1057,14 @@ def mp(name):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("instance")
-    p.add_argument("mode", choices=("sp", "page", "demos", "recorded", "asset", "mp"))
+    p.add_argument("mode", choices=("sp", "page", "demos", "recorded", "asset", "stage3d", "mp"))
     p.add_argument("--launch", action="store_true",
                    help="sp/recorded: launch on place-basic.json first, under the run lock")
     p.add_argument("--res", default="1920x1080", help="sp/recorded: the game's resolution")
     p.add_argument("--shot", help="sp, page: grab the presented frame with the window open to this PNG "
                                   "(page: on the second entry and its second demo, at (p2))")
-    p.add_argument("--shots", type=Path, help="demos: grab each entry's demo mid-play, and the mockup's, into this folder")
+    p.add_argument("--shots", type=Path, help="demos: grab each entry's demo mid-play, and the mockup's, into this folder; "
+                                              "stage3d: the captures of the wiki's target and the presented frames")
     a = p.parse_args()
     t0 = time.monotonic()
     stop = None
@@ -969,6 +1084,8 @@ def main():
                     demos(c, a.shots, a.res)
                 elif a.mode == "asset":
                     asset(c)
+                elif a.mode == "stage3d":
+                    stage3d(c, a.shots, a.res)
                 else:
                     recorded(c)
             finally:

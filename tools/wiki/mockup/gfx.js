@@ -22,6 +22,10 @@ window.WikiGfx = (() => {
   const TR = window.TasceneRender, WS = WikiScene;
   let mode = new URLSearchParams(location.search).get('gfx') === 'game' ? 'game' : 'whitebox';
   const SS = Math.max(1, Math.min(4, parseInt(new URLSearchParams(location.search).get('ss') || '2', 10) || 2));
+  // ?layers=terrain,features,units: what the image draws, all three unless named -- tools/wiki/stage3dcheck.py
+  // renders the terrain and the features apart to class each pixel of the game's capture
+  const LAYERS = (q => q === null ? null : new Set(q.split(',')))(new URLSearchParams(location.search).get('layers'));
+  const layer = n => !LAYERS || LAYERS.has(n);
   let index = null, state = 'none';     // none, loading, ready, missing
   const stages = {};                    // entry id -> a Stage, or a promise of one, or an error
 
@@ -174,14 +178,20 @@ window.WikiGfx = (() => {
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
       gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.depthMask(true); gl.disable(gl.BLEND);
       const E = [0, 0], W = [GW, GH], r0 = (E[1] >> 4) - 16;
-      if (terr) {
+      if (terr && layer('terrain')) {
         const g = terr.gather(tiles, pack.map.tilemap, E, W, 0, 0);
         terr.draw(f, g.n);
       }
-      if (spr) {
+      if (spr && layer('features')) {
         const got = TR.gatherFeatures({ lab: false, mirror: false, r0, E, W, vpL: 0, vpT: 0, w16: mw, h16: mh, heights,
           anchors, mapAnchors: anchors, defs: pack.features.defs, atlas: pack.features.atlas, D: pack.depth });
         if (got) {
+          // EACH CORNER'S OWN WORLD POINT for the fog lookup, as the game's feature gather gives it (tagpu_feat.c
+          // emit_frame: the anchor plus the corner's offset from the projected anchor), so a deposit across a fog
+          // edge fades across it; the stage's ground is flat and its camera the map's corner, so that point is the
+          // corner's own
+          for (const vs of [got.shadow, got.body])
+            for (let i = 0; i + TR.SVST <= vs.length; i += TR.SVST) { vs[i + 7] = vs[i]; vs[i + 8] = vs[i + 1]; }
           const all = got.shadow.concat(got.body);
           gl.bindBuffer(gl.ARRAY_BUFFER, sprVBO);
           gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(all), gl.DYNAMIC_DRAW);
@@ -191,7 +201,7 @@ window.WikiGfx = (() => {
       }
       const recs = sc.units.concat(sc.ghosts);
       let refused = 0;
-      if (cu && recs.length) {
+      if (cu && recs.length && layer('units')) {
         let need = 0;
         for (const r of recs) need += ((d.meshes[r.key] || []).length / TR.UNIT_STRIDE + (d.slants[r.key] || []).length / 3) * TR.UVST;
         if (out.length < need) out = new Float32Array(need);

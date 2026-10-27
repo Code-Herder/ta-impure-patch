@@ -45,7 +45,9 @@
 
 typedef struct {
     float   x, z;                       /* its centre, world units                         */
+    float   hx, hz;                     /* its facing, a unit vector (tagpu_wikisim.h)     */
     float   built, reclaimed;           /* fractions                                       */
+    uint8_t type;                       /* its type: an index into `type` below            */
     uint8_t fx, fz;                     /* footprint, cells                                */
     uint8_t owner;                      /* 255: none of the eight players                  */
     uint8_t selected;
@@ -67,6 +69,8 @@ typedef struct { float from_x, from_z, to_x, to_z; uint8_t kind; } WIKISTAGELINE
 
 typedef struct {
     uint32_t       trunc;               /* WIKISTAGE_TRUNC_*                               */
+    int32_t        tick;                /* the simulation's tick this view is of: the copy
+                                           leaves it, its caller sets it                    */
     int16_t        w, h;                /* cells; 0 when there is no view                  */
     double         surface_metal;
     uint8_t        metal[WIKISTAGE_MAP * WIKISTAGE_MAP];    /* w * h, row-major            */
@@ -110,11 +114,23 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
 #define WIKI_MAXRUN  1024
 #define WIKI_TEXTMAX 16384
 
+/* THE THREE OP RANGES (research/notes/ingame-wiki-3d-stage-plan.md, section 3): every op belongs to
+   one, stage.js's `o.layer` names, and the frame draws either R0 then R1 -- the whitebox, every op
+   in order -- or R0, the stage's 3D image, then R2, the ops tagpu_wikistage_keep keeps. */
+#define WIKISTAGE_IN_R0     0             /* under the image: the stage's background, a message      */
+#define WIKISTAGE_IN_GROUND 1             /* the whitebox ground: cells, grid, vents, fog            */
+#define WIKISTAGE_IN_BOX    2             /* a unit's, site's or ghost's box, by its type (`rtype`)  */
+#define WIKISTAGE_IN_LABEL  3             /* a queued site's name: the whitebox's alone              */
+#define WIKISTAGE_IN_OVER   4             /* the overlays: lines, squares, selection, the cursor...  */
+
 typedef struct {
     int     n, nrun, ntext;
     int     dropped;                    /* the ops this build had no room for              */
     int     logged;                     /* kept across builds: a dropping build was logged */
     HUDOP   op[WIKI_MAXOP];
+    uint8_t range[WIKI_MAXOP];          /* each op's WIKISTAGE_IN_*          */
+    uint8_t rtype[WIKI_MAXOP];          /* a WIKISTAGE_IN_BOX op's unit type, an index into the
+                                           view's `type`                                   */
     HUDRUN  run[WIKI_MAXRUN];
     char    text[WIKI_TEXTMAX];
 } WIKISTAGEOPS;                         /* about 0.9 MB: never on a stack                  */
@@ -148,6 +164,20 @@ void tagpu_wikistage_canvas(HUDRECT stage, double u, double* x0, double* y0, dou
    world point with it, from the same frame's canvas, so the two cannot disagree. */
 typedef struct { double s, ox, oz; } WIKISTAGEFIT;
 void tagpu_wikistage_fit(int w, int h, double stage_w, double stage_h, double u, WIKISTAGEFIT* out);
+
+/* THE IMAGE'S RECT (stage.js `draw`, the image's rect): where the stage's 3D target is composited, the
+   map's rect of the fit on the canvas of `stage`, each edge snapped to the device pixel as stage.js
+   snaps it -- [*x0, *x1) x [*y0, *y1) in device pixels from the screen's top left. The composite
+   and every op of the frame come from this one fit, so the image and the overlays cannot disagree
+   by more than the snap's half pixel. */
+void tagpu_wikistage_image(int w, int h, HUDRECT stage, double u, int* x0, int* y0, int* x1, int* y1);
+
+/* WHERE AN OP IS DRAWN THIS FRAME: 1 under the image, 2 over it, 0 not at all. `image` 0 is the
+   whitebox (R0 and R1: every op, in order, under -- there is no image to be over); with `image` 1,
+   R0 is under, and so is the whitebox ground when the image carries none (`ground` 0), and a box is
+   over when its type did not resolve (bit t of `resolved`, WIKI_MAX_DEFS bits), every other overlay
+   is over and a queued site's label is never drawn. stage.js `draw`'s `shows`, in C. */
+int tagpu_wikistage_keep(const WIKISTAGEOPS* o, int i, int image, int ground, const uint32_t* resolved);
 
 /* The stage's ops for `v` into `out`, in stage.js's paint order, on the canvas of `stage` at `u`.
    A view with no map draws the stage's ground and `msg` (NULL for none). WIKI_MAXOP BOUNDS IT: an

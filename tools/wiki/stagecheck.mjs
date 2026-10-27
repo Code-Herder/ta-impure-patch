@@ -30,7 +30,9 @@
    image, none resolved, and the ground fallen back -- and that recording, R0 and R2 with the image between them, must
    pair op for op with R1's ops kept by the same rule: R0 and the overlays always, the ground when the image has none,
    a box when its type did not resolve, a whitebox label never. R0 and R2 are thus R1's own ops, in R1's order, and a
-   DLL that builds R1 builds them by the names alone. */
+   DLL that builds R1 builds them by the names alone -- which the C ops carry (WIKISTAGE_IN_*): each op's range must
+   be its call's, tagpu_wikistage_keep must put each op where stage.js draws it under each image, and the image's
+   rect must be tagpu_wikistage_image's. */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -243,7 +245,7 @@ try {
   }
   const draw = (v, sz, em, asked, image) => {
     const r = recorder(em, asked);
-    const im = image && { ...image, draw: () => r.out.push({ k: 'image' }) };
+    const im = image && { ...image, draw: (g, rect) => r.out.push({ k: 'image', ...rect }) };
     WikiStage.draw(r.g, v, { W: sz.w, H: sz.h, U: sz.u, icons, layer: r.layer, image: im });
     return r;
   };
@@ -253,6 +255,7 @@ try {
     { name: 'none resolved', ground: true, resolved: () => false },
     { name: 'ground fallen back', ground: false, resolved: () => true },
   ];
+  const RANGES = ['r0', 'ground', 'box', 'label', 'over'];        // WIKISTAGE_IN_*
   const kept = (t, im) => t.range === 'r0' || t.range === 'over' || (t.range === 'ground' && !im.ground) ||
     (t.range === 'box' && !im.resolved(t.type));
   const pair = (js, c, what) => {
@@ -292,6 +295,13 @@ try {
       nframes++; nops += c.length;
       let bad = pair(r1.out, c, 'R1');
       if (!bad && r1.tags.some(t => !t)) bad = 'R1: a call drawn before stage.js named its range';
+      // the C ops' own ranges, which the DLL draws R0 and R2 by: each the range of the call it paired with, a box's
+      // with its type
+      for (let i = 0; !bad && i < c.length; i++) {
+        const t = r1.tags[i], [rng, type] = fr.rng[i] || [];
+        if (RANGES[rng] !== t.range || (t.range === 'box' && type !== t.type))
+          bad = `R1 op ${i}: C range ${RANGES[rng]}${type ? ` (${type})` : ''}, stage.js ${t.range}${t.type ? ` (${t.type})` : ''}`;
+      }
       // R0, the image, R2: R1's ops kept by the rule, the image after R0 and the ground
       for (const im of bad || !f.v || !f.v.map ? [] : IMAGES) {
         const r = draw(f.v, sz, em, null, im), at = r.out.findIndex(sh => sh.k === 'image');
@@ -299,6 +309,16 @@ try {
         const js = r.out.filter(sh => sh.k !== 'image'), want = c.filter((_, i) => kept(r1.tags[i], im));
         const under = r.tags.slice(0, at).every(t => t.range === 'r0' || t.range === 'ground');
         bad = !under ? `${im.name}: an overlay drawn under the image` : pair(js, want, `R0+R2 (${im.name})`);
+        // tagpu_wikistage_keep: under the image, over it or not at all, op for op as stage.js draws it
+        const k = IMAGES.indexOf(im), codes = r1.tags.map(t => !kept(t, im) ? '0' : t.range === 'r0' || t.range === 'ground' ? '1' : '2').join('');
+        if (!bad && fr.keep[k] !== codes) {
+          const i = [...codes].findIndex((ch, j) => ch !== fr.keep[k][j]);
+          bad = `${im.name}: tagpu_wikistage_keep puts op ${i} ${'-uo'[+fr.keep[k][i]]}, stage.js ${'-uo'[+codes[i]]}`;
+        }
+        // the image's rect: the composite's, from the same fit (tagpu_wikistage_image)
+        const ir = r.out[at], cr = [fr.img[0] - sz.x0, fr.img[1] - sz.y0, fr.img[2] - fr.img[0], fr.img[3] - fr.img[1]];
+        if (!bad && [ir.x, ir.y, ir.w, ir.h].some((v, j) => v !== cr[j]))
+          bad = `${im.name}: the image at ${show([ir.x, ir.y, ir.w, ir.h])}, tagpu_wikistage_image ${show(cr)}`;
         if (bad) break;
         nsplit++; nimage += want.length;
       }

@@ -86,7 +86,33 @@ static void frame(const WIKISTAGEOPS* o, const WIKISTAGEVIEW* v, const char* e, 
     int i;
     tagpu_wikistage_canvas(r, u, &x0, &y0, &w, &h);
     printf("{\"e\":\"%s\",\"d\":\"%s\",\"t\":%d,\"x0\":%.17g,\"y0\":%.17g,\"w\":%.17g,\"h\":%.17g,"
-           "\"dropped\":%d,\"trunc\":%u,\"ops\":[", e, d, t, x0, y0, w, h, o->dropped, (unsigned)v->trunc);
+           "\"dropped\":%d,\"trunc\":%u,", e, d, t, x0, y0, w, h, o->dropped, (unsigned)v->trunc);
+    /* each op's range and, for a box, its type's name (WIKISTAGE_IN_*); then where it is drawn
+       (tagpu_wikistage_keep) under three images -- every type resolved with the ground in the image,
+       none resolved, and the ground fallen back -- one digit an op; and the image's rect */
+    {
+        static const uint32_t all[2] = { 0xFFFFFFFFu, 0xFFFFFFFFu }, none[2] = { 0, 0 };
+        int x0i, y0i, x1i, y1i, k;
+        fputs("\"rng\":[", stdout);
+        for (i = 0; i < o->n; i++) {
+            printf("%s[%d,", i ? "," : "", o->range[i]);
+            if (o->range[i] == WIKISTAGE_IN_BOX) {
+                const char* tn = v->type[o->rtype[i] % WIKI_MAX_DEFS];
+                str(tn, strlen(tn));
+            } else
+                fputs("null", stdout);
+            putchar(']');
+        }
+        fputs("],\"keep\":[", stdout);
+        for (k = 0; k < 3; k++) {
+            printf("%s\"", k ? "," : "");
+            for (i = 0; i < o->n; i++) putchar('0' + tagpu_wikistage_keep(o, i, 1, k != 2, k == 1 ? none : all));
+            putchar('"');
+        }
+        tagpu_wikistage_image(v->w, v->h, r, u, &x0i, &y0i, &x1i, &y1i);
+        printf("],\"img\":[%d,%d,%d,%d],", x0i, y0i, x1i, y1i);
+    }
+    fputs("\"ops\":[", stdout);
     for (i = 0; i < o->n; i++) {
         const HUDOP* p = &o->op[i];
         printf("%s[%d,%d,%d,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%u,%.9g,%d,%d,", i ? "," : "", p->kind, p->flags,

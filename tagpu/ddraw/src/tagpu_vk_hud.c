@@ -122,6 +122,8 @@ static int                   s_nbase;           /* the base layer's batches: s_b
 static int                   s_tb0, s_tb1;      /* the top layer's: s_batch[s_tb0, s_tb1); the
                                                    groups' batches lie outside both          */
 static int                   s_wb0, s_wb1;      /* the wiki layer's: s_batch[s_wb0, s_wb1)     */
+static int                   s_wbm;             /* where the stage's ops over its 3D image start:
+                                                   [s_wb0, s_wbm) under it, [s_wbm, s_wb1) over */
 static VkRect2D              s_top;             /* the top layer's device pixels; empty none   */
 
 /* THE GROUPS' LAYER (tagpu_huddraw.c, THE GROUPS): an image a frame slot, cleared and drawn by
@@ -985,19 +987,19 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     const HUDART* art;
     const WIKIART* wart;
     const HUDSTATE* st = NULL;
-    HUDOPLIST wpage, wstage;
+    HUDOPLIST wpage, wstage, wover;
     TAGPU_VKSTAGE* sg;
     char err[160];
     float px = 0, wpx = 0;
     int dropped = 0, unfit = 0, r, due, ox = 0, oy = 0, wox = 0, woy = 0, hud, wiki;
 
-    s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_wb0 = s_wb1 = s_ngroup = 0;
+    s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_wb0 = s_wbm = s_wb1 = s_ngroup = 0;
     memset(&s_top, 0, sizeof s_top);
     tagpu_hudstate_drawn(NULL);
     tagpu_wikistate_drawn(0);
     if (s_state == ST_REFUSED) return 0;
     hud = tagpu_hudstate_frame(d->frame, &st, &px, &ox, &oy) && px > 0;
-    wiki = tagpu_wikistate_frame(d->frame, &wpage, &wstage, &wpx, &wox, &woy) && wpx > 0;
+    wiki = tagpu_wikistate_frame(d->frame, &wpage, &wstage, &wover, &wpx, &wox, &woy) && wpx > 0;
     if (!hud && !wiki) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS || w == 0 || h == 0) return 0;
 
@@ -1061,16 +1063,17 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         s_nbatch = nb0 + nb1;
         s_tb0 = nb0;
         s_tb1 = nb0 + m1;
-        s_wb0 = s_wb1 = s_nbatch;
+        s_wb0 = s_wbm = s_wb1 = s_nbatch;
         /* THE WIKI'S LAYER, in its own unit and from its own kit: a batch's texture is its kit
            index, which the pass holds after the HUD's parts. The page, then the stage inside its
-           bezel; the stage has no groups, so every batch it adds is the attachment's and the
-           layer's batches stay one run [s_wb0, s_wb1) when the page's groups' come after it */
+           bezel -- its ops under the 3D image, then those over it; the stage has no groups, so
+           every batch it adds is the attachment's and the layer's batches stay one run
+           [s_wb0, s_wb1) when the page's groups' come after it, cut at s_wbm where the image goes */
         if (wiki) {
-            const HUDOPLIST* list[2] = { &wpage, &wstage };
-            int k, mw[2] = { 0, 0 }, nbw[2] = { 0, 0 }, nb_at[2] = { 0, 0 };
+            const HUDOPLIST* list[3] = { &wpage, &wstage, &wover };
+            int k, mw[3] = { 0, 0, 0 }, nbw[3] = { 0, 0, 0 }, nb_at[3] = { 0, 0, 0 };
             s_wb0 = s_nbatch;
-            for (k = 0; k < 2; k++) {
+            for (k = 0; k < 3; k++) {
                 int nw, miw = 0, gw = s_ngroup, dw = 0, uw = 0;
                 if (!list[k]->n) continue;
                 nb_at[k] = s_nbatch;
@@ -1087,18 +1090,20 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 s_nbatch += nbw[k];
                 s_ninst += nw;
             }
-            /* the page's attachment batches, its groups' batches, then the stage's: the groups'
-               are moved past the stage's so the attachment's batches are one run */
-            if (nbw[0] > mw[0] && nbw[1] > 0) {
-                const int g0 = nb_at[0] + mw[0], ng = nbw[0] - mw[0], ns = nbw[1];
+            /* the page's attachment batches, its groups' batches, then the stage's two lists': the
+               groups' are moved past the stage's so the attachment's batches are one run. The
+               stage's lists follow each other, so theirs are one block of nbw[1] + nbw[2] */
+            if (nbw[0] > mw[0] && nbw[1] + nbw[2] > 0) {
+                const int g0 = nb_at[0] + mw[0], ng = nbw[0] - mw[0], ns = nbw[1] + nbw[2];
                 HUDBATCH tmp[HUD_MAXBATCH];
                 memcpy(tmp, s_batch + g0, (size_t)ng * sizeof *tmp);
-                memmove(s_batch + g0, s_batch + nb_at[1], (size_t)ns * sizeof *tmp);
+                memmove(s_batch + g0, s_batch + g0 + ng, (size_t)ns * sizeof *tmp);
                 memcpy(s_batch + g0 + ns, tmp, (size_t)ng * sizeof *tmp);
                 for (i = 0; i < s_ngroup; i++)
                     if (s_group[i].b0 >= g0 && s_group[i].b0 < g0 + ng) s_group[i].b0 += ns;
             }
-            s_wb1 = s_wb0 + mw[0] + (wstage.n ? nbw[1] : 0);
+            s_wbm = s_wb0 + mw[0] + (wstage.n ? nbw[1] : 0);
+            s_wb1 = s_wbm + (wover.n ? nbw[2] : 0);
         }
         s_layW = sh.w_used;
         s_layH = sh.h_used;
@@ -1226,9 +1231,16 @@ int tagpu_vk_hud_record_top(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
 int tagpu_vk_hud_record_wiki(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                              uint32_t w, uint32_t h)
 {
+    (void)d;
+    return draw_batches(cb, slot, w, h, s_wb0, s_wbm);
+}
+
+int tagpu_vk_hud_record_wiki_over(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                                  uint32_t w, uint32_t h)
+{
     int drew;
     (void)d;
-    drew = draw_batches(cb, slot, w, h, s_wb0, s_wb1);
+    drew = draw_batches(cb, slot, w, h, s_wbm, s_wb1);
     s_ninst = 0;
     return drew;
 }
@@ -1271,7 +1283,7 @@ void tagpu_vk_hud_down(const TAGPU_VKPASS* d)
     s_agen = 0;
     s_cgen = 0;
     s_cclear = 0;
-    s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_wb0 = s_wb1 = s_ngroup = 0;
+    s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_wb0 = s_wbm = s_wb1 = s_ngroup = 0;
     s_nwparts = 0;
     memset(&s_top, 0, sizeof s_top);
     /* UNBUILT, not REFUSED: a teardown or a resize must let the pass come back */

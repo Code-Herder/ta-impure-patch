@@ -26,6 +26,14 @@ static int      s_saidOver;             /* the page's ops overflowed: said once 
 static int      s_drew;                 /* this frame's layer was drawn                         */
 static TAGPU_CMD_WIKI s_map;
 static int      s_mapCut;
+/* the 3D stage: what tagpu_wikistate_scene answers, and the stage's ops split for its image */
+static int      s_viewOk;               /* this frame's stage draws the record's view           */
+static int      s_entry, s_demo;
+static uint32_t s_shot;
+static HUDRECT  s_stageRect;
+static int      s_split;                /* tagpu_wikistate_image ran for s_frame                */
+static HUDOP    s_over[WIKI_MAXOP];     /* the ops over the image, in their order; 0.8 MB       */
+static int      s_nover;
 
 /* ---- what the page and the stage need of the loaded art: set once, from the published art,
    which is immutable (tagpu_hudart.h) ---- */
@@ -135,7 +143,7 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
     float u, hpx;
     int vw = f->vp_w, vh = f->vp_h, pw = 128, bh = 32, q8 = 256, hox, hoy;
 
-    s_have = s_haveStage = 0;
+    s_have = s_haveStage = s_viewOk = s_split = s_nover = 0;
     if (s_refused || !pk || !pk->in_game || !(w = tagpu_pk_wiki(pk))) return;
     /* THE ART LOADS ON ITS OWN THREAD (tagpu_hudart.c), started by whichever half asks first; the
        wiki draws from the first frame after it is published */
@@ -186,7 +194,12 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
         msg[sizeof msg - 1] = 0;
         tagpu_wikistage_build(sv, msg[0] ? msg : NULL, s_fr.stage, u, &s_sart, &s_stage);
         s_haveStage = 1;
+        s_viewOk = sv && sv->w > 0 && sv->h > 0;
+        s_stageRect = s_fr.stage;
     }
+    s_entry = w->entry;
+    s_demo = w->demo;
+    s_shot = w->shot;
     s_open = w->open;
     s_ptr = w->ptr_x >= 0 && w->ptr_y >= 0;
     s_px = u;
@@ -207,17 +220,60 @@ static HUDOPLIST stage_list(void)
     return l;
 }
 
+int tagpu_wikistate_scene(unsigned frame, const WIKISTAGEVIEW** v, int* entry, int* demo, uint32_t* shot,
+                          HUDRECT* stage, float* px, int* ox, int* oy)
+{
+    if (!s_have || s_frame != frame || !s_viewOk) return 0;
+    *v = &s_view;
+    *entry = s_entry;
+    *demo = s_demo;
+    *shot = s_shot;
+    *stage = s_stageRect;
+    *px = s_px;
+    *ox = s_ox;
+    *oy = s_oy;
+    return 1;
+}
+
+/* THE SPLIT IS IN PLACE, ONCE: the ops kept under the image close up at the front of the stage's
+   own array, in their order (an op only ever moves to an index at or before its own, so each is
+   read before anything is written over it), and those over it are copied out in theirs. The
+   runs and the text stay where they are, and every op still names its own. */
+void tagpu_wikistate_image(unsigned frame, int image, int ground, const uint32_t* resolved)
+{
+    int i, n, under = 0;
+    if (!s_have || s_frame != frame || !s_haveStage || s_split) return;
+    s_split = 1;
+    if (!image) return;
+    n = s_stage.n < WIKI_MAXOP ? s_stage.n : WIKI_MAXOP;
+    for (i = 0; i < n; i++) {
+        const int k = tagpu_wikistage_keep(&s_stage, i, 1, ground, resolved);
+        if (k == 1) s_stage.op[under++] = s_stage.op[i];
+        else if (k == 2) s_over[s_nover++] = s_stage.op[i];
+    }
+    s_stage.n = under;
+}
+
 int tagpu_wikistate_refused(void)
 {
     return InterlockedCompareExchange(&s_refused, 0, 0) != 0;
 }
 
-int tagpu_wikistate_frame(unsigned frame, HUDOPLIST* page, HUDOPLIST* stage, float* px, int* ox, int* oy)
+int tagpu_wikistate_frame(unsigned frame, HUDOPLIST* page, HUDOPLIST* stage, HUDOPLIST* over, float* px,
+                          int* ox, int* oy)
 {
     if (!s_have || s_frame != frame) return 0;
     *page = tagpu_huddraw_list(&s_ops);
-    if (s_haveStage) *stage = stage_list();
-    else memset(stage, 0, sizeof *stage);
+    memset(stage, 0, sizeof *stage);
+    memset(over, 0, sizeof *over);
+    if (s_haveStage) {
+        *stage = stage_list();
+        if (s_nover) {
+            *over = *stage;
+            over->op = s_over;
+            over->n = s_nover;
+        }
+    }
     *px = s_px;
     *ox = s_ox;
     *oy = s_oy;

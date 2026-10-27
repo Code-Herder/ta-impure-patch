@@ -121,8 +121,13 @@ const WikiStage = (() => {
         g.fillRect(Math.floor(X(x * cell)), Math.floor(Z(z * cell)), Math.ceil(cp) + 1, Math.ceil(cp) + 1);
       }
     }
-    // the 3D image: the map at zoom 1, composited into the map's rect as the game's world target is (bilinear)
-    if (im) im.draw(g, { x: X(0), y: Z(0), w: mw * cell * s, h: mh * cell * s });
+    // the 3D image: the map at zoom 1, composited into the map's rect as the game's world target is (bilinear), each
+    // edge snapped to the device pixel as the game's composite rect is (tagpu_wikistage_image): the composite's
+    // viewport is whole pixels, so the image may sit up to half a pixel from the fit, the same way in both
+    if (im) {
+      const x0 = snap(X(0)), y0 = snap(Z(0));
+      im.draw(g, { x: x0, y: y0, w: snap(X(mw * cell)) - x0, h: snap(Z(mh * cell)) - y0 });
+    }
 
     const box = (q, f = 1) => { const p = pt(q), fx = +(q.fx ?? (q.footprint || [])[0]) || 1, fz = +(q.fz ?? (q.footprint || [])[1]) || 1;
       const w = fx * cp * f, h = fz * cp * f; return { x: X(p.x) - w / 2, y: Z(p.z) - h / 2, w, h, cx: X(p.x), cy: Z(p.z) }; };
