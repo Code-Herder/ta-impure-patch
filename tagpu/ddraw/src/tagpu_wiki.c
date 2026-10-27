@@ -356,8 +356,8 @@ static void sim_free(void)
    that carries the button up sends it instead, as the scrollbar's drag ends (THE DRAG ENDS WITH
    ITS BUTTON, below). A press already held sends no second down, as the browser sends none. */
 #define TRY_LOG 4096                            /* the inputs the dump can give, per Try it      */
-enum { TRY_MOVE, TRY_DOWN, TRY_UP, TRY_BUILD };
-typedef struct { int32_t tick; uint8_t kind; int8_t key; int16_t build; double x, z; } TRYIN;
+enum { TRY_MOVE, TRY_DOWN, TRY_UP };
+typedef struct { int32_t tick; uint8_t kind; int8_t key; double x, z; } TRYIN;
 
 static int      s_try;                          /* wiki.js S.try: the stage is the player's      */
 static int      s_down[WIKI_NKEYS], s_ndown;    /* wiki.js `down`: WIKI_KEY_*, in the order sent */
@@ -371,7 +371,7 @@ static int try_on(void)
 }
 
 /* one input to Try it's simulation, and its line in the log */
-static void try_send(int kind, int key, int build, double x, double z)
+static void try_send(int kind, int key, double x, double z)
 {
     WIKIINPUT in;
     memset(&in, 0, sizeof in);
@@ -380,14 +380,12 @@ static void try_send(int kind, int key, int build, double x, double z)
     case TRY_MOVE:  in.has = WIKI_IN_MOVE; in.move.x = x; in.move.z = z; break;
     case TRY_DOWN:  in.down = key; break;
     case TRY_UP:    in.up = key; break;
-    case TRY_BUILD: in.has = WIKI_IN_BUILD; in.build = build; break;
     }
     tagpu_wikisim_input(&s_sim, &in);
     if (s_nlog >= TRY_LOG) { s_logCut++; return; }
     s_log[s_nlog].tick = s_sim.tick;
     s_log[s_nlog].kind = (uint8_t)kind;
     s_log[s_nlog].key = (int8_t)key;
-    s_log[s_nlog].build = (int16_t)build;
     s_log[s_nlog].x = x;
     s_log[s_nlog].z = z;
     s_nlog++;
@@ -410,7 +408,7 @@ static void try_down(int k)
         s_down[s_ndown++] = k;
     } else if (k != WIKI_KEY_Z && k != WIKI_KEY_X)
         return;
-    try_send(TRY_DOWN, k, -1, 0, 0);
+    try_send(TRY_DOWN, k, 0, 0);
 }
 
 /* `k`'s up, if it is held */
@@ -422,7 +420,7 @@ static void try_up(int k)
     s_ndown--;
     if (k == WIKI_KEY_LMB) s_downReal &= ~B_L;
     if (k == WIKI_KEY_RMB) s_downReal &= ~B_R;
-    if (try_on()) try_send(TRY_UP, k, -1, 0, 0);
+    if (try_on()) try_send(TRY_UP, k, 0, 0);
 }
 
 /* wiki.js releaseAll: every held key's up in the order they went down, `send` 0 when the
@@ -430,7 +428,7 @@ static void try_up(int k)
 static void try_release_all(int send)
 {
     int i;
-    for (i = 0; send && try_on() && i < s_ndown; i++) try_send(TRY_UP, s_down[i], -1, 0, 0);
+    for (i = 0; send && try_on() && i < s_ndown; i++) try_send(TRY_UP, s_down[i], 0, 0);
     s_ndown = 0;
     s_downReal = 0;
 }
@@ -471,7 +469,7 @@ static void try_pointer(int cx, int cy, int real, WPARAM wp)
     double x, z;
     if (real && (s_downReal & B_L) && !(wp & MK_LBUTTON)) try_up(WIKI_KEY_LMB);
     if (real && (s_downReal & B_R) && !(wp & MK_RBUTTON)) try_up(WIKI_KEY_RMB);
-    if (try_on() && stage_world(cx, cy, &x, &z)) try_send(TRY_MOVE, -1, -1, x, z);
+    if (try_on() && stage_world(cx, cy, &x, &z)) try_send(TRY_MOVE, -1, x, z);
 }
 
 /* A left or right press at client point (cx, cy), or where the pointer is when the injection named
@@ -483,7 +481,7 @@ static int try_press(unsigned bit, int cx, int cy, int real)
     if (!try_on() || (bit != B_L && bit != B_R)) return 0;
     if (cx < 0 && !mouse_last_client(&cx, &cy)) return 0;
     if (!stage_world(cx, cy, &x, &z)) return 0;
-    try_send(TRY_MOVE, -1, -1, x, z);
+    try_send(TRY_MOVE, -1, x, z);
     if (try_held(k) < 0) {
         if (real) s_downReal |= bit;
         else s_downReal &= ~bit;
@@ -616,13 +614,12 @@ static int key_index(const char* key, const char* prefix, int n)
 /* the control acts on the selected entry's demo: its meaning is the entry it was drawn for */
 static int entry_relative(const char* key)
 {
-    return !strncmp(key, "demo:", 5) || !strcmp(key, "play") || !strcmp(key, "replay") || !strcmp(key, "try") ||
-           !strncmp(key, "build:", 6);
+    return !strncmp(key, "demo:", 5) || !strcmp(key, "play") || !strcmp(key, "replay") || !strcmp(key, "try");
 }
 
 /* A left press on control `key` of the last frame drawn (wiki.js's handlers). Selecting an entry
    or a demo leaves Try it yourself, as the tree's and the demo list's handlers do; its button
-   swaps the demo for Try it and back; a build menu button arms its type, or none.
+   swaps the demo for Try it and back.
    A PRESS ON AN ENTRY'S CONTROL COUNTS ONLY ON A FRAME DRAWN FOR THE ENTRY SELECTED NOW: the hit
    map lags a selection by the frames the render thread has not drawn yet, and `demo:1` of the
    entry the player saw is not `demo:1` of the one just picked. The hit map names the entry its
@@ -634,7 +631,7 @@ static void page_press(const char* key)
     int i;
     if (entry_relative(key) && s_hit.entry != (entry_of(d) ? s_entry : -1)) return;
     if (!strcmp(key, "play") || !strcmp(key, "replay") || !strcmp(key, "x1") || !strcmp(key, "x2") ||
-        !strcmp(key, "try") || !strncmp(key, "build:", 6))
+        !strcmp(key, "try"))
         held(key);
     if (!d) return;
     if ((i = key_index(key, "fold:", d->nnode < folds ? d->nnode : folds)) >= 0)
@@ -653,11 +650,6 @@ static void page_press(const char* key)
             s_playing = 1;
             start();
         }
-    } else if (!strncmp(key, "build:", 6)) {
-        /* a type of the entry by its name, or none: the menu names only the entry's types */
-        const int none = !strcmp(key + 6, "none");
-        const int t = none || !entry_of(d) ? -1 : tagpu_wikidata_def(entry_of(d), key + 6);
-        if (try_on() && (t >= 0 || none)) try_send(TRY_BUILD, -1, t, 0, 0);
     } else if (!strcmp(key, "play")) {
         if (done()) start();
         else s_playing = !s_playing;
@@ -1159,12 +1151,7 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
         const TRYIN* t = &s_log[i];
         fprintf(f, "%s[%ld,", i ? "," : "", (long)t->tick);
         if (t->kind == TRY_MOVE) fprintf(f, "\"move\",%.17g,%.17g]", t->x, t->z);
-        else if (t->kind == TRY_BUILD) {
-            fprintf(f, "\"build\",");
-            if (t->build >= 0 && e && t->build < e->ndef) jstr(f, e->def[t->build].name, WIKI_ID_MAX);
-            else fprintf(f, "null");
-            fprintf(f, "]");
-        } else {
+        else {
             fprintf(f, "\"%s\",", t->kind == TRY_DOWN ? "down" : "up");
             jstr(f, key_name(t->key), 16);
             fprintf(f, "]");

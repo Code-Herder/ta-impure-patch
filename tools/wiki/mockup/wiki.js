@@ -151,7 +151,7 @@ $('#demos').onclick = e => { const d = e.target.closest('[data-demo]'); if (d) {
 let sim = null, simErr = null, acc = 0;
 function fail(x) { simErr = x && x.message || String(x); console.error('wiki sim:', x); sim = null; }
 function start() {
-  sim = null; simErr = null; acc = 0; releaseAll(); picked = undefined; menuKey = null;
+  sim = null; simErr = null; acc = 0; releaseAll();
   const e = entry(), d = demo();
   if (!d) return;
   if (typeof WikiSim === 'undefined') { simErr = 'sim.js is not loaded'; return; }
@@ -178,7 +178,6 @@ function controls() {
   for (const id of ['#c-play', '#c-replay', '#c-x1', '#c-x2', '#c-try']) $(id).disabled = !has;
   $('#c-x1').classList.toggle('on', S.speed === 1); $('#c-x2').classList.toggle('on', S.speed === 2);
   $('#c-try').classList.toggle('on', S.try);
-  $('#bmenu').hidden = !S.try;
 }
 
 /* ---- the stage: a canvas at the resolution's pixels; the map fitted inside it, letterboxed ---- */
@@ -278,25 +277,6 @@ window.addEventListener('keyup', e => {
   if (m && down.has(m)) { e.preventDefault(); down.delete(m); send({ up: m }); }
 });
 window.addEventListener('blur', releaseAll);
-
-/* the build menu lists what the selection can build among the entry's own units -- a stock build list names the whole
-   side, the entry only the buildings it shows -- and marks the one view().mode says is armed ('build:<TYPE>') */
-let picked, menuKey = null;
-function buildMenu(v) {
-  if (!S.try) return;
-  const e = entry(), U = (e && e.units) || {}, sel = (v && v.units || []).filter(u => u.selected);
-  const opts = [...new Set(sel.flatMap(u => (U[u.type] && (U[u.type].builds || U[u.type].buildlist)) || []))].filter(t => t in U);
-  const mode = v && typeof v.mode === 'string' && v.mode.startsWith('build:') ? v.mode.slice(6) : null;
-  const cur = v && typeof v.mode === 'string' ? mode : picked;
-  const key = opts.join() + '|' + cur;
-  if (key === menuKey) return;
-  menuKey = key;
-  $('#bmenu').innerHTML = '<div class="h">Build</div>' + (opts.length
-    ? opts.map(t => `<button data-part="button" data-build="${esc(t)}"${t === cur ? ' class="on"' : ''}>${esc(t)}</button>`).join('')
-      + `<button data-part="button" data-build=""${cur == null ? ' class="on"' : ''}>none</button>`
-    : '<div class="e">Select a constructor</div>');
-}
-$('#bmenu').onclick = e => { const b = e.target.closest('[data-build]'); if (!b) return; picked = b.dataset.build || null; send({ build: picked }); menuKey = null; };
 
 /* ---- skins: the whitebox, or the kit of art/wiki/kit/ -- kit.json in art/hud/kit.json's format and its parts as
    PNGs. The layout's `geom` places what the kit's window art leaves room for, in units: the title in its dark title
@@ -414,8 +394,7 @@ const ROLE = {
   window_title: ['#win .wt'], entry_title: ['#e-title'],
   category: ['#tree .cat'], entry: ['#tree .leaf'], demo: ['#demos li'], demo_num: ['#demos li .n'],
   subtitle: ['#e-sub'], text: ['#text'], caption: ['#caption'],
-  control: ['#ctl button'], build: ['#bmenu button'], badge: ['#badge'], keycap: ['.kc'],
-  build_head: ['#bmenu .h', '#bmenu .e'], keys: ['#keys'],
+  control: ['#ctl button'], badge: ['#badge'], keycap: ['.kc'], keys: ['#keys'],
 };
 /* the layout's other numbers as custom properties of the frame, which wiki.css reads: `--w-` and the number's path,
    a list's items by their index (row.pad -> --w-row-pad-0, --w-row-pad-1) */
@@ -446,7 +425,7 @@ function loop(t) {
   gameTick(dt);
   if (S.open) {
     advance(dt);
-    const v = draw(); strip(v); buildMenu(v);
+    const v = draw(); strip(v);
     if (held() !== loop.held) { loop.held = held(); controls(); }
   }
   paintParts();                       // last, so a keycap or button made this frame shows its part in it

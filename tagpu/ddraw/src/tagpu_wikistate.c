@@ -212,12 +212,11 @@ static void view_bound(WIKISTAGEVIEW* v)
     v->caption[WIKISTAGE_CAPTION - 1] = 0;
 }
 
-/* the record into the layout's page state: the page's fields, the caption and the keys the demo's
-   view holds, and in Try it yourself the build menu of the view's selection (wiki.js buildMenu,
-   from the frame's own view, so the menu and the stage beside it are of one state) */
-static void page_of(WIKIPAGE* st, const TAGPU_PK_WIKI* w, const WIKISTAGEVIEW* v, const WIKIDATA* d)
+/* the record into the layout's page state: the page's fields, and the caption and the keys the
+   demo's view holds */
+static void page_of(WIKIPAGE* st, const TAGPU_PK_WIKI* w, const WIKISTAGEVIEW* v)
 {
-    int i, n = 0, sel[WIKISTAGE_UNITS];
+    int i;
     st->open = w->open;
     st->entry = w->entry;
     st->demo = w->demo;
@@ -236,13 +235,6 @@ static void page_of(WIKIPAGE* st, const TAGPU_PK_WIKI* w, const WIKISTAGEVIEW* v
         if (v->has_caption) lstrcpynA(st->caption, v->caption, sizeof st->caption);
         for (i = 0; i < WIKI_NKEYS; i++)
             if (v->held[i]) st->keys |= 1u << i;
-    }
-    st->nbuild = st->armed = 0;
-    if (w->try_it && v && d && w->entry >= 0 && w->entry < d->nentry) {
-        for (i = 0; i < v->nunit && i < WIKISTAGE_UNITS; i++)
-            if (v->unit[i].selected) sel[n++] = v->unit[i].type;
-        st->nbuild = tagpu_wikilay_menu(&d->entry[w->entry], sel, n, st->build);
-        st->armed = v->mode >= 0 && v->mode < d->entry[w->entry].ndef ? v->mode + 1 : 0;
     }
 }
 
@@ -292,7 +284,7 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
     s_page.bar = (float)bh * (float)vh / (float)f->game_height / u;
     /* the rewind button's slot is taken when the same frame's live HUD draws its button */
     s_page.rewind = tagpu_hudstate_frame(f->frame_counter, &hs, &hpx, &hox, &hoy) && hs->live;
-    page_of(&s_page, w, sv, art->data);
+    page_of(&s_page, w, sv);
     if (!tagpu_wikilay_build(art->lay, art->data, &s_faces, &s_page, &s_ops, &s_fr, err, sizeof err)) {
         InterlockedExchange(&s_refused, 1);
         tagpu_logf("wiki: the page's layout refused (%s) - the wiki is not drawn this session", err);

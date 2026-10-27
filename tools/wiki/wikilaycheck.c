@@ -225,18 +225,6 @@ int main(int argc, char** argv)
     for (e = v ? v->first : NULL; e; e = e->next)
         for (j = 0; j < WIKI_NKEYS; j++)
             if (!strcmp(tagpu_wikidata_key_name(j), tj_str(e, ""))) st->keys |= 1u << j;
-    /* Try it yourself's build menu, made here by tagpu_wikilay_menu from the view's selection the
-       mockup had, so the menu's order is checked against the one wiki.js lays out */
-    if (st->try_it && st->entry >= 0 && st->entry < d->nentry) {
-        const WIKIENTRY* we = &d->entry[st->entry];
-        int sel[WIKI_MAX_DEFS * 4], nsel = 0, t;
-        v = tj_get(S, "sel");
-        for (e = v ? v->first : NULL; e && nsel < (int)(sizeof sel / sizeof *sel); e = e->next)
-            if ((t = tagpu_wikidata_def(we, tj_str(e, ""))) >= 0) sel[nsel++] = t;
-        st->nbuild = tagpu_wikilay_menu(we, sel, nsel, st->build);
-        t = tagpu_wikidata_def(we, tj_str(tj_get(S, "armed"), ""));
-        st->armed = t >= 0 ? t + 1 : 0;
-    }
 
     if (!tagpu_wikilay_build(l, d, &f, st, o, &fr, err, sizeof err)) { fprintf(stderr, "wikilaycheck: %s\n", err); return 1; }
     px = st->H / 720.0;

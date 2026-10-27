@@ -12,7 +12,7 @@ replay HUD's ops, equal to the mockup's canvas call for op. On the Vulkan lane t
 wiki button and opens the window over the game, takes every input while it is open and pauses
 single player; the window holds the page -- the tree, the demo list, the entry's column -- and the
 stage with the selected demo playing, driven by the page's controls, the wheel and the scrollbars,
-or Try it yourself, the demo's scene handed to the player with the build menu beside it
+or Try it yourself, the demo's scene handed to the player
 ([the plan](ingame-wiki-plan.html), landings 2 to 5). The stage's ground is the game's own: the
 description's tiles, its deposits and vents and the engine's fog, drawn by Impure's own terrain and
 feature passes; its units are the game's models, drawn by Impure's own unit pass, facing where they
@@ -395,16 +395,17 @@ where the plan's first version and the mockup differed.
   - a left or right press on the stage gives a move there and then the button's down; a release
     anywhere gives its up;
   - Shift, Alt and Ctrl give a down and an up; Z and X with Alt down give a down every time, an
-    auto-repeat included;
-  - a build menu button gives `input({build})`, its type or none.
+    auto-repeat included.
 - **Nothing is left held.** What went down and not up is one ordered set; a close or a focus loss
   sends every member's up in that order; leaving Try it, a replay or a new selection empties it
   with the simulation it belonged to. A real press released off the window is let go at the first
   real move that carries its button up.
-- **The build menu** is a 66-unit column before the stage: "Build", a button for each type the
-  selection can build among the entry's own, in the selection's order and then each build list's,
-  and "none"; the armed type's button (or "none") is down. With no constructor selected it says
-  "Select a constructor". The render thread makes it from the frame's own view.
+- **No build menu.** The stage takes the row's full width, and nothing in Try it gives
+  `input({build})`, so no type is ever armed: the player selects, moves, and builds through Quick
+  Build's contextual ghost (a constructor selected, a deposit or vent hovered, a right-click), but
+  cannot place from a menu, draw a Shift line or grid, a Ctrl ring, or step the spacing with Alt+Z
+  and Alt+X. The game's own sidebar on the stage brings the build menu back
+  ([the sidebar plan](ingame-wiki-sidebar-plan.html)).
 - **The cursor**: exactly one on screen. In Try it the stage draws the simulation's cursor only
   while the player's pointer is over its canvas (`tagpu_wikistage_build`'s `cursor`, `stage.js`'s
   `o.cursor`), and the player's is hidden only in a frame whose stage cursor was drawn: the HUD pass
@@ -418,7 +419,9 @@ where the plan's first version and the mockup differed.
 - **The test**: `wiki_regression.py <instance> try --launch` gives `snap` and `line`'s inputs as
   device input on the stage, compares the paused simulation's state hash with `sim.js` fed the
   inputs the game logged (`simparity.mjs --try`), and checks the releases on Back to demo and on
-  close. `wikilaycheck.py` holds the menu to the mockup's (three Try it cases).
+  close. Both demos arm a building through the build menu's `build:<type>` control, which the
+  page no longer draws, so `try` fails at (t1) until it presses the stage's sidebar instead.
+  `wikilaycheck.py` holds Try it's page to the mockup's (three Try it cases).
 
 ## The 3D stage under the mods
 

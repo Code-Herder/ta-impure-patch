@@ -22,14 +22,14 @@
 
  "entry": {"pad": [3, 4], "gap": 3, "title_line": 1.2},
  "badge": {"h": 14, "pad": 9, "gap": 4, "dot": 8},
- "stage": {"min": 60, "gap": 5, "menu": 66, "menu_gap": 3},
+ "stage": {"min": 60},
  "strips": {"caption": 27, "keys": 19},
  "keys": {"gap": 4},
  "keycap": {"h": 15, "pad": 7},
  "controls": {"gap": 4, "pair": 2, "try": 6, "h": 17, "pad": 7, "min": 24},
  "text": {"share": 24, "para": 5},
 
- "roles_about": "Each text of the window in the replay HUD's style nearest its role (art/hud/layout.json `styles`): the titles in the stats window's title; a category in the team header; an entry or a demo in a player row's name, a demo's number in the HUD's numbers; the subtitle and the body text in the stats window's foot, its one mixed-case style; the caption, a line written at a moment, in the toast; the controls in the transport's labels; the build menu's buttons and the badge in the stats window's chips; a keycap in a transport button's small label; the build menu's heading and the keys strip's '+' in the HUD's labels.",
+ "roles_about": "Each text of the window in the replay HUD's style nearest its role (art/hud/layout.json `styles`): the titles in the stats window's title; a category in the team header; an entry or a demo in a player row's name, a demo's number in the HUD's numbers; the subtitle and the body text in the stats window's foot, its one mixed-case style; the caption, a line written at a moment, in the toast; the controls in the transport's labels; the badge in the stats window's chips; a keycap in a transport button's small label; the keys strip's '+' in the HUD's labels.",
  "roles": {
   "window_title": "title",
   "entry_title": "title",
@@ -41,10 +41,8 @@
   "text": "window_foot",
   "caption": "toast",
   "control": "face_big",
-  "build": "face_chip",
   "badge": "face_chip",
   "keycap": "face_num_sm",
-  "build_head": "label",
   "keys": "label"
  }
 }

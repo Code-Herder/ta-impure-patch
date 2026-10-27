@@ -104,15 +104,12 @@ canvas.skin { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 
   box-sizing: border-box; padding: 0 calc(var(--w-badge-pad) * var(--u)); }
 #badge[hidden] { display: none; }
 #badge i { width: calc(var(--w-badge-dot) * var(--u)); height: calc(var(--w-badge-dot) * var(--u)); border-radius: 50%; background: #d01818; border: 1px solid #5a0808; box-sizing: border-box; }
-.srow { flex: 1 1 0; min-height: calc(var(--w-stage-min) * var(--u)); display: flex; gap: calc(var(--w-stage-gap) * var(--u)); }
+.srow { flex: 1 1 0; min-height: calc(var(--w-stage-min) * var(--u)); display: flex; }
 #sbox { flex: 1; min-width: 0; position: relative; }
 #stage { position: absolute; left: calc(var(--bz-l) * var(--u)); right: calc(var(--bz-r) * var(--u)); top: calc(var(--bz-t) * var(--u));
   bottom: calc(var(--bz-b) * var(--u)); width: calc(100% - (var(--bz-l) + var(--bz-r)) * var(--u)); height: calc(100% - (var(--bz-t) + var(--bz-b)) * var(--u)); }
 #stage.try { cursor: none; }
-/* Try it yourself: the build menu of the selection, as the game's build buttons */
-#bmenu { flex: none; width: calc(var(--w-stage-menu) * var(--u)); display: flex; flex-direction: column; gap: calc(var(--w-stage-menu_gap) * var(--u)); }
-#bmenu[hidden] { display: none; }
-#bmenu button, #ctl button { position: relative; height: calc(var(--w-controls-h) * var(--u)); padding: 0 calc(var(--w-controls-pad) * var(--u)); box-sizing: border-box;
+#ctl button { position: relative; height: calc(var(--w-controls-h) * var(--u)); padding: 0 calc(var(--w-controls-pad) * var(--u)); box-sizing: border-box;
   display: flex; align-items: center; justify-content: center; white-space: nowrap; }
 /* the caption and the keys strip keep fixed heights: a caption or a keycap appearing must not resize the stage under the
    player's cursor */
@@ -139,9 +136,9 @@ canvas.skin { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 
 #frame:not(.kit) #tree .leaf.sel, #frame:not(.kit) #demos li.sel { background: #9d9d97; }
 #frame:not(.kit) #badge { border: 1px solid #8a1010; background: #ecd3d0; --ink: #8a1010; }
 #frame:not(.kit) #sbox { background: #6e6e68; border: 1px solid #1d1d1b; box-sizing: border-box; }
-#frame:not(.kit) #bmenu button, #frame:not(.kit) #ctl button { background: #b3b3ad; border: 1px solid #1d1d1b; }
+#frame:not(.kit) #ctl button { background: #b3b3ad; border: 1px solid #1d1d1b; }
 #frame:not(.kit) #ctl button:hover { background: #a2a29c; }
-#frame:not(.kit) #bmenu button.on, #frame:not(.kit) #ctl button.on { background: #5c5c56; --ink: #f0f0ea; }
+#frame:not(.kit) #ctl button.on { background: #5c5c56; --ink: #f0f0ea; }
 #frame:not(.kit) .kc { background: #f2f2ee; border: 1px solid #1d1d1b; border-bottom-width: calc(2.5 * var(--u)); border-radius: calc(2.5 * var(--u)); }
 
 /* ---- a kit: the window's part carries the faces, the title sits in its dark title groove ---- */
