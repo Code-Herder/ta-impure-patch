@@ -12,9 +12,14 @@
 
    THE LOADER REFUSES WHAT THE MOCKUP WOULD THROW ON OR READ AS UNDEFINED: a unit type the entry
    does not define, a key it does not name, a rectangle or a map size that is not an integer, a
-   missing footprint or a BuildTime that is not positive. Every other absent figure reads as 0,
-   which every rule of sim.js treats as it treats `undefined` (each one tests `> 0`). It also
-   refuses a map wider or taller than WIKI_MAP_MAX, which the mockup would play. */
+   missing footprint, a BuildTime that is not positive, or a unit's facing that is not two
+   numbers with a positive, finite length. Every other absent figure reads as 0, which every rule
+   of sim.js treats as it treats `undefined` (each one tests `> 0`). It also refuses a map wider
+   or taller than WIKI_MAP_MAX, which the mockup would play.
+
+   IT NORMALISES A FACING AS sim.js's facing() DOES, bit for bit: the same + * / and sqrt, each
+   rounded once, which is why the DLL compiles this file for SSE2 as it compiles the simulation
+   (Makefile, THE WIKI'S SIMULATION). */
 #include <stddef.h>
 #include <stdint.h>
 #include "tagpu_json.h"
@@ -50,6 +55,8 @@ typedef struct {
     int              owner;
     double           x, z;
     double           built;             /* 1 finished, below it under construction */
+    double           hx, hz;            /* "facing" as a unit vector, (0, 1) when absent; the
+                                           simulation turns only a mobile unit by it */
     const char*      label;             /* NULL: the type's name */
     int              nmove;
     WIKIPOINT*       move;              /* its move orders, in order */

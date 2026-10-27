@@ -21,7 +21,8 @@
    tagpu_wikisim.h states.
 
    By default the C side is built natively with gcc, AddressSanitizer and UndefinedBehaviorSanitizer. --wine builds it
-   with the DLL's own compiler and flags (i686-w64-mingw32-gcc, the simulation on SSE2 as the Makefile compiles it)
+   with the DLL's own compiler and flags (i686-w64-mingw32-gcc, the simulation and the loader on SSE2 as the Makefile
+   compiles them)
    and runs it under Wine (WINEPREFIX: the main checkout's wineprefix/), which checks the arithmetic the game runs. */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -62,7 +63,8 @@ function stateHash(sim, v) {
   int(m.vents.length); for (const p of m.vents) { dbl(p.x); dbl(p.z); }
   int(v.units.length);
   for (const u of v.units) {
-    str(u.id); str(u.type); int(u.owner); dbl(u.x); dbl(u.z); int(u.selected ? 1 : 0); dbl(u.built); dbl(u.reclaimed); str(u.label);
+    str(u.id); str(u.type); int(u.owner); dbl(u.x); dbl(u.z); dbl(u.hx); dbl(u.hz); int(u.selected ? 1 : 0); dbl(u.built); dbl(u.reclaimed);
+    str(u.label);
     const os = sim.orders(u.id);
     int(os.length);
     for (const o of os) {
@@ -96,10 +98,12 @@ function run(cmd, args, opts = {}) {
 
 function build(tmp) {
   if (WINE) {
-    const exe = path.join(DDRAW, 'tests/wikitest.exe'), sim = path.join(tmp, 'tagpu_wikisim.o');
+    // the simulation and the loader, which normalises the scenes' facings, on SSE2 as the Makefile compiles them
+    const exe = path.join(DDRAW, 'tests/wikitest.exe'), sse = ['src/tagpu_wikisim.c', 'src/tagpu_wikidata.c'];
     const cc = 'i686-w64-mingw32-gcc', flags = ['-Iinc', '-Isrc', '-O2', '-Wall', '-std=c99'];
-    run(cc, [...flags, '-msse2', '-mfpmath=sse', '-mincoming-stack-boundary=2', '-c', '-o', sim, 'src/tagpu_wikisim.c'], { cwd: DDRAW });
-    run(cc, [...flags, '-static', '-o', exe, 'tests/wikitest.c', sim, ...SRCS], { cwd: DDRAW });
+    const objs = sse.map(src => path.join(tmp, path.basename(src, '.c') + '.o'));
+    sse.forEach((src, i) => run(cc, [...flags, '-msse2', '-mfpmath=sse', '-mincoming-stack-boundary=2', '-c', '-o', objs[i], src], { cwd: DDRAW }));
+    run(cc, [...flags, '-static', '-o', exe, 'tests/wikitest.c', ...objs, ...SRCS.filter(src => !sse.includes(src))], { cwd: DDRAW });
     const common = run('git', ['rev-parse', '--git-common-dir'], { cwd: ROOT }).trim();
     const env = { ...process.env };
     env.WINEPREFIX ??= path.join(path.resolve(ROOT, common), '..', 'wineprefix');

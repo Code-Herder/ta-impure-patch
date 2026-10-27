@@ -152,24 +152,33 @@ static WIKIUNIT* new_unit(WIKISIM* s, int type, int owner, double built, const c
     return u;
 }
 
-/* a structure at its site, appended in the room new_unit made for it */
+/* a structure at its site, appended in the room new_unit made for it. It faces (0, 1), toward the
+   viewer, whatever its scene gives: TA's default heading 0x8000 is the centre of the spawn's
+   0x8000 - BuildAngle/2 + rand(BuildAngle) (0x485A40, tagpu_native.c ghost_one), and the
+   simulation has no randomness. */
 static WIKIUNIT* place(WIKISIM* s, WIKIUNIT* u, int ox, int oz)
 {
     u->ox = ox;
     u->oz = oz;
     u->x = (ox + fpx(s, u->type) / 2.0) * CELL;
     u->z = (oz + fpz(s, u->type) / 2.0) * CELL;
+    u->hx = 0;
+    u->hz = 1;
     s->unit[s->nunit++] = u;
     return u;
 }
 
-static WIKIUNIT* add(WIKISIM* s, int type, int owner, double x, double z, double built, const char* id, const char* label)
+/* (hx, hz): the scene's facing, already a unit vector (tagpu_wikidata.c) */
+static WIKIUNIT* add(WIKISIM* s, int type, int owner, double x, double z, double built, const char* id, const char* label,
+                     double hx, double hz)
 {
     WIKIUNIT* u = new_unit(s, type, owner, built, id, label);
     if (!u) return NULL;
     if (mobile(s, type)) {
         u->x = x;
         u->z = z;
+        u->hx = hx;
+        u->hz = hz;
         s->unit[s->nunit++] = u;
         return u;
     }
@@ -1145,7 +1154,13 @@ static double rect_dist(const WIKIUNIT* u, BOX b)
     return sqrt(dx * dx + dz * dz);
 }
 
-/* a step toward (tx, tz), ending `stop` short of it; 1 once there */
+/* A step toward (tx, tz), ending `stop` short of it; 1 once there. The step turns the unit to face
+   along it, at once: the simulation has no turn rate.
+
+   THE HEADING IS A VECTOR, NOT AN ANGLE. An angle would come from atan2, which no standard rounds
+   correctly, so its last bit differs between C libraries and JavaScript engines, and this file
+   would drift from sim.js. The step's own dx / d and dz / d are + - * / and sqrt, each rounded
+   once, so both simulations hold the same doubles. */
 static int walk(const WIKISIM* s, WIKIUNIT* u, double tx, double tz, double stop)
 {
     const double dx = tx - u->x, dz = tz - u->z, d = sqrt(dx * dx + dz * dz);
@@ -1153,6 +1168,8 @@ static int walk(const WIKISIM* s, WIKIUNIT* u, double tx, double tz, double stop
     if (d <= stop) return 1;
     step = def(s, u->type)->max_velocity;
     if (d - stop < step) step = d - stop;
+    u->hx = dx / d;
+    u->hz = dz / d;
     u->x += dx / d * step;
     u->z += dz / d * step;
     return 0;
@@ -1166,9 +1183,16 @@ static int reach(const WIKISIM* s, WIKIUNIT* u, BOX b)
     return 0;
 }
 
+/* a builder in range works on st, and turns at once to face its centre (unchanged when it stands
+   on the centre) */
 static void credit(const WIKISIM* s, WIKIUNIT* u, WIKIUNIT* st, int how)
 {
+    const double dx = st->x - u->x, dz = st->z - u->z, d = sqrt(dx * dx + dz * dz);
     const double w = def(s, u->type)->worker_time / def(s, st->type)->build_time / TPS * s->PACE;
+    if (d > 0) {
+        u->hx = dx / d;
+        u->hz = dz / d;
+    }
     if (how == HOW_BUILD) st->work_build += w;
     else st->work_reclaim += w;
     st->worked = 1;
@@ -1341,6 +1365,8 @@ const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s)
             w->owner = u->owner;
             w->x = u->x;
             w->z = u->z;
+            w->hx = u->hx;
+            w->hz = u->hz;
             w->fx = fpx(s, u->type);
             w->fz = fpz(s, u->type);
             w->selected = u->sel;
@@ -1515,6 +1541,8 @@ uint64_t tagpu_wikisim_hash(const WIKISIM* s)
         fnv_int(&h, u->owner);
         fnv_double(&h, u->x);
         fnv_double(&h, u->z);
+        fnv_double(&h, u->hx);
+        fnv_double(&h, u->hz);
         fnv_int(&h, u->sel ? 1 : 0);
         fnv_double(&h, u->built);
         fnv_double(&h, u->reclaimed);
@@ -1614,7 +1642,7 @@ static int scene_units(WIKISIM* s, const WIKISCENE* sc)
     int i, j;
     for (i = 0; i < sc->nunit; i++) {
         const WIKISCENEUNIT* d = &sc->unit[i];
-        WIKIUNIT* u = add(s, d->def, d->owner, d->x, d->z, d->built, d->id, d->label);
+        WIKIUNIT* u = add(s, d->def, d->owner, d->x, d->z, d->built, d->id, d->label, d->hx, d->hz);
         if (!u) return 0;
         for (j = 0; j < d->nmove; j++) {
             WIKIORDER o;

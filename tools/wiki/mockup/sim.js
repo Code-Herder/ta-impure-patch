@@ -112,23 +112,34 @@ const WikiSim = (() => {
     const overlap = (a, b) => a.ox < b.ox + b.fx && b.ox < a.ox + a.fx && a.oz < b.oz + b.fz && b.oz < a.oz + a.fz;
     const box = (t, ox, oz) => ({ ox, oz, fx: fp(t)[0], fz: fp(t)[1] });
 
-    /* ---- units ---- */
+    /* ---- units. Each faces along a unit vector (hx, hz); walk says why a vector. ---- */
     let units = [], nextId = 1;
-    function add(type, owner, x, z, built, id, label) {
+    // a scene unit's "facing": [x, z] as a unit vector, (0, 1) when absent; tagpu_wikidata.c refuses what this throws on
+    function facing(f) {
+      if (f == null) return [0, 1];
+      const two = Array.isArray(f) && f.length === 2 && typeof f[0] === 'number' && typeof f[1] === 'number';
+      const d = two ? Math.sqrt(f[0] * f[0] + f[1] * f[1]) : 0;
+      if (!(d > 0 && d < Infinity)) throw new Error(`a facing is not two numbers with a length: ${JSON.stringify(f)}`);
+      return [f[0] / d, f[1] / d];
+    }
+    function add(type, owner, x, z, built, id, label, [hx, hz]) {
       const [fx, fz] = fp(type), u = { id: id || `u${nextId++}`, type, owner, built, reclaimed: 0, orders: [], sel: false, label: label || type };
-      if (mobile(type)) { u.x = x; u.z = z; return units.push(u), u; }
+      if (mobile(type)) { Object.assign(u, { x, z, hx, hz }); return units.push(u), u; }
       return place(u, Math.round(x / CELL - fx / 2), Math.round(z / CELL - fz / 2));
     }
+    /* a structure at its site. It faces (0, 1), toward the viewer, whatever its scene gives: TA's default heading
+       0x8000 is the centre of the spawn's 0x8000 - BuildAngle/2 + rand(BuildAngle) (0x485A40, tagpu_native.c
+       ghost_one), and the simulation has no randomness. */
     function place(u, ox, oz) {
       const [fx, fz] = fp(u.type);
-      Object.assign(u, { ox, oz, x: (ox + fx / 2) * CELL, z: (oz + fz / 2) * CELL });
+      Object.assign(u, { ox, oz, x: (ox + fx / 2) * CELL, z: (oz + fz / 2) * CELL, hx: 0, hz: 1 });
       return units.push(u), u;
     }
     const byId = id => units.find(u => u.id === id);
     const structures = () => units.filter(u => !mobile(u.type));
     const structureAt = (t, ox, oz) => units.find(u => u.type === t && u.ox === ox && u.oz === oz);
     for (const s of S.units) {
-      const u = add(s.type, s.owner ?? 0, s.at[0], s.at[1], s.built ?? 1, s.id, s.label);
+      const u = add(s.type, s.owner ?? 0, s.at[0], s.at[1], s.built ?? 1, s.id, s.label, facing(s.facing));
       u.orders = (s.orders || []).slice(0, PLACE_LIST_CAP).map(o => ({ k: 'move', x: o.move[0], z: o.move[1] }));
     }
     for (const id of S.selected) byId(id).sel = true;
@@ -606,10 +617,18 @@ const WikiSim = (() => {
       const dx = Math.max(b.ox * CELL - u.x, 0, u.x - (b.ox + b.fx) * CELL), dz = Math.max(b.oz * CELL - u.z, 0, u.z - (b.oz + b.fz) * CELL);
       return Math.sqrt(dx * dx + dz * dz);
     }
-    function walk(u, tx, tz, stop) {  // a step toward (tx, tz), ending `stop` short of it; true once there
+    /* A step toward (tx, tz), ending `stop` short of it; true once there. The step turns the unit to face along it,
+       at once: the simulation has no turn rate.
+
+       THE HEADING IS A VECTOR, NOT AN ANGLE. An angle would come from Math.atan2, which no standard rounds correctly,
+       so its last bit differs between JavaScript engines and C libraries, and tagpu_wikisim.c would drift from this
+       file. The step's own dx / d and dz / d are + - * / and sqrt, each rounded once, so both simulations hold the
+       same doubles. */
+    function walk(u, tx, tz, stop) {
       const dx = tx - u.x, dz = tz - u.z, d = Math.sqrt(dx * dx + dz * dz);
       if (d <= stop) return true;
       const s = Math.min(def(u.type).maxVelocity, d - stop);
+      u.hx = dx / d; u.hz = dz / d;
       u.x += dx / d * s; u.z += dz / d * s;
       return false;
     }
@@ -620,7 +639,10 @@ const WikiSim = (() => {
     }
     function advance() {
       const work = new Map(), jobs = new Map();
+      // a builder in range works on s, and turns at once to face its centre (unchanged when it stands on the centre)
       const credit = (u, s, how) => {
+        const dx = s.x - u.x, dz = s.z - u.z, d = Math.sqrt(dx * dx + dz * dz);
+        if (d > 0) { u.hx = dx / d; u.hz = dz / d; }
         const w = work.get(s) || { build: 0, reclaim: 0 };
         w[how] += def(u.type).workerTime / def(s.type).buildTime / TPS * PACE;
         work.set(s, w); jobs.set(u, { s, how });
@@ -705,7 +727,7 @@ const WikiSim = (() => {
       const shape = st.mode || gh ? 'build' : selected().some(u => u.owner === 0 && mobile(u.type)) ? 'move' : 'arrow';
       return {
         map: { w: W, h: H, cell: CELL, surfaceMetal: SM, metal: metal.slice(), fog: fog.slice(), vents: vents.map(v => ({ x: (v.cx + 0.5) * CELL, z: (v.cz + 0.5) * CELL })) },
-        units: units.map(u => ({ id: u.id, type: u.type, owner: u.owner, x: u.x, z: u.z, fx: fp(u.type)[0], fz: fp(u.type)[1],
+        units: units.map(u => ({ id: u.id, type: u.type, owner: u.owner, x: u.x, z: u.z, hx: u.hx, hz: u.hz, fx: fp(u.type)[0], fz: fp(u.type)[1],
           selected: u.sel, built: u.built, reclaimed: u.reclaimed, label: u.label })),
         ghost: gh ? { ...centre(gh.type, gh.ox, gh.oz), ok: gh.ok } : null,
         // the gesture's preview: each site's centre and footprint, 'place' (green), 'refused' (red, skipped) or 'remove'

@@ -52,6 +52,8 @@ typedef struct WIKIUNIT {
     double           built, reclaimed;  /* fractions, 0..1 */
     const char*      label;
     double           x, z;              /* its centre */
+    double           hx, hz;            /* its facing, a unit vector (walk says why not an angle);
+                                           a structure's is (0, 1) */
     int              ox, oz;            /* a structure's first footprint cell; unused for a mobile unit */
     int              norder, corder;
     WIKIORDER*       order;
@@ -83,7 +85,7 @@ enum { WIKI_CURSOR_ARROW, WIKI_CURSOR_MOVE, WIKI_CURSOR_BUILD };
 typedef struct {
     const char* id;
     int         type, owner, fx, fz, selected;
-    double      x, z, built, reclaimed;
+    double      x, z, hx, hz, built, reclaimed;
     const char* label;
 } WIKIVUNIT;
 
@@ -212,9 +214,10 @@ int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
      2. the map: w, h, SurfaceMetal (double); every cell's metal (double) and then every cell's
         fog (integer 0..2), row-major; the vent count and each vent's centre x, z (doubles);
      3. the unit count, and for each unit in the view's order: id, type name, owner, x, z,
-        selected (0 or 1), built, reclaimed, label; then the orders tagpu_wikisim_orders answers
-        for its id: their count, and each one's kind (WIKI_ORDER_*), then for a move x, z
-        (doubles), for a build the type name and ox, oz, for a reclaim or a guard the target id;
+        hx, hz (its facing), selected (0 or 1), built, reclaimed, label; then the orders
+        tagpu_wikisim_orders answers for its id: their count, and each one's kind
+        (WIKI_ORDER_*), then for a move x, z (doubles), for a build the type name and ox, oz,
+        for a reclaim or a guard the target id;
      4. the ghost: 1 and its type name, x, z (doubles) and ok (0 or 1), or 0;
      5. the gesture's sites: the shape (PLACE_*, PLACE_NONE without sites), the count, and each
         site's x, z (doubles) and state (WIKI_SITE_*);
