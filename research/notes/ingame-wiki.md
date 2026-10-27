@@ -12,8 +12,11 @@ replay HUD's ops, equal to the mockup's canvas call for op. On the Vulkan lane t
 wiki button and opens the window over the game, takes every input while it is open and pauses
 single player; the window holds the page -- the tree, the demo list, the entry's column -- and the
 stage with the selected demo playing, driven by the page's controls, the wheel and the scrollbars
-([the plan](ingame-wiki-plan.html), landings 2 to 4). Try it yourself is drawn and does nothing
-yet (landing 5).
+([the plan](ingame-wiki-plan.html), landings 2 to 4). The stage's ground is the game's own: the
+description's tiles, its deposits and vents and the engine's fog, drawn by Impure's own terrain and
+feature passes, with the units still the whitebox's boxes over it ([the 3D stage's
+plan](ingame-wiki-3d-stage-plan.html), landing 6g). Try it yourself is drawn and does nothing yet
+(landing 5).
 
 | What | Where |
 |---|---|
@@ -31,10 +34,11 @@ yet (landing 5).
 | The layout check, C against the mockup | `python3 tools/wiki/wikilaycheck.py`, with `tools/wiki/wikilaycheck.c` |
 | The simulation in the DLL | `tagpu/ddraw/src/tagpu_wikisim.c` |
 | The parity check, C against `sim.js` | `node tools/wiki/simparity.mjs [--wine]`, with `tagpu/ddraw/tests/wikitest.c`; `--hash` prints each demo's final state hash from `sim.js` |
-| The stage in the DLL | `tagpu/ddraw/src/tagpu_wikistage.c`: a view copied by value, built into HUD ops |
+| The stage in the DLL | `tagpu/ddraw/src/tagpu_wikistage.c`: a view copied by value, built into HUD ops, each tagged with its range; `tagpu_wikiscene.c`: the ground's cells, feature quads and fog grid; `tagpu_wikiworld.c`: the 3D stage's producer for the wiki's copies of the world passes — [GPU status](gpu-status.html) §2.12d |
+| The 3D ground's check, C against the mockup | `node tools/wiki/scenecheck.mjs`, with `tagpu/ddraw/tests/wikiscenetest.c`; in the game, `tools/wiki/stage3dcheck.py` over `wiki_regression.py stage3d`'s captures |
 | The stage's check, C against `stage.js` | `node tools/wiki/stagecheck.mjs`, with `tagpu/ddraw/tests/wikistagetest.c` |
 | The window in the game | `tagpu_wiki.c` (input, pause, the page's state and the demo's simulation; game thread), `tagpu_wikistate.c` (`tagpu_wikilay.c` and `tagpu_wikistage.c` on the record) and `tagpu_vk_hud.c` (drawing; render thread) — [GPU status](gpu-status.html) §2.12c |
-| The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|recorded --launch`, `tools/wiki_regression.py <name> mp`; `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's |
+| The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|recorded|asset --launch`, `tools/wiki_regression.py <name> mp`; `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's |
 | Serving it | `python3 tools/hudart/serve.py`, then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
 
@@ -169,10 +173,12 @@ The map is fitted into the stage with a pad of 6 units (`stage.js` `fit`, `tagpu
 the one function the game's render thread draws with and its game thread will turn a click into a
 world point with.
 
-The mockup's `gfx=game` draws the same stage in 3D, as the game will: a render of the map at zoom 1
+The mockup's `gfx=game` draws the same stage in 3D, as the game does: a render of the map at zoom 1
 in the game's own shaders, from the local install, composited into the map's rect between the
-stage's op ranges (*In game: what each element is drawn with*, below). The layout and the
-simulation do not change for it.
+stage's op ranges (*In game: what each element is drawn with*, below), each edge of that rect
+snapped to the device pixel as the game's composite is. The layout and the simulation do not change
+for it. `?layers=terrain,features,units` draws only the named layers (`stage3dcheck.py` renders the
+features alone to class the game's pixels).
 
 ### The units and their figures
 
@@ -255,7 +261,10 @@ queued squares, selection brackets, the sites' and the ghost's squares and the s
 numbers, the drag box, the cursor, the readouts, and the whitebox box and label of any unit, site
 or ghost whose model did not resolve. A frame whose 3D image is complete draws R0, the image and
 R2; any other frame draws R0 and R1, the whitebox, whole. In the mockup, complete means every
-record of the frame was emitted and the GL context reported no error and was not lost. **The
+record of the frame was emitted and the GL context reported no error and was not lost; in the game,
+that the wiki's world target and every pass the frame expects (the terrain, and the features when
+the stage has any) prepared on that frame, decided once before the HUD's pass builds the wiki
+(`tagpu_vk.c`, [GPU status](gpu-status.html) §2.12d). **The
 ground falls back whole**: when any tile or feature of the description failed to resolve, the
 image carries neither terrain nor features, and R1's ground and fog are drawn under it. **Units
 fall back per type**: a type without a model keeps its whitebox box in R2. `stage.js` names each
@@ -708,8 +717,13 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
   textured face of other than four vertices takes the lab's corner collapse (the engine textures
   four-vertex faces); an animated texture shows frame 0; the wire is one pixel wide, where the game
   thickens it with the supersampling; the Gamma curve is not applied. A reclaim's staging is
-  [INFERRED]. Nothing compares the image with the game's yet: that is `stage3dcheck.py`, which
-  needs the DLL's 3D stage.
+  [INFERRED]. `stage3dcheck.py` compares the ground with the game's own (terrain and features,
+  every capture of `wiki_regression.py stage3d` byte for byte equal, MEASURED 2026-10-27); the units
+  are not compared, because the game's stage does not draw them in 3D yet (the 3D stage's plan,
+  landing 6h).
+- **The game's stage draws its units as the whitebox's boxes** over the 3D ground, and a stage
+  whose description names a 3D feature (a wreck) is drawn as the whitebox: the game's copies of
+  the unit pass are built and not called yet.
 
 ## Open issues in the placement code
 

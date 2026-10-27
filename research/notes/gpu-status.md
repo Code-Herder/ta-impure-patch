@@ -4456,8 +4456,9 @@ there.
 |---|---|---|
 | `fill_frame` (`tagpu_packet_pub.c`), after the effects' models | `tagpu_wiki_fill`: one `TAGPU_PK_WIKI` record (open, the pause taken, the pointer's client point, the held control, the page's selection, folds, scrolls and playback) into the packet's last area `wiki_off`/`wiki_len`; while open, the demo's `WIKISIM` stepped by the clock (at most 8 ticks) and its view copied by value into the record's `stage` (`tagpu_wikistage_copy`), the area then 60 KB longer; none, and the window closed, when the HUD's pass is off (GDI, or the pass refused) or the wiki's layout refused (`tagpu_wikistate_refused`). A whole record that does not fit sets `TAGPU_PK_TRUNC_WIKI` (`0x1000000`) and is placed as its head (`tagpu_wiki_head_only`: no stage, a message on it), the shortfall still the whole record's so the slot's growth aims at the stage; a head that does not fit either carries no record, and the first fill of the next publish closes the window (`tagpu_wiki_carried` records what the published fill carried; a fill redone for the same publish, `s_fillAgain`, does not count). The trigger `tagpu_wiki.check` (every demo played to its end, each `tagpu_wikisim_hash` logged) is answered from the fill, `tagpu_wiki.dump` (writes `tagpu_wiki.json`, with the bytes carried) from `tagpu_wiki_carried` after the record is placed | game |
 | `frame_valid` (`tagpu_packet.c`) | refuses a wiki area whose length is neither `TAGPU_PK_WIKI_HEAD` (no stage) nor `sizeof(TAGPU_PK_WIKI)`, or that lies outside the slot | render |
-| `tagpu_overlay_draw`, after `tagpu_hudstate_present` | `tagpu_wikistate_present`: the record laid out by `tagpu_wikilay_build` in the wiki unit (screen height / 720), the button in the bar's own pixels from `tagpu_hud_live`, in the rewind button's slot unless the same frame's live HUD draws that button; the stage's view copied out of the packet, every count bounded and every string ended, and built by `tagpu_wikistage_build` inside the page's bezel | render |
-| `vk_present` (`tagpu_vk.c`) | `tagpu_vk_hud_prepare` builds the wiki's two op lists, the page then the stage, through `tagpu_huddraw_build_list` as a third layer of the HUD's pass (one instance range of 32 768 quads a slot, one glyph atlas, the kit's parts uploaded after the HUD's); after the HUD's top layer and the UI drawn again inside it, `tagpu_vk_hud_record_wiki` draws it, and `tagpu_vk_gui_record_cursor` draws this frame's cursor quad once more over it when the window is closed, or open with the pointer in the picture | render |
+| `tagpu_overlay_draw`, after `tagpu_hudstate_present` | `tagpu_wikistate_present`: the record laid out by `tagpu_wikilay_build` in the wiki unit (screen height / 720), the button in the bar's own pixels from `tagpu_hud_live`, in the rewind button's slot unless the same frame's live HUD draws that button; the stage's view copied out of the packet, every count bounded and every string ended, and built by `tagpu_wikistage_build` inside the page's bezel, each op tagged with its range (`WIKISTAGE_IN_*`) | render |
+| `tagpu_overlay_draw`, after `tagpu_wikistate_present` | `tagpu_wikiworld_frame`: the stage's ground in 3D for this frame (§2.12d) -- the terrain, feature and target hand-overs from the view `tagpu_wikistate_scene` answers and the arena `tagpu_wiki3d_get` published, each stamped with the frame | render |
+| `vk_present` (`tagpu_vk.c`) | before the HUD's prepare, the wiki's stage in 3D is prepared and the frame's picture of the stage decided once (§2.12d, `tagpu_wikistate_image`); `tagpu_vk_hud_prepare` then builds the wiki's three op lists -- the page, the stage's ops under its image, those over it (every op of the stage under on a whitebox frame) -- through `tagpu_huddraw_build_list` as a third layer of the HUD's pass (one instance range of 32 768 quads a slot, one glyph atlas, the kit's parts uploaded after the HUD's); after the HUD's top layer and the UI drawn again inside it, `tagpu_vk_hud_record_wiki` draws the page and the ops under the image, the wiki's world target is composited into the map's rect, `tagpu_vk_hud_record_wiki_over` draws the ops over it, and `tagpu_vk_gui_record_cursor` draws this frame's cursor quad once more over it all when the window is closed, or open with the pointer in the picture | render |
 | `tagpu_zoom_frame_end` | `tagpu_wikistate_cmd`: the drawn frame's hit map (up to 160 controls, client pixels, topmost first), the entry it drew, each panel's scroll as drawn and its limit, and each scrollbar's track and thumb, into the command record's `TAGPU_CMD_WIKI`, emptied as it is copied | render |
 | the command record's take (`tagpu_packet_pub.c`) | `tagpu_wiki_take`: the map copied, every number bounded, for the game thread's hit tests and scroll limits | game |
 | `tagpu_shield_wndproc`, after the `WM_TAGPU_*` cases | `tagpu_wiki_message`: open, every input message on the shield's swallow list plus `WM_SYSKEYDOWN`/`UP` -- a left press acting on the drawn frame's control or scrollbar (a press on `demo:`, `play`, `replay` or `try` only when that frame drew the entry selected now), the wheel scrolling the panel under the pointer and a track press paging it, each from the scroll asked held to the drawn limit, a move dragging a held thumb (a real move with the left button up ends a real press's drag; a frame that drew no wiki moves no scroll); closed, any press on a control of a drawn frame that still showed the window open (the frame or two after a close, a double-click on X) taken and owed its release, a left press on the button, and the paired release, which goes on when it re-locks the mouse (unlocked, closed). The press opens nothing while a rewind or Leave's question holds the pause (`tagpu_replay_rewind_state`, `tagpu_hudinput_leave_pending`). The frozen point is the press's `lParam` through `mouse_client_to_game`. A release of a button the engine holds (`TAGPU_WIKI_FROZEN`) goes to the engine at the frozen point through `deliver_engine`, unless the shield is armed; `tagpu_wiki_cancel` on `WM_KILLFOCUS`, `WM_CAPTURECHANGED` and a deactivating `WM_ACTIVATEAPP` | game |
@@ -4475,7 +4476,9 @@ there.
 (the pause), only when `main+0x2A44` bit 0 is clear (a single-player level), set at the open only
 when it was clear and cleared at the close only when the open set it. Of our own: the game
 folder's `tagpu_wiki.json` and `tagpu_wiki3d.json` (and their `.tmp`) and the deletion of
-`tagpu_wiki.dump`, `tagpu_wiki3d.dump` and `tagpu_wiki.check`. **Fields we read**: `main+0x2A44`
+`tagpu_wiki.dump`, `tagpu_wiki3d.dump`, `tagpu_wiki.check` and `tagpu_wiki.shot` (game thread);
+and, on the render thread, `tagpu_wiki3d_shot.ppm` -- unlinked when a `tagpu_wiki.shot` capture is
+armed and written by `tagpu_vk_shot_finish` -- and the reads of the lever `tagpu_wiki3d.on`. **Fields we read**: `main+0x2A44`
 bit 0 and `main+0x38A51` bit 0; and, once, at the asset load's start, through `tagpu_replays.c`:
 the mount list (the graphics globals `*0x51FBD0`'s `+0x618` bounded by `+0x61C`, 0x104 bytes a
 path), the `language` value `0x51FB50` and the folder names in `.data` (`0x503920`, `0x503720`,
@@ -4484,15 +4487,17 @@ buffer. The rules the loader repeats: [engine map](exe-reverse-engineering.html)
 resolves a path, a unit's files and a model's textures*. Nothing the recording carries: the demo's simulation is the wiki's own, a `WIKISIM`
 on the game thread that TA's simulation never reads, and every wiki file is `presentation`.
 
-### 2.12d The world passes, compiled twice (`tagpu_scene.h`, `tagpu_wikiworld.c`, `tools/scene-check.sh`; built, not called)
+### 2.12d The wiki's stage in 3D: the world passes compiled twice (`tagpu_scene.h`, `tagpu_wikiworld.c`, `tagpu_wikiscene.c`, `tagpu_scene_wiki.h`, `tools/scene-check.sh`; every Vulkan level with the wiki open)
 
 The seven files that draw one world scene — `tagpu_vk_world.c`, `tagpu_vk_terr.c`,
 `tagpu_vk_feat.c`, `tagpu_vk_unit.c`, `tagpu_posedraw.c`, `tagpu_posebake.c` and
 `tagpu_render3do.c` — are compiled **twice**: `src/<name>.o` is the game's world, and
 `src/<name>.wiki.o`, built with `-DTAGPU_SCENE_WIKI`, is the in-game wiki's stage, each with its
 own statics. Both are linked. Design: [the 3D stage plan](ingame-wiki-3d-stage-plan.html),
-section 1 and landing 6f. **No engine address, no hook, no byte patch**: nothing for the tables
-above, and nothing calls the wiki's copies yet.
+section 1 and landings 6f and 6g. **No engine address, no hook, no byte patch**: nothing for the
+tables above. The wiki's copies of the world target, the terrain and the features draw the
+stage's ground; its copies of the unit pass, the pose bake, the pose draw and the 3DO renderer
+are built and not called (the stage draws its units as the whitebox's boxes).
 
 - **What `tagpu_scene.h` does under the macro**, included first by each of the seven: renames
   every external symbol they define (`tagpu_vk_*` → `tagpu_vkw_*`, `tagpu_r3d_*` → `tagpu_r3dw_*`,
@@ -4506,11 +4511,54 @@ above, and nothing calls the wiki's copies yet.
   stage's bound, `WIKIWORLD_FRAMEMAX` = 128 units + 256 gesture-site ghosts + the placement ghost +
   64 3D features = 449 (the keeps at the bound too: `tagpu_posebake.h` asserts that no keep exceeds
   its table, which would undo the bound). Without the macro it does nothing.
-- **Today every wiki source answers "nothing this frame"** (0, a null view, `VK_FORMAT_UNDEFINED`
-  for the shadow format, the restorer down), each the answer the passes already take from the
-  game's own module on a frame with nothing to give. `tagpu_wikiworld.c` defines them with
+- **The sources the wiki's copies read.** `tagpu_wikiworld.c` defines them with
   `TAGPU_SCENE_WIKI` set, so each definition is checked against the very prototype the wiki copy
-  calls.
+  calls. The terrain, feature and target sources answer from its producer (below); every other one
+  answers "nothing this frame" (0, a null view, `VK_FORMAT_UNDEFINED` for the shadow format, the
+  restorer down), each the answer the passes already take from the game's own module on a frame
+  with nothing to give.
+- **The producer**, `tagpu_wikiworld_frame`, once a frame on the render thread in
+  `tagpu_overlay_draw` after `tagpu_wikistate_present`: from the stage this frame draws
+  (`tagpu_wikistate_scene`: the record's view, bounded, the entry, the stage's rect) and the
+  arena's stage of that entry (`tagpu_wiki3d_get`, matched by id; a stage that did not resolve, or
+  whose map is not the view's, is the whitebox's), it builds once a stage the scene
+  (`tagpu_wikiscene_ground`: every cell's tile, the deposits' and vents' quads with
+  `tagpu_feat.c`'s depth bands), the R8 terrain atlas in `tagpu_terr.c`'s layout (64 tiles a row,
+  34-texel pitch, a one-texel replicated border) from the arena's tiles, and the features' frames
+  in an atlas of its own (`TAGPU_GAFATLAS`, 512 square, 128 entries, a key plane, no allowance),
+  painted then, with every quad's six vertices as `emit_frame` makes them (the edge nudge, each
+  corner's own world point); and every frame the fog grid (`tagpu_wikiscene_fog`) and three
+  hand-overs: the terrain's (`gw` = map cells × 16, zoom 1, the eye at the map's corner, the
+  viewport the whole map, the scissor on, no relief, restore or shadow), the features' (the same
+  camera), and the target's (`TAGPU_WORLDTGT`: `gw` × `gh` at `tagpu_settings_ss`, composited at
+  `tagpu_wikistage_image`'s rect on the attachment -- the stage fit's map rect, each edge snapped
+  to the device pixel as `stage.js` snaps it). The lever `tagpu_wiki3d.on`, read every 30 frames:
+  `off` (no stage in 3D), `nomap`, `nofeat` (that hand-over withheld while still expected, so the
+  frame shows the whitebox whole).
+- **In the seam** (`vk_present`, `tagpu_vk.c`): after the game's prepares and before
+  `tagpu_vk_hud_prepare`, the wiki's world target is prepared first (its own extent), then its
+  terrain and its features; **the image is drawn whole or not at all** -- only when the target and
+  every pass the producer said the frame expects (`tagpu_wikiworld_wants`) prepared on this frame
+  -- and `tagpu_wikistate_image` splits the stage's ops for that answer before the HUD's pass
+  builds them (`tagpu_wikistage_keep`: R0 under the image, R2 over it; R0 and R1 for the
+  whitebox). After the game's world render pass, the wiki's own (begin, terrain, features, end);
+  in the frame's pass, between `tagpu_vk_hud_record_wiki` and `tagpu_vk_hud_record_wiki_over`,
+  the wiki's `tagpu_vkw_world_record` composites the target, LINEAR, under the Gamma curve. Its
+  teardown is the game's: `tagpu_vkw_*_down` in `vk_down` and `passes_down` behind their
+  `vkDeviceWaitIdle`, and the three passes' `_down_owed` in the owed list, paid behind the same
+  wait. The trigger `tagpu_wiki.shot` (`ENTRY DEMO TICK`: the demo played to the tick and paused on
+  the game thread, the record numbering the capture) is taken through the A/B's one capture buffer
+  on the first frame of that view whose image was drawn, and only while no capture is in flight
+  (`s_abSlot1` 0), into `tagpu_wiki3d_shot.ppm`: the wiki's target before the Gamma curve.
+- **What it draws**, MEASURED 2026-10-27 on the reference setup (retail, a private Xvfb, the RTX
+  presenting): quickbuild's ground, 2 tiles and 240 cells, 11 feature quads, a 2176 × 34 terrain
+  atlas and 2 feature frames; the target 1280 × 768 at ss 2 and 640 × 384 at ss 1. The render
+  thread's time for the stage, from its periodic line: the first frame 4.9 ms in the seam (the
+  targets built, both atlases sent), then the producer 0.06 ms and the passes 0.02 ms a frame on
+  average, at most 0.04 ms, at 1920 × 1080 and at 3840 × 2160 alike. Against the mockup
+  (`tools/wiki/stage3dcheck.py` over `wiki_regression.py stage3d`'s 18 captures a run, three demos
+  at three ticks at ss 2 and 1): every pixel equal, terrain and features, in both runs. Under
+  `nomap` and `nofeat`, 0 of 300 frames drew the image; with the lever gone, 300 of 300.
 - **The invariants.** *No static of the wiki's stage is a static of the game's world*: two
   translation units share no file-scope state, which C's linkage guarantees for every static
   these files hold and every one a later edit adds. The one deliberate exception is the bake's
@@ -4539,10 +4587,19 @@ above, and nothing calls the wiki's copies yet.
   `tagpu_render3do` 188 928 (its 2 048-entry atlas table, not resized), `tagpu_posebake` 70 464,
   `tagpu_vk_unit` 63 168, `tagpu_vk_feat` 34 400, `tagpu_posedraw` 2 656, `tagpu_vk_terr` 2 304,
   `tagpu_vk_world` 1 408. The stock-limits build's are the same.
-- **Not done here**: the producer that fills the hand-overs, the seam's calls into the wiki's
-  copies and their declarations for a caller outside the seven (`tagpu_scene.h` declares none),
-  and the device memory the wiki's atlases and slot buffers will take — landing 6g.
-
+- **The invariants.** *A hand-over lives one iteration of the render loop*: the producer runs in
+  `tagpu_overlay_draw` and the seam takes the hand-overs later in the same iteration on the same
+  thread (`render_vk.c`: `tagpu_overlay_draw`, `tagpu_packet_frame_end`, `tagpu_vk_frame`), each
+  stamped with the frame and refused on any other, taken once; every pointer in one names a buffer
+  of `tagpu_wikiworld.c` -- rebuilt only by the producer, only at a change of stage, so never
+  between a publish and its take -- or the arena, immutable and never freed. *The feature atlas is
+  painted on the render thread only*, because `tagpu_gaf.c` decodes through static buffers that
+  the game's atlases, painted on the same thread, share. *No device object of the wiki's passes is
+  freed while a submit may name it*: their teardown is the seam's, behind its `vkDeviceWaitIdle`.
+- **Not done here**: units, ghosts and 3D features in the image (the stage keeps the whitebox's
+  boxes over it; a stage with a 3D feature falls back to the whitebox); the wiki's device memory
+  is computed from the sizes it creates, not read back (the plan's section 1); the GDI lane draws
+  no wiki at all.
 ### 2.13 Sub-tick pose interpolation (`tagpu_lerp.c`, OFF by default, `tagpu_lerp.on`) — 2026-09-09
 
 The design, the invariants and the gate results are [smooth motion](smooth-motion.html); this is
