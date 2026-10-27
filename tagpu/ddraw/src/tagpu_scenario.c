@@ -1482,7 +1482,11 @@ static void create_features(void)
 
         fe->feat = SpawnFeatureOnMap(plot, (short)fe->defIdx, pos, turn, 10);
 
-        if (!fe->feat)
+        /* A NULL return is not a refusal for a 2-D feature (a tree): 0x423C50 creates a
+           feature object only for a def without +0xFE bit 0 (0x423D96) and returns it,
+           else 0 (the local zeroed at 0x423C60). Its sprite branch writes the def into the
+           anchor cell's +8 at 0x423EE5, so that word is the placement fact. DISASSEMBLED. */
+        if (!fe->feat && *(unsigned short*)((char*)plot + 8) != (unsigned short)fe->defIdx)
         {
             fe->ok = 0;
             g_failed++;

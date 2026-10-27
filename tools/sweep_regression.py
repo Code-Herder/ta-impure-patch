@@ -6,7 +6,7 @@ the chosen kind inside it, shared nearest-first; the RECLAIM gadget's quickkey c
     sweep_regression.py <instance> core      cases (a)-(m) below
     sweep_regression.py <instance> replay    the sweep-basic test group's gestures (two arms)
     sweep_regression.py <instance> preview   a ring held mid-drag: the marker pass's count; then
-                                             the zoom lever's 0.5: (c) again, the cap and the
+                                             the zoom lever's 0.5: (c) again, the drag's radius and the
                                              drag threshold
 
 Each mode plays on scenarios/sweep-basic.json, handed the level held (resource_regression.py,
@@ -24,8 +24,8 @@ The cases (core), ARMCOM and both ARMCK selected:
   stock's: every list is that wreck alone, mode 1; (h) on a tree under METAL the cursor is the
   engine's "nothing", 0x13, and a click orders nothing and keeps the mode; (i) a right press
   mid-drag orders nothing and keeps the mode, a second one disarms; (j) Esc the same; (k) a ring
-  on bare ground orders nothing and keeps the mode; (l) a drag past the screen's diagonal caps
-  the radius at 320 screen px; (m) the level's counters: no self-check mismatch, no list cap.
+  on bare ground orders nothing and keeps the mode; (l) a drag across the view gives the drag's own
+  radius, no screen cap; (m) the level's counters: no self-check mismatch, no list cap.
 
 What each ring holds is computed here from the engine's own grid, by peek, with the rules the DLL
 applies (tagpu_sweep.c, enumerate): anchors whose centre is in the ring, the def's reclaimable
@@ -65,16 +65,16 @@ GEO = _sweeptest()
 KINDS = ("METAL", "ENERGY", "ALL")      # tagpu_sweep.h's enum, in the quickkey's cycle
 FAMILY = {"RECLAIM", "VTOL_RECLAIM", "RESURRECT"}
 NOTHING = 0x13                          # the engine's "nothing" cursor (0x49925D, 0x43F098)
-RING_MAX_PX = 320                       # tagpu_sweep.c
+RING_MAX_WU = 4096                      # tagpu_sweep.c: the scan's bound, world px
 LIST_CAP = 1024                         # SWEEP_LIST_CAP
 FOOT_MAX = 16
 EYE = (800, 1000)                       # the whole scene in view at 1024x768
 
 # the scene (sweep-basic.json): its wrecks and trees, world px
 WRECKS = [(1300, 1250), (1380, 1300), (1340, 1180), (1300, 1400), (1000, 1450), (1080, 1500)]
-TREES = [(1220, 1170), (1260, 1330), (1380, 1220), (1370, 1390), (1200, 1450), (1040, 1390),
+TREES = [(1220, 1170), (1260, 1330), (1240, 1230), (1370, 1390), (1200, 1450), (1040, 1390),
          (1150, 1480), (950, 1320)]
-BIG = ((1250, 1340), (1480, 1340))      # a ring of r 230 over the whole scene
+BIG = ((1200, 1360), (1470, 1360))      # a ring of r 270 over the whole scene (farthest centre 251)
 PREFIX = ((1300, 1250), (1400, 1250))   # r 100: part of the wrecks, for (f)'s prefix
 
 
@@ -319,8 +319,8 @@ class Sweep(Check):
         return sure, amb
 
     def scene(self):
-        """The scenario's wrecks and trees as anchors, each the nearest anchor within 48 px of
-        its position, and every one mapped for certain."""
+        """The scenario's wrecks and trees as anchors, each the one anchored at its position's
+        cell, and whether each is mapped for certain."""
         g = self.grid()
         pts = WRECKS + TREES
         feats, cells = self.anchors(g, min(x for x, _ in pts) // 16 - FOOT_MAX,
@@ -330,9 +330,12 @@ class Sweep(Check):
         found = {}
         for name, pts in (("wreck", WRECKS), ("tree", TREES)):
             for p in pts:
-                near = min(feats, key=lambda f: (f.cx - p[0]) ** 2 + (f.cz - p[1]) ** 2, default=None)
-                assert near and (near.cx - p[0]) ** 2 + (near.cz - p[1]) ** 2 <= 48 ** 2, \
-                    f"no feature anchor within 48 px of the scenario's {name} at {p}"
+                # a scenario feature's position is its anchor cell's corner, not its centre
+                # (tagpu_scenario.c hands GetGridPosPLOT(x / 16, z / 16) to 0x423C50)
+                near = min(feats, key=lambda f: (16 * f.ax - p[0]) ** 2 + (16 * f.az - p[1]) ** 2,
+                           default=None)
+                assert near and (near.ax, near.az) == (p[0] // 16, p[1] // 16), \
+                    f"no feature anchored at the scenario's {name} at {p}"
                 found[near.cell] = (name, near)
         return found, self.mapped([f for _, f in found.values()], cells, g)
 
@@ -500,9 +503,10 @@ class Sweep(Check):
 
 
 def radius(pc, pe, zoom):
-    """tagpu_sweep.c's radius: the drag's world length, capped at RING_MAX_PX / zoom, truncated."""
+    """tagpu_sweep.c's radius: the drag's world length, bounded by RING_MAX_WU, truncated. `zoom`
+    does not enter it: the ring follows the drag at any zoom."""
     d = math.hypot((pe[0] - pc[0]) / 65536.0, (pe[2] - pc[2]) / 65536.0)
-    return int(min(d, RING_MAX_PX / zoom))
+    return int(min(d, RING_MAX_WU))
 
 
 def ring_case(s, what, kind, ring=BIG, zoom=1.0, must=()):
@@ -670,7 +674,8 @@ def case_k(s):
 
 
 def long_drag(s, what, zoom):
-    """A drag across the viewport's diagonal: the commit line's r is the cap, RING_MAX_PX / zoom."""
+    """A drag across the viewport's diagonal: the commit line's r is the drag's own world length
+    at this zoom, with no screen cap (it is far below RING_MAX_WU)."""
     s.clear()
     s.arm()
     start = s.mark()
@@ -682,8 +687,8 @@ def long_drag(s, what, zoom):
     s.lift("lbutton")
     line = s.commit_line(start, what)
     want = radius(pc, pe, zoom)
-    assert line["r"] == want and want == int(RING_MAX_PX / zoom), \
-        f"{what}: r={line['r']}, the drag {radius(pc, pe, 1e-9)} world px capped at {int(RING_MAX_PX / zoom)}"
+    assert want < RING_MAX_WU and abs(line["r"] - want) <= 1, \
+        f"{what}: r={line['r']}, want the drag's {want} world px"
     return line
 
 
@@ -738,7 +743,7 @@ def core(s):
     case_gh(s, scene)
     case_ij(s)
     case_k(s)
-    long_drag(s, "(l) a drag past the cap", 1.0)
+    long_drag(s, "(l) a drag across the view", 1.0)
     s.clear()
     f = level_end(s)
     print(f"sweep-core: (a)-(l) passed; (m) level end {f}")
@@ -804,7 +809,7 @@ def threshold(s, zoom):
 
 def preview(s, gamedir):
     """V3: a METAL ring held mid-drag is what the marker pass draws (its status line under
-    mark.on=log), dropped by a right press; then at the zoom lever's 0.5, (c) again, the cap and
+    mark.on=log), dropped by a right press; then at the zoom lever's 0.5, (c) again, the drag radius and
     the threshold."""
     lever = gamedir / "tagpu_mark.on"
     zoomfile, ztmp = gamedir / "tagpu_zoom.txt", gamedir / "tagpu_zoom.txt.tmp"
@@ -833,11 +838,11 @@ def preview(s, gamedir):
         ztmp.replace(zoomfile)
         held_count(s, "the zoom lever's 0.5")
         ring_case(s, "(c) at zoom 0.5", "METAL", zoom=0.5, must=wrecks)
-        long_drag(s, "the cap at zoom 0.5", 0.5)
+        long_drag(s, "a drag across the view at zoom 0.5", 0.5)
         s.clear()
         threshold(s, 0.5)
         print(f"sweep-preview: the marker pass drew {n} brackets mid-drag; zoom 0.5: the ring, the "
-              f"cap and the threshold scale")
+              f"drag radius and the threshold follow the zoom")
     finally:
         zoomfile.unlink(missing_ok=True)
         if old is None:

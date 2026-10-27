@@ -68,7 +68,9 @@
 
 #define CURSOR_NONE    0x13   /* the engine's "nothing": 0x49925D, 0x43F098                    */
 #define DRAG_PX        7.0    /* screen px of travel past which a press is a ring             */
-#define RING_MAX_PX    320.0  /* the ring's radius cap, screen px at the zoom in force        */
+/* The ring follows the drag at any zoom; RING_MAX_WU only bounds the scan (at most 513 x 513 cells
+   a call, every one inside the grid's own W x H), never what the player can reach on a map. */
+#define RING_MAX_WU    4096.0 /* world px                                                      */
 /* A list stops growing at SWEEP_LIST_CAP nodes, below the 4096 a recorded list holds
    (REC_ORDERS_MAX, tagpu_recfmt.h), so no commit makes a list the recorder would cut. LIST_WALK
    bounds every walk of a list. */
@@ -156,11 +158,11 @@ static double zoom(void)
 
 static int point_px(int v) { return v >> 16; }
 
-/* The ring's radius, world px: the drag's length, capped at RING_MAX_PX screen px. */
+/* The ring's radius, world px: the drag's length, bounded by RING_MAX_WU. */
 static int radius(const Gesture* d)
 {
     double dx = (double)(d->cur[0] - d->c[0]) / 65536.0, dz = (double)(d->cur[2] - d->c[2]) / 65536.0;
-    double r = sqrt(dx * dx + dz * dz), cap = RING_MAX_PX / zoom();
+    double r = sqrt(dx * dx + dz * dz), cap = RING_MAX_WU;
     return (int)(r < cap ? r : cap);
 }
 
