@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=medium reviewers=1 range=c41e364d..b16dee26 findings=3 acted=3 rejected=0 date=2026-10-27 -- fixes in 690c9ea1 (type names bounded to the build menu key, 'none' refused; Alt doc line; plan thread wording). Not acted: an unscripted Try it sim grows without a unit cap (bounded per frame by STEPS_MAX), noted only.
