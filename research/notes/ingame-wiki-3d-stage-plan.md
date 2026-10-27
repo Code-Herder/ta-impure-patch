@@ -601,10 +601,10 @@ the parity checks).
   `simparity.mjs` natively and `--wine` finds all 21 demos and 9 rule cases equal, `stagecheck.mjs`
   pairs every op, `wikilaycheck.py` agrees, and the pre-commit hook's provenance check passes on
   the new files.
-- **Open for 6d and 6e**: the order of the loose files and of one archive's files within an
-  enumeration, and what an enumeration does with one path held by two sources, are still
-  QUESTIONS batch A1; `tavfs.py` lists loose files by name without case and an archive's in its
-  directory order, and every source's copy of a path.
+- **Settled for 6d and 6e** (the scout's answer A1): an enumeration lists each path once, from
+  its first source in the engine's precedence. `tavfs.py` lists loose files by name without case
+  and an archive's in its directory order; since 6d it drops a path an earlier source already
+  listed.
 
 ### Landing 6c — Create()'s hides, one function for the ghost and the wiki
 
@@ -647,6 +647,29 @@ the whitebox and the strip's notice; a run with one tile hash altered by hand in
 description shows the whole ground fall back.
 
 **Gate**: none. **Review**: none (no engine code). It can run beside 6e and 6f.
+
+**Status (2026-10-26): built and verified on its branch, not landed.** Every verification above
+ran:
+- `tools/tascene shot`: 40 shots (4 fixtures × 10 option sets, the mirror edge among them),
+  md5-identical before and after the factoring into `tools/tascene-render.js`.
+- `stagecheck.mjs`: `all equal -- 1020 frames (340 at each of 3 sizes), 1856917 ops of R1 paired
+  call for op within 1/64 px; R0 and R2 over 3060 stand-in images, 1999257 ops`. A planted change
+  that drew a whitebox label in R2 failed 420 of the 1020 frames. `simparity.mjs` still finds all
+  21 demos and 13 rule cases equal; `stagemap.py check` still resolves both descriptions.
+- `gfx.py` resolves both entries on the stock install: both grounds, every unit (ARMACK, ARMCK,
+  ARMGEO, ARMMEX, ARMMOHO, ARMPW; ARMDRAG, ARMLLT, ARMSOLAR), the deposit `lushmetal3` from
+  `anims\metals.GAF` and the vent `lushvent01`.
+- The captures, headless Chromium on ANGLE-Vulkan at 1920 × 1080: every frame complete, nothing
+  refused. A walking constructor faces along its line, buildings stand at their sites at the
+  game's scale, a nanoframe rises through the engine's staging with its wire, the ghosts stand on
+  the sites and queued builds, and fog paints unexplored ground black and seen ground grey.
+- With `gfx/` moved away the stage is the whitebox and the strip reads "game graphics: run
+  tools/wiki/gfx.py"; with tile 13's hash altered in a scratch copy of Quick Build's description,
+  `gfx.py` reports `ground FALLS BACK` and the stage draws the 3D units over the whitebox ground and
+  fog.
+
+What 6d did not settle: nothing compares the image with the game's (`stage3dcheck.py` needs 6g);
+the differences the lab's parity lane carries are listed in `ingame-wiki.md` *Gaps*.
 
 ### Landing 6e — the archive reader and the 3D asset load
 

@@ -6,7 +6,9 @@
    EVERYTHING DRAWN HERE HAS AN OP TO BE: a rectangle, a rectangle's stroke (an inset edge), a straight stroke with butt
    ends, a circle or a circle's stroke, a line of text in one HUD face, and a kit icon. So the text is set in the face of
    art/hud/layout.json's `toast` style, which the DLL already carries, and the three cursors are icons of the wiki's kit,
-   which tools/wiki/cursors.sh rasterises once from cursorShape below, the shapes this stage drew before.
+   which tools/wiki/cursors.sh rasterises once from cursorShape below, the shapes this stage drew before. Under
+   gfx=game one thing more is drawn, the stage's 3D image (gfx.js), which the game composites from its own world
+   target between two op ranges (draw() below says which).
 
    Runs in a page (the global WikiStage, which wiki.js calls) and under node (module.exports), as sim.js does. */
 const WikiStage = (() => {
@@ -34,12 +36,31 @@ const WikiStage = (() => {
     return { s, ox: (W - mw * cell * s) / 2, oz: (H - mh * cell * s) / 2 };
   }
 
-  /* The view `v` into the context `g` of a W x H canvas, at U pixels a unit; o = { W, H, U, msg, icons, gx }. `msg` is
-     what an absent view shows; `icons` the kit's cursor icons by name, each { img, pw, ph, w, h } with w and h in units
-     (loadIcons); `gx(phase, c, ...a)` the game graphics' hook (gfx.js), true where it drew an element. Returns the fit,
-     with the map's cell and size, or null without a map. */
+  /* The view `v` into the context `g` of a W x H canvas, at U pixels a unit; o = { W, H, U, msg, icons, image, layer }.
+     `msg` is what an absent view shows; `icons` the kit's cursor icons by name, each { img, pw, ph, w, h } with w and h
+     in units (loadIcons). Returns the fit, with the map's cell and size, or null without a map.
+
+     THE THREE OP RANGES (research/notes/ingame-wiki-3d-stage-plan.md, section 3). Everything drawn here belongs to one:
+     - R0, under the image: the stage's background (and the message of an absent view);
+     - R1, the whole whitebox stage: the ground (cells, grid, vents, fog), then every element below;
+     - R2, the overlays drawn over the image: order lines, queued squares, selection brackets, the sites' and the
+       ghost's squares and the sites' order numbers, the drag box, the cursor, the readouts, and the whitebox box and
+       label of any unit, site or ghost whose model did not resolve.
+     Without `o.image` this draws R0 and R1: the whitebox. With it -- `{ draw(g, rect), ground, resolved(type) }`, a
+     COMPLETE 3D image of this frame (gfx.js) -- it draws R0, the image into the map's rect, and R2. When the image
+     carries no ground (the stage's ground fell back whole) R1's ground is drawn under it, and fog is the whitebox's.
+     The choice is the caller's, per frame, so no frame shows half of one and half of the other. R2 is R1 with the
+     ground and the resolved boxes left out, in R1's order: `o.layer(range, type)` names the range of every call that
+     follows -- 'r0', 'ground', 'box' (with its unit type), 'label' (R1 only) or 'over' -- which is how
+     tools/wiki/stagecheck.mjs pairs R0 and R2 with the DLL's ops as well as R1. */
   function draw(g, v, o) {
-    const W = o.W, H = o.H, U = o.U, gx = o.gx || (() => false);
+    const W = o.W, H = o.H, U = o.U, im = o.image || null;
+    const mark = o.layer || (() => {});
+    // whether a range is drawn this frame: everything on the whitebox; R0, the overlays, the boxes of what did not
+    // resolve and, under an image without its ground, the ground, over the image
+    const shows = (range, type) => !im || range === 'r0' || range === 'over' ||
+      (range === 'ground' && !im.ground) || (range === 'box' && !im.resolved(type));
+    const at = (range, type) => { if (!shows(range, type)) return false; mark(range, type); return true; };
     const font = sz => `${FACE.weight} ${sz}px ${FACE.family}`;
     const measure = (t, sz) => { g.font = font(sz); return g.measureText(t).width; };
     /* a line of text centred on y: the canvas's middle baseline, the HUD's line box centred on a point */
@@ -47,6 +68,7 @@ const WikiStage = (() => {
       g.font = font(sz); g.textAlign = align; g.textBaseline = 'middle'; g.fillStyle = col;
       g.fillText(t, x, y);
     };
+    mark('r0');
     g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = '#6e6e68'; g.fillRect(0, 0, W, H);
     if (!v || !v.map) {
       if (o.msg) text(o.msg, W / 2, H / 2, Math.round(11 * U), 'center', '#e8e8e2');
@@ -55,50 +77,52 @@ const WikiStage = (() => {
     const M = v.map, cell = +M.cell || 16, mw = +M.w || 1, mh = +M.h || 1;
     const { s, ox, oz } = fit(mw, mh, cell, W, H, U);
     const X = x => ox + x * s, Z = z => oz + z * s, cp = cell * s;
-    const c = { v, X, Z, s, cp, cell, U, W, H };
-    const hook = (phase, ...a) => !!gx(phase, c, ...a);
 
-    // the ground: plain cells light, metal darker by how far it stands above surfaceMetal; metal ground at surfaceMetal is
-    // tinted once, so a metal map reads as metal everywhere and its richer patch as darker still
-    const metal = M.metal || [], sm = +M.surfaceMetal || 0, top = Math.max(sm, ...metal.filter(Number.isFinite));
-    if (!hook('ground')) for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) {
-      const m = +metal[z * mw + x] || 0;
-      let L = m > 0 ? 188 : 204;
-      if (m > sm && top > sm) L = 176 - 108 * (m - sm) / (top - sm);
-      g.fillStyle = `rgb(${L},${L},${L - 4})`;
-      g.fillRect(Math.floor(X(x * cell)), Math.floor(Z(z * cell)), Math.ceil(cp) + 1, Math.ceil(cp) + 1);
-    }
-    // the cell grid, one pixel wide on pixel centres. A row is broken at each column, so no pixel is stroked twice: the
-    // pieces are the one path's pixels, and the game draws each piece as its own stroke
-    if (cp >= 5 && !hook('grid')) {
-      g.strokeStyle = 'rgba(0,0,0,.12)'; g.lineWidth = 1; g.beginPath();
-      const cols = [];
-      for (let x = 0; x <= mw; x++) cols.push(Math.round(X(x * cell)));
-      for (const px of cols) { g.moveTo(px + .5, Z(0)); g.lineTo(px + .5, Z(mh * cell)); }
-      for (let z = 0; z <= mh; z++) {
-        const pz = Math.round(Z(z * cell)) + .5, end = X(mw * cell);
-        let a = X(0);
-        for (const px of cols) { if (px > a) { g.moveTo(a, pz); g.lineTo(px, pz); } a = px + 1; }
-        if (end > a) { g.moveTo(a, pz); g.lineTo(end, pz); }
+    if (at('ground')) {
+      // the ground: plain cells light, metal darker by how far it stands above surfaceMetal; metal ground at
+      // surfaceMetal is tinted once, so a metal map reads as metal everywhere and its richer patch as darker still
+      const metal = M.metal || [], sm = +M.surfaceMetal || 0, top = Math.max(sm, ...metal.filter(Number.isFinite));
+      for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) {
+        const m = +metal[z * mw + x] || 0;
+        let L = m > 0 ? 188 : 204;
+        if (m > sm && top > sm) L = 176 - 108 * (m - sm) / (top - sm);
+        g.fillStyle = `rgb(${L},${L},${L - 4})`;
+        g.fillRect(Math.floor(X(x * cell)), Math.floor(Z(z * cell)), Math.ceil(cp) + 1, Math.ceil(cp) + 1);
       }
-      g.stroke();
+      // the cell grid, one pixel wide on pixel centres. A row is broken at each column, so no pixel is stroked
+      // twice: the pieces are the one path's pixels, and the game draws each piece as its own stroke
+      if (cp >= 5) {
+        g.strokeStyle = 'rgba(0,0,0,.12)'; g.lineWidth = 1; g.beginPath();
+        const cols = [];
+        for (let x = 0; x <= mw; x++) cols.push(Math.round(X(x * cell)));
+        for (const px of cols) { g.moveTo(px + .5, Z(0)); g.lineTo(px + .5, Z(mh * cell)); }
+        for (let z = 0; z <= mh; z++) {
+          const pz = Math.round(Z(z * cell)) + .5, end = X(mw * cell);
+          let a = X(0);
+          for (const px of cols) { if (px > a) { g.moveTo(a, pz); g.lineTo(px, pz); } a = px + 1; }
+          if (end > a) { g.moveTo(a, pz); g.lineTo(end, pz); }
+        }
+        g.stroke();
+      }
+      // a geothermal vent: a ringed circle with a cross
+      for (const vt of M.vents || []) {
+        const p = pt(vt); if (!p) continue;
+        const r = cp * .8; g.lineWidth = Math.max(1, 1.5 * U);
+        g.fillStyle = '#9a9a94'; g.strokeStyle = '#2a2a28';
+        g.beginPath(); g.arc(X(p.x), Z(p.z), r, 0, 2 * Math.PI); g.fill(); g.stroke();
+        g.beginPath(); g.arc(X(p.x), Z(p.z), r * .5, 0, 2 * Math.PI); g.stroke();
+        g.beginPath(); g.moveTo(X(p.x) - r, Z(p.z)); g.lineTo(X(p.x) + r, Z(p.z)); g.moveTo(X(p.x), Z(p.z) - r); g.lineTo(X(p.x), Z(p.z) + r); g.stroke();
+      }
+      // fog: grey half over seen-before ground, black over unexplored
+      const fog = M.fog || [];
+      for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) {
+        const f = fog[z * mw + x]; if (!f) continue;
+        g.fillStyle = f === 2 || f === 'black' ? 'rgba(0,0,0,.9)' : 'rgba(128,128,128,.5)';
+        g.fillRect(Math.floor(X(x * cell)), Math.floor(Z(z * cell)), Math.ceil(cp) + 1, Math.ceil(cp) + 1);
+      }
     }
-    // a geothermal vent: a ringed circle with a cross
-    if (!hook('vents')) for (const vt of M.vents || []) {
-      const p = pt(vt); if (!p) continue;
-      const r = cp * .8; g.lineWidth = Math.max(1, 1.5 * U);
-      g.fillStyle = '#9a9a94'; g.strokeStyle = '#2a2a28';
-      g.beginPath(); g.arc(X(p.x), Z(p.z), r, 0, 2 * Math.PI); g.fill(); g.stroke();
-      g.beginPath(); g.arc(X(p.x), Z(p.z), r * .5, 0, 2 * Math.PI); g.stroke();
-      g.beginPath(); g.moveTo(X(p.x) - r, Z(p.z)); g.lineTo(X(p.x) + r, Z(p.z)); g.moveTo(X(p.x), Z(p.z) - r); g.lineTo(X(p.x), Z(p.z) + r); g.stroke();
-    }
-    // fog: grey half over seen-before ground, black over unexplored
-    const fog = M.fog || [];
-    for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) {
-      const f = fog[z * mw + x]; if (!f) continue;
-      g.fillStyle = f === 2 || f === 'black' ? 'rgba(0,0,0,.9)' : 'rgba(128,128,128,.5)';
-      g.fillRect(Math.floor(X(x * cell)), Math.floor(Z(z * cell)), Math.ceil(cp) + 1, Math.ceil(cp) + 1);
-    }
+    // the 3D image: the map at zoom 1, composited into the map's rect as the game's world target is (bilinear)
+    if (im) im.draw(g, { x: X(0), y: Z(0), w: mw * cell * s, h: mh * cell * s });
 
     const box = (q, f = 1) => { const p = pt(q), fx = +(q.fx ?? (q.footprint || [])[0]) || 1, fz = +(q.fz ?? (q.footprint || [])[1]) || 1;
       const w = fx * cp * f, h = fz * cp * f; return { x: X(p.x) - w / 2, y: Z(p.z) - h / 2, w, h, cx: X(p.x), cy: Z(p.z) }; };
@@ -111,6 +135,7 @@ const WikiStage = (() => {
       text(t, b.cx, b.cy, sz, 'center', col);
     };
     // order lines, dashed, coloured by kind
+    mark('over');
     g.setLineDash([5 * U, 3.5 * U]); g.lineWidth = Math.max(1, 1.4 * U);
     for (const l of v.lines || []) {
       const a = pt(l.from), b = pt(l.to); if (!a || !b) continue;
@@ -119,18 +144,19 @@ const WikiStage = (() => {
       g.fillStyle = g.strokeStyle; g.beginPath(); g.arc(X(b.x), Z(b.z), 2 * U, 0, 2 * Math.PI); g.fill();
     }
     g.setLineDash([]);
-    // queued build sites: an outlined square in the owner's colour
+    // queued build sites: an outlined square in the owner's colour, and on the whitebox its building's name
     for (const q of v.queued || []) {
-      const b = box(q); g.lineWidth = Math.max(1, 1.5 * U); g.strokeStyle = TEAM[q.owner | 0] || '#ccc';
+      const b = box(q);
+      mark('over');
+      g.lineWidth = Math.max(1, 1.5 * U); g.strokeStyle = TEAM[q.owner | 0] || '#ccc';
       g.setLineDash([3 * U, 2 * U]); g.strokeRect(b.x, b.y, b.w, b.h); g.setLineDash([]);
-      if (!hook('label')) label(q.type || '', b, 'rgba(20,20,20,.75)');
+      if (at('label')) label(q.type || '', b, 'rgba(20,20,20,.75)');
     }
     // units: grey boxes at their footprint, a team-coloured edge; construction fills up from the bottom, a reclaim empties
-    hook('units');                        // the game's sprites, back to front, under every selection box
     for (const u of v.units || []) {
       const b = box(u), built = u.built == null ? 1 : clamp(+u.built, 0, 1), rec = clamp(+u.reclaimed || 0, 0, 1);
       const bw = Math.max(1.5, 2 * U);
-      if (!hook('unit')) {
+      if (at('box', u.type)) {
         if (built < 1) {
           g.fillStyle = 'rgba(150,150,144,.35)'; g.fillRect(b.x, b.y, b.w, b.h);
           g.fillStyle = '#8a8a84'; g.fillRect(b.x, b.y + b.h * (1 - built), b.w, b.h * built);
@@ -143,6 +169,7 @@ const WikiStage = (() => {
       }
       if (u.selected) {
         // the selection box: corner brackets just outside the footprint
+        mark('over');
         const m = 3 * U, x0 = b.x - m, y0 = b.y - m, x1 = b.x + b.w + m, y1 = b.y + b.h + m, k = Math.min(b.w, b.h) * .35 + m;
         g.strokeStyle = '#f2f6e8'; g.lineWidth = Math.max(1, 1.5 * U); g.beginPath();
         for (const [x, y, dx, dy] of [[x0, y0, 1, 1], [x1, y0, -1, 1], [x0, y1, 1, -1], [x1, y1, -1, -1]]) {
@@ -156,7 +183,8 @@ const WikiStage = (() => {
     for (const st of v.sites || []) {
       if (!pt(st)) continue;
       const b = box(st), col = SITE[st.state] || SITE.place, lw = Math.max(1, 1.5 * U);
-      if (!hook('site', st)) { g.fillStyle = 'rgba(138,138,132,.45)'; g.fillRect(b.x + lw, b.y + lw, b.w - 2 * lw, b.h - 2 * lw); }
+      if (at('box', st.type)) { g.fillStyle = 'rgba(138,138,132,.45)'; g.fillRect(b.x + lw, b.y + lw, b.w - 2 * lw, b.h - 2 * lw); }
+      mark('over');
       g.strokeStyle = col; g.lineWidth = lw; g.strokeRect(b.x + lw / 2, b.y + lw / 2, b.w - lw, b.h - lw);
       if (st.order != null) {
         const sz = Math.max(5 * U, Math.min(7.5 * U, b.h * .32));
@@ -166,10 +194,12 @@ const WikiStage = (() => {
     // the placement ghost: translucent green where it may go, red where it may not
     if (v.ghost && pt(v.ghost)) {
       const b = box(v.ghost), ok = v.ghost.ok !== false;
-      if (!hook('ghost', v.ghost)) { g.fillStyle = ok ? 'rgba(40,210,70,.35)' : 'rgba(230,40,40,.35)'; g.fillRect(b.x, b.y, b.w, b.h); }
+      if (at('box', v.ghost.type)) { g.fillStyle = ok ? 'rgba(40,210,70,.35)' : 'rgba(230,40,40,.35)'; g.fillRect(b.x, b.y, b.w, b.h); }
+      mark('over');
       g.strokeStyle = ok ? '#2bd248' : '#e62828'; g.lineWidth = Math.max(1, 1.5 * U); g.strokeRect(b.x, b.y, b.w, b.h);
-      if (!hook('label')) label(v.ghost.type || '', b, ok ? '#0c3a12' : '#4a0a0a');
+      if (at('box', v.ghost.type)) label(v.ghost.type || '', b, ok ? '#0c3a12' : '#4a0a0a');
     }
+    mark('over');
     if (v.drag) {
       const d = v.drag, x0 = X(Math.min(d.x0, d.x1)), y0 = Z(Math.min(d.z0, d.z1));
       g.strokeStyle = '#f2f6e8'; g.lineWidth = Math.max(1, U); g.strokeRect(x0, y0, Math.abs(d.x1 - d.x0) * s, Math.abs(d.z1 - d.z0) * s);
@@ -177,7 +207,7 @@ const WikiStage = (() => {
     // the cursor at screen size, whatever the map's scale: its kit icon centred on the point, in a box snapped as the
     // game snaps a part's, and the icon as large as fits in it, centred (tagpu_hudlay_expand's icon)
     const cur = pt(v.cursor), ic = cur && o.icons && o.icons[CURSOR[v.cursor.shape] || CURSOR.arrow];
-    if (cur && !hook('cursor', X(cur.x), Z(cur.z), v.cursor.shape) && ic && ic.img) {
+    if (cur && ic && ic.img) {
       const w = ic.w * U, h = ic.h * U, a = X(cur.x) - w / 2, b = Z(cur.z) - h / 2;
       const x0 = snap(a), y0 = snap(b), bw = snap(a + w) - x0, bh = snap(b + h) - y0;
       const f = Math.min(bw / ic.pw, bh / ic.ph), iw = ic.pw * f, ih = ic.ph * f;

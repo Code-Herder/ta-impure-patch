@@ -197,13 +197,20 @@ function view() {
   if (!sim) return null;
   try { return sim.view(); } catch (x) { fail(x); return null; }
 }
-// the stage's drawing is stage.js's; gfx=game hands an element to gfx.js, and where that returns false the whitebox stands
+/* the stage's drawing is stage.js's. Under gfx=game, gfx.js first renders this frame's view in 3D; a COMPLETE image is
+   drawn between the op ranges R0 and R2, and anything less leaves the whole whitebox (stage.js, draw()) */
 const ICONS = WikiStage.loadIcons(ART + 'kit/');
+let IMG = null;                       // the last frame's 3D answer, for scripted checks
 function draw() {
   const g = stage.getContext('2d'), v = view();
-  FIT = WikiStage.draw(g, v, { W: stage.width, H: stage.height, U: G.gh / 720, icons: ICONS,
-    msg: simErr || (demo() ? 'loading…' : entry() ? 'no demo' : ''),
-    gx: (phase, c, ...a) => !!(window.WikiGfx && WikiGfx.draw(phase, g, c, ...a)) });
+  const r = v && window.WikiGfx ? WikiGfx.frame(S.entry, v, sim ? sim.tick : 0) : null;
+  IMG = r && { complete: r.complete, ground: r.ground, resolved: [...r.resolved], refused: r.refused };
+  const image = r && r.complete ? {
+    ground: r.ground, resolved: t => r.resolved.has(t),
+    draw: (c, b) => { c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'low'; c.drawImage(r.canvas, b.x, b.y, b.w, b.h); },
+  } : null;
+  FIT = WikiStage.draw(g, v, { W: stage.width, H: stage.height, U: G.gh / 720, icons: ICONS, image,
+    msg: simErr || (demo() ? 'loading…' : entry() ? 'no demo' : '') });
   return v;
 }
 
@@ -455,5 +462,5 @@ load().then(() => {
 });
 requestAnimationFrame(loop);
 // the page's state and its running simulation, for scripted checks of the mockup
-window.WikiPage = { state: S, sim: () => sim };
+window.WikiPage = { state: S, sim: () => sim, image: () => IMG };
 })();

@@ -1,31 +1,39 @@
-/* gfx.js -- the stage in the game's own graphics (gfx=game): the ground and metal from map tiles, the vent and deposit
-   features, the units' 3DO sprites, TA's cursors. Everything it draws is in gfx/, which tools/wiki/gfx.py renders from
-   the local install and .gitignore keeps out of the repository; without gfx/index.json the stage stays on the whitebox.
-   stage.js's draw() calls WikiGfx.draw(phase, ...), through the hook wiki.js gives it, at each element it can hand over,
-   and draws its whitebox when the call returns false. What each element is in the game: research/notes/ingame-wiki.md, *In game: what each element is
-   drawn with*. */
+/* gfx.js -- the stage in the game's own graphics (gfx=game): a real 3D render of the stage, as the game will draw it
+   (research/notes/ingame-wiki-3d-stage-plan.md, section 9). Each frame it renders one view into an offscreen WebGL2
+   target of the map at zoom 1, mw*16*ss by mh*16*ss, with tools/tascene-render.js -- tagpu's own terrain, feature and
+   unit shaders, extracted from the C sources -- and hands the image to stage.js, which draws it into the map's rect
+   between its op ranges R0 and R2. scene.js turns the view into the records drawn here.
+
+   Everything it reads is in gfx/, which tools/wiki/gfx.py resolves from the player's install and .gitignore keeps out
+   of the repository. Without gfx/index.json, or while an entry's pack loads, the stage stays the whitebox and the
+   controls strip says so.
+
+   What the image holds, in the world passes' order (tagpu_vk.c `world_records`):
+   - the terrain from the stage description's tiles and the features (deposits, vents), both under the engine's fog
+     grid (scene.js) -- or neither, when the pack's ground did not resolve: the ground falls back whole, and stage.js
+     draws its whitebox ground under an image that is clear there;
+   - every unit with a resolved model, its Classic silhouette or slant shadow first, then the bodies, a nanoframe in
+     the engine's staging and then its wire; units take no fog;
+   - the ghosts last, alpha 0.40, depth writes off: the placement ghost, the gesture's sites, the queued builds.
+   `complete` is false when anything this frame expected was not drawn; stage.js then draws the whitebox whole. */
 window.WikiGfx = (() => {
   const BASE = 'gfx/';
-  // the stage's cursor shapes: TA's cursors.gaf sequences (cursor_ary, exe-reverse-engineering.md)
-  const CURSOR = { arrow: 'arrow', move: 'move', build: 'arrow' };
-  const TINT = { ok: 'rgb(40,210,70)', bad: 'rgb(230,40,40)' };
+  // scene.js's WikiScene is a script-level const, not a property of window, so it is named bare
+  const TR = window.TasceneRender, WS = WikiScene;
   let mode = new URLSearchParams(location.search).get('gfx') === 'game' ? 'game' : 'whitebox';
-  let idx = null, state = 'none';       // none, loading, ready, missing
-  const img = {};
+  const SS = Math.max(1, Math.min(4, parseInt(new URLSearchParams(location.search).get('ss') || '2', 10) || 2));
+  let index = null, state = 'none';     // none, loading, ready, missing
+  const stages = {};                    // entry id -> a Stage, or a promise of one, or an error
+
+  const bin = async u => { const r = await fetch(u); if (!r.ok) throw new Error(`${u}: ${r.status}`); return new Uint8Array(await r.arrayBuffer()); };
+  const f32 = b => new Float32Array(b.buffer, b.byteOffset, b.byteLength >> 2);
 
   function load() {
     if (state !== 'none') return;
     state = 'loading'; note();
-    fetch(BASE + 'index.json').then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }).then(j => {
-      const files = [];
-      const add = (key, rec) => { if (rec && rec.file) files.push([key, rec.file]); };
-      for (const [n, r] of Object.entries(j.units || {})) add('u:' + n, r);
-      for (const k of ['ground', 'metalground', 'metal', 'vent']) add(k, j[k]);
-      for (const [n, r] of Object.entries(j.cursors || {})) add('c:' + n, r);
-      return Promise.all(files.map(([k, f]) => new Promise(ok => {
-        const im = new Image(); im.onload = () => { img[k] = im; ok(); }; im.onerror = () => ok(); im.src = BASE + f;
-      }))).then(() => { idx = j; state = 'ready'; note(); });
-    }).catch(() => { state = 'missing'; note(); });
+    fetch(BASE + 'index.json').then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(j => { index = j; state = 'ready'; note(); })
+      .catch(() => { state = 'missing'; note(); });
   }
   const on = () => mode === 'game' && state === 'ready';
 
@@ -47,131 +55,220 @@ window.WikiGfx = (() => {
     if (mode === 'game') q.set('gfx', 'game'); else q.delete('gfx');
     history.replaceState(null, '', '?' + q.toString().replace(/=(?=&|$)/g, ''));
   }
-  function url(q) { if (mode === 'game') q.set('gfx', 'game'); }
+  function url(q) { if (mode === 'game') q.set('gfx', 'game'); if (SS !== 2) q.set('ss', SS); }
 
-  /* ---- drawing helpers: a sprite at ppu pixels a world unit, drawn at the stage's scale ---- */
-  const k = c => c.s / idx.ppu;
-  function sprite(g, c, im, rec, x, z, alpha = 1) {
-    const f = k(c);
-    g.globalAlpha = alpha;
-    g.drawImage(im, c.X(x) - rec.anchor[0] * f, c.Z(z) - rec.anchor[1] * f, rec.w * f, rec.h * f);
-    g.globalAlpha = 1;
-  }
-  const tinted = {};
-  function tint(name, col) {
-    const key = name + '|' + col;
-    if (!tinted[key]) {
-      const im = img['u:' + name], cv = document.createElement('canvas');
-      cv.width = im.width; cv.height = im.height;
-      const t = cv.getContext('2d');
-      t.drawImage(im, 0, 0); t.globalCompositeOperation = 'source-atop'; t.globalAlpha = .55;
-      t.fillStyle = col; t.fillRect(0, 0, cv.width, cv.height);
-      tinted[key] = cv;
+  /* ---- one entry's stage: its pack, its own WebGL2 context and target ---- */
+  async function open(id) {
+    const dir = `${BASE}${id}/`, pack = await fetch(dir + 'scene.json').then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+    const sh = n => fetch(dir + pack.shaders + n).then(r => r.text());
+    const [pal, shd, tv, tf, sv, sf, uv, uf] = await Promise.all([bin(dir + pack.palette.file),
+      pack.palette.shd ? bin(dir + pack.palette.shd) : new Uint8Array(32 * 256),
+      sh('terrain.vert'), sh('terrain.frag'), sh('sprite.vert'), sh('sprite.frag'), sh('unit.vert'), sh('unit.frag')]);
+    const ground = pack.ground.ok && pack.map;
+    const T = ground ? await Promise.all([bin(dir + pack.map.atlas.file), bin(dir + pack.map.tilemap.file)]) : null;
+    const F = ground && pack.features && pack.features.count
+      ? await Promise.all([bin(dir + pack.features.atlas.file), bin(dir + pack.features.instances)]) : null;
+    const meshes = {}, slants = {}, wires = {}, U = pack.units;
+    const units = U.atlas ? await bin(dir + U.atlas.file) : null;
+    for (const [type, m] of Object.entries(U.meshes || {})) {
+      const [s, w] = await Promise.all([bin(dir + m.slantFile), bin(dir + m.wireFile)]);
+      for (const [owner, file] of Object.entries(m.files)) {
+        const key = `${type}.${owner}`;
+        meshes[key] = f32(await bin(dir + file)); slants[key] = f32(s); wires[key] = f32(w);
+      }
     }
-    return tinted[key];
+    return new Stage(pack, { pal, shd, tv, tf, sv, sf, uv, uf, T, F, units, meshes, slants, wires });
   }
-  // the deposits: each 4-connected patch above surfaceMetal small enough to be a deposit gets the feature's sprite
-  // stretched to the patch; broad metal (a metal map's ground, or SurfaceMetal itself above 0) gets the metal tile
-  let metalKey = null, metalParts = null;
-  function patches(M) {
-    const key = M.w + 'x' + M.h + ':' + M.surfaceMetal + ':' + (M.metal || []).join();
-    if (key === metalKey) return metalParts;
-    const W = M.w, H = M.h, m = M.metal || [], sm = +M.surfaceMetal || 0, seen = new Uint8Array(W * H), out = [];
-    for (let i = 0; i < W * H; i++) {
-      if (seen[i] || !(+m[i] > sm)) continue;
-      const cells = [], st = [i]; seen[i] = 1;
-      while (st.length) {
-        const c = st.pop(), x = c % W, z = (c / W) | 0; cells.push(c);
-        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-          const nx = x + dx, nz = z + dz, n = nz * W + nx;
-          if (nx >= 0 && nz >= 0 && nx < W && nz < H && !seen[n] && +m[n] > sm) { seen[n] = 1; st.push(n); }
+
+  function Stage(pack, d) {
+    const [mw, mh] = pack.cells, GW = mw * 16, GH = mh * 16, FW = GW * SS, FH = GH * SS;
+    const canvas = document.createElement('canvas');
+    canvas.width = FW; canvas.height = FH;
+    const gl = canvas.getContext('webgl2', { antialias: false, alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: true });
+    if (!gl) throw new Error('no WebGL2 context');
+    const ground = !!d.T;
+    // the shared textures: the palette (unit 1) and the fog grid (unit 2, rewritten each frame)
+    TR.tex2D(gl, 1, gl.RGBA8, 256, 1, gl.RGBA, gl.UNSIGNED_BYTE, d.pal);
+    const fogTex = TR.tex2D(gl, 2, gl.RG8, 1, 1, gl.RG, gl.UNSIGNED_BYTE, new Uint8Array([0, 0]));
+    let terr = null, tiles = null, spr = null, sprVBO = null, anchors = [];
+    if (ground) {
+      TR.tex2D(gl, 0, gl.R8, pack.map.atlas.w, pack.map.atlas.h, gl.RED, gl.UNSIGNED_BYTE, d.T[0]);
+      terr = TR.classicTerrain(gl, d.tv, d.tf, pack.map.atlas, d.T[0], d.pal);
+      tiles = new Uint16Array(d.T[1].buffer, d.T[1].byteOffset, d.T[1].byteLength >> 1);
+      if (d.F) {
+        TR.tex2D(gl, 5, gl.R8, pack.features.atlas.w, pack.features.atlas.h, gl.RED, gl.UNSIGNED_BYTE, d.F[0]);
+        sprVBO = gl.createBuffer();
+        spr = TR.classicSprites(gl, d.sv, d.sf, sprVBO, pack.features, d.F[0], d.pal);
+        const inst = new Uint16Array(d.F[1].buffer, d.F[1].byteOffset, d.F[1].byteLength >> 1);
+        for (let i = 0; i < inst.length; i += 3) anchors[inst[i + 1] * mw + inst[i]] = inst[i + 2];
+      }
+    }
+    let cu = null, ua = null, wa = null;
+    if (d.units) {
+      TR.tex2D(gl, 6, gl.R8, pack.units.atlas.w, pack.units.atlas.h, gl.RED, gl.UNSIGNED_BYTE, d.units);
+      ua = TR.unitArray(gl); wa = TR.unitArray(gl);
+      cu = TR.classicUnits(gl, d.uv, d.uf, pack.units, d.units, d.pal, d.shd, pack.palette.shdRows, pack.palette.neutral[0]);
+    }
+    gl.activeTexture(gl.TEXTURE0);
+    // the target: colour and depth+stencil (the silhouettes blend once a pixel through the stencil)
+    const colour = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, colour);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, FW, FH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.activeTexture(gl.TEXTURE0);
+    const depth = gl.createRenderbuffer();
+    gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH24_STENCIL8, FW, FH);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, colour, 0);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, depth);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('the stage target is incomplete');
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    const heights = new Uint8Array(mw * mh);                         // the stage is flat
+    const meshTop = {};
+    const look = { lane: 'parity', shadowSun: [0, 1, 0], shadowlen: null, airshadow: 'len' };
+    let out = new Float32Array(1), wout = new Float32Array(1);
+    const [neutral] = pack.palette.neutral;
+
+    /* the nanoframe wire of one range: every face outline, posed as emitUnits poses the body, one notch nearer than
+       the surface it traces (+0.15, tagpu_posedraw.c WVS), on the flat path in the second oscillator's colour */
+    function wire(r, at) {
+      const w = d.wires[r.inst.type], [cs, sn] = r.yaw, [hotX, hotY] = r.hot, wx = r.inst.pos[0], wz = r.inst.pos[1];
+      const need = at + (w.length / 3) * TR.UVST;
+      if (wout.length < need) { const g = new Float32Array(need * 2); g.set(wout); wout = g; }
+      let n = 0;
+      for (let i = 0; i + 3 <= w.length; i += 3) {
+        const x0 = w[i], y = w[i + 1], z0 = w[i + 2];
+        const x = x0 * cs + z0 * sn, z = -x0 * sn + z0 * cs;
+        let md = (2 * y - z) / 256;
+        if (md > 1.8) md = 1.8; else if (md < -1.8) md = -1.8;
+        const q = at + n * TR.UVST;
+        wout.fill(0, q, q + TR.UVST);
+        wout[q] = x + hotX; wout[q + 1] = (-z - y * 0.5) + hotY; wout[q + 2] = r.enc + md + 0.15;
+        wout[q + 3] = -1; wout[q + 4] = -1; wout[q + 5] = r.inst.nano.wire; wout[q + 6] = -1;
+        wout[q + 7] = neutral / 31; wout[q + 8] = wx + x; wout[q + 9] = wz + (-z - y * 0.5); wout[q + 10] = y;
+        wout[q + 12] = 1;
+        n++;
+      }
+      return n;
+    }
+
+    /* One frame of the view `v` at `tick`. Returns { complete, ground, resolved }. */
+    function render(v, tick) {
+      const sc = WS.build(v, pack, tick);
+      const fog = sc.fog;
+      const f = { GW, GH, zoom: 1, zoomC: [0, 0], depth: pack.depth, vp: [0, 0, GW, GH], SS,
+                  fog: fog ? 1 : 0, fogOrg: fog ? fog.org : [0, 0], fogDim: fog ? fog.dim : [1, 1] };
+      if (fog) {
+        gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, fogTex);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG8, fog.dim[0], fog.dim[1], 0, gl.RG, gl.UNSIGNED_BYTE, fog.grid);
+        gl.activeTexture(gl.TEXTURE0);
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.viewport(0, 0, FW, FH);
+      gl.disable(gl.SCISSOR_TEST);
+      gl.clearColor(0, 0, 0, 0); gl.clearDepth(1); gl.clearStencil(0);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+      gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.depthMask(true); gl.disable(gl.BLEND);
+      const E = [0, 0], W = [GW, GH], r0 = (E[1] >> 4) - 16;
+      if (terr) {
+        const g = terr.gather(tiles, pack.map.tilemap, E, W, 0, 0);
+        terr.draw(f, g.n);
+      }
+      if (spr) {
+        const got = TR.gatherFeatures({ lab: false, mirror: false, r0, E, W, vpL: 0, vpT: 0, w16: mw, h16: mh, heights,
+          anchors, mapAnchors: anchors, defs: pack.features.defs, atlas: pack.features.atlas, D: pack.depth });
+        if (got) {
+          const all = got.shadow.concat(got.body);
+          gl.bindBuffer(gl.ARRAY_BUFFER, sprVBO);
+          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(all), gl.DYNAMIC_DRAW);
+          spr.use(f);
+          spr.draw(got.shadow.length / TR.SVST, got.body.length / TR.SVST, got.shadow.length / TR.SVST);
         }
       }
-      const xs = cells.map(c => c % W), zs = cells.map(c => (c / W) | 0);
-      const x0 = Math.min(...xs), x1 = Math.max(...xs) + 1, z0 = Math.min(...zs), z1 = Math.max(...zs) + 1;
-      out.push({ cells, x0, x1, z0, z1, deposit: x1 - x0 <= 6 && z1 - z0 <= 6 });
+      const recs = sc.units.concat(sc.ghosts);
+      let refused = 0;
+      if (cu && recs.length) {
+        let need = 0;
+        for (const r of recs) need += ((d.meshes[r.key] || []).length / TR.UNIT_STRIDE + (d.slants[r.key] || []).length / 3) * TR.UVST;
+        if (out.length < need) out = new Float32Array(need);
+        const inst = recs.map(r => ({ ...r, type: r.key, agl: 0 }));
+        const { n } = TR.emitUnits({ instances: inst, meshData: d.meshes, slantData: d.slants, meshTop, out, D: pack.depth,
+          r0, E, W, vpL: 0, vpT: 0, w16: mw, h16: mh, heights, neutral, dir: pack.palette.neutral[1] }, look);
+        refused = recs.length - look.unitRanges.length;
+        gl.bindBuffer(gl.ARRAY_BUFFER, ua.vbo);
+        gl.bufferData(gl.ARRAY_BUFFER, out.subarray(0, n * TR.UVST), gl.DYNAMIC_DRAW);
+        gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        gl.bindVertexArray(ua.vao);
+        cu.use(f);
+        const P = cu.U;
+        // the shadows first, as the engine emits them inside each unit's own draw; then the bodies
+        cu.silhouettes(look.unitRanges, r => !r.inst.ghost);
+        gl.depthMask(true);
+        for (const r of look.unitRanges) {
+          if (r.inst.ghost || !r.count) continue;
+          const nn = r.inst.nano;
+          gl.uniform1i(P.uNanoOn, nn ? 1 : 0);
+          if (nn) { gl.uniform1f(P.uNanoT, nn.t); gl.uniform3f(P.uNanoC, nn.c[0], nn.c[1], nn.c[2]); }
+          gl.drawArrays(gl.TRIANGLES, r.first, r.count);
+        }
+        gl.uniform1i(P.uNanoOn, 0);
+        // each nanoframe's wire, after every body
+        let wn = 0;
+        const wr = [];
+        for (const r of look.unitRanges) if (!r.inst.ghost && r.inst.nano) { const k = wire(r, wn * TR.UVST); wr.push([wn, k]); wn += k; }
+        if (wn) {
+          gl.bindVertexArray(wa.vao);
+          gl.bindBuffer(gl.ARRAY_BUFFER, wa.vbo);
+          gl.bufferData(gl.ARRAY_BUFFER, wout.subarray(0, wn * TR.UVST), gl.DYNAMIC_DRAW);
+          for (const [a, k] of wr) gl.drawArrays(gl.LINES, a, k);
+          gl.bindVertexArray(ua.vao);
+        }
+        // the ghost stage: translucent, depth writes off, so ghosts blend with each other
+        gl.depthMask(false);
+        gl.uniform1f(P.uAlpha, WS.GHOST_ALPHA);
+        for (const r of look.unitRanges) if (r.inst.ghost && r.count) gl.drawArrays(gl.TRIANGLES, r.first, r.count);
+        gl.uniform1f(P.uAlpha, 1);
+        gl.depthMask(true);
+        gl.bindVertexArray(null);
+        gl.disable(gl.BLEND);
+      }
+      // the composite's source: the target into this canvas, flipped (the target's row 0 is the map's bottom)
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fbo);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+      gl.blitFramebuffer(0, 0, FW, FH, 0, FH, FW, 0, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      const err = gl.getError();
+      return { complete: !refused && err === gl.NO_ERROR && !gl.isContextLost(), ground, resolved: sc.resolved,
+               refused, glError: err };
     }
-    metalKey = key; metalParts = out;
-    return out;
-  }
-  function tile(g, c, im, rec) {
-    const p = g.createPattern(im, 'repeat'), f = c.s * rec.world / rec.w;
-    p.setTransform(new DOMMatrix([f, 0, 0, f, c.X(0), c.Z(0)]));
-    return p;
+    return { canvas, render, pack };
   }
 
-  /* ---- the phases wiki.js hands over; true = drawn here ---- */
-  const PH = {
-    ground(g, c) {
-      const M = c.v.map, cell = c.cell, cp = c.cp, sm = +M.surfaceMetal || 0, m = M.metal || [];
-      g.fillStyle = tile(g, c, img.ground, idx.ground);
-      g.fillRect(c.X(0), c.Z(0), M.w * cell * c.s, M.h * cell * c.s);
-      const mg = img.metalground && tile(g, c, img.metalground, idx.metalground);
-      const cellRect = i => [Math.floor(c.X((i % M.w) * cell)), Math.floor(c.Z(((i / M.w) | 0) * cell)), Math.ceil(cp) + 1, Math.ceil(cp) + 1];
-      if (mg) {
-        g.fillStyle = mg;
-        for (let i = 0; i < M.w * M.h; i++) if (+m[i] > 0 && +m[i] <= sm) g.fillRect(...cellRect(i));
-        for (const p of patches(M)) if (!p.deposit) for (const i of p.cells) g.fillRect(...cellRect(i));
-      }
-      if (img.metal) for (const p of patches(M)) if (p.deposit) {
-        const r = idx.metal, fx = (p.x1 - p.x0) / r.footprint[0], fz = (p.z1 - p.z0) / r.footprint[1], f = k(c);
-        const cx = c.X((p.x0 + p.x1) / 2 * cell), cz = c.Z((p.z0 + p.z1) / 2 * cell);
-        g.drawImage(img.metal, cx - r.anchor[0] * f * fx, cz - r.anchor[1] * f * fz, r.w * f * fx, r.h * f * fz);
-      }
-      return true;
-    },
-    grid: () => true,                     // the game draws no cell grid
-    label: () => true,                    // nor names
-    vents(g, c) {
-      if (!img.vent) return false;
-      for (const vt of c.v.map.vents || []) { const p = Array.isArray(vt) ? { x: vt[0], z: vt[1] } : vt; sprite(g, c, img.vent, idx.vent, +p.x, +p.z); }
-      return true;
-    },
-    // every unit's sprite, back to front (by world z, then x) as the engine's row sweep orders them; the per-unit
-    // whitebox then stands down for each unit drawn here
-    units(g, c) {
-      const us = (c.v.units || []).filter(u => img['u:' + u.type]).sort((a, b) => a.z - b.z || a.x - b.x);
-      for (const u of us) one(g, c, u, u.built == null ? 1 : Math.min(1, Math.max(0, +u.built)), Math.min(1, Math.max(0, +u.reclaimed || 0)));
-      return true;
-    },
-    unit: () => true,
-    // a gesture's site and the placement ghost: the building's sprite, translucent, as the Vulkan path draws a ghost
-    site(g, c, st) {
-      const im = img['u:' + st.type]; if (!im) return false;
-      sprite(g, c, im, idx.units[st.type], st.x, st.z, .45); return true;
-    },
-    ghost(g, c, gh) {
-      if (!img['u:' + gh.type]) return false;
-      sprite(g, c, tint(gh.type, gh.ok !== false ? TINT.ok : TINT.bad), idx.units[gh.type], gh.x, gh.z, .6); return true;
-    },
-    // TA's cursor at the stage's magnification of the game's pixels, nearest, its hotspot on the point
-    cursor(g, c, x, y, shape) {
-      const name = CURSOR[shape] || 'arrow', im = img['c:' + name], r = idx.cursors[name];
-      if (!im) return false;
-      const f = Math.max(1, Math.round(c.U));
-      g.imageSmoothingEnabled = false;
-      g.drawImage(im, Math.round(x - r.hot[0] * f), Math.round(y - r.hot[1] * f), r.w * f, r.h * f);
-      g.imageSmoothingEnabled = true;
-      return true;
-    },
-  };
-  // a unit: its sprite. Under construction the unbuilt share is a faint green stand-in for the engine's nano frame and
-  // the built share fills from the bottom up in full colour; a reclaim empties it from the top, its lost share faint red
-  function one(g, c, u, built, rec) {
-    const im = img['u:' + u.type], r = idx.units[u.type];
-    if (built >= 1 && rec <= 0) { sprite(g, c, im, r, u.x, u.z); return; }
-    sprite(g, c, tint(u.type, built < 1 ? TINT.ok : TINT.bad), r, u.x, u.z, .35);
-    const f = k(c), top = c.Z(u.z) - r.anchor[1] * f, h = r.h * f, keep = built < 1 ? built : 1 - rec;
-    g.save(); g.beginPath(); g.rect(0, top + h * (1 - keep), c.W, h * keep + 1); g.clip();
-    sprite(g, c, im, r, u.x, u.z);
-    g.restore();
+  /* The stage's image for `entry` showing view `v` at `tick`: { canvas, complete, ground, resolved }, or null while the
+     game graphics are off or the entry's pack is loading. A pack that fails to load leaves the stage whitebox. */
+  function frame(entry, v, tick) {
+    if (!on() || !entry || !index || !index.entries || !index.entries[entry]) return null;
+    let st = stages[entry];
+    if (!st) {
+      stages[entry] = open(entry).then(s => { stages[entry] = s; }, x => { console.error('wiki gfx:', x); stages[entry] = { error: x }; });
+      return null;
+    }
+    if (st instanceof Promise || st.error) return null;
+    try {
+      const r = st.render(v, tick);
+      return { canvas: st.canvas, ...r };
+    } catch (x) { console.error('wiki gfx:', x); stages[entry] = { error: x }; return null; }
   }
-  function draw(phase, g, c, ...a) {
-    if (!on() || !PH[phase]) return false;
-    try { return !!PH[phase](g, c, ...a); } catch (x) { console.error('wiki gfx:', x); mode = 'whitebox'; return false; }
-  }
+  // what a scripted check reads: whether an entry's stage has settled -- drawn in 3D, or failed and so whitebox -- or,
+  // with the graphics off or gfx/ absent, that nothing is coming
+  const ready = entry => mode !== 'game' || state === 'missing' ||
+    (state === 'ready' && !!stages[entry] && !(stages[entry] instanceof Promise));
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', control); else control();
   if (mode === 'game') load();
-  return { draw, url, on };
+  return { frame, url, on, ready, state: () => state, SS };
 })();

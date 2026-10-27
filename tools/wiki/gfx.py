@@ -1,449 +1,629 @@
 #!/usr/bin/env python3
-"""gfx.py -- the in-game wiki mockup's game graphics, rendered from the player's own install.
+"""gfx.py -- the in-game wiki mockup's 3D stage packs, resolved from the player's own install.
 
-    .venv-undither/bin/python tools/wiki/gfx.py              # the install found as below
-    .venv-undither/bin/python tools/wiki/gfx.py --gamedir <TA install>
+    .venv-undither/bin/python tools/wiki/gfx.py                      # the install found as below
+    .venv-undither/bin/python tools/wiki/gfx.py --gamedir <TA install> [--exe <its executable>]
+    .venv-undither/bin/python tools/wiki/gfx.py --resolve-json <file>   # also the resolution, element by element
 
-Writes tools/wiki/mockup/gfx/ -- gitignored, because everything in it is derived from the
-game's own files and nothing derived from the game is ever committed (CLAUDE.md, *Nothing from
-the original game, ever*). The mockup's `gfx=game` switch reads gfx/index.json and draws these
-instead of its whitebox; without the folder it stays on the whitebox.
+Writes tools/wiki/mockup/gfx/ -- gitignored, because everything in it is derived from the game's own files and
+nothing derived from the game is ever committed (CLAUDE.md, *Nothing from the original game, ever*). The mockup's
+`gfx=game` reads gfx/index.json and draws the stage with tools/tascene-render.js, tagpu's own shaders; without the
+folder it stays on the whitebox. research/notes/ingame-wiki-3d-stage-plan.md section 9 is the design.
 
-What it writes, all at one scale (`ppu` canvas pixels a world unit; the page scales to its stage):
+One tascene-format pack a wiki entry, `gfx/<entry>/scene.json` and its binaries:
 
-  units/<name>.png   every unit an art/wiki/entries/*.json `units` names: its 3DO in the rest pose,
-                     at TA's own oblique camera (screen y = world z - height / 2, the shear of 0.5
-                     tascene and the engine use), facing 0 (TA's default heading, toward the
-                     viewer), flat-shaded per face by the engine's PALETTE.SHD rows as tascene's
-                     parity lane does it, textured with each GAF's frame 0 -- player 0's colours,
-                     the ARM blue. `anchor` is the pixel of the unit's world position.
-  ground.png         the most used tileable 32 x 32 tile of a lush map's flat, featureless ground
-  metalground.png    the same from a metal-world map, for metal ground at SurfaceMetal or broad
-                     above-background regions
-  metal.png          the lush metal deposit feature's sprite (3 x 3 cells, `anchor` = its hotspot)
-  vent.png           the lush geothermal vent feature's sprite, frame 0 (1 x 1 cell)
-  cursors/<n>.png    cursornormal, cursormove, cursorselect, cursorfindsite, cursorgrn, cursorred
-                     from anims/cursors.gaf, frame 0, at their own pixels with their hotspots
-  index.json         all of the above with sizes and anchors
+  terrain/   the stage description's tile set as tagpu_terr.c's R8 atlas (64 tiles a row, 34-texel pitch), its
+             tile map (one u16 a 32-unit tile, an index into that set) and a zero height grid (the stage is flat)
+  features/  the description's 2D features: their frames in an R8 atlas, the anchors, the definitions
+  units/     every unit type the entry names: its model as the engine holds it, in tascene's mesh format, one mesh
+             per owner the entry's scenes use (a team face takes that owner's logo frame), the structure shadow's
+             slant casters, the nanoframe's wire edges, and the frames in an R8 atlas
+  palette/   PALETTE.PAL and PALETTE.SHD
+  shaders    gfx/shaders/, tagpu's GLSL extracted from the C sources (the repository's, not the game's)
 
-The readers are the repository's own: tools/ta3do (HPI, palette, GAF, 3DO, the COB Create-hide
-scan) and tools/tascene (TNT, feature definitions, GAF hotspots, the SHD calibration). Archives
-load in ta3do's order, then rev31.gp3's files again, so its copy wins over any .ufo.
-Colour is palette colour: no restorer runs.
+and gfx/index.json, which names each entry's pack and carries the whole resolution report.
+
+THE RULES ARE THE ENGINE'S, through tools/wiki/tavfs.py (loose first, then the first archive in the engine's mount
+order; an enumeration lists each path once, from its first source), with the directory names read out of the
+install's executable at their addresses, so a mod that renames `units` or `logos` is followed (the scout answers,
+D1/D2). Each element is resolved or refused by name:
+
+- **The ground** (section 4 of the plan): each source TNT opened, its tile count compared, each referenced tile
+  hashed (FNV-1a 32) and compared; each feature section found in the first `features\\*.tdf` that holds it
+  (LoadFeature 0x4224B0), its GAF `anims\\<filename>.GAF` loaded and its `seqname` (and `seqnameshad`) found, first
+  sequence by name without case. ANY miss and the pack carries no terrain and no features (`ground.ok` false): the
+  ground falls back whole, never a patchwork.
+- **A unit** (A2, A3): `units\\<UnitName>.FBI` by path; its `Objectname`, else the UnitName, names
+  `objects3d\\<name>.3DO`; `scripts\\<UnitName>.COB` gives Create()'s hides and dont-caches. A miss makes that type
+  fall back alone (its whitebox box).
+- **The model as the engine holds it** (A4): in every node whose selection primitive is not -1, that face and face 0
+  swap, and faces 1.. are sorted ascending by their vertices' mean Y (a stable sort: the engine's bubble sort swaps on
+  strictly greater), the truncated mean of the 16.16 values; face 0 is then the selection face, which the draws skip.
+  The X and Z negation the loader applies is the half turn of TA's default heading 0x8000, which tascene's yaw
+  already carries (facing 0 = yaw 180), so the mesh stays in the file's axes.
+- **Textures** (A4, A5): the texture bank is `textures\\*.GAF` in enumeration order without `logos.GAF`; a face's
+  name binds to the first GAF in bank order that has the entry; on a miss to `textures\\logos.GAF`, as a team face
+  (the owner's frame) only when the entry has exactly 10 frames; when neither has it, the face is flat colour 0xD1.
+  An animated face shows its frame 0, the binder's starting frame.
+- **Language variants**: every engine open tries `<dir>-english\\` first (0x4290F0), the registry's default.
+
+Colour is palette colour: no restorer runs (the plan's question 7: the stage is Classic).
 """
 
 import argparse
-import importlib.util
 import json
-import math
 import os
+import struct
 import sys
-from collections import Counter
-from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
-import numpy as np
-from PIL import Image
-
 HERE = Path(__file__).resolve().parent
-TOOLS = HERE.parent
-REPO = TOOLS.parent
+REPO = HERE.parent.parent
 OUT = HERE / "mockup" / "gfx"
 ENTRIES = REPO / "art" / "wiki" / "entries"
+STAGE = REPO / "art" / "wiki" / "stage"
+sys.path.insert(0, str(HERE))
+import tavfs  # noqa: E402
+
+tascene = tavfs.tascene
+ta3do = tavfs.ta3do
+
+FORMAT = 1
+TILE_BYTES = 1024
+FLAT_MISS = 0xD1           # the binder's colour for a texture name no bank holds (0x42A204)
+LANGUAGE = "english"       # 0x51FB50 when the registry's value is empty
+TEAM_FRAMES = 10           # a logos.GAF entry is a team face only with exactly this many frames (0x42A1F2)
+
+# The executable's directory strings (the scout answers, D1); a mod renames them in place (D2)
+VA = {"units": 0x503920, "objects3d": 0x5036E4, "scripts": 0x503740, "textures": 0x503720,
+      "logos_gaf": 0x503704, "logos": 0x504734, "anims": 0x502E30, "features": 0x502C7C,
+      "palettes": 0x5031BC, "palette": 0x5033A4}
 
 
-def _load(name, path):
-    loader = SourceFileLoader(name, str(path))
-    spec = importlib.util.spec_from_loader(name, loader)
-    mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
-    return mod
+def fnv1a32(data: bytes) -> str:
+    h = 0x811C9DC5
+    for b in data:
+        h = ((h ^ b) * 0x01000193) & 0xFFFFFFFF
+    return f"{h:08x}"
 
 
-tascene = _load("tascene", TOOLS / "tascene")
-ta3do = tascene.ta3do
+class Miss(Exception):
+    pass
 
 
-def die(msg):
-    print(f"gfx.py: {msg}", file=sys.stderr)
-    raise SystemExit(1)
+# --------------------------------------------------------------------------- the engine's opens
 
+class Engine:
+    """The install as the engine asks it: tavfs's precedence, the executable's names, the language variant."""
 
-def find_install(arg):
-    """--gamedir, else TA3DO_GAMEDIR, else Steam's default library, else ta3do's gamedir."""
-    for cand in (arg, os.environ.get("TA3DO_GAMEDIR"),
-                 Path.home() / ".local/share/Steam/steamapps/common/Total Annihilation"):
-        if cand and Path(cand).expanduser().is_dir():
-            return Path(cand).expanduser()
-    return ta3do.game_dir()
+    def __init__(self, root, exe=None):
+        self.vfs = tavfs.Vfs(root, exe)
+        exe_path = Path(exe) if exe else self.vfs._loose_path(tavfs.EXE_NAME)
+        blob = exe_path.read_bytes()
+        self.dirs = {k: tavfs.exe_cstr(blob, va) for k, va in VA.items()}
+        self._bank = None
+        self._logos = None
+        self._features = None
 
-
-def open_assets(root):
-    assets = ta3do.Assets(root)
-    for arc in assets.archives:                 # rev31.gp3 wins, .ufo included
-        if arc.path.name.lower() == "rev31.gp3":
-            for name in arc.files:
-                assets.index[name] = arc
-    return assets
-
-
-# --------------------------------------------------------------------------- shading
-
-SH_V = (0.0, 0.8944, -0.4472)      # tagpu_render3do.c: the model-space toward-camera axis
-SH_L = (-0.35, 0.80, -0.49)        # and the light (tascene-view.html, the parity lane)
-
-
-def shade_k(shd, palette, neutral):
-    """tagpu_render3do.c's s_shadeK, as tascene-view.html's shadeK: per SHD row, the least-squares
-    slope through the origin of the shaded colour against the unshaded one over every channel the
-    row does not clip (>= 250), normalised so the neutral row is 1.0."""
-    raw = []
-    for r in range(32):
-        sxy = sxx = 0.0
-        for i in range(256):
-            y = palette[shd[r * 256 + i]]
-            for c in range(3):
-                if y[c] >= 250:
-                    continue
-                sxy += palette[i][c] * y[c]
-                sxx += palette[i][c] * palette[i][c]
-        raw.append(sxy / sxx if sxx > 0 else 1.0)
-    n = raw[neutral] if raw[neutral] > 0 else 1.0
-    return [v / n for v in raw]
-
-
-# --------------------------------------------------------------------------- the 3DO raster
-
-def model_faces(assets, bank, name):
-    """[(points[(x,y,z)], texture frame or None, flat palette index)] in model space, the rest
-    pose: pieces at their offsets, what the script hides at Create left out, the selection
-    primitive skipped -- tascene's build_units rule."""
-    label, blob = ta3do.resolve_model(assets, name)
-    root = ta3do.parse_3do(blob)
-    hidden = {h.lower() for h in ta3do.script_hidden(assets, label) or ()}
-    faces = []
-
-    def emit(piece, ox, oy, oz):
-        px, py, pz = ox + piece.offset[0], oy + piece.offset[1], oz + piece.offset[2]
-        if piece.name.lower() not in hidden:
-            for prim in piece.primitives:
-                if prim.is_selection or len(prim.indices) < 3:
-                    continue
-                if any(i >= len(piece.vertices) for i in prim.indices):
-                    continue
-                frame = bank.frame(prim.texture) if prim.texture else None
-                if prim.texture and frame is None:
-                    continue                    # names a texture we cannot resolve
-                pts = [(px + piece.vertices[i][0], py + piece.vertices[i][1],
-                        pz + piece.vertices[i][2]) for i in prim.indices]
-                faces.append((pts, frame, prim.color & 0xFF))
-        for child in piece.children:
-            emit(child, px, py, pz)
-
-    emit(root, 0.0, 0.0, 0.0)
-    return label, faces
-
-
-def corner_uv(slot, n):
-    """The engine maps a whole GAF frame across a face's four corners; an n-gon collapses onto
-    them (tascene build_units)."""
-    c = slot if n <= 4 else slot * 4 // n
-    return (1.0 if c in (1, 2) else 0.0, 1.0 if c >= 2 else 0.0)
-
-
-def render_model(faces, palette, shd_k, neutral, direction, ppu, ss):
-    """RGBA at ppu pixels a world unit, and the anchor (the model origin's pixel).
-
-    Facing 0 is TA's default build heading 0x8000, half a turn: posed (x, y, z) = (-x, y, -z).
-    Screen: x = -x_model... i.e. sx = posed x, sy = -posed z - y / 2 (tascene-view.html). The
-    depth key is 2y - posed z, larger nearer, per pixel. Quads take per-pixel bilinear texture
-    coordinates (the Vulkan path's quad mapping), other faces fan from vertex 0 with affine ones."""
-    k = ppu * ss
-    tris = []
-    allx, ally = [], []
-    for pts, frame, col in faces:
-        posed = [(-x, y, -z) for x, y, z in pts]
-        scr = [(p[0] * k, (-p[2] - p[1] * 0.5) * k, 2 * p[1] - p[2]) for p in posed]
-        # per-face flat shade, tagpu_render3do.c's rule as tascene-view.html ports it
-        a, b, c = posed[0], posed[1], posed[2]
-        e1 = [b[i] - a[i] for i in range(3)]
-        e2 = [c[i] - a[i] for i in range(3)]
-        nx = e1[1] * e2[2] - e1[2] * e2[1]
-        ny = e1[2] * e2[0] - e1[0] * e2[2]
-        nz = e1[0] * e2[1] - e1[1] * e2[0]
-        if nx * SH_V[0] + ny * SH_V[1] + nz * SH_V[2] < 0:
-            nx, ny, nz = -nx, -ny, -nz
-        nl = math.sqrt(nx * nx + ny * ny + nz * nz)
-        row = neutral
-        if nl > 1e-6:
-            inten = (nx * SH_L[0] + ny * SH_L[1] + nz * SH_L[2]) / nl
-            row = max(0, min(31, neutral + direction * math.floor(inten * 12 + 0.5)))
-        tris.append((scr, frame, col, shd_k[row]))
-        allx += [s[0] for s in scr]
-        ally += [s[1] for s in scr]
-    if not tris:
-        return None, (0, 0)
-    pad = 2 * ss
-    x0 = math.floor(min(allx)) - pad
-    y0 = math.floor(min(ally)) - pad
-    x0 -= x0 % ss
-    y0 -= y0 % ss
-    w = math.ceil(max(allx)) + pad - x0
-    h = math.ceil(max(ally)) + pad - y0
-    w += (-w) % ss
-    h += (-h) % ss
-    rgb = np.zeros((h, w, 3), np.float32)
-    cov = np.zeros((h, w), np.float32)
-    depth = np.full((h, w), -np.inf, np.float32)
-    pal = np.array(palette, np.float32)
-
-    for scr, frame, col, shade in tris:
-        n = len(scr)
-        P = [(s[0] - x0, s[1] - y0, s[2]) for s in scr]
-        uv = [corner_uv(i, n) for i in range(n)]
-        bx0 = max(0, int(math.floor(min(p[0] for p in P))))
-        by0 = max(0, int(math.floor(min(p[1] for p in P))))
-        bx1 = min(w, int(math.ceil(max(p[0] for p in P))) + 1)
-        by1 = min(h, int(math.ceil(max(p[1] for p in P))) + 1)
-        if bx1 <= bx0 or by1 <= by0:
-            continue
-        gx, gy = np.meshgrid(np.arange(bx0, bx1) + 0.5, np.arange(by0, by1) + 0.5)
-        tex = None
-        if frame is not None:
-            tex = np.frombuffer(bytes(frame.pixels), np.uint8).reshape(frame.height, frame.width)
-        quad_uv = bilinear_uv(P, gx, gy) if (n == 4 and tex is not None) else None
-        for kk in range(1, n - 1):
-            A, B, C = P[0], P[kk], P[kk + 1]
-            area = (B[0] - A[0]) * (C[1] - A[1]) - (B[1] - A[1]) * (C[0] - A[0])
-            if abs(area) < 1e-9:
-                continue
-            w0 = ((B[0] - gx) * (C[1] - gy) - (B[1] - gy) * (C[0] - gx)) / area
-            w1 = ((C[0] - gx) * (A[1] - gy) - (C[1] - gy) * (A[0] - gx)) / area
-            w2 = 1.0 - w0 - w1
-            inside = (w0 >= -1e-6) & (w1 >= -1e-6) & (w2 >= -1e-6)
-            if not inside.any():
-                continue
-            z = w0 * A[2] + w1 * B[2] + w2 * C[2]
-            sub = depth[by0:by1, bx0:bx1]
-            win = inside & (z > sub)
-            if tex is not None:
-                if quad_uv is not None:
-                    u, v = quad_uv
-                else:
-                    u = w0 * uv[0][0] + w1 * uv[kk][0] + w2 * uv[kk + 1][0]
-                    v = w0 * uv[0][1] + w1 * uv[kk][1] + w2 * uv[kk + 1][1]
-                tx = np.clip((u * frame.width).astype(np.int32), 0, frame.width - 1)
-                ty = np.clip((v * frame.height).astype(np.int32), 0, frame.height - 1)
-                idx = tex[ty, tx]
-                if frame.transparent is not None:
-                    win &= idx != frame.transparent
-                colour = pal[idx]
-            else:
-                colour = np.broadcast_to(pal[col], gx.shape + (3,))
-            if not win.any():
-                continue
-            sub[win] = z[win]
-            rgb[by0:by1, bx0:bx1][win] = np.clip(colour[win] * shade, 0, 255)
-            cov[by0:by1, bx0:bx1][win] = 1.0
-
-    # down to ppu: coverage-weighted colour, coverage as alpha
-    H, W = h // ss, w // ss
-    c4 = cov.reshape(H, ss, W, ss).sum(axis=(1, 3))
-    r4 = (rgb * cov[..., None]).reshape(H, ss, W, ss, 3).sum(axis=(1, 3))
-    out = np.zeros((H, W, 4), np.uint8)
-    nz = c4 > 0
-    out[..., :3][nz] = np.clip(r4[nz] / c4[nz][:, None] + 0.5, 0, 255).astype(np.uint8)
-    out[..., 3] = np.clip(c4 / (ss * ss) * 255 + 0.5, 0, 255).astype(np.uint8)
-    return out, (-x0 / ss, -y0 / ss)
-
-
-def bilinear_uv(P, gx, gy):
-    """Inverse bilinear (u, v) of every pixel in the quad P0 (0,0) P1 (1,0) P2 (1,1) P3 (0,1)."""
-    a = np.array(P[0][:2]), np.array(P[1][:2]), np.array(P[2][:2]), np.array(P[3][:2])
-    e = a[1] - a[0]
-    f = a[3] - a[0]
-    g = a[0] - a[1] + a[2] - a[3]
-    hx, hy = gx - a[0][0], gy - a[0][1]
-    cross = lambda p, q: p[0] * q[1] - p[1] * q[0]
-    k2 = cross(g, f)
-    k1 = cross(e, f) + (hx * g[1] - hy * g[0])
-    k0 = hx * e[1] - hy * e[0]
-    if abs(k2) < 1e-6:
-        v = np.where(np.abs(k1) > 1e-9, -k0 / np.where(np.abs(k1) > 1e-9, k1, 1), 0)
-    else:
-        disc = np.sqrt(np.maximum(k1 * k1 - 4 * k0 * k2, 0))
-        v1 = (-k1 - disc) / (2 * k2)
-        v2 = (-k1 + disc) / (2 * k2)
-        v = np.where((v1 >= -0.01) & (v1 <= 1.01), v1, v2)
-    den_x = e[0] + g[0] * v
-    den_y = e[1] + g[1] * v
-    u = np.where(np.abs(den_x) > np.abs(den_y),
-                 (hx - f[0] * v) / np.where(np.abs(den_x) > 1e-9, den_x, 1),
-                 (hy - f[1] * v) / np.where(np.abs(den_y) > 1e-9, den_y, 1))
-    return np.clip(u, 0, 0.9999), np.clip(v, 0, 0.9999)
-
-
-# --------------------------------------------------------------------------- GAF and tiles
-
-def indexed_rgba(pixels, w, h, palette, key=None):
-    idx = np.frombuffer(bytes(pixels), np.uint8).reshape(h, w)
-    pal = np.array(palette, np.uint8)
-    out = np.zeros((h, w, 4), np.uint8)
-    out[..., :3] = pal[idx]
-    out[..., 3] = 255
-    if key is not None:
-        out[..., 3][idx == key] = 0
-    return out
-
-
-def upscale(rgba, k):
-    return np.repeat(np.repeat(rgba, k, axis=0), k, axis=1)
-
-
-def flat_tile(assets, palette, pick):
-    """The most used tileable 32 x 32 tile under flat, featureless ground, from the first map
-    `pick` accepts by its feature names: (map, tile index, its pixels)."""
-    for path in assets.glob("maps/*.tnt"):
-        try:
-            tnt = tascene.Tnt(assets.read(path), path)
-        except Exception:
-            continue
-        if not pick([n.lower() for n in tnt.feature_names()]):
-            continue
-        attr = tnt.blob[tnt.p_mapattr:tnt.p_mapattr + tnt.w16 * tnt.h16 * 4]
-        tiles = tnt.tilemap()
-        use = Counter()
-        for r in range(tnt.mh):
-            for c in range(tnt.mw):
-                cells = [((2 * r + j) * tnt.w16 + 2 * c + i) * 4 for j in (0, 1) for i in (0, 1)]
-                hs = {attr[o] for o in cells}
-                if len(hs) != 1 or any((attr[o + 1] | attr[o + 2] << 8) < 0xFFFB for o in cells):
-                    continue
-                use[tiles[2 * (r * tnt.mw + c)] | tiles[2 * (r * tnt.mw + c) + 1] << 8] += 1
-        for t, _n in use.most_common(40):
-            px = tnt.blob[tnt.p_tilegfx + t * 1024:tnt.p_tilegfx + (t + 1) * 1024]
-            if tascene._tileable(px, 32, 32, -1, palette):
-                return path, t, px
-    return None
-
-
-def gaf_sprite(gafs, seq, palette):
-    got = gafs.frame(seq)
-    if not got:
+    def open(self, d, name, ext):
+        """0x4290F0's path, `<d>-english\\<name>.<ext>` first: (bytes, path, where) or None."""
+        name = name.rsplit(".", 1)[0] if "." in name else name      # it cuts at the last '.'
+        for path in (f"{d}-{LANGUAGE}\\{name}.{ext}", f"{d}\\{name}.{ext}"):
+            hit = self.vfs.open(path)
+            if hit is not None:
+                return hit[0], path, hit[1]
         return None
-    frame, hx, hy = got
-    return indexed_rgba(frame.pixels, frame.width, frame.height, palette, frame.transparent), (hx, hy)
+
+    def gaf(self, d, name):
+        hit = self.open(d, name, "GAF")
+        if hit is None:
+            return None
+        try:
+            return Gaf(hit[0]), hit[1], hit[2]
+        except (struct.error, ValueError, IndexError):
+            return None
+
+    def bank(self):
+        """The texture bank, in the engine's order: `textures\\*.GAF` enumerated, logos.GAF skipped (0x42A440)."""
+        if self._bank is None:
+            self._bank = []
+            skip = self.dirs["logos_gaf"].lower()
+            for path, where in self.vfs.enumerate(self.dirs["textures"], "*.gaf", False):
+                base = path.rsplit("/", 1)[-1]
+                if base.lower() == skip:
+                    continue
+                got = self.gaf(self.dirs["textures"], base)
+                if got:
+                    self._bank.append(got)
+        return self._bank
+
+    def logos(self):
+        if self._logos is None:
+            self._logos = self.gaf(self.dirs["textures"], self.dirs["logos"]) or False
+        return self._logos or None
+
+    def feature(self, name):
+        """(section, tdf path, where) from the first `features\\*.tdf` holding it, in enumeration order."""
+        if self._features is None:
+            self._features = {}
+            for path, where in self.vfs.enumerate(self.dirs["features"], "*.tdf", True):
+                try:
+                    text = self.vfs.read_from(path, where).decode("latin-1")
+                except Exception:
+                    continue
+                for sec, body in tascene.parse_tdf(text).items():
+                    if isinstance(body, dict) and body:
+                        self._features.setdefault(sec, (body, path, where))
+        return self._features.get(name.lower())
 
 
-CURSORS = {"arrow": "cursornormal", "move": "cursormove", "select": "cursorselect",
-           "findsite": "cursorfindsite", "green": "cursorgrn", "red": "cursorred"}
+class Gaf:
+    """A GAF's sequences in file order: name -> (frame count, [frame offsets]); the first of a name wins (0x4B8D40)."""
+
+    def __init__(self, blob):
+        sig, count, _ = struct.unpack_from("<III", blob, 0)
+        if sig != 0x00010100:
+            raise ValueError("not a GAF")
+        self.blob = blob
+        self.seqs = {}
+        for off in struct.unpack_from(f"<{count}I", blob, 12):
+            n = struct.unpack_from("<H", blob, off)[0]
+            name = blob[off + 8:off + 40].split(b"\0")[0].decode("latin-1").lower()
+            frames = [struct.unpack_from("<I", blob, off + 40 + 8 * i)[0] for i in range(n)]
+            self.seqs.setdefault(name, (n, frames))
+
+    def frame(self, seq, k=0):
+        """(GafFrame, hotspot x, hotspot y) of frame k of `seq`, or None."""
+        hit = self.seqs.get(seq.lower())
+        if not hit or not 0 <= k < len(hit[1]):
+            return None
+        off = hit[1][k]
+        hx, hy = struct.unpack_from("<hh", self.blob, off + 4)
+        return ta3do.gaf_frame(self.blob, off), hx, hy
 
 
-def cursor_sprites(assets, palette):
-    blob = assets.read("anims/cursors.gaf")
-    entries = ta3do.gaf_entries(blob)
-    out = {}
-    for key, seq in CURSORS.items():
-        off = entries.get(seq.upper())
-        if off is None:
-            continue
-        frame = ta3do.gaf_frame(blob, off)
-        hx, hy = tascene.gaf_hotspot(blob, off)
-        out[key] = (seq, indexed_rgba(frame.pixels, frame.width, frame.height, palette,
-                                      frame.transparent), (hx, hy))
-    return out
+# --------------------------------------------------------------------------- the ground
+
+def tile_atlas(tiles):
+    """tagpu_terr.c's R8 atlas of `tiles` (1024 bytes each): 34 x 34 guarded cells, 64 a row."""
+    cols, pitch, border, tp = tascene.ATLAS_COLS, tascene.CELL_PITCH, tascene.CELL_BORDER, tascene.TILE_PX
+    aw = tascene.ATLAS_W
+    h = max(1, (len(tiles) + cols - 1) // cols) * pitch
+    buf = bytearray(aw * h)
+    for i, t in enumerate(tiles):
+        ox, oy = (i % cols) * pitch + border, (i // cols) * pitch + border
+        for r in range(tp):
+            row = t[r * tp:(r + 1) * tp]
+            o = (oy + r) * aw + ox
+            buf[o - 1] = row[0]
+            buf[o:o + tp] = row
+            buf[o + tp] = row[tp - 1]
+        top, first = (oy - 1) * aw + ox - 1, oy * aw + ox - 1
+        buf[top:top + pitch] = buf[first:first + pitch]
+        bot, last = (oy + tp) * aw + ox - 1, (oy + tp - 1) * aw + ox - 1
+        buf[bot:bot + pitch] = buf[last:last + pitch]
+    return aw, h, bytes(buf)
+
+
+def resolve_ground(eng, desc, report):
+    """The description's tiles and features, every one checked; raises Miss naming the first failure."""
+    maps = {}
+    for i, src in enumerate(desc["sources"]):
+        hit = eng.vfs.open(src["map"])
+        if hit is None:
+            raise Miss(f"{src['map']}: no such file in the install")
+        try:
+            tnt = tascene.Tnt(hit[0], src["map"])
+        except ValueError as e:
+            raise Miss(f"{src['map']} ({hit[1]}): not a TNT the readers take: {e}")
+        if tnt.tiles != src["tiles"]:
+            raise Miss(f"{src['map']} ({hit[1]}): {tnt.tiles} tiles, the description says {src['tiles']}")
+        maps[i] = tnt
+        report.append({"element": "map", "path": src["map"], "from": hit[1], "tiles": tnt.tiles})
+    tiles = []
+    for k, (si, ti, want) in enumerate(desc["tileset"]):
+        tnt = maps.get(si)
+        if tnt is None or not 0 <= ti < tnt.tiles:
+            raise Miss(f"tileset row {k}: source {si} tile {ti} is not in the map")
+        o = tnt.p_tilegfx + ti * TILE_BYTES
+        t = tnt.blob[o:o + TILE_BYTES]
+        got = fnv1a32(t)
+        if got != want:
+            raise Miss(f"tileset row {k}: {desc['sources'][si]['map']} tile {ti} hashes {got}, "
+                       f"the description says {want}")
+        tiles.append(t)
+        report.append({"element": "tile", "row": k, "source": si, "tile": ti, "hash": got})
+    n = len(tiles)
+    if any(not (isinstance(v, int) and 0 <= v < n) for v in desc["tilemap"]):
+        raise Miss("the tile map names a tile the tile set does not have")
+    feats = []
+    for f in desc["features"]:
+        hit = eng.feature(f["name"])
+        if hit is None:
+            raise Miss(f"feature {f['name']}: no section in any {eng.dirs['features']}\\*.tdf")
+        body, tdf, where = hit
+        rec = {"name": f["name"].lower(), "cell": f["cell"], "body": body, "tdf": tdf, "from": where}
+        if (body.get("object") or "").strip():
+            raise Miss(f"feature {f['name']}: a 3D feature ({body['object']}), which the stage's ground does not take")
+        filename = (body.get("filename") or "").strip()
+        got = eng.gaf(eng.dirs["anims"], filename) if filename else None
+        if got is None:
+            raise Miss(f"feature {f['name']}: no {eng.dirs['anims']}\\{filename}.GAF")
+        gaf, gpath, gwhere = got
+        for slot, key in (("bodyseq", "seqname"), ("shadowseq", "seqnameshad")):
+            seq = (body.get(key) or "").strip()
+            fr = gaf.frame(seq) if seq else None
+            if seq and fr is None:
+                raise Miss(f"feature {f['name']}: {key} {seq} is not in {gpath}")
+            rec[slot] = (seq.upper(), fr) if fr else None
+        if rec["bodyseq"] is None:
+            raise Miss(f"feature {f['name']}: no seqname")
+        feats.append(rec)
+        report.append({"element": "feature", "name": rec["name"], "cell": f["cell"], "tdf": tdf, "from": where,
+                       "gaf": gpath, "gafFrom": gwhere})
+    return tiles, feats
+
+
+def write_ground(out, desc, tiles, feats):
+    """terrain/ and features/ in tascene's layout; returns the scene.json `map` and `features` blocks."""
+    mw, mh = desc["cells"]
+    (out / "terrain").mkdir(parents=True, exist_ok=True)
+    aw, ah, atlas = tile_atlas(tiles)
+    (out / "terrain/atlas.r8.bin").write_bytes(atlas)
+    (out / "terrain/tilemap.u16.bin").write_bytes(struct.pack(f"<{len(desc['tilemap'])}H", *desc["tilemap"]))
+    (out / "terrain/height.r8.bin").write_bytes(bytes(mw * mh))
+    mapblock = {"name": desc["entry"], "w16": mw, "h16": mh,
+                "tilemap": {"w": mw // 2, "h": mh // 2, "file": "terrain/tilemap.u16.bin"},
+                "atlas": {"w": aw, "h": ah, "cols": tascene.ATLAS_COLS, "tiles": len(tiles),
+                          "pitch": tascene.CELL_PITCH, "border": tascene.CELL_BORDER,
+                          "file": "terrain/atlas.r8.bin", "rgba": None},
+                "height": {"w": mw, "h": mh, "file": "terrain/height.r8.bin"}, "sealevel": 0}
+    frames, hot, table, index = {}, {}, {}, {}
+    for f in feats:
+        if f["name"] not in index:
+            index[f["name"]] = len(index)
+            body = f["body"]
+            ent = {"name": f["name"], "height": int(float(body.get("height", 0) or 0)),
+                   "footx": int(float(body.get("footprintx", 1) or 1)),
+                   "footz": int(float(body.get("footprintz", 1) or 1)),
+                   "animtrans": 1 if (body.get("animtrans", "0") or "0").strip() == "1" else 0,
+                   "shadtrans": 1 if (body.get("shadtrans", "0") or "0").strip() == "1" else 0}
+            ent["flat"] = 1 if ent["height"] < 10 else 0
+            for slot in ("bodyseq", "shadowseq"):
+                if f[slot]:
+                    seq, (frame, hx, hy) = f[slot]
+                    frames[seq] = frame
+                    hot[seq] = (hx, hy)
+                    ent[slot[:-3]] = seq
+            table[index[f["name"]]] = ent
+    place, ah = tascene.shelf_pack(frames)
+    aw, ah = (2048 if frames else 1), max(1, ah)
+    atlas = bytearray(aw * ah)
+    rects = {}
+    for key, (x, y) in place.items():
+        fr = frames[key]
+        for r in range(fr.height):
+            o = (y + r) * aw + x
+            atlas[o:o + fr.width] = fr.pixels[r * fr.width:(r + 1) * fr.width]
+        rects[key] = {"x": x, "y": y, "w": fr.width, "h": fr.height,
+                      "hx": hot[key][0], "hy": hot[key][1], "ck": fr.transparent}
+    (out / "features").mkdir(parents=True, exist_ok=True)
+    (out / "features/atlas.r8.bin").write_bytes(bytes(atlas))
+    inst = bytearray()
+    for f in feats:
+        inst += struct.pack("<3H", f["cell"][0], f["cell"][1], index[f["name"]])
+    (out / "features/instances.bin").write_bytes(bytes(inst))
+    defs = {str(i): {**{k: e[k] for k in ("name", "height", "flat", "footx", "footz", "animtrans", "shadtrans")},
+                     "body": rects.get(e.get("body")), "shadow": rects.get(e.get("shadow"))}
+            for i, e in table.items()}
+    return mapblock, {"count": len(feats), "map": len(feats), "instances": "features/instances.bin",
+                      "atlas": {"w": aw, "h": ah, "file": "features/atlas.r8.bin", "rgba": None}, "defs": defs}
+
+
+# --------------------------------------------------------------------------- the units
+
+def fbi_fields(text):
+    import re
+    return {m.group(1).lower(): m.group(2).strip()
+            for m in re.finditer(r"^\s*([A-Za-z0-9_]+)\s*=\s*([^;]*);", text, re.M)}
+
+
+def engine_faces(piece):
+    """A node's faces in the order the loader leaves them (A4): the selection face swapped to 0, the rest sorted by
+    their vertices' mean Y, truncated as `cdq; idiv` truncates. Returns (faces, skip0)."""
+    faces = list(piece.primitives)
+    sel = piece.sel_prim
+    skip0 = sel != -1 and len(faces) > 0
+    if skip0 and 0 <= sel < len(faces):
+        faces[0], faces[sel] = faces[sel], faces[0]
+
+    def key(prim):
+        # a face with no vertices divides by zero in the engine; no stock face has one (MEASURED, A4)
+        if not prim.indices:
+            return 0
+        s = sum(int(round(piece.vertices[i][1] * 65536)) for i in prim.indices if i < len(piece.vertices))
+        q = abs(s) // len(prim.indices)
+        return q if s >= 0 else -q
+    faces[1:] = sorted(faces[1:], key=key)
+    return faces, skip0
+
+
+def resolve_unit(eng, name, report):
+    """(label, root piece, hidden, uncached, facts, fbi path) for unit `name`, or raises Miss."""
+    hit = eng.open(eng.dirs["units"], name, "FBI")
+    if hit is None:
+        raise Miss(f"{name}: no {eng.dirs['units']}\\{name}.FBI")
+    fbi = fbi_fields(hit[0].decode("latin-1", "replace"))
+    obj = (fbi.get("objectname") or name).strip()
+    mhit = eng.open(eng.dirs["objects3d"], obj, "3DO")
+    if mhit is None:
+        raise Miss(f"{name}: no {eng.dirs['objects3d']}\\{obj}.3DO")
+    try:
+        root = ta3do.parse_3do(mhit[0])
+    except (struct.error, ValueError, IndexError, RecursionError) as e:
+        raise Miss(f"{name}: {mhit[1]} does not parse: {e}")
+    shit = eng.open(eng.dirs["scripts"], name, "COB")
+    hidden = {h.lower() for h in ta3do.hidden_at_create(shit[0])} if shit else set()
+    uncached = {h.lower() for h in ta3do.dontcached_at_create(shit[0])} if shit else set()
+
+    def flag(k):
+        return (fbi.get(k, "0") or "0").strip() not in ("", "0")
+    mobile = (fbi.get("bmcode", "1") or "1").strip() != "0"
+    slant = not mobile and not flag("digger")
+    facts = {"shadow": bool(not flag("noshadow") and (slant or (not flag("canhover") and not flag("floater")))),
+             "slant": slant, "mobile": mobile}
+    report.append({"element": "unit", "name": name, "fbi": hit[1], "fbiFrom": hit[2], "model": mhit[1],
+                   "modelFrom": mhit[2], "script": shit[1] if shit else None,
+                   "scriptFrom": shit[2] if shit else None, "hidden": sorted(hidden)})
+    return obj.lower(), root, hidden, uncached, facts
+
+
+def bind(eng, tex, owner, binds):
+    """The binder's rule for one face's texture name (0x42A140): (frame key, GafFrame) or None for flat 0xD1."""
+    k = (tex.lower(), owner)
+    if k in binds:
+        return binds[k]
+    got = None
+    for gaf, path, _w in eng.bank():
+        hit = gaf.seqs.get(tex.lower())
+        if hit:
+            fr = gaf.frame(tex, 0)
+            got = (f"{path}:{tex.upper()}:0", fr[0]) if fr else None
+            break
+    else:
+        logos = eng.logos()
+        hit = logos[0].seqs.get(tex.lower()) if logos else None
+        if hit:
+            team = hit[0] == TEAM_FRAMES
+            fi = owner if team else 0
+            fr = logos[0].frame(tex, fi)
+            got = (f"{logos[1]}:{tex.upper()}:{fi}", fr[0]) if fr else None
+    binds[k] = got
+    return got
+
+
+def unit_meshes(eng, models, owners):
+    """Every (type, owner)'s mesh in tascene's format, the slant casters and wire edges per type, and the atlas."""
+    binds, frames = {}, {}
+    plan = {}
+    for name, (label, root, hidden, uncached, facts) in models.items():
+        for owner in owners:
+            for piece, _d in root.walk():
+                for prim in piece.primitives:
+                    if prim.texture and len(prim.indices) >= 3:
+                        got = bind(eng, prim.texture, owner, binds)
+                        if got:
+                            frames.setdefault(got[0], got[1])
+    UNIT_PAD = tascene.UNIT_PAD
+    place, ah = tascene.shelf_pack(frames, pad=UNIT_PAD, align=UNIT_PAD)
+    aw, ah = (2048 if frames else 1), max(1, ah)
+    atlas = bytearray(aw * ah)
+    rects = {}
+    for key, (x, y) in place.items():
+        f = frames[key]
+        tascene.blit_frame(atlas, aw, 1, x, y, f.width, f.height,
+                           lambda r, f=f: f.pixels[r * f.width:(r + 1) * f.width], UNIT_PAD)
+        rects[key] = (x / aw, y / ah, (x + f.width) / aw, (y + f.height) / ah, f.transparent)
+    for name, (label, root, hidden, uncached, facts) in models.items():
+        out = {"owners": {}, "slant": [], "wire": [], "faces": 0, "flatMiss": 0}
+        for owner in owners:
+            verts = []
+            stats = {"faces": 0, "flatMiss": 0}
+
+            def emit(piece, ox, oy, oz):
+                px, py, pz = ox + piece.offset[0], oy + piece.offset[1], oz + piece.offset[2]
+                if piece.name.lower() not in hidden:
+                    faces, skip0 = engine_faces(piece)
+                    for i, prim in enumerate(faces):
+                        if (i == 0 and skip0) or len(prim.indices) < 3:
+                            continue
+                        if any(ix >= len(piece.vertices) for ix in prim.indices):
+                            continue
+                        pts = [(px + piece.vertices[ix][0], py + piece.vertices[ix][1], pz + piece.vertices[ix][2])
+                               for ix in prim.indices]
+                        if owner == owners[0]:
+                            # the structure shadow's casters (0x45A610): every face of a cached piece
+                            if piece.name.lower() not in uncached:
+                                for k in range(1, len(pts) - 1):
+                                    for c in (pts[0], pts[k], pts[k + 1]):
+                                        out["slant"].extend(c)
+                            # the nanoframe's wire (0x458FA0): every face as a closed outline
+                            for e in range(len(pts)):
+                                out["wire"].extend(pts[e]); out["wire"].extend(pts[(e + 1) % len(pts)])
+                        rect = None
+                        flat = (prim.color & 0xFF) / 255.0
+                        if prim.texture:
+                            got = bind(eng, prim.texture, owner, binds)
+                            if got:
+                                rect = rects[got[0]]
+                            else:
+                                flat = FLAT_MISS / 255.0
+                                stats["flatMiss"] += 1
+                        stats["faces"] += 1
+                        n = len(pts)
+                        for k in range(1, n - 1):        # fanned from vertex 0
+                            for slot in (0, k, k + 1):
+                                vx, vy, vz = pts[slot]
+                                if rect:
+                                    # the engine maps a whole GAF frame across the face's four corners; an n-gon
+                                    # collapses onto them, as tascene's parity lane does
+                                    c = slot if n <= 4 else slot * 4 // n
+                                    u = rect[2] if c in (1, 2) else rect[0]
+                                    v = rect[3] if c >= 2 else rect[1]
+                                    verts.extend((vx, vy, vz, u, v, 0.0, (rect[4] if rect[4] is not None else 0) / 255.0))
+                                else:
+                                    verts.extend((vx, vy, vz, -1.0, -1.0, flat, -1.0))
+                for child in piece.children:
+                    emit(child, px, py, pz)
+
+            emit(root, 0.0, 0.0, 0.0)
+            out["owners"][owner] = verts
+            out["faces"], out["flatMiss"] = stats["faces"], stats["flatMiss"]
+        plan[name] = out
+    frame_rects = {key: {"x": x, "y": y, "w": frames[key].width, "h": frames[key].height,
+                         "key": -1 if frames[key].transparent is None else frames[key].transparent}
+                   for key, (x, y) in place.items()}
+    return plan, (aw, ah, bytes(atlas), frame_rects)
+
+
+def entry_owners(entry):
+    """Every owner the entry's scenes give a unit, and 0, the player."""
+    owners = {0}
+    for sc in [entry.get("scene", {})] + [d.get("scene", {}) for d in entry.get("demos", [])]:
+        for u in sc.get("units", []) or []:
+            if isinstance(u.get("owner"), int):
+                owners.add(u["owner"])
+    return sorted(owners)
+
+
+def write_units(out, eng, entry, report):
+    models, refused = {}, {}
+    for name in entry["units"]:
+        try:
+            models[name] = resolve_unit(eng, name, report)
+        except Miss as e:
+            refused[name] = str(e)
+            report.append({"element": "unit", "name": name, "refused": str(e)})
+    owners = entry_owners(entry)
+    (out / "units").mkdir(parents=True, exist_ok=True)
+    if not models:
+        return {"meshes": {}, "refused": refused, "owners": owners}
+    plan, (aw, ah, atlas, frame_rects) = unit_meshes(eng, models, owners)
+    (out / "units/atlas.r8.bin").write_bytes(atlas)
+    meshes = {}
+    for name, p in plan.items():
+        label, root, hidden, uncached, facts = models[name]
+        key = name.lower()
+        rec = {"label": label, "files": {}, **facts, "faces": p["faces"], "flatMiss": p["flatMiss"]}
+        for owner, verts in p["owners"].items():
+            f = f"units/{key}.{owner}.bin"
+            (out / f).write_bytes(struct.pack(f"<{len(verts)}f", *verts))
+            rec["files"][str(owner)] = f
+            rec["verts"] = len(verts) // tascene.UNIT_VSTRIDE
+        (out / f"units/{key}.slant.bin").write_bytes(struct.pack(f"<{len(p['slant'])}f", *p["slant"]))
+        (out / f"units/{key}.wire.bin").write_bytes(struct.pack(f"<{len(p['wire'])}f", *p["wire"]))
+        rec["slantFile"], rec["slantVerts"] = f"units/{key}.slant.bin", len(p["slant"]) // 3
+        rec["wireFile"], rec["wireVerts"] = f"units/{key}.wire.bin", len(p["wire"]) // 3
+        meshes[name] = rec
+    return {"atlas": {"w": aw, "h": ah, "file": "units/atlas.r8.bin", "rgba": None, "pad": tascene.UNIT_PAD,
+                      "frames": frame_rects},
+            "stride": tascene.UNIT_VSTRIDE, "meshes": meshes, "refused": refused, "owners": owners}
 
 
 # --------------------------------------------------------------------------- main
 
-def entry_units():
-    names = []
-    for path in sorted(ENTRIES.glob("*.json")):
-        for name in json.loads(path.read_text()).get("units", {}):
-            if name not in names:
-                names.append(name)
-    return names
-
-
-def save(rel, rgba):
-    path = OUT / rel
-    path.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(rgba, "RGBA").save(path, optimize=True)
-    return {"file": rel, "w": int(rgba.shape[1]), "h": int(rgba.shape[0])}
+def build_entry(eng, entry, desc, out, palette_block):
+    report = []
+    ground = {"ok": False, "miss": None}
+    mapblock = features = None
+    try:
+        if desc is None:
+            raise Miss(f"no stage description for {entry['id']}")
+        if list(desc["cells"]) != [entry["scene"]["map"]["w"], entry["scene"]["map"]["h"]]:
+            raise Miss(f"the description's cells {desc['cells']} are not the scene's map")
+        tiles, feats = resolve_ground(eng, desc, report)
+        mapblock, features = write_ground(out, desc, tiles, feats)
+        ground["ok"] = True
+    except Miss as e:
+        ground["miss"] = str(e)
+        report.append({"element": "ground", "refused": str(e)})
+    units = write_units(out, eng, entry, report)
+    cells = [entry["scene"]["map"]["w"], entry["scene"]["map"]["h"]]
+    scene = {"format": "ta-scene/1", "wiki": FORMAT, "entry": entry["id"], "cells": cells,
+             "ground": ground, "map": mapblock, "features": features, "units": units,
+             "palette": palette_block, "shaders": "../shaders/",
+             "depth": {"terrain": 0.10, "scale": 512.0, "flat0": 0.40, "flatSpan": 0.10, "tall0": 3.0,
+                       "rowStep": 4.0, "unit0": 1.0, "shadowTall": 0.30, "shadowFlat": 0.03},
+             "report": report}
+    (out / "scene.json").write_text(json.dumps(scene, indent=1) + "\n")
+    return scene
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(prog="gfx.py", description=__doc__.split("\n")[0])
     ap.add_argument("--gamedir", help="the Total Annihilation install (default: TA3DO_GAMEDIR, "
                                       "else Steam's default library)")
-    ap.add_argument("--ppu", type=int, default=3, help="pixels a world unit (default 3)")
-    ap.add_argument("--ss", type=int, default=3, help="supersampling of the 3DO raster (default 3)")
+    ap.add_argument("--exe", help="the executable the archive patterns and directory names are read from "
+                                  "(default: the install's TotalA.exe)")
+    ap.add_argument("--stage", help="read the stage descriptions from this folder instead of art/wiki/stage/")
+    ap.add_argument("--out", help=f"write here instead of {OUT.relative_to(REPO)}/")
+    ap.add_argument("--resolve-json", dest="resolve_json",
+                    help="also write the resolution report, element by element, to this file")
     args = ap.parse_args(argv)
 
-    root = find_install(args.gamedir)
-    assets = open_assets(root)
-    palette = ta3do.load_palette(assets)
-    shd = assets.read("palettes/palette.shd")
-    neutral, direction = tascene.shd_neutral(shd, palette)
-    shd_k = shade_k(shd, palette, neutral)
-    bank = ta3do.TextureBank(assets)
-    defs = tascene.FeatureDefs(assets)
-    gafs = tascene.GafBank(assets)
-    ppu = args.ppu
-    OUT.mkdir(parents=True, exist_ok=True)
-    index = {"format": 1, "ppu": ppu,
-             "note": "derived from the local install by tools/wiki/gfx.py; gitignored, never committed",
-             "units": {}, "cursors": {}}
+    root = tavfs.find_install(args.gamedir)
+    try:
+        eng = Engine(root, args.exe)
+    except tavfs.VfsError as e:
+        print(f"gfx.py: {e}", file=sys.stderr)
+        return 2
+    out_root = Path(args.out) if args.out else OUT
+    stage_dir = Path(args.stage) if args.stage else STAGE
+    out_root.mkdir(parents=True, exist_ok=True)
 
-    for name in entry_units():
-        label, faces = model_faces(assets, bank, name)
-        img, (ax, ay) = render_model(faces, palette, shd_k, neutral, direction, ppu, args.ss)
-        if img is None:
-            print(f"gfx.py: {name}: no faces", file=sys.stderr)
-            continue
-        rec = save(f"units/{name.lower()}.png", img)
-        rec.update(anchor=[round(ax, 2), round(ay, 2)], model=label, faces=len(faces))
-        index["units"][name] = rec
-        print(f"  {name:9} {rec['w']}x{rec['h']}  anchor {rec['anchor']}  {len(faces)} faces")
+    pal = eng.open(eng.dirs["palettes"], eng.dirs["palette"], "PAL")
+    shd = eng.open(eng.dirs["palettes"], eng.dirs["palette"], "SHD")
+    if pal is None or len(pal[0]) < 1024:
+        print("gfx.py: no palette in the install", file=sys.stderr)
+        return 2
+    palette = [(pal[0][i * 4], pal[0][i * 4 + 1], pal[0][i * 4 + 2]) for i in range(256)]
+    (out_root / "palette").mkdir(exist_ok=True)
+    (out_root / "palette/pal.bin").write_bytes(bytes(b for c in palette for b in (*c, 255)))
+    shdb = shd[0] if shd else b""
+    if shdb:
+        (out_root / "palette/shd.bin").write_bytes(shdb)
+    neutral = tascene.shd_neutral(shdb, palette) if shdb else [15, 1]
+    palette_block = {"file": "../palette/pal.bin", "shd": "../palette/shd.bin" if shdb else None,
+                     "shdRows": len(shdb) // 256, "neutral": neutral}
+    (out_root / "shaders").mkdir(exist_ok=True)
+    for name, src in tascene.extract_shaders(tascene.SHADER_SET).items():
+        (out_root / "shaders" / name).write_text(src)
 
-    for key, pick in (("ground", lambda ns: any(n.startswith("lushmetal") for n in ns)
-                       and any(n.startswith("lushvent") for n in ns)),
-                      ("metalground", lambda ns: any(n.startswith("metalvent") for n in ns))):
-        got = flat_tile(assets, palette, pick)
-        if not got:
-            print(f"gfx.py: no tileable flat tile for {key}", file=sys.stderr)
-            continue
-        path, tile, px = got
-        rec = save(f"{key}.png", upscale(indexed_rgba(px, 32, 32, palette), ppu))
-        rec.update(world=32, map=Path(path).stem, tile=tile)
-        index[key] = rec
-        print(f"  {key:11} {Path(path).stem}, tile {tile}")
-
-    for key, feat in (("metal", "lushmetal3"), ("vent", "lushvent01")):
-        body = defs.get(feat) or {}
-        got = gaf_sprite(gafs, body.get("seqname", ""), palette)
-        if not got:
-            print(f"gfx.py: no sprite for {feat}", file=sys.stderr)
-            continue
-        img, (hx, hy) = got
-        rec = save(f"{key}.png", upscale(img, ppu))
-        rec.update(anchor=[hx * ppu, hy * ppu], feature=feat,
-                   footprint=[int(body.get("footprintx", 1)), int(body.get("footprintz", 1))])
-        if body.get("metal"):
-            rec["metal"] = int(body["metal"])
-        index[key] = rec
-        print(f"  {key:11} {feat} ({body.get('filename')}.gaf {body.get('seqname')})")
-
-    for key, (seq, img, (hx, hy)) in cursor_sprites(assets, palette).items():
-        rec = save(f"cursors/{seq}.png", img)
-        rec.update(hot=[hx, hy], gaf=seq)
-        index["cursors"][key] = rec
-    print(f"  cursors     {', '.join(index['cursors'])}")
-
-    (OUT / "index.json").write_text(json.dumps(index, indent=1) + "\n")
-    print(f"gfx.py: wrote {OUT.relative_to(REPO)}/ ({len(index['units'])} units)")
+    index = {"format": FORMAT, "note": "derived from the local install by tools/wiki/gfx.py; gitignored, "
+             "never committed", "install": {"archives": [a for a, _ in eng.vfs.archives],
+                                            "dirs": eng.dirs, "palette": pal[2]},
+             "entries": {}}
+    full = {}
+    for f in sorted(ENTRIES.glob("*.json")):
+        entry = json.loads(f.read_text())
+        dpath = stage_dir / f"{entry['id']}.json"
+        desc = json.loads(dpath.read_text()) if dpath.exists() else None
+        out = out_root / entry["id"]
+        out.mkdir(exist_ok=True)
+        scene = build_entry(eng, entry, desc, out, palette_block)
+        index["entries"][entry["id"]] = {"scene": f"{entry['id']}/scene.json", "ground": scene["ground"]["ok"],
+                                         "units": sorted(scene["units"]["meshes"]),
+                                         "refused": scene["units"]["refused"]}
+        full[entry["id"]] = scene["report"]
+        g = "ground ok" if scene["ground"]["ok"] else f"ground FALLS BACK: {scene['ground']['miss']}"
+        print(f"  {entry['id']}: {g}; units {', '.join(sorted(scene['units']['meshes'])) or 'none'}"
+              + (f"; refused {', '.join(scene['units']['refused'])}" if scene["units"]["refused"] else ""))
+    (out_root / "index.json").write_text(json.dumps(index, indent=1) + "\n")
+    if args.resolve_json:
+        Path(args.resolve_json).write_text(json.dumps({"install": index["install"], "entries": full}, indent=1) + "\n")
+    print(f"gfx.py: wrote {out_root}/ ({len(index['entries'])} entries)")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
