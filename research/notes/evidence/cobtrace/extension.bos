@@ -4,12 +4,13 @@
 //
 // Create and seven sleepers hold records 0..7, so prober runs in record 8 and every getter it
 // calls runs in record 9: the two records Impure's raised build adds over the engine's eight.
-// Each getter's value leaves on its script's R line, where the replay group's check
-// (cob_ext_fixture.py check) and tacob's fixture (replay.json, "facts") both read it.
+// Each getter keeps its value in a static (r0..r9, in call order, then done = 1), which the replay
+// group's check reads out of the unit's COB object (cob_ext_fixture.py check), and returns it, so
+// it is on the script's R line too, which tacob's fixture compares (replay.json, "facts").
 
 piece base, dish1, dish2, dish3, dish4;
 
-static-var me;
+static-var me, done, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9;
 
 sleeper()
 {
@@ -19,16 +20,65 @@ sleeper()
 	}
 }
 
-min_id() { return (get 69); }
-max_id() { return (get 70); }
-my_id() { return (get 71); }
-my_owner() { return (get 72(me, 0, 0, 0)); }
-my_build_left() { return (get 73(me, 0, 0, 0)); }
-nobodys_build_left() { return (get 73(0, 0, 0, 0)); }
-allied_with_me() { return (get 74(me, 0, 0, 0)); }
-allied_past_the_array() { return (get 74(65537, 0, 0, 0)); }
-mine_is_local() { return (get 75(me, 0, 0, 0)); }
-my_kills() { return (get 32); }
+min_id()
+{
+	r0 = get 69;
+	return (r0);
+}
+
+max_id()
+{
+	r1 = get 70;
+	return (r1);
+}
+
+my_id()
+{
+	r2 = get 71;
+	return (r2);
+}
+
+my_owner()
+{
+	r3 = get 72(me, 0, 0, 0);
+	return (r3);
+}
+
+my_build_left()
+{
+	r4 = get 73(me, 0, 0, 0);
+	return (r4);
+}
+
+nobodys_build_left()
+{
+	r5 = get 73(0, 0, 0, 0);
+	return (r5);
+}
+
+allied_with_me()
+{
+	r6 = get 74(me, 0, 0, 0);
+	return (r6);
+}
+
+allied_past_the_array()
+{
+	r7 = get 74(65537, 0, 0, 0);
+	return (r7);
+}
+
+mine_is_local()
+{
+	r8 = get 75(me, 0, 0, 0);
+	return (r8);
+}
+
+my_kills()
+{
+	r9 = get 32;
+	return (r9);
+}
 
 prober()
 {
@@ -43,6 +93,7 @@ prober()
 	call-script allied_past_the_array();
 	call-script mine_is_local();
 	call-script my_kills();
+	done = 1;
 	while( 1 )
 	{
 		sleep 1000;

@@ -3633,10 +3633,16 @@ def cmd_fit(args):
     for cls in (CLASSES if args.all else args.classes):
         _header, lines = read_cobtrace(FIXTURES / cls / "cobtrace.log")
         timeline, gaps = fit_health(lines)
-        entry = {"note": "get timelines the cobtrace log cannot carry; HEALTH is derived "
-                         "from SmokeUnit's rand spacing (tacob fit-world)"}
+        # only the `get` timelines are fit-world's; a class's rules, facts and source stay
+        entry = data.get(cls, {})
+        entry.pop("get", None)
         if timeline:
+            entry["note"] = ("get timelines the cobtrace log cannot carry; HEALTH is derived "
+                             "from SmokeUnit's rand spacing (tacob fit-world)")
             entry["get"] = {str(VALUE_IDS["HEALTH"]): [list(x) for x in timeline]}
+        else:
+            entry.pop("note", None)
+        if entry:
             data[cls] = entry
         else:
             data.pop(cls, None)
