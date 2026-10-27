@@ -15,6 +15,9 @@ page's controls and the demos playing on the stage.
                                                       and a reclaim in the game
     wiki_regression.py <name> mp                      a two-player network game on Wine, started by
                                                       tools/compat/tacompat.py's launcher
+    wiki_regression.py all|<setup>[,<setup>...] mods --shots DIR
+                                                      the 3D stage under each setup of the
+                                                      compatibility suite, one at a time
 
 `sp` and `recorded` play scenarios/place-basic.json at --res (default 1920x1080) with the launch's
 hold (tagpu_hold.on), held at GameTime 120 and then let run, under the run lock (tools/runlock.py).
@@ -122,6 +125,22 @@ units, on the same launch as sp (the plan's landing 6h):
        the scenario's ARMSOLAR, the solar's build fraction remaining (+0x104) and HP (+0x108) read
        until it is gone, and the presented frame grabbed mid-reclaim -- the engine's own staging
        of a reclaimed unit, which the stage's records follow.
+mods, per setup of tools/compat/setups.json (`all`: retail, Escalation, Total Mayhem, ProTA, TA Zero,
+Twilight), under the run lock (the plan's landing 6i):
+  (w1) the setup's folder built by tacompat's prepare_wine with this tree's DLL, started on a private
+       Xvfb and walked into a skirmish on the suite's map (tacompat.wine_skirmish);
+  (w2) the wiki opened: the 3D asset load's line, and its report tagpu_wiki3d.json copied to
+       DIR/<setup>/ -- which archive each ground source, feature, unit file and texture came from;
+  (w3) Quick Build demo 3 at tick 180 and Build Lines demo 2 at tick 100 captured through
+       tagpu_wiki.shot (DIR/<setup>/<entry>-d<demo>-t<tick>.game.png) with the whole display grabbed
+       beside each (.screen.png); each stage's ground line, its types line (in 3D, and the boxes) and
+       a whole periodic line of its frames;
+  (w4) Esc closes the window;
+  (w5) each stage drew what the report resolved: a ground that resolved in 3D on every frame of the
+       line, one that did not as the whitebox on every frame.
+  At every step the display is polled: any top-level window that is not the game's own, an
+  ErrorLog.txt, or the game gone fails the setup. The table of every setup is printed at the end and
+  kept in DIR/rows.json.
 mp:
   (m) the wiki opened on the host takes no pause: both peers' GameTime advances over 3 s, and so
       does the host's demo, whose cost to the game thread is logged; a right and a left click on
@@ -826,7 +845,7 @@ def drawn_window(c, what, want_all):
 def shoot(c, shots, res, entry, demo, tick, ss, name=None, window=True):
     """One capture of the wiki's target through tagpu_wiki.shot, copied into `shots` (as
     `<entry>-d<demo>-t<tick>-ss<ss>.game.ppm` unless `name`), with the presented frame grabbed beside
-    it; the capture's `armed` line."""
+    it; the capture's `armed` line. `ss` None takes the capture at the Supersampling setting's ss."""
     ppm = c.gamedir / "tagpu_wiki3d_shot.ppm"
     start = c.mark()
     ppm.unlink(missing_ok=True)
@@ -836,7 +855,8 @@ def shoot(c, shots, res, entry, demo, tick, ss, name=None, window=True):
     n = re.search(r"wiki: shot (\d+) asked", asked).group(1)
     armed = wait_line(c, start, rf"wiki3d: shot {n}: ", f"shot {n} was never armed")
     m = re.search(r"the (\d+)x(\d+) target at ss (\d+)", armed)
-    assert m and int(m.group(3)) == ss, armed
+    assert m and (ss is None or int(m.group(3)) == ss), armed
+    ss = int(m.group(3))
     wait_line(c, start, r"shot: wrote tagpu_wiki3d_shot\.ppm", f"shot {n} was never written")
     out = shots / (name or f"{entry}-d{demo}-t{tick}-ss{ss}.game.ppm")
     shutil.copyfile(ppm, out)
@@ -1219,10 +1239,176 @@ def mp(name):
             tacompat.stop_wine(g)
 
 
+# the setups the wiki's 3D stage is measured under, as tools/compat/setups.json names them
+MODS_SETUPS = ("retail", "escalation", "mayhem-11.3.0", "prota-4.8", "tazero-alpha5", "twilight-2.0b98")
+# (entry, demo, tick) captured under each: a construction among Quick Build's units, and the
+# gesture's ghosts on Build Lines' stage (the first frames of UNITS_SHOTS for each entry)
+MODS_SHOTS = (("quickbuild", 3, 180), ("buildshapes", 2, 100))
+
+
+def mods_setup(tacompat, setup, dll, out):
+    """(w1)..(w5) on one setup: its folder as a player has it, started on a private Xvfb and walked
+    into a skirmish, the wiki opened on both entries. The row, passed or with why it failed."""
+    from PIL import Image
+    row = {"setup": setup["name"], "boxes": [], "pass": False}
+    out.mkdir(parents=True, exist_ok=True)
+    xv = tacompat.start_xvfb()
+    try:
+        inst = tacompat.prepare_wine(setup, dll, xv.tacompat_display, suffix="-wk")
+    finally:
+        tacompat.stop_xvfb(xv)
+    g = tacompat.start_wine(inst, None)
+    display, gamedir, t0, seen = g["display"], inst["gamedir"], time.time(), set()
+
+    def poll(step):
+        """The display polled: any top-level window that is not the game's own, the crash report,
+        the process."""
+        tacompat.new_boxes(display, seen, row["boxes"], t0)
+        assert not row["boxes"], f"({step}) a box on the display: {row['boxes']}"
+        assert not (gamedir / "ErrorLog.txt").exists(), f"({step}) ErrorLog.txt was written"
+        assert g["proc"].poll() is None, f"({step}) the game exited"
+
+    def screen_grab(name):
+        """The whole private display, so a box beside the game would be in the picture too."""
+        r = subprocess.run(["import", "-display", f":{display}", "-window", "root", str(out / name)],
+                           capture_output=True, text=True, timeout=60)
+        assert r.returncode == 0, f"import: {r.stderr.strip()}"
+
+    try:
+        end = time.monotonic() + tacompat.POLL_S
+        while "MAINMENU" not in (tacompat.tacli("ui", inst["name"], timeout=15).stdout.splitlines() or [""])[0]:
+            poll("w1")
+            assert time.monotonic() < end, "(w1) the main menu never came up"
+            time.sleep(2)
+        why = tacompat.wine_skirmish(inst["name"], g["proc"])
+        assert why is None, f"(w1) {why}"
+        poll("w1")
+        print(f"wiki mods: {setup['name']}: (w1) a skirmish on {tacompat.BATTLE_MAP}")
+
+        c = Wiki.__new__(Wiki)
+        c.attach(inst["name"])
+        start = c.mark()
+        d = c.open_wiki(expect_pause=True)
+        row["screen"] = "%dx%d" % tuple(d["game"])
+        row["load"] = wait_line(c, start, r"wiki3d: loaded in", "(w2) the 3D asset load", 180).split("wiki3d: ", 1)[1]
+        rep, ask = gamedir / "tagpu_wiki3d.json", gamedir / "tagpu_wiki3d.dump"
+        rep.unlink(missing_ok=True)
+        ask.write_text("")
+        end = time.monotonic() + 60
+        while True:
+            try:
+                report = json.loads(rep.read_text())
+                break
+            except (OSError, ValueError):
+                assert time.monotonic() < end, "(w2) no whole tagpu_wiki3d.json within 60 s"
+                time.sleep(0.5)
+        (out / "tagpu_wiki3d.json").write_text(json.dumps(report, indent=1))
+        row["report"] = report
+        poll("w2")
+        print(f"wiki mods: {setup['name']}: (w2) {row['load']}; {len(report['mounts'])} mounts")
+
+        row["stages"], row["types"], row["drawn"] = {}, {}, {}
+        for entry, demo, tick in MODS_SHOTS:
+            ppm, armed = shoot(c, out, None, entry, demo, tick, None, name=f"{entry}-d{demo}-t{tick}.game.ppm",
+                               window=False)
+            Image.open(ppm).save(ppm.with_suffix(".png"))
+            ppm.unlink()
+            ln = wait_line(c, start, rf"wiki3d: stage {entry}: the ground", f"(w3) no ground line for {entry}")
+            row["stages"][entry] = ln.split(f"stage {entry}: ", 1)[1]
+            ln = wait_line(c, start, rf"wiki3d: {entry}: the types in 3D:", f"(w3) no types line for {entry}")
+            row["types"][entry] = ln.split(f"{entry}: ", 1)[1]
+            # a whole periodic line over frames of this stage alone: the second one from here
+            mark = c.mark()
+            wait_line(c, mark, DRAWN, f"(w3) {entry}: no frame line", 180)
+            mark = c.mark()
+            m = re.search(DRAWN, wait_line(c, mark, DRAWN, f"(w3) {entry}: no frame line", 180))
+            row["drawn"][entry] = (int(m.group(1)), int(m.group(2)))
+            screen_grab(f"{entry}-d{demo}-t{tick}.screen.png")
+            poll("w3")
+            print(f"wiki mods: {setup['name']}: (w3) {entry} demo {demo} tick {tick}: "
+                  f"{armed.split('wiki3d: ', 1)[1]}; {row['stages'][entry]}; {row['types'][entry]}; "
+                  f"{m.group(1)} of {m.group(2)} frames drew the image")
+        c.keys("esc")
+        wait_dump(c, lambda d: not d["open"], "(w4) Esc did not close the window")
+        time.sleep(2)
+        poll("w4")
+        # (w5) the claim: a ground the report resolved is drawn in 3D on every frame, one it did not
+        # is the whitebox on every frame
+        for st in report["stages"]:
+            e = st["entry"]
+            if e not in row["stages"]:
+                continue
+            in3d = row["stages"][e].startswith("the ground in 3D")
+            assert in3d == bool(st["ok"]), f"(w5) {e}: the report says ok={st['ok']}, the stage `{row['stages'][e]}`"
+            drew, of = row["drawn"][e]
+            assert (drew == of) if st["ok"] else (drew == 0), f"(w5) {e}: {drew} of {of} frames drew the image"
+        row["pass"] = True
+        print(f"wiki mods: {setup['name']}: (w4, w5) each stage drew what the report resolved; no box, "
+              "no crash report, the game alive")
+    except CHECK_FAILURES as e:
+        row["why"] = str(e)
+        print(f"wiki mods: {setup['name']}: FAILED: {e}", file=sys.stderr)
+        try:
+            screen_grab("failure.screen.png")
+        except Exception:
+            pass
+    finally:
+        logs = sorted((gamedir / "log").glob("tagpu*.log"), key=lambda f: f.stat().st_mtime) \
+            if (gamedir / "log").is_dir() else []
+        if logs:
+            shutil.copyfile(logs[-1], out / "tagpu.log")
+        tacompat.stop_wine(g)
+    return row
+
+
+def mods_table(rows):
+    """Per setup: the archive each ground source, feature and unit came from, and what fell back."""
+    def arc(p):
+        return p.replace("\\", "/").rsplit("/", 1)[-1] if p else "-"
+    for r in rows:
+        rep = r.get("report") or {}
+        print(f"== {r['setup']}: {'PASS' if r['pass'] else 'FAIL - ' + r.get('why', '')}")
+        print(f"   {r.get('load')}; the screen {r.get('screen')}; boxes: {r['boxes'] or 'none'}; "
+              f"the first mounts {[arc(m['archive']) for m in rep.get('mounts', [])][:4]}")
+        for st in rep.get("stages", []):
+            srcs = "; ".join(f"{s['map']} <- {arc(s['from'])}" + ("" if s["ok"] else f" ({s['why']})")
+                             for s in st.get("sources", []))
+            feats = sorted({f"{f['name']} <- {arc(f.get('from'))}/{arc(f.get('gaf_from'))}" + ("" if f["ok"] else " MISS")
+                            for f in st.get("features", [])})
+            print(f"   stage {st['entry']}: ok={st['ok']} {st.get('why') or ''} | {srcs} | {', '.join(feats)}")
+            print(f"     drawn: {r.get('stages', {}).get(st['entry'])}; {r.get('drawn', {}).get(st['entry'])} frames")
+            print(f"     {r.get('types', {}).get(st['entry'])}")
+        for u in rep.get("units", []):
+            md = u.get("model") or {}
+            tex = sorted({arc(t.get("from")) for t in md.get("textures", []) if t.get("from")})
+            print(f"   unit {u['name']}: ok={u['ok']} fbi <- {arc(u.get('from'))}, 3do <- {arc(md.get('from'))}, "
+                  f"cob <- {arc(u.get('script_from'))}, textures <- {', '.join(tex) or '-'}"
+                  + ("" if u["ok"] else f" - {u.get('why')}"))
+
+
+def mods(names, shots):
+    """(w1)..(w5) per setup, one at a time under the run lock."""
+    assert shots, "mods needs --shots DIR"
+    sys.path.insert(0, str(TREE / "tools/compat"))
+    import tacompat
+    runlock.hold(TREE, f"wiki_regression mods ({','.join(names)})")
+    byname = {s["name"]: s for s in tacompat.load_json("setups.json")["setups"]}
+    unknown = [n for n in names if n not in byname]
+    assert not unknown, f"no such setup in tools/compat/setups.json: {unknown}"
+    dll = tacompat.snapshot_dll(TREE / "tagpu/ddraw/ddraw.dll")
+    rows = []
+    for n in names:
+        rows.append(mods_setup(tacompat, byname[n], dll, shots / n))
+        (shots / "rows.json").write_text(json.dumps(rows, indent=1, default=str))
+    mods_table(rows)
+    bad = [r["setup"] for r in rows if not r["pass"]]
+    assert not bad, f"failed on {bad}"
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("instance")
-    p.add_argument("mode", choices=("sp", "page", "demos", "recorded", "asset", "stage3d", "units", "mp"))
+    p.add_argument("mode", choices=("sp", "page", "demos", "recorded", "asset", "stage3d", "units", "mp", "mods"))
     p.add_argument("--launch", action="store_true",
                    help="sp/recorded: launch on place-basic.json first, under the run lock")
     p.add_argument("--res", default="1920x1080", help="sp/recorded: the game's resolution")
@@ -1236,6 +1422,8 @@ def main():
     try:
         if a.mode == "mp":
             mp(a.instance)
+        elif a.mode == "mods":
+            mods(MODS_SETUPS if a.instance == "all" else a.instance.split(","), a.shots)
         else:
             if a.launch:
                 stop = launched(a.instance, a.mode, a.res)

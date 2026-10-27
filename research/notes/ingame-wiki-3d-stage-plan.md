@@ -82,8 +82,11 @@ closes, and then deleted.
   `TAZ%s.GP3` / `tazero.ini`; Twilight is told by its main menu's label
   (`tagpu_replays.c`, `s_mods` and `mainmenu_visit`, from the source; the strings were read from
   the compatibility fixtures). That classifier is what sets `tagpu_profiles_mod()`.
-- **No note records a mod moving `units\`, `objects3d\`, `scripts\` or `textures\`** [INFERRED];
-  QUESTIONS batch D lists the engine's directory strings and compares them across the fixtures.
+- **Two mods rename asset folders, in the executable's `.data`** (MEASURED 2026-10-27, landing 6i:
+  the names each running game's asset report gives, read where `tagpu_replays_asset_names` reads
+  them): Escalation's units folder is `unitsE`; TA Zero's are `ZUnits`, `Textures` and `logoz`
+  (`logoz.GAF`). Mayhem, ProTA and Twilight keep the stock names, and no setup renames
+  `objects3d`, `scripts`, `anims` or `features`.
 - **A mod can lack what the stock game has**: Mayhem's `mayhem.gp3` carries 105 maps that are only
   `.ota`, 9 of them with a terrain nowhere ([compat setups](compat/setups.html)); TA Zero plays its
   own sides.
@@ -1024,16 +1027,37 @@ over the unit pixels to under 0.4.
 
 ### Landing 6i — the 3D stage under the mods
 
-**What changes**: what each supported setup shows, measured and written down; code only if a run
-finds a bug.
+**What changed**: no DLL code; no run found a bug. The measurement is a mode of the wiki's game
+test, `tools/wiki_regression.py all|<setup>,... mods --shots DIR`, on the compatibility suite's own
+launcher: `tools/compat/tacompat.py` builds each setup's folder (`prepare_wine`), starts it on a
+private Xvfb (`start_wine`) and walks the menus into a skirmish (`wine_skirmish`, factored out of
+`wine_battle`, which now calls it).
 
-**Verification**: one scripted run per setup through the compatibility suite's launcher
-(`tools/compat/tacompat.py`'s setups), about 6 minutes each, one at a time under the run lock:
-retail, Escalation, Total Mayhem, ProTA, TA Zero and Twilight. Each run: a skirmish, the wiki opened
-on both entries, `tagpu_wiki3d.json`, two captures, the display polled for error boxes. The note
-gets the table: per setup, which archive each unit and the ground came from and what fell back.
+**What it measured** (2026-10-27, the reference setup, Wine, the RTX presenting to a private Xvfb
+at 1280 × 1024, ss 2; one setup at a time under the run lock, 68 s for retail and 364 s for the
+other five): on all six setups -- retail, Escalation, Total Mayhem, ProTA, TA Zero, Twilight -- the
+wiki opened, both stages' ground resolved and was drawn in 3D on 300 of 300 frames, no window but
+the game's own came up, no `ErrorLog.txt` was written and the game ran to the end. The units:
+- **Escalation, Mayhem, ProTA**: the mod's own FBIs, scripts and models, from its first-mounted
+  archive, Create()'s hides from its own scripts; where a mod ships an FBI but no model (Mayhem's
+  ARMLLT and ARMSOLAR), the stock model from `totala1.hpi`, as the engine reads it.
+- **Twilight**: its own `rev31.gp3` for the FBIs, scripts and textures, the stock models; the
+  captures equal retail's pixel for pixel.
+- **TA Zero**: its units folder is `ZUnits`, which holds none of the nine stock types, so every
+  unit is the whitebox's box over the 3D ground: the design's answer for a type the running game
+  does not have, not a fault.
 
-**Gate**: none unless code changes. **Review**: none for docs.
+The table and the rest of the numbers are in [the wiki's note](ingame-wiki.html), *The 3D stage
+under the mods*; the asset reports and captures are not kept (they are the game's art).
+
+**Not measured**: Windows, a network game under a mod, another resolution. The colour of Mayhem's
+deposit highlights differs from retail's in the same frame of the same file; the stage takes the
+engine's live palette table, so it is drawn as Mayhem's running game holds it [INFERRED: the table
+was not read].
+
+**Gate**: no simulation or DLL file changed; the change to `tacompat.py` was run by its own
+`selftest` and `tacompat.py wine retail --mp 0 --battle 10` (meets the goal). **Review**: none
+(test tooling and docs).
 
 ## What runs in parallel
 
@@ -1134,8 +1158,7 @@ above can run, and no fix depends on timing.
   - the model and script paths;
   - the texture binding rule and the texture bank's order;
   - the TNT header the loader reads;
-  - a 3D feature's logo colour;
-  - whether any mod moves an asset directory.
+  - a 3D feature's logo colour.
 
   6e implements the answers; none changes the design.
 - **Whether the in-memory 3DO and GAF are the files rebased in place** (A4, A6). If the loader
