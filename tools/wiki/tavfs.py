@@ -34,7 +34,12 @@ exe-reverse-engineering.md, *Where the engine looks for archives*):
 - **A feature section** comes from the first TDF of `0x4BCB50("features", "*.tdf", -1, 1)` that holds it
   (LoadFeature 0x4224B0, cited).
 
-The readers are the repository's: tools/ta3do's HPI reader and tools/tascene's TDF and TNT readers.
+- **A file exists** for the engine when its size is above zero: the open test 0x4BBC40 returns the size (the archive
+  entry's, or filelength for a loose file) and every probe tests that value, so a 0-byte file is a missing one.
+  ProTA ships 32 0-byte .GUI pages as page stops (MEASURED, the Q1 scout answer).
+
+The readers are the repository's: tools/ta3do's HPI reader and tools/tascene's TDF and TNT readers, and `tdf_sections`
+below for the files the engine reads by position.
 """
 
 import fnmatch
@@ -109,12 +114,136 @@ def exe_cstr(blob: bytes, va: int, limit: int = 64) -> str:
     raise VfsError(f"0x{va:X} is in no section of the executable")
 
 
-def mount_patterns(exe: bytes):
-    """InitTAHPIAry's four patterns, the first as this executable spells it."""
-    first = exe_cstr(exe, VA_STR_ARCHIVE)
-    if "%s" in first:
-        first = first.replace("%s", exe_cstr(exe, VA_STR_ARCHIVE_ARG), 1)
+def mount_patterns(exe: bytes, first: str = None):
+    """InitTAHPIAry's four patterns, the first as this executable spells it unless `first` names it: a mod's loader
+    can rewrite that string in memory before the engine reads it, which the executable's file does not show."""
+    if first is None:
+        first = exe_cstr(exe, VA_STR_ARCHIVE)
+        if "%s" in first:
+            first = first.replace("%s", exe_cstr(exe, VA_STR_ARCHIVE_ARG), 1)
     return [first, "*.CCX", "*.UFO", "*.HPI"]
+
+
+# --------------------------------------------------------------------------- the engine's TDF grammar, by position
+
+class TdfError(Exception):
+    """A file the engine's parser refuses: in the game this is the "Parse error in .TDF File!" box and exit(1)."""
+
+
+_BLANK = b" \t\r\n"
+
+
+def _strip_comments(t: bytearray):
+    """0x4C33A0, once over the whole text before parsing: `//` blanks up to (not including) the next LF; `/*` blanks
+    up to and including the first `*/` (not nested; unterminated, it blanks to the end except the last byte).
+    Comments are recognised anywhere, inside a value too."""
+    n, i = len(t), 0
+    while i < n:
+        if t[i] == 0x2F and i + 1 < n and t[i + 1] == 0x2F:
+            while i < n and t[i] != 0x0A:
+                t[i] = 0x20
+                i += 1
+            continue
+        if t[i] == 0x2F and i + 1 < n and t[i + 1] == 0x2A:
+            t[i] = t[i + 1] = 0x20
+            i += 2
+            # the closing test looks at the byte before i, which the opener's own '*' never is: it is blanked
+            while i < n:
+                if t[i - 1] == 0x2A and t[i] == 0x2F:
+                    t[i - 1] = t[i] = 0x20
+                    i += 1
+                    break
+                t[i - 1] = 0x20
+                i += 1
+            continue
+        i += 1
+
+
+def _trim(b: bytes) -> str:
+    return b.strip(_BLANK).decode("latin-1")
+
+
+def tdf_sections(blob):
+    """The top-level sections of a TDF-grammar file in FILE ORDER, as the engine's parser 0x4C2F60 builds them, each
+    `{"_name": str, "keys": {lowercased key: str}, "sub": [nested sections, in order]}`.
+
+    Not tascene.parse_tdf and not tagpu_tdf: those merge sections that share a name, and the engine's .GUI reader
+    0x4AEAC0 walks the sections by index (0x4C3490(i)), one gadget each, so retail ARMCK1.GUI's repeated GADGET2..6
+    are distinct gadgets. The grammar is the engine's (DISASSEMBLED, the Q1 scout answer):
+
+    - the text ends at its first NUL byte (0x4C30A8 makes the file a C string); comments as `_strip_comments`;
+    - blanks are space, TAB, CR and LF only;
+    - `[name]` searches for `]` through the rest of the file; the name is trimmed and may be empty or repeated; the
+      next non-blank byte must be `{`;
+    - `}` closes a section; at the top level a stray `}` ends the whole parse silently;
+    - anything else is a key: `=` and then `;` are searched through the rest of the file, so a value missing its `;`
+      runs on to the next `;` anywhere later (retail ARMGEN.GUI's `attribs=256` swallows `colorf=15`);
+    - a key given twice keeps the LAST value (0x4C3F98..0x4C403C replaces it), matched without case;
+    - end of text inside a section, a missing `]`, `{`, `=` or `;` raise TdfError (the engine exits).
+
+    A 0-byte file is a failed load for the engine (0x4C2F9A), not an empty one: TdfError too."""
+    if isinstance(blob, str):
+        blob = blob.encode("latin-1")
+    if not blob:
+        raise TdfError("an empty file, which the engine does not load")
+    end = blob.find(b"\0")
+    t = bytearray(blob if end < 0 else blob[:end])
+    _strip_comments(t)
+    s, n, pos = bytes(t), len(t), 0
+    root = {"_name": "root", "keys": {}, "sub": []}
+    stack = [root]
+    while True:
+        while pos < n and s[pos] in _BLANK:
+            pos += 1
+        cur = stack[-1]
+        if pos >= n:
+            if len(stack) > 1:
+                raise TdfError(f"end of file inside [{cur['_name']}]")
+            break
+        c = s[pos]
+        if c == 0x5B:                                   # '['
+            j = s.find(b"]", pos)
+            if j < 0:
+                raise TdfError("a section's closing ']' is not found")
+            name = _trim(s[pos + 1:j])
+            k = j + 1
+            while k < n and s[k] in _BLANK:
+                k += 1
+            if k >= n or s[k] != 0x7B:
+                raise TdfError(f"no '{{' after [{name}]")
+            sec = {"_name": name, "keys": {}, "sub": []}
+            cur["sub"].append(sec)
+            stack.append(sec)
+            pos = k + 1
+            continue
+        if c == 0x7D:                                   # '}'
+            if len(stack) == 1:
+                break
+            stack.pop()
+            pos += 1
+            continue
+        j = s.find(b"=", pos)
+        if j < 0:
+            raise TdfError(f"a key in [{cur['_name']}] has no '='")
+        k = s.find(b";", j + 1)
+        if k < 0:
+            raise TdfError(f"a value in [{cur['_name']}] has no ';'")
+        cur["keys"][_trim(s[pos:j]).lower()] = _trim(s[j + 1:k])
+        pos = k + 1
+    return root["sub"]
+
+
+def gui_sections(blob):
+    """A .GUI file's gadgets as the reader 0x4AEAC0 takes them: `tdf_sections`, one gadget per top-level section,
+    whatever the names. The engine's gadget count is the section count: it overwrites HEADER's `totalgadgets` with
+    count − 1 (0x4AED48), so the number a file states is not read. A gadget's `[COMMON]` is `gadget_common`."""
+    return tdf_sections(blob)
+
+
+def gadget_common(sec):
+    """The section's first nested section named COMMON without case (0x4AD355 → 0x4C3410), or None: the gadget's
+    record then stays zero, which is id 0."""
+    return next((s for s in sec["sub"] if s["_name"].lower() == "common"), None)
 
 
 def _has_trailer(path: Path) -> bool:
@@ -137,14 +266,15 @@ def _key(path: str) -> str:
 class Vfs:
     """The archives of one install in the engine's mount order, and its loose files."""
 
-    def __init__(self, root: Path, exe: Path = None):
+    def __init__(self, root: Path, exe: Path = None, archive: str = None):
+        """`archive` replaces the first mount pattern the executable spells (`mount_patterns`)."""
         self.root = Path(root)
         if not self.root.is_dir():
             raise VfsError(f"no game directory at {self.root}")
         exe = Path(exe) if exe else self._loose_path(EXE_NAME)
         if not exe or not exe.is_file():
             raise VfsError(f"no {EXE_NAME} in {self.root} to read the archive patterns from (--exe)")
-        self.patterns = mount_patterns(exe.read_bytes())
+        self.patterns = mount_patterns(exe.read_bytes(), archive)
         self.archives = []                      # (file name, ta3do.HpiArchive), in mount order
         mounted = set()
         names = sorted((p for p in self.root.iterdir() if p.is_file()), key=lambda p: p.name.lower())
@@ -215,6 +345,18 @@ class Vfs:
             if key in arc.files:
                 return name
         return None
+
+    def size(self, path: str) -> int:
+        """What the open test 0x4BBC40 answers for `path`: the size of the copy the engine opens, 0 when nothing holds
+        it. A 0-byte file is as absent as a missing one to every probe that tests this value."""
+        loose = self._loose_path(path)
+        if loose:
+            return loose.stat().st_size
+        key = _key(path)
+        for _name, arc in self.archives:
+            if key in arc.files:
+                return arc.files[key][1]
+        return 0
 
     def open(self, path: str):
         """(bytes, where) for `path` by the engine's precedence, or None."""
