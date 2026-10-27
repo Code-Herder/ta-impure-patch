@@ -20,6 +20,7 @@
 #include "mouse.h"
 #include "tagpu_zoom.h"
 #include "tagpu_place.h"
+#include "tagpu_sweep.h"
 #include "tagpu_gui.h"
 #include "tagpu_input.h"
 #include "tagpu_log.h"
@@ -206,7 +207,8 @@ static void deliver_key(HWND hwnd, int vk, BOOL up)
         for (int i = 0; i < 256; i++)
             keys[i] = (BYTE)((s_down[i] ? 0x80 : 0) | (s_toggle[i] ? 1 : 0));
 
-        if (ToAscii((UINT)vk, scan, keys, &ch, 0) == 1)
+        /* the reclaim sweep's keys reach the game no further, as on the real path below */
+        if (ToAscii((UINT)vk, scan, keys, &ch, 0) == 1 && !tagpu_sweep_char(ch & 0xFF))
             to_game(hwnd, WM_CHAR, (WPARAM)(ch & 0xFF), lparam);
     }
 }
@@ -291,18 +293,20 @@ static int deliver_mouse(HWND hwnd, int code, int gx, int gy)
     case TAGPU_M_WHEELDN: msg = WM_MOUSEWHEEL; wheel = -WHEEL_DELTA; break;
     }
 
-    /* The render-options sprocket owns its own 28x28 of the top bar, and the
-       replay HUD its controls; both are hit-tested HERE as well as on the
-       real-message path below: with the shield armed this is the ONLY path a
-       tacli instance's clicks take, and with it disarmed it is the only path a
-       player's do not. A press one consumes is dropped whole -- no message and
+    /* The render-options sprocket owns its own 28x28 of the top bar, the
+       replay HUD its controls, and the reclaim sweep a right press during its
+       drag; all three are hit-tested HERE as well as on the real-message path
+       below: with the shield armed this is the ONLY path a tacli instance's
+       clicks take, and with it disarmed it is the only path a player's do not.
+       A press one consumes is dropped whole -- no message and
        no virtual key state, which the engine polls -- and its release is
        dropped too, but always clears the key so the engine is never left
        holding a button. The HUD is hit in client pixels, so only a device
        injection can reach it; a click in the engine's own space passes under
        it to the engine. */
     if ((vk == VK_LBUTTON && tagpu_menu_click(gx, gy, down)) ||
-        ((vk == VK_LBUTTON || vk == VK_RBUTTON) && tagpu_hudinput_button(dev_x, dev_y, gx, gy, down, vk == VK_RBUTTON)))
+        ((vk == VK_LBUTTON || vk == VK_RBUTTON) && tagpu_hudinput_button(dev_x, dev_y, gx, gy, down, vk == VK_RBUTTON)) ||
+        ((vk == VK_LBUTTON || vk == VK_RBUTTON) && tagpu_sweep_mouse(gx, gy, down, vk == VK_RBUTTON)))
     {
         if (!down) set_key(vk, FALSE);
         return TAGPU_DELIVER_MENU;
@@ -351,7 +355,8 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
         return TRUE;
 
     case WM_TAGPU_CHAR:
-        to_game(hwnd, WM_CHAR, wparam, 1);
+        if (!tagpu_sweep_char((unsigned)(wparam & 0xFF)))
+            to_game(hwnd, WM_CHAR, wparam, 1);
         tagpu_input_delivered((unsigned)lparam, TAGPU_DELIVER_ENGINE);
         *result = 0;
         return TRUE;
@@ -381,8 +386,11 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
         int cy = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
         int right = msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_RBUTTONDBLCLK;
         int down = msg != WM_LBUTTONUP && msg != WM_RBUTTONUP;
+        /* the reclaim sweep follows the engine's view of the mouse: with the shield armed the
+           player's buttons never reach the engine, so they never end its drag either */
         int took = (!right && msg != WM_LBUTTONDBLCLK && tagpu_menu_click(cx, cy, down)) ||
-                   tagpu_hudinput_button(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), cx, cy, down, right);
+                   tagpu_hudinput_button(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), cx, cy, down, right) ||
+                   (!tagpu_shield_on() && tagpu_sweep_mouse(cx, cy, down, right));
 
         if (took)
         {
@@ -393,8 +401,10 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
 
     /* The window lost the mouse: a release may never come, so the HUD's drag ends here. The
        messages go on as before. */
-    if (msg == WM_KILLFOCUS || msg == WM_CAPTURECHANGED || (msg == WM_ACTIVATEAPP && !wparam))
+    if (msg == WM_KILLFOCUS || msg == WM_CAPTURECHANGED || (msg == WM_ACTIVATEAPP && !wparam)) {
         tagpu_hudinput_cancel();
+        tagpu_sweep_cancel();
+    }
 
     if (!tagpu_shield_on())
     {
@@ -402,6 +412,12 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
            while the shield lets them through. A letter under Alt is WM_SYSKEYDOWN. */
         if ((msg == WM_SYSKEYDOWN || msg == WM_KEYDOWN) &&
             tagpu_place_key((unsigned)wparam, msg == WM_SYSKEYDOWN))
+        {
+            *result = 0;
+            return TRUE;
+        }
+        /* the reclaim sweep's keys: Esc during a drag, the RECLAIM gadget's quickkey while armed */
+        if (msg == WM_CHAR && tagpu_sweep_char((unsigned)(wparam & 0xFF)))
         {
             *result = 0;
             return TRUE;

@@ -21,8 +21,15 @@ typedef struct {
 #define PLACE_BLOCKED 0x04   /* refused as a single click would be: skipped */
 #define PLACE_TOGGLE  0x0E   /* removes a selected builder's queued build instead (the Shift toggle) */
 
-void tagpu_place_init(void);          /* after tagpu_resource_init: chains on its observer */
+void tagpu_place_init(void);          /* after tagpu_resource_init: chains on its observer;
+                                         after tagpu_route_init: needs its stub and entry */
 void tagpu_place_level_end(void);
+
+/* The click route's verdict for a mode-14 record `rec` (the handler's stack copy) with message
+   `msg`: 0 stock, 1 consumed, 2 run stock's click on this record (tagpu_route.c). */
+int tagpu_place_button(const int* rec, unsigned msg);
+/* The in-play handler's entry, before the record is handled (tagpu_route.c). */
+void tagpu_place_entry(void);
 
 /* Alt+Z / Alt+X with a building armed: one more / one less empty cell between the armed type's
    neighbouring sites (0..16, kept per type in impure.cfg). 1 when the key was taken -- the

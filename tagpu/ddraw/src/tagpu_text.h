@@ -82,6 +82,10 @@ int  tagpu_text_colour(void);
    string's first pixel row lands at `y - yoff`). 0 when there is no font, the
    string does not fit, or the atlas is full. */
 int  tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff);
+/* The width `s` would be rasterised at, in texels, without rasterising it: the
+   sum of its glyphs' width bytes, the blitter's own advance, over the first
+   characters the atlas would take; 0 when there is no font. */
+int  tagpu_text_width(const char* s);
 
 /* ---- the GLYPH cache, present thread ---- */
 /* Find or rasterise ONE character of `font` in the glyph atlas. The engine's

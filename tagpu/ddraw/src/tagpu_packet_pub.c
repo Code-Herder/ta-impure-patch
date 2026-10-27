@@ -93,6 +93,7 @@
 #include "tagpu_vpwide.h"
 #include "tagpu_resource.h"
 #include "tagpu_place.h"
+#include "tagpu_sweep.h"
 #include "tagpu_profiles.h"
 #include "tagpu_zoom.h"
 #include "tagpu_gui.h"
@@ -372,6 +373,34 @@ typedef char pk_place_layout[(offsetof(TagpuPlaceSite, rect) == offsetof(TAGPU_P
                               offsetof(TagpuPlaceSite, type) == offsetof(TAGPU_PK_PLACE, type) &&
                               offsetof(TagpuPlaceSite, colour) == offsetof(TAGPU_PK_PLACE, colour) &&
                               offsetof(TagpuPlaceSite, pad) == offsetof(TAGPU_PK_PLACE, pad)) ? 1 : -1];
+/* the sweep's two records, field by field: tagpu_sweep.c fills them by name and the marker pass
+   reads them by name, so a padding the compiler chose differently would only move the bytes --
+   but the layout is the one the header's comment states, and the acquire's bounds name it */
+typedef char pk_sweep_size  [(sizeof(TAGPU_PK_SWEEP) == 52 &&
+                              sizeof(TAGPU_PK_SWEEPITEM) == 24) ? 1 : -1];
+typedef char pk_sweep_layout[(offsetof(TAGPU_PK_SWEEP, flags) == 0 &&
+                              offsetof(TAGPU_PK_SWEEP, kind) == 1 &&
+                              offsetof(TAGPU_PK_SWEEP, hot) == 2 &&
+                              offsetof(TAGPU_PK_SWEEP, style) == 3 &&
+                              offsetof(TAGPU_PK_SWEEP, pop) == 4 &&
+                              offsetof(TAGPU_PK_SWEEP, tongue) == 12 &&
+                              offsetof(TAGPU_PK_SWEEP, c) == 20 &&
+                              offsetof(TAGPU_PK_SWEEP, r) == 32 &&
+                              offsetof(TAGPU_PK_SWEEP, nwreck) == 36 &&
+                              offsetof(TAGPU_PK_SWEEP, ntree) == 38 &&
+                              offsetof(TAGPU_PK_SWEEP, metal) == 40 &&
+                              offsetof(TAGPU_PK_SWEEP, energy) == 44 &&
+                              offsetof(TAGPU_PK_SWEEP, col) == 48) ? 1 : -1];
+typedef char pk_sweepitem_layout[(offsetof(TAGPU_PK_SWEEPITEM, kind) == 0 &&
+                                  offsetof(TAGPU_PK_SWEEPITEM, colour) == 1 &&
+                                  offsetof(TAGPU_PK_SWEEPITEM, n) == 2 &&
+                                  offsetof(TAGPU_PK_SWEEPITEM, x) == 4 &&
+                                  offsetof(TAGPU_PK_SWEEPITEM, h) == 8 &&
+                                  offsetof(TAGPU_PK_SWEEPITEM, z) == 12 &&
+                                  offsetof(TAGPU_PK_SWEEPITEM, w) == 16 &&
+                                  offsetof(TAGPU_PK_SWEEPITEM, d) == 18 &&
+                                  offsetof(TAGPU_PK_SWEEPITEM, top) == 20 &&
+                                  offsetof(TAGPU_PK_SWEEPITEM, pad) == 22) ? 1 : -1];
 typedef char pk_piece_size [(sizeof(TAGPU_PK_PIECE)  ==  24) ? 1 : -1];
 typedef char pk_wreck_size [(sizeof(TAGPU_PK_WRECK)  ==  44) ? 1 : -1];
 typedef char pk_anchor_size[(sizeof(TAGPU_PK_ANCHOR) ==  16) ? 1 : -1];
@@ -2433,6 +2462,31 @@ static unsigned fill_place(TAGPU_PACKET* p, unsigned* cursor, unsigned* nsites)
                         &p->off_place, &p->n_place, TAGPU_PK_TRUNC_PLACE);
 }
 
+/* THE RECLAIM SWEEP, COPIED BY VALUE: tagpu_sweep.c answers on this game thread from its own
+   game-thread state and the engine's feature grid, read inside this draw (tagpu_sweep.h). The
+   header and at most TAGPU_PK_MAX_SWEEP items, the caps the acquire checks again with every
+   field; items cut by the cap or by the packet's room set the table's bit, and the marker pass
+   then draws what arrived. */
+static TAGPU_PK_SWEEP     s_swHead;
+static TAGPU_PK_SWEEPITEM s_swItems[TAGPU_PK_MAX_SWEEP];
+
+static unsigned fill_sweep(TAGPU_PACKET* p, unsigned* cursor)
+{
+    unsigned n = 0, need = *cursor, e;
+    int cut = 0;
+    if (!tagpu_sweep_fill(&s_swHead, s_swItems, TAGPU_PK_MAX_SWEEP, &n, &cut)) return need;
+    if (n > TAGPU_PK_MAX_SWEEP) n = TAGPU_PK_MAX_SWEEP;
+    if (cut) p->truncated |= TAGPU_PK_TRUNC_SWEEP;
+    e = append_table(p, cursor, &s_swHead, 1u, (unsigned)sizeof(TAGPU_PK_SWEEP),
+                     &p->off_sweep, &p->n_sweep, TAGPU_PK_TRUNC_SWEEP);
+    if (e > need) need = e;
+    if (!p->n_sweep) return need;      /* no items without their header */
+    e = append_table(p, cursor, s_swItems, n, (unsigned)sizeof(TAGPU_PK_SWEEPITEM),
+                     &p->off_sweepitem, &p->n_sweepitem, TAGPU_PK_TRUNC_SWEEP);
+    if (e > need) need = e;
+    return need;
+}
+
 /* THE BUILD-ORDERS TABLE — the queued builds the order pass is showing site
    rects for, copied out of that pass's own game-thread snapshot (the one the
    squares are drawn from), so the ghost pass and the squares can never drift.
@@ -2812,6 +2866,9 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
        because the ghost masks fill_builds writes cover the sites' types ---- */
     e = fill_place(p, &cursor, &nplace);
     if (e > need) need = e;
+    /* ---- the reclaim sweep: 77 KB at most ---- */
+    e = fill_sweep(p, &cursor);
+    if (e > need) need = e;
     /* ---- the build-orders table (the ghost pass) ---- */
     e = fill_builds(p, &cursor, nplace);
     if (e > need) need = e;
@@ -3104,6 +3161,7 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
         char* ta = (char*)ta_main();
         tagpu_resource_level_end();
         tagpu_place_level_end();
+        tagpu_sweep_level_end();
         if (ta) { tagpu_zoom_level_end(ta); tagpu_vpwide_level_end(ta); }
         /* and the terrain latch with it: the shell, the next level's loading
            draws and any screenshot draw before its first in-play one never

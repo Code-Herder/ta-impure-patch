@@ -572,26 +572,14 @@ static void snap_device(float* x, float* y)
     *y = (float)((gy - s_zcy) / s_zoom + s_zcy);
 }
 
-/* One string, in the palette index the caller names, anchored at the (x, y) the
-   engine would have passed `DrawTextCustomFont`.
-
-   CONSTANT SCREEN SIZE, like the waypoint crosshair and unlike the health bars:
-   the glyphs are a bitmap font, so scaling the quad with the zoom would be the
-   magnified 1997 art this port exists to stop — a label two pixels tall at
-   0.25x and a blocky one at 4x. `s_px` is one screen pixel in game-frame units,
-   and the vertex shader's zoom multiplies it back out.
-
-   The vertical anchor is the engine's: `0x4CCF60` puts the string's first pixel
-   row at `y - (s8)font+0x02`, not at y. */
-int tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
-                         float wx, float wz)
+/* One atlas rect's quad -- a string's or a glyph's, (ax, ay, w, h) in texels with the blitter's
+   row offset `yoff` -- at the engine's anchor (x, y), into `base` at vertex `i`. Returns the x
+   its right edge lands on, where the blitter's next glyph would start. */
+static float text_quad(float* base, int i, float x, float y, int ax, int ay, int w, int h,
+                       int yoff, int colidx, float wx, float wz)
 {
-    int ax, ay, w, h, yoff, aw = 1, ah = 1;
+    int aw = 1, ah = 1;
     float u0, v0, u1, v1, x1, y0, y1, c;
-    int i = s_nordx;
-
-    if (s_nordx + QUADV > MAXORDX) return 0;
-    if (!tagpu_text_place(s, &ax, &ay, &w, &h, &yoff)) return 0;
     tagpu_text_dims(&aw, &ah);
     u0 = (float)ax / (float)aw;          v0 = (float)ay / (float)ah;
     u1 = (float)(ax + w) / (float)aw;    v1 = (float)(ay + h) / (float)ah;
@@ -613,12 +601,33 @@ int tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
     x1 = x + (float)((double)w * s_px);
     y1 = y0 + (float)((double)h * s_px);
     c  = (float)colidx / 255.0f;
-    put_at(s_ordx, i + 0, x,  y0, u0, v0, wx, wz, c);
-    put_at(s_ordx, i + 1, x1, y0, u1, v0, wx, wz, c);
-    put_at(s_ordx, i + 2, x,  y1, u0, v1, wx, wz, c);
-    put_at(s_ordx, i + 3, x1, y0, u1, v0, wx, wz, c);
-    put_at(s_ordx, i + 4, x1, y1, u1, v1, wx, wz, c);
-    put_at(s_ordx, i + 5, x,  y1, u0, v1, wx, wz, c);
+    put_at(base, i + 0, x,  y0, u0, v0, wx, wz, c);
+    put_at(base, i + 1, x1, y0, u1, v0, wx, wz, c);
+    put_at(base, i + 2, x,  y1, u0, v1, wx, wz, c);
+    put_at(base, i + 3, x1, y0, u1, v0, wx, wz, c);
+    put_at(base, i + 4, x1, y1, u1, v1, wx, wz, c);
+    put_at(base, i + 5, x,  y1, u0, v1, wx, wz, c);
+    return x1;
+}
+
+/* One string, in the palette index the caller names, anchored at the (x, y) the
+   engine would have passed `DrawTextCustomFont`.
+
+   CONSTANT SCREEN SIZE, like the waypoint crosshair and unlike the health bars:
+   the glyphs are a bitmap font, so scaling the quad with the zoom would be the
+   magnified 1997 art this port exists to stop — a label two pixels tall at
+   0.25x and a blocky one at 4x. `s_px` is one screen pixel in game-frame units,
+   and the vertex shader's zoom multiplies it back out.
+
+   The vertical anchor is the engine's: `0x4CCF60` puts the string's first pixel
+   row at `y - (s8)font+0x02`, not at y. */
+int tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
+                         float wx, float wz)
+{
+    int ax, ay, w, h, yoff;
+    if (s_nordx + QUADV > MAXORDX) return 0;
+    if (!tagpu_text_place(s, &ax, &ay, &w, &h, &yoff)) return 0;
+    text_quad(s_ordx, s_nordx, x, y, ax, ay, w, h, yoff, colidx, wx, wz);
     s_nordx += QUADV;
     s_ntext++;
     return 1;
@@ -802,6 +811,213 @@ static void gather_place(const TAGPU_FXVIEW* v)
     s_nplace = nv;
 }
 
+/* ---- THE RECLAIM SWEEP --------------------------------------------------
+   The ring, its targets' brackets, the feature under the cursor and the
+   readout, out of the packet's PK_SWEEP header and items (tagpu_sweep.c, on
+   the game thread, copied by value). Drawn in the cursor layer WITH THE FOG
+   OFF, as the build cursor is: the ring is the player's own gesture.
+
+   THE PROJECTION is the overlays' and the selection rect's: x - eyeX + vpL and
+   z - floor(h / 2) - eyeY + vpT, in the frame's pre-zoom units. Lengths that
+   belong to the screen -- the dashes, a bracket's arms, the readout's offsets --
+   are screen px times `s_px`, so they keep their size at every zoom. Every line
+   is the pass's one-game-pixel line (put_line, which bounds and clips it); the
+   outline is the same line moved one game pixel each way across its minor axis
+   (tagpu_line_nudge) in black, all of it drawn before any colour.
+
+   BOUND: the acquire bounds every coordinate to +-TAGPU_PK_PLACE_COORD, the
+   footprints to 16..256 and the counts to TAGPU_PK_MAX_SWEEP, so the int and
+   double arithmetic below cannot overflow; a footprint past SW_REACH screen px
+   outside the zoom's effective rect makes no line, and a bucket that is full
+   refuses the rest, counted in `s_swover`. */
+#define SW_DASH_ON   6.0                       /* the ring: 6 px on, 4 off   */
+#define SW_DASH_OFF  4.0
+#define SW_ARM       6.0                       /* a bracket's corner arm, px */
+#define SW_REACH     32
+#define MAXSWC       9000                      /* colour lines: 1024 brackets
+                                                  and the ring's dashes      */
+#define MAXSWK       (2 * MAXSWC)              /* their black outline        */
+#define MAXSWQ       (2 * QUADV)               /* the centre dot and its edge */
+#define MAXSWX       (160 * QUADV)             /* the readout's glyphs        */
+static float s_swc[MAXSWC * MVST];
+static float s_swk[MAXSWK * MVST];
+static float s_swq[MAXSWQ * MVST];
+static float s_swx[MAXSWX * MVST];
+static int   s_nswc, s_nswk, s_nswq, s_nswx;
+static int   s_cSweep;                  /* targets bracketed, this frame      */
+static int   s_swover;                  /* lines or glyphs refused, a frame   */
+
+static void sw_line(double x0, double y0, double x1, double y1, int col, int black,
+                    float wx, float wz)
+{
+    /* across the minor axis, in whole game pixels of the zoomed frame */
+    static const int across_y[2][4] = { { 0, -1, 0, -1 }, { 0, 1, 0, 1 } };
+    static const int across_x[2][4] = { { -1, 0, -1, 0 }, { 1, 0, 1, 0 } };
+    const int (*n)[4] = fabs(x1 - x0) >= fabs(y1 - y0) ? across_y : across_x;
+    int k;
+    if (s_nswc >= MAXSWC || s_nswk + 2 > MAXSWK) { s_swover++; return; }
+    for (k = 0; k < 2; k++)
+        if (put_line(s_swk + (size_t)s_nswk * MVST, x0, y0, x1, y1, n[k], wx, wz,
+                     (float)black / 255.0f, 0.0f))
+            s_nswk++;
+    if (put_line(s_swc + (size_t)s_nswc * MVST, x0, y0, x1, y1, NULL, wx, wz,
+                 (float)col / 255.0f, 0.0f))
+        s_nswc++;
+}
+
+/* a closed polyline, dashed `on` / `off` screen px along its length */
+static void sw_dashed(const double* xs, const double* ys, int n, double on, double off,
+                      int col, int black, float wx, float wz)
+{
+    double phase = 0.0, period = on + off;
+    int i;
+    for (i = 0; i < n; i++) {
+        int j = (i + 1) % n;
+        double dx = xs[j] - xs[i], dy = ys[j] - ys[i];
+        double len = sqrt(dx * dx + dy * dy) * s_zoom, t = 0.0;
+        if (!(len > 0.0)) continue;
+        while (t < len) {
+            double step = phase < on ? on - phase : period - phase;
+            if (step > len - t) step = len - t;
+            if (phase < on)
+                sw_line(xs[i] + dx * t / len, ys[i] + dy * t / len,
+                        xs[i] + dx * (t + step) / len, ys[i] + dy * (t + step) / len,
+                        col, black, wx, wz);
+            t += step;
+            phase += step;
+            if (phase >= period) phase -= period;
+        }
+    }
+}
+
+/* a footprint's brackets: four L corners round [x0, x0+w] x [z0 - (alt + top) / 2,
+   z0 + d - alt / 2], its body as the engine stands it on the ground. 1 when drawn. */
+static int sw_bracket(const TAGPU_FXVIEW* v, const TAGPU_PK_SWEEPITEM* e, int col, int black)
+{
+    const double reach = SW_REACH * s_px;
+    double l = (double)e->x - v->eyeX + v->vpL, r = l + e->w;
+    double t = (double)e->z - floor(((double)e->h + e->top) * 0.5) - v->eyeY + v->vpT;
+    double b = (double)e->z + e->d - floor((double)e->h * 0.5) - v->eyeY + v->vpT;
+    double ax = SW_ARM * s_px, ay = SW_ARM * s_px;
+    float wx = (float)e->x, wz = (float)e->z;
+    if (r < v->evpL - reach || l > v->evpL + v->evw + reach ||
+        b < v->evpT - reach || t > v->evpT + v->evh + reach) return 0;
+    if (ax > (r - l) / 2) ax = (r - l) / 2;
+    if (ay > (b - t) / 2) ay = (b - t) / 2;
+    sw_line(l, t, l + ax, t, col, black, wx, wz); sw_line(l, t, l, t + ay, col, black, wx, wz);
+    sw_line(r, t, r - ax, t, col, black, wx, wz); sw_line(r, t, r, t + ay, col, black, wx, wz);
+    sw_line(l, b, l + ax, b, col, black, wx, wz); sw_line(l, b, l, b - ay, col, black, wx, wz);
+    sw_line(r, b, r - ax, b, col, black, wx, wz); sw_line(r, b, r, b - ay, col, black, wx, wz);
+    return 1;
+}
+
+/* a string centred on x, glyph by glyph: each is its own atlas entry, so a readout whose
+   numbers change every frame never fills the atlas with strings; the glyphs sit where the
+   blitter's own loop puts them, each at the sum of the widths before it */
+static void sw_text(double x, double y, const char* str, int col)
+{
+    float gx = (float)(x - (double)tagpu_text_width(str) * s_px / 2.0);
+    for (; *str; str++) {
+        char one[2];
+        int ax, ay, w, h, yoff;
+        one[0] = *str; one[1] = 0;
+        if (s_nswx + QUADV > MAXSWX) { s_swover++; return; }
+        if (!tagpu_text_place(one, &ax, &ay, &w, &h, &yoff)) continue;
+        gx = text_quad(s_swx, s_nswx, gx, (float)y, ax, ay, w, h, yoff, col, 0.0f, 0.0f);
+        s_nswx += QUADV;
+    }
+}
+
+static void sw_square(double x, double y, double half, int col)
+{
+    float c = (float)col / 255.0f;
+    float x0 = (float)(x - half), y0 = (float)(y - half), x1 = (float)(x + half), y1 = (float)(y + half);
+    if (s_nswq + QUADV > MAXSWQ) return;
+    put_at(s_swq, s_nswq + 0, x0, y0, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    put_at(s_swq, s_nswq + 1, x1, y0, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    put_at(s_swq, s_nswq + 2, x0, y1, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    put_at(s_swq, s_nswq + 3, x1, y0, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    put_at(s_swq, s_nswq + 4, x1, y1, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    put_at(s_swq, s_nswq + 5, x0, y1, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    s_nswq += QUADV;
+}
+
+/* The readout over the ring: `[KIND]`, the counts, the sums -- or that the ring holds none of
+   the kind -- 22 px above the ring's highest point, or 16 px below its lowest when that would
+   come within 30 px of the view's top, and kept 92 px inside its sides. */
+static void sw_readout(const TAGPU_FXVIEW* v, const TAGPU_PK_SWEEP* h, double cx, double top,
+                       double bottom)
+{
+    static const char* const KIND[3] = { "METAL", "ENERGY", "ALL" };
+    static const char* const NONE[3] = { "NO WRECKS HERE", "NO TREES HERE", "NO FEATURES HERE" };
+    char head[16], counts[48], sums[48];
+    double lo = v->evpL + 92.0 * s_px, hi = v->evpL + v->evw - 92.0 * s_px;
+    double ty = top - 22.0 * s_px, x = cx < lo ? lo : cx > hi ? hi : cx;
+    if (ty < v->evpT + 30.0 * s_px) ty = bottom + 16.0 * s_px;
+    if (lo > hi) x = v->evpL + v->evw / 2.0;
+    _snprintf(head, sizeof head, "[%s]", KIND[h->kind]);
+    head[sizeof head - 1] = 0;
+    sw_text(x, ty - 13.0 * s_px, head, h->col[2]);
+    if (!h->nwreck && !h->ntree) {
+        sw_text(x, ty, NONE[h->kind], h->col[2]);
+        return;
+    }
+    counts[0] = sums[0] = 0;
+    if (h->nwreck) _snprintf(counts, sizeof counts, "%u WRECK%s", (unsigned)h->nwreck, h->nwreck > 1 ? "S" : "");
+    if (h->ntree) {
+        size_t at = strlen(counts);
+        _snprintf(counts + at, sizeof counts - at, "%s%u TREE%s", at ? "  " : "", (unsigned)h->ntree,
+                  h->ntree > 1 ? "S" : "");
+    }
+    counts[sizeof counts - 1] = 0;
+    if (h->metal >= 0.5f) _snprintf(sums, sizeof sums, "+%.0f METAL", (double)h->metal);
+    if (h->energy >= 0.5f) {
+        size_t at = strlen(sums);
+        _snprintf(sums + at, sizeof sums - at, "%s+%.0f ENERGY", at ? "   " : "", (double)h->energy);
+    }
+    sums[sizeof sums - 1] = 0;
+    sw_text(x, ty, counts, h->kind == 2 ? h->col[2] : h->col[0]);
+    if (sums[0]) sw_text(x, ty + 13.0 * s_px, sums, h->col[2]);
+}
+
+static void gather_sweep(const TAGPU_FXVIEW* v)
+{
+    const TAGPU_PACKET* pk = v->packet;
+    const TAGPU_PK_SWEEP* h = pk ? tagpu_pk_sweep(pk) : NULL;
+    const TAGPU_PK_SWEEPITEM* it = h ? tagpu_pk_sweepitems(pk) : NULL;
+    double xs[TAGPU_PK_SWEEP_RINGPTS], ys[TAGPU_PK_SWEEP_RINGPTS], top = 0.0, bottom = 0.0;
+    int npt = 0;
+    unsigned i;
+    s_nswc = s_nswk = s_nswq = s_nswx = 0;
+    s_cSweep = 0; s_swover = 0;
+    if (!h) return;
+    for (i = 0; i < pk->n_sweepitem; i++) {
+        const TAGPU_PK_SWEEPITEM* e = &it[i];
+        if (e->kind == TAGPU_PK_SWI_RINGPT && npt < (int)TAGPU_PK_SWEEP_RINGPTS) {
+            xs[npt] = (double)e->x - v->eyeX + v->vpL;
+            ys[npt] = (double)e->z - floor((double)e->h * 0.5) - v->eyeY + v->vpT;
+            if (!npt || ys[npt] < top) top = ys[npt];
+            if (!npt || ys[npt] > bottom) bottom = ys[npt];
+            npt++;
+        } else if (e->kind == TAGPU_PK_SWI_BOX) {
+            if (sw_bracket(v, e, e->colour, h->col[3])) s_cSweep++;
+        } else if (e->kind == TAGPU_PK_SWI_HOVER) {
+            sw_bracket(v, e, e->colour, h->col[3]);
+        }
+    }
+    if (!(h->flags & TAGPU_PK_SW_RING)) return;
+    {
+        double cx = (double)h->c[0] - v->eyeX + v->vpL;
+        double cy = (double)h->c[2] - floor((double)h->c[1] * 0.5) - v->eyeY + v->vpT;
+        if (npt >= 3) sw_dashed(xs, ys, npt, SW_DASH_ON, SW_DASH_OFF, h->col[1], h->col[3],
+                                (float)h->c[0], (float)h->c[2]);
+        sw_square(cx, cy, 2.5 * s_px, h->col[3]);
+        sw_square(cx, cy, 1.5 * s_px, h->col[1]);
+        if (!npt) top = bottom = cy;
+        sw_readout(v, h, cx, top, bottom);
+    }
+}
+
 /* ---- THE REPLAY'S OVERLAYS ----------------------------------------------
    A playback's recorded cursors and clicks, out of the packet's PK_OVERLAY table
    (tagpu_replay.c, THE OVERLAYS, builds it on the game thread from the
@@ -942,6 +1158,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     s_nordxOrd = 0; s_ntext = 0; s_xover = 0;
     s_novt = 0; s_novl = 0; s_novlRing = 0;
     s_nplace = 0; s_cPlace = 0;
+    s_nswc = s_nswk = s_nswq = s_nswx = 0; s_cSweep = 0; s_swover = 0;
     if (!pk || !pk->in_game) return 0;
     /* BEFORE ANYTHING EMITS: a bar per unit at most, a selection rect per unit
        at most, and the unit count is bounded by the packet's own table. A
@@ -976,6 +1193,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
        anything to say about them */
     gather_cursor(v);
     gather_place(v);
+    if (s_armed == 1 && !s_passive) gather_sweep(v);
     if (s_armed == 1 && !s_passive) gather_overlay(v);
     if (s_armed == 1 && !s_passive) tagpu_order_gather(v);
     else if (s_passive) tagpu_markown_set_orders(0);
@@ -1201,7 +1419,7 @@ int tagpu_mark_handover(TAGPU_MKHAND* out, unsigned now)
 
 void tagpu_mark_render(const TAGPU_FXVIEW* v)
 {
-    int total, textBase = 0, selBase = 0, ovtBase, ovlBase, placeBase;
+    int total, textBase = 0, selBase = 0, ovtBase, ovlBase, placeBase, swBase;
 
     /* THIS PASS BUILDS THE RECORD THE TWIN DRAWS FROM, and nothing else:
        `mk_push` and `mk_draw` are the record and are pure CPU. */
@@ -1221,7 +1439,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     }
 
     if (s_nbar == 0 && s_ncurs == 0 && s_nplace == 0 && s_nsel == 0 &&
-        s_nordt == 0 && s_nordl == 0 && s_nordx == 0 && s_novt == 0 && s_novl == 0) return;
+        s_nordt == 0 && s_nordl == 0 && s_nordx == 0 && s_novt == 0 && s_novl == 0 &&
+        s_nswk == 0 && s_nswc == 0 && s_nswq == 0 && s_nswx == 0) return;
 
     /* ---- the A/B's lever ---- */
     {
@@ -1255,6 +1474,11 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     if (s_novl) mk_push(s_ovl, s_novl);
     placeBase = ovlBase + s_novl;
     if (s_nplace) mk_push(s_place, s_nplace);
+    swBase = placeBase + s_nplace;
+    if (s_nswk) mk_push(s_swk, s_nswk);
+    if (s_nswc) mk_push(s_swc, s_nswc);
+    if (s_nswq) mk_push(s_swq, s_nswq);
+    if (s_nswx) mk_push(s_swx, s_nswx);
 
     /* THE SELECTION RECTS FIRST, and depth-tested: the engine draws each one
        inside the unit sweep, immediately before its own unit (`0x4699EB`,
@@ -1309,6 +1533,12 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     if (s_nplace) {
         mk_draw(placeBase, s_nplace, 0, 0, 0, TAGPU_MK_TEX_NONE, 0);
     }
+    /* the reclaim sweep in the same layer: every outline, then the lines over them, the
+       centre dot, the readout */
+    if (s_nswk) mk_draw(swBase, s_nswk, 1, 0, 0, TAGPU_MK_TEX_NONE, 0);
+    if (s_nswc) mk_draw(swBase + s_nswk, s_nswc, 1, 0, 0, TAGPU_MK_TEX_NONE, 0);
+    if (s_nswq) mk_draw(swBase + s_nswk + s_nswc, s_nswq, 0, 0, 0, TAGPU_MK_TEX_NONE, 0);
+    if (s_nswx) mk_draw(swBase + s_nswk + s_nswc + s_nswq, s_nswx, 0, 1, 0, TAGPU_MK_TEX_TEXT, 0);
     /* the replay's overlays, over everything and with the fog off: the click rings, then the
        cursor arrows' fills, then their outlines */
     if (s_novlRing) mk_draw(ovlBase, s_novlRing, 1, 0, 0, TAGPU_MK_TEX_NONE, 0);
@@ -1366,11 +1596,12 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
             last = v->frame_counter;
             tagpu_text_stats(&nstr, &ndrop);
             _snprintf(b, sizeof b,
-                "mark: bars=%d sel=%d selover=%d cursor=%d place=%d ordtri=%d "
-                "ordline=%d far=%d text=%d(lab=%d) "
+                "mark: bars=%d sel=%d selover=%d cursor=%d place=%d sweep=%d swover=%d "
+                "ordtri=%d ordline=%d far=%d text=%d(lab=%d) "
                 "atlas=%d/%d over=%d key=%d vp=(%d,%d %dx%d) "
                 "zoom=%.2f%s",
-                s_cBar, s_nsel / 4, s_selover, s_ncurs / QUADV, s_cPlace, s_nordt / 3,
+                s_cBar, s_nsel / 4, s_selover, s_ncurs / QUADV, s_cPlace, s_cSweep, s_swover,
+                s_nordt / 3,
                 s_nordl, s_lfar,
                 s_ntext, s_nordxOrd / QUADV, nstr, ndrop, s_xover,
                 tagpu_markown_key(), v->vpL, v->vpT, v->vw, v->vh, v->zoom,
