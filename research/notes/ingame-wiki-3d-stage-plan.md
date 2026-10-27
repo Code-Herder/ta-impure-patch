@@ -997,11 +997,12 @@ presenting; `wiki_regression.py <instance> units --launch`, about 11 minutes):
   side-by-side with the engine's ARMCK at `0xC000` and at `0x4000` matches the first.
 - (u5) under `nounit=ARMCK` ARMCK alone is the box; 300 of 300 frames drew the image.
 - (u6) the render thread: the producer 0.067 ms and the passes 0.037 ms a frame on average,
-  0.104 ms against 0.5 ms, the passes at most 0.057 ms (1920 × 1080).
+  0.104 ms against 0.5 ms, the passes at most 0.057 ms, at 1920 × 1080; 0.070, 0.041 (0.111) and
+  0.062 ms at 3840 × 2160.
 - (u7) **a reclaim is not a nanoframe** [DISASSEMBLED, then MEASURED]: ReclaimUnit `0x404730` and
   VTOL_ReclaimUnit `0x414A80` hit the target's hit points through `0x489BB0`/`0x489CE0`, and none
   of the four functions names `+0x104`; in a skirmish an ARMCK reclaimed an ARMSOLAR from HP 326
-  to its death with `+0x104` reading 0.0 at each of 101 reads. The stage draws a unit being
+  to its death with `+0x104` reading 0.0 at every read (101 reads in one run, 46 in another). The stage draws a unit being
   reclaimed finished, as the game does (the engine map, *A reclaimed unit is never a nanoframe*).
 - `mp` with a demo playing, `sp`, `page`, `demos`, `recorded` and `stage3d`: the hand-over's report.
 

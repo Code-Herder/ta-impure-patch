@@ -4628,9 +4628,9 @@ renderer draw its units and ghosts.
   loaded in 42 to 56 ms, 9 of 9 unit types resolved; quickbuild's types ARMCK ARMACK ARMMEX
   ARMMOHO ARMGEO ARMPW, no box. The render thread's time with the units, from the periodic line:
   the first frame about 10 ms producer and 8 ms passes (the bake and the atlas), then the producer
-  0.067 ms and the passes 0.037 ms a frame on average, the passes at most 0.057 ms, at 1920 × 1080
-  (3840 × 2160: [the plan](ingame-wiki-3d-stage-plan.html), landing 6h); 0 frames with a refused
-  record, 300 of 300 frames drew the image. Against the mockup, ten captures of Quick Build 3, 8
+  0.067 ms and the passes 0.037 ms a frame on average, the passes at most 0.057 ms, at 1920 × 1080,
+  and 0.070, 0.041 and 0.062 ms at 3840 × 2160; 0 frames with a refused record, 300 of 300 frames
+  drew the image. Against the mockup, ten captures of Quick Build 3, 8
   and 9 and Build Lines 2 and 4 at ss 2: every terrain pixel equal, every feature pixel equal, and
   over the unit pixels a mean difference of 0.03 to 0.38 / 255 a channel with 0.003 to 0.19 % of
   them past 40 (the tolerance: 2 / 255 and 0.5 %). Under `nounit=ARMCK` the types line names

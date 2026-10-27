@@ -1190,6 +1190,11 @@ def mp(name):
         assert d2["sim"] and d2["tick"] > d["tick"], f"(m) the host's demo did not play: tick {d['tick']} -> {d2['tick']}"
         print(f"wiki mp: (m) the host's demo played {d2['tick'] - d['tick']} ticks; the page cost the game thread "
               f"at most {d2['cost_max_ms']:.3f} ms in one frame over {d2['cost_frames']} frames")
+        got = drawn_window(c, "(m) the host's stage", want_all=True)
+        print(f"wiki mp: (m) the host's stage in 3D: {got[0]} of {got[1]} frames drew the image; the render thread "
+              f"{got[2]:.3f} ms producer and {got[3]:.3f} ms passes a frame on average, the passes at most "
+              f"{got[4]:.3f} ms")
+        assert got[2] + got[3] <= UNIT_MS, f"(m) the host's stage costs the render thread {got[2] + got[3]:.3f} ms a frame"
         before = c.orders("COM")
         for tok in ("drclick:%d,%d" % ground, "dclick:%d,%d" % ground):
             c.keys(tok)
