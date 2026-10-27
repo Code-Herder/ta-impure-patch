@@ -5,8 +5,14 @@
    The demos are the placement gesture of tagpu/ddraw/src/tagpu_place.c (research/notes/tadr-port/quality-of-life.md,
    "What Impure does") played through sim.js. A demo's cursor glides with a move every two ticks, so its inputs are
    generated here; change a demo here and regenerate. The unit figures are the stock game's, read once from the retail
-   unit files (each row's `from`); nothing of the game is copied. */
+   unit files (each row's `from`); nothing of the game is copied.
+
+   No demo writes `sidebar`, so each takes sim.js's default, decision 2 of
+   research/notes/ingame-wiki-sidebar-plan.md: the sidebar is shown when the scene gives the player a mobile builder.
+   ARMCK stands in this entry's scene, so every demo here shows it. */
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
+const { TRIP } = createRequire(import.meta.url)('./mockup/sim.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 // the cursor that puts a footprint of f cells on the site whose first cell is (cx, cz): its centre, which the build
 // cursor rounds back to that cell
@@ -22,10 +28,12 @@ const units = {
   ARMSOLAR: { footprint: [5, 5], buildTime: 2495, name: 'Solar Collector', from: 'ARMSOLAR.fbi' },
 };
 
-/* the map, 40 x 24 cells of plain ground. ARMCK stands left of centre; a finished ARMSOLAR (cells 20..24 x 9..13) is
-   the building to ring and the obstacle a line is refused on. */
+/* the map, 40 x 30 cells of plain ground, 480 rows: as tall as stock TA's sidebar beside it (decision 9 of
+   research/notes/ingame-wiki-sidebar-plan.md). ARMCK stands left of centre; a finished ARMSOLAR (cells 20..24 x
+   9..13) is the building to ring and the obstacle a line is refused on. Every demo plays in rows 0..23; rows 24..29
+   are plain ground. */
 const scene = {
-  map: { w: 40, h: 24, surfaceMetal: 0 },
+  map: { w: 40, h: 30, surfaceMetal: 0 },
   units: [
     { id: 'ck', type: 'ARMCK', at: [120, 200] },
     { id: 'sol', type: 'ARMSOLAR', at: [360, 184] },
@@ -51,7 +59,12 @@ function TL(start) {
     down(k) { inputs.push({ at: t, down: k }); return T; },
     up(k) { inputs.push({ at: t, up: k }); return T; },
     click(k) { T.down(k); t += 3; return T.up(k); },
-    build(b) { inputs.push({ at: t, build: b }); return T; },
+    /* a build input with the sidebar shown plays out as sim.js's trip: the glide to the button, through the pagers
+       when they are needed, the press, the arm at t + TRIP_UP and the glide back to where the cursor stood. Nothing
+       but a caption may stand in its TRIP ticks (sim.js checkTrips), so the timeline moves past them; the trip ends
+       with the cursor where it started, so `cur` still holds. Without the sidebar the build arms at once and the
+       timeline is the same. A caption meant for the trip is given before the build, on its tick. */
+    build(b) { inputs.push({ at: t, build: b }); t += TRIP; return T; },
     say(s) { inputs.push({ at: t, caption: s }); return T; },
   };
   return T;
@@ -65,68 +78,68 @@ function demo(id, title, add, fn, tail) {
 }
 
 demo('clicks', 'Click and Shift-click', {}, T => T
-  .say('One ARMCK selected. Pick the light laser tower, ARMLLT, in the build menu.').wait(20).build('ARMLLT').wait(15)
+  .say('One ARMCK selected. Pick the light laser tower, ARMLLT, in the build menu.').wait(20).build('ARMLLT').wait(5)
   .to(S(10, 5), 40).wait(10).click('lmb').say('A plain click places one and puts the building away.').wait(45)
-  .build('ARMLLT').say('Pick it again and hold Shift.').wait(15).down('shift')
+  .say('Pick it again and hold Shift.').build('ARMLLT').wait(5).down('shift')
   .to(S(13, 5), 30).wait(8).click('lmb').say('Shift-click: queued, and the building stays armed.').wait(20)
   .to(S(16, 5), 25).wait(8).click('lmb').wait(35)
   .up('shift').say('Let go of Shift: the building is put away, as in TA.'), 150);
 
 demo('line', 'Line', {}, T => T
-  .say('ARMLLT armed. Hold Shift, press the left button and drag.').build('ARMLLT').wait(15).to(S(4, 3), 40)
+  .say('ARMLLT armed. Hold Shift, press the left button and drag.').build('ARMLLT').wait(5).to(S(4, 3), 40)
   .down('shift').wait(10).down('lmb')
   .to(S(16, 6), 70).say('A line at any angle: each site steps one footprint along and snaps to the grid on its own.').wait(45)
   .up('lmb').say('Release with Shift held: seven towers queued, in order.').wait(30)
   .up('shift').say('Letting go of Shift afterwards puts the building away.').wait(35)
-  .build('ARMLLT').say('Armed again: start another line...').wait(10).to(S(4, 17), 40).down('shift').wait(8).down('lmb')
+  .say('Armed again: start another line...').build('ARMLLT').wait(5).to(S(4, 17), 40).down('shift').wait(8).down('lmb')
   .to(S(14, 17), 45).wait(15).up('shift').say('...and let go of Shift before the button: the line is gone.').wait(35)
   .up('lmb').say('Released: nothing is ordered, and the building is still armed.'), 60);
 
 demo('axis', 'Straight line', {}, T => T
-  .say('ARMLLT armed. Hold Shift and Ctrl, press and drag.').build('ARMLLT').wait(15).to(S(12, 10), 40)
+  .say('ARMLLT armed. Hold Shift and Ctrl, press and drag.').build('ARMLLT').wait(5).to(S(12, 10), 40)
   .down('shift').down('ctrl').wait(10).down('lmb')
   .to(S(30, 20), 90).say('Ctrl holds the line to its longer axis, wherever the cursor wanders.').wait(35)
   .say('Red: the solar collector stands there. Those sites are skipped.').wait(45)
   .up('lmb').up('ctrl').up('shift').say('Released: the green sites are queued, the red ones are not.'), 120);
 
 demo('rect', 'Filled rectangle', {}, T => T
-  .say("Dragon's teeth armed. Hold Shift and Alt, press and drag.").build('ARMDRAG').wait(15).to(S(6, 3), 40)
+  .say("Dragon's teeth armed. Hold Shift and Alt, press and drag.").build('ARMDRAG').wait(5).to(S(6, 3), 40)
   .down('shift').down('alt').wait(10).down('lmb')
   .to(S(12, 7), 60).say('A filled rectangle. The numbers are the order: rows alternate, so the builder snakes through.').wait(55)
   .up('lmb').up('alt').up('shift').say('Released: twelve queued. ARMCK builds them in that order.'), 330);
 
 demo('hollow', 'Hollow rectangle', { cursor: [300, 330] }, T => T
-  .say("Dragon's teeth armed. Shift, Alt and Ctrl: a hollow rectangle.").build('ARMDRAG').wait(15).to(S(12, 21), 30)
+  .say("Dragon's teeth armed. Shift, Alt and Ctrl: a hollow rectangle.").build('ARMDRAG').wait(5).to(S(12, 21), 30)
   .down('shift').down('alt').down('ctrl').wait(10).down('lmb')
   .to(S(4, 15), 60).say('Only the edge: a wall, started at the press and walked round in order.').wait(55)
   .up('lmb').up('ctrl').up('alt').up('shift').say('Released: fourteen pieces queued.'), 200);
 
 demo('spacing', 'Spacing', {}, T => T
-  .say("Dragon's teeth armed. Shift-drag a line: the pieces touch.").build('ARMDRAG').wait(15).to(S(4, 4), 40)
+  .say("Dragon's teeth armed. Shift-drag a line: the pieces touch.").build('ARMDRAG').wait(5).to(S(4, 4), 40)
   .down('shift').wait(8).down('lmb').to(S(16, 4), 50).wait(30)
   .down('alt').wait(8).click('z').say('Hold Alt and press Z: one more empty square between neighbours, at once.').wait(35)
   .click('z').say('Z again: two empty squares. Fewer pieces cover the same drag.').wait(30).up('alt').wait(20)
   .up('lmb').say('Released: four pieces, two squares apart.').wait(15).up('shift').wait(20)
-  .build('ARMDRAG').say("The spacing is kept for dragon's teeth: the next line starts spread.").wait(10).to(S(4, 7), 35)
+  .say("The spacing is kept for dragon's teeth: the next line starts spread.").build('ARMDRAG').wait(5).to(S(4, 7), 35)
   .down('shift').wait(8).down('lmb').to(S(16, 7), 45).wait(25)
   .down('alt').wait(8).click('x').say('Alt+X takes one away...').wait(30).click('x').say('...and again: back to touching.').wait(25)
   .up('alt').wait(15).up('lmb').say('Released: seven pieces, touching.').wait(10).up('shift'), 150);
 
 demo('ring', 'Ring around a building', {}, T => T
-  .say("Dragon's teeth armed. Point at the solar collector.").build('ARMDRAG').wait(15).to([360, 184], 45).wait(10)
+  .say("Dragon's teeth armed. Point at the solar collector.").build('ARMDRAG').wait(5).to([360, 184], 45).wait(10)
   .down('shift').down('ctrl').say('Hold Shift and Ctrl over a building: a ring round it.').wait(45)
   .click('lmb').up('ctrl').up('shift').say('Press and release without dragging: the ring is ordered.'), 330);
 
 demo('ringqueued', 'Ring around a queued build', {}, T => T
-  .say('Queue two solar collectors with Shift-clicks: one far away, then one near.').build('ARMSOLAR').wait(10).down('shift')
+  .say('Queue two solar collectors with Shift-clicks: one far away, then one near.').build('ARMSOLAR').wait(5).down('shift')
   .to(S(30, 3, 5), 40).wait(5).click('lmb').wait(10).to(S(10, 15, 5), 40).wait(5).click('lmb').wait(15).up('shift')
   .say('ARMCK walks to the first. The second is only a queued square.').wait(30)
-  .build('ARMDRAG').say("Dragon's teeth armed: Shift and Ctrl over the queued solar collector.").wait(10)
+  .say("Dragon's teeth armed: Shift and Ctrl over the queued solar collector.").build('ARMDRAG').wait(5)
   .to(S(10, 15, 5), 25).down('shift').down('ctrl').wait(40)
   .click('lmb').up('ctrl').up('shift').say('Click: the ring is queued round it, before it is even started.'), 90);
 
 demo('toggle', 'Placing it again removes it', {}, T => T
-  .say('ARMLLT armed. Shift-drag a row of five.').build('ARMLLT').wait(15).to(S(22, 3), 45)
+  .say('ARMLLT armed. Shift-drag a row of five.').build('ARMLLT').wait(5).to(S(22, 3), 45)
   .down('shift').wait(8).down('lmb').to(S(30, 3), 45).wait(10).up('lmb').say('Queued. Keep Shift held.').wait(25)
   .down('lmb').to(S(26, 3), 40).say('Drag back over the queue: yellow sites take a queued tower off.').wait(40)
   .up('lmb').say('Released: those three are gone; nothing is added.').wait(35)
@@ -134,7 +147,7 @@ demo('toggle', 'Placing it again removes it', {}, T => T
   .up('shift'), 120);
 
 demo('reshape', 'Change the shape mid-drag', {}, T => T
-  .say("Dragon's teeth armed. Shift-drag: a line.").build('ARMDRAG').wait(15).to(S(4, 4), 40)
+  .say("Dragon's teeth armed. Shift-drag: a line.").build('ARMDRAG').wait(5).to(S(4, 4), 40)
   .down('shift').wait(8).down('lmb').to(S(12, 9), 50).wait(30)
   .down('alt').say('Press Alt while dragging: a filled rectangle.').wait(45)
   .down('ctrl').say('Add Ctrl: hollow. The keys are read as you drag.').wait(45)
