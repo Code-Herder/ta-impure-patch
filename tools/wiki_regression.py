@@ -785,10 +785,11 @@ def wait_line(c, start, rx, what, seconds=30):
 
 def drawn_window(c, what, want_all):
     """The next whole periodic line of the stage's frames: (drew, of, producer ms, passes ms, max ms)."""
+    # 300 frames a line: some 12 s at 1920 x 1080 on a private Xvfb, and over 30 s at 3840 x 2160
     start = c.mark()
-    wait_line(c, start, DRAWN, what, 30)      # a window that may have begun before the change
+    wait_line(c, start, DRAWN, what, 180)     # a window that may have begun before the change
     start = c.mark()
-    ln = wait_line(c, start, DRAWN, what, 30)
+    ln = wait_line(c, start, DRAWN, what, 180)
     m = re.search(DRAWN, ln)
     drew, of = int(m.group(1)), int(m.group(2))
     assert (drew == of) if want_all else (drew == 0), f"{what}: {drew} of {of} frame(s) drew the image"
@@ -847,6 +848,11 @@ def stage3d(c, shots, res):
     print(r.stdout.rstrip())
     assert r.returncode == 0, f"(s3) stage3dcheck exited {r.returncode}: {r.stderr.strip()[-600:]}"
 
+    # the levers on quickbuild, whose stage has features (buildshapes' has none, so `nofeat` would
+    # withhold nothing the image expects there)
+    start = c.mark()
+    (gamedir / "tagpu_wiki.shot").write_text("quickbuild 1 30\n")
+    wait_line(c, start, r"wiki3d: shot \d+: quickbuild", "(s4) quickbuild was not drawn before the levers")
     try:
         for tok in ("nomap", "nofeat"):
             start = c.mark()
