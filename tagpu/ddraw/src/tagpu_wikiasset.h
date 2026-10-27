@@ -10,8 +10,9 @@
    FNV-1a 32 compared; each feature section from the first features\**\*.tdf that holds it (in the
    engine's enumeration order), with its sequences (a 2D feature) or its model (a 3D one). And for
    every unit type any entry defines: units\<name>.FBI by path, as a level opens it; the model
-   objects3d\<Objectname, else UnitName>.3DO; the script scripts\<UnitName>.COB. The folders'
-   names are the running executable's (Escalation's `unitsE`, TA Zero's `ZUnits` and `logoz`).
+   objects3d\<Objectname, else UnitName>.3DO; the script scripts\<UnitName>.COB, and from it the
+   pieces Create() hides (tagpu_cobscan_mask, the build ghost's rule). The folders' names are the
+   running executable's (Escalation's `unitsE`, TA Zero's `ZUnits` and `logoz`).
 
    THE MODELS ARE BUILT AS THE ENGINE HOLDS THEM (the scout's batch A4, DISASSEMBLED): the file's
    object and primitive structs with every offset turned into a pointer into the arena, the
@@ -102,11 +103,19 @@ typedef struct {
     const WIKI3DFEAT* feat;             /* in the description's order                            */
 } WIKI3DSTAGE;
 
-/* A unit type, resolved. `model` is NULL when it did not: its whitebox box is drawn. */
+#define WIKI3D_MAXPIECE 256             /* TAGPU_PBMAXPIECE: the readers' piece bound            */
+
+/* A unit type, resolved. `model` is NULL when it did not: its whitebox box is drawn.
+   `hidden` is what its Create() hides (tagpu_cobscan_mask, the build ghost's rule): bit g set when
+   node g of tagpu_model_walk's walk of `model` is hidden. `hides` is 1 with bits set, 0 when
+   nothing is hidden (no script, no Create(), no hide), -1 when the script or the model is refused
+   (then nothing is hidden either: every piece shows). */
 typedef struct {
     char        name[WIKI_ID_MAX];
     const char* model;
     int         ok;
+    int         hides;
+    uint32_t    hidden[WIKI3D_MAXPIECE / 32];
 } WIKI3DUNIT;
 
 typedef struct {

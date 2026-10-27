@@ -21,7 +21,8 @@
          reason, and exit 1 when any refusal is not named.
      wikiassettest fuzz-3do ARCHIVE PATH N SEED
          N copies of the 3DO at PATH inside ARCHIVE, damaged the same ways, each built as the loader
-         builds a model, its faces bound as misses, and walked by its report.
+         builds a model, its faces bound as misses, and walked by its report and by both piece
+         orders the Create() mask joins.
 
    Built with -fsanitize=address,undefined by assetcheck.py, so a read or write out of bounds fails
    the run as well. */
@@ -366,6 +367,11 @@ static int cmd_fuzz_3do(int argc, char** argv)
             for (t = 0; t < L.ntex; t++) L.tex[t].kind = T_MISS;
             bind_all(&L);
             model_report(&sb, &L, &md);
+            {
+                uint32_t bits[MAXPIECE / 32];
+                char hw[64];
+                unit_hides(&L.a, NULL, 0, md.root, bits, hw, sizeof hw);   /* both piece walks */
+            }
             clean++;
         }
         free(sb.s);

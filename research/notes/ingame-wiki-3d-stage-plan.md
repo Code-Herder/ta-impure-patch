@@ -740,7 +740,9 @@ and every entry's units from the player's archives into the arena, and says what
   `parse_tdf` parses them.
 - `src/tagpu_wikiasset.c`/`.h` (new): the 3D loader thread; the descriptions, the TNT tiles and
   their hashes, the feature sections and their sequences or models, the units' FBI, 3DO and
-  script, the texture bank and `logos.GAF`; models built and bound as the engine holds them, the
+  script and Create()'s hides (6c's `tagpu_cobscan_mask` over the file's bytes, base 0, joining
+  the engine's piece order and the readers' walk: bits over `tagpu_model_walk`, as the ghost's
+  are), the texture bank and `logos.GAF`; models built and bound as the engine holds them, the
   sequences and frames they name copied in the engine's in-memory form; the arena (32 MB reserved,
   committed in 1 MB steps) and its report; one interlocked publish (`tagpu_wiki3d_get()`); the
   trigger `tagpu_wiki3d.dump` → `tagpu_wiki3d.json` (each element: its path, the archive it came
@@ -758,8 +760,8 @@ and every entry's units from the player's archives into the arena, and says what
 - `tools/wiki/assetcheck.py` (new): builds the test with AddressSanitizer and
   UndefinedBehaviorSanitizer, compares its report with an independent Python resolution
   (`tavfs.py`, `tools/ta3do`'s reader, `tascene`'s TDF reader, the engine's rules written out a
-  second time), and runs the fuzz. `gfx.py --resolve-json`, which this plan named for the
-  comparison, does not exist; this is it.
+  second time, Create()'s hides from `ta3do`'s COB reader), compares it again with 6d's
+  `gfx.py --resolve-json` element by element, and runs the fuzz.
 - `tools/wiki_regression.py`: the `asset` step.
 
 **Invariants** (comments at each): the arena is immutable once published and never freed; it lies
@@ -768,8 +770,10 @@ until bounded against that file; the loader reads no engine memory and paints no
 
 **Verification** (MEASURED 2026-10-26, retail):
 - `tools/wiki/assetcheck.py`: the native load equals the Python reference on 30 mounts, 10 bank
-  GAFs, 2 of 2 grounds and 9 of 9 unit types, the 9 models' shape hashes included; 42 to 54 ms,
-  an arena of 246 301 bytes natively (pointers of 8 bytes in its own structs).
+  GAFs, 2 of 2 grounds and 9 of 9 unit types, the 9 models' shape hashes and hidden pieces
+  included (ARMLLT `flare`, ARMPW `rfire` and `lfire`, none for the other seven), and equals
+  `gfx.py --resolve-json` on its 27 elements; about 41 ms, an arena of 247 457 bytes natively
+  (pointers of 8 bytes in its own structs).
 - The fuzz, 1 000 damaged copies each under both sanitizers, no sanitizer error and 0 refusals
   unnamed: `AFark.ufo` (keyed, LZ77) 67 read whole, 933 refused; `CorNecro.ufo` (plain, zlib) 13
   and 987; `objects3d\armck.3do` 95 built, 905 refused (18, 14 and 10 kinds of refusal).
@@ -777,10 +781,10 @@ until bounded against that file; the loader reads no engine memory and paints no
   the native load over the instance's 31 mounts field for field, refusals' words included;
   `wiki3d: loaded in 49.8 ms - arena 246059 bytes`, 2 of 2 grounds and 9 of 9 unit types.
 
-**Not done here**: Create()'s hides. Landing 6c's `tagpu_cobscan.c` was not on this branch;
-`unit_hides` in `tagpu_wikiasset.c` is the one call site, and until 6c is merged it computes
-nothing and the report's `hides` is null. The mount list is read once a process: an archive a
-RESTART mounts later is not seen.
+**Not done here**: the mount list is read once a process, so an archive a RESTART mounts later is
+not seen. The native build walks the arena's two piece orders by offset (its arena holds stand-in
+addresses); the DLL calls `tagpu_model3do.h`'s own, and the game's report equalling the native
+one is what holds the two equal.
 
 **Gate**: `tagpu_replays.c` is a source of the `resource-*` groups; `tareplay.py landing`.
 **Review: high** (untrusted file parsing, a new thread, an allow-list argument grown).

@@ -18,11 +18,14 @@ against an independent Python resolution of the same install.
    first, the shadow mark in every enumeration, the first TDF holding a section, units\\<name>.FBI by path, the 3DO
    built as the engine holds it (the selection face swapped to 0, faces 1.. bubble-sorted by mean Y, X and Z
    negated) and bound (the texture bank in its enumeration order, then logos.GAF, FF_TEAM for exactly 10 frames),
-   and each model's shape hash over that. Every field must agree but `arena_bytes` (the C side's alone) and the
-   wording of a refusal (only whether there is one).
-4. **The fuzz**: `wikiassettest fuzz-hpi` on two archives (LZ77 and keyed, zlib and plain) and `fuzz-3do` on one
-   model, 1000 damaged copies each;
-   every refusal must be named and the sanitizers must stay silent.
+   each model's shape hash over that, and Create()'s hides (ta3do's COB reader, the engine's swap 0x45A950 by name
+   over its piece order, bits over the readers' walk). Every field must agree but `arena_bytes` (the C side's
+   alone) and the wording of a refusal (only whether there is one).
+4. **The mockup's resolution**: tools/wiki/gfx.py --resolve-json (landing 6d), element by element: each map's path,
+   archive and tile count, each tile's hash, each feature's TDF, archive and GAF, each unit's FBI, model and script
+   with their archives, and its hidden pieces. Skipped under --mounts, which gfx.py does not take.
+5. **The fuzz**: `wikiassettest fuzz-hpi` on two archives (LZ77 and keyed, zlib and plain) and `fuzz-3do` on one
+   model, 1000 damaged copies each; every refusal must be named and the sanitizers must stay silent.
 
 No game is run and nothing is written into the repository but the test's executable, which `*.exe` ignores.
 """
@@ -49,7 +52,7 @@ ta3do = tavfs.ta3do
 tascene = tavfs.tascene
 
 SRCS = ["tests/wikiassettest.c", "src/tagpu_hpi.c", "src/tagpu_vfs.c", "src/tagpu_tdf.c", "src/tagpu_json.c",
-        "src/tagpu_pak.c", "src/tagpu_wikidata.c"]
+        "src/tagpu_pak.c", "src/tagpu_wikidata.c", "src/tagpu_cobscan.c"]
 NAME_VAS = {"units": 0x503920, "textures": 0x503720, "logos": 0x504734, "logos_gaf": 0x503704,
             "objects3d": 0x5036E4, "scripts": 0x503740, "anims": 0x502E30, "features": 0x502C7C}
 FEATURE_BITS = ["animating", "animtrans", "shadtrans", "flamable", "geothermal", "blocking", "reclaimable",
@@ -295,6 +298,71 @@ def model_report(path, where, model, why, bank, logos):
     return r
 
 
+# --------------------------------------------------------------------------- Create()'s hides
+
+def cob_create(blob):
+    """(piece names, hidden piece indices) from Create()'s opening run, by ta3do's opcode table;
+    None for a script ta3do cannot read, (pieces, set()) for one without Create()."""
+    parsed = ta3do._cob_read(blob)
+    if parsed is None:
+        return None
+    entries, names, _p, code = parsed
+    n_pieces, off_pnames = struct.unpack_from("<i", blob, 8)[0], struct.unpack_from("<i", blob, 32)[0]
+    pieces = [blob[o:blob.index(b"\0", o)] for o in struct.unpack_from(f"<{n_pieces}i", blob, off_pnames)]
+    if "create" not in names:
+        return pieces, set()
+    pc, hidden = entries[names.index("create")], set()
+    while 0 <= pc < len(code):
+        op = code[pc] & 0xFFFFFFFF
+        inline = ta3do.COB_PROLOGUE.get(op)
+        if inline is None:
+            break
+        if op in (ta3do.OP_HIDE, ta3do.OP_SHOW) and pc + 1 < len(code) and 0 <= code[pc + 1] < n_pieces:
+            (hidden.add if op == ta3do.OP_HIDE else hidden.discard)(code[pc + 1])
+        pc += 1 + inline
+    return pieces, hidden
+
+
+def create_hides(blob, model):
+    """The report's `hides`: the engine's swap (0x45A950: COB piece i takes the first node at an
+    index >= i of its name, in the engine's order a node, its child's subtree, its sibling's),
+    the hidden pieces' nodes as bits over the readers' walk (root, then children pushed in
+    sibling order, the root's siblings not)."""
+    walk, stack = [], [model.root]
+    while stack:
+        n = stack.pop()
+        walk.append(n)
+        ch = n["child"]
+        while ch:
+            stack.append(ch)
+            ch = ch["sib"]
+    prim, stack = [], [model.root]
+    while stack:
+        n = stack.pop()
+        prim.append(n)
+        if n["sib"]:
+            stack.append(n["sib"])
+        if n["child"]:
+            stack.append(n["child"])
+    words = [0] * 8
+    got = cob_create(blob)
+    if got is None:
+        return {"pieces": [], "bits": "0" * 64, "why": "refused"}
+    pieces, hidden = got
+    fold = lambda b: ascii_lower(b.decode("latin-1"))  # noqa: E731
+    upto = max(hidden) if hidden else -1
+    for i in range(min(len(pieces), len(prim), upto + 1)):
+        j = next((j for j in range(i, len(prim)) if fold(prim[j]["name"]) == fold(pieces[i])), None)
+        if j is not None:
+            prim[i], prim[j] = prim[j], prim[i]
+    names = []
+    for g, n in enumerate(walk):
+        if any(k < len(prim) and prim[k] is n for k in hidden):
+            words[g >> 5] |= 1 << (g & 31)
+            names.append(n["name"].decode("latin-1"))
+    return {"pieces": names, "bits": "".join(f"{w:08x}" for w in words), "why": None}
+
+
 # --------------------------------------------------------------------------- the reference
 
 def entries_in_order():
@@ -453,6 +521,8 @@ def reference(gamedir, exe, language, mounts=None):
                     sp, shit = E.find_built(names["scripts"], un, "COB")
                     if shit:
                         u["script"], u["script_from"] = low(sp), low(shit[1])
+                        if u["ok"]:
+                            u["hides"] = create_hides(E.read(shit), m)
         units.append(u)
 
     # the bank: textures\*.GAF in the enumeration's order, logos.GAF aside; the count is the listing's less one
@@ -528,6 +598,60 @@ def diff(a, b, path="", out=None, exact=False):
     return out
 
 
+def against_gfx(native, gamedir, exe):
+    """The mockup's own resolution (tools/wiki/gfx.py --resolve-json, landing 6d) element by
+    element against the native report: each map's path, archive and tile count, each tile's hash,
+    each feature's TDF, archive and GAF, each unit's FBI, model and script with their archives and
+    its hidden pieces. gfx.py writes its packs into a temporary folder, never the mockup's."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "resolve.json"
+        cmd = [sys.executable, str(HERE / "gfx.py"), "--gamedir", str(gamedir), "--out", str(Path(tmp) / "packs"),
+               "--resolve-json", str(out)] + (["--exe", str(exe)] if exe else [])
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        gfx = json.loads(out.read_text())["entries"]
+    bad, n = [], 0
+    stages = {s["entry"]: s for s in native["stages"]}
+    units = {u["name"]: u for u in native["units"]}
+
+    def same(where, a, b):
+        if (a.lower() if isinstance(a, str) else a) != (b.lower() if isinstance(b, str) else b):
+            bad.append(f"{where}: native {a!r} != gfx.py {b!r}")
+
+    for eid, els in gfx.items():
+        st = stages.get(eid)
+        if st is None:
+            bad.append(f"{eid}: no stage in the native report")
+            continue
+        maps = iter(st["sources"])
+        feats = iter(st["features"])
+        for e in els:
+            n += 1
+            w = f"{eid} {e['element']}"
+            if e["element"] == "map":
+                m = next(maps, {})
+                same(w + " path", m.get("path"), e["path"]); same(w + " from", m.get("from"), e["from"])
+                same(w + " tiles", m.get("tiles"), e["tiles"])
+            elif e["element"] == "tile":
+                t = st["tiles"][e["row"]]
+                same(w + " source", t["source"], e["source"]); same(w + " index", t["index"], e["tile"])
+                same(w + " hash", t["hash"], e["hash"])
+            elif e["element"] == "feature":
+                f = next(feats, {})
+                same(w + " name", f.get("name"), e["name"]); same(w + " cell", f.get("cell"), e["cell"])
+                same(w + " tdf", (f.get("tdf") or "").replace("\\", "/"), e["tdf"].replace("\\", "/"))
+                same(w + " from", f.get("from"), e["from"])
+                same(w + " gaf", f.get("gaf"), e.get("gaf")); same(w + " gaf_from", f.get("gaf_from"), e.get("gafFrom"))
+            elif e["element"] == "unit":
+                u = units.get(e["name"], {})
+                same(w + " fbi", u.get("fbi"), e["fbi"]); same(w + " from", u.get("from"), e["fbiFrom"])
+                same(w + " model", (u.get("model") or {}).get("path"), e["model"])
+                same(w + " model_from", (u.get("model") or {}).get("from"), e["modelFrom"])
+                same(w + " script", u.get("script"), e["script"]); same(w + " script_from", u.get("script_from"), e["scriptFrom"])
+                same(w + " hidden", sorted(p.lower() for p in (u.get("hides") or {}).get("pieces", [])),
+                     sorted(p.lower() for p in e["hidden"]))
+    return bad, n
+
+
 def run_load(gamedir, pak, mounts=None, exe=None, language="english"):
     cmd = [str(EXE), "load", str(gamedir), str(pak)]
     if mounts:
@@ -574,6 +698,14 @@ def main():
     print(f"assetcheck: native == Python: {len(native['mounts'])} mounts, {len(native['bank'])} bank GAFs, "
           f"{len(native['stages'])} stages ({sum(s['ok'] for s in native['stages'])} grounds resolved), "
           f"{len(native['units'])} unit types ({sum(u['ok'] for u in native['units'])} resolved), {nmodels} models' shapes equal")
+    if not a.mounts:
+        bad, n = against_gfx(native, gamedir, exe)
+        if bad:
+            print(f"assetcheck: the native load and gfx.py --resolve-json DIFFER in {len(bad)} place(s):")
+            for b in bad[:40]:
+                print(f"  {b}")
+            return 1
+        print(f"assetcheck: native == gfx.py --resolve-json on {n} elements (paths, sources, tile hashes, hidden pieces)")
     if a.fuzz:
         # two small archives, one keyed with LZ77 chunks and one plain with zlib's, and a model
         g = Path(gamedir)

@@ -12,6 +12,7 @@
 #include "tagpu_json.h"
 #include "tagpu_pak.h"
 #include "tagpu_tdf.h"
+#include "tagpu_cobscan.h"
 #include "tagpu_vfs.h"
 #include "tagpu_wikiworld.h"
 #include "tagpu_wikiasset.h"
@@ -77,7 +78,7 @@ typedef char check_node[(N_VCOUNT == O_NVERT && N_FCOUNT == O_NFACE && N_SELPRIM
                          N_CHILD == O_CHILD && FACE_STRIDE == PR_SIZE && F_VCOUNT == PR_NIDX &&
                          F_INDICES == PR_IDX && F_TEXFRAME == PR_TEX && F_FLAGS == PR_FLAGS &&
                          FF_FLAT == PF_FLAT && FF_ANIM == PF_ANIM && FF_TEAM == PF_TEAM &&
-                         TAGPU_PBMAXPIECE == MAXPIECE) ? 1 : -1];
+                         TAGPU_PBMAXPIECE == MAXPIECE && WIKI3D_MAXPIECE == MAXPIECE) ? 1 : -1];
 #endif
 
 /* size caps on whole reads, a sanity bound per kind of file; the stock files' largest are far
@@ -1268,21 +1269,114 @@ static void stage_free(STAGEREC* s)
 /* ---- units --------------------------------------------------------------------------------------- */
 
 typedef struct {
-    int         found, script, hides;
+    int         found, script;
     TAGPU_VFILE f, sf;
     char        unitname[WIKI3D_NAMEMAX], object[WIKI3D_NAMEMAX];
     MODEL       md;
-    uint64_t    mask;
+    char        hides_why[64];  /* "" unless the mask was refused                               */
     char        why[200];
 } UNITREC;
 
-/* CREATE()'S HIDES. Landing 6c's tagpu_cobscan.c computes the pieces Create() hides from the script
-   and the model's node walk, one rule for the build ghost and the wiki; this is the wiki's one call
-   site, and until that file is merged here it computes nothing and the report says null. */
-static int unit_hides(const unsigned char* cob, uint32_t n, const char* root, uint64_t* mask)
+/* THE TWO PIECE ORDERS the mask joins, over a model of this arena: tagpu_model3do.h's
+   tagpu_model_walk (the readers' walk, the order of the bits) and tagpu_model_engine_order (the
+   engine's order for a new unit, the order COB pieces name). In the DLL the arena's fields are
+   pointers, so those two functions walk it themselves; the native build, whose arena holds
+   stand-in addresses, walks the same fields by offset with the same rules, and the game's
+   report equalling the native one (tools/wiki_regression.py `asset`) holds the two equal. A
+   model of this arena was built with every node reached once and at most MAXPIECE of them, so
+   both walks end. Host pointers come out, the nodes' and their names'. Returns the engine order's
+   count with the walk's in *np, or -1 for a walk past MAXPIECE. */
+#ifdef _WIN32
+static int piece_orders(const ARENA* a, uint32_t root, const char** walk, int* np, const char** prim,
+                        const char** pname)
 {
-    (void)cob; (void)n; (void)root; (void)mask;
-    return 0;
+    const int nprim = tagpu_model_engine_order((const char*)AT(a, root), prim, pname);
+    *np = tagpu_model_walk((const char*)AT(a, root), walk, MAXPIECE);
+    return *np > 0 && nprim > 0 ? nprim : -1;
+}
+#else
+static uint32_t field(const ARENA* a, uint32_t node, uint32_t at) { return OFF(a, rd32(AT(a, node + at))); }
+
+static int piece_orders(const ARENA* a, uint32_t root, const char** walk, int* npp, const char** prim,
+                        const char** pname)
+{
+    uint32_t stack[MAXPIECE + 2];
+    int sp = 0, np = 0, nprim = 0;
+    /* tagpu_model_walk: a node, then its children pushed in sibling order; the root's siblings not */
+    stack[sp++] = root;
+    while (sp > 0) {
+        const uint32_t nd = stack[--sp];
+        uint32_t ch;
+        if (np >= MAXPIECE) return -1;
+        walk[np++] = (const char*)AT(a, nd);
+        for (ch = field(a, nd, O_CHILD); ch; ch = field(a, ch, O_SIB)) {
+            if (sp >= MAXPIECE) return -1;
+            stack[sp++] = ch;
+        }
+    }
+    /* tagpu_model_engine_order: a node, its child's subtree, then its sibling's, the root's too */
+    stack[sp++] = root;
+    while (sp > 0) {
+        const uint32_t nd = stack[--sp], sib = field(a, nd, O_SIB), ch = field(a, nd, O_CHILD);
+        const uint32_t nm = field(a, nd, O_NAME);
+        if (nprim >= MAXPIECE) return -1;
+        pname[nprim] = nm ? (const char*)AT(a, nm) : NULL;
+        prim[nprim++] = (const char*)AT(a, nd);
+        if (sib) stack[sp++] = sib;
+        if (ch) stack[sp++] = ch;
+        if (sp > MAXPIECE) return -1;
+    }
+    *npp = np;
+    return np > 0 && nprim > 0 ? nprim : -1;
+}
+#endif
+
+/* CREATE()'S HIDES: tagpu_cobscan_mask, the rule the build ghost's mask takes (tagpu_datakeys.c),
+   over the script's file bytes (base 0: a file's offsets are unrelocated) and this model. The
+   engine's order holds the root's siblings and the readers' walk does not; the mask names nodes
+   by address, so a hidden sibling of the root is simply not in the bits. */
+static int unit_hides(const ARENA* a, const unsigned char* cob, uint32_t n, uint32_t root, uint32_t* bits,
+                      char* why, size_t nwhy)
+{
+    const char* walk[MAXPIECE];
+    const char* prim[MAXPIECE];
+    const char* pname[MAXPIECE];
+    int np = 0, r;
+    const int nprim = piece_orders(a, root, walk, &np, prim, pname);
+    memset(bits, 0, MAXPIECE / 8);
+    if (nprim < 0) { snprintf(why, nwhy, "the model's walk past %d pieces", MAXPIECE); return -1; }
+    r = tagpu_cobscan_mask((const char*)cob, n, 0, prim, pname, nprim, walk, np, bits);
+    if (r < 0) {
+        snprintf(why, nwhy, r == -2 ? "an empty script" : "the script or the model refused");
+        memset(bits, 0, MAXPIECE / 8);
+        return -1;
+    }
+    return r;
+}
+
+/* the report's "hides": null without a model and a script; else the hidden nodes' names in the
+   readers' walk, the bits as words (word 0 first), and the refusal */
+static void unit_hides_report(SB* b, const LOADER* L, const WIKI3DUNIT* u, const UNITREC* r)
+{
+    const char* walk[MAXPIECE];
+    const char* prim[MAXPIECE];
+    const char* pname[MAXPIECE];
+    int np = 0, g, first = 1;
+    if (!u->model || !r->script) { sb_raw(b, "null"); return; }
+    if (piece_orders(&L->a, r->md.root, walk, &np, prim, pname) < 0) np = 0;
+    sb_raw(b, "{\"pieces\":[");
+    for (g = 0; g < np; g++)
+        if (u->hidden[g >> 5] >> (g & 31) & 1u) {
+            const uint32_t nm = OFF(&L->a, rd32((const unsigned char*)walk[g] + O_NAME));
+            sb_raw(b, first ? "" : ",");
+            sb_q(b, nm ? (const char*)AT(&L->a, nm) : "", 0);
+            first = 0;
+        }
+    sb_raw(b, "],\"bits\":\"");
+    for (g = 0; g < MAXPIECE / 32; g++) sb_raw(b, "%08lx", (unsigned long)u->hidden[g]);
+    sb_raw(b, "\",\"why\":");
+    sb_q(b, u->hides < 0 ? r->hides_why : NULL, 0);
+    sb_raw(b, "}");
 }
 
 static void unit_load(LOADER* L, const char* type, WIKI3DUNIT* u, UNITREC* r)
@@ -1322,7 +1416,8 @@ static void unit_load(LOADER* L, const char* type, WIKI3DUNIT* u, UNITREC* r)
         char sw[200];
         unsigned char* cob = load(L, &r->sf, CAP_COB, sw, sizeof sw);
         r->script = 1;
-        if (cob && u->model) r->hides = unit_hides(cob, r->sf.size, u->model, &r->mask);
+        if (cob && u->model)
+            u->hides = unit_hides(&L->a, cob, r->sf.size, r->md.root, u->hidden, r->hides_why, sizeof r->hides_why);
         free(cob);
     }
     if (!u->ok) LOG("wiki3d: the unit type %s stays a whitebox box - %s", type, r->why);
@@ -1346,7 +1441,8 @@ static void unit_report(SB* b, const LOADER* L, const WIKI3DUNIT* u, const UNITR
     sb_q(b, r->script ? r->sf.path : NULL, 1);
     sb_raw(b, ",\"script_from\":");
     sb_q(b, r->script ? tagpu_vfs_source(L->vfs, r->sf.src) : NULL, 1);
-    if (r->hides) sb_raw(b, ",\"hides\":\"%016llx\"", (unsigned long long)r->mask); else sb_raw(b, ",\"hides\":null");
+    sb_raw(b, ",\"hides\":");
+    unit_hides_report(b, L, u, r);
     sb_raw(b, ",\"ok\":%s,\"why\":", u->ok ? "true" : "false");
     sb_q(b, u->ok ? NULL : r->why, 0);
     sb_raw(b, "}");
