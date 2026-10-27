@@ -14,6 +14,7 @@
 #include "tagpu_model3do.h"   /* F_COLORTAB: the Model3DOFace layout */
 #include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_render3do.h"
+#include "tagpu_nanostage.h"
 #include "tagpu_pal.h"
 #include "tagpu_gaf.h"
 #include "tagpu_vk.h"         /* tagpu_vk_owns_present: will a Vulkan pass run at all? */
@@ -200,22 +201,7 @@ static void shade_build(const unsigned char* shd)
    them — and not as live constants: each pass carries its own copy of the
    numbers in the form its shader wants. */
 
-/* ---- build-state (nanoframe) staging — engine formulas from build-state.md.
-   p = Nanoframe*255 runs 255->0 over the build; two triangle-wave "blues"
-   bounce over palette ramp 0xA0..0xAF; 5 stages pick a height threshold t and
-   the (above, band, below) colours: -2 erase-to-ColorKey, -1 keep, else index. */
-static int nano_tri(int ph)
-{
-    return (ph & 0x10) ? 0xAF - (ph & 0xF) : 0xA0 + (ph & 0xF);
-}
-static void nano_stage(int p, float b1, float b2, float* t, float c[3])
-{
-    if (p >= 236)      { *t = (float)((p-235)*255/20);              c[0]=-2; c[1]=b1; c[2]=-2; }
-    else if (p >= 201) { *t = (float)((p-200)*255/35);              c[0]=-2; c[1]=b1; c[2]=-2; }
-    else if (p >= 116) { *t = (float)(((115-p)*255/85 - 1) & 0xFF); c[0]=-2; c[1]=b2; c[2]=b1; }
-    else if (p >= 31)  { *t = (float)(((30-p)*255/85 - 1) & 0xFF);  c[0]=b1; c[1]=b2; c[2]=-1; }
-    else               { *t = (float)(p*255/30);                    c[0]=-1; c[1]=b1; c[2]=-1; }
-}
+/* ---- build-state (nanoframe) staging: the engine's formulas, tagpu_nanostage.h ---- */
 
 /* The whole build-state decision for one unit, in the engine's own terms, in
    one place, so whatever stages the scaffold (the native pass, tagpu_native.c)
@@ -231,21 +217,12 @@ static void nano_stage(int p, float b1, float b2, float* t, float c[3])
    its own cadence (the native pass once per arm poll; the composite path only
    after this function has said the unit is a nanoframe at all, so the stat
    costs nothing on the units that are not). build-state.md 0x458DD0 /
-   0x458D30. */
+   0x458D30; the arithmetic is tagpu_nanostage.h's, which the wiki's stage
+   shares. */
 int tagpu_r3d_nano_state(float nano, unsigned id, unsigned tick,
                          float* t, float c[3], float* wire)
 {
-    if (!(nano > 0.0f && nano <= 1.0f)) return 0;
-    {
-        unsigned slot = id;
-        int b1 = nano_tri((int)((slot ^ 5) + tick * 0x21 / 0x1E));
-        int b2 = nano_tri((int)((slot ^ 9) + tick * 0x39 / 0x1E));
-        int p  = (int)(nano * 255.0f);
-        if (p > 255) p = 255; else if (p < 0) p = 0;
-        *wire = (float)b2 / 255.0f;
-        nano_stage(p, (float)b1 / 255.0f, *wire, t, c);
-    }
-    return 1;
+    return tagpu_nanostage(nano, id, tick, t, c, wire);
 }
 
 /* The two things the passes share: the unit texture atlas and the shade

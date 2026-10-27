@@ -1,6 +1,6 @@
-/* tagpu_cobscan.c — Create()'s hides, read from a COB block, and the pieces of a model they
-   hide. The contract and the engine facts are in tagpu_cobscan.h; this file reads only its
-   arguments, and every read of the block is bounded by the length it was given. The build
+/* tagpu_cobscan.c — Create()'s hides and dont-caches, read from a COB block, and the pieces of a
+   model they mark. The contract and the engine facts are in tagpu_cobscan.h; this file reads only
+   its arguments, and every read of the block is bounded by the length it was given. The build
    ghost's mask (tagpu_datakeys.c) and the in-game wiki's models both read what it leaves, so a
    change here changes both. */
 #include <string.h>
@@ -46,15 +46,17 @@ static const char* name_at(const char* cob, unsigned size, uint32_t base, uint32
     return *room ? cob + (value - base) : cob;
 }
 
-#define OP_SHOW 0x10005000u
-#define OP_HIDE 0x10006000u
+#define OP_SHOW       0x10005000u
+#define OP_HIDE       0x10006000u
+#define OP_CACHE      0x10007000u
+#define OP_DONT_CACHE 0x10008000u
 
 /* The opcodes whose length is certain, with their inline operand counts: the prologue walk
    stops at the first opcode not here. The same table as tools/ta3do's COB_PROLOGUE, which
    measured the stock hides with it. */
 static const struct { uint32_t op; unsigned char inl; } PROLOGUE[] = {
     { OP_SHOW, 1 }, { OP_HIDE, 1 },
-    { 0x10007000u, 1 }, { 0x10008000u, 1 },                   /* CACHE, DONT_CACHE      */
+    { OP_CACHE, 1 }, { OP_DONT_CACHE, 1 },
     { 0x1000D000u, 1 }, { 0x1000E000u, 1 },                   /* SHADE, DONT_SHADE      */
     { 0x10001000u, 2 }, { 0x10002000u, 2 },                   /* MOVE, TURN             */
     { 0x1000B000u, 2 }, { 0x1000C000u, 2 },                   /* MOVE_NOW, TURN_NOW     */
@@ -105,11 +107,19 @@ static int name_is(const char* a, unsigned room, const char* lit)
     return -1;
 }
 
-int tagpu_cobscan_hides(const char* cob, unsigned size, uint32_t base,
-                        uint32_t hid[TAGPU_COB_HIDWORDS])
+/* the opcode that sets a piece's bit and the one that clears it, by TAGPU_COB_* */
+static void ops_of(int what, uint32_t* set, uint32_t* clr)
+{
+    *set = what == TAGPU_COB_DONTCACHE ? OP_DONT_CACHE : OP_HIDE;
+    *clr = what == TAGPU_COB_DONTCACHE ? OP_CACHE : OP_SHOW;
+}
+
+int tagpu_cobscan_create(const char* cob, unsigned size, uint32_t base, int what,
+                         uint32_t hid[TAGPU_COB_HIDWORDS])
 {
     int32_t ns, np, cl, i, ci = -1, pc;
-    uint32_t entries, snames, code;
+    uint32_t entries, snames, code, set, clr;
+    ops_of(what, &set, &clr);
     if (size < COB_HEADER || (int32_t)word(cob, COB_VERSION) != 4) return -1;
     ns = (int32_t)word(cob, COB_NSCRIPTS);
     np = (int32_t)word(cob, COB_NPIECES);
@@ -135,16 +145,22 @@ int tagpu_cobscan_hides(const char* cob, unsigned size, uint32_t base,
         uint32_t op = word(cob, code + 4u * (uint32_t)pc);
         int inl = op_inline(op);
         if (inl < 0) break;
-        if ((op == OP_HIDE || op == OP_SHOW) && pc + 1 < cl) {
+        if ((op == set || op == clr) && pc + 1 < cl) {
             int32_t k = (int32_t)word(cob, code + 4u * (uint32_t)(pc + 1));
             if (k >= 0 && k < np) {
-                if (op == OP_HIDE) hid[k >> 5] |= 1u << (k & 31);
-                else               hid[k >> 5] &= ~(1u << (k & 31));
+                if (op == set) hid[k >> 5] |= 1u << (k & 31);
+                else           hid[k >> 5] &= ~(1u << (k & 31));
             }
         }
         pc += 1 + inl;
     }
     return np;
+}
+
+int tagpu_cobscan_hides(const char* cob, unsigned size, uint32_t base,
+                        uint32_t hid[TAGPU_COB_HIDWORDS])
+{
+    return tagpu_cobscan_create(cob, size, base, TAGPU_COB_HIDE, hid);
 }
 
 const char* tagpu_cobscan_piece(const char* cob, unsigned size, uint32_t base, int k,
@@ -161,17 +177,17 @@ const char* tagpu_cobscan_piece(const char* cob, unsigned size, uint32_t base, i
     return *room ? nm : NULL;
 }
 
-int tagpu_cobscan_mask(const char* cob, unsigned size, uint32_t base,
-                       const char** prim, const char** pname, int nprim,
-                       const char* const* walk, int np, uint32_t* bits)
+int tagpu_cobscan_create_mask(const char* cob, unsigned size, uint32_t base, int what,
+                              const char** prim, const char** pname, int nprim,
+                              const char* const* walk, int np, uint32_t* bits)
 {
     uint32_t hid[TAGPU_COB_HIDWORDS];
     uint32_t pnames;
     int ncob, k, g, i, j, any = 0, upto = -1;
 
-    if (!cob) return 0;                                /* no script: nothing hidden */
+    if (!cob) return 0;                                /* no script: nothing marked */
     if (!size) return -2;
-    ncob = tagpu_cobscan_hides(cob, size, base, hid);
+    ncob = tagpu_cobscan_create(cob, size, base, what, hid);
     if (ncob <= 0) return ncob;
     for (k = 0; k < ncob; k++) if (hid[k >> 5] >> (k & 31) & 1) upto = k;
     if (upto < 0) return 0;
@@ -198,4 +214,12 @@ int tagpu_cobscan_mask(const char* cob, unsigned size, uint32_t base,
             if (walk[g] == prim[k]) bits[g >> 5] |= 1u << (g & 31);
     }
     return any;
+}
+
+int tagpu_cobscan_mask(const char* cob, unsigned size, uint32_t base,
+                       const char** prim, const char** pname, int nprim,
+                       const char* const* walk, int np, uint32_t* bits)
+{
+    return tagpu_cobscan_create_mask(cob, size, base, TAGPU_COB_HIDE, prim, pname, nprim, walk, np,
+                                     bits);
 }

@@ -18,12 +18,13 @@ against an independent Python resolution of the same install.
    first, the shadow mark in every enumeration, the first TDF holding a section, units\\<name>.FBI by path, the 3DO
    built as the engine holds it (the selection face swapped to 0, faces 1.. bubble-sorted by mean Y, X and Z
    negated) and bound (the texture bank in its enumeration order, then logos.GAF, FF_TEAM for exactly 10 frames),
-   each model's shape hash over that, and Create()'s hides (ta3do's COB reader, the engine's swap 0x45A950 by name
-   over its piece order, bits over the readers' walk). Every field must agree but `arena_bytes` (the C side's
+   each model's shape hash over that, Create()'s hides and dont-caches (ta3do's COB reader, the engine's swap 0x45A950 by name
+   over its piece order, bits over the readers' walk) and the FBI's facts (BMcode, Digger, NoShadow, CanHover, Floater).
+   Every field must agree but `arena_bytes` (the C side's
    alone) and the wording of a refusal (only whether there is one).
 4. **The mockup's resolution**: tools/wiki/gfx.py --resolve-json (landing 6d), element by element: each map's path,
    archive and tile count, each tile's hash, each feature's TDF, archive and GAF, each unit's FBI, model and script
-   with their archives, and its hidden pieces. Skipped under --mounts, which gfx.py does not take.
+   with their archives, its hidden and dont-cache pieces and its facts. Skipped under --mounts, which gfx.py does not take.
 5. **The fuzz**: `wikiassettest fuzz-hpi` on two archives (LZ77 and keyed, zlib and plain) and `fuzz-3do` on one
    model, 1000 damaged copies each; every refusal must be named and the sanitizers must stay silent.
 
@@ -300,9 +301,23 @@ def model_report(path, where, model, why, bank, logos):
 
 # --------------------------------------------------------------------------- Create()'s hides
 
-def cob_create(blob):
-    """(piece names, hidden piece indices) from Create()'s opening run, by ta3do's opcode table;
-    None for a script ta3do cannot read, (pieces, set()) for one without Create()."""
+MARKS = {"hides": (ta3do.OP_HIDE, ta3do.OP_SHOW), "uncached": (ta3do.OP_DONT_CACHE, ta3do.OP_CACHE)}
+
+
+def atoi(v, dflt):
+    """An FBI value as the engine's integer reader takes it (tagpu_tdf_int): leading blanks, a
+    sign, the digits; `dflt` when the key is absent."""
+    if v is None:
+        return dflt
+    m = re.match(r"\s*([+-]?)(\d*)", v)
+    n = int(m.group(2) or "0")
+    return -n if m.group(1) == "-" else n
+
+
+def cob_create(blob, ops=MARKS["hides"]):
+    """(piece names, marked piece indices) from Create()'s opening run, by ta3do's opcode table:
+    `ops` is the opcode that marks a piece and the one that clears it (MARKS); None for a script
+    ta3do cannot read, (pieces, set()) for one without Create()."""
     parsed = ta3do._cob_read(blob)
     if parsed is None:
         return None
@@ -317,14 +332,14 @@ def cob_create(blob):
         inline = ta3do.COB_PROLOGUE.get(op)
         if inline is None:
             break
-        if op in (ta3do.OP_HIDE, ta3do.OP_SHOW) and pc + 1 < len(code) and 0 <= code[pc + 1] < n_pieces:
-            (hidden.add if op == ta3do.OP_HIDE else hidden.discard)(code[pc + 1])
+        if op in ops and pc + 1 < len(code) and 0 <= code[pc + 1] < n_pieces:
+            (hidden.add if op == ops[0] else hidden.discard)(code[pc + 1])
         pc += 1 + inline
     return pieces, hidden
 
 
-def create_hides(blob, model):
-    """The report's `hides`: the engine's swap (0x45A950: COB piece i takes the first node at an
+def create_hides(blob, model, ops=MARKS["hides"]):
+    """The report's `hides` (or `uncached`, with that pair's `ops`): the engine's swap (0x45A950: COB piece i takes the first node at an
     index >= i of its name, in the engine's order a node, its child's subtree, its sibling's),
     the hidden pieces' nodes as bits over the readers' walk (root, then children pushed in
     sibling order, the root's siblings not)."""
@@ -345,7 +360,7 @@ def create_hides(blob, model):
         if n["child"]:
             stack.append(n["child"])
     words = [0] * 8
-    got = cob_create(blob)
+    got = cob_create(blob, ops)
     if got is None:
         return {"pieces": [], "bits": "0" * 64, "why": "refused"}
     pieces, hidden = got
@@ -503,7 +518,8 @@ def reference(gamedir, exe, language, mounts=None):
                 types.append(t)
     for t in types:
         u = {"name": t, "fbi": None, "from": None, "unitname": None, "object": None, "model": None,
-             "script": None, "script_from": None, "hides": None, "ok": False, "why": "refused"}
+             "script": None, "script_from": None, "hides": None, "uncached": None, "facts": None,
+             "ok": False, "why": "refused"}
         p, hit = E.find_built(names["units"], t, "FBI")
         if hit:
             u["fbi"], u["from"] = low(p), low(hit[1])
@@ -512,6 +528,11 @@ def reference(gamedir, exe, language, mounts=None):
                 un = (sec.get("unitname") or "")[:31]
                 obj = (sec.get("objectname") if sec.get("objectname") is not None else un)[:31]
                 u["unitname"], u["object"] = un or None, low(obj) or None
+                mobile = atoi(sec.get("bmcode"), 1) != 0
+                slant = not mobile and atoi(sec.get("digger"), 0) == 0
+                u["facts"] = {"mobile": mobile, "slant": slant,
+                              "shadow": atoi(sec.get("noshadow"), 0) == 0 and
+                              (slant or (atoi(sec.get("canhover"), 0) == 0 and atoi(sec.get("floater"), 0) == 0))}
                 if ascii_lower(un) == ascii_lower(t):
                     mp, mwhere, m, why = load_model(names["objects3d"], obj)
                     u["model"] = {}
@@ -523,6 +544,7 @@ def reference(gamedir, exe, language, mounts=None):
                         u["script"], u["script_from"] = low(sp), low(shit[1])
                         if u["ok"]:
                             u["hides"] = create_hides(E.read(shit), m)
+                            u["uncached"] = create_hides(E.read(shit), m, MARKS["uncached"])
         units.append(u)
 
     # the bank: textures\*.GAF in the enumeration's order, logos.GAF aside; the count is the listing's less one
@@ -649,6 +671,9 @@ def against_gfx(native, gamedir, exe):
                 same(w + " script", u.get("script"), e["script"]); same(w + " script_from", u.get("script_from"), e["scriptFrom"])
                 same(w + " hidden", sorted(p.lower() for p in (u.get("hides") or {}).get("pieces", [])),
                      sorted(p.lower() for p in e["hidden"]))
+                same(w + " uncached", sorted(p.lower() for p in (u.get("uncached") or {}).get("pieces", [])),
+                     sorted(p.lower() for p in e["uncached"]))
+                same(w + " facts", u.get("facts"), e["facts"])
     return bad, n
 
 
@@ -705,7 +730,7 @@ def main():
             for b in bad[:40]:
                 print(f"  {b}")
             return 1
-        print(f"assetcheck: native == gfx.py --resolve-json on {n} elements (paths, sources, tile hashes, hidden pieces)")
+        print(f"assetcheck: native == gfx.py --resolve-json on {n} elements (paths, sources, tile hashes, hidden pieces, dont-caches, FBI facts)")
     if a.fuzz:
         # two small archives, one keyed with LZ77 chunks and one plain with zlib's, and a model
         g = Path(gamedir)

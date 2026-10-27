@@ -12,6 +12,8 @@ from the game is written to disk.
 
 Checks, each a failure by unit name:
   - hides: the COB pieces tagpu_cobscan_hides leaves hidden, by name, are hidden_at_create's;
+    and the dont-caches tagpu_cobscan_create(TAGPU_COB_DONTCACHE) leaves are
+    dontcached_at_create's, with their mask by the same rule as the hides' below;
   - relocated: the script relocated as the engine's loader leaves it gives the same answers;
   - mask: where the engine's swap must land every hidden piece on the node of its own name
     (the script's piece names up to the last hidden one distinct, and each carried by exactly
@@ -108,46 +110,53 @@ def main(argv):
     if len(lines) != len(units):
         print(f"cobscantest: {len(lines)} answers for {len(units)} units", file=sys.stderr)
         return 1
-    failed, by_name, by_index, no_model, hidden_units = [], 0, 0, 0, 0
+    failed, no_model = [], 0
+    # per pair of opcodes: (what, ta3do's reader, units marking a piece, compared by name, by index)
+    kinds = [["hides", ta3do.hidden_at_create, 0, 0, 0],
+             ["dont-caches", ta3do.dontcached_at_create, 0, 0, 0]]
     for (unit, cob, nodes), line in zip(units, lines):
-        name, hides, pieces, mask, masked, reloc = line.split("\t")
-        want = set(ta3do.hidden_at_create(cob))
-        got = set(p for p in pieces.split(",") if p)
-        hidden_units += bool(want)
-        if name != unit or got != want:
-            failed.append(f"{unit}: hides {sorted(got)}, hidden_at_create {sorted(want)}")
+        f = line.split("\t")
+        name, reloc = f[0], f[9]
+        if name != unit:
+            failed.append(f"{unit}: answered as {name}")
         if reloc != "same":
             failed.append(f"{unit}: the relocated script differs ({reloc})")
         if nodes is None:
             no_model += 1
-            continue
-        parsed = ta3do._cob_read(cob)
-        model = [n.decode("latin-1").lower() for n in nodes]
-        if parsed is None or not want:
-            ok = mask == "0" and not masked
-            if not ok:
-                failed.append(f"{unit}: nothing hidden, yet mask {mask} {masked}")
-            by_name += 1
-            continue
-        cobnames = parsed[2]
-        upto = max(i for i, p in enumerate(cobnames) if p in want)
-        head = cobnames[:upto + 1]
-        if len(set(head)) == len(head) and all(model.count(p) == 1 for p in head):
-            by_name += 1
-            got_m = set(p for p in masked.split(",") if p)
-            if mask != "1" or got_m != want:
-                failed.append(f"{unit}: mask {mask} hides nodes {sorted(got_m)}, "
-                              f"hidden_at_create {sorted(want)}")
-        else:
-            by_index += 1
-            if verbose:
-                print(f"cobscantest: {unit}: by index, mask {mask} hides {masked}")
+        for kind, (pieces, mask, masked) in zip(kinds, ((f[2], f[3], f[4]), (f[6], f[7], f[8]))):
+            what, ref = kind[0], kind[1]
+            want = set(ref(cob))
+            got = set(p for p in pieces.split(",") if p)
+            kind[2] += bool(want)
+            if got != want:
+                failed.append(f"{unit}: {what} {sorted(got)}, ta3do {sorted(want)}")
+            if nodes is None:
+                continue
+            parsed = ta3do._cob_read(cob)
+            model = [n.decode("latin-1").lower() for n in nodes]
+            if parsed is None or not want:
+                if not (mask == "0" and not masked):
+                    failed.append(f"{unit}: no {what}, yet mask {mask} {masked}")
+                kind[3] += 1
+                continue
+            cobnames = parsed[2]
+            upto = max(i for i, p in enumerate(cobnames) if p in want)
+            head = cobnames[:upto + 1]
+            if len(set(head)) == len(head) and all(model.count(p) == 1 for p in head):
+                kind[3] += 1
+                got_m = set(p for p in masked.split(",") if p)
+                if mask != "1" or got_m != want:
+                    failed.append(f"{unit}: {what} mask {mask} marks nodes {sorted(got_m)}, ta3do {sorted(want)}")
+            else:
+                kind[4] += 1
+                if verbose:
+                    print(f"cobscantest: {unit}: {what} by index, mask {mask} marks {masked}")
     for f in failed:
         print("cobscantest: FAIL", f)
-    print(f"cobscantest: {len(units)} unit scripts ({hidden_units} hide a piece at Create), "
-          f"hides equal to hidden_at_create for {len(units) - sum(1 for f in failed if ': hides ' in f)}; "
-          f"mask compared by name for {by_name}, by the engine's index rule only for {by_index}, "
-          f"no model for {no_model}; {len(failed)} failed")
+    for what, _ref, marking, by_name, by_index in kinds:
+        print(f"cobscantest: {what}: {len(units)} unit scripts ({marking} mark a piece at Create); "
+              f"mask compared by name for {by_name}, by the engine's index rule only for {by_index}")
+    print(f"cobscantest: no model for {no_model}; {len(failed)} failed")
     return 1 if failed else 0
 
 

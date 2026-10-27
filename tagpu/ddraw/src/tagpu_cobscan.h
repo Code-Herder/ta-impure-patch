@@ -1,10 +1,11 @@
 #ifndef TAGPU_COBSCAN_H
 #define TAGPU_COBSCAN_H
-/* What a unit's script hides when the unit is created, read from the script and not run, and
-   which pieces of a model that hides. Engine-free and thread-free: no engine header, no Win32,
-   no state; every function reads only its arguments. The game's build ghost
-   (tagpu_datakeys.c) and the in-game wiki's models both take their hidden pieces from here, so
-   the wiki hides exactly what the game's ghost and finished building hide.
+/* What a unit's script hides (and marks dont-cache) when the unit is created, read from the
+   script and not run, and which pieces of a model that marks. Engine-free and thread-free: no
+   engine header, no Win32, no state; every function reads only its arguments. The game's build
+   ghost (tagpu_datakeys.c) and the in-game wiki's models both take their hidden pieces from here,
+   so the wiki hides exactly what the game's ghost and finished building hide; the wiki's slant
+   shadows take the dont-caches from here too.
 
    A COB block is given as its bytes, its length and a BASE: the value its header and its two
    name tables hold for the block's first byte. The engine's loader 0x4B2450 turns those
@@ -29,6 +30,18 @@
    return is positive. */
 int tagpu_cobscan_hides(const char* cob, unsigned size, uint32_t base,
                         uint32_t hid[TAGPU_COB_HIDWORDS]);
+
+/* THE SAME WALK FOR EITHER PAIR OF OPCODES Create() can mark a piece with:
+     TAGPU_COB_HIDE       HIDE sets the bit, SHOW clears it (what tagpu_cobscan_hides reads);
+     TAGPU_COB_DONTCACHE  DONT_CACHE sets it, CACHE clears it: the pieces whose `cached` flag
+                          (prim+0x28 bit 1, on at creation) the script clears, which the
+                          structure shadow's raster 0x45A610 then leaves out (build-state.md; a
+                          wind generator's rotor, ARMMEX's arms). The wiki's slant shadows read it.
+   The same returns as tagpu_cobscan_hides. */
+#define TAGPU_COB_HIDE      0
+#define TAGPU_COB_DONTCACHE 1
+int tagpu_cobscan_create(const char* cob, unsigned size, uint32_t base, int what,
+                         uint32_t hid[TAGPU_COB_HIDWORDS]);
 
 /* COB piece k's name and the bytes it has before the block ends; NULL when k is not a piece
    or the name table or the name lies outside the block. The name need not end inside `room`. */
@@ -55,5 +68,11 @@ const char* tagpu_cobscan_piece(const char* cob, unsigned size, uint32_t base, i
 int tagpu_cobscan_mask(const char* cob, unsigned size, uint32_t base,
                        const char** prim, const char** pname, int nprim,
                        const char* const* walk, int np, uint32_t* bits);
+
+/* The mask of either pair (TAGPU_COB_*), by the same swap and the same returns:
+   tagpu_cobscan_mask is this with TAGPU_COB_HIDE. */
+int tagpu_cobscan_create_mask(const char* cob, unsigned size, uint32_t base, int what,
+                              const char** prim, const char** pname, int nprim,
+                              const char* const* walk, int np, uint32_t* bits);
 
 #endif

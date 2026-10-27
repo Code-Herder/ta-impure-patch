@@ -10,6 +10,9 @@ page's controls and the demos playing on the stage.
     wiki_regression.py <instance> asset --launch      the 3D asset load, against the native one
     wiki_regression.py <instance> stage3d --launch --shots DIR
                                                       the stage's ground in 3D, against the mockup
+    wiki_regression.py <instance> units --launch --shots DIR
+                                                      the stage's units in 3D, against the mockup,
+                                                      and a reclaim in the game
     wiki_regression.py <name> mp                      a two-player network game on Wine, started by
                                                       tools/compat/tacompat.py's launcher
 
@@ -98,11 +101,27 @@ stage3d, on the same launch as sp (research/notes/ingame-wiki-3d-stage-plan.md, 
        wiki's target written to DIR as `<entry>-d<demo>-t<tick>-ss<ss>.game.ppm`, and the presented
        frame at ss 2 grabbed beside it (`<res>-<entry>-d<demo>-t<tick>.window.png`);
   (s3) tools/wiki/stage3dcheck.py over DIR: every terrain pixel equal to the mockup's, at most
-       0.05 % of the feature pixels differing;
+       0.05 % of the feature pixels differing, the unit pixels within question 8's tolerance;
   (s4) the lever tagpu_wiki3d.on `nomap` and then `nofeat`: no frame draws the image (the stage is
        the whitebox, R1 whole: `0 of N frame(s) drew the image`), each grabbed; the lever gone, every
        frame draws it again;
   (s5) the stage's render-thread time, as its periodic line gives it.
+units, on the same launch as sp (the plan's landing 6h):
+  (u1) the open's 3D asset load ends and the first stage's types line names every type in 3D;
+  (u2) at ss 2, Quick Build 3 and 8 (a construction, a reclaim, the upgrade's nanoframe), Build
+       Lines 2 and 4 (the gesture's ghosts) and Quick Build 9 (an ARMCK walking toward +x) held at
+       fixed ticks through tagpu_wiki.shot, each capture written to DIR as in stage3d with the
+       presented frame grabbed beside it;
+  (u3) tools/wiki/stage3dcheck.py over DIR, the unit pixels within question 8's tolerance;
+  (u4) the walking ARMCK's facing in the mockup's simulation at that tick, toward +x, which the
+       capture's unit pixels (u3) then show the game's model turned to;
+  (u5) the lever `nounit=ARMCK`: the types line puts ARMCK alone among the boxes, every frame still
+       draws the image, and the capture of Quick Build 3 differs from (u2)'s where the ARMCK stood;
+  (u6) the stage's render-thread time, the producer and the passes, against 0.5 ms;
+  (u7) the window closed, a reclaim in the game itself: the ARMCK ordered (tacli order) to reclaim
+       the scenario's ARMSOLAR, the solar's build fraction remaining (+0x104) and HP (+0x108) read
+       until it is gone, and the presented frame grabbed mid-reclaim -- the engine's own staging
+       of a reclaimed unit, which the stage's records follow.
 mp:
   (m) the wiki opened on the host takes no pause: both peers' GameTime advances over 3 s, and so
       does the host's demo, whose cost to the game thread is logged; a right and a left click on
@@ -768,8 +787,16 @@ def demos(c, shots, res):
 
 STAGE3D_SHOTS = (("quickbuild", 1), ("quickbuild", 11), ("buildshapes", 1))
 STAGE3D_TICKS = (30, 180, 330)
-DRAWN = r"wiki3d: frame \d+: .*; (\d+) of (\d+) frame\(s\) drew the image; render thread: the producer ([\d.]+) ms " \
+DRAWN = r"wiki3d: frame \d+: .*; (\d+) of (\d+) frame\(s\) drew the image; .*render thread: the producer ([\d.]+) ms " \
         r"and the passes ([\d.]+) ms a frame on average, the passes at most ([\d.]+) ms"
+# (entry, demo, ticks): the mockup's sim (tools/wiki/mockup/sim.js) puts a nanoframe in Quick Build 3 at
+# 267..287, the reclaim in Quick Build 8 at 171..180 and the upgrade's nanoframe after it, the gesture's
+# ghosts in Build Lines 2 and 4 from tick 0, and Quick Build 9's ARMCK walking toward +x at 115..207
+UNITS_SHOTS = (("quickbuild", 3, (180, 277)), ("quickbuild", 8, (120, 175, 300)),
+               ("buildshapes", 2, (100, 350)), ("buildshapes", 4, (100, 350)), ("quickbuild", 9, (150,)))
+FACING = ("quickbuild", 9, 150)
+NOUNIT = ("quickbuild", 3, 180)
+UNIT_MS = 0.5
 
 
 def wait_line(c, start, rx, what, seconds=30):
@@ -796,13 +823,36 @@ def drawn_window(c, what, want_all):
     return drew, of, float(m.group(3)), float(m.group(4)), float(m.group(5))
 
 
+def shoot(c, shots, res, entry, demo, tick, ss, name=None, window=True):
+    """One capture of the wiki's target through tagpu_wiki.shot, copied into `shots` (as
+    `<entry>-d<demo>-t<tick>-ss<ss>.game.ppm` unless `name`), with the presented frame grabbed beside
+    it; the capture's `armed` line."""
+    ppm = c.gamedir / "tagpu_wiki3d_shot.ppm"
+    start = c.mark()
+    ppm.unlink(missing_ok=True)
+    (c.gamedir / "tagpu_wiki.shot").write_text(f"{entry} {demo} {tick}\n")
+    asked = wait_line(c, start, r"wiki: shot \d+ (asked|: )|wiki: shot: ", f"{entry} {demo} {tick}")
+    assert " asked: " in asked, asked
+    n = re.search(r"wiki: shot (\d+) asked", asked).group(1)
+    armed = wait_line(c, start, rf"wiki3d: shot {n}: ", f"shot {n} was never armed")
+    m = re.search(r"the (\d+)x(\d+) target at ss (\d+)", armed)
+    assert m and int(m.group(3)) == ss, armed
+    wait_line(c, start, r"shot: wrote tagpu_wiki3d_shot\.ppm", f"shot {n} was never written")
+    out = shots / (name or f"{entry}-d{demo}-t{tick}-ss{ss}.game.ppm")
+    shutil.copyfile(ppm, out)
+    if window:
+        time.sleep(0.5)
+        grab(c, shots / f"{res}-{out.name.split('.')[0]}.window.png")
+    return out, armed
+
+
 def stage3d(c, shots, res):
     """(s1)..(s5): the stage's ground in 3D, against the mockup."""
     assert shots, "stage3d needs --shots DIR"
     shots.mkdir(parents=True, exist_ok=True)
     held_at(c, HELD_AT)
     gamedir = c.gamedir
-    ss_off, lever, ppm = gamedir / "tagpu_ss.off", gamedir / "tagpu_wiki3d.on", gamedir / "tagpu_wiki3d_shot.ppm"
+    ss_off, lever = gamedir / "tagpu_ss.off", gamedir / "tagpu_wiki3d.on"
     had_ss = ss_off.exists()
     lever.unlink(missing_ok=True)
     start = c.mark()
@@ -821,21 +871,7 @@ def stage3d(c, shots, res):
             time.sleep(1.5)
             for entry, demo in STAGE3D_SHOTS:
                 for tick in STAGE3D_TICKS:
-                    start = c.mark()
-                    ppm.unlink(missing_ok=True)
-                    (gamedir / "tagpu_wiki.shot").write_text(f"{entry} {demo} {tick}\n")
-                    asked = wait_line(c, start, r"wiki: shot \d+ (asked|: )|wiki: shot: ", f"(s2) {entry} {demo} {tick}")
-                    assert " asked: " in asked, f"(s2) {asked}"
-                    n = re.search(r"wiki: shot (\d+) asked", asked).group(1)
-                    armed = wait_line(c, start, rf"wiki3d: shot {n}: ", f"(s2) shot {n} was never armed")
-                    m = re.search(r"the (\d+)x(\d+) target at ss (\d+)", armed)
-                    assert m and int(m.group(3)) == ss, f"(s2) {armed}"
-                    wait_line(c, start, r"shot: wrote tagpu_wiki3d_shot\.ppm", f"(s2) shot {n} was never written")
-                    out = shots / f"{entry}-d{demo}-t{tick}-ss{ss}.game.ppm"
-                    shutil.copyfile(ppm, out)
-                    if ss == 2:
-                        time.sleep(0.5)
-                        grab(c, shots / f"{res}-{entry}-d{demo}-t{tick}.window.png")
+                    out, armed = shoot(c, shots, res, entry, demo, tick, ss, window=ss == 2)
                     print(f"wiki stage3d: (s2) {out.name}: {armed.split('wiki3d: ', 1)[1]}")
     finally:
         if had_ss:
@@ -869,6 +905,124 @@ def stage3d(c, shots, res):
           f"on average, the passes at most {got[4]:.3f} ms ({res})")
     c.keys("esc")
     wait_dump(c, lambda d: not d["open"], "(s5) Esc did not close the window")
+
+
+def sim_facing(entry, demo, tick, kind):
+    """The facing and the step of the first `kind` moving at `tick` in the mockup's simulation."""
+    js = ("const S = require(process.argv[1]); const fs = require('fs');"
+          "const e = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')); const sim = S.play(e, e.demos[+process.argv[3] - 1]);"
+          "let prev = null; while (sim.tick < +process.argv[4] && !sim.done) { prev = sim.view(); sim.step(); }"
+          "const v = sim.view(); const out = v.units.filter(u => u.type === process.argv[5]).map(u => {"
+          " const p = prev && prev.units.find(q => q.id === u.id); return { hx: u.hx, hz: u.hz, dx: p ? u.x - p.x : 0, dz: p ? u.z - p.z : 0 }; });"
+          "console.log(JSON.stringify(out));")
+    r = subprocess.run(["node", "-e", js, str(TREE / "tools/wiki/mockup/sim.js"), str(TREE / f"art/wiki/entries/{entry}.json"),
+                        str(demo), str(tick), kind], capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    got = [u for u in json.loads(r.stdout) if u["dx"] or u["dz"]]
+    assert got, f"no {kind} moves at {entry} demo {demo} tick {tick}"
+    return got[0]
+
+
+def units(c, shots, res):
+    """(u1)..(u7): the stage's units in 3D, against the mockup, and a reclaim in the game."""
+    assert shots, "units needs --shots DIR"
+    shots.mkdir(parents=True, exist_ok=True)
+    held_at(c, HELD_AT)
+    gamedir = c.gamedir
+    ss_off, lever = gamedir / "tagpu_ss.off", gamedir / "tagpu_wiki3d.on"
+    assert not ss_off.exists(), "units runs at the Supersampling setting's ss 2: remove tagpu_ss.off"
+    lever.unlink(missing_ok=True)
+    start = c.mark()
+    c.open_wiki(expect_pause=True)
+    line = wait_line(c, start, r"wiki3d: loaded in", "(u1) the 3D asset load", 120)
+    print(f"wiki units: (u1) {line.split('wiki3d: ', 1)[1]}")
+    line = wait_line(c, start, r"wiki3d: \S+: the types in 3D:", "(u1) the first stage's types", 30)
+    assert line.endswith("the boxes: none"), f"(u1) {line}"
+    print(f"wiki units: (u1) {line.split('wiki3d: ', 1)[1]}")
+
+    for entry, demo, ticks in UNITS_SHOTS:
+        for tick in ticks:
+            out, armed = shoot(c, shots, res, entry, demo, tick, 2)
+            print(f"wiki units: (u2) {out.name}: {armed.split('wiki3d: ', 1)[1]}")
+    r = subprocess.run([sys.executable, str(TREE / "tools/wiki/stage3dcheck.py"), str(shots), "--out", str(shots / "check")],
+                       capture_output=True, text=True, timeout=3600)
+    print(r.stdout.rstrip())
+    # (u3)'s verdict is given after (u4)..(u7), so one run reports every step
+    u3 = None if r.returncode == 0 else f"(u3) stage3dcheck exited {r.returncode}: {r.stderr.strip()[-600:]}"
+
+    f = sim_facing(*FACING, "ARMCK")
+    assert f["hx"] > 0.9 and f["dx"] > 0, f"(u4) the ARMCK at {FACING} is not walking toward +x: {f}"
+    print(f"wiki units: (u4) {FACING[0]} demo {FACING[1]} tick {FACING[2]}: the ARMCK walks ({f['dx']:.3f}, {f['dz']:.3f}) "
+          f"a tick facing ({f['hx']:.3f}, {f['hz']:.3f}); its capture is {FACING[0]}-d{FACING[1]}-t{FACING[2]}, "
+          f"against the mockup's in (u3)")
+
+    try:
+        start = c.mark()
+        lever.write_text("nounit=ARMCK")
+        wait_line(c, start, r"wiki3d: tagpu_wiki3d\.on: nounit=ARMCK", "(u5) the lever was not read")
+        entry, demo, tick = NOUNIT
+        out, _ = shoot(c, shots, res, entry, demo, tick, 2, name=f"lever-nounit-{entry}-d{demo}-t{tick}.ppm")
+        line = wait_line(c, start, rf"wiki3d: {entry}: the types in 3D:", "(u5) no types line under the lever")
+        assert line.endswith("the boxes: ARMCK"), f"(u5) {line}"
+        got = drawn_window(c, "(u5) under nounit=ARMCK", want_all=True)
+        from PIL import Image
+        import numpy as np
+        a = np.asarray(Image.open(out)); b = np.asarray(Image.open(shots / f"{entry}-d{demo}-t{tick}-ss2.game.ppm"))
+        ndiff = int((a != b).any(axis=2).sum())
+        assert ndiff > 0, "(u5) the capture under nounit=ARMCK equals the one without it"
+        print(f"wiki units: (u5) nounit=ARMCK: {line.split('wiki3d: ', 1)[1]}; {got[0]} of {got[1]} frames drew the "
+              f"image; {ndiff} px of the capture differ from (u2)'s")
+    finally:
+        lever.unlink(missing_ok=True)
+    got = drawn_window(c, "(u6) the lever gone", want_all=True)
+    total = got[2] + got[3]
+    print(f"wiki units: (u6) render thread: the producer {got[2]:.3f} ms and the passes {got[3]:.3f} ms a frame on "
+          f"average ({total:.3f} ms, against {UNIT_MS} ms), the passes at most {got[4]:.3f} ms ({res})")
+    assert total <= UNIT_MS, f"(u6) the stage costs the render thread {total:.3f} ms a frame"
+    c.keys("esc")
+    wait_dump(c, lambda d: not d["open"], "(u6) Esc did not close the window")
+    reclaim(c, shots, res)
+    assert u3 is None, u3
+
+
+def unit_state(c, kind):
+    """A unit's build fraction remaining (+0x104, float) and HP (+0x108, word), read at one instant."""
+    b = c.bytes(f"0x{c.address(kind) + 0x104:x}:x6")
+    frac, hp = struct.unpack("<fH", b)
+    return frac, hp
+
+
+def reclaim(c, shots, res):
+    """(u7): the engine's own reclaim, read as it runs."""
+    ck, solar = c.units["ARMCK"], c.units["ARMSOLAR"]
+    frac, hp = unit_state(c, "ARMSOLAR")
+    assert frac == 0.0 and hp > 0, f"(u7) the solar is not a finished unit before the reclaim: {frac}, {hp}"
+    sx, sz = 1600, 5800
+    c.settle_eye(sx - 500, sz - 400)
+    tacli("order", c.name, "reclaim", "unit", solar, "--unit", ck, "--expect", "ARMCK", "--expect-target", "ARMSOLAR",
+          timeout=60)
+    rows, grabbed, end = [], False, time.monotonic() + 240
+    hp0 = hp
+    while time.monotonic() < end:
+        try:
+            frac, hp = unit_state(c, "ARMSOLAR")
+            alive = c.values(f"0x{c.address('ARMSOLAR') + 0x110:x}")[0] != 0
+        except AssertionError:
+            break
+        rows.append((c.gametime(), frac, hp))
+        if not grabbed and 0 < hp < hp0 * 0.6:
+            grab(c, shots / f"{res}-reclaim-live.window.png")
+            grabbed = True
+        if hp == 0 or not alive or (len(rows) > 3 and rows[-1][2] == rows[-4][2] == 0):
+            break
+        time.sleep(0.5)
+    fell = [r for r in rows if r[2] < hp0]
+    assert fell, f"(u7) the solar's HP never fell under the reclaim: {rows[:5]}"
+    nano = [r for r in rows if r[1] != 0.0]
+    print(f"wiki units: (u7) the ARMCK reclaimed the ARMSOLAR: HP {hp0} -> {rows[-1][2]} over GameTime "
+          f"{rows[0][0]}..{rows[-1][0]} ({len(rows)} reads); the build fraction remaining (+0x104) read "
+          f"{'0.0 at every read' if not nano else f'non-zero at {len(nano)} reads, e.g. {nano[0]}'}")
+    assert not nano, "(u7) the engine staged the reclaimed unit as a nanoframe"
 
 
 def hud(c):
@@ -1063,14 +1217,14 @@ def mp(name):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("instance")
-    p.add_argument("mode", choices=("sp", "page", "demos", "recorded", "asset", "stage3d", "mp"))
+    p.add_argument("mode", choices=("sp", "page", "demos", "recorded", "asset", "stage3d", "units", "mp"))
     p.add_argument("--launch", action="store_true",
                    help="sp/recorded: launch on place-basic.json first, under the run lock")
     p.add_argument("--res", default="1920x1080", help="sp/recorded: the game's resolution")
     p.add_argument("--shot", help="sp, page: grab the presented frame with the window open to this PNG "
                                   "(page: on the second entry and its second demo, at (p2))")
     p.add_argument("--shots", type=Path, help="demos: grab each entry's demo mid-play, and the mockup's, into this folder; "
-                                              "stage3d: the captures of the wiki's target and the presented frames")
+                                              "stage3d, units: the captures of the wiki's target and the presented frames")
     a = p.parse_args()
     t0 = time.monotonic()
     stop = None
@@ -1092,6 +1246,8 @@ def main():
                     asset(c)
                 elif a.mode == "stage3d":
                     stage3d(c, a.shots, a.res)
+                elif a.mode == "units":
+                    units(c, a.shots, a.res)
                 else:
                     recorded(c)
             finally:

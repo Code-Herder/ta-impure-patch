@@ -1899,6 +1899,7 @@ static void vk_down(void)
         tagpu_vk_surf_down(&s_pass);
         tagpu_vk_world_down(&s_pass);
         /* the wiki's instances of the world passes (tagpu_scene.h), behind the same wait */
+        tagpu_vkw_unit_down(&s_pass);
         tagpu_vkw_feat_down(&s_pass);
         tagpu_vkw_terr_down(&s_pass);
         tagpu_vkw_world_down(&s_pass);
@@ -2439,7 +2440,8 @@ static int vk_present(void)
         tagpu_vk_shadow_down_owed() || tagpu_vk_unit_down_owed() ||
         tagpu_vk_mark_down_owed() || tagpu_vk_surf_down_owed() ||
         tagpu_vk_gui_down_owed() || tagpu_vk_world_down_owed() ||
-        tagpu_vkw_terr_down_owed() || tagpu_vkw_feat_down_owed() || tagpu_vkw_world_down_owed()) {
+        tagpu_vkw_terr_down_owed() || tagpu_vkw_feat_down_owed() || tagpu_vkw_unit_down_owed() ||
+        tagpu_vkw_world_down_owed()) {
         r = vkDeviceWaitIdle ? vkDeviceWaitIdle(s_vk.dev) : VK_ERROR_INITIALIZATION_FAILED;
         if (r != VK_SUCCESS) {
             s_lostLike = r == VK_ERROR_DEVICE_LOST ? LL_LOST : LL_NONE;
@@ -2463,6 +2465,7 @@ static int vk_present(void)
         if (tagpu_vk_world_down_owed())    tagpu_vk_world_down_paid(&s_pass);
         if (tagpu_vkw_terr_down_owed())    tagpu_vkw_terr_down_paid(&s_pass);
         if (tagpu_vkw_feat_down_owed())    tagpu_vkw_feat_down_paid(&s_pass);
+        if (tagpu_vkw_unit_down_owed())    tagpu_vkw_unit_down_paid(&s_pass);
         if (tagpu_vkw_world_down_owed())   tagpu_vkw_world_down_paid(&s_pass);
     }
 
@@ -2547,8 +2550,9 @@ static int vk_present(void)
         uint32_t tw = 0, th = 0;    /* the world target's extent, when there is one */
         /* the wiki's 3D stage (tagpu_wikiworld.h): its passes prepared, whether its image is drawn
            whole this frame, its target's extent and the render-thread time it took */
-        int wiki_on = 0, wiki_world = 0, wiki_terr = 0, wiki_feat = 0, wiki_image = 0, wiki_drawn = 0;
-        int wiki_want_terr = 0, wiki_want_feat = 0;
+        int wiki_on = 0, wiki_world = 0, wiki_terr = 0, wiki_feat = 0, wiki_unit = 0, wiki_image = 0;
+        int wiki_drawn = 0;
+        WIKIWORLDWANT wiki_want;
         uint32_t wtw = 0, wth = 0;
         double wiki_ms = 0.0;
         LARGE_INTEGER wiki_t0;
@@ -2688,18 +2692,28 @@ static int vk_present(void)
                built for that answer (tagpu_wikistate_image): R0, the image and R2, or R0 and R1.
                None of it puts a pixel in the world target the A/B reads; the composite is one
                more draw of the HUD's pass (draw_hud, below). */
-            wiki_on = tagpu_wikiworld_wants(s_pass.frame, &wiki_want_terr, &wiki_want_feat);
+            /* THE UNITS AFTER THE GROUND, the game's order: the unit pass's upload (its vertex
+               buffers, poses and texels -- and the atlas upload it owes on a frame the units were
+               withheld, so a frame the allowance refused still moves the atlas on), then its
+               prepare, only for a hand-over that carries every record. */
+            memset(&wiki_want, 0, sizeof wiki_want);
+            wiki_on = tagpu_wikiworld_wants(s_pass.frame, &wiki_want);
             if (wiki_on) {
                 QueryPerformanceCounter(&wiki_t0);
                 wiki_world = tagpu_vkw_world_prepare(&s_pass, cb, fi, &wtw, &wth);
                 if (wiki_world) {
                     wiki_terr = tagpu_vkw_terr_prepare(&s_pass, cb, fi);
                     wiki_feat = tagpu_vkw_feat_prepare(&s_pass, cb, fi);
+                    if (wiki_want.unit) {
+                        tagpu_vkw_unit_upload(&s_pass, cb, fi);
+                        if (wiki_want.unitWhole) wiki_unit = tagpu_vkw_unit_prepare(&s_pass, cb, fi);
+                    }
                 }
-                wiki_image = wiki_world && (!wiki_want_terr || wiki_terr) && (!wiki_want_feat || wiki_feat);
+                wiki_image = wiki_world && (!wiki_want.terr || wiki_terr) && (!wiki_want.feat || wiki_feat) &&
+                             (!wiki_want.unit || wiki_unit);
                 wiki_ms += ms_since(wiki_t0);
             }
-            tagpu_wikistate_image(s_pass.frame, wiki_image, 1, NULL);
+            tagpu_wikistate_image(s_pass.frame, wiki_image, wiki_want.ground, wiki_want.resolved);
             draw_hud = tagpu_vk_hud_prepare(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             draw_gui = tagpu_vk_gui_prepare(&s_pass, cb, fi);
             ab_gui = tagpu_vk_gui_ab_frame();
@@ -2781,12 +2795,17 @@ static int vk_present(void)
             tagpu_vk_world_end(&s_pass, cb);
         }
         /* THE WIKI'S STAGE, INTO ITS OWN TARGET, for the same reason and in the game's layer
-           order: the ground, then the features over it. Only for an image drawn whole. */
+           order: the ground, the features over it, the units, then the ghosts. Only for an image
+           drawn whole. The ghosts' call ends the unit pass's frame, so both or neither. */
         if (wiki_image) {
             QueryPerformanceCounter(&wiki_t0);
             tagpu_vkw_world_begin(&s_pass, cb, fi);
             if (wiki_terr) tagpu_vkw_terr_record(&s_pass, cb, fi, wtw, wth);
             if (wiki_feat) tagpu_vkw_feat_record(&s_pass, cb, fi, wtw, wth);
+            if (wiki_unit) {
+                tagpu_vkw_unit_record(&s_pass, cb, fi, wtw, wth);
+                tagpu_vkw_unit_record_ghosts(&s_pass, cb, fi, wtw, wth);
+            }
             tagpu_vkw_world_end(&s_pass, cb);
             wiki_ms += ms_since(wiki_t0);
         }
@@ -3079,6 +3098,7 @@ static void passes_down(void)
     tagpu_vk_unit_down(&s_pass);
     tagpu_vk_surf_down(&s_pass);
     tagpu_vk_world_down(&s_pass);
+    tagpu_vkw_unit_down(&s_pass);
     tagpu_vkw_feat_down(&s_pass);
     tagpu_vkw_terr_down(&s_pass);
     tagpu_vkw_world_down(&s_pass);

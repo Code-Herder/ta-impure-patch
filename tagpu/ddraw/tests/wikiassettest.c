@@ -370,7 +370,7 @@ static int cmd_fuzz_3do(int argc, char** argv)
             {
                 uint32_t bits[MAXPIECE / 32];
                 char hw[64];
-                unit_hides(&L.a, NULL, 0, md.root, bits, hw, sizeof hw);   /* both piece walks */
+                unit_hides(&L.a, NULL, 0, md.root, TAGPU_COB_HIDE, bits, hw, sizeof hw);   /* both piece walks */
             }
             clean++;
         }

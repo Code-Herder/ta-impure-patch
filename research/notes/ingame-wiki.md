@@ -14,8 +14,10 @@ single player; the window holds the page -- the tree, the demo list, the entry's
 stage with the selected demo playing, driven by the page's controls, the wheel and the scrollbars
 ([the plan](ingame-wiki-plan.html), landings 2 to 4). The stage's ground is the game's own: the
 description's tiles, its deposits and vents and the engine's fog, drawn by Impure's own terrain and
-feature passes, with the units still the whitebox's boxes over it ([the 3D stage's
-plan](ingame-wiki-3d-stage-plan.html), landing 6g). Try it yourself is drawn and does nothing yet
+feature passes; its units are the game's models, drawn by Impure's own unit pass, facing where they
+walk or work, buildings rising in the nanoframe, translucent ghosts at the cursor and the gesture's
+sites; a type the running game does not have stays the whitebox's box ([the 3D stage's
+plan](ingame-wiki-3d-stage-plan.html), landings 6g and 6h). Try it yourself is drawn and does nothing yet
 (landing 5).
 
 | What | Where |
@@ -38,7 +40,7 @@ plan](ingame-wiki-3d-stage-plan.html), landing 6g). Try it yourself is drawn and
 | The 3D ground's check, C against the mockup | `node tools/wiki/scenecheck.mjs`, with `tagpu/ddraw/tests/wikiscenetest.c`; in the game, `tools/wiki/stage3dcheck.py` over `wiki_regression.py stage3d`'s captures |
 | The stage's check, C against `stage.js` | `node tools/wiki/stagecheck.mjs`, with `tagpu/ddraw/tests/wikistagetest.c` |
 | The window in the game | `tagpu_wiki.c` (input, pause, the page's state and the demo's simulation; game thread), `tagpu_wikistate.c` (`tagpu_wikilay.c` and `tagpu_wikistage.c` on the record) and `tagpu_vk_hud.c` (drawing; render thread) — [GPU status](gpu-status.html) §2.12c |
-| The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|recorded|asset --launch`, `tools/wiki_regression.py <name> mp`; `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's |
+| The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|recorded|asset|stage3d|units --launch`, `tools/wiki_regression.py <name> mp`; `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's; `units --shots DIR` does the same with the units, then the facing, the `nounit=` lever, the render thread's time and a reclaim in the game |
 | Serving it | `python3 tools/hudart/serve.py`, then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
 
@@ -250,7 +252,7 @@ they were not re-disassembled for this table.
 | The build square, and a gesture's sites | Outlines in the GUI colour table at `main+0xDCB`. `0x0A` is green, `0x04` red (refused), `0x0E` yellow (takes a queued order off). These are table indices, not palette indices: stock reads them as palette `0xE9`, `0xD5` and `0xC2` (`terrain-depth.md`, the live read on Two Continents). | `tagpu_mark.c` `gather_cursor` (the single square, coloured by `region_flags` bit 6) and `gather_place` (one square per site), both through `square_emit`. The site colours are `tagpu_place.h` `PLACE_OK`, `PLACE_BLOCKED` and `PLACE_TOGGLE`, assigned by `tagpu_place.c` `classify`. `ghost_record` adds a ghost at each site. | A ghost at each site, whatever its colour, as in the game; the squares and the order numbers over the image |
 | Queued build squares | The engine's queued-build outline `0x438C00`, drawn while Shift is held | `tagpu_order.c` `draw_build`, a port with the engine's ten-tick sweep, gathered into the marker pass. `ghost_record` adds a translucent 3DO on each queued site not yet started. | A ghost on each queued site not yet started; the whitebox's dashed squares, in the owner's colour, over the image |
 | Order lines | TA draws no lines. It draws marching route dots in the `pathicon` ink, a waypoint sprite, target circles and range circles. | `tagpu_order.c` `draw_dots`, `draw_sprite` (a crosshair in place of the GAF sprite), `draw_circle`, `draw_ranges` | The whitebox's dashed lines, over the image |
-| Construction progress | The unit's build fraction: unit `+0x104`, the fraction remaining, staged as the engine's nano frame (`0x458D30` / `0x458DD0`) | `tagpu_render3do.c` `tagpu_r3d_nano_state` stages it; the unit shader in `tagpu_native.c` applies it, and the wire is `tagpu_posedraw.c` `pd_record`. | `tagpu_r3d_nano_state` ported line for line (`scene.js` `nanoState`) into the same shader, then the wire, every face's outline, after every body. A reclaim stages as a build run backward [INFERRED] |
+| Construction progress | The unit's build fraction: unit `+0x104`, the fraction remaining, staged as the engine's nano frame (`0x458D30` / `0x458DD0`) | `tagpu_render3do.c` `tagpu_r3d_nano_state` stages it; the unit shader in `tagpu_native.c` applies it, and the wire is `tagpu_posedraw.c` `pd_record`. A unit being reclaimed is not a nanoframe: the engine's reclaim lowers its hit points and leaves `+0x104` alone (`exe-reverse-engineering.md`, *A reclaimed unit is never a nanoframe*). | `tagpu_r3d_nano_state` ported line for line (`scene.js` `nanoState`) into the same shader, then the wire, every face's outline, after every body. A unit being reclaimed is drawn finished, as the game draws it |
 | Cursor | `anims/cursors.gaf`, chosen by the engine's picker `0x43E490` into `main+0x2CBE` from `cursor_ary` (`exe-reverse-engineering.md`, the cursor table): `cursornormal`, `cursormove`, `cursorselect`, … | `tagpu_gui_surf.c` `tagpu_gui_cursor_frame` takes the frame from the packet; `sharp_cursor` draws it last in the UI's sharp layer. | The kit's cursor icons, over the image |
 | Keys strip | None: the game has no such strip | Only the wiki draws one, under its own stage: `tagpu_wikilay.c` lays out the keycaps of the keys the demo's view holds, drawn by the replay HUD's stack (`tagpu_huddraw.c`, `tagpu_hudtext.c`, `tagpu_vk_hud.c`). | Unchanged |
 
@@ -713,17 +715,17 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
   icons, not `cursors.gaf`.
 - **What draws the geothermal steam plume is not established**: a feature animation or the
   engine's particles. `gfx=game` shows the vent's frame 0, without a plume.
-- **`gfx=game` departs from the game in known ways**, each the tascene lab's parity lane's: a
-  textured face of other than four vertices takes the lab's corner collapse (the engine textures
-  four-vertex faces); an animated texture shows frame 0; the wire is one pixel wide, where the game
-  thickens it with the supersampling; the Gamma curve is not applied. A reclaim's staging is
-  [INFERRED]. `stage3dcheck.py` compares the ground with the game's own (terrain and features,
-  every capture of `wiki_regression.py stage3d` byte for byte equal, MEASURED 2026-10-27); the units
-  are not compared, because the game's stage does not draw them in 3D yet (the 3D stage's plan,
-  landing 6h).
-- **The game's stage draws its units as the whitebox's boxes** over the 3D ground, and a stage
-  whose description names a 3D feature (a wreck) is drawn as the whitebox: the game's copies of
-  the unit pass are built and not called yet.
+- **`gfx=game` departs from the game in known ways**: a textured face of other than four vertices
+  takes the lab's corner collapse (the engine textures four-vertex faces); an animated texture shows
+  frame 0; the Gamma curve is not applied; the Shading option is taken as on, the game's default.
+  Its units follow the game's own rules (`gfx.js`, `tascene-render.js` `emitUnits` with
+  `engineShade`): the model turned by the record's yaw after the loader's half turn, a structure and
+  every ghost on the engine's lit rows from its vertex normals (`gfx.py` `vertex_normals`), any
+  other unit on the neutral row, a textured quad mapped and shaded over its own frame, and the
+  nanoframe's wire on the line grid thickened to `ss`. `stage3dcheck.py` compares the whole image
+  with the game's own: see the 3D stage's plan, landing 6h, for what it measured.
+- **A stage whose description names a 3D feature (a wreck) is drawn as the whitebox**, in the
+  game and in `gfx=game` alike: no stage names one.
 
 ## Open issues in the placement code
 

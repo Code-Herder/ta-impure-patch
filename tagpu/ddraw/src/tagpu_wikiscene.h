@@ -1,8 +1,9 @@
 #ifndef TAGPU_WIKISCENE_H
 #define TAGPU_WIKISCENE_H
 /* tagpu_wikiscene -- the in-game wiki's 3D stage as the world passes draw it: one stage's ground
-   and one view's fog turned into terrain cells, feature quads and the engine's fog grid
-   (research/notes/ingame-wiki-3d-stage-plan.md, sections 2, 3 and 7).
+   and one view's fog and units turned into terrain cells, feature quads, the engine's fog grid and
+   a model record per unit and ghost (research/notes/ingame-wiki-3d-stage-plan.md, sections 2, 3,
+   6 and 7).
 
    THE SPECIFICATION IS THE MOCKUP'S. The fog grid is tools/wiki/mockup/scene.js `fogGrid`; the
    cells are tools/tascene-render.js `classicTerrain().gather` and the quads its `gatherFeatures`,
@@ -29,6 +30,7 @@
    (`refused`), never a part of it. Pure C99 and the C library, so tools/wiki/scenecheck.mjs
    compiles it natively. */
 #include <stdint.h>
+#include "tagpu_wikistage.h"            /* WIKISTAGEVIEW, the record's view of the stage         */
 
 #define WIKISCENE_MAP    128                                     /* cells a side: WIKISTAGE_MAP */
 #define WIKISCENE_TILES  ((WIKISCENE_MAP / 2) * (WIKISCENE_MAP / 2))  /* 32-px cells           */
@@ -94,6 +96,46 @@ typedef struct {
     float    orgx, orgz;                /* the world point of block (0,0)'s corner sample: 16,16 */
     uint16_t grid[WIKISCENE_FOGMAX];    /* low byte b0 unexplored, high byte b1 grey (RG8)       */
 } WSCENEFOG;
+
+/* ---- the model records: every unit and every ghost the view shows (the plan's section 6) ---- */
+
+/* what the records need of each of the view's unit types (index = the view's type index),
+   which the caller resolves: the stage's producer from the 3D arena, the check from the
+   mockup's pack */
+typedef struct {
+    uint8_t ok;                         /* its model is drawn in 3D: else its box is, and no record */
+    uint8_t mobile, slant, shadow;      /* WIKI3DUNIT's FBI facts                                   */
+} WSCENETYPE;
+
+/* the Classic shadow a record casts before the engine's option bits, which its drawer applies:
+   tagpu_posedraw.h's TAGPU_PDSH_* */
+#define WSCENE_SH_NONE  0
+#define WSCENE_SH_SIL   1               /* a mobile unit's silhouette                              */
+#define WSCENE_SH_SLANT 2               /* a structure's slant                                     */
+
+typedef struct {
+    uint8_t  type;                      /* the view's type index                                   */
+    uint8_t  owner;                     /* its team colour: the frame of a team face, 0..7         */
+    uint8_t  ghost;                     /* a build ghost: alpha 0.40, depth writes off, no shadow  */
+    uint8_t  shadow;                    /* WSCENE_SH_*                                             */
+    uint8_t  nanoOn;                    /* a nanoframe, staged by nanoT, nanoC and nanoWire        */
+    int16_t  slot;                      /* a unit's index in the view, -1 for a ghost              */
+    float    x, z;                      /* its anchor, world units: on the flat stage, target px   */
+    float    cs, sn;                    /* its yaw: the model's +z turned onto its facing          */
+    float    enc;                       /* its depth row's key: 1 + 4 (z >> 4)                     */
+    float    alpha;
+    float    nanoT, nanoC[3], nanoWire; /* tagpu_nanostage.h, when nanoOn                          */
+} WSCENEMODEL;
+
+#define WIKISCENE_MODELS (WIKISTAGE_UNITS + 1 + WIKISTAGE_SITES + WIKISTAGE_QUEUED)
+
+/* THE RECORDS of view `v` at its tick, into `out` (WIKISCENE_MODELS of them): the units first, in
+   the view's order -- `*nunit` of them -- then the ghosts in tagpu_native.c `ghost_record`'s
+   order: the placement ghost, each gesture site's, each queued site's not yet started. A record
+   is made only for a type `types` marks ok (`ntype` of them; the rest are boxes) and an owner of
+   the eight. Returns the count. tools/wiki/mockup/scene.js `build` is the specification. */
+int  tagpu_wikiscene_models(const WIKISTAGEVIEW* v, const WSCENETYPE* types, int ntype,
+                            WSCENEMODEL* out, int* nunit);
 
 /* THE GROUND: `g`'s cells and quads into `out`. Returns 1 when the ground can be drawn whole, 0
    with out->refused set when it cannot -- a map past WIKISCENE_MAP, a tile map entry past the

@@ -10,7 +10,8 @@
    after the pass headers, so each of its prototypes meets the mapped one here.
 
    THE HAND-OVER SOURCES ANSWER FROM THE PRODUCER (tagpu_wikiworld.h): the terrain, the features,
-   the target. EVERY OTHER ANSWER IS "NOTHING", and each is one the instance already takes from the
+   the target; the units' hand-over is the wiki's posed program's own, which this file feeds
+   through the instances' entry points. EVERY OTHER ANSWER IS "NOTHING", and each is one the instance already takes from the
    game's own module on a frame with nothing to give: no fog grid for the posed program, no shadow
    map and no scaffold (a null view, which the passes replace with their own 1x1 dummy; an
    UNDEFINED shadow format, on which the passes give the dummy their own depth format and keep a
@@ -39,6 +40,11 @@
 #include "tagpu_vk_world.h"
 #include "tagpu_vk_terr.h"
 #include "tagpu_vk_feat.h"
+#include "tagpu_vk_unit.h"
+#include "tagpu_posebake.h"
+#include "tagpu_posedraw.h"
+#include "tagpu_render3do.h"
+#include "tagpu_model3do.h"
 #include "tagpu_scene_wiki.h"
 #include "tagpu_wikiworld.h"
 #include "tagpu_wikiscene.h"
@@ -76,13 +82,16 @@ static double ms_since(LARGE_INTEGER t0)
 }
 
 /* the lever, tagpu_wiki3d.on, on the passes' 30-frame beat */
-static int      s_leverOff, s_noMap, s_noFeat, s_leverSeen = -1;
-static unsigned s_leverAt;
+#define NOUNIT_MAX 8
+static int      s_leverOff, s_noMap, s_noFeat, s_noUnits, s_leverSeen = -1;
+static unsigned s_leverAt, s_leverSerial;
+static char     s_noUnit[NOUNIT_MAX][WIKI_ID_MAX];
+static int      s_nNoUnit;
 
 static void lever(unsigned frame)
 {
-    char buf[128], said[64];
-    int n, off = 0, nomap = 0, nofeat = 0, now;
+    char buf[256], said[64 + NOUNIT_MAX * (WIKI_ID_MAX + 8)], nu[NOUNIT_MAX][WIKI_ID_MAX];
+    int n, off = 0, nomap = 0, nofeat = 0, nounits = 0, nn = 0, now, k;
     if (s_leverSeen >= 0 && frame - s_leverAt < 30) return;
     s_leverAt = frame;
     n = tagpu_opt_read("tagpu_wiki3d.on", buf, sizeof buf);
@@ -100,20 +109,38 @@ static void lever(unsigned frame)
             if (!lstrcmpiA(p, "off")) off = 1;
             else if (!lstrcmpiA(p, "nomap")) nomap = 1;
             else if (!lstrcmpiA(p, "nofeat")) nofeat = 1;
+            else if (!lstrcmpiA(p, "nounits")) nounits = 1;
+            else if (!strncmp(p, "nounit=", 7) && p[7] && nn < NOUNIT_MAX) {
+                lstrcpynA(nu[nn], p + 7, WIKI_ID_MAX);
+                nn++;
+            }
             if (last) break;
             p = q + 1;
         }
     }
-    now = off | nomap << 1 | nofeat << 2;
+    /* the state as one number: the four switches, and the names folded in, so a changed name is
+       a change */
+    now = off | nomap << 1 | nofeat << 2 | nounits << 3 | nn << 4;
+    for (k = 0; k < nn; k++) {
+        const char* c;
+        for (c = nu[k]; *c; c++) now = (int)(((unsigned)now * 31u + (unsigned char)*c) & 0x7FFFFFFFu);
+    }
     if (now != s_leverSeen) {
-        snprintf(said, sizeof said, "%s%s%s", off ? " off" : "", nomap ? " nomap" : "", nofeat ? " nofeat" : "");
+        int o = snprintf(said, sizeof said, "%s%s%s%s", off ? " off" : "", nomap ? " nomap" : "",
+                         nofeat ? " nofeat" : "", nounits ? " nounits" : "");
+        for (k = 0; k < nn && o >= 0 && o < (int)sizeof said; k++)
+            o += snprintf(said + o, sizeof said - (size_t)o, " nounit=%s", nu[k]);
         said[sizeof said - 1] = 0;
         tagpu_logf("wiki3d: tagpu_wiki3d.on:%s", now ? said : " the 3D stage on");
+        s_leverSerial++;
     }
     s_leverSeen = now;
     s_leverOff = off;
     s_noMap = nomap;
     s_noFeat = nofeat;
+    s_noUnits = nounits;
+    memcpy(s_noUnit, nu, sizeof nu);
+    s_nNoUnit = nn;
 }
 
 /* THE GROUND, built once a stage: the scene's cells and quads, the terrain atlas, the feature
@@ -224,7 +251,9 @@ static const char* ground_build(const WIKI3DSTAGE* st)
         t->fx = (int16_t)f->fx; t->fz = (int16_t)f->fz;
         t->height = (int16_t)f->height;
         t->flags = f->flags;
-        if (f->model) return "a 3D feature, which only the unit pass draws, and the stage draws no unit";
+        /* the mockup's pack refuses the ground for one as well (tools/wiki/gfx.py), and the image is
+           the mockup's: no stage description names one */
+        if (f->model) return "a 3D feature, which the mockup's ground does not take either";
         if (!frames_of(f->seq, s_sframe[i][0], t->body, &t->nbody) ||
             !frames_of(f->seqshad, s_sframe[i][1], t->shadow, &t->nshadow))
             return "a feature's frame is not one the readers take";
@@ -280,7 +309,7 @@ static const char* ground_build(const WIKI3DSTAGE* st)
 
 /* this frame's hand-overs and target */
 static unsigned        s_frame;
-static int             s_have, s_wantTerr, s_wantFeat;
+static int             s_have, s_wantTerr, s_wantFeat, s_wantUnit, s_unitWhole, s_ground;
 static int             s_terrHave, s_featHave, s_tgtHave;
 static TAGPU_TERRHAND  s_terr;
 static TAGPU_FEATHAND  s_feat;
@@ -291,6 +320,242 @@ static unsigned        s_saidAt, s_nFrames, s_nImage;
 static double          s_msProd, s_msSeam, s_msMax;
 static uint32_t        s_shotWant, s_shotDone;
 static char            s_shotWhat[96];
+static unsigned        s_nRec, s_nRefused, s_nUnitFrames;
+
+/* ---- the units -------------------------------------------------------------------------------- */
+
+/* THE ARENA'S ONE LEVEL: the arena is immutable and never freed, so what the wiki's bake keyed on
+   it never goes stale. A constant, not the packet's: a level end in the game is no change to the
+   stage, and the bake must not drop what it holds for one. */
+#define WIKI_LEVEL_GEN  1u
+
+/* the bytes of a Model3DONode the readers take (tagpu_model3do.h: its last field is N_CHILD) */
+#define NODE_BYTES      (N_CHILD + 4)
+
+/* Each of the view's types as the stage draws it, rebuilt when the entry, the arena or the lever
+   changes: its record facts, the arena's unit, and its piece run -- the readers' walk of the
+   model, every node of it inside the arena. */
+typedef struct {
+    const WIKI3DUNIT* u;                 /* NULL: a box                                          */
+    int               np;
+    const char*       node[TAGPU_PBMAXPIECE];
+} TYPERUN;
+
+static const WIKI3D* s_tA;
+static int           s_tEntry = -1;
+static unsigned      s_tLever = ~0u;
+static WSCENETYPE    s_types[WIKI_MAX_DEFS];
+static TYPERUN       s_run[WIKI_MAX_DEFS];
+static uint32_t      s_resolved[(WIKI_MAX_DEFS + 31) / 32];
+static WSCENEMODEL   s_rec[WIKISCENE_MODELS];
+
+/* THE BOUND THE WIKI'S BAKE RESTS ON: node `p`'s bytes lie inside the arena. The arena is one
+   block, published whole and never freed, and its loader wrote every pointer in it to point inside
+   it (tagpu_wikiasset.h); this checks that a run handed to the bake names only that block, on the
+   pointer's value, before the call. */
+static int in_arena(const WIKI3D* a, const char* p)
+{
+    const char* base = (const char*)a;
+    return p >= base && a->bytes >= NODE_BYTES && (size_t)(p - base) <= (size_t)a->bytes - NODE_BYTES;
+}
+
+static int unit_levered(const char* name)
+{
+    int k;
+    for (k = 0; k < s_nNoUnit; k++)
+        if (!strcmp(s_noUnit[k], name)) return 1;
+    return 0;
+}
+
+static void types_build(const WIKI3D* a, const WIKISTAGEVIEW* v, int entry, const char* id)
+{
+    char in3d[512], boxes[512];
+    int t, j, k, n3 = 0, nb = 0;
+    in3d[0] = boxes[0] = 0;
+    memset(s_types, 0, sizeof s_types);
+    memset(s_resolved, 0, sizeof s_resolved);
+    for (t = 0; t < v->ntype && t < WIKI_MAX_DEFS; t++) {
+        TYPERUN* r = &s_run[t];
+        const WIKI3DUNIT* u = NULL;
+        r->u = NULL;
+        r->np = 0;
+        for (j = 0; j < a->nunit; j++)
+            if (!strcmp(a->unit[j].name, v->type[t])) { u = &a->unit[j]; break; }
+        if (!u || !u->ok || !u->model || unit_levered(v->type[t])) {
+            nb += snprintf(boxes + nb, nb < (int)sizeof boxes ? sizeof boxes - (size_t)nb : 0, " %s", v->type[t]);
+            if (nb > (int)sizeof boxes) nb = (int)sizeof boxes;
+            continue;
+        }
+        r->np = tagpu_model_walk(u->model, r->node, TAGPU_PBMAXPIECE);
+        for (k = 0; k < r->np; k++)
+            if (!in_arena(a, r->node[k])) break;
+        if (r->np <= 0 || k < r->np) {
+            tagpu_logf("wiki3d: %s: the model's walk %s - drawn as its box", v->type[t],
+                       r->np <= 0 ? "is refused" : "leaves the arena");
+            r->np = 0;
+            nb += snprintf(boxes + nb, nb < (int)sizeof boxes ? sizeof boxes - (size_t)nb : 0, " %s", v->type[t]);
+            if (nb > (int)sizeof boxes) nb = (int)sizeof boxes;
+            continue;
+        }
+        n3 += snprintf(in3d + n3, n3 < (int)sizeof in3d ? sizeof in3d - (size_t)n3 : 0, " %s", v->type[t]);
+        if (n3 > (int)sizeof in3d) n3 = (int)sizeof in3d;
+        r->u = u;
+        s_types[t].ok = 1;
+        s_types[t].mobile = u->mobile;
+        s_types[t].slant = u->slant;
+        s_types[t].shadow = u->shadow;
+        s_resolved[t >> 5] |= 1u << (t & 31);
+    }
+    in3d[sizeof in3d - 1] = boxes[sizeof boxes - 1] = 0;
+    tagpu_logf("wiki3d: %s: the types in 3D:%s; the boxes:%s", id, in3d[0] ? in3d : " none",
+               boxes[0] ? boxes : " none");
+    s_tA = a;
+    s_tEntry = entry;
+    s_tLever = s_leverSerial;
+}
+
+/* the engine's option word as the last packet carried it: bit 2 Shadow, bit 3 TShadow (the
+   silhouette), bit 5 Shading (tagpu_packet.h `gfx_opt`). The wiki can be open with no packet; it
+   keeps the last one's. */
+static unsigned s_gfx;
+
+/* One record's posed draw: the type's run baked, the rest pose turned onto its facing, and the
+   record's fields as tagpu_native.c hands a unit or a ghost to the posed program. 0 when the
+   bake refused it this frame. */
+static int unit_one(const WSCENEMODEL* m, const TYPERUN* r)
+{
+    static TAGPU_PK_PIECE s_pc[TAGPU_PBMAXPIECE];
+    static float s_pose[TAGPU_PBMAXPIECE * 12];
+    static unsigned char s_shaded[TAGPU_PBMAXPIECE];
+    static unsigned char s_pvis[TAGPU_PBMAXPIECE];
+    const WIKI3DUNIT* u = r->u;
+    const TAGPU_PBGEOM* bg;
+    const TAGPU_PBMAT* bm;
+    TAGPU_PDUNIT q;
+    float rot[12];
+    int i, k;
+    if (!u || r->np <= 0) return 0;
+    for (i = 0; i < r->np; i++) {
+        memset(&s_pc[i], 0, sizeof s_pc[i]);
+        s_pc[i].flags = 1;
+        s_pc[i].node = (uint32_t)(size_t)r->node[i];
+    }
+    /* THE TEMPLATE WALK'S KEY (`ghost` 1), the one tagpu_native.c `ghost_one` takes for the same
+       run: every run this bake is handed is the readers' walk of a model, so the units and the
+       ghosts of a type share one geometry entry. The owner keys the material: its team faces'
+       logo frame. */
+    if (!tagpu_posebake_unit(s_pc, r->np, m->owner, 1, &bg, &bm) || bg->nparts != r->np ||
+        bg->count[TAGPU_PB_BODY] <= 0)
+        return 0;
+    /* THE REST POSE TURNED ONTO THE FACING: ghost_one's arithmetic with the record's yaw (cs, sn)
+       about the up axis as the body turn -- the rotation tools/tascene-render.js `emitUnits`
+       applies, and at the default facing ghost_one's diag(-1, 1, -1) -- one rotation about the
+       root's rest point, every piece at rest. A piece Create() hides takes an all-zero matrix and
+       visibility 0; one it marks dont-cache draws but casts no slant (visibility 1, not 3:
+       tagpu_native.c `posed_pose`'s words). */
+    memset(rot, 0, sizeof rot);
+    rot[0] = m->cs;  rot[2] = m->sn;
+    rot[5] = 1.0f;
+    rot[8] = -m->sn; rot[10] = m->cs;
+    for (i = 0; i < bg->nparts; i++) {
+        float* o = s_pose + (size_t)i * 12;
+        const float* r0 = bg->restOff[0];
+        float rel[3];
+        for (k = 0; k < 3; k++) rel[k] = bg->restOff[i][k] - r0[k];
+        for (k = 0; k < 3; k++) {
+            o[k*4+0] = rot[k*4+0];
+            o[k*4+1] = rot[k*4+1];
+            o[k*4+2] = rot[k*4+2];
+            o[k*4+3] = rot[k*4+0]*rel[0] + rot[k*4+1]*rel[1] + rot[k*4+2]*rel[2] + r0[k];
+        }
+        s_shaded[i] = 1;
+        s_pvis[i] = 3;
+        if (u->hides > 0 && (u->hidden[i >> 5] >> (i & 31) & 1u)) {
+            memset(o, 0, 12 * sizeof *o);
+            s_pvis[i] = 0;
+        } else if (u->uncaches > 0 && (u->uncached[i >> 5] >> (i & 31) & 1u)) {
+            s_pvis[i] = 1;
+        }
+    }
+    memset(&q, 0, sizeof q);
+    q.geom = bg; q.mat = bm;
+    q.pose = s_pose; q.shaded = s_shaded; q.pvis = s_pvis;
+    q.npose = bg->nparts;
+    /* THE STAGE'S CAMERA: the eye and the viewport's corner at the map's, so the anchor is the
+       record's world point; the stage is flat, so the projected z is z and the shadow's ground
+       line is the anchor's own (shOffY 0) */
+    q.ax = m->x; q.ay = m->z;
+    q.wx0 = m->x; q.wz0 = m->z;
+    q.enc = m->enc;
+    q.alpha = m->alpha;
+    q.ghost = m->ghost;
+    q.fog = 0;                                /* units take no fog on the stage (section 7)   */
+    q.waterT = -1e9f; q.digT = -1e9f;
+    q.nanoOn = m->nanoOn;
+    if (m->nanoOn) {
+        q.nanoT = m->nanoT;
+        q.nanoC[0] = m->nanoC[0]; q.nanoC[1] = m->nanoC[1]; q.nanoC[2] = m->nanoC[2];
+        q.nanoWire = m->nanoWire;
+    }
+    q.cast[2] = 1.0f;
+    q.castSkip = 1;                           /* there is no cast-shadow map on the stage      */
+    /* THE ENGINE'S TWO HARD SHADOWS under its option word, tagpu_native.c's test with Classic's
+       `hard`: a structure's slant under Shadow, a mobile unit's silhouette under Shadow and
+       TShadow. The record carries the type's and the nanoframe's refusals already. */
+    q.shKind = TAGPU_PDSH_NONE;
+    if ((s_gfx & 4u) && m->shadow == WSCENE_SH_SLANT) q.shKind = TAGPU_PDSH_SLANT;
+    else if ((s_gfx & 4u) && (s_gfx & 8u) && m->shadow == WSCENE_SH_SIL) q.shKind = TAGPU_PDSH_SIL;
+    /* the engine's lit rasteriser for a structure under Shading, and for a ghost -- a preview of
+       one -- under the same option (ghost_one) */
+    q.lit = (s_gfx & 0x20u) && (m->ghost || !u->mobile);
+    tagpu_posedraw_unit(&q);
+    return 1;
+}
+
+/* THE UNITS' FRAME, every call in tagpu_native.c's order: the atlas's level and recycle before
+   the bake latches its generation, the bake's and the posed program's frame, the atlas's
+   allowance frame and the shade calibration, then the two windows -- the units', the ghosts'.
+   Returns 1 when every record was handed over, 0 when the bake refused one (its texels not yet
+   painted): the seam then does not draw this frame's hand-over (tagpu_wikiworld_wants). */
+static int units_frame(const TAGPU_FRAME* f, int nrec, int nunit, int gw, int gh, int ss)
+{
+    TAGPU_PDVIEW pv;
+    int i, refused = 0;
+    tagpu_r3d_atlas_level(WIKI_LEVEL_GEN);
+    tagpu_r3d_atlas_recycle();
+    tagpu_posebake_frame(f->frame_counter, WIKI_LEVEL_GEN);
+    tagpu_posedraw_frame(f->frame_counter);
+    if (!tagpu_r3d_ensure()) return 0;
+    tagpu_r3d_atlas_frame();
+    tagpu_r3d_shade_want(f->packet ? tagpu_pk_shd(f->packet) : NULL);
+    if (!nrec) return 1;
+    if (!tagpu_posedraw_ready()) return 0;
+    memset(&pv, 0, sizeof pv);
+    pv.game[0] = (float)gw; pv.game[1] = (float)gh;
+    pv.zoom = 1.0f;
+    pv.zoomC[0] = (float)gw * 0.5f; pv.zoomC[1] = (float)gh * 0.5f;
+    pv.depthScale = DEPTH_SCALE;
+    pv.ss = (float)ss;
+    pv.scafP[2] = (float)gw; pv.scafP[3] = (float)gh;
+    /* CLASSIC'S LIGHT: taLambert of the level normal is exactly 1 (amb 1, norm 1), as level
+       ground is in the game's Classic preset (tagpu_glsl.h) */
+    pv.sun[1] = 1.0f;
+    pv.amb = 1.0f;
+    pv.norm = 1.0f;
+    pv.shNeutral = tagpu_r3d_shade_neutral();
+    if (nunit) {
+        tagpu_posedraw_begin(&pv);
+        for (i = 0; i < nunit; i++) refused += !unit_one(&s_rec[i], &s_run[s_rec[i].type]);
+        tagpu_posedraw_end();
+    }
+    if (nrec > nunit) {
+        tagpu_posedraw_begin_ghost(&pv);
+        for (i = nunit; i < nrec; i++) refused += !unit_one(&s_rec[i], &s_run[s_rec[i].type]);
+        tagpu_posedraw_end();
+    }
+    s_nRefused += refused != 0;
+    return refused == 0;
+}
 
 static void fog_fields(float* org, float* cols, float* rows)
 {
@@ -310,6 +575,7 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     int ox, oy, entry, demo, i, x0, y0, x1, y1, ss;
     uint32_t shot;
     const WIKI3DSTAGE* st = NULL;
+    int gw, gh, nrec, nunit;
 
     s_have = s_terrHave = s_featHave = s_tgtHave = 0;
     QueryPerformanceCounter(&t0);
@@ -320,10 +586,12 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     if (entry < 0 || entry >= art->data->nentry) return;
     for (i = 0; i < a->nstage; i++)
         if (!strcmp(a->stage[i].entry, art->data->entry[entry].id)) { st = &a->stage[i]; break; }
+    if (v->w <= 0 || v->h <= 0 || v->w > WIKISCENE_MAP || v->h > WIKISCENE_MAP) return;
+    if (f->packet) s_gfx = f->packet->gfx_opt;
     /* THE GROUND FALLS BACK WHOLE (the plan's section 3): a stage the loader could not resolve, or
-       whose cells are not this view's map, is the whitebox's */
-    if (!st || !st->ok || st->w != v->w || st->h != v->h) return;
-    if (st != s_stage) {
+       whose cells are not this view's map, is the whitebox's, and the units are drawn over it */
+    if (!st || !st->ok || st->w != v->w || st->h != v->h) st = NULL;
+    if (st && st != s_stage) {
         const char* why = ground_build(st);
         s_stage = st;
         s_groundOk = why == NULL;
@@ -334,19 +602,33 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
                        "shadow(s), a %dx%d terrain atlas, %d feature frame(s)", st->entry, st->ntile,
                        s_scene.ncell, s_scene.nbody, s_scene.nshadow, ATLAS_W, s_tatlasH, s_fatlas.n);
     }
-    if (!s_groundOk) return;
+    s_ground = st && s_groundOk;
 
-    /* ONE ss FOR THE FRAME: the target is sized by it and both passes' hand-overs carry it */
+    /* THE MODEL RECORDS, of the types the arena resolved for this entry */
+    if (a != s_tA || entry != s_tEntry || s_leverSerial != s_tLever) types_build(a, v, entry, art->data->entry[entry].id);
+    nrec = tagpu_wikiscene_models(v, s_types, v->ntype < WIKI_MAX_DEFS ? v->ntype : WIKI_MAX_DEFS,
+                                  s_rec, &nunit);
+    if (!s_ground && !nrec) return;
+
+    /* ONE ss FOR THE FRAME: the target is sized by it and every pass's hand-over carries it */
     ss = tagpu_settings_ss();
-    tagpu_wikiscene_fog(v->fog, v->w, v->h, &s_fog);
-    tagpu_gaf_atlas_frame(&s_fatlas);
-    s_wantTerr = 1;
-    s_wantFeat = s_scene.nshadow + s_scene.nbody > 0;
+    gw = v->w * 16;
+    gh = v->h * 16;
+    s_wantTerr = s_ground;
+    s_wantFeat = s_ground && s_scene.nshadow + s_scene.nbody > 0;
+    s_wantUnit = nrec > 0;
+    s_unitWhole = units_frame(f, nrec, nunit, gw, gh, ss) && !s_noUnits;
+    s_nRec += (unsigned)nrec;
+    s_nUnitFrames++;
+    if (s_ground) {
+        tagpu_wikiscene_fog(v->fog, v->w, v->h, &s_fog);
+        tagpu_gaf_atlas_frame(&s_fatlas);
+    }
 
     /* THE TERRAIN, every cell of the map at zoom 1: tagpu_terr.c `terr_publish`'s fields at the
        stage's camera -- grid cell (0, 0) is the map's, its corner the target's, no restore, no
        relief, no shadow map, the engine's fog grid when a cell is fogged */
-    if (!s_noMap) {
+    if (s_wantTerr && !s_noMap) {
         memset(&s_terr, 0, sizeof s_terr);
         s_terr.cells = s_cells; s_terr.ncell = s_scene.ncell;
         s_terr.gw = (float)s_scene.gw; s_terr.gh = (float)s_scene.gh;
@@ -401,7 +683,7 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     /* THE TARGET: the map at the Supersampling setting's ss, composited into the image's rect --
        the fit the stage's ops are built with (tagpu_wikistage_image), on the attachment */
     tagpu_wikistage_image(v->w, v->h, stage, u, &x0, &y0, &x1, &y1);
-    s_tgt.gw = s_scene.gw; s_tgt.gh = s_scene.gh;
+    s_tgt.gw = gw; s_tgt.gh = gh;
     s_tgt.ss = ss;
     s_tgt.devres = 0;
     s_tgt.vx = ox + x0; s_tgt.vy = oy + y0;
@@ -411,7 +693,7 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
 
     if (shot != s_shotWant) {
         s_shotWant = shot;
-        snprintf(s_shotWhat, sizeof s_shotWhat, "%s demo %d at tick %d", st->entry, demo + 1, (int)v->tick);
+        snprintf(s_shotWhat, sizeof s_shotWhat, "%s demo %d at tick %d", art->data->entry[entry].id, demo + 1, (int)v->tick);
         s_shotWhat[sizeof s_shotWhat - 1] = 0;
     }
     s_frame = f->frame_counter;
@@ -419,11 +701,15 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     s_msProd += ms_since(t0);
 }
 
-int tagpu_wikiworld_wants(unsigned frame, int* terr, int* feat)
+int tagpu_wikiworld_wants(unsigned frame, WIKIWORLDWANT* w)
 {
     if (!s_have || s_frame != frame) return 0;
-    *terr = s_wantTerr;
-    *feat = s_wantFeat;
+    w->terr = s_wantTerr;
+    w->feat = s_wantFeat;
+    w->unit = s_wantUnit;
+    w->unitWhole = s_unitWhole;
+    w->ground = s_ground;
+    w->resolved = s_resolved;
     return 1;
 }
 
@@ -435,12 +721,15 @@ void tagpu_wikiworld_drawn(unsigned frame, int image, double ms)
     s_msSeam += ms;
     if (ms > s_msMax) s_msMax = ms;
     if (frame - s_saidAt >= 300) {
-        tagpu_logf("wiki3d: frame %u: %s; %u of %u frame(s) drew the image; render thread: the producer "
-                   "%.3f ms and the passes %.3f ms a frame on average, the passes at most %.3f ms",
+        tagpu_logf("wiki3d: frame %u: %s; %u of %u frame(s) drew the image; %.1f model record(s) a frame, "
+                   "%u frame(s) with one the bake refused; render thread: the producer %.3f ms and the "
+                   "passes %.3f ms a frame on average, the passes at most %.3f ms",
                    frame, image ? "the image" : "the whitebox (a pass the image needs did not prepare)",
-                   s_nImage, s_nFrames, s_msProd / s_nFrames, s_msSeam / s_nFrames, s_msMax);
+                   s_nImage, s_nFrames, s_nUnitFrames ? (double)s_nRec / s_nUnitFrames : 0.0, s_nRefused,
+                   s_msProd / s_nFrames, s_msSeam / s_nFrames, s_msMax);
         s_saidAt = frame;
         s_nFrames = s_nImage = 0;
+        s_nRec = s_nRefused = s_nUnitFrames = 0;
         s_msProd = s_msSeam = s_msMax = 0;
     }
 }

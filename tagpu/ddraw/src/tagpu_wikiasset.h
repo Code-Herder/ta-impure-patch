@@ -116,6 +116,16 @@ typedef struct {
     int         ok;
     int         hides;
     uint32_t    hidden[WIKI3D_MAXPIECE / 32];
+    /* what Create() marks dont-cache (tagpu_cobscan_create_mask, TAGPU_COB_DONTCACHE), as
+       `hidden` and with `uncaches` read as `hides`: a piece set here casts no structure shadow */
+    int         uncaches;
+    uint32_t    uncached[WIKI3D_MAXPIECE / 32];
+    /* THE FBI'S FACTS the stage draws a unit by, read with the engine's integer rule:
+       `mobile` unless BMcode is 0; `slant` -- the structure shadow's branch -- for a structure that
+       is not a Digger [INFERRED: the unit's structure bit +0x110 0x20000000 follows BMcode 0, as
+       tools/tascene takes it; tagpu_native.c `slant` tests that bit]; `shadow` unless NoShadow,
+       and for a mobile unit unless CanHover or Floater (tagpu_native.c, the engine's FBI gates). */
+    uint8_t     mobile, slant, shadow;
 } WIKI3DUNIT;
 
 typedef struct {

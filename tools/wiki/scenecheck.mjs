@@ -14,9 +14,13 @@
      paired is the mockup's own and not a copy of it;
    - every demo's FOG at tick 0, every 30th tick and its last: scene.js fogGrid of sim.js's view against
      tagpu_wikiscene_fog of tagpu_wikisim.c's view as the record carries it (tagpu_wikistage_copy) -- the grid's
-     size, its origin and every byte.
-   It catches a wrong placement, a wrong band or a wrong fog corner without either renderer. Units are not paired:
-   the stage draws none in 3D (their records are the plan's landing 6h). */
+     size, its origin and every byte;
+   - every demo's MODEL RECORDS at the same ticks: scene.js build of sim.js's view against tagpu_wikiscene_models of
+     the record's view, the types the pack resolved handed to both -- each record's type, owner, ghost bit, shadow
+     kind, slot, anchor, yaw, depth key and alpha within 1/64, and its nanoframe staging (on or off, the threshold,
+     the three colours and the wire's) exactly, units then ghosts in order.
+   It catches a wrong placement, a wrong band, a wrong fog corner, a unit turned the wrong way or staged on the wrong
+   frame without either renderer. */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -117,25 +121,50 @@ function groundText(id, dir, pack, feats) {
 }
 
 const near = (a, b) => Math.abs(a - b) <= TOL;
+const F = Math.fround;   // the C side prints a float in 9 digits, which reads back as that float
+
+/* one frame's model records: the C side's row [type, owner, ghost, shadow, nanoOn, slot, x, z, cs, sn, enc, alpha,
+   nanoT, nanoC0..2, wire] against scene.js's record; null when they pair */
+function pairModels(c, js) {
+  const want = [...js.units, ...js.ghosts];
+  if (c.nu !== js.units.length) return `${c.nu} unit records in C, ${js.units.length} in the mockup`;
+  if (c.m.length !== want.length) return `${c.m.length} records in C, ${want.length} in the mockup`;
+  for (let i = 0; i < want.length; i++) {
+    const r = c.m[i], m = want[i], n = m.nano;
+    const kind = !m.shadow ? 0 : m.slant ? 2 : 1;
+    const same = r[0] === m.type && r[1] === m.owner && r[2] === +m.ghost && r[3] === kind && r[4] === +!!n &&
+      r[5] === m.slot && near(r[6], m.pos[0]) && near(r[7], m.pos[1]) && near(r[8], m.yaw[0]) && near(r[9], m.yaw[1]) &&
+      near(r[10], m.enc) && near(r[11], m.alpha) &&
+      (!n || (r[12] === n.t && [n.c[0], n.c[1], n.c[2], n.wire].every((x, k) => F(r[13 + k]) === F(x))));
+    if (!same) return `record ${i}: C ${show(r)}, mockup ${show({ ...m, files: undefined })}`;
+    nmodels++;
+    if (n) nnano++;
+  }
+  return null;
+}
 const show = v => JSON.stringify(v, (k, x) => typeof x === 'number' ? +x.toFixed(4) : x);
 
 const t0 = Date.now();
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'scenecheck-'));
-let code = 0;
+let code = 0, nmodels = 0, nnano = 0;
 try {
   if (!fs.existsSync(path.join(PACK, 'index.json'))) throw new CannotRun(`no pack at ${PACK}: run tools/wiki/gfx.py`);
   const index = JSON.parse(fs.readFileSync(path.join(PACK, 'index.json'), 'utf8'));
 
   /* ---- the grounds, the mockup's way, and the file the C side reads them from ---- */
-  const grounds = {};
-  let text = '';
+  const grounds = {}, packs = {};
+  let text = '', types = '';
   for (const id of Object.keys(index.entries).sort()) {
     const dir = path.join(PACK, id), pack = JSON.parse(fs.readFileSync(path.join(dir, 'scene.json'), 'utf8'));
+    packs[id] = pack;
+    const meshes = Object.entries((pack.units || {}).meshes || {});
+    types += `${id} ${meshes.length}\n` + meshes.map(([t, m]) => `${t} ${+!!m.mobile} ${+!!m.slant} ${+!!m.shadow}\n`).join('');
     if (!pack.ground.ok) { console.log(`scenecheck: ${id}: the pack's ground fell back (${pack.ground.miss}) - not paired`); continue; }
     grounds[id] = mockupGround(dir, pack);
     text += groundText(id, dir, pack, grounds[id].feats);
   }
   fs.writeFileSync(path.join(tmp, 'grounds.txt'), text);
+  fs.writeFileSync(path.join(tmp, 'types.txt'), types);
 
   /* ---- the C side, built natively with the sanitizers ---- */
   const exe = path.join(DDRAW, 'tests/wikiscenetest-native.exe');   // `.exe` so the tree's *.exe ignore covers it
@@ -143,7 +172,7 @@ try {
     '-fno-sanitize-recover=all', '-o', exe, 'tests/wikiscenetest.c', ...SRCS, '-lm'], { cwd: DDRAW });
   const pak = path.join(tmp, 'wiki.bin');
   run('python3', [path.join(ROOT, 'tools/hudpak.py'), '--set', 'wiki', path.join(ROOT, 'art/wiki'), pak]);
-  const cout = run(exe, [pak, path.join(tmp, 'grounds.txt')]).trim().split('\n').map(l => JSON.parse(l));
+  const cout = run(exe, [pak, path.join(tmp, 'grounds.txt'), path.join(tmp, 'types.txt')]).trim().split('\n').map(l => JSON.parse(l));
 
   /* ---- the grounds paired ---- */
   let ncell = 0, nquad = 0, nground = 0;
@@ -204,6 +233,10 @@ try {
           }
           nframes++;
           if (bad) { code = 1; console.log(`DIFFER ${key} fog: ${bad}`); }
+          if (c && packs[id]) {
+            const why = pairModels(c, WikiScene.build(v, packs[id], sim.tick));
+            if (why) { code = 1; console.log(`DIFFER ${key} models: ${why}`); }
+          }
           cfog.delete(key);
         }
         if (sim.done) break;
@@ -215,7 +248,7 @@ try {
   const s = ((Date.now() - t0) / 1000).toFixed(1);
   if (code) console.log(`scenecheck: DIFFER (${s} s)`);
   else console.log(`scenecheck: all equal -- ${nground} grounds (${ncell} cells exactly, ${nquad} feature quads within 1/64), ` +
-                   `fog on ${nframes} frames (${nfogged} fogged) byte for byte (${s} s)`);
+                   `fog on ${nframes} frames (${nfogged} fogged) byte for byte, ${nmodels} model records (${nnano} nanoframes) (${s} s)`);
 } catch (x) {
   if (!(x instanceof CannotRun)) throw x;
   console.log(`scenecheck: cannot run: ${x.message}`);

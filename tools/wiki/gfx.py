@@ -39,8 +39,10 @@ D1/D2). Each element is resolved or refused by name:
 - **The model as the engine holds it** (A4): in every node whose selection primitive is not -1, that face and face 0
   swap, and faces 1.. are sorted ascending by their vertices' mean Y (a stable sort: the engine's bubble sort swaps on
   strictly greater), the truncated mean of the 16.16 values; face 0 is then the selection face, which the draws skip.
-  The X and Z negation the loader applies is the half turn of TA's default heading 0x8000, which tascene's yaw
-  already carries (facing 0 = yaw 180), so the mesh stays in the file's axes.
+  The mesh stays in the file's axes; the X and Z negation the loader applies is a half turn, which gfx.js applies with
+  the record's yaw (the stage's turn of the model as the engine holds it). Beside the mesh: each vertex's engine
+  normal and its quad's four corners' (`*.normals.bin`, 15 floats a vertex), and per owner each vertex's quad frame
+  (`*.<owner>.quad.bin`, 8 floats: tagpu_posebake.c `quad_frame`'s corner point, its (a, b) and the frame's rect).
 - **Textures** (A4, A5): the texture bank is `textures\\*.GAF` in enumeration order without `logos.GAF`; a face's
   name binds to the first GAF in bank order that has the entry; on a miss to `textures\\logos.GAF`, as a team face
   (the owner's frame) only when the entry has exactly 10 frames; when neither has it, the face is flat colour 0xD1.
@@ -348,6 +350,57 @@ def engine_faces(piece):
     return faces, skip0
 
 
+def vertex_normals(piece, faces, skip0):
+    """The engine's vertex normal of every vertex of a node (tagpu_posebake.c `piece_vnormals`, 0x45A0A0..0x45A22C):
+    each face's unit normal from its first three indices, against the winding ((V1-V0)x(V2-V0) negated), (0, 1, 0)
+    for a face repeating one of them or of no length; added to every vertex the face names and divided by the count,
+    not renormalised; (0, 0, 0) for a vertex no face names. Face 0 is left out when it is the selection face. In the
+    file's axes: the loader's negation of X and Z is a rotation, which turns the normals with the vertices."""
+    nv = len(piece.vertices)
+    acc = [[0.0, 0.0, 0.0] for _ in range(nv)]
+    cnt = [0] * nv
+    for j, prim in enumerate(faces):
+        idx = prim.indices
+        if (j == 0 and skip0) or len(idx) < 3 or len(idx) > 32 or any(i >= nv for i in idx):
+            continue
+        f = (0.0, 1.0, 0.0)
+        if idx[0] != idx[1] and idx[1] != idx[2] and idx[2] != idx[0]:
+            a, b, c = (piece.vertices[i] for i in idx[:3])
+            e1 = [b[k] - a[k] for k in range(3)]
+            e2 = [c[k] - a[k] for k in range(3)]
+            x = e1[1] * e2[2] - e1[2] * e2[1]
+            y = e1[2] * e2[0] - e1[0] * e2[2]
+            z = e1[0] * e2[1] - e1[1] * e2[0]
+            nl = (x * x + y * y + z * z) ** 0.5
+            if nl > 1e-6:
+                f = (-x / nl, -y / nl, -z / nl)
+        for i in idx:
+            for k in range(3):
+                acc[i][k] += f[k]
+            cnt[i] += 1
+    return [[v / cnt[i] for v in acc[i]] if cnt[i] else [0.0, 0.0, 0.0] for i in range(nv)]
+
+
+def quad_frame(piece, idx):
+    """A four-vertex face's frame (tagpu_posebake.c `quad_frame`): corner 2's point (a, b) in the frame of the edges
+    to corners 1 and 3, the least-squares fit, or None where the face keeps its two triangles' mapping -- e and f all
+    but parallel, or the quad not convex in the frame (a > 0, b > 0, a + b > 1, each with a 1/64 margin). An affine
+    invariant, so the file's axes give the engine's numbers."""
+    P = [piece.vertices[i] for i in idx]
+    e = [P[1][r] - P[0][r] for r in range(3)]
+    f = [P[3][r] - P[0][r] for r in range(3)]
+    d = [P[2][r] - P[0][r] for r in range(3)]
+    ee, ff, ef = sum(x * x for x in e), sum(x * x for x in f), sum(x * y for x, y in zip(e, f))
+    de, df = sum(x * y for x, y in zip(d, e)), sum(x * y for x, y in zip(d, f))
+    det = ee * ff - ef * ef
+    if not det > 1e-6 * ee * ff:
+        return None
+    a, b = (de * ff - df * ef) / det, (df * ee - de * ef) / det
+    if not (a > 1 / 64 and b > 1 / 64 and a + b > 1 + 1 / 64):
+        return None
+    return a, b
+
+
 def resolve_unit(eng, name, report):
     """(label, root piece, hidden, uncached, facts, fbi path) for unit `name`, or raises Miss."""
     hit = eng.open(eng.dirs["units"], name, "FBI")
@@ -374,7 +427,8 @@ def resolve_unit(eng, name, report):
              "slant": slant, "mobile": mobile}
     report.append({"element": "unit", "name": name, "fbi": hit[1], "fbiFrom": hit[2], "model": mhit[1],
                    "modelFrom": mhit[2], "script": shit[1] if shit else None,
-                   "scriptFrom": shit[2] if shit else None, "hidden": sorted(hidden)})
+                   "scriptFrom": shit[2] if shit else None, "hidden": sorted(hidden),
+                   "uncached": sorted(uncached), "facts": facts})
     return obj.lower(), root, hidden, uncached, facts
 
 
@@ -425,15 +479,16 @@ def unit_meshes(eng, models, owners):
                            lambda r, f=f: f.pixels[r * f.width:(r + 1) * f.width], UNIT_PAD)
         rects[key] = (x / aw, y / ah, (x + f.width) / aw, (y + f.height) / ah, f.transparent)
     for name, (label, root, hidden, uncached, facts) in models.items():
-        out = {"owners": {}, "slant": [], "wire": [], "faces": 0, "flatMiss": 0}
+        out = {"owners": {}, "quads": {}, "slant": [], "wire": [], "normals": [], "faces": 0, "flatMiss": 0}
         for owner in owners:
-            verts = []
+            verts, quads = [], []
             stats = {"faces": 0, "flatMiss": 0}
 
             def emit(piece, ox, oy, oz):
                 px, py, pz = ox + piece.offset[0], oy + piece.offset[1], oz + piece.offset[2]
                 if piece.name.lower() not in hidden:
                     faces, skip0 = engine_faces(piece)
+                    vn = vertex_normals(piece, faces, skip0) if owner == owners[0] else None
                     for i, prim in enumerate(faces):
                         if (i == 0 and skip0) or len(prim.indices) < 3:
                             continue
@@ -461,8 +516,22 @@ def unit_meshes(eng, models, owners):
                                 stats["flatMiss"] += 1
                         stats["faces"] += 1
                         n = len(pts)
+                        qf = quad_frame(piece, prim.indices) if rect and n == 4 else None
                         for k in range(1, n - 1):        # fanned from vertex 0
                             for slot in (0, k, k + 1):
+                                if vn is not None:
+                                    # the vertex's own normal, then the quad's four corners' (its own four times
+                                    # for any other face), as tagpu_posebake.c `geom_emit` carries them
+                                    out["normals"].extend(vn[prim.indices[slot]])
+                                    for c in range(4):
+                                        out["normals"].extend(vn[prim.indices[c]] if n == 4 else vn[prim.indices[slot]])
+                                if qf:
+                                    a, b = qf
+                                    quads.extend((1.0 if slot == 1 else a if slot == 2 else 0.0,
+                                                  1.0 if slot == 3 else b if slot == 2 else 0.0,
+                                                  a, b, rect[0], rect[1], rect[2], rect[3]))
+                                else:
+                                    quads.extend((0.0, 0.0, 1.0, 1.0, -1.0, -1.0, -1.0, -1.0))
                                 vx, vy, vz = pts[slot]
                                 if rect:
                                     # the engine maps a whole GAF frame across the face's four corners; an n-gon
@@ -478,6 +547,7 @@ def unit_meshes(eng, models, owners):
 
             emit(root, 0.0, 0.0, 0.0)
             out["owners"][owner] = verts
+            out["quads"][owner] = quads
             out["faces"], out["flatMiss"] = stats["faces"], stats["flatMiss"]
         plan[name] = out
     frame_rects = {key: {"x": x, "y": y, "w": frames[key].width, "h": frames[key].height,
@@ -519,9 +589,14 @@ def write_units(out, eng, entry, report):
             f = f"units/{key}.{owner}.bin"
             (out / f).write_bytes(struct.pack(f"<{len(verts)}f", *verts))
             rec["files"][str(owner)] = f
+            (out / f"units/{key}.{owner}.quad.bin").write_bytes(struct.pack(f"<{len(p['quads'][owner])}f",
+                                                                            *p["quads"][owner]))
+            rec.setdefault("quadFiles", {})[str(owner)] = f"units/{key}.{owner}.quad.bin"
             rec["verts"] = len(verts) // tascene.UNIT_VSTRIDE
         (out / f"units/{key}.slant.bin").write_bytes(struct.pack(f"<{len(p['slant'])}f", *p["slant"]))
         (out / f"units/{key}.wire.bin").write_bytes(struct.pack(f"<{len(p['wire'])}f", *p["wire"]))
+        (out / f"units/{key}.normals.bin").write_bytes(struct.pack(f"<{len(p['normals'])}f", *p["normals"]))
+        rec["normalsFile"] = f"units/{key}.normals.bin"
         rec["slantFile"], rec["slantVerts"] = f"units/{key}.slant.bin", len(p["slant"]) // 3
         rec["wireFile"], rec["wireVerts"] = f"units/{key}.wire.bin", len(p["wire"]) // 3
         meshes[name] = rec

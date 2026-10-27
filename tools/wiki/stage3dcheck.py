@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The in-game wiki's 3D stage in the game against the mockup's, pixel for pixel
-(research/notes/ingame-wiki-3d-stage-plan.md, landing 6g).
+(research/notes/ingame-wiki-3d-stage-plan.md, landings 6g and 6h).
 
     stage3dcheck.py DIR [--gpu vulkan|swiftshader] [--out DIR]
 
@@ -9,10 +9,13 @@ writes them: `<entry>-d<demo>-t<tick>-ss<ss>.game.ppm`, each the stage at one ti
 before the Gamma curve, gw*ss by gh*ss (tagpu_wikiworld.h, the trigger tagpu_wiki.shot). For each
 the mockup renders the same view -- the entry, the demo played from its start to the tick, at the
 same ss -- with tools/wiki/mockup/gfx.js, headless (playwright-cli; the real GPU through ANGLE's
-Vulkan by default), twice: the ground (`layers=terrain,features`), which is compared, and the
-features alone (`layers=features`), whose covered pixels are the FEATURE pixels; every other pixel
-is a TERRAIN pixel. The owner's tolerances: every terrain pixel equal; at most 0.05 % of the feature
-pixels differing. The game's image draws no unit, and neither render does.
+Vulkan by default), three times: the whole image (`layers=terrain,features,units`), which is
+compared; the units alone (`layers=units`: their bodies, their shadows, the nanoframes and the
+ghosts), whose covered pixels are the UNIT pixels; and the features alone (`layers=features`), whose
+covered pixels not under a unit are the FEATURE pixels. Every other pixel is a TERRAIN pixel. The
+owner's tolerances (the plan's question 8): every terrain pixel equal; at most 0.05 % of the feature
+pixels differing; over the unit pixels a mean absolute difference of at most 2/255 a channel, and at
+most 0.5 % of them differing by more than 40 on any channel.
 
 With --out, each pair is written beside a difference image (`*.diff.png`: differing pixels white
 over the game's image darkened) for review.
@@ -39,6 +42,9 @@ import wikilaycheck as wl  # noqa: E402
 
 NAME = re.compile(r"^(?P<entry>[a-z0-9_]+)-d(?P<demo>\d+)-t(?P<tick>\d+)-ss(?P<ss>\d)\.game\.ppm$")
 FEATURE_CEILING = 0.0005
+UNIT_MEAN = 2.0                 # /255, a channel, over the unit pixels
+UNIT_FAR = 40                   # a channel's difference that makes a unit pixel a far one
+UNIT_FAR_CEILING = 0.005
 GPU_ARGS = {
     "vulkan": ["--use-angle=vulkan", "--enable-features=Vulkan", "--ignore-gpu-blocklist"],
     "swiftshader": ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"],
@@ -108,14 +114,22 @@ class Mockup:
         shutil.rmtree(self.tmp, ignore_errors=True)
 
 
-def compare(game, ground, feats):
-    """(terrain pixels, terrain differing, feature pixels, feature differing, the mask of differing pixels)."""
+def compare(game, whole, feats, units):
+    """The three classes' numbers, and the mask of differing pixels: {terrain: (px, differ),
+    features: (px, differ), units: (px, mean abs diff /255, far)}."""
     import numpy as np
     g = np.asarray(game, dtype=np.int16)
-    m = np.asarray(ground.convert("RGB"), dtype=np.int16)
-    fmask = np.asarray(feats, dtype=np.uint8)[..., 3] > 0
-    diff = (g != m).any(axis=2)
-    return int((~fmask).sum()), int((diff & ~fmask).sum()), int(fmask.sum()), int((diff & fmask).sum()), diff
+    m = np.asarray(whole.convert("RGB"), dtype=np.int16)
+    umask = np.asarray(units, dtype=np.uint8)[..., 3] > 0
+    fmask = (np.asarray(feats, dtype=np.uint8)[..., 3] > 0) & ~umask
+    tmask = ~umask & ~fmask
+    ad = np.abs(g - m)
+    diff = (ad > 0).any(axis=2)
+    nu = int(umask.sum())
+    return ({"terrain": (int(tmask.sum()), int((diff & tmask).sum())),
+             "features": (int(fmask.sum()), int((diff & fmask).sum())),
+             "units": (nu, float(ad[umask].mean()) if nu else 0.0, int(((ad > UNIT_FAR).any(axis=2) & umask).sum()))},
+            diff)
 
 
 def main():
@@ -141,20 +155,25 @@ def main():
             m = NAME.match(f.name)
             entry, demo, tick, ss = m["entry"], int(m["demo"]), int(m["tick"]), int(m["ss"])
             game = read_ppm(f)
-            ground, t1, renderer = mk.image(entry, demo, tick, ss, "terrain,features")
+            ground, t1, renderer = mk.image(entry, demo, tick, ss, "terrain,features,units")
             feats, _, _ = mk.image(entry, demo, tick, ss, "features")
+            units, _, _ = mk.image(entry, demo, tick, ss, "units")
             if t1 != tick:
                 raise CannotRun(f"{f.name}: the mockup's demo stopped at tick {t1}")
             if game.size != ground.size:
                 print(f"DIFFER {f.name}: the game's target is {game.size}, the mockup's {ground.size}")
                 bad += 1
                 continue
-            nt, dt, nf, df, diff = compare(game, ground, feats)
+            got, diff = compare(game, ground, feats, units)
+            (nt, dt), (nf, df), (nu, mean, far) = got["terrain"], got["features"], got["units"]
             share = df / nf if nf else 0.0
-            ok = dt == 0 and share <= FEATURE_CEILING
+            fshare = far / nu if nu else 0.0
+            ok = dt == 0 and share <= FEATURE_CEILING and mean <= UNIT_MEAN and fshare <= UNIT_FAR_CEILING
             bad += not ok
             print(f"{'ok    ' if ok else 'DIFFER'} {f.name}: terrain {nt} px, {dt} differ; features {nf} px, {df} differ "
-                  f"({100 * share:.3f} %, the ceiling {100 * FEATURE_CEILING:.2f} %)")
+                  f"({100 * share:.3f} %, the ceiling {100 * FEATURE_CEILING:.2f} %); units {nu} px, mean "
+                  f"{mean:.2f}/255 (the ceiling {UNIT_MEAN:.0f}), {far} past {UNIT_FAR} ({100 * fshare:.3f} %, the ceiling "
+                  f"{100 * UNIT_FAR_CEILING:.1f} %)")
             if a.out:
                 a.out.mkdir(parents=True, exist_ok=True)
                 stem = f.name[:-len(".game.ppm")]
@@ -174,7 +193,8 @@ def main():
         print(f"stage3dcheck: DIFFER - {bad} of {len(shots)} capture(s) outside the tolerances ({s:.0f} s)")
         return 1
     print(f"stage3dcheck: all {len(shots)} capture(s) within the tolerances - every terrain pixel equal, the features "
-          f"within {100 * FEATURE_CEILING:.2f} % ({s:.0f} s)")
+          f"within {100 * FEATURE_CEILING:.2f} %, the units within a mean {UNIT_MEAN:.0f}/255 and "
+          f"{100 * UNIT_FAR_CEILING:.1f} % far ({s:.0f} s)")
     return 0
 
 

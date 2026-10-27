@@ -3,7 +3,7 @@
 /* tagpu_wikiworld -- the producer of the in-game wiki's 3D stage: what the wiki's instances of the
    world passes (tagpu_scene.h) draw their hand-overs from, and the inert answers that stand in
    for the modules only the game's world has (research/notes/ingame-wiki-3d-stage-plan.md,
-   sections 2, 3, 7 and 8; landing 6g).
+   sections 2, 3, 6, 7 and 8; landings 6g and 6h).
 
    WHAT IT PRODUCES, once a frame, on the render thread: from the stage this frame's wiki draws
    (tagpu_wikistate_scene) and the published 3D arena (tagpu_wiki3d_get), the stage's ground as the
@@ -13,7 +13,21 @@
    target's geometry: the map at zoom 1, one world unit a game pixel, at the Supersampling
    setting's `ss`, composited into the image's rect (tagpu_wikistage_image), the fit the stage's
    ops are built with. The cells, quads and fog are tagpu_wikiscene.c's, which is paired with the
-   mockup. No unit record is produced: the units are the whitebox's boxes, over the image.
+   mockup.
+
+   AND THE UNITS AS THEIR MODELS: tagpu_wikiscene.c's model records (every unit and every ghost
+   whose type the arena resolved), each baked by the wiki's instance of the geometry bake from the
+   arena's model and posed at rest, turned onto its facing, by the wiki's posed program -- the
+   posed-draw hand-over the wiki's unit pass draws from, in the game's order (the units, then the
+   ghosts' window). The bake, the material layer and the posed program take their `_frame` calls
+   in tagpu_native.c's order, under one constant level generation (the arena is never freed).
+   EVERY NODE HANDED TO THE BAKE LIES INSIDE THE ARENA: each type's piece run is the readers' walk
+   of its model, and every node of it is bounded against the arena's extent before the run is
+   kept -- a bound on the pointer's value, not a probe -- so the wiki's bake reads the arena and
+   nothing else. A type whose walk does not stay inside is a box.
+
+   A stage whose ground did not resolve still draws its units: the image then carries no ground
+   (`ground` 0), and the whitebox's ground is drawn under it (tagpu_wikistate_image).
 
    THE HAND-OVERS LIVE FOR ONE ITERATION OF THE RENDER LOOP. tagpu_wikiworld_frame runs in
    tagpu_overlay_draw after tagpu_wikistate_present, and the wiki's passes take what it published in
@@ -27,12 +41,16 @@
    buffers it shares with the game's atlases, all of which are painted here too.
 
    THE IMAGE IS DRAWN WHOLE OR NOT AT ALL. What a frame expects (`tagpu_wikiworld_wants`: the
-   terrain whenever the ground resolved, the features whenever it has any) is fixed here before the
-   seam prepares the passes; the seam composites the image only when every expected pass's prepare
-   answered 1 on this frame, and the wiki layer draws R0, the image and R2 then, R0 and R1
-   otherwise (tagpu_wikistate_image). The lever `tagpu_wiki3d.on` takes `off` (no 3D stage),
-   `nomap` and `nofeat` (that hand-over withheld while still expected, so the frame shows R1
-   whole: the check of that rule).
+   terrain whenever the ground resolved, the features whenever it has any, the units whenever a
+   record was made) is fixed here before the seam prepares the passes; the seam composites the
+   image only when every expected pass's prepare answered 1 on this frame, and the wiki layer draws
+   R0, the image and R2 then, R0 and R1 otherwise (tagpu_wikistate_image). A record the bake
+   refuses this frame (its texels not yet painted: the unit atlas's allowance) withholds the
+   units' hand-over whole, so the unit pass does not prepare and the frame is the whitebox -- never
+   a stage with a unit missing. The lever `tagpu_wiki3d.on` takes `off` (no 3D stage), `nomap`,
+   `nofeat` and `nounits` (that hand-over withheld while still expected, so the frame shows R1
+   whole: the check of that rule) and `nounit=TYPE` (that type left unresolved: its box over the
+   image, every other type in 3D).
 
    Render thread only, every entry point. Nothing here reads engine memory. */
 
@@ -59,10 +77,19 @@ struct TAGPU_FRAME;
    none (no stage drawn, the arena not loaded, the ground fallen back, the lever off). */
 void tagpu_wikiworld_frame(const struct TAGPU_FRAME* f);
 
+/* what frame `frame`'s image needs, for the seam */
+typedef struct {
+    int             terr, feat, unit;   /* the image needs that pass prepared                   */
+    int             unitWhole;          /* every record was handed over: else no image this frame */
+    int             ground;             /* the image carries the ground (tagpu_wikistate_image) */
+    const uint32_t* resolved;           /* the view's types drawn in 3D, WIKI_MAX_DEFS bits;
+                                           this module's, valid until its next frame             */
+} WIKIWORLDWANT;
+
 /* Render-thread frame `frame`'s 3D stage: 1 when the seam is to prepare the wiki's passes, with
-   whether the image needs the terrain pass (`*terr`) and the feature pass (`*feat`); 0 when there
-   is no 3D stage this frame and the wiki layer draws the whitebox. */
-int  tagpu_wikiworld_wants(unsigned frame, int* terr, int* feat);
+   what the image needs (`*w`); 0 when there is no 3D stage this frame and the wiki layer draws the
+   whitebox. */
+int  tagpu_wikiworld_wants(unsigned frame, WIKIWORLDWANT* w);
 
 /* The seam's answer for `frame`: whether the image was drawn whole, and the render-thread time the
    wiki's passes took in the seam (prepares, the target's pass and the composite), ms. Logged with

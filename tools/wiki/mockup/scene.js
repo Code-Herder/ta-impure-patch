@@ -1,14 +1,17 @@
 /* scene.js -- the in-game wiki's 3D stage: one view of sim.js turned into what the world passes draw. Pure: a view, the
    stage's pack (the scene.json tools/wiki/gfx.py writes) and the simulation's tick in, records out; no GL, no DOM. It
    runs in the page, where gfx.js draws its records with tools/tascene-render.js, and under node.
-   tagpu/ddraw/src/tagpu_wikiscene.c is to be its port (research/notes/ingame-wiki-3d-stage-plan.md, landing 6g),
-   paired with it by a scenecheck, as stage.js and tagpu_wikistage.c are paired by stagecheck.mjs.
+   tagpu/ddraw/src/tagpu_wikiscene.c is its port (research/notes/ingame-wiki-3d-stage-plan.md, landings 6g and 6h),
+   paired with it by tools/wiki/scenecheck.mjs, as stage.js and tagpu_wikistage.c are paired by stagecheck.mjs.
 
    What it makes, each the engine's rule (the plan, sections 3, 6 and 7):
    - **a model record per unit and per ghost**: the type's mesh for its owner, its anchor (the unit's world point, on
      the flat ground), its yaw from the facing vector, alpha 1 with depth writes, or for a ghost alpha 0.40 without
-     them, the Classic shadow kind (a structure's slant, a mobile unit's silhouette, a ghost none) and the nanoframe
-     staging of tagpu_r3d_nano_state, ported below;
+     them, the Classic shadow kind (a structure's slant, a mobile unit's silhouette; a ghost and a nanoframe none) and
+     the nanoframe staging of tagpu_nanostage.h, ported below. A unit being reclaimed is drawn finished: the engine
+     reclaims a unit by hitting its hit points and never makes it a nanoframe (the C file says where). The game's
+     record carries every position, facing and fraction as a float (tagpu_wikistage.h), so the records here take
+     them through Math.fround, and the two sides compute from the same numbers;
    - **the fog grid** in the engine's form: one entry a 32-unit block, two 4-bit corner masks (b0 unexplored, b1 grey)
      whose corners are the centres of this block and its right, lower and lower-right neighbours, the far column and
      row replicating their own block (tagpu_glsl.h, *the clamp stops one cell short of the grid*).
@@ -24,7 +27,7 @@ const WikiScene = (() => {
      (-1, 0), diag(-1, 1, -1): ghost_one's body rotation for 0x8000. */
   const yaw = (hx, hz) => [-hz, hx];
 
-  /* ---- tagpu_render3do.c's nanoframe staging, line for line (build-state.md 0x458DD0 / 0x458D30). `nano` is the build
+  /* ---- tagpu_nanostage.h's nanoframe staging, line for line (build-state.md 0x458DD0 / 0x458D30). `nano` is the build
      fraction REMAINING (unit +0x104), `id` the unit's slot and `tick` the simulation's; null for a unit that is not a
      nanoframe. The C arithmetic: unsigned tick * 0x21 / 0x1E, int division toward zero, nano * 255.0f in float. */
   const tri = ph => (ph & 0x10) ? 0xAF - (ph & 0xF) : 0xA0 + (ph & 0xF);
@@ -64,26 +67,35 @@ const WikiScene = (() => {
     return { grid, dim: [bw, bh], org: [16, 16] };
   }
 
-  /* One model record. `u` has type, x, z (its world point: a building's footprint centre), and a facing. */
+  const F = Math.fround;
+  // a player of the eight, else none (tagpu_wikistage.c `owner8`): a record is made only for one
+  const owner8 = o => Number.isInteger(o) && o >= 0 && o < 8 ? o : -1;
+
+  /* One model record, or null: `u` has type, x, z (its world point: a building's footprint centre), and a facing. The
+     depth row's key is emitUnits' unit0 + rel * rowStep at the stage's camera (rel the row, from 0), which the C side
+     computes as tagpu_wikiscene.c `row_key`. */
   function record(pack, u, owner, extra) {
     const m = pack.units && pack.units.meshes && pack.units.meshes[u.type];
-    if (!m || !m.files[String(owner)]) return null;
-    const [hx, hz] = m.mobile && Number.isFinite(u.hx) && Number.isFinite(u.hz) ? [u.hx, u.hz] : DEFAULT_FACING;
-    return { type: u.type, key: `${u.type}.${owner}`, owner, pos: [u.x, u.z], yaw: yaw(hx, hz),
-             shadow: !!m.shadow, slant: !!m.slant, alpha: 1, ghost: false, nano: null, ...extra };
+    if (!m || owner < 0 || !m.files[String(owner)]) return null;
+    const [hx, hz] = m.mobile && Number.isFinite(u.hx) && Number.isFinite(u.hz) ? [F(u.hx), F(u.hz)] : DEFAULT_FACING;
+    const [x, z] = [F(u.x), F(u.z)], mh = pack.cells ? pack.cells[1] : 1;
+    const row = Math.min(mh - 1, Math.max(0, z >> 4)), D = pack.depth || { unit0: 1, rowStep: 4 };
+    return { type: u.type, key: `${u.type}.${owner}`, owner, pos: [x, z], yaw: yaw(hx, hz), enc: D.unit0 + row * D.rowStep,
+             shadow: !!m.shadow, slant: !!m.slant, alpha: 1, ghost: false, nano: null, slot: -1, ...extra };
   }
 
   /* The view `v`, the pack and the tick -> { units, ghosts, fog, resolved }. A unit's slot is its index in the view,
-     the id its nanoframe's oscillators start from. A reclaim stages as a build run backward: the fraction gone is
-     the fraction remaining [INFERRED, the plan's 6h checks it against the game]. */
+     the id its nanoframe's oscillators start from. A unit under construction is a nanoframe and casts no shadow
+     (tagpu_native.c, build-state.md 7); one being reclaimed is neither (the engine's reclaim hits its hit points). */
   function build(v, pack, tick) {
     const out = { units: [], ghosts: [], fog: null, resolved: new Set(Object.keys((pack.units || {}).meshes || {})) };
     if (!v || !v.map) return out;
     out.fog = fogGrid(v.map.fog, +v.map.w || 0, +v.map.h || 0);
     (v.units || []).forEach((u, i) => {
-      const built = u.built == null ? 1 : Math.min(1, Math.max(0, +u.built)), rec = Math.min(1, Math.max(0, +u.reclaimed || 0));
-      const nano = built < 1 ? nanoState(1 - built, i, tick) : rec > 0 ? nanoState(rec, i, tick) : null;
-      const r = record(pack, u, u.owner | 0, { nano });
+      const built = u.built == null ? 1 : Math.min(1, Math.max(0, F(+u.built)));
+      const nano = built < 1 ? nanoState(F(1 - built), i, tick) : null;
+      const r = record(pack, u, owner8(u.owner), { nano, slot: i });
+      if (r && nano) r.shadow = false;
       if (r) out.units.push(r);
     });
     /* THE GHOST STAGE, in ghost_record's order (tagpu_native.c): the placement ghost, each gesture site's (whatever
@@ -95,8 +107,9 @@ const WikiScene = (() => {
     const push = r => { if (r) out.ghosts.push(r); };
     if (v.ghost && v.ghost.type) push(ghost(v.ghost, 0));
     for (const st of v.sites || []) if (st.type) push(ghost(st, 0));
-    const standing = new Set((v.units || []).map(u => `${u.type}@${u.x},${u.z}`));
-    for (const q of v.queued || []) if (q.type && !standing.has(`${q.type}@${q.x},${q.z}`)) push(ghost(q, q.owner | 0));
+    const standing = new Set((v.units || []).map(u => `${u.type}@${F(u.x)},${F(u.z)}`));
+    for (const q of v.queued || [])
+      if (q.type && !standing.has(`${q.type}@${F(q.x)},${F(q.z)}`)) push(ghost(q, owner8(q.owner)));
     return out;
   }
 

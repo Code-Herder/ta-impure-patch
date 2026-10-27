@@ -108,6 +108,57 @@ static int ground(FILE* f, char* entry, size_t n)
     return 1;
 }
 
+/* the unit types the mockup's packs resolved, from TYPES: per entry a line `ENTRY N` and N lines
+   `NAME MOBILE SLANT SHADOW`; a type an entry does not list there is a box */
+#define MAXENTRY 64
+static char s_tent[MAXENTRY][64];
+static char s_tname[MAXENTRY][WIKI_MAX_DEFS][64];
+static WSCENETYPE s_types[MAXENTRY][WIKI_MAX_DEFS];
+static int  s_ntypes[MAXENTRY], s_nent;
+
+static int types(FILE* f)
+{
+    char name[64];
+    int n, k;
+    while (fscanf(f, "%63s %d", name, &n) == 2) {
+        if (s_nent >= MAXENTRY || n < 0 || n > WIKI_MAX_DEFS) return -1;
+        memcpy(s_tent[s_nent], name, sizeof name);
+        for (k = 0; k < n; k++) {
+            int mo, sl, sh;
+            if (fscanf(f, "%63s %d %d %d", s_tname[s_nent][k], &mo, &sl, &sh) != 4) return -1;
+            s_types[s_nent][k].ok = 1; s_types[s_nent][k].mobile = (uint8_t)mo;
+            s_types[s_nent][k].slant = (uint8_t)sl; s_types[s_nent][k].shadow = (uint8_t)sh;
+        }
+        s_ntypes[s_nent++] = n;
+    }
+    return 0;
+}
+
+/* the view's model records as {"m": [[type, owner, ghost, shadow, nanoOn, slot, x, z, cs, sn, enc,
+   alpha, nanoT, nanoC0, nanoC1, nanoC2, wire]...], "nu": units}, the view's types matched to the
+   entry's resolved ones by name, as the stage's producer matches them to the arena's */
+static void models(const WIKISTAGEVIEW* v, const char* id)
+{
+    static WSCENEMODEL m[WIKISCENE_MODELS];
+    WSCENETYPE ty[WIKI_MAX_DEFS];
+    int e, k, j, n, nu = 0;
+    for (e = 0; e < s_nent && strcmp(s_tent[e], id); e++) {}
+    memset(ty, 0, sizeof ty);
+    for (k = 0; k < v->ntype && e < s_nent; k++)
+        for (j = 0; j < s_ntypes[e]; j++)
+            if (!strcmp(v->type[k], s_tname[e][j])) ty[k] = s_types[e][j];
+    n = tagpu_wikiscene_models(v, ty, v->ntype, m, &nu);
+    printf(",\"nu\":%d,\"m\":[", nu);
+    for (k = 0; k < n; k++)
+        printf("%s[\"%s\",%d,%d,%d,%d,%d,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g]", k ? "," : "",
+               m[k].type < v->ntype ? v->type[m[k].type] : "?", m[k].owner, m[k].ghost, m[k].shadow,
+               m[k].nanoOn, m[k].slot, m[k].x, m[k].z, m[k].cs, m[k].sn, m[k].enc, m[k].alpha,
+               m[k].nanoOn ? m[k].nanoT : 0.0f, m[k].nanoOn ? m[k].nanoC[0] : 0.0f,
+               m[k].nanoOn ? m[k].nanoC[1] : 0.0f, m[k].nanoOn ? m[k].nanoC[2] : 0.0f,
+               m[k].nanoOn ? m[k].nanoWire : 0.0f);
+    putchar(']');
+}
+
 int main(int argc, char** argv)
 {
     static WIKISTAGEVIEW v;
@@ -118,14 +169,19 @@ int main(int argc, char** argv)
     FILE* gf;
     WIKIDATA* d;
     int i, j, r;
-    if (argc != 3) {
-        fprintf(stderr, "usage: wikiscenetest PAK GROUNDS\n");
+    if (argc != 4) {
+        fprintf(stderr, "usage: wikiscenetest PAK GROUNDS TYPES\n");
         return 2;
     }
     if (!(gf = fopen(argv[2], "r"))) { fprintf(stderr, "wikiscenetest: cannot read %s\n", argv[2]); return 2; }
     while ((r = ground(gf, entry, sizeof entry)) > 0) {}
     fclose(gf);
     if (r < 0) { fprintf(stderr, "wikiscenetest: %s: a malformed ground after %s\n", argv[2], entry); return 2; }
+    if (!(gf = fopen(argv[3], "r")) || types(gf) < 0) {
+        fprintf(stderr, "wikiscenetest: cannot read the types from %s\n", argv[3]);
+        return 2;
+    }
+    fclose(gf);
     if (!(pak = slurp(argv[1], &n))) { fprintf(stderr, "wikiscenetest: cannot read %s\n", argv[1]); return 2; }
     if (!(d = tagpu_wikidata_load((const unsigned char*)pak, n, err, sizeof err))) {
         fprintf(stderr, "wikiscenetest: %s\n", err);
@@ -143,6 +199,7 @@ int main(int argc, char** argv)
                 if (s.tick % 30 == 0 || s.done) {
                     int k;
                     tagpu_wikistage_copy(&v, tagpu_wikisim_view(&s), e);
+                    v.tick = s.tick;
                     tagpu_wikiscene_fog(v.fog, v.w, v.h, &fog);
                     printf("{\"e\":\"%s\",\"d\":\"%s\",\"t\":%d,\"fog\":", e->id, e->demo[j].id, s.tick);
                     if (!fog.on) fputs("null", stdout);
@@ -153,6 +210,7 @@ int main(int argc, char** argv)
                             printf("%s%u,%u", k ? "," : "", fog.grid[k] & 0xFFu, fog.grid[k] >> 8);
                         fputs("]}", stdout);
                     }
+                    models(&v, e->id);
                     puts("}");
                 }
                 if (s.done) break;

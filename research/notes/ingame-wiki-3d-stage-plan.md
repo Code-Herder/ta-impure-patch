@@ -429,8 +429,11 @@ its length; TNT offsets and tile indices against the file and its count; GAF dim
   simulation's tick (for the nano staging). All values, in `tagpu_wikipk.h`.
 - **The render side builds the yaw from the vector**, with no angle: the body rotation is the one
   `ghost_one` builds for `0x8000` when the facing is `(0, 1)` (`diag(−1, 1, −1)`), turned by the
-  vector's components. Its lateral sign is [INFERRED] and checked by a capture (6h): a unit walking
-  toward +x faces +x.
+  vector's components: `(cs, sn) = (-hz, hx)`, the matrix `(cs, 0, sn; 0, 1, 0; -sn, 0, cs)` on the
+  engine-held nodes, which is the engine's own body turn of the matching heading -- a unit walking
+  toward +x is drawn as the engine draws heading `0xC000`, the heading it gives such a unit
+  (MEASURED, 6h). The mockup's meshes are in the file's axes, so it applies the same turn after
+  the loader's half turn (`gfx.js` `held`).
 - **A model record on the render thread** is: the type's resolved model (the arena's tree), its
   rest pose (`ghost_one`'s arithmetic: every piece turn 0, the body turn folded into the root),
   Create()'s hides (`tagpu_cobscan.c`, 6c), the anchor `(x, z)` at ground height 0, the depth row
@@ -955,31 +958,60 @@ resources, the record's growth).
 rising in the nano frame, translucent ghosts at the cursor and the gesture's sites, shadows as
 the game's options give them; a type the running game does not have stays a box.
 
-**Files:**
-- `src/tagpu_wikiscene.c`: the model records of section 6 (pose matrices, depth rows, nano, shadow
-  kind, alpha).
-- `src/tagpu_wikiworld.c`: through the wiki posebake, render3do and posedraw instances (their
-  `_frame` calls in their order, level generation constant, the atlas's allowance off at the first
-  frame); the completeness count of baked records; 3D features through the same path.
-- `tools/wiki/mockup/scene.js`, `gfx.js`: the same, if 6d left any of it out.
+**What was built** ([GPU status](gpu-status.html) §2.12d has the hand-over in full):
+- `src/tagpu_wikiscene.c` `tagpu_wikiscene_models`: one record a unit, then the placement ghost,
+  the sites and the queued sites not yet standing -- type, owner, yaw `(cs, sn) = (-hz, hx)` (a
+  structure's always `(0, 1)`), depth row, alpha, the nano staging of the new shared
+  `tagpu_nanostage.h` while `built < 1` (a nanoframe and a ghost cast no shadow). Equal to
+  `scene.js` record for record (`scenecheck.mjs`: 2640 records, 63 nanoframes).
+- `src/tagpu_wikiworld.c`: the arena's types matched to the stage's by name, every node of each
+  type's run bounded inside the arena before it is kept; each record through the wiki bake as a
+  piece run and posed at rest, one rotation about the root's rest point; the shadow kind and the
+  lit rows from the packet's option word; the calls in their order a frame (the level generation
+  1, the atlas allowance off from the first frame). The lever gains `nounits` and `nounit=TYPE`.
+- `src/tagpu_wikiasset.c`: per type, `Create()`'s dont-cache pieces beside its hides
+  (`tagpu_cobscan_create_mask`), and the facts the shadow needs (`BMcode`, `Digger`, `NoShadow`,
+  `CanHover`, `Floater`); `assetcheck.py` checks both against `gfx.py`.
+- The mockup draws as the game does (`gfx.py`, `gfx.js`, `tascene-render.js` `engineShade`): the
+  file's mesh turned by the record's yaw after the loader's half turn; a structure and every ghost
+  on the engine's lit rows from its vertex normals, any other unit on the neutral row; a textured
+  quad mapped and shaded over its own frame; the nanoframe's wire on the line grid thickened to
+  `ss`.
+- 3D features through the unit path are **not built**: no stage names one, and both sides still
+  fall back to the whitebox for one.
 
 **Invariants**: every node pointer handed to the wiki bake lies inside the arena, which the
 producer checks before the call (a bound on a value, not a probe); the wiki bake sees only the
-arena.
+arena, immutable and never freed; the pose is a function of the record alone.
 
-**Verification:**
-- `scenecheck.mjs` with the unit records.
-- One game run, `wiki_regression.py <instance> units --launch` (about 7 minutes):
-  - Quick Build 3 and 8 (construction, a reclaim) and Build Lines 2 and 4 (ghosts), shot at fixed
-    ticks;
-  - `stage3dcheck.py` within question 8's tolerance;
-  - a unit walking toward +x captured facing +x;
-  - a reclaim captured, its nano staging compared with the game's own on a real reclaim
-    [INFERRED that the engine stages a reclaim as a build run backward];
-  - the lever `nounit=ARMCK` boxes ARMCK alone;
-  - the wiki scene's render-thread time against 0.5 ms.
-- `wiki_regression.py mp` with a demo playing (about 8 minutes): both peers' logs desync-free; the
-  render-thread time on the host.
+**What it measured** (2026-10-27, the reference setup, retail, a private Xvfb with the RTX
+presenting; `wiki_regression.py <instance> units --launch`, about 11 minutes):
+- (u1) the arena 249 124 bytes in 42 to 56 ms, 9 of 9 types resolved, no box.
+- (u2, u3) ten captures (Quick Build 3, 8 and 9, Build Lines 2 and 4, at fixed ticks, ss 2) against
+  the mockup: every terrain and feature pixel equal; over the unit pixels a mean difference of 0.03
+  to 0.38 / 255 a channel and 0.003 to 0.19 % of them past 40, against question 8's 2 / 255 and
+  0.5 %, at 1920 × 1080 and 3840 × 2160 alike.
+- (u4) the ARMCK of Quick Build 9 at tick 150 walks (0.781, -0.174) a tick facing (0.976, -0.217),
+  and is drawn so: its pose is the engine's own for a unit heading `0xC000`, the heading the
+  engine gives an ARMCK walking toward +x (MEASURED in a skirmish: `0xBE2E`..`0xC000`), and a
+  side-by-side with the engine's ARMCK at `0xC000` and at `0x4000` matches the first.
+- (u5) under `nounit=ARMCK` ARMCK alone is the box; 300 of 300 frames drew the image.
+- (u6) the render thread: the producer 0.067 ms and the passes 0.037 ms a frame on average,
+  0.104 ms against 0.5 ms, the passes at most 0.057 ms (1920 × 1080).
+- (u7) **a reclaim is not a nanoframe** [DISASSEMBLED, then MEASURED]: ReclaimUnit `0x404730` and
+  VTOL_ReclaimUnit `0x414A80` hit the target's hit points through `0x489BB0`/`0x489CE0`, and none
+  of the four functions names `+0x104`; in a skirmish an ARMCK reclaimed an ARMSOLAR from HP 326
+  to its death with `+0x104` reading 0.0 at each of 101 reads. The stage draws a unit being
+  reclaimed finished, as the game does (the engine map, *A reclaimed unit is never a nanoframe*).
+- `mp` with a demo playing, `sp`, `page`, `demos`, `recorded` and `stage3d`: the hand-over's report.
+
+**What it found on the way**: the mockup turned its models half a turn from the game's -- the
+pack's meshes are in the file's axes and the record's yaw turns the model as the engine holds it,
+X and Z negated by the loader -- which a live ARMMOHO settled (its crane box toward +z, as the
+game's stage draws it); its units were flat-shaded a face at a time where the engine shades a
+structure by vertex and a mobile unit not at all; and its quads and wire were the lab's
+approximations. Each is now the game's rule, and the comparison went from a mean of 50 to 70 / 255
+over the unit pixels to under 0.4.
 
 **Gate**: the 34 groups, as 6g. **Review: high.**
 
@@ -1031,7 +1063,9 @@ also extends: integrate in order. QUESTIONS batches A to D are 6e's inputs and d
    frame.
 6. **The arena's size** under a mod with large textures; read frames, not whole GAFs, and log the
    size (6e).
-7. **The yaw's lateral sign and a reclaim's look are [INFERRED]**; each is a capture in 6h.
+7. **The yaw's lateral sign and a reclaim's look**: both settled in 6h -- the yaw by the engine's
+   own heading for a unit walking toward +x and a live model, the reclaim by disassembly and a live
+   reclaim (a reclaimed unit is never a nanoframe).
 8. **WebGL and Vulkan rasterise unit edges differently at `ss` 2**; hence a tolerance for unit
    pixels, the owner's to set (question 8).
 9. **A mod's model larger than the stock footprint the simulation uses** overhangs its box; the

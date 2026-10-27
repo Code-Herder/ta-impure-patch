@@ -1,8 +1,8 @@
 #ifndef TAGPU_SCENE_WIKI_H
 #define TAGPU_SCENE_WIKI_H
 /* tagpu_scene_wiki.h -- the entry points of the wiki's instances of the world passes
-   (tagpu_scene.h), for the seam that calls them (tagpu_vk.c): the world target's, the terrain's
-   and the features' -- the passes landing 6g draws the stage's ground with.
+   (tagpu_scene.h), for the seam that calls them (tagpu_vk.c): the world target's, the terrain's,
+   the features' and the units' -- the passes the stage's ground and its models are drawn with.
 
    WRITTEN OUT BY HAND, AND CHECKED. The instances' own prototypes are their game headers' under
    the names tagpu_scene.h maps them to, which a file can only see by compiling with
@@ -40,5 +40,15 @@ void tagpu_vkw_feat_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
 void tagpu_vkw_feat_down(const TAGPU_VKPASS* d);
 int  tagpu_vkw_feat_down_owed(void);
 void tagpu_vkw_feat_down_paid(const TAGPU_VKPASS* d);
+
+int  tagpu_vkw_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot);
+int  tagpu_vkw_unit_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot);
+void tagpu_vkw_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                           uint32_t w, uint32_t h);
+void tagpu_vkw_unit_record_ghosts(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                                  uint32_t w, uint32_t h);
+void tagpu_vkw_unit_down(const TAGPU_VKPASS* d);
+int  tagpu_vkw_unit_down_owed(void);
+void tagpu_vkw_unit_down_paid(const TAGPU_VKPASS* d);
 
 #endif

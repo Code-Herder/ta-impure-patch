@@ -10,7 +10,9 @@
    One line out a record, tab-separated:
      unit, hides (tagpu_cobscan_hides' return), the hidden COB pieces' names (comma-separated,
      lower case, in piece order), mask (tagpu_cobscan_mask's return), the hidden nodes' names
-     (the same form, in walk order), and `same` or `DIFF:<what>`: whether the script relocated
+     (the same form, in walk order), the same four for the dont-caches (tagpu_cobscan_create and
+     tagpu_cobscan_create_mask with TAGPU_COB_DONTCACHE), and `same` or `DIFF:<what>`: whether
+     the script relocated
      as 0x4B2450 leaves it, at two bases (one that wraps), gives the same hides, pieces and mask
      as the file's bytes at base 0.
    The mask runs over a walk that is the engine order reversed, so a bit lands by node address
@@ -67,10 +69,12 @@ static int relocate(char* c, uint32_t n, uint32_t base)
     return 1;
 }
 
+/* one answer per pair of opcodes: [TAGPU_COB_HIDE] through tagpu_cobscan_hides and
+   tagpu_cobscan_mask, [TAGPU_COB_DONTCACHE] through the general pair */
 typedef struct {
-    int hides, mask;
-    uint32_t hid[TAGPU_COB_HIDWORDS];
-    uint32_t bits[MAXNODES / 32];
+    int hides[2], mask[2];
+    uint32_t hid[2][TAGPU_COB_HIDWORDS];
+    uint32_t bits[2][MAXNODES / 32];
 } Answer;
 
 static char s_marker[MAXNODES];   /* the nodes' addresses: one byte each, never read */
@@ -81,35 +85,42 @@ static void answer(const char* cob, uint32_t n, uint32_t base, char* const* name
     const char* prim[MAXNODES];
     const char* pname[MAXNODES];
     const char* walk[MAXNODES];
-    int k;
+    int k, w;
     memset(a, 0, sizeof *a);
-    a->hides = tagpu_cobscan_hides(cob, n, base, a->hid);
-    for (k = 0; k < nn; k++) {
-        prim[k] = &s_marker[k];
-        pname[k] = names[k];
-        walk[nn - 1 - k] = &s_marker[k];
+    for (w = 0; w < 2; w++) {
+        a->hides[w] = w == TAGPU_COB_HIDE ? tagpu_cobscan_hides(cob, n, base, a->hid[w])
+                                          : tagpu_cobscan_create(cob, n, base, w, a->hid[w]);
+        for (k = 0; k < nn; k++) {
+            prim[k] = &s_marker[k];
+            pname[k] = names[k];
+            walk[nn - 1 - k] = &s_marker[k];
+        }
+        a->mask[w] = w == TAGPU_COB_HIDE
+            ? tagpu_cobscan_mask(cob, n, base, prim, pname, nn > 0 ? nn : -1, walk, nn, a->bits[w])
+            : tagpu_cobscan_create_mask(cob, n, base, w, prim, pname, nn > 0 ? nn : -1, walk, nn,
+                                        a->bits[w]);
     }
-    a->mask = tagpu_cobscan_mask(cob, n, base, prim, pname, nn > 0 ? nn : -1, walk, nn, a->bits);
 }
 
-static void print_list(const char* cob, uint32_t n, const Answer* a, char* const* names, int nn)
+static void print_list(const char* cob, uint32_t n, const Answer* a, char* const* names, int nn,
+                       int w)
 {
     int k, first = 1;
-    for (k = 0; a->hides > 0 && k < a->hides; k++) {
+    for (k = 0; a->hides[w] > 0 && k < a->hides[w]; k++) {
         unsigned room;
         const char* nm;
-        if (!(a->hid[k >> 5] >> (k & 31) & 1)) continue;
+        if (!(a->hid[w][k >> 5] >> (k & 31) & 1)) continue;
         nm = tagpu_cobscan_piece(cob, n, 0, k, &room);
         printf("%s", first ? "" : ",");
         first = 0;
         if (!nm) { printf("?%d", k); continue; }
         for (; room && *nm; nm++, room--) putchar(*nm >= 'A' && *nm <= 'Z' ? *nm + 32 : *nm);
     }
-    printf("\t%d\t", a->mask);
+    printf("\t%d\t", a->mask[w]);
     first = 1;
-    for (k = 0; a->mask > 0 && k < nn; k++) {
+    for (k = 0; a->mask[w] > 0 && k < nn; k++) {
         const char* nm;
-        if (!(a->bits[k >> 5] >> (k & 31) & 1)) continue;
+        if (!(a->bits[w][k >> 5] >> (k & 31) & 1)) continue;
         printf("%s", first ? "" : ",");
         first = 0;
         for (nm = names[nn - 1 - k]; *nm; nm++) putchar(*nm >= 'A' && *nm <= 'Z' ? *nm + 32 : *nm);
@@ -118,7 +129,7 @@ static void print_list(const char* cob, uint32_t n, const Answer* a, char* const
 
 static int same(const Answer* a, const Answer* b)
 {
-    return a->hides == b->hides && a->mask == b->mask &&
+    return !memcmp(a->hides, b->hides, sizeof a->hides) && !memcmp(a->mask, b->mask, sizeof a->mask) &&
            !memcmp(a->hid, b->hid, sizeof a->hid) && !memcmp(a->bits, b->bits, sizeof a->bits);
 }
 
@@ -171,8 +182,10 @@ int main(void)
             }
             free(c);
         }
-        printf("%.*s\t%d\t", (int)ln, name, file.hides);
-        print_list(cob, cn, &file, nm, (int)nn);
+        printf("%.*s\t%d\t", (int)ln, name, file.hides[TAGPU_COB_HIDE]);
+        print_list(cob, cn, &file, nm, (int)nn, TAGPU_COB_HIDE);
+        printf("\t%d\t", file.hides[TAGPU_COB_DONTCACHE]);
+        print_list(cob, cn, &file, nm, (int)nn, TAGPU_COB_DONTCACHE);
         printf("\t%s%s\n", why ? "DIFF:" : "same", why ? why : "");
         diffs += why != NULL;
         free(name);

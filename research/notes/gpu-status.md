@@ -4494,10 +4494,11 @@ The seven files that draw one world scene — `tagpu_vk_world.c`, `tagpu_vk_terr
 `tagpu_render3do.c` — are compiled **twice**: `src/<name>.o` is the game's world, and
 `src/<name>.wiki.o`, built with `-DTAGPU_SCENE_WIKI`, is the in-game wiki's stage, each with its
 own statics. Both are linked. Design: [the 3D stage plan](ingame-wiki-3d-stage-plan.html),
-section 1 and landings 6f and 6g. **No engine address, no hook, no byte patch**: nothing for the
-tables above. The wiki's copies of the world target, the terrain and the features draw the
-stage's ground; its copies of the unit pass, the pose bake, the pose draw and the 3DO renderer
-are built and not called (the stage draws its units as the whitebox's boxes).
+section 1 and landings 6f, 6g and 6h. **No engine address, no hook, no byte patch**: nothing for
+the tables above; the one engine value the stage reads is the graphics-option word, off the
+frame's packet (`gfx_opt`). The wiki's copies of the world target, the terrain and the features
+draw the stage's ground; its copies of the unit pass, the pose bake, the pose draw and the 3DO
+renderer draw its units and ghosts.
 
 - **What `tagpu_scene.h` does under the macro**, included first by each of the seven: renames
   every external symbol they define (`tagpu_vk_*` → `tagpu_vkw_*`, `tagpu_r3d_*` → `tagpu_r3dw_*`,
@@ -4534,14 +4535,40 @@ are built and not called (the stage draws its units as the whitebox's boxes).
   `tagpu_wikistage_image`'s rect on the attachment -- the stage fit's map rect, each edge snapped
   to the device pixel as `stage.js` snaps it). The lever `tagpu_wiki3d.on`, read every 30 frames:
   `off` (no stage in 3D), `nomap`, `nofeat` (that hand-over withheld while still expected, so the
-  frame shows the whitebox whole).
+  frame shows the whitebox whole), `nounits` (no unit drawn in 3D: every type the whitebox's box)
+  and up to eight `nounit=TYPE` (that type the box alone).
+- **The units**, every frame from the same view, through `tagpu_wikiscene_models`
+  (`tagpu_wikiscene.c`, equal record for record to `scene.js`: `scenecheck.mjs`): one record a
+  unit of a type the arena has (its owner, the record's yaw `(cs, sn) = (-hz, hx)` from the facing,
+  a structure's always `(0, 1)`, the depth row's key, the nano staging of `tagpu_nanostage.h` while
+  `built < 1` and then no shadow), then the placement ghost, the gesture's sites and the queued
+  sites not yet standing, alpha 0.40, no shadow. The arena's types are matched to the stage's by
+  name once a stage (`types_build`), each type's node run walked with `tagpu_model_walk` and every
+  node checked to lie inside the arena **before** it is handed over; a type that fails is drawn as
+  the box (`resolved`, bit t). Each record goes to the wiki bake as a piece run
+  (`tagpu_pbw_unit`, key `ghost` 1, so units and ghosts of a type share one geometry) and is posed
+  at rest: one rotation about the root's rest point, `(cs, 0, sn; 0, 1, 0; -sn, 0, cs)` on the
+  engine-held nodes, which is the engine's body turn of the matching heading (`0x4CB590` in the
+  engine map); a piece `Create()` hides takes visibility 0, one it marks dont-cache 1. The camera is
+  the map's corner at zoom 1 (`depthScale` 512, the scaffold rect the whole map), the light the
+  Classic one. From the packet's option word: the shadow kind (bit 2 Shadow: a structure's slant
+  when its type has one; bit 3 as well: a mobile unit's silhouette; never for a nanoframe or a
+  ghost) and the lit rows (bit 5 Shading: a structure, and every ghost). The calls in their order a
+  frame: `tagpu_r3dw_atlas_level(1)` (a constant level generation), the atlas recycle,
+  `tagpu_pbw_frame`, `tagpu_pdw_frame`, the 3DO renderer's ensure and atlas frame (the allowance
+  off from the first frame), the shade table, then the records; a frame on which the bake refused
+  any record hands nothing over, and the frame shows the whitebox whole.
 - **In the seam** (`vk_present`, `tagpu_vk.c`): after the game's prepares and before
   `tagpu_vk_hud_prepare`, the wiki's world target is prepared first (its own extent), then its
-  terrain and its features; **the image is drawn whole or not at all** -- only when the target and
+  terrain, its features, and its units (the upload always, so a frame the allowance withheld still
+  moves the atlas on; the prepare only for a hand-over that carries every record); **the image is
+  drawn whole or not at all** -- only when the target and
   every pass the producer said the frame expects (`tagpu_wikiworld_wants`) prepared on this frame
   -- and `tagpu_wikistate_image` splits the stage's ops for that answer before the HUD's pass
   builds them (`tagpu_wikistage_keep`: R0 under the image, R2 over it; R0 and R1 for the
-  whitebox). After the game's world render pass, the wiki's own (begin, terrain, features, end);
+  whitebox), and `tagpu_wikistate_image` is told which types the image drew in 3D, whose boxes it
+  then leaves out. After the game's world render pass, the wiki's own (begin, terrain, features,
+  units, ghosts, end);
   in the frame's pass, between `tagpu_vk_hud_record_wiki` and `tagpu_vk_hud_record_wiki_over`,
   the wiki's `tagpu_vkw_world_record` composites the target, LINEAR, under the Gamma curve. Its
   teardown is the game's: `tagpu_vkw_*_down` in `vk_down` and `passes_down` behind their
@@ -4596,10 +4623,27 @@ are built and not called (the stage draws its units as the whitebox's boxes).
   painted on the render thread only*, because `tagpu_gaf.c` decodes through static buffers that
   the game's atlases, painted on the same thread, share. *No device object of the wiki's passes is
   freed while a submit may name it*: their teardown is the seam's, behind its `vkDeviceWaitIdle`.
-- **Not done here**: units, ghosts and 3D features in the image (the stage keeps the whitebox's
-  boxes over it; a stage with a 3D feature falls back to the whitebox); the wiki's device memory
-  is computed from the sizes it creates, not read back (the plan's section 1); the GDI lane draws
-  no wiki at all.
+- **What the units cost and how they compare**, MEASURED 2026-10-27 (`wiki_regression.py units`,
+  the reference setup, retail, a private Xvfb with the RTX presenting): the arena 249 124 bytes,
+  loaded in 42 to 56 ms, 9 of 9 unit types resolved; quickbuild's types ARMCK ARMACK ARMMEX
+  ARMMOHO ARMGEO ARMPW, no box. The render thread's time with the units, from the periodic line:
+  the first frame about 10 ms producer and 8 ms passes (the bake and the atlas), then the producer
+  0.067 ms and the passes 0.037 ms a frame on average, the passes at most 0.057 ms, at 1920 × 1080
+  (3840 × 2160: [the plan](ingame-wiki-3d-stage-plan.html), landing 6h); 0 frames with a refused
+  record, 300 of 300 frames drew the image. Against the mockup, ten captures of Quick Build 3, 8
+  and 9 and Build Lines 2 and 4 at ss 2: every terrain pixel equal, every feature pixel equal, and
+  over the unit pixels a mean difference of 0.03 to 0.38 / 255 a channel with 0.003 to 0.19 % of
+  them past 40 (the tolerance: 2 / 255 and 0.5 %). Under `nounit=ARMCK` the types line names
+  ARMCK alone among the boxes and 300 of 300 frames still drew the image.
+- **The invariants at the units' hand-over.** *Every node pointer handed to the wiki bake lies
+  inside the arena*: `types_build` walks each type's run and checks every node against the
+  arena's bounds before a run is kept, a bound on the value, so the bake reads the arena only and
+  never game memory. *The arena outlives every hand-over*: it is immutable and never freed. *The
+  pose is a function of the record*: the rest pose and the record's yaw, nothing read from a unit
+  of the game.
+- **Not done here**: 3D features in the image (a stage whose description names one falls back to
+  the whitebox; no stage names one); the wiki's device memory is computed from the sizes it
+  creates, not read back (the plan's section 1); the GDI lane draws no wiki at all.
 ### 2.13 Sub-tick pose interpolation (`tagpu_lerp.c`, OFF by default, `tagpu_lerp.on`) — 2026-09-09
 
 The design, the invariants and the gate results are [smooth motion](smooth-motion.html); this is

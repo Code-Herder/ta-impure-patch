@@ -72,16 +72,17 @@ window.WikiGfx = (() => {
     const T = ground ? await Promise.all([bin(dir + pack.map.atlas.file), bin(dir + pack.map.tilemap.file)]) : null;
     const F = ground && pack.features && pack.features.count
       ? await Promise.all([bin(dir + pack.features.atlas.file), bin(dir + pack.features.instances)]) : null;
-    const meshes = {}, slants = {}, wires = {}, U = pack.units;
+    const meshes = {}, slants = {}, wires = {}, normals = {}, quads = {}, U = pack.units;
     const units = U.atlas ? await bin(dir + U.atlas.file) : null;
     for (const [type, m] of Object.entries(U.meshes || {})) {
-      const [s, w] = await Promise.all([bin(dir + m.slantFile), bin(dir + m.wireFile)]);
+      const [s, w, nv] = await Promise.all([bin(dir + m.slantFile), bin(dir + m.wireFile), bin(dir + m.normalsFile)]);
       for (const [owner, file] of Object.entries(m.files)) {
         const key = `${type}.${owner}`;
-        meshes[key] = f32(await bin(dir + file)); slants[key] = f32(s); wires[key] = f32(w);
+        meshes[key] = f32(await bin(dir + file)); slants[key] = f32(s); wires[key] = f32(w); normals[key] = f32(nv);
+        quads[key] = f32(await bin(dir + m.quadFiles[owner]));
       }
     }
-    return new Stage(pack, { pal, shd, tv, tf, sv, sf, uv, uf, T, F, units, meshes, slants, wires });
+    return new Stage(pack, { pal, shd, tv, tf, sv, sf, uv, uf, T, F, units, meshes, slants, wires, normals, quads });
   }
 
   function Stage(pack, d) {
@@ -110,8 +111,10 @@ window.WikiGfx = (() => {
     let cu = null, ua = null, wa = null;
     if (d.units) {
       TR.tex2D(gl, 6, gl.R8, pack.units.atlas.w, pack.units.atlas.h, gl.RED, gl.UNSIGNED_BYTE, d.units);
-      ua = TR.unitArray(gl); wa = TR.unitArray(gl);
-      cu = TR.classicUnits(gl, d.uv, d.uf, pack.units, d.units, d.pal, d.shd, pack.palette.shdRows, pack.palette.neutral[0]);
+      // the bodies with the quad stream (a textured quad mapped and shaded over its own frame, as the game's posed
+      // pass does); the wires without it
+      ua = TR.unitArray(gl, true); wa = TR.unitArray(gl, false, true);
+      cu = TR.classicUnits(gl, TR.unitQuadVS(d.uv), d.uf, pack.units, d.units, d.pal, d.shd, pack.palette.shdRows, pack.palette.neutral[0]);
     }
     gl.activeTexture(gl.TEXTURE0);
     // the target: colour and depth+stencil (the silhouettes blend once a pixel through the stencil)
@@ -133,28 +136,58 @@ window.WikiGfx = (() => {
     const heights = new Uint8Array(mw * mh);                         // the stage is flat
     const meshTop = {};
     const look = { lane: 'parity', shadowSun: [0, 1, 0], shadowlen: null, airshadow: 'len' };
-    let out = new Float32Array(1), wout = new Float32Array(1);
+    let out = new Float32Array(1), qout = new Float32Array(1), wout = new Float32Array(1), lout = new Float32Array(1);
     const [neutral] = pack.palette.neutral;
 
-    /* the nanoframe wire of one range: every face outline, posed as emitUnits poses the body, one notch nearer than
-       the surface it traces (+0.15, tagpu_posedraw.c WVS), on the flat path in the second oscillator's colour */
+    /* THE MODEL AS THE ENGINE HOLDS IT. A record's yaw turns the model as the engine holds it, X and Z negated by the
+       loader (0x4CB590), as the game's stage turns the arena's nodes; the pack's meshes are in the file's axes, so the
+       record's turn is applied after that half turn, which is the turn's own negation. */
+    const held = ([cs, sn]) => [-cs, -sn];
+
+    /* THE NANOFRAME WIRE OF ONE RANGE, as the game draws it (tagpu_vk_unit.c `wire_records`, tagpu_posedraw.c WVS):
+       every face outline posed as emitUnits poses the body, each end at 1/65536 and on the line grid
+       (floor(SS * p), tagpu_line.h), one band of six vertices an edge (tagpu_glsl.h `taBand`, 2 game pixels about
+       the segment) that the fragment stage cuts to 0x4CC7AB's walk thickened to SS; the depth and the height carried
+       along the segment, one notch nearer than the surface it traces (+0.15), on the flat path in the second
+       oscillator's colour. `at` counts vertices; `r` is emitUnits' range, whose yaw is already the held one. */
+    const BAND = 2.0;
     function wire(r, at) {
       const w = d.wires[r.inst.type], [cs, sn] = r.yaw, [hotX, hotY] = r.hot, wx = r.inst.pos[0], wz = r.inst.pos[1];
-      const need = at + (w.length / 3) * TR.UVST;
+      const need = (at + (w.length / 6) * 6) * TR.UVST;
       if (wout.length < need) { const g = new Float32Array(need * 2); g.set(wout); wout = g; }
+      if (lout.length < need / TR.UVST * 4) { const g = new Float32Array(need / TR.UVST * 8); g.set(lout); lout = g; }
+      const fx = v => Math.floor(v * 65536 + 0.5) / 65536;
       let n = 0;
-      for (let i = 0; i + 3 <= w.length; i += 3) {
-        const x0 = w[i], y = w[i + 1], z0 = w[i + 2];
-        const x = x0 * cs + z0 * sn, z = -x0 * sn + z0 * cs;
-        let md = (2 * y - z) / 256;
-        if (md > 1.8) md = 1.8; else if (md < -1.8) md = -1.8;
-        const q = at + n * TR.UVST;
-        wout.fill(0, q, q + TR.UVST);
-        wout[q] = x + hotX; wout[q + 1] = (-z - y * 0.5) + hotY; wout[q + 2] = r.enc + md + 0.15;
-        wout[q + 3] = -1; wout[q + 4] = -1; wout[q + 5] = r.inst.nano.wire; wout[q + 6] = -1;
-        wout[q + 7] = neutral / 31; wout[q + 8] = wx + x; wout[q + 9] = wz + (-z - y * 0.5); wout[q + 10] = y;
-        wout[q + 12] = 1;
-        n++;
+      for (let i = 0; i + 6 <= w.length; i += 6) {
+        const end = [];
+        for (let k = 0; k < 2; k++) {
+          const x0 = w[i + 3 * k], y0 = w[i + 3 * k + 1], z0 = w[i + 3 * k + 2];
+          const mx = fx(Math.fround(x0 * cs + z0 * sn)), my = fx(y0), mz = fx(Math.fround(-x0 * sn + z0 * cs));
+          const qx = mx, qy = -mz - my * 0.5;
+          const g = [Math.floor((hotX + qx) * SS), Math.floor((hotY + qy) * SS)];
+          let md = (2 * my - mz) / 256;
+          if (md > 1.8) md = 1.8; else if (md < -1.8) md = -1.8;
+          end.push({ c: [(g[0] + 0.5) / SS, (g[1] + 0.5) / SS], enc: r.enc + md + 0.15, y: my, q: [qx, qy] });
+        }
+        const [A, B] = end, dx = B.c[0] - A.c[0], dy = B.c[1] - A.c[1], len = Math.hypot(dx, dy);
+        const u = len > 0 ? [dx / len, dy / len] : [1, 0], nn = [-u[1], u[0]];
+        for (const c of [0, 1, 2, 2, 1, 3]) {
+          // corners: 0 A-, 1 B-, 2 A+, 3 B+ (taBand's two triangles (A-, B-, A+) and (A+, B-, B+))
+          const atB = c === 1 || c === 3, side = c >= 2 ? 1 : -1;
+          const t = len > 0 ? (atB ? 1 + BAND / len : -BAND / len) : (atB ? 1 : 0);
+          const base = atB ? B.c : A.c, along = atB ? BAND : -BAND;
+          const px = base[0] + along * u[0] + BAND * side * nn[0], py = base[1] + along * u[1] + BAND * side * nn[1];
+          const mix = (a, b) => a + (b - a) * t;
+          const q = (at + n) * TR.UVST, l = (at + n) * 4;
+          wout.fill(0, q, q + TR.UVST);
+          wout[q] = px; wout[q + 1] = py; wout[q + 2] = mix(A.enc, B.enc);
+          wout[q + 3] = -1; wout[q + 4] = -1; wout[q + 5] = r.inst.nano.wire; wout[q + 6] = -1;
+          wout[q + 7] = neutral / 31;
+          wout[q + 8] = wx + mix(A.q[0], B.q[0]); wout[q + 9] = wz + mix(A.q[1], B.q[1]); wout[q + 10] = mix(A.y, B.y);
+          wout[q + 12] = 1;
+          lout[l] = A.c[0]; lout[l + 1] = A.c[1]; lout[l + 2] = B.c[0]; lout[l + 3] = B.c[1];
+          n++;
+        }
       }
       return n;
     }
@@ -204,13 +237,21 @@ window.WikiGfx = (() => {
       if (cu && recs.length && layer('units')) {
         let need = 0;
         for (const r of recs) need += ((d.meshes[r.key] || []).length / TR.UNIT_STRIDE + (d.slants[r.key] || []).length / 3) * TR.UVST;
-        if (out.length < need) out = new Float32Array(need);
-        const inst = recs.map(r => ({ ...r, type: r.key, agl: 0 }));
-        const { n } = TR.emitUnits({ instances: inst, meshData: d.meshes, slantData: d.slants, meshTop, out, D: pack.depth,
+        if (out.length < need) { out = new Float32Array(need); qout = new Float32Array(need / TR.UVST * TR.QVST); }
+        /* THE GAME'S SHADE RULE (tagpu_wikiworld.c `unit_one`, tagpu_posedraw.c VS): a structure, and every ghost, on
+           the engine's lit rows from its vertex normals; any other unit on the neutral row. The stage takes the
+           Shading option as on, the game's default. */
+        const inst = recs.map(r => ({ ...r, type: r.key, agl: 0, yaw: held(r.yaw),
+          engineShade: { lit: r.ghost || !(pack.units.meshes[r.type] || {}).mobile, normals: d.normals[r.key],
+                         quad: d.quads[r.key] } }));
+        const { n } = TR.emitUnits({ instances: inst, meshData: d.meshes, slantData: d.slants, meshTop, out, qout, D: pack.depth,
           r0, E, W, vpL: 0, vpT: 0, w16: mw, h16: mh, heights, neutral, dir: pack.palette.neutral[1] }, look);
         refused = recs.length - look.unitRanges.length;
         gl.bindBuffer(gl.ARRAY_BUFFER, ua.vbo);
         gl.bufferData(gl.ARRAY_BUFFER, out.subarray(0, n * TR.UVST), gl.DYNAMIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER, ua.qvbo);
+        gl.bufferData(gl.ARRAY_BUFFER, qout.subarray(0, n * TR.QVST), gl.DYNAMIC_DRAW);
+        TR.unitQuadOff(gl);
         gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         gl.bindVertexArray(ua.vao);
         cu.use(f);
@@ -229,12 +270,16 @@ window.WikiGfx = (() => {
         // each nanoframe's wire, after every body
         let wn = 0;
         const wr = [];
-        for (const r of look.unitRanges) if (!r.inst.ghost && r.inst.nano) { const k = wire(r, wn * TR.UVST); wr.push([wn, k]); wn += k; }
+        for (const r of look.unitRanges) if (!r.inst.ghost && r.inst.nano) { const k = wire(r, wn); wr.push([wn, k]); wn += k; }
         if (wn) {
           gl.bindVertexArray(wa.vao);
           gl.bindBuffer(gl.ARRAY_BUFFER, wa.vbo);
           gl.bufferData(gl.ARRAY_BUFFER, wout.subarray(0, wn * TR.UVST), gl.DYNAMIC_DRAW);
-          for (const [a, k] of wr) gl.drawArrays(gl.LINES, a, k);
+          gl.bindBuffer(gl.ARRAY_BUFFER, wa.lvbo);
+          gl.bufferData(gl.ARRAY_BUFFER, lout.subarray(0, wn * 4), gl.DYNAMIC_DRAW);
+          // the line grid: the target's own pixels, SS to a game pixel, the thickness SS (tagpu_line.h `tagpu_line_grid`)
+          gl.uniform4i(gl.getUniformLocation(cu.prog, 'uGrid'), (GW * SS) | (SS << 16), GH * SS, FW, FH);
+          for (const [a, k] of wr) gl.drawArrays(gl.TRIANGLES, a, k);
           gl.bindVertexArray(ua.vao);
         }
         // the ghost stage: translucent, depth writes off, so ghosts blend with each other

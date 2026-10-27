@@ -29,10 +29,17 @@ const UNIT_STRIDE = 7;             // the mesh .bin's own stride: x,y,z,u,v,fc,c
 const ceil32 = (v) => { const q = div32trunc(v); return (v - q * 32) ? q + 1 : q; };
 // the unit vertex: x,y,enc, u,v, fc,ck, shade, wx,wz, vy, nx,ny,nz, WX,WY,WZ
 const UVST = 17;
+// A textured quad's per-pixel mapping and its corners' shade rows, a second stream beside the vertices for a page that
+// asks for the engine's quad rule (the in-game wiki's stage): the corner's point in the quad's frame (2), the fourth
+// corner in it (2), the frame's atlas rect, x < 0 where the face keeps its uv (4), the four corners' rows (4). Written
+// to `p.qout` by emitUnits when the page passes one, and read by tagpu_posedraw.c's VS's aQH, aQAB, aQR.
+const QVST = 12;
+const QDEFAULT = [0, 0, 1, 1, -1, -1, -1, -1];
 // the feature vertex: x,y,enc, u,v, ck,mode, wx,wz (the lab's lane adds its lambert)
 const SVST = 9;
 // tagpu_render3do.c: the model-space toward-camera axis and the light
 const SH_V = [0.0, 0.8944, -0.4472], SH_L = [-0.35, 0.80, -0.49];
+const ENGINE_L = [-0.8, 1.0, 0.25];   // the engine's unit light, 0x5065F8, not normalised (tagpu_posedraw.c SH_L)
 
 // ---- GL helpers -----------------------------------------------------------
 function shader(gl, type, src, label) {
@@ -421,7 +428,7 @@ function classicSprites(gl, vs, fs, vbo, feat, r8, pal) {
 // The unit vertex array over a fresh buffer: slots 6 (normal) and 7 (world) are
 // only the lab programs'; the parity program leaves them enabled and unread,
 // which GL allows as long as the buffer covers them
-function unitArray(gl) {
+function unitArray(gl, quad, line) {
   const vao = gl.createVertexArray(), vbo = gl.createBuffer();
   gl.bindVertexArray(vao);
   gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
@@ -430,8 +437,50 @@ function unitArray(gl) {
     gl.enableVertexAttribArray(i);
     gl.vertexAttribPointer(i, sizes[i], gl.FLOAT, false, UVST * 4, offs[i]);
   }
+  let qvbo = null;
+  if (quad) {
+    // attributes 8..11: the QVST stream; an array without it keeps them off and reads the constants unitQuadOff sets
+    qvbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, qvbo);
+    const qs = [2, 2, 4, 4], qo = [0, 8, 16, 32];
+    for (let i = 0; i < 4; i++) {
+      gl.enableVertexAttribArray(8 + i);
+      gl.vertexAttribPointer(8 + i, qs[i], gl.FLOAT, false, QVST * 4, qo[i]);
+    }
+  }
+  let lvbo = null;
+  if (line) {
+    // attribute 12: a line record's two ends (tagpu_posedraw.c WVS's vLine)
+    lvbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, lvbo);
+    gl.enableVertexAttribArray(12);
+    gl.vertexAttribPointer(12, 4, gl.FLOAT, false, 16, 0);
+  }
   gl.bindVertexArray(null);
-  return { vao, vbo };
+  return { vao, vbo, qvbo, lvbo };
+}
+
+// The constants attributes 8..11 read in an array without the quad stream: no frame, so every face keeps its uv.
+function unitQuadOff(gl) {
+  gl.vertexAttrib4f(8, 0, 0, 0, 0); gl.vertexAttrib4f(9, 1, 1, 0, 0);
+  gl.vertexAttrib4f(10, -1, -1, -1, -1); gl.vertexAttrib4f(11, 0, 0, 0, 0);
+  gl.vertexAttrib4f(12, -1, -1, -1, -1);
+}
+
+// The unit vertex stage with the quad stream read in place of its constants (attributes 8..11), and a line record's
+// ends (attribute 12, x < 0 for no line) in place of the line test's.
+function unitQuadVS(vs) {
+  const decl = "layout(location=6) in vec3 aNrm;\n";
+  const off = "vQH = vec2(0.0); vQAB = vec2(1.0); vQR = vec4(-1.0);";
+  const shq = "vShQ = vec4(aShade);";
+  const lin = "vLine = vec4(0.0); vLineOn = 0;";
+  if (!vs.includes(decl) || !vs.includes(off) || !vs.includes(shq) || !vs.includes(lin))
+    throw new Error("unit.vert: no quad or line constants to replace");
+  return vs.replace(decl, decl + "layout(location=8) in vec2 aQH;\nlayout(location=9) in vec2 aQAB;\n" +
+                              "layout(location=10) in vec4 aQR;\nlayout(location=11) in vec4 aShQ;\n" +
+                              "layout(location=12) in vec4 aLine;\n")
+           .replace(off, "vQH = aQH; vQAB = aQAB; vQR = aQR;").replace(shq, "vShQ = aShQ;")
+           .replace(lin, "vLine = aLine; vLineOn = aLine.x >= 0.0 ? 1 : 0;");
 }
 
 // One unit instance per entry of `p.instances`: yaw the bind pose, project
@@ -552,6 +601,29 @@ function emitUnits(p, L) {
       }
       // per-face flat shading, tagpu_render3do.c line for line
       let shade = lab ? 1.0 : SH_NEUTRAL / 31;
+      // THE ENGINE'S RULE, when the instance asks for it (the in-game wiki's stage): a lit unit takes each vertex's
+      // row from its own normal, posed -- ftol(dot(N, L) * 5) & 31, L the engine's light at 0x5065F8, row 0 taken as
+      // 5 (tagpu_posedraw.c `shRow`) -- and any other the neutral row. A quad's corners are blended across the two
+      // triangles, not bilinearly as the engine's rasteriser does.
+      const es = inst.engineShade, vshade = es ? [0, 0, 0] : null, qrows = es ? [[], [], []] : null;
+      if (es) {
+        const nv = es.normals;
+        const row = k => {
+          const nx = nv[k] * cs + nv[k + 2] * sn, ny = nv[k + 1], nz = -nv[k] * sn + nv[k + 2] * cs;
+          const r = Math.trunc(Math.fround(nx * ENGINE_L[0] + ny * ENGINE_L[1] + nz * ENGINE_L[2]) * 5) & 31;
+          return (r === 0 ? 5 : r) / 31;
+        };
+        for (let t2 = 0; t2 < 3; t2++) {
+          const k = (i / UNIT_STRIDE + t2) * 15;
+          if (!es.lit || !nv || k + 14 >= nv.length) {
+            vshade[t2] = SH_NEUTRAL / 31;
+            qrows[t2] = [vshade[t2], vshade[t2], vshade[t2], vshade[t2]];
+            continue;
+          }
+          vshade[t2] = row(k);
+          qrows[t2] = [row(k + 3), row(k + 6), row(k + 9), row(k + 12)];
+        }
+      }
       let ux = 0, uy = 1, uz = 0;               // the lab's normal; level if degenerate
       const e1 = [P[1][0] - P[0][0], P[1][1] - P[0][1], P[1][2] - P[0][2]];
       const e2 = [P[2][0] - P[0][0], P[2][1] - P[0][1], P[2][2] - P[0][2]];
@@ -589,7 +661,12 @@ function emitUnits(p, L) {
         uVerts[q + 2] = enc + md;
         uVerts[q + 3] = mesh[o + 3]; uVerts[q + 4] = mesh[o + 4];
         uVerts[q + 5] = mesh[o + 5]; uVerts[q + 6] = mesh[o + 6];
-        uVerts[q + 7] = shade;
+        uVerts[q + 7] = vshade ? vshade[t2] : shade;
+        if (p.qout) {
+          const qq = n * QVST, v = i / UNIT_STRIDE + t2, qd = es && es.quad;
+          for (let k = 0; k < 8; k++) p.qout[qq + k] = qd && v * 8 + 7 < qd.length ? qd[v * 8 + k] : QDEFAULT[k];
+          for (let k = 0; k < 4; k++) p.qout[qq + 8 + k] = qrows ? qrows[t2][k] : uVerts[q + 7];
+        }
         uVerts[q + 8] = wldX + x;                 // per-vertex, as the engine
         uVerts[q + 9] = wldZ + (-z - y * 0.5);
         uVerts[q + 10] = y;
@@ -635,6 +712,10 @@ function emitUnits(p, L) {
         uVerts[o + 10] = y;
         uVerts[o + 11] = 0; uVerts[o + 12] = 1; uVerts[o + 13] = 0;
         uVerts[o + 14] = wx + x; uVerts[o + 15] = gnd + y; uVerts[o + 16] = wz - z;
+        if (p.qout) {
+          for (let k = 0; k < 8; k++) p.qout[n * QVST + k] = QDEFAULT[k];
+          for (let k = 0; k < 4; k++) p.qout[n * QVST + 8 + k] = SH_NEUTRAL / 31;
+        }
         n++; nSlant++;
       }
     }
@@ -764,7 +845,7 @@ void main(){
 }`;
 
 root.TasceneRender = {
-  div32trunc, ceil32, TILE_PX, UNIT_STRIDE, UVST, SVST, SH_V, SH_L,
+  div32trunc, ceil32, TILE_PX, UNIT_STRIDE, UVST, QVST, unitQuadOff, unitQuadVS, SVST, SH_V, SH_L,
   shader, program, nameShadowUnits, uniforms, tex2D, baseAtlas, shadeK,
   classicTerrain, reflect, gatherFeatures, classicSprites,
   unitArray, emitUnits, classicUnits, BLIT_VS,

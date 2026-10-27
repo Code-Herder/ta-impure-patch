@@ -1215,6 +1215,18 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
   `+0x245` bit `0x400`, the target's `+0x110 & 3` ≠ 2 and its def's `+0x245` bit `0x1000` clear
   (`0x489960..0x48999E`). ReclaimUnit's progress is a kind-5 hit `0x489BB0` once `order+0x3A`
   reaches 15 (it grows by 2 a call), and it does not gate the spray.
+- **A reclaimed unit is never a nanoframe** [DISASSEMBLED 2026-10-27; MEASURED the same day, below].
+  ReclaimUnit `0x404730` sends `0x489BB0(reclaimer, order+0x16, order+0x36, 5, 0)`
+  (`0x404974..0x404981`) and resets `order+0x3A` (`0x404986`); VTOL_ReclaimUnit `0x414A80` sends
+  the same hit at `0x414B8D`. The sender `0x489BB0` calls the apply `0x489CE0` (`0x489C89`, or sends
+  the record), which lowers the target's HP `+0x108`. No instruction of `0x404730..0x404ACF`,
+  `0x414A80..0x414C7B`, `0x489BB0..0x489CDF` or `0x489CE0..0x489F7F` names `+0x104`, so the target's
+  build fraction stays 0.0 and it draws as a finished unit until it dies. The one unbuild,
+  `0x41BCD0(unit, n)` (`ret 8`: `0x41BA60(unit, unit, −(def +0x1EA · n) / def +0x186)`, the unit its
+  own builder), is not the reclaim: its only direct caller is GetBuilt's `0x402F6B`, after
+  `0x439E80(order, 0xB)`. MEASURED in a skirmish (`tools/wiki_regression.py units`, step u7): an
+  ARMCK ordered to reclaim a finished ARMSOLAR took its HP to 0 while `+0x104` read 0.0 at every
+  read. The in-game wiki's stage draws a reclaim so (`tagpu_wikiscene.c`).
 - **The ledger** `unit+0xBC` is 0x34 bytes: an energy group at `+0` and a metal group at `+0x18`,
   each six floats {produced, requested, granted, debt, last produced, last requested}, and the
   owner's slot in the player array at `+0x30` (`0x401070(owner index)`, which zeroes the 0x34
@@ -4047,8 +4059,9 @@ mover's `0x2F` at `+0x118`; mover offsets below are the mover's own):
   a single at `[esp+0x24]`. With M the def's `+0x1FA` it takes `trunc(fn · M)` and `trunc(fo · M)`
   through `0x4E43A0` (`0x41BB72`, `0x41BB7D`) -- `fistp qword` under a control word with RC set to
   chop, so a truncation, of each single times M at the FPU's precision -- and their difference d
-  (`0x41BB8E..0x41BB90`). For an amount below 0 (an unbuild; the reclaim `0x41BCD0` passes
-  `−(def +0x1EA · n) / def +0x186`) it stores fn (`0x41BC16`) and the HP `max(movsx(+0x108) + d,
+  (`0x41BB8E..0x41BB90`). For an amount below 0 (an unbuild: `0x41BCD0`, called only by GetBuilt
+  at `0x402F6B`, passes `−(def +0x1EA · n) / def +0x186`; a reclaim never comes here, *A reclaimed
+  unit is never a nanoframe*) it stores fn (`0x41BC16`) and the HP `max(movsx(+0x108) + d,
   0)` (`0x41BBFA..0x41BC22`, `setle`/`dec`/`and`). For an amount of 0 or more it asks the builder's
   ledger (`0x4011C0`, `0x41BC60`) and only when that grants it stores the HP `movsx(+0x108) + d`
   capped at M by an unsigned compare (`cmp eax, ecx; jb` at `0x41BC7F`) and fn (`0x41BC96`); both
@@ -16929,6 +16942,16 @@ fatal through `0x4B6290`); the script `scripts\<UnitName>.COB` (`0x42D8E5`), nev
   then bubble-sorted ascending by `Σ y / vcount` (a 32-bit sum, `idiv` truncating), equal keys
   keeping their order. A face of 0 vertices divides by zero (no stock face has one: MEASURED).
 - `0x4CB590`: every vertex's X and Z and the node's `+0x10`/`+0x18` negated, recursively.
+  [DISASSEMBLED 2026-10-27, `0x4CB590..0x4CB5EC`: `neg` of each vertex's `+0` and `+8` over `+0x04` vertices
+  at `+0x24`, then of `+0x10` and `+0x18`, recursing into the child `+0x2C` and looping on the sibling `+0x30`.]
+  The negation is a half turn about Y, so a model the engine holds is the file's turned by `0x8000`, and
+  a body turn of heading `h` (`piece_local`'s Y rotation, `(c, -s; s, c)` on (x, z)) draws the file's
+  model turned by `h + 0x8000`. MEASURED in a skirmish 2026-10-27: an ARMCK walking toward +x reads
+  heading `+0x66` `0xBE2E`..`0xBFE7` (`0xC000` once settled), a scenario facing of 90 places one at
+  `0xC000` and of -90 at `0x4000`, and structures placed at the default facing read `0x7A3C`..`0x834E`,
+  the engine's jitter about `0x8000`. The in-game wiki's stage poses the engine-held nodes with the
+  record's yaw and its mockup turns the file's mesh by the yaw after that half turn (`gfx.js` `held`);
+  the two draw the same model, which the live engine's ARMMOHO confirms (its crane box toward +z).
 - **The binder `0x42A140(node, name)`** (re-read for the landing at `0x42A195..0x42A295`): for each
   face with a texture name it clears FF_TEAM (bit 2); takes the **first GAF of the texture bank**
   holding the name (`0x4B8D40`, `_stricmp`, the first sequence of that name); else `logos.GAF`,

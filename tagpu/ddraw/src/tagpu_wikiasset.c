@@ -1269,11 +1269,12 @@ static void stage_free(STAGEREC* s)
 /* ---- units --------------------------------------------------------------------------------------- */
 
 typedef struct {
-    int         found, script;
+    int         found, script, info;   /* info: the FBI's [UNITINFO] was read                  */
     TAGPU_VFILE f, sf;
     char        unitname[WIKI3D_NAMEMAX], object[WIKI3D_NAMEMAX];
     MODEL       md;
     char        hides_why[64];  /* "" unless the mask was refused                               */
+    char        uncached_why[64];
     char        why[200];
 } UNITREC;
 
@@ -1331,12 +1332,13 @@ static int piece_orders(const ARENA* a, uint32_t root, const char** walk, int* n
 }
 #endif
 
-/* CREATE()'S HIDES: tagpu_cobscan_mask, the rule the build ghost's mask takes (tagpu_datakeys.c),
-   over the script's file bytes (base 0: a file's offsets are unrelocated) and this model. The
-   engine's order holds the root's siblings and the readers' walk does not; the mask names nodes
-   by address, so a hidden sibling of the root is simply not in the bits. */
-static int unit_hides(const ARENA* a, const unsigned char* cob, uint32_t n, uint32_t root, uint32_t* bits,
-                      char* why, size_t nwhy)
+/* CREATE()'S HIDES (`what` TAGPU_COB_HIDE) OR DONT-CACHES (TAGPU_COB_DONTCACHE):
+   tagpu_cobscan_create_mask, the rule the build ghost's mask takes (tagpu_datakeys.c), over the
+   script's file bytes (base 0: a file's offsets are unrelocated) and this model. The engine's
+   order holds the root's siblings and the readers' walk does not; the mask names nodes by
+   address, so a marked sibling of the root is simply not in the bits. */
+static int unit_hides(const ARENA* a, const unsigned char* cob, uint32_t n, uint32_t root, int what,
+                      uint32_t* bits, char* why, size_t nwhy)
 {
     const char* walk[MAXPIECE];
     const char* prim[MAXPIECE];
@@ -1345,7 +1347,7 @@ static int unit_hides(const ARENA* a, const unsigned char* cob, uint32_t n, uint
     const int nprim = piece_orders(a, root, walk, &np, prim, pname);
     memset(bits, 0, MAXPIECE / 8);
     if (nprim < 0) { snprintf(why, nwhy, "the model's walk past %d pieces", MAXPIECE); return -1; }
-    r = tagpu_cobscan_mask((const char*)cob, n, 0, prim, pname, nprim, walk, np, bits);
+    r = tagpu_cobscan_create_mask((const char*)cob, n, 0, what, prim, pname, nprim, walk, np, bits);
     if (r < 0) {
         snprintf(why, nwhy, r == -2 ? "an empty script" : "the script or the model refused");
         memset(bits, 0, MAXPIECE / 8);
@@ -1354,9 +1356,10 @@ static int unit_hides(const ARENA* a, const unsigned char* cob, uint32_t n, uint
     return r;
 }
 
-/* the report's "hides": null without a model and a script; else the hidden nodes' names in the
-   readers' walk, the bits as words (word 0 first), and the refusal */
-static void unit_hides_report(SB* b, const LOADER* L, const WIKI3DUNIT* u, const UNITREC* r)
+/* the report's "hides" (and "uncached"): null without a model and a script; else the marked
+   nodes' names in the readers' walk, the bits as words (word 0 first), and the refusal */
+static void unit_hides_report(SB* b, const LOADER* L, const WIKI3DUNIT* u, const UNITREC* r,
+                              const uint32_t* bits, int state, const char* why)
 {
     const char* walk[MAXPIECE];
     const char* prim[MAXPIECE];
@@ -1366,16 +1369,16 @@ static void unit_hides_report(SB* b, const LOADER* L, const WIKI3DUNIT* u, const
     if (piece_orders(&L->a, r->md.root, walk, &np, prim, pname) < 0) np = 0;
     sb_raw(b, "{\"pieces\":[");
     for (g = 0; g < np; g++)
-        if (u->hidden[g >> 5] >> (g & 31) & 1u) {
+        if (bits[g >> 5] >> (g & 31) & 1u) {
             const uint32_t nm = OFF(&L->a, rd32((const unsigned char*)walk[g] + O_NAME));
             sb_raw(b, first ? "" : ",");
             sb_q(b, nm ? (const char*)AT(&L->a, nm) : "", 0);
             first = 0;
         }
     sb_raw(b, "],\"bits\":\"");
-    for (g = 0; g < MAXPIECE / 32; g++) sb_raw(b, "%08lx", (unsigned long)u->hidden[g]);
+    for (g = 0; g < MAXPIECE / 32; g++) sb_raw(b, "%08lx", (unsigned long)bits[g]);
     sb_raw(b, "\",\"why\":");
-    sb_q(b, u->hides < 0 ? r->hides_why : NULL, 0);
+    sb_q(b, state < 0 ? why : NULL, 0);
     sb_raw(b, "}");
 }
 
@@ -1402,6 +1405,13 @@ static void unit_load(LOADER* L, const char* type, WIKI3DUNIT* u, UNITREC* r)
             on = tagpu_tdf_get(t, sec, "Objectname");
             strncpy(r->unitname, un ? un : "", sizeof r->unitname - 1);
             strncpy(r->object, on ? on : r->unitname, sizeof r->object - 1);
+            /* the facts the stage draws it by (WIKI3DUNIT) */
+            r->info = 1;
+            u->mobile = tagpu_tdf_int(t, sec, "BMcode", 1) != 0;
+            u->slant = !u->mobile && tagpu_tdf_int(t, sec, "Digger", 0) == 0;
+            u->shadow = tagpu_tdf_int(t, sec, "NoShadow", 0) == 0 &&
+                        (u->slant || (tagpu_tdf_int(t, sec, "CanHover", 0) == 0 &&
+                                      tagpu_tdf_int(t, sec, "Floater", 0) == 0));
             if (tagpu_hpi_stricmp(type, r->unitname, sizeof r->unitname))
                 snprintf(r->why, sizeof r->why, "%s names the UnitName %s, not %s", r->f.path, r->unitname, type);
             else if (model_load(L, &r->md, L->in->names.objects3d, r->object)) {
@@ -1416,8 +1426,12 @@ static void unit_load(LOADER* L, const char* type, WIKI3DUNIT* u, UNITREC* r)
         char sw[200];
         unsigned char* cob = load(L, &r->sf, CAP_COB, sw, sizeof sw);
         r->script = 1;
-        if (cob && u->model)
-            u->hides = unit_hides(&L->a, cob, r->sf.size, r->md.root, u->hidden, r->hides_why, sizeof r->hides_why);
+        if (cob && u->model) {
+            u->hides = unit_hides(&L->a, cob, r->sf.size, r->md.root, TAGPU_COB_HIDE, u->hidden,
+                                  r->hides_why, sizeof r->hides_why);
+            u->uncaches = unit_hides(&L->a, cob, r->sf.size, r->md.root, TAGPU_COB_DONTCACHE, u->uncached,
+                                     r->uncached_why, sizeof r->uncached_why);
+        }
         free(cob);
     }
     if (!u->ok) LOG("wiki3d: the unit type %s stays a whitebox box - %s", type, r->why);
@@ -1442,7 +1456,14 @@ static void unit_report(SB* b, const LOADER* L, const WIKI3DUNIT* u, const UNITR
     sb_raw(b, ",\"script_from\":");
     sb_q(b, r->script ? tagpu_vfs_source(L->vfs, r->sf.src) : NULL, 1);
     sb_raw(b, ",\"hides\":");
-    unit_hides_report(b, L, u, r);
+    unit_hides_report(b, L, u, r, u->hidden, u->hides, r->hides_why);
+    sb_raw(b, ",\"uncached\":");
+    unit_hides_report(b, L, u, r, u->uncached, u->uncaches, r->uncached_why);
+    if (r->info)
+        sb_raw(b, ",\"facts\":{\"mobile\":%s,\"slant\":%s,\"shadow\":%s}", u->mobile ? "true" : "false",
+               u->slant ? "true" : "false", u->shadow ? "true" : "false");
+    else
+        sb_raw(b, ",\"facts\":null");
     sb_raw(b, ",\"ok\":%s,\"why\":", u->ok ? "true" : "false");
     sb_q(b, u->ok ? NULL : r->why, 0);
     sb_raw(b, "}");

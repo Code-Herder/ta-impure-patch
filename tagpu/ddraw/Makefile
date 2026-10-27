@@ -230,6 +230,12 @@ $(addprefix src/tagpu_wikisim, $(ALLEXTS)) $(addprefix src/tagpu_wikidata, $(ALL
 # tools/wiki/stagecheck.mjs checks a native build of it.
 $(addprefix src/tagpu_wikistage, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
 
+# THE WIKI'S SCENE (src/tagpu_wikiscene.h) stages a nanoframe by truncating a single-precision
+# product (tagpu_nanostage.h, `nano * 255.0f`) as the mockup's scene.js truncates Math.fround's,
+# so it computes on SSE2 too: an 80-bit product can land on the other side of a whole number.
+# tools/wiki/scenecheck.mjs checks a native build of it.
+$(addprefix src/tagpu_wikiscene, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
+
 # THE RESTORER'S MODELS (src/tagpu_restore_core.c load_weights): unditherer/models/<name>.w32.bin,
 # compressed by zstd into inc/tagpu_rmodel_<name>.zst, which res.rc embeds as RMODEL_<NAME>.
 # Generated and never committed, like the HUD archive. The frame records its content size, which
