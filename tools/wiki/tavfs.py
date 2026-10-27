@@ -23,9 +23,14 @@ exe-reverse-engineering.md, *Where the engine looks for archives*):
   relative to the process's current directory, then from the first archive in mount order that holds it as a file
   (0x4BB2E0 walks the list from index 0 and stops at the first file entry, 0x4BB378). Names compare without case
   [INFERRED for 0x4F8A70], and the path splits at `\\` only (0x4BB4EA); `/` is accepted here as a convenience.
-- **An enumeration** lists loose files first, then each archive in mount order (0x4BCA30, 0x4BCB50, cited). Within
-  one source the order is the directory's: the loose files sorted without case, as NTFS lists them, and an
-  archive's in its directory order [INFERRED for both; QUESTIONS batch A1].
+- **An enumeration** lists loose files first, then each archive in mount order (0x4BCA30, 0x4BCB50), and **each path
+  once, from the first source that holds it**: the copy 0x4BB2E0 opens. The engine does not de-duplicate in the
+  enumerators; InitTAHPIAry ends with 0x4BE320, which sets bit 1 of every directory entry a loose file or an earlier
+  archive already holds as a file (`or cl,2` at 0x4BE658), and the find-next 0x4BC640 skips an entry with that bit
+  (`test byte [edi+8],2` at 0x4BC735). Directories are never shadowed. Within one source the order is the
+  directory's: an archive's forwards (0x4BC6FF..0x4BC754), the loose files as the host's `_findfirst` lists them,
+  here sorted without case as NTFS lists them [INFERRED for the loose order]. DISASSEMBLED 2026-10-26 (the 3D
+  stage's scout answers, A1).
 - **A feature section** comes from the first TDF of `0x4BCB50("features", "*.tdf", -1, 1)` that holds it
   (LoadFeature 0x4224B0, cited).
 
@@ -224,20 +229,22 @@ class Vfs:
 
     def enumerate(self, top: str, pattern: str, recursive: bool):
         """[(path, where)] of every file under `top` matching `pattern`, loose first, then the archives in mount
-        order. A path two sources hold is listed once per source, as each source lists it."""
+        order, each path once, from the first source that holds it (the module's header: the shadow bit)."""
         pat = pattern.lower()
         out = [(rel, "loose") for rel, _p in self._loose_walk(top, recursive)
                if fnmatch.fnmatch(rel.rsplit("/", 1)[-1], pat)]
+        seen = {rel for rel, _w in out}
         prefix = _key(top) + "/"
         for name, arc in self.archives:
             for path in arc.files:
-                if not path.startswith(prefix):
+                if not path.startswith(prefix) or path in seen:
                     continue
                 rest = path[len(prefix):]
                 if "/" in rest and not recursive:
                     continue
                 if fnmatch.fnmatch(rest.rsplit("/", 1)[-1], pat):
                     out.append((path, name))
+                    seen.add(path)
         return out
 
     def read_from(self, path: str, where: str) -> bytes:
