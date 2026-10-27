@@ -546,6 +546,20 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
     int j, n;
     switch (op->kind) {
     case HOP_PART:
+        if (op->flags & HOPF_SPRITE) {
+            /* a cell of the sprite sheet, its frame's texels whole into the op's box, which the
+               stage built a whole number of device pixels wide and high */
+            const float sw = (float)(HUD_SPRITE_CELL * HUD_SPRITE_CELLS), sh = (float)HUD_SPRITE_CELL;
+            if (op->part < 0 || op->part >= HUD_SPRITE_CELLS) break;
+            if (!(in = emit(c, HUD_TEX_SPRITE, HUDM_PART, snap(op->r.x * px), snap(op->r.y * px),
+                            (float)tagpu_hud_edge(op->r.x, op->r.w, px), (float)tagpu_hud_edge(op->r.y, op->r.h, px), op))) break;
+            in->uv[0] = (float)(op->part * HUD_SPRITE_CELL) / sw;
+            in->uv[1] = 0;
+            in->uv[2] = ((float)(op->part * HUD_SPRITE_CELL) + op->size) / sw;
+            in->uv[3] = op->shade / sh;
+            colour(in, 0xFFFFFF, (float)(op->rgba & 0xFF) / 255.0f);
+            break;
+        }
         n = tagpu_hudlay_expand(art->lay, op, px, q, HUD_MAXQUAD);
         for (j = 0; j < n; j++) {
             if (!(in = emit(c, op->part, HUDM_PART, q[j].x0, q[j].y0, q[j].x1, q[j].y1, op))) break;

@@ -13012,6 +13012,42 @@ seven by driving the game and reading `main+0x2CBE` back, and `cursormove` and
 `cursorreclamate` additionally by reading their sprites out of the GL framebuffer. `pathicon` at
 21 agrees with `ui-markers.md` §3, which already had the route dots at `main+0x148D3`.
 
+**How the installed cursor animates** (DISASSEMBLED 2026-10-27, for the in-game wiki's stage,
+which draws the same frames by the same rule: `tagpu_wikistage_cursor_frame`).
+
+| VA | What | How established |
+| --- | --- | --- |
+| `0x4AB400` | `SetUICursor(ctx, seq)`, `ret 8`, ctx `main+0x519` at every in-game site: `ctx+0x2C = seq` (`0x4AB410`), the animation state at `ctx+0x30` started by `0x4B8B30(ctx+0x30, seq, 0)` (`0x4AB414`), `ctx+0x5C` bit 0 set (animating, `0x4AB41D`), then the frame `0x4B7EE0` names handed to `0x4C2B20` (`0x4AB422..0x4AB428`). It starts the sequence over on every call; each in-game caller stores `main+0x2CBE` and calls only when the index changed (above), so an unchanged cursor keeps animating | disassembly |
+| `0x4B8B30` | animation state init `(state, seq, frame)`, `ret 0xC`: `+0x00` the frame (0 when the asked one is not below the sequence's u16 count `seq+0`, `0x4B8B40..0x4B8B4E`), `+0x08` the sequence, `+0x02` the countdown = that frame's u16 ticks `seq+0x2C+8·frame` (`0x4B8B5B`; `0xFFFF` with no sequence), `+0x04` the loop byte `seq+2` | disassembly |
+| `0x4B8BF0` | animation advance `(state, dt)`, `ret 8`: returns at once with no sequence or a count ≤ 1 (`0x4B8BFB`, unsigned); else subtracts dt from the signed 16-bit countdown (`0x4B8C06`) and, while it is ≤ 0, steps the frame (`0x4B8C11`) and adds the new frame's ticks (`0x4B8C3D`). Past the last frame it goes back to 0 when the loop byte is set (`0x4B8C23`), else clears the sequence (`0x4B8C4B`): nothing is drawn after a non-looping sequence ends | disassembly |
+| `0x4B8B90` | a one-tick step of the same state: a countdown of 2 or more is decremented (`0x4B8BE1`); below that the frame steps with the same wrap or clear and the countdown is reloaded [its callers not traced] | disassembly |
+| `0x4B7EE0` | the state's current frame: `[seq + 0x28 + 8·frame]`, 0 with no sequence | disassembly |
+| `0x4AB5D0` | the UI context's update, from `0x4AA00A` in `0x4A9FD0`: with `ctx+0x5C` bit 0 set it calls `0x4B8BF0(ctx+0x30, ctx+0x9A)` (`0x4AB5F0`) and, when the frame changed, hands the new one to `0x4C2B20` (`0x4AB5FF..0x4AB605`) | disassembly |
+| `0x4A9FD0` | the GUI pump: `ctx+0x9A = 0x4B6340() − ctx+0x96`, then `ctx+0x96` = now (`0x4A9FEE..0x4AA004`): the cursor counts down in the 30 Hz ticks of `0x4B6340` elapsed since the last pump | disassembly |
+
+So a frame's second dword in the GAF's sequence table is its duration in 30 Hz ticks, read as a
+u16, and the sequence's byte `+2` is its loop flag. In `cursors.gaf` (retail, `rev31.gp3`):
+`cursornormal` is one 10x20 frame, hotspot 0,0; `cursormove` is eight frames of 8 ticks, looping,
+27x27 to 35x35 and back (hotspots 13,13 to 17,17), frames 5..7 repeating 3..1 texel for texel.
+
+**Which cursor build placement shows** (MEASURED 2026-10-27, `main+0x2CBE` read back on Show Down,
+1024x768, Interface Type 1, through `tacli peek`): nothing selected, 19 `cursornormal`; an ARMCK
+selected, over ground, 14 `cursormove`, the sprite record changing between reads (animating);
+ARMMEX armed from the build menu (`main+0x2CC3` = 14), at every probe point over the map, 19
+`cursornormal`, the record constant. It follows from the gate above: in mode `0x0E` over the
+viewport `0x499200` calls the build cursor `0x4197D0` and installs nothing, and `0x4197D0` calls
+no `SetUICursor`, so the cursor is the one the click on the menu left — `cursornormal`, which the
+handler installs off both regions (`0x49925D`). The same holds for the twin `0x491CC0`. The mapper's
+order-14 case `0x43E828` (`cursorfindsite`, 16) is reached only through `CorretCursor_InGame`,
+which build placement over the viewport skips. **Not measured:** a constructor over a deposit with
+Impure's Quick Build ghost showing; Quick Build writes only the packet (`tagpu_resource.c`), so
+the engine's contextual cursor stands [INFERRED: `cursormove`].
+
+**`0x429700` serves the cursors** as it serves every animation bank: `0x429C9A` asks it for
+`"cursors"`, and a miss builds `<anims>\cursors.GAF` (`0x502E30`) through `0x4290F0`, the
+language variant first, and loads it with `0x4B8C60` (the section on the animation-bank cache
+above). The wiki's asset load resolves the same path (`tagpu_wikiasset.c` `cursors_load`).
+
 **Globals this chain owns.**
 
 | Field | What |

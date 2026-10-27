@@ -1290,6 +1290,28 @@ static void advance(WIKISIM* s)
 
 /* ---- the sim ---- */
 
+/* THE CURSOR'S SHAPE (WIKI_CURSOR_*, the game's cursor for each): the build-menu mode, else a
+   selection holding a mobile unit of the player's, else none. Quick Build's ghost changes nothing
+   here: it is drawn from the packet and leaves the engine's cursor as the selection has it. */
+static int cursor_shape(const WIKISIM* s)
+{
+    int i;
+    if (s->mode >= 0) return WIKI_CURSOR_BUILD;
+    for (i = 0; i < s->nunit; i++)
+        if (s->unit[i]->sel && s->unit[i]->owner == 0 && mobile(s, s->unit[i]->type)) return WIKI_CURSOR_MOVE;
+    return WIKI_CURSOR_ARROW;
+}
+
+/* the shape a tick ends on, and the tick it began when it is new */
+static void cursor_tick(WIKISIM* s)
+{
+    const int k = cursor_shape(s);
+    if (k != s->cursor_shape) {
+        s->cursor_shape = k;
+        s->cursor_since = s->tick;
+    }
+}
+
 static void feed(WIKISIM* s, int t)
 {
     while (s->next < s->nscript && s->script[s->next]->at == t) tagpu_wikisim_input(s, s->script[s->next++]);
@@ -1303,6 +1325,7 @@ void tagpu_wikisim_step(WIKISIM* s)
     s->tick = t;
     s->done = s->tick >= s->end;
     s->hover = hover(s);
+    cursor_tick(s);
 }
 
 int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o)
@@ -1345,7 +1368,7 @@ const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s)
     const WIKIPLACE* p = s->place.kind != PLACE_NONE && s->place.n ? &s->place : NULL;
     const WIKIHOVER* h = &s->hover;
     const int gh = !p && (h->kind == WIKI_HOVER_PLACE || h->kind == WIKI_HOVER_QUICK);
-    int i, j, k, n = 0, any_mobile = 0;
+    int i, j, k, n = 0;
 
     v->w = s->W;
     v->h = s->H;
@@ -1452,11 +1475,11 @@ const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s)
     }
     v->line = s->vline;
 
-    for (i = 0; i < s->nunit; i++)
-        if (s->unit[i]->sel && s->unit[i]->owner == 0 && mobile(s, s->unit[i]->type)) any_mobile = 1;
     v->cursor_x = s->cursor_x;
     v->cursor_z = s->cursor_z;
-    v->cursor_shape = s->mode >= 0 || gh ? WIKI_CURSOR_BUILD : any_mobile ? WIKI_CURSOR_MOVE : WIKI_CURSOR_ARROW;
+    v->cursor_shape = cursor_shape(s);
+    /* an input since the last tick may have changed the shape: then it begins now */
+    v->cursor_since = v->cursor_shape == s->cursor_shape ? s->cursor_since : s->tick;
     memcpy(v->held, s->held, sizeof v->held);
     if ((v->has_drag = s->has_drag && s->drag_active)) {
         v->drag_x0 = s->drag_x0;
@@ -1713,6 +1736,8 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     }
     feed(s, 0);
     s->hover = hover(s);
+    s->cursor_shape = cursor_shape(s);
+    s->cursor_since = 0;
     if (s->oom) goto oom;
     return 1;
 oom:

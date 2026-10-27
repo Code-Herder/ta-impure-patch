@@ -4,9 +4,10 @@
    first and then there. research/notes/ingame-wiki.md, "The stage", says what each element shows.
 
    EVERYTHING DRAWN HERE HAS AN OP TO BE: a rectangle, a rectangle's stroke (an inset edge), a straight stroke with butt
-   ends, a circle or a circle's stroke, a line of text in one HUD face, and a kit icon. So the text is set in the face of
-   art/hud/layout.json's `toast` style, which the DLL already carries, and the three cursors are icons of the wiki's kit,
-   which tools/wiki/cursors.sh rasterises once from cursorShape below, the shapes this stage drew before. Under
+   ends, a circle or a circle's stroke, a line of text in one HUD face, a kit icon, and a frame of the game's own
+   cursors. So the text is set in the face of art/hud/layout.json's `toast` style, which the DLL already carries, and
+   the cursor is the game's sprite, from the player's own archives (loadCursors; the DLL's asset load), or where that
+   did not resolve an icon of the wiki's kit, which tools/wiki/cursors.sh rasterises once from cursorShape below. Under
    gfx=game one thing more is drawn, the stage's 3D image (gfx.js), which the game composites from its own world
    target between two op ranges (draw() below says which).
 
@@ -19,7 +20,7 @@ const WikiStage = (() => {
   const LINE = { move: '#3ccf3c', build: '#f0cc10', guard: '#3a86f0', reclaim: '#e23030' };
   // layout.json's `toast`: Oswald 700, no letter-spacing, no case change, no shadow -- the HUD's one plain line
   const FACE = { style: 'toast', family: 'Oswald', weight: 700 };
-  // the kit's cursor icons by the view's cursor shape; each is drawn centred on the pointer
+  // the kit's cursor icons by the view's cursor shape, each drawn centred on the pointer where the game's did not load
   const CURSOR = { arrow: 'cursor_arrow', move: 'cursor_move', build: 'cursor_build' };
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   // a device coordinate rounded to the pixel an edge is drawn on, as the game snaps a part's box (tagpu_hud_snap)
@@ -36,9 +37,10 @@ const WikiStage = (() => {
     return { s, ox: (W - mw * cell * s) / 2, oz: (H - mh * cell * s) / 2 };
   }
 
-  /* The view `v` into the context `g` of a W x H canvas, at U pixels a unit; o = { W, H, U, msg, icons, image, layer }.
-     `msg` is what an absent view shows; `icons` the kit's cursor icons by name, each { img, pw, ph, w, h } with w and h
-     in units (loadIcons). Returns the fit, with the map's cell and size, or null without a map.
+  /* The view `v` into the context `g` of a W x H canvas, at U pixels a unit; o = { W, H, U, msg, icons, cursors, tick,
+     image, layer }. `msg` is what an absent view shows; `icons` the kit's cursor icons by name, each { img, pw, ph, w,
+     h } with w and h in units (loadIcons); `cursors` the game's (loadCursors), and `tick` the simulation's, which its
+     animation runs from. Returns the fit, with the map's cell and size, or null without a map.
 
      THE THREE OP RANGES (research/notes/ingame-wiki-3d-stage-plan.md, section 3). Everything drawn here belongs to one:
      - R0, under the image: the stage's background (and the message of an absent view);
@@ -209,10 +211,26 @@ const WikiStage = (() => {
       const d = v.drag, x0 = X(Math.min(d.x0, d.x1)), y0 = Z(Math.min(d.z0, d.z1));
       g.strokeStyle = '#f2f6e8'; g.lineWidth = Math.max(1, U); g.strokeRect(x0, y0, Math.abs(d.x1 - d.x0) * s, Math.abs(d.z1 - d.z0) * s);
     }
-    // the cursor at screen size, whatever the map's scale: its kit icon centred on the point, in a box snapped as the
-    // game snaps a part's, and the icon as large as fits in it, centred (tagpu_hudlay_expand's icon)
-    const cur = pt(v.cursor), ic = cur && o.icons && o.icons[CURSOR[v.cursor.shape] || CURSOR.arrow];
-    if (cur && ic && ic.img) {
+    /* THE CURSOR: the game's own when the cursors are loaded (loadCursors), as the game draws the player's
+       (tagpu_gui_surf.c sharp_cursor) -- the frame its animation shows `o.tick - v.cursor.since` ticks after the shape
+       began, at `scale` device pixels an art pixel whatever the map's scale or the HUD's, the frame's hotspot on the
+       pointer's device pixel, the floats as the C side's. Else, for a shape whose frames did not load, its kit icon at
+       screen size centred on the point, in a box snapped as the game snaps a part's, and the icon as large as fits in
+       it, centred (tagpu_hudlay_expand's icon) */
+    const cur = pt(v.cursor), cs = cur && o.cursors && o.cursors.sheet ? o.cursors.seq[v.cursor.shape] : null;
+    const ic = cur && !(cs && cs.n > 0) && o.icons && o.icons[CURSOR[v.cursor.shape] || CURSOR.arrow];
+    if (cs && cs.n > 0) {
+      const F = o.cursors.frames, f = cursorFrame(F.slice(cs.first, cs.first + cs.n), cs.n, cs.loop, (+o.tick || 0) - (+v.cursor.since || 0));
+      if (f >= 0) {
+        const q = F[cs.first + f], k = Math.fround(o.cursors.scale), dx = snap(X(cur.x)), dy = snap(Z(cur.z));
+        const w = Math.trunc(Math.fround(Math.fround(q.w * k) + 0.5)), h = Math.trunc(Math.fround(Math.fround(q.h * k) + 0.5));
+        if (w > 0 && h > 0) {
+          const sm = g.imageSmoothingEnabled; g.imageSmoothingEnabled = false;
+          g.drawImage(o.cursors.sheet, q.sx, 0, q.w, q.h, dx - Math.trunc(Math.fround(q.hx * k)), dy - Math.trunc(Math.fround(q.hy * k)), w, h);
+          g.imageSmoothingEnabled = sm;
+        }
+      }
+    } else if (cur && ic && ic.img) {
       const w = ic.w * U, h = ic.h * U, a = X(cur.x) - w / 2, b = Z(cur.z) - h / 2;
       const x0 = snap(a), y0 = snap(b), bw = snap(a + w) - x0, bh = snap(b + h) - y0;
       const f = Math.min(bw / ic.pw, bh / ic.ph), iw = ic.pw * f, ih = ic.ph * f;
@@ -270,6 +288,45 @@ const WikiStage = (() => {
     return icons;
   }
 
-  return { draw, fit, cursorShape, loadIcons, FACE, CURSOR, ICON_BOX };
+  /* THE ENGINE'S CURSOR ANIMATION, tagpu_wikistage_cursor_frame line for line: the frame `elapsed` 30 Hz ticks after
+     SetUICursor 0x4AB400 installed a sequence of `n` frames, each up for its `dur` ticks; -1 past the end of one that
+     does not loop, where the engine draws nothing. 0x4B8B30 starts at frame 0 with its ticks to count down; 0x4B8BF0
+     takes the ticks elapsed off and, at or below zero, steps on and adds the next frame's. A one-frame sequence never
+     steps; a looping one is back at its start after its whole length, so only the remainder is run; a length of 0 is
+     frame 0. */
+  function cursorFrame(frames, n, loop, elapsed) {
+    if (n <= 0) return -1;
+    if (n === 1 || elapsed <= 0) return 0;
+    let total = 0;
+    for (let i = 0; i < n; i++) total += frames[i].dur;
+    if (total <= 0) return 0;
+    if (loop) elapsed %= total;
+    let cd = frames[0].dur - elapsed, f = 0;
+    while (cd <= 0) {
+      if (++f >= n) { if (!loop) return -1; f = 0; }
+      cd += frames[f].dur;
+    }
+    return f;
+  }
+
+  /* The game's cursors from `base` (tools/wiki/gfx.py's pack: cursors.json and the sheet cursors.rgba, resolved from the
+     player's own archives and never committed), for a page: { sheet, frames, seq, scale }, filled in once both have
+     loaded. draw() draws each shape's kit icon until then, and for good when the pack has none, as the game does when
+     its cursors did not resolve. `frames` are the sheet's cells, { sx, w, h, hx, hy, dur }; `seq` each shape's
+     { first, n, loop }; `scale` the game's default, 1 device pixel an art pixel. */
+  function loadCursors(base) {
+    const cursors = { sheet: null, frames: [], seq: {}, scale: 1 };
+    Promise.all([fetch(base + 'cursors.json').then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }),
+      fetch(base + 'cursors.rgba').then(r => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })])
+      .then(([j, buf]) => {
+        const c = document.createElement('canvas');
+        c.width = j.sheet[0]; c.height = j.sheet[1];
+        c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(buf), j.sheet[0], j.sheet[1]), 0, 0);
+        Object.assign(cursors, { frames: j.frames, seq: j.seq, sheet: c });
+      }).catch(() => {});
+    return cursors;
+  }
+
+  return { draw, fit, cursorShape, cursorFrame, loadIcons, loadCursors, FACE, CURSOR, ICON_BOX };
 })();
 if (typeof module !== 'undefined') module.exports = WikiStage;

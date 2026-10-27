@@ -12,7 +12,9 @@
    every unit type any entry defines: units\<name>.FBI by path, as a level opens it; the model
    objects3d\<Objectname, else UnitName>.3DO; the script scripts\<UnitName>.COB, and from it the
    pieces Create() hides (tagpu_cobscan_mask, the build ghost's rule). The folders' names are the
-   running executable's (Escalation's `unitsE`, TA Zero's `ZUnits` and `logoz`).
+   running executable's (Escalation's `unitsE`, TA Zero's `ZUnits` and `logoz`). And the game's
+   own cursors, <anims>\cursors.GAF's cursornormal and cursormove, which the stage draws its
+   pointer with.
 
    THE MODELS ARE BUILT AS THE ENGINE HOLDS THEM (the scout's batch A4, DISASSEMBLED): the file's
    object and primitive structs with every offset turned into a pointer into the arena, the
@@ -135,6 +137,10 @@ typedef struct {
     const WIKI3DSTAGE* stage;
     const WIKI3DUNIT*  unit;
     const char*        report;          /* the JSON tagpu_wiki3d.dump writes, NUL-terminated     */
+    /* the game's cursor each shape shows, by WIKI_CURSOR_* (tagpu_wikisim.h): a sequence of the
+       player's <anims>\cursors.GAF in the engine's form (cursornormal, cursormove, cursornormal;
+       arrow and build share one copy), or NULL when it did not resolve */
+    const void*        cursor[3];
     uint32_t           base;            /* the arena's address as its pointer fields hold it     */
     uint32_t           bytes;           /* the arena's bytes in use, from `base`                 */
 } WIKI3D;

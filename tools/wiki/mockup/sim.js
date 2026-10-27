@@ -695,6 +695,14 @@ const WikiSim = (() => {
     const feed = t => { while (next < script.length && script[next].at === t) input(script[next++]); };
     const end = scripted && demo && demo.end != null ? demo.end : Infinity;  // a Try-it sim is never done
 
+    /* THE CURSOR'S SHAPE, each the cursor the game shows there (tagpu_wikisim.h, WIKI_CURSOR_*): the build-menu mode,
+       else a selection holding a mobile unit of the player's, else none. Quick Build's ghost changes nothing here: it
+       is drawn from the packet and leaves the engine's cursor as the selection has it. */
+    const cursorShape = () => st.mode ? 'build' : selected().some(u => u.owner === 0 && mobile(u.type)) ? 'move' : 'arrow';
+    // the shape a tick ends on, and the tick it began when it is new: the game restarts a cursor's animation when it
+    // installs one (SetUICursor 0x4AB400)
+    const cursorTick = () => { const k = cursorShape(); if (k !== st.cursorShape) { st.cursorShape = k; st.cursorSince = sim.tick; } };
+
     sim.input = input;
     sim.step = () => {
       const t = sim.tick + 1;
@@ -703,6 +711,7 @@ const WikiSim = (() => {
       sim.tick = t;
       sim.done = sim.tick >= end;
       st.hover = hover();
+      cursorTick();
     };
     // a unit's orders, for a check: kind, building and site, or the target's id
     sim.orders = id => { const u = byId(id); return u ? u.orders.map(o => ({ ...o })) : null; };
@@ -724,7 +733,8 @@ const WikiSim = (() => {
       }
       const owners = new Map();
       for (const u of units) for (const o of u.orders) if (o.k === 'build') owners.set(`${o.type}@${o.ox},${o.oz}`, u.owner);
-      const shape = st.mode || gh ? 'build' : selected().some(u => u.owner === 0 && mobile(u.type)) ? 'move' : 'arrow';
+      // an input since the last tick may have changed the shape: then it begins now
+      const shape = cursorShape(), since = shape === st.cursorShape ? st.cursorSince : sim.tick;
       return {
         map: { w: W, h: H, cell: CELL, surfaceMetal: SM, metal: metal.slice(), fog: fog.slice(), vents: vents.map(v => ({ x: (v.cx + 0.5) * CELL, z: (v.cz + 0.5) * CELL })) },
         units: units.map(u => ({ id: u.id, type: u.type, owner: u.owner, x: u.x, z: u.z, hx: u.hx, hz: u.hz, fx: fp(u.type)[0], fz: fp(u.type)[1],
@@ -737,7 +747,7 @@ const WikiSim = (() => {
         spacing: st.mode ? st.spacing[st.mode] || 0 : null,
         queued: plans().map(p => ({ ...centre(p.type, p.ox, p.oz), owner: owners.get(`${p.type}@${p.ox},${p.oz}`) })),
         lines,
-        cursor: { x: st.cursor.x, z: st.cursor.z, shape },
+        cursor: { x: st.cursor.x, z: st.cursor.z, shape, since },
         keys: KEYS.filter(k => st.held.has(k)),
         drag: st.drag && st.drag.active ? { x0: st.drag.x0, z0: st.drag.z0, x1: st.cursor.x, z1: st.cursor.z } : null,
         caption: st.caption,
@@ -748,6 +758,8 @@ const WikiSim = (() => {
 
     feed(0);
     st.hover = hover();
+    st.cursorShape = cursorShape();
+    st.cursorSince = 0;
     return sim;
   }
 

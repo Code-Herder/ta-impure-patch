@@ -131,7 +131,13 @@ function recorder(em, asked) {
       out.push({ k: 'text', x, y, align: { left: 0, start: 0, center: 1, right: 2, end: 2 }[g.textAlign], size: f.size,
         face: `${f.family} ${f.weight}`, c: colour(g.fillStyle), t: String(t) });
     },
-    drawImage(img, x, y, w, h) { out.push({ k: 'icon', name: img.name, x, y, w, h }); },
+    drawImage(img, ...a) {
+      if (a.length === 4) { const [x, y, w, h] = a; out.push({ k: 'icon', name: img.name, x, y, w, h }); return; }
+      // a cell of the cursors' sheet, drawn whole, unsmoothed
+      const [sx, sy, sw, sh, x, y, w, h] = a;
+      if (g.imageSmoothingEnabled) throw new Error('a sprite drawn smoothed');
+      out.push({ k: 'sprite', sx, sy, sw, sh, x, y, w, h });
+    },
   };
   const layer = (range, type) => { tag = { range, type }; };
   const font = s => { const m = /^(\d+) ([\d.e+-]+)px (.+)$/.exec(s); if (!m) throw new Error(`a font the check does not read: ${s}`);
@@ -166,10 +172,10 @@ function recorder(em, asked) {
 }
 
 /* ---- the ops read back as the same shapes, in the canvas's device pixels ---- */
-const HOP = { PART: 0, SOLID: 1, DOT: 2, TEXT: 3, LINE: 5 }, RING = 4;
-function shapes(fr, sz, face, part, icons) {
+const HOP = { PART: 0, SOLID: 1, DOT: 2, TEXT: 3, LINE: 5 }, RING = 4, SPRITE = 128;
+function shapes(fr, sz, face, part, icons, cell) {
   const u = sz.u, X = v => v * u - fr.x0, Y = v => v * u - fr.y0, out = [];
-  for (const [kind, flags, pi, x, y, w, h, cx, cy, cw, ch, rgba, size, style, centre, text, rgb] of fr.ops) {
+  for (const [kind, flags, pi, x, y, w, h, cx, cy, cw, ch, rgba, size, style, centre, text, rgb, shade] of fr.ops) {
     const clip = [X(cx), Y(cy), cw * u, ch * u];
     if (Math.abs(clip[0]) > TOL || Math.abs(clip[1]) > TOL || Math.abs(clip[2] - fr.w) > TOL || Math.abs(clip[3] - fr.h) > TOL)
       out.push({ k: 'clip', clip });
@@ -179,6 +185,9 @@ function shapes(fr, sz, face, part, icons) {
     else if (kind === HOP.LINE && !flags) out.push({ k: 'line', x0: X(x), y0: Y(y), x1: X(x) + w * u, y1: Y(y) + h * u, w: size * u, c: rgba });
     else if (kind === HOP.TEXT && !flags)
       out.push({ k: 'text', x: X(x), y: Y(y), align: centre, size: size * u, face: face[style], c: ((rgb << 8) | (rgba & 255)) >>> 0, t: text });
+    else if (kind === HOP.PART && flags === SPRITE)
+      // HOPF_SPRITE: cell `part` of the sheet, its top-left size x shade texels, into the op's box
+      out.push({ k: 'sprite', sx: pi * cell, sy: 0, sw: size, sh: shade, x: X(x), y: Y(y), w: w * u, h: h * u });
     else if (kind === HOP.PART && !flags && icons[part[pi]]) {
       // tagpu_hudlay_expand's icon: the part as large as fits the op's box, centred in it
       const ic = icons[part[pi]], bw = w * u, bh = h * u, f = Math.min(bw / ic.pw, bh / ic.ph), iw = ic.pw * f, ih = ic.ph * f;
@@ -228,6 +237,22 @@ try {
   const cursorArgs = ['arrow', 'move', 'build'].map(s => String(part.indexOf(WikiStage.CURSOR[s])));
   const sizeArgs = ['arrow', 'move', 'build'].flatMap(s => { const ic = icons[WikiStage.CURSOR[s]]; return [ic.w, ic.h].map(v => v.toPrecision(17)); });
 
+  /* ---- the game's cursors, stand-ins: cursors.gaf's own cursornormal and cursormove (size, hotspot, ticks), and for
+     build a two-frame sequence with a negative hotspot that does not loop, so the animator's every branch and the
+     hotspot's truncation toward zero are drawn; each size at its own scale (cursorscale=) ---- */
+  const CELL = +/#define HUD_SPRITE_CELL\s+(\d+)/.exec(fs.readFileSync(path.join(DDRAW, 'src/tagpu_hudlay.h'), 'utf8'))[1];
+  const SPR = [[10, 20, 0, 0, 10], ...[27, 29, 31, 33, 35, 33, 31, 29].map(e => [e, e, e >> 1, e >> 1, 8]), [21, 23, -15, -3, 10], [21, 23, -15, -3, 7]];
+  const SEQ = { arrow: { first: 0, n: 1, loop: 1 }, move: { first: 1, n: 8, loop: 1 }, build: { first: 9, n: 2, loop: 0 } };
+  const SCALE = [1, 1.5, 2];
+  const cursorsAt = k => ({ sheet: { name: 'sheet' }, scale: SCALE[k], seq: SEQ,
+    frames: SPR.map(([w, h, hx, hy, dur], i) => ({ sx: i * CELL, w, h, hx, hy, dur })) });
+  const spriteFile = k => {
+    const f = path.join(tmp, `sprites${k}.txt`);
+    fs.writeFileSync(f, [SCALE[k], ...['arrow', 'move', 'build'].map(s => `${SEQ[s].n} ${SEQ[s].first} ${SEQ[s].loop}`),
+      ...SPR.map(r => r.join(' '))].join('\n') + '\n');
+    return f;
+  };
+
   /* ---- sim.js's frames, at the C side's ticks ---- */
   const tree = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/tree.json'), 'utf8'));
   const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
@@ -237,16 +262,16 @@ try {
     for (const demo of entry.demos) {
       const sim = WikiSim.play(entry, demo);
       for (;;) {
-        if (sim.tick % 30 === 0 || sim.done) frames.push({ key: `${id}/${demo.id}/${sim.tick}`, v: sim.view() });
+        if (sim.tick % 30 === 0 || sim.done) frames.push({ key: `${id}/${demo.id}/${sim.tick}`, v: sim.view(), tick: sim.tick });
         if (sim.done) break;
         sim.step();
       }
     }
   }
-  const draw = (v, sz, em, asked, image) => {
+  const draw = (v, sz, em, asked, image, tick, cursors) => {
     const r = recorder(em, asked);
     const im = image && { ...image, draw: (g, rect) => r.out.push({ k: 'image', ...rect }) };
-    WikiStage.draw(r.g, v, { W: sz.w, H: sz.h, U: sz.u, icons, layer: r.layer, image: im });
+    WikiStage.draw(r.g, v, { W: sz.w, H: sz.h, U: sz.u, icons, cursors, tick, layer: r.layer, image: im });
     return r;
   };
   // the stand-in images: what a complete 3D frame may carry
@@ -276,12 +301,15 @@ try {
   if (ems.length !== strings.length) throw new CannotRun(`the C side measured ${ems.length} of ${strings.length} strings`);
   const em = new Map(strings.map((s, i) => [s, ems[i]]));
 
-  /* ---- each size: the C side's frames, paired with stage.js's ---- */
-  let nframes = 0, nops = 0, ndiffer = 0, nsplit = 0, nimage = 0;
-  for (const sz of SIZES) {
+  /* ---- each size, with the kit's cursors and then the game's: the C side's frames, paired with stage.js's ---- */
+  let nframes = 0, nops = 0, ndiffer = 0, nsplit = 0, nimage = 0, nsprite = 0;
+  const PASSES = [false, true].flatMap(sprites => SIZES.map((sz, k) => ({ sprites, k,
+    sz: { ...sz, name: sprites ? `${sz.name} game cursors x${SCALE[k]}` : sz.name } })));
+  for (const { sprites, k: si, sz } of PASSES) {
+    const cur = sprites ? cursorsAt(si) : null;
     const rect = [sz.x0 / sz.u, sz.y0 / sz.u, sz.w / sz.u, sz.h / sz.u].map(v => v.toPrecision(17));
     const cout = run(exe, ['ops', pak, ttf, String(S.spacing || 0), S.upper ? '1' : '0', String(style), ...cursorArgs, ...sizeArgs,
-      ...rect, sz.u.toPrecision(17)]).trim().split('\n').map(l => JSON.parse(l));
+      sprites ? spriteFile(si) : '-', ...rect, sz.u.toPrecision(17)]).trim().split('\n').map(l => JSON.parse(l));
     const cby = new Map(cout.map(f => [`${f.e}/${f.d}/${f.t}`, f]));
     if (cout.length !== frames.length) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name}: the C side drew ${cout.length} frames, stage.js ${frames.length}`); }
     for (const f of frames) {
@@ -291,8 +319,8 @@ try {
         code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${f.key}: the canvas is ${fr.w}x${fr.h} at ${fr.x0},${fr.y0}`); continue;
       }
       if (fr.dropped || fr.trunc) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${f.key}: dropped ${fr.dropped} ops, truncated ${fr.trunc}`); continue; }
-      const r1 = draw(f.v, sz, em, null), c = shapes(fr, sz, face, part, icons);
-      nframes++; nops += c.length;
+      const r1 = draw(f.v, sz, em, null, null, f.tick, cur), c = shapes(fr, sz, face, part, icons, CELL);
+      nframes++; nops += c.length; nsprite += c.filter(sh => sh.k === 'sprite').length;
       let bad = pair(r1.out, c, 'R1');
       if (!bad && r1.tags.some(t => !t)) bad = 'R1: a call drawn before stage.js named its range';
       // the C ops' own ranges, which the DLL draws R0 and R2 by: each the range of the call it paired with, a box's
@@ -304,7 +332,7 @@ try {
       }
       // R0, the image, R2: R1's ops kept by the rule, the image after R0 and the ground
       for (const im of bad || !f.v || !f.v.map ? [] : IMAGES) {
-        const r = draw(f.v, sz, em, null, im), at = r.out.findIndex(sh => sh.k === 'image');
+        const r = draw(f.v, sz, em, null, im, f.tick, cur), at = r.out.findIndex(sh => sh.k === 'image');
         if (at < 0 || r.out.filter(sh => sh.k === 'image').length !== 1) { bad = `${im.name}: the image is drawn ${at < 0 ? 'never' : 'twice'}`; break; }
         const js = r.out.filter(sh => sh.k !== 'image'), want = c.filter((_, i) => kept(r1.tags[i], im));
         const under = r.tags.slice(0, at).every(t => t.range === 'r0' || t.range === 'ground');
@@ -326,8 +354,8 @@ try {
     }
   }
   const s = ((Date.now() - t0) / 1000).toFixed(1);
-  if (code) console.log(`stagecheck: ${ndiffer} of ${frames.length * SIZES.length} frames DIFFER (${s} s)`);
-  else console.log(`stagecheck: all equal -- ${nframes} frames (${frames.length} at each of ${SIZES.length} sizes), ${nops} ops of R1 paired call for op within 1/64 px; R0 and R2 over ${nsplit} stand-in images, ${nimage} ops (${s} s)`);
+  if (code) console.log(`stagecheck: ${ndiffer} of ${frames.length * PASSES.length} frames DIFFER (${s} s)`);
+  else console.log(`stagecheck: all equal -- ${nframes} frames (${frames.length} at each of ${SIZES.length} sizes, with the kit's cursors and with the game's), ${nops} ops of R1 paired call for op within 1/64 px, ${nsprite} of them game cursor frames; R0 and R2 over ${nsplit} stand-in images, ${nimage} ops (${s} s)`);
 } catch (x) {
   if (!(x instanceof CannotRun)) throw x;
   console.log(`stagecheck: cannot run: ${x.message}`);

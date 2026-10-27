@@ -200,6 +200,9 @@ function view() {
 /* the stage's drawing is stage.js's. Under gfx=game, gfx.js first renders this frame's view in 3D; a COMPLETE image is
    drawn between the op ranges R0 and R2, and anything less leaves the whole whitebox (stage.js, draw()) */
 const ICONS = WikiStage.loadIcons(ART + 'kit/');
+// the game's own cursors, whenever tools/wiki/gfx.py's pack holds them, in either look: the DLL draws them whenever its
+// asset load resolved them, and the kit's icons only where it did not
+const CURSORS = WikiStage.loadCursors('gfx/');
 let IMG = null;                       // the last frame's 3D answer, for scripted checks
 function draw() {
   const g = stage.getContext('2d'), v = view();
@@ -209,7 +212,8 @@ function draw() {
     ground: r.ground, resolved: t => r.resolved.has(t),
     draw: (c, b) => { c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'low'; c.drawImage(r.canvas, b.x, b.y, b.w, b.h); },
   } : null;
-  FIT = WikiStage.draw(g, v, { W: stage.width, H: stage.height, U: G.gh / 720, icons: ICONS, image,
+  FIT = WikiStage.draw(g, v, { W: stage.width, H: stage.height, U: G.gh / 720, icons: ICONS, cursors: CURSORS,
+    tick: sim ? sim.tick : 0, image,
     msg: simErr || (demo() ? 'loading…' : entry() ? 'no demo' : '') });
   return v;
 }

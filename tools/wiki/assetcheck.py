@@ -578,7 +578,19 @@ def reference(gamedir, exe, language, mounts=None):
         bind(m)
     for slot, p, where, m, why in pending_models:
         slot.update(model_report(p, where, m, why, bank, logos))
-    rep.update(bank=bank, logos=logos, stages=stages, units=units)
+    # the game's cursors: <anims>\cursors.GAF by the path rule, and the sequences each shape shows (WIKI_CURSOR_*)
+    seqs = ["cursornormal", "cursormove", "cursornormal"]
+    p, hit = E.find_built(names["anims"], "cursors", "GAF")
+    cur = {"gaf": p.lower() if hit else None, "from": low(hit[1]) if hit else None,
+           "sequences": [{"name": n, "frames": None} for n in seqs], "ok": False, "why": "refused"}
+    if hit:
+        gaf = Gaf(E.read(hit))
+        for s in cur["sequences"]:
+            so = gaf.find(s["name"])
+            s["frames"] = gaf.frames(so) if so is not None else None
+        cur["ok"] = all(s["frames"] is not None for s in cur["sequences"])
+        cur["why"] = None if cur["ok"] else "refused"
+    rep.update(bank=bank, logos=logos, cursors=cur, stages=stages, units=units)
     return rep
 
 
@@ -630,7 +642,8 @@ def against_gfx(native, gamedir, exe):
         cmd = [sys.executable, str(HERE / "gfx.py"), "--gamedir", str(gamedir), "--out", str(Path(tmp) / "packs"),
                "--resolve-json", str(out)] + (["--exe", str(exe)] if exe else [])
         subprocess.run(cmd, check=True, capture_output=True, text=True)
-        gfx = json.loads(out.read_text())["entries"]
+        resolved = json.loads(out.read_text())
+        gfx = resolved["entries"]
     bad, n = [], 0
     stages = {s["entry"]: s for s in native["stages"]}
     units = {u["name"]: u for u in native["units"]}
@@ -638,6 +651,12 @@ def against_gfx(native, gamedir, exe):
     def same(where, a, b):
         if (a.lower() if isinstance(a, str) else a) != (b.lower() if isinstance(b, str) else b):
             bad.append(f"{where}: native {a!r} != gfx.py {b!r}")
+
+    # the game's cursors: the GAF, its source, each sequence's frames
+    nc, gc = native.get("cursors") or {}, resolved.get("cursors") or {}
+    n += 1
+    same("cursors gaf", nc.get("gaf"), gc.get("gaf")); same("cursors from", nc.get("from"), gc.get("from"))
+    same("cursors sequences", nc.get("sequences"), gc.get("sequences"))
 
     for eid, els in gfx.items():
         st = stages.get(eid)
@@ -730,7 +749,7 @@ def main():
             for b in bad[:40]:
                 print(f"  {b}")
             return 1
-        print(f"assetcheck: native == gfx.py --resolve-json on {n} elements (paths, sources, tile hashes, hidden pieces, dont-caches, FBI facts)")
+        print(f"assetcheck: native == gfx.py --resolve-json on {n} elements (paths, sources, tile hashes, hidden pieces, dont-caches, FBI facts, the cursors)")
     if a.fuzz:
         # two small archives, one keyed with LZ77 chunks and one plain with zlib's, and a model
         g = Path(gamedir)

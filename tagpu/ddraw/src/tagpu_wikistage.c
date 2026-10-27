@@ -19,7 +19,9 @@
      * fillText is HOP_TEXT in the `toast` style at the canvas's size, its colour a run's and
        its opacity the op's, its line box centred on the point (stage.js sets every line with the
        middle baseline);
-     * drawImage of a cursor is HOP_PART of the kit's icon, in the box stage.js snaps it to.
+     * drawImage of a game cursor's frame is HOP_PART with HOPF_SPRITE, its cell of the sprite
+       sheet in the frame's own box; of a kit icon, HOP_PART of the icon in the box stage.js snaps
+       it to.
    A canvas call that paints nothing -- an empty rect, a zero-length line, empty text -- is no op. */
 #include <math.h>
 #include <stdio.h>
@@ -138,6 +140,7 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
     out->cursor_x = v->cursor_x;
     out->cursor_z = v->cursor_z;
     out->cursor_shape = (uint8_t)v->cursor_shape;
+    out->cursor_since = v->cursor_since;
     for (i = 0; i < WIKI_NKEYS; i++) out->held[i] = (uint8_t)(v->held[i] != 0);
     out->has_drag = (uint8_t)(v->has_drag != 0);
     out->drag_x0 = (float)v->drag_x0;
@@ -177,6 +180,30 @@ void tagpu_wikistage_fit(int w, int h, double stage_w, double stage_h, double u,
 }
 
 static double snapd(double v) { return floor(v + 0.5 + 1.0 / 64); }
+
+/* The engine's countdown run over `elapsed` at once: taking the ticks off in several steps, as the
+   UI's updates do, lands on the same frame, since each step runs its loop until the countdown is
+   above zero again. A looping sequence is back where it began after its whole length, so only the
+   remainder is run; a length of 0 would never end the engine's own loop and is drawn as frame 0. */
+int tagpu_wikistage_cursor_frame(const WIKISTAGESPR* frames, int n, int loop, long elapsed)
+{
+    long total = 0, cd;
+    int f = 0, i;
+    if (n <= 0) return -1;
+    if (n == 1 || elapsed <= 0) return 0;
+    for (i = 0; i < n; i++) total += frames[i].dur;
+    if (total <= 0) return 0;
+    if (loop) elapsed %= total;
+    cd = (long)frames[0].dur - elapsed;
+    while (cd <= 0) {
+        if (++f >= n) {
+            if (!loop) return -1;
+            f = 0;
+        }
+        cd += frames[f].dur;
+    }
+    return f;
+}
 
 void tagpu_wikistage_image(int w, int h, HUDRECT stage, double u, int* x0, int* y0, int* x1, int* y1)
 {
@@ -570,8 +597,28 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
             const double x0 = X(fmin(v->drag_x0, v->drag_x1)), y0 = Z(fmin(v->drag_z0, v->drag_z1));
             ring(&c, x0, y0, fabs((double)v->drag_x1 - v->drag_x0) * s, fabs((double)v->drag_z1 - v->drag_z0) * s, fmax(1, U), HEX(0xf2f6e8));
         }
-        /* the cursor at screen size: its kit icon centred on the point, in the box stage.js snaps */
-        if (v->cursor_shape < 3 && art->cursor[v->cursor_shape] >= 0) {
+        /* THE CURSOR: the game's own, as sharp_cursor (tagpu_gui_surf.c) draws the player's -- the
+           frame its animation shows, at `spr_scale` device pixels an art pixel whatever the map's
+           scale or the HUD's, the hotspot on the pointer's device pixel. Else, for a shape whose
+           frames did not load, its kit icon centred on the point, in the box stage.js snaps. */
+        const WIKISTAGESEQ* sq = v->cursor_shape < 3 ? &art->seq[v->cursor_shape] : NULL;
+        if (sq && sq->n > 0) {
+            const int f = tagpu_wikistage_cursor_frame(art->spr + sq->first, sq->n, sq->loop,
+                                                       (long)v->tick - v->cursor_since);
+            if (f >= 0) {
+                const WIKISTAGESPR* q = &art->spr[sq->first + f];
+                const float k = art->spr_scale;
+                const double dx = snapd(X(v->cursor_x)), dy = snapd(Z(v->cursor_z));
+                const int w = (int)((float)q->w * k + 0.5f), h = (int)((float)q->h * k + 0.5f);
+                HUDOP* p = w > 0 && h > 0 ? op(&c, HOP_PART, dx - (int)((float)q->hx * k), dy - (int)((float)q->hy * k), w, h) : NULL;
+                if (p) {
+                    p->flags = HOPF_SPRITE;
+                    p->part = (int16_t)(sq->first + f);
+                    p->size = q->w;
+                    p->shade = q->h;
+                }
+            }
+        } else if (v->cursor_shape < 3 && art->cursor[v->cursor_shape] >= 0) {
             const int k = v->cursor_shape;
             const double w = art->cursor_w[k] * U, h = art->cursor_h[k] * U;
             const double a = X(v->cursor_x) - w / 2, b = Z(v->cursor_z) - h / 2;

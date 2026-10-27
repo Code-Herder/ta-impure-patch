@@ -28,7 +28,7 @@ landing 6i). Try it yourself is drawn and does nothing yet
 | One entry: its text, its mods, its demos | `art/wiki/entries/<id>.json` |
 | The mockup, which reads only those files | `tools/wiki/mockup/` (`index.html`, `wiki.js`, `wiki.css`, `sim.js`, `stage.js`; under `gfx=game` also `scene.js`, `gfx.js` and `tools/tascene-render.js`) |
 | The window's art kit | `art/wiki/kit/` (`kit.json` and `parts/`), in `art/hud/kit.json`'s format, fitted by `tools/hudart/fit.py --set wiki` from the parts as cut in `art/wiki-full/kit/` |
-| The stage's cursor icons, the controls' glyphs and the tree's marks | `cursor_*.png`, `i_play`, `i_pause`, `i_replay`, `i_open`, `i_shut` and `i_dot` in the kit, written by `tools/wiki/cursors.sh` from `stage.js` `cursorShape` and `tools/wiki/mockup/glyphs.js` |
+| The stage's fallback cursor icons, the controls' glyphs and the tree's marks | `cursor_*.png`, `i_play`, `i_pause`, `i_replay`, `i_open`, `i_shut` and `i_dot` in the kit, written by `tools/wiki/cursors.sh` from `stage.js` `cursorShape` and `tools/wiki/mockup/glyphs.js` |
 | The window's layout numbers and its text roles | `art/wiki/layout.json`, which `wiki.js` sets as custom properties of the frame (`--w-` and the number's path) for `wiki.css`, and which the DLL reads |
 | The stage in 3D, as the game will draw it | `tools/wiki/gfx.py` resolves each stage description and each entry's units from the local install into the gitignored `tools/wiki/mockup/gfx/`; under `gfx=game`, `scene.js` turns each view into model records and the fog grid, and `gfx.js` renders them with `tools/tascene-render.js` (tagpu's own shaders, which the tascene lab shares) |
 | The stage's ground as references: which tile of which map in each square, which feature on which cell | `art/wiki/stage/<entry>.json`, written and checked against the local install by `tools/wiki/stagemap.py` (`tiles`, `build`, `check`) through `tools/wiki/tavfs.py`, the engine's file precedence in Python; not packed yet |
@@ -169,9 +169,55 @@ be:
 - text in one face of the replay HUD, the `toast` style's Oswald 700 with no letter-spacing, each
   line centred on its point. A name longer than 1.5 times its box shrinks until it fits, as the HUD
   fits its text;
-- the cursor, one of three kit icons (`cursor_arrow`, `cursor_move`, `cursor_build`), drawn at
-  screen size centred on the pointer. `tools/wiki/cursors.sh` rasterises them once, in Chromium,
-  from `stage.js`'s own `cursorShape`, so the mockup and the game draw the same pixels.
+- the cursor: the game's own, a frame of the player's `anims\cursors.GAF` (below). Where those
+  frames did not resolve, one of three kit icons (`cursor_arrow`, `cursor_move`, `cursor_build`)
+  instead, drawn at screen size centred on the pointer. `tools/wiki/cursors.sh` rasterises the
+  icons once, in Chromium, from `stage.js`'s own `cursorShape`, so the mockup and the game draw the
+  same pixels.
+
+**The cursor is the game's.** Each of the view's three shapes shows the cursor the game shows in
+that situation, measured in the game (2026-10-27, the installed index `main+0x2CBE` read back on
+Show Down at 1024x768, Interface Type 1): nothing of the player's mobile selected, `cursornormal`
+(index 19); a mobile unit selected, `cursormove` (14), animating; a building armed from the build
+menu, `cursornormal` again, at every point of the map. The build cursor `0x4197D0` installs no
+cursor: in mode `0x0E` over the map `0x499200` calls it in place of the picker, so the cursor stays
+the one the click on the menu installed. Quick Build's ghost changes the packet alone
+(`tagpu_resource.c`), so over a deposit the cursor is the selection's: `cursormove` [INFERRED: the
+deposit hover itself was not measured; the scenario tool would not place `lushmetal3` on Show
+Down]. The sims' shape follows: the build-menu mode, else a mobile unit of the player's selected,
+else none (`cursor_shape` in both); Quick Build's ghost no longer makes it a build cursor.
+
+- **The art** is the 3D asset load's (`tagpu_wikiasset.c` `cursors_load`): `<anims>\cursors.GAF`
+  by the engine's path rule (`0x429700("cursors")`, language variant first), `cursornormal` and
+  `cursormove` found as `0x4B8D40` finds a name and copied in the engine's form into the arena,
+  which is immutable once published and never freed; WIKI3D `cursor[3]` by shape, and a `cursors`
+  element in the report (GAF, source, each sequence's frames). A mod that renames `anims` is
+  followed. The render thread decodes the frames through the presented palette, as the sharp layer
+  resolves the player's cursor, into a sprite sheet of 16 cells of 64x64 RGBA (`tagpu_wikistate.c`
+  `sprites_bind`), again when that palette moves; each frame is bounded by the cell and the count
+  by the sheet, and a shape whose frames do not fit or did not resolve keeps its kit icon. The HUD
+  pass holds the sheet as one more texture (`HUD_TEX_SPRITE`, `tagpu_vk_hud.c`), sent whole when
+  its generation moves, its sprites hidden in a frame that names a generation the device does not
+  hold.
+- **The size and place** are the player's cursor's (`tagpu_gui_surf.c` `sharp_cursor`): one device
+  pixel an art pixel times `cursorscale=` of `tagpu_gui.on` (1 by default; `tagpu_gui_cursor_scale`),
+  whatever the screen, the map's scale or the HUD scale, the frame's signed hotspot subtracted from
+  the pointer's device pixel: `w = (int)(w_art * k + 0.5)`, `x0 = x - (int)(hx * k)`. The op is
+  `HOP_PART` with `HOPF_SPRITE`; `stage.js` draws the same cell with `drawImage`'s nine arguments,
+  unsmoothed.
+- **The animation** is the engine's (`tagpu_wikistage_cursor_frame`, `stage.js` `cursorFrame`):
+  `SetUICursor 0x4AB400` starts a sequence at frame 0 when it installs one, and the UI's update
+  `0x4AB5D0` counts each frame's ticks down on a 30 Hz clock (`0x4B6340`), looping when the
+  sequence's byte `+2` says so, else drawing nothing past the end. The stage counts the
+  simulation's ticks since the shape began (`cursor_since` in both sims and their views), so at 2x
+  the move cursor pulses twice as fast, with the demo.
+
+`stagecheck.mjs` draws every frame twice, with the kit's icons and with stand-ins carrying
+`cursors.gaf`'s own sizes, hotspots and ticks and a third, negative-hotspot sequence that does not
+loop, each size at its own `cursorscale` (1, 1.5, 2). `assetcheck.py` holds the `cursors` element
+to its Python reference and to `gfx.py --resolve-json`. `gfx.py` writes the mockup's copy,
+`gfx/cursors.json` and the sheet `gfx/cursors.rgba`, gitignored with the rest of `gfx/`, and the
+mockup draws them in either look.
 
 The map is fitted into the stage with a pad of 6 units (`stage.js` `fit`, `tagpu_wikistage_fit`):
 the one function the game's render thread draws with and its game thread will turn a click into a
@@ -255,7 +301,7 @@ they were not re-disassembled for this table.
 | Queued build squares | The engine's queued-build outline `0x438C00`, drawn while Shift is held | `tagpu_order.c` `draw_build`, a port with the engine's ten-tick sweep, gathered into the marker pass. `ghost_record` adds a translucent 3DO on each queued site not yet started. | A ghost on each queued site not yet started; the whitebox's dashed squares, in the owner's colour, over the image |
 | Order lines | TA draws no lines. It draws marching route dots in the `pathicon` ink, a waypoint sprite, target circles and range circles. | `tagpu_order.c` `draw_dots`, `draw_sprite` (a crosshair in place of the GAF sprite), `draw_circle`, `draw_ranges` | The whitebox's dashed lines, over the image |
 | Construction progress | The unit's build fraction: unit `+0x104`, the fraction remaining, staged as the engine's nano frame (`0x458D30` / `0x458DD0`) | `tagpu_render3do.c` `tagpu_r3d_nano_state` stages it; the unit shader in `tagpu_native.c` applies it, and the wire is `tagpu_posedraw.c` `pd_record`. A unit being reclaimed is not a nanoframe: the engine's reclaim lowers its hit points and leaves `+0x104` alone (`exe-reverse-engineering.md`, *A reclaimed unit is never a nanoframe*). | `tagpu_r3d_nano_state` ported line for line (`scene.js` `nanoState`) into the same shader, then the wire, every face's outline, after every body. A unit being reclaimed is drawn finished, as the game draws it |
-| Cursor | `anims/cursors.gaf`, chosen by the engine's picker `0x43E490` into `main+0x2CBE` from `cursor_ary` (`exe-reverse-engineering.md`, the cursor table): `cursornormal`, `cursormove`, `cursorselect`, … | `tagpu_gui_surf.c` `tagpu_gui_cursor_frame` takes the frame from the packet; `sharp_cursor` draws it last in the UI's sharp layer. | The kit's cursor icons, over the image |
+| Cursor | `anims/cursors.gaf`, chosen by the engine's picker `0x43E490` into `main+0x2CBE` from `cursor_ary` (`exe-reverse-engineering.md`, the cursor table): `cursornormal`, `cursormove`, `cursorselect`, … | `tagpu_gui_surf.c` `tagpu_gui_cursor_frame` takes the frame from the packet; `sharp_cursor` draws it last in the UI's sharp layer. | The same frames from the player's `cursors.gaf` (`cursornormal` for the arrow and build placement, `cursormove` animating with a mobile unit selected), at the same size and hotspot, over the image (R2); the kit's icons where they did not resolve |
 | Keys strip | None: the game has no such strip | Only the wiki draws one, under its own stage: `tagpu_wikilay.c` lays out the keycaps of the keys the demo's view holds, drawn by the replay HUD's stack (`tagpu_huddraw.c`, `tagpu_hudtext.c`, `tagpu_vk_hud.c`). | Unchanged |
 
 **The three op ranges.** Everything `stage.js` draws belongs to one range ([the 3D stage's
@@ -703,7 +749,7 @@ its claim on the simulation's state, plus the rules no demo shows; `simparity.mj
 DLL's simulation to `sim.js` on the same demos and rules.
 
 **What it draws** (its view): the cells, metal, vents and fog; the units with their selection,
-progress and facing (`hx`, `hz`, not drawn yet); the ghost and its colour; the queued sites; the order lines; the cursor and its shape;
+progress and facing (`hx`, `hz`, not drawn yet); the ghost and its colour; the queued sites; the order lines; the cursor, its shape and the tick the shape began;
 the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `state` `place`,
 `refused` or `remove`, and `order`, the site's place among the orders the release adds), its
 `shape`, and the armed building's `spacing`.
@@ -760,9 +806,10 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
   (the game draws route dots and a waypoint crosshair), the queued squares are always shown (the
   game shows them only while Shift is held), and the sites' order numbers are in dark ink over the
   ghosts.
-- **The cursor during build placement is not established.** No source names the `cursors.gaf`
-  index the engine shows in mode `0x0E`, and there is no `cursorbuild`. The mockup draws the kit's
-  icons, not `cursors.gaf`.
+- **The arrow cursor is drawn by no demo.** Every demo keeps a mobile unit selected or a building
+  armed, so `cursornormal` is seen in game as the build cursor only; the arrow shows the same
+  sequence. The stage's other cursor situations (selecting, reclaiming, attacking) are not modelled.
+- **The Quick Build deposit hover's cursor is inferred, not measured** (the cursor section above).
 - **What draws the geothermal steam plume is not established**: a feature animation or the
   engine's particles. `gfx=game` shows the vent's frame 0, without a plume.
 - **`gfx=game` departs from the game in known ways**: a textured face of other than four vertices

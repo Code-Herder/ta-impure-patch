@@ -209,6 +209,7 @@ static void view(WIKISIM* s, int map)
     key("x", 1); num(v->cursor_x);
     key("z", 0); num(v->cursor_z);
     key("shape", 0); str(CURSOR[v->cursor_shape]);
+    key("since", 0); printf("%d", v->cursor_since);
     putchar('}');
     key("keys", 0);
     putchar('[');

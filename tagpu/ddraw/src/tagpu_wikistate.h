@@ -62,6 +62,12 @@ int  tagpu_wikistate_cursor(unsigned frame);
    missing argument or its own memory, so that memory is what is left to refuse. */
 int  tagpu_wikistate_refused(void);
 
+/* THE GAME'S CURSORS' SPRITE SHEET the stage's HOPF_SPRITE ops draw from (tagpu_hudlay.h):
+   HUD_SPRITE_CELLS x HUD_SPRITE_CELL by HUD_SPRITE_CELL texels, R8G8B8A8 premultiplied, and in
+   `*gen` its generation, which moves whenever its texels do; 0 while there is none (the stage then
+   draws no sprite op). The texels hold until the next `present`. */
+const unsigned char* tagpu_wikistate_sprites(unsigned* gen);
+
 /* The command record's wiki part: what the last frame drawn answered. */
 void tagpu_wikistate_cmd(TAGPU_CMD_WIKI* out);
 

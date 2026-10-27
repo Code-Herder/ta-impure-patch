@@ -6,14 +6,15 @@
    face FILE with `spacing` em of letter-spacing (upper-cased when UPPER is 1) at a size of one,
    one line out each: the advance a size multiplies, which stage.js's recorded measureText gives.
 
-   `wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD AW AH MW MH BW BH X Y W H U`
+   `wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD AW AH MW MH BW BH SPRITES X Y W H U`
    plays every demo of every entry in PAK (tools/hudpak.py --set wiki) to its end, and at tick 0,
    every 30th tick and the last copies the view (tagpu_wikistage_copy) and builds the stage on the
    rect X Y W H, in units, at U device pixels a unit: the text in style STYLE, measured in FONT;
-   the cursors the kit parts ARROW, MOVE and BUILD, AW x AH, MW x MH and BW x BH units. One line a
-   frame: {"e", "d", "t", "x0", "y0", "w", "h", "dropped", "trunc", "ops": [[kind, flags, part,
-   x, y, w, h, clip x, y, w, h, rgba, size, style, centre, text], ...]}, every position in units
-   as the op holds it.
+   the kit's cursors the parts ARROW, MOVE and BUILD, AW x AH, MW x MH and BW x BH units; the game
+   cursors' frames those of SPRITES (`sprites` below). One line a frame: {"e", "d", "t", "x0",
+   "y0", "w", "h", "dropped", "trunc", "ops": [[kind, flags, part, x, y, w, h, clip x, y, w, h,
+   rgba, size, style, centre, text, rgb, shade], ...]}, every position in units as the op holds
+   it.
 
    Exit 0 when everything loaded and ran; the comparison is stagecheck.mjs's. */
 #define STB_TRUETYPE_IMPLEMENTATION
@@ -122,11 +123,46 @@ static void frame(const WIKISTAGEOPS* o, const WIKISTAGEVIEW* v, const char* e, 
         if (p->kind == HOP_TEXT && p->nrun == 1) {
             const HUDRUN* run = &o->run[p->run];
             str(o->text + run->off, run->len);
-            printf(",%u]", (unsigned)run->rgb);
+            printf(",%u", (unsigned)run->rgb);
         } else
-            fputs("null,0]", stdout);
+            fputs("null,0", stdout);
+        printf(",%.9g]", p->shade);
     }
     fputs("]}\n", stdout);
+}
+
+/* The game cursors' frames, stagecheck.mjs's stand-ins: SPRITES is "-" for none (every shape draws
+   its kit icon), else a file of whitespace-separated numbers: the scale, three shapes' `n first
+   loop` by WIKI_CURSOR_*, then every cell's `w h hx hy dur` */
+static int sprites(WIKISTAGEART* art, const char* path)
+{
+    FILE* f;
+    int k, ncell = 0;
+    if (!strcmp(path, "-")) return 1;
+    if (!(f = fopen(path, "r"))) { fprintf(stderr, "wikistagetest: cannot read %s\n", path); return 0; }
+    if (fscanf(f, "%f", &art->spr_scale) != 1) goto bad;
+    for (k = 0; k < 3; k++) {
+        unsigned n, first, loop;
+        if (fscanf(f, "%u %u %u", &n, &first, &loop) != 3 || first + n > HUD_SPRITE_CELLS) goto bad;
+        art->seq[k].n = (uint8_t)n;
+        art->seq[k].first = (uint8_t)first;
+        art->seq[k].loop = (uint8_t)loop;
+    }
+    for (; ncell < HUD_SPRITE_CELLS; ncell++) {
+        int w, h, hx, hy, dur;
+        if (fscanf(f, "%d %d %d %d %d", &w, &h, &hx, &hy, &dur) != 5) break;
+        art->spr[ncell].w = (int16_t)w;
+        art->spr[ncell].h = (int16_t)h;
+        art->spr[ncell].hx = (int16_t)hx;
+        art->spr[ncell].hy = (int16_t)hy;
+        art->spr[ncell].dur = (uint16_t)dur;
+    }
+    fclose(f);
+    return 1;
+bad:
+    fclose(f);
+    fprintf(stderr, "wikistagetest: %s is not a sprite table\n", path);
+    return 0;
 }
 
 static int ops(char** a)
@@ -157,8 +193,9 @@ static int ops(char** a)
         art.cursor_w[k] = (float)atof(a[8 + 2 * k]);
         art.cursor_h[k] = (float)atof(a[9 + 2 * k]);
     }
-    r.x = (float)atof(a[14]); r.y = (float)atof(a[15]); r.w = (float)atof(a[16]); r.h = (float)atof(a[17]);
-    u = atof(a[18]);
+    if (!sprites(&art, a[14])) return 2;
+    r.x = (float)atof(a[15]); r.y = (float)atof(a[16]); r.w = (float)atof(a[17]); r.h = (float)atof(a[18]);
+    u = atof(a[19]);
     for (i = 0; i < d->nentry; i++)
         for (j = 0; j < d->entry[i].ndemo; j++) {
             const WIKIENTRY* e = &d->entry[i];
@@ -170,6 +207,7 @@ static int ops(char** a)
             for (;;) {
                 if (s.tick % 30 == 0 || s.done) {
                     tagpu_wikistage_copy(&v, tagpu_wikisim_view(&s), e);
+                    v.tick = s.tick;            /* the copy leaves it: tagpu_wiki.c sets it so */
                     tagpu_wikistage_build(&v, NULL, r, u, &art, &o);
                     frame(&o, &v, e->id, e->demo[j].id, s.tick, r, u);
                 }
@@ -202,8 +240,8 @@ static int measure_file(char** a)
 int main(int argc, char** argv)
 {
     if (argc == 6 && !strcmp(argv[1], "measure")) return measure_file(argv + 2);
-    if (argc == 21 && !strcmp(argv[1], "ops")) return ops(argv + 2);
+    if (argc == 22 && !strcmp(argv[1], "ops")) return ops(argv + 2);
     fprintf(stderr, "usage: wikistagetest measure FONT SPACING UPPER FILE\n"
-                    "       wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD AW AH MW MH BW BH X Y W H U\n");
+                    "       wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD AW AH MW MH BW BH SPRITES X Y W H U\n");
     return 2;
 }

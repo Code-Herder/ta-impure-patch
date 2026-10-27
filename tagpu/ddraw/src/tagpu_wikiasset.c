@@ -987,6 +987,71 @@ static void feature_report(SB* b, const LOADER* L, const FEATDEF* d)
     sb_q(b, d->res.ok ? NULL : d->why, 0);
 }
 
+/* ---- the game's cursors ----------------------------------------------------------------------------
+   THE PLAYER'S OWN CURSORS for the stage: <anims>\cursors.GAF by the path rule the engine loads it by
+   (0x429700("cursors") from 0x429C9A: 0x4290F0 builds <anims>\<name>.GAF with the language variant
+   first, then 0x4B8C60 loads it), and from it the sequences the shapes show (tagpu_wikisim.h,
+   WIKI_CURSOR_*) found as 0x4B8D40 finds a name, each copied once in the engine's form. A sequence
+   that is absent or refused leaves its shapes on the kit's icons. */
+static const char* const CURSOR_SEQ[3] = { "cursornormal", "cursormove", "cursornormal" };
+
+typedef struct {
+    char        gaf[TAGPU_VFS_PATHMAX], from[64], why[200];
+    int         frames[3];              /* -1: not found or refused                              */
+    const void* seq[3];
+} CURREC;
+
+static void cursors_load(LOADER* L, CURREC* r)
+{
+    TAGPU_VFILE f;
+    unsigned char* blob;
+    GAF g;
+    int k;
+    for (k = 0; k < 3; k++) r->frames[k] = -1;
+    if (!tagpu_vfs_find_built(L->vfs, L->in->names.anims, "cursors", "GAF", &f)) {
+        snprintf(r->why, sizeof r->why, "no source holds %s\\cursors.gaf", L->in->names.anims);
+        return;
+    }
+    memcpy(r->gaf, f.path, sizeof r->gaf);
+    strncpy(r->from, tagpu_vfs_source(L->vfs, f.src), sizeof r->from - 1);
+    if (!(blob = load(L, &f, CAP_GAF, r->why, sizeof r->why)) || !gaf_open(&g, blob, f.size, r->why, sizeof r->why)) {
+        free(blob);
+        return;
+    }
+    for (k = 0; k < 3; k++) {
+        int j, s, n = 0;
+        uint32_t at;
+        for (j = 0; j < k && strcmp(CURSOR_SEQ[j], CURSOR_SEQ[k]); j++) {}
+        if (j < k) { r->seq[k] = r->seq[j]; r->frames[k] = r->frames[j]; continue; }
+        if ((s = gaf_find(&g, CURSOR_SEQ[k])) < 0) {
+            if (!r->why[0]) snprintf(r->why, sizeof r->why, "it has no sequence %s", CURSOR_SEQ[k]);
+            continue;
+        }
+        if (!(at = gaf_seq(&L->a, &g, s, &n, r->why, sizeof r->why))) continue;
+        r->seq[k] = AT(&L->a, at);
+        r->frames[k] = n;
+    }
+    free(blob);
+}
+
+static void cursors_report(SB* b, const CURREC* r)
+{
+    int k, ok = 1;
+    sb_raw(b, ",\"cursors\":{\"gaf\":");
+    sb_q(b, r->gaf[0] ? r->gaf : NULL, 1);
+    sb_raw(b, ",\"from\":");
+    sb_q(b, r->gaf[0] ? r->from : NULL, 1);
+    sb_raw(b, ",\"sequences\":[");
+    for (k = 0; k < 3; k++) {
+        sb_raw(b, "%s{\"name\":\"%s\",\"frames\":", k ? "," : "", CURSOR_SEQ[k]);
+        if (r->frames[k] >= 0) sb_raw(b, "%d}", r->frames[k]); else sb_raw(b, "null}");
+        if (!r->seq[k]) ok = 0;
+    }
+    sb_raw(b, "],\"ok\":%s,\"why\":", ok ? "true" : "false");
+    sb_q(b, ok ? NULL : r->why, 0);
+    sb_raw(b, "}");
+}
+
 /* ---- stages -------------------------------------------------------------------------------------- */
 
 typedef struct {
@@ -1485,12 +1550,15 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, unsigned char* base, uint32_
     WIKI3D* w;
     STAGEREC* srec = NULL;
     UNITREC* urec = NULL;
+    CURREC cur;
     uint32_t w_at, st_at = 0, un_at = 0, rep_at, assets;
     const WIKIDATA* d = in->data;
     char (*names)[WIKI_ID_MAX] = NULL;
     int i, k, n = 0, nunit = 0, nstage = d ? d->nentry : 0;
     memset(&L, 0, sizeof L);
     memset(&b, 0, sizeof b);
+    memset(&cur, 0, sizeof cur);
+    cur.frames[0] = cur.frames[1] = cur.frames[2] = -1;
     L.in = in;
     L.a.base = base;
     L.a.base32 = base32;
@@ -1522,7 +1590,9 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, unsigned char* base, uint32_
         /* every model is in: the bank is searched once for every name they hold, then bound */
         bank_all(&L);
         bind_all(&L);
-    }
+        cursors_load(&L, &cur);
+    } else
+        snprintf(cur.why, sizeof cur.why, "the sources did not open");
     assets = L.a.used;
     /* THE REPORT, once everything is bound */
     sb_raw(&b, "{\"format\":1,\"language\":");
@@ -1571,6 +1641,7 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, unsigned char* base, uint32_
         sb_q(&b, L.logos.why[0] ? L.logos.why : NULL, 0);
         sb_raw(&b, "}");
     } else sb_raw(&b, "null");
+    cursors_report(&b, &cur);
     sb_raw(&b, ",\"stages\":[");
     for (i = 0; i < nstage; i++) {
         if (i) sb_raw(&b, ",");
@@ -1593,6 +1664,7 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, unsigned char* base, uint32_
         w->nunit = nunit;
         w->unit = nunit ? (const WIKI3DUNIT*)AT(&L.a, un_at) : NULL;
         w->report = (const char*)AT(&L.a, rep_at);
+        for (k = 0; k < 3; k++) w->cursor[k] = cur.seq[k];
         w->base = base32;
         w->bytes = L.a.used;
     }
