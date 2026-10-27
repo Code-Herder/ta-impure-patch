@@ -29,7 +29,7 @@
 /* Cells a side of an entry's map; the loader refuses a larger one. The DLL's packet carries the
    map by value, at most 128 x 128 cells, and a 700-pixel stage still gives 5 px a cell; the
    simulation's take-off rule rests on it too (tagpu_wikisim.c, fixed16). The data's map is
-   40 x 24. */
+   40 x 30. */
 #define WIKI_MAP_MAX  128
 
 /* sim.js's KEYS, in its order, which is the order the view lists the held ones in */
@@ -153,5 +153,73 @@ int tagpu_wikidata_def(const WIKIENTRY* e, const char* name);
 
 /* sim.js's name of a key: "shift", "alt", "ctrl", "z", "x", "lmb", "rmb"; NULL out of range. */
 const char* tagpu_wikidata_key_name(int key);
+
+/* ---- the left sidebar's layout: the running mod's (tagpu_wikiasset.c reads it from the mod's
+   .GUI files) or the fixture's (art/wiki/side/fixture.json, our own numbers, in WIKIPAK). The
+   same schema as sim.js's checkLayout, which is its specification; research/notes/
+   ingame-wiki-sidebar-plan.md says what the sidebar is.
+
+   Screens are referred to by their index in `screen`, never by a pointer, so a layout is one
+   block with no pointers in it: a producer fills it, tagpu_wikilayout_check bounds it, and from
+   then on nothing writes it, so the simulation and the render thread may both read it. Every
+   index stored in it is checked there against the count it indexes. It is about 285 KB: it lives
+   on the heap or in an arena, never on a stack. */
+#define WIKI_SIDE_W        128   /* the engine's panel width, whatever the HUD scale */
+#define WIKI_SIDE_MIN_H    480   /* the PANELSIDE picture's rows: the column is never shorter */
+#define WIKI_SIDE_MINIMAP  128   /* the minimap's square at the column's top, never clickable */
+#define WIKI_SIDE_ROWS     1024  /* the composed column's texture is 128 x 1024 */
+#define WIKI_SIDE_SCREENS  48
+#define WIKI_SIDE_GADGETS  64    /* a screen's gadgets, and the length of the view's states */
+#define WIKI_SIDE_PAGES    7     /* the page is unit+0x110 bits 23..25: at most 7 numbered pages */
+#define WIKI_SIDE_TYPES    WIKI_MAX_DEFS
+#define WIKI_SIDE_SIDES    8
+#define WIKI_SIDE_NAME     32    /* a gadget, screen, side or unit name, with its terminator */
+
+/* sim.js's ROLES, in its order: how 0x41AA00 tells the buttons apart by name */
+enum { WIKI_ROLE_ORDERS, WIKI_ROLE_BUILDTAB, WIKI_ROLE_BUILD, WIKI_ROLE_PREV, WIKI_ROLE_NEXT,
+       WIKI_ROLE_STOP, WIKI_ROLE_ORDER, WIKI_NROLES };
+
+typedef struct {
+    char name[WIKI_SIDE_NAME];
+    int  role;                      /* WIKI_ROLE_* */
+    char unit[WIKI_SIDE_NAME];      /* a build button's unit type; "" for none (null) */
+    int  grey, hidden;
+    int  x, y, w, h;                /* in its screen's pixels, inside the screen */
+} WIKIGADGET;
+
+typedef struct {
+    char       name[WIKI_SIDE_NAME];
+    int        y, w, h;             /* y: its first row in the column */
+    int        ngadget;
+    WIKIGADGET gadget[WIKI_SIDE_GADGETS];
+} WIKISCREEN;
+
+typedef struct {
+    char name[WIKI_SIDE_NAME], prefix[WIKI_SIDE_NAME];
+    int  main2, gen;                /* screen indices */
+} WIKISIDEDEF;
+
+typedef struct {
+    char name[WIKI_SIDE_NAME];
+    int  npage;
+    int  page[WIKI_SIDE_PAGES];     /* screen indices: page[k] is page k + 1 */
+    int  orders;                    /* the <NAME>0 screen's index, or -1 */
+} WIKIPAGES;
+
+typedef struct {
+    int         format, width, height;
+    int         nside, player_side;
+    WIKISIDEDEF side[WIKI_SIDE_SIDES];
+    int         ntype;
+    WIKIPAGES   type[WIKI_SIDE_TYPES];
+    int         nscreen;
+    WIKISCREEN  screen[WIKI_SIDE_SCREENS];
+} WIKILAYOUT;
+
+/* Every bound sim.js's checkLayout holds, over a filled layout: 1 when it holds them all, else 0
+   with a message in `err`; a refused layout is not used at all (the fixture is). Every producer
+   calls it before the layout is published, so a count or an index read out of a checked layout
+   is in range by construction. */
+int tagpu_wikilayout_check(const WIKILAYOUT* L, char* err, size_t errn);
 
 #endif
