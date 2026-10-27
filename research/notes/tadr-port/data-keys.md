@@ -200,7 +200,9 @@ commit can change.
 - **The mask**, on the game thread inside the packet fill, cached per type during unpaused play: `Create()`'s
   hides read and not run, with the engine's own piece match (`0x45A950`'s pre-order and swap,
   [the engine map](../exe-reverse-engineering.html)), or every piece `PreviewPieces=` does not
-  name. Every read of the COB is bounded by the block's own length, which a fourth observer
+  name. The script half is `tagpu_cobscan.c`'s, engine-free and shared with the in-game wiki's
+  models; the pre-order is `tagpu_model3do.h`'s `tagpu_model_engine_order`. Every read of the COB
+  is bounded by the block's own length, which a fourth observer
   records: the checksum `0x4B6BA0(buf, size)` that `0x4B2450` calls over exactly the block it
   read, kept only for the call that returns into the loader (`0x4B247C`). A script with no
   recorded length gets no mask. The cache is keyed by the packet's level generation, the record's

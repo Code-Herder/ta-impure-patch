@@ -5610,20 +5610,27 @@ and the COB length (`0x4B6BA0`) for the `Create()` mask.
   [data keys](tadr-port/data-keys.html)). A structure's COB `Create()` hides pieces the moment the
   unit exists — muzzle flares, a radar dish, a moho's rotary — and no script runs for a preview, so
   the ghost used to show them: 21 of the 126 stock structures hide a piece with faces. The mask is
-  computed on the GAME thread by `tagpu_datakeys.c`, cached during unpaused play, and published as
+  computed on the GAME thread by `tagpu_datakeys.c` through the rule in `tagpu_cobscan.c` (engine-free,
+  the one the in-game wiki's models read too), cached during unpaused play, and published as
   `TAGPU_PK_GHOSTMASK`: type, piece count, template root, 256 bits, one row per type a ghost may
   draw this frame that hides anything, sorted by type (validated in `frame_valid`). What it hides:
   - **by default, `Create()`'s hides, read and not run** — from the entry point, through the
     opcodes whose length is certain (`tools/ta3do`'s `COB_PROLOGUE`), `HIDE` sets and `SHOW`
-    clears a COB piece; the walk stops at the first opcode it cannot size. Every read of the COB
-    is bounded by the block's own length: the size `0x4B2450` checksums the block with
+    clears a COB piece; the walk stops at the first opcode it cannot size
+    (`tagpu_cobscan_hides`). Every read of the COB is a 32-bit offset from the block's base,
+    bounded by the block's own length: the size `0x4B2450` checksums the block with
     (`0x4B6BA0(buf, size)`, the call that returns to `0x4B247C`), which an observer records. A
     script with no recorded length gets no row. The template's node names have no such length;
     they are read under the type bound and the level lifetime, as every reader of the tree is.
   - **matched to the model as the engine matches it**: `0x45A950` builds the primitives in
     `0x45AEC0`'s pre-order, then for COB piece *i* swaps in the first primitive at an index ≥ *i*
-    whose node name `_stricmp`-matches. `tagpu_datakeys.c` reproduces that, so COB piece *k* names
-    the node the engine will hide (on stock content it equals a by-name match).
+    whose node name `_stricmp`-matches. `tagpu_model_engine_order` (`tagpu_model3do.h`) lays the
+    nodes out in that pre-order and `tagpu_cobscan_mask` runs the swap, so COB piece *k* names
+    the node the engine will hide. On stock content it equals a by-name match: MEASURED
+    2026-10-26 by `tagpu/ddraw/tests/cobscantest.py` over all 278 stock unit scripts, where the 90
+    that hide a piece at `Create()` each carry distinct names up to their last hidden piece, each
+    on exactly one node of the model, and the mask's nodes are `tools/ta3do`'s
+    `hidden_at_create` for every one.
   - **with `PreviewPieces=` in the FBI**, every piece the list does not name (TADR's split and
     fold; a list that names no piece of the model is ignored and logged).
 

@@ -18019,7 +18019,9 @@ tables:
 | `+0x28` | 8-byte entries, the second dword a name `[INFERRED: the sound table]` | the pointer and each entry's second dword |
 
 **Nothing checks a count or an offset**, so every one of them is file data: a reader that
-follows them bounds each first (`tagpu_datakeys.c`'s `create_hides`). The script is freed by
+follows them bounds each first (`tagpu_cobscan.c`'s `tagpu_cobscan_hides`, which reads each as a
+32-bit offset from the block's base: the block's own address for a script this loader left, 0 for
+the file's bytes). The script is freed by
 `0x4B2540` and lives from the level's load to its teardown (`0x42DC3C`, zeroed at `0x42DC41`),
 or to a console `Reload` of its type.
 
@@ -18328,8 +18330,13 @@ the first whose node name `_stricmp`s equal to COB piece *i*'s (`0x45A9FD`), and
 *j* ≠ *i* it swaps the two whole `0x36`-byte primitives (`0x45AA1A..0x45AA51`); `0x45AF90`
 relinks the tree afterwards (`0x45AA7E`). So a COB piece whose name no node carries drives
 whatever primitive sits at its index, and two nodes of one name go to the first one found at or
-after the index. `tagpu_datakeys.c` reproduces this to find the node a `Create()` `HIDE`
-reaches; on the stock structures it equals a by-name match.
+after the index. `tagpu_model_engine_order` (`tagpu_model3do.h`, the pre-order) and
+`tagpu_cobscan_mask` (`tagpu_cobscan.c`, the swap) reproduce this to find the node a `Create()`
+`HIDE` reaches, for the build ghost and the in-game wiki alike. On stock content it equals a
+by-name match: of the 278 stock unit scripts, the 90 whose `Create()` hides a piece carry
+distinct piece names up to the last hidden one, each on exactly one node of the unit's model, so
+every swap lands a hidden piece on the node of its own name (MEASURED 2026-10-26,
+`tagpu/ddraw/tests/cobscantest.py`).
 
 ### The repose, and the window it leaves open — `0x45AC20`, `0x45AB10`, `0x45B030`, `0x45B0A0`
 
