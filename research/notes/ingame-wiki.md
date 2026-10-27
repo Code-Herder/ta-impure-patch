@@ -751,7 +751,7 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
   fresh scene, where the mockup, which keeps its simulation, carries on.
 - **Try it yourself's Alt is the key events'.** Alt+Z and Alt+X step while the last Alt key event
   the window had was a press, as the browser's `altKey` reads the keyboard. An Alt let go while the
-  window had no focus reads down until its release is seen.
+  window had no focus reads down until Alt is next pressed and released.
 - **Try it yourself on the real input path is the owner's hand-over.** The test drives the stage
   through the shield's injected device path; the real messages share every rule but the lost
   release (a real move with the button up), which no test runs, and neither the focus loss's

@@ -994,7 +994,7 @@ over the wiki -- when the frame is in Try it with a view and the record's pointe
 same frame's stage canvas. Both facts are of one frame, so no frame shows both cursors or neither.
 The stage draws the simulation's own cursor there, as every demo does.
 
-**Who reads and writes what.** Game thread only. Nothing new crosses threads: the record's
+**Who reads and writes what.** The input is the game thread's; the render thread lays out the build menu from the same frame's view and the entry's immutable data, and decides the cursor from one record. Nothing new crosses threads: the record's
 `try_it` flag existed, and the stage rect is the hit map's `stage` control, which landing 3
 already posted. `tagpu_wikipk.h` and `tagpu_wikidata.h`, which the simulation files reach through
 `tagpu_packet.h`, are unchanged.

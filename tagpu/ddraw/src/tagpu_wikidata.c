@@ -5,6 +5,7 @@
 #include <string.h>
 #include "tagpu_pak.h"
 #include "tagpu_wikidata.h"
+#include "tagpu_wikipk.h"            /* TAGPU_WIKI_KEY, the build menu key's size */
 
 #define FOOTPRINT_MAX 64    /* tagpu_placegeo.c's bound on a footprint, which its arithmetic rests on */
 #define TREE_MAX      1024  /* nodes of the tree */
@@ -149,7 +150,11 @@ static int defs(R* r, WIKIENTRY* e, const TJV* units)
     if (!(e->def = (WIKIDEF*)zalloc(r, (size_t)e->ndef, sizeof *e->def))) return 0;
     for (u = units->first; u; u = u->next, i++) {
         WIKIDEF* d = &e->def[i];
-        if (strlen(u->key) >= sizeof d->name) return refuse(r, "a type name is too long:", u->key);
+        /* the build menu's key is `build:<name>` in a control key of TAGPU_WIKI_KEY bytes, and
+           `build:none` is the menu's own: a name past that or named none could not be pressed */
+        if (strlen(u->key) >= sizeof d->name || strlen(u->key) > TAGPU_WIKI_KEY - 1 - (sizeof "build:" - 1))
+            return refuse(r, "a type name is too long for the build menu's key:", u->key);
+        if (!strcmp(u->key, "none")) return refuse(r, "a type may not be named none, the build menu's own:", u->key);
         strcpy(d->name, u->key);
         d->title = tj_str(tj_get(u, "name"), NULL);
         if (!integer(r, tj_at(tj_get(u, "footprint"), 0), 1, FOOTPRINT_MAX, &d->fx, "a footprint")
