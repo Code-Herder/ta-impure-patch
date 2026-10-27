@@ -1015,8 +1015,17 @@ saw.
 **Verification:** `wiki_regression.py <instance> try --launch` replays `snap` and then `line` as
 device input on the stage, inverting the fit from the dump's `stage` hit and unit, and compares
 the paused simulation's hash with `simparity.mjs --try` (sim.js fed the inputs the dump logged at
-their ticks); then the releases on Back to demo and on close, and the reopen. Captures of Try it
-with the build column at 1080p and 4K.
+their ticks); then the releases on Back to demo and on close, and the reopen.
+- **Verified** on a private Xvfb: `try` at 1920 × 1080 (100 s) and 3840 × 2160 (254 s), both
+  hashes equal at each, every move within a pixel of the demo's point; captures of Try it with the
+  build column at both, the player's cursor drawn over the menu and the simulation's alone over
+  the stage. `sp`, `page`, `demos` (the page at most 0.274 ms of the game thread in a frame),
+  `recorded` and `mp` pass. `wikilaycheck.py` 13 cases, three in Try it; `simparity.mjs`,
+  `stagecheck.mjs` and `scenecheck.mjs` equal; `make` and `make LIMITS=stock` clean. No `sim`
+  file, and no header one includes, changed, so no replay test group runs.
+- **Not run**: the real input path (the owner's hand-over), the focus loss's release, the lost
+  real release, Alt+Z / Alt+X and the right button (no demo of the two replayed gives them), and
+  Try it in a network game or a replay.
 
 **Review: medium.**
 
