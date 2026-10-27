@@ -664,41 +664,66 @@ and every entry's units from the player's archives into the arena, and says what
 
 **Files:**
 - `tagpu/ddraw/src/tagpu_hpi.c`/`.h` (new): HAPI archives — header, key, directory, SQSH chunks
-  (LZ77 ported from `tools/ta3do` `lz77_decompress`, zlib through `lodepng_zlib_decompress`);
-  read-only handles shared for read and write; every bound of section 5.
-- `src/tagpu_vfs.c`/`.h` (new): the engine's precedence over the copied list and directory — open
-  a path, enumerate a directory pattern — with the duplicate rules batch A establishes.
-- `src/tagpu_tdf.c`/`.h` (new): TDF and FBI sections and keys, bounded by length. The DLL's JSON
-  reader is not a TDF reader.
+  (LZ77 ported from `tools/ta3do` `lz77_decompress`, refusing an overrun; zlib through
+  `lodepng_zlib_decompress`) — over a read callback, so the DLL reads through its own read-only
+  handles (shared for read and write) and the test from memory. Every bound of section 5: the
+  directory inside the file and at most 16 MB, entries and names inside the directory block, an
+  entry reached twice refused, depth ≤ 16, a file ≤ 64 MB, each chunk's stored length, marker,
+  method and declared size checked, only the chunks a range needs decompressed.
+- `src/tagpu_vfs.c`/`.h` (new): the engine's precedence over the copied list and directory — a
+  path loose first, then the first archive in mount order; the builder's `<dir>-<language>\`
+  first; enumerations in the engine's order with the shadow mark computed lazily, and
+  `0x4BCB50`'s recursion within one source (engine map, *How the engine resolves a path*). A
+  Win32 layer and a POSIX one (case-insensitive, for the native test).
+- `src/tagpu_tdf.c`/`.h` (new): TDF and FBI sections and keys, bounded by length and by 2 048
+  sections and 32 768 keys (stock's largest file has 94 and 1 692), parsed as `tools/tascene`'s
+  `parse_tdf` parses them.
 - `src/tagpu_wikiasset.c`/`.h` (new): the 3D loader thread; the descriptions, the TNT tiles and
-  their hashes, the feature sections and their frames or models, the units' FBI, 3DO, texture
-  frames and Create() masks (6c's `tagpu_cobscan.c`); the arena and its report; one interlocked
-  publish (`tagpu_wiki3d_get()`); the trigger `tagpu_wiki3d.dump` → `tagpu_wiki3d.json` (each
-  element: its path, the archive it came from, resolved or the refusal, faces and bound textures).
-- `src/tagpu_replays.c`/`.h`: `int tagpu_replays_archive_paths(char (*out)[0x104], int max)`, the
+  their hashes, the feature sections and their sequences or models, the units' FBI, 3DO and
+  script, the texture bank and `logos.GAF`; models built and bound as the engine holds them, the
+  sequences and frames they name copied in the engine's in-memory form; the arena (32 MB reserved,
+  committed in 1 MB steps) and its report; one interlocked publish (`tagpu_wiki3d_get()`); the
+  trigger `tagpu_wiki3d.dump` → `tagpu_wiki3d.json` (each element: its path, the archive it came
+  from, resolved or the refusal, faces and bound textures, a shape hash over the built model).
+- `src/tagpu_replays.c`/`.h`: `tagpu_replays_archive_paths(char (*out)[0x104], int max)`, the
   mount list's paths in mount order on the game thread, next to `running_mod`, which reads the same
-  list (question 2).
-- `src/tagpu_wiki.c`: the first open copies the list and `GetCurrentDirectoryA` and starts the
-  loader.
-- `tagpu/ddraw/tests/wikiassettest.c` (new): the same resolution compiled natively against the
-  local install.
+  list (question 2); and `tagpu_replays_asset_names`, the `language` value `0x51FB50` and the eight
+  asset folders' names in `.data`, which a mod renames in place (batch D2). Its
+  `thread-split.allow` argument names both.
+- `src/tagpu_wiki.c`: the first fill of an open window copies the list, the names and
+  `GetCurrentDirectoryA` and starts the loader; every 30th fill answers the trigger.
+- `tools/hudpak.py`: WIKIPAK carries `art/wiki/stage/*.json`.
+- `tagpu/ddraw/tests/wikiassettest.c` (new): the same load compiled natively (`load`, with
+  InitTAHPIAry's mount list or the game's), and the fuzz (`fuzz-hpi`, `fuzz-3do`).
+- `tools/wiki/assetcheck.py` (new): builds the test with AddressSanitizer and
+  UndefinedBehaviorSanitizer, compares its report with an independent Python resolution
+  (`tavfs.py`, `tools/ta3do`'s reader, `tascene`'s TDF reader, the engine's rules written out a
+  second time), and runs the fuzz. `gfx.py --resolve-json`, which this plan named for the
+  comparison, does not exist; this is it.
+- `tools/wiki_regression.py`: the `asset` step.
 
 **Invariants** (comments at each): the arena is immutable once published and never freed; it lies
 inside the readers' range, which is checked once at its allocation; every offset in a file is data
 until bounded against that file; the loader reads no engine memory and paints nothing.
 
-**Verification:**
-- `wikiassettest` built with gcc, AddressSanitizer and UndefinedBehaviorSanitizer, its JSON equal
-  to `gfx.py --resolve-json` on the same install: the same archive for every path, the same tile
-  hashes, the same face counts and texture bindings (about 1 minute).
-- A fuzz pass: 1 000 copies of one archive and one 3DO with bytes truncated or flipped, every
-  refusal named, no sanitizer error (about 3 minutes).
-- One game launch, `tools/wiki_regression.py <instance> asset --launch` (about 4 minutes): open
-  the wiki, wait for `tagpu_wiki3d.json`, compare it with the native run's; the log's load time and
-  arena size.
+**Verification** (MEASURED 2026-10-26, retail):
+- `tools/wiki/assetcheck.py`: the native load equals the Python reference on 30 mounts, 10 bank
+  GAFs, 2 of 2 grounds and 9 of 9 unit types, the 9 models' shape hashes included; 42 to 54 ms,
+  an arena of 246 301 bytes natively (pointers of 8 bytes in its own structs).
+- The fuzz, 1 000 damaged copies each under both sanitizers, no sanitizer error and 0 refusals
+  unnamed: `AFark.ufo` (keyed, LZ77) 67 read whole, 933 refused; `CorNecro.ufo` (plain, zlib) 13
+  and 987; `objects3d\armck.3do` 95 built, 905 refused (18, 14 and 10 kinds of refusal).
+- `tools/wiki_regression.py <instance> asset --launch` on a private Xvfb: the game's report equals
+  the native load over the instance's 31 mounts field for field, refusals' words included;
+  `wiki3d: loaded in 49.8 ms - arena 246059 bytes`, 2 of 2 grounds and 9 of 9 unit types.
 
-**Gate**: `tagpu_replays.c` is a source of the `resource-*` groups; the runner's `tareplay.py
-landing`. **Review: high** (untrusted file parsing, a new thread, an allow-list argument grown).
+**Not done here**: Create()'s hides. Landing 6c's `tagpu_cobscan.c` was not on this branch;
+`unit_hides` in `tagpu_wikiasset.c` is the one call site, and until 6c is merged it computes
+nothing and the report's `hides` is null. The mount list is read once a process: an archive a
+RESTART mounts later is not seen.
+
+**Gate**: `tagpu_replays.c` is a source of the `resource-*` groups; `tareplay.py landing`.
+**Review: high** (untrusted file parsing, a new thread, an allow-list argument grown).
 **Thread**: the loader thread reads files; the copy is the game thread's.
 
 ### Landing 6f — the per-scene modules instanced
