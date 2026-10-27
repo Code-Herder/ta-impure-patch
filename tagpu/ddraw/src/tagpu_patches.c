@@ -11003,7 +11003,7 @@ static unsigned char* lim_emit(unsigned char* p, const unsigned char* op, int n,
     return p + n + 4;
 }
 
-SIM_FEATURE(cob_guard, SIM_PUPPET_RUNS, "battle resource-core-upgrade");
+SIM_FEATURE(cob_guard, SIM_PUPPET_RUNS, "battle resource-core-upgrade cob-getters");
 
 typedef int (__attribute__((thiscall)) *CobNativeGet)(char*, int, int, int, int, int);
 static CobNativeGet s_cobNativeGet;

@@ -1,0 +1,66 @@
+// COBEXT's script: the COB extensions in one unit (research/notes/ingame-wiki-cob-plan.md, L2).
+// tools/cob_ext_fixture.py compiles it into a generated unit, COBEXT, which is ARMSOLAR's model and
+// FBI under a new name, in an archive written into a test instance's game folder only.
+//
+// Create and seven sleepers hold records 0..7, so prober runs in record 8 and every getter it
+// calls runs in record 9: the two records Impure's raised build adds over the engine's eight.
+// Each getter's value leaves on its script's R line, where the replay group's check
+// (cob_ext_fixture.py check) and tacob's fixture (replay.json, "facts") both read it.
+
+piece base, dish1, dish2, dish3, dish4;
+
+static-var me;
+
+sleeper()
+{
+	while( 1 )
+	{
+		sleep 1000;
+	}
+}
+
+min_id() { return (get 69); }
+max_id() { return (get 70); }
+my_id() { return (get 71); }
+my_owner() { return (get 72(me, 0, 0, 0)); }
+my_build_left() { return (get 73(me, 0, 0, 0)); }
+nobodys_build_left() { return (get 73(0, 0, 0, 0)); }
+allied_with_me() { return (get 74(me, 0, 0, 0)); }
+allied_past_the_array() { return (get 74(65537, 0, 0, 0)); }
+mine_is_local() { return (get 75(me, 0, 0, 0)); }
+my_kills() { return (get 32); }
+
+prober()
+{
+	me = get 71;
+	call-script min_id();
+	call-script max_id();
+	call-script my_id();
+	call-script my_owner();
+	call-script my_build_left();
+	call-script nobodys_build_left();
+	call-script allied_with_me();
+	call-script allied_past_the_array();
+	call-script mine_is_local();
+	call-script my_kills();
+	while( 1 )
+	{
+		sleep 1000;
+	}
+}
+
+Create()
+{
+	start-script sleeper();
+	start-script sleeper();
+	start-script sleeper();
+	start-script sleeper();
+	start-script sleeper();
+	start-script sleeper();
+	start-script sleeper();
+	start-script prober();
+	while( 1 )
+	{
+		sleep 1000;
+	}
+}
