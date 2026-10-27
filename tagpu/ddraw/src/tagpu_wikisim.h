@@ -78,6 +78,13 @@ enum { WIKI_HOVER_GROUND, WIKI_HOVER_UNIT, WIKI_HOVER_PLACE, WIKI_HOVER_QUICK };
 
 typedef struct { int kind, type, ox, oz, ok; } WIKIHOVER;
 
+/* THE CURSOR'S THREE SHAPES, each the cursor the game shows there (MEASURED 2026-10-27, the
+   installed index main+0x2CBE read back): nothing of the player's mobile selected, cursornormal;
+   a mobile unit of the player's selected, cursormove -- at Interface Type 1 too, which Impure's
+   contextual-cursor patch makes so -- and over a deposit as well, since Quick Build's ghost is
+   the packet's alone and writes no engine cursor (tagpu_resource.c); a building armed from the
+   build menu, cursornormal again, because 0x499200 calls the build cursor 0x4197D0 instead of
+   choosing one and the click on the menu installed cursornormal. */
 enum { WIKI_CURSOR_ARROW, WIKI_CURSOR_MOVE, WIKI_CURSOR_BUILD };
 
 /* ---- the view: what the stage draws, sim.js's view() field for field ---- */
@@ -125,6 +132,8 @@ typedef struct {
     const WIKIVLINE* line;
     double           cursor_x, cursor_z;
     int              cursor_shape;  /* WIKI_CURSOR_* */
+    int              cursor_since;  /* the tick the shape began: the game restarts a cursor's
+                                       animation when it installs one (SetUICursor 0x4AB400) */
     int              held[WIKI_NKEYS];
     int              has_drag;
     double           drag_x0, drag_z0, drag_x1, drag_z1;
@@ -151,6 +160,8 @@ typedef struct {
 
     /* sim.js's st */
     double           cursor_x, cursor_z;
+    int              cursor_shape, cursor_since;    /* the shape the last tick ended on, and the
+                                                       tick it began                            */
     int              held[WIKI_NKEYS];
     int              mode;
     int              has_drag, drag_active;
@@ -225,8 +236,9 @@ int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
         name ("" in the contextual mode); the spacing (-1 when nothing is armed); the drag: 1 and
         x0, z0 (doubles), or 0; the caption.
    The view's other fields follow from these: queued sites and order lines from the units and
-   their orders, the cursor's shape from the mode, the ghost and the selection, a site's order
-   number from the states, footprints from the types, the pace from the entry. */
+   their orders, the cursor's shape from the mode and the selection, a site's order number from
+   the states, footprints from the types, the pace from the entry. The tick the cursor's shape
+   began is history rather than state, and is left out. */
 uint64_t tagpu_wikisim_hash(const WIKISIM* s);
 
 #endif

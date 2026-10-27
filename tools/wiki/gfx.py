@@ -21,7 +21,8 @@ One tascene-format pack a wiki entry, `gfx/<entry>/scene.json` and its binaries:
   palette/   PALETTE.PAL and PALETTE.SHD
   shaders    gfx/shaders/, tagpu's GLSL extracted from the C sources (the repository's, not the game's)
 
-and gfx/index.json, which names each entry's pack and carries the whole resolution report.
+and gfx/index.json, which names each entry's pack and carries the whole resolution report; and the game's cursors,
+gfx/cursors.json and its sheet gfx/cursors.rgba, which the stage draws its pointer with in either look.
 
 THE RULES ARE THE ENGINE'S, through tools/wiki/tavfs.py (loose first, then the first archive in the engine's mount
 order; an enumeration lists each path once, from its first source), with the directory names read out of the
@@ -167,12 +168,13 @@ class Gaf:
         if sig != 0x00010100:
             raise ValueError("not a GAF")
         self.blob = blob
-        self.seqs = {}
+        self.seqs, self.heads = {}, {}      # heads: each name's sequence header offset
         for off in struct.unpack_from(f"<{count}I", blob, 12):
             n = struct.unpack_from("<H", blob, off)[0]
             name = blob[off + 8:off + 40].split(b"\0")[0].decode("latin-1").lower()
             frames = [struct.unpack_from("<I", blob, off + 40 + 8 * i)[0] for i in range(n)]
             self.seqs.setdefault(name, (n, frames))
+            self.heads.setdefault(name, off)
 
     def frame(self, seq, k=0):
         """(GafFrame, hotspot x, hotspot y) of frame k of `seq`, or None."""
@@ -182,6 +184,57 @@ class Gaf:
         off = hit[1][k]
         hx, hy = struct.unpack_from("<hh", self.blob, off + 4)
         return ta3do.gaf_frame(self.blob, off), hx, hy
+
+
+# --------------------------------------------------------------------------- the game's cursors
+
+CURSOR_SEQ = {"arrow": "cursornormal", "move": "cursormove", "build": "cursornormal"}   # WIKI_CURSOR_*'s sequences
+SPRITE_CELL, SPRITE_CELLS = 64, 16                       # tagpu_hudlay.h HUD_SPRITE_CELL, HUD_SPRITE_CELLS
+
+
+def cursors(eng, palette, out_root):
+    """The game's cursors as the stage draws them (tagpu_wikistate.c builds the same sheet): `<anims>\\cursors.GAF` by
+    the engine's path rule, each shape's sequence (CURSOR_SEQ) decoded through PALETTE.PAL into one 64 x 64 cell a
+    frame of an RGBA sheet, the frame's key transparent; `gfx/cursors.json` says where each frame is, its size, its
+    hotspot and its 30 Hz ticks, and each shape's first cell, frame count and loop byte. A sequence that is missing,
+    has a frame larger than a cell or would not fit the sheet leaves its shapes on the kit's icons (n 0). Returns the
+    resolution: the GAF, its source and each sequence's frame count."""
+    got = eng.gaf(eng.dirs["anims"], "cursors")
+    rep = {"gaf": got[1].lower() if got else None, "from": got[2].lower() if got else None,
+           "sequences": [{"name": CURSOR_SEQ[k], "frames": len(got[0].seqs[CURSOR_SEQ[k]][1])
+                          if got and CURSOR_SEQ[k] in got[0].seqs else None} for k in ("arrow", "move", "build")]}
+    sheet = bytearray(SPRITE_CELL * SPRITE_CELLS * SPRITE_CELL * 4)
+    frames, seq, placed = [], {}, {}
+    for shape, name in CURSOR_SEQ.items():
+        if name in placed:
+            seq[shape] = placed[name]
+            continue
+        seq[shape] = placed[name] = {"first": 0, "n": 0, "loop": 0}
+        if not got or name not in got[0].seqs:
+            continue
+        gaf = got[0]
+        n, offs = gaf.seqs[name]
+        so = gaf.heads[name]
+        loop, durs = gaf.blob[so + 2], [struct.unpack_from("<H", gaf.blob, so + 44 + 8 * i)[0] for i in range(n)]
+        decoded = [(ta3do.gaf_frame(gaf.blob, o), *struct.unpack_from("<hh", gaf.blob, o + 4)) for o in offs]
+        if not n or len(frames) + n > SPRITE_CELLS or any(f.width > SPRITE_CELL or f.height > SPRITE_CELL for f, _x, _y in decoded):
+            continue
+        placed[name].update(first=len(frames), n=n, loop=loop)
+        for (f, hx, hy), dur in zip(decoded, durs):
+            sx = len(frames) * SPRITE_CELL
+            for y in range(f.height):
+                for x in range(f.width):
+                    i = f.pixels[y * f.width + x]
+                    if i != f.transparent:
+                        o = (y * SPRITE_CELL * SPRITE_CELLS + sx + x) * 4
+                        sheet[o:o + 4] = bytes((*palette[i], 255))
+            frames.append({"sx": sx, "w": f.width, "h": f.height, "hx": hx, "hy": hy, "dur": dur})
+    (out_root / "cursors.rgba").write_bytes(bytes(sheet))
+    (out_root / "cursors.json").write_text(json.dumps({
+        "note": "derived from the local install by tools/wiki/gfx.py; gitignored, never committed",
+        "sheet": [SPRITE_CELL * SPRITE_CELLS, SPRITE_CELL], "cell": SPRITE_CELL, "frames": frames, "seq": seq, **rep},
+        indent=1) + "\n")
+    return rep
 
 
 # --------------------------------------------------------------------------- the ground
@@ -678,6 +731,7 @@ def main(argv=None):
              "never committed", "install": {"archives": [a for a, _ in eng.vfs.archives],
                                             "dirs": eng.dirs, "palette": pal[2]},
              "entries": {}}
+    index["cursors"] = cursors(eng, palette, out_root)
     full = {}
     for f in sorted(ENTRIES.glob("*.json")):
         entry = json.loads(f.read_text())
@@ -695,7 +749,7 @@ def main(argv=None):
               + (f"; refused {', '.join(scene['units']['refused'])}" if scene["units"]["refused"] else ""))
     (out_root / "index.json").write_text(json.dumps(index, indent=1) + "\n")
     if args.resolve_json:
-        Path(args.resolve_json).write_text(json.dumps({"install": index["install"], "entries": full}, indent=1) + "\n")
+        Path(args.resolve_json).write_text(json.dumps({"install": index["install"], "cursors": index["cursors"], "entries": full}, indent=1) + "\n")
     print(f"gfx.py: wrote {out_root}/ ({len(index['entries'])} entries)")
     return 0
 

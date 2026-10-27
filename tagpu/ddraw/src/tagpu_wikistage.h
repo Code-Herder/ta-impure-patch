@@ -88,6 +88,7 @@ typedef struct {
     double         cursor_x, cursor_z;  /* double: the cursor's icon box is snapped to a
                                            pixel, which a float's error could move        */
     uint8_t        cursor_shape;        /* WIKI_CURSOR_*                                   */
+    int32_t        cursor_since;        /* the tick the shape began, its animation's start */
     uint8_t        held[WIKI_NKEYS];
     uint8_t        has_drag;
     float          drag_x0, drag_z0, drag_x1, drag_z1;
@@ -140,17 +141,50 @@ typedef struct {
 typedef double (*WIKISTAGEMEASURE)(void* ctx, double size, const char* s);
 typedef void   (*WIKISTAGELOG)(void* ctx, const char* line);
 
+/* THE GAME'S CURSORS, as the stage draws them: each frame of the sequences the shapes show
+   (tagpu_wikisim.h, WIKI_CURSOR_*), decoded once into one cell of the sprite sheet the HUD pass
+   holds (HUD_TEX_SPRITE, tagpu_huddraw.h), cell k at x = k * HUD_SPRITE_CELL. A frame is the
+   GAF frame's size and hotspot and the 30 Hz ticks it stays up (the sequence's frame table's
+   second dword, which the animator 0x4B8B30 / 0x4B8BF0 counts down). */
+typedef struct {
+    int16_t  w, h;                      /* art pixels, each at most HUD_SPRITE_CELL        */
+    int16_t  hx, hy;                    /* the hotspot: the pointer's place in the frame,
+                                           signed, as sharp_cursor subtracts it            */
+    uint16_t dur;                       /* 30 Hz ticks                                     */
+} WIKISTAGESPR;
+
+typedef struct {
+    uint8_t  n;                         /* frames; 0: the shape draws its kit icon         */
+    uint8_t  first;                     /* its frame 0's cell                              */
+    uint8_t  loop;                      /* the sequence's header byte +2: back to frame 0
+                                           past the last, else nothing is drawn there      */
+} WIKISTAGESEQ;
+
 /* What the picture needs of the loaded art, by the caller. */
 typedef struct {
     int16_t          style;             /* layout.json's `toast` style: the stage's text   */
     WIKISTAGEMEASURE measure;           /* never NULL                                      */
     void*            measure_ctx;
     int16_t          cursor[3];         /* the kit's cursor_arrow, cursor_move and
-                                           cursor_build, by WIKI_CURSOR_*; -1 absent      */
+                                           cursor_build, by WIKI_CURSOR_*; -1 absent: the
+                                           icons a shape whose game cursor did not load
+                                           draws instead                                   */
     float            cursor_w[3], cursor_h[3];  /* their sizes in units: pw / scale        */
+    WIKISTAGESEQ     seq[3];            /* the game's cursor of each shape                 */
+    WIKISTAGESPR     spr[HUD_SPRITE_CELLS];
+    float            spr_scale;         /* device pixels an art pixel: the game cursor's,
+                                           tagpu_gui.on's cursorscale= (1 by default)      */
     WIKISTAGELOG     log;               /* NULL: none                                      */
     void*            log_ctx;
 } WIKISTAGEART;
+
+/* THE ENGINE'S CURSOR ANIMATION: the frame `elapsed` 30 Hz ticks after SetUICursor 0x4AB400
+   installed a sequence of `n` frames lasting `dur` ticks each. 0x4B8B30 starts it at frame 0
+   with frame 0's ticks to count down; 0x4B8BF0, from the UI's update 0x4AB5D0, takes the ticks
+   elapsed off and, at or below zero, steps to the next frame and adds that frame's ticks -- back
+   to frame 0 past the last when the sequence loops, else it drops the sequence and the cursor
+   draws nothing (-1). A sequence of one frame never steps (0x4B8BFB). DISASSEMBLED 2026-10-27. */
+int tagpu_wikistage_cursor_frame(const WIKISTAGESPR* frames, int n, int loop, long elapsed);
 
 /* THE CANVAS: the stage's rect `stage`, in units, at `u` device pixels a unit, snapped to whole
    device pixels as Chrome snaps the canvas element (tagpu_hud_snap, tagpu_hud_edge): its top left

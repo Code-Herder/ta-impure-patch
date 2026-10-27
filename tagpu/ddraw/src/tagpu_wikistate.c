@@ -9,6 +9,10 @@
 #include "tagpu_hudtext.h"
 #include "tagpu_hud.h"
 #include "tagpu_log.h"
+#include "tagpu_gaf.h"
+#include "tagpu_gui.h"
+#include "tagpu_pal.h"
+#include "tagpu_wikiasset.h"
 
 static HUDOPS        s_ops;             /* the page's; 400 KB, never on a stack                  */
 static WIKISTAGEOPS  s_stage;           /* the stage's; 0.9 MB                                   */
@@ -86,6 +90,97 @@ static int art_bind(const WIKIART* a)
         if (p && p->scale > 0) { s_sart.cursor_w[i] = (float)p->pw / p->scale; s_sart.cursor_h[i] = (float)p->ph / p->scale; }
     }
     return 1;
+}
+
+/* ---- the game's cursors: the sprite sheet ------------------------------------------------------
+   THE STAGE'S POINTER IS THE GAME'S OWN CURSOR, decoded here from the sequences the 3D asset load
+   copied out of the player's cursors.GAF (tagpu_wikiasset.h, WIKI3D `cursor`), into the sheet the
+   HUD pass draws as HUD_TEX_SPRITE (tagpu_vk_hud.c). Each frame through the PRESENTED palette, the
+   one the sharp layer resolves the player's cursor through (tagpu_gui_surf.c sharp_cursor), its
+   colour key transparent; premultiplied RGBA, one HUD_SPRITE_CELL cell a frame.
+
+   SAFE BY CONSTRUCTION: the sequences lie in the asset arena, which is immutable once published
+   and never freed, its every pointer written by the loader to a place inside it and its every
+   count bounded against the file it came from; and each frame is bounded again here, its size by
+   the cell and its count by the sheet, before a texel is written. The decode, the sheet and its
+   generation are this thread's alone, as is the HUD pass that uploads it. A shape whose frames do
+   not fit, or did not resolve, keeps n = 0 and draws its kit icon. */
+static unsigned char  s_sprite[HUD_SPRITE_CELLS * HUD_SPRITE_CELL * HUD_SPRITE_CELL * 4];  /* 256 KB */
+static unsigned char  s_dec[HUD_SPRITE_CELL * HUD_SPRITE_CELL];
+static unsigned       s_spriteGen;      /* bumped at every rebuild; 0: no sheet                  */
+static unsigned       s_spritePal;      /* the palette serial it was decoded through             */
+static const WIKI3D*  s_spriteOf;       /* the load it was decoded from                          */
+static WIKISTAGESEQ   s_seq[3];
+static WIKISTAGESPR   s_spr[HUD_SPRITE_CELLS];
+
+/* sequence `sq`'s frames into the sheet from cell `*cell`: 1 with `out` filled, 0 when one does not
+   fit or does not decode (the cells it wrote are left to the next shape, which overwrites them) */
+static int sprite_seq(const unsigned char* sq, const unsigned char* pal, int* cell, WIKISTAGESEQ* out)
+{
+    const int n = *(const uint16_t*)(sq + TAGPU_SQ_N);
+    int k, x, y;
+    if (n < 1 || n > HUD_SPRITE_CELLS - *cell) return 0;
+    for (k = 0; k < n; k++) {
+        const unsigned char* fr = *(const unsigned char* const*)(sq + TAGPU_SQ_TAB + 8 * k);
+        const uint16_t dur = *(const uint16_t*)(sq + TAGPU_SQ_TAB + 8 * k + 4);
+        TAGPU_GAFGEOM g;
+        WIKISTAGESPR* s = &s_spr[*cell + k];
+        if (!tagpu_gaf_frame_geom(fr, &g) || g.subn || g.w < 1 || g.h < 1 || g.w > HUD_SPRITE_CELL ||
+            g.h > HUD_SPRITE_CELL || !tagpu_gaf_decode(fr, g.w, g.h, s_dec))
+            return 0;
+        for (y = 0; y < HUD_SPRITE_CELL; y++)
+            for (x = 0; x < HUD_SPRITE_CELL; x++) {
+                unsigned char* t = s_sprite + ((size_t)y * HUD_SPRITE_CELLS * HUD_SPRITE_CELL + (size_t)(*cell + k) * HUD_SPRITE_CELL + x) * 4;
+                const int i = x < g.w && y < g.h ? s_dec[y * g.w + x] : g.ck;
+                if (i == g.ck) { t[0] = t[1] = t[2] = t[3] = 0; continue; }
+                t[0] = pal[i * 4];
+                t[1] = pal[i * 4 + 1];
+                t[2] = pal[i * 4 + 2];
+                t[3] = 255;
+            }
+        s->w = (int16_t)g.w;
+        s->h = (int16_t)g.h;
+        s->hx = (int16_t)g.hotx;
+        s->hy = (int16_t)g.hoty;
+        s->dur = dur;
+    }
+    out->n = (uint8_t)n;
+    out->first = (uint8_t)*cell;
+    out->loop = sq[2];
+    *cell += n;
+    return 1;
+}
+
+/* the sheet for this frame: decoded once the load is published, again when the presented palette
+   moves; the stage's art takes its table and the cursor's scale every frame */
+static void sprites_bind(void)
+{
+    const WIKI3D* w3 = tagpu_wiki3d_get();
+    const unsigned char* pal = tagpu_pal_live();
+    const unsigned serial = tagpu_pal_serial();
+    if (w3 && pal && (w3 != s_spriteOf || serial != s_spritePal)) {
+        int k, j, cell = 0;
+        memset(s_seq, 0, sizeof s_seq);
+        memset(s_spr, 0, sizeof s_spr);
+        for (k = 0; k < 3; k++) {
+            for (j = 0; j < k && w3->cursor[j] != w3->cursor[k]; j++) {}
+            if (j < k) s_seq[k] = s_seq[j];
+            else if (w3->cursor[k] && !sprite_seq((const unsigned char*)w3->cursor[k], pal, &cell, &s_seq[k]))
+                tagpu_logf("wiki: the game's cursor for shape %d does not fit the sprite sheet - its kit icon is drawn", k);
+        }
+        s_spriteOf = w3;
+        s_spritePal = serial;
+        if (++s_spriteGen == 0) s_spriteGen = 1;
+    }
+    memcpy(s_sart.seq, s_seq, sizeof s_sart.seq);
+    memcpy(s_sart.spr, s_spr, sizeof s_sart.spr);
+    s_sart.spr_scale = tagpu_gui_cursor_scale();
+}
+
+const unsigned char* tagpu_wikistate_sprites(unsigned* gen)
+{
+    *gen = s_spriteGen;
+    return s_sprite;
 }
 
 /* THE RECORD'S STAGE IS DATA until bounded: every count held to its array, every string ended
@@ -202,6 +297,7 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
     if (w->open && s_fr.stage.w > 0 && s_fr.stage.h > 0) {
         memcpy(msg, w->msg, sizeof msg);
         msg[sizeof msg - 1] = 0;
+        sprites_bind();
         tagpu_wikistage_build(sv, msg[0] ? msg : NULL, s_fr.stage, u, &s_sart, &s_stage);
         s_haveStage = 1;
         s_viewOk = sv && sv->w > 0 && sv->h > 0;

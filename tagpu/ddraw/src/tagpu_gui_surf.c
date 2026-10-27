@@ -2513,6 +2513,11 @@ static void poll(void)
     }
 }
 
+float tagpu_gui_cursor_scale(void)
+{
+    return s_cursorScale;
+}
+
 void tagpu_gui_present(const TAGPU_FRAME* f)
 {
     static unsigned last = 0;

@@ -14,7 +14,10 @@ page's controls and the demos playing on the stage.
     wiki_regression.py <instance> units --launch --shots DIR
                                                       the stage's units in 3D, against the mockup,
                                                       and a reclaim in the game
-    wiki_regression.py <name> mp                      a two-player network game on Wine, started by
+    wiki_regression.py <instance> cursor --launch --shots DIR
+                                                      the stage's cursor, the game's own sprite,
+                                                      against the mockup and the player's cursor
+    wiki_regression.py <name> mp                     a two-player network game on Wine, started by
                                                       tools/compat/tacompat.py's launcher
     wiki_regression.py all|<setup>[,<setup>...] mods --shots DIR
                                                       the 3D stage under each setup of the
@@ -142,6 +145,17 @@ units, on the same launch as sp (the plan's landing 6h):
        the scenario's ARMSOLAR, the solar's build fraction remaining (+0x104) and HP (+0x108) read
        until it is gone, and the presented frame grabbed mid-reclaim -- the engine's own staging
        of a reclaimed unit, which the stage's records follow.
+cursor, on the same launch as sp (needs tools/wiki/gfx.py's pack, whose cursors.json and sheet are
+the game's frames as the mockup draws them):
+  (c1) Quick Build 1 at tick 100 (build placement: cursornormal) and Quick Build 3 at ticks 160 and
+       180 (the ARMCK selected: cursormove, its frames 4 and 6) held through tagpu_wiki.shot; the
+       presented frame and the mockup's at the same state each searched for every cursor frame,
+       texel for texel within 3 a channel: the frame the engine's animation shows at that tick is
+       found once, at the same pixel in both; DIR gets each pair cropped side by side, 8x;
+  (c2) the pointer moved into the window and the frame grabbed: the player's own cursor and the
+       stage's found in the one picture against the same frames, both at the game's scale, and
+       cropped side by side (`<res>-cursor-real.pair.png`);
+  (c3) Esc closes the window.
 mods, per setup of tools/compat/setups.json (`all`: retail, Escalation, Total Mayhem, ProTA, TA Zero,
 Twilight), under the run lock (the plan's landing 6i):
   (w1) the setup's folder built by tacompat's prepare_wine with this tree's DLL, started on a private
@@ -1102,6 +1116,120 @@ def stage3d(c, shots, res):
     wait_dump(c, lambda d: not d["open"], "(s5) Esc did not close the window")
 
 
+# (entry, demo, tick, frame): the mockup's sim puts quickbuild's demo 1 in build placement from tick 20 (the
+# game's cursornormal, one frame), and demo 3's ARMCK selected from tick 0 (cursormove, 8 frames of 8 ticks
+# looping: frame 4, the largest, at tick 160, frame 6 -- frame 2 again -- at 180). No demo has nothing selected, the arrow, which
+# shows cursornormal too.
+CURSOR_SHOTS = (("quickbuild", 1, 100, "build frame 0"), ("quickbuild", 3, 160, "move frame 4"),
+                ("quickbuild", 3, 180, "move frame 2/6"))
+
+
+def sprite_frames():
+    """The game's cursor frames as tools/wiki/gfx.py decoded them: [(name, frame, rgba array h x w x 4)]."""
+    import numpy as np
+    gfx = TREE / "tools/wiki/mockup/gfx"
+    j = json.loads((gfx / "cursors.json").read_text())
+    sheet = np.frombuffer((gfx / "cursors.rgba").read_bytes(), np.uint8).reshape(j["sheet"][1], j["sheet"][0], 4)
+    import numpy as np
+    out = []
+    for shape in ("build", "move"):
+        s = j["seq"][shape]
+        mine = []
+        for k in range(s["n"]):
+            f = j["frames"][s["first"] + k]
+            px = sheet[:f["h"], f["sx"]:f["sx"] + f["w"]]
+            # cursormove's frames 5..7 repeat 3..1 texel for texel: one name for each picture
+            same = next((m for m in mine if m[2].shape == px.shape and np.array_equal(m[2], px)), None)
+            if same:
+                same[0].append(k)
+            else:
+                mine.append(([k], f, px))
+        out += [(f"{shape} frame {'/'.join(map(str, ks))}", f, px) for ks, f, px in mine]
+    return out
+
+
+def find_sprite(img, rgba, tol=3):
+    """Every top-left where the frame's opaque texels all appear in `img` (RGB) within `tol` a channel."""
+    import numpy as np
+    ys, xs = np.nonzero(rgba[..., 3])
+    col = rgba[ys, xs, :3].astype(int)
+    a = img.astype(int)
+    H, W = a.shape[:2]
+    h, w = rgba.shape[:2]
+    first = np.all(np.abs(a - col[0]) <= tol, axis=2)
+    hits = []
+    for y, x in zip(*np.nonzero(first)):
+        y0, x0 = y - ys[0], x - xs[0]
+        if y0 < 0 or x0 < 0 or y0 + h > H or x0 + w > W:
+            continue
+        if np.all(np.abs(a[y0 + ys, x0 + xs] - col) <= tol):
+            hits.append((int(x0), int(y0)))
+    return hits
+
+
+def cursor(c, shots, res):
+    """(c1)..(c3): the stage's cursor is the game's own sprite, against the mockup and the real cursor."""
+    import numpy as np
+    from PIL import Image
+    assert shots, "cursor needs --shots DIR"
+    shots.mkdir(parents=True, exist_ok=True)
+    frames = sprite_frames()
+    held_at(c, HELD_AT)
+    start = c.mark()
+    d = c.open_wiki(expect_pause=True)
+    wait_line(c, start, r"wiki3d: loaded in", "(c1) the 3D asset load", 120)
+    for entry, demo, tick, shape in CURSOR_SHOTS:
+        start = c.mark()
+        (c.gamedir / "tagpu_wiki.shot").write_text(f"{entry} {demo} {tick}\n")
+        wait_line(c, start, r"wiki: shot \d+ asked", f"(c1) {entry} {demo} {tick}")
+        time.sleep(1.0)
+        base = shots / f"{res}-cursor-{entry}-d{demo}-t{tick}"
+        grab(c, base.with_suffix(".game.png"))
+        mockup_shot({"res": [int(v) for v in res.split("x")], "entry": entry, "demo_n": demo - 1, "tick": tick},
+                    base.with_suffix(".mockup.png"))
+        # (c1) the frame the engine's animation shows at that tick, found pixel for pixel in both, at one place
+        got = {}
+        for side in ("game", "mockup"):
+            img = np.asarray(Image.open(base.with_suffix(f".{side}.png")).convert("RGB"))
+            got[side] = [(name, at) for name, f, rgba in frames for at in find_sprite(img, rgba)]
+        both = [g for g in got["game"] if g in got["mockup"]]
+        assert len(both) == 1 and both[0][0] == shape, \
+            f"(c1) {entry} {demo} {tick}: not the {shape} once - game {got['game']}, mockup {got['mockup']}"
+        print(f"wiki cursor: (c1) {entry} {demo} t{tick}: {shape} at {both[0][1]} in the game and the mockup, "
+              f"pixel for pixel")
+        name, at = both[0]
+        f = next(f for n, f, _r in frames if n == name)
+        crop = (at[0] - 8, at[1] - 8, at[0] + f["w"] + 8, at[1] + f["h"] + 8)
+        pair = Image.new("RGB", (2 * (crop[2] - crop[0]) + 4, crop[3] - crop[1]), (255, 0, 255))
+        pair.paste(Image.open(base.with_suffix(".game.png")).convert("RGB").crop(crop), (0, 0))
+        pair.paste(Image.open(base.with_suffix(".mockup.png")).convert("RGB").crop(crop), (crop[2] - crop[0] + 4, 0))
+        pair.resize((pair.width * 8, pair.height * 8), Image.NEAREST).save(base.with_suffix(".pair.png"))
+
+    # (c2) the player's own cursor in the picture beside the stage's, both at the game's scale: the
+    # pointer moved into the window, the frame grabbed once, each found against the same sprites
+    vx, vy, vw, vh = d["viewport"]
+    c.keys(f"dmove:{vx + vw // 2},{vy + vh // 2}")
+    time.sleep(1.0)
+    base = shots / f"{res}-cursor-real"
+    grab(c, base.with_suffix(".game.png"))
+    img = np.asarray(Image.open(base.with_suffix(".game.png")).convert("RGB"))
+    hits = [(name, at, f) for name, f, rgba in frames for at in find_sprite(img, rgba)]
+    print(f"wiki cursor: (c2) the frame holds {len(hits)} of the game's cursor frames: "
+          + ", ".join(f"{n} at {a}" for n, a, _f in hits))
+    assert len(hits) >= 2, f"(c2) the player's cursor and the stage's were not both found: {hits}"
+    tiles = []
+    for name, at, f in hits[:4]:
+        tiles.append(Image.fromarray(img).crop((at[0] - 4, at[1] - 4, at[0] + f["w"] + 4, at[1] + f["h"] + 4)))
+    side = Image.new("RGB", (sum(t.width + 4 for t in tiles), max(t.height for t in tiles)), (255, 0, 255))
+    x = 0
+    for t in tiles:
+        side.paste(t, (x, 0))
+        x += t.width + 4
+    side.resize((side.width * 8, side.height * 8), Image.NEAREST).save(base.with_suffix(".pair.png"))
+    c.keys("esc")
+    wait_dump(c, lambda d: not d["open"], "(c3) Esc did not close the window")
+
+
 def sim_facing(entry, demo, tick, kind):
     """The facing and the step of the first `kind` moving at `tick` in the mockup's simulation."""
     js = ("const S = require(process.argv[1]); const fs = require('fs');"
@@ -1583,7 +1711,7 @@ def mods(names, shots):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("instance")
-    p.add_argument("mode", choices=("sp", "page", "demos", "try", "recorded", "asset", "stage3d", "units", "mp", "mods"))
+    p.add_argument("mode", choices=("sp", "page", "demos", "try", "recorded", "asset", "stage3d", "units", "cursor", "mp", "mods"))
     p.add_argument("--launch", action="store_true",
                    help="sp/recorded: launch on place-basic.json first, under the run lock")
     p.add_argument("--res", default="1920x1080", help="sp/recorded: the game's resolution")
@@ -1619,6 +1747,8 @@ def main():
                     stage3d(c, a.shots, a.res)
                 elif a.mode == "units":
                     units(c, a.shots, a.res)
+                elif a.mode == "cursor":
+                    cursor(c, a.shots, a.res)
                 else:
                     recorded(c)
             finally:
