@@ -19973,12 +19973,17 @@ launch a mode:
 - **The Classic++ restorer still sees the hidden strip.** Its neighbourhood keys (`nb_build`)
   are built over the whole tile map, so the ring of the area's last column and row is read from
   the hidden column's and rows' texels, which the mirror no longer draws beside them.
-- **The lab draws none of Assault on Suburbia's own trees**, at any eye tried, under either fold —
-  a lab gap, not the game's, and open.
-- **The lab's black edge is not the game's.** The lab clamps the feature sweep to the area and
-  has no fragment-stage cut (its sprites carry no per-pixel world point), so under a black edge a
-  tree anchored in the hidden strip but drawn above the line is drawn in the game and not in the
-  lab, and an on-map tree's overhang past the line is cut in the game and not in the lab.
+- **The lab and the wiki mockup set the cut's uniforms.** Both run this pass's fragment stage,
+  extracted from `tagpu_feat.c`, through `tascene-render.js`'s `classicSprites`, whose `use()`
+  requires `uMapPx` and takes `uClip` as the pass publishes them: the lab the area × 32 and
+  `clip` = the mirror, the mockup the stage's tile map × 32 and 0 (the stage's cells are even, so
+  that is its target's own size and the cut discards no sample inside it). Left unset, `uMapPx`
+  reads (0, 0) and the black-edge cut discards every sample of the map's own features.
+- **The lab's black edge is not the game's.** The lab clamps the feature sweep to the area, and
+  its own sprites carry the anchor's drawn point as their world point, not each pixel's, so the
+  fragment-stage cut keeps or drops a whole sprite: under a black edge a tree anchored in the
+  hidden strip but drawn above the line is drawn in the game and not in the lab, and an on-map
+  tree's overhang past the line is cut in the game and not in the lab.
 - **Under a black edge the cut holds while the engine draws the ground.** The feature pass cuts
   the map's own features at the area whenever the mirror is off, including frames whose terrain
   the engine draws (the terrain pass handed back: its watchdog, `passive`). At zoom below 1 the
