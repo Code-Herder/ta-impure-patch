@@ -1641,7 +1641,9 @@ pad calls DISASSEMBLED 2026-10-13):
   `0x43E060` at `0x40280B`.
 - **`QueryNanoPiece`** (`0x5052D4`), whose one call is `0x43E427` inside `0x43E400(unit, out)`,
   with the piece local set to 0 (`0x43E41F`) and the other three arguments 0 (*The nano spray*,
-  above); `0x43E400` has fifteen callers, all order handlers, each passing the spray's source: the
+  above); `0x43E400` has fifteen callers, all order handlers (`0x40252E` … `0x405855`), which run
+  after the unit's `DoScriptsNow`, so the query lands after the unit's own script slice of its
+  tick (MEASURED 2026-10-27 in the builder, advbuilder and reclaim cobtrace fixtures, every query); each passing the spray's source: the
   handler's unit (the order's `+0xE`, or the register holding it), except SelfRepair `0x402430`,
   which passes the repairing pad, the order's target `+0x16` (`mov eax,[edi+0x16]` at `0x402525`,
   the call at `0x40252E`), in the aircraft's turn; the pad can be another player's.
@@ -18192,7 +18194,8 @@ destructor path (`call [vt+0x50]` at `0x486D8A`).
 **Every slot the VM reaches, read** [DISASSEMBLED 2026-10-27, `0x480C30..0x4814B0`, for
 `tagpu_cobvm.c`]. Each opens with the posed model `o3 = [cob+0x540]`; a piece's
 `PrimitiveStruct` is `o3 + 0x22 + piece × 0x36` (`lea eax,[eax+eax*2]; lea eax,[eax+eax*8];
-shl eax,1` = `piece × 0x36`), its flags word at `+0x28` (bit 0 visible, bit 1 cached, bit 2
+shl eax,1` = `piece × 0x36`; in `vt+0x14` the base is `lea eax,[ecx+edx*2+0x22]` at `0x480C40`), its
+flags word at `+0x28` (bit 0 visible, bit 1 cached, bit 2
 shaded) and a word at `+0x26` that every pose change clears `[role unknown]`.
 
 | Slot | Handler | Reached by | What it does |
@@ -18201,9 +18204,9 @@ shaded) and a word at `+0x26` that every pose change clears `[role unknown]`.
 | `vt+0x04` | `0x480CE0` `(piece, axis, value)` | TURN_NOW, the stepper | the same for the angle word `+0x10 + axis × 2`, compared and written as 16 bits |
 | `vt+0x08` | `0x480D50` `(piece, on)` | SHOW (1), HIDE (0) | when bit 0 differs: sets it to `on`, clears `+0x26`, and for a cached piece zeroes `o3+0x04`; `o3+0x08` is **not** set |
 | `vt+0x0C` | `0x480DB0` `(piece, on)` | CACHE (1), DONT_CACHE (0) | bit 1 = `on & 1`, always written; `o3+0x10 = 0` (`0x480DE3`) |
-| `vt+0x10` | `0x480DF0` `(piece, on)` | SHADE (1), DONT_SHADE (0) | bit 2 = `on & 1`, always written; `o3+0x10 = 0` (`0x480E24`) |
+| `vt+0x10` | `0x480DF0` `(piece, on)` | SHADE (1), DONT_SHADE (0) | bit 2 = `on & 1`, always written; `o3+0x10 = 0` (`0x480E24`); `ret 8` at `0x480E2B`, the last of the setters |
 | `vt+0x14` / `vt+0x18` | `0x480C30` / `0x480CB0` `(piece, axis)` | MOVE, TURN | read the position / the angle (zero-extended) |
-| `vt+0x1C` / `+0x20` / `+0x24` | `0x480E30` / `0x480E50` / `0x480E70` `(piece)` | — | read bit 0 / 1 / 2 |
+| `vt+0x1C` / `+0x20` / `+0x24` | `0x480E30` / `0x480E50` / `0x480E70` `(piece)` | — | read bit 0 / 1 / 2 (the last ends `shr eax,2; and eax,1` at `0x480E87`) |
 | `vt+0x28` | `0x480E90` | `0x10009000` (two pops and an inline piece) | **a bare `ret 0xC`**: the opcode only pops |
 | `vt+0x2C` | `0x480EA0` | `0x1000A000` (an inline piece) | **a bare `ret 4`** |
 | `vt+0x48` | `0x481430` `(id)` | `0x10044000` (one pop, the answer pushed) | walks the unit's list from `unit+0x8A` through each entry's `+0x8E` and returns 1 when an entry's `+0xA8` id equals `id`, else 0 [INFERRED: the transport's cargo] |
@@ -18361,7 +18364,8 @@ The tail: `0x4B1BD5` pc++, `0x4B1BD9` writes pc back, `0x4B1BDC` loops while the
 (`0x4B08D7..0x4B08ED`). The guarded opcode validates its script index first,
 so a refused VM CALL is the latter. `0x4B192F` skips argument copying on refusal:
 the parent's stack and SP stay intact. `0x4B1965..0x4B197F` writes child `-1`,
-advances PC by three, sets status `0x02800000` and stops this thread's execution.
+advances PC by three (`mov [esi+0x4],eax` at `0x4B1974`), sets status `0x02800000` and stops
+this thread's execution.
 
 The status dispatch `0x4B0DBF..0x4B0E49` leaves a CALL wait dormant. RETURN's
 wake loop `0x4B19F4..0x4B1A23` visits exactly eight records and compares each
@@ -18436,7 +18440,8 @@ travelling. Per axis, in this order:
 3. **Turn**: with the *post-acceleration* speed, `remaining = (target − cur + 0x10000) & 0xFFFF`
    for a positive speed and `(cur − target + 0x10000) & 0xFFFF` for a negative one; the axis
    arrives when `remaining <= |dt × speed|`, snapping to the target and zeroing the speed
-   (`0x4B1D78`, `0x4B1DB1`). A target of `-1` (a spin) never arrives. The angle goes through
+   (`0x4B1D78`, `0x4B1DB1`); for a negative speed the bound is `neg ecx` at `0x4B1DAB`, which
+   wraps (so `tagpu_cobvm.c` negates with a wrapping subtract, never `-step`). A target of `-1` (a spin) never arrives. The angle goes through
    `vt+0x04` masked to 16 bits.
 
 So **the wait opcodes release on the tick *after* the stepper zeroes the speed**: the runner
