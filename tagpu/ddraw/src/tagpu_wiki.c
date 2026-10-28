@@ -882,7 +882,8 @@ static void bar_drag(int cy)
 /* THE FILL STEPS THE DEMO ON THIS THREAD and copies its view by value into the record, so the
    render thread gets values and never a WIKISIM. The copy keeps every bound of
    tagpu_wikistage_copy (the map at 128 cells a side, 256 vents, 128 units, the gesture's sites,
-   256 queued, 512 lines, the caption and the labels) and says once what it had to cut. */
+   256 queued, 512 lines, the caption and the labels) and of tagpu_wikistage_pose (the units' poses,
+   4096 primitives), and says once what it had to cut. */
 static void page_fill(TAGPU_PK_WIKI* w)
 {
     const WIKIDATA* d = data();
@@ -923,10 +924,11 @@ static void page_fill(TAGPU_PK_WIKI* w)
         /* the entry the simulation plays, bound to its casting: the type names the stage labels
            are the casting's (tagpu_wikisim.h); copied by value, as the view is */
         t = tagpu_wikistage_copy(&w->stage, v, s_sim.entry, s_laySrc) & ~WIKISTAGE_TRUNC_CAPTION;
-        t |= tagpu_wikistage_pose(&w->stage, &s_sim);
         /* THE CAPTION IS SHOWN FILLED (tagpu_wikitext.h); the view keeps it raw, as the hash does */
         if (tagpu_wikitext_fill(v->caption, &s_words, w->stage.caption, sizeof w->stage.caption))
             t |= WIKISTAGE_TRUNC_CAPTION;
+        /* after the last read of `v`: a call on the simulation ends the view's lifetime */
+        t |= tagpu_wikistage_pose(&w->stage, &s_sim);
         w->stage.tick = s_sim.tick;
         w->has_stage = 1;
         if (t & ~s_trunc) {

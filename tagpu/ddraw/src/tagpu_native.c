@@ -849,7 +849,6 @@ static void pose_rest_block_init(void)
     filled = 1;
 }
 
-
 /* ---- THE SELECTION RECT (`DrawUnitSelectBoxRect 0x46A530`, ui-markers.md §1) ----
    Drawn by tagpu_vk_mark.c out of tagpu_mark.c's bucket. The geometry below
    was measured against the engine's own box (ui-markers.md §1, "what it took
@@ -993,7 +992,7 @@ static int selbox_emit(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* pu,
    came out at 2e-5 model units over every piece of a walking Peewee:
 
      - turn[0] rotates about X, turn[1] about Y, turn[2] about Z, each the
-       positive-angle rot2 above at 65536 = 360 degrees. NOT the index order
+       positive-angle rot2 (tagpu_posemath.h) at 65536 = 360 degrees. NOT the index order
        of the triple 0x4B6CC0 itself takes, whose FIRST word turns (x,y);
      - the ORDER is Z, then X, then Y -- read out of the engine, not guessed:
        UNITS_PieceOffset 0x43DEF0 composes through 0x4B6CC0, which rotates the
@@ -1008,9 +1007,8 @@ static int selbox_emit(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* pu,
        the cobtrace fixtures' posed vertices from these rules and diffs them
        against P_VBUF, and its residual equals this pass's own err= per dump.
 
-   research/notes/model-import.md carries the derivation and the numbers. */
-
-
+   research/notes/model-import.md carries the derivation and the numbers;
+   tagpu_posemath.h holds the arithmetic, shared with the wiki's stage. */
 
 
 /* ---- the level generation, and the caches keyed on a template -----------

@@ -355,9 +355,10 @@ the engine's:
   against. Anything else draws the rest pose. `pose_compose` then builds `posed_pose`'s tree,
   P = parent · T(rest offset from the parent + MOVE) · R(TURN), each entry of `posed_of` bounded by
   the run's count; at the root the stage's facing matrix stands for the body turn, about the root's
-  rest point, with the root's MOVE outside it, so a script that poses nothing draws exactly the
-  rest pose. A node the posed order does not hold, or whose parent never resolves, keeps the rest
-  pose turned onto the facing. The words are `posed_pose`'s: hidden (flag bit 0 clear) an all-zero
+  rest point, with the root's MOVE outside it, so a script that poses nothing draws the rest pose
+  to float rounding (the product chain and the rest path's single product can differ in the last
+  bits). A node the posed order does not hold, or whose parent never resolves, keeps the rest pose
+  turned onto the facing and the rest path's visibility. The words are `posed_pose`'s: hidden (flag bit 0 clear) an all-zero
   matrix and visibility 0, visible and cached 3, visible and dont-cache 1 (no slant), and a piece
   shaded by bit 2 once any visible piece carries it.
 - **One arithmetic.** `rot2` (the engine's pair rotator `0x4B7173` without its rounding),
@@ -420,7 +421,8 @@ fixtures — no file the sidebar's landing touches.
 - `posecheck.py`: on the stock pack's 9 types (ARMCK, ARMDRAG, ARMLLT, ARMSOLAR, ARMACK, ARMGEO,
   ARMMEX, ARMMOHO, ARMPW), 6 random poses each (a MOVE of up to 8 units and any TURN on every piece,
   a random facing), every body vertex of `pose.js` within 0.000076 model units of tacob's
-  `_compose` (the tolerance is 1/1024); the start pose composes to the rest pose exactly, and a
+  `_compose` (the tolerance is 1/1024); the start pose composes to the rest pose within 1/65536
+  (`pose.js`, measured), and a
   hidden piece leaves the body and the wire, an uncached one the slant.
 - `gfx.py`'s rest arrays byte for byte what the packs held before every piece was carried, on the
   stock pack and the six mod packs.

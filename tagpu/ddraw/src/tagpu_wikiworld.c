@@ -342,6 +342,10 @@ typedef struct {
 static const WIKI3D* s_tA;
 static int           s_tEntry = -1;
 static unsigned      s_tLever = ~0u;
+/* the view's type names the records were built for: the casting's (tagpu_wikisim.h), which a fill
+   on another side or Interface Type changes under the same entry */
+static int           s_tNtype = -1;
+static char          s_tNames[WIKI_MAX_DEFS][WIKISTAGE_LABEL];
 static WSCENETYPE    s_types[WIKI_MAX_DEFS];
 static TYPERUN       s_run[WIKI_MAX_DEFS];
 static uint32_t      s_resolved[(WIKI_MAX_DEFS + 31) / 32];
@@ -411,6 +415,8 @@ static void types_build(const WIKI3D* a, const WIKISTAGEVIEW* v, int entry, cons
     s_tA = a;
     s_tEntry = entry;
     s_tLever = s_leverSerial;
+    s_tNtype = v->ntype < WIKI_MAX_DEFS ? v->ntype : WIKI_MAX_DEFS;
+    memcpy(s_tNames, v->type, sizeof s_tNames);
 }
 
 /* the engine's option word as the last packet carried it: bit 2 Shadow, bit 3 TShadow (the
@@ -472,7 +478,10 @@ static void pose_compose(const WIKI3DUNIT* u, const TAGPU_PBGEOM* bg, const WIKI
         }
     for (i = 0; i < bg->nparts; i++) {
         const int j = u->posed_of[i];
-        const unsigned fl = j >= 0 && j < npose ? pose[j].flags : 7u;
+        /* a node the posed order does not hold keeps the rest path's visibility too */
+        const unsigned rest_fl = u->hides > 0 && (u->hidden[i >> 5] >> (i & 31) & 1u) ? 0u
+                               : u->uncaches > 0 && (u->uncached[i >> 5] >> (i & 31) & 1u) ? 5u : 7u;
+        const unsigned fl = j >= 0 && j < npose ? pose[j].flags : rest_fl;
         float* o = out + (size_t)i * 12;
         if (!done[i]) {
             float rel[3];
@@ -700,7 +709,10 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     s_ground = st && st == s_stage && s_groundOk;
 
     /* THE MODEL RECORDS, of the types the arena resolved for this entry */
-    if (a != s_tA || entry != s_tEntry || s_leverSerial != s_tLever) types_build(a, v, entry, art->data->entry[entry].id);
+    if (a != s_tA || entry != s_tEntry || s_leverSerial != s_tLever ||
+        s_tNtype != (v->ntype < WIKI_MAX_DEFS ? v->ntype : WIKI_MAX_DEFS) ||
+        memcmp(s_tNames, v->type, sizeof s_tNames))
+        types_build(a, v, entry, art->data->entry[entry].id);
     nrec = tagpu_wikiscene_models(v, s_types, v->ntype < WIKI_MAX_DEFS ? v->ntype : WIKI_MAX_DEFS,
                                   s_rec, &nunit);
     if (!s_ground && !nrec) return;

@@ -1480,12 +1480,10 @@ const WikiSim = (() => {
     // the host's handle on a unit by id, for the stage's pose and a check; 0 for none
     sim.cobUnit = id => { const u = byId(id); return u && u.cob || 0; };
     /* THE UNITS' POSES, index-aligned with view().units: each unit's posed model as its script leaves it (cob.js
-       `model`), null for a unit that runs no script; all null without a host. What the stage draws, as
-       tagpu_wikistage.c `tagpu_wikistage_pose` copies it for the game's; not the view, so neither the state hash
-       nor the view the C sim is compared on carries it. */
-    /* the posed models the game's stage view carries (tagpu_wikistage.c tagpu_wikistage_pose): its first
-       WIKISTAGE_UNITS units in unit order, into a pool of WIKISTAGE_POSE primitives, a model of more than
-       WIKISTAGE_PIECES or past what the pool has left drawn at rest -- so here */
+       `model`), null for a unit drawn at rest -- one that runs no script, all without a host, and as the game's
+       stage view carries them (tagpu_wikistage.c `tagpu_wikistage_pose`) any past its first WIKISTAGE_UNITS units,
+       a model of more than WIKISTAGE_PIECES, or one past what the pool of WIKISTAGE_POSE primitives has left in
+       unit order. Not the view, so neither the state hash nor the view the C sim is compared on carries it. */
     sim.poses = () => {
       let left = STAGE_POSE;
       return units.map((u, i) => {
