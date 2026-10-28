@@ -1761,7 +1761,9 @@ COUNT_OFFSET = 28 + COB_THREADS * RECORD_BYTES         # TAGPU_COB_COUNT_OFFSET
 PRIM_BASE, PRIM_BYTES = 0x22, 0x36    # the posed model's PrimitiveStructs
 PRIM_POS, PRIM_TURN, PRIM_FLAGS = 0x04, 0x10, 0x28
 VISIBLE, CACHED, SHADED = 1, 2, 4
-COB_SOURCES = ("src/tagpu_cobvm.c", "src/tagpu_cob_safe.c", "inc/tagpu_cobvm.h", "inc/tagpu_cob_safe.h")
+# the core, and the in-game wiki's host on it, which tools/wiki/serve.py loads from the same library
+COB_SOURCES = ("src/tagpu_cobvm.c", "src/tagpu_cob_safe.c", "src/tagpu_wikicob.c", "inc/tagpu_cobvm.h",
+               "inc/tagpu_cob_safe.h", "src/tagpu_wikicob.h")
 
 
 class _Record(_C.Structure):

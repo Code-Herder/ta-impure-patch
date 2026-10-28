@@ -1,7 +1,8 @@
 # Our own COB VM, and the in-game wiki's units animated by it, planned
 
-**Written** 2026-10-27. **L1 is built** (the core, tacob on it, the shared rules; see *The
-landings*); L2 to L5 are not. The wiki's specification is still
+**Written** 2026-10-27. **L1 and L2 are built** (the core, tacob on it, the shared rules, the
+wiki's units recorded and replayed; see *The landings*); L3, cut into L3a to L3c on 2026-10-28,
+is in progress, and L4 and L5 are not started. The wiki's specification is still
 [the in-game wiki](ingame-wiki.html) and its mockup, which stays the 1:1 spec of the DLL wiki. The
 engine facts below carry their address and are the engine map's
 ([*The COB engine — mapped by us*](exe-reverse-engineering.html)); a fact this plan needs and the map
@@ -199,15 +200,63 @@ values its script `set`, the ground height. `rand` draws from a generator the WI
 The per-unit COB state is part of the simulation's state hash, so `simparity.mjs` checks the events
 both simulations send to the core as well as everything else.
 
-**The mockup** keeps `sim.js` as the specification. It cannot load C, so a small server
-(`tools/wiki/serve.py`, replacing `http.server` for the mockup) loads the core through ctypes and
-answers, once a tick, every unit's calls and host answers with its poses and effect log; `sim.js`
-steps in lockstep with it. `simparity.mjs` runs against the same server.
+**One host, in C, for both simulations.** Everything the host decides about a script -- which
+program a type runs, the four blocks of each unit, what `get` answers, what a `SET` changes, the
+generator `rand` draws from, a refusal and its quarantine, the state hash of it all -- is one
+engine-free file, `tagpu_wikicob.{c,h}`. The DLL's `tagpu_wikisim.c` calls it in-process; the
+mockup's `sim.js` calls the same file through the mockup's server; `wikitest.c` links it for the
+parity check. What the two simulations still each implement is only *when* they call it: the
+actions of decision 8, made at the same points of the same tick, which `simparity.mjs` compares
+through the state hash (the host's hash is part of it). So the host cannot drift between the DLL
+and the mockup any more than the core can.
+
+**The tick.** The engine's unit turn is its script slice and then its orders and movement
+(`0x48ADEB` before `0x48AFAA`, the engine map's unit tick); the wiki's tick keeps that order for all
+its units at once, in creation order:
+
+1. the inputs of the tick (as today);
+2. **the slice**: `DoScriptsNow(1)` for every unit with a script, each `SET` committed into that
+   unit's values as its opcode runs;
+3. **the units' work** (`advance`), which reads the committed values -- a builder credits work only
+   once its INBUILDSTANCE is set -- and makes the engine's calls where the engine makes them, each
+   at once: a run-now start runs every record with `dt = 0` inside the call, a run-later one waits
+   for the next slice.
+
+A unit's `get`s are answered from its **facts**, which the simulation hands the host with every
+call that can run script code (the slice, a run-now start): every unit's id, owner, position,
+build fraction still to go (as the float the engine's `+0x104` holds, so `tagpu_cob_build_left`
+encodes it) and health. Both simulations build the facts from the same doubles with the same
+truncations, so the host sees the same words from either.
+
+**The mockup's transport.** `sim.js` stays synchronous: its context takes a host object
+(`ctx.cob`) whose calls return their answers. In the page the host is a synchronous request to the
+mockup's server, `tools/wiki/serve.py` (the repository served as `tools/hudart/serve.py` serves it,
+plus `POST /cob`), which loads the host and the core through ctypes, built by tacob's native
+builder. Under node (`simcheck.mjs`, `simparity.mjs`) the host is `tools/wiki/cobhost.mjs`: a
+worker thread that talks to `serve.py --stdio` while the caller waits on an `Atomics.wait`, so the
+checks call it synchronously as the page does. Without a host (`ctx.cob` absent, `WIKISIMCTX.cob`
+NULL) every type is quarantined (below): the rule cases that test no script play exactly as before.
+
+**Where the scripts come from.** The DLL takes each type's script from the wiki's asset load,
+which already resolves `scripts\<UnitName>.COB` by the engine's rules (`tagpu_wikiasset.c`). The
+mockup's packs carry the same bytes: `gfx.py` writes each unit's script and its model's piece
+facts beside its mesh (gitignored, like everything derived from the game), and `serve.py` and
+`wikitest.c` read them from the pack. A type's model gives the host its piece count (the
+`Object3do`'s primitives, `0x45AE80`) and each primitive's initial flags (`0x45AF1B`: visible only
+with three or more vertices), in the posed model's order -- the COB's piece order, after
+`0x45A950`'s swaps (`tagpu_cobscan.c`).
+
+**The quarantine** (decision 9): a type whose script the program validator refuses, or one whose
+unit's VM faults, is quarantined for the simulation's life -- every unit of it drops its VM, stands
+in the pose `Create()`'s hides give today, reads every gate as open (INBUILDSTANCE, ACTIVATION,
+YARD_OPEN set), and the host names the type, the script, the pc and the reason once. A
+quarantine is part of the state hash, so both simulations must quarantine alike.
 
 **Drawing.** The stage already draws units through the game's posed program with a pose array per
 piece (`tagpu_wikiworld.c`, 12 floats a piece, with per-piece visibility and shade); the PrimitiveStructs
-the core writes are composed into it the way `tagpu_native.c` `posed_pose` composes the engine's.
-The mockup does the same in `tools/tascene-render.js`.
+the core writes are composed into it the way `tagpu_native.c` `posed_pose` composes the engine's,
+over the posed model's node order (above) rather than the readers' walk the rest pose uses today.
+The mockup does the same in `gfx.js` with the poses the server answers.
 
 ## The landings
 
@@ -215,7 +264,9 @@ The mockup does the same in `tools/tascene-render.js`.
 |---|---|---|
 | **L1** — built 2026-10-27 | `tagpu_cobvm.{c,h}`: the core on the layout above, the host interface, the effect log, the observer; the shared extension functions factored out of `tagpu_patches.c`; tacob on the core through ctypes, **its Python VM deleted**, `tacob-build.py` cross-compiling it; the reentrancy check | the nine fixtures byte-exact through tacob on the core; `test_tacob.py`; native tests of the core under UBSan and ASan; the layout's static asserts; the DLL builds |
 | **L2** — built 2026-10-27 | live cobtrace + posedump fixtures for the wiki's units doing the wiki's actions — ARMCK and ARMACK walking, starting, assisting and stopping a build, reclaiming; ARMMEX and ARMMOHO built, activated, spinning at a set metal value; ARMGEO activating; ARMPW walking — and one exercising the extensions (records 9 and 10, the getters) | each fixture byte-exact through the core |
-| **L3** | the wiki host: the calls, the gating, `until` waits and the 11 demos converted, the quarantine, the corpus gate, poses drawn in the C stage and the mockup, the mockup's server | `simparity.mjs`, `simcheck.mjs`, `wiki_regression.py`, the corpus gate over every compatibility setup, a look at every demo in game and in the mockup |
+| **L3a** | the host (`tagpu_wikicob`), the calls and the gating in both simulations, the facts, the quarantine, `until` waits and the 11 demos converted, the mockup's server and node host, the scripts in the packs | `simparity.mjs`, `simcheck.mjs` (every demo's claim with the scripts running), `wiki_regression.py` |
+| **L3b** | poses drawn: the posed model's order, the core's PrimitiveStructs composed in the C stage and in the mockup | a look at every demo in game and in the mockup; the stage's checks |
+| **L3c** | the corpus gate: every compatibility setup's scripts through the host, a refusal named | the gate itself, clean over every setup |
 | **L4** | the nano spray and `emit-sfx`: the engine's emitters ported, the wiki generator, drawn through the stage's instance of the particle draw | the spray's look against a game capture of the same build |
 | **L5** | sound: the mixer, the triggers, the cooldowns, WebAudio in the mockup | a demo heard in game and in the mockup; the player's settings honoured; an MP game's own sounds unchanged with the wiki open |
 

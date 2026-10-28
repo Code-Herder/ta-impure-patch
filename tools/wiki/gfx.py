@@ -544,6 +544,24 @@ def resolve_unit(eng, name, report):
     return obj.lower(), root, hidden, uncached, facts
 
 
+def posed_order(root, cob):
+    """The posed model's primitives as the engine lays them out for a script (exe-reverse-engineering.md, *The
+    posed model the opcodes write into*): pre-order over the tree (0x45AEC0), then for each COB piece i below the
+    primitive count the first primitive from index i up whose name equals piece i's without case swaps into place
+    (0x45A950). [(walk index, visible)] in that order, visible when the node has three or more vertices
+    (0x45AF1B). ta3do reads no sibling of the root, which no stock model has [INFERRED for mods]."""
+    nodes = [p for p, _ in root.walk()]
+    order = list(range(len(nodes)))
+    got = ta3do._cob_read(cob)
+    pieces = got[2] if got else []
+    for i, want in enumerate(pieces[:len(order)]):
+        for j in range(i, len(order)):
+            if nodes[order[j]].name.lower() == want:
+                order[i], order[j] = order[j], order[i]
+                break
+    return [(k, len(nodes[k].vertices) >= 3) for k in order]
+
+
 def bind(eng, tex, owner, binds):
     """The binder's rule for one face's texture name (0x42A140): (frame key, GafFrame) or None for flat 0xD1."""
     k = (tex.lower(), owner)
@@ -726,6 +744,13 @@ def write_units(out, eng, entry, report, types):
         rec["normalsFile"] = f"units/{key}.normals.bin"
         rec["slantFile"], rec["slantVerts"] = f"units/{key}.slant.bin", len(p["slant"]) // 3
         rec["wireFile"], rec["wireVerts"] = f"units/{key}.wire.bin", len(p["wire"]) // 3
+        # the script and its posed order, for the COB host the mockup's server runs (tools/wiki/serve.py)
+        shit = eng.open(eng.dirs["scripts"], name, "COB")
+        if shit:
+            (out / f"units/{key}.cob").write_bytes(shit[0])
+            posed = posed_order(root, shit[0])
+            rec["script"] = {"file": f"units/{key}.cob", "order": [k for k, _ in posed],
+                             "visible": [int(v) for _, v in posed]}
         meshes[name] = rec
     return {"atlas": {"w": aw, "h": ah, "file": "units/atlas.r8.bin", "rgba": None, "pad": tascene.UNIT_PAD,
                       "frames": frame_rects},
