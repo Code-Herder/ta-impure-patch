@@ -142,7 +142,7 @@
    triangles instead, with the draw offsets computed at render. */
 /* Sized for tagpu_order.c's MAXORD records at the design point; an overflow
    loses markers and is counted, never written past the end. */
-#define MAXORDT      36000                   /* order triangle verts (dots)  */
+#define MAXORDA      36000                   /* order art verts (6 a frame)  */
 #define MAXORDL      18000                   /* order lines, one record each */
 /* Text quads: the ShowRanges labels (up to twelve per SELECTED unit with the
    toggle on) and one group digit per watched unit, in ONE bucket — 2 400 quads,
@@ -256,7 +256,7 @@ int tagpu_mark_armed(unsigned frame_counter)
 static float  s_verts[BARBASE * MVST];  /* the cursor rects                   */
 static float  s_place[MAXPLACEV * MVST]; /* the placement's sites' rects      */
 static float* s_barv;  static unsigned s_barvCap;  /* bars, in vertices       */
-static float  s_ordt[MAXORDT * MVST];   /* order markers: filled triangles    */
+static float  s_orda[MAXORDA * MVST];   /* order markers: art quads           */
 static float  s_ordl[MAXORDL * MVST];   /* order markers: line records        */
 static float  s_ordx[MAXORDX * MVST];   /* text quads: labels, then digits    */
 static float* s_sel;   static unsigned s_selCap;   /* selection rects, lines  */
@@ -269,7 +269,7 @@ static int   s_ncurs;                  /* build cursor / band box verts       */
 static int   s_nplace;                 /* placement site verts, this frame    */
 static int   s_cPlace;                 /* placement sites drawn, this frame   */
 static int   s_cPlaceRed, s_cPlaceTake; /* of them red, and yellow (tagpu_place.h) */
-static int   s_nordt, s_nordl;         /* order tri verts / lines, this frame */
+static int   s_norda, s_nordl;         /* order art verts / lines, this frame */
 static int   s_nordx;                  /* text verts, this frame              */
 /* Where the ShowRanges labels end and the group digits begin. The engine draws
    the labels from inside the order driver at `0x469BFC` and the digit at
@@ -335,6 +335,7 @@ static const char* FS =
        darkens the build cursor. */
     TAGPU_GLSL_FOG_DISCARD
     "  int pi;\n"
+    "  float a = 1.0;\n"
     /* Text is a COVERAGE mask, not a palette image: tagpu_text.c rasterises TA's
        glyphs with (fg,bg,transparent) = (255,0,0), so the texel says only whether
        the glyph covers this fragment and the colour comes from the vertex — which
@@ -344,18 +345,21 @@ static const char* FS =
     "    if (texture(uLayer, vUV).r < 0.5) discard;\n"
     "    pi = int(vCol * 255.0 + 0.5);\n"
     /* a negative u marks the flat path: the vertex carries a palette index
-       instead of a texel (health bars, order dots) */
+       instead of a texel (health bars) */
     "  } else if (vUV.x < 0.0) {\n"
     "    pi = int(vCol * 255.0 + 0.5);\n"
     "  } else {\n"
     "    pi = int(texture(uLayer, vUV).r * 255.0 + 0.5);\n"
     "    if (pi == uKey) discard;\n"
+    /* the order art: a palette-index atlas whose vertices carry the opacity
+       in the colour slot, the one draw this pass blends */
+    "    a = vCol;\n"
     "  }\n"
     /* THE GREY BAND: the RGB rule every world pass takes (renderers.md 2.6).
        LFS below carries the same lines. */
     "  vec3 rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
     TAGPU_GLSL_FOG_GREY_RGB("rgb")
-    "  frag = vec4(rgb, 1.0);\n"
+    "  frag = vec4(rgb, a);\n"
     "}\n";
 /* ---- THE LINE PROGRAM: one rule for every line ----
    Every line this pass draws -- the order lines, the range arcs, the waypoint
@@ -495,18 +499,6 @@ int tagpu_mark_emit_line(float x0, float y0, float x1, float y1,
     return 1;
 }
 
-int tagpu_mark_emit_tri(float x0, float y0, float x1, float y1,
-                        float x2, float y2, int colidx, float wx, float wz)
-{
-    float c = (float)colidx / 255.0f;
-    if (s_nordt + 3 > MAXORDT) return 0;
-    put_ord(s_ordt, s_nordt + 0, x0, y0, wx, wz, c);
-    put_ord(s_ordt, s_nordt + 1, x1, y1, wx, wz, c);
-    put_ord(s_ordt, s_nordt + 2, x2, y2, wx, wz, c);
-    s_nordt += 3;
-    return 1;
-}
-
 /* THE SELECTION RECT, emitted by the native pass's unit loop, which is the one
    place that knows both the unit's depth key and the engine's projection of its
    bounds -- the same division of labour as the order markers, whose geometry
@@ -622,6 +614,35 @@ int tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
     put_at(s_ordx, i + 5, x,  y1, u0, v1, wx, wz, c);
     s_nordx += QUADV;
     s_ntext++;
+    return 1;
+}
+
+/* One frame of the order art, its hotspot at (x, y). CONSTANT SCREEN SIZE, as
+   the text is: the frame is `w` game pixels after the zoom whatever the zoom,
+   so one texel is one screen pixel and at 1x the frame is the engine's blit.
+   Its corner goes on the device grid by pre-image (`snap_device`), for the
+   text's reason: a bitmap half a pixel off resolves every texel across two
+   device pixels. The colour slot carries the opacity (FS's art path). */
+int tagpu_mark_emit_art(float x, float y, const struct TAGPU_ORDART_FRAME* f,
+                        float alpha, float wx, float wz)
+{
+    float x0, y0, x1, y1, u0, v0, u1, v1;
+    int i = s_norda;
+    if (s_norda + QUADV > MAXORDA) return 0;
+    x0 = x - (float)((double)f->hx * s_px);
+    y0 = y - (float)((double)f->hy * s_px);
+    snap_device(&x0, &y0);
+    x1 = x0 + (float)((double)f->w * s_px);
+    y1 = y0 + (float)((double)f->h * s_px);
+    u0 = (float)f->x / (float)TAGPU_ORDART_W;          v0 = (float)f->y / (float)TAGPU_ORDART_H;
+    u1 = (float)(f->x + f->w) / (float)TAGPU_ORDART_W; v1 = (float)(f->y + f->h) / (float)TAGPU_ORDART_H;
+    put_at(s_orda, i + 0, x0, y0, u0, v0, wx, wz, alpha);
+    put_at(s_orda, i + 1, x1, y0, u1, v0, wx, wz, alpha);
+    put_at(s_orda, i + 2, x0, y1, u0, v1, wx, wz, alpha);
+    put_at(s_orda, i + 3, x1, y0, u1, v0, wx, wz, alpha);
+    put_at(s_orda, i + 4, x1, y1, u1, v1, wx, wz, alpha);
+    put_at(s_orda, i + 5, x0, y1, u0, v1, wx, wz, alpha);
+    s_norda += QUADV;
     return 1;
 }
 
@@ -941,7 +962,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     unsigned ui;
     int watched, nv = 0;
 
-    s_nbar = 0; s_cBar = 0; s_nordt = 0; s_nordl = 0; s_nordx = 0;
+    s_nbar = 0; s_cBar = 0; s_norda = 0; s_nordl = 0; s_nordx = 0;
     s_nsel = 0; s_selover = 0; s_lfar = 0;
     s_nordxOrd = 0; s_ntext = 0; s_xover = 0;
     s_novt = 0; s_novl = 0; s_novlRing = 0;
@@ -1179,6 +1200,7 @@ static void mk_draw(int first, int count, int lines, int text, int fog, int tex,
     s_mkD[s_mkDn].lines = lines; s_mkD[s_mkDn].text = text;
     s_mkD[s_mkDn].fog = fog;     s_mkD[s_mkDn].tex = tex;
     s_mkD[s_mkDn].depth = depth;
+    s_mkD[s_mkDn].blend = tex == TAGPU_MK_TEX_ART;
     s_mkDn++;
 }
 
@@ -1225,7 +1247,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     }
 
     if (s_nbar == 0 && s_ncurs == 0 && s_nplace == 0 && s_nsel == 0 &&
-        s_nordt == 0 && s_nordl == 0 && s_nordx == 0 && s_novt == 0 && s_novl == 0) return;
+        s_norda == 0 && s_nordl == 0 && s_nordx == 0 && s_novt == 0 && s_novl == 0) return;
 
     /* ---- the A/B's lever ---- */
     {
@@ -1240,7 +1262,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     }
 
     total = BARBASE + s_nbar;
-    textBase = total + s_nordt + s_nordl;
+    textBase = total + s_norda + s_nordl;
 
     /* ONE CONCATENATION, PUSHED ONCE, so every `first` below indexes the block
        tagpu_vk_mark.c receives. Pushed here rather than per draw because the
@@ -1248,7 +1270,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
        and the geometry drift apart. The record IS the vertex block. */
     mk_push(s_verts, BARBASE);
     if (s_nbar) mk_push(s_barv, s_nbar);
-    if (s_nordt) mk_push(s_ordt, s_nordt);
+    if (s_norda) mk_push(s_orda, s_norda);
     if (s_nordl) mk_push(s_ordl, s_nordl);
     if (s_nordx) mk_push(s_ordx, s_nordx);
     selBase = textBase + s_nordx;
@@ -1276,14 +1298,16 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
        (`0x469CB9`), then the group digit over those (`0x469CF9`), and the build
        cursor last of all — after the fog overlay, which is why it carries no
        fog. */
-    if (s_nordt || s_nordl) {
-        /* the lines are LVS's instances, `ss` target pixels wide -- the rule
-           the effects lines and the nanoframe wire follow too (tagpu_line.h) */
-        if (s_nordt) {
-            mk_draw(total, s_nordt, 0, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE, 0);
+    if (s_norda || s_nordl) {
+        /* the art first: the engine blits a record's sprite and dots (bits 1
+           and 3) before its target circle (bit 2). The lines are LVS's
+           instances, `ss` target pixels wide -- the rule the effects lines and
+           the nanoframe wire follow too (tagpu_line.h) */
+        if (s_norda) {
+            mk_draw(total, s_norda, 0, 0, v->fogMode & 1, TAGPU_MK_TEX_ART, 0);
         }
         if (s_nordl) {
-            mk_draw(total + s_nordt, s_nordl, 1, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE, 0);
+            mk_draw(total + s_norda, s_nordl, 1, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE, 0);
         }
     }
     if (s_nordx) {
@@ -1343,6 +1367,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
         s_mkPub.draws = s_mkD; s_mkPub.ndraw = s_mkDn;
         s_mkPub.text = tagpu_text_atlas(&s_mkPub.textGen);
         tagpu_text_dims(&s_mkPub.textW, &s_mkPub.textH);
+        s_mkPub.art = tagpu_order_art(&s_mkPub.artKey);
+        s_mkPub.artW = TAGPU_ORDART_W; s_mkPub.artH = TAGPU_ORDART_H;
         /* the three tagpu_vk_mark.c binds as textures, as bytes -- same shapes
            tagpu_fx.h uses for the same three */
         s_mkPub.pal = tagpu_pal_engine(); s_mkPub.palSerial = tagpu_pal_engine_serial();
@@ -1370,11 +1396,11 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
             last = v->frame_counter;
             tagpu_text_stats(&nstr, &ndrop);
             _snprintf(b, sizeof b,
-                "mark: bars=%d sel=%d selover=%d cursor=%d place=%d placered=%d placetake=%d ordtri=%d "
+                "mark: bars=%d sel=%d selover=%d cursor=%d place=%d placered=%d placetake=%d ordart=%d "
                 "ordline=%d far=%d text=%d(lab=%d) "
                 "atlas=%d/%d over=%d key=%d vp=(%d,%d %dx%d) "
                 "zoom=%.2f%s",
-                s_cBar, s_nsel / 4, s_selover, s_ncurs / QUADV, s_cPlace, s_cPlaceRed, s_cPlaceTake, s_nordt / 3,
+                s_cBar, s_nsel / 4, s_selover, s_ncurs / QUADV, s_cPlace, s_cPlaceRed, s_cPlaceTake, s_norda / QUADV,
                 s_nordl, s_lfar,
                 s_ntext, s_nordxOrd / QUADV, nstr, ndrop, s_xover,
                 tagpu_markown_key(), v->vpL, v->vpT, v->vw, v->vh, v->zoom,

@@ -125,11 +125,17 @@
    - Circles are real arcs at a segment count chosen for the zoom, not sixteen
      chords, and a line is the engine's walk on the ZOOMED frame's pixel grid
      (tagpu_line.h) rather than a 1x line magnified.
-   - Route dots and the waypoint sprite are drawn procedurally — a round dot
-     and a pulsing crosshair — in the ink read out of the GAF frame the engine
-     would have blitted. That is what keeps them crisp at 4x and legible at
-     0.25x, and it is why the 64 KB identity-blend-LUT machinery in
-     tagpu_markown.c has no order-marker work left to do.
+   - Route dots and the waypoint sprite are the engine's own frames, out of an
+     atlas the game thread decodes once (`art_build`), drawn one texel a
+     SCREEN pixel at every zoom: the engine's picture at 1x, never a magnified
+     sprite. The sprite is blended at ART_SPRITE_ALPHA rather than through
+     the engine's ALP table, a 50/50 palette-pair mix. The route line is laid
+     out for a zoom the engine never had (`draw_dots`): the dots stay on the
+     map, their spacing follows the zoom by whole doublings of the engine's
+     48 world units, and the dots a change of spacing adds or drops fade in or
+     out over LOD_FADE_MS, so a zoom moves no dot and leaves none part-visible.
+     The march is the engine's 48 world units per 30 ticks at 1x and keeps
+     that SCREEN speed at every zoom.
    - Unit-anchored positions ride tagpu_native_unit_pos(), the sub-pixel
      interpolated sample: a crisp circle centred on a walking unit would
      otherwise step once per sim tick against a body that slides.
@@ -244,18 +250,27 @@
 #define GUI_YELLOW    0x0E
 #define GUI_WHITE     0x0F
 
-#define DOT_STEP      0x300000       /* 48.0 world units between route dots   */
-/* Screen-constant marker weights, set against the art they replace: the
-   engine's `pathicon` dot reads about five pixels across at 1x and its
-   `cursor_ary` waypoint star about eleven, so a 2.4-px-radius disc and a
-   crosshair whose arms breathe out to 9 px carry the same weight without ever
-   being a magnified sprite. */
-#define DOT_R         2.4f
-#define CROSS_R0      4.0            /* arm length, first frame .. last       */
-#define CROSS_R1      5.0
-#define CROSS_G0      1.5            /* and the gap at the centre             */
-#define CROSS_G1      2.0
 #define GROW_TICKS    10
+#define ART_PATHICON  21             /* cursor_ary[21] = main+0x148D3         */
+#define ART_SEQS      22             /* cursor_ary[0..21]                     */
+#define ART_MAXFR     64             /* frames kept a sequence                */
+#define ART_FRMAX     64             /* largest frame edge kept               */
+/* the waypoint sprite's opacity: more solid than the engine's, so a waypoint
+   reads at a glance over busy ground. The engine blits it through
+   PALETTE.ALP, a 50/50 mix of art and ground (MEASURED under GDI,
+   exe-reverse-engineering.md under 0x512344); the route dots are opaque in
+   the engine and here. */
+#define ART_SPRITE_ALPHA 0.70f
+#define DOT_SPACE     48.0           /* world units between route dots at 1x  */
+#define MARCH_TICK    1.6            /* 48 world units per 30 ticks           */
+/* the route line's spacing levels: level j puts the dots 48 * 2^j world
+   units apart. LOD_SPAN levels either side of the zoom's are kept (8 is 256x);
+   the level changes only once the zoom is LOD_HYST of a level past it, so a
+   zoom resting on a boundary does not flicker; a dot fades fully in or out in
+   LOD_FADE_MS. */
+#define LOD_SPAN      8
+#define LOD_HYST      0.65
+#define LOD_FADE_MS   300.0
 #define CIRCLE_SQUASH 0.89           /* the double at 0x4FD2C0                */
 
 /* caps: an overflow is counted and logged, never silently dropped and never
@@ -380,9 +395,9 @@ int tagpu_order_armed(unsigned frame_counter)
    thread inside the marker block, so it resolves all of it there: a unit
    becomes its ARRAY SLOT (the present thread finds the matching PK_UNIT in the
    frame packet, or draws the snapshotted 16.16 if it is gone), and every def
-   and weapon field the drawing needs becomes a number in the record. A GAF
-   sequence pointer still crosses, as a session asset tagpu_gaf.c resolves —
-   the cursor table is loaded once and never rewritten. */
+   and weapon field the drawing needs becomes a number in the record. The
+   cursor art crosses as an INDEX into tagpu_order_art's frame table, which
+   this thread decoded. */
 typedef struct ORDREC {
     int sx, sy, sz;          /* chain-in position (16.16)                     */
     int bx, by, bz;          /* node+0x22.. — the build site / ground target  */
@@ -393,7 +408,6 @@ typedef struct ORDREC {
     int startSlot;           /* the chain-in position's unit, or -1           */
     int endSlot;             /* the resolved sprite position's unit, or -1    */
     int cirSlot;             /* the target-circle centre's unit, or -1        */
-    const char* seq;         /* the cursor sprite's GAF sequence (session)    */
     int foot[5];             /* the build def's five footprint extents        */
     int wrange[3];           /* live weapon ranges (0 = no such slot)         */
     int wattack[3];          /* ...and their attackrunlength (ShowRanges)     */
@@ -435,9 +449,6 @@ typedef struct ORDARENA {
     int    gameTime;         /* snapshotted, so the arena is self-contained   */
     int    showRanges;
     int    dropped;          /* records the cap refused                       */
-    const char* pathIcon;    /* main+0x148D3, the route dots' GAF sequence:
-                                a session asset, resolved here so the present
-                                thread needs no engine pointer of its own     */
 } ORDARENA;
 
 /* Two arenas and a published index, filled the same way the capture layer is:
@@ -660,10 +671,6 @@ static void walk_unit(ORDARENA* A, const char* ta, const char* units, const char
             r->type   = type;
             r->cursor = (unsigned char)(d ? *(const unsigned char*)(d + DESC_CURSOR) : 0);
             r->flag   = (unsigned char)(flag != 0);
-            /* the cursor sprite's sequence, resolved on this thread: a session
-               asset (tagpu_gaf.c's class), so the pointer may cross */
-            if (r->cursor && r->cursor < 0x15)
-                r->seq = *(const char* const*)(ta + OFF_CURSORARY + (size_t)r->cursor * 4);
 
             /* bit 0 — the build site. Nothing at all without a build target
                type, chains pos to the node's own target when there is one.
@@ -762,6 +769,110 @@ static void walk_unit(ORDARENA* A, const char* ta, const char* units, const char
     }
 }
 
+/* ---- the order art (game thread) -------------------------------------
+   THE PRESENT THREAD DRAWS THE ENGINE'S ART AND READS NO ENGINE MEMORY FOR
+   IT. Every frame of the cursor table's sequences (`cursor_ary`,
+   main+0x1487F, `pathicon` at index 21) is decoded here, on the game thread
+   inside the marker block, into `s_art`: one palette index a texel, every
+   texel the frame does not draw (`tagpu_gaf_decode_cov`) holding `s_artKey`,
+   an index no drawn texel of any frame holds.
+
+   WRITTEN ONCE, PUBLISHED BY ORDERING. Every byte of the atlas and of the
+   frame table is stored before `s_artReady` is set through an interlocked
+   exchange (a full barrier), and nothing writes either again, so a reader
+   that sees the flag reads finished bytes whatever the timing. The cursor
+   table is filled once by its loader (`0x429C84`, exe-reverse-engineering.md
+   *cursor_ary*), so the first decode is the session's art. It runs at the
+   first snapshot that finds `pathicon`; a sequence or frame that is absent,
+   wider than ART_FRMAX or past the atlas's room is left out (its `n` stops
+   before it), logged once, and draws nothing. */
+typedef struct {
+    unsigned char      n;                 /* frames kept                      */
+    TAGPU_ORDART_FRAME f[ART_MAXFR];
+} ARTSEQ;
+static unsigned char s_art[TAGPU_ORDART_W * TAGPU_ORDART_H];
+static unsigned char s_artCov[TAGPU_ORDART_W * TAGPU_ORDART_H];   /* this thread's */
+static ARTSEQ        s_artSeq[ART_SEQS];
+static int           s_artKey;
+static volatile LONG s_artReady;
+
+static void art_build(const char* ta)
+{
+    static unsigned char pix[ART_FRMAX * ART_FRMAX], cov[ART_FRMAX * ART_FRMAX];
+    int used[256];
+    int k, i, x = 1, y = 1, rowH = 0, frames = 0, left = 0, px;
+    char b[160];
+
+    if (!ptr_ok(*(const char* const*)(ta + OFF_PATHICON))) return;
+    memset(s_art, 0, sizeof s_art);
+    memset(s_artCov, 0, sizeof s_artCov);
+    memset(s_artSeq, 0, sizeof s_artSeq);
+    memset(used, 0, sizeof used);
+    for (k = 1; k < ART_SEQS; k++) {
+        const char* seq = *(const char* const*)(ta + OFF_CURSORARY + (size_t)k * 4);
+        int nfr;
+        if (!ptr_ok(seq)) continue;
+        nfr = tagpu_gaf_seq_nframes(seq);
+        for (i = 0; i < nfr && i < ART_MAXFR; i++) {
+            const unsigned char* g = tagpu_gaf_seq_frame(seq, i);
+            TAGPU_ORDART_FRAME* f = &s_artSeq[k].f[i];
+            int w, h, r;
+            if (!g) break;
+            w = *(const unsigned short*)(g + TAGPU_GF_W);
+            h = *(const unsigned short*)(g + TAGPU_GF_H);
+            if (w <= 0 || h <= 0 || w > ART_FRMAX || h > ART_FRMAX) break;
+            if (x + w + 1 > TAGPU_ORDART_W) { x = 1; y += rowH + 1; rowH = 0; }
+            if (y + h + 1 > TAGPU_ORDART_H) break;
+            if (!tagpu_gaf_decode_cov(g, w, h, pix, cov)) break;
+            for (r = 0; r < h; r++) {
+                memcpy(s_art + (size_t)(y + r) * TAGPU_ORDART_W + x, pix + r * w, (size_t)w);
+                memcpy(s_artCov + (size_t)(y + r) * TAGPU_ORDART_W + x, cov + r * w, (size_t)w);
+            }
+            for (px = 0; px < w * h; px++) if (cov[px]) used[pix[px]] = 1;
+            f->x = (short)x; f->y = (short)y; f->w = (short)w; f->h = (short)h;
+            f->hx = *(const short*)(g + TAGPU_GF_HOTX);
+            f->hy = *(const short*)(g + TAGPU_GF_HOTY);
+            /* the frame table's second dword, its 30 Hz ticks, read as the
+               animator reads it (u16, 0x4B8B30) */
+            f->dur = *(const unsigned short*)(seq + TAGPU_SQ_TAB + (size_t)i * 8 + 4);
+            x += w + 1;
+            if (h > rowH) rowH = h;
+            frames++;
+        }
+        s_artSeq[k].n = (unsigned char)i;
+        left += nfr - i;
+    }
+    for (s_artKey = 0; s_artKey < 256 && used[s_artKey]; s_artKey++) {}
+    if (s_artKey == 256) {
+        /* every index is drawn by some frame: no key can mark "not drawn" */
+        memset(s_artSeq, 0, sizeof s_artSeq);
+        s_artKey = 0;
+        frames = 0;
+    }
+    for (px = 0; px < TAGPU_ORDART_W * TAGPU_ORDART_H; px++)
+        if (!s_artCov[px]) s_art[px] = (unsigned char)s_artKey;
+    InterlockedExchange(&s_artReady, 1);
+    _snprintf(b, sizeof b, "order: art %d frame(s) of the cursor table, %d left out, "
+              "key %d, rows to %d of %d", frames, left, s_artKey, y + rowH, TAGPU_ORDART_H);
+    flog(b);
+}
+
+const unsigned char* tagpu_order_art(int* key)
+{
+    if (InterlockedCompareExchange(&s_artReady, 0, 0) != 1) return NULL;
+    if (key) *key = s_artKey;
+    return s_art;
+}
+
+/* the frames of cursor_ary[idx] on the present thread, NULL when the art is
+   not published or the sequence kept none */
+static const ARTSEQ* art_seq(int idx)
+{
+    if (idx <= 0 || idx >= ART_SEQS) return NULL;
+    if (InterlockedCompareExchange(&s_artReady, 0, 0) != 1) return NULL;
+    return s_artSeq[idx].n ? &s_artSeq[idx] : NULL;
+}
+
 int tagpu_order_snapshot(void* ctx, void* view)
 {
     const char* ta;
@@ -776,6 +887,7 @@ int tagpu_order_snapshot(void* ctx, void* view)
     if (s_armed != 1) return 0;
     ta = *(const char* const*)TA_MAINPP;
     if (!ptr_ok(ta) || !ptr_ok(view)) return 0;
+    if (!s_artReady) art_build(ta);
 
     units = *(const char* const*)(ta + OFF_UNITS);
     if (!ptr_ok(units)) return 0;
@@ -812,7 +924,6 @@ int tagpu_order_snapshot(void* ctx, void* view)
     A->dropped = 0;
     A->gameTime  = *(const int*)(ta + OFF_GAMETIME);
     A->showRanges = *(const int*)(ta + OFF_SHOWRANGE) != 0;
-    A->pathIcon  = *(const char* const*)(ta + OFF_PATHICON);
 
     if (ptr_ok(first) && ptr_ok(last) && first <= last &&
         (size_t)(last - first) <= (size_t)UNIT_STRIDE * 20000) {
@@ -906,7 +1017,18 @@ static const TAGPU_FXVIEW* s_v;
 static const TAGPU_PACKET* s_pk;   /* this frame's packet: the units and the GUI colours */
 static ORDREC s_rec[MAXORD];     /* the present thread's private copy       */
 static const unsigned char* s_gui;
-static const char* s_pathIcon;   /* the arena's copy, a session GAF sequence  */
+/* THE ROUTE LINE'S PRESENTATION STATE, this thread's alone. `s_march` is the
+   distance the dots have marched, in world units: MARCH_TICK / zoom a game
+   tick, so they move the engine's 48 px a second at every zoom, accumulated
+   rather than computed from the clock so a zoom changes its rate and not its
+   value -- the dots stay where they are on the map. `s_lodK` is the spacing
+   level the zoom selects and `s_lodOp[j]` level (s_lodK - LOD_SPAN + j)'s
+   opacity, walked toward its target in wall-clock time (`lod_step`). */
+static double   s_march;
+static int      s_marchT, s_marchHave;
+static int      s_lodK, s_lodHave;
+static float    s_lodOp[2 * LOD_SPAN + 1];
+static LONGLONG s_lodQpc;
 static double s_px;              /* one SCREEN pixel, in game-frame units    */
 static int    s_nrec, s_nline, s_ndot, s_nover, s_nlabel;
 
@@ -1006,30 +1128,6 @@ static void oline_n(float x0, float y0, float x1, float y1, const int nudge[4],
 static void oline(float x0, float y0, float x1, float y1, int col)
 {
     oline_n(x0, y0, x1, y1, NULL, col);
-}
-
-/* A filled disc of a constant SCREEN radius — the route dot. Constant in
-   SCREEN units, not world: the thing it replaces is a fixed-size sprite, so a
-   dot that grew with the zoom would be a magnified 1997 pixel by another
-   route. The radius is set against the engine's own `pathicon` frame, which
-   reads as about five pixels across at 1x (measured off the A/B capture). */
-static void odot(float cx, float cy, float rScreen, int col)
-{
-    const int N = 10;
-    float r = (float)(rScreen * s_px);
-    float wx, wz, px, py;
-    int i;
-    if (!on_screen(cx, cy, 8.0f)) return;
-    wx = cx - (float)s_v->vpL + (float)s_v->eyeX;
-    wz = cy - (float)s_v->vpT + (float)s_v->eyeY;
-    px = cx + r; py = cy;
-    for (i = 1; i <= N; i++) {
-        double a = 6.283185307179586 * (double)i / (double)N;
-        float qx = cx + r * (float)cos(a), qy = cy + r * (float)sin(a);
-        if (!tagpu_mark_emit_tri(cx, cy, px, py, qx, qy, col, wx, wz)) { s_nover++; return; }
-        px = qx; py = qy;
-    }
-    s_ndot++;
 }
 
 /* a closed ellipse as a native-res polyline: one segment per ~4 screen pixels,
@@ -1154,67 +1252,6 @@ static void range_circle(int uslot, int fx, int fy, int fz, double rad,
     ocircle(wx, wy, wz, rad, col, label, slot);
 }
 
-/* The ink a procedurally drawn marker inherits from the art it replaces.
-
-   NOT the most common index, which draws every route dot in (11,11,0) —
-   near-black, invisible against grass. A `pathicon`
-   dot and a `cursor_ary` crosshair are both a small bright core inside a dark
-   outline, and the outline is the bigger half by area, so "most common" picks
-   exactly the colour the sprite uses to HIDE its edge. The core is what the
-   eye reads as the marker, so: among the indices that make up a real share of
-   the frame, take the BRIGHTEST, through the live palette rather than a
-   guess at what the index means. Cached on the sequence pointer — it is a
-   decode, and this is asked per dot. */
-typedef struct { const void* seq; int ink; } INKENT;
-static INKENT s_ink[16];
-static int    s_nink;
-
-static int seq_ink(const char* seq, int fallback)
-{
-    static unsigned char pix[128 * 128];
-    const unsigned char* g;
-    const unsigned char* pal;
-    int i, w, h, ck, n, floor_, best = -1, bestlum = -1;
-    int hist[256];
-
-    if (!seq || !s_v) return fallback;
-    for (i = 0; i < s_nink; i++) if (s_ink[i].seq == (const void*)seq) return s_ink[i].ink;
-    g = tagpu_gaf_seq_frame(seq, 0);
-    if (!g) return fallback;
-    w = *(const unsigned short*)(g + TAGPU_GF_W);
-    h = *(const unsigned short*)(g + TAGPU_GF_H);
-    ck = *(const unsigned char*)(g + TAGPU_GF_CK);
-    /* THE ENGINE'S OWN TABLE, deliberately — the packet's copy of main+0x143A7
-       rather than tagpu_pal.c's gamma-scaled snapshot. The question is a
-       luminance RANKING over one sprite's own colours, which a uniform scale of
-       every entry cannot change: the ink index this picks is a property of the
-       art, not of the display. (The walk runs on the RENDER thread:
-       `tagpu_order_gather` is called from `tagpu_mark_gather`, inside the unit
-       pass — only the SNAPSHOT is game-side. The table arrives in the
-       packet.) */
-    pal = s_pk ? s_pk->pal : NULL;
-    if (!pal) return fallback;
-    if (w > 0 && h > 0 && w <= 128 && h <= 128 &&
-        tagpu_gaf_decode(g, w, h, pix)) {
-        memset(hist, 0, sizeof hist);
-        n = 0;
-        for (i = 0; i < w * h; i++) { hist[pix[i]]++; if (pix[i] != ck) n++; }
-        /* a twentieth of the sprite's opaque area keeps a stray anti-aliasing
-           pixel from deciding the colour of every dot on the map */
-        floor_ = n / 20;
-        if (floor_ < 1) floor_ = 1;
-        for (i = 0; i < 256; i++) {
-            int lum;
-            if (i == ck || hist[i] < floor_) continue;
-            lum = 2 * pal[i * 4 + 0] + 5 * pal[i * 4 + 1] + pal[i * 4 + 2];
-            if (lum > bestlum) { bestlum = lum; best = i; }
-        }
-    }
-    if (best < 0) best = fallback;
-    if (s_nink < 16) { s_ink[s_nink].seq = seq; s_ink[s_nink].ink = best; s_nink++; }
-    return best;
-}
-
 /* an arithmetic shift right by one: floor(v / 2), which `sar` is and C's
    division toward zero is not for a negative v */
 static int sar1(int v) { return v >= 0 ? v / 2 : -((1 - v) / 2); }
@@ -1297,19 +1334,15 @@ static void draw_build(const ORDREC* r, int gameTime)
     oline_px(x0, zg1, x1, zg1, NULL, colB);
 }
 
-/* --- bit 3 (and bit 1's delegation): the waypoint crosshair ---
-   TA blits frame (gameTime / (2*period)) % nframes of cursor_ary[idx]; we draw
-   a crosshair whose arms breathe on that same frame index, in that sequence's
-   own ink. Opaque, deliberately: TA's "alpha" is a palette-pair lookup rather
-   than alpha, what this pass already ships is opaque, and a waypoint is
-   information — translucency costs legibility. */
+/* --- bit 3 (and bit 1's delegation): the waypoint sprite ---
+   Frame (gameTime / (2 * frame 0's ticks)) % nframes of cursor_ary[idx], the
+   engine's rule (`0x439740`), at ART_SPRITE_ALPHA. */
 static void draw_sprite(const ORDREC* r, int gameTime, int showRanges)
 {
-    const char* seq;
+    const ARTSEQ* s;
     double wx, wy, wz;
     float cx, cy;
-    int nfr, period, frame, ink;
-    double a, outer, inner;
+    int period, frame;
 
     /* the descriptor's cursor index gates the whole drawer, ShowRanges limb
        included — `0x4397F9` returns before `0x439811` ever reads the toggle */
@@ -1351,42 +1384,55 @@ static void draw_sprite(const ORDREC* r, int gameTime, int showRanges)
 
     /* the sprite itself, and only now: the engine reaches its own sequence
        lookup at `0x439952`, after the limb above */
-    seq = r->seq;
-    if (!ptr_ok(seq)) return;
-    nfr = *(const unsigned short*)seq;
-    period = *(const unsigned short*)(seq + 0x2C);
-    if (nfr <= 0) return;
-    if (period <= 0) period = 1;
-    frame = (int)(((unsigned)gameTime / (unsigned)(2 * period)) % (unsigned)nfr);
-    if (!on_screen(cx, cy, 32.0f)) return;
-
-    ink = seq_ink(seq, s_gui[GUI_WHITE]);
-    /* The crosshair is a SCREEN icon, like the cursor sprite it replaces, so
-       it carries no isometric squash and no zoom scale — only the arms
-       breathe, on the sequence's own frame index. */
-    a = nfr > 1 ? (double)frame / (double)(nfr - 1) : 0.0;
-    outer = (CROSS_R0 + CROSS_R1 * a) * s_px;
-    inner = (CROSS_G0 + CROSS_G1 * a) * s_px;
-    oline(cx - (float)outer, cy, cx - (float)inner, cy, ink);
-    oline(cx + (float)inner, cy, cx + (float)outer, cy, ink);
-    oline(cx, cy - (float)outer, cx, cy - (float)inner, ink);
-    oline(cx, cy + (float)inner, cx, cy + (float)outer, ink);
+    s = art_seq(r->cursor);
+    if (!s) return;
+    period = s->f[0].dur ? s->f[0].dur : 1;
+    frame = (int)(((unsigned)gameTime / (unsigned)(2 * period)) % (unsigned)s->n);
+    if (!on_screen(cx, cy, (float)(ART_FRMAX * s_px))) return;
+    if (!tagpu_mark_emit_art(cx, cy, &s->f[frame], ART_SPRITE_ALPHA,
+                             cx - (float)s_v->vpL + (float)s_v->eyeX,
+                             cy - (float)s_v->vpT + (float)s_v->eyeY))
+        s_nover++;
 }
 
-/* --- bit 1: the marching route dots --- */
+/* --- bit 1: the marching route dots ---
+   The engine's line is a `pathicon` frame every 48 world units from the
+   leg's start, marching 48 per 30 ticks. Here the dots stand on one lattice
+   of the map for every zoom: at level j they are 48 * 2^j world units apart,
+   and every other dot of level j is a dot of level j + 1. A dot belongs to the
+   coarsest level it is on -- the trailing zero bits of its index on the finest
+   level drawn -- and is drawn at that level's opacity (`lod_op`): full at the
+   zoom's level and coarser, nothing finer, fading between when the level
+   changes. The lattice is `s_march` from the leg's start, so a zoom moves no
+   dot on the map. At zoom 1 the level is 0: the engine's spacing and speed.
+   The frame steps once a dot from (age / frame 0's ticks) % nframes, the
+   engine's rule. */
+static float lod_op(int lvl)
+{
+    int j = lvl - s_lodK + LOD_SPAN;
+    if (j < 0) return 0.0f;
+    if (j > 2 * LOD_SPAN) return 1.0f;
+    return s_lodOp[j];
+}
+
+static float dot_alpha(double c, double run, double step, int fine)
+{
+    double q = floor((c - run) / step + 0.5);
+    unsigned long long m = (unsigned long long)(q < 0.0 ? -q : q);
+    int j = fine;
+    if (m == 0) return lod_op(fine + LOD_SPAN);
+    while (!(m & 1u) && j < fine + LOD_SPAN) { m >>= 1; j++; }
+    return lod_op(j);
+}
+
 static void draw_dots(const ORDREC* r, int gameTime)
 {
-    const char* seq;
+    const ARTSEQ* s = art_seq(ART_PATHICON);
     double ax, ay, az, bx, by, bz;
-    double dx, dy, dz, len, cursor, phase;
-    int ink, age, n = 0;
+    double dx, dy, dz, len, c, step, run, phase;
+    int age, fi, fine, n = 0;
 
-    if (!s_dots || !r->flag) return;
-    /* only the frames' INK is wanted: what the engine steps through the
-       sequence for is the dot's animation, and a procedurally drawn round dot
-       is the same dot in every frame */
-    seq = s_pathIcon;
-    ink = ptr_ok(seq) ? seq_ink(seq, s_gui[GUI_WHITE]) : s_gui[GUI_WHITE];
+    if (!s_dots || !r->flag || !s) return;
 
     rec_pos(r->startSlot, r->sx, r->sy, r->sz, &ax, &ay, &az);
     rec_pos(r->endSlot,   r->ex, r->ey, r->ez, &bx, &by, &bz);
@@ -1394,15 +1440,82 @@ static void draw_dots(const ORDREC* r, int gameTime)
     len = sqrt(dx * dx + dy * dy + dz * dz);
     if (len < 1.0) return;                       /* the engine's 0x10000 floor */
 
-    age = gameTime - r->issue;
-    /* 48 world units of phase per 30 ticks, the engine's own signed division */
-    phase = (double)(age % 30) * 48.0 / 30.0;
+    /* the finest level still showing, so a fading level's dots are walked */
+    fine = s_lodK;
+    while (fine > s_lodK - LOD_SPAN && lod_op(fine - 1) > 0.004f) fine--;
+    step = DOT_SPACE * ldexp(1.0, fine);
+    run = s_march;
+    phase = fmod(run, step);
+    if (phase < 0.0) phase += step;
 
-    for (cursor = phase; cursor < len && n < MAXDOT; cursor += 48.0, n++) {
-        double f = cursor / len;
-        float sx, sy;
-        project(ax + dx * f, ay + dy * f, az + dz * f, &sx, &sy);
-        odot(sx, sy, DOT_R, ink);
+    age = gameTime - r->issue;
+    if (age < 0) age = 0;
+    fi = (int)(((unsigned)age / (unsigned)(s->f[0].dur ? s->f[0].dur : 1)) % (unsigned)s->n);
+    for (c = phase; c < len && n < MAXDOT; c += step, n++) {
+        float a = dot_alpha(c, run, step, fine);
+        if (a > 0.004f) {
+            double f = c / len;
+            float sx, sy;
+            project(ax + dx * f, ay + dy * f, az + dz * f, &sx, &sy);
+            if (on_screen(sx, sy, (float)(ART_FRMAX * s_px))) {
+                if (!tagpu_mark_emit_art(sx, sy, &s->f[fi], a,
+                                         sx - (float)s_v->vpL + (float)s_v->eyeX,
+                                         sy - (float)s_v->vpT + (float)s_v->eyeY))
+                    s_nover++;
+                else
+                    s_ndot++;
+            }
+        }
+        fi = (fi + 1) % s->n;
+    }
+}
+
+/* THIS FRAME'S MARCH AND SPACING LEVEL. The march adds MARCH_TICK / zoom a
+   game tick since the last frame -- a step back or of more than a second is a
+   load or a seek, and moves nothing. The level is the zoom's octave, held
+   until the zoom is LOD_HYST past it; each level's opacity walks to 1 at the
+   level and coarser and 0 finer at 1 / LOD_FADE_MS a millisecond, so at rest
+   every dot is opaque or gone. */
+static void route_step(int gameTime, double zoom)
+{
+    float old[2 * LOD_SPAN + 1];
+    LARGE_INTEGER now, hz;
+    double lv, rate;
+    int j, oldK;
+
+    if (zoom < 1.0 / 64.0) zoom = 1.0 / 64.0;
+    if (zoom > 64.0) zoom = 64.0;
+    if (s_marchHave) {
+        int dt = gameTime - s_marchT;
+        if (dt > 0 && dt <= 30) s_march += (double)dt * MARCH_TICK / zoom;
+    }
+    s_marchT = gameTime;
+    s_marchHave = 1;
+
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&hz);
+    lv = -log2(zoom);
+    if (!s_lodHave) {
+        s_lodK = (int)floor(lv + 0.5);
+        for (j = 0; j <= 2 * LOD_SPAN; j++) s_lodOp[j] = j >= LOD_SPAN ? 1.0f : 0.0f;
+        s_lodQpc = now.QuadPart;
+        s_lodHave = 1;
+        return;
+    }
+    oldK = s_lodK;
+    while (lv > s_lodK + LOD_HYST) s_lodK++;
+    while (lv < s_lodK - LOD_HYST) s_lodK--;
+    rate = hz.QuadPart > 0
+         ? (double)(now.QuadPart - s_lodQpc) * 1000.0 / (double)hz.QuadPart / LOD_FADE_MS
+         : 1.0;
+    s_lodQpc = now.QuadPart;
+    memcpy(old, s_lodOp, sizeof old);
+    for (j = 0; j <= 2 * LOD_SPAN; j++) {
+        int oj = j + s_lodK - oldK;
+        float want = j >= LOD_SPAN ? 1.0f : 0.0f;
+        float cur = (oj >= 0 && oj <= 2 * LOD_SPAN) ? old[oj] : want;
+        s_lodOp[j] = want > cur ? (float)fmin(want, cur + rate)
+                                : (float)fmax(want, cur - rate);
     }
 }
 
@@ -1563,7 +1676,6 @@ int tagpu_order_gather(const TAGPU_FXVIEW* v)
         showRanges = A->showRanges;
         if (n < 0) n = 0;
         if (n > MAXORD) n = MAXORD;
-        s_pathIcon = A->pathIcon;
         if (n) memcpy(s_rec, A->rec, (size_t)n * sizeof s_rec[0]);
         if (g_gen == gen) break;      /* nothing was published under us */
     }
@@ -1572,6 +1684,7 @@ int tagpu_order_gather(const TAGPU_FXVIEW* v)
     s_v   = v;
     s_gui = s_pk->gui_col;
     s_px  = 1.0 / (double)(v->zoom > 0.0f ? v->zoom : 1.0f);
+    route_step(gameTime, v->zoom > 0.0f ? (double)v->zoom : 1.0);
 
     for (i = 0; i < n; i++) {
         const ORDREC* r = &s_rec[i];
