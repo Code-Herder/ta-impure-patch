@@ -75,13 +75,25 @@ static unsigned char s_patch_seen[PATCH_CAP];
 static unsigned short s_patch_queue[PATCH_CAP];
 
 /* A constructor type's build menu: the types its pages arm, ascending. GAME THREAD ONLY.
-   THE TABLE'S LIFETIME: it holds type numbers, never a pointer into engine memory; one table a
-   level generation (tagpu_packet_pub_level_gen, bumped at every teardown), an entry built on
-   its first use for the watched player's side and rebuilt when that side changes; every number
-   read out of it is bounded against the live def count before it addresses a def. */
+   THE TABLE'S KEY is the def table it was read against: its base main+0x1439B and its count
+   main+0x1438F, as values that are compared and never dereferenced, and the level generation
+   (tagpu_packet_pub_level_gen). DISASSEMBLED: the level teardown 0x42DB90 frees the def array
+   (0x42DCCB) and zeroes its pointer (0x42DCE6), and the menu-time loader 0x42A8D0 allocates a
+   new one before the next level (0x42AA8A..0x42AA98). So every level has a new allocation, which
+   the base or the count shows with no teardown observer installed, unless the heap hands back
+   the freed block's address for the same count; the generation, which moves only while a
+   teardown observer is installed, covers that case. With no observer and that reuse, the table
+   outlives its level; its
+   content is then still the new level's [INFERRED: the archives are mounted once a process, so
+   every level reads the same defs, download files and GUI pages]. An entry is built on its
+   first use for the watched player's side and rebuilt when that side changes.
+   THE TABLE'S LIFETIME: it holds type numbers only, and every number read out of it is bounded
+   against the live def count before it addresses a def, so even a table kept past its level
+   costs a wrong candidate, never a read outside the defs. */
 typedef struct { unsigned short* types; unsigned short n; unsigned char side, built; } Menu;
 static Menu* s_menu;
 static unsigned s_menuN, s_menuGen;
+static uintptr_t s_menuDefs;
 
 static int world(World* w)
 {
@@ -363,21 +375,23 @@ static void menu_read(const World* w, unsigned id, unsigned char side, Menu* m)
                (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)hz.QuadPart);
 }
 
-/* The menu of def `id` (a builder) for the watched side, built on its first use in this level
-   generation. GAME THREAD ONLY (the ordering above). The pointer is good until the next call. */
+/* The menu of def `id` (a builder) for the watched side, built on its first use against this
+   def table (the key above). GAME THREAD ONLY (the ordering above). The pointer is good until
+   the next call. */
 static const Menu* build_menu(const World* w, unsigned id)
 {
     unsigned gen = tagpu_packet_pub_level_gen(), i;
     unsigned char side;
     Menu* m;
     if (!id || id >= w->ndefs) return NULL;
-    if (!s_menu || gen != s_menuGen || w->ndefs > s_menuN) {
+    if (!s_menu || gen != s_menuGen || (uintptr_t)w->defs != s_menuDefs || w->ndefs != s_menuN) {
         for (i = 0; s_menu && i < s_menuN; i++) free(s_menu[i].types);
         free(s_menu);
         s_menuN = 0;
         if (!(s_menu = (Menu*)calloc(w->ndefs, sizeof *s_menu))) return NULL;
         s_menuN = w->ndefs;
         s_menuGen = gen;
+        s_menuDefs = (uintptr_t)w->defs;
     }
     side = watched_side(w);
     m = &s_menu[id];

@@ -729,8 +729,7 @@ def refusals(c):
     assert c.orders("RSNGCK") == before, "Guard refusal changed the helper's queue"
     # The candidate source. RSNGCK shows ARMCK's pages (ARMMEX among them) and its CANBUILD holds
     # only RSNMOHO, so a Quick Build from CANBUILD orders RSNMOHO and one from the menu ARMMEX.
-    # RSNGCK stands off screen at the deposit's eye, and `select` moves the eye to the unit it
-    # selects, so the eye is set after the selection.
+    # The eye is set last, on the deposit, so the click below lands at the mex case's screen point.
     c.select("RSNGCK")
     c.eye(1000, 950)
     c.resource_click(588, 377)                    # the mex case's deposit, centre x 1432
