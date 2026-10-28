@@ -38,6 +38,7 @@ static TAGPU_CMD_WIKI s_map;
 static int      s_mapCut;
 /* the 3D stage: what tagpu_wikistate_scene answers, and the stage's ops split for its image */
 static int      s_viewOk;               /* this frame's stage draws the record's view           */
+static int      s_viewSide;             /* and that view's sidebar rows, 0 without one          */
 static int      s_entry, s_demo;
 static uint32_t s_shot;
 static HUDRECT  s_stageRect;
@@ -214,22 +215,27 @@ static const WIKILAYOUT* side_resolve(const WIKISTAGEVIEW* v, const WIKIART* art
 }
 
 /* THE COMPOSED COLUMN (tagpu_wikiside.h), the texels of HUD_TEX_SIDE the stage's HOP_SIDE op draws:
-   composed every frame from the frame's view, and its RGBA remade, with a new generation, only
-   when the indices, the coverage, the rows or the art differ from the last frame's (FNV-1a 32 over
-   them), which tagpu_vk_hud.c sends whole when the generation moves. This thread's alone. */
-static WIKISIDECOL    s_col;                                      /* 256 KB               */
+   composed every frame from the frame's view into the one of two buffers that does not hold the
+   column drawn last, and compared with that one byte for byte -- its rows, its indices and its
+   coverage -- so the RGBA is remade, with a new generation that tagpu_vk_hud.c sends whole, exactly
+   when a texel can differ, never on a hash's say-so: a frame never shows another frame's column as
+   its own. The comparison is two memcmp over at most 2 x 128 x 1024 bytes on columns that agree:
+   MEASURED 2026-10-27 at 5.9 us for a 480-row column and 12.9 us for 1024 rows, i686 -O2 -msse2
+   under Wine on the reference setup (1.5 and 3.2 us native x86-64). This thread's alone. */
+static WIKISIDECOL    s_col[2];                                   /* 256 KB each          */
+static int            s_colCur;         /* s_col[s_colCur] is the column s_colRgba holds        */
 static unsigned char  s_colRgba[HUD_SIDE_W * HUD_SIDE_H * 4];     /* 512 KB               */
-static uint32_t       s_colHash;
 static const WIKISIDE* s_colOf;
 static unsigned       s_colGen;         /* bumped at every new column; 0: none yet            */
 
 typedef char side_texture_fits[HUD_SIDE_W == WIKI_SIDE_W && HUD_SIDE_H == WIKI_SIDE_ROWS ? 1 : -1];
 
-static uint32_t fnv(uint32_t h, const unsigned char* p, size_t n)
+/* 1 when columns `a` and `b` give the same texels: the same rows, and the same indices and
+   coverage in them (the texels below the rows are transparent in both) */
+static int col_same(const WIKISIDECOL* a, const WIKISIDECOL* b)
 {
-    size_t i;
-    for (i = 0; i < n; i++) h = (h ^ p[i]) * 16777619u;
-    return h;
+    const size_t n = (size_t)WIKI_SIDE_W * (size_t)a->h;
+    return a->h == b->h && !memcmp(a->idx, b->idx, n) && !memcmp(a->a, b->a, n);
 }
 
 /* this frame's column for view `v` on the mod's art, into s_sart: 1 when the stage draws it as
@@ -238,7 +244,7 @@ static int side_bind(const WIKISTAGEVIEW* v, const WIKIART* art, const WIKISIDE*
 {
     const WIKI3D* w3 = tagpu_wiki3d_get();
     const WIKI3DSTAGE* st = NULL;
-    uint32_t h;
+    WIKISIDECOL* c = &s_col[s_colCur ^ 1];
     int i;
     s_sart.side = NULL;
     s_sart.side_minimap = 0;
@@ -247,20 +253,17 @@ static int side_bind(const WIKISTAGEVIEW* v, const WIKIART* art, const WIKISIDE*
     if (w3 && art->data && s_entry >= 0 && s_entry < art->data->nentry)
         for (i = 0; i < w3->nstage; i++)
             if (!strcmp(w3->stage[i].entry, art->data->entry[s_entry].id)) { st = &w3->stage[i]; break; }
-    if (!tagpu_wikiside_compose(side, v, st ? st->minimap : NULL, st && st->minimap ? st->mm_w * st->mm_h : 0, &s_col))
+    if (!tagpu_wikiside_compose(side, v, st ? st->minimap : NULL, st && st->minimap ? st->mm_w * st->mm_h : 0, c))
         return 0;
-    h = fnv(2166136261u, s_col.idx, (size_t)WIKI_SIDE_W * (size_t)s_col.h);
-    h = fnv(h, s_col.a, (size_t)WIKI_SIDE_W * (size_t)s_col.h);
-    h = fnv(h, (const unsigned char*)&s_col.h, sizeof s_col.h);
-    if (h != s_colHash || side != s_colOf || !s_colGen) {
+    if (!s_colGen || side != s_colOf || !col_same(c, &s_col[s_colCur])) {
         memset(s_colRgba, 0, sizeof s_colRgba);
-        tagpu_wikiside_rgba(side, &s_col, s_colRgba);
-        s_colHash = h;
+        tagpu_wikiside_rgba(side, c, s_colRgba);
+        s_colCur ^= 1;
         s_colOf = side;
         if (++s_colGen == 0) s_colGen = 1;
     }
     s_sart.side = side;
-    s_sart.side_minimap = s_col.minimap;
+    s_sart.side_minimap = c->minimap;
     return 1;
 }
 
@@ -335,7 +338,7 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
     float u, hpx;
     int vw = f->vp_w, vh = f->vp_h, pw = 128, bh = 32, q8 = 256, hox, hoy;
 
-    s_have = s_haveStage = s_viewOk = s_split = s_nover = s_curList = 0;
+    s_have = s_haveStage = s_viewOk = s_viewSide = s_split = s_nover = s_curList = 0;
     if (s_refused || !pk || !pk->in_game || !(w = tagpu_pk_wiki(pk))) return;
     /* THE ART LOADS ON ITS OWN THREAD (tagpu_hudart.c), started by whichever half asks first; the
        wiki draws from the first frame after it is published */
@@ -398,6 +401,7 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
         cx += s_ox;
         cy += s_oy;
         s_viewOk = sv && sv->w > 0 && sv->h > 0;
+        s_viewSide = s_viewOk && sv->has_side ? sv->side.h : 0;
         s_tryPtr = w->try_it && s_viewOk && s_ptr && w->ptr_x >= cx && w->ptr_x < cx + cw &&
                    w->ptr_y >= cy && w->ptr_y < cy + ch;
         /* THE STAGE, inside the bezel the page placed, from the record's view or its message */
@@ -561,6 +565,8 @@ void tagpu_wikistate_drawn(int drew, int cursor)
     s_map.drawn = 1;
     s_map.open = (uint8_t)s_open;
     s_map.entry = (int16_t)s_page.entry;
+    s_map.view = (uint8_t)(s_haveStage && s_viewOk);
+    s_map.side_h = (int16_t)s_viewSide;
     s_drew = 1;
 }
 

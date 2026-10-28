@@ -342,13 +342,6 @@ static void sim_free(void)
     s_simOn = 0;
 }
 
-/* the rows of the sidebar the running simulation shows, 0 without one: its layout's height, which
-   the view carries as side.h (the simulation's `lay` is NULL exactly when its sidebar is off) */
-static int side_rows(void)
-{
-    return s_simOn && s_sim.lay ? s_sim.lay->height : 0;
-}
-
 /* ---- Try it yourself -------------------------------------------------------------------------
 
    wiki.js's Try it yourself: the simulation made on the demo's scene with no script (sim.js
@@ -451,8 +444,11 @@ static void try_release_all(int send)
    rect -- the map, and with the sidebar the column left of it, as tall as the taller -- as wiki.js
    `world`: the simulation decides what lies under the point (the column, the map, or the dead
    band under a map shorter than the column). The map is the entry's scene's, the simulation's
-   only map, and its sidebar's rows are the layout it runs on (the view's side.h); the frame must
-   have drawn the window open for the entry selected now. 0 when the point is not on that stage. */
+   only map. THE FIT IS THE DRAWN FRAME'S: the sidebar's rows are those of the view that frame
+   drew (TAGPU_CMD_WIKI.side_h), not the running simulation's, which may have turned its sidebar
+   on or off since -- a press is mapped through what the player saw, never through a column no
+   frame has shown. The frame must have drawn the window open, for the entry selected now, with a
+   view on its stage. 0 when the point is not on that stage. */
 static int stage_world(int cx, int cy, double* wx, double* wz)
 {
     const WIKIENTRY* e = entry_of(data());
@@ -460,11 +456,11 @@ static int stage_world(int cx, int cy, double* wx, double* wz)
     WIKISTAGEFIT f;
     double x, z;
     unsigned i;
-    if (!e || cx < 0 || !s_hit.drawn || !s_hit.open || s_hit.entry != s_entry) return 0;
+    if (!e || cx < 0 || !s_hit.drawn || !s_hit.open || !s_hit.view || s_hit.entry != s_entry) return 0;
     for (i = 0; i < s_hit.n && !h; i++)
         if (!strncmp(s_hit.hit[i].key, "stage", TAGPU_WIKI_KEY)) h = &s_hit.hit[i];
     if (!h || cx < h->x0 || cx >= h->x1 || cy < h->y0 || cy >= h->y1) return 0;
-    tagpu_wikistage_fit(e->scene.w, e->scene.h, side_rows(), h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &f);
+    tagpu_wikistage_fit(e->scene.w, e->scene.h, s_hit.side_h, h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &f);
     if (!(f.s > 0)) return 0;
     x = (cx - h->x0 - f.ox) / f.s;
     z = (cy - h->y0 - f.oz) / f.s;
@@ -1208,6 +1204,7 @@ void tagpu_wiki_take(const TAGPU_CMD_WIKI* c)
     s_hit = *c;
     if (s_hit.n > TAGPU_CMD_WIKIHITS) s_hit.n = TAGPU_CMD_WIKIHITS;
     s_hit.u = bounded(s_hit.u, 1000);
+    if (s_hit.side_h < 0 || s_hit.side_h > WIKI_SIDE_ROWS) s_hit.side_h = 0;
     for (i = 0; i < (int)TAGPU_WIKI_NSCROLL; i++) {
         s_hit.scroll_max[i] = bounded(s_hit.scroll_max[i], 1e6f);
         s_hit.scroll[i] = bounded(s_hit.scroll[i], s_hit.scroll_max[i]);
@@ -1297,8 +1294,9 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
             fprintf(f, "]");
         }
     }
-    fprintf(f, "],\"u\":%.17g,\"map\":[%d,%d],\"side_h\":%d", (double)s_hit.u, e ? e->scene.w : 0, e ? e->scene.h : 0,
-            side_rows());
+    /* the stage's fit as stage_world takes it: the drawn frame's unit, map and sidebar rows */
+    fprintf(f, "],\"u\":%.17g,\"map\":[%d,%d],\"side_h\":%d,\"view_drawn\":%d", (double)s_hit.u, e ? e->scene.w : 0,
+            e ? e->scene.h : 0, (int)s_hit.side_h, (int)s_hit.view);
     /* the sidebar layout the simulation was started with, as simparity.mjs --try gives it to sim.js
        (null: none); and which one it is */
     fprintf(f, ",\"layout_src\":\"%s\"", !s_simOn ? "" : s_laySrc == WIKISTAGE_LAYOUT_MOD ? "mod"
@@ -1363,8 +1361,9 @@ static void shot(void)
                s_simOn ? s_sim.tick : -1);
 }
 
-/* THE 3D ASSET LOAD (tagpu_wikiasset.h), started once a process, by the first fill of an open
-   window once the wiki's data is loaded: the engine's mount list, its language and folder names
+/* THE 3D ASSET LOAD (tagpu_wikiasset.h), started once a process once the wiki's data is loaded,
+   by the first fill of an open window or by the parity check's trigger (CHECK_ASK), which needs
+   the sidebar's answer with the window closed: the engine's mount list, its language and folder names
    (tagpu_replays.c, which reads the same list for running_mod) and the current directory are
    copied here, on the game thread that owns them, and handed to the loader thread by value with
    the data and WIKIPAK, both immutable for the process. Nothing here waits for the load. */
