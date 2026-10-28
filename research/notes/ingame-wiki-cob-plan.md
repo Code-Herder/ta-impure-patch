@@ -434,9 +434,10 @@ fixtures — no file the sidebar's landing touches.
   posed models to tacob's composition. It is not in `wiki_regression.py - offline` either: it runs
   by hand.
 - **The pose pool is bounded at 4096 primitives a view** (`WIKISTAGE_POSE`), filled in unit order;
-  a unit past it draws at rest in the game, logged once a demo (`cut 0x200`), while the mockup,
-  which has no pool, draws it posed. The most pieces of any type in the stock and six mod packs is
-  49, so 83 such units fit; no demo's unit count has been checked against the bound.
+  a unit past it draws at rest, logged once a demo (`cut 0x200`); `sim.js` `sim.poses()` applies
+  the same bound, so the mockup draws the same units at rest. The most pieces of any type in the
+  stock and six mod packs is 49, so 83 such units fit; no demo's unit count has been checked
+  against the bound.
 - **The poses ride every frame.** The pool is copied into the record at every fill the stage is
   shown, all 80 KB of it whatever changed (the record grew from 63 512 to 145 944 bytes on the
   i686 build), and the render thread composes every posed unit every frame; neither cost has been

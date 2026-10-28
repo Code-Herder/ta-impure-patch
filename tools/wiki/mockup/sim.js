@@ -37,6 +37,8 @@ const WikiSim = (() => {
   const PLACE_MAX_SITES = 256, PLACE_SPACING_MAX = 16, PLACE_ORDER_BUDGET = 4096, PLACE_LIST_CAP = 1024;
   // tagpu_wikicob.h: WIKICOB_UNITS, the units one host spawns over its life, and the INBUILDSTANCE value id
   const COB_UNITS = 1024, COB_INBUILDSTANCE = 5;
+  // tagpu_wikistage.h: the stage view's units, its pose pool and one posed model's primitives
+  const STAGE_UNITS = 128, STAGE_POSE = 4096, STAGE_PIECES = 256;
   /* A DEMO'S WAIT, {"at", "until", "max"} (research/notes/ingame-wiki-cob-plan.md, decision 10): the demo's clock
      stops at `at` until the state `until` names holds, at most `max` ticks, after which the demo stops and says so.
      UNTILS are the states; "idle": no unit of the player's holds a build or a reclaim order. UNTIL_MAX bounds `max`. */
@@ -1481,7 +1483,18 @@ const WikiSim = (() => {
        `model`), null for a unit that runs no script; all null without a host. What the stage draws, as
        tagpu_wikistage.c `tagpu_wikistage_pose` copies it for the game's; not the view, so neither the state hash
        nor the view the C sim is compared on carries it. */
-    sim.poses = () => units.map(u => COB && u.cob ? COB.model(u.cob) : null);
+    /* the posed models the game's stage view carries (tagpu_wikistage.c tagpu_wikistage_pose): its first
+       WIKISTAGE_UNITS units in unit order, into a pool of WIKISTAGE_POSE primitives, a model of more than
+       WIKISTAGE_PIECES or past what the pool has left drawn at rest -- so here */
+    sim.poses = () => {
+      let left = STAGE_POSE;
+      return units.map((u, i) => {
+        const m = COB && u.cob && i < STAGE_UNITS ? COB.model(u.cob) : null;
+        if (!m || m.n <= 0 || m.n > STAGE_PIECES || m.n > left) return null;
+        left -= m.n;
+        return m;
+      });
+    };
     sim.view = () => {
       // the gesture's sites replace the cursor's single square; none (an empty ring) leaves the square standing
       const p = placed() && st.place.sites.length ? st.place : null;
