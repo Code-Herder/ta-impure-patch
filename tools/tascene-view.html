@@ -273,7 +273,7 @@
      chain moves on. The dots march 48 px a second ON SCREEN at every zoom,
      which is the engine's 48 world units per 30 ticks at 1x; the sprite
      shows frame (gameTime / (2 * frame 0's ticks)) % count at ordalpha
-     (default 0.5, PALETTE.ALP's mix, measured under GDI). Drawn onto the canvas after
+     (default 0.7; PALETTE.ALP's mix, measured under GDI, is 0.5). Drawn onto the canvas after
      the composite, at canvas resolution, inside each side's half of the
      wipe, and re-presented every display frame on a 30 Hz game clock, so the
      world under them is not redrawn to animate them. There is no fog and
@@ -313,7 +313,8 @@
        orddots=<d>   all (default: every unit is the hovered one) | active
                      (only the unit being ordered; the others show their
                      sprites, as a merely selected unit does)
-       ordalpha=<a>  the sprite's opacity, default 0.5 (the engine's blend)
+       ordalpha=<a>  the sprite's opacity, default 0.7 (the owner's pick;
+                     the engine's ALP blend is 0.5)
        orddotalpha=<a> the route dots' opacity, default 1 (the engine's)
                      Both are sliders in the status bar; neither touches
                      ordstyle=proc, which stays what the game draws today
@@ -593,7 +594,7 @@ function readOrd(p, label) {
   }
   const num = (k, d) => (p.get(k) === null || Number.isNaN(parseFloat(p.get(k)))
                          ? d : parseFloat(p.get(k)));
-  o.alpha = Math.min(1, Math.max(0, num("ordalpha", 0.5)));
+  o.alpha = Math.min(1, Math.max(0, num("ordalpha", 0.7)));
   o.dotAlpha = Math.min(1, Math.max(0, num("orddotalpha", 1)));
   o.fade = Math.max(0, num("ordfade", 300));
   o.min = Math.max(0.25, num("ordmin", 1));

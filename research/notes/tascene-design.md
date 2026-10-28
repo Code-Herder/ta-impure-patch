@@ -417,7 +417,7 @@ into the address bar):
 | `ordanim` | `engine` · `cursor` | the sprite's frame rule, above |
 | `ordtick` | `int` · `smooth` | whole ticks or a continuous clock |
 | `orddots` | `all` · `active` | which units draw their route dots |
-| `ordalpha` | 0.5 | the sprite's opacity (a slider) |
+| `ordalpha` | 0.7 | the sprite's opacity (a slider). The engine's ALP blend is 0.5; 0.7 is the owner's choice for the look (2026-10-27), `orders-engine` keeps 0.5 |
 | `orddotalpha` | 1 | the route dots' opacity (a slider) |
 | `ordfade` | 300 | ms for a dot to fade fully in or out when `ordspace=lod` changes level |
 
