@@ -12,7 +12,7 @@
    answers, what a SET changes, the generator RAND draws from, a refusal and its quarantine.
 
    THE RULES ARE IMPURE'S (TAGPU_COBVM_IMPURE): ten records, the raised build's guarded
-   interpreter, the getters of tagpu_cob_getter over this host's units, as the game the wiki
+   interpreter, the getters of tagpu_cob_getter over the wiki's units, as the game the wiki
    teaches runs them.
 
    ENGINE-FREE, WIN32-FREE, WITHOUT GLOBALS: a WIKICOB is its caller's and one thread uses it at a
@@ -48,10 +48,11 @@ enum {
     WIKICOB_BUGGER_OFF = 19, WIKICOB_ARMORED = 20
 };
 
-/* How a call enters the core: the engine's entries (tagpu_cobvm.h). NOW is 0x4B0940 with
-   run-now 1 (Create, StartMoving, StopMoving, MoveRate*), LATER 0x4B0940 with run-now 0
-   (Activate, Deactivate, StopBuilding), ARGS 0x4B0B00 / 0x4B0A70 with run-now 0 and the
-   arguments (StartBuilding, SetSpeed, SetDirection). */
+/* How a call enters the core: the engine's entries (tagpu_cobvm.h). NOW is a start with run-now
+   1 and no arguments (0x4B0940: Create, StartMoving, StopMoving, MoveRate*); LATER one with
+   run-now 0 and no arguments (Activate and Deactivate through 0x4B0940; a mobile builder's
+   StopBuilding by index through 0x4B0B00 at 0x43A251); ARGS one with run-now 0 and the arguments
+   (0x4B0B00 / 0x4B0A70: StartBuilding, SetSpeed, SetDirection). */
 enum { WIKICOB_NOW = 0, WIKICOB_LATER = 1, WIKICOB_ARGS = 2 };
 
 /* A type's script and the facts of its model the host needs, all borrowed for the call that
@@ -125,7 +126,9 @@ int  tagpu_wikicob_resting(const WIKICOB* w, int unit);
    the posed order; NULL for a resting unit. Valid until the next call on `w`. */
 const unsigned char* tagpu_wikicob_model(const WIKICOB* w, int unit, int* nprim);
 
-/* The first refusal of type `type`, "" when it has none: "<script> pc <pc>: <reason>". */
+/* The first refusal of type `type`, "" when it has none: "<what>: <reason>", `what` the call the
+   refusal came in ("the slice", a script's name, "the program", "no script", "no model"). The
+   core's run record carries no pc for a fault, so the note names none. */
 const char* tagpu_wikicob_note(const WIKICOB* w, int type);
 
 /* 64-bit FNV-1a over everything the host holds that a call can change, continued from `h`: the

@@ -383,10 +383,9 @@ fixtures — no file the sidebar's landing touches.
 - **A `SET ACTIVATION`'s `Activate` first runs at the next slice**; the engine starts it inside the
   opcode, so a record after the current one may run it in the same pass [not established in the
   engine: the runner's walk `0x4B0DA0` was not read for new records].
-- **The quarantine note carries no pc**, where decision 9 asks for one.
-- **tacob still names two StartBuilding parameters**: the editor's default call passes the one
-  word (`tacob-edit.html` `argsFor`), but `tools/tacob`'s `PARAM_NAMES` names `heading` and
-  `pitch`, and its `ENGINE_STARTS` row cites the factory's `0x48B14E`/`0x48B169` for it.
+- **The quarantine note carries no pc**, where decision 9 asks for one: it is `<what>: <reason>`,
+  the call the refusal came in and the core's reason, because the core's run record
+  (`TAGPU_COBVM_RUN`) keeps no pc for a fault. Giving it one is a change to the core's interface.
 
 - **The core's files are not `sim`.** `tagpu_cob_safe.c` holds rules the game's simulation runs
   (the step guard, the getters, the parent's pops, the attachment bound), but `thread-split.allow`

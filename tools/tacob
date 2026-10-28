@@ -204,7 +204,7 @@ PARAM_NAMES = {
     "hitbyweapon": ["anglex", "anglez"], "rockunit": ["anglex", "anglez"],
     "killed": ["severity", "corpsetype"], "sweetspot": ["piecenum"],
     "querynanopiece": ["piecenum"], "querybuildinfo": ["piecenum"], "querytransport": ["piecenum"],
-    "querylandingpad": ["piecenum1", "piecenum2"], "startbuilding": ["heading", "pitch"],
+    "querylandingpad": ["piecenum1", "piecenum2"], "startbuilding": ["heading"],
     "begintransport": ["height"], "transportpickup": ["unitid"], "transportdrop": ["unitid", "position"],
     "setsfxoccupy": ["state"], "requeststate": ["requestedstate", "currentstate"],
     "targetcleared": ["weapon"], "smokeunit": ["healthpercent", "sleeptime", "smoketype"],
@@ -2270,8 +2270,10 @@ ENGINE_STARTS = {
     # landing after that unit's DoScriptsNow — it first steps the tick after
     "activate":         ("later", "post"),   # 0x48B106/0x48B12B, runNow 0
     "deactivate":       ("later", "post"),   # 0x48B12B/0x48B14E, runNow 0
-    "startbuilding":    ("later", "post"),   # 0x48B14E/0x48B169, runNow 0
-    "stopbuilding":     ("later", "post"),   # 0x48B169, runNow 0
+    # a mobile builder's: 0x4385C7 (argc 1, the heading) and the order destructor 0x43A251 (and
+    # 0x43862B), both 0x4B0B00 by index; a factory's through its state setter 0x48B14E/0x48B169
+    "startbuilding":    ("later", "post"),   # 0x4385C7, runNow 0, argc 1
+    "stopbuilding":     ("later", "post"),   # 0x43A251, runNow 0
     "setmaxreloadtime": ("later", "pre"),    # 0x49E186 UNITS_StartWeaponsScripts, runNow 0, argc 1
     "endtransport":     ("later", "pre"),
     # the weapons, all in the unit's own tick ahead of DoScriptsNow
