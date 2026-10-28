@@ -1,0 +1,3 @@
+landing-review: model=claude-opus-5-5 effort=medium range=main..8efa19ab findings=4 acted=4 rejected=0 date=2026-10-28
+1 MEDIUM (a builder with BuildDistance under its half width stepping onto its own unclaimed site, holding the build for good): fixed in the next commit, the site is a body to the unit heading for it; rule case added, hangs without the fix.
+3 LOW doc corrections (evacuate order, a leg's end, the scratch figure 2.3 MB): fixed.
