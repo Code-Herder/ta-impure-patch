@@ -48,7 +48,8 @@ int tagpu_wav_parse(const unsigned char* blob, size_t n, TAGPU_WAV* out, char* w
             const size_t have = len < end - body ? len : end - body;
             if (!fmt) return refuse(why, nwhy, "data before fmt");
             out->bytes = (uint32_t)(have - have % (size_t)out->align);
-            if (!out->bytes) return refuse(why, nwhy, "no whole frame");
+            /* DirectSound refuses a buffer under DSBSIZE_MIN, 4 bytes */
+            if (out->bytes < 4) return refuse(why, nwhy, "under 4 bytes of whole frames");
             out->data = blob + body;
             return 1;
         }

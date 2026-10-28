@@ -4,8 +4,8 @@
 #include <windows.h>
 #include <mmsystem.h>
 #include <dsound.h>
+#include <stdlib.h>
 #include <string.h>
-#include "dd.h"
 #include "tagpu_log.h"
 #include "tagpu_menu.h"
 #include "tagpu_wikisound.h"
@@ -14,56 +14,32 @@
 
 typedef HRESULT (WINAPI* create_fn)(LPCGUID, LPDIRECTSOUND*, LPUNKNOWN);
 
-/* a clip's voices: buffer 0 made from its samples, the rest duplicates of it */
+/* THE OBJECT, made whole by tagpu_wikisound_make and then read-only: the clips it was made for and
+   one buffer a clip, NULL for one DirectSound refused. Never freed. */
 typedef struct {
-    const WIKI3DCLIP*   clip;
-    IDirectSoundBuffer* voice[WIKISOUND_VOICES];
-    int                 nvoice;
-} SET;
+    IDirectSound*       ds;
+    const WIKI3DSOUND*  snd;
+    int                 nclip;          /* min(snd->nclip, WIKI3D_CLIPS) */
+    IDirectSoundBuffer* first[WIKI3D_CLIPS];
+} DEVICE;
 
-static IDirectSound* s_ds;
-static int           s_dead;            /* the create failed: silent for the process */
-static int           s_saidHr;          /* the create's result has been logged       */
-static SET           s_set[WIKI3D_CLIPS];
-static int           s_played, s_failed, s_silent;
+/* ORDERING: s_make goes 0 -> 1 by one compare-exchange, so one make runs per process; the make
+   writes the DEVICE whole and then publishes it by one interlocked store, a full barrier, and the
+   game thread reads it by an interlocked read, so it sees every byte of it. s_make stays 1 after a
+   make, success or failure: a failed create is not tried again. */
+static volatile LONG  s_make;
+static PVOID volatile s_dev;
 
-/* the object, made at the first sound after an open; NULL while it cannot be */
-static IDirectSound* device(void)
+/* THE GAME THREAD'S OWN: each clip's duplicates (voice 1..), kept with the object */
+static IDirectSoundBuffer* s_dup[WIKI3D_CLIPS][WIKISOUND_VOICES - 1];
+static int                 s_played, s_failed, s_silent;
+
+static const DEVICE* device(void)
 {
-    HMODULE m;
-    create_fn create;
-    HRESULT hr;
-    if (s_ds || s_dead) return s_ds;
-    /* the exe imports DirectSoundCreate from DSOUND.dll (IAT 0x4FC044), so the module is loaded */
-    m = GetModuleHandleA("dsound.dll");
-    create = m ? (create_fn)(void*)GetProcAddress(m, "DirectSoundCreate") : NULL;
-    if (!create || !g_ddraw.hwnd) {
-        s_dead = 1;
-        tagpu_logf("wiki sound: NO DirectSound - %s; the wiki is silent", !create ? "dsound.dll's DirectSoundCreate is not loaded"
-                                                                                  : "the game has no window");
-        return NULL;
-    }
-    hr = create(NULL, &s_ds, NULL);
-    if (SUCCEEDED(hr)) {
-        const HRESULT co = IDirectSound_SetCooperativeLevel(s_ds, g_ddraw.hwnd, DSSCL_PRIORITY);
-        if (FAILED(co)) {
-            IDirectSound_Release(s_ds);
-            s_ds = NULL;
-            hr = co;
-        }
-    }
-    if (!s_ds) {
-        s_dead = 1;
-        tagpu_logf("wiki sound: NO DirectSound - its own object did not start (hr 0x%08lX); the wiki is silent for the "
-                   "process, the engine's object is not used", (unsigned long)hr);
-    } else if (!s_saidHr) {
-        s_saidHr = 1;
-        tagpu_logf("wiki sound: DirectSound created (hr 0x%08lX), PRIORITY on the game's window", (unsigned long)hr);
-    }
-    return s_ds;
+    return (const DEVICE*)InterlockedCompareExchangePointer((PVOID*)&s_dev, NULL, NULL);
 }
 
-/* the clip's samples into buffer `b`, whole */
+/* the clip's samples into its buffer, whole */
 static int fill(IDirectSoundBuffer* b, const WIKI3DCLIP* c)
 {
     void *p1, *p2;
@@ -75,7 +51,7 @@ static int fill(IDirectSoundBuffer* b, const WIKI3DCLIP* c)
     return 1;
 }
 
-static IDirectSoundBuffer* make(IDirectSound* ds, const WIKI3DCLIP* c)
+static IDirectSoundBuffer* make_buffer(IDirectSound* ds, const WIKI3DCLIP* c)
 {
     WAVEFORMATEX wf;
     DSBUFFERDESC d;
@@ -96,72 +72,134 @@ static IDirectSoundBuffer* make(IDirectSound* ds, const WIKI3DCLIP* c)
     hr = IDirectSound_CreateSoundBuffer(ds, &d, &b, NULL);
     if (FAILED(hr) || !fill(b, c)) {
         if (b) IDirectSoundBuffer_Release(b);
-        tagpu_logf("wiki sound: no buffer for %s (hr 0x%08lX)", c->name, (unsigned long)hr);
+        tagpu_logf("wiki sound: %s is silent - DirectSound refused its buffer (hr 0x%08lX)", c->name, (unsigned long)hr);
         return NULL;
     }
-    tagpu_logf("wiki sound: a buffer for %s - %d Hz, %d-bit, %d channel(s), %lu bytes", c->name, c->rate, c->bits,
-               c->channels, (unsigned long)c->bytes);
     return b;
 }
 
-/* 0x4CF570's choice among the clip's voices: a stopped one, else a new duplicate, else the one
-   furthest through its samples; NULL when none can be had */
-static IDirectSoundBuffer* voice(IDirectSound* ds, SET* set)
+void tagpu_wikisound_make(const WIKI3DSOUND* s, uintptr_t hwnd)
 {
+    HMODULE m;
+    create_fn create;
+    HRESULT hr;
+    DEVICE* d;
+    int i, made = 0;
+    if (!s || InterlockedCompareExchange(&s_make, 1, 0) != 0) return;
+    /* the exe imports DirectSoundCreate from DSOUND.dll (IAT 0x4FC044), so the module is loaded */
+    m = GetModuleHandleA("dsound.dll");
+    create = m ? (create_fn)(void*)GetProcAddress(m, "DirectSoundCreate") : NULL;
+    if (!create || !hwnd || !(d = (DEVICE*)calloc(1, sizeof *d))) {
+        tagpu_logf("wiki sound: NO DirectSound - %s; the wiki is silent for the process",
+                   !create ? "dsound.dll's DirectSoundCreate is not loaded" : !hwnd ? "the game had no window" : "no memory");
+        return;
+    }
+    hr = create(NULL, &d->ds, NULL);
+    if (SUCCEEDED(hr)) {
+        const HRESULT co = IDirectSound_SetCooperativeLevel(d->ds, (HWND)hwnd, DSSCL_PRIORITY);
+        if (FAILED(co)) {
+            IDirectSound_Release(d->ds);
+            d->ds = NULL;
+            hr = co;
+        }
+    }
+    if (!d->ds) {
+        free(d);
+        tagpu_logf("wiki sound: NO DirectSound - its own object did not start (hr 0x%08lX); the wiki is silent for the "
+                   "process, the engine's object is not used", (unsigned long)hr);
+        return;
+    }
+    d->snd = s;
+    d->nclip = s->nclip < WIKI3D_CLIPS ? s->nclip : WIKI3D_CLIPS;
+    for (i = 0; i < d->nclip; i++)
+        if (s->clip[i].data && (d->first[i] = make_buffer(d->ds, &s->clip[i])) != NULL) made++;
+    tagpu_logf("wiki sound: DirectSound created (hr 0x%08lX), PRIORITY on the game's window, off the game thread; "
+               "%d buffer(s) for %d WAV(s)", (unsigned long)hr, made, d->nclip);
+    InterlockedExchangePointer((PVOID*)&s_dev, d);
+}
+
+typedef struct {
+    const WIKI3DSOUND* s;
+    uintptr_t          hwnd;
+} ARM;
+
+static DWORD WINAPI maker(LPVOID p)
+{
+    ARM a = *(const ARM*)p;
+    free(p);
+    tagpu_wikisound_make(a.s, a.hwnd);
+    return 0;
+}
+
+void tagpu_wikisound_arm(const WIKI3DSOUND* s, uintptr_t hwnd)
+{
+    ARM* a;
+    HANDLE t;
+    if (!s || s_make || tagpu_wikisound_muted() || !(a = (ARM*)malloc(sizeof *a))) return;
+    a->s = s;
+    a->hwnd = hwnd;
+    if (!(t = CreateThread(NULL, 0, maker, a, 0, NULL))) {
+        free(a);
+        return;
+    }
+    CloseHandle(t);
+}
+
+int tagpu_wikisound_muted(void)
+{
+    TAGPU_SOUNDSET set;
+    return !tagpu_menu_sound(&set) || set.win_sound || set.no_dsound || set.fxvol == 0 || set.mode == 0;
+}
+
+/* 0x4CF570's choice among clip `c`'s voices (the header); NULL plays nothing */
+static IDirectSoundBuffer* voice(const DEVICE* d, int c)
+{
+    IDirectSoundBuffer* v[WIKISOUND_VOICES];
     DWORD best = 0, st, play, write;
-    int i, furthest = -1;
-    for (i = 0; i < set->nvoice; i++) {
-        if (FAILED(IDirectSoundBuffer_GetStatus(set->voice[i], &st))) continue;
-        if (!(st & DSBSTATUS_PLAYING)) return set->voice[i];
-        if (SUCCEEDED(IDirectSoundBuffer_GetCurrentPosition(set->voice[i], &play, &write)) && (furthest < 0 || play > best)) {
+    int i, furthest = -1, empty = -1;
+    v[0] = d->first[c];
+    for (i = 1; i < WIKISOUND_VOICES; i++) v[i] = s_dup[c][i - 1];
+    for (i = 0; i < WIKISOUND_VOICES; i++) {
+        if (!v[i]) {
+            empty = i;
+            continue;
+        }
+        if (FAILED(IDirectSoundBuffer_GetStatus(v[i], &st))) return NULL;
+        if (st == 0) return v[i];
+        if (FAILED(IDirectSoundBuffer_GetCurrentPosition(v[i], &play, &write))) play = 0;
+        if (furthest < 0 || play > best) {
             best = play;
             furthest = i;
         }
     }
-    if (set->nvoice == 0) {
-        if (!(set->voice[0] = make(ds, set->clip))) return NULL;
-        return set->voice[set->nvoice++];
+    if (empty > 0) {
+        IDirectSoundBuffer* dup = NULL;
+        if (FAILED(IDirectSound_DuplicateSoundBuffer(d->ds, v[0], &dup))) return NULL;
+        s_dup[c][empty - 1] = dup;
+        return dup;
     }
-    if (set->nvoice < WIKISOUND_VOICES &&
-        SUCCEEDED(IDirectSound_DuplicateSoundBuffer(ds, set->voice[0], &set->voice[set->nvoice])))
-        return set->voice[set->nvoice++];
     if (furthest < 0) return NULL;
-    IDirectSoundBuffer_Stop(set->voice[furthest]);
-    return set->voice[furthest];
+    IDirectSoundBuffer_Stop(v[furthest]);
+    return v[furthest];
 }
 
-/* clip `c` of `s` from its start; BOUND: `c` indexes the published clips only below their count */
+/* clip `c` of `s` from its start. BOUND: `c` indexes the device's clips only below their count,
+   and only the clips of the WIKI3DSOUND the device was made for */
 static int play(const WIKI3DSOUND* s, int c)
 {
-    IDirectSound* ds;
+    const DEVICE* d = device();
     IDirectSoundBuffer* b;
-    HRESULT hr;
-    if (!s || c < 0 || c >= s->nclip || c >= WIKI3D_CLIPS || !s->clip[c].data) {
+    if (!d || d->snd != s || c < 0 || c >= d->nclip || !d->first[c]) {
         s_silent++;
         return 0;
     }
-    if (!(ds = device())) {
-        s_silent++;
-        return 0;
-    }
-    if (s_set[c].clip != &s->clip[c]) {
-        /* the published sound is one for the process; a set made for another clip is let go */
-        int i;
-        for (i = 0; i < s_set[c].nvoice; i++) IDirectSoundBuffer_Release(s_set[c].voice[i]);
-        memset(&s_set[c], 0, sizeof s_set[c]);
-        s_set[c].clip = &s->clip[c];
-    }
-    if (!(b = voice(ds, &s_set[c]))) {
+    if (!(b = voice(d, c))) {
         s_failed++;
         return 0;
     }
     IDirectSoundBuffer_SetCurrentPosition(b, 0);
     IDirectSoundBuffer_SetVolume(b, VOLUME);
-    hr = IDirectSoundBuffer_Play(b, 0, 0, 0);
-    /* a lost buffer comes back by Restore and its samples written again, then plays once more */
-    if (hr == DSERR_BUFFERLOST && SUCCEEDED(IDirectSoundBuffer_Restore(b)) && fill(b, s->clip + c))
-        hr = IDirectSoundBuffer_Play(b, 0, 0, 0);
-    if (FAILED(hr)) {
+    if (FAILED(IDirectSoundBuffer_Play(b, 0, 0, 0))) {
         s_failed++;
         return 0;
     }
@@ -169,17 +207,11 @@ static int play(const WIKI3DSOUND* s, int c)
     return 1;
 }
 
-/* the settings that silence every sound of the engine's, as 0x47F0C0 and 0x47FD70 test them */
-static int muted(const TAGPU_SOUNDSET* set)
-{
-    return set->win_sound || set->no_dsound || set->fxvol == 0 || set->mode == 0;
-}
-
 int tagpu_wikisound_reply(const WIKI3DSOUND* s, int cat, int kind, int variant, int priority)
 {
     TAGPU_SOUNDSET set;
     int i;
-    if (!s || !tagpu_menu_sound(&set) || muted(&set) || !set.speech || priority <= 10 - set.unitchat ||
+    if (!s || tagpu_wikisound_muted() || !tagpu_menu_sound(&set) || !set.speech || priority <= 10 - set.unitchat ||
         kind <= 0 || kind >= WIKI_SND_KINDS) {
         s_silent++;
         return 0;
@@ -196,8 +228,7 @@ int tagpu_wikisound_reply(const WIKI3DSOUND* s, int cat, int kind, int variant, 
 
 int tagpu_wikisound_named(const WIKI3DSOUND* s, int name)
 {
-    TAGPU_SOUNDSET set;
-    if (!s || !tagpu_menu_sound(&set) || muted(&set) || name < 0 || name >= WIKI_NSNDNAME) {
+    if (!s || tagpu_wikisound_muted() || name < 0 || name >= WIKI_NSNDNAME) {
         s_silent++;
         return 0;
     }
@@ -212,16 +243,14 @@ void tagpu_wikisound_tally(int* played, int* failed, int* silent)
     s_played = s_failed = s_silent = 0;
 }
 
-void tagpu_wikisound_release(void)
+void tagpu_wikisound_stop(void)
 {
+    const DEVICE* d = device();
     int i, k;
-    for (i = 0; i < WIKI3D_CLIPS; i++) {
-        for (k = 0; k < s_set[i].nvoice; k++) {
-            IDirectSoundBuffer_Stop(s_set[i].voice[k]);
-            IDirectSoundBuffer_Release(s_set[i].voice[k]);
-        }
-        memset(&s_set[i], 0, sizeof s_set[i]);
+    if (!d) return;
+    for (i = 0; i < d->nclip; i++) {
+        if (d->first[i]) IDirectSoundBuffer_Stop(d->first[i]);
+        for (k = 0; k < WIKISOUND_VOICES - 1; k++)
+            if (s_dup[i][k]) IDirectSoundBuffer_Stop(s_dup[i][k]);
     }
-    if (s_ds) IDirectSound_Release(s_ds);
-    s_ds = NULL;
 }

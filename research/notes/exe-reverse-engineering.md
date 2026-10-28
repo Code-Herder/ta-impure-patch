@@ -15907,8 +15907,10 @@ the CRT `_stricmp`, so `oktobuild` and `OKTOBUILD` are one name.
   `0x49901D`); the sidebar's, in `0x41AA00`: ORDERS `ordersbutton` (`0x5027F8`, `0x41AB04`), BUILD
   `buildbutton` (`0x5027EC`, `0x41AB45`), a build button that arms a structure `addbuild`
   (`0x5026B8`, `0x41ABA3`, after writing `main+0x2CC3` = 14 and the type to `main+0x2CC4`), STOP
-  `immediateorders` (`0x50271C`, `0x419CF2` jumping to `0x41A0EA`); the page step `0x41BDE0`
-  (callers `0x41C1A5`, `0x49608F`) plays `nextbuildmenu` (`0x502850`, `0x41BF01`). The in-game
+  `immediateorders` (`0x50271C`, `0x419CF2` jumping to `0x41A0EA`); PREV and NEXT, through the
+  dispatcher `0x41C180` (NEXT `0x41BDE0` at `0x41C1A5`, PREV `0x41BF10` at `0x41C1C2`), play
+  `nextbuildmenu` (`0x502850`) at `0x41BF01` and `0x41C04C` on every press: the exits for no unit
+  shown or a unit with no pages (`0x41BDF2`, `0x41BE1F`, `0x41BF21`) jump to the play. The in-game
   menu's controls play `Options`. Every caller passes a fixed name; none takes one from a gadget.
 
 **The voices: `0x4CF570(set, volume, point)`** (`ret 0xC`). A set is four `IDirectSoundBuffer*`.

@@ -510,7 +510,7 @@ settings*.
   (`snd_quiet`).
 - **The button sounds.** The stage's sidebar plays the allsound names `0x41AA00` plays -- ORDERS
   `ordersbutton`, BUILD `buildbutton`, a build button that arms a structure `addbuild`, STOP
-  `immediateorders`, PREV and NEXT `nextbuildmenu` when they step a page -- and a placement
+  `immediateorders`, PREV and NEXT `nextbuildmenu` on every press, a page to step or not -- and a placement
   `oktobuild` (once a gesture, as `tagpu_place.c`'s commit plays it) or `notoktobuild` on a refused
   site (`0x498FA4`, `0x49901D`): these are simulation events too (kind 0 and a name), in the hash.
   The page's own controls (the tree, the demos, play, replay, ×1, ×2, Try it) say `Options`, as the
@@ -518,29 +518,40 @@ settings*.
   and not hashed.
 - **Volume by construction.** The player's Options slider does not set a buffer volume: it sets
   the process's wave-out volume (`waveOutSetVolume(fxvol << 10)`, `0x45BCC0` → `0x4D0070`), which
-  reaches the wiki's buffers as it reaches the engine's, so the wiki applies no fxvol of its own and
+  reaches the wiki's buffers as it reaches the engine's [INFERRED, below], so the wiki applies no fxvol of its own and
   only the engine's per-play −585 (−5.85 dB, `0x47FED0`, `0x47F17A`). Neither the reply nor the
   named sound passes a point (`0x4D0640(file, −585, 0)`, `0x4CF570(set, −585, 0)`), so Sound
   Mode's off-screen −1585 and its 3D placement, which only the combat sounds `0x47F300` get, do not
   apply: the stage's camera attenuates nothing.
 - **The player's settings at play time** (`tagpu_menu_sound`, game thread, plain reads):
-  UseWindowsSound (`0x51E694`), NoDirectSound (`0x51E690`), fxvol 0 (`main+0x37F0C`) or Sound Mode
-  0 (`main+0x37F19 & 7`) silence every sound; a reply also needs speechfx (bit `0x40`) and a
-  priority above 10 − unitchat (`main+0x37F17`). The engine plays a reply through `PlaySoundA`
-  under UseWindowsSound; the wiki is silent there instead.
+  NoDirectSound (`0x51E690`), fxvol 0 (`main+0x37F0C`) or Sound Mode 0 (`main+0x37F19 & 7`) silence
+  every sound, as they silence the engine's; a reply also needs speechfx (bit `0x40`) and a
+  priority above 10 − unitchat (`main+0x37F17`). UseWindowsSound (`0x51E694`) does not silence the
+  engine, which then plays through `PlaySoundA` (`0x47F0D9` → `0x49F6A0` / `0x49F680`; a reply
+  `0x47FE75..0x47FE83` → `0x49F6C0`); the wiki has no `PlaySoundA` path and is silent under it,
+  its own choice.
 - **The mixer** (`tagpu_wikisound.c`). A DirectSound object of its own, made by the
-  `DirectSoundCreate` of the `dsound.dll` the game imports (IAT `0x4FC044`), at the first sound
-  after an open, on the game thread, `DSSCL_PRIORITY` on the game's window as the engine's
-  (`0x4CEFBB`) and without global focus, so it is silent while the game is not in front, as the
-  engine's is. A create that fails leaves the wiki silent for the process and says so once; the
-  engine's object is never borrowed. A clip's first play makes its buffer (`DSBCAPS_STATIC |
-  DSBCAPS_CTRLVOLUME`) from the published samples, and up to `WIKISOUND_VOICES` = 4 copies of it
-  as `0x4CF570` keeps them: a stopped copy is reused, else a new duplicate, else the copy with the
-  largest play cursor restarts. A lost buffer is restored and refilled once. `tagpu_wikisound_release`
-  stops and lets everything go when the wiki closes, which the level's teardown does first
-  (`tagpu_wiki_level_end`, from the teardown wrap's entry to `0x491B60`), never at DLL detach.
-  It logs the create's result once, each buffer made, and per demo the Play calls that succeeded,
-  failed, or were left silent by the settings or a missing WAV, and any events lost.
+  `DirectSoundCreate` of the `dsound.dll` the game imports (IAT `0x4FC044`), `DSSCL_PRIORITY` on
+  the game's window as the engine's (`0x4CEFBB`) and without global focus, so it is silent while
+  the game is not in front, as the engine's is. **It is made off the game thread**, with one
+  buffer a clip (`DSBCAPS_STATIC | DSBCAPS_CTRLVOLUME`, filled from the published samples): on the
+  3D load's thread before the WIKI3D is published, unless the player's settings muted every sound
+  when the load started (read on the game thread then, with the window, and handed over by value
+  in `WIKI3DIN`); else on a thread of its own that the next open starts once they no longer mute
+  (`tagpu_wikisound_arm`). It is published by one interlocked store once whole and **kept for the
+  process**, never released, not at the close and not at DLL detach. A create that fails leaves
+  the wiki silent for the process and says so once; the engine's object is never borrowed. A clip
+  DirectSound refuses a buffer for is silent for the object's life, said once. On the game thread
+  only `GetStatus`, `GetCurrentPosition`, `DuplicateSoundBuffer`, `SetCurrentPosition`,
+  `SetVolume`, `Play` and `Stop` run, by `0x4CF570`'s rule for `WIKISOUND_VOICES` = 4 copies: the
+  first copy whose status is 0 plays, a failed `GetStatus` plays nothing (`0x4CF5F8`), with every
+  copy busy a copy not made yet is duplicated and a failed duplicate plays nothing (`0x4CF66D`),
+  and with all four made the one with the largest play cursor restarts. The wiki's close stops
+  every voice (`tagpu_wikisound_stop`), which the level's teardown does first
+  (`tagpu_wiki_level_end`, from the teardown wrap's entry to `0x491B60`). It logs the create's
+  result once with the buffers made, each clip refused, and per demo the Play calls that
+  succeeded, failed, or were left silent by the settings, no object or a missing WAV, and any
+  events lost.
 - **No archive read on the game thread.** The 3D asset load reads, on its own thread, each
   resolved unit's FBI `SoundCategory` over `<gamedata>\sound.TDF` as the engine does (absent 0;
   else the first section whose name matches it without case; else its `atoi`; a number outside
@@ -762,7 +773,8 @@ L4b starts when the wiki shows a unit that emits.
   (`tagpu_wikisound_reply`). A kind the player's settings silence still writes its cooldown in the
   wiki, where the engine leaves it unwritten when unitchat or speechfx refuses it (the engine
   writes it when fxvol, Sound Mode or NoDirectSound silences it, as the wiki does). Under
-  UseWindowsSound the engine plays replies through `PlaySoundA`; the wiki is silent.
+  UseWindowsSound the engine plays through `PlaySoundA`; the wiki, which has no such path, is
+  silent (its own choice).
 - **A demo starts one gap after its last reply.** The simulation starts with the last reply 30
   ticks before tick 0, so the first reply a demo or the player causes is heard; an engine level
   starts at 0 (`0x47EE30`), which would silence every demo's first second.

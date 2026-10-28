@@ -929,12 +929,14 @@ static void act(WIKISIM* s, const WIKIGADGET* g)
     int i, t;
     /* THE BUTTON'S SOUND, 0x41AA00's: ORDERS `ordersbutton` (0x41AB04), BUILD `buildbutton`
        (0x41AB45), a build button that arms `addbuild` (0x41ABA3), STOP `immediateorders` (its
-       branch jumps to 0x41A0EA); PREV and NEXT only set flags there, and the page step 0x41BDE0
-       plays `nextbuildmenu` (0x41BF01) when a unit with pages is shown */
+       branch jumps to 0x41A0EA); PREV and NEXT only set flags there, and the dispatcher 0x41C180
+       calls NEXT 0x41BDE0 or PREV 0x41BF10, which play `nextbuildmenu` (0x41BF01, 0x41C04C) on
+       every press: their exits for no unit shown or a unit with no pages (0x41BDF2, 0x41BE1F,
+       0x41BF21) jump to the play */
     if (g->role == WIKI_ROLE_ORDERS) sound_named(s, WIKI_SNDNAME_ORDERSBUTTON);
     else if (g->role == WIKI_ROLE_BUILDTAB) sound_named(s, WIKI_SNDNAME_BUILDBUTTON);
     else if (g->role == WIKI_ROLE_STOP) sound_named(s, WIKI_SNDNAME_IMMEDIATE);
-    else if ((g->role == WIKI_ROLE_PREV || g->role == WIKI_ROLE_NEXT) && n) sound_named(s, WIKI_SNDNAME_NEXTBUILDMENU);
+    else if (g->role == WIKI_ROLE_PREV || g->role == WIKI_ROLE_NEXT) sound_named(s, WIKI_SNDNAME_NEXTBUILDMENU);
     else if (g->role == WIKI_ROLE_BUILD && (t = unit_def(s, g)) >= 0 && !mobile(s, t)) sound_named(s, WIKI_SNDNAME_ADDBUILD);
     if ((g->role == WIKI_ROLE_PREV || g->role == WIKI_ROLE_NEXT) && n) {
         u->page = g->role == WIKI_ROLE_NEXT ? (u->page == n ? 1 : u->page + 1) : (u->page < 2 ? n : u->page - 1);

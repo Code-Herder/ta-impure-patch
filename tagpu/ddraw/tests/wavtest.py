@@ -5,7 +5,8 @@
 
 Builds tests/wavtest.c natively with the host's gcc, AddressSanitizer and UndefinedBehaviorSanitizer
 (tagpu_wav.c is engine-free and Win32-free) and runs its built-in cases: truncated files, huge RIFF,
-fmt and data lengths, non-PCM formats, a block align that is not the frame, data before fmt. Then
+fmt and data lengths, non-PCM formats, a block align that is not the frame, data before fmt,
+data under DirectSound's 4-byte minimum. Then
 every WAV the mockup's gitignored packs hold (tools/wiki/mockup/gfx/**/sounds/*.wav, written by
 gfx.py from the install) and each built-in case file through both parsers, the C verdict compared
 with gfx.py's (accepted or refused alike), every truncation of each parsed under the sanitizers.
@@ -46,7 +47,8 @@ def main():
         cases = [make(136, 16, 1, 1, 22050, 1, 8, 100, 100), make(138, 16, 1, 2, 44100, 4, 16, 102, 102),
                  make(136, 16, 2, 1, 22050, 256, 4, 100, 100), make(0xFFFFFFFF, 16, 1, 1, 22050, 1, 8, 0xFFFFFFF0, 100),
                  make(136, 0xFFFFFFF0, 1, 1, 22050, 1, 8, 100, 100), make(20, 16, 1, 1, 22050, 1, 8, 100, 100),
-                 make(136, 16, 1, 1, 22050, 1, 8, 100, 0), make(136, 16, 1, 1, 0xFFFFFFFF, 1, 8, 100, 100)]
+                 make(136, 16, 1, 1, 22050, 1, 8, 100, 0), make(136, 16, 1, 1, 0xFFFFFFFF, 1, 8, 100, 100),
+                 make(39, 16, 1, 1, 22050, 1, 8, 3, 3), make(42, 16, 1, 2, 22050, 4, 16, 6, 6)]
         for i, c in enumerate(cases):
             p = Path(tmp) / f"case{i}.wav"
             p.write_bytes(c)

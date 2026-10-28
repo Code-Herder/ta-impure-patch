@@ -87,6 +87,10 @@ typedef struct {
     const WIKIDATA*  data;
     const unsigned char* pak;           /* WIKIPAK: the stage descriptions                      */
     size_t           npak;
+    /* the wiki's sound (tagpu_wikisound.h), read on the game thread as the load starts: the game's
+       window, and whether the player's settings muted every sound then (no object is made) */
+    uintptr_t        hwnd;
+    int              sound_off;
 } WIKI3DIN;
 
 /* A feature of a stage, resolved. The sequences are the engine's in-memory form (TAGPU_SQ_*,

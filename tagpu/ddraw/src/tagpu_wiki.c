@@ -818,6 +818,8 @@ static void page_open(void)
     s_costFrames = 0;
     s_drag = -1;
     s_saidHead = 0;
+    /* a sound object the load did not make, the settings muting then, is made now they do not */
+    tagpu_wikisound_arm(sound_of(), (uintptr_t)g_ddraw.hwnd);
     if (d && s_entry < 0)
         for (i = 0; i < d->nnode; i++)
             if (d->node[i].entry >= 0) { pick(d->node[i].entry, 0); return; }
@@ -828,7 +830,7 @@ static void page_close(void)
 {
     try_release_all(1);
     sim_free();
-    tagpu_wikisound_release();
+    tagpu_wikisound_stop();
     s_want = 0;
     s_drag = -1;
     tagpu_logf("wiki: the page cost this thread at most %.3f ms in one frame over %u frames",
@@ -1665,6 +1667,8 @@ static void assets_start(void)
     }
     in->data = d;
     in->pak = tagpu_pak_resource("WIKIPAK", &in->npak);
+    in->hwnd = (uintptr_t)g_ddraw.hwnd;
+    in->sound_off = tagpu_wikisound_muted();
     tagpu_logf("wiki3d: loading from %d archives on a thread of its own", in->narc);
     tagpu_wikiasset_start(in);
 }

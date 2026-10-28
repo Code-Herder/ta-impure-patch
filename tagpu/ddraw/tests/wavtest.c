@@ -86,6 +86,10 @@ static int builtin(void)
     expect("a fmt chunk of 8 bytes", b, n, 0, 0);
     n = make(b, 36 + 100, 16, 1, 1, 22050, 1, 8, 100, 0);
     expect("data claimed, none present", b, n, 0, 0);
+    n = make(b, 36 + 3, 16, 1, 1, 22050, 1, 8, 3, 3);
+    expect("3 bytes of data, under DSBSIZE_MIN", b, n, 0, 0);
+    n = make(b, 36 + 4, 16, 1, 2, 22050, 4, 16, 6, 6);
+    expect("6 bytes of 4-byte frames: 4, DSBSIZE_MIN itself", b, n, 1, 4);
     n = make(b, 20, 16, 1, 1, 22050, 1, 8, 100, 100);
     expect("a RIFF size that ends inside fmt", b, n, 0, 0);
     memcpy(b + 12, "data", 4);

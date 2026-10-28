@@ -903,11 +903,12 @@ const WikiSim = (() => {
        takes in any mode but 14, which comes before any release could commit it. */
     function act(g) {
       const u = sb.shown, n = u ? npages(u.type) : 0;
-      // THE BUTTON'S SOUND, 0x41AA00's (tagpu_wikisim.c act)
+      // THE BUTTON'S SOUND, 0x41AA00's, and PREV and NEXT's on every press, 0x41C180 -> 0x41BDE0 / 0x41BF10
+      // (tagpu_wikisim.c act)
       if (g.role === 'orders') soundNamed('ordersbutton');
       else if (g.role === 'buildtab') soundNamed('buildbutton');
       else if (g.role === 'stop') soundNamed('immediateorders');
-      else if ((g.role === 'prev' || g.role === 'next') && n) soundNamed('nextbuildmenu');
+      else if (g.role === 'prev' || g.role === 'next') soundNamed('nextbuildmenu');
       else if (g.role === 'build' && defined(g.unit) && !mobile(g.unit)) soundNamed('addbuild');
       if ((g.role === 'prev' || g.role === 'next') && n) {
         u.page = g.role === 'next' ? (u.page === n ? 1 : u.page + 1) : (u.page < 2 ? n : u.page - 1);

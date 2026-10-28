@@ -7,7 +7,8 @@
    THE RULE: `RIFF`, a size, `WAVE`, then chunks, each a four-byte id, a 32-bit length and that many
    bytes padded to an even count. The `fmt ` chunk must be PCM (format tag 1) with 1 or 2 channels,
    8 or 16 bits, a rate of 1000..192000 Hz and a block align of channels x bits / 8; the first
-   `data` chunk after it is the samples, cut to whole frames. Any other format -- ADPCM, float,
+   `data` chunk after it is the samples, cut to whole frames, at least 4 bytes of them
+   (DSBSIZE_MIN: DirectSound makes no smaller buffer). Any other format -- ADPCM, float,
    anything DirectSound would need a codec for -- is refused, never converted.
 
    BOUNDED BY LENGTH: the RIFF size is cut to the file, every chunk length is compared with what is

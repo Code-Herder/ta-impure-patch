@@ -1699,10 +1699,13 @@ addresses and the gaps).
   page and `cobhost.mjs` `soundSource` under node; `tests/wikicobfile.h` reads a type's `"sound"`
   for `wikitest`.
 - **Played on the game thread** after each fill's steps (`tagpu_wiki.c` `sound_drain`), through
-  `tagpu_wikisound.c`: the wiki's own DirectSound object, the player's settings applied at each
-  play (fxvol and Sound Mode 0, NoDirectSound and UseWindowsSound silence it; a reply also needs
-  speechfx and unitchat), the engine's −585 a play and nothing for fxvol, which reaches the
-  wiki's buffers as the process's wave volume. The page's own controls say `Options`, outside the
+  `tagpu_wikisound.c`: the wiki's own DirectSound object and its clips' buffers, made off the game
+  thread (on the 3D load's thread, or at an open once the settings no longer mute, on a thread of
+  their own) and kept for the process, the close only stopping the voices; the player's settings
+  applied at each play (fxvol and Sound Mode 0 and NoDirectSound silence it, as the engine's;
+  UseWindowsSound silences it too, the wiki's own choice, where the engine plays through
+  `PlaySoundA`; a reply also needs speechfx and unitchat), the engine's −585 a play and nothing
+  for fxvol, which reaches the wiki's buffers as the process's wave volume [INFERRED]. The page's own controls say `Options`, outside the
   simulation. In the mockup `sound.js` plays the same events through WebAudio at the engine's
   default settings.
 - **The WAVs** are the player's install's, read on the 3D load's thread and kept only as PCM by

@@ -831,8 +831,8 @@ def unit_sound(eng, fbi):
 
 def wav_pcm(blob):
     """tagpu_wav.c's rule: a RIFF WAVE file whose `fmt ` chunk is PCM (tag 1), 1 or 2 channels, 8 or 16 bits, a rate
-    of 1000..192000 Hz and a block align of channels x bits / 8, and a `data` chunk after it holding a whole frame
-    within the file. None when it passes, else why not."""
+    of 1000..192000 Hz and a block align of channels x bits / 8, and a `data` chunk after it holding at least 4 bytes
+    of whole frames within the file (DSBSIZE_MIN). None when it passes, else why not."""
     if len(blob) < 12 or blob[:4] != b"RIFF" or blob[8:12] != b"WAVE":
         return "not a RIFF WAVE file"
     end = min(len(blob), 8 + struct.unpack_from("<I", blob, 4)[0])
@@ -853,7 +853,7 @@ def wav_pcm(blob):
             if fmt is None:
                 return "data before fmt"
             frames = min(n, end - body) // (fmt[0] * fmt[1] // 8)
-            return None if frames > 0 else "no whole frame"
+            return None if frames * (fmt[0] * fmt[1] // 8) >= 4 else "under 4 bytes of whole frames"
         if n > end - body:
             break
         at = body + n + (n & 1)

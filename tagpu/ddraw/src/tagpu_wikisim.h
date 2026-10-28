@@ -161,7 +161,8 @@ typedef struct {
    0x48B135 in the state setter 0x48B090). A NAMED SOUND (0x47F1A0, an allsound.tdf name, played
    at once, no queue and no cooldown) for the sidebar's buttons as 0x41AA00 plays them -- ORDERS
    `ordersbutton` (0x41AB04), BUILD `buildbutton` (0x41AB45), a build button that arms `addbuild`
-   (0x41ABA3), PREV and NEXT `nextbuildmenu` when they step a page (0x41BF01), STOP
+   (0x41ABA3), PREV and NEXT `nextbuildmenu` on every press (0x41C180 calls 0x41BDE0 or 0x41BF10,
+   which play it at 0x41BF01 and 0x41C04C, with a page to step or not), STOP
    `immediateorders` (0x419CF2 -> 0x41A0EA) -- and for a placement, `oktobuild` and `notoktobuild`
    (0x498FA4, 0x49901D in stock's click, `oktobuild` once a gesture in tagpu_place.c's commit).
 

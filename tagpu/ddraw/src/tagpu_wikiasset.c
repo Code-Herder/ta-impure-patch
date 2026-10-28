@@ -24,6 +24,7 @@
 #include <windows.h>
 #include "tagpu_log.h"
 #include "tagpu_model3do.h"
+#include "tagpu_wikisound.h"
 #define LOG tagpu_logf
 #else
 #define LOG(...) (fprintf(stderr, __VA_ARGS__), fputc('\n', stderr))
@@ -1743,16 +1744,18 @@ static void sound_load(LOADER* L, WIKI3DUNIT* unit, const UNITREC* rec, int nuni
         WIKI3DUNIT* u = &unit[i];
         u->sound_cat = -1;
         if (!u->ok) continue;
-        if (!rec[i].has_sndcat) u->sound_cat = 0;
-        else {
-            long long num = -1;
-            for (j = 0; j < nsec; j++) {
-                char nm[64];
-                snprintf(nm, sizeof nm, "%s", tagpu_guifile_name(t, tagpu_guifile_child(t, 0, j)));
-                if (!tagpu_hpi_stricmp(nm, rec[i].sndcat, sizeof rec[i].sndcat)) break;
+        {
+            /* absent: 0 (0x42CC61); every answer, that one too, is then bounded by the sections */
+            long long num = 0;
+            if (rec[i].has_sndcat) {
+                for (j = 0; j < nsec; j++) {
+                    char nm[64];
+                    snprintf(nm, sizeof nm, "%s", tagpu_guifile_name(t, tagpu_guifile_child(t, 0, j)));
+                    if (!tagpu_hpi_stricmp(nm, rec[i].sndcat, sizeof rec[i].sndcat)) break;
+                }
+                if (j < nsec) num = j;
+                else tagpu_guifile_num(rec[i].sndcat, &num, NULL);
             }
-            if (j < nsec) num = j;
-            else tagpu_guifile_num(rec[i].sndcat, &num, NULL);
             u->sound_cat = num >= 0 && num < nsec ? (int)num : -1;
         }
         if (u->sound_cat >= 0) {
@@ -4750,6 +4753,9 @@ static DWORD WINAPI loader(LPVOID p)
             (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)f.QuadPart, (unsigned long)w->bytes, (void*)base,
             so, w->nstage, uo, w->nunit);
     }
+    /* THE WIKI'S SOUND OBJECT, made here and not on the game thread (tagpu_wikisound.h), before the
+       WIKI3D is published, so the first sound finds it whole */
+    if (!in->sound_off) tagpu_wikisound_make(&w->sound, in->hwnd);
     publish_3d(w);
     free(in);
     return 0;
