@@ -48,7 +48,8 @@ D1/D2). Each element is resolved or refused by name:
   name binds to the first GAF in bank order that has the entry; on a miss to `textures\\logos.GAF`, as a team face
   (the owner's frame) only when the entry has exactly 10 frames; when neither has it, the face is flat colour 0xD1.
   An animated face shows its frame 0, the binder's starting frame.
-- **Language variants**: every engine open tries `<dir>-english\\` first (0x4290F0), the registry's default.
+- **Language variants**: every engine open tries `<dir>-<language>\\` first (0x4290F0); `--language`, english by
+  default as the registry's.
 
 Colour is palette colour: no restorer runs (the plan's question 7: the stage is Classic).
 
@@ -56,20 +57,24 @@ Each entry pack also carries `minimap.bin`, the minimap picture the engine gener
 (`minimap_base`), shrunk with this install's palettes\\PALETTE.ALP.
 
 THE SIDEBAR PACK (`--side-only --mod <m>`; tools/wiki/sidepacks.py runs it once per compat setup) is the mod's left
-sidebar as the stage draws it: `gfx/side/<m>/side.json` and its binaries (spec: .data/wiki-sidebar/spec.md section
-2.4). side.json holds
-  layout   exactly the object tools/wiki/mockup/sim.js `checkLayout` takes: the sides (MAIN2 and GEN screens), the
-           player's side, each player type's pages, and every screen's buttons with their roles and rects
+sidebar as the stage draws it and each side's own units for the wiki's demos: `gfx/side/<m>/side.json` and its
+binaries (spec: .data/wiki-sidebar/spec.md section 2.4). side.json holds
+  layout   exactly the object tools/wiki/mockup/sim.js `checkLayout` takes: every side that has MAIN2 and GEN screens,
+           in sidedata's order, with the pages of its cast types (`sides[k].types`), and every screen's buttons with
+           their roles and rects
+  casting  index-aligned with layout.sides: the side's commander and, for every cast, the unit the cast rule picks
+           (its type, display name, footprint, G cells and figures, and which casts its menu builds) or null, with
+           the reason for each pick
   art      `sheet.bin` (u8 palette indices, 1024 wide; every frame [sx, sy, w, h, hx, hy] with its GAF key),
-           `pal.bin` (PALETTE.PAL as 256 RGBA), PANELSIDE, each screen's panel picture, one picture a button (`pics[i]`
-           belongs to `layout.screens[S].gadgets[i]`) and its labels, `greyed.bin` (the tint over a greyed button,
-           greyed_table), the minimap dots, and the minimap's colours:
+           `pal.bin` (PALETTE.PAL as 256 RGBA), PANELSIDE of each layout side, each screen's panel picture, one
+           picture a button (`pics[i]` belongs to `layout.screens[S].gadgets[i]`) and its labels, `greyed.bin` (the
+           tint over a greyed button, greyed_table), the minimap dots, and the minimap's colours:
            `unexplored` and `box` (GUI colours 0 and 0x0E), `seen.bin` (the grey remap) and one base per entry,
            `minimap/<entry>.bin`, shrunk with that install's own PALETTE.ALP
-  defs     each player type's `canstop` (STOP's greyed state)
   report   every element's source, and every refusal, by name
 The rules are the engine's, each cited where it is applied: the .GUI files by position (tavfs.gui_sections), the page
-probe and the download fill of the def load and the page loader, the greyed pass, the picture rule of decision 5.
+probe and the download fill of the def load and the page loader, the greyed pass, the picture rule of decision 5,
+the FBI's figures and display name. The cast rule (`side_casting`) is the wiki's own and names no mod.
 """
 
 import argparse
@@ -124,11 +129,13 @@ class Miss(Exception):
 class Engine:
     """The install as the engine asks it: tavfs's precedence, the executable's names, the language variant."""
 
-    def __init__(self, root, exe=None, folders=None, archive=None):
+    def __init__(self, root, exe=None, folders=None, archive=None, language=LANGUAGE):
         """`folders` ({name: folder}, FOLDERS only) and `archive` (the first mount pattern) replace what the
         executable's file says: a mod's loader rewrites those strings in memory at DllMain, before the engine reads
-        them (the Q6 scout answer), and the offline pack reads the file."""
+        them (the Q6 scout answer), and the offline pack reads the file. `language` stands for 0x51FB50, which names
+        both the folder variant `open` tries first and the key a unit's display name is read under (`display_name`)."""
         self.vfs = tavfs.Vfs(root, exe, archive)
+        self.language = language
         exe_path = Path(exe) if exe else self.vfs._loose_path(tavfs.EXE_NAME)
         blob = exe_path.read_bytes()
         self.dirs = {k: tavfs.exe_cstr(blob, va) for k, va in VA.items()}
@@ -143,9 +150,9 @@ class Engine:
         self._features = None
 
     def open(self, d, name, ext):
-        """0x4290F0's path, `<d>-english\\<name>.<ext>` first: (bytes, path, where) or None."""
+        """0x4290F0's path, `<d>-<language>\\<name>.<ext>` first: (bytes, path, where) or None."""
         name = name.rsplit(".", 1)[0] if "." in name else name      # it cuts at the last '.'
-        for path in (f"{d}-{LANGUAGE}\\{name}.{ext}", f"{d}\\{name}.{ext}"):
+        for path in (f"{d}-{self.language}\\{name}.{ext}", f"{d}\\{name}.{ext}"):
             hit = self.vfs.open(path)
             if hit is not None:
                 return hit[0], path, hit[1]
@@ -962,27 +969,111 @@ def read_downloads(eng, report):
     return out
 
 
+def strtod(v):
+    """C's strtod over a TDF value, which is how this pack reads the FBI's fractional figures: leading blanks, then
+    the longest decimal prefix; 0.0 when there is none (or the key is missing)."""
+    m = re.match(r"[ \t\r\n]*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)", v or "")
+    return float(m.group(1)) if m else 0.0
+
+
+# The yard codes of the unit-def loader's parse (0x42CF9D..0x42D06B: the byte map 0x42D198 into the jump table
+# 0x42D16C, DISASSEMBLED). 0x8F, the G cell, is the only code with bit 0x80.
+YARD_CODES = {".": 0x00, "C": 0x35, "G": 0x8F, "O": 0x2B, "Y": 0x31, "c": 0x2D, "f": 0x6F, "o": 0x2F, "w": 0x37,
+              "y": 0x29}
+YARD_G = 0x8F
+YARD_BUF = 0x400           # GetString 0x4C48C0's buffer for the key (0x42CF3E..0x42CF59): 0x3FF chars and the NUL
+
+
+def yard_cells(text, fx, fz):
+    """The fx * fz yard bytes row by row, as the parse fills def+0x14E: a char of YARD_CODES fills one cell and moves
+    on unless the next char ends the string, so a short string repeats its last char; any other char is skipped. Past
+    the string every remaining cell takes the last code, or 'o' when the string had none: tagpu_patches.c
+    `yard_parse`, which Impure installs at 0x42CF5E and which equals the stock parse for every string that stock
+    parses inside its NUL."""
+    t = (text or "")[:YARD_BUF - 1]
+    cells, k, last = [], 0, None
+    while len(cells) < fx * fz:
+        if k >= len(t):
+            cells.append(last if last is not None else YARD_CODES["o"])
+            continue
+        code = YARD_CODES.get(t[k])
+        if code is None:
+            k += 1
+            continue
+        cells.append(code)
+        last = code
+        if k + 1 < len(t):
+            k += 1
+    return cells
+
+
+CP1252_UNMAPPED = b"\x81\x8d\x8f\x90\x9d"
+
+
+def display_name(keys, language, unitname):
+    """A unit's name as the game shows it: the FBI's `<language>name` when the key exists, else `name` (0x4C58A0 tries
+    `<0x51FDC0><key>` first and the plain key second; `name` is read into def+0x00 at 0x42BFAC..0x42BFBB), cut to 31
+    bytes because def+0x00 is 0x20 bytes (DISASSEMBLED). The bytes are the game's code page, taken to be Windows-1252
+    [INFERRED], and given as UTF-8, a byte with no Windows-1252 character becoming '?'. An empty name gives the
+    UnitName."""
+    raw = keys.get(f"{language.lower()}name", keys.get("name", "")).encode("latin-1")[:0x1F]
+    text = "".join("?" if bytes([b]) in CP1252_UNMAPPED else bytes([b]).decode("cp1252") for b in raw)
+    return text or unitname
+
+
+def unit_record(path, where, k, language):
+    """One FBI's UNITINFO keys as the cast rule and the casting read them: integers as the engine's atoi, fractional
+    figures as strtod, a missing key 0 except where said."""
+    name = k["unitname"].strip()
+    fx, fz = atoi(k.get("footprintx")), atoi(k.get("footprintz"))
+    # BMcode: a missing key reads 0, a structure (esi zeroed at 0x42C0F0 is pushed as the default at 0x42C401, with
+    # no write between; DISASSEMBLED)
+    bmcode = atoi(k.get("bmcode"))
+    # the yard is parsed only for a def whose BMcode is 0 (0x42CF30..0x42CF38)
+    yard = yard_cells(k.get("yardmap", ""), fx, fz) if bmcode == 0 and fx > 0 and fz > 0 else []
+    return {"name": name, "fbi": path, "where": where, "bmcode": bmcode, "builder": atoi(k.get("builder")),
+            "workertime": strtod(k.get("workertime")), "maxvelocity": strtod(k.get("maxvelocity")),
+            "canfly": atoi(k.get("canfly")),
+            "minwaterdepth": strtod(k["minwaterdepth"]) if "minwaterdepth" in k else None,
+            "fx": fx, "fz": fz, "g": [[i % fx, i // fx] for i, c in enumerate(yard) if c == YARD_G],
+            "extractsmetal": strtod(k.get("extractsmetal")), "energymake": strtod(k.get("energymake")),
+            "energyuse": strtod(k.get("energyuse")), "weapon1": bool((k.get("weapon1") or "").strip()),
+            "fort": (k.get("tedclass") or "").strip().upper() == "FORT",
+            "buildtime": strtod(k.get("buildtime")), "builddistance": strtod(k.get("builddistance")),
+            # canstop is def+0x245 bit 3, 0 when the key is missing (0x42C90B..0x42C936; the Q4 scout answer)
+            "canstop": atoi(k.get("canstop")) & 1,
+            "title": display_name(k, language, name)}
+
+
 def unit_index(eng, report):
     """Every FBI of the units folder by its UnitName without case (0x488B10 compares def+0x20, the FBI's
-    `unitname`, with _stricmp): {name: (UnitName, Side, canstop, path, where)}. The first file listed wins a name."""
+    `unitname`, with _stricmp): {name lowered: unit_record}. The FBI is read by the engine's TDF grammar, its first
+    UNITINFO section; the first file listed wins a name."""
     out = {}
     for path, where in eng.vfs.enumerate(eng.dirs["units"], "*.fbi", False):
         try:
-            f = fbi_fields(eng.vfs.read_from(path, where).decode("latin-1", "replace"))
+            blob = eng.vfs.read_from(path, where)
         except (ta3do.HpiError, tavfs.VfsError, struct.error, OSError):
             continue
-        name = (f.get("unitname") or "").strip()
-        if name:
-            # canstop is def+0x245 bit 3, 0 when the key is missing (0x42C90B..0x42C936; the Q4 scout answer)
-            out.setdefault(name.lower(), (name, (f.get("side") or "").strip(), atoi(f.get("canstop")) & 1,
-                                          path, where))
+        if not blob:
+            continue
+        try:
+            secs = tavfs.tdf_sections(blob)
+        except tavfs.TdfError as e:
+            report.append({"element": f"fbi {path}", "refused": f"the engine's parser refuses it: {e}"})
+            continue
+        ui = next((sec for sec in secs if sec["_name"].lower() == "unitinfo"), None)
+        if ui is None or not (ui["keys"].get("unitname") or "").strip():
+            continue
+        name = ui["keys"]["unitname"].strip()
+        out.setdefault(name.lower(), unit_record(path, where, ui["keys"], eng.language))
     report.append({"element": "units", "folder": eng.dirs["units"], "types": len(out)})
     return out
 
 
 def read_sides(eng, report):
     """`<gamedata>\\sidedata.tdf`'s [SIDE0], [SIDE1], ... up to the first missing one (0x431A60), the first section
-    of a name winning as the engine's lookup 0x4C3410 does: [{name, prefix, intgaf}]."""
+    of a name winning as the engine's lookup 0x4C3410 does: [{name, prefix, intgaf, commander}]."""
     hit = eng.load(eng.dirs["gamedata"], "sidedata", "TDF")
     if hit is None:
         raise SideError(f"no {eng.dirs['gamedata']}\\sidedata.tdf")
@@ -996,47 +1087,12 @@ def read_sides(eng, report):
         if sec is None:
             break
         k = sec["keys"]
-        sides.append({"name": k.get("name", ""), "prefix": k.get("nameprefix", ""), "intgaf": k.get("intgaf", "")})
+        sides.append({"name": k.get("name", ""), "prefix": k.get("nameprefix", ""), "intgaf": k.get("intgaf", ""),
+                      "commander": k.get("commander", "").strip()})
     report.append({"element": "sidedata", "path": hit[1], "where": hit[2], "sides": [s["name"] for s in sides]})
     if not sides:
         raise SideError(f"{hit[1]} has no [SIDE0]")
     return sides
-
-
-def player_units(entries):
-    """The types of the player's (owner 0) units over every entry's scene and demo scenes, in order of first
-    appearance, and the first entry's own scene's list (the player's side reads that one)."""
-    seen, first = [], []
-    for i, entry in enumerate(entries):
-        for j, sc in enumerate([entry.get("scene", {})] + [d.get("scene", {}) for d in entry.get("demos", [])]):
-            for u in sc.get("units", []) or []:
-                if (u.get("owner") or 0) == 0 and isinstance(u.get("type"), str):
-                    if u["type"] not in seen:
-                        seen.append(u["type"])
-                    if i == 0 and j == 0:
-                        first.append(u["type"])
-    return seen, first
-
-
-def player_side(sides, first, units):
-    """The player's side, which names MAIN2, GEN, DL and PANELSIDE (the engine takes it from the player's
-    PlayerInfo+0x95, which a stage has no copy of). In order, over the first entry's own scene's owner-0 units:
-    1. the first unit whose FBI's `Side` equals a side's `name` without case;
-    2. else the first unit whose type name begins with a side's `nameprefix` without case (the longest prefix): a
-       side's files are named that way, and some installs' units declare a Side no sidedata names (TA Zero's
-       human units say `NotForAI_Arm`, MEASURED, the Q5 scout answer);
-    3. else side 0. Returns (index, the step that decided)."""
-    names = [s["name"].lower() for s in sides]
-    for t in first:
-        u = units.get(t.lower())
-        if u and u[1].lower() in names:
-            return names.index(u[1].lower()), f"{t}'s Side {u[1]}"
-    for t in first:
-        hits = [(len(s["prefix"]), i) for i, s in enumerate(sides) if s["prefix"] and t.lower().startswith(s["prefix"].lower())]
-        if hits:
-            i = max(hits, key=lambda h: (h[0], -h[1]))[1]
-            return i, f"{t} begins with {sides[i]['prefix']}"
-    return 0, "no unit names a side: side 0"
 
 
 class SideArt:
@@ -1194,13 +1250,27 @@ def gadget_role(g, units):
     type: greyed), then STOP; any other button is an order. Returns (role, unit or None)."""
     name = g["name"]
     if g["commonattribs"] & 4 and name.lower() in units:
-        return "build", units[name.lower()][0].upper()
+        return "build", units[name.lower()]["name"].upper()
     for sub, role in (("PREV", "prev"), ("NEXT", "next"), ("ORDERS", "orders"), ("BUILD", "buildtab")):
         if sub in name:
             return role, None
     if g["commonattribs"] & 4:
         return "build", None
     return ("stop" if "STOP" in name else "order"), None
+
+
+def button_state(g, units, page, hide_pagers):
+    """A button as the layout holds it: (role, unit, grey, hidden). `page` is the build page number or None for a
+    side's screen; `hide_pagers` hides PREV and NEXT on a type with no numbered page."""
+    role, unit = gadget_role(g, units)
+    if role == "build" and page:
+        # the greyed pass 0x41B04E..0x41B096: on a numbered page a build button naming a type is UN-greyed and
+        # any other greyed, whatever the file says (0x4A1200 both ways; the Q4 scout answer)
+        grey = unit is None
+    else:
+        grey = bool(g["grey"]) or (role == "build" and unit is None)
+    hidden = not g["active"] or (hide_pagers and role in ("prev", "next"))
+    return role, unit, grey, hidden
 
 
 def panel_picture(art, header, bank_name):
@@ -1250,6 +1320,12 @@ def panel_picture(art, header, bank_name):
             "path": art.common[1], "where": art.common[2]}
 
 
+def check_panel(name, header):
+    """Raises SideError for a screen whose panel the column cannot hold: the layout leaves such a screen out."""
+    if not (1 <= header["w"] <= SIDE_W and header["h"] >= 1 and header["y"] >= 0 and header["y"] + header["h"] <= SIDE_ROWS):
+        raise SideError(f"{name}: a {header['w']} x {header['h']} panel at row {header['y']} is outside the column")
+
+
 def build_screen(art, name, file, path, where, recs, units, page, hide_pagers, report):
     """One screen of the layout and its art: (layout screen, art screen). Gadgets are the buttons (id 1) in file
     order; the panel (id 0), labels (id 5) and fonts (id 7) are the art's. `page` is the build page number (the
@@ -1257,8 +1333,7 @@ def build_screen(art, name, file, path, where, recs, units, page, hide_pagers, r
     header = recs[0]
     if header["x"] != 0:
         report.append({"element": f"screen {name}", "note": f"the panel is at x {header['x']}; drawn at 0"})
-    if not (1 <= header["w"] <= SIDE_W and header["h"] >= 1 and header["y"] >= 0 and header["y"] + header["h"] <= SIDE_ROWS):
-        raise SideError(f"{name}: a {header['w']} x {header['h']} panel at row {header['y']} is outside the column")
+    check_panel(name, header)
     gadgets, pics, labels = [], [], []
     for g in recs[1:]:
         if g is None:
@@ -1268,13 +1343,7 @@ def build_screen(art, name, file, path, where, recs, units, page, hide_pagers, r
             continue
         if g["id"] != 1:
             continue
-        role, unit = gadget_role(g, units)
-        if role == "build" and page:
-            # the greyed pass 0x41B04E..0x41B096: on a numbered page a build button naming a type is UN-greyed and
-            # any other greyed, whatever the file says (0x4A1200 both ways; the Q4 scout answer)
-            grey = unit is None
-        else:
-            grey = bool(g["grey"]) or (role == "build" and unit is None)
+        role, unit, grey, hidden = button_state(g, units, page, hide_pagers)
         pic, rect = gadget_picture(art, g, role, unit, file, f"{name}#{g['index']}", report)
         x, y, w, h = rect
         cw, ch = min(x + w, header["w"]) - max(x, 0), min(y + h, header["h"]) - max(y, 0)
@@ -1294,7 +1363,7 @@ def build_screen(art, name, file, path, where, recs, units, page, hide_pagers, r
         if role == "build":
             lg["unit"] = unit
         lg["grey"] = grey
-        if not g["active"] or (hide_pagers and role in ("prev", "next")):
+        if hidden:
             lg["hidden"] = True
         gadgets.append(lg)
         pics.append({**pic, "attribs": g["attribs"]})
@@ -1355,19 +1424,195 @@ def fill_downloads(recs, page, entries, name, report):
         report.append({"element": f"{name} download {unitname}", "slot": slot, "from": path})
 
 
-def side_pack(eng, mod, entries, descs, out, pal, report, player=None):
+# ---- the cast rule: each side's own units for the casts a wiki demo plays
+#
+# research/notes/ingame-wiki-sidebar-plan.md decisions 14 and 20. A unit's place in a demo is its CAST; a side's answer
+# to every cast is its CASTING. The rule names no mod, lists no unit and reads no unit's `Side=`: it walks a side's
+# build menus breadth-first from the side's commander, so tech level ranks first and the mod's own menu order second,
+# and it tests each candidate's own FBI figures. What pins it: on the stock game it gives ARM exactly the types the
+# wiki's entries author, cast for cast and figure for figure (sidepacks.py `stock_identity`, run on every stock pack).
+
+CASTS = ("builder", "advbuilder", "mex", "moho", "geo", "walker", "tower", "wall", "solar")
+CAST_FP_MAX = 16           # a footprint's side on each axis that the casting holds (WIKI_FP_MAX: one G row a u16)
+
+
+def is_mobile(u):
+    return u["bmcode"] != 0 and u["maxvelocity"] > 0
+
+
+def is_structure(u):
+    return u["bmcode"] == 0 and u["fx"] > 0 and u["fz"] > 0
+
+
+def is_builder(u):
+    return bool(u["builder"] & 1) and u["workertime"] > 0
+
+
+def is_land(u):
+    """Neither a flyer nor bound to water; an FBI without MinWaterDepth is a land unit."""
+    return not u["canfly"] and (u["minwaterdepth"] is None or u["minwaterdepth"] <= 0)
+
+
+def is_extractor(u):
+    return is_structure(u) and u["extractsmetal"] > 0
+
+
+def is_geothermal(u):
+    """A G cell in the yard is what ties a building to a vent: 0x47D2E0 refuses a yard holding G unless some G cell
+    stands on a geothermal feature (0x47D684..0x47D711, refusal 0x47D80F; DISASSEMBLED)."""
+    return is_structure(u) and not is_extractor(u) and bool(u["g"])
+
+
+def is_plain(u):
+    """A land building that is neither a resource building nor a builder: a tower, a wall or a power plant."""
+    return is_structure(u) and is_land(u) and not is_extractor(u) and not is_geothermal(u) and not u["builder"] & 1
+
+
+def net_energy(u):
+    """What the building adds to the energy income: a solar collector's energy is a negative EnergyUse (stock ARMSOLAR
+    energyuse -20, energymake 0)."""
+    return u["energymake"] - u["energyuse"]
+
+
+def menu_of(eng, units, downloads, tname, prefix, cache):
+    """menu(T): the units of T's build buttons on its numbered pages as the layout reads them for the side whose
+    prefix is `prefix` (type_pages' probe, else `<prefix>DL`, with the download fill and the greyed pass), in (page,
+    gadget) order, a unit already listed keeping its first place; hidden and greyed buttons left out. No picture is
+    composed. A page the layout would refuse leaves T with no menu, as the layout then holds no page of T. Returns
+    [UnitName lowered], cached per (type, prefix)."""
+    key = (tname.lower(), prefix.lower())
+    if key in cache:
+        return cache[key]
+    out = []
+    got = type_pages(eng, units[tname.lower()]["name"], downloads, prefix, [])
+    if got:
+        pages, mine = got
+        try:
+            for page, file in pages:
+                if not page:
+                    continue
+                _path, _where, recs = read_screen(eng, file, [])
+                check_panel(file, recs[0])
+                fill_downloads(recs, page, mine, file, [])
+                for g in recs[1:]:
+                    if g is None or g["id"] != 1:
+                        continue
+                    role, unit, grey, hidden = button_state(g, units, page, False)
+                    if role == "build" and unit and not grey and not hidden and unit.lower() not in out:
+                        out.append(unit.lower())
+        except SideError:
+            out = []
+    cache[key] = out
+    return out
+
+
+def side_walk(root, menu):
+    """Breadth-first from `root` through menu(): the units in the order they are first met (root first, at depth 0)
+    and each one's depth."""
+    order, depth = [root], {root: 0}
+    for t in order:
+        for x in menu(t):
+            if x not in depth:
+                depth[x] = depth[t] + 1
+                order.append(x)
+    return order, depth
+
+
+def strongest(cands, value):
+    """The candidate of the greatest value, the earlier one on an equal value."""
+    best = None
+    for t in cands:
+        if best is None or value(t) > value(best):
+            best = t
+    return best
+
+
+def side_casting(units, commander, menu):
+    """One side's casting by the rule above: ({cast: UnitName lowered or None}, [{cast, type, why}]). `menu(t)` is
+    menu_of for this side."""
+    picks = dict.fromkeys(CASTS)
+    why = {}
+    root = commander.lower()
+    if root not in units:
+        for c in CASTS:
+            why[c] = f"the side's commander {commander or '(none)'} has no FBI"
+        return picks, [{"cast": c, "type": None, "why": why[c]} for c in CASTS]
+    order, depth = side_walk(root, menu)
+    U = units
+    land_mex = lambda x: is_extractor(U[x]) and is_land(U[x])
+    mobile_builder = lambda t: is_mobile(U[t]) and is_builder(U[t]) and is_land(U[t])
+
+    b = next((t for t in order[1:] if mobile_builder(t) and any(land_mex(x) for x in menu(t))), None)
+    picks["builder"] = b
+    why["builder"] = (f"the first met (depth {depth[b]}) mobile land builder whose menu holds a land extractor" if b
+                      else "no mobile land builder below the commander has a land extractor on its menu")
+    if b:
+        mb = menu(b)
+        mx = strongest([x for x in mb if land_mex(x)], lambda x: U[x]["extractsmetal"])
+        picks["mex"] = mx
+        why["mex"] = f"the strongest land extractor on the builder's menu (extractsmetal {U[mx]['extractsmetal']:g})"
+        geo = strongest([x for x in mb if is_geothermal(U[x]) and is_land(U[x])], lambda x: net_energy(U[x]))
+        picks["geo"] = geo
+        why["geo"] = (f"the land geothermal plant of the greatest net energy ({net_energy(U[geo]):g}) on the builder's "
+                      "menu" if geo else "no land geothermal plant on the builder's menu")
+        top = U[mx]["extractsmetal"]
+        stronger = lambda x: land_mex(x) and U[x]["extractsmetal"] > top
+        a = next((t for t in order[1:] if t != b and mobile_builder(t) and any(stronger(x) for x in menu(t))), None)
+        picks["advbuilder"] = a
+        why["advbuilder"] = (f"the first met (depth {depth[a]}) mobile land builder, after the builder, whose menu "
+                             "holds a land extractor stronger than the mex" if a else
+                             "no other mobile land builder has a land extractor stronger than the mex on its menu")
+        if a:
+            mo = strongest([x for x in menu(a) if stronger(x)], lambda x: U[x]["extractsmetal"])
+            picks["moho"] = mo
+            why["moho"] = f"the strongest land extractor on the advbuilder's menu (extractsmetal {U[mo]['extractsmetal']:g})"
+        else:
+            why["moho"] = "no advbuilder"
+        maker = next((t for t in order if b in menu(t)), None)
+        w = next((x for x in menu(maker) if is_mobile(U[x]) and not is_builder(U[x]) and is_land(U[x])), None)
+        picks["walker"] = w
+        why["walker"] = (f"the first mobile land non-builder on the menu of {U[maker]['name']}, the first met unit that "
+                         "builds the builder" if w else
+                         f"no mobile land non-builder on the menu of {U[maker]['name']}, the first met unit that builds "
+                         "the builder")
+        plain = [x for x in mb if is_plain(U[x])]
+        picks["tower"] = next((x for x in plain if U[x]["weapon1"]), None)
+        picks["wall"] = next((x for x in plain if not U[x]["weapon1"] and U[x]["fort"]), None)
+        picks["solar"] = next((x for x in plain if net_energy(U[x]) > 0), None)
+        for c, what in (("tower", "with a Weapon1"), ("wall", "with no Weapon1 and TEDClass FORT"),
+                        ("solar", "of a positive net energy")):
+            why[c] = (f"the first plain land building on the builder's menu {what}" if picks[c] else
+                      f"no plain land building on the builder's menu {what}")
+    else:
+        for c in CASTS[1:]:
+            why[c] = "no builder"
+    for c in CASTS:
+        t = picks[c]
+        if t and not (1 <= U[t]["fx"] <= CAST_FP_MAX and 1 <= U[t]["fz"] <= CAST_FP_MAX):
+            why[c] = f"{U[t]['name']}'s footprint {U[t]['fx']} x {U[t]['fz']} is not within 1..{CAST_FP_MAX} a side"
+            picks[c] = None
+    return picks, [{"cast": c, "type": U[picks[c]]["name"].upper() if picks[c] else None, "why": why[c]}
+                   for c in CASTS]
+
+
+def cast_record(u, builds):
+    """A bound cast as the casting carries it: the entry's own keys (art/wiki/entries), the type in the case the
+    layout's build buttons spell it, and `builds` naming casts, not types."""
+    return {"type": u["name"].upper(), "title": u["title"], "footprint": [u["fx"], u["fz"]],
+            "buildTime": u["buildtime"], "workerTime": u["workertime"], "buildDistance": u["builddistance"],
+            "maxVelocity": u["maxvelocity"], "canstop": u["canstop"], "extracts": u["extractsmetal"],
+            "energyMake": u["energymake"], "vent": bool(u["g"]), "g": u["g"], "builds": builds}
+
+
+def side_pack(eng, mod, descs, out, pal, report):
     """The sidebar pack of one install (spec section 2.4): side.json, sheet.bin, pal.bin, seen.bin, greyed.bin and
-    the minimap bases. `player`, a list of unit types, stands for the player's units of the entries' scenes (the
-    first deciding the player's side), so a pack can be made for another scene's player, a capture's. Returns the
-    side.json object; raises SideError when no layout can be made."""
+    the minimap bases. Every side with MAIN2 and GEN screens is a layout side, with its casting and the pages of its
+    cast types. Returns the side.json object; raises SideError when no side has its screens."""
     units = unit_index(eng, report)
     sides = read_sides(eng, report)
     downloads = read_downloads(eng, report)
-    types_seen, first = (list(player), list(player)) if player else player_units(entries)
-    ps, why = player_side(sides, first, units)
-    report.append({"element": "player side", "side": sides[ps]["name"], "rule": why})
     art = SideArt(eng, report)
-    screens, art_screens, lay_sides = {}, {}, []
+    screens, art_screens, lay_sides, kept = {}, {}, [], []
 
     def add_screen(name, file, page, hide, recs_fill=None):
         path, where, recs = read_screen(eng, file, report)
@@ -1376,7 +1621,6 @@ def side_pack(eng, mod, entries, descs, out, pal, report, player=None):
         lay, a = build_screen(art, name, file, path, where, recs, units, page, hide, report)
         screens[name], art_screens[name] = lay, a
 
-    side_map = {}
     for i, s in enumerate(sides):
         try:
             add_screen(f"{s['prefix']}MAIN2", f"{s['prefix']}MAIN2", None, False)
@@ -1384,57 +1628,98 @@ def side_pack(eng, mod, entries, descs, out, pal, report, player=None):
         except SideError as e:
             report.append({"element": f"side {s['name']}", "refused": str(e)})
             continue
-        side_map[i] = len(lay_sides)
+        kept.append(s)
         lay_sides.append({"name": s["name"], "prefix": s["prefix"], "main2": f"{s['prefix']}MAIN2",
-                          "gen": f"{s['prefix']}GEN"})
-    if ps not in side_map:
-        raise SideError(f"the player's side {sides[ps]['name']} has no MAIN2 and GEN screens")
-    prefix = sides[ps]["prefix"]
-    types, defs = {}, {}
-    for t in types_seen:
-        u = units.get(t.lower())
-        if u is None:
-            report.append({"element": f"type {t}", "refused": f"no {eng.dirs['units']}\\*.FBI has UnitName {t}"})
+                          "gen": f"{s['prefix']}GEN", "types": {}})
+    if not lay_sides:
+        raise SideError("no side has MAIN2 and GEN screens")
+
+    menus, casting = {}, []
+    for s in kept:
+        menu = lambda t, prefix=s["prefix"]: menu_of(eng, units, downloads, t, prefix, menus)
+        picks, why = side_casting(units, s["commander"], menu)
+        casts = {}
+        for c in CASTS:
+            t = picks[c]
+            casts[c] = cast_record(units[t], [d for d in CASTS if picks[d] and picks[d] in menu(t)]) if t else None
+        casting.append({"side": s["name"], "commander": s["commander"], "casts": casts, "report": why})
+
+    # each side's types: its bound cast types that have a page, read with that side's prefix (the `<prefix>DL` page
+    # follows the PLAYER's side, 0x41AD6C, and the tutorial plays the player's side)
+    made, ntypes = {}, 0
+    for k, (s, cs) in enumerate(zip(kept, casting)):
+        want = []
+        for T in dict.fromkeys(rec["type"] for rec in cs["casts"].values() if rec):
+            u = units[T.lower()]
+            got = type_pages(eng, u["name"], downloads, s["prefix"], report)
+            if got is None:
+                report.append({"element": f"type {T} ({s['name']})", "note": "no page: the router shows GEN for it"})
+                continue
+            want.append((T, u, got))
+        # SIDE_TYPES: the layout's type table over all sides; a side whose types would pass it keeps none
+        if ntypes + len(want) > SIDE_TYPES:
+            report.append({"element": f"side {s['name']} types", "refused": f"its {len(want)} types pass "
+                           f"{SIDE_TYPES} over all sides"})
             continue
-        defs[t] = {"canstop": u[2], "fbi": u[3], "where": u[4]}
-        got = type_pages(eng, u[0], downloads, prefix, report)
-        if got is None:
-            report.append({"element": f"type {t}", "note": "no page: the router shows GEN for it"})
-            continue
-        pages, mine = got
-        # SIDE_SCREENS and SIDE_TYPES: the layout's tables; a type that would pass either is left out whole
-        if len(screens) + len(pages) > SIDE_SCREENS or len(types) == SIDE_TYPES:
-            report.append({"element": f"type {t}", "refused": f"its {len(pages)} pages pass {SIDE_SCREENS} screens"})
-            continue
-        numbered = [p for p, _f in pages if p]
-        made = []
-        try:
-            for p, file in pages:
-                name = f"{t.upper()}{p}"
-                add_screen(name, file, p, not numbered,
-                           lambda recs, p=p, name=name: fill_downloads(recs, p, mine, name, report))
-                made.append(name)
-        except SideError as e:
-            for name in made:
-                screens.pop(name)
-                art_screens.pop(name)
-            report.append({"element": f"type {t}", "refused": str(e)})
-            continue
-        types[t.upper()] = {"pages": [f"{t.upper()}{p}" for p in numbered],
-                            "orders": f"{t.upper()}0" if pages[0][0] == 0 else None}
-        report.append({"element": f"type {t}", "pages": [f for _p, f in pages]})
+        for T, u, (pages, mine) in want:
+            numbered = [p for p, _f in pages if p]
+            if made.get(T, (None,))[0] == pages:
+                # the same files as another side's: the same screens
+                lay_sides[k]["types"][T] = made[T][1]
+                ntypes += 1
+                continue
+            tag = "" if T not in made else f"@{k}"
+            names = {p: f"{T}{p}{tag}" for p, _f in pages}
+            if any(len(n.encode()) >= 32 for n in names.values()):
+                report.append({"element": f"type {T} ({s['name']})", "refused": "a page's screen name passes 31 bytes"})
+                continue
+            # SIDE_SCREENS: the layout's screen table; a type that would pass it is left out whole
+            if len(screens) + len(pages) > SIDE_SCREENS:
+                report.append({"element": f"type {T} ({s['name']})", "refused": f"its {len(pages)} pages pass "
+                               f"{SIDE_SCREENS} screens"})
+                continue
+            done = []
+            try:
+                for p, file in pages:
+                    add_screen(names[p], file, p, not numbered,
+                               lambda recs, p=p, name=names[p]: fill_downloads(recs, p, mine, name, report))
+                    done.append(names[p])
+            except SideError as e:
+                for name in done:
+                    screens.pop(name)
+                    art_screens.pop(name)
+                report.append({"element": f"type {T} ({s['name']})", "refused": str(e)})
+                continue
+            entry = {"pages": [names[p] for p in numbered], "orders": names[0] if pages[0][0] == 0 else None}
+            made.setdefault(T, (pages, entry))
+            lay_sides[k]["types"][T] = entry
+            ntypes += 1
+            report.append({"element": f"type {T} ({s['name']})", "pages": [f for _p, f in pages]})
+        # a cast the rule took from a menu that the layout shows no live button for would lock its demo's build trip
+        for c in CASTS:
+            rec = cs["casts"][c]
+            entry = rec and lay_sides[k]["types"].get(rec["type"])
+            if not entry:
+                continue
+            for d in rec["builds"]:
+                unit = cs["casts"][d]["type"]
+                if not any(g["role"] == "build" and g.get("unit") == unit and not g["grey"] and not g.get("hidden")
+                           for n in entry["pages"] for g in screens[n]["gadgets"]):
+                    report.append({"element": f"casting {s['name']}", "note": f"the {c} {rec['type']}'s pages show "
+                                   f"no live button for the {d} {unit}"})
     height = max([SIDE_MIN_H] + [s["y"] + s["h"] for s in screens.values()])
     layout = {"format": 1, "note": "derived from the local install by tools/wiki/gfx.py; gitignored, never committed",
-              "width": SIDE_W, "height": height, "sides": lay_sides, "player_side": side_map[ps],
-              "types": types, "screens": screens}
+              "width": SIDE_W, "height": height, "sides": lay_sides, "screens": screens}
 
-    # PANELSIDE and the dots
-    side_art = {}
-    got = art.bank(sides[ps]["intgaf"]) if sides[ps]["intgaf"] else None
-    fr = art.seq(got, "PANELSIDE")
-    side_art["panelside"] = {"f": fr[0][0], "hot": [fr[0][2], fr[0][3]], "key": fr[0][1].transparent} if fr else None
-    report.append({"element": "panelside", "from": got and got[1], "where": got and got[2],
-                   **({} if fr else {"refused": f"no PANELSIDE in {eng.dirs['anims']}\\{sides[ps]['intgaf']}.GAF"})})
+    # PANELSIDE of every layout side, and the dots
+    side_art = {"panelside": []}
+    for s in kept:
+        got = art.bank(s["intgaf"]) if s["intgaf"] else None
+        fr = art.seq(got, "PANELSIDE")
+        side_art["panelside"].append({"f": fr[0][0], "hot": [fr[0][2], fr[0][3]], "key": fr[0][1].transparent}
+                                     if fr else None)
+        report.append({"element": f"panelside {s['name']}", "from": got and got[1], "where": got and got[2],
+                       **({} if fr else {"refused": f"no PANELSIDE in {eng.dirs['anims']}\\{s['intgaf']}.GAF"})})
     fx = art.bank("fx")
     rad, high = art.seq(fx, "radlogo"), art.seq(fx, "radlogohigh")
     side_art["dots"] = {"radlogo": [(k, hx, hy) for k, _f, hx, hy in rad] if rad else None,
@@ -1484,8 +1769,8 @@ def side_pack(eng, mod, entries, descs, out, pal, report, player=None):
         x, y = place[key]
         return [x, y, f.width, f.height, hx, hy]
     art_out = {"sheet": {"file": "sheet.bin", "w": SHEET_W, "h": sh}, "palette": "pal.bin"}
-    ps_art = side_art["panelside"]
-    art_out["panelside"] = {"f": rect(ps_art["f"], *ps_art["hot"]), "key": ps_art["key"]} if ps_art else None
+    art_out["panelside"] = [{"f": rect(ps["f"], *ps["hot"]), "key": ps["key"]} if ps else None
+                            for ps in side_art["panelside"]]
     scr_out = {}
     for name, a in art_screens.items():
         pan = a["panel"]
@@ -1518,7 +1803,7 @@ def side_pack(eng, mod, entries, descs, out, pal, report, player=None):
             "committed", "mod": mod,
             "folders": {**{k: eng.dirs[k] for k in FOLDERS + ("anims", "commongui", "units")},
                         "archive": eng.vfs.patterns[0], "from": eng.folders_from},
-            "layout": layout, "art": art_out, "defs": defs, "report": report}
+            "layout": layout, "casting": casting, "art": art_out, "report": report}
     (out / "side.json").write_text(json.dumps(pack, indent=1) + "\n")
     return pack
 
@@ -1573,9 +1858,9 @@ def main(argv=None):
                     help="gui=..,unitpics=..,gamedata=..,download=..: folder names that replace the executable's, "
                          "for a mod whose loader renames them in memory")
     ap.add_argument("--archive", help="the first archive pattern, replacing the executable's (same reason)")
-    ap.add_argument("--player-units", dest="player_units", default="",
-                    help="T1,T2,...: with --side-only, the player's unit types in place of the entries' (the first "
-                         "decides the player's side), to make a pack for a capture's own scene")
+    ap.add_argument("--language", default=LANGUAGE,
+                    help=f"the registry's `language` value: the folder variant opened first and the key unit names "
+                         f"are read under (default: {LANGUAGE})")
     args = ap.parse_args(argv)
 
     root = tavfs.find_install(args.gamedir)
@@ -1585,7 +1870,7 @@ def main(argv=None):
         print("gfx.py: --folders takes name=folder pairs separated by commas", file=sys.stderr)
         return 2
     try:
-        eng = Engine(root, args.exe, folders, args.archive)
+        eng = Engine(root, args.exe, folders, args.archive, args.language)
     except tavfs.VfsError as e:
         print(f"gfx.py: {e}", file=sys.stderr)
         return 2
@@ -1611,15 +1896,16 @@ def main(argv=None):
         out = out_root / "side" / args.mod
         report = []
         try:
-            pack = side_pack(eng, args.mod, entries, descs, out, palette, report,
-                             [t for t in args.player_units.split(",") if t] or None)
+            pack = side_pack(eng, args.mod, descs, out, palette, report)
         except SideError as e:
             print(f"gfx.py: no sidebar pack for {args.mod}: {e}", file=sys.stderr)
             return 1
         lay = pack["layout"]
-        print(f"gfx.py: wrote {out}/: {len(lay['screens'])} screens, types "
-              f"{', '.join(f'{t} ({len(v['pages'])} pages)' for t, v in lay['types'].items()) or 'none'}, "
-              f"{lay['height']} rows, {sum(1 for r in report if 'refused' in r)} refused")
+        print(f"gfx.py: wrote {out}/: {len(lay['screens'])} screens; "
+              + "; ".join(f"{s['name']}: casts {sum(1 for c in cs['casts'].values() if c)}/{len(CASTS)}, types "
+                          f"{', '.join(f'{t} ({len(v['pages'])} pages)' for t, v in s['types'].items()) or 'none'}"
+                          for s, cs in zip(lay["sides"], pack["casting"]))
+              + f"; {lay['height']} rows, {sum(1 for r in report if 'refused' in r)} refused")
         return 0
     alp, _how = install_alp(eng, palette)
     (out_root / "palette").mkdir(exist_ok=True)

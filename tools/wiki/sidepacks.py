@@ -4,20 +4,20 @@
     .venv-undither/bin/python tools/wiki/sidepacks.py                 # every pack
     .venv-undither/bin/python tools/wiki/sidepacks.py stock prota     # these ones
     .venv-undither/bin/python tools/wiki/sidepacks.py --gamedir <retail TA install> [--out <folder>]
-    .venv-undither/bin/python tools/wiki/sidepacks.py tazero --player-units GOKCOMMANDER,ARMT1FEKBOT --out <folder>
-                                                       # another scene's player, a capture's (tools/wiki/sidedump.mjs)
 
 For each mod it lays out the setup's game folder as tools/compat/tacompat.py's `overlay` gives it -- the retail
 install's files, then the setup's on top, a later name replacing an earlier one without case -- as symlinks in a
 temporary folder, and runs `gfx.py --side-only` on it, which writes tools/wiki/mockup/gfx/side/<mod>/ (gitignored:
 it is derived from the game's files). Then it loads each pack's layout into tools/wiki/mockup/sim.js's checkLayout
-under node, the bound the mockup applies before it uses one.
+under node, the bound the mockup applies before it uses one, and on the stock pack checks the cast rule's stock
+identity (`stock_identity`): the rule is general, and this is what pins it.
 
-This mapping is test tooling (spec section 2.5); the picture rule in gfx.py names no mod. `unknown` has no pack: the
-mockup gives it the fixture layout.
+This mapping is test tooling (spec section 2.5); the picture rule and the cast rule in gfx.py name no mod. `unknown`
+has no pack: the mockup gives it the fixture layout.
 """
 
 import argparse
+import json
 import shutil
 import subprocess
 import sys
@@ -27,6 +27,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 OUT = HERE / "mockup" / "gfx"
+ENTRIES = REPO / "art" / "wiki" / "entries"
 SIM = HERE / "mockup" / "sim.js"
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO / "tools" / "compat"))
@@ -117,14 +118,61 @@ def check_layout(pack: Path):
     return r.returncode == 0, (r.stdout + r.stderr).strip()
 
 
+# An entry unit's figure and the value an absent key stands for: what the bound entry takes from the casting. The
+# casting carries every FBI's EnergyMake (a construction kbot's 8 among them), and the sims read energyMake only as a
+# geothermal plant's strength, so it is compared where the entry states it and nowhere else.
+FIGURES = (("footprint", None), ("buildTime", 0), ("workerTime", 0), ("buildDistance", 0), ("maxVelocity", 0),
+           ("canstop", 0), ("extracts", 0), ("vent", False))
+
+
+def stock_identity(pack):
+    """The stock pack's first side ([SIDE0], whose units the wiki's entries author) cast for cast: every entry unit's
+    `cast` is bound to that unit's own type, with the entry's figures and name, and builds the casts the entry says it
+    builds. Binding stock's entries to stock's casting then changes nothing, which is the check that keeps the
+    general rule honest (gfx.py `side_casting`). Returns the differences."""
+    casting = pack["casting"][0]["casts"]
+    bad = []
+    for f in sorted(ENTRIES.glob("*.json")):
+        e = json.loads(f.read_text())
+        units = e["units"]
+        used = {v.get("cast") for v in units.values()}
+        for t, u in units.items():
+            at, c = f"{e['id']} {t}", u.get("cast")
+            if c not in casting:
+                bad.append(f"{at}: its cast {c!r} is none of {', '.join(casting)}")
+                continue
+            got = casting[c]
+            if got is None:
+                bad.append(f"{at}: the stock casting leaves {c} unbound")
+                continue
+            if got["type"].lower() != t.lower():
+                bad.append(f"{at}: the stock {c} is {got['type']}")
+                continue
+            figures = FIGURES + ((("energyMake", None),) if "energyMake" in u else ())
+            for key, absent in figures:
+                if got[key] != u.get(key, absent):
+                    bad.append(f"{at}: {key} {got[key]!r} in the casting, {u.get(key, absent)!r} in the entry")
+            # an entry's `vent` without `g` makes every footprint cell G
+            fx, fz = got["footprint"]
+            every = [[x, z] for x in range(fx) for z in range(fz)]
+            g = sorted(map(list, u["g"])) if "g" in u else every if u.get("vent") else []
+            if sorted(got["g"]) != g:
+                bad.append(f"{at}: G cells {got['g']} in the casting, {g} in the entry")
+            if got["title"] != u.get("name"):
+                bad.append(f"{at}: named {got['title']!r} in the casting, {u.get('name')!r} in the entry")
+            have = sorted(d for d in got["builds"] if d in used)
+            want = sorted(units[b]["cast"] for b in u.get("builds", []) if b in units and "cast" in units[b])
+            if have != want:
+                bad.append(f"{at}: builds {have} of the entry's casts in the casting, {want} in the entry")
+    return bad
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="sidepacks.py", description=__doc__.split("\n")[0])
     ap.add_argument("mods", nargs="*", help=f"the packs to build (default: all of {', '.join(SETUPS)})")
     ap.add_argument("--gamedir", help="the retail install the setups lay their files over (default: TA3DO_GAMEDIR, "
                                       "else Steam's default library)")
     ap.add_argument("--out", help=f"write here instead of {OUT.relative_to(REPO)}/")
-    ap.add_argument("--player-units", dest="player_units", help="T1,T2,...: the player's unit types in place of the "
-                    "wiki entries' (gfx.py --player-units), for a pack of a capture's own scene")
     args = ap.parse_args(argv)
     mods = args.mods or list(SETUPS)
     unknown = [m for m in mods if m not in SETUPS]
@@ -152,8 +200,6 @@ def main(argv=None):
             if rec:
                 cmd += ["--folders", ",".join(f"{k}={v}" for k, v in rec["folders"].items()), "--archive",
                         rec["archive"]]
-            if args.player_units:
-                cmd += ["--player-units", args.player_units]
             r = subprocess.run(cmd, capture_output=True, text=True)
         print(f"{mod} ({setup['name']}): " + (r.stdout + r.stderr).strip().replace(str(out_root), "gfx"))
         if r.returncode != 0:
@@ -162,6 +208,10 @@ def main(argv=None):
         ok, msg = check_layout(out_root / "side" / mod / "side.json")
         print(f"  {msg}")
         failed += not ok
+        if mod == "stock":
+            bad = stock_identity(json.loads((out_root / "side" / mod / "side.json").read_text()))
+            print("  stock identity: " + ("ok" if not bad else "FAILED\n    " + "\n    ".join(bad)))
+            failed += bool(bad)
     return 1 if failed else 0
 
 
