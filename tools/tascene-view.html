@@ -270,9 +270,10 @@
      the unit, every order whose descriptor mask has bit 1 or 3 draws the
      cursor_ary sprite at its target, a bit-1 order on the hovered unit also
      draws the `pathicon` route dots from the previous target to it, and the
-     chain moves on. The dots march 48 world units per 30 ticks, one every 48;
-     the sprite shows frame (gameTime / (2 * frame 0's ticks)) % count at
-     ordalpha (default 0.5, PALETTE.ALP's mix). Drawn onto the canvas after
+     chain moves on. The dots march 48 px a second ON SCREEN at every zoom,
+     which is the engine's 48 world units per 30 ticks at 1x; the sprite
+     shows frame (gameTime / (2 * frame 0's ticks)) % count at ordalpha
+     (default 0.5, PALETTE.ALP's mix, measured under GDI). Drawn onto the canvas after
      the composite, at canvas resolution, inside each side's half of the
      wipe, and re-presented every display frame on a 30 Hz game clock, so the
      world under them is not redrawn to animate them. There is no fog and
@@ -299,7 +300,10 @@
        orddots=<d>   all (default: every unit is the hovered one) | active
                      (only the unit being ordered; the others show their
                      sprites, as a merely selected unit does)
-       ordalpha=<a>  the sprite's opacity, default 0.5
+       ordalpha=<a>  the sprite's opacity, default 0.5 (the engine's blend)
+       orddotalpha=<a> the route dots' opacity, default 1 (the engine's)
+                     Both are sliders in the status bar; neither touches
+                     ordstyle=proc, which stays what the game draws today
      Global: orders=<unit>:<cmd>@<x>,<z>;<cmd>#<handle>|<unit>:… replaces the
      scenario's queues, ordunit=<id> is the unit being ordered, ordtime=<t> is
      the clock under shot=1 (default 0). Serving, SHIFT-click queues the order
@@ -341,6 +345,7 @@
                        cursor: pointer; }
   #bar .modes button.on { color: #e6ecf5; background: #2c333d; border-color: #6aa8d8; }
   #bar .modes button:hover { border-color: #d8b24a; }
+  #bar input[type=range] { width: 110px; accent-color: #6aa8d8; }
   #err { position: fixed; top: 10px; left: 10px; right: 10px; padding: 8px 10px;
          border-radius: 8px; background: #40222a; border: 1px solid #6b3540;
          color: #f0c8ce; white-space: pre-wrap; display: none; font-family: ui-monospace, monospace; }
@@ -576,6 +581,7 @@ function readOrd(p, label) {
   const num = (k, d) => (p.get(k) === null || Number.isNaN(parseFloat(p.get(k)))
                          ? d : parseFloat(p.get(k)));
   o.alpha = Math.min(1, Math.max(0, num("ordalpha", 0.5)));
+  o.dotAlpha = Math.min(1, Math.max(0, num("orddotalpha", 1)));
   o.min = Math.max(0.25, num("ordmin", 1));
   o.max = Math.max(o.min, num("ordmax", 2));
   return o;
@@ -1177,6 +1183,9 @@ const ORDER_TYPES = {
   load: [0x08, "cursorload"], unload: [0x08, "cursorunload"],
   teleport: [0x08, "cursorteleport"], stop: [0, null],
 };
+// the opacity sliders: field, label, query parameter
+const ORD_OPACITY = [["alpha", "sprite opacity", "ordalpha"],
+                     ["dotAlpha", "dot opacity", "orddotalpha"]];
 // the overlay's knobs, `ord<key>`; the first value of each is the default
 const ORD_KNOBS = {
   style: ["gaf", "proc", "off"],
@@ -1666,7 +1675,7 @@ async function main() {
   // One side's markers as canvas-px vertices, by the engine's walk (0x439B30,
   // ui-markers.md §3.2): `pos` starts at the unit and every drawer that runs
   // moves it to its node's target, so the dots run unit -> wp1 -> wp2 …
-  function orderVerts(L, tReal) {
+  function orderVerts(L, side, tReal) {
     const o = L.ord;
     let n = 0;
     const push = (x, y, u, v, m, a, c) => {
@@ -1712,7 +1721,8 @@ async function main() {
       const k = frameOf(s);
       if (o.style === "gaf") { blit(s.frames[k], hx, hy, o.alpha); return; }
       // tagpu_order.c draw_sprite: a crosshair breathing on the same frame
-      // index, opaque, in the sequence's ink, one pixel wide
+      // index, opaque, in the sequence's ink, one pixel wide. The opacity
+      // knobs leave it alone: this style is what the game draws today
       const a = s.frames.length > 1 ? k / (s.frames.length - 1) : 0;
       const out = 4 + 5 * a, inn = 1.5 + 2 * a, c = ordInk[name];
       const cx = Math.floor(hx) + 0.5, cy = Math.floor(hy) + 0.5;
@@ -1721,31 +1731,30 @@ async function main() {
       quad(cx - 0.5, cy - out, cx + 0.5, cy - inn, 0, 0, 0, 0, 2, 1, c);
       quad(cx - 0.5, cy + inn, cx + 0.5, cy + out, 0, 0, 0, 0, 2, 1, c);
     };
-    // 0x4394E0: a dot every 48 world units from `a` towards `b`, the first at
-    // the phase (age % 30) * 48 / 30, the frame stepping once per dot
-    const dots = (A, B, issue) => {
+    // 0x4394E0: a dot every 48 world units from `a` towards `b`, the frame
+    // stepping once per dot. The first dot is the node's own march, the side's
+    // since the order was issued (L.march, drawOrders), wrapped to the step
+    const dots = (A, B, issue, marchAtIssue) => {
       const s = OS.seqs.pathicon;
       const dx = B[0] - A[0], dy = B[1] - A[1], dz = B[2] - A[2];
       const len = Math.hypot(dx, dy, dz);
       if (len < 1 || !s) return;
       const age = Math.max(0, t - issue);
-      let step = 48, phase;
-      if (o.space === "world") phase = (age % 30) * 1.6;
-      else if (o.space === "screen") { step = 48 / zoom; phase = (age % 30) * 1.6 / zoom; }
-      else {
-        // OCTAVE: 48 x 2^k world units, k the zoom's octave, at the engine's
-        // 1.6 units a tick. Each octave's dots are every other dot of the one
-        // below, so crossing an octave adds or drops dots and moves none
-        const p2 = Math.pow(2, Math.round(-Math.log2(zoom)));
-        step = 48 * p2; phase = (age % (30 * p2)) * 1.6;
-      }
+      let step = 48;
+      if (o.space === "screen") step = 48 / zoom;
+      // OCTAVE: 48 x 2^k world units, k the zoom's octave. The march is one
+      // continuous distance, so each octave's dots are every other dot of
+      // the one below: crossing an octave adds or drops dots and moves none
+      else if (o.space === "octave") step = 48 * Math.pow(2, Math.round(-Math.log2(zoom)));
+      const run = L.march - marchAtIssue;
+      const phase = ((run % step) + step) % step;
       const nf = s.frames.length;
       let fi = Math.floor(age / Math.max(1, s.frames[0].d)) % nf;
       const ink = ordInk.pathicon;
       for (let c = phase, i = 0; c < len && i < 4096; c += step, i++) {
         const f = c / len;
         const [px, py] = proj([A[0] + dx * f, A[1] + dy * f, A[2] + dz * f]);
-        if (o.style === "gaf") blit(s.frames[fi], px, py, 1);
+        if (o.style === "gaf") blit(s.frames[fi], px, py, o.dotAlpha);
         else quad(px - 2.4, py - 2.4, px + 2.4, py + 2.4, -1, -1, 1, 1, 1, 1, ink);
         fi = (fi + 1) % nf;
       }
@@ -1764,11 +1773,25 @@ async function main() {
         const P = nodeXYZ(nd);
         if (!P) continue;
         sprite(seq, P);
-        if ((mask & 0x02) && hovered) dots(pos, P, nd.issue);
+        if ((mask & 0x02) && hovered) dots(pos, P, nd.issue, nd.march ? nd.march[side] : 0);
         pos = P;
       }
     }
     return n / 9;
+  }
+
+  // THE MARCH: how far a side's dots have travelled, in world units. It
+  // advances 1.6 world units a tick divided by the zoom, so on screen the
+  // dots move 48 px a second at every zoom, the engine's own speed at 1x. It
+  // is accumulated rather than computed from the clock, so a zoom changes
+  // how fast the dots go and never where they are. Whole ticks under
+  // ordtick=int, as the engine steps; a shot computes it from ordtime=.
+  function ordMarch(L, tNow) {
+    const tt = L.ord.tick === "int" ? Math.floor(tNow) : tNow;
+    if (SHOT) { L.march = tt * 1.6 / zoom; return; }
+    if (L.march === undefined) L.march = 0;
+    if (L.marchT !== undefined && tt > L.marchT) L.march += (tt - L.marchT) * 1.6 / zoom;
+    L.marchT = tt;
   }
 
   // the markers over the composite, each side inside its own half of the wipe
@@ -1791,7 +1814,8 @@ async function main() {
       const x0 = Math.max(vpL, i ? split : 0), x1 = Math.min(vpL + vw, i ? GW : split);
       if (x1 <= x0) continue;
       gl.scissor(x0, GH - vpT - vh, x1 - x0, vh);
-      const nv = orderVerts(L, tNow);
+      ordMarch(L, tNow);
+      const nv = orderVerts(L, i, tNow);
       if (!nv) continue;
       gl.uniform1i(ORDU.uFilter, ["nearest", "sharp", "linear"].indexOf(L.ord.filter));
       gl.bufferData(gl.ARRAY_BUFFER, ordVerts.subarray(0, nv * 9), gl.DYNAMIC_DRAW);
@@ -2616,8 +2640,12 @@ async function main() {
     const nq = ordQueues.reduce((a, q) => a + q.nodes.length, 0);
     return [
       `<div class="row modes"><span>orders</span>${knobs}` +
-      `<span>alpha</span><b>${o.alpha}</b>` +
       (o.size === "clamp" ? `<span>scale</span><b>${o.min}..${o.max}</b>` : "") + `</div>`,
+      `<div class="row modes">` + ORD_OPACITY.map(([k, label]) =>
+        `<label for="ord-${k}"><span>${label}</span></label>` +
+        `<input type="range" id="ord-${k}" data-ordrange="${k}" min="0" max="1" step="0.05" ` +
+        `value="${o[k]}"><b data-ordval="${k}">${o[k].toFixed(2)}</b>`).join("") +
+      `<span>(the gaf style; proc stays opaque, as the game draws it)</span></div>`,
       `<div class="row modes"><span>queue</span><b>${ordActive ?? "no unit"}</b>` +
       `<span>${nq} orders</span>${cmds}` +
       `<button data-ordedit="undo">undo</button><button data-ordedit="clear">clear</button>` +
@@ -2683,6 +2711,25 @@ async function main() {
     // The renderer buttons rewrite the query and reload. A renderer already
     // on screen keeps its side's own parameters; a new one comes in at its
     // defaults; the live eye, ss, debug and the wipe position carry over.
+    // THE OPACITY SLIDERS move every side at once and redraw only the
+    // markers: the bar is not rebuilt under a drag, so the slider keeps the
+    // pointer
+    bar.addEventListener("input", (e) => {
+      const r = e.target.closest("input[data-ordrange]");
+      if (!r) return;
+      const k = r.dataset.ordrange, v = Math.min(1, Math.max(0, parseFloat(r.value)));
+      const param = ORD_OPACITY.find(([key]) => key === k)[2];
+      for (const L of sides) {
+        L.ord[k] = v;
+        const q = new URLSearchParams(L.query);
+        q.set(param, String(v));
+        L.query = q.toString();
+      }
+      writeQuery(param, String(v));
+      const out = bar.querySelector(`b[data-ordval="${k}"]`);
+      if (out) out.textContent = v.toFixed(2);
+      present();
+    });
     bar.addEventListener("click", (e) => {
       const ok = e.target.closest("button[data-ord]");
       if (ok) {
@@ -2881,7 +2928,8 @@ async function main() {
       } else if (ordActive) {
         let q = ordQueues.find((x) => x.unit === ordActive);
         if (!q) ordQueues.push(q = { unit: ordActive, nodes: [] });
-        q.nodes.push({ cmd: ordCmd, to: g, issue: Math.floor(ordClock()) });
+        q.nodes.push({ cmd: ordCmd, to: g, issue: Math.floor(ordClock()),
+                       march: sides.map((L) => L.march || 0) });
         writeQuery("orders", ordersQuery());
       }
       report(); present();

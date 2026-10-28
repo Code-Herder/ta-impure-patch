@@ -348,11 +348,22 @@ kbot that reclaims a wreck and then guards the lab. The overlay is the engine's 
   and no dots**.
 - A bit-1 order on the **hovered** unit also draws the route dots from `pos` to the target
   (`0x4394E0`): a `pathicon` frame every 48 world units of the straight 3-D line, the first at
-  `(age % 30) · 48 / 30`, `age` counted from the order's issue tick. A merely selected unit
-  gets the sprites only. `orddots=all` (the default) hovers every unit, `active` only the one
+  the distance the dots have marched since the order was issued, wrapped to the spacing. A
+  merely selected unit gets the sprites only.
+- **The dots move at one speed on screen, 48 px a second, at every zoom.** That is the
+  engine's `(age % 30) · 48 / 30` at 1×. Stock TA has no zoom, so there the rule is world units
+  and screen pixels at once; kept in world units, it ran the dots faster the further you zoomed
+  in (192 px/s at 4×, 12 px/s at 0.25×). The march is accumulated, 1.6 world units a tick
+  divided by the zoom (`ordMarch`), rather than computed from the clock, so a zoom changes how
+  fast the dots go and never where they are. Each side keeps its own march, and an order
+  queued by hand records the march it was issued at. MEASURED in the live page with a frozen
+  `performance.now` advanced 250 ms, terrain only: the dots moved 11.7 px at 0.5×, 11.7 px at
+  1× and 12.2 px at 3× (median over 16–56 dots), against 12. `orddots=all` (the default) hovers every unit, `active` only the one
   being ordered.
 - The sprite shows frame `(gameTime / (2 · frame 0's ticks)) % count` (`0x439740`) at
-  `ordalpha` 0.5: `PALETTE.ALP` is a half-and-half mix (measured, engine map). `ordanim=cursor`
+  `ordalpha` 0.5: `PALETTE.ALP` is a half-and-half mix (measured, engine map). The dots are
+  drawn at `orddotalpha`, 1 as the engine copies them. Both are sliders in the status bar;
+  neither touches `ordstyle=proc`, which stays what the game draws today. `ordanim=cursor`
   instead steps each frame after its own ticks, the mouse cursor's rule, twice as fast for
   `cursormove`.
 - The clock is 30 ticks a second, in whole ticks (`ordtick=int`) as the engine steps, or
@@ -376,7 +387,8 @@ into the address bar):
 | `ordanim` | `engine` · `cursor` | the sprite's frame rule, above |
 | `ordtick` | `int` · `smooth` | whole ticks or a continuous clock |
 | `orddots` | `all` · `active` | which units draw their route dots |
-| `ordalpha` | 0.5 | the sprite's opacity |
+| `ordalpha` | 0.5 | the sprite's opacity (a slider) |
+| `orddotalpha` | 1 | the route dots' opacity (a slider) |
 
 `orders=<unit>:<cmd>@<x>,<z>;<cmd>#<handle>|…` replaces the scenario's queues and `ordunit=`
 names the unit being ordered. Serving, **shift-click** queues the order picked in the status bar
@@ -394,7 +406,7 @@ one fixed game tick]:
 - **`clamp` 1..2 with `sharp` and `octave`** (`orders-tuned`) reads at every zoom: the arrows are
   11–22 px, the dots 34–68 px apart on screen whatever the zoom, and crossing an octave adds or
   drops every other dot and moves none (each octave's dots are a subset of the finer one's,
-  because the phase keeps the engine's 1.6 world units a tick). At 0.25× the waypoint stars are
+  because the march is one continuous distance). At 0.25× the waypoint stars are
   large against the shrunken world; `ordmin` below 1 is the knob for that.
 - **`sharp` is what makes a non-whole scale look like pixel art**: at 1.5× `nearest` draws the
   arrow's arms one and two pixels wide by turns, `sharp` evens them, `linear` blurs them. At
@@ -411,9 +423,9 @@ order at all, so a factory's rally markers were not captured.
 
 **Gaps.** The lab's frame has not been pixel-diffed against a game frame at the same eye.
 The ALP palette lookup is approximated in full colour (a plain 50 % mix), and so are the
-sub-pixel sprite placement and the per-tick integer projection. Under `octave` the march keeps the engine's world speed, so on screen it crawls at
-0.25× (12 px/s) and runs at 4× (192 px/s); scaling the speed per octave would move every dot
-at an octave change. Nothing in the DLL has changed.
+sub-pixel sprite placement and the per-tick integer projection. Under `ordspace=screen` the spacing is a
+function of the zoom, so a zoom slides the dots along the line; `world` and `octave` do not.
+Nothing in the DLL has changed.
 
 ### The presets  (`tools/tascene-presets.json`)
 
