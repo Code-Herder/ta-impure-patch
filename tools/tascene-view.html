@@ -288,11 +288,16 @@
        ordfilter=<f> nearest (default) | sharp (each texel flat, only the
                      pixel across a texel edge blended: even texels at a
                      scale that is not whole) | linear
-       ordspace=<s>  the dot spacing: world (default) 48 world units; screen
-                     48 canvas px at every zoom; octave 48 x 2^k world units,
+       ordspace=<s>  the dot spacing: screen (default) 48 canvas px at every
+                     zoom, laid out from each leg's start, so the line looks
+                     and moves the same at every zoom; world 48 world units,
+                     the dots held to the map; octave 48 x 2^k world units,
                      k the zoom's octave, each octave's dots every other dot
                      of the one below, so a zoom adds or drops dots and
-                     moves none
+                     moves none. The dots move 48 px a second on screen
+                     under all three; under world and octave the spacing
+                     changes with the zoom, so more or fewer dots pass a
+                     point each second
        ordanim=<a>   engine (default) | cursor: each frame for its own
                      ticks, as the mouse cursor animates (0x4B8BF0)
        ordtick=<t>   int (default: the clock in whole ticks, as the engine
@@ -1191,7 +1196,7 @@ const ORD_KNOBS = {
   style: ["gaf", "proc", "off"],
   size: ["world", "screen", "int", "clamp"],
   filter: ["nearest", "sharp", "linear"],
-  space: ["world", "screen", "octave"],
+  space: ["screen", "world", "octave"],
   anim: ["engine", "cursor"],
   tick: ["int", "smooth"],
   dots: ["all", "active"],
@@ -1733,21 +1738,29 @@ async function main() {
     };
     // 0x4394E0: a dot every 48 world units from `a` towards `b`, the frame
     // stepping once per dot. The first dot is the node's own march, the side's
-    // since the order was issued (L.march, drawOrders), wrapped to the step
-    const dots = (A, B, issue, marchAtIssue) => {
+    // since the order was issued (ordMarch), wrapped to the step
+    const dots = (A, B, issue, at) => {
       const s = OS.seqs.pathicon;
       const dx = B[0] - A[0], dy = B[1] - A[1], dz = B[2] - A[2];
       const len = Math.hypot(dx, dy, dz);
       if (len < 1 || !s) return;
       const age = Math.max(0, t - issue);
-      let step = 48;
-      if (o.space === "screen") step = 48 / zoom;
-      // OCTAVE: 48 x 2^k world units, k the zoom's octave. The march is one
-      // continuous distance, so each octave's dots are every other dot of
-      // the one below: crossing an octave adds or drops dots and moves none
-      else if (o.space === "octave") step = 48 * Math.pow(2, Math.round(-Math.log2(zoom)));
-      const run = L.march - marchAtIssue;
-      const phase = ((run % step) + step) % step;
+      const wrap = (v, m) => ((v % m) + m) % m;
+      let step, phase;
+      if (o.space === "screen") {
+        // SCREEN: 48 px apart and 48 px a second at every zoom, so the line
+        // looks the same at every zoom. Laid out from the leg's start in
+        // screen px, so a zoom keeps each dot's distance from the waypoint
+        step = 48 / zoom;
+        phase = wrap(L.marchPx - at[1], 48) / zoom;
+      } else {
+        // WORLD and OCTAVE (48 x 2^k world units, k the zoom's octave) march
+        // the world distance, which keeps each dot where it is on the map
+        // through a zoom; under octave each octave's dots are every other
+        // dot of the one below, so crossing one adds or drops dots
+        step = o.space === "octave" ? 48 * Math.pow(2, Math.round(-Math.log2(zoom))) : 48;
+        phase = wrap(L.march - at[0], step);
+      }
       const nf = s.frames.length;
       let fi = Math.floor(age / Math.max(1, s.frames[0].d)) % nf;
       const ink = ordInk.pathicon;
@@ -1773,24 +1786,29 @@ async function main() {
         const P = nodeXYZ(nd);
         if (!P) continue;
         sprite(seq, P);
-        if ((mask & 0x02) && hovered) dots(pos, P, nd.issue, nd.march ? nd.march[side] : 0);
+        if ((mask & 0x02) && hovered) dots(pos, P, nd.issue, nd.march ? nd.march[side] : [0, 0]);
         pos = P;
       }
     }
     return n / 9;
   }
 
-  // THE MARCH: how far a side's dots have travelled, in world units. It
-  // advances 1.6 world units a tick divided by the zoom, so on screen the
-  // dots move 48 px a second at every zoom, the engine's own speed at 1x. It
-  // is accumulated rather than computed from the clock, so a zoom changes
-  // how fast the dots go and never where they are. Whole ticks under
-  // ordtick=int, as the engine steps; a shot computes it from ordtime=.
+  // THE MARCH: how far a side's dots have travelled, twice over. marchPx
+  // in screen px, 1.6 a tick: 48 px a second, the engine's speed at 1x.
+  // march in world units, 1.6 a tick divided by the zoom: the same 48 px a
+  // second on screen, kept in world units for the spacings that hold dots
+  // to the map. Both are accumulated rather than computed from the clock,
+  // so a zoom changes how fast a world march goes and never where its dots
+  // are. Whole ticks under ordtick=int, as the engine steps; a shot computes
+  // both from ordtime=.
   function ordMarch(L, tNow) {
     const tt = L.ord.tick === "int" ? Math.floor(tNow) : tNow;
-    if (SHOT) { L.march = tt * 1.6 / zoom; return; }
-    if (L.march === undefined) L.march = 0;
-    if (L.marchT !== undefined && tt > L.marchT) L.march += (tt - L.marchT) * 1.6 / zoom;
+    if (SHOT) { L.march = tt * 1.6 / zoom; L.marchPx = tt * 1.6; return; }
+    if (L.march === undefined) { L.march = 0; L.marchPx = 0; }
+    if (L.marchT !== undefined && tt > L.marchT) {
+      L.march += (tt - L.marchT) * 1.6 / zoom;
+      L.marchPx += (tt - L.marchT) * 1.6;
+    }
     L.marchT = tt;
   }
 
@@ -2929,7 +2947,7 @@ async function main() {
         let q = ordQueues.find((x) => x.unit === ordActive);
         if (!q) ordQueues.push(q = { unit: ordActive, nodes: [] });
         q.nodes.push({ cmd: ordCmd, to: g, issue: Math.floor(ordClock()),
-                       march: sides.map((L) => L.march || 0) });
+                       march: sides.map((L) => [L.march || 0, L.marchPx || 0]) });
         writeQuery("orders", ordersQuery());
       }
       report(); present();

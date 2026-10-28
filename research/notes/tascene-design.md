@@ -349,17 +349,26 @@ kbot that reclaims a wreck and then guards the lab. The overlay is the engine's 
 - A bit-1 order on the **hovered** unit also draws the route dots from `pos` to the target
   (`0x4394E0`): a `pathicon` frame every 48 world units of the straight 3-D line, the first at
   the distance the dots have marched since the order was issued, wrapped to the spacing. A
-  merely selected unit gets the sprites only.
-- **The dots move at one speed on screen, 48 px a second, at every zoom.** That is the
-  engine's `(age % 30) · 48 / 30` at 1×. Stock TA has no zoom, so there the rule is world units
-  and screen pixels at once; kept in world units, it ran the dots faster the further you zoomed
-  in (192 px/s at 4×, 12 px/s at 0.25×). The march is accumulated, 1.6 world units a tick
-  divided by the zoom (`ordMarch`), rather than computed from the clock, so a zoom changes how
-  fast the dots go and never where they are. Each side keeps its own march, and an order
-  queued by hand records the march it was issued at. MEASURED in the live page with a frozen
-  `performance.now` advanced 250 ms, terrain only: the dots moved 11.7 px at 0.5×, 11.7 px at
-  1× and 12.2 px at 3× (median over 16–56 dots), against 12. `orddots=all` (the default) hovers every unit, `active` only the one
-  being ordered.
+  merely selected unit gets the sprites only. `orddots=all` (the default) hovers every unit,
+  `active` only the one being ordered.
+- **The line moves at one speed at every zoom.** The engine's rule is a dot every 48 world
+  units, marching `(age % 30) · 48 / 30`. Stock TA has no zoom, so there world units are screen
+  pixels. A zoomed view has to pick one, and the eye reads the line's speed as how many dots
+  pass a point each second, which is speed over spacing: both have to be constant on screen.
+  Kept in world units, the dots ran faster the further you zoomed in (192 px/s at 4×). With
+  only the speed on screen, they ran faster the further you zoomed out, because at 0.25× they
+  stood 12 px apart and four passed each second. So the default, `ordspace=screen`, is 48 px
+  apart and 48 px a second at every zoom, the engine's own line at 1×. Its march is counted in
+  screen pixels from each leg's start (`ordMarch`, `marchPx`), so a zoom keeps every dot's
+  distance from its waypoint. `world` and `octave` keep a second march in world units,
+  1.6 a tick divided by the zoom, accumulated rather than computed from the clock, so their
+  dots hold to the map through a zoom and still move 48 px a second; only their spacing
+  changes with the zoom. Each side keeps its own marches, and an order queued by hand records
+  them as they stood when it was issued. MEASURED in the live page with a frozen
+  `performance.now` advanced 250 ms, terrain only, default spacing: the dots moved 12.6, 11.7
+  and 12.1 px at 0.25×, 1× and 3× (target 12), and 1.28, 0.99 and 1.01 dots passed a point
+  each second (the 0.25× spacing reads short because the crossing routes stand close there).
+  Under `world` at 0.25× the dots stood too close to tell apart.
 - The sprite shows frame `(gameTime / (2 · frame 0's ticks)) % count` (`0x439740`) at
   `ordalpha` 0.5: `PALETTE.ALP` is a half-and-half mix (measured, engine map). The dots are
   drawn at `orddotalpha`, 1 as the engine copies them. Both are sliders in the status bar;
@@ -383,7 +392,7 @@ into the address bar):
 | `ordstyle` | `gaf` · `proc` · `off` | the engine's art; the procedural markers `tagpu_order.c` draws today, by its own constants and ink rule (`seq_ink`); nothing |
 | `ordsize` | `world` · `screen` · `int` · `clamp` | canvas pixels per texel: the zoom (the engine's pixel magnified with the world); 1; the zoom rounded, at least 1; the zoom held in `ordmin..ordmax` (1..2) |
 | `ordfilter` | `nearest` · `sharp` · `linear` | `sharp` keeps each texel flat and blends only the screen pixel across a texel edge |
-| `ordspace` | `world` · `screen` · `octave` | the dot spacing: 48 world units; 48 screen px; 48·2^k world units with k the zoom's octave |
+| `ordspace` | `screen` · `world` · `octave` | the dot spacing: 48 screen px from each leg's start; 48 world units; 48·2^k world units with k the zoom's octave. The dots move 48 px/s under all three |
 | `ordanim` | `engine` · `cursor` | the sprite's frame rule, above |
 | `ordtick` | `int` · `smooth` | whole ticks or a continuous clock |
 | `orddots` | `all` · `active` | which units draw their route dots |
@@ -403,11 +412,12 @@ one fixed game tick]:
 - **The engine's rule does not survive a zoom.** Scaled with the world, `pathicon` is a 3-px
   speck at 0.25× and a 44-px block at 4×, where the dots stand 192 px apart and one fits on
   screen. At 1× it is the engine's frame.
-- **`clamp` 1..2 with `sharp` and `octave`** (`orders-tuned`) reads at every zoom: the arrows are
-  11–22 px, the dots 34–68 px apart on screen whatever the zoom, and crossing an octave adds or
-  drops every other dot and moves none (each octave's dots are a subset of the finer one's,
-  because the march is one continuous distance). At 0.25× the waypoint stars are
-  large against the shrunken world; `ordmin` below 1 is the knob for that.
+- **`clamp` 1..2 with `sharp`** (`orders-tuned`, now with `screen` spacing) reads at every zoom:
+  the arrows are 11–22 px. With `octave` spacing instead, the dots stand 34–68 px apart on screen
+  and crossing an octave adds or drops every other dot and moves none (each octave's dots are a
+  subset of the finer one's, the march being one continuous distance); the pass rate then
+  swings between 0.7 and 1.4 dots a second. At 0.25× the waypoint stars are large against the
+  shrunken world; `ordmin` below 1 is the knob for that.
 - **`sharp` is what makes a non-whole scale look like pixel art**: at 1.5× `nearest` draws the
   arrow's arms one and two pixels wide by turns, `sharp` evens them, `linear` blurs them. At
   whole scales `sharp` and `nearest` are the same picture.
@@ -423,9 +433,10 @@ order at all, so a factory's rally markers were not captured.
 
 **Gaps.** The lab's frame has not been pixel-diffed against a game frame at the same eye.
 The ALP palette lookup is approximated in full colour (a plain 50 % mix), and so are the
-sub-pixel sprite placement and the per-tick integer projection. Under `ordspace=screen` the spacing is a
-function of the zoom, so a zoom slides the dots along the line; `world` and `octave` do not.
-Nothing in the DLL has changed.
+sub-pixel sprite placement and the per-tick integer projection. Under the default `ordspace=screen` the
+dots are laid out on screen, so a zoom moves them over the map (each keeps its distance from its
+waypoint on screen); `world` and `octave` hold them to the map instead. Nothing in the DLL has
+changed.
 
 ### The presets  (`tools/tascene-presets.json`)
 
@@ -439,8 +450,8 @@ Nothing in the DLL has changed.
 | `restored` | the undithered atlases and nothing else changed |
 | `restored-relief` | everything the exploration lane has |
 | `orders-engine` | Classic with the engine's order art scaled with the world, a dot every 48 world units |
-| `orders-proc` | Classic with the order markers tagpu draws today (`tagpu_order.c`) |
-| `orders-tuned` | the engine's order art at 1–2 texels a pixel, sharp-filtered, its dots spaced per zoom octave |
+| `orders-proc` | Classic with the order markers tagpu draws today (`tagpu_order.c`), on its world spacing |
+| `orders-tuned` | the engine's order art at 1–2 texels a pixel, sharp-filtered, its dots 48 px apart on screen at every zoom |
 
 `serve` and `shot` reuse `ta3do`'s existing `Viewer` (`ThreadingHTTPServer`) and `shoot`
 (`--headless=new` Chrome on a private X display, ANGLE/SwiftShader) rather than growing a
