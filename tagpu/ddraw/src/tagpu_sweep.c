@@ -148,7 +148,6 @@ static uint16_t s_who[SWEEP_MAX_TARGETS], s_seq[SWEEP_MAX_TARGETS], s_cellOrder[
 static unsigned char s_drop[SWEEP_MAX_TARGETS];
 static SweepBuilder s_b[TAGPU_LIM_UNITS];
 static uint16_t s_slot[TAGPU_LIM_UNITS];
-static unsigned char s_started[TAGPU_LIM_UNITS];
 
 /* the level's counters, logged at level end */
 static unsigned s_cCommit, s_cIssued, s_cClick, s_cMismatch, s_cListCap, s_cUnassigned, s_cTrunc;
@@ -463,12 +462,11 @@ static char* live_builder(const TagpuWorld* w, unsigned b)
 }
 
 /* The builder's split inputs, from its list walked on this thread, the one that links and frees
-   order nodes; the walk is bounded and stops at a node another unit owns. Without Shift a
-   builder starts at its own position with nothing queued; with Shift at its last node that has a
-   position, its load the model's ticks over its queued reclaim-family nodes from its position
-   through each, as the mockup's queuedTime. Its room keeps the list under SWEEP_LIST_CAP. */
-static void builder_inputs(const TagpuWorld* w, const Grid* g, const char* u, int shift,
-                           SweepBuilder* b)
+   order nodes; the walk is bounded and stops at a node another unit owns. A ring only appends,
+   so a builder starts at its last node that has a position, its load the model's ticks over its
+   queued reclaim-family nodes from its position through each, as the mockup's queuedTime. Its
+   room keeps the list under SWEEP_LIST_CAP. */
+static void builder_inputs(const TagpuWorld* w, const Grid* g, const char* u, SweepBuilder* b)
 {
     const char *def, *n;
     unsigned steps = 0;
@@ -487,7 +485,6 @@ static void builder_inputs(const TagpuWorld* w, const Grid* g, const char* u, in
         Feat f;
         if (*(const char* const*)(n + N_OWNER) != u) break;
         steps++;
-        if (!shift) continue;
         if (pos[0] > 0 && pos[2] > 0) { b->x = pos[0] >> 16; b->z = pos[2] >> 16; }
         if (family((unsigned char)n[4]) && feature_at(g, pos, &f)) {
             double dx = (double)(f.cx - px), dz = (double)(f.cz - pz), d = sqrt(dx * dx + dz * dz);
@@ -506,7 +503,7 @@ static int cell_cmp(const void* a, const void* b)
     return x < y ? -1 : x > y;
 }
 
-/* With Shift: every target whose feature is already the target of a reclaim-family node in a
+/* Every target whose feature is already the target of a reclaim-family node in a
    builder's list is dropped, so no feature is queued twice. The feature is the node's own,
    found at its position as the Reclaim handler finds it (0x421DA0 at order +0x22). Targets are
    matched by anchor cell, searched in a copy of them sorted by cell. Returns the targets kept,
@@ -543,7 +540,9 @@ static unsigned drop_queued(const TagpuWorld* w, const Grid* g, unsigned n, unsi
    root: the ring's targets, split nearest-first across the selected reclaimers, each issued as
    the order the resolver gives that builder there, then stock's tail of a click. Nothing is
    ordered and the mode stays when the ring holds nothing (the owner's ruling: an empty ring
-   orders nothing and stays armed), and a builder the split gives nothing keeps its orders. */
+   orders nothing and stays armed). A RING ONLY ADDS, with Shift or without (the owner's ruling):
+   every order is appended after the builder's own, no builder loses one, and a feature already
+   queued is not queued again. Shift decides only whether reclaim stays armed, through the tail. */
 static void commit(const TagpuWorld* w, const Gesture* d, int shift)
 {
     Grid g;
@@ -559,11 +558,10 @@ static void commit(const TagpuWorld* w, const Gesture* d, int shift)
     n = found = enumerate(&g, player, c, r, s_kind, s_t, SWEEP_MAX_TARGETS, &more);
     for (i = w->first; i <= w->last && nb < TAGPU_LIM_UNITS; i++)
         if (reclaimer(w, i)) s_slot[nb++] = (uint16_t)i;
-    if (shift && n) n = drop_queued(w, &g, n, nb);
+    if (n) n = drop_queued(w, &g, n, nb);
     if (n) {
         for (k = 0; k < nb; k++) {
-            builder_inputs(w, &g, live_builder(w, k), shift, &s_b[k]);
-            s_started[k] = 0;
+            builder_inputs(w, &g, live_builder(w, k), &s_b[k]);
         }
         for (k = 0; k < n; k++) {
             s_st[k].x = s_t[k].f.cx; s_st[k].z = s_t[k].f.cz;
@@ -571,12 +569,12 @@ static void commit(const TagpuWorld* w, const Gesture* d, int shift)
                                                 *(const float*)(s_t[k].f.def + FD_METAL));
         }
         m = sweep_split(s_b, nb, s_st, n, s_who, s_seq);
-        /* WHY 0x43ADC0 AND NOT 0x43AFC0 UNDER SHIFT: 0x43AFC0 with Shift first cancels a
-           same-action node within 16 world units, inclusive, and creates nothing -- the toggle
+        /* WHY 0x43ADC0, AND ALWAYS WITH ITS APPEND ARGUMENT 1: 0x43AFC0 with Shift first cancels
+           a same-action node within 16 world units, inclusive, and creates nothing -- the toggle
            -- so it would take back a neighbouring 1x1 feature's order instead of adding this
-           one (tagpu_place.c, PHASE 2, the same argument). Without Shift a builder's first order
-           has shift 0, stock's replace (0x43ADC0 destroys every node lacking flag bit 4 and
-           links the new one), and every later one appends. The resolver is asked again for
+           one (tagpu_place.c, PHASE 2, the same argument); and 0x43ADC0's 0, stock's replace,
+           destroys every node lacking flag bit 4 before it links the new one, which a ring never
+           does. The resolver is asked again for
            every order: the preview is never trusted, and the order byte is the builder's own
            (VTOL_RECLAIM for a VTOL, RESURRECT for a resurrector). A refusal is a mismatch, the
            self-check of enumerate's equivalence. No node pointer is held across a call. */
@@ -589,8 +587,7 @@ static void commit(const TagpuWorld* w, const Gesture* d, int shift)
             if (!u) continue;
             feature_pos(&t->f, pos);
             if (!(action = feature_order(u, pos))) { mismatch++; continue; }
-            ((Order)0x0043ADC0u)(action, (shift || s_started[b]) ? 1 : 0, u, NULL, pos, 0, 0);
-            s_started[b] = 1;
+            ((Order)0x0043ADC0u)(action, 1, u, NULL, pos, 0, 0);
             issued++;
         }
         for (k = 0; k < nb; k++) capped += m < n && !s_b[k].room;

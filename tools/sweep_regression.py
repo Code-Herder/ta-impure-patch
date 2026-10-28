@@ -31,7 +31,8 @@ The cases (core), ARMCOM and both ARMCK selected:
   expected METAL set, each feature once, and each builder's own targets come in the order
   sweep_split gives for the inputs read back here, then mode 1; (d) ENERGY and (e) ALL, the same;
   (f) a Shift ring after a METAL prefix: every list keeps its prefix, no feature twice, mode 12
-  with main+0x2CC6 bit 5, and Shift's release disarms; (g) a click on a wreck under METAL is
+  with main+0x2CC6 bit 5, and Shift's release disarms; (f2) the same without Shift: a ring only
+  adds, every builder's whole list stays at its head, and it disarms; (g) a click on a wreck under METAL is
   stock's: every list is that wreck alone, mode 1; (h) on a tree under METAL the cursor is the
   engine's "nothing", 0x13, and a click orders nothing and keeps the mode; (i) a right press
   mid-drag orders nothing and keeps the mode, a second one disarms; (j) Esc the same; (k) a ring
@@ -423,9 +424,9 @@ class Sweep(Check):
         self.once(not any(self.lists().values()), "the builders kept reclaim orders after a stop")
 
     def inputs(self):
-        """The split's inputs for a commit without Shift, read back from the engine: each
-        builder's position (unit +0x6A / +0x72 >> 16), its def's maxvelocity +0x192 (16.16) and
-        builddistance +0x212, no load, and the room its list leaves under LIST_CAP."""
+        """The split's inputs for a commit from builders with no orders, read back from the engine:
+        each builder's position (unit +0x6A / +0x72 >> 16), its def's maxvelocity +0x192 (16.16)
+        and builddistance +0x212, no load, and the room its list leaves under LIST_CAP."""
         defs = self.values(f"{MAIN}+0x1439b")[0]
         out = []
         for b in self.builders:
@@ -562,7 +563,8 @@ def radius(pc, pe, zoom):
 
 
 def ring_case(s, what, kind, ring=BIG, zoom=1.0, must=()):
-    """A ring without Shift from builders with no orders: the union of the lists is what the ring
+    """A ring without Shift from builders with no orders (a ring appends, so an empty list's
+    inputs are its unit's own): the union of the lists is what the ring
     holds, each feature once, each builder's targets in sweep_split's order, then mode 1."""
     s.clear()
     s.arm()
@@ -642,6 +644,36 @@ def case_f(s, scene):
         f"{what}: mode {s.mode()}, main+0x2CC6 0x{s.flags():02x}: the order is not kept armed"
     s.lift("shift")
     s.until(lambda: s.mode() == 1, f"{what}: Shift's release did not disarm")
+
+
+def case_f2(s, scene):
+    """A ring only adds: without Shift too, every builder's whole list -- every node, of any
+    action -- stays at its head, nothing is queued twice, and the order disarms."""
+    what = "(f2) a ring without Shift after a METAL prefix"
+    s.clear()
+    s.arm()
+    s.set_kind("METAL")
+    pc, pe, start = s.drag(*PREFIX)
+    s.commit_line(start, f"{what}: the prefix")
+    before = {b: [(o["action"], o["pos"]) for o in s.orders(b)] for b in s.builders}
+    cells = s.lists()
+    assert any(before.values()), f"{what}: the prefix ring took nothing"
+    s.arm()
+    s.set_kind("ALL")
+    pc, pe, start = s.drag(*BIG)
+    line = s.commit_line(start, what)
+    assert line["shift"] == 0 and line["issued"] > 0, f"{what}: {line}"
+    after = {b: [(o["action"], o["pos"]) for o in s.orders(b)] for b in s.builders}
+    for b in s.builders:
+        assert after[b][:len(before[b])] == before[b], \
+            f"{what}: {b}'s orders {before[b]} became {after[b]}: the ring cancelled some"
+    assert sum(map(len, after.values())) == sum(map(len, before.values())) + line["issued"], \
+        f"{what}: {line['issued']} issued, the lists went from {before} to {after}"
+    got = s.lists()
+    taken = [cell for b in s.builders for cell in got[b]]
+    assert len(taken) == len(set(taken)), f"{what}: a feature queued twice: {got}"
+    assert all(got[b][:len(cells[b])] == cells[b] for b in s.builders), f"{what}: {cells} -> {got}"
+    s.until(lambda: s.mode() == 1, f"{what}: the ring without Shift did not disarm")
 
 
 def click_at(s, x, z):
@@ -792,6 +824,7 @@ def core(s):
     ring_case(s, "(d) an ENERGY ring", "ENERGY", must=trees)
     ring_case(s, "(e) an ALL ring", "ALL", must=wrecks + trees)
     case_f(s, scene)
+    case_f2(s, scene)
     case_gh(s, scene)
     case_ij(s)
     case_k(s)
