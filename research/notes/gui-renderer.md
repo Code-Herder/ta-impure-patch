@@ -1251,6 +1251,15 @@ backgrounds, a 160×120 window at 3×), [`uiart-gaf.webp`](assets/shots/uiart/ui
 [`uiart-small.webp`](assets/shots/uiart/uiart-small.webp),
 [`uiart-cursors.webp`](assets/shots/uiart/uiart-cursors.webp).
 
+**43 of the `gaf` class's 92 frames are not the picture the game draws.** Every `commongui` order,
+`PREV`/`NEXT` and `BUILD`/`ORDERS` button and `skirmish.gaf`'s `SIDEX` is a stack of sub-frames (a
+body and its lettering), and the reader this run used pasted each sub-frame at the frame's top left,
+its transparent pixels included, instead of at the frame's hotspot less its own. On `ARMATTACK` that
+leaves 693 of the 1620 pixels the game draws. The sheets, their numbers in `uiart-report.json` and
+the ruling on the order buttons below rest on those pictures; `tools/ta3do`'s `gaf_compose` now
+composes them as `0x4B7F90` does, and the run has not been repeated on it. The DLL does not use
+that reader: it decodes GAF frames itself (`tagpu_gaf.c`).
+
 **The reading, and the owner's ruling on it [DECIDED 2026-09-08]:**
 
 - **`unitpics` and the panels pass on sight.** The build icons are exactly what the model was

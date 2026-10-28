@@ -322,8 +322,9 @@ def load_palette(assets: "Assets"):
 # blue; 263 of the 608 stock models name at least one such entry.
 
 
-class GafError(Exception):
-    pass
+class GafError(ValueError):
+    """A GAF this reader refuses. A ValueError, so callers that refuse a malformed frame by
+    ValueError refuse a GafError the same way."""
 
 
 class GafFrame:
@@ -354,19 +355,71 @@ def gaf_entries(blob: bytes):
 
 
 def gaf_frame(blob: bytes, offset: int) -> GafFrame:
-    (width, height, _x, _y, transparent, compressed,
-     subframes, _unk, ptr, _unk2) = struct.unpack_from("<HHhhBBHIII", blob, offset)
+    """The frame at `offset` as CopyGafToContext 0x4B7F90 draws it (see gaf_compose)."""
+    return gaf_compose(blob, offset)[0]
+
+
+def gaf_compose(blob: bytes, offset: int):
+    """(GafFrame, pixels outside the frame) of the frame at `offset` as CopyGafToContext 0x4B7F90 draws it.
+
+    The sub-frame count is the BYTE at +0x0A; the byte at +0x0B is a sub-frame's alpha-blit flag
+    (research/notes/exe-reverse-engineering.md, 0x4B7F90). A frame with sub-frames draws
+    none of its own pixels: the blit calls itself for each sub-frame in order with the SAME
+    destination point (0x4B7FC8..0x4B801A), and each lands at that point minus its own hotspot
+    (0x4B804A..0x4B805A), skipping its own transparent index; DISASSEMBLED. A stack is one level
+    deep: the GAF loader 0x4B8C60 rebases each sub-frame offset and that sub-frame's +0x10, and
+    never the entries of a sub-frame's own table (0x4B8CC0..0x4B8CF5, DISASSEMBLED), so in the
+    engine a nested table holds file offsets read as pointers. A sub-frame with sub-frames of its
+    own is therefore refused (GafError), which also bounds a frame to 255 leaves.
+
+    The layers are composed into the frame's own w x h box, which stands at the point minus the
+    frame's hotspot: a leaf pixel (c, r) lands at (frame hotspot - leaf hotspot + c, ... + r), and
+    one outside the box is counted, not drawn. The key is the frame's transparent index unless a
+    layer draws that index, then the lowest index none draws, so a drawn pixel never reads as a
+    hole. A lone leaf that fills the box at the frame's hotspot is the frame as it stands. A
+    sub-frame with +0x0B set goes through the alpha blit 0x4B8500 in the engine; here it is copied
+    like any other, palette indices carrying no blend."""
+    width, height, hx, hy, key = struct.unpack_from("<HHhhB", blob, offset)
+    if not blob[offset + 10]:
+        return _gaf_leaf(blob, offset), 0
+    layers = []
+    ptr = struct.unpack_from("<I", blob, offset + 16)[0]
+    for sub in struct.unpack_from(f"<{blob[offset + 10]}I", blob, ptr):
+        if blob[sub + 10]:
+            raise GafError("a sub-frame with sub-frames of its own, which the loader 0x4B8C60 does not rebase")
+        lx, ly = struct.unpack_from("<hh", blob, sub + 4)
+        layers.append((_gaf_leaf(blob, sub), lx, ly))
+    if len(layers) == 1 and layers[0][1:] == (hx, hy) and \
+            (layers[0][0].width, layers[0][0].height) == (width, height):
+        return layers[0][0], 0
+    px, drawn, outside = bytearray(width * height), bytearray(width * height), 0
+    for f, lx, ly in layers:
+        ox, oy = hx - lx, hy - ly
+        for r in range(f.height):
+            for c in range(f.width):
+                v = f.pixels[r * f.width + c]
+                if v == f.transparent:
+                    continue
+                x, y = ox + c, oy + r
+                if 0 <= x < width and 0 <= y < height:
+                    px[y * width + x], drawn[y * width + x] = v, 1
+                else:
+                    outside += 1
+    used = {px[i] for i in range(width * height) if drawn[i]}
+    if key in used:
+        key = next((i for i in range(256) if i not in used), key)
+    for i in range(width * height):
+        if not drawn[i]:
+            px[i] = key
+    return GafFrame(width, height, px, key), outside
+
+
+def _gaf_leaf(blob: bytes, offset: int) -> GafFrame:
+    """A frame without sub-frames: its own pixels, raw or RLE'd row by row, the transparent index
+    wherever a row writes nothing."""
+    (width, height, _x, _y, transparent, compressed, _sub, _alpha, _unk,
+     ptr, _unk2) = struct.unpack_from("<HHhhBBBBIII", blob, offset)
     pixels = bytearray([transparent]) * (width * height)
-    if subframes:
-        # A stack of sub-frames pasted at their own hotspots; rare for textures.
-        table = struct.unpack_from(f"<{subframes}I", blob, ptr)
-        for sub_off in table:
-            sub = gaf_frame(blob, sub_off)
-            for row in range(min(sub.height, height)):
-                start = row * width
-                pixels[start:start + min(sub.width, width)] = \
-                    sub.pixels[row * sub.width:row * sub.width + min(sub.width, width)]
-        return GafFrame(width, height, pixels, transparent)
     if not compressed:
         raw = blob[ptr:ptr + width * height]
         pixels[:len(raw)] = raw

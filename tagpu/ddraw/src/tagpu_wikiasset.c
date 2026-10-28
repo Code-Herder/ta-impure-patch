@@ -1551,7 +1551,7 @@ static void unit_report(SB* b, const LOADER* L, const WIKI3DUNIT* u, const UNITR
 #define SNAME      64           /* a name as a file gives it; the layout keeps WIKI_SIDE_NAME     */
 #define FRAME_MAXW WIKISIDE_SHEET_W
 #define FRAME_MAXH 4096
-#define LAYERS_MAX 1024         /* the leaves one frame's sub-frames may stack                    */
+#define LAYERS_MAX 255          /* the leaves one frame stacks: its byte sub-frame count, one level */
 #define LAYERS_PX  (16u << 20)  /* their pixels together: four of the largest leaf (FRAME_MAXW x
                                    FRAME_MAXH), so one frame never holds more than 16 MB of leaves */
 #define GAF_SIG    0x00010100u
@@ -1841,9 +1841,9 @@ static int leaf_decode(SIDE* S, SBANK* k, uint32_t o, int* w, int* h, int* tk, u
     W = rd16(hd);
     H = rd16(hd + 2);
     ptr = rd32(hd + 16);
-    /* the reader the pack uses takes a u16 sub-frame count at +0x0A where the engine takes a byte
-       (0x4B8CC0): a leaf whose +0x0B is set is one the two would read apart, so it is refused */
-    if (hd[11] || W > FRAME_MAXW || H > FRAME_MAXH) return 0;
+    /* +0x0B is the alpha-blit flag, not part of the sub-frame count (a byte at +0x0A, 0x4B8CC0):
+       the leaf's pixels are copied like any other's, as ta3do.gaf_compose copies them */
+    if (W > FRAME_MAXW || H > FRAME_MAXH) return 0;
     if (!(px = (unsigned char*)malloc(W && H ? W * H : 1))) return 0;
     memset(px, hd[8], W * H);
     if (!hd[9]) {
@@ -1908,7 +1908,7 @@ static void leaves(SIDE* S, SBANK* k, uint32_t o, int depth, LAYERS* L)
         LAYER* y;
         /* THE BOUND ON ONE FRAME'S MEMORY: every leaf is decoded and held until the frame is
            composed, and one crafted frame can stack LAYERS_MAX leaves of FRAME_MAXW x FRAME_MAXH
-           (4 GB). The running sum of their pixels is held to LAYERS_PX, checked on the leaf's
+           (1 GB). The running sum of their pixels is held to LAYERS_PX, checked on the leaf's
            header before its pixels are allocated; past it the frame is refused, with the reason.
            A leaf past FRAME_MAXW x FRAME_MAXH is leaf_decode's to refuse. gfx.py has no such
            bound: a file past it is one the two readers part on. */
@@ -1934,8 +1934,17 @@ static void leaves(SIDE* S, SBANK* k, uint32_t o, int depth, LAYERS* L)
         L->n++;
         return;
     }
-    /* the pack's reader stops at eight levels of sub-frames */
-    if (depth > 8 || !inside(k->n, ptr, (uint64_t)sub * 4)) { L->bad = 1; return; }
+    /* A STACK IS ONE LEVEL DEEP: the GAF loader 0x4B8C60 rebases each sub-frame offset and that
+       sub-frame's +0x10, never the entries of a sub-frame's own table (0x4B8CC0..0x4B8CF5,
+       DISASSEMBLED), so the engine would read a nested table's file offsets as pointers. The
+       pack's reader (ta3do.gaf_compose) refuses the same frame; this also holds a frame to 255
+       leaves. */
+    if (depth > 0) {
+        L->why = "a sub-frame has sub-frames of its own, which the engine's GAF loader does not rebase";
+        L->bad = 1;
+        return;
+    }
+    if (!inside(k->n, ptr, (uint64_t)sub * 4)) { L->bad = 1; return; }
     for (j = 0; j < sub && !L->bad; j++) {
         uint32_t so;
         if (!bank_u32(S, k, ptr + 4 * j, &so)) { L->bad = 1; return; }
@@ -1950,7 +1959,7 @@ static void leaves(SIDE* S, SBANK* k, uint32_t o, int depth, LAYERS* L)
    which stands at the point minus the frame's hotspot; a layer pixel outside the box is left out
    (counted in `*outside`). The key is the frame's transparent index unless a layer draws that
    index, then the lowest index none draws. 0 for a frame this reader refuses, with `*why` the
-   reason when it is the bound on the leaves' memory (LAYERS_PX), else NULL. */
+   reason when it is the bound on the leaves' memory (LAYERS_PX) or a nested stack, else NULL. */
 static int frame_drawn(SIDE* S, SBANK* k, uint32_t fo, int* w, int* h, int* hx, int* hy, int* tk,
                        unsigned char** out, long* outside, const char** why)
 {

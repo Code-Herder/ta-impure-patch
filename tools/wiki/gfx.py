@@ -217,63 +217,21 @@ class Gaf:
             self.heads.setdefault(name, off)
 
     def frame(self, seq, k=0):
-        """(GafFrame, hotspot x, hotspot y) of frame k of `seq`, or None."""
+        """(GafFrame, hotspot x, hotspot y) of frame k of `seq` as the blit draws it, or None."""
+        hit = self.drawn(seq, k)
+        return hit[:3] if hit else None
+
+    def drawn(self, seq, k=0):
+        """(GafFrame, hotspot x, hotspot y, pixels outside the frame) of frame k of `seq` as CopyGafToContext
+        0x4B7F90 draws it (ta3do.gaf_compose: sub-frames composed into the frame's own box), or None. The commongui
+        order, tab and pager buttons are such stacks (a body and its lettering)."""
         hit = self.seqs.get(seq.lower())
         if not hit or not 0 <= k < len(hit[1]):
             return None
         off = hit[1][k]
         hx, hy = struct.unpack_from("<hh", self.blob, off + 4)
-        return ta3do.gaf_frame(self.blob, off), hx, hy
-
-    def drawn(self, seq, k=0):
-        """(GafFrame, hotspot x, hotspot y, pixels outside the frame) of frame k of `seq` as CopyGafToContext
-        0x4B7F90 draws it, or None. A frame with subframes (the byte at +0xA) draws none of its own pixels: the blit
-        calls itself for each subframe in order with the SAME destination point (0x4B7FC8..0x4B801A), and each lands
-        at that point minus its own hotspot (0x4B804A..0x4B805A), skipping its own transparent index; DISASSEMBLED.
-        The commongui order, tab and pager buttons are such stacks (a body and its lettering). The layers are
-        composed here into the frame's own w x h box, which stands at the point minus the frame's hotspot; a layer
-        pixel outside the box is counted, not drawn. The key is the frame's transparent index unless a layer draws
-        that index, then the lowest index none draws."""
-        hit = self.seqs.get(seq.lower())
-        if not hit or not 0 <= k < len(hit[1]):
-            return None
-        off = hit[1][k]
-        w, h, hx, hy, key = struct.unpack_from("<HHhhB", self.blob, off)
-        layers = []
-
-        def leaves(o, depth):
-            n, ptr = self.blob[o + 10], struct.unpack_from("<I", self.blob, o + 16)[0]
-            if not n:
-                lx, ly = struct.unpack_from("<hh", self.blob, o + 4)
-                layers.append((ta3do.gaf_frame(self.blob, o), lx, ly))
-                return
-            if depth > 8:
-                raise ValueError("subframes nested past 8 levels")
-            for sub in struct.unpack_from(f"<{n}I", self.blob, ptr):
-                leaves(sub, depth + 1)
-        leaves(off, 0)
-        if len(layers) == 1 and layers[0][1:] == (hx, hy) and (layers[0][0].width, layers[0][0].height) == (w, h):
-            return layers[0][0], hx, hy, 0
-        px, drawn, outside = bytearray(w * h), bytearray(w * h), 0
-        for f, lx, ly in layers:
-            ox, oy = hx - lx, hy - ly
-            for r in range(f.height):
-                for c in range(f.width):
-                    v = f.pixels[r * f.width + c]
-                    if v == f.transparent:
-                        continue
-                    x, y = ox + c, oy + r
-                    if 0 <= x < w and 0 <= y < h:
-                        px[y * w + x], drawn[y * w + x] = v, 1
-                    else:
-                        outside += 1
-        used = {px[i] for i in range(w * h) if drawn[i]}
-        if key in used:
-            key = next((i for i in range(256) if i not in used), key)
-        for i in range(w * h):
-            if not drawn[i]:
-                px[i] = key
-        return ta3do.GafFrame(w, h, px, key), hx, hy, outside
+        fr, outside = ta3do.gaf_compose(self.blob, off)
+        return fr, hx, hy, outside
 
 
 # --------------------------------------------------------------------------- the game's cursors
