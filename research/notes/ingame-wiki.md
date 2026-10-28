@@ -1407,7 +1407,7 @@ cases). Every demo plays with the fixture's sidebar, the 768-row fixture's and n
 contexts: the entry's own types and the `identity`, `shifted` and `unbound` castings of
 `tools/wiki/casting-fixture.json`, each at Interface Type 1 and 0, and each of those with the
 units' scripts and without when a gfx pack under `tools/wiki/mockup/gfx/` holds them (`wikitest`
-reads the same script files). MEASURED 2026-10-28: 1008 demo plays and 53 rule cases equal, all
+reads the same script files). MEASURED 2026-10-28: 1008 demo plays and 55 rule cases equal, all
 180 refusal cases alike, 24 castings and layouts read back alike and all 21 malformed-data cases
 as stated, natively (gcc, with AddressSanitizer and UndefinedBehaviorSanitizer) and with `--wine`
 (the DLL's compiler and flags, run under Wine).
@@ -1749,7 +1749,7 @@ both fold into theirs, holds them to the same calls.
   built, it plays without the scripts and says why in the console, as it says a quarantined type's
   note. Run the mockup with `serve.py`.
 - **What it costs**: the host's slice over a demo's units is about 70 µs; with the scripts the page
-  cost the game thread at most 0.358 ms in a frame over 1222 frames, and *Queue several with
+  cost the game thread at most 0.281 ms in a frame over 1253 frames, and *Queue several with
   Shift* plays 1054 ticks where it played 570 (MEASURED 2026-10-28).
 
 ## Gaps
