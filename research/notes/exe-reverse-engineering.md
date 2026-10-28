@@ -7519,21 +7519,27 @@ reads none either.
       argument slot, `mov ecx,esp`) through the order issuer
       `0x48CF30(main+0x2C76, 0, STOP, 0, 0, 0)` (`0x419CED`), which hands every selected unit of
       the controlled player the order through `0x43AFC0` (`0x48D1F4`), with no `canstop` test;
-    - it ends at the shared tail `0x41A0EA` (`immediateorders`).
+    - it ends at the shared tail `0x41A0EA`, which plays `immediateorders` (`0x50271C`) through
+      `0x47F1A0`.
 - **What each unit receives** [DISASSEMBLED]. `0x48CF30(record, type, action, pos, p1, p2)`,
   `ret 0x18`, with `type` 0 skips the mapper `0x43F0E0` and uses `action` (`0x48CF4E`,
   `0x48D083..0x48D089`). The descriptor's flags (`0x438830`, `+0x11`) decide two things: bit 9
   makes the unit under the cursor (`main+0x2CBA`) the target (`0x48CF5E..0x48CFA4`), and bit 1
-  with a position spreads the units about it (`0x48D111..0x48D1D3`). Stop's flags are 0, so the
-  target is 0 and the position is NULL. The walk is the controlled player's `+0x67..+0x6B` units
+  with a position spreads the units about it (`0x48D111..0x48D1D3`). Stop's flags are 0 (its
+  static record `0x4FC490`: status `Stopping`, handler `0x401C20` at `+0x04`, flags at `+0x11`),
+  so the target is 0; the position is NULL because the button passes NULL. The walk is the controlled player's `+0x67..+0x6B` units
   (`0x48CFAC..0x48CFCC`) with `+0x110` bit 4, minus the target; it skips `Standing_FireOrder`
   (`0x50120C`) for a def without `+0x245` bit 1 and `Standing_MoveOrder` (`0x501220`) for one
   without bit 0 (`0x48D0B7..0x48D10B`). Each unit gets
   `0x43AFC0(STOP, shift, unit, 0, NULL, 0, 0)` (`0x48D1D9..0x48D1F4`). Without Shift
   `0x43AFC0` passes the position only through `0x43ADC0` to the node constructor `0x43A0C0`,
-  which stores (0,0,0) for a NULL one (`0x43A13A..0x43A164`).
+  which stores (0,0,0) for a NULL one (`0x43A13A..0x43A164`) and clears the node's `+0x42` bit
+  `0x400` for it (`0x43A1A7..0x43A1B3`); Stop's flags, which the constructor copies to `+0x42`,
+  do not carry that bit, so a zero position and a NULL one make the same Stop node.
 - **Stop's handler `0x401C20`** (`ret 0xC`, the unit the first argument, the node the second)
-  announces the order once (`0x438880`: node `+0x42` bit 13 → `0x47F780(owner, 5)`), clears
+  announces the order once (`0x438880`: node `+0x42` bit 13 → `0x47F780(unit, 5, 0)`, the unit
+  being the node's `+0x0E`; `0x47F780` speaks only for a unit of the viewed player `main+0x2A43`,
+  `0x47F78B..0x47F799`), clears
   weapon slots 0, 1 and 2's targets (`ClearTarget 0x48A0F0`, `0x401C2C..0x401C43`), and for a
   flying type (`def+0x241` bit 11) whose `+0x110 & 3` is 2 [INFERRED: in the air] links a
   `VTOL_LANDIFCAN` node (`0x5012BC`, `0x401C67..0x401C99`); it returns 5. MEASURED 2026-10-27

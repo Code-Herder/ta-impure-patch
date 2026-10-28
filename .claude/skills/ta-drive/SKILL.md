@@ -132,7 +132,11 @@ tools/tacli order t1 --unit 2 stop
   `stop` is the STOP button's order (the unit ends on Standby, action 41) without the button's
   disarm: an armed build stays armed.
 - **Not a validator.** A nonsense order is issued, not caught, so `1 issued` is not evidence the
-  unit did anything — read the roster. **Not ownership-checked**: an enemy unit takes the order.
+  unit did anything — read the roster. **Not ownership-checked**: a `--unit` order on another
+  player's unit or a replay puppet still rewrites its order list (`0x43ADC0`), but a unit whose
+  owner type is not 1 or 2 runs no order handler (`0x48AEB5`), so the node does nothing there. In
+  a network game, replacing a running build order can send a `0x10` StopBuilding message for a
+  unit we do not own (`0x43A258` → `0x456190`, gated on `main+0x2A44` bit 0).
 
 **Naming the unit.** `--unit` takes the `engine_index` from `tacli roster`, which the engine
 recycles when a unit dies, so **pass `--expect <TYPE>` whenever you pass `--unit`**: the DLL

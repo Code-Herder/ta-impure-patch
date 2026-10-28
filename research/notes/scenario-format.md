@@ -178,8 +178,9 @@ unit names by scanning the live definition table. This design follows its recipe
 ## Order vocabulary
 
 TA's own order names and the command types the fork hands the order mapper
-`ScriptAction_Type2Index` `0x43F0E0` for them, numbered as TADR numbers its button/order table
-[`TA_MemoryStructures.pas:6-21`]. The wire carries the name; the number is the fork's.
+`ScriptAction_Type2Index` `0x43F0E0` for them. The wire carries the name; the number is the
+fork's. Every number is TADR's button/order table's [`TA_MemoryStructures.pas:6-21`] except
+`stop`'s: TADR numbers it 1, and type 1 in the mapper is not Stop (below).
 
 `stop`(10) `move`(2) `attack`(3) `blast`(4) `unload`(5) `load`(6) `defend`(7) `repair`(8)
 `patrol`(9) `teleport`(11) `reclaim`(12) `capture`(13) `mobilebuild`(14)
