@@ -74,6 +74,17 @@ note and `roadmap.md` and deleted.
 19. **Keys shown in captions and the keys strip follow the player's key bindings**, where Impure or
     the mod lets them be rebound (2026-10-27, the same landing). Game speed is not followed: the
     wiki keeps its own 1x/2x.
+20. **The equivalence rule ranks by tech level, then the mod's own menu order** (2026-10-28, amending
+    decision 14's alphabetical tie-break), and "of the demo's movement class" is dropped: no unit field
+    tells movement class across mods. Still no mod names, lists or overrides.
+21. **Decision 19 is closed**: nothing is rebindable today (TA's keys are a table in the exe, impure.cfg
+    has none, the mods' key files are TADR's). Key names live in one table the captions read, so a
+    future rebinding feature changes one place (2026-10-28).
+22. **In a replay the tutorial follows the controlled player's side**, the one the engine's own
+    sidebar follows (2026-10-28).
+23. **Quick Build picks from the build menu the player sees**, not the engine's AI build list
+    (CANBUILD), if the live check confirms it reads the AI list: a separate simulation landing, before
+    the tutorials landing (2026-10-28).
 
 **Settled from the engine, not asked:** the page shown follows the engine's own router (nothing
 selected: the mod's `MAIN2` screen; exactly one unit selected, a builder: its numbered pages; anything
