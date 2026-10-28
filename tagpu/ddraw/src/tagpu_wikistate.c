@@ -253,7 +253,9 @@ static int side_bind(const WIKISTAGEVIEW* v, const WIKIART* art, const WIKISIDE*
     if (w3 && art->data && s_entry >= 0 && s_entry < art->data->nentry)
         for (i = 0; i < w3->nstage; i++)
             if (!strcmp(w3->stage[i].entry, art->data->entry[s_entry].id)) { st = &w3->stage[i]; break; }
-    if (!tagpu_wikiside_compose(side, v, st ? st->minimap : NULL, st && st->minimap ? st->mm_w * st->mm_h : 0, c))
+    /* the side the wiki's sims play, side 0 (tagpu_wiki.c start): the record carries no side of
+       its own */
+    if (!tagpu_wikiside_compose(side, v, 0, st ? st->minimap : NULL, st && st->minimap ? st->mm_w * st->mm_h : 0, c))
         return 0;
     if (!s_colGen || side != s_colOf || !col_same(c, &s_col[s_colCur])) {
         memset(s_colRgba, 0, sizeof s_colRgba);

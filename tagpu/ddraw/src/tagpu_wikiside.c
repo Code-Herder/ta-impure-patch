@@ -128,7 +128,7 @@ static int minimap(const WIKISIDE* art, const WIKISTAGEVIEW* v, const unsigned c
     return 1;
 }
 
-int tagpu_wikiside_compose(const WIKISIDE* art, const WIKISTAGEVIEW* v, const unsigned char* base, int nbase,
+int tagpu_wikiside_compose(const WIKISIDE* art, const WIKISTAGEVIEW* v, int side, const unsigned char* base, int nbase,
                            WIKISIDECOL* out)
 {
     const WIKILAYOUT* L;
@@ -147,8 +147,10 @@ int tagpu_wikiside_compose(const WIKISIDE* art, const WIKISTAGEVIEW* v, const un
 
     /* PANELSIDE lands with its top left at (0, 0) whatever its hotspot: 0x467D70 passes the
        frame's own hotspot as the point (0x467E30..0x467E3C) and CopyGafToContext 0x4B7F90
-       subtracts it again, DISASSEMBLED */
-    if (art->has_panelside) blit(art, out, &art->panelside, 0, 0, art->panelside_key, 0, 0, COL, H);
+       subtracts it again, DISASSEMBLED. Each layout side has its own (<intgaf>'s PANELSIDE); the
+       side is bounded by the layout's sides, which WIKI_SIDE_SIDES bounds (tagpu_wikilayout_check) */
+    if (side >= 0 && side < L->nside && side < WIKI_SIDE_SIDES && art->has_panelside[side])
+        blit(art, out, &art->panelside[side], 0, 0, art->panelside_key[side], 0, 0, COL, H);
 
     out->minimap = minimap(art, v, base, nbase, out);
 

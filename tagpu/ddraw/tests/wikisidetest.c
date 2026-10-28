@@ -15,10 +15,10 @@
    pixel.
 
    art.json holds the art as the asset loader fills WIKISIDE (tagpu_wikiasset.h), a frame as
-   [sx, sy, w, h, hx, hy]: {"sheet": [w, h], "panelside": {"f", "key"} | null, "dots": {"key",
-   "radlogo": [f...], "high": f | null}, "unexplored", "box", "screens": [{"panel": {"f", "key"} |
-   null, "pics": [{"from" (WIKISIDE_FROM_*), "frames": [f...], "key", "attribs", "text"}]}] in the
-   layout's screen order}.
+   [sx, sy, w, h, hx, hy]: {"sheet": [w, h], "panelside": [{"f", "key"} | null, one a layout side],
+   "dots": {"key", "radlogo": [f...], "high": f | null}, "unexplored", "box", "screens": [{"panel":
+   {"f", "key"} | null, "pics": [{"from" (WIKISIDE_FROM_*), "frames": [f...], "key", "attribs",
+   "text"}]}] in the layout's screen order}.
 
    Exit 0 when everything loaded and ran, 2 when an input is unreadable or refused. */
 #include <stdio.h>
@@ -77,10 +77,13 @@ static int art(WIKISIDE* sd, const TJV* a)
 {
     const TJV *ps = tj_get(a, "panelside"), *dots = tj_get(a, "dots"), *scr = tj_get(a, "screens"), *c;
     int k = 0, i;
-    if ((sd->has_panelside = tj_is(ps, TJ_OBJ))) {
-        if (!frame(tj_get(ps, "f"), &sd->panelside)) return 0;
-        sd->panelside_key = num(tj_get(ps, "key"), -1);
-    }
+    if (!tj_is(ps, TJ_ARR) || ps->n != sd->layout.nside) return 0;
+    for (c = ps->first; c; c = c->next, k++)
+        if ((sd->has_panelside[k] = tj_is(c, TJ_OBJ))) {
+            if (!frame(tj_get(c, "f"), &sd->panelside[k])) return 0;
+            sd->panelside_key[k] = num(tj_get(c, "key"), -1);
+        }
+    k = 0;
     sd->dot_key = num(tj_get(dots, "key"), -1);
     c = tj_get(dots, "radlogo");
     if (!tj_is(c, TJ_ARR) || c->n > WIKISIDE_DOTS) return 0;
@@ -247,7 +250,8 @@ static int compose(char** a)
                 if (sampled(w, &was, s.tick, s.done)) {
                     int h;
                     tagpu_wikistage_copy(&v, w, e, WIKISTAGE_LAYOUT_MOD);
-                    h = tagpu_wikiside_compose(sd, &v, base, base ? (int)nbase : 0, &col);
+                    /* side 0: the side a sim made with no context plays */
+                    h = tagpu_wikiside_compose(sd, &v, 0, base, base ? (int)nbase : 0, &col);
                     key(e->id, e->demo[j].id, s.tick);
                     put32(h);
                     put32(col.minimap);

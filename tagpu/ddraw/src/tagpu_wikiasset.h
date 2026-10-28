@@ -9,7 +9,8 @@
    checked, its tile count compared, and only the tiles the description names read and their
    FNV-1a 32 compared; each feature section from the first features\**\*.tdf that holds it (in the
    engine's enumeration order), with its sequences (a 2D feature) or its model (a 3D one). And for
-   every unit type any entry defines: units\<name>.FBI by path, as a level opens it; the model
+   every unit type any entry defines, and every layout side's type for each cast an entry's units
+   name (the sidebar's casting, below): units\<name>.FBI by path, as a level opens it; the model
    objects3d\<Objectname, else UnitName>.3DO; the script scripts\<UnitName>.COB, and from it the
    pieces Create() hides (tagpu_cobscan_mask, the build ghost's rule). The folders' names are the
    running executable's (Escalation's `unitsE`, TA Zero's `ZUnits` and `logoz`). And the game's
@@ -166,38 +167,65 @@ typedef struct {
 
    WHAT IT READS, every file by the engine's path rule (the language's folder first, a 0-byte file
    missing, as 0x4BBC40 answers):
-     - <units>\*.FBI, each by position (tagpu_guifile.h): [UNITINFO]'s UnitName, Side and canstop.
-       A "unit type" is a UnitName some FBI declares, compared without case (0x488B10's _stricmp
-       over def+0x20); the first file listed wins a name.
+     - <units>\*.FBI, each by position (tagpu_guifile.h): [UNITINFO]'s UnitName, canstop, the
+       display name and the cast rule's figures (below). A "unit type" is a UnitName some FBI
+       declares, compared without case (0x488B10's _stricmp over def+0x20); the first file listed
+       wins a name.
      - <gamedata>\sidedata.TDF: [SIDE0], [SIDE1], ... up to the first missing one (0x431A60), each
-       its `name`, `nameprefix` and `intgaf`; at most WIKI_SIDE_SIDES are kept.
+       its `name`, `nameprefix`, `intgaf` and `commander`; at most WIKI_SIDE_SIDES are kept.
      - <download>\*.TDF in the enumeration's order (0x42DCF0), each section with a UNITMENU an
        entry (UNITMENU, MENU, BUTTON, UNITNAME), MENU and BUTTON 0 when missing.
-     - per player type: the page probe of the def load (0x42D800..0x42D8CB) over <gui>\<NAME>0.GUI,
-       <NAME>1.GUI, ..., the count raised by the type's download entries' MENU (0x42DF60..0x42DFB4),
-       and every page: its own file, else the player's side's <prefix>DL.GUI (0x41AD61..0x41AD94);
-       each page's download fill (0x41ACE0); each side's <prefix>MAIN2.GUI and <prefix>GEN.GUI.
+     - per side's cast type: the page probe of the def load (0x42D800..0x42D8CB) over
+       <gui>\<NAME>0.GUI, <NAME>1.GUI, ..., the count raised by the type's download entries' MENU
+       (0x42DF60..0x42DFB4), and every page: its own file, else that side's <prefix>DL.GUI
+       (0x41AD61..0x41AD94 takes the prefix of the unit's owner, the player whose side the tutorial
+       plays); each page's download fill (0x41ACE0); each side's <prefix>MAIN2.GUI and
+       <prefix>GEN.GUI.
      - the pictures, by the spec's picture rule (decision 5): <anims>\<SCREEN>.GAF, then
        <anims>\<commongui>.GAF, then commongui's generic picture, for an order, tab or pager; for a
        build button, <anims>\<UNIT>_gadget.GAF, then <unitpics>\<UNIT>.PCX, else a labelled button.
-       PANELSIDE from <anims>\<intgaf>.GAF; the minimap dots from <anims>\fx.GAF. A GAF is read by
-       the archive's 64 KiB page, only the pages its lookups touch: Escalation's fx.GAF is 82 MB.
+       PANELSIDE of every side from its <anims>\<intgaf>.GAF; the minimap dots from <anims>\fx.GAF.
+       A GAF is read by the archive's 64 KiB page, only the pages its lookups touch: Escalation's
+       fx.GAF is 82 MB.
      - <palettes>\<palette>.PAL, .ALP and .SHD and <palettes>\<guipal>.PAL.
+
+   THE CASTING: every layout side's answer to each of the wiki's casts (WIKICASTING,
+   tagpu_wikidata.h), by gfx.py's cast rule (`side_casting`), which names no mod, reads no unit's
+   Side and lists no unit. From the side's commander it walks the build menus breadth first; a
+   menu is the unit types of a type's live build buttons on its numbered pages, read for that
+   side as the layout reads them (the page probe, else <prefix>DL, the download fill, the greyed
+   pass), without pictures. Each cast is then the first unit in that order, or the strongest on
+   the builder's menu, that the FBI's own figures qualify: BMcode, Builder, WorkerTime,
+   MaxVelocity, CanFly, MinWaterDepth, the footprint, the yard's G cells, ExtractsMetal,
+   EnergyMake, EnergyUse, Weapon1 and TEDClass. What pins the rule: on the stock game it gives
+   ARM exactly the types the wiki's entries author (tools/wiki/sidepacks.py `stock_identity`).
+   Each cast's display name is the FBI's `<language>name`, else `name` (0x4C58A0 tries the
+   language's key first, 0x42BFAC..0x42BFBB reads it into def+0x00), cut to 31 bytes (def+0x00 is
+   0x20 bytes) and converted from Windows-1252 [INFERRED: the game's code page] to UTF-8, the
+   UnitName when it is empty: DISASSEMBLED, and MEASURED 2026-10-28 with language=french (M5).
+   The language is WIKI3DNAMES.language, 0x51FB50, which is the value 0x4C54F0 copies to
+   0x51FDC0, the key prefix 0x4C58A0 reads.
+
    Format strings the engine builds these names with (`%s%d.GUI` 0x502838, `%sGEN.GUI` 0x50282C,
    `%sMAIN2.GUI` 0x509570, `%sDL` 0x502818, `_gadget` 0x509970, `PANELSIDE` 0x5033D4, `sidedata`
    0x503410) are this file's constants, DISASSEMBLED from the retail executable: a mod that
    patches one of them is not followed (none of the six compat setups does, the Q6 scout answer).
 
    WHERE THIS DEPARTS FROM THE ENGINE, each as gfx.py does (the two are compared, not the engine):
-     - the player's side is not a PlayerInfo's (the stage has none): the first unit of the wiki's
-       first entry (by id) whose FBI's Side names a side, else whose type begins with a side's
-       nameprefix (the longest), else side 0 -- TA Zero's human units say `NotForAI_Arm`;
      - a build button that only commongui's generic picture would picture skips it and keeps the
        .GUI's rect (the engine would shrink a 64 x 64 slot to a 96 x 20 BUTTONS0 frame);
      - a download entry whose BUTTON + 4 is no gadget of its page is skipped and reported: THE
        ENGINE HAS NO BOUND THERE (0x41AE5E..0x41AE73 indexes ControlsAry with it unchecked);
      - a type with more numbered pages than WIKI_SIDE_PAGES keeps none (the page is unit+0x110 bits
-       23..25), and the router then shows GEN for it.
+       23..25), and the router then shows GEN for it;
+     - a side's types are its bound casts' types that have pages, read with that side's prefix; a
+       type whose pages are other files than another side's gets screens of its own, named
+       <TYPE><page>@<side>.
+   And where it departs from gfx.py: a cast whose unit WIKICASTDEF cannot hold -- a UnitName past
+   WIKI_ID_MAX - 1 bytes or all digits, a figure that is not a finite number >= 0, a BuildTime
+   that is not above 0 -- is left unbound and reported, as gfx.py leaves a footprint past
+   WIKI_FP_MAX: tagpu_wikidata_casting's bounds, which the simulation's binding rests on, then hold
+   for every casting this file makes. No unit of the six compat setups' castings meets one.
 
    ONE BLOCK, IMMUTABLE ONCE PUBLISHED AND NEVER FREED: the WIKISIDE, its sheet and its report are
    one allocation the loader fills alone before the store that publishes it (tagpu_wikiside_get).
@@ -262,19 +290,17 @@ typedef struct {
     WIKISIDELABEL label[WIKISIDE_LABELS];
 } WIKISIDESCREEN;
 
-typedef struct {
-    char name[WIKI_SIDE_NAME];          /* the entry's type name, as the entry spells it          */
-    int  canstop;                       /* the FBI's canstop & 1 (def+0x245 bit 3, 0 when absent) */
-} WIKISIDETYPE;
-
 typedef struct WIKISIDE {
     WIKILAYOUT     layout;              /* checked by tagpu_wikilayout_check                      */
     const unsigned char* sheet;         /* sheet_w x sheet_h palette indices                      */
     int            sheet_w, sheet_h;
     unsigned char  pal[256 * 4];        /* <palette>.PAL as RGBA, alpha 255                       */
-    int            has_panelside;       /* the player's side's PANELSIDE frame 0, drawn with its  */
-    WIKISIDEFRAME  panelside;           /*   top left at (0, 0) whatever its hotspot: 0x467D70   */
-    int            panelside_key;       /*   passes the hotspot as the point (0x467E30..0x467E3C) */
+    /* PANELSIDE of each layout side (index-aligned with layout.side): frame 0 of its <intgaf>'s
+       PANELSIDE, drawn with its top left at (0, 0) whatever its hotspot: 0x467D70 passes the
+       hotspot as the point (0x467E30..0x467E3C). has_panelside[k] 0 for a side with none. */
+    int            has_panelside[WIKI_SIDE_SIDES];
+    WIKISIDEFRAME  panelside[WIKI_SIDE_SIDES];
+    int            panelside_key[WIKI_SIDE_SIDES];
     int            nradlogo;            /* fx.GAF's radlogo, frame k for owner k (0x466DC0)       */
     WIKISIDEFRAME  radlogo[WIKISIDE_DOTS];
     int            has_high;            /* radlogohigh frame 0, over the unit under the pointer   */
@@ -291,14 +317,22 @@ typedef struct WIKISIDE {
     unsigned char  alp[65536];          /* the 2:1 shrink's table, <palette>.ALP or generated
                                            (0x42E140, 0x4BA750); T[row * 256 + col]              */
     WIKISIDESCREEN screen[WIKI_SIDE_SCREENS];
-    int            ndef;                /* the player's types that resolved to an FBI             */
-    WIKISIDETYPE   def[WIKI_SIDE_TYPES];
+    /* THE CASTING of each layout side, index-aligned with layout.side (the header's THE CASTING).
+       Every bound cast holds tagpu_wikidata_casting's bounds: a type of 1..WIKI_ID_MAX - 1 bytes,
+       not all digits, upper-case as the layout's build buttons spell it; a title below
+       WIKI_TITLE_MAX bytes of UTF-8; a footprint of 1..WIKI_FP_MAX a side with its G cells inside
+       it; every figure finite and >= 0, the build time above 0. */
+    WIKICASTING    casting[WIKI_SIDE_SIDES];
+    /* sidedata's side s -- the byte the engine keeps at PlayerInfo+0x95 -- as a layout side:
+       side_of_engine[s] is the index into layout.side and casting, or -1 for a side with no MAIN2
+       and GEN screens or none at s. A reader holds s below WIKI_SIDE_SIDES before it indexes:
+       sidedata's sides past it are not read. */
+    int            side_of_engine[WIKI_SIDE_SIDES];
     const char*    report;              /* the JSON tagpu_wikiside.json holds, NUL-terminated     */
 } WIKISIDE;
 
 /* The sidebar's load, on the calling thread, over `vfs` opened on `in`'s sources: the block, or
-   NULL when the sidebar is refused (no sidedata, no MAIN2 and GEN for the player's side, no
-   palette, a layout tagpu_wikilayout_check refuses, a sheet past WIKISIDE_SHEET_MAXH, memory).
+   NULL when the sidebar is refused (no sidedata, no side with MAIN2 and GEN screens, no palette, a layout tagpu_wikilayout_check refuses, a sheet past WIKISIDE_SHEET_MAXH, memory).
    `*report` gets the report either way, malloc'd, or NULL when memory ran out; the block keeps its
    own copy. The block is one allocation; the DLL never frees it, the native test frees it. */
 const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** report);
@@ -346,8 +380,8 @@ void          tagpu_wikiasset_poll(void);
    test passes host memory and a stand-in address, since its pointers are not 32-bit. `commit`
    makes the block usable up to `upto` bytes and answers how far it now is, 0 when it cannot; NULL
    when the whole block already is. `vfs` is the sources opened on `in`, or NULL to open them here.
-   `side` is the published sidebar, whose `alp` makes each resolved stage's minimap picture, or
-   NULL for none. Returns the WIKI3D, which lies inside the arena past its first bytes, or NULL
+   `side` is the published sidebar, or NULL for none: its `alp` makes each resolved stage's minimap
+   picture, and its castings add their types to the unit types (tools/wiki/gfx.py `stage_types`). Returns the WIKI3D, which lies inside the arena past its first bytes, or NULL
    when not even the report fit. */
 const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISIDE* side, unsigned char* base,
                                 uint32_t base32, uint32_t cap, uint32_t (*commit)(unsigned char* base, uint32_t upto));

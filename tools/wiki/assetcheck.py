@@ -12,7 +12,9 @@ against an independent Python resolution of the same install.
    -fno-sanitize-recover=all (lodepng, vendored, with AddressSanitizer alone: its own shifts are UBSan's findings,
    not ours), into tagpu/ddraw/tests/wikiassettest-native.exe.
 2. **The load**: `wikiassettest load` over the install (--gamedir, else TA3DO_GAMEDIR, else Steam's library) and
-   art/wiki/ packed as the DLL packs it (tools/hudpak.py --set wiki); its report is the DLL's tagpu_wiki3d.json.
+   art/wiki/ packed as the DLL packs it (tools/hudpak.py --set wiki); its report is the DLL's tagpu_wiki3d.json. As
+   in the DLL, the sidebar is loaded first, so the unit types are every entry's own and, after each entry's, every
+   layout side's type for each cast the entry's units name.
 3. **The reference**: the same questions answered here, from tools/wiki/tavfs.py's mount and tools/ta3do's HPI
    reader and tools/tascene's TDF reader, with the engine's rules written out a second time: the language's folder
    first, the shadow mark in every enumeration, the first TDF holding a section, units\\<name>.FBI by path, the 3DO
@@ -20,6 +22,8 @@ against an independent Python resolution of the same install.
    negated) and bound (the texture bank in its enumeration order, then logos.GAF, FF_TEAM for exactly 10 frames),
    each model's shape hash over that, Create()'s hides and dont-caches (ta3do's COB reader, the engine's swap 0x45A950 by name
    over its piece order, bits over the readers' walk) and the FBI's facts (BMcode, Digger, NoShadow, CanHover, Floater).
+   The unit types are gfx.py's `stage_types` per entry over the casting of `gfx.py --side-only` on the same install,
+   which takes no mount list: under --mounts the casting is the install's own mount order's.
    Every field must agree but `arena_bytes` (the C side's
    alone) and the wording of a refusal (only whether there is one).
 4. **The mockup's resolution**: tools/wiki/gfx.py --resolve-json (landing 6d), element by element: each map's path,
@@ -37,10 +41,10 @@ against an independent Python resolution of the same install.
    every screen's file and panel, every button's picture source (step, file, archive, sequence) and its frames'
    pixels and hotspots, each side's PANELSIDE, the dots, the minimap's colours, tables and bases, the greyed tint
    and each side's casting -- every cast's type, title, footprint, figures, canstop, G cells and build list; the
-   rule's `report` prose is gfx.py's alone -- must be equal, and the sheet byte for byte. The setups' fixtures must
-   be present (tools/compat/tacompat.py fetch). The native half reads the pack's shape only once tagpu_wikiasset.c
-   loads every side (part 2D of the per-mod tutorials): until its report carries a casting and a PANELSIDE per side,
-   each setup is reported as not compared, a failure, never a pass.
+   rule's `report` prose is gfx.py's alone -- must be equal, and the sheet byte for byte; and the 3D load's unit types,
+   in its order, must be gfx.py's `stage_types` of every entry over the pack's casting. Both halves read the
+   display names under --language (english by default). The setups' fixtures must be present
+   (tools/compat/tacompat.py fetch).
 
 No game is run and nothing is written into the repository but the test's executable, which `*.exe` ignores.
 """
@@ -407,7 +411,29 @@ def entries_in_order():
     return out
 
 
-def reference(gamedir, exe, language, mounts=None):
+def stage_names(casting):
+    """The 3D load's unit types: gfx.py's `stage_types` of every entry, in the tree's order, each name once over all."""
+    import gfx  # noqa: E402  (tools/wiki, beside this file)
+    names = []
+    for eid in entries_in_order():
+        for t in gfx.stage_types(json.loads((REPO / f"art/wiki/entries/{eid}.json").read_text()), casting):
+            if t not in names:
+                names.append(t)
+    return names
+
+
+def install_casting(gamedir, exe, language):
+    """The casting `gfx.py --side-only` gives the install, [] when it makes no sidebar pack: the casts the native load
+    adds to its unit types, the sidebar loaded first as the DLL loads it."""
+    with tempfile.TemporaryDirectory(prefix="assetcheck-cast-") as tmp:
+        cmd = [sys.executable, str(HERE / "gfx.py"), "--side-only", "--mod", "install", "--gamedir", str(gamedir), "--out",
+               tmp, "--language", language] + (["--exe", str(exe)] if exe else [])
+        if subprocess.run(cmd, capture_output=True, text=True).returncode:
+            return []
+        return json.loads((Path(tmp) / "side/install/side.json").read_text())["casting"]
+
+
+def reference(gamedir, exe, language, mounts=None, casting=None):
     exe_blob = Path(exe).read_bytes()
     names = {k: tavfs.exe_cstr(exe_blob, va) for k, va in NAME_VAS.items()}
     vfs = tavfs.Vfs(gamedir, exe)
@@ -525,12 +551,7 @@ def reference(gamedir, exe, language, mounts=None):
         st["ok"], st["why"] = ok and n3d <= 64, None if ok and n3d <= 64 else "refused"
         stages.append(st)
 
-    types = []
-    for eid in entries:
-        for t in json.loads((REPO / f"art/wiki/entries/{eid}.json").read_text())["units"]:
-            if t not in types:
-                types.append(t)
-    for t in types:
+    for t in stage_names(casting):
         u = {"name": t, "fbi": None, "from": None, "unitname": None, "object": None, "model": None,
              "script": None, "script_from": None, "hides": None, "uncached": None, "facts": None,
              "ok": False, "why": "refused"}
@@ -778,22 +799,6 @@ def casting_of(c):
             "casts": {k: None if v is None else dict(v) for k, v in c["casts"].items()}}
 
 
-# what tagpu_wikiasset.c's report lacks until it loads every side (part 2D): pack_side's keys it cannot answer yet
-NATIVE_PENDING = "the native load predates the per-side pack: until part 2D its report has one PANELSIDE and the " \
-                 "player types' canstop, where the pack has a PANELSIDE and a casting per side"
-
-
-def native_pending(doc):
-    """Why `wikiassettest side`'s output cannot be compared with a per-side pack yet, or None when it can."""
-    s = doc.get("side") or {}
-    if s.get("refused"):
-        return None
-    art = s.get("art") or {}
-    if "casting" not in s or not isinstance(art.get("panelside"), list):
-        return NATIVE_PENDING
-    return None
-
-
 def native_side(doc):
     """`wikiassettest side`'s output in pack_side's shape: a PANELSIDE per layout side, a casting per side."""
     s = doc["side"]
@@ -819,7 +824,7 @@ def native_side(doc):
             "bases": {k: v for k, v in doc["minimap"].items() if v is not None}}
 
 
-def against_sidepacks(mods, retail, pak):
+def against_sidepacks(mods, retail, pak, language="english"):
     """Section 6 of the header, per setup: (all equal, lines to print)."""
     sys.path.insert(0, str(REPO / "tools" / "compat"))
     import sidepacks  # noqa: E402  (tools/wiki, beside this file)
@@ -842,25 +847,24 @@ def against_sidepacks(mods, retail, pak):
             if rec:
                 names = ["--folders", ",".join(f"{k}={v}" for k, v in rec["folders"].items()), "--archive", rec["archive"]]
             g = subprocess.run([sys.executable, str(HERE / "gfx.py"), "--side-only", "--mod", mod, "--gamedir", str(tree),
-                                "--exe", str(exe), "--out", str(out), *names], capture_output=True, text=True)
+                                "--exe", str(exe), "--out", str(out), "--language", language, *names],
+                               capture_output=True, text=True)
             if g.returncode:
                 lines.append(f"assetcheck: sidebar {mod}: gfx.py made no pack ({g.returncode}): {(g.stdout + g.stderr).strip()[-500:]}")
                 ok = False
                 continue
-            r = subprocess.run([str(EXE), "side", str(tree), str(pak), "--exe", str(exe), *names], capture_output=True, text=True)
+            r = subprocess.run([str(EXE), "side", str(tree), str(pak), "--exe", str(exe), "--language", language, *names],
+                               capture_output=True, text=True)
             if r.returncode:
                 lines.append(f"assetcheck: sidebar {mod}: wikiassettest side FAILED ({r.returncode}): {r.stderr.strip()[-2000:]}")
                 ok = False
                 continue
             doc = json.loads(r.stdout)
             ref = pack_side(out, mod)
-            pending = native_pending(doc)
-            if pending:
-                lines.append(f"assetcheck: sidebar {mod}: NOT COMPARED: {pending}; gfx.py's pack read: "
-                             f"{len(ref['layout']['sides'])} sides, {len(ref['casting'])} castings")
-                ok = False
-                continue
             native = native_side(doc)
+            # the 3D load's unit types, which a demo bound to any side's casting draws its models from
+            native["units3d"] = doc["units"]
+            ref["units3d"] = stage_names(json.loads((out / "side" / mod / "side.json").read_text())["casting"])
         bad = diff(native, ref, exact=True)
         if bad:
             ok = False
@@ -878,7 +882,8 @@ def against_sidepacks(mods, retail, pak):
         types = "; ".join(f"{sd['name']} {', '.join(f'{t} ({len(v['pages'])})' for t, v in sd['types'].items()) or 'none'}"
                           for sd in lay["sides"])
         lines.append(f"assetcheck: sidebar {mod}: native == gfx.py: {len(lay['screens'])} screens, types {types}, "
-                     f"{len(native['casting'])} castings, {npic} pictures "
+                     f"{len(native['casting'])} castings ({sum(1 for c in native['casting'] for k in c['casts'].values() if k)} "
+                     f"casts bound), {len(native['units3d'])} 3D unit types, {npic} pictures "
                      f"({', '.join(f'{k} {v}' for k, v in sorted(srcs.items()))}), a {native['sheet']['h']}-row sheet byte "
                      f"for byte, {len(native['bases'])} minimap bases; {r.stderr.strip().splitlines()[-1].split(': ', 1)[-1]}")
     return ok, lines
@@ -924,7 +929,7 @@ def main():
     mounts = None
     if a.mounts:
         mounts = [ln.strip() for ln in Path(a.mounts).read_text().splitlines() if ln.strip()]
-    ref = reference(gamedir, exe or Path(gamedir) / "TotalA.exe", a.language, mounts)
+    ref = reference(gamedir, exe or Path(gamedir) / "TotalA.exe", a.language, mounts, install_casting(gamedir, exe, a.language))
     bad = diff(native, ref)
     if bad:
         print(f"assetcheck: the native load and the Python reference DIFFER in {len(bad)} place(s):")
@@ -978,7 +983,7 @@ def side_main(a, gamedir):
     if unknown:
         print(f"assetcheck: no setup for {', '.join(unknown)} (the mods: {', '.join(sidepacks.SETUPS)})")
         return 2
-    ok, lines = against_sidepacks(mods, gamedir, pak_of_tree())
+    ok, lines = against_sidepacks(mods, gamedir, pak_of_tree(), a.language)
     print("\n".join(lines))
     if a.fuzz and not side_fuzz(a.fuzz):
         return 1

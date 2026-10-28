@@ -14,7 +14,13 @@
          case (the game's own list, from its report). The folders' names are EXE's own (units
          0x503920, textures 0x503720, logos 0x504734, logos.GAF 0x503704, objects3d 0x5036E4,
          scripts 0x503740, anims 0x502E30, features 0x502C7C); the language "english" unless given.
-         The load's time and the arena's size go to stderr.
+         As the DLL's loader thread runs it, the sidebar is loaded first and handed to the 3D load,
+         whose unit types then hold every layout side's cast types. The load's time and the
+         arena's size go to stderr.
+     wikiassettest side GAMEDIR PAK [same options] [--archive A] [--folders k=v,...]
+         The sidebar's load, then the 3D load with it, printed as {"side": <the sidebar's report>,
+         "minimap": {<entry>: {w, h, offx, offy, fnv} or null}, "units": [<the 3D load's unit
+         types, in its order>]}.
      wikiassettest fuzz-hpi ARCHIVE N SEED
          N copies of ARCHIVE, each truncated, or with bytes flipped (half of them in its header and
          directory), or both, each opened from memory and every file of it read whole; a line per
@@ -242,24 +248,32 @@ static int cmd_load(int argc, char** argv)
     static INPUT I;
     unsigned char* arena;
     const WIKI3D* w;
+    const WIKISIDE* side;
+    TAGPU_VFS* vfs;
+    char* report = NULL;
     struct timespec t0;
     if (!input_make(argc, argv, &I)) return 2;
     if (!(arena = (unsigned char*)calloc(1, ARENA_CAP))) return 2;
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    w = tagpu_wiki3d_load(&I.in, NULL, NULL, arena, STAND_IN_BASE, ARENA_CAP, NULL);
+    vfs = tagpu_vfs_open(I.in.cwd, (const char (*)[TAGPU_VFS_PATHMAX])I.in.arc, I.in.narc, I.in.names.language);
+    side = tagpu_wikiside_load(&I.in, vfs, &report);
+    w = tagpu_wiki3d_load(&I.in, vfs, side, arena, STAND_IN_BASE, ARENA_CAP, NULL);
     if (!w) { fprintf(stderr, "wikiassettest: the load published nothing\n"); return 1; }
     fputs(w->report, stdout);
-    fprintf(stderr, "wikiassettest: loaded in %.1f ms - arena %lu bytes; %d mounts\n", ms_since(&t0),
-            (unsigned long)w->bytes, I.in.narc);
+    fprintf(stderr, "wikiassettest: loaded in %.1f ms - arena %lu bytes; %d mounts; the sidebar %s\n", ms_since(&t0),
+            (unsigned long)w->bytes, I.in.narc, side ? "loaded" : "refused");
+    tagpu_vfs_close(vfs);
+    free((void*)side);
+    free(report);
     free(arena);
     input_free(&I);
     return 0;
 }
 
 /* The sidebar's load as the DLL's loader thread runs it -- the sidebar, then the 3D load with it --
-   printed as {"side": <its report>, "minimap": {<entry>: {w, h, offx, offy, fnv} or null}}: the
-   report tagpu_wikiside.json holds and each stage's minimap picture. The frames' bound the block
-   promises is checked again here. */
+   printed as {"side": <its report>, "minimap": {<entry>: {w, h, offx, offy, fnv} or null},
+   "units": [<name>...]}: the report tagpu_wikiside.json holds, each stage's minimap picture and
+   the 3D load's unit types. The frames' bound the block promises is checked again here. */
 static int cmd_side(int argc, char** argv)
 {
     static INPUT I;
@@ -292,7 +306,9 @@ static int cmd_side(int argc, char** argv)
                    st->mm_offy, (unsigned long)fnv(FNV0, st->minimap, (size_t)(st->mm_w * st->mm_h)));
         else printf("null");
     }
-    printf("}}\n");
+    printf("},\"units\":[");
+    for (i = 0; w && i < w->nunit; i++) printf("%s\"%s\"", i ? "," : "", w->unit[i].name);
+    printf("]}\n");
     fprintf(stderr, "wikiassettest: the sidebar %s in %.1f ms (%d screens, a %d-row sheet); %d mounts\n",
             side ? "loaded" : "REFUSED", side_ms, side ? side->layout.nscreen : 0, side ? side->sheet_h : 0, I.in.narc);
     tagpu_vfs_close(vfs);
@@ -532,14 +548,15 @@ static int cmd_fuzz_3do(int argc, char** argv)
 
 /* ---- the sidebar's fuzz, over synthetic files only ------------------------------------------------
    An install the test writes itself, every file of it made here from our own numbers (no byte of
-   the game): sidedata, three FBIs, a download TDF, five .GUI screens (one a 0-byte page stop), five
-   GAFs whose frames are plain, run-length coded and stacked from sub-frames, a PCX and the palette
-   files. Then N rounds, each damaging one file (or none) -- truncated, bytes flipped, the grammar's
-   own characters scattered in, a structural count or offset of a GAF set huge, emptied, removed --
-   and running the whole sidebar load over it; and N rounds of the positional reader over damaged and
-   pathological texts, of the PCX reader and of the number reader. Every load must end in a block whose
-   layout passes the check and whose frames lie in its sheet, or in a named refusal; the sanitizers do
-   the rest. */
+   the game): sidedata, ten FBIs whose casting the rule binds whole, a download TDF, eight .GUI
+   screens (one a 0-byte page stop), five GAFs whose frames are plain, run-length coded and stacked
+   from sub-frames, a PCX and the palette files. Then N rounds, each damaging one file (or none) --
+   truncated, bytes flipped, the grammar's own characters scattered in, a structural count or offset
+   of a GAF set huge, emptied, removed -- and running the whole sidebar load over it; and N rounds of
+   the positional reader over damaged and pathological texts, of the PCX reader and of the number
+   reader. Every load must end in a block whose layout passes the check, whose frames lie in its
+   sheet and whose every casting the pack's reader accepts and reads back as the block holds it
+   (casting_agrees), or in a named refusal; the sanitizers do the rest. */
 
 typedef struct { unsigned char* b; uint32_t n, cap; } BUF;
 
@@ -683,7 +700,7 @@ static BUF make_pcx(int w, int h)
     ";height=" h ";attribs=" attribs ";commonattribs=" common ";active=1;}status=0;text=;stages=0;}\r\n"
 
 typedef struct { const char* path; BUF body; } SYNFILE;
-static SYNFILE s_files[32];
+static SYNFILE s_files[48];
 static int s_nfiles;
 
 static void syn(const char* path, BUF body)
@@ -713,12 +730,30 @@ static void synth_install(void)
     for (i = 0; i < 65536; i++) b8(&alp, (unsigned)((i >> 8) + (i & 0xFF)) / 2);
     s_nfiles = 0;
     syn("gamedata/sidedata.tdf", make_text(
-        "[GENERAL]{baseheight=480;}\n// the sides\n[SIDE0]{name=ARM;nameprefix=ARM;intgaf=ARMINT;}\n"
-        "[SIDE1]{name=CORE;nameprefix=COR;intgaf=CORINT;}\n"));
-    syn("units/ARMCK.fbi", make_text("[UNITINFO]\n{\n\tUnitName=ARMCK;\n\tSide=ARM;\n\tcanstop=1;\n\t/* a comment */\n}\n"));
-    syn("units/ARMMEX.fbi", make_text("[UNITINFO]{UnitName=ARMMEX;Side=ARM;}\n"));
-    syn("units/ARMSOLAR.fbi", make_text("[UNITINFO]{UnitName=ARMSOLAR;Side=ARM;canstop=0;}\n"));
-    syn("units/ARMWIN.fbi", make_text("[UNITINFO]{UnitName=ARMWIN;Side=ARM;}\n"));
+        "[GENERAL]{baseheight=480;}\n// the sides\n[SIDE0]{name=ARM;nameprefix=ARM;intgaf=ARMINT;commander= ARMCOM ;}\n"
+        "[SIDE1]{name=CORE;nameprefix=COR;intgaf=CORINT;commander=CORCOM;}\n"));
+    /* every cast of the rule: ARMCOM builds the builder ARMCK, the advbuilder ARMACK and the walker
+       ARMPW; ARMCK's menu holds the mex, the geo (G inside its yard), the tower ARMWIN, the wall
+       and, through the download fill of ARMDL, the solar; ARMACK's the moho. ARMCK's display name
+       is past 31 bytes and holds Windows-1252's euro sign and an undefined byte. */
+    syn("units/ARMCOM.fbi", make_text("[UNITINFO]{UnitName=ARMCOM;BMcode=1;MaxVelocity=1.25;Builder=1;WorkerTime=300;"
+        "FootprintX=2;FootprintZ=2;BuildTime=50000;}\n"));
+    syn("units/ARMCK.fbi", make_text("[UNITINFO]\n{\n\tUnitName=ARMCK;\n\tSide=ARM;\n\tcanstop=1;\n\t/* a comment */\n"
+        "\tBMcode=1;MaxVelocity=1.1;Builder=1;WorkerTime=80;FootprintX=2;FootprintZ=2;BuildTime=5597;BuildDistance=40;\n"
+        "\tName=Construction KBot;EnglishName=Construction Kbot \x80 with \x81 a name past the cut;\n}\n"));
+    syn("units/ARMACK.fbi", make_text("[UNITINFO]{UnitName=ARMACK;BMcode=1;MaxVelocity=1;Builder=1;WorkerTime=180;"
+        "FootprintX=2;FootprintZ=2;BuildTime=9000;}\n"));
+    syn("units/ARMPW.fbi", make_text("[UNITINFO]{UnitName=ARMPW;BMcode=1;MaxVelocity=2.5;FootprintX=1;FootprintZ=1;BuildTime=1400;"
+        "Weapon1=EMG;MinWaterDepth=-10;}\n"));
+    syn("units/ARMMEX.fbi", make_text("[UNITINFO]{UnitName=ARMMEX;Side=ARM;FootprintX=2;FootprintZ=2;ExtractsMetal=.001;"
+        "BuildTime=1800;}\n"));
+    syn("units/ARMMOHO.fbi", make_text("[UNITINFO]{UnitName=ARMMOHO;FootprintX=3;FootprintZ=3;ExtractsMetal=0.003e0;BuildTime=14000;}\n"));
+    syn("units/ARMGEO.fbi", make_text("[UNITINFO]{UnitName=ARMGEO;FootprintX=4;FootprintZ=4;YardMap=oooo oGGo oGGo oooo;"
+        "EnergyMake=250;EnergyUse=+1;BuildTime=13000;}\n"));
+    syn("units/ARMSOLAR.fbi", make_text("[UNITINFO]{UnitName=ARMSOLAR;Side=ARM;canstop=0;FootprintX=5;FootprintZ=5;"
+        "EnergyUse=-20;BuildTime=2600;}\n"));
+    syn("units/ARMWIN.fbi", make_text("[UNITINFO]{UnitName=ARMWIN;Side=ARM;FootprintX=2;FootprintZ=2;Weapon1=LASER;BuildTime=2000;}\n"));
+    syn("units/ARMDRAG.fbi", make_text("[UNITINFO]{UnitName=ARMDRAG;FootprintX=2;FootprintZ=2;TEDClass= fort ;BuildTime=255;}\n"));
     syn("download/armck.tdf", make_text(
         "[MENUENTRY1]{UNITMENU=ARMCK;MENU=3;BUTTON=1;UNITNAME=ARMSOLAR;}\n"
         "[MENUENTRY2]{UNITMENU=ARMCK;MENU=2;BUTTON=99;UNITNAME=ARMMEX;}\n[MENUENTRY3]{MENU=1;}\n"));
@@ -730,6 +765,12 @@ static void synth_install(void)
         GUI_BTN("GADGET3", "ARMBUILD", "65", "4", "58", "18", "16", "0")
         GUI_BTN("GADGET4", "ARMSTOP", "64", "247", "54", "30", "256", "0")
         "[GADGET5]{[COMMON]{id=1;name=ARMMOVE;xpos=5;ypos=247;width=54;height=30;attribs=256\r\ncolorf=15;active=1;}text=Move;}\r\n"));
+    syn("guis/ARMCOM1.GUI", make_text(GUI_HEAD("ARMCOM1", "ARMPAN", "352")
+        GUI_BTN("GADGET1", "ARMCK", "0", "27", "64", "64", "32", "4")
+        GUI_BTN("GADGET2", "ARMACK", "64", "27", "64", "64", "32", "4")
+        GUI_BTN("GADGET3", "ARMPW", "0", "91", "64", "64", "32", "4")));
+    syn("guis/ARMACK1.GUI", make_text(GUI_HEAD("ARMACK1", "ARMPAN", "352")
+        GUI_BTN("GADGET1", "ARMMOHO", "0", "27", "64", "64", "32", "4")));
     syn("guis/ARMCK0.GUI", make_text(GUI_HEAD("ARMCK0", "ARMPAN", "64")
         GUI_BTN("GADGET1", "ARMSTOP", "4", "4", "54", "30", "0", "0")));
     syn("guis/ARMCK1.GUI", make_text(GUI_HEAD("ARMCK1", "ARMPAN", "352")
@@ -738,6 +779,8 @@ static void synth_install(void)
         GUI_BTN("GADGET2", "ARMWIN", "64", "27", "64", "64", "32", "4")
         GUI_BTN("GADGET3", "ARMSHOT", "0", "91", "64", "64", "32", "4")
         GUI_BTN("GADGET3", "IGPATCH", "64", "91", "64", "64", "32", "4")
+        GUI_BTN("GADGET3", "ARMGEO", "0", "155", "64", "64", "32", "4")
+        GUI_BTN("GADGET3", "ARMDRAG", "64", "155", "64", "64", "32", "4")
         GUI_BTN("GADGET4", "ARMPREV", "8", "222", "44", "16", "0", "0")
         GUI_BTN("GADGET5", "ARMNEXT", "72", "222", "44", "16", "0", "0")
         "[GADGET6]{[COMMON]{id=1;name=ARMSCROLL;xpos=-5;ypos=300;width=200;height=9;attribs=6144;active=0;}}\r\n"));
@@ -822,6 +865,9 @@ static WIKIDATA* synth_data(void)
     strcpy(def[0].name, "ARMCK");
     strcpy(def[1].name, "ARMSOLAR");
     strcpy(def[2].name, "CORCK");
+    def[0].cast = WIKI_CAST_BUILDER;
+    def[1].cast = WIKI_CAST_SOLAR;
+    def[2].cast = -1;
     u[0].def = 0; u[1].def = 1; u[2].def = 2; u[2].owner = 1;
     e.id = "fuzz";
     e.ndef = 3;
@@ -841,6 +887,37 @@ static const char* const SEEDS[] = {
     "[a]{[b]{[c]{[d]{e=f;}}}}[]{=;}",
     "[x]\n\n\t {\r\n  key = value with spaces ; }\n",
 };
+
+/* THE CASTING'S BOUNDS: each casting of the report, read by tagpu_wikidata_casting -- the pack's
+   reader, which holds sim.js's checkCasting -- must be accepted and equal the block's, field for
+   field. 1 when every side's is. */
+static int casting_agrees(const WIKISIDE* side, const char* rep, char* why, size_t nwhy)
+{
+    char err[200];
+    TJDOC* doc = tagpu_json_parse(rep, strlen(rep), err, sizeof err);
+    const TJV *list = doc ? tj_get(tagpu_json_root(doc), "casting") : NULL, *v;
+    int k = 0, c, ok = 1;
+    if (!tj_is(list, TJ_ARR) || list->n != side->layout.nside) {
+        snprintf(why, nwhy, "the report's casting is not one a layout side%s%s", doc ? "" : ": ", doc ? "" : err);
+        if (doc) tagpu_json_free(doc);
+        return 0;
+    }
+    for (v = list->first; v && ok; v = v->next, k++) {
+        WIKICASTING got;
+        if (!tagpu_wikidata_casting(v, &got, err, sizeof err)) { snprintf(why, nwhy, "side %d: %s", k, err); ok = 0; break; }
+        for (c = 0; c < WIKI_NCAST && ok; c++) {
+            const WIKICASTDEF *a = &got.cast[c], *b = &side->casting[k].cast[c];
+            ok = a->bound == b->bound && !strcmp(a->type, b->type) && !strcmp(a->title, b->title) && a->fx == b->fx &&
+                 a->fz == b->fz && a->build_time == b->build_time && a->worker_time == b->worker_time &&
+                 a->build_distance == b->build_distance && a->max_velocity == b->max_velocity && a->extracts == b->extracts &&
+                 a->energy_make == b->energy_make && a->canstop == b->canstop && a->vent == b->vent &&
+                 !memcmp(a->g, b->g, sizeof a->g) && a->builds == b->builds;
+            if (!ok) snprintf(why, nwhy, "side %d's %s read back differs from the block's", k, CAST_NAME[c]);
+        }
+    }
+    tagpu_json_free(doc);
+    return ok;
+}
 
 static int cmd_fuzz_side(int argc, char** argv)
 {
@@ -886,6 +963,10 @@ static int cmd_fuzz_side(int argc, char** argv)
                 fprintf(stderr, "wikiassettest: round %d made a block that breaks its own bounds\n", i);
                 return 1;
             }
+            if (!casting_agrees(side, rep, err, sizeof err)) {
+                fprintf(stderr, "wikiassettest: round %d made a casting the pack's reader refuses or reads otherwise: %s\n", i, err);
+                return 1;
+            }
         } else if (!strstr(rep, "\"refused\":\"")) unnamed++;
         else {
             const char* r = strstr(rep, "\"refused\":\"") + 11;
@@ -898,19 +979,32 @@ static int cmd_fuzz_side(int argc, char** argv)
         if (!i && !side) { fprintf(stderr, "wikiassettest: the undamaged synthetic install is refused: %s\n", rep ? rep : "?"); return 1; }
         if (!i) {
             /* the undamaged install reaches every source a picture has, and the column's art */
-            int from[WIKISIDE_FROM_UNITPICS + 1] = { 0 }, s2, g2, panels = 0;
+            int from[WIKISIDE_FROM_UNITPICS + 1] = { 0 }, s2, g2, panels = 0, nbound = 0;
             for (s2 = 0; s2 < side->layout.nscreen; s2++) {
                 panels += side->screen[s2].has_panel;
                 for (g2 = 0; g2 < side->layout.screen[s2].ngadget; g2++) from[side->screen[s2].pic[g2].from]++;
             }
             printf("fuzz-side: the undamaged install: %d screens, %d panels; pictures: %d labels, %d page, %d commongui, "
                    "%d fallback, %d download, %d unitpics; panelside %d, %d radlogo, high %d, greyed %d, a %d-row sheet\n",
-                   side->layout.nscreen, panels, from[0], from[1], from[2], from[3], from[4], from[5], side->has_panelside,
+                   side->layout.nscreen, panels, from[0], from[1], from[2], from[3], from[4], from[5], side->has_panelside[0],
                    side->nradlogo, side->has_high, side->has_greyed, side->sheet_h);
             for (k = 1; k <= WIKISIDE_FROM_UNITPICS; k++)
                 if (!from[k]) { fprintf(stderr, "wikiassettest: the synthetic install reaches no picture of source %d\n", k); return 1; }
-            if (!side->has_panelside || !side->nradlogo || !side->has_high || !side->has_greyed) {
+            if (!side->has_panelside[0] || !side->nradlogo || !side->has_high || !side->has_greyed) {
                 fprintf(stderr, "wikiassettest: the synthetic install misses the column's art\n");
+                return 1;
+            }
+            /* and every cast of the rule, its display name cut and converted */
+            for (k = 0; k < WIKI_NCAST; k++) nbound += side->casting[0].cast[k].bound;
+            printf("fuzz-side: the undamaged install's casting: %d of %d casts bound; the builder %s \"%s\", builds 0x%x; "
+                   "the geo's G rows %x %x %x %x\n", nbound, WIKI_NCAST, side->casting[0].cast[0].type,
+                   side->casting[0].cast[0].title, side->casting[0].cast[0].builds, side->casting[0].cast[WIKI_CAST_GEO].g[0],
+                   side->casting[0].cast[WIKI_CAST_GEO].g[1], side->casting[0].cast[WIKI_CAST_GEO].g[2],
+                   side->casting[0].cast[WIKI_CAST_GEO].g[3]);
+            if (nbound != WIKI_NCAST || strcmp(side->casting[0].cast[0].title, "Construction Kbot \xE2\x82\xAC with ? a na") ||
+                side->casting[0].cast[WIKI_CAST_GEO].g[1] != 6 || side->casting[0].cast[WIKI_CAST_GEO].g[0] ||
+                side->side_of_engine[0] != 0 || side->side_of_engine[1] != -1) {
+                fprintf(stderr, "wikiassettest: the synthetic install's casting is not the rule's\n");
                 return 1;
             }
         }

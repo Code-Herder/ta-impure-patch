@@ -68,14 +68,16 @@ typedef struct {
 
 /* side.js `compose`: view `v`'s column in `art`'s pictures, into `out`. `base` is the minimap's
    base picture of this stage (WIKI3DSTAGE.minimap, `nbase` = mm_w * mm_h bytes) or NULL, when the
-   minimap is left to the whitebox; the extent is the view's map, the stage map. In order: the
-   engine's black (palette index 0) over the whole column; PANELSIDE; the minimap -- the base
+   minimap is left to the whitebox; the extent is the view's map, the stage map. `side` is the
+   layout side the view shows (side.js's view.side.index), whose PANELSIDE is drawn: data until
+   bounded, so one outside the layout's sides draws none. In order: the engine's black (palette
+   index 0) over the whole column; that side's PANELSIDE; the minimap -- the base
    under the fog, the dots, the camera box; the routed screen -- its panel picture, then each
    drawn gadget's frame for its state, a greyed one tinted. Returns out->h, or 0 with nothing
    composed when the view has no sidebar, its layout is not the mod's (WIKISTAGE_LAYOUT_MOD:
    the published art's own layout, to whose gadgets its pictures are parallel), its rows are out
    of 1..WIKI_SIDE_ROWS or the art has no sheet. */
-int  tagpu_wikiside_compose(const WIKISIDE* art, const WIKISTAGEVIEW* v, const unsigned char* base, int nbase,
+int  tagpu_wikiside_compose(const WIKISIDE* art, const WIKISTAGEVIEW* v, int side, const unsigned char* base, int nbase,
                             WIKISIDECOL* out);
 
 /* side.js `rgba`: the composed column through the art's palette into `out`, WIKI_SIDE_W x c->h

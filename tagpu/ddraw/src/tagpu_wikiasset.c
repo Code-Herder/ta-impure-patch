@@ -6,6 +6,7 @@
    test's main thread) and touch nothing but their input, their own files, the sidebar's block and
    the arena; tagpu_wikiside_get, tagpu_wiki3d_get and the trigger read the published blocks, which
    nothing writes after their stores. */
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1562,9 +1563,27 @@ static void unit_report(SB* b, const LOADER* L, const WIKI3DUNIT* u, const UNITR
 #define ATTR_ONOFF     0x4000u
 #define GREY_ROW       (32 - 0x14)  /* GUI_ButtonDraw's box-shader level -20 (push at 0x4A69B6) */
 
-typedef struct { char name[SNAME], side[SNAME]; int canstop, src, order; char path[TAGPU_VFS_PATHMAX]; } SUNIT;
+#define TITLE_RAW  0x1F         /* the display name's bytes: def+0x00 is 0x20 bytes             */
+
+/* An FBI's UNITINFO as the cast rule and the casting read it (gfx.py `unit_record`): integers as
+   the engine's atoi (tagpu_guifile_num: `num` saturated for comparisons, `bits` for flag tests),
+   fractional figures as strtod over the first decimal number (fbi_strtod), a missing key 0. */
+typedef struct {
+    char      name[SNAME];              /* the UnitName as its FBI spells it                     */
+    int       canstop, src, order;
+    char      path[TAGPU_VFS_PATHMAX];
+    long long bmcode, canfly, fx, fz;
+    uint32_t  builder;
+    double    workertime, maxvelocity, mwd, extracts, energymake, energyuse, buildtime, builddistance;
+    int       has_mwd;                  /* MinWaterDepth given: a unit without it is a land unit  */
+    int       weapon1, fort;            /* Weapon1 not blank; TEDClass FORT without case          */
+    int       has_g;                    /* the yard holds a G cell (yard_g)                       */
+    uint16_t  g[WIKI_FP_MAX];           /* its G rows, when the footprint is within WIKI_FP_MAX   */
+    unsigned char title[TITLE_RAW];     /* the display name's code-page bytes; ntitle 0: the name */
+    int       ntitle;
+} SUNIT;
 typedef struct { char unitmenu[SNAME], unitname[SNAME]; uint32_t menu; long long button; int file; } SENTRY;
-typedef struct { char name[SNAME], prefix[SNAME], intgaf[SNAME]; } SSIDE;
+typedef struct { char name[SNAME], prefix[SNAME], intgaf[SNAME], commander[SNAME]; } SSIDE;
 
 /* a GAF of <anims>, opened once per name asked and read by the page (bank_get); `ok` 0 when
    absent or refused */
@@ -1629,6 +1648,7 @@ typedef struct {
     SFRAME*         fr;    int nfr, cfr;
     SSCREEN*        scr;   int nscr, cscr;
     int             failed;             /* memory ran out: the sidebar is refused               */
+    int             quiet;              /* the menus' reads report nothing (gfx.py `menu_of`)    */
 } SIDE;
 
 static int side_grow(SIDE* S, void** arr, int* cap, int need, size_t each)
@@ -1665,16 +1685,6 @@ static void scopy(char* d, const char* s, size_t n)
 
 static int ieq(const char* a, const char* b) { return !tagpu_hpi_stricmp(a, b, (size_t)-1); }
 
-/* `s` begins with `pre`, compared without case */
-static int istarts(const char* s, const char* pre)
-{
-    for (; *pre; s++, pre++) {
-        const int a = *s >= 'A' && *s <= 'Z' ? *s + 32 : *s, b = *pre >= 'A' && *pre <= 'Z' ? *pre + 32 : *pre;
-        if (!*s || a != b) return 0;
-    }
-    return 1;
-}
-
 /* one entry of the report: {"element": ..., <kind>: ...} */
 static void side_rep(SIDE* S, const char* kind, const char* fmt, const char* elem, ...)
 #if defined(__GNUC__)
@@ -1685,6 +1695,7 @@ static void side_rep(SIDE* S, const char* kind, const char* fmt, const char* ele
 {
     char t[400];
     va_list ap;
+    if (S->quiet) return;
     va_start(ap, elem);
     vsnprintf(t, sizeof t, fmt, ap);
     va_end(ap);
@@ -2079,30 +2090,143 @@ static int side_seq(SIDE* S, int bk, const char* name, SSEQ* q)
 
 /* ---- the files ---- */
 
+/* Python's str.strip() over a Latin-1 string, which gfx.py applies to the UnitName, the commander,
+   Weapon1 and TEDClass: blanks the TDF reader keeps (VT, FF, 0x1C..0x1F, 0x85, 0xA0) go too.
+   `*n` is the length left after `*s` is moved past the leading ones. */
+static int py_space(unsigned char c)
+{
+    return (c >= 0x09 && c <= 0x0D) || (c >= 0x1C && c <= 0x20) || c == 0x85 || c == 0xA0;
+}
+
+static void py_strip(const char** s, size_t* n)
+{
+    const char* p = *s ? *s : "";
+    size_t k = strlen(p);
+    while (k && py_space((unsigned char)*p)) { p++; k--; }
+    while (k && py_space((unsigned char)p[k - 1])) k--;
+    *s = p;
+    *n = k;
+}
+
+/* gfx.py `strtod`: blanks (space, TAB, CR, LF), then the longest [+-]?(D+.?D*|.D+)([eE][+-]?D+)?,
+   read as C's strtod reads that text alone; 0 when there is none or the key is missing. The match
+   is copied before it is converted, so C's own extensions (hexadecimal, inf, nan, its wider blanks)
+   never apply. */
+static double fbi_strtod(const char* v)
+{
+    char buf[128], *t = buf;
+    const char* p = v ? v : "";
+    size_t a, k;
+    double d;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    k = (*p == '+' || *p == '-') ? 1 : 0;
+    a = k;
+    while (p[k] >= '0' && p[k] <= '9') k++;
+    if (k > a) {
+        if (p[k] == '.') k++;
+        while (p[k] >= '0' && p[k] <= '9') k++;
+    } else {
+        if (p[k] != '.' || !(p[k + 1] >= '0' && p[k + 1] <= '9')) return 0.0;
+        k++;
+        while (p[k] >= '0' && p[k] <= '9') k++;
+    }
+    if (p[k] == 'e' || p[k] == 'E') {
+        size_t e = k + 1;
+        if (p[e] == '+' || p[e] == '-') e++;
+        if (p[e] >= '0' && p[e] <= '9') {
+            while (p[e] >= '0' && p[e] <= '9') e++;
+            k = e;
+        }
+    }
+    if (k >= sizeof buf && !(t = (char*)malloc(k + 1))) return 0.0;
+    memcpy(t, p, k);
+    t[k] = 0;
+    d = strtod(t, NULL);
+    if (t != buf) free(t);
+    return d;
+}
+
+/* THE YARD'S G CELLS as the unit-def loader parses YardMap into def+0x14E (0x42CF9D..0x42D06B: the
+   byte map 0x42D198 into the jump table 0x42D16C, DISASSEMBLED), gfx.py `yard_cells`: each char
+   of `.CGOYcfowy` fills one cell, any other is skipped; the string is read to 0x3FF chars (GetString
+   0x4C48C0's buffer, 0x42CF3E..0x42CF59), and every cell past its codes takes the last code, or `o`
+   with none (tagpu_patches.c `yard_parse`, which Impure installs at 0x42CF5E). G (0x8F) is the only
+   code with bit 0x80. So cell i is code i of the string, else its last: `has_g` asks that of the
+   fx x fz cells without making them (a footprint is data and may be huge), and the rows are made
+   only within WIKI_FP_MAX. */
+static void yard_g(SUNIT* u, const char* yard)
+{
+    static const char codes[] = ".CGOYcfowy";
+    char cell[0x3FF];
+    const char* y = yard ? yard : "";
+    int n = 0, i;
+    long long total;
+    for (i = 0; i < 0x3FF && y[i]; i++)
+        if (strchr(codes, y[i])) cell[n++] = y[i];
+    total = u->fx > 0x3FF || u->fz > 0x3FF ? 0x3FF + 1 : u->fx * u->fz;
+    for (i = 0; i < n && i < total; i++) if (cell[i] == 'G') u->has_g = 1;
+    if (total > n && n && cell[n - 1] == 'G') u->has_g = 1;
+    if (u->fx <= WIKI_FP_MAX && u->fz <= WIKI_FP_MAX)
+        for (i = 0; i < total; i++)
+            if ((i < n ? cell[i] : n ? cell[n - 1] : 'o') == 'G') u->g[i / u->fx] |= (uint16_t)(1u << (i % u->fx));
+}
+
 typedef struct { SIDE* S; } FBIWALK;
 
 static int fbi_each(void* ctx, const TAGPU_VFILE* f)
 {
     SIDE* S = ((FBIWALK*)ctx)->S;
-    char why[200];
+    char why[200], key[sizeof S->in->names.language + 8];
     unsigned char* b;
     TAGPU_GUIFILE* g;
     int sec;
-    const char* un;
+    const char *un, *t;
+    size_t nn;
     if (!f->size || !(b = tagpu_vfs_load(S->vfs, f, CAP_SIDE, why, sizeof why))) return 1;
     g = tagpu_guifile_parse(b, f->size, why, sizeof why);
     free(b);
     if (!g) { side_rep(S, "refused", "the engine's parser refuses it: %s", f->path, why); return 1; }
     sec = tagpu_guifile_find(g, 0, "UNITINFO");
     un = tagpu_guifile_get(g, sec, "unitname");
-    if (un && un[0] && side_grow(S, (void**)&S->unit, &S->cunit, S->nunit + 1, sizeof *S->unit)) {
+    py_strip(&un, &nn);
+    if (nn && side_grow(S, (void**)&S->unit, &S->cunit, S->nunit + 1, sizeof *S->unit)) {
         SUNIT* u = &S->unit[S->nunit];
         uint32_t bits;
-        scopy(u->name, un, sizeof u->name);
-        scopy(u->side, tagpu_guifile_get(g, sec, "side"), sizeof u->side);
+        memset(u, 0, sizeof *u);
+        snprintf(u->name, sizeof u->name, "%.*s", (int)nn, un);
         /* canstop is def+0x245 bit 3, 0 when the key is missing (0x42C90B..0x42C936) */
         tagpu_guifile_num(tagpu_guifile_get(g, sec, "canstop"), NULL, &bits);
         u->canstop = (int)(bits & 1u);
+        /* BMcode: a missing key reads 0, a structure: esi, zeroed at 0x42C0F0, is pushed as the
+           default at 0x42C401 with no write to it between (DISASSEMBLED) */
+        tagpu_guifile_num(tagpu_guifile_get(g, sec, "bmcode"), &u->bmcode, NULL);
+        tagpu_guifile_num(tagpu_guifile_get(g, sec, "builder"), NULL, &u->builder);
+        tagpu_guifile_num(tagpu_guifile_get(g, sec, "canfly"), &u->canfly, NULL);
+        tagpu_guifile_num(tagpu_guifile_get(g, sec, "footprintx"), &u->fx, NULL);
+        tagpu_guifile_num(tagpu_guifile_get(g, sec, "footprintz"), &u->fz, NULL);
+        u->workertime = fbi_strtod(tagpu_guifile_get(g, sec, "workertime"));
+        u->maxvelocity = fbi_strtod(tagpu_guifile_get(g, sec, "maxvelocity"));
+        if ((t = tagpu_guifile_get(g, sec, "minwaterdepth")) != NULL) { u->has_mwd = 1; u->mwd = fbi_strtod(t); }
+        u->extracts = fbi_strtod(tagpu_guifile_get(g, sec, "extractsmetal"));
+        u->energymake = fbi_strtod(tagpu_guifile_get(g, sec, "energymake"));
+        u->energyuse = fbi_strtod(tagpu_guifile_get(g, sec, "energyuse"));
+        u->buildtime = fbi_strtod(tagpu_guifile_get(g, sec, "buildtime"));
+        u->builddistance = fbi_strtod(tagpu_guifile_get(g, sec, "builddistance"));
+        t = tagpu_guifile_get(g, sec, "weapon1");
+        py_strip(&t, &nn);
+        u->weapon1 = nn > 0;
+        t = tagpu_guifile_get(g, sec, "tedclass");
+        py_strip(&t, &nn);
+        u->fort = nn == 4 && !tagpu_hpi_stricmp(t, "FORT", 4);
+        /* the yard is parsed only for a def whose BMcode is 0 (0x42CF30..0x42CF38) */
+        if (!u->bmcode && u->fx > 0 && u->fz > 0) yard_g(u, tagpu_guifile_get(g, sec, "yardmap"));
+        /* the display name: `<language>name` when the key exists, else `name` (0x4C58A0 tries
+           <0x51FDC0><key> first and the plain key second), its first 31 bytes (def+0x00 is 0x20
+           bytes, 0x42BFAC..0x42BFBB); none given and an empty one are the UnitName */
+        snprintf(key, sizeof key, "%sname", S->in->names.language);
+        if (!(t = tagpu_guifile_get(g, sec, key))) t = tagpu_guifile_get(g, sec, "name");
+        for (nn = 0; t && t[nn] && nn < TITLE_RAW; nn++) u->title[nn] = (unsigned char)t[nn];
+        u->ntitle = (int)nn;
         u->src = f->src;
         u->order = S->nunit;
         memcpy(u->path, f->path, sizeof u->path);
@@ -2171,6 +2295,12 @@ static int sides_read(SIDE* S)
         scopy(S->side[S->nside].name, tagpu_guifile_get(g, sec, "name"), SNAME);
         scopy(S->side[S->nside].prefix, tagpu_guifile_get(g, sec, "nameprefix"), SNAME);
         scopy(S->side[S->nside].intgaf, tagpu_guifile_get(g, sec, "intgaf"), SNAME);
+        {
+            const char* c = tagpu_guifile_get(g, sec, "commander");
+            size_t cn;
+            py_strip(&c, &cn);
+            snprintf(S->side[S->nside].commander, SNAME, "%.*s", (int)cn, c);
+        }
         S->nside++;
     }
     tagpu_guifile_free(g);
@@ -2759,70 +2889,363 @@ static int type_pages(SIDE* S, const char* tname, const int* mine, int nmine, in
     return last;
 }
 
-/* the player's (owner 0) unit types over every entry's scene and its demos' scenes, the entries in
-   id order (gfx.py reads them as sorted files), each type once in order of first appearance; and
-   the first entry's own scene's list */
-static int entries_by_id(const void* a, const void* b)
-{
-    const WIKIENTRY *x = *(const WIKIENTRY* const*)a, *y = *(const WIKIENTRY* const*)b;
-    return strcmp(x->id ? x->id : "", y->id ? y->id : "");
-}
+/* ---- the cast rule (gfx.py `side_casting`; tagpu_wikiasset.h, THE CASTING) ----
+   research/notes/ingame-wiki-sidebar-plan.md decisions 14 and 20. Units are SIDE.unit indices
+   throughout, so a name the layout cannot hold still has its place. */
 
-static int add_type(char (*t)[WIKI_ID_MAX], int n, int cap, const char* name)
+static const char* const CAST_NAME[WIKI_NCAST] = { "builder", "advbuilder", "mex", "moho", "geo", "walker", "tower", "wall",
+                                                   "solar" };
+
+static int is_mobile(const SUNIT* u) { return u->bmcode != 0 && u->maxvelocity > 0; }
+static int is_structure(const SUNIT* u) { return !u->bmcode && u->fx > 0 && u->fz > 0; }
+static int is_builder(const SUNIT* u) { return (u->builder & 1u) && u->workertime > 0; }
+/* neither a flyer nor bound to water; an FBI without MinWaterDepth is a land unit */
+static int is_land(const SUNIT* u) { return !u->canfly && (!u->has_mwd || u->mwd <= 0); }
+static int is_extractor(const SUNIT* u) { return is_structure(u) && u->extracts > 0; }
+/* a G cell in the yard ties a building to a vent: 0x47D2E0 refuses a yard holding G unless some G
+   cell stands on a geothermal feature (0x47D684..0x47D711, refusal 0x47D80F; DISASSEMBLED) */
+static int is_geothermal(const SUNIT* u) { return is_structure(u) && !is_extractor(u) && u->has_g; }
+/* a land building that is neither a resource building nor a builder: a tower, a wall, a plant */
+static int is_plain(const SUNIT* u)
+{
+    return is_structure(u) && is_land(u) && !is_extractor(u) && !is_geothermal(u) && !(u->builder & 1u);
+}
+/* what the building adds to the energy income: a solar collector's is a negative EnergyUse */
+static double net_energy(const SUNIT* u) { return u->energymake - u->energyuse; }
+static int land_mex(const SUNIT* u) { return is_extractor(u) && is_land(u); }
+static int mobile_builder(const SUNIT* u) { return is_mobile(u) && is_builder(u) && is_land(u); }
+
+/* a menu: unit indices in (page, gadget) order, each once */
+typedef struct { int done, n, cap; int* u; } SMENU;
+
+static int menu_has(const SMENU* m, int u)
 {
     int i;
-    for (i = 0; i < n; i++) if (!strcmp(t[i], name)) return n;
-    if (n == cap) return n;
-    scopy(t[n], name, WIKI_ID_MAX);
-    return n + 1;
+    for (i = 0; i < m->n; i++) if (m->u[i] == u) return 1;
+    return 0;
 }
 
-static void player_types(const WIKIDATA* d, char (*seen)[WIKI_ID_MAX], int* nseen, char (*first)[WIKI_ID_MAX], int* nfirst, int cap)
+/* the download entries of type `u` into `mine` (at most S->ndl) */
+static int dl_mine(const SIDE* S, const SUNIT* u, int* mine)
 {
-    const WIKIENTRY** e;
-    int i, j, k;
-    *nseen = *nfirst = 0;
-    if (!d || !d->nentry || !(e = (const WIKIENTRY**)malloc((size_t)d->nentry * sizeof *e))) return;
-    for (i = 0; i < d->nentry; i++) e[i] = &d->entry[i];
-    qsort(e, (size_t)d->nentry, sizeof *e, entries_by_id);
-    for (i = 0; i < d->nentry; i++)
-        for (j = -1; j < e[i]->ndemo; j++) {
-            const WIKISCENE* sc = j < 0 ? &e[i]->scene : &e[i]->demo[j].scene;
-            for (k = 0; k < sc->nunit; k++) {
-                const WIKISCENEUNIT* u = &sc->unit[k];
-                if (u->owner || u->def < 0 || u->def >= e[i]->ndef) continue;
-                *nseen = add_type(seen, *nseen, cap, e[i]->def[u->def].name);
-                if (!i && j < 0 && *nfirst < cap) scopy(first[(*nfirst)++], e[i]->def[u->def].name, WIKI_ID_MAX);
+    int k, n = 0;
+    for (k = 0; k < S->ndl; k++) if (ieq(S->dl[k].unitmenu, u->name)) mine[n++] = k;
+    return n;
+}
+
+/* gfx.py `menu_of`: menu(T) for the side whose prefix is `prefix`, cached in `cache` (one SMENU a
+   unit, shared by the sides of one prefix): the units of T's build buttons on its numbered pages
+   as the layout reads them -- the page probe, else <prefix>DL, the download fill, the greyed pass
+   -- hidden and greyed buttons left out. On a numbered page a button names a type exactly when it
+   is live (the greyed pass 0x41B04E..0x41B096), so a button counts when it is a gadget (id 1)
+   with commonattribs bit 2, whose name is a type, and active. A page the layout would refuse
+   leaves T with no menu, as the layout then holds no page of T. Nothing is reported. */
+static const SMENU* menu_of(SIDE* S, SMENU* cache, int t, const char* prefix, int* mine)
+{
+    SMENU* m = &cache[t];
+    const SUNIT* u = &S->unit[t];
+    int nmine, zero, last, p, ok = 1;
+    if (m->done) return m;
+    m->done = 1;
+    S->quiet++;
+    nmine = dl_mine(S, u, mine);
+    last = type_pages(S, u->name, mine, nmine, &zero);
+    for (p = 1; p <= last && ok && !S->failed; p++) {
+        TAGPU_VFILE f;
+        char file[SNAME + 8];
+        SREC* r;
+        int n = 0, i;
+        snprintf(file, sizeof file, "%s%d", u->name, p);
+        if (!side_find(S, S->in->names.gui, file, "GUI", &f)) snprintf(file, sizeof file, "%sDL", prefix);
+        if (!(r = screen_read(S, file, &n, &f))) { ok = 0; break; }
+        if (!(r[0].w >= 1 && r[0].w <= WIKI_SIDE_W && r[0].h >= 1 && r[0].y >= 0 && r[0].y + r[0].h <= WIKI_SIDE_ROWS)) {
+            free(r);
+            ok = 0;
+            break;
+        }
+        fill_downloads(S, r, n, p, mine, nmine, file);
+        for (i = 1; i < n; i++) {
+            const SUNIT* x;
+            int at;
+            if (!r[i].ok || r[i].id != 1 || !(r[i].common & 4u) || !r[i].active || !(x = unit_get(S, r[i].name))) continue;
+            at = (int)(x - S->unit);
+            if (menu_has(m, at)) continue;
+            if (!side_grow(S, (void**)&m->u, &m->cap, m->n + 1, sizeof *m->u)) break;
+            m->u[m->n++] = at;
+        }
+        free(r);
+    }
+    if (!ok) m->n = 0;
+    S->quiet--;
+    return m;
+}
+
+/* one side's walk and casts */
+typedef struct {
+    SIDE*       S;
+    SMENU*      cache;
+    const char* prefix;
+    int*        mine;
+} SWALK;
+
+static const SMENU* menu(SWALK* W, int t) { return menu_of(W->S, W->cache, t, W->prefix, W->mine); }
+
+static int menu_holds(SWALK* W, int t, int (*pred)(const SUNIT*))
+{
+    const SMENU* m = menu(W, t);
+    int i;
+    for (i = 0; i < m->n; i++) if (pred(&W->S->unit[m->u[i]])) return 1;
+    return 0;
+}
+
+/* a pick and its reason */
+typedef struct { int pick[WIKI_NCAST]; char why[WIKI_NCAST][200]; } SCASTING;
+
+/* A cast WIKICASTDEF cannot hold (tagpu_wikiasset.h, where this departs from gfx.py), or NULL:
+   tagpu_wikidata_casting's bounds, which the simulation's binding rests on */
+static const char* cast_unfit(const SUNIT* u)
+{
+    const double f[6] = { u->buildtime, u->workertime, u->builddistance, u->maxvelocity, u->extracts, u->energymake };
+    const size_t n = strlen(u->name);
+    int i;
+    if (n >= WIKI_ID_MAX || strspn(u->name, "0123456789") == n) return "a UnitName the casting cannot hold";
+    for (i = 0; i < 6; i++) if (!(f[i] >= 0 && f[i] < INFINITY)) return "a figure that is not a finite number >= 0";
+    if (!(u->buildtime > 0)) return "a BuildTime that is not above 0";
+    return NULL;
+}
+
+/* gfx.py `side_casting` over the units of SIDE, `commander` the side's root. BOUND: the walk's
+   order holds each unit once (depth -1 marks the unmet), so it is at most S->nunit long. */
+static void side_casting(SWALK* W, const char* commander, int* order, int* depth, SCASTING* C)
+{
+    SIDE* S = W->S;
+    const SUNIT* U = S->unit;
+    const SUNIT* root = unit_get(S, commander);
+    int n = 0, i, k, c, b = -1, mx = -1, a = -1;
+    for (c = 0; c < WIKI_NCAST; c++) { C->pick[c] = -1; C->why[c][0] = 0; }
+    if (!root) {
+        for (c = 0; c < WIKI_NCAST; c++)
+            snprintf(C->why[c], sizeof C->why[c], "the side's commander %s has no FBI", commander[0] ? commander : "(none)");
+        return;
+    }
+    for (i = 0; i < S->nunit; i++) depth[i] = -1;
+    order[n++] = (int)(root - U);
+    depth[order[0]] = 0;
+    for (i = 0; i < n && !S->failed; i++) {
+        const SMENU* m = menu(W, order[i]);
+        for (k = 0; k < m->n; k++)
+            if (depth[m->u[k]] < 0) { depth[m->u[k]] = depth[order[i]] + 1; order[n++] = m->u[k]; }
+    }
+    for (i = 1; i < n && b < 0; i++) if (mobile_builder(&U[order[i]]) && menu_holds(W, order[i], land_mex)) b = order[i];
+    C->pick[WIKI_CAST_BUILDER] = b;
+    if (b < 0) {
+        snprintf(C->why[WIKI_CAST_BUILDER], 200, "no mobile land builder below the commander has a land extractor on its menu");
+        for (c = 1; c < WIKI_NCAST; c++) snprintf(C->why[c], 200, "no builder");
+    } else {
+        const SMENU* mb = menu(W, b);
+        int geo = -1, maker = -1, w = -1, mo = -1;
+        double top;
+        snprintf(C->why[WIKI_CAST_BUILDER], 200, "the first met (depth %d) mobile land builder whose menu holds a land extractor", depth[b]);
+        /* the strongest, the earlier on an equal value */
+        for (k = 0; k < mb->n; k++) {
+            const SUNIT* x = &U[mb->u[k]];
+            if (land_mex(x) && (mx < 0 || x->extracts > U[mx].extracts)) mx = mb->u[k];
+            if (is_geothermal(x) && is_land(x) && (geo < 0 || net_energy(x) > net_energy(&U[geo]))) geo = mb->u[k];
+        }
+        C->pick[WIKI_CAST_MEX] = mx;
+        snprintf(C->why[WIKI_CAST_MEX], 200, "the strongest land extractor on the builder's menu (extractsmetal %g)", U[mx].extracts);
+        C->pick[WIKI_CAST_GEO] = geo;
+        if (geo >= 0) snprintf(C->why[WIKI_CAST_GEO], 200, "the land geothermal plant of the greatest net energy (%g) on the builder's menu", net_energy(&U[geo]));
+        else snprintf(C->why[WIKI_CAST_GEO], 200, "no land geothermal plant on the builder's menu");
+        top = U[mx].extracts;
+        for (i = 1; i < n && a < 0; i++) {
+            const SMENU* m;
+            if (order[i] == b || !mobile_builder(&U[order[i]])) continue;
+            m = menu(W, order[i]);
+            for (k = 0; k < m->n; k++) if (land_mex(&U[m->u[k]]) && U[m->u[k]].extracts > top) { a = order[i]; break; }
+        }
+        C->pick[WIKI_CAST_ADVBUILDER] = a;
+        if (a >= 0) {
+            const SMENU* ma = menu(W, a);
+            snprintf(C->why[WIKI_CAST_ADVBUILDER], 200, "the first met (depth %d) mobile land builder, after the builder, whose menu holds a land extractor stronger than the mex", depth[a]);
+            for (k = 0; k < ma->n; k++) {
+                const SUNIT* x = &U[ma->u[k]];
+                if (land_mex(x) && x->extracts > top && (mo < 0 || x->extracts > U[mo].extracts)) mo = ma->u[k];
+            }
+            C->pick[WIKI_CAST_MOHO] = mo;
+            snprintf(C->why[WIKI_CAST_MOHO], 200, "the strongest land extractor on the advbuilder's menu (extractsmetal %g)", U[mo].extracts);
+        } else {
+            snprintf(C->why[WIKI_CAST_ADVBUILDER], 200, "no other mobile land builder has a land extractor stronger than the mex on its menu");
+            snprintf(C->why[WIKI_CAST_MOHO], 200, "no advbuilder");
+        }
+        /* the first met unit whose menu holds the builder: one exists, since the builder was met
+           on some unit's menu */
+        for (i = 0; i < n && maker < 0; i++) if (menu_has(menu(W, order[i]), b)) maker = order[i];
+        if (maker >= 0) {
+            const SMENU* mm = menu(W, maker);
+            for (k = 0; k < mm->n && w < 0; k++) {
+                const SUNIT* x = &U[mm->u[k]];
+                if (is_mobile(x) && !is_builder(x) && is_land(x)) w = mm->u[k];
+            }
+            snprintf(C->why[WIKI_CAST_WALKER], 200, w >= 0 ? "the first mobile land non-builder on the menu of %s, the first met unit that builds the builder"
+                                                         : "no mobile land non-builder on the menu of %s, the first met unit that builds the builder", U[maker].name);
+        }
+        C->pick[WIKI_CAST_WALKER] = w;
+        for (k = 0; k < mb->n; k++) {
+            const SUNIT* x = &U[mb->u[k]];
+            if (!is_plain(x)) continue;
+            if (C->pick[WIKI_CAST_TOWER] < 0 && x->weapon1) C->pick[WIKI_CAST_TOWER] = mb->u[k];
+            if (C->pick[WIKI_CAST_WALL] < 0 && !x->weapon1 && x->fort) C->pick[WIKI_CAST_WALL] = mb->u[k];
+            if (C->pick[WIKI_CAST_SOLAR] < 0 && net_energy(x) > 0) C->pick[WIKI_CAST_SOLAR] = mb->u[k];
+        }
+        {
+            static const struct { int c; const char* what; } plain[3] = {
+                { WIKI_CAST_TOWER, "with a Weapon1" }, { WIKI_CAST_WALL, "with no Weapon1 and TEDClass FORT" },
+                { WIKI_CAST_SOLAR, "of a positive net energy" } };
+            for (k = 0; k < 3; k++)
+                snprintf(C->why[plain[k].c], 200, "%s plain land building on the builder's menu %s",
+                         C->pick[plain[k].c] >= 0 ? "the first" : "no", plain[k].what);
+        }
+    }
+    /* WIKI_FP_MAX: the G rows' width; then what WIKICASTDEF cannot hold */
+    for (c = 0; c < WIKI_NCAST; c++) {
+        const int t = C->pick[c];
+        const char* unfit;
+        if (t < 0) continue;
+        if (!(U[t].fx >= 1 && U[t].fx <= WIKI_FP_MAX && U[t].fz >= 1 && U[t].fz <= WIKI_FP_MAX)) {
+            snprintf(C->why[c], 200, "%s's footprint %lld x %lld is not within 1..%d a side", U[t].name, U[t].fx, U[t].fz, WIKI_FP_MAX);
+            C->pick[c] = -1;
+        } else if ((unfit = cast_unfit(&U[t])) != NULL) {
+            snprintf(C->why[c], 200, "%s has %s", U[t].name, unfit);
+            C->pick[c] = -1;
+        }
+    }
+}
+
+/* Windows-1252's 0x80..0x9F as Unicode, 0 for the five bytes it leaves undefined, which become
+   `?` (gfx.py `display_name`); every other byte is its own code point */
+static const uint16_t CP1252_HI[32] = {
+    0x20AC, 0, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0, 0x017D, 0,
+    0, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0, 0x017E, 0x0178 };
+
+static unsigned cp1252(unsigned char c)
+{
+    if (c < 0x80 || c > 0x9F) return c;
+    return CP1252_HI[c - 0x80] ? CP1252_HI[c - 0x80] : '?';
+}
+
+/* THE DISPLAY NAME as code points: the title's bytes through Windows-1252, or with none the
+   UnitName, whose bytes gfx.py reads as Latin-1. At most 63 code points (the name's SNAME). */
+static int title_points(const SUNIT* u, unsigned* cp)
+{
+    int i, n = 0;
+    if (u->ntitle) for (i = 0; i < u->ntitle; i++) cp[n++] = cp1252(u->title[i]);
+    else for (i = 0; u->name[i] && i < SNAME; i++) cp[n++] = (unsigned char)u->name[i];
+    return n;
+}
+
+/* the cast's WIKICASTDEF from its unit, whose fit cast_unfit and the footprint bound have passed.
+   BOUND: the title is at most 31 code points of at most 3 UTF-8 bytes (U+20AC and U+2122 are the
+   widest), 93 bytes and the terminator, WIKI_TITLE_MAX. */
+static void cast_fill(const SUNIT* u, uint16_t builds, WIKICASTDEF* k)
+{
+    unsigned cp[SNAME];
+    int n = title_points(u, cp), i;
+    size_t at = 0;
+    memset(k, 0, sizeof *k);
+    k->bound = 1;
+    upcpy(k->type, u->name, sizeof k->type);
+    for (i = 0; i < n && at + 4 <= sizeof k->title; i++) {
+        const unsigned c = cp[i];
+        if (c < 0x80) k->title[at++] = (char)c;
+        else if (c < 0x800) { k->title[at++] = (char)(0xC0 | (c >> 6)); k->title[at++] = (char)(0x80 | (c & 0x3F)); }
+        else {
+            k->title[at++] = (char)(0xE0 | (c >> 12));
+            k->title[at++] = (char)(0x80 | ((c >> 6) & 0x3F));
+            k->title[at++] = (char)(0x80 | (c & 0x3F));
+        }
+    }
+    k->title[at] = 0;
+    k->fx = (int)u->fx;
+    k->fz = (int)u->fz;
+    k->build_time = u->buildtime;
+    k->worker_time = u->workertime;
+    k->build_distance = u->builddistance;
+    k->max_velocity = u->maxvelocity;
+    k->extracts = u->extracts;
+    k->energy_make = u->energymake;
+    k->canstop = u->canstop;
+    k->vent = u->has_g;
+    memcpy(k->g, u->g, sizeof k->g);
+    k->builds = builds;
+}
+
+/* a double as JSON, the shortest text that reads back as the same double */
+static void sb_num(SB* b, double v)
+{
+    char t[40];
+    int p;
+    for (p = 1; p <= 17; p++) {
+        snprintf(t, sizeof t, "%.*g", p, v);
+        if (strtod(t, NULL) == v) break;
+    }
+    sb_raw(b, "%s", t);
+}
+
+/* one side's casting in the pack's form (gfx.py `side_pack`'s `casting` list) */
+static void casting_json(SB* b, const SIDE* S, const SSIDE* sd, const SCASTING* C, const WIKICASTING* K)
+{
+    int c, d, i, n;
+    sb_raw(b, "{\"side\":");
+    sb_q(b, sd->name, 0);
+    sb_raw(b, ",\"commander\":");
+    sb_q(b, sd->commander, 0);
+    sb_raw(b, ",\"casts\":{");
+    for (c = 0; c < WIKI_NCAST; c++) {
+        const WIKICASTDEF* k = &K->cast[c];
+        sb_raw(b, "%s\"%s\":", c ? "," : "", CAST_NAME[c]);
+        if (!k->bound) { sb_raw(b, "null"); continue; }
+        {
+            unsigned cp[SNAME];
+            char t[8];
+            n = title_points(&S->unit[C->pick[c]], cp);
+            sb_raw(b, "{\"type\":");
+            sb_q(b, k->type, 0);
+            sb_raw(b, ",\"title\":\"");
+            for (i = 0; i < n; i++) {
+                if (cp[i] == '"' || cp[i] == '\\') { t[0] = '\\'; t[1] = (char)cp[i]; sb_add(b, t, 2); }
+                else if (cp[i] < 0x20 || cp[i] >= 0x7F) { snprintf(t, sizeof t, "\\u%04x", cp[i]); sb_add(b, t, 6); }
+                else { t[0] = (char)cp[i]; sb_add(b, t, 1); }
             }
         }
-    free(e);
-}
-
-/* The player's side, which names MAIN2, GEN, DL and PANELSIDE (the engine takes it from the
-   player's PlayerInfo+0x95, which a stage has no copy of). Over the first entry's own scene's
-   owner-0 units: the first whose FBI's Side equals a side's name without case; else the first whose
-   type begins with a side's nameprefix without case (the longest, the lowest side on a tie): some
-   installs' units declare a Side no sidedata names (TA Zero's `NotForAI_Arm`); else side 0. */
-static int player_side(const SIDE* S, char (*first)[WIKI_ID_MAX], int nfirst, char* why, size_t nwhy)
-{
-    int i, k;
-    for (i = 0; i < nfirst; i++) {
-        const SUNIT* u = unit_get(S, first[i]);
-        if (!u) continue;
-        for (k = 0; k < S->nside; k++)
-            if (ieq(u->side, S->side[k].name)) { snprintf(why, nwhy, "%s's Side %s", first[i], u->side); return k; }
+        sb_raw(b, "\",\"footprint\":[%d,%d],\"buildTime\":", k->fx, k->fz);
+        sb_num(b, k->build_time);
+        sb_raw(b, ",\"workerTime\":");
+        sb_num(b, k->worker_time);
+        sb_raw(b, ",\"buildDistance\":");
+        sb_num(b, k->build_distance);
+        sb_raw(b, ",\"maxVelocity\":");
+        sb_num(b, k->max_velocity);
+        sb_raw(b, ",\"canstop\":%d,\"extracts\":", k->canstop);
+        sb_num(b, k->extracts);
+        sb_raw(b, ",\"energyMake\":");
+        sb_num(b, k->energy_make);
+        sb_raw(b, ",\"vent\":%s,\"g\":[", k->vent ? "true" : "false");
+        for (n = 0, i = 0; i < k->fx * k->fz; i++)
+            if (k->g[i / k->fx] >> (i % k->fx) & 1u) sb_raw(b, "%s[%d,%d]", n++ ? "," : "", i % k->fx, i / k->fx);
+        sb_raw(b, "],\"builds\":[");
+        for (n = 0, d = 0; d < WIKI_NCAST; d++) if (k->builds >> d & 1u) sb_raw(b, "%s\"%s\"", n++ ? "," : "", CAST_NAME[d]);
+        sb_raw(b, "]}");
     }
-    for (i = 0; i < nfirst; i++) {
-        int best = -1;
-        size_t bl = 0;
-        for (k = 0; k < S->nside; k++) {
-            const size_t pl = strlen(S->side[k].prefix);
-            if (pl && istarts(first[i], S->side[k].prefix) && pl > bl) { bl = pl; best = k; }
-        }
-        if (best >= 0) { snprintf(why, nwhy, "%s begins with %s", first[i], S->side[best].prefix); return best; }
+    sb_raw(b, "},\"report\":[");
+    for (c = 0; c < WIKI_NCAST; c++) {
+        sb_raw(b, "%s{\"cast\":\"%s\",\"type\":", c ? "," : "", CAST_NAME[c]);
+        sb_q(b, K->cast[c].bound ? K->cast[c].type : NULL, 0);
+        sb_raw(b, ",\"why\":");
+        sb_q(b, C->why[c], 0);
+        sb_raw(b, "}");
     }
-    snprintf(why, nwhy, "no unit names a side: side 0");
-    return 0;
+    sb_raw(b, "]}");
 }
 
 /* ---- the colour tables (each formula DISASSEMBLED; the retail results equal the shipped
@@ -2918,7 +3341,7 @@ static int frame_inside(const WIKISIDE* w, const WIKISIDEFRAME* q)
 static int side_frames_inside(const WIKISIDE* w)
 {
     int s, k, i;
-    if (w->has_panelside && !frame_inside(w, &w->panelside)) return 0;
+    for (k = 0; k < WIKI_SIDE_SIDES; k++) if (w->has_panelside[k] && !frame_inside(w, &w->panelside[k])) return 0;
     if (w->has_high && !frame_inside(w, &w->high)) return 0;
     for (k = 0; k < w->nradlogo; k++) if (!frame_inside(w, &w->radlogo[k])) return 0;
     for (s = 0; s < w->layout.nscreen; s++) {
@@ -2930,6 +3353,66 @@ static int side_frames_inside(const WIKISIDE* w)
     return 1;
 }
 
+/* a type of a side's layout: its pages' files (to tell whether another side's are the same) and
+   the tag its screens' names carry */
+typedef struct {
+    char name[WIKI_SIDE_NAME], tag[8];
+    int  side, last, zero;
+    char file[WIKI_SIDE_PAGES + 1][SNAME + 8];
+} STYPE;
+
+/* gfx.py `type_pages`' list of files: page p's own <NAME><p>, else the side's <prefix>DL */
+static void type_files(SIDE* S, const SUNIT* u, const char* prefix, STYPE* t)
+{
+    TAGPU_VFILE f;
+    int p;
+    for (p = t->zero ? 0 : 1; p <= t->last; p++) {
+        snprintf(t->file[p], sizeof t->file[p], "%s%d", u->name, p);
+        if (p > 0 && !side_find(S, S->in->names.gui, t->file[p], "GUI", &f)) snprintf(t->file[p], sizeof t->file[p], "%sDL", prefix);
+    }
+}
+
+static int same_files(const STYPE* a, const STYPE* b)
+{
+    int p;
+    if (a->zero != b->zero || a->last != b->last) return 0;
+    for (p = a->zero ? 0 : 1; p <= a->last; p++) if (strcmp(a->file[p], b->file[p])) return 0;
+    return 1;
+}
+
+/* a cast the rule took from a menu that the layout shows no live button for would lock its demo's
+   build trip: reported, as gfx.py reports it */
+static void casting_notes(SIDE* S, const SSIDE* sd, const WIKICASTING* K, const STYPE* types, int ntype, int side)
+{
+    int c, d, j, p, i;
+    for (c = 0; c < WIKI_NCAST; c++) {
+        const STYPE* t = NULL;
+        if (!K->cast[c].bound) continue;
+        for (j = 0; j < ntype; j++) if (types[j].side == side && !strcmp(types[j].name, K->cast[c].type)) t = &types[j];
+        if (!t) continue;
+        for (d = 0; d < WIKI_NCAST; d++) {
+            int live = 0;
+            if (!(K->cast[c].builds >> d & 1u)) continue;
+            for (p = 1; p <= t->last && !live; p++) {
+                char name[WIKI_SIDE_NAME + 16];
+                int at;
+                snprintf(name, sizeof name, "%s%d%s", t->name, p, t->tag);
+                if ((at = screen_at(S, name)) < 0) continue;
+                for (i = 0; i < S->scr[at].ng && !live; i++) {
+                    const WIKIGADGET* g = &S->scr[at].g[i];
+                    live = g->role == WIKI_ROLE_BUILD && !strcmp(g->unit, K->cast[d].type) && !g->grey && !g->hidden;
+                }
+            }
+            if (!live) {
+                char el[SNAME + 16];
+                snprintf(el, sizeof el, "casting %s", sd->name);
+                side_rep(S, "note", "the %s %s's pages show no live button for the %s %s", el, CAST_NAME[c], K->cast[c].type,
+                         CAST_NAME[d], K->cast[d].type);
+            }
+        }
+    }
+}
+
 const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** report)
 {
     SIDE S;
@@ -2937,15 +3420,18 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
     WIKISIDE* out = NULL;
     SFRAME** order = NULL;
     TAGPU_VFILE f;
-    char (*seen)[WIKI_ID_MAX] = NULL, (*first)[WIKI_ID_MAX] = NULL, why[200], err[200], alp_from[TAGPU_VFS_PATHMAX];
+    char why[200], err[200], alp_from[TAGPU_VFS_PATHMAX];
     char gui_from[TAGPU_VFS_PATHMAX] = "", shd_from[TAGPU_VFS_PATHMAX] = "";
     unsigned char pal[1024], gui[256], seen_t[256], greyed[256], *alp = NULL, *sheet = NULL, *shd = NULL;
-    int sum[256], idx[256], side_map[WIKI_SIDE_SIDES], nseen = 0, nfirst = 0, ps, i, k, sh = 0, has_gui = 0,
-        has_greyed = 0, refused = 1, closed = 0, ntype = 0, ndef = 0, nlay_side = 0, mine_cap = 0, *mine = NULL;
-    struct { char name[WIKI_SIDE_NAME]; int last, zero; } types[WIKI_SIDE_TYPES];
-    WIKISIDETYPE defs[WIKI_SIDE_TYPES];
-    const int cap_types = 4 * WIKI_MAX_DEFS;
+    int sum[256], idx[256], side_map[WIKI_SIDE_SIDES], kept[WIKI_SIDE_SIDES], i, k, sh = 0, has_gui = 0,
+        has_greyed = 0, refused = 1, closed = 0, ntype = 0, nlay_side = 0, *mine = NULL, *walk = NULL,
+        *depth = NULL;
+    SMENU* cache[WIKI_SIDE_SIDES];
+    SCASTING* picks = NULL;
+    WIKICASTING* casting = NULL;
+    STYPE* types = NULL;
     memset(&S, 0, sizeof S);
+    memset(cache, 0, sizeof cache);
     S.in = in;
     S.vfs = vfs;
     S.common = -1;
@@ -2964,14 +3450,10 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
     units_index(&S);
     if (!sides_read(&S)) { snprintf(err, sizeof err, "no sides: sidedata.tdf is missing, refused or empty"); goto done; }
     tagpu_vfs_enum(vfs, in->names.download, "*.tdf", 0, dl_each, &S);
-    seen = (char (*)[WIKI_ID_MAX])calloc((size_t)cap_types, WIKI_ID_MAX);
-    first = (char (*)[WIKI_ID_MAX])calloc((size_t)cap_types, WIKI_ID_MAX);
-    if (!seen || !first || S.failed) { snprintf(err, sizeof err, "out of memory"); goto done; }
-    player_types(in->data, seen, &nseen, first, &nfirst, cap_types);
-    ps = player_side(&S, first, nfirst, why, sizeof why);
-    side_rep(&S, "rule", "%s", "player side", why);
+    if (S.failed) { snprintf(err, sizeof err, "out of memory"); goto done; }
     S.common = side_bank(&S, in->names.commongui);
     if (S.common < 0) side_rep(&S, "refused", "no %s\\%s.GAF", "commongui", in->names.anims, in->names.commongui);
+    /* every side with MAIN2 and GEN screens is a layout side, in sidedata's order */
     for (i = 0; i < S.nside; i++) {
         char m2[SNAME + 8], gen[SNAME + 8];
         snprintf(m2, sizeof m2, "%sMAIN2", S.side[i].prefix);
@@ -2980,56 +3462,118 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
             side_rep(&S, "refused", "no MAIN2 and GEN screens", S.side[i].name);
             continue;
         }
+        kept[nlay_side] = i;
         side_map[i] = nlay_side++;
     }
-    if (side_map[ps] < 0) { snprintf(err, sizeof err, "the player's side %s has no MAIN2 and GEN screens", S.side[ps].name); goto done; }
-    if (!(mine = (int*)malloc((size_t)(S.ndl ? S.ndl : 1) * sizeof *mine))) { snprintf(err, sizeof err, "out of memory"); goto done; }
-    mine_cap = S.ndl;
-    for (i = 0; i < nseen && !S.failed; i++) {
-        const SUNIT* u = unit_get(&S, seen[i]);
-        char el[WIKI_ID_MAX + 8], T[WIKI_SIDE_NAME], dln[SNAME + 4];
-        int nmine = 0, last, zero, made = 0, numbered, p, ok = 1, made_at[WIKI_SIDE_PAGES + 1];
-        snprintf(el, sizeof el, "type %s", seen[i]);
-        if (!u) {
-            side_rep(&S, "refused", "no %s\\*.FBI has UnitName %s", el, in->names.units, seen[i]);
+    if (!nlay_side) { snprintf(err, sizeof err, "no side has MAIN2 and GEN screens"); goto done; }
+
+    /* THE CASTING of every layout side. BOUND: the walk and the depths are one slot a unit; the
+       menus one SMENU a unit and a distinct prefix, shared by the sides that spell it alike */
+    if (!(mine = (int*)malloc((size_t)(S.ndl ? S.ndl : 1) * sizeof *mine)) ||
+        !(walk = (int*)malloc((size_t)(S.nunit ? S.nunit : 1) * sizeof *walk)) ||
+        !(depth = (int*)malloc((size_t)(S.nunit ? S.nunit : 1) * sizeof *depth)) ||
+        !(picks = (SCASTING*)calloc((size_t)nlay_side, sizeof *picks)) ||
+        !(casting = (WIKICASTING*)calloc((size_t)nlay_side, sizeof *casting)) ||
+        !(types = (STYPE*)calloc(WIKI_SIDE_TYPES, sizeof *types))) {
+        snprintf(err, sizeof err, "out of memory");
+        goto done;
+    }
+    for (k = 0; k < nlay_side && !S.failed; k++) {
+        const SSIDE* sd = &S.side[kept[k]];
+        SWALK W;
+        int c, d, j;
+        for (j = 0; j < k && tagpu_hpi_stricmp(S.side[kept[j]].prefix, sd->prefix, (size_t)-1); j++) {}
+        if (j < k) cache[k] = cache[j];
+        else if (!(cache[k] = (SMENU*)calloc((size_t)(S.nunit ? S.nunit : 1), sizeof *cache[k]))) { S.failed = 1; break; }
+        W.S = &S;
+        W.cache = cache[k];
+        W.prefix = sd->prefix;
+        W.mine = mine;
+        side_casting(&W, sd->commander, walk, depth, &picks[k]);
+        for (c = 0; c < WIKI_NCAST; c++) {
+            uint16_t builds = 0;
+            const int t = picks[k].pick[c];
+            if (t < 0) continue;
+            for (d = 0; d < WIKI_NCAST; d++)
+                if (picks[k].pick[d] >= 0 && menu_has(menu(&W, t), picks[k].pick[d])) builds |= (uint16_t)(1u << d);
+            cast_fill(&S.unit[t], builds, &casting[k].cast[c]);
+        }
+    }
+    if (S.failed) { snprintf(err, sizeof err, "out of memory"); goto done; }
+
+    /* EACH SIDE'S TYPES: its bound casts' types that have a page, read with that side's prefix (the
+       <prefix>DL page follows the player's side, 0x41AD6C, and the tutorial plays the player's) */
+    for (k = 0; k < nlay_side && !S.failed; k++) {
+        const SSIDE* sd = &S.side[kept[k]];
+        STYPE want[WIKI_NCAST];
+        int nwant = 0, c, j, w;
+        for (c = 0; c < WIKI_NCAST; c++) {
+            const WIKICASTDEF* kc = &casting[k].cast[c];
+            const SUNIT* u;
+            char el[WIKI_ID_MAX + SNAME + 16];
+            int nmine;
+            if (!kc->bound) continue;
+            for (j = 0; j < nwant && strcmp(want[j].name, kc->type); j++) {}
+            if (j < nwant) continue;
+            u = &S.unit[picks[k].pick[c]];
+            memset(&want[nwant], 0, sizeof want[nwant]);
+            nmine = dl_mine(&S, u, mine);
+            if ((want[nwant].last = type_pages(&S, u->name, mine, nmine, &want[nwant].zero)) < 0) {
+                snprintf(el, sizeof el, "type %s (%s)", kc->type, sd->name);
+                side_rep(&S, "note", "no page: the router shows GEN for it", el);
+                continue;
+            }
+            scopy(want[nwant].name, kc->type, sizeof want[nwant].name);
+            want[nwant].side = k;
+            type_files(&S, u, sd->prefix, &want[nwant]);
+            nwant++;
+        }
+        /* WIKI_SIDE_TYPES: the layout's type table over every side; a side whose types would pass
+           it keeps none */
+        if (ntype + nwant > WIKI_SIDE_TYPES) {
+            char el[SNAME + 16];
+            snprintf(el, sizeof el, "side %s types", sd->name);
+            side_rep(&S, "refused", "its %d types pass %d over all sides", el, nwant, WIKI_SIDE_TYPES);
             continue;
         }
-        if (ndef < WIKI_SIDE_TYPES) {
-            scopy(defs[ndef].name, seen[i], sizeof defs[ndef].name);
-            defs[ndef++].canstop = u->canstop;
+        for (w = 0; w < nwant && !S.failed; w++) {
+            STYPE* t = &want[w];
+            const SUNIT* u = unit_get(&S, t->name);
+            char el[WIKI_SIDE_NAME + SNAME + 16];
+            int made = -1, p, ok = 1, nmade = 0, made_at[WIKI_SIDE_PAGES + 1], nmine = u ? dl_mine(&S, u, mine) : 0;
+            snprintf(el, sizeof el, "type %s (%s)", t->name, sd->name);
+            for (j = 0; j < ntype && made < 0; j++) if (!strcmp(types[j].name, t->name)) made = j;
+            if (made >= 0 && same_files(&types[made], t)) {
+                /* the same files as another side's: the same screens */
+                types[ntype] = types[made];
+                types[ntype++].side = k;
+                continue;
+            }
+            if (made >= 0) snprintf(t->tag, sizeof t->tag, "@%d", k);
+            for (p = t->zero ? 0 : 1; p <= t->last && ok; p++) {
+                char name[WIKI_SIDE_NAME + 16];
+                if (snprintf(name, sizeof name, "%s%d%s", t->name, p, t->tag) >= WIKI_SIDE_NAME) ok = 0;
+            }
+            if (!ok) { side_rep(&S, "refused", "a page's screen name passes 31 bytes", el); continue; }
+            /* WIKI_SIDE_SCREENS: the layout's screen table; a type that would pass it is left out */
+            if (live_screens(&S) + t->last + t->zero > WIKI_SIDE_SCREENS) {
+                side_rep(&S, "refused", "its %d pages pass %d screens", el, t->last + t->zero, WIKI_SIDE_SCREENS);
+                continue;
+            }
+            for (p = t->zero ? 0 : 1; p <= t->last && ok; p++) {
+                char name[WIKI_SIDE_NAME + 16];
+                snprintf(name, sizeof name, "%s%d%s", t->name, p, t->tag);
+                if (screen_build(&S, name, t->file[p], p, t->last == 0, mine, nmine)) made_at[nmade++] = screen_at(&S, name);
+                else ok = 0;
+            }
+            if (!ok) {
+                for (j = 0; j < nmade; j++) if (made_at[j] >= 0) S.scr[made_at[j]].live = 0;
+                side_rep(&S, "refused", "a page is refused", el);
+                continue;
+            }
+            types[ntype++] = *t;
         }
-        for (k = 0; k < S.ndl && nmine < mine_cap; k++) if (ieq(S.dl[k].unitmenu, u->name)) mine[nmine++] = k;
-        if ((last = type_pages(&S, u->name, mine, nmine, &zero)) < 0) {
-            side_rep(&S, "note", "no page: the router shows GEN for it", el);
-            continue;
-        }
-        /* WIKI_SIDE_SCREENS and WIKI_SIDE_TYPES: the layout's tables; a type that would pass
-           either is left out whole */
-        if (live_screens(&S) + last + zero > WIKI_SIDE_SCREENS || ntype == WIKI_SIDE_TYPES) {
-            side_rep(&S, "refused", "its %d pages pass %d screens", el, last + zero, WIKI_SIDE_SCREENS);
-            continue;
-        }
-        upcpy(T, seen[i], sizeof T);
-        snprintf(dln, sizeof dln, "%sDL", S.side[ps].prefix);
-        numbered = last > 0;
-        for (p = zero ? 0 : 1; p <= last && ok; p++) {
-            char name[WIKI_SIDE_NAME + 8], file[SNAME + 8];
-            snprintf(name, sizeof name, "%s%d", T, p);
-            snprintf(file, sizeof file, "%s%d", u->name, p);
-            if (p > 0 && !side_find(&S, in->names.gui, file, "GUI", &f)) scopy(file, dln, sizeof file);
-            if (screen_build(&S, name, file, p, !numbered, mine, nmine)) made_at[made++] = screen_at(&S, name);
-            else ok = 0;
-        }
-        if (!ok) {
-            for (k = 0; k < made; k++) if (made_at[k] >= 0) S.scr[made_at[k]].live = 0;
-            side_rep(&S, "refused", "a page is refused", el);
-            continue;
-        }
-        for (k = 0; k < ntype && strcmp(types[k].name, T); k++) {}
-        if (k == ntype) ntype++;
-        scopy(types[k].name, T, sizeof types[k].name);
-        types[k].last = last;
-        types[k].zero = zero;
+        casting_notes(&S, sd, &casting[k], types, ntype, k);
     }
     if (S.failed) { snprintf(err, sizeof err, "out of memory"); goto done; }
 
@@ -3056,34 +3600,32 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
             remap[i] = remap_n++;
         }
         lay->nscreen = remap_n;
-        for (i = 0; i < S.nside; i++) {
+        for (k = 0; k < nlay_side; k++) {
+            const SSIDE* sd = &S.side[kept[k]];
             char m2[SNAME + 8], gen[SNAME + 8];
-            if (side_map[i] < 0) continue;
-            snprintf(m2, sizeof m2, "%sMAIN2", S.side[i].prefix);
-            snprintf(gen, sizeof gen, "%sGEN", S.side[i].prefix);
-            scopy(lay->side[side_map[i]].name, S.side[i].name, WIKI_SIDE_NAME);
-            scopy(lay->side[side_map[i]].prefix, S.side[i].prefix, WIKI_SIDE_NAME);
-            lay->side[side_map[i]].main2 = screen_at(&S, m2) >= 0 ? remap[screen_at(&S, m2)] : -1;
-            lay->side[side_map[i]].gen = screen_at(&S, gen) >= 0 ? remap[screen_at(&S, gen)] : -1;
+            snprintf(m2, sizeof m2, "%sMAIN2", sd->prefix);
+            snprintf(gen, sizeof gen, "%sGEN", sd->prefix);
+            scopy(lay->side[k].name, sd->name, WIKI_SIDE_NAME);
+            scopy(lay->side[k].prefix, sd->prefix, WIKI_SIDE_NAME);
+            lay->side[k].main2 = screen_at(&S, m2) >= 0 ? remap[screen_at(&S, m2)] : -1;
+            lay->side[k].gen = screen_at(&S, gen) >= 0 ? remap[screen_at(&S, gen)] : -1;
         }
         lay->nside = nlay_side;
         lay->ntype = ntype;
-        /* the types read are the player's side's: their pages and its DL are read with its prefix */
         for (k = 0; k < ntype; k++) {
             WIKIPAGES* t = &lay->type[k];
             int p;
+            char name[WIKI_SIDE_NAME + 16];
             scopy(t->name, types[k].name, sizeof t->name);
-            t->side = side_map[ps];
+            t->side = types[k].side;
             t->npage = types[k].last;
             for (p = 1; p <= types[k].last; p++) {
-                char name[WIKI_SIDE_NAME + 8];
-                snprintf(name, sizeof name, "%s%d", types[k].name, p);
+                snprintf(name, sizeof name, "%s%d%s", types[k].name, p, types[k].tag);
                 t->page[p - 1] = screen_at(&S, name) >= 0 ? remap[screen_at(&S, name)] : -1;
             }
             t->orders = -1;
             if (types[k].zero) {
-                char name[WIKI_SIDE_NAME + 8];
-                snprintf(name, sizeof name, "%s0", types[k].name);
+                snprintf(name, sizeof name, "%s0%s", types[k].name, types[k].tag);
                 t->orders = screen_at(&S, name) >= 0 ? remap[screen_at(&S, name)] : -1;
             }
         }
@@ -3091,18 +3633,25 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
     }
     if (!tagpu_wikilayout_check(lay, why, sizeof why)) { snprintf(err, sizeof err, "the layout is refused: %s", why); goto done; }
 
-    /* PANELSIDE and the dots: registered after the screens, as the pack registers them */
+    /* PANELSIDE of every layout side, then the dots: registered after the screens, as the pack
+       registers them */
     {
         SSEQ q;
-        const int bk = S.side[ps].intgaf[0] ? side_bank(&S, S.side[ps].intgaf) : -1;
-        int panelside = -1, phx = 0, phy = 0, fx, nrad = 0, high = -1, rad[WIKISIDE_DOTS], dot_key = 0, have_q = 0;
+        int panelside[WIKI_SIDE_SIDES], fx, nrad = 0, high = -1, rad[WIKISIDE_DOTS], dot_key = 0, have_q = 0;
         SSEQ qr, qh;
-        if (side_seq(&S, bk, "PANELSIDE", &q)) {
-            panelside = q.f[0];
-            phx = S.fr[q.f[0]].hx;
-            phy = S.fr[q.f[0]].hy;
-            free(q.f);
-        } else side_rep(&S, "refused", "no PANELSIDE in %s\\%s.GAF", "panelside", in->names.anims, S.side[ps].intgaf);
+        for (k = 0; k < nlay_side; k++) {
+            const SSIDE* sd = &S.side[kept[k]];
+            const int bk = sd->intgaf[0] ? side_bank(&S, sd->intgaf) : -1;
+            char el[SNAME + 16];
+            panelside[k] = -1;
+            if (side_seq(&S, bk, "PANELSIDE", &q)) {
+                panelside[k] = q.f[0];
+                free(q.f);
+            } else {
+                snprintf(el, sizeof el, "panelside %s", sd->name);
+                side_rep(&S, "refused", "no PANELSIDE in %s\\%s.GAF", el, in->names.anims, sd->intgaf);
+            }
+        }
         fx = side_bank(&S, "fx");
         if (side_seq(&S, fx, "radlogo", &qr)) {
             have_q = 1;
@@ -3252,14 +3801,24 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
                 }
                 sb_raw(&S.rep, "]}");
             }
-            sb_raw(&S.rep, "}},\"art\":{\"sheet\":{\"w\":%d,\"h\":%d,\"fnv\":\"%08lx\"},\"pal\":\"%08lx\",\"panelside\":",
+            sb_raw(&S.rep, "}},\"casting\":[");
+            for (k = 0; k < nlay_side; k++) {
+                sb_raw(&S.rep, "%s", k ? "," : "");
+                casting_json(&S.rep, &S, &S.side[kept[k]], &picks[k], &casting[k]);
+            }
+            sb_raw(&S.rep, "],\"art\":{\"sheet\":{\"w\":%d,\"h\":%d,\"fnv\":\"%08lx\"},\"pal\":\"%08lx\",\"panelside\":[",
                    WIKISIDE_SHEET_W, sh, (unsigned long)fnv(FNV0, sheet, (size_t)WIKISIDE_SHEET_W * (size_t)sh),
                    (unsigned long)fnv(FNV0, pal, sizeof pal));
-            if (panelside >= 0) {
-                sb_raw(&S.rep, "{\"frame\":");
-                frame_json(&S.rep, &S.fr[panelside], phx, phy);
-                sb_raw(&S.rep, ",\"key\":%d}", S.fr[panelside].tkey);
-            } else sb_raw(&S.rep, "null");
+            for (k = 0; k < nlay_side; k++) {
+                const int ps = panelside[k];
+                sb_raw(&S.rep, "%s", k ? "," : "");
+                if (ps >= 0) {
+                    sb_raw(&S.rep, "{\"frame\":");
+                    frame_json(&S.rep, &S.fr[ps], S.fr[ps].hx, S.fr[ps].hy);
+                    sb_raw(&S.rep, ",\"key\":%d}", S.fr[ps].tkey);
+                } else sb_raw(&S.rep, "null");
+            }
+            sb_raw(&S.rep, "]");
             sb_raw(&S.rep, ",\"screens\":{");
             for (si = 0, i = 0; i < S.nscr; i++) {
                 const SSCREEN* c = &S.scr[i];
@@ -3338,12 +3897,6 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
             sb_q(&S.rep, alp_from[0] ? alp_from : NULL, 1);
             sb_raw(&S.rep, "}},\"greyed\":");
             if (has_greyed) sb_raw(&S.rep, "\"%08lx\"", (unsigned long)fnv(FNV0, greyed, 256)); else sb_raw(&S.rep, "null");
-            sb_raw(&S.rep, "},\"defs\":{");
-            for (k = 0; k < ndef; k++) {
-                sb_raw(&S.rep, "%s", k ? "," : "");
-                sb_q(&S.rep, defs[k].name, 0);
-                sb_raw(&S.rep, ":{\"canstop\":%d}", defs[k].canstop);
-            }
             sb_raw(&S.rep, "}}\n");
             closed = 1;
             if (S.rep.oom || !S.rep.s) { snprintf(err, sizeof err, "out of memory for the report"); goto done; }
@@ -3356,9 +3909,12 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
             w->sheet_w = WIKISIDE_SHEET_W;
             w->sheet_h = sh;
             memcpy(w->pal, pal, sizeof w->pal);
-            if ((w->has_panelside = panelside >= 0) != 0) {
-                w->panelside = sheet_rect(&S.fr[panelside], phx, phy);
-                w->panelside_key = S.fr[panelside].tkey;
+            for (k = 0; k < nlay_side; k++) {
+                const int ps = panelside[k];
+                if ((w->has_panelside[k] = ps >= 0) != 0) {
+                    w->panelside[k] = sheet_rect(&S.fr[ps], S.fr[ps].hx, S.fr[ps].hy);
+                    w->panelside_key[k] = S.fr[ps].tkey;
+                }
             }
             w->nradlogo = nrad;
             for (k = 0; k < nrad; k++) w->radlogo[k] = sheet_rect(&S.fr[rad[k]], S.fr[rad[k]].hx, S.fr[rad[k]].hy);
@@ -3392,8 +3948,8 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
                 o->nlabel = c->nlabel;
                 memcpy(o->label, c->label, sizeof o->label);
             }
-            w->ndef = ndef;
-            memcpy(w->def, defs, (size_t)ndef * sizeof *defs);
+            memcpy(w->casting, casting, (size_t)nlay_side * sizeof *casting);
+            for (i = 0; i < WIKI_SIDE_SIDES; i++) w->side_of_engine[i] = side_map[i];
             memcpy(blk + rep_at, S.rep.s, S.rep.n + 1);
             w->report = (const char*)blk + rep_at;
             /* THE BOUND every composer read rests on: each frame rect inside the sheet */
@@ -3432,9 +3988,19 @@ done:
     for (i = 0; i < S.nfr; i++) { free(S.fr[i].key); free(S.fr[i].px); }
     free(S.fr);
     free(S.scr);
-    free(seen);
-    free(first);
+    for (k = 0; k < WIKI_SIDE_SIDES; k++) {
+        int j;
+        if (!cache[k]) continue;
+        for (j = k + 1; j < WIKI_SIDE_SIDES; j++) if (cache[j] == cache[k]) cache[j] = NULL;
+        for (j = 0; j < S.nunit; j++) free(cache[k][j].u);
+        free(cache[k]);
+    }
     free(mine);
+    free(walk);
+    free(depth);
+    free(picks);
+    free(casting);
+    free(types);
     free(lay);
     free(alp);
     free(shd);
@@ -3483,6 +4049,15 @@ int tagpu_wikiside_minimap(const WIKI3DSTAGE* st, const unsigned char* alp, unsi
 
 /* ---- the load ----------------------------------------------------------------------------------- */
 
+/* `name` appended to the n names unless one of them is it; the new count */
+static int add_name(char (*names)[WIKI_ID_MAX], int n, const char* name)
+{
+    int j;
+    for (j = 0; j < n && strcmp(names[j], name); j++) {}
+    if (j == n) scopy(names[n++], name, WIKI_ID_MAX);
+    return n;
+}
+
 #define REPORT_RESERVE (1u << 20)   /* the arena's tail the report alone may use: assets that
                                        fill the rest are refused, and the report still fits      */
 
@@ -3498,7 +4073,7 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISI
     uint32_t w_at, st_at = 0, un_at = 0, rep_at, assets;
     const WIKIDATA* d = in->data;
     char (*names)[WIKI_ID_MAX] = NULL;
-    int i, k, n = 0, nunit = 0, nstage = d ? d->nentry : 0;
+    int i, k, s, n = 0, nunit = 0, nsides, nstage = d ? d->nentry : 0;
     memset(&L, 0, sizeof L);
     memset(&b, 0, sizeof b);
     memset(&cur, 0, sizeof cur);
@@ -3514,15 +4089,23 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISI
     if (nstage && (!(st_at = alloc(&L.a, (uint32_t)(nstage * sizeof(WIKI3DSTAGE)))) ||
                    !(srec = (STAGEREC*)calloc((size_t)nstage, sizeof *srec))))
         nstage = 0;
-    /* the unit types every entry defines, each once, in the entries' order */
-    for (i = 0; i < nstage; i++) nunit += d->entry[i].ndef;
+    /* THE UNIT TYPES, gfx.py `stage_types` per entry, each name once over all: every entry's own,
+       in the entries' order, each followed by every layout side's type for each cast the entry's
+       units name, so a demo bound to any side's casting finds its models. BOUND: names holds the
+       entries' types times one plus the sides, the most the loops below can add. */
+    nsides = side ? side->layout.nside : 0;
+    if (nsides < 0 || nsides > WIKI_SIDE_SIDES) nsides = 0;
+    for (i = 0; i < nstage; i++) nunit += d->entry[i].ndef * (1 + nsides);
     if (nunit && !(names = (char (*)[WIKI_ID_MAX])calloc((size_t)nunit, sizeof *names))) nunit = 0;
-    for (i = 0; names && i < nstage; i++)
-        for (k = 0; k < d->entry[i].ndef; k++) {
-            int j;
-            for (j = 0; j < n && strcmp(names[j], d->entry[i].def[k].name); j++) {}
-            if (j == n) memcpy(names[n++], d->entry[i].def[k].name, WIKI_ID_MAX);
-        }
+    for (i = 0; names && i < nstage; i++) {
+        const WIKIENTRY* e = &d->entry[i];
+        for (k = 0; k < e->ndef; k++) n = add_name(names, n, e->def[k].name);
+        for (s = 0; s < nsides; s++)
+            for (k = 0; k < e->ndef; k++) {
+                const int c = e->def[k].cast;
+                if (c >= 0 && c < WIKI_NCAST && side->casting[s].cast[c].bound) n = add_name(names, n, side->casting[s].cast[c].type);
+            }
+    }
     nunit = names ? n : 0;
     if (nunit && (!(un_at = alloc(&L.a, (uint32_t)(nunit * sizeof(WIKI3DUNIT)))) ||
                   !(urec = (UNITREC*)calloc((size_t)nunit, sizeof *urec))))

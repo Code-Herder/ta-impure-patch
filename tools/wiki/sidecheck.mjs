@@ -26,12 +26,12 @@
    own pictures through both composers.
 
    THE SIDES. A pack holds every side of its mod, each with its own PANELSIDE (art.panelside, index-aligned with
-   layout.sides) and its own casting. The byte compare plays layout side 0 with the entries' own types at Interface
-   Type 1, the one context tagpu_wikisim_init takes today, and hands the C side that side's PANELSIDE as the one
-   WIKISIDE holds (wikisidetest.c reads one). Every other context -- each side of each pack with its casting, at
-   Interface Type 1 and 0 -- is played and composed by side.js alone: each sampled frame must compose, with the
-   view's rows and the view's side, and its PANELSIDE must be the one that side's pack names. Those frames join the
-   byte compare once the C sim takes the context (WIKISIMCTX) and WIKISIDE a PANELSIDE per layout side.
+   layout.sides) and its own casting; the C side is handed every side's PANELSIDE, as WIKISIDE holds them. The byte
+   compare plays layout side 0 with the entries' own types at Interface Type 1, the context wikisidetest.c plays.
+   Every other context -- each side of each pack with its casting, at Interface Type 1 and 0 -- is played and
+   composed by side.js alone: each sampled frame must compose, with the view's rows and the view's side, and its
+   PANELSIDE must be the one that side's pack names. Those frames join the byte compare once wikisidetest.c plays
+   each context (WIKISIMCTX).
    --js-only runs that pass and the side-0 frames through side.js alone, building nothing. */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -123,16 +123,16 @@ function realPack(mod) {
     greyed: bin(A.greyed), bases };
 }
 
-/* ---- a pack for the C side: the art as the asset loader fills WIKISIDE (wikisidetest.c, art.json). WIKISIDE holds
-   one PANELSIDE, so it is given the one of the side the C frames play (PLAYED). ---- */
+/* ---- a pack for the C side: the art as the asset loader fills WIKISIDE (wikisidetest.c, art.json), a PANELSIDE per
+   layout side. The C frames play side PLAYED. ---- */
 const PLAYED = 0;
 function writeC(pack, dir) {
   const L = pack.json.layout, A = pack.json.art || {}, D = A.dots || {}, MM = A.minimap || {};
   const intOr = (v, d) => Number.isInteger(v) ? v : d;
-  const ps = Array.isArray(A.panelside) ? A.panelside[PLAYED] : null;
+  const PS = Array.isArray(A.panelside) ? A.panelside : [];
   const art = {
     sheet: [A.sheet.w, A.sheet.h],
-    panelside: ps ? { f: ps.f, key: intOr(ps.key, -1) } : null,
+    panelside: L.sides.map((_sd, k) => (PS[k] ? { f: PS[k].f, key: intOr(PS[k].key, -1) } : null)),
     dots: { key: intOr(D.key, -1), radlogo: D.radlogo || [], high: D.high || null },
     unexplored: intOr(MM.unexplored, -1), box: intOr(MM.box, -1),
     screens: Object.entries(L.screens).map(([sn, s]) => {
