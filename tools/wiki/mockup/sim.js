@@ -615,7 +615,7 @@ const WikiSim = (() => {
         st.mode = null; st.gesture = null;
         for (const v of selected()) if (v.owner === 0) v.orders = [];
       }
-      else if (g.role === 'build' && defined(g.unit) && !mobile(g.unit)) { disarm(); st.mode = g.unit; st.drag = null; }
+      else if (g.role === 'build' && defined(g.unit) && !mobile(g.unit)) arm(g.unit);
       route();
     }
     /* a press over the column: a tab drops the capture (0x4A6C28) and acts now; any other button is captured, either
@@ -849,6 +849,12 @@ const WikiSim = (() => {
     /* ---- orders ---- */
     // leaving the build-menu mode ends the gesture and clears the Shift-placement bit with it
     const disarm = () => { st.mode = null; st.gesture = null; st.shiftPlaced = false; };
+    /* ARMING a building, the build button's branch of 0x41AA00, DISASSEMBLED: main+0x2CC3 = 0x0E (0x41AB89) and the
+       type at main+0x2CC4 (0x41AB9C), and no write to main+0x2CC6. So a Shift-placement made earlier in this Shift
+       hold keeps bit 5, and releasing Shift disarms the building armed since as well: 0x4992D8..0x49930F tests bit 5,
+       not the mode. tagpu_place.c leaves the bit too (it sets it only on a commit), and ends its gesture when the armed
+       type changes (its evaluate, `s_gesture.type != c.type`), so a gesture outlives a re-arm of its own type only. */
+    const arm = t => { if (st.mode !== t) st.gesture = null; st.mode = t; st.drag = null; };
     /* a click's orders for one unit: they replace its list, or with Shift are appended to it -- all of them or, when
        they would take the list past PLACE_LIST_CAP, none, so an upgrade's reclaim never goes in without its build */
     const assign = (u, os, shift) => {
@@ -942,7 +948,8 @@ const WikiSim = (() => {
       if ('caption' in ev) st.caption = ev.caption || null;
       if ('build' in ev) {
         if (TRIPS) trip(ev.build);
-        else { disarm(); st.mode = ev.build || null; st.drag = null; }
+        else if (ev.build) arm(ev.build);
+        else { disarm(); st.drag = null; }
       }
       if (ev.move) {
         st.cursor = { x: ev.move[0], z: ev.move[1] };

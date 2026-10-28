@@ -629,6 +629,27 @@ const SIDE_RULES = {
     return armed.mode === 'build:ARMMEX' && gen.side && gen.side.screen === 'ARMGEN' && gen.mode === 'build:ARMMEX' && had === 2 &&
       stopped.mode === 'contextual' && same(left, [0, 2, 2]) && same(mixed, [0, 0, 0, 2, 1]);
   },
+  /* the build button's arm (0x41AB89, 0x41AB9C) writes nothing to main+0x2CC6, so the Shift-placement bit a Shift-click
+     set stays set through a new arm, and the Shift's release disarms (0x4992D8..0x49930F); without a placement in the
+     hold the building stays armed */
+  'a building armed after a Shift-placement in the same Shift hold is disarmed when Shift is released'(entry) {
+    // each sim is done with before the next is made: simparity.mjs replays one at a time
+    const hold = place => {
+      const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, FIXTURE);
+      press(s, centre(FIXTURE, 'ARMCK1', 'ARMMEX'));
+      s.input({ down: 'shift' });
+      if (place) { s.input({ move: [120, 400] }); s.input({ down: 'lmb' }); s.input({ up: 'lmb' }); }
+      const placed = s.orders('ck').length;
+      press(s, centre(FIXTURE, 'ARMCK1', 'ARMNEXT'));
+      press(s, centre(FIXTURE, 'ARMCK2', 'ARMGEO'));
+      const armed = s.view().mode;
+      s.input({ up: 'shift' });
+      return { placed, armed, after: s.view().mode };
+    };
+    const placed = hold(true), none = hold(false);
+    return placed.placed === 1 && placed.armed === 'build:ARMGEO' && placed.after === 'contextual' &&
+      none.placed === 0 && none.armed === 'build:ARMGEO' && none.after === 'build:ARMGEO';
+  },
   /* the pump 0x4A9FD0 offers a press in file order: a button acting on the release lets the scan go on, so the LAST
      one holding the point takes it; a greyed or an inactive one takes none */
   'where buttons overlap the last one takes the press, and a greyed or inactive one takes none'(entry) {

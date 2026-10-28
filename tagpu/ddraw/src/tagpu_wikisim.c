@@ -652,6 +652,7 @@ static WIKIUNIT* unit_at(const WIKISIM* s, double x, double z)
 /* ---- the sidebar's rules; none of them runs with the sidebar off (`lay` NULL) ---- */
 
 static void disarm(WIKISIM* s);
+static void arm(WIKISIM* s, int t);
 
 static const WIKISCREEN* screen_of(const WIKISIM* s, int i) { return &s->lay->screen[i]; }
 
@@ -800,11 +801,7 @@ static void act(WIKISIM* s, const WIKIGADGET* g)
         s->has_gesture = 0;
         for (i = 0; i < s->nunit; i++)
             if (s->unit[i]->sel && s->unit[i]->owner == 0) s->unit[i]->norder = 0;
-    } else if (g->role == WIKI_ROLE_BUILD && (t = unit_def(s, g)) >= 0 && !mobile(s, t)) {
-        disarm(s);
-        s->mode = t;
-        s->has_drag = 0;
-    }
+    } else if (g->role == WIKI_ROLE_BUILD && (t = unit_def(s, g)) >= 0 && !mobile(s, t)) arm(s, t);
     route(s);
 }
 
@@ -1307,6 +1304,20 @@ static void disarm(WIKISIM* s)
     s->shift_placed = 0;
 }
 
+/* ARMING a building, the build button's branch of 0x41AA00, DISASSEMBLED: main+0x2CC3 = 0x0E
+   (0x41AB89) and the type at main+0x2CC4 (0x41AB9C), and no write to main+0x2CC6. So a
+   Shift-placement made earlier in this Shift hold keeps bit 5 (shift_placed), and releasing
+   Shift disarms the building armed since as well: 0x4992D8..0x49930F tests bit 5, not the mode.
+   tagpu_place.c leaves the bit too (it sets it only on a commit), and ends its gesture when the
+   armed type changes (its evaluate, `s_gesture.type != c.type`), so a gesture outlives a re-arm
+   of its own type only. */
+static void arm(WIKISIM* s, int t)
+{
+    if (s->mode != t) s->has_gesture = 0;
+    s->mode = t;
+    s->has_drag = 0;
+}
+
 /* a click's orders for one unit: they replace its list, or with Shift are appended to it -- all
    of them or, when they would take the list past PLACE_LIST_CAP, none, so an upgrade's reclaim
    never goes in without its build */
@@ -1515,9 +1526,9 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
         /* tagpu_wikidata_trips refused a trip's build naming no type before the sim started */
         if (s->trips) {
             if (ev->build >= 0 && ev->build < s->entry->ndef) trip(s, ev->build);
-        } else {
+        } else if (ev->build >= 0 && ev->build < s->entry->ndef) arm(s, ev->build);
+        else {
             disarm(s);
-            s->mode = ev->build >= 0 && ev->build < s->entry->ndef ? ev->build : -1;
             s->has_drag = 0;
         }
     }
