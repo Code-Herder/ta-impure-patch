@@ -548,7 +548,7 @@ static void start(void)
     if (!d) { s_want = 1; return; }                  /* the data loads on its own thread       */
     if (!e) return;
     if (s_demo < 0 || s_demo >= e->ndemo) { lstrcpynA(s_msg, "no demo", sizeof s_msg); return; }
-    if (!tagpu_wikisim_init(&s_sim, e, &e->demo[s_demo], !s_try, err, sizeof err)) {
+    if (!tagpu_wikisim_init(&s_sim, e, &e->demo[s_demo], !s_try, NULL, err, sizeof err)) {
         tagpu_logf("wiki: the demo %s/%s did not start - %s", e->id, e->demo[s_demo].id, err);
         lstrcpynA(s_msg, "the demo did not start", sizeof s_msg);
         return;
@@ -797,7 +797,7 @@ static void check(void)
             const WIKIENTRY* e = &d->entry[i];
             WIKISIM* s = (WIKISIM*)malloc(sizeof *s);
             long k = 0;
-            if (!s || !tagpu_wikisim_init(s, e, &e->demo[j], 1, err, sizeof err)) {
+            if (!s || !tagpu_wikisim_init(s, e, &e->demo[j], 1, NULL, err, sizeof err)) {
                 tagpu_logf("wiki check: %s/%s did not start - %s", e->id, e->demo[j].id, s ? err : "no memory");
                 free(s);
                 bad++;

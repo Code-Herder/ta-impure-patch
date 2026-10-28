@@ -5,13 +5,11 @@
 
    The demos play with the sidebar of art/wiki/side/fixture.json, the layout the wiki falls back to, so each `build`
    input plays out as its trip through the sidebar (sim.js trip) and is checked as one; --null-layout plays them with
-   no sidebar, where a `build` arms at once, as tools/wiki/simparity.mjs plays them until the DLL's sim reads a
-   layout. The rule cases name their layout themselves.
+   no sidebar, where a `build` arms at once. The rule cases name their layout themselves.
 
-   Imported, it runs nothing and exports ENTRY_RULES, the rule cases per entry id, which call WikiSim.create through
-   the module object sim.js exports; tools/wiki/simparity.mjs plays them through the DLL's sim that way. simparity
-   records `create` without its layout and does not record `play`, so there the sidebar's cases compare the sims
-   without a sidebar, and the longest trip and the locked build, which play a scripted demo, run on sim.js alone.
+   Imported, it runs nothing and exports ENTRY_RULES, the rule cases per entry id, which call WikiSim.create and
+   WikiSim.play through the module object sim.js exports; tools/wiki/simparity.mjs records both, each with its
+   layout, and plays them through the DLL's sim that way.
 
    A demo is a scene and inputs, so a change to the rules, the figures or the map can quietly turn a demo into one
    that no longer shows its claim; this is what notices. The checks name the entry's deposits by their cell

@@ -12,10 +12,14 @@
 
    THE LOADER REFUSES WHAT THE MOCKUP WOULD THROW ON OR READ AS UNDEFINED: a unit type the entry
    does not define, a key it does not name, a rectangle or a map size that is not an integer, a
-   missing footprint, a BuildTime that is not positive, or a unit's facing that is not two
-   numbers with a positive, finite length. Every other absent figure reads as 0, which every rule
-   of sim.js treats as it treats `undefined` (each one tests `> 0`). It also refuses a map wider
-   or taller than WIKI_MAP_MAX, which the mockup would play.
+   missing footprint, a BuildTime that is not positive, a unit's facing that is not two numbers
+   with a positive, finite length, or a demo's `sidebar` that is not a boolean. Every other absent
+   figure reads as 0, which every rule of sim.js treats as it treats `undefined` (each one tests
+   `> 0`). It also refuses what the mockup would play: a map wider or taller than WIKI_MAP_MAX, a
+   type name that is empty or of WIKI_ID_MAX bytes or more, a `canstop` that is neither a number
+   nor a boolean, and a non-boolean `sidebar` on a demo only Try it yourself would read. The demo's
+   build trips (tagpu_wikidata_trips) are refused where sim.js refuses them, when a simulation
+   starts with the sidebar on.
 
    IT NORMALISES A FACING AS sim.js's facing() DOES, bit for bit: the same + * / and sqrt, each
    rounded once, which is why the DLL compiles this file for SSE2 as it compiles the simulation
@@ -28,7 +32,7 @@
 #define WIKI_MAX_DEFS 64    /* the unit types of one entry: a build list is a mask over them */
 /* Cells a side of an entry's map; the loader refuses a larger one. The DLL's packet carries the
    map by value, at most 128 x 128 cells, and a 700-pixel stage still gives 5 px a cell; the
-   simulation's take-off rule rests on it too (tagpu_wikisim.c, fixed16). The data's map is
+   simulation's take-off rule rests on it too (tagpu_wikisim.c, fixed16). The data's maps are
    40 x 30. */
 #define WIKI_MAP_MAX  128
 
@@ -42,6 +46,8 @@ typedef struct {
     int         fx, fz;             /* footprint, cells */
     double      build_time, worker_time, build_distance, max_velocity, extracts, energy_make;
     int         vent;               /* a geothermal plant: needs a vent under its footprint */
+    int         canstop;            /* FBI canstop, def+0x245 bit 3: STOP is live for a selection
+                                       holding it */
     uint64_t    builds;             /* bit i: its build list names type i of the entry */
 } WIKIDEF;
 
@@ -88,6 +94,9 @@ typedef struct {
     int              down, up;          /* WIKI_KEY_*, or -1 */
     int              build;             /* WIKI_IN_BUILD: the type armed, or -1 to leave the mode */
     const char*      caption;           /* WIKI_IN_CAPTION: the caption, NULL to clear it */
+    int              extra;             /* a demo's input names a key besides at, caption and
+                                           build: it is no caption alone, which a build trip's
+                                           ticks admit (tagpu_wikidata_trips) */
 } WIKIINPUT;
 
 typedef struct {
@@ -98,6 +107,8 @@ typedef struct {
     WIKIINPUT*       input;             /* in file order; the sim plays them by `at` */
     int              has_end;
     double           end;               /* the tick it ends on */
+    int              has_sidebar;       /* `sidebar` given: it decides whether the demo plays with */
+    int              sidebar;           /* the sidebar, else a mobile builder of the player's does */
 } WIKIDEMO;
 
 typedef struct {
@@ -121,11 +132,18 @@ typedef struct {
     int              entry;             /* an index of WIKIDATA.entry, or -1 */
 } WIKINODE;
 
+struct WIKILAYOUT;
+
 typedef struct {
     int              nnode, nentry;
     WIKINODE*        node;
     WIKIENTRY*       entry;
     TJDOC*           doc;
+    /* art/wiki/side/fixture.json, checked: the sidebar the wiki falls back to when the running
+       mod's is absent or refused. NULL when the archive has none (hudpak.py's wiki set requires
+       it, so the DLL's always does). It lives as long as the WIKIDATA, which the DLL never frees,
+       and nothing writes it, so a simulation and the render thread may hold it. */
+    const struct WIKILAYOUT* fixture;
 } WIKIDATA;
 
 /* An entry from its JSON text into `e`; 0 with a message in `err` when it is refused, and then
@@ -206,7 +224,7 @@ typedef struct {
     int  orders;                    /* the <NAME>0 screen's index, or -1 */
 } WIKIPAGES;
 
-typedef struct {
+typedef struct WIKILAYOUT {
     int         format, width, height;
     int         nside, player_side;
     WIKISIDEDEF side[WIKI_SIDE_SIDES];
@@ -221,5 +239,24 @@ typedef struct {
    calls it before the layout is published, so a count or an index read out of a checked layout
    is in range by construction. */
 int tagpu_wikilayout_check(const WIKILAYOUT* L, char* err, size_t errn);
+
+/* A layout from its JSON (sim.js's schema; a `note` key, or any other the schema does not name,
+   is read past), into a heap block the caller frees with free(), checked by
+   tagpu_wikilayout_check; NULL with a message in `err` when it is refused. The text form, the
+   tree form (a member of a larger document), and a file of a WIKIPAK archive (`path`, e.g.
+   "side/fixture-tall.json"). Every string is copied, so the layout outlives the text. Beyond
+   checkLayout's bounds it refuses two screens of one name, which sim.js cannot be given (a JSON
+   object keeps one of them). */
+WIKILAYOUT* tagpu_wikidata_layout(const char* text, size_t len, char* err, size_t errn);
+WIKILAYOUT* tagpu_wikidata_layout_json(const TJV* v, char* err, size_t errn);
+WIKILAYOUT* tagpu_wikidata_layout_pak(const unsigned char* pak, size_t npak, const char* path, char* err, size_t errn);
+
+/* THE BUILD TRIP'S DATA RULE, sim.js's checkTrips, for a demo that plays with the sidebar: every
+   `build` names a type, carries no other input and finds the left button up; no input but a
+   caption stands in its trip, the ticks (t, t + WIKI_TRIP), nor after it within tick t; and the
+   demo lasts the whole trip. The inputs are read in the simulation's order (by tick, then file
+   order). 1 when it holds, else 0 with a message in `err`. tagpu_wikisim_init asks it exactly
+   where sim.js throws: a scripted demo whose sidebar is on. */
+int tagpu_wikidata_trips(const WIKIDEMO* d, char* err, size_t errn);
 
 #endif

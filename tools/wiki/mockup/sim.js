@@ -39,12 +39,14 @@ const WikiSim = (() => {
      or null (greyed) when the name is none; hidden marks an inactive gadget. Labels, fonts and the panel picture
      are not gadgets here: they are the art's. types holds only the types with a page (def+0x22E != 0). */
   const SIDE_W = 128, SIDE_MIN_H = 480, MINIMAP = 128;
-  const SIDE_SCREENS = 48, SIDE_GADGETS = 64, SIDE_PAGES = 7, SIDE_TYPES = 64, SIDE_ROWS = 1024;
+  const SIDE_SCREENS = 48, SIDE_GADGETS = 64, SIDE_PAGES = 7, SIDE_TYPES = 64, SIDE_ROWS = 1024, SIDE_SIDES = 8, SIDE_NAME = 32;
   const ROLES = ['orders', 'buildtab', 'build', 'prev', 'next', 'stop', 'order'];
   function checkLayout(L) {
     const no = what => { throw new Error(`the sidebar layout is refused: ${what}`); };
     const obj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
-    const name = v => typeof v === 'string' && v.length > 0;
+    // SIDE_NAME: a name and its terminator fit WIKILAYOUT's name fields, counted in UTF-8 bytes as the C reads them
+    const fits = v => typeof v === 'string' && new TextEncoder().encode(v).length < SIDE_NAME;
+    const name = v => fits(v) && v.length > 0;
     const int = Number.isInteger;
     if (!obj(L) || L.format !== 1) no('format is not 1');
     if (L.width !== SIDE_W) no(`width is not ${SIDE_W}`);
@@ -55,6 +57,7 @@ const WikiSim = (() => {
     let rows = SIDE_MIN_H;
     for (const n of names) {
       const s = L.screens[n];
+      if (!fits(n)) no(`screen ${n} has a name too long`);
       if (!obj(s) || !int(s.y) || !int(s.w) || !int(s.h) || s.y < 0 || s.w < 1 || s.w > SIDE_W || s.h < 1)
         no(`screen ${n} has no integer y, w and h within the column`);
       // SIDE_ROWS: the composed column's texture is 128 x 1024
@@ -75,9 +78,10 @@ const WikiSim = (() => {
     }
     if (L.height !== rows) no(`height is not ${rows}, the column's rows`);
     const screen = v => name(v) && own(L.screens, v);
-    if (!Array.isArray(L.sides) || !L.sides.length) no('sides is not a non-empty list');
+    // SIDE_SIDES: WIKILAYOUT's side table
+    if (!Array.isArray(L.sides) || !L.sides.length || L.sides.length > SIDE_SIDES) no(`sides is not a list of 1 to ${SIDE_SIDES}`);
     L.sides.forEach((s, i) => {
-      if (!obj(s) || !name(s.name) || typeof s.prefix !== 'string' || !screen(s.main2) || !screen(s.gen))
+      if (!obj(s) || !name(s.name) || !fits(s.prefix) || !screen(s.main2) || !screen(s.gen))
         no(`side ${i} has no name, prefix, or MAIN2 and GEN screens`);
     });
     if (!int(L.player_side) || L.player_side < 0 || L.player_side >= L.sides.length) no('player_side is not one of the sides');
@@ -85,6 +89,7 @@ const WikiSim = (() => {
     // SIDE_TYPES: WIKI_MAX_DEFS, the unit types one entry can name
     if (Object.keys(L.types).length > SIDE_TYPES) no(`more than ${SIDE_TYPES} types`);
     for (const [t, T] of Object.entries(L.types)) {
+      if (!fits(t)) no(`type ${t} has a name too long`);
       // SIDE_PAGES: the page is unit+0x110 bits 23..25, a 3-bit field, so the engine reaches at most 7 numbered pages
       if (!obj(T) || !Array.isArray(T.pages) || T.pages.length > SIDE_PAGES || !T.pages.every(screen))
         no(`type ${t} has no list of at most ${SIDE_PAGES} page screens`);
@@ -591,11 +596,14 @@ const WikiSim = (() => {
        so it does nothing.
 
        STOP is 0x419BE0's STOP branch (0x419CB6..0x419CF2, called from 0x41AA00 at 0x41ABCC), DISASSEMBLED: it writes
-       main+0x2CC3 = 1 (0x419CC2), which replaces an armed build's mode 0x0E, so it disarms; then the order issuer
-       0x48CF30 gives every selected unit of the controlled player the STOP order through 0x43AFC0 (0x48D1F4), which
-       replaces its orders. The path tests no canstop, so a unit without it is stopped along with the selection's
-       others. With Shift held the issuer passes shift = 1 to 0x43AFC0, whose effect on STOP is not established; the
-       sim empties the orders either way [INFERRED]. */
+       main+0x2CC3 = 1 (0x419CC2), which replaces an armed build's mode 0x0E, so it disarms; it clears main+0x2CC6
+       bit 3 (0x419CCE..0x419CD8) and leaves bit 5, the Shift-placement bit, so a placement made earlier in this Shift
+       hold still disarms when Shift is released (0x4992D8); then the order issuer 0x48CF30 gives every selected unit
+       of the controlled player the STOP order through 0x43AFC0 (0x48D1F4), which replaces its orders. The path tests
+       no canstop, so a unit without it is stopped along with the selection's others. With Shift held the issuer
+       passes shift = 1 to 0x43AFC0, whose effect on STOP is not established; the sim empties the orders either way
+       [INFERRED]. The placement gesture ends with the mode: tagpu_place.c ends it on the first record the handler
+       takes in any mode but 14, which comes before any release could commit it. */
     function act(g) {
       const u = sb.shown, n = u ? npages(u.type) : 0;
       if ((g.role === 'prev' || g.role === 'next') && n) {
@@ -604,7 +612,7 @@ const WikiSim = (() => {
       } else if (g.role === 'orders' && n) u.bp = false;
       else if (g.role === 'buildtab' && n) u.bp = true;
       else if (g.role === 'stop') {
-        disarm();
+        st.mode = null; st.gesture = null;
         for (const v of selected()) if (v.owner === 0) v.orders = [];
       }
       else if (g.role === 'build' && defined(g.unit) && !mobile(g.unit)) { disarm(); st.mode = g.unit; st.drag = null; }

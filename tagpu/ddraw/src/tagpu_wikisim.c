@@ -26,6 +26,23 @@
 
 enum { KIND_NONE, KIND_MEX, KIND_GEO };
 enum { HOW_BUILD, HOW_RECLAIM };
+/* where the cursor is (sim.js over()); NONE: a mouse button that has not gone down */
+enum { OVER_NONE, OVER_SIDE, OVER_MAP, OVER_DEAD };
+
+static const WIKITRIPROW TRIP_ROWS[WIKI_TRIP_NROWS] = WIKI_TRIP_ROWS;
+/* Every row ends on the button's down, or it would arm at another tick in another mod; and the
+   inputs it makes -- its glide, a move, a down and an up per press, the glide on (row 0 has none),
+   the button's down and up and the glide back -- fit WIKISIM.trip_in. Checked as this file
+   compiles. */
+#define TRIP_FITS_(k, g, h, gp, b, hv) \
+    ((g) + (k) * ((h) + (gp)) + (b) + (hv) == WIKI_TRIP_DOWN \
+     && (g) + 3 * (k) + ((k) ? (b) : 0) + 2 + (WIKI_TRIP - WIKI_TRIP_UP) <= WIKI_TRIP_EVENTS)
+#define TRIP_FITS(k, row) TRIP_FITS_(k, row)
+typedef char trip_row0_fits[TRIP_FITS(0, WIKI_TRIP_ROW0) ? 1 : -1];
+typedef char trip_row1_fits[TRIP_FITS(1, WIKI_TRIP_ROW1) ? 1 : -1];
+typedef char trip_row2_fits[TRIP_FITS(2, WIKI_TRIP_ROW2) ? 1 : -1];
+typedef char trip_row3_fits[TRIP_FITS(3, WIKI_TRIP_ROW3) ? 1 : -1];
+typedef char trip_rows_four[WIKI_TRIP_NROWS == 4 ? 1 : -1];
 
 /* quickChoice's and site's answer, a candidate building: sim.js's `c` */
 typedef struct {
@@ -72,6 +89,12 @@ static int kind(const WIKISIM* s, int t) { return def(s, t)->extracts > 0 ? KIND
 /* mirrors tagpu_resource.c strength: ExtractsMetal for a mex, EnergyMake otherwise */
 static double strength(const WIKISIM* s, int t) { return kind(s, t) == KIND_MEX ? def(s, t)->extracts : def(s, t)->energy_make; }
 static int can_build(const WIKISIM* s, const WIKIUNIT* u, int t) { return (int)((def(s, u->type)->builds >> t) & 1); }
+/* the layout's pages of a type, NULL for none or with the sidebar off */
+static const WIKIPAGES* type_pages(const WIKISIM* s, int t)
+{
+    return s->lay && s->ltype[t] >= 0 ? &s->lay->type[s->ltype[t]] : NULL;
+}
+static int npages(const WIKISIM* s, int t) { const WIKIPAGES* p = type_pages(s, t); return p ? p->npage : 0; }
 
 /* ---- the grid ---- */
 
@@ -105,7 +128,45 @@ static BOX box(const WIKISIM* s, int t, int ox, int oz)
     return b;
 }
 
+/* Where the cursor is: the column left of x = 0, the map, or the dead band under a map shorter
+   than the column. The map is closed at its far edges because the stage clamps a pointer beyond
+   them onto exactly W x 16 or H x 16, which the map rules have always read as the map. With the
+   sidebar off everything is the map. */
+static int over(const WIKISIM* s)
+{
+    if (!s->lay) return OVER_MAP;
+    if (s->cursor_x < 0) return OVER_SIDE;
+    return s->cursor_x <= s->W * CELL && s->cursor_z <= s->H * CELL ? OVER_MAP : OVER_DEAD;
+}
+
+/* sim.js's Math.min(Math.max(v, 0), m): a v at or below 0, -0 included, gives +0 */
+static double clamp_map(double v, double m) { return v > 0 ? (v < m ? v : m) : 0.0; }
+
+/* the cursor the map rules read: with the sidebar, clamped onto the map, so a drag released over
+   the column selects up to its edge */
+static XZ map_cursor(const WIKISIM* s)
+{
+    XZ c;
+    c.x = s->lay ? clamp_map(s->cursor_x, s->W * CELL) : s->cursor_x;
+    c.z = s->lay ? clamp_map(s->cursor_z, s->H * CELL) : s->cursor_z;
+    return c;
+}
+
 /* ---- units: each one on the heap, so a pointer to it holds while the list grows ---- */
+
+/* a unit joins the world, appended in the room new_unit made for it. With the sidebar it carries
+   its page state: 0x485CD5 creates a unit whose type has numbered pages with bit 22 set and page
+   1; any other unit has neither. */
+static WIKIUNIT* enter(WIKISIM* s, WIKIUNIT* u)
+{
+    if (s->lay) {
+        const int n = npages(s, u->type);
+        u->bp = n >= 1;
+        u->page = n >= 1 ? 1 : 0;
+    }
+    s->unit[s->nunit++] = u;
+    return u;
+}
 
 /* THE ONE APPEND to a unit's orders, so a list never holds more than PLACE_LIST_CAP: an order
    past it is dropped, as sim.js's append drops it. Every order a player's clicks add comes
@@ -152,10 +213,9 @@ static WIKIUNIT* new_unit(WIKISIM* s, int type, int owner, double built, const c
     return u;
 }
 
-/* a structure at its site, appended in the room new_unit made for it. It faces (0, 1), toward the
-   viewer, whatever its scene gives: TA's default heading 0x8000 is the centre of the spawn's
-   0x8000 - BuildAngle/2 + rand(BuildAngle) (0x485A40, tagpu_native.c ghost_one), and the
-   simulation has no randomness. */
+/* a structure at its site. It faces (0, 1), toward the viewer, whatever its scene gives: TA's
+   default heading 0x8000 is the centre of the spawn's 0x8000 - BuildAngle/2 + rand(BuildAngle)
+   (0x485A40, tagpu_native.c ghost_one), and the simulation has no randomness. */
 static WIKIUNIT* place(WIKISIM* s, WIKIUNIT* u, int ox, int oz)
 {
     u->ox = ox;
@@ -164,8 +224,7 @@ static WIKIUNIT* place(WIKISIM* s, WIKIUNIT* u, int ox, int oz)
     u->z = (oz + fpz(s, u->type) / 2.0) * CELL;
     u->hx = 0;
     u->hz = 1;
-    s->unit[s->nunit++] = u;
-    return u;
+    return enter(s, u);
 }
 
 /* (hx, hz): the scene's facing, already a unit vector (tagpu_wikidata.c) */
@@ -179,8 +238,7 @@ static WIKIUNIT* add(WIKISIM* s, int type, int owner, double x, double z, double
         u->z = z;
         u->hx = hx;
         u->hz = hz;
-        s->unit[s->nunit++] = u;
-        return u;
+        return enter(s, u);
     }
     return place(s, u, bound_cell(js_round(x / CELL - fpx(s, type) / 2.0)), bound_cell(js_round(z / CELL - fpz(s, type) / 2.0)));
 }
@@ -532,7 +590,8 @@ static WIKIUNIT* unit_at(const WIKISIM* s, double x, double z);
    is nearer the cursor. */
 static int quick_choice(WIKISIM* s, int shift, CHOICE* out)
 {
-    const double x = s->cursor_x, z = s->cursor_z;
+    const XZ m = map_cursor(s);
+    const double x = m.x, z = m.z;
     const WIKIUNIT* target;
     const uint64_t offered = available(s);
     CHOICE best[3];
@@ -590,13 +649,363 @@ static WIKIUNIT* unit_at(const WIKISIM* s, double x, double z)
     return hit;
 }
 
+/* ---- the sidebar's rules; none of them runs with the sidebar off (`lay` NULL) ---- */
+
+static void disarm(WIKISIM* s);
+
+static const WIKISCREEN* screen_of(const WIKISIM* s, int i) { return &s->lay->screen[i]; }
+
+/* a point of the stage in the column's own pixels is (x + 128, z); the minimap's 128 x 128 there
+   takes no click */
+static int on_minimap(double x, double z)
+{
+    return x + WIKI_SIDE_W >= 0 && x + WIKI_SIDE_W < WIKI_SIDE_MINIMAP && z >= 0 && z < WIKI_SIDE_MINIMAP;
+}
+
+/* The engine's hit tests (the pump's 0x4AA1F6..0x4AA216, the button handler's 0x4A6B79..0x4A6B95
+   on the press and 0x4A6E84..0x4A6EAC on the release) take the whole pixels x .. x + w - 1 and
+   y .. y + h - 1, DISASSEMBLED. The cursor here is a double, and the pixel it stands in is its
+   floor, so that is half-open on the doubles. */
+static int in_rect(const WIKIGADGET* g, double px, double pz)
+{
+    return px >= g->x && px < g->x + g->w && pz >= g->y && pz < g->y + g->h;
+}
+
+static int inside(const WIKISCREEN* sc, const WIKIGADGET* g, double x, double z)
+{
+    return x < 0 && !on_minimap(x, z) && in_rect(g, x + WIKI_SIDE_W, z - sc->y);
+}
+
+/* a build button's unit as a type of the entry, -1 when it names none the entry defines */
+static int unit_def(const WIKISIM* s, const WIKIGADGET* g)
+{
+    return g->unit[0] ? tagpu_wikidata_def(s->entry, g->unit) : -1;
+}
+
+/* OWNER QUESTION Q-O1, the recommended answer: a build button is live only when the entry defines
+   its unit and the shown builder's list holds it, and greyed otherwise, so a button "comes alive"
+   when an entry adds its unit (decision 7's principle) */
+static int build_live(const WIKISIM* s, const WIKIGADGET* g, const WIKIUNIT* shown)
+{
+    const int t = unit_def(s, g);
+    return !g->grey && t >= 0 && shown && can_build(s, shown, t);
+}
+
+/* A gadget's state as the stage draws it: -1 not drawn, 0 normal, 1 pressed or the current tab, 2
+   greyed (frame 2 at rest, GUI_ButtonDraw 0x4A5F40). The tabs follow bit 22 as 0x41A120 sets them;
+   every order button but STOP is greyed (decision 7: an entry that needs an order adds it to the
+   simulation). STOP is live while some selected unit of the player's has canstop: the router
+   0x41B2E0 ORs def+0x245 bit 3 over the controlled player's selected units (0x41B4AC) and 0x41A120
+   greys STOP when the OR is clear (0x41A2F3), DISASSEMBLED. That 0x41A120 un-greys it for the next
+   selection, because a route to the screen shown reloads it, is [INFERRED]. */
+static int gadget_state(const WIKISIM* s, const WIKIGADGET* g, const WIKIUNIT* shown, int pressed)
+{
+    const int n = shown ? npages(s, shown->type) : 0;
+    int i;
+    if (g->hidden) return -1;
+    switch (g->role) {
+    case WIKI_ROLE_ORDERS:   return n >= 1 ? (shown->bp ? 0 : 1) : 2;
+    case WIKI_ROLE_BUILDTAB: return n >= 1 ? (shown->bp ? 1 : 0) : 2;
+    case WIKI_ROLE_BUILD:    return build_live(s, g, shown) ? pressed : 2;
+    case WIKI_ROLE_STOP:
+        for (i = 0; i < s->nunit; i++)
+            if (s->unit[i]->sel && s->unit[i]->owner == 0 && def(s, s->unit[i]->type)->canstop) return pressed;
+        return 2;
+    case WIKI_ROLE_ORDER:    return 2;
+    default:                 return pressed;
+    }
+}
+
+static int live(int state) { return state == 0 || state == 1; }
+
+/* a tab (commonattribs 0x10) acts on its press; every other button on its release */
+static int press_acts(const WIKIGADGET* g) { return g->role == WIKI_ROLE_ORDERS || g->role == WIKI_ROLE_BUILDTAB; }
+
+/* THE GADGET A PRESS AT (x, z) LANDS ON, as the GUI pump 0x4A9FD0 finds it, DISASSEMBLED: it
+   offers the press to the gadgets in file order and stops at the first whose handler acts. An
+   inactive gadget is skipped (0x4AA1CE..0x4AA1D3) and a greyed one's handler refuses at once
+   (0x4A6B10..0x4A6B19), so neither takes it. A button that acts on the release takes the capture
+   and lets the scan go on (0x4A6BAC, 0x49FC50 at 0x4A6BB3), so where buttons overlap the LAST one
+   holds it. A tab acts during its own turn: it drops the capture an earlier button took (0x4A6C28)
+   and returns 1 (0x4A6CD4), which ends the scan (0x4AA549..0x4AA54E), so the FIRST tab holding the
+   point wins over any button before or after it. -1: none. */
+static int gadget_at(const WIKISIM* s, int screen, const WIKIUNIT* shown, double x, double z)
+{
+    const WIKISCREEN* sc = screen_of(s, screen);
+    int i, last = -1;
+    for (i = 0; i < sc->ngadget; i++) {
+        const WIKIGADGET* g = &sc->gadget[i];
+        if (!live(gadget_state(s, g, shown, 0)) || !inside(sc, g, x, z)) continue;
+        if (press_acts(g)) return i;
+        last = i;
+    }
+    return last;
+}
+
+/* THE PAGE ROUTER, 0x41B2E0, run from the frame loop at 0x4969B4: nothing of the player's selected
+   shows the side's MAIN2; EXACTLY ONE selected unit whose type has pages shows its numbered page
+   while bit 22 is set, else its orders page (<NAME>0.GUI) when the type has one; anything else,
+   two builders of one type included, shows the side's GEN, with the unit shown when there is
+   exactly one. GEN and MAIN2 are the player's side's. The sim routes after every input and every
+   tick, where the engine re-routes a frame or more later: a known difference of at most a frame.
+   A screen change drops the capture, as the engine's page swap reloads the screen and its
+   gadgets. */
+static void route(WIKISIM* s)
+{
+    const WIKISIDEDEF* side = &s->lay->side[s->lay->player_side];
+    const WIKIPAGES* T;
+    WIKIUNIT* u = NULL;
+    int i, nsel = 0, screen;
+    for (i = 0; i < s->nunit; i++)
+        if (s->unit[i]->sel && s->unit[i]->owner == 0 && nsel++ == 0) u = s->unit[i];
+    if (nsel != 1) u = NULL;
+    T = u ? type_pages(s, u->type) : NULL;
+    /* THE BOUND on the screen shown: every index taken here is one tagpu_wikilayout_check held
+       below lay->nscreen (a side's main2 and gen, a type's pages and orders), and u->page is 1..n:
+       enter() starts it at 1 and act() is its only other writer, wrapping within 1..n */
+    screen = !nsel ? side->main2
+           : T && u->bp && u->page >= 1 && u->page <= T->npage ? T->page[u->page - 1]
+           : T && T->orders >= 0 ? T->orders : side->gen;
+    if (screen != s->screen) s->cap = -1;
+    s->screen = screen;
+    s->shown = u;
+}
+
+/* A BUTTON ACTS ON THE RELEASE INSIDE IT, as the engine's: 0x4A6AE0 returns 1 for a release inside
+   a captured button, 0x4A9E98 stores its index and 0x4AA797 calls the screen's handler 0x41AA00.
+   The tabs, which act on the press, come here too. PREV and NEXT step the shown unit's page as
+   0x41BF10 and 0x41BDE0 do, wrapping within 1..n, and set bit 22; ORDERS and BUILD clear and set
+   bit 22 (0x41C180). A build button arms its building; a mobile unit's button would queue it at a
+   factory (0x419B00), which no entry has, so it does nothing.
+
+   STOP is 0x419BE0's STOP branch (0x419CB6..0x419CF2, called from 0x41AA00 at 0x41ABCC),
+   DISASSEMBLED: main+0x2CC3 = 1 (0x419CC2) replaces an armed build's mode 0x0E, so it disarms; it
+   clears main+0x2CC6 bit 3 and leaves bit 5, the Shift-placement bit (shift_placed); the order
+   issuer 0x48CF30 then gives every selected unit of the controlled player the STOP order through
+   0x43AFC0 (0x48D1F4), which replaces its orders, with no canstop test. Its effect with Shift held
+   is not established; the orders are emptied either way [INFERRED]. The placement gesture ends
+   with the mode, as tagpu_place.c ends it on the first record handled in any mode but 14. */
+static void act(WIKISIM* s, const WIKIGADGET* g)
+{
+    WIKIUNIT* u = s->shown;
+    const int n = u ? npages(s, u->type) : 0;
+    int i, t;
+    if ((g->role == WIKI_ROLE_PREV || g->role == WIKI_ROLE_NEXT) && n) {
+        u->page = g->role == WIKI_ROLE_NEXT ? (u->page == n ? 1 : u->page + 1) : (u->page < 2 ? n : u->page - 1);
+        u->bp = 1;
+    } else if (g->role == WIKI_ROLE_ORDERS && n) u->bp = 0;
+    else if (g->role == WIKI_ROLE_BUILDTAB && n) u->bp = 1;
+    else if (g->role == WIKI_ROLE_STOP) {
+        s->mode = -1;
+        s->has_gesture = 0;
+        for (i = 0; i < s->nunit; i++)
+            if (s->unit[i]->sel && s->unit[i]->owner == 0) s->unit[i]->norder = 0;
+    } else if (g->role == WIKI_ROLE_BUILD && (t = unit_def(s, g)) >= 0 && !mobile(s, t)) {
+        disarm(s);
+        s->mode = t;
+        s->has_drag = 0;
+    }
+    route(s);
+}
+
+/* a press over the column: a tab drops the capture (0x4A6C28) and acts now; any other button is
+   captured, either mouse button alike (0x41AA00 never tests which one arms a structure) */
+static void press_side(WIKISIM* s, int key)
+{
+    const int i = gadget_at(s, s->screen, s->shown, s->cursor_x, s->cursor_z);
+    const WIKIGADGET* g;
+    if (i < 0) return;
+    g = &screen_of(s, s->screen)->gadget[i];
+    if (press_acts(g)) {
+        s->cap = -1;
+        act(s, g);
+    } else {
+        s->cap = i;
+        s->cap_key = key;
+    }
+}
+
+/* the release of the captured button: inside its gadget, still live, it acts; outside, nothing */
+static void release_side(WIKISIM* s)
+{
+    const WIKISCREEN* sc = screen_of(s, s->screen);
+    const int i = s->cap;
+    s->cap = -1;
+    /* THE BOUND: a capture is a gadget of the screen shown, since route() drops it with any
+       change of screen */
+    if (i < 0 || i >= sc->ngadget) return;
+    if (live(gadget_state(s, &sc->gadget[i], s->shown, 0)) && inside(sc, &sc->gadget[i], s->cursor_x, s->cursor_z))
+        act(s, &sc->gadget[i]);
+}
+
+/* the sidebar as the view shows it; `under` reads the cursor unclamped, as sim.js's view does */
+static void side_view(const WIKISIM* s, WIKIVSIDE* v)
+{
+    const WIKISCREEN* sc = screen_of(s, s->screen);
+    const WIKIUNIT* under = over(s) == OVER_MAP ? unit_at(s, s->cursor_x, s->cursor_z) : NULL;
+    int i;
+    memset(v, 0, sizeof *v);
+    v->h = s->lay->height;
+    v->screen = s->screen;
+    if (s->shown) snprintf(v->unit, sizeof v->unit, "%s", s->shown->id);
+    v->page = s->shown ? s->shown->page : 0;
+    /* sc->ngadget <= WIKI_SIDE_GADGETS, the length of state[] (tagpu_wikilayout_check) */
+    v->nstate = sc->ngadget;
+    for (i = 0; i < sc->ngadget; i++) {
+        const WIKIGADGET* g = &sc->gadget[i];
+        v->state[i] = gadget_state(s, g, s->shown, s->cap == i && inside(sc, g, s->cursor_x, s->cursor_z));
+    }
+    if (under) snprintf(v->under, sizeof v->under, "%s", under->id);
+}
+
+/* ---- the build trip: a scripted `build` input played out through the sidebar ----
+   A data input {build: T} at tick t arms nothing itself: it becomes generated inputs, a glide, the
+   pager presses and the button's own press, that go through exactly the path the player's clicks
+   take in Try it. They are made when tick t is fed, from the state at t, and the arm is the
+   release at t + WIKI_TRIP_UP whatever the route (tagpu_wikisim.h says why it is fixed). */
+
+enum { GEN_MOVE, GEN_DOWN, GEN_UP };
+
+static void gen_push(WIKISIM* s, int at, int kind, double x, double z)
+{
+    WIKIINPUT* in;
+    /* THE BOUND: one trip makes at most WIKI_TRIP_EVENTS inputs (TRIP_FITS), and trip() starts
+       the table afresh once the last trip's are all fed, which the data rule makes so before the
+       next build: no other input stands in a trip */
+    if (s->ntrip_in >= WIKI_TRIP_EVENTS) return;
+    in = &s->trip_in[s->ntrip_in++];
+    memset(in, 0, sizeof *in);
+    in->at = at;
+    in->down = in->up = in->build = -1;
+    if (kind == GEN_MOVE) {
+        in->has = WIKI_IN_MOVE;
+        in->move.x = x;
+        in->move.z = z;
+    } else if (kind == GEN_DOWN) in->down = WIKI_KEY_LMB;
+    else in->up = WIKI_KEY_LMB;
+}
+
+static XZ centre_of(const WIKISCREEN* sc, const WIKIGADGET* g)
+{
+    XZ c;
+    c.x = -WIKI_SIDE_W + g->x + g->w / 2.0;
+    c.z = sc->y + g->y + g->h / 2.0;
+    return c;
+}
+
+typedef struct { int k; XZ press[WIKI_TRIP_NROWS - 1]; XZ button; } TRIPPLAN;
+
+/* the plan: the shown unit's first page holding a live T button, the pagers the nearer way round
+   (a tie goes to NEXT), and each press's point. Each point is the pager on the page it is pressed
+   on, and every point is checked to land on its gadget, so the release at t + WIKI_TRIP_UP arms T
+   in any layout this accepts. 0: T cannot be reached here. */
+static int plan_trip(const WIKISIM* s, int T, TRIPPLAN* plan)
+{
+    const WIKIUNIT* u = s->shown;
+    const WIKIPAGES* TP = u ? type_pages(s, u->type) : NULL;
+    const int n = TP ? TP->npage : 0;
+    const char* name = def(s, T)->name;
+    int p = 0, gi = -1, k, i, j, c, page, knext, kprev, dir;
+    const WIKISCREEN* sc;
+    /* no data input presses a tab, so bp is set in a scripted demo; a build met on the orders page
+       is locked */
+    if (!n || !u->bp) return 0;
+    for (k = 1; k <= n && !p; k++) {
+        sc = screen_of(s, TP->page[k - 1]);
+        for (i = 0; i < sc->ngadget; i++) {
+            const WIKIGADGET* g = &sc->gadget[i];
+            if (g->role == WIKI_ROLE_BUILD && !strcmp(g->unit, name) && live(gadget_state(s, g, u, 0))) {
+                p = k;
+                gi = i;
+                break;
+            }
+        }
+    }
+    if (!p) return 0;
+    c = u->page;
+    knext = ((p - c) % n + n) % n;
+    kprev = ((c - p) % n + n) % n;
+    dir = knext <= kprev ? WIKI_ROLE_NEXT : WIKI_ROLE_PREV;
+    plan->k = knext < kprev ? knext : kprev;
+    /* THE BOUND: n <= WIKI_SIDE_PAGES = 7, so the nearer way round is at most 3 presses, the rows
+       TRIP_ROWS has; and c is 1..n (route() says why), so every page below is too */
+    if (plan->k >= WIKI_TRIP_NROWS || c < 1 || c > n) return 0;
+    for (j = 0, page = c; j < plan->k; j++) {
+        const int scr = TP->page[page - 1];
+        sc = screen_of(s, scr);
+        for (i = 0; i < sc->ngadget && !(sc->gadget[i].role == dir && live(gadget_state(s, &sc->gadget[i], u, 0))); i++) {}
+        if (i == sc->ngadget) return 0;
+        plan->press[j] = centre_of(sc, &sc->gadget[i]);
+        if (gadget_at(s, scr, u, plan->press[j].x, plan->press[j].z) != i) return 0;
+        page = dir == WIKI_ROLE_NEXT ? (page == n ? 1 : page + 1) : (page < 2 ? n : page - 1);
+    }
+    sc = screen_of(s, TP->page[p - 1]);
+    plan->button = centre_of(sc, &sc->gadget[gi]);
+    return gadget_at(s, TP->page[p - 1], u, plan->button.x, plan->button.z) == gi;
+}
+
+/* THE GLIDE, exact in both languages: step i of n from a to b is
+   a + trunc((b - a) * (i*i*(3n - 2i)) / (n*n*n)), each axis, evaluated in that order. Step n is b
+   itself: the formula reaches b only when b - a is a whole number, and the cursor must stand
+   exactly on the button and exactly back where it started. */
+static double glide_at(double a, double b, int i, int n)
+{
+    return i == n ? b : a + trunc((b - a) * (double)(i * i * (3 * n - 2 * i)) / (double)(n * n * n));
+}
+
+static void glide(WIKISIM* s, int t, XZ from, XZ to, int n, int t0)
+{
+    int i;
+    for (i = 1; i <= n; i++) gen_push(s, t + t0 + i, GEN_MOVE, glide_at(from.x, to.x, i, n), glide_at(from.z, to.z, i, n));
+}
+
+static void trip(WIKISIM* s, int T)
+{
+    const int t = s->feeding;
+    const WIKITRIPROW* R;
+    TRIPPLAN plan;
+    XZ a, cur;
+    int j;
+    /* OWNER QUESTION Q-O2, the recommended answer: a build this layout cannot reach stops the demo
+       here, holding the frame under the entry's "Turned off in this mod" badge (decision 4),
+       rather than playing on unarmed */
+    if (!plan_trip(s, T, &plan)) {
+        s->locked = T;
+        return;
+    }
+    if (s->trip_next == s->ntrip_in) s->ntrip_in = s->trip_next = 0;
+    a.x = s->cursor_x;
+    a.z = s->cursor_z;
+    R = &TRIP_ROWS[plan.k];
+    cur = a;
+    if (plan.k) {
+        glide(s, t, a, plan.press[0], R->glide, 0);
+        cur = plan.press[0];
+        for (j = 0; j < plan.k; j++) {
+            const int d = R->glide + j * (R->hold + R->gap);
+            /* a mod whose pages move the pager: the cursor steps onto it, before the press of the
+               same tick */
+            if (plan.press[j].x != cur.x || plan.press[j].z != cur.z)
+                gen_push(s, t + d, GEN_MOVE, plan.press[j].x, plan.press[j].z);
+            gen_push(s, t + d, GEN_DOWN, 0, 0);
+            gen_push(s, t + d + R->hold, GEN_UP, 0, 0);
+            cur = plan.press[j];
+        }
+    }
+    glide(s, t, cur, plan.button, plan.k ? R->back : R->glide, plan.k ? R->glide + plan.k * (R->hold + R->gap) : 0);
+    gen_push(s, t + WIKI_TRIP_DOWN, GEN_DOWN, 0, 0);
+    gen_push(s, t + WIKI_TRIP_UP, GEN_UP, 0, 0);
+    glide(s, t, plan.button, a, WIKI_TRIP - WIKI_TRIP_UP, WIKI_TRIP_UP);
+}
+
 static void evaluate(WIKISIM* s, WIKIPLACE* p);
 
 /* the build-menu mode: the ghost is manual_cursor's snapped site (no legality), or where the cursor
    is, as the build cursor 0x4197D0 rounds it */
-static WIKIHOVER hover(WIKISIM* s)
+static WIKIHOVER map_hover(WIKISIM* s)
 {
-    const double x = s->cursor_x, z = s->cursor_z;
+    const XZ m = map_cursor(s);
+    const double x = m.x, z = m.z;
     const int shift = s->held[WIKI_KEY_SHIFT];
     WIKIHOVER h;
     CHOICE c;
@@ -624,6 +1033,14 @@ static WIKIHOVER hover(WIKISIM* s)
     return h;
 }
 
+/* none while the cursor is off the map, though the gesture's evaluation goes on */
+static WIKIHOVER hover(WIKISIM* s)
+{
+    WIKIHOVER h = map_hover(s);
+    if (over(s) != OVER_MAP) h.kind = WIKI_HOVER_NONE;
+    return h;
+}
+
 /* ---- the placement gesture, tagpu_place.c as sim.js mirrors it ---- */
 
 /* mirrors tagpu_place.c's cursor site: the build cursor's rectangle, snapped as the ghost is.
@@ -631,15 +1048,16 @@ static WIKIHOVER hover(WIKISIM* s)
 static PlaceCell cursor_site(WIKISIM* s)
 {
     const int t = s->mode;
+    const XZ m = map_cursor(s);
     PlaceCell p;
     CHOICE c;
     int cx, cz;
-    if (!s->held[WIKI_KEY_ALT] && snapped_site(s, t, s->cursor_x, s->cursor_z, 0, s->held[WIKI_KEY_SHIFT], &c)) {
+    if (!s->held[WIKI_KEY_ALT] && snapped_site(s, t, m.x, m.z, 0, s->held[WIKI_KEY_SHIFT], &c)) {
         cx = c.ox;
         cz = c.oz;
     } else {
-        cx = origin(s->cursor_x, fpx(s, t));
-        cz = origin(s->cursor_z, fpz(s, t));
+        cx = origin(m.x, fpx(s, t));
+        cz = origin(m.z, fpz(s, t));
     }
     p.cx = (int16_t)(cx < -32768 ? -32768 : cx > 32767 ? 32767 : cx);
     p.cz = (int16_t)(cz < -32768 ? -32768 : cz > 32767 ? 32767 : cz);
@@ -747,7 +1165,8 @@ static void classify(WIKISIM* s, int t, const PlaceCell* cells, int n, int ring,
    queue order. As cells. */
 static int ring_target(const WIKISIM* s, int* tx, int* tz, int* tw, int* th)
 {
-    const WIKIUNIT* u = unit_at(s, s->cursor_x, s->cursor_z);
+    const XZ m = map_cursor(s);
+    const WIKIUNIT* u = unit_at(s, m.x, m.z);
     int i, j, px, pz;
     if (u) {
         *tw = fpx(s, u->type);
@@ -756,8 +1175,8 @@ static int ring_target(const WIKISIM* s, int* tx, int* tz, int* tw, int* th)
         *tz = origin(u->z, *th);
         return 1;
     }
-    px = cell_of(s->cursor_x);
-    pz = cell_of(s->cursor_z);
+    px = cell_of(m.x);
+    pz = cell_of(m.z);
     for (i = 0; i < s->nunit; i++) {
         const WIKIUNIT* b = s->unit[i];
         if (!is_builder(s, b)) continue;
@@ -967,6 +1386,7 @@ static void unqueue(WIKISIM* s, CHOICE* c)
 /* a move: the selected mobile units to points SPACING apart across the cursor, in selection order */
 static void move_order(WIKISIM* s, int shift)
 {
+    const XZ c = map_cursor(s);
     int i, n = 0, m = 0;
     for (i = 0; i < s->nunit; i++)
         if (s->unit[i]->sel && s->unit[i]->owner == 0 && mobile(s, s->unit[i]->type)) n++;
@@ -976,8 +1396,8 @@ static void move_order(WIKISIM* s, int shift)
         if (!(u->sel && u->owner == 0 && mobile(s, u->type))) continue;
         memset(&o, 0, sizeof o);
         o.k = WIKI_ORDER_MOVE;
-        o.x = s->cursor_x + (m++ - (n - 1) / 2.0) * SPACING;
-        o.z = s->cursor_z;
+        o.x = c.x + (m++ - (n - 1) / 2.0) * SPACING;
+        o.z = c.z;
         assign(s, u, &o, 1, shift);
     }
 }
@@ -989,6 +1409,7 @@ static void right_click(WIKISIM* s, int shift)
 {
     CHOICE c;
     WIKIUNIT* u;
+    XZ m;
     int i;
     if (s->mode >= 0) { disarm(s); return; }
     if (quick_choice(s, shift, &c)) {
@@ -999,7 +1420,8 @@ static void right_click(WIKISIM* s, int shift)
         quick_order(s, &c, shift);
         return;
     }
-    u = unit_at(s, s->cursor_x, s->cursor_z);
+    m = map_cursor(s);
+    u = unit_at(s, m.x, m.z);
     if (u && u->owner == 0 && !mobile(s, u->type) && u->built < 1) {
         const WIKIORDER o = order_build(u->type, u->ox, u->oz);
         for (i = 0; i < s->nunit; i++)
@@ -1015,7 +1437,7 @@ static void right_click(WIKISIM* s, int shift)
    Shift-placement bit: releasing Shift then disarms. */
 static void place_click(WIKISIM* s, int shift)
 {
-    const WIKIHOVER h = hover(s);
+    const WIKIHOVER h = map_hover(s);
     XZ at;
     int i, j;
     if (h.kind != WIKI_HOVER_PLACE || !h.ok) return;
@@ -1038,7 +1460,8 @@ static void place_click(WIKISIM* s, int shift)
 
 static void select_units(WIKISIM* s, int shift)
 {
-    const double x = s->cursor_x, z = s->cursor_z;
+    const XZ m = map_cursor(s);
+    const double x = m.x, z = m.z;
     WIKIUNIT* u;
     int i;
     if (s->has_drag && s->drag_active) {
@@ -1082,51 +1505,74 @@ static void step_spacing(WIKISIM* s, int key)
     s->spacing[s->mode] = v < 0 ? 0 : v > PLACE_SPACING_MAX ? PLACE_SPACING_MAX : v;
 }
 
+/* A scripted demo with the sidebar on plays a `build` out as its trip; Try it, and a demo without
+   the sidebar, arm at once (the wiki never sends `build`, and the rule cases use it as their
+   shortcut). */
 static void input(WIKISIM* s, const WIKIINPUT* ev)
 {
     if (ev->has & WIKI_IN_CAPTION) s->caption = ev->caption;
     if (ev->has & WIKI_IN_BUILD) {
-        disarm(s);
-        s->mode = ev->build >= 0 && ev->build < s->entry->ndef ? ev->build : -1;
-        s->has_drag = 0;
+        /* tagpu_wikidata_trips refused a trip's build naming no type before the sim started */
+        if (s->trips) {
+            if (ev->build >= 0 && ev->build < s->entry->ndef) trip(s, ev->build);
+        } else {
+            disarm(s);
+            s->mode = ev->build >= 0 && ev->build < s->entry->ndef ? ev->build : -1;
+            s->has_drag = 0;
+        }
     }
     if (ev->has & WIKI_IN_MOVE) {
+        XZ c;
         s->cursor_x = ev->move.x;
         s->cursor_z = ev->move.z;
-        if (s->has_drag && sq(s->cursor_x - s->drag_x0) + sq(s->cursor_z - s->drag_z0) > DRAG * DRAG) s->drag_active = 1;
+        c = map_cursor(s);
+        if (s->has_drag && sq(c.x - s->drag_x0) + sq(c.z - s->drag_z0) > DRAG * DRAG) s->drag_active = 1;
     }
     if (ev->down == WIKI_KEY_Z || ev->down == WIKI_KEY_X) {
         s->held[ev->down] = 1;
         step_spacing(s, ev->down);
     } else if (ev->down >= 0 && ev->down < WIKI_NKEYS && !s->held[ev->down]) {
-        int shift;
+        const int mouse = ev->down == WIKI_KEY_LMB || ev->down == WIKI_KEY_RMB;
+        int shift, where;
         s->held[ev->down] = 1;
         shift = s->held[WIKI_KEY_SHIFT];
-        /* with a building armed a left press carrying Shift starts a gesture at the cursor site
-           instead of placing */
-        if (ev->down == WIKI_KEY_LMB) {
-            if (s->mode >= 0 && shift) {
-                s->gesture = cursor_site(s);
-                s->has_gesture = 1;
-            } else if (s->mode >= 0) place_click(s, 0);
-            else {
-                s->has_drag = 1;
-                s->drag_active = 0;
-                s->drag_x0 = s->cursor_x;
-                s->drag_z0 = s->cursor_z;
+        where = over(s);
+        /* a mouse button's press over the column is the column's; over the dead band it is
+           nobody's */
+        if (mouse) s->down_on[ev->down] = where;
+        if (where == OVER_SIDE && mouse) press_side(s, ev->down);
+        else if (where == OVER_MAP) {
+            /* with a building armed a left press carrying Shift starts a gesture at the cursor
+               site instead of placing */
+            if (ev->down == WIKI_KEY_LMB) {
+                if (s->mode >= 0 && shift) {
+                    s->gesture = cursor_site(s);
+                    s->has_gesture = 1;
+                } else if (s->mode >= 0) place_click(s, 0);
+                else {
+                    const XZ c = map_cursor(s);
+                    s->has_drag = 1;
+                    s->drag_active = 0;
+                    s->drag_x0 = c.x;
+                    s->drag_z0 = c.z;
+                }
             }
-        }
-        if (ev->down == WIKI_KEY_RMB) {
-            s->has_drag = 0;
-            right_click(s, shift);
+            if (ev->down == WIKI_KEY_RMB) {
+                s->has_drag = 0;
+                right_click(s, shift);
+            }
         }
     }
     if (ev->up >= 0 && ev->up < WIKI_NKEYS && s->held[ev->up]) {
         s->held[ev->up] = 0;
-        if (ev->up == WIKI_KEY_LMB && s->has_gesture) release(s);
-        else if (ev->up == WIKI_KEY_LMB && s->has_drag) {
-            select_units(s, s->held[WIKI_KEY_SHIFT]);
-            s->has_drag = 0;
+        /* a release runs the map rules only for a press that went down on the map */
+        if (s->cap >= 0 && s->cap_key == ev->up) release_side(s);
+        else if (s->down_on[ev->up] == OVER_MAP) {
+            if (ev->up == WIKI_KEY_LMB && s->has_gesture) release(s);
+            else if (ev->up == WIKI_KEY_LMB && s->has_drag) {
+                select_units(s, s->held[WIKI_KEY_SHIFT]);
+                s->has_drag = 0;
+            }
         }
         /* 0x4992D8: Shift found up after a placement in this hold disarms, as after a stock Shift-click */
         if (ev->up == WIKI_KEY_SHIFT) {
@@ -1134,6 +1580,7 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
             s->shift_placed = 0;
         }
     }
+    if (s->lay) route(s);
     s->hover = hover(s);
 }
 
@@ -1202,9 +1649,12 @@ static void credit(const WIKISIM* s, WIKIUNIT* u, WIKIUNIT* st, int how)
 
 static void shift_order(WIKIUNIT* u) { splice_orders(u, 0, 1); }
 
+/* the unit leaves the list and its memory goes; the sidebar's shown unit goes with it, which
+   route() would make so on this tick's end anyway */
 static void remove_unit(WIKISIM* s, WIKIUNIT* u)
 {
     int i, k = 0;
+    if (s->shown == u) s->shown = NULL;
     for (i = 0; i < s->nunit; i++)
         if (s->unit[i] != u) s->unit[k++] = s->unit[i];
     s->nunit = k;
@@ -1292,10 +1742,12 @@ static void advance(WIKISIM* s)
 
 /* THE CURSOR'S SHAPE (WIKI_CURSOR_*, the game's cursor for each): the build-menu mode, else a
    selection holding a mobile unit of the player's, else none. Quick Build's ghost changes nothing
-   here: it is drawn from the packet and leaves the engine's cursor as the selection has it. */
+   here: it is drawn from the packet and leaves the engine's cursor as the selection has it. Off
+   the map it is the arrow: the GUI shows cursornormal [INFERRED, capture C5]. */
 static int cursor_shape(const WIKISIM* s)
 {
     int i;
+    if (over(s) != OVER_MAP) return WIKI_CURSOR_ARROW;
     if (s->mode >= 0) return WIKI_CURSOR_BUILD;
     for (i = 0; i < s->nunit; i++)
         if (s->unit[i]->sel && s->unit[i]->owner == 0 && mobile(s, s->unit[i]->type)) return WIKI_CURSOR_MOVE;
@@ -1316,9 +1768,13 @@ static void cursor_tick(WIKISIM* s, int now)
     s->cursor_shape = k;
 }
 
-/* a script's inputs of tick `t` are shown first by tick t, which the step's cursor_tick records */
+/* a script's inputs of tick `t` are shown first by tick t, which the step's cursor_tick records; a
+   tick's generated inputs come before its data inputs, and within a trip's tick a move comes
+   before a press */
 static void feed(WIKISIM* s, int t)
 {
+    s->feeding = t;
+    while (s->trip_next < s->ntrip_in && s->trip_in[s->trip_next].at <= t) input(s, &s->trip_in[s->trip_next++]);
     while (s->next < s->nscript && s->script[s->next]->at == t) input(s, s->script[s->next++]);
 }
 
@@ -1335,7 +1791,9 @@ void tagpu_wikisim_step(WIKISIM* s)
     feed(s, t);
     advance(s);
     s->tick = t;
-    s->done = s->tick >= s->end;
+    /* a locked build ends the demo on its own tick, which then holds under the entry's badge */
+    s->done = s->tick >= s->end || s->locked >= 0;
+    if (s->lay) route(s);
     s->hover = hover(s);
     cursor_tick(s, t);
 }
@@ -1494,14 +1952,18 @@ const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s)
     v->cursor_since = s->cursor_since;
     memcpy(v->held, s->held, sizeof v->held);
     if ((v->has_drag = s->has_drag && s->drag_active)) {
+        const XZ c = map_cursor(s);
         v->drag_x0 = s->drag_x0;
         v->drag_z0 = s->drag_z0;
-        v->drag_x1 = s->cursor_x;
-        v->drag_z1 = s->cursor_z;
+        v->drag_x1 = c.x;
+        v->drag_z1 = c.z;
     }
     v->caption = s->caption;
     v->pace = s->PACE;
     v->mode = s->mode;
+    /* the column, only with the sidebar on; then the build a demo could not reach */
+    if ((v->has_side = s->lay != NULL)) side_view(s, &v->side);
+    v->locked = s->locked;
     return v;
 }
 
@@ -1626,6 +2088,20 @@ uint64_t tagpu_wikisim_hash(const WIKISIM* s)
         fnv_double(&h, s->drag_z0);
     }
     fnv_str(&h, s->caption);
+
+    fnv_int(&h, s->lay != NULL);
+    if (s->lay) {
+        WIKIVSIDE v;
+        side_view(s, &v);
+        fnv_int(&h, v.h);
+        fnv_str(&h, s->lay->screen[v.screen].name);
+        fnv_str(&h, v.unit);
+        fnv_int(&h, v.page);
+        fnv_int(&h, v.nstate);
+        for (i = 0; i < v.nstate; i++) fnv_int(&h, v.state[i]);
+        fnv_str(&h, v.under);
+    }
+    fnv_str(&h, s->locked >= 0 ? def(s, s->locked)->name : "");
     return h;
 }
 
@@ -1692,7 +2168,19 @@ static int scene_units(WIKISIM* s, const WIKISCENE* sc)
     return 1;
 }
 
-int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int scripted, char* err, size_t errn)
+/* the scene gives the player a mobile builder: sim.js builders() without the selection test */
+static int scene_builder(const WIKIENTRY* e, const WIKISCENE* sc)
+{
+    int i;
+    for (i = 0; sc && i < sc->nunit; i++) {
+        const WIKIDEF* t = &e->def[sc->unit[i].def];
+        if (sc->unit[i].owner == 0 && t->max_velocity > 0 && t->worker_time > 0) return 1;
+    }
+    return 0;
+}
+
+int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int scripted, const WIKILAYOUT* lay,
+                       char* err, size_t errn)
 {
     const WIKISCENE* a = &e->scene;
     const WIKISCENE* b = d ? &d->scene : NULL;
@@ -1700,6 +2188,23 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     const size_t cells = (size_t)a->w * a->h;
     int i, k;
     memset(s, 0, sizeof *s);
+    /* a layout is checked whole before any sim reads it, as sim.js's checked() does; every index
+       read out of it below is then in range */
+    if (lay && !tagpu_wikilayout_check(lay, err, errn)) return 0;
+    /* THE SIDEBAR, on or off for the sim's whole life: a demo shows it when its `sidebar` says so,
+       by default when the scene gives the player a mobile builder; Try it shows it whenever the
+       scene does, whatever the demo said */
+    s->lay = lay && (scripted && d && d->has_sidebar ? d->sidebar : scene_builder(e, a) || scene_builder(e, b))
+           ? lay : NULL;
+    s->trips = scripted && s->lay;
+    if (s->trips && d && !tagpu_wikidata_trips(d, err, errn)) return 0;
+    for (i = 0; i < e->ndef; i++) {
+        s->ltype[i] = -1;
+        for (k = 0; s->lay && k < s->lay->ntype; k++)
+            if (!strcmp(s->lay->type[k].name, e->def[i].name)) s->ltype[i] = k;
+    }
+    s->cap = -1;
+    s->locked = -1;
     s->entry = e;
     s->W = a->w;
     s->H = a->h;
@@ -1746,7 +2251,9 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
         qsort((void*)s->script, (size_t)d->ninput, sizeof *s->script, by_tick);
         s->nscript = d->ninput;
     }
+    if (s->lay) route(s);
     feed(s, 0);
+    s->done = s->locked >= 0;
     s->hover = hover(s);
     s->cursor_shape = cursor_shape(s);
     s->cursor_since = 0;
