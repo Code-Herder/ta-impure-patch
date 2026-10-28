@@ -253,9 +253,9 @@ static int side_bind(const WIKISTAGEVIEW* v, const WIKIART* art, const WIKISIDE*
     if (w3 && art->data && s_entry >= 0 && s_entry < art->data->nentry)
         for (i = 0; i < w3->nstage; i++)
             if (!strcmp(w3->stage[i].entry, art->data->entry[s_entry].id)) { st = &w3->stage[i]; break; }
-    /* the side the wiki's sims play, side 0 (tagpu_wiki.c start): the record carries no side of
-       its own */
-    if (!tagpu_wikiside_compose(side, v, 0, st ? st->minimap : NULL, st && st->minimap ? st->mm_w * st->mm_h : 0, c))
+    /* the side the view shows, whose PANELSIDE is drawn: data, bounded by the composer against the
+       layout's sides */
+    if (!tagpu_wikiside_compose(side, v, v->side.index, st ? st->minimap : NULL, st && st->minimap ? st->mm_w * st->mm_h : 0, c))
         return 0;
     if (!s_colGen || side != s_colOf || !col_same(c, &s_col[s_colCur])) {
         memset(s_colRgba, 0, sizeof s_colRgba);
@@ -294,6 +294,7 @@ static void view_bound(WIKISTAGEVIEW* v)
     if (v->has_side != 1 || v->layout_src >= WIKISTAGE_LAYOUT_N) v->has_side = 0;
     HOLD(v->side.h, WIKI_SIDE_ROWS);
     HOLD(v->side.nstate, WIKI_SIDE_GADGETS);
+    if (v->side.index < -1 || v->side.index >= WIKI_SIDE_SIDES) v->side.index = -1;
     if (v->side.under < -1 || v->side.under >= v->nunit) v->side.under = -1;
     if (v->locked < -1 || v->locked >= v->ntype) v->locked = -1;
 #undef HOLD
@@ -302,8 +303,22 @@ static void view_bound(WIKISTAGEVIEW* v)
     v->caption[WIKISTAGE_CAPTION - 1] = 0;
 }
 
-/* the record into the layout's page state: the page's fields, and the caption, the keys and the
-   locked build the demo's view holds */
+/* THE CASTING THE TEXT IS FILLED WITH, from the record's layout side: the published WIKISIDE's,
+   read through tagpu_wikiside_get, whose interlocked read pairs with the loader's one publishing
+   store, so the block is whole; it is immutable and never freed, so the pointer holds for the
+   process. The game thread names a side only after it read WIKISIDE_READY, which is final; the
+   side is data all the same, bounded against WIKI_SIDE_SIDES and the layout's sides, and any
+   other value, or no published block, fills with each entry's own names. */
+static const WIKICASTING* casting_of(int side)
+{
+    const WIKISIDE* s = NULL;
+    if (side < 0 || side >= WIKI_SIDE_SIDES || tagpu_wikiside_get(&s) != WIKISIDE_READY || !s || side >= s->layout.nside)
+        return NULL;
+    return &s->casting[side];
+}
+
+/* the record into the layout's page state: the page's fields, the context its text is filled
+   with, and the caption, the keys and the locked build the demo's view holds */
 static void page_of(WIKIPAGE* st, const TAGPU_PK_WIKI* w, const WIKISTAGEVIEW* v)
 {
     int i;
@@ -317,6 +332,8 @@ static void page_of(WIKIPAGE* st, const TAGPU_PK_WIKI* w, const WIKISTAGEVIEW* v
     st->speed = w->speed == 2 ? 2 : 1;
     st->try_it = w->try_it;
     st->mod = w->mod;
+    st->iface = w->iface == 1;
+    st->casting = casting_of(w->cast_side);
     memcpy(st->held, w->held, sizeof st->held);
     st->held[sizeof st->held - 1] = 0;
     st->caption[0] = 0;

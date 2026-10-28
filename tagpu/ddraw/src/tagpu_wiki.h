@@ -77,8 +77,12 @@ void tagpu_wiki_init(void);
    tagpu_wiki.check. `again`: this fill redoes one made for the same publish, which the slot's
    growth discarded. The first fill of a publish closes a window the last published packet carried
    no record of (tagpu_wiki_carried), so the wiki is never open past one frame that cannot show it.
-   Every fill that returns 1 is followed by one tagpu_wiki_carried. */
-int  tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again);
+   Every fill that returns 1 is followed by one tagpu_wiki_carried.
+   THE PLAYER'S CONTEXT, read by the caller from the engine on this thread at this fill: `side` the
+   controlled player's sidedata side (PlayerInfo+0x95), -1 for none -- data, which the wiki maps
+   through the published WIKISIDE's side_of_engine -- and `iface` the Interface Type, 0 or 1. A
+   fill given another pair than the last restarts the open window's demo on it. */
+int  tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again, int side, int iface);
 
 /* The whole record did not fit the packet: `w` made a head without the stage -- has_stage 0, and
    a message on the stage instead -- and the head's length returned, for the caller to place. */

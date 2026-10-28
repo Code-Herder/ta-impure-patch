@@ -77,12 +77,17 @@ typedef struct { float from_x, from_z, to_x, to_z; uint8_t kind; } WIKISTAGELINE
    (WIKISTAGEART.side_layout): the wiki data's fixture, or the published WIKISIDE's own. */
 enum { WIKISTAGE_LAYOUT_NONE, WIKISTAGE_LAYOUT_FIXTURE, WIKISTAGE_LAYOUT_MOD, WIKISTAGE_LAYOUT_N };
 
-/* THE SIDEBAR, WIKIVSIDE as the stage draws it (tagpu_wikisim.h): the column's rows, the routed
-   screen, each gadget's state and the unit under the cursor, the last as an index of the view's
-   `unit`. The copy holds each to its array; the render thread bounds `screen` against the
-   layout's nscreen and `nstate` against the screen's gadgets where it reads them. */
+/* THE SIDEBAR, WIKIVSIDE as the stage draws it (tagpu_wikisim.h): the column's rows, the side
+   shown, the routed screen, each gadget's state and the unit under the cursor, the last as an
+   index of the view's `unit`. The copy holds each to its array; the render thread bounds `index`
+   against the layout's nside, `screen` against its nscreen and `nstate` against the screen's
+   gadgets where it reads them. */
 typedef struct {
     int16_t h;                          /* the layout's height: 480 .. WIKI_SIDE_ROWS      */
+    int8_t  index;                      /* the layout side shown (WIKIVSIDE.index): its
+                                           prefix names the whitebox buttons and its
+                                           PANELSIDE is drawn; -1 none. Data: the render
+                                           thread bounds it against the layout's sides    */
     int16_t screen;                     /* an index into the view's layout's `screen`      */
     int16_t nstate;
     int16_t under;                      /* an index of `unit`, -1 for none                 */
@@ -122,8 +127,9 @@ typedef struct {
     uint8_t        has_side;            /* the sidebar is on: the stage draws its column   */
     uint8_t        layout_src;          /* WIKISTAGE_LAYOUT_*: the layout `side` indexes   */
     WIKISTAGESIDE  side;
-    int16_t        locked;              /* the type a scripted build could not reach in
-                                           this layout, an index into `type`; -1 none      */
+    int16_t        locked;              /* the type the demo stopped on (WIKIVIEW.locked),
+                                           with the sidebar on or off, an index into
+                                           `type`; -1 none: the page shows its badge       */
     int16_t        ntype;
     char           type[WIKI_MAX_DEFS][WIKISTAGE_LABEL];    /* the types' names: a queued
                                            site's and the ghost's label                    */

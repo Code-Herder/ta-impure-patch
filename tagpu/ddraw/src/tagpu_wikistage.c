@@ -84,6 +84,7 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
     out->has_side = 0;
     out->layout_src = WIKISTAGE_LAYOUT_NONE;
     memset(&out->side, 0, sizeof out->side);
+    out->side.index = -1;
     out->locked = -1;
     if (!v || v->w <= 0 || v->h <= 0) return 0;
 
@@ -175,6 +176,7 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
         out->has_side = 1;
         out->layout_src = (uint8_t)(layout_src > 0 && layout_src < WIKISTAGE_LAYOUT_N ? layout_src : WIKISTAGE_LAYOUT_NONE);
         out->side.h = (int16_t)(sd->h > 0 && sd->h <= WIKI_SIDE_ROWS ? sd->h : 0);
+        out->side.index = (int8_t)(sd->index >= 0 && sd->index < WIKI_SIDE_SIDES ? sd->index : -1);
         out->side.screen = (int16_t)(sd->screen >= 0 && sd->screen < WIKI_SIDE_SCREENS ? sd->screen : -1);
         n = sd->nstate > 0 ? sd->nstate < WIKI_SIDE_GADGETS ? sd->nstate : WIKI_SIDE_GADGETS : 0;
         for (i = 0; i < n; i++) out->side.state[i] = (int8_t)(sd->state[i] >= -1 && sd->state[i] <= 2 ? sd->state[i] : -1);
@@ -185,8 +187,10 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
                 out->side.under = (int16_t)i;
                 break;
             }
-        out->locked = (int16_t)(v->locked >= 0 && v->locked < WIKI_MAX_DEFS ? v->locked : -1);
     }
+    /* A LOCK REACHES THE PAGE WITH THE SIDEBAR OFF TOO: a scene unit or a build of a cast the
+       casting leaves unbound stops a demo that has no sidebar, and the page's badge says so */
+    out->locked = (int16_t)(v->locked >= 0 && v->locked < WIKI_MAX_DEFS ? v->locked : -1);
     n = e->ndef < WIKI_MAX_DEFS ? e->ndef : WIKI_MAX_DEFS;
     for (i = 0; i < n; i++)
         if (cut(out->type[i], sizeof out->type[i], e->def[i].name)) t |= WIKISTAGE_TRUNC_LABEL;
@@ -533,14 +537,13 @@ static void sring(B* c, const SBOX* b, double s, uint32_t col)
     ring(c, b->x + s / 2, b->y + s / 2, b->w - s, b->h - s, s, col);
 }
 
-/* a whitebox button's name: its unit, or its gadget name without the prefix of side 0, the side
-   tagpu_wiki.c's simulations play (their WIKISIMCTX; the view's side.index names it) (ARMORDERS ->
-   ORDERS). The layout is checked
-   (tagpu_wikilayout_check), so every name in it is terminated inside its array and it has a
-   side 0. */
-static const char* named(const WIKILAYOUT* L, const WIKIGADGET* g)
+/* a whitebox button's name: its unit, or its gadget name without the prefix of the side the view
+   shows (stage.js: L.sides[sv.index]), none for a side the layout does not have (ARMORDERS ->
+   ORDERS). The layout is checked (tagpu_wikilayout_check), so every name in it is terminated
+   inside its array; `side` is the record's, data, bounded here against the layout's sides. */
+static const char* named(const WIKILAYOUT* L, const WIKIGADGET* g, int side)
 {
-    const char* prefix = L->nside >= 1 ? L->side[0].prefix : "";
+    const char* prefix = side >= 0 && side < L->nside && side < WIKI_SIDE_SIDES ? L->side[side].prefix : "";
     const size_t n = strlen(prefix);
     if (g->role == WIKI_ROLE_BUILD && g->unit[0]) return g->unit;
     if (n && strlen(g->name) > n && !strncmp(g->name, prefix, n)) return g->name + n;
@@ -640,7 +643,7 @@ static void side(B* c, const WIKISTAGEVIEW* v, const WIKISTAGEART* art, double o
         }
         rect(c, b.x, b.y, b.w, b.h, HEX(st == 1 ? SIDE_PRESSED : SIDE_BUTTON));
         sring(c, &b, s, HEX(SIDE_EDGE));
-        label_to(c, *lt ? lt : named(L, g), b.h, st == 1 ? b.cx + s : b.cx, st == 1 ? b.cy + s : b.cy,
+        label_to(c, *lt ? lt : named(L, g, v->side.index), b.h, st == 1 ? b.cx + s : b.cx, st == 1 ? b.cy + s : b.cy,
                  fmax(s, b.w - 4 * s), HEX(SIDE_LABEL));
         c->grp = 0;
     }

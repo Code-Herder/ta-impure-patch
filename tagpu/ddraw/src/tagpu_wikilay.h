@@ -13,6 +13,14 @@
    A WIKILAY is immutable once loaded and its lights set, and is never freed while the wiki can
    draw.
 
+   THE TEXT IS FILLED HERE, AS IT IS READ: an entry's title (in the window and as its tree leaf),
+   subtitle, paragraphs and demo titles go through tagpu_wikitext_fill with the words of that
+   entry under the page's casting and interface type (WIKIPAGE.casting, .iface), as wiki.js
+   `fill` does; the caption comes filled. It is a pure fill over immutable blocks -- the wiki's
+   data and the published WIKISIDE's casting, neither ever freed -- so the render thread reads
+   nothing the game thread writes, and the record carries two small values rather than every
+   text of the window filled.
+
    Pure C99 and the C library, so tools/wiki/ compiles it natively (wikilaycheck.c).
 
    The screen is given in pixels; every coordinate out is in wiki units, the screen's height / 720,
@@ -54,7 +62,12 @@ typedef struct {
                                    (the view's `locked`): the badge shows, as for an entry the
                                    data locks (wiki.js `off`)                                   */
     char     held[HUD_KEYLEN];  /* the key of the control held down; "" none                    */
-    char     caption[WIKI_CAPTION]; /* the demo's caption, UTF-8; "" none                       */
+    char     caption[WIKI_CAPTION]; /* the demo's caption, UTF-8, filled; "" none               */
+    const WIKICASTING* casting; /* the casting the text names units by, NULL: each entry's own
+                                   names. LIFETIME: it lies in the published WIKISIDE block,
+                                   immutable and never freed (tagpu_wikiasset.h)                */
+    int      iface;             /* the Interface Type the text names buttons by: 1 exactly when
+                                   1, as tagpu_wikitext_words takes it                          */
     unsigned keys;              /* bit WIKI_KEY_* (tagpu_wikidata.h): held in the demo's view   */
 } WIKIPAGE;
 
@@ -144,8 +157,10 @@ int           tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const WIK
    button held, and every entry's every demo playing at 1x and ended at 2x with Try it yourself
    held. Else 0 with the first failure in `err`. The build itself refuses only a missing argument
    or its memory, so the states test the op, run, text, hit and group bounds; another scroll, a
-   held key, a caption or another screen is not built here, and a frame that overflows all the
-   same is drawn with the ops that fit (tagpu_wikistate.c says so once). `scratch` takes the ops
+   held key, a caption, a casting's names or another screen is not built here -- the states are
+   filled at interface type 1, whose words are the longer, with each entry's own names -- and a
+   frame that overflows all the same is drawn with the ops that fit (tagpu_wikistate.c says so
+   once). `scratch` takes the ops
    of the states tried. A load-time call: any thread, before the layout is published. */
 int           tagpu_wikilay_check(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
                                   HUDOPS* scratch, char* err, size_t errn);

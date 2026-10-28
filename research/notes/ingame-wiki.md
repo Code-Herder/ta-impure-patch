@@ -521,8 +521,25 @@ press*](exe-reverse-engineering.html#the-left-sidebar-its-pages-its-buttons-and-
   fixture once the loader has refused it or could not start. Until then the stage says
   "loading…" and no demo starts, so none ever runs on a layout that arrives later. The parity
   check and the capture trigger wait for the same answer.
-- **A simulation's refusal** (a layout, the build trip's data rule, memory) is shown on the stage
-  in its own words, up to 127 bytes (`TAGPU_WIKI_MSG`), as the mockup shows its `simErr`.
+- **A simulation's refusal** (a layout, the context, the entry's binding to the casting, a scene
+  structure the casting's footprint no longer fits, the resolved script's data rule, memory) is
+  shown on the stage in its own words, up to 127 bytes (`TAGPU_WIKI_MSG`), as the mockup shows its
+  `simErr`.
+- **The demo plays the player's side and Interface Type.** At every packet fill, on the game
+  thread in game, `tagpu_packet_pub.c` reads the controlled player's side, byte `+0x95` of the
+  PlayerInfo of the record `main+0x1B63 + 0x14B·byte[main+0x2A42]` -- the record the engine's
+  sidebar router reads (0x41AD1C..0x41AD66), the viewer's in a replay -- and `main+0x37EFA == 1`,
+  and hands both to `tagpu_wiki_fill` by value. The wiki maps the side through the published
+  block's `side_of_engine`: a mapped side plays on the mod's layout with that side's casting; an
+  unmapped one, or none, plays the fixture with no casting. A fill given another pair restarts the
+  open window's demo, so no demo plays past one fill on a stale side or interface.
+- **The text is filled on the render thread, as it is read.** The caption is filled on the game
+  thread with the running demo's words; the title, subtitle, paragraphs, demo titles and tree
+  leaves are filled by `tagpu_wikilay.c` from the record's two values -- the layout side whose
+  casting names the units, and the Interface Type -- over the wiki's data and the published
+  casting. Both are immutable and never freed, and the fill is a pure function of them, so the
+  render thread reads nothing the game thread writes, and the record carries two small values
+  rather than a copy of every text in the window.
 
 ### The rules
 
@@ -1182,10 +1199,11 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
   figures and the captions are stock ARM's: a mod with other extractors or other build lists shows
   the stock demos, and a demo whose build the mod's sidebar cannot reach stops under the badge. The
   per-mod tutorials are [the sidebar plan](ingame-wiki-sidebar-plan.html)'s decisions 13 to 17.
-- **The stage plays the right-click interface (Interface Type 1).** A player on left-click orders
-  sees demos and a Try it whose buttons differ from theirs; following `main+0x37EFA` is the plan's
-  decision 18, and the engine map's *What each Interface Type does with a press* is its input.
-  Captions and the keys strip do not follow the player's key bindings (decision 19).
+- **The mixed interface value is shown as left-click.** The typed command `IFace` stores any
+  integer and the registry load's clamp is signed, so `main+0x37EFA` can hold a value outside 0
+  and 1. The engine's four `== 1` readers then take the type-0 branch and its two `!= 0` readers
+  (the right press 0x499162, a release 0x499352) the type-1 branch; the wiki plays the left-click
+  interface for any value but 1.
 - **The sidebar's paths not run in the game.** The fixture's fallback (a mod's layout refused, or
   the asset loader unable to start) and the "loading…" wait are covered by reading the code and
   by the loader's native fuzz (`assetcheck.py fuzz-side`), and held to the mockup by

@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_wikilay.h"
+#include "tagpu_wikitext.h"
 #include "tagpu_hudtext.h"
 #include "tagpu_json.h"
 #include "tagpu_mod.h"
@@ -70,6 +71,12 @@ static const char* const KEYCAP[WIKI_NKEYS] = { "Shift", "Alt", "Ctrl", "Z", "X"
 #if MAXGLYPH > TAGPU_HUDTEXT_MAX
 #error a line of one text must fit the glyphs the HUD draw sets of one op
 #endif
+#define MAXFILL     (4 * MAXGLYPH + 1)      /* a filled text's bytes: the code points the rules set,
+                                               four bytes at most each, and the terminator; a
+                                               longer fill is cut at a character (tagpu_wikitext.h) */
+enum { FILL_TITLE, FILL_SUB, FILL_ROW, FILL_N };    /* the texts filled at once: the entry's title
+                                               and subtitle are measured and then set, and a row,
+                                               a paragraph or a demo title is set as it is filled */
 
 /* layout.json's numbers, in units unless named */
 typedef struct {
@@ -122,7 +129,26 @@ typedef struct {
     int              off[MAXGLYPH + 1];
     float            pen[MAXGLYPH + 1];
     int              ls[MAXLINE], le[MAXLINE];  /* a wrapped text's lines, as code point ranges */
+    char             fill[FILL_N][MAXFILL];     /* the texts filled, by FILL_*                   */
 } C;
+
+/* text.js's fill(e, raw): `raw` (NULL reads "") with entry `e`'s words under the page's casting and
+   interface type, into fill buffer `slot`. The words point into the entry and the casting, both
+   immutable for as long as the build runs (tagpu_wikilay.h, THE TEXT IS FILLED HERE). */
+static const char* filled(C* c, int slot, const WIKIENTRY* e, const char* raw)
+{
+    WIKIWORDS w;
+    tagpu_wikitext_words(&w, e, c->st->casting, c->st->iface);
+    tagpu_wikitext_fill(raw, &w, c->fill[slot], sizeof c->fill[slot]);
+    return c->fill[slot];
+}
+
+/* wiki.js `fill(e, t) || id`: a text that fills to nothing shows its id */
+static const char* filled_or(C* c, int slot, const WIKIENTRY* e, const char* raw, const char* id)
+{
+    const char* t = filled(c, slot, e, raw);
+    return *t ? t : id;
+}
 
 /* ---- Chrome's rounding ------------------------------------------------------------------------- */
 
@@ -566,7 +592,7 @@ static double tree_rows(C* c, const PANEL* p, double w, int emit)
         rw.mark_w = U(c, g->mark);
         if (nd->entry >= 0) {
             const WIKIENTRY* e = &c->d->entry[nd->entry];
-            rw.text = e->title ? e->title : e->id;
+            rw.text = filled_or(c, FILL_ROW, e, e->title, e->id);
             rw.mark_icon = c->l->icon_dot;
             rw.locked = locked(c, nd->entry);
             if (nd->entry == c->st->entry) rw.part = c->l->part[P_ROW_SEL];
@@ -618,7 +644,7 @@ static double demo_rows(C* c, const PANEL* p, double w, int emit)
         memset(&rw, 0, sizeof rw);
         rw.part = c->l->part[i == c->st->demo ? P_ROW_SEL : P_ROW];
         rw.role = R_DEMO;
-        rw.text = e->demo[i].title ? e->demo[i].title : e->demo[i].id;
+        rw.text = filled_or(c, FILL_ROW, e, e->demo[i].title, e->demo[i].id);
         snprintf(num, sizeof num, "%d", i + 1);
         rw.mark = num;
         rw.mark_role = R_DEMO_NUM;
@@ -640,7 +666,7 @@ static double text_rows(C* c, const PANEL* p, double w, int emit)
     double y = 0;
     int i, ink = light(c, c->l->part[P_PANEL]);
     for (i = 0; e && i < e->ntext; i++) {
-        y += block(c, R_TEXT, c->l->g.line, e->text[i], p->cx, p->cy + y, w, ink, &p->view, emit);
+        y += block(c, R_TEXT, c->l->g.line, filled(c, FILL_ROW, e, e->text[i]), p->cx, p->cy + y, w, ink, &p->view, emit);
         y += U(c, c->l->g.text_para);
     }
     return y;
@@ -702,8 +728,8 @@ static void entry_col(C* c, R col)
     const double top = col.y + U(c, g->entry_pad[0]), ch = col.h - U(c, g->entry_pad[0]);
     const int wink = light(c, c->l->part[P_WINDOW]), off = !has_demo(c);
     const int lk = locked(c, c->st->entry) || c->st->sim_locked;
-    const char* title = e ? (e->title ? e->title : e->id) : S_CHOOSE;
-    const char* sub = e && e->subtitle ? e->subtitle : "";
+    const char* title = e ? filled_or(c, FILL_TITLE, e, e->title, e->id) : S_CHOOSE;
+    const char* sub = e ? filled(c, FILL_SUB, e, e->subtitle) : "";
     double th, sh, bh, ph, fixed, srow, y, ctl_h = U(c, g->ctl_h), cap_h = U(c, g->caption_h), keys_h = U(c, g->keys_h);
     int items, k;
     R sbox, stage;
@@ -937,6 +963,7 @@ int tagpu_wikilay_check(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
         st.bar = 24;
         st.entry = -1;
         st.speed = 1;
+        st.iface = 1;
         snprintf(st.held, sizeof st.held, "wiki");
         if (!check_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
         st.open = 1;

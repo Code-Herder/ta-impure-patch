@@ -64,7 +64,12 @@
    (below, *Try it yourself*) the stage's pointer, buttons and keys are the simulation's input,
    read against the same hit map.
 
-   Nothing here names engine memory: the two engine facts the pause needs are tagpu_menu.c's. */
+   THE CONTEXT (below, *the context*): the demo plays, and its text is filled for, the controlled
+   player's side and Interface Type, which the packet's fill reads from the engine and hands to
+   tagpu_wiki_fill by value.
+
+   Nothing here names engine memory: the two engine facts the pause needs are tagpu_menu.c's, and
+   the side and the interface type are tagpu_packet_pub.c's. */
 #include <windows.h>
 #include <windowsx.h>
 #include <stdio.h>
@@ -320,9 +325,15 @@ static unsigned s_costFrames;
 static uint32_t s_trunc;                        /* the copy's WIKISTAGE_TRUNC_* already said     */
 static int      s_saidHead;                     /* a stage the packet could not carry, said      */
 static uint32_t s_shot;                         /* the last capture asked for, 0 none            */
-static WIKIWORDS s_words;                       /* the running demo's fill words (start): they
+static WIKIWORDS s_words;                       /* the running demo's caption words (start): they
                                                    point into its entry, which the DLL never
-                                                   frees, and into nothing else                  */
+                                                   frees, and into its casting, in the published
+                                                   WIKISIDE block, never freed either            */
+static int      s_side = -2;                    /* the last fill's engine side, -1 none; -2 before
+                                                   the first fill                                */
+static int      s_iface = 1;                    /* the last fill's Interface Type, 0 or 1        */
+static WIKISIMCTX s_ctx;                        /* the context s_sim was started with            */
+static int      s_cast = -1;                    /* the layout side whose casting s_ctx holds, -1 */
 
 static const WIKIDATA* data(void)
 {
@@ -553,18 +564,59 @@ static int s_assets;
    layout it started with, and none starts while the answer is pending, so no demo ever runs on a
    layout that arrives after it started. ORDERING: tagpu_wikiside_get's read is interlocked, pairing
    with the loader's one publishing store, so the block it hands back was written whole before; the
-   block and the fixture are immutable and never freed, so the pointer holds for the process. */
-static int layout_now(const WIKIDATA* d, const WIKILAYOUT** lay, int* src)
+   block and the fixture are immutable and never freed, so the pointer holds for the process.
+   `*blk` (optional) gets the published block with the mod's layout, else NULL. */
+static int layout_now(const WIKIDATA* d, const WIKILAYOUT** lay, int* src, const WIKISIDE** blk)
 {
     const WIKISIDE* side = NULL;
     const int st = s_assets == ASSETS_FAILED ? WIKISIDE_REFUSED : tagpu_wikiside_get(&side);
+    if (blk) *blk = NULL;
     if (st == WIKISIDE_PENDING) return 0;
     if (st == WIKISIDE_READY && side) {
         *lay = &side->layout;
         *src = WIKISTAGE_LAYOUT_MOD;
+        if (blk) *blk = side;
     } else {
         *lay = d ? d->fixture : NULL;
         *src = *lay ? WIKISTAGE_LAYOUT_FIXTURE : WIKISTAGE_LAYOUT_NONE;
+    }
+    return 1;
+}
+
+/* ---- the context -----------------------------------------------------------------------------
+
+   THE CONTEXT A NEW SIMULATION PLAYS (WIKISIMCTX), and the text is filled for: on the mod's
+   layout, the layout side the player's engine side maps to and that side's casting; with the
+   fixture, or no layout, side 0 and no casting -- each with the last fill's Interface Type.
+   BOUND: s_side is the byte the packet's fill read at PlayerInfo+0x95, DATA: it indexes
+   side_of_engine only below WIKI_SIDE_SIDES, and the layout side it gives only below the layout's
+   sides; a side that does not map, like no side at all, plays the fixture with no casting, so a
+   wrong byte shows another side's tutorial and never reads outside the block.
+   LIFETIME: the casting lies inside the published WIKISIDE block, immutable and never freed, so
+   it outlives every simulation that holds it (WIKISIMCTX) and every WIKIWORDS taken from it.
+   ORDERING: the pair is this thread's, set by the fill; a fill that is given another pair restarts
+   the open window's demo (tagpu_wiki_fill), so no demo plays past one fill on a stale side or
+   interface, and a start between fills (an input handler) takes the last fill's pair.
+   0 while layout_now's answer is pending; `*cast` gets the layout side whose casting the context
+   holds, -1 none. */
+static int context_now(const WIKIDATA* d, const WIKILAYOUT** lay, int* src, WIKISIMCTX* ctx, int* cast)
+{
+    const WIKISIDE* blk;
+    ctx->side = 0;
+    ctx->cast = NULL;
+    ctx->iface = s_iface;
+    *cast = -1;
+    if (!layout_now(d, lay, src, &blk)) return 0;
+    if (blk) {
+        const int k = s_side >= 0 && s_side < WIKI_SIDE_SIDES ? blk->side_of_engine[s_side] : -1;
+        if (k >= 0 && k < blk->layout.nside && k < WIKI_SIDE_SIDES) {
+            ctx->side = k;
+            ctx->cast = &blk->casting[k];
+            *cast = k;
+        } else {
+            *lay = d ? d->fixture : NULL;
+            *src = *lay ? WIKISTAGE_LAYOUT_FIXTURE : WIKISTAGE_LAYOUT_NONE;
+        }
     }
     return 1;
 }
@@ -577,7 +629,8 @@ static void start(void)
     const WIKIDATA* d = data();
     const WIKIENTRY* e = entry_of(d);
     const WIKILAYOUT* lay;
-    int src;
+    WIKISIMCTX ctx;
+    int src, cast;
     char err[TAGPU_WIKI_MSG];
     try_release_all(0);
     s_nlog = s_logCut = 0;
@@ -590,25 +643,25 @@ static void start(void)
     if (!d) { s_want = 1; return; }                  /* the data loads on its own thread       */
     if (!e) return;
     if (s_demo < 0 || s_demo >= e->ndemo) { lstrcpynA(s_msg, "no demo", sizeof s_msg); return; }
-    /* THE FILL'S WORDS are the entry's authored names at interface 1, the mockup's defaults.
-       TODO(2E): the running side's casting and the player's interface type, from the fill */
-    tagpu_wikitext_words(&s_words, e, NULL, 1);
-    if (!layout_now(d, &lay, &src)) {
+    if (!context_now(d, &lay, &src, &ctx, &cast)) {
         s_want = 1;
         lstrcpynA(s_msg, "loading\xE2\x80\xA6", sizeof s_msg);
         return;
     }
-    /* a refusal -- the layout, the build trip's data rule, memory -- is shown on the stage in its
-       own words, as wiki.js shows the mockup's (`simErr`) */
-    /* the context sim.js gives a sim made with none: side 0, no casting, Interface Type 1.
-       TODO(2E): the player's side, its casting and the interface type, from the fill */
-    if (!tagpu_wikisim_init(&s_sim, e, &e->demo[s_demo], !s_try, lay, &(const WIKISIMCTX){ 0, NULL, 1 }, err, sizeof err)) {
+    /* THE CAPTION'S WORDS, of the context the demo plays (text.js words) */
+    tagpu_wikitext_words(&s_words, e, ctx.cast, ctx.iface);
+    /* a refusal -- the layout, the context, the entry's binding to the casting, a scene structure
+       the casting's footprint no longer fits, the resolved script's data rule, memory -- is shown
+       on the stage in its own words, as wiki.js shows the mockup's (`simErr`) */
+    if (!tagpu_wikisim_init(&s_sim, e, &e->demo[s_demo], !s_try, lay, &ctx, err, sizeof err)) {
         tagpu_logf("wiki: the demo %s/%s did not start - %s", e->id, e->demo[s_demo].id, err);
         lstrcpynA(s_msg, err, sizeof s_msg);
         return;
     }
     s_lay = lay;
     s_laySrc = src;
+    s_ctx = ctx;
+    s_cast = cast;
     s_simOn = 1;
 }
 
@@ -827,7 +880,9 @@ static void page_fill(TAGPU_PK_WIKI* w)
     w->shot = s_shot;
     if (s_simOn && e) {
         const WIKIVIEW* v = tagpu_wikisim_view(&s_sim);
-        t = tagpu_wikistage_copy(&w->stage, v, e, s_laySrc) & ~WIKISTAGE_TRUNC_CAPTION;
+        /* the entry the simulation plays, bound to its casting: the type names the stage labels
+           are the casting's (tagpu_wikisim.h); copied by value, as the view is */
+        t = tagpu_wikistage_copy(&w->stage, v, s_sim.entry, s_laySrc) & ~WIKISTAGE_TRUNC_CAPTION;
         /* THE CAPTION IS SHOWN FILLED (tagpu_wikitext.h); the view keeps it raw, as the hash does */
         if (tagpu_wikitext_fill(v->caption, &s_words, w->stage.caption, sizeof w->stage.caption))
             t |= WIKISTAGE_TRUNC_CAPTION;
@@ -841,8 +896,9 @@ static void page_fill(TAGPU_PK_WIKI* w)
     }
 }
 
-/* a layout's name as a JSON string: its UTF-8 bytes as they are, which is how both readers take
-   them (sim.js counts a name's UTF-8 bytes against WIKI_SIDE_NAME), the rest escaped */
+/* a UTF-8 string -- a layout's name, a casting's type or title, a filled caption -- as a JSON
+   string: its bytes as they are, which is how the readers take them (sim.js counts a name's UTF-8
+   bytes against WIKI_SIDE_NAME and a title's against TITLE_MAX), the rest escaped */
 static void ustr(FILE* f, const char* s, size_t n)
 {
     size_t i;
@@ -919,19 +975,24 @@ static void layout_json(FILE* f, const WIKILAYOUT* L)
 
 /* THE PARITY CHECK OF THE CODE THE GAME RUNS (tools/wiki_regression.py demos): every demo of every
    entry played to its end at once, here on the game thread in the DLL's i686 SSE2 build, on the
-   sidebar layout a demo would start on (layout_now; the caller waits for it), and its
-   tagpu_wikisim_hash logged in the form `node tools/wiki/simparity.mjs --hash` prints. The layout
-   is written to CHECK_LAYOUT first, for simparity's --layout (null: none). */
+   sidebar layout a demo would start on (layout_now; the caller waits for it), for every side of
+   that layout -- with its casting on the mod's layout -- at both Interface Types, and its
+   tagpu_wikisim_hash logged as `<entry>/<demo>/<side>/<iface> <hash>`: the hash
+   `node tools/wiki/simparity.mjs --hash --side <side> --iface <iface>` prints for `<entry>/<demo>`
+   (with --pack, on the mod's layout). The layout is written to CHECK_LAYOUT first, for simparity's
+   --layout (null: none). */
 static void check(void)
 {
     const WIKIDATA* d = data();
     const WIKILAYOUT* lay = NULL;
+    const WIKISIDE* blk = NULL;
     LARGE_INTEGER t0, t1;
     char err[160];
-    int i, j, n = 0, bad = 0, src = WIKISTAGE_LAYOUT_NONE;
+    int i, j, k, ifc, nside, n = 0, bad = 0, src = WIKISTAGE_LAYOUT_NONE;
     FILE* f;
     if (!d) { tagpu_logf("wiki check: the wiki's data is not loaded"); return; }
-    layout_now(d, &lay, &src);
+    layout_now(d, &lay, &src, &blk);
+    nside = lay && lay->nside > 0 ? (lay->nside < WIKI_SIDE_SIDES ? lay->nside : WIKI_SIDE_SIDES) : 1;
     if ((f = fopen(CHECK_LAYOUT ".tmp", "wb"))) {
         if (lay) layout_json(f, lay);
         else fputs("null", f);
@@ -942,26 +1003,30 @@ static void check(void)
     tagpu_logf("wiki check: the sidebar layout is %s, in %s", src == WIKISTAGE_LAYOUT_MOD ? "the mod's"
                : src == WIKISTAGE_LAYOUT_FIXTURE ? "the fixture" : "none", CHECK_LAYOUT);
     QueryPerformanceCounter(&t0);
-    for (i = 0; i < d->nentry; i++)
-        for (j = 0; j < d->entry[i].ndemo; j++) {
-            const WIKIENTRY* e = &d->entry[i];
-            WIKISIM* s = (WIKISIM*)malloc(sizeof *s);
-            long k = 0;
-            /* the context start() plays the stage's demo in */
-            if (!s || !tagpu_wikisim_init(s, e, &e->demo[j], 1, lay, &(const WIKISIMCTX){ 0, NULL, 1 }, err, sizeof err)) {
-                tagpu_logf("wiki check: %s/%s did not start - %s", e->id, e->demo[j].id, s ? err : "no memory");
-                free(s);
-                bad++;
-                continue;
-            }
-            /* a scripted demo is done at its end tick; the bound holds a script that never is */
-            while (!s->done && k++ < 1000000L) tagpu_wikisim_step(s);
-            tagpu_logf("wiki check: %s/%s %016llx", e->id, e->demo[j].id,
-                       (unsigned long long)tagpu_wikisim_hash(s));
-            tagpu_wikisim_free(s);
-            free(s);
-            n++;
-        }
+    for (k = 0; k < nside; k++)
+        for (ifc = 0; ifc <= 1; ifc++)
+            for (i = 0; i < d->nentry; i++)
+                for (j = 0; j < d->entry[i].ndemo; j++) {
+                    const WIKIENTRY* e = &d->entry[i];
+                    /* the contexts start() can give: the side's casting only on the mod's layout */
+                    const WIKISIMCTX ctx = { k, blk ? &blk->casting[k] : NULL, ifc };
+                    WIKISIM* s = (WIKISIM*)malloc(sizeof *s);
+                    long t = 0;
+                    if (!s || !tagpu_wikisim_init(s, e, &e->demo[j], 1, lay, &ctx, err, sizeof err)) {
+                        tagpu_logf("wiki check: %s/%s/%d/%d did not start - %s", e->id, e->demo[j].id, k, ifc,
+                                   s ? err : "no memory");
+                        free(s);
+                        bad++;
+                        continue;
+                    }
+                    /* a scripted demo is done at its end tick; the bound holds a script that never is */
+                    while (!s->done && t++ < 1000000L) tagpu_wikisim_step(s);
+                    tagpu_logf("wiki check: %s/%s/%d/%d %016llx", e->id, e->demo[j].id, k, ifc,
+                               (unsigned long long)tagpu_wikisim_hash(s));
+                    tagpu_wikisim_free(s);
+                    free(s);
+                    n++;
+                }
     QueryPerformanceCounter(&t1);
     tagpu_logf("wiki check: %d demos played, %d did not start, in %.0f ms", n, bad,
                s_qpf.QuadPart > 0 ? (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)s_qpf.QuadPart : 0.0);
@@ -1249,6 +1314,36 @@ static const char* key_name(int k)
     return s ? s : "";
 }
 
+/* A casting as a pack's casting record writes it ({"casts": {...}}, tools/wiki/sidepacks.py): what
+   tagpu_wikidata_casting reads back and simparity.mjs --try gives sim.js. Each figure at 17
+   significant digits, so the double read back is the one written. */
+static void casting_json(FILE* f, const WIKICASTING* c)
+{
+    int i, j, x, z, n;
+    fputs("{\"casts\":{", f);
+    for (i = 0; i < WIKI_NCAST; i++) {
+        const WIKICASTDEF* k = &c->cast[i];
+        fprintf(f, "%s\"%s\":", i ? "," : "", tagpu_wikidata_cast_name(i));
+        if (!k->bound) { fputs("null", f); continue; }
+        fputs("{\"type\":", f);
+        ustr(f, k->type, sizeof k->type);
+        fputs(",\"title\":", f);
+        ustr(f, k->title, sizeof k->title);
+        fprintf(f, ",\"footprint\":[%d,%d],\"buildTime\":%.17g,\"workerTime\":%.17g,\"buildDistance\":%.17g,"
+                   "\"maxVelocity\":%.17g,\"extracts\":%.17g,\"energyMake\":%.17g,\"canstop\":%d,\"vent\":%s,\"g\":[",
+                k->fx, k->fz, k->build_time, k->worker_time, k->build_distance, k->max_velocity, k->extracts,
+                k->energy_make, k->canstop, k->vent ? "true" : "false");
+        for (z = n = 0; z < WIKI_FP_MAX; z++)
+            for (x = 0; x < WIKI_FP_MAX; x++)
+                if (k->g[z] >> x & 1u) fprintf(f, "%s[%d,%d]", n++ ? "," : "", x, z);
+        fputs("],\"builds\":[", f);
+        for (j = n = 0; j < WIKI_NCAST; j++)
+            if (k->builds >> j & 1u) fprintf(f, "%s\"%s\"", n++ ? "," : "", tagpu_wikidata_cast_name(j));
+        fputs("]}", f);
+    }
+    fputs("}}", f);
+}
+
 /* THE STATE, FOR THE TESTS (tools/wiki_regression.py): written when tagpu_wiki.dump appears, after
    the fill's record is placed in the packet (`carried`: the bytes of it the packet holds), on this
    thread, as the replay HUD's tagpu_replayhud.dump is. The engine screen's size
@@ -1291,6 +1386,9 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
             s_playing, s_speed, s_simOn, s_simOn ? s_sim.tick : -1, done(),
             s_simOn ? (unsigned long long)tagpu_wikisim_hash(&s_sim) : 0ull, w->has_stage, s_costMax, s_costFrames);
     jstr(f, s_msg, sizeof s_msg);
+    /* the caption as the record carries it, filled, its UTF-8 as it is */
+    fprintf(f, ",\"caption\":");
+    ustr(f, w->has_stage ? w->stage.caption : "", sizeof w->stage.caption);
     /* Try it yourself: its held keys, every input given its simulation with its tick (the form
        tools/wiki/simparity.mjs --try reads), and the unit the hit map's frame was drawn at */
     fprintf(f, ",\"try\":%d,\"try_down\":[", s_try);
@@ -1313,13 +1411,18 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
     fprintf(f, "],\"u\":%.17g,\"map\":[%d,%d],\"side_h\":%d,\"view_drawn\":%d", (double)s_hit.u, e ? e->scene.w : 0,
             e ? e->scene.h : 0, (int)s_hit.side_h, (int)s_hit.view);
     /* the sidebar layout the simulation was started with, as simparity.mjs --try gives it to sim.js
-       (null: none); and which one it is */
+       (null: none), and which one it is; and its context, sim.js's ctx, the casting written whole */
     fprintf(f, ",\"layout_src\":\"%s\"", !s_simOn ? "" : s_laySrc == WIKISTAGE_LAYOUT_MOD ? "mod"
                : s_laySrc == WIKISTAGE_LAYOUT_FIXTURE ? "fixture" : "none");
+    fprintf(f, ",\"engine_side\":%d,\"engine_iface\":%d", s_side, s_iface);
     if (s_simOn) {
         fprintf(f, ",\"layout\":");
         if (s_lay) layout_json(f, s_lay);
         else fputs("null", f);
+        fprintf(f, ",\"ctx\":{\"side\":%d,\"iface\":%d,\"casting\":", s_ctx.side, s_ctx.iface);
+        if (s_ctx.cast) casting_json(f, s_ctx.cast);
+        else fputs("null", f);
+        fputc('}', f);
     }
     fprintf(f, ",\"bars\":[");
     for (i = 0; i < TAGPU_WIKI_NSCROLL; i++) {
@@ -1413,7 +1516,7 @@ static void assets_start(void)
 static int s_cut;
 static int s_ask;                       /* this fill answers the triggers                        */
 
-int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again)
+int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again, int side, int iface)
 {
     static unsigned calls;
     int cx, cy;
@@ -1425,7 +1528,7 @@ int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again)
         const WIKILAYOUT* lay;
         int src;
         assets_start();
-        if (layout_now(data(), &lay, &src)) {
+        if (layout_now(data(), &lay, &src, NULL)) {
             DeleteFileA(CHECK_ASK);
             check();
         }
@@ -1454,25 +1557,45 @@ int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again)
     }
     if (s_open) QueryPerformanceCounter(&s_costT0);
     else s_costT0.QuadPart = 0;
+    /* THE PLAYER'S CONTEXT MOVED: the open window's demo restarts on the new pair, before the page
+       is filled (*the context*) */
+    iface = iface == 1;
+    if (side != s_side || iface != s_iface) {
+        s_side = side;
+        s_iface = iface;
+        tagpu_logf("wiki: the player's side is %d and the interface type %d%s", side, iface,
+                   s_open ? " - the demo restarts" : "");
+        if (s_open) start();
+    }
     memset(w, 0, TAGPU_PK_WIKI_HEAD);
     w->open = (uint8_t)s_open;
     w->paused = (uint8_t)s_paused;
     w->ptr_x = w->ptr_y = -1;
     w->entry = w->demo = -1;
+    w->iface = (uint8_t)s_iface;
+    w->cast_side = -1;
     if (mouse_last_client(&cx, &cy)) {
         w->ptr_x = (int16_t)(cx < -32768 ? -32768 : cx > 32767 ? 32767 : cx);
         w->ptr_y = (int16_t)(cy < -32768 ? -32768 : cy > 32767 ? 32767 : cy);
     }
     lstrcpynA(w->held, s_held, sizeof w->held);
     if (s_open) {
+        const WIKILAYOUT* lay;
+        WIKISIMCTX ctx;
+        int src, cast;
         assets_start();
         /* a capture waits, as a demo does, for the layout it would start on */
-        if (s_ask && GetFileAttributesA(SHOT_ASK) != INVALID_FILE_ATTRIBUTES) {
-            const WIKILAYOUT* lay;
-            int src;
-            if (layout_now(data(), &lay, &src)) shot();
-        }
+        if (s_ask && GetFileAttributesA(SHOT_ASK) != INVALID_FILE_ATTRIBUTES && layout_now(data(), &lay, &src, NULL))
+            shot();
         page_fill(w);
+        /* the text's context, by value: the running demo's, else the one a demo would start on */
+        if (s_simOn) {
+            ctx = s_ctx;
+            cast = s_cast;
+        } else
+            context_now(data(), &lay, &src, &ctx, &cast);
+        w->iface = (uint8_t)(ctx.iface == 1);
+        w->cast_side = (int8_t)(cast >= 0 && cast < WIKI_SIDE_SIDES ? cast : -1);
     }
     *len = w->has_stage ? (uint32_t)sizeof *w : TAGPU_PK_WIKI_HEAD;
     return 1;

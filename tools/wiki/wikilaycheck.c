@@ -222,6 +222,15 @@ int main(int argc, char** argv)
     st->mod = mod_of(tj_str(tj_get(S, "mod"), "stock"));
     snprintf(st->held, sizeof st->held, "%s", tj_str(tj_get(S, "held"), ""));
     snprintf(st->caption, sizeof st->caption, "%s", tj_str(tj_get(S, "caption"), ""));
+    /* the context the mockup fills its text with (wiki.js `fill`): the interface type and the
+       side's casting, null for the entry's own names */
+    st->iface = (int)tj_num(tj_get(S, "iface"), 1);
+    v = tj_get(S, "casting");
+    if (v && !tj_is(v, TJ_NULL)) {
+        static WIKICASTING casting;
+        if (!tagpu_wikidata_casting(v, &casting, err, sizeof err)) { fprintf(stderr, "wikilaycheck: casting: %s\n", err); return 1; }
+        st->casting = &casting;
+    }
     v = tj_get(S, "keys");
     for (e = v ? v->first : NULL; e; e = e->next)
         for (j = 0; j < WIKI_NKEYS; j++)

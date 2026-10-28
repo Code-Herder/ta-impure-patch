@@ -72,6 +72,8 @@ CASES = [
     ("1080-stock-quickbuild-try", (1920, 1080), "mod=stock&entry=quickbuild", {"try": True}),
     ("4k-stock-buildshapes-try", (3840, 2160), "mod=stock&entry=buildshapes&demo=2", {"try": True}),
     ("1024-stock-quickbuild-try", (1024, 768), "mod=stock&entry=quickbuild", {"try": True}),
+    # Interface Type 0: the button words of the titles, the paragraphs and the caption are the left-click ones
+    ("1080-stock-quickbuild-iface0", (1920, 1080), "mod=stock&entry=quickbuild&iface=0", {"tick": 75}),
 ]
 
 KEYNAME = {"Shift": "shift", "Alt": "alt", "Ctrl": "ctrl", "Z": "z", "X": "x", "Left-click": "lmb", "Right-click": "rmb"}
@@ -196,7 +198,8 @@ COLLECT = r"""async () => {
     fold: [...S.fold].map(p => nodes.findIndex(n => n.p === p)), scroll: ['tree', 'demos', 'text'].map(k => scroll[k].top),
     playing: S.playing, done: !!(sim && sim.done && !S.try), speed: S.speed, try: S.try, mod: S.mod,
     sim_locked: !!(sim && sim.view().locked), held: A.held ? A.held.replace('c-', '') : '',
-    caption: $('#caption').textContent, keys: [...document.querySelectorAll('#keys .kc')].map(e => e.textContent), fallback, sizes };
+    caption: $('#caption').textContent, keys: [...document.querySelectorAll('#keys .kc')].map(e => e.textContent), fallback, sizes,
+    iface: S.iface, casting: (WikiPage.context() || {}).casting || null };
   return JSON.stringify({ state, els, u, scroll, frame: [f.left, f.top] });
 }"""
 
@@ -372,7 +375,7 @@ def main():
     exe, pak = tmp / "wikilaycheck", tmp / "wikipak.bin"
     cc = subprocess.run(["gcc", "-O1", "-std=c99", "-Wall", f"-I{SRC}", f"-I{SRC.parent / 'inc'}",
                          str(ROOT / "tools/wiki/wikilaycheck.c"), *(str(SRC / f) for f in (
-                             "tagpu_wikilay.c", "tagpu_hudlay.c", "tagpu_hudtext.c", "tagpu_wikidata.c", "tagpu_json.c",
+                             "tagpu_wikilay.c", "tagpu_wikitext.c", "tagpu_hudlay.c", "tagpu_hudtext.c", "tagpu_wikidata.c", "tagpu_json.c",
                              "tagpu_pak.c", "lodepng.c")), "-lm", "-o", str(exe)], capture_output=True, text=True)
     if cc.returncode:
         sys.exit("wikilaycheck: the native build failed\n" + cc.stderr)

@@ -14,7 +14,8 @@
    usage: node tools/wiki/simparity.mjs --try DUMP
      prints sim.js's state hash of Try it yourself fed the inputs the game's state dump logged (tools/wiki_regression.py
      try), the number the dump's own hash must equal. The layout is the dump's `layout` when it records one, else the
-     fixture. Builds nothing.
+     fixture, and the context its `ctx` (side, Interface Type, the casting written whole), else sim.js's default.
+     Builds nothing.
 
    It packs art/wiki/ as the Makefile does (tools/hudpak.py --set wiki), builds tagpu/ddraw/tests/wikitest.c with the
    real sources, and plays every demo of every entry the tree names through both, comparing every field of the view,
@@ -198,7 +199,7 @@ if (tryAt >= 0) {
   const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${dump.entry}.json`), 'utf8'));
   const demo = entry.demos.find(d => d.id === dump.demo);
   if (!demo) { console.error(`simparity --try: no demo ${dump.entry}/${dump.demo}`); process.exit(2); }
-  const sim = WikiSim.create(entry, demo, 'layout' in dump ? dump.layout : FIXTURE);
+  const sim = WikiSim.create(entry, demo, 'layout' in dump ? dump.layout : FIXTURE, dump.ctx || undefined);
   for (const [t, kind, a, b] of dump.try_log) {
     while (sim.tick < t) sim.step();
     sim.input(kind === 'move' ? { move: [a, b] } : { [kind]: a });

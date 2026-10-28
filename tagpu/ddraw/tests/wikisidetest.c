@@ -3,11 +3,15 @@
    every sampled frame's composed column, and sidecheck.mjs compares it byte for byte with
    side.js's.
 
-   `wikisidetest compose PAK DIR` reads a sidebar's art from DIR -- layout.json (sim.js's schema),
-   art.json (below), sheet.bin, pal.bin, and seen.bin and greyed.bin when present -- into a
-   WIKISIDE, plays every demo of every entry in PAK (tools/hudpak.py --set wiki) on its layout,
-   and at every sampled tick (`sampled` below) copies the view (tagpu_wikistage_copy) and composes
-   its column over DIR/bases/<entry>.bin, the stage's minimap picture, when that file exists. Per
+   `wikisidetest compose PAK DIR [CTX]` reads a sidebar's art from DIR -- layout.json (sim.js's
+   schema), art.json (below), sheet.bin, pal.bin, and seen.bin and greyed.bin when present -- into
+   a WIKISIDE, plays every demo of every entry in PAK (tools/hudpak.py --set wiki) on its layout in
+   the context CTX names, and at every sampled tick (`sampled` below) copies the view of the entry
+   the sim plays (tagpu_wikistage_copy over WIKISIM.entry, the bound entry with a casting, as
+   tagpu_wiki.c copies it) and composes its column for the view's side over DIR/bases/<entry>.bin,
+   the stage's minimap picture, when that file exists. CTX is a JSON file, sim.js's ctx:
+   {"side": k, "iface": 0 | 1, "casting": a pack's casting record | null}; without it the sims are
+   made with none (side 0, no casting, Interface Type 1). Per
    frame, to stdout: the key "<entry>/<demo>/<tick>" as a little-endian u16 length and its bytes,
    then two little-endian i32 -- the rows composed (0: none, the view has no sidebar; -1: the demo
    did not start, its tick 0 alone) and whether the minimap was composed -- then, with rows, the
@@ -204,8 +208,36 @@ static int sampled(const WIKIVIEW* v, const STATES* prev, int tick, int done)
     return v->side.under[0] && tick % 10 == 0;
 }
 
-static int compose(char** a)
+/* CTX's context into `ctx`, its casting into `c`; 1, else 0 with a message */
+static int context(const char* path, WIKISIMCTX* ctx, WIKICASTING* c)
 {
+    char err[256];
+    size_t n;
+    unsigned char* text = slurp(path, &n);
+    TJDOC* doc = text ? tagpu_json_parse((const char*)text, n, err, sizeof err) : NULL;
+    const TJV *r, *cast;
+    int ok = 0;
+    if (!doc) { fprintf(stderr, "wikisidetest: %s: %s\n", path, text ? err : "unreadable"); goto done; }
+    r = tagpu_json_root(doc);
+    ctx->side = num(tj_get(r, "side"), 0);
+    ctx->iface = num(tj_get(r, "iface"), 1);
+    ctx->cast = NULL;
+    cast = tj_get(r, "casting");
+    if (cast && !tj_is(cast, TJ_NULL)) {
+        if (!tagpu_wikidata_casting(cast, c, err, sizeof err)) { fprintf(stderr, "wikisidetest: %s: the casting: %s\n", path, err); goto done; }
+        ctx->cast = c;
+    }
+    ok = 1;
+done:
+    if (doc) tagpu_json_free(doc);
+    free(text);
+    return ok;
+}
+
+static int compose(char** a, const char* ctxfile)
+{
+    static WIKICASTING casting;
+    WIKISIMCTX ctx = { 0, NULL, 1 };
     static WIKISTAGEVIEW v;
     static WIKISIDECOL col;
     static unsigned char rgba[WIKI_SIDE_W * WIKI_SIDE_ROWS * 4];
@@ -221,6 +253,7 @@ static int compose(char** a)
         return 2;
     }
     if (!(sd = load(a[1], &sheet))) return 2;
+    if (ctxfile && !context(ctxfile, &ctx, &casting)) return 2;
     for (i = 0; i < d->nentry; i++) {
         const WIKIENTRY* e = &d->entry[i];
         char name[256];
@@ -230,7 +263,7 @@ static int compose(char** a)
         base = file_in(a[1], name, &nbase);
         for (j = 0; j < e->ndemo; j++) {
             WIKISIM s;
-            if (!tagpu_wikisim_init(&s, e, &e->demo[j], 1, &sd->layout, NULL, err, sizeof err)) {
+            if (!tagpu_wikisim_init(&s, e, &e->demo[j], 1, &sd->layout, ctxfile ? &ctx : NULL, err, sizeof err)) {
                 key(e->id, e->demo[j].id, 0);
                 put32(-1);
                 put32(0);
@@ -249,9 +282,8 @@ static int compose(char** a)
                 }
                 if (sampled(w, &was, s.tick, s.done)) {
                     int h;
-                    tagpu_wikistage_copy(&v, w, e, WIKISTAGE_LAYOUT_MOD);
-                    /* side 0: the side a sim made with no context plays */
-                    h = tagpu_wikiside_compose(sd, &v, 0, base, base ? (int)nbase : 0, &col);
+                    tagpu_wikistage_copy(&v, w, s.entry, WIKISTAGE_LAYOUT_MOD);
+                    h = tagpu_wikiside_compose(sd, &v, v.side.index, base, base ? (int)nbase : 0, &col);
                     key(e->id, e->demo[j].id, s.tick);
                     put32(h);
                     put32(col.minimap);
@@ -278,7 +310,7 @@ static int compose(char** a)
 
 int main(int argc, char** argv)
 {
-    if (argc == 4 && !strcmp(argv[1], "compose")) return compose(argv + 2);
-    fprintf(stderr, "usage: wikisidetest compose PAK DIR\n");
+    if ((argc == 4 || argc == 5) && !strcmp(argv[1], "compose")) return compose(argv + 2, argc == 5 ? argv[4] : NULL);
+    fprintf(stderr, "usage: wikisidetest compose PAK DIR [CTX]\n");
     return 2;
 }

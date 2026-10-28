@@ -56,7 +56,16 @@ typedef struct TAGPU_PK_WIKI {
     uint8_t  try_it;            /* Try it yourself has the stage                             */
     int16_t  mod;               /* MOD_* (tagpu_mod.h): the mod a lock is read for           */
     uint8_t  has_stage;         /* `stage` is carried                                        */
-    uint8_t  pad;
+    /* THE CONTEXT THE TEXT IS FILLED FOR, by value (tagpu_wiki.c, *the context*): the render
+       thread fills the page's titles, subtitle, paragraphs, demo titles and tree leaves with the
+       words of each entry under it (tagpu_wikilay.h WIKIPAGE) -- the same pair the running demo
+       plays and its caption, filled on the game thread, was filled with */
+    uint8_t  iface;             /* the Interface Type, 0 or 1                                */
+    int8_t   cast_side;         /* the layout side of the published WIKISIDE whose casting
+                                   names the units; -1 none: the entry's own names. Data: the
+                                   render thread bounds it against WIKI_SIDE_SIDES and the
+                                   layout's sides, and the game thread names a side only after
+                                   it read WIKISIDE_READY, which is final                    */
     char     held[TAGPU_WIKI_KEY];          /* the control held down; "" none                */
     uint32_t fold[TAGPU_WIKI_FOLDS];        /* bit n: tree node n is folded                  */
     float    scroll[TAGPU_WIKI_NSCROLL];    /* each panel's offset, units, as asked: the layout
