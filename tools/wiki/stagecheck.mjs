@@ -10,6 +10,15 @@
    stage at 1920 x 1080 and at 1024 x 768 (MEASURED 2026-10-25 in the mockup, the canvas's size and its corner in the
    frame's device pixels), and one small enough that the grid is left out and every label shrinks.
 
+   THE SIDEBAR. The demos play three ways: with art/wiki/side/fixture.json's sidebar at the three sizes, with
+   fixture-tall.json's 768-row column at 1920 x 1080, and with none at the three sizes. With a sidebar, a frame whose
+   tick / 30 is 1 past a multiple of 3 draws the column as the game look's image with its minimap, one 2 past it the
+   image without its minimap (the whitebox minimap over it), and the rest the whitebox column; the image is a stand-in
+   (sideArt below, wikistagetest.c side_art), since what the stage takes of the art is only the image's rect and which
+   gadgets are labels -- tools/wiki/sidecheck.mjs checks the image's pixels. A greyed whitebox button is one group at
+   one opacity (stage.js `group`), recorded by its beginGroup and endGroup and paired with the ops' group and its
+   opacity.
+
    THE RECORDING turns each canvas call into the shapes the ops draw, by the canvas's own rules: a fillRect a rect, its
    size normalised; an undashed strokeRect a ring, the band half the width either side of its edges; a stroked subpath
    one line a straight piece, dashed by the canvas dash rule from its first point, a corner inside a dash carrying the
@@ -76,13 +85,16 @@ function colour(s) {
 /* ---- the recording context ---- */
 function recorder(em, asked) {
   const out = [], tags = [];
-  let path = [], dash = [], tag = null;
-  // every shape recorded carries the range the call that made it was drawn in
+  let path = [], dash = [], tag = null, grp = 0, ga = 1, ngrp = 0;
+  // every shape recorded carries the range the call that made it was drawn in, and its group and that group's opacity
   const push = out.push.bind(out);
-  out.push = sh => { tags.push(tag); return push(sh); };
+  // (in place: a dash's stroke is carried round a corner after it is recorded)
+  out.push = sh => { tags.push(tag); sh.grp = grp; sh.ga = ga; return push(sh); };
   const g = {
     fillStyle: '#000', strokeStyle: '#000', lineWidth: 1, font: '10px sans-serif', textAlign: 'start', textBaseline: 'alphabetic',
     imageSmoothingQuality: 'low', imageSmoothingEnabled: true,
+    beginGroup(alpha) { grp = ++ngrp; ga = alpha; },
+    endGroup() { grp = 0; ga = 1; },
     setTransform(a, b, c, d, e, f) { if (a !== 1 || b || c || d !== 1 || e || f) throw new Error('a transform the check does not read'); },
     setLineDash(d) { dash = d.length % 2 ? [...d, ...d] : [...d]; },
     beginPath() { path = []; },
@@ -133,10 +145,10 @@ function recorder(em, asked) {
     },
     drawImage(img, ...a) {
       if (a.length === 4) { const [x, y, w, h] = a; out.push({ k: 'icon', name: img.name, x, y, w, h }); return; }
-      // a cell of the cursors' sheet, drawn whole, unsmoothed
+      // a cell of the cursors' sheet, or the sidebar's composed column, drawn whole, unsmoothed
       const [sx, sy, sw, sh, x, y, w, h] = a;
       if (g.imageSmoothingEnabled) throw new Error('a sprite drawn smoothed');
-      out.push({ k: 'sprite', sx, sy, sw, sh, x, y, w, h });
+      out.push({ k: img.name === 'side' ? 'side' : 'sprite', sx, sy, sw, sh, x, y, w, h });
     },
   };
   const layer = (range, type) => { tag = { range, type }; };
@@ -172,10 +184,13 @@ function recorder(em, asked) {
 }
 
 /* ---- the ops read back as the same shapes, in the canvas's device pixels ---- */
-const HOP = { PART: 0, SOLID: 1, DOT: 2, TEXT: 3, LINE: 5 }, RING = 4, SPRITE = 128;
+const HOP = { PART: 0, SOLID: 1, DOT: 2, TEXT: 3, LINE: 5, SIDE: 7 }, RING = 4, SPRITE = 128;
 function shapes(fr, sz, face, part, icons, cell) {
   const u = sz.u, X = v => v * u - fr.x0, Y = v => v * u - fr.y0, out = [];
-  for (const [kind, flags, pi, x, y, w, h, cx, cy, cw, ch, rgba, size, style, centre, text, rgb, shade] of fr.ops) {
+  // each shape's group and the group's opacity, as the recording gives them
+  const push = out.push.bind(out);
+  for (const [kind, flags, pi, x, y, w, h, cx, cy, cw, ch, rgba, size, style, centre, text, rgb, shade, grp] of fr.ops) {
+    out.push = sh => { sh.grp = grp; sh.ga = grp ? fr.grp[grp - 1] : 1; return push(sh); };
     const clip = [X(cx), Y(cy), cw * u, ch * u];
     if (Math.abs(clip[0]) > TOL || Math.abs(clip[1]) > TOL || Math.abs(clip[2] - fr.w) > TOL || Math.abs(clip[3] - fr.h) > TOL)
       out.push({ k: 'clip', clip });
@@ -188,6 +203,9 @@ function shapes(fr, sz, face, part, icons, cell) {
     else if (kind === HOP.PART && flags === SPRITE)
       // HOPF_SPRITE: cell `part` of the sheet, its top-left size x shade texels, into the op's box
       out.push({ k: 'sprite', sx: pi * cell, sy: 0, sw: size, sh: shade, x: X(x), y: Y(y), w: w * u, h: h * u });
+    else if (kind === HOP.SIDE && !flags)
+      // HOP_SIDE: the composed column's top-left size x shade texels into the op's box
+      out.push({ k: 'side', sx: 0, sy: 0, sw: size, sh: shade, x: X(x), y: Y(y), w: w * u, h: h * u });
     else if (kind === HOP.PART && !flags && icons[part[pi]]) {
       // tagpu_hudlay_expand's icon: the part as large as fits the op's box, centred in it
       const ic = icons[part[pi]], bw = w * u, bh = h * u, f = Math.min(bw / ic.pw, bh / ic.ph), iw = ic.pw * f, ih = ic.ph * f;
@@ -253,28 +271,52 @@ try {
     return f;
   };
 
-  /* ---- sim.js's frames, at the C side's ticks ---- */
+  /* ---- sim.js's frames, at the C side's ticks, for each sidebar: the fixture's, the tall fixture's, none ---- */
   const tree = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/tree.json'), 'utf8'));
   const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
-  const frames = [];
-  for (const id of [...new Set(tree.tree.flatMap(leaves))]) {
-    const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
-    for (const demo of entry.demos) {
-      const sim = WikiSim.play(entry, demo);
-      for (;;) {
-        if (sim.tick % 30 === 0 || sim.done) frames.push({ key: `${id}/${demo.id}/${sim.tick}`, v: sim.view(), tick: sim.tick });
-        if (sim.done) break;
-        sim.step();
+  const ids = [...new Set(tree.tree.flatMap(leaves))];
+  const entries = ids.map(id => JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8')));
+  const SIDEBARS = [
+    { name: 'fixture', file: 'side/fixture.json', sizes: SIZES },
+    { name: 'fixture-tall', file: 'side/fixture-tall.json', sizes: SIZES.slice(0, 1) },
+    { name: 'no sidebar', file: null, sizes: SIZES },
+  ];
+  for (const sb of SIDEBARS) {
+    sb.layout = sb.file && JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki', sb.file), 'utf8'));
+    sb.frames = [];
+    entries.forEach((entry, i) => {
+      for (const demo of entry.demos) {
+        const sim = WikiSim.play(entry, demo, sb.layout);
+        for (;;) {
+          if (sim.tick % 30 === 0 || sim.done) sb.frames.push({ key: `${ids[i]}/${demo.id}/${sim.tick}`, v: sim.view(), tick: sim.tick });
+          if (sim.done) break;
+          sim.step();
+        }
       }
-    }
+    });
   }
+  /* THE SIDEBAR'S STAND-IN ART, wikistagetest.c side_art: the game look's image in frames whose tick / 30 is 1 past a
+     multiple of 3 (with its minimap) or 2 past it (without), drawn as wiki.js draws the composed column; gadget i of
+     screen k (in the layout's order) a label when (7k + i) % 3 is 0, its text '' when k + i is even and `L<k>.<i>`
+     when it is odd, every other gadget a picture */
+  const sideArt = (v, L, tick) => {
+    const phase = Math.floor((+tick || 0) / 30) % 3;
+    if (!L || !v || !v.side || !phase) return null;
+    const k = Object.keys(L.screens).indexOf(v.side.screen);
+    return {
+      minimap: phase === 1,
+      label: i => (7 * k + i) % 3 === 0 ? ((k + i) % 2 ? `L${k}.${i}` : '') : null,
+      draw: (g, r) => { const sm = g.imageSmoothingEnabled; g.imageSmoothingEnabled = false;
+        g.drawImage({ name: 'side' }, 0, 0, 128, v.side.h, r.x, r.y, r.w, r.h); g.imageSmoothingEnabled = sm; },
+    };
+  };
   // the cursor left out of every frame whose tick / 30 is odd, as Try it yourself leaves it while the pointer is off
   // the stage (wikistagetest.c draws the same frames without it)
-  const draw = (v, sz, em, asked, image, tick, cursors) => {
+  const draw = (v, sz, em, asked, image, tick, cursors, L) => {
     const r = recorder(em, asked);
     const im = image && { ...image, draw: (g, rect) => r.out.push({ k: 'image', ...rect }) };
     r.fit = WikiStage.draw(r.g, v, { W: sz.w, H: sz.h, U: sz.u, icons, cursors, tick, cursor: Math.floor((+tick || 0) / 30) % 2 === 0,
-      layer: r.layer, image: im });
+      layer: r.layer, image: im, side: { layout: L, art: sideArt(v, L, tick) } });
     return r;
   };
   // the stand-in images: what a complete 3D frame may carry
@@ -283,8 +325,9 @@ try {
     { name: 'none resolved', ground: true, resolved: () => false },
     { name: 'ground fallen back', ground: false, resolved: () => true },
   ];
-  const RANGES = ['r0', 'ground', 'box', 'label', 'over'];        // WIKISTAGE_IN_*
-  const kept = (t, im) => t.range === 'r0' || t.range === 'over' || (t.range === 'ground' && !im.ground) ||
+  const RANGES = ['r0', 'ground', 'box', 'label', 'over', 'side'];        // WIKISTAGE_IN_*
+  const under = t => t.range === 'r0' || t.range === 'side' || t.range === 'ground';
+  const kept = (t, im) => t.range === 'r0' || t.range === 'side' || t.range === 'over' || (t.range === 'ground' && !im.ground) ||
     (t.range === 'box' && !im.resolved(t.type));
   const pair = (js, c, what) => {
     for (let i = 0; i < Math.max(js.length, c.length); i++) {
@@ -296,7 +339,7 @@ try {
 
   /* ---- the measure: every string a dry run asks for, measured by the C side ---- */
   const asked = new Set();
-  for (const sz of SIZES) for (const f of frames) draw(f.v, sz, null, asked);
+  for (const sb of SIDEBARS) for (const sz of sb.sizes) for (const f of sb.frames) draw(f.v, sz, null, asked, null, f.tick, null, sb.layout);
   const strings = [...asked].filter(s => s !== '');
   if (strings.some(s => s.includes('\n'))) throw new CannotRun('a measured string holds a line break');
   fs.writeFileSync(path.join(tmp, 'strings.txt'), strings.join('\n') + '\n');
@@ -304,16 +347,18 @@ try {
   if (ems.length !== strings.length) throw new CannotRun(`the C side measured ${ems.length} of ${strings.length} strings`);
   const em = new Map(strings.map((s, i) => [s, ems[i]]));
 
-  /* ---- each size, with the kit's cursors and then the game's: the C side's frames, paired with stage.js's ---- */
-  let nframes = 0, nops = 0, ndiffer = 0, nsplit = 0, nimage = 0, nsprite = 0, ncur = 0;
-  const PASSES = [false, true].flatMap(sprites => SIZES.map((sz, k) => ({ sprites, k,
-    sz: { ...sz, name: sprites ? `${sz.name} game cursors x${SCALE[k]}` : sz.name } })));
-  for (const { sprites, k: si, sz } of PASSES) {
-    const cur = sprites ? cursorsAt(si) : null;
+  /* ---- each sidebar and size, with the kit's cursors and then the game's: the C side's frames, paired with
+     stage.js's ---- */
+  let nframes = 0, nops = 0, ndiffer = 0, nsplit = 0, nimage = 0, nsprite = 0, ncur = 0, nside = 0, nsideim = 0, ngrp = 0, nall = 0;
+  const PASSES = SIDEBARS.flatMap(sb => [false, true].flatMap(sprites => sb.sizes.map((sz, k) => ({ sb, sprites, k,
+    sz: { ...sz, name: `${sb.name} ${sprites ? `${sz.name} game cursors x${SCALE[k]}` : sz.name}` } }))));
+  for (const { sb, sprites, k: si, sz } of PASSES) {
+    const cur = sprites ? cursorsAt(si) : null, frames = sb.frames;
     const rect = [sz.x0 / sz.u, sz.y0 / sz.u, sz.w / sz.u, sz.h / sz.u].map(v => v.toPrecision(17));
     const cout = run(exe, ['ops', pak, ttf, String(S.spacing || 0), S.upper ? '1' : '0', String(style), ...cursorArgs, ...sizeArgs,
-      sprites ? spriteFile(si) : '-', ...rect, sz.u.toPrecision(17)]).trim().split('\n').map(l => JSON.parse(l));
+      sprites ? spriteFile(si) : '-', sb.file || '-', ...rect, sz.u.toPrecision(17)]).trim().split('\n').map(l => JSON.parse(l));
     const cby = new Map(cout.map(f => [`${f.e}/${f.d}/${f.t}`, f]));
+    nall += frames.length;
     if (cout.length !== frames.length) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name}: the C side drew ${cout.length} frames, stage.js ${frames.length}`); }
     for (const f of frames) {
       const fr = cby.get(f.key);
@@ -322,8 +367,11 @@ try {
         code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${f.key}: the canvas is ${fr.w}x${fr.h} at ${fr.x0},${fr.y0}`); continue;
       }
       if (fr.dropped || fr.trunc) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${f.key}: dropped ${fr.dropped} ops, truncated ${fr.trunc}`); continue; }
-      const r1 = draw(f.v, sz, em, null, null, f.tick, cur), c = shapes(fr, sz, face, part, icons, CELL);
+      const r1 = draw(f.v, sz, em, null, null, f.tick, cur, sb.layout), c = shapes(fr, sz, face, part, icons, CELL);
       nframes++; nops += c.length; nsprite += c.filter(sh => sh.k === 'sprite').length;
+      if (f.v && f.v.side) nside++;
+      nsideim += c.filter(sh => sh.k === 'side').length;
+      ngrp += fr.grp.length;
       let bad = pair(r1.out, c, 'R1');
       if (!bad && r1.tags.some(t => !t)) bad = 'R1: a call drawn before stage.js named its range';
       // the op the DLL names as the cursor's (tagpu_wikistate_cursor shows the player's when none is drawn): one exactly
@@ -339,15 +387,14 @@ try {
         if (RANGES[rng] !== t.range || (t.range === 'box' && type !== t.type))
           bad = `R1 op ${i}: C range ${RANGES[rng]}${type ? ` (${type})` : ''}, stage.js ${t.range}${t.type ? ` (${t.type})` : ''}`;
       }
-      // R0, the image, R2: R1's ops kept by the rule, the image after R0 and the ground
+      // R0 and the sidebar, the image, R2: R1's ops kept by the rule, the image after R0, the sidebar and the ground
       for (const im of bad || !f.v || !f.v.map ? [] : IMAGES) {
-        const r = draw(f.v, sz, em, null, im, f.tick, cur), at = r.out.findIndex(sh => sh.k === 'image');
+        const r = draw(f.v, sz, em, null, im, f.tick, cur, sb.layout), at = r.out.findIndex(sh => sh.k === 'image');
         if (at < 0 || r.out.filter(sh => sh.k === 'image').length !== 1) { bad = `${im.name}: the image is drawn ${at < 0 ? 'never' : 'twice'}`; break; }
         const js = r.out.filter(sh => sh.k !== 'image'), want = c.filter((_, i) => kept(r1.tags[i], im));
-        const under = r.tags.slice(0, at).every(t => t.range === 'r0' || t.range === 'ground');
-        bad = !under ? `${im.name}: an overlay drawn under the image` : pair(js, want, `R0+R2 (${im.name})`);
+        bad = !r.tags.slice(0, at).every(under) ? `${im.name}: an overlay drawn under the image` : pair(js, want, `R0+R2 (${im.name})`);
         // tagpu_wikistage_keep: under the image, over it or not at all, op for op as stage.js draws it
-        const k = IMAGES.indexOf(im), codes = r1.tags.map(t => !kept(t, im) ? '0' : t.range === 'r0' || t.range === 'ground' ? '1' : '2').join('');
+        const k = IMAGES.indexOf(im), codes = r1.tags.map(t => !kept(t, im) ? '0' : under(t) ? '1' : '2').join('');
         if (!bad && fr.keep[k] !== codes) {
           const i = [...codes].findIndex((ch, j) => ch !== fr.keep[k][j]);
           bad = `${im.name}: tagpu_wikistage_keep puts op ${i} ${'-uo'[+fr.keep[k][i]]}, stage.js ${'-uo'[+codes[i]]}`;
@@ -363,8 +410,8 @@ try {
     }
   }
   const s = ((Date.now() - t0) / 1000).toFixed(1);
-  if (code) console.log(`stagecheck: ${ndiffer} of ${frames.length * PASSES.length} frames DIFFER (${s} s)`);
-  else console.log(`stagecheck: all equal -- ${nframes} frames (${frames.length} at each of ${SIZES.length} sizes, with the kit's cursors and with the game's), ${nops} ops of R1 paired call for op within 1/64 px, ${nsprite} of them game cursor frames; a cursor in ${ncur} frames and its op named in each; R0 and R2 over ${nsplit} stand-in images, ${nimage} ops (${s} s)`);
+  if (code) console.log(`stagecheck: ${ndiffer} of ${nall} frames DIFFER (${s} s)`);
+  else console.log(`stagecheck: all equal -- ${nframes} frames (${SIDEBARS.map(sb => `${sb.name} ${sb.frames.length} at ${sb.sizes.length} size${sb.sizes.length > 1 ? 's' : ''}`).join(', ')}; each with the kit's cursors and with the game's), ${nops} ops of R1 paired call for op within 1/64 px, ${nsprite} of them game cursor frames; a cursor in ${ncur} frames and its op named in each; a sidebar in ${nside} frames, ${nsideim} of them as the image, ${ngrp} greyed buttons as groups; R0 and R2 over ${nsplit} stand-in images, ${nimage} ops (${s} s)`);
 } catch (x) {
   if (!(x instanceof CannotRun)) throw x;
   console.log(`stagecheck: cannot run: ${x.message}`);

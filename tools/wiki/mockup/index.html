@@ -19,6 +19,8 @@
   <label>Game <select id="mode"><option value="sp">single player (pauses)</option><option value="mp">multiplayer (keeps running)</option></select></label>
   <label>Detected mod <select id="mod"><option value="stock">Stock</option><option value="mayhem">Total Mayhem</option><option value="prota">ProTA</option>
     <option value="twilight">Twilight</option><option value="escalation">Escalation</option><option value="tazero">TA Zero</option><option value="unknown">unknown</option></select></label>
+  <label>Sidebar <select id="sidebar"><option value="mod">the mod's (its pack, else the fixture)</option><option value="fixture">fixture, 480 rows</option>
+    <option value="tall">fixture, 768 rows</option><option value="off">none</option></select><output id="sidebar-note"></output></label>
   <label>Skin <select id="skin"><option value="kit">kit</option><option value="whitebox">whitebox</option></select></label>
   <label>Rewind button <select id="rewind"><option value="1">shown (live recorded skirmish)</option><option value="0">absent</option></select></label>
   <label>Graphics <select id="gfx"><option value="whitebox">whitebox</option><option value="game">game (gfx/)</option></select><output id="gfx-note"></output></label>
@@ -47,7 +49,6 @@
           <div id="e-sub"></div>
           <div id="badge" hidden data-part="badge"><i></i>Turned off in this mod</div>
           <div class="srow">
-            <div id="bmenu" hidden></div>
             <div id="sbox" data-part="bezel"><canvas id="stage"></canvas></div>
           </div>
           <div id="caption"></div>
@@ -68,12 +69,15 @@
 length in the window is in units of the frame's height / 720. The window, its tree, the entry and its demos come from <code>art/wiki/</code>;
 what the stage shows comes from <code>sim.js</code>; the kit's parts from <code>art/wiki/kit/</code>, the text styles from the replay
 HUD's <code>art/hud/layout.json</code>. URL switches: <code>res=</code>, <code>size=</code>, <code>mode=sp|mp</code>,
-<code>mod=</code>, <code>skin=kit|whitebox</code>, <code>rewind=0|1</code>, <code>open</code>, <code>entry=</code>, <code>demo=</code> (from 1), <code>try</code>, <code>gfx=whitebox|game</code> (the stage in 3D, as the game draws it, from the packs <code>tools/wiki/gfx.py</code>
+<code>mod=</code>, <code>sidebar=mod|fixture|tall|off</code> (the game's left sidebar on the stage: the detected mod's layout and, under
+<code>gfx=game</code>, its pictures from the gitignored <code>gfx/side/&lt;mod&gt;/</code>, the fixture of <code>art/wiki/side/</code> where the mod has
+none; a fixture by name; or no sidebar), <code>skin=kit|whitebox</code>, <code>rewind=0|1</code>, <code>open</code>, <code>entry=</code>, <code>demo=</code> (from 1), <code>try</code>, <code>gfx=whitebox|game</code> (the stage in 3D, as the game draws it, from the packs <code>tools/wiki/gfx.py</code>
 resolves from the local install into the gitignored <code>gfx/</code>), <code>ss=</code> (its supersampling, default 2).</p>
 <script src="sim.js"></script>
 <script src="../../tascene-render.js"></script>
 <script src="scene.js"></script>
 <script src="gfx.js"></script>
+<script src="side.js"></script>
 <script src="stage.js"></script>
 <script src="wiki.js"></script>
 </body>

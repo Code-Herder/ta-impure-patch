@@ -622,6 +622,20 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
         in->prm[1] = hw;
         break;
     }
+    case HOP_SIDE: {
+        /* the composed column's top-left size x shade texels whole into the op's box, which the
+           stage snapped to whole device pixels, as a sprite cell is drawn */
+        const float sw = (float)HUD_SIDE_W, sh = (float)HUD_SIDE_H;
+        if (!(op->size > 0 && op->size <= sw && op->shade > 0 && op->shade <= sh)) break;
+        if (!(in = emit(c, HUD_TEX_SIDE, HUDM_PART, snap(op->r.x * px), snap(op->r.y * px),
+                        (float)tagpu_hud_edge(op->r.x, op->r.w, px), (float)tagpu_hud_edge(op->r.y, op->r.h, px), op))) break;
+        in->uv[0] = 0;
+        in->uv[1] = 0;
+        in->uv[2] = op->size / sw;
+        in->uv[3] = op->shade / sh;
+        colour(in, 0xFFFFFF, (float)(op->rgba & 0xFF) / 255.0f);
+        break;
+    }
     case HOP_CHART:
         if (!c->ops->chart) break;
         if (!*charted) { chart_prepare(c); *charted = 1; }

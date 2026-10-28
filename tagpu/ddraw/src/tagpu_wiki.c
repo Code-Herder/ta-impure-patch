@@ -90,6 +90,7 @@
 #define DUMP_ASK  "tagpu_wiki.dump"
 #define DUMP_OUT  "tagpu_wiki.json"
 #define CHECK_ASK "tagpu_wiki.check"
+#define CHECK_LAYOUT "tagpu_wiki.layout.json"
 /* THE 3D STAGE'S CAPTURE (tools/wiki_regression.py stage3d): the file holds `ENTRY DEMO TICK` -- an
    entry's id, its demo's number from 1, a tick -- and the fill that reads it picks that demo,
    plays it here to the tick, pauses it and numbers the capture in the record; the render thread
@@ -297,7 +298,10 @@ static int      s_playing = 1, s_speed = 1;
 static WIKISIM  s_sim;
 static int      s_simOn;                        /* s_sim holds a demo: it is freed at a change   */
 static int      s_want;                         /* a demo is owed as soon as the data is there   */
-static char     s_msg[32];                      /* what the stage shows with no demo             */
+static char     s_msg[TAGPU_WIKI_MSG];          /* what the stage shows with no demo             */
+static const WIKILAYOUT* s_lay;                 /* the sidebar layout s_sim was started with,
+                                                   NULL none: immutable and never freed          */
+static int      s_laySrc;                       /* its WIKISTAGE_LAYOUT_*, the record's value    */
 static LARGE_INTEGER s_qpf, s_last;
 static double   s_acc;                          /* ticks owed, wiki.js `acc`                     */
 static int      s_drag = -1;                    /* the panel whose thumb a left press holds      */
@@ -356,8 +360,8 @@ static void sim_free(void)
    that carries the button up sends it instead, as the scrollbar's drag ends (THE DRAG ENDS WITH
    ITS BUTTON, below). A press already held sends no second down, as the browser sends none. */
 #define TRY_LOG 4096                            /* the inputs the dump can give, per Try it      */
-enum { TRY_MOVE, TRY_DOWN, TRY_UP, TRY_BUILD };
-typedef struct { int32_t tick; uint8_t kind; int8_t key; int16_t build; double x, z; } TRYIN;
+enum { TRY_MOVE, TRY_DOWN, TRY_UP };
+typedef struct { int32_t tick; uint8_t kind; int8_t key; double x, z; } TRYIN;
 
 static int      s_try;                          /* wiki.js S.try: the stage is the player's      */
 static int      s_down[WIKI_NKEYS], s_ndown;    /* wiki.js `down`: WIKI_KEY_*, in the order sent */
@@ -371,7 +375,7 @@ static int try_on(void)
 }
 
 /* one input to Try it's simulation, and its line in the log */
-static void try_send(int kind, int key, int build, double x, double z)
+static void try_send(int kind, int key, double x, double z)
 {
     WIKIINPUT in;
     memset(&in, 0, sizeof in);
@@ -380,14 +384,12 @@ static void try_send(int kind, int key, int build, double x, double z)
     case TRY_MOVE:  in.has = WIKI_IN_MOVE; in.move.x = x; in.move.z = z; break;
     case TRY_DOWN:  in.down = key; break;
     case TRY_UP:    in.up = key; break;
-    case TRY_BUILD: in.has = WIKI_IN_BUILD; in.build = build; break;
     }
     tagpu_wikisim_input(&s_sim, &in);
     if (s_nlog >= TRY_LOG) { s_logCut++; return; }
     s_log[s_nlog].tick = s_sim.tick;
     s_log[s_nlog].kind = (uint8_t)kind;
     s_log[s_nlog].key = (int8_t)key;
-    s_log[s_nlog].build = (int16_t)build;
     s_log[s_nlog].x = x;
     s_log[s_nlog].z = z;
     s_nlog++;
@@ -410,7 +412,7 @@ static void try_down(int k)
         s_down[s_ndown++] = k;
     } else if (k != WIKI_KEY_Z && k != WIKI_KEY_X)
         return;
-    try_send(TRY_DOWN, k, -1, 0, 0);
+    try_send(TRY_DOWN, k, 0, 0);
 }
 
 /* `k`'s up, if it is held */
@@ -422,7 +424,7 @@ static void try_up(int k)
     s_ndown--;
     if (k == WIKI_KEY_LMB) s_downReal &= ~B_L;
     if (k == WIKI_KEY_RMB) s_downReal &= ~B_R;
-    if (try_on()) try_send(TRY_UP, k, -1, 0, 0);
+    if (try_on()) try_send(TRY_UP, k, 0, 0);
 }
 
 /* wiki.js releaseAll: every held key's up in the order they went down, `send` 0 when the
@@ -430,7 +432,7 @@ static void try_up(int k)
 static void try_release_all(int send)
 {
     int i;
-    for (i = 0; send && try_on() && i < s_ndown; i++) try_send(TRY_UP, s_down[i], -1, 0, 0);
+    for (i = 0; send && try_on() && i < s_ndown; i++) try_send(TRY_UP, s_down[i], 0, 0);
     s_ndown = 0;
     s_downReal = 0;
 }
@@ -438,28 +440,32 @@ static void try_release_all(int send)
 /* THE WORLD POINT COMES FROM THE FRAME THE PLAYER SAW: client point (cx, cy) on the stage of the
    last frame drawn, read through that frame's own `stage` hit -- the stage's canvas, the same
    snapped rect the render thread fitted the map into (tagpu_wikistage_canvas) -- and its unit,
-   with tagpu_wikistage_fit, the one function both threads fit with; clamped to the map, as
-   wiki.js `world`. The map is the entry's scene's, the simulation's only map, and the frame must
-   have drawn the window open for the entry selected now. 0 when the point is not on that stage. */
+   with tagpu_wikistage_fit, the one function both threads fit with; clamped to the content
+   rect -- the map, and with the sidebar the column left of it, as tall as the taller -- as wiki.js
+   `world`: the simulation decides what lies under the point (the column, the map, or the dead
+   band under a map shorter than the column). The map is the entry's scene's, the simulation's
+   only map. THE FIT IS THE DRAWN FRAME'S: the sidebar's rows are those of the view that frame
+   drew (TAGPU_CMD_WIKI.side_h), not the running simulation's, which may have turned its sidebar
+   on or off since -- a press is mapped through what the player saw, never through a column no
+   frame has shown. The frame must have drawn the window open, for the entry selected now, with a
+   view on its stage. 0 when the point is not on that stage. */
 static int stage_world(int cx, int cy, double* wx, double* wz)
 {
     const WIKIENTRY* e = entry_of(data());
     const TAGPU_CMD_WIKIHIT* h = NULL;
     WIKISTAGEFIT f;
-    double w, hh, x, z;
+    double x, z;
     unsigned i;
-    if (!e || cx < 0 || !s_hit.drawn || !s_hit.open || s_hit.entry != s_entry) return 0;
+    if (!e || cx < 0 || !s_hit.drawn || !s_hit.open || !s_hit.view || s_hit.entry != s_entry) return 0;
     for (i = 0; i < s_hit.n && !h; i++)
         if (!strncmp(s_hit.hit[i].key, "stage", TAGPU_WIKI_KEY)) h = &s_hit.hit[i];
     if (!h || cx < h->x0 || cx >= h->x1 || cy < h->y0 || cy >= h->y1) return 0;
-    tagpu_wikistage_fit(e->scene.w, e->scene.h, h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &f);
+    tagpu_wikistage_fit(e->scene.w, e->scene.h, s_hit.side_h, h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &f);
     if (!(f.s > 0)) return 0;
-    w = (e->scene.w > 0 ? e->scene.w : 1) * (double)WIKI_CELL;
-    hh = (e->scene.h > 0 ? e->scene.h : 1) * (double)WIKI_CELL;
     x = (cx - h->x0 - f.ox) / f.s;
     z = (cy - h->y0 - f.oz) / f.s;
-    *wx = x < 0 ? 0 : x > w ? w : x;
-    *wz = z < 0 ? 0 : z > hh ? hh : z;
+    *wx = x < f.x0 ? f.x0 : x > f.x0 + f.cw ? f.x0 + f.cw : x;
+    *wz = z < 0 ? 0 : z > f.ch ? f.ch : z;
     return 1;
 }
 
@@ -471,7 +477,7 @@ static void try_pointer(int cx, int cy, int real, WPARAM wp)
     double x, z;
     if (real && (s_downReal & B_L) && !(wp & MK_LBUTTON)) try_up(WIKI_KEY_LMB);
     if (real && (s_downReal & B_R) && !(wp & MK_RBUTTON)) try_up(WIKI_KEY_RMB);
-    if (try_on() && stage_world(cx, cy, &x, &z)) try_send(TRY_MOVE, -1, -1, x, z);
+    if (try_on() && stage_world(cx, cy, &x, &z)) try_send(TRY_MOVE, -1, x, z);
 }
 
 /* A left or right press at client point (cx, cy), or where the pointer is when the injection named
@@ -483,7 +489,7 @@ static int try_press(unsigned bit, int cx, int cy, int real)
     if (!try_on() || (bit != B_L && bit != B_R)) return 0;
     if (cx < 0 && !mouse_last_client(&cx, &cy)) return 0;
     if (!stage_world(cx, cy, &x, &z)) return 0;
-    try_send(TRY_MOVE, -1, -1, x, z);
+    try_send(TRY_MOVE, -1, x, z);
     if (try_held(k) < 0) {
         if (real) s_downReal |= bit;
         else s_downReal &= ~bit;
@@ -532,13 +538,43 @@ static void try_key(unsigned vk, int down)
         try_down(m);
 }
 
+/* THE 3D ASSET LOAD's state on this thread (assets_start, below): not asked, started, or failed
+   before its loader thread could start, which then publishes no answer */
+enum { ASSETS_NONE, ASSETS_STARTED, ASSETS_FAILED };
+static int s_assets;
+
+/* THE SIDEBAR'S LAYOUT FOR A NEW SIMULATION (the sidebar spec, section 7, the ordering): the
+   running mod's once the asset loader has published it, else the wiki data's fixture once the
+   loader has refused it or could not start; 0 while the answer is pending. A simulation keeps the
+   layout it started with, and none starts while the answer is pending, so no demo ever runs on a
+   layout that arrives after it started. ORDERING: tagpu_wikiside_get's read is interlocked, pairing
+   with the loader's one publishing store, so the block it hands back was written whole before; the
+   block and the fixture are immutable and never freed, so the pointer holds for the process. */
+static int layout_now(const WIKIDATA* d, const WIKILAYOUT** lay, int* src)
+{
+    const WIKISIDE* side = NULL;
+    const int st = s_assets == ASSETS_FAILED ? WIKISIDE_REFUSED : tagpu_wikiside_get(&side);
+    if (st == WIKISIDE_PENDING) return 0;
+    if (st == WIKISIDE_READY && side) {
+        *lay = &side->layout;
+        *src = WIKISTAGE_LAYOUT_MOD;
+    } else {
+        *lay = d ? d->fixture : NULL;
+        *src = *lay ? WIKISTAGE_LAYOUT_FIXTURE : WIKISTAGE_LAYOUT_NONE;
+    }
+    return 1;
+}
+
 /* wiki.js `start`: the selected demo afresh, scripted, its clock from now; in Try it yourself its
-   scene with no script, the player's */
+   scene with no script, the player's. It starts on the sidebar layout layout_now gives, and not
+   before it gives one: the stage says "loading…" and the fill asks again. */
 static void start(void)
 {
     const WIKIDATA* d = data();
     const WIKIENTRY* e = entry_of(d);
-    char err[160];
+    const WIKILAYOUT* lay;
+    int src;
+    char err[TAGPU_WIKI_MSG];
     try_release_all(0);
     s_nlog = s_logCut = 0;
     sim_free();
@@ -550,11 +586,20 @@ static void start(void)
     if (!d) { s_want = 1; return; }                  /* the data loads on its own thread       */
     if (!e) return;
     if (s_demo < 0 || s_demo >= e->ndemo) { lstrcpynA(s_msg, "no demo", sizeof s_msg); return; }
-    if (!tagpu_wikisim_init(&s_sim, e, &e->demo[s_demo], !s_try, err, sizeof err)) {
-        tagpu_logf("wiki: the demo %s/%s did not start - %s", e->id, e->demo[s_demo].id, err);
-        lstrcpynA(s_msg, "the demo did not start", sizeof s_msg);
+    if (!layout_now(d, &lay, &src)) {
+        s_want = 1;
+        lstrcpynA(s_msg, "loading\xE2\x80\xA6", sizeof s_msg);
         return;
     }
+    /* a refusal -- the layout, the build trip's data rule, memory -- is shown on the stage in its
+       own words, as wiki.js shows the mockup's (`simErr`) */
+    if (!tagpu_wikisim_init(&s_sim, e, &e->demo[s_demo], !s_try, lay, err, sizeof err)) {
+        tagpu_logf("wiki: the demo %s/%s did not start - %s", e->id, e->demo[s_demo].id, err);
+        lstrcpynA(s_msg, err, sizeof s_msg);
+        return;
+    }
+    s_lay = lay;
+    s_laySrc = src;
     s_simOn = 1;
 }
 
@@ -616,13 +661,12 @@ static int key_index(const char* key, const char* prefix, int n)
 /* the control acts on the selected entry's demo: its meaning is the entry it was drawn for */
 static int entry_relative(const char* key)
 {
-    return !strncmp(key, "demo:", 5) || !strcmp(key, "play") || !strcmp(key, "replay") || !strcmp(key, "try") ||
-           !strncmp(key, "build:", 6);
+    return !strncmp(key, "demo:", 5) || !strcmp(key, "play") || !strcmp(key, "replay") || !strcmp(key, "try");
 }
 
 /* A left press on control `key` of the last frame drawn (wiki.js's handlers). Selecting an entry
    or a demo leaves Try it yourself, as the tree's and the demo list's handlers do; its button
-   swaps the demo for Try it and back; a build menu button arms its type, or none.
+   swaps the demo for Try it and back.
    A PRESS ON AN ENTRY'S CONTROL COUNTS ONLY ON A FRAME DRAWN FOR THE ENTRY SELECTED NOW: the hit
    map lags a selection by the frames the render thread has not drawn yet, and `demo:1` of the
    entry the player saw is not `demo:1` of the one just picked. The hit map names the entry its
@@ -634,7 +678,7 @@ static void page_press(const char* key)
     int i;
     if (entry_relative(key) && s_hit.entry != (entry_of(d) ? s_entry : -1)) return;
     if (!strcmp(key, "play") || !strcmp(key, "replay") || !strcmp(key, "x1") || !strcmp(key, "x2") ||
-        !strcmp(key, "try") || !strncmp(key, "build:", 6))
+        !strcmp(key, "try"))
         held(key);
     if (!d) return;
     if ((i = key_index(key, "fold:", d->nnode < folds ? d->nnode : folds)) >= 0)
@@ -653,11 +697,6 @@ static void page_press(const char* key)
             s_playing = 1;
             start();
         }
-    } else if (!strncmp(key, "build:", 6)) {
-        /* a type of the entry by its name, or none: the menu names only the entry's types */
-        const int none = !strcmp(key + 6, "none");
-        const int t = none || !entry_of(d) ? -1 : tagpu_wikidata_def(entry_of(d), key + 6);
-        if (try_on() && (t >= 0 || none)) try_send(TRY_BUILD, -1, t, 0, 0);
     } else if (!strcmp(key, "play")) {
         if (done()) start();
         else s_playing = !s_playing;
@@ -778,7 +817,7 @@ static void page_fill(TAGPU_PK_WIKI* w)
     lstrcpynA(w->msg, s_msg, sizeof w->msg);
     w->shot = s_shot;
     if (s_simOn && e) {
-        t = tagpu_wikistage_copy(&w->stage, tagpu_wikisim_view(&s_sim), e);
+        t = tagpu_wikistage_copy(&w->stage, tagpu_wikisim_view(&s_sim), e, s_laySrc);
         w->stage.tick = s_sim.tick;
         w->has_stage = 1;
         if (t & ~s_trunc) {
@@ -789,23 +828,112 @@ static void page_fill(TAGPU_PK_WIKI* w)
     }
 }
 
+/* a layout's name as a JSON string: its UTF-8 bytes as they are, which is how both readers take
+   them (sim.js counts a name's UTF-8 bytes against WIKI_SIDE_NAME), the rest escaped */
+static void ustr(FILE* f, const char* s, size_t n)
+{
+    size_t i;
+    fputc('"', f);
+    for (i = 0; i < n && s[i]; i++) {
+        unsigned char ch = (unsigned char)s[i];
+        if (ch == '"' || ch == '\\') fprintf(f, "\\%c", ch);
+        else if (ch < 0x20 || ch == 0x7F) fprintf(f, "\\u%04x", ch);
+        else fputc(ch, f);
+    }
+    fputc('"', f);
+}
+
+/* A layout as sim.js's schema writes it (the sidebar spec, section 4.1): what tagpu_wikidata_layout
+   reads back, and what simparity.mjs's --layout and --try give sim.js. Screens by name, in their
+   index order, which a JSON object keeps. */
+static void layout_json(FILE* f, const WIKILAYOUT* L)
+{
+    /* sim.js ROLES, by WIKI_ROLE_* */
+    static const char* const ROLE[WIKI_NROLES] = { "orders", "buildtab", "build", "prev", "next", "stop", "order" };
+    int i, j;
+    fprintf(f, "{\"format\":1,\"width\":%d,\"height\":%d,\"sides\":[", L->width, L->height);
+    for (i = 0; i < L->nside && i < WIKI_SIDE_SIDES; i++) {
+        const WIKISIDEDEF* s = &L->side[i];
+        fprintf(f, "%s{\"name\":", i ? "," : "");
+        ustr(f, s->name, WIKI_SIDE_NAME);
+        fprintf(f, ",\"prefix\":");
+        ustr(f, s->prefix, WIKI_SIDE_NAME);
+        fprintf(f, ",\"main2\":");
+        ustr(f, L->screen[s->main2].name, WIKI_SIDE_NAME);
+        fprintf(f, ",\"gen\":");
+        ustr(f, L->screen[s->gen].name, WIKI_SIDE_NAME);
+        fputc('}', f);
+    }
+    fprintf(f, "],\"player_side\":%d,\"types\":{", L->player_side);
+    for (i = 0; i < L->ntype && i < WIKI_SIDE_TYPES; i++) {
+        const WIKIPAGES* t = &L->type[i];
+        fprintf(f, "%s", i ? "," : "");
+        ustr(f, t->name, WIKI_SIDE_NAME);
+        fprintf(f, ":{\"pages\":[");
+        for (j = 0; j < t->npage && j < WIKI_SIDE_PAGES; j++) {
+            fprintf(f, "%s", j ? "," : "");
+            ustr(f, L->screen[t->page[j]].name, WIKI_SIDE_NAME);
+        }
+        fprintf(f, "],\"orders\":");
+        if (t->orders >= 0) ustr(f, L->screen[t->orders].name, WIKI_SIDE_NAME);
+        else fputs("null", f);
+        fputc('}', f);
+    }
+    fprintf(f, "},\"screens\":{");
+    for (i = 0; i < L->nscreen && i < WIKI_SIDE_SCREENS; i++) {
+        const WIKISCREEN* s = &L->screen[i];
+        fprintf(f, "%s", i ? "," : "");
+        ustr(f, s->name, WIKI_SIDE_NAME);
+        fprintf(f, ":{\"y\":%d,\"w\":%d,\"h\":%d,\"gadgets\":[", s->y, s->w, s->h);
+        for (j = 0; j < s->ngadget && j < WIKI_SIDE_GADGETS; j++) {
+            const WIKIGADGET* g = &s->gadget[j];
+            fprintf(f, "%s{\"name\":", j ? "," : "");
+            ustr(f, g->name, WIKI_SIDE_NAME);
+            fprintf(f, ",\"role\":\"%s\",\"rect\":[%d,%d,%d,%d]", g->role >= 0 && g->role < WIKI_NROLES ? ROLE[g->role] : "",
+                    g->x, g->y, g->w, g->h);
+            if (g->role == WIKI_ROLE_BUILD) {
+                fprintf(f, ",\"unit\":");
+                if (g->unit[0]) ustr(f, g->unit, WIKI_SIDE_NAME);
+                else fputs("null", f);
+            }
+            fprintf(f, ",\"grey\":%s,\"hidden\":%s}", g->grey ? "true" : "false", g->hidden ? "true" : "false");
+        }
+        fprintf(f, "]}");
+    }
+    fprintf(f, "}}");
+}
+
 /* THE PARITY CHECK OF THE CODE THE GAME RUNS (tools/wiki_regression.py demos): every demo of every
-   entry played to its end at once, here on the game thread in the DLL's i686 SSE2 build, and its
-   tagpu_wikisim_hash logged in the form `node tools/wiki/simparity.mjs --hash` prints. */
+   entry played to its end at once, here on the game thread in the DLL's i686 SSE2 build, on the
+   sidebar layout a demo would start on (layout_now; the caller waits for it), and its
+   tagpu_wikisim_hash logged in the form `node tools/wiki/simparity.mjs --hash` prints. The layout
+   is written to CHECK_LAYOUT first, for simparity's --layout (null: none). */
 static void check(void)
 {
     const WIKIDATA* d = data();
+    const WIKILAYOUT* lay = NULL;
     LARGE_INTEGER t0, t1;
     char err[160];
-    int i, j, n = 0, bad = 0;
+    int i, j, n = 0, bad = 0, src = WIKISTAGE_LAYOUT_NONE;
+    FILE* f;
     if (!d) { tagpu_logf("wiki check: the wiki's data is not loaded"); return; }
+    layout_now(d, &lay, &src);
+    if ((f = fopen(CHECK_LAYOUT ".tmp", "wb"))) {
+        if (lay) layout_json(f, lay);
+        else fputs("null", f);
+        fputc('\n', f);
+        if (fclose(f) != 0 || !MoveFileExA(CHECK_LAYOUT ".tmp", CHECK_LAYOUT, MOVEFILE_REPLACE_EXISTING))
+            tagpu_logf("wiki check: %s could not be written (%lu)", CHECK_LAYOUT, (unsigned long)GetLastError());
+    }
+    tagpu_logf("wiki check: the sidebar layout is %s, in %s", src == WIKISTAGE_LAYOUT_MOD ? "the mod's"
+               : src == WIKISTAGE_LAYOUT_FIXTURE ? "the fixture" : "none", CHECK_LAYOUT);
     QueryPerformanceCounter(&t0);
     for (i = 0; i < d->nentry; i++)
         for (j = 0; j < d->entry[i].ndemo; j++) {
             const WIKIENTRY* e = &d->entry[i];
             WIKISIM* s = (WIKISIM*)malloc(sizeof *s);
             long k = 0;
-            if (!s || !tagpu_wikisim_init(s, e, &e->demo[j], 1, err, sizeof err)) {
+            if (!s || !tagpu_wikisim_init(s, e, &e->demo[j], 1, lay, err, sizeof err)) {
                 tagpu_logf("wiki check: %s/%s did not start - %s", e->id, e->demo[j].id, s ? err : "no memory");
                 free(s);
                 bad++;
@@ -1076,6 +1204,7 @@ void tagpu_wiki_take(const TAGPU_CMD_WIKI* c)
     s_hit = *c;
     if (s_hit.n > TAGPU_CMD_WIKIHITS) s_hit.n = TAGPU_CMD_WIKIHITS;
     s_hit.u = bounded(s_hit.u, 1000);
+    if (s_hit.side_h < 0 || s_hit.side_h > WIKI_SIDE_ROWS) s_hit.side_h = 0;
     for (i = 0; i < (int)TAGPU_WIKI_NSCROLL; i++) {
         s_hit.scroll_max[i] = bounded(s_hit.scroll_max[i], 1e6f);
         s_hit.scroll[i] = bounded(s_hit.scroll[i], s_hit.scroll_max[i]);
@@ -1159,18 +1288,24 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
         const TRYIN* t = &s_log[i];
         fprintf(f, "%s[%ld,", i ? "," : "", (long)t->tick);
         if (t->kind == TRY_MOVE) fprintf(f, "\"move\",%.17g,%.17g]", t->x, t->z);
-        else if (t->kind == TRY_BUILD) {
-            fprintf(f, "\"build\",");
-            if (t->build >= 0 && e && t->build < e->ndef) jstr(f, e->def[t->build].name, WIKI_ID_MAX);
-            else fprintf(f, "null");
-            fprintf(f, "]");
-        } else {
+        else {
             fprintf(f, "\"%s\",", t->kind == TRY_DOWN ? "down" : "up");
             jstr(f, key_name(t->key), 16);
             fprintf(f, "]");
         }
     }
-    fprintf(f, "],\"u\":%.17g,\"map\":[%d,%d]", (double)s_hit.u, e ? e->scene.w : 0, e ? e->scene.h : 0);
+    /* the stage's fit as stage_world takes it: the drawn frame's unit, map and sidebar rows */
+    fprintf(f, "],\"u\":%.17g,\"map\":[%d,%d],\"side_h\":%d,\"view_drawn\":%d", (double)s_hit.u, e ? e->scene.w : 0,
+            e ? e->scene.h : 0, (int)s_hit.side_h, (int)s_hit.view);
+    /* the sidebar layout the simulation was started with, as simparity.mjs --try gives it to sim.js
+       (null: none); and which one it is */
+    fprintf(f, ",\"layout_src\":\"%s\"", !s_simOn ? "" : s_laySrc == WIKISTAGE_LAYOUT_MOD ? "mod"
+               : s_laySrc == WIKISTAGE_LAYOUT_FIXTURE ? "fixture" : "none");
+    if (s_simOn) {
+        fprintf(f, ",\"layout\":");
+        if (s_lay) layout_json(f, s_lay);
+        else fputs("null", f);
+    }
     fprintf(f, ",\"bars\":[");
     for (i = 0; i < TAGPU_WIKI_NSCROLL; i++) {
         const TAGPU_CMD_WIKIBAR* b = &s_hit.bar[i];
@@ -1226,24 +1361,25 @@ static void shot(void)
                s_simOn ? s_sim.tick : -1);
 }
 
-/* THE 3D ASSET LOAD (tagpu_wikiasset.h), started once a process, by the first fill of an open
-   window once the wiki's data is loaded: the engine's mount list, its language and folder names
+/* THE 3D ASSET LOAD (tagpu_wikiasset.h), started once a process once the wiki's data is loaded,
+   by the first fill of an open window or by the parity check's trigger (CHECK_ASK), which needs
+   the sidebar's answer with the window closed: the engine's mount list, its language and folder names
    (tagpu_replays.c, which reads the same list for running_mod) and the current directory are
    copied here, on the game thread that owns them, and handed to the loader thread by value with
    the data and WIKIPAK, both immutable for the process. Nothing here waits for the load. */
-static int s_assets;
-
 static void assets_start(void)
 {
     const WIKIDATA* d = data();
     WIKI3DIN* in;
     DWORD n;
-    if (s_assets || !d) return;
-    s_assets = 1;
+    if (s_assets != ASSETS_NONE || !d) return;
     if (!(in = (WIKI3DIN*)calloc(1, sizeof *in))) {
-        tagpu_logf("wiki3d: NOT loaded - out of memory for its input");
+        /* no loader thread, so no sidebar answer will ever be published: the fixture stands */
+        s_assets = ASSETS_FAILED;
+        tagpu_logf("wiki3d: NOT loaded - out of memory for its input; the sidebar is the fixture's");
         return;
     }
+    s_assets = ASSETS_STARTED;
     in->narc = tagpu_replays_archive_paths(in->arc, TAGPU_VFS_ARCMAX);
     tagpu_replays_asset_names(&in->names);
     n = GetCurrentDirectoryA(sizeof in->cwd, in->cwd);
@@ -1268,9 +1404,16 @@ int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again)
     int cx, cy;
     s_ask = (calls++ % 30u) == 0u;
     if (!s_qpf.QuadPart) QueryPerformanceFrequency(&s_qpf);
+    /* the check plays on the layout a demo would start on: it starts the asset load if the wiki has
+       not, and the trigger waits until the sidebar's answer is in */
     if (s_ask && GetFileAttributesA(CHECK_ASK) != INVALID_FILE_ATTRIBUTES) {
-        DeleteFileA(CHECK_ASK);
-        check();
+        const WIKILAYOUT* lay;
+        int src;
+        assets_start();
+        if (layout_now(data(), &lay, &src)) {
+            DeleteFileA(CHECK_ASK);
+            check();
+        }
     }
     /* A WINDOW THE LAST PUBLISHED PACKET COULD NOT CARRY CLOSES HERE, the first fill after it: that
        frame drew no wiki and took no input to it, so the window held the input with nothing to see
@@ -1308,7 +1451,12 @@ int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again)
     lstrcpynA(w->held, s_held, sizeof w->held);
     if (s_open) {
         assets_start();
-        if (s_ask && GetFileAttributesA(SHOT_ASK) != INVALID_FILE_ATTRIBUTES) shot();
+        /* a capture waits, as a demo does, for the layout it would start on */
+        if (s_ask && GetFileAttributesA(SHOT_ASK) != INVALID_FILE_ATTRIBUTES) {
+            const WIKILAYOUT* lay;
+            int src;
+            if (layout_now(data(), &lay, &src)) shot();
+        }
         page_fill(w);
     }
     *len = w->has_stage ? (uint32_t)sizeof *w : TAGPU_PK_WIKI_HEAD;

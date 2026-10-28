@@ -7,9 +7,10 @@
    canvas call with its op within 1/64 of a pixel.
 
    PURE. It names no engine address, holds no global and reads only its arguments: the view by
-   value (WIKISTAGEVIEW), the stage's rect in HUD units and u, the device pixels a unit. So the
-   render thread can build the picture from a packet record while the game thread steps the
-   simulation that made it, and a native build of this file is the check's.
+   value (WIKISTAGEVIEW) and the sidebar layout and art the caller resolves for it, both immutable,
+   the stage's rect in HUD units and u, the device pixels a unit. So the render thread can build
+   the picture from a packet record while the game thread steps the simulation that made it, and
+   a native build of this file is the check's.
 
    Every op is in HUD units from the screen's top left, as tagpu_huddraw.c draws them, and clips
    to the stage's canvas as the canvas clips what is drawn on it. The canvas is the stage's rect
@@ -51,6 +52,10 @@ typedef struct {
     uint8_t fx, fz;                     /* footprint, cells                                */
     uint8_t owner;                      /* 255: none of the eight players                  */
     uint8_t selected;
+    int16_t tx, tz;                     /* its centre truncated toward zero from the
+                                           simulation's double, as the minimap's dot takes it
+                                           (tagpu_wikiside.h): the float above may round
+                                           across a whole unit                              */
     char    label[WIKISTAGE_LABEL];     /* its label, else its type's name                 */
 } WIKISTAGEUNIT;
 
@@ -66,6 +71,24 @@ typedef struct {
 } WIKISTAGESITE;
 
 typedef struct { float from_x, from_z, to_x, to_z; uint8_t kind; } WIKISTAGELINE;
+
+/* WHICH LAYOUT THE SIMULATION RUNS ON, as the view names it: a value, so the record stays a
+   record of values (tagpu_wikipk.h). The render thread resolves it to a layout it holds itself
+   (WIKISTAGEART.side_layout): the wiki data's fixture, or the published WIKISIDE's own. */
+enum { WIKISTAGE_LAYOUT_NONE, WIKISTAGE_LAYOUT_FIXTURE, WIKISTAGE_LAYOUT_MOD, WIKISTAGE_LAYOUT_N };
+
+/* THE SIDEBAR, WIKIVSIDE as the stage draws it (tagpu_wikisim.h): the column's rows, the routed
+   screen, each gadget's state and the unit under the cursor, the last as an index of the view's
+   `unit`. The copy holds each to its array; the render thread bounds `screen` against the
+   layout's nscreen and `nstate` against the screen's gadgets where it reads them. */
+typedef struct {
+    int16_t h;                          /* the layout's height: 480 .. WIKI_SIDE_ROWS      */
+    int16_t screen;                     /* an index into the view's layout's `screen`      */
+    int16_t nstate;
+    int16_t under;                      /* an index of `unit`, -1 for none                 */
+    int8_t  state[WIKI_SIDE_GADGETS];   /* -1 not drawn, 0 normal, 1 pressed or the current
+                                           tab, 2 greyed                                   */
+} WIKISTAGESIDE;
 
 typedef struct {
     uint32_t       trunc;               /* WIKISTAGE_TRUNC_*                               */
@@ -96,6 +119,11 @@ typedef struct {
     char           caption[WIKISTAGE_CAPTION];
     double         pace;
     int16_t        mode;                /* the armed type, or -1: contextual               */
+    uint8_t        has_side;            /* the sidebar is on: the stage draws its column   */
+    uint8_t        layout_src;          /* WIKISTAGE_LAYOUT_*: the layout `side` indexes   */
+    WIKISTAGESIDE  side;
+    int16_t        locked;              /* the type a scripted build could not reach in
+                                           this layout, an index into `type`; -1 none      */
     int16_t        ntype;
     char           type[WIKI_MAX_DEFS][WIKISTAGE_LABEL];    /* the types' names: a queued
                                            site's and the ghost's label                    */
@@ -104,16 +132,23 @@ typedef struct {
 /* THE COPY. `v` (NULL for none) and the entry `e` it was made from into `out`, every array to its
    bound and every string cut at a character, by value: a WIKIVIEW's arrays live in its WIKISIM
    and hold only until the next call on it, so nothing that outlives the call may point into
-   them. Returns the WIKISTAGE_TRUNC_* bits, which are also out->trunc. */
-uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIENTRY* e);
+   them. `layout_src` (WIKISTAGE_LAYOUT_*) names the layout the simulation was started with
+   (tagpu_wikisim_init), kept as the view's while its sidebar is on. Returns the
+   WIKISTAGE_TRUNC_* bits, which are also out->trunc. */
+uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIENTRY* e, int layout_src);
 
 /* ---- the picture ---------------------------------------------------------------------------- */
 
-/* The wiki's own op budget, apart from the replay HUD's HUD_MAXOP: a 40 x 24 map's cells, fog and
-   grid come to about 3000, and a 128 x 128 map's cells and fog alone would take every op. */
+/* The wiki's own op budget, apart from the replay HUD's HUD_MAXOP: a 40 x 30 map's cells, grid
+   and fog come to about 3750, the whitebox minimap's cells, fog and dots to at most
+   2 x 1200 + 128 more and the sidebar's buttons to about 200; a 128 x 128 map's cells and fog
+   alone would take every op. */
 #define WIKI_MAXOP   16384
 #define WIKI_MAXRUN  1024
 #define WIKI_TEXTMAX 16384
+/* the groups: one a greyed button of the whitebox sidebar, so a screen's gadgets bound them,
+   and the HUD pass draws at most HUD_MAXGRP */
+#define WIKI_MAXGRP  WIKI_SIDE_GADGETS
 
 /* THE THREE OP RANGES (research/notes/ingame-wiki-3d-stage-plan.md, section 3): every op belongs to
    one, stage.js's `o.layer` names, and the frame draws either R0 then R1 -- the whitebox, every op
@@ -123,12 +158,15 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
 #define WIKISTAGE_IN_BOX    2             /* a unit's, site's or ghost's box, by its type (`rtype`)  */
 #define WIKISTAGE_IN_LABEL  3             /* a queued site's name: the whitebox's alone              */
 #define WIKISTAGE_IN_OVER   4             /* the overlays: lines, squares, selection, the cursor...  */
+#define WIKISTAGE_IN_SIDE   5             /* the left sidebar, left of the map: under the image      */
 
 typedef struct {
     int     n, nrun, ntext;
     int     dropped;                    /* the ops this build had no room for              */
     int     logged;                     /* kept across builds: a dropping build was logged */
     int     cursor;                     /* the op that draws the cursor, -1 when none does */
+    int     ngrp;                       /* the groups the ops' `grp` name, 1-based          */
+    float   grp[WIKI_MAXGRP];           /* each group's opacity (HUDOPLIST `grp`)           */
     HUDOP   op[WIKI_MAXOP];
     uint8_t range[WIKI_MAXOP];          /* each op's WIKISTAGE_IN_*          */
     uint8_t rtype[WIKI_MAXOP];          /* a WIKISTAGE_IN_BOX op's unit type, an index into the
@@ -177,6 +215,19 @@ typedef struct {
                                            tagpu_gui.on's cursorscale= (1 by default)      */
     WIKISTAGELOG     log;               /* NULL: none                                      */
     void*            log_ctx;
+    /* THE LAYOUT THE VIEW'S `layout_src` NAMES, resolved by the caller to one it holds (NULL:
+       none, and a sidebar draws its column and minimap alone). It must be immutable while the
+       build runs; the DLL's are WIKIDATA.fixture and the published WIKISIDE's, never freed. */
+    const WIKILAYOUT*      side_layout;
+    /* THE SIDEBAR IN THE MOD'S OWN PICTURES, or NULL for the whitebox column: the published
+       WIKISIDE whose column this frame composed (tagpu_wikiside_compose), used only for a view
+       on the mod's layout that is this block's own (`side_layout` == &side->layout), since its
+       pictures are parallel to that layout's gadgets. The column is then one HOP_SIDE op, and a
+       gadget whose picture is a label a whitebox button over it (wiki.js sideArt).
+       `side_minimap` 0: the composed column has no minimap (no base picture for this stage),
+       and the whitebox's is drawn over it. */
+    const struct WIKISIDE* side;
+    int              side_minimap;
 } WIKISTAGEART;
 
 /* THE ENGINE'S CURSOR ANIMATION: the frame `elapsed` 30 Hz ticks after SetUICursor 0x4AB400
@@ -192,29 +243,35 @@ int tagpu_wikistage_cursor_frame(const WIKISTAGESPR* frames, int n, int loop, lo
    (`*x0`, `*y0`) and its size, in device pixels. */
 void tagpu_wikistage_canvas(HUDRECT stage, double u, double* x0, double* y0, double* w, double* h);
 
-/* THE FIT, stage.js `fit`: a map of `w` x `h` cells in a canvas `stage_w` x `stage_h` device pixels
-   at `u` pixels a unit, letterboxed with a pad of 6 units. `s` is device pixels a world unit and
-   (`ox`, `oz`) the map's corner from the canvas's top left. ONE FUNCTION ON BOTH THREADS: the
-   render thread draws the stage with it and the game thread turns a click on the stage into a
-   world point with it, from the same frame's canvas, so the two cannot disagree. */
-typedef struct { double s, ox, oz; } WIKISTAGEFIT;
-void tagpu_wikistage_fit(int w, int h, double stage_w, double stage_h, double u, WIKISTAGEFIT* out);
+/* THE FIT, stage.js `fit` over `content`: a map of `w` x `h` cells, and with the sidebar
+   (`side_h` its rows, 0 for none) the 128-unit column left of it, in a canvas `stage_w` x
+   `stage_h` device pixels at `u` pixels a unit, letterboxed with a pad of 6 units. The content
+   rect is x in [x0, x0 + cw), z in [0, ch), world units: the map's, or with the column x0 = -128,
+   cw = 128 + the map's width and ch the taller of the map and the column; the map stays at the
+   top. `s` is device pixels a world unit and (`ox`, `oz`) the world origin -- the map's corner --
+   from the canvas's top left, for the map and the column alike. ONE FUNCTION ON BOTH THREADS:
+   the render thread draws the stage with it and the game thread turns a click on the stage into
+   a world point with it, from the same frame's canvas, so the two cannot disagree. */
+typedef struct { double s, ox, oz, x0, cw, ch; } WIKISTAGEFIT;
+void tagpu_wikistage_fit(int w, int h, int side_h, double stage_w, double stage_h, double u, WIKISTAGEFIT* out);
 
 /* THE IMAGE'S RECT (stage.js `draw`, the image's rect): where the stage's 3D target is composited, the
-   map's rect of the fit on the canvas of `stage`, each edge snapped to the device pixel as stage.js
-   snaps it -- [*x0, *x1) x [*y0, *y1) in device pixels from the screen's top left. The composite
-   and every op of the frame come from this one fit, so the image and the overlays cannot disagree
-   by more than the snap's half pixel. */
-void tagpu_wikistage_image(int w, int h, HUDRECT stage, double u, int* x0, int* y0, int* x1, int* y1);
+   map's rect of the fit (`side_h` as tagpu_wikistage_fit takes it) on the canvas of `stage`, each
+   edge snapped to the device pixel as stage.js snaps it -- [*x0, *x1) x [*y0, *y1) in device
+   pixels from the screen's top left. The composite and every op of the frame come from this one
+   fit, so the image and the overlays cannot disagree by more than the snap's half pixel. */
+void tagpu_wikistage_image(int w, int h, int side_h, HUDRECT stage, double u, int* x0, int* y0, int* x1, int* y1);
 
 /* WHERE AN OP IS DRAWN THIS FRAME: 1 under the image, 2 over it, 0 not at all. `image` 0 is the
    whitebox (R0 and R1: every op, in order, under -- there is no image to be over); with `image` 1,
-   R0 is under, and so is the whitebox ground when the image carries none (`ground` 0), and a box is
+   R0 and the sidebar, which lies left of the map's rect, are under, and so is the whitebox ground
+   when the image carries none (`ground` 0), and a box is
    over when its type did not resolve (bit t of `resolved`, WIKI_MAX_DEFS bits), every other overlay
    is over and a queued site's label is never drawn. stage.js `draw`'s `shows`, in C. */
 int tagpu_wikistage_keep(const WIKISTAGEOPS* o, int i, int image, int ground, const uint32_t* resolved);
 
-/* The stage's ops for `v` into `out`, in stage.js's paint order, on the canvas of `stage` at `u`.
+/* The stage's ops for `v` into `out`, in stage.js's paint order, on the canvas of `stage` at `u`:
+   with the sidebar, its column (WIKISTAGE_IN_SIDE) after the background and before the map.
    A view with no map draws the stage's ground and `msg` (NULL for none). WIKI_MAXOP BOUNDS IT: an
    op past the budget is dropped and counted in out->dropped; the build that first drops is
    logged through art->log, once while out->logged stays set; and a frame that dropped any is

@@ -1,10 +1,15 @@
 /* simcheck.mjs -- plays every demo of the wiki's entries through tools/wiki/mockup/sim.js, headless, and checks that
    each one shows what its title claims, on the sim's own state rather than on pictures.
 
-   usage: node tools/wiki/simcheck.mjs [--trace]     exit 0 when every demo and rule passes, 1 otherwise
+   usage: node tools/wiki/simcheck.mjs [--null-layout] [--trace]     exit 0 when every demo and rule passes, 1 otherwise
 
-   Imported, it runs nothing and exports ENTRY_RULES, the rule cases per entry id, which call WikiSim.create through
-   the module object sim.js exports; tools/wiki/simparity.mjs plays them through the DLL's sim that way.
+   The demos play with the sidebar of art/wiki/side/fixture.json, the layout the wiki falls back to, so each `build`
+   input plays out as its trip through the sidebar (sim.js trip) and is checked as one; --null-layout plays them with
+   no sidebar, where a `build` arms at once. The rule cases name their layout themselves.
+
+   Imported, it runs nothing and exports ENTRY_RULES, the rule cases per entry id, which call WikiSim.create and
+   WikiSim.play through the module object sim.js exports; tools/wiki/simparity.mjs records both, each with its
+   layout, and plays them through the DLL's sim that way.
 
    A demo is a scene and inputs, so a change to the rules, the figures or the map can quietly turn a demo into one
    that no longer shows its claim; this is what notices. The checks name the entry's deposits by their cell
@@ -15,6 +20,9 @@ import { pathToFileURL } from 'node:url';
 const WikiSim = createRequire(import.meta.url)('./mockup/sim.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const TRACE = process.argv.includes('--trace');
+const FIXTURE = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/side/fixture.json`, 'utf8'));
+const LAYOUT = process.argv.includes('--null-layout') ? null : FIXTURE;
+const { TRIP, TRIP_DOWN, TRIP_UP } = WikiSim;
 
 // the quickbuild entry's deposits and vents, in cells: [x, z, w, h]
 const DEP = { A: [13, 15, 5, 5], B: [22, 3, 3, 3], E: [3, 10, 3, 3], S: [15, 1, 3, 3], D: [26, 15, 3, 3], R: [29, 19, 3, 3],
@@ -31,14 +39,16 @@ const whole = (u, r) => covers(u, r) === r[2] * r[3];
 const holds = (u, [cx, cz]) => covers(u, [cx, cz, 1, 1]) === 1;
 const cellIn = (x, z, r) => x >= r[0] * 16 && x < (r[0] + r[2]) * 16 && z >= r[1] * 16 && z < (r[1] + r[3]) * 16;
 
-function run(entry, demo) {
-  const sim = WikiSim.play(entry, demo), ids = [...entry.scene.units, ...((demo.scene && demo.scene.units) || [])].map(u => u.id);
+function run(entry, demo, layout = LAYOUT) {
+  const sim = WikiSim.play(entry, demo, layout), ids = [...entry.scene.units, ...((demo.scene && demo.scene.units) || [])].map(u => u.id);
   const frames = [];
   const snap = () => frames.push({ t: sim.tick, v: sim.view(), o: Object.fromEntries(ids.map(id => [id, sim.orders(id)])) });
   snap();
   while (!sim.done) { sim.step(); snap(); }
-  return { sim, frames, last: frames[frames.length - 1], log: sim.log };
+  return { sim, frames, last: frames[frames.length - 1], log: sim.log, layout: frames[0].v.side ? layout : null };
 }
+// the tick a build input's building is armed on: its own without the sidebar, the trip's release with it
+const armedAt = (r, e) => e.at + (r.layout ? TRIP_UP : 0);
 // the first frame after the inputs of tick `at` with this `down`; clicks are where the checks look
 const clicks = (demo, k) => demo.inputs.filter(e => e.down === k).map(e => e.at);
 const fresh = (v, type) => v.units.filter(u => u.type === type && !['mex', 'geo'].includes(u.id));
@@ -312,7 +322,7 @@ const BUILDSHAPES = {
     ok(same(a[0], [12, 19]) && same(a[a.length - 1], [12, 21]), 'walked round from beside the press back to it');
   },
   spacing(r, d, ok) {
-    const [u1, u2] = ups(d, 'lmb'), arm2 = d.inputs.filter(e => 'build' in e)[1].at;
+    const [u1, u2] = ups(d, 'lmb'), arm2 = armedAt(r, d.inputs.filter(e => 'build' in e)[1]);
     const pitch = cs => cs.slice(1).map((c, i) => c[0] - cs[i][0]);
     const steps = [];
     for (const f of r.frames.filter(f => f.t < u1 && f.v.sites.length)) {
@@ -441,8 +451,349 @@ const BUILDSHAPES_RULES = {
   },
 };
 
+/* ---- the sidebar (research/notes/ingame-wiki-sidebar-plan.md; sim.js "the sidebar's rules" and "the build trip") ----
+   Every build input of a demo played with a layout is a trip: it is never locked on the fixture, it arms its
+   building on the release at t + TRIP_UP and not before, the cursor is back where it stood at t + TRIP, and it goes
+   through the pages written here. A path is the page shown at the build's tick, then each pager press up to the
+   button's own press: '1' presses no pager, '1<4' is one PREV from page 1 to page 4, '1>2>3' two NEXTs. They are the
+   fixture's: ARMCK's page 1 holds ARMMEX and ARMSOLAR, page 3 ARMDRAG and page 4 ARMLLT, so from page 1 ARMLLT is one
+   PREV and ARMDRAG two NEXTs (the tie goes to NEXT), and a second ARMLLT or ARMDRAG starts on the page the first left
+   shown. */
+const TRIP_PATHS = {
+  quickbuild: { snap: ['1'], alt: ['1'], fog: ['1'] },
+  buildshapes: { clicks: ['1<4', '4'], line: ['1<4', '4'], axis: ['1<4'], rect: ['1>2>3'], hollow: ['1>2>3'],
+    spacing: ['1>2>3', '3'], ring: ['1>2>3'], ringqueued: ['1', '1>2>3'], toggle: ['1<4'], reshape: ['1>2>3'] },
+};
+const gadgetsOf = (L, v) => L.screens[v.side.screen].gadgets;
+// the pages a trip from tick t shows up to the button's press, each change marked by the pager pressed just before it
+function tripPath(r, t) {
+  const at = i => r.frames[t + i].v;
+  let path = String(at(0).side.page);
+  for (let i = 1; i <= TRIP_DOWN; i++) {
+    const was = at(i - 1), now = at(i);
+    if (now.side.page === was.side.page) continue;
+    const pressed = gadgetsOf(r.layout, was).find((g, k) => was.side.state[k] === 1 && (g.role === 'prev' || g.role === 'next'));
+    path += (pressed ? (pressed.role === 'next' ? '>' : '<') : '?') + now.side.page;
+  }
+  return path;
+}
+function tripChecks(r, d, ok, paths) {
+  const bs = d.inputs.filter(e => 'build' in e);
+  ok(r.frames.every(f => f.v.locked === null), 'no build is locked on the fixture');
+  ok(bs.length === (paths || []).length, `a page path is written for each of the ${bs.length} build inputs`);
+  bs.forEach((e, n) => {
+    const t = e.at, v = i => r.frames[t + i].v, what = `the ${e.build} build at ${t}`;
+    const before = Array.from({ length: TRIP_UP }, (_, i) => v(i).mode), after = Array.from({ length: TRIP - TRIP_UP + 1 }, (_, i) => v(TRIP_UP + i).mode);
+    ok(before.every(m => m === v(0).mode) && after.every(m => m === `build:${e.build}`),
+      `${what}: armed from t + ${TRIP_UP}, by the release, and not before (${v(TRIP_UP - 1).mode}, then ${v(TRIP_UP).mode})`);
+    ok(v(TRIP).cursor.x === v(0).cursor.x && v(TRIP).cursor.z === v(0).cursor.z, `${what}: the cursor is back where it stood at t + ${TRIP}`);
+    const path = tripPath(r, t);
+    ok(paths && path === paths[n], `${what}: the pages ${path} (want ${paths && paths[n]})`);
+    const b = gadgetsOf(r.layout, v(TRIP_DOWN)).findIndex(g => g.role === 'build' && g.unit === e.build);
+    ok(b >= 0 && v(TRIP_DOWN).side.state[b] === 1 && v(TRIP_UP - 1).side.state[b] === 1 && v(TRIP_UP).side.state[b] === 0,
+      `${what}: its button shows pressed from t + ${TRIP_DOWN} to the release`);
+  });
+}
+
+/* the sidebar's rules on the fixture, which no demo shows: the page router, a button's press and release, the
+   pagers and tabs, STOP, the inert buttons and the minimap, the clamped map drag, the longest trip, a locked build */
+const SIDE_W = 128;
+// the centre of the gadget named `name` on screen `screen`, in stage units
+function centre(L, screen, name) {
+  const s = L.screens[screen], g = s.gadgets.find(g => g.name === name);
+  return [-SIDE_W + g.rect[0] + g.rect[2] / 2, s.y + g.rect[1] + g.rect[3] / 2];
+}
+const press = (s, at, b = 'lmb') => { s.input({ move: at }); s.input({ down: b }); s.input({ up: b }); };
+const stateOf = (v, name) => v.side.state[FIXTURE.screens[v.side.screen].gadgets.findIndex(g => g.name === name)];
+const selIds = v => v.units.filter(u => u.selected).map(u => u.id).join(' ');
+const fixtureWith = (types, screens) => ({ ...FIXTURE, types: { ...FIXTURE.types, ...types }, screens: { ...FIXTURE.screens, ...screens } });
+const withOrders = (entry, ids) => ({ ...entry, scene: { ...entry.scene,
+  units: entry.scene.units.map(u => ids.includes(u.id) ? { ...u, orders: [{ move: [120, 120] }, { move: [200, 120] }] } : u) } });
+/* stand-ins for STOP's rules: a static unit with canstop, as turrets and factories have it, and a mobile one without,
+   neither a builder */
+const withStoppers = entry => ({ ...entry, units: { ...entry.units,
+  TURRET: { footprint: [2, 2], buildTime: 10, canstop: 1, from: 'a static stand-in with canstop' },
+  ROVER: { footprint: [2, 2], buildTime: 10, maxVelocity: 1, from: 'a mobile stand-in without canstop' } } });
+const STOPPERS = [{ id: 'tur', type: 'TURRET', at: [120, 136] }, { id: 'rov', type: 'ROVER', at: [200, 136] }];
+// ARMCK1 of the fixture with its gadgets replaced, and a gadget put just before or after the one named n
+const G1 = FIXTURE.screens.ARMCK1.gadgets;
+const ck1With = gadgets => fixtureWith({}, { ARMCK1: { ...FIXTURE.screens.ARMCK1, gadgets } });
+const beside = (n, g, first) => G1.flatMap(x => x.name !== n ? [x] : first ? [g, x] : [x, g]);
+const rectOf = n => G1.find(g => g.name === n).rect;
+const rectCentre = r => [-SIDE_W + r[0] + r[2] / 2, FIXTURE.screens.ARMCK1.y + r[1] + r[3] / 2];
+const geoAt = (rect, extra = {}) => ({ name: 'ARMGEO', role: 'build', unit: 'ARMGEO', rect, ...extra });
+const SIDE_RULES = {
+  'the page router: nothing selected shows MAIN2, one ARMCK its page 1, ARMCK with ARMACK or a Peewee alone GEN'(entry) {
+    const side = sel => WikiSim.create(entry, { scene: { selected: sel } }, FIXTURE).view().side;
+    const none = side([]), ck = side(['ck']), two = side(['ck', 'ack']), pw = side(['pw']);
+    return none.screen === 'ARMMAIN2' && none.unit === null && ck.screen === 'ARMCK1' && ck.unit === 'ck' && ck.page === 1 &&
+      two.screen === 'ARMGEN' && two.unit === null && pw.screen === 'ARMGEN' && pw.unit === 'pw' && pw.page === 0;
+  },
+  'ORDERS shows GEN with ORDERS current, and BUILD goes back to the page kept'(entry) {
+    const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, FIXTURE);
+    press(s, centre(FIXTURE, 'ARMCK1', 'ARMNEXT'));
+    const p2 = s.view().side;
+    // a tab acts on the press
+    s.input({ move: centre(FIXTURE, 'ARMCK2', 'ARMORDERS') }); s.input({ down: 'lmb' });
+    const gen = s.view();
+    s.input({ up: 'lmb' });
+    press(s, centre(FIXTURE, 'ARMGEN', 'ARMBUILD'));
+    const back = s.view();
+    return p2.screen === 'ARMCK2' && gen.side.screen === 'ARMGEN' && gen.side.unit === 'ck' &&
+      stateOf(gen, 'ARMORDERS') === 1 && stateOf(gen, 'ARMBUILD') === 0 &&
+      back.side.screen === 'ARMCK2' && back.side.page === 2 && stateOf(back, 'ARMBUILD') === 1;
+  },
+  'a build button pressed, dragged off and released does nothing; released inside it arms'(entry) {
+    const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, FIXTURE), mex = centre(FIXTURE, 'ARMCK1', 'ARMMEX');
+    s.input({ move: mex }); s.input({ down: 'lmb' });
+    const held = s.view();
+    s.input({ move: centre(FIXTURE, 'ARMCK1', 'ARMSOLAR') });
+    const off = s.view();
+    s.input({ move: [200, 200] }); s.input({ up: 'lmb' });
+    const out = s.view();
+    press(s, mex);
+    const armed = s.view();
+    return held.mode === 'contextual' && stateOf(held, 'ARMMEX') === 1 && stateOf(off, 'ARMMEX') === 0 &&
+      out.mode === 'contextual' && selIds(out) === 'ck' && !out.drag && armed.mode === 'build:ARMMEX' && stateOf(armed, 'ARMMEX') === 0;
+  },
+  // 0x41AA00 never tests which button released a structure's button
+  'the right button arms a building too'(entry) {
+    const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, FIXTURE);
+    press(s, centre(FIXTURE, 'ARMCK1', 'ARMMEX'), 'rmb');
+    return s.view().mode === 'build:ARMMEX';
+  },
+  /* the in-play handler's cancel: a right press it gets disarms whatever the point (0x4993AC -> 0x499100), and it gets
+     every press outside the screen's window (the pump's poll 0x4AB5D0) -- the minimap, the column's rows below the
+     screen, the band under a short map */
+  'a right press off the screen disarms a building armed and orders nothing'(entry) {
+    const off = at => {
+      const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, FIXTURE);
+      press(s, centre(FIXTURE, 'ARMCK1', 'ARMMEX'));
+      s.input({ move: at }); s.input({ down: 'rmb' });
+      const v = s.view();
+      s.input({ up: 'rmb' });
+      return v.mode === 'contextual' && s.view().mode === 'contextual' && s.orders('ck').length === 0 &&
+        selIds(s.view()) === 'ck' && s.view().side.screen === 'ARMCK1';
+    };
+    const MH = entry.scene.map.h * 16;
+    return off([-SIDE_W + 60, 128 + 352 + 20]) && off([-SIDE_W + 64, 64]) && off([60, MH + 8]);
+  },
+  /* a left press off the screen reaches stock's click 0x498F70 (place_button returns 0 off the viewport), which places
+     the building once at the point clamped to the view, snapped: the sim's clamp is onto the map, and the deposit at
+     cells 2..3 of rows 26..27 is where ARMMEX snaps from the clamped corner. Shift keeps it armed; the release adds
+     nothing; the minimap stays inert (decision 6) */
+  'a left press off the screen with a building armed places it once at the clamped cursor'(entry) {
+    const run = (at, shift) => {
+      const s = WikiSim.create(entry, { scene: { selected: ['ck'], metal: [{ rect: [2, 26, 2, 2], v: 200 }] } }, FIXTURE);
+      press(s, centre(FIXTURE, 'ARMCK1', 'ARMMEX'));
+      if (shift) s.input({ down: 'shift' });
+      s.input({ move: [200, 300] }); s.input({ move: at }); s.input({ down: 'lmb' });
+      const pressed = s.orders('ck').map(o => `${o.type}@${o.ox},${o.oz}`).join(' '), armed = s.view().mode;
+      s.input({ up: 'lmb' });
+      const released = s.orders('ck').length;
+      if (shift) s.input({ up: 'shift' });
+      return { pressed, armed, released, after: s.view().mode };
+    };
+    const MH = entry.scene.map.h * 16, below = run([-SIDE_W + 60, 128 + 352 + 20], false), held = run([-SIDE_W + 60, 128 + 352 + 20], true);
+    const band = run([40, MH + 8], false), mini = run([-SIDE_W + 64, 64], false);
+    return below.pressed === 'ARMMEX@1,26' && below.armed === 'contextual' && below.released === 1 &&
+      held.pressed === 'ARMMEX@1,26' && held.armed === 'build:ARMMEX' && held.released === 1 && held.after === 'contextual' &&
+      band.pressed === 'ARMMEX@1,26' && band.armed === 'contextual' &&
+      mini.pressed === '' && mini.armed === 'build:ARMMEX' && mini.released === 0;
+  },
+  /* a right press on the screen is the GUI's alone (0x4AB5D0 pops it), so the handler's cancel never sees it: an empty
+     spot or a greyed button keeps the building armed, and a live build button arms its own on the right release, as
+     the left one would (0x41AA00 reads which button only for a factory's queue, 0x41AC09) */
+  'a right press on the screen keeps a building armed, and a build button arms its own on the release'(entry) {
+    const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, FIXTURE);
+    press(s, centre(FIXTURE, 'ARMCK1', 'ARMMEX'));
+    press(s, [-SIDE_W + 2, 128 + 2], 'rmb');
+    const empty = s.view().mode;
+    press(s, centre(FIXTURE, 'ARMCK1', 'ARMSOLAR'), 'rmb');
+    const grey = s.view().mode;
+    press(s, centre(FIXTURE, 'ARMCK1', 'ARMNEXT'));
+    s.input({ move: centre(FIXTURE, 'ARMCK2', 'ARMGEO') }); s.input({ down: 'rmb' });
+    const held = s.view().mode;
+    s.input({ up: 'rmb' });
+    return empty === 'build:ARMMEX' && grey === 'build:ARMMEX' && held === 'build:ARMMEX' && s.view().mode === 'build:ARMGEO' &&
+      s.orders('ck').length === 0;
+  },
+  'PREV from page 1 shows the last page'(entry) {
+    const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, FIXTURE);
+    press(s, centre(FIXTURE, 'ARMCK1', 'ARMPREV'));
+    const v = s.view().side;
+    return v.screen === 'ARMCK4' && v.page === 4;
+  },
+  /* greyed: IGPATCH, which names no unit; ARMSOLAR, a unit this entry does not define (owner question Q-O1, the
+     recommended answer); every order button but STOP */
+  'a greyed button and an order button are inert'(entry) {
+    const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, FIXTURE), first = s.view();
+    press(s, centre(FIXTURE, 'ARMCK1', 'ARMSOLAR'));
+    const solar = s.view();
+    press(s, centre(FIXTURE, 'ARMCK1', 'ARMPREV'));
+    const before = s.view(), patch = centre(FIXTURE, 'ARMCK4', 'IGPATCH');
+    s.input({ move: patch }); s.input({ down: 'lmb' });
+    const down = s.view();
+    s.input({ up: 'lmb' });
+    const grey = s.view();
+    press(s, centre(FIXTURE, 'ARMCK4', 'ARMORDERS'));
+    const gen = s.view();
+    press(s, centre(FIXTURE, 'ARMGEN', 'ARMMOVE'));
+    const order = s.view();
+    const still = (a, b) => a.side.screen === b.side.screen && a.side.page === b.side.page && same(a.side.state, b.side.state) && a.mode === b.mode;
+    return stateOf(first, 'ARMSOLAR') === 2 && still(solar, first) && stateOf(before, 'IGPATCH') === 2 && still(down, before) &&
+      still(grey, before) && grey.mode === 'contextual' && stateOf(gen, 'ARMMOVE') === 2 && still(order, gen) && s.orders('ck').length === 0;
+  },
+  'a press on the minimap does nothing'(entry) {
+    const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, FIXTURE), before = s.view();
+    press(s, [-SIDE_W + 64, 64]); press(s, [-SIDE_W + 64, 64], 'rmb');
+    const v = s.view();
+    return same(v.side.state, before.side.state) && v.side.screen === 'ARMCK1' && selIds(v) === 'ck' && v.mode === 'contextual' &&
+      !v.drag && s.orders('ck').length === 0 && v.cursor.shape === 'arrow';
+  },
+  /* STOP's greyed state is the OR of FBI canstop over the selection (0x41B2E0, 0x41A120), not mobility: the stand-ins
+     are a static unit with canstop, as a turret or a factory has it, and a mobile one without */
+  'STOP is live while a selected unit has canstop, greyed otherwise, and a greyed STOP takes no click'(entry) {
+    // each sim is done with before the next is made: simparity.mjs replays one at a time
+    const e = withStoppers(entry), sim = sel => WikiSim.create(e, { scene: { selected: sel, units: STOPPERS } }, FIXTURE);
+    const stop = v => v.side && v.side.screen === 'ARMGEN' ? stateOf(v, 'ARMSTOP') : null;
+    const ck = sim(['ck']);
+    press(ck, centre(FIXTURE, 'ARMCK1', 'ARMORDERS'));
+    const ckStop = stop(ck.view());
+    const geo = sim(['geo']);
+    geo.input({ build: 'ARMMEX' });
+    press(geo, centre(FIXTURE, 'ARMGEN', 'ARMSTOP'));
+    const greyed = geo.view();
+    const states = [['geo'], ['tur'], ['rov'], ['geo', 'rov'], ['geo', 'tur'], ['rov', 'ck']].map(sel => stop(sim(sel).view()));
+    return ckStop === 0 && same(states, [2, 0, 2, 2, 0, 0]) && greyed.mode === 'build:ARMMEX' && stop(greyed) === 2;
+  },
+  // 0x419BE0's STOP branch: main+0x2CC3 = 1 leaves the build mode, and 0x48CF30 stops every selected unit
+  'STOP disarms an armed build and empties every selected unit\'s orders, canstop or not'(entry) {
+    const e = withOrders(withStoppers(entry), ['ck', 'pw', 'ack']);
+    const units = STOPPERS.map(u => ({ ...u, orders: [{ move: [120, 120] }] }));
+    const s = WikiSim.create(e, { scene: { selected: ['ck'], units } }, FIXTURE);
+    press(s, centre(FIXTURE, 'ARMCK1', 'ARMMEX'));
+    const armed = s.view();
+    press(s, centre(FIXTURE, 'ARMCK1', 'ARMORDERS'));
+    const gen = s.view(), had = s.orders('ck').length;
+    press(s, centre(FIXTURE, 'ARMGEN', 'ARMSTOP'));
+    const stopped = s.view(), left = ['ck', 'pw', 'ack'].map(id => s.orders(id).length);
+    // a mixed selection: the Peewee and the stand-in without canstop are stopped with the rest
+    const m = WikiSim.create(e, { scene: { selected: ['ck', 'pw', 'rov'], units } }, FIXTURE);
+    press(m, centre(FIXTURE, 'ARMGEN', 'ARMSTOP'));
+    const mixed = ['ck', 'pw', 'rov', 'ack', 'tur'].map(id => m.orders(id).length);
+    return armed.mode === 'build:ARMMEX' && gen.side && gen.side.screen === 'ARMGEN' && gen.mode === 'build:ARMMEX' && had === 2 &&
+      stopped.mode === 'contextual' && same(left, [0, 2, 2]) && same(mixed, [0, 0, 0, 2, 1]);
+  },
+  /* the build button's arm (0x41AB89, 0x41AB9C) writes nothing to main+0x2CC6, so the Shift-placement bit a Shift-click
+     set stays set through a new arm, and the Shift's release disarms (0x4992D8..0x49930F); without a placement in the
+     hold the building stays armed */
+  'a building armed after a Shift-placement in the same Shift hold is disarmed when Shift is released'(entry) {
+    // each sim is done with before the next is made: simparity.mjs replays one at a time
+    const hold = place => {
+      const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, FIXTURE);
+      press(s, centre(FIXTURE, 'ARMCK1', 'ARMMEX'));
+      s.input({ down: 'shift' });
+      if (place) { s.input({ move: [120, 400] }); s.input({ down: 'lmb' }); s.input({ up: 'lmb' }); }
+      const placed = s.orders('ck').length;
+      press(s, centre(FIXTURE, 'ARMCK1', 'ARMNEXT'));
+      press(s, centre(FIXTURE, 'ARMCK2', 'ARMGEO'));
+      const armed = s.view().mode;
+      s.input({ up: 'shift' });
+      return { placed, armed, after: s.view().mode };
+    };
+    const placed = hold(true), none = hold(false);
+    return placed.placed === 1 && placed.armed === 'build:ARMGEO' && placed.after === 'contextual' &&
+      none.placed === 0 && none.armed === 'build:ARMGEO' && none.after === 'build:ARMGEO';
+  },
+  /* a placement drag released over the sidebar: the handler still gets the release (IdleTick, 0x4999CB..0x499A04) and
+     tagpu_place.c commits, but the build cursor 0x4197D0 runs only in the viewport, so the shape is the one the map
+     last showed -- A to B -- not one stretched to the map's edge; the building stays armed until Shift's release */
+  'a placement drag released over the sidebar orders the shape the map last showed'(entry) {
+    const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, FIXTURE);
+    press(s, centre(FIXTURE, 'ARMCK1', 'ARMMEX'));
+    s.input({ down: 'shift' });
+    s.input({ move: [120, 400] }); s.input({ down: 'lmb' }); s.input({ move: [200, 400] });
+    const onMap = s.view().sites.map(t => t.x).join(' ');
+    s.input({ move: [-60, 400] });
+    const overSide = s.view().sites.map(t => t.x).join(' ');
+    s.input({ up: 'lmb' });
+    const orders = s.orders('ck').map(o => o.ox).join(' '), armed = s.view().mode;
+    s.input({ up: 'shift' });
+    // ARMMEX is 3 x 3: the cursor's sites start at cells 6 and 12, so the line is cells 6, 9 and 12
+    return onMap === '120 168 216' && overSide === onMap && orders === '6 9 12' && armed === 'build:ARMMEX' &&
+      s.view().mode === 'contextual';
+  },
+  /* the pump 0x4A9FD0 offers a press in file order: a button acting on the release lets the scan go on, so the LAST
+     one holding the point takes it; a greyed or an inactive one takes none */
+  'where buttons overlap the last one takes the press, and a greyed or inactive one takes none'(entry) {
+    const mex = rectOf('ARMMEX'), armOver = gadgets => {
+      const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, ck1With(gadgets));
+      s.input({ move: rectCentre(mex) }); s.input({ down: 'lmb' });
+      const held = s.view().side.state;
+      s.input({ up: 'lmb' });
+      return { mode: s.view().mode, held: gadgets.filter((g, i) => g.role === 'build' && held[i] === 1).map(g => g.name).join(' ') };
+    };
+    const after = armOver(beside('ARMMEX', geoAt(mex), false)), before = armOver(beside('ARMMEX', geoAt(mex), true));
+    const grey = armOver(beside('ARMMEX', { name: 'IGPATCH', role: 'build', unit: null, grey: true, rect: mex }, false));
+    const hidden = armOver(beside('ARMMEX', geoAt(mex, { hidden: true }), false));
+    return after.mode === 'build:ARMGEO' && after.held === 'ARMGEO' && before.mode === 'build:ARMMEX' && before.held === 'ARMMEX' &&
+      grey.mode === 'build:ARMMEX' && grey.held === 'ARMMEX' && hidden.mode === 'build:ARMMEX' && hidden.held === 'ARMMEX';
+  },
+  /* a tab acts on its own press and ends the scan, dropping an earlier button's capture: the FIRST tab holding the
+     point wins, over a button before or after it */
+  'where a tab overlaps, the first tab takes the press, over any button'(entry) {
+    const tab = (gadgets, at) => {
+      const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, ck1With(gadgets));
+      s.input({ move: rectCentre(at) }); s.input({ down: 'lmb' });
+      const down = s.view().side.screen;
+      s.input({ up: 'lmb' });
+      return { down, screen: s.view().side.screen, mode: s.view().mode };
+    };
+    const ord = rectOf('ARMORDERS'), bld = rectOf('ARMBUILD');
+    // both tabs on ORDERS' rect: ORDERS first shows GEN on the press; BUILD first keeps the page
+    const [orders, build, ...rest] = G1;
+    const ordersFirst = tab([orders, { ...build, rect: ord }, ...rest], ord);
+    const buildFirst = tab([{ ...build, rect: ord }, orders, ...rest], ord);
+    // a live build button on BUILD's rect, before or after it: BUILD acts and drops any capture, so nothing arms
+    const btnBefore = tab(beside('ARMBUILD', geoAt(bld), true), bld), btnAfter = tab(beside('ARMBUILD', geoAt(bld), false), bld);
+    return ordersFirst.down === 'ARMGEN' && buildFirst.down === 'ARMCK1' && buildFirst.screen === 'ARMCK1' &&
+      btnBefore.screen === 'ARMCK1' && btnBefore.mode === 'contextual' && btnAfter.screen === 'ARMCK1' && btnAfter.mode === 'contextual';
+  },
+  'a map drag released over the sidebar selects with the box clamped to the map'(entry) {
+    const s = WikiSim.create(entry, { scene: { selected: [] } }, FIXTURE);
+    s.input({ move: [330, 150] }); s.input({ down: 'lmb' }); s.input({ move: [-60, 200] });
+    const drag = s.view();
+    s.input({ up: 'lmb' });
+    const v = s.view();
+    // the box is x 0..330, z 150..200: the Peewee (256, 176) and ARMCK (304, 176), not ARMACK at x 352
+    return drag.drag && drag.drag.x1 === 0 && drag.drag.z1 === 200 && selIds(v) === 'pw ck' && v.side.screen === 'ARMGEN';
+  },
+  'a page three away goes by three NEXT presses, the longest trip (a 7-page variant of the fixture)'(entry) {
+    // ARMMEX on page 4 of 7: three pages away by NEXT, four by PREV
+    const blank = () => ({ ...FIXTURE.screens.ARMCK4, gadgets: FIXTURE.screens.ARMCK4.gadgets.map(g => g.role === 'build' ?
+      { name: 'IGPATCH', role: 'build', unit: null, grey: true, rect: g.rect } : g) });
+    const names = ['B1', 'B2', 'B3', 'ARMCK1', 'B5', 'B6', 'B7'];
+    const L = fixtureWith({ ARMCK: { pages: names, orders: null } }, Object.fromEntries(names.filter(n => n[0] === 'B').map(n => [n, blank()])));
+    const d = { id: 'k3', scene: { selected: ['ck'] }, inputs: [{ at: 1, build: 'ARMMEX' }], end: 1 + TRIP };
+    const r = run(entry, d, L), notes = [];
+    tripChecks(r, d, (c, what) => notes.push([!!c, what]), ['1>2>3>4']);
+    return notes.every(n => n[0]);
+  },
+  'a build the layout cannot reach locks the demo on its tick'(entry) {
+    const L = fixtureWith({}, { ARMCK1: { ...FIXTURE.screens.ARMCK1, gadgets: FIXTURE.screens.ARMCK1.gadgets.map(g => g.unit === 'ARMMEX' ?
+      { ...g, unit: null, grey: true } : g) } });
+    const s = WikiSim.play(entry, { id: 'locked', scene: { selected: ['ck'] }, inputs: [{ at: 5, build: 'ARMMEX' }], end: 200 }, L);
+    const start = s.view().cursor;
+    for (let i = 0; i < 300 && !s.done; i++) s.step();
+    const v = s.view();
+    return s.done && s.tick === 5 && v.locked === 'ARMMEX' && v.mode === 'contextual' && v.cursor.x === start.x && v.cursor.z === start.z;
+  },
+};
+
 const CHECKS = { quickbuild: QUICKBUILD, buildshapes: BUILDSHAPES };
-export const ENTRY_RULES = { quickbuild: RULES, buildshapes: BUILDSHAPES_RULES };
+// the sidebar's rules use quickbuild's scene: two builder types and a Peewee
+export const ENTRY_RULES = { quickbuild: { ...RULES, ...SIDE_RULES }, buildshapes: BUILDSHAPES_RULES };
 
 function main() {
 const tree = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/tree.json`, 'utf8'));
@@ -459,6 +810,7 @@ for (const id of ids) {
       const check = (CHECKS[id] || {})[d.id];
       if (!check) ok(false, 'no check for this demo');
       else check(r, d, ok);
+      if (r.layout) tripChecks(r, d, ok, (TRIP_PATHS[id] || {})[d.id]);
     } catch (e) { ok(false, `threw: ${e.stack}`); }
     const pass = notes.every(n => n[0]);
     if (!pass) failed++;

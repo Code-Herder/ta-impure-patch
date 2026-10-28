@@ -24,13 +24,18 @@ typedef struct {
 enum { HUDM_PART, HUDM_SOLID, HUDM_SHADE, HUDM_DOT, HUDM_GLYPH, HUDM_LINE, HUDM_CHART, HUDM_DROP, HUDM_RING };
 
 /* A run of instances drawn with one texture bound: a part's index, HUD_TEX_ATLAS,
-   HUD_TEX_CHART, HUD_TEX_LAYER or HUD_TEX_SPRITE (the wiki's sprite sheet, tagpu_wikistate.h).
+   HUD_TEX_CHART, HUD_TEX_LAYER, HUD_TEX_SPRITE (the wiki's sprite sheet, tagpu_wikistate.h) or
+   HUD_TEX_SIDE (the wiki stage's composed sidebar column, HUD_SIDE_W x HUD_SIDE_H RGBA8, the
+   same).
    A fill samples nothing, so it joins whatever run it falls in rather than breaking it -- except
    a HUD_TEX_LAYER run, which holds only groups' composites, since the pass rescales its uv. */
 #define HUD_TEX_ATLAS  (-2)
 #define HUD_TEX_CHART  (-3)
 #define HUD_TEX_LAYER  (-4)
 #define HUD_TEX_SPRITE (-5)
+#define HUD_TEX_SIDE   (-6)
+#define HUD_SIDE_W     128          /* WIKI_SIDE_W: the column's width                        */
+#define HUD_SIDE_H     1024         /* WIKI_SIDE_ROWS: the most rows a layout may have        */
 typedef struct { int tex, first, count; } HUDBATCH;
 
 /* A GROUP'S REGION OF THE LAYER IMAGE (tagpu_huddraw.c, THE GROUPS), in its pixels from its top

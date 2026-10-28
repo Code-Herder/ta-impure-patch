@@ -404,8 +404,8 @@ int tagpu_hpi_read(const TAGPU_HPI* a, int e, uint32_t off, uint32_t n, void* ds
     int ok = 0;
     if (why && nwhy) why[0] = 0;
     if (!f || (f->flag & EF_DIR)) { say(why, nwhy, "%snot a file", "", 0); return 0; }
-    if (f->size > TAGPU_HPI_FILEMAX) {
-        say(why, nwhy, "%sa file of %lu bytes, past the reader's bound", "", (unsigned long)f->size);
+    if (n > TAGPU_HPI_READMAX) {
+        say(why, nwhy, "%sa read of %lu bytes, past the reader's bound", "", (unsigned long)n);
         return 0;
     }
     if ((uint64_t)off + n > f->size) {
@@ -420,7 +420,14 @@ int tagpu_hpi_read(const TAGPU_HPI* a, int e, uint32_t off, uint32_t n, void* ds
         }
         return 1;
     }
-    nch = (f->size + TAGPU_HPI_CHUNK - 1) / TAGPU_HPI_CHUNK;
+    /* in 64 bits: a size past 0xFFFF0000 would wrap the round-up to no chunk at all. The count is
+       then at most 0x10000, the table at most 256 KiB (tagpu_hpi.h), and the table and the chunks
+       after it are placed in 64 bits against the archive, so no offset wraps either */
+    nch = (uint32_t)(((uint64_t)f->size + TAGPU_HPI_CHUNK - 1) / TAGPU_HPI_CHUNK);
+    if ((uint64_t)f->data + (uint64_t)nch * 4u > a->src.size) {
+        say(why, nwhy, "%sthe file's chunk table at 0x%lx lies past the archive", "", (unsigned long)f->data);
+        return 0;
+    }
     if (!(tab = (unsigned char*)malloc((size_t)nch * 4u)) || !(buf = (unsigned char*)malloc(TAGPU_HPI_CHUNK))) {
         say(why, nwhy, "%sout of memory", "", 0);
         goto done;

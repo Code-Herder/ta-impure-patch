@@ -191,14 +191,14 @@ int main(int argc, char** argv)
         for (j = 0; j < d->entry[i].ndemo; j++) {
             const WIKIENTRY* e = &d->entry[i];
             WIKISIM s;
-            if (!tagpu_wikisim_init(&s, e, &e->demo[j], 1, err, sizeof err)) {
+            if (!tagpu_wikisim_init(&s, e, &e->demo[j], 1, NULL, err, sizeof err)) {
                 fprintf(stderr, "wikiscenetest: %s/%s: %s\n", e->id, e->demo[j].id, err);
                 return 2;
             }
             for (;;) {
                 if (s.tick % 30 == 0 || s.done) {
                     int k;
-                    tagpu_wikistage_copy(&v, tagpu_wikisim_view(&s), e);
+                    tagpu_wikistage_copy(&v, tagpu_wikisim_view(&s), e, s.lay ? WIKISTAGE_LAYOUT_FIXTURE : WIKISTAGE_LAYOUT_NONE);
                     v.tick = s.tick;
                     tagpu_wikiscene_fog(v.fog, v.w, v.h, &fog);
                     printf("{\"e\":\"%s\",\"d\":\"%s\",\"t\":%d,\"fog\":", e->id, e->demo[j].id, s.tick);

@@ -16,8 +16,10 @@ const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
 
 /* ---- the state, from the URL; the URL is kept up to date so a view can be shared ---- */
 const SKINS = ['kit', 'whitebox'];
-const S = { res: '1920x1080', size: LAY.window.share, mode: 'sp', mod: 'stock', skin: 'kit', rewind: true, open: false, entry: null, demo: 0, try: false,
-  playing: true, speed: 1, fold: new Set() };
+// the sidebar's layout: the detected mod's pack (the fixture where it has none), a fixture by name, or none at all
+const SIDEBARS = ['mod', 'fixture', 'tall', 'off'];
+const S = { res: '1920x1080', size: LAY.window.share, mode: 'sp', mod: 'stock', skin: 'kit', sidebar: 'mod', rewind: true, open: false, entry: null, demo: 0,
+  try: false, playing: true, speed: 1, fold: new Set() };
 { const q = new URLSearchParams(location.search);
   if (RES.includes(q.get('res'))) S.res = q.get('res');
   if (q.get('size')) S.size = clamp(Math.round(+q.get('size')) || LAY.window.share, 50, 100);
@@ -25,10 +27,11 @@ const S = { res: '1920x1080', size: LAY.window.share, mode: 'sp', mod: 'stock', 
   if (MODS.includes(q.get('mod'))) S.mod = q.get('mod');
   if (q.get('rewind') === '0') S.rewind = false;
   if (SKINS.includes(q.get('skin'))) S.skin = q.get('skin');
+  if (SIDEBARS.includes(q.get('sidebar'))) S.sidebar = q.get('sidebar');
   S.open = q.has('open'); S.entry = q.get('entry'); S.try = q.has('try');
   if (q.get('demo')) S.demo = Math.max(0, (+q.get('demo') || 1) - 1); }
 function syncURL() {
-  const q = new URLSearchParams({ res: S.res, size: S.size, mode: S.mode, mod: S.mod, skin: S.skin, rewind: +S.rewind });
+  const q = new URLSearchParams({ res: S.res, size: S.size, mode: S.mode, mod: S.mod, skin: S.skin, sidebar: S.sidebar, rewind: +S.rewind });
   if (S.open) { q.set('open', ''); if (S.entry) { q.set('entry', S.entry); q.set('demo', S.demo + 1); } if (S.try) q.set('try', ''); }
   if (window.WikiGfx) WikiGfx.url(q);
   history.replaceState(null, '', '?' + q.toString().replace(/=(?=&|$)/g, ''));
@@ -94,6 +97,74 @@ const entry = () => (S.entry && ENT[S.entry] && !ENT[S.entry].error) ? ENT[S.ent
 const demo = () => { const e = entry(); return e && Array.isArray(e.demos) ? e.demos[S.demo] || null : null; };
 const locked = e => !!(e && Array.isArray(e.lockedIn) && e.lockedIn.includes(S.mod));
 
+/* ---- the game's left sidebar: the layout the sims run on and, in the game look, its pictures ----
+   The detected mod's layout comes from its pack, which tools/wiki/gfx.py resolves from the player's install into the
+   gitignored gfx/side/<mod>/; where the mod has no pack, its layout is refused (WikiSim.checkLayout) or the pack has
+   not loaded yet, the fixture art/wiki/side/fixture.json stands in, as it does in the DLL (spec 4.1). `sidebar=` picks
+   a fixture by name or no sidebar instead, for the mockup's own checks. The pictures need the game look (gfx=game) and
+   a pack with its sheet; otherwise the column is stage.js's whitebox. */
+const FIXTURES = {};                  // 'fixture', 'tall' -> the layout, or { error }
+const PACKS = {};                     // mod -> 'loading', or WikiSide.load's pack (+ refused), or { error }
+const MINIMAPS = {};                  // mod/entry -> the minimap's base: 'loading', bytes or null
+async function loadFixtures() {
+  await Promise.all([['fixture', 'fixture.json'], ['tall', 'fixture-tall.json']].map(([k, f]) =>
+    fetch(`${ART}side/${f}`).then(r => { if (!r.ok) throw new Error(`side/${f}: ${r.status}`); return r.json(); })
+      .then(j => { FIXTURES[k] = j; }, x => { FIXTURES[k] = { error: x.message }; })));
+}
+// a mod's pack, once: a sim started before it arrived restarts on it
+function loadPack(mod) {
+  if (PACKS[mod] || mod === 'unknown') return;
+  PACKS[mod] = 'loading';
+  WikiSide.load(`gfx/side/${mod}/`).then(p => {
+    try { WikiSim.checkLayout(p.layout); } catch (x) { p.refused = x.message; console.error(`wiki sidebar pack ${mod}:`, x.message); }
+    for (const m of p.problems) console.warn(`wiki sidebar pack ${mod}:`, m);
+    PACKS[mod] = p;
+  }, x => { PACKS[mod] = { error: x.message }; }).then(() => { sideNote(); if (mod === S.mod && TREE && sideLayout() !== simLayout) start(); });
+}
+const fixture = k => FIXTURES[k] && !FIXTURES[k].error ? FIXTURES[k] : null;
+const pack = () => { const p = S.sidebar === 'mod' && PACKS[S.mod]; return p && p !== 'loading' && !p.error && !p.refused ? p : null; };
+function sideLayout() {
+  if (S.sidebar === 'off') return null;
+  if (S.sidebar === 'tall') return fixture('tall');
+  const p = pack();
+  return p ? p.layout : fixture('fixture');
+}
+function sideNote() {
+  const p = PACKS[S.mod], el = $('#sidebar-note');
+  el.textContent = S.sidebar !== 'mod' ? '' : !p || p.error ? `no pack for ${S.mod}: the fixture` : p === 'loading' ? 'loading…'
+    : p.refused ? `${S.mod}'s layout refused: the fixture` : p.art ? `${S.mod}'s pack` : `${S.mod}'s pack, no pictures`;
+}
+const gameLook = () => $('#gfx').value === 'game';
+/* the minimap's base picture for an entry's stage map, in the mod's own palette and shrink table: the pack's
+   art.minimap.bases[entry]; none leaves the minimap to the whitebox. Fetched once per mod and entry */
+function minimapBase(p, id) {
+  const b = id && p.minimap && p.minimap[id], key = `${S.mod}/${id}`;
+  if (!b) return null;
+  if (!(key in MINIMAPS)) {
+    MINIMAPS[key] = 'loading';
+    fetch(`gfx/side/${S.mod}/${b.file}`).then(r => r.ok ? r.arrayBuffer() : null)
+      .then(buf => { MINIMAPS[key] = buf ? new Uint8Array(buf) : null; }, () => { MINIMAPS[key] = null; });
+  }
+  return MINIMAPS[key] instanceof Uint8Array ? MINIMAPS[key] : null;
+}
+/* the column in the mod's own pictures, for stage.js's drawSide: composed (side.js) at 128 game pixels wide and drawn
+   whole into the column's rect, nearest, as the game cursor is; null leaves stage.js its whitebox */
+const SIDECV = document.createElement('canvas');
+function sideArt(v, layout) {
+  const p = pack();
+  if (!v || !v.side || !gameLook() || !p || !p.art || layout !== p.layout) return null;
+  const c = WikiSide.compose(p.art, p.layout, v, minimapBase(p, S.entry), v.map.w * v.map.cell, v.map.h * v.map.cell);
+  if (SIDECV.width !== WikiSide.COL || SIDECV.height !== c.h) { SIDECV.width = WikiSide.COL; SIDECV.height = c.h; }
+  SIDECV.getContext('2d').putImageData(new ImageData(WikiSide.rgba(p.art, c), WikiSide.COL, c.h), 0, 0);
+  const pics = p.art.screens[v.side.screen];
+  return {
+    minimap: c.minimap,
+    // a gadget the image leaves to stage.js's whitebox button: its label's text ('' names it by its unit or gadget)
+    label: i => !pics || !pics.pics[i] ? '' : pics.pics[i].from === 'label' ? pics.pics[i].text : null,
+    draw: (g, r) => { const sm = g.imageSmoothingEnabled; g.imageSmoothingEnabled = false; g.drawImage(SIDECV, 0, 0, WikiSide.COL, c.h, r.x, r.y, r.w, r.h); g.imageSmoothingEnabled = sm; },
+  };
+}
+
 function renderTree() {
   const el = $('#tree');
   if (treeErr) { el.innerHTML = `<div class="row missing">${esc(treeErr)}</div>`; return; }
@@ -148,14 +219,16 @@ $('#demos').onclick = e => { const d = e.target.closest('[data-demo]'); if (d) {
 
 /* ---- playback: a demo plays when selected, at 30 ticks a second (60 at 2x), and holds its last frame when done;
    Try it yourself creates the same scene with no inputs and hands the stage to the player ---- */
-let sim = null, simErr = null, acc = 0;
+let sim = null, simErr = null, acc = 0, simLayout = null;
 function fail(x) { simErr = x && x.message || String(x); console.error('wiki sim:', x); sim = null; }
 function start() {
-  sim = null; simErr = null; acc = 0; releaseAll(); picked = undefined; menuKey = null;
+  sim = null; simErr = null; acc = 0; releaseAll();
   const e = entry(), d = demo();
   if (!d) return;
   if (typeof WikiSim === 'undefined') { simErr = 'sim.js is not loaded'; return; }
-  try { sim = S.try ? WikiSim.create(e, d) : WikiSim.play(e, d); } catch (x) { fail(x); }
+  // a demo the layout refuses (an input inside a build's trip, say) shows why on the stage, as a broken entry does
+  simLayout = sideLayout();
+  try { sim = S.try ? WikiSim.create(e, d, simLayout) : WikiSim.play(e, d, simLayout); } catch (x) { fail(x); }
   controls(); syncURL();
 }
 const held = () => !S.try && sim && sim.done;
@@ -178,7 +251,6 @@ function controls() {
   for (const id of ['#c-play', '#c-replay', '#c-x1', '#c-x2', '#c-try']) $(id).disabled = !has;
   $('#c-x1').classList.toggle('on', S.speed === 1); $('#c-x2').classList.toggle('on', S.speed === 2);
   $('#c-try').classList.toggle('on', S.try);
-  $('#bmenu').hidden = !S.try;
 }
 
 /* ---- the stage: a canvas at the resolution's pixels; the map fitted inside it, letterboxed ---- */
@@ -217,9 +289,12 @@ function draw() {
      icon not loaded yet, leaves the player's. A demo's scripted cursor is drawn whatever the pointer does. */
   const tryIt = S.try && !!sim;
   FIT = WikiStage.draw(g, v, { W: stage.width, H: stage.height, U: G.gh / 720, icons: ICONS, cursors: CURSORS,
-    tick: sim ? sim.tick : 0, cursor: !tryIt || overStage, image,
+    tick: sim ? sim.tick : 0, cursor: !tryIt || overStage, image, side: { layout: simLayout, art: sideArt(v, simLayout) },
     msg: simErr || (demo() ? 'loading…' : entry() ? 'no demo' : '') });
   stage.classList.toggle('try', tryIt && !!FIT && FIT.cursor);
+  // a build this mod's sidebar cannot reach stops the demo under the entry's badge (decision 4)
+  const off = locked(entry()) || !!(v && v.locked);
+  if ($('#badge').hidden === off) $('#badge').hidden = !off;
   return v;
 }
 
@@ -241,15 +316,16 @@ function strip(v) {
   }
 }
 
-/* ---- Try it yourself: the stage's mouse and the modifier keys go to sim.input, the build menu picks a build ---- */
+/* ---- Try it yourself: the stage's mouse and the modifier keys go to sim.input; the sidebar's buttons are the sim's ---- */
 const down = new Set();                // the buttons and keys sent down and not yet up
 function send(ev) { if (!sim || !S.try) return; try { sim.input(ev); } catch (x) { fail(x); } }
 function releaseAll() { for (const k of down) send({ up: k }); down.clear(); }
+// the pointer as a stage point clamped to the content rect: the map, and the sidebar with it. The sim decides what is
+// under it (the column, the map, or the dead band under a map shorter than the column)
 function world(e) {
   if (!FIT) return null;
   const r = stage.getBoundingClientRect(), px = (e.clientX - r.left) * stage.width / r.width, pz = (e.clientY - r.top) * stage.height / r.height;
-  const W = FIT.mw * FIT.cell, H = FIT.mh * FIT.cell;
-  return [clamp((px - FIT.ox) / FIT.s, 0, W), clamp((pz - FIT.oz) / FIT.s, 0, H)];
+  return [clamp((px - FIT.ox) / FIT.s, FIT.x0, FIT.x0 + FIT.cw), clamp((pz - FIT.oz) / FIT.s, 0, FIT.ch)];
 }
 const BTN = { 0: 'lmb', 2: 'rmb' };
 stage.addEventListener('mouseenter', () => { overStage = true; });
@@ -278,25 +354,6 @@ window.addEventListener('keyup', e => {
   if (m && down.has(m)) { e.preventDefault(); down.delete(m); send({ up: m }); }
 });
 window.addEventListener('blur', releaseAll);
-
-/* the build menu lists what the selection can build among the entry's own units -- a stock build list names the whole
-   side, the entry only the buildings it shows -- and marks the one view().mode says is armed ('build:<TYPE>') */
-let picked, menuKey = null;
-function buildMenu(v) {
-  if (!S.try) return;
-  const e = entry(), U = (e && e.units) || {}, sel = (v && v.units || []).filter(u => u.selected);
-  const opts = [...new Set(sel.flatMap(u => (U[u.type] && (U[u.type].builds || U[u.type].buildlist)) || []))].filter(t => t in U);
-  const mode = v && typeof v.mode === 'string' && v.mode.startsWith('build:') ? v.mode.slice(6) : null;
-  const cur = v && typeof v.mode === 'string' ? mode : picked;
-  const key = opts.join() + '|' + cur;
-  if (key === menuKey) return;
-  menuKey = key;
-  $('#bmenu').innerHTML = '<div class="h">Build</div>' + (opts.length
-    ? opts.map(t => `<button data-part="button" data-build="${esc(t)}"${t === cur ? ' class="on"' : ''}>${esc(t)}</button>`).join('')
-      + `<button data-part="button" data-build=""${cur == null ? ' class="on"' : ''}>none</button>`
-    : '<div class="e">Select a constructor</div>');
-}
-$('#bmenu').onclick = e => { const b = e.target.closest('[data-build]'); if (!b) return; picked = b.dataset.build || null; send({ build: picked }); menuKey = null; };
 
 /* ---- skins: the whitebox, or the kit of art/wiki/kit/ -- kit.json in art/hud/kit.json's format and its parts as
    PNGs. The layout's `geom` places what the kit's window art leaves room for, in units: the title in its dark title
@@ -414,8 +471,7 @@ const ROLE = {
   window_title: ['#win .wt'], entry_title: ['#e-title'],
   category: ['#tree .cat'], entry: ['#tree .leaf'], demo: ['#demos li'], demo_num: ['#demos li .n'],
   subtitle: ['#e-sub'], text: ['#text'], caption: ['#caption'],
-  control: ['#ctl button'], build: ['#bmenu button'], badge: ['#badge'], keycap: ['.kc'],
-  build_head: ['#bmenu .h', '#bmenu .e'], keys: ['#keys'],
+  control: ['#ctl button'], badge: ['#badge'], keycap: ['.kc'], keys: ['#keys'],
 };
 /* the layout's other numbers as custom properties of the frame, which wiki.css reads: `--w-` and the number's path,
    a list's items by their index (row.pad -> --w-row-pad-0, --w-row-pad-1) */
@@ -446,7 +502,7 @@ function loop(t) {
   gameTick(dt);
   if (S.open) {
     advance(dt);
-    const v = draw(); strip(v); buildMenu(v);
+    const v = draw(); strip(v);
     if (held() !== loop.held) { loop.held = held(); controls(); }
   }
   paintParts();                       // last, so a keycap or button made this frame shows its part in it
@@ -461,17 +517,18 @@ $('#mode').value = S.mode; $('#mode').onchange = e => { S.mode = e.target.value;
 $('#rewind').value = +S.rewind; $('#rewind').onchange = e => { S.rewind = e.target.value === '1'; frame.classList.toggle('norewind', !S.rewind); syncURL(); };
 frame.classList.toggle('norewind', !S.rewind);
 $('#skin').value = S.skin; $('#skin').onchange = e => { S.skin = e.target.value; applySkin(); syncURL(); };
-$('#mod').value = S.mod; $('#mod').onchange = e => { S.mod = e.target.value; renderTree(); renderEntry(); syncURL(); };
+$('#mod').value = S.mod; $('#mod').onchange = e => { S.mod = e.target.value; loadPack(S.mod); sideNote(); renderTree(); renderEntry(); start(); syncURL(); };
+$('#sidebar').value = S.sidebar; $('#sidebar').onchange = e => { S.sidebar = e.target.value; sideNote(); start(); syncURL(); };
 window.addEventListener('resize', layout);
 
-applySkin(); layout(); renderTree(); renderEntry(); controls();
-load().then(() => {
+applySkin(); layout(); renderTree(); renderEntry(); controls(); loadPack(S.mod); sideNote();
+Promise.all([load(), loadFixtures()]).then(() => {
   if (S.entry && !(S.entry in ENT)) S.entry = null;
   if (S.open && !S.entry && TREE) S.entry = leaves(TREE.tree)[0] || null;
   const d = entry() && entry().demos; if (d && S.demo >= d.length) S.demo = 0;
   setOpen(S.open); start(); render();
 });
 requestAnimationFrame(loop);
-// the page's state and its running simulation, for scripted checks of the mockup
-window.WikiPage = { state: S, sim: () => sim, image: () => IMG };
+// the page's state, its running simulation and the sidebar layout it runs on, for scripted checks of the mockup
+window.WikiPage = { state: S, sim: () => sim, image: () => IMG, layout: () => simLayout };
 })();

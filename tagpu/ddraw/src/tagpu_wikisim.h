@@ -7,10 +7,11 @@
    simulation taking the player's inputs instead.
 
    IT AGREES WITH sim.js BIT FOR BIT. Both visit units in creation order, use no clock and no
-   randomness, and compute on doubles with + - * / and sqrt only, each rounded once, so the same
-   inputs give the same doubles. tools/wiki/simparity.mjs plays every demo of every entry and
-   simcheck.mjs's rule cases through both and compares every field of the view and every unit's
-   orders, tick by tick. The DLL compiles this file for SSE2 (Makefile, THE WIKI'S SIMULATION) so
+   randomness, and compute on doubles with + - * / and sqrt only, each rounded once, plus trunc,
+   floor and comparisons, which are exact, so the same inputs give the same doubles.
+   tools/wiki/simparity.mjs plays every demo of every entry, with the fixture's sidebar, the tall
+   fixture's and none, and simcheck.mjs's rule cases through both, and compares every field of
+   the view and every unit's orders, tick by tick. The DLL compiles this file for SSE2 (Makefile, THE WIKI'S SIMULATION) so
    that no intermediate keeps x87's extra precision.
 
    ENGINE-FREE, WIN32-FREE AND WITHOUT GLOBALS. It reads no engine memory and names no engine
@@ -20,7 +21,8 @@
    directly as the game does. Every piece of its state lives in the WIKISIM its caller owns
    (and on the heap that WIKISIM owns), so it runs on whichever thread owns the wiki window;
    one WIKISIM is used by one thread at a time. The WIKIENTRY (and the WIKIDEMO) it was made
-   from must outlive it: it points into them.
+   from must outlive it: it points into them. So must its sidebar layout, which it reads and
+   never writes.
 
    BOUNDED BY CONSTRUCTION: a unit's orders stop at PLACE_LIST_CAP (every append goes through
    one function that refuses past it), and the map at WIKI_MAP_MAX cells a side (the loader
@@ -36,6 +38,32 @@
 #define WIKI_CELL 16
 #define WIKI_TPS  30
 
+/* THE BUILD TRIP, sim.js's TRIP, TRIP_DOWN, TRIP_UP and TRIP_ROWS (tools/wiki/simparity.mjs
+   compares them). A scripted demo with the sidebar plays a `build` input at tick t as the cursor's
+   trip to the button: it takes WIKI_TRIP ticks whatever the page, the pagers or the mod, the
+   button goes down at t + WIKI_TRIP_DOWN and is released at t + WIKI_TRIP_UP, which is where it
+   arms. Because the arm tick is fixed, the mode and everything else in the world are the same in
+   every mod at every tick; only the cursor and the sidebar differ. Row k is the trip through k
+   pager presses (k <= 3: the nearer way round WIKI_SIDE_PAGES = 7 pages is at most 3): the glide
+   to the pager (to the button itself for k = 0), each press held `hold` ticks then `gap` ticks
+   before the next, the glide from the pager to the button, and the hover on it. Every row ends on
+   the button's down (tagpu_wikisim.c checks it as it compiles). */
+#define WIKI_TRIP       90
+#define WIKI_TRIP_DOWN  45
+#define WIKI_TRIP_UP    60
+/* glide, hold, gap, back, hover */
+#define WIKI_TRIP_ROW0  30, 0, 0, 0, 15
+#define WIKI_TRIP_ROW1  12, 15, 3, 12, 3
+#define WIKI_TRIP_ROW2  9, 10, 3, 10, 0
+#define WIKI_TRIP_ROW3  6, 8, 3, 6, 0
+#define WIKI_TRIP_ROWS  { { WIKI_TRIP_ROW0 }, { WIKI_TRIP_ROW1 }, { WIKI_TRIP_ROW2 }, { WIKI_TRIP_ROW3 } }
+#define WIKI_TRIP_NROWS 4
+/* the inputs one trip makes, at most: row 0's 30 glide moves, the button's down and up, and the
+   30 moves back (tagpu_wikisim.c checks every row against it as it compiles) */
+#define WIKI_TRIP_EVENTS 64
+
+typedef struct { int glide, hold, gap, back, hover; } WIKITRIPROW;
+
 enum { WIKI_ORDER_MOVE, WIKI_ORDER_BUILD, WIKI_ORDER_RECLAIM, WIKI_ORDER_GUARD };
 
 typedef struct {
@@ -50,6 +78,9 @@ typedef struct WIKIUNIT {
     char             id[WIKI_ID_MAX];
     int              type, owner, sel;
     double           built, reclaimed;  /* fractions, 0..1 */
+    int              bp, page;          /* with the sidebar, unit+0x110 bit 22 (a numbered page
+                                           shown rather than the orders page) and bits 23..25
+                                           (the page, 1..n; 0 for a type without pages) */
     const char*      label;
     double           x, z;              /* its centre */
     double           hx, hz;            /* its facing, a unit vector (walk says why not an angle);
@@ -74,7 +105,8 @@ typedef struct {
     WIKISITE site[PLACE_MAX_SITES];
 } WIKIPLACE;
 
-enum { WIKI_HOVER_GROUND, WIKI_HOVER_UNIT, WIKI_HOVER_PLACE, WIKI_HOVER_QUICK };
+/* NONE: the cursor is off the map, over the sidebar or the dead band under a short map */
+enum { WIKI_HOVER_GROUND, WIKI_HOVER_UNIT, WIKI_HOVER_PLACE, WIKI_HOVER_QUICK, WIKI_HOVER_NONE };
 
 typedef struct { int kind, type, ox, oz, ok; } WIKIHOVER;
 
@@ -111,6 +143,20 @@ typedef struct {
     int    kind;                    /* WIKI_ORDER_* */
 } WIKIVLINE;
 
+/* The sidebar as the stage draws it, sim.js's view.side; by value and pointer-free, so a copy
+   holds across threads. */
+typedef struct {
+    int              h;             /* the column's rows: the layout's height */
+    int              screen;        /* the routed screen, an index < the layout's nscreen */
+    char             unit[WIKI_ID_MAX];     /* the shown unit's id, "" for none */
+    int              page;          /* the shown unit's page, 0 for none */
+    int              nstate;        /* the screen's gadget count */
+    int              state[WIKI_SIDE_GADGETS];  /* per gadget: -1 not drawn, 0 normal, 1 pressed
+                                                   or the current tab, 2 greyed */
+    char             under[WIKI_ID_MAX];    /* the unit under the cursor over the map (the
+                                               minimap's high dot), "" for none */
+} WIKIVSIDE;
+
 typedef struct {
     int              w, h;
     double           surface_metal;
@@ -141,6 +187,10 @@ typedef struct {
     const char*      caption;       /* NULL for none */
     double           pace;
     int              mode;          /* the armed type, or -1: contextual */
+    int              has_side;      /* the sidebar is on: side and locked are the view's */
+    WIKIVSIDE        side;
+    int              locked;        /* the type a scripted build could not reach in this layout,
+                                       or -1 */
 } WIKIVIEW;
 
 /* ---- the simulation: the caller owns it; tick and done are its to read, the rest is private ---- */
@@ -180,6 +230,21 @@ typedef struct {
     const WIKIINPUT** script;
     double           end;           /* the tick it is done on; never for Try it yourself */
 
+    /* the sidebar, sim.js's sb; `lay` NULL: off for the sim's whole life */
+    const WIKILAYOUT* lay;
+    int              trips;         /* a scripted demo with the sidebar: a build is its trip */
+    int              ltype[WIKI_MAX_DEFS];  /* each entry type's index in lay->type, or -1 */
+    int              screen;        /* the routed screen, an index < lay->nscreen */
+    WIKIUNIT*        shown;         /* main+0x37E9C; remove_unit clears it with its unit */
+    int              cap, cap_key;  /* the gadget of `screen` a press captured (-1 none), and the
+                                       button that pressed it */
+    int              down_on[WIKI_NKEYS];   /* where each mouse button went down (OVER_*) */
+    int              locked;        /* a type, or -1 */
+    /* the trip's generated inputs, fed before the script's of the same tick */
+    WIKIINPUT        trip_in[WIKI_TRIP_EVENTS];
+    int              ntrip_in, trip_next;
+    int              feeding;       /* the tick being fed */
+
     /* scratch: distinct's flood; take_offs' one builder's orders and the site taking each off,
        sized for any list since push_order holds every list to PLACE_LIST_CAP; the view's arrays */
     uint32_t*        mark;
@@ -198,9 +263,21 @@ typedef struct {
 
 /* sim.js's play (`scripted`: the demo's inputs are fed at their ticks and it is done at its end)
    or create (Try it yourself on the demo's scene: no script, never done). `d` may be NULL for the
-   entry's scene alone. 0 with a message in `err` when the scene names a unit it does not have or
-   memory runs out; then `s` holds nothing to free. */
-int  tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int scripted, char* err, size_t errn);
+   entry's scene alone.
+
+   `lay` is the sidebar's layout, or NULL for none. LIFETIME: it is WIKIDATA.fixture or the layout
+   inside the published WIKISIDE block (that block's own allocation, tagpu_wikiasset.h), both
+   immutable and never freed, so the sim may hold it; the render thread resolves its own copy
+   of the pointer from the view's WIKISTAGE_LAYOUT_* value. A caller giving any other layout keeps
+   it alive and unwritten as long as the sim. The sidebar is on when `lay` is given and, for play, the
+   demo's `sidebar` says so, by default (and always for create) when the scene gives the player a
+   mobile builder (owner 0, MaxVelocity > 0, WorkerTime > 0).
+
+   0 with a message in `err` when the scene names a unit it does not have, the layout fails
+   tagpu_wikilayout_check, a scripted demo with the sidebar on breaks the build trip's data rule
+   (tagpu_wikidata_trips), or memory runs out; then `s` holds nothing to free. */
+int  tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int scripted, const WIKILAYOUT* lay,
+                        char* err, size_t errn);
 void tagpu_wikisim_free(WIKISIM* s);
 
 /* One input now, as the player gives it, between two ticks: a cursor sequence it changes begins
@@ -236,7 +313,11 @@ int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
         site's x, z (doubles) and state (WIKI_SITE_*);
      6. the cursor's x, z (doubles); each key in WIKI_KEY_* order, 1 held or 0; the armed type's
         name ("" in the contextual mode); the spacing (-1 when nothing is armed); the drag: 1 and
-        x0, z0 (doubles), or 0; the caption.
+        x0, z0 (doubles), or 0; the caption;
+     7. the sidebar: 1 when it is on, then its rows, the routed screen's name, the shown unit's id
+        ("" for none), its page, the state count and each state, and the id of the unit under
+        the cursor over the map ("" for none); or 0 alone. Then the locked type's name ("" for
+        none, and always with the sidebar off).
    The view's other fields follow from these: queued sites and order lines from the units and
    their orders, the cursor's shape from the mode and the selection, a site's order number from
    the states, footprints from the types, the pace from the entry. The tick the cursor's shape

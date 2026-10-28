@@ -38,6 +38,21 @@
    the sprite sheet tagpu_wikistate.c decodes (HUD_TEX_SPRITE): 256 KB of RGBA8, sent whole as the
    chart is when its generation moves, cleared after the build so a draw always binds a written
    image, and its sprites hidden in a frame whose ops name a generation the device does not hold.
+   Its sidebar, in the running mod's pictures, is one more (HUD_TEX_SIDE): the column
+   tagpu_wikistate.c composes each frame, 512 KB of RGBA8 sampled nearest, under the same rules --
+   sent whole when its generation moves, cleared after the build, hidden while the device holds
+   another generation's.
+
+   EVERY OBJECT HERE BELONGS TO THE LANE'S OWNER (tagpu_vk.c, the lane's states): the render
+   thread builds them in the first prepare after the HUD's art and the wiki's have loaded (build),
+   writes them in prepare's uploads and reads them in the draws of the frame that recorded those;
+   tagpu_vk_hud_down destroys them from the seam's teardown (vk_down, passes_down) -- the render
+   thread's, or the window owner's after it has joined the render thread -- behind
+   vkDeviceWaitIdle, so no submitted frame still names one. The one other call, prepare's when
+   build() fails, waits for nothing and needs nothing: the pass is UNBUILT there, every object
+   it frees was made by that failing build in the same call, and no frame has recorded a draw or
+   an upload with one (the uploads and the draws start only once the pass is READY), so none is
+   in a submitted command buffer.
 
    IT KNOWS NOTHING ABOUT A WINDOW, and reads no engine state: everything arrives in its
    arguments or in the loaded HUD and wiki (tagpu_hudart.h), which are immutable. */
@@ -104,12 +119,13 @@ static VkPipelineLayout      s_plo;
 static VkPipeline            s_pipe;
 static VkDescriptorPool      s_dpool;
 static VkSampler             s_clamp, s_repeat, s_glyph;
-static TEX                   s_part[MAXPART], s_atlas, s_chart, s_sprite;
+static TEX                   s_part[MAXPART], s_atlas, s_chart, s_sprite, s_side;
 static VkSampler             s_near;
 static unsigned              s_cgen;            /* the chart generation the device holds; 0 none */
-static int                   s_cclear;          /* the chart's and the sprite sheet's images
-                                                   cleared since the build                       */
+static int                   s_cclear;          /* the chart's, the sprite sheet's and the
+                                                   sidebar's images cleared since the build      */
 static unsigned              s_sgen;            /* the sprite generation the device holds; 0 none */
+static unsigned              s_dgen;            /* the sidebar generation the device holds; 0 none */
 static int                   s_nparts;          /* the HUD's parts: s_part[0, s_nparts)       */
 static int                   s_nwparts;         /* the wiki's, after them; 0 when it failed    */
 static int                   s_nsent;           /* the parts uploaded and their chains blitted */
@@ -122,7 +138,7 @@ static TAGPU_VKSTAGE         s_stage[TAGPU_VK_SLOTS];
 static HUDOPS                s_ops;             /* render thread's; 400 KB, never on a stack  */
 static HUDBATCH              s_batch[HUD_MAXBATCH];
 static int                   s_nbatch, s_ninst;
-static int                   s_saidDrop, s_saidMiss, s_saidChart, s_saidSprite, s_saidUnfit;
+static int                   s_saidDrop, s_saidMiss, s_saidChart, s_saidSprite, s_saidSide, s_saidUnfit;
 static int                   s_nbase;           /* the base layer's batches: s_batch[0, s_nbase) */
 static int                   s_tb0, s_tb1;      /* the top layer's: s_batch[s_tb0, s_tb1); the
                                                    groups' batches lie outside both          */
@@ -343,7 +359,7 @@ static void draw_batch(VkCommandBuffer cb, const HUDBATCH* b, uint32_t slot)
 {
     VkDescriptorSet set = b->tex == HUD_TEX_LAYER ? s_layer[slot].set
                         : b->tex == HUD_TEX_ATLAS ? s_atlas.set : b->tex == HUD_TEX_CHART ? s_chart.set
-                        : b->tex == HUD_TEX_SPRITE ? s_sprite.set
+                        : b->tex == HUD_TEX_SPRITE ? s_sprite.set : b->tex == HUD_TEX_SIDE ? s_side.set
                         : b->tex >= 0 && b->tex < s_nparts + s_nwparts ? s_part[b->tex].set : s_atlas.set;
     if (!b->count) return;
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_plo, 0, 1, &set, 0, NULL);
@@ -725,8 +741,9 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art, const WIKIART* wart)
 
     memset(&ps, 0, sizeof ps);
     ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps.descriptorCount = (uint32_t)(s_nparts + s_nwparts) + 3 + TAGPU_VK_SLOTS;
-    dpi.maxSets = (uint32_t)(s_nparts + s_nwparts) + 3 + TAGPU_VK_SLOTS;
+    /* a set for each part, the atlas, the chart, the sprite sheet, the sidebar, and each slot's layer */
+    ps.descriptorCount = (uint32_t)(s_nparts + s_nwparts) + 4 + TAGPU_VK_SLOTS;
+    dpi.maxSets = (uint32_t)(s_nparts + s_nwparts) + 4 + TAGPU_VK_SLOTS;
     dpi.poolSizeCount = 1;
     dpi.pPoolSizes = &ps;
     if (vkCreateDescriptorPool(d->dev, &dpi, NULL, &s_dpool) != VK_SUCCESS) return 0;
@@ -747,6 +764,8 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art, const WIKIART* wart)
     /* the wiki's sprite sheet, sampled nearest as the sharp layer draws the player's cursor */
     if (!mk_tex(d, &s_sprite, VK_FORMAT_R8G8B8A8_UNORM, HUD_SPRITE_CELL * HUD_SPRITE_CELLS, HUD_SPRITE_CELL, 1, s_near))
         return 0;
+    /* the wiki stage's sidebar column, nearest as the engine draws its sidebar: one texel a game pixel */
+    if (!mk_tex(d, &s_side, VK_FORMAT_R8G8B8A8_UNORM, HUD_SIDE_W, HUD_SIDE_H, 1, s_near)) return 0;
 
     bci.size = IBYTES * d->slots;
     bci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
@@ -766,6 +785,7 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art, const WIKIART* wart)
     s_agen = 0;
     s_cgen = 0;
     s_sgen = 0;
+    s_dgen = 0;
     s_cclear = 0;
     plog(d, "hud: the pass is up - %d parts and the wiki's %d, a %dx%d glyph atlas, %u frame slots",
          s_nparts, s_nwparts, HUD_ATLAS, HUD_ATLAS, (unsigned)d->slots);
@@ -928,7 +948,7 @@ static int send_chart(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* 
 }
 
 /* The wiki's sprite sheet, whole, once its generation has moved; 1 the device holds it. Until it
-   does the sprites are not drawn (hide_sprites). */
+   does the sprites are not drawn (hide_tex). */
 static int send_sprite(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* st)
 {
     unsigned gen;
@@ -949,10 +969,32 @@ static int send_sprite(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE*
     return 1;
 }
 
+/* The wiki stage's sidebar column, whole, once its generation has moved; 1 the device holds it.
+   Until it does the column is not drawn (hide_tex). */
+static int send_side(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* st)
+{
+    unsigned gen;
+    const unsigned char* a = tagpu_wikistate_side(&gen);
+    const VkDeviceSize bytes = (VkDeviceSize)HUD_SIDE_W * HUD_SIDE_H * 4;
+    int said = 0;
+
+    if (!gen || gen == s_dgen) return 1;
+    if (!send_whole(cb, st, &s_side, a, bytes, &said)) {
+        if (said && !s_saidSide) {
+            s_saidSide = 1;
+            plog(d, "wiki: the sidebar column (%u bytes) does not fit the slot's staging (%u mapped): "
+                 "the stage's sidebar waits for room (said once)", (unsigned)bytes, (unsigned)st->cap);
+        }
+        return 0;
+    }
+    s_dgen = gen;
+    return 1;
+}
+
 /* An image cleared, once after the build: a sampled layout, and for the chart a header that draws
    no line (row 0's count 0), for the sprite sheet transparent texels, so the HUD never waits on an
    image's first upload, which needs room in a frame's staging -- the lines and the sprites wait for
-   it (hide_mode, hide_sprites), the rest of the HUD does not. */
+   it (hide_mode, hide_tex), the rest of the HUD does not. */
 static void clear_image(VkCommandBuffer cb, VkImage img)
 {
     VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
@@ -995,14 +1037,14 @@ static void hide_mode(HUDINST* in, int n, int mode)
         if (in[i].prm[0] == (float)mode) in[i].rgba[0] = in[i].rgba[1] = in[i].rgba[2] = in[i].rgba[3] = 0;
 }
 
-/* The sprites of the wiki's stage made transparent while the device does not hold the sheet's
-   current generation, whose cells would be another frame's: the part instances of the
-   HUD_TEX_SPRITE runs, and not the fills that joined them. */
-static void hide_sprites(HUDINST* in, const HUDBATCH* b, int nb)
+/* The wiki stage's images drawn from texture `tex` -- the sprite sheet, the sidebar column -- made
+   transparent while the device does not hold its current generation, whose texels would be another
+   frame's: the part instances of that texture's runs, and not the fills that joined them. */
+static void hide_tex(HUDINST* in, const HUDBATCH* b, int nb, int tex)
 {
     int i, j;
     for (i = 0; i < nb; i++)
-        if (b[i].tex == HUD_TEX_SPRITE)
+        if (b[i].tex == tex)
             for (j = b[i].first; j < b[i].first + b[i].count; j++)
                 if (in[j].prm[0] == (float)HUDM_PART) in[j].rgba[0] = in[j].rgba[1] = in[j].rgba[2] = in[j].rgba[3] = 0;
 }
@@ -1188,15 +1230,18 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (!s_cclear) {
         clear_image(cb, s_chart.img);
         clear_image(cb, s_sprite.img);
+        clear_image(cb, s_side.img);
         s_cclear = 1;
     }
     {
-        unsigned gen, cgen, sgen;
+        unsigned gen, cgen, sgen, dgen;
         int y0, y1;
         tagpu_huddraw_atlas(&gen, &y0, &y1);
         tagpu_huddraw_chart(&cgen);
         tagpu_wikistate_sprites(&sgen);
-        due = !s_sent || gen != s_agen || y1 > y0 || cgen != s_cgen || (sgen && sgen != s_sgen);
+        tagpu_wikistate_side(&dgen);
+        due = !s_sent || gen != s_agen || y1 > y0 || cgen != s_cgen || (sgen && sgen != s_sgen)
+           || (dgen && dgen != s_dgen);
     }
     if (!due) {
         if (sg->buf) tagpu_vk_stage_drop(d, sg);
@@ -1211,6 +1256,7 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (s_sent && (r = send_atlas(d, cb, sg)) < 0) goto lost;
         if (s_sent && s_agen) send_chart(d, cb, sg);
         if (s_sent) send_sprite(d, cb, sg);
+        if (s_sent) send_side(d, cb, sg);
     }
     if (!s_sent || !s_agen) { s_ninst = 0; return 0; }
     /* THE TEXT DRAWS ONLY FROM WHAT THE DEVICE HOLDS: this build's glyphs are in the atlas the
@@ -1226,9 +1272,12 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         /* and the stage's cursor only from the sheet this frame's ops were built against */
         tagpu_wikistate_sprites(&gen);
         if (gen != s_sgen) {
-            hide_sprites((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_batch, s_nbatch);
+            hide_tex((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_batch, s_nbatch, HUD_TEX_SPRITE);
             if (wcurSprite) wcur = 0;
         }
+        /* and the sidebar column only from the one this frame composed */
+        tagpu_wikistate_side(&gen);
+        if (gen != s_dgen) hide_tex((HUDINST*)(s_imap + (size_t)slot * IBYTES), s_batch, s_nbatch, HUD_TEX_SIDE);
     }
     /* a frame with a group has its composites, which bind the layer: it is made whenever there is
        one, even if every region is empty */
@@ -1344,6 +1393,7 @@ void tagpu_vk_hud_down(const TAGPU_VKPASS* d)
     free_tex(dev, &s_atlas);
     free_tex(dev, &s_chart);
     free_tex(dev, &s_sprite);
+    free_tex(dev, &s_side);
     /* the sets go back with the pool */
     if (s_dpool) { vkDestroyDescriptorPool(dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
     if (s_dsl)   { vkDestroyDescriptorSetLayout(dev, s_dsl, NULL); s_dsl = VK_NULL_HANDLE; }
@@ -1358,6 +1408,7 @@ void tagpu_vk_hud_down(const TAGPU_VKPASS* d)
     s_agen = 0;
     s_cgen = 0;
     s_sgen = 0;
+    s_dgen = 0;
     s_cclear = 0;
     s_ninst = s_nbatch = s_nbase = s_tb0 = s_tb1 = s_wb0 = s_wbm = s_wb1 = s_ngroup = 0;
     s_nwparts = 0;

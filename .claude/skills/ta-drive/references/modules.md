@@ -949,7 +949,7 @@ block that reads to its last complete block.
   Follow, Follow again and Jump on the controlled seat's row, Cursors off and on, its dump
   (`w<T1>` compared like the others), resume and Leave. It runs every check above and
   reports each by name: exit 0 all passed, 1 a named failure, 2 something could not run. `-j N`
-  is the games at once (default 8, at most 16); the checks run beside them on a pool of their own
+  is the games at once (default 12, at most 16); the checks run beside them on a pool of their own
   at lower priority, a test group's as soon as its last test ends, and the summary lists them in the
   same order whatever finished first. It
   refuses a `ddraw.dll` (or `--stock-dll`) older than its sources — rebuild with `make -C

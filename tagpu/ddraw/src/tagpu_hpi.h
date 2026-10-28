@@ -35,7 +35,11 @@
 #define TAGPU_HPI_CHUNK     0x10000u        /* a compressed file's chunk, decompressed             */
 #define TAGPU_HPI_CHUNKMAX  0x20000u        /* a chunk's stored length: LZ77's worst case on 64 KiB
                                                is 9/8 of it plus the 19-byte header               */
-#define TAGPU_HPI_FILEMAX   (64u << 20)     /* the largest file the reader takes, stored or not    */
+/* The most bytes one read returns. It bounds the range asked for, not the file: a read allocates
+   only the file's chunk table (4 bytes per 64 KiB, 256 KiB for the largest uint32 size) and one
+   chunk, so a file of any size may be read in ranges. Escalation's fx.GAF is 82 MB (measured
+   2026-10-27), and the wiki reads its GAFs in pages. */
+#define TAGPU_HPI_READMAX   (64u << 20)
 
 /* Where an archive's bytes come from: a file handle in the DLL and the native test, memory in the
    fuzz pass. `read` answers 1 when all `n` bytes at `off` were read. */
@@ -76,7 +80,7 @@ int  tagpu_hpi_shadowed(const TAGPU_HPI* a, int e);
 void tagpu_hpi_shadow(TAGPU_HPI* a, int e);
 
 /* `n` bytes of file `e` from its byte `off`, decompressed, into `dst`; 0 with the reason in `why`
-   when the range is past the file, the file is past TAGPU_HPI_FILEMAX, or any chunk the range
+   when the range is past the file, `n` is past TAGPU_HPI_READMAX, or any chunk the range
    touches is not a chunk this reader takes. */
 int tagpu_hpi_read(const TAGPU_HPI* a, int e, uint32_t off, uint32_t n, void* dst, char* why, size_t nwhy);
 

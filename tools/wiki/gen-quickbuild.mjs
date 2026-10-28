@@ -4,36 +4,46 @@
 
    A demo's cursor glides with a move every two ticks, so its inputs are generated here rather than written by hand;
    change a demo here and regenerate. The unit figures are the stock game's, read once from the retail unit files
-   (each row's `from`); nothing of the game is copied. */
+   (each row's `from`); nothing of the game is copied. `canstop` is written only for the types whose FBI sets it:
+   the engine reads a missing key as 0 (sim.js canStop), and so does the sim.
+
+   No demo writes `sidebar`, so each takes sim.js's default, decision 2 of
+   research/notes/ingame-wiki-sidebar-plan.md: the sidebar is shown when the scene gives the player a mobile builder.
+   ARMCK and ARMACK stand in this entry's scene, so every demo here shows it. */
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
+const { TRIP } = createRequire(import.meta.url)('./mockup/sim.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const C = c => c * 16 + 8;                  // a cell's centre in world units
 const at = (cx, cz) => [C(cx), C(cz)];
 
 const units = {
-  ARMCK: { footprint: [2, 2], buildTime: 5597, workerTime: 80, buildDistance: 40, maxVelocity: 0.8,
+  ARMCK: { footprint: [2, 2], buildTime: 5597, workerTime: 80, buildDistance: 40, maxVelocity: 0.8, canstop: 1,
     builds: ['ARMSOLAR', 'ARMWIN', 'ARMESTOR', 'ARMMSTOR', 'ARMMEX', 'ARMMAKR', 'ARMLAB', 'ARMVP', 'ARMAP', 'ARMSY', 'ARMLLT', 'ARMRAD',
       'ARMALAB', 'ARMGEO', 'ARMHLT', 'ARMRL', 'ARMDRAG', 'ARMGUARD', 'ARMHP'],
     name: 'Construction KBot', from: 'ARMCK.fbi; build list gamedata/sidedata.tdf [CANBUILD]' },
-  ARMACK: { footprint: [2, 2], buildTime: 13432, workerTime: 160, buildDistance: 60, maxVelocity: 0.6,
+  ARMACK: { footprint: [2, 2], buildTime: 13432, workerTime: 160, buildDistance: 60, maxVelocity: 0.6, canstop: 1,
     builds: ['ARMLAB', 'ARMARAD', 'ARMFUS', 'ARMMOHO', 'ARMBRTHA', 'ARMSILO', 'ARMANNI', 'ARMAMD', 'ARMASP'],
     name: 'Adv. Construction Kbot', from: 'ARMACK.fbi; build list gamedata/sidedata.tdf [CANBUILD]' },
   ARMMEX: { footprint: [3, 3], extracts: 0.001, buildTime: 1800, name: 'Metal Extractor', from: 'ARMMEX.fbi' },
   ARMMOHO: { footprint: [5, 5], extracts: 0.003, buildTime: 35750, name: 'Moho Mine', from: 'ARMMOHO.fbi' },
   ARMGEO: { footprint: [4, 4], energyMake: 250, vent: true, buildTime: 13078, name: 'Geothermal Powerplant',
     from: 'ARMGEO.fbi (YardMap all G: one cell on a geothermal feature)' },
-  ARMPW: { footprint: [2, 2], buildTime: 1452, maxVelocity: 1.8, name: 'Peewee', from: 'ARMPW.fbi' },
+  ARMPW: { footprint: [2, 2], buildTime: 1452, maxVelocity: 1.8, canstop: 1, name: 'Peewee', from: 'ARMPW.fbi' },
 };
 
-/* the map, 40 x 24 cells. Deposits: A 5x5 (a Moho fits), B C E 3x3, S 3x3 between the map's unbuildable top row and
-   a finished ARMGEO (no Moho site over it is legal), D 3x3 under the player's finished ARMMEX, R 3x3 beside the broad
-   metal band, one deposit in the black corner and one under grey fog. Vents: a free one, and the one under the
-   ARMGEO. The metal ground and the fog cover whole tiles (even cells): the stage's ground is drawn in the map's
-   2 x 2-cell tiles and its fog in the engine's 32-unit blocks, so a rect off that grid has no picture
-   (research/notes/ingame-wiki-3d-stage-plan.md, section 4; tools/wiki/stagemap.py check refuses one). R keeps two
-   background columns between it and the band, so it stays a deposit of its own. */
+/* the map, 40 x 30 cells, 480 rows: as tall as stock TA's sidebar beside it (decision 9 of
+   research/notes/ingame-wiki-sidebar-plan.md). Deposits: A 5x5 (a Moho fits), B C E 3x3, S 3x3 between the map's
+   unbuildable top row and a finished ARMGEO (no Moho site over it is legal), D 3x3 under the player's finished
+   ARMMEX, R 3x3 beside the broad metal band, one deposit in the black corner and one under grey fog. Vents: a free
+   one, and the one under the ARMGEO. The metal ground and the fog cover whole tiles (even cells): the stage's ground
+   is drawn in the map's 2 x 2-cell tiles and its fog in the engine's 32-unit blocks, so a rect off that grid has no
+   picture (research/notes/ingame-wiki-3d-stage-plan.md, section 4; tools/wiki/stagemap.py check refuses one). R
+   keeps two background columns between it and the band, so it stays a deposit of its own. The band runs the map's
+   full height: one that stopped short of the bottom edge would be a deposit (sim.js distinct). Every demo plays in
+   rows 0..23; rows 24..29 hold only plain ground and the band. */
 const scene = {
-  map: { w: 40, h: 24, surfaceMetal: 0 },
+  map: { w: 40, h: 30, surfaceMetal: 0 },
   metal: [
     { rect: [13, 15, 5, 5], v: 90 }, { rect: [14, 16, 3, 3], v: 170 },   // A
     { rect: [22, 3, 3, 3], v: 140 },                                     // B
@@ -41,7 +51,7 @@ const scene = {
     { rect: [3, 10, 3, 3], v: 120 },                                     // E
     { rect: [15, 1, 3, 3], v: 130 },                                     // S
     { rect: [26, 15, 3, 3], v: 150 },                                    // D
-    { rect: [34, 0, 6, 24], v: 40 },                                     // broad metal ground, edge to edge
+    { rect: [34, 0, 6, 30], v: 40 },                                     // broad metal ground, edge to edge
     { rect: [29, 19, 3, 3], v: 160 },                                    // R, closed by background cells
     { rect: [2, 2, 3, 3], v: 120 },                                      // in the black corner
     { rect: [3, 18, 3, 3], v: 110 },                                     // under grey fog
@@ -77,7 +87,12 @@ function TL(start) {
     down(k) { inputs.push({ at: t, down: k }); return T; },
     up(k) { inputs.push({ at: t, up: k }); return T; },
     click(k) { T.down(k); t += 3; return T.up(k); },
-    build(b) { inputs.push({ at: t, build: b }); return T; },
+    /* a build input with the sidebar shown plays out as sim.js's trip: the glide to the button, through the pagers
+       when they are needed, the press, the arm at t + TRIP_UP and the glide back to where the cursor stood. Nothing
+       but a caption may stand in its TRIP ticks (sim.js checkTrips), so the timeline moves past them; the trip ends
+       with the cursor where it started, so `cur` still holds. Without the sidebar the build arms at once and the
+       timeline is the same. A caption meant for the trip is given before the build, on its tick. */
+    build(b) { inputs.push({ at: t, build: b }); t += TRIP; return T; },
     say(s) { inputs.push({ at: t, caption: s }); return T; },
   };
   return T;
@@ -91,13 +106,13 @@ function demo(id, title, add, fn, tail) {
 }
 
 demo('snap', 'Snap onto the deposit', { selected: ['ck'] }, T => T
-  .say('ARMCK selected. Pick the metal extractor in the build menu.').wait(20).build('ARMMEX').wait(25)
+  .say('ARMCK selected. Pick the metal extractor in the build menu.').wait(20).build('ARMMEX').wait(5)
   .to([344, 120], 50).say('Near a deposit the ghost jumps onto it, not under the cursor.').wait(30)
   .to([408, 104], 40).wait(15).to([344, 40], 40).wait(20).to([340, 112], 30).wait(15)
   .click('lmb').say('Click: it is placed on the deposit and ARMCK builds it.'), 130);
 
 demo('alt', 'Hold Alt to place exactly', { selected: ['ck'] }, T => T
-  .say('ARMCK selected, metal extractor picked from the build menu.').wait(20).build('ARMMEX').wait(15)
+  .say('ARMCK selected, metal extractor picked from the build menu.').wait(20).build('ARMMEX').wait(5)
   .to([344, 120], 50).say('The ghost snaps onto the deposit...').wait(35)
   .down('alt').say('...hold Alt and it stays exactly under the cursor.').wait(45)
   .up('alt').say('Let go of Alt and it snaps again.').wait(40)
@@ -151,7 +166,7 @@ demo('metalmap', 'Metal maps', { selected: ['ck'] }, T => T
   .click('rmb').say('Right-click builds it.'), 240);
 
 demo('fog', 'Fog', { selected: ['ck'] }, T => T
-  .say('ARMCK selected, metal extractor picked from the build menu.').wait(20).build('ARMMEX').wait(10)
+  .say('ARMCK selected, metal extractor picked from the build menu.').wait(20).build('ARMMEX').wait(5)
   .path([[200, 120], [104, 88]], 70).say('Unexplored ground (black): a deposit you have not seen does not pull the ghost.').wait(60)
   .path([[136, 220], [40, 280]], 60).say('Under grey fog the deposit is known: the ghost snaps onto it.').wait(45)
   .click('lmb').say('Click: placed on the deposit.'), 90);

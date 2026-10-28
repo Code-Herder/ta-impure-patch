@@ -28,24 +28,151 @@ const WikiStage = (() => {
   // a view's fields, read defensively: sim.js owns the shape and the stage draws whatever it can find
   const pt = p => Array.isArray(p) ? { x: +p[0], z: +p[1] } : p ? { x: +p.x, z: +p.z } : null;
 
-  /* THE FIT: the map in a W x H canvas at U pixels a unit, letterboxed with a pad of 6 units, its scale s pixels a world
-     unit and its corner at (ox, oz). tagpu_wikistage_fit is this, and both of the game's threads call it, so a click on
-     the stage and the picture of it cannot disagree. */
-  function fit(mw, mh, cell, W, H, U) {
+  /* THE GROUND'S SHADES of a view's map, by cell index: plain cells light, metal darker by how far it stands above
+     surfaceMetal; metal ground at surfaceMetal is tinted once, so a metal map reads as metal everywhere and its richer
+     patch as darker still. The map's cells and the whitebox minimap's take the same shades. */
+  function grounds(M) {
+    const metal = M.metal || [], sm = +M.surfaceMetal || 0, top = Math.max(sm, ...metal.filter(Number.isFinite));
+    return i => {
+      const m = +metal[i] || 0;
+      let L = m > 0 ? 188 : 204;
+      if (m > sm && top > sm) L = 176 - 108 * (m - sm) / (top - sm);
+      return `rgb(${L},${L},${L - 4})`;
+    };
+  }
+  // fog over ground, the map's and the minimap's: grey half over seen-before ground, black over unexplored
+  const fogColour = f => f === 2 || f === 'black' ? 'rgba(0,0,0,.9)' : 'rgba(128,128,128,.5)';
+
+  /* ---- THE GAME'S LEFT SIDEBAR (research/notes/ingame-wiki-sidebar-plan.md; spec section 5) ----
+     The column is x in [-128, 0) of the stage at one game pixel a world unit, whatever the HUD scale (decision 8), and
+     v.side.h rows tall. In the game look it is one image (side.js composes it from the mod's pack); otherwise it is
+     this whitebox, every element an op: the column, the minimap -- its well, the ground's shades and the fog one
+     solid a map cell at the minimap's scale, a dot a unit in its owner's colour, the camera box -- then the routed
+     screen's panel and each drawn gadget as a button: a solid, an edge one game pixel deep and its name. A pressed
+     button (or the current tab) takes the pressed colour and its name moves one game pixel right and down, as the
+     engine moves a pressed button's text (0x4A5F40); a greyed one is drawn whole at opacity 0.45, as one group.
+     tagpu_wikistage.c mirrors SIDE_WB. */
+  const SIDE_W = 128, MINIMAP = 128;
+  const SIDE_WB = { column: '#2e2e2a', panel: '#3a3a36', well: '#1e1e1c', button: '#55554f', edge: '#8a8a80',
+    pressed: '#6e6e66', grey: 0.45, label: '#e8e8e2', box: '#f0cc10' };
+  const SIDE = typeof WikiSide !== 'undefined' ? WikiSide : require('./side.js');
+
+  /* A GROUP AT ONE OPACITY, the HUD's ops' `grp` (tagpu_hudlay.h, THE GROUPS): fn's calls composited at full opacity,
+     then the whole faded once over what was under it. A check's recording context marks it with beginGroup and
+     endGroup. A canvas keeps a copy of r's pixels, which must hold everything fn draws, lets fn draw at full opacity,
+     and lays the copy back over at 1 - alpha: under (1 - alpha) + drawn alpha, the group's own blend. */
+  let groupCanvas = null;
+  function group(g, alpha, r, fn) {
+    if (typeof g.beginGroup === 'function') { g.beginGroup(alpha); fn(); g.endGroup(); return; }
+    const W = g.canvas.width, H = g.canvas.height;
+    const x0 = clamp(Math.floor(r.x), 0, W), y0 = clamp(Math.floor(r.y), 0, H);
+    const w = clamp(Math.ceil(r.x + r.w), 0, W) - x0, h = clamp(Math.ceil(r.y + r.h), 0, H) - y0;
+    if (w <= 0 || h <= 0) return;
+    if (!groupCanvas) groupCanvas = document.createElement('canvas');
+    if (groupCanvas.width < w || groupCanvas.height < h) { groupCanvas.width = Math.max(w, groupCanvas.width); groupCanvas.height = Math.max(h, groupCanvas.height); }
+    const c = groupCanvas.getContext('2d');
+    c.globalCompositeOperation = 'copy'; c.drawImage(g.canvas, x0, y0, w, h, 0, 0, w, h);
+    fn();
+    const a = g.globalAlpha; g.globalAlpha = 1 - alpha;
+    g.drawImage(groupCanvas, 0, 0, w, h, x0, y0, w, h);
+    g.globalAlpha = a;
+  }
+
+  /* The column of view v (v.side: { h, screen, unit, page, state, under }) with `side` = { layout, art }: the layout
+     the sim ran on (sim.js, checkLayout), and art = { draw(g, rect), label(i), minimap } when the column is the
+     game's image -- drawn whole into the column's rect snapped to device pixels, then the whitebox's minimap when
+     the image has none (no base picture for this entry) and a whitebox button over every gadget whose picture is a
+     label (spec 5.3), label(i) giving that label's text ('' for the gadget's own name) or null for a picture -- or
+     null for the whitebox. k carries draw()'s X, Z, s, label and the ground's shades. */
+  function drawSide(g, v, side, k) {
+    const { X, Z, s, U, label, shade } = k, sv = v.side, L = side.layout || null, art = side.art || null, H = +sv.h || 0;
+    const CX = x => X(x - SIDE_W);
+    const box = (x, y, w, h) => ({ x: CX(x), y: Z(y), w: w * s, h: h * s, cx: CX(x + w / 2), cy: Z(y + h / 2) });
+    const ring = (b, col) => { g.lineWidth = s; g.strokeStyle = col; g.strokeRect(b.x + s / 2, b.y + s / 2, b.w - s, b.h - s); };
+    const solid = (b, col) => { g.fillStyle = col; g.fillRect(b.x, b.y, b.w, b.h); };
+    if (art) {
+      const x0 = snap(X(-SIDE_W)), y0 = snap(Z(0));
+      art.draw(g, { x: x0, y: y0, w: snap(X(0)) - x0, h: snap(Z(H)) - y0 });
+    } else solid(box(0, 0, SIDE_W, H), SIDE_WB.column);
+
+    if (!art || !art.minimap) {
+      // the minimap's picture where the engine puts it (0x466780) over the stage map's extent, as the game look has it
+      const M = v.map, cell = +M.cell || 16, mw = +M.w || 1, mh = +M.h || 1, m = SIDE.geometry(mw * cell, mh * cell);
+      solid(box(0, 0, MINIMAP, MINIMAP), SIDE_WB.well);
+      // one solid a map cell, its edges on the device pixels the picture's own fractions round to
+      const cellAt = (cx, cz, col) => {
+        const a = snap(CX(m.offx + cx * m.w / mw)), b = snap(CX(m.offx + (cx + 1) * m.w / mw));
+        const c = snap(Z(m.offy + cz * m.h / mh)), d = snap(Z(m.offy + (cz + 1) * m.h / mh));
+        if (b > a && d > c) { g.fillStyle = col; g.fillRect(a, c, b - a, d - c); }
+      };
+      for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) cellAt(x, z, shade(z * mw + x));
+      const fog = M.fog || [];
+      for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) { const f = fog[z * mw + x]; if (f) cellAt(x, z, fogColour(f)); }
+      // a dot 3 game pixels across on the unit's minimap pixel (0x466DC0's point), in its owner's colour
+      for (const u of v.units || []) {
+        const p = pt(u); if (!p) continue;
+        const [px, py] = SIDE.dotAt(p.x, p.z, m, mw * cell, mh * cell);
+        g.fillStyle = TEAM[u.owner | 0] || '#ccc';
+        g.beginPath(); g.arc(CX(m.offx + px + .5), Z(m.offy + py + .5), 1.5 * s, 0, 2 * Math.PI); g.fill();
+      }
+      // the camera box: the stage shows the whole map, so it is the picture's border
+      ring(box(m.offx, m.offy, m.w, m.h), SIDE_WB.box);
+    }
+
+    const scr = L && L.screens[sv.screen];
+    if (!scr) return;
+    if (!art) solid(box(0, scr.y, scr.w, scr.h), SIDE_WB.panel);
+    // a button's name: its unit, or its gadget name without the side's prefix (ARMORDERS -> ORDERS)
+    const prefix = (L.sides[L.player_side] || {}).prefix || '';
+    const named = gd => gd.role === 'build' && gd.unit ? gd.unit
+      : prefix && gd.name.length > prefix.length && gd.name.startsWith(prefix) ? gd.name.slice(prefix.length) : gd.name;
+    scr.gadgets.forEach((gd, i) => {
+      const st = sv.state[i];
+      const lt = art ? art.label(i) : '';
+      if (!(st >= 0) || lt === null) return;
+      const [gx, gy, gw, gh] = gd.rect, b = box(gx, scr.y + gy, gw, gh);
+      const button = () => {
+        solid(b, st === 1 ? SIDE_WB.pressed : SIDE_WB.button);
+        ring(b, SIDE_WB.edge);
+        // inside the button, two game pixels clear of each edge: neighbouring buttons touch
+        label(lt || named(gd), st === 1 ? { ...b, cx: b.cx + s, cy: b.cy + s } : b, SIDE_WB.label, Math.max(s, b.w - 4 * s));
+      };
+      // the label fits the button's width, but its line may stand 9 units tall in a shorter box
+      if (st === 2) group(g, SIDE_WB.grey, { x: b.x - 2, y: b.y - 9 * U - 2, w: b.w + 4, h: b.h + 18 * U + 4 }, button);
+      else button();
+    });
+  }
+
+  /* THE FIT: the stage's content rect c = { x0, w, h } in world units -- the map, and with the game's sidebar the
+     128-unit column left of it (spec section 3) -- in a W x H canvas at U pixels a unit, letterboxed with a pad of 6
+     units: s pixels a world unit and the world origin at (ox, oz), so X(x) = ox + x s holds for the map and the column
+     alike. Without the column (x0 = 0) this is the map's own fit, to the bit. tagpu_wikistage_fit is this, and both of
+     the game's threads call it, so a click on the stage and the picture of it cannot disagree. */
+  function fit(c, W, H, U) {
     const pad = 6 * U;
-    const s = Math.min((W - 2 * pad) / (mw * cell), (H - 2 * pad) / (mh * cell));
-    return { s, ox: (W - mw * cell * s) / 2, oz: (H - mh * cell * s) / 2 };
+    const s = Math.min((W - 2 * pad) / c.w, (H - 2 * pad) / c.h);
+    return { s, ox: (W - c.w * s) / 2 - c.x0 * s, oz: (H - c.h * s) / 2 };
+  }
+  /* The content rect of a view: the map's, or with the column (v.side) the column and the map, as tall as the taller.
+     The map stays at the top; the band under a map shorter than the column is only R0's background (decision 9). */
+  function content(v) {
+    const M = v.map, cell = +M.cell || 16, mw = (+M.w || 1) * cell, mh = (+M.h || 1) * cell;
+    return v.side ? { x0: -SIDE_W, w: SIDE_W + mw, h: Math.max(mh, +v.side.h || 0) } : { x0: 0, w: mw, h: mh };
   }
 
   /* The view `v` into the context `g` of a W x H canvas, at U pixels a unit; o = { W, H, U, msg, icons, cursors, tick,
-     cursor, image, layer }. `msg` is what an absent view shows; `icons` the kit's cursor icons by name, each { img, pw,
+     cursor, image, layer, side }. `msg` is what an absent view shows; `icons` the kit's cursor icons by name, each { img, pw,
      ph, w, h } with w and h in units (loadIcons); `cursors` the game's (loadCursors), and `tick` the simulation's, which
      its animation runs from; `cursor` false leaves the cursor out (Try it yourself while the player's pointer is off
-     the stage: the player's own is the one on screen). Returns the fit, with the map's cell and size and `cursor`, true
-     when a cursor was drawn, or null without a map.
+     the stage: the player's own is the one on screen); `side` = { layout, art } for a view with the sidebar (drawSide).
+     Returns the fit, with the map's cell and size, the content rect (x0, cw, ch) and `cursor`, true when a cursor was
+     drawn, or null without a map.
 
      THE THREE OP RANGES (research/notes/ingame-wiki-3d-stage-plan.md, section 3). Everything drawn here belongs to one:
-     - R0, under the image: the stage's background (and the message of an absent view);
+     - R0, under the image: the stage's background, which also fills the band under a map shorter than the sidebar
+       (and the message of an absent view);
+     - side, the game's left sidebar (drawSide), whole in every look: it never overlaps the map's rect, so it is
+       drawn under the image;
      - R1, the whole whitebox stage: the ground (cells, grid, vents, fog), then every element below;
      - R2, the overlays drawn over the image: order lines, queued squares, selection brackets, the sites' and the
        ghost's squares and the sites' order numbers, the drag box, the cursor, the readouts, and the whitebox box and
@@ -55,7 +182,7 @@ const WikiStage = (() => {
      carries no ground (the stage's ground fell back whole) R1's ground is drawn under it, and fog is the whitebox's.
      The choice is the caller's, per frame, so no frame shows half of one and half of the other. R2 is R1 with the
      ground and the resolved boxes left out, in R1's order: `o.layer(range, type)` names the range of every call that
-     follows -- 'r0', 'ground', 'box' (with its unit type), 'label' (R1 only) or 'over' -- which is how
+     follows -- 'r0', 'side', 'ground', 'box' (with its unit type), 'label' (R1 only) or 'over' -- which is how
      tools/wiki/stagecheck.mjs pairs R0 and R2 with the DLL's ops as well as R1. */
   function draw(g, v, o) {
     const W = o.W, H = o.H, U = o.U, im = o.image || null;
@@ -78,19 +205,25 @@ const WikiStage = (() => {
       if (o.msg) text(o.msg, W / 2, H / 2, Math.round(11 * U), 'center', '#e8e8e2');
       return null;
     }
-    const M = v.map, cell = +M.cell || 16, mw = +M.w || 1, mh = +M.h || 1;
-    const { s, ox, oz } = fit(mw, mh, cell, W, H, U);
-    const X = x => ox + x * s, Z = z => oz + z * s, cp = cell * s;
+    const M = v.map, cell = +M.cell || 16, mw = +M.w || 1, mh = +M.h || 1, C = content(v);
+    const { s, ox, oz } = fit(C, W, H, U);
+    const X = x => ox + x * s, Z = z => oz + z * s, cp = cell * s, shade = grounds(M);
+    // a name on its box. One longer than `max`, 1.5 times its box unless given, shrinks until it fits, as the HUD fits
+    // its text
+    const label = (t, b, col, max = b.w * 1.5) => {
+      t = String(t);
+      let sz = Math.max(6 * U, Math.min(9 * U, b.h * .3));
+      const w = measure(t, sz);
+      if (w > max) sz = sz * max / w;
+      text(t, b.cx, b.cy, sz, 'center', col);
+    };
+    // the game's left sidebar, before the map: the cursor and the overlays are drawn over it
+    if (v.side) { mark('side'); drawSide(g, v, o.side || {}, { X, Z, s, U, label, shade }); }
 
     if (at('ground')) {
-      // the ground: plain cells light, metal darker by how far it stands above surfaceMetal; metal ground at
-      // surfaceMetal is tinted once, so a metal map reads as metal everywhere and its richer patch as darker still
-      const metal = M.metal || [], sm = +M.surfaceMetal || 0, top = Math.max(sm, ...metal.filter(Number.isFinite));
+      // the ground, in the shades of grounds()
       for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) {
-        const m = +metal[z * mw + x] || 0;
-        let L = m > 0 ? 188 : 204;
-        if (m > sm && top > sm) L = 176 - 108 * (m - sm) / (top - sm);
-        g.fillStyle = `rgb(${L},${L},${L - 4})`;
+        g.fillStyle = shade(z * mw + x);
         g.fillRect(Math.floor(X(x * cell)), Math.floor(Z(z * cell)), Math.ceil(cp) + 1, Math.ceil(cp) + 1);
       }
       // the cell grid, one pixel wide on pixel centres. A row is broken at each column, so no pixel is stroked
@@ -117,11 +250,11 @@ const WikiStage = (() => {
         g.beginPath(); g.arc(X(p.x), Z(p.z), r * .5, 0, 2 * Math.PI); g.stroke();
         g.beginPath(); g.moveTo(X(p.x) - r, Z(p.z)); g.lineTo(X(p.x) + r, Z(p.z)); g.moveTo(X(p.x), Z(p.z) - r); g.lineTo(X(p.x), Z(p.z) + r); g.stroke();
       }
-      // fog: grey half over seen-before ground, black over unexplored
+      // fog, in fogColour's
       const fog = M.fog || [];
       for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) {
         const f = fog[z * mw + x]; if (!f) continue;
-        g.fillStyle = f === 2 || f === 'black' ? 'rgba(0,0,0,.9)' : 'rgba(128,128,128,.5)';
+        g.fillStyle = fogColour(f);
         g.fillRect(Math.floor(X(x * cell)), Math.floor(Z(z * cell)), Math.ceil(cp) + 1, Math.ceil(cp) + 1);
       }
     }
@@ -135,14 +268,6 @@ const WikiStage = (() => {
 
     const box = (q, f = 1) => { const p = pt(q), fx = +(q.fx ?? (q.footprint || [])[0]) || 1, fz = +(q.fz ?? (q.footprint || [])[1]) || 1;
       const w = fx * cp * f, h = fz * cp * f; return { x: X(p.x) - w / 2, y: Z(p.z) - h / 2, w, h, cx: X(p.x), cy: Z(p.z) }; };
-    // a name on its box. One longer than 1.5 times its box shrinks until it fits, as the HUD fits its text
-    const label = (t, b, col) => {
-      t = String(t);
-      let sz = Math.max(6 * U, Math.min(9 * U, b.h * .3));
-      const w = measure(t, sz), max = b.w * 1.5;
-      if (w > max) sz = sz * max / w;
-      text(t, b.cx, b.cy, sz, 'center', col);
-    };
     // order lines, dashed, coloured by kind
     mark('over');
     g.setLineDash([5 * U, 3.5 * U]); g.lineWidth = Math.max(1, 1.4 * U);
@@ -254,7 +379,7 @@ const WikiStage = (() => {
     if (+v.pace > 1) readout(`construction ×${+v.pace}`, true);
     // the armed building's spacing: the mockup's readout, at the stage's bottom left; the game specifies none yet
     if (+v.spacing > 0) readout(`Spacing: ${+v.spacing}`, false);
-    return { s, ox, oz, cell, mw, mh, cursor: drew };
+    return { s, ox, oz, cell, mw, mh, x0: C.x0, cw: C.w, ch: C.h, cursor: drew };
   }
 
   /* THE CURSOR SHAPES the icons are rasterised from (tools/wiki/cursors.sh), at U pixels a unit with the pointer at
@@ -332,6 +457,6 @@ const WikiStage = (() => {
     return cursors;
   }
 
-  return { draw, fit, cursorShape, cursorFrame, loadIcons, loadCursors, FACE, CURSOR, ICON_BOX };
+  return { draw, fit, content, cursorShape, cursorFrame, loadIcons, loadCursors, FACE, CURSOR, ICON_BOX, SIDE_WB };
 })();
 if (typeof module !== 'undefined') module.exports = WikiStage;

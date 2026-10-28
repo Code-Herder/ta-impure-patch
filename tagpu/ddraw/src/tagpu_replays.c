@@ -1717,10 +1717,18 @@ int tagpu_replays_archive_paths(char (*out)[ARC_PATHMAX], int max)
 /* THE NAMES THE ASSET LOADER RESOLVES WITH, copied beside the list: the `language` value
    0x51FB50 that the path builder 0x4290F0 puts in "<dir>-<language>\" (WinMain's init sets it once,
    from the registry, "english" when empty: 0x49E9FC..0x49EA27), and the asset folders' names in
-   the running executable's .data, which a mod renames in place (Escalation's `unitsE`, TA Zero's
-   `ZUnits` and `logoz`: the 3D stage plan's batch D2). Every engine instruction that names one of
-   the folders passes it as a path or pattern [INFERRED: none writes it]; a DLL patching them at
-   run time is not checked. The game thread, which runs the engine's own loads, is the one copying.
+   the running process's .data, which a mod renames in place: in the executable file (Escalation's
+   `unitsE`, TA Zero's `ZUnits` and `logoz`: the 3D stage plan's batch D2), or from its loader
+   DLL's DllMain before the engine's entry point (Mayhem's `guiM`, ProTA's `gamedatP`: the sidebar
+   scout's Q6), so a copy of the live strings carries either. Every engine instruction that names
+   one of the folders passes it as a path or pattern [INFERRED: none writes it]. The game thread,
+   which runs the engine's own loads, is the one copying.
+   The sidebar's, each DISASSEMBLED as pushed by the code that reads the files (and the string
+   read out of the retail executable): gui 0x502820 (the page probe 0x42D82A, the page loader
+   0x41AD2C), gamedata 0x503360 (the sidedata reader 0x429EB1), unitpics 0x505FE4 (0x44C188,
+   0x494421), download 0x503730 (the download reader 0x42DD0E), commongui 0x50925C (0x491542, into
+   0x4AEEE0), palettes 0x5031BC and PALETTE 0x5033A4 (the PALETTE.ALP path built for 0x4290F0 at
+   0x42E14B..0x42E15B, as for .SHD at 0x42E1E0), guipal 0x5031C8 (0x49810E).
    BOUND: each string within its buffer; one that is not terminated there is given as "", which
    resolves nothing. */
 #define VA_LANGUAGE   0x0051FB50u
@@ -1743,6 +1751,14 @@ void tagpu_replays_asset_names(struct WIKI3DNAMES* n)
     engine_name(n->scripts, sizeof n->scripts, 0x00503740u);
     engine_name(n->anims, sizeof n->anims, 0x00502E30u);
     engine_name(n->features, sizeof n->features, 0x00502C7Cu);
+    engine_name(n->gui, sizeof n->gui, 0x00502820u);
+    engine_name(n->gamedata, sizeof n->gamedata, 0x00503360u);
+    engine_name(n->unitpics, sizeof n->unitpics, 0x00505FE4u);
+    engine_name(n->download, sizeof n->download, 0x00503730u);
+    engine_name(n->commongui, sizeof n->commongui, 0x0050925Cu);
+    engine_name(n->palettes, sizeof n->palettes, 0x005031BCu);
+    engine_name(n->palette, sizeof n->palette, 0x005033A4u);
+    engine_name(n->guipal, sizeof n->guipal, 0x005031C8u);
 }
 
 /* The main menu's version text as RT_GAME_VERSION takes it: printable, 1 to 7 characters, else

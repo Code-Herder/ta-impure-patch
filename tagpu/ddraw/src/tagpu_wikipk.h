@@ -31,6 +31,7 @@
 #define TAGPU_WIKI_FOLDS   32u      /* fold words: a bit for each of the tree's 1024 nodes the
                                        loader keeps (WIKI_MAXNODE)                           */
 #define TAGPU_WIKI_NSCROLL 3u       /* the panels that scroll: tree, demos, text (WIKI_SCROLL_*) */
+#define TAGPU_WIKI_MSG     128u     /* the stage's message: a simulation's refusal fits it       */
 
 /* What the wiki shows this draw. Present in a packet exactly while the wiki can be drawn: in a
    level, on the Vulkan lane, while the replay HUD's pass stands (tagpu_hudstate_on) and the
@@ -60,7 +61,8 @@ typedef struct TAGPU_PK_WIKI {
     uint32_t fold[TAGPU_WIKI_FOLDS];        /* bit n: tree node n is folded                  */
     float    scroll[TAGPU_WIKI_NSCROLL];    /* each panel's offset, units, as asked: the layout
                                                holds it to the limit                         */
-    char     msg[32];           /* what the stage shows with no view: "no demo", a failure   */
+    char     msg[TAGPU_WIKI_MSG];   /* what the stage shows with no view: "no demo",
+                                   "loading…", why the demo did not start                  */
     uint32_t shot;              /* the last capture the trigger tagpu_wiki.shot asked for, 0
                                    none: the first frame of this view whose 3D image is drawn
                                    writes it (tagpu_wikiworld.h)                             */
@@ -89,6 +91,9 @@ typedef struct TAGPU_CMD_WIKI {
     uint8_t  drawn;             /* the frame this map is drew the wiki layer                  */
     uint8_t  open;              /* that frame drew the window, not the button alone           */
     int16_t  entry;             /* the entry that frame drew, TAGPU_PK_WIKI.entry's value      */
+    uint8_t  view;              /* that frame's stage drew a view, not a message               */
+    int16_t  side_h;            /* that view's sidebar rows, 0 without a sidebar: the stage's
+                                   fit is the drawn frame's, whatever the simulation runs now */
     float    u;                 /* the client pixels a wiki unit was on that frame            */
     float    scroll[TAGPU_WIKI_NSCROLL];     /* each panel's scroll as drawn, units           */
     float    scroll_max[TAGPU_WIKI_NSCROLL]; /* and its limit                                 */
