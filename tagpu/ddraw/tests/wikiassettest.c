@@ -18,7 +18,9 @@
      wikiassettest fuzz-hpi ARCHIVE N SEED
          N copies of ARCHIVE, each truncated, or with bytes flipped (half of them in its header and
          directory), or both, each opened from memory and every file of it read whole; a line per
-         reason, and exit 1 when any refusal is not named.
+         reason, and exit 1 when any refusal is not named. First, two archives made here: a chunked
+         file whose size rounds past 32 bits, and one whose chunk table ends past 4 GiB, each read
+         one byte, both of which must be refused by name.
      wikiassettest fuzz-3do ARCHIVE PATH N SEED
          N copies of the 3DO at PATH inside ARCHIVE, damaged the same ways, each built as the loader
          builds a model, its faces bound as misses, and walked by its report and by both piece
@@ -376,6 +378,52 @@ static void report_tally(const char* what, int n, int clean)
     for (i = 0; i < s_nreason; i++) printf("  %5d  %s\n", s_count[i], s_reason[i]);
 }
 
+/* An unkeyed archive of one chunked file, "big", whose record says `size` bytes at `data`, with
+   `pad` bytes after the directory; a read of its first byte must be refused by name. */
+static int hpi_one(uint32_t size, uint32_t data, uint32_t pad)
+{
+    const uint32_t dir = 20, end = dir + 8 + 9 + 4 + 9;
+    unsigned char* b = (unsigned char*)calloc(1, end + pad);
+    unsigned char out[1];
+    char why[200] = "";
+    MEM mem;
+    TAGPU_HPISRC src;
+    TAGPU_HPI* a;
+    int e, ok;
+#define W32(p, v) do { (p)[0] = (unsigned char)(v); (p)[1] = (unsigned char)((v) >> 8); \
+                       (p)[2] = (unsigned char)((v) >> 16); (p)[3] = (unsigned char)((v) >> 24); } while (0)
+    if (!b) return 0;
+    W32(b, 0x49504148u);                    /* "HAPI" */
+    W32(b + 4, 0x00010000u);
+    W32(b + 8, end);                        /* the directory's end, its key 0, its start */
+    W32(b + 16, dir);
+    W32(b + dir, 1u);                       /* the root: one entry, listed after it */
+    W32(b + dir + 4, dir + 8);
+    W32(b + dir + 8, dir + 17);             /* the entry: its name, its record, a file */
+    W32(b + dir + 12, dir + 21);
+    memcpy(b + dir + 17, "big", 4);
+    W32(b + dir + 21, data);                /* the record: data, size, chunked */
+    W32(b + dir + 25, size);
+    b[dir + 29] = 1;
+#undef W32
+    mem.b = b;
+    src.ctx = &mem;
+    src.size = end + pad;
+    src.read = mem_read;
+    if (!(a = tagpu_hpi_open(&src, why, sizeof why)) || (e = tagpu_hpi_find(a, "big")) < 0) {
+        fprintf(stderr, "wikiassettest: the made archive did not open: %s\n", why);
+        if (a) tagpu_hpi_close(a);
+        free(b);
+        return 0;
+    }
+    ok = !tagpu_hpi_read(a, e, 0, 1, out, why, sizeof why) && why[0];
+    printf("fuzz-hpi: a chunked file of %lu bytes at 0x%lx: %s\n", (unsigned long)size, (unsigned long)data,
+           ok ? why : "NOT refused by name");
+    tagpu_hpi_close(a);
+    free(b);
+    return ok;
+}
+
 static int cmd_fuzz_hpi(int argc, char** argv)
 {
     uint32_t n, m, hot;
@@ -383,6 +431,7 @@ static int cmd_fuzz_hpi(int argc, char** argv)
     int cases = atoi(argv[3]), i, clean = 0;
     s_rng = (uint32_t)strtoul(argv[4], NULL, 10) | 1u;
     (void)argc;
+    if (!hpi_one(0xFFFFFFF0u, 64, 64) || !hpi_one(1, 0xFFFFFFFEu, 64)) return 1;
     if (!(b = slurp(argv[2], &n))) { fprintf(stderr, "wikiassettest: cannot read %s\n", argv[2]); return 2; }
     hot = n >= 12 ? rd32(b + 8) + 64 : n;           /* the header and the directory */
     for (i = 0; i < cases; i++) {
