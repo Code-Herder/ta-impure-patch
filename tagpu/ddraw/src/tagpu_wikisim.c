@@ -830,10 +830,10 @@ static void press_side(WIKISIM* s, int key)
    releases IdleTick copies after the pump (0x4999EF..0x499A04). Every other press, the minimap's
    and the column's rows outside the screen included, reaches the handler, whose WM_RBUTTONDOWN
    calls 0x499100 at 0x4993AC wherever the point is; with an order armed (main+0x2CC3 != 1) that
-   is the cancel, and it reads neither the point nor the Interface Type (0x499107..0x49915F). The
-   sim does nothing else there: a press with nothing armed depends on the Interface Type
-   (0x499162, 0x499567), and a left press with a building armed goes to the placement click
-   0x498F70 (0x4993BF -> 0x4995B3), not established off the viewport. */
+   is the cancel, and it reads neither the point nor the Interface Type (0x499107..0x49915F). A
+   left press there with a building armed is one placement (see input()). A press there with
+   nothing armed depends on the Interface Type (0x499162, 0x499567), and the sim does none of
+   it. */
 static int on_screen(const WIKISIM* s)
 {
     const WIKISCREEN* sc = screen_of(s, s->screen);
@@ -1607,8 +1607,22 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
                 right_click(s, shift);
             }
         }
-        /* off the map and off the screen the right press is the in-play handler's cancel and
-           nothing else */
+        /* OFF THE MAP AND OFF THE SCREEN a left press with a building armed places it once, at
+           the press. The handler finds bit 1 clear, so place_button returns 0 at the route
+           0x4993BF and stock's click 0x498F70 runs; the resource module's gate there re-runs the
+           build cursor 0x4197D0 on the point 0x498DA0 clamped to the view's edge (0x498E32..), and
+           0x419670 places that site. Shift keeps the building armed (bit 5, 0x498FB4), and
+           without it the press disarms (0x498FC0); no gesture starts, and the release adds
+           nothing. MEASURED 2026-10-27, Interface Type 1, 1024 x 768: a press at (60, 600), below
+           the screen, placed one site at the clamped point (1148, 6416), snapped to
+           (1144, 6424). The sim's clamp onto the map stands for the engine's onto the view,
+           because the stage shows the map where the game shows a view. The band under a short
+           map has no engine equivalent: the game's scroll keeps its view on the map [INFERRED],
+           so the nearest rule is the same clamp. The minimap stays inert (the owner's decision 6),
+           where the game would place at its world point. A right press there is the handler's
+           cancel and nothing else. */
+        else if (ev->down == WIKI_KEY_LMB && s->mode >= 0 && !on_minimap(s->cursor_x, s->cursor_z))
+            place_click(s, shift);
         else if (ev->down == WIKI_KEY_RMB && s->mode >= 0) disarm(s);
     }
     if (ev->up >= 0 && ev->up < WIKI_NKEYS && s->held[ev->up]) {

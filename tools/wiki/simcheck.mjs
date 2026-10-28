@@ -578,6 +578,29 @@ const SIDE_RULES = {
     const MH = entry.scene.map.h * 16;
     return off([-SIDE_W + 60, 128 + 352 + 20]) && off([-SIDE_W + 64, 64]) && off([60, MH + 8]);
   },
+  /* a left press off the screen reaches stock's click 0x498F70 (place_button returns 0 off the viewport), which places
+     the building once at the point clamped to the view, snapped: the sim's clamp is onto the map, and the deposit at
+     cells 2..3 of rows 26..27 is where ARMMEX snaps from the clamped corner. Shift keeps it armed; the release adds
+     nothing; the minimap stays inert (decision 6) */
+  'a left press off the screen with a building armed places it once at the clamped cursor'(entry) {
+    const run = (at, shift) => {
+      const s = WikiSim.create(entry, { scene: { selected: ['ck'], metal: [{ rect: [2, 26, 2, 2], v: 200 }] } }, FIXTURE);
+      press(s, centre(FIXTURE, 'ARMCK1', 'ARMMEX'));
+      if (shift) s.input({ down: 'shift' });
+      s.input({ move: [200, 300] }); s.input({ move: at }); s.input({ down: 'lmb' });
+      const pressed = s.orders('ck').map(o => `${o.type}@${o.ox},${o.oz}`).join(' '), armed = s.view().mode;
+      s.input({ up: 'lmb' });
+      const released = s.orders('ck').length;
+      if (shift) s.input({ up: 'shift' });
+      return { pressed, armed, released, after: s.view().mode };
+    };
+    const MH = entry.scene.map.h * 16, below = run([-SIDE_W + 60, 128 + 352 + 20], false), held = run([-SIDE_W + 60, 128 + 352 + 20], true);
+    const band = run([40, MH + 8], false), mini = run([-SIDE_W + 64, 64], false);
+    return below.pressed === 'ARMMEX@1,26' && below.armed === 'contextual' && below.released === 1 &&
+      held.pressed === 'ARMMEX@1,26' && held.armed === 'build:ARMMEX' && held.released === 1 && held.after === 'contextual' &&
+      band.pressed === 'ARMMEX@1,26' && band.armed === 'contextual' &&
+      mini.pressed === '' && mini.armed === 'build:ARMMEX' && mini.released === 0;
+  },
   /* a right press on the screen is the GUI's alone (0x4AB5D0 pops it), so the handler's cancel never sees it: an empty
      spot or a greyed button keeps the building armed, and a live build button arms its own on the right release, as
      the left one would (0x41AA00 reads which button only for a factory's queue, 0x41AC09) */
