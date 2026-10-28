@@ -1552,6 +1552,8 @@ static void unit_report(SB* b, const LOADER* L, const WIKI3DUNIT* u, const UNITR
 #define FRAME_MAXW WIKISIDE_SHEET_W
 #define FRAME_MAXH 4096
 #define LAYERS_MAX 1024         /* the leaves one frame's sub-frames may stack                    */
+#define LAYERS_PX  (16u << 20)  /* their pixels together: four of the largest leaf (FRAME_MAXW x
+                                   FRAME_MAXH), so one frame never holds more than 16 MB of leaves */
 #define GAF_SIG    0x00010100u
 /* GUI_ButtonDraw 0x4A5F40 and the stage pass's id-1 case 0x4A8B4B read these attribs bits */
 #define ATTR_CHECKBOX  0x80u
@@ -1891,7 +1893,7 @@ static int leaf_decode(SIDE* S, SBANK* k, uint32_t o, int* w, int* h, int* tk, u
 }
 
 typedef struct { int w, h, tk, lx, ly; unsigned char* px; } LAYER;
-typedef struct { LAYER* l; int n, cap, bad; } LAYERS;
+typedef struct { LAYER* l; int n, cap, bad; uint32_t px; const char* why; } LAYERS;
 
 static void leaves(SIDE* S, SBANK* k, uint32_t o, int depth, LAYERS* L)
 {
@@ -1904,6 +1906,21 @@ static void leaves(SIDE* S, SBANK* k, uint32_t o, int depth, LAYERS* L)
     ptr = rd32(hd + 16);
     if (!sub) {
         LAYER* y;
+        /* THE BOUND ON ONE FRAME'S MEMORY: every leaf is decoded and held until the frame is
+           composed, and one crafted frame can stack LAYERS_MAX leaves of FRAME_MAXW x FRAME_MAXH
+           (4 GB). The running sum of their pixels is held to LAYERS_PX, checked on the leaf's
+           header before its pixels are allocated; past it the frame is refused, with the reason.
+           A leaf past FRAME_MAXW x FRAME_MAXH is leaf_decode's to refuse. gfx.py has no such
+           bound: a file past it is one the two readers part on. */
+        {
+            const uint32_t lw = rd16(hd), lh = rd16(hd + 2);
+            if (lw <= FRAME_MAXW && lh <= FRAME_MAXH && (uint64_t)L->px + (uint64_t)lw * lh > LAYERS_PX) {
+                L->why = "its sub-frames hold more than 16 MB of pixels";
+                L->bad = 1;
+                return;
+            }
+            L->px += lw * lh;
+        }
         if (L->n == L->cap) {
             LAYER* t;
             if (L->cap >= LAYERS_MAX || !(t = (LAYER*)realloc(L->l, (size_t)(L->cap ? L->cap * 2 : 4) * sizeof *t))) { L->bad = 1; return; }
@@ -1932,9 +1949,10 @@ static void leaves(SIDE* S, SBANK* k, uint32_t o, int depth, LAYERS* L)
    and skipping its own transparent index. The layers are composed into the frame's own w x h box,
    which stands at the point minus the frame's hotspot; a layer pixel outside the box is left out
    (counted in `*outside`). The key is the frame's transparent index unless a layer draws that
-   index, then the lowest index none draws. 0 for a frame this reader refuses. */
+   index, then the lowest index none draws. 0 for a frame this reader refuses, with `*why` the
+   reason when it is the bound on the leaves' memory (LAYERS_PX), else NULL. */
 static int frame_drawn(SIDE* S, SBANK* k, uint32_t fo, int* w, int* h, int* hx, int* hy, int* tk,
-                       unsigned char** out, long* outside)
+                       unsigned char** out, long* outside, const char** why)
 {
     LAYERS L;
     unsigned char hd[9], used[256], *px, *drawn;
@@ -1948,6 +1966,7 @@ static int frame_drawn(SIDE* S, SBANK* k, uint32_t fo, int* w, int* h, int* hx, 
     HY = (int16_t)rd16(hd + 6);
     key = hd[8];
     leaves(S, k, fo, 0, &L);
+    *why = L.why;
     if (L.bad || W > FRAME_MAXW || H > FRAME_MAXH) {
         for (i = 0; i < L.n; i++) free(L.l[i].px);
         free(L.l);
@@ -2029,12 +2048,14 @@ static int side_seq(SIDE* S, int bk, const char* name, SSEQ* q)
         long outside;
         uint32_t fo;
         unsigned char* px = NULL;
+        const char* why = NULL;
         snprintf(key, sizeof key, "%s:%s:%s:%lu", lp, tagpu_vfs_source(S->vfs, k->src), up, (unsigned long)i);
         if ((at = frame_find(S, key)) < 0) {
             if (!bank_u32(S, k, so + SQ_TAB + 8 * i, &fo) ||
-                !frame_drawn(S, k, fo, &w, &h, &hx, &hy, &tk, &px, &outside) || w < 1 || h < 1) {
+                !frame_drawn(S, k, fo, &w, &h, &hx, &hy, &tk, &px, &outside, &why) || w < 1 || h < 1) {
                 free(px);
-                side_rep(S, "refused", "frame %lu of %s is one this reader does not take", k->path, (unsigned long)i, up);
+                side_rep(S, "refused", "frame %lu of %s is one this reader does not take%s%s", k->path, (unsigned long)i, up,
+                         why ? ": " : "", why ? why : "");
                 free(q->f);
                 q->f = NULL;
                 return 0;
@@ -2173,7 +2194,8 @@ static int dl_each(void* ctx, const TAGPU_VFILE* f)
         e = &S->dl[S->ndl++];
         scopy(e->unitmenu, um, sizeof e->unitmenu);
         scopy(e->unitname, tagpu_guifile_get(g, sec, "unitname"), sizeof e->unitname);
-        /* MENU and BUTTON through 0x4C46C0, 0 when missing; MENU is a byte (0x41AE48) */
+        /* MENU and BUTTON through 0x4C46C0, 0 when missing; both are bytes in the engine's entry
+           (MENU read at 0x41AE48, BUTTON stored at 0x42DEE7 and read at 0x41AE57), cut where used */
         tagpu_guifile_num(tagpu_guifile_get(g, sec, "menu"), NULL, &e->menu);
         tagpu_guifile_num(tagpu_guifile_get(g, sec, "button"), &v, NULL);
         e->button = v;
@@ -2571,7 +2593,9 @@ static int live_screens(const SIDE* S)
 }
 
 /* 0x41ACE0's fill: each entry of the type with MENU - 1 == page (MENU zero-extended from its byte,
-   0x41AE48) writes gadget BUTTON + 4: the unit's name, commonattribs 4, not greyed, the `_gadget`
+   0x41AE48) writes gadget BUTTON + 4 (BUTTON zero-extended from its byte too: stored with
+   `mov BYTE PTR [..+0x7], al` at 0x42DEE7, read with `mov al, BYTE PTR [..+0x7]` over a cleared eax
+   at 0x41AE57, DISASSEMBLED): the unit's name, commonattribs 4, not greyed, the `_gadget`
    picture; later entries overwrite. BOUND: THE ENGINE NEVER BOUNDS BUTTON + 4 against the gadget
    count (0x41AE5E..0x41AE73 indexes ControlsAry with it); here an entry whose slot is no gadget of
    the page is skipped and reported. */
@@ -2580,7 +2604,7 @@ static void fill_downloads(SIDE* S, SREC* r, int n, int page, const int* mine, i
     int i;
     for (i = 0; i < nmine; i++) {
         const SENTRY* e = &S->dl[mine[i]];
-        const long long slot = e->button + 4;
+        const long long slot = (e->button & 0xFF) + 4;
         SREC* g;
         if ((int)(e->menu & 0xFFu) - 1 != page) continue;
         if (slot < 0 || slot >= n || !r[slot].ok) {

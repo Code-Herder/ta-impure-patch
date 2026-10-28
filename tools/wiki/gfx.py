@@ -1381,13 +1381,13 @@ def type_pages(eng, tname, downloads, player_prefix, report):
 
 def fill_downloads(recs, page, entries, name, report):
     """0x41ACE0's fill: each entry with MENU − 1 == page (MENU zero-extended from its byte, 0x41AE48) writes gadget
-    BUTTON + 4: the unit's name, commonattribs 4, not greyed, the `_gadget` picture. Later entries overwrite. The
+    BUTTON + 4 (BUTTON zero-extended from its byte too: stored at 0x42DEE7, read at 0x41AE57): the unit's name, commonattribs 4, not greyed, the `_gadget` picture. Later entries overwrite. The
     engine never bounds BUTTON + 4 against the gadget count (it writes past the screen's gadgets); here an entry
     whose slot is no gadget of the page is skipped and reported."""
     for unitmenu, menu, button, unitname, path in entries:
         if (menu & 0xFF) - 1 != page:
             continue
-        slot = button + 4
+        slot = (button & 0xFF) + 4
         if not 0 <= slot < len(recs) or recs[slot] is None:
             report.append({"element": f"{name} download {unitname}", "refused": f"{path}: BUTTON {button} names "
                            f"gadget {slot}, which the page (of {len(recs)}) does not have"})

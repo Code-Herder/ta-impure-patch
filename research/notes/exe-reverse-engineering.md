@@ -7324,7 +7324,11 @@ when `main+0x37EBE` bit 4 asks. A selection sets that bit (`0x41C110`).
   order (`0x41AE0F..0x41AEFF`). An entry is placed when its builder word is the unit's type
   (`0x41AE38`) and its `MENU`, zero-extended from its byte, minus 1 is the page
   (`0x41AE48..0x41AE4D`). It writes gadget `BUTTON + 4` of `ControlsAry` (stride `0x15B`,
-  `0x41AE5E..0x41AE73`) **with no bound against the screen's gadget count**:
+  `0x41AE5E..0x41AE73`) **with no bound against the screen's gadget count**. `BUTTON` is a byte
+  as well: the reader stores it with `mov BYTE PTR [ecx+edi+0x7], al` (`0x42DEE7`) and the fill
+  reads it with `mov al, BYTE PTR [ebp+ecx+0x7]` over a cleared `eax` (`0x41AE51`, `0x41AE57`)
+  before the `add eax, 4` (`0x41AE5E`), so the slot is `(BUTTON & 0xFF) + 4`, 4..259
+  (DISASSEMBLED). The fill:
     - clears its greyed bit (`0x41AE77`);
     - sets commonattribs 4 (`0x41AE80`);
     - sets its name to the entry's `UNITNAME` (`0x41AE84..0x41AEAC`);
