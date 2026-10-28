@@ -224,7 +224,7 @@ the plan below:
   visible and acquirable, which is TADR's margin — a gameplay change, not a defect.
 - **Classified differently from the provisional list:** flak's divides are **local** (a peer
   without them faults on the shot, which is not a silent divergence), and the download menus'
-  records are **sim** (they feed the builders' lists and the build menus, as the build lists do).
+  records are **sim** (they feed the builders' lists, which the AI builds from, and the build menus).
   The weapon IDs join the table in the stock-limits build too.
 - **The install.** One table, `tagpu_limits_install`, in both builds: it now refuses two rows over
   one byte as well, and the report says "engine limits and fixes" ([the failure

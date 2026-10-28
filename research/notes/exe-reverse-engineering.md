@@ -5170,7 +5170,7 @@ made, or its page cannot be made writable. Each, and why:
 | the reclaim's anchor mark `0x423892` | simulation | without it a group reclaim pays once per builder |
 | the saved features on the border `0x43265A` | simulation | a loaded game silently lacks the border's features; retail has no saved multiplayer game, so the class follows from what the fix changes, the game's own state |
 | a saved feature's record `0x4250C0`, `0x425185` | simulation | as the border fix |
-| whole build lists `0x42DA58`, `0x42DAC7`, `0x42BEAF`, `0x42BEC3` | simulation | a builder's list is what the AI's pick `0x40BDB0` and the build menu offer |
+| whole build lists `0x42DA58`, `0x42DAC7`, `0x42BEAF`, `0x42BEC3` | simulation | a builder's list is what the AI's pick `0x40BDB0` chooses from; the build menu does not read it (*A builder's build list*) |
 | the download menus `0x42DCF0` | simulation | its records feed the builders' lists (`0x42BE30`) and the build menus |
 | unique sync keys `0x42BD29` | simulation | a player without it keeps colliding keys, which the host's walk `0x46D9E3` answers with the first type that has them |
 | weapon IDs `0x42E468`, `0x49D280`, `0x424575`, `0x455FB8` | simulation | the `0x0F` hit flag is a wire format; in the raised build these are the raise's own rows |
@@ -6889,6 +6889,21 @@ two bytes past the block (`0x42BEC3..0x42BED3`). The AI's pick `0x40BDB0`, its d
 pointer only ([limits-evidence §8](tadr-port/limits-evidence.md) lists them). The def clone `0x42B370`
 runs before `0x42D9BB`/`0x42D9C7` zero the pair, and the teardown frees each copy (`0x42DC52`).
 
+- **Every builder gets a copy.** The pair is zeroed for every def, and a def with the builder bit
+  `+0x241 & 0x40` goes on to the copy (`0x42D9B5..0x42D9CD`). A builder with no `[CANBUILD]`
+  section, or no subsection of its own name in it, jumps past the reads straight to the copy
+  (`0x42D9EC`, `0x42DA01` → `0x42DAA7`) and gets a non-NULL block of count 0.
+- **The appender ignores MENU.** `0x42BE30` appends every download entry of the builder, whatever
+  its `MENU` (`0x42BE9E..0x42BED1`), so an entry with no `MENU`, which no build page shows, is still
+  on the list.
+- **No order is made from it.** The build menu's placement dispatch `0x419670` gives every selected
+  builder (`+0x241` bit `0x40`) a `MOBILEBUILD` or `VTOL_MOBILEBUILD` of `main+0x2CC4`
+  (`0x41975E..0x4197A9`) and reads no list; nor do the order roots or MobileBuild `0x403A20`.
+  Its walkers are the AI's (`0x40BDB0`, `0x408149`, `0x408781`), the debug listing and the
+  uncalled `0x4894F0`. So the list is what the AI builds from, not what a player's menu offers:
+  Impure's Quick Build reads each constructor's build menu instead (*The left sidebar*, below,
+  and *Resource placement and contextual order contracts*).
+
 **The fix**, `fix_build_list`: a block holding `n` entries has room for `bl_room(n)` — 30, then
 powers of two from 64 — and each writer grows its block through `0x4D83B0` before the entry that
 would not fit, the old block freed through `0x4D85A0`. `0x42DA58` and `0x42BEC3` call the two appends,
@@ -7277,13 +7292,19 @@ when `main+0x37EBE` bit 4 asks. A selection sets that bit (`0x41C110`).
     - **Exactly one unit**, whose type has `def+0x22E` ≠ 0 and either a page (`+0x110` bit 22 set
       and bits 23..25 above 0) or an orders page (`def+0x241` bit 31: `<NAME>0.GUI` exists):
       `%s%d.GUI` (`0x502838`) with the type's name and that page, 0 being the orders page. It is
-      loaded by `0x41ACE0`, whose one call is `0x41B83A`.
+      loaded by `0x41ACE0`, whose one call is `0x41B83A`. The page is `+0x110` bits 23..25 when
+      bit 22 is set, else 0, and page 0 is shown only with `def+0x241` bit 31
+      (`0x41B77D..0x41B79E`). The name is `def+0x20` cut at 31 characters: `strncpy` of 0x20 bytes
+      into a local, then its byte 31 cleared (`[esp+0x6F]`), and the `sprintf` that makes the file name
+  is the call at `0x41B7E9` (`0x41B7A6..0x41B7E9`).
     - **Anything else**, two builders of one type included: `0x41B0F0` (called at `0x41B871` and
       `0x41B883`), which loads the side's `%sGEN.GUI` (`0x50282C`).
 - **The side's screens are the player's.** GEN, MAIN2 and DL belong to the player's side, not the
   unit's. The prefix is `nameprefix` (key `0x5048EC`) of sidedata's `[SIDE%d]`, copied to
   `main+0x37F5B + side · 0x232` by the sidedata reader `0x431A60` (`0x431B26..0x431B66`). The side
-  is the player's PlayerInfo `+0x95`. A build page is named by the unit's type.
+  is the player's PlayerInfo `+0x95`. A build page is named by the unit's type. `nameprefix` is
+  read with a size of 4 (`0x4C48C0(local, "nameprefix", 4)`, `0x431B26..0x431B3B`), so a prefix
+  holds at most three characters.
 - Retail ships no `<NAME>0.GUI`; TA Zero does. The router runs a frame or more after the selection
   changes.
 
@@ -7311,18 +7332,38 @@ when `main+0x37EBE` bit 4 asks. A selection sets that bit (`0x41C110`).
 **The build pages: their count, their files and the download fill.**
 
 - **The page count.** The def load probes `<gui>\<NAME>0.GUI`, `1`, `2` … (`0x42D800..0x42D8CB`;
-  the folder `0x502820` is pushed at `0x42D82A`) through the open test `0x4BBC40`, which answers
-  the file's size. `def+0x22E`, a byte, is the first index that answers 0. So a 0-byte file stops
-  the count exactly as a missing one does; ProTA ships 32 such stubs, `armck3.gui` among them.
+  the folder `0x502820` is pushed at `0x42D82A`) through the path builder `0x4290F0` and the open
+  test `0x4BBC40`, which answers the file's size. `<NAME>0.GUI` answering sets `def+0x241` bit 31,
+  the orders page, and its absence clears it (`0x42D830..0x42D855`). `def+0x22E`, a byte, is then
+  (`0x42D85B..0x42D8CB`):
+    - when `<NAME>1.GUI` answers, the first index of 1, 2, … that does not;
+    - else 1 when `<NAME>0.GUI` answers;
+    - else 0.
+
+  So a 0-byte file stops the count exactly as a missing one does; ProTA ships 32 such stubs,
+  `armck3.gui` among them.
   The download records (*The download menus' records — `0x42DCF0`*) raise the count to an entry's
   `MENU` (`0x42DF60..0x42DFB4`).
 - **A new unit's page.** A unit whose type has `def+0x22E` > 1 is created with bit 22 set and
   page 1 (`0x485CD5..0x485CF1`). Any other unit is created with bits 22..25 clear.
-- **The page file.** `0x41ACE0(unit, name, page)` opens `<gui>\<NAME><page>.GUI` (`0x502820`
-  pushed at `0x41AD2C`). When the open test answers 0, it builds `%sDL` (`0x502818`) instead,
-  with the controlled player's side prefix (`0x41AD61..0x41AD94`).
+- **The page file.** `0x41ACE0(unit, name, page)` returns at once unless the unit is complete
+  (`unit+0x104` = 0.0, `0x41ACF1..0x41AD02`). It probes `<gui>\<NAME><page>.GUI` through
+  `0x4290F0(buf, 0x502820, name, "GUI")` (`0x502820` pushed at `0x41AD2C`) and the open test
+  `0x4BBC40`. When that answers 0, it builds `%sDL` (`0x502818`) instead, with the watched
+  player's side prefix: `main+0x37F5B + side · 0x232`, side = PlayerInfo `+0x95` of the record
+  `main+0x1B63 + main[0x2A42] · 0x14B` (its `+0x27`, `0x41AD61..0x41AD94`; the PlayerInfo pointer and
+  its side byte are read at `0x41AD61..0x41AD66`, with no NULL test and no bound on the side). Either name goes to
+  GUI_Load `0x4AA8F0(main+0x519, name, 0)` (`0x41ADD9`).
+- **GUI_Load's file is not the probe's.** GUI_Load builds its path as `strncpy(path, gi+0x9B6,
+  0x100)` (gi = `main+0x519`, so the prefix is `main+0xECF`, `guis\` from `0x502820`, set at
+  `0x4914CE`) followed by the name (`0x4AA989..0x4AA9DF`), then `0x4BAFF0(path, path, "GUI")`
+  (`0x4AAA06`): the path is cut at the last `.` found scanning back from its end before any `\`,
+  and `.` + `GUI` appended (`0x4BB024..0x4BB03F`, then `0x4BB042..0x4BB093`). It has no language
+  folder; the probe's `0x4290F0` tries `<folder>-<language>\` first (*The file primitives*, in
+  the saved-map section). `0x4BAFF0` is `stdcall`, `ret 0xC`.
 - **The download fill.** `0x41ACE0` then walks every download record and every entry, in file
-  order (`0x41AE0F..0x41AEFF`). An entry is placed when its builder word is the unit's type
+  order (`0x41AE0F..0x41AEFF`): the entry loop is `0x41AE24..0x41AEAE` (entry stride `0x25`,
+  `0x41AEC8`) and the record stride `0xBD` is added at `0x41AEEF`. An entry is placed when its builder word is the unit's type
   (`0x41AE38`) and its `MENU`, zero-extended from its byte, minus 1 is the page
   (`0x41AE48..0x41AE4D`). It writes gadget `BUTTON + 4` of `ControlsAry` (stride `0x15B`,
   `0x41AE5E..0x41AE73`) **with no bound against the screen's gadget count**. `BUTTON` is a byte
@@ -7332,7 +7373,9 @@ when `main+0x37EBE` bit 4 asks. A selection sets that bit (`0x41C110`).
   (DISASSEMBLED). The fill:
     - clears its greyed bit (`0x41AE77`);
     - sets commonattribs 4 (`0x41AE80`);
-    - sets its name to the entry's `UNITNAME` (`0x41AE84..0x41AEAC`);
+    - sets its name to the entry's `UNITNAME` (`0x41AE84..0x41AEAC`), a `strcpy` of the whole
+      name, up to 31 characters: a name of 17 or more runs past the 16-byte name field over the
+      record's geometry from `+0x13`;
     - sets `+0xB4` bit 0 (`0x41AEAE`), which makes its picture `<anims>\<NAME>_gadget.GAF`.
 
     A `MENU` of 0 gives −1 and is never placed. TA Zero's pages are templates of 12 `IGPATCH`
@@ -7341,6 +7384,14 @@ when `main+0x37EBE` bit 4 asks. A selection sets that bit (`0x41C110`).
     over TAZ31.gp3's 303 files; TA Zero's exe and DLLs leave this code unpatched. The download reader `0x42DCF0` skips a section without `UNITMENU`
     (`0x42DE20`) and reads `MENU` and `BUTTON` through `0x4C46C0`, 0 when missing.
 
+- **The gadget record**, `0x15B` bytes, as the COMMON reader `0x4AD350` fills it
+  (`0x4AD36A..0x4AD482`): `id` `+0`, `assoc` `+1` (bytes); `name` `+2`, 16 bytes, 15 characters
+  (`0x4C48C0(…, 0x10)` at `0x4AD3A7`, which copies at most the size and clears the last byte,
+  `0x4C4951`); `xpos` `+0x13`, `ypos` `+0x15`, `width` `+0x17`, `height` `+0x19`
+  (words); `attribs` `+0x1B`, `colorf` `+0x1F`, `colorb` `+0x23` (dwords); `active` `+0x29` and
+  `commonattribs` `+0x2A` (bytes). A section without COMMON leaves the record as it was
+  (`0x4AD361`). The button reader `0x4ADC70` takes the greyed bit, `+0x13C` bit 0, from the
+  section's own `grayedout`.
 - **The pagers.** When `def+0x22E` < 2, `0x41ACE0` sets the screen's `%sPREV`/`%sNEXT`
   (`0x5027E4`, `0x5027DC`) inactive through `0x4A0570` → `0x4A03F0`.
 - **MEASURED.** Retail ARMCK has `ARMCK1..3.GUI`, and `download\armhp.tdf` gives MENU 5 and
@@ -7353,8 +7404,9 @@ when `main+0x37EBE` bit 4 asks. A selection sets that bit (`0x41C110`).
 walks records 0 (the index cleared at `0x41B054`) to N − 1, N being the header's `+0xB6` (`movsx`
 at `0x41B065`; the loop bound `0x41B094`), which the reader sets to the section count − 1 (`0x4AED48`, below). Each record there
 with commonattribs bit 2 (`0x41B073`) is greyed or un-greyed by whether `0x488B10` knows its
-**whole** name (`0x41B07A`; `0x4A1200(gi, i, found ? 0 : 1)`, `0x41B07F..0x41B088`), whatever
-the file said. So `IGPATCH` is greyed, and so is a page's button for a type the mod does not load;
+**whole** name (`0x41B07A`, the record's `+2` read at `0x41B079`; `0x4A1200(gi, i, found ? 0 : 1)`,
+`0x41B07F..0x41B088`, which writes bit 0 of record `i` itself, `[[gi+0x18]+4] + i · 0x15B + 0x13C`,
+`0x4A120B..0x4A1237`), whatever the file said. Record 0, the panel, is tested too. So `IGPATCH` is greyed, and so is a page's button for a type the mod does not load;
 and **the page's last record is never visited**, so it keeps the file's grey after the download
 fill, as every record of page 0 and of a side's screen does. DISASSEMBLED 2026-10-28; the wiki's
 menu reader follows it (`tagpu_wikiasset.c` `button_grey`, `gfx.py`), which changed no pick,
@@ -7363,7 +7415,9 @@ page or sheet byte in the six compatibility setups.
 `0x488B10(name)` is a binary search over the defs `main+0x1439B`, from def[1] (count
 `main+0x1438F`, stride `0x249`). It compares `def+0x20`, the FBI's `UnitName`, with `_stricmp`
 `0x4F8A70`, and answers the type word `def+0x21E`, or 0. The loader sorts the array by that key
-(`0x42D56E..0x42D604`).
+(`0x42D56E..0x42D604`). The answer is in `ax` only: `mov ax,[ebp+0x21E]` (`0x488BC1`) or
+`xor ax,ax` (`0x488BD3`), the upper half of `eax` left from the search, so a caller takes the word
+(the handler tests `bx`, `0x41AB5D`).
 
 **Negative result: a constructor's build button carries no `+N`.** `0x4199B0` writes each
 commonattribs-4 button's text `+0xB6` as `"+%d"` (`0x502660`) of `0x439D80(unit, type)`, or "".
@@ -7389,6 +7443,18 @@ TDF the exe reads (26 call sites).
 
 - **Loading.** A file of size 0 is refused and nothing is parsed (`0x4C2F9A`). The text ends at
   its first NUL (`0x4C30A8` makes the file a C string).
+- **The file layer as `0x4C2F60` calls it** (`0x4C2F60..0x4C30FF`), every call `stdcall`:
+    - open `0x4BB5B0(path)`, `ret 4`: a handle, or NULL (`0x4C2F71`);
+    - size `0x4BBD00(h)`, `ret 4` (`0x4C2F8B`); a size ≤ 0 skips the read (`0x4C2F9C`);
+    - seek `0x4BB710(h, pos)`, `ret 8`, to 0 (`0x4C2FB5`);
+    - read `0x4BB7C0(h, buf, n)`, `ret 0xC`, which answers the bytes read; a negative answer
+      fails (`0x4C2FBD..0x4C2FC4`);
+    - close `0x4BB5D0(h)`, `ret 4` (`0x4C30FF`).
+
+  The buffer comes from `0x4D83B0` (`0x4C2FA4`), which the loader does not NULL-check. The open
+  test `0x4BBC40(path)`, `ret 4`, opens, takes the size and closes, and answers the size or 0.
+  Quick Build reads a build page through these same calls into a buffer of its own
+  (`tagpu_resource.c` `page_bytes`).
 - **Comments.** `0x4C33A0` blanks them once over the whole text before the parse, inside values
   too:
     - a line comment runs up to the next LF;
@@ -7488,25 +7554,32 @@ Python tool, is `tools/ta3do`'s `gaf_compose`.
 **The build pages' handler, `0x41AA00`.** It is stored at screen `+8` by the page loader
 (`0x41ADEA`) and the GEN loader (`0x41B171`) and has no direct caller. It takes the actuated
 gadget's name cut to 16 characters (`0x49FED0`: `strncpy` of 0x10 bytes, then byte `[0x10]` = 0,
-`0x49FEE0..0x49FEFF`) and the type of that cut name (`0x488B10` at `0x41AA39`), then tests, in
-this order -- the cut name's substrings by the case-sensitive `strstr` `0x4E49B0`
-(`0x41AA75..0x41AB30`) before the type, which `0x41AB5D` tests whatever the gadget's
-commonattribs:
+`0x49FEE0..0x49FEFF`; the handler clears its copy's byte 16 again, `0x41AA33`) and the type of that
+cut name (`0x488B10` at `0x41AA39`). The greyed pass looks up the whole name, so a filled name of 17
+characters or more can be un-greyed and still arm nothing. It then tests, in this order -- the cut
+name's substrings by the case-sensitive `strstr` `0x4E49B0` (`0x41AA75..0x41AB30`) before the
+type, which `0x41AB5D` tests whatever the gadget's commonattribs:
 
-- **the pagers and the tabs**, by substring. `PREV` (`0x502810`) sets `main+0x37EBF` bit 0,
+- **the pagers and the tabs**, by substring (`strstr` `0x4E49B0`, case-sensitive, on the
+  16-character copy, `0x41AA75..0x41AB30`). `PREV` (`0x502810`) sets `main+0x37EBF` bit 0,
   `NEXT` (`0x502808`) sets `main+0x37EBE` bit 7, `ORDERS` (`0x50274C`) sets `0x37EBF` bit 1 and
   plays `ordersbutton`, and `BUILD` (`0x502754`) sets `0x37EBF` bit 2 and plays `buildbutton`.
   The dispatcher `0x41C180` (its one call, `0x4992CD`) then calls NEXT `0x41BDE0` or PREV
   `0x41BF10`:
-    - NEXT makes the page 1 after the last, else page + 1, sets bit 22, and plays
-      `nextbuildmenu`;
+    - NEXT `0x41BDE0(arg)` makes the page 1 after the last, else page + 1, sets bit 22, and
+      plays `nextbuildmenu` (`arg` = 0, `0x41BE8F..0x41BEE8`). With `arg` ≠ 0 the orders state
+      (bit 22 clear) steps to page 1 and the last page to the orders state, bit 22 cleared
+      (`0x41BE33..0x41BE87`). Either way page + 1 is taken in the 3-bit field, bits 23..25
+      (`and edx,0x3800000`, `0x41BE7F`, `0x41BECE`), so page 7 steps to 0: the numbered pages a
+      player can reach are 1..min(`def+0x22E` − 1, 7);
     - PREV makes the page the last when it is below 2, else page − 1, and sets bit 22;
     - the last page is `def+0x22E` − 1;
     - BUILD sets the shown unit's bit 22 and ORDERS clears it, and both re-route.
 
     The in-game keys call NEXT and PREV too (`0x49608F`, `0x496083`).
 
-- **A type whose def byte `+0x22F` is 0** is armed (`0x41AB7F`). The arm writes `main+0x2CC3` =
+- **A type whose def byte `+0x22F` is 0** is armed: the type must be nonzero (`test bx,bx`,
+  `0x41AB5D`) and its byte 0 (`0x41AB7F`). The arm writes `main+0x2CC3` =
   `0x0E` (`0x41AB89`) and the type to `main+0x2CC4` (`0x41AB9C`), plays `addbuild`, and writes
   nothing to `main+0x2CC6`. Which button armed it is never read.
 - **Anything else** goes to the stage gadgets `0x41A490`, then to the orders `0x419BE0` (its one
@@ -20502,6 +20575,7 @@ are an instruction-level `call rel32` scan of `.text`, not a scan of address-sha
 | `0x43AFC0` | Ordinary mouse order dispatch, `stdcall(action, shift, unit, target, pos, param1, param2)`, `ret 28`. Called at `0x4197A9` (manual build) and `0x48D1F4` (contextual command). A build's param1 is the definition ID; an upgrade uses the resolved reclaim action then an appended build |
 | `0x438760` | Action-name lookup, thiscall `(output_byte*, name)`; 109 direct callers, including manual dispatch `0x4197A4`. Resource dispatch asks for `MOBILEBUILD` (`0x502654`) or `VTOL_MOBILEBUILD` (`0x502640`) according to the builder's fly bit |
 | `0x43F0E0` | Action resolver, `stdcall(index*, mode, unit, target, pos)`; returns the caller's output pointer; refusal writes action byte zero (`0x4401E3`), which native dispatch rejects at `0x48D0AF`. Guard is mode 7, reclaim mode 12. There are 28 direct callers; context dispatch uses `0x48D0A0`, script orders `0x4804A3`, and constructor/assist paths `0x487D5B`..`0x487F8C`. Resource input asks the resolver instead of assuming every selected builder can reclaim or Guard |
+| `0x41ACE0`'s calls | **Quick Build's candidates are each selected constructor's build menu** (owner decision 23), read by `tagpu_resource.c` `build_menu` as the page loader reads it, on the GAME thread inside `quick_choice`'s callers (the gates above and the packet fill), never inside an engine file call. Per page from `tagpu_buildmenu_pages(def+0x241 bit 31, def+0x22E)`: the probe `0x4290F0(buf[1024], 0x502820, "<NAME><page>.GUI", 0x502828)` + `0x4BBC40`, else `<prefix>DL` with the watched player's side (bounded below min(`main+0x37F39`, 5), prefix `strnlen < 4`); GUI_Load's path from `main+0xECF` (`strnlen < 0x100`); the file through `0x4BB5B0`/`0x4BBD00`/`0x4BB710`/`0x4BB7C0`/`0x4BB5D0`, 1 byte to 1 MiB, the read exactly the size; the builder's download entries from records below `[main+0x391C7]`, five a record; `0x488B10`'s answer masked to its word and bounded below the def count. The rule is `tagpu_buildmenu.c`; the table holds type numbers per def table (base `main+0x1439B` and count `main+0x1438F`, which the teardown `0x42DB90` frees (`0x42DCCB`) and zeroes (`0x42DCE6`) and the menu-time loader `0x42A8D0` allocates anew, `0x4D83B0` at `0x42AA8A` stored at `0x42AA98`), level generation and side. CANBUILD `+0x152`/`+0x156` is not read |
 | `0x48CD80`, `0x48D220` | Hovered-unit query and context resolution; callers respectively `0x491D18`/`0x499278` and `0x491D36`/`0x499297`. Hovered unit ID is stored at `main+0x2CBA`; feature ID is `+0x2CBC` |
 | `0x481930` | Explored-map setter, six callers: `0x4818E6`, `0x48269C`, `0x48279B`, `0x482901`, `0x482A94`, `0x482C08`. Uses the player's map bit, not its seat number; allocation `0x483CF6`..`0x483D25` is W×H/4 u16 entries for even W/H |
 | `0x422040` | Applies indestructible metal-spot feature values to grid byte `+7`; only caller `0x483D7D`. The cell's feature ID must be below `0xFFFB`, its definition's metal float `+0xF0` nonzero and flags `+0xFF & 2` set. Uses definition footprint `+0x94/+0x96`, bounds helper `0x481550`, and float conversion `0x4E43A0`. This is how the private synthetic fixture supplies metal values |
@@ -20633,11 +20707,10 @@ Unit flags `+0x110`: alive `0x10000000`, selected `0x10`, excluded `0x4000`, str
 `u16 +0x76/+0x78`, footprint size `+0x7E/+0x80`.
 
 Definitions: footprint shorts `+0x14A/+0x14C`, yard pointer `+0x14E` (allocated as FootX×FootZ by
-`0x42CF30`), CANBUILD count `+0x152` and u16-array pointer `+0x156`. The existing whole-build-list
-patch maintains `bl_room(count)` at every allocator/copy/append; resource hooks require its
-complete installed state. `s_buildListsLive` is `SIM_INSTALL`, set from the deferred patch-table
-registration; its public predicate also requires `s_limState == 1`. This prevents input using a
-count bound without the allocation bound. Building movement code is byte `+0x22F == 0`, builder
+`0x42CF30`). Quick Build's candidates come from the builder's build menu (the `0x41ACE0` row
+above), not from CANBUILD `+0x152`/`+0x156`, so the resource hooks do not depend on the
+whole-build-list patch. The menu reads the page count byte `+0x22E`, the orders-page bit
+`+0x241` bit 31, the type word `+0x21E` and the name `+0x20`. Building movement code is byte `+0x22F == 0`, builder
 bit `+0x241 & 0x40`, fly bit `+0x241 & 0x800`; worker time is u16 `+0x1FE`, repair capability
 `+0x245 & 0x200`. Metal extraction and energy output floats `+0x1CE/+0x1C2` must be finite and
 positive. Geo recognition scans the complete bounded yard for byte `0x8F`, at most 64×64 cells.
@@ -21040,7 +21113,7 @@ word at `+0x137`. This is the allocation bound, not a readable-page probe.
 Resource raw coordinates are captured after the `0x499221` conversion independently of zoom.
 With zoom disabled, the installed wrapper calls pristine `0x498DA0` directly before capture;
 no zoom conversion or viewport rect write runs. Resource hooks require that producer
-installation to be live, in addition to the complete CANBUILD allocation patch.
+installation to be live.
 
 The resolver's mode-7 branch at `0x43F4C7` requires definition `+0x245` bit `0x20`
 (CanGuard) and a nonzero relationship at `0x43F4D4`. Mode 12 starts at `0x43F4F7` and
