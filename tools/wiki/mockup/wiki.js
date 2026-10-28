@@ -18,20 +18,27 @@ const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
 const SKINS = ['kit', 'whitebox'];
 // the sidebar's layout: the detected mod's pack (the fixture where it has none), a fixture by name, or none at all
 const SIDEBARS = ['mod', 'fixture', 'tall', 'off'];
-const S = { res: '1920x1080', size: LAY.window.share, mode: 'sp', mod: 'stock', skin: 'kit', sidebar: 'mod', rewind: true, open: false, entry: null, demo: 0,
-  try: false, playing: true, speed: 1, fold: new Set() };
+/* side: the side asked for by name, matched without case against the sidebar layout's sides (sideIndex), kept as asked
+   so a pack that loads after the page still finds it; null or no match is the layout's first side. iface: the
+   Interface Type the demos play, 1 right-click (the interface they are authored in) or 0 left-click */
+const S = { res: '1920x1080', size: LAY.window.share, mode: 'sp', mod: 'stock', side: null, iface: 1, skin: 'kit', sidebar: 'mod', rewind: true,
+  open: false, entry: null, demo: 0, try: false, playing: true, speed: 1, fold: new Set() };
 { const q = new URLSearchParams(location.search);
   if (RES.includes(q.get('res'))) S.res = q.get('res');
   if (q.get('size')) S.size = clamp(Math.round(+q.get('size')) || LAY.window.share, 50, 100);
   if (q.get('mode') === 'mp') S.mode = 'mp';
   if (MODS.includes(q.get('mod'))) S.mod = q.get('mod');
+  if (q.get('side')) S.side = q.get('side');
+  if (q.get('iface') === '0') S.iface = 0;
   if (q.get('rewind') === '0') S.rewind = false;
   if (SKINS.includes(q.get('skin'))) S.skin = q.get('skin');
   if (SIDEBARS.includes(q.get('sidebar'))) S.sidebar = q.get('sidebar');
   S.open = q.has('open'); S.entry = q.get('entry'); S.try = q.has('try');
   if (q.get('demo')) S.demo = Math.max(0, (+q.get('demo') || 1) - 1); }
 function syncURL() {
-  const q = new URLSearchParams({ res: S.res, size: S.size, mode: S.mode, mod: S.mod, skin: S.skin, sidebar: S.sidebar, rewind: +S.rewind });
+  const q = new URLSearchParams({ res: S.res, size: S.size, mode: S.mode, mod: S.mod });
+  if (S.side) q.set('side', S.side);
+  for (const [k, v] of Object.entries({ iface: S.iface, skin: S.skin, sidebar: S.sidebar, rewind: +S.rewind })) q.set(k, v);
   if (S.open) { q.set('open', ''); if (S.entry) { q.set('entry', S.entry); q.set('demo', S.demo + 1); } if (S.try) q.set('try', ''); }
   if (window.WikiGfx) WikiGfx.url(q);
   history.replaceState(null, '', '?' + q.toString().replace(/=(?=&|$)/g, ''));
@@ -97,9 +104,9 @@ async function load() {
 const entry = () => (S.entry && ENT[S.entry] && !ENT[S.entry].error) ? ENT[S.entry] : null;
 const demo = () => { const e = entry(); return e && Array.isArray(e.demos) ? e.demos[S.demo] || null : null; };
 const locked = e => !!(e && Array.isArray(e.lockedIn) && e.lockedIn.includes(S.mod));
-/* every text an entry shows goes through text.js's fillText with these words, and the sim keeps the raw text. The sim
-   plays the entries' own types, whose names are stock ARM's, on the right-click interface, so the words are those */
-const textWords = e => WikiText.words(e, null, 1);
+/* every text an entry shows goes through text.js's fillText with the words of the context the sim plays -- the
+   side's casting, or the entry's own types without one, and the Interface Type -- and the sim keeps the raw text */
+const textWords = e => { const c = context(); return WikiText.words(e, c.casting, c.iface); };
 const fill = (e, t) => WikiText.fillText(t, textWords(e));
 
 /* ---- the game's left sidebar: the layout the sims run on and, in the game look, its pictures ----
@@ -116,15 +123,30 @@ async function loadFixtures() {
     fetch(`${ART}side/${f}`).then(r => { if (!r.ok) throw new Error(`side/${f}: ${r.status}`); return r.json(); })
       .then(j => { FIXTURES[k] = j; }, x => { FIXTURES[k] = { error: x.message }; })));
 }
-// a mod's pack, once: a sim started before it arrived restarts on it
+/* a mod's pack, once: a sim started before it arrived restarts on it, and the page's text and side list follow it.
+   The layout and the casting are one source (spec 5): a casting list that is not index-aligned with the layout's
+   sides, or one side's casting the sim's bounds refuse, refuses the pack whole, as a refused layout does. The mod's
+   stage packs (gfx.py --stages) are optional: without them a bound demo draws from the entry's own pack */
 function loadPack(mod) {
   if (PACKS[mod] || mod === 'unknown') return;
   PACKS[mod] = 'loading';
-  WikiSide.load(`gfx/side/${mod}/`).then(p => {
-    try { WikiSim.checkLayout(p.layout); } catch (x) { p.refused = x.message; console.error(`wiki sidebar pack ${mod}:`, x.message); }
+  WikiSide.load(`gfx/side/${mod}/`).then(async p => {
+    try {
+      WikiSim.checkLayout(p.layout);
+      if (!Array.isArray(p.casting) || p.casting.length !== p.layout.sides.length)
+        throw new Error(`the casting lists ${Array.isArray(p.casting) ? p.casting.length : 'no'} sides for the layout's ${p.layout.sides.length}`);
+      p.casting.forEach((c, k) => { try { WikiSim.checkCasting(c); } catch (x) { throw new Error(`side ${p.layout.sides[k].name}: ${x.message}`); } });
+    } catch (x) { p.refused = x.message; console.error(`wiki sidebar pack ${mod}:`, x.message); }
     for (const m of p.problems) console.warn(`wiki sidebar pack ${mod}:`, m);
+    p.stages = await fetch(`gfx/side/${mod}/stage/index.json`).then(r => r.ok ? r.json() : null, () => null)
+      .then(j => j && j.entries ? j.entries : {}, () => ({}));
     PACKS[mod] = p;
-  }, x => { PACKS[mod] = { error: x.message }; }).then(() => { sideNote(); if (mod === S.mod && TREE && sideLayout() !== simLayout) start(); });
+  }, x => { PACKS[mod] = { error: x.message }; }).then(() => {
+    sideNote();
+    if (mod !== S.mod) return;
+    sideControl(); renderTree(); renderEntry();
+    if (TREE && sideLayout() !== simLayout) start();
+  });
 }
 const fixture = k => FIXTURES[k] && !FIXTURES[k].error ? FIXTURES[k] : null;
 const pack = () => { const p = S.sidebar === 'mod' && PACKS[S.mod]; return p && p !== 'loading' && !p.error && !p.refused ? p : null; };
@@ -133,6 +155,27 @@ function sideLayout() {
   if (S.sidebar === 'tall') return fixture('tall');
   const p = pack();
   return p ? p.layout : fixture('fixture');
+}
+/* THE CONTEXT the sim plays and the text is filled with: the side, by name, among the sidebar layout's sides (the
+   fixture's one side where the fixture stands in, side 0 and nothing to choose without a sidebar); that side's casting
+   only when the layout is the mod's own pack, so a trip never looks for a button of a type another layout named; and
+   the Interface Type */
+const sideIndex = L => {
+  if (!L) return 0;
+  const want = (S.side || '').toLowerCase(), k = L.sides.findIndex(d => d.name.toLowerCase() === want);
+  return k < 0 ? 0 : k;
+};
+function context() {
+  const L = sideLayout(), p = pack(), side = sideIndex(L);
+  return { side, casting: p && L === p.layout ? p.casting[side] : null, iface: S.iface };
+}
+// the Side selector: the sidebar layout's sides by name, the one played selected; disabled without a sidebar
+function sideControl() {
+  const L = sideLayout(), el = $('#side'), names = L ? L.sides.map(d => d.name) : [];
+  const html = names.length ? names.map(n => `<option>${esc(n)}</option>`).join('') : '<option>none</option>';
+  if (el.innerHTML !== html) el.innerHTML = html;
+  el.disabled = !names.length;
+  if (names.length) el.selectedIndex = sideIndex(L);
 }
 function sideNote() {
   const p = PACKS[S.mod], el = $('#sidebar-note');
@@ -224,7 +267,7 @@ $('#demos').onclick = e => { const d = e.target.closest('[data-demo]'); if (d) {
 
 /* ---- playback: a demo plays when selected, at 30 ticks a second (60 at 2x), and holds its last frame when done;
    Try it yourself creates the same scene with no inputs and hands the stage to the player ---- */
-let sim = null, simErr = null, acc = 0, simLayout = null;
+let sim = null, simErr = null, acc = 0, simLayout = null, simCtx = null;
 function fail(x) { simErr = x && x.message || String(x); console.error('wiki sim:', x); sim = null; }
 function start() {
   sim = null; simErr = null; acc = 0; releaseAll();
@@ -232,11 +275,14 @@ function start() {
   if (!d) return;
   if (typeof WikiSim === 'undefined') { simErr = 'sim.js is not loaded'; return; }
   // a demo the layout refuses (an input inside a build's trip, say) shows why on the stage, as a broken entry does
-  simLayout = sideLayout();
-  try { sim = S.try ? WikiSim.create(e, d, simLayout) : WikiSim.play(e, d, simLayout); } catch (x) { fail(x); }
+  simLayout = sideLayout(); simCtx = context();
+  try { sim = S.try ? WikiSim.create(e, d, simLayout, simCtx) : WikiSim.play(e, d, simLayout, simCtx); } catch (x) { fail(x); }
   controls(); syncURL();
 }
-const held = () => !S.try && sim && sim.done;
+/* a demo holds its last frame once done. A Try-it sim is never done but by a lock -- its scene holds a unit whose cast
+   the side leaves unbound (sim.js, decision 12) -- and then holds the same way: the frame under the entry's badge, no
+   tick and no input, as a demo stopped at a build the mod cannot reach does */
+const held = () => !!sim && sim.done;
 function advance(dt) {
   if (!S.open || !sim || !S.playing || held()) { acc = 0; return; }
   acc = Math.min(acc + dt * TICK * S.speed, 8);       // a stalled tab catches up a few ticks, not seconds of them
@@ -274,6 +320,12 @@ function view() {
   if (!sim) return null;
   try { return sim.view(); } catch (x) { fail(x); return null; }
 }
+/* the 3D pack the stage draws from: a sim bound to a mod's casting draws from that mod's stage packs, which hold its
+   units (gfx.py --stages), where it has one for the entry; any other from the entry's own */
+function stageDir() {
+  const p = pack();
+  return simCtx && simCtx.casting && p && p.stages && p.stages[S.entry] ? `side/${S.mod}/stage/${S.entry}` : S.entry;
+}
 /* the stage's drawing is stage.js's. Under gfx=game, gfx.js first renders this frame's view in 3D; a COMPLETE image is
    drawn between the op ranges R0 and R2, and anything less leaves the whole whitebox (stage.js, draw()) */
 const ICONS = WikiStage.loadIcons(ART + 'kit/');
@@ -283,7 +335,7 @@ const CURSORS = WikiStage.loadCursors('gfx/');
 let IMG = null;                       // the last frame's 3D answer, for scripted checks
 function draw() {
   const g = stage.getContext('2d'), v = view();
-  const r = v && window.WikiGfx ? WikiGfx.frame(S.entry, v, sim ? sim.tick : 0) : null;
+  const r = v && window.WikiGfx ? WikiGfx.frame(S.entry, v, sim ? sim.tick : 0, stageDir()) : null;
   IMG = r && { complete: r.complete, ground: r.ground, resolved: [...r.resolved], refused: r.refused };
   const image = r && r.complete ? {
     ground: r.ground, resolved: t => r.resolved.has(t),
@@ -292,7 +344,7 @@ function draw() {
   /* EXACTLY ONE CURSOR IN TRY IT YOURSELF: the stage draws its cursor only while the player's pointer is over the
      stage, and hides the player's (#stage.try) only in a frame whose cursor it drew -- a game sequence that ended, or an
      icon not loaded yet, leaves the player's. A demo's scripted cursor is drawn whatever the pointer does. */
-  const tryIt = S.try && !!sim;
+  const tryIt = S.try && !!sim && !sim.done;
   FIT = WikiStage.draw(g, v, { W: stage.width, H: stage.height, U: G.gh / 720, icons: ICONS, cursors: CURSORS,
     tick: sim ? sim.tick : 0, cursor: !tryIt || overStage, image, side: { layout: simLayout, art: sideArt(v, simLayout) },
     msg: simErr || (demo() ? 'loading…' : entry() ? 'no demo' : '') });
@@ -323,7 +375,7 @@ function strip(v) {
 
 /* ---- Try it yourself: the stage's mouse and the modifier keys go to sim.input; the sidebar's buttons are the sim's ---- */
 const down = new Set();                // the buttons and keys sent down and not yet up
-function send(ev) { if (!sim || !S.try) return; try { sim.input(ev); } catch (x) { fail(x); } }
+function send(ev) { if (!sim || !S.try || sim.done) return; try { sim.input(ev); } catch (x) { fail(x); } }
 function releaseAll() { for (const k of down) send({ up: k }); down.clear(); }
 // the pointer as a stage point clamped to the content rect: the map, and the sidebar with it. The sim decides what is
 // under it (the column, the map, or the dead band under a map shorter than the column)
@@ -522,12 +574,15 @@ $('#mode').value = S.mode; $('#mode').onchange = e => { S.mode = e.target.value;
 $('#rewind').value = +S.rewind; $('#rewind').onchange = e => { S.rewind = e.target.value === '1'; frame.classList.toggle('norewind', !S.rewind); syncURL(); };
 frame.classList.toggle('norewind', !S.rewind);
 $('#skin').value = S.skin; $('#skin').onchange = e => { S.skin = e.target.value; applySkin(); syncURL(); };
-$('#mod').value = S.mod; $('#mod').onchange = e => { S.mod = e.target.value; loadPack(S.mod); sideNote(); renderTree(); renderEntry(); start(); syncURL(); };
-$('#sidebar').value = S.sidebar; $('#sidebar').onchange = e => { S.sidebar = e.target.value; sideNote(); start(); syncURL(); };
+$('#mod').value = S.mod; $('#mod').onchange = e => { S.mod = e.target.value; loadPack(S.mod); sideNote(); sideControl(); renderTree(); renderEntry(); start(); syncURL(); };
+$('#sidebar').value = S.sidebar; $('#sidebar').onchange = e => { S.sidebar = e.target.value; sideNote(); sideControl(); renderTree(); renderEntry(); start(); syncURL(); };
+$('#side').onchange = e => { S.side = e.target.value; renderTree(); renderEntry(); start(); syncURL(); };
+$('#iface').value = S.iface; $('#iface').onchange = e => { S.iface = +e.target.value; renderTree(); renderEntry(); start(); syncURL(); };
 window.addEventListener('resize', layout);
 
-applySkin(); layout(); renderTree(); renderEntry(); controls(); loadPack(S.mod); sideNote();
+applySkin(); layout(); renderTree(); renderEntry(); controls(); loadPack(S.mod); sideNote(); sideControl();
 Promise.all([load(), loadFixtures()]).then(() => {
+  sideControl();
   if (S.entry && !(S.entry in ENT)) S.entry = null;
   if (S.open && !S.entry && TREE) S.entry = leaves(TREE.tree)[0] || null;
   const d = entry() && entry().demos; if (d && S.demo >= d.length) S.demo = 0;
@@ -535,5 +590,5 @@ Promise.all([load(), loadFixtures()]).then(() => {
 });
 requestAnimationFrame(loop);
 // the page's state, its running simulation and the sidebar layout it runs on, for scripted checks of the mockup
-window.WikiPage = { state: S, sim: () => sim, image: () => IMG, layout: () => simLayout };
+window.WikiPage = { state: S, sim: () => sim, image: () => IMG, layout: () => simLayout, context: () => simCtx };
 })();

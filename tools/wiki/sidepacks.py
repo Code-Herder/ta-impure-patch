@@ -7,10 +7,11 @@
 
 For each mod it lays out the setup's game folder as tools/compat/tacompat.py's `overlay` gives it -- the retail
 install's files, then the setup's on top, a later name replacing an earlier one without case -- as symlinks in a
-temporary folder, and runs `gfx.py --side-only` on it, which writes tools/wiki/mockup/gfx/side/<mod>/ (gitignored:
-it is derived from the game's files). Then it loads each pack's layout into tools/wiki/mockup/sim.js's checkLayout
-under node, the bound the mockup applies before it uses one, and on the stock pack checks the cast rule's stock
-identity (`stock_identity`): the rule is general, and this is what pins it.
+temporary folder, and runs `gfx.py --side-only --stages` on it, which writes tools/wiki/mockup/gfx/side/<mod>/ and
+the mod's entry stage packs in its stage/ (gitignored: they are derived from the game's files). Then it loads each
+pack's layout into tools/wiki/mockup/sim.js's checkLayout under node, the bound the mockup applies before it uses
+one, and on the stock pack checks the cast rule's stock identity (`stock_identity`): the rule is general, and this is
+what pins it.
 
 This mapping is test tooling (spec section 2.5); the picture rule and the cast rule in gfx.py name no mod. `unknown`
 has no pack: the mockup gives it the fixture layout.
@@ -194,8 +195,8 @@ def main(argv=None):
             tree = Path(tmp) / "game"
             setup_tree(setup, retail, tree)
             exe = child(tree, tavfs.EXE_NAME)
-            cmd = [sys.executable, str(HERE / "gfx.py"), "--side-only", "--mod", mod, "--gamedir", str(tree),
-                   "--exe", str(exe), "--out", str(out_root)]
+            cmd = [sys.executable, str(HERE / "gfx.py"), "--side-only", "--stages", "--mod", mod,
+                   "--gamedir", str(tree), "--exe", str(exe), "--out", str(out_root)]
             rec = RECORDS.get(mod)
             if rec:
                 cmd += ["--folders", ",".join(f"{k}={v}" for k, v in rec["folders"].items()), "--archive",

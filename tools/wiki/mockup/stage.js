@@ -122,8 +122,8 @@ const WikiStage = (() => {
     const scr = L && L.screens[sv.screen];
     if (!scr) return;
     if (!art) solid(box(0, scr.y, scr.w, scr.h), SIDE_WB.panel);
-    // a button's name: its unit, or its gadget name without the side's prefix (ARMORDERS -> ORDERS)
-    const prefix = (L.sides[L.player_side] || {}).prefix || '';
+    // a button's name: its unit, or its gadget name without the view's side's prefix (ARMORDERS -> ORDERS)
+    const prefix = (L.sides[sv.index] || {}).prefix || '';
     const named = gd => gd.role === 'build' && gd.unit ? gd.unit
       : prefix && gd.name.length > prefix.length && gd.name.startsWith(prefix) ? gd.name.slice(prefix.length) : gd.name;
     scr.gadgets.forEach((gd, i) => {

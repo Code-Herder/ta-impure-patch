@@ -72,6 +72,10 @@ binaries (spec: .data/wiki-sidebar/spec.md section 2.4). side.json holds
            `unexplored` and `box` (GUI colours 0 and 0x0E), `seen.bin` (the grey remap) and one base per entry,
            `minimap/<entry>.bin`, shrunk with that install's own PALETTE.ALP
   report   every element's source, and every refusal, by name
+and with `--stages`, `gfx/side/<m>/stage/`: the entry packs above, laid out as in gfx/ (`<entry>/scene.json`,
+`palette/`, `shaders/`, `index.json`), resolved from the mod's install and holding, beside each entry's own unit
+types, every side's type for each cast the entry's units name (`stage_types`). The mockup draws a demo bound to the
+mod's casting from these, so each side shows its own models.
 The rules are the engine's, each cited where it is applied: the .GUI files by position (tavfs.gui_sections), the page
 probe and the download fill of the def load and the page loader, the greyed pass, the picture rule of decision 5,
 the FBI's figures and display name. The cast rule (`side_casting`) is the wiki's own and names no mod.
@@ -674,9 +678,24 @@ def entry_owners(entry):
     return sorted(owners)
 
 
-def write_units(out, eng, entry, report):
+def stage_types(entry, casting=None):
+    """The unit types an entry's stage pack exports: the entry's own, then, for each cast its units name, every
+    side's type for that cast in `casting` (a side pack's list), each name once. A bound demo's units carry the
+    casting's type names (sim.js bindEntry) and an unbound cast keeps the entry's own type, so the pack holds a model
+    for either."""
+    names = list(entry["units"])
+    casts = [u.get("cast") for u in entry["units"].values()]
+    for side in casting or []:
+        for c in casts:
+            k = side["casts"].get(c)
+            if k and k["type"] not in names:
+                names.append(k["type"])
+    return names
+
+
+def write_units(out, eng, entry, report, types):
     models, refused = {}, {}
-    for name in entry["units"]:
+    for name in types:
         try:
             models[name] = resolve_unit(eng, name, report)
         except Miss as e:
@@ -1015,7 +1034,9 @@ def display_name(keys, language, unitname):
     `<0x51FDC0><key>` first and the plain key second; `name` is read into def+0x00 at 0x42BFAC..0x42BFBB), cut to 31
     bytes because def+0x00 is 0x20 bytes (DISASSEMBLED). The bytes are the game's code page, taken to be Windows-1252
     [INFERRED], and given as UTF-8, a byte with no Windows-1252 character becoming '?'. An empty name gives the
-    UnitName."""
+    UnitName. The value comes without its blanks at either end, as tavfs.tdf_sections trims it and as the engine
+    holds it: stock ARMCK's `FrenchName=Kbot de construction  ;` is def+0x00 "Kbot de construction" under
+    language=french (MEASURED 2026-10-28 in game, M5)."""
     raw = keys.get(f"{language.lower()}name", keys.get("name", "")).encode("latin-1")[:0x1F]
     text = "".join("?" if bytes([b]) in CP1252_UNMAPPED else bytes([b]).decode("cp1252") for b in raw)
     return text or unitname
@@ -1810,7 +1831,7 @@ def side_pack(eng, mod, descs, out, pal, report):
 
 # --------------------------------------------------------------------------- main
 
-def build_entry(eng, entry, desc, out, palette_block, alp):
+def build_entry(eng, entry, desc, out, palette_block, alp, types):
     report = []
     ground = {"ok": False, "miss": None}
     mapblock = features = minimap = None
@@ -1829,7 +1850,7 @@ def build_entry(eng, entry, desc, out, palette_block, alp):
     except Miss as e:
         ground["miss"] = str(e)
         report.append({"element": "ground", "refused": str(e)})
-    units = write_units(out, eng, entry, report)
+    units = write_units(out, eng, entry, report, types)
     cells = [entry["scene"]["map"]["w"], entry["scene"]["map"]["h"]]
     scene = {"format": "ta-scene/1", "wiki": FORMAT, "entry": entry["id"], "cells": cells,
              "ground": ground, "map": mapblock, "features": features, "units": units, "minimap": minimap,
@@ -1839,6 +1860,38 @@ def build_entry(eng, entry, desc, out, palette_block, alp):
              "report": report}
     (out / "scene.json").write_text(json.dumps(scene, indent=1) + "\n")
     return scene
+
+
+def write_stages(eng, entries, stage_dir, out_root, palette, shdb, casting=None):
+    """Every entry's stage pack under `out_root`, with the palette and the shaders beside them: `<entry>/scene.json`,
+    `palette/`, `shaders/`. The units are stage_types(entry, casting): a mod's pack (`casting` its side pack's list)
+    holds every side's units for the entry's casts as well as the entry's own. Returns (the index's `entries`, each
+    entry's resolution report)."""
+    alp, _how = install_alp(eng, palette)
+    (out_root / "palette").mkdir(parents=True, exist_ok=True)
+    (out_root / "palette/pal.bin").write_bytes(bytes(b for c in palette for b in (*c, 255)))
+    if shdb:
+        (out_root / "palette/shd.bin").write_bytes(shdb)
+    neutral = tascene.shd_neutral(shdb, palette) if shdb else [15, 1]
+    palette_block = {"file": "../palette/pal.bin", "shd": "../palette/shd.bin" if shdb else None,
+                     "shdRows": len(shdb) // 256, "neutral": neutral}
+    (out_root / "shaders").mkdir(exist_ok=True)
+    for name, src in tascene.extract_shaders(tascene.SHADER_SET).items():
+        (out_root / "shaders" / name).write_text(src)
+    index, full = {}, {}
+    for entry in entries:
+        dpath = stage_dir / f"{entry['id']}.json"
+        desc = json.loads(dpath.read_text()) if dpath.exists() else None
+        out = out_root / entry["id"]
+        out.mkdir(exist_ok=True)
+        scene = build_entry(eng, entry, desc, out, palette_block, alp, stage_types(entry, casting))
+        index[entry["id"]] = {"scene": f"{entry['id']}/scene.json", "ground": scene["ground"]["ok"],
+                              "units": sorted(scene["units"]["meshes"]), "refused": scene["units"]["refused"]}
+        full[entry["id"]] = scene["report"]
+        g = "ground ok" if scene["ground"]["ok"] else f"ground FALLS BACK: {scene['ground']['miss']}"
+        print(f"  {entry['id']}: {g}; units {', '.join(sorted(scene['units']['meshes'])) or 'none'}"
+              + (f"; refused {', '.join(scene['units']['refused'])}" if scene["units"]["refused"] else ""))
+    return index, full
 
 
 def main(argv=None):
@@ -1852,7 +1905,9 @@ def main(argv=None):
     ap.add_argument("--resolve-json", dest="resolve_json",
                     help="also write the resolution report, element by element, to this file")
     ap.add_argument("--side-only", dest="side_only", action="store_true",
-                    help="write only the sidebar pack, gfx/side/<mod>/ (tools/wiki/sidepacks.py runs this per setup)")
+                    help="write only the mod's pack, gfx/side/<mod>/ (tools/wiki/sidepacks.py runs this per setup)")
+    ap.add_argument("--stages", action="store_true",
+                    help="with --side-only, also every entry's stage pack with the mod's units, gfx/side/<mod>/stage/")
     ap.add_argument("--mod", default="stock", help="the sidebar pack's name (default: stock)")
     ap.add_argument("--folders", default="",
                     help="gui=..,unitpics=..,gamedata=..,download=..: folder names that replace the executable's, "
@@ -1906,39 +1961,19 @@ def main(argv=None):
                           f"{', '.join(f'{t} ({len(v['pages'])} pages)' for t, v in s['types'].items()) or 'none'}"
                           for s, cs in zip(lay["sides"], pack["casting"]))
               + f"; {lay['height']} rows, {sum(1 for r in report if 'refused' in r)} refused")
+        if args.stages:
+            index = {"format": FORMAT, "note": "derived from the local install by tools/wiki/gfx.py; gitignored, "
+                     "never committed", "mod": args.mod}
+            index["entries"], _full = write_stages(eng, entries, stage_dir, out / "stage", palette,
+                                                   shd[0] if shd else b"", pack["casting"])
+            (out / "stage/index.json").write_text(json.dumps(index, indent=1) + "\n")
         return 0
-    alp, _how = install_alp(eng, palette)
-    (out_root / "palette").mkdir(exist_ok=True)
-    (out_root / "palette/pal.bin").write_bytes(bytes(b for c in palette for b in (*c, 255)))
     shdb = shd[0] if shd else b""
-    if shdb:
-        (out_root / "palette/shd.bin").write_bytes(shdb)
-    neutral = tascene.shd_neutral(shdb, palette) if shdb else [15, 1]
-    palette_block = {"file": "../palette/pal.bin", "shd": "../palette/shd.bin" if shdb else None,
-                     "shdRows": len(shdb) // 256, "neutral": neutral}
-    (out_root / "shaders").mkdir(exist_ok=True)
-    for name, src in tascene.extract_shaders(tascene.SHADER_SET).items():
-        (out_root / "shaders" / name).write_text(src)
-
     index = {"format": FORMAT, "note": "derived from the local install by tools/wiki/gfx.py; gitignored, "
              "never committed", "install": {"archives": [a for a, _ in eng.vfs.archives],
-                                            "dirs": eng.dirs, "palette": pal[2]},
-             "entries": {}}
+                                            "dirs": eng.dirs, "palette": pal[2]}}
     index["cursors"] = cursors(eng, palette, out_root)
-    full = {}
-    for entry in entries:
-        dpath = stage_dir / f"{entry['id']}.json"
-        desc = json.loads(dpath.read_text()) if dpath.exists() else None
-        out = out_root / entry["id"]
-        out.mkdir(exist_ok=True)
-        scene = build_entry(eng, entry, desc, out, palette_block, alp)
-        index["entries"][entry["id"]] = {"scene": f"{entry['id']}/scene.json", "ground": scene["ground"]["ok"],
-                                         "units": sorted(scene["units"]["meshes"]),
-                                         "refused": scene["units"]["refused"]}
-        full[entry["id"]] = scene["report"]
-        g = "ground ok" if scene["ground"]["ok"] else f"ground FALLS BACK: {scene['ground']['miss']}"
-        print(f"  {entry['id']}: {g}; units {', '.join(sorted(scene['units']['meshes'])) or 'none'}"
-              + (f"; refused {', '.join(scene['units']['refused'])}" if scene["units"]["refused"] else ""))
+    index["entries"], full = write_stages(eng, entries, stage_dir, out_root, palette, shdb)
     (out_root / "index.json").write_text(json.dumps(index, indent=1) + "\n")
     if args.resolve_json:
         Path(args.resolve_json).write_text(json.dumps({"install": index["install"], "cursors": index["cursors"], "entries": full}, indent=1) + "\n")

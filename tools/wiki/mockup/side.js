@@ -66,8 +66,10 @@ const WikiSide = (() => {
     const ALL = [0, 0, COL, H];
     /* PANELSIDE lands with its top left at (0, 0) whatever its hotspot: 0x467D70 passes the frame's own hotspot as
        the point (0x467E30..0x467E3C) and CopyGafToContext 0x4B7F90 subtracts it again, DISASSEMBLED. TA Zero's is
-       128 x 128 with its hotspot at (64, 64), and its capture shows it at (0, 0) (MEASURED 2026-10-27). */
-    if (art.panelside) blit(art.panelside.f, 0, 0, art.panelside.key, ALL);
+       128 x 128 with its hotspot at (64, 64), and its capture shows it at (0, 0) (MEASURED 2026-10-27). It is the
+       view's side's: each layout side has its own (<prefix>PANELSIDE), and a side without one has none drawn. */
+    const ps = art.panelside[sv.index];
+    if (ps) blit(ps.f, 0, 0, ps.key, ALL);
 
     let minimap = false;
     const m = geometry(mapW, mapH), M = view.map;
@@ -168,8 +170,16 @@ const WikiSide = (() => {
     const okFrame = f => Array.isArray(f) && f.length === 6 && f.every(Number.isInteger) && f[0] >= 0 && f[1] >= 0 &&
       f[2] > 0 && f[3] > 0 && f[0] + f[2] <= sh.w && f[1] + f[3] <= sh.h;
     const key = k => Number.isInteger(k) && k >= 0 && k < 256 ? k : -1;
-    if (A.panelside && okFrame(A.panelside.f)) art.panelside = { f: A.panelside.f, key: key(A.panelside.key) };
-    else problems.push('PANELSIDE: no frame inside the sheet');
+    // PANELSIDE, one a layout side, index-aligned with layout.sides; null where that side has none
+    const sides = json.layout && Array.isArray(json.layout.sides) ? json.layout.sides : [];
+    const PS = Array.isArray(A.panelside) ? A.panelside : [];
+    if (PS.length !== sides.length) problems.push(`PANELSIDE: ${PS.length} pictures for ${sides.length} sides`);
+    art.panelside = sides.map((sd, k) => {
+      const p = PS[k];
+      if (p && okFrame(p.f)) return { f: p.f, key: key(p.key) };
+      problems.push(`PANELSIDE of ${sd && sd.name}: no frame inside the sheet`);
+      return null;
+    });
     const D = A.dots || {};
     art.dots = { key: key(D.key), radlogo: Array.isArray(D.radlogo) ? D.radlogo.filter(okFrame) : [], high: okFrame(D.high) ? D.high : null };
     if (!art.dots.radlogo.length) problems.push('dots: no radlogo frame inside the sheet');
@@ -198,8 +208,9 @@ const WikiSide = (() => {
     return { layout: json.layout || null, art, minimap, problems };
   }
 
-  /* A pack from `base` (gfx/side/<mod>/), for a page: { layout, art, minimap, problems, report }, or throws when there is no
-     side.json. A missing sheet or palette leaves the layout without art. */
+  /* A pack from `base` (gfx/side/<mod>/), for a page: { layout, casting, art, minimap, problems, report }, or throws
+     when there is no side.json. A missing sheet or palette leaves the layout without art. The casting is returned as
+     found, index-aligned with layout.sides: the caller checks it with WikiSim.checkCasting, beside the layout. */
   async function load(base) {
     const r = await fetch(base + 'side.json');
     if (!r.ok) throw new Error(`${base}side.json: ${r.status}`);
@@ -207,7 +218,7 @@ const WikiSide = (() => {
     const bin = f => f ? fetch(base + f).then(q => q.ok ? q.arrayBuffer().then(b => new Uint8Array(b)) : null, () => null) : Promise.resolve(null);
     const [sheet, pal, seen, greyed] = await Promise.all([bin(A.sheet && A.sheet.file), bin(A.palette),
       bin(A.minimap && A.minimap.seen), bin(A.greyed)]);
-    return { ...read(j, sheet, pal, seen, greyed), report: j.report || [], mod: j.mod };
+    return { ...read(j, sheet, pal, seen, greyed), casting: j.casting, report: j.report || [], mod: j.mod };
   }
 
   return { compose, rgba, read, load, geometry, dotAt, COL };

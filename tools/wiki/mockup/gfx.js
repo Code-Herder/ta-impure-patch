@@ -27,7 +27,7 @@ window.WikiGfx = (() => {
   const LAYERS = (q => q === null ? null : new Set(q.split(',')))(new URLSearchParams(location.search).get('layers'));
   const layer = n => !LAYERS || LAYERS.has(n);
   let index = null, state = 'none';     // none, loading, ready, missing
-  const stages = {};                    // entry id -> a Stage, or a promise of one, or an error
+  const stages = {};                    // pack folder -> a Stage, or a promise of one, or an error
 
   const bin = async u => { const r = await fetch(u); if (!r.ok) throw new Error(`${u}: ${r.status}`); return new Uint8Array(await r.arrayBuffer()); };
   const f32 = b => new Float32Array(b.buffer, b.byteOffset, b.byteLength >> 2);
@@ -307,24 +307,28 @@ window.WikiGfx = (() => {
   }
 
   /* The stage's image for `entry` showing view `v` at `tick`: { canvas, complete, ground, resolved }, or null while the
-     game graphics are off or the entry's pack is loading. A pack that fails to load leaves the stage whitebox. */
-  function frame(entry, v, tick) {
+     game graphics are off or the entry's pack is loading. A pack that fails to load leaves the stage whitebox. `dir`
+     is the pack's folder under gfx/: the entry's own by default, or a mod's (side/<mod>/stage/<entry>, gfx.py
+     --stages), which holds that mod's units for the casting the view is bound to. */
+  const shown = {};                     // entry id -> the folder its last frame was drawn from
+  function frame(entry, v, tick, dir = entry) {
     if (!on() || !entry || !index || !index.entries || !index.entries[entry]) return null;
-    let st = stages[entry];
+    shown[entry] = dir;
+    let st = stages[dir];
     if (!st) {
-      stages[entry] = open(entry).then(s => { stages[entry] = s; }, x => { console.error('wiki gfx:', x); stages[entry] = { error: x }; });
+      stages[dir] = open(dir).then(s => { stages[dir] = s; }, x => { console.error('wiki gfx:', x); stages[dir] = { error: x }; });
       return null;
     }
     if (st instanceof Promise || st.error) return null;
     try {
       const r = st.render(v, tick);
       return { canvas: st.canvas, ...r };
-    } catch (x) { console.error('wiki gfx:', x); stages[entry] = { error: x }; return null; }
+    } catch (x) { console.error('wiki gfx:', x); stages[dir] = { error: x }; return null; }
   }
   // what a scripted check reads: whether an entry's stage has settled -- drawn in 3D, or failed and so whitebox -- or,
   // with the graphics off or gfx/ absent, that nothing is coming
-  const ready = entry => mode !== 'game' || state === 'missing' ||
-    (state === 'ready' && !!stages[entry] && !(stages[entry] instanceof Promise));
+  const ready = entry => { const st = stages[shown[entry] || entry]; return mode !== 'game' || state === 'missing' ||
+    (state === 'ready' && !!st && !(st instanceof Promise)); };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', control); else control();
   if (mode === 'game') load();
