@@ -57,7 +57,12 @@ class Fact(C.Structure):
 
 def library():
     tacob = SourceFileLoader("tacob", str(ROOT / "tools/tacob")).load_module()
-    lib = tacob.cobvm_lib()
+    return bind(tacob.cobvm_lib())
+
+
+def bind(lib):
+    """`lib`, a build of tagpu_wikicob.c with the core, with the host's signatures set (tools/test_cobvm.py binds its
+    sanitizer build here too)."""
     lib.tagpu_wikicob_new.restype = C.c_void_p
     lib.tagpu_wikicob_new.argtypes = [C.c_int, C.POINTER(Type), C.c_uint32, C.c_char_p, C.c_size_t]
     lib.tagpu_wikicob_free.argtypes = [C.c_void_p]

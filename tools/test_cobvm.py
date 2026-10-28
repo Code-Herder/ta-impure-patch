@@ -1,10 +1,13 @@
-"""The COB VM core, tagpu_cobvm.c, compiled natively under UBSan and driven through ctypes.
+"""The COB VM core, tagpu_cobvm.c, and the in-game wiki's host over it, tagpu_wikicob.c, compiled
+natively under UBSan and driven through ctypes.
 
 The nine cobtrace fixtures run through this build as they do through `tools/tacob run --all`;
 the rest pins what the fixtures do not reach: Impure's rules beside the retail engine's, the
 effect log of a host without a commit, refusals, the shared getters (tagpu_cob_getter), the
-engine layout, and that two VMs run at once on two threads.
-research/notes/ingame-wiki-cob-plan.md is the design."""
+engine layout, and that two VMs run at once on two threads. For the host (WikiHost): no
+writable static, two hosts on two threads, the quarantine of a type with no script and of one
+whose script faults, and ACTIVATION's state setter. research/notes/ingame-wiki-cob-plan.md is
+the design."""
 import ctypes as C
 import importlib.machinery
 import os
@@ -326,6 +329,141 @@ class Core(unittest.TestCase):
         self.assertEqual(both[1], alone[0])
 
 
+def load_serve():
+    loader = importlib.machinery.SourceFileLoader("wikiserve", str(ROOT / "tools" / "wiki" / "serve.py"))
+    spec = importlib.util.spec_from_loader("wikiserve", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+class WikiHost(unittest.TestCase):
+    """tagpu_wikicob.h's host, bound as tools/wiki/serve.py binds it, on its own sanitizer build."""
+    SOURCES = ("tagpu_wikicob", "tagpu_cobvm", "tagpu_cob_safe")
+    INBUILDSTANCE, ACTIVATION, BUGGER_OFF = 5, 1, 19
+
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory(prefix="wikicob-")
+        lib = Path(cls.temp.name) / "libwikicob.so"
+        inc = ["-I", str(DDRAW / "inc"), "-I", str(DDRAW / "src")]
+        subprocess.run(["cc", "-std=c99", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC", "-g",
+                        "-fsanitize=" + SANITIZE, "-fno-sanitize-recover=all", *inc,
+                        *[str(DDRAW / "src" / f"{n}.c") for n in cls.SOURCES], "-lm", "-o", str(lib)], check=True)
+        cls.serve = load_serve()
+        cls.lib = cls.serve.bind(C.CDLL(str(lib)))
+        obj = Path(cls.temp.name) / "tagpu_wikicob.o"
+        subprocess.run(["cc", "-std=c99", "-O2", "-c", *inc, str(DDRAW / "src" / "tagpu_wikicob.c"), "-o", str(obj)],
+                       check=True)
+        cls.symbols = subprocess.run(["nm", str(obj)], check=True, capture_output=True, text=True).stdout
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temp.cleanup()
+
+    def host(self, sources):
+        """A host for one type per source (None: no script), its handle freed with the test."""
+        keep, arr = [], (self.serve.Type * len(sources))()
+        for i, src in enumerate(sources):
+            if src is None:
+                continue
+            cob = tacob.write_cob(tacob.compile_bos(PRELUDE + src, "test.bos"))
+            vis = bytes([1, 1])
+            keep += [cob, vis]
+            arr[i].cob, arr[i].ncob = C.cast(C.c_char_p(cob), C.c_void_p), len(cob)
+            arr[i].pieces, arr[i].visible = 2, C.cast(C.c_char_p(vis), C.c_void_p)
+        err = C.create_string_buffer(256)
+        h = self.lib.tagpu_wikicob_new(len(sources), arr, 1, err, 256)
+        self.assertTrue(h, err.value)
+        self.addCleanup(self.lib.tagpu_wikicob_free, h)
+        return h
+
+    def facts(self, units):
+        arr = (self.serve.Fact * max(1, len(units)))()
+        for i, u in enumerate(units):
+            arr[i] = self.serve.Fact(u, 0, 0, 0, 0.0, 100)
+        return arr, len(units)
+
+    def note(self, h, t):
+        return self.lib.tagpu_wikicob_note(h, t).decode("latin-1")
+
+    def test_the_host_has_no_writable_static(self):
+        written = [ln for ln in self.symbols.splitlines() if ln.split()[-2:-1] and ln.split()[-2] in "BbDdGgSsVv"]
+        self.assertEqual(written, [])
+
+    def test_two_hosts_on_two_threads(self):
+        source = """
+        Go() { turn arm to y-axis <90> speed <30>; wait-for-turn arm around y-axis; set INBUILDSTANCE to 1; }
+        Stop() { set INBUILDSTANCE to 0; turn arm to y-axis <0> speed <45>; wait-for-turn arm around y-axis; }
+        StartBuilding(h) { start-script Go(); }
+        StopBuilding() { start-script Stop(); }
+        """
+
+        def play(out, index):
+            h = self.host([source])
+            f, n = self.facts([1])
+            self.assertEqual(self.lib.tagpu_wikicob_spawn(h, 0, f, n), 1)
+            for tick in range(3000):
+                if tick % 300 == 0:
+                    arg = (C.c_int32 * 1)(0)
+                    self.lib.tagpu_wikicob_call(h, 1, b"StartBuilding" if tick % 600 == 0 else b"StopBuilding",
+                                                2 if tick % 600 == 0 else 1, 1 if tick % 600 == 0 else 0, arg, f, n)
+                self.lib.tagpu_wikicob_slice(h, f, n)
+            out[index] = (self.lib.tagpu_wikicob_hash(h, self.serve.FNV_BASIS),
+                          self.lib.tagpu_wikicob_value(h, 1, self.INBUILDSTANCE))
+        alone = [None]
+        play(alone, 0)
+        both = [None, None]
+        threads = [threading.Thread(target=play, args=(both, i)) for i in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(both, [alone[0], alone[0]])
+
+    def test_a_type_with_no_script_is_quarantined_with_its_gates_open(self):
+        h = self.host([None])
+        f, n = self.facts([1])
+        self.assertEqual(self.lib.tagpu_wikicob_spawn(h, 0, f, n), 1)
+        self.assertIn("no script", self.note(h, 0))
+        self.assertTrue(self.lib.tagpu_wikicob_resting(h, 1))
+        self.assertEqual(self.lib.tagpu_wikicob_value(h, 1, self.INBUILDSTANCE), 1)
+        self.assertEqual(self.lib.tagpu_wikicob_value(h, 1, self.ACTIVATION), 1)
+
+    def test_a_faulting_script_quarantines_its_type_and_no_other(self):
+        h = self.host(["Create() { var z; z = 0; z = 1 / z; }", "Create() { set INBUILDSTANCE to 0; }"])
+        f, n = self.facts([1, 2])
+        self.assertEqual(self.lib.tagpu_wikicob_spawn(h, 0, f, n), 1)
+        self.assertEqual(self.lib.tagpu_wikicob_spawn(h, 1, f, n), 2)
+        self.lib.tagpu_wikicob_slice(h, f, n)
+        self.assertNotEqual(self.note(h, 0), "")
+        self.assertEqual(self.note(h, 1), "")
+        self.assertEqual(self.lib.tagpu_wikicob_value(h, 1, self.INBUILDSTANCE), 1)
+        self.assertEqual(self.lib.tagpu_wikicob_value(h, 2, self.INBUILDSTANCE), 0)
+
+    def test_activation_runs_activate_once_a_change(self):
+        # the flags a script SETs read back as 0 or 1: a second Activate would clear INBUILDSTANCE
+        source = """
+        static-var n;
+        Create() { n = 0; }
+        Activate() { n = n + 1; if (n == 1) { set INBUILDSTANCE to 1; } else { set INBUILDSTANCE to 0; } }
+        Deactivate() { set BUGGER_OFF to 1; }
+        """
+        h = self.host([source])
+        f, n = self.facts([1])
+        self.lib.tagpu_wikicob_spawn(h, 0, f, n)
+        self.lib.tagpu_wikicob_activate(h, 1, 1)
+        self.lib.tagpu_wikicob_activate(h, 1, 1)      # unchanged: no second Activate (0x48B090)
+        self.lib.tagpu_wikicob_slice(h, f, n)
+        self.assertEqual(self.lib.tagpu_wikicob_value(h, 1, self.ACTIVATION), 1)
+        self.assertEqual(self.lib.tagpu_wikicob_value(h, 1, self.INBUILDSTANCE), 1)
+        self.assertEqual(self.lib.tagpu_wikicob_value(h, 1, self.BUGGER_OFF), 0)
+        self.lib.tagpu_wikicob_activate(h, 1, 0)
+        self.lib.tagpu_wikicob_slice(h, f, n)
+        self.assertEqual(self.lib.tagpu_wikicob_value(h, 1, self.ACTIVATION), 0)
+        self.assertEqual(self.lib.tagpu_wikicob_value(h, 1, self.BUGGER_OFF), 1)
+
+
 class Asan(unittest.TestCase):
     @unittest.skipIf("COBVM_SANITIZE" in os.environ, "already the sanitizer child")
     def test_the_core_under_address_sanitizer(self):
@@ -334,7 +472,8 @@ class Asan(unittest.TestCase):
             self.skipTest("no ASan runtime for this compiler")
         env = dict(os.environ, COBVM_SANITIZE="address,undefined", LD_PRELOAD=runtime,
                    ASAN_OPTIONS="detect_leaks=0")
-        child = subprocess.run([sys.executable, "-m", "unittest", "test_cobvm.Core"], cwd=Path(__file__).parent,
+        child = subprocess.run([sys.executable, "-m", "unittest", "test_cobvm.Core", "test_cobvm.WikiHost"],
+                               cwd=Path(__file__).parent,
                                env=env, capture_output=True, text=True)
         self.assertEqual(child.returncode, 0, child.stderr[-4000:])
 
