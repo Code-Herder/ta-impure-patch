@@ -42,9 +42,16 @@ child.stdout.on('data', d => {
   Atomics.store(flag, 0, 2);
   Atomics.notify(flag, 0);
 });
-child.on('exit', code => { flag[1] = -2; Atomics.store(flag, 0, 2); Atomics.notify(flag, 0); });
+// a child that cannot start (no python3), exits, or closes its pipe answers every request after as gone: the caller
+// blocks in Atomics.wait, where no event of its own can reach it
+let dead = false;
+const gone = () => { dead = true; flag[1] = -2; Atomics.store(flag, 0, 2); Atomics.notify(flag, 0); };
+child.on('exit', gone);
+child.on('error', gone);
+child.stdin.on('error', gone);
 parentPort.on('message', m => {
-  if (m === 'close') { child.stdin.end(); return; }
+  if (m === 'close') { if (!dead) child.stdin.end(); return; }
+  if (dead) { gone(); return; }
   const n = flag[1];
   child.stdin.write(Buffer.from(bytes.subarray(0, n)).toString('utf8') + '\\n');
 });

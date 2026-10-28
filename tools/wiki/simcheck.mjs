@@ -406,8 +406,11 @@ const BUILDSHAPES = {
     ok(p.v.shape === 'rect' && same(preview(p), want), `the preview is a 4 x 3 serpentine (${show(preview(p))})`);
     ok(p.v.sites.every((s, i) => s.order === i + 1), 'the preview numbers the sites 1..12 in that order');
     ok(same(added(r, u), want), 'the release queued them in serpentine order');
+    /* with its script ARMCK folds and opens its arms between two queued pieces (~268 ticks a piece), so the demo's
+       fixed end sees two of them; without, six */
     const done = r.log.filter(e => e.what === 'finished').map(e => [e.ox, e.oz]);
-    ok(done.length >= 2 && same(done, want.slice(0, done.length)), `${r.ty('ARMCK')} built them in that order (${done.length} done)`);
+    const least = r.last.v.cob ? 2 : 6;
+    ok(done.length >= least && same(done, want.slice(0, done.length)), `${r.ty('ARMCK')} built them in that order (${done.length} done, ${least} wanted)`);
   },
   hollow(r, d, ok) {
     const u = ups(d, 'lmb')[0], p = r.frames[u - 1], a = added(r, u);

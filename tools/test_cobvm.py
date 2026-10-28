@@ -463,6 +463,20 @@ class WikiHost(unittest.TestCase):
         self.assertEqual(self.lib.tagpu_wikicob_value(h, 1, self.ACTIVATION), 0)
         self.assertEqual(self.lib.tagpu_wikicob_value(h, 1, self.BUGGER_OFF), 1)
 
+    def test_set_keeps_what_the_engine_keeps(self):
+        # 0x480B20: INBUILDSTANCE, BUSY and BUGGER_OFF keep bit 0, ARMORED whether nonzero (0x48B090),
+        # STANDINGMOVEORDERS nothing (0x480BF1)
+        source = """
+        Create() { set INBUILDSTANCE to 2; set BUSY to 3; set BUGGER_OFF to 4; set ARMORED to 6;
+                   set STANDINGMOVEORDERS to 1; }
+        """
+        h = self.host([source])
+        f, n = self.facts([1])
+        self.lib.tagpu_wikicob_spawn(h, 0, f, n)
+        self.assertEqual(self.note(h, 0), "")
+        got = [self.lib.tagpu_wikicob_value(h, 1, v) for v in (self.INBUILDSTANCE, 6, self.BUGGER_OFF, 20, 2)]
+        self.assertEqual(got, [0, 1, 0, 1, 0])
+
 
 class Asan(unittest.TestCase):
     @unittest.skipIf("COBVM_SANITIZE" in os.environ, "already the sanitizer child")

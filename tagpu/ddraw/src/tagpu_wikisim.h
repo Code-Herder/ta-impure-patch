@@ -104,12 +104,13 @@ typedef struct WIKIUNIT {
     int              job_how, worked;
     double           work_build, work_reclaim;
     /* the unit's script (tagpu_wikicob.h): its handle in the host, 0 for none; the structure it
-       works on, by id, which its StartBuilding went for ("" for none), and the serial of the
-       order that work came from; this tick's job by id (a reclaim frees its target mid-tick);
-       whether it stepped this tick, and whether it was moving after the last */
+       works on, by id, which its StartBuilding went for ("" for none), the serial of the order
+       that work came from, and whether its stance has been seen on that work; this tick's job by
+       id (a reclaim frees its target mid-tick); whether it stepped this tick, and whether it was
+       moving after the last */
     int              cob;
     char             work[WIKI_ID_MAX];
-    int              work_serial;
+    int              work_serial, stanced;
     char             job_id[WIKI_ID_MAX];
     int              stepped, moving;
 } WIKIUNIT;

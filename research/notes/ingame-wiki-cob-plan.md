@@ -195,7 +195,7 @@ engine map's *The scripts a unit's work starts* establishes them (DISASSEMBLED 2
 | The wiki's action | The engine's calls, as both simulations make them |
 |---|---|
 | a unit appears: a scene's spawn, a nanoframe placed | `Create` (`0x485DE6`, run-now); for an extractor (ExtractsMetal above 0) `SetSpeed` with one word, Σ (cell metal + 1) over the footprint cells on the map, kept as a sign-extended 16-bit word (`0x437840`, `0x437866..0x437902`, run-later), at the create and so at the nanoframe's placement — ExtractsMetal does not enter the value; for a unit made whole whose FBI has ActivateWhenBuilt, `Activate` through the state setter (`0x48612F`) |
-| a mobile builder's build, assist or reclaim | its work is credited only once its INBUILDSTANCE reads set (the stance wait `0x438700`); `StartBuilding` with one word when its work target changes (`0x4385C7`, run-later; the word is the target's bearing relative to the builder's heading, 0 in the wiki, which turns the builder at once); `StopBuilding` with none when its work ends or changes (`0x43A251`, run-later: the order's destructor, in the same call as the step that finished the build), and at input time when the player takes the order away; `QueryNanoPiece` (`0x43E427`) per spray in L4 |
+| a mobile builder's build, assist or reclaim | its work on a target starts only once its INBUILDSTANCE reads set (the stance wait `0x438700`, read once at the work's start: MobileBuild's work state `0x403E0C` and the step `0x41BA60` never read `+0x10F`), and goes on whatever the stance does after; `StartBuilding` with one word when its work target changes (`0x4385C7`, run-later; the word is the target's bearing relative to the builder's heading, 0 in the wiki, which turns the builder at once); `StopBuilding` with none when its work ends or changes (`0x43A251`, run-later: the order's destructor, in the same call as the step that finished the build), and at input time when the player takes the order away; `QueryNanoPiece` (`0x43E427`) per spray in L4 |
 | a factory's build | `StartBuilding` / `StopBuilding` through the state setter, with no word (`0x48B14E`, `0x48B169`): no entry has a factory, so neither simulation makes them |
 | a move starts, ends | `StartMoving` then `MoveRate1` / `StopMoving` (`0x43DAF2`, `0x43DB27`, run-now, in the movement pass after the unit's orders); the class thresholds are FBI `moverate1`/`moverate2`, by default 2 × MaxVelocity, which the wiki reads from no FBI, so its units, walking at MaxVelocity, are always class 1 and never start `MoveRate2`/`MoveRate3` |
 | a structure finishes, is switched on or off | `Activate` on completion when its FBI has ActivateWhenBuilt (`0x41B8D0`, `0x41B9A6`); `Activate` / `Deactivate` (`0x48B106`, `0x48B12B`, run-later) when a script's `SET ACTIVATION` changes the value. The player's on and off (FBI `onoffable`) is no wiki action |
@@ -237,7 +237,8 @@ for all its units at once, in creation order (`tagpu_wikisim_step`, `sim.js` `st
    unit's values as its opcode runs (a `SET ACTIVATION` that changes the value starts `Activate`
    or `Deactivate` at the end of that VM call, so it first runs at the next slice);
 3. **the units' work** (`advance`), which reads the committed values: a builder in range takes its
-   job, but credits work only once its INBUILDSTANCE is set; a structure finished this tick whose
+   job, but credits work on it only once its INBUILDSTANCE has been set since it took that work,
+   and is not read again until the work changes; a structure finished this tick whose
    FBI has ActivateWhenBuilt is switched on at once; a reclaimed one leaves the host;
 4. **the calls of the units' turn**, unit by unit in creation order: a builder whose work target
    changed (a new job, or its job finished, reclaimed or gone) starts StopBuilding for the old one
@@ -320,8 +321,8 @@ clock, the wait, `stalled` and the host's hash (`tagpu_wikisim.h`, item 8).
   again (about 2.6 s) on every StopBuilding and StartBuilding between two pieces, so waiting for a
   whole line would run for minutes. The tails of *Click and Shift-click*, *Filled rectangle* and
   *Ring around a building* are 300, 480 and 420 ticks, long enough for the pieces their claims
-  read finished, and `simcheck.mjs`'s rectangle claim needs two pieces built in order where it
-  needed six.
+  read finished, and `simcheck.mjs`'s rectangle claim needs two pieces built in order with the
+  scripts and six without.
 - **The scripts run at game speed while the builds run at the entry's pace** (`"pace"`), so a
   script's animations take their game time while a build fills N times faster: Quick Build's
   *Queue several with Shift* plays 1054 ticks with the scripts and 570 without (MEASURED
@@ -378,8 +379,13 @@ fixtures — no file the sidebar's landing touches.
   the host beyond the six packs' stage units, which `simcheck.mjs --pack` plays without a
   quarantine.
 - **GET answers what the wiki has**: PIECE_Y, UNIT_Y, UNIT_HEIGHT and GROUND_HEIGHT are 0,
-  PIECE_XZ is the unit's own point and XZ_ATAN leaves out its heading (the facts carry none); an
-  angle can differ from the engine's by one unit at a rounding boundary.
+  PIECE_XZ is the unit's own point and XZ_ATAN leaves out its heading (the facts carry none);
+  STANDINGMOVEORDERS and STANDINGFIREORDERS are 0 (the engine reads `unit+0x110` bits,
+  `0x4807A4`, `0x4807B7`, and the wiki has no standing orders); an angle can differ from the
+  engine's by one unit at a rounding boundary. A `SET` keeps what `0x480B20` keeps (its byte
+  table `0x480C18`): INBUILDSTANCE, BUSY and BUGGER_OFF the value's bit 0, ACTIVATION and ARMORED
+  whether it is nonzero (`0x48B090`), YARD_OPEN whether it is nonzero [INFERRED: `0x47DAC0` not
+  read], and every other id nothing (`0x480BF1`).
 - **A `SET ACTIVATION`'s `Activate` first runs at the next slice**; the engine starts it inside the
   opcode, so a record after the current one may run it in the same pass [not established in the
   engine: the runner's walk `0x4B0DA0` was not read for new records].
@@ -432,8 +438,9 @@ fixtures — no file the sidebar's landing touches.
   - **INBUILDSTANCE against the builder's tick**: the stance wait `0x438700` is read in the order
     controller, after the unit's slice, and the handler's states chain inside one controller call,
     so a script's `SET` is seen in the tick it runs and the first progress is added in that tick;
-    a stance left set by the previous build starts progress at once. No build order tests the
-    builder's heading: the script turns and sets the stance.
+    a stance left set by the previous build starts progress at once. Once in the work state
+    (`0x403E0C`) the stance is not read again: the step `0x41BA60` does not read `+0x10F`. No build
+    order tests the builder's heading: the script turns and sets the stance.
   - **ActivateWhenBuilt** is def `+0x241` bit 18, the FBI key's `and 1` (`0x42C6B9..0x42C6DE`),
     and the only reason the engine switches a finished structure on (`0x41B9A6`) or one made whole
     (`0x48612F`).

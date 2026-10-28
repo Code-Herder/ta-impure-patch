@@ -49,11 +49,6 @@ static int is_gate(int id)
     return id == WIKICOB_ACTIVATION || id == WIKICOB_INBUILDSTANCE || id == WIKICOB_YARD_OPEN;
 }
 
-/* the ids the engine keeps as a bit or a 0/1 state, so a SET of any nonzero value reads back 1 */
-static int is_flag(int id)
-{
-    return is_gate(id) || id == WIKICOB_BUSY || id == WIKICOB_BUGGER_OFF || id == WIKICOB_ARMORED;
-}
 
 static const WIKICOBFACT* fact(const WIKICOB* w, int32_t unit)
 {
@@ -141,7 +136,9 @@ static int32_t trunc_hypot(double x, double z)
    exe-reverse-engineering.md, "get and set -- the twenty value ids"). The stage is flat at
    height 0 and the host keeps no piece transform and no definition box, so PIECE_Y, UNIT_Y,
    UNIT_HEIGHT and GROUND_HEIGHT answer 0, PIECE_XZ answers the unit's own point, and XZ_ATAN
-   leaves out the unit's heading, which the facts do not carry. Any other id is 0 (0x480ABB). */
+   leaves out the unit's heading, which the facts do not carry. STANDINGMOVEORDERS and
+   STANDINGFIREORDERS read unit+0x110 bits in the engine (0x4807A4, 0x4807B7), which no SET
+   changes; the wiki has no standing orders, so they answer 0. Any other id is 0 (0x480ABB). */
 static int32_t host_get(void* ctx, int32_t id, int32_t a, int32_t b, int32_t c, int32_t d)
 {
     WIKICOB* w = (WIKICOB*)ctx;
@@ -152,8 +149,7 @@ static int32_t host_get(void* ctx, int32_t id, int32_t a, int32_t b, int32_t c, 
     (void)c; (void)d;
     if (!u) return 0;
     switch (id) {
-    case WIKICOB_ACTIVATION: case WIKICOB_STANDINGMOVEORDERS: case WIKICOB_STANDINGFIREORDERS:
-    case WIKICOB_INBUILDSTANCE: case WIKICOB_BUSY: case WIKICOB_YARD_OPEN: case WIKICOB_BUGGER_OFF:
+    case WIKICOB_ACTIVATION: case WIKICOB_INBUILDSTANCE: case WIKICOB_BUSY: case WIKICOB_YARD_OPEN: case WIKICOB_BUGGER_OFF:
     case WIKICOB_ARMORED:
         return u->value[id];
     /* (i16 hp * 100) / MaxDamage, 0x4807CA: the wiki has no damage, so the facts' percent */
@@ -194,11 +190,14 @@ static int host_alive(void* ctx, int32_t id)
     return u && u->live;
 }
 
-/* A SET, at its opcode (tagpu_cobvm.h, the effect log): the unit's value. ACTIVATION goes through
-   the state change 0x48B090 makes of it, whose start is deferred to the end of the VM call (the
-   engine starts it inside the opcode, so a record after the current one runs it in the same
-   pass; here it runs at the next slice). The other effects -- EMIT_SFX, EXPLODE, ATTACH, DROP --
-   change nothing the wiki has. */
+/* A SET, at its opcode (tagpu_cobvm.h, the effect log), as 0x480B20 keeps it (its byte table
+   0x480C18, DISASSEMBLED): INBUILDSTANCE, BUSY and BUGGER_OFF keep the value's bit 0 (unit+0x10F
+   bits 0, 1 and 3); ACTIVATION and ARMORED go through the state setter 0x48B090, which keeps
+   whether the value is nonzero; YARD_OPEN goes to 0x47DAC0, kept here as nonzero [INFERRED: the
+   wiki has no yard to block]; every other id changes nothing (0x480BF1). ACTIVATION's start is
+   deferred to the end of the VM call (the engine starts it inside the opcode, so a record after
+   the current one runs it in the same pass; here it runs at the next slice). The other effects
+   -- EMIT_SFX, EXPLODE, ATTACH, DROP -- change nothing the wiki has. */
 static void host_commit(void* ctx, const TAGPU_COBVM_EFFECT* e)
 {
     WIKICOB* w = (WIKICOB*)ctx;
@@ -207,8 +206,11 @@ static void host_commit(void* ctx, const TAGPU_COBVM_EFFECT* e)
     if (!u || e->op != 0x10082000u) return;
     id = e->v[0];
     v = e->v[1];
-    if (id < 0 || id >= WIKICOB_VALUES) return;
-    if (is_flag(id)) v = v != 0;
+    switch (id) {
+    case WIKICOB_INBUILDSTANCE: case WIKICOB_BUSY: case WIKICOB_BUGGER_OFF: v &= 1; break;
+    case WIKICOB_ACTIVATION: case WIKICOB_ARMORED: case WIKICOB_YARD_OPEN:  v = v != 0; break;
+    default: return;
+    }
     if (id == WIKICOB_ACTIVATION && v != u->value[id] && u->ndefer < DEFERRED)
         u->defer[u->ndefer++] = v;
     u->value[id] = v;

@@ -259,7 +259,12 @@ static void spawn(WIKISIM* s, WIKIUNIT* u)
     if (!s->cob || s->ncob >= WIKICOB_UNITS) return;
     u->cob = ++s->ncob;
     n = facts(s);
-    if (tagpu_wikicob_spawn(s->cob, u->type, s->fact, n) != u->cob) { s->oom = 1; return; }
+    if (tagpu_wikicob_spawn(s->cob, u->type, s->fact, n) != u->cob) {
+        u->cob = 0;
+        s->ncob--;
+        s->oom = 1;
+        return;
+    }
     if (def(s, u->type)->extracts > 0) {
         const int32_t a = extractor_speed(s, u);
         cob_call(s, u, "SetSpeed", WIKICOB_ARGS, 1, &a);
@@ -1899,8 +1904,10 @@ static int reach(const WIKISIM* s, WIKIUNIT* u, BOX b)
 }
 
 /* a builder in range works on st, and turns at once to face its centre (unchanged when it stands
-   on the centre); its work waits on its stance (0x438700): no progress until its script has set
-   INBUILDSTANCE, though the job is its own from now, which its StartBuilding goes for */
+   on the centre); its work waits on its stance (0x438700), at the work's start only (MobileBuild's
+   work state 0x403E0C and the step 0x41BA60 never read +0x10F): no progress on a work until its
+   script has set INBUILDSTANCE once, though the job is its own from now, which its StartBuilding
+   goes for */
 static void credit(const WIKISIM* s, WIKIUNIT* u, WIKIUNIT* st, int how)
 {
     const double dx = st->x - u->x, dz = st->z - u->z, d = sqrt(dx * dx + dz * dz);
@@ -1912,7 +1919,10 @@ static void credit(const WIKISIM* s, WIKIUNIT* u, WIKIUNIT* st, int how)
     u->job = st;
     u->job_how = how;
     snprintf(u->job_id, sizeof u->job_id, "%s", st->id);
-    if (!stance(s, u)) return;
+    if (!(u->stanced && !strcmp(u->work, st->id))) {
+        if (!stance(s, u)) return;
+        u->stanced = 1;
+    }
     if (how == HOW_BUILD) st->work_build += w;
     else st->work_reclaim += w;
     st->worked = 1;
@@ -2030,6 +2040,7 @@ static void advance(WIKISIM* s)
             cob_call(s, u, "StopBuilding", WIKICOB_LATER, 0, NULL);
             u->work[0] = 0;
             u->work_serial = 0;
+            u->stanced = 0;
         }
         if (t && !u->work[0]) {
             const int32_t heading = 0;
@@ -2116,10 +2127,11 @@ static void drop_work(WIKISIM* s)
     int i;
     for (i = 0; s->cob && i < s->nunit; i++) {
         WIKIUNIT* u = s->unit[i];
-        if (!u->work[0] || (u->norder && u->order[0].serial == u->work_serial)) continue;
+        if (!u->work[0] || (u->norder ? u->order[0].serial : 0) == u->work_serial) continue;
         cob_call(s, u, "StopBuilding", WIKICOB_LATER, 0, NULL);
         u->work[0] = 0;
         u->work_serial = 0;
+        u->stanced = 0;
     }
 }
 

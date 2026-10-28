@@ -1455,7 +1455,8 @@ static void unit_hides_report(SB* b, const LOADER* L, const WIKI3DUNIT* u, const
 
 /* THE SCRIPT FOR THE WIKI'S COB HOST: the bytes copied into the arena, and the posed model's
    order and visibility (WIKI3DUNIT). An arena too full to take the bytes leaves the type without
-   a script, as its log line says. */
+   a script, as its log line says; a full arena stays full (alloc), so every later allocation of
+   the load fails with it. */
 static void unit_script(LOADER* L, const unsigned char* cob, uint32_t n, uint32_t root, WIKI3DUNIT* u)
 {
     const char* walk[MAXPIECE];

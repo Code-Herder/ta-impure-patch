@@ -93,7 +93,8 @@ class Host:
         self.lock = threading.Lock()
 
     def pack_type(self, spec):
-        """(cob bytes, visible bytes) of a type from its pack, or None."""
+        """(cob bytes, visible bytes) of a type from its pack, or None: None too for a model past PIECES, which the
+        DLL's 3D load refuses, so its type has no script there either."""
         if not spec:
             return None
         pack = (ROOT / spec["pack"]).resolve()
@@ -102,9 +103,9 @@ class Host:
         scene = json.loads((pack / "scene.json").read_text())
         mesh = (scene.get("units") or {}).get("meshes", {}).get(spec["name"])
         script = mesh and mesh.get("script")
-        if not script:
+        if not script or len(script["visible"]) > PIECES:
             return None
-        return (pack / script["file"]).read_bytes(), bytes(script["visible"][:PIECES])
+        return (pack / script["file"]).read_bytes(), bytes(script["visible"])
 
     def new(self, req):
         specs = req["types"]
@@ -181,7 +182,7 @@ class Host:
     def answer(self, line):
         try:
             return self.call(json.loads(line))
-        except (ValueError, KeyError, TypeError, OSError, struct.error) as e:
+        except (ValueError, KeyError, TypeError, OSError, struct.error, C.ArgumentError) as e:
             return {"error": str(e)}
 
 

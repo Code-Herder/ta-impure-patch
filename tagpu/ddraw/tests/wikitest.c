@@ -312,6 +312,10 @@ static int cob_load(const char* path)
     if (!doc) fprintf(stderr, "wikitest: %s: %s\n", path, text ? err : "cannot read it");
     for (c = doc ? tagpu_json_root(doc)->first : NULL; ok && c; c = c->next) {
         const TJV *f = tj_get(c, "cob"), *vis = tj_get(c, "visible"), *e;
+        int k = 0;
+        /* a model past WIKICOB_PIECES is one the DLL's 3D load refuses, so its type has no script */
+        for (e = tj_is(vis, TJ_ARR) ? vis->first : NULL; e; e = e->next) k++;
+        if (k > WIKICOB_PIECES) continue;
         if (s_ncob == COB_TYPES || strlen(c->key) >= WIKI_ID_MAX || !tj_is(f, TJ_STR)) {
             fprintf(stderr, "wikitest: %s: %s is not a script\n", path, c->key);
             ok = 0;
@@ -323,7 +327,7 @@ static int cob_load(const char* path)
             ok = 0;
             break;
         }
-        for (e = tj_is(vis, TJ_ARR) ? vis->first : NULL; e && s_cob[s_ncob].pieces < WIKICOB_PIECES; e = e->next)
+        for (e = tj_is(vis, TJ_ARR) ? vis->first : NULL; e; e = e->next)
             s_cob[s_ncob].visible[s_cob[s_ncob].pieces++] = (unsigned char)tj_num(e, 0);
         s_ncob++;
     }

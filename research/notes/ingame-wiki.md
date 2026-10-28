@@ -1588,8 +1588,9 @@ both fold into theirs, holds them to the same calls.
 - **The tick**: the inputs, then every unit's script slice (`DoScriptsNow(1)`), then the units'
   work, then the engine's calls of each unit's turn, unit by unit in creation order -- the
   engine's order of a unit's turn, slice before orders before movement.
-- **The scripts gate the work.** A builder in range credits nothing until its script has set
-  INBUILDSTANCE. A structure finished, or made whole, whose FBI has `activatewhenbuilt` is switched
+- **The scripts gate the work.** A builder in range credits nothing on a work until its script
+  has set INBUILDSTANCE since the work began; after that the stance is not read again until the
+  work changes, as the engine reads it only at the work's start (`0x438700`). A structure finished, or made whole, whose FBI has `activatewhenbuilt` is switched
   on. Without a host, or for a type whose script the host refused (quarantined), every gate reads
   open and the unit plays at the figures' pace alone.
 - **The calls**: `Create` at a unit's appearance, and an extractor's `SetSpeed` with the metal

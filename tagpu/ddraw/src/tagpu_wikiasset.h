@@ -388,7 +388,8 @@ int           tagpu_wikiside_get(const WIKISIDE** out);
 const WIKI3D* tagpu_wiki3d_get(void);
 
 /* THE LOAD'S ANSWER, as the sidebar's (WIKISIDE_*): PENDING while the loader runs, READY with
-   `*out` the load, or REFUSED for good when it failed or never started. The wiki starts no demo
+   `*out` the load, or REFUSED for good when it failed. PENDING too before the load is started
+   (tagpu_wikiasset_start, which publishes REFUSED if its thread cannot start). The wiki starts no demo
    before it, so a demo's units have their scripts from its first tick or never. ORDERING as
    tagpu_wikiside_get's: one interlocked store publishes the answer, and this read is interlocked. */
 int           tagpu_wiki3d_answer(const WIKI3D** out);

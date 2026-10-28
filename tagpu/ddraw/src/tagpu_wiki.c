@@ -636,7 +636,8 @@ static int scripts_now(const WIKICOBSRC** src)
    the open window's demo (tagpu_wiki_fill), so no demo plays past one fill on a stale side or
    interface, and a start between fills (an input handler) takes the last fill's pair.
    0 while layout_now's or scripts_now's answer is pending; `*cast` gets the layout side whose
-   casting the context holds, -1 none. */
+   casting the context holds, -1 none, as soon as layout_now answers, so the text takes the
+   casting's names while the 3D load still runs. */
 static int context_now(const WIKIDATA* d, const WIKILAYOUT** lay, int* src, WIKISIMCTX* ctx, int* cast)
 {
     const WIKISIDE* blk;
@@ -645,7 +646,7 @@ static int context_now(const WIKIDATA* d, const WIKILAYOUT** lay, int* src, WIKI
     ctx->iface = s_iface;
     ctx->cob = NULL;
     *cast = -1;
-    if (!layout_now(d, lay, src, &blk) || !scripts_now(&ctx->cob)) return 0;
+    if (!layout_now(d, lay, src, &blk)) return 0;
     if (blk) {
         const int k = s_side >= 0 && s_side < WIKI_SIDE_SIDES ? blk->side_of_engine[s_side] : -1;
         if (k >= 0 && k < blk->layout.nside && k < WIKI_SIDE_SIDES) {
@@ -657,7 +658,7 @@ static int context_now(const WIKIDATA* d, const WIKILAYOUT** lay, int* src, WIKI
             *src = *lay ? WIKISTAGE_LAYOUT_FIXTURE : WIKISTAGE_LAYOUT_NONE;
         }
     }
-    return 1;
+    return scripts_now(&ctx->cob);
 }
 
 /* wiki.js `start`: the selected demo afresh, scripted, its clock from now; in Try it yourself its
@@ -1637,8 +1638,8 @@ int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again, int side, int if
         WIKISIMCTX ctx;
         int src, cast;
         assets_start();
-        /* a capture waits, as a demo does, for the layout it would start on */
-        if (s_ask && GetFileAttributesA(SHOT_ASK) != INVALID_FILE_ATTRIBUTES && layout_now(data(), &lay, &src, NULL))
+        /* a capture waits, as a demo does, for the context it would start on */
+        if (s_ask && GetFileAttributesA(SHOT_ASK) != INVALID_FILE_ATTRIBUTES && context_now(data(), &lay, &src, &ctx, &cast))
             shot();
         page_fill(w);
         /* the text's context, by value: the running demo's, else the one a demo would start on */

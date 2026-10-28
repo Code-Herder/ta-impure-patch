@@ -1319,8 +1319,9 @@ const WikiSim = (() => {
         const dx = s.x - u.x, dz = s.z - u.z, d = Math.sqrt(dx * dx + dz * dz);
         if (d > 0) { u.hx = dx / d; u.hz = dz / d; }
         jobs.set(u, { s, how });
-        // the build orders' stance wait (0x438700): no progress until the builder's script has set INBUILDSTANCE
-        if (!stance(u)) return;
+        /* the build orders' stance wait (0x438700, at the work's start: MobileBuild's work state 0x403E0C and the step
+           0x41BA60 never read +0x10F): no progress on a work until the builder's script has set INBUILDSTANCE once */
+        if (!(u.stanced && u.work === s)) { if (!stance(u)) return; u.stanced = true; }
         const w = work.get(s) || { build: 0, reclaim: 0 };
         w[how] += def(u.type).workerTime / def(s.type).buildTime / TPS * PACE;
         work.set(s, w);
@@ -1387,7 +1388,7 @@ const WikiSim = (() => {
       for (const u of units) {
         const j = jobs.get(u);
         const target = j && units.includes(j.s) && !(j.how === 'build' && j.s.built >= 1) ? j.s : null;
-        if (u.work && u.work !== target) { cobCall(u, 'StopBuilding', 'later'); u.work = null; u.workOrder = null; }
+        if (u.work && u.work !== target) { cobCall(u, 'StopBuilding', 'later'); u.work = null; u.workOrder = null; u.stanced = false; }
         if (target && !u.work) { cobCall(u, 'StartBuilding', 'args', [0]); u.work = target; u.workOrder = u.orders[0]; }
         if (!mobile(u.type)) continue;
         if (u.stepped && !u.moving) { cobCall(u, 'StartMoving', 'now'); cobCall(u, 'MoveRate1', 'now'); }
@@ -1399,7 +1400,7 @@ const WikiSim = (() => {
        is handled (0x43A251), before the next tick's slice */
     function dropWork() {
       if (!COB) return;
-      for (const u of units) if (u.work && u.orders[0] !== u.workOrder) { cobCall(u, 'StopBuilding', 'later'); u.work = null; u.workOrder = null; }
+      for (const u of units) if (u.work && u.orders[0] !== u.workOrder) { cobCall(u, 'StopBuilding', 'later'); u.work = null; u.workOrder = null; u.stanced = false; }
     }
 
     /* side: the layout side the sidebar shows, -1 with the sidebar off; iface: the Interface Type. Both are the state

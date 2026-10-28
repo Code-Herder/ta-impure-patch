@@ -19,8 +19,9 @@
    time; two threads may each run their own (tagpu_cobvm.h, SAFE ON SEVERAL THREADS).
 
    BOUNDED BY CONSTRUCTION: at most WIKICOB_TYPES types, WIKICOB_UNITS units over a host's life,
-   WIKICOB_PIECES primitives a model; a spawn past the unit bound gets no script (its gates read
-   open, as a quarantined type's do), so a player's placements cannot grow it without bound.
+   WIKICOB_PIECES primitives a model; a spawn past the unit bound gets no handle (0), which the
+   simulation treats as a unit with no script, its gates open, so a player's placements cannot
+   grow it without bound.
 
    THE QUARANTINE (the plan's decision 9). A type whose script the validator refuses, or one of
    whose units' VMs faults, is quarantined for the host's life: every unit of it drops its VM,
