@@ -402,10 +402,16 @@ one fixed game tick]:
 - **`world` size with `octave` spacing does not mix**: at 3× the 33-px arrows sit 36 px apart.
   Size and spacing want the same rule.
 
-**Gaps.** No frame of the game has been put beside the lab's: at 1× the overlay follows the
-engine's arithmetic but is not pixel-diffed against a GDI capture, and the sub-pixel sprite
-placement, the per-tick integer projection and the ALP palette lookup are approximated in full
-colour. Under `octave` the march keeps the engine's world speed, so on screen it crawls at
+**Checked against the game** [MEASURED 2026-10-27, the GDI backend, engine map "What each order
+type draws"]: the waypoint sprite is ALP-blended over the ground pixel for pixel, the route dots
+are opaque, and the sprite's frame is the drawer's `gameTime / (2·period)` rule. Those are the
+three things `ordalpha=0.5` and `ordanim=engine` assume. The capture also showed the factory
+case does not apply here: a right-click with a Kbot Lab selected (Interface Type 1) queued no
+order at all, so a factory's rally markers were not captured.
+
+**Gaps.** The lab's frame has not been pixel-diffed against a game frame at the same eye.
+The ALP palette lookup is approximated in full colour (a plain 50 % mix), and so are the
+sub-pixel sprite placement and the per-tick integer projection. Under `octave` the march keeps the engine's world speed, so on screen it crawls at
 0.25× (12 px/s) and runs at 4× (192 px/s); scaling the speed per octave would move every dot
 at an octave change. Nothing in the DLL has changed.
 

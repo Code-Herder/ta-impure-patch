@@ -11504,7 +11504,17 @@ the mouse cursor, which steps each frame after its own 8 ticks (`0x4B8BF0`).
 `dst = table[src·256 + dst]`: repeat runs at `0x4CC156..0x4CC167` and literal runs at
 `0x4CC17F..0x4CC18C` and `0x4CC1A4..0x4CC1B1`. Only transparent runs skip. The dots go through
 `CopyGafToContext 0x4B7F90`, and `pathicon`'s sub-frame byte `+0x0B` is 0, so they never take its
-composite branch (`0x4B7FF7`) and are copied opaque. The ALP blend is a 50 % mix: `palettes\PALETTE.ALP` at `[src·256 + dst]`
+composite branch (`0x4B7FF7`) and are copied opaque.
+**MEASURED 2026-10-27 under the GDI backend** (`gdi.on`, no other pass armed, so every marker
+pixel is the engine's): an ARMCK on Two Continents with three queued `Move_Ground` and a
+`RepairPatrol`, the game paused at tick 2174, SHIFT held and the pointer on the unit. Each pixel
+under a sprite was predicted from the same frame taken before the orders existed. Of the three
+`cursormove` sprites' texels, 94 % are exactly `ALP[art·256 + ground]` and 6–9 % the art's own
+colour (the route dot the engine draws over each waypoint). Of `cursorpatrol`'s 181, 100 % are
+the blend. Each `pathicon` dot is 57 of 57 texels opaque and 0 blended. The frames are the
+drawer's `(0x38A47 / (2·period)) % count`: 7 for `cursormove` (identical to frame 1) and 8 for
+`cursorpatrol`. The presented GDI window differs from `tacli shot`'s frame by one pixel, under the
+pointer. The ALP blend is a 50 % mix: `palettes\PALETTE.ALP` at `[src·256 + dst]`
 lands within 20 RGB units of the palette colour nearest the half-and-half mix for 57 % of 300
 random pairs, against 14–15 % at a 25/75 weight either way round [MEASURED 2026-10-27; the misses are palette
 quantisation].
