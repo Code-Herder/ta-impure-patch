@@ -27,7 +27,11 @@ trip to the button, and in Try it yourself the player presses it
 mod: its units, their figures and their display names are that side's own, picked from the mod's
 files by one rule that names no mod, and the demo plays, and its captions name, the buttons of the
 player's Interface Type ([below](#the-per-mod-tutorials)). The owner's decisions for the sidebar
-and the tutorials are [below](#the-sidebar-and-the-per-mod-tutorials-the-owners-decisions).
+and the tutorials are [below](#the-sidebar-and-the-per-mod-tutorials-the-owners-decisions). The
+units run their own COB scripts in both simulations, through one C host on our own COB VM: a
+builder works only once its script has taken its build stance, and the Quick Build demos wait for
+the work to be done; the stage does not draw the scripts' poses yet
+([the COB plan](ingame-wiki-cob-plan.html), L3a built, L3b open; [below](#the-units-scripts)).
 
 | What | Where |
 |---|---|
@@ -58,7 +62,8 @@ and the tutorials are [below](#the-sidebar-and-the-per-mod-tutorials-the-owners-
 | The sidebar's checks | `node tools/wiki/sidecheck.mjs` (with `tagpu/ddraw/tests/wikisidetest.c`); `python3 tools/wiki/assetcheck.py --side`; `tools/wiki/sidedump.mjs` (a pack's column for a state, as a PNG) and `tools/wiki/sideview.mjs` (`sim.js` at a game dump's state) |
 | The window in the game | `tagpu_wiki.c` (input, pause, the page's state and the demo's simulation; game thread), `tagpu_wikistate.c` (`tagpu_wikilay.c` and `tagpu_wikistage.c` on the record) and `tagpu_vk_hud.c` (drawing; render thread) — [GPU status](gpu-status.html) §2.12c |
 | The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|try|recorded|asset|stage3d|units --launch`, `tools/wiki_regression.py <name> mp`, `tools/wiki_regression.py all mods --shots DIR` (the 3D stage under each supported setup: [below](#the-3d-stage-under-the-mods)); `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's; `units --shots DIR` does the same with the units, then the facing, the `nounit=` lever, the render thread's time and a reclaim in the game; `try` replays two demos through Try it yourself's stage as device input and holds the game's simulation to `simparity.mjs --try` |
-| Serving it | `python3 tools/hudart/serve.py`, then `http://127.0.0.1:8000/tools/wiki/mockup/` |
+| The units' scripts | `tagpu/ddraw/src/tagpu_wikicob.c`, the host on `tagpu_cobvm.c`, which the DLL's simulation calls in-process; the mockup's `sim.js` reaches the same C through `tools/wiki/serve.py` (`POST /cob`, from the page through `tools/wiki/mockup/cob.js`) and, under node, `tools/wiki/cobhost.mjs` (`serve.py --stdio`) |
+| Serving it | `python3 tools/wiki/serve.py`: the repository with `Cache-Control: no-cache`, and the units' scripts at `POST /cob`; then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
 
 Two entries, both under Quality of Life → Building: **Quick Build: Resource Extractors** and
@@ -446,7 +451,9 @@ readers:
   with the description; each feature section found in the first `features\*.tdf` that holds it,
   with its GAF and sequence. Any miss and the entry's pack carries no ground.
 - **The units**: `units\<UnitName>.FBI`; its `Objectname`, else the UnitName, names
-  `objects3d\<name>.3DO`; `scripts\<UnitName>.COB` gives Create()'s hides. A face binds to the
+  `objects3d\<name>.3DO`; `scripts\<UnitName>.COB` gives Create()'s hides, and is written beside
+  the mesh as `units/<type>.cob` with its posed model's order and visible flags (the mesh's
+  `script`; `posed_order`), for the units' scripts. A face binds to the
   first GAF of the texture bank (`textures\*.GAF` without `logos.GAF`) that has its name, else to
   `logos.GAF`, as a team face when the entry has exactly 10 frames, else to flat colour `0xD1`.
   One mesh is written per owner the entry's scenes use, with the slant casters and the wire's
@@ -468,7 +475,9 @@ code is the tascene lab's parity lane, factored into `tools/tascene-render.js`, 
 `stage.js` draws the target into the map's rect, bilinear. Without `gfx/index.json`, `gfx=game`
 stays on the whitebox and the controls strip says "game graphics: run tools/wiki/gfx.py".
 
-**What the simplified simulation cannot drive.** No COB script runs past Create(), so:
+**What the stage does not draw yet.** The units' scripts run ([below](#the-units-scripts)), but
+the stage draws the rest pose with what Create() hides left out, not the pieces the scripts move
+(the COB plan's L3b), so:
 
 - every unit stands in its rest pose;
 - a kbot's legs do not walk and a constructor does not aim its nano-lathe;
@@ -476,8 +485,8 @@ stays on the whitebox and the controls strip says "game graphics: run tools/wiki
   at rest.
 
 The nano spray is the engine's particles (`PK_PART` kind 5, drawn by `tagpu_fx.c`
-`tagpu_fx_gather`), and it starts at the point COB `QueryNanoPiece` returns, so the mockup has
-none.
+`tagpu_fx_gather`), and it starts at the point COB `QueryNanoPiece` returns; neither the stage nor
+the mockup draws it yet (the COB plan's L4).
 
 ## Try it yourself in the game
 
@@ -486,7 +495,7 @@ specification is the mockup's handlers, and [the plan](ingame-wiki-plan.html), l
 where the plan's first version and the mockup differed.
 
 - **The simulation** is `sim.js` `create` on the selected demo's scene (`tagpu_wikisim_init` with no
-  script): never done, the controls' play and replay acting on it as on a demo. Its button swaps the
+  timeline, its units running their scripts as a demo's do): never done, the controls' play and replay acting on it as on a demo. Its button swaps the
   stage between Try it and the demo; picking an entry or a demo leaves Try it.
 - **Input**, from the messages the window already takes while it is open, so the engine sees no
   more and no less than with the demo on the stage:
@@ -797,10 +806,11 @@ side had its own types.
 
 - **`simparity.mjs`** plays every demo through both simulations with the fixture's sidebar, with
   `fixture-tall.json`'s 768-row column and with none, each in the eight contexts of *The
-  simulation's contract* (below): 504 plays. It replays the 46 rule cases and the 173 refusal
-  cases (the `sidebar` flag, the trip's data rule, every bound of the layout on both sides of it,
-  the context, the binding and the scene's fit), reads 24 castings and layouts back, then the 21
-  malformed-data cases, and compares the trip's constants. All equal, natively and with `--wine`.
+  simulation's contract* (below), with the units' scripts and without: 1008 plays. It replays the
+  47 rule cases and the 180 refusal cases (the `sidebar` flag, the trip's data rule, every bound
+  of the layout on both sides of it, the context, the binding and the scene's fit), reads 24
+  castings and layouts back, then the 21 malformed-data cases, and compares the trip's constants.
+  All equal, natively and with `--wine`.
 - **`stagecheck.mjs`** pairs the stage's ops with `stage.js`'s calls, the `side` range and the
   greyed buttons' groups included: 5376 frames, the fixture at three sizes, the tall fixture at
   1920 × 1080 and no sidebar at three sizes. With a sidebar it draws the whitebox column, the
@@ -855,11 +865,17 @@ side had its own types.
 
 - `tagpu_wiki.check` writes the layout it plays on to `tagpu_wiki.layout.json`, in the layout
   schema, or `null` for none. It logs `wiki check: the sidebar layout is the mod's / the fixture
-  / none` and waits, as a demo does, for the loader's answer.
+  / none ...; the units' scripts are on / off` and waits, as a demo does, for the loader's answer
+  and the 3D load's. After a demo's hash it logs each quarantined type's note
+  (`<TYPE>'s script is quarantined - <note>`) and a demo a wait stopped (`stopped: a wait ran
+  past its max`); `wiki_regression.py` passes `--scripts` to `simparity.mjs --hash` when the log
+  says the scripts are on.
 - The state dump `tagpu_wiki.json` gains three fields: `side_h`, the running simulation's
   column rows, 0 without one; `layout_src`, one of `"mod"`, `"fixture"`, `"none"`, or `""`
   with no simulation; and `layout`, the layout itself, which `simparity.mjs --try` and
-  `sideview.mjs --dump` replay. `tools/wiki/sideview.mjs` plays `sim.js` to a dump's state and
+  `sideview.mjs --dump` replay. Its `ctx` carries `cob`, whether the simulation runs its units'
+  scripts, which `simparity.mjs --try` then takes from the gfx packs and `sideview.mjs --scripts
+  DIR` from a folder. `tools/wiki/sideview.mjs` plays `sim.js` to a dump's state and
   prints its view (`--dump`), or plays a demo to a tick and composes its column (`--play
   --compose`).
 - Layout names are written as their UTF-8 bytes, as both readers count them.
@@ -1089,15 +1105,16 @@ All MEASURED 2026-10-28 on this tree (native gcc with AddressSanitizer and Undef
 unless said).
 
 - **`simcheck.mjs`** plays every demo with the fixture in eight contexts (the authored types, and
-  the `identity`, `shifted` and `unbound` castings, each at types 1 and 0): 21 of 21 pass in each,
+  the `identity`, `shifted` and `unbound` castings, each at types 1 and 0), and each again with the
+  units' scripts (`+scripts`; under `--pack` each mod's own stage scripts first): 21 of 21 pass in each,
   `identity` held to the authored play frame for frame, and `unbound` stopping under the badge
   where its wall is built (five Build Lines demos at tick 0, the ring around a queued build at 206).
   **`--pack`** plays each mod's pack in every side at both types: stock, Mayhem, ProTA and Twilight
   21 of 21 in every side; Escalation and TA Zero Build Lines' 10 of 10 in every side, and Quick
   Build's 11 played with their claims unchecked.
-- **`simparity.mjs`**: 504 demo plays (21 demos × the fixture, the tall fixture and no sidebar ×
-  the eight contexts), 46 rule cases, 173 refusal cases, 24 castings and layouts read back and 21
-  malformed-data cases, all equal.
+- **`simparity.mjs`**: 1008 demo plays (21 demos × the fixture, the tall fixture and no sidebar ×
+  the eight contexts × with and without the units' scripts), 47 rule cases, 180 refusal cases, 24
+  castings and layouts read back and 21 malformed-data cases, all equal.
 - **`textparity.mjs`**: 18 castings at Interface Type 1, 0, 2 and −1 over both entries and 24 edge
   strings, 12 600 fills and 27 656 cut fills, equal byte for byte.
 - **`assetcheck.py --side`**: the DLL's loader equal to `gfx.py --side-only` in all six setups,
@@ -1110,6 +1127,9 @@ unless said).
   sides × 2 types × 21), none refused, and all 84 hashes equal `simparity.mjs --hash --pack` on the
   stock pack, compared afterwards from the log. After a typed `+iface 0` the log said `the interface type 0`
   and the click demo's caption read "Left-click builds it." where it had read "Right-click".
+  With the units' scripts (`wiki_regression.py <instance> wikicob demos --launch`, a private Xvfb
+  at 1920 × 1080): `wiki check: 84 demos played, 0 did not start, in 89 ms`, the scripts on, all 84
+  hashes equal `simparity.mjs --hash --scripts`.
 - **`tools/wiki_regression.py - offline`** runs, in one run with no lock, `simcheck` (plain,
   `--null-layout` and `--pack` for each pack present), `simparity` and `textparity` natively and
   `--wine`, `sidecheck`, `stagecheck` and `scenecheck`: 522 s, all passing. `assetcheck.py --side`
@@ -1135,6 +1155,10 @@ click at type 0:
 | 9 | Geothermal vents | the same click on a vent builds ARMGEO |
 | 10 | Metal maps | on uniform metal ground a click is a move; only a richer deposit builds |
 | 11 | Fog | an unexplored deposit does not snap; one under grey fog does |
+
+Every demo ends on its work done: after its last input it waits until no unit of the player's
+holds a build or a reclaim order (at most 1800 ticks), then plays 60 more; *The best extractor
+that fits* also waits between its two clicks (`gen-quickbuild.mjs` `until`, `TAIL`, `WAIT_MAX`).
 
 **Mods that lock it off:** Escalation, TA Zero and an unidentified mod (the resource profiles,
 `resource-snapping.md` *Scope and defaults*). Stock, Total Mayhem, ProTA and Twilight allow it.
@@ -1174,7 +1198,11 @@ the one loaded):
 
 Every demo has exactly one ARMCK selected: the stock interface arms a building only with one unit
 selected (`quality-of-life.md` *Who builds*). The entry's `pace` is 24: an ARMLLT takes ARMCK
-2.4 s on the stage (58 s in the game), an ARMDRAG 0.27 s.
+2.4 s on the stage (58 s in the game), an ARMDRAG 0.27 s. The demos end a fixed tail after their
+last input, on the shape and its first pieces, not the whole queue: with its script ARMCK folds
+and unfolds its nanolathe between two queued pieces, about 268 ticks a piece, so a whole line
+would run for minutes. *Click and Shift-click*, *Filled rectangle* and *Ring around a building*
+have tails of 300, 480 and 420 ticks, long enough for the pieces their claims read finished.
 
 ## The data format
 
@@ -1224,10 +1252,21 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
   the ticks (t, t + 90), nor after it in tick t; the demo lasts the whole trip; and the left button
   is up when it starts. Without the sidebar it arms at once, and `{ "build": null }` leaves the
   mode.
+- **A wait, `{ "at": t, "until": "idle", "max": m }`**, holds the demo's clock at `t` until no unit
+  of the player's holds a build or a reclaim order, at most `m` ticks (an integer, 1 to 3600);
+  past that the demo stops, stalled, and the check names it. `idle` is the only state. A wait
+  carries no other key, and no other input shares its tick; both simulations refuse a demo that
+  breaks either. Every later input, trip and the demo's `end` count the clock's ticks, which stand
+  still during a wait (*The units' scripts*, below).
 - **A demo's `sidebar`**, a boolean, is optional: absent, the sidebar is shown when the scene gives
   the player a mobile builder. No demo sets it today.
 - **A unit's `canstop`** (a boolean, or a number whose integer part's bit 0 counts) is the FBI key; absent, it is 0, as the
   engine's FBI reader defaults it. The entries give it to ARMCK, ARMACK, ARMPW and ARMLLT.
+- **A unit's `activatewhenbuilt`** (a boolean, or a number whose integer part's bit 0 counts; a
+  casting's must be an integer) is the FBI key, def `+0x241` bit 18; absent, it is 0. A structure
+  finished, or made whole in a scene, with it set is switched on: its script's `Activate` runs
+  (`0x41B9A6`, `0x48612F`). The entries give it to ARMMEX, ARMMOHO, ARMGEO and ARMSOLAR, and the
+  castings carry it for every cast (`gfx.py`, `tagpu_wikiasset.c`, `casting-fixture.json`).
 - **The scene**: the map's size in cells, its `surfaceMetal`, its metal as rectangles of a value,
   its vents, its fog rectangles (`grey` or `black`), the units (type, owner, position, finished or
   not, and optionally move orders and a `facing`), and which are selected. `"facing": [x, z]` is
@@ -1337,20 +1376,25 @@ recording replays one at a time. For each demo and case it names the first diffe
 and field. Last, it loads data the loader must survive or refuse (`wikitest.c`'s `malformed`
 cases). Every demo plays with the fixture's sidebar, the 768-row fixture's and none, each in eight
 contexts: the entry's own types and the `identity`, `shifted` and `unbound` castings of
-`tools/wiki/casting-fixture.json`, each at Interface Type 1 and 0. MEASURED 2026-10-28: 504 demo
-plays and 46 rule cases equal, all 173 refusal cases alike, 24 castings and layouts read back
-alike and all 21 malformed-data cases as stated, natively (gcc, with AddressSanitizer and
-UndefinedBehaviorSanitizer) and with `--wine` (the DLL's compiler and flags, run under Wine).
+`tools/wiki/casting-fixture.json`, each at Interface Type 1 and 0, and each of those with the
+units' scripts and without when a gfx pack under `tools/wiki/mockup/gfx/` holds them (`wikitest`
+reads the same script files). MEASURED 2026-10-28: 1008 demo plays and 47 rule cases equal, all
+180 refusal cases alike, 24 castings and layouts read back alike and all 21 malformed-data cases
+as stated, natively (gcc, with AddressSanitizer and UndefinedBehaviorSanitizer) and with `--wine`
+(the DLL's compiler and flags, run under Wine).
 
 - **The context.** `WikiSim.play(entry, demo, layout, ctx)` and `create`, and
-  `tagpu_wikisim_init(…, const WIKISIMCTX* ctx, …)`, take `{side, casting, iface}`: the layout's
-  side the player plays, that side's casting or none (the entry's own types), and the Interface
-  Type. An absent context (NULL in C) is side 0, no casting and type 1, the interface the demos are
-  authored in. LIFETIME: the casting and the layout must outlive the simulation; in the DLL both
+  `tagpu_wikisim_init(…, const WIKISIMCTX* ctx, …)`, take `{side, casting, iface, cob}`: the
+  layout's side the player plays, that side's casting or none (the entry's own types), the
+  Interface Type, and where the units' scripts come from or none (`ctx.cob`, a `WIKICOBSRC` in C,
+  read during init only; *The units' scripts*, below). An absent context (NULL in C) is side 0, no
+  casting, type 1, the interface the demos are authored in, and no scripts. LIFETIME: the casting and the layout must outlive the simulation; in the DLL both
   lie in the published WIKISIDE block, immutable and never freed. The bound entry, the resolved
   script and the type-0 rows are [above](#the-per-mod-tutorials).
 - **The hash's first step** is the tick, `done`, the side (−1 without a sidebar) and the Interface
-  Type; `locked` is hashed with the sidebar off too. The captions enter it raw.
+  Type; `locked` is hashed with the sidebar off too. The captions enter it raw. Its last is the
+  demo's clock, the wait, `stalled`, then 1 and the scripts' host's own hash, or 0 alone without a
+  host (`tagpu_wikisim.h`, item 8).
 
 - **Bit for bit, by construction.** Both visit units in creation order, use no clock and no
   randomness, and compute on doubles with + − × ÷ and sqrt only, each rounded once. The DLL
@@ -1507,7 +1551,8 @@ three:
   resource cost and no economy; a reclaim takes as long as building it would;
 - construction and reclaim run at the entry's `pace` (`"pace": {"build": N}`), N times faster
   than the game, which the stage says: an ARMMOHO takes one ARMACK about 223 s
-  (BuildTime 35,750 / WorkerTime 160), too long to watch;
+  (BuildTime 35,750 / WorkerTime 160), too long to watch. The units' scripts run at game speed,
+  so their animations, and a build's wait for the builder's stance, take their game time;
 - no pathfinding, collisions, terrain height, enemies or other orders;
 - the engine's own site test (`0x47D2E0`) as: inside the map's interior cells, clear of
   structures, a geothermal plant with a vent under it; a mobile unit never blocks a site, where
@@ -1528,7 +1573,48 @@ DLL's simulation to `sim.js` on the same demos and rules.
 progress and facing (`hx`, `hz`, not drawn yet); the ghost and its colour; the queued sites; the order lines; the cursor, its shape and the tick the shape began;
 the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `state` `place`,
 `refused` or `remove`, and `order`, the site's place among the orders the release adds), its
-`shape`, and the armed building's `spacing`.
+`shape`, and the armed building's `spacing`; the demo's `clock`, `waiting` (the state a wait holds
+it for, or none), `stalled`, and `cob`, the scripts' host's hash as two 32-bit halves.
+
+### The units' scripts
+
+Each unit runs its own COB script, on our own VM, in both simulations
+([the COB plan](ingame-wiki-cob-plan.html), *The wiki host*, which has the engine's calls and the
+addresses behind them). The host is one engine-free C file, `tagpu_wikicob.c`, on `tagpu_cobvm.c`
+under Impure's rules: `tagpu_wikisim.c` calls it in-process and `sim.js` through the mockup's
+server, so the two simulations implement only *when* they call it, and the host's state hash, which
+both fold into theirs, holds them to the same calls.
+
+- **The tick**: the inputs, then every unit's script slice (`DoScriptsNow(1)`), then the units'
+  work, then the engine's calls of each unit's turn, unit by unit in creation order -- the
+  engine's order of a unit's turn, slice before orders before movement.
+- **The scripts gate the work.** A builder in range credits nothing until its script has set
+  INBUILDSTANCE. A structure finished, or made whole, whose FBI has `activatewhenbuilt` is switched
+  on. Without a host, or for a type whose script the host refused (quarantined), every gate reads
+  open and the unit plays at the figures' pace alone.
+- **The calls**: `Create` at a unit's appearance, and an extractor's `SetSpeed` with the metal
+  under it; `StartBuilding` and `StopBuilding` when a builder's work target changes, and
+  `StopBuilding` at once when the player takes its order away; `StartMoving` with `MoveRate1` and
+  `StopMoving` when a mobile unit starts and stops walking; `Activate` for a structure switched
+  on, and `Activate` or `Deactivate` when a script changes its own ACTIVATION.
+- **Where the scripts come from**: in the DLL, the 3D asset load's (`WIKI3DUNIT` `script`, with
+  the posed model's order and visible flags); in the mockup, the gfx pack the stage draws
+  (`gfx.py` writes `units/<type>.cob`). **No demo, Try it or check starts before the 3D load has
+  answered** (`tagpu_wiki3d_answer`, `tagpu_wiki.c` `scripts_now`), so a demo's units have their
+  scripts from tick 0 or never; a load that failed plays them all without.
+- **The demo's clock.** A wait (*The data format*) stops the clock the demo's inputs are written in
+  while the simulation's tick runs on, so a demo can end on its work done whatever the side's
+  builder: every Quick Build demo ends on `until idle` and 60 more ticks. The scripts run at game
+  speed while builds run at the entry's `pace`, so a build stance or a nanolathe folding between
+  two queued pieces takes its game time: stock's ARMCK takes about 268 ticks a queued piece, and
+  the Build Lines demos keep fixed tails long enough for the pieces their claims read
+  ([the COB plan](ingame-wiki-cob-plan.html), *The demo's wait*).
+- **The page** asks `tools/wiki/serve.py` for its host; served without it, or with no gfx pack
+  built, it plays without the scripts and says why in the console, as it says a quarantined type's
+  note. Run the mockup with `serve.py`.
+- **What it costs**: the host's slice over a demo's units is about 70 µs; with the scripts the page
+  cost the game thread at most 0.358 ms in a frame over 1222 frames, and *Queue several with
+  Shift* plays 1054 ticks where it played 570 (MEASURED 2026-10-28).
 
 ## Gaps
 
@@ -1579,6 +1665,11 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
   checked by `wiki_regression.py demos`, whose `tagpu_wiki.check` hashes must equal
   `simparity.mjs --hash`. `stagecheck.mjs` builds
   the stage natively (x86-64, SSE); the DLL compiles it for SSE2, but no check runs the i686 build.
+- **The units' scripts are checked on the entries' units only.** `simcheck.mjs --pack` plays the
+  six setups' stage units with their own scripts, none quarantined; no setup's whole script corpus
+  has been run through the host (the COB plan's L3c), and the poses the scripts set are not drawn
+  (L3b). GET answers what the flat stage has: piece and unit heights 0, a piece's position the
+  unit's, XZ_ATAN without the unit's heading.
 - **The per-mod tutorials have been played in one setup in game.** Retail as CORE at both
   Interface Types (*The per-mod tutorials*, *The checks*); the six setups at both types, each
   demo's `<entry>/<demo>/<side>/<iface>` hash from `tagpu_wiki.check` against

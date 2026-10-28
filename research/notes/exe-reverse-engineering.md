@@ -1736,6 +1736,204 @@ query `0x4865C3` (*A death's Killed*, above); AutoAim's aim and `SweetSpot` quer
 `0x43E227`..`0x43E3E4`, owner-only on a puppet and accepted as such by the owner
 (`replay-absent.tsv`); and the dead `0x41189C`.
 
+### The scripts a unit's work starts: the order controller, the stance wait, StartBuilding and StopBuilding, the walk class, the extractor's SetSpeed and the activation [DISASSEMBLED 2026-10-28]
+
+The in-game wiki's COB host (`tagpu_wikicob.c`, [the plan](ingame-wiki-cob-plan.html), *The wiki
+host*) makes the engine's script calls for the actions the wiki performs, at the engine's point
+of the tick. These are the facts it rests on. DISASSEMBLED on `pristine/TotalA.exe.pristine`
+(`objdump -d -M intel`); every caller list is a raw scan of `.text` for `E8`/`E9` rel32 to the
+target (a call through a register or a stored pointer is not covered).
+
+**The order controller `0x43B7C0(unit)`** (the main list `unit+0x5C`; called once per unit tick
+at `0x48AF98`, after the unit's `DoScriptsNow(1)` at `0x48ADEB` and before the movement pass
+`0x43DD20` at `0x48AFAA`):
+
+- For the head node: when GameTime `main+0x38A47` has reached the node's deadline `+0x0A`, the
+  timer event: `+0x4E |= 1`, `+0x0A = −1` (`0x43B7E2..0x43B7FB`). Then
+  `events = (node+0x4E | (u16)unit+0xBA) & node+0x06` (`0x43B7FE..0x43B815`). **A node whose
+  `+0x06` is nonzero and whose events are 0 is not called** (`0x43B817..0x43B81D` → `0x43BA9C`);
+  a node with `+0x06 == 0` is called with events 0.
+- The consumed bits are cleared from `unit+0xBA` (`0x43B831`) and `node+0x4E` (`0x43B846`) and
+  `node+0x06` is zeroed (`0x43B83D`) before the call `0x43B87C`; event `0x10000` first calls
+  `0x48A0F0(unit, k)` for k = 0, 1, 2 (`0x43B840..0x43B85D`) [what that does: not read].
+- The result goes through the table `0x43BAA4` (*The ground Guard's node*, below). Results 0, 1,
+  2, 4 and 6 end at `0x43B99F`, which **re-reads the head and goes round again in the same call**
+  (`0x43B99F..0x43B9A7`); 3 arms a 30 + `0x4B6C30(15)` tick timer and also loops (`0x43B951..0x43B973`).
+  So **a handler's states chain inside one controller call**: one that returns 1 without arming a
+  wait is called again at once with its next state, in the same tick; one that arms `+0x06` and
+  returns 2 ends the call unless one of its events is already pending.
+- **Every COB `SET` sets `unit+0xBA` bit 2**, whatever the id, in range or not: `or byte
+  [esi+0xBA], 4` at `0x480B57`, `0x480B73`, `0x480B97`, `0x480BB3`, `0x480BD2` and `0x480BF1`, the
+  out-of-range `ja` at `0x480B34` landing on the last. So event 4 is "this unit's script SET
+  something" [other writers of bit 2 not enumerated].
+
+**The stance wait `0x438700(unit, node, mask)`** (`ret 0xC`, `0x438700..0x438724`): returns **1**
+when `unit+0x10F` bit 0 (INBUILDSTANCE) is set; otherwise stores `node+0x06 = mask | 4` and
+returns **2**. Its nine callers, with the mask and the handler's StartBuilding, all read:
+
+| handler | StartBuilding `0x438590` | stance wait (mask) | its own StopBuilding `0x4385F0` |
+|---|---|---|---|
+| BuildingBuild `0x402640` (a factory) | none: the state setter (below) | `0x4027CA` (2) | none |
+| MobileBuild `0x403A20` | `0x403DE1` | `0x403DFD` (`0xA`) | none |
+| HelpBuild `0x403F70` (assist) | `0x4040D4` | `0x4040F6` (`0xA`) | none |
+| Capture `0x404270` | `0x40453A` | `0x404559` (`0x10008`) | `0x404599` |
+| ReclaimUnit `0x404730` | `0x404887` | `0x4048A6` (`0x10008`) | `0x404A7F` |
+| Reclaim (a feature) `0x404AD0` | `0x404C3E` | `0x404C5A` (**0**) | none |
+| Resurrect `0x404DB0` | `0x404F0B` | `0x404F27` | none |
+| RepairUnit `0x405300` | `0x405563` | `0x40557B` (8) | `0x4055B5` |
+| VTOL_MobileBuild `0x413D80` | `0x41411C` | `0x41413E` (`0xA`) | none |
+| VTOL_HelpBuild `0x414380` | `0x41454F` | **none: the air assist never waits** | none |
+
+The other reader of `+0x10F` in the orders is `0x438730`, bit 1 (BUSY), the same shape inverted.
+The byte stores to `unit+0x10F` are COB `SET` (`0x480B7A`, `0x480B9E`, `0x480BD9`), YARD_OPEN's
+`0x47DAF1`, the create's `0x485B52` and the network and restore copies `0x4872F3`, `0x48730B`,
+`0x487325`, `0x487346`: **the engine never clears INBUILDSTANCE itself; only the script does.**
+
+**StartBuilding `0x438590(unit, node, heading)`** (`ret 0xC`): the index of `StartBuilding`
+(`0x5050F4`) by `0x4B07C0`, the start `0x4B0B00(idx, cb 0, runNow 0, argc 1, heading & 0xFFFF,
+0, 0, 0)` at `0x4385C7`, its broadcast `0x456290` at `0x4385D7`, then `node+0x42 |= 0x400000`
+(`0x4385E3`). **Run-later, one word.** The heading every caller passes is
+`0x48A980(builder+0x6A, target+0x6A) − builder+0x66` (MobileBuild `0x403DCA..0x403DDA`, HelpBuild
+`0x4040BD..0x4040CD`): the target's bearing from the builder relative to its own heading. **No
+build handler tests the builder's heading** before it starts or works (MobileBuild state 1
+`0x403B45..0x403DF2`, HelpBuild state 1 `0x404069..0x4040EB`): the script does the turning, and
+any wait for it is the script's own, through INBUILDSTANCE.
+
+**MobileBuild's states and when progress starts.** State 1 (`0x403B45`) creates the nanoframe
+(`0x485F50(…, finished 0, …)` at `0x403D5B`; its `Create` runs run-now inside the create,
+`0x485DE6`), sends it `getbuilt`, starts StartBuilding (`0x403DE1`) and returns 1; state 2
+(`0x403DF5`) is `return 0x438700(unit, node, 0xA)`; state 3 (`0x403E0C`) steps the frame with
+`0x41BA60(builder, frame, (float)(WorkerTime def+0x1FE / 30))` (`0x403E43`) and returns 1 when the
+frame's `+0x104` reads 0.0, else re-arms one tick and returns 2 (`0x403EEB..0x403F1B`). State 3
+does not read `+0x10F`: a script that clears INBUILDSTANCE mid-build does not stop the progress.
+Through the state chain:
+
+- **the script's `SET` is seen in the tick it runs.** The slice (`0x48ADEB`) precedes the
+  controller (`0x48AF98`) in the unit's tick, so a `set INBUILDSTANCE to 1` there raises event 4,
+  the waiting node is called, `0x438700` returns 1 and state 3 adds the first progress **in that
+  same tick**. A SET made in a run-now start of the movement pass (the walk scripts, below), which
+  comes after the controller, waits for the next tick's controller [INFERRED from the call order];
+- **a stance left set starts progress at once.** With the bit already 1 when state 1 runs, state
+  2 returns 1 in the same call and the first step lands in the tick the frame was placed, before
+  StartBuilding's script has run a line. That happens when the previous build's StopBuilding has
+  not yet run its `set INBUILDSTANCE to 0` [INFERRED from the code paths; not measured];
+- the wait is woken by events 2, 4 and 8 only, never by the timer, so only a COB `SET` on that
+  unit brings it back while its stance is clear.
+
+The other waits are alike: HelpBuild's state 2 (mask `0xA`), Reclaim's (mask 0, so only a `SET`
+wakes it: a cancel during that wait does not call the handler, and the destructor still starts
+StopBuilding), whose countdown `node+0x36` then drops by 2 every two ticks (`0x404C73..0x404C89`).
+A factory waits **before** it makes the frame: BuildingBuild's state 0 activates the factory
+(`0x48B090(1, 1)` at `0x4027AE`), state 1 is the stance wait (`0x4027CA`, mask 2), state 2 tests
+the yard and makes the frame.
+
+**StopBuilding.** Two paths, by the kind of builder:
+
+1. **Mobile builders** (MobileBuild, HelpBuild, Reclaim, Resurrect, the VTOL pair): StopBuilding
+   comes only from the **order node's destructor `0x43A1F0`**, when `node+0x42` has bit
+   `0x400000` (`0x43A21E`): the index of `StopBuilding` (`0x505104`), `0x4B0B00(idx, 0, runNow 0,
+   argc 0, …)` at **`0x43A251`**, its broadcast `0x456190` at `0x43A258`, the bit cleared
+   (`0x43A25D`). Only `0x438590` sets the bit, so **StopBuilding comes exactly when StartBuilding
+   was started for that node.** Run-later, no argument. Inside the destructor the handler's
+   event-2 call (`0x43A21A`, only with `node+0x06` bit 2) comes first, then StopBuilding, then the
+   owned object at `+0x52` is freed, then `0x489800(unit, 3)` unless `node+0x42` has `0x10000`
+   (`0x43A2AB..0x43A2B9`). Capture, ReclaimUnit and RepairUnit also call `0x4385F0` themselves
+   (`0x404599`, `0x404A7F`, `0x4055B5`), the same start at `0x43862B` behind the same bit, which
+   it then clears, so the destructor does not repeat it.
+   - **A build that completes**: state 3's step finishes the frame (`0x41BA60` → `0x41B8D0`, so
+     the frame's own completion, its activation included, comes first), state 4 returns 5 and the
+     controller destroys the node (`0x43B8A8` → `0x43A1F0` at `0x43B93B`): **StopBuilding in the
+     same controller call as the step that finished it.**
+   - **An assist** (HelpBuild): state 1 returns 5 **without StartBuilding, and so without
+     StopBuilding**, when the target's `+0x104` already reads 0.0 (`0x40408E..0x4040AD`). Working,
+     its state 3 tests the target's `+0x104` after every step whoever finished it
+     (`0x4041DE..0x4041F2`; a step that adds nothing branches to the same test), and on 0.0 state
+     4 replies, sets `node+0x06 |= 2` and returns 5 (`0x404223..`): **StopBuilding in the tick the
+     assister sees the build complete.**
+   - **Cancelled** (any of the destructor's twelve callers, *The nano spray* above): StopBuilding
+     if StartBuilding was started; none while the builder still walks (states 0 and 1).
+   - **Between two queued builds** the engine carries nothing over: build 1's node returns 5, is
+     destroyed (StopBuilding queued), and the controller loops onto build 2's node in the same
+     call, which starts with its walk; build 2's StartBuilding comes at its own state 1, with its
+     own heading.
+2. **Factories** (BuildingBuild) start both from **the state setter `0x48B090`** on `+0x10E` bit 3:
+   set → StartBuilding at **`0x48B14E`**, cleared → StopBuilding at **`0x48B169`**, both
+   `0x4B0940` by name, run-later, **no argument** (`0x48B13A..0x48B169`). Its mask-8 calls in the
+   handler: `0x4029B0` (8, 1) in state 2 after the frame is made, `0x402B1B` (8, 0) in state 4
+   before `0x41B8D0`, and `0x40270C` (9, 0) in the event-2 cleanup (a cancel: Deactivate and
+   StopBuilding).
+
+**The walk class `0x43DA70`** (thiscall on the move object, the unit its argument;
+`0x43DA70..0x43DB45`; its only caller the movement pass at `0x43DD5D`, which runs after the unit's
+controller and only when the unit has a move object, `unit+0`, `0x48AFA3..0x48AFAA`). A move
+object is made at the create when def `+0x22F` (FBI `bmcode`) is 1 (`0x4860BB`), so every mobile
+unit runs it and no structure does.
+
+- The class is 0 when the move object's `+0x2E` bit 2 is set, the unit is carried (`+0x86`), or
+  the speed `+0x20` and the word `+0x24` are both 0; else 1 when the speed is at most def
+  `+0x1AE`, 2 at most def `+0x1B2`, else 3 (signed compares, `0x43DA9A`, `0x43DAB1`).
+- **The thresholds are absolute FBI values**: def `+0x1AE` is `moverate1` (`0x503DEC`), `+0x1B2`
+  `moverate2` (`0x503DE0`), read by `0x4C4800` (16.16) with **the default `2 × maxvelocity`** (def
+  `+0x192`, shifted left once and pushed as the default, `0x42C1E6..0x42C225`). So a unit whose
+  speed never passes twice its MaxVelocity is always class 1 when it moves [INFERRED: the speed
+  `+0x20` is in maxvelocity's units, from the shared compare].
+- A class different from `+0x110` bits 2–3 (`0x43DABF..0x43DACF`): new class 0 starts
+  **StopMoving** (`0x50523C`); a nonzero class after class 0 starts **StartMoving** (`0x505230`),
+  both at `0x43DAF2`; then class 1, 2 or 3 starts **MoveRate1/2/3** (`0x50520C`, `0x505218`,
+  `0x505224`) at `0x43DB27`, so a start from rest is StartMoving **then** MoveRate1 in the same
+  pass, and a change between moving classes is the MoveRate alone. All `0x4B0940`, **run-now 1**.
+  The class is stored at `0x43DB2C..0x43DB3D`.
+- **When**: in the tick the movement step first makes speed (or `+0x24`) nonzero, and in the tick
+  both return to 0 — after the unit's slice and its orders. A start by name of a function the
+  script lacks is dropped (`0x4B0940` finds no name).
+
+**The extractor's `SetSpeed`: `0x437840(unit)`** (`ret 4`, `0x437840..0x43790C`), from every
+create (`0x4860B2` in the local create `0x485F50`, `0x4862CA` in `0x4861D0`, `0x485F0A` in
+`0x485E90`; no other caller) — not the wind path, which is `0x437910`'s:
+
+1. It returns unless def `+0x1CE` (`extractsmetal`) compares above 0.0 (`0x43784F..0x437860`).
+2. **S = Σ (cell `+7` + 1)** over the footprint: x from `unit+0x76` for the word `unit+0x7E`
+   cells, z from `unit+0x78` for the word `unit+0x80` (`0x437866..0x4378C4`); each cell is
+   `0x481550(x, z)` = `main+0x14287 + (z·W + x)·13` (W `main+0x14233`, H `main+0x14237`), NULL off
+   the map and then skipped. The sum is added into the **high 16-bit word** of a zeroed dword
+   (`add word [esp+0x1A], dx`, `0x4378A4`), so it wraps at 65536.
+3. `unit+0x58 = ExtractsMetal × (S·65536) × 2⁻¹⁶` (`0x4378C6..0x4378E6`, `ds:0x4FD278` =
+   1.52587890625e-05).
+4. With a script (`+0x9A`), **`SetSpeed(movsx S)`** through `0x4B0A70` (`SetSpeed` at `0x505000`)
+   at **`0x437902`**: cb 0, **run-now 0**, argc 1. **The value is S alone; ExtractsMetal does not
+   enter it**, and a sum above 32767 arrives negative. It is sent once, at the create — for a built
+   extractor when its nanoframe is placed, not at completion — after `Create` (`0x485D40`, run-now
+   at `0x485DE6`) and the weapon queries (`0x49E070`) of the same create (`0x4860A0..0x4860B2`).
+   The L2 fixtures agree: ARMMEX 3 × 3 on the 223-metal patch, 9 × 224 = **2016**; ARMMOHO 5 × 5
+   over it with SurfaceMetal 20 around, 9 × 224 + 16 × 21 = **2352** (`evidence/cobtrace/README.md`)
+   [that cell `+7` is the cell's metal is INFERRED from that match; its writer `0x422040` is cited
+   by the wiki's note, not read here].
+
+**The activation.** `0x48B090(unit, mask, on)` (*COB on a puppet*, above) returns at once when
+`+0x10E` does not change; on a change bit 0 starts `Activate` (`0x48B106`) or `Deactivate`
+(`0x48B12B`), run-later, no argument.
+
+- **At completion** `0x41B8D0` calls `0x48B090(built, 1, 1)` only when def `+0x241` bit 18 is set
+  (`0x41B9A6..0x41B9BF`); **a unit created whole** takes the same gate in the create, behind
+  `finished` (`0x48611A`, `0x48612F..0x486148`). Bit 18 is FBI **`activatewhenbuilt`**: the loader
+  reads the key (`0x503B6C`) with `0x4C46C0`, keeps `and 1`, shifts it to bit 18 and merges it into
+  def `+0x241` (`0x42C6B9..0x42C6DE`). It is `0x41B8D0`'s only script start: without
+  ActivateWhenBuilt a finished structure is not switched on by the engine.
+- **The player's on and off**: the orders Activate `0x403010` and Deactivate `0x403040` call
+  `0x48B090(1, 1)` / `(1, 0)` (`0x40302C`, `0x40305C`) only when def `+0x245` bit 2 is set — FBI
+  **`onoffable`** (`0x503AE4`, loader `0x42C89A..0x42C8C1`, the same `and 1`) — and return 5.
+- **`SET ACTIVATION`** (case 0, `0x480B49`) is `0x48B090(unit, 1, value)` then the dirty bit: a
+  script that sets the value it already has starts nothing, and one that turns itself on from
+  anywhere but `Activate` starts its own `Activate`.
+
+**Not established**: what raises the move events `0x20`/`0x40`/`0x80` (`0x44D8A0`, `0x44D3B0` not
+read), and so whether a builder already in range reaches state 1 in the tick of state 0; the move
+object's word `+0x24`; Reclaim's countdown constants `0x4FC940`/`0x4FC944`; whether ARMCK's and
+ARMPW's FBIs set `moverate1` (their fixtures show StartMoving and StopMoving and no MoveRate,
+consistent with scripts that have none [INFERRED]); whether an `Activate` started by a `SET`
+runs in the same `DoScriptsNow` pass (the runner's walk `0x4B0DA0` not read for new records); the
+other writers of `unit+0xBA` bit 2.
+
 ### Seating a level: the SKIRMISH Start, the seat fill, the start commanders and the two end tests [DISASSEMBLED + MEASURED 2026-09-29]
 
 How a skirmish fills its player records before the loader runs, what the loader creates for each
@@ -19554,15 +19752,15 @@ probe precondition checks, not evidence for a non-zero getter result.
 | 6 | `BUSY` | `0x4807FF` | `unit+0x10F` bit 1 |
 | 7 | `PIECE_XZ` | `0x480811` | `0x43E060(&v, unit, a)`, then `(v.x & 0xFFFF0000) + (v.z >> 16)` |
 | 8 | `PIECE_Y` | `0x48083F` | the same call; `v.y` **raw 16.16**, not an integer |
-| 9 | `UNIT_XZ` | `0x480868` | that unit's `+0x6A`/`+0x72` packed the same way |
-| 10 | `UNIT_Y` | `0x4808C2` | that unit's `+0x6E`, raw 16.16 |
-| 11 | `UNIT_HEIGHT` | `0x48090F` | `[[unit+0x92]+0x16E]` — a unit-**definition** field |
+| 9 | `UNIT_XZ` | `0x480868` | the unit of id `a & 0xFFFF`, `[main+0x14357] + id × 0x118`: its `+0x6A`/`+0x72` packed the same way; **0 for id 0 or a unit without `+0x110` bit 28** (`0x480868..0x4808A4`), and **no compare against the slot count** |
+| 10 | `UNIT_Y` | `0x4808C2` | the same lookup and the same two tests; that unit's `+0x6E`, raw 16.16 |
+| 11 | `UNIT_HEIGHT` | `0x48090F` | the same lookup and tests; `[[unit+0x92]+0x16E]` — a unit-**definition** field |
 | 12 | `XZ_ATAN` | `0x480965` | `0x4B715A(x, z)` **minus the unit's own heading `+0x66`**, `& 0xFFFF` |
 | 13 | `XZ_HYPOT` | `0x480994` | `_hypot` of the unpacked 16.16 pair → `_ftol` → 16.16 |
 | 14 | `ATAN` | `0x4809C7` | `0x4B715A(a, b)`, `& 0xFFFF` — **no** heading subtraction |
 | 15 | `HYPOT` | `0x4809E5` | `_hypot(a, b)` on the raw arguments, `_ftol` |
 | 16 | `GROUND_HEIGHT` | `0x480A0D` | `0x485070(&v)` on the unpacked pair, result `<< 16` |
-| 17 | `BUILD_PERCENT_LEFT` | `0x480A44` | `0` when `unit+0x104 == 0.0f` (`ds:0x4FD668`), else `1 − (int)(unit+0x104 × −99.0f)` (`ds:0x4FD66C`) — the field is `Nanoframe`, and that it holds the fraction *still to go* is read off the arithmetic, not the writer `[INFERRED]` |
+| 17 | `BUILD_PERCENT_LEFT` | `0x480A44` | `0` when `unit+0x104 == 0.0f` (`ds:0x4FD668`), else `1 − (int)(unit+0x104 × −99.0f)` (`ds:0x4FD66C`) — the field is `Nanoframe`, the fraction *still to go*: the build step `0x41BA60` lowers it and finishes the unit when it reads 0.0 (`0x41BCAA..0x41BCBF`), and `0x41B8D0` stores 0 (`0x41B933`) |
 | 18 | `YARD_OPEN` | `0x480A83` | `unit+0x10F` bit 2 |
 | 19 | `BUGGER_OFF` | `0x480A96` | `unit+0x10F` bit 3 |
 | 20 | `ARMORED` | `0x480AA9` | `unit+0x10E` bit 1 |

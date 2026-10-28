@@ -1,8 +1,11 @@
 # Our own COB VM, and the in-game wiki's units animated by it, planned
 
 **Written** 2026-10-27. **L1 and L2 are built** (the core, tacob on it, the shared rules, the
-wiki's units recorded and replayed; see *The landings*); L3, cut into L3a to L3c on 2026-10-28,
-is in progress, and L4 and L5 are not started. The wiki's specification is still
+wiki's units recorded and replayed), and **L3a is built** (2026-10-28, on `worktree-wiki-anim`):
+the wiki's units run their scripts in both simulations through one host, the scripts gate the
+builds, and the demos wait on the work. L3 was cut into L3a to L3c on 2026-10-28; **L3b** (the
+poses drawn) and **L3c** (the corpus gate), L4 and L5 are not started (see *The landings*). The
+wiki's specification is still
 [the in-game wiki](ingame-wiki.html) and its mockup, which stays the 1:1 spec of the DLL wiki. The
 engine facts below carry their address and are the engine map's
 ([*The COB engine — mapped by us*](exe-reverse-engineering.html)); a fact this plan needs and the map
@@ -12,10 +15,11 @@ it disassembles it. When the work closes this file is folded into the wiki's not
 
 ## Why
 
-Today the wiki reads each unit's script only for what `Create()` hides (`tagpu_cobscan.c`): every unit
-stands in its rest pose, a kbot's legs do not walk, a constructor does not unfold its nanolathe, an
-extractor's arms do not turn, and there is no nano spray ([the wiki's note](ingame-wiki.html), *What
-the simplified simulation cannot drive*). Animating them needs a COB VM the wiki can run.
+The wiki's stage draws each unit from its script's `Create()` hides alone (`tagpu_cobscan.c`): every
+unit stands in its rest pose, a kbot's legs do not walk, a constructor does not unfold its
+nanolathe, an extractor's arms do not turn, and there is no nano spray ([the wiki's
+note](ingame-wiki.html), *What the stage does not draw yet*). Animating them needs a COB VM the
+wiki can run. The wiki runs one (L3a); drawing what it poses is L3b.
 
 The one VM we have outside the engine is tacob's, in Python, byte-identical to the engine on nine
 cobtrace fixtures ([tacob](tacob-design.html), landing 3). It has already drifted from the game:
@@ -185,20 +189,32 @@ is marked `sim` (*Gaps*, below).
 
 ## The wiki host
 
-The calls (decision 8), each with the entry, `runNow` and the side of `DoScriptsNow` that tacob's
-`ENGINE_STARTS` table gives:
+The calls (decision 8), each with the engine's entry, `runNow` and point of the tick, as the
+engine map's *The scripts a unit's work starts* establishes them (DISASSEMBLED 2026-10-28):
 
-| The wiki's action | The engine's calls |
+| The wiki's action | The engine's calls, as both simulations make them |
 |---|---|
-| a unit appears: a scene's spawn, a nanoframe placed | `Create` (`0x485DE6`, run-now) |
-| a move starts, ends | `StartMoving` / `StopMoving` (`0x43DAF2`, run-now, after the unit's tick), the MoveRate calls (`0x43DB27`) where the engine makes them, `SetSpeed` (`0x437902`), `SetDirection` (`0x43795E`, `0x43798A`) |
-| build, assist, reclaim | `StartBuilding` / `StopBuilding` (`0x48B14E`, `0x48B169`), `QueryNanoPiece` (`0x43E427`) per spray |
-| a structure finishes, is switched on or off | `Activate` / `Deactivate` (`0x48B106`, `0x48B12B`); the extractor's `SetSpeed` with its metal |
+| a unit appears: a scene's spawn, a nanoframe placed | `Create` (`0x485DE6`, run-now); for an extractor (ExtractsMetal above 0) `SetSpeed` with one word, Σ (cell metal + 1) over the footprint cells on the map, kept as a sign-extended 16-bit word (`0x437840`, `0x437866..0x437902`, run-later), at the create and so at the nanoframe's placement — ExtractsMetal does not enter the value; for a unit made whole whose FBI has ActivateWhenBuilt, `Activate` through the state setter (`0x48612F`) |
+| a mobile builder's build, assist or reclaim | its work is credited only once its INBUILDSTANCE reads set (the stance wait `0x438700`); `StartBuilding` with one word when its work target changes (`0x4385C7`, run-later; the word is the target's bearing relative to the builder's heading, 0 in the wiki, which turns the builder at once); `StopBuilding` with none when its work ends or changes (`0x43A251`, run-later: the order's destructor, in the same call as the step that finished the build), and at input time when the player takes the order away; `QueryNanoPiece` (`0x43E427`) per spray in L4 |
+| a factory's build | `StartBuilding` / `StopBuilding` through the state setter, with no word (`0x48B14E`, `0x48B169`): no entry has a factory, so neither simulation makes them |
+| a move starts, ends | `StartMoving` then `MoveRate1` / `StopMoving` (`0x43DAF2`, `0x43DB27`, run-now, in the movement pass after the unit's orders); the class thresholds are FBI `moverate1`/`moverate2`, by default 2 × MaxVelocity, which the wiki reads from no FBI, so its units, walking at MaxVelocity, are always class 1 and never start `MoveRate2`/`MoveRate3` |
+| a structure finishes, is switched on or off | `Activate` on completion when its FBI has ActivateWhenBuilt (`0x41B8D0`, `0x41B9A6`); `Activate` / `Deactivate` (`0x48B106`, `0x48B12B`, run-later) when a script's `SET ACTIVATION` changes the value. The player's on and off (FBI `onoffable`) is no wiki action |
 
-`get` is answered from the WIKISIM: the unit's own position, heading, build fraction, health, the
-values its script `set`, the ground height. `rand` draws from a generator the WIKISIM owns and hashes.
-The per-unit COB state is part of the simulation's state hash, so `simparity.mjs` checks the events
-both simulations send to the core as well as everything else.
+The wind generator's `SetSpeed`/`SetDirection` (`0x43795E`, `0x43798A`) is not made: the wiki has
+no wind.
+
+`get` is answered from the facts the simulation hands the host (below): the values the unit's
+script `set`; HEALTH 100 (the wiki has no damage); PIECE_XZ the unit's own point; UNIT_XZ another
+unit's, 0 for id 0 or a unit not alive, as the engine's (`0x480868..0x4808A4`); XZ_ATAN without
+the unit's heading, which the facts do not carry; ATAN by the engine's formula (`0x4B715A`) from
+an atan of + − × ÷ alone, so that every compiler gives the same answer, which can differ from the
+engine's x87 `fpatan` by one unit at a rounding boundary; the hypots as the square root of the
+sum of squares, truncated as `_ftol` truncates; BUILD_PERCENT_LEFT from the
+fraction still to go (`tagpu_cob_build_left`); PIECE_Y, UNIT_Y, UNIT_HEIGHT and GROUND_HEIGHT 0 on
+the flat stage; ids 32 and 69–75 `tagpu_cob_getter`'s over the host's units; any other id 0.
+`rand` draws from a xorshift32 generator the host owns and hashes, never the engine's. The host's
+state is part of the simulation's state hash, so `simparity.mjs` checks the calls both
+simulations make as well as everything else.
 
 **One host, in C, for both simulations.** Everything the host decides about a script -- which
 program a type runs, the four blocks of each unit, what `get` answers, what a `SET` changes, the
@@ -210,17 +226,29 @@ actions of decision 8, made at the same points of the same tick, which `simparit
 through the state hash (the host's hash is part of it). So the host cannot drift between the DLL
 and the mockup any more than the core can.
 
-**The tick.** The engine's unit turn is its script slice and then its orders and movement
-(`0x48ADEB` before `0x48AFAA`, the engine map's unit tick); the wiki's tick keeps that order for all
-its units at once, in creation order:
+**The tick.** The engine's unit turn is its script slice, then its orders, then its movement
+(`0x48ADEB`, `0x48AF98`, `0x48AFAA`, the engine map's unit tick); the wiki's tick keeps that order
+for all its units at once, in creation order (`tagpu_wikisim_step`, `sim.js` `step`):
 
-1. the inputs of the tick (as today);
+1. the inputs of the tick, unless a demo's wait holds its clock (*The demo's wait*, below); then
+   any work whose order the player took away ends (`drop_work`: StopBuilding, as the order's
+   destructor starts it when the input is handled). Try it's inputs between two ticks do the same;
 2. **the slice**: `DoScriptsNow(1)` for every unit with a script, each `SET` committed into that
-   unit's values as its opcode runs;
-3. **the units' work** (`advance`), which reads the committed values -- a builder credits work only
-   once its INBUILDSTANCE is set -- and makes the engine's calls where the engine makes them, each
-   at once: a run-now start runs every record with `dt = 0` inside the call, a run-later one waits
-   for the next slice.
+   unit's values as its opcode runs (a `SET ACTIVATION` that changes the value starts `Activate`
+   or `Deactivate` at the end of that VM call, so it first runs at the next slice);
+3. **the units' work** (`advance`), which reads the committed values: a builder in range takes its
+   job, but credits work only once its INBUILDSTANCE is set; a structure finished this tick whose
+   FBI has ActivateWhenBuilt is switched on at once; a reclaimed one leaves the host;
+4. **the calls of the units' turn**, unit by unit in creation order: a builder whose work target
+   changed (a new job, or its job finished, reclaimed or gone) starts StopBuilding for the old one
+   and StartBuilding for the new one, both run-later; then a mobile unit that stepped this tick
+   after standing starts StartMoving and MoveRate1, and one that stood after stepping StopMoving,
+   both run-now. A run-now start runs every record with `dt = 0` inside the call; a run-later one
+   waits for the next slice.
+
+A builder's work is identified by its target's id and by the `serial` of the order it came from
+(`WIKIORDER.serial`, `sim.js`'s order object), so an order taken away and replaced by an equal one
+still ends the old work.
 
 A unit's `get`s are answered from its **facts**, which the simulation hands the host with every
 call that can run script code (the slice, a run-now start): every unit's id, owner, position,
@@ -234,23 +262,70 @@ mockup's server, `tools/wiki/serve.py` (the repository served as `tools/hudart/s
 plus `POST /cob`), which loads the host and the core through ctypes, built by tacob's native
 builder. Under node (`simcheck.mjs`, `simparity.mjs`) the host is `tools/wiki/cobhost.mjs`: a
 worker thread that talks to `serve.py --stdio` while the caller waits on an `Atomics.wait`, so the
-checks call it synchronously as the page does. Without a host (`ctx.cob` absent, `WIKISIMCTX.cob`
-NULL) every type is quarantined (below): the rule cases that test no script play exactly as before.
+checks call it synchronously as the page does; `forPack` takes every type's script from one gfx
+pack, `forPacks` each from the first of several that holds it. Without a host (`ctx.cob` absent,
+`WIKISIMCTX.cob` NULL) no unit runs a script and every gate reads open, as for a quarantined type
+(below), so the rule cases that test no script play no script. The page
+(`tools/wiki/mockup/cob.js`, `cobPage`) asks the host for the scripts of the gfx pack its stage
+draws; served any other way, or with no pack built, the request fails and the page plays the demo
+without scripts, saying why in the console, as it says a quarantined type's note.
 
 **Where the scripts come from.** The DLL takes each type's script from the wiki's asset load,
-which already resolves `scripts\<UnitName>.COB` by the engine's rules (`tagpu_wikiasset.c`). The
-mockup's packs carry the same bytes: `gfx.py` writes each unit's script and its model's piece
-facts beside its mesh (gitignored, like everything derived from the game), and `serve.py` and
-`wikitest.c` read them from the pack. A type's model gives the host its piece count (the
-`Object3do`'s primitives, `0x45AE80`) and each primitive's initial flags (`0x45AF1B`: visible only
-with three or more vertices), in the posed model's order -- the COB's piece order, after
-`0x45A950`'s swaps (`tagpu_cobscan.c`).
+which resolves `scripts\<UnitName>.COB` by the engine's rules (`tagpu_wikiasset.c` `unit_script`):
+the bytes are kept in the arena with the posed model's primitive count and each primitive's
+visible flag (`WIKI3DUNIT` `script`, `nscript`, `pieces`, `visible`). The posed order is
+`tagpu_cobscan_posed`: the engine's order for a new unit (`0x45AEC0`), then `0x45A950`'s swap for
+every COB piece below the primitive count; a primitive is visible with three or more vertices
+(`0x45AF1B`). The load's report carries it as `posed`, which `tools/wiki/assetcheck.py` holds equal
+to its Python reference and to `gfx.py --resolve-json` (`gfx.py` `posed_order`). The mockup's packs
+carry the same bytes: `gfx.py` writes each unit's script beside its mesh with its posed order and
+visible flags (`units/<type>.cob`, the mesh's `script`; gitignored, like everything derived from
+the game), which `serve.py` reads, and `wikitest.c` takes a list of the same files (`demos … COB`,
+`trace FILE COB`).
+
+**No demo starts before the scripts' answer.** The 3D load publishes a three-state answer,
+`tagpu_wiki3d_answer` (`WIKISIDE_PENDING`, `_READY`, `_REFUSED`, by one interlocked store, as the
+sidebar's), and `tagpu_wiki.c` `scripts_now` makes a demo, Try it and the parity check
+`tagpu_wiki.check` wait for it as they wait for the layout: a demo's units have their scripts
+from tick 0 or never. A refused or never-started load plays every unit without a script.
 
 **The quarantine** (decision 9): a type whose script the program validator refuses, or one whose
 unit's VM faults, is quarantined for the simulation's life -- every unit of it drops its VM, stands
 in the pose `Create()`'s hides give today, reads every gate as open (INBUILDSTANCE, ACTIVATION,
-YARD_OPEN set), and the host names the type, the script, the pc and the reason once. A
-quarantine is part of the state hash, so both simulations must quarantine alike.
+YARD_OPEN set). A type with no script, or whose model gives no pieces, is quarantined the same
+way at the host's making. The host keeps the type's first refusal as its note
+(`tagpu_wikicob_note`): the call that met it -- the program, `Create`, a script by name, the
+slice, or "no script" -- and the reason the core gave. The game's check logs it with the type's
+name (`wiki check: <entry>/<demo>/<side>/<iface> <TYPE>'s script is quarantined - <note>`), the
+page's console prints it, and `simcheck.mjs` fails a play with scripts on any note. A quarantine is
+part of the state hash, so both simulations must quarantine alike. The pc is not in the note,
+where decision 9 asks for it.
+
+**The demo's wait** (decision 10). A demo input `{"at", "until": "idle", "max"}` holds the demo's
+**clock** -- the tick its inputs, trips and `end` are written in -- at `at` until no unit of the
+player's holds a build or reclaim order, at most `max` ticks (an integer 1 to 3600,
+`WIKI_UNTIL_MAX`, `sim.js` `UNTIL_MAX`); one tick past it the demo stops, `stalled`. The wait
+carries no other key and shares its tick with no other input; both simulations refuse a demo that
+breaks either (`sim.js` `make`, `tagpu_wikidata.c` `input` and `tagpu_wikisim_init`). The
+simulation's own tick runs on under a wait. The view gains `clock`, `waiting` (the state a wait
+holds the clock for), `stalled` and `cob` (the host's hash halves), and the state hash appends the
+clock, the wait, `stalled` and the host's hash (`tagpu_wikisim.h`, item 8).
+
+- **Every Quick Build demo ends on its work done**: after its last input `gen-quickbuild.mjs`
+  writes a wait (`WAIT_MAX` 1800 ticks) and then 60 ticks of tail (`TAIL`); *The best extractor
+  that fits* also waits between its two clicks. How long a side's builder takes -- its walk, its
+  script's stance, the build -- is then the demo's own, and no tail is sized for the slowest mod.
+- **The Build Lines demos keep fixed tails.** With the scripts, stock's ARMCK takes about 268
+  ticks a queued piece: its script finishes closing its nanolathe (about 5 s) before it opens it
+  again (about 2.6 s) on every StopBuilding and StartBuilding between two pieces, so waiting for a
+  whole line would run for minutes. The tails of *Click and Shift-click*, *Filled rectangle* and
+  *Ring around a building* are 300, 480 and 420 ticks, long enough for the pieces their claims
+  read finished, and `simcheck.mjs`'s rectangle claim needs two pieces built in order where it
+  needed six.
+- **The scripts run at game speed while the builds run at the entry's pace** (`"pace"`), so a
+  script's animations take their game time while a build fills N times faster: Quick Build's
+  *Queue several with Shift* plays 1054 ticks with the scripts and 570 without (MEASURED
+  2026-10-28).
 
 **Drawing.** The stage already draws units through the game's posed program with a pose array per
 piece (`tagpu_wikiworld.c`, 12 floats a piece, with per-piece visibility and shade); the PrimitiveStructs
@@ -264,8 +339,8 @@ The mockup does the same in `gfx.js` with the poses the server answers.
 |---|---|---|
 | **L1** — built 2026-10-27 | `tagpu_cobvm.{c,h}`: the core on the layout above, the host interface, the effect log, the observer; the shared extension functions factored out of `tagpu_patches.c`; tacob on the core through ctypes, **its Python VM deleted**, `tacob-build.py` cross-compiling it; the reentrancy check | the nine fixtures byte-exact through tacob on the core; `test_tacob.py`; native tests of the core under UBSan and ASan; the layout's static asserts; the DLL builds |
 | **L2** — built 2026-10-27 | live cobtrace + posedump fixtures for the wiki's units doing the wiki's actions — ARMCK and ARMACK walking, starting, assisting and stopping a build, reclaiming; ARMMEX and ARMMOHO built, activated, spinning at a set metal value; ARMGEO activating; ARMPW walking — and one exercising the extensions (records 9 and 10, the getters) | each fixture byte-exact through the core |
-| **L3a** | the host (`tagpu_wikicob`), the calls and the gating in both simulations, the facts, the quarantine, `until` waits and the 11 demos converted, the mockup's server and node host, the scripts in the packs | `simparity.mjs`, `simcheck.mjs` (every demo's claim with the scripts running), `wiki_regression.py` |
-| **L3b** | poses drawn: the posed model's order, the core's PrimitiveStructs composed in the C stage and in the mockup | a look at every demo in game and in the mockup; the stage's checks |
+| **L3a** — built 2026-10-28 | the host (`tagpu_wikicob`), the calls and the gating in both simulations, the facts, the quarantine, `until` waits and the 11 Quick Build demos converted, the posed order in the DLL's asset load, the three-state 3D answer the demos wait for, `activatewhenbuilt` through every reader, the mockup's server and node host, the scripts in the packs | `simparity.mjs`, `simcheck.mjs` (every demo's claim with the scripts running), `wiki_regression.py` |
+| **L3b** | poses drawn: the core's PrimitiveStructs composed over the posed order in the C stage and in the mockup; until then the stage draws every unit in its rest pose with `Create()`'s hides | a look at every demo in game and in the mockup; the stage's checks |
 | **L3c** | the corpus gate: every compatibility setup's scripts through the host, a refusal named | the gate itself, clean over every setup |
 | **L4** | the nano spray and `emit-sfx`: the engine's emitters ported, the wiki generator, drawn through the stage's instance of the particle draw | the spray's look against a game capture of the same build |
 | **L5** | sound: the mixer, the triggers, the cooldowns, WebAudio in the mockup | a demo heard in game and in the mockup; the player's settings honoured; an MP game's own sounds unchanged with the wiki open |
@@ -273,7 +348,45 @@ The mockup does the same in `gfx.js` with the poses the server answers.
 L1 and L2 touch `tagpu_cobvm.*`, `tagpu_cob_safe.*`, `tagpu_patches.c`, `tools/tacob*` and the
 fixtures — no file the sidebar's landing touches.
 
-### Gaps L1 leaves open
+**L3a's gate**, MEASURED 2026-10-28 on the reference setup:
+
+- `simparity.mjs`: every demo played through both simulations with the scripts and without
+  (1008 plays) and the 47 rule cases equal tick for tick, natively (AddressSanitizer and
+  UndefinedBehaviorSanitizer) and the i686 build under Wine; `--hash --scripts` prints each
+  demo's hash with the scripts, `--try` takes a dump's `ctx.cob`.
+- `simcheck.mjs`: every demo and rule passes with and without the scripts (the `+scripts`
+  contexts), with and without the sidebar, and on all six mod packs (stock, ProTA, Mayhem, TA
+  Zero, Twilight, Escalation) with each mod's own scripts (`--pack` takes the mod's stage packs
+  first); no wait ran past its max and no type was quarantined.
+- In game (`wiki_regression.py <instance> wikicob demos --launch`, a private Xvfb at 1920 × 1080):
+  `wiki check: 84 demos played, 0 did not start` in 89 ms with the units' scripts on, all 84
+  hashes (both sides, both Interface Types, stock castings) equal to `simparity.mjs --hash
+  --scripts`; Quick Build's *Queue several* and *The best extractor that fits* at 30.0 ticks a
+  second at 1×, 60.2 at 2×; the page cost the game thread at most 0.358 ms in a frame over 1222
+  frames. `try --launch` passed (166 s); `asset --launch` passed, the load in 245.8 ms, an arena
+  of 594 049 bytes, 18 of 18 unit types resolved, the report equal to the native load's.
+- The host's slice over a demo's units costs about 70 µs (2 ms for 30 slices).
+- `tools/test_cobvm.py`'s `WikiHost` tests: no writable static in the host, two hosts on two
+  threads, the quarantines, `SET ACTIVATION` through the setter's rule.
+
+### Gaps open
+
+- **The stage does not draw the poses** (L3b). The scripts run and gate the builds, but every unit
+  is still drawn in its rest pose with `Create()`'s hides: a kbot's legs, a nanolathe, an
+  extractor's arms do not move on the stage.
+- **The corpus gate is not built** (L3c): no compatibility setup's scripts have been run through
+  the host beyond the six packs' stage units, which `simcheck.mjs --pack` plays without a
+  quarantine.
+- **GET answers what the wiki has**: PIECE_Y, UNIT_Y, UNIT_HEIGHT and GROUND_HEIGHT are 0,
+  PIECE_XZ is the unit's own point and XZ_ATAN leaves out its heading (the facts carry none); an
+  angle can differ from the engine's by one unit at a rounding boundary.
+- **A `SET ACTIVATION`'s `Activate` first runs at the next slice**; the engine starts it inside the
+  opcode, so a record after the current one may run it in the same pass [not established in the
+  engine: the runner's walk `0x4B0DA0` was not read for new records].
+- **The quarantine note carries no pc**, where decision 9 asks for one.
+- **tacob still names two StartBuilding parameters**: the editor's default call passes the one
+  word (`tacob-edit.html` `argsFor`), but `tools/tacob`'s `PARAM_NAMES` names `heading` and
+  `pitch`, and its `ENGINE_STARTS` row cites the factory's `0x48B14E`/`0x48B169` for it.
 
 - **The core's files are not `sim`.** `tagpu_cob_safe.c` holds rules the game's simulation runs
   (the step guard, the getters, the parent's pops, the attachment bound), but `thread-split.allow`
@@ -301,10 +414,30 @@ fixtures — no file the sidebar's landing touches.
   corrects it; a reclaim runs the same script traffic as a build, `StopBuilding` included;
   `QueryNanoPiece` runs after the unit's own script slice (its callers are the order handlers),
   which tacob's replay table had wrong. The extractor's `SetSpeed` value is in the traces (`2016`
-  ARMMEX, `2352` ARMMOHO on the 223-metal patch) but not yet derived.
-- **L3**: when the engine calls `StopBuilding` on an assist; the MoveRate thresholds; the
-  extractor's `SetSpeed` value as a function of the metal under it; the order in which the
-  builder's code reads INBUILDSTANCE against its own tick.
+  ARMMEX, `2352` ARMMOHO on the 223-metal patch), derived in L3.
+- **L3** (answered 2026-10-28, the engine map's *The scripts a unit's work starts*, DISASSEMBLED):
+  - **StopBuilding** of a mobile builder comes only from the order node's destructor
+    (`0x43A251`), exactly when StartBuilding was started for that node: in the same controller
+    call as the step that finishes a build; for an assist, in the tick the assister sees its
+    target finished, whoever finished it, and **never** when the target was finished before the
+    assist's StartBuilding; on a cancel, only once StartBuilding has been started. Between two
+    queued builds the engine carries no stance over: StopBuilding for the first, then the second
+    node's walk, then its own StartBuilding. The factories' StartBuilding/StopBuilding is the state
+    setter's (`0x48B14E`, `0x48B169`), which the calls table above wrongly gave for every build.
+  - **The MoveRate thresholds** are FBI `moverate1` and `moverate2`, absolute, by default 2 ×
+    MaxVelocity (`0x42C1E6..0x42C225`): a unit that never passes twice its MaxVelocity starts
+    StartMoving then MoveRate1 and nothing more.
+  - **The extractor's `SetSpeed`** is Σ (cell metal + 1) over the footprint cells on the map, kept
+    as a sign-extended 16-bit word, sent once at the create (`0x437840`); ExtractsMetal does not
+    enter it. 2016 and 2352 follow.
+  - **INBUILDSTANCE against the builder's tick**: the stance wait `0x438700` is read in the order
+    controller, after the unit's slice, and the handler's states chain inside one controller call,
+    so a script's `SET` is seen in the tick it runs and the first progress is added in that tick;
+    a stance left set by the previous build starts progress at once. No build order tests the
+    builder's heading: the script turns and sets the stance.
+  - **ActivateWhenBuilt** is def `+0x241` bit 18, the FBI key's `and 1` (`0x42C6B9..0x42C6DE`),
+    and the only reason the engine switches a finished structure on (`0x41B9A6`) or one made whole
+    (`0x48612F`).
 - **L4**: the nano emitter (spawn rate, velocity, lifetime, colour, how its randomness is drawn) and
   `emit-sfx`'s types, from `effects.md` and `build-state.md` and disassembly.
 - **L5**: every caller of `0x47F0C0` / `0x47F1A0` / `0x47F300` for the events the wiki has, the
