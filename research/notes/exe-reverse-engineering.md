@@ -11495,8 +11495,16 @@ into an attack target and resume from it, since the sprite still moves `pos`.
 5,5, so the route dots' per-dot frame step `0x4394E0` takes changes nothing on stock data and the
 march is the 48-unit phase alone. `cursormove` is eight 8-tick frames, so at the sprite's
 `(gameTime / (2·8)) % 8` it cycles in 128 ticks, 4.3 s — half the speed of the same sequence as
-the mouse cursor, which steps each frame after its own 8 ticks (`0x4B8BF0`). The sprite's
-`AlphaCompsteBuf2OFFScreen` blend is a 50 % mix: `palettes\PALETTE.ALP` at `[src·256 + dst]`
+the mouse cursor, which steps each frame after its own 8 ticks (`0x4B8BF0`).
+
+**The waypoint sprite is translucent, every pixel of it; the route dots are solid**
+[DISASSEMBLED 2026-10-27]. `0x4399BB` calls `AlphaCompsteBuf2OFFScreen 0x4B8500`. Every
+`cursors.gaf` frame is RLE (`+0x09` = 1), so it takes `0x4B86AA call 0x4CC057` with the table
+`[prog+0xC0]` (`0x4B8691`), the ALP table. That loop writes BOTH run kinds through it, as
+`dst = table[src·256 + dst]`: repeat runs at `0x4CC156..0x4CC167` and literal runs at
+`0x4CC17F..0x4CC18C` and `0x4CC1A4..0x4CC1B1`. Only transparent runs skip. The dots go through
+`CopyGafToContext 0x4B7F90`, and `pathicon`'s sub-frame byte `+0x0B` is 0, so they never take its
+composite branch (`0x4B7FF7`) and are copied opaque. The ALP blend is a 50 % mix: `palettes\PALETTE.ALP` at `[src·256 + dst]`
 lands within 20 RGB units of the palette colour nearest the half-and-half mix for 57 % of 300
 random pairs, against 14–15 % at a 25/75 weight either way round [MEASURED 2026-10-27; the misses are palette
 quantisation].
