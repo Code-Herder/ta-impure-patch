@@ -401,7 +401,7 @@ static int cmd_fuzz_hpi(int argc, char** argv)
             const uint32_t sz = tagpu_hpi_size(a, e);
             unsigned char* out;
             if (tagpu_hpi_is_dir(a, e)) continue;
-            if (sz > TAGPU_HPI_FILEMAX) { tally("a file past the reader's bound"); ok = 0; continue; }
+            if (sz > TAGPU_HPI_READMAX) { tally("a file past one read's bound"); ok = 0; continue; }
             if (!(out = (unsigned char*)malloc(sz ? sz : 1))) continue;
             why[0] = 0;
             if (!tagpu_hpi_read(a, e, 0, sz, out, why, sizeof why)) { tally(why); ok = 0; }
