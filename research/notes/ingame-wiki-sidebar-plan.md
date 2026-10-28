@@ -1,12 +1,13 @@
 # The in-game wiki's stage with the game's left sidebar, planned
 
-**Written** 2026-10-27, before any of it is built. The specification is still
-[the in-game wiki](ingame-wiki.html) and its mockup, which stays the 1:1 spec of the DLL wiki: every
-decision below lands in the mockup first. Engine facts carry their address and how they were
-established; the ones marked *scout* come from a read-only disassembly and archive census
-(2026-10-27) and are re-verified by the landing that first relies on them. Like the 3D stage's
-plan, this file is folded into the wiki's note, `gpu-status.md` and `roadmap.md` when the work
-closes, and then deleted.
+**Status (2026-10-27): decisions 1 to 12 are built** on the wiki's worktree branch, not landed.
+What they became is [the in-game wiki](ingame-wiki.html), *The left sidebar on the stage*, which
+is the specification now. The engine facts are the engine map's [*The left sidebar: its pages,
+its buttons and who takes a
+press*](exe-reverse-engineering.html#the-left-sidebar-its-pages-its-buttons-and-who-takes-a-press-disassembled-measured-2026-10-27),
+where every scout fact this plan rested on was re-read. **Decisions 13 to 19 are the next
+landing's**, and this note stays until that landing closes. Then it is folded into the wiki's
+note and `roadmap.md` and deleted.
 
 ## The owner's decisions (2026-10-27)
 
@@ -81,61 +82,60 @@ build carries no `+N` caption (its count is 0), and the main screen's KILLS/LOSS
 have no writer. The side's art (ARM or
 CORE) follows the side of the player's units.
 
-## The engine facts this rests on (scout, to re-verify)
+## What was built, and where it departs from the decisions
 
-- **The sidebar, top to bottom**: the minimap at (0,0), 128 x 128; the side's `PANELSIDE` art in
-  one blit (`0x467D70`), from `gamedata\sidedata.tdf` `[SIDE%d] intgaf` (`0x429E9E..0x429FE1`); the
-  top GUI screen at (0,128). Nothing in the exe scales the panel; the world viewport is fixed at
-  left 128, top 32 (`0x4981C9..0x498237`).
-- **The page router** `0x41B2E0` (one caller, `0x4969B4`): a single builder with pages opens
-  `"%s%d.GUI"` through `0x41ACE0` (one call, `0x41B83A`); any other selection `%sGEN.GUI` through
-  `0x41B0F0`; nothing selected `<prefix>MAIN2.GUI` (`0x497BA4`).
-- **Build pages are shipped files**, one set per builder; the engine never generates one from
-  `CANBUILD`. Page count: the def load probes `guis\<NAME>0.GUI`, `1`, ... into `def+0x22E`
-  (`0x42D800..0x42D8CB`); download units raise it to their `MENU` (`0x42DF60..0x42DFB4`) and fill
-  gadget `BUTTON+4` of page `MENU-1`, or `%sDL.GUI` when the page file is missing (`0x41ACE0`).
-- **The .GUI sections are read by position** (`0x4AEAC0` through `0x4C3490(i)`), and retail pages
-  repeat section names (`GADGET2..6` in `ARMCK1.GUI`): **`tagpu_tdf`, which merges sections of one
-  name, cannot read them as written**. The wiki needs a positional reader.
-- **Pictures**: the panel's `panel=` in `anims\<screen>.GAF`, then commongui, then `BackTile`
-  (`0x4A85C9..0x4A8658`); a button's in `anims\<PAGE>.GAF` by gadget name, then commongui
-  (`0x4A8BA1..0x4A8BF7`); download slots `anims\<NAME>_gadget.GAF` (`0x4A83E2..0x4A84D8`).
-  `unitpics\*.PCX` is not the stock build-menu picture (its string `0x505FE4` has two users,
-  RESTRICT2 and UNITINFOx).
-- **Frames** (`GUI_ButtonDraw 0x4A5F40`, `0x4A6071..0x4A616D`): 0 normal, 1 pressed, 2 greyed.
-  The engine never marks the armed build type on the menu (`0x41AA00` sets `main+0x2CC3 = 0x0E`,
-  `main+0x2CC4 = type` and plays `addbuild`, `0x41AB89..0x41ABA3`).
-- **Paging**: PREV/NEXT/ORDERS/BUILD by substring into `main+0x37EBE`/`0x37EBF`; `0x41C180` (from
-  `0x4992CD`) calls NEXT `0x41BDE0` or PREV `0x41BF10`; the page is `unit+0x110` bits 23..25 (bit
-  22 = has a page), wraps at `def+0x22E - 1`, starts at 1 (`0x485CD5`); a page swap reloads the
-  screen file.
-- **Sizes by setup** (measured from the archives): retail pages 128 x 352, 2 x 3 grid with tabs;
-  Escalation, Mayhem, ProTA 128 x 640, 2 x 6; TA Zero 128 x 640 templates and 128 x 768 panel art;
-  `MAIN2` 128 x 352 everywhere. Mayhem and ProTA ship empty page GAFs (their pictures come from
-  somewhere else, [INFERRED] their DLLs).
+The work ran in two phases.
 
-## The landings (a first cut; re-cut as the work learns)
+- **Phase 1, the mockup's sidebar**, the specification:
+    - the positional .GUI reader and the picture rule in `tools/wiki/` (`tavfs.py`; `gfx.py
+      --side-only`, written per installed mod by `sidepacks.py`);
+    - the router, the buttons, the minimap and the build trip in `sim.js`, and the column's
+      composer `side.js`;
+    - the wiki's own build column retired, the maps at 40 × 30 and the demos re-timed.
 
-1. **The mockup's sidebar**, the spec: a positional .GUI reader and the picture rule in
-   `tools/wiki/` (`tavfs.py`, `gfx.py` packs per installed mod), the page router, the minimap, the
-   pressed/greyed frames, the `build` input's trip, the column retired, the maps at 40 x 30 and the
-   demos re-timed, with `simparity`, `stagecheck` and `wikilaycheck` kept equal. The owner reviews
-   it in the browser before the DLL copies it.
-2. **The DLL reads the sidebar**: the positional reader and the picture rule in the wiki's asset
-   loader, into the immutable arena; the folder names a mod renames (gui, gamedata, unitpics,
-   download) added beside the existing ones.
-3. **The DLL draws it**: the stage layout widened, the sidebar's ops, the minimap, the demo trip
-   and the pressed frame; the hit map takes the sidebar's buttons in Try it.
-4. **Every mod checked in game**: the compat setups' live sidebars captured and compared; TA Zero's
-   research and its answer.
+    The composed column was compared with each compatibility setup's own sidebar, captured in the
+    game. The rule was corrected where a setup drew otherwise, until all six matched.
 
-## What this plan does not know yet
+- **Phase 2, the DLL**:
+    - the layout's C struct and its one check (`WIKILAYOUT`, `tagpu_wikilayout_check`);
+    - the sidebar in `tagpu_wikisim.c`, bit for bit with `sim.js`;
+    - the running mod's sidebar read on the asset loader's thread into one immutable block, with
+      the folder names a mod renames copied on the game thread;
+    - the column in the stage's fit and ops and composed as `side.js` does (`tagpu_wikiside.c`,
+      held to it by `sidecheck.mjs`);
+    - the whole wired into the game: the demos wait for the loader's answer, `tagpu_wiki.check`
+      writes the layout it played on, a demo that cannot reach its build stops under the badge, and
+      Try it arms through the stage's sidebar.
 
-- Where Mayhem's and ProTA's build pictures and their GUI folders come from at run time.
-- How TA Zero places its `ZBuildMenu` units.
-- Whether the engine keeps duplicate-named .GUI sections in practice (the file order says so; not
-  measured live).
-- Which sidedata key fills the side prefix at `main+0x37F5B` (the file names suggest `nameprefix`).
-- What `0x491D70` does ([INFERRED] the pop back to `MAIN2`).
-- The pager rows' and orders' exact positions per mod, beyond the census parser (33 ProTA .GUI
-  files failed it; the engine's own reader was not run on them).
+**Where the build departs from the decisions as written:**
+
+- **Decision 2's builder** is a *mobile* builder of the player's (MaxVelocity > 0, WorkerTime > 0).
+- **The player's side** is taken from the wiki's first entry's units, since the stage has no
+  PlayerInfo. Decision 17 replaces it.
+- **The stage plays the right-click interface.** Decision 18 replaces it.
+- **A press off the routed screen.** On the minimap, the column's rows outside the screen, or the
+  band under a short map, a press follows the engine's rule for a press outside the GUI's window:
+  a right press cancels an armed building, and an armed left press places it once at the cursor
+  clamped onto the map. The engine map's *What each Interface Type does with a press* is the
+  measured table.
+
+## What the scout got wrong, corrected when the work re-read it
+
+- **Mayhem's and ProTA's download folders.** Their loaders point it at `downloadsM` and
+  `downloadP`, which neither ships, so both load no download entries; neither reads retail's.
+- **Mayhem's and ProTA's build pictures.** They are not `unitpics` PCX files drawn by their DLLs.
+  The pictures are in each mod's own `commongui.GAF`, under the gadget's name, which is the
+  engine's second lookup, after the screen's own GAF. MEASURED from the packs `gfx.py` resolves.
+  Their pages are read from the folders their loaders rename (`guiM`, `guiP`).
+- **Mayhem's patch at `0x419CFE..0x419D4E`** lies in the ATTACK branch, not STOP's.
+- **TA Zero's `ZBuildMenu`.** Only its `_a`/`_d` files lack `MENU` and `BUTTON`. Its `_h` files
+  fill its template pages by the stock rule, which no TA Zero file patches.
+
+## What is still not known
+
+- Whether a mod that patches one of the format strings (`%s%d.GUI`, `%sDL`, `_gadget`) exists.
+  None of the six setups does.
+- The archive pattern Mayhem's and ProTA's loaders rewrite (`0x5028CC`), not read live.
+- What STOP does with Shift held, and the rest of the order resolver's case for order type 1
+  (`0x43F9E9`).
+- The cursor over the column, which no capture compared.

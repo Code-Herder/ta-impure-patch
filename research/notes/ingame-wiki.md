@@ -20,7 +20,10 @@ walk or work, buildings rising in the nanoframe, translucent ghosts at the curso
 sites; a type the running game does not have stays the whitebox's box ([the 3D stage's
 plan](ingame-wiki-3d-stage-plan.html), landings 6g and 6h). Under each supported mod the stage
 draws the mod's own files, read in the running game's order ([below](#the-3d-stage-under-the-mods),
-landing 6i).
+landing 6i). Beside the map the stage shows the running mod's left sidebar, its minimap and the
+page the engine would show, and its build menu is the only one: a scripted build is the cursor's
+trip to the button, and in Try it yourself the player presses it
+([below](#the-left-sidebar-on-the-stage), [the sidebar plan](ingame-wiki-sidebar-plan.html)).
 
 | What | Where |
 |---|---|
@@ -41,6 +44,10 @@ landing 6i).
 | The stage in the DLL | `tagpu/ddraw/src/tagpu_wikistage.c`: a view copied by value, built into HUD ops, each tagged with its range; `tagpu_wikiscene.c`: the ground's cells, feature quads and fog grid; `tagpu_wikiworld.c`: the 3D stage's producer for the wiki's copies of the world passes — [GPU status](gpu-status.html) §2.12d |
 | The 3D ground's check, C against the mockup | `node tools/wiki/scenecheck.mjs`, with `tagpu/ddraw/tests/wikiscenetest.c`; in the game, `tools/wiki/stage3dcheck.py` over `wiki_regression.py stage3d`'s captures |
 | The stage's check, C against `stage.js` | `node tools/wiki/stagecheck.mjs`, with `tagpu/ddraw/tests/wikistagetest.c` |
+| The sidebar's fallback layouts | `art/wiki/side/fixture.json` (480 rows) and `fixture-tall.json` (768 rows), synthetic |
+| The sidebar in the mockup | `tools/wiki/mockup/side.js` (the column's composer); `sim.js` (the layout's check, the router, the buttons and the build trip); each installed mod's pack under the gitignored `tools/wiki/mockup/gfx/side/<mod>/`, written by `tools/wiki/sidepacks.py` through `gfx.py --side-only` |
+| The sidebar in the DLL | `tagpu_wikiasset.c` (`tagpu_wikiside_load`, the reading) over `tagpu_guifile.c` (the .GUI files by position); `tagpu_wikiside.c` (the composer); the router and the buttons in `tagpu_wikisim.c`, the column's ops in `tagpu_wikistage.c` |
+| The sidebar's checks | `node tools/wiki/sidecheck.mjs` (with `tagpu/ddraw/tests/wikisidetest.c`); `python3 tools/wiki/assetcheck.py --side`; `tools/wiki/sidedump.mjs` (a pack's column for a state, as a PNG) and `tools/wiki/sideview.mjs` (`sim.js` at a game dump's state) |
 | The window in the game | `tagpu_wiki.c` (input, pause, the page's state and the demo's simulation; game thread), `tagpu_wikistate.c` (`tagpu_wikilay.c` and `tagpu_wikistage.c` on the record) and `tagpu_vk_hud.c` (drawing; render thread) — [GPU status](gpu-status.html) §2.12c |
 | The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|try|recorded|asset|stage3d|units --launch`, `tools/wiki_regression.py <name> mp`, `tools/wiki_regression.py all mods --shots DIR` (the 3D stage under each supported setup: [below](#the-3d-stage-under-the-mods)); `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's; `units --shots DIR` does the same with the units, then the facing, the `nounit=` lever, the render thread's time and a reclaim in the game; `try` replays two demos through Try it yourself's stage as device input and holds the game's simulation to `simparity.mjs --try` |
 | Serving it | `python3 tools/hudart/serve.py`, then `http://127.0.0.1:8000/tools/wiki/mockup/` |
@@ -156,7 +163,9 @@ A whitebox of the game's own view, so a demo reads as what the player will see:
 - a placement gesture's sites as TA's build square in the site's colour (green placed, red refused,
   yellow takes a queued order off) over a translucent ghost of the building, as the game's Vulkan
   path draws a ghost at each site, with the site's place among the orders the release adds small in
-  its corner (the game draws no number; the mockup does, so the queue order can be read).
+  its corner (the game draws no number; the mockup does, so the queue order can be read);
+- the running mod's left sidebar beside the map, its minimap and the page the engine would show
+  ([below](#the-left-sidebar-on-the-stage)).
 
 **How it is drawn.** `tools/wiki/mockup/stage.js` draws one view of `sim.js` into a 2D canvas; it
 runs in the page, where `wiki.js` calls it, and under node. The DLL's `tagpu_wikistage.c` builds the
@@ -281,6 +290,7 @@ A strip above the stage, outside the game frame:
 | Try it | Try it yourself on that demo's scene | `try` |
 | Rewind button | shown (a live recorded skirmish) or absent | `rewind=1` / `rewind=0` |
 | Skin | the kit, or the flat whitebox | `skin=kit` / `skin=whitebox` |
+| Sidebar | the detected mod's pack (the fixture where it has none), the fixture, the 768-row fixture, or none | `sidebar=mod` / `fixture` / `tall` / `off` |
 | Graphics | the stage's whitebox, or the stage in 3D from `gfx/`, supersampled `ss` times (default 2) | `gfx=whitebox` / `gfx=game`, `ss=2` |
 
 Behind the window: the replay HUD mockup's backdrop (`research/notes/assets/hud-art/backdrop.png`),
@@ -312,6 +322,7 @@ they were not re-disassembled for this table.
 | Order lines | TA draws no lines. It draws marching route dots in the `pathicon` ink, a waypoint sprite, target circles and range circles. | `tagpu_order.c` `draw_dots`, `draw_sprite` (a crosshair in place of the GAF sprite), `draw_circle`, `draw_ranges` | The whitebox's dashed lines, over the image |
 | Construction progress | The unit's build fraction: unit `+0x104`, the fraction remaining, staged as the engine's nano frame (`0x458D30` / `0x458DD0`) | `tagpu_render3do.c` `tagpu_r3d_nano_state` stages it; the unit shader in `tagpu_native.c` applies it, and the wire is `tagpu_posedraw.c` `pd_record`. A unit being reclaimed is not a nanoframe: the engine's reclaim lowers its hit points and leaves `+0x104` alone (`exe-reverse-engineering.md`, *A reclaimed unit is never a nanoframe*). | `tagpu_r3d_nano_state` ported line for line (`scene.js` `nanoState`) into the same shader, then the wire, every face's outline, after every body. A unit being reclaimed is drawn finished, as the game draws it |
 | Cursor | `anims/cursors.gaf`, chosen by the engine's picker `0x43E490` into `main+0x2CBE` from `cursor_ary` (`exe-reverse-engineering.md`, the cursor table): `cursornormal`, `cursormove`, `cursorselect`, … | `tagpu_gui_surf.c` `tagpu_gui_cursor_frame` takes the frame from the packet; `sharp_cursor` draws it last in the UI's sharp layer. | The same frames from the player's `cursors.gaf` (`cursornormal` for the arrow and build placement, `cursormove` animating with a mobile unit selected), at the same size and hotspot, over the image (R2); the kit's icons where they did not resolve |
+| The left sidebar | The engine's own column: PANELSIDE, the minimap, the routed .GUI screen and its gadgets' GAF frames (the engine map's *The left sidebar*) | `tagpu_wikiside.c` composes the column the engine would show into `HUD_TEX_SIDE`, drawn by one `HOP_SIDE` op in the HUD pass (`tagpu_vk_hud.c`; [GPU status](gpu-status.html) §2.12c) | `side.js` `compose`, the same composer, from the mod's pack |
 | Keys strip | None: the game has no such strip | Only the wiki draws one, under its own stage: `tagpu_wikilay.c` lays out the keycaps of the keys the demo's view holds, drawn by the replay HUD's stack (`tagpu_huddraw.c`, `tagpu_hudtext.c`, `tagpu_vk_hud.c`). | Unchanged |
 
 **The three op ranges.** Everything `stage.js` draws belongs to one range ([the 3D stage's
@@ -400,12 +411,10 @@ where the plan's first version and the mockup differed.
   sends every member's up in that order; leaving Try it, a replay or a new selection empties it
   with the simulation it belonged to. A real press released off the window is let go at the first
   real move that carries its button up.
-- **No build menu.** The stage takes the row's full width, and nothing in Try it gives
-  `input({build})`, so no type is ever armed: the player selects, moves, and builds through Quick
-  Build's contextual ghost (a constructor selected, a deposit or vent hovered, a right-click), but
-  cannot place from a menu, draw a Shift line or grid, a Ctrl ring, or step the spacing with Alt+Z
-  and Alt+X. The game's own sidebar on the stage brings the build menu back
-  ([the sidebar plan](ingame-wiki-sidebar-plan.html)).
+- **The build menu is the stage's sidebar.** Nothing in Try it gives `input({build})`: a press on
+  the column is a press like any other, and the simulation's sidebar rules arm the building, page,
+  switch tabs or stop ([below](#the-left-sidebar-on-the-stage)). The pointer is clamped to the
+  stage's content rect, the column with the map, rather than to the map alone.
 - **The cursor**: exactly one on screen. In Try it the stage draws the simulation's cursor only
   while the player's pointer is over its canvas (`tagpu_wikistage_build`'s `cursor`, `stage.js`'s
   `o.cursor`), and the player's is hidden only in a frame whose stage cursor was drawn: the HUD pass
@@ -419,9 +428,11 @@ where the plan's first version and the mockup differed.
 - **The test**: `wiki_regression.py <instance> try --launch` gives `snap` and `line`'s inputs as
   device input on the stage, compares the paused simulation's state hash with `sim.js` fed the
   inputs the game logged (`simparity.mjs --try`), and checks the releases on Back to demo and on
-  close. Both demos arm a building through the build menu's `build:<type>` control, which the
-  page no longer draws, so `try` fails at (t1) until it presses the stage's sidebar instead.
-  `wikilaycheck.py` holds Try it's page to the mockup's (three Try it cases).
+  close. A demo's `build` is armed as a player arms it: PREV or NEXT the nearer way round, then
+  the building's button, each a release inside. It then pages, switches tabs and presses STOP on
+  the sidebar, and reads every step back from `sim.js` fed the logged inputs
+  (`sideview.mjs --dump`). `wikilaycheck.py` holds Try it's page to the mockup's (three Try it
+  cases).
 
 ## The 3D stage under the mods
 
@@ -470,6 +481,235 @@ running game reads that file from.
 - **Not measured**: Windows; a network game under a mod; any setup at another resolution. The
   figures are the stock game's whatever the mod (see *Gaps*), so under TA Zero the demos are
   whitebox units on the game's ground.
+
+## The left sidebar on the stage
+
+**The stage is a slice of the game's screen.** It shows the running mod's left sidebar, 128 game
+pixels wide, then the map, at one game pixel a world unit each, whatever the HUD scale. The
+column is:
+
+- the minimap's 128 × 128 square: the demo's map, the units' dots in their owners' colours and
+  the camera box, which is the picture's border because the stage shows the whole map. It is
+  never clickable (the owner's decision 6).
+- under it, the page the engine's router would show for the selection.
+
+Its build buttons, PREV and NEXT, the ORDERS and BUILD tabs and STOP work as the game's do.
+Every other order button is drawn greyed. The owner's decisions and what is still planned are
+[the sidebar plan](ingame-wiki-sidebar-plan.html). The engine facts are the engine map's [*The
+left sidebar: its pages, its buttons and who takes a
+press*](exe-reverse-engineering.html#the-left-sidebar-its-pages-its-buttons-and-who-takes-a-press-disassembled-measured-2026-10-27).
+
+### Which layout, and when a demo shows it
+
+- **The layout is the running mod's**, read from its files by the engine's rules (*What the DLL
+  reads*, below; in the mockup, the detected mod's pack). A mod's layout that is absent or
+  refused is replaced by the fixture, `art/wiki/side/fixture.json` (*The data format*, below).
+  With no layout at all there is no sidebar.
+- **A demo shows the sidebar** when its `sidebar` says so. By default it shows it when the scene
+  gives the player a mobile builder (owner 0, MaxVelocity > 0, WorkerTime > 0), which is every
+  one of the 21 demos.
+- **Try it yourself shows it** whenever the demo's scene gives the player one, whatever the demo
+  said.
+- **The sidebar is on or off for a simulation's whole life**, and the simulation keeps the layout
+  it started with.
+- **In the DLL a demo waits for the loader's answer** (`tagpu_wiki.c` `layout_now`). It starts on
+  the mod's layout once the asset loader has published it (`WIKISIDE_READY`), and on the
+  fixture once the loader has refused it or could not start. Until then the stage says
+  "loading…" and no demo starts, so none ever runs on a layout that arrives later. The parity
+  check and the capture trigger wait for the same answer.
+- **A simulation's refusal** (a layout, the build trip's data rule, memory) is shown on the stage
+  in its own words, up to 127 bytes (`TAGPU_WIKI_MSG`), as the mockup shows its `simErr`.
+
+### The rules
+
+`sim.js` and `tagpu_wikisim.c` hold them bit for bit. Every rule below is the engine's, cited in
+the code.
+
+- **Where the cursor is.** Left of x = 0 is the column. Then comes the map, closed at its far
+  edges. Below a map shorter than the column is the dead band. The map's rules read the cursor
+  clamped onto the map, so a box dragged onto the column selects up to the map's edge.
+- **The router.**
+    - Nothing of the player's selected: the side's MAIN2.
+    - Exactly one selected unit whose type has pages: its numbered page while its bit 22 is set,
+      else its orders page.
+    - Anything else, two builders of one type included: the side's GEN.
+
+    Each unit carries bit 22 (`bp`) and its page. A unit of a type with pages starts at page 1
+    with the bit set. The simulation routes after every input and every tick.
+
+- **Gadget states**: −1 not drawn, 0 normal, 1 pressed or the current tab, 2 greyed.
+    - The tabs follow bit 22.
+    - Every order button but STOP is greyed (decision 7).
+    - STOP is live while some selected unit of the player's has `canstop`.
+    - A build button is live only when the entry defines its unit and the shown builder's build
+      list holds it (decision 11).
+- **A press on the column goes to the sidebar only inside the routed screen's rect**, as the
+  engine's GUI takes a press only inside its window.
+    - **Which button takes it.** Where buttons overlap, the last release-acting button in file
+      order takes the press, and the first tab holding the point wins over every button. A greyed
+      or hidden gadget takes nothing.
+    - **When it acts.** A button acts on the release inside it, from either mouse button. A tab
+      acts on its press.
+    - **PREV and NEXT** step the shown unit's page, wrapping within 1..n, and set bit 22.
+    - **ORDERS and BUILD** clear and set bit 22.
+    - **A build button** arms its building, keeping the Shift-placement bit.
+    - **STOP** disarms, keeps the Shift-placement bit, and empties every selected unit's orders.
+- **A press off the screen and off the map** lands on the minimap, the column's rows outside the
+  screen, or the band.
+    - A right press there cancels an armed building and orders nothing.
+    - An armed left press there places the building once, at the cursor clamped onto the map, and
+      Shift keeps it armed. In the game the point is the view's edge; the stage shows the map where
+      the game shows the view.
+    - The band has no engine equivalent, and the same clamp is the nearest rule.
+    - The minimap stays inert.
+- **Off the map, the gesture's evaluation stands.** Its preview and its release are the shape the
+  map last showed, as the build cursor `0x4197D0` runs only over the viewport.
+- **The build trip.** A scripted demo with the sidebar plays `{ "build": T }` at tick t as the
+  cursor's trip to T's button. The inputs are generated when tick t is fed, and they take the
+  exact path a player's clicks take in Try it:
+    - a glide to the pager, then the pager presses the nearer way round, a tie going to NEXT;
+    - a glide to the button;
+    - the button's press at t + 45 and its release at t + 60, which arms T;
+    - a glide back, ending at t + 90.
+
+    The trip takes `WIKI_TRIP` = 90 ticks whatever the page or the mod, so the armed mode and
+    everything else in the world are the same in every mod at every tick; only the cursor and the
+    sidebar differ. Row k of `WIKI_TRIP_ROWS` is the trip through k pager presses, k ≤ 3. The glide
+    is exact in both languages: step i of n from a to b is
+    `a + trunc((b − a) · i²(3n − 2i) / n³)`, each axis.
+
+- **A build the layout cannot reach** stops the demo at that tick. The view's `locked` names the
+  type, and the stage holds the frame under the entry's "Turned off in this mod" badge
+  (decision 12). In TA Zero, whose sidebar has no page for the stock ARMCK, a demo stops at its
+  first build: tick 0 or 20 in Build Lines, tick 20 in the three Quick Build demos that arm one.
+- **Try it never sends `build`.** The player presses the sidebar. A simulation made with
+  `create`, simcheck's rule cases among them, keeps `build` as an instant arm.
+
+### How it is drawn
+
+- **The content rect.** With the sidebar, the stage's content is x ∈ [−128, map width) and
+  z ∈ [0, the taller of the map and the column), in world units. The map stays at the top, and
+  the band under a shorter map is only R0's background.
+- **The fit.** `tagpu_wikistage_fit(w, h, side_h, …)` fits that rect with the pad of 6 units. It
+  is the one function the render thread draws with and the game thread turns a click into a stage
+  point with. Without the sidebar it is the map's fit to the bit.
+- **Where the column's ops go.** They are a range of their own, `side` (`WIKISTAGE_IN_SIDE`;
+  `stage.js` `o.layer('side')`). The range is drawn after R0 and under the image, and it never
+  overlaps the map's rect.
+- **The whitebox column** is ops:
+    - a solid for the column, then the minimap's well;
+    - the minimap's cells in the ground's shades and its fog;
+    - a dot per unit and the camera box;
+    - the routed screen's panel;
+    - per drawn gadget, a solid, a ring and its label.
+
+    A greyed button is one group at opacity 0.45 (`WIKI_MAXGRP`, one a gadget, which the HUD pass's
+    group bound holds at compile time). A pressed button takes the pressed colour, with its label
+    moved one game pixel right and down. The colours are `stage.js` `SIDE_WB`, mirrored in
+    `tagpu_wikistage.c`.
+
+- **The game look**, used when the view runs on the mod's own layout, is one `HOP_SIDE` op. It
+  draws the column `tagpu_wikiside.c` composed into `HUD_TEX_SIDE`, sampled nearest, with a
+  whitebox button over each gadget whose picture is a label. A view on the fixture draws the
+  whitebox column, since the mod's pictures belong to the mod's gadgets.
+- **The composer** (`side.js` `compose`, `tagpu_wikiside.c` line for line) works in palette
+  indices, then through the mod's palette into RGBA. In order:
+    - palette index 0 over the whole column, as the engine clears its sidebar;
+    - PANELSIDE at (0, 0);
+    - the minimap: its base picture under the fog, the dots (`radlogo` frame by owner, and
+      `radlogohigh` over the unit under the cursor), then the box;
+    - the routed screen's panel, then each drawn gadget's frame for its state. A greyed gadget is
+      tinted as the engine tints it, and a held one-frame button draws no picture, as the engine
+      draws none.
+- **The minimap's extent is the stage map**, where the engine uses its scroll extent, which would
+  cut the stage's bottom rows off. Each stage's base picture is generated as `0x466780` generates
+  one, shrunk 2:1 through the mod's `PALETTE.ALP`.
+
+### What the DLL reads
+
+`tagpu_wikiside_load` (`tagpu_wikiasset.c`) runs on the asset loader's thread before the 3D load.
+It reads every file by the engine's path rule, the language's folder first, with a 0-byte file
+counting as missing:
+
+- `<units>\*.FBI`: `UnitName`, `Side` and `canstop`;
+- `<gamedata>\sidedata.TDF`: each side's `name`, `nameprefix` and `intgaf`;
+- `<download>\*.TDF`, read by position;
+- each player type's pages and orders page, their download fill, and each side's MAIN2 and GEN;
+- the pictures by decision 5's rule:
+    - for an order, tab or pager: `<anims>\<SCREEN>.GAF`, then commongui, then commongui's
+      generic picture;
+    - for a build button: the page's own picture by the engine's rule, then
+      `<anims>\<UNIT>_gadget.GAF`, then `<unitpics>\<UNIT>.PCX`, else a labelled button;
+- PANELSIDE;
+- `fx.GAF`'s dots;
+- the palette, its `.ALP` and `.SHD`, and `guipal`.
+
+A GAF is read only in the 64 KiB archive pages its lookups touch: Escalation's `fx.GAF` is 82 MB
+(`TAGPU_HPI_READMAX` bounds a read's range, not the file).
+
+- **The .GUI files are read by position.** `tagpu_guifile.c` is the engine's own grammar,
+  sections in file order, because retail pages repeat section names, which `tagpu_tdf` would
+  merge.
+- **The result is one immutable block.** The layout passes `tagpu_wikilayout_check`, every frame
+  rect lies inside the sheet, and one interlocked store publishes the block, which is never
+  freed (`tagpu_wikiside_get`; [GPU status](gpu-status.html) §2.12c).
+- **The log line** is `wikiside: loaded in N ms - S screens, T types, R rows, a H-row sheet`. The
+  trigger `tagpu_wiki3d.dump` also writes the sidebar's report, `tagpu_wikiside.json`.
+
+**Where it departs from the engine**, as `gfx.py` does (the two are compared with each other, not
+with the engine):
+
+- **The player's side.** The stage has no PlayerInfo, so the side comes from the first unit of
+  the wiki's first entry whose FBI `Side` names a side. Failing that, it is the side whose
+  `nameprefix` begins the unit's type (the longest prefix), else side 0. TA Zero's human units
+  say `NotForAI_Arm`, which names no side.
+- **A build button with only commongui's generic picture** skips that picture and keeps the
+  .GUI's rect, where the engine would shrink a 64 × 64 slot to a 96 × 20 `BUTTONS0` frame.
+- **A download entry whose `BUTTON + 4` is no gadget of its page** is skipped and reported. The
+  engine has no bound there.
+- **A type with more than 7 numbered pages** keeps none, and the router shows GEN for it.
+- **The format strings** (`%s%d.GUI`, `%sDL`, `_gadget`, …) are the retail executable's. A mod
+  that patched one would not be followed.
+
+### The checks
+
+All MEASURED 2026-10-27 on this tree.
+
+- **`simparity.mjs`** plays every demo three times through both simulations: with the fixture's
+  sidebar, with `fixture-tall.json`'s 768-row column and with none, 63 plays. It replays the 35
+  rule cases and the 67 refusal cases (the `sidebar` flag, the trip's data rule, every bound of
+  the layout on both sides of it), then the 13 malformed-data cases, and compares the trip's
+  constants. All equal, natively and with `--wine`.
+- **`stagecheck.mjs`** pairs the stage's ops with `stage.js`'s calls, the `side` range and the
+  greyed buttons' groups included: 5376 frames, the fixture at three sizes, the tall fixture at
+  1920 × 1080 and no sidebar at three sizes. With a sidebar it draws the whitebox column, the
+  game look's image with its minimap, and the image without it, over a stand-in image.
+- **`sidecheck.mjs`** compares the two composers byte for byte (with
+  `tagpu/ddraw/tests/wikisidetest.c`): 8 packs and 4176 frames. Two packs are synthetic,
+  generated from a fixed seed to take every branch of the composer. The other six are the
+  compat setups' own packs, present locally.
+- **`assetcheck.py --side`** compares the DLL's loader (`wikiassettest side`) with `gfx.py
+  --side-only` per compat setup: the layout, every picture's source and frames, PANELSIDE, the
+  dots, the minimap's tables and bases, the greyed tint, each type's `canstop` and the sheet byte
+  for byte. `fuzz-side` damages synthetic files. All six setups equal.
+- **The composed column against the game.** `tools/wiki/sidedump.mjs` composes a pack's column
+  for a named state as a PNG, and it equals the game's own sidebar pixel for pixel in all six
+  setups, in every captured state but the cursor, the minimap's content and TA Zero's run-time
+  states. The positional reader agrees with an emulation of the engine's parser on all 1581
+  .GUI files of the six setups.
+- **The game's demos** (`wiki_regression.py demos`) played the 21 demos on retail's own sidebar
+  layout, every hash equal to `simparity.mjs --hash --layout` on the layout the check wrote.
+
+**The game's files for the checks.**
+
+- `tagpu_wiki.check` writes the layout it plays on to `tagpu_wiki.layout.json`, in the layout
+  schema, or `null` for none. It logs `wiki check: the sidebar layout is the mod's / the fixture
+  / none` and waits, as a demo does, for the loader's answer.
+- The state dump `tagpu_wiki.json` gains three fields: `side_h`, the running simulation's
+  column rows, 0 without one; `layout_src`, one of `"mod"`, `"fixture"`, `"none"`, or `""`
+  with no simulation; and `layout`, the layout itself, which `simparity.mjs --try` and
+  `sideview.mjs --dump` replay.
+- Layout names are written as their UTF-8 bytes, as both readers count them.
 
 ## The first entry: Quick Build: Resource Extractors
 
@@ -562,9 +802,18 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
 - **Time is in simulation ticks**, 30 a second, so a demo plays the same at any frame rate and the
   game's version can be compared tick by tick.
 - **Positions are world units** (a cell is 16), the game's own.
-- **Keys and buttons**: `shift`, `alt`, `ctrl`, `z`, `x`, `lmb`, `rmb`; `{ "build": "ARMMEX" }`
-  picks a build-menu button (the manual placement mode); `{ "build": null }` leaves it. A `z` or
-  `x` down steps again while the key is held, as an auto-repeat does.
+- **Keys and buttons**: `shift`, `alt`, `ctrl`, `z`, `x`, `lmb`, `rmb`. A `z` or `x` down steps
+  again while the key is held, as an auto-repeat does.
+- **`{ "build": "ARMMEX" }`** arms a building (the manual placement mode). With the sidebar on it
+  is the cursor's trip to the button (*The rules*, above), and both simulations refuse to play a
+  demo that breaks the trip's data rule (`sim.js` `checkTrips`, `tagpu_wikidata_trips`): the build names a type; nothing but a caption stands in its trip,
+  the ticks (t, t + 90), nor after it in tick t; the demo lasts the whole trip; and the left button
+  is up when it starts. Without the sidebar it arms at once, and `{ "build": null }` leaves the
+  mode.
+- **A demo's `sidebar`**, a boolean, is optional: absent, the sidebar is shown when the scene gives
+  the player a mobile builder. No demo sets it today.
+- **A unit's `canstop`** (a boolean, or a number whose integer part's bit 0 counts) is the FBI key; absent, it is 0, as the
+  engine's FBI reader defaults it. The entries give it to ARMCK, ARMACK, ARMPW and ARMLLT.
 - **The scene**: the map's size in cells, its `surfaceMetal`, its metal as rectangles of a value,
   its vents, its fog rectangles (`grey` or `black`), the units (type, owner, position, finished or
   not, and optionally move orders and a `facing`), and which are selected. `"facing": [x, z]` is
@@ -583,7 +832,7 @@ The stage's ground for one entry's scene, by reference to the player's own files
 
 ```json
 { "format": 1, "entry": "quickbuild",
-  "cells": [40, 24],
+  "cells": [40, 30],
   "sources": [ { "map": "maps\\crossing two rivers.tnt", "tiles": 4792 },
                { "map": "maps\\metal heck.tnt", "tiles": 583 } ],
   "tileset": [ [0, 13, "04e02f02"], [1, 170, "8cb0058f"] ],
@@ -620,6 +869,40 @@ The stage's ground for one entry's scene, by reference to the player's own files
   the whole ground fall back to the whitebox ([the plan](ingame-wiki-3d-stage-plan.html),
   section 3), never part of it.
 
+### `art/wiki/side/<name>.json`: a sidebar layout
+
+The layout the simulation and the stage run on: a fixture here, or the running mod's, which the
+DLL's loader and `gfx.py --side-only` write in the same schema. `sim.js` `checkLayout` states it
+and checks it, and `tagpu_wikilayout_check` (`tagpu_wikidata.c`) holds the same bounds, so a
+layout breaking any of them is refused whole and no index read out of it addresses past the
+`WIKILAYOUT` tables.
+
+```json
+{ "format": 1, "note": "…", "width": 128, "height": 480,
+  "sides": [ { "name": "ARM", "prefix": "ARM", "main2": "ARMMAIN2", "gen": "ARMGEN" } ],
+  "player_side": 0,
+  "types": { "ARMCK": { "pages": ["ARMCK1", "ARMCK2", "ARMCK3", "ARMCK4"], "orders": null } },
+  "screens": { "ARMCK1": { "y": 128, "w": 128, "h": 352, "gadgets": [
+                 { "name": "ARMMEX", "role": "build", "unit": "ARMMEX", "rect": [4, 32, 60, 60] },
+                 { "name": "ARMPREV", "role": "prev", "rect": [4, 228, 58, 20] } ] } } }
+```
+
+- **`width`** is 128, the engine's panel. **`height`** is the column's rows, the larger of 480
+  (PANELSIDE) and the lowest screen's end.
+- **A screen** has its row `y` in the column and its `w` (1..128) and `h`, ending by row 1024,
+  the composed column's texture.
+- **A gadget** has a non-empty `name`, a `role` and a `rect` inside its screen, in the screen's
+  pixels, and optionally `grey` and `hidden`, booleans. The roles are `orders`, `buildtab`,
+  `build`, `prev`, `next`, `stop` and `order`, as `0x41AA00` tells them apart by name. A build
+  button's `unit` is its type, or `null` (greyed) when its name is no type.
+- **`sides`** lists 1 to 8 sides, each with a name, its prefix and its MAIN2 and GEN screens;
+  **`player_side`** is one of them.
+- **`types`** holds only the types with a page, at most 64 with distinct names, each with at most
+  7 numbered page screens and its orders page or `null`, and at least one of the two.
+- **The bounds**: at most 48 screens and 64 gadgets a screen. A name, with its terminator, fits 32
+  bytes in UTF-8. A layout that names a screen that is not in `screens` is refused. `note` and any
+  key not named here are ignored.
+
 ## The simulation's contract
 
 `sim.js` is the mockup's and `tagpu/ddraw/src/tagpu_wikisim.c` the DLL's: a port of `sim.js`
@@ -631,7 +914,8 @@ C sim from a recording of their calls on `sim.js`, and compares every answer the
 hash after every view included. A rule case must finish with one sim before it makes the next: the
 recording replays one at a time. For each demo and case it names the first differing tick or call
 and field. Last, it loads data the loader must survive or refuse (`wikitest.c`'s `malformed`
-cases). MEASURED 2026-10-26: all 21 demos (9298 frames) and 13 rule cases equal, and all 13
+cases). MEASURED 2026-10-27: all 21 demos played three times (the fixture's sidebar, the 768-row
+fixture's and none: 63 plays) and 35 rule cases equal, all 67 refusal cases alike and all 13
 malformed-data cases as stated, both natively (gcc, with AddressSanitizer and
 UndefinedBehaviorSanitizer) and with `--wine` (the DLL's compiler and flags, run under Wine).
 
@@ -827,8 +1111,9 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
   game scrolls 48 units a notch (three of the tree's rows) and a press on a track off its thumb
   pages by seven eighths of the panel, as Chrome does.
 - **The stage's budget holds the data's map, not the largest.** Cells and fog are one op a cell,
-  as the canvas calls them: 2587 ops at most over the demos (40 × 24 cells), against
-  `WIKI_MAXOP` 16384. A square map past about 70 cells a side, fogged everywhere, drops ops and
+  as the canvas calls them. By `tagpu_wikistage.h`'s count, a 40 × 30 map's cells, grid and fog
+  come to about 3750 ops, the whitebox minimap's to at most 2 × 1200 + 128 more and the sidebar's
+  buttons to about 200, against `WIKI_MAXOP` 16384. A square map past about 70 cells a side, fogged everywhere, drops ops and
   edges the stage in red.
 - **The controls' glyphs and the tree's marks are kit icons, pending the owner.** No HUD face has
   play, pause, replay, the folds' triangles or the entry's dot, so both the mockup and the game
@@ -857,8 +1142,24 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
   checked by `wiki_regression.py demos`, whose `tagpu_wiki.check` hashes must equal
   `simparity.mjs --hash`. `stagecheck.mjs` builds
   the stage natively (x86-64, SSE); the DLL compiles it for SSE2, but no check runs the i686 build.
-- **The figures are the stock game's.** A mod with other extractors or other build lists shows the
-  stock demos.
+- **The demos are the stock game's.** The sidebar is the running mod's, but the units, their
+  figures and the captions are stock ARM's: a mod with other extractors or other build lists shows
+  the stock demos, and a demo whose build the mod's sidebar cannot reach stops under the badge. The
+  per-mod tutorials are [the sidebar plan](ingame-wiki-sidebar-plan.html)'s decisions 13 to 17.
+- **The stage plays the right-click interface (Interface Type 1).** A player on left-click orders
+  sees demos and a Try it whose buttons differ from theirs; following `main+0x37EFA` is the plan's
+  decision 18, and the engine map's *What each Interface Type does with a press* is its input.
+  Captions and the keys strip do not follow the player's key bindings (decision 19).
+- **The sidebar's paths not run in the game.** The game's demos and Try it ran on retail's own
+  layout. The fixture's path (a mod's layout refused, or the loader unable to start) and the
+  "loading…" wait are held to the mockup by `simparity.mjs` and `stagecheck.mjs`, not seen in
+  the game.
+- **What the composed column does not show.** It matches the game's captures except for the
+  cursor over the column, which no capture compared; the minimap's content, which is the stage
+  map's and not the game's; and TA Zero's run-time states.
+- **The folder names are followed, the format strings and the archive pattern are not.** A mod
+  that patched `%s%d.GUI`, `%sDL` or `_gadget` would not be followed; none of the six setups
+  does. The archive pattern Mayhem's and ProTA's loaders rewrite (`0x5028CC`) was not read live.
 - **No hotkey** opens the wiki.
 - **The spacing readout is the mockup's**: the game has no on-screen spacing value.
 - **Build Split is not shown**: it is not built.
