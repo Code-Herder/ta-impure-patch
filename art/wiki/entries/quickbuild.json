@@ -62,16 +62,26 @@
       "footprint": [3,3],
       "extracts": 0.001,
       "buildTime": 1800,
+      "activatewhenbuilt": 1,
       "name": "Metal Extractor",
       "from": "ARMMEX.fbi"
     },
-    "ARMMOHO": {"cast":"moho","footprint":[5,5],"extracts":0.003,"buildTime":35750,"name":"Moho Mine","from":"ARMMOHO.fbi"},
+    "ARMMOHO": {
+      "cast": "moho",
+      "footprint": [5,5],
+      "extracts": 0.003,
+      "buildTime": 35750,
+      "activatewhenbuilt": 1,
+      "name": "Moho Mine",
+      "from": "ARMMOHO.fbi"
+    },
     "ARMGEO": {
       "cast": "geo",
       "footprint": [4,4],
       "energyMake": 250,
       "vent": true,
       "buildTime": 13078,
+      "activatewhenbuilt": 1,
       "name": "Geothermal Powerplant",
       "from": "ARMGEO.fbi (YardMap all G: one cell on a geothermal feature)"
     },
@@ -203,9 +213,10 @@
         {"at":340,"move":[340,112]},
         {"at":355,"down":"lmb"},
         {"at":358,"up":"lmb"},
-        {"at":358,"caption":"{Select}: it is placed on the deposit and the {builder} builds it."}
+        {"at":358,"caption":"{Select}: it is placed on the deposit and the {builder} builds it."},
+        {"at":359,"until":"idle","max":1800}
       ],
-      "end": 488
+      "end": 420
     },
     {
       "id": "alt",
@@ -248,9 +259,10 @@
         {"at":285,"caption":"Hold Alt and {select}: built exactly under the cursor."},
         {"at":315,"down":"lmb"},
         {"at":318,"up":"lmb"},
-        {"at":323,"up":"alt"}
+        {"at":323,"up":"alt"},
+        {"at":324,"until":"idle","max":1800}
       ],
-      "end": 413
+      "end": 385
     },
     {
       "id": "click",
@@ -316,9 +328,10 @@
         {"at":175,"move":[372,76]},
         {"at":200,"down":"order"},
         {"at":203,"up":"order"},
-        {"at":203,"caption":"{Order} builds it. The mode stays on for the next one."}
+        {"at":203,"caption":"{Order} builds it. The mode stays on for the next one."},
+        {"at":204,"until":"idle","max":1800}
       ],
-      "end": 333
+      "end": 265
     },
     {
       "id": "bestfit",
@@ -418,9 +431,10 @@
         {"at":408,"move":[248,284]},
         {"at":418,"down":"order"},
         {"at":421,"up":"order"},
-        {"at":421,"caption":"Back on the big deposit: the {moho}, and the {builder} helps."}
+        {"at":421,"caption":"Back on the big deposit: the {moho}, and the {builder} helps."},
+        {"at":422,"until":"idle","max":1800}
       ],
-      "end": 721
+      "end": 483
     },
     {
       "id": "queue",
@@ -486,9 +500,10 @@
         {"at":148,"down":"order"},
         {"at":151,"up":"order"},
         {"at":151,"caption":"And a third. The {builder} works through them in order."},
-        {"at":171,"up":"shift"}
+        {"at":171,"up":"shift"},
+        {"at":172,"until":"idle","max":1800}
       ],
-      "end": 501
+      "end": 233
     },
     {
       "id": "cancel",
@@ -538,9 +553,10 @@
         {"at":156,"down":"order"},
         {"at":159,"up":"order"},
         {"at":159,"up":"shift"},
-        {"at":159,"caption":"Shift+{order} it again: the plan is cancelled and the {builder} stops."}
+        {"at":159,"caption":"Shift+{order} it again: the plan is cancelled and the {builder} stops."},
+        {"at":160,"until":"idle","max":1800}
       ],
-      "end": 249
+      "end": 221
     },
     {
       "id": "helpers",
@@ -603,9 +619,10 @@
         {
           "at": 146,
           "caption": "{Order}: the {advbuilder} builds, the {builder} guards it and helps, the {walker} keeps walking."
-        }
+        },
+        {"at":147,"until":"idle","max":1800}
       ],
-      "end": 386
+      "end": 208
     },
     {
       "id": "upgrade",
@@ -644,9 +661,10 @@
         {"at":80,"caption":"It offers the stronger {moho} in its place."},
         {"at":120,"down":"order"},
         {"at":123,"up":"order"},
-        {"at":123,"caption":"{Order}: the {mex} is reclaimed, then the {moho} is built."}
+        {"at":123,"caption":"{Order}: the {mex} is reclaimed, then the {moho} is built."},
+        {"at":124,"until":"idle","max":1800}
       ],
-      "end": 433
+      "end": 185
     },
     {
       "id": "geo",
@@ -685,9 +703,10 @@
         {"at":80,"caption":"Over a vent the ghost is the {geo}."},
         {"at":115,"down":"order"},
         {"at":118,"up":"order"},
-        {"at":118,"caption":"{Order} builds it on the vent."}
+        {"at":118,"caption":"{Order} builds it on the vent."},
+        {"at":119,"until":"idle","max":1800}
       ],
-      "end": 583
+      "end": 180
     },
     {
       "id": "metalmap",
@@ -755,9 +774,10 @@
         {"at":198,"caption":"A deposit with plain ground around it is one: the ghost appears."},
         {"at":233,"down":"order"},
         {"at":236,"up":"order"},
-        {"at":236,"caption":"{Order} builds it."}
+        {"at":236,"caption":"{Order} builds it."},
+        {"at":237,"until":"idle","max":1800}
       ],
-      "end": 476
+      "end": 298
     },
     {
       "id": "fog",
@@ -836,9 +856,10 @@
         {"at":305,"caption":"Under grey fog the deposit is known: the ghost snaps onto it."},
         {"at":350,"down":"lmb"},
         {"at":353,"up":"lmb"},
-        {"at":353,"caption":"{Select}: placed on the deposit."}
+        {"at":353,"caption":"{Select}: placed on the deposit."},
+        {"at":354,"until":"idle","max":1800}
       ],
-      "end": 443
+      "end": 415
     }
   ]
 }

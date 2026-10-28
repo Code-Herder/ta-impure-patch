@@ -362,6 +362,8 @@ function refusalCases(entry) {
   cast('canstop 3', 'accepted', tower(k => { k.canstop = 3; }));
   cast('canstop 1.5', 'refused', tower(k => { k.canstop = 1.5; }));
   cast('canstop true', 'refused', tower(k => { k.canstop = true; }));
+  cast('activatewhenbuilt 3', 'accepted', tower(k => { k.activatewhenbuilt = 3; }));
+  cast('activatewhenbuilt 0.5', 'refused', tower(k => { k.activatewhenbuilt = 0.5; }));
   cast('vent 1', 'refused', tower(k => { k.vent = 1; }));
   cast('vent false and no g', 'accepted', tower(k => { k.vent = false; }));
   cast('G cells with vent', 'accepted', tower(k => { k.vent = true; k.g = [[0, 0], [1, 1]]; }));
@@ -450,7 +452,8 @@ function castingOut(C) {
     else if (k.vent) for (let dz = 0; dz < fz; dz++) g[dz] = (1 << fx) - 1;
     const o = { type: k.type, title: k.title, fx, fz };
     for (const n of ['buildTime', 'workerTime', 'buildDistance', 'maxVelocity', 'extracts', 'energyMake']) o[n] = k[n] ?? 0;
-    return { ...o, canstop: (k.canstop & 1) === 1 ? 1 : 0, vent: k.vent ? 1 : 0, g,
+    return { ...o, canstop: (k.canstop & 1) === 1 ? 1 : 0, activatewhenbuilt: (k.activatewhenbuilt & 1) === 1 ? 1 : 0,
+      vent: k.vent ? 1 : 0, g,
       builds: (k.builds || []).reduce((m, b) => m | (1 << WikiSim.CASTS.indexOf(b)), 0) };
   });
   return { ok: true, casts };

@@ -35,6 +35,12 @@ const WikiSim = (() => {
   const CLICK_TIME = 25, CLICK_BOX = 32;
   // tagpu_placegeo.h's caps, and tagpu_place.c's on one commit; a unit's list never holds more than PLACE_LIST_CAP
   const PLACE_MAX_SITES = 256, PLACE_SPACING_MAX = 16, PLACE_ORDER_BUDGET = 4096, PLACE_LIST_CAP = 1024;
+  // tagpu_wikicob.h: WIKICOB_UNITS, the units one host spawns over its life, and the INBUILDSTANCE value id
+  const COB_UNITS = 1024, COB_INBUILDSTANCE = 5;
+  /* A DEMO'S WAIT, {"at", "until", "max"} (research/notes/ingame-wiki-cob-plan.md, decision 10): the demo's clock
+     stops at `at` until the state `until` names holds, at most `max` ticks, after which the demo stops and says so.
+     UNTILS are the states; "idle": no unit of the player's holds a build or a reclaim order. UNTIL_MAX bounds `max`. */
+  const UNTILS = ['idle'], UNTIL_MAX = 3600;
   const KEYS = ['shift', 'alt', 'ctrl', 'z', 'x', 'lmb', 'rmb'];
   const sq = v => v * v;
   const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
@@ -160,6 +166,7 @@ const WikiSim = (() => {
       for (const n of FIGURES) if (n in k && !(typeof k[n] === 'number' && k[n] >= 0 && k[n] < Infinity)) no(`${at}: ${n} is not a finite number >= 0`);
       if (!(k.buildTime > 0)) no(`${at}: buildTime is not above 0`);
       if ('canstop' in k && !int(k.canstop)) no(`${at}: canstop is not an integer`);
+      if ('activatewhenbuilt' in k && !int(k.activatewhenbuilt)) no(`${at}: activatewhenbuilt is not an integer`);
       if ('vent' in k && typeof k.vent !== 'boolean') no(`${at}: vent is not a boolean`);
       checkG(at, k, f);
       if ('builds' in k && !(Array.isArray(k.builds) && k.builds.every(b => CASTS.includes(b)))) no(`${at}: builds is not a list of casts`);
@@ -167,7 +174,7 @@ const WikiSim = (() => {
     return C;
   }
   /* THE BOUND ENTRY: the entry with every unit of a bound cast replaced by the casting's type, under the type's name,
-     with the casting's title (as `name`), footprint, figures, canstop and G cells, and a build list that holds unit j
+     with the casting's title (as `name`), footprint, figures, canstop, activatewhenbuilt and G cells, and a build list that holds unit j
      of the entry exactly when the casting's build list names j's cast. A unit of an unbound cast keeps the authored
      definition, marked `unbound`, and its build list keeps only the entry's own units, renamed as they are. The
      units keep their order, so the scene's units and a `build` point at the same definitions as before; the scene's
@@ -192,6 +199,7 @@ const WikiSim = (() => {
         builds: names.filter(j => (k.builds || []).includes(entry.units[j].cast)).map(j => to[j]) };
       for (const n of FIGURES) if (n in k) b[n] = k[n];
       if ('canstop' in k) b.canstop = k.canstop;
+      if ('activatewhenbuilt' in k) b.activatewhenbuilt = k.activatewhenbuilt;
       if (k.vent) b.vent = true;
       if (k.g && k.g.length) b.g = k.g.map(c => [c[0], c[1]]);
       units[to[t]] = b;
@@ -298,7 +306,7 @@ const WikiSim = (() => {
     if (!(c.iface === 0 || c.iface === 1)) throw new Error(`the interface type ${c.iface} is not 0 or 1`);
     if (layout && !(int(c.side) && c.side >= 0 && c.side < layout.sides.length)) throw new Error(`side ${c.side} is not one of the layout's sides`);
     if (!(c.casting == null || obj(c.casting))) throw new Error('the casting is not an object or null');
-    return { side: layout ? c.side : -1, casting: c.casting ?? null, iface: c.iface };
+    return { side: layout ? c.side : -1, casting: c.casting ?? null, iface: c.iface, cob: c.cob || null };
   }
 
   /* ---- actions (decision 18): a demo's press names what it does, and the Interface Type names the button ----
@@ -378,6 +386,41 @@ const WikiSim = (() => {
     const overlap = (a, b) => a.ox < b.ox + b.fx && b.ox < a.ox + a.fx && a.oz < b.oz + b.fz && b.oz < a.oz + a.fz;
     const box = (t, ox, oz) => ({ ox, oz, fx: fp(t)[0], fz: fp(t)[1] });
 
+    /* ---- the units' scripts: the in-game wiki's COB host, tagpu_wikicob.c, which tagpu_wikisim.c calls in-process
+       and this file through ctx.cob (tools/wiki/mockup/cob.js; research/notes/ingame-wiki-cob-plan.md, *The wiki
+       host*). Without one every unit stands at rest and every gate reads open. ---- */
+    const COB = ctx.cob ? ctx.cob.open(defIndex) : null;
+    let cobN = 0;
+    // a world position in 16.16, truncated toward zero and held to the int32 range, as tagpu_wikisim.c's fix16
+    const fix16 = v => Math.max(-2147483648, Math.min(2147483647, Math.trunc(v * 65536)));
+    /* GET's facts (WIKICOBFACT): every unit with a script handle, in creation order -- its handle, owner, centre, the
+       build fraction still to go as the float unit+0x104 holds, and HEALTH in percent, 100 since the wiki has no
+       damage */
+    const facts = () => units.filter(u => u.cob).map(u => [u.cob, u.owner, fix16(u.x), fix16(u.z), Math.fround(1 - u.built), 100]);
+    // INBUILDSTANCE, the gate a builder's work waits on (0x438700); open for a unit that runs no script
+    const stance = u => !COB || !u.cob || COB.value(u.cob, COB_INBUILDSTANCE) !== 0;
+    const cobCall = (u, script, how, args) => { if (COB && u.cob) COB.call(u.cob, script, how, args, facts()); };
+    /* the extractor's SetSpeed (0x437840, from every create): the sum over its footprint cells on the map of the cell's
+       metal + 1, kept in a 16-bit word and sign-extended (0x437866..0x437902). ExtractsMetal does not enter it. */
+    function extractorSpeed(u) {
+      const [fx, fz] = fp(u.type);
+      let sum = 0;
+      for (let z = u.oz; z < u.oz + fz; z++) for (let x = u.ox; x < u.ox + fx; x++)
+        if (x >= 0 && x < W && z >= 0 && z < H) sum += (Math.trunc(metal[z * W + x]) & 0xff) + 1;
+      return (sum & 0xffff) << 16 >> 16;
+    }
+    /* A UNIT APPEARS (a scene's spawn, a nanoframe placed): the create's script starts in the engine's order, Create
+       run-now (0x485DE6), an extractor's SetSpeed run-later (0x437902), and for a unit made whole whose FBI says
+       ActivateWhenBuilt the state setter's Activate (0x48612F). Its handle is the next in spawn order, the host's own
+       numbering, so the facts can carry its row while Create runs. */
+    function spawn(u) {
+      if (!COB || cobN >= COB_UNITS) return;
+      u.cob = ++cobN;
+      if (COB.spawn(defIndex.indexOf(u.type), facts()) !== u.cob) throw new Error(`the COB host numbered ${u.id} otherwise`);
+      if (def(u.type).extracts > 0) cobCall(u, 'SetSpeed', 'args', [extractorSpeed(u)]);
+      if (u.built >= 1 && (def(u.type).activatewhenbuilt & 1) === 1) COB.activate(u.cob, 1);
+    }
+
     /* ---- units. Each faces along a unit vector (hx, hz); walk says why a vector. ---- */
     let units = [], nextId = 1;
     /* a unit joins the world. With the sidebar it carries its page state, unit+0x110: bp (bit 22, a numbered page
@@ -386,6 +429,7 @@ const WikiSim = (() => {
     function enter(u) {
       if (ON) { const n = npages(u.type); u.bp = n >= 1; u.page = n >= 1 ? 1 : 0; }
       units.push(u);
+      spawn(u);
       return u;
     }
     // a scene unit's "facing": [x, z] as a unit vector, (0, 1) when absent; tagpu_wikidata.c refuses what this throws on
@@ -1258,6 +1302,7 @@ const WikiSim = (() => {
       const dx = tx - u.x, dz = tz - u.z, d = Math.sqrt(dx * dx + dz * dz);
       if (d <= stop) return true;
       const s = Math.min(def(u.type).maxVelocity, d - stop);
+      u.stepped = true;
       u.hx = dx / d; u.hz = dz / d;
       u.x += dx / d * s; u.z += dz / d * s;
       return false;
@@ -1273,10 +1318,14 @@ const WikiSim = (() => {
       const credit = (u, s, how) => {
         const dx = s.x - u.x, dz = s.z - u.z, d = Math.sqrt(dx * dx + dz * dz);
         if (d > 0) { u.hx = dx / d; u.hz = dz / d; }
+        jobs.set(u, { s, how });
+        // the build orders' stance wait (0x438700): no progress until the builder's script has set INBUILDSTANCE
+        if (!stance(u)) return;
         const w = work.get(s) || { build: 0, reclaim: 0 };
         w[how] += def(u.type).workerTime / def(s.type).buildTime / TPS * PACE;
-        work.set(s, w); jobs.set(u, { s, how });
+        work.set(s, w);
       };
+      for (const u of units) u.stepped = false;
       for (const u of units) {
         const o = u.orders[0];
         if (!o || !mobile(u.type) || o.k === 'guard') continue;
@@ -1307,8 +1356,18 @@ const WikiSim = (() => {
         else walk(u, g.x, g.z, FOLLOW);
       }
       for (const [s, w] of work) {
-        if (w.build && s.built < 1) { s.built = Math.min(1, s.built + w.build); if (s.built >= 1) log('finished', s); }
-        if (w.reclaim) { s.reclaimed = Math.min(1, s.reclaimed + w.reclaim); if (s.reclaimed >= 1) { units = units.filter(v => v !== s); log('reclaimed', s); } }
+        if (w.build && s.built < 1) {
+          s.built = Math.min(1, s.built + w.build);
+          if (s.built >= 1) {
+            log('finished', s);
+            // 0x41B8D0: a structure finished whose FBI says ActivateWhenBuilt is switched on (0x41B9A6)
+            if (COB && s.cob && (def(s.type).activatewhenbuilt & 1) === 1) COB.activate(s.cob, 1);
+          }
+        }
+        if (w.reclaim) {
+          s.reclaimed = Math.min(1, s.reclaimed + w.reclaim);
+          if (s.reclaimed >= 1) { units = units.filter(v => v !== s); if (COB && s.cob) COB.remove(s.cob); log('reclaimed', s); }
+        }
       }
       for (const u of units) {  // orders whose work is over end now, so the next one starts on the next tick
         const o = u.orders[0];
@@ -1316,6 +1375,31 @@ const WikiSim = (() => {
         if (o.k === 'build') { const s = structureAt(o.type, o.ox, o.oz); if (s && s.built >= 1) u.orders.shift(); }
         else if ((o.k === 'reclaim' || o.k === 'guard') && !byId(o.target)) u.orders.shift();
       }
+      if (!COB) return;
+      /* THE ENGINE'S CALLS OF THE UNIT'S TURN, unit by unit in creation order: its build calls, then its walk class.
+         A builder's work is the structure it worked on this tick, waiting on its stance or not; when that changes
+         StopBuilding goes for the old one (0x43A251, run-later, no argument: the order's destructor, in the same call
+         as the build it finished) and StartBuilding for the new one (0x4385C7, run-later, one word: the target's angle
+         from the builder's facing, 0 here since the builder faces it at once). A structure finished or reclaimed this
+         tick is no one's work any more. Then the walk class (0x43DA70): a mobile unit that stepped this tick and stood
+         the last starts StartMoving and MoveRate1 (no FBI the wiki reads sets moverate1, whose default 2 x MaxVelocity
+         keeps its class 1), one that stood this tick and stepped the last StopMoving, both run-now. */
+      for (const u of units) {
+        const j = jobs.get(u);
+        const target = j && units.includes(j.s) && !(j.how === 'build' && j.s.built >= 1) ? j.s : null;
+        if (u.work && u.work !== target) { cobCall(u, 'StopBuilding', 'later'); u.work = null; u.workOrder = null; }
+        if (target && !u.work) { cobCall(u, 'StartBuilding', 'args', [0]); u.work = target; u.workOrder = u.orders[0]; }
+        if (!mobile(u.type)) continue;
+        if (u.stepped && !u.moving) { cobCall(u, 'StartMoving', 'now'); cobCall(u, 'MoveRate1', 'now'); }
+        else if (!u.stepped && u.moving) cobCall(u, 'StopMoving', 'now');
+        u.moving = u.stepped;
+      }
+    }
+    /* AN ORDER THE PLAYER TAKES AWAY ends its work at once: the order's destructor starts StopBuilding when the input
+       is handled (0x43A251), before the next tick's slice */
+    function dropWork() {
+      if (!COB) return;
+      for (const u of units) if (u.work && u.orders[0] !== u.workOrder) { cobCall(u, 'StopBuilding', 'later'); u.work = null; u.workOrder = null; }
     }
 
     /* side: the layout side the sidebar shows, -1 with the sidebar off; iface: the Interface Type. Both are the state
@@ -1323,12 +1407,30 @@ const WikiSim = (() => {
     const sim = { tick: 0, done: false, log: [], side: ON ? ctx.side : -1, iface: IFACE };
     const log = (what, u, type) => sim.log.push({ t: sim.tick, what, id: u.id, type: type || u.type, ox: u.ox, oz: u.oz });
     const script = scripted && demo ? resolve(demo, demo.inputs.map((e, i) => [e, i]).sort((a, b) => a[0].at - b[0].at || a[1] - b[1]).map(p => p[0]), IFACE) : [];
-    let next = 0;
+    /* THE DATA RULE OF A WAIT, refused here as tagpu_wikidata.c refuses it: `until` one of UNTILS, `max` an integer
+       1..UNTIL_MAX, nothing else on the input and no other input on its tick */
+    for (const e of script) {
+      if (!('until' in e)) continue;
+      const at = `demo ${demo.id}: the wait at tick ${e.at}`;
+      if (!UNTILS.includes(e.until)) throw new Error(`${at} names no state the sim knows`);
+      if (!(int(e.max) && e.max >= 1 && e.max <= UNTIL_MAX)) throw new Error(`${at} has no max of 1 to ${UNTIL_MAX} ticks`);
+      if (!Object.keys(e).every(k => k === 'at' || k === 'until' || k === 'max')) throw new Error(`${at} carries another input`);
+      if (script.some(f => f !== e && f.at === e.at)) throw new Error(`${at} shares its tick with another input`);
+    }
+    /* THE DEMO'S CLOCK: the tick its inputs, its trips and its end are written in. It runs with the sim's own tick
+       except while a wait holds it (wait: {until, max, from}, from the tick it began); a wait that runs past its max
+       stops the demo, `stalled`. A Try-it sim has no script, so its clock is its tick. */
+    let next = 0, clock = 0, wait = null, stalled = false;
+    const idle = () => !units.some(u => u.owner === 0 && u.orders.some(o => o.k === 'build' || o.k === 'reclaim'));
     // a tick's generated inputs come before its data inputs; within a trip's tick a move comes before a press
     const feed = t => {
       feeding = t;
       while (genNext < gen.length && gen[genNext].at <= t) input(gen[genNext++].ev);
-      while (next < script.length && script[next].at === t) input(script[next++]);
+      while (next < script.length && script[next].at === t) {
+        const e = script[next++];
+        if ('until' in e) wait = { until: e.until, max: e.max, from: sim.tick };
+        else input(e);
+      }
     };
     const end = scripted && demo && demo.end != null ? demo.end : Infinity;  // a Try-it sim is never done
     if (TRIPS) checkTrips(script, end);
@@ -1351,20 +1453,29 @@ const WikiSim = (() => {
       st.cursorShape = k;
     };
 
-    sim.input = ev => { input(ev); cursorTick(sim.tick); };
+    sim.input = ev => { input(ev); dropWork(); cursorTick(sim.tick); };
     sim.step = () => {
       const t = sim.tick + 1;
-      feed(t);
+      if (wait && idle()) wait = null;
+      else if (wait && t - wait.from > wait.max) stalled = true;
+      if (!wait) feed(++clock);
+      dropWork();
+      // the slice: every unit's DoScriptsNow(1), before its orders and its movement (0x48ADEB)
+      if (COB) COB.slice(facts());
       advance();
       sim.tick = t;
       // a lock ends the demo on its own tick, which then holds under the entry's badge
-      sim.done = sim.tick >= end || sb.locked !== null;
+      sim.done = clock >= end || sb.locked !== null || stalled;
       if (ON) route();
       st.hover = hover();
       cursorTick(t);
     };
     // a unit's orders, for a check: kind, building and site, or the target's id
     sim.orders = id => { const u = byId(id); return u ? u.orders.map(o => ({ ...o })) : null; };
+    // each type's quarantine note, "" for none (tagpu_wikicob_note); [] without a host
+    sim.cobNotes = () => COB ? COB.notes.slice() : [];
+    // the host's handle on a unit by id, for the stage's pose and a check; 0 for none
+    sim.cobUnit = id => { const u = byId(id); return u && u.cob || 0; };
     sim.view = () => {
       // the gesture's sites replace the cursor's single square; none (an empty ring) leaves the square standing
       const p = placed() && st.place.sites.length ? st.place : null;
@@ -1412,6 +1523,10 @@ const WikiSim = (() => {
         } : {}),
         // the type the demo stopped on (lock), with the sidebar or without: null while it plays
         locked: sb.locked,
+        // the demo's clock, a wait holding it (its state, or null), and whether a wait ran past its max
+        clock, waiting: wait ? wait.until : null, stalled,
+        // the COB host's state hash (tagpu_wikicob_hash) as two uint32 halves, null without a host
+        cob: COB ? COB.hash() : null,
       };
     };
 

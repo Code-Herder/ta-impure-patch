@@ -1578,7 +1578,7 @@ static void unit_report(SB* b, const LOADER* L, const WIKI3DUNIT* u, const UNITR
    fractional figures as strtod over the first decimal number (fbi_strtod), a missing key 0. */
 typedef struct {
     char      name[SNAME];              /* the UnitName as its FBI spells it                     */
-    int       canstop, src, order;
+    int       canstop, activate_when_built, src, order;
     char      path[TAGPU_VFS_PATHMAX];
     long long bmcode, canfly, fx, fz;
     uint32_t  builder;
@@ -2205,6 +2205,9 @@ static int fbi_each(void* ctx, const TAGPU_VFILE* f)
         /* canstop is def+0x245 bit 3, 0 when the key is missing (0x42C90B..0x42C936) */
         tagpu_guifile_num(tagpu_guifile_get(g, sec, "canstop"), NULL, &bits);
         u->canstop = (int)(bits & 1u);
+        /* activatewhenbuilt is def+0x241 bit 18, the key's `and 1` (0x42C6B9..0x42C6DE) */
+        tagpu_guifile_num(tagpu_guifile_get(g, sec, "activatewhenbuilt"), NULL, &bits);
+        u->activate_when_built = (int)(bits & 1u);
         /* BMcode: a missing key reads 0, a structure: esi, zeroed at 0x42C0F0, is pushed as the
            default at 0x42C401 with no write to it between (DISASSEMBLED) */
         tagpu_guifile_num(tagpu_guifile_get(g, sec, "bmcode"), &u->bmcode, NULL);
@@ -3224,6 +3227,7 @@ static void cast_fill(const SUNIT* u, uint16_t builds, WIKICASTDEF* k)
     k->extracts = u->extracts;
     k->energy_make = u->energymake;
     k->canstop = u->canstop;
+    k->activate_when_built = u->activate_when_built;
     k->vent = u->has_g;
     memcpy(k->g, u->g, sizeof k->g);
     k->builds = builds;
@@ -3275,7 +3279,7 @@ static void casting_json(SB* b, const SIDE* S, const SSIDE* sd, const SCASTING* 
         sb_num(b, k->build_distance);
         sb_raw(b, ",\"maxVelocity\":");
         sb_num(b, k->max_velocity);
-        sb_raw(b, ",\"canstop\":%d,\"extracts\":", k->canstop);
+        sb_raw(b, ",\"canstop\":%d,\"activatewhenbuilt\":%d,\"extracts\":", k->canstop, k->activate_when_built);
         sb_num(b, k->extracts);
         sb_raw(b, ",\"energyMake\":");
         sb_num(b, k->energy_make);

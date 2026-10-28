@@ -4,8 +4,8 @@
 
    A demo's cursor glides with a move every two ticks, so its inputs are generated here rather than written by hand;
    change a demo here and regenerate. The unit figures are the stock game's, read once from the retail unit files
-   (each row's `from`); nothing of the game is copied. `canstop` is written only for the types whose FBI sets it:
-   the engine reads a missing key as 0 (sim.js canStop), and so does the sim.
+   (each row's `from`); nothing of the game is copied. `canstop` and `activatewhenbuilt` are written only for the
+   types whose FBI sets them: the engine reads a missing key as 0 (sim.js canStop), and so does the sim.
 
    Each unit names its `cast`, its place in the demos: where a side's casting applies, the sim plays that side's type
    for the cast, with its figures, and the authored type plays everywhere else. Text names units by cast tokens
@@ -34,9 +34,10 @@ const units = {
   ARMACK: { cast: 'advbuilder', footprint: [2, 2], buildTime: 13432, workerTime: 160, buildDistance: 60, maxVelocity: 0.6, canstop: 1,
     builds: ['ARMLAB', 'ARMARAD', 'ARMFUS', 'ARMMOHO', 'ARMBRTHA', 'ARMSILO', 'ARMANNI', 'ARMAMD', 'ARMASP'],
     name: 'Adv. Construction Kbot', from: 'ARMACK.fbi; build list: the stock build menu, the first nine buttons in page order' },
-  ARMMEX: { cast: 'mex', footprint: [3, 3], extracts: 0.001, buildTime: 1800, name: 'Metal Extractor', from: 'ARMMEX.fbi' },
-  ARMMOHO: { cast: 'moho', footprint: [5, 5], extracts: 0.003, buildTime: 35750, name: 'Moho Mine', from: 'ARMMOHO.fbi' },
-  ARMGEO: { cast: 'geo', footprint: [4, 4], energyMake: 250, vent: true, buildTime: 13078, name: 'Geothermal Powerplant',
+  ARMMEX: { cast: 'mex', footprint: [3, 3], extracts: 0.001, buildTime: 1800, activatewhenbuilt: 1, name: 'Metal Extractor', from: 'ARMMEX.fbi' },
+  ARMMOHO: { cast: 'moho', footprint: [5, 5], extracts: 0.003, buildTime: 35750, activatewhenbuilt: 1, name: 'Moho Mine', from: 'ARMMOHO.fbi' },
+  ARMGEO: { cast: 'geo', footprint: [4, 4], energyMake: 250, vent: true, buildTime: 13078, activatewhenbuilt: 1,
+    name: 'Geothermal Powerplant',
     from: 'ARMGEO.fbi (YardMap all G: one cell on a geothermal feature)' },
   ARMPW: { cast: 'walker', footprint: [2, 2], buildTime: 1452, maxVelocity: 1.8, canstop: 1, name: 'Peewee', from: 'ARMPW.fbi' },
 };
@@ -103,42 +104,51 @@ function TL(start) {
        timeline is the same. A caption meant for the trip is given before the build, on its tick. */
     build(b) { inputs.push({ at: t, build: b }); t += TRIP; return T; },
     say(s) { inputs.push({ at: t, caption: s }); return T; },
+    /* the demo's clock stops until no unit of the player's holds a build or a reclaim order, at most `max` ticks
+       (sim.js UNTILS); the wait takes a tick of its own, after the last input's, which no other input shares */
+    until(max) { t += 1; inputs.push({ at: t, until: 'idle', max }); t += 1; return T; },
   };
   return T;
 }
 
+/* EVERY DEMO ENDS ON ITS WORK DONE: after its last input the clock waits until the player's builds and reclaims are
+   finished, then plays TAIL ticks, so how long a side's builder takes -- its walk, its script's build stance, the
+   build -- is the demo's own and no tail is sized for the slowest mod. WAIT_MAX, 60 seconds, is far past the slowest
+   build measured: Twilight's CORE geothermal plant, finished on tick 542 of the geo demo without the scripts
+   (MEASURED 2026-10-28). */
+const TAIL = 60, WAIT_MAX = 1800;
 const demos = [];
-function demo(id, title, add, fn, tail) {
+function demo(id, title, add, fn) {
   const T = TL(add.cursor || scene.cursor);
   fn(T);
-  demos.push({ id, title, scene: add, inputs: T.inputs, end: T.t + tail });
+  T.until(WAIT_MAX);
+  demos.push({ id, title, scene: add, inputs: T.inputs, end: T.t + TAIL });
 }
 
 demo('snap', 'Snap onto the deposit', { selected: ['ck'] }, T => T
   .say('{builder} selected. Pick the {mex} in the build menu.').wait(20).build('ARMMEX').wait(5)
   .to([344, 120], 50).say('Near a deposit the ghost jumps onto it, not under the cursor.').wait(30)
   .to([408, 104], 40).wait(15).to([344, 40], 40).wait(20).to([340, 112], 30).wait(15)
-  .click('lmb').say('{Select}: it is placed on the deposit and the {builder} builds it.'), 130);
+  .click('lmb').say('{Select}: it is placed on the deposit and the {builder} builds it.'));
 
-// the tail holds Twilight CORE's extractor, the slowest side's (buildtime 6773 against stock's 1800)
 demo('alt', 'Hold Alt to place exactly', { selected: ['ck'] }, T => T
   .say('{builder} selected, {mex} picked from the build menu.').wait(20).build('ARMMEX').wait(5)
   .to([344, 120], 50).say('The ghost snaps onto the deposit...').wait(35)
   .down('alt').say('...hold Alt and it stays exactly under the cursor.').wait(45)
   .up('alt').say('Let go of Alt and it snaps again.').wait(40)
-  .down('alt').say('Hold Alt and {select}: built exactly under the cursor.').wait(30).click('lmb').wait(5).up('alt'), 90);
+  .down('alt').say('Hold Alt and {select}: built exactly under the cursor.').wait(30).click('lmb').wait(5).up('alt'));
 
 demo('click', '{Order} a deposit to build', { selected: ['ck'] }, T => T
   .say('{builder} selected. No build menu: just point at a deposit.').wait(25)
   .to([240, 120], 40).wait(10).to([330, 128], 40).say('Over a deposit the ghost of the extractor appears.').wait(30)
-  .to([372, 76], 30).wait(25).click('order').say('{Order} builds it. The mode stays on for the next one.'), 130);
+  .to([372, 76], 30).wait(25).click('order').say('{Order} builds it. The mode stays on for the next one.'));
 
 demo('bestfit', 'The best extractor that fits', { selected: ['ck', 'ack'], cursor: [330, 150] }, T => T
   .say('{builder} and {advbuilder} selected: together they can build both extractors.').wait(25)
   .to([248, 284], 50).say('The {moho} fits this deposit, and it is the strongest: the {advbuilder} will build it.').wait(55)
   .path([[210, 150], [266, 40]], 60).say('This deposit is wedged against the edge: no room for the {moho}, so the {mex}.').wait(55)
   .click('order').say('{Order}: the {builder} builds the {mex}, the {advbuilder} helps.').wait(100)
-  .to([248, 284], 60).wait(10).click('order').say('Back on the big deposit: the {moho}, and the {builder} helps.'), 300);
+  .to([248, 284], 60).wait(10).click('order').say('Back on the big deposit: the {moho}, and the {builder} helps.'));
 
 /* The claim is that the builder holds all three at once, so the third click must land before the first extractor is
    finished, and a mod's builder walks and builds faster than stock's. The first click goes to the grey-fogged
@@ -150,7 +160,7 @@ demo('queue', 'Queue several with Shift', { selected: ['ck'] }, T => T
   .say('{builder} selected. Hold Shift and {order} one deposit after another.').wait(25).down('shift')
   .to([72, 312], 50).wait(10).click('order').say('Shift+{order}: queued. The mode stays on.').wait(3)
   .to([72, 184], 25).wait(3).click('order').say('The next deposit gives its own ghost: queued after the first.').wait(3)
-  .to([168, 136], 20).wait(3).click('order').say('And a third. The {builder} works through them in order.').wait(20).up('shift'), 330);
+  .to([168, 136], 20).wait(3).click('order').say('And a third. The {builder} works through them in order.').wait(20).up('shift'));
 
 /* the grey-fogged deposit, the farthest one explored from the builder: the cancel must land before the builder
    starts the extractor. It lands 71 ticks after the queuing click (74 at Interface Type 0); MEASURED 2026-10-28,
@@ -160,7 +170,7 @@ demo('cancel', 'Cancel a queued one', { selected: ['ck'] }, T => T
   .say('{builder} selected.').wait(20).to([72, 312], 60).down('shift').wait(5).click('order').up('shift')
   .say('Shift+{order}: the extractor is queued.').wait(30)
   .click('order').say('A plain {order} on the queued site changes nothing.').wait(30)
-  .down('shift').wait(5).click('order').up('shift').say('Shift+{order} it again: the plan is cancelled and the {builder} stops.'), 90);
+  .down('shift').wait(5).click('order').up('shift').say('Shift+{order} it again: the plan is cancelled and the {builder} stops.'));
 
 /* The box is dragged from the walk's end back over the constructors, so it holds the walker wherever its walk has
    brought it: a mod's walker is up to twice as fast as the Peewee (TA Zero's scouts, maxvelocity 3.5). The {order}
@@ -170,32 +180,30 @@ demo('helpers', 'Helpers assist', { selected: ['pw'], cursor: [300, 210] }, T =>
   .say('The {walker} is sent off on a walk.').wait(10).to([596, 468], 15).click('order').wait(5)
   .down('select').to([150, 140], 35).up('select').say('Box-select it with both constructors.').wait(15)
   .to([248, 284], 35).say('The {advbuilder} can build the {moho}; the {builder} cannot.').wait(25)
-  .click('order').say('{Order}: the {advbuilder} builds, the {builder} guards it and helps, the {walker} keeps walking.'), 240);
+  .click('order').say('{Order}: the {advbuilder} builds, the {builder} guards it and helps, the {walker} keeps walking.'));
 
 demo('upgrade', 'Upgrade your extractor', { selected: ['ack'] }, T => T
   .say('{advbuilder} selected. Point at your finished {mex}.').wait(25)
   .to([440, 266], 55).say('It offers the stronger {moho} in its place.').wait(40)
-  .click('order').say('{Order}: the {mex} is reclaimed, then the {moho} is built.'), 310);
+  .click('order').say('{Order}: the {mex} is reclaimed, then the {moho} is built.'));
 
-/* The tail is the slowest side's build: Twilight's geothermal plants cost about three times stock's (buildtime 36272
-   and 38674 against 13078), and its CORE one is finished on tick 542 (MEASURED 2026-10-28), where stock's is on 360 */
 demo('geo', 'Geothermal vents', { selected: ['ck'] }, T => T
   .say('{builder} selected. Point at a geothermal vent.').wait(25)
   .to([456, 154], 55).say('Over a vent the ghost is the {geo}.').wait(35)
-  .click('order').say('{Order} builds it on the vent.'), 465);
+  .click('order').say('{Order} builds it on the vent.'));
 
 demo('metalmap', 'Metal maps', { selected: ['ck'] }, T => T
   .say('{builder} selected. The right side is uniform metal ground.').wait(25)
   .to([568, 120], 55).say('Broad metal ground is not a deposit: no ghost, the cursor says move.').wait(35)
   .click('order').say('{Order}: the {builder} just moves there.').wait(30)
   .to([490, 330], 50).say('A deposit with plain ground around it is one: the ghost appears.').wait(35)
-  .click('order').say('{Order} builds it.'), 240);
+  .click('order').say('{Order} builds it.'));
 
 demo('fog', 'Fog', { selected: ['ck'] }, T => T
   .say('{builder} selected, {mex} picked from the build menu.').wait(20).build('ARMMEX').wait(5)
   .path([[200, 120], [104, 88]], 70).say('Unexplored ground (black): a deposit you have not seen does not pull the ghost.').wait(60)
   .path([[136, 220], [40, 280]], 60).say('Under grey fog the deposit is known: the ghost snaps onto it.').wait(45)
-  .click('lmb').say('{Select}: placed on the deposit.'), 90);
+  .click('lmb').say('{Select}: placed on the deposit.'));
 
 const entry = {
   format: 1, id: 'quickbuild',

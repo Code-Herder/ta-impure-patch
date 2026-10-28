@@ -14,7 +14,7 @@ const WikiCob = (() => {
   function cobWorld(request, specs) {
     const made = request({ op: 'new', types: specs, seed: 1 });
     const id = made.world;
-    let st = { values: {}, resting: [], hash: null };
+    let st = made;
     const take = got => { st = got; return got; };
     return {
       notes: made.notes,
@@ -23,10 +23,11 @@ const WikiCob = (() => {
         take(request({ op: 'call', world: id, unit, script, how: HOW[how], args: args || [], facts })).r,
       slice: facts => { take(request({ op: 'slice', world: id, facts })); },
       remove: unit => { take(request({ op: 'remove', world: id, unit })); },
+      activate: (unit, on) => take(request({ op: 'activate', world: id, unit, on: on ? 1 : 0 })).r,
       value: (unit, k) => { const v = st.values[unit]; return v ? v[k] : 0; },
       resting: unit => st.resting.includes(unit),
-      // tagpu_wikicob_hash from the FNV-1a offset basis, as two uint32 halves; null before the first call
-      hash: () => st.hash && [parseInt(st.hash.slice(0, 8), 16), parseInt(st.hash.slice(8), 16)],
+      // tagpu_wikicob_hash from the FNV-1a offset basis, as two uint32 halves
+      hash: () => [parseInt(st.hash.slice(0, 8), 16), parseInt(st.hash.slice(8), 16)],
       free: () => request({ op: 'free', world: id }),
     };
   }

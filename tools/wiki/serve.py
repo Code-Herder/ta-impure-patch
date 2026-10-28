@@ -12,13 +12,14 @@ wiki runs them (research/notes/ingame-wiki-cob-plan.md, *The wiki host*). The pa
 synchronous requests; tools/wiki/cobhost.mjs gives node's checks the same calls over --stdio.
 
 A request is a JSON object with `op`:
-  new     {"types": [{"name", "pack"} | null, ...]} -> {"world": id, "notes": [...]}: a host for the types, in the
+  new     {"types": [{"name", "pack"} | null, ...]} -> {"world": id, "notes": [...], ...state}: a host for the types, in the
           simulation's type order; each named type's script and posed order are read from the gfx pack folder
           `pack` (a path under tools/wiki/mockup/gfx/, which tools/wiki/gfx.py writes: units/<type>.cob and the
           scene.json mesh's `script`), a type without them (null, or none in the pack) runs no script
   spawn   {"world", "type", "facts"} -> {"unit": handle, ...state}
   call    {"world", "unit", "script", "how", "args", "facts"} -> {"r": 1 started, 0 refused, -1 faulted, ...state}
   slice   {"world", "facts"} -> state
+  activate {"world", "unit", "on"} -> {"r", ...state}: the state setter 0x48B090(unit, 1, on)
   remove  {"world", "unit"} -> state
   free    {"world"} -> {}
 `facts` is a list of [unit, owner, x, z, left, health] rows (tagpu_wikicob.h WIKICOBFACT; `left` a number the
@@ -61,6 +62,7 @@ def library():
     lib.tagpu_wikicob_free.argtypes = [C.c_void_p]
     lib.tagpu_wikicob_spawn.argtypes = [C.c_void_p, C.c_int, C.POINTER(Fact), C.c_int]
     lib.tagpu_wikicob_remove.argtypes = [C.c_void_p, C.c_int]
+    lib.tagpu_wikicob_activate.argtypes = [C.c_void_p, C.c_int, C.c_int]
     lib.tagpu_wikicob_call.argtypes = [C.c_void_p, C.c_int, C.c_char_p, C.c_int, C.c_int, C.POINTER(C.c_int32),
                                        C.POINTER(Fact), C.c_int]
     lib.tagpu_wikicob_slice.argtypes = [C.c_void_p, C.POINTER(Fact), C.c_int]
@@ -120,7 +122,7 @@ class Host:
             old = min(self.worlds)
             self.lib.tagpu_wikicob_free(self.worlds.pop(old)[0])
         notes = [self.lib.tagpu_wikicob_note(h, i).decode("latin-1") for i in range(len(specs))]
-        return {"world": wid, "notes": notes}
+        return {"world": wid, "notes": notes, **self.state(self.worlds[wid])}
 
     def facts(self, rows):
         arr = (Fact * max(1, len(rows)))()
@@ -163,6 +165,8 @@ class Host:
                 f, n = self.facts(req["facts"])
                 self.lib.tagpu_wikicob_slice(h, f, n)
                 return self.state(w)
+            if op == "activate":
+                return {"r": self.lib.tagpu_wikicob_activate(h, req["unit"], req["on"]), **self.state(w)}
             if op == "remove":
                 self.lib.tagpu_wikicob_remove(h, req["unit"])
                 return self.state(w)

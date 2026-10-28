@@ -180,15 +180,15 @@ static int key_of(R* r, const TJV* v, int* key)
     return refuse(r, "no key", s);
 }
 
-/* FBI canstop as sim.js reads it, `(canstop & 1) === 1`: a number whose integer part is odd, or
-   true, is 1; absent, null or false is 0. JS's `&` takes the integer part modulo 2^32, which keeps
-   its parity. Anything else (a string JS would coerce) is refused. */
-static int canstop(R* r, const TJV* v, int* out)
+/* An FBI flag (canstop, activatewhenbuilt) as sim.js reads it, `(v & 1) === 1`: a number whose
+   integer part is odd, or true, is 1; absent, null or false is 0. JS's `&` takes the integer part
+   modulo 2^32, which keeps its parity. Anything else (a string JS would coerce) is refused. */
+static int fbi_flag(R* r, const TJV* v, const char* key, int* out)
 {
     *out = 0;
     if (!v || tj_is(v, TJ_NULL) || tj_is(v, TJ_FALSE)) return 1;
     if (tj_is(v, TJ_TRUE)) { *out = 1; return 1; }
-    if (!tj_is(v, TJ_NUM)) return refuse(r, "a canstop is neither a number nor a boolean", NULL);
+    if (!tj_is(v, TJ_NUM)) return refuse(r, "a flag is neither a number nor a boolean:", key);
     *out = isfinite(v->num) && fmod(fabs(trunc(v->num)), 2.0) == 1.0;
     return 1;
 }
@@ -253,7 +253,8 @@ static int defs(R* r, WIKIENTRY* e, const TJV* units)
                      "when it is not empty", d->name);
             return refuse(r, why, NULL);
         }
-        if (!canstop(r, tj_get(u, "canstop"), &d->canstop)) return 0;
+        if (!fbi_flag(r, tj_get(u, "canstop"), "canstop", &d->canstop)) return 0;
+        if (!fbi_flag(r, tj_get(u, "activatewhenbuilt"), "activatewhenbuilt", &d->activate_when_built)) return 0;
         if (!(d->build_time > 0)) return refuse(r, "no positive buildTime for", d->name);
     }
     /* the build lists once every type is known; a name the entry does not define is never asked
@@ -362,6 +363,23 @@ static int input(R* r, const TJV* v, WIKIINPUT* in)
     if ((c = tj_get(v, "move")) && !tj_is(c, TJ_NULL)) {
         in->has |= WIKI_IN_MOVE;
         if (!point(r, c, &in->move, "a move")) return 0;
+    }
+    /* A WAIT, sim.js's data rule (make): `until` a state it knows, `max` an integer 1..WIKI_UNTIL_MAX
+       ticks, and nothing but `at` beside them. sim.js checks it as it plays the demo, and every
+       demo is played, so the loader refuses it whatever reads the demo; the rule that no other
+       input shares its tick is tagpu_wikisim_init's. */
+    if ((c = tj_get(v, "until"))) {
+        const TJV* m = tj_get(v, "max");
+        const TJV* k;
+        if (!tj_is(c, TJ_STR) || strcmp(c->str, "idle")) return refuse(r, "a wait names no state the sim knows", NULL);
+        if (!m || !tj_is(m, TJ_NUM) || m->num != floor(m->num) || !(m->num >= 1 && m->num <= WIKI_UNTIL_MAX))
+            return refuse(r, "a wait has no max of 1 to 3600 ticks", NULL);
+        for (k = v->first; k; k = k->next)
+            if (strcmp(k->key, "at") && strcmp(k->key, "until") && strcmp(k->key, "max"))
+                return refuse(r, "a wait carries another input", NULL);
+        in->has |= WIKI_IN_UNTIL;
+        in->until = WIKI_UNTIL_IDLE;
+        in->until_max = (int)m->num;
     }
     return key_of(r, tj_get(v, "down"), &in->down) && key_of(r, tj_get(v, "up"), &in->up);
 }
@@ -952,6 +970,7 @@ static const char* const FIGURES[6] = { "buildTime", "workerTime", "buildDistanc
 static int cast_def(const TJV* v, const char* at, WIKICASTDEF* k, char* why, size_t n)
 {
     const TJV *t = tj_get(v, "type"), *f = tj_get(v, "footprint"), *cs = tj_get(v, "canstop"), *vt = tj_get(v, "vent");
+    const TJV *aw = tj_get(v, "activatewhenbuilt");
     const TJV *b = tj_get(v, "builds"), *x;
     size_t len;
     int i;
@@ -992,6 +1011,11 @@ static int cast_def(const TJV* v, const char* at, WIKICASTDEF* k, char* why, siz
     }
     /* sim.js's (canstop & 1) === 1: JS's & takes the integer modulo 2^32, which keeps its parity */
     k->canstop = cs && fmod(fabs(cs->num), 2.0) == 1.0;
+    if (aw && (!tj_is(aw, TJ_NUM) || aw->num != floor(aw->num) || !isfinite(aw->num))) {
+        snprintf(why, n, "%s: activatewhenbuilt is not an integer", at);
+        return 0;
+    }
+    k->activate_when_built = aw && fmod(fabs(aw->num), 2.0) == 1.0;
     if (vt && !tj_is(vt, TJ_TRUE) && !tj_is(vt, TJ_FALSE)) { snprintf(why, n, "%s: vent is not a boolean", at); return 0; }
     k->vent = tj_is(vt, TJ_TRUE);
     /* fx and fz are within WIKI_FP_MAX above, the bound g_rows rests on */

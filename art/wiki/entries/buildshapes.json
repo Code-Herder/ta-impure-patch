@@ -48,7 +48,14 @@
     },
     "ARMLLT": {"cast":"tower","footprint":[2,2],"buildTime":4662,"canstop":1,"name":"L.L.T.","from":"ARMLLT.fbi"},
     "ARMDRAG": {"cast":"wall","footprint":[2,2],"buildTime":520,"name":"Dragon's Teeth","from":"ARMDRAG.fbi"},
-    "ARMSOLAR": {"cast":"solar","footprint":[5,5],"buildTime":2495,"name":"Solar Collector","from":"ARMSOLAR.fbi"}
+    "ARMSOLAR": {
+      "cast": "solar",
+      "footprint": [5,5],
+      "buildTime": 2495,
+      "activatewhenbuilt": 1,
+      "name": "Solar Collector",
+      "from": "ARMSOLAR.fbi"
+    }
   },
   "scene": {
     "map": {"w":40,"h":30,"surfaceMetal":0},

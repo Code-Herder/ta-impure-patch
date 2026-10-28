@@ -75,6 +75,8 @@ typedef struct {
                                        the unit's `g`, or every cell when `vent` comes with none */
     int         canstop;            /* FBI canstop, def+0x245 bit 3: STOP is live for a selection
                                        holding it */
+    int         activate_when_built;/* FBI activatewhenbuilt, def+0x241 bit 18: a structure
+                                       finished, or made whole, is switched on (0x41B9A6) */
     uint64_t    builds;             /* bit i: its build list names type i of the entry */
 } WIKIDEF;
 
@@ -111,7 +113,12 @@ typedef struct {
     WIKIPOINT        cursor;
 } WIKISCENE;
 
-enum { WIKI_IN_MOVE = 1, WIKI_IN_BUILD = 2, WIKI_IN_CAPTION = 4 };
+enum { WIKI_IN_MOVE = 1, WIKI_IN_BUILD = 2, WIKI_IN_CAPTION = 4, WIKI_IN_UNTIL = 8 };
+
+/* A DEMO'S WAIT (sim.js's UNTILS): the state a wait holds the demo's clock for. IDLE: no unit of
+   the player's holds a build or a reclaim order. WIKI_UNTIL_MAX bounds its max, in ticks. */
+enum { WIKI_UNTIL_IDLE = 1 };
+#define WIKI_UNTIL_MAX 3600
 
 /* One input of a demo's timeline, or one the player gives Try it yourself. */
 typedef struct {
@@ -121,6 +128,7 @@ typedef struct {
     int              down, up;          /* WIKI_KEY_*, WIKI_ACT_* (an action, unresolved), or -1 */
     int              build;             /* WIKI_IN_BUILD: the type armed, or -1 to leave the mode */
     const char*      caption;           /* WIKI_IN_CAPTION: the caption, NULL to clear it */
+    int              until, until_max;  /* WIKI_IN_UNTIL: the WIKI_UNTIL_* and its max, ticks */
     int              extra;             /* a demo's input names a key besides at, caption and
                                            build: it is no caption alone, which a build trip's
                                            ticks admit (tagpu_wikidata_trips) */
@@ -234,6 +242,7 @@ typedef struct {
     double   build_time, worker_time, build_distance, max_velocity, extracts, energy_make;
                                     /* finite, >= 0, build_time > 0; an absent one reads 0 */
     int      canstop;               /* (canstop & 1), as WIKIDEF's */
+    int      activate_when_built;   /* (activatewhenbuilt & 1), as WIKIDEF's */
     int      vent;                  /* has a G cell */
     uint16_t g[WIKI_FP_MAX];        /* as WIKIDEF's; inside fx x fz */
     uint16_t builds;                /* bit c: its build menu holds cast c's type */
@@ -243,7 +252,8 @@ typedef struct { WIKICASTDEF cast[WIKI_NCAST]; } WIKICASTING;
 
 /* A side's casting from its JSON record ({"casts": {...}}; `side`, `commander`, `report` and any
    other key are read past) into `c`, held to every bound of sim.js's checkCasting: all nine casts
-   given, each null or a record whose type, title, footprint, figures, canstop, vent, g and builds
+   given, each null or a record whose type, title, footprint, figures, canstop, activatewhenbuilt,
+   vent, g and builds
    hold. Beyond it, a cast named twice is refused (a JSON object keeps one of them for sim.js).
    1, or 0 with a message in `err` and `c` zeroed: a refused casting is not used at all. */
 int tagpu_wikidata_casting(const TJV* v, WIKICASTING* c, char* err, size_t errn);

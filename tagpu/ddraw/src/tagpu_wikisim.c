@@ -37,7 +37,7 @@
 
 /* The context sim.js's context() gives a sim created with none: the layout's side 0, which every
    checked layout has (tagpu_wikilayout_check: 1 to 8 sides), no casting, and Interface Type 1. */
-static const WIKISIMCTX CTX_NONE = { 0, NULL, 1 };
+static const WIKISIMCTX CTX_NONE = { 0, NULL, 1, NULL };
 enum { KIND_NONE, KIND_MEX, KIND_GEO };
 enum { HOW_BUILD, HOW_RECLAIM };
 /* where the cursor is (sim.js over()); NONE: a mouse button that has not gone down */
@@ -176,6 +176,97 @@ static XZ map_cursor(const WIKISIM* s)
 
 /* ---- units: each one on the heap, so a pointer to it holds while the list grows ---- */
 
+/* ---- the units' scripts: the in-game wiki's COB host (tagpu_wikicob.h), sim.js's COB, facts,
+   stance, cobCall, extractorSpeed and spawn ---- */
+
+/* a world position in 16.16, truncated toward zero and held to the int32 range, as sim.js's fix16 */
+static int32_t fix16(double v)
+{
+    const double t = trunc(v * 65536.0);
+    return t < -2147483648.0 ? INT32_MIN : t > 2147483647.0 ? INT32_MAX : (int32_t)t;
+}
+
+/* GET's facts: every unit with a script handle, in creation order -- its handle, owner, centre,
+   the build fraction still to go as the float unit+0x104 holds, and HEALTH in percent, 100 since
+   the wiki has no damage. The count, 0 when the scratch could not grow (oom set). */
+static int facts(WIKISIM* s)
+{
+    int i, n = 0;
+    if (s->nunit > s->cfact) {
+        WIKICOBFACT* p = (WIKICOBFACT*)realloc(s->fact, (size_t)s->nunit * sizeof *p);
+        if (!p) { s->oom = 1; return 0; }
+        s->fact = p;
+        s->cfact = s->nunit;
+    }
+    for (i = 0; i < s->nunit; i++) {
+        const WIKIUNIT* u = s->unit[i];
+        WIKICOBFACT* f = &s->fact[n];
+        if (!u->cob) continue;
+        f->unit = u->cob;
+        f->owner = u->owner;
+        f->x = fix16(u->x);
+        f->z = fix16(u->z);
+        f->left = (float)(1.0 - u->built);
+        f->health = 100;
+        n++;
+    }
+    return n;
+}
+
+/* INBUILDSTANCE, the gate a builder's work waits on (0x438700); open for a unit that runs no script */
+static int stance(const WIKISIM* s, const WIKIUNIT* u)
+{
+    return !s->cob || !u->cob || tagpu_wikicob_value(s->cob, u->cob, WIKICOB_INBUILDSTANCE) != 0;
+}
+
+static void cob_call(WIKISIM* s, const WIKIUNIT* u, const char* script, int how, int argc, const int32_t* args)
+{
+    int n;
+    if (!s->cob || !u->cob) return;
+    n = facts(s);
+    tagpu_wikicob_call(s->cob, u->cob, script, how, argc, args, s->fact, n);
+}
+
+/* JS's ToInt32 of a finite double's integer part, its low byte: a cell's metal as the engine's byte */
+static int metal_byte(double m)
+{
+    double t = fmod(trunc(m), 4294967296.0);
+    if (t < 0) t += 4294967296.0;
+    return (int)((uint32_t)t & 0xFFu);
+}
+
+/* the extractor's SetSpeed (0x437840, from every create): the sum over its footprint cells on the
+   map of the cell's metal + 1, kept in a 16-bit word and sign-extended (0x437866..0x437902).
+   ExtractsMetal does not enter it. */
+static int32_t extractor_speed(const WIKISIM* s, const WIKIUNIT* u)
+{
+    int x, z, sum = 0;
+    for (z = u->oz; z < u->oz + fpz(s, u->type); z++)
+        for (x = u->ox; x < u->ox + fpx(s, u->type); x++)
+            if (x >= 0 && x < s->W && z >= 0 && z < s->H) sum += metal_byte(s->metal[z * s->W + x]) + 1;
+    sum &= 0xFFFF;
+    return sum >= 0x8000 ? sum - 0x10000 : sum;
+}
+
+/* A UNIT APPEARS (a scene's spawn, a nanoframe placed): the create's script starts in the engine's
+   order, Create run-now (0x485DE6), an extractor's SetSpeed run-later (0x437902), and for a unit
+   made whole whose FBI says ActivateWhenBuilt the state setter's Activate (0x48612F). Its handle
+   is the next in spawn order, the host's own numbering, so the facts carry its row while Create
+   runs. */
+static void spawn(WIKISIM* s, WIKIUNIT* u)
+{
+    int n;
+    if (!s->cob || s->ncob >= WIKICOB_UNITS) return;
+    u->cob = ++s->ncob;
+    n = facts(s);
+    if (tagpu_wikicob_spawn(s->cob, u->type, s->fact, n) != u->cob) { s->oom = 1; return; }
+    if (def(s, u->type)->extracts > 0) {
+        const int32_t a = extractor_speed(s, u);
+        cob_call(s, u, "SetSpeed", WIKICOB_ARGS, 1, &a);
+    }
+    if (u->built >= 1 && def(s, u->type)->activate_when_built) tagpu_wikicob_activate(s->cob, u->cob, 1);
+}
+
 /* a unit joins the world, appended in the room new_unit made for it. With the sidebar it carries
    its page state: 0x485CD5 creates a unit whose type has numbered pages with bit 22 set and page
    1; any other unit has neither. */
@@ -187,6 +278,7 @@ static WIKIUNIT* enter(WIKISIM* s, WIKIUNIT* u)
         u->page = n >= 1 ? 1 : 0;
     }
     s->unit[s->nunit++] = u;
+    spawn(s, u);
     return u;
 }
 
@@ -205,7 +297,8 @@ static int push_order(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* o)
         u->order = p;
         u->corder = c;
     }
-    u->order[u->norder++] = *o;
+    u->order[u->norder] = *o;
+    u->order[u->norder++].serial = ++s->next_serial;
     return 1;
 }
 
@@ -1789,6 +1882,7 @@ static int walk(const WIKISIM* s, WIKIUNIT* u, double tx, double tz, double stop
     if (d <= stop) return 1;
     step = def(s, u->type)->max_velocity;
     if (d - stop < step) step = d - stop;
+    u->stepped = 1;
     u->hx = dx / d;
     u->hz = dz / d;
     u->x += dx / d * step;
@@ -1805,7 +1899,8 @@ static int reach(const WIKISIM* s, WIKIUNIT* u, BOX b)
 }
 
 /* a builder in range works on st, and turns at once to face its centre (unchanged when it stands
-   on the centre) */
+   on the centre); its work waits on its stance (0x438700): no progress until its script has set
+   INBUILDSTANCE, though the job is its own from now, which its StartBuilding goes for */
 static void credit(const WIKISIM* s, WIKIUNIT* u, WIKIUNIT* st, int how)
 {
     const double dx = st->x - u->x, dz = st->z - u->z, d = sqrt(dx * dx + dz * dz);
@@ -1814,11 +1909,13 @@ static void credit(const WIKISIM* s, WIKIUNIT* u, WIKIUNIT* st, int how)
         u->hx = dx / d;
         u->hz = dz / d;
     }
+    u->job = st;
+    u->job_how = how;
+    snprintf(u->job_id, sizeof u->job_id, "%s", st->id);
+    if (!stance(s, u)) return;
     if (how == HOW_BUILD) st->work_build += w;
     else st->work_reclaim += w;
     st->worked = 1;
-    u->job = st;
-    u->job_how = how;
 }
 
 static void shift_order(WIKIUNIT* u) { splice_orders(u, 0, 1); }
@@ -1842,7 +1939,9 @@ static void advance(WIKISIM* s)
     for (i = 0; i < s->nunit; i++) {
         WIKIUNIT* u = s->unit[i];
         u->job = NULL;
+        u->job_id[0] = 0;
         u->worked = 0;
+        u->stepped = 0;
         u->work_build = u->work_reclaim = 0;
     }
     /* a structure placed here joins the list and is visited too, with no orders */
@@ -1887,11 +1986,15 @@ static void advance(WIKISIM* s)
         if (st->work_build && st->built < 1) {
             st->built += st->work_build;
             if (st->built > 1) st->built = 1;
+            /* 0x41B8D0: a structure finished whose FBI says ActivateWhenBuilt is switched on (0x41B9A6) */
+            if (st->built >= 1 && s->cob && st->cob && def(s, st->type)->activate_when_built)
+                tagpu_wikicob_activate(s->cob, st->cob, 1);
         }
         if (st->work_reclaim) {
             st->reclaimed += st->work_reclaim;
             if (st->reclaimed > 1) st->reclaimed = 1;
             if (st->reclaimed >= 1) {
+                if (s->cob && st->cob) tagpu_wikicob_remove(s->cob, st->cob);
                 remove_unit(s, st);
                 i--;
             }
@@ -1907,6 +2010,40 @@ static void advance(WIKISIM* s)
             if ((st = structure_at(s, o->type, o->ox, o->oz)) && st->built >= 1) shift_order(u);
         } else if ((o->k == WIKI_ORDER_RECLAIM || o->k == WIKI_ORDER_GUARD) && !by_id(s, o->target))
             shift_order(u);
+    }
+    /* THE ENGINE'S CALLS OF THE UNIT'S TURN, sim.js's, unit by unit in creation order: its build
+       calls, then its walk class. A builder's work is the structure it worked on this tick,
+       waiting on its stance or not; when that changes StopBuilding goes for the old one (0x43A251,
+       run-later, no argument: the order's destructor, in the same call as the build it finished)
+       and StartBuilding for the new one (0x4385C7, run-later, one word: the target's angle from the
+       builder's facing, 0 here since the builder faces it at once). A structure finished or
+       reclaimed this tick is no one's work any more. Then the walk class (0x43DA70): a mobile unit
+       that stepped this tick and stood the last starts StartMoving and MoveRate1 (no FBI the wiki
+       reads sets moverate1, whose default 2 x MaxVelocity keeps its class 1), one that stood this
+       tick and stepped the last StopMoving, both run-now. Jobs are found by id: a reclaim freed
+       its target above. */
+    for (i = 0; s->cob && i < s->nunit; i++) {
+        WIKIUNIT* u = s->unit[i];
+        const WIKIUNIT* t = u->job_id[0] ? by_id(s, u->job_id) : NULL;
+        if (t && u->job_how == HOW_BUILD && t->built >= 1) t = NULL;
+        if (u->work[0] && (!t || strcmp(u->work, t->id))) {
+            cob_call(s, u, "StopBuilding", WIKICOB_LATER, 0, NULL);
+            u->work[0] = 0;
+            u->work_serial = 0;
+        }
+        if (t && !u->work[0]) {
+            const int32_t heading = 0;
+            cob_call(s, u, "StartBuilding", WIKICOB_ARGS, 1, &heading);
+            snprintf(u->work, sizeof u->work, "%s", t->id);
+            u->work_serial = u->norder ? u->order[0].serial : 0;
+        }
+        if (!mobile(s, u->type)) continue;
+        if (u->stepped && !u->moving) {
+            cob_call(s, u, "StartMoving", WIKICOB_NOW, 0, NULL);
+            cob_call(s, u, "MoveRate1", WIKICOB_NOW, 0, NULL);
+        } else if (!u->stepped && u->moving)
+            cob_call(s, u, "StopMoving", WIKICOB_NOW, 0, NULL);
+        u->moving = u->stepped;
     }
     /* no pointer to a reclaimed unit outlives the tick */
     for (i = 0; i < s->nunit; i++) s->unit[i]->job = NULL;
@@ -1949,24 +2086,67 @@ static void feed(WIKISIM* s, int t)
 {
     s->feeding = t;
     while (s->trip_next < s->ntrip_in && s->trip_in[s->trip_next].at <= t) input(s, &s->trip_in[s->trip_next++]);
-    while (s->next < s->nscript && s->script[s->next]->at == t) input(s, s->script[s->next++]);
+    while (s->next < s->nscript && s->script[s->next]->at == t) {
+        const WIKIINPUT* e = s->script[s->next++];
+        if (e->has & WIKI_IN_UNTIL) {
+            s->waiting = e->until;
+            s->wait_max = e->until_max;
+            s->wait_from = s->tick;
+        } else input(s, e);
+    }
+}
+
+/* the wait's state: WIKI_UNTIL_IDLE, no unit of the player's holds a build or a reclaim order */
+static int idle(const WIKISIM* s)
+{
+    int i, j;
+    for (i = 0; i < s->nunit; i++) {
+        const WIKIUNIT* u = s->unit[i];
+        if (u->owner != 0) continue;
+        for (j = 0; j < u->norder; j++)
+            if (u->order[j].k == WIKI_ORDER_BUILD || u->order[j].k == WIKI_ORDER_RECLAIM) return 0;
+    }
+    return 1;
+}
+
+/* AN ORDER THE PLAYER TAKES AWAY ends its work at once: the order's destructor starts StopBuilding
+   when the input is handled (0x43A251), before the next tick's slice */
+static void drop_work(WIKISIM* s)
+{
+    int i;
+    for (i = 0; s->cob && i < s->nunit; i++) {
+        WIKIUNIT* u = s->unit[i];
+        if (!u->work[0] || (u->norder && u->order[0].serial == u->work_serial)) continue;
+        cob_call(s, u, "StopBuilding", WIKICOB_LATER, 0, NULL);
+        u->work[0] = 0;
+        u->work_serial = 0;
+    }
 }
 
 /* the player's input stands between two ticks: the view of the tick the sim stands at shows it */
 void tagpu_wikisim_input(WIKISIM* s, const WIKIINPUT* ev)
 {
     input(s, ev);
+    drop_work(s);
     cursor_tick(s, s->tick);
 }
 
 void tagpu_wikisim_step(WIKISIM* s)
 {
     const int t = s->tick + 1;
-    feed(s, t);
+    if (s->waiting && idle(s)) s->waiting = 0;
+    else if (s->waiting && t - s->wait_from > s->wait_max) s->stalled = 1;
+    if (!s->waiting) feed(s, ++s->clock);
+    drop_work(s);
+    /* the slice: every unit's DoScriptsNow(1), before its orders and its movement (0x48ADEB) */
+    if (s->cob) {
+        const int n = facts(s);
+        tagpu_wikicob_slice(s->cob, s->fact, n);
+    }
     advance(s);
     s->tick = t;
     /* a lock ends the demo on its own tick, which then holds under the entry's badge */
-    s->done = s->tick >= s->end || s->locked >= 0;
+    s->done = s->clock >= s->end || s->locked >= 0 || s->stalled;
     if (s->lay) route(s);
     s->hover = hover(s);
     cursor_tick(s, t);
@@ -2134,6 +2314,11 @@ const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s)
     }
     v->caption = s->caption;
     v->pace = s->PACE;
+    v->clock = s->clock;
+    v->waiting = s->waiting;
+    v->stalled = s->stalled;
+    v->has_cob = s->cob != NULL;
+    v->cob_hash = s->cob ? tagpu_wikicob_hash(s->cob, 0xCBF29CE484222325ull) : 0;
     v->mode = s->mode;
     /* the column, only with the sidebar on; the type the demo stopped on, with it or without */
     if ((v->has_side = s->lay != NULL)) side_view(s, &v->side);
@@ -2278,6 +2463,17 @@ uint64_t tagpu_wikisim_hash(const WIKISIM* s)
         fnv_str(&h, v.under);
     }
     fnv_str(&h, s->locked >= 0 ? def(s, s->locked)->name : "");
+
+    fnv_int(&h, s->clock);
+    fnv_int(&h, s->waiting);
+    fnv_int(&h, s->stalled);
+    fnv_int(&h, s->cob != NULL);
+    if (s->cob) {
+        const uint64_t c = tagpu_wikicob_hash(s->cob, 0xCBF29CE484222325ull);
+        unsigned char b[8];
+        for (i = 0; i < 8; i++) b[i] = (unsigned char)(c >> (8 * i));
+        fnv_bytes(&h, b, 8);
+    }
     return h;
 }
 
@@ -2289,6 +2485,8 @@ void tagpu_wikisim_free(WIKISIM* s)
         free(s->unit[i]);
     }
     free(s->unit);
+    tagpu_wikicob_free(s->cob);
+    free(s->fact);
     free(s->metal);
     free(s->fog);
     free(s->vent);
@@ -2434,6 +2632,7 @@ static int bind(WIKISIM* s, const WIKIENTRY* e, const WIKICASTING* k, char* err,
         d->vent = c->vent;
         memcpy(d->g, c->g, sizeof d->g);
         d->canstop = c->canstop;
+        d->activate_when_built = c->activate_when_built;
         for (j = 0; j < e->ndef; j++)
             if ((c->builds >> e->def[j].cast) & 1) d->builds |= (uint64_t)1 << j;
     }
@@ -2553,6 +2752,15 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
         s->vent_centre[i].x = (cx + 0.5) * CELL;
         s->vent_centre[i].z = (cz + 0.5) * CELL;
     }
+    /* THE UNITS' SCRIPTS, the host made before any unit so each scene unit's spawn reaches it: each
+       of the sim's types (the bound ones, with a casting) asked of the context's source by name */
+    if (ctx->cob) {
+        WIKICOBTYPE types[WIKI_MAX_DEFS];
+        memset(types, 0, sizeof types);
+        for (i = 0; i < s->entry->ndef && i < WIKI_MAX_DEFS; i++)
+            if (!ctx->cob->type(ctx->cob->ctx, s->entry->def[i].name, &types[i])) memset(&types[i], 0, sizeof types[i]);
+        if (!(s->cob = tagpu_wikicob_new(s->entry->ndef, types, 1, err, errn))) goto refused;
+    }
     if ((r = scene_units(s, a, err, errn)) > 0 && b) r = scene_units(s, b, err, errn);
     if (r < 0) goto oom;
     if (!r) goto refused;
@@ -2567,6 +2775,16 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     if (b && b->has_cursor) { s->cursor_x = b->cursor.x; s->cursor_z = b->cursor.z; }
     else if (a->has_cursor) { s->cursor_x = a->cursor.x; s->cursor_z = a->cursor.z; }
     if (scripted && d) {
+        /* the wait's data rule beyond the loader's (sim.js make): no other input shares its tick */
+        for (i = 0; i < d->ninput; i++) {
+            if (!(d->input[i].has & WIKI_IN_UNTIL)) continue;
+            for (k = 0; k < d->ninput; k++)
+                if (k != i && d->input[k].at == d->input[i].at) {
+                    snprintf(err, errn, "demo %s: the wait at tick %.17g shares its tick with another input",
+                             d->id ? d->id : "?", d->input[i].at);
+                    goto refused;
+                }
+        }
         if (!tagpu_wikidata_buttons(d, s->iface, err, errn)) goto refused;
         if (!resolve(s, d)) goto oom;
         if (s->trips && !tagpu_wikidata_trips(d, s->iface, err, errn)) goto refused;

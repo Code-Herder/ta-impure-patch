@@ -5,8 +5,8 @@
    The demos are the placement gesture of tagpu/ddraw/src/tagpu_place.c (research/notes/tadr-port/quality-of-life.md,
    "What Impure does") played through sim.js. A demo's cursor glides with a move every two ticks, so its inputs are
    generated here; change a demo here and regenerate. The unit figures are the stock game's, read once from the retail
-   unit files (each row's `from`); nothing of the game is copied. `canstop` is written only for the types whose FBI
-   sets it: the engine reads a missing key as 0 (sim.js canStop), and so does the sim.
+   unit files (each row's `from`); nothing of the game is copied. `canstop` and `activatewhenbuilt` are written only for the
+   types whose FBI sets them: the engine reads a missing key as 0 (sim.js canStop), and so does the sim.
 
    Each unit names its `cast`, its place in the demos: where a side's casting applies, the sim plays that side's type
    for the cast, with its figures, and the authored type plays everywhere else. Text names units by cast tokens
@@ -35,7 +35,7 @@ const units = {
     name: 'Construction KBot', from: 'ARMCK.fbi; build list: the stock build menu, every button in page order' },
   ARMLLT: { cast: 'tower', footprint: [2, 2], buildTime: 4662, canstop: 1, name: 'L.L.T.', from: 'ARMLLT.fbi' },
   ARMDRAG: { cast: 'wall', footprint: [2, 2], buildTime: 520, name: "Dragon's Teeth", from: 'ARMDRAG.fbi' },
-  ARMSOLAR: { cast: 'solar', footprint: [5, 5], buildTime: 2495, name: 'Solar Collector', from: 'ARMSOLAR.fbi' },
+  ARMSOLAR: { cast: 'solar', footprint: [5, 5], buildTime: 2495, activatewhenbuilt: 1, name: 'Solar Collector', from: 'ARMSOLAR.fbi' },
 };
 
 /* the map, 40 x 30 cells of plain ground, 480 rows: as tall as stock TA's sidebar beside it (the owner's

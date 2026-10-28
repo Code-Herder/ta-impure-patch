@@ -575,6 +575,7 @@ static void casting_out(const WIKICASTING* k)
         key("fz", 0); printf("%d", d->fz);
         for (i = 0; i < 6; i++) { key(FIG[i], 0); num(fig[i]); }
         key("canstop", 0); printf("%d", d->canstop);
+        key("activatewhenbuilt", 0); printf("%d", d->activate_when_built);
         key("vent", 0); printf("%d", d->vent);
         key("g", 0);
         for (i = 0; i < WIKI_FP_MAX; i++) printf("%c%u", i ? ',' : '[', (unsigned)d->g[i]);

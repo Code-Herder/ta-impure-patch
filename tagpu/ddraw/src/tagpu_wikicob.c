@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "tagpu_cob_safe.h"
 #include "tagpu_cobvm.h"
 #include "tagpu_wikicob.h"
@@ -69,19 +70,106 @@ static UNIT* unit_at(const WIKICOB* w, int u)
 
 /* ---- the host the core calls ---- */
 
-/* GET_UNIT_VALUE (vt+0x44, 0x480770) for the ids tagpu_cob_getter leaves to the stock handler */
+/* (x & 0xFFFF0000) + (z >> 16): a point as PIECE_XZ and UNIT_XZ pack it (0x480811, 0x480868),
+   integer x in the high word, integer z in the low, added, so a negative z borrows from x */
+static int32_t pack_xz(int32_t x, int32_t z)
+{
+    return (int32_t)(((uint32_t)x & 0xFFFF0000u) + (uint32_t)(z >> 16));
+}
+
+/* the point a packed word names, as XZ_ATAN, XZ_HYPOT and GROUND_HEIGHT unpack it (0x480965):
+   x = a & 0xFFFF0000, z = a << 16, and x + 0x10000 when z is negative */
+static void unpack_xz(int32_t a, double* x, double* z)
+{
+    int32_t zz = (int32_t)((uint32_t)a << 16);
+    uint32_t xx = (uint32_t)a & 0xFFFF0000u;
+    if (zz < 0) xx += 0x10000u;
+    *x = (double)(int32_t)xx;
+    *z = (double)zz;
+}
+
+/* round half to even, the x87 store 0x4B715A ends with */
+static int32_t round_even(double v)
+{
+    double f = (double)(int64_t)v, d;
+    if (f > v) f -= 1.0;                    /* floor */
+    d = v - f;
+    if (d > 0.5 || (d == 0.5 && (int64_t)f % 2 != 0)) f += 1.0;
+    return (int32_t)(int64_t)f;
+}
+
+/* atan on [0, 1] from + - * / alone, so every compiler and C library gives the same double
+   (the wiki's simulation rule, tagpu_wikisim.h): a reduction to |t| <= tan(pi/12) and the series
+   to t^15, whose error there is below 1e-13 rad */
+static double atan01(double t)
+{
+    const double r3 = 0.57735026918962576451;   /* tan(pi/6) */
+    double off = 0.0, t2, s;
+    if (t > 0.26794919243112270647) {           /* tan(pi/12) */
+        t = (t - r3) / (1.0 + r3 * t);
+        off = 0.52359877559829887308;           /* pi/6 */
+    }
+    t2 = t * t;
+    s = t * (1.0 - t2 * (1.0 / 3 - t2 * (1.0 / 5 - t2 * (1.0 / 7 - t2 * (1.0 / 9 - t2 * (1.0 / 11 -
+        t2 * (1.0 / 13 - t2 * (1.0 / 15))))))));
+    return off + s;
+}
+
+/* 0x4B715A(x, z): round(atan2(x, z) * 65536 / 2pi), the engine's angle in 1/65536 turns, here
+   from atan01 instead of the x87 fpatan, so it can differ from the engine's by one unit at a
+   rounding boundary */
+static int32_t ta_atan(double x, double z)
+{
+    const double pi = 3.14159265358979323846;
+    double ax = x < 0 ? -x : x, az = z < 0 ? -z : z, a;
+    if (ax == 0.0 && az == 0.0) return 0;
+    a = ax <= az ? atan01(ax / az) : pi / 2 - atan01(az / ax);
+    if (z < 0) a = pi - a;
+    if (x < 0) a = -a;
+    return round_even(a * (65536.0 / (2.0 * pi)));
+}
+
+/* hypot as sqrt of the sum of squares, truncated as _ftol truncates (0x480994, 0x4809E5) */
+static int32_t trunc_hypot(double x, double z)
+{
+    double h = sqrt(x * x + z * z);
+    return h >= 2147483647.0 ? 2147483647 : (int32_t)h;
+}
+
+/* GET_UNIT_VALUE (vt+0x44, 0x480770) for the ids tagpu_cob_getter leaves to the stock handler:
+   the table at 0x480AC4, each id answered from what the wiki has (research/notes/
+   exe-reverse-engineering.md, "get and set -- the twenty value ids"). The stage is flat at
+   height 0 and the host keeps no piece transform and no definition box, so PIECE_Y, UNIT_Y,
+   UNIT_HEIGHT and GROUND_HEIGHT answer 0, PIECE_XZ answers the unit's own point, and XZ_ATAN
+   leaves out the unit's heading, which the facts do not carry. Any other id is 0 (0x480ABB). */
 static int32_t host_get(void* ctx, int32_t id, int32_t a, int32_t b, int32_t c, int32_t d)
 {
     WIKICOB* w = (WIKICOB*)ctx;
     const UNIT* u = unit_at(w, w->cur);
     const WIKICOBFACT* f = fact(w, w->cur);
-    (void)a; (void)b; (void)c; (void)d;
+    const WIKICOBFACT* t;
+    double x, z;
+    (void)c; (void)d;
     if (!u) return 0;
     switch (id) {
+    case WIKICOB_ACTIVATION: case WIKICOB_STANDINGMOVEORDERS: case WIKICOB_STANDINGFIREORDERS:
+    case WIKICOB_INBUILDSTANCE: case WIKICOB_BUSY: case WIKICOB_YARD_OPEN: case WIKICOB_BUGGER_OFF:
+    case WIKICOB_ARMORED:
+        return u->value[id];
+    /* (i16 hp * 100) / MaxDamage, 0x4807CA: the wiki has no damage, so the facts' percent */
     case WIKICOB_HEALTH:             return f ? f->health : 100;
+    case WIKICOB_PIECE_XZ:           return f ? pack_xz(f->x, f->z) : 0;
+    /* a unit id in the low word; 0, or a unit not alive, answers 0 (0x480868..0x4808A4) */
+    case WIKICOB_UNIT_XZ:
+        if ((a & 0xFFFF) == 0 || !unit_at(w, a & 0xFFFF) || !unit_at(w, a & 0xFFFF)->live) return 0;
+        t = fact(w, a & 0xFFFF);
+        return t ? pack_xz(t->x, t->z) : 0;
+    case WIKICOB_XZ_ATAN:            unpack_xz(a, &x, &z); return ta_atan(x, z) & 0xFFFF;
+    case WIKICOB_XZ_HYPOT:           unpack_xz(a, &x, &z); return trunc_hypot(x, z);
+    case WIKICOB_ATAN:               return ta_atan((double)a, (double)b) & 0xFFFF;
+    case WIKICOB_HYPOT:              return trunc_hypot((double)a, (double)b);
     case WIKICOB_BUILD_PERCENT_LEFT: return tagpu_cob_build_left(f ? f->left : 0.0f);
-    default:
-        return id >= 0 && id < WIKICOB_VALUES ? u->value[id] : 0;
+    default:                         return 0;
     }
 }
 
@@ -351,6 +439,23 @@ int tagpu_wikicob_call(WIKICOB* w, int unit, const char* script, int how, int ar
     r = how == WIKICOB_ARGS ? tagpu_cobvm_start(&u->vm, &run, s, 0, 0, 1, argc, words)
                             : tagpu_cobvm_start(&u->vm, &run, s, 0, how == WIKICOB_NOW, 0, 0, NULL);
     r = settle(w, unit, &run, r, script);
+    leave(w);
+    return r;
+}
+
+int tagpu_wikicob_activate(WIKICOB* w, int unit, int on)
+{
+    TAGPU_COBVM_RUN run;
+    UNIT* u = unit_at(w, unit);
+    int r;
+    on = on != 0;
+    if (!u || !u->live || u->value[WIKICOB_ACTIVATION] == on) return 0;
+    u->value[WIKICOB_ACTIVATION] = on;
+    if (!u->block) return 0;
+    u->defer[0] = on;
+    u->ndefer = 1;
+    enter(w, unit, &run, NULL, 0);
+    r = settle(w, unit, &run, 1, on ? "Activate" : "Deactivate");
     leave(w);
     return r;
 }

@@ -41,6 +41,7 @@
 #include <stdint.h>
 #include "tagpu_placegeo.h"
 #include "tagpu_wikidata.h"
+#include "tagpu_wikicob.h"
 
 #define WIKI_CELL 16
 #define WIKI_TPS  30
@@ -75,6 +76,8 @@ enum { WIKI_ORDER_MOVE, WIKI_ORDER_BUILD, WIKI_ORDER_RECLAIM, WIKI_ORDER_GUARD }
 
 typedef struct {
     int    k;                       /* WIKI_ORDER_* */
+    int    serial;                  /* the sim's count of orders made when this one was, from 1:
+                                       sim.js's order object, whose identity a COB work rests on */
     int    type;                    /* BUILD: the building's type */
     int    ox, oz;                  /* BUILD: its footprint's first cell */
     double x, z;                    /* MOVE: where to */
@@ -100,6 +103,15 @@ typedef struct WIKIUNIT {
     struct WIKIUNIT* job;
     int              job_how, worked;
     double           work_build, work_reclaim;
+    /* the unit's script (tagpu_wikicob.h): its handle in the host, 0 for none; the structure it
+       works on, by id, which its StartBuilding went for ("" for none), and the serial of the
+       order that work came from; this tick's job by id (a reclaim frees its target mid-tick);
+       whether it stepped this tick, and whether it was moving after the last */
+    int              cob;
+    char             work[WIKI_ID_MAX];
+    int              work_serial;
+    char             job_id[WIKI_ID_MAX];
+    int              stepped, moving;
 } WIKIUNIT;
 
 enum { WIKI_SITE_PLACE, WIKI_SITE_REFUSED, WIKI_SITE_REMOVE };
@@ -195,6 +207,11 @@ typedef struct {
     double           drag_x0, drag_z0, drag_x1, drag_z1;
     const char*      caption;       /* NULL for none */
     double           pace;
+    int              clock;         /* the demo's clock */
+    int              waiting;       /* the WIKI_UNTIL_* a wait holds the clock for, 0 for none */
+    int              stalled;       /* a wait ran past its max: the demo stopped */
+    int              has_cob;       /* the sim runs its units' scripts: cob_hash is the host's */
+    uint64_t         cob_hash;      /* tagpu_wikicob_hash from the FNV-1a offset basis */
     int              mode;          /* the armed type, or -1: contextual */
     int              has_side;      /* the sidebar is on: side is the view's */
     WIKIVSIDE        side;
@@ -208,11 +225,20 @@ typedef struct {
    or 1 and, with a layout, a side that is not one of its sides. LIFETIME: `cast` must outlive the
    sim, which holds it (its bound types' titles point into it); in the DLL it lies inside the
    published WIKISIDE block, immutable and never freed. */
+/* Where a sim's unit scripts come from (sim.js's ctx.cob): for the type named `name`, its script
+   and its posed model's facts into `out` (borrowed until the call returns), 1; or 0 when it has
+   none, which quarantines it. NULL in WIKISIMCTX: no host, every unit at rest and every gate open. */
+typedef struct WIKICOBSRC {
+    void* ctx;
+    int (*type)(void* ctx, const char* name, WIKICOBTYPE* out);
+} WIKICOBSRC;
+
 typedef struct {
     int                side;        /* the layout's side the player plays: its MAIN2, GEN and
                                        types; not read without a layout */
     const WIKICASTING* cast;        /* that side's casting, or NULL: the entry's own types */
     int                iface;       /* the Interface Type: 0 left-click, 1 right-click */
+    const WIKICOBSRC*  cob;         /* the units' scripts, or NULL; read during init only */
 } WIKISIMCTX;
 
 struct WIKISIMBOUND;
@@ -262,7 +288,18 @@ typedef struct {
     int              nscript, next;
     WIKIINPUT*       resolved;
     const WIKIINPUT** script;
-    double           end;           /* the tick it is done on; never for Try it yourself */
+    double           end;           /* the clock it is done on; never for Try it yourself */
+    /* THE DEMO'S CLOCK (sim.js's clock): the tick its inputs, trips and end are written in. It runs
+       with `tick` except while a wait holds it: waiting the WIKI_UNTIL_* it waits for (0 none),
+       from the tick it began, at most wait_max ticks; one past its max stops the demo, stalled */
+    int              clock, waiting, wait_from, wait_max, stalled;
+    int              next_serial;   /* the orders made, the last serial given */
+
+    /* the units' scripts: the host, or NULL without one; GET's facts, scratch for every call */
+    WIKICOB*         cob;
+    int              ncob;          /* the handles given: the last unit's */
+    WIKICOBFACT*     fact;
+    int              cfact;
 
     /* the sidebar, sim.js's sb; `lay` NULL: off for the sim's whole life */
     const WIKILAYOUT* lay;
@@ -314,7 +351,8 @@ typedef struct {
 
    THE BOUND ENTRY, with a casting (sim.js's binder): every type of the entry names one of the
    nine casts and no cast twice, or the sim is refused. Type i of a cast the casting binds becomes
-   the casting's type under its name, with its title, footprint, figures, canstop and G cells, and
+   the casting's type under its name, with its title, footprint, figures, canstop, activatewhenbuilt
+   and G cells, and
    a build list holding entry type j exactly when the casting's list names j's cast; type i of a
    cast it leaves unbound keeps the entry's own definition and is marked unbound. Two types bound
    to one name refuse the sim. The indices do not move, so the scene's units and the inputs'
@@ -374,7 +412,10 @@ int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
      7. the sidebar: 1 when it is on, then its rows, the routed screen's name, the shown unit's id
         ("" for none), its page, the state count and each state, and the id of the unit under
         the cursor over the map ("" for none); or 0 alone. Then the locked type's name ("" for
-        none), with the sidebar on or off.
+        none), with the sidebar on or off;
+     8. the demo's clock, the WIKI_UNTIL_* a wait holds it for (0 none), stalled (0 or 1); then
+        the COB host: 1 and tagpu_wikicob_hash from the offset basis as 8 bytes little-endian, or
+        0 alone without one.
    The view's other fields follow from these: queued sites and order lines from the units and
    their orders, the cursor's shape from the mode and the selection, a site's order number from
    the states, footprints from the types, the pace from the entry. The tick the cursor's shape

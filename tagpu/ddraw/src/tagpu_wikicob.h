@@ -103,6 +103,13 @@ void tagpu_wikicob_remove(WIKICOB* w, int unit);
 int  tagpu_wikicob_call(WIKICOB* w, int unit, const char* script, int how, int argc, const int32_t* args,
                         const WIKICOBFACT* facts, int nfacts);
 
+/* The state setter 0x48B090(unit, 1, on), as the engine calls it on a structure finished (or
+   created whole) whose FBI says ActivateWhenBuilt (0x41B9A6, 0x48612F): nothing when ACTIVATION
+   already reads `on` (0x48B0D6); else the value changes and Activate or Deactivate starts
+   run-later (0x48B106, 0x48B12B). A script's SET ACTIVATION takes the same rule. Returns 1
+   started, 0 nothing to start, -1 when the VM faulted. */
+int  tagpu_wikicob_activate(WIKICOB* w, int unit, int on);
+
 /* The slice: DoScriptsNow(1) for every live unit with a VM, in spawn order (0x48ADEB). */
 void tagpu_wikicob_slice(WIKICOB* w, const WIKICOBFACT* facts, int nfacts);
 
