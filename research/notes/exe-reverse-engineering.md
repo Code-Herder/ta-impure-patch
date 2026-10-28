@@ -1678,7 +1678,8 @@ still free in state 5 leave `0x411AA6` and `0x411CF1` unreached there.
 
 **Teleport, order type 11** [DISASSEMBLED]. The mapper's table `0x4401EC` sends type 11 to
 `0x43F813`, which names `TELEPORT` (`push 0x505324`, `0x43F817`) through `0x438760` with no test of
-the unit, its def or a target; type 10 goes to `0x43F82C`, `STOP` (`0x502714`). `TELEPORT` is entry
+the unit, its def or a target; type 10 goes to `0x43F82C`, `STOP` (`0x502714`), which is the
+order the ARMSTOP button gives (*STOP and ATTACK*, below). `TELEPORT` is entry
 12 of the 22-entry action table `0x4FC6E8` (stride 25; `0x406BF0` passes it and its count to
 `0x43BC90`, which registers it [INFERRED]): name `Teleport`, gerund `Teleporting`, handler
 `0x406AA0`, second handler `0x439740`. The handler,
@@ -7513,10 +7514,40 @@ reads none either.
     - it writes `main+0x2CC3` = 1 (`0x419CC2`), which replaces an armed build's `0x0E`, so **STOP
       disarms**;
     - it clears `main+0x2CC6` bit 3 (`0x419CCE..0x419CD8`) and leaves bit 5;
-    - it gives the order `0x438760("STOP")` through the order issuer
+    - it gives the order `0x438760("STOP")` (`0x419CE5`; the action byte is built in place in the
+      argument slot, `mov ecx,esp`) through the order issuer
       `0x48CF30(main+0x2C76, 0, STOP, 0, 0, 0)` (`0x419CED`), which hands every selected unit of
       the controlled player the order through `0x43AFC0` (`0x48D1F4`), with no `canstop` test;
     - it ends at the shared tail `0x41A0EA` (`immediateorders`).
+- **What each unit receives** [DISASSEMBLED]. `0x48CF30(record, type, action, pos, p1, p2)`,
+  `ret 0x18`, with `type` 0 skips the mapper `0x43F0E0` and uses `action` (`0x48CF4E`,
+  `0x48D083..0x48D089`). The descriptor's flags (`0x438830`, `+0x11`) decide two things: bit 9
+  makes the unit under the cursor (`main+0x2CBA`) the target (`0x48CF5E..0x48CFA4`), and bit 1
+  with a position spreads the units about it (`0x48D111..0x48D1D3`). Stop's flags are 0, so the
+  target is 0 and the position is NULL. The walk is the controlled player's `+0x67..+0x6B` units
+  (`0x48CFAC..0x48CFCC`) with `+0x110` bit 4, minus the target; it skips `Standing_FireOrder`
+  (`0x50120C`) for a def without `+0x245` bit 1 and `Standing_MoveOrder` (`0x501220`) for one
+  without bit 0 (`0x48D0B7..0x48D10B`). Each unit gets
+  `0x43AFC0(STOP, shift, unit, 0, NULL, 0, 0)` (`0x48D1D9..0x48D1F4`). Without Shift
+  `0x43AFC0` passes the position only through `0x43ADC0` to the node constructor `0x43A0C0`,
+  which stores (0,0,0) for a NULL one (`0x43A13A..0x43A164`).
+- **Stop's handler `0x401C20`** (`ret 0xC`, the unit the first argument, the node the second)
+  announces the order once (`0x438880`: node `+0x42` bit 13 → `0x47F780(owner, 5)`), clears
+  weapon slots 0, 1 and 2's targets (`ClearTarget 0x48A0F0`, `0x401C2C..0x401C43`), and for a
+  flying type (`def+0x241` bit 11) whose `+0x110 & 3` is 2 [INFERRED: in the air] links a
+  `VTOL_LANDIFCAN` node (`0x5012BC`, `0x401C67..0x401C99`); it returns 5. MEASURED 2026-10-27
+  on Comet Catcher, an ARMCK walking to (3600, 6450): after the ARMSTOP button the order chain
+  is one Standby (action 41) at (0,0,0) and the unit holds its position to 0.1 world units for
+  15 s, and the mode byte goes 14 → 1.
+- **The scenario applier's `stop` is this order** (`tagpu_scenario.c`, `SCN_ORDERTYPES`): command
+  type 10, which the mapper `0x43F0E0` sends to `0x43F82C`, `0x438760("STOP")` with no test,
+  issued through `0x43AFC0` with no target and the zero position. MEASURED 2026-10-27 on the same
+  setup, `tacli order --unit` and `--sel`: the chain becomes one Standby (41) and the unit holds
+  its position to 0.1 world units for 15 s, as after the button; the mode byte stays 14 with a
+  build armed, because the disarm is the button's and not the order's. Command type 1 is not
+  Stop although TADR names it `BUTTON_ORDER_STOP`: it is the right click's contextual default
+  (`0x43F9E9`), and with no target and the position (0,0,0) it gave the ARMCK Move_Ground
+  (action 26) to (0,0,0), 3 of 3.
 - **The ATTACK branch begins at `0x419CF7`.** It takes the name again and compares it with
   `ATTACK` (`0x50270C`) at `0x419D0A`. Mayhem's loader rewrites `0x419CFE..0x419D4E` (its
   "teleport button" patch, read from its patch list): that range lies in ATTACK's branch, not
@@ -7573,7 +7604,8 @@ calls the pump `0x4A9FD0` at `0x499992`, then the state's handler through `[main
   `0x41D0F0` [INFERRED: the scroll]. It is not a right release over the panel.
 - **The rest of the order cascade.** `0x43F9EF` reads `main+0x37EFA` inside the order resolver
   `0x43F0E0`: it is the case for order type 1 (`0x43F141..0x43F14D`, table `0x4401EC`, index
-  type − 1, entry 0 → `0x43F9E9`). The rest of that case was not traced.
+  type − 1, entry 0 → `0x43F9E9`). The rest of that case was not traced; with no target and the
+  position (0,0,0) it orders a ground unit to (0,0,0) (MEASURED, *STOP and ATTACK* above).
 
 **What each Interface Type does with a press** (the input to the wiki's interface-type work,
 [the sidebar plan](ingame-wiki-sidebar-plan.html) decision 18). DISASSEMBLED, the rows marked

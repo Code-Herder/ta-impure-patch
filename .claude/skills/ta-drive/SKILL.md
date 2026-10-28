@@ -129,6 +129,8 @@ tools/tacli order t1 --unit 2 stop
   ring. No selection, no camera work, and the order type is yours rather than the engine's guess.
 - Orders: `move attack defend repair patrol reclaim capture load unload blast stop mobilebuild`
   (`guard` = `defend`, `blast` = the D-gun, `ctrl+d` self-destructs). No attack-move: `attack pos <x> <y>`.
+  `stop` is the STOP button's order (the unit ends on Standby, action 41) without the button's
+  disarm: an armed build stays armed.
 - **Not a validator.** A nonsense order is issued, not caught, so `1 issued` is not evidence the
   unit did anything — read the roster. **Not ownership-checked**: an enemy unit takes the order.
 

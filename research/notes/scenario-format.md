@@ -177,11 +177,22 @@ unit names by scanning the live definition table. This design follows its recipe
 
 ## Order vocabulary
 
-TA's own order names, from the engine's button/order table [VERIFIED,
-`TA_MemoryStructures.pas:6-21`]:
+TA's own order names and the command types the fork hands the order mapper
+`ScriptAction_Type2Index` `0x43F0E0` for them, numbered as TADR numbers its button/order table
+[`TA_MemoryStructures.pas:6-21`]. The wire carries the name; the number is the fork's.
 
-`stop`(1) `move`(2) `attack`(3) `blast`(4) `unload`(5) `load`(6) `defend`(7) `repair`(8)
+`stop`(10) `move`(2) `attack`(3) `blast`(4) `unload`(5) `load`(6) `defend`(7) `repair`(8)
 `patrol`(9) `teleport`(11) `reclaim`(12) `capture`(13) `mobilebuild`(14)
+
+`stop` is the sidebar STOP button's own order: type 10 sends the mapper to `0x43F82C`, which looks
+up the script action `"STOP"` with no test of the unit [DISASSEMBLED], the action the button
+gives every selected unit through `0x43AFC0`; its handler `0x401C20` clears the unit's weapon
+targets. TADR's type 1 (`BUTTON_ORDER_STOP`) is not Stop: in the mapper
+it is the right click's contextual default, which with no target orders a move to the map's
+corner. MEASURED 2026-10-27, an ARMCK walking on Comet Catcher: after `stop`, by `--unit` or
+`--sel`, its chain is one Standby (action 41) and it does not move for 15 s, as after the button.
+The button also disarms an armed build; the order does not, so an armed build stays armed
+([exe-reverse-engineering](exe-reverse-engineering.html) §"STOP and ATTACK").
 
 `teleport` is the engine's own Teleport, which no stock button issues (the order buttons' click
 handler names `ATTACK` alone, [deep-total-mayhem.md](deep-total-mayhem.md)). For type 11
