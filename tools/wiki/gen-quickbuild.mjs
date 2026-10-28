@@ -152,7 +152,7 @@ demo('cancel', 'Cancel a queued one', { selected: ['ck'] }, T => T
   .down('shift').wait(5).click('order').up('shift').say('Shift+{order} it again: the plan is cancelled and the {builder} stops.'), 90);
 
 demo('helpers', 'Helpers assist', { selected: ['pw'], cursor: [300, 210] }, T => T
-  .say('The {walker} is sent off on a walk.').wait(10).to([60, 360], 12).click('order').wait(5)
+  .say('The {walker} is sent off on a walk.').wait(10).to([596, 468], 15).click('order').wait(5)
   .to([400, 140], 25).down('select').to([150, 300], 35).up('select').say('Box-select it with both constructors.').wait(15)
   .to([248, 284], 35).say('The {advbuilder} can build the {moho}; the {builder} cannot.').wait(30)
   .click('order').say('{Order}: the {advbuilder} builds, the {builder} guards it and helps, the {walker} keeps walking.'), 240);
