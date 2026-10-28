@@ -91,11 +91,16 @@ async function load() {
   catch (x) { treeErr = x.message; return; }
   await Promise.all(leaves(TREE.tree).map(id => fetch(`${ART}entries/${id}.json`)
     .then(r => { if (!r.ok) throw new Error(`entries/${id}.json: ${r.status}`); return r.json(); })
-    .then(j => { ENT[id] = j; }, x => { ENT[id] = { error: x.message }; })));
+    .then(j => { const why = WikiText.checkEntry(j); ENT[id] = why ? { error: `entries/${id}.json: ${why}` } : j; },
+      x => { ENT[id] = { error: x.message }; })));
 }
 const entry = () => (S.entry && ENT[S.entry] && !ENT[S.entry].error) ? ENT[S.entry] : null;
 const demo = () => { const e = entry(); return e && Array.isArray(e.demos) ? e.demos[S.demo] || null : null; };
 const locked = e => !!(e && Array.isArray(e.lockedIn) && e.lockedIn.includes(S.mod));
+/* every text an entry shows goes through text.js's fillText with these words, and the sim keeps the raw text. The sim
+   plays the entries' own types, whose names are stock ARM's, on the right-click interface, so the words are those */
+const textWords = e => WikiText.words(e, null, 1);
+const fill = (e, t) => WikiText.fillText(t, textWords(e));
 
 /* ---- the game's left sidebar: the layout the sims run on and, in the game look, its pictures ----
    The detected mod's layout comes from its pack, which tools/wiki/gfx.py resolves from the player's install into the
@@ -172,7 +177,7 @@ function renderTree() {
   const walk = (ns, path) => '<ul>' + (ns || []).map((n, i) => {
     const p = `${path}.${i}`;
     if (n.entry) {
-      const e = ENT[n.entry], title = e && !e.error ? e.title || n.entry : n.entry;
+      const e = ENT[n.entry], title = e && !e.error ? fill(e, e.title) || n.entry : n.entry;
       return `<li><div class="row leaf${S.entry === n.entry ? ' sel' : ''}${e && e.error ? ' missing' : ''}" data-part="row" data-entry="${esc(n.entry)}">`
         + `<span class="dot" data-part="i_dot"><i class="gl">•</i></span><span>${esc(title)}</span>${locked(e) ? '<span class="lock" title="Turned off in this mod"></span>' : ''}</div></li>`;
     }
@@ -184,13 +189,13 @@ function renderTree() {
 }
 function renderEntry() {
   const e = entry(), err = S.entry && ENT[S.entry] && ENT[S.entry].error;
-  $('#e-title').textContent = e ? e.title || e.id : err ? S.entry : TREE ? 'Choose an entry' : '';
-  $('#e-sub').textContent = e ? e.subtitle || '' : '';
+  $('#e-title').textContent = e ? fill(e, e.title) || e.id : err ? S.entry : TREE ? 'Choose an entry' : '';
+  $('#e-sub').textContent = e ? fill(e, e.subtitle) : '';
   $('#badge').hidden = !locked(e);
   $('#demos').innerHTML = e && Array.isArray(e.demos) && e.demos.length
-    ? e.demos.map((d, i) => `<li data-part="row" data-demo="${i}"${i === S.demo ? ' class="sel"' : ''}><span class="n">${i + 1}</span><span>${esc(d.title || d.id)}</span></li>`).join('')
+    ? e.demos.map((d, i) => `<li data-part="row" data-demo="${i}"${i === S.demo ? ' class="sel"' : ''}><span class="n">${i + 1}</span><span>${esc(fill(e, d.title) || d.id)}</span></li>`).join('')
     : `<li class="none">${e ? 'No demos' : ''}</li>`;
-  $('#text').innerHTML = err ? `<p class="err">${esc(err)}</p>` : e ? (e.text || []).map(p => `<p>${esc(p)}</p>`).join('') : '';
+  $('#text').innerHTML = err ? `<p class="err">${esc(err)}</p>` : e ? (e.text || []).map(p => `<p>${esc(fill(e, p))}</p>`).join('') : '';
 }
 function render() { renderTree(); renderEntry(); controls(); syncURL(); }
 
@@ -307,7 +312,7 @@ function keysOf(v) {
   return list.map(String);
 }
 function strip(v) {
-  const cap = v ? v.caption || '' : '';
+  const cap = v && v.caption ? fill(entry(), v.caption) : '';
   if (cap !== shownCap) { $('#caption').textContent = shownCap = cap; }
   const ks = keysOf(v).join('+');
   if (ks !== shownKeys) {
