@@ -4,7 +4,7 @@
 wiki's units recorded and replayed), and **L3a and L3b are built** (2026-10-28, on
 `worktree-wiki-anim`): the wiki's units run their scripts in both simulations through one host,
 the scripts gate the builds, the demos wait on the work, and the stage draws the poses the scripts
-set, in the game and in the mockup; **L3c**, the corpus gate, is built with one refusal open
+set, in the game and in the mockup; **L3c**, the corpus gate, is built and clean (ZZZ accepted as malformed content by the owner)
 (ZZZ, below); **L4a**, the nano spray, is built (2026-10-28): a builder at work sprays from the
 piece its script's `QueryNanoPiece` names, as the engine's particles, in both simulations and on
 the stage (*The spray*); **L5**, sound, is built (2026-10-28): the wiki's units and sidebar say
@@ -575,7 +575,7 @@ settings*.
 | **L2** — built 2026-10-27 | live cobtrace + posedump fixtures for the wiki's units doing the wiki's actions — ARMCK and ARMACK walking, starting, assisting and stopping a build, reclaiming; ARMMEX and ARMMOHO built, activated, spinning at a set metal value; ARMGEO activating; ARMPW walking — and one exercising the extensions (records 9 and 10, the getters) | each fixture byte-exact through the core |
 | **L3a** — built 2026-10-28 | the host (`tagpu_wikicob`), the calls and the gating in both simulations, the facts, the quarantine, `until` waits and the 11 Quick Build demos converted, the posed order in the DLL's asset load, the three-state 3D answer the demos wait for, `activatewhenbuilt` through every reader, the mockup's server and node host, the scripts in the packs | `simparity.mjs`, `simcheck.mjs` (every demo's claim with the scripts running), `wiki_regression.py` |
 | **L3b** — built 2026-10-28 | poses drawn: the core's PrimitiveStructs copied into the stage view's pose pool on the game thread and composed over the posed order on the render thread (`tagpu_wikistage_pose`, `pose_compose`, `tagpu_posemath.h`); in the mockup `gfx.py`'s piece tables, `serve.py`'s `models`, `sim.js` `poses()`, `pose.js`, and back faces culled as the game culls them (*Drawing*) | `stage3dcheck.py` (the game's stage against the mockup's, with the poses), `posecheck.py`, `simparity.mjs`, `simcheck.mjs`, `scenecheck.mjs`, `stagecheck.mjs`, `sidecheck.mjs`, `textparity.mjs`; the demos watched in game |
-| **L3c** — built 2026-10-28, one refusal open | the corpus gate, `tools/wiki/cobcorpus.py`: every compatibility setup's unit types through the host (Create, 600 slices, the wiki's calls and a state-setter Deactivate/Activate), a refusal named | the gate itself, clean over every setup: clean but for ZZZ (below) |
+| **L3c** — built 2026-10-28 | the corpus gate, `tools/wiki/cobcorpus.py`: every compatibility setup's unit types through the host (Create, 600 slices, the wiki's calls and a state-setter Deactivate/Activate), a refusal named | the gate itself, clean over every setup: clean, ZZZ listed apart as known malformed (below) |
 | **L4a** — built 2026-10-28 | the nano spray: `QueryNanoPiece` on the engine's schedule and the piece's origin through the host (`tagpu_wikicob_query`, `tagpu_wikicob_origin`, the model's shape in `WIKICOBTYPE`), the engine's emitters and particle class repeated in both simulations as state in the hash, the wiki's own generator, the particles bounded and copied into the stage record, drawn as the engine's 2 × 2 dots (*The spray*) | `simparity.mjs` natively and `--wine`; `stagecheck.mjs`'s scripted lane; `tools/test_cobvm.py`'s query and origin tests; the host's origins against `pose.js` |
 | **L4b** — planned | `emit-sfx`: the engine's EMIT_SFX emitters (`0x480EB0`: fire `0x472330`, the wakes `0x472430`, bubbles `0x472530`, the smokes `0x472810` and `0x4728F0`) from the effect log the host now drops | the effect drawn against a game capture of the same script |
 | **L5** — built 2026-10-28 | sound: the triggers, the queue and the cooldowns as state in both simulations (hash item 10), the sound.TDF and allsound.TDF reads and the WAVs on the loader thread (`tagpu_wav.c`), the mixer on our own DirectSound object (`tagpu_wikisound.c`), the player's settings read where the engine reads them (`tagpu_menu_sound`), the sidebar's and the page's button sounds, WebAudio in the mockup (`sound.js`) (*Sound*) | a demo heard in game and in the mockup; the player's settings honoured; an MP game's own sounds unchanged with the wiki open |
@@ -698,9 +698,11 @@ L4b starts when the wiki shows a unit that emits.
   Retail runs it and reads past the model's allocation when the unit dies [INFERRED from the engine
   map, not measured]; Impure's game refuses it at load by the same rule, and its own corpus driver
   records it as the one malformed-content quarantine of those four setups (`tadr-port/cob.md`). The
-  wiki's core agrees with the game, so this is not a host bug; whether to bind per entry point, to
-  fault only on the access, or to accept the type as malformed is open, and it is the owner's.
-  `cobcorpus.py` exits 1 until it is decided.
+  wiki's core agrees with the game, so this is not a host bug. **The owner accepted it as malformed
+  content (2026-10-28)**, over binding per entry point or faulting only on the access: `cobcorpus.py`
+  lists it apart as *known malformed* through `MALFORMED`, keyed by the script's SHA-256 together with
+  the exact note, so another script named ZZZ, or this one refused for another reason, still fails the
+  gate. The gate exits 0 over every setup.
 - **GET answers what the wiki has**: PIECE_Y, UNIT_Y, UNIT_HEIGHT and GROUND_HEIGHT are 0,
   PIECE_XZ is the unit's own point and XZ_ATAN leaves out its heading (the facts carry none);
   STANDINGMOVEORDERS and STANDINGFIREORDERS are 0 (the engine reads `unit+0x110` bits,

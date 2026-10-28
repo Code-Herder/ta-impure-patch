@@ -15,7 +15,8 @@
    own -585 (0x47FED0, 0x47F17A); fxvol is never applied here: the Options slider sets it as the
    process's wave volume (waveOutSetVolume(fxvol << 10), 0x45BCC0 -> 0x4D0070), which reaches this
    object's buffers as it reaches the engine's. Neither the reply nor the named sound is positional
-   (0x4D0640 and 0x4CF570 take no point), so Sound Mode's 3D and off-screen rules do not apply.
+   (0x4D0640 takes none; 0x4CF570 takes one, and these callers pass 0), so Sound Mode's 3D and
+   off-screen rules do not apply.
 
    OUR OWN LIFETIME: the object is created by DirectSoundCreate out of the dsound.dll the game
    imports, at the first sound after an open, on the game thread, at PRIORITY on the game's window

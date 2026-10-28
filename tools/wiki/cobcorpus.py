@@ -32,9 +32,13 @@ primitives, which the host's bound, not the core, refuses.
 Setups whose types resolve to the same scripts, posed orders and calls -- most differ only by TADR's or the loader's
 files -- are run once, and the summary says which setup's run each one shares.
 
+Known malformed content is listed apart as well, by the owner's decision only: MALFORMED names a script by the SHA-256
+of its bytes together with the exact refusal note it must produce, so the same name with other bytes, or the same bytes
+refused for another reason, is still a refusal. Each entry is a loosening of the rule above and carries its case.
+
 A setup whose compat fixtures are not installed is named "not installed" and skipped, never silently. Exit 0 when no
-setup's script is refused, 1 naming each refused type (setup, type, note), 2 when the gate cannot run (an unknown
-setup, no retail install)."""
+setup's script is refused, 1 naming each refused type (setup, type, note, the script's SHA-256), 2 when the gate cannot
+run (an unknown setup, no retail install)."""
 import argparse
 import ctypes as C
 import hashlib
@@ -59,6 +63,15 @@ PIECES = 256                # WIKICOB_PIECES
 NOW, LATER, ARGS = 0, 1, 2  # WIKICOB_NOW, _LATER, _ARGS
 SPOT = (1024 << 16, 1024 << 16)     # the unit's centre in 16.16 world units, inside any map
 METAL_CELL = 3              # the metal of each footprint cell the extractor's SetSpeed sums (cell metal + 1)
+
+# Scripts the engine's own rule refuses as malformed, accepted as content by the owner's decision: SHA-256 of the COB
+# -> (unit name, the note it must be refused with, the case).
+MALFORMED = {
+    "c601321eb65f5f3930eb6d76f1e4cd8cb56f95ab0b20993c6c436b2e2db082e2": ("ZZZ", "the program: piece index exceeds model allocation",
+              "the demo pack's CORE tower (Mayhem, ProTA, TA Zero, Twilight): Killed EXPLODEs piece 3 of a three-node "
+              "model; Impure's game refuses it at load by the same rule (tadr-port/cob.md); the owner accepted it as "
+              "malformed content on 2026-10-28 (ingame-wiki-cob-plan.md, the corpus gate)"),
+}
 
 # The wiki's calls over the run, each at its tick, before that tick's slice: (tick, what, who). `who` names the kind
 # of type the wiki makes the call for; the calls table of the plan gives each one's entry.
@@ -250,9 +263,17 @@ def main(argv=None):
             shared = first
         else:
             got = {n: runner.run(cob, vis, k) for n, cob, vis, k in types}
+            digest = {n: hashlib.sha256(cob).hexdigest() for n, cob, _vis, _k in types}
+            refused_here, malformed = {}, {}
+            for n, g in got.items():
+                known = MALFORMED.get(digest[n])
+                if g[0] and known and known[:2] == (n, g[0]):
+                    malformed[n] = f"{g[0]} (known malformed: {known[2]})"
+                elif g[0]:
+                    refused_here[n] = f"{g[0]} [sha256 {digest[n]}]"
             res = {"types": len(types) + len(apart), "scripts": len(types),
                    "calls": sum(g[1] for g in got.values()), "started": sum(g[2] for g in got.values()),
-                   "refused": {n: g[0] for n, g in got.items() if g[0]}, "apart": apart}
+                   "refused": refused_here, "malformed": malformed, "apart": apart}
             runs[key] = (name, res)
             shared = None
             ran += 1
@@ -260,10 +281,12 @@ def main(argv=None):
             refused.append((name, n, note))
         print(f"{name}: {res['types']} types, {res['scripts']} scripts through the host, "
               f"{res['started']} of {res['calls']} calls started, {len(res['refused'])} refused, "
-              f"{len(res['apart'])} set apart" + (f" (the same scripts as {shared}, run once)" if shared else "")
+              f"{len(res['malformed'])} known malformed, {len(res['apart'])} set apart" + (f" (the same scripts as {shared}, run once)" if shared else "")
               + f" [{time.monotonic() - t:.1f} s]")
         for n, note in sorted(res["refused"].items()):
             print(f"  REFUSED {n}: {note}")
+        for n, why in sorted(res["malformed"].items()):
+            print(f"  malformed {n}: {why}")
         for n, why in sorted(res["apart"].items()):
             print(f"  apart {n}: {why}")
         out.append({"setup": name, "shares": shared, **res})
