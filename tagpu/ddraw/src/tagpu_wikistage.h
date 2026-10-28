@@ -29,6 +29,7 @@
 #define WIKISTAGE_UNITS   128
 #define WIKISTAGE_POSE    4096                  /* primitives posed by scripts, all units      */
 #define WIKISTAGE_PIECES  256                   /* one posed model's: WIKI3D_MAXPIECE          */
+#define WIKISTAGE_PARTS   WIKI_SPRAY_PARTS      /* the nano spray's particles: the sim's pool  */
 #define WIKISTAGE_SITES   PLACE_MAX_SITES       /* a gesture never has more                   */
 #define WIKISTAGE_QUEUED  256
 #define WIKISTAGE_LINES   512
@@ -46,6 +47,7 @@
 #define WIKISTAGE_TRUNC_CAPTION 0x080u
 #define WIKISTAGE_TRUNC_LABEL   0x100u          /* a label or a type's name, cut at a character */
 #define WIKISTAGE_TRUNC_POSE    0x200u          /* a unit's posed model: the unit draws at rest */
+#define WIKISTAGE_TRUNC_SPRAY   0x400u          /* the simulation dropped a spray particle      */
 
 typedef struct {
     float   x, z;                       /* its centre, world units                         */
@@ -85,6 +87,14 @@ typedef struct {
 } WIKISTAGESITE;
 
 typedef struct { float from_x, from_z, to_x, to_z; uint8_t kind; } WIKISTAGELINE;
+
+/* ONE PARTICLE OF THE NANO SPRAY (tagpu_wikisim.h WIKIVPART): its point in 16.16 world units --
+   x, altitude, z -- and its palette index, 0xA1..0xA7. Data on the render thread: the colour is
+   bounded where it is read. */
+typedef struct {
+    int32_t x, y, z;
+    uint8_t col;
+} WIKISTAGEPART;
 
 /* WHICH LAYOUT THE SIMULATION RUNS ON, as the view names it: a value, so the record stays a
    record of values (tagpu_wikipk.h). The render thread resolves it to a layout it holds itself
@@ -147,6 +157,9 @@ typedef struct {
     int16_t        ntype;
     char           type[WIKI_MAX_DEFS][WIKISTAGE_LABEL];    /* the types' names: a queued
                                            site's and the ghost's label                    */
+    uint16_t       npart;
+    WIKISTAGEPART  part[WIKISTAGE_PARTS];                   /* the nano spray, in the order
+                                                               the simulation made it      */
     uint16_t       npose;
     WIKISTAGEPIECE pose[WIKISTAGE_POSE];                    /* the units' posed models     */
 } WIKISTAGEVIEW;

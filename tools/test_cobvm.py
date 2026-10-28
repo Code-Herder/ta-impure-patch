@@ -14,6 +14,7 @@ import os
 import sys
 import importlib.util
 from pathlib import Path
+import struct
 import subprocess
 import tempfile
 import threading
@@ -361,8 +362,9 @@ class WikiHost(unittest.TestCase):
     def tearDownClass(cls):
         cls.temp.cleanup()
 
-    def host(self, sources):
-        """A host for one type per source (None: no script), its handle freed with the test."""
+    def host(self, sources, shape=None):
+        """A host for one type per source (None: no script), its handle freed with the test; `shape`
+        (offsets, parents, top) the model's shape of every type, none without it."""
         keep, arr = [], (self.serve.Type * len(sources))()
         for i, src in enumerate(sources):
             if src is None:
@@ -372,6 +374,12 @@ class WikiHost(unittest.TestCase):
             keep += [cob, vis]
             arr[i].cob, arr[i].ncob = C.cast(C.c_char_p(cob), C.c_void_p), len(cob)
             arr[i].pieces, arr[i].visible = 2, C.cast(C.c_char_p(vis), C.c_void_p)
+            if shape:
+                off = struct.pack("<6i", *[w for o in shape[0] for w in o])
+                par = struct.pack("<2h", *shape[1])
+                keep += [off, par]
+                arr[i].offset, arr[i].parent = C.cast(C.c_char_p(off), C.c_void_p), C.cast(C.c_char_p(par), C.c_void_p)
+                arr[i].top = shape[2]
         err = C.create_string_buffer(256)
         h = self.lib.tagpu_wikicob_new(len(sources), arr, 1, err, 256)
         self.assertTrue(h, err.value)
@@ -462,6 +470,48 @@ class WikiHost(unittest.TestCase):
         self.lib.tagpu_wikicob_slice(h, f, n)
         self.assertEqual(self.lib.tagpu_wikicob_value(h, 1, self.ACTIVATION), 0)
         self.assertEqual(self.lib.tagpu_wikicob_value(h, 1, self.BUGGER_OFF), 1)
+
+    def origin(self, h, unit, piece):
+        turned, base = (C.c_int32 * 3)(), (C.c_int32 * 3)()
+        r = self.lib.tagpu_wikicob_origin(h, unit, piece, turned, base)
+        return r, list(turned), list(base)
+
+    def test_query_nano_piece_answers_its_piece_and_a_missing_one_leaves_the_preset(self):
+        h = self.host(["QueryNanoPiece(p) { p = arm; }", "Create() { }"])
+        f, n = self.facts([1, 2])
+        self.lib.tagpu_wikicob_spawn(h, 0, f, n)
+        self.lib.tagpu_wikicob_spawn(h, 1, f, n)
+        io = (C.c_int32 * 4)(7, 0, 0, 0)
+        self.assertEqual(self.lib.tagpu_wikicob_query(h, 1, b"QueryNanoPiece", io, f, n), 1)
+        self.assertEqual(io[0], 1)
+        io = (C.c_int32 * 4)(7, 0, 0, 0)
+        self.assertEqual(self.lib.tagpu_wikicob_query(h, 2, b"QueryNanoPiece", io, f, n), 0)
+        self.assertEqual(io[0], 7)
+
+    def test_a_pieces_origin_is_carried_up_its_parent_turned(self):
+        # arm, a child of the root base: its offset turned by base's TURN (0x43DEF0), base's own
+        # offset and MOVE apart; a quarter turn about y is exact, so its words are known
+        shape = ([(2 << 16, 1 << 16, 0), (10 << 16, 3 << 16, 0)], (-1, 0), 40 << 16)
+        h = self.host(["Create() { }", "Create() { turn base to y-axis <90> now; }"], shape)
+        f, n = self.facts([1, 2])
+        self.lib.tagpu_wikicob_spawn(h, 0, f, n)
+        self.lib.tagpu_wikicob_spawn(h, 1, f, n)
+        self.assertEqual(self.origin(h, 1, 1), (1, [10 << 16, 3 << 16, 0], [2 << 16, 1 << 16, 0]))
+        r, turned, base = self.origin(h, 2, 1)
+        self.assertEqual((r, turned[0], turned[1], abs(turned[2]), base), (1, 0, 3 << 16, 10 << 16, [2 << 16, 1 << 16, 0]))
+        self.assertEqual(self.origin(h, 2, 0), (1, [0, 0, 0], [2 << 16, 1 << 16, 0]))
+        self.assertEqual(self.lib.tagpu_wikicob_top(h, 1), 40 << 16)
+        self.assertEqual(self.lib.tagpu_wikicob_top(h, 2), 0)
+
+    def test_a_piece_outside_the_model_and_a_broken_parent_chain_answer_the_units_point(self):
+        shape = ([(2 << 16, 1 << 16, 0), (10 << 16, 3 << 16, 0)], (1, 0), 0)
+        h = self.host(["Create() { }"], shape)
+        f, n = self.facts([1])
+        self.lib.tagpu_wikicob_spawn(h, 0, f, n)
+        self.assertEqual(self.origin(h, 1, 2), (0, [0, 0, 0], [0, 0, 0]))
+        self.assertEqual(self.origin(h, 1, -1), (0, [0, 0, 0], [0, 0, 0]))
+        # parents that never reach a root: the shape is refused whole, every offset 0
+        self.assertEqual(self.origin(h, 1, 1)[1:], ([0, 0, 0], [0, 0, 0]))
 
     def test_set_keeps_what_the_engine_keeps(self):
         # 0x480B20: INBUILDSTANCE, BUSY and BUGGER_OFF keep bit 0, ARMORED whether nonzero (0x48B090),

@@ -602,6 +602,9 @@ static int cob_type(void* c, const char* name, WIKICOBTYPE* out)
         out->ncob = u->nscript;
         out->pieces = u->pieces;
         out->visible = u->visible;
+        out->offset = &u->offset[0][0];
+        out->parent = u->parent;
+        out->top = u->top;
         return 1;
     }
     return 0;

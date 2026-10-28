@@ -573,6 +573,42 @@ def posed_order(root, cob):
     return [(k, len(nodes[k].vertices) >= 3) for k in order]
 
 
+def model_shape(root, order):
+    """The model's shape the wiki's COB host takes (tagpu_wikicob.h WIKICOBTYPE), for the tree `root` whose posed
+    order is `order` (walk indices, posed_order's): per primitive its node's offset from its parent's, three 16.16 words
+    in the axes the engine holds a model in -- X and Z negated, as the loader 0x4CB590 negates them -- and its parent's
+    primitive index, -1 for the root; and `top`, 0x4CB5F0's height: over a sibling chain, the most of 0 and, for each
+    node, its vertices' y and its child chain's height, each plus the node's y offset (0x4CB5F0..0x4CB641,
+    DISASSEMBLED). The DLL's 3D load computes the same from its arena (tagpu_wikiasset.c `unit_shape`)."""
+    nodes = [p for p, _ in root.walk()]
+    walk = {id(p): k for k, p in enumerate(nodes)}
+    parent = {}
+    for p in nodes:
+        for c in p.children:
+            parent[id(c)] = walk[id(p)]
+    at = {k: i for i, k in enumerate(order)}
+
+    def raw(v):
+        return round(v * 65536)
+
+    def i32(v):
+        return (v + 2 ** 31) % 2 ** 32 - 2 ** 31
+
+    def top(chain):
+        m = 0
+        for nd in chain:
+            oy = raw(nd.offset[1])
+            for v in nd.vertices:
+                m = max(m, i32(raw(v[1]) + oy))
+            if nd.children:
+                m = max(m, i32(top(nd.children) + oy))
+        return m
+
+    offset = [[i32(-raw(nodes[k].offset[0])), i32(raw(nodes[k].offset[1])), i32(-raw(nodes[k].offset[2]))]
+              for k in order]
+    return {"offset": offset, "parent": [at.get(parent.get(id(nodes[k]), -1), -1) for k in order], "top": top([root])}
+
+
 def bind(eng, tex, owner, binds):
     """The binder's rule for one face's texture name (0x42A140): (frame key, GafFrame) or None for flat 0xD1."""
     k = (tex.lower(), owner)
@@ -777,7 +813,8 @@ def write_units(out, eng, entry, report, types):
             (out / f"units/{key}.cob").write_bytes(shit[0])
             posed = posed_order(root, shit[0])
             order = [k for k, _ in posed]
-            rec["script"] = {"file": f"units/{key}.cob", "order": order, "visible": [int(v) for _, v in posed]}
+            rec["script"] = {"file": f"units/{key}.cob", "order": order, "visible": [int(v) for _, v in posed],
+                             **model_shape(root, order)}
         # the pieces in the order the host's posed model holds them, so a primitive's index is its row and its
         # vertices' piece (tools/wiki/mockup/pose.js composes the script's pose over this table)
         at = {k: i for i, k in enumerate(order)}

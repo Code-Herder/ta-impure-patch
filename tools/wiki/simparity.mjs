@@ -122,6 +122,8 @@ function stateHash(sim, v) {
   int(v.clock); int(v.waiting === 'idle' ? 1 : 0); int(v.stalled ? 1 : 0);
   int(v.cob ? 1 : 0);
   if (v.cob) for (const half of [v.cob[1], v.cob[0]]) for (let k = 0; k < 4; k++) byte((half >>> (8 * k)) & 255);
+  int(v.parts.length);
+  for (const p of v.parts) for (const w of p) int(w);
   return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0');
 }
 
@@ -514,7 +516,8 @@ try {
   const ids = [...new Set(tree.tree.flatMap(leaves))];
   for (const name of Object.keys(CASTINGS))
     fs.writeFileSync(path.join(tmp, `casting-${name}.json`), JSON.stringify(CASTINGS[name][0]));
-  fs.writeFileSync(path.join(tmp, 'cob.json'), JSON.stringify(Object.fromEntries(Object.entries(SCRIPTS).map(([n, t]) => [n, { cob: t.cob, visible: t.visible }]))));
+  fs.writeFileSync(path.join(tmp, 'cob.json'), JSON.stringify(Object.fromEntries(Object.entries(SCRIPTS).map(([n, t]) =>
+    [n, { cob: t.cob, visible: t.visible, offset: t.offset, parent: t.parent, top: t.top }]))));
   if (!COBS.includes(true)) console.log('note   no gfx pack under tools/wiki/mockup/gfx/ holds a script: the demos play without their units\' scripts only');
   for (const cob of COBS) for (const side of ['fixture', 'fixture-tall', null]) for (const cname of [null, ...Object.keys(CASTINGS)]) for (const iface of [1, 0]) {
     const layout = side && SIDE(side), named = `${side || 'no sidebar'}, ${cname || 'own types'}, type ${iface}${cob ? ', scripts' : ''}`;

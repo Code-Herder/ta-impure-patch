@@ -161,6 +161,13 @@ typedef struct {
        has `nwalk` nodes, and bounds each entry by the unit's primitive count. */
     int         nwalk;
     int16_t     posed_of[WIKI3D_MAXPIECE];
+    /* THE MODEL'S SHAPE (tagpu_wikicob.h WIKICOBTYPE), set with `pieces`: each posed primitive's
+       node offset from its parent's in 16.16 as the arena holds it (X and Z negated, as the
+       loader 0x4CB590 negates them), its parent's primitive index (-1 a root), and the model's
+       height by 0x4CB5F0's rule, which the nano spray's target box rises to */
+    int32_t     offset[WIKI3D_MAXPIECE][3];
+    int16_t     parent[WIKI3D_MAXPIECE];
+    int32_t     top;
 } WIKI3DUNIT;
 
 typedef struct {

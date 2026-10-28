@@ -39,6 +39,8 @@ const WikiSim = (() => {
   const COB_UNITS = 1024, COB_INBUILDSTANCE = 5;
   // tagpu_wikistage.h: the stage view's units, its pose pool and one posed model's primitives
   const STAGE_UNITS = 128, STAGE_POSE = 4096, STAGE_PIECES = 256;
+  // tagpu_wikisim.h, THE NANO SPRAY: the live particles and the second bursts waiting, at most
+  const SPRAY_PARTS = 1024, SPRAY_BURSTS = 256;
   /* A DEMO'S WAIT, {"at", "until", "max"} (research/notes/ingame-wiki-cob-plan.md, decision 10): the demo's clock
      stops at `at` until the state `until` names holds, at most `max` ticks, after which the demo stops and says so.
      UNTILS are the states; "idle": no unit of the player's holds a build or a reclaim order. UNTIL_MAX bounds `max`. */
@@ -1314,6 +1316,90 @@ const WikiSim = (() => {
       walk(u, (b.ox + b.fx / 2) * CELL, (b.oz + b.fz / 2) * CELL, 0);
       return false;
     }
+    /* ---- the nano spray (tagpu_wikisim.h, THE NANO SPRAY), tagpu_wikisim.c's spray functions line for line: int32
+       arithmetic through | 0 and Math.imul, each double operation as the C rounds it ---- */
+    let parts = [], bursts = [], nemit = 0, partsCut = false;
+    // a double truncated toward zero and held to the int32 range, as tagpu_wikisim.c's trunc32
+    const trunc32 = v => Math.max(-2147483648, Math.min(2147483647, Math.trunc(v)));
+    // lowbias32, a 32-bit finaliser
+    const mix32 = x => {
+      x ^= x >>> 16; x = Math.imul(x, 0x7feb352d); x ^= x >>> 15; x = Math.imul(x, 0x846ca68b); x ^= x >>> 16;
+      return x >>> 0;
+    };
+    // the emission's key: the builder's id (FNV-1a 32 over its UTF-8 bytes) and its place among the tick's emissions
+    const sprayKey = (id, n) => {
+      let h = 0x811c9dc5;
+      for (const b of new TextEncoder().encode(id)) h = Math.imul(h ^ b, 0x01000193) >>> 0;
+      return mix32((h + Math.imul(n, 0x9e3779b9)) >>> 0);
+    };
+    // THE WIKI'S GENERATOR: draw k (0..5) of particle i of the burst made on `tick`, 0..0x7FFF
+    const sprayDraw = (key, tick, i, k) => mix32((mix32((key ^ tick) >>> 0) ^ (i * 8 + k)) >>> 0) & 0x7fff;
+    // 0x473B50's box: on each axis the base at lo + 4/11 of the span, the extent to 7/11 of it
+    const sprayBox = (lo, hi) => {
+      const out = [0, 0, 0, 0, 0, 0];
+      for (let k = 0; k < 3; k++) {
+        const d = (hi[k] - lo[k]) | 0, q4 = Math.trunc(Math.imul(4, d) / 11), q7 = Math.trunc(Math.imul(7, d) / 11);
+        out[k] = (lo[k] + q4) | 0;
+        out[3 + k] = (((lo[k] + q7) | 0) - out[k]) | 0;
+      }
+      return out;
+    };
+    // ONE BURST of 0x473D50 on `tick`: five particles; the particles it made, those past the pool's bound included
+    const sprayBurst = (e, tick) => {
+      let made = 0;
+      for (let i = 0; i < 5; i++) {
+        const at = [[0, 0, 0], [0, 0, 0]];
+        for (let k = 0; k < 6; k++) {
+          const b = e.box[Math.trunc(k / 3)];
+          at[Math.trunc(k / 3)][k % 3] = (b[k % 3] + Math.trunc(sprayDraw(e.key, tick, i, k) * b[3 + k % 3] / 0x8000)) | 0;
+        }
+        const d = [0, 1, 2].map(k => (at[1][k] - at[0][k]) | 0);
+        const len = trunc32(Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]));
+        const steps = ((len >>> 18) << 16) >> 16;
+        if (!steps) continue;
+        made++;
+        if (parts.length >= SPRAY_PARTS) { partsCut = true; continue; }
+        parts.push([at[0][0], at[0][1], at[0][2], Math.trunc(d[0] / steps), Math.trunc(d[1] / steps), Math.trunc(d[2] / steps),
+          tick + steps, 0xa1 + i % 7]);
+      }
+      return made;
+    };
+    /* THE UNIT'S SPRAY on tick `t`, in its turn after its build calls: QueryNanoPiece names the piece, the host gives
+       its origin, the unit's facing turns it as the stage turns the model, and the structure's box is the target */
+    function spray(u, t) {
+      const sp = u.spray, [fx, fz] = fp(sp.type), cs = -u.hz, sn = u.hx;
+      if (sp.how === 'reclaim') {
+        if (u.sprayAt && t - u.sprayAt < 2) return;
+        u.sprayAt = t;
+      }
+      const q = u.cob ? COB.query(u.cob, 'QueryNanoPiece', [0, 0, 0, 0], facts()) : { r: 0 };
+      const piece = q.r > 0 ? q.io[0] : 0;
+      const o = u.cob ? COB.origin(u.cob, piece) : { turned: [0, 0, 0], base: [0, 0, 0] };
+      const pt = [
+        (((fix16(u.x) + trunc32(cs * o.turned[0] + sn * o.turned[2])) | 0) + o.base[0]) | 0,
+        (o.turned[1] + o.base[1]) | 0,
+        (((fix16(u.z) - trunc32(-sn * o.turned[0] + cs * o.turned[2])) | 0) - o.base[2]) | 0,
+      ];
+      const lo = [(fix16(sp.x) - fx * 0x80000) | 0, 0, (fix16(sp.z) - fz * 0x80000) | 0];
+      const hi = [(fix16(sp.x) + fx * 0x80000) | 0, COB.top(defIndex.indexOf(sp.type)), (fix16(sp.z) + fz * 0x80000) | 0];
+      const point = sprayBox(pt, pt), target = sprayBox(lo, hi);
+      const e = { box: sp.how === 'reclaim' ? [target, point] : [point, target], key: sprayKey(u.id, nemit++), due: t + 1 };
+      if (!sprayBurst(e, t)) return;
+      if (bursts.length < SPRAY_BURSTS) bursts.push(e); else partsCut = true;
+    }
+    // THE WALKER on tick `t`: every particle moves a step, its colour on, and dies past its end; then the bursts due
+    function sprayTick(t) {
+      for (const p of parts) {
+        const low = (p[7] & 0xf) + 1;
+        p[0] = (p[0] + p[3]) | 0; p[1] = (p[1] + p[4]) | 0; p[2] = (p[2] + p[5]) | 0;
+        p[7] = (p[7] & 0xfff0) + (low > 7 ? 1 : low);
+      }
+      parts = parts.filter(p => t <= p[6]);
+      const due = bursts.filter(e => e.due === t);
+      bursts = bursts.filter(e => e.due !== t);
+      for (const e of due) sprayBurst(e, t);
+    }
+
     function advance() {
       const work = new Map(), jobs = new Map();
       // a builder in range works on s, and turns at once to face its centre (unchanged when it stands on the centre)
@@ -1327,8 +1413,11 @@ const WikiSim = (() => {
         const w = work.get(s) || { build: 0, reclaim: 0 };
         w[how] += def(u.type).workerTime / def(s.type).buildTime / TPS * PACE;
         work.set(s, w);
+        // the step made progress: the unit's turn sprays at the structure as it stands now
+        u.spray = { how, type: s.type, x: s.x, z: s.z };
       };
-      for (const u of units) u.stepped = false;
+      for (const u of units) { u.stepped = false; u.spray = null; }
+      nemit = 0;
       for (const u of units) {
         const o = u.orders[0];
         if (!o || !mobile(u.type) || o.k === 'guard') continue;
@@ -1390,8 +1479,11 @@ const WikiSim = (() => {
       for (const u of units) {
         const j = jobs.get(u);
         const target = j && units.includes(j.s) && !(j.how === 'build' && j.s.built >= 1) ? j.s : null;
-        if (u.work && u.work !== target) { cobCall(u, 'StopBuilding', 'later'); u.work = null; u.workOrder = null; u.stanced = false; }
+        if (u.work && u.work !== target) {
+          cobCall(u, 'StopBuilding', 'later'); u.work = null; u.workOrder = null; u.stanced = false; u.sprayAt = 0;
+        }
         if (target && !u.work) { cobCall(u, 'StartBuilding', 'args', [0]); u.work = target; u.workOrder = u.orders[0]; }
+        if (u.spray) spray(u, sim.tick + 1);
         if (!mobile(u.type)) continue;
         if (u.stepped && !u.moving) { cobCall(u, 'StartMoving', 'now'); cobCall(u, 'MoveRate1', 'now'); }
         else if (!u.stepped && u.moving) cobCall(u, 'StopMoving', 'now');
@@ -1402,7 +1494,9 @@ const WikiSim = (() => {
        is handled (0x43A251), before the next tick's slice */
     function dropWork() {
       if (!COB) return;
-      for (const u of units) if (u.work && u.orders[0] !== u.workOrder) { cobCall(u, 'StopBuilding', 'later'); u.work = null; u.workOrder = null; u.stanced = false; }
+      for (const u of units) if (u.work && u.orders[0] !== u.workOrder) {
+        cobCall(u, 'StopBuilding', 'later'); u.work = null; u.workOrder = null; u.stanced = false; u.sprayAt = 0;
+      }
     }
 
     /* side: the layout side the sidebar shows, -1 with the sidebar off; iface: the Interface Type. Both are the state
@@ -1466,6 +1560,7 @@ const WikiSim = (() => {
       // the slice: every unit's DoScriptsNow(1), before its orders and its movement (0x48ADEB)
       if (COB) COB.slice(facts());
       advance();
+      sprayTick(t);
       sim.tick = t;
       // a lock ends the demo on its own tick, which then holds under the entry's badge
       sim.done = clock >= end || sb.locked !== null || stalled;
@@ -1544,6 +1639,9 @@ const WikiSim = (() => {
         clock, waiting: wait ? wait.until : null, stalled,
         // the COB host's state hash (tagpu_wikicob_hash) as two uint32 halves, null without a host
         cob: COB ? COB.hash() : null,
+        // the nano spray's live particles in the order made, each [x, y, z, its step's x, y, z, end, colour] (16.16
+        // world units, x, altitude, z), and whether a bound dropped one
+        parts: parts.map(p => p.slice()), partsCut,
       };
     };
 

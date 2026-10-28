@@ -72,6 +72,46 @@
 
 typedef struct { int glide, hold, gap, back, hover; } WIKITRIPROW;
 
+/* THE NANO SPRAY (research/notes/ingame-wiki-cob-plan.md, L4a): the engine's nano particles
+   (0x4720D0 forward for a build, 0x472200 reverse for a reclaim; their class 0x4FD5B8) as the
+   wiki's simulation state. A builder whose work is credited this tick asks its script's
+   QueryNanoPiece (0x43E400, run-now) and emits from that piece's origin: every tick for a build
+   (MobileBuild 0x403E43 -> 0x403E56 -> 0x403ECC, HelpBuild 0x404139 -> 0x4041C2), every second
+   tick of a reclaim from its first (ReclaimUnit 0x4049AD -> 0x404A4E, re-armed by 0x439E80(order,
+   2)). An emission is two bursts of five (0x473D50): one on its tick, one on the next (the
+   walker 0x471EB0 spawns it again once the object's life of 1 has come, 0x472F60), the second
+   only when the first made a particle. A particle runs straight from a point of one box to a
+   point of the other at a quarter of their distance a tick (0x473EB1..0x473F04), each box shrunk
+   to its middle 4/11 .. 7/11 on every axis (0x473B80..0x473D34); it moves and then dies once the
+   tick is past its end (0x4739B0, 0x473B30), its colour cycling 0xA1..0xA7.
+
+   ITS RANDOMNESS IS THE WIKI'S OWN: a stateless hash of the builder's id, the emission's place
+   among the tick's, the tick and the draw, never the engine's CRT rand 0x4E4870 (decision 11) and
+   never the host's RAND generator, whose state the scripts' hash carries.
+
+   BOUNDED: at most WIKI_SPRAY_PARTS particles live and WIKI_SPRAY_BURSTS second bursts wait; a
+   particle or a burst past its bound is not made, and the view says so (part_cut). sim.js holds
+   the same bounds, so the two drop the same particles. */
+#define WIKI_SPRAY_PARTS  1024
+#define WIKI_SPRAY_BURSTS 256
+
+/* one particle: its point and its step a tick in 16.16 world units (x, altitude, z), the last tick
+   it is drawn, and its palette index */
+typedef struct {
+    int32_t x, y, z;
+    int32_t sx, sy, sz;
+    int32_t end;
+    int32_t col;
+} WIKIVPART;
+
+/* an emission's second burst, waiting for its tick: its two boxes as 0x473B50 keeps them,
+   {base x, y, z, extent x, y, z}, the first the one its particles start in */
+typedef struct {
+    int32_t  box[2][6];
+    int      due;
+    uint32_t key;
+} WIKISPRAY;
+
 enum { WIKI_ORDER_MOVE, WIKI_ORDER_BUILD, WIKI_ORDER_RECLAIM, WIKI_ORDER_GUARD };
 
 typedef struct {
@@ -113,6 +153,11 @@ typedef struct WIKIUNIT {
     int              work_serial, stanced;
     char             job_id[WIKI_ID_MAX];
     int              stepped, moving;
+    /* the spray: how its work was credited this tick (HOW_* + 1, 0 none) and the structure's
+       type and centre then (a reclaim may free it before the unit's turn sprays), and the tick
+       of its last reclaim spray on this work (0 none) */
+    int              spray, spray_type, spray_at;
+    double           spray_x, spray_z;
 } WIKIUNIT;
 
 enum { WIKI_SITE_PLACE, WIKI_SITE_REFUSED, WIKI_SITE_REMOVE };
@@ -213,6 +258,9 @@ typedef struct {
     int              stalled;       /* a wait ran past its max: the demo stopped */
     int              has_cob;       /* the sim runs its units' scripts: cob_hash is the host's */
     uint64_t         cob_hash;      /* tagpu_wikicob_hash from the FNV-1a offset basis */
+    int              npart;         /* the nano spray's live particles, in the order made */
+    const WIKIVPART* part;
+    int              part_cut;      /* a particle or a burst was past its bound */
     int              mode;          /* the armed type, or -1: contextual */
     int              has_side;      /* the sidebar is on: side is the view's */
     WIKIVSIDE        side;
@@ -301,6 +349,12 @@ typedef struct {
     int              ncob;          /* the handles given: the last unit's */
     WIKICOBFACT*     fact;
     int              cfact;
+    /* the nano spray, with a host only: WIKI_SPRAY_PARTS particles and WIKI_SPRAY_BURSTS second
+       bursts on the heap, the emissions of the tick being stepped, and whether a bound dropped one */
+    WIKIVPART*       part;
+    int              npart;
+    WIKISPRAY*       burst;
+    int              nburst, nemit, part_cut;
 
     /* the sidebar, sim.js's sb; `lay` NULL: off for the sim's whole life */
     const WIKILAYOUT* lay;
@@ -421,7 +475,9 @@ int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
         none), with the sidebar on or off;
      8. the demo's clock, the WIKI_UNTIL_* a wait holds it for (0 none), stalled (0 or 1); then
         the COB host: 1 and tagpu_wikicob_hash from the offset basis as 8 bytes little-endian, or
-        0 alone without one.
+        0 alone without one;
+     9. the nano spray: the particle count, and each particle's x, y, z, its step's x, y, z, its
+        end and its colour, in the view's order.
    The view's other fields follow from these: queued sites and order lines from the units and
    their orders, the cursor's shape from the mode and the selection, a site's order number from
    the states, footprints from the types, the pace from the entry. The tick the cursor's shape

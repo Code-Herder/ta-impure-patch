@@ -289,6 +289,7 @@ static void view_bound(WIKISTAGEVIEW* v)
     HOLD(v->nqueued, WIKISTAGE_QUEUED);
     HOLD(v->nline, WIKISTAGE_LINES);
     HOLD(v->ntype, WIKI_MAX_DEFS);
+    if (v->npart > WIKISTAGE_PARTS) v->npart = WIKISTAGE_PARTS;
     /* the sidebar: a source no layout answers to draws none (side_resolve); its rows, states and
        the unit under the cursor held to their arrays, the locked type to the types */
     if (v->has_side != 1 || v->layout_src >= WIKISTAGE_LAYOUT_N) v->has_side = 0;

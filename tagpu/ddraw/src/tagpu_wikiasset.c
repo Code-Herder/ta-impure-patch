@@ -1453,6 +1453,56 @@ static void unit_hides_report(SB* b, const LOADER* L, const WIKI3DUNIT* u, const
     sb_raw(b, "}");
 }
 
+/* an arena node's link field as an arena offset, 0 for none */
+static uint32_t node_link(const ARENA* a, uint32_t node, uint32_t at) { return OFF(a, rd32(AT(a, node + at))); }
+
+/* 0x4CB5F0 (DISASSEMBLED, 0x4CB5F0..0x4CB641): over the sibling chain from `node`, the most of 0
+   and, for each node, its vertices' y and its child chain's height, each plus the node's y
+   offset, in 16.16 with the engine's wrapping adds. `*left` counts the nodes it may still visit:
+   the loader refused a model that reaches a node twice, so the tree holds at most MAXPIECE, and
+   the count bounds the recursion as well. */
+static int32_t model_top(const ARENA* a, uint32_t node, int* left)
+{
+    int32_t m = 0;
+    for (; node && *left > 0; node = node_link(a, node, O_SIB)) {
+        const uint32_t oy = rd32(AT(a, node + O_X + 4)), nv = rd32(AT(a, node + O_NVERT));
+        const uint32_t vs = node_link(a, node, O_VERTS), ch = node_link(a, node, O_CHILD);
+        uint32_t i;
+        (*left)--;
+        for (i = 0; vs && i < nv; i++) {
+            const int32_t y = (int32_t)(rd32(AT(a, vs + 12 * i + 4)) + oy);
+            if (y > m) m = y;
+        }
+        if (ch) {
+            const int32_t y = (int32_t)((uint32_t)model_top(a, ch, left) + oy);
+            if (y > m) m = y;
+        }
+    }
+    return m;
+}
+
+/* THE MODEL'S SHAPE (WIKI3DUNIT) of the `nprim` posed primitives `prim`: each one's offset from
+   its parent as the arena holds it, and its parent, found as the primitive whose child chain
+   names it; tools/wiki/gfx.py `model_shape` is the same for the mockup's packs */
+static void unit_shape(const ARENA* a, uint32_t root, const char* const* prim, int nprim, WIKI3DUNIT* u)
+{
+    int j, k, n, left = MAXPIECE;
+    for (k = 0; k < nprim; k++) {
+        const unsigned char* nd = (const unsigned char*)prim[k];
+        u->offset[k][0] = (int32_t)rd32(nd + O_X);
+        u->offset[k][1] = (int32_t)rd32(nd + O_X + 4);
+        u->offset[k][2] = (int32_t)rd32(nd + O_Z);
+        u->parent[k] = -1;
+    }
+    for (j = 0; j < nprim; j++) {
+        uint32_t ch = node_link(a, (uint32_t)((const unsigned char*)prim[j] - a->base), O_CHILD);
+        for (n = 0; ch && n < nprim; n++, ch = node_link(a, ch, O_SIB))
+            for (k = 0; k < nprim; k++)
+                if ((const unsigned char*)prim[k] == AT(a, ch)) u->parent[k] = (int16_t)j;
+    }
+    u->top = model_top(a, root, &left);
+}
+
 /* THE SCRIPT FOR THE WIKI'S COB HOST: the bytes copied into the arena, and the posed model's
    order and visibility (WIKI3DUNIT). An arena too full to take the bytes leaves the type without
    a script, as its log line says; a full arena stays full (alloc), so every later allocation of
@@ -1471,6 +1521,7 @@ static void unit_script(LOADER* L, const unsigned char* cob, uint32_t n, uint32_
     nprim = piece_orders(&L->a, root, walk, &np, prim, pname);
     if (nprim < 0 || tagpu_cobscan_posed((const char*)cob, n, 0, prim, pname, nprim) < 0) return;
     for (k = 0; k < nprim; k++) u->visible[k] = rd32((const unsigned char*)prim[k] + O_NVERT) >= 3;
+    unit_shape(&L->a, root, prim, nprim, u);
     for (k = 0; k < np; k++) {
         int j;
         u->posed_of[k] = -1;

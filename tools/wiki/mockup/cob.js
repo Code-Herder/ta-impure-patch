@@ -2,10 +2,11 @@
    tools/wiki/serve.py runs: what sim.js's ctx.cob opens.
 
    cobWorld(request, specs) makes a host for the simulation's types (specs[i] {name, pack} or null, in the
-   simulation's type order) and returns its world, whose calls are tagpu_wikicob.h's: spawn, call, slice, remove,
-   each sent through `request` (one synchronous call answering serve.py's JSON), and value, resting, hash and notes
-   (each type's quarantine note, "" for none; a type is quarantined when it is made or when its script faults) read
-   from the state the last call answered. model(unit) is the unit's posed model as tagpu_wikicob_model leaves it
+   simulation's type order) and returns its world, whose calls are tagpu_wikicob.h's: spawn, call, query, slice,
+   remove and origin, each sent through `request` (one synchronous call answering serve.py's JSON), and value,
+   resting, hash and notes (each type's quarantine note, "" for none; a type is quarantined when it is made or when
+   its script faults) read from the state the last call answered, and top (each type's model height) from the
+   host's making. model(unit) is the unit's posed model as tagpu_wikicob_model leaves it
    (pose.js `parse`), null for a unit that runs no script: one `models` request answers every unit until the next
    call, so a page that draws several frames between two ticks asks once. `request` is a synchronous XMLHttpRequest
    to POST /cob in the page (cobPage) and tools/wiki/cobhost.mjs's worker under node.
@@ -18,7 +19,7 @@ const WikiCob = (() => {
 
   function cobWorld(request, specs) {
     const made = request({ op: 'new', types: specs, seed: 1 });
-    const id = made.world;
+    const id = made.world, tops = made.tops || [];
     let st = made, models = null, parsed = {};
     const take = got => { st = got; models = null; parsed = {}; return got; };
     function model(unit) {
@@ -37,6 +38,14 @@ const WikiCob = (() => {
       slice: facts => { take(request({ op: 'slice', world: id, facts })); },
       remove: unit => { take(request({ op: 'remove', world: id, unit })); },
       activate: (unit, on) => take(request({ op: 'activate', world: id, unit, on: on ? 1 : 0 })).r,
+      // tagpu_wikicob_query: { r, io }, io the four words the script left
+      query: (unit, script, io, facts) => {
+        const got = take(request({ op: 'query', world: id, unit, script, io, facts }));
+        return { r: got.r, io: got.io };
+      },
+      // tagpu_wikicob_origin: { r, turned, base }, 16.16 words in the model's axes; it changes no state
+      origin: (unit, piece) => request({ op: 'origin', world: id, unit, piece }),
+      top: type => tops[type] | 0,
       value: (unit, k) => { const v = st.values[unit]; return v ? v[k] : 0; },
       resting: unit => st.resting.includes(unit),
       // tagpu_wikicob_hash from the FNV-1a offset basis, as two uint32 halves

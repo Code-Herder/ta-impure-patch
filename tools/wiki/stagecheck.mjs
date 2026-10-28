@@ -41,12 +41,18 @@
    a box when its type did not resolve, a whitebox label never. R0 and R2 are thus R1's own ops, in R1's order, and a
    DLL that builds R1 builds them by the names alone -- which the C ops carry (WIKISTAGE_IN_*): each op's range must
    be its call's, tagpu_wikistage_keep must put each op where stage.js draws it under each image, and the image's
-   rect must be tagpu_wikistage_image's. */
+   rect must be tagpu_wikistage_image's.
+
+   THE UNITS' SCRIPTS. With a gfx pack built (tools/wiki/gfx.py, gitignored: read from the game), the demos play once
+   more with the fixture's sidebar at the first size and the units' scripts -- sim.js through serve.py's host
+   (cobhost.mjs), the C side from the same files (tests/wikicobfile.h) -- so the scripted poses and the nano spray's
+   dots are drawn and paired; without a pack that lane is left out, and the line says so. */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { cobHost, scripts } from './cobhost.mjs';
 
 const require = createRequire(import.meta.url);
 const WikiSim = require('./mockup/sim.js');
@@ -63,6 +69,12 @@ const SIZES = [
   { name: '1024x768', u: 768 / 720, x0: 409, y0: 104, w: 550, h: 378 },
   { name: 'small', u: 1, x0: 37, y0: 21, w: 200, h: 130 },
 ];
+
+// the gfx packs, each type's script from the first that holds it (simparity.mjs reads the same)
+const GFX = path.join(ROOT, 'tools/wiki/mockup/gfx');
+const PACKS = fs.existsSync(GFX) ? fs.readdirSync(GFX).sort().map(d => path.join(GFX, d)).filter(d => fs.existsSync(path.join(d, 'scene.json'))) : [];
+const SCRIPTS = scripts(PACKS);
+let host = null;
 
 class CannotRun extends Error {}
 function run(cmd, args, opts = {}) {
@@ -281,15 +293,25 @@ try {
     { name: 'fixture', file: 'side/fixture.json', sizes: SIZES },
     { name: 'fixture-tall', file: 'side/fixture-tall.json', sizes: SIZES.slice(0, 1) },
     { name: 'no sidebar', file: null, sizes: SIZES },
+    ...(Object.keys(SCRIPTS).length ? [{ name: 'fixture scripted', file: 'side/fixture.json', sizes: SIZES.slice(0, 1), cob: true }] : []),
   ];
+  const cobFile = path.join(tmp, 'cob.json');
+  fs.writeFileSync(cobFile, JSON.stringify(Object.fromEntries(Object.entries(SCRIPTS).map(([n, t]) =>
+    [n, { cob: t.cob, visible: t.visible, offset: t.offset, parent: t.parent, top: t.top }]))));
+  let nspray = 0, nsprayed = 0;
   for (const sb of SIDEBARS) {
     sb.layout = sb.file && JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki', sb.file), 'utf8'));
     sb.frames = [];
     entries.forEach((entry, i) => {
       for (const demo of entry.demos) {
-        const sim = WikiSim.play(entry, demo, sb.layout);
+        const ctx = sb.cob ? { side: 0, casting: null, iface: 1, cob: (host ??= cobHost()).forPacks(PACKS) } : undefined;
+        const sim = WikiSim.play(entry, demo, sb.layout, ctx);
         for (;;) {
-          if (sim.tick % 30 === 0 || sim.done) sb.frames.push({ key: `${ids[i]}/${demo.id}/${sim.tick}`, v: sim.view(), tick: sim.tick });
+          if (sim.tick % 30 === 0 || sim.done) {
+            const v = sim.view();
+            sb.frames.push({ key: `${ids[i]}/${demo.id}/${sim.tick}`, v, tick: sim.tick });
+            if (v.parts.length) { nspray += v.parts.length; nsprayed++; }
+          }
           if (sim.done) break;
           sim.step();
         }
@@ -357,7 +379,7 @@ try {
     const cur = sprites ? cursorsAt(si) : null, frames = sb.frames;
     const rect = [sz.x0 / sz.u, sz.y0 / sz.u, sz.w / sz.u, sz.h / sz.u].map(v => v.toPrecision(17));
     const cout = run(exe, ['ops', pak, ttf, String(S.spacing || 0), S.upper ? '1' : '0', String(style), ...cursorArgs, ...sizeArgs,
-      sprites ? spriteFile(si) : '-', sb.file || '-', ...rect, sz.u.toPrecision(17)]).trim().split('\n').map(l => JSON.parse(l));
+      sprites ? spriteFile(si) : '-', sb.file || '-', ...rect, sz.u.toPrecision(17), ...(sb.cob ? [cobFile] : [])]).trim().split('\n').map(l => JSON.parse(l));
     const cby = new Map(cout.map(f => [`${f.e}/${f.d}/${f.t}`, f]));
     nall += frames.length;
     if (cout.length !== frames.length) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name}: the C side drew ${cout.length} frames, stage.js ${frames.length}`); }
@@ -412,12 +434,13 @@ try {
   }
   const s = ((Date.now() - t0) / 1000).toFixed(1);
   if (code) console.log(`stagecheck: ${ndiffer} of ${nall} frames DIFFER (${s} s)`);
-  else console.log(`stagecheck: all equal -- ${nframes} frames (${SIDEBARS.map(sb => `${sb.name} ${sb.frames.length} at ${sb.sizes.length} size${sb.sizes.length > 1 ? 's' : ''}`).join(', ')}; each with the kit's cursors and with the game's), ${nops} ops of R1 paired call for op within 1/64 px, ${nsprite} of them game cursor frames; a cursor in ${ncur} frames and its op named in each; a sidebar in ${nside} frames, ${nsideim} of them as the image, ${ngrp} greyed buttons as groups; R0 and R2 over ${nsplit} stand-in images, ${nimage} ops (${s} s)`);
+  else console.log(`stagecheck: all equal -- ${nframes} frames (${SIDEBARS.map(sb => `${sb.name} ${sb.frames.length} at ${sb.sizes.length} size${sb.sizes.length > 1 ? 's' : ''}`).join(', ')}; each with the kit's cursors and with the game's), ${nops} ops of R1 paired call for op within 1/64 px, ${nsprite} of them game cursor frames; a cursor in ${ncur} frames and its op named in each; a sidebar in ${nside} frames, ${nsideim} of them as the image, ${ngrp} greyed buttons as groups; R0 and R2 over ${nsplit} stand-in images, ${nimage} ops; ${SIDEBARS.some(sb => sb.cob) ? `the units' scripts played, the nano spray in ${nsprayed} frames, ${nspray} particles` : "no gfx pack: the units' scripts not played"} (${s} s)`);
 } catch (x) {
   if (!(x instanceof CannotRun)) throw x;
   console.log(`stagecheck: cannot run: ${x.message}`);
   code = 2;
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
+  if (host) host.close();
 }
 process.exit(code);

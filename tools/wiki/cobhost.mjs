@@ -92,7 +92,8 @@ export function cobHost() {
 }
 
 /* every type a script of `packs` (gfx pack folders) is for, the first pack's where two name one: name -> {pack (repository-
-   relative), cob (the script's absolute path), visible (its posed model's visible flags)} */
+   relative), cob (the script's absolute path), visible (its posed model's visible flags), offset, parent and top (its
+   model's shape, gfx.py `model_shape`; empty and 0 in a pack written before the shape was)} */
 export function scripts(packs) {
   const has = {};
   for (const pack of packs) {
@@ -100,7 +101,9 @@ export function scripts(packs) {
     if (!fs.existsSync(file)) continue;
     const meshes = (JSON.parse(fs.readFileSync(file, 'utf8')).units || {}).meshes || {};
     for (const [name, m] of Object.entries(meshes))
-      if (m.script && !has[name]) has[name] = { pack: path.relative(ROOT, dir), cob: path.join(dir, m.script.file), visible: m.script.visible };
+      if (m.script && !has[name])
+        has[name] = { pack: path.relative(ROOT, dir), cob: path.join(dir, m.script.file), visible: m.script.visible,
+                      offset: m.script.offset || [], parent: m.script.parent || [], top: m.script.top || 0 };
   }
   return has;
 }

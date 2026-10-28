@@ -18,6 +18,9 @@ const WikiStage = (() => {
   // TA's build square colours for a placement site: green placed, red refused (skipped), yellow takes a queued order off
   const SITE = { place: '#2bd248', refused: '#e62828', remove: '#f0d020' };
   const LINE = { move: '#3ccf3c', build: '#f0cc10', guard: '#3a86f0', reclaim: '#e23030' };
+  // the nano spray's palette entries 0xA1..0xA7, a light-to-dark green ramp (MEASURED in the retail palettes\PALETTE.PAL;
+  // a mod's own palette is not followed)
+  const SPRAY = ['#abe77f', '#83d35b', '#67bf3f', '#4bab2b', '#43972b', '#378727', '#2f771b'];
   // layout.json's `toast`: Oswald 700, no letter-spacing, no case change, no shadow -- the HUD's one plain line
   const FACE = { style: 'toast', family: 'Oswald', weight: 700 };
   // the kit's cursor icons by the view's cursor shape, each drawn centred on the pointer where the game's did not load
@@ -312,6 +315,18 @@ const WikiStage = (() => {
         }
         g.stroke();
       }
+    }
+    /* THE NANO SPRAY over the units, as the engine draws its layer 6 above every unit row: each particle a dot of 2 x 2
+       game pixels (DrawBar 0x4BF6F0 over {sx, sy, sx + 1, sy + 1}, its fill inclusive) on the pixel sx = x >> 16,
+       sy = (z >> 16) - ((alt >> 16) >> 1), in its palette entry; only where the ground under it is in sight, as
+       0x473A00 asks the viewed player's sight, and never off the map (tagpu_wikistage.c says how each was read) */
+    mark('over');
+    for (const p of v.parts || []) {
+      const px = p[0] >> 16, py = (p[2] >> 16) - ((p[1] >> 16) >> 1), col = p[7];
+      if (!(col >= 0xa1 && col <= 0xa7) || px < 0 || py < 0 || px >= mw * cell || py >= mh * cell) continue;
+      if ((M.fog || [])[Math.trunc(py / cell) * mw + Math.trunc(px / cell)]) continue;
+      g.fillStyle = SPRAY[col - 0xa1];
+      g.fillRect(X(px), Z(py), 2 * s, 2 * s);
     }
     // a placement gesture's sites: a translucent ghost of the building, TA's build square in the site's colour, and its
     // place among the orders the release adds, small in the corner

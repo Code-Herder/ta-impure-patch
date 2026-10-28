@@ -6,9 +6,11 @@
    face FILE with `spacing` em of letter-spacing (upper-cased when UPPER is 1) at a size of one,
    one line out each: the advance a size multiplies, which stage.js's recorded measureText gives.
 
-   `wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD AW AH MW MH BW BH SPRITES LAYOUT X Y W H U`
+   `wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD AW AH MW MH BW BH SPRITES LAYOUT X Y W H U [COB]`
    plays every demo of every entry in PAK (tools/hudpak.py --set wiki) to its end, with the
-   sidebar of LAYOUT (a file of PAK, side/fixture.json say; - for none), and at tick 0, every 30th
+   sidebar of LAYOUT (a file of PAK, side/fixture.json say; - for none) and with COB the units'
+   scripts that file names (tests/wikicobfile.h), as sim.js plays with serve.py's host -- the nano
+   spray is drawn only then -- and at tick 0, every 30th
    tick and the last copies the view (tagpu_wikistage_copy) and builds the stage on the rect
    X Y W H, in units, at U device pixels a unit, with the cursor left out of every frame whose
    tick / 30 is odd (as Try it yourself leaves it while the pointer is off the stage): the text in
@@ -32,6 +34,7 @@
 #include "tagpu_wikidata.h"
 #include "tagpu_wikisim.h"
 #include "tagpu_wikistage.h"
+#include "wikicobfile.h"
 
 static char* slurp(const char* path, size_t* n)
 {
@@ -201,10 +204,11 @@ static WIKISIDE* side_art(const WIKILAYOUT* lay)
     return sd;
 }
 
-static int ops(char** a)
+static int ops(char** a, const char* cob)
 {
     static WIKISTAGEVIEW v;
     static WIKISTAGEOPS o;
+    const WIKISIMCTX ctx = { 0, NULL, 1, &COB_SRC };
     char err[256];
     size_t n;
     char* pak = slurp(a[0], &n);
@@ -216,6 +220,7 @@ static int ops(char** a)
     double u;
     int i, j, k;
     if (!pak) { fprintf(stderr, "wikistagetest: cannot read %s\n", a[0]); return 2; }
+    if (cob && !cob_load(cob)) return 2;
     if (!face(&f, a[1], a[2], a[3])) return 2;
     if (!(d = tagpu_wikidata_load((const unsigned char*)pak, n, err, sizeof err))) {
         fprintf(stderr, "wikistagetest: %s\n", err);
@@ -245,7 +250,7 @@ static int ops(char** a)
         for (j = 0; j < d->entry[i].ndemo; j++) {
             const WIKIENTRY* e = &d->entry[i];
             WIKISIM s;
-            if (!tagpu_wikisim_init(&s, e, &e->demo[j], 1, sd ? &sd->layout : NULL, NULL, err, sizeof err)) {
+            if (!tagpu_wikisim_init(&s, e, &e->demo[j], 1, sd ? &sd->layout : NULL, cob ? &ctx : NULL, err, sizeof err)) {
                 fprintf(stderr, "wikistagetest: %s/%s: %s\n", e->id, e->demo[j].id, err);
                 return 2;
             }
@@ -269,6 +274,7 @@ static int ops(char** a)
     free(sd);
     free(pak);
     free(f.ttf);
+    cob_free();
     return 0;
 }
 
@@ -290,8 +296,8 @@ static int measure_file(char** a)
 int main(int argc, char** argv)
 {
     if (argc == 6 && !strcmp(argv[1], "measure")) return measure_file(argv + 2);
-    if (argc == 23 && !strcmp(argv[1], "ops")) return ops(argv + 2);
+    if ((argc == 23 || argc == 24) && !strcmp(argv[1], "ops")) return ops(argv + 2, argc == 24 ? argv[23] : NULL);
     fprintf(stderr, "usage: wikistagetest measure FONT SPACING UPPER FILE\n"
-                    "       wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD AW AH MW MH BW BH SPRITES LAYOUT X Y W H U\n");
+                    "       wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD AW AH MW MH BW BH SPRITES LAYOUT X Y W H U [COB]\n");
     return 2;
 }

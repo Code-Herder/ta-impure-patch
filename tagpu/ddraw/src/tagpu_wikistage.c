@@ -82,6 +82,7 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
     out->nvent = out->nunit = out->nsite = out->nqueued = out->nline = 0;
     out->has_ghost = out->has_drag = out->has_caption = 0;
     out->ntype = 0;
+    out->npart = 0;
     out->npose = 0;
     out->has_side = 0;
     out->layout_src = WIKISTAGE_LAYOUT_NONE;
@@ -156,6 +157,16 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
         d->kind = (uint8_t)v->line[i].kind;
     }
     out->nline = (int16_t)n;
+    n = v->npart < WIKISTAGE_PARTS ? v->npart : WIKISTAGE_PARTS;
+    if (n < v->npart || v->part_cut) t |= WIKISTAGE_TRUNC_SPRAY;
+    for (i = 0; i < n; i++) {
+        WIKISTAGEPART* d = &out->part[i];
+        d->x = v->part[i].x;
+        d->y = v->part[i].y;
+        d->z = v->part[i].z;
+        d->col = (uint8_t)(v->part[i].col >= 0 && v->part[i].col < 256 ? v->part[i].col : 0);
+    }
+    out->npart = (uint16_t)n;
 
     out->cursor_x = v->cursor_x;
     out->cursor_z = v->cursor_z;
@@ -665,6 +676,10 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
 {
     static const uint32_t SITE[3] = { 0x2bd248, 0xe62828, 0xf0d020 };
     static const uint32_t LINE[4] = { 0x3ccf3c, 0xf0cc10, 0xe23030, 0x3a86f0 };   /* WIKI_ORDER_* */
+    /* the spray's palette entries 0xA1..0xA7, a light-to-dark green ramp (MEASURED in the retail
+       palettes\PALETTE.PAL; a mod's own palette is not followed) */
+    static const uint8_t SPRAY[7][3] = { { 171, 231, 127 }, { 131, 211, 91 }, { 103, 191, 63 }, { 75, 171, 43 },
+                                         { 67, 151, 43 }, { 55, 135, 39 }, { 47, 119, 27 } };
     B c;
     const double U = u;
     int i, x, z;
@@ -795,6 +810,27 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
                     const double pt[6] = { cn[j][0] + cn[j][2] * k, cn[j][1], cn[j][0], cn[j][1], cn[j][0], cn[j][1] + cn[j][3] * k };
                     poly(&c, pt, 3, 0, fmax(1, 1.5 * U), HEX(0xf2f6e8), HUGE_VAL, 0);
                 }
+            }
+        }
+        /* THE NANO SPRAY over the units, as the engine draws a particle of its layer 6 above
+           every unit row (tagpu_native.c's layer keys): each one a dot on its pixel, sx = x >> 16
+           and sy = (z >> 16) - ((alt >> 16) >> 1), each word's arithmetic shift (0x473A00..
+           0x473A43), filled by DrawBar 0x4BF6F0 from {sx, sy} to {sx + 1, sy + 1} inclusive --
+           its fill 0x4CCDEA takes x1 - x0 + 1 columns and y1 - y0 + 1 rows, so 2 x 2 game pixels
+           (DISASSEMBLED) -- in its palette entry, 0xA1..0xA7. Drawn only where the ground under
+           the dot is in sight, as 0x473A50..0x473B05 asks the viewed player's sight at its
+           32-unit tile; off the map, never. A colour outside the ramp is data no simulation makes,
+           and is not drawn. */
+        mark(&c, WIKISTAGE_IN_OVER, 0);
+        for (i = 0; i < v->npart && i < WIKISTAGE_PARTS; i++) {
+            const WIKISTAGEPART* q = &v->part[i];
+            const int px = q->x >> 16, py = (q->z >> 16) - ((q->y >> 16) >> 1);
+            if (q->col < 0xA1 || q->col > 0xA7 || px < 0 || py < 0 || px >= mw * WIKI_CELL || py >= mh * WIKI_CELL ||
+                v->fog[(py / WIKI_CELL) * mw + px / WIKI_CELL])
+                continue;
+            {
+                const uint8_t* k = SPRAY[q->col - 0xA1];
+                rect(&c, X(px), Z(py), 2 * s, 2 * s, HEX((uint32_t)k[0] << 16 | (uint32_t)k[1] << 8 | k[2]));
             }
         }
         /* a placement gesture's sites: a translucent ghost, TA's build square in the site's

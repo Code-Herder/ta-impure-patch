@@ -16,6 +16,9 @@ typedef struct {
     TagpuCobProgram* prog;
     int              nodes;         /* the posed model's primitives                            */
     unsigned char    visible[WIKICOB_PIECES];
+    int32_t          off[WIKICOB_PIECES][3];    /* each primitive's offset from its parent's  */
+    int16_t          parent[WIKICOB_PIECES];    /* -1 a root; every chain ends within `nodes` */
+    int32_t          top;
     int              quarantined;
     char             note[WIKICOB_NOTE];
 } TYPE;
@@ -326,6 +329,26 @@ static int make_vm(WIKICOB* w, UNIT* u)
     return 1;
 }
 
+/* THE MODEL'S SHAPE (WIKICOBTYPE): copied, and the parents held to a tree, so that every walk up
+   from a primitive ends at a root within `nodes` steps -- origin's bound. A parent outside the
+   model, or a chain that does not end, leaves the whole model flat: every offset 0 and every
+   primitive a root, each piece's origin then the model's own point. */
+static void shape(TYPE* ty, const WIKICOBTYPE* in)
+{
+    int i, k, p;
+    for (i = 0; i < ty->nodes; i++) {
+        ty->parent[i] = in->parent ? in->parent[i] : -1;
+        for (k = 0; k < 3; k++) ty->off[i][k] = in->offset ? in->offset[3 * i + k] : 0;
+    }
+    for (i = 0; i < ty->nodes; i++) {
+        for (k = 0, p = ty->parent[i]; p >= 0 && p < ty->nodes && k < ty->nodes; k++) p = ty->parent[p];
+        if (p == -1) continue;
+        memset(ty->off, 0, sizeof ty->off);
+        for (k = 0; k < ty->nodes; k++) ty->parent[k] = -1;
+        return;
+    }
+}
+
 /* ---- the entries ---- */
 
 WIKICOB* tagpu_wikicob_new(int ntypes, const WIKICOBTYPE* types, uint32_t seed, char* err, size_t errn)
@@ -359,6 +382,7 @@ WIKICOB* tagpu_wikicob_new(int ntypes, const WIKICOBTYPE* types, uint32_t seed, 
         TYPE* ty = &w->type[t];
         char why[160];
         why[0] = 0;
+        ty->top = in->top;
         if (!in->cob || !in->ncob) { quarantine(w, t, "no script", "the type has none"); continue; }
         if (in->pieces <= 0 || in->pieces > WIKICOB_PIECES || !in->visible) {
             quarantine(w, t, "no model", "the type's model gives no pieces");
@@ -366,6 +390,7 @@ WIKICOB* tagpu_wikicob_new(int ntypes, const WIKICOBTYPE* types, uint32_t seed, 
         }
         ty->nodes = in->pieces;
         memcpy(ty->visible, in->visible, (size_t)in->pieces);
+        shape(ty, in);
         ty->blob = (unsigned char*)malloc(in->ncob);
         if (!ty->blob) { quarantine(w, t, "the program", "out of memory"); continue; }
         memcpy(ty->blob, in->cob, in->ncob);
@@ -460,6 +485,120 @@ int tagpu_wikicob_activate(WIKICOB* w, int unit, int on)
     r = settle(w, unit, &run, 1, on ? "Activate" : "Deactivate");
     leave(w);
     return r;
+}
+
+int tagpu_wikicob_query(WIKICOB* w, int unit, const char* script, int32_t io[4],
+                        const WIKICOBFACT* facts, int nfacts)
+{
+    TAGPU_COBVM_RUN run;
+    UNIT* u = unit_at(w, unit);
+    int s, r;
+    if (!u || !u->live || !u->block) return 0;
+    s = tagpu_cobvm_index(w->type[u->type].prog, script);
+    if (s < 0) return 0;
+    enter(w, unit, &run, facts, nfacts);
+    r = settle(w, unit, &run, tagpu_cobvm_query(&u->vm, &run, s, io), script);
+    leave(w);
+    return r;
+}
+
+/* sine and cosine of a COB angle, 65536 a whole turn, from + - * / alone: the quadrant and the
+   octant taken in integers, then the series on [0, pi/4], whose error there is below 1e-16 */
+static void sincos16(uint16_t a, double* s, double* c)
+{
+    const double K = 3.14159265358979323846 / 32768.0;
+    unsigned r = a & 0x3FFFu;
+    const int q = a >> 14, swap = r > 0x2000u;
+    double x, x2, sn, cs, t;
+    if (swap) r = 0x4000u - r;
+    x = r * K;
+    x2 = x * x;
+    sn = x * (1 - x2 / 6 * (1 - x2 / 20 * (1 - x2 / 42 * (1 - x2 / 72 * (1 - x2 / 110 * (1 - x2 / 156 *
+         (1 - x2 / 210)))))));
+    cs = 1 - x2 / 2 * (1 - x2 / 12 * (1 - x2 / 30 * (1 - x2 / 56 * (1 - x2 / 90 * (1 - x2 / 132 *
+         (1 - x2 / 182))))));
+    if (swap) { t = sn; sn = cs; cs = t; }
+    switch (q) {
+    case 0:  *s = sn;  *c = cs;  break;
+    case 1:  *s = cs;  *c = -sn; break;
+    case 2:  *s = -sn; *c = -cs; break;
+    default: *s = -cs; *c = sn;  break;
+    }
+}
+
+/* fistp's store in the default mode: to the nearest, ties to even; out of range, the integer
+   indefinite 0x80000000 */
+static int32_t fist(double v)
+{
+    return v >= -2147483648.5 && v < 2147483647.5 ? round_even(v) : INT32_MIN;
+}
+
+/* 0x4B7173: (a, b) turned by `t`, a' = a cos - b sin, b' = a sin + b cos; nothing for t 0 (0x4B717B) */
+static void rot_pair(uint16_t t, int32_t* a, int32_t* b)
+{
+    double s, c;
+    const double A = *a, B = *b;
+    if (!t) return;
+    sincos16(t, &s, &c);
+    *a = fist(A * c - B * s);
+    *b = fist(A * s + B * c);
+}
+
+/* 0x4B6CC0 with a PrimitiveStruct's TURN: (x, y) by the Z word +0x14, then (y, z) by the X word
+   +0x10, then (x, z) by the Y word +0x12 (exe-reverse-engineering.md, the piece transform) */
+static void rot_turn(const uint16_t turn[3], int32_t v[3])
+{
+    rot_pair(turn[2], &v[0], &v[1]);
+    rot_pair(turn[0], &v[1], &v[2]);
+    rot_pair(turn[1], &v[0], &v[2]);
+}
+
+static int32_t add32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a + (uint32_t)b); }
+
+int tagpu_wikicob_origin(const WIKICOB* w, int unit, int piece, int32_t turned[3], int32_t base[3])
+{
+    const UNIT* u = unit_at(w, unit);
+    const TYPE* ty;
+    int32_t move[3], v[3];
+    uint16_t turn[3];
+    int k, p, steps;
+    for (k = 0; k < 3; k++) turned[k] = base[k] = 0;
+    if (!u || !u->live) return 0;
+    ty = &w->type[u->type];
+    if (piece < 0 || piece >= ty->nodes) return 0;
+    /* the piece, then its parents: offset + MOVE, each parent's TURN before its own offset + MOVE */
+    for (p = piece, steps = 0; ; steps++) {
+        const unsigned char* prim = u->model ? u->model + TAGPU_COBVM_PRIM_BASE + (size_t)p * TAGPU_COBVM_PRIM_BYTES : NULL;
+        if (prim) {
+            memcpy(move, prim + TAGPU_COBVM_PRIM_POS, sizeof move);
+            memcpy(turn, prim + TAGPU_COBVM_PRIM_TURN, sizeof turn);
+        } else {
+            memset(move, 0, sizeof move);
+            memset(turn, 0, sizeof turn);
+        }
+        if (p == piece) for (k = 0; k < 3; k++) v[k] = add32(ty->off[p][k], move[k]);
+        else if (ty->parent[p] >= 0) {
+            rot_turn(turn, v);
+            for (k = 0; k < 3; k++) v[k] = add32(v[k], add32(ty->off[p][k], move[k]));
+        }
+        /* the root: its TURN turns what is below it, its offset + MOVE is the base */
+        if (ty->parent[p] < 0) {
+            if (p != piece) {
+                rot_turn(turn, v);
+                for (k = 0; k < 3; k++) turned[k] = v[k];
+            }
+            for (k = 0; k < 3; k++) base[k] = add32(ty->off[p][k], move[k]);
+            return 1;
+        }
+        /* shape() ended every chain within `nodes` steps */
+        if (steps >= ty->nodes) return 0;
+        p = ty->parent[p];
+    }
+}
+
+int32_t tagpu_wikicob_top(const WIKICOB* w, int type)
+{
+    return type >= 0 && type < w->ntypes ? w->type[type].top : 0;
 }
 
 void tagpu_wikicob_slice(WIKICOB* w, const WIKICOBFACT* facts, int nfacts)

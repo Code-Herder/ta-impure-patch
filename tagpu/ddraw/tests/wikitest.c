@@ -281,83 +281,22 @@ static void view(WIKISIM* s, int map)
     key("cob", 0);
     if (v->has_cob) printf("[%lu,%lu]", (unsigned long)(v->cob_hash >> 32), (unsigned long)(v->cob_hash & 0xFFFFFFFFu));
     else fputs("null", stdout);
+    key("parts", 0);
+    putchar('[');
+    for (i = 0; i < v->npart; i++) {
+        const WIKIVPART* q = &v->part[i];
+        printf("%s[%ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld]", i ? "," : "", (long)q->x, (long)q->y, (long)q->z, (long)q->sx,
+               (long)q->sy, (long)q->sz, (long)q->end, (long)q->col);
+    }
+    putchar(']');
+    key("partsCut", 0); fputs(v->part_cut ? "true" : "false", stdout);
     putchar('}');
 }
 
-/* the state hash as 16 hex digits, in two halves: mingw's printf need not know %llx */
 /* ---- the units' scripts: what the DLL reads from the game's archives, here from files ---- */
+#include "wikicobfile.h"
 
-/* COB, the file `demos` and `trace` take: a JSON object of type name -> {"cob": the path of its
-   script, "visible": its posed model's visible flags}, which simparity.mjs writes from the gfx
-   packs (tools/wiki/gfx.py) sim.js's host reads the same scripts from. A type it does not name
-   has no script. Each script is read once and lives until the run ends. */
-#define COB_TYPES 64
-static struct {
-    char           name[WIKI_ID_MAX];
-    unsigned char* cob;
-    size_t         ncob;
-    unsigned char  visible[WIKICOB_PIECES];
-    int            pieces;
-} s_cob[COB_TYPES];
-static int s_ncob;
-
-static int cob_load(const char* path)
-{
-    char err[256];
-    size_t n;
-    char* text = slurp(path, &n);
-    TJDOC* doc = text ? tagpu_json_parse(text, n, err, sizeof err) : NULL;
-    const TJV* c;
-    int ok = doc != NULL;
-    if (!doc) fprintf(stderr, "wikitest: %s: %s\n", path, text ? err : "cannot read it");
-    for (c = doc ? tagpu_json_root(doc)->first : NULL; ok && c; c = c->next) {
-        const TJV *f = tj_get(c, "cob"), *vis = tj_get(c, "visible"), *e;
-        int k = 0;
-        /* a model past WIKICOB_PIECES is one the DLL's 3D load refuses, so its type has no script */
-        for (e = tj_is(vis, TJ_ARR) ? vis->first : NULL; e; e = e->next) k++;
-        if (k > WIKICOB_PIECES) continue;
-        if (s_ncob == COB_TYPES || strlen(c->key) >= WIKI_ID_MAX || !tj_is(f, TJ_STR)) {
-            fprintf(stderr, "wikitest: %s: %s is not a script\n", path, c->key);
-            ok = 0;
-            break;
-        }
-        snprintf(s_cob[s_ncob].name, WIKI_ID_MAX, "%s", c->key);
-        if (!(s_cob[s_ncob].cob = (unsigned char*)slurp(f->str, &s_cob[s_ncob].ncob))) {
-            fprintf(stderr, "wikitest: cannot read %s\n", f->str);
-            ok = 0;
-            break;
-        }
-        for (e = tj_is(vis, TJ_ARR) ? vis->first : NULL; e; e = e->next)
-            s_cob[s_ncob].visible[s_cob[s_ncob].pieces++] = (unsigned char)tj_num(e, 0);
-        s_ncob++;
-    }
-    tagpu_json_free(doc);
-    free(text);
-    return ok;
-}
-
-static int cob_type(void* ctx, const char* name, WIKICOBTYPE* out)
-{
-    int i;
-    (void)ctx;
-    for (i = 0; i < s_ncob; i++)
-        if (!strcmp(s_cob[i].name, name)) {
-            out->cob = s_cob[i].cob;
-            out->ncob = s_cob[i].ncob;
-            out->pieces = s_cob[i].pieces;
-            out->visible = s_cob[i].visible;
-            return 1;
-        }
-    return 0;
-}
-
-static const WIKICOBSRC COB_SRC = { NULL, cob_type };
-
-static void cob_free(void)
-{
-    while (s_ncob) free(s_cob[--s_ncob].cob);
-}
-
+/* the state hash as 16 hex digits, in two halves: mingw's printf need not know %llx */
 static void hash(const WIKISIM* s)
 {
     const uint64_t h = tagpu_wikisim_hash(s);

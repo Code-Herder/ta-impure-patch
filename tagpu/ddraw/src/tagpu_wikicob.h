@@ -60,12 +60,23 @@ enum { WIKICOB_NOW = 0, WIKICOB_LATER = 1, WIKICOB_ARGS = 2 };
    takes them: the script file's bytes (NULL: the type has none), and the posed model's primitive
    count and, per primitive in the posed order (the COB's piece order after 0x45A950's swaps),
    1 when the model builder leaves it visible (0x45AF1B: three or more vertices). pieces 0: no
-   model, which quarantines the type as no script does. */
+   model, which quarantines the type as no script does.
+
+   THE MODEL'S SHAPE, for a piece's origin (tagpu_wikicob_origin) and the nano spray's target box:
+   per primitive in the posed order its node's offset from its parent's, three 16.16 words in the
+   axes the engine holds a model in (the loader 0x4CB590 negates X and Z), and its parent's
+   primitive index, -1 for a root; NULL leaves every offset 0 and every primitive a root. `top` is
+   0x4CB5F0's height of the model, 16.16: over the root's sibling chain, the most of 0 and, for
+   each node, its vertices' y and its children's height, each plus the node's y offset
+   (0x4CB5F0..0x4CB641, DISASSEMBLED), which the def loader stores at UnitDef+0x16E (0x42D7BF). */
 typedef struct {
     const void*          cob;
     size_t               ncob;
     int                  pieces;
     const unsigned char* visible;
+    const int32_t*       offset;        /* 3 words a primitive */
+    const int16_t*       parent;
+    int32_t              top;
 } WIKICOBTYPE;
 
 /* One unit as GET sees it, which the simulation hands with every call that can run script code.
@@ -111,6 +122,33 @@ int  tagpu_wikicob_call(WIKICOB* w, int unit, const char* script, int how, int a
    run-later (0x48B106, 0x48B12B). A script's SET ACTIVATION takes the same rule. Returns 1
    started, 0 nothing to start, -1 when the VM faulted. */
 int  tagpu_wikicob_activate(WIKICOB* w, int unit, int on);
+
+/* A query (0x4B0BC0 by name, entered through 0x4B0C40): `script` runs inside the call with the
+   four words of `io` on its stack, run-now, and the four come back in `io` -- QueryNanoPiece's
+   first word is the piece its spray starts at (0x43E400). A script the program lacks, or a unit
+   with no VM, is a refused query: `io` is left as it was, as the engine leaves the caller's
+   preset. Returns 1 answered, 0 refused, -1 when the VM faulted (the type is quarantined by then). */
+int  tagpu_wikicob_query(WIKICOB* w, int unit, const char* script, int32_t io[4],
+                         const WIKICOBFACT* facts, int nfacts);
+
+/* A PIECE'S ORIGIN, 0x43DEF0's arithmetic on the unit's posed model as its script left it (a unit
+   with no VM: its rest pose), in 16.16 in the model axes WIKICOBTYPE's offsets are in: the
+   piece's offset plus its MOVE, carried up its parents -- each turned by the parent's TURN
+   through 0x4B6CC0 and moved by the parent's offset plus MOVE -- the piece's own TURN never
+   applied. The root's offset plus MOVE is `base`, which the body turn does not move, and the
+   rest, turned by the root's TURN, is `turned`, which the engine turns by the body's angles
+   folded into the root's (0x43DF86): the caller turns it by the unit's facing, which the host
+   does not hold, and adds `base`. The engine then negates z (0x43E00A); here z stays in the model
+   axes. Each pair rotation is 0x4B7173's -- skipped for a zero angle, else rounded to the nearest
+   integer, ties to even, as its fistp rounds -- with sine and cosine from + - * / alone, so that
+   every compiler gives the same words; they can differ from the engine's x87 by one unit at a
+   rounding boundary. A piece outside the model (DATA: a script's answer, bounded by the
+   primitive count) or a type with no model answers 0 and both all zero, the unit's own point, as
+   0x43DF16..0x43E01D answers. Returns 1 for a piece of the model. */
+int  tagpu_wikicob_origin(const WIKICOB* w, int unit, int piece, int32_t turned[3], int32_t base[3]);
+
+/* The model's height of type `type` (WIKICOBTYPE.top), 0 for a type outside the host. */
+int32_t tagpu_wikicob_top(const WIKICOB* w, int type);
 
 /* The slice: DoScriptsNow(1) for every live unit with a VM, in spawn order (0x48ADEB). */
 void tagpu_wikicob_slice(WIKICOB* w, const WIKICOBFACT* facts, int nfacts);
