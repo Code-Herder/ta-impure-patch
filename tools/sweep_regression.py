@@ -8,8 +8,8 @@ the chosen kind inside it, shared nearest-first; the RECLAIM gadget's quickkey c
     sweep_regression.py <instance> preview   a ring held mid-drag: the marker pass's count; then
                                              the zoom lever's 0.5: (c) again, the drag's radius and the
                                              drag threshold
-    sweep_regression.py <instance> markers   the queue markers' count after a ring, with and
-                                             without Shift, deselected and one builder selected
+    sweep_regression.py <instance> markers   the engine's order markers draw what a ring queued:
+                                             with and without Shift, deselected, one selected
     sweep_regression.py <instance> popup     the popup's anchor and drawn rect, a row click, the
                                              cursor over it, the same at the zoom lever's 0.5; at
                                              whatever HUD scale the instance runs
@@ -124,9 +124,9 @@ def sweep_line(line):
 
 
 def mark_sweep_count(line, key="sweep"):
-    """The marker pass's count of sweep brackets drawn, from its status line (tagpu_mark.c,
-    `mark: bars=.. ... sweep=N sweepq=Q ...`, every 120 frames under mark.on=log): `sweep` the
-    ring's targets, `sweepq` the queued features; None for any other line."""
+    """A count from the marker pass's status line (tagpu_mark.c, `mark: bars=.. ... sweep=N ...
+    ordart=A ...`, every 120 frames under mark.on=log): `sweep` the ring's targets bracketed,
+    `ordart` the order markers' art quads; None for any other line."""
     if not line.lstrip().startswith("mark: bars="):
         return None
     for w in line.split():
@@ -847,15 +847,19 @@ def capture(what):
         time.sleep(HOLD_FOR)
 
 
-class MarkLog:
-    """tagpu_mark.on with `log` for the marker pass's status line, put back afterwards."""
-    def __init__(self, gamedir):
-        self.lever = gamedir / "tagpu_mark.on"
+class Lever:
+    """A lever file with `word` added to whatever it held, put back afterwards (a file overrides
+    the play defaults, tagpu_opt.c)."""
+    def __init__(self, gamedir, name, word):
+        self.lever = gamedir / name
+        self.word = word
         self.old = self.lever.read_text() if self.lever.exists() else None
 
     def __enter__(self):
         words = (self.old or "").split()
-        self.lever.write_text(" ".join(words + ([] if "log" in (w.lower() for w in words) else ["log"])) + "\n")
+        if self.word not in (w.lower() for w in words):
+            words.append(self.word)
+        self.lever.write_text(" ".join(words) + "\n")
         return self
 
     def __exit__(self, *exc):
@@ -865,24 +869,40 @@ class MarkLog:
             self.lever.write_text(self.old)
 
 
+def MarkLog(gamedir):
+    """tagpu_mark.on with `log`, for the marker pass's status line."""
+    return Lever(gamedir, "tagpu_mark.on", "log")
+
+
 def queued(s, names):
-    """The reclaim-family orders of `names`, whose features stand: what the markers bracket."""
+    """The reclaim-family orders of `names`, whose features stand: what the order markers draw."""
     return sum(len(s.targets(b)) for b in names)
 
 
+# bare ground in sweep-basic's view, away from every feature and from where any builder walks
+PARK = (1600, 1060)
+
+
 def markers(s, gamedir):
-    """L2a: the queue markers show only while Shift is held, as the engine's own queued-order
-    markers do. After an ALL ring, none without Shift; with it, every selected builder's reclaim
-    orders; none with nothing selected; one builder's alone when it alone is selected."""
-    def shifted(what, picture=None):
-        s.press("shift")
+    """L2a: what a ring queues is drawn by the engine's own queued-order markers, as any other
+    order is, and the sweep draws none of its own. After an ALL ring, the pointer parked on bare
+    ground: no order art without Shift. With Shift, and the order markers' route dots off
+    (`nodots`) so the count is the cursors alone: one reclaim cursor per queued target of the
+    selected builders; none with nothing selected; one builder's alone when it alone is selected.
+    Then, dots back on, that lone builder -- the unit the GUI shows, which stock flags as it does a
+    hovered one -- has its route dots as well. The marker pass's status line carries no queue
+    count."""
+    def ordart(what, shift=True):
+        if shift:
+            s.press("shift")
         try:
-            got = held_count(s, what, "sweepq")
-            if picture:
-                capture(picture)
+            got = held_count(s, what, "ordart")
+            if shift:
+                capture(what)
             return got
         finally:
-            s.lift("shift")
+            if shift:
+                s.lift("shift")
 
     with MarkLog(gamedir):
         setup(s)
@@ -893,22 +913,30 @@ def markers(s, gamedir):
         s.commit_line(start, "the ALL ring")
         want = queued(s, s.builders)
         assert want > 0, "the ALL ring queued nothing"
-        got = held_count(s, "(L2a) all selected, no Shift", "sweepq")
-        assert got == 0, f"(L2a) sweepq={got} without Shift, want 0"
-        got = shifted("(L2a) all selected, Shift held", "the queue markers of three builders")
-        assert got == want, f"(L2a) sweepq={got} with every builder selected, want {want}"
-        s.keys("esc")
-        s.once(not any(s.values(f"0x{s.address(b) + 0x110:x}")[0] & 0x10 for b in s.builders),
-               "(L2a) Esc left a builder selected")
-        got = shifted("(L2a) none selected, Shift held")
-        assert got == 0, f"(L2a) sweepq={got} with nothing selected"
-        s.select("CK1")
-        want = queued(s, ["CK1"])
-        got = held_count(s, "(L2a) one selected, no Shift", "sweepq")
-        assert got == 0, f"(L2a) sweepq={got} with CK1 alone selected and no Shift, want 0"
-        got = shifted("(L2a) one selected, Shift held")
-        assert got == want, f"(L2a) sweepq={got} with CK1 alone selected, want {want}"
-        print(f"sweep-markers: sweepq only under Shift, following the selection ({want} for CK1 alone)")
+        s.aim(*PARK)
+        got = ordart("(L2a) all selected, no Shift", shift=False)
+        assert got == 0, f"(L2a) ordart={got} without Shift, want 0"
+        status = [ln for ln in s.log[start:] if ln.lstrip().startswith("mark: bars=")]
+        assert status and not any("sweepq=" in ln for ln in status), \
+            f"(L2a) the status line still counts queued features: {status[-1:]}"
+        with Lever(gamedir, "tagpu_order.on", "nodots"):
+            got = ordart("(L2a) all selected, Shift held")
+            assert got == want, f"(L2a) ordart={got} with every builder selected, want {want}"
+            s.keys("esc")
+            s.once(not any(s.values(f"0x{s.address(b) + 0x110:x}")[0] & 0x10 for b in s.builders),
+                   "(L2a) Esc left a builder selected")
+            s.aim(*PARK)
+            got = ordart("(L2a) none selected, Shift held")
+            assert got == 0, f"(L2a) ordart={got} with nothing selected"
+            s.select("CK1")
+            one = queued(s, ["CK1"])
+            s.aim(*PARK)
+            got = ordart("(L2a) one selected, Shift held, no dots")
+            assert got == one, f"(L2a) ordart={got} with CK1 alone selected, want {one}"
+        dotted = ordart("(L2a) one selected, Shift held")
+        assert dotted > one, f"(L2a) ordart={dotted} with CK1 alone selected and dots on: no route dots"
+        print(f"sweep-markers: the engine's markers draw the queue, one reclaim cursor a target, only "
+              f"under Shift ({one} for CK1 alone, {dotted - one} route dots with it)")
 
 
 def engine_point(sx, sy, q8):

@@ -5,8 +5,8 @@
    chosen kind inside it, shared nearest-first (tagpu_sweepgeo.h); a click below the drag's
    threshold is stock's click. The cursor shows a feature of the other kind as ground, and a click
    on it orders nothing. A popup off the RECLAIM gadget's row picks the kind, and its quickkey
-   cycles it, while armed; a right press or Esc ends a drag. Every selected builder's reclaim
-   queue is drawn whether or not reclaim is armed. Off on GDI and on a puppet seat; the ring, the
+   cycles it, while armed; a right press or Esc ends a drag. What a commit queues is drawn by the engine's
+   own queued-order markers. Off on GDI and on a puppet seat; the ring, the
    filter and the popup outside mode 12 too. The kind is kept in the settings store.
 
    Every function here runs on the GAME thread; the render thread sees all of it only as the

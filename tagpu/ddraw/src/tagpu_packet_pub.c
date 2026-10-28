@@ -380,7 +380,7 @@ typedef char pk_place_layout[(offsetof(TagpuPlaceSite, rect) == offsetof(TAGPU_P
    reads them by name, so a padding the compiler chose differently would only move the bytes --
    but the layout is the one the header's comment states, and the acquire's bounds name it */
 typedef char pk_sweep_size  [(sizeof(TAGPU_PK_SWEEP) == 52 &&
-                              sizeof(TAGPU_PK_SWEEPITEM) == 24) ? 1 : -1];
+                              sizeof(TAGPU_PK_SWEEPITEM) == 20) ? 1 : -1];
 typedef char pk_sweep_layout[(offsetof(TAGPU_PK_SWEEP, flags) == 0 &&
                               offsetof(TAGPU_PK_SWEEP, kind) == 1 &&
                               offsetof(TAGPU_PK_SWEEP, hot) == 2 &&
@@ -396,14 +396,12 @@ typedef char pk_sweep_layout[(offsetof(TAGPU_PK_SWEEP, flags) == 0 &&
                               offsetof(TAGPU_PK_SWEEP, col) == 48) ? 1 : -1];
 typedef char pk_sweepitem_layout[(offsetof(TAGPU_PK_SWEEPITEM, kind) == 0 &&
                                   offsetof(TAGPU_PK_SWEEPITEM, colour) == 1 &&
-                                  offsetof(TAGPU_PK_SWEEPITEM, n) == 2 &&
+                                  offsetof(TAGPU_PK_SWEEPITEM, pad) == 2 &&
                                   offsetof(TAGPU_PK_SWEEPITEM, x) == 4 &&
                                   offsetof(TAGPU_PK_SWEEPITEM, h) == 8 &&
                                   offsetof(TAGPU_PK_SWEEPITEM, z) == 12 &&
                                   offsetof(TAGPU_PK_SWEEPITEM, w) == 16 &&
-                                  offsetof(TAGPU_PK_SWEEPITEM, d) == 18 &&
-                                  offsetof(TAGPU_PK_SWEEPITEM, top) == 20 &&
-                                  offsetof(TAGPU_PK_SWEEPITEM, pad) == 22) ? 1 : -1];
+                                  offsetof(TAGPU_PK_SWEEPITEM, d) == 18) ? 1 : -1];
 typedef char pk_piece_size [(sizeof(TAGPU_PK_PIECE)  ==  24) ? 1 : -1];
 typedef char pk_wreck_size [(sizeof(TAGPU_PK_WRECK)  ==  44) ? 1 : -1];
 typedef char pk_anchor_size[(sizeof(TAGPU_PK_ANCHOR) ==  16) ? 1 : -1];

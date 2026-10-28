@@ -878,13 +878,11 @@ static void gather_place(const TAGPU_FXVIEW* v)
    px of colour are 3 device px and the one of black is 1.5). The colour is
    never narrower than one record.
 
-   THE DASHES AND THE ARMS are device px as well: ring 6 on / 4 off, paths 3 /
-   3, and an arm 30 % of the box's shorter side on the screen, clamped to 7..20.
+   THE DASHES AND THE ARMS are device px as well: the ring 6 on / 4 off, and an
+   arm 30 % of the box's shorter side on the screen, clamped to 7..20.
 
-   THE QUEUE MARKERS are the same pass's: each selected builder's path from the
-   unit through its queued features, each feature bracketed in the green. The
-   path starts where the unit is drawn (tagpu_native_unit_pos, the body's own
-   sample), else at the packet's position for it.
+   What a commit queues is not this pass's: the order markers draw it, as they
+   draw every other queued order (tagpu_order.c).
 
    BOUND: the acquire bounds every coordinate to +-TAGPU_PK_PLACE_COORD, a box
    to 1..TAGPU_PK_SWEEP_BOXMAX and the counts to TAGPU_PK_MAX_SWEEP, and
@@ -899,7 +897,6 @@ static void gather_place(const TAGPU_FXVIEW* v)
 #define SW_MAXEDGEQ  2
 #define SW_DASH_ON   6.0                       /* the ring: 6 px on, 4 off   */
 #define SW_DASH_OFF  4.0
-#define SW_QDASH     3.0                       /* a queue path: 3 px on, 3 off */
 #define SW_ARM_SHARE 0.3                       /* a bracket's arm, of the box's */
 #define SW_ARM_MIN   7.0                       /* shorter side, device px     */
 #define SW_ARM_MAX   20.0
@@ -907,8 +904,8 @@ static void gather_place(const TAGPU_FXVIEW* v)
 #define SW_FAR       (TAGPU_LINE_FAR - 65536)
 /* records: a bracket is 8 rects, each about W / ss colour and (W + 2B) / ss
    black records -- 24 and 40 at ss 2 and a devPx of 1 -- for 1024 targets and
-   1024 queued features, then the ring's and the paths' dashes; what the cap
-   refuses is counted in `s_swover` */
+   the hovered feature, then the ring's dashes; what the cap refuses is counted
+   in `s_swover` */
 #define MAXSWC       65536
 #define MAXSWK       (2 * MAXSWC)              /* their black outline        */
 #define MAXSWQ       (2 * QUADV)               /* the centre dot and its edge */
@@ -919,8 +916,6 @@ static float s_swq[MAXSWQ * MVST];
 static float s_swx[MAXSWX * MVST];
 static int   s_nswc, s_nswk, s_nswq, s_nswx;
 static int   s_cSweep;                  /* targets bracketed, this frame      */
-static int   s_cSweepQ;                 /* queued features bracketed           */
-static double s_qx[TAGPU_PK_SWEEP_QUEUE + 1], s_qy[TAGPU_PK_SWEEP_QUEUE + 1];
 static int   s_swover;                  /* lines or glyphs refused, a frame   */
 static int   s_swQ, s_swW, s_swB;       /* the quantum, the colour, the edge: line-grid px */
 static double s_swDev;                  /* line-grid px a device px            */
@@ -1102,33 +1097,6 @@ static void sw_text(double x, double y, const char* str, int col)
     sw_text_at(x - (double)tagpu_text_width(str) * s_px / 2.0, y, str, col);
 }
 
-/* where the unit of `slot` is drawn: the body's own sample when this frame's unit gather made
-   one, else the packet's 16.16; 0 when the packet holds no unit at that slot */
-static int sw_unit_at(const TAGPU_PACKET* pk, unsigned slot, double* x, double* h, double* z)
-{
-    const TAGPU_PK_UNIT* u = tagpu_pk_units(pk);
-    unsigned i;
-    for (i = 0; u && i < pk->n_units; i++) {
-        float fx, fa, fd;
-        if (u[i].slot != slot) continue;
-        if ((u[i].flags & TAGPU_PK_U_NATIVE) && tagpu_native_unit_pos(&u[i], &fx, &fa, &fd)) {
-            *x = fx; *h = fa; *z = fd;
-        } else {
-            *x = (double)(short)(u[i].pos[0] >> 16);
-            *h = (double)(short)(u[i].pos[1] >> 16);
-            *z = (double)(short)(u[i].pos[2] >> 16);
-        }
-        return 1;
-    }
-    return 0;
-}
-
-/* one builder's queue path, through `n` projected points from its start */
-static void sw_path(int n, int col, int black)
-{
-    if (n >= 2) sw_dashed(s_qx, s_qy, n, 0, SW_QDASH, SW_QDASH, col, black);
-}
-
 static void sw_square(double x, double y, double half, int col)
 {
     float c = (float)col / 255.0f;
@@ -1189,33 +1157,12 @@ static void gather_sweep(const TAGPU_FXVIEW* v)
     double xs[TAGPU_PK_SWEEP_RINGPTS], ys[TAGPU_PK_SWEEP_RINGPTS], top = 0.0, bottom = 0.0;
     int npt = 0;
     unsigned i;
-    int nq = 0, qcol = 0;
     s_nswc = s_nswk = s_nswq = s_nswx = 0;
-    s_cSweep = 0; s_cSweepQ = 0; s_swover = 0;
+    s_cSweep = 0; s_swover = 0;
     if (!h) return;
     sw_widths(v);
     for (i = 0; i < pk->n_sweepitem; i++) {
         const TAGPU_PK_SWEEPITEM* e = &it[i];
-        if (e->kind == TAGPU_PK_SWI_QPATH) {
-            double x = e->x, a = e->h, z = e->z;
-            if (e->top) {
-                /* a builder's path starts: the last one is drawn */
-                sw_path(nq, qcol, h->col[3]);
-                nq = 0;
-                qcol = e->colour;
-                sw_unit_at(pk, e->n, &x, &a, &z);
-            }
-            if (nq <= (int)TAGPU_PK_SWEEP_QUEUE) {
-                s_qx[nq] = x - v->eyeX + v->vpL;
-                s_qy[nq] = z - floor(a * 0.5) - v->eyeY + v->vpT;
-                nq++;
-            }
-            continue;
-        }
-        if (e->kind == TAGPU_PK_SWI_QBOX) {
-            if (sw_bracket(v, e, e->colour, h->col[3])) s_cSweepQ++;
-            continue;
-        }
         if (e->kind == TAGPU_PK_SWI_RINGPT && npt < (int)TAGPU_PK_SWEEP_RINGPTS) {
             xs[npt] = (double)e->x - v->eyeX + v->vpL;
             ys[npt] = (double)e->z - floor((double)e->h * 0.5) - v->eyeY + v->vpT;
@@ -1228,7 +1175,6 @@ static void gather_sweep(const TAGPU_FXVIEW* v)
             sw_bracket(v, e, e->colour, h->col[3]);
         }
     }
-    sw_path(nq, qcol, h->col[3]);
     if (!(h->flags & TAGPU_PK_SW_RING)) return;
     {
         double cx = (double)h->c[0] - v->eyeX + v->vpL;
@@ -1381,7 +1327,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     s_nordxOrd = 0; s_ntext = 0; s_xover = 0;
     s_novt = 0; s_novl = 0; s_novlRing = 0;
     s_nplace = 0; s_cPlace = 0; s_cPlaceRed = 0; s_cPlaceTake = 0;
-    s_nswc = s_nswk = s_nswq = s_nswx = 0; s_cSweep = 0; s_cSweepQ = 0; s_swover = 0;
+    s_nswc = s_nswk = s_nswq = s_nswx = 0; s_cSweep = 0; s_swover = 0;
     if (!pk || !pk->in_game) return 0;
     /* BEFORE ANYTHING EMITS: a bar per unit at most, a selection rect per unit
        at most, and the unit count is bounded by the packet's own table. A
@@ -1828,12 +1774,12 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
             tagpu_text_stats(&nstr, &ndrop);
             _snprintf(b, sizeof b,
                 "mark: bars=%d sel=%d selover=%d cursor=%d place=%d placered=%d placetake=%d "
-                "sweep=%d sweepq=%d swover=%d ordart=%d "
+                "sweep=%d swover=%d ordart=%d "
                 "ordline=%d far=%d text=%d(lab=%d) "
                 "atlas=%d/%d over=%d key=%d vp=(%d,%d %dx%d) "
                 "zoom=%.2f%s",
                 s_cBar, s_nsel / 4, s_selover, s_ncurs / QUADV, s_cPlace, s_cPlaceRed, s_cPlaceTake,
-                s_cSweep, s_cSweepQ, s_swover, s_norda / QUADV,
+                s_cSweep, s_swover, s_norda / QUADV,
                 s_nordl, s_lfar,
                 s_ntext, s_nordxOrd / QUADV, nstr, ndrop, s_xover,
                 tagpu_markown_key(), v->vpL, v->vpT, v->vw, v->vh, v->zoom,

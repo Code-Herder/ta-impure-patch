@@ -637,16 +637,13 @@ static const char* frame_valid(const void* rec)
             return "sweep sums";
         for (k = 0; k < p->n_sweepitem; k++) {
             const TAGPU_PK_SWEEPITEM* e = &it[k];
-            if (e->kind > TAGPU_PK_SWI_QBOX) return "sweep item kind";
+            if (e->kind > TAGPU_PK_SWI_HOVER) return "sweep item kind";
             if (e->x < -TAGPU_PK_PLACE_COORD || e->x > TAGPU_PK_PLACE_COORD ||
                 e->h < -TAGPU_PK_PLACE_COORD || e->h > TAGPU_PK_PLACE_COORD ||
                 e->z < -TAGPU_PK_PLACE_COORD || e->z > TAGPU_PK_PLACE_COORD)
                 return "sweep item coordinate";
-            if (e->w < 1 || e->w > TAGPU_PK_SWEEP_BOXMAX || e->d < 1 ||
-                e->d > TAGPU_PK_SWEEP_BOXMAX || e->top < 0 || e->top > 255)
+            if (e->w < 1 || e->w > TAGPU_PK_SWEEP_BOXMAX || e->d < 1 || e->d > TAGPU_PK_SWEEP_BOXMAX)
                 return "sweep item size";
-            if (e->kind == TAGPU_PK_SWI_QPATH ? e->n >= TAGPU_PK_DESIGN_SLOTS : e->n != 0)
-                return "sweep item number";
         }
     }
     if (p->n_units && p->unit_slots && p->n_units > p->unit_slots) return "more units than slots";

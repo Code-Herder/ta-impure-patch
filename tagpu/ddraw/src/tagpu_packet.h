@@ -371,44 +371,34 @@ typedef struct TAGPU_PK_SWEEP {
 #define TAGPU_PK_SW_ARMED  8u   /* RECLAIM is armed                              */
 #define TAGPU_PK_SWEEP_RECT 8192  /* a popup rect's sanity bound, screen px      */
 
-/* 24 B, at most TAGPU_PK_MAX_SWEEP. A point (RINGPT, QPATH) is world x,
-   altitude, z. A box (BOX, HOVER, QBOX) is the rect a bracket frames, on the
-   projected plane the marker pass draws on: its corner x, z with the
-   altitude's half already taken (h 0) and its size w x d (tagpu_sweep.c
-   `box_item`). */
+/* 20 B, at most TAGPU_PK_MAX_SWEEP. A point (RINGPT) is world x, altitude,
+   z. A box (BOX, HOVER) is the rect a bracket frames, on the projected plane
+   the marker pass draws on: its corner x, z with the altitude's half already
+   taken (h 0) and its size w x d (tagpu_sweep.c `box_item`). */
 typedef struct TAGPU_PK_SWEEPITEM {
     uint8_t  kind;            /* TAGPU_PK_SWI_*                                 */
     uint8_t  colour;          /* a palette index                                */
-    uint16_t n;               /* QPATH: the builder's slot on its start, 0 on a
-                                 point; 0 on every other kind                   */
+    uint16_t pad;
     int32_t  x, h, z;         /* a point, or a box's corner (world px)          */
     int16_t  w, d;            /* a box's size, world px: 1..BOXMAX; 16 a point  */
-    int16_t  top;             /* QPATH: 1 on the path's start (slot 0 is a
-                                 slot), 0 on a point; 0 on every other kind     */
-    int16_t  pad;
 } TAGPU_PK_SWEEPITEM;
 
 #define TAGPU_PK_SWI_RINGPT 0u  /* one point of the ring, in order              */
 #define TAGPU_PK_SWI_BOX    1u  /* a target inside the ring                     */
 #define TAGPU_PK_SWI_HOVER  2u  /* the feature of the kind under the cursor     */
-#define TAGPU_PK_SWI_QPATH  3u  /* a builder's queue path: its start, at the unit's
-                                   position, then a point per queued feature    */
-#define TAGPU_PK_SWI_QBOX   4u  /* a queued feature                             */
 /* a box's size bound, world px: a GAF frame's edge is at most 640
    (TAGPU_GAF_DECMAX), and a sub-frame list's union past this is framed by
    its footprint instead */
 #define TAGPU_PK_SWEEP_BOXMAX 1024
-/* THE ITEM BUDGET: the ring's points, the targets (SWEEP_MAX_TARGETS), the
-   hovered feature and the queue markers' own cap, each cut on its own, so
-   one never starves another and the table never passes its sum. 256 points
+/* THE ITEM BUDGET: the ring's points, the targets (SWEEP_MAX_TARGETS) and the
+   hovered feature, each cut on its own, so one never starves another and the
+   table never passes its sum. 256 points
    keep a ring of 4096 world px, the scan's bound, within a third of a pixel of
    round at zoom 2 (the sagitta r(1 - cos(pi/256)) = 0.3 px at r = 8192 screen
    px), the case a 3840 x 2160 screen reaches. */
 #define TAGPU_PK_SWEEP_RINGPTS 256u   /* the ring's points, at most              */
 #define TAGPU_PK_SWEEP_TARGETS 1024u  /* the targets bracketed, at most          */
-#define TAGPU_PK_SWEEP_QUEUE   2048u  /* the queue markers' items, at most       */
-#define TAGPU_PK_MAX_SWEEP  (TAGPU_PK_SWEEP_RINGPTS + TAGPU_PK_SWEEP_TARGETS + 1u + \
-                             TAGPU_PK_SWEEP_QUEUE)
+#define TAGPU_PK_MAX_SWEEP  (TAGPU_PK_SWEEP_RINGPTS + TAGPU_PK_SWEEP_TARGETS + 1u)
 
 /* ---- THE EFFECTS AND THE PARTICLE LAYERS --------------------------------
    The engine's four per-frame effect arrays, copied by the thread that owns

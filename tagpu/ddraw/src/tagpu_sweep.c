@@ -15,14 +15,14 @@
    - the handler's entry ends the gesture when a record is handled in another mode.
 
    Keys and buttons come from the window procedure (tagpu_shield.c), on the same thread. While
-   armed a popup off the RECLAIM gadget's row picks the kind, and a tag beside the cursor names it;
-   while Shift is held, as the engine's own queued-order markers are, every selected builder's
-   reclaim queue is drawn as a path through its features.
+   armed a popup off the RECLAIM gadget's row picks the kind, and a tag beside the cursor names it.
+   The orders a commit queues are drawn by the engine's own queued-order markers, as every other
+   order is (tagpu_order.c: the reclaim cursor at each target and the route dots under Shift).
 
    Everything here is game-thread UI state: the simulation never reads it, and what a commit
    causes -- order nodes made through the engine's own root 0x43ADC0, and the click's own tail
-   0x4958C0 -- is engine state the demo recorder keeps. The render thread sees the ring, the
-   queues and the popup only as the packet's copied values (tagpu_sweep_fill), and hands back
+   0x4958C0 -- is engine state the demo recorder keeps. The render thread sees the ring and
+   the popup only as the packet's copied values (tagpu_sweep_fill), and hands back
    what it drew of the popup in the command record (tagpu_sweep_take). The kind is kept in the
    settings store (`reclaimkind=`). */
 #include <windows.h>
@@ -95,7 +95,6 @@
    bounds every walk of a list. */
 #define SWEEP_LIST_CAP 1024u
 #define LIST_WALK      16384u
-#define FILL_WALK      24576u   /* the queue markers' nodes a fill, tagpu_order.c's MAXWALK */
 /* the gadget records a top screen may have: a count past it is not a screen's */
 #define GADGETS_MAX    512
 /* the reach of a footprint below its anchor's cell: a centre is at most 8 cells from it */
@@ -104,7 +103,6 @@
 typedef const unsigned char* (__stdcall* Resolve)(int*, unsigned, void*, void*, const void*);
 typedef void (__stdcall* Order)(int, int, void*, void*, const void*, int, int);
 typedef void (__stdcall* ClickTail)(int);
-typedef int (__stdcall* KeyDown)(int);
 typedef int (__stdcall* GroundHeight)(const int*);
 typedef int (__stdcall* Mapped)(const void*, const int*);
 typedef unsigned char* (__attribute__((thiscall))* Action)(void*, const char*);
@@ -934,62 +932,6 @@ static void ring_items(const int c[3], int r, unsigned char colour, TAGPU_PK_SWE
     }
 }
 
-/* THE QUEUE MARKERS, only while Shift is held: the test is the engine's own for its queued-order
-   markers, 0x4C1B80(0xF9) at 0x469BE1 (GetAsyncKeyState(VK_SHIFT) through its table at 0x4C1C48),
-   so the reclaim queue shows and hides with every other queue. For each selected unit of the
-   player, in slot order, whose list holds reclaim-family nodes, a QPATH start at the unit's
-   position (top 1, n its slot), then for each such node whose feature still stands a QPATH point
-   at the feature's centre and a QBOX framing it. A node whose feature has gone is skipped: the Reclaim handler unlinks it itself at its
-   next call (0x404AD0, "Reclamation failed"). The walks are this thread's, the one that links and
-   frees nodes, bounded at LIST_WALK a list and FILL_WALK a fill and stopped at a node another unit
-   owns; at most TAGPU_PK_SWEEP_QUEUE items and 1024 features a builder. */
-static void markers(const TagpuWorld* w, const Grid* g, unsigned char colour,
-                    TAGPU_PK_SWEEPITEM* it, unsigned max, unsigned* n, int* cut)
-{
-    unsigned slot, walked = 0, used = 0;
-    if (!((KeyDown)0x004C1B80u)(0xF9) || !actions()) return;
-    for (slot = w->first; slot <= w->last; slot++) {
-        const char* u = tagpu_route_unit(w, slot);
-        const char* node;
-        unsigned steps = 0, queued = 0;
-        if (!u || *(const unsigned char*)(u + U_OWNER) != (unsigned)w->player ||
-            !(*(const unsigned*)(u + U_FLAGS) & 0x10u)) continue;
-        for (node = *(const char* const*)(u + U_ORDERS); node && steps < LIST_WALK;
-             node = *(const char* const*)(node + N_NEXT)) {
-            TAGPU_PK_SWEEPITEM e;
-            Feat f;
-            int pos[3];
-            if (*(const char* const*)(node + N_OWNER) != u) break;
-            if (++walked > FILL_WALK) { *cut = 1; return; }
-            steps++;
-            if (!family((unsigned char)node[4]) || !feature_at(g, (const int*)(node + N_POS), &f))
-                continue;
-            if (queued >= 1024u) break;
-            if (used + (queued ? 2u : 3u) > TAGPU_PK_SWEEP_QUEUE) { *cut = 1; return; }
-            if (!queued) {
-                memset(&e, 0, sizeof e);
-                e.kind = TAGPU_PK_SWI_QPATH; e.colour = colour; e.n = (uint16_t)slot; e.top = 1;
-                e.x = *(const int*)(u + U_XFIX) >> 16;
-                e.h = *(const int*)(u + U_ZFIX) >> 16;
-                e.z = *(const int*)(u + U_YFIX) >> 16;
-                e.w = e.d = 16;
-                if (!push_item(it, max, n, cut, &e)) break;
-                used++;
-            }
-            feature_pos(&f, pos);
-            memset(&e, 0, sizeof e);
-            e.kind = TAGPU_PK_SWI_QPATH; e.colour = colour;
-            e.x = f.cx; e.h = pos[1] >> 16; e.z = f.cz;
-            e.w = e.d = 16;
-            if (!push_item(it, max, n, cut, &e)) break;
-            box_item(&e, TAGPU_PK_SWI_QBOX, colour, g, &f, pos[1] >> 16);
-            queued++;
-            if (!push_item(it, max, n, cut, &e)) break;
-            used += 2;
-        }
-    }
-}
-
 /* THE POPUP'S GEOMETRY, in the engine's 1x units off the RECLAIM gadget's absolute rect
    (bx, by, bw, bh): shown only while the gadget is active and not greyed, and only when the
    button lies on the panel the player sees -- inside the 128-px column, below the top bar and
@@ -1173,7 +1115,6 @@ int tagpu_sweep_fill(TAGPU_PK_SWEEP* h, TAGPU_PK_SWEEPITEM* it, unsigned max, un
             }
         }
     }
-    markers(&w, &g, h->col[1], it, max, n, cut);
     return armed || *n > 0;
 }
 
