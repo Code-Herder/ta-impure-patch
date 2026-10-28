@@ -65,3 +65,40 @@ covered by a synthetic COB in `tools/test_tacob.py` instead. Every posedump also
 `HIDDEN` that no script hides — the aircraft's flares and thrust anchors, the ship's wakes, the
 sub's tubes: the model builder clears a piece's visible bit when its 3DO node has fewer than
 three vertices (`0x45AF1B`), which the replay reproduces.
+
+## The in-game wiki's units and the extensions (COB L2, 2026-10-27)
+
+Seven more classes, recorded the same way on Impure's raised build
+([the plan](../../ingame-wiki-cob-plan.html), L2). The six of the wiki's units play on `RS mixed`,
+the generated map `tools/resource_fixture.py` installs into the recording instance; `extension`
+is COBEXT, `tools/cob_ext_fixture.py`'s generated unit (ARMSOLAR's model, the script
+`extension.bos` beside this README). Each folder adds a **`world.json`**, which the recorder
+writes and `tacob run` reads: `"rules": "impure"` (ten records, the guarded interpreter's rules)
+and the facts `tagpu_cob_getter` answers from, read out of the game at the posedump (the slot
+count, the traced unit's id, owner, kills and build fraction, its seat's kind and its own
+alliance byte); `extension`'s also names its BOS `source` and the stock `model`.
+
+| # | class | type | lines | S | R | X | K | D | first..last tick | posedump | scripts seen |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 10 | builder | ARMCK | 957 | 480 | 477 | 0 | 0 | 0 | 27..1664 | tick=825 (12 pieces lines) | Create, Go, InitState, MotionControl, QueryNanoPiece, RequestState, SmokeUnit, StartBuilding, StartMoving, Stop, StopBuilding, StopMoving, close, open, stand, walk |
+| 11 | advbuilder | ARMACK | 655 | 329 | 326 | 0 | 0 | 0 | 28..1680 | tick=826 (16 pieces lines) | Create, Go, InitState, MotionControl, QueryNanoPiece, RequestState, SmokeUnit, StartBuilding, StartMoving, Stop, StopBuilding, StopMoving, close, open, stand, walk |
+| 12 | reclaim | ARMCK | 493 | 248 | 245 | 0 | 0 | 0 | 27..1660 | tick=825 (12 pieces lines) | Create, Go, InitState, MotionControl, QueryNanoPiece, RequestState, SmokeUnit, StartBuilding, StartMoving, Stop, StopBuilding, StopMoving, close, open, stand, walk |
+| 13 | mex | ARMMEX | 13 | 7 | 6 | 0 | 0 | 0 | 28..31 | tick=677 (3 pieces lines) | Activate, Create, Go, InitState, RequestState, SetSpeed, SmokeUnit |
+| 14 | moho | ARMMOHO | 13 | 7 | 6 | 0 | 0 | 0 | 29..32 | tick=678 (2 pieces lines) | Activate, Create, Go, InitState, RequestState, SetSpeed, SmokeUnit |
+| 15 | geo | ARMGEO | 3 | 2 | 1 | 0 | 0 | 0 | 27..27 | tick=524 (5 pieces lines) | Create, SmokeUnit |
+| 16 | extension | COBEXT | 29 | 19 | 10 | 0 | 0 | 0 | 25..34 | tick=320 (5 pieces lines) | Create, allied_past_the_array, allied_with_me, max_id, min_id, mine_is_local, my_build_left, my_id, my_kills, my_owner, nobodys_build_left, prober, sleeper |
+
+What they show: a constructor finishing a nanoframe and one reclaiming a wreck run the same
+traffic — the walk (`StartMoving`, `MotionControl`'s `walk`/`stand` loop, `StopMoving`), then
+`StartBuilding` with its heading, `Go`'s `open` and turret turn, a `QueryNanoPiece` every tick of the
+nanolathe, and `StopBuilding`, `Stop`, `close` — so a reclaim is a build to the scripts. Every
+`QueryNanoPiece` lands **after** the unit's own script slice of its tick: its caller `0x43E400` is
+called by the order handlers (`0x40252E` … `0x405855`), which run after `DoScriptsNow`, and tacob's
+`ENGINE_STARTS` says so. The scenarios spawn the extractors and the geothermal plant as nanoframes,
+but the applier creates a unit whole and writes its build fraction afterwards, so their `Create`,
+`SetSpeed` (the metal, `2016` and `2352`) and `Activate` run in the spawn's own tick and the repair
+that finishes them adds no COB event. `extension` runs every getter in **record 9**, which the
+engine's eight records do not have; its R lines are the values `cob-getters` (the replay test
+group) judges against the engine's state.
+
+`tools/tacob run --all` replays all sixteen byte for byte, trace and pose.

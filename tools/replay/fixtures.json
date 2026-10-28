@@ -338,6 +338,14 @@
              [64, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "6296", "4900", "--unit", "41", "--expect", "ARMFAV"]]],
    "end": 525
   },
+  "cob-getters": {
+   "load": "replay-cob-getters.json",
+   "sources": ["tagpu/ddraw/src/tagpu_cob_safe.c", "tagpu/ddraw/inc/tagpu_cob_safe.h",
+               "tools/cob_ext_fixture.py", "research/notes/evidence/cobtrace/extension.bos"],
+   "steps": [[150, "run", ["tools/cob_ext_fixture.py", "check", "{instance}"]]],
+   "end": 1500,
+   "content": {"run": ["tools/cob_ext_fixture.py", "{gamedir}"], "files": ["cobext.ufo"]}
+  },
   "stock-teleport": {
    "load": "replay-teleport.json",
    "dll": "stock",

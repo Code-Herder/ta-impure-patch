@@ -21161,7 +21161,13 @@ off-thread free, a same-base re-make and a full window still drop at once.
 
 The [COB decision and evidence note](tadr-port/cob.html) is the verification ledger; this branch
 does not yet claim complete mod parity. Required getters 32 and 69–75 use full signed-ID checks
-against the match's pool before addressing a live record. ID 111 remains native/inactive.
+against the match's pool before addressing a live record. The rule is one engine-free function,
+`tagpu_cob_getter` (`tagpu_cob_safe.c`): the detour's `cob_get` hands it the engine's units
+(id, owner, kills and build fraction from the unit array; alliance and seat kind from the player
+records) and the COB VM `tagpu_cobvm.c` calls the same function under its IMPURE rules, so the two
+cannot answer an id differently. The replay test group `cob-getters` judges the game's answers
+against the engine's state. The guarded runner's pop and attachment rules are likewise
+`tagpu_cob_parent_pops` and `tagpu_cob_attach_piece_ok` there. ID 111 remains native/inactive.
 The portable core bounds file allocations, instruction/entry operands, 128-word stacks,
 ten-record waits and old/new saved state. Native scheduling and valid opcode bodies remain
 in use; unsupported types are unavailable with an entry warning, while required-unit creation

@@ -1,0 +1,4 @@
+posedump: tick=677 idx=2 o3=095EB240 nparts=3 yaw=32029 body=(0,32029,0) live=(0,32029,0)
+posedump: p0 base off=(0,0,0) move=(0,0,0) turn=(0,0,0)
+posedump: p1 arms off=(0,1441792,3932) move=(0,0,0) turn=(0,41004,0)
+posedump: p2 pieces off=(0,0,0) move=(0,0,0) turn=(0,0,0)

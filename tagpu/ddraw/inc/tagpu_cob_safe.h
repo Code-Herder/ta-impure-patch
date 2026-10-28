@@ -47,6 +47,36 @@ int tagpu_cob_check_step(const TagpuCobProgram* program, const TagpuCobRecord* r
                          char* reason, size_t capacity);
 int tagpu_cob_check_record(const TagpuCobProgram* program, const TagpuCobRecord* record,
                            char* reason, size_t capacity);
+/* The words a START or CALL takes off the parent's stack. A started child takes its argc; a
+   refused CALL keeps them and waits on child -1 (0x4B192F..0x4B1974); a refused START drops
+   them, so repeated refused starts cannot fill the parent's stack (the retail engine keeps them). */
+uint32_t tagpu_cob_parent_pops(uint32_t kind, int child, uint32_t argc);
+/* ATTACH's piece: -1 (hidden cargo, 0x48AC99) or one the model has and the transport packet's
+   byte can carry */
+int tagpu_cob_attach_piece_ok(int32_t piece, uint32_t model_pieces);
+
+/* THE GETTERS IMPURE ANSWERS: the port-F ids 32 and 69..75 (research/notes/tadr-port/cob.md,
+   *Getter contract*) and the bounds on the stock ids 7..11. One rule for the game (tagpu_patches.c
+   cob_get, over the engine's units) and for every other host of tagpu_cobvm (over its own world). */
+typedef struct TagpuCobUnitFacts {
+    uint32_t id, owner, kills;
+    float remaining;                /* unit+0x104: the build fraction still to go */
+} TagpuCobUnitFacts;
+typedef struct TagpuCobWorld {
+    void* ctx;
+    uint32_t slots;                 /* the unit array's slot count; ids run 1 .. slots - 1 */
+    uint32_t script_pieces, model_pieces;
+    /* 1 with the facts for a live unit at a valid id, else 0 */
+    int (*unit)(void* ctx, int32_t id, TagpuCobUnitFacts* out);
+    /* the unit running the script; 0 when it cannot be named */
+    int (*caller)(void* ctx, TagpuCobUnitFacts* out);
+    int (*allied)(void* ctx, uint32_t own, uint32_t owner);
+    /* the owner controlled by a human or an AI on this peer */
+    int (*local)(void* ctx, uint32_t owner);
+} TagpuCobWorld;
+/* 1 with *value for an id this rule answers; 0 for one the stock handler answers */
+int tagpu_cob_getter(const TagpuCobWorld* w, int32_t key, int32_t a, int32_t* value);
+
 int tagpu_cob_save_records(const TagpuCobProgram* program, uint32_t checksum,
                            const TagpuCobRecord* records, void* output, size_t size,
                            char* reason, size_t capacity);
