@@ -1683,8 +1683,9 @@ both fold into theirs, holds them to the same calls.
   `simparity.mjs --hash`. `stagecheck.mjs` builds
   the stage natively (x86-64, SSE); the DLL compiles it for SSE2, but no check runs the i686 build.
 - **The units' scripts are checked on the entries' units only.** `simcheck.mjs --pack` plays the
-  six setups' stage units with their own scripts, none quarantined; no setup's whole script corpus
-  has been run through the host (the COB plan's L3c), and `posecheck.py` holds the drawn poses to
+  six setups' stage units with their own scripts, none quarantined; `tools/wiki/cobcorpus.py` runs
+  every compatibility setup's whole script corpus through the host and refuses one type, ZZZ (the
+  COB plan, *Gaps open*), and `posecheck.py` holds the drawn poses to
   tacob's composition on the stock pack's types only. GET answers what the flat stage has: piece and unit heights 0, a piece's position the
   unit's, XZ_ATAN without the unit's heading.
 - **The per-mod tutorials have been played in one setup in game.** Retail as CORE at both

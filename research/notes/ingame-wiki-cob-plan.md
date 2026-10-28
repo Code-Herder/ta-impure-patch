@@ -4,8 +4,8 @@
 wiki's units recorded and replayed), and **L3a and L3b are built** (2026-10-28, on
 `worktree-wiki-anim`): the wiki's units run their scripts in both simulations through one host,
 the scripts gate the builds, the demos wait on the work, and the stage draws the poses the scripts
-set, in the game and in the mockup. **L3c** (the corpus gate), L4 and L5 are not started (see *The
-landings*). The wiki's specification is still
+set, in the game and in the mockup; **L3c**, the corpus gate, is built with one refusal open
+(ZZZ, below). L4 and L5 are not started (see *The landings*). The wiki's specification is still
 [the in-game wiki](ingame-wiki.html) and its mockup, which stays the 1:1 spec of the DLL wiki. The
 engine facts below carry their address and are the engine map's
 ([*The COB engine — mapped by us*](exe-reverse-engineering.html)); a fact this plan needs and the map
@@ -384,7 +384,7 @@ the engine's:
 | **L2** — built 2026-10-27 | live cobtrace + posedump fixtures for the wiki's units doing the wiki's actions — ARMCK and ARMACK walking, starting, assisting and stopping a build, reclaiming; ARMMEX and ARMMOHO built, activated, spinning at a set metal value; ARMGEO activating; ARMPW walking — and one exercising the extensions (records 9 and 10, the getters) | each fixture byte-exact through the core |
 | **L3a** — built 2026-10-28 | the host (`tagpu_wikicob`), the calls and the gating in both simulations, the facts, the quarantine, `until` waits and the 11 Quick Build demos converted, the posed order in the DLL's asset load, the three-state 3D answer the demos wait for, `activatewhenbuilt` through every reader, the mockup's server and node host, the scripts in the packs | `simparity.mjs`, `simcheck.mjs` (every demo's claim with the scripts running), `wiki_regression.py` |
 | **L3b** — built 2026-10-28 | poses drawn: the core's PrimitiveStructs copied into the stage view's pose pool on the game thread and composed over the posed order on the render thread (`tagpu_wikistage_pose`, `pose_compose`, `tagpu_posemath.h`); in the mockup `gfx.py`'s piece tables, `serve.py`'s `models`, `sim.js` `poses()`, `pose.js`, and back faces culled as the game culls them (*Drawing*) | `stage3dcheck.py` (the game's stage against the mockup's, with the poses), `posecheck.py`, `simparity.mjs`, `simcheck.mjs`, `scenecheck.mjs`, `stagecheck.mjs`, `sidecheck.mjs`, `textparity.mjs`; the demos watched in game |
-| **L3c** | the corpus gate: every compatibility setup's scripts through the host, a refusal named | the gate itself, clean over every setup |
+| **L3c** — built 2026-10-28, one refusal open | the corpus gate, `tools/wiki/cobcorpus.py`: every compatibility setup's unit types through the host (Create, 600 slices, the wiki's calls and a state-setter Deactivate/Activate), a refusal named | the gate itself, clean over every setup: clean but for ZZZ (below) |
 | **L4** | the nano spray and `emit-sfx`: the engine's emitters ported, the wiki generator, drawn through the stage's instance of the particle draw | the spray's look against a game capture of the same build |
 | **L5** | sound: the mixer, the triggers, the cooldowns, WebAudio in the mockup | a demo heard in game and in the mockup; the player's settings honoured; an MP game's own sounds unchanged with the wiki open |
 
@@ -448,9 +448,19 @@ fixtures — no file the sidebar's landing touches.
   a piece without the shaded flag the normal (0, 3.1, 0), whose `emitUnits` row is
   trunc(3.1 × 5) = 15 at every facing, standing for the engine's default row 15 that
   `tagpu_posedraw.c` gives such a piece directly. A change to `emitUnits`' row rule changes it.
-- **The corpus gate is not built** (L3c): no compatibility setup's scripts have been run through
-  the host beyond the six packs' stage units, which `simcheck.mjs --pack` plays without a
-  quarantine.
+- **The corpus gate refuses one type, ZZZ** (L3c's run, 2026-10-28: 19 setups, 6 distinct
+  corpora, 2 423 scripts, 22 s). `tools/wiki/cobcorpus.py [SETUP ...]` builds each setup's file view
+  (`sidepacks.py` `setup_tree`, `gfx.py` `Engine`), resolves every unit type as `gfx.py` does, and
+  runs it through its own host; setups with the same scripts run once. Types with no script (the
+  engine allows one, `0x485DFE`) are set apart, not refused. The one refusal is the demo pack's
+  CORE tower ZZZ, one 1 804-byte script in Mayhem, ProTA, TA Zero and Twilight: "piece index exceeds
+  model allocation" -- its `Killed` EXPLODEs piece 3 (pc 289, 324, 362, 383) of a three-node model.
+  Retail runs it and reads past the model's allocation when the unit dies [INFERRED from the engine
+  map, not measured]; Impure's game refuses it at load by the same rule, and its own corpus driver
+  records it as the one malformed-content quarantine of those four setups (`tadr-port/cob.md`). The
+  wiki's core agrees with the game, so this is not a host bug; whether to bind per entry point, to
+  fault only on the access, or to accept the type as malformed is open, and it is the owner's.
+  `cobcorpus.py` exits 1 until it is decided.
 - **GET answers what the wiki has**: PIECE_Y, UNIT_Y, UNIT_HEIGHT and GROUND_HEIGHT are 0,
   PIECE_XZ is the unit's own point and XZ_ATAN leaves out its heading (the facts carry none);
   STANDINGMOVEORDERS and STANDINGFIREORDERS are 0 (the engine reads `unit+0x110` bits,
