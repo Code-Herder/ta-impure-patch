@@ -191,7 +191,7 @@ int main(int argc, char** argv)
         for (j = 0; j < d->entry[i].ndemo; j++) {
             const WIKIENTRY* e = &d->entry[i];
             WIKISIM s;
-            if (!tagpu_wikisim_init(&s, e, &e->demo[j], 1, NULL, err, sizeof err)) {
+            if (!tagpu_wikisim_init(&s, e, &e->demo[j], 1, NULL, NULL, err, sizeof err)) {
                 fprintf(stderr, "wikiscenetest: %s/%s: %s\n", e->id, e->demo[j].id, err);
                 return 2;
             }

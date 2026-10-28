@@ -4,10 +4,13 @@
 
    usage: node tools/wiki/simparity.mjs [--wine]
      exit 0 when every demo and every rule case agrees and every malformed case loads, 1 when one does not, 2 when the C side cannot be built or run
-   usage: node tools/wiki/simparity.mjs --hash [--layout FILE|null]
+   usage: node tools/wiki/simparity.mjs --hash [--layout FILE|null] [--pack DIR] [--side N] [--iface 0|1]
      prints `<entry>/<demo> <hash>` for every demo: sim.js's state hash on its last tick, 16 hex digits, the number
      the DLL's tagpu_wikisim_hash must give for the same demo played to its end with the same sidebar layout (by
-     default art/wiki/side/fixture.json; `null` for none). Builds nothing.
+     default art/wiki/side/fixture.json; `null` for none) in the same context: side N (0 by default), Interface Type
+     0 or 1 (1 by default), and with --pack the casting of side N in DIR's side.json, whose layout is then the
+     default (tools/wiki/sidepacks.py writes the packs). A demo sim.js refuses prints `refused` and why. Builds
+     nothing.
    usage: node tools/wiki/simparity.mjs --try DUMP
      prints sim.js's state hash of Try it yourself fed the inputs the game's state dump logged (tools/wiki_regression.py
      try), the number the dump's own hash must equal. The layout is the dump's `layout` when it records one, else the
@@ -16,16 +19,20 @@
    It packs art/wiki/ as the Makefile does (tools/hudpak.py --set wiki), builds tagpu/ddraw/tests/wikitest.c with the
    real sources, and plays every demo of every entry the tree names through both, comparing every field of the view,
    every unit's orders and the state hash on every tick; the map, which nothing writes once the scene is laid out, on
-   the first and the last tick. It plays them three times: with the sidebar of art/wiki/side/fixture.json, the layout
-   the wiki falls back to, with fixture-tall.json's 768-row column, and with none (both C sides read the layouts out
-   of the archive). It then plays simcheck.mjs's rule cases -- the rules no demo shows -- through both: each case is
-   run against sim.js with every call recorded, `create` and `play` with the layout each was given, the recording is
+   the first and the last tick. It plays them with the sidebar of art/wiki/side/fixture.json, the layout the wiki
+   falls back to, with fixture-tall.json's 768-row column, and with none (both C sides read the layouts out of the
+   archive), each in simcheck.mjs's contexts: the entry's own types and each casting of tools/wiki/casting-fixture.json
+   (identity, shifted, unbound), each at Interface Type 1 and 0; a demo one side refuses in a context the other must
+   refuse too. It then plays simcheck.mjs's rule cases -- the rules no demo shows -- through both: each case is run
+   against sim.js with every call recorded, `create` and `play` with the layout and the context each was given, the
+   recording is
    replayed through the C sim, and every answer the case read (each view, with the state hash after it, orders, done)
    is compared. For each demo and case it names the first differing tick or call and field. It compares the build
-   trip's constants. Then the refusal cases: data, castings and layouts each side must refuse or accept alike -- the
-   demo's `sidebar`, the build trip's data rule, the text's tokens, the actions' data rule at each interface type, a
-   unit's G cells, every bound of the casting and of the layout on both sides of it -- each made into a sim by
-   text.js's checkEntry and sim.js and by the C readers and init. Then the data read back: every casting of
+   trip's constants. Then the refusal cases: data, castings, contexts and layouts each side must refuse or accept
+   alike -- the demo's `sidebar`, the build trip's data rule, the text's tokens, the actions' data rule at each
+   interface type, a unit's G cells, every bound of the casting and of the layout on both sides of it, the binding of
+   an entry to a casting, a scene its bound footprints do not fit, the context's interface type and side -- each made
+   into a sim by text.js's checkEntry and sim.js and by the C readers and init. Then the data read back: every casting of
    tools/wiki/casting-fixture.json and of every pack present under tools/wiki/mockup/gfx/side/ (gitignored, built
    by tools/wiki/sidepacks.py), and every layout of art/wiki/side/ and of those packs, read by tagpu_wikidata.c and
    compared field by field with what sim.js's checkCasting and checkLayout accept, a refused casting by its message.
@@ -73,7 +80,7 @@ function stateHash(sim, v) {
   const int = n => { for (let k = 0; k < 4; k++) byte((n >>> (8 * k)) & 255); };
   const dbl = x => { f64.setFloat64(0, x, true); for (let k = 0; k < 8; k++) byte(f64.getUint8(k)); };
   const str = s => { const b = utf8.encode(s || ''); int(b.length); for (const c of b) byte(c); };
-  int(sim.tick); int(sim.done ? 1 : 0);
+  int(sim.tick); int(sim.done ? 1 : 0); int(sim.side); int(sim.iface);
   const m = v.map;
   int(m.w); int(m.h); dbl(m.surfaceMetal);
   for (const x of m.metal) dbl(x);
@@ -161,14 +168,19 @@ const show = v => { const s = JSON.stringify(v); return s.length > 160 ? `${s.sl
 const lines = out => out.split(/\r?\n/).filter(l => l.length);
 
 if (process.argv.includes('--hash')) {
-  const at = process.argv.indexOf('--layout'), file = at >= 0 ? process.argv[at + 1] : null;
-  const layout = !file ? FIXTURE : file === 'null' ? null : JSON.parse(fs.readFileSync(file, 'utf8'));
+  const arg = k => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : undefined; };
+  const file = arg('--layout'), dir = arg('--pack');
+  const pack = dir ? JSON.parse(fs.readFileSync(path.join(dir, 'side.json'), 'utf8')) : null;
+  const layout = !file ? (pack ? pack.layout : FIXTURE) : file === 'null' ? null : JSON.parse(fs.readFileSync(file, 'utf8'));
+  const side = Number(arg('--side') ?? 0), iface = Number(arg('--iface') ?? 1);
+  const ctx = { side, casting: pack ? pack.casting[side] ?? null : null, iface };
   const tree = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/tree.json'), 'utf8'));
   const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
   for (const id of new Set(tree.tree.flatMap(leaves))) {
     const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
     for (const demo of entry.demos) {
-      const sim = WikiSim.play(entry, demo, layout);
+      let sim;
+      try { sim = WikiSim.play(entry, demo, layout, ctx); } catch (e) { console.log(`${id}/${demo.id} refused ${e.message}`); continue; }
       while (!sim.done) sim.step();
       console.log(`${id}/${demo.id} ${stateHash(sim, sim.view())}`);
     }
@@ -196,21 +208,26 @@ if (tryAt >= 0) {
   process.exit(0);
 }
 
-/* ---- the refusal cases: each a scripted flag, a layout, a context (interface type and casting) and an entry whose
-   first demo the sim is made from; both sides must accept it or refuse it alike, and as `want` says. The C sim takes
-   no context: it plays the entry's own types at interface type 1, and the casting's reader and the actions' data
-   rule are asked beside it (tests/wikitest.c refuse_case). So the cases with a casting change only what the
-   entry does not name (or give the authored types back), and the interface type decides only the data rule. ---- */
+/* ---- the refusal cases: each a scripted flag, a layout, a context (side, interface type and casting) and an entry
+   whose first demo the sim is made from; both sides must accept it or refuse it alike, and as `want` says
+   (tests/wikitest.c refuse_case). ---- */
 const CASTINGS = JSON.parse(fs.readFileSync(path.join(ROOT, 'tools/wiki/casting-fixture.json'), 'utf8')).castings;
 function refusalCases(entry) {
   const clone = v => JSON.parse(JSON.stringify(v));
   const T = WikiSim.TRIP, base = { id: 'm', scene: { selected: ['ck'] }, inputs: [{ at: 5, build: 'ARMMEX' }], end: 5 + T };
   const cases = [];
+  const CTX = { side: 0, iface: 1, casting: null };
   const demo = (name, want, d, scripted = 1, ctx = {}) =>
-    cases.push({ name, want, scripted, layout: FIXTURE, iface: 1, casting: null, ...ctx, entry: { ...entry, demos: [{ ...base, ...d }] } });
-  const lay = (name, want, edit) => { const L = clone(FIXTURE); edit(L); cases.push({ name, want, scripted: 1, layout: L, iface: 1, casting: null, entry: { ...entry, demos: [base] } }); };
-  const text = (name, want, edit) => { const e = clone(entry); edit(e); cases.push({ name, want, scripted: 1, layout: FIXTURE, iface: 1, casting: null, entry: { ...e, demos: [{ ...base, ...(e.demos && e.demos.base) }] } }); };
-  const cast = (name, want, edit) => { const C = clone(CASTINGS.identity[0]); edit(C); cases.push({ name, want, scripted: 1, layout: FIXTURE, iface: 1, casting: C, entry: { ...entry, demos: [base] } }); };
+    cases.push({ name, want, scripted, layout: FIXTURE, ...CTX, ...ctx, entry: { ...entry, demos: [{ ...base, ...d }] } });
+  const lay = (name, want, edit) => { const L = clone(FIXTURE); edit(L); cases.push({ name, want, scripted: 1, layout: L, ...CTX, entry: { ...entry, demos: [base] } }); };
+  const text = (name, want, edit) => { const e = clone(entry); edit(e); cases.push({ name, want, scripted: 1, layout: FIXTURE, ...CTX, entry: { ...e, demos: [{ ...base, ...(e.demos && e.demos.base) }] } }); };
+  const cast = (name, want, edit) => { const C = clone(CASTINGS.identity[0]); edit(C); cases.push({ name, want, scripted: 1, layout: FIXTURE, ...CTX, casting: C, entry: { ...entry, demos: [base] } }); };
+  // an entry edited by `edit` and bound to the identity casting edited by `cedit`, or to none
+  const bind = (name, want, edit, cedit, casting = true) => {
+    const e = clone(entry), C = clone(CASTINGS.identity[0]);
+    edit(e); cedit(C);
+    cases.push({ name, want, scripted: 1, layout: FIXTURE, ...CTX, casting: casting ? C : null, entry: { ...e, demos: [base] } });
+  };
   demo('a build trip with room', 'accepted', {});
   demo('sidebar a string', 'refused', { sidebar: 'yes' });
   demo('sidebar a number', 'refused', { sidebar: 1 });
@@ -252,6 +269,34 @@ function refusalCases(entry) {
   noBar('a release first in its tick', 'refused', [{ at: 1, up: 'lmb' }, { at: 1, down: 'lmb' }]);
   noBar('a key pressed twice', 'accepted', [{ at: 1, down: 'shift' }, { at: 2, down: 'shift' }]);
   noBar('Try it reads no data rule', 'accepted', [{ at: 1, down: 'lmb' }, { at: 2, down: 'lmb' }], 1, 0);
+  // the build trip reads the resolved script: an order held is the left button at type 0, the right one at type 1
+  demo('a build with order held at type 0', 'refused', { inputs: [{ at: 1, down: 'order' }, { at: 5, build: 'ARMMEX' }] }, 1, { iface: 0 });
+  demo('a build with order held at type 1', 'accepted', { inputs: [{ at: 1, down: 'order' }, { at: 5, build: 'ARMMEX' }] }, 1, { iface: 1 });
+  // the context: the interface type, and the side when a layout is given
+  demo('interface type 2', 'refused', {}, 1, { iface: 2 });
+  demo('interface type -1', 'refused', {}, 1, { iface: -1 });
+  demo('side 1 of a one-side layout', 'refused', {}, 1, { side: 1 });
+  demo('side -1', 'refused', {}, 1, { side: -1 });
+  demo('side 5 with no layout is not read', 'accepted', {}, 1, { side: 5, layout: null });
+  demo('side 1 of a two-side layout', 'accepted', {}, 1,
+    { side: 1, layout: (L => { L.sides.push({ ...clone(L.sides[0]), name: 'CORE', types: {} }); return L; })(clone(FIXTURE)) });
+  // the binding (sim.js binder): every unit one cast, no cast twice, no two units bound to one type
+  bind('a unit with no cast, bound', 'refused', e => { delete e.units.ARMPW.cast; }, () => {});
+  bind('a unit with no cast, no casting', 'accepted', e => { delete e.units.ARMPW.cast; }, () => {}, false);
+  bind('a unit with an unknown cast, bound', 'refused', e => { e.units.ARMPW.cast = 'dance'; }, () => {});
+  bind('two units of one cast, bound', 'refused', e => { e.units.ARMPW.cast = 'mex'; }, () => {});
+  bind('two units of one cast, no casting', 'accepted', e => { e.units.ARMPW.cast = 'mex'; }, () => {}, false);
+  bind('two units bound to one type', 'refused', () => {}, C => { C.casts.walker.type = 'ARMCK'; });
+  bind('a bound type the name of an unbound unit', 'refused', () => {}, C => { C.casts.walker = null; C.casts.mex.type = 'ARMPW'; });
+  bind('a cast the entry lacks bound to its type', 'accepted', () => {}, C => { C.casts.tower.type = 'ARMCK'; });
+  bind('every type renamed', 'accepted', () => {}, C => { for (const k of Object.values(C.casts)) if (k) k.type = `X${k.type}`; });
+  // a scene its bound footprints do not fit
+  bind('a bound footprint past the interior', 'refused', () => {}, C => { C.casts.geo.footprint = [16, 16]; });
+  const mex2 = e => { e.scene.units.push({ id: 'mex2', type: 'ARMMEX', at: [496, 264] }); };
+  bind('a second extractor beside the first', 'accepted', mex2, () => {}, false);
+  bind('a bound footprint over a structure placed before it', 'refused', mex2, C => { C.casts.mex.footprint = [5, 5]; });
+  bind('a bound footprint that still fits', 'accepted', () => {}, C => { C.casts.mex.footprint = [4, 4]; });
+  bind('an unbound scene unit locks, never refuses', 'accepted', () => {}, C => { C.casts.geo = null; });
   // text.js's tokens: title, subtitle, paragraphs, demo titles and captions
   const caption = c => e => { e.demos = { base: { inputs: [{ at: 0, caption: c }, ...base.inputs] } }; };
   text('every token kind', 'accepted', caption('{builder} {Order} {order} {Select} {select} {Cancel} {cancel} {mex} {geo}'));
@@ -434,14 +479,33 @@ try {
   const tree = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/tree.json'), 'utf8'));
   const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
   const ids = [...new Set(tree.tree.flatMap(leaves))];
-  for (const side of ['fixture', 'fixture-tall', null]) {
-    const layout = side && SIDE(side), named = side || 'no sidebar';
-    const cout = lines(wikitest(['demos', 'wiki.bin', side || '-']));
+  for (const name of Object.keys(CASTINGS))
+    fs.writeFileSync(path.join(tmp, `casting-${name}.json`), JSON.stringify(CASTINGS[name][0]));
+  for (const side of ['fixture', 'fixture-tall', null]) for (const cname of [null, ...Object.keys(CASTINGS)]) for (const iface of [1, 0]) {
+    const layout = side && SIDE(side), named = `${side || 'no sidebar'}, ${cname || 'own types'}, type ${iface}`;
+    const ctx = { side: 0, casting: cname ? CASTINGS[cname][0] : null, iface };
+    const cout = lines(wikitest(['demos', 'wiki.bin', side || '-', cname ? `casting-${cname}.json` : '-', String(iface)]));
     let at = 0;
     for (const id of ids) {
       const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
       for (const demo of entry.demos) {
-        const sim = WikiSim.play(entry, demo, layout);
+        let sim, why = null;
+        try { sim = WikiSim.play(entry, demo, layout, ctx); } catch (e) { why = e.message; }
+        // a demo refused in this context: the C side must refuse it too, in one line
+        if (why !== null || (at < cout.length && 'refused' in JSON.parse(cout[at]))) {
+          const c = at < cout.length ? JSON.parse(cout[at]) : null;
+          const same = c && c.entry === id && c.demo === demo.id && 'refused' in c && why !== null;
+          if (c && c.entry === id && c.demo === demo.id) at++;
+          demos++;
+          if (same) console.log(`equal  ${id}/${demo.id} (${named}): both refused (${why})`);
+          else {
+            failed++;
+            differ++;
+            console.log(`DIFFER ${id}/${demo.id} (${named}): C ${c && 'refused' in c ? `refused (${c.refused})` : 'played'}, sim.js ${why !== null ? `refused (${why})` : 'played'}`);
+            while (at < cout.length && JSON.parse(cout[at]).demo === demo.id && JSON.parse(cout[at]).entry === id) at++;
+          }
+          continue;
+        }
         let first = null, ticks = 0;
         for (;;) {
           const v = sim.view(), h = stateHash(sim, v);
@@ -469,14 +533,16 @@ try {
   /* ---- simcheck.mjs's rule cases, recorded on sim.js and replayed through the C sim ---- */
   const { ENTRY_RULES } = await import('./simcheck.mjs');
   const { create, play } = WikiSim;
-  let ops, expected;
-  const record = (make, scripted) => (entry, demo, layout) => {
-    const sim = make(entry, demo, layout);
-    ops.push(JSON.stringify({ op: 'create', scripted, layout: layout ?? null }), JSON.stringify({ ...entry, demos: [demo || {}] }));
-    const ask = (op, v) => { ops.push(JSON.stringify(op)); expected.push(v); return v; };
+  /* a case may hold several sims at once (one made, another made, the first asked): each call names its sim by the
+     order it was made in, which wikitest's trace keeps apart */
+  let ops, expected, made;
+  const record = (make, scripted) => (entry, demo, layout, ctx) => {
+    const sim = make(entry, demo, layout, ctx), k = made++;
+    ops.push(JSON.stringify({ op: 'create', sim: k, scripted, layout: layout ?? null, ctx: ctx ?? null }), JSON.stringify({ ...entry, demos: [demo || {}] }));
+    const ask = (op, v) => { ops.push(JSON.stringify({ ...op, sim: k })); expected.push(v); return v; };
     return {
-      input(ev) { ops.push(JSON.stringify({ op: 'input', ev })); sim.input(ev); },
-      step() { ops.push(JSON.stringify({ op: 'step' })); sim.step(); },
+      input(ev) { ops.push(JSON.stringify({ op: 'input', sim: k, ev })); sim.input(ev); },
+      step() { ops.push(JSON.stringify({ op: 'step', sim: k })); sim.step(); },
       view: () => {
         const v = ask({ op: 'view' }, sim.view());
         ask({ op: 'hash' }, stateHash(sim, sim.view()));
@@ -484,6 +550,8 @@ try {
       },
       orders: id => ask({ op: 'orders', id }, sim.orders(id)),
       get done() { return ask({ op: 'done' }, sim.done); },
+      get side() { return ask({ op: 'side' }, sim.side); },
+      get iface() { return ask({ op: 'iface' }, sim.iface); },
       get tick() { return ask({ op: 'tick' }, sim.tick); },
       get log() { return sim.log; },
     };
@@ -493,7 +561,7 @@ try {
   for (const id of ids) {
     const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
     for (const [what, check] of Object.entries(ENTRY_RULES[id] || {})) {
-      ops = []; expected = [];
+      ops = []; expected = []; made = 0;
       let verdict;
       try { verdict = check(entry); } catch (e) { verdict = `threw ${e.message}`; }
       fs.writeFileSync(path.join(tmp, 'trace.jsonl'), ops.join('\n') + '\n');
@@ -524,7 +592,7 @@ try {
     const entry = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries/quickbuild.json'), 'utf8'));
     const all = refusalCases(entry);
     fs.writeFileSync(path.join(tmp, 'refuse.jsonl'), all.map(c =>
-      JSON.stringify({ name: c.name, scripted: c.scripted, layout: c.layout, iface: c.iface, casting: c.casting }) + '\n' +
+      JSON.stringify({ name: c.name, scripted: c.scripted, layout: c.layout, side: c.side, iface: c.iface, casting: c.casting }) + '\n' +
       JSON.stringify(c.entry) + '\n').join(''));
     const got = lines(wikitest(['refuse', 'refuse.jsonl']));
     all.forEach((c, i) => {
@@ -533,7 +601,7 @@ try {
         // text.js's checkEntry is the loader's refusal of the text, which wiki.js asks before any sim is made
         const bad = WikiText.checkEntry(c.entry);
         if (bad) throw new Error(bad);
-        (c.scripted ? WikiSim.play : WikiSim.create)(c.entry, c.entry.demos[0], c.layout, { side: 0, casting: c.casting, iface: c.iface });
+        (c.scripted ? WikiSim.play : WikiSim.create)(c.entry, c.entry.demos[0], c.layout, { side: c.side, casting: c.casting, iface: c.iface });
       } catch (e) { js = 'refused'; why = e.message; }
       const cv = (got[i] || '').startsWith('accepted ') ? 'accepted' : (got[i] || '').startsWith('refused ') ? 'refused' : '(no answer)';
       refusals++;

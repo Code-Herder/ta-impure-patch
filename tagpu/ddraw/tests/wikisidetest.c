@@ -227,7 +227,7 @@ static int compose(char** a)
         base = file_in(a[1], name, &nbase);
         for (j = 0; j < e->ndemo; j++) {
             WIKISIM s;
-            if (!tagpu_wikisim_init(&s, e, &e->demo[j], 1, &sd->layout, err, sizeof err)) {
+            if (!tagpu_wikisim_init(&s, e, &e->demo[j], 1, &sd->layout, NULL, err, sizeof err)) {
                 key(e->id, e->demo[j].id, 0);
                 put32(-1);
                 put32(0);

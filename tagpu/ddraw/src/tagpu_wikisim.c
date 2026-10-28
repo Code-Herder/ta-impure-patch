@@ -25,9 +25,8 @@
 #define CELL_BOUND (1 << 20)
 
 /* The context sim.js's context() gives a sim created with none: the layout's side 0, which every
-   checked layout has (tagpu_wikilayout_check: 1 to 8 sides), and interface type 1. Every sim
-   plays it: tagpu_wikisim_init takes no context. */
-enum { CTX_SIDE = 0, CTX_IFACE = 1 };
+   checked layout has (tagpu_wikilayout_check: 1 to 8 sides), no casting, and Interface Type 1. */
+static const WIKISIMCTX CTX_NONE = { 0, NULL, 1 };
 enum { KIND_NONE, KIND_MEX, KIND_GEO };
 enum { HOW_BUILD, HOW_RECLAIM };
 /* where the cursor is (sim.js over()); NONE: a mouse button that has not gone down */
@@ -88,8 +87,16 @@ static const WIKIDEF* def(const WIKISIM* s, int t) { return &s->entry->def[t]; }
 static int fpx(const WIKISIM* s, int t) { return def(s, t)->fx; }
 static int fpz(const WIKISIM* s, int t) { return def(s, t)->fz; }
 static int mobile(const WIKISIM* s, int t) { return def(s, t)->max_velocity > 0; }
-/* a resource building: a mex extracts metal, a geothermal plant needs a vent under its yard */
+/* a resource building: a mex extracts metal, a geothermal plant needs a vent under a G cell of its yard */
 static int kind(const WIKISIM* s, int t) { return def(s, t)->extracts > 0 ? KIND_MEX : def(s, t)->vent ? KIND_GEO : KIND_NONE; }
+/* footprint cell (dx, dz) of type t is a G cell, sim.js's gCell: WIKIDEF.g holds the `g` a type
+   lists, or every cell of a `vent` type with none. THE BOUND: the rows are WIKI_FP_MAX cells a
+   side, and a type with G cells is held within them (the loader and the casting's reader refuse
+   one past it), so a cell outside them is no G cell. */
+static int g_cell(const WIKISIM* s, int t, int dx, int dz)
+{
+    return dx >= 0 && dz >= 0 && dx < WIKI_FP_MAX && dz < WIKI_FP_MAX && ((def(s, t)->g[dz] >> dx) & 1);
+}
 /* mirrors tagpu_resource.c strength: ExtractsMetal for a mex, EnergyMake otherwise */
 static double strength(const WIKISIM* s, int t) { return kind(s, t) == KIND_MEX ? def(s, t)->extracts : def(s, t)->energy_make; }
 static int can_build(const WIKISIM* s, const WIKIUNIT* u, int t) { return (int)((def(s, u->type)->builds >> t) & 1); }
@@ -294,11 +301,20 @@ static int started(const WIKISIM* s, const WIKIORDER* o) { return structure_at(s
 
 /* THE ENGINE'S SITE TEST (0x47D2E0), simplified as sim.js simplifies it: the footprint inside the
    map's placeable interior, cells 1 to w - 2 (tagpu_resource.c site_known's bound), clear of every
-   structure but `ignore` (an upgrade's old building), and for a geothermal plant one footprint
-   cell on a vent. Mobile units never block. */
+   structure but `ignore` (an upgrade's old building), and for a geothermal plant a vent under one
+   of its G cells: 0x47D2E0 refuses a yard holding G (0x47D80F) unless some G cell stands on a
+   feature whose FeatureDef +0xFE has bit 0x20 (0x47D684..0x47D711, 0x47D75B..0x47D769),
+   DISASSEMBLED; a vent under any other cell of the yard counts for nothing. Mobile units never
+   block. */
 static int interior(const WIKISIM* s, int t, int ox, int oz)
 {
     return ox >= 1 && oz >= 1 && ox + fpx(s, t) < s->W && oz + fpz(s, t) < s->H;
+}
+
+/* vent v lies under a G cell of type t's footprint at (ox, oz), sim.js's ventsUnderG */
+static int vent_under_g(const WIKISIM* s, const PlaceCell* v, int t, int ox, int oz)
+{
+    return v->cx >= ox && v->cx < ox + fpx(s, t) && v->cz >= oz && v->cz < oz + fpz(s, t) && g_cell(s, t, v->cx - ox, v->cz - oz);
 }
 
 static int site_ok(const WIKISIM* s, int t, int ox, int oz, const WIKIUNIT* ignore)
@@ -311,10 +327,7 @@ static int site_ok(const WIKISIM* s, int t, int ox, int oz, const WIKIUNIT* igno
         if (!mobile(s, u->type) && u != ignore && overlap(b, box(s, u->type, u->ox, u->oz))) return 0;
     }
     if (kind(s, t) == KIND_GEO) {
-        for (i = 0; i < s->nvent; i++) {
-            const PlaceCell* v = &s->vent[i];
-            if (v->cx >= ox && v->cx < ox + b.fx && v->cz >= oz && v->cz < oz + b.fz) break;
-        }
+        for (i = 0; i < s->nvent && !vent_under_g(s, &s->vent[i], t, ox, oz); i++) {}
         if (i == s->nvent) return 0;
     }
     return 1;
@@ -501,15 +514,15 @@ static int distinct(WIKISIM* s, CHOICE* c)
     return 1;
 }
 
-/* mirrors tagpu_resource.c geo_anchor: the one explored vent under a footprint, by index; -1 when
-   it touches no vent or several cells of them */
+/* mirrors tagpu_resource.c geo_anchor: the one explored vent under a G cell of the footprint, by
+   index (tagpu_resource.c tests yard & 0x80 alone); -1 when no G cell holds one or they hold
+   several cells of them */
 static int vent_anchor(const WIKISIM* s, int t, int ox, int oz)
 {
-    const int fx = fpx(s, t), fz = fpz(s, t);
     int i, first = -1;
     for (i = 0; i < s->nvent; i++) {
         const PlaceCell* v = &s->vent[i];
-        if (!seen(s, v->cx, v->cz) || v->cx < ox || v->cx >= ox + fx || v->cz < oz || v->cz >= oz + fz) continue;
+        if (!vent_under_g(s, v, t, ox, oz) || !seen(s, v->cx, v->cz)) continue;
         if (first < 0) first = i;
         else if (v->cx != s->vent[first].cx || v->cz != s->vent[first].cz) return -1;
     }
@@ -751,14 +764,15 @@ static int gadget_at(const WIKISIM* s, int screen, const WIKIUNIT* shown, double
    shows the side's MAIN2; EXACTLY ONE selected unit whose type has pages shows its numbered page
    while bit 22 is set, else its orders page (<NAME>0.GUI) when the type has one; anything else,
    two builders of one type included, shows the side's GEN, with the unit shown when there is
-   exactly one. GEN and MAIN2 are those of the side the sim plays (CTX_SIDE). The sim routes after
-   every input and every tick, where the engine re-routes a frame or more later: a known
-   difference of at most a frame.
+   exactly one. GEN and MAIN2 are those of the side the sim plays (WIKISIMCTX.side). The sim
+   routes after every input and every tick, where the engine re-routes a frame or more later: a
+   known difference of at most a frame.
    A screen change drops the capture, as the engine's page swap reloads the screen and its
    gadgets. */
 static void route(WIKISIM* s)
 {
-    const WIKISIDEDEF* side = &s->lay->side[CTX_SIDE];
+    /* THE BOUND: tagpu_wikisim_init refused a side the layout lacks */
+    const WIKISIDEDEF* side = &s->lay->side[s->side];
     const WIKIPAGES* T;
     WIKIUNIT* u = NULL;
     int i, nsel = 0, screen;
@@ -866,6 +880,7 @@ static void side_view(const WIKISIM* s, WIKIVSIDE* v)
     const WIKIUNIT* under = over(s) == OVER_MAP ? unit_at(s, s->cursor_x, s->cursor_z) : NULL;
     int i;
     memset(v, 0, sizeof *v);
+    v->index = s->side;
     v->h = s->lay->height;
     v->screen = s->screen;
     if (s->shown) snprintf(v->unit, sizeof v->unit, "%s", s->shown->id);
@@ -886,6 +901,15 @@ static void side_view(const WIKISIM* s, WIKIVSIDE* v)
    release at t + WIKI_TRIP_UP whatever the route (tagpu_wikisim.h says why it is fixed). */
 
 enum { GEN_MOVE, GEN_DOWN, GEN_UP };
+
+/* The demo stops under the entry's badge: the first lock of the sim names the type, and the tick
+   it falls on finishes as any tick does (a trip's data rule leaves only captions after its build
+   there). Its sources: a build the layout cannot reach (trip), and a scene unit or a build of a
+   cast the casting leaves unbound (decision 12), with the sidebar or without. */
+static void lock(WIKISIM* s, int t)
+{
+    if (s->locked < 0) s->locked = t;
+}
 
 static void gen_push(WIKISIM* s, int at, int kind, double x, double z)
 {
@@ -991,7 +1015,7 @@ static void trip(WIKISIM* s, int T)
        here, holding the frame under the entry's "Turned off in this mod" badge (decision 4),
        rather than playing on unarmed */
     if (!plan_trip(s, T, &plan)) {
-        s->locked = T;
+        lock(s, T);
         return;
     }
     if (s->trip_next == s->ntrip_in) s->ntrip_in = s->trip_next = 0;
@@ -1455,33 +1479,83 @@ static void move_order(WIKISIM* s, int shift)
     }
 }
 
-/* a right-click (tagpu_resource.c right_click): Quick Build's when it has a choice -- on a queued site Shift cancels and a plain
-   click is consumed unchanged -- otherwise the game's own: assist an unfinished building of the
-   player's, or move */
-static void right_click(WIKISIM* s, int shift)
+/* Quick Build's click, the same at both Interface Types: tagpu_resource.c gates the button that
+   orders, the right press at type 1 (0x499100) and the left click at type 0 (0x498F70,
+   `(iface != 0) != right` in its gate). With a choice, a queued site is cancelled by Shift and a
+   plain click is consumed unchanged; otherwise the choice is ordered. 0: no choice, the click is
+   the game's own. */
+static int quick_click(WIKISIM* s, int shift)
 {
     CHOICE c;
+    if (!quick_choice(s, shift, &c)) return 0;
+    if (c.queued) {
+        if (shift && c.queued == 2) unqueue(s, &c);
+    } else quick_order(s, &c, shift);
+    return 1;
+}
+
+static int unfinished_own(const WIKISIM* s, const WIKIUNIT* u)
+{
+    return u->owner == 0 && !mobile(s, u->type) && u->built < 1;
+}
+
+/* the assist: every selected builder is ordered to build the unfinished building where it stands */
+static void assist(WIKISIM* s, const WIKIUNIT* u, int shift)
+{
+    const WIKIORDER o = order_build(u->type, u->ox, u->oz);
+    int i;
+    for (i = 0; i < s->nunit; i++)
+        if (is_builder(s, s->unit[i])) assign(s, s->unit[i], &o, 1, shift);
+}
+
+/* TYPE 1, a right press on the map with nothing armed (tagpu_resource.c right_click): Quick
+   Build's, else the game's own, which orders at the press (0x4991D5..0x4991F5, MEASURED): assist
+   an unfinished building of the player's, or move */
+static void right_click(WIKISIM* s, int shift)
+{
     WIKIUNIT* u;
     XZ m;
-    int i;
-    if (s->mode >= 0) { disarm(s); return; }
-    if (quick_choice(s, shift, &c)) {
-        if (c.queued) {
-            if (shift && c.queued == 2) unqueue(s, &c);
-            return;
-        }
-        quick_order(s, &c, shift);
-        return;
-    }
+    if (quick_click(s, shift)) return;
     m = map_cursor(s);
     u = unit_at(s, m.x, m.z);
-    if (u && u->owner == 0 && !mobile(s, u->type) && u->built < 1) {
-        const WIKIORDER o = order_build(u->type, u->ox, u->oz);
-        for (i = 0; i < s->nunit; i++)
-            if (is_builder(s, s->unit[i])) assign(s, s->unit[i], &o, 1, shift);
-        return;
-    }
-    move_order(s, shift);
+    if (u && unfinished_own(s, u)) assist(s, u, shift);
+    else move_order(s, shift);
+}
+
+static void select_units(WIKISIM* s, int shift);
+
+/* TYPE 0, a left click on the map with nothing armed: the release of a press that went down on the
+   map and never became a box (0x499421..0x499441 call 0x498F70), so its order lands at the release
+   where type 1's lands at the press. DISASSEMBLED, not measured: the runner's measurement M3
+   checks the outcomes and their tick. In order: Quick Build's choice; else over a unit of the
+   player's, an unfinished building with a selected builder is assisted (cursor 6,
+   0x43EDB6..0x43EE42) and any other is selected as a click selects (cursor 0xF, 0x48C7F0); else
+   the selected mobile units of the player's move (0x48CF30, Shift appends), and with none nothing
+   happens. [INFERRED] that an unfinished building of the player's with no builder selected is
+   selected: 0x43EDB6 gives 0xF only over a finished unit (+0x104 == 0.0), so the engine may show
+   another cursor there. */
+static void left_click(WIKISIM* s, int shift)
+{
+    WIKIUNIT* u;
+    XZ m;
+    if (quick_click(s, shift)) return;
+    m = map_cursor(s);
+    u = unit_at(s, m.x, m.z);
+    if (u && u->owner == 0) {
+        if (unfinished_own(s, u) && nbuilders(s)) assist(s, u, shift);
+        else select_units(s, shift);
+    } else move_order(s, shift);
+}
+
+/* TYPE 0, a right press on the map with nothing armed (0x499172..0x499196, DISASSEMBLED): with
+   Ctrl it calls 0x41CC60, which hands the mouse to a view mode (main+0x2CDF = 1, the camera
+   follow released, the cursor centred) that the stage, having no camera to move, does not model;
+   without Ctrl every unit is deselected (0x48BD00). */
+static void right_press0(WIKISIM* s)
+{
+    int i;
+    if (!s->held[WIKI_KEY_CTRL])
+        for (i = 0; i < s->nunit; i++) s->unit[i]->sel = 0;
 }
 
 /* a build-menu placement, stock's click: the selected builders with that button get it; without
@@ -1566,7 +1640,8 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
     if (ev->has & WIKI_IN_CAPTION) s->caption = ev->caption;
     if (ev->has & WIKI_IN_BUILD) {
         /* tagpu_wikidata_trips refused a trip's build naming no type before the sim started */
-        if (s->trips) {
+        if (ev->build >= 0 && ev->build < s->entry->ndef && s->unbound[ev->build]) lock(s, ev->build);
+        else if (s->trips) {
             if (ev->build >= 0 && ev->build < s->entry->ndef) trip(s, ev->build);
         } else if (ev->build >= 0 && ev->build < s->entry->ndef) arm(s, ev->build);
         else {
@@ -1608,9 +1683,13 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
                     s->drag_z0 = c.z;
                 }
             }
+            /* with a building armed a right press cancels it at both types (0x499100, MEASURED
+               at type 1) */
             if (ev->down == WIKI_KEY_RMB) {
                 s->has_drag = 0;
-                right_click(s, shift);
+                if (s->mode >= 0) disarm(s);
+                else if (s->iface) right_click(s, shift);
+                else right_press0(s);
             }
         }
         /* OFF THE MAP AND OFF THE SCREEN a left press with a building armed places it once, at
@@ -1638,7 +1717,9 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
         else if (s->down_on[ev->up] == OVER_MAP) {
             if (ev->up == WIKI_KEY_LMB && s->has_gesture) release(s);
             else if (ev->up == WIKI_KEY_LMB && s->has_drag) {
-                select_units(s, s->held[WIKI_KEY_SHIFT]);
+                /* a box is the same at both types; a click is type 1's select and type 0's left_click */
+                if (s->iface || s->drag_active) select_units(s, s->held[WIKI_KEY_SHIFT]);
+                else left_click(s, s->held[WIKI_KEY_SHIFT]);
                 s->has_drag = 0;
             }
         }
@@ -1859,7 +1940,7 @@ void tagpu_wikisim_step(WIKISIM* s)
     feed(s, t);
     advance(s);
     s->tick = t;
-    /* a locked build ends the demo on its own tick, which then holds under the entry's badge */
+    /* a lock ends the demo on its own tick, which then holds under the entry's badge */
     s->done = s->tick >= s->end || s->locked >= 0;
     if (s->lay) route(s);
     s->hover = hover(s);
@@ -2029,7 +2110,7 @@ const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s)
     v->caption = s->caption;
     v->pace = s->PACE;
     v->mode = s->mode;
-    /* the column, only with the sidebar on; then the build a demo could not reach */
+    /* the column, only with the sidebar on; the type the demo stopped on, with it or without */
     if ((v->has_side = s->lay != NULL)) side_view(s, &v->side);
     v->locked = s->locked;
     return v;
@@ -2084,6 +2165,8 @@ uint64_t tagpu_wikisim_hash(const WIKISIM* s)
 
     fnv_int(&h, s->tick);
     fnv_int(&h, s->done ? 1 : 0);
+    fnv_int(&h, s->side);
+    fnv_int(&h, s->iface);
 
     fnv_int(&h, s->W);
     fnv_int(&h, s->H);
@@ -2186,6 +2269,8 @@ void tagpu_wikisim_free(WIKISIM* s)
     free(s->vent);
     free(s->vent_centre);
     free((void*)s->script);
+    free(s->resolved);
+    free(s->bound);
     free(s->mark);
     free(s->todo);
     free(s->vunit);
@@ -2216,13 +2301,19 @@ static int by_tick(const void* a, const void* b)
     return x->at < y->at ? -1 : x->at > y->at ? 1 : x < y ? -1 : x > y;
 }
 
-static int scene_units(WIKISIM* s, const WIKISCENE* sc)
+/* A SCENE ITS TYPES DO NOT FIT IS REFUSED. A scene unit is placed by its centre, so a bound
+   footprint other than the authored one can overlap a structure placed before it or leave the
+   placeable interior (cells 1 to w - 2, site_ok's bound); the demo is refused for that casting
+   rather than played broken, as sim.js refuses it. Mobile units never block. 1, or 0 with the
+   refusal in `err`, or -1 when memory ran out. */
+static int scene_units(WIKISIM* s, const WIKISCENE* sc, char* err, size_t errn)
 {
     int i, j;
     for (i = 0; i < sc->nunit; i++) {
         const WIKISCENEUNIT* d = &sc->unit[i];
         WIKIUNIT* u = add(s, d->def, d->owner, d->x, d->z, d->built, d->id, d->label, d->hx, d->hz);
-        if (!u) return 0;
+        BOX b;
+        if (!u) return -1;
         for (j = 0; j < d->nmove; j++) {
             WIKIORDER o;
             memset(&o, 0, sizeof o);
@@ -2230,13 +2321,24 @@ static int scene_units(WIKISIM* s, const WIKISCENE* sc)
             o.x = d->move[j].x;
             o.z = d->move[j].z;
             push_order(s, u, &o);
-            if (s->oom) return 0;
+            if (s->oom) return -1;
+        }
+        if (mobile(s, u->type)) continue;
+        b = box(s, u->type, u->ox, u->oz);
+        for (j = 0; j < s->nunit; j++) {
+            const WIKIUNIT* v = s->unit[j];
+            if (v != u && !mobile(s, v->type) && overlap(b, box(s, v->type, v->ox, v->oz))) break;
+        }
+        if (!(b.ox >= 1 && b.oz >= 1 && b.ox + b.fx < s->W && b.oz + b.fz < s->H) || j < s->nunit) {
+            snprintf(err, errn, "%s's %s does not fit the scene", u->id, def(s, u->type)->name);
+            return 0;
         }
     }
     return 1;
 }
 
-/* the scene gives the player a mobile builder: sim.js builders() without the selection test */
+/* the scene gives the player a mobile builder: sim.js builders() without the selection test, over
+   the types the sim plays */
 static int scene_builder(const WIKIENTRY* e, const WIKISCENE* sc)
 {
     int i;
@@ -2247,34 +2349,158 @@ static int scene_builder(const WIKIENTRY* e, const WIKISCENE* sc)
     return 0;
 }
 
+/* the bound entry: a copy of the entry pointing at its own types, and those types */
+struct WIKISIMBOUND {
+    WIKIENTRY e;
+    WIKIDEF   def[WIKI_MAX_DEFS];
+};
+
+/* THE BOUND ENTRY, sim.js's binder, into s->bound and s->unbound (tagpu_wikisim.h says what it
+   is). THE BOUND on every index: the entry holds at most WIKI_MAX_DEFS types (the loader), each
+   cast is checked against WIKI_NCAST before it indexes the casting, and the casting's footprints
+   and G rows were held to WIKI_FP_MAX by its reader. 1, or 0 with the refusal in `err` (-1 when
+   memory ran out), and s->entry is the bound entry once it is 1. */
+static int bind(WIKISIM* s, const WIKIENTRY* e, const WIKICASTING* k, char* err, size_t errn)
+{
+    struct WIKISIMBOUND* B;
+    unsigned seen = 0;
+    int i, j;
+    if (e->ndef < 0 || e->ndef > WIKI_MAX_DEFS) {
+        snprintf(err, errn, "wiki sim: the entry has %d types", e->ndef);
+        return 0;
+    }
+    for (i = 0; i < e->ndef; i++) {
+        const int c = e->def[i].cast;
+        if (c < 0 || c >= WIKI_NCAST) {
+            snprintf(err, errn, "unit %s names no cast", e->def[i].name);
+            return 0;
+        }
+        if ((seen >> c) & 1) {
+            snprintf(err, errn, "two units name the cast %s", tagpu_wikidata_cast_name(c));
+            return 0;
+        }
+        seen |= 1u << c;
+    }
+    if (!(B = (struct WIKISIMBOUND*)calloc(1, sizeof *B))) return -1;
+    s->bound = B;
+    B->e = *e;
+    B->e.def = B->def;
+    for (i = 0; i < e->ndef; i++) {
+        const WIKIDEF* a = &e->def[i];
+        const WIKICASTDEF* c = &k->cast[a->cast];
+        WIKIDEF* d = &B->def[i];
+        if (!c->bound) {
+            *d = *a;
+            s->unbound[i] = 1;
+            continue;
+        }
+        memset(d, 0, sizeof *d);
+        snprintf(d->name, sizeof d->name, "%s", c->type);
+        d->title = c->title;
+        d->cast = a->cast;
+        d->fx = c->fx;
+        d->fz = c->fz;
+        d->build_time = c->build_time;
+        d->worker_time = c->worker_time;
+        d->build_distance = c->build_distance;
+        d->max_velocity = c->max_velocity;
+        d->extracts = c->extracts;
+        d->energy_make = c->energy_make;
+        d->vent = c->vent;
+        memcpy(d->g, c->g, sizeof d->g);
+        d->canstop = c->canstop;
+        for (j = 0; j < e->ndef; j++)
+            if ((c->builds >> e->def[j].cast) & 1) d->builds |= (uint64_t)1 << j;
+    }
+    for (i = 0; i < e->ndef; i++)
+        for (j = 0; j < i; j++)
+            if (!strcmp(B->def[i].name, B->def[j].name)) {
+                snprintf(err, errn, "the casting binds two units to one type");
+                return 0;
+            }
+    s->entry = &B->e;
+    return 1;
+}
+
+/* the first scene unit, in creation order, of a cast the casting leaves unbound: decision 12 stops
+   the demo on tick 0 under the entry's badge, naming its type; -1 for none */
+static int unbound_in_scene(const WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b)
+{
+    int i;
+    for (i = 0; i < a->nunit; i++)
+        if (s->unbound[a->unit[i].def]) return a->unit[i].def;
+    for (i = 0; b && i < b->nunit; i++)
+        if (s->unbound[b->unit[i].def]) return b->unit[i].def;
+    return -1;
+}
+
+/* THE RESOLVED SCRIPT, sim.js's resolve: the demo's inputs copied into the sim's own array with
+   each action turned into its button at s->iface, then ordered by tick, file order breaking ties.
+   tagpu_wikidata_buttons has held the copy to its data rule; s->script points into it. 0 when
+   memory ran out. */
+static int resolve(WIKISIM* s, const WIKIDEMO* d)
+{
+    int k;
+    if (!(s->resolved = (WIKIINPUT*)malloc(((size_t)d->ninput + 1) * sizeof *s->resolved))
+        || !(s->script = (const WIKIINPUT**)malloc(((size_t)d->ninput + 1) * sizeof *s->script)))
+        return 0;
+    for (k = 0; k < d->ninput; k++) {
+        s->resolved[k] = d->input[k];
+        s->resolved[k].down = tagpu_wikidata_button(d->input[k].down, s->iface);
+        s->resolved[k].up = tagpu_wikidata_button(d->input[k].up, s->iface);
+        s->script[k] = &s->resolved[k];
+    }
+    qsort((void*)s->script, (size_t)d->ninput, sizeof *s->script, by_tick);
+    s->nscript = d->ninput;
+    return 1;
+}
+
 int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int scripted, const WIKILAYOUT* lay,
-                       char* err, size_t errn)
+                       const WIKISIMCTX* ctx, char* err, size_t errn)
 {
     const WIKISCENE* a = &e->scene;
     const WIKISCENE* b = d ? &d->scene : NULL;
     const WIKISCENE* sel = b && b->has_selected ? b : a->has_selected ? a : NULL;
     const size_t cells = (size_t)a->w * a->h;
-    int i, k;
+    int i, k, r;
     memset(s, 0, sizeof *s);
     /* a layout is checked whole before any sim reads it, as sim.js's checked() does; every index
        read out of it below is then in range */
     if (lay && !tagpu_wikilayout_check(lay, err, errn)) return 0;
+    /* THE CONTEXT, refused as sim.js's context() refuses it: an Interface Type other than 0 or 1
+       (the DLL maps the engine's int to these two before it starts a demo), and with a layout a
+       side that is not one of its sides, which every read of lay->side[s->side] rests on */
+    if (!ctx) ctx = &CTX_NONE;
+    if (ctx->iface != 0 && ctx->iface != 1) {
+        snprintf(err, errn, "the interface type %d is not 0 or 1", ctx->iface);
+        return 0;
+    }
+    if (lay && (ctx->side < 0 || ctx->side >= lay->nside)) {
+        snprintf(err, errn, "side %d is not one of the layout's sides", ctx->side);
+        return 0;
+    }
+    s->iface = ctx->iface;
+    s->entry = e;
+    if (ctx->cast && (r = bind(s, e, ctx->cast, err, errn)) <= 0) {
+        if (r < 0) goto oom;
+        tagpu_wikisim_free(s);
+        return 0;
+    }
     /* THE SIDEBAR, on or off for the sim's whole life: a demo shows it when its `sidebar` says so,
        by default when the scene gives the player a mobile builder; Try it shows it whenever the
        scene does, whatever the demo said */
-    s->lay = lay && (scripted && d && d->has_sidebar ? d->sidebar : scene_builder(e, a) || scene_builder(e, b))
+    s->lay = lay && (scripted && d && d->has_sidebar ? d->sidebar : scene_builder(s->entry, a) || scene_builder(s->entry, b))
            ? lay : NULL;
+    s->side = s->lay ? ctx->side : -1;
     s->trips = scripted && s->lay;
-    if (s->trips && d && !tagpu_wikidata_trips(d, CTX_IFACE, err, errn)) return 0;
     /* a type's pages are the ones of the side the sim plays: a type is found by (name, side) */
     for (i = 0; i < e->ndef; i++) {
         s->ltype[i] = -1;
         for (k = 0; s->lay && k < s->lay->ntype; k++)
-            if (s->lay->type[k].side == CTX_SIDE && !strcmp(s->lay->type[k].name, e->def[i].name)) s->ltype[i] = k;
+            if (s->lay->type[k].side == s->side && !strcmp(s->lay->type[k].name, s->entry->def[i].name)) s->ltype[i] = k;
     }
     s->cap = -1;
     s->locked = -1;
-    s->entry = e;
     s->W = a->w;
     s->H = a->h;
     s->SM = a->surface_metal;
@@ -2302,25 +2528,26 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
         s->vent_centre[i].x = (cx + 0.5) * CELL;
         s->vent_centre[i].z = (cz + 0.5) * CELL;
     }
-    if (!scene_units(s, a) || (b && !scene_units(s, b))) goto oom;
+    if ((r = scene_units(s, a, err, errn)) > 0 && b) r = scene_units(s, b, err, errn);
+    if (r < 0) goto oom;
+    if (!r) goto refused;
     for (i = 0; sel && i < sel->nselected; i++) {
         WIKIUNIT* u = by_id(s, sel->selected[i]);
         if (!u) {
             snprintf(err, errn, "wiki sim: the scene selects %s, which it does not have", sel->selected[i]);
-            tagpu_wikisim_free(s);
-            return 0;
+            goto refused;
         }
         u->sel = 1;
     }
     if (b && b->has_cursor) { s->cursor_x = b->cursor.x; s->cursor_z = b->cursor.z; }
     else if (a->has_cursor) { s->cursor_x = a->cursor.x; s->cursor_z = a->cursor.z; }
     if (scripted && d) {
-        if (!(s->script = (const WIKIINPUT**)malloc(((size_t)d->ninput + 1) * sizeof *s->script))) goto oom;
-        for (k = 0; k < d->ninput; k++) s->script[k] = &d->input[k];
-        qsort((void*)s->script, (size_t)d->ninput, sizeof *s->script, by_tick);
-        s->nscript = d->ninput;
+        if (!tagpu_wikidata_buttons(d, s->iface, err, errn)) goto refused;
+        if (!resolve(s, d)) goto oom;
+        if (s->trips && !tagpu_wikidata_trips(d, s->iface, err, errn)) goto refused;
     }
     if (s->lay) route(s);
+    if ((k = unbound_in_scene(s, a, b)) >= 0) lock(s, k);
     feed(s, 0);
     s->done = s->locked >= 0;
     s->hover = hover(s);
@@ -2330,6 +2557,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     return 1;
 oom:
     snprintf(err, errn, "wiki sim: out of memory");
+refused:
     tagpu_wikisim_free(s);
     return 0;
 }

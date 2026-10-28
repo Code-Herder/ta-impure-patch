@@ -600,7 +600,9 @@ static void start(void)
     }
     /* a refusal -- the layout, the build trip's data rule, memory -- is shown on the stage in its
        own words, as wiki.js shows the mockup's (`simErr`) */
-    if (!tagpu_wikisim_init(&s_sim, e, &e->demo[s_demo], !s_try, lay, err, sizeof err)) {
+    /* the context sim.js gives a sim made with none: side 0, no casting, Interface Type 1.
+       TODO(2E): the player's side, its casting and the interface type, from the fill */
+    if (!tagpu_wikisim_init(&s_sim, e, &e->demo[s_demo], !s_try, lay, &(const WIKISIMCTX){ 0, NULL, 1 }, err, sizeof err)) {
         tagpu_logf("wiki: the demo %s/%s did not start - %s", e->id, e->demo[s_demo].id, err);
         lstrcpynA(s_msg, err, sizeof s_msg);
         return;
@@ -945,7 +947,8 @@ static void check(void)
             const WIKIENTRY* e = &d->entry[i];
             WIKISIM* s = (WIKISIM*)malloc(sizeof *s);
             long k = 0;
-            if (!s || !tagpu_wikisim_init(s, e, &e->demo[j], 1, lay, err, sizeof err)) {
+            /* the context start() plays the stage's demo in */
+            if (!s || !tagpu_wikisim_init(s, e, &e->demo[j], 1, lay, &(const WIKISIMCTX){ 0, NULL, 1 }, err, sizeof err)) {
                 tagpu_logf("wiki check: %s/%s did not start - %s", e->id, e->demo[j].id, s ? err : "no memory");
                 free(s);
                 bad++;

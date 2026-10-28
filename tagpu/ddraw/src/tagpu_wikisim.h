@@ -10,8 +10,9 @@
    randomness, and compute on doubles with + - * / and sqrt only, each rounded once, plus trunc,
    floor and comparisons, which are exact, so the same inputs give the same doubles.
    tools/wiki/simparity.mjs plays every demo of every entry, with the fixture's sidebar, the tall
-   fixture's and none, and simcheck.mjs's rule cases through both, and compares every field of
-   the view and every unit's orders, tick by tick. The DLL compiles this file for SSE2 (Makefile, THE WIKI'S SIMULATION) so
+   fixture's and none, with each casting of tools/wiki/casting-fixture.json and none, at both
+   Interface Types, and simcheck.mjs's rule cases through both, and compares every field of the
+   view and every unit's orders, tick by tick. The DLL compiles this file for SSE2 (Makefile, THE WIKI'S SIMULATION) so
    that no intermediate keeps x87's extra precision.
 
    ENGINE-FREE, WIN32-FREE AND WITHOUT GLOBALS. It reads no engine memory and names no engine
@@ -21,8 +22,14 @@
    directly as the game does. Every piece of its state lives in the WIKISIM its caller owns
    (and on the heap that WIKISIM owns), so it runs on whichever thread owns the wiki window;
    one WIKISIM is used by one thread at a time. The WIKIENTRY (and the WIKIDEMO) it was made
-   from must outlive it: it points into them. So must its sidebar layout, which it reads and
-   never writes.
+   from must outlive it: it points into them. So must its sidebar layout and its context's
+   casting, which it reads and never writes.
+
+   A SIM IS MADE FOR A CONTEXT, WIKISIMCTX (sim.js's ctx): the layout's side the player plays,
+   that side's casting (the mod's own type for each of the entry's casts, or none for the entry's
+   own types) and the Interface Type. With a casting it plays the BOUND ENTRY, its own copy of
+   the entry whose types are the casting's (tagpu_wikisim_init says how), and every type name it
+   shows -- the view's, the hash's, WIKISIM.entry's -- is the bound one.
 
    BOUNDED BY CONSTRUCTION: a unit's orders stop at PLACE_LIST_CAP (every append goes through
    one function that refuses past it), and the map at WIKI_MAP_MAX cells a side (the loader
@@ -146,6 +153,8 @@ typedef struct {
 /* The sidebar as the stage draws it, sim.js's view.side; by value and pointer-free, so a copy
    holds across threads. */
 typedef struct {
+    int              index;         /* the layout side it shows (WIKISIMCTX.side): its prefix and
+                                       PANELSIDE are the stage's */
     int              h;             /* the column's rows: the layout's height */
     int              screen;        /* the routed screen, an index < the layout's nscreen */
     char             unit[WIKI_ID_MAX];     /* the shown unit's id, "" for none */
@@ -187,18 +196,41 @@ typedef struct {
     const char*      caption;       /* NULL for none */
     double           pace;
     int              mode;          /* the armed type, or -1: contextual */
-    int              has_side;      /* the sidebar is on: side and locked are the view's */
+    int              has_side;      /* the sidebar is on: side is the view's */
     WIKIVSIDE        side;
-    int              locked;        /* the type a scripted build could not reach in this layout,
-                                       or -1 */
+    int              locked;        /* the type the demo stopped on, with the sidebar or without,
+                                       or -1 while it plays: a scripted build the layout cannot
+                                       reach, or a scene unit or a build of a cast the casting
+                                       leaves unbound */
 } WIKIVIEW;
+
+/* The context a sim is made for, sim.js's ctx. tagpu_wikisim_init refuses an iface other than 0
+   or 1 and, with a layout, a side that is not one of its sides. LIFETIME: `cast` must outlive the
+   sim, which holds it (its bound types' titles point into it); in the DLL it lies inside the
+   published WIKISIDE block, immutable and never freed. */
+typedef struct {
+    int                side;        /* the layout's side the player plays: its MAIN2, GEN and
+                                       types; not read without a layout */
+    const WIKICASTING* cast;        /* that side's casting, or NULL: the entry's own types */
+    int                iface;       /* the Interface Type: 0 left-click, 1 right-click */
+} WIKISIMCTX;
+
+struct WIKISIMBOUND;
 
 /* ---- the simulation: the caller owns it; tick and done are its to read, the rest is private ---- */
 
 typedef struct {
     int              tick, done;
+    int              side;          /* the layout side the sidebar shows, -1 with it off */
+    int              iface;         /* the Interface Type, 0 or 1 */
 
+    /* the entry it plays: the one it was made from, or with a casting the bound entry, which
+       `bound` holds on the heap (a heap block rather than a field, so that a WIKISIM moved by
+       value points at nothing of its old place); its type names are the casting's */
     const WIKIENTRY* entry;
+    struct WIKISIMBOUND* bound;
+    unsigned char    unbound[WIKI_MAX_DEFS];    /* type i is of a cast the casting leaves
+                                                   unbound: a scene unit or a build of it locks */
     int              W, H;
     double           SM, PACE;
     double*          metal;
@@ -225,8 +257,10 @@ typedef struct {
     int              spacing[WIKI_MAX_DEFS];
     WIKIPLACE        place;
 
-    /* the script: the demo's inputs ordered by tick, file order breaking ties */
+    /* the script: the demo's inputs resolved at `iface` (each action its button) into `resolved`,
+       the sim's own copy, then ordered by tick, file order breaking ties */
     int              nscript, next;
+    WIKIINPUT*       resolved;
     const WIKIINPUT** script;
     double           end;           /* the tick it is done on; never for Try it yourself */
 
@@ -239,7 +273,7 @@ typedef struct {
     int              cap, cap_key;  /* the gadget of `screen` a press captured (-1 none), and the
                                        button that pressed it */
     int              down_on[WIKI_NKEYS];   /* where each mouse button went down (OVER_*) */
-    int              locked;        /* a type, or -1 */
+    int              locked;        /* the type the demo stopped on (the first lock wins), or -1 */
     /* the trip's generated inputs, fed before the script's of the same tick */
     WIKIINPUT        trip_in[WIKI_TRIP_EVENTS];
     int              ntrip_in, trip_next;
@@ -273,11 +307,31 @@ typedef struct {
    demo's `sidebar` says so, by default (and always for create) when the scene gives the player a
    mobile builder (owner 0, MaxVelocity > 0, WorkerTime > 0).
 
-   0 with a message in `err` when the scene names a unit it does not have, the layout fails
-   tagpu_wikilayout_check, a scripted demo with the sidebar on breaks the build trip's data rule
-   (tagpu_wikidata_trips), or memory runs out; then `s` holds nothing to free. */
+   `ctx` is the context (WIKISIMCTX); NULL is sim.js's absent ctx: side 0, no casting, Interface
+   Type 1, the interface the demos are authored in.
+
+   THE BOUND ENTRY, with a casting (sim.js's binder): every type of the entry names one of the
+   nine casts and no cast twice, or the sim is refused. Type i of a cast the casting binds becomes
+   the casting's type under its name, with its title, footprint, figures, canstop and G cells, and
+   a build list holding entry type j exactly when the casting's list names j's cast; type i of a
+   cast it leaves unbound keeps the entry's own definition and is marked unbound. Two types bound
+   to one name refuse the sim. The indices do not move, so the scene's units and the inputs'
+   `build` name the same types as before; captions stay raw (the hash keeps them so).
+
+   THE DATA RULE OF THE RESOLVED SCRIPT (sim.js's resolve): a scripted demo's actions become their
+   buttons at `iface` (tagpu_wikidata_button) in the sim's own copy of its inputs, and a press of
+   a mouse button already held, or a release of one not held, refuses the demo with its tick
+   (tagpu_wikidata_buttons). The player's inputs to Try it are buttons already and are not
+   resolved.
+
+   0 with a message in `err` when the layout fails tagpu_wikilayout_check, the context is refused,
+   the entry does not bind to the casting, a scene structure leaves the placeable interior or
+   overlaps one placed before it (its footprint may be the casting's), the scene selects a unit it
+   does not have, the resolved script breaks its data rule, a scripted demo with the sidebar on
+   breaks the build trip's data rule (tagpu_wikidata_trips), or memory runs out; then `s` holds
+   nothing to free. */
 int  tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int scripted, const WIKILAYOUT* lay,
-                        char* err, size_t errn);
+                        const WIKISIMCTX* ctx, char* err, size_t errn);
 void tagpu_wikisim_free(WIKISIM* s);
 
 /* One input now, as the player gives it, between two ticks: a cursor sequence it changes begins
@@ -300,7 +354,8 @@ int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
    at any point, the view taken or not. Fed in this order, an integer as 4 bytes little-endian
    (two's complement), a double as its 8 IEEE-754 bytes little-endian, a string as its byte
    length (an integer) and then its bytes, "" for none:
-     1. tick, done (0 or 1);
+     1. tick, done (0 or 1), the layout side the sidebar shows (-1 with it off), the Interface
+        Type;
      2. the map: w, h, SurfaceMetal (double); every cell's metal (double) and then every cell's
         fog (integer 0..2), row-major; the vent count and each vent's centre x, z (doubles);
      3. the unit count, and for each unit in the view's order: id, type name, owner, x, z,
@@ -317,7 +372,7 @@ int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
      7. the sidebar: 1 when it is on, then its rows, the routed screen's name, the shown unit's id
         ("" for none), its page, the state count and each state, and the id of the unit under
         the cursor over the map ("" for none); or 0 alone. Then the locked type's name ("" for
-        none, and always with the sidebar off).
+        none), with the sidebar on or off.
    The view's other fields follow from these: queued sites and order lines from the units and
    their orders, the cursor's shape from the mode and the selection, a site's order number from
    the states, footprints from the types, the pace from the entry. The tick the cursor's shape

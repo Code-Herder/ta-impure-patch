@@ -534,7 +534,8 @@ static void sring(B* c, const SBOX* b, double s, uint32_t col)
 }
 
 /* a whitebox button's name: its unit, or its gadget name without the prefix of side 0, the side
-   every simulation plays (tagpu_wikisim.c CTX_SIDE) (ARMORDERS -> ORDERS). The layout is checked
+   tagpu_wiki.c's simulations play (their WIKISIMCTX; the view's side.index names it) (ARMORDERS ->
+   ORDERS). The layout is checked
    (tagpu_wikilayout_check), so every name in it is terminated inside its array and it has a
    side 0. */
 static const char* named(const WIKILAYOUT* L, const WIKIGADGET* g)
