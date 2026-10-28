@@ -933,6 +933,25 @@ def try_view(c, d, what):
     return json.loads(r.stdout)
 
 
+def view_side(lay, sv, what):
+    """The layout side a view of the sidebar shows, as its `index` names it (sim.js view.side.index): its types hold
+    the shown builder's pages and its GEN is the ORDERS tab's screen. The view is sideview.mjs's replay of the game's
+    Try it, so this is the side the replay plays, which is the game's as long as the two are given the same context:
+    today neither the DLL's sim nor the dump carries one (the per-mod tutorials' parts 2B and 2E), and both play layout
+    side 0; once the dump carries the player's side, the replay plays it and this reads it."""
+    k = sv.get("index") if sv else None
+    assert isinstance(k, int) and 0 <= k < len(lay["sides"]), f"{what}: the view names no side of the layout: {sv}"
+    return lay["sides"][k]
+
+
+def side_by_prefix(lay, prefix, what):
+    """The layout side whose screens carry `prefix`, the engine's own side prefix (main + 0x37F5B + side * 0x232, the
+    one its MAIN2's file name starts with): the side the player plays in the running game."""
+    hit = [sd for sd in lay["sides"] if sd["prefix"].upper() == prefix.upper()]
+    assert len(hit) == 1, f"{what}: {len(hit)} sides of the layout have the prefix {prefix}: {[sd['name'] for sd in lay['sides']]}"
+    return hit[0]
+
+
 def side_centre(lay, screen, i):
     """Gadget i of a layout screen: its centre in the stage's world units, where the build trip
     presses it (sim.js centreOf)."""
@@ -978,8 +997,9 @@ class Stage:
         and the mode armed are read back from the simulation."""
         v = self.view(what)
         sv, lay = v["side"], self.c.dump()["layout"]
-        assert sv and sv["type"] in lay["types"], f"{what}: the sidebar shows no builder's page: {sv}"
-        pages = lay["types"][sv["type"]]["pages"]
+        types = view_side(lay, sv, what)["types"]
+        assert sv["type"] in types, f"{what}: the sidebar shows no builder's page: {sv}"
+        pages = types[sv["type"]]["pages"]
         holds = [k for k, n in enumerate(pages, 1) if any(g["role"] == "build" and g.get("unit") == T
                                                           for g in lay["screens"][n]["gadgets"])]
         assert holds, f"{what}: no page of {sv['type']} holds {T}"
@@ -1056,9 +1076,10 @@ def side_controls(c, d):
     lay = d["layout"]
     v = st.view("(t2c)")
     sv = v["side"]
-    pages = lay["types"][sv["type"]]["pages"]
+    shown = view_side(lay, sv, "(t2c)")
+    pages = shown["types"][sv["type"]]["pages"]
     n, page, screen = len(pages), sv["page"], sv["screen"]
-    gen = lay["sides"][lay["player_side"]]["gen"]
+    gen = shown["gen"]
     steps = []
     for role, want in (("next", page % n + 1), ("prev", page)):
         st.press(lay, screen, side_gadget(lay, screen, lambda g: g["role"] == role, "(t2c)"))
@@ -1137,10 +1158,11 @@ def try_it(c, shot=None):
         d = wait_dump(c, lambda d: d["try"] and d["sim"] and d["side_h"] > 0, "(t1) Try it yourself did not take the stage")
         v = try_view(c, d, "(t1)")
         sv = v["side"]
-        assert sv and sv["page"] == 1 and sv["screen"] == d["layout"]["types"][sv["type"]]["pages"][0], \
+        types = view_side(d["layout"], sv, "(t1)")["types"]
+        assert sv["page"] == 1 and sv["type"] in types and sv["screen"] == types[sv["type"]]["pages"][0], \
             f"(t1) {entry}/{demo}: Try it's sidebar is not its builder's first page: {sv}"
         print(f"wiki try: (t1) {entry}/{demo}: Try it took the stage, its sidebar the {d['layout_src']} layout's "
-              f"{sv['screen']} ({sv['type']} page 1 of {len(d['layout']['types'][sv['type']]['pages'])}), "
+              f"{sv['screen']} ({sv['type']} page 1 of {len(types[sv['type']]['pages'])}), "
               f"{d['side_h']} rows")
 
         shot_n = shot and Path(shot).with_name(f"{Path(shot).stem}-{entry}-{demo}{Path(shot).suffix}")
@@ -1858,8 +1880,9 @@ def live_sidebar(c, inst, pack, out, row):
     pixel) cropped to the column, its rows from 128 down to the layout's height, against
     tools/wiki/sidedump.mjs on the pack with each gadget greyed as the engine's own snapshot of the
     screen has it (`tacli ui`, `--live`). Nothing selected (the player's side's MAIN2); then,
-    where the pack gives ARMCK pages, an ARMCK placed beside the commander and selected (its first
-    page, the BUILD tab and the move-order button current, as the engine draws them for it)."""
+    where the player's side gives ARMCK pages, an ARMCK placed beside the commander and selected
+    (its first page, the BUILD tab and the move-order button current, as the engine draws them for
+    it)."""
     name, lay = inst["name"], json.loads((pack / "side.json").read_text())["layout"]
     H = lay["height"]
     got = {}
@@ -1874,12 +1897,14 @@ def live_sidebar(c, inst, pack, out, row):
     cap, snap, ui = capture("main2")
     gui = snap["gui"].upper()
     assert gui.endswith("MAIN2.GUI"), f"(b1) nothing selected, the engine shows {snap['gui']}, not a MAIN2"
-    screen = sidedump(pack, ["--live", ui, "--screen", "main2", "--side", gui[:-len("MAIN2.GUI")]], out / "live-main2.composed.png")
+    prefix = gui[:-len("MAIN2.GUI")]
+    player = side_by_prefix(lay, prefix, "(b1)")
+    screen = sidedump(pack, ["--live", ui, "--screen", "main2", "--side", prefix], out / "live-main2.composed.png")
     n, where = column_diff(cap, png_rgba(out / "live-main2.composed.png"), lay, screen, (128, H))
     got["main2"] = (screen, n, where)
     assert n == 0, f"(b1) {snap['gui']}: {n} pixels of rows 128..{H - 1} differ from the composer, in {where}"
 
-    if "ARMCK" in lay["types"]:
+    if "ARMCK" in player["types"]:
         roster = c.call("roster", "--json")["units"]
         com = next(u for u in roster if u["owner"] == 0)
         cx, cz = com["world"]
@@ -1902,9 +1927,9 @@ def live_sidebar(c, inst, pack, out, row):
             cap, snap, ui = capture("armck")
         finally:
             c.call("eye", "--release")
-        page = lay["types"]["ARMCK"]["pages"][0]
+        page = player["types"]["ARMCK"]["pages"][0]
         current = [g["name"] for g in lay["screens"][page]["gadgets"] if g["role"] == "buildtab"] + ["ARMMOVEORD"]
-        screen = sidedump(pack, ["--live", ui, "--type", "ARMCK", "--page", 1, "--pressed", ",".join(current)],
+        screen = sidedump(pack, ["--live", ui, "--side", prefix, "--type", "ARMCK", "--page", 1, "--pressed", ",".join(current)],
                           out / "live-armck.composed.png")
         n, where = column_diff(cap, png_rgba(out / "live-armck.composed.png"), lay, screen, (128, H))
         got["armck"] = (screen, n, where)
@@ -1988,8 +2013,8 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
     got = dict(m.groups() for ln in c.log[start:] if (m := re.search(r"wiki check: (\S+/\S+) ([0-9a-f]{16})$", ln)))
     differ = sorted(k for k in want if got.get(k) != want[k])
     assert not differ and len(got) == len(want), f"(b2) the game's hashes differ from simparity --hash for {differ}"
-    row["layout"] = {"screens": len(game_lay["screens"]), "types": sorted(game_lay["types"]), "height": game_lay["height"],
-                     "sides": [s["name"] for s in game_lay["sides"]], "player_side": game_lay["player_side"]}
+    row["layout"] = {"screens": len(game_lay["screens"]), "height": game_lay["height"],
+                     "types": {s["name"]: sorted(s["types"]) for s in game_lay["sides"]}}
     print(f"wiki mods: {row['setup']}: (b2) {src.split('wiki check: ', 1)[1]}, equal to the pack's "
           f"({row['layout']}); {line.split('wiki check: ', 1)[1]}; all {len(want)} hashes equal simparity --hash")
 

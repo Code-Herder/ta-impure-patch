@@ -33,10 +33,14 @@ against an independent Python resolution of the same install.
 6. **The sidebar, per compat setup** (`--side`, or with the rest; `--mods` to choose): each setup's game folder laid
    out as tools/wiki/sidepacks.py lays it out (the retail install, then the setup's files over it), its folder names
    and first archive from sidepacks.py's record where the mod's loader renames them in memory, and the DLL's
-   `wikiassettest side` against `gfx.py --side-only` with the same names: the layout, every screen's file and panel,
-   every button's picture source (step, file, archive, sequence) and its frames' pixels and hotspots, PANELSIDE, the
-   dots, the minimap's colours, tables and bases, the greyed tint and each type's canstop must be equal, and the
-   sheet byte for byte. The setups' fixtures must be present (tools/compat/tacompat.py fetch).
+   `wikiassettest side` against `gfx.py --side-only` with the same names: the layout (every side with its own types),
+   every screen's file and panel, every button's picture source (step, file, archive, sequence) and its frames'
+   pixels and hotspots, each side's PANELSIDE, the dots, the minimap's colours, tables and bases, the greyed tint
+   and each side's casting -- every cast's type, title, footprint, figures, canstop, G cells and build list; the
+   rule's `report` prose is gfx.py's alone -- must be equal, and the sheet byte for byte. The setups' fixtures must
+   be present (tools/compat/tacompat.py fetch). The native half reads the pack's shape only once tagpu_wikiasset.c
+   loads every side (part 2D of the per-mod tutorials): until its report carries a casting and a PANELSIDE per side,
+   each setup is reported as not compared, a failure, never a pass.
 
 No game is run and nothing is written into the repository but the test's executable, which `*.exe` ignores.
 """
@@ -749,14 +753,13 @@ def pack_side(out, mod):
     rep = {r["element"]: r for r in pack["report"] if isinstance(r, dict) and "element" in r}
     mm = rep.get("minimap", {})
     dots = art["dots"]
-    ps = art["panelside"]
     bases = {}
     for eid, b in art["minimap"]["bases"].items():
         bases[eid] = {"w": b["w"], "h": b["h"], "offx": b["offx"], "offy": b["offy"], "fnv": fnv_hex((d / b["file"]).read_bytes())}
     layout = {k: v for k, v in pack["layout"].items() if k != "note"}
     return {"refused": None, "layout": layout, "folders": {k: pack["folders"][k] for k in SIDE_FOLDERS},
             "sheet": {"w": sw, "h": art["sheet"]["h"], "fnv": fnv_hex(sheet)}, "pal": fnv_hex((d / art["palette"]).read_bytes()),
-            "panelside": None if ps is None else {"frame": frame(ps["f"]), "key": ps["key"]},
+            "panelside": [None if ps is None else {"frame": frame(ps["f"]), "key": ps["key"]} for ps in art["panelside"]],
             "screens": screens,
             "dots": {"radlogo": [frame(f) for f in dots["radlogo"]] if dots["radlogo"] else None,
                      "high": frame(dots["high"]), "key": dots["key"]},
@@ -764,12 +767,35 @@ def pack_side(out, mod):
                         "gui": low_((mm.get("gui") or {}).get("path")), "seen": fnv_hex((d / art["minimap"]["seen"]).read_bytes()),
                         "alp": low_((mm.get("alp") or {}).get("path"))},
             "greyed": fnv_hex((d / art["greyed"]).read_bytes()) if art.get("greyed") else None,
-            "defs": {t: v["canstop"] for t, v in pack["defs"].items()},
+            "casting": [casting_of(c) for c in pack["casting"]],
             "bases": bases}
 
 
+def casting_of(c):
+    """One side's casting as both halves compare it: the side, its commander and every cast (None where unbound),
+    without the rule's `report`, whose prose only gfx.py writes."""
+    return {"side": c["side"], "commander": c["commander"],
+            "casts": {k: None if v is None else dict(v) for k, v in c["casts"].items()}}
+
+
+# what tagpu_wikiasset.c's report lacks until it loads every side (part 2D): pack_side's keys it cannot answer yet
+NATIVE_PENDING = "the native load predates the per-side pack: until part 2D its report has one PANELSIDE and the " \
+                 "player types' canstop, where the pack has a PANELSIDE and a casting per side"
+
+
+def native_pending(doc):
+    """Why `wikiassettest side`'s output cannot be compared with a per-side pack yet, or None when it can."""
+    s = doc.get("side") or {}
+    if s.get("refused"):
+        return None
+    art = s.get("art") or {}
+    if "casting" not in s or not isinstance(art.get("panelside"), list):
+        return NATIVE_PENDING
+    return None
+
+
 def native_side(doc):
-    """`wikiassettest side`'s output in pack_side's shape."""
+    """`wikiassettest side`'s output in pack_side's shape: a PANELSIDE per layout side, a casting per side."""
     s = doc["side"]
     if s.get("refused"):
         return {"refused": s["refused"]}
@@ -789,7 +815,7 @@ def native_side(doc):
             "panelside": art["panelside"], "screens": screens, "dots": art["dots"],
             "minimap": {"unexplored": mm["unexplored"], "box": mm["box"], "gui": mm["gui"], "seen": mm["seen"],
                         "alp": mm["alp"]["path"]},
-            "greyed": art["greyed"], "defs": {t: v["canstop"] for t, v in s["defs"].items()},
+            "greyed": art["greyed"], "casting": [casting_of(c) for c in s["casting"]],
             "bases": {k: v for k, v in doc["minimap"].items() if v is not None}}
 
 
@@ -827,7 +853,14 @@ def against_sidepacks(mods, retail, pak):
                 ok = False
                 continue
             doc = json.loads(r.stdout)
-            native, ref = native_side(doc), pack_side(out, mod)
+            ref = pack_side(out, mod)
+            pending = native_pending(doc)
+            if pending:
+                lines.append(f"assetcheck: sidebar {mod}: NOT COMPARED: {pending}; gfx.py's pack read: "
+                             f"{len(ref['layout']['sides'])} sides, {len(ref['casting'])} castings")
+                ok = False
+                continue
+            native = native_side(doc)
         bad = diff(native, ref, exact=True)
         if bad:
             ok = False
@@ -842,8 +875,10 @@ def against_sidepacks(mods, retail, pak):
         for scr in native["screens"].values():
             for q in scr["pics"]:
                 srcs[q["from"]] = srcs.get(q["from"], 0) + 1
-        lines.append(f"assetcheck: sidebar {mod}: native == gfx.py: {len(lay['screens'])} screens, types "
-                     f"{', '.join(f'{t} ({len(v['pages'])})' for t, v in lay['types'].items()) or 'none'}, {npic} pictures "
+        types = "; ".join(f"{sd['name']} {', '.join(f'{t} ({len(v['pages'])})' for t, v in sd['types'].items()) or 'none'}"
+                          for sd in lay["sides"])
+        lines.append(f"assetcheck: sidebar {mod}: native == gfx.py: {len(lay['screens'])} screens, types {types}, "
+                     f"{len(native['casting'])} castings, {npic} pictures "
                      f"({', '.join(f'{k} {v}' for k, v in sorted(srcs.items()))}), a {native['sheet']['h']}-row sheet byte "
                      f"for byte, {len(native['bases'])} minimap bases; {r.stderr.strip().splitlines()[-1].split(': ', 1)[-1]}")
     return ok, lines

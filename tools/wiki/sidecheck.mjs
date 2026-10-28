@@ -1,7 +1,7 @@
 /* sidecheck.mjs -- the sidebar composer's check: tagpu/ddraw/src/tagpu_wikiside.c's column against the mockup's
    tools/wiki/mockup/side.js, byte for byte.
 
-   usage: node tools/wiki/sidecheck.mjs [--no-packs]
+   usage: node tools/wiki/sidecheck.mjs [--no-packs] [--js-only]
      exit 0 when every frame is equal, 1 when one differs, 2 when the C side cannot be built or run
 
    For every demo of every entry, sim.js plays on a sidebar's layout and, at every sampled tick (every 30th and the
@@ -23,7 +23,16 @@
 
    And, unless --no-packs, every real pack under tools/wiki/mockup/gfx/side/<mod>/ that is present (gitignored:
    tools/wiki/sidepacks.py builds them from the player's install), on its own layout: the stronger check, the mods'
-   own pictures through both composers. */
+   own pictures through both composers.
+
+   THE SIDES. A pack holds every side of its mod, each with its own PANELSIDE (art.panelside, index-aligned with
+   layout.sides) and its own casting. The byte compare plays layout side 0 with the entries' own types at Interface
+   Type 1, the one context tagpu_wikisim_init takes today, and hands the C side that side's PANELSIDE as the one
+   WIKISIDE holds (wikisidetest.c reads one). Every other context -- each side of each pack with its casting, at
+   Interface Type 1 and 0 -- is played and composed by side.js alone: each sampled frame must compose, with the
+   view's rows and the view's side, and its PANELSIDE must be the one that side's pack names. Those frames join the
+   byte compare once the C sim takes the context (WIKISIMCTX) and WIKISIDE a PANELSIDE per layout side.
+   --js-only runs that pass and the side-0 frames through side.js alone, building nothing. */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -92,7 +101,7 @@ function synthetic(name, layout, seed, opts, entries) {
   });
   const art = {
     sheet: { file: 'sheet.bin', w: SW, h: SH }, palette: 'pal.bin',
-    panelside: { f: frame(129, 300, int(-9, 9), int(-9, 9)), key: KEY },
+    panelside: layout.sides.map(() => ({ f: frame(129, 300, int(-9, 9), int(-9, 9)), key: KEY })),
     dots: { key: KEY, radlogo: Array.from({ length: opts.radlogo }, () => frame(int(3, 7), int(3, 7), int(0, 3), int(0, 3))),
       high: frame(8, 8, 3, 3) },
     minimap: { unexplored: opts.unexplored, box: opts.box, ...(opts.tables ? { seen: 'seen.bin' } : {}),
@@ -114,13 +123,16 @@ function realPack(mod) {
     greyed: bin(A.greyed), bases };
 }
 
-/* ---- a pack for the C side: the art as the asset loader fills WIKISIDE (wikisidetest.c, art.json) ---- */
+/* ---- a pack for the C side: the art as the asset loader fills WIKISIDE (wikisidetest.c, art.json). WIKISIDE holds
+   one PANELSIDE, so it is given the one of the side the C frames play (PLAYED). ---- */
+const PLAYED = 0;
 function writeC(pack, dir) {
   const L = pack.json.layout, A = pack.json.art || {}, D = A.dots || {}, MM = A.minimap || {};
   const intOr = (v, d) => Number.isInteger(v) ? v : d;
+  const ps = Array.isArray(A.panelside) ? A.panelside[PLAYED] : null;
   const art = {
     sheet: [A.sheet.w, A.sheet.h],
-    panelside: A.panelside ? { f: A.panelside.f, key: intOr(A.panelside.key, -1) } : null,
+    panelside: ps ? { f: ps.f, key: intOr(ps.key, -1) } : null,
     dots: { key: intOr(D.key, -1), radlogo: D.radlogo || [], high: D.high || null },
     unexplored: intOr(MM.unexplored, -1), box: intOr(MM.box, -1),
     screens: Object.entries(L.screens).map(([sn, s]) => {
@@ -183,16 +195,56 @@ function firstDiff(js, c, per) {
   return null;
 }
 
+/* THE OTHER CONTEXTS, side.js alone: every side k of the pack with its casting (none for a pack without one), at
+   Interface Type 1 and 0, every demo played and every sampled frame composed. A frame must compose with the view's
+   rows, show side k, and draw side k's PANELSIDE (the frame side.js read for it, or none where the pack has none).
+   Returns [frames, problems, the contexts played as side/iface]. */
+function jsContexts(pack, p, entries) {
+  const L = pack.json.layout, casting = pack.json.casting, bad = [], played = [];
+  let frames = 0;
+  L.sides.forEach((sd, k) => [1, 0].forEach(iface => {
+    if (k === PLAYED && iface === 1 && !casting) return;   // the byte compare's own context
+    const ctx = { side: k, casting: casting ? casting[k] : null, iface }, at = `${sd.name}/${iface}`;
+    played.push(at);
+    for (const entry of entries) for (const demo of entry.demos) {
+      let sim;
+      try { sim = WikiSim.play(entry, demo, L, ctx); } catch (e) { bad.push(`${at} ${entry.id}/${demo.id}: sim.js refuses it (${e.message})`); continue; }
+      let prev = null;
+      for (;;) {
+        const v = sim.view(), was = prev;
+        prev = sideKey(v);
+        if (v.side && sampled(v, was, sim.tick, sim.done)) {
+          frames++;
+          const M = v.map, cell = M.cell || 16, key = `${at} ${entry.id}/${demo.id}/${sim.tick}`;
+          try {
+            const js = WikiSide.compose(p.art, L, v, pack.bases[entry.id] || null, M.w * cell, M.h * cell);
+            if (js.h !== v.side.h) bad.push(`${key}: composed ${js.h} rows, the view has ${v.side.h}`);
+            if (v.side.index !== k) bad.push(`${key}: the view shows side ${v.side.index}`);
+            const want = Array.isArray(pack.json.art.panelside) ? pack.json.art.panelside[k] : null, got = p.art.panelside[k];
+            if (JSON.stringify(want ? want.f : null) !== JSON.stringify(got ? got.f : null)) bad.push(`${key}: PANELSIDE is not side ${k}'s`);
+          } catch (e) { bad.push(`${key}: side.js cannot compose it (${e.message})`); }
+        }
+        if (sim.done) break;
+        sim.step();
+      }
+    }
+  }));
+  return [frames, bad, played];
+}
+
+const JS_ONLY = process.argv.includes('--js-only');
 const t0 = Date.now();
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecheck-'));
 let code = 0;
 try {
   /* ---- the C side, built natively with the sanitizers ---- */
   const exe = path.join(DDRAW, 'tests/wikisidetest-native.exe');   // `.exe` so the tree's *.exe ignore covers it
-  run('gcc', ['-std=c99', '-Wall', '-Wextra', '-Werror', '-Isrc', '-Iinc', '-O1', '-g', '-fsanitize=address,undefined',
-    '-fno-sanitize-recover=all', '-o', exe, 'tests/wikisidetest.c', ...SRCS, '-lm'], { cwd: DDRAW, encoding: 'utf8' });
   const pak = path.join(tmp, 'wiki.bin');
-  run('python3', [path.join(ROOT, 'tools/hudpak.py'), '--set', 'wiki', path.join(ROOT, 'art/wiki'), pak], { encoding: 'utf8' });
+  if (!JS_ONLY) {
+    run('gcc', ['-std=c99', '-Wall', '-Wextra', '-Werror', '-Isrc', '-Iinc', '-O1', '-g', '-fsanitize=address,undefined',
+      '-fno-sanitize-recover=all', '-o', exe, 'tests/wikisidetest.c', ...SRCS, '-lm'], { cwd: DDRAW, encoding: 'utf8' });
+    run('python3', [path.join(ROOT, 'tools/hudpak.py'), '--set', 'wiki', path.join(ROOT, 'art/wiki'), pak], { encoding: 'utf8' });
+  }
 
   const tree = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/tree.json'), 'utf8'));
   const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
@@ -214,24 +266,27 @@ try {
     }
 
   const lines = [];
-  let nframes = 0, ndiffer = 0;
+  let nframes = 0, ndiffer = 0, njs = 0;
   for (const pack of packs) {
     const dir = path.join(tmp, pack.name.replace(/[^a-z0-9-]+/gi, '_'));
     const p = WikiSide.read(pack.json, pack.sheet, pack.pal, pack.seen, pack.greyed), L = pack.json.layout;
     if (!p.art) throw new CannotRun(`${pack.name}: side.js reads no art: ${p.problems.join('; ')}`);
-    writeC(pack, dir);
-    // to a file: a pack's frames run to hundreds of megabytes
-    const out = path.join(tmp, 'frames.bin'), fd = fs.openSync(out, 'w');
-    try { run(exe, ['compose', pak, dir], { stdio: ['ignore', fd, 'pipe'] }); } finally { fs.closeSync(fd); }
-    const C = readC(fs.readFileSync(out));
+    let C = null;
+    if (!JS_ONLY) {
+      writeC(pack, dir);
+      // to a file: a pack's frames run to hundreds of megabytes
+      const out = path.join(tmp, 'frames.bin'), fd = fs.openSync(out, 'w');
+      try { run(exe, ['compose', pak, dir], { stdio: ['ignore', fd, 'pipe'] }); } finally { fs.closeSync(fd); }
+      C = readC(fs.readFileSync(out));
+    }
     const st = { frames: 0, side: 0, minimap: 0, pressed: 0, greyed: 0, under: 0, bytes: 0 };
     let bad = 0;
     const differ = (key, why) => { bad++; if (bad <= 10) console.log(`DIFFER ${pack.name} ${key}: ${why}`); };
     for (const entry of entries) for (const demo of entry.demos) {
       let sim;
       try { sim = WikiSim.play(entry, demo, L); } catch (e) {
-        const c = C.get(`${entry.id}/${demo.id}/0`);
-        if (!c || c.h !== -1) differ(`${entry.id}/${demo.id}`, `sim.js refuses it (${e.message}), the C side ${c ? 'plays it' : 'gives no frame'}`);
+        const c = C && C.get(`${entry.id}/${demo.id}/0`);
+        if (C && (!c || c.h !== -1)) differ(`${entry.id}/${demo.id}`, `sim.js refuses it (${e.message}), the C side ${c ? 'plays it' : 'gives no frame'}`);
         continue;
       }
       let prev = null;
@@ -239,7 +294,7 @@ try {
         const v = sim.view(), was = prev;
         prev = sideKey(v);
         if (sampled(v, was, sim.tick, sim.done)) {
-          const key = `${entry.id}/${demo.id}/${sim.tick}`, c = C.get(key);
+          const key = `${entry.id}/${demo.id}/${sim.tick}`, c = C ? C.get(key) : { h: v.side ? v.side.h : 0 };
           st.frames++;
           if (!c) differ(key, 'no C frame');
           else if (!v.side) { if (c.h !== 0) differ(key, `no sidebar in sim.js's view, ${c.h} rows from the C side`); }
@@ -249,7 +304,8 @@ try {
             st.side++; st.minimap += js.minimap ? 1 : 0; st.under += v.side.under != null ? 1 : 0;
             st.pressed += v.side.state.filter(s => s === 1).length; st.greyed += v.side.state.filter(s => s === 2).length;
             let why = null;
-            if (c.h !== js.h) why = `rows: side.js ${js.h}, C ${c.h}`;
+            if (!C) why = js.h !== v.side.h ? `rows: side.js ${js.h}, the view ${v.side.h}` : null;
+            else if (c.h !== js.h) why = `rows: side.js ${js.h}, C ${c.h}`;
             else if (!!c.minimap !== js.minimap) why = `minimap: side.js ${js.minimap}, C ${!!c.minimap}`;
             else why = (firstDiff(js.idx, c.idx, 1) && `indices, ${firstDiff(js.idx, c.idx, 1)}`) ||
               (firstDiff(js.a, c.a, 1) && `coverage, ${firstDiff(js.a, c.a, 1)}`) ||
@@ -262,13 +318,19 @@ try {
         sim.step();
       }
     }
-    if (C.size !== st.frames + [...C.values()].filter(f => f.h === -1).length) differ('-', `the C side wrote ${C.size} frames, side.js sampled ${st.frames}`);
+    if (C && C.size !== st.frames + [...C.values()].filter(f => f.h === -1).length) differ('-', `the C side wrote ${C.size} frames, side.js sampled ${st.frames}`);
     nframes += st.frames;
+    const what = C ? 'equal' : 'composed by side.js alone';
     if (bad) { code = 1; ndiffer += bad; lines.push(`  ${pack.name}: ${bad} DIFFER`); }
-    else lines.push(`  ${pack.name} (${L.height} rows): ${st.frames} frames equal, ${st.side} with the sidebar (${st.minimap} with the minimap, ${st.under} with a unit under the cursor), ${st.pressed} pressed and ${st.greyed} greyed gadgets drawn, ${(st.bytes / 1048576).toFixed(1)} MiB compared`);
+    else lines.push(`  ${pack.name} (${L.height} rows): ${st.frames} frames ${what}, ${st.side} with the sidebar (${st.minimap} with the minimap, ${st.under} with a unit under the cursor), ${st.pressed} pressed and ${st.greyed} greyed gadgets drawn${C ? `, ${(st.bytes / 1048576).toFixed(1)} MiB compared` : ''}`);
+    const [jf, jbad, played] = jsContexts(pack, p, entries);
+    njs += jf;
+    for (const b of jbad.slice(0, 10)) console.log(`JS ${pack.name} ${b}`);
+    if (jbad.length) { code = 1; ndiffer += jbad.length; lines.push(`  ${pack.name}, the other sides and interfaces: ${jbad.length} of ${jf} frames FAIL in side.js`); }
+    else if (jf) lines.push(`  ${pack.name}, ${played.join(' ')}${pack.json.casting ? ' with their castings' : ''}: ${jf} frames composed by side.js alone`);
   }
-  const s = ((Date.now() - t0) / 1000).toFixed(1);
-  console.log(code ? `sidecheck: ${ndiffer} of ${nframes} frames DIFFER (${s} s)` : `sidecheck: all equal -- ${packs.length} packs, ${nframes} frames byte for byte (${s} s)`);
+  const s = ((Date.now() - t0) / 1000).toFixed(1), half = JS_ONLY ? 'side.js alone, the C half not run' : 'byte for byte';
+  console.log(code ? `sidecheck: ${ndiffer} of ${nframes + njs} frames DIFFER (${s} s)` : `sidecheck: all ${JS_ONLY ? 'compose' : 'equal'} -- ${packs.length} packs, ${nframes} frames ${half}, ${njs} more by side.js alone (${s} s)`);
   for (const l of lines) console.log(l);
   if (absent.length) console.log(`  not present (no side.json): ${absent.join(', ')}`);
 } catch (x) {

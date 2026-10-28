@@ -4,9 +4,12 @@
    usage: node tools/wiki/sidedump.mjs --mod <m> (--screen <name> | --type <T> --page <n>) [options]
      --mod M          the pack tools/wiki/mockup/gfx/side/<M>/ (gitignored; tools/wiki/sidepacks.py builds it)
      --pack DIR       read the pack from DIR instead
-     --screen NAME    a screen of the pack's layout, or main2 / gen: the player's side's MAIN2 or GEN
-     --side NAME      the side main2 / gen name, instead of the layout's player side
-     --type T --page N  the screen the router shows for one selected T at page N (0: its orders page)
+     --screen NAME    a screen of the pack's layout, or main2 / gen: the side's MAIN2 or GEN
+     --side NAME      the layout side (its name or prefix) the column shows: its MAIN2 and GEN, its types' pages,
+                      its PANELSIDE. Without it, the one side whose screens hold the state; a state more than one
+                      side holds (main2 and gen in a pack of two sides, a type two sides page) needs it
+     --type T --page N  the screen the router shows for one selected T at page N (0: its orders page), from the
+                      side's own types: a type's pages follow the side's prefix
      --pressed A,B    these gadgets in state 1: a button held inside, the current tab
      --grey A,B       these gadgets greyed
      --hide A,B       these gadgets not drawn
@@ -74,26 +77,42 @@ function readPack(dir) {
   return { ...pack, dir, json: j };
 }
 
-// the screen the state names: a layout screen, the side's main2 / gen, or one selected type's page
+// the screens a layout side routes to: its MAIN2, its GEN, and each of its types' pages and orders page
+const screensOf = sd => [sd.main2, sd.gen, ...Object.values(sd.types).flatMap(t => [...t.pages, ...(t.orders ? [t.orders] : [])])];
+
+/* the screen the state names -- a layout screen, the side's main2 / gen, or one selected type's page -- and the index
+   of the layout side that shows it: --side's, else the one side that holds it */
 function screenOf(o, L) {
+  let k = -1;
+  if (o.side !== undefined) {
+    k = L.sides.findIndex(d => same(d.name, o.side) || same(d.prefix, o.side));
+    if (k < 0) throw new Error(`no side ${o.side} (the sides: ${L.sides.map(d => d.name).join(', ')})`);
+  }
+  const only = (ks, what) => {
+    if (k >= 0) { if (!ks.includes(k)) throw new Error(`side ${L.sides[k].name} has no ${what}`); return k; }
+    if (ks.length === 1) return ks[0];
+    if (!ks.length) throw new Error(`no side has ${what}`);
+    throw new Error(`${ks.map(i => L.sides[i].name).join(' and ')} each have ${what}: name one with --side`);
+  };
+  const all = L.sides.map((d, i) => i);
   if (o.type !== undefined) {
-    const T = Object.keys(L.types).find(t => same(t, o.type)), page = Number(o.page ?? 1);
-    if (!T) throw new Error(`the pack's layout has no pages for ${o.type} (its types: ${Object.keys(L.types).join(', ') || 'none'})`);
-    const t = L.types[T];
-    if (page === 0) { if (!t.orders) throw new Error(`${T} has no orders page`); return t.orders; }
+    const has = i => Object.keys(L.sides[i].types).find(t => same(t, o.type));
+    const ks = all.filter(has);
+    if (!ks.length) throw new Error(`the pack's layout has no pages for ${o.type} (the sides' types: ${L.sides.map(d => `${d.name} ${Object.keys(d.types).join(', ') || 'none'}`).join('; ')})`);
+    const i = only(ks, `pages for ${o.type}`), T = has(i), t = L.sides[i].types[T], page = Number(o.page ?? 1);
+    if (page === 0) { if (!t.orders) throw new Error(`${T} has no orders page`); return [t.orders, i]; }
     if (!(Number.isInteger(page) && page >= 1 && page <= t.pages.length)) throw new Error(`${T} has pages 1..${t.pages.length}`);
-    return t.pages[page - 1];
+    return [t.pages[page - 1], i];
   }
   const s = o.screen;
   if (s === undefined) throw new Error('--screen or --type is required');
   if (same(s, 'main2') || same(s, 'gen')) {
-    const side = o.side !== undefined ? L.sides.find(d => same(d.name, o.side) || same(d.prefix, o.side)) : L.sides[L.player_side];
-    if (!side) throw new Error(`no side ${o.side}`);
-    return same(s, 'main2') ? side.main2 : side.gen;
+    const i = only(all, s);
+    return [same(s, 'main2') ? L.sides[i].main2 : L.sides[i].gen, i];
   }
   const hit = Object.keys(L.screens).find(n => same(n, s));
   if (!hit) throw new Error(`the pack's layout has no screen ${s} (its screens: ${Object.keys(L.screens).join(', ')})`);
-  return hit;
+  return [hit, only(all.filter(i => screensOf(L.sides[i]).includes(hit)), `the screen ${hit}`)];
 }
 
 function main() {
@@ -106,8 +125,8 @@ function main() {
   if (!p.art || !p.layout) { console.error(`sidedump: ${dir}: no art: ${p.problems.join('; ')}`); return 2; }
   for (const m of p.problems) console.warn(`sidedump: pack: ${m}`);
   const L = p.layout;
-  let screen;
-  try { screen = screenOf(o, L); } catch (e) { console.error(`sidedump: ${e.message}`); return 1; }
+  let screen, side;
+  try { [screen, side] = screenOf(o, L); } catch (e) { console.error(`sidedump: ${e.message}`); return 1; }
   const gadgets = L.screens[screen].gadgets;
   const state = gadgets.map(g => g.hidden ? -1 : g.grey ? 2 : 0);
   const unknown = [];
@@ -134,12 +153,12 @@ function main() {
     map = { w: mw, h: mh, cell: 16, fog: [] };
     W = mw * 16; H = mh * 16;
   }
-  const view = { map, units: [], side: { h: L.height, screen, unit: null, page: 0, state, under: null } };
+  const view = { map, units: [], side: { index: side, h: L.height, screen, unit: null, page: 0, state, under: null } };
   const c = WikiSide.compose(p.art, L, view, base, W, H);
   const out = o.out || path.join(os.tmpdir(), 'sidedump', `${o.mod || path.basename(dir)}-${screen}.png`);
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, png(WikiSide.COL, c.h, WikiSide.rgba(p.art, c)));
-  console.log(`sidedump: ${out}: ${screen}, ${WikiSide.COL} x ${c.h}, states ${gadgets.map((g, i) => `${g.name}=${state[i]}`).join(' ')}`);
+  console.log(`sidedump: ${out}: ${L.sides[side].name} ${screen}, ${WikiSide.COL} x ${c.h}, states ${gadgets.map((g, i) => `${g.name}=${state[i]}`).join(' ')}`);
   return 0;
 }
 process.exitCode = main();
