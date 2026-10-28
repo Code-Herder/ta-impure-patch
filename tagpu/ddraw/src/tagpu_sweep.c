@@ -57,6 +57,7 @@
 #define N_NEXT    0x4A        /* an order node's next                                         */
 #define N_OWNER   0x0E        /* ...its unit                                                  */
 #define N_POS     0x22        /* ...its position, x, altitude, z in 16.16                     */
+#define N_FLAGS   0x42        /* ...its flags: bit 2 survives stock's replace, 0x40000 the +0x60 list */
 #define M_RECORD  0x2C76      /* the six-dword mouse record the handler acts on               */
 #define M_POINT   0x2CAA      /* the world point, 16.16 x, altitude, z                        */
 #define M_MODE    0x2CC3
@@ -102,6 +103,7 @@
 
 typedef const unsigned char* (__stdcall* Resolve)(int*, unsigned, void*, void*, const void*);
 typedef void (__stdcall* Order)(int, int, void*, void*, const void*, int, int);
+typedef void (__stdcall* RemoveOrder)(void*, const void*);
 typedef void (__stdcall* ClickTail)(int);
 typedef int (__stdcall* GroundHeight)(const int*);
 typedef int (__stdcall* Mapped)(const void*, const int*);
@@ -146,11 +148,16 @@ static Target s_t[SWEEP_MAX_TARGETS];
 static SweepTarget s_st[SWEEP_MAX_TARGETS];
 static uint16_t s_who[SWEEP_MAX_TARGETS], s_seq[SWEEP_MAX_TARGETS], s_cellOrder[SWEEP_MAX_TARGETS];
 static unsigned char s_drop[SWEEP_MAX_TARGETS];
+/* a node a ring without Shift takes off, as one walk read it: its place in the list, action and
+   position */
+typedef struct { uint16_t place; unsigned char action; int x, z; } Cut;
+static Cut s_cut[LIST_WALK];
 static SweepBuilder s_b[TAGPU_LIM_UNITS];
 static uint16_t s_slot[TAGPU_LIM_UNITS];
 
 /* the level's counters, logged at level end */
 static unsigned s_cCommit, s_cIssued, s_cClick, s_cMismatch, s_cListCap, s_cUnassigned, s_cTrunc;
+static unsigned s_cCancelled, s_cStale;
 
 _Static_assert(TAGPU_PK_SWEEP_TARGETS == SWEEP_MAX_TARGETS, "the packet's targets are the ring's");
 
@@ -503,32 +510,104 @@ static int cell_cmp(const void* a, const void* b)
     return x < y ? -1 : x > y;
 }
 
-/* Every target whose feature is already the target of a reclaim-family node in a
-   builder's list is dropped, so no feature is queued twice. The feature is the node's own,
-   found at its position as the Reclaim handler finds it (0x421DA0 at order +0x22). Targets are
-   matched by anchor cell, searched in a copy of them sorted by cell. Returns the targets kept,
-   compacted in their order. */
+/* The targets in anchor-cell order, for target_of: s_cellOrder holds their indices sorted. */
+static void sort_targets(unsigned n)
+{
+    unsigned i;
+    for (i = 0; i < n; i++) s_cellOrder[i] = (uint16_t)i;
+    qsort(s_cellOrder, n, sizeof *s_cellOrder, cell_cmp);
+}
+
+/* The target whose feature is anchored at `cell`, or -1; after sort_targets(n). */
+static int target_of(unsigned n, int cell)
+{
+    unsigned lo = 0, hi = n;
+    while (lo < hi) {
+        unsigned mid = (lo + hi) / 2;
+        if (s_t[s_cellOrder[mid]].f.cell < cell) lo = mid + 1; else hi = mid;
+    }
+    return lo < n && s_t[s_cellOrder[lo]].f.cell == cell ? (int)s_cellOrder[lo] : -1;
+}
+
+/* The ring's target a node reclaims, or -1: a reclaim-family node whose feature, found at its
+   position as the Reclaim handler finds it (0x421DA0 at order +0x22), is one of the targets. */
+static int node_target(const Grid* g, const char* node, unsigned n)
+{
+    Feat f;
+    if (!family((unsigned char)node[4]) || !feature_at(g, (const int*)(node + N_POS), &f)) return -1;
+    return target_of(n, f.cell);
+}
+
+/* WITHOUT SHIFT A RING REPLACES AS A STOCK ORDER DOES, BUT FOR WHAT IT TARGETS: of each builder's
+   list it takes off what 0x43ADC0's replace takes off -- every node of the +0x5C list without
+   +0x42 bit 2 (0x43AE14..0x43AE59) -- except a node that already reclaims one of the ring's
+   targets, which stays where it is, so a builder at work on one goes on with it. The places are
+   read in one bounded walk, then taken off in descending place through the exact-removal root
+   0x439F80 (stdcall, its callers 0x43BA7C and 0x49646F), each found again by a fresh walk to its
+   place and taken only while it still carries the action, position and flags that walk read.
+   NO NODE POINTER OUTLIVES 0x439F80: its destructor 0x43A1F0 can run the action's handler and
+   start COB scripts, and on the head calls 0x489800(unit, 3) (tagpu_place.c, PHASE 1, the same
+   argument); descending, a removal moves no place still to come, and the head goes last. A node
+   carrying 0x40000 belongs on +0x60 (0x439F8F picks that list for it), so it is never taken.
+   Returns the nodes taken off; `*stale` counts a place that held something else by then, which
+   stays. After sort_targets(n). */
+static unsigned cancel_others(const TagpuWorld* w, const Grid* g, unsigned n, unsigned nb,
+                              unsigned* stale)
+{
+    unsigned b, removed = 0;
+    for (b = 0; b < nb; b++) {
+        const char *u = live_builder(w, b), *node;
+        unsigned place = 0, nc = 0;
+        if (!u) continue;
+        for (node = *(const char* const*)(u + U_ORDERS); node && place < LIST_WALK;
+             node = *(const char* const*)(node + N_NEXT), place++) {
+            const int* pos = (const int*)(node + N_POS);
+            if (*(const char* const*)(node + N_OWNER) != u) break;
+            if ((*(const unsigned*)(node + N_FLAGS) & 0x40004u) || node_target(g, node, n) >= 0) continue;
+            s_cut[nc].place = (uint16_t)place;
+            s_cut[nc].action = (unsigned char)node[4];
+            s_cut[nc].x = pos[0];
+            s_cut[nc].z = pos[2];
+            nc++;
+        }
+        while (nc--) {
+            const Cut* c = &s_cut[nc];
+            const int* pos;
+            unsigned p;
+            if (!(u = live_builder(w, b))) break;
+            for (node = *(const char* const*)(u + U_ORDERS), p = 0;
+                 node && p < c->place && *(const char* const*)(node + N_OWNER) == u;
+                 node = *(const char* const*)(node + N_NEXT), p++) {}
+            pos = node ? (const int*)(node + N_POS) : NULL;
+            if (!node || *(const char* const*)(node + N_OWNER) != u ||
+                (unsigned char)node[4] != c->action || pos[0] != c->x || pos[2] != c->z ||
+                (*(const unsigned*)(node + N_FLAGS) & 0x40004u)) {
+                ++*stale;
+                continue;
+            }
+            ((RemoveOrder)0x00439F80u)((void*)u, node);
+            removed++;
+        }
+    }
+    return removed;
+}
+
+/* Every target that a reclaim-family node in a builder's list already reclaims is dropped, so
+   no feature is queued twice. Returns the targets kept, compacted in their order. After
+   sort_targets(n). */
 static unsigned drop_queued(const TagpuWorld* w, const Grid* g, unsigned n, unsigned nb)
 {
     unsigned i, b, k;
-    for (i = 0; i < n; i++) { s_cellOrder[i] = (uint16_t)i; s_drop[i] = 0; }
-    qsort(s_cellOrder, n, sizeof *s_cellOrder, cell_cmp);
+    memset(s_drop, 0, n);
     for (b = 0; b < nb; b++) {
         const char *u = live_builder(w, b), *node;
         unsigned steps = 0;
         if (!u) continue;
         for (node = *(const char* const*)(u + U_ORDERS); node && steps++ < LIST_WALK;
              node = *(const char* const*)(node + N_NEXT)) {
-            Feat f;
-            unsigned lo = 0, hi = n;
+            int t;
             if (*(const char* const*)(node + N_OWNER) != u) break;
-            if (!family((unsigned char)node[4]) || !feature_at(g, (const int*)(node + N_POS), &f))
-                continue;
-            while (lo < hi) {
-                unsigned mid = (lo + hi) / 2;
-                if (s_t[s_cellOrder[mid]].f.cell < f.cell) lo = mid + 1; else hi = mid;
-            }
-            if (lo < n && s_t[s_cellOrder[lo]].f.cell == f.cell) s_drop[s_cellOrder[lo]] = 1;
+            if ((t = node_target(g, node, n)) >= 0) s_drop[t] = 1;
         }
     }
     for (i = k = 0; i < n; i++)
@@ -540,15 +619,17 @@ static unsigned drop_queued(const TagpuWorld* w, const Grid* g, unsigned n, unsi
    root: the ring's targets, split nearest-first across the selected reclaimers, each issued as
    the order the resolver gives that builder there, then stock's tail of a click. Nothing is
    ordered and the mode stays when the ring holds nothing (the owner's ruling: an empty ring
-   orders nothing and stays armed). A RING ONLY ADDS, with Shift or without (the owner's ruling):
-   every order is appended after the builder's own, no builder loses one, and a feature already
-   queued is not queued again. Shift decides only whether reclaim stays armed, through the tail. */
+   orders nothing and stays armed). WHAT IT TARGETS IS ONLY ADDED TO (the owner's ruling): a
+   builder already reclaiming one of the ring's targets keeps that order where it is, and no
+   feature is queued twice. Without Shift the rest of each builder's list goes, as a stock order's
+   replace takes it (cancel_others); with Shift it all stays. Every new order is appended. */
 static void commit(const TagpuWorld* w, const Gesture* d, int shift)
 {
     Grid g;
     const char *rep, *player;
     int c[3], r = radius(d);
     unsigned found = 0, more = 0, n, nb = 0, m = 0, k, i, issued = 0, mismatch = 0, capped = 0;
+    unsigned cancelled = 0, stale = 0;
     centre_px(d, c);
     if (!grid(w->ta, &g) || !(rep = representative(w)) || !(player = player_of(w, rep)) ||
         !actions()) {
@@ -558,7 +639,11 @@ static void commit(const TagpuWorld* w, const Gesture* d, int shift)
     n = found = enumerate(&g, player, c, r, s_kind, s_t, SWEEP_MAX_TARGETS, &more);
     for (i = w->first; i <= w->last && nb < TAGPU_LIM_UNITS; i++)
         if (reclaimer(w, i)) s_slot[nb++] = (uint16_t)i;
-    if (n) n = drop_queued(w, &g, n, nb);
+    if (n) {
+        sort_targets(n);
+        if (!shift) cancelled = cancel_others(w, &g, n, nb, &stale);
+        n = drop_queued(w, &g, n, nb);
+    }
     if (n) {
         for (k = 0; k < nb; k++) {
             builder_inputs(w, &g, live_builder(w, k), &s_b[k]);
@@ -573,9 +658,8 @@ static void commit(const TagpuWorld* w, const Gesture* d, int shift)
            a same-action node within 16 world units, inclusive, and creates nothing -- the toggle
            -- so it would take back a neighbouring 1x1 feature's order instead of adding this
            one (tagpu_place.c, PHASE 2, the same argument); and 0x43ADC0's 0, stock's replace,
-           destroys every node lacking flag bit 4 before it links the new one, which a ring never
-           does. The resolver is asked again for
-           every order: the preview is never trusted, and the order byte is the builder's own
+           would take off a builder's order on one of the ring's own targets, which
+           cancel_others spares. The resolver is asked again for every order: the preview is never trusted, and the order byte is the builder's own
            (VTOL_RECLAIM for a VTOL, RESURRECT for a resurrector). A refusal is a mismatch, the
            self-check of enumerate's equivalence. No node pointer is held across a call. */
         for (k = 0; k < m; k++) {
@@ -597,15 +681,15 @@ static void commit(const TagpuWorld* w, const Gesture* d, int shift)
        radio group reset through 0x49FE60 and 0x4A6A40, which also drops the armed plate --
        0x499092..0x4990F1 exactly (DISASSEMBLED). It reads [main+0x531] and its +4 unchecked,
        so both are tested first; the screen is this thread's and no call between frees it. */
-    if (issued) {
+    if (issued || cancelled) {
         const char* top = *(const char* const*)(w->ta + M_TOP);
         if (top && *(const char* const*)(top + 4)) ((ClickTail)0x004958C0u)(shift ? 1 : 0);
     }
     s_cCommit++; s_cIssued += issued; s_cMismatch += mismatch; s_cListCap += capped;
-    s_cUnassigned += n - m; s_cTrunc += more;
+    s_cUnassigned += n - m; s_cTrunc += more; s_cCancelled += cancelled; s_cStale += stale;
     tagpu_logf("sweep: commit kind=%s r=%d found=%u taken=%u builders=%u issued=%u unassigned=%u "
-               "mismatch=%u listcap=%u shift=%d", kind_name(s_kind), r, found, n, nb, issued, n - m,
-               mismatch, capped, shift ? 1 : 0);
+               "mismatch=%u listcap=%u cancelled=%u stale=%u shift=%d", kind_name(s_kind), r, found,
+               n, nb, issued, n - m, mismatch, capped, cancelled, stale, shift ? 1 : 0);
 }
 
 /* The drag follows the record's world point, which 0x498DA0 wrote for this record before the
@@ -1163,8 +1247,8 @@ void tagpu_sweep_level_end(void)
 {
     if (s_armed)
         tagpu_logf("sweep: level end commits=%u issued=%u clicks=%u mismatch=%u listcap=%u "
-                   "unassigned=%u trunc=%u", s_cCommit, s_cIssued, s_cClick, s_cMismatch,
-                   s_cListCap, s_cUnassigned, s_cTrunc);
+                   "unassigned=%u trunc=%u cancelled=%u stale=%u", s_cCommit, s_cIssued, s_cClick,
+                   s_cMismatch, s_cListCap, s_cUnassigned, s_cTrunc, s_cCancelled, s_cStale);
     /* outside play: a kind still pending may wait for the store's lock here */
     kind_offer(1);
     memset(&s_g, 0, sizeof s_g);
@@ -1172,6 +1256,7 @@ void tagpu_sweep_level_end(void)
     s_taken[0] = s_taken[1] = 0;
     s_actOk = 0;
     s_cCommit = s_cIssued = s_cClick = s_cMismatch = s_cListCap = s_cUnassigned = s_cTrunc = 0;
+    s_cCancelled = s_cStale = 0;
 }
 
 void tagpu_sweep_init(void)

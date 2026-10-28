@@ -30,9 +30,10 @@ The cases (core), ARMCOM and both ARMCK selected:
   mode; (c) a METAL ring without Shift: the union of the lists' reclaim-family nodes is the
   expected METAL set, each feature once, and each builder's own targets come in the order
   sweep_split gives for the inputs read back here, then mode 1; (d) ENERGY and (e) ALL, the same;
-  (f) a Shift ring after a METAL prefix: every list keeps its prefix, no feature twice, mode 12
-  with main+0x2CC6 bit 5, and Shift's release disarms; (f2) the same without Shift: a ring only
-  adds, every builder's whole list stays at its head, and it disarms; (g) a click on a wreck under METAL is
+  (f) a Shift ring after a move and a METAL prefix: every list keeps it all, no feature twice,
+  mode 12 with main+0x2CC6 bit 5, and Shift's release disarms; (f2) an ALL ring without Shift
+  after the same: the prefix's reclaims of the ring's own features stay at the head, the move goes,
+  the rest is added, and it disarms; (f3) an ENERGY ring the same: the wrecks go too; (g) a click on a wreck under METAL is
   stock's: every list is that wreck alone, mode 1; (h) on a tree under METAL the cursor is the
   engine's "nothing", 0x13, and a click orders nothing and keeps the mode; (i) a right press
   mid-drag orders nothing and keeps the mode, a second one disarms; (j) Esc the same; (k) a ring
@@ -89,6 +90,9 @@ TREES = [(1220, 1170), (1260, 1330), (1240, 1230), (1370, 1390), (1200, 1450), (
          (1150, 1480), (950, 1320)]
 BIG = ((1200, 1360), (1470, 1360))      # a ring of r 270 over the whole scene (farthest centre 251)
 PREFIX = ((1300, 1250), (1400, 1250))   # r 100: part of the wrecks, for (f)'s prefix
+# bare ground in sweep-basic's view, away from every feature: where the pointer rests unhovering
+# and where (f)'s move goes
+PARK = (1600, 1060)
 
 
 # -- the DLL's account: tagpu_sweep.c's log lines ---------------------------------------------
@@ -618,27 +622,53 @@ def cases_ab(s):
     assert seen == want, f"(b) the quickkey cycled {seen}, want {want}"
 
 
-def case_f(s, scene):
-    what = "(f) a Shift ring after a METAL prefix"
+def prefix(s, what):
+    """Each builder's list as (f)-(f3) start from it: a move to PARK, then, by a Shift METAL ring
+    that appends, part of the wrecks. Returns the lists as (action, position) per builder, and
+    the move's action."""
     s.clear()
+    s.call("order", "move", "pos", str(PARK[0]), str(PARK[1]), "--sel")
+    s.once(all(s.orders(b) and s.action_name(s.orders(b)[0]["action"]).upper() == "MOVE_GROUND"
+               for b in s.builders), f"{what}: the move did not reach every builder")
+    move = s.orders(s.builders[0])[0]["action"]
     s.arm()
     s.set_kind("METAL")
-    pc, pe, start = s.drag(*PREFIX)
+    pc, pe, start = s.drag(*PREFIX, shift=True)
     s.commit_line(start, f"{what}: the prefix")
-    before = s.lists()
-    assert any(before.values()), f"{what}: the prefix ring took nothing"
+    s.lift("shift")
+    s.until(lambda: s.mode() == 1, f"{what}: Shift's release did not disarm")
+    before = {b: [(o["action"], o["pos"]) for o in s.orders(b)] for b in s.builders}
+    for b in s.builders:
+        assert before[b][0][0] == move, f"{what}: {b}'s list does not start with the move: {before[b]}"
+    assert any(s.lists().values()), f"{what}: the prefix ring took nothing"
+    return before, move
+
+
+def full_lists(s):
+    return {b: [(o["action"], o["pos"]) for o in s.orders(b)] for b in s.builders}
+
+
+def reclaims(s, nodes):
+    return [n for n in nodes if s.action_name(n[0]).upper() in FAMILY]
+
+
+def case_f(s, scene):
+    """With Shift a ring keeps every order: the move and the prefix stay at the head of each
+    list, nothing is queued twice, the order stays armed, and Shift's release disarms."""
+    what = "(f) a Shift ring after a move and a METAL prefix"
+    before, move = prefix(s, what)
     s.arm()
     s.set_kind("ALL")
     pc, pe, start = s.drag(*BIG, shift=True)
     line = s.commit_line(start, what)
-    assert line["shift"] == 1, f"{what}: {line}"
-    after = s.lists()
+    assert line["shift"] == 1 and line["cancelled"] == 0, f"{what}: {line}"
+    after = full_lists(s)
     for b in s.builders:
-        assert after[b][:len(before[b])] == before[b], f"{what}: {b}'s prefix {before[b]} became {after[b]}"
-    taken = [cell for b in s.builders for cell in after[b]]
-    assert len(taken) == len(set(taken)), f"{what}: a feature queued twice: {after}"
+        assert after[b][:len(before[b])] == before[b], f"{what}: {b}'s orders {before[b]} became {after[b]}"
+    taken = [cell for b in s.builders for cell in s.targets(b)]
+    assert len(taken) == len(set(taken)), f"{what}: a feature queued twice"
     sure, amb = s.ring((pc[0] >> 16, pc[2] >> 16), radius(pc, pe, 1.0), "ALL")
-    assert set(sure) <= set(taken) <= set(sure) | set(amb) | {c for v in before.values() for c in v}, \
+    assert set(sure) <= set(taken) <= set(sure) | set(amb), \
         f"{what}: queued {sorted(taken)}, want {sorted(sure)}"
     assert s.mode() == 12 and s.flags() & 0x20, \
         f"{what}: mode {s.mode()}, main+0x2CC6 0x{s.flags():02x}: the order is not kept armed"
@@ -646,34 +676,46 @@ def case_f(s, scene):
     s.until(lambda: s.mode() == 1, f"{what}: Shift's release did not disarm")
 
 
-def case_f2(s, scene):
-    """A ring only adds: without Shift too, every builder's whole list -- every node, of any
-    action -- stays at its head, nothing is queued twice, and the order disarms."""
-    what = "(f2) a ring without Shift after a METAL prefix"
-    s.clear()
+def no_shift_ring(s, what, kind):
+    """Without Shift a ring keeps only what it targets: each builder's reclaims of the ring's own
+    features stay at the head of its list in their order, every other order goes -- the move, and
+    reclaims of anything not the ring's -- and the ring's other features are added, none twice;
+    the order disarms."""
+    before, move = prefix(s, what)
     s.arm()
-    s.set_kind("METAL")
-    pc, pe, start = s.drag(*PREFIX)
-    s.commit_line(start, f"{what}: the prefix")
-    before = {b: [(o["action"], o["pos"]) for o in s.orders(b)] for b in s.builders}
-    cells = s.lists()
-    assert any(before.values()), f"{what}: the prefix ring took nothing"
-    s.arm()
-    s.set_kind("ALL")
+    s.set_kind(kind)
     pc, pe, start = s.drag(*BIG)
     line = s.commit_line(start, what)
-    assert line["shift"] == 0 and line["issued"] > 0, f"{what}: {line}"
-    after = {b: [(o["action"], o["pos"]) for o in s.orders(b)] for b in s.builders}
+    sure, amb = s.ring((pc[0] >> 16, pc[2] >> 16), radius(pc, pe, 1.0), kind)
+    g = s.grid()
+    ours = set(sure) | set(amb)
+    kept = {b: [n for n in reclaims(s, before[b]) if s.anchor_at(g, n[1]) in ours] for b in s.builders}
+    gone = sum(len(before[b]) - len(kept[b]) for b in s.builders)
+    assert line["shift"] == 0 and line["cancelled"] == gone and line["stale"] == 0, \
+        f"{what}: {line}, want {gone} cancelled"
+    after = full_lists(s)
     for b in s.builders:
-        assert after[b][:len(before[b])] == before[b], \
-            f"{what}: {b}'s orders {before[b]} became {after[b]}: the ring cancelled some"
-    assert sum(map(len, after.values())) == sum(map(len, before.values())) + line["issued"], \
-        f"{what}: {line['issued']} issued, the lists went from {before} to {after}"
-    got = s.lists()
-    taken = [cell for b in s.builders for cell in got[b]]
-    assert len(taken) == len(set(taken)), f"{what}: a feature queued twice: {got}"
-    assert all(got[b][:len(cells[b])] == cells[b] for b in s.builders), f"{what}: {cells} -> {got}"
+        assert after[b][:len(kept[b])] == kept[b], f"{what}: {b}'s kept reclaims {kept[b]}, now {after[b]}"
+        assert all(n[0] != move for n in after[b]), f"{what}: {b} kept its move: {after[b]}"
+        assert len(after[b]) == len(reclaims(s, after[b])), f"{what}: {b} kept a non-reclaim order: {after[b]}"
+    taken = [cell for b in s.builders for cell in s.targets(b)]
+    assert len(taken) == len(set(taken)), f"{what}: a feature queued twice"
+    assert set(sure) <= set(taken) <= set(sure) | set(amb), \
+        f"{what}: queued {sorted(taken)}, want {sorted(sure)} (+ any of {sorted(amb)})"
+    assert sum(map(len, after.values())) == sum(map(len, kept.values())) + line["issued"], \
+        f"{what}: {line['issued']} issued onto {kept}, the lists are {after}"
     s.until(lambda: s.mode() == 1, f"{what}: the ring without Shift did not disarm")
+    return kept
+
+
+def case_f2(s, scene):
+    kept = no_shift_ring(s, "(f2) an ALL ring without Shift after a move and a METAL prefix", "ALL")
+    assert any(kept.values()), "(f2) the prefix's wrecks are the ring's own, yet none was kept"
+
+
+def case_f3(s, scene):
+    kept = no_shift_ring(s, "(f3) an ENERGY ring without Shift after a move and a METAL prefix", "ENERGY")
+    assert not any(kept.values()), f"(f3) a wreck is no ENERGY target, yet {kept} were kept"
 
 
 def click_at(s, x, z):
@@ -791,7 +833,7 @@ def level_end(s):
             results = True
         time.sleep(1)
     f = got[-1]
-    for key in ("mismatch", "listcap"):
+    for key in ("mismatch", "listcap", "stale"):
         assert f.get(key) == 0, f"(m) the level ended with {key}={f.get(key)}: {f}"
     return f
 
@@ -825,6 +867,7 @@ def core(s):
     ring_case(s, "(e) an ALL ring", "ALL", must=wrecks + trees)
     case_f(s, scene)
     case_f2(s, scene)
+    case_f3(s, scene)
     case_gh(s, scene)
     case_ij(s)
     case_k(s)
@@ -910,10 +953,6 @@ def MarkLog(gamedir):
 def queued(s, names):
     """The reclaim-family orders of `names`, whose features stand: what the order markers draw."""
     return sum(len(s.targets(b)) for b in names)
-
-
-# bare ground in sweep-basic's view, away from every feature and from where any builder walks
-PARK = (1600, 1060)
 
 
 def markers(s, gamedir):
