@@ -3232,53 +3232,57 @@ static int by_tick(const void* a, const void* b)
     return x->at < y->at ? -1 : x->at > y->at ? 1 : x < y ? -1 : x > y;
 }
 
-/* A SCENE ITS TYPES DO NOT FIT IS REFUSED. A scene unit is placed by its centre, so a bound
-   footprint other than the authored one can overlap a structure placed before it or leave the
-   placeable interior (cells 1 to w - 2, site_ok's bound); the demo is refused for that casting
-   rather than played broken, as sim.js refuses it. Mobile units never block. 1, or 0 with the
-   refusal in `err`, or -1 when memory ran out. */
 static WIKIRECT scene_rect(const WIKISIM* s, int t, double x, double z)
 {
     if (mobile(s, t)) return body_at_type(s, t, x, z);
     return rect_of(s, t, bound_cell(js_round(x / CELL - fpx(s, t) / 2.0)), bound_cell(js_round(z / CELL - fpz(s, t) / 2.0)));
 }
 
+/* the scene's units as sim.js's merge() lists them: the entry's, then the demo's (b, or NULL) */
+static int scene_n(const WIKISCENE* a, const WIKISCENE* b) { return a->nunit + (b ? b->nunit : 0); }
+static const WIKISCENEUNIT* scene_unit(const WIKISCENE* a, const WIKISCENE* b, int k)
+{
+    return k < a->nunit ? &a->unit[k] : &b->unit[k - a->nunit];
+}
+
 /* scene unit k's body at (x, z) lies on the map and overlaps no scene structure and no mobile
    scene unit before k, at the place spot[] settled for it */
-static int scene_free(const WIKISIM* s, const WIKISCENE* sc, const double* spot, int k, double x, double z)
+static int scene_free(const WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, const double* spot, int k,
+                      double x, double z)
 {
-    const WIKIRECT a = scene_rect(s, sc->unit[k].def, x, z);
+    const WIKIRECT r = scene_rect(s, scene_unit(a, b, k)->def, x, z);
     int m;
-    if (!on_map(s, a)) return 0;
-    for (m = 0; m < sc->nunit; m++) {
-        const int t = sc->unit[m].def;
+    if (!on_map(s, r)) return 0;
+    for (m = 0; m < scene_n(a, b); m++) {
+        const int t = scene_unit(a, b, m)->def;
         if (mobile(s, t) && m >= k) continue;
-        if (hits(a, scene_rect(s, t, spot[2 * m], spot[2 * m + 1]))) return 0;
+        if (hits(r, scene_rect(s, t, spot[2 * m], spot[2 * m + 1]))) return 0;
     }
     return 1;
 }
 
 /* A SCENE'S MOBILE UNIT STARTS CLEAR, sim.js's: at its authored centre, or the nearest centre a
    whole number of cells away, at most SCENE_SPREAD either way, by distance, then z, then x, whose
-   body is on the map and clear of the scene's structures and of the mobile units before it; with
-   none, where authored. Into spot[2k], spot[2k + 1], before any unit enters: entering starts its
-   script, which may read where it stands. */
+   body is on the map and clear of the scene's structures and of the mobile units before it, the
+   entry's and the demo's together; with none, where authored. Into spot[2k], spot[2k + 1],
+   before any unit enters: entering starts its script, which may read where it stands. */
 #define SCENE_SPREAD 8
-static void scene_spots(const WIKISIM* s, const WIKISCENE* sc, double* spot)
+static void scene_spots(const WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, double* spot)
 {
+    const int n = scene_n(a, b);
     int k, d2, i, j;
-    for (k = 0; k < sc->nunit; k++) {
-        spot[2 * k] = sc->unit[k].x;
-        spot[2 * k + 1] = sc->unit[k].z;
+    for (k = 0; k < n; k++) {
+        spot[2 * k] = scene_unit(a, b, k)->x;
+        spot[2 * k + 1] = scene_unit(a, b, k)->z;
     }
-    for (k = 0; k < sc->nunit; k++) {
-        const double x = sc->unit[k].x, z = sc->unit[k].z;
+    for (k = 0; k < n; k++) {
+        const double x = scene_unit(a, b, k)->x, z = scene_unit(a, b, k)->z;
         int found = 0;
-        if (!mobile(s, sc->unit[k].def)) continue;
+        if (!mobile(s, scene_unit(a, b, k)->def)) continue;
         for (d2 = 0; d2 <= 2 * SCENE_SPREAD * SCENE_SPREAD && !found; d2++)
             for (j = -SCENE_SPREAD; j <= SCENE_SPREAD && !found; j++)
                 for (i = -SCENE_SPREAD; i <= SCENE_SPREAD && !found; i++)
-                    if (i * i + j * j == d2 && scene_free(s, sc, spot, k, x + i * CELL, z + j * CELL)) {
+                    if (i * i + j * j == d2 && scene_free(s, a, b, spot, k, x + i * CELL, z + j * CELL)) {
                         spot[2 * k] = x + i * CELL;
                         spot[2 * k + 1] = z + j * CELL;
                         found = 1;
@@ -3286,16 +3290,22 @@ static void scene_spots(const WIKISIM* s, const WIKISCENE* sc, double* spot)
     }
 }
 
-static int scene_units(WIKISIM* s, const WIKISCENE* sc, char* err, size_t errn)
+/* A SCENE ITS TYPES DO NOT FIT IS REFUSED. A scene unit is placed by its centre, so a bound
+   footprint other than the authored one can overlap a structure placed before it or leave the
+   placeable interior (cells 1 to w - 2, site_ok's bound); the demo is refused for that casting
+   rather than played broken, as sim.js refuses it. Mobile units never block. The entry's units,
+   then the demo's (b, or NULL). 1, or 0 with the refusal in `err`, or -1 when memory ran out. */
+static int scene_units(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, char* err, size_t errn)
 {
+    const int n = scene_n(a, b);
     int i, j;
-    double* spot = (double*)malloc((size_t)(sc->nunit + 1) * 2 * sizeof *spot);
+    double* spot = (double*)malloc((size_t)(n + 1) * 2 * sizeof *spot);
     if (!spot) return -1;
-    scene_spots(s, sc, spot);
-    for (i = 0; i < sc->nunit; i++) {
-        const WIKISCENEUNIT* d = &sc->unit[i];
+    scene_spots(s, a, b, spot);
+    for (i = 0; i < n; i++) {
+        const WIKISCENEUNIT* d = scene_unit(a, b, i);
         WIKIUNIT* u = add(s, d->def, d->owner, spot[2 * i], spot[2 * i + 1], d->built, d->id, d->label, d->hx, d->hz);
-        BOX b;
+        BOX fb;
         if (!u) {
             free(spot);
             return -1;
@@ -3313,12 +3323,12 @@ static int scene_units(WIKISIM* s, const WIKISCENE* sc, char* err, size_t errn)
             }
         }
         if (mobile(s, u->type)) continue;
-        b = box(s, u->type, u->ox, u->oz);
+        fb = box(s, u->type, u->ox, u->oz);
         for (j = 0; j < s->nunit; j++) {
             const WIKIUNIT* v = s->unit[j];
-            if (v != u && !mobile(s, v->type) && overlap(b, box(s, v->type, v->ox, v->oz))) break;
+            if (v != u && !mobile(s, v->type) && overlap(fb, box(s, v->type, v->ox, v->oz))) break;
         }
-        if (!(b.ox >= 1 && b.oz >= 1 && b.ox + b.fx < s->W && b.oz + b.fz < s->H) || j < s->nunit) {
+        if (!(fb.ox >= 1 && fb.oz >= 1 && fb.ox + fb.fx < s->W && fb.oz + fb.fz < s->H) || j < s->nunit) {
             snprintf(err, errn, "%s's %s does not fit the scene", u->id, def(s, u->type)->name);
             free(spot);
             return 0;
@@ -3536,7 +3546,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
             !(s->burst = (WIKISPRAY*)calloc(WIKI_SPRAY_BURSTS, sizeof *s->burst)))
             goto oom;
     }
-    if ((r = scene_units(s, a, err, errn)) > 0 && b) r = scene_units(s, b, err, errn);
+    r = scene_units(s, a, b, err, errn);
     if (r < 0) goto oom;
     if (!r) goto refused;
     for (i = 0; sel && i < sel->nselected; i++) {
