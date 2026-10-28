@@ -6960,8 +6960,9 @@ at `0x5122D4` with its length at `0x5122DC`, its count at `0x5122E0` and a flag 
 **The file primitives it and the fix use** [DISASSEMBLED 2026-09-28]:
 
 - `0x4290F0(out, dir, name, ext)`, `stdcall`, `ret 0x10`: `0x49F580` returns the `language`
-  value (`0x51FB50`, read from the registry value named at `0x5097E8` by `0x42F980` at
-  `0x49E9F7` and set to "english" when empty, `0x49E9FC..0x49EA27`), so it first tries
+  value (`0x51FB50`: a non-option command-line argument, else the registry value named at
+  `0x5097E8` read by `0x42F980` at `0x49E9F7`, else "english", `0x49E9FC..0x49EA27`; the
+  language's two writers are under *The wiki's per-mod tutorials*), so it first tries
   `"%s-%s\%s"` (`0x503378`) — `Maps-english\name` on an English install — and keeps it if
   `0x4BB5B0` opens it (closed again with `0x4BB5D0`); otherwise `dir\name`. Either way, with an `ext`, `0x4BB0F0` cuts the name at its last dot and
   `"." + ext` is appended. It writes `out` with no bound.
@@ -7856,8 +7857,13 @@ test `!= 0`.
   (`0x4C4949..0x4C4951`), so `def+0x00` holds at most 31 bytes.
 - **`0x51FDC0` is the language.** `0x4C54F0(…, lang)` compares `lang` with it (`_stricmp`
   `0x4F8A70` at `0x4C5500`) and copies it there (`0x4C55A2`); its one call (`0x49EA33`) passes
-  `0x51FB50`, which WinMain fills from the registry value "language" (`0x5097E8`, the read at
-  `0x49E9F7`), or "english" (`0x504AB8`, `0x49EA04`) when that is empty.
+  `0x51FB50`, which has two writers, both in WinMain's init. The command-line parser `0x49EE30`
+  (called at `0x49E8D2`) splits the line with `strtok` on space and tab (`0x509890`) and copies
+  each token that starts with neither `-` nor `/` there, unbounded (`0x49EEDB..0x49EEF4`), so the
+  last such argument stands. The registry value "language" (`0x5097E8`) is read into it by
+  `0x42F980` at `0x49E9F7` only while it is still empty (`0x49E9D6..0x49E9DE`: `strlen`, then
+  `jne` past the read), and "english" (`0x504AB8`, `0x49EA04`) stands in when both left it empty
+  (`0x49E9FC`). DISASSEMBLED.
 - **MEASURED** on a retail skirmish with the instance's registry `language=french`: `0x51FB50`
   and `0x51FDC0` both "french"; ARMCK's `def+0x00` "Kbot de construction" (its FBI's
   `FrenchName=Kbot de construction  ;` arrives without the trailing blanks), ARMACK's "Kbot de
@@ -7868,7 +7874,8 @@ test `!= 0`.
 - **The wiki's rule** (`tagpu_wikiasset.c`, `gfx.py` `display_name`): the FBI's `<language>name`
   when the key exists, else `name`, its first 31 bytes, converted from Windows-1252 to UTF-8 (a
   byte with no character there becomes `?`), the UnitName when that is empty, so a title takes up
-  to 94 bytes (`WIKI_TITLE_MAX`). The language is the one `tagpu_replays.c` copies from `0x51FB50`.
+  to 93 bytes, 94 with its terminator (`WIKI_TITLE_MAX`). The language is the one `tagpu_replays.c`
+  copies from `0x51FB50`.
 
 **A missing `BMcode` reads 0** (a structure): `esi` is zeroed at `0x42C0F0` and pushed as the
 default of the `BMcode` read at `0x42C401`, with no write to `esi` between. The cast rule's
@@ -7897,9 +7904,11 @@ that is not G does not count.
 
 **The type-0 clicks** (the table above, its type-0 column).
 
-- **A left release is a click** when the press is less than 25 clock units old and the box less
-  than 32 pixels on each axis (`0x499421..0x499441`, the clock `0x4B6340`; *The cursor chain*,
-  below, has the pseudo-code); it then calls `0x498F70` (`0x4995AE..0x4995B3`). So a click's order
+- **A left release is a click** when the press is less than 25 clock units old (30 a second,
+  MEASURED) and the release point less than 32 world units from the press point on x and on z
+  (`0x499421..0x499441`, the clock `0x4B6340`; *The cursor chain*, below, has the pseudo-code and
+  the points it compares); it then calls `0x498F70` (`0x4995AE..0x4995B3`), at both Interface
+  Types. So a click's order
   lands at the release, where type 1's right press orders at the press.
 - **The type-0 cursor over a unit**, `0x43EDB6..0x43EE42` (type 0's branch of the order-1 case;
   type 1 jumps to `0x43EB02` at `0x43E50C`): when `0x4899B0` answers non-zero for the unit under
@@ -13980,8 +13989,17 @@ button's own release. Both extend the bit table in the cursor section above; bit
 **A left click is a short, still drag.** There is no click event: the press opens a box and the
 release decides. `0x4B6340` is the clock it times that with — `GetTickCount()` (import
 `0x4FC0DC`, resolved from the import table) multiplied by `*(0x51FBD0)+0xE8` and divided by
-1000, so it counts game time, not wall time *[the multiplier's own meaning was not chased]*.
-`0x19` = 25 of those units, and 0x20 = 32 pixels on each axis.
+1000 (`0x4B6340..0x4B6361`), so it counts wall time in units of one rate-th of a second; the rate
+`*(0x51FBD0)+0xE8` was MEASURED at 30 (2026-10-28), so the `0x19` = 25 units are about 833 ms.
+The press (`0x4994B4..0x499533`) stamps `main+0x2CB6` with the clock (the call at `0x4994BC`, the
+store `0x4994C7`) and stores the cursor's world point -- the words `main+0x2CAC`, `+0x2CB0`,
+`+0x2CB4`, x, height and z -- at `+0x2C92`, `+0x2C96`, `+0x2C9A` and again at `+0x2C9E`,
+`+0x2CA2`, `+0x2CA6`. While the box is open every message but the release rewrites the second
+three from the current point (`0x49946A..0x49949B`). The release (`0x4993E9..0x499441`) compares
+`|+0x2C92 − +0x2C9E|` and `|+0x2C9A − +0x2CA6|` with 0x20: the world x and z of the press against
+the last point before the release, so the 32 are world units on each axis, and a cursor that
+wanders and comes back still clicks. DISASSEMBLED. The wiki's simulations take the same window
+(`sim.js` `CLICK_TIME`, `CLICK_BOX`) at both Interface Types, in ticks, 30 a second.
 
 **`0x498F70` — the left click's action, and the only reader of `main+0x2CBE` that is not a
 change test.** One call site, `0x4995B3`, which every left-button path above jumps to.

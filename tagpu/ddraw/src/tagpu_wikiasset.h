@@ -62,8 +62,9 @@
    them in place in its .data, in the executable file (Escalation, TA Zero: the scout's batch D2)
    or at run time from its loader DLL's DllMain, before the engine reads them (Mayhem's and ProTA's
    gui, unitpics, gamedata and download: the sidebar scout's Q6), and the copy is taken from the
-   running process, so it carries both. The language is the registry's, "english" when it gives
-   none. Copied on the game thread (tagpu_replays_asset_names). The sidebar's are `gui` to
+   running process, so it carries both. The language is 0x51FB50: a command-line argument that is
+   no option, else the registry's value, else "english" (tagpu_replays.c says where each is
+   written). Copied on the game thread (tagpu_replays_asset_names). The sidebar's are `gui` to
    `guipal`; `palette` is the palette files' base name and `guipal` the GUI palette's. */
 typedef struct WIKI3DNAMES {
     char language[64];
@@ -163,7 +164,8 @@ typedef struct {
    The running mod's sidebar as the wiki's stage draws it: its layout (WIKILAYOUT, tagpu_wikidata.h)
    and its art, read from the mod's files by the engine's rules. tools/wiki/gfx.py's side pack
    (`--side-only`) is the same resolution in Python, and tools/wiki/assetcheck.py holds the two
-   equal per compat setup; the spec is .data/wiki-sidebar/spec.md sections 1, 2 and 7.
+   equal per compat setup; research/notes/ingame-wiki.md, *The left sidebar on the stage*,
+   describes it.
 
    WHAT IT READS, every file by the engine's path rule (the language's folder first, a 0-byte file
    missing, as 0x4BBC40 answers):
@@ -292,7 +294,7 @@ typedef struct {
                                            block does not carry                                  */
     int           panel_key;
     WIKISIDEPIC   pic[WIKI_SIDE_GADGETS];
-    int           nlabel;               /* its labels (id 5), which nothing fills (spec 1, MAIN2) */
+    int           nlabel;               /* its labels (id 5), which nothing fills         */
     WIKISIDELABEL label[WIKISIDE_LABELS];
 } WIKISIDESCREEN;
 

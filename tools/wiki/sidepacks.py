@@ -13,7 +13,7 @@ pack's layout into tools/wiki/mockup/sim.js's checkLayout under node, the bound 
 one, and on the stock pack checks the cast rule's stock identity (`stock_identity`): the rule is general, and this is
 what pins it.
 
-This mapping is test tooling (spec section 2.5); the picture rule and the cast rule in gfx.py name no mod. `unknown`
+This mapping is test tooling; the picture rule and the cast rule in gfx.py name no mod. `unknown`
 has no pack: the mockup gives it the fixture layout.
 """
 

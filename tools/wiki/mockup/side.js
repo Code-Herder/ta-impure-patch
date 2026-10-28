@@ -39,12 +39,12 @@ const WikiSide = (() => {
     }
     return best;
   }
-  /* THE COLUMN, 128 x layout.height, for one view (spec 5.2). `art` is a pack read by read(); `base` the minimap's base
-     picture (geometry's w x h palette indices: the pack's art.minimap.bases[entry]) or null, when the minimap is left to the
-     whitebox (the result's `minimap` false); mapW and mapH the stage map's extent in world units. In order: the
-     engine's black (CLEAR) over the whole column; PANELSIDE; the minimap -- the base under the fog, the dots, the
-     camera box; the routed screen -- its panel picture, then each drawn gadget's frame for its state. Returns
-     { idx, a, h, minimap }, a pixel painted where a is 1, which the black clear makes every pixel. */
+  /* THE COLUMN, 128 x layout.height, for one view (ingame-wiki.md, *How it is drawn*). `art` is a pack read by read();
+     `base` the minimap's base picture (geometry's w x h palette indices: the pack's art.minimap.bases[entry]) or null,
+     when the minimap is left to the whitebox (the result's `minimap` false); mapW and mapH the stage map's extent in
+     world units. In order: the engine's black (CLEAR) over the whole column; PANELSIDE; the minimap -- the base under
+     the fog, the dots, the camera box; the routed screen -- its panel picture, then each drawn gadget's frame for its
+     state. Returns { idx, a, h, minimap }, a pixel painted where a is 1, which the black clear makes every pixel. */
   function compose(art, layout, view, base, mapW, mapH) {
     const sv = view.side, H = sv.h, idx = new Uint8Array(COL * H).fill(CLEAR), a = new Uint8Array(COL * H).fill(1);
     const S = art.sheet;
@@ -142,8 +142,8 @@ const WikiSide = (() => {
     return out;
   }
 
-  /* A PACK READ AND CHECKED (spec 2.4): side.json with its sheet, palette, seen remap and greyed tint, each a file
-     beside it.
+  /* A PACK READ AND CHECKED (ingame-wiki.md, *The data format*, a mod's pack): side.json with its sheet, palette,
+     seen remap and greyed tint, each a file beside it.
      Every number is data until checked: a frame whose rect leaves the sheet, a picture list that does not match its
      screen's gadgets, a palette or remap of the wrong size refuses that element, which is reported in `problems`
      and falls back as the spec says (a picture to a labelled button; a missing PANELSIDE or panel to nothing; a

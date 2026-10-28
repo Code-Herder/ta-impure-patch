@@ -558,9 +558,10 @@ static void try_key(unsigned vk, int down)
 enum { ASSETS_NONE, ASSETS_STARTED, ASSETS_FAILED };
 static int s_assets;
 
-/* THE SIDEBAR'S LAYOUT FOR A NEW SIMULATION (the sidebar spec, section 7, the ordering): the
-   running mod's once the asset loader has published it, else the wiki data's fixture once the
-   loader has refused it or could not start; 0 while the answer is pending. A simulation keeps the
+/* THE SIDEBAR'S LAYOUT FOR A NEW SIMULATION (research/notes/ingame-wiki.md, *Which layout, and
+   when a demo shows it*): the running mod's once the asset loader has published it, else the wiki
+   data's fixture once the loader has refused it or could not start; 0 while the answer is
+   pending. A simulation keeps the
    layout it started with, and none starts while the answer is pending, so no demo ever runs on a
    layout that arrives after it started. ORDERING: tagpu_wikiside_get's read is interlocked, pairing
    with the loader's one publishing store, so the block it hands back was written whole before; the
@@ -912,9 +913,10 @@ static void ustr(FILE* f, const char* s, size_t n)
     fputc('"', f);
 }
 
-/* A layout as sim.js's schema writes it (the sidebar spec, section 4.1): what tagpu_wikidata_layout
-   reads back, and what simparity.mjs's --layout and --try give sim.js. Screens by name, in their
-   index order, which a JSON object keeps. */
+/* A layout as sim.js's schema writes it (research/notes/ingame-wiki.md,
+   *art/wiki/side/<name>.json*): what tagpu_wikidata_layout reads back, and what simparity.mjs's
+   --layout and --try give sim.js. Screens by name, in their index order, which a JSON object
+   keeps. */
 static void layout_json(FILE* f, const WIKILAYOUT* L)
 {
     /* sim.js ROLES, by WIKI_ROLE_* */

@@ -1715,8 +1715,11 @@ int tagpu_replays_archive_paths(char (*out)[ARC_PATHMAX], int max)
 }
 
 /* THE NAMES THE ASSET LOADER RESOLVES WITH, copied beside the list: the `language` value
-   0x51FB50 that the path builder 0x4290F0 puts in "<dir>-<language>\" (WinMain's init sets it once,
-   from the registry, "english" when empty: 0x49E9FC..0x49EA27), and the asset folders' names in
+   0x51FB50 that the path builder 0x4290F0 puts in "<dir>-<language>\", which only WinMain's init
+   writes: the command-line parser 0x49EE30 (called at 0x49E8D2) copies each argument that starts
+   with neither '-' nor '/' there (0x49EEF4), the registry value "language" is read into it
+   (0x42F980 at 0x49E9F7) only while it is still empty (0x49E9D6..0x49E9DE), and "english" stands
+   in when both left it empty (0x49E9FC..0x49EA27); and the asset folders' names in
    the running process's .data, which a mod renames in place: in the executable file (Escalation's
    `unitsE`, TA Zero's `ZUnits` and `logoz`: the 3D stage plan's batch D2), or from its loader
    DLL's DllMain before the engine's entry point (Mayhem's `guiM`, ProTA's `gamedatP`: the sidebar

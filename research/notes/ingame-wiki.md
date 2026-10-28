@@ -349,8 +349,9 @@ as stated except where a line says otherwise.
 22. **In a replay the tutorial follows the controlled player's side**, the one the engine's own
     sidebar follows.
 23. **Quick Build picks from the build menu the player sees**, not the engine's AI build list
-    (CANBUILD), as its own simulation landing before the tutorials (the live check confirmed that
-    Twilight's Quick Build offers the AI's extractor: *Gaps*).
+    (CANBUILD), as its own simulation landing: it is on `main` (`b01f816f..240ed6be`) and merged
+    here, so Quick Build and the casting read the same menu (a live check had shown Twilight's
+    Quick Build offering the AI's extractor).
 24. **A demo of a feature the mod turns off plays under the badge, and its claims are not checked
     there**: a named rule over the entry's own turned-off list, never a list of mods in the check.
 25. **A scene that a mod makes false is redesigned, not narrowed**: Build Lines' ring around a
@@ -908,6 +909,13 @@ engine's order.
 | wall | the first plain structure on the builder's menu with no Weapon1 and TEDClass `FORT` (without case) |
 | solar | the first plain structure on the builder's menu with EnergyMake − EnergyUse > 0 (a solar collector's energy is a negative EnergyUse: retail ARMSOLAR's is −20) |
 
+- **Every cast's unit is distinct**: one unit in two casts would bind two of an entry's defs to one
+  type, which the binder refuses for every demo of the entry. Tower, wall and solar are drawn from
+  one list, the builder's plain structures, and each skips a unit an earlier cast took, in that
+  order: a tower that makes energy is the tower, not the solar too. The other casts' tests already
+  exclude one another, and a last pass in the casts' order unbinds a pick that still repeats an
+  earlier cast's, with the reason, so the casts are distinct whatever the tests. No pick of the six
+  setups changed (`assetcheck.py`'s synthetic install has the collision).
 - A cast the rule cannot fill, or whose type's footprint is not 1 to 16 cells a side
   (`WIKI_FP_MAX`, the width of a G row's mask), is **unbound**, and the loader's report says why.
 - **What pins it: the stock identity.** On the stock game it gives ARM exactly the types and
@@ -957,6 +965,15 @@ kbot builder); TA Zero's geothermal plants make no EnergyMake (Quick Build is of
   the simulation and its hash keep the raw text, so a hash depends on neither the language nor the
   side's names. One pure function fills, `text.js` `fillText` and `tagpu_wikitext_fill`, cut at a
   UTF-8 character as the stage's copy cuts.
+- **The caption's bound.** A filled caption has 511 bytes and its terminator (`WIKI_CAPTION_MAX`,
+  the stage record's and the page's field), and both loaders refuse an entry one of whose captions
+  could fill past it with any casting at either type: its own bytes with a button token at its
+  longer word and a cast token at the longer of 93 bytes, a casting name's bound, and the entry's
+  own name for that cast (`text.js` `captionWorst`, `tagpu_wikidata.c` `caption_worst`). So no
+  caption is ever cut; the longest bound today is 350 bytes. `textparity.mjs` fills every caption
+  with every pack's casting and a casting of 93-byte names and checks each fits, and
+  `tagpu_wikilay_check` builds the page with each casting it is given and with the worst ones
+  (*Gaps* says what it checks of the caption's strip).
 - **Actions.** A demo's press names what it does: `select` (the left button at both types),
   `order` (the right button at type 1, the left at type 0), `cancel` (the right button at both);
   `lmb` and `rmb` stay for presses that are one button at both types (a placement, a sidebar
@@ -967,10 +984,19 @@ kbot builder); TA Zero's geothermal plants make no EnergyMake (Quick Build is of
 
 ### The two interface types in the simulations
 
+**The click window**, the same at both types (`sim.js` `CLICK_TIME`, `CLICK_BOX`;
+`tagpu_wikisim.c` the same): a left release on the map is a click when its press is under 25 ticks
+old and the release point under 32 world units from the press point on each axis; any other release
+is a box, and a box that catches nothing deselects. That is the engine's test at
+`0x4993E9..0x499441`: the press is stamped with the clock `0x4B6340` (MEASURED at 30 units a second,
+so 25 units are 25 ticks) and the world point's x and z words, and the release compares the last
+point before it with the press's, so a wobble that comes back is a click. The 4 world units past
+which the stage draws the box only decide the drawing.
+
 Type 1 is the rows the stage played before. At type 0 (`sim.js` `leftClick`, `rightPress0`;
 `tagpu_wikisim.c` the same), with nothing armed on the map:
 
-- **a left click** -- the release of a press that went down on the map and never became a box --
+- **a left click** -- the release of a press that went down on the map, inside the click window --
   is Quick Build's choice first, exactly as type 1's right click gives it (Impure's gate is on the
   left click at type 0, `tagpu_resource.c`); else over a unit of the player's, an unfinished
   building with a builder selected is assisted and any other unit selected; else the selected
@@ -1005,8 +1031,9 @@ unfinished building of the player's with no builder selected is selected.
   cell refused, under a G cell placed).
 - **Display names**: the FBI's `<language>name` when the key exists, else `name`, its first 31
   bytes (the engine's `def+0x00` is 0x20 bytes), converted from Windows-1252 to UTF-8 (a byte with
-  no character there becomes `?`), the UnitName when that is empty; at most 94 bytes
-  (`WIKI_TITLE_MAX`). The language is the game's own, `0x51FB50`, copied on the game thread
+  no character there becomes `?`), the UnitName when that is empty; at most 93 bytes, 94 with the
+  terminator (`WIKI_TITLE_MAX`). The language is the game's own, `0x51FB50` (a command-line
+  argument that is no option, else the registry's value, else English), copied on the game thread
   (`gfx.py` takes `--language`, English by default). MEASURED in game with `language=french`: the
   engine's names are the French keys with their trailing blanks gone and their accents in
   Windows-1252.
@@ -1562,16 +1589,18 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
   Interface Type restarts the open window's demo, but a player cannot change either while the wiki
   holds input: the typed command and the options screen both need the window closed. What has been
   seen is the next open after a change, playing the new type.
-- **`tagpu_wikilay_check` builds without the castings' names.** The art loader's overflow check
-  fills the page at Interface Type 1, whose words are the longer, with each entry's own names; a
-  casting whose names are longer is not checked there, and a frame that overflows draws the ops
-  that fit (`tagpu_wikistate.c` says so once).
-- **Twilight's Quick Build demos wait for Quick Build to read the build menu.** The casting reads
-  the build menu, where Quick Build on `main` reads the AI list, CANBUILD. MEASURED 2026-10-28 in
-  Twilight as ARM at type 1 with an ARMCK selected: a click on a deposit ordered AAIMEXX, the AI
-  list's extractor, where the casting's mex is ARMAMEX, and a click on a vent gave a move, no
-  geothermal plant. The Quick Build menu landing (decision 23), a simulation landing of its own,
-  lands on `main` before this one.
+- **A caption of names longer than any setup's can pass its strip.** Its bytes always fit (the
+  caption's bound, above), but the strip has a fixed height (27 units, `layout.json` `strips`) and
+  shows a caption's first lines:
+  `tagpu_wikilay_check` requires every caption to show whole with the entries' own names and with
+  every pack's casting (`wikilaycheck.py --check-only`), and builds the worst castings for the
+  page's ops only. The game's own check runs before the side loads, so it checks no casting.
+- **Twilight's Quick Build has not been measured again since it reads the build menu.** MEASURED
+  2026-10-28 in Twilight as ARM at type 1 with an ARMCK selected, while Quick Build still read the
+  AI list, CANBUILD: a click on a deposit ordered AAIMEXX, the AI list's extractor, where the
+  casting's mex is ARMAMEX, and a click on a vent gave a move. Quick Build now reads each
+  constructor's build menu, the one the casting reads (decision 23), so the click is the
+  casting's ARMAMEX [INFERRED]; the in-game run over the six setups is still open.
 - **The code page is inferred.** The display names are converted as Windows-1252; the French bytes
   measured are the same letters in Latin-1. No game run has shown the wiki's own text in another
   language; `assetcheck.py --language` compares the two loaders' names offline.

@@ -58,7 +58,7 @@ Each entry pack also carries `minimap.bin`, the minimap picture the engine gener
 
 THE SIDEBAR PACK (`--side-only --mod <m>`; tools/wiki/sidepacks.py runs it once per compat setup) is the mod's left
 sidebar as the stage draws it and each side's own units for the wiki's demos: `gfx/side/<m>/side.json` and its
-binaries (spec: .data/wiki-sidebar/spec.md section 2.4). side.json holds
+binaries (research/notes/ingame-wiki.md, *The data format*, a mod's pack). side.json holds
   layout   exactly the object tools/wiki/mockup/sim.js `checkLayout` takes: every side that has MAIN2 and GEN screens,
            in sidedata's order, with the pages of its cast types (`sides[k].types`), and every screen's buttons with
            their roles and rects
@@ -103,14 +103,14 @@ ta3do = tavfs.ta3do
 FORMAT = 1
 TILE_BYTES = 1024
 FLAT_MISS = 0xD1           # the binder's colour for a texture name no bank holds (0x42A204)
-LANGUAGE = "english"       # 0x51FB50 when the registry's value is empty
+LANGUAGE = "english"       # 0x51FB50 when neither a command-line argument nor the registry gives one
 TEAM_FRAMES = 10           # a logos.GAF entry is a team face only with exactly this many frames (0x42A1F2)
 
 # The executable's directory strings (the scout answers, D1); a mod renames them in place (D2)
 VA = {"units": 0x503920, "objects3d": 0x5036E4, "scripts": 0x503740, "textures": 0x503720,
       "logos_gaf": 0x503704, "logos": 0x504734, "anims": 0x502E30, "features": 0x502C7C,
       "palettes": 0x5031BC, "palette": 0x5033A4,
-      # the left sidebar's (MEASURED from the pristine exe; spec section 1, *Folders a mod renames*)
+      # the left sidebar's (MEASURED from the pristine exe; exe-reverse-engineering.md, *The left sidebar*)
       "gui": 0x502820, "gamedata": 0x503360, "unitpics": 0x505FE4, "download": 0x503730,
       "commongui": 0x50925C, "guipal": 0x5031C8}
 # the folders --folders may override: the ones a mod's loader renames in memory, after the exe file was read
@@ -884,7 +884,8 @@ def minimap_base(desc, tiles, alp):
     """The minimap picture the engine generates for a map with no TNT picture (0x466780): a 2w x 2h surface sampled
     from the tiles, shrunk 2:1 by 0x4B95A0 through the ALP table, out = T[T[a][b]][T[c][d]] with a, b the top pair
     and c, d the bottom pair (first index the row). The extent is the stage map's, not the engine's scroll extent,
-    which would cut the stage's bottom rows off (spec section 5.2). Returns (w, h, offx, offy, w*h indices)."""
+    which would cut the stage's bottom rows off (research/notes/ingame-wiki.md, *How it is drawn*). Returns
+    (w, h, offx, offy, w*h indices)."""
     mw, mh = desc["cells"]
     W, H = mw * 16, mh * 16
     w, h, offx, offy = minimap_geometry(W, H)
@@ -1653,9 +1654,10 @@ def cast_record(u, builds):
 
 
 def side_pack(eng, mod, descs, out, pal, report):
-    """The sidebar pack of one install (spec section 2.4): side.json, sheet.bin, pal.bin, seen.bin, greyed.bin and
-    the minimap bases. Every side with MAIN2 and GEN screens is a layout side, with its casting and the pages of its
-    cast types. Returns the side.json object; raises SideError when no side has its screens."""
+    """The sidebar pack of one install (research/notes/ingame-wiki.md, *The data format*): side.json, sheet.bin,
+    pal.bin, seen.bin, greyed.bin and the minimap bases. Every side with MAIN2 and GEN screens is a layout side, with
+    its casting and the pages of its cast types. Returns the side.json object; raises SideError when no side has its
+    screens."""
     units = unit_index(eng, report)
     sides = read_sides(eng, report)
     downloads = read_downloads(eng, report)

@@ -82,7 +82,7 @@ const WikiStage = (() => {
      the sim ran on (sim.js, checkLayout), and art = { draw(g, rect), label(i), minimap } when the column is the
      game's image -- drawn whole into the column's rect snapped to device pixels, then the whitebox's minimap when
      the image has none (no base picture for this entry) and a whitebox button over every gadget whose picture is a
-     label (spec 5.3), label(i) giving that label's text ('' for the gadget's own name) or null for a picture -- or
+     label, label(i) giving that label's text ('' for the gadget's own name) or null for a picture -- or
      null for the whitebox. k carries draw()'s X, Z, s, label and the ground's shades. */
   function drawSide(g, v, side, k) {
     const { X, Z, s, U, label, shade } = k, sv = v.side, L = side.layout || null, art = side.art || null, H = +sv.h || 0;
@@ -144,10 +144,11 @@ const WikiStage = (() => {
   }
 
   /* THE FIT: the stage's content rect c = { x0, w, h } in world units -- the map, and with the game's sidebar the
-     128-unit column left of it (spec section 3) -- in a W x H canvas at U pixels a unit, letterboxed with a pad of 6
-     units: s pixels a world unit and the world origin at (ox, oz), so X(x) = ox + x s holds for the map and the column
-     alike. Without the column (x0 = 0) this is the map's own fit, to the bit. tagpu_wikistage_fit is this, and both of
-     the game's threads call it, so a click on the stage and the picture of it cannot disagree. */
+     128-unit column left of it (ingame-wiki.md, *The left sidebar on the stage*) -- in a W x H canvas at U pixels a
+     unit, letterboxed with a pad of 6 units: s pixels a world unit and the world origin at (ox, oz), so X(x) = ox + x s
+     holds for the map and the column alike. Without the column (x0 = 0) this is the map's own fit, to the bit.
+     tagpu_wikistage_fit is this, and both of the game's threads call it, so a click on the stage and the picture of it
+     cannot disagree. */
   function fit(c, W, H, U) {
     const pad = 6 * U;
     const s = Math.min((W - 2 * pad) / c.w, (H - 2 * pad) / c.h);

@@ -112,9 +112,10 @@ const fill = (e, t) => WikiText.fillText(t, textWords(e));
 /* ---- the game's left sidebar: the layout the sims run on and, in the game look, its pictures ----
    The detected mod's layout comes from its pack, which tools/wiki/gfx.py resolves from the player's install into the
    gitignored gfx/side/<mod>/; where the mod has no pack, its layout is refused (WikiSim.checkLayout) or the pack has
-   not loaded yet, the fixture art/wiki/side/fixture.json stands in, as it does in the DLL (spec 4.1). `sidebar=` picks
-   a fixture by name or no sidebar instead, for the mockup's own checks. The pictures need the game look (gfx=game) and
-   a pack with its sheet; otherwise the column is stage.js's whitebox. */
+   not loaded yet, the fixture art/wiki/side/fixture.json stands in, as it does in the DLL (ingame-wiki.md, *Which
+   layout, and when a demo shows it*). `sidebar=` picks a fixture by name or no sidebar instead, for the mockup's own
+   checks. The pictures need the game look (gfx=game) and a pack with its sheet; otherwise the column is stage.js's
+   whitebox. */
 const FIXTURES = {};                  // 'fixture', 'tall' -> the layout, or { error }
 const PACKS = {};                     // mod -> 'loading', or WikiSide.load's pack (+ refused), or { error }
 const MINIMAPS = {};                  // mod/entry -> the minimap's base: 'loading', bytes or null
@@ -124,7 +125,7 @@ async function loadFixtures() {
       .then(j => { FIXTURES[k] = j; }, x => { FIXTURES[k] = { error: x.message }; })));
 }
 /* a mod's pack, once: a sim started before it arrived restarts on it, and the page's text and side list follow it.
-   The layout and the casting are one source (spec 5): a casting list that is not index-aligned with the layout's
+   The layout and the casting are one source: a casting list that is not index-aligned with the layout's
    sides, or one side's casting the sim's bounds refuse, refuses the pack whole, as a refused layout does. The mod's
    stage packs (gfx.py --stages) are optional: without them a bound demo draws from the entry's own pack */
 function loadPack(mod) {

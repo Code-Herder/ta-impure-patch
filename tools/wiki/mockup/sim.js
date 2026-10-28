@@ -1105,17 +1105,18 @@ const WikiSim = (() => {
       if (u && unfinishedOwn(u)) return assist(u, shift);
       moveOrder(shift);
     }
-    /* TYPE 0, a left click on the map with nothing armed: the release of a press that went down on the map and never
-       became a box (0x499421..0x499441 call 0x498F70), so its order lands at the release where type 1's lands at the
-       press. In order: Quick Build's choice; else over a unit of the player's, an unfinished building with a selected
-       builder is assisted (cursor 6, 0x43EDB6..0x43EE42) and any other is selected as a click selects (cursor 0xF,
-       0x48C7F0); else the selected mobile units of the player's move (0x48CF30, Shift appends), and with none nothing
-       happens. MEASURED in game 2026-10-28 (stock ARM skirmish, an ARMCK selected): the move order appears after the
-       release, Quick Build takes a deposit and a vent, an unfinished ARMSOLAR is assisted, a click on the ARMCK selects
-       it, and the cursor is 14 over ground, a deposit and a vent, 6 over the unfinished building and 15 over a finished
-       unit of the player's. [INFERRED] that an unfinished building of the player's with no builder selected is
-       selected: 0x43EDB6 gives 0xF only over a finished unit (+0x104 == 0.0), so the engine may show another cursor
-       there. [INFERRED] that a unit of another player under the cursor gives the move: no measured scene had one. */
+    /* TYPE 0, a left click on the map with nothing armed: the release of a press that went down on the map, inside the
+       click window (CLICK_TIME, CLICK_BOX; 0x499421..0x499441 call 0x498F70), so its order lands at the release where
+       type 1's lands at the press. In order: Quick Build's choice; else over a unit of the player's, an unfinished
+       building with a selected builder is assisted (cursor 6, 0x43EDB6..0x43EE42) and any other is selected as a click
+       selects (cursor 0xF, 0x48C7F0); else the selected mobile units of the player's move (0x48CF30, Shift appends),
+       and with none nothing happens. MEASURED in game 2026-10-28 (stock ARM skirmish, an ARMCK selected): the move
+       order appears after the release, Quick Build takes a deposit and a vent, an unfinished ARMSOLAR is assisted, a
+       click on the ARMCK selects it, and the cursor is 14 over ground, a deposit and a vent, 6 over the unfinished
+       building and 15 over a finished unit of the player's. [INFERRED] that an unfinished building of the player's with
+       no builder selected is selected: 0x43EDB6 gives 0xF only over a finished unit (+0x104 == 0.0), so the engine may
+       show another cursor there. [INFERRED] that a unit of another player under the cursor gives the move: no measured
+       scene had one. */
     function leftClick(shift) {
       if (quickClick(shift)) return;
       const { x, z } = mapCursor(), u = unitAt(x, z);
