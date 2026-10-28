@@ -290,10 +290,12 @@
                      pixel across a texel edge blended: even texels at a
                      scale that is not whole) | linear
        ordspace=<s>  the dot spacing: lod (default) pinned to the map, 48 x
-                     2^k world units at the zoom's level k, the dots between
-                     the next level's fading with the fraction, as a mipmap
-                     does: a zoom fades dots in or out and moves none, and
-                     at zoom 1 it is the engine's line; screen 48 canvas px
+                     2^k world units at the zoom's level k (31..75 px apart
+                     on screen); when a zoom changes the level, the dots it
+                     adds fade in to full and the ones it drops fade out
+                     over ordfade ms (default 300), so a zoom moves no dot
+                     and at rest every dot is full; at zoom 1 it is the
+                     engine's line; screen 48 canvas px
                      at every zoom, laid out from each leg's start, which
                      slides the dots over the map during a zoom; world 48
                      world units,
@@ -593,6 +595,7 @@ function readOrd(p, label) {
                          ? d : parseFloat(p.get(k)));
   o.alpha = Math.min(1, Math.max(0, num("ordalpha", 0.5)));
   o.dotAlpha = Math.min(1, Math.max(0, num("orddotalpha", 1)));
+  o.fade = Math.max(0, num("ordfade", 300));
   o.min = Math.max(0.25, num("ordmin", 1));
   o.max = Math.max(o.min, num("ordmax", 2));
   return o;
@@ -1194,6 +1197,10 @@ const ORDER_TYPES = {
   load: [0x08, "cursorload"], unload: [0x08, "cursorunload"],
   teleport: [0x08, "cursorteleport"], stop: [0, null],
 };
+// ordspace=lod: the levels kept either side of the zoom's (a level is a
+// doubling, so 8 is 256x), and how far past a level boundary the zoom goes
+// before the level changes, in levels
+const LOD_SPAN = 8, LOD_HYST = 0.65;
 // the opacity sliders: field, label, query parameter
 const ORD_OPACITY = [["alpha", "sprite opacity", "ordalpha"],
                      ["dotAlpha", "dot opacity", "orddotalpha"]];
@@ -1752,22 +1759,29 @@ async function main() {
       if (len < 1 || !s) return;
       const age = Math.max(0, t - issue);
       const wrap = (v, m) => ((v % m) + m) % m;
-      let step, phase, fade = 1, coarseOdd = 0;
+      let step, phase, alphaOf = null;
       if (o.space === "lod") {
-        // LOD: the dots are pinned to the map by the world march, and the
-        // spacing follows the zoom's level the way a mipmap does. At level
-        // k = floor(-log2 zoom) the dots stand 48 x 2^k world units apart;
-        // every other one is also a dot of level k + 1, and the ones between
-        // fade out as the zoom falls toward that level. So a zoom in fades
-        // new dots in halfway between the standing ones, a zoom out fades
-        // every other one away, and no dot moves on the map or pops. At
-        // zoom 1 every dot is full and 48 apart: the engine's line
-        const lv = -Math.log2(zoom), k = Math.floor(lv + 1e-9);
-        step = 48 * Math.pow(2, k);
-        fade = 1 - (lv - k);
-        const c0 = wrap(L.march - at[0], 2 * step);    // the next level's phase
-        phase = c0 % step;
-        coarseOdd = c0 >= step ? 1 : 0;                 // which of these are its dots
+        // LOD: the dots are pinned to the map by the world march on one
+        // lattice, 48 x 2^j world units apart at level j, each level every
+        // other dot of the one below. A dot's LEVEL is the coarsest one it
+        // belongs to (the trailing zeros of its index on the finest level
+        // drawn), and it is drawn at that level's opacity (lodStep): 1 for
+        // the zoom's level and coarser, 0 finer, fading between the two over
+        // ordfade ms when the level changes. So a dot fades in or out fully
+        // and no dot moves on the map. At zoom 1 the level is 0, every dot 48
+        // apart: the engine's line
+        const op = (j) => (j in L.lodOp ? L.lodOp[j] : (j >= L.lodK ? 1 : 0));
+        let fine = L.lodK;
+        while (fine > L.lodK - LOD_SPAN && op(fine - 1) > 0.004) fine--;
+        step = 48 * Math.pow(2, fine);
+        const run = L.march - at[0];
+        phase = wrap(run, step);
+        alphaOf = (c) => {
+          let m = Math.abs(Math.round((c - run) / step)), j = fine;
+          if (m === 0) return op(fine + LOD_SPAN);
+          while ((m & 1) === 0 && j < fine + LOD_SPAN) { m >>= 1; j++; }
+          return op(j);
+        };
       } else if (o.space === "screen") {
         // SCREEN: 48 px apart and 48 px a second at every zoom, so the line
         // looks the same at every zoom. Laid out from the leg's start in
@@ -1787,7 +1801,7 @@ async function main() {
       const ink = ordInk.pathicon;
       for (let c = phase, i = 0; c < len && i < 4096; c += step, i++) {
         const f = c / len;
-        const a = (i & 1) === coarseOdd ? 1 : fade;
+        const a = alphaOf ? alphaOf(c) : 1;
         if (a > 0.004) {
           const [px, py] = proj([A[0] + dx * f, A[1] + dy * f, A[2] + dz * f]);
           if (o.style === "gaf") blit(s.frames[fi], px, py, o.dotAlpha * a);
@@ -1825,7 +1839,34 @@ async function main() {
   // so a zoom changes how fast a world march goes and never where its dots
   // are. Whole ticks under ordtick=int, as the engine steps; a shot computes
   // both from ordtime=.
+  // THE LEVEL ordspace=lod draws at, and each level's opacity. The level is
+  // the zoom's octave, -log2 zoom rounded, held until the zoom is LOD_HYST
+  // past the level so a zoom resting on a boundary does not flicker; the
+  // dots then stand 31..75 px apart on screen. Each level's opacity walks
+  // toward its target (1 at the level and coarser, 0 finer) at 1 / ordfade
+  // per ms of wall clock: the dots a level change adds fade in to full, the
+  // ones it drops fade out to nothing, and at rest every dot is full or
+  // gone. A shot lands on the targets at once.
+  function lodStep(L) {
+    const lv = -Math.log2(zoom);
+    if (L.lodK === undefined) L.lodK = Math.round(lv);
+    while (lv > L.lodK + LOD_HYST) L.lodK++;
+    while (lv < L.lodK - LOD_HYST) L.lodK--;
+    const now = performance.now();
+    const dt = SHOT || L.lodT === undefined ? Infinity : now - L.lodT;
+    L.lodT = now;
+    const rate = L.ord.fade > 0 ? dt / L.ord.fade : Infinity;
+    const old = L.lodOp || {};
+    L.lodOp = {};
+    for (let j = L.lodK - LOD_SPAN; j <= L.lodK + LOD_SPAN; j++) {
+      const want = j >= L.lodK ? 1 : 0;
+      const cur = j in old ? old[j] : want;
+      L.lodOp[j] = want > cur ? Math.min(want, cur + rate) : Math.max(want, cur - rate);
+    }
+  }
+
   function ordMarch(L, tNow) {
+    lodStep(L);
     const tt = L.ord.tick === "int" ? Math.floor(tNow) : tNow;
     if (SHOT) { L.march = tt * 1.6 / zoom; L.marchPx = tt * 1.6; return; }
     if (L.march === undefined) { L.march = 0; L.marchPx = 0; }

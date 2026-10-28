@@ -366,21 +366,30 @@ kbot that reclaims a wreck and then guards the lab. The overlay is the engine's 
   the leg's start, so the dots slip back along the line toward the start, the farther ones the
   most; on a long leg the slip outruns the march and the line seems to run backward. Pinned to
   the map and fixed on screen cannot both hold through a continuous zoom.
-- **So the default, `ordspace=lod`, pins the dots to the map and fades them across zoom
-  levels, as a mipmap does or as map renderers do for a dashed line.** At level
-  `k = floor(−log2 zoom)` the dots stand `48 · 2^k` world units apart; every other one is also a
-  dot of level `k + 1`, and the ones between fade with the fraction of the way to it. A zoom in
-  fades new dots in halfway between the standing ones, a zoom out fades every other one away,
-  and none moves on the map or pops: at the next level the survivors are its whole set, at full
-  opacity. At zoom 1 every dot is full and 48 apart, the engine's line. The fully opaque dots
-  stand 48–96 px apart on screen, the fading ones between them. The march is in world units,
-  1.6 a tick divided by the zoom (`ordMarch`), accumulated rather than computed from the clock,
-  so a zoom changes only how fast it goes. MEASURED: the dots of a 1× frame carried to 1.3×
-  through the zoom land within 0.4 px (median, 1.0 at the 90th percentile, 33 dots) of the
-  1.3× frame's dots under `lod`, and 9.8 px (19.5) under `screen`; the dots move 11.7, 11.7 and
-  12.1 px per 250 ms at 0.5×, 1× and 2×. `world` and `octave` share the world march; `octave`
-  is `lod` without the fade, so its dots pop at each level. Each side keeps its own marches,
-  and an order queued by hand records them as they stood when it was issued.
+- **So the default, `ordspace=lod`, pins the dots to the map and fades them in and out over
+  time when the zoom changes their spacing level**, as map renderers do for a dashed line. All
+  levels share one lattice: at level `j` the dots stand `48 · 2^j` world units apart, every other
+  one also a dot of level `j + 1`. The zoom picks the level, `−log2 zoom` rounded, held until the
+  zoom is 0.65 of a level past it so a zoom resting on a boundary does not flicker, which puts the
+  dots 31–75 px apart on screen. A dot belongs to the coarsest level it is on (the trailing zeros
+  of its index on the finest level drawn) and is drawn at that level's opacity, which walks toward
+  1 for the zoom's level and coarser and 0 for finer, at `1/ordfade` per millisecond of wall clock
+  (`lodStep`, `ordfade` 300 ms). So when a zoom changes the level, the dots it adds fade in to
+  full and the ones it drops fade out to nothing, and **at rest every dot is fully opaque or
+  gone**. A shot lands on the targets at once. At zoom 1 the level is 0, every dot 48 apart: the
+  engine's line. The march is in world units, 1.6 a tick divided by the zoom (`ordMarch`),
+  accumulated rather than computed from the clock, so a zoom changes only how fast it goes.
+  MEASURED: the dots of a 1× frame carried through the zoom to 1.3× land within 0.4 px (median,
+  1.0 at the 90th percentile, 33 dots) of the 1.3× frame's dots, against 9.8 px (19.5) under
+  `screen`; the dots move 11.7, 11.7 and 12.1 px per 250 ms at 0.5×, 1× and 2×. OBSERVED with a
+  frozen `performance.now` stepped 60 ms at a time in the live page: four notches out from 1×
+  (to 0.59×, level 0 → 1) fade every other dot out by +300 ms and leave the rest fully opaque;
+  five notches back in fade the new dots in, full by +480 ms. (An earlier version faded by the
+  zoom's fraction of a level, which left the in-between dots part-visible for as long as the
+  zoom rested between levels.) `world` and `octave` share the world march; `octave` changes
+  level at the same rounding without the fade or the hold, so its dots pop. Each side keeps its
+  own marches and opacities, and an order queued by hand records the marches as they stood when
+  it was issued.
 - The sprite shows frame `(gameTime / (2 · frame 0's ticks)) % count` (`0x439740`) at
   `ordalpha` 0.5: `PALETTE.ALP` is a half-and-half mix (measured, engine map). The dots are
   drawn at `orddotalpha`, 1 as the engine copies them. Both are sliders in the status bar;
@@ -404,12 +413,13 @@ into the address bar):
 | `ordstyle` | `gaf` · `proc` · `off` | the engine's art; the procedural markers `tagpu_order.c` draws today, by its own constants and ink rule (`seq_ink`); nothing |
 | `ordsize` | `screen` · `world` · `int` · `clamp` | canvas pixels per texel: 1, the art at its own size at every zoom; the zoom (the engine's pixel magnified with the world); the zoom rounded, at least 1; the zoom held in `ordmin..ordmax` (1..2) |
 | `ordfilter` | `nearest` · `sharp` · `linear` | `sharp` keeps each texel flat and blends only the screen pixel across a texel edge |
-| `ordspace` | `lod` · `screen` · `world` · `octave` | the dot spacing: pinned to the map at 48·2^k world units for the zoom's level k, the next level's in-between dots fading; 48 screen px from each leg's start; 48 world units; 48·2^k world units with k the nearest level, no fade. The dots move 48 px/s under all four |
+| `ordspace` | `lod` · `screen` · `world` · `octave` | the dot spacing: pinned to the map at 48·2^k world units for the zoom's level k, the dots a level change adds or drops fading in or out over `ordfade` ms; 48 screen px from each leg's start; 48 world units; 48·2^k world units with k the nearest level, no fade. The dots move 48 px/s under all four |
 | `ordanim` | `engine` · `cursor` | the sprite's frame rule, above |
 | `ordtick` | `int` · `smooth` | whole ticks or a continuous clock |
 | `orddots` | `all` · `active` | which units draw their route dots |
 | `ordalpha` | 0.5 | the sprite's opacity (a slider) |
 | `orddotalpha` | 1 | the route dots' opacity (a slider) |
+| `ordfade` | 300 | ms for a dot to fade fully in or out when `ordspace=lod` changes level |
 
 `orders=<unit>:<cmd>@<x>,<z>;<cmd>#<handle>|…` replaces the scenario's queues and `ordunit=`
 names the unit being ordered. Serving, **shift-click** queues the order picked in the status bar
@@ -451,7 +461,7 @@ order at all, so a factory's rally markers were not captured.
 
 **Gaps.** The lab's frame has not been pixel-diffed against a game frame at the same eye.
 The ALP palette lookup is approximated in full colour (a plain 50 % mix), and so are the
-sub-pixel sprite placement and the per-tick integer projection. Under `ordspace=lod` the in-between dots fade by opacity alone; a pathicon with more than one frame would step its frame by the fine level's dot index, so a dot's frame can change at a level. Nothing in the DLL has
+sub-pixel sprite placement and the per-tick integer projection. Under `ordspace=lod` a dot fades by opacity alone, at its own size; a pathicon with more than one frame would step its frame by the fine level's dot index, so a dot's frame can change at a level. Nothing in the DLL has
 changed.
 
 ### The presets  (`tools/tascene-presets.json`)
