@@ -682,7 +682,7 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     }
     /* THE TARGET: the map at the Supersampling setting's ss, composited into the image's rect --
        the fit the stage's ops are built with (tagpu_wikistage_image), on the attachment */
-    tagpu_wikistage_image(v->w, v->h, stage, u, &x0, &y0, &x1, &y1);
+    tagpu_wikistage_image(v->w, v->h, v->has_side ? v->side.h : 0, stage, u, &x0, &y0, &x1, &y1);
     s_tgt.gw = gw; s_tgt.gh = gh;
     s_tgt.ss = ss;
     s_tgt.devres = 0;

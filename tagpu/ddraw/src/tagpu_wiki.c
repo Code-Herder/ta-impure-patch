@@ -450,7 +450,7 @@ static int stage_world(int cx, int cy, double* wx, double* wz)
     for (i = 0; i < s_hit.n && !h; i++)
         if (!strncmp(s_hit.hit[i].key, "stage", TAGPU_WIKI_KEY)) h = &s_hit.hit[i];
     if (!h || cx < h->x0 || cx >= h->x1 || cy < h->y0 || cy >= h->y1) return 0;
-    tagpu_wikistage_fit(e->scene.w, e->scene.h, h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &f);
+    tagpu_wikistage_fit(e->scene.w, e->scene.h, 0, h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &f);
     if (!(f.s > 0)) return 0;
     w = (e->scene.w > 0 ? e->scene.w : 1) * (double)WIKI_CELL;
     hh = (e->scene.h > 0 ? e->scene.h : 1) * (double)WIKI_CELL;
@@ -770,7 +770,7 @@ static void page_fill(TAGPU_PK_WIKI* w)
     lstrcpynA(w->msg, s_msg, sizeof w->msg);
     w->shot = s_shot;
     if (s_simOn && e) {
-        t = tagpu_wikistage_copy(&w->stage, tagpu_wikisim_view(&s_sim), e);
+        t = tagpu_wikistage_copy(&w->stage, tagpu_wikisim_view(&s_sim), e, s_sim.lay);
         w->stage.tick = s_sim.tick;
         w->has_stage = 1;
         if (t & ~s_trunc) {

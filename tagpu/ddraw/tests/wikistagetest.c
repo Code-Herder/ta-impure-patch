@@ -6,17 +6,21 @@
    face FILE with `spacing` em of letter-spacing (upper-cased when UPPER is 1) at a size of one,
    one line out each: the advance a size multiplies, which stage.js's recorded measureText gives.
 
-   `wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD AW AH MW MH BW BH SPRITES X Y W H U`
-   plays every demo of every entry in PAK (tools/hudpak.py --set wiki) to its end, and at tick 0,
-   every 30th tick and the last copies the view (tagpu_wikistage_copy) and builds the stage on the
-   rect X Y W H, in units, at U device pixels a unit, with the cursor left out of every frame whose
+   `wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD AW AH MW MH BW BH SPRITES LAYOUT X Y W H U`
+   plays every demo of every entry in PAK (tools/hudpak.py --set wiki) to its end, with the
+   sidebar of LAYOUT (a file of PAK, side/fixture.json say; - for none), and at tick 0, every 30th
+   tick and the last copies the view (tagpu_wikistage_copy) and builds the stage on the rect
+   X Y W H, in units, at U device pixels a unit, with the cursor left out of every frame whose
    tick / 30 is odd (as Try it yourself leaves it while the pointer is off the stage): the text in
    style STYLE, measured in FONT;
    the kit's cursors the parts ARROW, MOVE and BUILD, AW x AH, MW x MH and BW x BH units; the game
-   cursors' frames those of SPRITES (`sprites` below). One line a frame: {"e", "d", "t", "x0",
-   "y0", "w", "h", "dropped", "trunc", "cur" (the op drawing the cursor, -1 none), "ops": [[kind, flags, part, x, y, w, h, clip x, y, w, h,
-   rgba, size, style, centre, text, rgb, shade], ...]}, every position in units as the op holds
-   it.
+   cursors' frames those of SPRITES (`sprites` below). With a layout, the sidebar's art is the
+   stand-in `side_art` below, in the frames whose tick / 30 is 1 or 2 past a multiple of 3 (with
+   its minimap in the first, without in the second), and the whitebox column in the rest.
+   One line a frame: {"e", "d", "t", "x0", "y0", "w", "h", "dropped", "trunc", "cur" (the op
+   drawing the cursor, -1 none), "grp" (each group's opacity), "ops": [[kind, flags, part, x, y,
+   w, h, clip x, y, w, h, rgba, size, style, centre, text, rgb, shade, grp], ...]}, every position
+   in units as the op holds it.
 
    Exit 0 when everything loaded and ran; the comparison is stagecheck.mjs's. */
 #define STB_TRUETYPE_IMPLEMENTATION
@@ -24,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_hudtext.h"
+#include "tagpu_wikiasset.h"
 #include "tagpu_wikidata.h"
 #include "tagpu_wikisim.h"
 #include "tagpu_wikistage.h"
@@ -113,8 +118,10 @@ static void frame(const WIKISTAGEOPS* o, const WIKISTAGEVIEW* v, const char* e, 
             for (i = 0; i < o->n; i++) putchar('0' + tagpu_wikistage_keep(o, i, 1, k != 2, k == 1 ? none : all));
             putchar('"');
         }
-        tagpu_wikistage_image(v->w, v->h, r, u, &x0i, &y0i, &x1i, &y1i);
-        printf("],\"img\":[%d,%d,%d,%d],", x0i, y0i, x1i, y1i);
+        tagpu_wikistage_image(v->w, v->h, v->has_side ? v->side.h : 0, r, u, &x0i, &y0i, &x1i, &y1i);
+        printf("],\"img\":[%d,%d,%d,%d],\"grp\":[", x0i, y0i, x1i, y1i);
+        for (i = 0; i < o->ngrp; i++) printf("%s%.9g", i ? "," : "", o->grp[i]);
+        fputs("],", stdout);
     }
     fputs("\"ops\":[", stdout);
     for (i = 0; i < o->n; i++) {
@@ -129,7 +136,7 @@ static void frame(const WIKISTAGEOPS* o, const WIKISTAGEVIEW* v, const char* e, 
             printf(",%u", (unsigned)run->rgb);
         } else
             fputs("null,0", stdout);
-        printf(",%.9g]", p->shade);
+        printf(",%.9g,%d]", p->shade, p->grp);
     }
     fputs("]}\n", stdout);
 }
@@ -168,6 +175,31 @@ bad:
     return 0;
 }
 
+/* THE SIDEBAR'S STAND-IN ART, stagecheck.mjs's `sideArt`: the stage reads of a WIKISIDE only
+   whether each gadget's picture is a label and that label's text, so gadget i of screen k is a
+   label when (7k + i) % 3 is 0, its text "" (the gadget's name) when k + i is even and "L<k>.<i>"
+   when it is odd, and every other gadget a one-frame picture. The layout is a copy of `lay`, and
+   the simulation runs on that copy, so the view names the art's own layout. */
+static WIKISIDE* side_art(const WIKILAYOUT* lay)
+{
+    WIKISIDE* sd = (WIKISIDE*)calloc(1, sizeof *sd);
+    int k, i;
+    if (!sd) return NULL;
+    sd->layout = *lay;
+    for (k = 0; k < lay->nscreen; k++)
+        for (i = 0; i < lay->screen[k].ngadget; i++) {
+            WIKISIDEPIC* p = &sd->screen[k].pic[i];
+            if ((7 * k + i) % 3 == 0) {
+                p->from = WIKISIDE_FROM_LABEL;
+                if ((k + i) % 2) snprintf(p->text, sizeof p->text, "L%d.%d", k, i);
+            } else {
+                p->from = WIKISIDE_FROM_PAGE;
+                p->nframe = 1;
+            }
+        }
+    return sd;
+}
+
 static int ops(char** a)
 {
     static WIKISTAGEVIEW v;
@@ -177,6 +209,7 @@ static int ops(char** a)
     char* pak = slurp(a[0], &n);
     WIKIDATA* d;
     WIKISTAGEART art;
+    WIKISIDE* sd = NULL;
     FACE f;
     HUDRECT r;
     double u;
@@ -197,20 +230,31 @@ static int ops(char** a)
         art.cursor_h[k] = (float)atof(a[9 + 2 * k]);
     }
     if (!sprites(&art, a[14])) return 2;
-    r.x = (float)atof(a[15]); r.y = (float)atof(a[16]); r.w = (float)atof(a[17]); r.h = (float)atof(a[18]);
-    u = atof(a[19]);
+    if (strcmp(a[15], "-")) {
+        WIKILAYOUT* lay = tagpu_wikidata_layout_pak((const unsigned char*)pak, n, a[15], err, sizeof err);
+        if (!lay || !(sd = side_art(lay))) {
+            fprintf(stderr, "wikistagetest: %s: %s\n", a[15], lay ? "no memory" : err);
+            return 2;
+        }
+        free(lay);
+    }
+    r.x = (float)atof(a[16]); r.y = (float)atof(a[17]); r.w = (float)atof(a[18]); r.h = (float)atof(a[19]);
+    u = atof(a[20]);
     for (i = 0; i < d->nentry; i++)
         for (j = 0; j < d->entry[i].ndemo; j++) {
             const WIKIENTRY* e = &d->entry[i];
             WIKISIM s;
-            if (!tagpu_wikisim_init(&s, e, &e->demo[j], 1, NULL, err, sizeof err)) {
+            if (!tagpu_wikisim_init(&s, e, &e->demo[j], 1, sd ? &sd->layout : NULL, err, sizeof err)) {
                 fprintf(stderr, "wikistagetest: %s/%s: %s\n", e->id, e->demo[j].id, err);
                 return 2;
             }
             for (;;) {
                 if (s.tick % 30 == 0 || s.done) {
-                    tagpu_wikistage_copy(&v, tagpu_wikisim_view(&s), e);
+                    const int phase = (s.tick / 30) % 3;
+                    tagpu_wikistage_copy(&v, tagpu_wikisim_view(&s), e, s.lay);
                     v.tick = s.tick;            /* the copy leaves it: tagpu_wiki.c sets it so */
+                    art.side = sd && phase ? sd : NULL;
+                    art.side_minimap = phase == 1;
                     tagpu_wikistage_build(&v, NULL, r, u, (s.tick / 30) % 2 == 0, &art, &o);
                     frame(&o, &v, e->id, e->demo[j].id, s.tick, r, u);
                 }
@@ -220,6 +264,7 @@ static int ops(char** a)
             tagpu_wikisim_free(&s);
         }
     tagpu_wikidata_free(d);
+    free(sd);
     free(pak);
     free(f.ttf);
     return 0;
@@ -243,8 +288,8 @@ static int measure_file(char** a)
 int main(int argc, char** argv)
 {
     if (argc == 6 && !strcmp(argv[1], "measure")) return measure_file(argv + 2);
-    if (argc == 22 && !strcmp(argv[1], "ops")) return ops(argv + 2);
+    if (argc == 23 && !strcmp(argv[1], "ops")) return ops(argv + 2);
     fprintf(stderr, "usage: wikistagetest measure FONT SPACING UPPER FILE\n"
-                    "       wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD AW AH MW MH BW BH SPRITES X Y W H U\n");
+                    "       wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD AW AH MW MH BW BH SPRITES LAYOUT X Y W H U\n");
     return 2;
 }

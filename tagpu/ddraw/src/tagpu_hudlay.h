@@ -125,8 +125,11 @@ typedef struct {
      HOP_LINE   a straight stroke with butt ends, from (r.x, r.y) to (r.x + r.w, r.y + r.h), `size`
                 units wide: an SVG <line>;
      HOP_CHART  the chart's lines (HUDOPS `chart`) in the box r, every group composited in order
-                and the whole at the op's opacity: an SVG <g opacity> of polylines. */
-enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART };
+                and the whole at the op's opacity: an SVG <g opacity> of polylines;
+     HOP_SIDE   the in-game wiki stage's left sidebar, composed in the running mod's pictures
+                (tagpu_wikiside.h): the top-left `size` x `shade` texels of HUD_TEX_SIDE drawn
+                whole into r, sampled nearest, as HOPF_SPRITE draws a cell (tagpu_wikistage.c). */
+enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART, HOP_SIDE };
 #define HOPF_DIM    1u      /* the dim filter of a player who is out (layout.json `dim`) */
 #define HOPF_SHADE  2u      /* HOP_SOLID: an inner shadow `shade` units deep, black 55 % */
 #define HOPF_RING   4u      /* HOP_SOLID: an inset edge `size` units deep inside r, drawn as
