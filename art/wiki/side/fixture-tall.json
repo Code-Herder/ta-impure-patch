@@ -2,12 +2,10 @@
   "format": 1,
   "note": "Synthetic: our own numbers and arrangement, derived from no game file. The sidebar layout the wiki falls back to when the running mod gives none; tools/wiki/mockup/sim.js (checkLayout) states the schema and checks it.",
   "width": 128, "height": 768,
-  "sides": [{"name": "ARM", "prefix": "ARM", "main2": "ARMMAIN2", "gen": "ARMGEN"}],
-  "player_side": 0,
-  "types": {
+  "sides": [{"name": "ARM", "prefix": "ARM", "main2": "ARMMAIN2", "gen": "ARMGEN", "types": {
     "ARMCK": {"pages": ["ARMCK1", "ARMCK2"], "orders": null},
     "ARMACK": {"pages": ["ARMACK1"], "orders": null}
-  },
+  }}],
   "screens": {
     "ARMCK1": {"y": 128, "w": 128, "h": 640, "gadgets": [
       {"name": "ARMMEX", "role": "build", "unit": "ARMMEX", "rect": [4, 8, 60, 60]},

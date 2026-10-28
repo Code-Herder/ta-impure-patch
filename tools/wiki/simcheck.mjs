@@ -1,11 +1,17 @@
 /* simcheck.mjs -- plays every demo of the wiki's entries through tools/wiki/mockup/sim.js, headless, and checks that
    each one shows what its title claims, on the sim's own state rather than on pictures.
 
-   usage: node tools/wiki/simcheck.mjs [--null-layout] [--trace]     exit 0 when every demo and rule passes, 1 otherwise
+   usage: node tools/wiki/simcheck.mjs [--null-layout] [--casting NAME|none] [--iface 0|1] [--trace]
+     exit 0 when every demo and rule passes, 1 otherwise
 
    The demos play with the sidebar of art/wiki/side/fixture.json, the layout the wiki falls back to, so each `build`
    input plays out as its trip through the sidebar (sim.js trip) and is checked as one; --null-layout plays them with
-   no sidebar, where a `build` arms at once. The rule cases name their layout themselves.
+   no sidebar, where a `build` arms at once. Each demo plays in every context: the entry's own types and each casting
+   of tools/wiki/casting-fixture.json (identity, shifted, unbound), each at Interface Type 1 and 0; --casting and
+   --iface keep one of each. A demo is checked on its claims in every context, except where the casting leaves one of
+   its casts unbound: there it must stop under the badge on the tick decision 12 names, and only that is checked. With
+   `identity` every demo must play exactly as with the entry's own types. The rule cases name their layout and
+   context themselves.
 
    Imported, it runs nothing and exports ENTRY_RULES, the rule cases per entry id, which call WikiSim.create and
    WikiSim.play through the module object sim.js exports; tools/wiki/simparity.mjs records both, each with its
@@ -22,7 +28,19 @@ const ROOT = new URL('../../', import.meta.url).pathname;
 const TRACE = process.argv.includes('--trace');
 const FIXTURE = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/side/fixture.json`, 'utf8'));
 const LAYOUT = process.argv.includes('--null-layout') ? null : FIXTURE;
+const CASTINGS = JSON.parse(fs.readFileSync(`${ROOT}tools/wiki/casting-fixture.json`, 'utf8')).castings;
 const { TRIP, TRIP_DOWN, TRIP_UP } = WikiSim;
+const arg = k => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : undefined; };
+/* the contexts every demo plays in: {label, layout, ctx, casting name}. The fixture layout has one side, which each
+   fixture casting answers; a mod's pack would give one context per side and interface. */
+function contexts() {
+  const pick = arg('--casting'), iface = arg('--iface');
+  const names = pick === undefined ? [null, ...Object.keys(CASTINGS)] : [pick === 'none' ? null : pick];
+  const ifaces = iface === undefined ? [1, 0] : [Number(iface)];
+  for (const n of names) if (n !== null && !CASTINGS[n]) throw new Error(`no casting ${n} in casting-fixture.json`);
+  return names.flatMap(n => ifaces.map(i => ({ label: `${n || 'authored'}/${i}`, name: n, layout: LAYOUT,
+    ctx: { side: 0, casting: n ? CASTINGS[n][0] : null, iface: i } })));
+}
 
 // the quickbuild entry's deposits and vents, in cells: [x, z, w, h]
 const DEP = { A: [13, 15, 5, 5], B: [22, 3, 3, 3], E: [3, 10, 3, 3], S: [15, 1, 3, 3], D: [26, 15, 3, 3], R: [29, 19, 3, 3],
@@ -39,18 +57,22 @@ const whole = (u, r) => covers(u, r) === r[2] * r[3];
 const holds = (u, [cx, cz]) => covers(u, [cx, cz, 1, 1]) === 1;
 const cellIn = (x, z, r) => x >= r[0] * 16 && x < (r[0] + r[2]) * 16 && z >= r[1] * 16 && z < (r[1] + r[3]) * 16;
 
-function run(entry, demo, layout = LAYOUT) {
-  const sim = WikiSim.play(entry, demo, layout), ids = [...entry.scene.units, ...((demo.scene && demo.scene.units) || [])].map(u => u.id);
+function run(entry, demo, layout = LAYOUT, ctx) {
+  const sim = WikiSim.play(entry, demo, layout, ctx), ids = [...entry.scene.units, ...((demo.scene && demo.scene.units) || [])].map(u => u.id);
   const frames = [];
   const snap = () => frames.push({ t: sim.tick, v: sim.view(), o: Object.fromEntries(ids.map(id => [id, sim.orders(id)])) });
   snap();
   while (!sim.done) { sim.step(); snap(); }
-  return { sim, frames, last: frames[frames.length - 1], log: sim.log, layout: frames[0].v.side ? layout : null };
+  return { sim, frames, last: frames[frames.length - 1], log: sim.log, layout: frames[0].v.side ? layout : null, iface: sim.iface };
 }
 // the tick a build input's building is armed on: its own without the sidebar, the trip's release with it
 const armedAt = (r, e) => e.at + (r.layout ? TRIP_UP : 0);
-// the first frame after the inputs of tick `at` with this `down`; clicks are where the checks look
-const clicks = (demo, k) => demo.inputs.filter(e => e.down === k).map(e => e.at);
+// the ticks of the presses of k, an action or a button, in the data's order
+const presses = (demo, k) => demo.inputs.filter(e => e.down === k).map(e => e.at);
+/* the ticks the clicks of action k land on: an `order` lands at its press at type 1 and at its release at type 0
+   (sim.js leftClick); every other press acts on its press. A check reads the frame after it. */
+const lands = (r, demo, k) => k !== 'order' || r.iface ? presses(demo, k)
+  : presses(demo, k).map(t => demo.inputs.find(e => e.up === k && e.at >= t).at);
 const fresh = (v, type) => v.units.filter(u => u.type === type && !['mex', 'geo'].includes(u.id));
 const kinds = os => (os || []).map(o => o.k + (o.type ? ':' + o.type : o.target ? ':' + o.target : '')).join(' ');
 
@@ -77,7 +99,7 @@ const QUICKBUILD = {
   bestfit(r, d, ok) {
     ok(r.frames.some(f => f.v.ghost && f.v.ghost.type === 'ARMMOHO' && whole(f.v.ghost, DEP.A)), 'over A the ghost is ARMMOHO');
     ok(r.frames.some(f => f.v.ghost && f.v.ghost.type === 'ARMMEX' && whole(f.v.ghost, DEP.S)), 'over the wedged deposit S the ghost is ARMMEX');
-    const [c1, c2] = clicks(d, 'rmb'), f1 = r.frames[c1 + 1], f2 = r.frames[c2 + 1];
+    const [c1, c2] = lands(r, d, 'order'), f1 = r.frames[c1 + 1], f2 = r.frames[c2 + 1];
     ok(kinds(f1.o.ck) === 'build:ARMMEX' && kinds(f1.o.ack) === 'guard:ck', `first click: ck ${kinds(f1.o.ck)}, ack ${kinds(f1.o.ack)}`);
     ok(kinds(f2.o.ack) === 'build:ARMMOHO' && kinds(f2.o.ck) === 'guard:ack', `second click: ack ${kinds(f2.o.ack)}, ck ${kinds(f2.o.ck)}`);
     const mex = fresh(r.last.v, 'ARMMEX'), moho = fresh(r.last.v, 'ARMMOHO');
@@ -88,19 +110,19 @@ const QUICKBUILD = {
     const n = Math.max(...r.frames.map(f => (f.o.ck || []).filter(o => o.k === 'build').length));
     ok(n === 3, `ARMCK held three queued builds (${n})`);
     ok(r.frames.every(f => f.v.mode === 'contextual'), 'the mode stayed on, no build menu');
-    const after = r.frames[clicks(d, 'rmb')[2] + 1];
+    const after = r.frames[lands(r, d, 'order')[2] + 1];
     ok(after.v.queued.length + fresh(after.v, 'ARMMEX').length === 3, 'three sites queued or started after the third click');
     ok(fresh(r.last.v, 'ARMMEX').filter(u => u.built === 1).length >= 2, 'ARMCK worked through them in order');
   },
   cancel(r, d, ok) {
-    const [q, plain, c] = clicks(d, 'rmb').map(t => r.frames[t + 1]);
+    const [q, plain, c] = lands(r, d, 'order').map(t => r.frames[t + 1]);
     ok(kinds(q.o.ck) === 'build:ARMMEX' && q.v.queued.length === 1, 'Shift+right-click queued it');
     ok(JSON.stringify(plain.o.ck) === JSON.stringify(q.o.ck), 'a plain repeat click left the queue unchanged');
     ok(c.o.ck.length === 0 && c.v.queued.length === 0, 'Shift+right-click on the site cancelled it');
     ok(fresh(r.last.v, 'ARMMEX').length === 0 && r.last.o.ck.length === 0, 'nothing built, queue still empty at the end');
   },
   helpers(r, d, ok) {
-    const f = r.frames[clicks(d, 'rmb')[1] + 1];
+    const f = r.frames[lands(r, d, 'order')[1] + 1];
     ok(f.v.units.filter(u => u.selected).length === 3, 'the box selected all three');
     ok(kinds(f.o.ack) === 'build:ARMMOHO', `ARMACK builds the Moho (${kinds(f.o.ack)})`);
     ok(kinds(f.o.ck) === 'guard:ack', `ARMCK guards ARMACK (${kinds(f.o.ck)})`);
@@ -111,7 +133,7 @@ const QUICKBUILD = {
   },
   upgrade(r, d, ok) {
     ok(r.frames.some(f => f.v.ghost && f.v.ghost.type === 'ARMMOHO' && whole(f.v.ghost, DEP.D)), 'over the ARMMEX the ghost is ARMMOHO');
-    const f = r.frames[clicks(d, 'rmb')[0] + 1];
+    const f = r.frames[lands(r, d, 'order')[0] + 1];
     ok(kinds(f.o.ack) === 'reclaim:mex build:ARMMOHO', `the order is reclaim then build (${kinds(f.o.ack)})`);
     const gone = r.log.find(e => e.what === 'reclaimed' && e.id === 'mex'), start = r.log.find(e => e.what === 'started' && e.type === 'ARMMOHO');
     ok(gone && start && gone.t <= start.t, 'the ARMMEX was reclaimed before the Moho started');
@@ -124,9 +146,9 @@ const QUICKBUILD = {
     ok(g.length === 1 && holds(g[0], VENT) && g[0].built === 1, 'ARMGEO built on the vent');
   },
   metalmap(r, d, ok) {
-    const [c1, c2] = clicks(d, 'rmb'), f1 = r.frames[c1], f2 = r.frames[c2];
+    const [c1, c2] = presses(d, 'order'), f1 = r.frames[c1], f2 = r.frames[c2], l1 = lands(r, d, 'order')[0];
     ok(!f1.v.ghost && f1.v.cursor.shape === 'move', 'over broad metal ground: no ghost, a move cursor');
-    ok(kinds(r.frames[c1 + 1].o.ck) === 'move', `the click there is a move (${kinds(r.frames[c1 + 1].o.ck)})`);
+    ok(kinds(r.frames[l1 + 1].o.ck) === 'move', `the click there is a move (${kinds(r.frames[l1 + 1].o.ck)})`);
     ok(f2.v.ghost && f2.v.ghost.type === 'ARMMEX' && whole(f2.v.ghost, DEP.R), 'over the separate deposit: the ARMMEX ghost');
     const m = fresh(r.last.v, 'ARMMEX');
     ok(m.length === 1 && whole(m[0], DEP.R) && m[0].built === 1, 'ARMMEX built on the separate deposit');
@@ -134,9 +156,9 @@ const QUICKBUILD = {
   fog(r, d, ok) {
     const near = r.frames.filter(f => f.v.ghost && Math.abs(f.v.cursor.x - 104) <= 2 && Math.abs(f.v.cursor.z - 88) <= 2);
     ok(near.length && near.every(f => covers(f.v.ghost, DEP.black) === 0 && f.v.map.fog[2 * 40 + 2] === 2), 'beside the unexplored deposit the ghost did not snap');
-    const f = r.frames[clicks(d, 'lmb')[0]];
+    const f = r.frames[presses(d, 'lmb')[0]];
     ok(f.v.ghost && whole(f.v.ghost, DEP.grey) && f.v.map.fog[19 * 40 + 4] === 1, 'beside the grey-fogged deposit it snapped onto it');
-    const o = r.frames[clicks(d, 'lmb')[0] + 1].o.ck;
+    const o = r.frames[presses(d, 'lmb')[0] + 1].o.ck;
     ok(o.length === 1 && o[0].type === 'ARMMEX' && whole({ x: (o[0].ox + 1.5) * 16, z: (o[0].oz + 1.5) * 16, fx: 3, fz: 3 }, DEP.grey), 'the order is on the grey deposit');
   },
 };
@@ -369,7 +391,7 @@ const BUILDSHAPES = {
     }
     ok(same(seen.slice(-3), ['line:5', 'rect:15', 'hollow:12']), `one drag: a line, Alt a rectangle, Ctrl hollow (${seen.slice(-3).join(' ')})`);
     ok(added(r, u).length === 12, 'the hollow one was ordered');
-    const rmb = downs(d, 'rmb')[0];
+    const rmb = downs(d, 'cancel')[0];
     ok(r.frames[rmb - 1].v.sites.length > 0 && r.frames[rmb].v.mode === 'contextual' && !r.frames[rmb].v.sites.length, 'the right-click ended the drag and disarmed');
     ok(!r.frames.some(f => builds(f.o.ck).some(b => b.c[1] >= 17)), 'the cancelled drag ordered nothing');
   },
@@ -506,7 +528,8 @@ function centre(L, screen, name) {
 const press = (s, at, b = 'lmb') => { s.input({ move: at }); s.input({ down: b }); s.input({ up: b }); };
 const stateOf = (v, name) => v.side.state[FIXTURE.screens[v.side.screen].gadgets.findIndex(g => g.name === name)];
 const selIds = v => v.units.filter(u => u.selected).map(u => u.id).join(' ');
-const fixtureWith = (types, screens) => ({ ...FIXTURE, types: { ...FIXTURE.types, ...types }, screens: { ...FIXTURE.screens, ...screens } });
+const fixtureWith = (types, screens) => ({ ...FIXTURE, sides: [{ ...FIXTURE.sides[0], types: { ...FIXTURE.sides[0].types, ...types } }],
+  screens: { ...FIXTURE.screens, ...screens } });
 const withOrders = (entry, ids) => ({ ...entry, scene: { ...entry.scene,
   units: entry.scene.units.map(u => ids.includes(u.id) ? { ...u, orders: [{ move: [120, 120] }, { move: [200, 120] }] } : u) } });
 /* stand-ins for STOP's rules: a static unit with canstop, as turrets and factories have it, and a mobile one without,
@@ -791,31 +814,170 @@ const SIDE_RULES = {
   },
 };
 
+/* ---- the context (sim.js `context`, `resolve`, `binder`; decisions 12-18): the Interface Type's rows, the resolved
+   script's data rule, G cells, locks for an unbound cast, and what a context or a casting is refused for. Each case
+   names its context; the type-0 rows are DISASSEMBLED and await the runner's M3, so these pin the sim to the spec. */
+const T0 = { side: 0, casting: null, iface: 0 }, T1 = { side: 0, casting: null, iface: 1 };
+const click = (s, at, b, mods = []) => { s.input({ move: at }); for (const k of mods) s.input({ down: k }); s.input({ down: b }); s.input({ up: b }); for (const k of mods) s.input({ up: k }); };
+const refuses = f => { try { f(); return false; } catch (e) { return e.message; } };
+const ident = () => JSON.parse(JSON.stringify(CASTINGS.identity[0]));
+const HALF = { id: 'half', type: 'ARMMEX', at: [120, 248], built: 0.5 };
+const CTX_RULES = {
+  'type 0: an order click lands at its release, where type 1 orders at its press'(entry) {
+    const at = (iface, b) => {
+      const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, null, { ...T1, iface });
+      s.input({ move: [376, 72] }); s.input({ down: b });
+      const down = kinds(s.orders('ck'));
+      s.input({ up: b });
+      return [down, kinds(s.orders('ck'))];
+    };
+    return same(at(1, 'rmb'), ['build:ARMMEX', 'build:ARMMEX']) && same(at(0, 'lmb'), ['', 'build:ARMMEX']);
+  },
+  'type 0: a left click moves the mobile selection, selects a unit of the player\'s, and does nothing on empty ground with no mobile unit selected'(entry) {
+    const s = WikiSim.create(entry, { scene: { selected: ['pw'] } }, null, T0);
+    click(s, [200, 300], 'lmb');
+    const moved = kinds(s.orders('pw')) === 'move' && selIds(s.view()) === 'pw';
+    click(s, [304, 176], 'lmb');
+    const picked = selIds(s.view()) === 'ck';
+    click(s, [352, 176], 'lmb', ['shift']);
+    const added = selIds(s.view()) === 'ck ack';
+    const b = WikiSim.create(entry, { scene: { selected: ['geo'] } }, null, T0);
+    click(b, [200, 300], 'lmb');
+    return moved && picked && added && selIds(b.view()) === 'geo' && b.orders('geo').length === 0;
+  },
+  'type 0: a left click on an unfinished building of the player\'s assists it with a builder selected, else selects it'(entry) {
+    const s = WikiSim.create(entry, { scene: { selected: ['ck'], units: [HALF] } }, null, T0);
+    click(s, HALF.at, 'lmb');
+    const helped = kinds(s.orders('ck')) === 'build:ARMMEX' && selIds(s.view()) === 'ck';
+    const p = WikiSim.create(entry, { scene: { selected: ['pw'], units: [HALF] } }, null, T0);
+    click(p, HALF.at, 'lmb');
+    return helped && selIds(p.view()) === 'half' && p.orders('pw').length === 0;
+  },
+  'type 0: a right press deselects, with Ctrl it keeps the selection, and with a building armed it only disarms'(entry) {
+    const s = WikiSim.create(entry, { scene: { selected: ['ck', 'pw'] } }, null, T0);
+    click(s, [200, 300], 'rmb', ['ctrl']);
+    const kept = selIds(s.view()) === 'pw ck';
+    s.input({ build: 'ARMMEX' });
+    click(s, [200, 300], 'rmb');
+    const disarmed = s.view().mode === 'contextual' && selIds(s.view()) === 'pw ck';
+    click(s, [200, 300], 'rmb');
+    return kept && disarmed && selIds(s.view()) === '' && s.orders('ck').length === 0 && s.orders('pw').length === 0;
+  },
+  'the resolved script: a press of a held button or a release of one not held refuses the demo with its tick'(entry) {
+    const d = (inputs) => ({ id: 'rule', scene: { selected: ['ck'] }, inputs, end: 10 });
+    const overlap = d([{ at: 1, down: 'select' }, { at: 2, down: 'order' }, { at: 3, up: 'order' }, { at: 4, up: 'select' }]);
+    const t1 = !refuses(() => WikiSim.play(entry, overlap, null, T1)), t0 = refuses(() => WikiSim.play(entry, overlap, null, T0));
+    const loose = refuses(() => WikiSim.play(entry, d([{ at: 6, up: 'cancel' }]), null, T1));
+    return t1 && /at tick 2 the press of lmb/.test(t0) && /at tick 6 the release of rmb/.test(loose);
+  },
+  'a geothermal plant stands only with a vent under one of its G cells'(entry) {
+    // the vent at cell 28,9; with Alt the ghost stands where the cursor puts it, footprint 4 x 4 first cell 28,9 or 27,8
+    const ok = (casting, at) => {
+      const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, null, { ...T1, casting });
+      s.input({ build: 'ARMGEO' }); s.input({ down: 'alt' }); s.input({ move: at });
+      return s.view().ghost.ok;
+    };
+    const shifted = CASTINGS.shifted[0];
+    return ok(null, [480, 176]) && ok(ident(), [480, 176]) && !ok(shifted, [480, 176]) && ok(shifted, [464, 160]);
+  },
+  'the context: an Interface Type other than 0 or 1, or a side the layout lacks, is refused; without a layout the side is not read'(entry) {
+    const d = { scene: { selected: ['ck'] } };
+    const s = WikiSim.create(entry, d, FIXTURE, T0), n = WikiSim.create(entry, d, null, { ...T0, side: 5 });
+    return !!refuses(() => WikiSim.create(entry, d, null, { ...T0, iface: 2 })) && !!refuses(() => WikiSim.create(entry, d, null, { side: 0, casting: null })) &&
+      !!refuses(() => WikiSim.create(entry, d, FIXTURE, { ...T0, side: 1 })) && s.side === 0 && s.iface === 0 && s.view().side.index === 0 &&
+      n.side === -1 && !n.view().side;
+  },
+  'a casting is refused whole when it breaks a bound'(entry) {
+    const bad = f => { const c = ident(); f(c.casts); return !!refuses(() => WikiSim.create(entry, { scene: {} }, null, { ...T1, casting: c })); };
+    return bad(k => { k.mex.footprint = [17, 3]; }) && bad(k => { k.geo.g = [[4, 0]]; }) && bad(k => { k.mex.g = [[0, 0]]; }) &&
+      bad(k => { delete k.wall; }) && bad(k => { k.mex.type = '1234'; }) && bad(k => { k.mex.buildTime = 0; }) &&
+      bad(k => { k.mex.type = 'X'.repeat(24); }) && bad(k => { k.builder.builds = ['mex', 'factory']; }) && bad(k => { k.navy = null; }) &&
+      !bad(k => { k.mex.type = 'X'.repeat(23); });
+  },
+  'a scene its bound footprints do not fit refuses the demo'(entry) {
+    const c = ident(); c.casts.geo.footprint = [16, 16];
+    return /geo's ARMGEO does not fit the scene/.test(refuses(() => WikiSim.create(entry, { scene: {} }, null, { ...T1, casting: c })));
+  },
+  'the bound entry renames every bound type, keeps the units\' order, and builds by cast'(entry) {
+    const c = ident();
+    for (const k of Object.values(c.casts)) k.type = `X${k.type}`;
+    const b = WikiSim.bindEntry(entry, c), demo = entry.demos.find(d => d.id === 'click');
+    const r = run(entry, demo, null, { ...T1, casting: c }), built = fresh(r.last.v, 'XARMMEX');
+    return same(Object.keys(b.units), Object.keys(entry.units).map(t => `X${t}`)) && same(b.units.XARMCK.builds, ['XARMMEX', 'XARMGEO']) &&
+      b.units.XARMCK.name === 'Construction KBot' && b.scene.units.every(u => u.type[0] === 'X') &&
+      built.length === 1 && built[0].built === 1 && !r.last.v.units.some(u => u.type === 'ARMMEX');
+  },
+};
+const CTX_SHAPES_RULES = {
+  'an unbound cast stops the demo: a scene unit of it on tick 0, a build of it on its tick, with the sidebar or without'(entry) {
+    const casting = CASTINGS.unbound[0];
+    const scene = WikiSim.play(entry, { id: 'u', scene: { units: [{ id: 'w', type: 'ARMDRAG', at: [200, 300] }] }, inputs: [], end: 50 }, FIXTURE, { ...T1, casting });
+    const later = layout => {
+      const s = WikiSim.play(entry, { id: 'u', inputs: [{ at: 7, build: 'ARMDRAG' }], end: 200 }, layout, { ...T1, casting });
+      while (!s.done) s.step();
+      return s.tick === 7 && s.view().locked === 'ARMDRAG' && s.view().mode === 'contextual';
+    };
+    return scene.done && scene.tick === 0 && scene.view().locked === 'ARMDRAG' && later(null) && later(FIXTURE);
+  },
+};
+
 const CHECKS = { quickbuild: QUICKBUILD, buildshapes: BUILDSHAPES };
 // the sidebar's rules use quickbuild's scene: two builder types and a Peewee
-export const ENTRY_RULES = { quickbuild: { ...RULES, ...SIDE_RULES }, buildshapes: BUILDSHAPES_RULES };
+export const ENTRY_RULES = { quickbuild: { ...RULES, ...SIDE_RULES, ...CTX_RULES }, buildshapes: { ...BUILDSHAPES_RULES, ...CTX_SHAPES_RULES } };
+
+/* decision 12 for an unbound cast: the tick and the authored type a demo stops on in this casting -- tick 0 for a
+   scene unit of an unbound cast, else the first `build` of one -- or null when it plays to its end */
+function expectedLock(entry, d, casting) {
+  if (!casting) return null;
+  const off = Object.keys(entry.units).filter(t => casting.casts[entry.units[t].cast] === null);
+  const scene = [...entry.scene.units, ...((d.scene && d.scene.units) || [])].find(u => off.includes(u.type));
+  if (scene) return { t: 0, type: scene.type };
+  const b = d.inputs.map((e, i) => [e, i]).sort((x, y) => x[0].at - y[0].at || x[1] - y[1]).map(p => p[0]).find(e => off.includes(e.build));
+  return b ? { t: b.at, type: b.build } : null;
+}
+// what a frame shows, for comparing two plays of one demo
+const frameKey = f => JSON.stringify([f.t, f.v, f.o]);
 
 function main() {
 const tree = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/tree.json`, 'utf8'));
 const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
 const ids = tree.tree.flatMap(leaves);
 let failed = 0;
-for (const id of ids) {
-  const entry = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/entries/${id}.json`, 'utf8'));
-  for (const d of entry.demos) {
-    const notes = [], ok = (c, what) => notes.push([!!c, what]);
-    try {
-      const r = run(entry, d);
-      if (TRACE) console.log(`  ${d.id} log:`, r.log.map(e => `${e.t} ${e.what} ${e.type}@${e.ox},${e.oz}`).join('; '));
-      const check = (CHECKS[id] || {})[d.id];
-      if (!check) ok(false, 'no check for this demo');
-      else check(r, d, ok);
-      if (r.layout) tripChecks(r, d, ok, (TRIP_PATHS[id] || {})[d.id]);
-    } catch (e) { ok(false, `threw: ${e.stack}`); }
-    const pass = notes.every(n => n[0]);
-    if (!pass) failed++;
-    console.log(`${pass ? 'PASS' : 'FAIL'} ${id}/${d.id} -- ${d.title}`);
-    for (const [c, what] of notes) if (!c || TRACE) console.log(`     ${c ? 'ok  ' : 'FAIL'} ${what}`);
+const tally = {};
+for (const c of contexts()) {
+  tally[c.label] = { pass: 0, fail: 0, locked: [] };
+  for (const id of ids) {
+    const entry = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/entries/${id}.json`, 'utf8'));
+    for (const d of entry.demos) {
+      const notes = [], ok = (cond, what) => notes.push([!!cond, what]), lock = expectedLock(entry, d, c.ctx.casting);
+      try {
+        const r = run(entry, d, c.layout, c.ctx);
+        if (TRACE) console.log(`  ${d.id} log:`, r.log.map(e => `${e.t} ${e.what} ${e.type}@${e.ox},${e.oz}`).join('; '));
+        if (lock) {
+          ok(r.sim.done && r.last.t === lock.t && r.last.v.locked === lock.type,
+            `stops on tick ${lock.t} under the badge, ${lock.type} unbound (tick ${r.last.t}, locked ${r.last.v.locked})`);
+          ok(r.frames.slice(0, -1).every(f => f.v.locked === null), 'no earlier frame is locked');
+          tally[c.label].locked.push(`${id}/${d.id}@${lock.t}`);
+        } else {
+          ok(r.frames.every(f => f.v.locked === null), 'no frame is locked');
+          const check = (CHECKS[id] || {})[d.id];
+          if (!check) ok(false, 'no check for this demo');
+          else check(r, d, ok);
+          if (r.layout) tripChecks(r, d, ok, (TRIP_PATHS[id] || {})[d.id]);
+          // the identity casting binds every cast to the entry's own type with its own figures: nothing may change
+          if (c.name === 'identity') {
+            const a = run(entry, d, c.layout, { ...c.ctx, casting: null });
+            const k = a.frames.findIndex((f, i) => !r.frames[i] || frameKey(f) !== frameKey(r.frames[i]));
+            ok(k < 0 && a.frames.length === r.frames.length, `plays exactly as the entry's own types${k < 0 ? '' : ` (first difference on tick ${k})`}`);
+          }
+        }
+      } catch (e) { ok(false, `threw: ${e.stack}`); }
+      const pass = notes.every(n => n[0]);
+      if (!pass) failed++;
+      tally[c.label][pass ? 'pass' : 'fail']++;
+      console.log(`${pass ? 'PASS' : 'FAIL'} [${c.label}] ${id}/${d.id} -- ${d.title}${lock ? ` (stops on tick ${lock.t}: ${lock.type} unbound)` : ''}`);
+      for (const [cond, what] of notes) if (!cond || TRACE) console.log(`     ${cond ? 'ok  ' : 'FAIL'} ${what}`);
+    }
   }
 }
 for (const id of ids) {
@@ -827,6 +989,8 @@ for (const id of ids) {
     console.log(`${pass ? 'PASS' : 'FAIL'} rule -- ${what}`);
   }
 }
+for (const [label, t] of Object.entries(tally))
+  console.log(`[${LAYOUT ? 'fixture' : 'no sidebar'} ${label}] ${t.pass} pass, ${t.fail} fail${t.locked.length ? `; stopped under the badge: ${t.locked.join(' ')}` : ''}`);
 console.log(failed ? `${failed} check(s) failed` : 'all demos and rules pass');
 process.exit(failed ? 1 : 0);
 }

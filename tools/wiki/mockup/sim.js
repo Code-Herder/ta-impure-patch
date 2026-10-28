@@ -16,6 +16,11 @@
    game's 128-pixel column left of the map, x in [-128, 0): its page router, its buttons, and a demo's `build` input
    played out as the cursor's trip to the button (research/notes/ingame-wiki-sidebar-plan.md, the owner's decisions).
 
+   A sim is made for a context, ctx = {side, casting, iface} (the owner's decisions 13-18): the layout's side the
+   player plays, that side's casting (the mod's own unit for each of an entry's casts, or null for the entry's own
+   types), and the Interface Type, 0 left-click or 1 right-click. An absent ctx is side 0, no casting and type 1, the
+   interface the demos are authored in. tagpu_wikisim.c's WIKISIMCTX is the same three.
+
    Runs in a page (the global WikiSim) and under node (module.exports). */
 const WikiSim = (() => {
   const CELL = 16, TPS = 30, RADIUS = 3, ARENA = 64, DRAG = 4, FOLLOW = 48, SPACING = 24;
@@ -24,6 +29,10 @@ const WikiSim = (() => {
   const KEYS = ['shift', 'alt', 'ctrl', 'z', 'x', 'lmb', 'rmb'];
   const sq = v => v * v;
   const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  const obj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const int = Number.isInteger;
+  // a name and its terminator fit a C field of n bytes, counted in UTF-8 as the C reads them
+  const fitsIn = (v, n) => typeof v === 'string' && new TextEncoder().encode(v).length < n;
 
   /* ---- the sidebar's layout ----
      The column is the engine's panel width, 128 game pixels, whatever the HUD scale; it is at least 480 rows (the
@@ -31,23 +40,23 @@ const WikiSim = (() => {
      clickable. Every bound below is one tagpu_wikisim.h's WIKILAYOUT holds: a layout breaking any of them is refused
      whole (this throws; the caller then gives the fixture), so no index read out of a layout addresses past it.
 
-     The layout: {format: 1, width: 128, height, sides: [{name, prefix, main2, gen}], player_side,
-     types: {TYPE: {pages: [screen of page 1, ...], orders: screen or null}},
+     The layout: {format: 1, width: 128, height,
+     sides: [{name, prefix, main2, gen, types: {TYPE: {pages: [screen of page 1, ...], orders: screen or null}}}],
      screens: {NAME: {y, w, h, gadgets: [{name, role, rect: [x, y, w, h], unit, grey, hidden}]}}}.
      A screen's y is its row in the column and a gadget's rect is in its screen's pixels. role is orders, buildtab,
      build, prev, next, stop or order, as 0x41AA00 tells them apart by name; a build button's unit is its unit type,
      or null (greyed) when the name is none; hidden marks an inactive gadget. Labels, fonts and the panel picture
-     are not gadgets here: they are the art's. types holds only the types with a page (def+0x22E != 0). */
+     are not gadgets here: they are the art's. A side's types are the types with a page (def+0x22E != 0) that side's
+     casting names; its pages are read with its own prefix, so one type name may have other pages in another side.
+     The sim reads the side ctx.side names, MAIN2, GEN and types alike. */
   const SIDE_W = 128, SIDE_MIN_H = 480, MINIMAP = 128;
   const SIDE_SCREENS = 48, SIDE_GADGETS = 64, SIDE_PAGES = 7, SIDE_TYPES = 64, SIDE_ROWS = 1024, SIDE_SIDES = 8, SIDE_NAME = 32;
   const ROLES = ['orders', 'buildtab', 'build', 'prev', 'next', 'stop', 'order'];
   function checkLayout(L) {
     const no = what => { throw new Error(`the sidebar layout is refused: ${what}`); };
-    const obj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
-    // SIDE_NAME: a name and its terminator fit WIKILAYOUT's name fields, counted in UTF-8 bytes as the C reads them
-    const fits = v => typeof v === 'string' && new TextEncoder().encode(v).length < SIDE_NAME;
+    // SIDE_NAME: WIKILAYOUT's name fields
+    const fits = v => fitsIn(v, SIDE_NAME);
     const name = v => fits(v) && v.length > 0;
-    const int = Number.isInteger;
     if (!obj(L) || L.format !== 1) no('format is not 1');
     if (L.width !== SIDE_W) no(`width is not ${SIDE_W}`);
     if (!obj(L.screens)) no('screens is not an object');
@@ -83,22 +92,108 @@ const WikiSim = (() => {
     L.sides.forEach((s, i) => {
       if (!obj(s) || !name(s.name) || !fits(s.prefix) || !screen(s.main2) || !screen(s.gen))
         no(`side ${i} has no name, prefix, or MAIN2 and GEN screens`);
+      if (!obj(s.types)) no(`side ${i}: types is not an object`);
     });
-    if (!int(L.player_side) || L.player_side < 0 || L.player_side >= L.sides.length) no('player_side is not one of the sides');
-    if (!obj(L.types)) no('types is not an object');
-    // SIDE_TYPES: WIKI_MAX_DEFS, the unit types one entry can name
-    if (Object.keys(L.types).length > SIDE_TYPES) no(`more than ${SIDE_TYPES} types`);
-    for (const [t, T] of Object.entries(L.types)) {
-      if (!fits(t)) no(`type ${t} has a name too long`);
-      // SIDE_PAGES: the page is unit+0x110 bits 23..25, a 3-bit field, so the engine reaches at most 7 numbered pages
-      if (!obj(T) || !Array.isArray(T.pages) || T.pages.length > SIDE_PAGES || !T.pages.every(screen))
-        no(`type ${t} has no list of at most ${SIDE_PAGES} page screens`);
-      if (!(T.orders === null || screen(T.orders))) no(`type ${t}: orders is not a screen or null`);
-      // def+0x22E != 0: a type with neither a numbered page nor an orders page is not in `types`
-      if (!T.pages.length && T.orders === null) no(`type ${t} has no page`);
-    }
+    // SIDE_TYPES: WIKIPAGES' table, one row per (type, side) over every side
+    if (L.sides.reduce((n, s) => n + Object.keys(s.types).length, 0) > SIDE_TYPES) no(`more than ${SIDE_TYPES} types over the sides`);
+    L.sides.forEach((s, i) => {
+      for (const [t, T] of Object.entries(s.types)) {
+        const at = `side ${i} type ${t}`;
+        if (!fits(t)) no(`${at} has a name too long`);
+        // SIDE_PAGES: the page is unit+0x110 bits 23..25, a 3-bit field, so the engine reaches at most 7 numbered pages
+        if (!obj(T) || !Array.isArray(T.pages) || T.pages.length > SIDE_PAGES || !T.pages.every(screen))
+          no(`${at} has no list of at most ${SIDE_PAGES} page screens`);
+        if (!(T.orders === null || screen(T.orders))) no(`${at}: orders is not a screen or null`);
+        // def+0x22E != 0: a type with neither a numbered page nor an orders page is not in `types`
+        if (!T.pages.length && T.orders === null) no(`${at} has no page`);
+      }
+    });
     return L;
   }
+
+  /* ---- casts and castings (research/notes/ingame-wiki-sidebar-plan.md, decisions 13-15 and 20) ----
+     Each unit of an entry names its cast, its place in the demos; a casting answers each cast with one of the mod's
+     types for one side, or null when the rule found none (unbound). The casting is a pack's
+     (gfx/side/<mod>/side.json `casting`, index-aligned with the layout's sides) or tools/wiki/casting-fixture.json's.
+     Every bound below is one tagpu_wikidata.h's WIKICASTDEF holds; a casting breaking one is refused whole. */
+  const CASTS = ['builder', 'advbuilder', 'mex', 'moho', 'geo', 'walker', 'tower', 'wall', 'solar'];   // WIKI_CAST_* order
+  const FIGURES = ['buildTime', 'workerTime', 'buildDistance', 'maxVelocity', 'extracts', 'energyMake'];
+  // WIKI_FP_MAX: a footprint's side on each axis, the width of a G row's bit mask; WIKI_ID_MAX: a type name's field
+  const FP_MAX = 16, ID_MAX = 24;
+  /* a type's G cells, `g`: [[dx, dz], ...] inside its footprint, the yard cells with bit 0x80 (0x8F, the only yard
+     code carrying it, 0x42CF9D..0x42D06B, DISASSEMBLED). `vent` says whether it has one; with no `g`, `vent: true` is
+     a yard all G, as stock's ARMGEO is. Refused: a cell off the footprint, or a `vent` that disagrees with `g`. */
+  function checkG(at, d, f) {
+    if (!('g' in d)) return;
+    const [fx, fz] = f;
+    if (!Array.isArray(d.g) || !!d.vent !== d.g.length > 0 ||
+        !d.g.every(c => Array.isArray(c) && c.length === 2 && int(c[0]) && int(c[1]) && c[0] >= 0 && c[0] < fx && c[1] >= 0 && c[1] < fz))
+      throw new Error(`${at}: g is not a list of G cells inside the footprint, held by vent exactly when it is not empty`);
+  }
+  function checkCasting(C) {
+    const no = what => { throw new Error(`the casting is refused: ${what}`); };
+    if (!obj(C) || !obj(C.casts)) no('casts is not an object');
+    for (const c of Object.keys(C.casts)) if (!CASTS.includes(c)) no(`${c} is not a cast`);
+    for (const c of CASTS) {
+      if (!own(C.casts, c)) no(`${c} is absent (null is the unbound cast)`);
+      const k = C.casts[c];
+      if (k === null) continue;
+      const at = `cast ${c}`;
+      /* a name of digits alone is refused because a JS object lists integer keys first, so the bound entry's types
+         would leave definition order, which Quick Build's ties and every unit loop read; no UnitName measured is one */
+      if (!obj(k) || !fitsIn(k.type, ID_MAX) || !k.type || /^[0-9]+$/.test(k.type)) no(`${at} has no type name of 1 to ${ID_MAX - 1} bytes, not all digits`);
+      if (!fitsIn(k.title, SIDE_NAME)) no(`${at} has no title of at most ${SIDE_NAME - 1} bytes`);
+      const f = k.footprint;
+      if (!Array.isArray(f) || f.length !== 2 || !f.every(v => int(v) && v >= 1 && v <= FP_MAX)) no(`${at}: the footprint is not two integers 1..${FP_MAX}`);
+      // the figures divide and step: a build time of 0 would fill a building in no time at all, and a negative or
+      // infinite speed or reach would leave the world's arithmetic
+      for (const n of FIGURES) if (n in k && !(typeof k[n] === 'number' && k[n] >= 0 && k[n] < Infinity)) no(`${at}: ${n} is not a finite number >= 0`);
+      if (!(k.buildTime > 0)) no(`${at}: buildTime is not above 0`);
+      if ('canstop' in k && !int(k.canstop)) no(`${at}: canstop is not an integer`);
+      if ('vent' in k && typeof k.vent !== 'boolean') no(`${at}: vent is not a boolean`);
+      checkG(at, k, f);
+      if ('builds' in k && !(Array.isArray(k.builds) && k.builds.every(b => CASTS.includes(b)))) no(`${at}: builds is not a list of casts`);
+    }
+    return C;
+  }
+  /* THE BOUND ENTRY: the entry with every unit of a bound cast replaced by the casting's type, under the type's name,
+     with the casting's title (as `name`), footprint, figures, canstop and G cells, and a build list that holds unit j
+     of the entry exactly when the casting's build list names j's cast. A unit of an unbound cast keeps the authored
+     definition, marked `unbound`, and its build list keeps only the entry's own units, renamed as they are. The
+     units keep their order, so the scene's units and a `build` point at the same definitions as before; the scene's
+     types and the inputs' `build` are renamed with them, captions untouched (the sim and its hash keep raw
+     captions). Every unit names one of the nine casts and no cast twice; two units bound to one name are refused.
+     tagpu_wikisim.c builds the same as WIKISIM's own bdef[] (a field of the sim, so it lives and dies with it). */
+  function binder(entry, casting) {
+    const K = checkCasting(casting).casts, names = Object.keys(entry.units), to = {}, seen = new Set();
+    for (const t of names) {
+      const c = entry.units[t].cast;
+      if (!CASTS.includes(c)) throw new Error(`unit ${t} names no cast`);
+      if (seen.has(c)) throw new Error(`two units name the cast ${c}`);
+      seen.add(c);
+      to[t] = K[c] ? K[c].type : t;
+    }
+    if (new Set(names.map(t => to[t])).size !== names.length) throw new Error('the casting binds two units to one type');
+    const units = {};
+    for (const t of names) {
+      const d = entry.units[t], k = K[d.cast];
+      if (!k) { units[t] = { ...d, unbound: true, builds: (d.builds || []).filter(b => own(entry.units, b)).map(b => to[b]) }; continue; }
+      const b = { cast: d.cast, name: k.title, footprint: [k.footprint[0], k.footprint[1]],
+        builds: names.filter(j => (k.builds || []).includes(entry.units[j].cast)).map(j => to[j]) };
+      for (const n of FIGURES) if (n in k) b[n] = k[n];
+      if ('canstop' in k) b.canstop = k.canstop;
+      if (k.vent) b.vent = true;
+      if (k.g && k.g.length) b.g = k.g.map(c => [c[0], c[1]]);
+      units[to[t]] = b;
+    }
+    const scene = s => s && s.units ? { ...s, units: s.units.map(u => own(to, u.type) ? { ...u, type: to[u.type] } : u) } : s;
+    const demo = d => d && { ...d, scene: scene(d.scene),
+      inputs: d.inputs && d.inputs.map(e => typeof e.build === 'string' && own(to, e.build) ? { ...e, build: to[e.build] } : e) };
+    const bound = { ...entry, units, scene: scene(entry.scene) };
+    if (entry.demos) bound.demos = entry.demos.map(demo);
+    return { entry: bound, demo };
+  }
+  const bindEntry = (entry, casting) => binder(entry, casting).entry;
 
   /* ---- the build trip: a scripted `build` input played out through the sidebar ----
      FIXED BUDGET: the trip takes TRIP ticks whatever the page, the pagers or the mod; the build button goes down at
@@ -186,7 +281,47 @@ const WikiSim = (() => {
       units: cat('units'), selected: b.selected ?? a.selected ?? [], cursor: b.cursor ?? a.cursor ?? [0, 0] };
   }
 
-  function make(entry, demo, scripted, layout) {
+  /* THE CONTEXT, refused as tagpu_wikisim_init refuses it: an Interface Type other than 0 or 1 (the DLL maps the
+     engine's int to these two before it starts a demo), and with a layout a side that is not one of its sides. */
+  function context(layout, ctx) {
+    const c = ctx == null ? { side: 0, casting: null, iface: 1 } : ctx;
+    if (!(c.iface === 0 || c.iface === 1)) throw new Error(`the interface type ${c.iface} is not 0 or 1`);
+    if (layout && !(int(c.side) && c.side >= 0 && c.side < layout.sides.length)) throw new Error(`side ${c.side} is not one of the layout's sides`);
+    if (!(c.casting == null || obj(c.casting))) throw new Error('the casting is not an object or null');
+    return { side: layout ? c.side : -1, casting: c.casting ?? null, iface: c.iface };
+  }
+
+  /* ---- actions (decision 18): a demo's press names what it does, and the Interface Type names the button ----
+     select is the left button in both types, cancel the right one in both, order the right one at type 1 and the left
+     one at type 0. lmb and rmb stay as written. */
+  const ACTIONS = ['select', 'order', 'cancel'];
+  const button = (a, iface) => a === 'select' ? 'lmb' : a === 'cancel' ? 'rmb' : a === 'order' ? (iface ? 'rmb' : 'lmb') : a;
+  /* THE DATA RULE OF A RESOLVED SCRIPT, refused here as tagpu_wikisim_init refuses it: once the actions are buttons,
+     a press of a mouse button already held, or a release of one not held, refuses the demo with the input's tick. An
+     authored overlap -- the left button held for a box drag while an `order` click lands at type 0 -- therefore fails
+     simcheck, which plays every demo at both types, and never reaches a player. The keys are not held to it: a key's
+     second down is an auto-repeat (stepSpacing). */
+  function resolve(demo, script, iface) {
+    const held = new Set();
+    return script.map(e => {
+      const r = ACTIONS.includes(e.down) || ACTIONS.includes(e.up) ? { ...e } : e;
+      if (r !== e && 'down' in r) r.down = button(r.down, iface);
+      if (r !== e && 'up' in r) r.up = button(r.up, iface);
+      for (const [k, down] of [[r.down, true], [r.up, false]]) {
+        if (k !== 'lmb' && k !== 'rmb') continue;
+        if (down === held.has(k))
+          throw new Error(`demo ${demo.id}: at tick ${e.at} the ${down ? 'press' : 'release'} of ${k} ${down ? 'while it is held' : 'while it is up'}`);
+        if (down) held.add(k); else held.delete(k);
+      }
+      return r;
+    });
+  }
+
+  function make(entryIn, demoIn, scripted, layout, ctxIn) {
+    const ctx = context(layout, ctxIn), IFACE = ctx.iface;
+    // the bound entry and demo are this sim's own copies: they live as long as it does, and nothing else holds them
+    const B = ctx.casting ? binder(entryIn, ctx.casting) : null;
+    const entry = B ? B.entry : entryIn, demo = B ? B.demo(demoIn) : demoIn;
     const S = merge(entry, demo), D = entry.units, defIndex = Object.keys(D);
     const W = S.map.w, H = S.map.h, SM = S.map.surfaceMetal || 0, PACE = (entry.pace && entry.pace.build) || 1;
     const metal = new Array(W * H).fill(SM), fog = new Array(W * H).fill(0);
@@ -204,8 +339,11 @@ const WikiSim = (() => {
     /* FBI canstop, def+0x245 bit 3: the FBI reader 0x42BF40 stores the key's `and 1` at 0x42C90B..0x42C936 with a
        default of 0, so a type whose FBI has no canstop has none (DISASSEMBLED); an entry's absent key reads the same */
     const canStop = t => (def(t).canstop & 1) === 1;
-    // a resource building: a mex extracts metal, a geothermal plant needs a vent under its yard
+    for (const t of defIndex) checkG(`unit ${t}`, D[t], D[t].footprint);
+    // a resource building: a mex extracts metal, a geothermal plant needs a vent under a G cell of its yard
     const kind = t => def(t).extracts > 0 ? 'mex' : def(t).vent ? 'geo' : null;
+    // footprint cell (dx, dz) of type t is a G cell: one `g` lists, or any cell of a `vent` type with no `g`
+    const gCell = (t, dx, dz) => { const d = def(t); return d.g ? d.g.some(c => c[0] === dx && c[1] === dz) : !!d.vent; };
     const strength = t => kind(t) === 'mex' ? def(t).extracts : def(t).energyMake || 0;
     const canBuild = (u, t) => (def(u.type).builds || []).includes(t);
     const defined = t => typeof t === 'string' && own(D, t);
@@ -220,8 +358,8 @@ const WikiSim = (() => {
       const builder = S.units.some(s => (s.owner ?? 0) === 0 && mobile(s.type) && def(s.type).workerTime > 0);
       return scripted && demo && typeof demo.sidebar === 'boolean' ? demo.sidebar : builder;
     })();
-    const LAY = ON ? layout : null;
-    const typePages = t => ON && own(LAY.types, t) ? LAY.types[t] : null;
+    const LAY = ON ? layout : null, SIDE = ON ? LAY.sides[ctx.side] : null;
+    const typePages = t => ON && own(SIDE.types, t) ? SIDE.types[t] : null;
     const npages = t => { const T = typePages(t); return T ? T.pages.length : 0; };
 
     /* ---- the grid ---- */
@@ -264,10 +402,23 @@ const WikiSim = (() => {
     const byId = id => units.find(u => u.id === id);
     const structures = () => units.filter(u => !mobile(u.type));
     const structureAt = (t, ox, oz) => units.find(u => u.type === t && u.ox === ox && u.oz === oz);
+    /* A SCENE ITS TYPES DO NOT FIT IS REFUSED. A scene unit is placed by its centre, so a bound footprint other than
+       the authored one can overlap a structure placed before it or leave the placeable interior (cells 1 to w - 2,
+       the site test's bound below); the demo is refused for that casting rather than played broken, as
+       tagpu_wikisim_init refuses it. Mobile units never block. */
     for (const s of S.units) {
       const u = add(s.type, s.owner ?? 0, s.at[0], s.at[1], s.built ?? 1, s.id, s.label, facing(s.facing));
       u.orders = (s.orders || []).slice(0, PLACE_LIST_CAP).map(o => ({ k: 'move', x: o.move[0], z: o.move[1] }));
+      if (mobile(u.type)) continue;
+      const b = box(u.type, u.ox, u.oz);
+      if (!(b.ox >= 1 && b.oz >= 1 && b.ox + b.fx < W && b.oz + b.fz < H) ||
+          units.some(v => v !== u && !mobile(v.type) && overlap(b, box(v.type, v.ox, v.oz))))
+        throw new Error(`${u.id}'s ${u.type} does not fit the scene`);
     }
+    /* DECISION 12 FOR AN UNBOUND CAST: a scene unit of an unbound type stops the demo on tick 0 under the entry's
+       badge, the first such unit in creation order naming it (input() does the same for a `build` on its tick) */
+    const unbound = t => defined(t) && D[t].unbound === true;
+    const lock0 = S.units.find(s => unbound(s.type));
     for (const id of S.selected) byId(id).sel = true;
     const selected = () => units.filter(u => u.sel);
     const builders = () => selected().filter(u => u.owner === 0 && mobile(u.type) && def(u.type).workerTime > 0);
@@ -290,15 +441,21 @@ const WikiSim = (() => {
 
     /* THE ENGINE'S SITE TEST (0x47D2E0), simplified: the footprint inside the map's placeable interior, cells 1 to
        w - 2 (tagpu_resource.c's site_known bound; [INFERRED] for the engine from 0x47D820, which answers 0 outside
-       it), clear of every structure but `ignore` (an upgrade's old building), and for a geothermal plant one footprint
-       cell on a vent, as one G cell over a geothermal feature suffices there. Mobile units never block: the sim has no
-       collisions. */
+       it), clear of every structure but `ignore` (an upgrade's old building), and for a geothermal plant a vent under
+       one of its G cells: 0x47D2E0 refuses a yard holding G (0x47D80F) unless some G cell stands on a feature whose
+       FeatureDef +0xFE has bit 0x20 (0x47D684..0x47D711, 0x47D75B..0x47D769), DISASSEMBLED; a vent under any other
+       cell of the yard counts for nothing. Mobile units never block: the sim has no collisions. */
     const interior = (t, ox, oz) => ox >= 1 && oz >= 1 && ox + fp(t)[0] < W && oz + fp(t)[1] < H;
+    // the vents under a G cell of type t's footprint at (ox, oz), in scene order
+    const ventsUnderG = (t, ox, oz) => {
+      const [fx, fz] = fp(t);
+      return vents.filter(v => v.cx >= ox && v.cx < ox + fx && v.cz >= oz && v.cz < oz + fz && gCell(t, v.cx - ox, v.cz - oz));
+    };
     function siteOk(t, ox, oz, ignore) {
       const b = box(t, ox, oz);
       if (!interior(t, ox, oz)) return false;
       for (const u of structures()) if (u !== ignore && overlap(b, box(u.type, u.ox, u.oz))) return false;
-      if (kind(t) === 'geo' && !vents.some(v => v.cx >= ox && v.cx < ox + b.fx && v.cz >= oz && v.cz < oz + b.fz)) return false;
+      if (kind(t) === 'geo' && !ventsUnderG(t, ox, oz).length) return false;
       return true;
     }
     // tagpu_resource.c: site_known (the interior, every footprint cell explored) and fits (that, then the site test)
@@ -400,9 +557,10 @@ const WikiSim = (() => {
       }
       return boundary && (edges & 3) !== 3 && (edges & 12) !== 12 ? { ax, az } : null;
     }
-    // geo_anchor: the one explored vent under a footprint; none when it touches no vent or several
+    // geo_anchor: the one explored vent under a G cell of the footprint (tagpu_resource.c tests yard & 0x80 alone);
+    // none when no G cell holds one or they hold several
     function ventAnchor(t, ox, oz) {
-      const [fx, fz] = fp(t), vs = vents.filter(v => seen(v.cx, v.cz) && v.cx >= ox && v.cx < ox + fx && v.cz >= oz && v.cz < oz + fz);
+      const vs = ventsUnderG(t, ox, oz).filter(v => seen(v.cx, v.cz));
       return vs.length && vs.every(v => v.cx === vs[0].cx && v.cz === vs[0].cz) ? vs[0] : null;
     }
     const centre = (t, ox, oz) => { const [fx, fz] = fp(t); return { type: t, x: (ox + fx / 2) * CELL, z: (oz + fz / 2) * CELL, fx, fz }; };
@@ -510,9 +668,12 @@ const WikiSim = (() => {
     const mapCursor = () => ON ? { x: Math.min(Math.max(st.cursor.x, 0), MW), z: Math.min(Math.max(st.cursor.z, 0), MH) } : st.cursor;
     /* screen: the routed screen's name; shown: the shown unit (main+0x37E9C); cap: the gadget a press captured and the
        button that pressed it (gi+0x64, one slot, so a second press takes it over); downOn: where each mouse button
-       went down, which decides whether its release runs the map rules; locked: the type a scripted build could not
-       reach in this layout */
+       went down, which decides whether its release runs the map rules; locked: the type the demo stopped on (lock) */
     const sb = { screen: null, shown: null, cap: null, downOn: {}, locked: null };
+    /* the demo stops under the badge: the first lock of the sim names the type, and the tick it falls on finishes as
+       any tick does (a trip's data rule leaves only captions after its build there). Its sources: a build the
+       layout cannot reach (trip), and a scene unit or a build of an unbound type, with or without the sidebar. */
+    const lock = t => { if (sb.locked === null) sb.locked = t; };
     const screenOf = n => LAY.screens[n];
     // a point of the stage in the column's own pixels is (x + 128, z); the minimap's 128 x 128 there holds no gadget
     const onMinimap = (x, z) => x + SIDE_W >= 0 && x + SIDE_W < MINIMAP && z >= 0 && z < MINIMAP;
@@ -575,11 +736,12 @@ const WikiSim = (() => {
     /* THE PAGE ROUTER, 0x41B2E0, run from the frame loop at 0x4969B4: nothing of the player's selected shows the side's
        MAIN2; EXACTLY ONE selected unit whose type has pages shows its numbered page while bit 22 is set, else its
        orders page (<NAME>0.GUI) when the type has one; anything else, two builders of one type included, shows the
-       side's GEN, with the unit shown when there is exactly one. GEN and MAIN2 are the player's side's. The sim routes
-       after every input and every tick, where the engine re-routes a frame or more later: a known difference of at
-       most a frame. A screen change drops the capture, as the engine's page swap reloads the screen and its gadgets. */
+       side's GEN, with the unit shown when there is exactly one. GEN and MAIN2 are the player's side's, ctx.side. The
+       sim routes after every input and every tick, where the engine re-routes a frame or more later: a known
+       difference of at most a frame. A screen change drops the capture, as the engine's page swap reloads the screen
+       and its gadgets. */
     function route() {
-      const sel = selected().filter(u => u.owner === 0), side = LAY.sides[LAY.player_side];
+      const sel = selected().filter(u => u.owner === 0), side = SIDE;
       const u = sel.length === 1 ? sel[0] : null, T = u && typePages(u.type);
       // u.page is 1..n for a type with n pages: enter() starts it at 1 and act() is its only other writer, wrapping
       // within 1..n, so T.pages[u.page - 1] is always a page
@@ -691,7 +853,7 @@ const WikiSim = (() => {
       const t = feeding, plan = planTrip(T);
       /* OWNER QUESTION Q-O2, the recommended answer: a build this layout cannot reach stops the demo here, holding the
          frame under the entry's "Turned off in this mod" badge (decision 4), rather than playing on unarmed */
-      if (!plan) { sb.locked = T; return; }
+      if (!plan) { lock(T); return; }
       const a = { x: st.cursor.x, z: st.cursor.z }, R = TRIP_ROWS[plan.k], B = plan.button;
       const push = (dt, ev) => gen.push({ at: t + dt, ev });
       const glide = (from, to, n, t0) => {
@@ -909,21 +1071,48 @@ const WikiSim = (() => {
       const c = mapCursor();
       ms.forEach((u, i) => assign(u, [{ k: 'move', x: c.x + (i - (ms.length - 1) / 2) * SPACING, z: c.z }], shift));
     }
-    // a right-click: Quick Build's when it has a choice -- on a queued site Shift cancels and a plain click is consumed
-    // unchanged -- otherwise the game's own: assist an unfinished building of the player's, or move
-    function rightClick(shift) {
-      if (st.mode) { disarm(); return; }
+    /* Quick Build's click, the same at both Interface Types: tagpu_resource.c gates the button that orders, the right
+       press at type 1 (0x499100) and the left click at type 0 (0x498F70, `(iface != 0) != right` at line 742). With a
+       choice, a queued site is cancelled by Shift and a plain click is consumed unchanged; otherwise the choice is
+       ordered. false: no choice, the click is the game's own. */
+    function quickClick(shift) {
       const c = quickChoice(shift);
-      if (c) {
-        if (c.queued) { if (shift && c.queued === 2) unqueue(c); return; }
-        return quickOrder(c, shift);
-      }
+      if (!c) return false;
+      if (c.queued) { if (shift && c.queued === 2) unqueue(c); }
+      else quickOrder(c, shift);
+      return true;
+    }
+    const unfinishedOwn = u => u.owner === 0 && !mobile(u.type) && u.built < 1;
+    // the assist: every selected builder is ordered to build the unfinished building where it stands
+    const assist = (u, shift) => { for (const b of builders()) assign(b, [{ k: 'build', type: u.type, ox: u.ox, oz: u.oz }], shift); };
+    /* TYPE 1, a right press on the map with nothing armed: Quick Build's, else the game's own, which orders at the
+       press (0x4991D5..0x4991F5, MEASURED): assist an unfinished building of the player's, or move */
+    function rightClick(shift) {
+      if (quickClick(shift)) return;
       const { x, z } = mapCursor(), u = unitAt(x, z);
-      if (u && u.owner === 0 && !mobile(u.type) && u.built < 1) {
-        for (const b of builders()) assign(b, [{ k: 'build', type: u.type, ox: u.ox, oz: u.oz }], shift);
-        return;
-      }
+      if (u && unfinishedOwn(u)) return assist(u, shift);
       moveOrder(shift);
+    }
+    /* TYPE 0, a left click on the map with nothing armed: the release of a press that went down on the map and never
+       became a box (0x499421..0x499441 call 0x498F70), so its order lands at the release where type 1's lands at the
+       press. DISASSEMBLED, not measured: the runner's measurement M3 checks the outcomes and their tick. In order:
+       Quick Build's choice; else over a unit of the player's, an unfinished building with a selected builder is
+       assisted (cursor 6, 0x43EDB6..0x43EE42) and any other is selected as a click selects (cursor 0xF, 0x48C7F0);
+       else the selected mobile units of the player's move (0x48CF30, Shift appends), and with none nothing happens.
+       [INFERRED] that an unfinished building of the player's with no builder selected is selected: 0x43EDB6 gives
+       0xF only over a finished unit (+0x104 == 0.0), so the engine may show another cursor there. */
+    function leftClick(shift) {
+      if (quickClick(shift)) return;
+      const { x, z } = mapCursor(), u = unitAt(x, z);
+      if (u && u.owner === 0) return unfinishedOwn(u) && builders().length ? assist(u, shift) : select(shift);
+      moveOrder(shift);
+    }
+    /* TYPE 0, a right press on the map with nothing armed (0x499172..0x499196, DISASSEMBLED): with Ctrl it calls
+       0x41CC60, which hands the mouse to a view mode (main+0x2CDF = 1, the camera follow released, the cursor
+       centred) that the stage, having no camera to move, does not model; without Ctrl every unit is deselected
+       (0x48BD00). */
+    function rightPress0() {
+      if (!st.held.has('ctrl')) for (const u of units) u.sel = false;
     }
     /* a build-menu placement, stock's click: the selected builders with that button get it; without Shift the menu mode
        ends. With Shift (0x43AFC0) the first build order of the builder's within 16 world units of the site is taken off
@@ -971,7 +1160,8 @@ const WikiSim = (() => {
     function input(ev) {
       if ('caption' in ev) st.caption = ev.caption || null;
       if ('build' in ev) {
-        if (TRIPS) trip(ev.build);
+        if (unbound(ev.build)) lock(ev.build);
+        else if (TRIPS) trip(ev.build);
         else if (ev.build) arm(ev.build);
         else { disarm(); st.drag = null; }
       }
@@ -993,7 +1183,8 @@ const WikiSim = (() => {
             else if (st.mode) placeClick(false);
             else { const c = mapCursor(); st.drag = { x0: c.x, z0: c.z, active: false }; }
           }
-          if (ev.down === 'rmb') { st.drag = null; rightClick(shift); }
+          // with a building armed a right press cancels it at both types (0x499100, MEASURED at type 1)
+          if (ev.down === 'rmb') { st.drag = null; if (st.mode) disarm(); else if (IFACE) rightClick(shift); else rightPress0(); }
         }
         /* OFF THE MAP AND OFF THE SCREEN a left press with a building armed places it once, at the press. The handler
            finds bit 1 clear, so place_button returns 0 at the route 0x4993BF and stock's click 0x498F70 runs; the
@@ -1015,7 +1206,11 @@ const WikiSim = (() => {
         if (sb.cap && sb.cap.b === ev.up) releaseSide();
         else if (sb.downOn[ev.up] === 'map') {
           if (ev.up === 'lmb' && st.gesture) release();
-          else if (ev.up === 'lmb' && st.drag) { select(st.held.has('shift')); st.drag = null; }
+          else if (ev.up === 'lmb' && st.drag) {
+            // a box is the same at both types; a click is type 1's select and type 0's leftClick
+            if (IFACE || st.drag.active) select(st.held.has('shift')); else leftClick(st.held.has('shift'));
+            st.drag = null;
+          }
         }
         // 0x4992D8: Shift found up after a placement in this hold disarms, as after a stock Shift-click
         if (ev.up === 'shift') { if (st.shiftPlaced) disarm(); st.shiftPlaced = false; }
@@ -1103,9 +1298,11 @@ const WikiSim = (() => {
       }
     }
 
-    const sim = { tick: 0, done: false, log: [] };
+    /* side: the layout side the sidebar shows, -1 with the sidebar off; iface: the Interface Type. Both are the state
+       hash's first step with tick and done (tagpu_wikisim.h, tagpu_wikisim_hash). */
+    const sim = { tick: 0, done: false, log: [], side: ON ? ctx.side : -1, iface: IFACE };
     const log = (what, u, type) => sim.log.push({ t: sim.tick, what, id: u.id, type: type || u.type, ox: u.ox, oz: u.oz });
-    const script = scripted && demo ? demo.inputs.map((e, i) => [e, i]).sort((a, b) => a[0].at - b[0].at || a[1] - b[1]).map(p => p[0]) : [];
+    const script = scripted && demo ? resolve(demo, demo.inputs.map((e, i) => [e, i]).sort((a, b) => a[0].at - b[0].at || a[1] - b[1]).map(p => p[0]), IFACE) : [];
     let next = 0;
     // a tick's generated inputs come before its data inputs; within a trip's tick a move comes before a press
     const feed = t => {
@@ -1140,7 +1337,7 @@ const WikiSim = (() => {
       feed(t);
       advance();
       sim.tick = t;
-      // a locked build ends the demo on its own tick, which then holds under the entry's badge
+      // a lock ends the demo on its own tick, which then holds under the entry's badge
       sim.done = sim.tick >= end || sb.locked !== null;
       if (ON) route();
       st.hover = hover();
@@ -1186,17 +1383,20 @@ const WikiSim = (() => {
         caption: st.caption,
         pace: PACE,
         mode: st.mode ? `build:${st.mode}` : 'contextual',
-        // the column, only with the sidebar on: its rows, the routed screen, the shown unit and its page, each gadget's
-        // state, the unit under the cursor over the map (the minimap's high dot); then the build a demo could not reach
+        // the column, only with the sidebar on: the layout side it shows (its prefix and PANELSIDE are the stage's), its
+        // rows, the routed screen, the shown unit and its page, each gadget's state, the unit under the cursor over the
+        // map (the minimap's high dot)
         ...(ON ? {
-          side: { h: LAY.height, screen: sb.screen, unit: sb.shown ? sb.shown.id : null, page: sb.shown ? sb.shown.page : 0,
+          side: { index: ctx.side, h: LAY.height, screen: sb.screen, unit: sb.shown ? sb.shown.id : null, page: sb.shown ? sb.shown.page : 0,
             state: sideStates(), under: over() === 'map' ? (unitAt(st.cursor.x, st.cursor.z) || { id: null }).id : null },
-          locked: sb.locked,
         } : {}),
+        // the type the demo stopped on (lock), with the sidebar or without: null while it plays
+        locked: sb.locked,
       };
     };
 
     if (ON) route();
+    if (lock0) lock(lock0.type);
     feed(0);
     sim.done = sb.locked !== null;
     st.hover = hover();
@@ -1209,10 +1409,14 @@ const WikiSim = (() => {
   // with the placement rules (arm keeping the Shift bit and a same-type gesture, placed) as with one
   const checked = layout => layout == null ? null : checkLayout(layout);
   return {
-    create: (entry, demo, layout) => make(entry, demo, false, checked(layout)),
-    play: (entry, demo, layout) => make(entry, demo, true, checked(layout)),
+    create: (entry, demo, layout, ctx) => make(entry, demo, false, checked(layout), ctx),
+    play: (entry, demo, layout, ctx) => make(entry, demo, true, checked(layout), ctx),
     // the bounds, for the caller that falls back to the fixture on a refused layout
     checkLayout,
+    // the casting's bounds, and the bound entry (its titles name the casts' units for the text's role words)
+    checkCasting, bindEntry, CASTS,
+    // the button an action presses at an Interface Type, for the keys strip and the captions' button words
+    button,
     // the trip's fixed budget and its table, which tagpu_wikisim.h #defines and simparity compares
     TRIP, TRIP_DOWN, TRIP_UP, TRIP_ROWS,
     // the shapes alone, for checks against tagpu_placegeo.c
