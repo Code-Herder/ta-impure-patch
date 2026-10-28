@@ -396,10 +396,13 @@ static void sound_drain(const WIKIVIEW* v)
 static void sound_tally(void)
 {
     int played, failed, silent;
-    tagpu_wikisound_tally(&played, &failed, &silent);
+    double slow;
+    const char* what;
+    tagpu_wikisound_tally(&played, &failed, &silent, &slow, &what);
     if (s_simOn && s_sim.snd_on && (s_heard || played || failed || silent))
         tagpu_logf("wiki sound: the demo %s made %d sound(s): %d Play call(s) succeeded, %d failed, %d silent by the "
-                   "settings or a missing WAV, %d lost", s_sndDemo, s_heard, played, failed, silent, s_lost);
+                   "settings or a missing WAV, %d lost; the slowest call %.0f us (%s)", s_sndDemo, s_heard, played,
+                   failed, silent, s_lost, slow, what);
     s_heard = 0;
     s_lost = 0;
 }

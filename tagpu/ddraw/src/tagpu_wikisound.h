@@ -21,8 +21,9 @@
    positional (0x4D0640 takes no point; these callers pass 0x4CF570 none), so Sound Mode's 3D and
    off-screen rules do not apply.
 
-   NOT ON THE GAME THREAD: the object and one buffer a clip (DSBCAPS_STATIC | DSBCAPS_CTRLVOLUME,
-   filled from the published samples) are made off it, by tagpu_wikisound_make -- on the 3D load's
+   NOT ON THE GAME THREAD: the object and each clip's WIKISOUND_VOICES voices -- one buffer
+   (DSBCAPS_STATIC | DSBCAPS_CTRLVOLUME, filled from the published samples) and its duplicates,
+   which share its samples -- are made off it, by tagpu_wikisound_make -- on the 3D load's
    thread, before the WIKI3D is published, unless a muting setting was on when the load started;
    else on a thread of its own that tagpu_wikisound_arm starts at an open once the settings no
    longer mute. The object is DirectSoundCreate's from the dsound.dll the game imports, at PRIORITY
@@ -33,13 +34,14 @@
    and says so once; the engine's object is never borrowed. A clip DirectSound refuses a buffer
    for is silent for the object's life, said once when it is made.
 
-   ON THE GAME THREAD only GetStatus, GetCurrentPosition, DuplicateSoundBuffer, SetCurrentPosition,
-   SetVolume, Play and Stop, by 0x4CF570's rule for WIKISOUND_VOICES copies of a clip's buffer:
-   the first copy whose status is 0 plays; a GetStatus that fails plays nothing (0x4CF5F8); with
-   every copy busy, a copy not made yet is duplicated, and a duplicate that fails plays nothing
-   (0x4CF66D); with all four made, the one with the largest play cursor restarts (0x4CF615). The
-   wiki's close stops every voice (tagpu_wikisound_stop) -- the level's teardown closes it first
-   (tagpu_wiki_level_end, from the teardown wrap's entry to 0x491B60).
+   ON THE GAME THREAD only GetStatus, GetCurrentPosition, SetCurrentPosition, SetVolume, Play and
+   Stop, by 0x4CF570's rule for a clip's voices: the first whose status is 0 plays; a GetStatus
+   that fails plays nothing (0x4CF5F8); with every voice busy, the one with the largest play cursor
+   restarts (0x4CF615). Where the engine duplicates a copy at a busy set's first overlap, the voice
+   is already made; reaching one the make could not duplicate, every voice before it busy, plays
+   nothing, as the engine's failed duplicate does (0x4CF66D). The wiki's close stops every voice
+   (tagpu_wikisound_stop) -- the level's teardown closes it first (tagpu_wiki_level_end,
+   from the teardown wrap's entry to 0x491B60).
 
    The clips are the published WIKI3D's (tagpu_wikiasset.h), immutable and never freed, so a
    buffer made from one never outlives its samples. */
@@ -66,8 +68,9 @@ int  tagpu_wikisound_reply(const WIKI3DSOUND* s, int cat, int kind, int variant,
 int  tagpu_wikisound_named(const WIKI3DSOUND* s, int name);
 
 /* what was played since the last call -- Play calls that succeeded, that failed, and sounds the
-   settings, no object or a silent clip left unplayed -- and zeroes it; game thread */
-void tagpu_wikisound_tally(int* played, int* failed, int* silent);
+   settings, no object or a silent clip left unplayed -- and the slowest DirectSound call the game
+   thread made, in microseconds, and which; zeroes it; game thread */
+void tagpu_wikisound_tally(int* played, int* failed, int* silent, double* slow_us, const char** slow_what);
 
 /* every voice stopped; the object and the buffers stay; game thread */
 void tagpu_wikisound_stop(void);

@@ -15,12 +15,13 @@
 typedef HRESULT (WINAPI* create_fn)(LPCGUID, LPDIRECTSOUND*, LPUNKNOWN);
 
 /* THE OBJECT, made whole by tagpu_wikisound_make and then read-only: the clips it was made for and
-   one buffer a clip, NULL for one DirectSound refused. Never freed. */
+   each clip's voices, voice 0 its buffer and the rest duplicates sharing its samples; voice 0 NULL
+   for a clip DirectSound refused, a later voice NULL for a duplicate it refused. Never freed. */
 typedef struct {
     IDirectSound*       ds;
     const WIKI3DSOUND*  snd;
     int                 nclip;          /* min(snd->nclip, WIKI3D_CLIPS) */
-    IDirectSoundBuffer* first[WIKI3D_CLIPS];
+    IDirectSoundBuffer* voice[WIKI3D_CLIPS][WIKISOUND_VOICES];
 } DEVICE;
 
 /* ORDERING: s_make goes 0 -> 1 by one compare-exchange, so one make runs per process; the make
@@ -30,9 +31,32 @@ typedef struct {
 static volatile LONG  s_make;
 static PVOID volatile s_dev;
 
-/* THE GAME THREAD'S OWN: each clip's duplicates (voice 1..), kept with the object */
-static IDirectSoundBuffer* s_dup[WIKI3D_CLIPS][WIKISOUND_VOICES - 1];
-static int                 s_played, s_failed, s_silent;
+/* THE GAME THREAD'S OWN: the tally, and the slowest DirectSound call since the last tally, in
+   microseconds, and which */
+static int           s_played, s_failed, s_silent;
+static LARGE_INTEGER s_qpf;
+static double        s_slowUs;
+static const char*   s_slowWhat = "none";
+
+static LARGE_INTEGER now(void)
+{
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return t;
+}
+
+/* the call `what`, started at `t0`, as the slowest when it is */
+static void took(LARGE_INTEGER t0, const char* what)
+{
+    const LARGE_INTEGER t1 = now();
+    double us;
+    if (!s_qpf.QuadPart) QueryPerformanceFrequency(&s_qpf);
+    us = s_qpf.QuadPart > 0 ? (double)(t1.QuadPart - t0.QuadPart) * 1e6 / (double)s_qpf.QuadPart : 0;
+    if (us > s_slowUs) {
+        s_slowUs = us;
+        s_slowWhat = what;
+    }
+}
 
 static const DEVICE* device(void)
 {
@@ -84,7 +108,7 @@ void tagpu_wikisound_make(const WIKI3DSOUND* s, uintptr_t hwnd)
     create_fn create;
     HRESULT hr;
     DEVICE* d;
-    int i, made = 0;
+    int i, made = 0, dups = 0;
     if (!s || InterlockedCompareExchange(&s_make, 1, 0) != 0) return;
     /* the exe imports DirectSoundCreate from DSOUND.dll (IAT 0x4FC044), so the module is loaded */
     m = GetModuleHandleA("dsound.dll");
@@ -111,10 +135,21 @@ void tagpu_wikisound_make(const WIKI3DSOUND* s, uintptr_t hwnd)
     }
     d->snd = s;
     d->nclip = s->nclip < WIKI3D_CLIPS ? s->nclip : WIKI3D_CLIPS;
-    for (i = 0; i < d->nclip; i++)
-        if (s->clip[i].data && (d->first[i] = make_buffer(d->ds, &s->clip[i])) != NULL) made++;
+    /* every voice here, so the game thread duplicates nothing. MEASURED under Wine on 2026-10-28,
+       the demos' check with sound playing: with duplicates made at a first overlapping play the
+       page's worst frame was 8.1 ms; with them made here it is 1.1 ms over 1291 frames, and the
+       slowest DirectSound call the game thread makes 2 us [INFERRED: the duplicate was the cost,
+       the one call moved; the first run timed no call] */
+    for (i = 0; i < d->nclip; i++) {
+        int k;
+        if (!s->clip[i].data || !(d->voice[i][0] = make_buffer(d->ds, &s->clip[i]))) continue;
+        made++;
+        for (k = 1; k < WIKISOUND_VOICES; k++)
+            if (FAILED(IDirectSound_DuplicateSoundBuffer(d->ds, d->voice[i][0], &d->voice[i][k]))) d->voice[i][k] = NULL;
+            else dups++;
+    }
     tagpu_logf("wiki sound: DirectSound created (hr 0x%08lX), PRIORITY on the game's window, off the game thread; "
-               "%d buffer(s) for %d WAV(s)", (unsigned long)hr, made, d->nclip);
+               "%d buffer(s) for %d WAV(s), %d duplicate voice(s)", (unsigned long)hr, made, d->nclip, dups);
     InterlockedExchangePointer((PVOID*)&s_dev, d);
 }
 
@@ -151,36 +186,37 @@ int tagpu_wikisound_muted(void)
     return !tagpu_menu_sound(&set) || set.win_sound || set.no_dsound || set.fxvol == 0 || set.mode == 0;
 }
 
-/* 0x4CF570's choice among clip `c`'s voices (the header); NULL plays nothing */
+/* 0x4CF570's choice among clip `c`'s voices (the header); NULL plays nothing. The voices are all
+   made with the object, so where the engine duplicates a copy at a busy set's first overlap this
+   finds it made; a voice the object's make could not duplicate is absent, and reaching it with
+   every voice before it busy plays nothing, as the engine's failed duplicate does (0x4CF66D). */
 static IDirectSoundBuffer* voice(const DEVICE* d, int c)
 {
-    IDirectSoundBuffer* v[WIKISOUND_VOICES];
     DWORD best = 0, st, play, write;
-    int i, furthest = -1, empty = -1;
-    v[0] = d->first[c];
-    for (i = 1; i < WIKISOUND_VOICES; i++) v[i] = s_dup[c][i - 1];
+    LARGE_INTEGER t0;
+    HRESULT hr;
+    int i, furthest = -1;
     for (i = 0; i < WIKISOUND_VOICES; i++) {
-        if (!v[i]) {
-            empty = i;
-            continue;
-        }
-        if (FAILED(IDirectSoundBuffer_GetStatus(v[i], &st))) return NULL;
-        if (st == 0) return v[i];
-        if (FAILED(IDirectSoundBuffer_GetCurrentPosition(v[i], &play, &write))) play = 0;
+        IDirectSoundBuffer* v = d->voice[c][i];
+        if (!v) return NULL;
+        t0 = now();
+        hr = IDirectSoundBuffer_GetStatus(v, &st);
+        took(t0, "GetStatus");
+        if (FAILED(hr)) return NULL;
+        if (st == 0) return v;
+        t0 = now();
+        if (FAILED(IDirectSoundBuffer_GetCurrentPosition(v, &play, &write))) play = 0;
+        took(t0, "GetCurrentPosition");
         if (furthest < 0 || play > best) {
             best = play;
             furthest = i;
         }
     }
-    if (empty > 0) {
-        IDirectSoundBuffer* dup = NULL;
-        if (FAILED(IDirectSound_DuplicateSoundBuffer(d->ds, v[0], &dup))) return NULL;
-        s_dup[c][empty - 1] = dup;
-        return dup;
-    }
     if (furthest < 0) return NULL;
-    IDirectSoundBuffer_Stop(v[furthest]);
-    return v[furthest];
+    t0 = now();
+    IDirectSoundBuffer_Stop(d->voice[c][furthest]);
+    took(t0, "Stop");
+    return d->voice[c][furthest];
 }
 
 /* clip `c` of `s` from its start. BOUND: `c` indexes the device's clips only below their count,
@@ -189,7 +225,9 @@ static int play(const WIKI3DSOUND* s, int c)
 {
     const DEVICE* d = device();
     IDirectSoundBuffer* b;
-    if (!d || d->snd != s || c < 0 || c >= d->nclip || !d->first[c]) {
+    LARGE_INTEGER t0;
+    HRESULT hr;
+    if (!d || d->snd != s || c < 0 || c >= d->nclip || !d->voice[c][0]) {
         s_silent++;
         return 0;
     }
@@ -197,9 +235,16 @@ static int play(const WIKI3DSOUND* s, int c)
         s_failed++;
         return 0;
     }
+    t0 = now();
     IDirectSoundBuffer_SetCurrentPosition(b, 0);
+    took(t0, "SetCurrentPosition");
+    t0 = now();
     IDirectSoundBuffer_SetVolume(b, VOLUME);
-    if (FAILED(IDirectSoundBuffer_Play(b, 0, 0, 0))) {
+    took(t0, "SetVolume");
+    t0 = now();
+    hr = IDirectSoundBuffer_Play(b, 0, 0, 0);
+    took(t0, "Play");
+    if (FAILED(hr)) {
         s_failed++;
         return 0;
     }
@@ -235,12 +280,16 @@ int tagpu_wikisound_named(const WIKI3DSOUND* s, int name)
     return play(s, s->named[name]);
 }
 
-void tagpu_wikisound_tally(int* played, int* failed, int* silent)
+void tagpu_wikisound_tally(int* played, int* failed, int* silent, double* slow_us, const char** slow_what)
 {
     *played = s_played;
     *failed = s_failed;
     *silent = s_silent;
+    *slow_us = s_slowUs;
+    *slow_what = s_slowWhat;
     s_played = s_failed = s_silent = 0;
+    s_slowUs = 0;
+    s_slowWhat = "none";
 }
 
 void tagpu_wikisound_stop(void)
@@ -248,9 +297,7 @@ void tagpu_wikisound_stop(void)
     const DEVICE* d = device();
     int i, k;
     if (!d) return;
-    for (i = 0; i < d->nclip; i++) {
-        if (d->first[i]) IDirectSoundBuffer_Stop(d->first[i]);
-        for (k = 0; k < WIKISOUND_VOICES - 1; k++)
-            if (s_dup[i][k]) IDirectSoundBuffer_Stop(s_dup[i][k]);
-    }
+    for (i = 0; i < d->nclip; i++)
+        for (k = 0; k < WIKISOUND_VOICES; k++)
+            if (d->voice[i][k]) IDirectSoundBuffer_Stop(d->voice[i][k]);
 }

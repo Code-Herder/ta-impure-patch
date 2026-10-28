@@ -533,8 +533,9 @@ settings*.
 - **The mixer** (`tagpu_wikisound.c`). A DirectSound object of its own, made by the
   `DirectSoundCreate` of the `dsound.dll` the game imports (IAT `0x4FC044`), `DSSCL_PRIORITY` on
   the game's window as the engine's (`0x4CEFBB`) and without global focus, so it is silent while
-  the game is not in front, as the engine's is. **It is made off the game thread**, with one
-  buffer a clip (`DSBCAPS_STATIC | DSBCAPS_CTRLVOLUME`, filled from the published samples): on the
+  the game is not in front, as the engine's is. **It is made off the game thread**, with each
+  clip's four voices, one buffer (`DSBCAPS_STATIC | DSBCAPS_CTRLVOLUME`, filled from the published
+  samples) and three duplicates sharing its samples: on the
   3D load's thread before the WIKI3D is published, unless the player's settings muted every sound
   when the load started (read on the game thread then, with the window, and handed over by value
   in `WIKI3DIN`); else on a thread of its own that the next open starts once they no longer mute
@@ -542,11 +543,15 @@ settings*.
   process**, never released, not at the close and not at DLL detach. A create that fails leaves
   the wiki silent for the process and says so once; the engine's object is never borrowed. A clip
   DirectSound refuses a buffer for is silent for the object's life, said once. On the game thread
-  only `GetStatus`, `GetCurrentPosition`, `DuplicateSoundBuffer`, `SetCurrentPosition`,
-  `SetVolume`, `Play` and `Stop` run, by `0x4CF570`'s rule for `WIKISOUND_VOICES` = 4 copies: the
-  first copy whose status is 0 plays, a failed `GetStatus` plays nothing (`0x4CF5F8`), with every
-  copy busy a copy not made yet is duplicated and a failed duplicate plays nothing (`0x4CF66D`),
-  and with all four made the one with the largest play cursor restarts. The wiki's close stops
+  only `GetStatus`, `GetCurrentPosition`, `SetCurrentPosition`, `SetVolume`, `Play` and `Stop` run,
+  by `0x4CF570`'s rule for `WIKISOUND_VOICES` = 4 voices: the first whose status is 0 plays, a
+  failed `GetStatus` plays nothing (`0x4CF5F8`), and with every voice busy the one with the largest
+  play cursor restarts; where the engine duplicates at a busy set's first overlap the voice is
+  already made, and reaching one the make could not duplicate, every voice before it busy, plays
+  nothing, as the engine's failed duplicate does (`0x4CF66D`). Duplicating on the game thread cost the page's frame up to 8.1 ms under
+  Wine; with every voice made off it the worst frame is 1.1 ms and the slowest DirectSound call
+  2 µs (MEASURED 2026-10-28, the demos' check with sound playing; that the duplicate was the cost
+  is [INFERRED]: the first run timed no call). Each demo's log line names its slowest call. The wiki's close stops
   every voice (`tagpu_wikisound_stop`), which the level's teardown does first
   (`tagpu_wiki_level_end`, from the teardown wrap's entry to `0x491B60`). It logs the create's
   result once with the buffers made, each clip refused, and per demo the Play calls that
