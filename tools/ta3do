@@ -354,9 +354,6 @@ def gaf_entries(blob: bytes):
     return entries
 
 
-GAF_NEST_MAX = 8   # sub-frame levels taken below a frame; deeper is refused rather than recursed
-
-
 def gaf_frame(blob: bytes, offset: int) -> GafFrame:
     """The frame at `offset` as CopyGafToContext 0x4B7F90 draws it (see gaf_compose)."""
     return gaf_compose(blob, offset)[0]
@@ -369,8 +366,11 @@ def gaf_compose(blob: bytes, offset: int):
     (research/notes/exe-reverse-engineering.md, 0x4B7F90). A frame with sub-frames draws
     none of its own pixels: the blit calls itself for each sub-frame in order with the SAME
     destination point (0x4B7FC8..0x4B801A), and each lands at that point minus its own hotspot
-    (0x4B804A..0x4B805A), skipping its own transparent index; DISASSEMBLED. Sub-frames of a
-    sub-frame recurse the same way, so every leaf lands at the one point less its own hotspot.
+    (0x4B804A..0x4B805A), skipping its own transparent index; DISASSEMBLED. A stack is one level
+    deep: the GAF loader 0x4B8C60 rebases each sub-frame offset and that sub-frame's +0x10, and
+    never the entries of a sub-frame's own table (0x4B8CC0..0x4B8CF5, DISASSEMBLED), so in the
+    engine a nested table holds file offsets read as pointers. A sub-frame with sub-frames of its
+    own is therefore refused (GafError), which also bounds a frame to 255 leaves.
 
     The layers are composed into the frame's own w x h box, which stands at the point minus the
     frame's hotspot: a leaf pixel (c, r) lands at (frame hotspot - leaf hotspot + c, ... + r), and
@@ -383,18 +383,12 @@ def gaf_compose(blob: bytes, offset: int):
     if not blob[offset + 10]:
         return _gaf_leaf(blob, offset), 0
     layers = []
-
-    def leaves(o, depth):
-        n, ptr = blob[o + 10], struct.unpack_from("<I", blob, o + 16)[0]
-        if not n:
-            lx, ly = struct.unpack_from("<hh", blob, o + 4)
-            layers.append((_gaf_leaf(blob, o), lx, ly))
-            return
-        if depth > GAF_NEST_MAX:
-            raise GafError(f"sub-frames nested past {GAF_NEST_MAX} levels")
-        for sub in struct.unpack_from(f"<{n}I", blob, ptr):
-            leaves(sub, depth + 1)
-    leaves(offset, 0)
+    ptr = struct.unpack_from("<I", blob, offset + 16)[0]
+    for sub in struct.unpack_from(f"<{blob[offset + 10]}I", blob, ptr):
+        if blob[sub + 10]:
+            raise GafError("a sub-frame with sub-frames of its own, which the loader 0x4B8C60 does not rebase")
+        lx, ly = struct.unpack_from("<hh", blob, sub + 4)
+        layers.append((_gaf_leaf(blob, sub), lx, ly))
     if len(layers) == 1 and layers[0][1:] == (hx, hy) and \
             (layers[0][0].width, layers[0][0].height) == (width, height):
         return layers[0][0], 0

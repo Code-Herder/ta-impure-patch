@@ -330,18 +330,17 @@ class TestGaf(unittest.TestCase):
 
 class TestGafStack(unittest.TestCase):
     """A frame with sub-frames as CopyGafToContext 0x4B7F90 draws it: every leaf at the frame's
-    hotspot less its own, in order, its own transparent pixels skipped."""
+    hotspot less its own, in order, its own transparent pixels skipped; one level deep, as the
+    loader 0x4B8C60 rebases it."""
 
     # 6 x 4 box, hotspot (3, 2), key 0. A leaf lands at (3 - its hx + c, 2 - its hy + r).
     STACK = dict(w=6, h=4, hx=3, hy=2, key=0, subs=[
         # at (0, 0); its 7 is a hole
         dict(w=3, h=2, hx=3, hy=2, key=7, pixels=[1, 7, 1,
                                                     1, 1, 1]),
-        # a stack inside the stack: its own box and hotspot place nothing, its leaf lands at
-        # (3, 2); it draws index 0, the frame's key, and its own key 5 stays a hole
-        dict(w=2, h=2, hx=9, hy=9, key=0, subs=[
-            dict(w=2, h=2, hx=0, hy=0, key=5, pixels=[0, 5,
-                                                       2, 3])]),
+        # at (3, 2): it draws index 0, the frame's key, and its own key 5 stays a hole
+        dict(w=2, h=2, hx=0, hy=0, key=5, pixels=[0, 5,
+                                                   2, 3]),
         # at (5, 0): one pixel in the box, one past its right edge
         dict(w=2, h=1, hx=-2, hy=2, key=9, pixels=[4, 4]),
         # at (1, 0), after the first leaf: fills its hole, and its own hole (8) at (2, 0) leaves
@@ -362,6 +361,15 @@ class TestGafStack(unittest.TestCase):
         self.assertEqual(outside, 1)
         same = ta3do.gaf_frame(blob, offset)
         self.assertEqual((list(same.pixels), same.transparent), (list(frame.pixels), k))
+
+    def test_a_nested_stack_is_refused(self):
+        # the loader 0x4B8C60 rebases one level of sub-frames, so the engine cannot draw this one
+        blob = make_gaf_stack(dict(w=2, h=2, hx=0, hy=0, key=0, subs=[
+            dict(w=1, h=1, hx=0, hy=0, key=0, pixels=[1]),
+            dict(w=2, h=2, hx=0, hy=0, key=0, subs=[
+                dict(w=1, h=1, hx=0, hy=0, key=0, pixels=[2])])]))
+        with self.assertRaises(ta3do.GafError):
+            ta3do.gaf_frame(blob, ta3do.gaf_entries(blob)["STACK"])
 
     def test_a_cycle_is_refused(self):
         blob = bytearray(make_gaf_stack(dict(w=1, h=1, hx=0, hy=0, key=0, subs=[

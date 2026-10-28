@@ -717,12 +717,17 @@ Uncompressed frames are just `Width×Height` bytes, row-major. [VERIFIED `gaf.cp
 
 **A stack draws none of its own pixels.** `0x4B7F90` calls itself for each sub-frame in order with
 the same destination point, and each lands at that point minus its own hotspot over its own
-transparent index; sub-frames of a sub-frame recurse the same way [DISASSEMBLED,
-`0x4B7FC8..0x4B805A`]. A picture of the frame is therefore its leaves composed into its own
-`Width×Height` box at (frame hotspot − leaf hotspot + c, …), later leaves over earlier ones. In stock
-data only `anims/` carries stacks — 14 114 of its frames (the commongui order and pager buttons, the
-foliage, rock and building features), none nested [MEASURED]. `tools/ta3do`'s `gaf_compose` is the
-offline reader of that rule, and the one every Python tool shares.
+transparent index [DISASSEMBLED, `0x4B7FC8..0x4B805A`]. A picture of the frame is therefore its
+sub-frames composed into its own `Width×Height` box at (frame hotspot − sub-frame hotspot + c, …),
+later ones over earlier ones.
+
+**A stack is one level deep.** The GAF loader `0x4B8C60` rebases each sub-frame offset and that
+sub-frame's `+0x10`, and never the entries of a sub-frame's own table [DISASSEMBLED,
+`0x4B8CC0..0x4B8CF5`]: a nested table reaches memory as file offsets the blit would read as
+pointers. In stock data only `anims/` carries stacks — 14 114 of its frames (the commongui order and
+pager buttons, the foliage, rock and building features), none nested [MEASURED]. `tools/ta3do`'s
+`gaf_compose` is the offline reader of these rules, the one every Python tool shares, and it refuses
+a sub-frame with sub-frames of its own, as the wiki sidebar's loader (`tagpu_wikiasset.c`) does.
 
 **For the renderer:** resolve each 3DO primitive's `pTextureName` to a GAF frame, expand it to
 RGBA via the palette (treat `Background` index as alpha 0), and upload as a texture (an atlas
