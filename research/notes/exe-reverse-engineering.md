@@ -11495,7 +11495,11 @@ into an attack target and resume from it, since the sprite still moves `pos`.
 5,5, so the route dots' per-dot frame step `0x4394E0` takes changes nothing on stock data and the
 march is the 48-unit phase alone. `cursormove` is eight 8-tick frames, so at the sprite's
 `(gameTime / (2·8)) % 8` it cycles in 128 ticks, 4.3 s — half the speed of the same sequence as
-the mouse cursor, which steps each frame after its own 8 ticks (`0x4B8BF0`).
+the mouse cursor, which steps each frame after its own 8 ticks (`0x4B8BF0`). Across
+`cursor_ary[1..21]` the retail sequences hold **238 frames**, no sequence longer than 64 frames
+and no frame over 64 texels on a side, and **no frame draws a texel of palette index 0**, so 0 can
+key out what a frame does not draw [MEASURED 2026-10-27, `tagpu_order.c` `art_build`'s log line
+`order: art 238 frame(s) of the cursor table, 0 left out, key 0, rows to 321 of 512`].
 
 **The waypoint sprite is translucent, every pixel of it; the route dots are solid**
 [DISASSEMBLED 2026-10-27]. `0x4399BB` calls `AlphaCompsteBuf2OFFScreen 0x4B8500`. Every

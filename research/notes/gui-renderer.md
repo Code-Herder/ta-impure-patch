@@ -2412,8 +2412,7 @@ DLL change with its own review.
   measures, and teaching the browser lab the same scale remains the second landing it always was.
   The policy is now "the world draws what the player is shown"; `paldiff=` in the heartbeat is
   how far that is from the lab's reference on any given run, and it must be read rather than
-  assumed. `tagpu_order.c`'s `seq_ink` and the tileability threshold deliberately stay on the
-  engine's unscaled table — the first because its walk is on the game thread, the second because
+  assumed. The tileability threshold deliberately stays on the engine's unscaled table, because
   tileability is a property of the ART (`tagpu_pal_engine()`).
 - **Seeded art stays indexed** until redrawn (above). Restoring a seed directly — the surface is
   an indexed image and the restorer restores indexed images — is the obvious candidate and is

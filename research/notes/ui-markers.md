@@ -588,9 +588,10 @@ order-issue game time.
 
 Which order types reach which drawer, and with which cursor, is the descriptor table in
 [the engine map](exe-reverse-engineering.html) ("What each order type draws"): no stock order
-sets bit 2, and an attack draws its sprite without route dots. The browser lab draws the engine's
-own art for all of this at any zoom, beside what `tagpu_order.c` draws instead
-([tascene](tascene-design.html), *The order markers*).
+sets bit 2, and an attack draws its sprite without route dots. On the Vulkan lane
+`tagpu_order.c` draws the route dots and the waypoint sprite as the engine's own `cursors.gaf`
+frames at every zoom (§6.5); the browser lab draws the same art with knobs for every rule a zoom
+forces a choice on ([tascene](tascene-design.html), *The order markers*).
 
 **Build-site rect `0x438C00`** [BINARY-VERIFIED]: for build orders
 (`node+0x36` = target type): corners = target pos ± UnitDef footprint extents
@@ -1029,13 +1030,10 @@ its last-seen cache (`node+0x32/0x34`, flag `0x200000`) whenever it takes the li
 and that cache is what stops a waypoint marker following a target the player can no longer
 see. A port that drops it leaks the target's live position.
 
-**Native resolution, on purpose.** Real arcs at a segment count chosen for the zoom rather
-than sixteen chords; one SCREEN pixel of line width at any zoom (`glLineWidth(ss)`); a round
-dot where `pathicon` put one and a crosshair on the engine's own frame phase where
-`cursor_ary` put one, both in the ink read out of the GAF frame that would have been blitted
-— **the brightest index making up at least a twentieth of the frame, not the most common
-one**, which is the dark outline and drew every dot in (11,11,0). Spacing (48 world units),
-phase (+48 per 30 ticks) and colours are the engine's.
+**Native resolution for the lines, on purpose.** Real arcs at a segment count chosen for the
+zoom rather than sixteen chords, and one SCREEN pixel of line width at any zoom (`DrawLine`'s walk
+on the zoomed frame's grid, `tagpu_line.h`). The route dots and the waypoint sprite are the
+engine's own frames, drawn one texel a screen pixel at every zoom (§6.5).
 
 **Publication.** Two arenas, the index stored last, only ever replaced. Two are NOT enough on
 their own here: the block republishes ~83× per presented frame (§6.2) and building a frame's
@@ -1095,7 +1093,7 @@ and the labels would have drawn with. `[globals+0x208]` is their colour — `gui
 
 **Constant SCREEN size, snapped to the device grid.** A bitmap glyph magnified with the zoom
 is the 1997 art this pass exists to stop — two pixels tall at 0.25×, blocky at 4× — so the
-quad is sized by `1/zoom` like the waypoint crosshair. And it is snapped: the vertex shader
+quad is sized by `1/zoom`, as the order art is (§6.5). And it is snapped: the vertex shader
 applies the zoom, so the snap takes the post-zoom position, rounds it onto the `1/ss` grid and
 hands back the point that transforms to it. Without that the anchor arrives fractional from
 the marker pass's own `project()` and each 1-px stroke is resolved across two device pixels —
@@ -1133,6 +1131,79 @@ range circle 11 % flat.
 **Not closed by G13p**: nothing world-anchored is left engine-drawn. What remains engine-side
 inside the viewport is the mouse cursor sprite, which is screen-space and correct at 1:1 at
 any zoom.
+
+### 6.5 The engine's cursor art, at every zoom (2026-10-27)
+
+`tagpu_order.c` (`art_build`, `draw_sprite`, `draw_dots`, `route_step`), `tagpu_mark.c`
+(`tagpu_mark_emit_art`), `tagpu_vk_mark.c`. The route dots and the waypoint sprite are the
+engine's own `anims/cursors.gaf` frames — `pathicon` (`cursor_ary[21]`, `main+0x148D3`) and
+`cursor_ary[idx]` (`main+0x1487F`, `idx` = the order descriptor's `+0x10`) — laid out for a
+zoom the engine never had. How each rule was chosen, with the lab's measurements:
+[tascene](tascene-design.html), *The order markers*.
+
+**The art is decoded once, on the game thread, into an atlas of ours.** At the first
+`tagpu_order_snapshot` (inside the `0x469BFC` marker block) that finds `pathicon`, `art_build`
+decodes every frame of `cursor_ary[1..21]` with `tagpu_gaf_decode_cov` into a 512×512 R8 atlas,
+one palette index a texel. A texel a frame does not draw holds a **key**: the lowest index no
+drawn texel of any frame uses (if all 256 are used, no frame is kept). The frame table per
+sequence holds the atlas rect, the hotspot (GAF frame `+0x04`/`+0x06`) and the duration, the
+u16 of the sequence table's second dword (`seq + 0x28 + 8i + 4`, as `0x4B8B30` reads it). A
+sequence of more than 64 frames, a frame wider or taller than 64, or one past the atlas's room
+is left out from that frame on, and the log line counts it. Every byte is written before
+`InterlockedExchange` publishes the atlas, and nothing writes it again — the cursor table is
+filled once by its loader (`0x429C84`), so the first decode is the session's art. **No engine
+pointer crosses to the render thread for the art**: the record carries the descriptor's cursor
+index, and the render thread looks the frames up in our table. **MEASURED 2026-10-27, retail:**
+`order: art 238 frame(s) of the cursor table, 0 left out, key 0, rows to 321 of 512`.
+
+**The sprite** is frame `(gameTime / (2 · frame 0's ticks)) % count`, `0x439740`'s rule, drawn
+at **opacity 0.70**. The engine blits it through `PALETTE.ALP`, a 50/50 mix of art and ground
+(engine map, "The waypoint sprite is translucent"); 0.70 is a look chosen 2026-10-27, more solid
+so a waypoint reads at a glance over busy ground. **The dots** are opaque at rest, as the
+engine's are. Both are **one texel a screen pixel at every zoom** — the engine's picture at 1×,
+never a magnified sprite — with the frame's corner put on the device pixel grid by pre-image
+(`snap_device`, the text's rule, §6.4).
+
+**The route line** (flag == 1 records only, the engine's rule):
+
+- **Pinned to the map on one lattice.** At level `j` the dots stand `48 · 2^j` world units
+  apart, and every other dot of level `j` is a dot of level `j + 1`. The zoom selects level
+  `round(−log2 zoom)`, then holds it until the zoom is 0.65 of a level past it. A dot belongs to
+  the coarsest level it is on — the trailing zero bits of its index on the finest level drawn —
+  and takes that level's opacity, which walks to 1 (the zoom's level and coarser) or 0 (finer)
+  over 300 ms of wall clock (`QueryPerformanceCounter`). So a zoom moves no dot, the dots a
+  change of level adds or drops fade in or out, and at rest every dot is opaque or gone. At 1×
+  the level is 0: the engine's 48-unit spacing.
+- **The march** adds `1.6 / zoom` world units for each game tick since the last frame, for a
+  step of 1 to 30 ticks only (a step back or a longer one is a load or a seek and moves nothing):
+  1.6 screen pixels a tick at every zoom, which at 1× is the engine's 48 per 30 ticks. It counts
+  game ticks, so a pause freezes the dots and the game speed scales them.
+- **Every leg marches from the same anchor, 0.** The engine starts each leg's dots at its own
+  order's age, `(age % 30) · 48 / 30`; ours share one march for the whole line, so the dots of
+  two legs stand at the same phase from their starts where the engine's would not. A dot's frame
+  still counts from the order's age, `(age / frame 0's ticks) % count`, one frame further each
+  dot along the finest level drawn — which on retail data changes nothing, `pathicon` being one
+  frame.
+
+**In the marker pass** the art is its own bucket (`MAXORDA` 36 000 vertices, six a frame), drawn
+as **one blended triangle draw** (`TAGPU_MK_TEX_ART`, `TAGPU_MKDRAW.blend`) before the order
+lines, as the engine blits a record's sprite and dots before its target circle. Every other draw
+of the pass is opaque. The fragment shader's textured, non-text path outputs alpha = the vertex
+colour slot, which the art's vertices fill with the opacity, and keys out the art's own key
+(`uKey = artKey` for that draw); every other path writes alpha 1. On Vulkan the atlas is a third
+descriptor set (`s_setA`, `IMG_ART`), uploaded once per slot because it never changes, and the
+draw binds `s_pipeTriA`: `s_pipeTri` with `SRC_ALPHA` / `ONE_MINUS_SRC_ALPHA` on colour and the
+target's alpha kept (`ZERO` / `ONE`). The heartbeat counts art quads as `ordart=`.
+
+**OBSERVED 2026-10-27**, Vulkan on Xvfb with the reference setup's GPU, 1024×768, `ss` 2, an
+ARMCK given three queued moves, paused: the sprites and the dots draw; four wheel notches out
+fade every other dot away within about 300 ms while the rest stay opaque, and the sprites keep
+their size; wheeling back in fades them in.
+
+**Not closed:** the march speed in game was not measured (the capture's timing was too coarse);
+it is the arithmetic the lab measured at 11.7–12.1 px per 250 ms at 0.5×–2×. Not run on GDI
+(unchanged: the engine draws its own markers there), on Windows, or under the replay harness (no
+simulation code changed).
 
 ## Appendix — addresses & offsets
 

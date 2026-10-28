@@ -346,7 +346,9 @@ the same fix one layer up, and is not done.
 **The order block is PORTED, not captured, since G13o.** `tagpu_order.c` re-derives §3 of
 [UI markers](ui-markers.html) — the driver's three selection rules, the walker's
 capability-mask dispatch and its `pos` chaining, and all five leaf drawers — and draws them
-at native resolution in `tagpu_mark.c`'s pass. A capture could never reach past the
+in `tagpu_mark.c`'s pass: the lines and circles as native-resolution geometry, the route dots
+and the waypoint sprite as the engine's own `cursors.gaf` frames, one texel a screen pixel at
+every zoom, out of an atlas the game thread decodes once ([UI markers](ui-markers.html) §6.5). A capture could never reach past the
 OFFSCREEN's own width and height, and the offscreen is screen-sized while `vpwide` lets the
 projection run far outside it, so at zoom < 1 the engine's own clipper threw the outer ring's
 markers away before our buffer saw them.
@@ -2003,9 +2005,6 @@ a texel with no coverage is additive light (the effects' flashes) and takes the 
     refusal; `tagpu_vk_world_down` frees them with the device or a resize. **MEASURED 2026-09-24**
     (§2.88): against the target path at `ss=1`, 69.6 % of the world's channels exact at Gamma 16 and
     75.2 % at Gamma 6, the rest off by 1; byte-identical at Gamma 12.
-- `tagpu_order.c`'s `seq_ink` reads the packet's `pal[]` directly, the same unscaled table, from
-  the packet the order walk already holds; its question is a luminance ranking over one sprite's
-  colours, which no uniform scale moves.
 
 **Everything in `tagpu_pal.h` is render-thread only**: its entry points resolve into shared
 snapshots, so a call from the game thread would race them. The heartbeat's `palchg=`,
@@ -2107,7 +2106,7 @@ and [the engine map](exe-reverse-engineering.html#cob-guarded-runtime-integratio
 | `main+0x2C92`, `+0x2C96`, `+0x2C9A`, `+0x2C9E`, `+0x2CA2`, `+0x2CA6` | the build-cursor / band-box rect: two corners as (world x, altitude, world z) DWORDs. Read only, once a frame on the render thread, and projected with the engine's own baked `+0x80`/`+0x20` origin — **not** `main+0x37E27`'s L/T, which `vpwide` widens |
 | `main+0x1B63` (+ watched × `0x14B`) | PlayerStruct; `+0x67`/`+0x6B` its first/last unit pointer — the range the order-marker driver walks. Read only, game thread |
 | `main+0x37E9C` / `main+0x2CBA` | tracked / hovered unit id. Read only; with `viewStruct+0` (`CameraToUnit`) these are the three units the order-marker driver's selection rules key off |
-| `main+0x1487F` / `main+0x148D3` | `cursor_ary[0x15]` and the `pathicon` GAF sequence. Read only, once each per session — the order pass decodes frame 0 of each for the ink its procedural dot and crosshair inherit |
+| `main+0x1487F` / `main+0x148D3` | `cursor_ary[0x15]` and the `pathicon` GAF sequence (`cursor_ary[21]`). Read only, on the GAME thread, once per session: `art_build` decodes every frame of `cursor_ary[1..21]` into the order art's atlas at the first marker block that finds `pathicon`; the render thread reads only that atlas ([UI markers](ui-markers.html) §6.5) |
 | `0x512344` / `0x512348` | the order-descriptor array and its end: `+0xC` is the type's marker-capability mask and `+0x10` its `cursor_ary` index. Read only; the end pointer is what lets us bound an index the engine does not |
 | `unit+0xAC` | the squad tag. Read only — and read as a **DWORD** and then used as a byte, because that is what `0x469C55`/`0x469CD1` do |
 | weapon `+0x68` | the ballistic launch speed, `weaponvelocity`·65 536/30, the divisor of `0x49CE6A`. **WRITTEN at load, on the game-load thread, by flak's floor (§2.6c)**: a ballistic weapon (`+0x111` bit 1) whose value is 0 gets 1, logged, before `0x49E010` picks its aim routine. No stock weapon is written |
@@ -10193,7 +10192,8 @@ world* and *under* nothing.
 
 **The captured post-fog layer no longer exists.** The clean cut (`a2b1333`, 2026-09-20) deleted
 `TAGPU_MK_TEX_LAYER` and the `markown` capture behind it, so the list below is one kind shorter
-today. The pass draws the selection rects (depth-tested), the order triangles, lines and labels,
+today. The pass draws the selection rects (depth-tested), the order art (route dots and waypoint
+sprites, the pass's one blended draw), lines and labels,
 the health bars, the group digits, and last the cursors — the build square and the band box —
 which are now the one draw with the fog off. `mark.on=nocursor` hands the cursors back to the
 engine and fills nothing of ours. The tables record the pass as measured on 2026-09-17.
@@ -17798,8 +17798,7 @@ golden source with holes in it is the more expensive mistake.
 >
 > *(An earlier revision of this line also listed "`OP.seq`'s other readers" as open. There are
 > none — both reviewers swept the tree 2026-09-22 and `OP::seq` and `tagpu_terrown_fill_seq` have
-> no surviving reader anywhere. `tagpu_order.c`'s `r->seq` is an unrelated cursor-sprite pointer
-> and `tagpu_packet.c`'s `m->seq` is the command ring.)*
+> no surviving reader anywhere. `tagpu_packet.c`'s `m->seq` is the command ring.)*
 >
 > Two residuals the review named, both cosmetic-worst-case and neither fixed here:
 >
@@ -20285,7 +20284,7 @@ required at attach (a static import of `TotalA.exe`).
 — the world target's own pixels, `ss` to a game pixel — thickened to `w = ss` pixels across its
 minor axis, each end a `w` × `w` block, decided in integer arithmetic in the fragment stage. One rule for every preset:
 smooth when supersampled, and at `ss = 1` the engine's own line by construction. That covers the
-order markers (waypoint crosshairs), queued build sites, selection rects, lasers and lightning,
+order markers' target and range circles, queued build sites, selection rects, lasers and lightning,
 and the nanoframe wire. The owner's decision and the gate's numbers are in
 [Hardware portability](hardware-portability.html), decision 4 and the G21b block; this section is
 the map of what implements it.

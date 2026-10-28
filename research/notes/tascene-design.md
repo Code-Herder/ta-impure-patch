@@ -327,11 +327,11 @@ and differs only in the look.
 
 ### The order markers  [BUILT 2026-10-27, worktree-waypoint_gfx]
 
-**Why it is here.** The game stopped drawing the engine's queued-order art when the order pass
-was ported (G13o, [UI markers](ui-markers.html) §6): `tagpu_order.c` draws a 2.4-px disc for
-each route dot and a crosshair for each waypoint sprite, in the art's ink, so they stay crisp at
-4× and visible at 0.25×. The lab puts the engine's own art back, on a real map, so how it looks
-at each zoom can be judged before anything changes in the DLL.
+**Why it is here.** When the order pass was ported (G13o, [UI markers](ui-markers.html) §6),
+`tagpu_order.c` drew a 2.4-px disc for each route dot and a crosshair for each waypoint sprite
+instead of the engine's art. The lab put the engine's own art back, on a real map, so how it
+looks at each zoom could be judged before the DLL changed. The DLL now draws the art by the
+lab's defaults ([UI markers](ui-markers.html) §6.5); what differs is under *The DLL* below.
 
 **What it draws, and by which rule.** `build` packs every sequence of `anims/cursors.gaf` (22,
 `orders/atlas.r8.bin`), and each scenario unit's `orders` list rides its instance.
@@ -393,7 +393,7 @@ kbot that reclaims a wreck and then guards the lab. The overlay is the engine's 
 - The sprite shows frame `(gameTime / (2 · frame 0's ticks)) % count` (`0x439740`) at
   `ordalpha` 0.5: `PALETTE.ALP` is a half-and-half mix (measured, engine map). The dots are
   drawn at `orddotalpha`, 1 as the engine copies them. Both are sliders in the status bar;
-  neither touches `ordstyle=proc`, which stays what the game draws today. `ordanim=cursor`
+  neither touches `ordstyle=proc`, which stays opaque. `ordanim=cursor`
   instead steps each frame after its own ticks, the mouse cursor's rule, twice as fast for
   `cursormove`.
 - The clock is 30 ticks a second, in whole ticks (`ordtick=int`) as the engine steps, or
@@ -410,7 +410,7 @@ into the address bar):
 
 | Knob | Values (default first) | What it does |
 |---|---|---|
-| `ordstyle` | `gaf` · `proc` · `off` | the engine's art; the procedural markers `tagpu_order.c` draws today, by its own constants and ink rule (`seq_ink`); nothing |
+| `ordstyle` | `gaf` · `proc` · `off` | the engine's art; the procedural markers `tagpu_order.c` drew before it took the art (a 2.4-px disc and a breathing crosshair in the ink of frame 0's brightest index holding at least a twentieth of its opaque texels); nothing |
 | `ordsize` | `screen` · `world` · `int` · `clamp` | canvas pixels per texel: 1, the art at its own size at every zoom; the zoom (the engine's pixel magnified with the world); the zoom rounded, at least 1; the zoom held in `ordmin..ordmax` (1..2) |
 | `ordfilter` | `nearest` · `sharp` · `linear` | `sharp` keeps each texel flat and blends only the screen pixel across a texel edge |
 | `ordspace` | `lod` · `screen` · `world` · `octave` | the dot spacing: pinned to the map at 48·2^k world units for the zoom's level k, the dots a level change adds or drops fading in or out over `ordfade` ms; 48 screen px from each leg's start; 48 world units; 48·2^k world units with k the nearest level, no fade. The dots move 48 px/s under all four |
@@ -459,10 +459,34 @@ three things `ordalpha=0.5` and `ordanim=engine` assume. The capture also showed
 case does not apply here: a right-click with a Kbot Lab selected (Interface Type 1) queued no
 order at all, so a factory's rally markers were not captured.
 
+**The DLL** ([UI markers](ui-markers.html) §6.5 is the mechanism). On the Vulkan lane
+`tagpu_order.c` draws this section's defaults out of an atlas of the same `cursors.gaf`
+frames: `ordsize=screen` (one texel a screen pixel, the corner on the device grid),
+`ordspace=lod` with the same constants (`48 · 2^j`, the 0.65 hold, the 300 ms fade, eight levels
+either side of the zoom's), `ordanim=engine`, the sprite at opacity 0.70 and the dots opaque.
+Where it differs from the lab:
+
+- **Every leg marches from the same anchor, 0.** The lab, like the engine, starts a leg's dots
+  at the distance marched since its order was issued. The DLL keeps one march for the whole
+  route line, so every leg's dots stand at the same phase from its start. A dot's FRAME still
+  counts from the order's age (`(age / frame 0's ticks) % count`, then one frame a dot), which on
+  stock data, where `pathicon` is one frame, changes nothing.
+- **The march counts game ticks.** It adds `1.6 / zoom` world units for each game tick seen since
+  the last frame, 1.6 screen pixels a tick at every zoom, and only for a step of 1 to 30 ticks: a
+  step back or a longer one moves nothing. So a paused game freezes the dots and the game speed
+  scales them; the 48 px a second is at 30 ticks a second. The fade between levels runs on the
+  wall clock, as in the lab.
+- **The sprite is an alpha blend, not `PALETTE.ALP`.** 0.70 of the frame's palette colour over
+  what is drawn, in full colour, chosen 2026-10-27 to read more solidly than the engine's 50/50
+  table; the DLL has no 0.5 setting.
+
 **Gaps.** The lab's frame has not been pixel-diffed against a game frame at the same eye.
 The ALP palette lookup is approximated in full colour (a plain 50 % mix), and so are the
-sub-pixel sprite placement and the per-tick integer projection. Under `ordspace=lod` a dot fades by opacity alone, at its own size; a pathicon with more than one frame would step its frame by the fine level's dot index, so a dot's frame can change at a level. Nothing in the DLL has
-changed.
+sub-pixel sprite placement and the per-tick integer projection. Under `ordspace=lod` a dot
+fades by opacity alone, at its own size; a pathicon with more than one frame would step its
+frame by the fine level's dot index, so a dot's frame can change at a level — in the DLL as
+here. The DLL's march speed has not been measured in game: it is the arithmetic the lab measured
+above, not a capture.
 
 ### The presets  (`tools/tascene-presets.json`)
 
