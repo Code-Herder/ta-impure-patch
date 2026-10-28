@@ -45,9 +45,11 @@ const WikiSim = (() => {
      stops at `at` until the state `until` names holds, at most `max` ticks, after which the demo stops and says so.
      UNTILS are the states, in tagpu_wikidata.h's WIKI_UNTIL_* order from 1: "idle", no unit of the player's holds a
      build or a reclaim order; "arrived", no unit of the player's holds a move order (each reached its place or
-     stopped close by it). A demo waits on the state its next input needs instead of timing that input to a walk,
-     whose length the units in the way decide. UNTIL_MAX bounds `max`. */
-  const UNTILS = ['idle', 'arrived'], UNTIL_MAX = 3600;
+     stopped close by it); "built", the demo's k-th such wait, k buildings of the player's have been finished in the
+     demo -- a count, so a building finished before the wait counts too. A demo waits
+     on the state its next input or its claim needs instead of timing it to a walk, whose length the units in the
+     way decide. UNTIL_MAX bounds `max`. */
+  const UNTILS = ['idle', 'arrived', 'built'], UNTIL_MAX = 3600;
   const KEYS = ['shift', 'alt', 'ctrl', 'z', 'x', 'lmb', 'rmb'];
   const sq = v => v * v;
   const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
@@ -429,7 +431,8 @@ const WikiSim = (() => {
     }
 
     /* ---- units. Each faces along a unit vector (hx, hz); walk says why a vector. ---- */
-    let units = [], nextId = 1;
+    // built: the buildings of the player's finished so far; builtWaits: the "built" waits begun
+    let units = [], nextId = 1, built = 0, builtWaits = 0;
     /* a unit joins the world. With the sidebar it carries its page state, unit+0x110: bp (bit 22, a numbered page
        is shown rather than the orders page) and page (bits 23..25, 1..n). 0x485CD5 creates a unit whose type has
        numbered pages with bit 22 set and page 1; any other unit has neither. */
@@ -467,8 +470,37 @@ const WikiSim = (() => {
        the authored one can overlap a structure placed before it or leave the placeable interior (cells 1 to w - 2,
        the site test's bound below); the demo is refused for that casting rather than played broken, as
        tagpu_wikisim_init refuses it. Mobile units never block. */
-    for (const s of S.units) {
-      const u = add(s.type, s.owner ?? 0, s.at[0], s.at[1], s.built ?? 1, s.id, s.label, facing(s.facing));
+    /* A SCENE'S MOBILE UNIT STARTS CLEAR (research/notes/ingame-wiki.md, *How units move*): at its authored centre,
+       or, when its body there would overlap a scene structure or a mobile scene unit before it -- a casting's bigger
+       units can -- at the nearest centre a whole number of cells away whose body overlaps neither and lies on the map:
+       nearest by distance, then by z, then by x, at most SPREAD cells either way. With none it stands where authored,
+       and the step rule lets it walk out. The structures stay where authored. Settled before any unit enters, since
+       entering starts its script, which may read where it stands. */
+    const SPREAD = 8, spot = S.units.map(s => [s.at[0], s.at[1]]);
+    {
+      const rectAt = (t, x, z) => {
+        if (mobile(t)) return [x - fp(t)[0] * CELL / 2, z - fp(t)[1] * CELL / 2, x + fp(t)[0] * CELL / 2, z + fp(t)[1] * CELL / 2];
+        const ox = Math.round(x / CELL - fp(t)[0] / 2), oz = Math.round(z / CELL - fp(t)[1] / 2);
+        return [ox * CELL, oz * CELL, (ox + fp(t)[0]) * CELL, (oz + fp(t)[1]) * CELL];
+      };
+      const clash = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+      S.units.forEach((s, k) => {
+        if (!mobile(s.type)) return;
+        const free = (x, z) => {
+          const a = rectAt(s.type, x, z);
+          if (!(a[0] >= 0 && a[1] >= 0 && a[2] <= W * CELL && a[3] <= H * CELL)) return false;
+          return S.units.every((v, m) => (mobile(v.type) && m >= k) || !clash(a, rectAt(v.type, spot[m][0], spot[m][1])));
+        };
+        for (let d2 = 0; d2 <= 2 * SPREAD * SPREAD; d2++)
+          for (let j = -SPREAD; j <= SPREAD; j++) for (let i = -SPREAD; i <= SPREAD; i++)
+            if (i * i + j * j === d2 && free(s.at[0] + i * CELL, s.at[1] + j * CELL)) {
+              spot[k] = [s.at[0] + i * CELL, s.at[1] + j * CELL];
+              return;
+            }
+      });
+    }
+    for (const [k, s] of S.units.entries()) {
+      const u = add(s.type, s.owner ?? 0, spot[k][0], spot[k][1], s.built ?? 1, s.id, s.label, facing(s.facing));
       u.orders = (s.orders || []).slice(0, PLACE_LIST_CAP).map(o => ({ k: 'move', x: o.move[0], z: o.move[1] }));
       if (mobile(u.type)) continue;
       const b = box(u.type, u.ox, u.oz);
@@ -1701,6 +1733,7 @@ const WikiSim = (() => {
           s.built = Math.min(1, s.built + w.build);
           if (s.built >= 1) {
             log('finished', s);
+            if (s.owner === 0) built++;
             // 0x41B8D0: a structure finished whose FBI says ActivateWhenBuilt is switched on (0x41B9A6)
             if (COB && s.cob && (def(s.type).activatewhenbuilt & 1) === 1) COB.activate(s.cob, 1);
           }
@@ -1772,15 +1805,15 @@ const WikiSim = (() => {
        stops the demo, `stalled`. A Try-it sim has no script, so its clock is its tick. */
     let next = 0, clock = 0, wait = null, stalled = false;
     // the wait's state holds (UNTILS)
-    const holds = until => !units.some(u => u.owner === 0 &&
-      u.orders.some(o => until === 'idle' ? o.k === 'build' || o.k === 'reclaim' : o.k === 'move'));
+    const holds = w => w.until === 'built' ? built >= w.need : !units.some(u => u.owner === 0 &&
+      u.orders.some(o => w.until === 'idle' ? o.k === 'build' || o.k === 'reclaim' : o.k === 'move'));
     // a tick's generated inputs come before its data inputs; within a trip's tick a move comes before a press
     const feed = t => {
       feeding = t;
       while (genNext < gen.length && gen[genNext].at <= t) input(gen[genNext++].ev);
       while (next < script.length && script[next].at === t) {
         const e = script[next++];
-        if ('until' in e) wait = { until: e.until, max: e.max, from: sim.tick };
+        if ('until' in e) wait = { until: e.until, max: e.max, from: sim.tick, need: e.until === 'built' ? ++builtWaits : 0 };
         else input(e);
       }
     };
@@ -1808,7 +1841,7 @@ const WikiSim = (() => {
     sim.input = ev => { input(ev); dropWork(); cursorTick(sim.tick); };
     sim.step = () => {
       const t = sim.tick + 1;
-      if (wait && holds(wait.until)) wait = null;
+      if (wait && holds(wait)) wait = null;
       else if (wait && t - wait.from > wait.max) stalled = true;
       if (!wait) feed(++clock);
       dropWork();

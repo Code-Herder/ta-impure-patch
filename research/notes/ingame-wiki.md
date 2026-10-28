@@ -1218,11 +1218,12 @@ the one loaded):
 
 Every demo has exactly one ARMCK selected: the stock interface arms a building only with one unit
 selected (`quality-of-life.md` *Who builds*). The entry's `pace` is 24: an ARMLLT takes ARMCK
-2.4 s on the stage (58 s in the game), an ARMDRAG 0.27 s. The demos end a fixed tail after their
-last input, on the shape and its first pieces, not the whole queue: with its script ARMCK folds
-and unfolds its nanolathe between two queued pieces, about 268 ticks a piece, so a whole line
-would run for minutes. *Click and Shift-click*, *Filled rectangle* and *Ring around a building*
-have tails of 300, 480 and 420 ticks, long enough for the pieces their claims read finished.
+2.4 s on the stage (58 s in the game), an ARMDRAG 0.27 s. The demos end on the shape and its
+first pieces, not the whole queue: with its script ARMCK folds and unfolds its nanolathe between
+two queued pieces, about 268 ticks a piece, so a whole line would run for minutes. *Click and
+Shift-click* and *Filled rectangle* wait until two pieces are finished and *Ring around a
+building* until one is (`until: "built"`), then play 60 ticks; the others end a fixed tail after
+their last input, since their claims read only the shape and the queue.
 
 ## The data format
 
@@ -1277,8 +1278,12 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
   past that the demo stops, stalled, and the check names it. **`"until": "arrived"`** holds it
   instead until no unit of the player's holds a move order: each reached its place or stopped
   close by it. A demo waits on the state its next input needs rather than timing that input to a
-  walk, whose length the units and buildings in the way decide ([below](#how-units-move)). The
-  states are `WIKI_UNTIL_IDLE` 1 and `WIKI_UNTIL_ARRIVED` 2, in `sim.js`'s `UNTILS` order. A wait
+  walk, whose length the units and buildings in the way decide ([below](#how-units-move)).
+  **`"until": "built"`**, the demo's k-th such wait, holds once k buildings of the player's have
+  been finished in the demo -- a count, so a building finished before the wait counts too, and a
+  fast mod's builder never leaves a wait with nothing left to finish. The states are
+  `WIKI_UNTIL_IDLE` 1, `WIKI_UNTIL_ARRIVED` 2 and `WIKI_UNTIL_BUILT` 3, in `sim.js`'s `UNTILS`
+  order. A wait
   carries no other key, and no other input shares its tick; both simulations refuse a demo that
   breaks either. Every later input, trip and the demo's `end` count the clock's ticks, which stand
   still during a wait (*The units' scripts*, below).
@@ -1659,6 +1664,13 @@ owner chose a rule of the wiki's own over a port of the engine's mover and pathf
   unit's body overlaps the site. A unit on a structure or a claim (the claimant included, when it
   was ordered to build where it stands) spends its turn stepping straight away from the body's
   centre, the first such in creation order, along `(0, 1)` from the centre itself.
+- **A scene's mobile unit starts clear.** A casting's bigger units can overlap an authored scene
+  (TA Zero's GOK hovers are 3 × 3 and 4 × 4 where stock's kbots are 2 × 2, 48 units apart). Such
+  a unit stands at the nearest centre a whole number of cells from its authored one, at most 8
+  either way, nearest by distance, then z, then x, whose body is on the map and clear of the
+  scene's structures and of the mobile units before it in the scene; with none it stands where
+  authored and walks out. It is settled before any unit enters, since entering starts the unit's
+  script, which may read where it stands. A stock scene never moves.
 - **What the rule does not do.** Nobody pushes: an idle unit in a path is walked round, never moved
   aside (but off a claim). A unit boxed in on a claimed site, every step refused, holds that build
   until something moves. A crowd going opposite ways through a one-unit gap can take many ticks of
@@ -1697,8 +1709,7 @@ both fold into theirs, holds them to the same calls.
   builder: every Quick Build demo ends on `until idle` and 60 more ticks. The scripts run at game
   speed while builds run at the entry's `pace`, so a build stance or a nanolathe folding between
   two queued pieces takes its game time: stock's ARMCK takes about 268 ticks a queued piece, and
-  the Build Lines demos keep fixed tails long enough for the pieces their claims read
-  ([the COB plan](ingame-wiki-cob-plan.html), *The demo's wait*).
+  the Build Lines demos whose claims read finished pieces wait for them (`until: "built"`).
 - **The poses.** What a unit's script poses is drawn, not simulated: the poses are outside the
   view and the state hash. In the DLL the page fill copies each unit's posed model (each
   primitive's MOVE, TURN and flags) after the view's copy into the stage record's pose pool,

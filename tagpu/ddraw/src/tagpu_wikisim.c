@@ -1903,11 +1903,13 @@ static WIKIRECT rect_of(const WIKISIM* s, int t, int ox, int oz)
     return rect(ox * CELL, oz * CELL, (ox + fpx(s, t)) * CELL, (oz + fpz(s, t)) * CELL);
 }
 
-static WIKIRECT body_at(const WIKISIM* s, const WIKIUNIT* u, double x, double z)
+static WIKIRECT body_at_type(const WIKISIM* s, int t, double x, double z)
 {
-    const double ax = fpx(s, u->type) * CELL / 2.0, az = fpz(s, u->type) * CELL / 2.0;
+    const double ax = fpx(s, t) * CELL / 2.0, az = fpz(s, t) * CELL / 2.0;
     return rect(x - ax, z - az, x + ax, z + az);
 }
+
+static WIKIRECT body_at(const WIKISIM* s, const WIKIUNIT* u, double x, double z) { return body_at_type(s, u->type, x, z); }
 
 static WIKIRECT body(const WIKISIM* s, const WIKIUNIT* v)
 {
@@ -2623,6 +2625,7 @@ static void advance(WIKISIM* s)
         if (st->work_build && st->built < 1) {
             st->built += st->work_build;
             if (st->built > 1) st->built = 1;
+            if (st->built >= 1 && st->owner == 0) s->nbuilt++;
             /* 0x41B8D0: a structure finished whose FBI says ActivateWhenBuilt is switched on (0x41B9A6) */
             if (st->built >= 1 && s->cob && st->cob && def(s, st->type)->activate_when_built)
                 tagpu_wikicob_activate(s->cob, st->cob, 1);
@@ -2736,15 +2739,18 @@ static void feed(WIKISIM* s, int t)
             s->waiting = e->until;
             s->wait_max = e->until_max;
             s->wait_from = s->tick;
+            if (e->until == WIKI_UNTIL_BUILT) s->wait_built = ++s->built_waits;
         } else input(s, e);
     }
 }
 
 /* the wait's state holds: WIKI_UNTIL_IDLE, no unit of the player's holds a build or a reclaim
-   order; WIKI_UNTIL_ARRIVED, none holds a move order */
+   order; WIKI_UNTIL_ARRIVED, none holds a move order; WIKI_UNTIL_BUILT, the demo's k-th such
+   wait, k buildings of the player's have been finished in the demo */
 static int holds(const WIKISIM* s, int until)
 {
     int i, j;
+    if (until == WIKI_UNTIL_BUILT) return s->nbuilt >= s->wait_built;
     for (i = 0; i < s->nunit; i++) {
         const WIKIUNIT* u = s->unit[i];
         if (u->owner != 0) continue;
@@ -3223,14 +3229,69 @@ static int by_tick(const void* a, const void* b)
    placeable interior (cells 1 to w - 2, site_ok's bound); the demo is refused for that casting
    rather than played broken, as sim.js refuses it. Mobile units never block. 1, or 0 with the
    refusal in `err`, or -1 when memory ran out. */
+static WIKIRECT scene_rect(const WIKISIM* s, int t, double x, double z)
+{
+    if (mobile(s, t)) return body_at_type(s, t, x, z);
+    return rect_of(s, t, bound_cell(js_round(x / CELL - fpx(s, t) / 2.0)), bound_cell(js_round(z / CELL - fpz(s, t) / 2.0)));
+}
+
+/* scene unit k's body at (x, z) lies on the map and overlaps no scene structure and no mobile
+   scene unit before k, at the place spot[] settled for it */
+static int scene_free(const WIKISIM* s, const WIKISCENE* sc, const double* spot, int k, double x, double z)
+{
+    const WIKIRECT a = scene_rect(s, sc->unit[k].def, x, z);
+    int m;
+    if (!on_map(s, a)) return 0;
+    for (m = 0; m < sc->nunit; m++) {
+        const int t = sc->unit[m].def;
+        if (mobile(s, t) && m >= k) continue;
+        if (hits(a, scene_rect(s, t, spot[2 * m], spot[2 * m + 1]))) return 0;
+    }
+    return 1;
+}
+
+/* A SCENE'S MOBILE UNIT STARTS CLEAR, sim.js's: at its authored centre, or the nearest centre a
+   whole number of cells away, at most SCENE_SPREAD either way, by distance, then z, then x, whose
+   body is on the map and clear of the scene's structures and of the mobile units before it; with
+   none, where authored. Into spot[2k], spot[2k + 1], before any unit enters: entering starts its
+   script, which may read where it stands. */
+#define SCENE_SPREAD 8
+static void scene_spots(const WIKISIM* s, const WIKISCENE* sc, double* spot)
+{
+    int k, d2, i, j;
+    for (k = 0; k < sc->nunit; k++) {
+        spot[2 * k] = sc->unit[k].x;
+        spot[2 * k + 1] = sc->unit[k].z;
+    }
+    for (k = 0; k < sc->nunit; k++) {
+        const double x = sc->unit[k].x, z = sc->unit[k].z;
+        int found = 0;
+        if (!mobile(s, sc->unit[k].def)) continue;
+        for (d2 = 0; d2 <= 2 * SCENE_SPREAD * SCENE_SPREAD && !found; d2++)
+            for (j = -SCENE_SPREAD; j <= SCENE_SPREAD && !found; j++)
+                for (i = -SCENE_SPREAD; i <= SCENE_SPREAD && !found; i++)
+                    if (i * i + j * j == d2 && scene_free(s, sc, spot, k, x + i * CELL, z + j * CELL)) {
+                        spot[2 * k] = x + i * CELL;
+                        spot[2 * k + 1] = z + j * CELL;
+                        found = 1;
+                    }
+    }
+}
+
 static int scene_units(WIKISIM* s, const WIKISCENE* sc, char* err, size_t errn)
 {
     int i, j;
+    double* spot = (double*)malloc((size_t)(sc->nunit + 1) * 2 * sizeof *spot);
+    if (!spot) return -1;
+    scene_spots(s, sc, spot);
     for (i = 0; i < sc->nunit; i++) {
         const WIKISCENEUNIT* d = &sc->unit[i];
-        WIKIUNIT* u = add(s, d->def, d->owner, d->x, d->z, d->built, d->id, d->label, d->hx, d->hz);
+        WIKIUNIT* u = add(s, d->def, d->owner, spot[2 * i], spot[2 * i + 1], d->built, d->id, d->label, d->hx, d->hz);
         BOX b;
-        if (!u) return -1;
+        if (!u) {
+            free(spot);
+            return -1;
+        }
         for (j = 0; j < d->nmove; j++) {
             WIKIORDER o;
             memset(&o, 0, sizeof o);
@@ -3238,7 +3299,10 @@ static int scene_units(WIKISIM* s, const WIKISCENE* sc, char* err, size_t errn)
             o.x = d->move[j].x;
             o.z = d->move[j].z;
             push_order(s, u, &o);
-            if (s->oom) return -1;
+            if (s->oom) {
+                free(spot);
+                return -1;
+            }
         }
         if (mobile(s, u->type)) continue;
         b = box(s, u->type, u->ox, u->oz);
@@ -3248,9 +3312,11 @@ static int scene_units(WIKISIM* s, const WIKISCENE* sc, char* err, size_t errn)
         }
         if (!(b.ox >= 1 && b.oz >= 1 && b.ox + b.fx < s->W && b.oz + b.fz < s->H) || j < s->nunit) {
             snprintf(err, errn, "%s's %s does not fit the scene", u->id, def(s, u->type)->name);
+            free(spot);
             return 0;
         }
     }
+    free(spot);
     return 1;
 }
 

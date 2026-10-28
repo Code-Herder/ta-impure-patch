@@ -360,6 +360,13 @@ const RULES = {
     const ck = at('ck'), ack = at('ack'), off = Math.hypot(ack.x - goal.x, ack.z - goal.z);
     return ok && t < 1200 && ck.x === 388 && ck.z === 400 && off > 0 && off <= 32;
   },
+  'a scene unit put over another starts at the nearest clear place'(entry) {
+    // a second Peewee authored on the first starts two cells off, the nearest whole-cell offset that clears a 32-wide
+    // body, and of the four at that distance the one first by z, then x: (0, -2) cells
+    const s = WikiSim.create(entry, { scene: { units: [{ id: 'twin', type: 'ARMPW', at: [256, 176] }] } });
+    const twin = s.view().units.find(u => u.id === 'twin'), pw = s.view().units.find(u => u.id === 'pw');
+    return apart(s.view()) && pw.x === 256 && pw.z === 176 && twin.x === 256 && twin.z === 144;
+  },
   'a build waits for the units on its site, which step off it'(entry) {
     // a Peewee stands across the extractor's site; the constructor's build starts once it has stepped off
     const s = WikiSim.create(entry, { scene: { selected: ['ck'], units: [{ id: 'stand', type: 'ARMPW', at: [396, 72] }] } });
@@ -470,10 +477,9 @@ const BUILDSHAPES = {
     ok(p.v.shape === 'rect' && same(preview(p), want), `the preview is a 4 x 3 serpentine (${show(preview(p))})`);
     ok(p.v.sites.every((s, i) => s.order === i + 1), 'the preview numbers the sites 1..12 in that order');
     ok(same(added(r, u), want), 'the release queued them in serpentine order');
-    /* with its script ARMCK folds and opens its arms between two queued pieces (~268 ticks a piece), so the demo's
-       fixed end sees two of them; without, six */
+    // the demo waits for two pieces to finish (gen-buildshapes.mjs `built`)
     const done = r.log.filter(e => e.what === 'finished').map(e => [e.ox, e.oz]);
-    const least = r.last.v.cob ? 2 : 6;
+    const least = 2;
     ok(done.length >= least && same(done, want.slice(0, done.length)), `${r.ty('ARMCK')} built them in that order (${done.length} done, ${least} wanted)`);
   },
   hollow(r, d, ok) {
@@ -504,7 +510,7 @@ const BUILDSHAPES = {
     const c = downs(d, 'lmb')[0], p = r.frames[c - 1], want = ringOf(2, solarOf(r));
     ok(p.v.shape === 'ring' && same(preview(p), want) && p.v.sites.every(s => s.state === 'place'), `Shift+Ctrl over the solar collector previews its ring (${show(preview(p))})`);
     ok(same(added(r, c + 3), want), 'a press and release without a drag ordered it');
-    ok(r.log.some(e => e.what === 'finished' && e.type === r.ty('ARMDRAG')), `${r.ty('ARMCK')} started on the ring`);
+    ok(r.log.some(e => e.what === 'finished' && e.type === r.ty('ARMDRAG')), `${r.ty('ARMCK')} built a piece of the ring`);
   },
   ringqueued(r, d, ok) {
     // the near solar collector is queued with the cursor at (200, 280): cells 10..14 x 15..19 for stock's 5 x 5

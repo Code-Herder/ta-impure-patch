@@ -362,6 +362,9 @@ typedef struct {
        with `tick` except while a wait holds it: waiting the WIKI_UNTIL_* it waits for (0 none),
        from the tick it began, at most wait_max ticks; one past its max stops the demo, stalled */
     int              clock, waiting, wait_from, wait_max, stalled;
+    int              nbuilt, built_waits, wait_built;  /* the buildings of the player's finished so
+                                                         far, the BUILT waits begun, and the count
+                                                         this one needs: its place among them */
     int              next_serial;   /* the orders made, the last serial given */
 
     /* the units' scripts: the host, or NULL without one; GET's facts, scratch for every call */

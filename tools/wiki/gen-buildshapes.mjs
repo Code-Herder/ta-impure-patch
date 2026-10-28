@@ -76,6 +76,10 @@ function TL(start) {
        timeline is the same. A caption meant for the trip is given before the build, on its tick. */
     build(b) { inputs.push({ at: t, build: b }); t += TRIP; return T; },
     say(s) { inputs.push({ at: t, caption: s }); return T; },
+    /* the demo's clock stops until as many buildings of the player's are finished in the demo as there have been
+       `built` waits, this one included, at most `max` ticks (sim.js UNTILS); the wait takes a tick of its own, after
+       the last input's, which no other input shares */
+    built(max) { t += 1; inputs.push({ at: t, until: 'built', max }); t += 1; return T; },
   };
   return T;
 }
@@ -83,11 +87,15 @@ function TL(start) {
 /* A DEMO ENDS `tail` TICKS AFTER ITS LAST INPUT, on the shape and the first pieces of it, not on the whole queue: the
    builder's script folds its arms and opens them again between two queued builds (StopBuilding, then StartBuilding,
    each waiting on the other's animation), about 270 ticks a piece for stock's Construction KBot, so a whole line would
-   run for minutes. The tails of clicks, rect and ring hold the pieces their claims read finished (simcheck.mjs). */
+   run for minutes. A demo whose claim reads pieces finished (clicks, rect, ring: simcheck.mjs) first waits until
+   `built` of them are finished, each wait at most WAIT_MAX ticks, and its tail starts after: how long the builder's
+   walk and its script take is the demo's own, never a tail sized to them. */
+const WAIT_MAX = 1800;
 const demos = [];
-function demo(id, title, add, fn, tail) {
+function demo(id, title, add, fn, tail, built = 0) {
   const T = TL(add.cursor || scene.cursor);
   fn(T);
+  for (let i = 0; i < built; i++) T.built(WAIT_MAX);
   demos.push({ id, title, scene: add, inputs: T.inputs, end: T.t + tail });
 }
 
@@ -97,7 +105,7 @@ demo('clicks', '{Select} and Shift-{select}', {}, T => T
   .say('Pick it again and hold Shift.').build('ARMLLT').wait(5).down('shift')
   .to(S(13, 5), 30).wait(8).click('lmb').say('Shift-{select}: queued, and the building stays armed.').wait(20)
   .to(S(16, 5), 25).wait(8).click('lmb').wait(35)
-  .up('shift').say('Let go of Shift: the building is put away, as in TA.'), 300);
+  .up('shift').say('Let go of Shift: the building is put away, as in TA.'), 60, 2);
 
 demo('line', 'Line', {}, T => T
   .say('{tower} armed. Hold Shift, press and drag.').build('ARMLLT').wait(5).to(S(4, 3), 40)
@@ -120,7 +128,7 @@ demo('rect', 'Filled rectangle', {}, T => T
   .say('{wall} armed. Hold Shift and Alt, press and drag.').build('ARMDRAG').wait(5).to(S(6, 3), 40)
   .down('shift').down('alt').wait(10).down('lmb')
   .to(S(12, 7), 60).say('A filled rectangle. The numbers are the order: rows alternate, so the builder snakes through.').wait(55)
-  .up('lmb').up('alt').up('shift').say('Released: twelve queued. The {builder} builds them in that order.'), 480);
+  .up('lmb').up('alt').up('shift').say('Released: twelve queued. The {builder} builds them in that order.'), 60, 2);
 
 demo('hollow', 'Hollow rectangle', { cursor: [300, 330] }, T => T
   .say('{wall} armed. Shift, Alt and Ctrl: a hollow rectangle.').build('ARMDRAG').wait(5).to(S(12, 21), 30)
@@ -142,7 +150,7 @@ demo('spacing', 'Spacing', {}, T => T
 demo('ring', 'Ring around a building', {}, T => T
   .say('{wall} armed. Point at the {solar}.').build('ARMDRAG').wait(5).to([360, 184], 45).wait(10)
   .down('shift').down('ctrl').say('Hold Shift and Ctrl over a building: a ring round it.').wait(45)
-  .click('lmb').up('ctrl').up('shift').say('Press and release without dragging: the ring is ordered.'), 420);
+  .click('lmb').up('ctrl').up('shift').say('Press and release without dragging: the ring is ordered.'), 60, 1);
 
 /* The ring is clicked while the builder still walks to the far solar collector, and the walk outlasts the wall's
    trip for every side's builder only when it is long: TA Zero's hover builders cross the map at 2.25 a tick and start
