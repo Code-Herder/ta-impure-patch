@@ -727,7 +727,21 @@ def refusals(c):
     c.once(any(o["target"] == c.address("ARMACK") for o in c.orders("CORCK")),
            "eligible constructor did not receive its helper Guard")
     assert c.orders("RSNGCK") == before, "Guard refusal changed the helper's queue"
-    print("resource-refusals: reclaim and Guard refusal, eligible upgrade and helper fallback passed")
+    # The candidate source. RSNGCK shows ARMCK's pages (ARMMEX among them) and its CANBUILD holds
+    # only RSNMOHO, so a Quick Build from CANBUILD orders RSNMOHO and one from the menu ARMMEX.
+    # The eye is set last, on the deposit, so the click below lands at the mex case's screen point.
+    c.select("RSNGCK")
+    c.eye(1000, 950)
+    c.resource_click(588, 377)                    # the mex case's deposit, centre x 1432
+    def quick():
+        orders = c.orders("RSNGCK")
+        return orders if any(o["type"] in (types["ARMMEX"], types["RSNMOHO"]) for o in orders) else None
+    orders = c.once(quick(), "menu-only builder received no Quick Build order")
+    assert not any(o["type"] == types["RSNMOHO"] for o in orders), "Quick Build took a CANBUILD-only extractor"
+    assert any(o["type"] == types["ARMMEX"] and o["pos"][0] >> 16 == 1432 for o in orders), \
+        "Quick Build missed the menu's extractor on the deposit"
+    print("resource-refusals: reclaim and Guard refusal, eligible upgrade, helper fallback and the "
+          "build menu as Quick Build's source passed")
 
 
 def viewer(c, kind="ARMACK"):

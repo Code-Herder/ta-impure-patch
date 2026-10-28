@@ -546,6 +546,11 @@ static const char* frame_valid(const void* rec)
             return "replay HUD stats area";
         if (tagpu_pk_hudstat(p)->npt > TAGPU_PK_HUD_POINTS) return "replay HUD stats count";
     }
+    /* the in-game wiki's record: values and no count, so its length is its whole check -- one of
+       its two, the head alone or the whole record with the stage (tagpu_wikipk.h) */
+    if (p->wiki_len && ((p->wiki_len != sizeof(TAGPU_PK_WIKI) && p->wiki_len != TAGPU_PK_WIKI_HEAD) ||
+                        !area_ok(p, p->wiki_off, p->wiki_len)))
+        return "wiki area";
     /* THE FOUR WORLD TABLES. Each is checked ONCE, here, against
        the record's own committed extent, so every consumer indexes with its
        `n_` and nothing else. `area_ok` does the 4-alignment, the "starts after

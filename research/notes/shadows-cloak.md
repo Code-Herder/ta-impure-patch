@@ -71,8 +71,10 @@ the subframe pointer array at `+0x10`.
 4b8519  test cl,0x20             ; capability bit5 = "ALP table exists"
 4b851c  je   0x4b86c4            ; clear ⇒ DRAW NOTHING (silent no-op)
 ```
-`GetTAProgramStruct 0x4B6220` returns `*(0x51FBD0)` (TADR `gSchedulerBlock`) — a
-heap block created by `0x4B5980` (pointer stored at `0x4B5990`). `+0xF0` is a
+`GetTAProgramStruct 0x4B6220` returns `*(0x51FBD0)` (TADR `gSchedulerBlock`) — the
+static block `0x51F320` in `.data`, which WinMain hands to `0x4B5980` (called at `0x49E977`)
+and `0x4B5980` stores at `0x51FBD0` (`0x4B5990`); WinMain stores the same address at
+`main+0xC` (`0x49E9B0`). `+0xF0` is a
 16-bit capability word; bit5 also gates the table's generation, so if the table
 was built, the blit works. The same block hosts the whole **table set**:
 

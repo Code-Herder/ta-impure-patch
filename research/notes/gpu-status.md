@@ -346,7 +346,9 @@ the same fix one layer up, and is not done.
 **The order block is PORTED, not captured, since G13o.** `tagpu_order.c` re-derives §3 of
 [UI markers](ui-markers.html) — the driver's three selection rules, the walker's
 capability-mask dispatch and its `pos` chaining, and all five leaf drawers — and draws them
-at native resolution in `tagpu_mark.c`'s pass. A capture could never reach past the
+in `tagpu_mark.c`'s pass: the lines and circles as native-resolution geometry, the route dots
+and the waypoint sprite as the engine's own `cursors.gaf` frames, one texel a screen pixel at
+every zoom, out of an atlas the game thread decodes once ([UI markers](ui-markers.html) §6.5). A capture could never reach past the
 OFFSCREEN's own width and height, and the offscreen is screen-sized while `vpwide` lets the
 projection run far outside it, so at zoom < 1 the engine's own clipper threw the outer ring's
 markers away before our buffer saw them.
@@ -2003,9 +2005,6 @@ a texel with no coverage is additive light (the effects' flashes) and takes the 
     refusal; `tagpu_vk_world_down` frees them with the device or a resize. **MEASURED 2026-09-24**
     (§2.88): against the target path at `ss=1`, 69.6 % of the world's channels exact at Gamma 16 and
     75.2 % at Gamma 6, the rest off by 1; byte-identical at Gamma 12.
-- `tagpu_order.c`'s `seq_ink` reads the packet's `pal[]` directly, the same unscaled table, from
-  the packet the order walk already holds; its question is a luminance ranking over one sprite's
-  colours, which no uniform scale moves.
 
 **Everything in `tagpu_pal.h` is render-thread only**: its entry points resolve into shared
 snapshots, so a call from the game thread would race them. The heartbeat's `palchg=`,
@@ -2083,7 +2082,7 @@ and [the engine map](exe-reverse-engineering.html#cob-guarded-runtime-integratio
 | `main+0x2CAA` | Resource input restores the repaired raw point, then writes the chosen manual snap point before `0x4197D0` computes its rectangle/flags. Game/input thread only; does not arm a command (§2.108) |
 | `0x51E684` / `0x51E688` | Site-test scratch: Quick preview/click queries save and restore both words. Manual placement leaves their normal native ownership (§2.108) |
 | Order nodes through `0x43ADC0`, `0x43AFC0`, `0x439F80` | Resource clicks append/replace build and reclaim orders through `0x43ADC0`; helpers use `0x43AFC0` for Guard; queued-plan cancellation removes exact nodes through `0x439F80`. No direct unit/grid mutation. Recorded and replayed by the existing recorder (§2.108) |
-| Order nodes through `0x439F80`, `0x43ADC0` (placement) | A multi-building gesture's commit, on the game thread inside the click routing: each site removes at most one node of the builder's own build action queued before the gesture (`0x439F80`, the chain re-walked after every removal), the rest are appended with Shift through `0x43ADC0`, under a 1024-node chain cap. No direct unit or grid write. Recorded and replayed by the existing recorder (§2.109) |
+| Order nodes through `0x439F80`, `0x43ADC0` (placement) | A multi-building gesture's commit, on the game thread inside the click routing: each queued node of the builder's own build action is taken off by one site at most (`0x439F80`, in descending place in the chain, the chain re-walked after every removal), the rest are appended with Shift through `0x43ADC0`, under a 1024-node chain cap. No direct unit or grid write. Recorded and replayed by the existing recorder (§2.109) |
 | `placespacing=` in `impure.cfg` | The placement's spacing per unit name. An Alt+Z / Alt+X step hands the game thread's table to the store with `tagpu_settings_put_spacing`, never waiting for the lock in play (a busy lock leaves it pending for the next step or evaluation; the level's end waits); the render thread writes the file at its next flush ([renderers](renderers.html) §2.10b) |
 | `main+0x2CC6` bit 5 | Set by the placement commit, only when it added or removed an order — `0x498FB4`'s own store after a Shift-click, so releasing Shift disarms as after one (`0x4992D8`). Game thread, inside the in-play handler (§2.109) |
 | `0x51E684` / `0x51E688` (placement) | The site test's scratch, saved before and restored after each loop of per-site tests (§2.109) |
@@ -2107,7 +2106,7 @@ and [the engine map](exe-reverse-engineering.html#cob-guarded-runtime-integratio
 | `main+0x2C92`, `+0x2C96`, `+0x2C9A`, `+0x2C9E`, `+0x2CA2`, `+0x2CA6` | the build-cursor / band-box rect: two corners as (world x, altitude, world z) DWORDs. Read only, once a frame on the render thread, and projected with the engine's own baked `+0x80`/`+0x20` origin — **not** `main+0x37E27`'s L/T, which `vpwide` widens |
 | `main+0x1B63` (+ watched × `0x14B`) | PlayerStruct; `+0x67`/`+0x6B` its first/last unit pointer — the range the order-marker driver walks. Read only, game thread |
 | `main+0x37E9C` / `main+0x2CBA` | tracked / hovered unit id. Read only; with `viewStruct+0` (`CameraToUnit`) these are the three units the order-marker driver's selection rules key off |
-| `main+0x1487F` / `main+0x148D3` | `cursor_ary[0x15]` and the `pathicon` GAF sequence. Read only, once each per session — the order pass decodes frame 0 of each for the ink its procedural dot and crosshair inherit |
+| `main+0x1487F` / `main+0x148D3` | `cursor_ary[0x15]` and the `pathicon` GAF sequence (`cursor_ary[21]`). Read only, on the GAME thread, once per session: `art_build` decodes every frame of `cursor_ary[1..21]` into the order art's atlas at the first marker block that finds `pathicon`; the render thread reads only that atlas ([UI markers](ui-markers.html) §6.5) |
 | `0x512344` / `0x512348` | the order-descriptor array and its end: `+0xC` is the type's marker-capability mask and `+0x10` its `cursor_ary` index. Read only; the end pointer is what lets us bound an index the engine does not |
 | `unit+0xAC` | the squad tag. Read only — and read as a **DWORD** and then used as a byte, because that is what `0x469C55`/`0x469CD1` do |
 | weapon `+0x68` | the ballistic launch speed, `weaponvelocity`·65 536/30, the divisor of `0x49CE6A`. **WRITTEN at load, on the game-load thread, by flak's floor (§2.6c)**: a ballistic weapon (`+0x111` bit 1) whose value is 0 gets 1, logged, before `0x49E010` picks its aim routine. No stock weapon is written |
@@ -2152,7 +2151,7 @@ and [the engine map](exe-reverse-engineering.html#cob-guarded-runtime-integratio
 | `main+0x142E7..0x142ED` | minimap rect on screen |
 | `main+0x1423B` / `+0x1423F` | view size in map cells (the minimap rect's size comes from here) |
 | `main+0x14283` / `+0x1428B` | `TILE_SET` `{count, pixels}` and the `u16` `TILE_MAP` — the terrain pass reads both per frame. The GLSL restorer reads them once more when its job starts, on the render thread: each tile's edge texels for the tileability test and the whole tile map once, to rank tiles by distance from the centre of the viewport (`tagpu_terr.c` `restore_order`, G14e: from the centre, so the reveal radiates); the pixels themselves are sampled from the RGBA8 base atlas already on the GPU (§2.88) |
-| `main+0x143A7` | the engine's own palette table, 256 × (R, G, B, pad). Read only, **on the game thread by the frame packet's publisher since 2026-09-12** (a 1 KB copy in every packet, the level-end one too), and by nothing on the render thread: `tagpu_pal.c` takes it from the packet — **and it is not what the screen shows** (§2.3f). **Every world colour is built from it** (`tagpu_pal_engine()`, keyed on `tagpu_pal_engine_serial()`): the four RGBA8 base atlases (terrain, features, effects, units — `tagpu_pal_expand`), which are the Classic++ restorer's input too; the markers' `uPal`; the effects' LHT flash colours; the units' face-shade multipliers; and `tagpu_rglsl_tileable`'s edge test. The Gamma is applied once, after all of them, by the world composite (§2.3f). `tagpu_order.c`'s `seq_ink` reads the packet's `pal[]` itself, on the render thread (`tagpu_order_gather` runs from `tagpu_mark_gather`, inside the unit pass) — a luminance ranking over one sprite's colours, which no uniform scale moves. Its one writer is the PALETTE load `0x42A400`, once per process ([engine map](exe-reverse-engineering.html)) |
+| `main+0x143A7` | the engine's own palette table, 256 × (R, G, B, pad). Read only, **on the game thread by the frame packet's publisher since 2026-09-12** (a 1 KB copy in every packet, the level-end one too), and by nothing on the render thread: `tagpu_pal.c` takes it from the packet — **and it is not what the screen shows** (§2.3f). **Every world colour is built from it** (`tagpu_pal_engine()`, keyed on `tagpu_pal_engine_serial()`): the four RGBA8 base atlases (terrain, features, effects, units — `tagpu_pal_expand`), which are the Classic++ restorer's input too; the markers' `uPal`; the effects' LHT flash colours; the units' face-shade multipliers; and `tagpu_rglsl_tileable`'s edge test. The Gamma is applied once, after all of them, by the world composite (§2.3f). Its one writer is the PALETTE load `0x42A400`, once per process ([engine map](exe-reverse-engineering.html)) |
 | `*(0x51FBD0) + 0x614` | the gamma factor `0x4BA200` multiplies every palette entry by on its way to DirectDraw (`SetGamma 0x4BA590`). Read only, **on the game thread by the packet publisher since 2026-09-12** (a bounded float in every packet; `tagpu_pal_gamma()` answers from the copy). **Its consumer is the world composite** (`tagpu_vk_world.c`, §2.3f): the engine's own curve `min(255, trunc(e × factor))`, uploaded per slot when the factor changes and applied to the finished world; at exactly 1.0 no curve is drawn. It also reaches the `pal:` log lines. **Bounded** to 0.05..8.0 against the slider's own 0.5..1.5 and the chat command's N/10; anything else, NaN included, reads as 1.0, the identity |
 | **`main+0x14287`** | the `FeatureStruct` grid, one 13-byte record per 16-px cell, `mapW16 × mapH16` (`main+0x14233`/`+0x14237`). **WRITTEN, on the LOADER thread, by the saved-feature border fix** (§2.6c): the def word `+0x08` of the border cells only, `0xFFFD` → `0xFFFF` before the saved-feature restore `0x424C00` and back to `0xFFFD` after it for every such cell then EMPTY or `0xFFFE`, inside the call at `0x43265A`, before any unit is restored and before the level's first in-play draw. Otherwise read only. `tagpu_feat.c` reads the height byte (`+0x04`) of the anchor's four corners per anchor per frame for the engine's own projection, and since G14f the four central-difference neighbours too, for the ground's lambert (Classic++ only); `tagpu_terr.c` (G14f) copies the height byte of **every** cell once per map, when it builds the atlas, into an R8 texture the terrain shader samples — keyed on the grid pointer, the dims and the tile set, re-checked every frame; the grid is `IsBadReadPtr`-checked whole before the copy (7 MB on Two Continents), and an unreadable grid leaves Classic++ terrain **unlit** (the restored colour and the grey rule stay, the lambert is skipped), logged and retried every 60 frames. **The map edge's mirror reads the height bytes of every anchor it keeps and of its right, lower and lower-right neighbours, once a load**, on the LOADER thread at LoadMap's join `0x483B53`, right after LoadMap wrote them (`mapfeat_at_load`, §2.90); its feature list comes from the TNT's records, not from the grid's def indices |
 | **`0x512358`** | the pathing maps: 32 movement classes of stride `0x20`, each with its map at `+0x18` and its class tick at `+0x1C` (built by `0x440940`, called at `0x4918E3`). **WRITTEN, on the LOADER thread, by the saved-feature border fix** (§2.6c), only through the engine's own refresh `0x440A40` over the 1 × 1 rectangle of each cell it sets back to `0xFFFD` — the call the engine makes for a grid change — inside the level load, before any unit is restored. Nothing of ours reads them |
@@ -4425,7 +4424,7 @@ regions (§2.15).
 | `fill_frame` (`tagpu_packet_pub.c`), after the UI's render half | `tagpu_hudstate_fill`: one `TAGPU_PK_HUD` record into the packet's area `hud_off`/`hud_len` — the clock, the speed and pause, the HUD's scale, up to 10 seats from `tagpu_replay_players`, up to 320 markers from `tagpu_hudmarks_get`, and the HUD's own state from `tagpu_hudinput_fill` (the pointer, the folds, the switches, the scroll, Sight's and Follow's seats, the key held, the toast, and the stats window's open, split, measure and place); in it, the timeline drag's seek and the window drag's move once a frame. Then, while the window is open, `tagpu_hudstate_fill_stats`: one `TAGPU_PK_HUDSTAT` into `hstat_off`/`hstat_len` — the chosen measure's samples for the record's seats from `tagpu_hudmarks_stats`, with their period and base. No area unless the Vulkan lane draws the HUD and a recording plays, or, the live HUD (`mode` `TAGPU_PK_HUD_LIVE`), a live recorded skirmish whose rewind is open or could open: then the record carries the clock, the pause, the scale, the rewind's state, span and `rw_G`, and Play from here's arm (`rw_arm`, `rw_R`, `rw_evict`), and no seats, markers or stats. A record or a stats area that does not fit sets `TAGPU_PK_TRUNC_HUD` (`0x800000`) | game |
 | `frame_valid` (`tagpu_packet.c`) | refuses a HUD area whose length is not `sizeof(TAGPU_PK_HUD)` or lies outside the slot, and a record whose `nseat` or `nmark` passes its array; a stats area with no HUD record, of any length but `sizeof(TAGPU_PK_HUDSTAT)`, outside the slot, or with `npt` above 512 | render |
 | `tagpu_overlay_draw`, after `tagpu_gui_present` | `tagpu_hudstate_present`: the record as the layout's state — HUD units from the viewport, the engine's frame from `tagpu_hud_live`, colours through the presented palette, the teams, the names as Latin-1, the pointer in units, Sight and Follow as rows, the stats window's groups (a player each, or a team each, summed, when the split asks for teams and they are told apart, `tagpu_hudlay_headed`; a non-finite sample as 0) — stamped with the frame's `frame_counter`, which `tagpu_hudstate_frame` compares with the pass's `frame`; and the state dump on `tagpu_replayhud.dump`, with the hit map of the frame on screen | render |
-| `vk_present` (`tagpu_vk.c`) | `tagpu_vk_hud_prepare` just before `tagpu_vk_gui_prepare`, which builds two layers into one instance range after one `tagpu_huddraw_begin` (one glyph-atlas generation for both). **The record order**: the HUD's base layer (`tagpu_vk_hud_record`) after the world's composite, so the engine's UI and the cursor draw over it; the UI composite (`tagpu_vk_gui_record`); the HUD's top layer (`tagpu_vk_hud_record_top`, the ops flagged `HOPF_TOP`: the live rewind's button in the top bar, its strip and its toast); then, while the composite drawn holds the Config panel (its hand-over's `panelL..panelB`, taken at that flip), the whole composite again inside the panel's part of the top layer's rect (`tagpu_vk_gui_panel_rect`, `tagpu_vk_gui_record_whole`), so the panel stays over the strip; then, inside the top layer's rect (the union of the quads its instances emit) and only when the composite drew this frame, the composite's sharp layer again (`tagpu_vk_gui_record_sharp`, a second quad with `a.z = 1` that `LAY_FS` cuts to the sharp layer), so the cursor stays the last thing drawn there, in record order within the one render pass. It counts in the census's drawn passes (`hud=N` on the `vk: census` line) and claims no A/B frame, so an A/B capture of the swapchain image with it drawn stands down; a world capture reads the world target, which neither layer draws into, so the refusal's count leaves it out there (`if (abworld) ndraw -= draw_hud`), and a world A/B runs in a live recorded skirmish, which always draws the rewind button; the UI pass still counts, so under the play defaults a world A/B needs `tagpu_gui.off`, as before. In `prepare`, the chart's RGBA32F image (`tagpu_huddraw_chart`, 157 KB) goes whole through the slot's staging in the frame's own command buffer when its generation moves; the first frame after the build clears the image, so the HUD never waits on that upload's room, and a frame whose image is an older generation hides the chart's instances. **The groups' layer** (a control drawn whole and faded once, `tagpu_huddraw.c` *THE GROUPS*): a frame with a group records, in `prepare` and so before the seam's render pass begins, a render pass of the HUD's own (`s_lrp`) into an RGBA8 image a frame slot (sRGB when the attachment is, UNORM otherwise: the group's coverage lives in its alpha), drawn by a second pipeline built against that pass (`s_lpipe`); both layers' groups are packed into the one image, and `record` and `record_top` sample it through the composites that place each group. The image grows in steps of 64 pixels, never past the attachment, and is replaced only behind the slot's fence wait, so nothing in flight names the image it replaces (`layer_size`); one that cannot be made stops the pass (`ST_REFUSED`). A frame it will draw hands its ops to `tagpu_hudstate_drawn`, the hit map; any other frame empties the map | render |
+| `vk_present` (`tagpu_vk.c`) | `tagpu_vk_hud_prepare` just before `tagpu_vk_gui_prepare`, which builds two layers (three with the in-game wiki's, §2.12c) into one instance range after one `tagpu_huddraw_begin` (one glyph-atlas generation for both). **The record order**: the HUD's base layer (`tagpu_vk_hud_record`) after the world's composite, so the engine's UI and the cursor draw over it; the UI composite (`tagpu_vk_gui_record`); the HUD's top layer (`tagpu_vk_hud_record_top`, the ops flagged `HOPF_TOP`: the live rewind's button in the top bar, its strip and its toast); then, while the composite drawn holds the Config panel (its hand-over's `panelL..panelB`, taken at that flip), the whole composite again inside the panel's part of the top layer's rect (`tagpu_vk_gui_panel_rect`, `tagpu_vk_gui_record_whole`), so the panel stays over the strip; then, inside the top layer's rect (the union of the quads its instances emit) and only when the composite drew this frame, the composite's sharp layer again (`tagpu_vk_gui_record_sharp`, a second quad with `a.z = 1` that `LAY_FS` cuts to the sharp layer), so the cursor stays the last thing drawn there, in record order within the one render pass; then the in-game wiki's layer and the cursor over it (§2.12c). It counts in the census's drawn passes (`hud=N` on the `vk: census` line) and claims no A/B frame, so an A/B capture of the swapchain image with it drawn stands down; a world capture reads the world target, which neither layer draws into, so the refusal's count leaves it out there (`if (abworld) ndraw -= draw_hud`), and a world A/B runs in a live recorded skirmish, which always draws the rewind button; the UI pass still counts, so under the play defaults a world A/B needs `tagpu_gui.off`, as before. In `prepare`, the chart's RGBA32F image (`tagpu_huddraw_chart`, 157 KB) goes whole through the slot's staging in the frame's own command buffer when its generation moves; the first frame after the build clears the image, so the HUD never waits on that upload's room, and a frame whose image is an older generation hides the chart's instances. **The groups' layer** (a control drawn whole and faded once, `tagpu_huddraw.c` *THE GROUPS*): a frame with a group records, in `prepare` and so before the seam's render pass begins, a render pass of the HUD's own (`s_lrp`) into an RGBA8 image a frame slot (sRGB when the attachment is, UNORM otherwise: the group's coverage lives in its alpha), drawn by a second pipeline built against that pass (`s_lpipe`); both layers' groups are packed into the one image, and `record` and `record_top` sample it through the composites that place each group. The image grows in steps of 64 pixels, never past the attachment, and is replaced only behind the slot's fence wait, so nothing in flight names the image it replaces (`layer_size`); one that cannot be made stops the pass (`ST_REFUSED`). A frame it will draw hands its ops to `tagpu_hudstate_drawn`, the hit map; any other frame empties the map | render |
 | `tagpu_zoom_frame_end` | `tagpu_hudstate_cmd`: the hit map into the command record's `TAGPU_CMD_HUD`, with the window drag's frame (`u`, the client pixels of a HUD unit, and `W`, `H`, the screen in units), emptied as it is copied, so each drawn frame's map is posted once and a frame `vk_present` did not prepare posts none; `pass` is 1 when the HUD's prepare ran since the last record (`tagpu_hudstate_drawn` sets it, NULL first, on every frame the pass runs) and 0 otherwise, so the game thread tells "drew nothing" from "no frame was prepared" | render |
 | the command record's take (`tagpu_packet_pub.c`), before every in-play draw | `tagpu_hudinput_take`: the map copied for the game thread's hit tests | game |
 | `tagpu_shield_wndproc`, before the shield's gate | `tagpu_hudinput_button` at `lParam`'s client point, for both buttons' presses, double clicks and releases, after the sprocket's `tagpu_menu_click`; `tagpu_hudinput_cancel` on `WM_KILLFOCUS`, `WM_CAPTURECHANGED` and a deactivating `WM_ACTIVATEAPP` | game |
@@ -4456,6 +4455,261 @@ the level's unit defs as listed above, on the game thread; and, in the walker, n
 engine's — the recording's player images (`+0x90`, `+0x9C`, `+0xD4`, `+0xFC`, `+0xFE`, `+0x144`,
 with `+0x106` for the markers) and unit images (`+0xA6`, `+0xFF`, `+0x104`, `+0x110` bit 28).
 
+### 2.12c The in-game wiki (`tagpu_wiki.c`, `tagpu_wikistate.c`, `tagpu_wikilay.c`, `tagpu_wikistage.c`, `tagpu_vk_hud.c`; every Vulkan level)
+
+The wiki button in the top bar's right-hand row and, when it is pressed, the kit's window over the
+game (90 % of the screen, centred): the title "Wiki" and its close button, the tree, the selected
+entry's demos, and the entry's column -- title, subtitle, badge, the stage with its demo playing,
+the caption and keys strips, the controls and the text -- drawn from `art/wiki/kit/` at the
+device's resolution on the Vulkan lane in every level, a replay's included. While the window is
+open the engine takes no input, and a single-player level is paused. Try it yourself hands the
+stage to the player: the demo's scene simulated on the game thread, driven by the pointer, the
+buttons and the keys the window takes anyway. Beside the stage's map is the running mod's left
+sidebar, the only build menu ([the in-game wiki](ingame-wiki.html), *The left sidebar on the
+stage*). Design and status:
+[the in-game wiki plan](ingame-wiki-plan.html), landings 2 to 5; the engine facts: [engine map](exe-reverse-engineering.html), *The in-game wiki's engine
+questions*. **No byte patch and no detour**: the input is taken in hooks Impure already owns, the
+pause through `tagpu_menu.c`. GDI draws neither the button nor the window, so the wiki cannot open
+there.
+
+| site | what we do there | thread |
+|---|---|---|
+| `fill_frame` (`tagpu_packet_pub.c`), after the effects' models | `tagpu_wiki_fill`, given by value the controlled player's side (PlayerInfo `+0x95` of the record `main+0x1B63 + 0x14B·byte[main+0x2A42]`, the record index held below eleven, -1 when it or the pointer does not validate; `wiki_side`) and `main+0x37EFA == 1` (`wiki_iface`), read there: a pair other than the last restarts the open window's demo. One `TAGPU_PK_WIKI` record (open, the pause taken, the pointer's client point, the held control, the page's selection, folds, scrolls and playback, and the text's context -- the Interface Type and the layout side whose casting names the units, which the render thread fills the page's text with) into the packet's last area `wiki_off`/`wiki_len`; while open, the demo's `WIKISIM` stepped by the clock (at most 8 ticks) and its view copied by value into the record's `stage` (`tagpu_wikistage_copy`; the nano spray's live particles with it, `WIKISTAGEPART part[WIKISTAGE_PARTS]`, x, y, z and colour, 16 bytes each, at most the simulation's pool of 1024, `WIKISTAGE_TRUNC_SPRAY` set when the simulation dropped one), then each unit's posed model into the view's pose pool (`tagpu_wikistage_pose`: each primitive's MOVE, TURN and flags out of `tagpu_wikisim_model`, 4096 `WIKISTAGEPIECE`s of 20 bytes over all the units, a unit's run `pose_at`/`pose_n`; a unit past the pool or `WIKISTAGE_PIECES` draws at rest and sets `WIKISTAGE_TRUNC_POSE`), the record then `sizeof(TAGPU_PK_WIKI)` = 162 328 bytes on the i686 build against a 320-byte head; none, and the window closed, when the HUD's pass is off (GDI, or the pass refused) or the wiki's layout refused (`tagpu_wikistate_refused`). A whole record that does not fit sets `TAGPU_PK_TRUNC_WIKI` (`0x1000000`) and is placed as its head (`tagpu_wiki_head_only`: no stage, a message on it), the shortfall still the whole record's so the slot's growth aims at the stage; a head that does not fit either carries no record, and the first fill of the next publish closes the window (`tagpu_wiki_carried` records what the published fill carried; a fill redone for the same publish, `s_fillAgain`, does not count). The trigger `tagpu_wiki.check` (every demo played to its end for every side of the layout and both Interface Types, each `tagpu_wikisim_hash` logged as `<entry>/<demo>/<side>/<iface> <hash>`) is answered from the fill, `tagpu_wiki.dump` (writes `tagpu_wiki.json`, with the bytes carried) from `tagpu_wiki_carried` after the record is placed | game |
+| `frame_valid` (`tagpu_packet.c`) | refuses a wiki area whose length is neither `TAGPU_PK_WIKI_HEAD` (no stage) nor `sizeof(TAGPU_PK_WIKI)`, or that lies outside the slot | render |
+| `tagpu_overlay_draw`, after `tagpu_hudstate_present` | `tagpu_wikistate_present`: the record laid out by `tagpu_wikilay_build` in the wiki unit (screen height / 720), its titles, subtitle, paragraphs, demo titles and tree leaves filled as they are read (`tagpu_wikitext_fill`) for the record's Interface Type and layout side, whose casting `casting_of` takes from the published WIKISIDE through `tagpu_wikiside_get` -- immutable and never freed, the side bounded against `WIKI_SIDE_SIDES` and the layout's sides, anything else filling with each entry's own names -- the button in the bar's own pixels from `tagpu_hud_live`, in the rewind button's slot unless the same frame's live HUD draws that button; the stage's view copied out of the packet, every count bounded and every string ended (`view_bound`, the spray's `npart` to `WIKISTAGE_PARTS` among them), and built by `tagpu_wikistage_build` inside the page's bezel, each op tagged with its range (`WIKISTAGE_IN_*`); the spray's particles are data there too, each drawn as a 2 × 2 game-pixel rect only for a colour inside `0xA1..0xA7` and a point on the map; the stage's cursor decoded once from the published arena's sequences through the presented palette (`tagpu_pal_live`) into a 16-cell sprite sheet, again when `tagpu_pal_serial` moves, and sized by the sharp layer's `cursorscale=` (`tagpu_gui_cursor_scale`, written by `tagpu_gui_present`'s poll on the same thread); `tagpu_vk_hud.c` sends the sheet whole as `HUD_TEX_SPRITE` when its generation moves. **The sidebar**: the view names its layout by a value (`WIKISTAGE_LAYOUT_NONE`, `_FIXTURE`, `_MOD`), resolved here to a layout this thread holds itself (`side_resolve`: the fixture of the wiki's published data, or the running mod's through `tagpu_wikiside_get`; a `_MOD` that does not answer `WIKISIDE_READY` resolves to none, and the stage draws the column and its minimap alone; a value out of range draws no sidebar, `view_bound`). With the mod's layout, `side_bind` composes the column every frame (`tagpu_wikiside_compose`, 128 × 1024 RGBA8, with the PANELSIDE of the side the view names, bounded by the composer against the layout's sides) and bumps its generation exactly when the indices, the coverage or the rows differ from the last column's, compared byte for byte (two buffers, the new column composed into the one not drawn; 5.9 µs a frame for 480 rows and 12.9 µs for 1024 when nothing changed, i686 under Wine, MEASURED 2026-10-27); `tagpu_vk_hud.c` sends it whole as `HUD_TEX_SIDE` (sampled nearest) when the generation moves, and hides the `HOP_SIDE` instances of a frame whose generation the device does not hold yet (`hide_tex`), so a column is never drawn from another frame's texels. The texture is made with the pass (one more descriptor set in the pool) and freed in `tagpu_vk_hud_down` | render |
+| `tagpu_overlay_draw`, after `tagpu_wikistate_present` | `tagpu_wikiworld_frame`: the stage's ground in 3D for this frame (§2.12d) -- the terrain, feature and target hand-overs from the view `tagpu_wikistate_scene` answers and the arena `tagpu_wiki3d_get` published, each stamped with the frame | render |
+| `vk_present` (`tagpu_vk.c`) | before the HUD's prepare, the wiki's stage in 3D is prepared and the frame's picture of the stage decided once (§2.12d, `tagpu_wikistate_image`); `tagpu_vk_hud_prepare` then builds the wiki's three op lists -- the page, the stage's ops under its image, those over it (every op of the stage under on a whitebox frame) -- through `tagpu_huddraw_build_list` as a third layer of the HUD's pass (one instance range of 32 768 quads a slot, one glyph atlas, the kit's parts uploaded after the HUD's); after the HUD's top layer and the UI drawn again inside it, `tagpu_vk_hud_record_wiki` draws the page and the ops under the image, the wiki's world target is composited into the map's rect, `tagpu_vk_hud_record_wiki_over` draws the ops over it, and `tagpu_vk_gui_record_cursor` draws this frame's cursor quad once more over it all when the window is closed, or open with the pointer in the picture and not over the stage of a frame in Try it yourself (`tagpu_wikistate_cursor`: the record's `try_it`, its pointer and the frame's stage canvas, all of one frame), where the stage draws the simulation's own cursor | render |
+| `tagpu_zoom_frame_end` | `tagpu_wikistate_cmd`: the drawn frame's hit map (up to 160 controls, client pixels, topmost first), the entry it drew, each panel's scroll as drawn and its limit, and each scrollbar's track and thumb, into the command record's `TAGPU_CMD_WIKI`, emptied as it is copied | render |
+| the command record's take (`tagpu_packet_pub.c`) | `tagpu_wiki_take`: the map copied, every number bounded, for the game thread's hit tests and scroll limits | game |
+| `tagpu_shield_wndproc`, after the `WM_TAGPU_*` cases | `tagpu_wiki_message`: open, every input message on the shield's swallow list plus `WM_SYSKEYDOWN`/`UP` -- a left press acting on the drawn frame's control or scrollbar (a press on `demo:`, `play`, `replay` or `try` only when that frame drew the entry selected now), the wheel scrolling the panel under the pointer and a track press paging it, each from the scroll asked held to the drawn limit, a move dragging a held thumb (a real move with the left button up ends a real press's drag; a frame that drew no wiki moves no scroll); in Try it yourself, a move over the drawn frame's `stage` control fitted to the world (`tagpu_wikistage_fit` on that control's rect and the frame's unit) as the simulation's move, a left or right press there as a move and a down, a release anywhere as the up of a held button, Shift, Alt and Ctrl and Alt+Z / Alt+X as downs and ups, all into the game thread's `WIKISIM` (a press on the stage's sidebar is such a press: the pointer is clamped to the content rect, the column with the map, and the simulation's sidebar rules act on it); closed, any press on a control of a drawn frame that still showed the window open (the frame or two after a close, a double-click on X) taken and owed its release, a left press on the button, and the paired release, which goes on when it re-locks the mouse (unlocked, closed). The press opens nothing while a rewind or Leave's question holds the pause (`tagpu_replay_rewind_state`, `tagpu_hudinput_leave_pending`). The frozen point is the press's `lParam` through `mouse_client_to_game`. A release of a button the engine holds (`TAGPU_WIKI_FROZEN`) goes to the engine at the frozen point through `deliver_engine`, unless the shield is armed; `tagpu_wiki_cancel` on `WM_KILLFOCUS`, `WM_CAPTURECHANGED` and a deactivating `WM_ACTIVATEAPP`, which also gives Try it's simulation the up of everything it holds | game |
+| `deliver_mouse`, `deliver_key`, `WM_TAGPU_CHAR` (`tagpu_shield.c`) | `tagpu_wiki_mouse` (before the store to `g_ddraw.cursor`; `TAGPU_WIKI_FROZEN` delivers the release at the frozen point), `tagpu_wiki_key` (before `set_key`), `tagpu_wiki_char`: the injected path, the same rules | game |
+| the two doors into TA's window procedure: `fake_WndProc`'s tail (`wndproc.c`) and `to_game` (`tagpu_shield.c`), past the display-only ring's drop | `tagpu_wiki_engine_got`: the left, right and middle buttons and the keys the engine is handed down and not yet up, whose releases the wiki never keeps | game |
+| `WM_MOUSELEAVE` (`wndproc.c`) | while the wiki holds input, the leave forgets the client point and goes no further, so the engine is not told the pointer left | game |
+| `fake_GetCursorPos`, `fake_GetKeyState`, `fake_GetAsyncKeyState` (`winapi_hooks.c`) | while the capture word is set: the frozen opening point (no store) and 0 for every key. `fake_GetCursorPos` stores its live point through `tagpu_wiki_cursor_store`, under the critical section the open and the close hold (`tagpu_wiki_init` makes it in `DllMain`'s attach) | any, the engine's mouse thread included |
+| the art loader's thread (`tagpu_hudart.c`, `wiki_load`) | `tagpu_wikilay_check`: the kit and the data refused, and the wiki not published, when the kit lacks an icon or the `toast` style the window and the stage draw, or the page drops an op, run, text, hit or group (`HUDOPS.overflow`) in any of its checked states -- closed with its button held, open with its close button held, every entry's every demo playing at 1× and ended at 2×, with Try it's button held -- at 1024 × 768, 1280 × 720 or 3840 × 1080, every scroll at 0, the text filled at Interface Type 1 with each entry's own names. The build itself refuses only a missing argument or its memory, so the overflow is what the states test; other scrolls, captions, held keys, screens and the castings' names are not built. The parts and the roles' styles are refused by `tagpu_wikilay_load` itself | the loader |
+| teardown wrap's entry (`tagpu_reclaim.c`) | `tagpu_wiki_level_end` after `tagpu_hudinput_level_end`: the window closed, its pause forgotten without a write, the hit map emptied | game |
+| `tagpu_wiki_fill`, the first fill of an open window once the wiki's data is loaded, once a process | `assets_start`: the 3D asset load's inputs copied by value -- the mount list's paths (`tagpu_replays_archive_paths`, the list `running_mod` reads), the `language` value and the asset folders' names (`tagpu_replays_asset_names`), `GetCurrentDirectoryA`, the wiki's data and WIKIPAK -- and `tagpu_wikiasset_start`, which starts the loader below; nothing waits for it | game |
+| the 3D asset loader's thread (`tagpu_wikiasset.c`, below-normal priority, started once under an interlocked compare) | the stage descriptions' TNT tiles and their hashes, their feature sections with their sequences or models, and every entry's unit types' FBI, 3DO and script, then every layout side's type for each cast the entry's units name, with Create()'s hides (`tagpu_cobscan_mask`, bits over `tagpu_model_walk` as the ghost's) and each script's bytes kept in the arena with its posed model's order and visible flags (`unit_script`, `tagpu_cobscan_posed`), and the game's own cursors (`<anims>\cursors.GAF`'s `cursornormal` and `cursormove`, WIKI3D `cursor`), resolved by the engine's rules (`tagpu_vfs.c` over `tagpu_hpi.c` and `tagpu_tdf.c`, its own read-only handles) into one arena reserved `MEM_TOP_DOWN` and refused unless both ends pass `tagpu_m3_ptr_ok`; published by one `InterlockedExchangePointer` (`tagpu_wiki3d_get`), immutable and never freed, or, when the load fails, a refusal's sentinel by the same store (`tagpu_wiki3d_answer`: pending, ready or refused, as the sidebar's). **The sidebar first**, before the 3D load starts: `tagpu_wikiside_load` reads the running mod's sidebar (its layout, every side with MAIN2 and GEN, the pictures of every screen it can show, each side's PANELSIDE, the dots, the palette's tables) and each side's casting (the cast rule over the side's build menus and the unit files, with the display names in the copied `language`; `side_of_engine`, sidedata's index to the layout's side) by the engine's rules into one block, checked by `tagpu_wikilayout_check`, and `side_publish` stores the block, or the refusal's sentinel, by one `InterlockedExchangePointer`. ORDERING: the block is written whole before that store, a full barrier, and `tagpu_wikiside_get` reads the pointer with `InterlockedCompareExchangePointer`, so a reader that sees it sees every byte; the answer is final and the block never written or freed after it. A `CreateThread` that fails publishes the refusal, so the game thread never waits for an answer that cannot come. A read through `tagpu_hpi.c` is bounded on the range it asks for, `TAGPU_HPI_READMAX` (64 MiB), not on the file's size, so the sidebar's lookups into an 82 MB `fx.GAF` (Escalation) read only the pages they touch. It reads no engine memory and paints nothing; the log lines `wikiside: loaded in N ms - S screens, T types, R rows, a H-row sheet` and `wiki3d: loaded in N ms - arena B bytes ...` | the loader |
+| `tagpu_wiki_carried`, every 30th fill | `tagpu_wikiasset_poll`: the trigger `tagpu_wiki3d.dump` writes the published load's report to `tagpu_wiki3d.json` and, when the sidebar answered `WIKISIDE_READY`, the sidebar's to `tagpu_wikiside.json` (each through its `.tmp`); it waits while the load runs | game |
+
+**The units' scripts** run in the demo's `WIKISIM` on the game thread: `tagpu_wikicob.c`, on our
+own COB VM `tagpu_cobvm.c`, with one host a simulation, its units' scripts copied from the
+published 3D arena when the simulation is made (`tagpu_wiki.c` `scripts_now`, `cob_type`). No demo,
+Try it or parity check starts while `tagpu_wiki3d_answer` is pending. The host reads and writes no
+engine memory and no engine script object -- its units, their COB objects and its random number
+generator are its own -- so it adds no field to the lists below, and neither do the poses it sets,
+which reach the render thread only as the record's pose pool (§2.12d), nor the nano spray: its
+particles are the simulation's own, written on the game thread into the record's `part` with the
+view and read on the render thread only as the stage's ops draw them, after `view_bound`
+(`tagpu_wikistate.c`) has held their count to the array; the engine addresses it names are
+the facts it imitates ([the COB plan](ingame-wiki-cob-plan.html), *The wiki host*). Its slice costs
+about 70 µs over a demo's units; with the scripts on, the wiki's page cost the game thread at most
+0.358 ms in a frame over 1222 frames, and `tagpu_wiki.check` played its 84 demos in 89 ms
+(MEASURED 2026-10-28, a private Xvfb at 1920 × 1080). It compiles for SSE2 like the simulation.
+
+**Fields we write**, on the game thread, through `tagpu_menu_pause_hold`: bit 0 of `main+0x38A51`
+(the pause), only when `main+0x2A44` bit 0 is clear (a single-player level), set at the open only
+when it was clear and cleared at the close only when the open set it. Of our own: the game
+folder's `tagpu_wiki.json`, `tagpu_wiki3d.json`, `tagpu_wikiside.json` and `tagpu_wiki.layout.json`
+(the layout a `tagpu_wiki.check` played on; each through its `.tmp`) and the deletion of
+`tagpu_wiki.dump`, `tagpu_wiki3d.dump`, `tagpu_wiki.check` and `tagpu_wiki.shot` (game thread);
+and, on the render thread, `tagpu_wiki3d_shot.ppm` -- unlinked when a `tagpu_wiki.shot` capture is
+armed and written by `tagpu_vk_shot_finish` -- and the reads of the lever `tagpu_wiki3d.on`. **Fields we read**: `main+0x2A44`
+bit 0 and `main+0x38A51` bit 0; at every packet fill, in `tagpu_packet_pub.c` (the wiki's own files read no engine memory), byte `main+0x2A42` (held below main's eleven player records), the record's PlayerInfo pointer at `main+0x1B63 + 0x14B·p + 0x27` (`ptr_ok` as a sanity filter) and its byte `+0x95`, and the int `main+0x37EFA`, each passed to `tagpu_wiki_fill` by value, the side byte as data the wiki maps through the published block (engine map, *The wiki's per-mod tutorials*); and, once, at the asset load's start, through `tagpu_replays.c`:
+the mount list (the graphics globals `*0x51FBD0`'s `+0x618` bounded by `+0x61C`, 0x104 bytes a
+path), the `language` value `0x51FB50` and the folder names in `.data` (`0x503920`, `0x503720`,
+`0x504734`, `0x503704`, `0x5036E4`, `0x503740`, `0x502E30`, `0x502C7C`, and for the sidebar
+`guis` `0x502820`, `gamedata` `0x503360`, `unitpics` `0x505FE4`, `download` `0x503730`,
+`commongui` `0x50925C`, `palettes` `0x5031BC`, `PALETTE` `0x5033A4` and `guipal` `0x5031C8`),
+each bounded to its buffer. They are read in the running process because a mod's loader DLL
+rewrites some of them in `DllMain` (Mayhem's `guiM`, ProTA's `guiP`; the engine map's *The left
+sidebar*, *The folder names a mod renames*). **No new engine hook, patch or detour**: the sidebar
+is drawn from those files alone, and its rules are the engine's repeated in `tagpu_wikisim.c`. The rules the loader repeats: [engine map](exe-reverse-engineering.html), *How the engine
+resolves a path, a unit's files and a model's textures*. Nothing the recording carries: the demo's simulation is the wiki's own, a `WIKISIM`
+on the game thread that TA's simulation never reads, and every wiki file is `presentation`.
+
+### 2.12d The wiki's stage in 3D: the world passes compiled twice (`tagpu_scene.h`, `tagpu_wikiworld.c`, `tagpu_wikiscene.c`, `tagpu_scene_wiki.h`, `tools/scene-check.sh`; every Vulkan level with the wiki open)
+
+The seven files that draw one world scene — `tagpu_vk_world.c`, `tagpu_vk_terr.c`,
+`tagpu_vk_feat.c`, `tagpu_vk_unit.c`, `tagpu_posedraw.c`, `tagpu_posebake.c` and
+`tagpu_render3do.c` — are compiled **twice**: `src/<name>.o` is the game's world, and
+`src/<name>.wiki.o`, built with `-DTAGPU_SCENE_WIKI`, is the in-game wiki's stage, each with its
+own statics. Both are linked. Design: [the 3D stage plan](ingame-wiki-3d-stage-plan.html),
+section 1 and landings 6f, 6g and 6h. **No engine address, no hook, no byte patch**: nothing for
+the tables above; the one engine value the stage reads is the graphics-option word, off the
+frame's packet (`gfx_opt`). The wiki's copies of the world target, the terrain and the features
+draw the stage's ground; its copies of the unit pass, the pose bake, the pose draw and the 3DO
+renderer draw its units and ghosts.
+
+- **What `tagpu_scene.h` does under the macro**, included first by each of the seven: renames
+  every external symbol they define (`tagpu_vk_*` → `tagpu_vkw_*`, `tagpu_r3d_*` → `tagpu_r3dw_*`,
+  `tagpu_posedraw_*` → `tagpu_pdw_*`, `tagpu_posebake_*` → `tagpu_pbw_*`); points their hand-over
+  sources (`tagpu_terr_handover`, `tagpu_feat_handover`, `tagpu_feat_atlas_hand/owed/ack`,
+  `tagpu_native_worldtgt`, `tagpu_native_foggrid`, `tagpu_native_scissor_on`) at
+  `tagpu_wikiworld_*`; points every call into a game-only module (the cast-shadow map, the
+  scaffold, the effects pass, the Classic++ restorer, `tagpu_classicpp_assets`/`_light`, the fault
+  lever, `tagpu_vk_ab_arm`, `tagpu_grow_stress`) at an inert answer in `tagpu_wikiworld.c`; and
+  sizes the bake's caches, the unit pass's vertex-buffer table and their lookup hashes from the
+  stage's bound, `WIKIWORLD_FRAMEMAX` = 128 units + 256 gesture-site ghosts + the placement ghost +
+  64 3D features = 449 (the keeps at the bound too: `tagpu_posebake.h` asserts that no keep exceeds
+  its table, which would undo the bound). Without the macro it does nothing.
+- **The sources the wiki's copies read.** `tagpu_wikiworld.c` defines them with
+  `TAGPU_SCENE_WIKI` set, so each definition is checked against the very prototype the wiki copy
+  calls. The terrain, feature and target sources answer from its producer (below); every other one
+  answers "nothing this frame" (0, a null view, `VK_FORMAT_UNDEFINED` for the shadow format, the
+  restorer down), each the answer the passes already take from the game's own module on a frame
+  with nothing to give.
+- **The producer**, `tagpu_wikiworld_frame`, once a frame on the render thread in
+  `tagpu_overlay_draw` after `tagpu_wikistate_present`: from the stage this frame draws
+  (`tagpu_wikistate_scene`: the record's view, bounded, the entry, the stage's rect) and the
+  arena's stage of that entry (`tagpu_wiki3d_get`, matched by id; a stage that did not resolve, or
+  whose map is not the view's, is the whitebox's), it builds once a stage the scene
+  (`tagpu_wikiscene_ground`: every cell's tile, the deposits' and vents' quads with
+  `tagpu_feat.c`'s depth bands), the R8 terrain atlas in `tagpu_terr.c`'s layout (64 tiles a row,
+  34-texel pitch, a one-texel replicated border) from the arena's tiles, and the features' frames
+  in an atlas of its own (`TAGPU_GAFATLAS`, 512 square, 128 entries, a key plane, no allowance),
+  painted then, with every quad's six vertices as `emit_frame` makes them (the edge nudge, each
+  corner's own world point); and every frame the fog grid (`tagpu_wikiscene_fog`) and three
+  hand-overs: the terrain's (`gw` = map cells × 16, zoom 1, the eye at the map's corner, the
+  viewport the whole map, the scissor on, no relief, restore or shadow), the features' (the same
+  camera), and the target's (`TAGPU_WORLDTGT`: `gw` × `gh` at `tagpu_settings_ss`, composited at
+  `tagpu_wikistage_image`'s rect on the attachment -- the stage fit's map rect, each edge snapped
+  to the device pixel as `stage.js` snaps it). The lever `tagpu_wiki3d.on`, read every 30 frames:
+  `off` (no stage in 3D), `nomap`, `nofeat` (that hand-over withheld while still expected, so the
+  frame shows the whitebox whole), `nounits` (no unit drawn in 3D: every type the whitebox's box)
+  and up to eight `nounit=TYPE` (that type the box alone).
+- **The units**, every frame from the same view, through `tagpu_wikiscene_models`
+  (`tagpu_wikiscene.c`, equal record for record to `scene.js`: `scenecheck.mjs`): one record a
+  unit of a type the arena has (its owner, the record's yaw `(cs, sn) = (-hz, hx)` from the facing,
+  a structure's always `(0, 1)`, the depth row's key, the nano staging of `tagpu_nanostage.h` while
+  `built < 1` and then no shadow), then the placement ghost, the gesture's sites and the queued
+  sites not yet standing, alpha 0.40, no shadow. The arena's types are matched to the stage's by
+  name once a stage (`types_build`), each type's node run walked with `tagpu_model_walk` and every
+  node checked to lie inside the arena **before** it is handed over; a type that fails is drawn as
+  the box (`resolved`, bit t). Each record goes to the wiki bake as a piece run
+  (`tagpu_pbw_unit`, key `ghost` 1, so units and ghosts of a type share one geometry). **A unit
+  its script poses** takes the pose the record's pool carries (`pose_of`, `pose_compose`):
+  `tagpu_native.c` `posed_pose`'s composition, P = parent · T(rest offset from the parent + MOVE) ·
+  R(TURN) down the tree, through `tagpu_wikiasset.c`'s `posed_of` map from the stage's walk to the
+  posed order; at the root the facing below stands for the body turn, about the root's rest point,
+  with the root's MOVE outside it; a node the posed order does not hold, or whose parent never
+  resolves, keeps the rest pose; the flags give `posed_pose`'s words (hidden: an all-zero matrix
+  and visibility 0; visible and cached 3; dont-cache 1; shaded by bit 2 once any visible piece
+  carries it). `rot2`, `m43_mul` and `piece_local` are `tagpu_posemath.h`'s, which
+  `tagpu_native.c` includes too, so the game's units and the stage's are posed by one arithmetic.
+  **A ghost, and a unit no script poses or whose run `pose_of` refuses,** is posed at rest: one
+  rotation about the root's rest point, `(cs, 0, sn; 0, 1, 0; -sn, 0, cs)` on the engine-held
+  nodes, which is the engine's body turn of the matching heading (`0x4CB590` in the engine map); a
+  piece `Create()` hides takes visibility 0, one it marks dont-cache 1. The camera is
+  the map's corner at zoom 1 (`depthScale` 512, the scaffold rect the whole map), the light the
+  Classic one. From the packet's option word: the shadow kind (bit 2 Shadow: a structure's slant
+  when its type has one; bit 3 as well: a mobile unit's silhouette; never for a nanoframe or a
+  ghost) and the lit rows (bit 5 Shading: a structure, and every ghost). The calls in their order a
+  frame: `tagpu_r3dw_atlas_level(1)` (a constant level generation), the atlas recycle,
+  `tagpu_pbw_frame`, `tagpu_pdw_frame`, the 3DO renderer's ensure and atlas frame (the allowance
+  off from the first frame), the shade table, then the records; a frame on which the bake refused
+  any record hands nothing over, and the frame shows the whitebox whole.
+- **In the seam** (`vk_present`, `tagpu_vk.c`): after the game's prepares and before
+  `tagpu_vk_hud_prepare`, the wiki's world target is prepared first (its own extent), then its
+  terrain, its features, and its units (the upload always, so a frame the allowance withheld still
+  moves the atlas on; the prepare only for a hand-over that carries every record); **the image is
+  drawn whole or not at all** -- only when the target and
+  every pass the producer said the frame expects (`tagpu_wikiworld_wants`) prepared on this frame
+  -- and `tagpu_wikistate_image` splits the stage's ops for that answer before the HUD's pass
+  builds them (`tagpu_wikistage_keep`: R0 under the image, R2 over it; R0 and R1 for the
+  whitebox), and `tagpu_wikistate_image` is told which types the image drew in 3D, whose boxes it
+  then leaves out. After the game's world render pass, the wiki's own (begin, terrain, features,
+  units, ghosts, end);
+  in the frame's pass, between `tagpu_vk_hud_record_wiki` and `tagpu_vk_hud_record_wiki_over`,
+  the wiki's `tagpu_vkw_world_record` composites the target, LINEAR, under the Gamma curve. Its
+  teardown is the game's: `tagpu_vkw_*_down` in `vk_down` and `passes_down` behind their
+  `vkDeviceWaitIdle`, and the four passes' (terrain, features, units, world) `_down_owed` in the owed list, paid behind the same
+  wait. The trigger `tagpu_wiki.shot` (`ENTRY DEMO TICK`: the demo played to the tick and paused on
+  the game thread, the record numbering the capture) is taken through the A/B's one capture buffer
+  on the first frame of that view whose image was drawn, and only while no capture is in flight
+  (`s_abSlot1` 0), into `tagpu_wiki3d_shot.ppm`: the wiki's target before the Gamma curve.
+- **What it draws**, MEASURED 2026-10-27 on the reference setup (retail, a private Xvfb, the RTX
+  presenting): quickbuild's ground, 2 tiles and 240 cells, 11 feature quads, a 2176 × 34 terrain
+  atlas and 2 feature frames; the target 1280 × 768 at ss 2 and 640 × 384 at ss 1. The render
+  thread's time for the stage, from its periodic line: the first frame 4.9 ms in the seam (the
+  targets built, both atlases sent), then the producer 0.06 ms and the passes 0.02 ms a frame on
+  average, at most 0.04 ms, at 1920 × 1080 and at 3840 × 2160 alike. Against the mockup
+  (`tools/wiki/stage3dcheck.py` over `wiki_regression.py stage3d`'s 18 captures a run, three demos
+  at three ticks at ss 2 and 1): every pixel equal, terrain and features, in both runs. Under
+  `nomap` and `nofeat`, 0 of 300 frames drew the image; with the lever gone, 300 of 300.
+- **The invariants.** *No static of the wiki's stage is a static of the game's world*: two
+  translation units share no file-scope state, which C's linkage guarantees for every static
+  these files hold and every one a later edit adds. The one deliberate exception is the bake's
+  scratch (`tagpu_pb_scratch_*`: the two vertex streams, the skip flags and the normal sums,
+  5.3 MB), defined by the game's object and `extern` in the wiki's (`PB_SCRATCH`); it holds one
+  model during one `tagpu_posebake_unit` call, both copies run on the render thread only, and
+  neither calls the other. *Every external symbol is renamed*: a missed one is defined twice and
+  the link fails naming it (checked by planting one). *No wiki copy reaches a game-only module*:
+  `tools/scene-check.sh`, a prerequisite of the link that depends on every object, fails on any
+  undefined symbol of a wiki object that another object of ours defines and its allow list does
+  not name (stateless or read-only helpers: `tagpu_vk_stage_*`, `tagpu_gaf_atlas_*`/`_frame_*`/
+  `_seq_*`/`_rects_*`, four `tagpu_pal_*` reads, the device queries, `tagpu_log`/`_logf`,
+  `tagpu_settings_ss`, `tagpu_user_top_bound`). MEASURED 2026-10-26 by planting a call to
+  `tagpu_vk_shadow_prepare` in a wiki copy: `scene-check: src/tagpu_vk_world.wiki.o calls
+  tagpu_vk_shadow_prepare, which a module of the game's world defines`.
+- **The game's path is unchanged.** MEASURED 2026-10-26: six of the seven game objects are
+  byte-identical to the base commit's; `tagpu_posebake.o` differs only in that its scratch has
+  external linkage, which moves `.bss` offsets and one register choice. On `tascene-parity`,
+  paused, the base commit's DLL and this one give byte-identical terrain, feature and unit
+  captures (`tacli ab`, each pass armed alone), and a presented window under the whole play set
+  that differs by 0 px below the message band (whose "forces obliterated" wording is random per
+  boot), the cursor's pulsing hotspot pixel aside.
+- **What it costs**, MEASURED 2026-10-26 with `size` and `objdump -h` on the i686 build:
+  `ddraw.dll` 17 778 688 → 18 040 832 bytes (+262 144: `.text` +115 424, `.rdata` +126 592, the
+  shaders' SPIR-V arrays included twice); `.bss` +363 296. The wiki objects' `.bss`:
+  `tagpu_render3do` 188 928 (its 2 048-entry atlas table, not resized), `tagpu_posebake` 70 464,
+  `tagpu_vk_unit` 63 168, `tagpu_vk_feat` 34 400, `tagpu_posedraw` 2 656, `tagpu_vk_terr` 2 304,
+  `tagpu_vk_world` 1 408. The stock-limits build's are the same.
+- **The invariants.** *A hand-over lives one iteration of the render loop*: the producer runs in
+  `tagpu_overlay_draw` and the seam takes the hand-overs later in the same iteration on the same
+  thread (`render_vk.c`: `tagpu_overlay_draw`, `tagpu_packet_frame_end`, `tagpu_vk_frame`), each
+  stamped with the frame and refused on any other, taken once; every pointer in one names a buffer
+  of `tagpu_wikiworld.c` -- rebuilt only by the producer, only at a change of stage, so never
+  between a publish and its take -- or the arena, immutable and never freed. *The feature atlas is
+  painted on the render thread only*, because `tagpu_gaf.c` decodes through static buffers that
+  the game's atlases, painted on the same thread, share. *No device object of the wiki's passes is
+  freed while a submit may name it*: their teardown is the seam's, behind its `vkDeviceWaitIdle`.
+- **What the units cost and how they compare**, MEASURED 2026-10-27 (`wiki_regression.py units`,
+  the reference setup, retail, a private Xvfb with the RTX presenting): the arena 249 124 bytes,
+  loaded in 42 to 56 ms, 9 of 9 unit types resolved; quickbuild's types ARMCK ARMACK ARMMEX
+  ARMMOHO ARMGEO ARMPW, no box. The render thread's time with the units, from the periodic line:
+  the first frame about 10 ms producer and 8 ms passes (the bake and the atlas), then the producer
+  0.067 ms and the passes 0.037 ms a frame on average, the passes at most 0.057 ms, at 1920 × 1080,
+  and 0.070, 0.041 and 0.062 ms at 3840 × 2160; 0 frames with a refused record, 300 of 300 frames
+  drew the image. Against the mockup, ten captures of Quick Build 3, 8
+  and 9 and Build Lines 2 and 4 at ss 2: every terrain pixel equal, every feature pixel equal, and
+  over the unit pixels a mean difference of 0.03 to 0.38 / 255 a channel with 0.003 to 0.19 % of
+  them past 40 (the tolerance: 2 / 255 and 0.5 %). Under `nounit=ARMCK` the types line names
+  ARMCK alone among the boxes and 300 of 300 frames still drew the image.
+- **The invariants at the units' hand-over.** *The wiki bake reads the arena only, never game
+  memory*: the loader wrote every pointer in the arena, each inside it, and copies no word of a
+  file that a reader follows as a pointer (a face's texture state past its name starts at 0 and
+  only the binder writes it). `types_build` then re-checks every node of a type's run against the
+  arena's used extent (`WIKI3D.base`, `bytes`) on its value before the run is kept, so a loader
+  that broke that rule makes a box. *The arena outlives every hand-over*: it is immutable and never freed. *The
+  pose is a function of the record*: the rest pose, the record's yaw and the view's pose pool,
+  nothing read from a unit of the game. *The pool is data*: the game thread writes it into the
+  record and the render thread reads it from the packet's copy, so `pose_of` bounds every number
+  of it before use -- the slot against the view's `nunit` and `WIKISTAGE_UNITS`, `npose` against
+  `WIKISTAGE_POSE`, `pose_at` and `pose_n` inside `npose`, `pose_n` equal to the type's primitive
+  count and the type's run the `nwalk` nodes `posed_of` was made against -- and `pose_compose`
+  bounds each `posed_of` entry by that count; a run that fails any of them draws the rest pose.
+- **The nano spray is not a world pass's.** The wiki's copies compile without the effects pass
+  (`tagpu_fx.c`, `tagpu_sfx.c` and `tagpu_vk_fx.c` are not among the seven, and the fx models'
+  answer is the inert one), so the stage's particles -- the wiki simulation's own, in the record's
+  `part` (§2.12c) -- are drawn as 2D dots by the stage's ops in the range over the image, 2 × 2
+  game pixels each, after the units; they take no depth and no fog shader, only the stage's own
+  fog-cell test.
+- **Not done here**: 3D features in the image (a stage whose description names one falls back to
+  the whitebox; no stage names one); the wiki's device memory is computed from the sizes it
+  creates, not read back (the plan's section 1); the GDI lane draws no wiki at all; the poses'
+  and the spray's cost -- the 80 KB pool and the 16 KB of particles in the record at every fill
+  that shows the stage, every posed unit composed every frame -- is not measured.
 ### 2.13 Sub-tick pose interpolation (`tagpu_lerp.c`, OFF by default, `tagpu_lerp.on`) — 2026-09-09
 
 The design, the invariants and the gate results are [smooth motion](smooth-motion.html); this is
@@ -5531,20 +5785,27 @@ and the COB length (`0x4B6BA0`) for the `Create()` mask.
   [data keys](tadr-port/data-keys.html)). A structure's COB `Create()` hides pieces the moment the
   unit exists — muzzle flares, a radar dish, a moho's rotary — and no script runs for a preview, so
   the ghost used to show them: 21 of the 126 stock structures hide a piece with faces. The mask is
-  computed on the GAME thread by `tagpu_datakeys.c`, cached during unpaused play, and published as
+  computed on the GAME thread by `tagpu_datakeys.c` through the rule in `tagpu_cobscan.c` (engine-free,
+  the one the in-game wiki's models read too), cached during unpaused play, and published as
   `TAGPU_PK_GHOSTMASK`: type, piece count, template root, 256 bits, one row per type a ghost may
   draw this frame that hides anything, sorted by type (validated in `frame_valid`). What it hides:
   - **by default, `Create()`'s hides, read and not run** — from the entry point, through the
     opcodes whose length is certain (`tools/ta3do`'s `COB_PROLOGUE`), `HIDE` sets and `SHOW`
-    clears a COB piece; the walk stops at the first opcode it cannot size. Every read of the COB
-    is bounded by the block's own length: the size `0x4B2450` checksums the block with
+    clears a COB piece; the walk stops at the first opcode it cannot size
+    (`tagpu_cobscan_hides`). Every read of the COB is a 32-bit offset from the block's base,
+    bounded by the block's own length: the size `0x4B2450` checksums the block with
     (`0x4B6BA0(buf, size)`, the call that returns to `0x4B247C`), which an observer records. A
     script with no recorded length gets no row. The template's node names have no such length;
     they are read under the type bound and the level lifetime, as every reader of the tree is.
   - **matched to the model as the engine matches it**: `0x45A950` builds the primitives in
     `0x45AEC0`'s pre-order, then for COB piece *i* swaps in the first primitive at an index ≥ *i*
-    whose node name `_stricmp`-matches. `tagpu_datakeys.c` reproduces that, so COB piece *k* names
-    the node the engine will hide (on stock content it equals a by-name match).
+    whose node name `_stricmp`-matches. `tagpu_model_engine_order` (`tagpu_model3do.h`) lays the
+    nodes out in that pre-order and `tagpu_cobscan_mask` runs the swap, so COB piece *k* names
+    the node the engine will hide. On stock content it equals a by-name match: MEASURED
+    2026-10-26 by `tagpu/ddraw/tests/cobscantest.py` over all 278 stock unit scripts, where the 90
+    that hide a piece at `Create()` each carry distinct names up to their last hidden piece, each
+    on exactly one node of the model, and the mask's nodes are `tools/ta3do`'s
+    `hidden_at_create` for every one.
   - **with `PreviewPieces=` in the FBI**, every piece the list does not name (TADR's split and
     fold; a list that names no piece of the model is ignored and logged).
 
@@ -9977,7 +10238,8 @@ world* and *under* nothing.
 
 **The captured post-fog layer no longer exists.** The clean cut (`a2b1333`, 2026-09-20) deleted
 `TAGPU_MK_TEX_LAYER` and the `markown` capture behind it, so the list below is one kind shorter
-today. The pass draws the selection rects (depth-tested), the order triangles, lines and labels,
+today. The pass draws the selection rects (depth-tested), the order art (route dots and waypoint
+sprites, the pass's one blended draw), lines and labels,
 the health bars, the group digits, and last the cursors — the build square and the band box —
 which are now the one draw with the fog off. `mark.on=nocursor` hands the cursors back to the
 engine and fills nothing of ours. The tables record the pass as measured on 2026-09-17.
@@ -17582,8 +17844,7 @@ golden source with holes in it is the more expensive mistake.
 >
 > *(An earlier revision of this line also listed "`OP.seq`'s other readers" as open. There are
 > none — both reviewers swept the tree 2026-09-22 and `OP::seq` and `tagpu_terrown_fill_seq` have
-> no surviving reader anywhere. `tagpu_order.c`'s `r->seq` is an unrelated cursor-sprite pointer
-> and `tagpu_packet.c`'s `m->seq` is the command ring.)*
+> no surviving reader anywhere. `tagpu_packet.c`'s `m->seq` is the command ring.)*
 >
 > Two residuals the review named, both cosmetic-worst-case and neither fixed here:
 >
@@ -19758,12 +20019,17 @@ launch a mode:
 - **The Classic++ restorer still sees the hidden strip.** Its neighbourhood keys (`nb_build`)
   are built over the whole tile map, so the ring of the area's last column and row is read from
   the hidden column's and rows' texels, which the mirror no longer draws beside them.
-- **The lab draws none of Assault on Suburbia's own trees**, at any eye tried, under either fold —
-  a lab gap, not the game's, and open.
-- **The lab's black edge is not the game's.** The lab clamps the feature sweep to the area and
-  has no fragment-stage cut (its sprites carry no per-pixel world point), so under a black edge a
-  tree anchored in the hidden strip but drawn above the line is drawn in the game and not in the
-  lab, and an on-map tree's overhang past the line is cut in the game and not in the lab.
+- **The lab and the wiki mockup set the cut's uniforms.** Both run this pass's fragment stage,
+  extracted from `tagpu_feat.c`, through `tascene-render.js`'s `classicSprites`, whose `use()`
+  requires `uMapPx` and takes `uClip` as the pass publishes them: the lab the area × 32 and
+  `clip` = the mirror, the mockup the stage's tile map × 32 and 0 (the stage's cells are even, so
+  that is its target's own size and the cut discards no sample inside it). Left unset, `uMapPx`
+  reads (0, 0) and the black-edge cut discards every sample of the map's own features.
+- **The lab's black edge is not the game's.** The lab clamps the feature sweep to the area, and
+  its own sprites carry the anchor's drawn point as their world point, not each pixel's, so the
+  fragment-stage cut keeps or drops a whole sprite: under a black edge a tree anchored in the
+  hidden strip but drawn above the line is drawn in the game and not in the lab, and an on-map
+  tree's overhang past the line is cut in the game and not in the lab.
 - **Under a black edge the cut holds while the engine draws the ground.** The feature pass cuts
   the map's own features at the area whenever the mirror is off, including frames whose terrain
   the engine draws (the terrain pass handed back: its watchdog, `passive`). At zoom below 1 the
@@ -20064,7 +20330,7 @@ required at attach (a static import of `TotalA.exe`).
 — the world target's own pixels, `ss` to a game pixel — thickened to `w = ss` pixels across its
 minor axis, each end a `w` × `w` block, decided in integer arithmetic in the fragment stage. One rule for every preset:
 smooth when supersampled, and at `ss = 1` the engine's own line by construction. That covers the
-order markers (waypoint crosshairs), queued build sites, selection rects, lasers and lightning,
+order markers' target and range circles, queued build sites, selection rects, lasers and lightning,
 and the nanoframe wire. The owner's decision and the gate's numbers are in
 [Hardware portability](hardware-portability.html), decision 4 and the G21b block; this section is
 the map of what implements it.
@@ -20932,7 +21198,13 @@ off-thread free, a same-base re-make and a full window still drop at once.
 
 The [COB decision and evidence note](tadr-port/cob.html) is the verification ledger; this branch
 does not yet claim complete mod parity. Required getters 32 and 69–75 use full signed-ID checks
-against the match's pool before addressing a live record. ID 111 remains native/inactive.
+against the match's pool before addressing a live record. The rule is one engine-free function,
+`tagpu_cob_getter` (`tagpu_cob_safe.c`): the detour's `cob_get` hands it the engine's units
+(id, owner, kills and build fraction from the unit array; alliance and seat kind from the player
+records) and the COB VM `tagpu_cobvm.c` calls the same function under its IMPURE rules, so the two
+cannot answer an id differently. The replay test group `cob-getters` judges the game's answers
+against the engine's state. The guarded runner's pop and attachment rules are likewise
+`tagpu_cob_parent_pops` and `tagpu_cob_attach_piece_ok` there. ID 111 remains native/inactive.
 The portable core bounds file allocations, instruction/entry operands, 128-word stacks,
 ten-record waits and old/new saved state. Native scheduling and valid opcode bodies remain
 in use; unsupported types are unavailable with an entry warning, while required-unit creation
@@ -21174,6 +21446,7 @@ contracts* gives the allocation/lifetime proof and disassembly.
 | `0x4197D0` | Nine-byte entry observer chooses manual placement, original code computes corners/flags and tests the site |
 | `0x498F70`, `0x499100` | Six-/seven-byte gates for left/right handlers, each `ret 4`. Only the configured contextual button is consumed; paired button bookkeeping outside these handlers remains native |
 | `0x47D2E0`, `0x47C780`, `0x47D820` | Engine site/altitude queries on the input thread. Quick queries preserve scratch words; an upgrade uses a private yard projection of an uncontested old footprint's clear. A queued plan is matched before the site test's refusal drops a site, and its ghost then takes the blocked-site altitude `0x47D820`, which writes nothing |
+| `0x4290F0`, `0x4BBC40`, `0x4BB5B0`, `0x4BBD00`, `0x4BB710`, `0x4BB7C0`, `0x4BB5D0`, `0x488B10` | Quick Build's candidates: each selected constructor's build menu, read on the game thread by the page loader `0x41ACE0`'s rule on the first use of a builder type in a level (and again when the watched side changes). The probe and the DL fallback choose the file, the TDF loader's file calls read it into our buffer, `tagpu_buildmenu.c` applies the download fill, the greyed pass and the press's tab test and 16-character cut. Type numbers only are kept, per def table (its base and count) and level generation |
 | `0x43F0E0`, `0x438760`, `0x43ADC0`, `0x439F80` | Native eligibility (zero action byte refuses), action lookup, append/replace and exact removal. Upgrade is reclaim→appended build; non-building constructor helpers Guard primaries via `0x43AFC0`, combat units untouched |
 | `tagpu_packet_pub.c` → native ghost and marker | Chosen type/green rectangle and queued/selected-cancellation bits copied into the packet. Engine stays in contextual mode. Queued resource ghosts have no caption text. No new renderer-owned engine access or GL object |
 | `0x4C63A0` flip observer / `0x46A3E0` game return; shared replay-menu identity | Config/archive names and Twilight's label select a general profile plus an optional exact-version override. Game-thread menu polling remains live without packets or a render consumer; native game flips freeze policy and in-game options cannot unfreeze it |
@@ -21183,8 +21456,14 @@ E/Z/unknown. A player can set manual radius zero with Quick Build still on. Alt 
 Manual and Quick mex selection share a footprint-sized stability check with raw-mouse distance
 ties. A partial deposit at the configured search boundary cannot supply a Quick ghost or build;
 the native contextual action remains available. The check adds no state or engine writes.
-The whole-build-list allocation patch must be fully installed before resource hooks can arm;
-the new predicate's `SIM_INSTALL` flag belongs to that installation. Unit/definition/grid/
+Quick Build offers what each selected constructor's build menu offers (owner decision 23), not
+its CANBUILD list, which is the AI's: MEASURED offline, the two give the same extractor and
+geothermal candidates for all 45 stock builders, and on Twilight ARMCK now builds ARMAMEX and
+ARMGEO and CORCK COREXP and CORGEO. The menu read writes no engine game state, so the *fields
+we write* table gains nothing from it. The engine's file layer it calls does allocate on the
+engine heap: each open makes a handle through `0x4BB2E0` → `0x4D83B0` (`0x4BB2F5`), and the
+close `0x4BB5D0` frees it (`0x4D85A0`, `0x4BB63D`), exactly as for the engine's own reads. It reads
+the defs, the download records, the side table and the GUI files, every index bounded at use. Unit/definition/grid/
 exploration/descriptor values are bounded, and owned unit walks use the engine's validated
 inclusive player partition. Engine heap order nodes have the input thread's sole-mutator
 lifetime; nothing retains a pointer across a simulation iteration or level teardown.
@@ -21236,7 +21515,8 @@ With a building armed, Shift + left-drag lays a line of it (Ctrl: held to the do
 Shift + Alt a filled rectangle in serpentine order (Ctrl: hollow), and Shift + Ctrl over a unit, or
 over a queued build of a selected builder, a ring round it; the release with Shift held orders it.
 The shapes are BAR's (Recoil's `GetBuildPositions`) in TA build cells, ported to exact integers
-(`tagpu_placegeo.c`, engine-free, self-tested by `tests/placetest.py`). Behaviour, semantics and
+(`tagpu_placegeo.c`, engine-free, self-tested by `tests/placetest.py`). The take-off rule is there
+too, as `place_take_offs_one`, which the in-game wiki's simulation (`tagpu_wikisim.c`) also calls. Behaviour, semantics and
 gaps: [quality-of-life](tadr-port/quality-of-life.html), *What Impure does*. The engine side: the
 engine map's *The placement's mouse path, and several buildings in one gesture*.
 
@@ -21249,10 +21529,10 @@ engine map's *The placement's mouse path, and several buildings in one gesture*.
 | `0x4993BF` | **12-byte route stub** (`E9 rel32` + seven `90`), written through `tagpu_detour_write` after all 22 bytes `0x4993BF..0x4993D4` match. `pushad`, `place_button(record copy, message)`, `popad`; 1 → the frame `0x4995B8` (a Shift press starts a gesture instead of placing; a release commits it), 2 → `0x4993CB`, stock's click on this record (a one-site gesture at the release cursor is stock's own Shift-click: its toggle, sound, recorded click and bit 5), 0 → the two original instructions |
 | `0x48CD80` | Called by the evaluation, with Shift and Ctrl held, for the ring's unit: the engine's hover query, which the handler skips in build placement; its answer is bounded as a unit slot |
 | `0x438760` | The two build actions `MOBILEBUILD` / `VTOL_MOBILEBUILD` by the engine's own name strings (`0x502654`, `0x502640`), as `0x419670` asks |
-| `0x439F80`, `0x43ADC0` | The commit (inside the click routing, where the stock click calls its root): per builder, each non-red site removes the node of the builder's build action at its own position, else the first within 16 units, that was queued before the gesture (`0x439F80`, re-walking after every removal, at most one per site), then every other non-red site is appended with Shift (`0x43ADC0`) while the builder's chain holds fewer than 1024 nodes |
+| `0x439F80`, `0x43ADC0` | The commit (inside the click routing, where the stock click calls its root), from the same take-off rule the preview's colours come from (`take_offs`, which calls `place_take_offs_one` once per builder over its run of the snapshot): per builder, each queued node of the builder's build action is taken by one non-red site at most — first every site takes the node at its own position, then each site without one the first within 16 units that no site took. The taken nodes are removed through `0x439F80` in descending place in the chain, the head last, each re-found by its place and removed only if it still carries the snapshot's action, position and flag (else counted `stale=` and left queued); then every other non-red site is appended with Shift (`0x43ADC0`) while the builder's chain holds fewer than 1024 nodes |
 | `0x47F1A0` | `oktobuild` (`0x509660`) once a committed gesture that added or removed an order, as `0x498FA4` plays it per click |
 | `tagpu_packet_pub.c` → `PK_PLACE` | The sites copied by value (≤ 256 × 28 bytes: the build rectangle in `0x4197D0`'s layout, the type, the GUI colour index `0x0A` placed / `0x04` refused / `0x0E` toggles a queued build off). The acquire bounds the count, each colour, each coordinate (±`0x100000`) and each type (`< udef_count`). An overflow sets `TAGPU_PK_TRUNC_PLACE` (`0x4000`) and the square stays replaced |
-| `tagpu_mark.c`, `tagpu_native.c` (Vulkan) | The marker pass draws each site as the build square (its gate, projection, ±`0x100000` drop, normalise-then-inset; `square_gate`/`square_emit`, shared with the cursor's square) from a bucket of its own, and skips the one square; the ghost pass draws one build ghost per site instead of the cursor's. Counters: `mark: … place=N` under `tagpu_mark.on=log`, `ghost: … sites=N` |
+| `tagpu_mark.c`, `tagpu_native.c` (Vulkan) | The marker pass draws each site as the build square (its gate, projection, ±`0x100000` drop, normalise-then-inset; `square_gate`/`square_emit`, shared with the cursor's square) from a bucket of its own, and skips the one square; the ghost pass draws one build ghost per site instead of the cursor's. Counters: `mark: … place=N placered=R placetake=T` (sites drawn, of them red and yellow) under `tagpu_mark.on=log`, `ghost: … sites=N` |
 | `0x469EC5`, `0x469F1E` (GDI, `tagpu_markown.c`) | The existing redirect of the square's two `0x4BF8C0` calls draws each site's rectangle instead: the engine's rectangle moved by the site's offset from `main+0x2C92..0x2CA6`, so the projection and vpwide's widening stay the engine's. Needs `tagpu_markown.on` |
 
 **Threads and lifetimes.** All of the module's state is game-thread state, written and read inside
@@ -21283,5 +21563,14 @@ display at zoom 0.35 and 0.6 (16 presses, none lost), so no regression case cove
 
 **Open:** Build Split is not built; GDI shows the sites only with `tagpu_markown.on`
 (without it the engine's one square); the replay overlay shows no click for a multi-site gesture;
-no facing. The classification's toggle rule (yellow) is the module's reading of `0x43AFC0`, not
-the engine's call, and is checked only by the regression.
+no facing. The take-off rule (yellow) is the module's reading of `0x43AFC0`, not the engine's
+call, and is checked only by the regression (cases (h) and (n)) and by `placetest.py`'s table
+cases of `place_take_offs_one`. The preview and the commit
+apply the one rule (`take_offs`) and agree for the same queues; the release judges again against
+the queues as they stand at the release, so a change since the last drawn frame — a tick
+finishing or starting a queued build, a builder dying or the selection changing (the order
+budget), a nanoframe turning a site red — changes its result, and a release over the side panel
+acts on a snapshot newer than the preview: the evaluation runs only from `0x4197D0`, which the
+handler calls only with `main+0x2CC6` bit 1 set (`0x499236..0x499241`), while the route at
+`0x4993BF` and the release reach `place_button` anywhere. `stale=` counts only a queue that changed
+inside the commit itself.

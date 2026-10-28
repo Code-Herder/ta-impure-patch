@@ -226,6 +226,41 @@ int tagpu_cob_id_valid(int32_t id, uint32_t slots)
     return id > 0 && (uint32_t)id < slots && slots <= UINT16_MAX;
 }
 
+uint32_t tagpu_cob_parent_pops(uint32_t kind, int child, uint32_t argc)
+{
+    return child >= 0 || kind == 0x10061000u ? argc : 0u;
+}
+
+int tagpu_cob_attach_piece_ok(int32_t piece, uint32_t model_pieces)
+{
+    return piece == -1 || (piece >= 0 && piece < 255 && (uint32_t)piece < model_pieces);
+}
+
+int tagpu_cob_getter(const TagpuCobWorld* w, int32_t key, int32_t a, int32_t* value)
+{
+    TagpuCobUnitFacts caller, target;
+    if (key >= 9 && key <= 11 && !w->unit(w->ctx, a, &target)) { *value = 0; return 1; }
+    if ((key == 7 || key == 8) &&
+        (a < 0 || (uint32_t)a >= w->script_pieces || (uint32_t)a >= w->model_pieces)) {
+        *value = 0;
+        return 1;
+    }
+    if (key != 32 && (key < 69 || key > 75)) return 0;
+    if (key == 69) { *value = 1; return 1; }
+    if (key == 70) { *value = w->slots ? (int32_t)w->slots - 1 : 0; return 1; }
+    if (key == 32 || key == 71) {
+        if (!w->caller(w->ctx, &caller)) *value = 0;
+        else *value = key == 32 ? (int32_t)caller.kills * 100 : (int32_t)caller.id;
+        return 1;
+    }
+    if (!w->unit(w->ctx, a, &target)) { *value = key == 72 || key == 73 ? -1 : 0; return 1; }
+    if (key == 72) *value = (int32_t)target.owner;
+    else if (key == 73) *value = tagpu_cob_build_left(target.remaining);
+    else if (key == 74) *value = w->caller(w->ctx, &caller) ? !!w->allied(w->ctx, caller.owner, target.owner) : 0;
+    else *value = !!w->local(w->ctx, target.owner);
+    return 1;
+}
+
 int tagpu_cob_save_records(const TagpuCobProgram* program, uint32_t checksum,
                            const TagpuCobRecord* records, void* output, size_t size,
                            char* reason, size_t capacity)

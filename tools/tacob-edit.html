@@ -737,8 +737,9 @@ function drawTab() {
 
 function argsFor(name) {
   const n = name.toLowerCase();
-  if (n.startsWith('aim') || n === 'rockunit' || n === 'hitbyweapon' || n === 'startbuilding')
-    return [0, 0];
+  if (n.startsWith('aim') || n === 'rockunit' || n === 'hitbyweapon') return [0, 0];
+  // the build orders' start (0x4385C7) pushes one word, the heading; 0x4B0B00 writes 0 into the rest
+  if (n === 'startbuilding') return [0];
   if (n === 'killed') return [50, 0];
   if (n === 'setspeed') return [100];
   if (n === 'setdirection' || n === 'setsfxoccupy' || n === 'takedamage' ||

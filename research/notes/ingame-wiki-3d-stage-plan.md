@@ -1,0 +1,1169 @@
+# The in-game wiki's stage in the game's own 3D graphics, planned
+
+**Written** 2026-10-26, before any of it is built. It replaces landing 6 of
+[the wiki's plan](ingame-wiki-plan.html), the sprite baker it scoped, which the owner declined. The
+specification is still [the in-game wiki](ingame-wiki.html) and its mockup. Every engine fact
+carries its address and how it was established: DISASSEMBLED (from `pristine/TotalA.exe.pristine`),
+cited from [the engine map](exe-reverse-engineering.html), read in our source, or [INFERRED]. Like
+its parent, this file is folded into the wiki's note, `gpu-status.md` and `roadmap.md` when the work
+closes, and then deleted.
+
+## The owner's decisions (2026-10-26)
+
+1. **The stage is a real 3D render, not sprites.** A second, small world render: its own offscreen
+   target and its own camera at the stage rect, drawn before the wiki layer, which then shows it
+   as an image. It reuses the game's terrain, feature and unit passes rather than a software baker.
+2. **The wiki's units become model records**: model, rest pose, position, heading. The simulation
+   gains a heading, in `sim.js` and in C together, with parity kept.
+3. **The ground is a small custom map**: a corner of real maps' tiles, with the features the demos
+   need (metal deposits, a geothermal vent, wrecks where a demo wants one).
+4. **Units load from the game's files**, not from the level's loaded templates, found at their real
+   path in the running mod's archives and folders.
+5. **What is committed is our own description of the stage map** (question 2, answered the same
+   day): which tile goes where, by reference to a source map and a tile index, and which feature
+   sits where, by name. The art is looked up in the player's archives when it loads. Nothing
+   derived from the game is committed, and nothing is cut into a cached TNT at run time. A missing
+   map, tile or feature falls back by construction, never crashes.
+
+## Where it starts
+
+- **On the wiki branch at `848309b7`**: the core (`tagpu_wikisim.c`, `tagpu_wikidata.c`), the
+  shell (landing 2: button, window, capture, pause), the page's layout (`tagpu_wikilay.c`) and the
+  stage's ops (`tagpu_wikistage.c`, `stagecheck.mjs`) are committed. The coordinator reports
+  landings 3 and 4 (the page and the whitebox stage drawn in the wiki layer) built; at `848309b7`
+  `tagpu_wiki.c` and `tagpu_wikistate.c` do not call the stage or the simulation yet. This plan
+  assumes landing 4 as [the parent plan](ingame-wiki-plan.html) specifies it: the fill copies a
+  `WIKISTAGEVIEW` into the record, `tagpu_wikistate.c` builds `WIKISTAGEOPS` on the render thread,
+  and `tagpu_vk_hud.c` draws them in the wiki layer. If landing 4 lands with other names, 6g below
+  takes them; nothing else changes.
+- **The mockup's `gfx=game`** draws sprites that `tools/wiki/gfx.py` bakes in Python. It is
+  replaced, not kept beside the 3D stage (one look, no "old mode").
+- **`tools/tascene`** already builds a scene pack from the player's archives (tile atlas, tile map,
+  feature atlas and anchors, unit meshes, palette, the SHD table) and `tools/tascene-view.html`
+  draws it in WebGL with tagpu's own shaders in its parity lane, MEASURED against the game at zoom 1:
+  terrain 52 differing pixels of 354 744, sprite bodies identical
+  ([tascene](tascene-design.html), *The A/B, measured*).
+
+## The engine facts this rests on
+
+### How the engine opens a file
+
+- **`0x4BB2E0(path, mode)` tries the loose file first, then the archives in mount order, and the
+  first archive that has it wins.** It calls the C runtime's `0x4E4990(path, mode)` on the path as
+  given, relative to the process's current directory (`0x4BB32D`); on success the handle's `+0`
+  is the `FILE*` and `+4` is 0 (`0x4BB339..0x4BB347`). Otherwise it walks the mount list
+  `[0x4B6220()+0x618]` from index 0 to `+0x61C` (`0x4BB34A..0x4BB387`), asks each archive's root
+  directory (`[[handle+8]+0x10]`) through `0x4BB4E0`, and stops at the first entry whose flag bit 0
+  (directory) is clear (`0x4BB378`). An archive whose `FILE*` was closed is reopened from its path
+  `+0x14` (`0x4BB3A7..0x4BB3D4`). DISASSEMBLED 2026-10-26.
+- **`0x4BB4E0(dir, path)` splits the path at `\` only** (`push 0x5C`, `call 0x4E65C0` at
+  `0x4BB4EA`), scans each directory's 9-byte entries from the last to the first
+  (`0x4BB530..0x4BB558`) comparing names with `0x4F8A70` [INFERRED: a case-insensitive compare;
+  not disassembled], and descends into an entry with flag bit 0 (`0x4BB56C..0x4BB57E`).
+  DISASSEMBLED 2026-10-26.
+- **The mount list and its order** (cited, *Where the engine looks for archives*): the graphics
+  globals `*(0x51FBD0)` hold the handles at `+0x618` and the count at `+0x61C`; each handle's
+  `+0x14` is the archive's full path (`OpenHAPIFile 0x4BDD70`); `InitTAHPIAry 0x41D4C0` mounts
+  `rev31.GP3`, `*.CCX`, `*.UFO`, `*.HPI` in that order (`0x41D4E0..0x41D5AB`), then `%c:\*.hpi` per
+  drive; only it mounts, from eleven callers, all on the game thread; the list is final by a
+  skirmish's first iteration, and RESTART (`0x460428`) or the load dialog (`0x49257A`) can still
+  add to it.
+- **Enumerations list loose files first, then the archives in mount order**: the unit definitions
+  (`0x4BCA30`, the def array's order) and the feature TDFs (`0x4BCB50("features", "*.tdf", −1, 1)`,
+  recursive; LoadFeature `0x4224B0` takes a section from the first TDF that holds it). Cited.
+  What an enumeration does with one path present in two sources is QUESTIONS batch A1.
+
+### What a mod changes
+
+- **A mod's executable renames the first archive pattern, so its own archive mounts first and wins
+  every path it holds.** The main-menu classifier compares the exe's `rev%s.GP3` string
+  (`VA_STR_ARCHIVE`, `0x5028CC`) and its ini name against a table: Escalation `TAE%s.GP3` /
+  `taesc.ini`, Total Mayhem `may%s.GP3` / `mayhem.ini`, ProTA `ProTA.gp3` / `ProTA.ini`, TA Zero
+  `TAZ%s.GP3` / `tazero.ini`; Twilight is told by its main menu's label
+  (`tagpu_replays.c`, `s_mods` and `mainmenu_visit`, from the source; the strings were read from
+  the compatibility fixtures). That classifier is what sets `tagpu_profiles_mod()`.
+- **Two mods rename asset folders, in the executable's `.data`** (MEASURED 2026-10-27, landing 6i:
+  the names each running game's asset report gives, read where `tagpu_replays_asset_names` reads
+  them): Escalation's units folder is `unitsE`; TA Zero's are `ZUnits`, `Textures` and `logoz`
+  (`logoz.GAF`). Mayhem, ProTA and Twilight keep the stock names, and no setup renames
+  `objects3d`, `scripts`, `anims` or `features`.
+- **A mod can lack what the stock game has**: Mayhem's `mayhem.gp3` carries 105 maps that are only
+  `.ota`, 9 of them with a terrain nowhere ([compat setups](compat/setups.html)); TA Zero plays its
+  own sides.
+
+So **a reader that asks the engine's question of the engine's list, in the engine's order, finds
+what the running game would find, whatever the mod**. `tools/wiki/gfx.py` does not: `ta3do.Assets`
+lets the last archive win and `gfx.py` then forces `rev31.gp3` to win, which is wrong for every mod
+above.
+
+### Models and frames in memory are the files, rebased
+
+- **Every field the DLL reads of a `Model3DONode` sits at the 3DO file's own offset**:
+  `tagpu_model3do.h` (`N_VCOUNT 0x04`, `N_FCOUNT 0x08`, `N_SELPRIM 0x0C`, `N_OFF 0x10`, `N_NAME 0x1C`,
+  `N_VERTS 0x24`, `N_FACES 0x28`, `N_SIB 0x2C`, `N_CHILD 0x30`; faces of `0x20` with `F_VCOUNT 0x04`,
+  `F_INDICES 0x0C`) against the file's object and primitive structs (`tools/ta3do` `parse_3do`).
+  The face's `+0x10` (the file's texture-name offset), `+0x18` and `+0x1C` are what the engine
+  rewrites into `F_TEXFRAME`, `F_TEXSEQ` and `F_FLAGS`. **So the engine's template is the file with
+  its offsets rebased to pointers and its textures bound** [INFERRED from the coincidence of every
+  offset; QUESTIONS A4 confirms which fields the loader writes and the binding rule].
+- **A GAF frame and sequence likewise**: `TAGPU_GF_*` (w, h, hotspot, key `+0x08`, compressed
+  `+0x09`, sub-frame count `+0x0A`, pixels `+0x10`) is the file's 24-byte frame-data struct, and
+  `TAGPU_SQ_*` (count `+0x00`, name `+0x08`, table `+0x28` stride 8) the file's entry
+  (`tools/ta3do` `gaf_frame`, `gaf_entries`) [INFERRED the same way; QUESTIONS A6].
+- **The readers' range filters accept any pointer in (0x600000, `tagpu_user_top()`]**
+  (`ptr_ok` in `tagpu_posebake.c`, `tagpu_render3do.c`, `tagpu_gaf.c`; `tagpu_m3_ptr_ok` in
+  `tagpu_model3do.h`; from the source).
+
+Together: **a model loaded from its file the way the engine loads it, into memory inside that
+range, is read by `tagpu_posebake.c`, `tagpu_render3do.c` and `tagpu_gaf.c` exactly as an engine
+template is**, with no line of theirs changed.
+
+### The world passes, and what ties them to one scene
+
+The Vulkan passes read no engine state; every value arrives in a hand-over built earlier in the same
+render-loop iteration (`tagpu_vk_pass.h`). What ties each to the one game scene (read in the source
+2026-10-26):
+
+| Pass | Its hand-over source | Per-pass state a second scene would collide with |
+|---|---|---|
+| `tagpu_vk_terr.c` (2 064 lines, ~53 statics) | `tagpu_terr_handover`, one a frame | per-slot uniform and instance buffers and descriptor sets (`s_slot[]`); one shared base atlas and height grid, retired behind a per-slot visit mask; the restorer job; latches |
+| `tagpu_vk_feat.c` (1 729, ~45) | `tagpu_feat_handover`; the atlas protocol `tagpu_feat_atlas_hand/owed/ack` | per-slot buffers and sets; one base atlas; the atlas's single acked serial (`tagpu_gaf_atlas_ack`) |
+| `tagpu_vk_unit.c` (4 007, ~73) | `tagpu_posedraw_handover`; vertices by `tagpu_posebake_geom_mirror/mat_mirror` | per-slot pose and uniform buffers and sets; the vertex-buffer cache keyed on bake serials; one unit atlas copy and its ack (`tagpu_posedraw_atlas_ack` → `tagpu_r3d_atlas_ack`); the effects-model hold; the shadow and scaffold bindings |
+| `tagpu_posedraw.c` (1 364) | called by `tagpu_native.c`; reads `tagpu_native_foggrid`, `tagpu_native_scissor_on` | one recording window and one hand-over a frame; its arenas |
+| `tagpu_posebake.c` (980) | PK_PIECE runs naming template nodes | caches sized for the game's frame (`TAGPU_PB_FRAMEMAX` = units + wrecks + builds + 1) with the "never evict what this frame asked for" bound; latched level and atlas generations |
+| `tagpu_render3do.c` (577) | face records and GAF frames | one unit atlas (`s_atlas`), its per-frame paint allowance and its single consumer's ack |
+| `tagpu_vk_world.c` (1 293) | `tagpu_native_worldtgt` (`gw`, `gh`, `ss`, the destination rect) | one colour+depth target per slot; the composite into the viewport rect, with the engine's Gamma curve (`tagpu_pal_gamma`) |
+
+- **The camera is already a parameter.** Every pass scales the game-space rect it is handed into
+  whatever extent it records into (`gw`, `gh`, `zoom`, `zoomC`, the viewport rect and `ss` are
+  hand-over fields; `terr_scissor`, `tagpu_vk_world.h`), and TA's camera is the fixed oblique shear
+  `screen y = world z − height/2` ([tascene](tascene-design.html), *Decisions locked*). A second
+  camera is a second set of numbers, not new code.
+- **Palette and fog are hand-over fields** (`pal`/`palSerial`, `fogGrid`), except that
+  `tagpu_posedraw.c` asks `tagpu_native_foggrid` directly.
+- **A second scene through the same instances would be corrupted, not merely wrong**:
+  - a second `prepare` on the same slot overwrites mapped uniform, instance and pose buffers that
+    the first scene's draws, recorded in the same command buffer, have not read yet;
+  - the hand-overs are taken exactly once a frame and stamped with it;
+  - a shared atlas tracks one consumer's acked serial, and its allowance (no more tiles due than
+    `TAGPU_VK_STAGE_CAP` holds) is an argument about that one consumer
+    (`tagpu_vk_stage.h`, `tagpu_gaf.h`);
+  - posebake's eviction bound counts one scene's records;
+  - `tagpu_gaf.c` decodes through static buffers (`s_dec`, `s_pad`), so every paint must stay on
+    the render thread.
+
+**MEASURED 2026-10-26**, `size` on the branch's i686 objects, `.bss` in bytes: `tagpu_posebake.o`
+9 925 088 (its two scratch streams for one model at `PB_MAXVERT` 49 152 vertices are 5.3 MB of it),
+`tagpu_vk_unit.o` 2 854 080, `tagpu_gaf.o` 881 312, `tagpu_render3do.o` 188 928,
+`tagpu_vk_feat.o` 34 400, `tagpu_posedraw.o` 2 656, `tagpu_vk_terr.o` 2 304, `tagpu_vk_world.o`
+1 408.
+
+## The design
+
+### 1. The second scene: the per-scene modules compiled twice
+
+**Decision.** Seven files are compiled a second time, with `-DTAGPU_SCENE_WIKI`, into a second
+instance with its own statics: `tagpu_vk_world.c`, `tagpu_vk_terr.c`, `tagpu_vk_feat.c`,
+`tagpu_vk_unit.c`, `tagpu_posedraw.c`, `tagpu_posebake.c` and `tagpu_render3do.c`. The game's
+instance is the existing object, unchanged. A new header, `src/tagpu_scene.h`, included first by
+each of the seven, does four things under `TAGPU_SCENE_WIKI` and nothing otherwise:
+
+1. **Renames every external symbol the seven define** (`tagpu_vk_terr_prepare` →
+   `tagpu_vkw_terr_prepare`, `tagpu_r3d_atlas_uv` → `tagpu_r3dw_atlas_uv`, …), so calls between the
+   wiki instances stay among them.
+2. **Points the hand-over sources at the wiki's producer**: `tagpu_terr_handover`,
+   `tagpu_feat_handover`, `tagpu_feat_atlas_hand/owed/ack`, `tagpu_native_worldtgt`,
+   `tagpu_native_foggrid`, `tagpu_native_scissor_on` → `tagpu_wikiworld_*`.
+3. **Points every call into a game-only module at an inert answer**: the shadow map, the scaffold,
+   the effects pass, the Classic++ restorer and its switches (`tagpu_classicpp_on`,
+   `_assets`), and the A/B lever answer "none" (`tagpu_wikiworld.c`'s stubs; the wiki's
+   hand-overs carry `shadowOn`, `scafOn`, `restored` 0 and no effects records). The wiki
+   instances therefore bind no image a game pass writes and queue no restorer job.
+4. **Sizes the wiki instances for the wiki**: `TAGPU_PB_FRAMEMAX` and the arrays it sizes in
+   `tagpu_posebake.c` and `tagpu_vk_unit.c` come from the stage's bounds
+   (`WIKIWORLD_FRAMEMAX` = `WIKISTAGE_UNITS` + `WIKISTAGE_SITES` + 1 + `WIKIWORLD_FEAT3D`, the
+   description's 3D features, 64, which the description's reader refuses to exceed: 449). The two
+   keeps are set to the bound as well, since a keep above its table would let the table fill
+   without ever recycling (`tagpu_posebake.h` asserts `keep <= table`), and the two lookup hashes
+   over those tables (`PB_HBITS`, `VB_HBITS`) to 2 048 chains. posebake's two scratch streams, its
+   skip flags and its normal scratch (`tagpu_pb_scratch_*`) are defined in the game's object only
+   and are `extern` in the wiki's (a `PB_SCRATCH` macro): one bake runs to completion inside one
+   call and both instances run on the render thread, so they never use it at once.
+
+**The invariant, stated where it is enforced.** *No static of the wiki's stage is a static of the
+game's world*: two translation units share no file-scope state, which C's linkage guarantees for
+every static these files hold today **and for every one a later edit adds**. *No wiki instance
+reaches a game-only module*: `tools/scene-check.sh`, an order-only prerequisite of the link like
+`thread-split-check.sh`, lists each wiki object's undefined symbols (`nm -u`) and fails on any
+outside an allow list of stateless or read-only helpers (`tagpu_vk_stage_*` over a caller's
+`TAGPU_VKSTAGE`, `tagpu_gaf_*` frame readers and atlas functions over a caller's atlas, `tagpu_pal_*`
+reads, the device queries `tagpu_vk_armed`, `tagpu_vk_owns_present`, `tagpu_vk_max_image_dim` and
+`tagpu_vk_max_storage_range`, `tagpu_line_*`, `tagpu_log*`, `tagpu_settings_ss`, the C library and
+the Win32 and Vulkan imports), naming the symbol. As built (6f): the C library and the imports are
+recognised as the undefined symbols no object of ours defines, the `tagpu_gaf_*` and `tagpu_pal_*`
+entries are the precise families and reads the passes call, `tagpu_user_top_bound` (the range
+filters' top, written once at attach) is on the list, and the bake's shared scratch is too. The
+check reads objects, so it is a phony target that depends on every object of the link and the link
+waits on it (order-only), which cannot race the compiler. The shadow map's format query is not a
+device query to allow but one of the stubs: its `VK_FORMAT_UNDEFINED` is an answer both passes
+already take, giving their dummy their own depth format. The rename list is proven complete by
+the link itself: a symbol left unrenamed is defined twice. **The seam's declarations of the
+renamed entry points are not a second inclusion of the headers**: each of the seven headers is
+include-guarded and defines types (`TAGPU_PDHAND`, `TAGPU_R3DTEX`, the unit pass's records) beside
+its prototypes, so a second inclusion in `tagpu_vk.c` under the renames is either skipped by the
+guard or redefines the types. `src/tagpu_scene_wiki.h` writes them out under their mapped names,
+and `tagpu_wikiworld.c`, compiled with `TAGPU_SCENE_WIKI`, includes it after the pass headers, so
+each prototype meets its mapped original in one translation unit: a drift in a parameter or the
+return does not compile, a name the mapping does not make does not link. It declares the world
+target's, the terrain's and the features' (6g); the unit pass's are 6h's.
+
+**What each instanced file gains**: the include, and a paragraph at the top of its header comment —
+"TWO INSTANCES: compiled for the game's world and, under `TAGPU_SCENE_WIKI`, for the wiki's stage,
+each with its own statics; `tagpu_scene.h` names where the wiki's draws its hand-over from and
+what it may call". Nothing in the bodies changes, except posebake's scratch macro and the two
+hash sizes' `#ifndef` (posebake's paragraph adds that the scratch is the one shared state). Four of the
+seven carry GLSL that `tools/spirv-gen.py` extracts (`tagpu_posedraw.c`, `tagpu_vk_terr.c`,
+`tagpu_vk_unit.c`, `tagpu_vk_world.c`): the build's `spirv-check` says whether the header edit
+needs a regeneration.
+
+**What it costs**: about 250 KB more code in the DLL; the wiki instances' `.bss` small once
+resized; device memory for the wiki's own atlases and per-slot buffers, sized by its content (a
+few MB). MEASURED 2026-10-26 (6f): the DLL +262 144 bytes, `.bss` +363 296, under the 400 KB
+target (`gpu-status.md` §2.12d has the per-object figures). Device memory of the wiki's passes
+at 6g, COMPUTED from the sizes the passes create (not read back from the driver): the target, one
+per swapchain slot, RGBA8 colour and a depth-stencil at `gw·ss` × `gh·ss` (1280 × 768 at ss 2,
+about 3.9 MB colour and 3.9 MB depth a slot); the terrain atlas 2176 × 34 R8 (74 KB); the
+features' atlas 512 × 512 R8 and its key plane (0.5 MB); and the passes' per-slot uniform and
+instance buffers.
+
+**Considered and declined:**
+- *A per-scene state struct in each file.* About 170 statics across the seven files and every
+  reference to them in about 12 000 lines change, on the path every frame of the game draws; and a
+  later static added at file scope would be shared by both scenes silently. The invariant would be
+  a convention, not a construction.
+- *Sharing posebake, render3do and the unit atlas between the scenes.* The atlas's ack and
+  allowance are a one-consumer argument (above), the eviction bound counts one scene, and the
+  wiki's draws would depend on the game's frame sequence (`tagpu_native_frame` resets the allowance
+  and recycles the atlas).
+- *A dedicated wiki pass that reuses only the SPIR-V.* It would re-implement each pass's vertex and
+  uniform packing, which is where these passes are subtle, and drift from them.
+
+### 2. The stage camera and target: the game's own scale, composited into the map rect
+
+- **The wiki scene renders the map at zoom 1, one world unit a game pixel, at the game's own `ss`**
+  (`tagpu_settings_ss`): the target is `mw·16·ss` × `mh·16·ss` (1280 × 768 for the 40 × 24-cell map
+  at `ss` 2; at most 4 096 for `WIKI_MAP_MAX` 128, under `WORLD_MAXDIM` 8192). The hand-overs carry
+  `gw = mw·16`, `gh = mh·16`, `zoom` 1, the eye at the map's top left, the viewport rect the whole
+  map with the scissor on, no mirror past the edge.
+- **The wiki instance of `tagpu_vk_world.c` composites it into the map's rect on the stage canvas**
+  (`TAGPU_WORLDTGT` `vx, vy, vw, vh` = the canvas corner plus `tagpu_wikistage_fit`'s `ox, oz`, and
+  `mw·16·s` × `mh·16·s`), with LINEAR and the engine's Gamma curve, as the world's composite puts
+  the world on the screen.
+- **Why this camera**: the image is the game's own picture of that map, the same at every screen
+  size, and zoom 1 is the only scale at which the parity lane carries a pixel claim — so the image
+  diff against the mockup compares fixed-size images at the scale the game is exact at.
+- **The ground is flat** (height 0 everywhere; the authoring tool takes flat tiles only), so the
+  ground plane under the shear is the whitebox's top-down grid: **the composite rect and every
+  overlay op come from the one fit**, `tagpu_wikistage_fit`, and cannot disagree. A model taller
+  than its row's distance to the map's top edge is cut there, as at the game's viewport edge.
+
+### 3. What the image holds, what stays an op, and the fallback
+
+- **In the image** (drawn by the passes): the terrain, the features (deposits, vents, 2D features;
+  3D features such as wrecks through the unit pass, as the game draws them), every unit at rest
+  with its heading and its construction state (the engine's nano staging,
+  `tagpu_r3d_nano_state`), the Classic shadows under the engine's options, and the placement ghost
+  and each gesture site's ghost (alpha 0.40, depth writes off, after the units: the game's ghost
+  stage). The ghost is untinted, as the game draws it; its colour is its square's.
+- **Over the image, as ops** (the game's marker layer is over the world too): order lines, queued
+  squares, selection brackets, the gesture sites' and the ghost's squares and the sites' order
+  numbers, the drag box, the cursor, the readouts, and the whitebox box and label of any unit whose
+  model did not resolve.
+- **Three op ranges a frame**, all built by the pure stage builder on the render thread:
+  - **R0**, under the image: the window, the page and the stage's background;
+  - **R1**, the whole whitebox stage, as today;
+  - **R2**, the overlays above.
+
+  The wiki layer draws **R0, the image, R2** when the image is complete this frame, and **R0, R1**
+  otherwise. Both choices are made at record time from the seam's own facts, so no frame shows half
+  of one and half of the other.
+- **Complete means**: the wiki target was prepared, and every wiki pass whose content this frame
+  expects (`terrain` when the ground resolved, `features` when there are any, `units` when any
+  record resolved) returned 1 from its `prepare`, and every unit and ghost record of the frame
+  baked (the producer counts the refusals, as the game's `otherDraws` does). A unit pass that
+  refuses for device memory therefore turns the stage whitebox, never empty.
+- **The ground falls back whole.** If any tile or deposit feature of the stage's description fails
+  to resolve, the image carries no terrain and no features, R1's ground is drawn, and fog is the
+  whitebox's. A partial ground could show a rule without its picture (a deposit the simulation
+  has, with grass over it), so there is none. **Units fall back per type**: a type whose model did
+  not resolve has its whitebox box in R2; the others are 3D.
+
+### 4. The stage description: committed indices and names, resolved against the player's archives
+
+**One file per entry's scene**, `art/wiki/stage/<entry>.json`, keyed by the entry's id (the entry
+files do not change). Packed into `WIKIPAK` by `tools/hudpak.py --set wiki` (6e, which reads it).
+
+```json
+{ "format": 1, "entry": "quickbuild",
+  "cells": [40, 24],
+  "sources": [ { "map": "maps\\Crossing Two Rivers.tnt", "tiles": 4096 },
+               { "map": "maps\\<a metal world map>.tnt", "tiles": 2310 } ],
+  "tileset": [ [0, 13, "9f3a17c2"], [1, 402, "c0d11e88"] ],
+  "tilemap": [ 0, 0, 0, 1, … ],
+  "features": [ { "name": "lushmetal3", "cell": [14, 16] },
+                { "name": "lushvent01", "cell": [28, 9] } ] }
+```
+
+- `cells` must equal the scene's map; `tilemap` is `cells/2` tiles a side (a TNT tile is 32 world
+  units, two cells), each an index into `tileset`.
+- A `tileset` row is `[source, tile index in that TNT, FNV-1a 32 of the tile's 1024 bytes]`; a
+  source's `tiles` is its TNT's tile count. The hash and the count are identity checks
+  (question 4): a map of the same name with other tiles is refused, not drawn as a patchwork.
+- A feature is a TDF section name at a cell (the feature's anchor cell, as LoadFeature places it).
+  A 3D feature (`object=` in its section, a wreck such as `armmex_dead`) is drawn through the unit
+  pass.
+- **No art, no pixels, no palette, no extracted file**: indices, names, counts and hashes only.
+
+**Authoring: `tools/wiki/stagemap.py`**, run with the shared venv against the local install
+(`--gamedir`, else `TA3DO_GAMEDIR`, as `gfx.py` finds it), reading through the resolver of
+section 5's rules in Python (`tools/ta3do`'s HPI and GAF readers, `tools/tascene`'s TNT and feature
+readers):
+- `stagemap.py tiles <map>`: the map's flat, featureless, tileable tiles with their indices and a
+  contact sheet into the gitignored `tools/wiki/mockup/gfx/` for the author to look at.
+- `stagemap.py build`: the description from a recipe held in the script, as `gen-quickbuild.mjs`
+  holds the demos — a ground tile, a metal-ground tile over the scene's metal-ground rects, a
+  deposit feature centred on each deposit, a vent feature on each vent cell — writing only the
+  JSON above.
+- `stagemap.py check`: resolves every description against the install and checks it against its
+  entry's scene: every map and tile found with its count and hash; every feature found; each
+  deposit feature's footprint over a metal rect of the scene and each vent feature on a vent cell;
+  every metal-ground rect and fog rect of the scene aligned to whole tiles (even cells; question 5).
+  Exit 1 naming each failure.
+
+**Resolution in the DLL** (6e, on the 3D loader thread): each source TNT opened by the engine's
+rule (section 5), its header bounds-checked, its tile count compared, only the referenced tiles
+read and hashed; each feature section found by the engine's enumeration rule and its GAF frame or
+3DO loaded. **Resolution in the mockup** (6d): the same rules in Python, writing the gitignored
+pack. **A miss** — no such map, another tile count, a hash that differs, no such section, a frame or
+model that does not load — is recorded per element in the arena's report, logged once, and the
+ground falls back whole (section 3). Nothing indexes a tile set or a feature table with an
+unchecked value.
+
+**Considered and declined**: cutting a corner of a retail map into a TNT at the first open and
+caching it on disk (the owner's decision 5).
+
+### 5. Units from files: a DLL-side reader asking the engine's question
+
+**Recommended: a DLL-side archive reader over the engine's own mount list, not a call into the
+engine's loader.**
+- **Why not the engine's loader.** Its file layer is the engine's: the handles' seek state is
+  shared with the engine's own reads, so it may run only on the game thread, where a load of models
+  and textures would stall a frame (or many, under a mod with a thousand FBIs). It loads into
+  engine structures with level lifetimes. And it needs new `publisher` lines in
+  `thread-split.allow`.
+- **Why the reader is safe.** It opens its own read-only handles, on its own thread, of the files
+  the engine mounted. It reads nothing of the engine's but what the game thread copies for it:
+  the mount list, the `language` value and the asset folders' names.
+- **The DLL has no archive reader today**: `tagpu_ufo.c` writes one; `tools/ta3do` has the Python
+  reader to port; `lodepng.c`'s `lodepng_zlib_decompress` covers SQSH mode 2.
+
+**The rules, which are the engine's** (DISASSEMBLED or cited above; the open points are QUESTIONS
+batch A, and the reader implements whatever the scouts establish without changing this design):
+- **A path** opens loose first, relative to the process's current directory as the engine's
+  `fopen` would, then from the first archive in mount order whose directory holds it as a file,
+  the path split at `\` and each level scanned last to first with `_stricmp`, which folds `A`..`Z`
+  alone (A1, DISASSEMBLED). A path the engine builds tries `<dir>-<language>\` first (`0x4290F0`).
+  An enumeration lists each path once, from the first source holding it (the shadow mark
+  `0x4BE320` sets).
+- **The archive list** is the engine's own: at the wiki's first open, on the game thread, the open
+  copies every mounted archive's full path (handle `+0x14`, bounded by `+0x61C` and by `0x104`
+  bytes each), the `language` value, the asset folders' names as the running executable spells
+  them (Escalation's `unitsE`, TA Zero's `ZUnits` and `logoz`) and the current directory by value,
+  and hands them to the loader thread. The reads are `tagpu_replays.c`'s, which already reads the
+  same list in `running_mod` (question 2).
+- **A unit type** is found as a level finds it, `units\<UnitName>.FBI` **by path**, not by
+  enumerating every FBI (A2: the enumeration only decides which names exist). The FBI's
+  `Objectname`, else its `UnitName`, names `objects3d\<name>.3DO` (A2). The script
+  `scripts\<UnitName>.COB` gives Create()'s hides (A3).
+- **Textures** are bound by the engine's rule (A4, A5) from the texture GAFs, read in the engine's
+  order; the frames a model's faces name are copied into the arena, not whole GAFs.
+- **The model is loaded as the engine holds it**, which is not the file rebased (A4): every
+  offset bounded inside the blob and rebased to a pointer, the selection face swapped to 0 and
+  faces 1.. bubble-sorted by mean Y (`0x4CB370`), X and Z negated (`0x4CB590`), every face's
+  texture bound by `0x42A140`'s rule to a copied GAF frame or sequence with its flags, the tree
+  walked once with the walk's bounds (256 pieces, 4 096 vertices and 512 faces a piece, a piece
+  reached twice refused).
+- **The arena** is one `VirtualAlloc(MEM_TOP_DOWN)` block, refused whole unless it lies inside
+  (0x600000, `tagpu_user_top()`], so every pointer in it passes the readers' range filters by
+  construction. It is published by one interlocked store and never freed.
+
+**"A mod alters the default paths" is handled by construction.** Nothing in the resolver names a
+mod, a pattern or an archive: it reads whatever the engine mounted, in the engine's order, with the
+engine's precedence, so it finds the copy the running game would draw — Escalation's ARMCK from
+its own first-mounted `TAE…GP3` if it ships one, the stock one from `totala1.hpi` on retail. A unit the running game does not have
+resolves to nothing, and its whitebox box is drawn.
+
+**Mod detection** (`tagpu_profiles_mod`) is not part of resolution; it still decides only the
+"Turned off in this mod" badge.
+
+**Bounds on untrusted bytes** (every archive is data): the HPI header, key and directory offsets
+against the file size; directory depth ≤ 16 and entries against the directory block; SQSH chunks
+≤ `0x10000` out with the declared size checked after LZ77 or zlib; TDF and FBI text parsed within
+its length; TNT offsets and tile indices against the file and its count; GAF dimensions ≤
+`TAGPU_GAF_DECMAX`, RLE rows within the blob, sub-frame counts against the table; COB reads by
+`tagpu_cobscan_hides`' own bounds (6c), on the file's bytes at base 0.
+
+### 6. Model records and the heading
+
+- **The simulation keeps a facing vector per unit, `(hx, hz)`, not an angle.** The two simulations
+  agree bit for bit because they use only + − × ÷ and `sqrt` (the contract in the wiki's note); an
+  angle would need `atan2`, whose last bit differs between engines.
+  - **Movement**: a walk step sets the facing to the step's own `dx / d`, `dz / d`, the numbers
+    `walk` already computes.
+  - **Work**: a builder within range of what it builds or reclaims faces the target's centre
+    (question 9).
+  - **Buildings** face `(0, 1)`, toward the viewer: TA's default heading `0x8000`, the centre of
+    the spawn's `0x8000 − BuildAngle/2 + rand(BuildAngle)` (`0x485A40`, cited in `tagpu_native.c`
+    `ghost_one`).
+  - **A scene unit** may give `"facing": [x, z]`, normalised with `sqrt`; the default is `(0, 1)`.
+  - Both enter the state hash.
+- **The record** gains, per unit and per site, the type's index into the entry's types (bounded by
+  `WIKI_MAX_DEFS`), and per unit `hx`, `hz`; the stage part gains the entry's index and the
+  simulation's tick (for the nano staging). All values, in `tagpu_wikipk.h`.
+- **The render side builds the yaw from the vector**, with no angle: the body rotation is the one
+  `ghost_one` builds for `0x8000` when the facing is `(0, 1)` (`diag(−1, 1, −1)`), turned by the
+  vector's components: `(cs, sn) = (-hz, hx)`, the matrix `(cs, 0, sn; 0, 1, 0; -sn, 0, cs)` on the
+  engine-held nodes, which is the engine's own body turn of the matching heading -- a unit walking
+  toward +x is drawn as the engine draws heading `0xC000`, the heading it gives such a unit
+  (MEASURED, 6h). The mockup's meshes are in the file's axes, so it applies the same turn after
+  the loader's half turn (`gfx.js` `held`).
+- **A model record on the render thread** is: the type's resolved model (the arena's tree), its
+  rest pose (`ghost_one`'s arithmetic: every piece turn 0, the body turn folded into the root),
+  Create()'s hides (`tagpu_cobscan.c`, 6c), the anchor `(x, z)` at ground height 0, the depth row
+  `1 + (z >> 4)·4`, alpha 1 and depth writes on (a ghost: 0.40 and off), the nano staging from the
+  built fraction and the tick, the Classic shadow kind (a structure's slant, a mobile unit's
+  silhouette, under the engine's option bits the packet carries), `lit` under the Shading option,
+  and no fog (section 7). It goes through the wiki instance of `tagpu_posedraw_unit`, the same entry
+  the game's units take.
+
+### 7. Fog
+
+- **Terrain and features take the engine's fog**: the producer builds the stage's fog grid in the
+  engine's own form — 32-px cells, two 4-bit corner masks, unexplored and grey (`0x4843C0`;
+  `tagpu_glsl.h` *TAGPU_GLSL_FOG_UNIFORMS*) — from the record's fog cells, with corners at the
+  centres of 32-px blocks (`uFogOrg` (16, 16)). The scenes' fog rects are whole tiles (question 5),
+  so each block is uniform, and a straight fog edge falls on the rect's edge exactly. A rect's
+  corner is rounded, as the engine feathers it.
+- **Units and ghosts take no fog** (`fog` 0): the player's own units are never fogged in the game,
+  and the simulation has no line of sight, so a building raised under grey fog must stay visible.
+- When the ground falls back, fog is R1's whitebox overlay, as today.
+
+### 8. Threads and data
+
+| State | Owner | Written by | Read by |
+|---|---|---|---|
+| the mount-list copy, the `language` value, the folder names and the current directory | game thread, at the first open | `tagpu_wiki.c` through `tagpu_replays.c` | handed by value to the 3D loader thread, then its own |
+| the 3D arena: tiles, the stage's R8 terrain atlas, feature frames and definitions, models with bound textures, Create() masks, the resolution report | published once by the 3D loader thread, immutable, never freed | the loader | the render thread (`tagpu_wikiworld.c`, the wiki instances) |
+| the record's stage part, with types, facings, tick and entry | the packet | the game thread's fill | the render thread |
+| the wiki atlases (a `TAGPU_GAFATLAS` for features, the wiki render3do's unit atlas), the wiki bake caches, the wiki posedraw arenas, the three hand-overs, the target's geometry | render thread | `tagpu_wikiworld.c` | the wiki pass instances, in the same render-loop iteration |
+| the wiki instances' device objects | render thread | the seam's prepare and record | the device |
+
+- **The hand-overs are produced and consumed in one iteration of the render loop, on one thread**:
+  `tagpu_wikiworld_frame` runs in `tagpu_overlay_draw` right after `tagpu_wikistate_present`, which
+  laid out this frame's stage canvas, and `tagpu_vk_frame` consumes them later in the same
+  iteration. Each carries the frame's stamp and is refused on any other: the rule every hand-over
+  here follows.
+- **What the record carries is copied out before `tagpu_packet_frame_end`**: the producer builds
+  into its own buffers.
+- **The 3D loader thread** is started once, at the first open, guarded by an interlocked compare,
+  with its inputs by value. It reads files only and publishes with one interlocked store. It
+  touches no atlas and no device: painting is the render thread's, because `tagpu_gaf.c` decodes
+  through static buffers.
+- **No new file names engine memory**: `tagpu_hpi.c`, `tagpu_vfs.c`, `tagpu_tdf.c`,
+  `tagpu_wikiasset.c`, `tagpu_wikiscene.c` and `tagpu_wikiworld.c` are on no line of
+  `thread-split.allow`. Every wiki file stays `presentation`, declares no `SIM_*` state, and the
+  recorder carries none of it.
+
+### 9. The mockup: the same 3D stage, and what replaces op-for-op parity
+
+- **The pack.** `tools/wiki/gfx.py` is rewritten to resolve each stage description and the
+  entries' units by section 5's rules (loose first, then the archives in the engine's mount order,
+  first wins; the archive patterns read from the install's own executable, as a mod patches them)
+  and to write a tascene-format pack per stage into the gitignored `tools/wiki/mockup/gfx/<entry>/`:
+  terrain atlas and tile map, feature atlas and definitions, unit meshes with their slant casters,
+  the unit atlas, palette and SHD table, and the resolution report with the same fallbacks.
+- **The renderer.** `tools/tascene-view.html`'s parity lane (tagpu's own shaders, extracted from
+  the C sources) moves into `tools/tascene-render.js`, which the lab page and the wiki mockup both
+  load. The extraction is checked by the lab's own shot md5s, unchanged. `tools/wiki/mockup/gfx.js`
+  renders the stage per frame into an offscreen WebGL canvas at zoom 1 × `ss`, with the nano
+  staging (a JS port of `tagpu_r3d_nano_state`), the ghost stage and the fog grid of section 7.
+  `stage.js` draws R0, the image through the fit's rect with bilinear, and R2 (or R1).
+- **The scene, checked op-for-op.** `tools/wiki/mockup/scene.js` turns a view into the scene's
+  inputs: tile instances, feature quads with their depth keys, unit and ghost records (model,
+  anchor, depth row, pose matrices, alpha, nano, shadow kind). `tagpu/ddraw/src/tagpu_wikiscene.c`
+  is its port, pure, compiled natively by `tools/wiki/scenecheck.mjs`, which pairs the two on every
+  demo at every 30th tick, exactly or within 1/64 of a unit. This is the 3D stage's `stagecheck`:
+  it catches a wrong placement without either renderer. `stagecheck.mjs` itself keeps pairing every
+  op of R0, R1 and R2.
+- **The image, checked against the game.** `tools/wiki/stage3dcheck.py` compares the game's stage
+  image with the mockup's:
+  - the game's side is the wiki target before the Gamma curve, written by the trigger
+    `tagpu_wiki.shot` (entry, demo, tick) through the wiki instance of `tagpu_vk_world_shot`;
+  - the mockup's side is the same frame, rendered headless at the same size;
+  - each pixel is classed by the layer the mockup drew last there (an ID pass).
+
+  **Recommended tolerance** (question 8), each a ceiling:
+  - **terrain-only pixels**: exactly equal;
+  - **feature pixels**: at most 0.05 % differing. tascene's A/B against the game found 52 of
+    354 744 terrain-classified pixels different, all on feature-sprite edges, and tree bodies
+    identical;
+  - **unit and ghost pixels**: a mean absolute difference of at most 2/255, and at most 0.5 %
+    differing by more than 40 on any channel. This allows for the two rasterisers' edge coverage
+    at `ss` 2; inside tascene alone, `ss` 2 against 1 moves 12 883 unit pixels.
+
+  The first runs measure the floor, and the note records it.
+
+## The landings
+
+The boundaries: what can be checked offline lands first and in parallel; the DLL's visible change
+comes in two steps, the ground and then the units. Every landing ends with the documentation pass
+and `research/build_wiki.py`, which are not repeated below. "Gate" is `tools/replay/tareplay.py
+landing --check` before the commit, and the full `tareplay.py landing` by the runner when it names
+groups.
+
+### Landing 6a — the heading, in both simulations
+
+**Status: built 2026-10-26, not landed.** As specified, with three points the plan did not settle,
+each in [the wiki's note](ingame-wiki.html) *The simulation's contract*:
+
+- **`tagpu_wikidata.c` now computes on SSE2 too** (the Makefile's rule for the simulation names
+  it, and `simparity.mjs --wine` builds it so): normalising a facing on x87 differs from `sim.js`
+  in a bit for 1804 of 3720 vectors (MEASURED 2026-10-26; none on SSE2), so the invariant below
+  needs it.
+- **A building faces (0, 1) even when its scene gives a `facing`**; only a mobile unit takes one.
+- **The loader refuses a facing whose length is not a positive finite double**, which takes in
+  zero and a square that underflows or overflows; `sim.js` throws on the same. `wikitest.c`'s
+  `malformed` cases hold ten readings of a facing.
+
+At 6a `WIKISTAGEVIEW` and `tagpu_wikistage_copy` did not carry the facing; since 6g each unit's
+facing and type and the view's tick travel in the record (`tagpu_wikistage.h`). Results: `simparity.mjs` native and `--wine`, all 21 demos and 13 rule cases
+equal and 13 malformed-data cases as stated; `simcheck.mjs` all pass, the four new cases included;
+`stagecheck.mjs` all equal; `make` clean with and without `LIMITS=stock`.
+
+**What changes**: nothing on screen yet; every view and the state hash carry each unit's facing.
+
+**Files:**
+- `tools/wiki/mockup/sim.js`: `hx`, `hz` on every unit, set by `walk`, by the work rule and by
+  `facing` in a scene; `view()` carries them.
+- `tagpu/ddraw/src/tagpu_wikisim.c`/`.h`: the same, function for function; `WIKIVIEW` carries them;
+  `tagpu_wikisim_hash` hashes them after each unit's position, in the order the header states.
+- `tagpu/ddraw/src/tagpu_wikidata.c`: `facing` read and normalised, refused when zero or not two
+  numbers.
+- `tools/wiki/simparity.mjs`: the hash twin; `tools/wiki/simcheck.mjs`: rule cases.
+
+**Invariant**: the facing is computed only with ÷ and `sqrt` of values both simulations already
+hold, so parity holds by the contract. **Comment that must stand**, above `walk` in both files: why
+a vector and not an angle.
+
+**Verification**: `node tools/wiki/simparity.mjs` natively and `--wine`, every demo and rule case
+equal (about 1 minute); `node tools/wiki/simcheck.mjs` with four new cases: a step faces its
+direction; a builder in range faces its target; a building faces (0, 1); a scene's facing is
+normalised; `make -C tagpu/ddraw -j$(nproc)`.
+
+**Gate**: none expected (`tagpu_wikisim.c` is no fixture's source); `--check` confirms.
+**Review: medium.** **Thread**: the simulation stays the game thread's.
+
+### Landing 6b — the stage description and its authoring tool
+
+**What changes**: `art/wiki/stage/quickbuild.json` and `buildshapes.json`, and the tool that writes
+and checks them. Not packed yet.
+
+**Files:**
+- `tools/wiki/stagemap.py` (new): `tiles`, `build`, `check` (section 4); the Python resolver of
+  section 5, shared with 6d's `gfx.py` as one module `tools/wiki/tavfs.py`.
+- `art/wiki/stage/*.json` (new), written by `stagemap.py build`.
+- `tools/wiki/gen-quickbuild.mjs`: the metal-ground strip `[33, 0, 7, 24]` and the black fog rect
+  `[0, 0, 8, 7]` move to whole tiles (question 5), then `art/wiki/entries/quickbuild.json` is
+  regenerated.
+- `research/notes/ingame-wiki.md`: the format, in *The data format*.
+
+**Verification**: `stagemap.py check` exits 0 for both entries (under 1 minute);
+`simcheck.mjs`, `simparity.mjs` and `stagecheck.mjs` pass on the regenerated entry; the new files
+hold indices, names, counts and hashes only, and the pre-commit hook's provenance check passes.
+
+**Gate**: none expected. **Review**: none (data and a tool; the regenerated demo data is held by
+the parity checks).
+
+**Status (2026-10-26): built on the wiki branch, not landed.**
+- **The rects**: the metal-ground strip is now `[34, 0, 6, 24]`, the black fog `[0, 0, 8, 8]`. The
+  strip shrinks rather than grows because at `[32, 0, 8, 24]` deposit R (`[29, 19, 3, 3]`) would
+  touch it and join the band, and *Metal maps* would lose its deposit; the fog grows by one row,
+  over nothing a demo uses. No input of any demo changed.
+- **The descriptions**: `art/wiki/stage/quickbuild.json` (two sources, two tiles, nine deposit
+  features and two vent features) and `buildshapes.json` (one tile, no features). The ground is
+  Crossing Two Rivers' tile 13 (`tactics6.hpi`, 4 792 tiles), the metal ground Metal Heck's tile
+  170 (`totala2.hpi`, 583 tiles), each the first `stagemap.py tiles` lists; the metal worlds'
+  most used flat tiles are the dark void between their plates, so Metal Heck's plate stands in.
+  The deposit is `lushmetal3` and the vent `lushvent01`, both from `features\lush\*.tdf` in
+  `rev31.gp3`.
+- **`tavfs.py`** mounts the patterns in the engine's order, the first read out of the executable at
+  `0x5028CC`/`0x5028D8`, and takes an archive by the engine's trailer rule: any four year bytes,
+  because OpenHAPIFile overwrites the file's year with `"0000"` before comparing with
+  `"Copyright 0000 Cavedog Entertainment"` (`0x4BDE72..0x4BDED4`, DISASSEMBLED 2026-10-26; the
+  retail archives carry 1997 to 2000). On the reference setup's retail install it mounts all 30
+  archives: `rev31.gp3`, the five `.ccx`, the eleven `.ufo`, the thirteen `.hpi`.
+- **`stagemap.py check` beyond the list above**: it also refuses a demo that adds metal, a vent or
+  fog (the stage's ground is the entry's), requires each deposit and each vent to carry its
+  feature, not only each feature to sit on its rule, and compares each file with what `build`
+  writes now.
+- **Verified**: `stagemap.py check` exits 0 in under a second; with a tile hash, a tile count, a
+  vent's cell and a feature name altered by hand it names all four and exits 1, and with the old
+  rects restored in a copy of the entry it names both. `simcheck.mjs` passes every demo and rule,
+  `simparity.mjs` natively and `--wine` finds all 21 demos and 9 rule cases equal, `stagecheck.mjs`
+  pairs every op, `wikilaycheck.py` agrees, and the pre-commit hook's provenance check passes on
+  the new files.
+- **Settled for 6d and 6e** (the scout's answer A1): an enumeration lists each path once, from
+  its first source in the engine's precedence. `tavfs.py` lists loose files by name without case
+  and an archive's in its directory order; since 6d it drops a path an earlier source already
+  listed.
+
+### Landing 6c — Create()'s hides, one function for the ghost and the wiki
+
+**Status: built 2026-10-26, not landed.** As specified, with what the plan did not settle:
+
+- **A COB block is read through a base.** `tagpu_cobscan_hides(cob, size, base, hid)` and
+  `tagpu_cobscan_mask` read every header offset and name-table entry as a 32-bit value minus
+  `base`, bounded by `size`: the ghost passes the block's own address (the engine's loader
+  relocated it in place), the wiki's loader (6e) passes 0 for the file's bytes and need not
+  relocate. The same arithmetic makes the file build natively on a 64-bit host.
+- **The engine's piece order moved to `tagpu_model3do.h`** as `tagpu_model_engine_order(root,
+  prim, name)`, beside the ghost's `tagpu_model_walk`: it is the one part of the old
+  `engine_prims` that reads the template tree, and the wiki's arena models are in the engine's
+  form, so both callers take it from there. `tagpu_cobscan_mask` takes its output (the nodes, their
+  names, the count) and the caller's walk, and runs the swap and the mapping; it compares node
+  addresses and never follows one. The ghost now walks the engine order before reading the
+  script, where `engine_prims` walked it after; the answer is the same, the walk being the same
+  bounded read of the same template.
+- **`tagpu_cobscan_piece`** names COB piece k, for the test and for the wiki's report.
+- **`tagpu_cobscan.c` is not on `thread-split.allow`**: it names no engine memory and has no
+  writable static (its scratch is on the stack). Like `tagpu_placegeo.c` it is therefore not a
+  `sim` file, so a change to it alone gates no test group and is not instrumented; a change to
+  `tagpu_cobscan.h` gates every feature of `tagpu_datakeys.c`, which includes it. The gap is the
+  same one landing 1b left.
+
+Results: `tagpu/ddraw/tests/cobscantest.py` (new; `cobscantest.c` built with gcc, ASan and UBSan,
+about 1 s): all 278 stock unit scripts (`scripts\<UnitName>.cob` of every `units\*.fbi`; 90 hide a
+piece at `Create()`) hide the same pieces as `tools/ta3do`'s `hidden_at_create`; relocated at two
+bases (one that wraps) each answers as the file's bytes do; the mask over each unit's model in the
+engine's order hides `hidden_at_create`'s pieces for all 278, every hidden piece's name being
+carried by exactly one node; the truncation and overwrite pass ran with no sanitizer error. A
+mutation that dropped the swap failed 85 units. A scratch differential under Wine of the old
+`create_mask` against the new pair, with real 32-bit pointers, over the same 278 scripts and
+models with truncations, overwritten dwords, a NULL script, a zero length and a renamed node: 0
+differences in 345 862 calls. `make` clean with and without `LIMITS=stock`. `tareplay.py landing`
+over `main..598cbb6f` passed: 35 test groups (the branch's range carries more than this landing;
+`keys_ghost_mask`'s are `battle` and `resource-core-upgrade`), no check failed, 2 of 2 changed
+functions and regions reached, its `replay-roundtrip:` note on `598cbb6f`. The high review is not
+run.
+
+**What changes**: nothing visible. `create_hides` and `create_mask` move out of
+`tagpu_datakeys.c` into `tagpu/ddraw/src/tagpu_cobscan.c`/`.h`, pure (a COB blob and its size, a
+node walk; bits out), and the ghost's mask calls them there. This is landing 1b's shape: one rule,
+two callers, so the wiki's buildings hide exactly what the game's ghost and finished building hide.
+
+**Invariant**: the scan reads only its arguments, every read bounded by the blob's size; the
+comment says the ghost's mask and the wiki's models both read what it leaves.
+
+**Verification**: a native `tagpu/ddraw/tests/cobscantest.c` over every stock unit's script on the
+local install, against `tools/ta3do` `hidden_at_create`: the same pieces for every unit (about 1
+minute); `make`.
+
+**Gate**: `tagpu_datakeys.c` is a `sim` file, and `keys_ghost_mask` names `battle` and
+`resource-core-upgrade`; the runner's `tareplay.py landing`. **Review: high** (a sim file).
+
+### Landing 6d — the mockup's 3D stage
+
+**What the owner sees**: `gfx=game` shows the stage as the game will draw it: terrain from the
+description's tiles, deposits and vents, units in 3D facing their way, construction in the nano
+frame, translucent ghosts, the engine's fog, with order lines, squares, selection and the cursor
+over it. The sprites and their baker are deleted.
+
+**Files** (all tools and mockup; no DLL):
+- `tools/tascene-render.js` (new) and `tools/tascene-view.html` (now loads it);
+- `tools/wiki/gfx.py` (rewritten as section 9's pack builder), `tools/wiki/tavfs.py` (6b's
+  resolver);
+- `tools/wiki/mockup/scene.js` (new), `gfx.js` (rewritten), `stage.js` (the R0/R1/R2 split and
+  the completeness rule), `wiki.js` (the hook);
+- `tools/wiki/stagecheck.mjs` (R0 and R2 paired as well as R1);
+- `research/notes/ingame-wiki.md`: *In game: what each element is drawn with* rewritten for the
+  3D stage; its *Gaps* for `gfx=game` replaced.
+
+**Verification**: `tools/tascene shot` on the lab's fixtures, md5s unchanged (the extraction,
+about 2 minutes); `node tools/wiki/stagecheck.mjs`; headless captures of Quick Build demos 1, 3, 8
+and 11 and Build Lines demos 2 and 4 at 1920 × 1080 for the owner; a run with `gfx/` absent shows
+the whitebox and the strip's notice; a run with one tile hash altered by hand in a scratch copy of a
+description shows the whole ground fall back.
+
+**Gate**: none. **Review**: none (no engine code). It can run beside 6e and 6f.
+
+**Status (2026-10-26): built and verified on its branch, not landed.** Every verification above
+ran:
+- `tools/tascene shot`: 40 shots (4 fixtures × 10 option sets, the mirror edge among them),
+  md5-identical before and after the factoring into `tools/tascene-render.js`.
+- `stagecheck.mjs`: `all equal -- 1020 frames (340 at each of 3 sizes), 1856917 ops of R1 paired
+  call for op within 1/64 px; R0 and R2 over 3060 stand-in images, 1999257 ops`. A planted change
+  that drew a whitebox label in R2 failed 420 of the 1020 frames. `simparity.mjs` still finds all
+  21 demos and 13 rule cases equal; `stagemap.py check` still resolves both descriptions.
+- `gfx.py` resolves both entries on the stock install: both grounds, every unit (ARMACK, ARMCK,
+  ARMGEO, ARMMEX, ARMMOHO, ARMPW; ARMDRAG, ARMLLT, ARMSOLAR), the deposit `lushmetal3` from
+  `anims\metals.GAF` and the vent `lushvent01`.
+- The captures, headless Chromium on ANGLE-Vulkan at 1920 × 1080: every frame complete, nothing
+  refused. A walking constructor faces along its line, buildings stand at their sites at the
+  game's scale, a nanoframe rises through the engine's staging with its wire, the ghosts stand on
+  the sites and queued builds, and fog paints unexplored ground black and seen ground grey.
+- With `gfx/` moved away the stage is the whitebox and the strip reads "game graphics: run
+  tools/wiki/gfx.py"; with tile 13's hash altered in a scratch copy of Quick Build's description,
+  `gfx.py` reports `ground FALLS BACK` and the stage draws the 3D units over the whitebox ground and
+  fog.
+
+What 6d did not settle: nothing compared the image with the game's (6g's `stage3dcheck.py` does);
+the differences the lab's parity lane carries are listed in `ingame-wiki.md` *Gaps*.
+
+### Landing 6e — the archive reader and the 3D asset load
+
+**What changes**: nothing drawn. At the wiki's first open the DLL resolves both stage descriptions
+and every entry's units from the player's archives into the arena, and says what it found.
+
+**Files:**
+- `tagpu/ddraw/src/tagpu_hpi.c`/`.h` (new): HAPI archives — header, key, directory, SQSH chunks
+  (LZ77 ported from `tools/ta3do` `lz77_decompress`, refusing an overrun; zlib through
+  `lodepng_zlib_decompress`) — over a read callback, so the DLL reads through its own read-only
+  handles (shared for read and write) and the test from memory. Every bound of section 5: the
+  directory inside the file and at most 16 MB, entries and names inside the directory block, an
+  entry reached twice refused, depth ≤ 16, a file ≤ 64 MB, each chunk's stored length, marker,
+  method and declared size checked, only the chunks a range needs decompressed.
+- `src/tagpu_vfs.c`/`.h` (new): the engine's precedence over the copied list and directory — a
+  path loose first, then the first archive in mount order; the builder's `<dir>-<language>\`
+  first; enumerations in the engine's order with the shadow mark computed lazily, and
+  `0x4BCB50`'s recursion within one source (engine map, *How the engine resolves a path*). A
+  Win32 layer and a POSIX one (case-insensitive, for the native test).
+- `src/tagpu_tdf.c`/`.h` (new): TDF and FBI sections and keys, bounded by length and by 2 048
+  sections and 32 768 keys (stock's largest file has 94 and 1 692), parsed as `tools/tascene`'s
+  `parse_tdf` parses them.
+- `src/tagpu_wikiasset.c`/`.h` (new): the 3D loader thread; the descriptions, the TNT tiles and
+  their hashes, the feature sections and their sequences or models, the units' FBI, 3DO and
+  script and Create()'s hides (6c's `tagpu_cobscan_mask` over the file's bytes, base 0, joining
+  the engine's piece order and the readers' walk: bits over `tagpu_model_walk`, as the ghost's
+  are), the texture bank and `logos.GAF`; models built and bound as the engine holds them, the
+  sequences and frames they name copied in the engine's in-memory form; the arena (32 MB reserved,
+  committed in 1 MB steps) and its report; one interlocked publish (`tagpu_wiki3d_get()`); the
+  trigger `tagpu_wiki3d.dump` → `tagpu_wiki3d.json` (each element: its path, the archive it came
+  from, resolved or the refusal, faces and bound textures, a shape hash over the built model).
+- `src/tagpu_replays.c`/`.h`: `tagpu_replays_archive_paths(char (*out)[0x104], int max)`, the
+  mount list's paths in mount order on the game thread, next to `running_mod`, which reads the same
+  list (question 2); and `tagpu_replays_asset_names`, the `language` value `0x51FB50` and the eight
+  asset folders' names in `.data`, which a mod renames in place (batch D2). Its
+  `thread-split.allow` argument names both.
+- `src/tagpu_wiki.c`: the first fill of an open window copies the list, the names and
+  `GetCurrentDirectoryA` and starts the loader; every 30th fill answers the trigger.
+- `tools/hudpak.py`: WIKIPAK carries `art/wiki/stage/*.json`.
+- `tagpu/ddraw/tests/wikiassettest.c` (new): the same load compiled natively (`load`, with
+  InitTAHPIAry's mount list or the game's), and the fuzz (`fuzz-hpi`, `fuzz-3do`).
+- `tools/wiki/assetcheck.py` (new): builds the test with AddressSanitizer and
+  UndefinedBehaviorSanitizer, compares its report with an independent Python resolution
+  (`tavfs.py`, `tools/ta3do`'s reader, `tascene`'s TDF reader, the engine's rules written out a
+  second time, Create()'s hides from `ta3do`'s COB reader), compares it again with 6d's
+  `gfx.py --resolve-json` element by element, and runs the fuzz.
+- `tools/wiki_regression.py`: the `asset` step.
+
+**Invariants** (comments at each): the arena is immutable once published and never freed; it lies
+inside the readers' range, which is checked once at its allocation; every offset in a file is data
+until bounded against that file; the loader reads no engine memory and paints nothing.
+
+**Verification** (MEASURED 2026-10-26, retail):
+- `tools/wiki/assetcheck.py`: the native load equals the Python reference on 30 mounts, 10 bank
+  GAFs, 2 of 2 grounds and 9 of 9 unit types, the 9 models' shape hashes and hidden pieces
+  included (ARMLLT `flare`, ARMPW `rfire` and `lfire`, none for the other seven), and equals
+  `gfx.py --resolve-json` on its 27 elements; about 41 ms, an arena of 247 457 bytes natively
+  (pointers of 8 bytes in its own structs).
+- The fuzz, 1 000 damaged copies each under both sanitizers, no sanitizer error and 0 refusals
+  unnamed: `AFark.ufo` (keyed, LZ77) 67 read whole, 933 refused; `CorNecro.ufo` (plain, zlib) 13
+  and 987; `objects3d\armck.3do` 95 built, 905 refused (18, 14 and 10 kinds of refusal).
+- `tools/wiki_regression.py <instance> asset --launch` on a private Xvfb: the game's report equals
+  the native load over the instance's 31 mounts field for field, refusals' words and hidden
+  pieces included; `wiki3d: loaded in 57.4 ms - arena 247255 bytes`, 2 of 2 grounds and 9 of 9
+  unit types.
+
+**Not done here**: the mount list is read once a process, so an archive a RESTART mounts later is
+not seen. The native build walks the arena's two piece orders by offset (its arena holds stand-in
+addresses); the DLL calls `tagpu_model3do.h`'s own, and the game's report equalling the native
+one is what holds the two equal.
+
+**Gate**: `tagpu_replays.c` is a source of the `resource-*` groups; `tareplay.py landing`.
+**Review: high** (untrusted file parsing, a new thread, an allow-list argument grown).
+**Thread**: the loader thread reads files; the copy is the game thread's.
+
+### Landing 6f — the per-scene modules instanced
+
+**What changes**: nothing drawn. The wiki's instances of the seven files exist, link, and are
+proven isolated; the game's are byte for byte what they were.
+
+**Files:**
+- `src/tagpu_scene.h` (new): the four duties of section 1.
+- The seven files: the include and the header paragraph; `tagpu_posebake.c`'s `PB_SCRATCH`.
+- `tagpu/ddraw/Makefile`: each of the seven compiled again as `<name>.wiki.o` with
+  `-DTAGPU_SCENE_WIKI`, linked into the DLL.
+- `tools/scene-check.sh` (new): the undefined-symbol allow list, an order-only prerequisite of the
+  link.
+- `src/tagpu_wikiworld.c`/`.h` (new): the stubs and the redirected sources, each answering
+  "nothing this frame".
+- `research/notes/gpu-status.md`: the hook map's note that the world passes have two instances.
+
+**Invariants**: the two of section 1, each stated in `tagpu_scene.h` and in the check's header.
+
+**Verification:**
+- `make -C tagpu/ddraw -j$(nproc)` with `scene-check` passing.
+- A planted call from a wiki object into `tagpu_vk_shadow_prepare` fails the link, naming it.
+- `size` of the seven `.wiki.o`, recorded.
+- The world's A/B captures on `scenarios/tascene-parity.json`, paused at a fixed GameTime (the
+  terrain, feature and unit levers and the world shot), byte-identical between the previous DLL and
+  this one: one launch, about 5 minutes.
+
+**Gate**: none expected (no fixture names these files); `--check` confirms. **Review: high** (it
+touches every world pass file and the build). It can run beside 6e.
+
+**Status (2026-10-26): built and verified on its branch, not reviewed or landed.** Every
+verification above ran:
+- `make -C tagpu/ddraw -j$(nproc)`, `LIMITS=stock` and `COVER=1`: clean, `scene-check: clean -- 7
+  wiki object(s), 175 undefined symbol(s)`; thread-split, sim-state, sim-features and spirv clean,
+  and no shader header needed regenerating.
+- The planted call: `scene-check: src/tagpu_vk_world.wiki.o calls tagpu_vk_shadow_prepare, which a
+  module of the game's world defines`; a planted unrenamed function fails the link with `multiple
+  definition`.
+- The game's objects: six of the seven byte-identical to the base commit's; `tagpu_posebake.o`
+  differs because its scratch has external linkage (`.bss` offsets and one register choice).
+- Sizes: `gpu-status.md` §2.12d.
+- The A/B on `tascene-parity`, the base commit's DLL against this one, each launched on a private
+  Xvfb and paused (`keys pause`, the tick read twice): the terrain, feature and unit captures
+  (`tacli ab terr|feat|posedraw`, each pass armed alone) are byte-identical, md5 for md5; the
+  presented window under the whole play set (seven passes in the census, 1 966 colours) differs by
+  0 px below the message band, the cursor's pulsing hotspot pixel aside, which also differs
+  between two grabs of one run. The band's 2 902 px are the "forces obliterated" lines, whose
+  wording is random per boot (seen in a crop of both).
+- `tareplay.py landing --check`: pass, the note on `848309b7` covering every gated file; no group.
+
+What 6f did not settle and 6g takes: the seam's declarations of the wiki's entry points (section 1
+says why the header cannot simply be included again), and the wiki instances' device memory.
+
+### Landing 6g — the ground in 3D
+
+**What the player sees**: the stage's ground in the game's own tiles, with its deposits and vents
+and the engine's fog; units still as whitebox boxes, now over the 3D ground (R2).
+
+**Files:**
+- `src/tagpu_wikiscene.c`/`.h` (new, pure): the stage's ground (`tagpu_wikiscene_ground`) — every
+  cell of the description's tile map, and the deposits' and vents' quads with `tagpu_feat.c`'s
+  depth bands (flat features below the units, tall ones in their row; a sub-frame with its alpha
+  bit drawn translucent), at the stage's camera — and the fog grid (`tagpu_wikiscene_fog`: one
+  entry a 32-unit block, its unexplored and grey corner masks, origin (16, 16)). Its types are
+  `WSCENE*`, because `WIKISCENE` is already the data's scene (`tagpu_wikidata.h`).
+- `src/tagpu_wikiworld.c`/`.h`: the producer, `tagpu_wikiworld_frame`, once a frame on the render
+  thread. It builds once a stage the scene, the R8 terrain atlas in `tagpu_terr.c`'s layout from
+  the arena's tiles (built here, not by the loader: the loader keeps the tiles as the description
+  orders them, and the atlas's border and pitch are the terrain pass's), and the features' own
+  `TAGPU_GAFATLAS` (512 square, 128 entries, a key plane, no allowance) painted then, with every
+  quad's six vertices as `emit_frame` makes them; every frame the fog grid and the three
+  hand-overs. A stage with a 3D feature falls back whole (no unit pass is drawn yet). The lever
+  `tagpu_wiki3d.on`: `off`, `nomap`, `nofeat`.
+- `src/tagpu_scene_wiki.h` (new): the seam's declarations of the wiki's world, terrain and feature
+  entry points, written out and checked: `tagpu_wikiworld.c`, compiled with `TAGPU_SCENE_WIKI`,
+  includes it after the pass headers, so each prototype meets its mapped original in one
+  translation unit and a drift does not compile.
+- `src/tagpu_overlay.c`: `tagpu_wikiworld_frame(f)` after `tagpu_wikistate_present(f)`.
+- `src/tagpu_vk.c`: the wiki's world target, terrain and feature prepares after the game's and
+  before the HUD's; the image's choice there, once; the wiki's world render pass after the game's;
+  its composite between `tagpu_vk_hud_record_wiki` and `tagpu_vk_hud_record_wiki_over`; its
+  teardown in `vk_down`, `passes_down` and the owed list; the `tagpu_wiki.shot` capture through
+  the A/B's buffer; the stage's render-thread time.
+- `src/tagpu_vk_hud.c`/`.h`: the wiki layer as the page, the stage's ops under the image, and those
+  over it (`s_wbm` cuts the run); `tagpu_vk_hud_record_wiki_over` is the frame's last call.
+- `src/tagpu_wikistage.c`/`.h`: each op's range (`WIKISTAGE_IN_R0` … `_OVER`, `stage.js`'s
+  `o.layer`) and a box's type; `tagpu_wikistage_keep` (where an op is drawn under an image) and
+  `tagpu_wikistage_image` (the image's rect, the fit's map rect snapped to device pixels);
+  `WIKISTAGEUNIT` gains its type and facing, `WIKISTAGEVIEW` its tick.
+- `src/tagpu_wikistate.c`/`.h`: `tagpu_wikistate_scene` (the stage this frame draws, for the
+  producer) and `tagpu_wikistate_image` (the split, in place, once a frame).
+- `src/tagpu_wikipk.h`, `src/tagpu_wiki.c`: the record's `shot` and the view's `tick`; the trigger
+  `tagpu_wiki.shot` (`ENTRY DEMO TICK`: the demo picked, played to the tick on the game thread and
+  paused).
+- `tools/wiki/mockup/stage.js`: the image's rect snapped to device pixels, as the game's composite
+  viewport is whole pixels; `gfx.js`: each feature corner's own world point for the fog lookup (as
+  `emit_frame`), and `?layers=`.
+- `tools/wiki/scenecheck.mjs` with `tagpu/ddraw/tests/wikiscenetest.c` (new);
+  `tools/wiki/stagecheck.mjs` pairs the C ops' ranges, `tagpu_wikistage_keep` and
+  `tagpu_wikistage_image` with `stage.js`; `tools/wiki/stage3dcheck.py` (new);
+  `tools/wiki_regression.py stage3d`.
+- Not changed: `tools/hudpak.py` and `tagpu_wikidata.c` (6e already packs and keeps the
+  descriptions).
+
+**Invariants and the comments that stand:**
+- `tagpu_wikiworld.h`/`.c`: a hand-over lives one iteration of the render loop — produced in
+  `tagpu_overlay_draw`, taken in `tagpu_vk_frame` later in the same iteration on the same thread,
+  stamped with the frame, refused on any other, taken once; its pointers name the producer's
+  buffers, rebuilt only by the producer at a change of stage, or the arena. The feature atlas is
+  painted on the render thread only.
+- `tagpu_vk.c`, at the choice: the image is drawn whole or the whitebox is, decided once from this
+  frame's prepares, before the HUD's pass builds the wiki. The shot is armed only while no capture
+  is in flight (`s_abSlot1` 0), so its file can only be written by its own arming.
+- `tagpu_wikistage.h`: one fit for the composite and the ops (`tagpu_wikistage_image`).
+
+**Verification** (MEASURED 2026-10-27, retail, on a private Xvfb with the RTX presenting):
+- `node tools/wiki/scenecheck.mjs`: `all equal -- 2 grounds (480 cells exactly, 11 feature quads
+  within 1/64), fog on 340 frames (173 fogged) byte for byte (3.4 s)`; it fails, as planted, on a
+  shifted anchor and on a swapped fog byte.
+- `node tools/wiki/stagecheck.mjs`: `all equal -- 1020 frames (340 at each of 3 sizes), 1856917
+  ops of R1 paired call for op within 1/64 px; R0 and R2 over 3060 stand-in images, 1999257 ops`,
+  every C op's range, every `tagpu_wikistage_keep` answer and every image rect included.
+- `node tools/wiki/simparity.mjs`: all 21 demos and 13 rule cases equal.
+- `make -j32` and `LIMITS=stock`: clean, `scene-check: clean -- 7 wiki object(s), 175 undefined
+  symbol(s)`.
+- `wiki_regression.py <instance> stage3d --launch --shots DIR`, at 3840 × 2160: `passed in 607 s`.
+  At 1920 × 1080 every step but the last lever passed; `nofeat` was first tried on buildshapes,
+  whose stage has no features (so it withholds nothing), and the step now moves to quickbuild
+  first. Each run: the arena loaded (`wiki3d: loaded in 53.1 ms`), quickbuild's ground in 3D (2
+  tiles, 240 cells, 11 feature quads, a 2176 × 34 atlas, 2 frames), 18 shots (quickbuild demos 1
+  and 11, buildshapes demo 1, ticks 30, 180 and 330, at ss 2 then ss 1: 1280 × 768 and 640 × 384).
+- `stage3dcheck.py` (the mockup on the RTX through ANGLE's Vulkan): in both runs all 18 captures
+  equal to the mockup's pixel for pixel — quickbuild's 882 424 terrain and 100 616 feature pixels
+  at ss 2, buildshapes' 983 040 terrain pixels — under the owner's tolerances with nothing to
+  spare. The levers: under `nomap` and under `nofeat` 0 of 300 frames drew the image, and the
+  grabs show the whitebox whole; with the lever gone, 300 of 300.
+- The render thread's time for the stage, from its periodic line: the first frame 4.9 ms in the
+  seam (the targets built, both atlases sent), then the producer 0.06 ms and the passes 0.02 ms a
+  frame on average, at most 0.04 ms, at both sizes.
+- The window grabs at 1920 × 1080 and 3840 × 2160, looked at: the tiles at the game's scale inside
+  the stage's map rect, deposits and vents on them, unexplored ground black with its rounded
+  corner, grey fog over the lower-left patch, the whitebox boxes, brackets and squares over the
+  image, nothing torn or offset.
+
+**Not done here**: units, ghosts and 3D features in the image (6h); a stage whose description
+names a 3D feature is drawn as the whitebox. The image's composite is LINEAR over a rect snapped to
+whole pixels, so the image may sit up to half a pixel from the fit; the mockup snaps it the same
+way, and the ops are drawn from the unsnapped fit in both.
+
+**Gate**: `tagpu_wikipk.h` reaches three sim files through `tagpu_packet.h`; `tareplay.py
+landing` (from `main`): pass, 35 groups, noted on `2e8fad37` (MEASURED 2026-10-27). **Review: high** (a render pass and a composite added to the frame, per-slot
+resources, the record's growth).
+
+### Landing 6h — units in 3D
+
+**What the player sees**: every unit as its model, facing where it walks or works, buildings
+rising in the nano frame, translucent ghosts at the cursor and the gesture's sites, shadows as
+the game's options give them; a type the running game does not have stays a box.
+
+**What was built** ([GPU status](gpu-status.html) §2.12d has the hand-over in full):
+- `src/tagpu_wikiscene.c` `tagpu_wikiscene_models`: one record a unit, then the placement ghost,
+  the sites and the queued sites not yet standing -- type, owner, yaw `(cs, sn) = (-hz, hx)` (a
+  structure's always `(0, 1)`), depth row, alpha, the nano staging of the new shared
+  `tagpu_nanostage.h` while `built < 1` (a nanoframe and a ghost cast no shadow). Equal to
+  `scene.js` record for record (`scenecheck.mjs`: 2640 records, 63 nanoframes).
+- `src/tagpu_wikiworld.c`: the arena's types matched to the stage's by name, every node of each
+  type's run bounded inside the arena before it is kept; each record through the wiki bake as a
+  piece run and posed at rest, one rotation about the root's rest point; the shadow kind and the
+  lit rows from the packet's option word; the calls in their order a frame (the level generation
+  1, the atlas allowance off from the first frame). The lever gains `nounits` and `nounit=TYPE`.
+- `src/tagpu_wikiasset.c`: per type, `Create()`'s dont-cache pieces beside its hides
+  (`tagpu_cobscan_create_mask`), and the facts the shadow needs (`BMcode`, `Digger`, `NoShadow`,
+  `CanHover`, `Floater`); `assetcheck.py` checks both against `gfx.py`.
+- The mockup draws as the game does (`gfx.py`, `gfx.js`, `tascene-render.js` `engineShade`): the
+  file's mesh turned by the record's yaw after the loader's half turn; a structure and every ghost
+  on the engine's lit rows from its vertex normals, any other unit on the neutral row; a textured
+  quad mapped and shaded over its own frame; the nanoframe's wire on the line grid thickened to
+  `ss`.
+- 3D features through the unit path are **not built**: no stage names one, and both sides still
+  fall back to the whitebox for one.
+
+**Invariants**: every node pointer handed to the wiki bake lies inside the arena, which the
+producer checks before the call (a bound on a value, not a probe); the wiki bake sees only the
+arena, immutable and never freed; the pose is a function of the record alone.
+
+**What it measured** (2026-10-27, the reference setup, retail, a private Xvfb with the RTX
+presenting; `wiki_regression.py <instance> units --launch`, about 11 minutes):
+- (u1) the arena 249 124 bytes in 42 to 56 ms, 9 of 9 types resolved, no box.
+- (u2, u3) ten captures (Quick Build 3, 8 and 9, Build Lines 2 and 4, at fixed ticks, ss 2) against
+  the mockup: every terrain and feature pixel equal; over the unit pixels a mean difference of 0.03
+  to 0.38 / 255 a channel and 0.003 to 0.19 % of them past 40, against question 8's 2 / 255 and
+  0.5 %, at 1920 × 1080 and 3840 × 2160 alike.
+- (u4) the ARMCK of Quick Build 9 at tick 150 walks (0.781, -0.174) a tick facing (0.976, -0.217),
+  and is drawn so: its pose is the engine's own for a unit heading `0xC000`, the heading the
+  engine gives an ARMCK walking toward +x (MEASURED in a skirmish: `0xBE2E`..`0xC000`), and a
+  side-by-side with the engine's ARMCK at `0xC000` and at `0x4000` matches the first.
+- (u5) under `nounit=ARMCK` ARMCK alone is the box; 300 of 300 frames drew the image.
+- (u6) the render thread: the producer 0.067 ms and the passes 0.037 ms a frame on average,
+  0.104 ms against 0.5 ms, the passes at most 0.057 ms, at 1920 × 1080; 0.070, 0.041 (0.111) and
+  0.062 ms at 3840 × 2160.
+- (u7) **a reclaim is not a nanoframe** [DISASSEMBLED, then MEASURED]: ReclaimUnit `0x404730` and
+  VTOL_ReclaimUnit `0x414A80` hit the target's hit points through `0x489BB0`/`0x489CE0`, and none
+  of the four functions names `+0x104`; in a skirmish an ARMCK reclaimed an ARMSOLAR from HP 326
+  to its death with `+0x104` reading 0.0 at every read (101 reads in one run, 46 in another). The stage draws a unit being
+  reclaimed finished, as the game does (the engine map, *A reclaimed unit is never a nanoframe*).
+- `mp` with the host's demo playing: both peers ran on with no desync line; the host's stage drew
+  300 of 300 frames, the render thread 0.069 ms producer and 0.083 ms passes a frame on average, the
+  passes at most 2.566 ms in one frame.
+- `stage3d`, now over the units as well: all 18 captures within the tolerances, every terrain and
+  feature pixel equal, the unit pixels' mean 0.11 to 0.63 / 255 and 0 to 0.46 % past 40 (ss 1 and
+  2); `sp`, `page`, `demos` and `recorded` pass as before.
+
+**What it found on the way**: the mockup turned its models half a turn from the game's -- the
+pack's meshes are in the file's axes and the record's yaw turns the model as the engine holds it,
+X and Z negated by the loader -- which a live ARMMOHO settled (its crane box toward +z, as the
+game's stage draws it); its units were flat-shaded a face at a time where the engine shades a
+structure by vertex and a mobile unit not at all; and its quads and wire were the lab's
+approximations. Each is now the game's rule, and the comparison went from a mean of 50 to 70 / 255
+over the unit pixels to under 0.4.
+
+**Gate**: `tareplay.py landing` (from `main`): pass, 35 groups, noted on `43102b9c` (MEASURED
+2026-10-27). **Review: high.**
+
+### Landing 6i — the 3D stage under the mods
+
+**What changed**: no DLL code; no run found a bug. The measurement is a mode of the wiki's game
+test, `tools/wiki_regression.py all|<setup>,... mods --shots DIR`, on the compatibility suite's own
+launcher: `tools/compat/tacompat.py` builds each setup's folder (`prepare_wine`), starts it on a
+private Xvfb (`start_wine`) and walks the menus into a skirmish (`wine_skirmish`, factored out of
+`wine_battle`, which now calls it).
+
+**What it measured** (2026-10-27, the reference setup, Wine, the RTX presenting to a private Xvfb
+at 1280 × 1024, ss 2; one setup at a time under the run lock, 68 s for retail and 364 s for the
+other five): on all six setups -- retail, Escalation, Total Mayhem, ProTA, TA Zero, Twilight -- the
+wiki opened, both stages' ground resolved and was drawn in 3D on 300 of 300 frames, no window but
+the game's own came up, no `ErrorLog.txt` was written and the game ran to the end. The units:
+- **Escalation, Mayhem, ProTA**: the mod's own FBIs, scripts and models, from its first-mounted
+  archive, Create()'s hides from its own scripts; where a mod ships an FBI but no model (Mayhem's
+  ARMLLT and ARMSOLAR), the stock model from `totala1.hpi`, as the engine reads it.
+- **Twilight**: its own `rev31.gp3` for the FBIs, scripts and textures, the stock models; the
+  captures equal retail's pixel for pixel.
+- **TA Zero**: its units folder is `ZUnits`, which holds none of the nine stock types, so every
+  unit is the whitebox's box over the 3D ground: the design's answer for a type the running game
+  does not have, not a fault.
+
+The table and the rest of the numbers are in [the wiki's note](ingame-wiki.html), *The 3D stage
+under the mods*; the asset reports and captures are not kept (they are the game's art).
+
+**Not measured**: Windows, a network game under a mod, another resolution. The colour of Mayhem's
+deposit highlights differs from retail's in the same frame of the same file; the stage takes the
+engine's live palette table, so it is drawn as Mayhem's running game holds it [INFERRED: the table
+was not read].
+
+**Gate**: no simulation or DLL file changed; the change to `tacompat.py` was run by its own
+`selftest` and `tacompat.py wine retail --mp 0 --battle 10` (meets the goal). **Review**: none
+(test tooling and docs).
+
+## What runs in parallel
+
+| Track | Touches | Needs |
+|---|---|---|
+| 6a, the heading | `sim.js`, `tagpu_wikisim.c`, `tagpu_wikidata.c` | nothing |
+| 6b, the description | `tools/wiki/stagemap.py`, `tavfs.py`, `art/wiki/stage/`, `gen-quickbuild.mjs` | nothing |
+| 6c, the shared scan | `tagpu_datakeys.c`, `tagpu_cobscan.c` | nothing |
+| 6d, the mockup | `tools/tascene*`, `tools/wiki/gfx.py`, the mockup | 6b's format |
+| 6e, the reader | `tagpu_hpi.c`, `tagpu_vfs.c`, `tagpu_tdf.c`, `tagpu_wikiasset.c`, `tagpu_replays.c` | 6b's format, 6c |
+| 6f, the instances | `tagpu_scene.h`, the seven files, `Makefile` | nothing |
+
+6g needs 6d, 6e, 6f and landing 4 integrated; 6h needs 6g and 6a; 6i needs 6h. The merge surfaces
+are `tagpu_wikipk.h`, `tagpu_wiki.c` and `tagpu_wikistage.c`, which landing 5 (Try it yourself)
+also extends: integrate in order. QUESTIONS batches A to D are 6e's inputs and do not block 6a to
+6d or 6f.
+
+## Risks
+
+1. **The instancing is unusual.** A reader of a pass file may not expect it to be compiled twice.
+   The header paragraph, `tagpu_scene.h` and `scene-check.sh` say so where they would look, and the
+   link fails on the two mistakes it invites (a missed rename, a call into a game-only module).
+2. **The seam grows a render pass and a composite per frame while the wiki is open**, and more
+   teardown handshakes. The A/B identity of 6f covers the game's path; 6g's run measures the wiki
+   scene's cost.
+3. **Untrusted archives.** A malformed or hostile archive is parsed on the loader thread; the
+   bounds of section 5 and 6e's fuzz pass are the defence. A crash there would take the game down.
+4. **The replay gate is longer than ten minutes** (34 groups, 14 minutes at landing 2) for every
+   landing that touches `tagpu_wikipk.h`. Scoping it down would be a loosening; batch 6g and 6h if
+   the gate's length matters.
+5. **The first open in play uploads the wiki atlases through the banded path**, which waits on its
+   fences (`tagpu_vk_stage.h`): MEASURED 2026-10-27 at 6g, the first frame of the stage cost the
+   render thread 4.9 ms in the seam (the targets built, both atlases sent), then 0.02 to 0.04 ms a
+   frame.
+6. **The arena's size** under a mod with large textures; read frames, not whole GAFs, and log the
+   size (6e).
+7. **The yaw's lateral sign and a reclaim's look**: both settled in 6h -- the yaw by the engine's
+   own heading for a unit walking toward +x and a live model, the reclaim by disassembly and a live
+   reclaim (a reclaimed unit is never a nanoframe).
+8. **WebGL and Vulkan rasterise unit edges differently at `ss` 2**; hence a tolerance for unit
+   pixels, the owner's to set (question 8).
+9. **A mod's model larger than the stock footprint the simulation uses** overhangs its box; the
+   demos' figures are the stock game's, as the wiki's note already states.
+10. **Landing 4's integration** is on this checkout since 6g, which takes its names
+    (`tagpu_wikistate.c`, `tagpu_vk_hud_record_wiki`).
+
+## Questions for the owner
+
+**Answered 2026-10-26: the owner took every recommendation.** The loosenings of questions 2 and 3
+are approved (`tagpu_replays.c`'s argument grows by the mount-list copy; `tagpu_posebake.c`'s and
+`tagpu_render3do.c`'s arguments are reworded to cover their wiki copy), the tolerances of
+question 8 are accepted, and questions 1, 4 to 7 and 9 to 11 proceed on their recommendations.
+
+Each with the recommended answer. Questions 2, 3 and 8 are loosenings in CLAUDE.md's sense; the
+rest are design choices the specification leaves open. None is an escalation: every verification
+above can run, and no fix depends on timing.
+
+1. **How the second scene is made.** *Recommended: compile the seven per-scene modules a second
+   time* (section 1). Isolation holds by C's linkage for today's statics and tomorrow's, and the
+   game's path does not change. The alternative, a per-scene struct in each file, changes every
+   line the game draws through and leaves isolation to each later edit.
+2. **The mount list's copy: a loosening.** `tagpu_replays.c`'s `thread-split.allow` argument grows
+   by "and copies the mount list's paths, on the game thread, for the wiki's asset loader".
+   *Recommended: yes.* It reads the same list already (`running_mod`), so no new engine address is
+   named; the alternative is a new `publisher` line for `tagpu_wiki.c`.
+3. **The arguments of `tagpu_posebake.c` and `tagpu_render3do.c`.** Their `fenced` lines would
+   also say that their wiki instance reads only the wiki's arena, immutable and never freed. No
+   new engine memory is read, but an allow-list argument changes. *Recommended: yes.*
+4. **A hash per referenced tile in the committed description** (FNV-1a 32 of the tile's bytes,
+   and each source's tile count): numbers derived from the game's data, beyond indices and names.
+   *Recommended: yes.* They cannot rebuild a pixel, and they are what makes a same-named map with
+   other tiles fall back instead of drawing a patchwork.
+5. **The scenes' tile-sized rects.** Quick Build's metal-ground strip `[33, 0, 7, 24]` and its black
+   fog `[0, 0, 8, 7]` move to whole tiles (even cells), so the ground's tiles and the engine's fog
+   match the rules exactly. *Recommended: yes*; the demos' claims are unchanged (`simcheck.mjs`).
+6. **Fog in the engine's style** on terrain and features (feathered corner masks), units never
+   fogged. *Recommended: yes*, rather than the whitebox's translucent cells over the 3D ground.
+7. **The stage's look is Classic in landing 6**: palette colour and the engine's shade rows,
+   whatever Classic++ setting the player uses. Classic++ (the restored twins, the lighting) is a
+   later landing, since the restorer's job pool is one of the game-only modules section 1 stubs.
+   *Recommended: yes.*
+8. **The image tolerance: a loosening.** Terrain pixels equal; feature pixels at most 0.05 %
+   differing; unit and ghost pixels within a mean of 2/255 and 0.5 % past 40 (section 9).
+   *Recommended: approve these as the ceilings; the first runs' measured floor is written in the
+   note.*
+9. **Builders face their work.** A builder in range turns to what it builds or reclaims; units turn
+   instantly, with no turn rate. *Recommended: yes*: it reads as the game does at the stage's
+   scale, and it costs one rule in both simulations.
+10. **The ground falls back whole** if any tile or deposit fails, rather than element by element.
+    *Recommended: yes*, so the picture never shows a rule without its art or art without its rule.
+11. **The stage's cursors stay the kit's icons** in landing 6, as specified, rather than TA's
+    `cursors.gaf`. *Recommended: yes*; TA's own is a later choice, made in the mockup first.
+
+## What this plan does not know yet
+
+- **QUESTIONS batches A to D**:
+  - how the engine resolves duplicate paths and duplicate `UnitName`s;
+  - the model and script paths;
+  - the texture binding rule and the texture bank's order;
+  - the TNT header the loader reads;
+  - a 3D feature's logo colour.
+
+  6e implements the answers; none changes the design.
+- **Whether the in-memory 3DO and GAF are the files rebased in place** (A4, A6). If the loader
+  reshapes them, the arena builds the engine's shape instead; the readers still do not change.
+- **The wiki instances' sizes after resizing**, and the first open's load time and stall.
+- **The image diff's floor** for unit pixels.
+- **The geothermal plume** (feature animation or particles) is still not established; the stage
+  shows the vent's frame as the engine's feature pass draws it.

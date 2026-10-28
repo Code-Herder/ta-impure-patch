@@ -15,6 +15,7 @@
 #include "debug.h"
 #include "versionhelpers.h"
 #include "tagpu_shield.h"
+#include "tagpu_wiki.h"
 #include "tagpu_menu.h"
 #include "tagpu_vk.h"
 #include "tagpu_zoom.h"
@@ -709,6 +710,15 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
            leaves. Event-driven, not polled: the invariant is that the engine's
            cursor is on a border pixel only while the pointer really is. */
         s_track_leave = FALSE;
+        /* tagpu: while the in-game wiki holds the input the engine's point stays where the
+           wiki's opening press left it, on its button and never on a border pixel, and no move
+           reaches the engine (tagpu_wiki.c): only the UI layer's cursor goes, as the pointer
+           has */
+        if (tagpu_wiki_holds_input())
+        {
+            mouse_forget_client();
+            return 0;
+        }
         if (g_mouse_locked && !g_config.devmode && g_ddraw.width && g_ddraw.height)
         {
             int cx = (int)g_ddraw.width / 2, cy = (int)g_ddraw.height / 2;
@@ -1105,6 +1115,9 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
        swallow a click the engine has no world point for (tagpu_zoom.h). */
     if (tagpu_zoom_drop_mouse(uMsg, lParam))
         return 0;
+
+    /* tagpu: what the engine is handed down and up, for the in-game wiki's paired releases */
+    tagpu_wiki_engine_got(uMsg, wParam);
 
     return CallWindowProcA(g_ddraw.wndproc, hWnd, uMsg, wParam,
                            tagpu_zoom_mouse_lparam(uMsg, lParam));

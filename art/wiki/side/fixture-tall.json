@@ -1,0 +1,68 @@
+{
+  "format": 1,
+  "note": "Synthetic: our own numbers and arrangement, derived from no game file. The sidebar layout the wiki falls back to when the running mod gives none; tools/wiki/mockup/sim.js (checkLayout) states the schema and checks it.",
+  "width": 128, "height": 768,
+  "sides": [{"name": "ARM", "prefix": "ARM", "main2": "ARMMAIN2", "gen": "ARMGEN", "types": {
+    "ARMCK": {"pages": ["ARMCK1", "ARMCK2"], "orders": null},
+    "ARMACK": {"pages": ["ARMACK1"], "orders": null}
+  }}],
+  "screens": {
+    "ARMCK1": {"y": 128, "w": 128, "h": 640, "gadgets": [
+      {"name": "ARMMEX", "role": "build", "unit": "ARMMEX", "rect": [4, 8, 60, 60]},
+      {"name": "ARMSOLAR", "role": "build", "unit": "ARMSOLAR", "rect": [64, 8, 60, 60]},
+      {"name": "ARMWIN", "role": "build", "unit": "ARMWIN", "rect": [4, 72, 60, 60]},
+      {"name": "ARMMAKR", "role": "build", "unit": "ARMMAKR", "rect": [64, 72, 60, 60]},
+      {"name": "ARMESTOR", "role": "build", "unit": "ARMESTOR", "rect": [4, 136, 60, 60]},
+      {"name": "ARMMSTOR", "role": "build", "unit": "ARMMSTOR", "rect": [64, 136, 60, 60]},
+      {"name": "ARMGEO", "role": "build", "unit": "ARMGEO", "rect": [4, 200, 60, 60]},
+      {"name": "ARMRAD", "role": "build", "unit": "ARMRAD", "rect": [64, 200, 60, 60]},
+      {"name": "ARMLAB", "role": "build", "unit": "ARMLAB", "rect": [4, 264, 60, 60]},
+      {"name": "ARMVP", "role": "build", "unit": "ARMVP", "rect": [64, 264, 60, 60]},
+      {"name": "ARMAP", "role": "build", "unit": "ARMAP", "rect": [4, 328, 60, 60]},
+      {"name": "ARMSY", "role": "build", "unit": "ARMSY", "rect": [64, 328, 60, 60]},
+      {"name": "ARMPREV", "role": "prev", "rect": [4, 400, 58, 20]},
+      {"name": "ARMNEXT", "role": "next", "rect": [66, 400, 58, 20]}
+    ]},
+    "ARMCK2": {"y": 128, "w": 128, "h": 640, "gadgets": [
+      {"name": "ARMDRAG", "role": "build", "unit": "ARMDRAG", "rect": [4, 8, 60, 60]},
+      {"name": "ARMGUARD", "role": "build", "unit": "ARMGUARD", "rect": [64, 8, 60, 60]},
+      {"name": "ARMHLT", "role": "build", "unit": "ARMHLT", "rect": [4, 72, 60, 60]},
+      {"name": "ARMRL", "role": "build", "unit": "ARMRL", "rect": [64, 72, 60, 60]},
+      {"name": "ARMALAB", "role": "build", "unit": "ARMALAB", "rect": [4, 136, 60, 60]},
+      {"name": "ARMHP", "role": "build", "unit": "ARMHP", "rect": [64, 136, 60, 60]},
+      {"name": "ARMLLT", "role": "build", "unit": "ARMLLT", "rect": [4, 200, 60, 60]},
+      {"name": "IGPATCH", "role": "build", "unit": null, "grey": true, "rect": [64, 200, 60, 60]},
+      {"name": "IGPATCH", "role": "build", "unit": null, "grey": true, "rect": [4, 264, 60, 60]},
+      {"name": "IGPATCH", "role": "build", "unit": null, "grey": true, "rect": [64, 264, 60, 60]},
+      {"name": "IGPATCH", "role": "build", "unit": null, "grey": true, "rect": [4, 328, 60, 60]},
+      {"name": "IGPATCH", "role": "build", "unit": null, "grey": true, "rect": [64, 328, 60, 60]},
+      {"name": "ARMPREV", "role": "prev", "rect": [4, 400, 58, 20]},
+      {"name": "ARMNEXT", "role": "next", "rect": [66, 400, 58, 20]}
+    ]},
+    "ARMACK1": {"y": 128, "w": 128, "h": 640, "gadgets": [
+      {"name": "ARMMOHO", "role": "build", "unit": "ARMMOHO", "rect": [4, 8, 60, 60]},
+      {"name": "ARMFUS", "role": "build", "unit": "ARMFUS", "rect": [64, 8, 60, 60]},
+      {"name": "ARMARAD", "role": "build", "unit": "ARMARAD", "rect": [4, 72, 60, 60]},
+      {"name": "ARMBRTHA", "role": "build", "unit": "ARMBRTHA", "rect": [64, 72, 60, 60]},
+      {"name": "ARMSILO", "role": "build", "unit": "ARMSILO", "rect": [4, 136, 60, 60]},
+      {"name": "ARMLAB", "role": "build", "unit": "ARMLAB", "rect": [64, 136, 60, 60]},
+      {"name": "ARMANNI", "role": "build", "unit": "ARMANNI", "rect": [4, 200, 60, 60]},
+      {"name": "ARMAMD", "role": "build", "unit": "ARMAMD", "rect": [64, 200, 60, 60]},
+      {"name": "ARMASP", "role": "build", "unit": "ARMASP", "rect": [4, 264, 60, 60]},
+      {"name": "IGPATCH", "role": "build", "unit": null, "grey": true, "rect": [64, 264, 60, 60]},
+      {"name": "IGPATCH", "role": "build", "unit": null, "grey": true, "rect": [4, 328, 60, 60]},
+      {"name": "IGPATCH", "role": "build", "unit": null, "grey": true, "rect": [64, 328, 60, 60]},
+      {"name": "ARMPREV", "role": "prev", "rect": [4, 400, 58, 20]},
+      {"name": "ARMNEXT", "role": "next", "rect": [66, 400, 58, 20]}
+    ]},
+    "ARMMAIN2": {"y": 128, "w": 128, "h": 352, "gadgets": []},
+    "ARMGEN": {"y": 128, "w": 128, "h": 640, "gadgets": [
+      {"name": "ARMSTOP", "role": "stop", "rect": [4, 8, 120, 24]},
+      {"name": "ARMMOVE", "role": "order", "rect": [4, 36, 58, 24]},
+      {"name": "ARMATTACK", "role": "order", "rect": [66, 36, 58, 24]},
+      {"name": "ARMPATROL", "role": "order", "rect": [4, 64, 58, 24]},
+      {"name": "ARMREPAIR", "role": "order", "rect": [66, 64, 58, 24]},
+      {"name": "ARMRECLAIM", "role": "order", "rect": [4, 92, 58, 24]}
+    ]}
+  }
+}

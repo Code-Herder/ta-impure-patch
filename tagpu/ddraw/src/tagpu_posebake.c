@@ -5,6 +5,11 @@
    `Model3DONode` template into two vertex streams, the two caches over them,
    the four things that invalidate an entry, and the lever.
 
+   TWO INSTANCES: compiled for the game's world and, under TAGPU_SCENE_WIKI, for
+   the wiki's stage, each with its own statics but one: the bake's scratch, which
+   the two share (see it). tagpu_scene.h names where the wiki's draws its
+   hand-over from and what it may call.
+
    THE WALK IS THE POINT. The body, the structure-shadow slant and the
    nanoframe wire each walk the same tree with slightly different rules, and the
    bake has to reproduce all three EXACTLY — the same faces, the same fan, the
@@ -22,6 +27,7 @@
    collapses onto the model origin; that is the whole mechanism, and it is why
    the bake can be per type at all. */
 
+#include "tagpu_scene.h"            /* first: the wiki instance's names and sizes */
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -97,7 +103,9 @@ static unsigned char* s_matSkip[PB_MAXMAT];   /* per vertex, for the predictor *
    0 ends one and a zeroed table is empty. A geometry entry hashes on its root
    and ghost flag, a material stream on its geometry's slot and its owner; the
    rest of each key is compared in the chain. */
+#ifndef PB_HBITS                     /* the wiki's instance sets its own (tagpu_scene.h) */
 #define PB_HBITS 16
+#endif
 #define PB_HSIZE (1u << PB_HBITS)
 typedef char pb_chain_fits[(PB_MAXGEOM < 0xFFFF && PB_MAXMAT < 0xFFFF) ? 1 : -1];
 static unsigned short s_geomHead[PB_HSIZE], s_geomNext[PB_MAXGEOM];
@@ -136,10 +144,17 @@ static unsigned     s_frame;
    for exactly this reason, and this matches it. */
 static unsigned     s_lvlGen, s_atlasGen;
 
-/* the bake's scratch: one model at a time, render thread only */
-static float s_scratchG[PB_MAXVERT * TAGPU_PB_GEOMST];
-static float s_scratchM[PB_MAXVERT * TAGPU_PB_MATST];
-static unsigned char s_scratchSkip[PB_MAXVERT];
+/* THE BAKE'S SCRATCH: one model at a time, render thread only, and dead when the
+   bake that filled it returns. It is the one state the game's instance of this
+   file and the wiki's share (tagpu_scene.h says why that is safe): the game's
+   object defines it and the wiki's declares it `extern` through PB_SCRATCH, which
+   is why it has external linkage and names of its own. */
+#ifndef PB_SCRATCH
+#define PB_SCRATCH
+#endif
+PB_SCRATCH float tagpu_pb_scratch_geom[PB_MAXVERT * TAGPU_PB_GEOMST];
+PB_SCRATCH float tagpu_pb_scratch_mat[PB_MAXVERT * TAGPU_PB_MATST];
+PB_SCRATCH unsigned char tagpu_pb_scratch_skip[PB_MAXVERT];
 
 /* ---- the one walk ------------------------------------------------------- */
 /* Emitted in range order; within a range, piece order, then face order, then
@@ -220,7 +235,7 @@ static int pb_walk(const char* const* nd, int nparts, int range,
    (a face repeating an index gets (0,1,0)), adds it to every vertex the face
    names, and divides each vertex's sum by its count -- no renormalisation, so a
    vertex between differing faces has a normal shorter than 1
-   (0x45A0A0..0x45A22C, DISASSEMBLED; exe-reverse-engineering.md "The unit
+   (0x45A0FD..0x45A22A, DISASSEMBLED; exe-reverse-engineering.md "The unit
    shade"). Face 0 is left out of the sums when the piece carries a selection
    primitive, as it is left out of the raster (0x45A13D).
 
@@ -231,8 +246,8 @@ static int pb_walk(const char* const* nd, int nparts, int range,
    THE BOUNDS are pb_walk's own, on the same template pieces in the same call:
    the piece's vertex count is at most PB_MAXNODEV (pb_walk skips a node past
    it), every index is checked against that count before it addresses
-   `s_vn`, and the template's lifetime is the bake's (the level generation
-   latched per frame, tagpu_posebake_frame).
+   `tagpu_pb_scratch_vn`, and the template's lifetime is the bake's (the level
+   generation latched per frame, tagpu_posebake_frame).
 
    PB_SHADE_SIGN is which side of the winding the engine's normal points to:
    -1 against (V1-V0)x(V2-V0), MEASURED against the engine's own frames
@@ -241,8 +256,9 @@ static int pb_walk(const char* const* nd, int nparts, int range,
    is not decoded. */
 #define PB_SHADE_SIGN -1.0f
 
-static float s_vn[PB_MAXNODEV][3];
-static int   s_vnCnt[PB_MAXNODEV];
+/* one piece's vertex normals: bake scratch, shared as the streams above are */
+PB_SCRATCH float tagpu_pb_scratch_vn[PB_MAXNODEV][3];
+PB_SCRATCH int   tagpu_pb_scratch_vncnt[PB_MAXNODEV];
 
 typedef struct { int nv; int over; int vnPiece; } PBGEOMCTX;
 
@@ -260,7 +276,10 @@ static void piece_vnormals(const char* n, const int* rv, int nvert)
     const int nface = *(const int*)(n + N_FCOUNT);
     const char* faces = *(const char* const*)(n + N_FACES);
     int j, k;
-    for (k = 0; k < nvert; k++) { s_vn[k][0] = s_vn[k][1] = s_vn[k][2] = 0.0f; s_vnCnt[k] = 0; }
+    for (k = 0; k < nvert; k++) {
+        tagpu_pb_scratch_vn[k][0] = tagpu_pb_scratch_vn[k][1] = tagpu_pb_scratch_vn[k][2] = 0.0f;
+        tagpu_pb_scratch_vncnt[k] = 0;
+    }
     /* pb_walk's own bound on the face list, taken again because these are
        re-reads of engine memory: a piece it would not walk sums nothing */
     if (nface <= 0 || nface > 512 || !ptr_ok(faces) ||
@@ -292,14 +311,18 @@ static void piece_vnormals(const char* n, const int* rv, int nvert)
             if (nl > 1e-6f) { f[0] = PB_SHADE_SIGN * x / nl; f[1] = PB_SHADE_SIGN * y / nl; f[2] = PB_SHADE_SIGN * z / nl; }
         }
         for (k = 0; k < fvc; k++) {
-            s_vn[idx[k]][0] += f[0]; s_vn[idx[k]][1] += f[1]; s_vn[idx[k]][2] += f[2];
-            s_vnCnt[idx[k]]++;
+            tagpu_pb_scratch_vn[idx[k]][0] += f[0];
+            tagpu_pb_scratch_vn[idx[k]][1] += f[1];
+            tagpu_pb_scratch_vn[idx[k]][2] += f[2];
+            tagpu_pb_scratch_vncnt[idx[k]]++;
         }
     }
     for (k = 0; k < nvert; k++) {
-        if (s_vnCnt[k] > 0) {
-            const float inv = 1.0f / (float)s_vnCnt[k];
-            s_vn[k][0] *= inv; s_vn[k][1] *= inv; s_vn[k][2] *= inv;
+        if (tagpu_pb_scratch_vncnt[k] > 0) {
+            const float inv = 1.0f / (float)tagpu_pb_scratch_vncnt[k];
+            tagpu_pb_scratch_vn[k][0] *= inv;
+            tagpu_pb_scratch_vn[k][1] *= inv;
+            tagpu_pb_scratch_vn[k][2] *= inv;
         }
         /* a vertex no face names keeps the engine's zeroed sum, whose row is 0
            (0x459F0A..0x459F15; the divide at 0x45A1FF skips a count of 0) */
@@ -342,17 +365,19 @@ static void geom_emit(void* vctx, int range, int p, const char* nd,
     if (range == TAGPU_PB_BODY && fvc == 4) {
         const unsigned short* fi = *(const unsigned short* const*)(fa + F_INDICES);
         if (ptr_ok(fi) && fi[0] < nvert && fi[1] < nvert && fi[2] < nvert && fi[3] < nvert) {
-            for (t = 0; t < 4; t++) cn4[t] = s_vn[fi[t]];
+            for (t = 0; t < 4; t++) cn4[t] = tagpu_pb_scratch_vn[fi[t]];
             haveQ = 1;
         }
     }
     for (t = 0; t < n; t++) {
-        float* o = s_scratchG + (size_t)(c->nv + t) * TAGPU_PB_GEOMST;
+        float* o = tagpu_pb_scratch_geom + (size_t)(c->nv + t) * TAGPU_PB_GEOMST;
         short q[12];
         int k;
         o[0] = V[t][0]; o[1] = V[t][1]; o[2] = V[t][2];
         if (range == TAGPU_PB_BODY) {
-            o[3] = s_vn[vi[t]][0]; o[4] = s_vn[vi[t]][1]; o[5] = s_vn[vi[t]][2];
+            o[3] = tagpu_pb_scratch_vn[vi[t]][0];
+            o[4] = tagpu_pb_scratch_vn[vi[t]][1];
+            o[5] = tagpu_pb_scratch_vn[vi[t]][2];
             o[7] = (float)TAGPU_PBF_SHADED;
         } else {
             o[3] = 0.0f; o[4] = 1.0f; o[5] = 0.0f;
@@ -579,7 +604,7 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
     if (s_mirrorWant && c.nv > 0) {
         size_t nb = (size_t)c.nv * TAGPU_PB_GEOMST * sizeof(float);
         s_geomMirror[slot] = (float*)malloc(nb);
-        if (s_geomMirror[slot]) memcpy(s_geomMirror[slot], s_scratchG, nb);
+        if (s_geomMirror[slot]) memcpy(s_geomMirror[slot], tagpu_pb_scratch_geom, nb);
     }
     if (s_log) {
         _snprintf(b, sizeof b,
@@ -700,7 +725,7 @@ static void mat_emit(void* vctx, int range, int p, const char* nd,
     if (range == TAGPU_PB_BODY && hasTex && fvc == 4)
         quad = quad_frame(rv, nvert, fa, &qa, &qb);
     for (t = 0; t < n; t++) {
-        float* o = s_scratchM + (size_t)(c->nv + t) * TAGPU_PB_MATST;
+        float* o = tagpu_pb_scratch_mat + (size_t)(c->nv + t) * TAGPU_PB_MATST;
         if (range == TAGPU_PB_BODY && hasTex) {
             /* the fan's corner onto the quad's four UV corners; a face of more
                than four spreads its corners over the four */
@@ -724,7 +749,7 @@ static void mat_emit(void* vctx, int range, int p, const char* nd,
             o[5] = 0.0f; o[6] = 0.0f; o[7] = 1.0f; o[8] = 1.0f;
             o[9] = o[10] = o[11] = o[12] = -1.0f;
         }
-        s_scratchSkip[c->nv + t] = (unsigned char)skip;
+        tagpu_pb_scratch_skip[c->nv + t] = (unsigned char)skip;
     }
     c->nv += n;
 }
@@ -774,7 +799,7 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
     if (s_mirrorWant && c.nv > 0) {
         size_t nb = (size_t)c.nv * TAGPU_PB_MATST * sizeof(float);
         s_matMirror[slot] = (float*)malloc(nb);
-        if (s_matMirror[slot]) memcpy(s_matMirror[slot], s_scratchM, nb);
+        if (s_matMirror[slot]) memcpy(s_matMirror[slot], tagpu_pb_scratch_mat, nb);
     }
     /* WHAT THE VERTEX LAYOUT IS, recorded because the consumer has to
        reproduce it and nothing else in this file states it. Locations 0-3 come
@@ -783,7 +808,7 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
        touching the other. tagpu_vk_unit.c builds its own binding from the two
        mirrors. */
     s_matSkip[slot] = (unsigned char*)malloc((size_t)c.nv ? (size_t)c.nv : 1);
-    if (s_matSkip[slot]) memcpy(s_matSkip[slot], s_scratchSkip, (size_t)c.nv);
+    if (s_matSkip[slot]) memcpy(s_matSkip[slot], tagpu_pb_scratch_skip, (size_t)c.nv);
     /* A FACE WITH NO MATERIAL IS ORDINARY, and measuring said so: all 67 models
        of the pose inventory have some (the footprint quad the slant raster
        fills and the body raster does not, among others), 2.7% of every baked

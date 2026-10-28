@@ -62,6 +62,11 @@ int  tagpu_hudinput_leave_due(void);
 void tagpu_hudinput_leave_opened(int opened);
 void tagpu_hudinput_leave_shown(int open);
 
+/* 1 from Leave's click until its question is gone: the pause the click took is put back by the
+   observer above, a frame or more later and without input (the in-game wiki opens only when this
+   is 0, tagpu_wiki.c THE PAUSE). Game thread. */
+int  tagpu_hudinput_leave_pending(void);
+
 /* tagpu_reclaim's teardown wrap, on entry to 0x491B60: the level's HUD state is forgotten. */
 void tagpu_hudinput_level_end(void);
 

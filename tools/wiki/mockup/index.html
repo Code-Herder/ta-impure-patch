@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>In-game wiki mockup</title>
+<!-- The in-game wiki drawn from art/wiki/ (tree.json, entries/<id>.json) and played by sim.js. Serve the repository root
+     with python3 tools/hudart/serve.py and open /tools/wiki/mockup/. research/notes/ingame-wiki.md is the specification:
+     the game copies this page, so a change to the wiki is made here first. -->
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="wiki.css">
+</head>
+<body>
+<header id="controls">
+  <h1>In-game wiki mockup</h1>
+  <label>Screen <select id="res"><option>1920x1080</option><option>2560x1440</option><option>3840x2160</option><option>3440x1440</option>
+    <option>1280x1024</option><option>1024x768</option><option value="fit">fit the browser</option></select></label>
+  <label>Window <input type="range" id="size" min="50" max="100" step="1"><output id="sizev"></output></label>
+  <label>Game <select id="mode"><option value="sp">single player (pauses)</option><option value="mp">multiplayer (keeps running)</option></select></label>
+  <label>Detected mod <select id="mod"><option value="stock">Stock</option><option value="mayhem">Total Mayhem</option><option value="prota">ProTA</option>
+    <option value="twilight">Twilight</option><option value="escalation">Escalation</option><option value="tazero">TA Zero</option><option value="unknown">unknown</option></select></label>
+  <label>Side <select id="side"></select></label>
+  <label>Interface <select id="iface"><option value="1">Right-click</option><option value="0">Left-click</option></select></label>
+  <label>Sidebar <select id="sidebar"><option value="mod">the mod's (its pack, else the fixture)</option><option value="fixture">fixture, 480 rows</option>
+    <option value="tall">fixture, 768 rows</option><option value="off">none</option></select><output id="sidebar-note"></output></label>
+  <label>Skin <select id="skin"><option value="kit">kit</option><option value="whitebox">whitebox</option></select></label>
+  <label>Rewind button <select id="rewind"><option value="1">shown (live recorded skirmish)</option><option value="0">absent</option></select></label>
+  <label>Graphics <select id="gfx"><option value="whitebox">whitebox</option><option value="game">game (gfx/)</option></select><output id="gfx-note"></output></label>
+</header>
+<div id="view">
+  <div id="frame">
+    <canvas id="bg"></canvas>
+    <div id="topbar">
+      <div class="rd"><b>Metal</b><span id="m-v"></span><i id="m-f"><s></s></i><em id="m-r"></em></div>
+      <div class="rd"><b>Energy</b><span id="e-v"></span><i id="e-f"><s></s></i><em id="e-r"></em></div>
+      <div id="clock"></div>
+      <div id="paused">PAUSED</div>
+      <button id="b-wiki" class="tb" title="Wiki" data-part="wikibtn" data-glyph="i_wiki"><i class="gl">?</i></button>
+      <button id="b-rewind" class="tb" title="Rewind">&#10226;</button>
+      <button id="b-gear" class="tb" title="Impure settings">&#9881;&#xFE0E;</button>
+    </div>
+    <div id="capture"></div>
+    <div id="win" hidden data-part="window">
+      <div class="wt">Wiki</div>
+      <button id="wx" title="Close (Esc)" data-part="close" data-glyph="i_close i_x"><i class="gl">&#10005;</i></button>
+      <div class="wb">
+        <div class="pnl" data-part="panel"><nav id="tree" class="scr"></nav></div>
+        <div class="pnl" data-part="panel"><ol id="demos" class="scr"></ol></div>
+        <section id="entry">
+          <h2 id="e-title"></h2>
+          <div id="e-sub"></div>
+          <div id="badge" hidden data-part="badge"><i></i>Turned off in this mod</div>
+          <div class="srow">
+            <div id="sbox" data-part="bezel"><canvas id="stage"></canvas></div>
+          </div>
+          <div id="caption"></div>
+          <div id="keys"></div>
+          <div id="ctl">
+            <button id="c-play" title="Play / pause" data-part="button" data-glyph="i_play"><i class="gl">&#9654;</i></button>
+            <button id="c-replay" title="Replay" data-part="button" data-glyph="i_replay"><i class="gl">&#10226;</i></button>
+            <span class="sp"><button id="c-x1" data-part="button">1&times;</button><button id="c-x2" data-part="button">2&times;</button></span>
+            <button id="c-try" data-part="button"></button>
+          </div>
+          <div class="pnl" id="p-text" data-part="panel"><div id="text" class="scr"></div></div>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note">The game frame is the chosen resolution fitted into the browser, its canvases drawn at the resolution's own pixels; every
+length in the window is in units of the frame's height / 720. The window, its tree, the entry and its demos come from <code>art/wiki/</code>;
+what the stage shows comes from <code>sim.js</code>; the kit's parts from <code>art/wiki/kit/</code>, the text styles from the replay
+HUD's <code>art/hud/layout.json</code>. URL switches: <code>res=</code>, <code>size=</code>, <code>mode=sp|mp</code>,
+<code>mod=</code>, <code>side=</code> (the side the tutorial plays, by name without case: the sidebar layout's first side when
+it names none of them), <code>iface=1|0</code> (the Interface Type: 1 right-click, the default, or 0 left-click),
+<code>sidebar=mod|fixture|tall|off</code> (the game's left sidebar on the stage: the detected mod's layout and, under
+<code>gfx=game</code>, its pictures from the gitignored <code>gfx/side/&lt;mod&gt;/</code>, the fixture of <code>art/wiki/side/</code> where the mod has
+none; a fixture by name; or no sidebar. With the mod's own layout the demos play that side's units, its casting, and
+under <code>gfx=game</code> draw them from the mod's stage packs), <code>skin=kit|whitebox</code>, <code>rewind=0|1</code>, <code>open</code>, <code>entry=</code>, <code>demo=</code> (from 1), <code>try</code>, <code>gfx=whitebox|game</code> (the stage in 3D, as the game draws it, from the packs <code>tools/wiki/gfx.py</code>
+resolves from the local install into the gitignored <code>gfx/</code>), <code>ss=</code> (its supersampling, default 2).</p>
+<script src="sim.js"></script>
+<script src="pose.js"></script>
+<script src="cob.js"></script>
+<script src="text.js"></script>
+<script src="../../tascene-render.js"></script>
+<script src="scene.js"></script>
+<script src="gfx.js"></script>
+<script src="side.js"></script>
+<script src="stage.js"></script>
+<script src="wiki.js"></script>
+</body>
+</html>

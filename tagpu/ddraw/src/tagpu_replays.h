@@ -65,4 +65,13 @@ void tagpu_replays_refused(const char* file, unsigned code, unsigned a, unsigned
    1 escalation, 2 twilight; retail's until the first main-menu visit. GAME THREAD. */
 int  tagpu_replays_style_index(void);
 
+/* FOR THE IN-GAME WIKI'S ASSET LOADER (tagpu_wikiasset.h), at the wiki's first open, on the game
+   thread. archive_paths copies the engine's mount list into `out`, at most `max` archives' full
+   paths (0x104 bytes each, as the engine keeps them) in mount order, and returns how many; one
+   the mount left unterminated is "". asset_names copies the engine's `language` value and the
+   asset folders' names as the running executable spells them. */
+struct WIKI3DNAMES;
+int  tagpu_replays_archive_paths(char (*out)[0x104], int max);
+void tagpu_replays_asset_names(struct WIKI3DNAMES* out);
+
 #endif

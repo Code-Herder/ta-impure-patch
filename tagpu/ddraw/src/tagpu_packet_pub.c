@@ -113,6 +113,8 @@
                                 THIS thread at the one point it is finished      */
 #include "tagpu_feat.h"      /* whether the mirror wants the map's own features */
 #include "tagpu_hudstate.h"   /* the replay HUD's record, through the replay's own calls */
+#include "tagpu_wiki.h"       /* the in-game wiki's record: Impure's own state, and the two engine
+                                values it follows, read here (wiki_side, wiki_iface) */
 #include "tagpu_hudinput.h"   /* ...and the controls it drew, handed back */
 #include "tagpu_datakeys.h"  /* the build ghost's piece masks, computed on THIS thread */
 #include "tagpu_replay.h"    /* the replay's overlays, built at its frame visit on THIS thread */
@@ -306,6 +308,7 @@ static int      s_fillAgain;
 /* the replay HUD's record, built here and copied into the area: 3.4 KB, off the stack */
 static TAGPU_PK_HUD s_hud;
 static TAGPU_PK_HUDSTAT s_hudstat;
+static TAGPU_PK_WIKI s_wiki;
 
 static unsigned append_area(TAGPU_PACKET* p, unsigned* cursor, const void* src, unsigned len,
                             unsigned* off_out, unsigned* len_out, unsigned trunc_bit)
@@ -536,6 +539,50 @@ static int player_logo(const char* ta, unsigned id)
     if (!ptr_ok(pi)) return -1;
     b = *(const unsigned char*)(pi + PI_LOGO);
     return b < PLAYER_COUNT ? (int)b : -1;
+}
+
+/* ---- THE IN-GAME WIKI'S CONTEXT: the controlled player's side and the Interface Type, read
+   here at the fill, on the game thread, in game, and handed to tagpu_wiki_fill by value
+   (tagpu_wiki.c reads no engine memory). ---- */
+#define WIKI_PLAYER_RECORDS 11      /* main's player records: the ten seats and the viewer's, which
+                                       a replay controls (0x2A42 = 10, MEASURED 2026-10-28); all
+                                       eleven built by 0x463BE0 from 0x41D98B (tagpu_recorder.c) */
+#define PI_SIDE             0x95    /* u8 PlayerInfo's side: sidedata's [SIDEn] index            */
+#define OFF_IFACE           0x37EFA /* i32 the Interface Type                                    */
+
+/* THE CONTROLLED PLAYER'S SIDE, as the engine's sidebar router reads it: the record at
+   `main+0x1B63 + 0x14B * byte[main+0x2A42]`, its PlayerInfo at +0x27, the side byte at +0x95
+   (DISASSEMBLED 0x41AD1C..0x41AD66). In a replay 0x2A42 names the viewer's record, whose side the
+   sidebar shows -- the wiki follows what the sidebar shows.
+   LIFETIME: main's eleven PlayerInfo blocks are allocated by the record constructor and nothing
+   frees one (tagpu_recorder.c, the player records), and the router dereferences this one on this
+   thread in game (0x41AD61); this runs on the same thread, in game, between engine calls, so the
+   block is the engine's own live allocation while it is read. ptr_ok is a sanity filter on the
+   pointer's value, not that argument.
+   BOUND: the record index is held below the eleven records; the byte returned is DATA -- the wiki
+   maps it through the published WIKISIDE's side_of_engine, below WIKI_SIDE_SIDES and mapped, else
+   no casting and the fixture -- so a wrong value shows another side's tutorial and never reads
+   memory the engine does not own. -1 when the index or the pointer does not validate. */
+static int wiki_side(const char* ta)
+{
+    const unsigned p = RDU8(ta, OFF_WATCHED);
+    const char* pi;
+    if (p >= WIKI_PLAYER_RECORDS) return -1;
+    pi = *(const char* const*)(ta + OFF_PLAYERS + p * PLAYER_STRIDE + PL_INFO);
+    if (!ptr_ok(pi)) return -1;
+    return RDU8(pi, PI_SIDE);
+}
+
+/* THE INTERFACE TYPE, main+0x37EFA, as the four readers that decide the left button's rows test
+   it, `== 1` (0x43E505, 0x43F9EF, 0x499046, 0x499567, DISASSEMBLED): 1 right-click, anything
+   else left-click. The typed command IFace (0x416D20) stores any integer, unclamped, and the
+   registry load's clamp is signed (0x42F9CD), so a value outside {0, 1} is the engine's mixed
+   interface -- its two `!= 0` readers (0x499162, the right press; 0x499352, a release) take the
+   type-1 branch -- which the wiki shows as the left-click one (research/notes/ingame-wiki.md,
+   Gaps). */
+static int wiki_iface(const char* ta)
+{
+    return RD32(ta, OFF_IFACE) == 1;
 }
 
 /* One live unit's entry. `ta` and `u` are the game thread's own; every value
@@ -2735,6 +2782,7 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
 {
     const char* ta = ta_main();
     unsigned cursor = sizeof(TAGPU_PACKET), need = sizeof(TAGPU_PACKET), e, nplace = 0;
+    uint32_t wlen = 0;
     int L, T, W, H;
     (void)ctx;
 
@@ -2916,9 +2964,27 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
         e = append_area(p, &cursor, NULL, 6144u, &p->stress_off, &p->stress_len, TAGPU_PK_TRUNC_STRESS);
         if (e > need) need = e;
     }
-    /* ---- the effects models, last ---- */
+    /* ---- the effects models ---- */
     e = fill_fxmodels(p, &cursor);
     if (e > need) need = e;
+    /* ---- the in-game wiki's record, LAST: it can grow without moving or cutting a table
+       before it (tagpu_wikipk.h) ---- */
+    if (tagpu_wiki_fill(&s_wiki, &wlen, s_fillAgain, wiki_side(ta), wiki_iface(ta))) {
+        e = append_area(p, &cursor, &s_wiki, wlen, &p->wiki_off, &p->wiki_len, TAGPU_PK_TRUNC_WIKI);
+        if (e > need) need = e;
+        /* THE STAGE IS CUT BEFORE THE PAGE: a whole record that does not fit is placed as its head,
+           so the window is still drawn and can be closed. The shortfall stays the whole record's,
+           so the growth aims at the stage; the head's own refusal adds nothing to it. A head that
+           does not fit either carries no record, and the wiki closes the window at the next
+           publish's fill (tagpu_wiki.h). */
+        if (!p->wiki_len && wlen > TAGPU_PK_WIKI_HEAD) {
+            const unsigned short_was = s_fillShort;
+            append_area(p, &cursor, &s_wiki, tagpu_wiki_head_only(&s_wiki), &p->wiki_off, &p->wiki_len,
+                        TAGPU_PK_TRUNC_WIKI);
+            s_fillShort = short_was;
+        }
+        tagpu_wiki_carried(&s_wiki, p->wiki_len);
+    }
     p->used_bytes = cursor;
     /* the whole fill's size when a table did not fit (s_fillShort) */
     if (s_fillShort && PKT_ALIGN4(cursor) + s_fillShort > need) need = PKT_ALIGN4(cursor) + s_fillShort;
@@ -3237,6 +3303,7 @@ static int __cdecl before_draw(void* entry_esp)
         tagpu_hudinput_take(c ? &c->hud : NULL);
         /* the reclaim popup as last drawn, for a click before the next take */
         tagpu_sweep_take(c ? &c->sweep : NULL);
+        tagpu_wiki_take(c ? &c->wiki : NULL);
         /* THE CAMERA AND THE RECT, THEN THE TERRAIN LATCH: the eye may only
            be off the engine's range, and the rect only wide, on a draw whose
            ground is ours. The render thread's request is read ONCE, the camera

@@ -1,0 +1,144 @@
+{
+  "format": 1,
+  "note": "Castings for the fixture layout (art/wiki/side/fixture.json), each a pack casting list index-aligned with the layout's one side. identity casts the entries' own types with their authored figures, so a bound entry plays as the authored one. shifted keeps the type names with invented figures: a 3 x 3 builder, other build times and speeds, and a 4 x 4 geothermal plant whose G cells are its four interior cells. unbound is identity with the wall cast unbound. No figure here is read from the game beyond what the entries author.",
+  "castings": {
+    "identity": [
+      {
+        "side": "ARM",
+        "commander": "ARMCOM",
+        "casts": {
+          "builder": {
+            "type": "ARMCK",
+            "title": "Construction KBot",
+            "footprint": [2,2],
+            "buildTime": 5597,
+            "workerTime": 80,
+            "buildDistance": 40,
+            "maxVelocity": 0.8,
+            "canstop": 1,
+            "builds": ["mex","geo","tower","wall","solar"]
+          },
+          "advbuilder": {
+            "type": "ARMACK",
+            "title": "Adv. Construction Kbot",
+            "footprint": [2,2],
+            "buildTime": 13432,
+            "workerTime": 160,
+            "buildDistance": 60,
+            "maxVelocity": 0.6,
+            "canstop": 1,
+            "builds": ["moho"]
+          },
+          "mex": {"type":"ARMMEX","title":"Metal Extractor","footprint":[3,3],"buildTime":1800,"extracts":0.001,"activatewhenbuilt":1},
+          "moho": {"type":"ARMMOHO","title":"Moho Mine","footprint":[5,5],"buildTime":35750,"extracts":0.003,"activatewhenbuilt":1},
+          "geo": {
+            "type": "ARMGEO",
+            "title": "Geothermal Powerplant",
+            "footprint": [4,4],
+            "buildTime": 13078,
+            "energyMake": 250,
+            "activatewhenbuilt": 1,
+            "vent": true
+          },
+          "walker": {"type":"ARMPW","title":"Peewee","footprint":[2,2],"buildTime":1452,"maxVelocity":1.8,"canstop":1},
+          "tower": {"type":"ARMLLT","title":"L.L.T.","footprint":[2,2],"buildTime":4662,"canstop":1},
+          "wall": {"type":"ARMDRAG","title":"Dragon's Teeth","footprint":[2,2],"buildTime":520},
+          "solar": {"type":"ARMSOLAR","title":"Solar Collector","footprint":[5,5],"buildTime":2495,"activatewhenbuilt":1}
+        },
+        "report": []
+      }
+    ],
+    "shifted": [
+      {
+        "side": "ARM",
+        "commander": "ARMCOM",
+        "casts": {
+          "builder": {
+            "type": "ARMCK",
+            "title": "Construction KBot",
+            "footprint": [3,3],
+            "buildTime": 6400,
+            "workerTime": 80,
+            "buildDistance": 40,
+            "maxVelocity": 1.1,
+            "canstop": 1,
+            "builds": ["mex","geo","tower","wall","solar"]
+          },
+          "advbuilder": {
+            "type": "ARMACK",
+            "title": "Adv. Construction Kbot",
+            "footprint": [2,2],
+            "buildTime": 15000,
+            "workerTime": 160,
+            "buildDistance": 60,
+            "maxVelocity": 0.45,
+            "canstop": 1,
+            "builds": ["moho"]
+          },
+          "mex": {"type":"ARMMEX","title":"Metal Extractor","footprint":[3,3],"buildTime":2400,"extracts":0.001,"activatewhenbuilt":1},
+          "moho": {"type":"ARMMOHO","title":"Moho Mine","footprint":[5,5],"buildTime":30000,"extracts":0.003,"activatewhenbuilt":1},
+          "geo": {
+            "type": "ARMGEO",
+            "title": "Geothermal Powerplant",
+            "footprint": [4,4],
+            "buildTime": 16000,
+            "energyMake": 250,
+            "vent": true,
+            "g": [[1,1],[2,1],[1,2],[2,2]]
+          },
+          "walker": {"type":"ARMPW","title":"Peewee","footprint":[2,2],"buildTime":1200,"maxVelocity":2.4,"canstop":1},
+          "tower": {"type":"ARMLLT","title":"L.L.T.","footprint":[2,2],"buildTime":5200,"canstop":1},
+          "wall": {"type":"ARMDRAG","title":"Dragon's Teeth","footprint":[2,2],"buildTime":400},
+          "solar": {"type":"ARMSOLAR","title":"Solar Collector","footprint":[5,5],"buildTime":3000,"activatewhenbuilt":1}
+        },
+        "report": []
+      }
+    ],
+    "unbound": [
+      {
+        "side": "ARM",
+        "commander": "ARMCOM",
+        "casts": {
+          "builder": {
+            "type": "ARMCK",
+            "title": "Construction KBot",
+            "footprint": [2,2],
+            "buildTime": 5597,
+            "workerTime": 80,
+            "buildDistance": 40,
+            "maxVelocity": 0.8,
+            "canstop": 1,
+            "builds": ["mex","geo","tower","solar"]
+          },
+          "advbuilder": {
+            "type": "ARMACK",
+            "title": "Adv. Construction Kbot",
+            "footprint": [2,2],
+            "buildTime": 13432,
+            "workerTime": 160,
+            "buildDistance": 60,
+            "maxVelocity": 0.6,
+            "canstop": 1,
+            "builds": ["moho"]
+          },
+          "mex": {"type":"ARMMEX","title":"Metal Extractor","footprint":[3,3],"buildTime":1800,"extracts":0.001,"activatewhenbuilt":1},
+          "moho": {"type":"ARMMOHO","title":"Moho Mine","footprint":[5,5],"buildTime":35750,"extracts":0.003,"activatewhenbuilt":1},
+          "geo": {
+            "type": "ARMGEO",
+            "title": "Geothermal Powerplant",
+            "footprint": [4,4],
+            "buildTime": 13078,
+            "energyMake": 250,
+            "activatewhenbuilt": 1,
+            "vent": true
+          },
+          "walker": {"type":"ARMPW","title":"Peewee","footprint":[2,2],"buildTime":1452,"maxVelocity":1.8,"canstop":1},
+          "tower": {"type":"ARMLLT","title":"L.L.T.","footprint":[2,2],"buildTime":4662,"canstop":1},
+          "wall": null,
+          "solar": {"type":"ARMSOLAR","title":"Solar Collector","footprint":[5,5],"buildTime":2495,"activatewhenbuilt":1}
+        },
+        "report": [{"cast":"wall","why":"no plain structure with no weapon1 and tedclass FORT on ARMCK's menu"}]
+      }
+    ]
+  }
+}

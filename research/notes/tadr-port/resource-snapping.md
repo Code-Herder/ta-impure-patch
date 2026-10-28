@@ -210,12 +210,51 @@ eligible. Owned-building upgrades remain available on metal maps, and geothermal
 independent of the uniform-metal rule. The closed-component classifier below establishes the
 distinct-deposit rule; TADR's above-background footprint count alone cannot establish it.
 
-Choose the highest extraction-rate mex available to the selected constructors that legally fits
-the target patch. A lower-rate option can be chosen when stronger ones do not fit. Apply the same
-rule to geothermal plants using energy output. Show the exact variant in the ghost. If no option
-fits, retain normal contextual behavior. The implementation reads definition output metrics and
-the bounded native build lists, with a stable definition-index tie-break. Unit names and tech
-levels do not determine output priority.
+Choose the highest extraction-rate mex available to the selected constructors' build menus that
+legally fits the target patch. A lower-rate option can be chosen when stronger ones do not fit.
+Apply the same rule to geothermal plants using energy output. Show the exact variant in the ghost.
+If no option fits, retain normal contextual behavior. The implementation reads definition output
+metrics and each constructor's build menu by the page loader's rule (*Candidate source*, below),
+with a stable definition-index tie-break. Unit names and tech levels do not determine output
+priority.
+
+### Candidate source
+
+Quick Build offers what each selected constructor's **build menu** offers, the buttons the player
+would press, and never reads the `CANBUILD` list (owner decision 23, 2026-10-28). `CANBUILD` is
+the AI's list: the engine's own placement dispatch `0x419670` builds whatever a menu press armed
+and reads no list, while the list carries AI-only types and every download entry whatever its
+`MENU`. The menu **replaces** the list rather than being intersected with it: an intersection
+would leave Twilight's ARMCK with nothing for a vent (its list has no geothermal) and nothing for
+a deposit (its list's AAIMEXX is not on its menu).
+
+- **Per constructor.** A builder type's menu is what it shows when it alone is selected: its pages
+  `<NAME>0.GUI` (the orders page) and 1..min(count − 1, 7), the side's `DL` page standing in for a
+  missing one, filled from the download entries, greyed by the engine's pass, and pressed as the
+  engine's handler presses (a 16-character name, the pager and tab names refused, mobile types
+  refused). The selection rule is unchanged: the union of the selected constructors' menus, the
+  constructors whose menu holds the choice as primaries and the others Guarding.
+- **The read.** `tagpu_buildmenu.c` is the rule, engine-free and unit-tested
+  (`tagpu/ddraw/tests/buildmenutest.py`); `tagpu_resource.c` feeds it the files through the
+  engine's own file calls on the game thread and keeps the type numbers per def table (its base and count), level generation and
+  watched side. The engine map's *The left sidebar* has the rule's addresses and the
+  *Resource placement and contextual order contracts* row its calls and bounds.
+- **Replay and multiplayer.** Nothing changes for the recorder: the menu decides which ordinary
+  order a click makes, the order is what is recorded, and playback never consults the menu.
+  Each peer reads its own files for its own clicks, as it draws its own build buttons.
+- **What it changes.** Stock: nothing, MEASURED offline over all 45 stock builders on both sides
+  (no extractor or geothermal difference against `CANBUILD`). Twilight: ARMCK builds ARMAMEX on a
+  deposit and ARMGEO on a vent, where it built the AI's AAIMEXX and had nothing for a vent; CORCK
+  builds COREXP and CORGEO. A `CANBUILD`-only type, such as Twilight's AI extractors, is no longer
+  offered.
+
+| Verification of the candidate source | Result |
+|---|---|
+| The rule against the Python model of it, every builder and side of the six compatibility setups (`buildmenutest dump`) | 0 differences: stock 106, Twilight 280, TA Zero 267, Mayhem 224, ProTA 136, Escalation 380 builder-side cases |
+| `buildmenutest.py`, native, ASan/UBSan | 34 checks pass |
+| Twilight 2.0b98, Wine, MEASURED 2026-10-28: one ARMCK and one CORCK on the resource fixture map, Quick Build clicks | ARMCK: deposit → ARMAMEX, vent → ARMGEO, ground → Move; CORCK: vent → CORGEO, deposit → COREXP, whose nanoframe appears. One `resource: menu` line per builder type for the level (ARMCK 3 pages, 40 types, 2 extractors, 1 geothermal; CORCK 3 pages, 41 types; 0.7 ms each) |
+| Retail, the same driver | ARMCK: ARMMEX, ARMGEO, Move; CORCK: CORGEO, CORMEX, as `CANBUILD` gave. ARMCK 4 pages (the fourth the side's `DL`), 19 types; CORCK 4 pages, 21 types |
+| `resource-refusals`' candidate-source step | run by the landing's replay gate (`tareplay.py landing`) |
 
 ### Orders and mixed selections
 
@@ -320,7 +359,7 @@ New Quick plans use `0x43ADC0` so a Shift append never toggles a neighboring pla
 Geo reservations compare a unique geothermal feature anchor touched by the G yard, normalizing
 bounded footprint aliases; footprints spanning multiple distinct vents have no cancellation identity.
 Upgrade pairs require an adjacent resolved reclaim and an unstarted non-head build with no handler,
-StopMoving flag or owned object. Its destructor only unlinks its reference, so the preceding reclaim
+StopBuilding flag (`+0x42` bit `0x400000`) or owned object. Its destructor only unlinks its reference, so the preceding reclaim
 remains live across build removal and can then be removed exactly. No destroyed node is reused,
 and cancellation never appends an order. Only selected constructors are cancelled; persistent
 helper Guards remain ordinary orders.
@@ -338,8 +377,11 @@ per-mod preferences, so an effective profile cap never becomes the saved radius 
 All engine reads share the input thread's level lifetime. Unit indices, the controlled player's
 inclusive unit partition, definition indices, map products, exploration bits and descriptor
 indices are bounded before addressing memory. Yard reads use the loader's allocation contract.
-CANBUILD reads require the existing allocation patch to have installed successfully; the new
-`SIM_INSTALL` flag describes that process installation, not match state.
+The build-menu read runs on the game thread where the engine reads its own build pages, and
+bounds what it takes: the page probe's and GUI_Load's paths to their buffers, a file to 1 MiB
+read exactly, the download records below their count and five entries a record, the watched
+side below the sides loaded, and every type number below the def count. Its table holds type
+numbers only, one table a def table (its base and count) and level generation.
 
 Resource and profile scratch is classified as presentation: simulation never reads it, no address
 survives into the simulation, and the module refuses puppet seats. The orders it creates are
@@ -396,7 +438,7 @@ comparison of a queue before and after a click reads both on the same held tick.
 | `resource-locked`, `resource-inherit` | General locks, exact-version inheritance/clamping, effective controls and policy frozen despite edits during the match | L/P/R/Q |
 | `resource-priority` | Explicit Move, Alt, equal own mex and personal Quick toggle off | L/P/R/Q |
 | `resource-nozoom` (stock limits) | Manual/Alt and Quick Build when zoom and widening are disabled | L/P/R/Q |
-| `resource-refusals` | Reclaim-ineligible constructor, Guard-ineligible helper retaining its queue, eligible primary and helper fallback | Native catalogue preflight + L/P/R/Q |
+| `resource-refusals` | Reclaim-ineligible constructor, Guard-ineligible helper retaining its queue, eligible primary and helper fallback; the candidate source: RSNGCK, whose menu is ARMCK's and whose `CANBUILD` holds only RSNMOHO (a download entry with no `MENU`), Quick-Builds ARMMEX on the deposit and never RSNMOHO | Native catalogue preflight + L/P/R/Q |
 | `resource-frontend` | Untouched/touched Visuals Undo preserves a raw radius above the current cap; raising the cap recovers it with packets disabled | Frontend preflight + L/P/R/Q mex |
 
 A queue is read in one consistent piece: each round of `Check.chain` reads the unit's head and

@@ -264,6 +264,63 @@
      bottom, standing where the reflected art puts them, in the same tone, and
      never drawn over the map itself. Units stay on the map.
 
+     ORDER MARKERS: the engine's queued-order graphics (ui-markers.md §3), in
+     both renderers, from the pack's copy of anims/cursors.gaf. Each unit's
+     scenario `orders` is drawn as a shift-queue by the engine's walk: from
+     the unit, every order whose descriptor mask has bit 1 or 3 draws the
+     cursor_ary sprite at its target, a bit-1 order on the hovered unit also
+     draws the `pathicon` route dots from the previous target to it, and the
+     chain moves on. The dots march 48 px a second ON SCREEN at every zoom,
+     which is the engine's 48 world units per 30 ticks at 1x; the sprite
+     shows frame (gameTime / (2 * frame 0's ticks)) % count at ordalpha
+     (default 0.7; PALETTE.ALP's mix, measured under GDI, is 0.5). Drawn onto the canvas after
+     the composite, at canvas resolution, inside each side's half of the
+     wipe, and re-presented every display frame on a 30 Hz game clock, so the
+     world under them is not redrawn to animate them. There is no fog and
+     nothing draws over them. Per side:
+       ordstyle=<s>  gaf (default: the engine's art) | off
+       ordsize=<s>   canvas px per texel: screen (default) = 1 at every zoom,
+                     the art at its own size, as the engine draws it at 1x;
+                     world = the zoom, the engine's pixel magnified with the
+                     world; int = the zoom rounded, at least 1; clamp = the
+                     zoom held inside ordmin..ordmax (default 1..2)
+       ordfilter=<f> nearest (default) | sharp (each texel flat, only the
+                     pixel across a texel edge blended: even texels at a
+                     scale that is not whole) | linear
+       ordspace=<s>  the dot spacing: lod (default) pinned to the map, 48 x
+                     2^k world units at the zoom's level k (31..75 px apart
+                     on screen); when a zoom changes the level, the dots it
+                     adds fade in to full and the ones it drops fade out
+                     over ordfade ms (default 300), so a zoom moves no dot
+                     and at rest every dot is full; at zoom 1 it is the
+                     engine's line; screen 48 canvas px
+                     at every zoom, laid out from each leg's start, which
+                     slides the dots over the map during a zoom; world 48
+                     world units,
+                     the dots held to the map; octave 48 x 2^k world units,
+                     k the zoom's octave, each octave's dots every other dot
+                     of the one below, so a zoom adds or drops dots and
+                     moves none. The dots move 48 px a second on screen
+                     under all three; under world and octave the spacing
+                     changes with the zoom, so more or fewer dots pass a
+                     point each second
+       ordanim=<a>   engine (default) | cursor: each frame for its own
+                     ticks, as the mouse cursor animates (0x4B8BF0)
+       ordtick=<t>   int (default: the clock in whole ticks, as the engine
+                     steps) | smooth
+       orddots=<d>   all (default: every unit is the hovered one) | active
+                     (only the unit being ordered; the others show their
+                     sprites, as a merely selected unit does)
+       ordalpha=<a>  the sprite's opacity, default 0.7, the game's (the
+                     engine's ALP blend is 0.5)
+       orddotalpha=<a> the route dots' opacity, default 1 (the engine's)
+                     Both are sliders in the status bar
+     Global: orders=<unit>:<cmd>@<x>,<z>;<cmd>#<handle>|<unit>:… replaces the
+     scenario's queues, ordunit=<id> is the unit being ordered, ordtime=<t> is
+     the clock under shot=1 (default 0). Serving, SHIFT-click queues the order
+     picked in the status bar, CTRL-click picks the unit, and both write back
+     into the address bar.
+
      THE COORDINATE CONVENTION IS TAGPU'S, DELIBERATELY. The extracted vertex
      shader maps game py 0 -> NDC -1, i.e. the offscreen's row 0 is the game
      frame's TOP row and gl_FragCoord.xy is the game-frame pixel — which is what
@@ -299,6 +356,7 @@
                        cursor: pointer; }
   #bar .modes button.on { color: #e6ecf5; background: #2c333d; border-color: #6aa8d8; }
   #bar .modes button:hover { border-color: #d8b24a; }
+  #bar input[type=range] { width: 110px; accent-color: #6aa8d8; }
   #err { position: fixed; top: 10px; left: 10px; right: 10px; padding: 8px 10px;
          border-radius: 8px; background: #40222a; border: 1px solid #6b3540;
          color: #f0c8ce; white-space: pre-wrap; display: none; font-family: ui-monospace, monospace; }
@@ -307,7 +365,12 @@
 <div id="bar"></div>
 <div id="err"></div>
 
+<!-- the Classic lane (tagpu's shaders over the pack), shared with the in-game wiki's mockup -->
+<script src="tascene-render.js"></script>
 <script type="module">
+const TR = window.TasceneRender;
+const { div32trunc, ceil32, TILE_PX, UNIT_STRIDE } = TR;
+const { program, nameShadowUnits, uniforms, tex2D } = TR;
 const Q = new URLSearchParams(location.search);
 const SHOT = Q.get("shot") === "1";
 const SS   = Math.max(1, parseInt(Q.get("ss") || "2", 10));
@@ -337,22 +400,14 @@ async function fetchBin(u) {
   return new Uint8Array(await r.arrayBuffer());
 }
 
-// ---- the engine's own integer arithmetic (tagpu_terr.c / terrain-depth.md 2).
-// `sar 5` is a division TOWARD ZERO, and the column count is a ceil — both are
-// reproduced deliberately, not cleaned up, because a cell boundary landing one
-// pixel differently is exactly what the parity diff exists to catch.
-const div32trunc = (v) => (v + (v < 0 ? 31 : 0)) >> 5;
-const TILE_PX = 32;
-const UNIT_STRIDE = 7;             // the mesh .bin's own stride: x,y,z,u,v,fc,ck
-const ceil32 = (v) => { const q = div32trunc(v); return (v - q * 32) ? q + 1 : q; };
-
 // ---------------------------------------------------------------------------
 // PARAMETERS. Two scopes: a handful are global to the frame, the rest describe
 // ONE LOOK and so exist once per wipe side. A side's parameters are the
 // top-level query overridden by its own a= / b= query overridden by nothing —
 // which is what makes `?eye=X,Y&a=engine&b=relief` share the camera and differ
 // only in the look, i.e. the same pixel coordinates on both sides.
-const GLOBAL = new Set(["shot", "ss", "eye", "wipe", "a", "b", "debug", "zoom"]);
+const GLOBAL = new Set(["shot", "ss", "eye", "wipe", "a", "b", "debug", "zoom",
+                        "orders", "ordunit", "ordtime"]);
 const zoomClamp = (z) => (Number.isNaN(z) ? 1 : Math.max(0.25, Math.min(8, z)));
 let zoom = zoomClamp(parseFloat(Q.get("zoom") || "1"));
 
@@ -520,56 +575,31 @@ function readLook(p, label) {
     edgeFade: Math.max(32, num("edgefade", 1536)),
     edgeSteps: Math.max(0, Math.min(32, num("edgesteps", 0) | 0)),
     edgeDither: p.get("edgedither") === "1",
+    ord: readOrd(p, label),
     stats: {},
   };
 }
 
-// ---- GL helpers -----------------------------------------------------------
-function shader(gl, type, src, label) {
-  const sh = gl.createShader(type);
-  gl.shaderSource(sh, src); gl.compileShader(sh);
-  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS))
-    fail(`${label}: ${gl.getShaderInfoLog(sh)}\n---\n` +
-         src.split("\n").map((l, i) => `${i + 1}: ${l}`).join("\n"));
-  return sh;
+// the order overlay's knobs (header, ORDER MARKERS), in both renderers
+function readOrd(p, label) {
+  const o = {};
+  for (const [k, vals] of Object.entries(ORD_KNOBS)) {
+    const v = p.get("ord" + k);
+    if (v !== null && !vals.includes(v))
+      fail(`${label}: ord${k} must be one of ${vals.join(", ")}, not "${v}"`);
+    o[k] = v === null ? vals[0] : v;
+  }
+  const num = (k, d) => (p.get(k) === null || Number.isNaN(parseFloat(p.get(k)))
+                         ? d : parseFloat(p.get(k)));
+  o.alpha = Math.min(1, Math.max(0, num("ordalpha", 0.7)));
+  o.dotAlpha = Math.min(1, Math.max(0, num("orddotalpha", 1)));
+  o.fade = Math.max(0, num("ordfade", 300));
+  o.min = Math.max(0.25, num("ordmin", 1));
+  o.max = Math.max(o.min, num("ordmax", 2));
+  return o;
 }
-function program(gl, vs, fs, label) {
-  const p = gl.createProgram();
-  gl.attachShader(p, shader(gl, gl.VERTEX_SHADER, vs, label + ".vert"));
-  gl.attachShader(p, shader(gl, gl.FRAGMENT_SHADER, fs, label + ".frag"));
-  gl.linkProgram(p);
-  if (!gl.getProgramParameter(p, gl.LINK_STATUS))
-    fail(`${label}: ${gl.getProgramInfoLog(p)}`);
-  return p;
-}
-// tagpu's terrain and unit shaders carry the Classic++ shadow map's two
-// samplers since G14i (tagpu_glsl.h), even in the Classic lane where uShadowOn
-// stays 0: two sampler TYPES left on unit 0 make GL drop the whole draw, so
-// their units are named at link, exactly as tagpu_shadow.c names them
-function nameShadowUnits(gl, prog) {
-  gl.useProgram(prog);
-  const c = gl.getUniformLocation(prog, "uShadowCmp"), r = gl.getUniformLocation(prog, "uShadowRaw");
-  if (c) gl.uniform1i(c, 12);
-  if (r) gl.uniform1i(r, 13);
-}
-function uniforms(gl, prog, names) {
-  const U = {};
-  for (const n of names) U[n] = gl.getUniformLocation(prog, n);
-  return U;
-}
-function tex2D(gl, unit, internal, w, h, format, type, data, filter) {
-  const t = gl.createTexture();
-  gl.activeTexture(gl.TEXTURE0 + unit);
-  gl.bindTexture(gl.TEXTURE_2D, t);
-  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-  gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, format, type, data);
-  const f = filter || gl.NEAREST;
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  return t;
-}
+
+// ---- GL helpers: tascene-render.js's (TR above) --------------------------
 
 // ---------------------------------------------------------------------------
 // LAB SHADERS. These are NOT tagpu's and make no parity claim; they are the
@@ -1101,6 +1131,82 @@ void main(){
 }`;
 
 // ---------------------------------------------------------------------------
+// ORDER MARKERS (header, ORDER MARKERS). Drawn straight onto the canvas after
+// the composite, so an animation tick redraws only this layer and never the
+// world. Vertices are canvas px with row 0 at the top: x,y, u,v (atlas
+// texels), alpha.
+const ORD_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 aPos;
+layout(location=1) in vec2 aUV;     // atlas texels
+layout(location=2) in float aA;     // alpha
+uniform vec2 uCanvas;
+out vec2 vUV; flat out float vA;
+void main(){
+  gl_Position = vec4(aPos.x/uCanvas.x*2.0-1.0, 1.0-aPos.y/uCanvas.y*2.0, 0.0, 1.0);
+  vUV = aUV; vA = aA;
+}`;
+const ORD_FS = `#version 300 es
+precision highp float;
+in vec2 vUV; flat in float vA;
+out vec4 frag;
+uniform sampler2D uOrd;   // RGBA, every texel its palette colour, (0,0,0,0) at the key
+uniform int uFilter;      // 0 nearest, 1 sharp, 2 linear
+void main(){
+  vec4 c;
+  if (uFilter == 0) {
+    c = texelFetch(uOrd, ivec2(floor(vUV)), 0);
+  } else {
+    vec2 t = vUV;
+    if (uFilter == 1) {
+      // SHARP: each texel flat, and only the one screen pixel straddling a
+      // texel boundary blended — nearest's look without its uneven texels at
+      // a scale that is not a whole number
+      vec2 p = t - 0.5, f = fract(p), s = max(fwidth(p), vec2(1e-4));
+      t = floor(p) + clamp((f - 0.5) / s + 0.5, 0.0, 1.0) + 0.5;
+    }
+    c = texture(uOrd, t / vec2(textureSize(uOrd, 0)));
+  }
+  frag = c * vA;                            // premultiplied
+}`;
+
+// What each scenario order draws: the order descriptor's marker mask (+0x0C)
+// and cursor_ary index (+0x10), read out of the 25-byte records behind
+// *(u32*)0x512344 in the pristine exe (exe-reverse-engineering.md, the order
+// descriptor table). Bit 1 is the sprite and, for the unit under the mouse,
+// the route dots (0x4394E0); bit 3 the sprite alone (0x439740). No stock
+// record sets bit 2, the target circle. Which record a scenario `cmd` issues
+// for a GROUND unit is [INFERRED] from the names: move Move_Ground, patrol
+// Patrol, attack Attack_Chase, defend Follow_Ground, repair RepairUnit,
+// reclaim Reclaim, capture Capture, load Ground_Pickup, unload Ground_Unload,
+// teleport Teleport, blast AttackSpecial.
+const ORDER_TYPES = {
+  move: [0x12, "cursormove"], patrol: [0x12, "cursorpatrol"],
+  attack: [0x08, "cursorattack"], blast: [0x08, "cursorattack"],
+  defend: [0x12, "cursordefend"], repair: [0x12, "cursorrepair"],
+  reclaim: [0x12, "cursorreclamate"], capture: [0x08, "cursorcapture"],
+  load: [0x08, "cursorload"], unload: [0x08, "cursorunload"],
+  teleport: [0x08, "cursorteleport"], stop: [0, null],
+};
+// ordspace=lod: the levels kept either side of the zoom's (a level is a
+// doubling, so 8 is 256x), and how far past a level boundary the zoom goes
+// before the level changes, in levels
+const LOD_SPAN = 8, LOD_HYST = 0.65;
+// the opacity sliders: field, label, query parameter
+const ORD_OPACITY = [["alpha", "sprite opacity", "ordalpha"],
+                     ["dotAlpha", "dot opacity", "orddotalpha"]];
+// the overlay's knobs, `ord<key>`; the first value of each is the default
+const ORD_KNOBS = {
+  style: ["gaf", "off"],
+  size: ["screen", "world", "int", "clamp"],
+  filter: ["nearest", "sharp", "linear"],
+  space: ["lod", "screen", "world", "octave"],
+  anim: ["engine", "cursor"],
+  tick: ["int", "smooth"],
+  dots: ["all", "active"],
+};
+
+// ---------------------------------------------------------------------------
 async function main() {
   const scene = await fetchJSON("scene.json");
   let presets = {};
@@ -1299,53 +1405,9 @@ async function main() {
   const rgbaTex = (unit, buf, w, h) =>
     tex2D(gl, unit, gl.RGBA8, buf ? w : 1, buf ? h : 1, gl.RGBA, gl.UNSIGNED_BYTE,
           buf || DUMMY);
-  // CLASSIC IS tagpu's ONE FULL-COLOUR PATH with assets=0 light=0
-  // (uRestored 0, uLambert 0), so it samples what the game's Classic samples:
-  // the BASE ATLAS -- every index expanded to its palette colour, alpha 0 at a
-  // sprite frame's own key, the game's tagpu_pal_expand over its key plane.
-  // `rects` are the frames with their keys, `pad` the replicated border each
-  // one carries; the terrain has no key and passes none. Texels outside every
-  // frame stay (0,0,0,0), as the game's zeroed mirror leaves them.
-  function baseAtlas(r8, w, h, rects, pad) {
-    const out = new Uint8Array(w * h * 4);
-    const put = (i) => {
-      const p = r8[i] * 4;
-      out[i * 4] = palBuf[p]; out[i * 4 + 1] = palBuf[p + 1];
-      out[i * 4 + 2] = palBuf[p + 2]; out[i * 4 + 3] = 255;
-    };
-    if (!rects) { for (let i = 0; i < w * h; i++) put(i); return out; }
-    for (const r of rects) {
-      const x0 = Math.max(0, r.x - pad), y0 = Math.max(0, r.y - pad);
-      const x1 = Math.min(w, r.x + r.w + pad), y1 = Math.min(h, r.y + r.h + pad);
-      for (let y = y0; y < y1; y++)
-        for (let x = x0; x < x1; x++)
-          if (r8[y * w + x] !== r.key) put(y * w + x);
-    }
-    return out;
-  }
-  // THE FACE-SHADE MULTIPLIER, tagpu_render3do.c's `s_shadeK` in the same
-  // order of operations: per SHD row, the least-squares slope through the
-  // origin of the shaded colour against the unshaded one over every channel
-  // the row does not clip (>= 250), normalised so the neutral row is 1.0
-  function shadeK(shd, rows, neutral) {
-    const raw = new Float64Array(32), k = new Float32Array(32);
-    for (let r = 0; r < 32; r++) {
-      let sxy = 0, sxx = 0;
-      if (r < rows)
-        for (let i = 0; i < 256; i++) {
-          const y = shd[r * 256 + i] * 4;
-          for (let c = 0; c < 3; c++) {
-            if (palBuf[y + c] >= 250) continue;
-            sxy += palBuf[i * 4 + c] * palBuf[y + c];
-            sxx += palBuf[i * 4 + c] * palBuf[i * 4 + c];
-          }
-        }
-      raw[r] = sxx > 0 ? sxy / sxx : 1;
-    }
-    const n = raw[neutral] > 0 ? raw[neutral] : 1;
-    for (let r = 0; r < 32; r++) k[r] = raw[r] / n;
-    return k;
-  }
+  // the base atlas (every index its palette colour, alpha 0 at a frame's
+  // key) and the face-shade multipliers: tascene-render.js's, over this pack's palette
+  const baseAtlas = (r8, w, h, rects, pad) => TR.baseAtlas(palBuf, r8, w, h, rects, pad);
   rgbaTex(8, terrRGB, map.atlas.w, map.atlas.h);
 
   // ---- offscreen(s) at game resolution (x SS). One per wipe side, because the
@@ -1375,42 +1437,10 @@ async function main() {
   }
   const targets = sides.map(offscreen);
 
-  // ---- terrain, parity: tagpu's own shaders and the 32-px grid. tagpu_terr.c's
-  // vertex shader is INSTANCED: a static unit quad (TAGPU_TERR_QUAD, the
-  // engine's vertex order, the shared edge on (1,0)-(0,1)) at location 0, and
-  // per instance the cell's grid column and row and its tile's atlas column and
-  // row as four unnormalised shorts at location 1 (TAGPU_TERR_ICOMP). The
-  // shader rebuilds the position, world point and UVs from those and uOrigin,
-  // uTile0, uTexel — exactly, every term an integer far below 2^24.
+  // ---- terrain, parity: tagpu's own shaders and the 32-px grid, instanced
+  // (tascene-render.js classicTerrain)
   const TVST = 6;              // the mirror's vertex: x,y, u,v, wx,wz
-  let terrProg = null, terrVAO = null, terrInst = null, U = {};
-  let terrCells = new Int16Array(4 * 4096);
-  if (wantParity) {
-    terrProg = program(gl, terrVS, terrFS, "terrain");
-    terrVAO = gl.createVertexArray();
-    gl.bindVertexArray(terrVAO);
-    const quad = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, quad);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1]),
-                  gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 8, 0);
-    terrInst = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, terrInst);
-    gl.enableVertexAttribArray(1);
-    gl.vertexAttribPointer(1, 4, gl.SHORT, false, 8, 0);   // SSCALED, as the game's
-    gl.vertexAttribDivisor(1, 1);
-    gl.bindVertexArray(null);
-    U = uniforms(gl, terrProg, ["uGame", "uZoom", "uZoomC", "uDepthScale", "uEnc",
-                                "uPal", "uFogGrid", "uFogOrg",
-                                "uFogDim", "uFog", "uOrigin", "uTile0", "uTexel",
-                                "uLambert", "uRestored", "uBase", "uHDim",
-                                "uShadowOn"]);
-    nameShadowUnits(gl, terrProg);
-    tex2D(gl, 16, gl.RGBA8, map.atlas.w, map.atlas.h, gl.RGBA, gl.UNSIGNED_BYTE,
-          baseAtlas(atlasBuf, map.atlas.w, map.atlas.h, null, 0));
-    gl.activeTexture(gl.TEXTURE0);        // tex2D leaves its own unit selected
-  }
+  const terr = wantParity ? TR.classicTerrain(gl, terrVS, terrFS, map.atlas, atlasBuf, palBuf) : null;
 
   // ---- terrain, exploration: the 16-px heightfield
   const LTVST = 11;                     // x,gy,row, u,v, nx,ny,nz, WX,WY,WZ
@@ -1455,8 +1485,8 @@ async function main() {
   // the lab's one extra float (the anchor's ground lambert)
   const SVST = 9;                                   // x,y,enc, u,v, ck,mode, wx,wz
   const LSVST = 10;                                 // ... + lam
-  let sprProg = null, sprVAO = null, lsProg = null, lsVAO = null, sprVBO = null;
-  let SU = {}, LSU = {}, anchors = [], mapAnchors = [];
+  let spr = null, lsProg = null, lsVAO = null, sprVBO = null;
+  let LSU = {}, anchors = [], mapAnchors = [];
   let sprVerts = null, esProg = null, esVAO = null, esVBO = null, ESU = {};
   let esVerts = new Float32Array(1);
   if (hasFeat) {
@@ -1464,29 +1494,8 @@ async function main() {
           gl.RED, gl.UNSIGNED_BYTE, featAtlas);
     rgbaTex(9, featRGB, scene.features.atlas.w, scene.features.atlas.h);
     sprVBO = gl.createBuffer();
-    if (wantParity) {
-      sprProg = program(gl, sprVS, sprFS, "sprite");
-      sprVAO = gl.createVertexArray();
-      gl.bindVertexArray(sprVAO);
-      gl.bindBuffer(gl.ARRAY_BUFFER, sprVBO);
-      const sizes = [3, 2, 2, 2], offs = [0, 12, 20, 28];
-      for (let i = 0; i < 4; i++) {
-        gl.enableVertexAttribArray(i);
-        gl.vertexAttribPointer(i, sizes[i], gl.FLOAT, false, SVST * 4, offs[i]);
-      }
-      gl.bindVertexArray(null);
-      SU = uniforms(gl, sprProg, ["uGame", "uZoom", "uZoomC", "uDepthScale",
-                                  "uFogGrid", "uFogOrg", "uFogDim", "uFog",
-                                  "uRestored", "uBase"]);
-      const rects = [];
-      for (const d of Object.values(scene.features.defs))
-        for (const r of [d.body, d.shadow]) if (r) rects.push({ ...r, key: r.ck });
-      tex2D(gl, 17, gl.RGBA8, scene.features.atlas.w, scene.features.atlas.h, gl.RGBA,
-            gl.UNSIGNED_BYTE, baseAtlas(featAtlas, scene.features.atlas.w,
-                                        scene.features.atlas.h, rects,
-                                        scene.features.atlas.pad || 0));
-      gl.activeTexture(gl.TEXTURE0);
-    }
+    if (wantParity)
+      spr = TR.classicSprites(gl, sprVS, sprFS, sprVBO, scene.features, featAtlas, palBuf);
     if (wantLab) {
       lsProg = program(gl, LAB_SPR_VS, LAB_SPR_FS, "lab-sprite");
       lsVAO = gl.createVertexArray();
@@ -1528,12 +1537,11 @@ async function main() {
                                 "uUndither", "uPal", "uMapPx", "uEdge", "uDither"]);
   }
   // ---- unit pass — tagpu_native.c's shaders, tagpu_render3do.c's geometry rule
-  const UVST = 17;      // x,y,enc, u,v, fc,ck, shade, wx,wz, vy, nx,ny,nz, WX,WY,WZ
-  let uProg = null, uVAO = null, uVBO = null, luProg = null, UU = {}, LUU = {};
+  // (tascene-render.js emitUnits, classicUnits)
+  const UVST = TR.UVST;
+  let uVAO = null, uVBO = null, luProg = null, cu = null, LUU = {};
   let uVerts = null;
   const meshTop = {};                 // model height (max y) per unit type
-  // tagpu_render3do.c: the model-space toward-camera axis and the light
-  const SH_V = [0.0, 0.8944, -0.4472], SH_L = [-0.35, 0.80, -0.49];
   let unitRGBTex = null;
   const ANISO = gl.getExtension("EXT_texture_filter_anisotropic");
   const ANISO_MAX = ANISO ? gl.getParameter(ANISO.MAX_TEXTURE_MAX_ANISOTROPY_EXT) : 0;
@@ -1547,37 +1555,10 @@ async function main() {
       gl.generateMipmap(gl.TEXTURE_2D);
       gl.texParameterf(gl.TEXTURE_2D, gl.TEXTURE_MAX_LOD, Math.log2(unitPad));
     }
-    uVAO = gl.createVertexArray(); uVBO = gl.createBuffer();
-    gl.bindVertexArray(uVAO);
-    gl.bindBuffer(gl.ARRAY_BUFFER, uVBO);
-    // slots 6 (normal) and 7 (world) are only the lab programs'; the parity
-    // program leaves them enabled and unread, which GL allows as long as the
-    // buffer covers them
-    const sizes = [3, 2, 2, 1, 2, 1, 3, 3], offs = [0, 12, 20, 28, 32, 40, 44, 56];
-    for (let i = 0; i < 8; i++) {
-      gl.enableVertexAttribArray(i);
-      gl.vertexAttribPointer(i, sizes[i], gl.FLOAT, false, UVST * 4, offs[i]);
-    }
-    gl.bindVertexArray(null);
-    if (wantUnitClassic) {
-      uProg = program(gl, unitVS, unitFS, "unit");
-      UU = uniforms(gl, uProg, ["uGame", "uOffset", "uZoom", "uZoomC", "uDepthScale",
-                                "uPal", "uShadow", "uAlpha",
-                                "uWaterT", "uWaterMode", "uDigT",
-                                "uScaf", "uScafOn", "uScafP", "uSS", "uZoomF",
-                                "uZoomCF", "uFogGrid", "uFogOrg",
-                                "uFogDim", "uFog", "uLambert", "uRestored",
-                                "uBase", "uShadeK", "uSun", "uAmb", "uNorm",
-                                "uShadowOn"]);
-      nameShadowUnits(gl, uProg);
-      const rects = Object.values(scene.units.atlas.frames || {});
-      tex2D(gl, 18, gl.RGBA8, scene.units.atlas.w, scene.units.atlas.h, gl.RGBA,
-            gl.UNSIGNED_BYTE, baseAtlas(unitAtlas, scene.units.atlas.w,
-                                        scene.units.atlas.h, rects, unitPad));
-      tex2D(gl, 19, gl.R32F, 32, 1, gl.RED, gl.FLOAT,
-            shadeK(shdBuf, scene.palette.shdRows, SH_NEUTRAL));
-      gl.activeTexture(gl.TEXTURE0);
-    }
+    ({ vao: uVAO, vbo: uVBO } = TR.unitArray(gl));
+    if (wantUnitClassic)
+      cu = TR.classicUnits(gl, unitVS, unitFS, scene.units, unitAtlas, palBuf, shdBuf,
+                           scene.palette.shdRows, SH_NEUTRAL);
     if (wantLab) {
       luProg = program(gl, LAB_UNIT_VS, LAB_UNIT_FS, "lab-unit");
       LUU = uniforms(gl, luProg, ["uGame", "uDepthScale", "uAtlas", "uRGB",
@@ -1585,6 +1566,303 @@ async function main() {
                                   "uZoom", "uZoomC", ...SHADOW_U]);
     }
     uVerts = new Float32Array(65536 * UVST);
+  }
+
+  // ---- ORDER MARKERS (header). The queues: the scenario's `orders` on each
+  // unit, or `orders=` when the URL carries one, which replaces them all. A
+  // node keeps the order's world target, or the handle of a unit or feature
+  // it names, and its issue time in 30 Hz ticks.
+  const OS = scene.orders;
+  const gndAt = (wx, wz) => {
+    const col = Math.min(map.w16 - 1, Math.max(0, wx >> 4));
+    const row = Math.min(map.h16 - 1, Math.max(0, wz >> 4));
+    return heightBuf[row * map.w16 + col];
+  };
+  const instList = (scene.units && scene.units.instances) || [];
+  const instName = (inst, i) => inst.id || `#${i}`;
+  const byName = new Map(instList.map((inst, i) => [instName(inst, i), inst]));
+  // the hot point emitUnits draws a unit about: on the terrain, or `agl` above
+  const instXYZ = (inst) => {
+    const g = gndAt(inst.pos[0], inst.pos[1]);
+    const agl = Math.max(0, inst.alt !== undefined ? inst.alt - g : (inst.agl || 0));
+    return [inst.pos[0], g + agl, inst.pos[1]];
+  };
+  let ordQueues = [];               // [{ unit: name, nodes: [{cmd, to|target, issue}] }]
+  let ordActive = Q.get("ordunit");
+  const parseOrders = (s) => s.split("|").filter(Boolean).map((u) => {
+    const [unit, list = ""] = u.split(":");
+    return { unit, nodes: list.split(";").filter(Boolean).map((n) => {
+      const m = /^([a-z]+)(?:@(-?\d+),(-?\d+)|#(.+))$/.exec(n);
+      if (!m) fail(`orders: cannot read "${n}" — want cmd@x,z or cmd#handle`);
+      return m[4] ? { cmd: m[1], target: m[4], issue: 0 }
+                  : { cmd: m[1], to: [+m[2], +m[3]], issue: 0 };
+    }) };
+  });
+  const ordersQuery = () => ordQueues.filter((q) => q.nodes.length).map((q) =>
+    `${q.unit}:` + q.nodes.map((n) => n.target ? `${n.cmd}#${n.target}`
+                                               : `${n.cmd}@${n.to[0]},${n.to[1]}`).join(";"))
+    .join("|");
+  if (Q.get("orders") !== null) ordQueues = parseOrders(Q.get("orders"));
+  else instList.forEach((inst, i) => {
+    if (inst.orders && inst.orders.length)
+      ordQueues.push({ unit: instName(inst, i),
+                       nodes: inst.orders.map((o) => ({ ...o, issue: 0 })) });
+  });
+  for (const q of ordQueues) {
+    if (!byName.has(q.unit)) fail(`orders: no unit "${q.unit}" in this pack`);
+    for (const n of q.nodes)
+      if (!(n.cmd in ORDER_TYPES))
+        fail(`orders: no order "${n.cmd}" — have ${Object.keys(ORDER_TYPES).join(", ")}`);
+  }
+  if (ordActive === null || !byName.has(ordActive))
+    ordActive = ordQueues.length ? ordQueues[0].unit
+              : instList.length ? instName(instList[0], 0) : null;
+  let ordCmd = "move";              // what a shift-click queues
+  // a node's target in world units (x, altitude, z): a ground point at the
+  // terrain's height there, or where the named unit or feature stands
+  const nodeXYZ = (n) => {
+    if (n.target !== undefined) {
+      const inst = byName.get(n.target);
+      return inst ? instXYZ(inst) : null;
+    }
+    if (!Array.isArray(n.to)) return null;
+    return [n.to[0], gndAt(n.to[0], n.to[1]), n.to[1]];
+  };
+
+  let ordProg = null, ORDU = {}, ordVAO = null, ordVBO = null;
+  let ordVerts = new Float32Array(5 * 6 * 4096);
+  if (OS) {
+    const ab = await fetchBin(OS.atlas.file);
+    const rects = [];
+    for (const s of Object.values(OS.seqs))
+      for (const f of s.frames) rects.push({ x: f.x, y: f.y, w: f.w, h: f.h, key: f.ck });
+    tex2D(gl, 15, gl.RGBA8, OS.atlas.w, OS.atlas.h, gl.RGBA, gl.UNSIGNED_BYTE,
+          baseAtlas(ab, OS.atlas.w, OS.atlas.h, rects, 0), gl.LINEAR);
+    gl.activeTexture(gl.TEXTURE0);
+    ordProg = program(gl, ORD_VS, ORD_FS, "orders");
+    ORDU = uniforms(gl, ordProg, ["uCanvas", "uOrd", "uFilter"]);
+    ordVAO = gl.createVertexArray(); ordVBO = gl.createBuffer();
+    gl.bindVertexArray(ordVAO);
+    gl.bindBuffer(gl.ARRAY_BUFFER, ordVBO);
+    const sizes = [2, 2, 1], offs = [0, 8, 16];
+    for (let i = 0; i < 3; i++) {
+      gl.enableVertexAttribArray(i);
+      gl.vertexAttribPointer(i, sizes[i], gl.FLOAT, false, 5 * 4, offs[i]);
+    }
+    gl.bindVertexArray(null);
+  }
+
+  // THE GAME CLOCK the markers animate on: 30 ticks a second, the engine's
+  // gameTime at normal speed. A shot is a measurement, so it reads ordtime=
+  // (default 0) instead of the wall clock.
+  const ORD_T0 = performance.now();
+  const ordClock = () => SHOT ? parseFloat(Q.get("ordtime") || "0")
+                              : (performance.now() - ORD_T0) * 0.03;
+
+  // One side's markers as canvas-px vertices, by the engine's walk (0x439B30,
+  // ui-markers.md §3.2): `pos` starts at the unit and every drawer that runs
+  // moves it to its node's target, so the dots run unit -> wp1 -> wp2 …
+  function orderVerts(L, side, tReal) {
+    const o = L.ord;
+    let n = 0;
+    const push = (x, y, u, v, a) => {
+      if (n + 5 > ordVerts.length) {
+        const g = new Float32Array(ordVerts.length * 2); g.set(ordVerts); ordVerts = g;
+      }
+      ordVerts.set([x, y, u, v, a], n); n += 5;
+    };
+    const quad = (x0, y0, x1, y1, u0, v0, u1, v1, a) => {
+      push(x0, y0, u0, v0, a); push(x1, y0, u1, v0, a); push(x0, y1, u0, v1, a);
+      push(x1, y0, u1, v0, a); push(x1, y1, u1, v1, a); push(x0, y1, u0, v1, a);
+    };
+    // the zoomed frame's projection: tagpu's (wx - eyeX + 128, wz - alt/2 -
+    // eyeY + 32) about the viewport corner, which is what every pass here does
+    const proj = (p) => [vpL + (p[0] - E[0]) * zoom, vpT + (p[2] - p[1] / 2 - E[1]) * zoom];
+    // texels -> canvas px
+    const scale = o.size === "world" ? zoom : o.size === "screen" ? 1
+                : o.size === "int" ? Math.max(1, Math.round(zoom))
+                : Math.min(o.max, Math.max(o.min, zoom));
+    const t = o.tick === "int" ? Math.floor(tReal) : tReal;
+    const frameOf = (s) => {
+      const fr = s.frames, nf = fr.length;
+      if (o.anim === "engine") {
+        // 0x439740: (gameTime / (2 * period)) % count, the period being frame 0's ticks
+        return Math.floor(t / (2 * Math.max(1, fr[0].d))) % nf;
+      }
+      // the mouse cursor's own rule (0x4B8BF0): each frame for its own ticks
+      const total = fr.reduce((a, f) => a + Math.max(1, f.d), 0);
+      let k = t % total;
+      for (let i = 0; i < nf; i++) { k -= Math.max(1, fr[i].d); if (k < 0) return i; }
+      return nf - 1;
+    };
+    const blit = (f, hx, hy, a) => {
+      let x0 = hx - f.hx * scale, y0 = hy - f.hy * scale;
+      if (o.filter === "nearest") { x0 = Math.round(x0); y0 = Math.round(y0); }
+      quad(x0, y0, x0 + f.w * scale, y0 + f.h * scale, f.x, f.y, f.x + f.w, f.y + f.h, a);
+    };
+    const sprite = (name, P) => {
+      const s = OS.seqs[name];
+      if (!s) return;
+      const [hx, hy] = proj(P);
+      const k = frameOf(s);
+      blit(s.frames[k], hx, hy, o.alpha);
+    };
+    // 0x4394E0: a dot every 48 world units from `a` towards `b`, the frame
+    // stepping once per dot. The first dot is the node's own march, the side's
+    // since the order was issued (ordMarch), wrapped to the step
+    const dots = (A, B, issue, at) => {
+      const s = OS.seqs.pathicon;
+      const dx = B[0] - A[0], dy = B[1] - A[1], dz = B[2] - A[2];
+      const len = Math.hypot(dx, dy, dz);
+      if (len < 1 || !s) return;
+      const age = Math.max(0, t - issue);
+      const wrap = (v, m) => ((v % m) + m) % m;
+      let step, phase, alphaOf = null;
+      if (o.space === "lod") {
+        // LOD: the dots are pinned to the map by the world march on one
+        // lattice, 48 x 2^j world units apart at level j, each level every
+        // other dot of the one below. A dot's LEVEL is the coarsest one it
+        // belongs to (the trailing zeros of its index on the finest level
+        // drawn), and it is drawn at that level's opacity (lodStep): 1 for
+        // the zoom's level and coarser, 0 finer, fading between the two over
+        // ordfade ms when the level changes. So a dot fades in or out fully
+        // and no dot moves on the map. At zoom 1 the level is 0, every dot 48
+        // apart: the engine's line
+        const op = (j) => (j in L.lodOp ? L.lodOp[j] : (j >= L.lodK ? 1 : 0));
+        let fine = L.lodK;
+        while (fine > L.lodK - LOD_SPAN && op(fine - 1) > 0.004) fine--;
+        step = 48 * Math.pow(2, fine);
+        const run = L.march - at[0];
+        phase = wrap(run, step);
+        alphaOf = (c) => {
+          let m = Math.abs(Math.round((c - run) / step)), j = fine;
+          if (m === 0) return op(fine + LOD_SPAN);
+          while ((m & 1) === 0 && j < fine + LOD_SPAN) { m >>= 1; j++; }
+          return op(j);
+        };
+      } else if (o.space === "screen") {
+        // SCREEN: 48 px apart and 48 px a second at every zoom, so the line
+        // looks the same at every zoom. Laid out from the leg's start in
+        // screen px, so a zoom keeps each dot's distance from the waypoint
+        step = 48 / zoom;
+        phase = wrap(L.marchPx - at[1], 48) / zoom;
+      } else {
+        // WORLD and OCTAVE (48 x 2^k world units, k the zoom's octave) march
+        // the world distance, which keeps each dot where it is on the map
+        // through a zoom; under octave each octave's dots are every other
+        // dot of the one below, so crossing one adds or drops dots
+        step = o.space === "octave" ? 48 * Math.pow(2, Math.round(-Math.log2(zoom))) : 48;
+        phase = wrap(L.march - at[0], step);
+      }
+      const nf = s.frames.length;
+      let fi = Math.floor(age / Math.max(1, s.frames[0].d)) % nf;
+      for (let c = phase, i = 0; c < len && i < 4096; c += step, i++) {
+        const f = c / len;
+        const a = alphaOf ? alphaOf(c) : 1;
+        if (a > 0.004) {
+          const [px, py] = proj([A[0] + dx * f, A[1] + dy * f, A[2] + dz * f]);
+          blit(s.frames[fi], px, py, o.dotAlpha * a);
+        }
+        fi = (fi + 1) % nf;
+      }
+    };
+    for (const q of ordQueues) {
+      const inst = byName.get(q.unit);
+      if (!inst) continue;
+      // the unit under the mouse gets flag 1 and its dots; a selected one
+      // only its sprites (0x48CC30) — `orddots=active` makes the active unit
+      // the hovered one, `all` hovers every unit
+      const hovered = o.dots === "all" || q.unit === ordActive;
+      let pos = instXYZ(inst);
+      for (const nd of q.nodes) {
+        const [mask, seq] = ORDER_TYPES[nd.cmd];
+        if (!(mask & 0x0A)) continue;
+        const P = nodeXYZ(nd);
+        if (!P) continue;
+        sprite(seq, P);
+        if ((mask & 0x02) && hovered) dots(pos, P, nd.issue, nd.march ? nd.march[side] : [0, 0]);
+        pos = P;
+      }
+    }
+    return n / 5;
+  }
+
+  // THE MARCH: how far a side's dots have travelled, twice over. marchPx
+  // in screen px, 1.6 a tick: 48 px a second, the engine's speed at 1x.
+  // march in world units, 1.6 a tick divided by the zoom: the same 48 px a
+  // second on screen, kept in world units for the spacings that hold dots
+  // to the map. Both are accumulated rather than computed from the clock,
+  // so a zoom changes how fast a world march goes and never where its dots
+  // are. Whole ticks under ordtick=int, as the engine steps; a shot computes
+  // both from ordtime=.
+  // THE LEVEL ordspace=lod draws at, and each level's opacity. The level is
+  // the zoom's octave, -log2 zoom rounded, held until the zoom is LOD_HYST
+  // past the level so a zoom resting on a boundary does not flicker; the
+  // dots then stand 31..75 px apart on screen. Each level's opacity walks
+  // toward its target (1 at the level and coarser, 0 finer) at 1 / ordfade
+  // per ms of wall clock: the dots a level change adds fade in to full, the
+  // ones it drops fade out to nothing, and at rest every dot is full or
+  // gone. A shot lands on the targets at once.
+  function lodStep(L) {
+    const lv = -Math.log2(zoom);
+    if (L.lodK === undefined) L.lodK = Math.round(lv);
+    while (lv > L.lodK + LOD_HYST) L.lodK++;
+    while (lv < L.lodK - LOD_HYST) L.lodK--;
+    const now = performance.now();
+    const dt = SHOT || L.lodT === undefined ? Infinity : now - L.lodT;
+    L.lodT = now;
+    const rate = L.ord.fade > 0 ? dt / L.ord.fade : Infinity;
+    const old = L.lodOp || {};
+    L.lodOp = {};
+    for (let j = L.lodK - LOD_SPAN; j <= L.lodK + LOD_SPAN; j++) {
+      const want = j >= L.lodK ? 1 : 0;
+      const cur = j in old ? old[j] : want;
+      L.lodOp[j] = want > cur ? Math.min(want, cur + rate) : Math.max(want, cur - rate);
+    }
+  }
+
+  function ordMarch(L, tNow) {
+    lodStep(L);
+    const tt = L.ord.tick === "int" ? Math.floor(tNow) : tNow;
+    if (SHOT) { L.march = tt * 1.6 / zoom; L.marchPx = tt * 1.6; return; }
+    if (L.march === undefined) { L.march = 0; L.marchPx = 0; }
+    if (L.marchT !== undefined && tt > L.marchT) {
+      L.march += (tt - L.marchT) * 1.6 / zoom;
+      L.marchPx += (tt - L.marchT) * 1.6;
+    }
+    L.marchT = tt;
+  }
+
+  // the markers over the composite, each side inside its own half of the wipe
+  // and inside the engine's viewport
+  function drawOrders() {
+    if (!ordProg || !ordQueues.length) return;
+    const tNow = ordClock();
+    gl.useProgram(ordProg);
+    gl.uniform2f(ORDU.uCanvas, GW, GH);
+    gl.uniform1i(ORDU.uOrd, 15);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.enable(gl.SCISSOR_TEST);
+    gl.bindVertexArray(ordVAO);
+    gl.bindBuffer(gl.ARRAY_BUFFER, ordVBO);
+    const split = wipe > 1 ? GW : Math.round(wipe * GW);
+    for (let i = 0; i < sides.length; i++) {
+      const L = sides[i];
+      if (L.ord.style === "off") continue;
+      const x0 = Math.max(vpL, i ? split : 0), x1 = Math.min(vpL + vw, i ? GW : split);
+      if (x1 <= x0) continue;
+      gl.scissor(x0, GH - vpT - vh, x1 - x0, vh);
+      ordMarch(L, tNow);
+      const nv = orderVerts(L, i, tNow);
+      if (!nv) continue;
+      gl.uniform1i(ORDU.uFilter, ["nearest", "sharp", "linear"].indexOf(L.ord.filter));
+      gl.bufferData(gl.ARRAY_BUFFER, ordVerts.subarray(0, nv * 5), gl.DYNAMIC_DRAW);
+      gl.drawArrays(gl.TRIANGLES, 0, nv);
+    }
+    gl.bindVertexArray(null);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.disable(gl.BLEND);
   }
 
   // ---- the shadow map: one depth texture, re-rendered per side, read through
@@ -1884,40 +2162,18 @@ async function main() {
   // the row the depth keys are relative to — one definition, used by every pass
   const rowBase = () => (E[1] >> 4) - 16;
 
+  // tagpu_terr.c's gather (tascene-render.js), one instance per visible cell
   function buildTerrain(L) {
-    // tagpu_terr.c's gather, line for line: one instance per visible cell
-    const stride = map.tilemap.w, mrows = map.tilemap.h;
-    const tx0 = div32trunc(E[0]), fx = E[0] - tx0 * 32;
-    const ty0 = div32trunc(E[1]), fy = E[1] - ty0 * 32;
-    const cols = ceil32(W[0] + fx), rows = ceil32(W[1] + fy);
-    if (terrCells.length < cols * rows * 4) terrCells = new Int16Array(cols * rows * 4);
-    let n = 0, skipped = 0, junk = 0;
-    for (let r = 0; r < rows; r++) {
-      const my = ty0 + r;
-      if (my < 0 || my >= areaR) { skipped += cols; continue; }
-      for (let c = 0; c < cols; c++) {
-        const mx = tx0 + c;
-        if (mx < 0 || mx >= areaC) { skipped++; continue; }
-        const idx = tilemap[my * stride + mx];
-        if (idx >= map.atlas.tiles) { junk++; continue; }
-        // the quad still spans exactly TILE_PX texels, and its far edge lands
-        // ON the guard column, which is a copy of the last real one
-        const o = n * 4;
-        terrCells[o] = c; terrCells[o + 1] = r;
-        terrCells[o + 2] = idx % map.atlas.cols; terrCells[o + 3] = (idx / map.atlas.cols) | 0;
-        n++;
-      }
-    }
-    gl.bindBuffer(gl.ARRAY_BUFFER, terrInst);
-    gl.bufferData(gl.ARRAY_BUFFER, terrCells.subarray(0, n * 4), gl.DYNAMIC_DRAW);
-    gl.useProgram(terrProg);
-    // grid cell (0,0)'s screen corner, the map cell it is, the atlas texel
-    gl.uniform2f(U.uOrigin, vpL - fx, vpT - fy);
-    gl.uniform2f(U.uTile0, tx0, ty0);
-    gl.uniform2f(U.uTexel, 1 / map.atlas.w, 1 / map.atlas.h);
-    L.stats = { cols, rows, tx0, ty0, fx, fy, cells: n, skipped, junk };
-    return n;
+    const g = terr.gather(tilemap, map.tilemap, E, W, vpL, vpT, [areaC, areaR]);
+    L.stats = g.stats;
+    return g.n;
   }
+  // the frame the Classic passes draw into: the game's frame, the zoom, the
+  // pack's depth keys, and no fog (the parity fixture's fog is off; the
+  // samplers are still bound, to unit 2's 1 x 1 grid)
+  const frameNow = () => ({ GW, GH, zoom, zoomC: ZOOM_C, depth: scene.depth,
+                            fog: 0, fogOrg: [0, 0], fogDim: [1, 1],
+                            vp: [vpL, vpT, vw, vh], SS });
 
   // The exploration lane's terrain: the SAME 32-px tile grid, but each cell is
   // four 16-px quads so every heightmap sample gets a vertex. The tile's UVs
@@ -2162,162 +2418,22 @@ async function main() {
     gl.enable(gl.DEPTH_TEST); gl.depthMask(true);
   }
 
-  // tagpu_feat.c's gather: the engine's own sweep rect, its projection with
-  // +128/+32 baked in, and the depth keys the painter's order implies.
-  // Shadows and bodies go to separate buckets because the shadow is drawn with
-  // depth writes OFF (a shadow occludes nothing) — G13a's rule.
-  //
-  // The exploration lane keeps all of that and changes only the DEPTH KEYS,
-  // because it has to: with a per-row heightfield under it, the parity lane's
-  // global 0.40-0.50 band for flat features would sit behind the ground.
+  // tagpu_feat.c's gather (tascene-render.js gatherFeatures): the engine's own
+  // sweep rect, projection and depth keys; under the mirror the sweep runs past
+  // the map as well, so the mirrored features take their depth keys from the
+  // SAME base and formula as the map's own and sort against them.
   function buildFeatures(L) {
     const lab = L.lane === "explore";
     const VST = lab ? LSVST : SVST;
-    const D = scene.depth, defs = scene.features.defs;
-    // Under the mirror the sweep runs past the map as well, so the mirrored
-    // features take their depth keys from the SAME base and formula as the
-    // map's own and sort against them; without it, the engine's own rect.
     const mirror = L.edge === "mirror";
-    // the map ends at the engine's area (areaC, areaR), two 16-px cells to a
-    // tile; the engine's sweep never reaches the tile map's last row or column
-    const aW = Math.min(2 * areaC, w16 - 1), aH = Math.min(2 * areaR, h16 - 1);
-    let r0 = rowBase(), nRows = (W[1] >> 4) + 32;
-    let c0 = (E[0] >> 4) - 10, nCols = (W[0] >> 4) + 12;
-    if (!mirror) {
-      if (r0 < 0) { nRows += r0; r0 = 0; }
-      if (r0 + nRows > aH) nRows = aH - r0;
-      if (c0 < 0) { nCols += c0; c0 = 0; }
-      if (c0 + nCols > aW) nCols = aW - c0;
-    }
     L.edgeFeat = null;
-    if (nRows <= 0 || nCols <= 0) return [0, 0];
-    const flatSpan = nRows * nCols;
-    const iw = 1 / scene.features.atlas.w, ih = 1 / scene.features.atlas.h;
-    const shadow = [], body = [];
-    const quad = (into, rect, sx, sy, enc, mode, wax, waz, lam) => {
-      const x0 = sx - rect.hx, y0 = sy - rect.hy;
-      const x1 = x0 + rect.w,  y1 = y0 + rect.h;
-      const u0 = rect.x * iw,  u1 = (rect.x + rect.w) * iw;
-      const v0 = rect.y * ih,  v1 = (rect.y + rect.h) * ih;
-      const ck = rect.ck / 255;
-      for (const [x, y, u, v] of [[x0, y0, u0, v0], [x1, y0, u1, v0], [x0, y1, u0, v1],
-                                  [x1, y0, u1, v0], [x1, y1, u1, v1], [x0, y1, u0, v1]]) {
-        into.push(x, y, enc, u, v, ck, mode, wax, waz);
-        if (lab) into.push(lam);
-      }
-    };
-    // the mirrored ones: the sprite flipped with the terrain on an x
-    // reflection and never on a y one (a tree stands up either way), and slot
-    // 3 the point each corner is DRAWN at on the tile grid, for the tone
-    const mshadow = [], mbody = [];
-    const mquad = (into, rect, sx, sy, enc, mode, flip) => {
-      const x0 = sx - (flip ? rect.w - rect.hx : rect.hx), y0 = sy - rect.hy;
-      const x1 = x0 + rect.w, y1 = y0 + rect.h;
-      let u0 = rect.x * iw, u1 = (rect.x + rect.w) * iw;
-      if (flip) [u0, u1] = [u1, u0];
-      const v0 = rect.y * ih, v1 = (rect.y + rect.h) * ih;
-      const ck = rect.ck / 255;
-      for (const [x, y, u, v] of [[x0, y0, u0, v0], [x1, y0, u1, v0], [x0, y1, u0, v1],
-                                  [x1, y0, u1, v0], [x1, y1, u1, v1], [x0, y1, u0, v1]])
-        into.push(x, y, enc, u, v, ck, mode, x - vpL + E[0], y - vpT + E[1]);
-    };
-    // the four height bytes' projection term at a cell, the engine's own
-    const liftAt = (r, c) => {
-      const h00 = heightBuf[r * w16 + c];
-      const h01 = (c + 1 < w16) ? heightBuf[r * w16 + c + 1] : h00;
-      let h10 = h00, h11 = h01;
-      if (r + 1 < h16) {
-        h10 = heightBuf[(r + 1) * w16 + c];
-        h11 = (c + 1 < w16) ? heightBuf[(r + 1) * w16 + c + 1] : h10;
-      }
-      return (h00 + h01 + h10 + h11) >> 3;
-    };
-    const keyAt = (d, row, col) => {
-      const rel0 = row - r0;
-      if (d.flat)
-        return lab ? labD.flat + rel0 * D.rowStep
-                   : D.flat0 + D.flatSpan * (rel0 * nCols + (col - c0)) / flatSpan;
-      let rel = rel0;
-      if (rel < 0) rel = 0;
-      if (rel > nRows + 8) rel = nRows + 8;
-      // the column term breaks ties inside a row. The lab narrows it so a
-      // tall feature cannot reach past the NEXT row's ground (rowStep-0.1).
-      return D.tall0 + rel * D.rowStep + (lab ? labD.tallCol : 1.5) * ((col - c0) / nCols);
-    };
-    // the engine area's edges on the tile grid, px (tagpu_feat.c s_areaW/H)
-    const areaPxW = areaC * 32, areaPxH = areaR * 32;
-    // THE MAP'S OWN: the engine's sweep. Under the mirror a feature DRAWN past
-    // the area is past the map, and the mirror takes exactly the ones this
-    // keeps as its sources.
-    for (let row = Math.max(r0, 0); row < Math.min(r0 + nRows, h16 - 1); row++) {
-      for (let col = Math.max(c0, 0); col < Math.min(c0 + nCols, w16 - 1); col++) {
-        const idx = anchors[row * w16 + col];
-        if (idx === undefined) continue;
-        const d = defs[idx];
-        if (!d) continue;
-        const hx = (d.footx * 16) / 2 | 0, hz = (d.footz * 16) / 2 | 0;
-        const wax = col * 16 + hx, waz = row * 16 + hz - liftAt(row, col);
-        if (mirror && (wax >= areaPxW || waz >= areaPxH)) continue;
-        const sx = wax + 128 - E[0], sy = waz + 32 - E[1];
-        const enc = keyAt(d, row, col);
-        const shEnc = enc - (d.flat ? D.shadowFlat : D.shadowTall);
-        const lam = lab ? lambertAt(col, row, L) : 1;
-        if (d.shadow)
-          quad(shadow, d.shadow, sx, sy, shEnc, d.shadtrans ? 2 : 1, wax, waz, lam);
-        if (d.body)
-          quad(body, d.body, sx, sy, enc, d.animtrans ? 2 : 1, wax, waz, lam);
-      }
-    }
-    // THE MIRROR (tagpu_feat.c mirror_gather). Band b of the picture is the map
-    // (0), the map turned over (b odd) or the right way round (b even) b maps
-    // away; a copy in band b sits on row b H + srow, or (b + 1) H - 1 - srow
-    // turned over. A source is the map's when it is DRAWN on the map, and a
-    // feature is drawn under 8 rows above its anchor, so each row is asked of
-    // its own band and of a neighbour it is that near. A copy past the top or
-    // bottom stands upright and is drawn whole, or — when any of it would reach
-    // across the map's border — not at all. The engine's projection: screenY is
-    // worldZ minus half the height. A reflection reverses the cells a footprint
-    // spans, so a mirrored feature ENDS on the cell its source begins on. The
-    // mirrored terrain is the tile ART reflected, and the art has the height
-    // baked in, so a y reflection mirrors where the source is DRAWN: the half
-    // height is added, not taken off.
-    const crosses = (rect, waz, top) => {
-      const y0 = waz - rect.hy, y1 = y0 + rect.h;
-      return top ? y1 > 0 : y0 < areaPxH;
-    };
-    const H = 2 * areaR, Wc = 2 * areaC, LIFT_ROWS = 8;
-    if (mirror) for (let row = r0; row < r0 + nRows; row++) {
-      const b0 = Math.floor(row / H), bands = [b0];
-      if (((b0 + 1) & 1) && row >= (b0 + 1) * H - LIFT_ROWS) bands.push(b0 + 1);
-      if (!((b0 - 1) & 1) && row < b0 * H + LIFT_ROWS) bands.push(b0 - 1);
-      for (const band of bands) {
-        const flipY = (band & 1) !== 0;
-        const srow = flipY ? (band + 1) * H - 1 - row : row - band * H;
-        if (srow < 0 || srow >= h16 - 1) continue;
-        for (let col = c0; col < c0 + nCols; col++) {
-          if (band === 0 && col >= 0 && col < Wc) continue;      // the map's own
-          const [scol, flipX] = reflect(col, Wc);
-          if (scol >= aW) continue;
-          const idx = mapAnchors[srow * w16 + scol];
-          if (idx === undefined) continue;
-          const d = defs[idx];
-          if (!d) continue;
-          const hx = (d.footx * 16) / 2 | 0, hz = (d.footz * 16) / 2 | 0;
-          const lift = liftAt(srow, scol);
-          const swaz = srow * 16 + hz - lift;
-          if (scol * 16 + hx >= areaPxW || swaz >= areaPxH || (band !== 0 && swaz < 0)) continue;
-          const wax = flipX ? (col + 1) * 16 - hx : col * 16 + hx;
-          const waz = flipY ? (row + 1) * 16 - hz + lift : row * 16 + hz - lift;
-          if (band !== 0 && ((d.shadow && crosses(d.shadow, waz, band < 0)) ||
-                             (d.body && crosses(d.body, waz, band < 0)))) continue;
-          const sx = wax + 128 - E[0], sy = waz + 32 - E[1];
-          const enc = keyAt(d, row, col);
-          const shEnc = enc - (d.flat ? D.shadowFlat : D.shadowTall);
-          if (d.shadow) mquad(mshadow, d.shadow, sx, sy, shEnc, d.shadtrans ? 2 : 1, flipX);
-          if (d.body) mquad(mbody, d.body, sx, sy, enc, d.animtrans ? 2 : 1, flipX);
-        }
-      }
-    }
+    const got = TR.gatherFeatures({
+      lab, mirror, r0: rowBase(), E, W, vpL, vpT, w16, h16, heights: heightBuf,
+      area: [areaC, areaR],
+      anchors, mapAnchors, defs: scene.features.defs, atlas: scene.features.atlas,
+      D: scene.depth, labD, lambertAt: (col, row) => lambertAt(col, row, L) });
+    if (!got) return [0, 0];
+    const { shadow, body, mshadow, mbody } = got;
     const all = shadow.concat(body);
     if (all.length > sprVerts.length) sprVerts = new Float32Array(all.length);
     sprVerts.set(all);
@@ -2360,310 +2476,41 @@ async function main() {
 
   function drawSprites(L, nShadow, nBody, bodyBase) {
     const lab = L.lane === "explore";
-    gl.useProgram(lab ? lsProg : sprProg);
     if (lab) {
+      gl.useProgram(lsProg);
       gl.uniform2f(LSU.uGame, GW, GH);
       gl.uniform1f(LSU.uDepthScale, scene.depth.scale);
       gl.uniform1i(LSU.uAtlas, 5); gl.uniform1i(LSU.uRGB, 9);
       gl.uniform1i(LSU.uPal, 1); gl.uniform1i(LSU.uUndither, L.undither ? 1 : 0);
       gl.uniform1f(LSU.uZoom, zoom); gl.uniform2f(LSU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
     } else {
-      gl.uniform2f(SU.uGame, GW, GH);
-      gl.uniform1f(SU.uZoom, zoom);
-      gl.uniform2f(SU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
-      gl.uniform1f(SU.uDepthScale, scene.depth.scale);
-      gl.uniform1i(SU.uFogGrid, 2);
-      gl.uniform2f(SU.uFogOrg, 0, 0); gl.uniform2f(SU.uFogDim, 1, 1);
-      gl.uniform1i(SU.uFog, 0);
-      gl.uniform1i(SU.uRestored, 0);
-      gl.uniform1i(SU.uBase, 17);
-      // aLam, the anchor's ground lambert, is not in the parity vertex: the
-      // generic value stands in, and light=0 bakes exactly 1.0 there
-      gl.vertexAttrib1f(4, 1.0);
+      // the engine's area, and the clip to the map's columns under the mirror,
+      // as tagpu_feat.c publishes them (s_pub.mapPxW/H, s_clip)
+      spr.use({ ...frameNow(), mapPx: [areaC * 32, areaR * 32], clip: L.edge === "mirror" });
+      spr.draw(nShadow, nBody, bodyBase);
+      return;
     }
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);   // the shader premultiplies
-    gl.bindVertexArray(lab ? lsVAO : sprVAO);
+    gl.bindVertexArray(lsVAO);
     if (nShadow) { gl.depthMask(false); gl.drawArrays(gl.TRIANGLES, 0, nShadow); }
     if (nBody)   { gl.depthMask(true);  gl.drawArrays(gl.TRIANGLES, bodyBase, nBody); }
     gl.bindVertexArray(null);
     gl.disable(gl.BLEND);
   }
 
-  // One unit instance: yaw the bind pose, project with the engine's rule, and
-  // take the shade row from the POSED normal — rotating before shading is what
-  // makes the row the same one the engine's own pass would pick.
-  //
-  // In the exploration lane slot 3 is left at 1.0 and slot 6 carries the same
-  // POSED face normal, so LAB_UNIT_FS can light every pixel by (by default)
-  // the same light with the 32-row quantisation taken out. That is the whole
-  // "free lighting" half of the undithered decision.
+  // Every unit instance, yawed, projected, shaded per face and keyed in depth
+  // (tascene-render.js emitUnits); the lab lane's slot 3 stays 1.0 and slot 6
+  // carries the posed face normal it lights by.
   function buildUnits(L) {
-    const lab = L.lane === "explore";
-    const U = scene.units, D = scene.depth;
-    let r0 = rowBase(), nRows = (W[1] >> 4) + 32;
-    if (r0 < 0) { nRows += r0; r0 = 0; }
-    let n = 0, nAir = 0, nSlant = 0;
-    L.unitRanges = [];
-    // shadowlen: the shadow's length is a + b*height instead of the parallel
-    // light's height/tan(el), done as a vertical scale on the caster in the
-    // shadow map. sv = height ONLY along the shadow sun's ground direction
-    const cot = Math.hypot(L.shadowSun[0], L.shadowSun[2]) / Math.max(L.shadowSun[1], 1e-3);
-    for (const inst of U.instances) {
-      const mesh = meshData[inst.type];
-      if (!mesh) continue;
-      if (meshTop[inst.type] === undefined) {
-        let top = 0;
-        for (let i = 1; i < mesh.length; i += UNIT_STRIDE) if (mesh[i] > top) top = mesh[i];
-        meshTop[inst.type] = top;
-      }
-      const top = meshTop[inst.type];
-      const sv = L.shadowlen && top > 0 && cot > 1e-3
-               ? (L.shadowlen[0] + L.shadowlen[1] * top) / (top * cot) : 1;
-      // scenario facing 0 is TA's default build heading 0x8000, i.e. half a turn
-      const yaw = (inst.facing + 180) * Math.PI / 180;
-      const cs = Math.cos(yaw), sn = Math.sin(yaw);
-      const wx = inst.pos[0], wz = inst.pos[1];
-      const col = Math.min(w16 - 1, Math.max(0, wx >> 4));
-      const row = Math.min(h16 - 1, Math.max(0, wz >> 4));
-      const gnd = heightBuf[row * w16 + col];         // the engine snaps to terrain
-      // ALTITUDE. A ground unit is on the terrain, as the engine puts it; an
-      // aircraft is `agl` above it -- the FBI's CruiseAlt, carried in the pack
-      // (tascene `unit_facts`). A scenario `height` is an ABSOLUTE altitude, so
-      // it is measured from the ground the lab actually has under the unit.
-      const agl = Math.max(0, inst.alt !== undefined ? inst.alt - gnd
-                                                     : (inst.agl || 0));
-      const wy = gnd + agl;
-      const hotX = wx - E[0] + vpL;
-      const hotY = wz - (wy >> 1) - E[1] + vpT;
-      // the SHADOW is at the GROUND under the unit, so it trails the body down
-      // the screen by half the altitude -- 0 for anything on the ground
-      // (0x459228: bodyY uses altitude>>1, shadowY GetPosHeight()>>1)
-      const shadowDy = (wy >> 1) - (gnd >> 1);
-      // CLASSIC++ AIRBORNE CASTER (renderers.md §2.2). At the shadow sun's 40°
-      // a plane's shadow lands about 1.2x its altitude up-right — the lab
-      // throws a Thunder's clean off the frame — so `airshadow` picks one of:
-      //   len       shadowlen's own rule extended to the ALTITUDE, so the throw
-      //             is a + b*(agl + model height) rather than (agl + h)*cot el:
-      //             67 world units for a Thunder at 200 instead of 250
-      //   physical  cast from the true altitude and live with it
-      //   drop      do not cast at all — draw the Classic silhouette instead,
-      //             which is what the engine itself does
-      const svAir = agl > 0 && L.shadowlen && cot > 1e-3
-                  ? (L.shadowlen[0] + L.shadowlen[1] * (agl + top)) / ((agl + top) * cot)
-                  : sv;
-      const airLen = agl > 0 && L.airshadow === "len";
-      const shAgl = airLen ? agl * svAir : agl;    // `drop` never reaches the map,
-      const shSv  = airLen ? svAir : sv;           // so it keeps the true position
-                                                   // and its own lookup reads lit
-      let rel = row - r0;
-      if (rel < 0) rel = 0;
-      if (rel > nRows + 8) rel = nRows + 8;
-      // AIRBORNE UNITS ARE A BAND ABOVE EVERY ROW, which is what the engine's
-      // second DrawUnit sweep amounts to: site B 0x469BA3 runs over ALL rows
-      // with no depth sorting, after the ground units, the features, the
-      // weapons and the explosions, so an aircraft and its shadow composite on
-      // top of the lot (shadows-cloak.md 4). Within the band they are keyed by
-      // the order they appear in, not by row -- site B has no sorting either,
-      // so the later one wins -- and a whole rowStep apart, because the
-      // intra-model term below spans +-1.8 and would otherwise interleave two
-      // aircraft face by face. A row-keyed air band would not fit: the top row
-      // is already ~355 of the 512 the depth scale allows.
-      // CAPPED: past the depth scale the shared VS clamps `1 - z/scale` to 0 and
-      // every aircraft after that pins to the near plane and silently stops
-      // sorting. The band starts above the top row (~355 of 512 on a 768-tall
-      // view), so there is room for a few dozen; beyond that they share the last
-      // key and interleave, which is wrong but visible rather than mysterious.
-      const airMax = Math.floor((D.scale - D.unit0) / D.rowStep) - 1;
-      const enc = agl > 0
-        ? D.unit0 + Math.min(nRows + 12 + nAir++, airMax) * D.rowStep
-        : D.unit0 + rel * D.rowStep;
-      const wldX = wx, wldZ = wz - (wy >> 1);
-      const P = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
-      const first = n;
-      for (let i = 0; i + 3 * UNIT_STRIDE <= mesh.length; i += 3 * UNIT_STRIDE) {
-        for (let t2 = 0; t2 < 3; t2++) {
-          const o = i + t2 * UNIT_STRIDE;
-          const x = mesh[o], y = mesh[o + 1], z = mesh[o + 2];
-          P[t2][0] = x * cs + z * sn;                 // yaw about the up axis
-          P[t2][1] = y;
-          P[t2][2] = -x * sn + z * cs;
-        }
-        // per-face flat shading, tagpu_render3do.c line for line
-        let shade = lab ? 1.0 : SH_NEUTRAL / 31;
-        let ux = 0, uy = 1, uz = 0;               // the lab's normal; level if degenerate
-        const e1 = [P[1][0] - P[0][0], P[1][1] - P[0][1], P[1][2] - P[0][2]];
-        const e2 = [P[2][0] - P[0][0], P[2][1] - P[0][1], P[2][2] - P[0][2]];
-        let nx = e1[1] * e2[2] - e1[2] * e2[1];
-        let ny = e1[2] * e2[0] - e1[0] * e2[2];
-        let nz = e1[0] * e2[1] - e1[1] * e2[0];
-        if (nx * SH_V[0] + ny * SH_V[1] + nz * SH_V[2] < 0) { nx = -nx; ny = -ny; nz = -nz; }
-        const nl = Math.hypot(nx, ny, nz);
-        if (nl > 1e-6) {
-          if (lab) {
-            // lit per pixel in LAB_UNIT_FS; the face only supplies its normal,
-            // in MAP space (z south), where the terrain's already is and the
-            // shadow falls — 3DO z points north, hence the flip. Flat, as a
-            // 3DO is — a smooth model would put a different one on each
-            // vertex right here and nothing downstream changes
-            ux = nx / nl; uy = ny / nl; uz = -nz / nl;
-          } else {
-            const I = (nx * SH_L[0] + ny * SH_L[1] + nz * SH_L[2]) / nl;
-            let rr = SH_NEUTRAL + SH_DIR * Math.floor(I * 12 + 0.5);
-            rr = Math.max(0, Math.min(31, rr));
-            shade = rr / 31;
-          }
-        }
-        for (let t2 = 0; t2 < 3; t2++) {
-          const o = i + t2 * UNIT_STRIDE, q = n * UVST;
-          const x = P[t2][0], y = P[t2][1], z = P[t2][2];
-          // Intra-model depth. Without it every face of a unit shares one key
-          // and GL_LESS keeps whichever drew first — which is how the
-          // commander's yellow GLOW panels drew over its own torso. The engine
-          // squeezes this into the +-2 gap between row keys.
-          let md = (2 * y - z) / 256;
-          if (md > 1.8) md = 1.8; else if (md < -1.8) md = -1.8;
-          uVerts[q]     = x + hotX;
-          uVerts[q + 1] = (-z - y * 0.5) + hotY;
-          uVerts[q + 2] = enc + md;
-          uVerts[q + 3] = mesh[o + 3]; uVerts[q + 4] = mesh[o + 4];
-          uVerts[q + 5] = mesh[o + 5]; uVerts[q + 6] = mesh[o + 6];
-          uVerts[q + 7] = shade;
-          uVerts[q + 8] = wldX + x;                 // per-vertex, as the engine
-          uVerts[q + 9] = wldZ + (-z - y * 0.5);
-          uVerts[q + 10] = y;
-          uVerts[q + 11] = ux; uVerts[q + 12] = uy; uVerts[q + 13] = uz;
-          // the SHADOW position: real x/z, height scaled by sv. The depth pass
-          // casts from it and LAB_UNIT_FS looks its own shadow up at it, so a
-          // unit is consistent with itself; only the ground sees the real world
-          uVerts[q + 14] = wx + x; uVerts[q + 15] = gnd + shAgl + shSv * y;
-          uVerts[q + 16] = wz - z;
-          n++;
-        }
-      }
-      // THE STRUCTURE SHADOW: the engine's cached slant projection
-      // (shadows-cloak.md 3, 0x45A790), a second range after the body's,
-      // drawn in its place by silhouettes(). The casters are the pack's
-      // (tascene: every face of every visible, cached piece, the selection
-      // quad alone skipped); each vertex lands at (x + y/4, -z - y/4) from
-      // the posed coordinates snapped to whole units the engine's way (the
-      // 16.16 high word of x, y and -z, then an arithmetic shift), flat, so
-      // the unit shader takes the flat path and never samples the atlas --
-      // the engine flat-fills, and a texture key punches no hole. The same
-      // rule as tagpu_native.c's emit_slant, which this lane mirrors.
-      const slantFirst = n;
-      const cast = slantData[inst.type];
-      if (inst.slant && inst.shadow && cast && !lab) {
-        for (let i = 0; i + 3 <= cast.length; i += 3) {
-          const x0 = cast[i], y = cast[i + 1], z0 = cast[i + 2];
-          const x = x0 * cs + z0 * sn, z = -x0 * sn + z0 * cs;
-          const xi = Math.floor(x), yi = Math.floor(y), nzi = Math.floor(-z);
-          const q = yi >> 2;
-          const px = xi + q, py = nzi - q;
-          let md = (2 * y - z) / 256;
-          if (md > 1.8) md = 1.8; else if (md < -1.8) md = -1.8;
-          const o = n * UVST;
-          uVerts[o]     = px + hotX;
-          uVerts[o + 1] = py + hotY;
-          uVerts[o + 2] = enc + md;
-          uVerts[o + 3] = -1; uVerts[o + 4] = -1;
-          uVerts[o + 5] = 0;  uVerts[o + 6] = -1;
-          uVerts[o + 7] = SH_NEUTRAL / 31;
-          uVerts[o + 8] = wldX + px;
-          uVerts[o + 9] = wldZ + py;
-          uVerts[o + 10] = y;
-          uVerts[o + 11] = 0; uVerts[o + 12] = 1; uVerts[o + 13] = 0;
-          uVerts[o + 14] = wx + x; uVerts[o + 15] = gnd + y; uVerts[o + 16] = wz - z;
-          n++; nSlant++;
-        }
-      }
-      // the engine draws a unit's shadow inside that unit's own blit, so the
-      // silhouette pass needs each unit's own vertex range, offset and gate:
-      // a mobile unit's is its body range, a structure's the slant range
-      if (n > first)
-        L.unitRanges.push({ first, count: slantFirst - first, air: agl > 0,
-                            shadow: !!inst.shadow, dy: shadowDy,
-                            slant: !!inst.slant,
-                            slantFirst, slantCount: n - slantFirst });
-    }
+    const { n, nSlant } = TR.emitUnits({
+      instances: scene.units.instances, meshData, slantData, meshTop, out: uVerts,
+      D: scene.depth, r0: rowBase(), E, W, vpL, vpT, w16, h16, heights: heightBuf,
+      neutral: SH_NEUTRAL, dir: SH_DIR }, L);
     gl.bindBuffer(gl.ARRAY_BUFFER, uVBO);
     gl.bufferData(gl.ARRAY_BUFFER, uVerts.subarray(0, n * UVST), gl.DYNAMIC_DRAW);
     L.stats.units = (n - nSlant) / 3;
     return n;
-  }
-
-  // the CLASSIC unit program's uniforms. The explore lane borrows them too,
-  // when `airshadow=drop` asks it for a Classic silhouette under an aircraft.
-  function classicUnitUniforms() {
-    gl.useProgram(uProg);
-    gl.uniform2f(UU.uGame, GW, GH);
-    gl.uniform2f(UU.uOffset, 0, 0);
-    gl.uniform1f(UU.uZoom, zoom);
-    gl.uniform2f(UU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
-    gl.uniform1f(UU.uDepthScale, scene.depth.scale);
-    gl.uniform1i(UU.uPal, 1);
-    gl.uniform1i(UU.uShadow, 0); gl.uniform1f(UU.uAlpha, 1.0);
-    // the water/dig tests are `vVY <= threshold`; -1e9 disables both
-    gl.uniform1f(UU.uWaterT, -1e9); gl.uniform1i(UU.uWaterMode, 0);
-    gl.uniform1f(UU.uDigT, -1e9);
-    gl.uniform1i(UU.uScaf, 2); gl.uniform1i(UU.uScafOn, 0);
-    gl.uniform4f(UU.uScafP, vpL, vpT, vw, vh);
-    gl.uniform1f(UU.uSS, SS); gl.uniform1f(UU.uZoomF, zoom);
-    gl.uniform2f(UU.uZoomCF, ZOOM_C[0], ZOOM_C[1]);
-    gl.uniform1i(UU.uFogGrid, 2);
-    gl.uniform2f(UU.uFogOrg, 0, 0); gl.uniform2f(UU.uFogDim, 1, 1);
-    gl.uniform1i(UU.uFog, 0);
-    // light=0: the base, the face-shade multiplier, and a lambert that is
-    // exactly 1.0 (ambient 1, no shadow)
-    gl.uniform1i(UU.uLambert, 0);
-    gl.uniform1i(UU.uRestored, 0); gl.uniform1i(UU.uBase, 18);
-    gl.uniform1i(UU.uShadeK, 19);
-    gl.uniform3f(UU.uSun, 0, 1, 0); gl.uniform1f(UU.uAmb, 1); gl.uniform1f(UU.uNorm, 1);
-    gl.uniform1i(UU.uShadowOn, 0);
-  }
-
-  // THE CLASSIC SILHOUETTE DROP SHADOW, drawn before the bodies as the engine
-  // draws it (shadows-cloak.md §3): the unit's own shape filled with palette
-  // index 0 and blitted through PALETTE.ALP at (sx+5, groundY) — 5 px right of
-  // the body, at the ground under the unit, so an aircraft's trails half its
-  // altitude below it.
-  //
-  // Blended ONCE PER PIXEL through the stencil, not once per surface the view
-  // ray crosses: the engine blits ONE blackened copy of the composite, so a
-  // pixel the model covers twice is still darkened once — and from above an
-  // aircraft is a two-sided shell over its whole area, which is where this
-  // showed up in the game. Marking with colour writes off and then blending
-  // with the op that ZEROES the mark makes the second fragment on a pixel fail
-  // EQUAL 1; both draws see the same depth buffer (writes are off), so they
-  // cover the same fragments and leave no mark behind. Clearing per unit keeps
-  // two units' shadows stacking the way the engine's two separate blits do.
-  // The same scheme as tagpu_native.c, which this lane exists to mirror.
-  function silhouettes(L, want) {
-    gl.depthMask(false);
-    gl.enable(gl.STENCIL_TEST);
-    gl.uniform1i(UU.uShadow, 1);
-    for (const r of L.unitRanges) {
-      if (!r.shadow || !want(r)) continue;
-      // a structure's shadow is the slant range (buildUnits), a mobile
-      // unit's its own body; a structure whose pack carries no casters
-      // (built before the slant, or every piece dont-cache) draws none
-      const first = r.slant ? r.slantFirst : r.first;
-      const count = r.slant ? r.slantCount : r.count;
-      if (!count) continue;
-      gl.uniform2f(UU.uOffset, 5, r.dy);
-      gl.stencilFunc(gl.ALWAYS, 1, 0xFF);
-      gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
-      gl.colorMask(false, false, false, false);
-      gl.drawArrays(gl.TRIANGLES, first, count);
-      gl.stencilFunc(gl.EQUAL, 1, 0xFF);
-      gl.stencilOp(gl.KEEP, gl.KEEP, gl.ZERO);
-      gl.colorMask(true, true, true, true);
-      gl.drawArrays(gl.TRIANGLES, first, count);
-    }
-    gl.colorMask(true, true, true, true);
-    gl.disable(gl.STENCIL_TEST);
-    gl.uniform1i(UU.uShadow, 0);
-    gl.uniform2f(UU.uOffset, 0, 0);
   }
 
   function drawUnits(L, n) {
@@ -2677,8 +2524,8 @@ async function main() {
     // Classic draws every unit's; Classic++ only borrows one for an aircraft,
     // and only under `airshadow=drop` — everything else it has is cast.
     if (L.unitShadows && (!lab || L.airshadow === "drop")) {
-      classicUnitUniforms();
-      silhouettes(L, lab ? (r) => r.air : () => true);
+      cu.use(frameNow());
+      cu.silhouettes(L.unitRanges, lab ? (r) => r.air : () => true);
     }
 
     if (lab) {
@@ -2701,7 +2548,7 @@ async function main() {
       if (ANISO) gl.texParameterf(gl.TEXTURE_2D, ANISO.TEXTURE_MAX_ANISOTROPY_EXT,
                                   lin ? Math.min(L.aniso, ANISO_MAX) : 1);
     } else if (!L.unitShadows) {
-      classicUnitUniforms();
+      cu.use(frameNow());
     }
 
     gl.depthMask(true);
@@ -2755,23 +2602,7 @@ async function main() {
         setShadowUniforms(LTU, L, L.shadowFrame);
         drawTerrainLab(L);
       } else {
-        gl.useProgram(terrProg);
-        gl.uniform2f(U.uGame, GW, GH);
-        gl.uniform1f(U.uZoom, zoom);
-        gl.uniform2f(U.uZoomC, ZOOM_C[0], ZOOM_C[1]);
-        gl.uniform1f(U.uDepthScale, scene.depth.scale);
-        gl.uniform1f(U.uEnc, scene.depth.terrain);
-        gl.uniform1i(U.uPal, 1);
-        gl.uniform1i(U.uFogGrid, 2);
-        gl.uniform2f(U.uFogOrg, 0, 0); gl.uniform2f(U.uFogDim, 1, 1);
-        gl.uniform1i(U.uFog, 0);
-        // unlit: no height grid, so no lambert term
-        gl.uniform1i(U.uLambert, 0);
-        gl.uniform1i(U.uRestored, 0); gl.uniform1i(U.uBase, 16);
-        gl.uniform2f(U.uHDim, 0, 0); gl.uniform1i(U.uShadowOn, 0);
-        gl.bindVertexArray(terrVAO);
-        gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, nterr);
-        gl.bindVertexArray(null);
+        terr.draw(frameNow(), nterr);
       }
     }
 
@@ -2797,7 +2628,13 @@ async function main() {
       if (!SHOT) report();
       return;
     }
+    present();
+    if (!SHOT) report();
+  }
 
+  // the composite and the order markers over it: all an animation tick
+  // redraws, since the world under the markers has not moved
+  function present() {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.disable(gl.SCISSOR_TEST);
     gl.disable(gl.DEPTH_TEST);
@@ -2814,8 +2651,7 @@ async function main() {
     gl.bindVertexArray(blitVAO);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
-
-    if (!SHOT) report();
+    drawOrders();
   }
 
   // The edge, live. It is per look, so the toggle sets it on every side.
@@ -2827,6 +2663,34 @@ async function main() {
     return `<div class="row modes"><span>edge</span>${knob("black")}${knob("mirror")}</div>`;
   }
 
+  // The order overlay's knobs, live, on every side at once like the edge; a
+  // button is lit only when every side agrees. The second row is the queue a
+  // shift-click edits.
+  function orderRows() {
+    if (!OS) return [];
+    const knobs = Object.entries(ORD_KNOBS).map(([k, vals]) => {
+      const cur = sides.every((L) => L.ord[k] === sides[0].ord[k]) ? sides[0].ord[k] : "";
+      return `<span>${k}</span>` + vals.map((v) =>
+        `<button data-ord="${k}:${v}" class="${cur === v ? "on" : ""}">${v}</button>`).join("");
+    }).join("");
+    const o = sides[0].ord;
+    const cmds = Object.keys(ORDER_TYPES).filter((c) => ORDER_TYPES[c][0]).map((c) =>
+      `<button data-ordcmd="${c}" class="${ordCmd === c ? "on" : ""}">${c}</button>`).join("");
+    const nq = ordQueues.reduce((a, q) => a + q.nodes.length, 0);
+    return [
+      `<div class="row modes"><span>orders</span>${knobs}` +
+      (o.size === "clamp" ? `<span>scale</span><b>${o.min}..${o.max}</b>` : "") + `</div>`,
+      `<div class="row modes">` + ORD_OPACITY.map(([k, label]) =>
+        `<label for="ord-${k}"><span>${label}</span></label>` +
+        `<input type="range" id="ord-${k}" data-ordrange="${k}" min="0" max="1" step="0.05" ` +
+        `value="${o[k]}"><b data-ordval="${k}">${o[k].toFixed(2)}</b>`).join("") +
+      `</div>`,
+      `<div class="row modes"><span>queue</span><b>${ordActive ?? "no unit"}</b>` +
+      `<span>${nq} orders</span>${cmds}` +
+      `<button data-ordedit="undo">undo</button><button data-ordedit="clear">clear</button>` +
+      `<span>shift-click queues · ctrl-click picks the unit</span></div>`];
+  }
+
   function report() {
     const s0 = sides[0].stats, on = new Set(sides.map((L) => L.lane));
     const rows = [
@@ -2835,6 +2699,7 @@ async function main() {
       `<button data-mode="explore" class="${on.has("explore") ? "on" : ""}">Classic++</button>` +
       `</div>`,
       edgeRow(),
+      ...orderRows(),
       `<div class="row"><b>${map.name}</b> <span>${map.w16}x${map.h16} cells</span>` +
       `<span>eye</span><b>${eye[0]},${eye[1]}</b>` +
       `<span>grid</span><b>${s0.cols}x${s0.rows}</b>` +
@@ -2885,7 +2750,50 @@ async function main() {
     // The renderer buttons rewrite the query and reload. A renderer already
     // on screen keeps its side's own parameters; a new one comes in at its
     // defaults; the live eye, ss, debug and the wipe position carry over.
+    // THE OPACITY SLIDERS move every side at once and redraw only the
+    // markers: the bar is not rebuilt under a drag, so the slider keeps the
+    // pointer
+    bar.addEventListener("input", (e) => {
+      const r = e.target.closest("input[data-ordrange]");
+      if (!r) return;
+      const k = r.dataset.ordrange, v = Math.min(1, Math.max(0, parseFloat(r.value)));
+      const param = ORD_OPACITY.find(([key]) => key === k)[2];
+      for (const L of sides) {
+        L.ord[k] = v;
+        const q = new URLSearchParams(L.query);
+        q.set(param, String(v));
+        L.query = q.toString();
+      }
+      writeQuery(param, String(v));
+      const out = bar.querySelector(`b[data-ordval="${k}"]`);
+      if (out) out.textContent = v.toFixed(2);
+      present();
+    });
     bar.addEventListener("click", (e) => {
+      const ok = e.target.closest("button[data-ord]");
+      if (ok) {
+        const [k, v] = ok.dataset.ord.split(":");
+        for (const L of sides) {
+          L.ord[k] = v;
+          const q = new URLSearchParams(L.query);
+          if (v === ORD_KNOBS[k][0]) q.delete("ord" + k); else q.set("ord" + k, v);
+          L.query = q.toString();
+        }
+        writeQuery("ord" + k, v === ORD_KNOBS[k][0] ? null : v);
+        report(); present();
+        return;
+      }
+      const oc = e.target.closest("button[data-ordcmd]");
+      if (oc) { ordCmd = oc.dataset.ordcmd; report(); return; }
+      const oe = e.target.closest("button[data-ordedit]");
+      if (oe) {
+        const q = ordQueues.find((x) => x.unit === ordActive);
+        if (oe.dataset.ordedit === "clear") ordQueues = [];
+        else if (q) q.nodes.pop();
+        writeQuery("orders", ordersQuery());
+        report(); present();
+        return;
+      }
       const set = e.target.closest("button[data-edge]");
       if (set) {
         const edge = set.dataset.edge;
@@ -2937,11 +2845,23 @@ async function main() {
       eye[0] = Math.round(cam[0]); eye[1] = Math.round(cam[1]);
     };
     // the edge, written back into the address bar so the look stays a link
-    const writeEdgeQuery = (edge) => {
+    const writeEdgeQuery = (edge) => writeQuery("edge", edge === "black" ? null : edge);
+    // one top-level parameter written back into the address bar; null deletes
+    // it. Under a wipe the per-side knobs live inside a= and b=, so they are
+    // rewritten there too
+    function writeQuery(k, v) {
       const q = new URLSearchParams(location.search);
-      if (edge === "black") q.delete("edge"); else q.set("edge", edge);
+      const put = (p) => { if (v === null || v === "") p.delete(k); else p.set(k, v); };
+      if (!GLOBAL.has(k) && (q.has("a") || q.has("b"))) {
+        for (const s of ["a", "b"]) {
+          if (!q.has(s)) continue;
+          const raw = q.get(s);
+          const inner = new URLSearchParams(raw.includes("=") ? raw : "preset=" + raw);
+          put(inner); q.set(s, inner.toString());
+        }
+      } else put(q);
       history.replaceState(null, "", "?" + q.toString());
-    };
+    }
     // the game-space point under the pointer: the canvas is the game frame 1:1
     const gamePoint = (e) => {
       const r = cv.getBoundingClientRect();
@@ -3021,7 +2941,40 @@ async function main() {
       return (e.clientX - r.left) / r.width;
     };
     let drag = null;
+    // the ground point under the pointer: invert the projection, then walk
+    // the terrain's own half-height lift until it settles
+    const groundPoint = (e) => {
+      const [sx, sy] = gamePoint(e);
+      if (sx < vpL || sx >= vpL + vw || sy < vpT || sy >= vpT + vh) return null;
+      const wx = Math.round(E[0] + (sx - vpL) / zoom), wz0 = E[1] + (sy - vpT) / zoom;
+      let wz = wz0;
+      for (let i = 0; i < 4; i++) wz = wz0 + gndAt(wx, Math.round(wz)) / 2;
+      return [wx, Math.round(wz)];
+    };
+    // SHIFT-CLICK queues the selected order at the ground point, CTRL-CLICK
+    // makes the nearest unit (within 48 world units) the one being ordered
+    function orderClick(e) {
+      const g = groundPoint(e);
+      if (!g) return;
+      if (e.ctrlKey) {
+        let best = null, bd = 48;
+        instList.forEach((inst, i) => {
+          if (inst.feature) return;
+          const d = Math.hypot(inst.pos[0] - g[0], inst.pos[1] - g[1]);
+          if (d < bd) { bd = d; best = instName(inst, i); }
+        });
+        if (best) { ordActive = best; writeQuery("ordunit", best); }
+      } else if (ordActive) {
+        let q = ordQueues.find((x) => x.unit === ordActive);
+        if (!q) ordQueues.push(q = { unit: ordActive, nodes: [] });
+        q.nodes.push({ cmd: ordCmd, to: g, issue: Math.floor(ordClock()),
+                       march: sides.map((L) => [L.march || 0, L.marchPx || 0]) });
+        writeQuery("orders", ordersQuery());
+      }
+      report(); present();
+    }
     cv.addEventListener("pointerdown", (e) => {
+      if (OS && (e.shiftKey || e.ctrlKey)) { orderClick(e); return; }
       if (sides.length > 1 && Math.abs(canvasX(e) - wipe) * GW < 8) drag = { wipe: true };
       else { settle(); drag = { x: e.clientX, y: e.clientY, cx: cam[0], cy: cam[1] }; }
       cv.setPointerCapture(e.pointerId);
@@ -3044,6 +2997,17 @@ async function main() {
       kick();
     });
     cv.addEventListener("pointerup", () => { drag = null; });
+    // THE MARKERS ANIMATE on their own clock: every display frame re-presents
+    // the composite with the markers over it, unless a world frame is already
+    // on its way (it presents too)
+    if (ordProg) {
+      const tick = () => {
+        if (!raf && !contextLost && ordQueues.length &&
+            sides.some((L) => L.ord.style !== "off")) present();
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    }
   }
 
   draw();

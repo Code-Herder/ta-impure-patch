@@ -1,0 +1,202 @@
+{
+  "ok": 1,
+  "frame": 140,
+  "gametime": 28,
+  "seed": 7,
+  "requested": {
+    "units": 5,
+    "features": 0,
+    "orders": 1
+  },
+  "applied": 5,
+  "failed": 0,
+  "cleared": 2,
+  "orders": {
+    "issued": 1,
+    "failed": 0
+  },
+  "map": {
+    "name": "RS mixed",
+    "world": [
+      1024,
+      1024
+    ],
+    "tiles": [
+      64,
+      64
+    ]
+  },
+  "limit": {
+    "requested": 0,
+    "total": 0,
+    "per_player": 500,
+    "array_slots": 5000
+  },
+  "limit_requested": 500,
+  "switches": {
+    "before": 12,
+    "after": 28,
+    "bits": {
+      "drop": false,
+      "cheats": false,
+      "selboxes": true,
+      "invulnfeatures": true,
+      "noshake": true,
+      "clock": false,
+      "doubleshot": false,
+      "halfshot": false,
+      "radar": false,
+      "shootall": false
+    }
+  },
+  "units": {
+    "ack": {
+      "engine_index": 2,
+      "owner": 0,
+      "type": "ARMACK",
+      "requested": [
+        500,
+        600
+      ],
+      "actual": [
+        500,
+        600,
+        32
+      ],
+      "ordinal": 0
+    },
+    "solar": {
+      "engine_index": 3,
+      "owner": 0,
+      "type": "ARMSOLAR",
+      "requested": [
+        720,
+        600
+      ],
+      "actual": [
+        720,
+        600,
+        32
+      ],
+      "ordinal": 1
+    },
+    "ms": {
+      "engine_index": 4,
+      "owner": 0,
+      "type": "ARMMSTOR",
+      "requested": [
+        160,
+        700
+      ],
+      "actual": [
+        160,
+        700,
+        32
+      ],
+      "ordinal": 2
+    },
+    "es": {
+      "engine_index": 5,
+      "owner": 0,
+      "type": "ARMESTOR",
+      "requested": [
+        240,
+        800
+      ],
+      "actual": [
+        240,
+        800,
+        32
+      ],
+      "ordinal": 3
+    },
+    "far": {
+      "engine_index": 502,
+      "owner": 1,
+      "type": "CORAK",
+      "requested": [
+        900,
+        950
+      ],
+      "actual": [
+        900,
+        950,
+        32
+      ],
+      "ordinal": 4
+    }
+  },
+  "features": {},
+  "players": {
+    "0": {
+      "requested": {
+        "metal": 5000,
+        "energy": 5000
+      },
+      "wrote": {
+        "metal": 5000,
+        "energy": 5000
+      },
+      "now": {
+        "metal": 1100,
+        "energy": 3100
+      }
+    }
+  },
+  "order_probe": {
+    "passed": [
+      720,
+      32,
+      600
+    ],
+    "stored": [
+      720,
+      32,
+      600
+    ]
+  },
+  "camera": [
+    500,
+    600
+  ],
+  "pin": 0,
+  "eye": [
+    96,
+    192
+  ],
+  "errors": [],
+  "name": "cobl2",
+  "scenario": "cob-advbuilder",
+  "catalogue": null,
+  "loaded": {
+    "steps": [
+      "launched 1024x768, map 'RS mixed', unit limit 500",
+      "clicked SINGLE on MAINMENU.GUI \u2014 screen MAINMENU.GUI -> SINGLE.GUI",
+      "clicked Skirmish on SINGLE.GUI \u2014 screen SINGLE.GUI -> SKIRMISH.GUI",
+      "map unmapped -> mapped",
+      "clicked Start on SKIRMISH.GUI",
+      "live with 2 units",
+      "map Maps\\RS mixed.TNT"
+    ],
+    "map_file": "Maps\\RS mixed.TNT",
+    "map_requested": "RS mixed",
+    "res": [
+      1024,
+      768
+    ],
+    "unit_limit": 500,
+    "players": [
+      "0:1:0:0:5000:5000",
+      "1:2:1:1"
+    ],
+    "alive_before_apply": 2,
+    "window": [
+      10485761,
+      0,
+      0,
+      640,
+      480
+    ],
+    "pid": 2617450
+  }
+}

@@ -1,0 +1,147 @@
+/* The page around the game, and the game frame: Impure's top bar and the wiki window. Inside the frame every length is in
+   units through --u, the CSS pixels of the frame's height / 720, so the window reads the same at every resolution of one
+   aspect. The window's numbers are art/wiki/layout.json's, which the DLL reads too: wiki.js sets each as a custom
+   property of the frame, --w- and its path (row.pad -> --w-row-pad-0, --w-row-pad-1). The window is drawn in a skin: the whitebox (flat greys, 1 CSS pixel lines) or the kit of art/wiki/kit/, whose
+   parts wiki.js paints into each part's box (#frame.kit). Its text takes the replay HUD's styles, which wiki.js writes
+   from art/hud/layout.json. */
+/* the replay HUD's faces, the files the DLL draws with */
+@font-face { font-family: 'Oswald'; font-weight: 500; src: url('../../../art/hud/fonts/oswald-500.ttf'); }
+@font-face { font-family: 'Oswald'; font-weight: 700; src: url('../../../art/hud/fonts/oswald-700.ttf'); }
+@font-face { font-family: 'Barlow Condensed'; font-weight: 600; src: url('../../../art/hud/fonts/barlowcondensed-600.ttf'); }
+:root { --bg: #111310; --fg: #d8d8c8; --muted: #8f9384; --line: #34372e; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; padding: 12px 16px 24px; }
+header { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; margin-bottom: 10px; }
+header h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 600; }
+header label { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+header select { background: #1c1e19; color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; font: inherit; }
+header output { min-width: 3.2em; color: var(--fg); }
+#view { display: flex; justify-content: center; }
+p.note { color: var(--muted); max-width: 90ch; margin: 12px auto 0; }
+
+/* ---- the game frame ---- */
+#frame { --u: 1px; --s: 90; position: relative; isolation: isolate; overflow: hidden; background: #000; user-select: none;
+  -webkit-user-select: none; font-family: 'DejaVu Sans', 'Helvetica Neue', Arial, sans-serif; outline: 1px solid var(--line); }
+#bg { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+/* Impure's top bar, 32 bar pixels tall at 720 (a bar pixel is a unit): the readouts on the left, its own buttons at the
+   right -- wiki, rewind, gear -- each 28 square at y 2 */
+#topbar { position: absolute; left: calc(128 * var(--u)); right: 0; top: 0; height: calc(32 * var(--u)); box-sizing: border-box;
+  display: flex; align-items: center; gap: calc(14 * var(--u)); padding: 0 calc(8 * var(--u)); background: #3b3c39;
+  border-bottom: 1px solid #151514; color: #e2e2da; font-size: calc(10.5 * var(--u)); white-space: nowrap; }
+#topbar .rd { display: flex; align-items: center; gap: calc(5 * var(--u)); width: calc(220 * var(--u)); }
+#topbar .rd b { text-transform: uppercase; width: calc(46 * var(--u)); font-weight: 700; }
+#topbar .rd span { width: calc(40 * var(--u)); text-align: right; font-variant-numeric: tabular-nums; }
+#topbar .rd i { position: relative; flex: 1; height: calc(5 * var(--u)); background: #1e1f1d; border: 1px solid #6e6e68; }
+#topbar .rd i s { position: absolute; left: 0; top: 0; bottom: 0; background: #b8b8b0; }
+#topbar .rd em { font-style: normal; width: calc(40 * var(--u)); color: #b7b7ae; font-variant-numeric: tabular-nums; }
+#clock { font-variant-numeric: tabular-nums; color: #b7b7ae; }
+#paused { visibility: hidden; font-weight: 700; letter-spacing: .08em; padding: 0 calc(5 * var(--u)); border: 1px solid #e2e2da; }
+#frame.paused #paused { visibility: visible; }
+/* the gear at x W-44..W-16 (tagpu_menu.c, trigger_rect); the rewind button 3 left of it, shown only in a live
+   single-player recorded skirmish; the wiki button 3 left of the rewind button, or in its slot when it is absent */
+.tb { position: absolute; top: calc(2 * var(--u)); width: calc(28 * var(--u)); height: calc(28 * var(--u)); padding: 0; box-sizing: border-box;
+  background: #94948c; color: #1d1d1b; border: 1px solid #1d1d1b; font: 700 calc(16 * var(--u))/1 'DejaVu Sans', sans-serif; cursor: pointer; }
+.tb:active, .tb.on { background: #5c5c56; color: #e2e2da; }
+#b-gear { right: calc(16 * var(--u)); }
+#b-rewind { right: calc(47 * var(--u)); }
+#b-wiki { right: calc(var(--w-button-right-0) * var(--u)); top: calc(var(--w-button-top) * var(--u)); width: calc(var(--w-button-side) * var(--u)); height: calc(var(--w-button-side) * var(--u)); }
+#frame.norewind #b-rewind { display: none; }
+#frame.norewind #b-wiki { right: calc(var(--w-button-right-1) * var(--u)); }
+/* the wiki button closes the window too, so it stays above the layer that takes the game's input */
+#b-wiki { z-index: 7; }
+.gl { font-style: normal; }
+
+/* while the window is open it takes all input: the margin of game around it swallows every click */
+#capture { position: absolute; inset: 0; z-index: 5; display: none; }
+#frame.open #capture { display: block; }
+
+/* ---- a kit's parts: each painted on a canvas (canvas.skin) behind its box's content, the box's own fill and lines
+   dropped; a kit's glyph icon replaces the whitebox's text glyph, which then takes no room ---- */
+canvas.skin { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; }
+#frame.kit [data-part] { isolation: isolate; background: none; border-color: transparent; }
+#frame.kit .gl { display: none; }
+
+/* ---- the window: --s per cent of the frame, centred. The skin places its title (--wt-*), close button (--wx-*) and
+   body (--wb-*) and says how deep its panels' and bezel's frames are (--pn-*, --bz-*); wiki.js sets them ---- */
+#win { position: absolute; z-index: 6; left: calc((100% - var(--s) * 1%) / 2); top: calc((100% - var(--s) * 1%) / 2);
+  width: calc(var(--s) * 1%); height: calc(var(--s) * 1%); box-sizing: border-box; background: #d3d3ce; border: 1px solid #1d1d1b;
+  font-size: calc(var(--w-window-font) * var(--u)); line-height: var(--w-window-line); --ink: #1d1d1b; --shade: none; color: var(--ink); }
+#win[hidden] { display: none; }
+#win button { font: inherit; color: inherit; cursor: pointer; }
+#win .wt { position: absolute; left: calc(var(--wt-l) * var(--u)); right: calc(var(--wt-r) * var(--u)); top: calc(var(--wt-t) * var(--u));
+  height: calc(var(--wt-h) * var(--u)); display: flex; align-items: center; padding-left: calc(var(--w-title-pad) * var(--u)); overflow: hidden; white-space: nowrap; }
+#wx { position: absolute; right: calc(var(--wx-r) * var(--u)); top: calc(var(--wx-t) * var(--u)); width: calc(var(--wx-w) * var(--u));
+  height: calc(var(--wx-h) * var(--u)); padding: 0; border: 0; }
+#win .wb { position: absolute; left: calc(var(--wb-l) * var(--u)); right: calc(var(--wb-r) * var(--u)); top: calc(var(--wb-t) * var(--u));
+  bottom: calc(var(--wb-b) * var(--u)); display: grid; grid-template-columns: calc(var(--w-columns-0) * 1%) calc(var(--w-columns-1) * 1%) minmax(0, 1fr); gap: calc(var(--gap) * var(--u)); }
+/* the columns take fixed shares of the window and scale with it; long names wrap. A panel's list scrolls inside its frame */
+.pnl { position: relative; min-height: 0; min-width: 0; }
+.pnl > .scr { position: absolute; left: calc(var(--pn-l) * var(--u)); right: calc(var(--pn-r) * var(--u)); top: calc(var(--pn-t) * var(--u));
+  bottom: calc(var(--pn-b) * var(--u)); margin: 0; overflow: auto; padding: calc(var(--w-panel-pad-0) * var(--u)) calc(var(--w-panel-pad-1) * var(--u)); box-sizing: border-box; }
+#win ::-webkit-scrollbar { width: calc(var(--w-scrollbar) * var(--u)); height: calc(var(--w-scrollbar) * var(--u)); }
+#win ::-webkit-scrollbar-thumb { background: rgba(128, 128, 120, .7); }
+#win ::-webkit-scrollbar-track { background: transparent; }
+
+/* the tree: categories nest to any depth, their leaves are entries; tree and demo rows are the skin's rows */
+#tree ul { list-style: none; margin: 0; padding: 0 0 0 calc(var(--w-tree-indent) * var(--u)); }
+#tree > ul { padding-left: 0; }
+#tree .row, #demos li { position: relative; display: flex; gap: calc(var(--w-row-gap) * var(--u)); align-items: center; cursor: pointer;
+  min-height: calc(var(--w-row-h) * var(--u)); box-sizing: border-box; padding: calc(var(--w-row-pad-0) * var(--u)) calc(var(--w-row-pad-1) * var(--u)); margin-bottom: calc(var(--w-row-after) * var(--u)); }
+/* a mark is a square box, its kit icon as large as fits it */
+#tree .tw, #tree .leaf .dot { position: relative; flex: none; width: calc(var(--w-tree-mark) * var(--u)); height: calc(var(--w-tree-mark) * var(--u));
+  line-height: calc(var(--w-tree-mark) * var(--u)); text-align: center; }
+#tree .missing { font-style: italic; opacity: .7; }
+.lock { flex: none; display: inline-block; width: calc(var(--w-lock) * var(--u)); height: calc(var(--w-lock) * var(--u)); border-radius: 50%; margin-left: auto;
+  background: #d01818; border: 1px solid #5a0808; box-sizing: border-box; }
+#demos { list-style: none; }
+#demos li .n { flex: none; width: calc(var(--w-demo-num) * var(--u)); text-align: right; }
+#demos .none { cursor: default; }
+
+/* the entry: title, subtitle, the lock badge, the stage, caption, keys, controls, and the text scrolling below */
+#entry { display: flex; flex-direction: column; gap: calc(var(--w-entry-gap) * var(--u)); min-width: 0; min-height: 0; padding: calc(var(--w-entry-pad-0) * var(--u)) calc(var(--w-entry-pad-1) * var(--u)) 0; }
+#e-title { margin: 0; line-height: var(--w-entry-title_line); }
+#badge { position: relative; align-self: flex-start; display: flex; align-items: center; gap: calc(var(--w-badge-gap) * var(--u)); height: calc(var(--w-badge-h) * var(--u));
+  box-sizing: border-box; padding: 0 calc(var(--w-badge-pad) * var(--u)); }
+#badge[hidden] { display: none; }
+#badge i { width: calc(var(--w-badge-dot) * var(--u)); height: calc(var(--w-badge-dot) * var(--u)); border-radius: 50%; background: #d01818; border: 1px solid #5a0808; box-sizing: border-box; }
+.srow { flex: 1 1 0; min-height: calc(var(--w-stage-min) * var(--u)); display: flex; }
+#sbox { flex: 1; min-width: 0; position: relative; }
+#stage { position: absolute; left: calc(var(--bz-l) * var(--u)); right: calc(var(--bz-r) * var(--u)); top: calc(var(--bz-t) * var(--u));
+  bottom: calc(var(--bz-b) * var(--u)); width: calc(100% - (var(--bz-l) + var(--bz-r)) * var(--u)); height: calc(100% - (var(--bz-t) + var(--bz-b)) * var(--u)); }
+#stage.try { cursor: none; }
+#ctl button { position: relative; height: calc(var(--w-controls-h) * var(--u)); padding: 0 calc(var(--w-controls-pad) * var(--u)); box-sizing: border-box;
+  display: flex; align-items: center; justify-content: center; white-space: nowrap; }
+/* the caption and the keys strip keep fixed heights: a caption or a keycap appearing must not resize the stage under the
+   player's cursor */
+#caption { flex: none; height: calc(var(--w-strips-caption) * var(--u)); overflow: hidden; }
+#keys { flex: none; display: flex; flex-wrap: nowrap; overflow: hidden; gap: calc(var(--w-keys-gap) * var(--u)); align-items: center; height: calc(var(--w-strips-keys) * var(--u)); }
+.kc { position: relative; display: inline-flex; align-items: center; box-sizing: border-box; height: calc(var(--w-keycap-h) * var(--u)); padding: 0 calc(var(--w-keycap-pad) * var(--u)); }
+#ctl { display: flex; gap: calc(var(--w-controls-gap) * var(--u)); align-items: center; }
+#ctl button { min-width: calc(var(--w-controls-min) * var(--u)); }
+#ctl button:disabled { opacity: .45; cursor: default; }
+#ctl .sp { display: flex; gap: calc(var(--w-controls-pair) * var(--u)); }
+#c-try { margin-left: calc(var(--w-controls-try) * var(--u)); }
+#p-text { flex: 0 0 calc(var(--w-text-share) * 1%); }
+#text p { margin: 0 0 calc(var(--w-text-para) * var(--u)); }
+#text .err { color: #c03030; }
+
+/* ---- the whitebox: flat greys, 1 CSS pixel lines ---- */
+#frame:not(.kit) #win .wt { background: #a7a7a1; border-bottom: 1px solid #1d1d1b; box-sizing: border-box; }
+#frame:not(.kit) #wx { background: #bcbcb6; border-left: 1px solid #1d1d1b; border-bottom: 1px solid #1d1d1b; box-sizing: border-box; }
+#frame:not(.kit) #wx:hover { background: #8e8e88; }
+#frame:not(.kit) .wb > .pnl { border-right: 1px solid #1d1d1b; }
+#frame:not(.kit) #p-text { border-top: 1px solid #8a8a86; }
+#frame:not(.kit) #tree .row:hover, #frame:not(.kit) #demos li:hover { background: #c2c2bd; }
+#frame:not(.kit) #tree .row, #frame:not(.kit) #demos li { margin-bottom: 0; }
+#frame:not(.kit) #tree .leaf.sel, #frame:not(.kit) #demos li.sel { background: #9d9d97; }
+#frame:not(.kit) #badge { border: 1px solid #8a1010; background: #ecd3d0; --ink: #8a1010; }
+#frame:not(.kit) #sbox { background: #6e6e68; border: 1px solid #1d1d1b; box-sizing: border-box; }
+#frame:not(.kit) #ctl button { background: #b3b3ad; border: 1px solid #1d1d1b; }
+#frame:not(.kit) #ctl button:hover { background: #a2a29c; }
+#frame:not(.kit) #ctl button.on { background: #5c5c56; --ink: #f0f0ea; }
+#frame:not(.kit) .kc { background: #f2f2ee; border: 1px solid #1d1d1b; border-bottom-width: calc(2.5 * var(--u)); border-radius: calc(2.5 * var(--u)); }
+
+/* ---- a kit: the window's part carries the faces, the title sits in its dark title groove ---- */
+#frame.kit #win { border: 0; background: none; }
+#frame.kit #win .wt { --ink: initial; --shade: initial; }
+#frame.kit #b-wiki { border: 0; }

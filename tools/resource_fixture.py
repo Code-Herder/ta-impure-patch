@@ -132,6 +132,15 @@ def main():
                 if re.fullmatch(rf"guis/{old}\d+\.gui", name):
                     gui = archive.read(name).decode("latin-1").replace(old.upper(), new.upper())
                     hpipack.insert(extra, name.replace(old, new), gui.encode("latin-1"))
+        # RSNMOHO: ARMMOHO renamed, named by a download entry with no MENU. 0x42BE30 appends it to
+        # RSNGCK's CANBUILD whatever the MENU; the fill places no entry with MENU 0 (0x41AE48..0x41AE4D),
+        # so no page of RSNGCK's shows it.
+        fbi = content["units/armmoho.fbi"].read("units/armmoho.fbi").decode("latin-1")
+        fbi, n = re.subn(r"\bUnitName\s*=[^;]*;", "UnitName=RSNMOHO;", fbi, count=1, flags=re.I)
+        assert n == 1, "refusal fixture lacks UnitName"
+        hpipack.insert(extra, "units/rsnmoho.fbi", fbi.encode("latin-1"))
+        hpipack.insert(extra, "scripts/rsnmoho.cob", content["scripts/armmoho.cob"].read("scripts/armmoho.cob"))
+        hpipack.insert(extra, "download/rsnmoho.tdf", b"[MENUENTRY1]{unitmenu=RSNGCK;unitname=RSNMOHO;}")
         (a.gamedir / "resource-refusal.ufo").write_bytes(hpipack.build(extra, method=2))
 
 

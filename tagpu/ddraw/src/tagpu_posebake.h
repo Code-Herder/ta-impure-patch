@@ -74,12 +74,23 @@
    MODEL, not one type: a wreck's model and a ghost's split entry take slots of
    their own, which is why the keep is twice stock's 279 types; a material
    stream is one (type, owner). Here as well as in tagpu_posebake.c because
-   tagpu_vk_unit.c sizes its vertex-buffer table from them. */
+   tagpu_vk_unit.c sizes its vertex-buffer table from them.
+
+   THE WIKI'S INSTANCE SETS ALL THREE BEFORE THIS HEADER (tagpu_scene.h), from the
+   stage's own bounds; the game's takes the values below.
+
+   A KEEP ABOVE ITS TABLE WOULD UNDO THE BOUND: the table would fill without the
+   keep ever being reached, and the next entry would find neither an entry to
+   evict nor a free slot. Hence the assertion. */
+#ifndef TAGPU_PB_FRAMEMAX
 #define TAGPU_PB_FRAMEMAX (TAGPU_PK_MAX_UNITS + TAGPU_PK_MAX_WRECKS + TAGPU_PK_MAX_BUILDS + 1u)
-#define TAGPU_PB_MAXGEOM  ((int)TAGPU_PB_FRAMEMAX)   /* models cached at once        */
-#define TAGPU_PB_MAXMAT   ((int)TAGPU_PB_FRAMEMAX)   /* (type, owner) streams        */
 #define TAGPU_PB_KEEPGEOM  512
 #define TAGPU_PB_KEEPMAT  1024
+#endif
+#define TAGPU_PB_MAXGEOM  ((int)TAGPU_PB_FRAMEMAX)   /* models cached at once        */
+#define TAGPU_PB_MAXMAT   ((int)TAGPU_PB_FRAMEMAX)   /* (type, owner) streams        */
+typedef char pb_keep_within_table[(TAGPU_PB_KEEPGEOM <= TAGPU_PB_MAXGEOM &&
+                                   TAGPU_PB_KEEPMAT <= TAGPU_PB_MAXMAT) ? 1 : -1];
 
 /* geometry vertex flags (float, bit-tested in the shader as an int) */
 #define TAGPU_PBF_SHADED 1      /* body vertex: carries the engine's normal   */

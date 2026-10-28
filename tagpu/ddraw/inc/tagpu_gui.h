@@ -83,6 +83,11 @@ void tagpu_gui_present(const TAGPU_FRAME* f);
    reference wants it, and ours is the sharp layer's. */
 void tagpu_gui_cursor_frame(const struct TAGPU_PACKET* packet);
 
+/* The device pixels the sharp layer draws the player's cursor at, an art pixel: tagpu_gui.on's
+   `cursorscale=`, 1 by default, clamped to 0.25..8. RENDER THREAD ONLY: tagpu_gui_present's poll
+   writes it there, so a reader on that thread sees the value this frame's cursor is drawn at. */
+float tagpu_gui_cursor_scale(void);
+
 /* THE ENGINE'S CURSORS PULSE (gui-renderer.md 13.5, 17 and 23): the move
    cursor cycles 27x27 to 35x35, one pixel per side per step, so a rect taken
    from one frame's sprite can be one animation step behind the sprite the

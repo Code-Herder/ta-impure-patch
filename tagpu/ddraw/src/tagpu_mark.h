@@ -68,12 +68,16 @@ int  tagpu_mark_gather(const TAGPU_FXVIEW* v);
    pixel's CENTRE where the engine draws the line from integers, the
    fractional position where the geometry is ours. `nudge` ({x0, y0, x1, y1},
    NULL for none) then moves each end by whole game pixels of the ZOOMED frame
-   (tagpu_line_nudge): a fixed screen offset from a neighbouring line.
-   Triangles carry no such rule and must be sized by the caller. */
+   (tagpu_line_nudge): a fixed screen offset from a neighbouring line. */
 int  tagpu_mark_emit_line(float x0, float y0, float x1, float y1,
                           const int nudge[4], int colidx, float wx, float wz);
-int  tagpu_mark_emit_tri(float x0, float y0, float x1, float y1,
-                         float x2, float y2, int colidx, float wx, float wz);
+/* One frame of the order art (tagpu_order_art) with its hotspot at (x, y),
+   one texel a SCREEN pixel at every zoom, at opacity `alpha` (1 = opaque),
+   fogged at (wx, wz). The frame's corner is put on the device pixel grid, so
+   its texels land whole. */
+struct TAGPU_ORDART_FRAME;
+int  tagpu_mark_emit_art(float x, float y, const struct TAGPU_ORDART_FRAME* f,
+                         float alpha, float wx, float wz);
 /* One unit's SELECTION RECT (`DrawUnitSelectBoxRect 0x46A530`, ui-markers.md
    §1): the closed loop p0->p1->p2->p3->p0 as four lines, in palette index
    `colidx`, fogged at (wx, wz).
@@ -95,8 +99,8 @@ int  tagpu_mark_emit_selbox(const float px[4], const float py[4], int colidx,
 int  tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
                           float wx, float wz);
 /* Gather the marker layer and publish it through `tagpu_mark_handover`. This
-   issues NO draw. The markers are the frame's top layer with every fragment
-   opaque; tagpu_vk_mark.c honours that. */
+   issues NO draw. The markers are the frame's top layer; every fragment is
+   opaque but the order art's, which is blended at its own alpha. */
 void tagpu_mark_render(const TAGPU_FXVIEW* v);
 /* ---- the hand-over to the Vulkan lane ----
 
@@ -115,7 +119,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v);
 /* 1 is retired rather than reused, so a stale `tex` field cannot silently
    become a text draw. */
 enum { TAGPU_MK_TEX_NONE = 0,   /* no sampler feeds uLayer this draw */
-       TAGPU_MK_TEX_TEXT = 2 }; /* tagpu_text.c's coverage atlas */
+       TAGPU_MK_TEX_TEXT = 2,   /* tagpu_text.c's coverage atlas */
+       TAGPU_MK_TEX_ART  = 3 }; /* tagpu_order_art's palette-index atlas */
 
 typedef struct TAGPU_MKDRAW {
     int first, count;           /* vertices into `verts` below, or for a
@@ -129,6 +134,8 @@ typedef struct TAGPU_MKDRAW {
     int depth;                  /* 1 = depth-TESTED against the world (never
                                    written): the selection rects alone. Every
                                    other draw is the frame's top layer.      */
+    int blend;                  /* 1 = blended at the vertex alpha: the order
+                                   art alone, TAGPU_MK_TEX_ART triangles     */
 } TAGPU_MKDRAW;
 
 #define TAGPU_MK_MAXDRAW 16
@@ -145,6 +152,9 @@ typedef struct TAGPU_MKHAND {
     /* tagpu_text.c's atlas: one coverage byte a texel. `textGen` moves when a
        raster lands, which is how a backend holding its own copy is told. */
     const unsigned char* text; unsigned textGen; int textW, textH;
+    /* tagpu_order_art: one palette index a texel, `artKey` where a frame draws
+       nothing. Written once, so it is uploaded once per slot. */
+    const unsigned char* art; int artW, artH, artKey;
     /* THE TWO SHARED TEXTURES, AS BYTES: the consumer builds its own
        images from them. They come over in the shapes `tagpu_fx.h` already uses
        for the same two, so the two consumers agree about what they are:

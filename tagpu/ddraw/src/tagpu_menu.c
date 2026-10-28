@@ -156,6 +156,9 @@ typedef void  (__cdecl   *void_fn)(void);
    tagpu_menu_modal), and Leave's question */
 #define OFF_GUISTATE      0x37EBEu      /* u16: bit 0 the options stack, 2 TALK, 5, 6 SHARE, 11 */
 #define OFF_GUISTATE2     0x2BEEu       /* u8: bits 5-7                        */
+/* the in-game wiki's two engine facts (tagpu_menu_single_player, tagpu_menu_pause_hold) */
+#define OFF_NETGAME       0x2A44u       /* u8: bit 0 a network game            */
+#define OFF_PAUSE         0x38A51u      /* u16: bit 0 single player's pause    */
 #define VA_SETLABEL       0x004A07D0u   /* (gi, name, text): the TOP screen, by name; copies 0x80
                                            bytes and sets gi+0xCCA itself (0x4A085E) */
 #define VA_YESORNO        0x00460680u   /* the in-game YESORNO opener, void cdecl */
@@ -1617,6 +1620,41 @@ int tagpu_menu_modal(void)
 int tagpu_menu_leave_ready(void)
 {
     return s_installed;
+}
+
+/* ---- the in-game wiki's two engine facts --------------------------------------------------
+
+   A NETWORK GAME IS BIT 0 OF THE BYTE main+0x2A44. The frame callback takes its network branch on
+   it (`test byte [eax+0x2a44],bl; je 0x496918` at 0x4967E7, bl = 1), and that branch calls the
+   scheduler (0x4967F3) and the step (0x49680C) without ever reaching the pause test at 0x496920.
+   Front-end code alone sets the bit (0x426D34, 0x42700C, 0x4277DF, 0x427B02, 0x427C0F, 0x428478)
+   and play only ever clears it (0x41EFEC, 0x450E10, 0x4523D2, 0x496AB4, 0x496B38): every store
+   whose operand carries the displacement 0x2A44, DISASSEMBLED 2026-10-25; the `or word, di` at
+   0x49982F stores 4 (edi = 4 at 0x499603). So a level that is single player at one moment of play
+   is single player at every later one. */
+int tagpu_menu_single_player(void)
+{
+    char* main_p = *(char**)TA_MAIN;
+    return main_p && !(*(const unsigned char*)(main_p + OFF_NETGAME) & 1);
+}
+
+/* SINGLE PLAYER'S PAUSE IS BIT 0 OF main+0x38A51. A skirmish frame tests it at 0x496920
+   (`test byte [eax+0x38a51],bl; jne 0x496969`) and a set bit skips only the scheduler 0x495230 and
+   the step 0x495490; the draw at 0x4969CD still runs. The Pause key flips it with a word
+   read-modify-write at 0x4960AA..0x4960BC and broadcasts message 0x19; the in-game menu's open sets
+   it with `or byte [eax+0x38a51],1` at 0x460E00. DISASSEMBLED 2026-10-25. This is that byte's
+   read-modify-write, bit 0 alone, without the 0x19 broadcast, so it is made only in single
+   player, where there is no peer to tell: the test is here, beside the write. */
+int tagpu_menu_pause_hold(int on, int* was)
+{
+    char* main_p = *(char**)TA_MAIN;
+    unsigned char* b;
+    if (!main_p || !tagpu_menu_single_player()) return 0;
+    b = (unsigned char*)(main_p + OFF_PAUSE);
+    if (was) *was = *b & 1;
+    if (on) *b = (unsigned char)(*b | 1u);
+    else *b = (unsigned char)(*b & ~1u);
+    return 1;
 }
 
 int tagpu_menu_panel_box(int* l, int* t, int* r, int* b)

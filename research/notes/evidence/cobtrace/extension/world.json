@@ -1,0 +1,25 @@
+{
+ "facts": {
+  "allied": [
+   [
+    0,
+    0
+   ]
+  ],
+  "caller": 2,
+  "local": [
+   0
+  ],
+  "slots": 5001,
+  "units": {
+   "2": [
+    0,
+    0,
+    0.0
+   ]
+  }
+ },
+ "model": "armsolar",
+ "rules": "impure",
+ "source": "research/notes/evidence/cobtrace/extension.bos"
+}

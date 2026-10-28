@@ -220,8 +220,8 @@ capture time out; it never returns a stale file.
   where the rule is the engine's line. To put
   lines across the viewport edge, pin the camera with `tacli eye` after staging. The capture must hold lines ONLY
   (anything else is "only in the capture", and bodies hide the wire), which the shipped build
-  cannot arrange: it needs a build whose recorders skip every non-line draw. The waypoint
-  crosshairs change size with game time, so two runs paused on different ticks do not pair.
+  cannot arrange: it needs a build whose recorders skip every non-line draw. The route dots and
+  waypoint sprites are not lines: they are the order art's quads, a non-line draw like the text.
 - **A world capture at 1080p with `ss=2` is 3840x2160, 33 MB**, in a 32-bit process; the lane
   refuses and logs rather than faulting. 1024x768 is 9.4 MB and nothing to think about.
 

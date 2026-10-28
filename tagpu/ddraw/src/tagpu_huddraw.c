@@ -57,7 +57,10 @@
             opacity -- an SVG <g opacity> composites its children first, so lines that cross in
             the faint part show the top one, not the two summed;
      DROP   CSS box-shadow: the box vPx moved down by vUV.x and blurred as SHADE blurs, drawn
-            outside the box only, as an outer shadow is.
+            outside the box only, as an outer shadow is;
+     RING   the colour over the band vPrm.y pixels deep inside the circle inscribed in vPx, each
+            edge antialiased over a pixel as DOT's is: the disc of the outer radius less the disc
+            of the inner, none when the band reaches the centre. Unsnapped, as a canvas arc is.
    The dim filter of a player who is out, `brightness(b) saturate(s)`, is linear in a
    premultiplied colour, so it applies per instance and composes as the browser's does on the
    whole row. Its matrix is the Filter Effects spec's saturate. */
@@ -152,6 +155,10 @@ static const char* FS =
     "      }\n"
     "    }\n"
     "    c = acc * vCol.a;\n"
+    "  } else if (m == 8) {\n"
+    "    vec2 ce = 0.5 * (vPx.xy + vPx.zw);\n"
+    "    float r = 0.5 * (vPx.z - vPx.x), ri = r - vPrm.y, d = length(p - ce);\n"
+    "    c = vCol * (clamp(r - d + 0.5, 0.0, 1.0) - (ri > 0.0 ? clamp(ri - d + 0.5, 0.0, 1.0) : 0.0));\n"
     "  } else {\n"
     "    if (p.x >= vPx.x && p.x < vPx.z && p.y >= vPx.y && p.y < vPx.w) discard;\n"
     "    float s = max(vPrm.y, 1e-3);\n"
@@ -253,8 +260,8 @@ static const GLYPH* glyph(const HUDFACE* f, int fi, float size, int g, int quart
 /* ---- the instances ------------------------------------------------------------------------- */
 
 typedef struct {
-    const HUDART* art;
-    const HUDOPS* ops;
+    const HUDART*    art;
+    const HUDOPLIST* ops;
     float         px;
     float         ox, oy;       /* the game screen's top-left on the attachment      */
     float         W, H;         /* the attachment                                    */
@@ -263,6 +270,7 @@ typedef struct {
     HUDBATCH*     b;
     int           nb, bcap;
     int           dropped;
+    int           watched;      /* the instances ops->watch was given                        */
     int           fresh;        /* the next instance opens a batch: a group's first          */
 } B;
 
@@ -331,17 +339,24 @@ static void colour(HUDINST* q, uint32_t rgb, float a)
 static void text(B* c, const HUDOP* op)
 {
     const HUDGLOBALS* g = tagpu_hudlay_globals(c->art->lay);
-    const struct HUDSTYLE* S = &g->style[op->style];
-    int fi = c->art->style_face[op->style];
-    const HUDFACE* f = &c->art->face[fi];
-    float size = op->size * c->px, sc = stbtt_ScaleForMappingEmToPixels(&f->info, size);
-    float sp = S->spacing * size, width, x, base;
+    const struct HUDSTYLE* S;
+    const HUDFACE* f;
+    float size = op->size * c->px, sc;
+    float sp, width, x, base, opacity = (float)(op->rgba & 0xFF) / 255.0f;
     uint32_t cp[MAXCH], rgb[MAXCH];
-    int gi[MAXCH], n = 0, i, k, r, copies;
+    int gi[MAXCH], n = 0, i, k, r, copies, fi;
     float pen[MAXCH];
     float off[5][2];
     float alpha[5];
 
+    /* the runs and their bytes inside the list's counts, or nothing is set */
+    if ((int)op->run + (int)op->nrun > c->ops->nrun || op->style < 0 || op->style >= g->nstyle) return;
+    for (r = 0; r < op->nrun; r++)
+        if ((int)c->ops->run[op->run + r].off + (int)c->ops->run[op->run + r].len > c->ops->ntext) return;
+    S = &g->style[op->style];
+    fi = c->art->style_face[op->style];
+    f = &c->art->face[fi];
+    sp = S->spacing * size;
     for (r = 0; r < op->nrun; r++) {
         const HUDRUN* run = &c->ops->run[op->run + r];
         const unsigned char *s = (const unsigned char*)c->ops->text + run->off, *e = s + run->len;
@@ -353,6 +368,7 @@ static void text(B* c, const HUDOP* op)
             n++;
         }
     }
+    sc = stbtt_ScaleForMappingEmToPixels(&f->info, size);
     width = tagpu_hudtext_pens(&f->info, sc, sp, gi, n, pen);
     if (op->flags & HOPF_BASE) {
         /* an SVG <text>: its anchor at x, its baseline at y, painted on a whole pixel */
@@ -366,7 +382,9 @@ static void text(B* c, const HUDOP* op)
 
     /* the copies under the text, then the text */
     copies = 0;
-    if (S->outline) {
+    if (op->flags & HOPF_INK) {
+        /* dark ink on a light face: the runs' colour alone, neither the shadow nor the outline */
+    } else if (S->outline) {
         static const int pick[4][2] = { { 0, 1 }, { 2, 3 }, { 0, 3 }, { 2, 1 } };
         for (k = 0; k < 4; k++) {
             off[copies][0] = S->ol[pick[k][0]] * c->px;
@@ -401,7 +419,7 @@ static void text(B* c, const HUDOP* op)
             if (!(q = emit(c, HUD_TEX_ATLAS, HUDM_GLYPH, x0, y0, x0 + gl->w, y0 + gl->h, op))) return;
             q->uv[0] = (float)gl->x / HUD_ATLAS; q->uv[1] = (float)gl->y / HUD_ATLAS;
             q->uv[2] = (float)(gl->x + gl->w) / HUD_ATLAS; q->uv[3] = (float)(gl->y + gl->h) / HUD_ATLAS;
-            colour(q, k < copies ? 0 : rgb[i], alpha[k]);
+            colour(q, k < copies ? 0 : rgb[i], alpha[k] * opacity);
         }
     }
 }
@@ -438,7 +456,7 @@ static void rgba4(float* t, uint32_t rgb, float a)
 
 static void chart_prepare(const B* c)
 {
-    const HUDCHART* K = &c->ops->chart;
+    const HUDCHART* K = c->ops->chart;
     float px = c->px, hw = K->w * px / 2, hh = K->halo_w * px / 2, cr = K->cross * px, cw = K->cross_w * px / 2;
     float reach = (hw > hh ? hw : hh) + 1, ce = cr + cw + 1, ends = reach > ce ? reach : ce;
     int n = K->n < HUD_MAXSEAT ? K->n : HUD_MAXSEAT, np = K->npt < HUD_MAXPT ? K->npt : HUD_MAXPT;
@@ -529,6 +547,20 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
     int j, n;
     switch (op->kind) {
     case HOP_PART:
+        if (op->flags & HOPF_SPRITE) {
+            /* a cell of the sprite sheet, its frame's texels whole into the op's box, which the
+               stage built a whole number of device pixels wide and high */
+            const float sw = (float)(HUD_SPRITE_CELL * HUD_SPRITE_CELLS), sh = (float)HUD_SPRITE_CELL;
+            if (op->part < 0 || op->part >= HUD_SPRITE_CELLS) break;
+            if (!(in = emit(c, HUD_TEX_SPRITE, HUDM_PART, snap(op->r.x * px), snap(op->r.y * px),
+                            (float)tagpu_hud_edge(op->r.x, op->r.w, px), (float)tagpu_hud_edge(op->r.y, op->r.h, px), op))) break;
+            in->uv[0] = (float)(op->part * HUD_SPRITE_CELL) / sw;
+            in->uv[1] = 0;
+            in->uv[2] = ((float)(op->part * HUD_SPRITE_CELL) + op->size) / sw;
+            in->uv[3] = op->shade / sh;
+            colour(in, 0xFFFFFF, (float)(op->rgba & 0xFF) / 255.0f);
+            break;
+        }
         n = tagpu_hudlay_expand(art->lay, op, px, q, HUD_MAXQUAD);
         for (j = 0; j < n; j++) {
             if (!(in = emit(c, op->part, HUDM_PART, q[j].x0, q[j].y0, q[j].x1, q[j].y1, op))) break;
@@ -565,6 +597,15 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
         }
         /* fall through */
     case HOP_DOT:
+        if (op->kind == HOP_DOT && (op->flags & HOPF_RING)) {
+            /* a canvas arc: the circle where it falls, the quad a pixel past it for the edge */
+            float x0 = op->r.x * px, y0 = op->r.y * px, x1 = (op->r.x + op->r.w) * px, y1 = (op->r.y + op->r.h) * px;
+            if (!(in = emit(c, -1, HUDM_RING, x0 - 1, y0 - 1, x1 + 1, y1 + 1, op))) break;
+            in->px[0] = x0 + c->ox; in->px[1] = y0 + c->oy; in->px[2] = x1 + c->ox; in->px[3] = y1 + c->oy;
+            colour(in, op->rgba >> 8, (float)(op->rgba & 0xFF) / 255.0f);
+            in->prm[1] = op->size * px;
+            break;
+        }
         if (!(in = emit(c, -1, op->kind == HOP_DOT ? HUDM_DOT : op->flags & HOPF_SHADE ? HUDM_SHADE : HUDM_SOLID,
                         snap(op->r.x * px), snap(op->r.y * px), (float)tagpu_hud_edge(op->r.x, op->r.w, px),
                         (float)tagpu_hud_edge(op->r.y, op->r.h, px), op))) break;
@@ -581,7 +622,22 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
         in->prm[1] = hw;
         break;
     }
+    case HOP_SIDE: {
+        /* the composed column's top-left size x shade texels whole into the op's box, which the
+           stage snapped to whole device pixels, as a sprite cell is drawn */
+        const float sw = (float)HUD_SIDE_W, sh = (float)HUD_SIDE_H;
+        if (!(op->size > 0 && op->size <= sw && op->shade > 0 && op->shade <= sh)) break;
+        if (!(in = emit(c, HUD_TEX_SIDE, HUDM_PART, snap(op->r.x * px), snap(op->r.y * px),
+                        (float)tagpu_hud_edge(op->r.x, op->r.w, px), (float)tagpu_hud_edge(op->r.y, op->r.h, px), op))) break;
+        in->uv[0] = 0;
+        in->uv[1] = 0;
+        in->uv[2] = op->size / sw;
+        in->uv[3] = op->shade / sh;
+        colour(in, 0xFFFFFF, (float)(op->rgba & 0xFF) / 255.0f);
+        break;
+    }
     case HOP_CHART:
+        if (!c->ops->chart) break;
         if (!*charted) { chart_prepare(c); *charted = 1; }
         for (j = 0; j < s_nband; j++) {
             const BAND* bd = &s_band[j];
@@ -638,7 +694,7 @@ static void group_box(const B* c, int i0, int* x0, int* y0, int* x1, int* y1)
 
 /* group k's ops [i0, i1) drawn into its region; its composite at index `at` (-1 none) set. 0 when
    the region does not fit the attachment. */
-static int draw_group(B* c, const HUDOPS* ops, int k, int i0, int i1, int at, int* charted,
+static int draw_group(B* c, const HUDOPLIST* ops, int k, int i0, int i1, int at, int* charted,
                       HUDSHELF* sh, HUDLAYREG* g)
 {
     int j0 = c->n, i, x0, y0, x1, y1, w, h;
@@ -689,10 +745,36 @@ void tagpu_huddraw_begin(void)
     if (s_full) atlas_empty();
 }
 
+HUDOPLIST tagpu_huddraw_list(const HUDOPS* ops)
+{
+    HUDOPLIST l;
+    l.op = ops->op;
+    l.n = ops->n < HUD_MAXOP ? ops->n : HUD_MAXOP;
+    l.run = ops->run;
+    l.nrun = ops->nrun < HUD_MAXRUN ? ops->nrun : HUD_MAXRUN;
+    l.text = ops->text;
+    l.ntext = ops->ntext < HUD_TEXTMAX ? ops->ntext : HUD_TEXTMAX;
+    l.grp = ops->grp;
+    l.ngrp = ops->ngrp < HUD_MAXGRP ? ops->ngrp : HUD_MAXGRP;
+    l.chart = &ops->chart;
+    l.watch = -1;
+    return l;
+}
+
 int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, int layer, float px, int ox, int oy,
                         int w, int h, HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb,
                         int* nmain, int* nminst, HUDLAYREG* g, int* ng, HUDSHELF* shelf,
                         int* dropped, int* unfit)
+{
+    const HUDOPLIST l = tagpu_huddraw_list(ops);
+    return tagpu_huddraw_build_list(art, &l, layer, px, ox, oy, w, h, inst, cap, b, bcap, nb, nmain, nminst,
+                                    g, ng, shelf, dropped, unfit, NULL);
+}
+
+int tagpu_huddraw_build_list(const HUDART* art, const HUDOPLIST* ops, int layer, float px, int ox, int oy,
+                             int w, int h, HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb,
+                             int* nmain, int* nminst, HUDLAYREG* g, int* ng, HUDSHELF* shelf,
+                             int* dropped, int* unfit, int* watched)
 {
     B c;
     HUDOP none;
@@ -725,6 +807,7 @@ int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, int layer, float p
                 float a = op->grp && op->grp <= ops->ngrp ? ops->grp[op->grp - 1] : 1.0f;
                 if (op->grp > ops->ngrp) continue;
                 draw_op(&c, op, &charted);
+                if (i == ops->watch) c.watched = c.n - n0;
                 for (j = n0; j < c.n && a != 1.0f; j++) {
                     c.inst[j].rgba[0] *= a; c.inst[j].rgba[1] *= a; c.inst[j].rgba[2] *= a; c.inst[j].rgba[3] *= a;
                 }
@@ -756,5 +839,6 @@ int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, int layer, float p
     *shelf = sh;
     *nb = c.nb;
     *dropped = c.dropped;
+    if (watched) *watched = c.watched;
     return c.n;
 }

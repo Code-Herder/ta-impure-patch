@@ -12,24 +12,30 @@
 typedef struct {
     float ndc[4];       /* x0, y0, x1, y1 in clip space (y down: no viewport flip)            */
     float px[4];        /* the same, in device pixels: the dot's circle, the shade's box; a
-                           line's two ends; a drop shadow's box; a chart band's segments j0, j1
-                           and its column                                                     */
+                           line's two ends; a drop shadow's box; a ring's circle, unsnapped; a
+                           chart band's segments j0, j1 and its column                        */
     float uv[4];        /* u0, v0, u1, v1; a drop shadow's offset down, in u0 and u1          */
     float rgba[4];      /* premultiplied; a part's opacity in all four                        */
     float clip[4];      /* x0, y0, x1, y1 in device pixels; x1 < x0: none                     */
-    float prm[4];       /* mode (HUDM_*), the shade's or the drop's sigma or a line's half
-                           width in pixels, dim brightness, saturate                          */
+    float prm[4];       /* mode (HUDM_*), the shade's or the drop's sigma, a line's half
+                           width or a ring's depth in pixels, dim brightness, saturate        */
 } HUDINST;
 
-enum { HUDM_PART, HUDM_SOLID, HUDM_SHADE, HUDM_DOT, HUDM_GLYPH, HUDM_LINE, HUDM_CHART, HUDM_DROP };
+enum { HUDM_PART, HUDM_SOLID, HUDM_SHADE, HUDM_DOT, HUDM_GLYPH, HUDM_LINE, HUDM_CHART, HUDM_DROP, HUDM_RING };
 
 /* A run of instances drawn with one texture bound: a part's index, HUD_TEX_ATLAS,
-   HUD_TEX_CHART or HUD_TEX_LAYER. A fill samples nothing, so it joins whatever run it falls in
-   rather than breaking it -- except a HUD_TEX_LAYER run, which holds only groups' composites,
-   since the pass rescales its uv. */
-#define HUD_TEX_ATLAS (-2)
-#define HUD_TEX_CHART (-3)
-#define HUD_TEX_LAYER (-4)
+   HUD_TEX_CHART, HUD_TEX_LAYER, HUD_TEX_SPRITE (the wiki's sprite sheet, tagpu_wikistate.h) or
+   HUD_TEX_SIDE (the wiki stage's composed sidebar column, HUD_SIDE_W x HUD_SIDE_H RGBA8, the
+   same).
+   A fill samples nothing, so it joins whatever run it falls in rather than breaking it -- except
+   a HUD_TEX_LAYER run, which holds only groups' composites, since the pass rescales its uv. */
+#define HUD_TEX_ATLAS  (-2)
+#define HUD_TEX_CHART  (-3)
+#define HUD_TEX_LAYER  (-4)
+#define HUD_TEX_SPRITE (-5)
+#define HUD_TEX_SIDE   (-6)
+#define HUD_SIDE_W     128          /* WIKI_SIDE_W: the column's width                        */
+#define HUD_SIDE_H     1024         /* WIKI_SIDE_ROWS: the most rows a layout may have        */
 typedef struct { int tex, first, count; } HUDBATCH;
 
 /* A GROUP'S REGION OF THE LAYER IMAGE (tagpu_huddraw.c, THE GROUPS), in its pixels from its top
@@ -63,6 +69,35 @@ int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, int layer, float p
                         int w, int h, HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb,
                         int* nmain, int* nminst, HUDLAYREG* g, int* ng, HUDSHELF* shelf,
                         int* dropped, int* unfit);
+
+/* AN OP LIST BY POINTER AND COUNT: the arrays a build reads, which a HUDOPS holds at the replay
+   HUD's bounds (HUD_MAXOP) and another list of the same HUDOP/HUDRUN/text layout holds at its own
+   -- the in-game wiki's stage, WIKISTAGEOPS, at WIKI_MAXOP. Read only during the build. Every
+   index an op carries is checked against these counts: a text whose runs or bytes fall outside
+   them, a group past `ngrp` and a HOP_CHART with no `chart` draw nothing. */
+typedef struct {
+    const HUDOP*    op;
+    int             n;
+    const HUDRUN*   run;
+    int             nrun;
+    const char*     text;
+    int             ntext;
+    const float*    grp;        /* each group's opacity; NULL with ngrp 0: none              */
+    int             ngrp;
+    const HUDCHART* chart;      /* NULL: no chart                                            */
+    int             watch;      /* an op whose instances the build counts; -1: none          */
+} HUDOPLIST;
+
+/* `ops` as a list. */
+HUDOPLIST tagpu_huddraw_list(const HUDOPS* ops);
+
+/* tagpu_huddraw_build, of a list; `*watched` (NULL: not asked) the instances op `ops->watch`, one
+   of no group, was given on the attachment -- 0 when the cap or the batches had no room left for
+   it, or it draws nothing. */
+int tagpu_huddraw_build_list(const HUDART* art, const HUDOPLIST* ops, int layer, float px, int ox, int oy,
+                             int w, int h, HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb,
+                             int* nmain, int* nminst, HUDLAYREG* g, int* ng, HUDSHELF* shelf,
+                             int* dropped, int* unfit, int* watched);
 
 /* THE GLYPH ATLAS: one R8 coverage image. `gen` changes when it is emptied because a glyph did
    not fit; the rows [*y0, *y1) are the ones changed since tagpu_huddraw_atlas_sent last covered

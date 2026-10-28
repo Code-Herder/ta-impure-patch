@@ -49,6 +49,7 @@
    nothing, so two publishes of one tick must produce the same table. */
 #include <stdint.h>
 #include "tagpu_limits.h"   /* the effect pools' sizes: the tables hold every record */
+#include "tagpu_wikipk.h"   /* the in-game wiki's record and its part of the command record */
 
 /* One glyph of the marker font, as a self-contained one-glyph FONT OBJECT the
    engine's own blitter 0x4CCF60 accepts: [rows][0][yoff][code][u16 6][w][bits]
@@ -729,7 +730,8 @@ typedef struct TAGPU_PK_PART {
                                              fit this packet                */
 
 #define TAGPU_PK_TRUNC_HUD     0x800000u  /* the replay HUD's record          */
-#define TAGPU_PK_TRUNC_SWEEP   0x1000000u /* the sweep's items did not fit this
+#define TAGPU_PK_TRUNC_WIKI    0x1000000u /* the in-game wiki's record        */
+#define TAGPU_PK_TRUNC_SWEEP   0x2000000u /* the sweep's items did not fit this
                                              packet, or were more than its cap */
 
 /* ---- THE REPLAY HUD (tagpu_hudstate.c) ----------------------------------
@@ -1161,6 +1163,8 @@ typedef struct TAGPU_PACKET {
     /* ---- the replay HUD ---- */
     uint32_t hud_off, hud_len;        /* one TAGPU_PK_HUD; 0 = no recording plays */
     uint32_t hstat_off, hstat_len;    /* one TAGPU_PK_HUDSTAT; 0 = no stats window */
+    /* ---- the in-game wiki (tagpu_wikipk.h): its area is the packet's last ---- */
+    uint32_t wiki_off, wiki_len;      /* one TAGPU_PK_WIKI; 0 = the wiki cannot draw */
     uint32_t truncated;         /* TAGPU_PK_TRUNC_* bits: what did not fit      */
     uint32_t crc;               /* CRC-32 of the slot with these two fields as
                                    zero, under `tagpu_packet.check`; else 0     */
@@ -1259,6 +1263,7 @@ typedef struct TAGPU_CMD {
                                    drew at its level: a Jump ends there       */
     TAGPU_CMD_HUD hud;          /* the replay HUD's controls, a level         */
     TAGPU_CMD_SWEEP sweep;      /* the reclaim popup as drawn, a level        */
+    TAGPU_CMD_WIKI wiki;        /* the in-game wiki's controls, a level       */
     uint32_t crc;               /* the primitive's suffix, as above            */
     uint32_t tail_seq;
 } TAGPU_CMD;
@@ -1352,6 +1357,12 @@ static __inline const TAGPU_PK_HUD* tagpu_pk_hud(const TAGPU_PACKET* p)
 { return p->hud_len ? (const TAGPU_PK_HUD*)(const void*)((const unsigned char*)p + p->hud_off) : (const TAGPU_PK_HUD*)0; }
 static __inline const TAGPU_PK_HUDSTAT* tagpu_pk_hudstat(const TAGPU_PACKET* p)
 { return p->hstat_len ? (const TAGPU_PK_HUDSTAT*)(const void*)((const unsigned char*)p + p->hstat_off) : (const TAGPU_PK_HUDSTAT*)0; }
+/* the in-game wiki's record, or NULL: see TAGPU_PK_WIKI */
+static __inline const TAGPU_PK_WIKI* tagpu_pk_wiki(const TAGPU_PACKET* p)
+{ return p->wiki_len ? (const TAGPU_PK_WIKI*)(const void*)((const unsigned char*)p + p->wiki_off) : (const TAGPU_PK_WIKI*)0; }
+/* its stage, or NULL: carried only by a record of the whole length (TAGPU_PK_WIKI_HEAD) */
+static __inline const WIKISTAGEVIEW* tagpu_pk_wiki_stage(const TAGPU_PACKET* p)
+{ return p->wiki_len == sizeof(TAGPU_PK_WIKI) ? &tagpu_pk_wiki(p)->stage : (const WIKISTAGEVIEW*)0; }
 
 /* ---- lifetime ---- */
 /* DLL attach, before either thread exists — never lazily: reserves the slots

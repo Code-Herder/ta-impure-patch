@@ -139,6 +139,9 @@
 #include "tagpu_vk_gui.h"
 #include "tagpu_vk_fps.h"
 #include "tagpu_vk_hud.h"
+#include "tagpu_wikistate.h"
+#include "tagpu_wikiworld.h"
+#include "tagpu_scene_wiki.h"
 #include "tagpu_vk_scaffold.h"
 #include "tagpu_vk_surf.h"
 #include "tagpu_vk_world.h"
@@ -432,6 +435,15 @@ static int s_abSlot1;       /* 0 = nothing pending, else the slot index + 1 */
 enum { LL_NONE = 0, LL_LOST, LL_ASK };
 static int s_lostLike;
 static const char* s_abPath;/* the file the pending capture belongs in         */
+
+/* the milliseconds since `t0`, for the wiki stage's render-thread time (tagpu_wikiworld_drawn) */
+static double ms_since(LARGE_INTEGER t0)
+{
+    LARGE_INTEGER t1, f;
+    QueryPerformanceCounter(&t1);
+    QueryPerformanceFrequency(&f);
+    return f.QuadPart > 0 ? (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)f.QuadPart : 0.0;
+}
 
 /* Give the staging buffer back at a point where the device is idle. The FILE is
    not written here -- a lane that is coming down or rebuilding its swapchain
@@ -1886,6 +1898,11 @@ static void vk_down(void)
         tagpu_vk_mark_down(&s_pass);
         tagpu_vk_surf_down(&s_pass);
         tagpu_vk_world_down(&s_pass);
+        /* the wiki's instances of the world passes (tagpu_scene.h), behind the same wait */
+        tagpu_vkw_unit_down(&s_pass);
+        tagpu_vkw_feat_down(&s_pass);
+        tagpu_vkw_terr_down(&s_pass);
+        tagpu_vkw_world_down(&s_pass);
         /* AFTER THE PASSES, because a pass owns the JOBS and the restorer owns
            what they are drawn with: each `_down` above gives its job back, and
            this then gives back the pipelines, the activations and the render
@@ -2422,7 +2439,9 @@ static int vk_present(void)
         tagpu_vk_fx_down_owed() || tagpu_vk_scaffold_down_owed() ||
         tagpu_vk_shadow_down_owed() || tagpu_vk_unit_down_owed() ||
         tagpu_vk_mark_down_owed() || tagpu_vk_surf_down_owed() ||
-        tagpu_vk_gui_down_owed() || tagpu_vk_world_down_owed()) {
+        tagpu_vk_gui_down_owed() || tagpu_vk_world_down_owed() ||
+        tagpu_vkw_terr_down_owed() || tagpu_vkw_feat_down_owed() || tagpu_vkw_unit_down_owed() ||
+        tagpu_vkw_world_down_owed()) {
         r = vkDeviceWaitIdle ? vkDeviceWaitIdle(s_vk.dev) : VK_ERROR_INITIALIZATION_FAILED;
         if (r != VK_SUCCESS) {
             s_lostLike = r == VK_ERROR_DEVICE_LOST ? LL_LOST : LL_NONE;
@@ -2444,6 +2463,10 @@ static int vk_present(void)
         if (tagpu_vk_surf_down_owed())     tagpu_vk_surf_down_paid(&s_pass);
         if (tagpu_vk_gui_down_owed())      tagpu_vk_gui_down_paid(&s_pass);
         if (tagpu_vk_world_down_owed())    tagpu_vk_world_down_paid(&s_pass);
+        if (tagpu_vkw_terr_down_owed())    tagpu_vkw_terr_down_paid(&s_pass);
+        if (tagpu_vkw_feat_down_owed())    tagpu_vkw_feat_down_paid(&s_pass);
+        if (tagpu_vkw_unit_down_owed())    tagpu_vkw_unit_down_paid(&s_pass);
+        if (tagpu_vkw_world_down_owed())   tagpu_vkw_world_down_paid(&s_pass);
     }
 
     r = vkAcquireNextImageKHR(s_vk.dev, s_vk.sc, 1000000000ull,
@@ -2525,6 +2548,14 @@ static int vk_present(void)
     {
         int draw_world = 0;
         uint32_t tw = 0, th = 0;    /* the world target's extent, when there is one */
+        /* the wiki's 3D stage (tagpu_wikiworld.h): its passes prepared, whether its image is drawn
+           whole this frame, its target's extent and the render-thread time it took */
+        int wiki_on = 0, wiki_world = 0, wiki_terr = 0, wiki_feat = 0, wiki_unit = 0, wiki_image = 0;
+        int wiki_drawn = 0;
+        WIKIWORLDWANT wiki_want;
+        uint32_t wtw = 0, wth = 0;
+        double wiki_ms = 0.0;
+        LARGE_INTEGER wiki_t0;
         int draw_fps = 0, draw_scaf = 0, draw_feat = 0, draw_terr = 0, draw_fx = 0;
         int draw_gui = 0, draw_hud = 0, gui_drew = 0;
         int draw_mark = 0, ab_mark = 0;
@@ -2653,6 +2684,36 @@ static int vk_present(void)
                layer over the UI (the record, below). It claims no A/B frame, so a capture of the
                swapchain image with it drawn stands down; a world capture reads the world target,
                which it never draws into (the census below). */
+            /* THE WIKI'S 3D STAGE, BEFORE THE HUD'S PASS BUILDS THE WIKI. Its own world target
+               first, for the world's reason above (the extent its passes record into), then its
+               terrain and its features, each from the hand-over tagpu_wikiworld_frame published
+               for this frame. WHETHER THE IMAGE IS DRAWN IS DECIDED HERE, ONCE: whole -- every
+               pass the stage expects prepared on this frame -- or not at all, and the wiki layer is
+               built for that answer (tagpu_wikistate_image): R0, the image and R2, or R0 and R1.
+               None of it puts a pixel in the world target the A/B reads; the composite is one
+               more draw of the HUD's pass (draw_hud, below). */
+            /* THE UNITS AFTER THE GROUND, the game's order: the unit pass's upload (its vertex
+               buffers, poses and texels -- and the atlas upload it owes on a frame the units were
+               withheld, so a frame the allowance refused still moves the atlas on), then its
+               prepare, only for a hand-over that carries every record. */
+            memset(&wiki_want, 0, sizeof wiki_want);
+            wiki_on = tagpu_wikiworld_wants(s_pass.frame, &wiki_want);
+            if (wiki_on) {
+                QueryPerformanceCounter(&wiki_t0);
+                wiki_world = tagpu_vkw_world_prepare(&s_pass, cb, fi, &wtw, &wth);
+                if (wiki_world) {
+                    wiki_terr = tagpu_vkw_terr_prepare(&s_pass, cb, fi);
+                    wiki_feat = tagpu_vkw_feat_prepare(&s_pass, cb, fi);
+                    if (wiki_want.unit) {
+                        tagpu_vkw_unit_upload(&s_pass, cb, fi);
+                        if (wiki_want.unitWhole) wiki_unit = tagpu_vkw_unit_prepare(&s_pass, cb, fi);
+                    }
+                }
+                wiki_image = wiki_world && (!wiki_want.terr || wiki_terr) && (!wiki_want.feat || wiki_feat) &&
+                             (!wiki_want.unit || wiki_unit);
+                wiki_ms += ms_since(wiki_t0);
+            }
+            tagpu_wikistate_image(s_pass.frame, wiki_image, wiki_want.ground, wiki_want.resolved);
             draw_hud = tagpu_vk_hud_prepare(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             draw_gui = tagpu_vk_gui_prepare(&s_pass, cb, fi);
             ab_gui = tagpu_vk_gui_ab_frame();
@@ -2733,6 +2794,21 @@ static int vk_present(void)
                           draw_terr, draw_feat, draw_unit, draw_fx, draw_mark);
             tagpu_vk_world_end(&s_pass, cb);
         }
+        /* THE WIKI'S STAGE, INTO ITS OWN TARGET, for the same reason and in the game's layer
+           order: the ground, the features over it, the units, then the ghosts. Only for an image
+           drawn whole. The ghosts' call ends the unit pass's frame, so both or neither. */
+        if (wiki_image) {
+            QueryPerformanceCounter(&wiki_t0);
+            tagpu_vkw_world_begin(&s_pass, cb, fi);
+            if (wiki_terr) tagpu_vkw_terr_record(&s_pass, cb, fi, wtw, wth);
+            if (wiki_feat) tagpu_vkw_feat_record(&s_pass, cb, fi, wtw, wth);
+            if (wiki_unit) {
+                tagpu_vkw_unit_record(&s_pass, cb, fi, wtw, wth);
+                tagpu_vkw_unit_record_ghosts(&s_pass, cb, fi, wtw, wth);
+            }
+            tagpu_vkw_world_end(&s_pass, cb);
+            wiki_ms += ms_since(wiki_t0);
+        }
 
         if (s_vk.rp && s_vk.fb[idx]) {
             VkClearValue cv[2];
@@ -2804,6 +2880,26 @@ static int vk_present(void)
                         rect_meet(&pan, &top))
                         tagpu_vk_gui_record_whole(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height, pan);
                     tagpu_vk_gui_record_sharp(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height, top);
+                }
+                /* THE IN-GAME WIKI OVER ALL OF IT, AND THE CURSOR BACK OVER THE WIKI. Its button and
+                   window are the last layer of the HUD's pass; the cursor is then this frame's cursor
+                   quad drawn once more, alone, when the wiki says the player's pointer is to be shown
+                   (tagpu_wikistate_cursor) -- the same quad the composite drew, so outside the window
+                   it lands on its own pixels. */
+                /* THE STAGE'S 3D IMAGE BETWEEN THE WIKI'S TWO CALLS: the page and the stage's
+                   ops under it, the image composited into its rect (tagpu_wikistage_image), then
+                   the stage's ops over it -- draws in record order in one render pass. */
+                {
+                    int wdrew = tagpu_vk_hud_record_wiki(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
+                    if (wiki_image) {
+                        QueryPerformanceCounter(&wiki_t0);
+                        tagpu_vkw_world_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
+                        wiki_ms += ms_since(wiki_t0);
+                        wiki_drawn = 1;
+                    }
+                    wdrew |= tagpu_vk_hud_record_wiki_over(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
+                    if (wdrew && gui_drew && tagpu_wikistate_cursor(s_pass.frame))
+                        tagpu_vk_gui_record_cursor(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
                 }
             }
             if (draw_scaf)
@@ -2920,6 +3016,25 @@ static int vk_present(void)
             s_abSlot1 = (int)fi + 1;
             s_abPath = abpath;
         }
+        /* THE WIKI'S SHOT (tagpu_wiki.shot), through the same one capture buffer, and only when
+           no capture holds it: `s_abSlot1` is 0 exactly while no capture is recorded and not yet
+           written, so the shot is never refused for a capture in flight and its file, unlinked by
+           tagpu_wikiworld_shot_due, can only be written by this arming's tagpu_vk_shot_finish.
+           It reads the wiki's target -- the stage before the Gamma curve, at gw*ss -- on a frame
+           whose image was composited whole. */
+        if (wiki_drawn && !s_abSlot1 && tagpu_wikiworld_shot_due(s_pass.frame)) {
+            VkImage wimg = VK_NULL_HANDLE;
+            VkFormat wfmt = VK_FORMAT_UNDEFINED;
+            uint32_t ww = 0, wh = 0;
+            if (tagpu_vkw_world_shot(fi, &wimg, &ww, &wh, &wfmt) &&
+                tagpu_vk_shot_record(&s_pass, cb, wimg, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                     ww, wh, wfmt)) {
+                s_abSlot1 = (int)fi + 1;
+                s_abPath = WIKIWORLD_SHOT;
+                tagpu_wikiworld_shot_armed(s_pass.frame, ww, wh);
+            }
+        }
+        if (wiki_on) tagpu_wikiworld_drawn(s_pass.frame, wiki_drawn, wiki_ms);
     }
     /* BOTTOM_OF_PIPE, paired with the TOP_OF_PIPE above: between them lies
        every stage of everything this buffer recorded, which is this lane's
@@ -2983,6 +3098,10 @@ static void passes_down(void)
     tagpu_vk_unit_down(&s_pass);
     tagpu_vk_surf_down(&s_pass);
     tagpu_vk_world_down(&s_pass);
+    tagpu_vkw_unit_down(&s_pass);
+    tagpu_vkw_feat_down(&s_pass);
+    tagpu_vkw_terr_down(&s_pass);
+    tagpu_vkw_world_down(&s_pass);
     /* AND ON A RESIZE TOO, though the device survives one: the restorer's
        staging and its timestamp pairs are sized by `d->slots`, which is
        `s_vk.nimg` and can change under a swapchain rebuild. The passes above
