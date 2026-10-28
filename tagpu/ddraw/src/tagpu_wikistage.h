@@ -27,6 +27,8 @@
 #define WIKISTAGE_MAP     128                   /* cells a side                               */
 #define WIKISTAGE_VENTS   256
 #define WIKISTAGE_UNITS   128
+#define WIKISTAGE_POSE    4096                  /* primitives posed by scripts, all units      */
+#define WIKISTAGE_PIECES  256                   /* one posed model's: WIKI3D_MAXPIECE          */
 #define WIKISTAGE_SITES   PLACE_MAX_SITES       /* a gesture never has more                   */
 #define WIKISTAGE_QUEUED  256
 #define WIKISTAGE_LINES   512
@@ -43,6 +45,7 @@
 #define WIKISTAGE_TRUNC_LINES   0x040u
 #define WIKISTAGE_TRUNC_CAPTION 0x080u
 #define WIKISTAGE_TRUNC_LABEL   0x100u          /* a label or a type's name, cut at a character */
+#define WIKISTAGE_TRUNC_POSE    0x200u          /* a unit's posed model: the unit draws at rest */
 
 typedef struct {
     float   x, z;                       /* its centre, world units                         */
@@ -57,7 +60,18 @@ typedef struct {
                                            (tagpu_wikiside.h): the float above may round
                                            across a whole unit                              */
     char    label[WIKISTAGE_LABEL];     /* its label, else its type's name                 */
+    uint16_t pose_at, pose_n;           /* its posed model: `pose_n` primitives of the
+                                           view's `pose` from `pose_at`, in the posed order;
+                                           pose_n 0 draws it at rest (no script poses it)  */
 } WIKISTAGEUNIT;
+/* ONE PRIMITIVE OF A POSED MODEL, as the unit's script left it (tagpu_cobvm.h): the MOVE delta in
+   16.16, the TURN about x, y, z with 65536 a whole turn, and the flags TAGPU_COBVM_VISIBLE,
+   _CACHED and _SHADED -- the fields tagpu_native.c `posed_pose` takes of a TAGPU_PK_PIECE */
+typedef struct {
+    int32_t  pos[3];
+    uint16_t turn[3];
+    uint16_t flags;
+} WIKISTAGEPIECE;
 
 /* the ghost, a gesture's site or a queued site: a building's centre and footprint */
 typedef struct {
@@ -133,6 +147,8 @@ typedef struct {
     int16_t        ntype;
     char           type[WIKI_MAX_DEFS][WIKISTAGE_LABEL];    /* the types' names: a queued
                                            site's and the ghost's label                    */
+    uint16_t       npose;
+    WIKISTAGEPIECE pose[WIKISTAGE_POSE];                    /* the units' posed models     */
 } WIKISTAGEVIEW;
 
 /* THE COPY. `v` (NULL for none) and the entry `e` it was made from into `out`, every array to its
@@ -142,6 +158,12 @@ typedef struct {
    (tagpu_wikisim_init), kept as the view's while its sidebar is on. Returns the
    WIKISTAGE_TRUNC_* bits, which are also out->trunc. */
 uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIENTRY* e, int layout_src);
+
+/* THE POSES, after the copy: each copied unit's posed model from the simulation `s` the view was
+   taken of (tagpu_wikisim_model), into `out`'s pose pool in unit order. A unit whose model does not
+   fit the pool, or whose primitives are more than WIKI3D's bound, is left at rest
+   (WIKISTAGE_TRUNC_POSE); the copy left every unit at rest first. Returns the bits it added. */
+uint32_t tagpu_wikistage_pose(WIKISTAGEVIEW* out, const WIKISIM* s);
 
 /* ---- the picture ---------------------------------------------------------------------------- */
 

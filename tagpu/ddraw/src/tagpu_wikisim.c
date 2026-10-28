@@ -2197,6 +2197,13 @@ static WIKIVSITE vsite(const WIKISIM* s, int t, int ox, int oz)
     return v;
 }
 
+const unsigned char* tagpu_wikisim_model(const WIKISIM* s, int i, int* nprim)
+{
+    *nprim = 0;
+    if (!s->cob || i < 0 || i >= s->nunit || !s->unit[i]->cob) return NULL;
+    return tagpu_wikicob_model(s->cob, s->unit[i]->cob, nprim);
+}
+
 const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s)
 {
     WIKIVIEW* v = &s->view;

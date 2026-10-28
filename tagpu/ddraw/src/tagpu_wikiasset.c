@@ -1471,6 +1471,13 @@ static void unit_script(LOADER* L, const unsigned char* cob, uint32_t n, uint32_
     nprim = piece_orders(&L->a, root, walk, &np, prim, pname);
     if (nprim < 0 || tagpu_cobscan_posed((const char*)cob, n, 0, prim, pname, nprim) < 0) return;
     for (k = 0; k < nprim; k++) u->visible[k] = rd32((const unsigned char*)prim[k] + O_NVERT) >= 3;
+    for (k = 0; k < np; k++) {
+        int j;
+        u->posed_of[k] = -1;
+        for (j = 0; j < nprim; j++)
+            if (prim[j] == walk[k]) { u->posed_of[k] = (int16_t)j; break; }
+    }
+    u->nwalk = np;
     u->pieces = nprim;
 }
 

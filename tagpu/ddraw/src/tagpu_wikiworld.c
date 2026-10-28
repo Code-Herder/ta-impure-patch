@@ -46,6 +46,7 @@
 #include "tagpu_render3do.h"
 #include "tagpu_model3do.h"
 #include "tagpu_scene_wiki.h"
+#include "tagpu_posemath.h"
 #include "tagpu_wikiworld.h"
 #include "tagpu_wikiscene.h"
 #include "tagpu_wikistate.h"
@@ -417,10 +418,101 @@ static void types_build(const WIKI3D* a, const WIKISTAGEVIEW* v, int entry, cons
    keeps the last one's. */
 static unsigned s_gfx;
 
-/* One record's posed draw: the type's run baked, the rest pose turned onto its facing, and the
-   record's fields as tagpu_native.c hands a unit or a ghost to the posed program. 0 when the
-   bake refused it this frame. */
-static int unit_one(const WSCENEMODEL* m, const TYPERUN* r)
+/* THE SCRIPT'S POSE of a unit, `pose` its posed model (the view's WIKISTAGEPIECEs, `npose` of them
+   in the posed order), in the stage's piece order: tagpu_native.c `posed_pose`'s composition --
+   P = parent * T(rest offset from the parent + MOVE) * R(TURN) down the tree, the root's
+   translation unturned and its rotation folded under the facing -- with the stage's facing
+   matrix `rot` about the root's rest point r0 standing for the body turn, so a script that poses
+   nothing draws the rest pose. A piece the walk cannot place, or that the posed order does not
+   hold, keeps the rest pose turned onto the facing. Each piece's matrix, shade and visibility word
+   in posed_pose's words: hidden (flag bit 0 clear) all zeros and 0, visible and cached 3, visible
+   dont-cache 1; shaded by bit 2 once any visible piece carries it. */
+static void pose_compose(const WIKI3DUNIT* u, const TAGPU_PBGEOM* bg, const WIKISTAGEPIECE* pose,
+                         int npose, const float* rot, float* out, unsigned char* shaded,
+                         unsigned char* pvis)
+{
+    static float acc[TAGPU_PBMAXPIECE][12];   /* render thread only */
+    static unsigned char done[TAGPU_PBMAXPIECE];
+    static const unsigned short rest_turn[3] = { 0, 0, 0 };
+    const float* r0 = bg->restOff[0];
+    int i, k, pass, left = bg->nparts, any_shade = 0;
+    for (i = 0; i < bg->nparts; i++) {
+        const int j = u->posed_of[i];
+        done[i] = 0;
+        if (j >= 0 && j < npose && (pose[j].flags & 1) && (pose[j].flags & 4)) any_shade = 1;
+    }
+    for (pass = 0; pass < bg->nparts && left > 0; pass++)
+        for (i = 0; i < bg->nparts; i++) {
+            const short par = bg->parent[i];
+            const int j = u->posed_of[i];
+            const WIKISTAGEPIECE* p = j >= 0 && j < npose ? &pose[j] : NULL;
+            float d[3], loc[12];
+            if (done[i] || (par >= 0 && (par >= bg->nparts || !done[par]))) continue;
+            for (k = 0; k < 3; k++)
+                d[k] = (par >= 0 ? bg->restOff[i][k] - bg->restOff[par][k] : 0.0f) +
+                       (p ? (float)p->pos[k] / 65536.0f : 0.0f);
+            piece_local(p ? p->turn : rest_turn, d, loc);
+            if (par >= 0) m43_mul(acc[par], loc, acc[i]);
+            else {
+                /* the root: its rest point turned onto the facing about r0, its MOVE unturned
+                   (posed_pose's T(off + move) outside the body turn) */
+                float face[12], rel[3];
+                for (k = 0; k < 3; k++) rel[k] = bg->restOff[i][k] - r0[k];
+                for (k = 0; k < 3; k++) {
+                    face[k*4+0] = rot[k*4+0];
+                    face[k*4+1] = rot[k*4+1];
+                    face[k*4+2] = rot[k*4+2];
+                    face[k*4+3] = rot[k*4+0]*rel[0] + rot[k*4+1]*rel[1] + rot[k*4+2]*rel[2] + r0[k] + d[k];
+                }
+                m43_mul(face, loc, acc[i]);
+                for (k = 0; k < 3; k++) acc[i][k*4+3] = face[k*4+3];
+            }
+            done[i] = 1;
+            left--;
+        }
+    for (i = 0; i < bg->nparts; i++) {
+        const int j = u->posed_of[i];
+        const unsigned fl = j >= 0 && j < npose ? pose[j].flags : 7u;
+        float* o = out + (size_t)i * 12;
+        if (!done[i]) {
+            float rel[3];
+            for (k = 0; k < 3; k++) rel[k] = bg->restOff[i][k] - r0[k];
+            for (k = 0; k < 3; k++) {
+                acc[i][k*4+0] = rot[k*4+0];
+                acc[i][k*4+1] = rot[k*4+1];
+                acc[i][k*4+2] = rot[k*4+2];
+                acc[i][k*4+3] = rot[k*4+0]*rel[0] + rot[k*4+1]*rel[1] + rot[k*4+2]*rel[2] + r0[k];
+            }
+        }
+        if (fl & 1) memcpy(o, acc[i], 12 * sizeof *o);
+        else        memset(o, 0, 12 * sizeof *o);
+        shaded[i] = (unsigned char)(any_shade ? (fl & 4) != 0 : 1);
+        pvis[i] = (unsigned char)(!(fl & 1) ? 0 : (fl & 2) ? 3 : 1);
+    }
+}
+
+/* the posed model the view carries for record `m`'s unit, *n its primitives; NULL for a ghost or a
+   unit drawn at rest. DATA from the packet: its slot, offset and count are bounded by the view's
+   own counts, and the count must be the type's primitive count and its run the walk the posed
+   order was matched against (WIKI3DUNIT posed_of). */
+static const WIKISTAGEPIECE* pose_of(const WIKISTAGEVIEW* v, const WSCENEMODEL* m, const WIKI3DUNIT* u,
+                                     const TYPERUN* r, int* n)
+{
+    const WIKISTAGEUNIT* vu;
+    *n = 0;
+    if (!v || m->ghost || m->slot < 0 || m->slot >= v->nunit || m->slot >= WIKISTAGE_UNITS) return NULL;
+    vu = &v->unit[m->slot];
+    if (!vu->pose_n || vu->pose_n != u->pieces || u->nwalk != r->np || v->npose > WIKISTAGE_POSE ||
+        vu->pose_at > v->npose || vu->pose_n > v->npose - vu->pose_at)
+        return NULL;
+    *n = vu->pose_n;
+    return &v->pose[vu->pose_at];
+}
+
+/* One record's posed draw: the type's run baked, its script's pose -- or the rest pose -- turned
+   onto its facing, and the record's fields as tagpu_native.c hands a unit or a ghost to the posed
+   program. 0 when the bake refused it this frame. */
+static int unit_one(const WSCENEMODEL* m, const TYPERUN* r, const WIKISTAGEVIEW* v)
 {
     static TAGPU_PK_PIECE s_pc[TAGPU_PBMAXPIECE];
     static float s_pose[TAGPU_PBMAXPIECE * 12];
@@ -429,9 +521,10 @@ static int unit_one(const WSCENEMODEL* m, const TYPERUN* r)
     const WIKI3DUNIT* u = r->u;
     const TAGPU_PBGEOM* bg;
     const TAGPU_PBMAT* bm;
+    const WIKISTAGEPIECE* pose;
     TAGPU_PDUNIT q;
     float rot[12];
-    int i, k;
+    int i, k, npose;
     if (!u || r->np <= 0) return 0;
     for (i = 0; i < r->np; i++) {
         memset(&s_pc[i], 0, sizeof s_pc[i]);
@@ -455,7 +548,9 @@ static int unit_one(const WSCENEMODEL* m, const TYPERUN* r)
     rot[0] = m->cs;  rot[2] = m->sn;
     rot[5] = 1.0f;
     rot[8] = -m->sn; rot[10] = m->cs;
-    for (i = 0; i < bg->nparts; i++) {
+    pose = pose_of(v, m, u, r, &npose);
+    if (pose) pose_compose(u, bg, pose, npose, rot, s_pose, s_shaded, s_pvis);
+    else for (i = 0; i < bg->nparts; i++) {
         float* o = s_pose + (size_t)i * 12;
         const float* r0 = bg->restOff[0];
         float rel[3];
@@ -515,7 +610,7 @@ static int unit_one(const WSCENEMODEL* m, const TYPERUN* r)
    allowance frame and the shade calibration, then the two windows -- the units', the ghosts'.
    Returns 1 when every record was handed over, 0 when the bake refused one (its texels not yet
    painted): the seam then does not draw this frame's hand-over (tagpu_wikiworld_wants). */
-static int units_frame(const TAGPU_FRAME* f, int nrec, int nunit, int gw, int gh, int ss)
+static int units_frame(const TAGPU_FRAME* f, const WIKISTAGEVIEW* v, int nrec, int nunit, int gw, int gh, int ss)
 {
     TAGPU_PDVIEW pv;
     int i, refused = 0;
@@ -543,12 +638,12 @@ static int units_frame(const TAGPU_FRAME* f, int nrec, int nunit, int gw, int gh
     pv.shNeutral = tagpu_r3d_shade_neutral();
     if (nunit) {
         tagpu_posedraw_begin(&pv);
-        for (i = 0; i < nunit; i++) refused += !unit_one(&s_rec[i], &s_run[s_rec[i].type]);
+        for (i = 0; i < nunit; i++) refused += !unit_one(&s_rec[i], &s_run[s_rec[i].type], v);
         tagpu_posedraw_end();
     }
     if (nrec > nunit) {
         tagpu_posedraw_begin_ghost(&pv);
-        for (i = nunit; i < nrec; i++) refused += !unit_one(&s_rec[i], &s_run[s_rec[i].type]);
+        for (i = nunit; i < nrec; i++) refused += !unit_one(&s_rec[i], &s_run[s_rec[i].type], v);
         tagpu_posedraw_end();
     }
     s_nRefused += refused != 0;
@@ -617,7 +712,7 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     s_wantTerr = s_ground;
     s_wantFeat = s_ground && s_scene.nshadow + s_scene.nbody > 0;
     s_wantUnit = nrec > 0;
-    s_unitWhole = units_frame(f, nrec, nunit, gw, gh, ss) && !s_noUnits;
+    s_unitWhole = units_frame(f, v, nrec, nunit, gw, gh, ss) && !s_noUnits;
     s_nRec += (unsigned)nrec;
     s_nUnitFrames++;
     if (s_ground) {

@@ -155,6 +155,12 @@ typedef struct {
     uint32_t    nscript;
     int         pieces;
     uint8_t     visible[WIKI3D_MAXPIECE];
+    /* THE STAGE'S PIECE ORDER AGAINST THE POSED ONE: node g of tagpu_model_walk's walk (`nwalk`
+       nodes, the order the stage bakes and draws) is posed primitive posed_of[g], -1 for a node
+       the posed order does not hold. Set with `pieces`; the stage poses a unit only when its run
+       has `nwalk` nodes, and bounds each entry by the unit's primitive count. */
+    int         nwalk;
+    int16_t     posed_of[WIKI3D_MAXPIECE];
 } WIKI3DUNIT;
 
 typedef struct {

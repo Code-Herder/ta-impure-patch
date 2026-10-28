@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "tagpu_cobvm.h"
 #include "tagpu_wikistage.h"
 #include "tagpu_wikiside.h"
 
@@ -81,6 +82,7 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
     out->nvent = out->nunit = out->nsite = out->nqueued = out->nline = 0;
     out->has_ghost = out->has_drag = out->has_caption = 0;
     out->ntype = 0;
+    out->npose = 0;
     out->has_side = 0;
     out->layout_src = WIKISTAGE_LAYOUT_NONE;
     memset(&out->side, 0, sizeof out->side);
@@ -126,6 +128,7 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
         d->selected = (uint8_t)(s->selected != 0);
         d->tx = whole16(s->x);
         d->tz = whole16(s->z);
+        d->pose_at = d->pose_n = 0;
         if (cut(d->label, sizeof d->label, name)) t |= WIKISTAGE_TRUNC_LABEL;
     }
     out->nunit = (int16_t)n;
@@ -893,4 +896,29 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
         }
     }
     return out->n;
+}
+
+uint32_t tagpu_wikistage_pose(WIKISTAGEVIEW* out, const WIKISIM* s)
+{
+    uint32_t t = 0;
+    int i, k;
+    for (i = 0; i < out->nunit; i++) {
+        WIKISTAGEUNIT* d = &out->unit[i];
+        int n;
+        const unsigned char* m = tagpu_wikisim_model(s, i, &n);
+        if (!m || n <= 0) continue;
+        if (n > WIKISTAGE_PIECES || n > WIKISTAGE_POSE - out->npose) { t |= WIKISTAGE_TRUNC_POSE; continue; }
+        for (k = 0; k < n; k++) {
+            const unsigned char* p = m + TAGPU_COBVM_PRIM_BASE + (size_t)k * TAGPU_COBVM_PRIM_BYTES;
+            WIKISTAGEPIECE* q = &out->pose[out->npose + k];
+            memcpy(q->pos, p + TAGPU_COBVM_PRIM_POS, sizeof q->pos);
+            memcpy(q->turn, p + TAGPU_COBVM_PRIM_TURN, sizeof q->turn);
+            memcpy(&q->flags, p + TAGPU_COBVM_PRIM_FLAGS, sizeof q->flags);
+        }
+        d->pose_at = out->npose;
+        d->pose_n = (uint16_t)n;
+        out->npose = (uint16_t)(out->npose + n);
+    }
+    out->trunc |= t;
+    return t;
 }

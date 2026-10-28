@@ -385,6 +385,11 @@ void tagpu_wikisim_step(WIKISIM* s);
 /* The view as it stands; it and its arrays hold until the next call on `s`. */
 const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s);
 
+/* The posed model of the view's unit `i` (tagpu_wikicob_model: TAGPU_COBVM_MODEL_BYTES(*nprim)
+   bytes, the primitives in the posed order), NULL for a unit no script poses -- none run, its type
+   quarantined, or `i` not a unit. Valid until the next call on `s`. */
+const unsigned char* tagpu_wikisim_model(const WIKISIM* s, int i, int* nprim);
+
 /* A unit's orders by id into `*o`, valid until the next call on `s`, and their count; -1 when
    there is no such unit. At most PLACE_LIST_CAP: every append stops there. */
 int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
