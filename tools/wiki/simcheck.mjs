@@ -417,11 +417,12 @@ const BUILDSHAPES = {
   ringqueued(r, d, ok) {
     // the near solar collector is queued with the cursor at (200, 280): cells 10..14 x 15..19 for stock's 5 x 5
     const near = cellsAt(200, 280, r.fp('ARMSOLAR')[0]), c = downs(d, 'lmb')[2], p = r.frames[c - 1], want = ringOf(2, near);
-    ok(builds(p.o.ck).some(b => b.type === r.ty('ARMSOLAR') && same(b.c, near.slice(0, 2))) && !p.v.units.some(u => u.type === r.ty('ARMSOLAR') && u.id !== 'sol'),
+    // the demo's own builder `b`, selected, far from both solar collectors
+    ok(builds(p.o.b).some(b => b.type === r.ty('ARMSOLAR') && same(b.c, near.slice(0, 2))) && !p.v.units.some(u => u.type === r.ty('ARMSOLAR') && u.id !== 'sol'),
       `the solar collector at ${key(near.slice(0, 2))} is queued and not started, nor the far one`);
     ok(p.v.shape === 'ring' && same(preview(p), want), `Shift+Ctrl over it previews its ring (${show(preview(p))})`);
-    const q = builds(r.frames[c + 3].o.ck);
-    ok(same(added(r, c + 3), want) && q.length === 2 + want.length && q[0].type === r.ty('ARMSOLAR') && q[1].type === r.ty('ARMSOLAR'),
+    const q = builds(r.frames[c + 3].o.b);
+    ok(same(added(r, c + 3, 'b'), want) && q.length === 2 + want.length && q[0].type === r.ty('ARMSOLAR') && q[1].type === r.ty('ARMSOLAR'),
       'the click queued the ring after the two solar collectors');
   },
   toggle(r, d, ok) {
@@ -1002,6 +1003,12 @@ function expectedLock(entry, d, casting) {
   const b = d.inputs.map((e, i) => [e, i]).sort((x, y) => x[0].at - y[0].at || x[1] - y[1]).map(p => p[0]).find(e => off.includes(e.build));
   return b ? { t: b.at, type: b.build } : null;
 }
+/* THE TURNED-OFF RULE (decision 24): an entry whose own `lockedIn` names the pack's mod is shown in that mod under
+   the "Turned off in this mod" badge (wiki.js `locked`, the same list and the same name), which already tells the
+   player its demos do not apply there. Its demos still play, and must play to their end without being refused, but
+   their claims are not checked in that mod. The rule reads the entry's list alone, so it says nothing about a mod
+   the entry does not name, and nothing without a pack: the fixture runs check every claim. */
+const turnedOff = entry => !!PACK && Array.isArray(entry.lockedIn) && entry.lockedIn.includes(PACK.mod);
 // what a frame shows, for comparing two plays of one demo
 const frameKey = f => JSON.stringify([f.t, f.v, f.o]);
 
@@ -1015,15 +1022,18 @@ const ids = tree.tree.flatMap(leaves);
 let failed = 0;
 const tally = {};
 for (const c of contexts()) {
-  tally[c.label] = { pass: 0, fail: 0, locked: [] };
+  tally[c.label] = { pass: 0, fail: 0, locked: [], off: [] };
   for (const id of ids) {
     const entry = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/entries/${id}.json`, 'utf8'));
     for (const d of entry.demos) {
       const notes = [], ok = (cond, what) => notes.push([!!cond, what]), lock = expectedLock(entry, d, c.ctx.casting);
+      const off = turnedOff(entry);
       try {
         const r = run(entry, d, c.layout, c.ctx);
         if (TRACE) console.log(`  ${d.id} log:`, r.log.map(e => `${e.t} ${e.what} ${e.type}@${e.ox},${e.oz}`).join('; '));
-        if (lock) {
+        if (off) {
+          ok(r.sim.done, `played to its end (tick ${r.last.t})`);
+        } else if (lock) {
           ok(r.sim.done && r.last.t === lock.t && r.last.v.locked === lock.type,
             `stops on tick ${lock.t} under the badge, ${lock.type} unbound (tick ${r.last.t}, locked ${r.last.v.locked})`);
           ok(r.frames.slice(0, -1).every(f => f.v.locked === null), 'no earlier frame is locked');
@@ -1044,8 +1054,10 @@ for (const c of contexts()) {
       } catch (e) { ok(false, `threw: ${e.stack}`); }
       const pass = notes.every(n => n[0]);
       if (!pass) failed++;
-      tally[c.label][pass ? 'pass' : 'fail']++;
-      console.log(`${pass ? 'PASS' : 'FAIL'} [${c.label}] ${id}/${d.id} -- ${d.title}${lock ? ` (stops on tick ${lock.t}: ${lock.type} unbound)` : ''}`);
+      if (pass && off) tally[c.label].off.push(`${id}/${d.id}`);
+      else tally[c.label][pass ? 'pass' : 'fail']++;
+      const why = off ? ` (turned off in ${PACK.mod}: played, claims not checked)` : lock ? ` (stops on tick ${lock.t}: ${lock.type} unbound)` : '';
+      console.log(`${!pass ? 'FAIL' : off ? 'OFF ' : 'PASS'} [${c.label}] ${id}/${d.id} -- ${d.title}${why}`);
       for (const [cond, what] of notes) if (!cond || TRACE) console.log(`     ${cond ? 'ok  ' : 'FAIL'} ${what}`);
     }
   }
@@ -1060,7 +1072,9 @@ for (const id of PACK ? [] : ids) {
   }
 }
 for (const [label, t] of Object.entries(tally))
-  console.log(`[${PACK ? `pack ${PACK.mod}${LAYOUT ? '' : ', no sidebar'}` : LAYOUT ? 'fixture' : 'no sidebar'} ${label}] ${t.pass} pass, ${t.fail} fail${t.locked.length ? `; stopped under the badge: ${t.locked.join(' ')}` : ''}`);
+  console.log(`[${PACK ? `pack ${PACK.mod}${LAYOUT ? '' : ', no sidebar'}` : LAYOUT ? 'fixture' : 'no sidebar'} ${label}] ${t.pass} pass, ${t.fail} fail` +
+    `${t.off.length ? `; locked: claims not checked, ${t.off.length} played (${[...new Set(t.off.map(x => x.split('/')[0]))].join(', ')} turned off in ${PACK.mod})` : ''}` +
+    `${t.locked.length ? `; stopped under the badge: ${t.locked.join(' ')}` : ''}`);
 console.log(failed ? `${failed} check(s) failed` : 'all demos and rules pass');
 process.exit(failed ? 1 : 0);
 }

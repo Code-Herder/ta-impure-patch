@@ -23,6 +23,7 @@ page's controls and the demos playing on the stage.
                                                       the 3D stage and the sidebar under each
                                                       setup of the compatibility suite, one game
                                                       a setup
+    wiki_regression.py - offline                      the offline checks, no game: OFFLINE_CHECKS
 
 `sp` and `recorded` play scenarios/place-basic.json at --res (default 1920x1080) with the launch's
 hold (tagpu_hold.on), held at GameTime 120 and then let run, under the run lock (tools/runlock.py).
@@ -2273,10 +2274,43 @@ def mods(names, shots):
     assert not bad, f"failed on {bad}"
 
 
+def offline_checks():
+    """OFFLINE_CHECKS: every check of the wiki that plays no game, in one run -- the mockup's demos on the fixture,
+    without a sidebar and on each side pack present (tools/wiki/sidepacks.py builds them, gitignored), then the DLL's
+    code against the mockup's: the simulation (simparity), the text's fill (textparity), each natively and under
+    Wine as the DLL is built, the sidebar's column (sidecheck), the stage's ops (stagecheck) and the 3D scene
+    (scenecheck). Each runs to its end whatever the one before said; a check that cannot run (its exit 2) fails the
+    run like one that differs. Takes no lock: none of them plays a game."""
+    packs = sorted(d for d in (TREE / "tools/wiki/mockup/gfx/side").glob("*") if (d / "side.json").is_file())
+    wiki = TREE / "tools/wiki"
+    runs = [("simcheck", [wiki / "simcheck.mjs"]), ("simcheck --null-layout", [wiki / "simcheck.mjs", "--null-layout"])]
+    runs += [(f"simcheck --pack {d.name}", [wiki / "simcheck.mjs", "--pack", d]) for d in packs]
+    runs += [("simparity", [wiki / "simparity.mjs"]), ("simparity --wine", [wiki / "simparity.mjs", "--wine"]),
+             ("textparity", [wiki / "textparity.mjs"]), ("textparity --wine", [wiki / "textparity.mjs", "--wine"]),
+             ("sidecheck", [wiki / "sidecheck.mjs"]), ("stagecheck", [wiki / "stagecheck.mjs"]),
+             ("scenecheck", [wiki / "scenecheck.mjs"])]
+    if not packs:
+        print("wiki offline: no side pack present (tools/wiki/sidepacks.py builds them): the mods' runs are left out")
+    failed = []
+    for name, cmd in runs:
+        t0 = time.monotonic()
+        r = subprocess.run(["node", *map(str, cmd)], capture_output=True, text=True, cwd=TREE)
+        # the check's own verdict, the line it starts with its name (sidecheck prints its packs after it), else the last
+        out = r.stdout.strip().splitlines() or r.stderr.strip().splitlines() or [""]
+        own = Path(str(cmd[0])).stem + ":"
+        last = next((ln for ln in out if ln.startswith(own)), out[-1])
+        verdict = "passed" if r.returncode == 0 else "CANNOT RUN" if r.returncode == 2 else "FAILED"
+        print(f"wiki offline: {name}: {verdict} ({r.returncode}, {time.monotonic() - t0:.0f} s): {last[:300]}")
+        if r.returncode:
+            failed.append(name)
+    assert not failed, f"the offline checks {', '.join(failed)} did not pass"
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("instance")
-    p.add_argument("mode", choices=("sp", "page", "demos", "try", "recorded", "asset", "stage3d", "units", "cursor", "mp", "mods"))
+    p.add_argument("mode", choices=("sp", "page", "demos", "try", "recorded", "asset", "stage3d", "units", "cursor", "mp", "mods",
+                                    "offline"))
     p.add_argument("--launch", action="store_true",
                    help="sp/recorded: launch on place-basic.json first, under the run lock")
     p.add_argument("--res", default="1920x1080", help="sp/recorded: the game's resolution")
@@ -2289,7 +2323,9 @@ def main():
     t0 = time.monotonic()
     stop = None
     try:
-        if a.mode == "mp":
+        if a.mode == "offline":
+            offline_checks()
+        elif a.mode == "mp":
             mp(a.instance)
         elif a.mode == "mods":
             mods(MODS_SETUPS if a.instance == "all" else a.instance.split(","), a.shots)

@@ -140,16 +140,19 @@ demo('ring', 'Ring around a building', {}, T => T
   .down('shift').down('ctrl').say('Hold Shift and Ctrl over a building: a ring round it.').wait(45)
   .click('lmb').up('ctrl').up('shift').say('Press and release without dragging: the ring is ordered.'), 330);
 
-/* The ring is clicked while the builder still walks to the far solar collector, so the far one lies in the map's far
-   corner (cells 34..38 x 18..22) and the caption about the walk stays up through the wall's trip: a mod's builder
-   walks faster than stock's. MEASURED 2026-10-28: the ring click lands on tick 361; Escalation's builder starts the
-   far one on tick 380, Twilight's on 406, and TA Zero's hover and kbot builders by tick 300, before it (simcheck
-   --pack names those). */
-demo('ringqueued', 'Ring around a queued build', {}, T => T
+/* The ring is clicked while the builder still walks to the far solar collector, and the walk outlasts the wall's
+   trip for every side's builder only when it is long: TA Zero's hover builders cross the map at 2.25 a tick and start
+   building about 144 world units short of a site. So the demo brings its own builder, `b`, of the entry's builder
+   cast, into the map's top left corner and selects it, and the far solar collector stands in the bottom right (cells
+   33..37 x 18..22), 615 world units away; the scene's own builder stands by. The cursor never leaves the near one
+   after queuing it: the trip returns it there. MEASURED 2026-10-28 with the six packs: the ring click lands on tick
+   336; TA Zero's GOK and CORE builders start the far one on 349, its ARM builder on 357, and no other side's builder
+   starts it before the demo ends on 429. */
+demo('ringqueued', 'Ring around a queued build', { units: [{ id: 'b', type: 'ARMCK', at: [24, 40] }], selected: ['b'] }, T => T
   .say('Queue the {solar} twice with Shift-{select}s: one far away, then one near.').build('ARMSOLAR').wait(5).down('shift')
-  .to(S(34, 18, 5), 40).wait(5).click('lmb').wait(5).to(S(10, 15, 5), 40).wait(5).click('lmb').wait(5).up('shift')
+  .to(S(33, 18, 5), 40).wait(5).click('lmb').wait(5).to(S(10, 15, 5), 40).wait(5).click('lmb').wait(5).up('shift')
   .say('The {builder} walks to the first. The second is only a queued square.').wait(5).build('ARMDRAG').wait(5)
-  .to(S(10, 15, 5), 25).say('{wall} armed: Shift and Ctrl over the queued {solar}.').down('shift').down('ctrl').wait(35)
+  .say('{wall} armed: Shift and Ctrl over the queued {solar}.').down('shift').down('ctrl').wait(35)
   .click('lmb').up('ctrl').up('shift').say('{Select}: the ring is queued round it, before it is even started.'), 90);
 
 /* The row stands near the map's top right (cells 29..38 x 3..4; the last column takes no building), as far from the
