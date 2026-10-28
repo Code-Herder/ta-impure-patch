@@ -298,6 +298,13 @@ window.WikiGfx = (() => {
         gl.bindVertexArray(ua.vao);
         cu.use(f);
         const P = cu.U;
+        /* BACK FACES CULLED for the shadows and the bodies, as the game's body pipeline culls them (tagpu_vk_unit.c,
+           BACK FACES CULLED): the engine's rasterisers paint only a face whose vertices run clockwise on its y-down
+           screen, and a model closes a surface with two faces wound apart and textured apart, so a turned piece
+           shows the face that now runs clockwise. The vertices here are the engine's screen coordinates and the
+           target keeps its y with them (the blit flips it), so the engine's clockwise is GL's counter-clockwise, its
+           front face. The wire and the ghosts are not culled, as the game's are not. */
+        gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); gl.frontFace(gl.CCW);
         // the shadows first, as the engine emits them inside each unit's own draw; then the bodies
         cu.silhouettes(look.unitRanges, r => !r.inst.ghost);
         gl.depthMask(true);
@@ -309,6 +316,7 @@ window.WikiGfx = (() => {
           gl.drawArrays(gl.TRIANGLES, r.first, r.count);
         }
         gl.uniform1i(P.uNanoOn, 0);
+        gl.disable(gl.CULL_FACE);
         // each nanoframe's wire, after every body
         let wn = 0;
         const wr = [];
