@@ -236,7 +236,7 @@ a deposit (its list's AAIMEXX is not on its menu).
   constructors whose menu holds the choice as primaries and the others Guarding.
 - **The read.** `tagpu_buildmenu.c` is the rule, engine-free and unit-tested
   (`tagpu/ddraw/tests/buildmenutest.py`); `tagpu_resource.c` feeds it the files through the
-  engine's own file calls on the game thread and keeps the type numbers per level generation and
+  engine's own file calls on the game thread and keeps the type numbers per def table (its base and count), level generation and
   watched side. The engine map's *The left sidebar* has the rule's addresses and the
   *Resource placement and contextual order contracts* row its calls and bounds.
 - **Replay and multiplayer.** Nothing changes for the recorder: the menu decides which ordinary
@@ -381,7 +381,7 @@ The build-menu read runs on the game thread where the engine reads its own build
 bounds what it takes: the page probe's and GUI_Load's paths to their buffers, a file to 1 MiB
 read exactly, the download records below their count and five entries a record, the watched
 side below the sides loaded, and every type number below the def count. Its table holds type
-numbers only, one table a level generation.
+numbers only, one table a def table (its base and count) and level generation.
 
 Resource and profile scratch is classified as presentation: simulation never reads it, no address
 survives into the simulation, and the module refuses puppet seats. The orders it creates are

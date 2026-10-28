@@ -21408,7 +21408,7 @@ contracts* gives the allocation/lifetime proof and disassembly.
 | `0x4197D0` | Nine-byte entry observer chooses manual placement, original code computes corners/flags and tests the site |
 | `0x498F70`, `0x499100` | Six-/seven-byte gates for left/right handlers, each `ret 4`. Only the configured contextual button is consumed; paired button bookkeeping outside these handlers remains native |
 | `0x47D2E0`, `0x47C780`, `0x47D820` | Engine site/altitude queries on the input thread. Quick queries preserve scratch words; an upgrade uses a private yard projection of an uncontested old footprint's clear. A queued plan is matched before the site test's refusal drops a site, and its ghost then takes the blocked-site altitude `0x47D820`, which writes nothing |
-| `0x4290F0`, `0x4BBC40`, `0x4BB5B0`, `0x4BBD00`, `0x4BB710`, `0x4BB7C0`, `0x4BB5D0`, `0x488B10` | Quick Build's candidates: each selected constructor's build menu, read on the game thread by the page loader `0x41ACE0`'s rule on the first use of a builder type in a level (and again when the watched side changes). The probe and the DL fallback choose the file, the TDF loader's file calls read it into our buffer, `tagpu_buildmenu.c` applies the download fill, the greyed pass and the press's tab test and 16-character cut. Type numbers only are kept, per level generation |
+| `0x4290F0`, `0x4BBC40`, `0x4BB5B0`, `0x4BBD00`, `0x4BB710`, `0x4BB7C0`, `0x4BB5D0`, `0x488B10` | Quick Build's candidates: each selected constructor's build menu, read on the game thread by the page loader `0x41ACE0`'s rule on the first use of a builder type in a level (and again when the watched side changes). The probe and the DL fallback choose the file, the TDF loader's file calls read it into our buffer, `tagpu_buildmenu.c` applies the download fill, the greyed pass and the press's tab test and 16-character cut. Type numbers only are kept, per def table (its base and count) and level generation |
 | `0x43F0E0`, `0x438760`, `0x43ADC0`, `0x439F80` | Native eligibility (zero action byte refuses), action lookup, append/replace and exact removal. Upgrade is reclaim→appended build; non-building constructor helpers Guard primaries via `0x43AFC0`, combat units untouched |
 | `tagpu_packet_pub.c` → native ghost and marker | Chosen type/green rectangle and queued/selected-cancellation bits copied into the packet. Engine stays in contextual mode. Queued resource ghosts have no caption text. No new renderer-owned engine access or GL object |
 | `0x4C63A0` flip observer / `0x46A3E0` game return; shared replay-menu identity | Config/archive names and Twilight's label select a general profile plus an optional exact-version override. Game-thread menu polling remains live without packets or a render consumer; native game flips freeze policy and in-game options cannot unfreeze it |
@@ -21421,9 +21421,11 @@ the native contextual action remains available. The check adds no state or engin
 Quick Build offers what each selected constructor's build menu offers (owner decision 23), not
 its CANBUILD list, which is the AI's: MEASURED offline, the two give the same extractor and
 geothermal candidates for all 45 stock builders, and on Twilight ARMCK now builds ARMAMEX and
-ARMGEO and CORCK COREXP and CORGEO. The menu read writes no engine memory, so the *fields we
-write* table gains nothing from it; it reads the defs, the download records, the side table and
-the GUI files, every index bounded at use. Unit/definition/grid/
+ARMGEO and CORCK COREXP and CORGEO. The menu read writes no engine game state, so the *fields
+we write* table gains nothing from it. The engine's file layer it calls does allocate on the
+engine heap: each open makes a handle through `0x4BB2E0` → `0x4D83B0` (`0x4BB2F5`), and the
+close `0x4BB5D0` frees it (`0x4D85A0`, `0x4BB63D`), exactly as for the engine's own reads. It reads
+the defs, the download records, the side table and the GUI files, every index bounded at use. Unit/definition/grid/
 exploration/descriptor values are bounded, and owned unit walks use the engine's validated
 inclusive player partition. Engine heap order nodes have the input thread's sole-mutator
 lifetime; nothing retains a pointer across a simulation iteration or level teardown.
