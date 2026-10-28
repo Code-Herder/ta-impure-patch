@@ -832,7 +832,20 @@ static void page_fill(TAGPU_PK_WIKI* w)
     }
 }
 
-static void jstr(FILE* f, const char* s, size_t n);
+/* a layout's name as a JSON string: its UTF-8 bytes as they are, which is how both readers take
+   them (sim.js counts a name's UTF-8 bytes against WIKI_SIDE_NAME), the rest escaped */
+static void ustr(FILE* f, const char* s, size_t n)
+{
+    size_t i;
+    fputc('"', f);
+    for (i = 0; i < n && s[i]; i++) {
+        unsigned char ch = (unsigned char)s[i];
+        if (ch == '"' || ch == '\\') fprintf(f, "\\%c", ch);
+        else if (ch < 0x20 || ch == 0x7F) fprintf(f, "\\u%04x", ch);
+        else fputc(ch, f);
+    }
+    fputc('"', f);
+}
 
 /* A layout as sim.js's schema writes it (the sidebar spec, section 4.1): what tagpu_wikidata_layout
    reads back, and what simparity.mjs's --layout and --try give sim.js. Screens by name, in their
@@ -846,27 +859,27 @@ static void layout_json(FILE* f, const WIKILAYOUT* L)
     for (i = 0; i < L->nside && i < WIKI_SIDE_SIDES; i++) {
         const WIKISIDEDEF* s = &L->side[i];
         fprintf(f, "%s{\"name\":", i ? "," : "");
-        jstr(f, s->name, WIKI_SIDE_NAME);
+        ustr(f, s->name, WIKI_SIDE_NAME);
         fprintf(f, ",\"prefix\":");
-        jstr(f, s->prefix, WIKI_SIDE_NAME);
+        ustr(f, s->prefix, WIKI_SIDE_NAME);
         fprintf(f, ",\"main2\":");
-        jstr(f, L->screen[s->main2].name, WIKI_SIDE_NAME);
+        ustr(f, L->screen[s->main2].name, WIKI_SIDE_NAME);
         fprintf(f, ",\"gen\":");
-        jstr(f, L->screen[s->gen].name, WIKI_SIDE_NAME);
+        ustr(f, L->screen[s->gen].name, WIKI_SIDE_NAME);
         fputc('}', f);
     }
     fprintf(f, "],\"player_side\":%d,\"types\":{", L->player_side);
     for (i = 0; i < L->ntype && i < WIKI_SIDE_TYPES; i++) {
         const WIKIPAGES* t = &L->type[i];
         fprintf(f, "%s", i ? "," : "");
-        jstr(f, t->name, WIKI_SIDE_NAME);
+        ustr(f, t->name, WIKI_SIDE_NAME);
         fprintf(f, ":{\"pages\":[");
         for (j = 0; j < t->npage && j < WIKI_SIDE_PAGES; j++) {
             fprintf(f, "%s", j ? "," : "");
-            jstr(f, L->screen[t->page[j]].name, WIKI_SIDE_NAME);
+            ustr(f, L->screen[t->page[j]].name, WIKI_SIDE_NAME);
         }
         fprintf(f, "],\"orders\":");
-        if (t->orders >= 0) jstr(f, L->screen[t->orders].name, WIKI_SIDE_NAME);
+        if (t->orders >= 0) ustr(f, L->screen[t->orders].name, WIKI_SIDE_NAME);
         else fputs("null", f);
         fputc('}', f);
     }
@@ -874,17 +887,17 @@ static void layout_json(FILE* f, const WIKILAYOUT* L)
     for (i = 0; i < L->nscreen && i < WIKI_SIDE_SCREENS; i++) {
         const WIKISCREEN* s = &L->screen[i];
         fprintf(f, "%s", i ? "," : "");
-        jstr(f, s->name, WIKI_SIDE_NAME);
+        ustr(f, s->name, WIKI_SIDE_NAME);
         fprintf(f, ":{\"y\":%d,\"w\":%d,\"h\":%d,\"gadgets\":[", s->y, s->w, s->h);
         for (j = 0; j < s->ngadget && j < WIKI_SIDE_GADGETS; j++) {
             const WIKIGADGET* g = &s->gadget[j];
             fprintf(f, "%s{\"name\":", j ? "," : "");
-            jstr(f, g->name, WIKI_SIDE_NAME);
+            ustr(f, g->name, WIKI_SIDE_NAME);
             fprintf(f, ",\"role\":\"%s\",\"rect\":[%d,%d,%d,%d]", g->role >= 0 && g->role < WIKI_NROLES ? ROLE[g->role] : "",
                     g->x, g->y, g->w, g->h);
             if (g->role == WIKI_ROLE_BUILD) {
                 fprintf(f, ",\"unit\":");
-                if (g->unit[0]) jstr(f, g->unit, WIKI_SIDE_NAME);
+                if (g->unit[0]) ustr(f, g->unit, WIKI_SIDE_NAME);
                 else fputs("null", f);
             }
             fprintf(f, ",\"grey\":%s,\"hidden\":%s}", g->grey ? "true" : "false", g->hidden ? "true" : "false");
