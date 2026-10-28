@@ -1841,9 +1841,9 @@ static int leaf_decode(SIDE* S, SBANK* k, uint32_t o, int* w, int* h, int* tk, u
     W = rd16(hd);
     H = rd16(hd + 2);
     ptr = rd32(hd + 16);
-    /* the reader the pack uses takes a u16 sub-frame count at +0x0A where the engine takes a byte
-       (0x4B8CC0): a leaf whose +0x0B is set is one the two would read apart, so it is refused */
-    if (hd[11] || W > FRAME_MAXW || H > FRAME_MAXH) return 0;
+    /* +0x0B is the alpha-blit flag, not part of the sub-frame count (a byte at +0x0A, 0x4B8CC0):
+       the leaf's pixels are copied like any other's, as ta3do.gaf_compose copies them */
+    if (W > FRAME_MAXW || H > FRAME_MAXH) return 0;
     if (!(px = (unsigned char*)malloc(W && H ? W * H : 1))) return 0;
     memset(px, hd[8], W * H);
     if (!hd[9]) {
