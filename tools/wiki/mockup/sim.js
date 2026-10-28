@@ -722,9 +722,14 @@ const WikiSim = (() => {
       });
     }
 
-    // the build-menu mode: the ghost is manual_cursor's snapped site (no legality), or where the cursor is, as the build
-    // cursor 0x4197D0 rounds it. None while the cursor is off the map, though the gesture's evaluation goes on.
-    function hover() { const h = mapHover(); return over() === 'map' ? h : null; }
+    /* the build-menu mode: the ghost is manual_cursor's snapped site (no legality), or where the cursor is, as the build
+       cursor 0x4197D0 rounds it. None while the cursor is off the map, and the gesture's evaluation stands as the map
+       last left it: the in-play handler calls 0x4197D0 only with main+0x2CC6 bit 1, the cursor in the viewport
+       (0x499236..0x499241), and tagpu_place.c evaluates only from that call. */
+    function hover() { return over() === 'map' ? mapHover() : null; }
+    /* the evaluation the stage shows, as tagpu_place.c's current() lets the packet have it: only while the building it
+       was made for is still the one armed */
+    const placed = () => st.place && st.mode === st.place.type ? st.place : null;
     function mapHover() {
       const { x, z } = mapCursor(), shift = st.held.has('shift');
       st.place = evaluate();
@@ -837,12 +842,17 @@ const WikiSim = (() => {
       if (changed) st.shiftPlaced = true;
     }
     /* THE RELEASE: Shift up first drops the gesture and the building stays armed; a one-site gesture ending at the
-       cursor is the stock Shift-click itself; anything else commits the last evaluation. */
+       cursor is the stock Shift-click itself; anything else commits the last evaluation. A release over the sidebar
+       reaches tagpu_place.c too: IdleTick hands the in-play handler a button's release the GUI pump took
+       (0x4999CB..0x499A04, then 0x499A1C), and the route at 0x4993BF passes it to place_button wherever the cursor
+       is. Its record is never the evaluated one there (the evaluation stands as the map left it), so it is never the
+       stock Shift-click: it commits the evaluation the map last made. */
     function release() {
       st.gesture = null;
       if (!st.held.has('shift')) return;
-      const p = st.place, cur = cursorSite();
-      if (p && p.kind !== 'ring' && p.sites.length === 1 && p.sites[0].cx === cur.cx && p.sites[0].cz === cur.cz) return placeClick(true);
+      const p = placed(), cur = cursorSite();
+      if (p && over() === 'map' && p.kind !== 'ring' && p.sites.length === 1 && p.sites[0].cx === cur.cx && p.sites[0].cz === cur.cz)
+        return placeClick(true);
       if (p) commit(p);
     }
 
@@ -1114,7 +1124,7 @@ const WikiSim = (() => {
     sim.orders = id => { const u = byId(id); return u ? u.orders.map(o => ({ ...o })) : null; };
     sim.view = () => {
       // the gesture's sites replace the cursor's single square; none (an empty ring) leaves the square standing
-      const p = st.place && st.place.sites.length ? st.place : null;
+      const p = placed() && st.place.sites.length ? st.place : null;
       const h = st.hover, gh = !p && h && (h.kind === 'place' ? h : h.kind === 'quick' ? { ...h, ok: true } : null);
       let n = 0;
       const sites = p ? p.sites.map(s => ({ ...siteCentre(p.type, s), state: s.state, order: s.state === 'place' ? ++n : null })) : [];

@@ -1030,12 +1030,23 @@ static WIKIHOVER map_hover(WIKISIM* s)
     return h;
 }
 
-/* none while the cursor is off the map, though the gesture's evaluation goes on */
+/* None while the cursor is off the map, and the gesture's evaluation stands as the map last left
+   it: the in-play handler calls 0x4197D0 only with main+0x2CC6 bit 1, the cursor in the viewport
+   (0x499236..0x499241), and tagpu_place.c evaluates only from that call. */
 static WIKIHOVER hover(WIKISIM* s)
 {
-    WIKIHOVER h = map_hover(s);
-    if (over(s) != OVER_MAP) h.kind = WIKI_HOVER_NONE;
+    WIKIHOVER h;
+    if (over(s) == OVER_MAP) return map_hover(s);
+    memset(&h, 0, sizeof h);
+    h.kind = WIKI_HOVER_NONE;
     return h;
+}
+
+/* the evaluation the stage shows, as tagpu_place.c's current() lets the packet have it: only while
+   the building it was made for is still the one armed; NULL for none */
+static const WIKIPLACE* placed(const WIKISIM* s)
+{
+    return s->place.kind != PLACE_NONE && s->mode == s->place.type ? &s->place : NULL;
 }
 
 /* ---- the placement gesture, tagpu_place.c as sim.js mirrors it ---- */
@@ -1279,19 +1290,25 @@ static void commit(WIKISIM* s, const WIKIPLACE* p)
 
 /* mirrors tagpu_place.c's release (place_button): Shift up first drops the gesture and the building
    stays armed; a one-site gesture ending at the cursor is the stock Shift-click itself; anything
-   else commits the last evaluation */
+   else commits the last evaluation. A release over the sidebar reaches tagpu_place.c too: IdleTick
+   hands the in-play handler a button's release the GUI pump took (0x4999CB..0x499A04, then
+   0x499A1C), and the route at 0x4993BF passes it to place_button wherever the cursor is. Its
+   record is never the evaluated one there (the evaluation stands as the map left it), so it is
+   never the stock Shift-click: it commits the evaluation the map last made. */
 static void release(WIKISIM* s)
 {
-    WIKIPLACE* p = &s->place;
+    const WIKIPLACE* p;
     PlaceCell cur;
     s->has_gesture = 0;
     if (!s->held[WIKI_KEY_SHIFT]) return;
+    p = placed(s);
     cur = cursor_site(s);
-    if (p->kind != PLACE_NONE && p->kind != PLACE_RING && p->n == 1 && p->site[0].cx == cur.cx && p->site[0].cz == cur.cz) {
+    if (p && over(s) == OVER_MAP && p->kind != PLACE_RING && p->n == 1 && p->site[0].cx == cur.cx
+        && p->site[0].cz == cur.cz) {
         place_click(s, 1);
         return;
     }
-    if (p->kind != PLACE_NONE) commit(s, p);
+    if (p) commit(s, p);
 }
 
 /* ---- orders ---- */
@@ -1846,7 +1863,7 @@ const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s)
 {
     WIKIVIEW* v = &s->view;
     /* the gesture's sites replace the cursor's single square; none (an empty ring) leaves the square standing */
-    const WIKIPLACE* p = s->place.kind != PLACE_NONE && s->place.n ? &s->place : NULL;
+    const WIKIPLACE* p = placed(s) && s->place.n ? &s->place : NULL;
     const WIKIHOVER* h = &s->hover;
     const int gh = !p && (h->kind == WIKI_HOVER_PLACE || h->kind == WIKI_HOVER_QUICK);
     int i, j, k, n = 0;
@@ -2018,7 +2035,7 @@ static void fnv_str(uint64_t* h, const char* str)
 uint64_t tagpu_wikisim_hash(const WIKISIM* s)
 {
     /* the view's own rule: the gesture's sites stand in for the ghost (tagpu_wikisim_view) */
-    const WIKIPLACE* p = s->place.kind != PLACE_NONE && s->place.n ? &s->place : NULL;
+    const WIKIPLACE* p = placed(s) && s->place.n ? &s->place : NULL;
     const WIKIHOVER* g = &s->hover;
     const int ghost = !p && (g->kind == WIKI_HOVER_PLACE || g->kind == WIKI_HOVER_QUICK);
     const int cells = s->W * s->H;

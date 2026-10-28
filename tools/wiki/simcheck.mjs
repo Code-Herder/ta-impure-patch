@@ -650,6 +650,24 @@ const SIDE_RULES = {
     return placed.placed === 1 && placed.armed === 'build:ARMGEO' && placed.after === 'contextual' &&
       none.placed === 0 && none.armed === 'build:ARMGEO' && none.after === 'build:ARMGEO';
   },
+  /* a placement drag released over the sidebar: the handler still gets the release (IdleTick, 0x4999CB..0x499A04) and
+     tagpu_place.c commits, but the build cursor 0x4197D0 runs only in the viewport, so the shape is the one the map
+     last showed -- A to B -- not one stretched to the map's edge; the building stays armed until Shift's release */
+  'a placement drag released over the sidebar orders the shape the map last showed'(entry) {
+    const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, FIXTURE);
+    press(s, centre(FIXTURE, 'ARMCK1', 'ARMMEX'));
+    s.input({ down: 'shift' });
+    s.input({ move: [120, 400] }); s.input({ down: 'lmb' }); s.input({ move: [200, 400] });
+    const onMap = s.view().sites.map(t => t.x).join(' ');
+    s.input({ move: [-60, 400] });
+    const overSide = s.view().sites.map(t => t.x).join(' ');
+    s.input({ up: 'lmb' });
+    const orders = s.orders('ck').map(o => o.ox).join(' '), armed = s.view().mode;
+    s.input({ up: 'shift' });
+    // ARMMEX is 3 x 3: the cursor's sites start at cells 6 and 12, so the line is cells 6, 9 and 12
+    return onMap === '120 168 216' && overSide === onMap && orders === '6 9 12' && armed === 'build:ARMMEX' &&
+      s.view().mode === 'contextual';
+  },
   /* the pump 0x4A9FD0 offers a press in file order: a button acting on the release lets the scan go on, so the LAST
      one holding the point takes it; a greyed or an inactive one takes none */
   'where buttons overlap the last one takes the press, and a greyed or inactive one takes none'(entry) {
