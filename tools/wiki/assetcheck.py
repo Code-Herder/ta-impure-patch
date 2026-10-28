@@ -26,7 +26,17 @@ against an independent Python resolution of the same install.
    archive and tile count, each tile's hash, each feature's TDF, archive and GAF, each unit's FBI, model and script
    with their archives, its hidden and dont-cache pieces and its facts. Skipped under --mounts, which gfx.py does not take.
 5. **The fuzz**: `wikiassettest fuzz-hpi` on two archives (LZ77 and keyed, zlib and plain) and `fuzz-3do` on one
-   model, 1000 damaged copies each; every refusal must be named and the sanitizers must stay silent.
+   model, 1000 damaged copies each; and `fuzz-side`, the sidebar's readers over synthetic files (no game data): the
+   positional .GUI reader and the GAF, PCX and number readers on damaged and garbage copies with huge counts, and
+   the whole sidebar load over a synthetic install with one of its files damaged each time. Every refusal must be
+   named and the sanitizers must stay silent.
+6. **The sidebar, per compat setup** (`--side`, or with the rest; `--mods` to choose): each setup's game folder laid
+   out as tools/wiki/sidepacks.py lays it out (the retail install, then the setup's files over it), its folder names
+   and first archive from sidepacks.py's record where the mod's loader renames them in memory, and the DLL's
+   `wikiassettest side` against `gfx.py --side-only` with the same names: the layout, every screen's file and panel,
+   every button's picture source (step, file, archive, sequence) and its frames' pixels and hotspots, PANELSIDE, the
+   dots, the minimap's colours, tables and bases, the greyed tint and each type's canstop must be equal, and the
+   sheet byte for byte. The setups' fixtures must be present (tools/compat/tacompat.py fetch).
 
 No game is run and nothing is written into the repository but the test's executable, which `*.exe` ignores.
 """
@@ -53,7 +63,7 @@ ta3do = tavfs.ta3do
 tascene = tavfs.tascene
 
 SRCS = ["tests/wikiassettest.c", "src/tagpu_hpi.c", "src/tagpu_vfs.c", "src/tagpu_tdf.c", "src/tagpu_json.c",
-        "src/tagpu_pak.c", "src/tagpu_wikidata.c", "src/tagpu_cobscan.c"]
+        "src/tagpu_pak.c", "src/tagpu_wikidata.c", "src/tagpu_cobscan.c", "src/tagpu_guifile.c"]
 NAME_VAS = {"units": 0x503920, "textures": 0x503720, "logos": 0x504734, "logos_gaf": 0x503704,
             "objects3d": 0x5036E4, "scripts": 0x503740, "anims": 0x502E30, "features": 0x502C7C}
 FEATURE_BITS = ["animating", "animtrans", "shadtrans", "flamable", "geothermal", "blocking", "reclaimable",
@@ -696,6 +706,149 @@ def against_gfx(native, gamedir, exe):
     return bad, n
 
 
+# --------------------------------------------------------------------------- the sidebar, per compat setup
+
+SIDE_FOLDERS = ("gui", "unitpics", "gamedata", "download", "anims", "commongui", "units")
+
+
+def fnv_hex(data):
+    return f"{fnv(FNV0, data):08x}"
+
+
+def pack_side(out, mod):
+    """gfx.py's side pack of `mod` under `out`, in the shape the native report is read into (native_side)."""
+    d = out / "side" / mod
+    pack = json.loads((d / "side.json").read_text())
+    art = pack["art"]
+    sheet, sw = (d / art["sheet"]["file"]).read_bytes(), art["sheet"]["w"]
+
+    def frame(f):
+        if f is None:
+            return None
+        sx, sy, w, h, hx, hy = f
+        return {"w": w, "h": h, "hx": hx, "hy": hy,
+                "fnv": fnv_hex(b"".join(sheet[(sy + r) * sw + sx:(sy + r) * sw + sx + w] for r in range(h)))}
+
+    def low_(v):
+        return v.lower() if isinstance(v, str) else v
+
+    screens = {}
+    for name, a in art["screens"].items():
+        pan = a["panel"]
+        pics = []
+        for q in a["pics"]:
+            label = q["from"] == "label"
+            pics.append({"from": q["from"], "path": low_(q.get("path")), "where": low_(q.get("where")),
+                         "seq": q.get("seq"), "frames": None if label else [frame(f) for f in q["frames"]],
+                         "key": None if label else q.get("key"),
+                         "text": q.get("text") if q["from"] in ("label", "fallback") else None, "attribs": q["attribs"]})
+        screens[name] = {"file": a["file"], "path": low_(a["path"]), "where": low_(a["where"]),
+                         "panel": None if pan is None else {"frame": frame(pan["f"]), "key": pan["key"], "from": pan["from"],
+                                                           "path": low_(pan["path"]), "where": low_(pan["where"])},
+                         "pics": pics, "labels": a["labels"]}
+    rep = {r["element"]: r for r in pack["report"] if isinstance(r, dict) and "element" in r}
+    mm = rep.get("minimap", {})
+    dots = art["dots"]
+    ps = art["panelside"]
+    bases = {}
+    for eid, b in art["minimap"]["bases"].items():
+        bases[eid] = {"w": b["w"], "h": b["h"], "offx": b["offx"], "offy": b["offy"], "fnv": fnv_hex((d / b["file"]).read_bytes())}
+    layout = {k: v for k, v in pack["layout"].items() if k != "note"}
+    return {"refused": None, "layout": layout, "folders": {k: pack["folders"][k] for k in SIDE_FOLDERS},
+            "sheet": {"w": sw, "h": art["sheet"]["h"], "fnv": fnv_hex(sheet)}, "pal": fnv_hex((d / art["palette"]).read_bytes()),
+            "panelside": None if ps is None else {"frame": frame(ps["f"]), "key": ps["key"]},
+            "screens": screens,
+            "dots": {"radlogo": [frame(f) for f in dots["radlogo"]] if dots["radlogo"] else None,
+                     "high": frame(dots["high"]), "key": dots["key"]},
+            "minimap": {"unexplored": art["minimap"]["unexplored"], "box": art["minimap"]["box"],
+                        "gui": low_((mm.get("gui") or {}).get("path")), "seen": fnv_hex((d / art["minimap"]["seen"]).read_bytes()),
+                        "alp": low_((mm.get("alp") or {}).get("path"))},
+            "greyed": fnv_hex((d / art["greyed"]).read_bytes()) if art.get("greyed") else None,
+            "defs": {t: v["canstop"] for t, v in pack["defs"].items()},
+            "bases": bases}
+
+
+def native_side(doc):
+    """`wikiassettest side`'s output in pack_side's shape."""
+    s = doc["side"]
+    if s.get("refused"):
+        return {"refused": s["refused"]}
+    art = s["art"]
+    screens = {}
+    for name, a in art["screens"].items():
+        pics = []
+        for q in a["pics"]:
+            label = q["from"] == "label"
+            pics.append({"from": q["from"], "path": None if label else q["path"], "where": None if label else q["where"],
+                         "seq": None if label else q["seq"], "frames": None if label else q["frames"],
+                         "key": None if label else q["key"], "text": q.get("text"), "attribs": q["attribs"]})
+        screens[name] = {"file": a["file"], "path": a["path"], "where": a["where"], "panel": a["panel"], "pics": pics,
+                         "labels": a["labels"]}
+    mm = art["minimap"]
+    return {"refused": None, "layout": s["layout"], "folders": s["folders"], "sheet": art["sheet"], "pal": art["pal"],
+            "panelside": art["panelside"], "screens": screens, "dots": art["dots"],
+            "minimap": {"unexplored": mm["unexplored"], "box": mm["box"], "gui": mm["gui"], "seen": mm["seen"],
+                        "alp": mm["alp"]["path"]},
+            "greyed": art["greyed"], "defs": {t: v["canstop"] for t, v in s["defs"].items()},
+            "bases": {k: v for k, v in doc["minimap"].items() if v is not None}}
+
+
+def against_sidepacks(mods, retail, pak):
+    """Section 6 of the header, per setup: (all equal, lines to print)."""
+    sys.path.insert(0, str(REPO / "tools" / "compat"))
+    import sidepacks  # noqa: E402  (tools/wiki, beside this file)
+    import tacompat  # noqa: E402
+    by_name = {s["name"]: s for s in tacompat.SETUPS}
+    ok, lines = True, []
+    for mod in mods:
+        setup = by_name[sidepacks.SETUPS[mod]]
+        missing = sorted({a["fixture"] for a in setup["add"] if tacompat.fixture_problems(a["fixture"])})
+        if missing:
+            lines.append(f"assetcheck: sidebar {mod}: CANNOT RUN, setup {setup['name']} needs fixtures {', '.join(missing)}")
+            ok = False
+            continue
+        with tempfile.TemporaryDirectory(prefix="assetcheck-side-") as tmp:
+            tree, out = Path(tmp) / "game", Path(tmp) / "packs"
+            sidepacks.setup_tree(setup, retail, tree)
+            exe = sidepacks.child(tree, tavfs.EXE_NAME)
+            rec = sidepacks.RECORDS.get(mod)
+            names = []
+            if rec:
+                names = ["--folders", ",".join(f"{k}={v}" for k, v in rec["folders"].items()), "--archive", rec["archive"]]
+            g = subprocess.run([sys.executable, str(HERE / "gfx.py"), "--side-only", "--mod", mod, "--gamedir", str(tree),
+                                "--exe", str(exe), "--out", str(out), *names], capture_output=True, text=True)
+            if g.returncode:
+                lines.append(f"assetcheck: sidebar {mod}: gfx.py made no pack ({g.returncode}): {(g.stdout + g.stderr).strip()[-500:]}")
+                ok = False
+                continue
+            r = subprocess.run([str(EXE), "side", str(tree), str(pak), "--exe", str(exe), *names], capture_output=True, text=True)
+            if r.returncode:
+                lines.append(f"assetcheck: sidebar {mod}: wikiassettest side FAILED ({r.returncode}): {r.stderr.strip()[-2000:]}")
+                ok = False
+                continue
+            doc = json.loads(r.stdout)
+            native, ref = native_side(doc), pack_side(out, mod)
+        bad = diff(native, ref, exact=True)
+        if bad:
+            ok = False
+            lines.append(f"assetcheck: sidebar {mod}: the native load and gfx.py's pack DIFFER in {len(bad)} place(s):")
+            lines += [f"  {b}" for b in bad[:40]]
+            lines += [f"  the native load refused: {e.get('element')}: {e['refused']}"
+                      for e in doc["side"].get("report", []) if isinstance(e, dict) and "refused" in e]
+            continue
+        lay = native["layout"]
+        npic = sum(len(s["pics"]) for s in native["screens"].values())
+        srcs = {}
+        for scr in native["screens"].values():
+            for q in scr["pics"]:
+                srcs[q["from"]] = srcs.get(q["from"], 0) + 1
+        lines.append(f"assetcheck: sidebar {mod}: native == gfx.py: {len(lay['screens'])} screens, types "
+                     f"{', '.join(f'{t} ({len(v['pages'])})' for t, v in lay['types'].items()) or 'none'}, {npic} pictures "
+                     f"({', '.join(f'{k} {v}' for k, v in sorted(srcs.items()))}), a {native['sheet']['h']}-row sheet byte "
+                     f"for byte, {len(native['bases'])} minimap bases; {r.stderr.strip().splitlines()[-1].split(': ', 1)[-1]}")
+    return ok, lines
+
+
 def run_load(gamedir, pak, mounts=None, exe=None, language="english"):
     cmd = [str(EXE), "load", str(gamedir), str(pak)]
     if mounts:
@@ -718,11 +871,16 @@ def main():
     p.add_argument("--language", default="english")
     p.add_argument("--fuzz", type=int, default=1000, help="damaged copies per fuzz (default 1000)")
     p.add_argument("--no-build", action="store_true")
+    p.add_argument("--side", action="store_true", help="only the sidebar: section 6 and its fuzz")
+    p.add_argument("--no-side", action="store_true", help="leave section 6 out")
+    p.add_argument("--mods", default="", help="m1,m2,...: section 6's setups (default: every one sidepacks.py knows)")
     a = p.parse_args()
     gamedir = tavfs.find_install(a.gamedir)
     exe = Path(a.exe) if a.exe else None
     if not a.no_build:
         build()
+    if a.side:
+        return side_main(a, gamedir)
     native, log = run_load(gamedir, pak_of_tree(), a.mounts, exe, a.language)
     print(f"assetcheck: native {log.splitlines()[-1] if log else ''}")
     if a.report:
@@ -761,6 +919,37 @@ def main():
             if r.returncode:
                 print(f"assetcheck: {cmd[0]} FAILED ({r.returncode}): {r.stderr.strip()[-3000:]}")
                 return 1
+    if not a.no_side:
+        return side_main(a, gamedir)
+    print("assetcheck: passed")
+    return 0
+
+
+def side_fuzz(n):
+    """`wikiassettest fuzz-side`: synthetic files only, so it runs without a game"""
+    with tempfile.TemporaryDirectory(prefix="assetcheck-fuzz-") as tmp:
+        r = subprocess.run([str(EXE), "fuzz-side", tmp, str(n), "5"], capture_output=True, text=True)
+    print(r.stdout.rstrip())
+    if r.returncode:
+        print(f"assetcheck: fuzz-side FAILED ({r.returncode}): {r.stderr.strip()[-3000:]}")
+    return r.returncode == 0
+
+
+def side_main(a, gamedir):
+    sys.path.insert(0, str(HERE))
+    import sidepacks  # noqa: E402
+    mods = [m for m in a.mods.split(",") if m] or list(sidepacks.SETUPS)
+    unknown = [m for m in mods if m not in sidepacks.SETUPS]
+    if unknown:
+        print(f"assetcheck: no setup for {', '.join(unknown)} (the mods: {', '.join(sidepacks.SETUPS)})")
+        return 2
+    ok, lines = against_sidepacks(mods, gamedir, pak_of_tree())
+    print("\n".join(lines))
+    if a.fuzz and not side_fuzz(a.fuzz):
+        return 1
+    if not ok:
+        print("assetcheck: the sidebar FAILED")
+        return 1
     print("assetcheck: passed")
     return 0
 
