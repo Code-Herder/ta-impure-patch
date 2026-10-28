@@ -119,7 +119,7 @@ function stateHash(sim, v) {
     int(d.h); str(d.screen); str(d.unit); int(d.page); int(d.state.length); for (const x of d.state) int(x); str(d.under);
   }
   str(v.locked);
-  int(v.clock); int(v.waiting === 'idle' ? 1 : 0); int(v.stalled ? 1 : 0);
+  int(v.clock); int(v.waiting ? WikiSim.UNTILS.indexOf(v.waiting) + 1 : 0); int(v.stalled ? 1 : 0);
   int(v.cob ? 1 : 0);
   if (v.cob) for (const half of [v.cob[1], v.cob[0]]) for (let k = 0; k < 4; k++) byte((half >>> (8 * k)) & 255);
   int(v.parts.length);

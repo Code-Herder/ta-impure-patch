@@ -1181,7 +1181,10 @@ click at type 0:
 
 Every demo ends on its work done: after its last input it waits until no unit of the player's
 holds a build or a reclaim order (at most 1800 ticks), then plays 60 more; *The best extractor
-that fits* also waits between its two clicks (`gen-quickbuild.mjs` `until`, `TAIL`, `WAIT_MAX`).
+that fits* also waits between its two clicks, and *Metal maps* waits for its constructor to arrive
+before its second (`gen-quickbuild.mjs` `until`, `TAIL`, `WAIT_MAX`). The ring and helpers demos
+need their unit still walking at a click instead; a path round something only lengthens a walk, so
+that holds.
 
 **Mods that lock it off:** Escalation, TA Zero and an unidentified mod (the resource profiles,
 `resource-snapping.md` *Scope and defaults*). Stock, Total Mayhem, ProTA and Twilight allow it.
@@ -1221,11 +1224,12 @@ the one loaded):
 
 Every demo has exactly one ARMCK selected: the stock interface arms a building only with one unit
 selected (`quality-of-life.md` *Who builds*). The entry's `pace` is 24: an ARMLLT takes ARMCK
-2.4 s on the stage (58 s in the game), an ARMDRAG 0.27 s. The demos end a fixed tail after their
-last input, on the shape and its first pieces, not the whole queue: with its script ARMCK folds
-and unfolds its nanolathe between two queued pieces, about 268 ticks a piece, so a whole line
-would run for minutes. *Click and Shift-click*, *Filled rectangle* and *Ring around a building*
-have tails of 300, 480 and 420 ticks, long enough for the pieces their claims read finished.
+2.4 s on the stage (58 s in the game), an ARMDRAG 0.27 s. The demos end on the shape and its
+first pieces, not the whole queue: with its script ARMCK folds and unfolds its nanolathe between
+two queued pieces, about 268 ticks a piece, so a whole line would run for minutes. *Click and
+Shift-click* and *Filled rectangle* wait until two pieces are finished and *Ring around a
+building* until one is (`until: "built"`), then play 60 ticks; the others end a fixed tail after
+their last input, since their claims read only the shape and the queue.
 
 ## The data format
 
@@ -1277,7 +1281,15 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
   mode.
 - **A wait, `{ "at": t, "until": "idle", "max": m }`**, holds the demo's clock at `t` until no unit
   of the player's holds a build or a reclaim order, at most `m` ticks (an integer, 1 to 3600);
-  past that the demo stops, stalled, and the check names it. `idle` is the only state. A wait
+  past that the demo stops, stalled, and the check names it. **`"until": "arrived"`** holds it
+  instead until no unit of the player's holds a move order: each reached its place or stopped
+  close by it. A demo waits on the state its next input needs rather than timing that input to a
+  walk, whose length the units and buildings in the way decide ([below](#how-units-move)).
+  **`"until": "built"`**, the demo's k-th such wait, holds once k buildings of the player's have
+  been finished in the demo -- a count, so a building finished before the wait counts too, and a
+  fast mod's builder never leaves a wait with nothing left to finish. The states are
+  `WIKI_UNTIL_IDLE` 1, `WIKI_UNTIL_ARRIVED` 2 and `WIKI_UNTIL_BUILT` 3, in `sim.js`'s `UNTILS`
+  order. A wait
   carries no other key, and no other input shares its tick; both simulations refuse a demo that
   breaks either. Every later input, trip and the demo's `end` count the clock's ticks, which stand
   still during a wait (*The units' scripts*, below).
@@ -1401,7 +1413,7 @@ cases). Every demo plays with the fixture's sidebar, the 768-row fixture's and n
 contexts: the entry's own types and the `identity`, `shifted` and `unbound` castings of
 `tools/wiki/casting-fixture.json`, each at Interface Type 1 and 0, and each of those with the
 units' scripts and without when a gfx pack under `tools/wiki/mockup/gfx/` holds them (`wikitest`
-reads the same script files). MEASURED 2026-10-28: 1008 demo plays and 47 rule cases equal, all
+reads the same script files). MEASURED 2026-10-28: 1008 demo plays and 55 rule cases equal, all
 180 refusal cases alike, 24 castings and layouts read back alike and all 21 malformed-data cases
 as stated, natively (gcc, with AddressSanitizer and UndefinedBehaviorSanitizer) and with `--wine`
 (the DLL's compiler and flags, run under Wine).
@@ -1440,8 +1452,10 @@ as stated, natively (gcc, with AddressSanitizer and UndefinedBehaviorSanitizer) 
   (`stage.js`, `tagpu_wikistage.c`) ignores it, and `tagpu_wikistage_copy`'s by-value view does
   not carry it until the 3D stage's units do. Units turn at once, with no turn rate (the owner's
   answer of 2026-10-26, [the 3D stage's plan](ingame-wiki-3d-stage-plan.html) question 9):
-  - a walk step faces along the step, `dx / d`, `dz / d`, the numbers the step itself moves by;
-    the tick a unit arrives, with no step, keeps the last one's facing;
+  - a walk step faces along the step, `dx / d`, `dz / d`, the numbers the step itself moves by,
+    and a turned step along its turn, that vector rotated by `Math.SQRT1_2` (the correctly
+    rounded double the C literal names too); the tick a unit arrives, with no step, keeps the last
+    one's facing;
   - a builder in range of what it builds or reclaims, its own order or a guarded unit's, faces
     that building's centre every tick it works (unchanged if it stands on the centre);
   - a building faces `(0, 1)`, toward the viewer, a scene's `facing` included: TA's default
@@ -1464,7 +1478,11 @@ as stated, natively (gcc, with AddressSanitizer and UndefinedBehaviorSanitizer) 
   click's orders go in whole or not at all, so an upgrade's reclaim never goes in without its
   build. The loader refuses a map wider or taller than 128 cells (`WIKI_MAP_MAX`), which bounds
   every per-cell array and the map a packet will carry by value. `sim.js` caps the same appends
-  in the same way, and `simcheck.mjs` checks it as a rule case.
+  in the same way, and `simcheck.mjs` checks it as a rule case. The planner's scratch is sized at
+  init from the map: W × H bytes for the held cells, W × H nodes of state, cost and parent, and a
+  heap of 8 × W × H + 4 entries -- a node is pushed once from a seed and at most once from each of
+  its eight neighbours, since a neighbour relaxes it only when popped, once -- about 2.3 MB at
+  128 × 128 and 0.2 MB on the 40 × 30 stage maps.
 - **Its calls** (`tagpu_wikisim.h`): `tagpu_wikisim_init` from an entry and a demo, scripted (the
   demo plays, `sim.js`'s `play`) or not (Try it yourself on the demo's scene, `create`);
   `tagpu_wikisim_input`; `tagpu_wikisim_step`, one tick; `tagpu_wikisim_view`, `sim.js`'s
@@ -1575,15 +1593,16 @@ three:
 
 **What it simplifies, on purpose and in both places:**
 
-- units walk in a straight line at their speed and stop within their build distance, and turn at
-  once, with no turn rate;
+- units walk by the wiki's own movement rule ([below](#how-units-move)), not the engine's
+  pathfinder: bodies are footprint boxes, a path is A* over the map's cells, nobody is pushed, and
+  units turn at once, with no turn rate;
 - construction fills at the builders' total worker time over the building's build time, with no
   resource cost and no economy; a reclaim takes as long as building it would;
 - construction and reclaim run at the entry's `pace` (`"pace": {"build": N}`), N times faster
   than the game, which the stage says: an ARMMOHO takes one ARMACK about 223 s
   (BuildTime 35,750 / WorkerTime 160), too long to watch. The units' scripts run at game speed,
   so their animations, and a build's wait for the builder's stance, take their game time;
-- no pathfinding, collisions, terrain height, enemies or other orders;
+- no terrain height, slopes, enemies or other orders;
 - the engine's own site test (`0x47D2E0`) as: inside the map's interior cells, clear of
   structures, a geothermal plant with a vent under it; a mobile unit never blocks a site, where
   the engine's test refuses one standing on it;
@@ -1609,6 +1628,75 @@ nano spray's live particles, `parts` (each `[x, y, z, step x, y, z, end, colour]
 units, x, altitude, z; `npart` and `part` in C) and `partsCut` (`part_cut`: a bound dropped one);
 and `sound`, null without a source: `next` (each kind's next time), `last`, `queue`, `total` and
 `events` (the last 32, oldest first; `snd_next`, `snd_last`, `sndq`, `snd_total`, `snd` in C).
+
+### How units move
+
+The owner's request of 2026-10-28: units do not walk over each other or through builders. The
+owner chose a rule of the wiki's own over a port of the engine's mover and pathfinder (`0x43DD20`,
+`0x40E9E0`, unmapped), and that a unit whose place is taken stops close by rather than pushing.
+`sim.js` *MOVEMENT* and `tagpu_wikisim.c` *MOVEMENT* are the rule, function for function.
+
+- **Bodies.** A mobile unit's body is its footprint's box about its centre (`fx × 8` either side,
+  so ARMCK is 32 × 32); a structure's is its footprint, finished or a nanoframe; and a builder
+  within build distance of a site it has not started yet holds the site as a **claim**, a body of
+  no unit. Bodies overlap only with area in common: touching is not overlapping.
+- **The step rule**, which every position change obeys: a step may not make its unit overlap a
+  body it does not overlap already, nor take its body off the map. So no step ever puts two bodies
+  together, and a unit that something was put over (a scene, a structure started on it) can still
+  walk out. `simcheck.mjs` holds every demo, in every context, to no overlap on any tick.
+- **Straight while clear.** A unit walks straight at its target, exactly as it did before this
+  rule (the same arithmetic, so a walk with nothing in its way is unchanged), while the straight
+  line is clear of every **still** body: a structure, a claim, or a unit that did not step on the
+  last tick. The test is the segment against each body grown by the walker's half sides, which is
+  exactly where the sliding box would overlap it. A walking unit does not block the line: a step
+  one refuses tries 45° left, 45° right, 90° left, 90° right, and failing all five the unit waits
+  the tick.
+- **Otherwise the planner**: A* over the map's cells, a node standing the unit's body on whole
+  cells, free when no body covers it (walking units included, at their present place: a guard
+  that steps one tick in two would otherwise flicker on and off every path past it). A side costs
+  16, a corner `16√2` and needs both sides beside it free. It starts from the nodes whose cells the
+  unit's body touches already (one on a node, up to four between nodes), each at its distance,
+  and ends at the first node popped that meets the goal; the heap orders by f, then push order,
+  a total order both heaps pop alike. The goal is the target's range (a point: within one cell;
+  a site: build distance; a guarded unit: 48), or touching the target's own body.
+- **Legs.** A path is walked one node at a time. The unit keeps its leg until it stands on the
+  node (the last step lands on it exactly), a body covers the node, the straight step is refused
+  or a turn was taken, or its order or the kind of its target changes (a guard whose leader moves
+  to a new job keeps its leg to the next node); only then does it plan again. Replanning
+  every tick dithered: from between two nodes the nearer can lie behind (seen on *The best
+  extractor that fits*, a constructor rocking between two nodes for 1500 ticks). A leg crosses no
+  structure cell: it starts on a node or within a cell of it on each axis, so the box sweeps only
+  cells the unit's body or the node's covers already.
+- **Stuck, and close by.** When no node is nearer the target than where the unit stands, it is
+  **stuck**: a move ends there (two units sent to one place: the first takes it, the second stops
+  beside it), and a build, reclaim or guard waits, planning again each tick, so a helper at a
+  crowded site stands close by until a place frees.
+- **Arrival at a target body.** A unit is in range when within its range of the target, or
+  touching the target's own body, or when the target itself refuses its straight step. A site is
+  a body to the unit heading for it, started or not, so that step stops at its edge: a builder
+  whose BuildDistance is shorter than its own half width still reaches its site rather than
+  walking onto it. A **claim** follows the same arrival: the builder's centre within its
+  BuildDistance of the site, or its body within one step (MaxVelocity) of it, which covers
+  touching and a refused step. A builder that arrived without claiming would never send what
+  stands on the site away, and its build would wait for good. For every builder whose
+  BuildDistance is at least its half width plus a step, the second test adds nothing.
+- **A site is cleared before it starts.** A builder in range does not start a building while any
+  unit's body overlaps the site. A unit on a structure or a claim (the claimant included, when it
+  was ordered to build where it stands) spends its turn stepping straight away from the body's
+  centre -- the first it overlaps of the units' bodies in creation order, then the claims in their
+  claimants' order -- along `(0, 1)` from the centre itself.
+- **A scene's mobile unit starts clear.** A casting's bigger units can overlap an authored scene
+  (TA Zero's GOK hovers are 3 × 3 and 4 × 4 where stock's kbots are 2 × 2, 48 units apart). Such
+  a unit stands at the nearest centre a whole number of cells from its authored one, at most 8
+  either way, nearest by distance, then z, then x, whose body is on the map and clear of the
+  scene's structures and of the mobile units before it in the scene; with none it stands where
+  authored and walks out. It is settled before any unit enters, since entering starts the unit's
+  script, which may read where it stands. A stock scene never moves.
+- **What the rule does not do.** Nobody pushes: an idle unit in a path is walked round, never moved
+  aside (but off a claim). A unit boxed in on a claimed site, every step refused, holds that build
+  until something moves. A crowd going opposite ways through a one-unit gap can take many ticks of
+  turns. Paths are eight-direction: diagonal runs look stepped, since nothing smooths them. None
+  of these is seen in a demo.
 
 ### The units' scripts
 
@@ -1642,8 +1730,7 @@ both fold into theirs, holds them to the same calls.
   builder: every Quick Build demo ends on `until idle` and 60 more ticks. The scripts run at game
   speed while builds run at the entry's `pace`, so a build stance or a nanolathe folding between
   two queued pieces takes its game time: stock's ARMCK takes about 268 ticks a queued piece, and
-  the Build Lines demos keep fixed tails long enough for the pieces their claims read
-  ([the COB plan](ingame-wiki-cob-plan.html), *The demo's wait*).
+  the Build Lines demos whose claims read finished pieces wait for them (`until: "built"`).
 - **The poses.** What a unit's script poses is drawn, not simulated: the poses are outside the
   view and the state hash. In the DLL the page fill copies each unit's posed model (each
   primitive's MOVE, TURN and flags) after the view's copy into the stage record's pose pool,
@@ -1675,7 +1762,7 @@ both fold into theirs, holds them to the same calls.
   built, it plays without the scripts and says why in the console, as it says a quarantined type's
   note. Run the mockup with `serve.py`.
 - **What it costs**: the host's slice over a demo's units is about 70 µs; with the scripts the page
-  cost the game thread at most 0.358 ms in a frame over 1222 frames, and *Queue several with
+  cost the game thread at most 0.281 ms in a frame over 1253 frames, and *Queue several with
   Shift* plays 1054 ticks where it played 570 (MEASURED 2026-10-28).
 
 ### The units' sounds

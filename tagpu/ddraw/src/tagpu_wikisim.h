@@ -234,6 +234,9 @@ typedef struct {
     char   target[WIKI_ID_MAX];     /* RECLAIM, GUARD: the unit's id */
 } WIKIORDER;
 
+/* a rect in world units; the movement's bodies (tagpu_wikisim.c, MOVEMENT) */
+typedef struct { double x0, z0, x1, z1; } WIKIRECT;
+
 typedef struct WIKIUNIT {
     char             id[WIKI_ID_MAX];
     int              type, owner, sel;
@@ -263,6 +266,13 @@ typedef struct WIKIUNIT {
     int              work_serial, stanced;
     char             job_id[WIKI_ID_MAX];
     int              stepped, moving;
+    /* movement (tagpu_wikisim.c, MOVEMENT): whether it stepped on the last tick; whether this
+       tick's step turned off its line, and whether it stepped off a structure or a claim instead
+       of its orders; its leg -- the node it walks to, and the serial of the order and the kind of
+       target it was planned for -- when `leg` */
+    int              went, turned, evacuated;
+    int              leg, leg_serial, leg_kind;
+    double           leg_x, leg_z;
     /* the spray: how its work was credited this tick (HOW_* + 1, 0 none) and the structure's
        id, type and centre then (a reclaim may free it before the unit's turn sprays); and the
        tick of its last reclaim spray (0 none) and the structure that one was on */
@@ -274,6 +284,12 @@ typedef struct WIKIUNIT {
        and ACTIVATION as the last notice saw it */
     int              begun, said, completed, active;
 } WIKIUNIT;
+
+/* a body another unit's step must not newly overlap: a unit's, or a claim's (u NULL) */
+typedef struct { WIKIRECT r; const WIKIUNIT* u; } WIKIBODY;
+
+/* the planner's heap entry: its f, the order it was pushed in, its node */
+typedef struct { double f; int seq, n; } WIKIHEAPNODE;
 
 enum { WIKI_SITE_PLACE, WIKI_SITE_REFUSED, WIKI_SITE_REMOVE };
 
@@ -469,6 +485,9 @@ typedef struct {
        with `tick` except while a wait holds it: waiting the WIKI_UNTIL_* it waits for (0 none),
        from the tick it began, at most wait_max ticks; one past its max stops the demo, stalled */
     int              clock, waiting, wait_from, wait_max, stalled;
+    int              nbuilt, built_waits, wait_built;  /* the buildings of the player's finished so
+                                                         far, the BUILT waits begun, and the count
+                                                         this one needs: its place among them */
     int              next_serial;   /* the orders made, the last serial given */
 
     /* the units' scripts: the host, or NULL without one; GET's facts, scratch for every call */
@@ -530,6 +549,20 @@ typedef struct {
     WIKIVSITE        vsite[PLACE_MAX_SITES];
     WIKISNDEV        vsnd[WIKI_SND_LOG];
     int              cvunit, cvqueued, cvline;
+    /* the movement's scratch: one unit's bodies (two a unit: its own and a claim, and the site it
+       heads for) and the walking
+       ones among them; the planner's held cells, then per node its state, cost and parent, W x H
+       of each; its heap, 8 x W x H + 4 */
+    WIKIBODY*        obs;
+    WIKIRECT*        mover;
+    int              cobs, cmover;
+    unsigned char*   occ;
+    unsigned char*   known;
+    unsigned char*   shut;
+    double*          pg;
+    int*             par;
+    WIKIHEAPNODE*    heap;
+    int              nheap, heap_seq;
     int              oom;           /* an allocation failed: the sim went on without what it could not add */
 } WIKISIM;
 

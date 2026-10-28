@@ -55,8 +55,13 @@ const WikiSim = (() => {
   const SNDNAME = Object.fromEntries(SND_NAMES.map((n, i) => [n, i]));
   /* A DEMO'S WAIT, {"at", "until", "max"} (research/notes/ingame-wiki-cob-plan.md, decision 10): the demo's clock
      stops at `at` until the state `until` names holds, at most `max` ticks, after which the demo stops and says so.
-     UNTILS are the states; "idle": no unit of the player's holds a build or a reclaim order. UNTIL_MAX bounds `max`. */
-  const UNTILS = ['idle'], UNTIL_MAX = 3600;
+     UNTILS are the states, in tagpu_wikidata.h's WIKI_UNTIL_* order from 1: "idle", no unit of the player's holds a
+     build or a reclaim order; "arrived", no unit of the player's holds a move order (each reached its place or
+     stopped close by it); "built", the demo's k-th such wait, k buildings of the player's have been finished in the
+     demo -- a count, so a building finished before the wait counts too. A demo waits
+     on the state its next input or its claim needs instead of timing it to a walk, whose length the units in the
+     way decide. UNTIL_MAX bounds `max`. */
+  const UNTILS = ['idle', 'arrived', 'built'], UNTIL_MAX = 3600;
   const KEYS = ['shift', 'alt', 'ctrl', 'z', 'x', 'lmb', 'rmb'];
   const sq = v => v * v;
   const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
@@ -501,7 +506,8 @@ const WikiSim = (() => {
     }
 
     /* ---- units. Each faces along a unit vector (hx, hz); walk says why a vector. ---- */
-    let units = [], nextId = 1;
+    // built: the buildings of the player's finished so far; builtWaits: the "built" waits begun
+    let units = [], nextId = 1, built = 0, builtWaits = 0;
     /* a unit joins the world. With the sidebar it carries its page state, unit+0x110: bp (bit 22, a numbered page
        is shown rather than the orders page) and page (bits 23..25, 1..n). 0x485CD5 creates a unit whose type has
        numbered pages with bit 22 set and page 1; any other unit has neither. */
@@ -539,8 +545,37 @@ const WikiSim = (() => {
        the authored one can overlap a structure placed before it or leave the placeable interior (cells 1 to w - 2,
        the site test's bound below); the demo is refused for that casting rather than played broken, as
        tagpu_wikisim_init refuses it. Mobile units never block. */
-    for (const s of S.units) {
-      const u = add(s.type, s.owner ?? 0, s.at[0], s.at[1], s.built ?? 1, s.id, s.label, facing(s.facing));
+    /* A SCENE'S MOBILE UNIT STARTS CLEAR (research/notes/ingame-wiki.md, *How units move*): at its authored centre,
+       or, when its body there would overlap a scene structure or a mobile scene unit before it -- a casting's bigger
+       units can -- at the nearest centre a whole number of cells away whose body overlaps neither and lies on the map:
+       nearest by distance, then by z, then by x, at most SPREAD cells either way. With none it stands where authored,
+       and the step rule lets it walk out. The structures stay where authored. Settled before any unit enters, since
+       entering starts its script, which may read where it stands. */
+    const SPREAD = 8, spot = S.units.map(s => [s.at[0], s.at[1]]);
+    {
+      const rectAt = (t, x, z) => {
+        if (mobile(t)) return [x - fp(t)[0] * CELL / 2, z - fp(t)[1] * CELL / 2, x + fp(t)[0] * CELL / 2, z + fp(t)[1] * CELL / 2];
+        const ox = Math.round(x / CELL - fp(t)[0] / 2), oz = Math.round(z / CELL - fp(t)[1] / 2);
+        return [ox * CELL, oz * CELL, (ox + fp(t)[0]) * CELL, (oz + fp(t)[1]) * CELL];
+      };
+      const clash = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+      S.units.forEach((s, k) => {
+        if (!mobile(s.type)) return;
+        const free = (x, z) => {
+          const a = rectAt(s.type, x, z);
+          if (!(a[0] >= 0 && a[1] >= 0 && a[2] <= W * CELL && a[3] <= H * CELL)) return false;
+          return S.units.every((v, m) => (mobile(v.type) && m >= k) || !clash(a, rectAt(v.type, spot[m][0], spot[m][1])));
+        };
+        for (let d2 = 0; d2 <= 2 * SPREAD * SPREAD; d2++)
+          for (let j = -SPREAD; j <= SPREAD; j++) for (let i = -SPREAD; i <= SPREAD; i++)
+            if (i * i + j * j === d2 && free(s.at[0] + i * CELL, s.at[1] + j * CELL)) {
+              spot[k] = [s.at[0] + i * CELL, s.at[1] + j * CELL];
+              return;
+            }
+      });
+    }
+    for (const [k, s] of S.units.entries()) {
+      const u = add(s.type, s.owner ?? 0, spot[k][0], spot[k][1], s.built ?? 1, s.id, s.label, facing(s.facing));
       u.orders = (s.orders || []).slice(0, PLACE_LIST_CAP).map(o => ({ k: 'move', x: o.move[0], z: o.move[1] }));
       for (const o of u.orders) sceneOrders.add(o);
       if (mobile(u.type)) continue;
@@ -1379,35 +1414,284 @@ const WikiSim = (() => {
       st.hover = hover();
     }
 
-    /* ---- one tick. Units walk in a straight line at MaxVelocity (world units a tick) and stop once within
+    /* ---- one tick. Units walk at MaxVelocity (world units a tick) as MOVEMENT below says, and stop once within
        BuildDistance of the footprint; a building fills at its builders' summed WorkerTime over its BuildTime (worker
        time a second), times the entry's pace.build, with no cost; a reclaim takes as long as building it would. Guards
        work on whatever their guarded unit works on this tick, so they are resolved after everyone else. ---- */
-    function rectDist(u, b) {
-      const dx = Math.max(b.ox * CELL - u.x, 0, u.x - (b.ox + b.fx) * CELL), dz = Math.max(b.oz * CELL - u.z, 0, u.z - (b.oz + b.fz) * CELL);
-      return Math.sqrt(dx * dx + dz * dz);
-    }
-    /* A step toward (tx, tz), ending `stop` short of it; true once there. The step turns the unit to face along it,
-       at once: the simulation has no turn rate.
+
+    /* ---- MOVEMENT (research/notes/ingame-wiki.md, *How units move*). A rect is [x0, z0, x1, z1] in world units.
+       A mobile unit's BODY is its footprint's box about its centre, a structure's its footprint, and a builder within
+       build distance of a site it has not started yet holds the site as a CLAIM, a body of no unit. Bodies overlap
+       only with area in common: touching is not overlapping.
+
+       THE STEP RULE, which every step obeys: a step may not make its unit overlap a body it does not overlap already,
+       nor take its body off the map. So no step ever puts two bodies together, and a unit that something was put
+       over (a scene, a structure started on it) can still walk out.
+
+       A unit with somewhere to go walks straight at it while the straight line is clear of every STILL body -- a
+       structure, a claim, a unit that did not step on the last tick -- and otherwise along the PLANNER's path round
+       every body where it stands now. A unit walking does not take a straight line from another: a step one of them
+       refuses turns 45 and then 90 degrees left and right, and failing all of them the unit waits for the tick. The
+       planner counts the walking too, since a unit that walks one tick in two (a guard keeping up with its leader)
+       would otherwise put its body on and off every path planned past it. A unit the planner has no nearer place for is STUCK:
+       a move ends there, any other order waits.
+
+       A path is walked one LEG at a time, a leg being the walk to one node: the unit keeps its leg until it stands on
+       the node, until a body covers the node, until its straight step is refused (a turned step ends the leg
+       too), or until its order or target changes, and only then plans again. Planning afresh every tick would dither: from between two nodes the nearer
+       one can lie behind. A leg crosses no structure: one starts on a node or within a cell of its node on each axis,
+       so the box sweeps only cells the unit's body or the node's already covers, and a corner leg needs both cells
+       beside it free.
 
        THE HEADING IS A VECTOR, NOT AN ANGLE. An angle would come from Math.atan2, which no standard rounds correctly,
        so its last bit differs between JavaScript engines and C libraries, and tagpu_wikisim.c would drift from this
-       file. The step's own dx / d and dz / d are + - * / and sqrt, each rounded once, so both simulations hold the
-       same doubles. */
-    function walk(u, tx, tz, stop) {
-      const dx = tx - u.x, dz = tz - u.z, d = Math.sqrt(dx * dx + dz * dz);
-      if (d <= stop) return true;
-      const s = Math.min(def(u.type).maxVelocity, d - stop);
-      u.stepped = true;
-      u.hx = dx / d; u.hz = dz / d;
-      u.x += dx / d * s; u.z += dz / d * s;
+       file. A step's direction is + - * / and sqrt, each rounded once, and a turn multiplies it by Math.SQRT1_2, the
+       correctly rounded double the C literal names too, so both simulations hold the same doubles. ---- */
+    const ARRIVED = 1, STEPPED = 2, WAITING = 3, STUCK = 4, EDGE = { r: null, u: null };
+    const C45 = Math.SQRT1_2, DIAG = CELL * Math.SQRT2;
+    // a step's tries, (cos, sin) of its turn: straight on, 45 degrees either way, then 90
+    const TURNS = [[1, 0], [C45, C45], [C45, -C45], [0, 1], [0, -1]];
+    // the planner's neighbours: the four sides, then the four corners
+    const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+    const hits = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+    const meets = (a, b) => a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
+    const sameRect = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
+    const onMap = r => r[0] >= 0 && r[1] >= 0 && r[2] <= W * CELL && r[3] <= H * CELL;
+    const rectOf = (t, ox, oz) => [ox * CELL, oz * CELL, (ox + fp(t)[0]) * CELL, (oz + fp(t)[1]) * CELL];
+    const bodyAt = (u, x, z) => {
+      const ax = fp(u.type)[0] * CELL / 2, az = fp(u.type)[1] * CELL / 2;
+      return [x - ax, z - az, x + ax, z + az];
+    };
+    const body = v => mobile(v.type) ? bodyAt(v, v.x, v.z) : rectOf(v.type, v.ox, v.oz);
+    // the distance from (x, z) to rect r, 0 inside it
+    function rectDist(x, z, r) {
+      const dx = Math.max(r[0] - x, 0, x - r[2]), dz = Math.max(r[1] - z, 0, z - r[3]);
+      return Math.sqrt(dx * dx + dz * dz);
+    }
+    // the gap between rects a and b, 0 when they touch or overlap
+    function rectGap(a, b) {
+      const dx = Math.max(b[0] - a[2], 0, a[0] - b[2]), dz = Math.max(b[1] - a[3], 0, a[1] - b[3]);
+      return Math.sqrt(dx * dx + dz * dz);
+    }
+    /* the site u's first order claims: a build not started yet that u has reached -- its centre within build distance
+       of the site, or its body within a step of it. The second is how a builder whose BuildDistance is under its half
+       width arrives (touching the site, or stopped short of it by the site refusing its step), and it must claim
+       there too, or what stands on the site is never told to leave it and the build waits for good. */
+    function claim(u) {
+      const o = u.orders[0];
+      if (!o || o.k !== 'build' || started(o)) return null;
+      const r = rectOf(o.type, o.ox, o.oz);
+      return rectDist(u.x, u.z, r) <= def(u.type).buildDistance || rectGap(body(u), r) <= def(u.type).maxVelocity ? r : null;
+    }
+    // every body but u's, as {r, u}: the units' in creation order, then the claims in their claimants' order
+    function bodies(u) {
+      const out = [];
+      for (const v of units) if (v !== u) out.push({ r: body(v), u: v });
+      for (const v of units) if (mobile(v.type)) { const r = claim(v); if (r) out.push({ r, u: null }); }
+      return out;
+    }
+    const still = b => !b.u || !mobile(b.u.type) || !b.u.went;
+    // a body that is the target itself: its body (the site, a structure on it or a claim of it; the guarded unit)
+    const isTarget = (b, tgt) => !!tgt.body && sameRect(b.r, tgt.body);
+    /* A TARGET: the point aimed at (x, z); in range within `stop` of rect r, or touching `body`, the target's own
+       body (null for a point); a straight walk ends `clip` short of the point; the planner's goal is within `plan` of
+       r, or touching `body`; `order` and `kind` name it for the leg */
+    const toPoint = (o, x, z) => ({ x, z, r: [x, z, x, z], stop: 0, clip: 0, plan: CELL, body: null, order: o, kind: 0 });
+    const toSite = (o, u, r) => {
+      const bd = def(u.type).buildDistance;
+      return { x: (r[0] + r[2]) / 2, z: (r[1] + r[3]) / 2, r, stop: bd, clip: 0, plan: bd, body: r, order: o, kind: 1 };
+    };
+    const toUnit = (o, g) => ({ x: g.x, z: g.z, r: [g.x, g.z, g.x, g.z], stop: FOLLOW, clip: FOLLOW, plan: FOLLOW, body: body(g), order: o, kind: 2 });
+    const inRange = (x, z, b, tgt, within) => rectDist(x, z, tgt.r) <= within || (!!tgt.body && meets(b, tgt.body));
+
+    // THE STEP RULE: the body u's step to (x, z) would newly overlap, the first in `obs`'s order, or EDGE; null if none
+    function refuses(u, x, z, obs) {
+      const a = bodyAt(u, x, z), now = body(u);
+      if (!onMap(a) && onMap(now)) return EDGE;
+      for (const b of obs) if (hits(a, b.r) && !hits(now, b.r)) return b;
+      return null;
+    }
+    /* u steps `len` along the unit vector (hx, hz) -- to (ex, ez) exactly when that is given, the end of a path's leg
+       -- or along the first turn of it the step rule lets go. ARRIVED, with no step, when what refuses the straight
+       step is the target itself; WAITING when every try is refused. u.turned says whether a turn went. */
+    function step(u, hx, hz, len, obs, tgt, ex, ez) {
+      for (let k = 0; k < TURNS.length; k++) {
+        const c = TURNS[k][0], s = TURNS[k][1];
+        const dx = k ? hx * c - hz * s : hx, dz = k ? hx * s + hz * c : hz;
+        const x = !k && ex !== undefined ? ex : u.x + dx * len, z = !k && ez !== undefined ? ez : u.z + dz * len;
+        const r = refuses(u, x, z, obs);
+        if (!r) { u.x = x; u.z = z; u.hx = dx; u.hz = dz; u.stepped = true; u.turned = k > 0; return STEPPED; }
+        if (!k && tgt && r !== EDGE && isTarget(r, tgt)) return ARRIVED;
+      }
+      return WAITING;
+    }
+    // the segment from (x, z) to (tx, tz) passes through the inside of rect r
+    function crosses(x, z, tx, tz, r) {
+      let t0 = 0, t1 = 1;
+      const p = [x, z], d = [tx - x, tz - z];
+      for (let k = 0; k < 2; k++) {
+        const lo = r[k], hi = r[k + 2];
+        if (d[k] === 0) { if (!(lo < p[k] && p[k] < hi)) return false; continue; }
+        let a = (lo - p[k]) / d[k], b = (hi - p[k]) / d[k];
+        if (a > b) { const c = a; a = b; b = c; }
+        if (a > t0) t0 = a;
+        if (b < t1) t1 = b;
+      }
+      return t0 < t1;
+    }
+    /* u's body can slide straight to the target's point past every still body but the target's own and those it
+       overlaps already, and ends on the map: the segment against each body grown by u's half sides, which is exactly
+       where the sliding box would overlap it */
+    function clear(u, tgt, obs) {
+      const now = body(u), ax = fp(u.type)[0] * CELL / 2, az = fp(u.type)[1] * CELL / 2;
+      if (onMap(now) && !onMap(bodyAt(u, tgt.x, tgt.z))) return false;
+      for (const b of obs) {
+        if (!still(b) || isTarget(b, tgt) || hits(now, b.r)) continue;
+        if (crosses(u.x, u.z, tgt.x, tgt.z, [b.r[0] - ax, b.r[1] - az, b.r[2] + ax, b.r[3] + az])) return false;
+      }
+      return true;
+    }
+    /* THE PLANNER: A* over the map's cells. Node (i, j) stands u with its body on cells i..i+fx-1, j..j+fz-1; it is
+       free when no body covers it but those u overlaps already. A step to a side costs CELL, to a corner DIAG
+       and needs both sides beside it free. The search starts from the nodes whose cells u's body touches already --
+       one when u stands on a node, up to four between nodes -- each at its distance, and ends at the first node popped that meets the goal; failing one, at the popped node nearest the
+       target, if it is nearer than u stands. The heap orders by f, then by push, so every correct heap pops the same
+       nodes. The node to head for, or null: no nearer place (STUCK), which is also u standing on a goal node already. */
+    function plan(u, tgt, obs) {
+      const fx = fp(u.type)[0], fz = fp(u.type)[1], NW = W - fx + 1, NH = H - fz + 1;
+      if (NW < 1 || NH < 1) return null;
+      const now = body(u), occ = new Uint8Array(W * H), movers = [];
+      for (const b of obs) {
+        if (hits(now, b.r)) continue;
+        if (b.u && mobile(b.u.type)) { movers.push(b.r); continue; }
+        for (let j = Math.max(0, b.r[1] / CELL); j < Math.min(H, b.r[3] / CELL); j++)
+          for (let i = Math.max(0, b.r[0] / CELL); i < Math.min(W, b.r[2] / CELL); i++) occ[j * W + i] = 1;
+      }
+      const N = NW * NH, g = new Float64Array(N).fill(Infinity), par = new Int32Array(N).fill(-1);
+      const shut = new Uint8Array(N), known = new Uint8Array(N);  // known: 1 free, 2 blocked
+      const cx = i => (i + fx / 2) * CELL, cz = j => (j + fz / 2) * CELL;
+      const nodeBox = (i, j) => [i * CELL, j * CELL, (i + fx) * CELL, (j + fz) * CELL];
+      function free(n) {
+        if (!known[n]) {
+          const i = n % NW, j = (n - i) / NW, a = nodeBox(i, j);
+          let ok = true;
+          for (let dj = 0; dj < fz && ok; dj++) for (let di = 0; di < fx && ok; di++) if (occ[(j + dj) * W + i + di]) ok = false;
+          for (let k = 0; k < movers.length && ok; k++) if (hits(a, movers[k])) ok = false;
+          known[n] = ok ? 1 : 2;
+        }
+        return known[n] === 1;
+      }
+      const h = (i, j) => Math.max(0, rectDist(cx(i), cz(j), tgt.r) - tgt.plan);
+      const heap = [];
+      let seq = 0;
+      const less = (a, b) => a[0] < b[0] || (a[0] === b[0] && a[1] < b[1]);
+      function push(f, n) {
+        heap.push([f, seq++, n]);
+        for (let k = heap.length - 1; k > 0;) {
+          const p = (k - 1) >> 1;
+          if (!less(heap[k], heap[p])) break;
+          [heap[k], heap[p]] = [heap[p], heap[k]]; k = p;
+        }
+      }
+      function pop() {
+        const top = heap[0], last = heap.pop();
+        if (heap.length) {
+          heap[0] = last;
+          for (let k = 0; ;) {
+            const l = 2 * k + 1, r = l + 1;
+            let m = k;
+            if (l < heap.length && less(heap[l], heap[m])) m = l;
+            if (r < heap.length && less(heap[r], heap[m])) m = r;
+            if (m === k) break;
+            [heap[k], heap[m]] = [heap[m], heap[k]]; k = m;
+          }
+        }
+        return top[2];
+      }
+      const a = u.x / CELL - fx / 2, b = u.z / CELL - fz / 2, i0 = Math.floor(a), j0 = Math.floor(b);
+      for (let j = j0; j <= Math.ceil(b); j++) for (let i = i0; i <= Math.ceil(a); i++) {
+        if (i < 0 || j < 0 || i >= NW || j >= NH || !free(j * NW + i)) continue;
+        const dx = cx(i) - u.x, dz = cz(j) - u.z, d = Math.sqrt(dx * dx + dz * dz);
+        g[j * NW + i] = d;
+        push(d + h(i, j), j * NW + i);
+      }
+      let end = -1, best = -1, bestD = 0;
+      while (heap.length) {
+        const n = pop();
+        if (shut[n]) continue;
+        shut[n] = 1;
+        const i = n % NW, j = (n - i) / NW;
+        if (inRange(cx(i), cz(j), nodeBox(i, j), tgt, tgt.plan)) { end = n; break; }
+        const e = rectDist(cx(i), cz(j), tgt.r);
+        if (best < 0 || e < bestD) { best = n; bestD = e; }
+        for (const [di, dj] of DIRS) {
+          const ni = i + di, nj = j + dj, m = nj * NW + ni;
+          if (ni < 0 || nj < 0 || ni >= NW || nj >= NH || shut[m] || !free(m)) continue;
+          if (di && dj && (!free(j * NW + ni) || !free(nj * NW + i))) continue;
+          const c = g[n] + (di && dj ? DIAG : CELL);
+          if (c < g[m]) { g[m] = c; par[m] = n; push(c + h(ni, nj), m); }
+        }
+      }
+      if (end < 0) {
+        if (best < 0 || !(bestD < rectDist(u.x, u.z, tgt.r))) return null;
+        end = best;
+      }
+      // back to the seed; past it when u stands on it
+      let n = end, next = -1;
+      while (par[n] >= 0) { next = n; n = par[n]; }
+      if (g[n] === 0) n = next;
+      if (n < 0) return null;
+      const i = n % NW;
+      return { x: cx(i), z: cz((n - i) / NW) };
+    }
+    // u's leg is still its to walk: the same order and target, its node covered by no body u is not on already
+    function legHolds(u, tgt, obs) {
+      const L = u.leg;
+      if (!L || L.order !== tgt.order || L.kind !== tgt.kind) return false;
+      const now = body(u), a = bodyAt(u, L.x, L.z);
+      for (const b of obs) if (hits(a, b.r) && !hits(now, b.r)) return false;
+      return true;
+    }
+    // u's turn toward tgt: ARRIVED in range, else STEPPED, WAITING (its tries refused) or STUCK (no nearer place)
+    function go(u, tgt) {
+      if (inRange(u.x, u.z, body(u), tgt, tgt.stop)) { u.leg = null; return ARRIVED; }
+      const obs = bodies(u), v = def(u.type).maxVelocity;
+      /* the site is a body to the unit heading for it, started, claimed or not: its straight step stops at the site's
+         edge and is ARRIVED, so a builder whose BuildDistance is shorter than its half width does not walk onto it
+         (claim says how it then claims the site) */
+      if (tgt.kind === 1) obs.push({ r: tgt.body, u: null });
+      if (clear(u, tgt, obs)) {
+        u.leg = null;
+        const dx = tgt.x - u.x, dz = tgt.z - u.z, d = Math.sqrt(dx * dx + dz * dz);
+        return step(u, dx / d, dz / d, Math.min(v, d - tgt.clip), obs, tgt);
+      }
+      if (!legHolds(u, tgt, obs)) {
+        const w = plan(u, tgt, obs);
+        if (!w) { u.leg = null; return STUCK; }
+        u.leg = { x: w.x, z: w.z, order: tgt.order, kind: tgt.kind };
+      }
+      const L = u.leg, dx = L.x - u.x, dz = L.z - u.z, d = Math.sqrt(dx * dx + dz * dz);
+      const r = d <= v ? step(u, dx / d, dz / d, d, obs, tgt, L.x, L.z) : step(u, dx / d, dz / d, v, obs, tgt);
+      if (r !== STEPPED || u.turned || (u.x === L.x && u.z === L.z)) u.leg = null;
+      return r;
+    }
+    /* A unit on a structure or a claim steps straight away from its centre (the first such in bodies' order), away
+       along (0, 1) from the centre itself, and does nothing else on its turn; true when it was on one. A build waits
+       for its site to be clear of units, so this is how the units on a claimed site leave it. */
+    function evacuate(u) {
+      const obs = bodies(u), now = body(u);
+      for (const b of obs) {
+        if ((b.u && mobile(b.u.type)) || !hits(now, b.r)) continue;
+        const dx = u.x - (b.r[0] + b.r[2]) / 2, dz = u.z - (b.r[1] + b.r[3]) / 2, d = Math.sqrt(dx * dx + dz * dz);
+        u.leg = null;
+        if (d > 0) step(u, dx / d, dz / d, def(u.type).maxVelocity, obs, null);
+        else step(u, 0, 1, def(u.type).maxVelocity, obs, null);
+        return true;
+      }
       return false;
     }
-    function reach(u, b) {  // toward a footprint until within build distance of it; true once in range
-      if (rectDist(u, b) <= def(u.type).buildDistance) return true;
-      walk(u, (b.ox + b.fx / 2) * CELL, (b.oz + b.fz / 2) * CELL, 0);
-      return false;
-    }
+    // toward a footprint until within build distance of it; true once in range
+    const reach = (o, u, t, ox, oz) => go(u, toSite(o, u, rectOf(t, ox, oz))) === ARRIVED;
     /* ---- the nano spray (tagpu_wikisim.h, THE NANO SPRAY), tagpu_wikisim.c's spray functions line for line: int32
        arithmetic through | 0 and Math.imul, each double operation as the C rounds it ---- */
     let parts = [], bursts = [], nemit = 0, partsCut = false;
@@ -1513,24 +1797,37 @@ const WikiSim = (() => {
         // the step made progress: the unit's turn sprays at the structure as it stands now
         u.spray = { how, id: s.id, type: s.type, x: s.x, z: s.z };
       };
-      for (const u of units) { u.stepped = false; u.spray = null; u.completed = false; }
+      // went: the unit stepped on the last tick, so this tick's planners walk round it only if it stood
+      for (const u of units) { u.went = !!u.stepped; u.stepped = false; u.spray = null; u.evacuated = false; u.completed = false; }
       nemit = 0;
       for (const u of units) {
+        if (!mobile(u.type)) continue;
+        if (evacuate(u)) { u.evacuated = true; continue; }
         const o = u.orders[0];
-        if (!o || !mobile(u.type) || o.k === 'guard') continue;
+        if (!o || o.k === 'guard') continue;
         begin(u, o);
-        if (o.k === 'move') { if (walk(u, o.x, o.z, 0)) { u.orders.shift(); notice(u, SND.arrived); } continue; }
+        if (o.k === 'move') {
+          const r = go(u, toPoint(o, o.x, o.z));
+          if (r === ARRIVED || r === STUCK) u.orders.shift();
+          // a stuck move ends without arriving: the engine says arrived only where its move reaches the goal
+          // (Move_Ground 0x4031FB, 0x4032C2; 0x40FA53)
+          if (r === ARRIVED) notice(u, SND.arrived);
+          continue;
+        }
         if (o.k === 'reclaim') {
           const s = byId(o.target);
           if (!s) { u.orders.shift(); continue; }
-          if (reach(u, box(s.type, s.ox, s.oz))) credit(u, s, 'reclaim');
+          if (reach(o, u, s.type, s.ox, s.oz)) credit(u, s, 'reclaim');
           continue;
         }
         let s = structureAt(o.type, o.ox, o.oz);
         if (s && s.built >= 1) { u.orders.shift(); continue; }
-        if (!reach(u, box(o.type, o.ox, o.oz))) continue;
+        if (!reach(o, u, o.type, o.ox, o.oz)) continue;
         if (!s) {
           if (!siteOk(o.type, o.ox, o.oz, null)) { u.orders.shift(); notice(u, SND.cant); log('refused', u, o.type); continue; }
+          // the site waits until no unit stands on it; those that do step off it, its claim (evacuate)
+          const r = rectOf(o.type, o.ox, o.oz);
+          if (units.some(v => mobile(v.type) && hits(body(v), r))) continue;
           s = place({ id: `u${nextId++}`, type: o.type, owner: u.owner, built: 0, reclaimed: 0, orders: [], sel: false, label: o.type }, o.ox, o.oz);
           notice(u, SND.build);
           log('started', s);
@@ -1539,13 +1836,13 @@ const WikiSim = (() => {
       }
       for (const u of units) {
         const o = u.orders[0];
-        if (!o || o.k !== 'guard') continue;
+        if (!o || o.k !== 'guard' || u.evacuated) continue;
         begin(u, o);
         const g = byId(o.target);
         if (!g) { u.orders.shift(); continue; }
         const j = jobs.get(g);
-        if (j) { if (reach(u, box(j.s.type, j.s.ox, j.s.oz))) credit(u, j.s, j.how); }
-        else walk(u, g.x, g.z, FOLLOW);
+        if (j) { if (reach(o, u, j.s.type, j.s.ox, j.s.oz)) credit(u, j.s, j.how); }
+        else go(u, toUnit(o, g));
       }
       for (const [s, w] of work) {
         if (w.build && s.built < 1) {
@@ -1553,6 +1850,7 @@ const WikiSim = (() => {
           s.completed = s.built >= 1;
           if (s.built >= 1) {
             log('finished', s);
+            if (s.owner === 0) built++;
             // 0x41B8D0: a structure finished whose FBI says ActivateWhenBuilt is switched on (0x41B9A6)
             if (COB && s.cob && (def(s.type).activatewhenbuilt & 1) === 1) COB.activate(s.cob, 1);
           }
@@ -1632,14 +1930,16 @@ const WikiSim = (() => {
        except while a wait holds it (wait: {until, max, from}, from the tick it began); a wait that runs past its max
        stops the demo, `stalled`. A Try-it sim has no script, so its clock is its tick. */
     let next = 0, clock = 0, wait = null, stalled = false;
-    const idle = () => !units.some(u => u.owner === 0 && u.orders.some(o => o.k === 'build' || o.k === 'reclaim'));
+    // the wait's state holds (UNTILS)
+    const holds = w => w.until === 'built' ? built >= w.need : !units.some(u => u.owner === 0 &&
+      u.orders.some(o => w.until === 'idle' ? o.k === 'build' || o.k === 'reclaim' : o.k === 'move'));
     // a tick's generated inputs come before its data inputs; within a trip's tick a move comes before a press
     const feed = t => {
       feeding = t;
       while (genNext < gen.length && gen[genNext].at <= t) input(gen[genNext++].ev);
       while (next < script.length && script[next].at === t) {
         const e = script[next++];
-        if ('until' in e) wait = { until: e.until, max: e.max, from: sim.tick };
+        if ('until' in e) wait = { until: e.until, max: e.max, from: sim.tick, need: e.until === 'built' ? ++builtWaits : 0 };
         else input(e);
       }
     };
@@ -1668,7 +1968,7 @@ const WikiSim = (() => {
     sim.step = () => {
       const t = sim.tick + 1;
       now = t;
-      if (wait && idle()) wait = null;
+      if (wait && holds(wait)) wait = null;
       else if (wait && t - wait.from > wait.max) stalled = true;
       if (!wait) feed(++clock);
       dropWork();
@@ -1797,6 +2097,8 @@ const WikiSim = (() => {
     TRIP, TRIP_DOWN, TRIP_UP, TRIP_ROWS,
     // the allsound names a named sound's `name` indexes (tagpu_wikisim.h WIKI_SNDNAME_*)
     SND_NAMES,
+    // a wait's states, tagpu_wikidata.h's WIKI_UNTIL_* from 1
+    UNTILS,
     // the shapes alone, for checks against tagpu_placegeo.c
     shapes: { placeShape, placeRing },
   };
