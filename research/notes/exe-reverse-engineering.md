@@ -7295,13 +7295,16 @@ when `main+0x37EBE` bit 4 asks. A selection sets that bit (`0x41C110`).
       loaded by `0x41ACE0`, whose one call is `0x41B83A`. The page is `+0x110` bits 23..25 when
       bit 22 is set, else 0, and page 0 is shown only with `def+0x241` bit 31
       (`0x41B77D..0x41B79E`). The name is `def+0x20` cut at 31 characters: `strncpy` of 0x20 bytes
-      into a local, then its byte 31 cleared (`[esp+0x6F]`, `0x41B7A6..0x41B7DC`).
+      into a local, then its byte 31 cleared (`[esp+0x6F]`), and the `sprintf` that makes the file name
+  is the call at `0x41B7E9` (`0x41B7A6..0x41B7E9`).
     - **Anything else**, two builders of one type included: `0x41B0F0` (called at `0x41B871` and
       `0x41B883`), which loads the side's `%sGEN.GUI` (`0x50282C`).
 - **The side's screens are the player's.** GEN, MAIN2 and DL belong to the player's side, not the
   unit's. The prefix is `nameprefix` (key `0x5048EC`) of sidedata's `[SIDE%d]`, copied to
   `main+0x37F5B + side · 0x232` by the sidedata reader `0x431A60` (`0x431B26..0x431B66`). The side
-  is the player's PlayerInfo `+0x95`. A build page is named by the unit's type.
+  is the player's PlayerInfo `+0x95`. A build page is named by the unit's type. `nameprefix` is
+  read with a size of 4 (`0x4C48C0(local, "nameprefix", 4)`, `0x431B26..0x431B3B`), so a prefix
+  holds at most three characters.
 - Retail ships no `<NAME>0.GUI`; TA Zero does. The router runs a frame or more after the selection
   changes.
 
@@ -7348,7 +7351,8 @@ when `main+0x37EBE` bit 4 asks. A selection sets that bit (`0x41C110`).
   `0x4290F0(buf, 0x502820, name, "GUI")` (`0x502820` pushed at `0x41AD2C`) and the open test
   `0x4BBC40`. When that answers 0, it builds `%sDL` (`0x502818`) instead, with the watched
   player's side prefix: `main+0x37F5B + side · 0x232`, side = PlayerInfo `+0x95` of the record
-  `main+0x1B63 + main[0x2A42] · 0x14B` (its `+0x27`, `0x41AD61..0x41AD94`). Either name goes to
+  `main+0x1B63 + main[0x2A42] · 0x14B` (its `+0x27`, `0x41AD61..0x41AD94`; the PlayerInfo pointer and
+  its side byte are read at `0x41AD61..0x41AD66`, with no NULL test and no bound on the side). Either name goes to
   GUI_Load `0x4AA8F0(main+0x519, name, 0)` (`0x41ADD9`).
 - **GUI_Load's file is not the probe's.** GUI_Load builds its path as `strncpy(path, gi+0x9B6,
   0x100)` (gi = `main+0x519`, so the prefix is `main+0xECF`, `guis\` from `0x502820`, set at
@@ -7358,7 +7362,8 @@ when `main+0x37EBE` bit 4 asks. A selection sets that bit (`0x41C110`).
   folder; the probe's `0x4290F0` tries `<folder>-<language>\` first (*The file primitives*, in
   the saved-map section). `0x4BAFF0` is `stdcall`, `ret 0xC`.
 - **The download fill.** `0x41ACE0` then walks every download record and every entry, in file
-  order (`0x41AE0F..0x41AEFF`). An entry is placed when its builder word is the unit's type
+  order (`0x41AE0F..0x41AEFF`): the entry loop is `0x41AE24..0x41AEAE` (entry stride `0x25`,
+  `0x41AEC8`) and the record stride `0xBD` is added at `0x41AEEF`. An entry is placed when its builder word is the unit's type
   (`0x41AE38`) and its `MENU`, zero-extended from its byte, minus 1 is the page
   (`0x41AE48..0x41AE4D`). It writes gadget `BUTTON + 4` of `ControlsAry` (stride `0x15B`,
   `0x41AE5E..0x41AE73`) **with no bound against the screen's gadget count**. `BUTTON` is a byte
@@ -7381,7 +7386,8 @@ when `main+0x37EBE` bit 4 asks. A selection sets that bit (`0x41C110`).
 
 - **The gadget record**, `0x15B` bytes, as the COMMON reader `0x4AD350` fills it
   (`0x4AD36A..0x4AD482`): `id` `+0`, `assoc` `+1` (bytes); `name` `+2`, 16 bytes, 15 characters
-  (`0x4C48C0(…, 0x10)`); `xpos` `+0x13`, `ypos` `+0x15`, `width` `+0x17`, `height` `+0x19`
+  (`0x4C48C0(…, 0x10)` at `0x4AD3A7`, which copies at most the size and clears the last byte,
+  `0x4C4951`); `xpos` `+0x13`, `ypos` `+0x15`, `width` `+0x17`, `height` `+0x19`
   (words); `attribs` `+0x1B`, `colorf` `+0x1F`, `colorb` `+0x23` (dwords); `active` `+0x29` and
   `commonattribs` `+0x2A` (bytes). A section without COMMON leaves the record as it was
   (`0x4AD361`). The button reader `0x4ADC70` takes the greyed bit, `+0x13C` bit 0, from the
@@ -7406,7 +7412,9 @@ So `IGPATCH` is greyed, and so is a page's button for a type the mod does not lo
 `0x488B10(name)` is a binary search over the defs `main+0x1439B`, from def[1] (count
 `main+0x1438F`, stride `0x249`). It compares `def+0x20`, the FBI's `UnitName`, with `_stricmp`
 `0x4F8A70`, and answers the type word `def+0x21E`, or 0. The loader sorts the array by that key
-(`0x42D56E..0x42D604`).
+(`0x42D56E..0x42D604`). The answer is in `ax` only: `mov ax,[ebp+0x21E]` (`0x488BC1`) or
+`xor ax,ax` (`0x488BD3`), the upper half of `eax` left from the search, so a caller takes the word
+(the handler tests `bx`, `0x41AB5D`).
 
 **Negative result: a constructor's build button carries no `+N`.** `0x4199B0` writes each
 commonattribs-4 button's text `+0xB6` as `"+%d"` (`0x502660`) of `0x439D80(unit, type)`, or "".
@@ -7548,7 +7556,8 @@ gadget's name (`0x49FED0`) and its type (`0x488B10` at `0x41AA39`), then tests, 
 byte 16 again (`0x41AA33`). The greyed pass looks up the whole name, so a filled name of 17
 characters or more can be un-greyed and still arm nothing.
 
-- **the pagers and the tabs**, by substring. `PREV` (`0x502810`) sets `main+0x37EBF` bit 0,
+- **the pagers and the tabs**, by substring (`strstr` `0x4E49B0`, case-sensitive, on the
+  16-character copy, `0x41AA75..0x41AB30`). `PREV` (`0x502810`) sets `main+0x37EBF` bit 0,
   `NEXT` (`0x502808`) sets `main+0x37EBE` bit 7, `ORDERS` (`0x50274C`) sets `0x37EBF` bit 1 and
   plays `ordersbutton`, and `BUILD` (`0x502754`) sets `0x37EBF` bit 2 and plays `buildbutton`.
   The dispatcher `0x41C180` (its one call, `0x4992CD`) then calls NEXT `0x41BDE0` or PREV
@@ -7565,7 +7574,8 @@ characters or more can be un-greyed and still arm nothing.
 
     The in-game keys call NEXT and PREV too (`0x49608F`, `0x496083`).
 
-- **A type whose def byte `+0x22F` is 0** is armed (`0x41AB7F`). The arm writes `main+0x2CC3` =
+- **A type whose def byte `+0x22F` is 0** is armed: the type must be nonzero (`test bx,bx`,
+  `0x41AB5D`) and its byte 0 (`0x41AB7F`). The arm writes `main+0x2CC3` =
   `0x0E` (`0x41AB89`) and the type to `main+0x2CC4` (`0x41AB9C`), plays `addbuild`, and writes
   nothing to `main+0x2CC6`. Which button armed it is never read.
 - **Anything else** goes to the stage gadgets `0x41A490`, then to the orders `0x419BE0` (its one
