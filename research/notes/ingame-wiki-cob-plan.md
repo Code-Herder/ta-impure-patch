@@ -503,7 +503,7 @@ settings*.
 - **The triggers**, each the engine's (the engine map lists the sites): select (kind 1) when a
   click leaves its unit selected or a box takes exactly one, `SelectMultipleUnits` when a box
   takes more; ok (5) at an order's first run, never for the scene's own orders; arrived (6) when a
-  move ends; cant (7) when a builder in range finds its site refused; build (9) when a builder
+  move reaches its place (one that ends stuck says nothing); cant (7) when a builder in range finds its site refused; build (9) when a builder
   places a nanoframe; unitcomplete (8) for each builder whose build finished this tick; working
   (11) when a reclaim first makes progress on an order; activate (3) and deactivate (4) when a
   scripted unit's ACTIVATION changes. A scene's units say nothing while it is laid out
@@ -785,7 +785,8 @@ L4b starts when the wiki shows a unit that emits.
   starts at 0 (`0x47EE30`), which would silence every demo's first second.
 - **cant fires once.** The wiki drops a refused build at once and says cant once; MobileBuild says
   it at the first failure, retries every 30 ticks and says it again past ten failures
-  (`0x403CDF`, `0x403D10`).
+  (`0x403CDF`, `0x403D10`). A site a unit stands on waits for it to step off without a word,
+  where MobileBuild's first failure says cant, "Waiting for target area to clear" (`0x403CD0`).
 - **256 variants of one kind of one category are read** (`SND_KEYVARS`), 4096 over all; the
   simulation draws among all of the category's variants, so one past the bound plays silent.
 - **TA Zero's `hovsmof1` has no file**: its category names a WAV no source holds, so that variant
