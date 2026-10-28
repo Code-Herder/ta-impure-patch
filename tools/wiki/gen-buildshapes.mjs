@@ -32,7 +32,7 @@ const units = {
   ARMCK: { cast: 'builder', footprint: [2, 2], buildTime: 5597, workerTime: 80, buildDistance: 40, maxVelocity: 0.8, canstop: 1,
     builds: ['ARMSOLAR', 'ARMWIN', 'ARMESTOR', 'ARMMSTOR', 'ARMMEX', 'ARMMAKR', 'ARMLAB', 'ARMVP', 'ARMAP', 'ARMSY', 'ARMLLT', 'ARMRAD',
       'ARMALAB', 'ARMGEO', 'ARMHLT', 'ARMRL', 'ARMDRAG', 'ARMGUARD', 'ARMHP'],
-    name: 'Construction KBot', from: 'ARMCK.fbi; build list gamedata/sidedata.tdf [CANBUILD]' },
+    name: 'Construction KBot', from: 'ARMCK.fbi; build list: the stock build menu, every button in page order' },
   ARMLLT: { cast: 'tower', footprint: [2, 2], buildTime: 4662, canstop: 1, name: 'L.L.T.', from: 'ARMLLT.fbi' },
   ARMDRAG: { cast: 'wall', footprint: [2, 2], buildTime: 520, name: "Dragon's Teeth", from: 'ARMDRAG.fbi' },
   ARMSOLAR: { cast: 'solar', footprint: [5, 5], buildTime: 2495, name: 'Solar Collector', from: 'ARMSOLAR.fbi' },

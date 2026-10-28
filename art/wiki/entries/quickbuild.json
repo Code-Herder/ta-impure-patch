@@ -43,7 +43,7 @@
         "ARMHP"
       ],
       "name": "Construction KBot",
-      "from": "ARMCK.fbi; build list gamedata/sidedata.tdf [CANBUILD]"
+      "from": "ARMCK.fbi; build list: the stock build menu, every button in page order"
     },
     "ARMACK": {
       "cast": "advbuilder",
@@ -55,7 +55,7 @@
       "canstop": 1,
       "builds": ["ARMLAB","ARMARAD","ARMFUS","ARMMOHO","ARMBRTHA","ARMSILO","ARMANNI","ARMAMD","ARMASP"],
       "name": "Adv. Construction Kbot",
-      "from": "ARMACK.fbi; build list gamedata/sidedata.tdf [CANBUILD]"
+      "from": "ARMACK.fbi; build list: the stock build menu, the first nine buttons in page order"
     },
     "ARMMEX": {
       "cast": "mex",

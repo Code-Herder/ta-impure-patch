@@ -44,7 +44,7 @@
         "ARMHP"
       ],
       "name": "Construction KBot",
-      "from": "ARMCK.fbi; build list gamedata/sidedata.tdf [CANBUILD]"
+      "from": "ARMCK.fbi; build list: the stock build menu, every button in page order"
     },
     "ARMLLT": {"cast":"tower","footprint":[2,2],"buildTime":4662,"canstop":1,"name":"L.L.T.","from":"ARMLLT.fbi"},
     "ARMDRAG": {"cast":"wall","footprint":[2,2],"buildTime":520,"name":"Dragon's Teeth","from":"ARMDRAG.fbi"},
