@@ -69,7 +69,7 @@ function build(tmp) {
     return (args) => run('wine', [exe, ...args], { cwd: tmp, env });
   }
   const exe = path.join(DDRAW, 'tests/wikitexttest-native.exe');   // `.exe` so the tree's *.exe ignore covers it
-  run('gcc', ['-std=c99', '-Wall', '-Wextra', '-Werror', '-Isrc', '-O1', '-g', '-fsanitize=address,undefined',
+  run('gcc', ['-std=c99', '-Wall', '-Wextra', '-Werror', '-Isrc', '-Iinc', '-O1', '-g', '-fsanitize=address,undefined',
     '-fno-sanitize-recover=all', '-o', exe, 'tests/wikitexttest.c', ...SRCS, '-lm'], { cwd: DDRAW });
   return (args) => run(exe, args, { cwd: tmp });
 }

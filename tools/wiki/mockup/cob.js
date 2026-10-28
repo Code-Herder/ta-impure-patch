@@ -39,7 +39,7 @@ const WikiCob = (() => {
       const x = new XMLHttpRequest();
       x.open('POST', url, false);
       x.setRequestHeader('Content-Type', 'application/json');
-      x.send(JSON.stringify(req));
+      try { x.send(JSON.stringify(req)); } catch (e) { throw new Error(`the COB host is not reachable at ${url}: ${e.message}`); }
       if (x.status !== 200) throw new Error(`the COB host answered ${x.status}`);
       const got = JSON.parse(x.responseText);
       if (got.error) throw new Error(`the COB host: ${got.error}`);

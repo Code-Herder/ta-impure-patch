@@ -741,18 +741,19 @@ def check_hashes(lines):
     return out
 
 
-def simparity_hashes(layout, pack=None):
+def simparity_hashes(layout, pack=None, scripts=False):
     """sim.js's hashes of every demo in every context the game's check plays (tagpu_wiki.c check): each side of the
     sidebar layout file `layout` (tagpu_wiki.layout.json, the one the check played on and wrote: the running mod's,
     the fixture, or null and one side) at Interface Type 0 and 1, with that side's casting from the side pack `pack`
-    when the layout is the mod's -- the check gives a casting on the mod's layout only. Keyed as check_hashes keys
-    the game's lines; REFUSED where sim.js refuses the demo."""
+    when the layout is the mod's -- the check gives a casting on the mod's layout only -- and with `scripts` the
+    units' scripts, from the packs gfx.py built from the same install, as the check runs them when its log says so.
+    Keyed as check_hashes keys the game's lines; REFUSED where sim.js refuses the demo."""
     lay = json.loads(Path(layout).read_text())
     want = {}
     for k in range(len(lay["sides"]) if lay else 1):
         for i in (0, 1):
             cmd = ["node", str(TREE / "tools/wiki/simparity.mjs"), "--hash", "--layout", str(layout), "--side", str(k),
-                   "--iface", str(i), *(["--pack", str(pack)] if pack else [])]
+                   "--iface", str(i), *(["--pack", str(pack)] if pack else []), *(["--scripts"] if scripts else [])]
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             assert r.returncode == 0, f"simparity --hash --side {k} --iface {i}: {r.stderr.strip()}"
             for ln in r.stdout.splitlines():
@@ -865,7 +866,7 @@ def demos(c, shots, res):
     print(f"wiki demos: (d1) {lay.split('wiki check: ', 1)[1]}")
     layf = c.gamedir / "tagpu_wiki.layout.json"
     pack = pack_for_layout(layf) if "the mod's" in lay else None
-    n = check_against(check_hashes(c.log[start:]), simparity_hashes(layf, pack), "(d1)")
+    n = check_against(check_hashes(c.log[start:]), simparity_hashes(layf, pack, "scripts are on" in lay), "(d1)")
     print(f"wiki demos: (d1) {line.split('wiki check: ', 1)[1]}; all {n} hashes (every side at both interface types"
           f"{f', with {pack.name} castings' if pack else ''}) equal simparity --hash")
 
@@ -2129,7 +2130,7 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
     # locks it, playing on past its first build elsewhere
     entry, node, k, at = SIDE_LOCK
     r = subprocess.run(["node", str(TREE / "tools/wiki/sideview.mjs"),
-                        *map(str, ("--play", entry, k + 1, at + 60, "--layout", layf, "--ctx", ctxf))],
+                        *map(str, ("--play", entry, k + 1, at + 60, "--layout", layf, "--ctx", ctxf, "--scripts", pack))],
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, f"sideview: {r.stderr.strip()}"
     v = json.loads(r.stdout)

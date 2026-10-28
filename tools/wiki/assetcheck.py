@@ -28,7 +28,8 @@ against an independent Python resolution of the same install.
    alone) and the wording of a refusal (only whether there is one).
 4. **The mockup's resolution**: tools/wiki/gfx.py --resolve-json (landing 6d), element by element: each map's path,
    archive and tile count, each tile's hash, each feature's TDF, archive and GAF, each unit's FBI, model and script
-   with their archives, its hidden and dont-cache pieces and its facts. Skipped under --mounts, which gfx.py does not take.
+   with their archives, its hidden and dont-cache pieces, its script's posed order and visible pieces and its facts.
+   Skipped under --mounts, which gfx.py does not take.
 5. **The fuzz**: `wikiassettest fuzz-hpi` on two archives (LZ77 and keyed, zlib and plain) and `fuzz-3do` on one
    model, 1000 damaged copies each; and `fuzz-side`, the sidebar's readers over synthetic files (no game data): the
    positional .GUI reader and the GAF, PCX and number readers on damaged and garbage copies with huge counts, and
@@ -397,6 +398,31 @@ def create_hides(blob, model, ops=MARKS["hides"]):
     return {"pieces": names, "bits": "".join(f"{w:08x}" for w in words), "why": None}
 
 
+def posed(blob, model):
+    """The report's `posed`: the engine's order for a new unit (a node, its child's subtree, its sibling's) put in place
+    by the swap 0x45A950 for every COB piece below the primitive count, its nodes' names and each one's visibility
+    (0x45AF1B: three or more vertices) as a string of 0 and 1; both empty for a script ta3do cannot read."""
+    prim, stack = [], [model.root]
+    while stack:
+        n = stack.pop()
+        prim.append(n)
+        if n["sib"]:
+            stack.append(n["sib"])
+        if n["child"]:
+            stack.append(n["child"])
+    if ta3do._cob_read(blob) is None:
+        return {"pieces": [], "visible": ""}
+    n_pieces, off_pnames = struct.unpack_from("<i", blob, 8)[0], struct.unpack_from("<i", blob, 32)[0]
+    pieces = [blob[o:blob.index(b"\0", o)] for o in struct.unpack_from(f"<{n_pieces}i", blob, off_pnames)]
+    fold = lambda b: ascii_lower(b.decode("latin-1"))  # noqa: E731
+    for i in range(min(len(pieces), len(prim))):
+        j = next((j for j in range(i, len(prim)) if fold(prim[j]["name"]) == fold(pieces[i])), None)
+        if j is not None:
+            prim[i], prim[j] = prim[j], prim[i]
+    return {"pieces": [n["name"].decode("latin-1") for n in prim],
+            "visible": "".join("1" if len(n["verts"]) >= 3 else "0" for n in prim)}
+
+
 # --------------------------------------------------------------------------- the reference
 
 def entries_in_order():
@@ -554,7 +580,7 @@ def reference(gamedir, exe, language, mounts=None, casting=None):
 
     for t in stage_names(casting):
         u = {"name": t, "fbi": None, "from": None, "unitname": None, "object": None, "model": None,
-             "script": None, "script_from": None, "hides": None, "uncached": None, "facts": None,
+             "script": None, "script_from": None, "hides": None, "uncached": None, "posed": None, "facts": None,
              "ok": False, "why": "refused"}
         p, hit = E.find_built(names["units"], t, "FBI")
         if hit:
@@ -581,6 +607,7 @@ def reference(gamedir, exe, language, mounts=None, casting=None):
                         if u["ok"]:
                             u["hides"] = create_hides(E.read(shit), m)
                             u["uncached"] = create_hides(E.read(shit), m, MARKS["uncached"])
+                            u["posed"] = posed(E.read(shit), m)
         units.append(u)
 
     # the bank: textures\*.GAF in the enumeration's order, logos.GAF aside; the count is the listing's less one
@@ -729,6 +756,9 @@ def against_gfx(native, gamedir, exe):
                 same(w + " uncached", sorted(p.lower() for p in (u.get("uncached") or {}).get("pieces", [])),
                      sorted(p.lower() for p in e["uncached"]))
                 same(w + " facts", u.get("facts"), e["facts"])
+                same(w + " posed", [p.lower() for p in (u.get("posed") or {}).get("pieces", [])] or None,
+                     [p.lower() for p in (e.get("posed") or {}).get("pieces", [])] or None)
+                same(w + " visible", (u.get("posed") or {}).get("visible") or None, (e.get("posed") or {}).get("visible") or None)
     return bad, n
 
 
@@ -948,7 +978,7 @@ def main():
             for b in bad[:40]:
                 print(f"  {b}")
             return 1
-        print(f"assetcheck: native == gfx.py --resolve-json on {n} elements (paths, sources, tile hashes, hidden pieces, dont-caches, FBI facts, the cursors)")
+        print(f"assetcheck: native == gfx.py --resolve-json on {n} elements (paths, sources, tile hashes, hidden pieces, dont-caches, posed orders, FBI facts, the cursors)")
     if a.fuzz:
         # two small archives, one keyed with LZ77 chunks and one plain with zlib's, and a model
         g = Path(gamedir)

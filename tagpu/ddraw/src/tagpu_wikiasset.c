@@ -1453,6 +1453,48 @@ static void unit_hides_report(SB* b, const LOADER* L, const WIKI3DUNIT* u, const
     sb_raw(b, "}");
 }
 
+/* THE SCRIPT FOR THE WIKI'S COB HOST: the bytes copied into the arena, and the posed model's
+   order and visibility (WIKI3DUNIT). An arena too full to take the bytes leaves the type without
+   a script, as its log line says. */
+static void unit_script(LOADER* L, const unsigned char* cob, uint32_t n, uint32_t root, WIKI3DUNIT* u)
+{
+    const char* walk[MAXPIECE];
+    const char* prim[MAXPIECE];
+    const char* pname[MAXPIECE];
+    int np = 0, nprim, k;
+    const uint32_t at = alloc(&L->a, n);
+    if (!at) { LOG("wiki3d: the arena has no room for %s's script", u->name); return; }
+    memcpy(AT(&L->a, at), cob, n);
+    u->script = AT(&L->a, at);
+    u->nscript = n;
+    nprim = piece_orders(&L->a, root, walk, &np, prim, pname);
+    if (nprim < 0 || tagpu_cobscan_posed((const char*)cob, n, 0, prim, pname, nprim) < 0) return;
+    for (k = 0; k < nprim; k++) u->visible[k] = rd32((const unsigned char*)prim[k] + O_NVERT) >= 3;
+    u->pieces = nprim;
+}
+
+/* the report's "posed": null without a script; else the posed order's names and each primitive's
+   visibility as a string of 0 and 1, both empty when the swap refused */
+static void unit_posed_report(SB* b, const LOADER* L, const WIKI3DUNIT* u, const UNITREC* r)
+{
+    const char* walk[MAXPIECE];
+    const char* prim[MAXPIECE];
+    const char* pname[MAXPIECE];
+    int np = 0, k;
+    if (!u->script) { sb_raw(b, "null"); return; }
+    sb_raw(b, "{\"pieces\":[");
+    if (u->pieces && piece_orders(&L->a, r->md.root, walk, &np, prim, pname) == u->pieces &&
+        tagpu_cobscan_posed((const char*)u->script, u->nscript, 0, prim, pname, u->pieces) == u->pieces)
+        for (k = 0; k < u->pieces; k++) {
+            const uint32_t nm = OFF(&L->a, rd32((const unsigned char*)prim[k] + O_NAME));
+            sb_raw(b, k ? "," : "");
+            sb_q(b, nm ? (const char*)AT(&L->a, nm) : "", 0);
+        }
+    sb_raw(b, "],\"visible\":\"");
+    for (k = 0; k < u->pieces; k++) sb_raw(b, u->visible[k] ? "1" : "0");
+    sb_raw(b, "\"}");
+}
+
 static void unit_load(LOADER* L, const char* type, WIKI3DUNIT* u, UNITREC* r)
 {
     unsigned char* text;
@@ -1502,6 +1544,7 @@ static void unit_load(LOADER* L, const char* type, WIKI3DUNIT* u, UNITREC* r)
                                   r->hides_why, sizeof r->hides_why);
             u->uncaches = unit_hides(&L->a, cob, r->sf.size, r->md.root, TAGPU_COB_DONTCACHE, u->uncached,
                                      r->uncached_why, sizeof r->uncached_why);
+            unit_script(L, cob, r->sf.size, r->md.root, u);
         }
         free(cob);
     }
@@ -1530,6 +1573,8 @@ static void unit_report(SB* b, const LOADER* L, const WIKI3DUNIT* u, const UNITR
     unit_hides_report(b, L, u, r, u->hidden, u->hides, r->hides_why);
     sb_raw(b, ",\"uncached\":");
     unit_hides_report(b, L, u, r, u->uncached, u->uncaches, r->uncached_why);
+    sb_raw(b, ",\"posed\":");
+    unit_posed_report(b, L, u, r);
     if (r->info)
         sb_raw(b, ",\"facts\":{\"mobile\":%s,\"slant\":%s,\"shadow\":%s}", u->mobile ? "true" : "false",
                u->slant ? "true" : "false", u->shadow ? "true" : "false");
@@ -4282,7 +4327,14 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISI
 #define SIDE_OUT    "tagpu_wikiside.json"
 
 static volatile LONG s_started;
-static PVOID volatile s_pub;            /* the WIKI3D, once: one interlocked store               */
+/* THE LOAD'S ANSWER, once: NULL while the loader runs, then for good the WIKI3D or &s_3d_refused,
+   by one interlocked store (tagpu_wiki3d_answer) */
+static PVOID volatile s_pub;
+static const char s_3d_refused = 0;
+static void publish_3d(const WIKI3D* w)
+{
+    InterlockedExchangePointer((PVOID*)&s_pub, w ? (PVOID)w : (PVOID)&s_3d_refused);
+}
 /* THE SIDEBAR'S ANSWER, once: NULL while the loader decides, then for good the WIKISIDE or
    &s_side_refused, by one interlocked store (tagpu_wikiside_get) */
 static PVOID volatile s_side;
@@ -4334,6 +4386,7 @@ static DWORD WINAPI loader(LPVOID p)
         LOG("wiki3d: NOT loaded - %lu MB of address space could not be reserved (%lu)", (unsigned long)(ARENA_CAP >> 20),
             (unsigned long)GetLastError());
         tagpu_vfs_close(vfs);
+        publish_3d(NULL);
         free(in);
         return 0;
     }
@@ -4341,6 +4394,7 @@ static DWORD WINAPI loader(LPVOID p)
         LOG("wiki3d: NOT loaded - the arena at %p lies outside the readers' range", (void*)base);
         VirtualFree(base, 0, MEM_RELEASE);
         tagpu_vfs_close(vfs);
+        publish_3d(NULL);
         free(in);
         return 0;
     }
@@ -4350,6 +4404,7 @@ static DWORD WINAPI loader(LPVOID p)
     if (!w) {
         LOG("wiki3d: NOT loaded - the arena could not hold the report");
         VirtualFree(base, 0, MEM_RELEASE);      /* never published, so no reader holds it */
+        publish_3d(NULL);
         free(in);
         return 0;
     }
@@ -4361,7 +4416,7 @@ static DWORD WINAPI loader(LPVOID p)
             (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)f.QuadPart, (unsigned long)w->bytes, (void*)base,
             so, w->nstage, uo, w->nunit);
     }
-    InterlockedExchangePointer((PVOID*)&s_pub, (PVOID)w);
+    publish_3d(w);
     free(in);
     return 0;
 }
@@ -4373,6 +4428,7 @@ void tagpu_wikiasset_start(WIKI3DIN* in)
     if (!(t = CreateThread(NULL, 0, loader, in, CREATE_SUSPENDED, NULL))) {
         LOG("wiki3d: NOT loaded - CreateThread failed (%lu)", (unsigned long)GetLastError());
         side_publish(NULL);
+        publish_3d(NULL);
         free(in);
         return;
     }
@@ -4383,7 +4439,20 @@ void tagpu_wikiasset_start(WIKI3DIN* in)
 
 const WIKI3D* tagpu_wiki3d_get(void)
 {
-    return (const WIKI3D*)InterlockedCompareExchangePointer((PVOID*)&s_pub, NULL, NULL);
+    const WIKI3D* w;
+    return tagpu_wiki3d_answer(&w) == WIKISIDE_READY ? w : NULL;
+}
+
+/* ORDERING: an interlocked read, a full barrier, pairs with publish_3d's store; the block is never
+   written after it */
+int tagpu_wiki3d_answer(const WIKI3D** out)
+{
+    const PVOID v = InterlockedCompareExchangePointer((PVOID*)&s_pub, NULL, NULL);
+    *out = NULL;
+    if (!v) return WIKISIDE_PENDING;
+    if (v == (PVOID)&s_3d_refused) return WIKISIDE_REFUSED;
+    *out = (const WIKI3D*)v;
+    return WIKISIDE_READY;
 }
 
 /* ORDERING: an interlocked read, a full barrier, pairs with side_publish's store; the block is

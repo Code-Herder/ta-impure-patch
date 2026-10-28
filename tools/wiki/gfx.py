@@ -537,10 +537,14 @@ def resolve_unit(eng, name, report):
     slant = not mobile and not flag("digger")
     facts = {"shadow": bool(not flag("noshadow") and (slant or (not flag("canhover") and not flag("floater")))),
              "slant": slant, "mobile": mobile}
+    nodes = [p for p, _ in root.walk()]
+    pose = posed_order(root, shit[0]) if shit else None
     report.append({"element": "unit", "name": name, "fbi": hit[1], "fbiFrom": hit[2], "model": mhit[1],
                    "modelFrom": mhit[2], "script": shit[1] if shit else None,
                    "scriptFrom": shit[2] if shit else None, "hidden": sorted(hidden),
-                   "uncached": sorted(uncached), "facts": facts})
+                   "uncached": sorted(uncached), "facts": facts,
+                   "posed": {"pieces": [nodes[k].name for k, _v in pose],
+                             "visible": "".join("1" if v else "0" for _k, v in pose)} if pose else None})
     return obj.lower(), root, hidden, uncached, facts
 
 

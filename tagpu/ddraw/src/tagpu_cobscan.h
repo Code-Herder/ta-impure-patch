@@ -69,6 +69,14 @@ int tagpu_cobscan_mask(const char* cob, unsigned size, uint32_t base,
                        const char** prim, const char** pname, int nprim,
                        const char* const* walk, int np, uint32_t* bits);
 
+/* THE POSED ORDER: prim and pname (as above, in the engine's order for a new unit) put in place
+   by 0x45A950's swaps for every COB piece below the primitive count, the order whose position i
+   COB piece i drives (exe-reverse-engineering.md, *The posed model the opcodes write into*).
+   Returns nprim, or -1 when the block's bounds or a name refuse it (prim and pname then hold a
+   partial swap). */
+int tagpu_cobscan_posed(const char* cob, unsigned size, uint32_t base,
+                        const char** prim, const char** pname, int nprim);
+
 /* The mask of either pair (TAGPU_COB_*), by the same swap and the same returns:
    tagpu_cobscan_mask is this with TAGPU_COB_HIDE. */
 int tagpu_cobscan_create_mask(const char* cob, unsigned size, uint32_t base, int what,

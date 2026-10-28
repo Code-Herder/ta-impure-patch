@@ -177,23 +177,15 @@ const char* tagpu_cobscan_piece(const char* cob, unsigned size, uint32_t base, i
     return *room ? nm : NULL;
 }
 
-int tagpu_cobscan_create_mask(const char* cob, unsigned size, uint32_t base, int what,
-                              const char** prim, const char** pname, int nprim,
-                              const char* const* walk, int np, uint32_t* bits)
+/* 0x45A950's swaps for COB pieces 0..upto (and below ncob and nprim), on prim and pname in place:
+   0, or -1 when the name table or a name is refused. The caller has bounded the table to ncob. A
+   swap at position i moves only entries at i and past it, so positions up to upto come out the
+   same whatever upto is. */
+static int swap_pieces(const char* cob, unsigned size, uint32_t base, int ncob, int upto,
+                       const char** prim, const char** pname, int nprim)
 {
-    uint32_t hid[TAGPU_COB_HIDWORDS];
-    uint32_t pnames;
-    int ncob, k, g, i, j, any = 0, upto = -1;
-
-    if (!cob) return 0;                                /* no script: nothing marked */
-    if (!size) return -2;
-    ncob = tagpu_cobscan_create(cob, size, base, what, hid);
-    if (ncob <= 0) return ncob;
-    for (k = 0; k < ncob; k++) if (hid[k >> 5] >> (k & 31) & 1) upto = k;
-    if (upto < 0) return 0;
-    if (room_at(size, base, word(cob, COB_PNAMES)) / 4 < (unsigned)ncob) return -1;
-    if (nprim <= 0) return -1;
-    pnames = word(cob, COB_PNAMES) - base;
+    const uint32_t pnames = word(cob, COB_PNAMES) - base;
+    int i, j;
     for (i = 0; i < ncob && i < nprim && i <= upto; i++) {
         unsigned room;
         const char* nm = name_at(cob, size, base, word(cob, pnames + 4u * (uint32_t)i), &room);
@@ -207,6 +199,35 @@ int tagpu_cobscan_create_mask(const char* cob, unsigned size, uint32_t base, int
             t = pname[i];             pname[i] = pname[j]; pname[j] = t;
         }
     }
+    return 0;
+}
+
+int tagpu_cobscan_posed(const char* cob, unsigned size, uint32_t base,
+                        const char** prim, const char** pname, int nprim)
+{
+    int32_t ncob;
+    if (!cob || size < COB_HEADER || nprim <= 0) return -1;
+    ncob = (int32_t)word(cob, COB_NPIECES);
+    if (ncob < 0 || room_at(size, base, word(cob, COB_PNAMES)) / 4 < (unsigned)ncob) return -1;
+    return swap_pieces(cob, size, base, ncob, ncob - 1, prim, pname, nprim) < 0 ? -1 : nprim;
+}
+
+int tagpu_cobscan_create_mask(const char* cob, unsigned size, uint32_t base, int what,
+                              const char** prim, const char** pname, int nprim,
+                              const char* const* walk, int np, uint32_t* bits)
+{
+    uint32_t hid[TAGPU_COB_HIDWORDS];
+    int ncob, k, g, any = 0, upto = -1;
+
+    if (!cob) return 0;                                /* no script: nothing marked */
+    if (!size) return -2;
+    ncob = tagpu_cobscan_create(cob, size, base, what, hid);
+    if (ncob <= 0) return ncob;
+    for (k = 0; k < ncob; k++) if (hid[k >> 5] >> (k & 31) & 1) upto = k;
+    if (upto < 0) return 0;
+    if (room_at(size, base, word(cob, COB_PNAMES)) / 4 < (unsigned)ncob) return -1;
+    if (nprim <= 0) return -1;
+    if (swap_pieces(cob, size, base, ncob, upto, prim, pname, nprim) < 0) return -1;
     for (k = 0; k <= upto && k < nprim; k++) {
         if (!(hid[k >> 5] >> (k & 31) & 1)) continue;
         any = 1;

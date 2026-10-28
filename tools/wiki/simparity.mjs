@@ -4,18 +4,19 @@
 
    usage: node tools/wiki/simparity.mjs [--wine]
      exit 0 when every demo and every rule case agrees and every malformed case loads, 1 when one does not, 2 when the C side cannot be built or run
-   usage: node tools/wiki/simparity.mjs --hash [--layout FILE|null] [--pack DIR] [--side N] [--iface 0|1]
+   usage: node tools/wiki/simparity.mjs --hash [--layout FILE|null] [--pack DIR] [--side N] [--iface 0|1] [--scripts]
      prints `<entry>/<demo> <hash>` for every demo: sim.js's state hash on its last tick, 16 hex digits, the number
      the DLL's tagpu_wikisim_hash must give for the same demo played to its end with the same sidebar layout (by
      default art/wiki/side/fixture.json; `null` for none) in the same context: side N (0 by default), Interface Type
      0 or 1 (1 by default), and with --pack the casting of side N in DIR's side.json, whose layout is then the
-     default (tools/wiki/sidepacks.py writes the packs). A demo sim.js refuses prints `refused` and why. Builds
-     nothing.
+     default (tools/wiki/sidepacks.py writes the packs), and with --scripts the units' scripts, as the game's check
+     plays when its log says they are on: each type's from the first pack that holds it, DIR's stage packs first, then
+     the gfx packs under tools/wiki/mockup/gfx/. A demo sim.js refuses prints `refused` and why. Builds nothing.
    usage: node tools/wiki/simparity.mjs --try DUMP
      prints sim.js's state hash of Try it yourself fed the inputs the game's state dump logged (tools/wiki_regression.py
      try), the number the dump's own hash must equal. The layout is the dump's `layout` when it records one, else the
-     fixture, and the context its `ctx` (side, Interface Type, the casting written whole), else sim.js's default.
-     Builds nothing.
+     fixture, and the context its `ctx` (side, Interface Type, the casting written whole, and with `cob` the units'
+     scripts from the gfx packs), else sim.js's default. Builds nothing.
 
    It packs art/wiki/ as the Makefile does (tools/hudpak.py --set wiki), builds tagpu/ddraw/tests/wikitest.c with the
    real sources, and plays every demo of every entry the tree names through both, comparing every field of the view,
@@ -124,6 +125,16 @@ function stateHash(sim, v) {
   return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0');
 }
 
+/* THE UNITS' SCRIPTS: every gfx pack tools/wiki/gfx.py built under tools/wiki/mockup/gfx/ (gitignored, read from the
+   game), each type's script from the first that holds it. sim.js asks them of serve.py's host through cobhost.mjs and
+   wikitest reads the same files; without a pack the demos play without scripts only. */
+const GFX = path.join(ROOT, 'tools/wiki/mockup/gfx');
+const PACKS = fs.existsSync(GFX) ? fs.readdirSync(GFX).sort().map(d => path.join(GFX, d)).filter(d => fs.existsSync(path.join(d, 'scene.json'))) : [];
+const SCRIPTS = scripts(PACKS);
+const COBS = Object.keys(SCRIPTS).length ? [false, true] : [false];
+let host = null;
+const HOST = () => (host ??= cobHost());
+
 class CannotRun extends Error {}
 
 function run(cmd, args, opts = {}) {
@@ -179,7 +190,9 @@ if (process.argv.includes('--hash')) {
   const pack = dir ? JSON.parse(fs.readFileSync(path.join(dir, 'side.json'), 'utf8')) : null;
   const layout = !file ? (pack ? pack.layout : FIXTURE) : file === 'null' ? null : JSON.parse(fs.readFileSync(file, 'utf8'));
   const side = Number(arg('--side') ?? 0), iface = Number(arg('--iface') ?? 1);
-  const ctx = { side, casting: pack ? pack.casting[side] ?? null : null, iface };
+  const stages = dir && fs.existsSync(path.join(dir, 'stage')) ? fs.readdirSync(path.join(dir, 'stage')).sort().map(d => path.join(dir, 'stage', d)) : [];
+  const cob = process.argv.includes('--scripts') ? HOST().forPacks([...stages, ...PACKS]) : null;
+  const ctx = { side, casting: pack ? pack.casting[side] ?? null : null, iface, cob };
   const tree = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/tree.json'), 'utf8'));
   const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
   for (const id of new Set(tree.tree.flatMap(leaves))) {
@@ -191,6 +204,7 @@ if (process.argv.includes('--hash')) {
       console.log(`${id}/${demo.id} ${stateHash(sim, sim.view())}`);
     }
   }
+  if (host) host.close();
   process.exit(0);
 }
 
@@ -204,13 +218,15 @@ if (tryAt >= 0) {
   const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${dump.entry}.json`), 'utf8'));
   const demo = entry.demos.find(d => d.id === dump.demo);
   if (!demo) { console.error(`simparity --try: no demo ${dump.entry}/${dump.demo}`); process.exit(2); }
-  const sim = WikiSim.create(entry, demo, 'layout' in dump ? dump.layout : FIXTURE, dump.ctx || undefined);
+  const ctx = dump.ctx ? { ...dump.ctx, cob: dump.ctx.cob ? HOST().forPacks(PACKS) : null } : undefined;
+  const sim = WikiSim.create(entry, demo, 'layout' in dump ? dump.layout : FIXTURE, ctx);
   for (const [t, kind, a, b] of dump.try_log) {
     while (sim.tick < t) sim.step();
     sim.input(kind === 'move' ? { move: [a, b] } : { [kind]: a });
   }
   while (sim.tick < dump.tick) sim.step();
   console.log(stateHash(sim, sim.view()));
+  if (host) host.close();
   process.exit(0);
 }
 
@@ -485,16 +501,6 @@ function dataItems() {
   }
   return items;
 }
-
-/* THE UNITS' SCRIPTS: every gfx pack tools/wiki/gfx.py built under tools/wiki/mockup/gfx/ (gitignored, read from the
-   game), each type's script from the first that holds it. sim.js asks them of serve.py's host through cobhost.mjs and
-   wikitest reads the same files; without a pack the demos play without scripts only. */
-const GFX = path.join(ROOT, 'tools/wiki/mockup/gfx');
-const PACKS = fs.existsSync(GFX) ? fs.readdirSync(GFX).sort().map(d => path.join(GFX, d)).filter(d => fs.existsSync(path.join(d, 'scene.json'))) : [];
-const SCRIPTS = scripts(PACKS);
-const COBS = Object.keys(SCRIPTS).length ? [false, true] : [false];
-let host = null;
-const HOST = () => (host ??= cobHost());
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'simparity-'));
 let failed = 0, demos = 0, cases = 0, differ = 0, malformed = 0, bad = 0, refusals = 0, refuseBad = 0, datas = 0, dataBad = 0;

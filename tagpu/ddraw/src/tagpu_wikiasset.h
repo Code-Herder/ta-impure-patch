@@ -145,6 +145,16 @@ typedef struct {
        tools/tascene takes it; tagpu_native.c `slant` tests that bit]; `shadow` unless NoShadow,
        and for a mobile unit unless CanHover or Floater (tagpu_native.c, the engine's FBI gates). */
     uint8_t     mobile, slant, shadow;
+    /* THE SCRIPT the wiki's COB host runs (tagpu_wikicob.h WIKICOBTYPE): the file's bytes, kept in
+       the arena, NULL when the type has none or no model; and its posed model, `pieces` primitives
+       in the order COB pieces drive them (tagpu_cobscan_posed: the engine's order for a new unit,
+       then 0x45A950's swaps), each `visible` when it has three or more vertices (0x45AF1B).
+       pieces 0 with a script: the swap refused the script or the model, which the host
+       quarantines as it does a type with none. */
+    const unsigned char* script;
+    uint32_t    nscript;
+    int         pieces;
+    uint8_t     visible[WIKI3D_MAXPIECE];
 } WIKI3DUNIT;
 
 typedef struct {
@@ -376,6 +386,12 @@ int           tagpu_wikiside_get(const WIKISIDE** out);
 /* The published load, or NULL while it runs and for good when it failed before publishing (the
    log says why). Any thread; immutable once returned and never freed. */
 const WIKI3D* tagpu_wiki3d_get(void);
+
+/* THE LOAD'S ANSWER, as the sidebar's (WIKISIDE_*): PENDING while the loader runs, READY with
+   `*out` the load, or REFUSED for good when it failed or never started. The wiki starts no demo
+   before it, so a demo's units have their scripts from its first tick or never. ORDERING as
+   tagpu_wikiside_get's: one interlocked store publishes the answer, and this read is interlocked. */
+int           tagpu_wiki3d_answer(const WIKI3D** out);
 
 /* TRIGGER: `tagpu_wiki3d.dump` in the game's folder writes the report to `tagpu_wiki3d.json` once
    the load is published (until then the trigger waits), and the sidebar's to `tagpu_wikiside.json`

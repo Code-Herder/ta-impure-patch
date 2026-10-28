@@ -55,7 +55,8 @@ const ROOT = new URL('../../', import.meta.url).pathname;
 const DDRAW = path.join(ROOT, 'tagpu/ddraw');
 const TOL = 1 / 64;
 const SRCS = ['src/tagpu_wikistage.c', 'src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_json.c', 'src/tagpu_pak.c',
-  'src/tagpu_placegeo.c', 'src/tagpu_hudtext.c'];
+  'src/tagpu_placegeo.c', 'src/tagpu_hudtext.c',
+  'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c'];
 // the stages: device pixels a unit, the canvas's corner and size in device pixels
 const SIZES = [
   { name: '1920x1080', u: 1.5, x0: 759, y0: 146, w: 1045, h: 532 },

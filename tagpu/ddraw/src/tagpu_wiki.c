@@ -584,6 +584,43 @@ static int layout_now(const WIKIDATA* d, const WIKILAYOUT** lay, int* src, const
     return 1;
 }
 
+/* THE UNITS' SCRIPTS FOR A NEW SIMULATION (tagpu_wikicob.h): each type's script and posed model
+   from the published 3D load, found by name as the loader named it; 0 while the load's answer is
+   pending, else 1 with `*src` the source, or NULL when the load failed or never started, which
+   plays every unit at rest. As with the layout, no simulation starts while the answer is pending,
+   so a demo's units have their scripts from its first tick or never. LIFETIME: the WIKI3D is
+   immutable and never freed once published, and the host copies a script when it is made
+   (tagpu_wikicob_new), so nothing the source hands out is held past the call. */
+static int cob_type(void* c, const char* name, WIKICOBTYPE* out)
+{
+    const WIKI3D* w = (const WIKI3D*)c;
+    int i;
+    for (i = 0; i < w->nunit; i++) {
+        const WIKI3DUNIT* u = &w->unit[i];
+        if (_stricmp(u->name, name) || !u->script) continue;
+        out->cob = u->script;
+        out->ncob = u->nscript;
+        out->pieces = u->pieces;
+        out->visible = u->visible;
+        return 1;
+    }
+    return 0;
+}
+static WIKICOBSRC s_cobsrc = { NULL, cob_type };
+
+static int scripts_now(const WIKICOBSRC** src)
+{
+    const WIKI3D* w = NULL;
+    const int st = s_assets == ASSETS_FAILED ? WIKISIDE_REFUSED : tagpu_wiki3d_answer(&w);
+    *src = NULL;
+    if (st == WIKISIDE_PENDING) return 0;
+    if (w) {
+        s_cobsrc.ctx = (void*)w;
+        *src = &s_cobsrc;
+    }
+    return 1;
+}
+
 /* ---- the context -----------------------------------------------------------------------------
 
    THE CONTEXT A NEW SIMULATION PLAYS (WIKISIMCTX), and the text is filled for: on the mod's
@@ -598,16 +635,17 @@ static int layout_now(const WIKIDATA* d, const WIKILAYOUT** lay, int* src, const
    ORDERING: the pair is this thread's, set by the fill; a fill that is given another pair restarts
    the open window's demo (tagpu_wiki_fill), so no demo plays past one fill on a stale side or
    interface, and a start between fills (an input handler) takes the last fill's pair.
-   0 while layout_now's answer is pending; `*cast` gets the layout side whose casting the context
-   holds, -1 none. */
+   0 while layout_now's or scripts_now's answer is pending; `*cast` gets the layout side whose
+   casting the context holds, -1 none. */
 static int context_now(const WIKIDATA* d, const WIKILAYOUT** lay, int* src, WIKISIMCTX* ctx, int* cast)
 {
     const WIKISIDE* blk;
     ctx->side = 0;
     ctx->cast = NULL;
     ctx->iface = s_iface;
+    ctx->cob = NULL;
     *cast = -1;
-    if (!layout_now(d, lay, src, &blk)) return 0;
+    if (!layout_now(d, lay, src, &blk) || !scripts_now(&ctx->cob)) return 0;
     if (blk) {
         const int k = s_side >= 0 && s_side < WIKI_SIDE_SIDES ? blk->side_of_engine[s_side] : -1;
         if (k >= 0 && k < blk->layout.nside && k < WIKI_SIDE_SIDES) {
@@ -977,7 +1015,8 @@ static void layout_json(FILE* f, const WIKILAYOUT* L)
 
 /* THE PARITY CHECK OF THE CODE THE GAME RUNS (tools/wiki_regression.py demos): every demo of every
    entry played to its end at once, here on the game thread in the DLL's i686 SSE2 build, on the
-   sidebar layout a demo would start on (layout_now; the caller waits for it), for every side of
+   sidebar layout a demo would start on (layout_now) with the units' scripts it would start with
+   (scripts_now; the caller waits for both), for every side of
    that layout -- with its casting on the mod's layout -- at both Interface Types, and its
    tagpu_wikisim_hash logged as `<entry>/<demo>/<side>/<iface> <hash>`: the hash
    `node tools/wiki/simparity.mjs --hash --side <side> --iface <iface>` prints for `<entry>/<demo>`
@@ -988,12 +1027,14 @@ static void check(void)
     const WIKIDATA* d = data();
     const WIKILAYOUT* lay = NULL;
     const WIKISIDE* blk = NULL;
+    const WIKICOBSRC* cob = NULL;
     LARGE_INTEGER t0, t1;
     char err[160];
     int i, j, k, ifc, nside, n = 0, bad = 0, src = WIKISTAGE_LAYOUT_NONE;
     FILE* f;
     if (!d) { tagpu_logf("wiki check: the wiki's data is not loaded"); return; }
     layout_now(d, &lay, &src, &blk);
+    scripts_now(&cob);
     nside = lay && lay->nside > 0 ? (lay->nside < WIKI_SIDE_SIDES ? lay->nside : WIKI_SIDE_SIDES) : 1;
     if ((f = fopen(CHECK_LAYOUT ".tmp", "wb"))) {
         if (lay) layout_json(f, lay);
@@ -1002,8 +1043,8 @@ static void check(void)
         if (fclose(f) != 0 || !MoveFileExA(CHECK_LAYOUT ".tmp", CHECK_LAYOUT, MOVEFILE_REPLACE_EXISTING))
             tagpu_logf("wiki check: %s could not be written (%lu)", CHECK_LAYOUT, (unsigned long)GetLastError());
     }
-    tagpu_logf("wiki check: the sidebar layout is %s, in %s", src == WIKISTAGE_LAYOUT_MOD ? "the mod's"
-               : src == WIKISTAGE_LAYOUT_FIXTURE ? "the fixture" : "none", CHECK_LAYOUT);
+    tagpu_logf("wiki check: the sidebar layout is %s, in %s; the units' scripts are %s", src == WIKISTAGE_LAYOUT_MOD ? "the mod's"
+               : src == WIKISTAGE_LAYOUT_FIXTURE ? "the fixture" : "none", CHECK_LAYOUT, cob ? "on" : "off");
     QueryPerformanceCounter(&t0);
     for (k = 0; k < nside; k++)
         for (ifc = 0; ifc <= 1; ifc++)
@@ -1011,9 +1052,10 @@ static void check(void)
                 for (j = 0; j < d->entry[i].ndemo; j++) {
                     const WIKIENTRY* e = &d->entry[i];
                     /* the contexts start() can give: the side's casting only on the mod's layout */
-                    const WIKISIMCTX ctx = { k, blk ? &blk->casting[k] : NULL, ifc, NULL };
+                    const WIKISIMCTX ctx = { k, blk ? &blk->casting[k] : NULL, ifc, cob };
                     WIKISIM* s = (WIKISIM*)malloc(sizeof *s);
                     long t = 0;
+                    int ty;
                     if (!s || !tagpu_wikisim_init(s, e, &e->demo[j], 1, lay, &ctx, err, sizeof err)) {
                         tagpu_logf("wiki check: %s/%s/%d/%d did not start - %s", e->id, e->demo[j].id, k, ifc,
                                    s ? err : "no memory");
@@ -1025,6 +1067,12 @@ static void check(void)
                     while (!s->done && t++ < 1000000L) tagpu_wikisim_step(s);
                     tagpu_logf("wiki check: %s/%s/%d/%d %016llx", e->id, e->demo[j].id, k, ifc,
                                (unsigned long long)tagpu_wikisim_hash(s));
+                    for (ty = 0; s->cob && ty < e->ndef; ty++)
+                        if (tagpu_wikicob_note(s->cob, ty)[0])
+                            tagpu_logf("wiki check: %s/%s/%d/%d %s's script is quarantined - %s", e->id, e->demo[j].id, k,
+                                       ifc, s->entry->def[ty].name, tagpu_wikicob_note(s->cob, ty));
+                    if (s->stalled)
+                        tagpu_logf("wiki check: %s/%s/%d/%d stopped: a wait ran past its max", e->id, e->demo[j].id, k, ifc);
                     tagpu_wikisim_free(s);
                     free(s);
                     n++;
@@ -1425,7 +1473,8 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
         fprintf(f, ",\"ctx\":{\"side\":%d,\"iface\":%d,\"casting\":", s_ctx.side, s_ctx.iface);
         if (s_ctx.cast) casting_json(f, s_ctx.cast);
         else fputs("null", f);
-        fputc('}', f);
+        /* whether the sim runs its units' scripts, which simparity --try then runs from the packs */
+        fprintf(f, ",\"cob\":%s}", s_ctx.cob ? "true" : "false");
     }
     fprintf(f, ",\"bars\":[");
     for (i = 0; i < TAGPU_WIKI_NSCROLL; i++) {
@@ -1525,13 +1574,14 @@ int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again, int side, int if
     int cx, cy;
     s_ask = (calls++ % 30u) == 0u;
     if (!s_qpf.QuadPart) QueryPerformanceFrequency(&s_qpf);
-    /* the check plays on the layout a demo would start on: it starts the asset load if the wiki has
-       not, and the trigger waits until the sidebar's answer is in */
+    /* the check plays on the layout and with the scripts a demo would start on: it starts the asset
+       load if the wiki has not, and the trigger waits until both answers are in */
     if (s_ask && GetFileAttributesA(CHECK_ASK) != INVALID_FILE_ATTRIBUTES) {
         const WIKILAYOUT* lay;
+        const WIKICOBSRC* cob;
         int src;
         assets_start();
-        if (layout_now(data(), &lay, &src, NULL)) {
+        if (layout_now(data(), &lay, &src, NULL) && scripts_now(&cob)) {
             DeleteFileA(CHECK_ASK);
             check();
         }

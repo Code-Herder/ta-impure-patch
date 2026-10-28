@@ -277,7 +277,20 @@ function start() {
   if (typeof WikiSim === 'undefined') { simErr = 'sim.js is not loaded'; return; }
   // a demo the layout refuses (an input inside a build's trip, say) shows why on the stage, as a broken entry does
   simLayout = sideLayout(); simCtx = context();
-  try { sim = S.try ? WikiSim.create(e, d, simLayout, simCtx) : WikiSim.play(e, d, simLayout, simCtx); } catch (x) { fail(x); }
+  const make = ctx => S.try ? WikiSim.create(e, d, simLayout, ctx) : WikiSim.play(e, d, simLayout, ctx);
+  /* THE UNITS' SCRIPTS run on tools/wiki/serve.py's host, from the gfx pack the stage draws (cob.js). Served any other
+     way, or with no pack built, the page plays without them and says why in the console. */
+  const cob = typeof WikiCob !== 'undefined' ? WikiCob.cobPage(`tools/wiki/mockup/gfx/${stageDir()}`) : null;
+  try { sim = make(cob ? { ...simCtx, cob } : simCtx); }
+  catch (x) {
+    if (!cob || !/COB host/.test(x && x.message)) fail(x);
+    else {
+      console.warn('wiki sim: playing without the units\' scripts:', x.message);
+      try { sim = make(simCtx); } catch (y) { fail(y); }
+    }
+  }
+  // a type whose script the host refused plays at rest, its gates open (tagpu_wikicob.h)
+  for (const n of sim ? sim.cobNotes() : []) if (n) console.warn('wiki sim: a script is quarantined:', n);
   controls(); syncURL();
 }
 /* a demo holds its last frame once done. A Try-it sim is never done but by a lock -- its scene holds a unit whose cast

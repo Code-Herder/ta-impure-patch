@@ -2,16 +2,20 @@
    for tools/wiki_regression.py: the sidebar's routed screen, page and gadget states, the armed mode and the selected
    units' orders, and optionally the column composed from a pack as the stage draws it (side.js, as wiki.js sideArt).
 
-   usage: node tools/wiki/sideview.mjs --dump FILE [--compose DIR --out PNG]
+   usage: node tools/wiki/sideview.mjs --dump FILE [--compose DIR --out PNG] [--scripts DIR]
           node tools/wiki/sideview.mjs --play ENTRY DEMO TICK --layout FILE [--ctx FILE] [--compose DIR --out PNG]
+                                       [--scripts DIR]
      --dump FILE    Try it yourself as the game played it: the wiki's state dump (tagpu_wiki.json), its scene made with
                     WikiSim.create on the dump's `layout` in the dump's `ctx` (side, interface type, casting) and fed
                     its `try_log` at the logged ticks, up to its tick -- simparity.mjs --try's replay, whose hash the
                     dump's must equal before this view describes the game
      --play         a scripted demo (DEMO counts from 1) on the layout FILE (tagpu_wiki.layout.json; `null` for none),
                     played to TICK or to its end, as tagpu_wiki.shot holds it
-     --ctx FILE     the context --play plays in, as the dump's `ctx` writes it ({side, iface, casting}); sim.js's
+     --ctx FILE     the context --play plays in, as the dump's `ctx` writes it ({side, iface, casting, cob}); sim.js's
                     default (side 0, no casting, type 1) without it
+     --scripts DIR  where a context whose `cob` is true takes its units' scripts first: the stage packs of the side
+                    pack DIR (--compose's DIR when this is absent), then the gfx packs under tools/wiki/mockup/gfx/,
+                    each type's from the first that holds it, run by serve.py's host (cobhost.mjs) as the game ran them
      --compose DIR  the column through the pack in DIR (tools/wiki/sidepacks.py's gfx/side/<mod>/), with the entry's
                     minimap base, written to PNG at one pixel a game pixel (alpha 0 where nothing is painted)
 
@@ -23,6 +27,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { createRequire } from 'node:module';
+import { cobHost } from './cobhost.mjs';
 
 const require = createRequire(import.meta.url);
 const WikiSim = require('./mockup/sim.js');
@@ -35,13 +40,23 @@ const entryOf = id => JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entri
 
 function fail(code, msg) { console.error(`sideview: ${msg}`); process.exit(code); }
 
+// the context with its scripts' source in place of the dump's `cob: true` (--scripts)
+let host = null;
+function withScripts(ctx) {
+  if (!ctx || !ctx.cob) return ctx;
+  const subdirs = d => fs.existsSync(d) ? fs.readdirSync(d).sort().map(x => path.join(d, x)) : [];
+  const dir = opt('--scripts') || opt('--compose');
+  const packs = [...(dir ? subdirs(path.join(dir, 'stage')) : []), ...subdirs(path.join(ROOT, 'tools/wiki/mockup/gfx'))];
+  return { ...ctx, cob: (host ??= cobHost()).forPacks(packs) };
+}
+
 let entry, sim;
 if (argv.includes('--dump')) {
   const dump = JSON.parse(fs.readFileSync(opt('--dump'), 'utf8'));
   entry = entryOf(dump.entry);
   const demo = entry.demos.find(d => d.id === dump.demo);
   if (!demo) fail(2, `no demo ${dump.entry}/${dump.demo}`);
-  sim = WikiSim.create(entry, demo, dump.layout ?? null, dump.ctx || undefined);
+  sim = WikiSim.create(entry, demo, dump.layout ?? null, withScripts(dump.ctx) || undefined);
   for (const [t, kind, a, b] of dump.try_log) {
     while (sim.tick < t) sim.step();
     sim.input(kind === 'move' ? { move: [a, b] } : { [kind]: a });
@@ -55,7 +70,7 @@ if (argv.includes('--dump')) {
   const demo = entry.demos[Number(n) - 1];
   if (!demo) fail(2, `${id} has no demo ${n}`);
   const cf = opt('--ctx');
-  sim = WikiSim.play(entry, demo, JSON.parse(fs.readFileSync(lf, 'utf8')), cf ? JSON.parse(fs.readFileSync(cf, 'utf8')) : undefined);
+  sim = WikiSim.play(entry, demo, JSON.parse(fs.readFileSync(lf, 'utf8')), cf ? withScripts(JSON.parse(fs.readFileSync(cf, 'utf8'))) : undefined);
   while (!sim.done && sim.tick < Number(tick)) sim.step();
 } else fail(2, '--dump FILE or --play ENTRY DEMO TICK --layout FILE');
 
@@ -87,6 +102,7 @@ if (packDir) {
   fs.writeFileSync(opt('--out'), png(WikiSide.COL, c.h, rgba));
 }
 console.log(JSON.stringify(out));
+if (host) host.close();
 
 // a PNG of w x h RGBA bytes: one IDAT, every row filter 0
 function png(w, h, rgba) {

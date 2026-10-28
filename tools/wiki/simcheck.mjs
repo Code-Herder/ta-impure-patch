@@ -16,9 +16,10 @@
 
    THE UNITS' SCRIPTS: when gfx packs built by tools/wiki/gfx.py hold them (tools/wiki/mockup/gfx/, gitignored, read
    from the game), every context is played again with them, through serve.py's host (cobhost.mjs), as the game's wiki
-   plays its demos; --no-scripts keeps the plays without. Every play must end on its own end, never stopped by a wait
-   that ran past its max (sim.js UNTILS), and with scripts no type may be quarantined (the host's notes). A pack's
-   types are a mod's, whose scripts the gfx packs do not hold, so --pack plays without them.
+   plays its demos; --no-scripts keeps the plays without. Under --pack each type's script comes from the mod's own
+   stage packs first (DIR/stage/, which sidepacks.py writes), then the gfx packs. Every play must end on its own end,
+   never stopped by a wait that ran past its max (sim.js UNTILS), and with scripts no type may be quarantined (the
+   host's notes).
 
    --pack DIR plays the demos in a mod's pack instead (tools/wiki/sidepacks.py writes them to the gitignored
    tools/wiki/mockup/gfx/side/<mod>/; DIR holds its side.json): with the pack's layout, one context per layout side
@@ -49,16 +50,16 @@ const arg = k => { const i = process.argv.indexOf(k); return i >= 0 ? process.ar
 /* the pack under --pack (its side.json, whose layout and castings the demos play with) and the layout the demos play
    in: set by main() from the command line, so that importing this module for ENTRY_RULES reads no argument of the
    importer's */
-let PACK = null, LAYOUT = FIXTURE;
+let PACK = null, PACK_DIR = null, LAYOUT = FIXTURE;
 const ifaces = () => { const i = arg('--iface'); return i === undefined ? [1, 0] : [Number(i)]; };
 /* the contexts every demo plays in: {label, layout, ctx, casting name}. The fixture layout has one side, which each
    fixture casting answers; a pack gives one context per layout side, with that side's casting (index-aligned with
    layout.sides), and interface. */
 function contexts() {
   const cs = baseContexts();
-  if (PACK || process.argv.includes('--no-scripts')) return cs;
-  const GFX = `${ROOT}tools/wiki/mockup/gfx`;
-  const packs = fs.existsSync(GFX) ? fs.readdirSync(GFX).sort().map(d => `${GFX}/${d}`) : [];
+  if (process.argv.includes('--no-scripts')) return cs;
+  const subdirs = d => fs.existsSync(d) ? fs.readdirSync(d).sort().map(x => `${d}/${x}`) : [];
+  const packs = [...(PACK_DIR ? subdirs(`${PACK_DIR}/stage`) : []), ...subdirs(`${ROOT}tools/wiki/mockup/gfx`)];
   if (!Object.keys(scripts(packs)).length) return cs;
   const host = cobHost();
   return [...cs, ...cs.map(c => ({ ...c, label: `${c.label}+scripts`, ctx: { ...c.ctx, cob: host.forPacks(packs) } }))];
@@ -1056,7 +1057,10 @@ const frameKey = f => JSON.stringify([f.t, f.v, f.o]);
 
 function main() {
 const packDir = arg('--pack');
-if (packDir !== undefined) PACK = JSON.parse(fs.readFileSync(`${packDir.replace(/\/$/, '')}/side.json`, 'utf8'));
+if (packDir !== undefined) {
+  PACK_DIR = packDir.replace(/\/$/, '');
+  PACK = JSON.parse(fs.readFileSync(`${PACK_DIR}/side.json`, 'utf8'));
+}
 LAYOUT = process.argv.includes('--null-layout') ? null : PACK ? PACK.layout : FIXTURE;
 const tree = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/tree.json`, 'utf8'));
 const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
