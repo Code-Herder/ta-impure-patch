@@ -4028,6 +4028,11 @@ unchanged. Native pool snapshot layouts remain separate work; see the recorder c
 note for the exact bounds. Wine compatibility
 has 18 expected setup outcomes, one known inactive gap and zero unexpected outcomes across
 19 setups; all 15 network cases pass. Windows was not run.
+
+On 2026-10-28 Quick Build's candidates became each selected constructor's build menu, read by the
+page loader's rule, in place of the AI's `CANBUILD` list (owner decision 23). Stock is unchanged,
+MEASURED offline over all 45 stock builders; on Twilight ARMCK now builds ARMAMEX and ARMGEO and
+CORCK COREXP and CORGEO, MEASURED live.
 See [resource snapping](tadr-port/resource-snapping.html) for the contracts and verification table.
 
 Still open: multiplayer feature-policy parity chat warnings, future mod activation/download,
