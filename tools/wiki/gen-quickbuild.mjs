@@ -120,12 +120,13 @@ demo('snap', 'Snap onto the deposit', { selected: ['ck'] }, T => T
   .to([408, 104], 40).wait(15).to([344, 40], 40).wait(20).to([340, 112], 30).wait(15)
   .click('lmb').say('{Select}: it is placed on the deposit and the {builder} builds it.'), 130);
 
+// the tail holds Twilight CORE's extractor, the slowest side's (buildtime 6773 against stock's 1800)
 demo('alt', 'Hold Alt to place exactly', { selected: ['ck'] }, T => T
   .say('{builder} selected, {mex} picked from the build menu.').wait(20).build('ARMMEX').wait(5)
   .to([344, 120], 50).say('The ghost snaps onto the deposit...').wait(35)
   .down('alt').say('...hold Alt and it stays exactly under the cursor.').wait(45)
   .up('alt').say('Let go of Alt and it snaps again.').wait(40)
-  .down('alt').say('Hold Alt and {select}: built exactly under the cursor.').wait(30).click('lmb').wait(5).up('alt'), 60);
+  .down('alt').say('Hold Alt and {select}: built exactly under the cursor.').wait(30).click('lmb').wait(5).up('alt'), 90);
 
 demo('click', '{Order} a deposit to build', { selected: ['ck'] }, T => T
   .say('{builder} selected. No build menu: just point at a deposit.').wait(25)
@@ -139,22 +140,36 @@ demo('bestfit', 'The best extractor that fits', { selected: ['ck', 'ack'], curso
   .click('order').say('{Order}: the {builder} builds the {mex}, the {advbuilder} helps.').wait(100)
   .to([248, 284], 60).wait(10).click('order').say('Back on the big deposit: the {moho}, and the {builder} helps.'), 300);
 
+/* The claim is that the builder holds all three at once, so the third click must land before the first extractor is
+   finished, and a mod's builder walks and builds faster than stock's. The first click goes to the grey-fogged
+   deposit, the farthest one explored from the builder, and the third lands 63 ticks after it (66 at Interface Type
+   0, where an order lands at the release). MEASURED with the six packs, 2026-10-28: the first extractor is finished
+   69 ticks after its click by TA Zero's GOK and CORE builders, 105 by Escalation's, 153 by Mayhem's, 239 by stock
+   CORE's. The opening caption says what the clicks will do, so nothing needs reading between them. */
 demo('queue', 'Queue several with Shift', { selected: ['ck'] }, T => T
-  .say('{builder} selected. Hold Shift to queue.').wait(25).down('shift')
-  .to([72, 184], 50).wait(10).click('order').say('Shift+{order}: queued. The mode stays on.').wait(20)
-  .to([168, 136], 35).wait(10).click('order').say('The next deposit gives its own ghost: queued after the first.').wait(20)
-  .to([248, 284], 45).wait(10).click('order').say('And a third. The {builder} works through them in order.').wait(20).up('shift'), 330);
+  .say('{builder} selected. Hold Shift and {order} one deposit after another.').wait(25).down('shift')
+  .to([72, 312], 50).wait(10).click('order').say('Shift+{order}: queued. The mode stays on.').wait(3)
+  .to([72, 184], 25).wait(3).click('order').say('The next deposit gives its own ghost: queued after the first.').wait(3)
+  .to([168, 136], 20).wait(3).click('order').say('And a third. The {builder} works through them in order.').wait(20).up('shift'), 330);
 
+/* the grey-fogged deposit, the farthest one explored from the builder: the cancel must land before the builder
+   starts the extractor. It lands 71 ticks after the queuing click (74 at Interface Type 0); MEASURED 2026-10-28,
+   Escalation's builder starts it 87 ticks after that click, and TA Zero's builders 51 to 69, before it (simcheck
+   --pack names those) */
 demo('cancel', 'Cancel a queued one', { selected: ['ck'] }, T => T
-  .say('{builder} selected.').wait(20).to([72, 184], 60).down('shift').wait(5).click('order').up('shift')
-  .say('Shift+{order}: the extractor is queued.').wait(35)
-  .click('order').say('A plain {order} on the queued site changes nothing.').wait(40)
+  .say('{builder} selected.').wait(20).to([72, 312], 60).down('shift').wait(5).click('order').up('shift')
+  .say('Shift+{order}: the extractor is queued.').wait(30)
+  .click('order').say('A plain {order} on the queued site changes nothing.').wait(30)
   .down('shift').wait(5).click('order').up('shift').say('Shift+{order} it again: the plan is cancelled and the {builder} stops.'), 90);
 
+/* The box is dragged from the walk's end back over the constructors, so it holds the walker wherever its walk has
+   brought it: a mod's walker is up to twice as fast as the Peewee (TA Zero's scouts, maxvelocity 3.5). The {order}
+   lands on tick 143 (146 at Interface Type 0), before the fastest one ends its walk (tick 154, MEASURED 2026-10-28), so
+   it is still walking then. */
 demo('helpers', 'Helpers assist', { selected: ['pw'], cursor: [300, 210] }, T => T
   .say('The {walker} is sent off on a walk.').wait(10).to([596, 468], 15).click('order').wait(5)
-  .to([400, 140], 25).down('select').to([150, 300], 35).up('select').say('Box-select it with both constructors.').wait(15)
-  .to([248, 284], 35).say('The {advbuilder} can build the {moho}; the {builder} cannot.').wait(30)
+  .down('select').to([150, 140], 35).up('select').say('Box-select it with both constructors.').wait(15)
+  .to([248, 284], 35).say('The {advbuilder} can build the {moho}; the {builder} cannot.').wait(25)
   .click('order').say('{Order}: the {advbuilder} builds, the {builder} guards it and helps, the {walker} keeps walking.'), 240);
 
 demo('upgrade', 'Upgrade your extractor', { selected: ['ack'] }, T => T
@@ -162,10 +177,12 @@ demo('upgrade', 'Upgrade your extractor', { selected: ['ack'] }, T => T
   .to([440, 266], 55).say('It offers the stronger {moho} in its place.').wait(40)
   .click('order').say('{Order}: the {mex} is reclaimed, then the {moho} is built.'), 310);
 
+/* The tail is the slowest side's build: Twilight's geothermal plants cost about three times stock's (buildtime 36272
+   and 38674 against 13078), and its CORE one is finished on tick 542 (MEASURED 2026-10-28), where stock's is on 360 */
 demo('geo', 'Geothermal vents', { selected: ['ck'] }, T => T
   .say('{builder} selected. Point at a geothermal vent.').wait(25)
   .to([456, 154], 55).say('Over a vent the ghost is the {geo}.').wait(35)
-  .click('order').say('{Order} builds it on the vent.'), 285);
+  .click('order').say('{Order} builds it on the vent.'), 465);
 
 demo('metalmap', 'Metal maps', { selected: ['ck'] }, T => T
   .say('{builder} selected. The right side is uniform metal ground.').wait(25)

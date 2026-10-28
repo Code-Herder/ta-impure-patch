@@ -140,20 +140,27 @@ demo('ring', 'Ring around a building', {}, T => T
   .down('shift').down('ctrl').say('Hold Shift and Ctrl over a building: a ring round it.').wait(45)
   .click('lmb').up('ctrl').up('shift').say('Press and release without dragging: the ring is ordered.'), 330);
 
+/* The ring is clicked while the builder still walks to the far solar collector, so the far one lies in the map's far
+   corner (cells 34..38 x 18..22) and the caption about the walk stays up through the wall's trip: a mod's builder
+   walks faster than stock's. MEASURED 2026-10-28: the ring click lands on tick 361; Escalation's builder starts the
+   far one on tick 380, Twilight's on 406, and TA Zero's hover and kbot builders by tick 300, before it (simcheck
+   --pack names those). */
 demo('ringqueued', 'Ring around a queued build', {}, T => T
   .say('Queue the {solar} twice with Shift-{select}s: one far away, then one near.').build('ARMSOLAR').wait(5).down('shift')
-  .to(S(30, 3, 5), 40).wait(5).click('lmb').wait(10).to(S(10, 15, 5), 40).wait(5).click('lmb').wait(15).up('shift')
-  .say('The {builder} walks to the first. The second is only a queued square.').wait(30)
-  .say('{wall} armed: Shift and Ctrl over the queued {solar}.').build('ARMDRAG').wait(5)
-  .to(S(10, 15, 5), 25).down('shift').down('ctrl').wait(40)
+  .to(S(34, 18, 5), 40).wait(5).click('lmb').wait(5).to(S(10, 15, 5), 40).wait(5).click('lmb').wait(5).up('shift')
+  .say('The {builder} walks to the first. The second is only a queued square.').wait(5).build('ARMDRAG').wait(5)
+  .to(S(10, 15, 5), 25).say('{wall} armed: Shift and Ctrl over the queued {solar}.').down('shift').down('ctrl').wait(35)
   .click('lmb').up('ctrl').up('shift').say('{Select}: the ring is queued round it, before it is even started.'), 90);
 
+/* The row stands near the map's top right (cells 29..38 x 3..4; the last column takes no building), as far from the
+   builder as it fits, and the last Shift-{select} comes 45 ticks after the drag back: it takes a queued tower off,
+   so it must land before the builder finishes the first one, and a mod's builder walks faster than stock's. */
 demo('toggle', 'Placing it again removes it', {}, T => T
-  .say('{tower} armed. Shift-drag a row of five.').build('ARMLLT').wait(5).to(S(22, 3), 45)
-  .down('shift').wait(8).down('lmb').to(S(30, 3), 45).wait(10).up('lmb').say('Queued. Keep Shift held.').wait(25)
-  .down('lmb').to(S(26, 3), 40).say('Drag back over the queue: yellow sites take a queued tower off.').wait(40)
-  .up('lmb').say('Released: those three are gone; nothing is added.').wait(35)
-  .to(S(24, 3), 20).wait(10).click('lmb').say('A Shift-{select} on a queued site takes it off too, as in TA.').wait(35)
+  .say('{tower} armed. Shift-drag a row of five.').build('ARMLLT').wait(5).to(S(29, 3), 45)
+  .down('shift').wait(8).down('lmb').to(S(37, 3), 45).wait(10).up('lmb').say('Queued. Keep Shift held.').wait(20)
+  .down('lmb').to(S(33, 3), 35).say('Drag back over the queue: yellow sites take a queued tower off.').wait(35)
+  .up('lmb').say('Released: those three are gone; nothing is added.').wait(25)
+  .to(S(31, 3), 15).wait(5).click('lmb').say('A Shift-{select} on a queued site takes it off too, as in TA.').wait(35)
   .up('shift'), 120);
 
 demo('reshape', 'Change the shape mid-drag', {}, T => T

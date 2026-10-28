@@ -1,7 +1,7 @@
 /* simcheck.mjs -- plays every demo of the wiki's entries through tools/wiki/mockup/sim.js, headless, and checks that
    each one shows what its title claims, on the sim's own state rather than on pictures.
 
-   usage: node tools/wiki/simcheck.mjs [--null-layout] [--casting NAME|none] [--iface 0|1] [--trace]
+   usage: node tools/wiki/simcheck.mjs [--pack DIR] [--null-layout] [--casting NAME|none] [--side N] [--iface 0|1] [--trace]
      exit 0 when every demo and rule passes, 1 otherwise
 
    The demos play with the sidebar of art/wiki/side/fixture.json, the layout the wiki falls back to, so each `build`
@@ -12,6 +12,14 @@
    its casts unbound: there it must stop under the badge on the tick decision 12 names, and only that is checked. With
    `identity` every demo must play exactly as with the entry's own types. The rule cases name their layout and
    context themselves.
+
+   --pack DIR plays the demos in a mod's pack instead (tools/wiki/sidepacks.py writes them to the gitignored
+   tools/wiki/mockup/gfx/side/<mod>/; DIR holds its side.json): with the pack's layout, one context per layout side
+   with that side's casting, at Interface Type 1 and 0 (--side and --iface keep one). Every claim that names a unit
+   type names the type the context casts in that unit's place (`r.ty`), a claim that reads the solar collector's
+   cells reads the cast's footprint (`r.fp`: the sites over it and its ring), and the trip's pages are the ones the
+   pack's layout holds for the cast type (packPath). The rule cases are not played: they name the fixture's layout
+   and castings, which a pack does not change, so the plain run is where they are checked.
 
    Imported, it runs nothing and exports ENTRY_RULES, the rule cases per entry id, which call WikiSim.create and
    WikiSim.play through the module object sim.js exports; tools/wiki/simparity.mjs records both, each with its
@@ -27,18 +35,29 @@ const WikiSim = createRequire(import.meta.url)('./mockup/sim.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const TRACE = process.argv.includes('--trace');
 const FIXTURE = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/side/fixture.json`, 'utf8'));
-const LAYOUT = process.argv.includes('--null-layout') ? null : FIXTURE;
 const CASTINGS = JSON.parse(fs.readFileSync(`${ROOT}tools/wiki/casting-fixture.json`, 'utf8')).castings;
 const { TRIP, TRIP_DOWN, TRIP_UP } = WikiSim;
 const arg = k => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : undefined; };
+/* the pack under --pack (its side.json, whose layout and castings the demos play with) and the layout the demos play
+   in: set by main() from the command line, so that importing this module for ENTRY_RULES reads no argument of the
+   importer's */
+let PACK = null, LAYOUT = FIXTURE;
+const ifaces = () => { const i = arg('--iface'); return i === undefined ? [1, 0] : [Number(i)]; };
 /* the contexts every demo plays in: {label, layout, ctx, casting name}. The fixture layout has one side, which each
-   fixture casting answers; a mod's pack would give one context per side and interface. */
+   fixture casting answers; a pack gives one context per layout side, with that side's casting (index-aligned with
+   layout.sides), and interface. */
 function contexts() {
-  const pick = arg('--casting'), iface = arg('--iface');
+  if (PACK) {
+    const want = arg('--side'), sides = PACK.layout.sides.map((s, k) => k).filter(k => want === undefined || k === Number(want));
+    if (PACK.casting.length !== PACK.layout.sides.length) throw new Error(`the pack has ${PACK.casting.length} castings for ${PACK.layout.sides.length} sides`);
+    if (!sides.length) throw new Error(`no side ${want} in the pack`);
+    return sides.flatMap(k => ifaces().map(i => ({ label: `${PACK.layout.sides[k].name}/${i}`, name: null, layout: LAYOUT,
+      ctx: { side: k, casting: PACK.casting[k], iface: i } })));
+  }
+  const pick = arg('--casting');
   const names = pick === undefined ? [null, ...Object.keys(CASTINGS)] : [pick === 'none' ? null : pick];
-  const ifaces = iface === undefined ? [1, 0] : [Number(iface)];
   for (const n of names) if (n !== null && !CASTINGS[n]) throw new Error(`no casting ${n} in casting-fixture.json`);
-  return names.flatMap(n => ifaces.map(i => ({ label: `${n || 'authored'}/${i}`, name: n, layout: LAYOUT,
+  return names.flatMap(n => ifaces().map(i => ({ label: `${n || 'authored'}/${i}`, name: n, layout: LAYOUT,
     ctx: { side: 0, casting: n ? CASTINGS[n][0] : null, iface: i } })));
 }
 
@@ -57,13 +76,19 @@ const whole = (u, r) => covers(u, r) === r[2] * r[3];
 const holds = (u, [cx, cz]) => covers(u, [cx, cz, 1, 1]) === 1;
 const cellIn = (x, z, r) => x >= r[0] * 16 && x < (r[0] + r[2]) * 16 && z >= r[1] * 16 && z < (r[1] + r[3]) * 16;
 
+/* the type the context casts in place of the entry's unit `t`, and that type's footprint: the casting's for a bound
+   cast, else t's own (no casting, or the cast unbound), as sim.js binder renames them */
+const castOf = (entry, casting, t) => casting && entry.units[t] ? casting.casts[entry.units[t].cast] : null;
+const typeIn = (entry, casting) => t => { const k = castOf(entry, casting, t); return k ? k.type : t; };
+const footprintIn = (entry, casting) => t => { const k = castOf(entry, casting, t); return k ? k.footprint : entry.units[t].footprint; };
 function run(entry, demo, layout = LAYOUT, ctx) {
   const sim = WikiSim.play(entry, demo, layout, ctx), ids = [...entry.scene.units, ...((demo.scene && demo.scene.units) || [])].map(u => u.id);
   const frames = [];
   const snap = () => frames.push({ t: sim.tick, v: sim.view(), o: Object.fromEntries(ids.map(id => [id, sim.orders(id)])) });
   snap();
   while (!sim.done) { sim.step(); snap(); }
-  return { sim, frames, last: frames[frames.length - 1], log: sim.log, layout: frames[0].v.side ? layout : null, iface: sim.iface };
+  return { sim, frames, last: frames[frames.length - 1], log: sim.log, layout: frames[0].v.side ? layout : null, iface: sim.iface,
+    ty: typeIn(entry, ctx && ctx.casting), fp: footprintIn(entry, ctx && ctx.casting) };
 }
 // the tick a build input's building is armed on: its own without the sidebar, the trip's release with it
 const armedAt = (r, e) => e.at + (r.layout ? TRIP_UP : 0);
@@ -78,80 +103,80 @@ const kinds = os => (os || []).map(o => o.k + (o.type ? ':' + o.type : o.target 
 
 const QUICKBUILD = {
   snap(r, d, ok) {
-    ok(r.frames.some(f => f.v.ghost && f.v.ghost.type === 'ARMMEX' && whole(f.v.ghost, DEP.B) && !cellIn(f.v.cursor.x, f.v.cursor.z, DEP.B)),
+    ok(r.frames.some(f => f.v.ghost && f.v.ghost.type === r.ty('ARMMEX') && whole(f.v.ghost, DEP.B) && !cellIn(f.v.cursor.x, f.v.cursor.z, DEP.B)),
       'the ghost covered deposit B while the cursor was off it');
-    const m = fresh(r.last.v, 'ARMMEX');
-    ok(m.length === 1 && whole(m[0], DEP.B) && m[0].built === 1, `ARMMEX built on B (${m.map(u => foot(u))})`);
+    const m = fresh(r.last.v, r.ty('ARMMEX'));
+    ok(m.length === 1 && whole(m[0], DEP.B) && m[0].built === 1, `${r.ty('ARMMEX')} built on B (${m.map(u => foot(u))})`);
   },
   alt(r, d, ok) {
     const held = r.frames.filter(f => f.v.keys.includes('alt') && f.v.ghost);
     ok(held.length && held.every(f => covers(f.v.ghost, DEP.B) === 0), 'with Alt held the ghost stayed off the deposit');
     ok(r.frames.some(f => !f.v.keys.includes('alt') && f.v.ghost && whole(f.v.ghost, DEP.B)), 'without Alt it snapped onto B');
-    const m = fresh(r.last.v, 'ARMMEX');
-    ok(m.length === 1 && covers(m[0], DEP.B) === 0 && m[0].built === 1, `ARMMEX built where clicked, off B (${m.map(u => foot(u))})`);
+    const m = fresh(r.last.v, r.ty('ARMMEX'));
+    ok(m.length === 1 && covers(m[0], DEP.B) === 0 && m[0].built === 1, `${r.ty('ARMMEX')} built where clicked, off B (${m.map(u => foot(u))})`);
   },
   click(r, d, ok) {
     ok(r.frames.every(f => f.v.mode === 'contextual'), 'no build menu used');
-    ok(r.frames.some(f => f.v.ghost && f.v.ghost.type === 'ARMMEX' && whole(f.v.ghost, DEP.B)), 'hovering B showed the ARMMEX ghost');
-    const m = fresh(r.last.v, 'ARMMEX');
-    ok(m.length === 1 && whole(m[0], DEP.B) && m[0].built === 1, 'the right-click built ARMMEX on B');
+    ok(r.frames.some(f => f.v.ghost && f.v.ghost.type === r.ty('ARMMEX') && whole(f.v.ghost, DEP.B)), `hovering B showed the ${r.ty('ARMMEX')} ghost`);
+    const m = fresh(r.last.v, r.ty('ARMMEX'));
+    ok(m.length === 1 && whole(m[0], DEP.B) && m[0].built === 1, `the right-click built ${r.ty('ARMMEX')} on B`);
   },
   bestfit(r, d, ok) {
-    ok(r.frames.some(f => f.v.ghost && f.v.ghost.type === 'ARMMOHO' && whole(f.v.ghost, DEP.A)), 'over A the ghost is ARMMOHO');
-    ok(r.frames.some(f => f.v.ghost && f.v.ghost.type === 'ARMMEX' && whole(f.v.ghost, DEP.S)), 'over the wedged deposit S the ghost is ARMMEX');
+    ok(r.frames.some(f => f.v.ghost && f.v.ghost.type === r.ty('ARMMOHO') && whole(f.v.ghost, DEP.A)), `over A the ghost is ${r.ty('ARMMOHO')}`);
+    ok(r.frames.some(f => f.v.ghost && f.v.ghost.type === r.ty('ARMMEX') && whole(f.v.ghost, DEP.S)), `over the wedged deposit S the ghost is ${r.ty('ARMMEX')}`);
     const [c1, c2] = lands(r, d, 'order'), f1 = r.frames[c1 + 1], f2 = r.frames[c2 + 1];
-    ok(kinds(f1.o.ck) === 'build:ARMMEX' && kinds(f1.o.ack) === 'guard:ck', `first click: ck ${kinds(f1.o.ck)}, ack ${kinds(f1.o.ack)}`);
-    ok(kinds(f2.o.ack) === 'build:ARMMOHO' && kinds(f2.o.ck) === 'guard:ack', `second click: ack ${kinds(f2.o.ack)}, ck ${kinds(f2.o.ck)}`);
-    const mex = fresh(r.last.v, 'ARMMEX'), moho = fresh(r.last.v, 'ARMMOHO');
-    ok(mex.length === 1 && whole(mex[0], DEP.S) && mex[0].built === 1, 'ARMMEX built on S');
-    ok(moho.length === 1 && whole(moho[0], DEP.A) && moho[0].built === 1, 'ARMMOHO built on A');
+    ok(kinds(f1.o.ck) === `build:${r.ty('ARMMEX')}` && kinds(f1.o.ack) === 'guard:ck', `first click: ck ${kinds(f1.o.ck)}, ack ${kinds(f1.o.ack)}`);
+    ok(kinds(f2.o.ack) === `build:${r.ty('ARMMOHO')}` && kinds(f2.o.ck) === 'guard:ack', `second click: ack ${kinds(f2.o.ack)}, ck ${kinds(f2.o.ck)}`);
+    const mex = fresh(r.last.v, r.ty('ARMMEX')), moho = fresh(r.last.v, r.ty('ARMMOHO'));
+    ok(mex.length === 1 && whole(mex[0], DEP.S) && mex[0].built === 1, `${r.ty('ARMMEX')} built on S`);
+    ok(moho.length === 1 && whole(moho[0], DEP.A) && moho[0].built === 1, `${r.ty('ARMMOHO')} built on A`);
   },
   queue(r, d, ok) {
     const n = Math.max(...r.frames.map(f => (f.o.ck || []).filter(o => o.k === 'build').length));
-    ok(n === 3, `ARMCK held three queued builds (${n})`);
+    ok(n === 3, `${r.ty('ARMCK')} held three queued builds (${n})`);
     ok(r.frames.every(f => f.v.mode === 'contextual'), 'the mode stayed on, no build menu');
     const after = r.frames[lands(r, d, 'order')[2] + 1];
-    ok(after.v.queued.length + fresh(after.v, 'ARMMEX').length === 3, 'three sites queued or started after the third click');
-    ok(fresh(r.last.v, 'ARMMEX').filter(u => u.built === 1).length >= 2, 'ARMCK worked through them in order');
+    ok(after.v.queued.length + fresh(after.v, r.ty('ARMMEX')).length === 3, 'three sites queued or started after the third click');
+    ok(fresh(r.last.v, r.ty('ARMMEX')).filter(u => u.built === 1).length >= 2, `${r.ty('ARMCK')} worked through them in order`);
   },
   cancel(r, d, ok) {
     const [q, plain, c] = lands(r, d, 'order').map(t => r.frames[t + 1]);
-    ok(kinds(q.o.ck) === 'build:ARMMEX' && q.v.queued.length === 1, 'Shift+right-click queued it');
+    ok(kinds(q.o.ck) === `build:${r.ty('ARMMEX')}` && q.v.queued.length === 1, 'Shift+right-click queued it');
     ok(JSON.stringify(plain.o.ck) === JSON.stringify(q.o.ck), 'a plain repeat click left the queue unchanged');
     ok(c.o.ck.length === 0 && c.v.queued.length === 0, 'Shift+right-click on the site cancelled it');
-    ok(fresh(r.last.v, 'ARMMEX').length === 0 && r.last.o.ck.length === 0, 'nothing built, queue still empty at the end');
+    ok(fresh(r.last.v, r.ty('ARMMEX')).length === 0 && r.last.o.ck.length === 0, 'nothing built, queue still empty at the end');
   },
   helpers(r, d, ok) {
     const f = r.frames[lands(r, d, 'order')[1] + 1];
     ok(f.v.units.filter(u => u.selected).length === 3, 'the box selected all three');
-    ok(kinds(f.o.ack) === 'build:ARMMOHO', `ARMACK builds the Moho (${kinds(f.o.ack)})`);
-    ok(kinds(f.o.ck) === 'guard:ack', `ARMCK guards ARMACK (${kinds(f.o.ck)})`);
+    ok(kinds(f.o.ack) === `build:${r.ty('ARMMOHO')}`, `${r.ty('ARMACK')} builds the Moho (${kinds(f.o.ack)})`);
+    ok(kinds(f.o.ck) === 'guard:ack', `${r.ty('ARMCK')} guards ${r.ty('ARMACK')} (${kinds(f.o.ck)})`);
     ok(kinds(f.o.pw) === 'move', `the Peewee kept its move (${kinds(f.o.pw)})`);
-    const moho = fresh(r.last.v, 'ARMMOHO');
+    const moho = fresh(r.last.v, r.ty('ARMMOHO'));
     ok(moho.length === 1 && whole(moho[0], DEP.A) && moho[0].built === 1, 'the Moho was built on A');
     ok(r.frames.some(x => x.v.lines.some(l => l.kind === 'guard')), 'a guard line was drawn');
   },
   upgrade(r, d, ok) {
-    ok(r.frames.some(f => f.v.ghost && f.v.ghost.type === 'ARMMOHO' && whole(f.v.ghost, DEP.D)), 'over the ARMMEX the ghost is ARMMOHO');
+    ok(r.frames.some(f => f.v.ghost && f.v.ghost.type === r.ty('ARMMOHO') && whole(f.v.ghost, DEP.D)), `over the ${r.ty('ARMMEX')} the ghost is ${r.ty('ARMMOHO')}`);
     const f = r.frames[lands(r, d, 'order')[0] + 1];
-    ok(kinds(f.o.ack) === 'reclaim:mex build:ARMMOHO', `the order is reclaim then build (${kinds(f.o.ack)})`);
-    const gone = r.log.find(e => e.what === 'reclaimed' && e.id === 'mex'), start = r.log.find(e => e.what === 'started' && e.type === 'ARMMOHO');
-    ok(gone && start && gone.t <= start.t, 'the ARMMEX was reclaimed before the Moho started');
-    const moho = fresh(r.last.v, 'ARMMOHO');
-    ok(moho.length === 1 && whole(moho[0], DEP.D) && moho[0].built === 1 && !r.last.v.units.some(u => u.id === 'mex'), 'ARMMOHO built in its place');
+    ok(kinds(f.o.ack) === `reclaim:mex build:${r.ty('ARMMOHO')}`, `the order is reclaim then build (${kinds(f.o.ack)})`);
+    const gone = r.log.find(e => e.what === 'reclaimed' && e.id === 'mex'), start = r.log.find(e => e.what === 'started' && e.type === r.ty('ARMMOHO'));
+    ok(gone && start && gone.t <= start.t, `the ${r.ty('ARMMEX')} was reclaimed before the Moho started`);
+    const moho = fresh(r.last.v, r.ty('ARMMOHO'));
+    ok(moho.length === 1 && whole(moho[0], DEP.D) && moho[0].built === 1 && !r.last.v.units.some(u => u.id === 'mex'), `${r.ty('ARMMOHO')} built in its place`);
   },
   geo(r, d, ok) {
-    ok(r.frames.some(f => f.v.ghost && f.v.ghost.type === 'ARMGEO' && holds(f.v.ghost, VENT)), 'over the vent the ghost is ARMGEO');
-    const g = fresh(r.last.v, 'ARMGEO');
-    ok(g.length === 1 && holds(g[0], VENT) && g[0].built === 1, 'ARMGEO built on the vent');
+    ok(r.frames.some(f => f.v.ghost && f.v.ghost.type === r.ty('ARMGEO') && holds(f.v.ghost, VENT)), `over the vent the ghost is ${r.ty('ARMGEO')}`);
+    const g = fresh(r.last.v, r.ty('ARMGEO'));
+    ok(g.length === 1 && holds(g[0], VENT) && g[0].built === 1, `${r.ty('ARMGEO')} built on the vent`);
   },
   metalmap(r, d, ok) {
     const [c1, c2] = presses(d, 'order'), f1 = r.frames[c1], f2 = r.frames[c2], l1 = lands(r, d, 'order')[0];
     ok(!f1.v.ghost && f1.v.cursor.shape === 'move', 'over broad metal ground: no ghost, a move cursor');
     ok(kinds(r.frames[l1 + 1].o.ck) === 'move', `the click there is a move (${kinds(r.frames[l1 + 1].o.ck)})`);
-    ok(f2.v.ghost && f2.v.ghost.type === 'ARMMEX' && whole(f2.v.ghost, DEP.R), 'over the separate deposit: the ARMMEX ghost');
-    const m = fresh(r.last.v, 'ARMMEX');
-    ok(m.length === 1 && whole(m[0], DEP.R) && m[0].built === 1, 'ARMMEX built on the separate deposit');
+    ok(f2.v.ghost && f2.v.ghost.type === r.ty('ARMMEX') && whole(f2.v.ghost, DEP.R), `over the separate deposit: the ${r.ty('ARMMEX')} ghost`);
+    const m = fresh(r.last.v, r.ty('ARMMEX'));
+    ok(m.length === 1 && whole(m[0], DEP.R) && m[0].built === 1, `${r.ty('ARMMEX')} built on the separate deposit`);
   },
   fog(r, d, ok) {
     const near = r.frames.filter(f => f.v.ghost && Math.abs(f.v.cursor.x - 104) <= 2 && Math.abs(f.v.cursor.z - 88) <= 2);
@@ -159,7 +184,7 @@ const QUICKBUILD = {
     const f = r.frames[presses(d, 'lmb')[0]];
     ok(f.v.ghost && whole(f.v.ghost, DEP.grey) && f.v.map.fog[19 * 40 + 4] === 1, 'beside the grey-fogged deposit it snapped onto it');
     const o = r.frames[presses(d, 'lmb')[0] + 1].o.ck;
-    ok(o.length === 1 && o[0].type === 'ARMMEX' && whole({ x: (o[0].ox + 1.5) * 16, z: (o[0].oz + 1.5) * 16, fx: 3, fz: 3 }, DEP.grey), 'the order is on the grey deposit');
+    ok(o.length === 1 && o[0].type === r.ty('ARMMEX') && whole({ x: (o[0].ox + 1.5) * 16, z: (o[0].oz + 1.5) * 16, fx: 3, fz: 3 }, DEP.grey), 'the order is on the grey deposit');
   },
 };
 
@@ -291,20 +316,39 @@ const show = cs => cs.map(key).join(' ');
 const preview = f => f.v.sites.map(cellOf);
 // a site of f x f cells at c overlapping the rectangle r = [x, z, w, h]
 const hits = (c, f, r) => c[0] < r[0] + r[2] && r[0] < c[0] + f && c[1] < r[1] + r[3] && r[1] < c[1] + f;
-const SOLAR = [20, 9, 5, 5];
 // place_ring(2, 2, tx, tz, 5, 5): three a side, right side down, bottom left, left side up, top right
 const ring5 = (tx, tz) => [[tx + 5, tz], [tx + 5, tz + 2], [tx + 5, tz + 4], [tx + 3, tz + 5], [tx + 1, tz + 5], [tx - 1, tz + 5],
   [tx - 2, tz + 3], [tx - 2, tz + 1], [tx - 2, tz - 1], [tx, tz - 2], [tx + 2, tz - 2], [tx + 4, tz - 2]];
+/* place_ring(f, f, tx, tz, w, h) for any square footprint f round a w x h building: 1 + h / f sites down the right
+   side, 1 + w / f along the bottom, then up the left side and along the top, each side from a corner. A cast's solar
+   collector need not be stock's 5 x 5 (TA Zero's GOK and CORE ones are 3 x 3), so the ring checks read this; on the
+   5 x 5 it must give ring5's sites, written out by hand above, which RING_SELF_CHECK below holds it to. */
+function ringOf(f, [tx, tz, w, h]) {
+  const down = 1 + Math.trunc(h / f), across = 1 + Math.trunc(w / f), out = [];
+  for (let k = 0; k < down; k++) out.push([tx + w, tz + k * f]);
+  for (let k = 0; k < across; k++) out.push([tx + w - f - k * f, tz + h]);
+  for (let k = 0; k < down; k++) out.push([tx - f, tz + h - f - k * f]);
+  for (let k = 0; k < across; k++) out.push([tx + k * f, tz - f]);
+  return out;
+}
+const RING_SELF_CHECK = JSON.stringify(ringOf(2, [20, 9, 5, 5])) === JSON.stringify(ring5(20, 9)) &&
+  JSON.stringify(ringOf(2, [10, 15, 5, 5])) === JSON.stringify(ring5(10, 15));
+if (!RING_SELF_CHECK) throw new Error('ringOf does not give ring5 on the 5 x 5 solar collector');
+/* the cells of a building of f x f centred at world (x, z): its first cell is 0x4197D0's rounding, floor((v - 8f + 8)
+   / 16), as sim.js `origin` places a scene unit and a build cursor's site. The scene's solar collector stands at
+   (360, 184): cells 20..24 x 9..13 for stock's 5 x 5. */
+const cellsAt = (x, z, f) => [Math.floor((x - 8 * f + 8) / 16), Math.floor((z - 8 * f + 8) / 16), f, f];
+const solarOf = r => { const f = r.fp('ARMSOLAR')[0]; return cellsAt(360, 184, f); };
 
 const BUILDSHAPES = {
   clicks(r, d, ok) {
     const [plain, s1, s2] = downs(d, 'lmb'), f = t => r.frames[t];
-    ok(f(plain).v.mode === 'contextual' && same(added(r, plain), [[10, 5]]), `a plain click placed ARMLLT at 10,5 and disarmed (${f(plain).v.mode})`);
-    ok(f(s1 + 3).v.mode === 'build:ARMLLT' && same(added(r, s1 + 3), [[13, 5]]), 'the first Shift-click queued 13,5 and stayed armed');
-    ok(f(s2 + 3).v.mode === 'build:ARMLLT' && same(added(r, s2 + 3), [[16, 5]]), 'the second Shift-click queued 16,5 and stayed armed');
+    ok(f(plain).v.mode === 'contextual' && same(added(r, plain), [[10, 5]]), `a plain click placed ${r.ty('ARMLLT')} at 10,5 and disarmed (${f(plain).v.mode})`);
+    ok(f(s1 + 3).v.mode === `build:${r.ty('ARMLLT')}` && same(added(r, s1 + 3), [[13, 5]]), 'the first Shift-click queued 13,5 and stayed armed');
+    ok(f(s2 + 3).v.mode === `build:${r.ty('ARMLLT')}` && same(added(r, s2 + 3), [[16, 5]]), 'the second Shift-click queued 16,5 and stayed armed');
     const off = ups(d, 'shift')[0];
-    ok(f(off - 1).v.mode === 'build:ARMLLT' && f(off).v.mode === 'contextual', 'letting go of Shift after placing disarmed');
-    ok(r.log.filter(e => e.what === 'finished' && e.type === 'ARMLLT').length >= 2, 'ARMCK built at least two of them');
+    ok(f(off - 1).v.mode === `build:${r.ty('ARMLLT')}` && f(off).v.mode === 'contextual', 'letting go of Shift after placing disarmed');
+    ok(r.log.filter(e => e.what === 'finished' && e.type === r.ty('ARMLLT')).length >= 2, `${r.ty('ARMCK')} built at least two of them`);
   },
   line(r, d, ok) {
     const [u1, u2] = ups(d, 'lmb'), want = [[4, 3], [6, 4], [8, 4], [10, 5], [12, 5], [14, 6], [16, 6]];
@@ -316,16 +360,20 @@ const BUILDSHAPES = {
     ok(r.frames[off].v.mode === 'contextual', 'letting go of Shift after the line disarmed');
     const g = r.frames.filter(f => f.t > downs(d, 'lmb')[1] && f.t < u2 && f.v.keys.includes('lmb') && !f.v.keys.includes('shift'));
     ok(g.length && g.every(f => !f.v.sites.length && f.v.ghost), 'with Shift up mid-drag nothing previews but the single square');
-    ok(added(r, u2).length === 0 && r.last.v.mode === 'build:ARMLLT', 'releasing after Shift ordered nothing and kept ARMLLT armed');
+    ok(added(r, u2).length === 0 && r.last.v.mode === `build:${r.ty('ARMLLT')}`, `releasing after Shift ordered nothing and kept ${r.ty('ARMLLT')} armed`);
   },
   axis(r, d, ok) {
     const u = ups(d, 'lmb')[0], p = r.frames[u - 1], cs = preview(p);
     ok(p.v.shape === 'axis' && cs.length === 10 && cs.every((c, i) => c[1] === 10 && c[0] === 12 + 2 * i), `ten sites held to row 10 (${show(cs)})`);
     ok(Math.floor(p.v.cursor.z / 16) !== 10, 'while the cursor stood off that row');
+    /* the sites over the solar collector, from its cells: 20, 22 and 24 on stock's 5 x 5 at cells 20..24, the rest
+       12..18 and 26..30 */
+    const SOL = solarOf(r), row = Array.from({ length: 10 }, (_, i) => [12 + 2 * i, 10]);
+    const over = row.filter(c => hits(c, 2, SOL)), clear = row.filter(c => !hits(c, 2, SOL));
     const red = p.v.sites.filter(s => s.state === 'refused').map(cellOf);
-    ok(same(red, [[20, 10], [22, 10], [24, 10]]), `the three over the solar collector are red (${show(red)})`);
+    ok(over.length && same(red, over), `the ${over.length} over the solar collector are red (${show(red)})`);
     const a = added(r, u);
-    ok(same(a, [[12, 10], [14, 10], [16, 10], [18, 10], [26, 10], [28, 10], [30, 10]]) && !a.some(c => hits(c, 2, SOLAR)), `the red sites were skipped (${show(a)})`);
+    ok(same(a, clear), `the red sites were skipped (${show(a)})`);
   },
   rect(r, d, ok) {
     const u = ups(d, 'lmb')[0], p = r.frames[u - 1];
@@ -334,7 +382,7 @@ const BUILDSHAPES = {
     ok(p.v.sites.every((s, i) => s.order === i + 1), 'the preview numbers the sites 1..12 in that order');
     ok(same(added(r, u), want), 'the release queued them in serpentine order');
     const done = r.log.filter(e => e.what === 'finished').map(e => [e.ox, e.oz]);
-    ok(done.length >= 6 && same(done, want.slice(0, done.length)), `ARMCK built them in that order (${done.length} done)`);
+    ok(done.length >= 6 && same(done, want.slice(0, done.length)), `${r.ty('ARMCK')} built them in that order (${done.length} done)`);
   },
   hollow(r, d, ok) {
     const u = ups(d, 'lmb')[0], p = r.frames[u - 1], a = added(r, u);
@@ -354,34 +402,35 @@ const BUILDSHAPES = {
     ok(same(steps.slice(-3), ['0:7', '1:5', '2:4']), `mid-drag Alt+Z spread the line at once: 7, 5, 4 sites (${steps.join(' ')})`);
     const a1 = added(r, u1);
     ok(same(a1, [[4, 4], [8, 4], [12, 4], [16, 4]]) && pitch(a1).every(p => p === 2 + 2), `queued at pitch footprint + 2 (${show(a1)})`);
-    ok(r.frames[arm2].v.spacing === 2, 'armed again, ARMDRAG kept its spacing');
+    ok(r.frames[arm2].v.spacing === 2, `armed again, ${r.ty('ARMDRAG')} kept its spacing`);
     const p2 = r.frames[u2 - 1];
     ok(p2.v.spacing === 0 && p2.v.sites.length === 7, 'Alt+X twice brought it back to 0');
     const a2 = added(r, u2);
     ok(a2.length === 7 && pitch(a2).every(p => p === 2) && a2.every(c => c[1] === 7), `then queued at pitch footprint + 0 (${show(a2)})`);
   },
   ring(r, d, ok) {
-    const c = downs(d, 'lmb')[0], p = r.frames[c - 1], want = ring5(20, 9);
+    const c = downs(d, 'lmb')[0], p = r.frames[c - 1], want = ringOf(2, solarOf(r));
     ok(p.v.shape === 'ring' && same(preview(p), want) && p.v.sites.every(s => s.state === 'place'), `Shift+Ctrl over the solar collector previews its ring (${show(preview(p))})`);
     ok(same(added(r, c + 3), want), 'a press and release without a drag ordered it');
-    ok(r.log.some(e => e.what === 'finished' && e.type === 'ARMDRAG'), 'ARMCK started on the ring');
+    ok(r.log.some(e => e.what === 'finished' && e.type === r.ty('ARMDRAG')), `${r.ty('ARMCK')} started on the ring`);
   },
   ringqueued(r, d, ok) {
-    const c = downs(d, 'lmb')[2], p = r.frames[c - 1], want = ring5(10, 15);
-    ok(builds(p.o.ck).some(b => b.type === 'ARMSOLAR' && same(b.c, [10, 15])) && !p.v.units.some(u => u.type === 'ARMSOLAR' && u.id !== 'sol'),
-      'the solar collector at 10,15 is queued and not started');
+    // the near solar collector is queued with the cursor at (200, 280): cells 10..14 x 15..19 for stock's 5 x 5
+    const near = cellsAt(200, 280, r.fp('ARMSOLAR')[0]), c = downs(d, 'lmb')[2], p = r.frames[c - 1], want = ringOf(2, near);
+    ok(builds(p.o.ck).some(b => b.type === r.ty('ARMSOLAR') && same(b.c, near.slice(0, 2))) && !p.v.units.some(u => u.type === r.ty('ARMSOLAR') && u.id !== 'sol'),
+      `the solar collector at ${key(near.slice(0, 2))} is queued and not started, nor the far one`);
     ok(p.v.shape === 'ring' && same(preview(p), want), `Shift+Ctrl over it previews its ring (${show(preview(p))})`);
     const q = builds(r.frames[c + 3].o.ck);
-    ok(same(added(r, c + 3), want) && q.length === 14 && q[0].type === 'ARMSOLAR' && q[1].type === 'ARMSOLAR',
+    ok(same(added(r, c + 3), want) && q.length === 2 + want.length && q[0].type === r.ty('ARMSOLAR') && q[1].type === r.ty('ARMSOLAR'),
       'the click queued the ring after the two solar collectors');
   },
   toggle(r, d, ok) {
     const [u1, u2, u3] = ups(d, 'lmb');
-    ok(same(added(r, u1), [[22, 3], [24, 3], [26, 3], [28, 3], [30, 3]]), 'a row of five queued');
+    ok(same(added(r, u1), [[29, 3], [31, 3], [33, 3], [35, 3], [37, 3]]), 'a row of five queued');
     const p = r.frames[u2 - 1];
-    ok(same(preview(p), [[30, 3], [28, 3], [26, 3]]) && p.v.sites.every(s => s.state === 'remove' && s.order === null), 'dragging back over three of them shows them yellow');
-    ok(same(builds(r.frames[u2].o.ck).map(b => b.c), [[22, 3], [24, 3]]), 'the release took those three off and added nothing');
-    ok(same(builds(r.frames[u3].o.ck).map(b => b.c), [[22, 3]]), 'a Shift-click on 24,3 took it off too');
+    ok(same(preview(p), [[37, 3], [35, 3], [33, 3]]) && p.v.sites.every(s => s.state === 'remove' && s.order === null), 'dragging back over three of them shows them yellow');
+    ok(same(builds(r.frames[u2].o.ck).map(b => b.c), [[29, 3], [31, 3]]), 'the release took those three off and added nothing');
+    ok(same(builds(r.frames[u3].o.ck).map(b => b.c), [[29, 3]]), 'a Shift-click on 31,3 took it off too');
   },
   reshape(r, d, ok) {
     const p0 = downs(d, 'lmb')[0], u = ups(d, 'lmb')[0], seen = [];
@@ -499,19 +548,37 @@ function tripPath(r, t) {
   }
   return path;
 }
+/* the page path a pack's layout gives the build input e of a played demo: from the page the shown builder shows at
+   e's tick to the first of its pages holding a button of the type cast for e's unit that is neither greyed nor
+   hidden, the nearer way round with a tie to NEXT -- the rule TRIP_PATHS spells out for the fixture, read here off
+   the pack's own pages. '?' when no page holds the button: the trip cannot be planned there. */
+function packPath(r, e) {
+  const v = r.frames[e.at].v, L = r.layout, shown = v.units.find(u => u.id === v.side.unit);
+  const T = shown && L.sides[v.side.index].types[shown.type], pages = T ? T.pages : [], n = pages.length, want = r.ty(e.build);
+  const p = 1 + pages.findIndex(name => L.screens[name].gadgets.some(g => g.role === 'build' && g.unit === want && !g.grey && !g.hidden));
+  if (!p || !v.side.page) return '?';
+  const c = v.side.page, kNext = ((p - c) % n + n) % n, kPrev = ((c - p) % n + n) % n, next = kNext <= kPrev;
+  let path = String(c);
+  for (let j = 0, page = c; j < Math.min(kNext, kPrev); j++) {
+    page = next ? (page === n ? 1 : page + 1) : (page < 2 ? n : page - 1);
+    path += (next ? '>' : '<') + page;
+  }
+  return path;
+}
 function tripChecks(r, d, ok, paths) {
   const bs = d.inputs.filter(e => 'build' in e);
-  ok(r.frames.every(f => f.v.locked === null), 'no build is locked on the fixture');
+  ok(r.frames.every(f => f.v.locked === null), 'no build is locked on this layout');
+  if (PACK) paths = bs.map(e => packPath(r, e));
   ok(bs.length === (paths || []).length, `a page path is written for each of the ${bs.length} build inputs`);
   bs.forEach((e, n) => {
-    const t = e.at, v = i => r.frames[t + i].v, what = `the ${e.build} build at ${t}`;
+    const t = e.at, v = i => r.frames[t + i].v, T = r.ty(e.build), what = `the ${T} build at ${t}`;
     const before = Array.from({ length: TRIP_UP }, (_, i) => v(i).mode), after = Array.from({ length: TRIP - TRIP_UP + 1 }, (_, i) => v(TRIP_UP + i).mode);
-    ok(before.every(m => m === v(0).mode) && after.every(m => m === `build:${e.build}`),
+    ok(before.every(m => m === v(0).mode) && after.every(m => m === `build:${T}`),
       `${what}: armed from t + ${TRIP_UP}, by the release, and not before (${v(TRIP_UP - 1).mode}, then ${v(TRIP_UP).mode})`);
     ok(v(TRIP).cursor.x === v(0).cursor.x && v(TRIP).cursor.z === v(0).cursor.z, `${what}: the cursor is back where it stood at t + ${TRIP}`);
     const path = tripPath(r, t);
     ok(paths && path === paths[n], `${what}: the pages ${path} (want ${paths && paths[n]})`);
-    const b = gadgetsOf(r.layout, v(TRIP_DOWN)).findIndex(g => g.role === 'build' && g.unit === e.build);
+    const b = gadgetsOf(r.layout, v(TRIP_DOWN)).findIndex(g => g.role === 'build' && g.unit === T);
     ok(b >= 0 && v(TRIP_DOWN).side.state[b] === 1 && v(TRIP_UP - 1).side.state[b] === 1 && v(TRIP_UP).side.state[b] === 0,
       `${what}: its button shows pressed from t + ${TRIP_DOWN} to the release`);
   });
@@ -939,6 +1006,9 @@ function expectedLock(entry, d, casting) {
 const frameKey = f => JSON.stringify([f.t, f.v, f.o]);
 
 function main() {
+const packDir = arg('--pack');
+if (packDir !== undefined) PACK = JSON.parse(fs.readFileSync(`${packDir.replace(/\/$/, '')}/side.json`, 'utf8'));
+LAYOUT = process.argv.includes('--null-layout') ? null : PACK ? PACK.layout : FIXTURE;
 const tree = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/tree.json`, 'utf8'));
 const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
 const ids = tree.tree.flatMap(leaves);
@@ -980,7 +1050,7 @@ for (const c of contexts()) {
     }
   }
 }
-for (const id of ids) {
+for (const id of PACK ? [] : ids) {
   const entry = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/entries/${id}.json`, 'utf8'));
   for (const [what, check] of Object.entries(ENTRY_RULES[id] || {})) {
     let pass = false;
@@ -990,7 +1060,7 @@ for (const id of ids) {
   }
 }
 for (const [label, t] of Object.entries(tally))
-  console.log(`[${LAYOUT ? 'fixture' : 'no sidebar'} ${label}] ${t.pass} pass, ${t.fail} fail${t.locked.length ? `; stopped under the badge: ${t.locked.join(' ')}` : ''}`);
+  console.log(`[${PACK ? `pack ${PACK.mod}${LAYOUT ? '' : ', no sidebar'}` : LAYOUT ? 'fixture' : 'no sidebar'} ${label}] ${t.pass} pass, ${t.fail} fail${t.locked.length ? `; stopped under the badge: ${t.locked.join(' ')}` : ''}`);
 console.log(failed ? `${failed} check(s) failed` : 'all demos and rules pass');
 process.exit(failed ? 1 : 0);
 }
