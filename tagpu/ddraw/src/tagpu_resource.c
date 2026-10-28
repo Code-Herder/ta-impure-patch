@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
@@ -11,15 +12,18 @@
 #include "tagpu_replay.h"
 #include "tagpu_puppet.h"
 #include "tagpu_log.h"
-#include "tagpu_patches.h"
 #include "tagpu_vpwide.h"
+#include "tagpu_buildmenu.h"
+#include "tagpu_packet_pub.h"
 #include "winapi_hooks.h"
 
-/* DISASSEMBLED: 0x419670 uses these order roots and the def's CANBUILD list.
-   The input and placement contracts are recorded in resource-snapping.md
-   and exe-reverse-engineering.md. All engine access belongs to the input/
-   publish thread, between simulation iterations. No pointer is retained
-   across engine calls that can tear a level down. */
+/* DISASSEMBLED: 0x419670 uses these order roots and reads no build list
+   (0x41975E..0x4197A9). Quick Build's candidates are each constructor's
+   build menu (tagpu_buildmenu.h). The input and placement contracts are
+   recorded in resource-snapping.md and exe-reverse-engineering.md. All
+   engine access belongs to the input/publish thread, between simulation
+   iterations. No pointer is retained across engine calls that can tear a
+   level down. */
 #define D_STRIDE 0x249u
 #define D_BASE 0x1439B
 #define U_FLAGS 0x110
@@ -40,6 +44,16 @@ typedef const unsigned char* (__stdcall* Resolve)(int*, unsigned, void*, void*, 
 typedef void (__stdcall* Order)(int, int, void*, void*, const void*, int, int);
 typedef void (__stdcall* RemoveOrder)(void*, const void*);
 typedef unsigned char* (__attribute__((thiscall))* Action)(void*, const char*);
+/* The page loader's calls (0x41ACE0) and the file layer as the TDF loader 0x4C2F60 calls it,
+   all stdcall (DISASSEMBLED, the `ret` sizes in exe-reverse-engineering.md beside 0x4C2F60). */
+typedef char* (__stdcall* PathFn)(char*, const char*, const char*, const char*);  /* 0x4290F0, ret 0x10 */
+typedef int (__stdcall* SizeFn)(const char*);              /* 0x4BBC40, ret 4: the size, 0 missing */
+typedef void* (__stdcall* OpenFn)(const char*);            /* 0x4BB5B0, ret 4: handle or NULL */
+typedef int (__stdcall* LengthFn)(void*);                  /* 0x4BBD00, ret 4 */
+typedef int (__stdcall* SeekFn)(void*, int);               /* 0x4BB710, ret 8 */
+typedef int (__stdcall* ReadFn)(void*, void*, int);        /* 0x4BB7C0, ret 0xC: bytes read */
+typedef int (__stdcall* CloseFn)(void*);                   /* 0x4BB5D0, ret 4 */
+typedef unsigned (__stdcall* TypeOfFn)(const char*);       /* 0x488B10, ret 4: the type in ax */
 
 typedef struct {
     char *ta, *defs, *units, *grid;
@@ -59,6 +73,15 @@ typedef struct {
 static int s_armed, s_raw[3], s_raw_valid;
 static unsigned char s_patch_seen[PATCH_CAP];
 static unsigned short s_patch_queue[PATCH_CAP];
+
+/* A constructor type's build menu: the types its pages arm, ascending. GAME THREAD ONLY.
+   THE TABLE'S LIFETIME: it holds type numbers, never a pointer into engine memory; one table a
+   level generation (tagpu_packet_pub_level_gen, bumped at every teardown), an entry built on
+   its first use for the watched player's side and rebuilt when that side changes; every number
+   read out of it is bounded against the live def count before it addresses a def. */
+typedef struct { unsigned short* types; unsigned short n; unsigned char side, built; } Menu;
+static Menu* s_menu;
+static unsigned s_menuN, s_menuGen;
 
 static int world(World* w)
 {
@@ -150,21 +173,243 @@ static int selected(const World* w, const char* u)
     return *(unsigned char*)(u + U_OWNER) == w->player && (*(unsigned*)(u + U_FLAGS) & 0x10u);
 }
 
+/* ---- the build menu, Quick Build's candidates --------------------------------------------
+
+   THE ORDERING THAT MAKES EVERY CALL BELOW SAFE: build_menu runs only inside quick_choice's
+   callers -- the left and right command gates 0x498F70 / 0x499100 and the packet fill -- on the
+   GAME thread, in play, between two simulation steps and never inside an engine file call. That
+   is the thread and the phase in which the engine itself calls the page loader 0x41ACE0, its
+   GUI_Load 0x4AA8F0 and the TDF loader 0x4C2F60, which make these same calls; a puppet seat
+   never gets here (world()). The def array, the download records and the side table it reads
+   are written by the loader before the first in-play step and freed by the teardown 0x491B60,
+   which runs on this thread. The rule itself is tagpu_buildmenu.c; this is its engine half. */
+
+#define M_DL_COUNT 0x391C7          /* int: the download records, 0x42DCF0 */
+#define M_DL_BLOCK 0x391CB          /* the records, 0xBD bytes each (0x41AEEF) */
+#define DL_STRIDE 0xBDu
+#define DL_ENTRY 0x25u              /* five entries a record from +4: {u16 builder, MENU, BUTTON, name[32]} */
+#define M_SIDES 0x37F39             /* u32: the sides this game loaded */
+#define M_SIDE_PREFIX 0x37F5B       /* a side's nameprefix, read with size 4 (0x431B26..0x431B3B) */
+#define SIDE_STRIDE 0x232u
+#define SIDE_ROOM 5u                /* the engine's five side records (0x431A20's free loop) */
+#define M_GUI_DIR 0xECF             /* GUI_Load's prefix gi+0x9B6, gi = main+0x519, set once at 0x4914CE */
+
+static unsigned bm_type_of(void* ctx, const char* name)
+{
+    const World* w = (const World*)ctx;
+    /* 0x488B10 answers the type word in ax and leaves the rest of eax undefined (0x488BC1) */
+    unsigned t = ((TypeOfFn)0x00488B10u)(name) & 0xFFFFu;
+    return t < w->ndefs ? t : 0;
+}
+
+static int bm_armable(void* ctx, unsigned type)
+{
+    const World* w = (const World*)ctx;
+    return type && type < w->ndefs && !w->defs[type * D_STRIDE + 0x22F];
+}
+
+/* The watched player's side, as 0x41ACE0 takes it for the DL page (0x41AD61..0x41AD66):
+   PlayerInfo at the player record +0x27, its byte +0x95. PlayerInfo objects live for the
+   process. BOUND: below the sides loaded and the five records; 0xFF when out of bounds. */
+static unsigned char watched_side(const World* w)
+{
+    const unsigned char* info =
+        *(const unsigned char* const*)(w->ta + OFF_PLAYERS + w->player * 0x14B + PL_INFO);
+    unsigned sides = *(const unsigned*)(w->ta + M_SIDES), side;
+    if (!info) return 0xFF;
+    side = info[0x95];
+    return side < sides && side < SIDE_ROOM ? (unsigned char)side : 0xFF;
+}
+
+/* This builder's download entries in the engine's order (0x41AE0F..0x41AEFF). BOUND: records
+   below [main+0x391C7], which lie inside the block in stock's layout and in fix_download_records'
+   (tagpu_patches.c, its THE INVARIANT); entries below min(count, 5). Where the download fix is
+   absent (the stock-limits build), a file of six or more sections gives a record a count past
+   five, and the engine reads on past its fifth entry into the next record: this read stops at
+   the fifth, inside the record. An entry's name is the module's to bound (its 32 bytes). */
+static TAGPU_BM_ENTRY* dl_entries(const World* w, unsigned short builder, unsigned* n)
+{
+    const unsigned char* block = *(const unsigned char* const*)(w->ta + M_DL_BLOCK);
+    int records = *(const int*)(w->ta + M_DL_COUNT), r;
+    TAGPU_BM_ENTRY* out = NULL;
+    unsigned room = 0;
+    *n = 0;
+    if (!block) return NULL;
+    for (r = 0; r < records; r++) {
+        const unsigned char* rec = block + (size_t)r * DL_STRIDE;
+        int count = *(const int*)rec, k;
+        if (count > 5) count = 5;
+        for (k = 0; k < count; k++) {
+            const unsigned char* e = rec + 4 + (unsigned)k * DL_ENTRY;
+            if (*(const unsigned short*)e != builder) continue;
+            if (*n == room) {
+                TAGPU_BM_ENTRY* bigger;
+                room = room ? room * 2 : 8;
+                if (!(bigger = (TAGPU_BM_ENTRY*)realloc(out, room * sizeof *out))) { free(out); *n = 0; return NULL; }
+                out = bigger;
+            }
+            out[*n].menu = e[2];
+            out[*n].button = e[3];
+            memcpy(out[*n].name, e + 4, TAGPU_BM_ENTRY_NAME);
+            (*n)++;
+        }
+    }
+    return out;
+}
+
+/* The file GUI_Load reads, whole, through the engine's own file layer as 0x4C2F60 calls it.
+   BOUND: 0 < size <= 1 MiB into our own buffer, and the read must return exactly the size.
+   0x4BBE50 is not used: its allocation 0x4D83B0 is not NULL-checked. */
+static unsigned char* page_bytes(const char* path, size_t* size, const char** why)
+{
+    void* h = ((OpenFn)0x004BB5B0u)(path);
+    unsigned char* buf;
+    int n;
+    *size = 0;
+    if (!h) { *why = "the file does not open"; return NULL; }
+    n = ((LengthFn)0x004BBD00u)(h);
+    if (n <= 0 || (unsigned)n > TAGPU_BM_FILE_CAP) {
+        ((CloseFn)0x004BB5D0u)(h);
+        *why = n <= 0 ? "an empty file" : "a file past 1 MiB";
+        return NULL;
+    }
+    if (!(buf = (unsigned char*)malloc((size_t)n))) {
+        ((CloseFn)0x004BB5D0u)(h);
+        *why = "out of memory";
+        return NULL;
+    }
+    ((SeekFn)0x004BB710u)(h, 0);
+    if (((ReadFn)0x004BB7C0u)(h, buf, n) != n) {
+        ((CloseFn)0x004BB5D0u)(h);
+        free(buf);
+        *why = "a short read";
+        return NULL;
+    }
+    ((CloseFn)0x004BB5D0u)(h);
+    *size = (size_t)n;
+    return buf;
+}
+
+/* One page's file name as 0x41ACE0 chooses it: its own "<NAME><page>.GUI" when the probe
+   0x4290F0 + 0x4BBC40 answers a size, else the watched side's "<prefix>DL". BOUND: the probe's
+   output is 1024 bytes and 0x4290F0 writes with no bound of its own; the folder 0x502820 and the
+   language 0x51FB50 (0x49F580) under 256 bytes each and a name of at most 36 keep its longest
+   form, "<folder>-<language>\<name>.GUI", inside it (map_file_opens' argument). */
+static int page_file(const World* w, const char* d, unsigned page, unsigned char side,
+                     char* name, size_t cap, const char** why)
+{
+    char probe[1024];
+    const char* prefix;
+    if (!tagpu_buildmenu_page_name(name, cap, d + 0x20, page)) { *why = "no room for the name"; return 0; }
+    if (strnlen((const char*)0x00502820u, 256) >= 256 || strnlen((const char*)0x0051FB50u, 256) >= 256) {
+        *why = "the GUI folder or the language is past 256 bytes";
+        return 0;
+    }
+    ((PathFn)0x004290F0u)(probe, (const char*)0x00502820u, name, (const char*)0x00502828u);
+    if (((SizeFn)0x004BBC40u)(probe)) return 1;
+    if (side == 0xFF) { *why = "no own page and no side for the DL page"; return 0; }
+    prefix = w->ta + M_SIDE_PREFIX + side * SIDE_STRIDE;
+    if (strnlen(prefix, 4) >= 4) { *why = "the side's prefix is past 3 characters"; return 0; }
+    snprintf(name, cap, "%sDL", prefix);
+    return 1;
+}
+
+static void menu_read(const World* w, unsigned id, unsigned char side, Menu* m)
+{
+    const char* d = w->defs + id * D_STRIDE;
+    unsigned char pages[TAGPU_BM_PAGES], *offered;
+    TAGPU_BM_ENGINE eng;
+    TAGPU_BM_ENTRY* entries;
+    LARGE_INTEGER t0, t1, hz;
+    unsigned np, nentries, p, t, read = 0, extractors = 0, geos = 0;
+    QueryPerformanceCounter(&t0);
+    np = tagpu_buildmenu_pages((*(const unsigned*)(d + D_FLAGS) & 0x80000000u) != 0,
+                               *(const unsigned char*)(d + 0x22E), pages);
+    entries = dl_entries(w, *(const unsigned short*)(d + 0x21E), &nentries);
+    if (!(offered = (unsigned char*)calloc(w->ndefs, 1))) { free(entries); return; }
+    eng.type_of = bm_type_of; eng.armable = bm_armable; eng.ctx = (void*)w; eng.ndefs = w->ndefs;
+    for (p = 0; p < np; p++) {
+        char name[64], path[0x100 + 64], why[160];
+        const char* refused = NULL;
+        unsigned char* blob;
+        size_t size;
+        if (!page_file(w, d, pages[p], side, name, sizeof name, &refused))
+            ;   /* `refused` says why */
+        else if (!tagpu_buildmenu_gui_path(path, sizeof path, w->ta + M_GUI_DIR, name))
+            refused = "the GUI path is past its buffer";
+        else if ((blob = page_bytes(path, &size, &refused)) != NULL) {
+            if (tagpu_buildmenu_page(blob, size, pages[p], entries, nentries, &eng, offered,
+                                     why, sizeof why) < 0) refused = why;
+            else read++;
+            free(blob);
+        }
+        if (refused) tagpu_logf("resource: menu %.31s page %u: %s", d + 0x20, pages[p], refused);
+    }
+    free(entries);
+    for (t = 1; t < w->ndefs; t++) if (offered[t]) m->n++;
+    if (m->n && (m->types = (unsigned short*)malloc(m->n * sizeof *m->types)) != NULL) {
+        unsigned k = 0;
+        for (t = 1; t < w->ndefs; t++) if (offered[t]) {
+            int kd = kind(w->defs + t * D_STRIDE);
+            m->types[k++] = (unsigned short)t;
+            extractors += kd == 1; geos += kd == 2;
+        }
+    } else m->n = 0;
+    free(offered);
+    QueryPerformanceCounter(&t1);
+    QueryPerformanceFrequency(&hz);
+    tagpu_logf("resource: menu %.31s side=%d pages=%u read=%u offers=%u extractors=%u geos=%u ms=%.2f",
+               d + 0x20, side == 0xFF ? -1 : (int)side, np, read, m->n, extractors, geos,
+               (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)hz.QuadPart);
+}
+
+/* The menu of def `id` (a builder) for the watched side, built on its first use in this level
+   generation. GAME THREAD ONLY (the ordering above). The pointer is good until the next call. */
+static const Menu* build_menu(const World* w, unsigned id)
+{
+    unsigned gen = tagpu_packet_pub_level_gen(), i;
+    unsigned char side;
+    Menu* m;
+    if (!id || id >= w->ndefs) return NULL;
+    if (!s_menu || gen != s_menuGen || w->ndefs > s_menuN) {
+        for (i = 0; s_menu && i < s_menuN; i++) free(s_menu[i].types);
+        free(s_menu);
+        s_menuN = 0;
+        if (!(s_menu = (Menu*)calloc(w->ndefs, sizeof *s_menu))) return NULL;
+        s_menuN = w->ndefs;
+        s_menuGen = gen;
+    }
+    side = watched_side(w);
+    m = &s_menu[id];
+    if (m->built && m->side == side) return m;
+    free(m->types);
+    memset(m, 0, sizeof *m);
+    menu_read(w, id, side, m);
+    m->side = side;
+    m->built = 1;
+    return m;
+}
+
+static int menu_offers(const World* w, unsigned id, unsigned type)
+{
+    const Menu* m = build_menu(w, id);
+    unsigned lo = 0, hi;
+    if (!m || !type || type >= w->ndefs) return 0;
+    hi = m->n;
+    while (lo < hi) {
+        unsigned mid = (lo + hi) / 2;
+        if (m->types[mid] < type) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo < m->n && m->types[lo] == type;
+}
+
 static int can_build(const World* w, const char* u, unsigned type)
 {
-    unsigned id = def_id(w, u), count, i;
-    const char* d;
-    const unsigned short* list;
+    unsigned id = def_id(w, u);
     if (!id) return 0;
-    d = w->defs + id * D_STRIDE;
-    if (!(*(unsigned*)(d + D_FLAGS) & 0x40u)) return 0;
-    count = *(unsigned*)(d + 0x152); list = *(const unsigned short* const*)(d + 0x156);
-    /* CANBUILD's writers allocate bl_room(count) entries; all writers and
-       readers run on the game thread at this point. Bound the count and
-       every type taken from it; definitions live until level teardown. */
-    if (!list || count > TAGPU_LIM_TYPES) return 0;
-    for (i = 0; i < count; i++) if (list[i] == type && type < w->ndefs) return 1;
-    return 0;
+    if (!(*(unsigned*)(w->defs + id * D_STRIDE + D_FLAGS) & 0x40u)) return 0;
+    return menu_offers(w, id, type);
 }
 
 static int can_assist(const World* w, const char* u)
@@ -624,16 +869,13 @@ static int quick_choice(const World* w, Choice* chosen)
     }
     for (i = w->first; i <= w->last; i++) {
         const char* u = unit(w, i);
-        unsigned id, n, j;
-        const char* d;
-        const unsigned short* list;
+        unsigned id, j;
+        const Menu* m;
         if (!u || !selected(w, u) || !(id = def_id(w, u))) continue;
-        d = w->defs + id * D_STRIDE;
-        if (!(*(unsigned*)(d + D_FLAGS) & 0x40u)) continue;
-        n = *(unsigned*)(d + 0x152); list = *(const unsigned short* const*)(d + 0x156);
-        if (!list || n > TAGPU_LIM_TYPES) continue;
+        if (!(*(unsigned*)(w->defs + id * D_STRIDE + D_FLAGS) & 0x40u)) continue;
         if (target && resolve(u, 12, target, s_raw) < 0) continue;
-        for (j = 0; j < n; j++) if (list[j] && list[j] < w->ndefs) available[list[j]] = 1;
+        if (!(m = build_menu(w, id))) continue;
+        for (j = 0; j < m->n; j++) if (m->types[j] && m->types[j] < w->ndefs) available[m->types[j]] = 1;
     }
     memset(chosen, 0, sizeof *chosen);
     for (t = 1; t < w->ndefs; t++) if (available[t]) {
@@ -839,9 +1081,6 @@ void tagpu_resource_init(void)
     static const unsigned char right[] = {0x51,0x8B,0x0D,0xE8,0x1D,0x51,0x00};
     if (!tagpu_vpwide_mouse_world_live()) {
         tagpu_logf("resource: raw mouse coordinate producer unavailable; not armed"); return;
-    }
-    if (!tagpu_build_lists_live()) {
-        tagpu_logf("resource: CANBUILD allocation bound unavailable; not armed"); return;
     }
     if (!tagpu_detour_bytes_ok(0x004197D0u, build, sizeof build) ||
         !tagpu_detour_bytes_ok(0x00498F70u, left, sizeof left) ||
