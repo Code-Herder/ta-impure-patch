@@ -1556,6 +1556,10 @@ const WikiSim = (() => {
     function go(u, tgt) {
       if (inRange(u.x, u.z, body(u), tgt, tgt.stop)) { u.leg = null; return ARRIVED; }
       const obs = bodies(u), v = def(u.type).maxVelocity;
+      /* the site is a body to the unit heading for it, started, claimed or not: its straight step stops at the site's
+         edge and is ARRIVED, so a builder whose BuildDistance is shorter than its half width never stands on its own
+         site, which would hold the build for good */
+      if (tgt.kind === 1) obs.push({ r: tgt.body, u: null });
       if (clear(u, tgt, obs)) {
         u.leg = null;
         const dx = tgt.x - u.x, dz = tgt.z - u.z, d = Math.sqrt(dx * dx + dz * dz);

@@ -409,7 +409,8 @@ typedef struct {
     WIKIVLINE*       vline;
     WIKIVSITE        vsite[PLACE_MAX_SITES];
     int              cvunit, cvqueued, cvline;
-    /* the movement's scratch: one unit's bodies (two a unit: its own and a claim) and the walking
+    /* the movement's scratch: one unit's bodies (two a unit: its own and a claim, and the site it
+       heads for) and the walking
        ones among them; the planner's held cells, then per node its state, cost and parent, W x H
        of each; its heap, 8 x W x H + 4 */
     WIKIBODY*        obs;

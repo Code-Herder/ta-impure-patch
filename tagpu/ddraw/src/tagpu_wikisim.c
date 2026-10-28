@@ -1939,12 +1939,13 @@ static int claim(const WIKISIM* s, const WIKIUNIT* u, WIKIRECT* out)
 }
 
 /* every body but u's into s->obs: the units' in creation order, then the claims in their
-   claimants' order; their count, or -1 when the scratch cannot grow */
+   claimants' order; their count, or -1 when the scratch cannot grow. It holds one more, the site
+   go() adds. */
 static int bodies(WIKISIM* s, const WIKIUNIT* u)
 {
     int i, n = 0;
     WIKIRECT r;
-    if (!grow(s, (void**)&s->obs, &s->cobs, 2 * s->nunit, sizeof *s->obs)) return -1;
+    if (!grow(s, (void**)&s->obs, &s->cobs, 2 * s->nunit + 1, sizeof *s->obs)) return -1;
     for (i = 0; i < s->nunit; i++)
         if (s->unit[i] != u) {
             s->obs[n].r = body(s, s->unit[i]);
@@ -2286,6 +2287,13 @@ static int go(WIKISIM* s, WIKIUNIT* u, const TARGET* t)
         return GO_ARRIVED;
     }
     if ((nobs = bodies(s, u)) < 0) return GO_WAITING;
+    /* the site is a body to the unit heading for it, started, claimed or not: its straight step
+       stops at the site's edge and is GO_ARRIVED, so a builder whose BuildDistance is shorter
+       than its half width never stands on its own site, which would hold the build for good */
+    if (t->kind == TARGET_SITE) {
+        s->obs[nobs].r = t->body;
+        s->obs[nobs++].u = NULL;
+    }
     if (clear(s, u, t, nobs)) {
         u->leg = 0;
         dx = t->x - u->x;

@@ -360,6 +360,19 @@ const RULES = {
     const ck = at('ck'), ack = at('ack'), off = Math.hypot(ack.x - goal.x, ack.z - goal.z);
     return ok && t < 1200 && ck.x === 388 && ck.z === 400 && off > 0 && off <= 32;
   },
+  'a builder whose build distance is under its half width reaches its site and builds'(entry) {
+    // ARMCK's BuildDistance cut to 4, under its 16 half width: in range only by touching the site, whose edge stops it
+    const short = { ...entry, units: { ...entry.units, ARMCK: { ...entry.units.ARMCK, buildDistance: 4 } } };
+    const s = WikiSim.create(short, { scene: { selected: ['ck'] } });
+    s.input({ move: [376, 72] }); s.input({ down: 'rmb' }); s.input({ up: 'rmb' });
+    let ok = s.orders('ck')[0] && s.orders('ck')[0].k === 'build', raised = null, t = 0;
+    for (; t < 1500 && !(raised && raised.built === 1); t++) {
+      s.step();
+      ok = ok && apart(s.view());
+      raised = fresh(s.view(), 'ARMMEX')[0] || null;
+    }
+    return ok && t < 1500;
+  },
   'a scene unit put over another starts at the nearest clear place'(entry) {
     // a second Peewee authored on the first starts two cells off, the nearest whole-cell offset that clears a 32-wide
     // body, and of the four at that distance the one first by z, then x: (0, -2) cells

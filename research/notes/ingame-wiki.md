@@ -1470,7 +1470,7 @@ as stated, natively (gcc, with AddressSanitizer and UndefinedBehaviorSanitizer) 
   in the same way, and `simcheck.mjs` checks it as a rule case. The planner's scratch is sized at
   init from the map: W × H bytes for the held cells, W × H nodes of state, cost and parent, and a
   heap of 8 × W × H + 4 entries -- a node is pushed once from a seed and at most once from each of
-  its eight neighbours, since a neighbour relaxes it only when popped, once -- about 2.6 MB at
+  its eight neighbours, since a neighbour relaxes it only when popped, once -- about 2.3 MB at
   128 × 128 and 0.2 MB on the 40 × 30 stage maps.
 - **Its calls** (`tagpu_wikisim.h`): `tagpu_wikisim_init` from an entry and a demo, scripted (the
   demo plays, `sim.js`'s `play`) or not (Try it yourself on the demo's scene, `create`);
@@ -1648,7 +1648,8 @@ owner chose a rule of the wiki's own over a port of the engine's mover and pathf
   a site: build distance; a guarded unit: 48), or touching the target's own body.
 - **Legs.** A path is walked one node at a time. The unit keeps its leg until it stands on the
   node (the last step lands on it exactly), a body covers the node, the straight step is refused
-  or a turn was taken, or its order or target changes; only then does it plan again. Replanning
+  or a turn was taken, or its order or the kind of its target changes (a guard whose leader moves
+  to a new job keeps its leg to the next node); only then does it plan again. Replanning
   every tick dithered: from between two nodes the nearer can lie behind (seen on *The best
   extractor that fits*, a constructor rocking between two nodes for 1500 ticks). A leg crosses no
   structure cell: it starts on a node or within a cell of it on each axis, so the box sweeps only
@@ -1658,12 +1659,15 @@ owner chose a rule of the wiki's own over a port of the engine's mover and pathf
   beside it), and a build, reclaim or guard waits, planning again each tick, so a helper at a
   crowded site stands close by until a place frees.
 - **Arrival at a target body.** A unit is in range when within its range of the target, or
-  touching the target's own body, or when the target itself refuses its straight step -- so a
-  builder whose BuildDistance is shorter than its own half width still reaches its site.
+  touching the target's own body, or when the target itself refuses its straight step. A site is
+  a body to the unit heading for it, started or not, so that step stops at its edge: a builder
+  whose BuildDistance is shorter than its own half width still reaches its site, and never stands
+  on it, which would hold the build for good.
 - **A site is cleared before it starts.** A builder in range does not start a building while any
   unit's body overlaps the site. A unit on a structure or a claim (the claimant included, when it
   was ordered to build where it stands) spends its turn stepping straight away from the body's
-  centre, the first such in creation order, along `(0, 1)` from the centre itself.
+  centre -- the first it overlaps of the units' bodies in creation order, then the claims in their
+  claimants' order -- along `(0, 1)` from the centre itself.
 - **A scene's mobile unit starts clear.** A casting's bigger units can overlap an authored scene
   (TA Zero's GOK hovers are 3 × 3 and 4 × 4 where stock's kbots are 2 × 2, 48 units apart). Such
   a unit stands at the nearest centre a whole number of cells from its authored one, at most 8
