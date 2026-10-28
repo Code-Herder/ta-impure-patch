@@ -3037,6 +3037,22 @@ static const char* cast_unfit(const SUNIT* u)
     return NULL;
 }
 
+/* the plain casts' own tests: tower, wall, solar */
+static int plain_test(int c, const SUNIT* x)
+{
+    if (c == WIKI_CAST_TOWER) return x->weapon1 != 0;
+    if (c == WIKI_CAST_WALL) return !x->weapon1 && x->fort;
+    return net_energy(x) > 0;
+}
+
+/* unit index t is already some cast's pick */
+static int picked(const SCASTING* C, int t)
+{
+    int c;
+    for (c = 0; c < WIKI_NCAST; c++) if (C->pick[c] == t) return 1;
+    return 0;
+}
+
 /* gfx.py `side_casting` over the units of SIDE, `commander` the side's root. BOUND: the walk's
    order holds each unit once (depth -1 marks the unmet), so it is at most S->nunit long. */
 static void side_casting(SWALK* W, const char* commander, int* order, int* depth, SCASTING* C)
@@ -3114,21 +3130,31 @@ static void side_casting(SWALK* W, const char* commander, int* order, int* depth
                                                          : "no mobile land non-builder on the menu of %s, the first met unit that builds the builder", U[maker].name);
         }
         C->pick[WIKI_CAST_WALKER] = w;
-        for (k = 0; k < mb->n; k++) {
-            const SUNIT* x = &U[mb->u[k]];
-            if (!is_plain(x)) continue;
-            if (C->pick[WIKI_CAST_TOWER] < 0 && x->weapon1) C->pick[WIKI_CAST_TOWER] = mb->u[k];
-            if (C->pick[WIKI_CAST_WALL] < 0 && !x->weapon1 && x->fort) C->pick[WIKI_CAST_WALL] = mb->u[k];
-            if (C->pick[WIKI_CAST_SOLAR] < 0 && net_energy(x) > 0) C->pick[WIKI_CAST_SOLAR] = mb->u[k];
-        }
+        /* the last three casts share one list: each skips a unit an earlier cast took */
         {
             static const struct { int c; const char* what; } plain[3] = {
                 { WIKI_CAST_TOWER, "with a Weapon1" }, { WIKI_CAST_WALL, "with no Weapon1 and TEDClass FORT" },
                 { WIKI_CAST_SOLAR, "of a positive net energy" } };
-            for (k = 0; k < 3; k++)
-                snprintf(C->why[plain[k].c], 200, "%s plain land building on the builder's menu %s",
-                         C->pick[plain[k].c] >= 0 ? "the first" : "no", plain[k].what);
+            int j;
+            for (j = 0; j < 3; j++) {
+                const int pc = plain[j].c;
+                for (k = 0; k < mb->n && C->pick[pc] < 0; k++) {
+                    const SUNIT* x = &U[mb->u[k]];
+                    if (is_plain(x) && plain_test(pc, x) && !picked(C, mb->u[k])) C->pick[pc] = mb->u[k];
+                }
+                snprintf(C->why[pc], 200, "%s plain land building on the builder's menu %s",
+                         C->pick[pc] >= 0 ? "the first" : "no", plain[j].what);
+            }
         }
+    }
+    /* every cast's unit distinct whatever the tests: a pick repeating an earlier cast's is unbound */
+    for (c = 1; c < WIKI_NCAST; c++) {
+        int d;
+        for (d = 0; d < c && C->pick[c] >= 0; d++)
+            if (C->pick[d] == C->pick[c]) {
+                snprintf(C->why[c], 200, "%s is already the %s", U[C->pick[c]].name, CAST_NAME[d]);
+                C->pick[c] = -1;
+            }
     }
     /* WIKI_FP_MAX: the G rows' width; then what WIKICASTDEF cannot hold */
     for (c = 0; c < WIKI_NCAST; c++) {

@@ -1466,6 +1466,14 @@ def fill_downloads(recs, page, entries, name, report):
 # build menus breadth-first from the side's commander, so tech level ranks first and the mod's own menu order second,
 # and it tests each candidate's own FBI figures. What pins it: on the stock game it gives ARM exactly the types the
 # wiki's entries author, cast for cast and figure for figure (sidepacks.py `stock_identity`, run on every stock pack).
+#
+# Every cast's unit is distinct, since one unit in two casts binds two of an entry's defs to one type, which the
+# binder refuses for every demo of the entry: a cast skips a unit already picked for an earlier cast in CASTS' order.
+# tower, wall and solar, the last three, are drawn from one list and skip in that order (a tower that makes energy
+# is the tower, not the solar too). The other casts' tests already exclude one another (a builder or the walker is
+# mobile, an extractor, a geothermal plant and a plain building each fail the others' tests, the moho is stronger
+# than the mex, the advbuilder is not the builder), and the last pass makes it a fact whatever the tests: a pick that
+# repeats an earlier cast's is left unbound, with the reason. The DLL's loader (tagpu_wikiasset.c) does the same.
 
 CASTS = ("builder", "advbuilder", "mex", "moho", "geo", "walker", "tower", "wall", "solar")
 CAST_FP_MAX = 16           # a footprint's side on each axis that the casting holds (WIKI_FP_MAX: one G row a u16)
@@ -1610,17 +1618,22 @@ def side_casting(units, commander, menu):
                          "builds the builder" if w else
                          f"no mobile land non-builder on the menu of {U[maker]['name']}, the first met unit that builds "
                          "the builder")
+        # the last three casts share one list: each skips a unit an earlier cast took
         plain = [x for x in mb if is_plain(U[x])]
-        picks["tower"] = next((x for x in plain if U[x]["weapon1"]), None)
-        picks["wall"] = next((x for x in plain if not U[x]["weapon1"] and U[x]["fort"]), None)
-        picks["solar"] = next((x for x in plain if net_energy(U[x]) > 0), None)
-        for c, what in (("tower", "with a Weapon1"), ("wall", "with no Weapon1 and TEDClass FORT"),
-                        ("solar", "of a positive net energy")):
+        for c, test, what in (("tower", lambda x: U[x]["weapon1"], "with a Weapon1"),
+                              ("wall", lambda x: not U[x]["weapon1"] and U[x]["fort"], "with no Weapon1 and TEDClass FORT"),
+                              ("solar", lambda x: net_energy(U[x]) > 0, "of a positive net energy")):
+            picks[c] = next((x for x in plain if test(x) and x not in picks.values()), None)
             why[c] = (f"the first plain land building on the builder's menu {what}" if picks[c] else
                       f"no plain land building on the builder's menu {what}")
     else:
         for c in CASTS[1:]:
             why[c] = "no builder"
+    for i, c in enumerate(CASTS):
+        first = next((d for d in CASTS[:i] if picks[c] and picks[d] == picks[c]), None)
+        if first:
+            why[c] = f"{U[picks[c]]['name']} is already the {first}"
+            picks[c] = None
     for c in CASTS:
         t = picks[c]
         if t and not (1 <= U[t]["fx"] <= CAST_FP_MAX and 1 <= U[t]["fz"] <= CAST_FP_MAX):

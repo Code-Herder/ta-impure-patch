@@ -199,6 +199,12 @@ typedef struct {
    MaxVelocity, CanFly, MinWaterDepth, the footprint, the yard's G cells, ExtractsMetal,
    EnergyMake, EnergyUse, Weapon1 and TEDClass. What pins the rule: on the stock game it gives
    ARM exactly the types the wiki's entries author (tools/wiki/sidepacks.py `stock_identity`).
+   Every cast's unit is distinct, since one unit in two casts binds two of an entry's defs to one
+   type, which the binding refuses for every demo of the entry: a cast skips a unit already picked
+   for an earlier cast in WIKI_CAST_* order. Tower, wall and solar, the last three, are drawn from
+   one list and skip in that order (a tower that makes energy is the tower, not the solar too); the
+   other casts' tests already exclude one another, and a last pass makes it a fact whatever the
+   tests: a pick that repeats an earlier cast's is left unbound, with the reason.
    Each cast's display name is the FBI's `<language>name`, else `name` (0x4C58A0 tries the
    language's key first, 0x42BFAC..0x42BFBB reads it into def+0x00), cut to 31 bytes (def+0x00 is
    0x20 bytes) and converted from Windows-1252 [INFERRED: the game's code page] to UTF-8, the

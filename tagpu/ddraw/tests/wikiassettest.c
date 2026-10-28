@@ -734,8 +734,10 @@ static void synth_install(void)
         "[SIDE1]{name=CORE;nameprefix=COR;intgaf=CORINT;commander=CORCOM;}\n"));
     /* every cast of the rule: ARMCOM builds the builder ARMCK, the advbuilder ARMACK and the walker
        ARMPW; ARMCK's menu holds the mex, the geo (G inside its yard), the tower ARMWIN, the wall
-       and, through the download fill of ARMDL, the solar; ARMACK's the moho. ARMCK's display name
-       is past 31 bytes and holds Windows-1252's euro sign and an undefined byte. */
+       and, through the download fill of ARMDL, the solar; ARMACK's the moho. ARMWIN makes energy
+       and stands before ARMSOLAR on the menu, so the solar must skip the tower to stay a unit of
+       its own. ARMCK's display name is past 31 bytes and holds Windows-1252's euro sign and an
+       undefined byte. */
     syn("units/ARMCOM.fbi", make_text("[UNITINFO]{UnitName=ARMCOM;BMcode=1;MaxVelocity=1.25;Builder=1;WorkerTime=300;"
         "FootprintX=2;FootprintZ=2;BuildTime=50000;}\n"));
     syn("units/ARMCK.fbi", make_text("[UNITINFO]\n{\n\tUnitName=ARMCK;\n\tSide=ARM;\n\tcanstop=1;\n\t/* a comment */\n"
@@ -752,7 +754,7 @@ static void synth_install(void)
         "EnergyMake=250;EnergyUse=+1;BuildTime=13000;}\n"));
     syn("units/ARMSOLAR.fbi", make_text("[UNITINFO]{UnitName=ARMSOLAR;Side=ARM;canstop=0;FootprintX=5;FootprintZ=5;"
         "EnergyUse=-20;BuildTime=2600;}\n"));
-    syn("units/ARMWIN.fbi", make_text("[UNITINFO]{UnitName=ARMWIN;Side=ARM;FootprintX=2;FootprintZ=2;Weapon1=LASER;BuildTime=2000;}\n"));
+    syn("units/ARMWIN.fbi", make_text("[UNITINFO]{UnitName=ARMWIN;Side=ARM;FootprintX=2;FootprintZ=2;Weapon1=LASER;EnergyMake=5;BuildTime=2000;}\n"));
     syn("units/ARMDRAG.fbi", make_text("[UNITINFO]{UnitName=ARMDRAG;FootprintX=2;FootprintZ=2;TEDClass= fort ;BuildTime=255;}\n"));
     syn("download/armck.tdf", make_text(
         "[MENUENTRY1]{UNITMENU=ARMCK;MENU=3;BUTTON=1;UNITNAME=ARMSOLAR;}\n"
@@ -1002,6 +1004,8 @@ static int cmd_fuzz_side(int argc, char** argv)
                    side->casting[0].cast[WIKI_CAST_GEO].g[1], side->casting[0].cast[WIKI_CAST_GEO].g[2],
                    side->casting[0].cast[WIKI_CAST_GEO].g[3]);
             if (nbound != WIKI_NCAST || strcmp(side->casting[0].cast[0].title, "Construction Kbot \xE2\x82\xAC with ? a na") ||
+                strcmp(side->casting[0].cast[WIKI_CAST_TOWER].type, "ARMWIN") ||
+                strcmp(side->casting[0].cast[WIKI_CAST_SOLAR].type, "ARMSOLAR") ||
                 side->casting[0].cast[WIKI_CAST_GEO].g[1] != 6 || side->casting[0].cast[WIKI_CAST_GEO].g[0] ||
                 side->side_of_engine[0] != 0 || side->side_of_engine[1] != -1) {
                 fprintf(stderr, "wikiassettest: the synthetic install's casting is not the rule's\n");

@@ -33,7 +33,8 @@ against an independent Python resolution of the same install.
    model, 1000 damaged copies each; and `fuzz-side`, the sidebar's readers over synthetic files (no game data): the
    positional .GUI reader and the GAF, PCX and number readers on damaged and garbage copies with huge counts, and
    the whole sidebar load over a synthetic install with one of its files damaged each time. Every refusal must be
-   named and the sanitizers must stay silent.
+   named and the sanitizers must stay silent. The undamaged install's casting must be the rule's, its solar a unit
+   of its own past a tower that makes energy; gfx.py's rule runs over the same units (`cast_rule_case`).
 6. **The sidebar, per compat setup** (`--side`, or with the rest; `--mods` to choose): each setup's game folder laid
    out as tools/wiki/sidepacks.py lays it out (the retail install, then the setup's files over it), its folder names
    and first archive from sidepacks.py's record where the mod's loader renames them in memory, and the DLL's
@@ -965,6 +966,33 @@ def main():
     return 0
 
 
+def cast_rule_case():
+    """gfx.py's cast rule (`side_casting`) over fuzz-side's synthetic units, menus as its install gives them: the
+    tower ARMWIN makes energy and stands before ARMSOLAR on the builder's menu, so the solar must skip it for a unit
+    of its own. fuzz-side checks the C rule on the same install. True when every cast is the expected unit."""
+    import gfx  # noqa: E402
+    base = dict(bmcode=0, maxvelocity=0, fx=2, fz=2, builder=0, workertime=0, canfly=0, minwaterdepth=None,
+                extractsmetal=0, g=[], energymake=0, energyuse=0, weapon1=False, fort=False)
+    mobile = dict(bmcode=1, maxvelocity=1)
+    spec = {"ARMCOM": dict(mobile, builder=1, workertime=300), "ARMCK": dict(mobile, builder=1, workertime=80),
+            "ARMACK": dict(mobile, builder=1, workertime=180), "ARMPW": dict(mobile, fx=1, fz=1, weapon1=True),
+            "ARMMEX": dict(extractsmetal=.001), "ARMMOHO": dict(fx=3, fz=3, extractsmetal=.003),
+            "ARMGEO": dict(fx=4, fz=4, g=[[1, 1]], energymake=250, energyuse=1),
+            "ARMWIN": dict(weapon1=True, energymake=5), "ARMDRAG": dict(fort=True),
+            "ARMSOLAR": dict(fx=5, fz=5, energyuse=-20)}
+    units = {k.lower(): {**base, "name": k, **v} for k, v in spec.items()}
+    menus = {"armcom": ["armck", "armack", "armpw"], "armck": ["armmex", "armwin", "armgeo", "armdrag", "armsolar"],
+             "armack": ["armmoho"]}
+    picks, _why = gfx.side_casting(units, "ARMCOM", lambda t: menus.get(t, []))
+    want = {"builder": "armck", "advbuilder": "armack", "mex": "armmex", "moho": "armmoho", "geo": "armgeo",
+            "walker": "armpw", "tower": "armwin", "wall": "armdrag", "solar": "armsolar"}
+    if picks != want:
+        print(f"assetcheck: gfx.py's cast rule over the synthetic units FAILED: {picks}")
+        return False
+    print("assetcheck: gfx.py's cast rule over the synthetic units: every cast its own unit, the solar past the tower")
+    return True
+
+
 def side_fuzz(n):
     """`wikiassettest fuzz-side`: synthetic files only, so it runs without a game"""
     with tempfile.TemporaryDirectory(prefix="assetcheck-fuzz-") as tmp:
@@ -986,6 +1014,8 @@ def side_main(a, gamedir):
     ok, lines = against_sidepacks(mods, gamedir, pak_of_tree(), a.language)
     print("\n".join(lines))
     if a.fuzz and not side_fuzz(a.fuzz):
+        return 1
+    if not cast_rule_case():
         return 1
     if not ok:
         print("assetcheck: the sidebar FAILED")
