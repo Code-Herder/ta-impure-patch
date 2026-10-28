@@ -2,18 +2,19 @@
   "format": 1,
   "id": "quickbuild",
   "title": "Quick Build: Resource Extractors",
-  "subtitle": "Extractors and geothermal plants land on their deposit or vent, and a constructor builds one with a single right-click.",
+  "subtitle": "Extractors and geothermal plants land on their deposit or vent, and a constructor builds one with a single {order}.",
   "text": [
     "Placing a metal extractor from the build menu near a metal deposit puts it on the deposit: the ghost jumps to the spot within three squares that covers the most metal. A geothermal powerplant jumps onto a nearby vent the same way.",
-    "With a constructor selected you need no build menu at all. Point at a deposit or a vent: the ghost of the best extractor or powerplant your selection can build there appears, and a right-click orders it. Constructors that cannot build it help the ones that can. Broad metal ground that runs across the map is not a deposit, and neither is a patch joined to it, so a right-click there is still a move; place an extractor there from the build menu.",
-    "Hold Shift to queue one deposit after another; the mode stays on. Shift+right-click a queued site again to cancel it. Hold Alt to place exactly where the cursor is, with no snapping and no Quick Build.",
-    "Point at one of your finished extractors with a constructor that can build a stronger one, such as ARMACK over a metal extractor: a right-click reclaims the old one and builds the Moho mine in its place.",
+    "With a constructor selected you need no build menu at all. Point at a deposit or a vent: the ghost of the best extractor or powerplant your selection can build there appears, and a {order} orders it. Constructors that cannot build it help the ones that can. Broad metal ground that runs across the map is not a deposit, and neither is a patch joined to it, so a {order} there is still a move; place an extractor there from the build menu.",
+    "Hold Shift to queue one deposit after another; the mode stays on. Shift+{order} a queued site again to cancel it. Hold Alt to place exactly where the cursor is, with no snapping and no Quick Build.",
+    "Point at one of your finished extractors with a constructor that can build a stronger one, such as the {advbuilder} over the {mex}: a {order} reclaims the old one and builds the {moho} in its place.",
     "Only deposits you have explored count. Escalation, TA Zero and unrecognised mods turn the feature off; both parts can be switched off separately in Impure's options."
   ],
   "lockedIn": ["escalation","tazero","unknown"],
   "pace": {"build":32},
   "units": {
     "ARMCK": {
+      "cast": "builder",
       "footprint": [2,2],
       "buildTime": 5597,
       "workerTime": 80,
@@ -45,6 +46,7 @@
       "from": "ARMCK.fbi; build list gamedata/sidedata.tdf [CANBUILD]"
     },
     "ARMACK": {
+      "cast": "advbuilder",
       "footprint": [2,2],
       "buildTime": 13432,
       "workerTime": 160,
@@ -55,9 +57,17 @@
       "name": "Adv. Construction Kbot",
       "from": "ARMACK.fbi; build list gamedata/sidedata.tdf [CANBUILD]"
     },
-    "ARMMEX": {"footprint":[3,3],"extracts":0.001,"buildTime":1800,"name":"Metal Extractor","from":"ARMMEX.fbi"},
-    "ARMMOHO": {"footprint":[5,5],"extracts":0.003,"buildTime":35750,"name":"Moho Mine","from":"ARMMOHO.fbi"},
+    "ARMMEX": {
+      "cast": "mex",
+      "footprint": [3,3],
+      "extracts": 0.001,
+      "buildTime": 1800,
+      "name": "Metal Extractor",
+      "from": "ARMMEX.fbi"
+    },
+    "ARMMOHO": {"cast":"moho","footprint":[5,5],"extracts":0.003,"buildTime":35750,"name":"Moho Mine","from":"ARMMOHO.fbi"},
     "ARMGEO": {
+      "cast": "geo",
       "footprint": [4,4],
       "energyMake": 250,
       "vent": true,
@@ -65,7 +75,15 @@
       "name": "Geothermal Powerplant",
       "from": "ARMGEO.fbi (YardMap all G: one cell on a geothermal feature)"
     },
-    "ARMPW": {"footprint":[2,2],"buildTime":1452,"maxVelocity":1.8,"canstop":1,"name":"Peewee","from":"ARMPW.fbi"}
+    "ARMPW": {
+      "cast": "walker",
+      "footprint": [2,2],
+      "buildTime": 1452,
+      "maxVelocity": 1.8,
+      "canstop": 1,
+      "name": "Peewee",
+      "from": "ARMPW.fbi"
+    }
   },
   "scene": {
     "map": {"w":40,"h":30,"surfaceMetal":0},
@@ -100,7 +118,7 @@
       "title": "Snap onto the deposit",
       "scene": {"selected":["ck"]},
       "inputs": [
-        {"at":0,"caption":"ARMCK selected. Pick the metal extractor in the build menu."},
+        {"at":0,"caption":"{builder} selected. Pick the {mex} in the build menu."},
         {"at":20,"build":"ARMMEX"},
         {"at":117,"move":[304,140]},
         {"at":119,"move":[305,140]},
@@ -185,7 +203,7 @@
         {"at":340,"move":[340,112]},
         {"at":355,"down":"lmb"},
         {"at":358,"up":"lmb"},
-        {"at":358,"caption":"Click: it is placed on the deposit and ARMCK builds it."}
+        {"at":358,"caption":"{Select}: it is placed on the deposit and the {builder} builds it."}
       ],
       "end": 488
     },
@@ -194,7 +212,7 @@
       "title": "Hold Alt to place exactly",
       "scene": {"selected":["ck"]},
       "inputs": [
-        {"at":0,"caption":"ARMCK selected, metal extractor picked from the build menu."},
+        {"at":0,"caption":"{builder} selected, {mex} picked from the build menu."},
         {"at":20,"build":"ARMMEX"},
         {"at":117,"move":[304,140]},
         {"at":119,"move":[305,140]},
@@ -227,7 +245,7 @@
         {"at":245,"up":"alt"},
         {"at":245,"caption":"Let go of Alt and it snaps again."},
         {"at":285,"down":"alt"},
-        {"at":285,"caption":"Hold Alt and click: built exactly where you clicked."},
+        {"at":285,"caption":"Hold Alt and {select}: built exactly under the cursor."},
         {"at":315,"down":"lmb"},
         {"at":318,"up":"lmb"},
         {"at":323,"up":"alt"}
@@ -236,10 +254,10 @@
     },
     {
       "id": "click",
-      "title": "Click a deposit to build",
+      "title": "{Order} a deposit to build",
       "scene": {"selected":["ck"]},
       "inputs": [
-        {"at":0,"caption":"ARMCK selected. No build menu: just point at a deposit."},
+        {"at":0,"caption":"{builder} selected. No build menu: just point at a deposit."},
         {"at":27,"move":[304,140]},
         {"at":29,"move":[302,139]},
         {"at":31,"move":[300,139]},
@@ -296,9 +314,9 @@
         {"at":171,"move":[370,79]},
         {"at":173,"move":[371,77]},
         {"at":175,"move":[372,76]},
-        {"at":200,"down":"rmb"},
-        {"at":203,"up":"rmb"},
-        {"at":203,"caption":"Right-click builds it. The mode stays on for the next one."}
+        {"at":200,"down":"order"},
+        {"at":203,"up":"order"},
+        {"at":203,"caption":"{Order} builds it. The mode stays on for the next one."}
       ],
       "end": 333
     },
@@ -307,7 +325,7 @@
       "title": "The best extractor that fits",
       "scene": {"selected":["ck","ack"],"cursor":[330,150]},
       "inputs": [
-        {"at":0,"caption":"ARMCK and ARMACK selected: together they can build both extractors."},
+        {"at":0,"caption":"{builder} and {advbuilder} selected: together they can build both extractors."},
         {"at":27,"move":[330,151]},
         {"at":29,"move":[329,152]},
         {"at":31,"move":[327,155]},
@@ -333,7 +351,7 @@
         {"at":71,"move":[249,282]},
         {"at":73,"move":[248,283]},
         {"at":75,"move":[248,284]},
-        {"at":75,"caption":"A Moho mine fits this deposit, and it is the strongest: ARMACK will build it."},
+        {"at":75,"caption":"The {moho} fits this deposit, and it is the strongest: the {advbuilder} will build it."},
         {"at":132,"move":[248,282]},
         {"at":134,"move":[246,277]},
         {"at":136,"move":[244,270]},
@@ -364,10 +382,10 @@
         {"at":186,"move":[263,45]},
         {"at":188,"move":[265,41]},
         {"at":190,"move":[266,40]},
-        {"at":190,"caption":"This deposit is wedged against the edge: no room for a Moho, so a metal extractor."},
-        {"at":245,"down":"rmb"},
-        {"at":248,"up":"rmb"},
-        {"at":248,"caption":"Right-click: ARMCK builds the extractor, ARMACK helps."},
+        {"at":190,"caption":"This deposit is wedged against the edge: no room for the {moho}, so the {mex}."},
+        {"at":245,"down":"order"},
+        {"at":248,"up":"order"},
+        {"at":248,"caption":"{Order}: the {builder} builds the {mex}, the {advbuilder} helps."},
         {"at":350,"move":[266,41]},
         {"at":352,"move":[266,43]},
         {"at":354,"move":[265,47]},
@@ -398,9 +416,9 @@
         {"at":404,"move":[248,281]},
         {"at":406,"move":[248,283]},
         {"at":408,"move":[248,284]},
-        {"at":418,"down":"rmb"},
-        {"at":421,"up":"rmb"},
-        {"at":421,"caption":"Back on the big deposit: the Moho mine, and ARMCK helps."}
+        {"at":418,"down":"order"},
+        {"at":421,"up":"order"},
+        {"at":421,"caption":"Back on the big deposit: the {moho}, and the {builder} helps."}
       ],
       "end": 721
     },
@@ -409,7 +427,7 @@
       "title": "Queue several with Shift",
       "scene": {"selected":["ck"]},
       "inputs": [
-        {"at":0,"caption":"ARMCK selected. Hold Shift to queue."},
+        {"at":0,"caption":"{builder} selected. Hold Shift to queue."},
         {"at":25,"down":"shift"},
         {"at":27,"move":[303,140]},
         {"at":29,"move":[300,141]},
@@ -436,9 +454,9 @@
         {"at":71,"move":[76,183]},
         {"at":73,"move":[73,184]},
         {"at":75,"move":[72,184]},
-        {"at":85,"down":"rmb"},
-        {"at":88,"up":"rmb"},
-        {"at":88,"caption":"Shift+right-click: queued. The mode stays on."},
+        {"at":85,"down":"order"},
+        {"at":88,"up":"order"},
+        {"at":88,"caption":"Shift+{order}: queued. The mode stays on."},
         {"at":110,"move":[73,184]},
         {"at":112,"move":[75,182]},
         {"at":114,"move":[79,180]},
@@ -457,8 +475,8 @@
         {"at":139,"move":[165,138]},
         {"at":141,"move":[167,136]},
         {"at":143,"move":[168,136]},
-        {"at":153,"down":"rmb"},
-        {"at":156,"up":"rmb"},
+        {"at":153,"down":"order"},
+        {"at":156,"up":"order"},
         {"at":156,"caption":"The next deposit gives its own ghost: queued after the first."},
         {"at":178,"move":[168,137]},
         {"at":180,"move":[170,139]},
@@ -483,9 +501,9 @@
         {"at":217,"move":[246,281]},
         {"at":219,"move":[248,283]},
         {"at":221,"move":[248,284]},
-        {"at":231,"down":"rmb"},
-        {"at":234,"up":"rmb"},
-        {"at":234,"caption":"And a third. ARMCK works through them in order."},
+        {"at":231,"down":"order"},
+        {"at":234,"up":"order"},
+        {"at":234,"caption":"And a third. The {builder} works through them in order."},
         {"at":254,"up":"shift"}
       ],
       "end": 584
@@ -495,7 +513,7 @@
       "title": "Cancel a queued one",
       "scene": {"selected":["ck"]},
       "inputs": [
-        {"at":0,"caption":"ARMCK selected."},
+        {"at":0,"caption":"{builder} selected."},
         {"at":22,"move":[303,140]},
         {"at":24,"move":[301,141]},
         {"at":26,"move":[298,141]},
@@ -527,18 +545,18 @@
         {"at":78,"move":[73,184]},
         {"at":80,"move":[72,184]},
         {"at":80,"down":"shift"},
-        {"at":85,"down":"rmb"},
-        {"at":88,"up":"rmb"},
+        {"at":85,"down":"order"},
+        {"at":88,"up":"order"},
         {"at":88,"up":"shift"},
-        {"at":88,"caption":"Shift+right-click: the extractor is queued."},
-        {"at":123,"down":"rmb"},
-        {"at":126,"up":"rmb"},
-        {"at":126,"caption":"A plain right-click on the queued site changes nothing."},
+        {"at":88,"caption":"Shift+{order}: the extractor is queued."},
+        {"at":123,"down":"order"},
+        {"at":126,"up":"order"},
+        {"at":126,"caption":"A plain {order} on the queued site changes nothing."},
         {"at":166,"down":"shift"},
-        {"at":171,"down":"rmb"},
-        {"at":174,"up":"rmb"},
+        {"at":171,"down":"order"},
+        {"at":174,"up":"order"},
         {"at":174,"up":"shift"},
-        {"at":174,"caption":"Shift+right-click it again: the plan is cancelled and ARMCK stops."}
+        {"at":174,"caption":"Shift+{order} it again: the plan is cancelled and the {builder} stops."}
       ],
       "end": 264
     },
@@ -547,15 +565,15 @@
       "title": "Helpers assist",
       "scene": {"selected":["pw"],"cursor":[300,210]},
       "inputs": [
-        {"at":0,"caption":"The Peewee is sent off on a walk."},
+        {"at":0,"caption":"The {walker} is sent off on a walk."},
         {"at":12,"move":[282,221]},
         {"at":14,"move":[238,249]},
         {"at":16,"move":[180,285]},
         {"at":18,"move":[122,321]},
         {"at":20,"move":[78,349]},
         {"at":22,"move":[60,360]},
-        {"at":22,"down":"rmb"},
-        {"at":25,"up":"rmb"},
+        {"at":22,"down":"order"},
+        {"at":25,"up":"order"},
         {"at":32,"move":[66,356]},
         {"at":34,"move":[82,346]},
         {"at":36,"move":[106,330]},
@@ -569,7 +587,7 @@
         {"at":51,"move":[378,154]},
         {"at":53,"move":[394,144]},
         {"at":55,"move":[400,140]},
-        {"at":55,"down":"lmb"},
+        {"at":55,"down":"select"},
         {"at":57,"move":[398,141]},
         {"at":59,"move":[391,145]},
         {"at":61,"move":[381,152]},
@@ -588,7 +606,7 @@
         {"at":86,"move":[159,295]},
         {"at":88,"move":[152,299]},
         {"at":90,"move":[150,300]},
-        {"at":90,"up":"lmb"},
+        {"at":90,"up":"select"},
         {"at":90,"caption":"Box-select it with both constructors."},
         {"at":107,"move":[151,300]},
         {"at":109,"move":[153,299]},
@@ -608,10 +626,13 @@
         {"at":136,"move":[245,285]},
         {"at":138,"move":[247,284]},
         {"at":140,"move":[248,284]},
-        {"at":140,"caption":"ARMACK can build the Moho mine; ARMCK cannot."},
-        {"at":170,"down":"rmb"},
-        {"at":173,"up":"rmb"},
-        {"at":173,"caption":"Right-click: ARMACK builds, ARMCK guards it and helps, the Peewee keeps walking."}
+        {"at":140,"caption":"The {advbuilder} can build the {moho}; the {builder} cannot."},
+        {"at":170,"down":"order"},
+        {"at":173,"up":"order"},
+        {
+          "at": 173,
+          "caption": "{Order}: the {advbuilder} builds, the {builder} guards it and helps, the {walker} keeps walking."
+        }
       ],
       "end": 413
     },
@@ -620,7 +641,7 @@
       "title": "Upgrade your extractor",
       "scene": {"selected":["ack"]},
       "inputs": [
-        {"at":0,"caption":"ARMACK selected. Point at your finished metal extractor."},
+        {"at":0,"caption":"{advbuilder} selected. Point at your finished {mex}."},
         {"at":27,"move":[305,140]},
         {"at":29,"move":[306,142]},
         {"at":31,"move":[308,144]},
@@ -649,10 +670,10 @@
         {"at":76,"move":[438,264]},
         {"at":78,"move":[439,266]},
         {"at":80,"move":[440,266]},
-        {"at":80,"caption":"It offers the stronger Moho mine in its place."},
-        {"at":120,"down":"rmb"},
-        {"at":123,"up":"rmb"},
-        {"at":123,"caption":"Right-click: the extractor is reclaimed, then the Moho mine is built."}
+        {"at":80,"caption":"It offers the stronger {moho} in its place."},
+        {"at":120,"down":"order"},
+        {"at":123,"up":"order"},
+        {"at":123,"caption":"{Order}: the {mex} is reclaimed, then the {moho} is built."}
       ],
       "end": 433
     },
@@ -661,7 +682,7 @@
       "title": "Geothermal vents",
       "scene": {"selected":["ck"]},
       "inputs": [
-        {"at":0,"caption":"ARMCK selected. Point at a geothermal vent."},
+        {"at":0,"caption":"{builder} selected. Point at a geothermal vent."},
         {"at":27,"move":[305,140]},
         {"at":29,"move":[306,140]},
         {"at":31,"move":[309,140]},
@@ -690,10 +711,10 @@
         {"at":76,"move":[454,154]},
         {"at":78,"move":[455,154]},
         {"at":80,"move":[456,154]},
-        {"at":80,"caption":"Over a vent the ghost is a geothermal powerplant."},
-        {"at":115,"down":"rmb"},
-        {"at":118,"up":"rmb"},
-        {"at":118,"caption":"Right-click builds it on the vent."}
+        {"at":80,"caption":"Over a vent the ghost is the {geo}."},
+        {"at":115,"down":"order"},
+        {"at":118,"up":"order"},
+        {"at":118,"caption":"{Order} builds it on the vent."}
       ],
       "end": 403
     },
@@ -702,7 +723,7 @@
       "title": "Metal maps",
       "scene": {"selected":["ck"]},
       "inputs": [
-        {"at":0,"caption":"ARMCK selected. The right side is uniform metal ground."},
+        {"at":0,"caption":"{builder} selected. The right side is uniform metal ground."},
         {"at":27,"move":[305,140]},
         {"at":29,"move":[308,140]},
         {"at":31,"move":[312,139]},
@@ -732,9 +753,9 @@
         {"at":78,"move":[567,120]},
         {"at":80,"move":[568,120]},
         {"at":80,"caption":"Broad metal ground is not a deposit: no ghost, the cursor says move."},
-        {"at":115,"down":"rmb"},
-        {"at":118,"up":"rmb"},
-        {"at":118,"caption":"Right-click: ARMCK just moves there."},
+        {"at":115,"down":"order"},
+        {"at":118,"up":"order"},
+        {"at":118,"caption":"{Order}: the {builder} just moves there."},
         {"at":150,"move":[568,121]},
         {"at":152,"move":[567,124]},
         {"at":154,"move":[565,128]},
@@ -761,9 +782,9 @@
         {"at":196,"move":[490,329]},
         {"at":198,"move":[490,330]},
         {"at":198,"caption":"A deposit with plain ground around it is one: the ghost appears."},
-        {"at":233,"down":"rmb"},
-        {"at":236,"up":"rmb"},
-        {"at":236,"caption":"Right-click builds it."}
+        {"at":233,"down":"order"},
+        {"at":236,"up":"order"},
+        {"at":236,"caption":"{Order} builds it."}
       ],
       "end": 476
     },
@@ -772,7 +793,7 @@
       "title": "Fog",
       "scene": {"selected":["ck"]},
       "inputs": [
-        {"at":0,"caption":"ARMCK selected, metal extractor picked from the build menu."},
+        {"at":0,"caption":"{builder} selected, {mex} picked from the build menu."},
         {"at":20,"build":"ARMMEX"},
         {"at":117,"move":[303,140]},
         {"at":119,"move":[300,139]},
@@ -844,7 +865,7 @@
         {"at":305,"caption":"Under grey fog the deposit is known: the ghost snaps onto it."},
         {"at":350,"down":"lmb"},
         {"at":353,"up":"lmb"},
-        {"at":353,"caption":"Click: placed on the deposit."}
+        {"at":353,"caption":"{Select}: placed on the deposit."}
       ],
       "end": 443
     }

@@ -4,17 +4,18 @@
   "title": "Build Lines, Grids and Rings",
   "subtitle": "With a building armed, Shift-drag lays a whole line, rectangle or wall of it, and Shift+Ctrl rings a building.",
   "text": [
-    "With a building picked from the build menu, a plain click places one and puts the building away; a Shift-click queues one and keeps the building armed until you let go of Shift.",
-    "Hold Shift, press the left button and drag to place a row: each site steps one footprint along the longer axis, follows the slope on the other and snaps to the grid. Add Ctrl to hold the line to its axis, Alt for a filled rectangle, laid out in a snake so the builder never walks back across it, and Alt+Ctrl for a hollow one. The keys are read while you drag, so the shape changes the moment you press or let go of one. Release the button with Shift still held to order it.",
+    "With a building picked from the build menu, a plain {select} places one and puts the building away; a Shift-{select} queues one and keeps the building armed until you let go of Shift.",
+    "Hold Shift, press and drag to place a row: each site steps one footprint along the longer axis, follows the slope on the other and snaps to the grid. Add Ctrl to hold the line to its axis, Alt for a filled rectangle, laid out in a snake so the builder never walks back across it, and Alt+Ctrl for a hollow one. The keys are read while you drag, so the shape changes the moment you press or let go of one. Release the button with Shift still held to order it.",
     "Hold Shift+Ctrl over a building, or over a building your constructor has queued, to ring it; a press and release orders the ring.",
-    "Every site shows TA's build square: green is placed, red is refused there and skipped, yellow takes off a building already queued at that spot, as a Shift-click on a queued site does in TA. Dragging back over a queued row takes off every one of them. A ring leaves its yellow sites out.",
+    "Every site shows TA's build square: green is placed, red is refused there and skipped, yellow takes off a building already queued at that spot, as a Shift-{select} on a queued site does in TA. Dragging back over a queued row takes off every one of them. A ring leaves its yellow sites out.",
     "Hold Alt and press Z for one more empty square between neighbours, X for one fewer, from 0 to 16; each building remembers its own. A ring ignores it.",
-    "Let go of Shift before the button and nothing is ordered; the building stays armed. A right-click cancels the drag and puts the building away. A gesture places at most 256 sites. TA arms a building only with one unit selected, so the order goes to that constructor."
+    "Let go of Shift before the button and nothing is ordered; the building stays armed. A {cancel} cancels the drag and puts the building away. A gesture places at most 256 sites. TA arms a building only with one unit selected, so the order goes to that constructor."
   ],
   "lockedIn": [],
   "pace": {"build":24},
   "units": {
     "ARMCK": {
+      "cast": "builder",
       "footprint": [2,2],
       "buildTime": 5597,
       "workerTime": 80,
@@ -45,9 +46,9 @@
       "name": "Construction KBot",
       "from": "ARMCK.fbi; build list gamedata/sidedata.tdf [CANBUILD]"
     },
-    "ARMLLT": {"footprint":[2,2],"buildTime":4662,"canstop":1,"name":"L.L.T.","from":"ARMLLT.fbi"},
-    "ARMDRAG": {"footprint":[2,2],"buildTime":520,"name":"Dragon's Teeth","from":"ARMDRAG.fbi"},
-    "ARMSOLAR": {"footprint":[5,5],"buildTime":2495,"name":"Solar Collector","from":"ARMSOLAR.fbi"}
+    "ARMLLT": {"cast":"tower","footprint":[2,2],"buildTime":4662,"canstop":1,"name":"L.L.T.","from":"ARMLLT.fbi"},
+    "ARMDRAG": {"cast":"wall","footprint":[2,2],"buildTime":520,"name":"Dragon's Teeth","from":"ARMDRAG.fbi"},
+    "ARMSOLAR": {"cast":"solar","footprint":[5,5],"buildTime":2495,"name":"Solar Collector","from":"ARMSOLAR.fbi"}
   },
   "scene": {
     "map": {"w":40,"h":30,"surfaceMetal":0},
@@ -58,10 +59,10 @@
   "demos": [
     {
       "id": "clicks",
-      "title": "Click and Shift-click",
+      "title": "{Select} and Shift-{select}",
       "scene": {},
       "inputs": [
-        {"at":0,"caption":"One ARMCK selected. Pick the light laser tower, ARMLLT, in the build menu."},
+        {"at":0,"caption":"One {builder} selected. Pick the {tower} in the build menu."},
         {"at":20,"build":"ARMLLT"},
         {"at":117,"move":[240,120]},
         {"at":119,"move":[238,119]},
@@ -85,7 +86,7 @@
         {"at":155,"move":[176,96]},
         {"at":165,"down":"lmb"},
         {"at":168,"up":"lmb"},
-        {"at":168,"caption":"A plain click places one and puts the building away."},
+        {"at":168,"caption":"A plain {select} places one and puts the building away."},
         {"at":213,"caption":"Pick it again and hold Shift."},
         {"at":213,"build":"ARMLLT"},
         {"at":308,"down":"shift"},
@@ -106,7 +107,7 @@
         {"at":338,"move":[224,96]},
         {"at":346,"down":"lmb"},
         {"at":349,"up":"lmb"},
-        {"at":349,"caption":"Shift-click: queued, and the building stays armed."},
+        {"at":349,"caption":"Shift-{select}: queued, and the building stays armed."},
         {"at":371,"move":[225,96]},
         {"at":373,"move":[227,96]},
         {"at":375,"move":[230,96]},
@@ -132,7 +133,7 @@
       "title": "Line",
       "scene": {},
       "inputs": [
-        {"at":0,"caption":"ARMLLT armed. Hold Shift, press the left button and drag."},
+        {"at":0,"caption":"{tower} armed. Hold Shift, press and drag."},
         {"at":0,"build":"ARMLLT"},
         {"at":97,"move":[239,120]},
         {"at":99,"move":[236,118]},
@@ -258,7 +259,7 @@
       "title": "Straight line",
       "scene": {},
       "inputs": [
-        {"at":0,"caption":"ARMLLT armed. Hold Shift and Ctrl, press and drag."},
+        {"at":0,"caption":"{tower} armed. Hold Shift and Ctrl, press and drag."},
         {"at":0,"build":"ARMLLT"},
         {"at":97,"move":[240,120]},
         {"at":99,"move":[239,122]},
@@ -329,7 +330,7 @@
         {"at":233,"move":[496,336]},
         {"at":235,"move":[496,336]},
         {"at":235,"caption":"Ctrl holds the line to its longer axis, wherever the cursor wanders."},
-        {"at":270,"caption":"Red: the solar collector stands there. Those sites are skipped."},
+        {"at":270,"caption":"Red: the {solar} stands there. Those sites are skipped."},
         {"at":315,"up":"lmb"},
         {"at":315,"up":"ctrl"},
         {"at":315,"up":"shift"},
@@ -342,7 +343,7 @@
       "title": "Filled rectangle",
       "scene": {},
       "inputs": [
-        {"at":0,"caption":"Dragon's teeth armed. Hold Shift and Alt, press and drag."},
+        {"at":0,"caption":"{wall} armed. Hold Shift and Alt, press and drag."},
         {"at":0,"build":"ARMDRAG"},
         {"at":97,"move":[239,120]},
         {"at":99,"move":[236,118]},
@@ -404,7 +405,7 @@
         {"at":260,"up":"lmb"},
         {"at":260,"up":"alt"},
         {"at":260,"up":"shift"},
-        {"at":260,"caption":"Released: twelve queued. ARMCK builds them in that order."}
+        {"at":260,"caption":"Released: twelve queued. The {builder} builds them in that order."}
       ],
       "end": 590
     },
@@ -413,7 +414,7 @@
       "title": "Hollow rectangle",
       "scene": {"cursor":[300,330]},
       "inputs": [
-        {"at":0,"caption":"Dragon's teeth armed. Shift, Alt and Ctrl: a hollow rectangle."},
+        {"at":0,"caption":"{wall} armed. Shift, Alt and Ctrl: a hollow rectangle."},
         {"at":0,"build":"ARMDRAG"},
         {"at":97,"move":[299,330]},
         {"at":99,"move":[296,331]},
@@ -478,7 +479,7 @@
       "title": "Spacing",
       "scene": {},
       "inputs": [
-        {"at":0,"caption":"Dragon's teeth armed. Shift-drag a line: the pieces touch."},
+        {"at":0,"caption":"{wall} armed. Shift-drag a line: the pieces touch."},
         {"at":0,"build":"ARMDRAG"},
         {"at":97,"move":[239,120]},
         {"at":99,"move":[236,119]},
@@ -538,7 +539,7 @@
         {"at":322,"up":"lmb"},
         {"at":322,"caption":"Released: four pieces, two squares apart."},
         {"at":337,"up":"shift"},
-        {"at":357,"caption":"The spacing is kept for dragon's teeth: the next line starts spread."},
+        {"at":357,"caption":"The {wall} keeps its spacing: the next line starts spread."},
         {"at":357,"build":"ARMDRAG"},
         {"at":454,"move":[270,80]},
         {"at":456,"move":[265,82]},
@@ -602,7 +603,7 @@
       "title": "Ring around a building",
       "scene": {},
       "inputs": [
-        {"at":0,"caption":"Dragon's teeth armed. Point at the solar collector."},
+        {"at":0,"caption":"{wall} armed. Point at the {solar}."},
         {"at":0,"build":"ARMDRAG"},
         {"at":97,"move":[241,120]},
         {"at":99,"move":[243,121]},
@@ -643,7 +644,7 @@
       "title": "Ring around a queued build",
       "scene": {},
       "inputs": [
-        {"at":0,"caption":"Queue two solar collectors with Shift-clicks: one far away, then one near."},
+        {"at":0,"caption":"Queue the {solar} twice with Shift-{select}s: one far away, then one near."},
         {"at":0,"build":"ARMSOLAR"},
         {"at":95,"down":"shift"},
         {"at":97,"move":[242,120]},
@@ -691,8 +692,8 @@
         {"at":198,"down":"lmb"},
         {"at":201,"up":"lmb"},
         {"at":216,"up":"shift"},
-        {"at":216,"caption":"ARMCK walks to the first. The second is only a queued square."},
-        {"at":246,"caption":"Dragon's teeth armed: Shift and Ctrl over the queued solar collector."},
+        {"at":216,"caption":"The {builder} walks to the first. The second is only a queued square."},
+        {"at":246,"caption":"{wall} armed: Shift and Ctrl over the queued {solar}."},
         {"at":246,"build":"ARMDRAG"},
         {"at":343,"move":[200,280]},
         {"at":345,"move":[200,280]},
@@ -713,7 +714,7 @@
         {"at":409,"up":"lmb"},
         {"at":409,"up":"ctrl"},
         {"at":409,"up":"shift"},
-        {"at":409,"caption":"Click: the ring is queued round it, before it is even started."}
+        {"at":409,"caption":"{Select}: the ring is queued round it, before it is even started."}
       ],
       "end": 499
     },
@@ -722,7 +723,7 @@
       "title": "Placing it again removes it",
       "scene": {},
       "inputs": [
-        {"at":0,"caption":"ARMLLT armed. Shift-drag a row of five."},
+        {"at":0,"caption":"{tower} armed. Shift-drag a row of five."},
         {"at":0,"build":"ARMLLT"},
         {"at":97,"move":[241,120]},
         {"at":99,"move":[243,119]},
@@ -810,7 +811,7 @@
         {"at":363,"move":[400,64]},
         {"at":373,"down":"lmb"},
         {"at":376,"up":"lmb"},
-        {"at":376,"caption":"A Shift-click on a queued site takes it off too, as in TA."},
+        {"at":376,"caption":"A Shift-{select} on a queued site takes it off too, as in TA."},
         {"at":411,"up":"shift"}
       ],
       "end": 531
@@ -820,7 +821,7 @@
       "title": "Change the shape mid-drag",
       "scene": {},
       "inputs": [
-        {"at":0,"caption":"Dragon's teeth armed. Shift-drag: a line."},
+        {"at":0,"caption":"{wall} armed. Shift-drag: a line."},
         {"at":0,"build":"ARMDRAG"},
         {"at":97,"move":[239,120]},
         {"at":99,"move":[236,119]},
@@ -919,9 +920,9 @@
         {"at":421,"move":[591,336]},
         {"at":423,"move":[592,336]},
         {"at":423,"caption":"Another drag..."},
-        {"at":443,"down":"rmb"},
-        {"at":446,"up":"rmb"},
-        {"at":446,"caption":"...and a right-click cancels it and puts the building away."},
+        {"at":443,"down":"cancel"},
+        {"at":446,"up":"cancel"},
+        {"at":446,"caption":"...and a {cancel} cancels it and puts the building away."},
         {"at":466,"up":"lmb"},
         {"at":476,"up":"shift"}
       ],

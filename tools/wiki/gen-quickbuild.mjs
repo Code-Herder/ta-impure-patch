@@ -7,6 +7,15 @@
    (each row's `from`); nothing of the game is copied. `canstop` is written only for the types whose FBI sets it:
    the engine reads a missing key as 0 (sim.js canStop), and so does the sim.
 
+   Each unit names its `cast`, its place in the demos: where a side's casting applies, the sim plays that side's type
+   for the cast, with its figures, and the authored type plays everywhere else. Text names units by cast tokens
+   (`{builder}`, `{mex}`, ...) and buttons by `{order}`, `{select}` and `{cancel}` (capitalised to start a sentence),
+   filled for the player's side and interface type when shown; the sim keeps the raw text. A `{` that starts no
+   token is refused by both loaders. No `a` or `an` stands before a cast token, since the filled name decides the
+   article. An input whose button depends on the interface type names its action (`order`; `select` for a box
+   drag); `lmb` stays for a press that is the left button in both types and none of the actions, placing an armed
+   building. research/notes/ingame-wiki.md, *The data format*.
+
    No demo writes `sidebar`, so each takes sim.js's default, decision 2 of
    research/notes/ingame-wiki-sidebar-plan.md: the sidebar is shown when the scene gives the player a mobile builder.
    ARMCK and ARMACK stand in this entry's scene, so every demo here shows it. */
@@ -18,18 +27,18 @@ const C = c => c * 16 + 8;                  // a cell's centre in world units
 const at = (cx, cz) => [C(cx), C(cz)];
 
 const units = {
-  ARMCK: { footprint: [2, 2], buildTime: 5597, workerTime: 80, buildDistance: 40, maxVelocity: 0.8, canstop: 1,
+  ARMCK: { cast: 'builder', footprint: [2, 2], buildTime: 5597, workerTime: 80, buildDistance: 40, maxVelocity: 0.8, canstop: 1,
     builds: ['ARMSOLAR', 'ARMWIN', 'ARMESTOR', 'ARMMSTOR', 'ARMMEX', 'ARMMAKR', 'ARMLAB', 'ARMVP', 'ARMAP', 'ARMSY', 'ARMLLT', 'ARMRAD',
       'ARMALAB', 'ARMGEO', 'ARMHLT', 'ARMRL', 'ARMDRAG', 'ARMGUARD', 'ARMHP'],
     name: 'Construction KBot', from: 'ARMCK.fbi; build list gamedata/sidedata.tdf [CANBUILD]' },
-  ARMACK: { footprint: [2, 2], buildTime: 13432, workerTime: 160, buildDistance: 60, maxVelocity: 0.6, canstop: 1,
+  ARMACK: { cast: 'advbuilder', footprint: [2, 2], buildTime: 13432, workerTime: 160, buildDistance: 60, maxVelocity: 0.6, canstop: 1,
     builds: ['ARMLAB', 'ARMARAD', 'ARMFUS', 'ARMMOHO', 'ARMBRTHA', 'ARMSILO', 'ARMANNI', 'ARMAMD', 'ARMASP'],
     name: 'Adv. Construction Kbot', from: 'ARMACK.fbi; build list gamedata/sidedata.tdf [CANBUILD]' },
-  ARMMEX: { footprint: [3, 3], extracts: 0.001, buildTime: 1800, name: 'Metal Extractor', from: 'ARMMEX.fbi' },
-  ARMMOHO: { footprint: [5, 5], extracts: 0.003, buildTime: 35750, name: 'Moho Mine', from: 'ARMMOHO.fbi' },
-  ARMGEO: { footprint: [4, 4], energyMake: 250, vent: true, buildTime: 13078, name: 'Geothermal Powerplant',
+  ARMMEX: { cast: 'mex', footprint: [3, 3], extracts: 0.001, buildTime: 1800, name: 'Metal Extractor', from: 'ARMMEX.fbi' },
+  ARMMOHO: { cast: 'moho', footprint: [5, 5], extracts: 0.003, buildTime: 35750, name: 'Moho Mine', from: 'ARMMOHO.fbi' },
+  ARMGEO: { cast: 'geo', footprint: [4, 4], energyMake: 250, vent: true, buildTime: 13078, name: 'Geothermal Powerplant',
     from: 'ARMGEO.fbi (YardMap all G: one cell on a geothermal feature)' },
-  ARMPW: { footprint: [2, 2], buildTime: 1452, maxVelocity: 1.8, canstop: 1, name: 'Peewee', from: 'ARMPW.fbi' },
+  ARMPW: { cast: 'walker', footprint: [2, 2], buildTime: 1452, maxVelocity: 1.8, canstop: 1, name: 'Peewee', from: 'ARMPW.fbi' },
 };
 
 /* the map, 40 x 30 cells, 480 rows: as tall as stock TA's sidebar beside it (decision 9 of
@@ -106,80 +115,80 @@ function demo(id, title, add, fn, tail) {
 }
 
 demo('snap', 'Snap onto the deposit', { selected: ['ck'] }, T => T
-  .say('ARMCK selected. Pick the metal extractor in the build menu.').wait(20).build('ARMMEX').wait(5)
+  .say('{builder} selected. Pick the {mex} in the build menu.').wait(20).build('ARMMEX').wait(5)
   .to([344, 120], 50).say('Near a deposit the ghost jumps onto it, not under the cursor.').wait(30)
   .to([408, 104], 40).wait(15).to([344, 40], 40).wait(20).to([340, 112], 30).wait(15)
-  .click('lmb').say('Click: it is placed on the deposit and ARMCK builds it.'), 130);
+  .click('lmb').say('{Select}: it is placed on the deposit and the {builder} builds it.'), 130);
 
 demo('alt', 'Hold Alt to place exactly', { selected: ['ck'] }, T => T
-  .say('ARMCK selected, metal extractor picked from the build menu.').wait(20).build('ARMMEX').wait(5)
+  .say('{builder} selected, {mex} picked from the build menu.').wait(20).build('ARMMEX').wait(5)
   .to([344, 120], 50).say('The ghost snaps onto the deposit...').wait(35)
   .down('alt').say('...hold Alt and it stays exactly under the cursor.').wait(45)
   .up('alt').say('Let go of Alt and it snaps again.').wait(40)
-  .down('alt').say('Hold Alt and click: built exactly where you clicked.').wait(30).click('lmb').wait(5).up('alt'), 60);
+  .down('alt').say('Hold Alt and {select}: built exactly under the cursor.').wait(30).click('lmb').wait(5).up('alt'), 60);
 
-demo('click', 'Click a deposit to build', { selected: ['ck'] }, T => T
-  .say('ARMCK selected. No build menu: just point at a deposit.').wait(25)
+demo('click', '{Order} a deposit to build', { selected: ['ck'] }, T => T
+  .say('{builder} selected. No build menu: just point at a deposit.').wait(25)
   .to([240, 120], 40).wait(10).to([330, 128], 40).say('Over a deposit the ghost of the extractor appears.').wait(30)
-  .to([372, 76], 30).wait(25).click('rmb').say('Right-click builds it. The mode stays on for the next one.'), 130);
+  .to([372, 76], 30).wait(25).click('order').say('{Order} builds it. The mode stays on for the next one.'), 130);
 
 demo('bestfit', 'The best extractor that fits', { selected: ['ck', 'ack'], cursor: [330, 150] }, T => T
-  .say('ARMCK and ARMACK selected: together they can build both extractors.').wait(25)
-  .to([248, 284], 50).say('A Moho mine fits this deposit, and it is the strongest: ARMACK will build it.').wait(55)
-  .path([[210, 150], [266, 40]], 60).say('This deposit is wedged against the edge: no room for a Moho, so a metal extractor.').wait(55)
-  .click('rmb').say('Right-click: ARMCK builds the extractor, ARMACK helps.').wait(100)
-  .to([248, 284], 60).wait(10).click('rmb').say('Back on the big deposit: the Moho mine, and ARMCK helps.'), 300);
+  .say('{builder} and {advbuilder} selected: together they can build both extractors.').wait(25)
+  .to([248, 284], 50).say('The {moho} fits this deposit, and it is the strongest: the {advbuilder} will build it.').wait(55)
+  .path([[210, 150], [266, 40]], 60).say('This deposit is wedged against the edge: no room for the {moho}, so the {mex}.').wait(55)
+  .click('order').say('{Order}: the {builder} builds the {mex}, the {advbuilder} helps.').wait(100)
+  .to([248, 284], 60).wait(10).click('order').say('Back on the big deposit: the {moho}, and the {builder} helps.'), 300);
 
 demo('queue', 'Queue several with Shift', { selected: ['ck'] }, T => T
-  .say('ARMCK selected. Hold Shift to queue.').wait(25).down('shift')
-  .to([72, 184], 50).wait(10).click('rmb').say('Shift+right-click: queued. The mode stays on.').wait(20)
-  .to([168, 136], 35).wait(10).click('rmb').say('The next deposit gives its own ghost: queued after the first.').wait(20)
-  .to([248, 284], 45).wait(10).click('rmb').say('And a third. ARMCK works through them in order.').wait(20).up('shift'), 330);
+  .say('{builder} selected. Hold Shift to queue.').wait(25).down('shift')
+  .to([72, 184], 50).wait(10).click('order').say('Shift+{order}: queued. The mode stays on.').wait(20)
+  .to([168, 136], 35).wait(10).click('order').say('The next deposit gives its own ghost: queued after the first.').wait(20)
+  .to([248, 284], 45).wait(10).click('order').say('And a third. The {builder} works through them in order.').wait(20).up('shift'), 330);
 
 demo('cancel', 'Cancel a queued one', { selected: ['ck'] }, T => T
-  .say('ARMCK selected.').wait(20).to([72, 184], 60).down('shift').wait(5).click('rmb').up('shift')
-  .say('Shift+right-click: the extractor is queued.').wait(35)
-  .click('rmb').say('A plain right-click on the queued site changes nothing.').wait(40)
-  .down('shift').wait(5).click('rmb').up('shift').say('Shift+right-click it again: the plan is cancelled and ARMCK stops.'), 90);
+  .say('{builder} selected.').wait(20).to([72, 184], 60).down('shift').wait(5).click('order').up('shift')
+  .say('Shift+{order}: the extractor is queued.').wait(35)
+  .click('order').say('A plain {order} on the queued site changes nothing.').wait(40)
+  .down('shift').wait(5).click('order').up('shift').say('Shift+{order} it again: the plan is cancelled and the {builder} stops.'), 90);
 
 demo('helpers', 'Helpers assist', { selected: ['pw'], cursor: [300, 210] }, T => T
-  .say('The Peewee is sent off on a walk.').wait(10).to([60, 360], 12).click('rmb').wait(5)
-  .to([400, 140], 25).down('lmb').to([150, 300], 35).up('lmb').say('Box-select it with both constructors.').wait(15)
-  .to([248, 284], 35).say('ARMACK can build the Moho mine; ARMCK cannot.').wait(30)
-  .click('rmb').say('Right-click: ARMACK builds, ARMCK guards it and helps, the Peewee keeps walking.'), 240);
+  .say('The {walker} is sent off on a walk.').wait(10).to([60, 360], 12).click('order').wait(5)
+  .to([400, 140], 25).down('select').to([150, 300], 35).up('select').say('Box-select it with both constructors.').wait(15)
+  .to([248, 284], 35).say('The {advbuilder} can build the {moho}; the {builder} cannot.').wait(30)
+  .click('order').say('{Order}: the {advbuilder} builds, the {builder} guards it and helps, the {walker} keeps walking.'), 240);
 
 demo('upgrade', 'Upgrade your extractor', { selected: ['ack'] }, T => T
-  .say('ARMACK selected. Point at your finished metal extractor.').wait(25)
-  .to([440, 266], 55).say('It offers the stronger Moho mine in its place.').wait(40)
-  .click('rmb').say('Right-click: the extractor is reclaimed, then the Moho mine is built.'), 310);
+  .say('{advbuilder} selected. Point at your finished {mex}.').wait(25)
+  .to([440, 266], 55).say('It offers the stronger {moho} in its place.').wait(40)
+  .click('order').say('{Order}: the {mex} is reclaimed, then the {moho} is built.'), 310);
 
 demo('geo', 'Geothermal vents', { selected: ['ck'] }, T => T
-  .say('ARMCK selected. Point at a geothermal vent.').wait(25)
-  .to([456, 154], 55).say('Over a vent the ghost is a geothermal powerplant.').wait(35)
-  .click('rmb').say('Right-click builds it on the vent.'), 285);
+  .say('{builder} selected. Point at a geothermal vent.').wait(25)
+  .to([456, 154], 55).say('Over a vent the ghost is the {geo}.').wait(35)
+  .click('order').say('{Order} builds it on the vent.'), 285);
 
 demo('metalmap', 'Metal maps', { selected: ['ck'] }, T => T
-  .say('ARMCK selected. The right side is uniform metal ground.').wait(25)
+  .say('{builder} selected. The right side is uniform metal ground.').wait(25)
   .to([568, 120], 55).say('Broad metal ground is not a deposit: no ghost, the cursor says move.').wait(35)
-  .click('rmb').say('Right-click: ARMCK just moves there.').wait(30)
+  .click('order').say('{Order}: the {builder} just moves there.').wait(30)
   .to([490, 330], 50).say('A deposit with plain ground around it is one: the ghost appears.').wait(35)
-  .click('rmb').say('Right-click builds it.'), 240);
+  .click('order').say('{Order} builds it.'), 240);
 
 demo('fog', 'Fog', { selected: ['ck'] }, T => T
-  .say('ARMCK selected, metal extractor picked from the build menu.').wait(20).build('ARMMEX').wait(5)
+  .say('{builder} selected, {mex} picked from the build menu.').wait(20).build('ARMMEX').wait(5)
   .path([[200, 120], [104, 88]], 70).say('Unexplored ground (black): a deposit you have not seen does not pull the ghost.').wait(60)
   .path([[136, 220], [40, 280]], 60).say('Under grey fog the deposit is known: the ghost snaps onto it.').wait(45)
-  .click('lmb').say('Click: placed on the deposit.'), 90);
+  .click('lmb').say('{Select}: placed on the deposit.'), 90);
 
 const entry = {
   format: 1, id: 'quickbuild',
   title: 'Quick Build: Resource Extractors',
-  subtitle: 'Extractors and geothermal plants land on their deposit or vent, and a constructor builds one with a single right-click.',
+  subtitle: 'Extractors and geothermal plants land on their deposit or vent, and a constructor builds one with a single {order}.',
   text: [
     'Placing a metal extractor from the build menu near a metal deposit puts it on the deposit: the ghost jumps to the spot within three squares that covers the most metal. A geothermal powerplant jumps onto a nearby vent the same way.',
-    'With a constructor selected you need no build menu at all. Point at a deposit or a vent: the ghost of the best extractor or powerplant your selection can build there appears, and a right-click orders it. Constructors that cannot build it help the ones that can. Broad metal ground that runs across the map is not a deposit, and neither is a patch joined to it, so a right-click there is still a move; place an extractor there from the build menu.',
-    'Hold Shift to queue one deposit after another; the mode stays on. Shift+right-click a queued site again to cancel it. Hold Alt to place exactly where the cursor is, with no snapping and no Quick Build.',
-    'Point at one of your finished extractors with a constructor that can build a stronger one, such as ARMACK over a metal extractor: a right-click reclaims the old one and builds the Moho mine in its place.',
+    'With a constructor selected you need no build menu at all. Point at a deposit or a vent: the ghost of the best extractor or powerplant your selection can build there appears, and a {order} orders it. Constructors that cannot build it help the ones that can. Broad metal ground that runs across the map is not a deposit, and neither is a patch joined to it, so a {order} there is still a move; place an extractor there from the build menu.',
+    'Hold Shift to queue one deposit after another; the mode stays on. Shift+{order} a queued site again to cancel it. Hold Alt to place exactly where the cursor is, with no snapping and no Quick Build.',
+    'Point at one of your finished extractors with a constructor that can build a stronger one, such as the {advbuilder} over the {mex}: a {order} reclaims the old one and builds the {moho} in its place.',
     'Only deposits you have explored count. Escalation, TA Zero and unrecognised mods turn the feature off; both parts can be switched off separately in Impure\'s options.',
   ],
   lockedIn: ['escalation', 'tazero', 'unknown'],
