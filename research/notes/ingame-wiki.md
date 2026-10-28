@@ -30,8 +30,9 @@ player's Interface Type ([below](#the-per-mod-tutorials)). The owner's decisions
 and the tutorials are [below](#the-sidebar-and-the-per-mod-tutorials-the-owners-decisions). The
 units run their own COB scripts in both simulations, through one C host on our own COB VM: a
 builder works only once its script has taken its build stance, the Quick Build demos wait for
-the work to be done, and the stage draws the poses the scripts set, in the game and in the mockup
-([the COB plan](ingame-wiki-cob-plan.html), L3a and L3b built; [below](#the-units-scripts)).
+the work to be done, the stage draws the poses the scripts set, in the game and in the mockup,
+and a builder at work sprays the engine's nano particles from the piece its script names
+([the COB plan](ingame-wiki-cob-plan.html), L3a, L3b and L4a built; [below](#the-units-scripts)).
 
 | What | Where |
 |---|---|
@@ -64,6 +65,7 @@ the work to be done, and the stage draws the poses the scripts set, in the game 
 | The window in the game | `tagpu_wiki.c` (input, pause, the page's state and the demo's simulation; game thread), `tagpu_wikistate.c` (`tagpu_wikilay.c` and `tagpu_wikistage.c` on the record) and `tagpu_vk_hud.c` (drawing; render thread) — [GPU status](gpu-status.html) §2.12c |
 | The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|try|recorded|asset|stage3d|units --launch`, `tools/wiki_regression.py <name> mp`, `tools/wiki_regression.py all mods --shots DIR` (the 3D stage under each supported setup: [below](#the-3d-stage-under-the-mods)); `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's; `units --shots DIR` does the same with the units, then the facing, the `nounit=` lever, the render thread's time and a reclaim in the game; `try` replays two demos through Try it yourself's stage as device input and holds the game's simulation to `simparity.mjs --try` |
 | The units' scripts | `tagpu/ddraw/src/tagpu_wikicob.c`, the host on `tagpu_cobvm.c`, which the DLL's simulation calls in-process; the mockup's `sim.js` reaches the same C through `tools/wiki/serve.py` (`POST /cob`, from the page through `tools/wiki/mockup/cob.js`) and, under node, `tools/wiki/cobhost.mjs` (`serve.py --stdio`) |
+| The nano spray | the particles in both simulations (`tagpu_wikisim.c` *THE NANO SPRAY*, `sim.js`'s spray functions), the piece's origin from the host (`tagpu_wikicob_query`, `tagpu_wikicob_origin`); drawn by `tagpu_wikistage.c` and `stage.js` ([the COB plan](ingame-wiki-cob-plan.html), *The spray*) |
 | Serving it | `python3 tools/wiki/serve.py`: the repository with `Cache-Control: no-cache`, and the units' scripts at `POST /cob`; then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
 
@@ -183,7 +185,10 @@ A whitebox of the game's own view, so a demo reads as what the player will see:
   path draws a ghost at each site, with the site's place among the orders the release adds small in
   its corner (the game draws no number; the mockup does, so the queue order can be read);
 - the running mod's left sidebar beside the map, its minimap and the page the engine would show
-  ([below](#the-left-sidebar-on-the-stage)).
+  ([below](#the-left-sidebar-on-the-stage));
+- the nano spray, when the units run their scripts: each particle a dot of 2 × 2 game pixels in
+  the retail palette's green ramp (`0xA1..0xA7`), above the units, only where its fog cell is
+  clear ([below](#the-units-scripts)).
 
 **How it is drawn.** `tools/wiki/mockup/stage.js` draws one view of `sim.js` into a 2D canvas; it
 runs in the page, where `wiki.js` calls it, and under node. The DLL's `tagpu_wikistage.c` builds the
@@ -417,6 +422,7 @@ they were not re-disassembled for this table.
 | Queued build squares | The engine's queued-build outline `0x438C00`, drawn while Shift is held | `tagpu_order.c` `draw_build`, a port with the engine's ten-tick sweep, gathered into the marker pass. `ghost_record` adds a translucent 3DO on each queued site not yet started. | A ghost on each queued site not yet started; the whitebox's dashed squares, in the owner's colour, over the image |
 | Order lines | TA draws no lines. It draws marching `pathicon` route dots, a waypoint sprite, target circles and range circles. | `tagpu_order.c` `draw_dots`, `draw_sprite` (the engine's own frames, one texel a screen pixel, out of `tagpu_order_art`'s atlas), `draw_circle`, `draw_ranges` | The whitebox's dashed lines, over the image |
 | Construction progress | The unit's build fraction: unit `+0x104`, the fraction remaining, staged as the engine's nano frame (`0x458D30` / `0x458DD0`) | `tagpu_render3do.c` `tagpu_r3d_nano_state` stages it; the unit shader in `tagpu_native.c` applies it, and the wire is `tagpu_posedraw.c` `pd_record`. A unit being reclaimed is not a nanoframe: the engine's reclaim lowers its hit points and leaves `+0x104` alone (`exe-reverse-engineering.md`, *A reclaimed unit is never a nanoframe*). | `tagpu_r3d_nano_state` ported line for line (`scene.js` `nanoState`) into the same shader, then the wire, every face's outline, after every body. A unit being reclaimed is drawn finished, as the game draws it |
+| Nano spray | The engine's nano particles (vtable `0x4FD5B8`, layer 6), palette `0xA1..0xA7`, each a `DrawBar` of 2 × 2 pixels (`0x473A00`; `exe-reverse-engineering.md`, *The nano particle*) | In the game `tagpu_packet_pub.c` gathers them (`PK_PART` kind 5) and `tagpu_sfx.c` / `tagpu_fx.c` draw each as a 2 × 2 quad. On the stage the wiki's own particles (`tagpu_wikisim.c`) are drawn by `tagpu_wikistage.c` as 2 × 2 game-pixel rects in the retail palette's RGB, over the image | The same rects (`stage.js`), over the image, in both looks |
 | Cursor | `anims/cursors.gaf`, chosen by the engine's picker `0x43E490` into `main+0x2CBE` from `cursor_ary` (`exe-reverse-engineering.md`, the cursor table): `cursornormal`, `cursormove`, `cursorselect`, … | `tagpu_gui_surf.c` `tagpu_gui_cursor_frame` takes the frame from the packet; `sharp_cursor` draws it last in the UI's sharp layer. | The same frames from the player's `cursors.gaf` (`cursornormal` for the arrow and build placement, `cursormove` animating with a mobile unit selected), at the same size and hotspot, over the image (R2); the kit's icons where they did not resolve |
 | The left sidebar | The engine's own column: PANELSIDE, the minimap, the routed .GUI screen and its gadgets' GAF frames (the engine map's *The left sidebar*) | `tagpu_wikiside.c` composes the column the engine would show into `HUD_TEX_SIDE`, drawn by one `HOP_SIDE` op in the HUD pass (`tagpu_vk_hud.c`; [GPU status](gpu-status.html) §2.12c) | `side.js` `compose`, the same composer, from the mod's pack |
 | Keys strip | None: the game has no such strip | Only the wiki draws one, under its own stage: `tagpu_wikilay.c` lays out the keycaps of the keys the demo's view holds, drawn by the replay HUD's stack (`tagpu_huddraw.c`, `tagpu_hudtext.c`, `tagpu_vk_hud.c`). | Unchanged |
@@ -489,9 +495,12 @@ host's posed model over the pack's piece table as `tagpu_wikiworld.c` `pose_comp
 float32 step for step, and `gfx.js` culls the bodies' and the shadows' back faces as the game's
 body pipeline does (`tagpu_vk_unit.c`), so a turned piece shows the face the game shows.
 
-**What the stage does not draw yet.** The nano spray is the engine's particles (`PK_PART` kind 5, drawn by `tagpu_fx.c`
-`tagpu_fx_gather`), and it starts at the point COB `QueryNanoPiece` returns; neither the stage nor
-the mockup draws it yet (the COB plan's L4).
+**The nano spray.** In the game it is the engine's particles (`PK_PART` kind 5, drawn by
+`tagpu_fx.c`); on the stage it is the wiki's own particles, simulated in both simulations as the
+engine simulates them and drawn by the stage's ops, not by the 3D world passes: one 2 × 2
+game-pixel dot each, at the pixel the engine's leaf `0x473A00` puts it on, in the op range over
+the image, so above the units as the engine's layer 6 is. `stage.js` draws the same in both looks
+([the COB plan](ingame-wiki-cob-plan.html), *The spray*).
 
 ## Try it yourself in the game
 
@@ -817,9 +826,12 @@ side had its own types.
   castings and layouts back, then the 21 malformed-data cases, and compares the trip's constants.
   All equal, natively and with `--wine`.
 - **`stagecheck.mjs`** pairs the stage's ops with `stage.js`'s calls, the `side` range and the
-  greyed buttons' groups included: 5376 frames, the fixture at three sizes, the tall fixture at
-  1920 × 1080 and no sidebar at three sizes. With a sidebar it draws the whitebox column, the
-  game look's image with its minimap, and the image without it, over a stand-in image.
+  greyed buttons' groups included: 6550 frames, the fixture at three sizes, the tall fixture at
+  1920 × 1080, no sidebar at three sizes, and, when a gfx pack holds the units' scripts, the
+  fixture at the first size with them (`sim.js` through `serve.py`'s host, the C side from the same
+  files through `tests/wikicobfile.h`): 447 frames, the nano spray in 53 of them, 8325 particles.
+  With a sidebar it draws the whitebox column, the game look's image with its minimap, and the
+  image without it, over a stand-in image.
 - **`sidecheck.mjs`** compares the two composers byte for byte (with
   `tagpu/ddraw/tests/wikisidetest.c`), every side of every pack at both Interface Types with its
   casting: 8 packs and 18 740 frames. Two packs are synthetic, generated from a fixed seed to take
@@ -1399,7 +1411,8 @@ as stated, natively (gcc, with AddressSanitizer and UndefinedBehaviorSanitizer) 
 - **The hash's first step** is the tick, `done`, the side (−1 without a sidebar) and the Interface
   Type; `locked` is hashed with the sidebar off too. The captions enter it raw. Its last is the
   demo's clock, the wait, `stalled`, then 1 and the scripts' host's own hash, or 0 alone without a
-  host (`tagpu_wikisim.h`, item 8).
+  host (`tagpu_wikisim.h`, item 8), and then the nano spray: the particle count and each
+  particle's x, y, z, its step, its end and its colour, in the order made (item 9).
 
 - **Bit for bit, by construction.** Both visit units in creation order, use no clock and no
   randomness, and compute on doubles with + − × ÷ and sqrt only, each rounded once. The DLL
@@ -1579,7 +1592,9 @@ progress and facing (`hx`, `hz`, not drawn yet); the ghost and its colour; the q
 the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `state` `place`,
 `refused` or `remove`, and `order`, the site's place among the orders the release adds), its
 `shape`, and the armed building's `spacing`; the demo's `clock`, `waiting` (the state a wait holds
-it for, or none), `stalled`, and `cob`, the scripts' host's hash as two 32-bit halves.
+it for, or none), `stalled`, and `cob`, the scripts' host's hash as two 32-bit halves; and the
+nano spray's live particles, `parts` (each `[x, y, z, step x, y, z, end, colour]`, 16.16 world
+units, x, altitude, z; `npart` and `part` in C) and `partsCut` (`part_cut`: a bound dropped one).
 
 ### The units' scripts
 
@@ -1626,6 +1641,22 @@ both fold into theirs, holds them to the same calls.
   `sim.js` `poses()` gives them aligned with `view().units`, null for a unit no script poses;
   `gfx.js` `frame(entry, v, tick, dir, poses)` draws them ([the COB plan](ingame-wiki-cob-plan.html),
   *Drawing*).
+- **The spray** is simulated, unlike the poses: a builder whose work is credited this tick asks
+  its script's `QueryNanoPiece` (run-now, once a spray: it can write the script's statics) and
+  sprays from that piece's origin into the structure's box, every tick for a build and every
+  second tick for a reclaim, in reverse; two bursts of five particles an emission, each a quarter
+  of its distance a tick, its colour cycling `0xA1..0xA7`. The particles are in the view and the
+  state hash (item 9), bounded at 1024 live and 256 waiting bursts, drawn from the wiki's own
+  stateless generator and never from the host's `rand`. The host answers the query and the
+  piece's origin (`tagpu_wikicob_query`, `tagpu_wikicob_origin`, from the model's shape the type
+  now carries: offsets, parents and the model's height); in the mockup `serve.py`'s `query` and
+  `origin` ops, `cob.js`'s `query`, `origin` and `top` (the heights `new` answers), and
+  `cobhost.mjs` carrying the shape from the pack, which `gfx.py` writes (`model_shape`) -- a pack
+  written before it gives every piece the unit's own point. In the DLL the page fill copies the
+  particles into the stage record, `WIKISTAGEPART part[WIKISTAGE_PARTS]` (x, y, z, colour; the
+  sim's 1024), and sets `WIKISTAGE_TRUNC_SPRAY` (`0x400`) when the simulation dropped one. Without
+  the scripts nothing sprays ([the COB plan](ingame-wiki-cob-plan.html), *The spray*, which has
+  the engine's addresses and the gaps).
 - **The page** asks `tools/wiki/serve.py` for its host; served without it, or with no gfx pack
   built, it plays without the scripts and says why in the console, as it says a quarantined type's
   note. Run the mockup with `serve.py`.
@@ -1688,6 +1719,13 @@ both fold into theirs, holds them to the same calls.
   COB plan, *Gaps open*), and `posecheck.py` holds the drawn poses to
   tacob's composition on the stock pack's types only. GET answers what the flat stage has: piece and unit heights 0, a piece's position the
   unit's, XZ_ATAN without the unit's heading.
+- **The nano spray has not been compared with the game's.** Its arithmetic is the engine's,
+  disassembled, and the two stages draw it alike (`stagecheck.mjs`), but no capture of the same
+  build in a game has been set beside it. It takes the retail palette's colours under every mod,
+  tests its sight on the wiki's 16-unit fog cell rather than the engine's 32-unit tile, and turns
+  the nano point by the facing in a second rounding step; only the units' scripts make it, and a
+  gfx pack written before the model's shape sprays every piece from the unit's own point (the COB
+  plan, *Gaps open*). `emit-sfx` is not drawn (the COB plan's L4b).
 - **The per-mod tutorials have been played in one setup in game.** Retail as CORE at both
   Interface Types (*The per-mod tutorials*, *The checks*); the six setups at both types, each
   demo's `<entry>/<demo>/<side>/<iface>` hash from `tagpu_wiki.check` against

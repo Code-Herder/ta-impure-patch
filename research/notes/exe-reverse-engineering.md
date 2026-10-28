@@ -1078,7 +1078,8 @@ What the recorder's rule for owner-only effects rests on (*Decisions taken* in t
 spray is made by two emitters, called only from fifteen order handlers, which run only on the
 machine that simulates the unit. Established by whole-image scans (E8, E9, Jcc and absolute
 dwords at every byte offset) and recursive descent from each handler. The particle object, its
-layer and its draw are in [effects §7](effects.md).
+layer and its draw are in [effects §7](effects.md); the nano class's boxes, bursts, step and dot
+in *The nano particle*, below.
 
 **The emitters** are `0x4720D0(point3, box6, layer)` and `0x472200(box6, point3, layer)`,
 stdcall, `ret 0xC`, 297-byte bodies that differ only in which argument they expand: the forward
@@ -1295,6 +1296,113 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
   eight thread records busy, a null `+0x9E` or a piece out of range, the point is the unit's
   origin. The query runs where the handler runs, on the owner's machine; a recording carries it
   and a playing makes it again (*The owner's COB queries*).
+
+### The nano particle: its boxes, its two bursts, its step, its dot [DISASSEMBLED 2026-10-28]
+
+What the in-game wiki's spray repeats (`tagpu_wikisim.c` *THE NANO SPRAY*, [the COB
+plan](ingame-wiki-cob-plan.html), *The spray*). DISASSEMBLED on `pristine/TotalA.exe.pristine`
+(`objdump -d -M intel`); caller counts are a scan of `.text` for direct `call`/`jmp` to the
+target. The particle object is `effects.md` §7.2's; this is its nano class, vtable `0x4FD5B8`,
+whose seven slots read from `.rdata` are `0x471560` destroy, `0x472EB0` update, `0x472F90` draw,
+`0x472FD0` empty, `0x473D50` spawn, `0x472F60` spawn-again and `0x473B50` init.
+`0x473B50` and `0x473D50` have no direct caller: they are reached through the vtable only.
+
+- **Where an emission starts.** MobileBuild steps at `0x403E43` and, only when `0x41BA60`
+  returned nonzero (`0x403E4A je 0x403ED1` skips both), asks `0x43E400` at `0x403E56`, builds box
+  B (`0x403E5B..0x403EC8`) and emits at `0x403ECC`. ReclaimUnit `0x404730` sprays from its state 5
+  (the jump table `0x404AB0`, entry 5 = `0x4048D2`): in range (`0x404953`) and eligible
+  (`0x489960` at `0x404961`), it may send its hit (`0x404974..0x404986`), stamps `+0xB0`, asks
+  `0x43E400` at `0x4049AD`, builds box A of the target (`0x4049B2..0x404A4A`), emits in reverse at
+  `0x404A4E` and re-arms itself two ticks on (`0x439E80(order, 2)` at `0x404A57`). Out of range or
+  ineligible it calls `0x439E80(order, 15)` and `0x4385F0` and returns 0 with no spray
+  (`0x404A74..0x404A8D`). So a reclaim sprays every second tick from its first spraying call.
+- **The target box.** The def loader writes D15E = −(FootprintX `def+0x14A` << 20)/2, D166 the
+  same of FootprintZ `+0x14C`, D16A and D172 their positives (`0x42D079..0x42D0C5`, each `sar 1`
+  after the sign fix: ±FootprintX × 8 world units in 16.16), D162 = 0 (`0x42D7A5`) and D16E =
+  `0x4CB5F0(model)` (`0x42D7BF`, stored at `0x42D7CA`). So box A and box B are equal in stock: the
+  target's footprint by the ground to its model's top.
+- **`0x4CB5F0(node)`, the model's top** (stdcall, `ret 4`; called at `0x42D7BF` and by itself at
+  `0x4CB627`): over the sibling chain from `node` (`+0x2C`), the most of 0 and, for each node, each
+  vertex's y (`+0x24` the array, 12 bytes a vertex, y at `+4`; `+0x04` the count) plus the node's y
+  offset `+0x14`, and its child chain's (`+0x30`) top plus the same offset, with plain 32-bit adds
+  (`0x4CB5F0..0x4CB641`). The wiki's 3D load and `gfx.py` compute it the same way
+  (`tagpu_wikiasset.c` `model_top`, `gfx.py` `model_shape`).
+- **The init `0x473B50(box1, box2, life)`** (thiscall): end tick `+0x04` = GameTime + life through
+  `0x471D70` (`0x473B5B`; both emitters pass life 1, `0x47216F` and `0x4722A3`); box1 to
+  `+0x1C..+0x30` (`0x473B6E`), box2 to `+0x34..+0x48` (`0x473B7E`); then **each box cut, per
+  axis, to its middle**: with d = max − min, the low edge becomes min + 4·d/11 and the high min +
+  7·d/11, each product a 32-bit `lea`/`shl` and the division by 11 the multiply by `0x2E8BA2E9`
+  then `sar 1` with the sign fix, so toward zero (`0x473B80..0x473C0C` for box2's x and y, the
+  same through `0x473D34`); then each high edge is replaced by its extent, high − low. The box is
+  kept as {base x, y, z, extent x, y, z}; the spawn follows (`call [vt+0x10]` at `0x473D39`). A
+  degenerate box (the forward emitter's point) keeps base = the point and extent 0.
+- **The spawn `0x473D50`**: five particles a call (`[esp+0x18] = 5` at `0x473DA5`, the loop back
+  at `0x474109`); for each, six draws of the CRT `rand 0x4E4870` in the order start x, y, z (box1)
+  and end x, y, z (box2), each `base + rand·extent / 0x8000`, the product 64-bit (`imul`) and the
+  division `_alldiv 0x4E4440`, toward zero (`0x473DAD..0x473E54`). The six draws are made whatever
+  the extents. Then d = end − start, len = `_ftol` (`0x4E43A0`) of the x87 `fsqrt` of the sum of
+  the squares (`0x473E6D..0x473EB1`), and **steps = the high word, as int16, of (len << 16) /
+  0x40000** (`_allshl 0x4E44F0` by 16, `_alldiv` by `0x40000`, the word at `[esp+0x16]`;
+  `0x473EB6..0x473ED9`), which for len ≥ 0 is `(int16)(len >> 18)`: a quarter of the length in
+  world units. **A particle of 0 steps is not made** (`0x473EDE..0x473EE1 je 0x4740F7`), its draws
+  spent. The step is d / steps per axis by `idiv`, toward zero (`0x473EE7..0x473F04`); the end
+  tick `+0x2C` = GameTime + steps (`0x473F08..0x473F1E`); `+0x24` = `0x100`; the colour `+0x28` =
+  `0xA1 + i % 7`, i the particle's place in the call, 0..4 (`0x473F13..0x473F41`). After the loop
+  the last-spawn tick `+0x08` = GameTime + 1 (`0x47410F..0x47411E`).
+- **The update `0x472EB0`** (slot 1): for each particle the move `0x4739B0` then the death test
+  `0x473B30(GameTime)`, which answers `GameTime > end` (`setg`, `0x473B3A..0x473B3D`); a dead one is
+  removed by moving the rest down (`0x472EEC..0x472F1F`). Then the spawn-again test `0x472F60`
+  (`+0x08 <= +0x04`, signed, and `+0x08 <= GameTime`, unsigned) calls slot 4 again
+  (`0x472F37..0x472F48`).
+- **The move `0x4739B0`**: x, altitude, z += the step (`+0x18/+0x1C/+0x20`); the colour's low
+  nibble + 1, and past 7 back to 1, over `colour & 0xFFF0` (`0x4739B6..0x4739F1`), so a particle
+  cycles `0xA1..0xA7`. No gravity, no drag. One caller, `0x472ED0`.
+- **The walker `0x471EB0`** (one caller, `0x4955BF` in the game loop step `0x495490`, after the unit
+  tick `0x48AD30` at `0x4954ED`; GameTime `main+0x38A47` is advanced at `0x4954C0`, before both):
+  for each of the ten layers, for each object, slot 3 first (`0x471EE0`); an object whose
+  sub-vector is empty (`0x472FD0`) is destroyed and the rest shifted down (`0x471EE7..0x471F16`),
+  any other updated through slot 1 (`0x471F1C`).
+- **Two bursts an emission.** At tick T the handler's emitter makes burst 1 in the unit's turn; the
+  walker of the same tick moves it (the update) and the spawn-again test fails (`+0x08` = T + 1 >
+  T). At T + 1 the object is not empty (a particle of burst 1 has steps ≥ 1 and so dies at T +
+  steps + 1 at the earliest), its particles move, and the test passes: burst 2 is made **after**
+  that tick's moves, and sets `+0x08` = T + 2 > `+0x04` = T + 1, so there is no third. An emission
+  whose burst 1 made no particle is empty at T's walker and destroyed: no burst 2. A particle of
+  burst 1 moves at T … T + steps and dies at T + steps + 1, one step past its end point; one of
+  burst 2 moves from T + 2. [The gates DISASSEMBLED; the T / T + 1 order follows from the call
+  order of `0x495490`, not measured live.]
+- **The draw `0x473A00(ctx, eyeX, eyeY)`** (thiscall on the particle, `ret 0xC`; one caller,
+  `0x472FBB` in slot 2 `0x472F90`, with the words `main+0x1431F` and `main+0x14323`): sx =
+  (int16)(hi(x) − eyeX) + `0x80`, sy = (int16)(hi(z) − eyeY) − (hi(alt) >> 1) + `0x20`, the shift
+  arithmetic on the sign-extended word (`0x473A10..0x473A43`); the rect {sx, sy, sx + 1, sy + 1}.
+  The sight test is the viewed player's (`main+0x2A43`, record `main+0x1B63 + 0x14B·p`) at the tile
+  (hi(x) >> 5, (hi(z) − (hi(alt) >> 1)) >> 5): with `main+0x14281` bit 1 set its byte map at record
+  `+0x7C` (width `+0x80`, height `+0x84`) nonzero, else the mapped word map `*(main+0x14273)`'s bit
+  p; off the map, not drawn (`0x473A50..0x473B05`). Then `DrawBar 0x4BF6F0(ctx, &rect, colour)`
+  at `0x473B1D`.
+- **`DrawBar` fills 2 × 2 here.** `0x4BF6F0` copies the rect, clips it with `0x4BF620` and fills
+  through `0x4CCDEA` (`0x4BF754`, or `0x4BF790` with a context given); `0x4CCDEA` writes
+  right − left + 1 columns (`0x4CCE1B..0x4CCE20`, the byte path `0x4CCE61..0x4CCE66`) and
+  bottom − top + 1 rows (the count `0x4CCE25..0x4CCE2B`, looped while `dec esi` stays
+  non-negative, `0x4CCE42`, `0x4CCE7C`): {sx, sy, sx + 1, sy + 1} is two pixels by two, in the
+  colour's low byte.
+- **The piece origin `0x43DEF0`** (*The piece transform*, below, has the whole rule): a piece
+  `< 0` or `>= [o3]` answers (0, 0, 0) (`0x43DF16`, `0x43DF1E` → `0x43E01D`); each ancestor's angle
+  triple is read and, at the root (no parent, `0x43DF73`), the unit's `+0x64`, `+0x68`, `+0x66` are
+  added to its z, x and y words (`0x43DF86..0x43DF9C`) before `0x4B6CC0` turns what is below it
+  (`0x43DFB0`); the root's own offset and position are then added unturned; z is negated at
+  `0x43E00A`. `0x4B7173` returns at `0x4B717B` for a zero angle and stores both results with
+  `fistp` in the FPU's current rounding mode, to the nearest by default (`0x4B71A0`, `0x4B71A2`).
+- **What the wiki repeats and where it differs** (`tagpu_wikisim.c`, `sim.js`): the boxes, the
+  cut, the five-a-burst spawn, the steps, the 0-step rule, the step, the end, the colour and its
+  cycle, the two bursts and their order, and the reclaim's two-tick cadence, all in int32 as the
+  engine's. It draws from its own generator, never `0x4E4870` (decision 11 of the COB plan); its
+  sight test is its own fog grid's 16-unit cell, grey or black hidden, not the engine's 32-unit
+  tile; its colours are the retail palette's (below).
+- **The colours** `0xA1..0xA7` in the retail `palettes\PALETTE.PAL`, MEASURED 2026-10-28: (171,
+  231, 127), (131, 211, 91), (103, 191, 63), (75, 171, 43), (67, 151, 43), (55, 135, 39), (47, 119,
+  27), a light-to-dark green ramp. Whether the palette in play equals the file at those indices was
+  not checked.
 
 ### COB on a puppet: getter 75, the writers COB reaches, fresh COB [DISASSEMBLED + SOURCE 2026-09-29]
 
@@ -4774,6 +4882,20 @@ not `0x470EB0`. Their callers, classified:
   `0x481128`): 0 and 1 fire `0x472330` (returning to `0x481015`, `0x481034`), 2–5 the wake `0x472430`
   (`0x481051`, `0x48106E`, `0x48108B`, `0x4810A8`), `0x101` grey smoke `0x472810` (`0x4810BE`),
   `0x102` black smoke `0x4728F0` (`0x48111D`), `0x103` bubbles `0x472530` at sea level (`0x481107`).
+  **What the emitters are given** [DISASSEMBLED 2026-10-28, for the in-game wiki's L4b]: the unit is
+  reposed first (`0x45AB10`, `0x480EFC`) and the piece index is not bounded. A type with bit
+  `0x100` takes one point, the unit's position plus the piece's posed origin, `prim+0x16`,
+  `+0x1A` and the negated `+0x1E` (`0x480F0A..0x480F50`); types 0–5 take two, the unit's position
+  plus the piece's first two posed vertices, each (x, y, −z), from the array `prim+0x22` points at
+  (`0x480F59..0x480FDA`). Then fire `0x472330(p1, p2, 1, 6, 7)` for type 0 and `(…, 1, 7, 7)` for
+  type 1; the wake `0x472430(p1, p2, 0x10, 2)` and `(p1, p2, 8, 2)` for 2 and 3, the same with
+  the two points swapped for 4 and 5; grey and black smoke `0x472810(&p, 9)` and `0x4728F0(&p, 9)`;
+  bubbles `0x472530(p, q, 8, 7)`, q the same point at sea level, its altitude the byte
+  `main+0x1427F` << 16 (`0x4810D4..0x481102`). A smoke emitter initialises
+  its Smoke2 object with life 0 (`0x472867..0x472874`, the fifth argument; init `0x474D50`) and
+  makes one puff a call [INFERRED from `edi = 1` at `0x474ECE` in its spawn; the loop not traced].
+  The fire (vtable `0x4FD5D8`), wake (`0x4FD5F8`) and bubble emitters' particle counts, lifetimes
+  and velocities are not established.
 - **The explosion draw.** `0x421550` is called from the explosion draw `0x420B00` (`0x420B18`; the
   draw from DrawGameScreen at `0x469B2C`) and from `0x4211A0` (`0x4211B3`), which has no caller; it
   emits a flying piece's smoke `0x472810` at `0x421583` and its fire `0x472AB0` at `0x4215AA`

@@ -379,15 +379,20 @@ bit — the same rule as the projectiles.
 | `0x4FD5D8` | fire | `0x3C` | alpha blit of `seq[frame]`, LOS-gated (`0x474170`) | `seq* @0` = the flare sequence `*(main+0x147F3)`, pos @4/8/C, velocity @0x10.., frame @0x2C, end tick @0x38 |
 | `0x4FD588` | flare sprite (teleport / `0x472630` callers) | `0x34` | alpha blit of `seq[frame]`, LOS-gated (`0x473590`) | pos @4/8/C, frame @0x2C |
 | `0x4FD5F8` | wake / bubbles | `0x44` | `DrawBar(ctx, {x, y, x+1, y+1}, colour)` = a **2×2 dot**, LOS-gated (`0x4745E0`) | pos @4/8/C, colour byte @0x30 cycling `0x61..0x67` (foam), dies when its ground height rises above sea level |
-| `0x4FD5B8` | nanolathe spray | `0x30` | 2×2 dot, LOS-gated (`0x473A00`) | **pos @0/4/8**, target @0xC.., step @0x18.., colour byte @0x28 = `0xA1 + n%7` cycling its low nibble 1..7, end tick @0x2C |
+| `0x4FD5B8` | nanolathe spray | `0x30` | `DrawBar(ctx, {sx, sy, sx+1, sy+1}, colour)` = a **2×2 dot** (its fill `0x4CCDEA` is inclusive), LOS-gated (`0x473A00`, which adds the constants `0x80` and `0x20`) | **pos @0/4/8**, target @0xC.., step @0x18.., colour byte @0x28 = `0xA1 + n%7` cycling its low nibble 1..7, end tick @0x2C |
 | `0x4FD5A8` | base (destroyed object) | — | nothing | the destructors reset the vtable to this |
 
 Smoke update (`0x475340`/`0x475600`): `x += wind_x(main+0x37ECC)·8`, `alt += main+0x14263·4`
 (Smoke1: `·16`), `y += wind_y(main+0x37ED4)·8`; the countdown at `+0x1C` reaches 0 → `frame++`,
 reset to `rand()·(reset/2)/0x8000 + reset/2`; a puff dies at `frame >= nframes`. The nano
-spray (`0x473D50`) spawns five sub-particles per tick along a randomised segment between
-two 6-int boxes set up by its init (`0x473B50`: the 4/11 and 7/11 points of the
-builder→site line).
+spray's init (`0x473B50`) cuts each of its two 6-int boxes, on every axis, to its middle: from
+the 4/11 to the 7/11 point of that axis's span, in int32. Its spawn (`0x473D50`) makes five
+sub-particles a call, each from a random point of the first box to a random point of the
+second (six CRT `rand` draws), at a quarter of their distance a tick in a straight line
+(steps = `(int16)(len >> 18)`, a particle of 0 steps not made). One emission is two such
+bursts: the first in the builder's turn, moved by the walker the same tick, the second made
+by the walker on the next tick after it moves the live ones, and only when the first made a
+particle. The engine map's *The nano particle* has the addresses.
 
 ### 7.4 Emitters — who makes them, and the layer argument
 

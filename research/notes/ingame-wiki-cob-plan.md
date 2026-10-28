@@ -5,7 +5,9 @@ wiki's units recorded and replayed), and **L3a and L3b are built** (2026-10-28, 
 `worktree-wiki-anim`): the wiki's units run their scripts in both simulations through one host,
 the scripts gate the builds, the demos wait on the work, and the stage draws the poses the scripts
 set, in the game and in the mockup; **L3c**, the corpus gate, is built with one refusal open
-(ZZZ, below). L4 and L5 are not started (see *The landings*). The wiki's specification is still
+(ZZZ, below); **L4a**, the nano spray, is built (2026-10-28): a builder at work sprays from the
+piece its script's `QueryNanoPiece` names, as the engine's particles, in both simulations and on
+the stage (*The spray*). L4b (`emit-sfx`) and L5 (sound) are planned (see *The landings*). The wiki's specification is still
 [the in-game wiki](ingame-wiki.html) and its mockup, which stays the 1:1 spec of the DLL wiki. The
 engine facts below carry their address and are the engine map's
 ([*The COB engine — mapped by us*](exe-reverse-engineering.html)); a fact this plan needs and the map
@@ -18,8 +20,8 @@ it disassembles it. When the work closes this file is folded into the wiki's not
 Before this work the wiki's stage drew each unit from its script's `Create()` hides alone
 (`tagpu_cobscan.c`): every unit in its rest pose, a kbot's legs still, a constructor's nanolathe
 folded, an extractor's arms unturned, and no nano spray. Animating them needs a COB VM the wiki can
-run. The wiki runs one (L3a) and draws what it poses (L3b); the nano spray is L4 ([the wiki's
-note](ingame-wiki.html), *What the stage does not draw yet*).
+run. The wiki runs one (L3a), draws what it poses (L3b) and sprays from the piece the script
+names (L4a).
 
 The one VM we have outside the engine is tacob's, in Python, byte-identical to the engine on nine
 cobtrace fixtures ([tacob](tacob-design.html), landing 3). It has already drifted from the game:
@@ -195,7 +197,7 @@ engine map's *The scripts a unit's work starts* establishes them (DISASSEMBLED 2
 | The wiki's action | The engine's calls, as both simulations make them |
 |---|---|
 | a unit appears: a scene's spawn, a nanoframe placed | `Create` (`0x485DE6`, run-now); for an extractor (ExtractsMetal above 0) `SetSpeed` with one word, Σ (cell metal + 1) over the footprint cells on the map, kept as a sign-extended 16-bit word (`0x437840`, `0x437866..0x437902`, run-later), at the create and so at the nanoframe's placement — ExtractsMetal does not enter the value; for a unit made whole whose FBI has ActivateWhenBuilt, `Activate` through the state setter (`0x48612F`) |
-| a mobile builder's build, assist or reclaim | its work on a target starts only once its INBUILDSTANCE reads set (the stance wait `0x438700`, read once at the work's start: MobileBuild's work state `0x403E0C` and the step `0x41BA60` never read `+0x10F`), and goes on whatever the stance does after; `StartBuilding` with one word when its work target changes (`0x4385C7`, run-later; the word is the target's bearing relative to the builder's heading, 0 in the wiki, which turns the builder at once); `StopBuilding` with none when its work ends or changes (`0x43A251`, run-later: the order's destructor, in the same call as the step that finished the build), and at input time when the player takes the order away; `QueryNanoPiece` (`0x43E427`) per spray in L4 |
+| a mobile builder's build, assist or reclaim | its work on a target starts only once its INBUILDSTANCE reads set (the stance wait `0x438700`, read once at the work's start: MobileBuild's work state `0x403E0C` and the step `0x41BA60` never read `+0x10F`), and goes on whatever the stance does after; `StartBuilding` with one word when its work target changes (`0x4385C7`, run-later; the word is the target's bearing relative to the builder's heading, 0 in the wiki, which turns the builder at once); `StopBuilding` with none when its work ends or changes (`0x43A251`, run-later: the order's destructor, in the same call as the step that finished the build), and at input time when the player takes the order away; `QueryNanoPiece` run-now (`0x43E400`, which asks it at `0x43E427`) on every tick the builder's work is credited, a reclaim's every second tick (MobileBuild `0x403E56`, ReclaimUnit `0x4049AD`; *The spray*) |
 | a factory's build | `StartBuilding` / `StopBuilding` through the state setter, with no word (`0x48B14E`, `0x48B169`): no entry has a factory, so neither simulation makes them |
 | a move starts, ends | `StartMoving` then `MoveRate1` / `StopMoving` (`0x43DAF2`, `0x43DB27`, run-now, in the movement pass after the unit's orders); the class thresholds are FBI `moverate1`/`moverate2`, by default 2 × MaxVelocity, which the wiki reads from no FBI, so its units, walking at MaxVelocity, are always class 1 and never start `MoveRate2`/`MoveRate3` |
 | a structure finishes, is switched on or off | `Activate` on completion when its FBI has ActivateWhenBuilt (`0x41B8D0`, `0x41B9A6`); `Activate` / `Deactivate` (`0x48B106`, `0x48B12B`, run-later) when a script's `SET ACTIVATION` changes the value. The player's on and off (FBI `onoffable`) is no wiki action |
@@ -244,8 +246,11 @@ for all its units at once, in creation order (`tagpu_wikisim_step`, `sim.js` `st
    changed (a new job, or its job finished, reclaimed or gone) starts StopBuilding for the old one
    and StartBuilding for the new one, both run-later; then a mobile unit that stepped this tick
    after standing starts StartMoving and MoveRate1, and one that stood after stepping StopMoving,
-   both run-now. A run-now start runs every record with `dt = 0` inside the call; a run-later one
-   waits for the next slice.
+   both run-now. Between the two, a builder whose work was credited this tick sprays (*The
+   spray*). A run-now start runs every record with `dt = 0` inside the call; a run-later one
+   waits for the next slice;
+5. **the particles' walk**: every live particle moves a step and dies once past its end, then each
+   emission's second burst due this tick is made (*The spray*).
 
 A builder's work is identified by its target's id and by the `serial` of the order it came from
 (`WIKIORDER.serial`, `sim.js`'s order object), so an order taken away and replaced by an equal one
@@ -376,6 +381,91 @@ the engine's:
   now runs clockwise on the engine's screen, and the opened ARMCK's shell panel showed its grey
   side without it.
 
+## The spray
+
+L4a. A builder whose work is credited sprays the engine's nano particles from the piece its
+script names into the structure it works on, in both simulations, as simulation state, and the
+stage draws them. The engine's side, every fact with its address: the engine map's *The nano
+spray: two emitters, fifteen order handlers* and *The nano particle*.
+
+- **When.** The engine's step-gated build handlers emit only on a tick their step returned 1
+  (MobileBuild `0x403E43` → `0x403E56` → `0x403ECC`, HelpBuild `0x404139` → `0x4041C2`); the
+  wiki's analogue is its `credit`, which adds work only past the stance gate, so `credit` records
+  the spray (how, and the structure's type and centre as they stand then: a reclaim may remove
+  the structure before the unit's turn). The spray is made in the unit's turn (*The tick*, step
+  4), after its build calls. A reclaim sprays in reverse, from the box to the piece, and only every
+  second tick from its first spray on that work (ReclaimUnit's state 5 re-arms itself two ticks
+  on, `0x404A57`); the count restarts when the work ends or changes (`spray_at`, `sprayAt`).
+- **QueryNanoPiece on the engine's schedule.** ARMACK's `QueryNanoPiece` and the ARM factories'
+  flip a static to alternate two pieces (the retail scripts, decompiled), so the call writes COB
+  state and the host's hash depends on how
+  often it runs: both simulations ask it exactly once a spray, run-now, through
+  `tagpu_wikicob_query` (`0x4B0BC0` by name, entered through `0x4B0C40`), the piece preset to 0
+  as `0x43E400` presets it; a script without the query, or a unit with no VM, leaves the 0.
+- **The piece's origin, from the host.** `tagpu_wikicob_origin` is `0x43DEF0`'s arithmetic on the
+  unit's posed model as its script left it: the piece's offset plus its MOVE, carried up its
+  parents, each parent's TURN applied through `0x4B6CC0`'s order before its own offset plus MOVE,
+  the piece's own TURN never; each pair rotation `0x4B7173`'s (skipped for a zero angle, rounded to
+  the nearest, ties to even, as its `fistp` rounds), with sine and cosine from + − × ÷ alone after
+  an integer reduction to the octant, so every compiler gives the same words. It answers in two
+  parts: `base`, the root's offset plus MOVE, which the engine does not turn by the body, and
+  `turned`, the rest turned by the root's TURN, which the engine turns by the body's angles folded
+  into the root's (`0x43DF86`). The host holds no facing, so the simulation turns `turned` by the
+  unit's facing, `(cs, sn) = (−hz, hx)` about the up axis as the stage turns the model, adds
+  `base` and the unit's position, and takes z off, as the engine negates it (`0x43E00A`). A piece
+  outside the model (the script's answer is data, bounded by the primitive count) answers the
+  unit's own point, as `0x43DF16..0x43E01D` does. **The model's shape** the host needs is a new
+  part of `WIKICOBTYPE`: each primitive's offset from its parent in the axes the engine holds a
+  model in (the loader `0x4CB590` negates X and Z), its parent, and `top`, `0x4CB5F0`'s height of
+  the model, which the target box rises to. The DLL's 3D load computes it from its arena
+  (`tagpu_wikiasset.c` `unit_shape`, `model_top`), `gfx.py` `model_shape` from the 3DO for the
+  packs, and `wikitest`'s and `wikistagetest`'s `cob.json` carries the pack's
+  (`tests/wikicobfile.h`); `serve.py` hands it to the host (`new` answers each type's `top`;
+  `query` and `origin` are new ops), `cob.js` and `cobhost.mjs` carry it. The host holds the
+  parents to a tree when it is made: a parent outside the model, or a chain that does not end
+  within the primitive count, leaves the whole model flat, every piece at the unit's point.
+- **The particles**, `0x4720D0` / `0x472200` and their class `0x4FD5B8` repeated in int32
+  (`tagpu_wikisim.c` *THE NANO SPRAY*, `sim.js`'s spray functions, line for line): the source
+  box the piece's point, the target box the structure's centre ± FootprintX and FootprintZ × 8
+  world units by the ground to `top`, each cut to its middle 4/11 … 7/11 on every axis
+  (`0x473B50`); an emission is two bursts of five (`0x473D50`), the second on the next tick after
+  that tick's moves and only when the first made a particle; each particle runs from its box1
+  point to its box2 point in `(int16)(len >> 18)` steps of the distance over the steps, toward
+  zero, a particle of 0 steps not made; its end the burst's tick plus the steps; its colour
+  `0xA1 + i % 7`, cycling `0xA1..0xA7` as it moves (`0x4739B0`); it dies once the tick is past its
+  end (`0x473B30`). The walk (`spray_tick`, `sprayTick`) runs after the units' turns, as the walker
+  `0x471EB0` runs after the unit tick.
+- **The wiki's generator, never the engine's and never the host's.** Each of a particle's six
+  draws is a stateless counter hash, 0..`0x7FFF` as `rand`'s: lowbias32 over the emission's key
+  (FNV-1a of the builder's id, mixed with the emission's place among the tick's emissions), the
+  tick, the particle and the draw (`spray_draw`, `sprayDraw`). It keeps no state, so nothing about
+  it can drift between the twins, and it never touches the host's xorshift `rand`, which RAND
+  draws from and the host's hash carries: a spray changes no script's random numbers (decision
+  11).
+- **Simulation state, in the hash.** The live particles are `WIKIVPART` (x, y, z, their step, the
+  end, the colour) and the waiting second bursts `WIKISPRAY` (the two cut boxes, the due tick, the
+  key); the view carries the particles (`npart`, `part`, `part_cut`; `sim.js` `parts`, `partsCut`)
+  and the state hash appends them after the host's hash, as item 9 (`tagpu_wikisim.h`), so
+  `simparity.mjs` holds them equal tick for tick.
+- **Bounded.** At most `WIKI_SPRAY_PARTS` = 1024 particles live and `WIKI_SPRAY_BURSTS` = 256
+  second bursts wait, on the heap, allocated only with a host; a particle or a burst past its bound
+  is not made and the view says so (`part_cut`), which the stage's copy turns into
+  `WIKISTAGE_TRUNC_SPRAY` (`0x400`), logged once a demo (`cut 0x400`). `sim.js` holds the same
+  bounds, so both drop the same particles. The busiest demo, Quick Build's *helpers*, peaks at 457
+  live particles, and no demo drops one (MEASURED 2026-10-28, a one-off count over every demo
+  with the stock pack's scripts).
+- **Drawn as the engine draws a particle, by the stage's own ops.** The page fill copies the
+  particles into the stage record (`WIKISTAGEPART`: x, y, z and the colour; `WIKISTAGE_PARTS` =
+  the sim's pool, 16 KB of the record), and `tagpu_wikistage_build` draws each as one 2 × 2
+  game-pixel dot -- `DrawBar 0x4BF6F0`'s inclusive rect {sx, sy, sx + 1, sy + 1}, its fill
+  `0x4CCDEA` -- at sx = x >> 16, sy = (z >> 16) − ((alt >> 16) >> 1) (`0x473A00`), in the stage's
+  op range over the image, so above the units, as the engine's layer 6 is drawn after its row
+  sweep. A dot is drawn only where the wiki's fog cell under it is clear and never off the map; a
+  colour outside `0xA1..0xA7` is not drawn. `stage.js` draws the same, and `stagecheck.mjs` pairs
+  them op for op. The colours are the retail palette's ramp, as RGB constants in both.
+- **Only with the scripts.** Without a host (`ctx.cob` absent, `WIKISIMCTX.cob` NULL) no unit
+  sprays: the pool is not allocated and `sim.js`'s turn returns before the spray.
+
 ## The landings
 
 | | What | Gate |
@@ -385,7 +475,8 @@ the engine's:
 | **L3a** — built 2026-10-28 | the host (`tagpu_wikicob`), the calls and the gating in both simulations, the facts, the quarantine, `until` waits and the 11 Quick Build demos converted, the posed order in the DLL's asset load, the three-state 3D answer the demos wait for, `activatewhenbuilt` through every reader, the mockup's server and node host, the scripts in the packs | `simparity.mjs`, `simcheck.mjs` (every demo's claim with the scripts running), `wiki_regression.py` |
 | **L3b** — built 2026-10-28 | poses drawn: the core's PrimitiveStructs copied into the stage view's pose pool on the game thread and composed over the posed order on the render thread (`tagpu_wikistage_pose`, `pose_compose`, `tagpu_posemath.h`); in the mockup `gfx.py`'s piece tables, `serve.py`'s `models`, `sim.js` `poses()`, `pose.js`, and back faces culled as the game culls them (*Drawing*) | `stage3dcheck.py` (the game's stage against the mockup's, with the poses), `posecheck.py`, `simparity.mjs`, `simcheck.mjs`, `scenecheck.mjs`, `stagecheck.mjs`, `sidecheck.mjs`, `textparity.mjs`; the demos watched in game |
 | **L3c** — built 2026-10-28, one refusal open | the corpus gate, `tools/wiki/cobcorpus.py`: every compatibility setup's unit types through the host (Create, 600 slices, the wiki's calls and a state-setter Deactivate/Activate), a refusal named | the gate itself, clean over every setup: clean but for ZZZ (below) |
-| **L4** | the nano spray and `emit-sfx`: the engine's emitters ported, the wiki generator, drawn through the stage's instance of the particle draw | the spray's look against a game capture of the same build |
+| **L4a** — built 2026-10-28 | the nano spray: `QueryNanoPiece` on the engine's schedule and the piece's origin through the host (`tagpu_wikicob_query`, `tagpu_wikicob_origin`, the model's shape in `WIKICOBTYPE`), the engine's emitters and particle class repeated in both simulations as state in the hash, the wiki's own generator, the particles bounded and copied into the stage record, drawn as the engine's 2 × 2 dots (*The spray*) | `simparity.mjs` natively and `--wine`; `stagecheck.mjs`'s scripted lane; `tools/test_cobvm.py`'s query and origin tests; the host's origins against `pose.js` |
+| **L4b** — planned | `emit-sfx`: the engine's EMIT_SFX emitters (`0x480EB0`: fire `0x472330`, the wakes `0x472430`, bubbles `0x472530`, the smokes `0x472810` and `0x4728F0`) from the effect log the host now drops | the effect drawn against a game capture of the same script |
 | **L5** | sound: the mixer, the triggers, the cooldowns, WebAudio in the mockup | a demo heard in game and in the mockup; the player's settings honoured; an MP game's own sounds unchanged with the wiki open |
 
 L1 and L2 touch `tagpu_cobvm.*`, `tagpu_cob_safe.*`, `tagpu_patches.c`, `tools/tacob*` and the
@@ -411,6 +502,33 @@ fixtures — no file the sidebar's landing touches.
 - The host's slice over a demo's units costs about 70 µs (2 ms for 30 slices).
 - `tools/test_cobvm.py`'s `WikiHost` tests: no writable static in the host, two hosts on two
   threads, the quarantines, `SET ACTIVATION` through the setter's rule.
+
+**Why L4b waits.** No stock unit the wiki shows reaches EMIT_SFX: of the 278 retail scripts
+(decompiled with tacob), the wiki's units' only `emit-sfx` is in `SmokeUnit`, which emits only
+while `get HEALTH` is below 66, and the wiki's HEALTH is always 100 (it has no damage). The
+other users are ships, hovers and submarines (their wakes and bubbles), aircraft, and a few
+structures' `Activate`. And the fire, wake and bubble emitters' particle counts, lifetimes and
+velocities are not established (the engine map, *The demo recorder's counts and the step's
+phases*, its COB `EMIT_SFX` entry).
+L4b starts when the wiki shows a unit that emits.
+
+**L4a's gate**, MEASURED 2026-10-28 on the reference setup:
+
+- `simparity.mjs`: all 1008 demo plays and the 47 rule cases equal tick for tick, the particles
+  in the state hash, natively and with `--wine`.
+- `stagecheck.mjs`: its scripted lane (the demos with the fixture's sidebar at the first size and
+  the units' scripts, `sim.js` through `serve.py`'s host, the C side from the same files through
+  `tests/wikicobfile.h`), 447 frames, the spray drawn in 53 of them, 8325 particles, paired op for
+  op; all 6550 frames equal.
+- The host's origin against the stage's composition: every visible piece of every scripted unit
+  of Quick Build's and Build Lines' demos, every seventh tick, 58 529 origins, turned by the facing
+  as the simulation turns them, within 0.00003 world units of `pose.js`'s (a one-off script, not
+  in the tree).
+- `tools/test_cobvm.py`: `QueryNanoPiece` answers its piece and a missing one leaves the preset; a
+  piece's origin is carried up its parents turned; a piece outside the model and a broken parent
+  chain answer the unit's point.
+- `simcheck.mjs` (every pack under `--pack`), `scenecheck.mjs`, `sidecheck.mjs` and
+  `textparity.mjs` pass.
 
 **L3b's gate**, MEASURED 2026-10-28 on the reference setup:
 
@@ -440,10 +558,11 @@ fixtures — no file the sidebar's landing touches.
   the same bound, so the mockup draws the same units at rest. The most pieces of any type in the
   stock and six mod packs is 49, so 83 such units fit; no demo's unit count has been checked
   against the bound.
-- **The poses ride every frame.** The pool is copied into the record at every fill the stage is
-  shown, all 80 KB of it whatever changed (the record grew from 63 512 to 145 944 bytes on the
-  i686 build), and the render thread composes every posed unit every frame; neither cost has been
-  measured.
+- **The poses and the spray ride every frame.** The pose pool (4096 × 20 = 81 920 bytes) and the
+  spray's particles (1024 × 16 = 16 384, of which the fill writes the live ones) ride in the
+  record at every fill the stage is shown, whatever changed (the record is a fixed 162 328 bytes
+  on the i686 build), and the render thread
+  composes every posed unit every frame; neither cost has been measured.
 - **A dont-shade piece's row is carried as a normal in the mockup.** `pose.js` gives each vertex of
   a piece without the shaded flag the normal (0, 3.1, 0), whose `emitUnits` row is
   trunc(3.1 × 5) = 15 at every facing, standing for the engine's default row 15 that
@@ -475,6 +594,25 @@ fixtures — no file the sidebar's landing touches.
 - **The quarantine note carries no pc**, where decision 9 asks for one: it is `<what>: <reason>`,
   the call the refusal came in and the core's reason, because the core's run record
   (`TAGPU_COBVM_RUN`) keeps no pc for a fault. Giving it one is a change to the core's interface.
+
+- **The spray's facing is turned in two steps.** The engine folds the body's angles into the
+  root's and rounds each pair rotation once (`0x43DF86`, `0x4B7173`); the host rounds the root's
+  TURN and the simulation then turns by its facing vector in doubles and truncates, so a nano
+  point can differ from the engine's by about one 16.16 unit (1/65536 of a world unit)
+  [INFERRED from the arithmetic, not measured against the engine].
+- **The spray's colours are the retail palette's** `0xA1..0xA7` as RGB constants in both stages
+  (`tagpu_wikistage.c` `SPRAY`, `stage.js`); a mod's own palette is not followed, where the game's
+  `tagpu_fx.c` reads the palette in play.
+- **The spray's sight test is the wiki's fog cell**, 16 world units, a grey cell hiding the dot;
+  the engine asks the viewed player's sight at its 32-unit tile, the LOS counter with true LOS and
+  the mapped bit without (`0x473A50..0x473B05`).
+- **The spray needs the scripts.** Without a host no unit sprays, so a demo played without the
+  scripts, or in a check that plays none, shows no spray.
+- **A pack written before the model's shape** (`gfx.py` before L4a) has no offsets, parents or
+  height: every piece's origin is the unit's own point and the target box has no height. Rebuild
+  the packs with `gfx.py`.
+- **The spray was not compared with a game capture of the same build**, the gate the plan's L4
+  row named.
 
 - **The core's files are not `sim`.** `tagpu_cob_safe.c` holds rules the game's simulation runs
   (the step guard, the getters, the parent's pops, the attachment bound), but `thread-split.allow`
@@ -527,7 +665,15 @@ fixtures — no file the sidebar's landing touches.
   - **ActivateWhenBuilt** is def `+0x241` bit 18, the FBI key's `and 1` (`0x42C6B9..0x42C6DE`),
     and the only reason the engine switches a finished structure on (`0x41B9A6`) or one made whole
     (`0x48612F`).
-- **L4**: the nano emitter (spawn rate, velocity, lifetime, colour, how its randomness is drawn) and
-  `emit-sfx`'s types, from `effects.md` and `build-state.md` and disassembly.
+- **L4a** (answered 2026-10-28, the engine map's *The nano particle*, DISASSEMBLED): the boxes
+  and their cut to 4/11 … 7/11 of each axis (`0x473B50`); five particles a burst and two bursts an
+  emission (`0x473D50`, `0x472F60`, the walker `0x471EB0`); the steps `(int16)(len >> 18)` and the
+  0-step rule; the step, the end and the colour cycle (`0x4739B0`, `0x473B30`); the target's
+  height `0x4CB5F0`; a reclaim's two-tick cadence (`0x404A57`); the dot, 2 × 2 by `DrawBar`'s
+  inclusive fill (`0x4BF6F0`, `0x4CCDEA`). `effects.md` §7.3 had the box cut as points of the
+  builder→site line, and is corrected.
+- **L4b**: the fire `0x472330`, wake `0x472430` and bubble `0x472530` emitters' particle counts,
+  lifetimes, velocities and draws; the smoke emitters' puff count past `0x474ECE`; and what the
+  wiki's HEALTH would have to be for `SmokeUnit` to emit.
 - **L5**: every caller of `0x47F0C0` / `0x47F1A0` / `0x47F300` for the events the wiki has, the
   cooldown rule (`0x47FAF0`, `0x47FEFD`), the volume settings' storage, the sounds.tdf reader.
