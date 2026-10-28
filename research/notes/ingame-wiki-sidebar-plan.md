@@ -65,6 +65,14 @@ closes, and then deleted.
     in-game display name in the running mod, never its internal name.
 17. **The tutorial uses the player's own side in the current game**; the mockup gets a side
     selector beside its mod selector.
+18. **The wiki follows the player's interface type** (left-click or right-click orders, the engine's
+    `main+0x37EFA`), in demos and in Try it (2026-10-27). Demos name actions (select, order, cancel),
+    which are mapped to the player's buttons, and captions name the button the player uses. The
+    mockup gets an interface selector. Same landing as the per-mod tutorials, since both rewrite
+    the demo data and its captions; the sidebar landing ships the right-click interface.
+19. **Keys shown in captions and the keys strip follow the player's key bindings**, where Impure or
+    the mod lets them be rebound (2026-10-27, the same landing). Game speed is not followed: the
+    wiki keeps its own 1x/2x.
 
 **Settled from the engine, not asked:** the page shown follows the engine's own router (nothing
 selected: the mod's `MAIN2` screen; exactly one unit selected, a builder: its numbered pages; anything
