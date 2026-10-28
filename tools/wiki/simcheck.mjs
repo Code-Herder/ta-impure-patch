@@ -373,6 +373,17 @@ const RULES = {
     }
     return ok && t < 1500;
   },
+  'a short-range builder sends a unit off its site, and builds'(entry) {
+    // BuildDistance 4, under the 16 half width: it arrives only by its body, and must claim there for the Peewee
+    // standing across the extractor's site (cells 22..24 x 3..5) to step off
+    const short = { ...entry, units: { ...entry.units, ARMCK: { ...entry.units.ARMCK, buildDistance: 4 } } };
+    return shortBuild(short, { selected: ['ck'], units: [{ id: 'stand', type: 'ARMPW', at: [396, 72] }] });
+  },
+  'a short-range builder over its site\'s edge steps off it, and builds'(entry) {
+    // a second constructor stands 8 world units over the site's west edge (352) when it is ordered there
+    const short = { ...entry, units: { ...entry.units, ARMCK: { ...entry.units.ARMCK, buildDistance: 4 } } };
+    return shortBuild(short, { selected: ['b2'], units: [{ id: 'b2', type: 'ARMCK', at: [344, 72] }] });
+  },
   'a scene unit put over another starts at the nearest clear place'(entry) {
     // a second Peewee authored on the first starts two cells off, the nearest whole-cell offset that clears a 32-wide
     // body, and of the four at that distance the one first by z, then x: (0, -2) cells
@@ -395,6 +406,22 @@ const RULES = {
     return ok && t < 900 && !on(s.view().units.find(u => u.id === 'stand'));
   },
 };
+
+/* a short-range builder's case: the scene's selected builder ordered to Quick Build the extractor at (376, 72); true
+   when it is ordered, the extractor is finished within 1500 ticks, and no two bodies overlap on any tick (a unit over
+   the site overlaps no body: the site is one only once started, and the build waits for it to be clear) */
+function shortBuild(entry, scene) {
+  const s = WikiSim.create(entry, { scene });
+  s.input({ move: [376, 72] }); s.input({ down: 'rmb' }); s.input({ up: 'rmb' });
+  const id = scene.selected[0], o = s.orders(id)[0];
+  let ok = !!o && o.k === 'build', raised = null, t = 0;
+  for (; t < 1500 && !(raised && raised.built === 1); t++) {
+    s.step();
+    raised = fresh(s.view(), 'ARMMEX')[0] || null;
+    ok = ok && apart(s.view());
+  }
+  return ok && t < 1500;
+}
 
 /* no two bodies overlap: each unit's footprint box about its centre, touching allowed */
 function apart(v) {

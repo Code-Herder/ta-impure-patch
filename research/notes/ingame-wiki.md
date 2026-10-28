@@ -1661,8 +1661,12 @@ owner chose a rule of the wiki's own over a port of the engine's mover and pathf
 - **Arrival at a target body.** A unit is in range when within its range of the target, or
   touching the target's own body, or when the target itself refuses its straight step. A site is
   a body to the unit heading for it, started or not, so that step stops at its edge: a builder
-  whose BuildDistance is shorter than its own half width still reaches its site, and never stands
-  on it, which would hold the build for good.
+  whose BuildDistance is shorter than its own half width still reaches its site rather than
+  walking onto it. A **claim** follows the same arrival: the builder's centre within its
+  BuildDistance of the site, or its body within one step (MaxVelocity) of it, which covers
+  touching and a refused step. A builder that arrived without claiming would never send what
+  stands on the site away, and its build would wait for good. For every builder whose
+  BuildDistance is at least its half width plus a step, the second test adds nothing.
 - **A site is cleared before it starts.** A builder in range does not start a building while any
   unit's body overlaps the site. A unit on a structure or a claim (the claimant included, when it
   was ordered to build where it stands) spends its turn stepping straight away from the body's

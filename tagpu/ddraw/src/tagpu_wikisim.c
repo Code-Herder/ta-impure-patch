@@ -1928,14 +1928,30 @@ static double rect_dist(double x, double z, WIKIRECT r)
     return sqrt(dx * dx + dz * dz);
 }
 
-/* the site u's first order claims: a build not started yet whose site u stands within build
-   distance of; 0 when none */
+/* the gap between rects a and b, 0 when they touch or overlap */
+static double rect_gap(WIKIRECT a, WIKIRECT b)
+{
+    double dx = b.x0 - a.x1, dz = b.z0 - a.z1;
+    const double ex = a.x0 - b.x1, ez = a.z0 - b.z1;
+    if (dx < 0) dx = 0;
+    if (ex > dx) dx = ex;
+    if (dz < 0) dz = 0;
+    if (ez > dz) dz = ez;
+    return sqrt(dx * dx + dz * dz);
+}
+
+/* the site u's first order claims, sim.js's claim: a build not started yet that u has reached --
+   its centre within build distance of the site, or its body within a step of it, which is how a
+   builder whose BuildDistance is under its half width arrives (touching the site, or stopped short
+   by the site refusing its step); unclaimed there, what stands on the site would never leave it.
+   0 when none */
 static int claim(const WIKISIM* s, const WIKIUNIT* u, WIKIRECT* out)
 {
     const WIKIORDER* o = u->norder ? &u->order[0] : NULL;
     if (!o || o->k != WIKI_ORDER_BUILD || started(s, o)) return 0;
     *out = rect_of(s, o->type, o->ox, o->oz);
-    return rect_dist(u->x, u->z, *out) <= def(s, u->type)->build_distance;
+    return rect_dist(u->x, u->z, *out) <= def(s, u->type)->build_distance
+        || rect_gap(body(s, u), *out) <= def(s, u->type)->max_velocity;
 }
 
 /* every body but u's into s->obs: the units' in creation order, then the claims in their
@@ -2289,7 +2305,7 @@ static int go(WIKISIM* s, WIKIUNIT* u, const TARGET* t)
     if ((nobs = bodies(s, u)) < 0) return GO_WAITING;
     /* the site is a body to the unit heading for it, started, claimed or not: its straight step
        stops at the site's edge and is GO_ARRIVED, so a builder whose BuildDistance is shorter
-       than its half width never stands on its own site, which would hold the build for good */
+       than its half width does not walk onto it (claim says how it then claims the site) */
     if (t->kind == TARGET_SITE) {
         s->obs[nobs].r = t->body;
         s->obs[nobs++].u = NULL;

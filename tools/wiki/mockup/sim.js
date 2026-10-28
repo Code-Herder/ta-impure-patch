@@ -1376,12 +1376,20 @@ const WikiSim = (() => {
       const dx = Math.max(r[0] - x, 0, x - r[2]), dz = Math.max(r[1] - z, 0, z - r[3]);
       return Math.sqrt(dx * dx + dz * dz);
     }
-    // the site u's first order claims: a build not started yet whose site u stands within build distance of
+    // the gap between rects a and b, 0 when they touch or overlap
+    function rectGap(a, b) {
+      const dx = Math.max(b[0] - a[2], 0, a[0] - b[2]), dz = Math.max(b[1] - a[3], 0, a[1] - b[3]);
+      return Math.sqrt(dx * dx + dz * dz);
+    }
+    /* the site u's first order claims: a build not started yet that u has reached -- its centre within build distance
+       of the site, or its body within a step of it. The second is how a builder whose BuildDistance is under its half
+       width arrives (touching the site, or stopped short of it by the site refusing its step), and it must claim
+       there too, or what stands on the site is never told to leave it and the build waits for good. */
     function claim(u) {
       const o = u.orders[0];
       if (!o || o.k !== 'build' || started(o)) return null;
       const r = rectOf(o.type, o.ox, o.oz);
-      return rectDist(u.x, u.z, r) <= def(u.type).buildDistance ? r : null;
+      return rectDist(u.x, u.z, r) <= def(u.type).buildDistance || rectGap(body(u), r) <= def(u.type).maxVelocity ? r : null;
     }
     // every body but u's, as {r, u}: the units' in creation order, then the claims in their claimants' order
     function bodies(u) {
@@ -1557,8 +1565,8 @@ const WikiSim = (() => {
       if (inRange(u.x, u.z, body(u), tgt, tgt.stop)) { u.leg = null; return ARRIVED; }
       const obs = bodies(u), v = def(u.type).maxVelocity;
       /* the site is a body to the unit heading for it, started, claimed or not: its straight step stops at the site's
-         edge and is ARRIVED, so a builder whose BuildDistance is shorter than its half width never stands on its own
-         site, which would hold the build for good */
+         edge and is ARRIVED, so a builder whose BuildDistance is shorter than its half width does not walk onto it
+         (claim says how it then claims the site) */
       if (tgt.kind === 1) obs.push({ r: tgt.body, u: null });
       if (clear(u, tgt, obs)) {
         u.leg = null;
