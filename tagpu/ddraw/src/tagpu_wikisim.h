@@ -247,7 +247,7 @@ typedef struct {
                                                        sequence began                           */
     int              held[WIKI_NKEYS];
     int              mode;
-    int              has_drag, drag_active;
+    int              has_drag, drag_active, drag_t;     /* drag_t: the press's tick */
     double           drag_x0, drag_z0;
     const char*      caption;
     WIKIHOVER        hover;
@@ -277,7 +277,9 @@ typedef struct {
     /* the trip's generated inputs, fed before the script's of the same tick */
     WIKIINPUT        trip_in[WIKI_TRIP_EVENTS];
     int              ntrip_in, trip_next;
-    int              feeding;       /* the tick being fed */
+    int              feeding;       /* the tick being fed, and between two ticks the one the
+                                       sim stands at, since every step feeds its tick: the
+                                       clock an input reads                                    */
 
     /* scratch: distinct's flood; take_offs' one builder's orders and the site taking each off,
        sized for any list since push_order holds every list to PLACE_LIST_CAP; the view's arrays */

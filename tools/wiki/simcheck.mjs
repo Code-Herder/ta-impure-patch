@@ -933,6 +933,22 @@ const CTX_RULES = {
     click(s, [200, 300], 'rmb');
     return kept && disarmed && selIds(s.view()) === '' && s.orders('ck').length === 0 && s.orders('pw').length === 0;
   },
+  /* the click window (sim.js CLICK_TIME, CLICK_BOX): a left release is a click when its press is under 25 ticks old
+     and the release point under 32 world units from the press point on each axis, else a box, at both types. Every
+     release lands beside ck's centre, on it, and every press on the same side of it, so a click there selects ck and
+     a box from the press holds nothing and deselects */
+  'the click window: a hold of 25 ticks or a release 32 units from the press is a box, a wobble of 5 to 31 is a click, at both types'(entry) {
+    const sel = (iface, from, ticks) => {
+      const s = WikiSim.create(entry, { scene: { selected: ['pw'] } }, null, { ...T1, iface });
+      s.input({ move: from }); s.input({ down: 'lmb' });
+      for (let i = 0; i < ticks; i++) s.step();
+      s.input({ move: [306, 178] }); s.input({ up: 'lmb' });
+      return selIds(s.view());
+    };
+    return [0, 1].every(i => sel(i, [306, 178], 24) === 'ck' && sel(i, [306, 178], 25) === '' &&
+      sel(i, [311, 178], 0) === 'ck' && sel(i, [337, 178], 0) === 'ck' && sel(i, [306, 209], 0) === 'ck' &&
+      sel(i, [338, 178], 0) === '' && sel(i, [306, 210], 0) === '');
+  },
   'the resolved script: a press of a held button or a release of one not held refuses the demo with its tick'(entry) {
     const d = (inputs) => ({ id: 'rule', scene: { selected: ['ck'] }, inputs, end: 10 });
     const overlap = d([{ at: 1, down: 'select' }, { at: 2, down: 'order' }, { at: 3, up: 'order' }, { at: 4, up: 'select' }]);

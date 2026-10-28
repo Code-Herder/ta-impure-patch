@@ -24,6 +24,15 @@
    Runs in a page (the global WikiSim) and under node (module.exports). */
 const WikiSim = (() => {
   const CELL = 16, TPS = 30, RADIUS = 3, ARENA = 64, DRAG = 4, FOLLOW = 48, SPACING = 24;
+  /* THE CLICK WINDOW, the same at both Interface Types: a left release on the map is a click when its press is fewer
+     than CLICK_TIME ticks old and the release point lies fewer than CLICK_BOX world units from the press point on
+     each axis; any other release is a box (0x4993E9..0x499441, DISASSEMBLED). The engine stamps the press with
+     0x4B6340 (0x4994BC), GetTickCount times *0x51FBD0+0xE8 over 1000, a rate MEASURED at 30 a second, so its 25
+     units are 25 ticks here. It compares the world point's x and z words, main+0x2CAC and +0x2CB4, at the press
+     (stored at +0x2C92, +0x2C9A) with the last ones before the release (+0x2C9E, +0x2CA6, rewritten on every other
+     message while the box is open, 0x49946A..0x49949B), so a wobble that comes back is a click. DRAG only decides
+     when the view draws the box. */
+  const CLICK_TIME = 25, CLICK_BOX = 32;
   // tagpu_placegeo.h's caps, and tagpu_place.c's on one commit; a unit's list never holds more than PLACE_LIST_CAP
   const PLACE_MAX_SITES = 256, PLACE_SPACING_MAX = 16, PLACE_ORDER_BUDGET = 4096, PLACE_LIST_CAP = 1024;
   const KEYS = ['shift', 'alt', 'ctrl', 'z', 'x', 'lmb', 'rmb'];
@@ -816,6 +825,8 @@ const WikiSim = (() => {
        They are made when tick t is fed, from the state at t, and the arm is the release at t + TRIP_UP whatever the
        route (TRIP_ROWS says why it is fixed). */
     const gen = [];
+    /* feeding: the tick being fed, and between two ticks the one the sim stands at, since every step feeds its tick:
+       the clock an input reads */
     let genNext = 0, feeding = 0;
     const centreOf = (s, g) => ({ x: -SIDE_W + g.rect[0] + g.rect[2] / 2, z: s.y + g.rect[1] + g.rect[3] / 2 });
     /* the plan: the shown unit's first page holding a live T button, the pagers the nearer way round (a tie goes to
@@ -1134,9 +1145,10 @@ const WikiSim = (() => {
       if (!shift) disarm();
       else st.shiftPlaced = true;
     }
-    function select(shift) {
+    // box: the release that ends a press on the map outside the click window selects what the box from the press holds
+    function select(shift, box) {
       const d = st.drag, { x, z } = mapCursor();
-      if (d && d.active) {
+      if (box) {
         const x0 = Math.min(d.x0, x), x1 = Math.max(d.x0, x), z0 = Math.min(d.z0, z), z1 = Math.max(d.z0, z);
         const inBox = units.filter(u => u.owner === 0 && u.x >= x0 && u.x <= x1 && u.z >= z0 && u.z <= z1);
         const pick = inBox.some(u => mobile(u.type)) ? inBox.filter(u => mobile(u.type)) : inBox;
@@ -1186,7 +1198,7 @@ const WikiSim = (() => {
           if (ev.down === 'lmb') {
             if (st.mode && shift) st.gesture = cursorSite();
             else if (st.mode) placeClick(false);
-            else { const c = mapCursor(); st.drag = { x0: c.x, z0: c.z, active: false }; }
+            else { const c = mapCursor(); st.drag = { x0: c.x, z0: c.z, t: feeding, active: false }; }
           }
           // with a building armed a right press cancels it at both types (0x499100, MEASURED at type 1)
           if (ev.down === 'rmb') { st.drag = null; if (st.mode) disarm(); else if (IFACE) rightClick(shift); else rightPress0(); }
@@ -1213,7 +1225,9 @@ const WikiSim = (() => {
           if (ev.up === 'lmb' && st.gesture) release();
           else if (ev.up === 'lmb' && st.drag) {
             // a box is the same at both types; a click is type 1's select and type 0's leftClick
-            if (IFACE || st.drag.active) select(st.held.has('shift')); else leftClick(st.held.has('shift'));
+            const d = st.drag, c = mapCursor(), shift = st.held.has('shift');
+            const click = feeding - d.t < CLICK_TIME && Math.abs(c.x - d.x0) < CLICK_BOX && Math.abs(c.z - d.z0) < CLICK_BOX;
+            if (!click) select(shift, true); else if (IFACE) select(shift); else leftClick(shift);
             st.drag = null;
           }
         }

@@ -15,6 +15,17 @@
 #define RADIUS  3
 #define ARENA   64
 #define DRAG    4
+/* THE CLICK WINDOW, the same at both Interface Types: a left release on the map is a click when
+   its press is fewer than CLICK_TIME ticks old and the release point lies fewer than CLICK_BOX
+   world units from the press point on each axis; any other release is a box
+   (0x4993E9..0x499441, DISASSEMBLED). The engine stamps the press with 0x4B6340 (0x4994BC),
+   GetTickCount times *0x51FBD0+0xE8 over 1000, a rate MEASURED at 30 a second, so its 25 units
+   are 25 ticks here. It compares the world point's x and z words, main+0x2CAC and +0x2CB4, at
+   the press (stored at +0x2C92, +0x2C9A) with the last ones before the release (+0x2C9E,
+   +0x2CA6, rewritten on every other message while the box is open, 0x49946A..0x49949B), so a
+   wobble that comes back is a click. DRAG only decides when the view draws the box. */
+#define CLICK_TIME 25
+#define CLICK_BOX  32
 #define FOLLOW  48
 #define SPACING 24
 /* tagpu_place.c's cap on one commit's orders; its cap on a list, PLACE_LIST_CAP, is
@@ -1522,7 +1533,7 @@ static void right_click(WIKISIM* s, int shift)
     else move_order(s, shift);
 }
 
-static void select_units(WIKISIM* s, int shift);
+static void select_units(WIKISIM* s, int shift, int box);
 
 /* TYPE 0, a left click on the map with nothing armed: the release of a press that went down on the
    map and never became a box (0x499421..0x499441 call 0x498F70), so its order lands at the release
@@ -1547,7 +1558,7 @@ static void left_click(WIKISIM* s, int shift)
     u = unit_at(s, m.x, m.z);
     if (u && u->owner == 0) {
         if (unfinished_own(s, u) && nbuilders(s)) assist(s, u, shift);
-        else select_units(s, shift);
+        else select_units(s, shift, 0);
     } else move_order(s, shift);
 }
 
@@ -1591,13 +1602,15 @@ static void place_click(WIKISIM* s, int shift)
     else s->shift_placed = 1;
 }
 
-static void select_units(WIKISIM* s, int shift)
+/* box: the release that ends a press on the map outside the click window selects what the box
+   from the press holds */
+static void select_units(WIKISIM* s, int shift, int box)
 {
     const XZ m = map_cursor(s);
     const double x = m.x, z = m.z;
     WIKIUNIT* u;
     int i;
-    if (s->has_drag && s->drag_active) {
+    if (box) {
         const double x0 = s->drag_x0 < x ? s->drag_x0 : x, x1 = s->drag_x0 > x ? s->drag_x0 : x;
         const double z0 = s->drag_z0 < z ? s->drag_z0 : z, z1 = s->drag_z0 > z ? s->drag_z0 : z;
         int any_mobile = 0;
@@ -1685,6 +1698,7 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
                     const XZ c = map_cursor(s);
                     s->has_drag = 1;
                     s->drag_active = 0;
+                    s->drag_t = s->feeding;
                     s->drag_x0 = c.x;
                     s->drag_z0 = c.z;
                 }
@@ -1724,8 +1738,13 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
             if (ev->up == WIKI_KEY_LMB && s->has_gesture) release(s);
             else if (ev->up == WIKI_KEY_LMB && s->has_drag) {
                 /* a box is the same at both types; a click is type 1's select and type 0's left_click */
-                if (s->iface || s->drag_active) select_units(s, s->held[WIKI_KEY_SHIFT]);
-                else left_click(s, s->held[WIKI_KEY_SHIFT]);
+                const XZ c = map_cursor(s);
+                const int shift = s->held[WIKI_KEY_SHIFT];
+                const int click = s->feeding - s->drag_t < CLICK_TIME && fabs(c.x - s->drag_x0) < CLICK_BOX &&
+                                  fabs(c.z - s->drag_z0) < CLICK_BOX;
+                if (!click) select_units(s, shift, 1);
+                else if (s->iface) select_units(s, shift, 0);
+                else left_click(s, shift);
                 s->has_drag = 0;
             }
         }
