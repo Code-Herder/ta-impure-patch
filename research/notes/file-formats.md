@@ -699,7 +699,8 @@ file has offsets.]
 | 0x06 | `yPosition` (`u16`) | hotspot/anchor Y |
 | 0x08 | `Background`/transparency index (`u8`) | palette index treated as transparent |
 | 0x09 | `Compressed` (`u8`) | 0 = raw 8-bpp; nonzero = RLE (below) |
-| 0x0A | `FramePointers` (`u16`) | number of sub-frames (>0 → this "frame" is a stack of sub-frames) |
+| 0x0A | sub-frame count (`u8`) | >0 → this "frame" is a stack of sub-frames, `PtrFrameBits` then the offset of a table of that many `u32` frame offsets. `Gaf.h` declares `FramePointers` a `u16`; `CopyGafToContext 0x4B7F90` reads the byte [DISASSEMBLED, [exe-reverse-engineering](exe-reverse-engineering.html) `0x4B7F90`] |
+| 0x0B | alpha-blit flag (`u8`) | a sub-frame with it set is drawn through `AlphaCompsteBuf2OFFScreen 0x4B8500` instead [DISASSEMBLED]; 0 in every frame and sub-frame of the stock files [MEASURED, 23 598 frames]. The exe map's `0x4B7F90` row measures SKIRMISH's side-button sub-frames taking that arm, so something after the file sets the byte in memory; what is not established |
 | 0x0C | `Unknown0` (`u32`) | |
 | 0x10 | `PtrFrameBits` | offset→pixel data (pointer in memory) |
 | 0x14 | `FPS`/unknown (`u32`) | |
@@ -713,6 +714,15 @@ consumed:
 - else → **literal run**: copy the next `(mask >> 2) + 1` bytes verbatim.
 
 Uncompressed frames are just `Width×Height` bytes, row-major. [VERIFIED `gaf.cpp:200-256`]
+
+**A stack draws none of its own pixels.** `0x4B7F90` calls itself for each sub-frame in order with
+the same destination point, and each lands at that point minus its own hotspot over its own
+transparent index; sub-frames of a sub-frame recurse the same way [DISASSEMBLED,
+`0x4B7FC8..0x4B805A`]. A picture of the frame is therefore its leaves composed into its own
+`Width×Height` box at (frame hotspot − leaf hotspot + c, …), later leaves over earlier ones. In stock
+data only `anims/` carries stacks — 14 114 of its frames (the commongui order and pager buttons, the
+foliage, rock and building features), none nested [MEASURED]. `tools/ta3do`'s `gaf_compose` is the
+offline reader of that rule, and the one every Python tool shares.
 
 **For the renderer:** resolve each 3DO primitive's `pTextureName` to a GAF frame, expand it to
 RGBA via the palette (treat `Background` index as alpha 0), and upload as a texture (an atlas

@@ -7451,7 +7451,8 @@ calling itself for each subframe in order with the SAME destination point
 (`0x4B7FC8..0x4B801A`). Each subframe lands at that point minus its own hotspot (`hotX` `+4`,
 `hotY` `+6`, signed; `0x4B804A..0x4B805A`), over its own transparent index. commongui's order,
 tab and pager pictures are such stacks. MEASURED: a column that pasted the subframes at (0, 0)
-differed from the captures, and one that layers them matches.
+differed from the captures, and one that layers them matches. The offline reader of this rule, shared by every
+Python tool, is `tools/ta3do`'s `gaf_compose`.
 
 **The hit test and who wins an overlap**, in the GUI pump `0x4A9FD0`.
 
