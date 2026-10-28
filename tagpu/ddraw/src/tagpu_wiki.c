@@ -589,8 +589,8 @@ static int layout_now(const WIKIDATA* d, const WIKILAYOUT** lay, int* src, const
    pending, else 1 with `*src` the source, or NULL when the load failed or never started, which
    plays every unit at rest. As with the layout, no simulation starts while the answer is pending,
    so a demo's units have their scripts from its first tick or never. LIFETIME: the WIKI3D is
-   immutable and never freed once published, and the host copies a script when it is made
-   (tagpu_wikicob_new), so nothing the source hands out is held past the call. */
+   immutable and never freed once published, and the host copies a script and its model's shape
+   when it is made (tagpu_wikicob_new), so nothing the source hands out is held past the call. */
 static int cob_type(void* c, const char* name, WIKICOBTYPE* out)
 {
     const WIKI3D* w = (const WIKI3D*)c;
@@ -885,8 +885,9 @@ static void bar_drag(int cy)
 /* THE FILL STEPS THE DEMO ON THIS THREAD and copies its view by value into the record, so the
    render thread gets values and never a WIKISIM. The copy keeps every bound of
    tagpu_wikistage_copy (the map at 128 cells a side, 256 vents, 128 units, the gesture's sites,
-   256 queued, 512 lines, the caption and the labels) and of tagpu_wikistage_pose (the units' poses,
-   4096 primitives), and says once what it had to cut. */
+   256 queued, 512 lines, the nano spray's 1024 particles, the caption and the labels) and of
+   tagpu_wikistage_pose (the units' poses, 4096 primitives), and says once what it had to cut --
+   a particle the simulation itself dropped included. */
 static void page_fill(TAGPU_PK_WIKI* w)
 {
     const WIKIDATA* d = data();

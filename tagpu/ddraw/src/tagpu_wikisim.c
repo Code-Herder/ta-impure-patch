@@ -1928,6 +1928,7 @@ static void credit(const WIKISIM* s, WIKIUNIT* u, WIKIUNIT* st, int how)
     st->worked = 1;
     /* the step made progress: the unit's turn sprays at the structure as it stands now */
     u->spray = how + 1;
+    snprintf(u->spray_id, sizeof u->spray_id, "%s", st->id);
     u->spray_type = st->type;
     u->spray_x = st->x;
     u->spray_z = st->z;
@@ -2003,7 +2004,7 @@ static void spray_box(const int32_t lo[3], const int32_t hi[3], int32_t out[6])
 
 /* ONE BURST of 0x473D50 on `tick`: five particles, each drawn as the spawn draws them -- start x,
    y, z in the first box, then target x, y, z in the second, each base + trunc(draw * extent /
-   0x8000) -- running the distance's integer length >> 18 steps (a quarter of it a tick), each
+   0x8000) -- running the distance's integer length >> 18 steps (about 4 world units a tick), each
    step the distance over the steps toward zero, its end `tick` + steps; one of 0 steps is not
    made, its draws spent (0x473EDE). Its colour is 0xA1 + its place in the burst (0x473F13..
    0x473F41). Returns the particles the burst made, those past the pool's bound included. */
@@ -2039,23 +2040,28 @@ static int spray_burst(WIKISIM* s, const WIKISPRAY* e, int tick)
 /* THE UNIT'S SPRAY on tick `t`, in its turn after its build calls: QueryNanoPiece run-now names the
    piece (0 when the script has none, as 0x43E400 presets it), the host gives that piece's origin,
    and the unit's facing turns it as the stage turns the unit's model (tagpu_wikiscene.c `model`:
-   (cs, sn) = (-hz, hx) about the up axis, the model's z out of the world's), so the spray starts
-   at the piece the stage draws. The target is the structure's box (0x403E5B..0x403EC8): its centre
+   (cs, sn) = (-hz, hx) about the up axis, the model's z out of the world's; a type that does not
+   move at the heading (0, 1) whatever its facing says), so the spray starts at the piece the
+   stage draws. The target is the structure's box (0x403E5B..0x403EC8): its centre
    +- FootprintX and FootprintZ x 8 world units (the def loader's 0x42D079..0x42D0C5) and from the
    ground to its model's height (0x42D7BF). A build sprays from the piece into the box
    (0x4720D0), a reclaim from the box into the piece (0x472200) and only every second tick from
-   its first. */
+   its first on that structure: a new order's first step sprays at once (its counter reset at
+   0x404845), and no two ticks running ever spray the same reclaim (0x404A4E re-arms the order at
+   2 ticks, 0x439E80). */
 static void spray(WIKISIM* s, WIKIUNIT* u, int t)
 {
     const WIKIDEF* d = def(s, u->spray_type);
     int32_t io[4] = { 0, 0, 0, 0 }, turned[3], base[3], pt[3], lo[3], hi[3];
-    const double cs = -u->hz, sn = u->hx;
+    const int fixed = !mobile(s, u->type);
+    const double cs = fixed ? -1.0 : -u->hz, sn = fixed ? 0.0 : u->hx;
     WIKISPRAY e;
     int piece = 0, n, k;
     if (!s->part) return;
     if (u->spray - 1 == HOW_RECLAIM) {
-        if (u->spray_at && t - u->spray_at < 2) return;
+        if (u->spray_at && !strcmp(u->spray_on, u->spray_id) && t - u->spray_at < 2) return;
         u->spray_at = t;
+        snprintf(u->spray_on, sizeof u->spray_on, "%s", u->spray_id);
     }
     n = facts(s);
     if (tagpu_wikicob_query(s->cob, u->cob, "QueryNanoPiece", io, s->fact, n) > 0) piece = io[0];
@@ -2196,13 +2202,14 @@ static void advance(WIKISIM* s)
     for (i = 0; s->cob && i < s->nunit; i++) {
         WIKIUNIT* u = s->unit[i];
         const WIKIUNIT* t = u->job_id[0] ? by_id(s, u->job_id) : NULL;
+        char ended[WIKI_ID_MAX] = "";
         if (t && u->job_how == HOW_BUILD && t->built >= 1) t = NULL;
         if (u->work[0] && (!t || strcmp(u->work, t->id))) {
             cob_call(s, u, "StopBuilding", WIKICOB_LATER, 0, NULL);
+            snprintf(ended, sizeof ended, "%s", u->work);
             u->work[0] = 0;
             u->work_serial = 0;
             u->stanced = 0;
-            u->spray_at = 0;
         }
         if (t && !u->work[0]) {
             const int32_t heading = 0;
@@ -2210,7 +2217,10 @@ static void advance(WIKISIM* s)
             snprintf(u->work, sizeof u->work, "%s", t->id);
             u->work_serial = u->norder ? u->order[0].serial : 0;
         }
+        /* a work that ended this tick sprays its last step by its own cadence, which is forgotten
+           only then -- unless this tick's spray was a new work's */
         if (u->spray) spray(s, u, s->tick + 1);
+        if (ended[0] && !strcmp(u->spray_on, ended)) u->spray_at = 0;
         if (!mobile(s, u->type)) continue;
         if (u->stepped && !u->moving) {
             cob_call(s, u, "StartMoving", WIKICOB_NOW, 0, NULL);
@@ -2506,6 +2516,8 @@ const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s)
     v->npart = s->npart;
     v->part = s->part;
     v->part_cut = s->part_cut;
+    v->nburst = s->nburst;
+    v->burst = s->burst;
     v->mode = s->mode;
     /* the column, only with the sidebar on; the type the demo stopped on, with it or without */
     if ((v->has_side = s->lay != NULL)) side_view(s, &v->side);
@@ -2672,6 +2684,15 @@ uint64_t tagpu_wikisim_hash(const WIKISIM* s)
         fnv_int(&h, q->sz);
         fnv_int(&h, q->end);
         fnv_int(&h, q->col);
+    }
+    fnv_int(&h, s->part_cut);
+    fnv_int(&h, s->nburst);
+    for (i = 0; i < s->nburst; i++) {
+        const WIKISPRAY* e = &s->burst[i];
+        int k;
+        for (k = 0; k < 12; k++) fnv_int(&h, e->box[k / 6][k % 6]);
+        fnv_int(&h, e->due);
+        fnv_int(&h, (int)e->key);
     }
     return h;
 }

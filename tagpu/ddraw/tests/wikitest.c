@@ -290,6 +290,16 @@ static void view(WIKISIM* s, int map)
     }
     putchar(']');
     key("partsCut", 0); fputs(v->part_cut ? "true" : "false", stdout);
+    key("bursts", 0);
+    putchar('[');
+    for (i = 0; i < v->nburst; i++) {
+        const WIKISPRAY* e = &v->burst[i];
+        int k;
+        printf("%s[", i ? "," : "");
+        for (k = 0; k < 12; k++) printf("%ld,", (long)e->box[k / 6][k % 6]);
+        printf("%d,%lu]", e->due, (unsigned long)e->key);
+    }
+    putchar(']');
     putchar('}');
 }
 

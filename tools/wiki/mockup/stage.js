@@ -318,8 +318,9 @@ const WikiStage = (() => {
     }
     /* THE NANO SPRAY over the units, as the engine draws its layer 6 above every unit row: each particle a dot of 2 x 2
        game pixels (DrawBar 0x4BF6F0 over {sx, sy, sx + 1, sy + 1}, its fill inclusive) on the pixel sx = x >> 16,
-       sy = (z >> 16) - ((alt >> 16) >> 1), in its palette entry; only where the ground under it is in sight, as
-       0x473A00 asks the viewed player's sight, and never off the map (tagpu_wikistage.c says how each was read) */
+       sy = (z >> 16) - ((alt >> 16) >> 1), in its palette entry; only where the view's 16-unit fog cell under it is
+       clear (the engine asks the viewed player's sight at its 32-unit tile; grey fog hides a dot here as black does),
+       and never off the map (tagpu_wikistage.c says how each was read) */
     mark('over');
     for (const p of v.parts || []) {
       const px = p[0] >> 16, py = (p[2] >> 16) - ((p[1] >> 16) >> 1), col = p[7];

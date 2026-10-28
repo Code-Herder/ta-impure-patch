@@ -124,6 +124,9 @@ function stateHash(sim, v) {
   if (v.cob) for (const half of [v.cob[1], v.cob[0]]) for (let k = 0; k < 4; k++) byte((half >>> (8 * k)) & 255);
   int(v.parts.length);
   for (const p of v.parts) for (const w of p) int(w);
+  int(v.partsCut ? 1 : 0);
+  int(v.bursts.length);
+  for (const e of v.bursts) for (const w of e) int(w);
   return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0');
 }
 

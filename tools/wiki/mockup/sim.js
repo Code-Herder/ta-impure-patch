@@ -1365,12 +1365,15 @@ const WikiSim = (() => {
       return made;
     };
     /* THE UNIT'S SPRAY on tick `t`, in its turn after its build calls: QueryNanoPiece names the piece, the host gives
-       its origin, the unit's facing turns it as the stage turns the model, and the structure's box is the target */
+       its origin, the unit's facing turns it as the stage turns the model (a type that does not move at the heading
+       (0, 1)), and the structure's box is the target; a reclaim only every second tick from its first on that
+       structure */
     function spray(u, t) {
-      const sp = u.spray, [fx, fz] = fp(sp.type), cs = -u.hz, sn = u.hx;
+      const sp = u.spray, [fx, fz] = fp(sp.type), fixed = !mobile(u.type), cs = fixed ? -1 : -u.hz, sn = fixed ? 0 : u.hx;
       if (sp.how === 'reclaim') {
-        if (u.sprayAt && t - u.sprayAt < 2) return;
+        if (u.sprayAt && u.sprayOn === sp.id && t - u.sprayAt < 2) return;
         u.sprayAt = t;
+        u.sprayOn = sp.id;
       }
       const q = u.cob ? COB.query(u.cob, 'QueryNanoPiece', [0, 0, 0, 0], facts()) : { r: 0 };
       const piece = q.r > 0 ? q.io[0] : 0;
@@ -1414,7 +1417,7 @@ const WikiSim = (() => {
         w[how] += def(u.type).workerTime / def(s.type).buildTime / TPS * PACE;
         work.set(s, w);
         // the step made progress: the unit's turn sprays at the structure as it stands now
-        u.spray = { how, type: s.type, x: s.x, z: s.z };
+        u.spray = { how, id: s.id, type: s.type, x: s.x, z: s.z };
       };
       for (const u of units) { u.stepped = false; u.spray = null; }
       nemit = 0;
@@ -1479,11 +1482,15 @@ const WikiSim = (() => {
       for (const u of units) {
         const j = jobs.get(u);
         const target = j && units.includes(j.s) && !(j.how === 'build' && j.s.built >= 1) ? j.s : null;
+        let ended = null;
         if (u.work && u.work !== target) {
-          cobCall(u, 'StopBuilding', 'later'); u.work = null; u.workOrder = null; u.stanced = false; u.sprayAt = 0;
+          cobCall(u, 'StopBuilding', 'later'); ended = u.work.id; u.work = null; u.workOrder = null; u.stanced = false;
         }
         if (target && !u.work) { cobCall(u, 'StartBuilding', 'args', [0]); u.work = target; u.workOrder = u.orders[0]; }
+        // a work that ended this tick sprays its last step by its own cadence, forgotten only then -- unless this
+        // tick's spray was a new work's
         if (u.spray) spray(u, sim.tick + 1);
+        if (ended !== null && u.sprayOn === ended) u.sprayAt = 0;
         if (!mobile(u.type)) continue;
         if (u.stepped && !u.moving) { cobCall(u, 'StartMoving', 'now'); cobCall(u, 'MoveRate1', 'now'); }
         else if (!u.stepped && u.moving) cobCall(u, 'StopMoving', 'now');
@@ -1642,6 +1649,8 @@ const WikiSim = (() => {
         // the nano spray's live particles in the order made, each [x, y, z, its step's x, y, z, end, colour] (16.16
         // world units, x, altitude, z), and whether a bound dropped one
         parts: parts.map(p => p.slice()), partsCut,
+        // the second bursts waiting, in the order made, each [its two boxes' twelve words, due, key]
+        bursts: bursts.map(e => [...e.box[0], ...e.box[1], e.due, e.key]),
       };
     };
 

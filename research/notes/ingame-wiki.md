@@ -1412,7 +1412,8 @@ as stated, natively (gcc, with AddressSanitizer and UndefinedBehaviorSanitizer) 
   Type; `locked` is hashed with the sidebar off too. The captions enter it raw. Its last is the
   demo's clock, the wait, `stalled`, then 1 and the scripts' host's own hash, or 0 alone without a
   host (`tagpu_wikisim.h`, item 8), and then the nano spray: the particle count and each
-  particle's x, y, z, its step, its end and its colour, in the order made (item 9).
+  particle's x, y, z, its step, its end and its colour, in the order made, then `part_cut` and the
+  waiting second bursts, each its two boxes, its due tick and its key (item 9).
 
 - **Bit for bit, by construction.** Both visit units in creation order, use no clock and no
   randomness, and compute on doubles with + − × ÷ and sqrt only, each rounded once. The DLL
@@ -1644,8 +1645,8 @@ both fold into theirs, holds them to the same calls.
 - **The spray** is simulated, unlike the poses: a builder whose work is credited this tick asks
   its script's `QueryNanoPiece` (run-now, once a spray: it can write the script's statics) and
   sprays from that piece's origin into the structure's box, every tick for a build and every
-  second tick for a reclaim, in reverse; two bursts of five particles an emission, each a quarter
-  of its distance a tick, its colour cycling `0xA1..0xA7`. The particles are in the view and the
+  second tick for a reclaim, in reverse; two bursts of five particles an emission, each at about
+  4 world units a tick (`len >> 18` steps), its colour cycling `0xA1..0xA7`. The particles are in the view and the
   state hash (item 9), bounded at 1024 live and 256 waiting bursts, drawn from the wiki's own
   stateless generator and never from the host's `rand`. The host answers the query and the
   piece's origin (`tagpu_wikicob_query`, `tagpu_wikicob_origin`, from the model's shape the type

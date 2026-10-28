@@ -388,8 +388,9 @@ reset to `rand()·(reset/2)/0x8000 + reset/2`; a puff dies at `frame >= nframes`
 spray's init (`0x473B50`) cuts each of its two 6-int boxes, on every axis, to its middle: from
 the 4/11 to the 7/11 point of that axis's span, in int32. Its spawn (`0x473D50`) makes five
 sub-particles a call, each from a random point of the first box to a random point of the
-second (six CRT `rand` draws), at a quarter of their distance a tick in a straight line
-(steps = `(int16)(len >> 18)`, a particle of 0 steps not made). One emission is two such
+second (six CRT `rand` draws), in a straight line at about 4 world units a tick
+(steps = `(int16)(len >> 18)` of the 16.16 distance's integer length, `0x473EB6..0x473F04`; a
+particle of 0 steps not made). One emission is two such
 bursts: the first in the builder's turn, moved by the walker the same tick, the second made
 by the walker on the next tick after it moves the live ones, and only when the first made a
 particle. The engine map's *The nano particle* has the addresses.

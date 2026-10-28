@@ -395,7 +395,9 @@ spray: two emitters, fifteen order handlers* and *The nano particle*.
   the structure before the unit's turn). The spray is made in the unit's turn (*The tick*, step
   4), after its build calls. A reclaim sprays in reverse, from the box to the piece, and only every
   second tick from its first spray on that work (ReclaimUnit's state 5 re-arms itself two ticks
-  on, `0x404A57`); the count restarts when the work ends or changes (`spray_at`, `sprayAt`).
+  on, `0x404A57`), its finishing tick included; the cadence is kept per structure (`spray_at` and
+  `spray_on`, `sprayAt` and `sprayOn`), so a new work sprays at once, and it is forgotten after the
+  turn the work ends in, or when the player takes the order away.
 - **QueryNanoPiece on the engine's schedule.** ARMACK's `QueryNanoPiece` and the ARM factories'
   flip a static to alternate two pieces (the retail scripts, decompiled), so the call writes COB
   state and the host's hash depends on how
@@ -411,7 +413,8 @@ spray: two emitters, fifteen order handlers* and *The nano particle*.
   parts: `base`, the root's offset plus MOVE, which the engine does not turn by the body, and
   `turned`, the rest turned by the root's TURN, which the engine turns by the body's angles folded
   into the root's (`0x43DF86`). The host holds no facing, so the simulation turns `turned` by the
-  unit's facing, `(cs, sn) = (−hz, hx)` about the up axis as the stage turns the model, adds
+  unit's facing, `(cs, sn) = (−hz, hx)` about the up axis as the stage turns the model (a type
+  that does not move at the heading (0, 1), as `tagpu_wikiscene.c` `model` draws it), adds
   `base` and the unit's position, and takes z off, as the engine negates it (`0x43E00A`). A piece
   outside the model (the script's answer is data, bounded by the primitive count) answers the
   unit's own point, as `0x43DF16..0x43E01D` does. **The model's shape** the host needs is a new
@@ -444,9 +447,10 @@ spray: two emitters, fifteen order handlers* and *The nano particle*.
   11).
 - **Simulation state, in the hash.** The live particles are `WIKIVPART` (x, y, z, their step, the
   end, the colour) and the waiting second bursts `WIKISPRAY` (the two cut boxes, the due tick, the
-  key); the view carries the particles (`npart`, `part`, `part_cut`; `sim.js` `parts`, `partsCut`)
-  and the state hash appends them after the host's hash, as item 9 (`tagpu_wikisim.h`), so
-  `simparity.mjs` holds them equal tick for tick.
+  key); the view carries both (`npart`, `part`, `part_cut`, `nburst`, `burst`; `sim.js` `parts`,
+  `partsCut`, `bursts`) and the state hash appends them after the host's hash, as item 9
+  (`tagpu_wikisim.h`), so `simparity.mjs` holds them equal tick for tick, a waiting burst on the
+  tick it diverges.
 - **Bounded.** At most `WIKI_SPRAY_PARTS` = 1024 particles live and `WIKI_SPRAY_BURSTS` = 256
   second bursts wait, on the heap, allocated only with a host; a particle or a burst past its bound
   is not made and the view says so (`part_cut`), which the stage's copy turns into
@@ -606,6 +610,13 @@ L4b starts when the wiki shows a unit that emits.
 - **The spray's sight test is the wiki's fog cell**, 16 world units, a grey cell hiding the dot;
   the engine asks the viewed player's sight at its 32-unit tile, the LOS counter with true LOS and
   the mapped bit without (`0x473A50..0x473B05`).
+- **The engine's cap on spray objects is not modelled.** The engine's particle layer holds at most
+  400 objects in stock (20 480 under the raised limits); past that, every emitter, the nano one at
+  `0x47219F` among them, destroys the oldest object and appends anyway (*the ten particle layers*
+  in the engine map), and each emission is one object of up to ten particles. The wiki bounds its
+  own pool instead, 1024 particles and 256 waiting bursts (`WIKI_SPRAY_PARTS`, `WIKI_SPRAY_BURSTS`),
+  a drop flagged and logged rather than the oldest evicted; the busiest demo peaks at 457 live
+  particles (L4a's run, 2026-10-28), so neither bound is reached by the shipped demos.
 - **The spray needs the scripts.** Without a host no unit sprays, so a demo played without the
   scripts, or in a check that plays none, shows no spray.
 - **A pack written before the model's shape** (`gfx.py` before L4a) has no offsets, parents or

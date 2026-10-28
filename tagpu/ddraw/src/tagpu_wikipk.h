@@ -39,7 +39,8 @@
 
    TWO LENGTHS. The area is TAGPU_PK_WIKI_HEAD bytes -- everything before `stage` -- while there is
    no stage to draw (the window closed, or no demo), and sizeof(TAGPU_PK_WIKI) with the stage, so
-   the 142 KB view (80 KB of it the pose pool) is carried only while it is shown. The reader takes
+   the 158 KB view (80 KB of it the pose pool, 16 KB the nano spray's particles; MEASURED as
+   sizeof on the DLL's compiler) is carried only while it is shown. The reader takes
    `stage` only from an area of the whole size (tagpu_pk_wiki_stage). */
 typedef struct TAGPU_PK_WIKI {
     uint8_t  open;              /* the window is open: the game takes no input              */

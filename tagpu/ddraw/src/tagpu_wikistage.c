@@ -817,9 +817,10 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
            and sy = (z >> 16) - ((alt >> 16) >> 1), each word's arithmetic shift (0x473A00..
            0x473A43), filled by DrawBar 0x4BF6F0 from {sx, sy} to {sx + 1, sy + 1} inclusive --
            its fill 0x4CCDEA takes x1 - x0 + 1 columns and y1 - y0 + 1 rows, so 2 x 2 game pixels
-           (DISASSEMBLED) -- in its palette entry, 0xA1..0xA7. Drawn only where the ground under
-           the dot is in sight, as 0x473A50..0x473B05 asks the viewed player's sight at its
-           32-unit tile; off the map, never. A colour outside the ramp is data no simulation makes,
+           (DISASSEMBLED) -- in its palette entry, 0xA1..0xA7. Drawn only where the view's fog
+           cell under the dot is clear: the engine asks the viewed player's sight at its 32-unit
+           tile (0x473A50..0x473B05), the wiki its own 16-unit cell, grey fog hiding the dot as
+           black does; off the map, never. A colour outside the ramp is data no simulation makes,
            and is not drawn. */
         mark(&c, WIKISTAGE_IN_OVER, 0);
         for (i = 0; i < v->npart && i < WIKISTAGE_PARTS; i++) {

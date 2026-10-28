@@ -81,7 +81,8 @@ typedef struct { int glide, hold, gap, back, hover; } WIKITRIPROW;
    2)). An emission is two bursts of five (0x473D50): one on its tick, one on the next (the
    walker 0x471EB0 spawns it again once the object's life of 1 has come, 0x472F60), the second
    only when the first made a particle. A particle runs straight from a point of one box to a
-   point of the other at a quarter of their distance a tick (0x473EB1..0x473F04), each box shrunk
+   point of the other in their distance's integer length >> 18 steps, so about 4 world units a
+   tick (0x473EB6..0x473F04), each box shrunk
    to its middle 4/11 .. 7/11 on every axis (0x473B80..0x473D34); it moves and then dies once the
    tick is past its end (0x4739B0, 0x473B30), its colour cycling 0xA1..0xA7.
 
@@ -154,10 +155,11 @@ typedef struct WIKIUNIT {
     char             job_id[WIKI_ID_MAX];
     int              stepped, moving;
     /* the spray: how its work was credited this tick (HOW_* + 1, 0 none) and the structure's
-       type and centre then (a reclaim may free it before the unit's turn sprays), and the tick
-       of its last reclaim spray on this work (0 none) */
+       id, type and centre then (a reclaim may free it before the unit's turn sprays); and the
+       tick of its last reclaim spray (0 none) and the structure that one was on */
     int              spray, spray_type, spray_at;
     double           spray_x, spray_z;
+    char             spray_id[WIKI_ID_MAX], spray_on[WIKI_ID_MAX];
 } WIKIUNIT;
 
 enum { WIKI_SITE_PLACE, WIKI_SITE_REFUSED, WIKI_SITE_REMOVE };
@@ -261,6 +263,8 @@ typedef struct {
     int              npart;         /* the nano spray's live particles, in the order made */
     const WIKIVPART* part;
     int              part_cut;      /* a particle or a burst was past its bound */
+    int              nburst;        /* the second bursts waiting for their tick, in the order made */
+    const WIKISPRAY* burst;
     int              mode;          /* the armed type, or -1: contextual */
     int              has_side;      /* the sidebar is on: side is the view's */
     WIKIVSIDE        side;
@@ -477,7 +481,9 @@ int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
         the COB host: 1 and tagpu_wikicob_hash from the offset basis as 8 bytes little-endian, or
         0 alone without one;
      9. the nano spray: the particle count, and each particle's x, y, z, its step's x, y, z, its
-        end and its colour, in the view's order.
+        end and its colour, in the view's order; then part_cut (0 or 1) and the waiting second
+        bursts' count, and each one's twelve box words (the first box's, then the second's), its
+        due tick and its key, in the view's order.
    The view's other fields follow from these: queued sites and order lines from the units and
    their orders, the cursor's shape from the mode and the selection, a site's order number from
    the states, footprints from the types, the pace from the entry. The tick the cursor's shape
