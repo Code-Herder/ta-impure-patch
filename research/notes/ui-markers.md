@@ -586,6 +586,12 @@ order-issue game time.
 
 ### 3.3 The five drawers
 
+Which order types reach which drawer, and with which cursor, is the descriptor table in
+[the engine map](exe-reverse-engineering.html) ("What each order type draws"): no stock order
+sets bit 2, and an attack draws its sprite without route dots. The browser lab draws the engine's
+own art for all of this at any zoom, beside what `tagpu_order.c` draws instead
+([tascene](tascene-design.html), *The order markers*).
+
 **Build-site rect `0x438C00`** [BINARY-VERIFIED]: for build orders
 (`node+0x36` = target type): corners = target pos ± UnitDef footprint extents
 (dwords at UnitDef `+0x15E/+0x162/+0x166/+0x16A/+0x172` — the load-time world

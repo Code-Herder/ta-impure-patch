@@ -146,6 +146,10 @@ pack/
   shaders/terrain.*        extracted from tagpu_terr.c
   shaders/sprite.*         extracted from tagpu_feat.c
   shaders/unit.*           extracted from tagpu_native.c
+  orders/atlas.r8.bin      every sequence of anims/cursors.gaf -- the order
+                           markers' art -- 1024 wide, one transparent texel
+                           around each frame; `orders.seqs` in the manifest
+                           names each frame's rect, hotspot and ticks
 
   --undither only, for the exploration lane, same layout as the R8 beside it:
   terrain/atlas.rgba.bin   features/atlas.rgba.bin   units/atlas.rgba.bin
@@ -189,6 +193,8 @@ A **unit instance** in `scene.json` carries `type`, `pos`, `facing`, `id`, and s
 - **`alt`** — present only when the scenario gave an explicit `height`. It is an ABSOLUTE
   altitude, and the viewer subtracts the ground it actually has under the unit, so the builder
   never has to read the height map.
+- **`orders`** — the scenario unit's `orders` list (`cmd` with `to` or `target`), copied as it
+  is. The viewer draws it as a shift-queue; see *The order markers* below.
 
 `serve` and `shot` also stage two **checked-in** files into the pack directory so
 the page can fetch them same-origin: `tascene-view.html` itself and
@@ -319,6 +325,90 @@ be a wipe. Everything else is per side: the top-level query is the base and each
 side's own query overrides it, so `?eye=X,Y&a=engine&b=relief` shares the camera
 and differs only in the look.
 
+### The order markers  [BUILT 2026-10-27, worktree-waypoint_gfx]
+
+**Why it is here.** The game stopped drawing the engine's queued-order art when the order pass
+was ported (G13o, [UI markers](ui-markers.html) §6): `tagpu_order.c` draws a 2.4-px disc for
+each route dot and a crosshair for each waypoint sprite, in the art's ink, so they stay crisp at
+4× and visible at 0.25×. The lab puts the engine's own art back, on a real map, so how it looks
+at each zoom can be judged before anything changes in the DLL.
+
+**What it draws, and by which rule.** `build` packs every sequence of `anims/cursors.gaf` (22,
+`orders/atlas.r8.bin`), and each scenario unit's `orders` list rides its instance.
+`scenarios/tascene-orders.json` is the fixture: tascene-base with a Peewee's move–move–patrol,
+a second Peewee's long leg over the hill, a Flash's attack on the ground, and a construction
+kbot that reclaims a wreck and then guards the lab. The overlay is the engine's walk
+(`0x439B30`, [UI markers](ui-markers.html) §3.2) with nothing changed but the size:
+
+- `pos` starts at the unit (on the terrain, or `agl` above it, as the unit pass puts it), and
+  every order whose descriptor mask has bit 1 or 3 draws its `cursor_ary` sprite at its target
+  and moves `pos` there. The mask and cursor per scenario `cmd` come from the descriptor table
+  ([engine map](exe-reverse-engineering.html), "What each order type draws"); which record a
+  `cmd` issues for a ground unit is [INFERRED] from the names. So an **attack draws its sprite
+  and no dots**.
+- A bit-1 order on the **hovered** unit also draws the route dots from `pos` to the target
+  (`0x4394E0`): a `pathicon` frame every 48 world units of the straight 3-D line, the first at
+  `(age % 30) · 48 / 30`, `age` counted from the order's issue tick. A merely selected unit
+  gets the sprites only. `orddots=all` (the default) hovers every unit, `active` only the one
+  being ordered.
+- The sprite shows frame `(gameTime / (2 · frame 0's ticks)) % count` (`0x439740`) at
+  `ordalpha` 0.5: `PALETTE.ALP` is a half-and-half mix (measured, engine map). `ordanim=cursor`
+  instead steps each frame after its own ticks, the mouse cursor's rule, twice as fast for
+  `cursormove`.
+- The clock is 30 ticks a second, in whole ticks (`ordtick=int`) as the engine steps, or
+  `smooth`. A shot reads `ordtime=` (default 0), so it is deterministic.
+
+**Where it draws.** Onto the canvas after the composite, at canvas resolution, scissored to the
+viewport and to each side's half of the wipe, so the two renderers and any two looks wipe
+against each other like everything else. Every display frame re-presents the composite with
+the markers over it; the world is redrawn only when the camera moves. Not drawn: the fog that
+darkens the engine's markers, and the health bars that paint over them — the lab has neither.
+
+**The knobs** (per side; the status bar toggles them live on every side and writes them back
+into the address bar):
+
+| Knob | Values (default first) | What it does |
+|---|---|---|
+| `ordstyle` | `gaf` · `proc` · `off` | the engine's art; the procedural markers `tagpu_order.c` draws today, by its own constants and ink rule (`seq_ink`); nothing |
+| `ordsize` | `world` · `screen` · `int` · `clamp` | canvas pixels per texel: the zoom (the engine's pixel magnified with the world); 1; the zoom rounded, at least 1; the zoom held in `ordmin..ordmax` (1..2) |
+| `ordfilter` | `nearest` · `sharp` · `linear` | `sharp` keeps each texel flat and blends only the screen pixel across a texel edge |
+| `ordspace` | `world` · `screen` · `octave` | the dot spacing: 48 world units; 48 screen px; 48·2^k world units with k the zoom's octave |
+| `ordanim` | `engine` · `cursor` | the sprite's frame rule, above |
+| `ordtick` | `int` · `smooth` | whole ticks or a continuous clock |
+| `orddots` | `all` · `active` | which units draw their route dots |
+| `ordalpha` | 0.5 | the sprite's opacity |
+
+`orders=<unit>:<cmd>@<x>,<z>;<cmd>#<handle>|…` replaces the scenario's queues and `ordunit=`
+names the unit being ordered. Serving, **shift-click** queues the order picked in the status bar
+at the ground point under the pointer and **ctrl-click** picks the unit within 48 world units;
+undo and clear are buttons. Each queue edit is written back into the URL, so a hand-built queue
+is a link.
+
+**What the zooms showed** [OBSERVED 2026-10-27, contact sheets of `orders-engine`,
+`orders-tuned` and `orders-proc` on `tascene-orders.json` at 0.25×, 0.5×, 1×, 1.5×, 2×, 3×, 4×,
+one fixed game tick]:
+
+- **The engine's rule does not survive a zoom.** Scaled with the world, `pathicon` is a 3-px
+  speck at 0.25× and a 44-px block at 4×, where the dots stand 192 px apart and one fits on
+  screen. At 1× it is the engine's frame.
+- **`clamp` 1..2 with `sharp` and `octave`** (`orders-tuned`) reads at every zoom: the arrows are
+  11–22 px, the dots 34–68 px apart on screen whatever the zoom, and crossing an octave adds or
+  drops every other dot and moves none (each octave's dots are a subset of the finer one's,
+  because the phase keeps the engine's 1.6 world units a tick). At 0.25× the waypoint stars are
+  large against the shrunken world; `ordmin` below 1 is the knob for that.
+- **`sharp` is what makes a non-whole scale look like pixel art**: at 1.5× `nearest` draws the
+  arrow's arms one and two pixels wide by turns, `sharp` evens them, `linear` blurs them. At
+  whole scales `sharp` and `nearest` are the same picture.
+- **`world` size with `octave` spacing does not mix**: at 3× the 33-px arrows sit 36 px apart.
+  Size and spacing want the same rule.
+
+**Gaps.** No frame of the game has been put beside the lab's: at 1× the overlay follows the
+engine's arithmetic but is not pixel-diffed against a GDI capture, and the sub-pixel sprite
+placement, the per-tick integer projection and the ALP palette lookup are approximated in full
+colour. Under `octave` the march keeps the engine's world speed, so on screen it crawls at
+0.25× (12 px/s) and runs at 4× (192 px/s); scaling the speed per octave would move every dot
+at an octave change. Nothing in the DLL has changed.
+
 ### The presets  (`tools/tascene-presets.json`)
 
 | Name | What it is for |
@@ -330,6 +420,9 @@ and differs only in the look.
 | `half-relief` | `relief=0.5`, the middle of that axis |
 | `restored` | the undithered atlases and nothing else changed |
 | `restored-relief` | everything the exploration lane has |
+| `orders-engine` | Classic with the engine's order art scaled with the world, a dot every 48 world units |
+| `orders-proc` | Classic with the order markers tagpu draws today (`tagpu_order.c`) |
+| `orders-tuned` | the engine's order art at 1–2 texels a pixel, sharp-filtered, its dots spaced per zoom octave |
 
 `serve` and `shot` reuse `ta3do`'s existing `Viewer` (`ThreadingHTTPServer`) and `shoot`
 (`--headless=new` Chrome on a private X display, ANGLE/SwiftShader) rather than growing a

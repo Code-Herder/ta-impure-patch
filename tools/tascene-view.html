@@ -264,6 +264,48 @@
      bottom, standing where the reflected art puts them, in the same tone, and
      never drawn over the map itself. Units stay on the map.
 
+     ORDER MARKERS: the engine's queued-order graphics (ui-markers.md §3), in
+     both renderers, from the pack's copy of anims/cursors.gaf. Each unit's
+     scenario `orders` is drawn as a shift-queue by the engine's walk: from
+     the unit, every order whose descriptor mask has bit 1 or 3 draws the
+     cursor_ary sprite at its target, a bit-1 order on the hovered unit also
+     draws the `pathicon` route dots from the previous target to it, and the
+     chain moves on. The dots march 48 world units per 30 ticks, one every 48;
+     the sprite shows frame (gameTime / (2 * frame 0's ticks)) % count at
+     ordalpha (default 0.5, PALETTE.ALP's mix). Drawn onto the canvas after
+     the composite, at canvas resolution, inside each side's half of the
+     wipe, and re-presented every display frame on a 30 Hz game clock, so the
+     world under them is not redrawn to animate them. There is no fog and
+     nothing draws over them. Per side:
+       ordstyle=<s>  gaf (default: the engine's art) | proc (what tagpu draws
+                     today, tagpu_order.c: a 2.4-px disc per dot and a
+                     breathing crosshair, opaque, in the art's ink) | off
+       ordsize=<s>   canvas px per texel: world (default) = the zoom, the
+                     engine's pixel magnified with the world; screen = 1 at
+                     every zoom; int = the zoom rounded, at least 1; clamp =
+                     the zoom held inside ordmin..ordmax (default 1..2)
+       ordfilter=<f> nearest (default) | sharp (each texel flat, only the
+                     pixel across a texel edge blended: even texels at a
+                     scale that is not whole) | linear
+       ordspace=<s>  the dot spacing: world (default) 48 world units; screen
+                     48 canvas px at every zoom; octave 48 x 2^k world units,
+                     k the zoom's octave, each octave's dots every other dot
+                     of the one below, so a zoom adds or drops dots and
+                     moves none
+       ordanim=<a>   engine (default) | cursor: each frame for its own
+                     ticks, as the mouse cursor animates (0x4B8BF0)
+       ordtick=<t>   int (default: the clock in whole ticks, as the engine
+                     steps) | smooth
+       orddots=<d>   all (default: every unit is the hovered one) | active
+                     (only the unit being ordered; the others show their
+                     sprites, as a merely selected unit does)
+       ordalpha=<a>  the sprite's opacity, default 0.5
+     Global: orders=<unit>:<cmd>@<x>,<z>;<cmd>#<handle>|<unit>:… replaces the
+     scenario's queues, ordunit=<id> is the unit being ordered, ordtime=<t> is
+     the clock under shot=1 (default 0). Serving, SHIFT-click queues the order
+     picked in the status bar, CTRL-click picks the unit, and both write back
+     into the address bar.
+
      THE COORDINATE CONVENTION IS TAGPU'S, DELIBERATELY. The extracted vertex
      shader maps game py 0 -> NDC -1, i.e. the offscreen's row 0 is the game
      frame's TOP row and gl_FragCoord.xy is the game-frame pixel — which is what
@@ -348,7 +390,8 @@ async function fetchBin(u) {
 // top-level query overridden by its own a= / b= query overridden by nothing —
 // which is what makes `?eye=X,Y&a=engine&b=relief` share the camera and differ
 // only in the look, i.e. the same pixel coordinates on both sides.
-const GLOBAL = new Set(["shot", "ss", "eye", "wipe", "a", "b", "debug", "zoom"]);
+const GLOBAL = new Set(["shot", "ss", "eye", "wipe", "a", "b", "debug", "zoom",
+                        "orders", "ordunit", "ordtime"]);
 const zoomClamp = (z) => (Number.isNaN(z) ? 1 : Math.max(0.25, Math.min(8, z)));
 let zoom = zoomClamp(parseFloat(Q.get("zoom") || "1"));
 
@@ -516,8 +559,26 @@ function readLook(p, label) {
     edgeFade: Math.max(32, num("edgefade", 1536)),
     edgeSteps: Math.max(0, Math.min(32, num("edgesteps", 0) | 0)),
     edgeDither: p.get("edgedither") === "1",
+    ord: readOrd(p, label),
     stats: {},
   };
+}
+
+// the order overlay's knobs (header, ORDER MARKERS), in both renderers
+function readOrd(p, label) {
+  const o = {};
+  for (const [k, vals] of Object.entries(ORD_KNOBS)) {
+    const v = p.get("ord" + k);
+    if (v !== null && !vals.includes(v))
+      fail(`${label}: ord${k} must be one of ${vals.join(", ")}, not "${v}"`);
+    o[k] = v === null ? vals[0] : v;
+  }
+  const num = (k, d) => (p.get(k) === null || Number.isNaN(parseFloat(p.get(k)))
+                         ? d : parseFloat(p.get(k)));
+  o.alpha = Math.min(1, Math.max(0, num("ordalpha", 0.5)));
+  o.min = Math.max(0.25, num("ordmin", 1));
+  o.max = Math.max(o.min, num("ordmax", 2));
+  return o;
 }
 
 // ---- GL helpers: tascene-render.js's (TR above) --------------------------
@@ -1052,6 +1113,82 @@ void main(){
 }`;
 
 // ---------------------------------------------------------------------------
+// ORDER MARKERS (header, ORDER MARKERS). Drawn straight onto the canvas after
+// the composite, so an animation tick redraws only this layer and never the
+// world. Vertices are canvas px with row 0 at the top; one stride-9 layout for
+// all three primitives: x,y, u,v, mode,alpha, r,g,b.
+const ORD_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 aPos;
+layout(location=1) in vec2 aUV;     // atlas texels (sprite) or -1..1 (disc)
+layout(location=2) in vec2 aMA;     // mode, alpha
+layout(location=3) in vec3 aCol;    // the solid colour of a disc or a bar
+uniform vec2 uCanvas;
+out vec2 vUV; flat out vec2 vMA; flat out vec3 vCol;
+void main(){
+  gl_Position = vec4(aPos.x/uCanvas.x*2.0-1.0, 1.0-aPos.y/uCanvas.y*2.0, 0.0, 1.0);
+  vUV = aUV; vMA = aMA; vCol = aCol;
+}`;
+const ORD_FS = `#version 300 es
+precision highp float;
+in vec2 vUV; flat in vec2 vMA; flat in vec3 vCol;
+out vec4 frag;
+uniform sampler2D uOrd;   // RGBA, every texel its palette colour, (0,0,0,0) at the key
+uniform int uFilter;      // 0 nearest, 1 sharp, 2 linear
+void main(){
+  int mode = int(vMA.x + 0.5);
+  vec4 c;
+  if (mode == 1) {                          // a disc, its edge one pixel soft
+    float r = length(vUV);
+    c = vec4(vCol, 1.0) * clamp((1.0 - r) / max(fwidth(r), 1e-4) + 0.5, 0.0, 1.0);
+  } else if (mode == 2) {
+    c = vec4(vCol, 1.0);                    // a bar
+  } else if (uFilter == 0) {
+    c = texelFetch(uOrd, ivec2(floor(vUV)), 0);
+  } else {
+    vec2 t = vUV;
+    if (uFilter == 1) {
+      // SHARP: each texel flat, and only the one screen pixel straddling a
+      // texel boundary blended — nearest's look without its uneven texels at
+      // a scale that is not a whole number
+      vec2 p = t - 0.5, f = fract(p), s = max(fwidth(p), vec2(1e-4));
+      t = floor(p) + clamp((f - 0.5) / s + 0.5, 0.0, 1.0) + 0.5;
+    }
+    c = texture(uOrd, t / vec2(textureSize(uOrd, 0)));
+  }
+  frag = c * vMA.y;                         // premultiplied
+}`;
+
+// What each scenario order draws: the order descriptor's marker mask (+0x0C)
+// and cursor_ary index (+0x10), read out of the 25-byte records behind
+// *(u32*)0x512344 in the pristine exe (exe-reverse-engineering.md, the order
+// descriptor table). Bit 1 is the sprite and, for the unit under the mouse,
+// the route dots (0x4394E0); bit 3 the sprite alone (0x439740). No stock
+// record sets bit 2, the target circle. Which record a scenario `cmd` issues
+// for a GROUND unit is [INFERRED] from the names: move Move_Ground, patrol
+// Patrol, attack Attack_Chase, defend Follow_Ground, repair RepairUnit,
+// reclaim Reclaim, capture Capture, load Ground_Pickup, unload Ground_Unload,
+// teleport Teleport, blast AttackSpecial.
+const ORDER_TYPES = {
+  move: [0x12, "cursormove"], patrol: [0x12, "cursorpatrol"],
+  attack: [0x08, "cursorattack"], blast: [0x08, "cursorattack"],
+  defend: [0x12, "cursordefend"], repair: [0x12, "cursorrepair"],
+  reclaim: [0x12, "cursorreclamate"], capture: [0x08, "cursorcapture"],
+  load: [0x08, "cursorload"], unload: [0x08, "cursorunload"],
+  teleport: [0x08, "cursorteleport"], stop: [0, null],
+};
+// the overlay's knobs, `ord<key>`; the first value of each is the default
+const ORD_KNOBS = {
+  style: ["gaf", "proc", "off"],
+  size: ["world", "screen", "int", "clamp"],
+  filter: ["nearest", "sharp", "linear"],
+  space: ["world", "screen", "octave"],
+  anim: ["engine", "cursor"],
+  tick: ["int", "smooth"],
+  dots: ["all", "active"],
+};
+
+// ---------------------------------------------------------------------------
 async function main() {
   const scene = await fetchJSON("scene.json");
   let presets = {};
@@ -1411,6 +1548,258 @@ async function main() {
                                   "uZoom", "uZoomC", ...SHADOW_U]);
     }
     uVerts = new Float32Array(65536 * UVST);
+  }
+
+  // ---- ORDER MARKERS (header). The queues: the scenario's `orders` on each
+  // unit, or `orders=` when the URL carries one, which replaces them all. A
+  // node keeps the order's world target, or the handle of a unit or feature
+  // it names, and its issue time in 30 Hz ticks.
+  const OS = scene.orders;
+  const gndAt = (wx, wz) => {
+    const col = Math.min(map.w16 - 1, Math.max(0, wx >> 4));
+    const row = Math.min(map.h16 - 1, Math.max(0, wz >> 4));
+    return heightBuf[row * map.w16 + col];
+  };
+  const instList = (scene.units && scene.units.instances) || [];
+  const instName = (inst, i) => inst.id || `#${i}`;
+  const byName = new Map(instList.map((inst, i) => [instName(inst, i), inst]));
+  // the hot point emitUnits draws a unit about: on the terrain, or `agl` above
+  const instXYZ = (inst) => {
+    const g = gndAt(inst.pos[0], inst.pos[1]);
+    const agl = Math.max(0, inst.alt !== undefined ? inst.alt - g : (inst.agl || 0));
+    return [inst.pos[0], g + agl, inst.pos[1]];
+  };
+  let ordQueues = [];               // [{ unit: name, nodes: [{cmd, to|target, issue}] }]
+  let ordActive = Q.get("ordunit");
+  const parseOrders = (s) => s.split("|").filter(Boolean).map((u) => {
+    const [unit, list = ""] = u.split(":");
+    return { unit, nodes: list.split(";").filter(Boolean).map((n) => {
+      const m = /^([a-z]+)(?:@(-?\d+),(-?\d+)|#(.+))$/.exec(n);
+      if (!m) fail(`orders: cannot read "${n}" — want cmd@x,z or cmd#handle`);
+      return m[4] ? { cmd: m[1], target: m[4], issue: 0 }
+                  : { cmd: m[1], to: [+m[2], +m[3]], issue: 0 };
+    }) };
+  });
+  const ordersQuery = () => ordQueues.filter((q) => q.nodes.length).map((q) =>
+    `${q.unit}:` + q.nodes.map((n) => n.target ? `${n.cmd}#${n.target}`
+                                               : `${n.cmd}@${n.to[0]},${n.to[1]}`).join(";"))
+    .join("|");
+  if (Q.get("orders") !== null) ordQueues = parseOrders(Q.get("orders"));
+  else instList.forEach((inst, i) => {
+    if (inst.orders && inst.orders.length)
+      ordQueues.push({ unit: instName(inst, i),
+                       nodes: inst.orders.map((o) => ({ ...o, issue: 0 })) });
+  });
+  for (const q of ordQueues) {
+    if (!byName.has(q.unit)) fail(`orders: no unit "${q.unit}" in this pack`);
+    for (const n of q.nodes)
+      if (!(n.cmd in ORDER_TYPES))
+        fail(`orders: no order "${n.cmd}" — have ${Object.keys(ORDER_TYPES).join(", ")}`);
+  }
+  if (ordActive === null || !byName.has(ordActive))
+    ordActive = ordQueues.length ? ordQueues[0].unit
+              : instList.length ? instName(instList[0], 0) : null;
+  let ordCmd = "move";              // what a shift-click queues
+  // a node's target in world units (x, altitude, z): a ground point at the
+  // terrain's height there, or where the named unit or feature stands
+  const nodeXYZ = (n) => {
+    if (n.target !== undefined) {
+      const inst = byName.get(n.target);
+      return inst ? instXYZ(inst) : null;
+    }
+    if (!Array.isArray(n.to)) return null;
+    return [n.to[0], gndAt(n.to[0], n.to[1]), n.to[1]];
+  };
+
+  let ordProg = null, ORDU = {}, ordVAO = null, ordVBO = null;
+  let ordVerts = new Float32Array(9 * 6 * 4096);
+  const ordInk = {};                // sequence name -> [r, g, b] 0..1
+  if (OS) {
+    const ab = await fetchBin(OS.atlas.file);
+    const rects = [];
+    for (const s of Object.values(OS.seqs))
+      for (const f of s.frames) rects.push({ x: f.x, y: f.y, w: f.w, h: f.h, key: f.ck });
+    tex2D(gl, 15, gl.RGBA8, OS.atlas.w, OS.atlas.h, gl.RGBA, gl.UNSIGNED_BYTE,
+          baseAtlas(ab, OS.atlas.w, OS.atlas.h, rects, 0), gl.LINEAR);
+    gl.activeTexture(gl.TEXTURE0);
+    // THE INK tagpu_order.c's procedural markers take from the art they
+    // replace (seq_ink): of frame 0's indices holding at least a twentieth of
+    // its opaque texels, the brightest by 2R + 5G + B
+    for (const [name, s] of Object.entries(OS.seqs)) {
+      const f = s.frames[0], hist = new Map();
+      let n = 0;
+      for (let y = 0; y < f.h; y++)
+        for (let x = 0; x < f.w; x++) {
+          const v = ab[(f.y + y) * OS.atlas.w + f.x + x];
+          if (v === f.ck) continue;
+          hist.set(v, (hist.get(v) || 0) + 1); n++;
+        }
+      let best = -1, lum = -1;
+      for (const [v, c] of hist) {
+        if (c < Math.max(1, Math.floor(n / 20))) continue;
+        const l = 2 * palBuf[v * 4] + 5 * palBuf[v * 4 + 1] + palBuf[v * 4 + 2];
+        if (l > lum) { lum = l; best = v; }
+      }
+      ordInk[name] = best < 0 ? [1, 1, 1]
+                   : [palBuf[best * 4] / 255, palBuf[best * 4 + 1] / 255, palBuf[best * 4 + 2] / 255];
+    }
+    ordProg = program(gl, ORD_VS, ORD_FS, "orders");
+    ORDU = uniforms(gl, ordProg, ["uCanvas", "uOrd", "uFilter"]);
+    ordVAO = gl.createVertexArray(); ordVBO = gl.createBuffer();
+    gl.bindVertexArray(ordVAO);
+    gl.bindBuffer(gl.ARRAY_BUFFER, ordVBO);
+    const sizes = [2, 2, 2, 3], offs = [0, 8, 16, 24];
+    for (let i = 0; i < 4; i++) {
+      gl.enableVertexAttribArray(i);
+      gl.vertexAttribPointer(i, sizes[i], gl.FLOAT, false, 9 * 4, offs[i]);
+    }
+    gl.bindVertexArray(null);
+  }
+
+  // THE GAME CLOCK the markers animate on: 30 ticks a second, the engine's
+  // gameTime at normal speed. A shot is a measurement, so it reads ordtime=
+  // (default 0) instead of the wall clock.
+  const ORD_T0 = performance.now();
+  const ordClock = () => SHOT ? parseFloat(Q.get("ordtime") || "0")
+                              : (performance.now() - ORD_T0) * 0.03;
+
+  // One side's markers as canvas-px vertices, by the engine's walk (0x439B30,
+  // ui-markers.md §3.2): `pos` starts at the unit and every drawer that runs
+  // moves it to its node's target, so the dots run unit -> wp1 -> wp2 …
+  function orderVerts(L, tReal) {
+    const o = L.ord;
+    let n = 0;
+    const push = (x, y, u, v, m, a, c) => {
+      if (n + 9 > ordVerts.length) {
+        const g = new Float32Array(ordVerts.length * 2); g.set(ordVerts); ordVerts = g;
+      }
+      ordVerts.set([x, y, u, v, m, a, c[0], c[1], c[2]], n); n += 9;
+    };
+    const quad = (x0, y0, x1, y1, u0, v0, u1, v1, m, a, c) => {
+      push(x0, y0, u0, v0, m, a, c); push(x1, y0, u1, v0, m, a, c); push(x0, y1, u0, v1, m, a, c);
+      push(x1, y0, u1, v0, m, a, c); push(x1, y1, u1, v1, m, a, c); push(x0, y1, u0, v1, m, a, c);
+    };
+    const NOC = [0, 0, 0];
+    // the zoomed frame's projection: tagpu's (wx - eyeX + 128, wz - alt/2 -
+    // eyeY + 32) about the viewport corner, which is what every pass here does
+    const proj = (p) => [vpL + (p[0] - E[0]) * zoom, vpT + (p[2] - p[1] / 2 - E[1]) * zoom];
+    // texels -> canvas px
+    const scale = o.size === "world" ? zoom : o.size === "screen" ? 1
+                : o.size === "int" ? Math.max(1, Math.round(zoom))
+                : Math.min(o.max, Math.max(o.min, zoom));
+    const t = o.tick === "int" ? Math.floor(tReal) : tReal;
+    const frameOf = (s) => {
+      const fr = s.frames, nf = fr.length;
+      if (o.anim === "engine") {
+        // 0x439740: (gameTime / (2 * period)) % count, the period being frame 0's ticks
+        return Math.floor(t / (2 * Math.max(1, fr[0].d))) % nf;
+      }
+      // the mouse cursor's own rule (0x4B8BF0): each frame for its own ticks
+      const total = fr.reduce((a, f) => a + Math.max(1, f.d), 0);
+      let k = t % total;
+      for (let i = 0; i < nf; i++) { k -= Math.max(1, fr[i].d); if (k < 0) return i; }
+      return nf - 1;
+    };
+    const blit = (f, hx, hy, a) => {
+      let x0 = hx - f.hx * scale, y0 = hy - f.hy * scale;
+      if (o.filter === "nearest") { x0 = Math.round(x0); y0 = Math.round(y0); }
+      quad(x0, y0, x0 + f.w * scale, y0 + f.h * scale, f.x, f.y, f.x + f.w, f.y + f.h, 0, a, NOC);
+    };
+    const sprite = (name, P) => {
+      const s = OS.seqs[name];
+      if (!s) return;
+      const [hx, hy] = proj(P);
+      const k = frameOf(s);
+      if (o.style === "gaf") { blit(s.frames[k], hx, hy, o.alpha); return; }
+      // tagpu_order.c draw_sprite: a crosshair breathing on the same frame
+      // index, opaque, in the sequence's ink, one pixel wide
+      const a = s.frames.length > 1 ? k / (s.frames.length - 1) : 0;
+      const out = 4 + 5 * a, inn = 1.5 + 2 * a, c = ordInk[name];
+      const cx = Math.floor(hx) + 0.5, cy = Math.floor(hy) + 0.5;
+      quad(cx - out, cy - 0.5, cx - inn, cy + 0.5, 0, 0, 0, 0, 2, 1, c);
+      quad(cx + inn, cy - 0.5, cx + out, cy + 0.5, 0, 0, 0, 0, 2, 1, c);
+      quad(cx - 0.5, cy - out, cx + 0.5, cy - inn, 0, 0, 0, 0, 2, 1, c);
+      quad(cx - 0.5, cy + inn, cx + 0.5, cy + out, 0, 0, 0, 0, 2, 1, c);
+    };
+    // 0x4394E0: a dot every 48 world units from `a` towards `b`, the first at
+    // the phase (age % 30) * 48 / 30, the frame stepping once per dot
+    const dots = (A, B, issue) => {
+      const s = OS.seqs.pathicon;
+      const dx = B[0] - A[0], dy = B[1] - A[1], dz = B[2] - A[2];
+      const len = Math.hypot(dx, dy, dz);
+      if (len < 1 || !s) return;
+      const age = Math.max(0, t - issue);
+      let step = 48, phase;
+      if (o.space === "world") phase = (age % 30) * 1.6;
+      else if (o.space === "screen") { step = 48 / zoom; phase = (age % 30) * 1.6 / zoom; }
+      else {
+        // OCTAVE: 48 x 2^k world units, k the zoom's octave, at the engine's
+        // 1.6 units a tick. Each octave's dots are every other dot of the one
+        // below, so crossing an octave adds or drops dots and moves none
+        const p2 = Math.pow(2, Math.round(-Math.log2(zoom)));
+        step = 48 * p2; phase = (age % (30 * p2)) * 1.6;
+      }
+      const nf = s.frames.length;
+      let fi = Math.floor(age / Math.max(1, s.frames[0].d)) % nf;
+      const ink = ordInk.pathicon;
+      for (let c = phase, i = 0; c < len && i < 4096; c += step, i++) {
+        const f = c / len;
+        const [px, py] = proj([A[0] + dx * f, A[1] + dy * f, A[2] + dz * f]);
+        if (o.style === "gaf") blit(s.frames[fi], px, py, 1);
+        else quad(px - 2.4, py - 2.4, px + 2.4, py + 2.4, -1, -1, 1, 1, 1, 1, ink);
+        fi = (fi + 1) % nf;
+      }
+    };
+    for (const q of ordQueues) {
+      const inst = byName.get(q.unit);
+      if (!inst) continue;
+      // the unit under the mouse gets flag 1 and its dots; a selected one
+      // only its sprites (0x48CC30) — `orddots=active` makes the active unit
+      // the hovered one, `all` hovers every unit
+      const hovered = o.dots === "all" || q.unit === ordActive;
+      let pos = instXYZ(inst);
+      for (const nd of q.nodes) {
+        const [mask, seq] = ORDER_TYPES[nd.cmd];
+        if (!(mask & 0x0A)) continue;
+        const P = nodeXYZ(nd);
+        if (!P) continue;
+        sprite(seq, P);
+        if ((mask & 0x02) && hovered) dots(pos, P, nd.issue);
+        pos = P;
+      }
+    }
+    return n / 9;
+  }
+
+  // the markers over the composite, each side inside its own half of the wipe
+  // and inside the engine's viewport
+  function drawOrders() {
+    if (!ordProg || !ordQueues.length) return;
+    const tNow = ordClock();
+    gl.useProgram(ordProg);
+    gl.uniform2f(ORDU.uCanvas, GW, GH);
+    gl.uniform1i(ORDU.uOrd, 15);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.enable(gl.SCISSOR_TEST);
+    gl.bindVertexArray(ordVAO);
+    gl.bindBuffer(gl.ARRAY_BUFFER, ordVBO);
+    const split = wipe > 1 ? GW : Math.round(wipe * GW);
+    for (let i = 0; i < sides.length; i++) {
+      const L = sides[i];
+      if (L.ord.style === "off") continue;
+      const x0 = Math.max(vpL, i ? split : 0), x1 = Math.min(vpL + vw, i ? GW : split);
+      if (x1 <= x0) continue;
+      gl.scissor(x0, GH - vpT - vh, x1 - x0, vh);
+      const nv = orderVerts(L, tNow);
+      if (!nv) continue;
+      gl.uniform1i(ORDU.uFilter, ["nearest", "sharp", "linear"].indexOf(L.ord.filter));
+      gl.bufferData(gl.ARRAY_BUFFER, ordVerts.subarray(0, nv * 9), gl.DYNAMIC_DRAW);
+      gl.drawArrays(gl.TRIANGLES, 0, nv);
+    }
+    gl.bindVertexArray(null);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.disable(gl.BLEND);
   }
 
   // ---- the shadow map: one depth texture, re-rendered per side, read through
@@ -2176,7 +2565,13 @@ async function main() {
       if (!SHOT) report();
       return;
     }
+    present();
+    if (!SHOT) report();
+  }
 
+  // the composite and the order markers over it: all an animation tick
+  // redraws, since the world under the markers has not moved
+  function present() {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.disable(gl.SCISSOR_TEST);
     gl.disable(gl.DEPTH_TEST);
@@ -2193,8 +2588,7 @@ async function main() {
     gl.bindVertexArray(blitVAO);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
-
-    if (!SHOT) report();
+    drawOrders();
   }
 
   // The edge, live. It is per look, so the toggle sets it on every side.
@@ -2206,6 +2600,30 @@ async function main() {
     return `<div class="row modes"><span>edge</span>${knob("black")}${knob("mirror")}</div>`;
   }
 
+  // The order overlay's knobs, live, on every side at once like the edge; a
+  // button is lit only when every side agrees. The second row is the queue a
+  // shift-click edits.
+  function orderRows() {
+    if (!OS) return [];
+    const knobs = Object.entries(ORD_KNOBS).map(([k, vals]) => {
+      const cur = sides.every((L) => L.ord[k] === sides[0].ord[k]) ? sides[0].ord[k] : "";
+      return `<span>${k}</span>` + vals.map((v) =>
+        `<button data-ord="${k}:${v}" class="${cur === v ? "on" : ""}">${v}</button>`).join("");
+    }).join("");
+    const o = sides[0].ord;
+    const cmds = Object.keys(ORDER_TYPES).filter((c) => ORDER_TYPES[c][0]).map((c) =>
+      `<button data-ordcmd="${c}" class="${ordCmd === c ? "on" : ""}">${c}</button>`).join("");
+    const nq = ordQueues.reduce((a, q) => a + q.nodes.length, 0);
+    return [
+      `<div class="row modes"><span>orders</span>${knobs}` +
+      `<span>alpha</span><b>${o.alpha}</b>` +
+      (o.size === "clamp" ? `<span>scale</span><b>${o.min}..${o.max}</b>` : "") + `</div>`,
+      `<div class="row modes"><span>queue</span><b>${ordActive ?? "no unit"}</b>` +
+      `<span>${nq} orders</span>${cmds}` +
+      `<button data-ordedit="undo">undo</button><button data-ordedit="clear">clear</button>` +
+      `<span>shift-click queues · ctrl-click picks the unit</span></div>`];
+  }
+
   function report() {
     const s0 = sides[0].stats, on = new Set(sides.map((L) => L.lane));
     const rows = [
@@ -2214,6 +2632,7 @@ async function main() {
       `<button data-mode="explore" class="${on.has("explore") ? "on" : ""}">Classic++</button>` +
       `</div>`,
       edgeRow(),
+      ...orderRows(),
       `<div class="row"><b>${map.name}</b> <span>${map.w16}x${map.h16} cells</span>` +
       `<span>eye</span><b>${eye[0]},${eye[1]}</b>` +
       `<span>grid</span><b>${s0.cols}x${s0.rows}</b>` +
@@ -2265,6 +2684,30 @@ async function main() {
     // on screen keeps its side's own parameters; a new one comes in at its
     // defaults; the live eye, ss, debug and the wipe position carry over.
     bar.addEventListener("click", (e) => {
+      const ok = e.target.closest("button[data-ord]");
+      if (ok) {
+        const [k, v] = ok.dataset.ord.split(":");
+        for (const L of sides) {
+          L.ord[k] = v;
+          const q = new URLSearchParams(L.query);
+          if (v === ORD_KNOBS[k][0]) q.delete("ord" + k); else q.set("ord" + k, v);
+          L.query = q.toString();
+        }
+        writeQuery("ord" + k, v === ORD_KNOBS[k][0] ? null : v);
+        report(); present();
+        return;
+      }
+      const oc = e.target.closest("button[data-ordcmd]");
+      if (oc) { ordCmd = oc.dataset.ordcmd; report(); return; }
+      const oe = e.target.closest("button[data-ordedit]");
+      if (oe) {
+        const q = ordQueues.find((x) => x.unit === ordActive);
+        if (oe.dataset.ordedit === "clear") ordQueues = [];
+        else if (q) q.nodes.pop();
+        writeQuery("orders", ordersQuery());
+        report(); present();
+        return;
+      }
       const set = e.target.closest("button[data-edge]");
       if (set) {
         const edge = set.dataset.edge;
@@ -2316,11 +2759,23 @@ async function main() {
       eye[0] = Math.round(cam[0]); eye[1] = Math.round(cam[1]);
     };
     // the edge, written back into the address bar so the look stays a link
-    const writeEdgeQuery = (edge) => {
+    const writeEdgeQuery = (edge) => writeQuery("edge", edge === "black" ? null : edge);
+    // one top-level parameter written back into the address bar; null deletes
+    // it. Under a wipe the per-side knobs live inside a= and b=, so they are
+    // rewritten there too
+    function writeQuery(k, v) {
       const q = new URLSearchParams(location.search);
-      if (edge === "black") q.delete("edge"); else q.set("edge", edge);
+      const put = (p) => { if (v === null || v === "") p.delete(k); else p.set(k, v); };
+      if (!GLOBAL.has(k) && (q.has("a") || q.has("b"))) {
+        for (const s of ["a", "b"]) {
+          if (!q.has(s)) continue;
+          const raw = q.get(s);
+          const inner = new URLSearchParams(raw.includes("=") ? raw : "preset=" + raw);
+          put(inner); q.set(s, inner.toString());
+        }
+      } else put(q);
       history.replaceState(null, "", "?" + q.toString());
-    };
+    }
     // the game-space point under the pointer: the canvas is the game frame 1:1
     const gamePoint = (e) => {
       const r = cv.getBoundingClientRect();
@@ -2400,7 +2855,39 @@ async function main() {
       return (e.clientX - r.left) / r.width;
     };
     let drag = null;
+    // the ground point under the pointer: invert the projection, then walk
+    // the terrain's own half-height lift until it settles
+    const groundPoint = (e) => {
+      const [sx, sy] = gamePoint(e);
+      if (sx < vpL || sx >= vpL + vw || sy < vpT || sy >= vpT + vh) return null;
+      const wx = Math.round(E[0] + (sx - vpL) / zoom), wz0 = E[1] + (sy - vpT) / zoom;
+      let wz = wz0;
+      for (let i = 0; i < 4; i++) wz = wz0 + gndAt(wx, Math.round(wz)) / 2;
+      return [wx, Math.round(wz)];
+    };
+    // SHIFT-CLICK queues the selected order at the ground point, CTRL-CLICK
+    // makes the nearest unit (within 48 world units) the one being ordered
+    function orderClick(e) {
+      const g = groundPoint(e);
+      if (!g) return;
+      if (e.ctrlKey) {
+        let best = null, bd = 48;
+        instList.forEach((inst, i) => {
+          if (inst.feature) return;
+          const d = Math.hypot(inst.pos[0] - g[0], inst.pos[1] - g[1]);
+          if (d < bd) { bd = d; best = instName(inst, i); }
+        });
+        if (best) { ordActive = best; writeQuery("ordunit", best); }
+      } else if (ordActive) {
+        let q = ordQueues.find((x) => x.unit === ordActive);
+        if (!q) ordQueues.push(q = { unit: ordActive, nodes: [] });
+        q.nodes.push({ cmd: ordCmd, to: g, issue: Math.floor(ordClock()) });
+        writeQuery("orders", ordersQuery());
+      }
+      report(); present();
+    }
     cv.addEventListener("pointerdown", (e) => {
+      if (OS && (e.shiftKey || e.ctrlKey)) { orderClick(e); return; }
       if (sides.length > 1 && Math.abs(canvasX(e) - wipe) * GW < 8) drag = { wipe: true };
       else { settle(); drag = { x: e.clientX, y: e.clientY, cx: cam[0], cy: cam[1] }; }
       cv.setPointerCapture(e.pointerId);
@@ -2423,6 +2910,17 @@ async function main() {
       kick();
     });
     cv.addEventListener("pointerup", () => { drag = null; });
+    // THE MARKERS ANIMATE on their own clock: every display frame re-presents
+    // the composite with the markers over it, unless a world frame is already
+    // on its way (it presents too)
+    if (ordProg) {
+      const tick = () => {
+        if (!raf && !contextLost && ordQueues.length &&
+            sides.some((L) => L.ord.style !== "off")) present();
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    }
   }
 
   draw();

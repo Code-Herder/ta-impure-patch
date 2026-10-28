@@ -1,0 +1,257 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The tascene order-marker fixture: tascene-base's ARM base with shift-queues on four units, for the lab's order overlay (tascene-view.html, ORDER MARKERS). A Peewee moves twice and patrols, a Flash attacks ground, a construction kbot reclaims a wreck and then guards the lab, and a second Peewee walks a long leg off to the east so the route dots cross the hill. The lab draws each list as a shift-queue; the game's applier keeps only the last order of a list today (scenario-format.md), so this file is a lab fixture.",
+ "seed": 20260903,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "lab",
+   "type": "ARMLAB",
+   "owner": 0,
+   "pos": [
+    6560,
+    12330
+   ]
+  },
+  {
+   "id": "mex1",
+   "type": "ARMMEX",
+   "owner": 0,
+   "pos": [
+    6300,
+    12470
+   ]
+  },
+  {
+   "id": "mex2",
+   "type": "ARMMEX",
+   "owner": 0,
+   "pos": [
+    6720,
+    12440
+   ]
+  },
+  {
+   "id": "llt",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    6640,
+    12060
+   ]
+  },
+  {
+   "id": "pw1",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    6380,
+    12300
+   ],
+   "facing": 30,
+   "stance": "hold",
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      6560,
+      12200
+     ]
+    },
+    {
+     "cmd": "move",
+     "to": [
+      6740,
+      12260
+     ]
+    },
+    {
+     "cmd": "patrol",
+     "to": [
+      6820,
+      12040
+     ]
+    }
+   ]
+  },
+  {
+   "id": "pw2",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    6440,
+    12330
+   ],
+   "facing": 135,
+   "stance": "hold"
+  },
+  {
+   "id": "pw3",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    6400,
+    12390
+   ],
+   "facing": 225,
+   "stance": "hold"
+  },
+  {
+   "id": "pw4",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    6470,
+    12420
+   ],
+   "facing": 300,
+   "stance": "hold",
+   "orders": [
+    {
+     "cmd": "move",
+     "to": [
+      6300,
+      11960
+     ]
+    },
+    {
+     "cmd": "move",
+     "to": [
+      6050,
+      12000
+     ]
+    }
+   ]
+  },
+  {
+   "id": "fl1",
+   "type": "ARMFLASH",
+   "owner": 0,
+   "pos": [
+    6250,
+    12300
+   ],
+   "facing": 60,
+   "stance": "hold",
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      6020,
+      12120
+     ]
+    }
+   ]
+  },
+  {
+   "id": "fl2",
+   "type": "ARMFLASH",
+   "owner": 0,
+   "pos": [
+    6300,
+    12360
+   ],
+   "facing": 170,
+   "stance": "hold"
+  },
+  {
+   "id": "fl3",
+   "type": "ARMFLASH",
+   "owner": 0,
+   "pos": [
+    6180,
+    12330
+   ],
+   "facing": 290,
+   "stance": "hold"
+  },
+  {
+   "id": "ck",
+   "type": "ARMCK",
+   "owner": 0,
+   "pos": [
+    6250,
+    12200
+   ],
+   "facing": 90,
+   "stance": "hold",
+   "orders": [
+    {
+     "cmd": "reclaim",
+     "target": "w_pw2"
+    },
+    {
+     "cmd": "defend",
+     "target": "lab"
+    }
+   ]
+  }
+ ],
+ "features": [
+  {
+   "id": "w_pw1",
+   "type": "armpw_dead",
+   "pos": [
+    6360,
+    12060
+   ],
+   "facing": 45
+  },
+  {
+   "id": "w_pw2",
+   "type": "armpw_dead",
+   "pos": [
+    6400,
+    12120
+   ],
+   "facing": 200
+  },
+  {
+   "id": "w_flash",
+   "type": "armflash_dead",
+   "pos": [
+    6480,
+    12080
+   ],
+   "facing": 120
+  },
+  {
+   "id": "w_mex",
+   "type": "armmex_dead",
+   "pos": [
+    6200,
+    12500
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   6336,
+   12192
+  ],
+  "pin": true
+ }
+}

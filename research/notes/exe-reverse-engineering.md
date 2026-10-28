@@ -11464,6 +11464,43 @@ The engine indexes this with the raw type byte and no bound at all, here and at 
 handler dispatches. With a live end pointer in `0x512348` the bound costs two loads, so ours
 takes it.
 
+**What each order type draws** [READ 2026-10-27 from the three `.rdata` sources at `0x4FC6E8`,
+`0x4FCA18` and `0x4FC490`, 25-byte stride, sorted by name as `0x43C050` sorts them]. Every record
+whose `+0x0C` mask or `+0x10` cursor index is non-zero; the 68th record, the empty-named one at
+`0x4FD288`, has neither. Mask bits are the walker's (`0x439B30`): `0x01` build-site rect, `0x02`
+target sprite plus the route dots for the hovered unit, `0x04` target circle, `0x08` target sprite,
+`0x10` range circles. **No stock record sets `0x04`**, so the target-circle drawer `0x4399F0` is
+reached by no order in an unmodified game. Cursor names are `cursor_ary`'s (below).
+
+| Mask | Cursor | Order types (type byte) |
+| --- | --- | --- |
+| `0x12` | `cursormove` | Move_Ground `0x1A` |
+| `0x12` | `cursorpatrol` | Patrol `0x1D`, RepairPatrol `0x22` |
+| `0x12` | `cursorreclamate` | Reclaim `0x20`, ReclaimUnit `0x21`, Resurrect `0x25` |
+| `0x12` | `cursorrepair` | RepairUnit `0x23` |
+| `0x12` | `cursordefend` | Follow_Ground `0x12` |
+| `0x18` | `cursorrepair` | HelpBuild `0x17`, RepairUnitNoMove `0x24` |
+| `0x13` / `0x03` | none (index 0) | MobileBuild `0x19` / VTOL_MobileBuild `0x36` |
+| `0x10` | `cursorselect` | Standby `0x29`, Standby_Mine `0x2A` |
+| `0x08` | `cursorattack` | AirToAir `0x03`, AirToGround `0x04`, AirToGroundHover `0x05`, Attack_Chase `0x06`, Attack_Kamikaze `0x07`, Attack_NoMove `0x08`, AttackSpecial `0x09`, Suppress `0x2E` |
+| `0x08` | others | AirStrike `0x02` (`cursorairstrike`), Capture `0x0E` (`cursorcapture`), Ground_Pickup `0x14` (`cursorload`), Ground_Unload `0x15` (`cursorunload`), Teleport `0x2F` (`cursorteleport`), VTOL_HelpBuild `0x33` (`cursorrepair`), VTOL_Landing `0x35` (`cursormove`), VTOL_Pickup `0x39` (`cursorpickup`), VTOL_Unload `0x41` (`cursorteleport`) |
+| `0x02` | as named | QMove `0x1E`, VTOL_Move `0x37` (`cursormove`); QPatrol `0x1F`, VTOL_Patrol `0x38`, VTOL_RepairPatrol `0x3C` (`cursorpatrol`); VTOL_Follow `0x31` (`cursordefend`); VTOL_Reclaim `0x3A`, VTOL_ReclaimUnit `0x3B` (`cursorreclamate`); VTOL_RepairUnit `0x3D` (`cursorrepair`) |
+
+The rest carry mask 0 with cursor 19 `cursornormal` (Park `0x1C` 14 `cursormove`, VTOL_Standby
+`0x40` 15 `cursorselect`) and draw nothing: the walker ANDs the mask before any drawer runs.
+**An attack draws its sprite and no route dots** (`0x08` only), so a queue's dots skip the leg
+into an attack target and resume from it, since the sprite still moves `pos`.
+
+**The art these name** (`anims/cursors.gaf`, retail): `pathicon` is ONE 11×11 frame, hotspot
+5,5, so the route dots' per-dot frame step `0x4394E0` takes changes nothing on stock data and the
+march is the 48-unit phase alone. `cursormove` is eight 8-tick frames, so at the sprite's
+`(gameTime / (2·8)) % 8` it cycles in 128 ticks, 4.3 s — half the speed of the same sequence as
+the mouse cursor, which steps each frame after its own 8 ticks (`0x4B8BF0`). The sprite's
+`AlphaCompsteBuf2OFFScreen` blend is a 50 % mix: `palettes\PALETTE.ALP` at `[src·256 + dst]`
+lands within 20 RGB units of the palette colour nearest the half-and-half mix for 57 % of 300
+random pairs, against 14–15 % at a 25/75 weight either way round [MEASURED 2026-10-27; the misses are palette
+quantisation].
+
 ### `0x438C00` — the build-site footprint rect
 
 **`node+0x16` TELLS AN EMPTY SITE FROM ONE ALREADY UNDER CONSTRUCTION** [MEASURED LIVE

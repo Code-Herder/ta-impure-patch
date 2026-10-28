@@ -708,6 +708,55 @@ def build_features(tnt, defs, gafs, out, restore=None, scenario=None):
             "defs": defs_out}
 
 
+def build_orders(assets, out):
+    """Every sequence of `anims/cursors.gaf`: the order markers' art.
+
+    The engine draws a queued order's route dots from `pathicon` and its target
+    sprite from `cursor_ary[idx]`, both sequences of this one GAF
+    (exe-reverse-engineering.md, "cursor_ary"; ui-markers.md §3). A sequence
+    entry in the file IS the engine's in-memory sequence: u16 frame count at
+    +0, the loop byte at +2, the name at +8, and at +0x28 one (frame pointer,
+    u32 duration in 30 Hz ticks) pair per frame. Frames are packed with one
+    transparent texel around each, so a filtered sample never reads a
+    neighbour."""
+    path = "anims/cursors.gaf"
+    if not assets.has(path):
+        return None
+    blob = assets.read(path)
+    _sig, count, _ = struct.unpack_from("<III", blob, 0)
+    frames, seqs = {}, {}
+    for off in struct.unpack_from(f"<{count}I", blob, 12):
+        n, loop = struct.unpack_from("<HH", blob, off)
+        name = blob[off + 8:off + 40].split(b"\0")[0].decode("latin-1").lower()
+        if n <= 0:
+            continue
+        seq = {"loop": loop & 0xFF, "frames": []}
+        for i in range(n):
+            fptr, dur = struct.unpack_from("<II", blob, off + 0x28 + 8 * i)
+            key = f"{name}:{i}"
+            frames[key] = ta3do.gaf_frame(blob, fptr)
+            hx, hy = gaf_hotspot(blob, fptr)
+            seq["frames"].append({"key": key, "hx": hx, "hy": hy, "d": dur & 0xFFFF})
+        seqs[name] = seq
+    place, ah = shelf_pack(frames, width=1024, pad=1)
+    aw, ah = 1024, max(1, ah)
+    atlas = bytearray(aw * ah)
+    for key, (x, y) in place.items():
+        f = frames[key]
+        for r in range(f.height):
+            o = (y + r) * aw + x
+            atlas[o:o + f.width] = f.pixels[r * f.width:(r + 1) * f.width]
+    for seq in seqs.values():
+        for fr in seq["frames"]:
+            key = fr.pop("key")
+            f = frames[key]
+            x, y = place[key]
+            fr.update({"x": x, "y": y, "w": f.width, "h": f.height, "ck": f.transparent})
+    (out / "orders").mkdir(parents=True, exist_ok=True)
+    (out / "orders/atlas.r8.bin").write_bytes(bytes(atlas))
+    return {"atlas": {"w": aw, "h": ah, "file": "orders/atlas.r8.bin"}, "seqs": seqs}
+
+
 # --------------------------------------------------------------------------- shade
 
 # tagpu_render3do.c calibrates the engine's PALETTE.SHD rather than assuming:
@@ -934,6 +983,12 @@ def build_units(scenario, assets, out, restore=None, defs=None):
         # the ground under the unit -- the builder never reads the height map
         if isinstance(unit.get("height"), (int, float)):
             inst["alt"] = int(unit["height"])
+        # the viewer draws the list as a shift-queue, which is what the
+        # scenario format means by it (scenario-format.md: the game's applier
+        # keeps only the last order today)
+        if isinstance(unit.get("orders"), list):
+            inst["orders"] = [{k: o[k] for k in ("cmd", "to", "target") if k in o}
+                              for o in unit["orders"] if isinstance(o, dict)]
         instances.append(inst)
     for feat in scenario.get("features", []):
         obj = feature_object(defs, feat)
@@ -1187,6 +1242,7 @@ def cmd_build(args):
     if not args.no_features:
         features = build_features(tnt, defs, GafBank(assets), out, restore, scenario)
     units = None if args.no_units else build_units(scenario, assets, out, restore, defs)
+    orders = build_orders(assets, out)
 
     manifest = {
         "format": "ta-scene/1",
@@ -1208,6 +1264,7 @@ def cmd_build(args):
                     "neutral": shd_neutral(shd, palette) if shd else [15, 1]},
         "features": features,
         "units": units,
+        "orders": orders,
         "depth": {"terrain": 0.10, "scale": 512.0,
                   "flat0": 0.40, "flatSpan": 0.10, "tall0": 3.0, "rowStep": 4.0,
                   "unit0": 1.0, "shadowTall": 0.30, "shadowFlat": 0.03},
