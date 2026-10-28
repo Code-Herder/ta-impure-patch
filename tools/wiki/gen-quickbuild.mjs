@@ -43,9 +43,12 @@ const units = {
 };
 
 /* the map, 40 x 30 cells, 480 rows: as tall as stock TA's sidebar beside it (the owner's
-   decision 9 in research/notes/ingame-wiki.md). Deposits: A 5x5 (a Moho fits), B C E 3x3, S 3x3 between the map's
-   unbuildable top row and a finished ARMGEO (no Moho site over it is legal), D 3x3 under the player's finished
-   ARMMEX, R 3x3 beside the broad metal band, one deposit in the black corner and one under grey fog. Vents: a free
+   decision 9 in research/notes/ingame-wiki.md). Every deposit is 3x3, one greenworld metal rock's footprint, and its
+   value is that rock's `metal=` (RockMetal2 86, RockMetal1 127, RockMetal 187, RockMetal3 223, totala1.hpi), so the
+   stage draws the rock whose value the deposit holds (tools/wiki/stagemap.py refuses any other value). Deposits: A
+   with room round it for a Moho, B C E, S between the map's unbuildable top row and a finished ARMGEO (no Moho site
+   over it is legal), D under the player's finished ARMMEX, R beside the broad metal band, one deposit in the black
+   corner and one under grey fog. Vents: a free
    one, and the one under the ARMGEO. The metal ground and the fog cover whole tiles (even cells): the stage's ground
    is drawn in the map's 2 x 2-cell tiles and its fog in the engine's 32-unit blocks, so a rect off that grid has no
    picture (research/notes/ingame-wiki-3d-stage-plan.md, section 4; tools/wiki/stagemap.py check refuses one). R
@@ -55,16 +58,16 @@ const units = {
 const scene = {
   map: { w: 40, h: 30, surfaceMetal: 0 },
   metal: [
-    { rect: [13, 15, 5, 5], v: 90 }, { rect: [14, 16, 3, 3], v: 170 },   // A
-    { rect: [22, 3, 3, 3], v: 140 },                                     // B
-    { rect: [9, 7, 3, 3], v: 120 },                                      // C
-    { rect: [3, 10, 3, 3], v: 120 },                                     // E
-    { rect: [15, 1, 3, 3], v: 130 },                                     // S
-    { rect: [26, 15, 3, 3], v: 150 },                                    // D
+    { rect: [14, 16, 3, 3], v: 223 },                                    // A
+    { rect: [22, 3, 3, 3], v: 187 },                                     // B
+    { rect: [9, 7, 3, 3], v: 127 },                                      // C
+    { rect: [3, 10, 3, 3], v: 86 },                                      // E
+    { rect: [15, 1, 3, 3], v: 127 },                                     // S
+    { rect: [26, 15, 3, 3], v: 86 },                                     // D
     { rect: [34, 0, 6, 30], v: 40 },                                     // broad metal ground, edge to edge
-    { rect: [29, 19, 3, 3], v: 160 },                                    // R, closed by background cells
-    { rect: [2, 2, 3, 3], v: 120 },                                      // in the black corner
-    { rect: [3, 18, 3, 3], v: 110 },                                     // under grey fog
+    { rect: [29, 19, 3, 3], v: 187 },                                    // R, closed by background cells
+    { rect: [2, 2, 3, 3], v: 127 },                                      // in the black corner
+    { rect: [3, 18, 3, 3], v: 86 },                                      // under grey fog
   ],
   vents: [at(28, 9), at(16, 5)],
   fog: [{ rect: [0, 0, 8, 8], kind: 'black' }, { rect: [0, 16, 10, 8], kind: 'grey' }],

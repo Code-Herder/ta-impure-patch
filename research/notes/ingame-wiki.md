@@ -412,8 +412,8 @@ they were not re-disassembled for this table.
 | Stage element | Game asset | Impure code that draws it in game | `gfx=game` in the mockup |
 |---|---|---|---|
 | Ground | The map's TNT tiles: the tile set `*(main+0x14283)`, 32 × 32 8-bpp, and the tile map `*(main+0x1428B)`, one u16 per 32-pixel cell | `tagpu_terr.c` `ensure_atlas` (the R8 atlas, 64 tiles a row, 34-texel pitch) and `tagpu_terr_gather`; `tagpu_vk_terr.c` `tagpu_vk_terr_record`. `tagpu_terrown.c` `terr_fill` suppresses the engine's blit `0x483FA0`. | The stage description's tiles (`art/wiki/stage/<entry>.json`), in the same atlas form, through tagpu's terrain shader (`tascene-render.js` `classicTerrain`) |
-| Metal deposit | A map **feature** with `metal=` and footprint 3 × 3: on lush maps `lushmetal1..3` (`metals.gaf`, `seqname` frame 0). The metal a mex reads is the feature-grid byte `+7`, which `0x422040` writes from the definition; the sprite is only the picture. | The feature pass, which has no metal case: `tagpu_feat.c` `tagpu_feat_gather` → `draw_feature`; `tagpu_vk_feat.c` `tagpu_vk_feat_record`. `tagpu_featown.c` skips the engine leaf `0x46A610`. | The description's deposit feature, frame 0 of its sequence at its GAF hotspot, through tagpu's sprite shader (`classicSprites`) |
-| Geothermal vent | A map feature with `geothermal=1`, footprint 1 × 1: on lush maps `lushvent01..03` (`lushvents.gaf`, `geovent0N`) | The feature pass, as for metal | The description's vent feature, as for metal |
+| Metal deposit | A map **feature** with `metal=` and footprint 3 × 3: on lush maps `lushmetal1..3` (`metals.gaf`, `seqname` frame 0); on greenworld maps the rocks `RockMetal2`, `RockMetal1`, `RockMetal`, `RockMetal3` of `features\green\metal.tdf` (`metal=` 86, 127, 187, 223; `rocks.gaf`), which the stage draws. The metal a mex reads is the feature-grid byte `+7`, which `0x422040` writes from the definition; the sprite is only the picture. | The feature pass, which has no metal case: `tagpu_feat.c` `tagpu_feat_gather` → `draw_feature`; `tagpu_vk_feat.c` `tagpu_vk_feat_record`. `tagpu_featown.c` skips the engine leaf `0x46A610`. | The description's deposit feature, frame 0 of its sequence at its GAF hotspot, through tagpu's sprite shader (`classicSprites`) |
+| Geothermal vent | A map feature with `geothermal=1`, footprint 1 × 1: on lush maps `lushvent01..03` (`lushvents.gaf`, `geovent0N`); on greenworld maps `GreenVent01..10` and `Geothermal` (`greenvents.gaf`), which the stage draws | The feature pass, as for metal | The description's vent feature, as for metal |
 | Grey fog, unexplored ground | The engine's fog grid, built by `0x4843C0` from the line-of-sight counters and the mapped bits | No separate pass. Each world pass applies `tagpu_glsl.h`: `TAGPU_GLSL_FOG_TERRAIN` paints unexplored ground palette index 0 (black), `TAGPU_GLSL_FOG_GREY_RGB` turns a fogged pixel into its R+G+B mean, and `TAGPU_GLSL_FOG_DISCARD` hides units and effects outside sight. The grid is rebuilt by `tagpu_terrown.c` `terr_fogtick` and, zoomed out, by `tagpu_fogwide.c`. | The view's fog cells in the engine's grid form (`scene.js` `fogGrid`: one entry a 32-unit block, two corner masks), on terrain and features. Units and ghosts take none ([the 3D stage's plan](ingame-wiki-3d-stage-plan.html), section 7). When the ground falls back, the whitebox's fog overlays |
 | Units and buildings | Each unit's 3DO, posed by its COB script. Faces are textured with GAF frames; a team-coloured face takes frame *k* = the player's logo colour. | The pose is copied by `tagpu_packet_pub.c` `fill_pieces` and composed by `tagpu_native.c` `posed_pose`. `tagpu_posebake.c` `tagpu_posebake_unit` bakes it, `tagpu_posedraw.c` `tagpu_posedraw_unit` hands it over, and `tagpu_vk_unit.c` `tagpu_vk_unit_record` draws it. Team colour: `tagpu_packet_pub.c` `player_logo` reads PlayerInfo `+0x96`; `tagpu_render3do.c` `face_texframe` takes that frame of a team-coloured face's sequence. | The 3DO as the engine holds it (in each node with a selection primitive, that face swapped to 0 and skipped, the rest sorted by mean Y), posed by its script as the game's stage poses it (`pose.js`), or at rest with what Create() hides left out for a unit no script poses and every ghost, its faces bound by the engine's rules with the owner's logo frame, back faces culled as the game's body pipeline culls them, through tagpu's unit shader (`classicUnits`). A mobile unit faces the way the simulation says; a structure faces TA's default heading `0x8000`. The Classic shadows first: a mobile unit's silhouette, a structure's slant |
 | Selection | The engine's box `0x46A530`, in GUI colour `0x0A` | `tagpu_native.c` `selbox_emit` → `tagpu_mark.c` `tagpu_mark_emit_selbox` → `tagpu_vk_mark.c` `tagpu_vk_mark_record`. `tagpu_markown.c` `mark_selbox` redirects the engine's box. | The whitebox brackets, over the image (R2) |
@@ -1303,12 +1303,13 @@ The stage's ground for one entry's scene, by reference to the player's own files
 ```json
 { "format": 1, "entry": "quickbuild",
   "cells": [40, 30],
-  "sources": [ { "map": "maps\\crossing two rivers.tnt", "tiles": 4792 },
+  "sources": [ { "map": "maps\\evad river confluence.tnt", "tiles": 3098 },
                { "map": "maps\\metal heck.tnt", "tiles": 583 } ],
-  "tileset": [ [0, 13, "04e02f02"], [1, 170, "8cb0058f"] ],
-  "tilemap": [ 0, 0, 0, 1, "…" ],
-  "features": [ { "name": "lushmetal3", "cell": [14, 16] },
-                { "name": "lushvent01", "cell": [28, 9] } ] }
+  "tileset": [ [0, 0, "fd32b023"], [0, 1, "b69db994"], "…", [1, 170, "8cb0058f"] ],
+  "tilemap": [ 0, 1, 2, 3, 0, 1, 2, 3, "…" ],
+  "features": [ { "name": "rockmetal3", "cell": [14, 16] },
+                { "name": "greenvent01", "cell": [28, 9] },
+                { "name": "smudge04", "cell": [5, 7] }, "…" ] }
 ```
 
 - **`cells`** is the scene's map; **`tilemap`** is `cells / 2` tiles a side, row-major, each an
@@ -1324,17 +1325,31 @@ The stage's ground for one entry's scene, by reference to the player's own files
   read and a section found all follow the engine's precedence: loose first, then the first archive
   in mount order, the first pattern read out of the player's executable (`tools/wiki/tavfs.py`;
   [the 3D stage's plan](ingame-wiki-3d-stage-plan.html), section 5).
-- **`stagemap.py build`** derives it from the entry's scene and the recipe the script holds: the
-  ground tile everywhere, the metal-ground tile over each broad metal rectangle, a deposit feature
-  centred on each deposit (the bounding box of the other metal rectangles that touch), and a vent
-  feature on each vent's cell. Each recipe tile is its map's most used tileable tile under flat,
-  featureless ground, the first `stagemap.py tiles <map>` lists; that command also draws a contact
+- **`stagemap.py build`** derives it from the entry's scene and the recipe the script holds; the
+  greenworld recipe, which both entries use, draws only the base game's files:
+  - **the ground is a map editor section**, greenflat01 (Cavedog's flat grass, one 4 × 4-tile
+    block that joins itself edge to edge), laid from the map's top-left corner and repeated. The
+    section is read from `worlds.hpi`, which the engine mounts as any `*.HPI` and no map loads, so
+    each of its tiles is referenced by its index in Evad River Confluence (`totala2.hpi`), which
+    holds all sixteen byte for byte. Only the author's install needs `worlds.hpi`;
+  - the metal-ground tile over each broad metal rectangle (Metal Heck's tile 170);
+  - **each deposit is the greenworld rock whose `metal=` is the deposit's value**, so the picture is
+    the value: every deposit is one 3 × 3 rectangle of 86, 127, 187 or 223, the four rocks of
+    `features\green\metal.tdf` (the world's water ores, in `watermetal.tdf`, repeat those values);
+  - **each vent is a greenworld vent**, a different one for each;
+  - **decoration breaks the section's repeat**: one smudge or scar of greenworld (they block nothing
+    and hold no metal, so the simulation has nothing to learn about them) per 8 × 8 cells where one
+    fits, 2 cells clear of every deposit and vent and off broad metal, placed by a seeded xorshift so
+    every build writes the same file.
+
+  `stagemap.py tiles <map>` lists a map's flat, featureless, tileable tiles and draws a contact
   sheet into the gitignored `tools/wiki/mockup/gfx/`.
 - **`stagemap.py check`** exits 0 when every entry's description resolves on the local install —
   every map with its tile count, every tile with its hash, every feature section — fits its scene
-  (each deposit carries a deposit feature over its metal, each vent a vent feature on its cell,
-  every feature inside the map, the grid of the bullet above), and is what `build` writes now; 1
-  naming each failure, 2 when it finds no install or executable.
+  (each deposit's feature footprint is its metal rectangle and its `metal=` the rectangle's value,
+  each vent a vent feature on its cell, every other feature one that blocks nothing, no two
+  footprints overlapping, every feature inside the map, the grid of the bullet above), and is what
+  `build` writes now; 1 naming each failure, 2 when it finds no install or executable.
 - **A miss in the game** — no such map, another tile count, another hash, no such section — makes
   the whole ground fall back to the whitebox ([the plan](ingame-wiki-3d-stage-plan.html),
   section 3), never part of it.

@@ -599,13 +599,12 @@ the parity checks).
   strip shrinks rather than grows because at `[32, 0, 8, 24]` deposit R (`[29, 19, 3, 3]`) would
   touch it and join the band, and *Metal maps* would lose its deposit; the fog grows by one row,
   over nothing a demo uses. No input of any demo changed.
-- **The descriptions**: `art/wiki/stage/quickbuild.json` (two sources, two tiles, nine deposit
-  features and two vent features) and `buildshapes.json` (one tile, no features). The ground is
-  Crossing Two Rivers' tile 13 (`tactics6.hpi`, 4 792 tiles), the metal ground Metal Heck's tile
-  170 (`totala2.hpi`, 583 tiles), each the first `stagemap.py tiles` lists; the metal worlds'
-  most used flat tiles are the dark void between their plates, so Metal Heck's plate stands in.
-  The deposit is `lushmetal3` and the vent `lushvent01`, both from `features\lush\*.tdf` in
-  `rev31.gp3`.
+- **The descriptions**: `art/wiki/stage/quickbuild.json` and `buildshapes.json`. The ground is
+  greenworld's, drawn from the base game: the map editor's greenflat01 section by Evad River
+  Confluence's tiles, the greenworld rock whose `metal=` is each deposit's value, greenworld vents
+  and a scatter of smudges and scars; the metal ground is Metal Heck's tile 170 (`totala2.hpi`, 583
+  tiles), because the metal worlds' most used flat tiles are the dark void between their plates.
+  The recipe and its rules: [the wiki's note](ingame-wiki.html), *`art/wiki/stage/<entry>.json`*.
 - **`tavfs.py`** mounts the patterns in the engine's order, the first read out of the executable at
   `0x5028CC`/`0x5028D8`, and takes an archive by the engine's trailer rule: any four year bytes,
   because OpenHAPIFile overwrites the file's year with `"0000"` before comparing with

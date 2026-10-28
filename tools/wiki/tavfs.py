@@ -400,6 +400,11 @@ class Vfs:
 
     def feature(self, name: str):
         """(section, tdf path, where) of the feature section `name` from the first TDF that holds it, or None."""
+        return self.features().get(name.lower())
+
+    def features(self):
+        """{lowercased section name: (section, tdf path, where)} of every feature section, each from the first TDF that
+        holds it, in the order the TDFs enumerate."""
         if self._features is None:
             self._features = {}
             for path, where in self.enumerate("features", "*.tdf", True):
@@ -410,4 +415,4 @@ class Vfs:
                 for sec, body in tascene.parse_tdf(text).items():
                     if isinstance(body, dict) and body:
                         self._features.setdefault(sec, (body, path, where))
-        return self._features.get(name.lower())
+        return self._features
