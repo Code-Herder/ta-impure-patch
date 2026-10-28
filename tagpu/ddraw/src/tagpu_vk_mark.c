@@ -186,7 +186,7 @@ static int s_saidFog, s_saidRoom, s_saidHand, s_saidDrew, s_saidIn;
 static int s_saidPal;
 /* ONE LATCH PER SITE HERE TOO: one latch over several distinct refusals lets
    the first to fire silence a DIFFERENT one for the rest of the session. */
-static int s_saidEmpty, s_saidMany, s_saidBound, s_saidTexA;
+static int s_saidEmpty, s_saidMany, s_saidBound, s_saidTexA, s_saidArtA;
 /* ONE LATCH PER SITE. A single latch shared by six upload sites hides every
    failure after the first -- including a failure at a DIFFERENT site, which is
    the case that matters. */
@@ -792,7 +792,7 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         }
         if (g->tex == TAGPU_MK_TEX_ART &&
             !(s_h.art && s_h.artW > 0 && s_h.artH > 0)) {
-            if (!s_saidTexA) { s_saidTexA = 1;
+            if (!s_saidArtA) { s_saidArtA = 1;
                 plog(d, "mark: an order-art draw arrived with no art atlas - "
                         "nothing drawn while that is true"); }
             return 0;
@@ -1097,7 +1097,7 @@ void tagpu_vk_mark_down(const TAGPU_VKPASS* d)
     s_drawThis = 0; s_abFrame = 0;
     s_downOwed = 0; s_downPaying = 0;
     s_saidFog = s_saidRoom = s_saidPal = 0;
-    s_saidEmpty = s_saidMany = s_saidBound = s_saidTexA = 0;
+    s_saidEmpty = s_saidMany = s_saidBound = s_saidTexA = s_saidArtA = 0;
     s_saidImgT = s_saidImgP = s_saidImgF = s_saidImgS = 0;
     s_saidNoDraw = s_saidSlot = 0;
     s_saidHand = s_saidDrew = s_saidIn = 0;

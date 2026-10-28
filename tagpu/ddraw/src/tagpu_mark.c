@@ -362,8 +362,8 @@ static const char* FS =
     "  frag = vec4(rgb, a);\n"
     "}\n";
 /* ---- THE LINE PROGRAM: one rule for every line ----
-   Every line this pass draws -- the order lines, the range arcs, the waypoint
-   crosshairs, the build sites and the selection rects -- is tagpu_line.h's
+   Every line this pass draws -- the order lines, the range arcs, the build
+   sites and the selection rects -- is tagpu_line.h's
    rule: `DrawLine`'s walk (`0x4CC7AB`) on the line grid, the world target's
    own pixels, thickened to ss pixels across its minor axis; at ss = 1 that is
    the engine's line exactly. A line primitive cannot promise any of it: even
@@ -568,7 +568,7 @@ static void snap_device(float* x, float* y)
 /* One string, in the palette index the caller names, anchored at the (x, y) the
    engine would have passed `DrawTextCustomFont`.
 
-   CONSTANT SCREEN SIZE, like the waypoint crosshair and unlike the health bars:
+   CONSTANT SCREEN SIZE, like the order art and unlike the health bars:
    the glyphs are a bitmap font, so scaling the quad with the zoom would be the
    magnified 1997 art this port exists to stop — a label two pixels tall at
    0.25x and a blocky one at 4x. `s_px` is one screen pixel in game-frame units,
@@ -1299,8 +1299,11 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
        cursor last of all — after the fog overlay, which is why it carries no
        fog. */
     if (s_norda || s_nordl) {
-        /* the art first: the engine blits a record's sprite and dots (bits 1
-           and 3) before its target circle (bit 2). The lines are LVS's
+        /* the art first, under every order line. The engine interleaves them
+           per record in mask-bit order (`0x439B30`: build rect, dots, target
+           circle, sprite), so its lines can fall either side of its art; one
+           art draw cannot, and art under lines is the order that hides the
+           least of a waypoint (ui-markers.md §6.5). The lines are LVS's
            instances, `ss` target pixels wide -- the rule the effects lines and
            the nanoframe wire follow too (tagpu_line.h) */
         if (s_norda) {

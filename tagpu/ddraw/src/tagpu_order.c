@@ -191,7 +191,7 @@
 #define OFF_GUICOL    0x0DCB
 #define OFF_PALETTE   0x143A7        /* the live palette, RGBx per index      */
 #define OFF_PATHICON  0x148D3        /* GAF sequence* for the route dots      */
-#define OFF_CURSORARY 0x1487F        /* GAF sequence*[0x15]                   */
+#define OFF_CURSORARY 0x1487F        /* GAF sequence*[22], [21] = pathicon    */
 
 #define UNIT_STRIDE   0x118
 #define PLAYER_STRIDE 0x14B
@@ -778,11 +778,12 @@ static void walk_unit(ORDARENA* A, const char* ta, const char* units, const char
    an index no drawn texel of any frame holds.
 
    WRITTEN ONCE, PUBLISHED BY ORDERING. Every byte of the atlas and of the
-   frame table is stored before `s_artReady` is set through an interlocked
-   exchange (a full barrier), and nothing writes either again, so a reader
+   frame table is stored before `s_artReady` is set by a RELEASE store, read
+   by an ACQUIRE load, and nothing writes either again, so a reader
    that sees the flag reads finished bytes whatever the timing. The cursor
-   table is filled once by its loader (`0x429C84`, exe-reverse-engineering.md
-   *cursor_ary*), so the first decode is the session's art. It runs at the
+   table is filled once, by its loader (`0x429870`, from start-up's
+   `0x491200`, exe-reverse-engineering.md *cursor_ary*), before any marker
+   block runs, so the first decode is the session's art. It runs at the
    first snapshot that finds `pathicon`; a sequence or frame that is absent,
    wider than ART_FRMAX or past the atlas's room is left out (its `n` stops
    before it), logged once, and draws nothing. */
@@ -824,6 +825,11 @@ static void art_build(const char* ta)
             if (x + w + 1 > TAGPU_ORDART_W) { x = 1; y += rowH + 1; rowH = 0; }
             if (y + h + 1 > TAGPU_ORDART_H) break;
             if (!tagpu_gaf_decode_cov(g, w, h, pix, cov)) break;
+            /* a raw frame "covers" every texel (tagpu_gaf.h): its key is the
+               blitter's test, so it is applied here */
+            if (!*(const unsigned char*)(g + TAGPU_GF_COMP))
+                for (px = 0; px < w * h; px++)
+                    if (pix[px] == *(const unsigned char*)(g + TAGPU_GF_CK)) cov[px] = 0;
             for (r = 0; r < h; r++) {
                 memcpy(s_art + (size_t)(y + r) * TAGPU_ORDART_W + x, pix + r * w, (size_t)w);
                 memcpy(s_artCov + (size_t)(y + r) * TAGPU_ORDART_W + x, cov + r * w, (size_t)w);
@@ -851,7 +857,10 @@ static void art_build(const char* ta)
     }
     for (px = 0; px < TAGPU_ORDART_W * TAGPU_ORDART_H; px++)
         if (!s_artCov[px]) s_art[px] = (unsigned char)s_artKey;
-    InterlockedExchange(&s_artReady, 1);
+    /* not InterlockedExchange: mingw spells it __sync_lock_test_and_set,
+       whose contract is acquire-only, so the compiler could sink the fill
+       below it (tagpu_packet.c, "ORDERING") */
+    __atomic_store_n(&s_artReady, 1, __ATOMIC_RELEASE);
     _snprintf(b, sizeof b, "order: art %d frame(s) of the cursor table, %d left out, "
               "key %d, rows to %d of %d", frames, left, s_artKey, y + rowH, TAGPU_ORDART_H);
     flog(b);
@@ -859,7 +868,7 @@ static void art_build(const char* ta)
 
 const unsigned char* tagpu_order_art(int* key)
 {
-    if (InterlockedCompareExchange(&s_artReady, 0, 0) != 1) return NULL;
+    if (__atomic_load_n(&s_artReady, __ATOMIC_ACQUIRE) != 1) return NULL;
     if (key) *key = s_artKey;
     return s_art;
 }
@@ -869,7 +878,7 @@ const unsigned char* tagpu_order_art(int* key)
 static const ARTSEQ* art_seq(int idx)
 {
     if (idx <= 0 || idx >= ART_SEQS) return NULL;
-    if (InterlockedCompareExchange(&s_artReady, 0, 0) != 1) return NULL;
+    if (__atomic_load_n(&s_artReady, __ATOMIC_ACQUIRE) != 1) return NULL;
     return s_artSeq[idx].n ? &s_artSeq[idx] : NULL;
 }
 
@@ -1036,7 +1045,7 @@ static int    s_nrec, s_nline, s_ndot, s_nover, s_nlabel;
    this pass uses (tagpu_mark.c, the health bar). The engine halves the
    altitude with an arithmetic shift, i.e. rounded to a whole pixel; this
    keeps the fraction, because what it projects is OUR geometry (a unit's
-   interpolated anchor, an arc, a crosshair) and a line's ends are quantised
+   interpolated anchor, an arc, a route dot) and a line's ends are quantised
    after the wheel zoom (tagpu_line.h), not on the 1x grid. The build site,
    which the engine draws from its own integers, does not come through here
    (`draw_build`). */
@@ -1425,11 +1434,35 @@ static float dot_alpha(double c, double run, double step, int fine)
     return lod_op(j);
 }
 
+/* the parameters [f0, f1] of the leg a -> b whose projection lies in the
+   viewport, widened by one art frame; 0 when none of it does */
+static int leg_on_screen(double ax, double ay, double az, double bx, double by, double bz,
+                         double* f0, double* f1)
+{
+    float x0, y0, x1, y1;
+    double p[4], q[4], lo = 0.0, hi = 1.0, sl = ART_FRMAX * s_px;
+    int i;
+    project(ax, ay, az, &x0, &y0);
+    project(bx, by, bz, &x1, &y1);
+    p[0] = -(x1 - x0); q[0] = x0 - ((double)s_v->evpL - sl);
+    p[1] =   x1 - x0;  q[1] = ((double)(s_v->evpL + s_v->evw) + sl) - x0;
+    p[2] = -(y1 - y0); q[2] = y0 - ((double)s_v->evpT - sl);
+    p[3] =   y1 - y0;  q[3] = ((double)(s_v->evpT + s_v->evh) + sl) - y0;
+    for (i = 0; i < 4; i++) {
+        if (p[i] == 0.0) { if (q[i] < 0.0) return 0; continue; }
+        if (p[i] < 0.0) { double t = q[i] / p[i]; if (t > lo) lo = t; }
+        else            { double t = q[i] / p[i]; if (t < hi) hi = t; }
+    }
+    if (lo > hi) return 0;
+    *f0 = lo; *f1 = hi;
+    return 1;
+}
+
 static void draw_dots(const ORDREC* r, int gameTime)
 {
     const ARTSEQ* s = art_seq(ART_PATHICON);
     double ax, ay, az, bx, by, bz;
-    double dx, dy, dz, len, c, step, run, phase;
+    double dx, dy, dz, len, c, cend, step, run, phase, f0, f1, skip;
     int age, fi, fine, n = 0;
 
     if (!s_dots || !r->flag || !s) return;
@@ -1448,10 +1481,22 @@ static void draw_dots(const ORDREC* r, int gameTime)
     phase = fmod(run, step);
     if (phase < 0.0) phase += step;
 
+    /* THE PART OF THE LEG ON SCREEN, so MAXDOT bounds the dots drawn rather
+       than the lattice points from the leg's start: the step shrinks with the
+       zoom (6 world units at 8x), and a cross-map leg would spend the cap
+       off screen. The projection is affine in the leg's parameter, so this
+       is the screen segment clipped to the viewport (Liang-Barsky). */
+    if (!leg_on_screen(ax, ay, az, bx, by, bz, &f0, &f1)) return;
+    skip = floor((f0 * len - phase) / step);
+    if (skip < 0.0) skip = 0.0;
+    c = phase + skip * step;
+    cend = f1 * len < len ? f1 * len : len;
+
     age = gameTime - r->issue;
     if (age < 0) age = 0;
-    fi = (int)(((unsigned)age / (unsigned)(s->f[0].dur ? s->f[0].dur : 1)) % (unsigned)s->n);
-    for (c = phase; c < len && n < MAXDOT; c += step, n++) {
+    fi = (int)(((unsigned)age / (unsigned)(s->f[0].dur ? s->f[0].dur : 1) +
+                (unsigned)fmod(skip, (double)s->n)) % (unsigned)s->n);
+    for (; c < cend && n < MAXDOT; c += step, n++) {
         float a = dot_alpha(c, run, step, fine);
         if (a > 0.004f) {
             double f = c / len;
@@ -1635,8 +1680,8 @@ int tagpu_order_gather(const TAGPU_FXVIEW* v)
        `tagpu_order_snapshot` -- and an uninstalled `markown` shows up below as
        an empty slot, which is the honest failure and not a refusal to draw. */
     /* THE FRAME PACKET IS THE ONLY ENGINE STATE THIS HALF SEES:
-       the units the records name, the GUI colour table and the palette the ink
-       ranking uses. No main pointer, no unit array pair, no def dereference. */
+       the units the records name and the GUI colour table. No main pointer,
+       no unit array pair, no def dereference. */
     s_pk = v->packet;
     if (!ptr_ok(v) || !s_pk || !s_pk->in_game) return 0;
     /* Taking the draw is done HERE and not from the arm poll, for the reason

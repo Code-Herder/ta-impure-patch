@@ -1187,7 +1187,15 @@ never a magnified sprite — with the frame's corner put on the device pixel gri
 
 **In the marker pass** the art is its own bucket (`MAXORDA` 36 000 vertices, six a frame), drawn
 as **one blended triangle draw** (`TAGPU_MK_TEX_ART`, `TAGPU_MKDRAW.blend`) before the order
-lines, as the engine blits a record's sprite and dots before its target circle. Every other draw
+lines, so every line lies over the art. The engine interleaves them per record in mask-bit order
+(`0x439B30` tests 0x1 at `0x439B87`, 0x2 at `0x439BCC`, 0x4 at `0x439C12`, 0x8 at `0x439C57`:
+build rect, dots, target circle, sprite), so its target circle lies under its own sprite and a
+later record's lines over an earlier one's art; one draw cannot reproduce that, and art under
+lines hides the least of a waypoint. The dots are walked only over the part of a leg that
+projects into the viewport (`leg_on_screen`), so `MAXDOT` (512) bounds the dots drawn rather than
+the lattice points from the leg's start, which at 8× zoom (a 6-unit step) would end 3 072 world
+units in. A raw (uncompressed) cursor frame is keyed on its colour key at decode, as the blitter
+keys it; every retail cursor frame is RLE. Every other draw
 of the pass is opaque. The fragment shader's textured, non-text path outputs alpha = the vertex
 colour slot, which the art's vertices fill with the opacity, and keys out the art's own key
 (`uKey = artKey` for that draw); every other path writes alpha 1. On Vulkan the atlas is a third
@@ -1202,8 +1210,9 @@ their size; wheeling back in fades them in.
 
 **Not closed:** the march speed in game was not measured (the capture's timing was too coarse);
 it is the arithmetic the lab measured at 11.7–12.1 px per 250 ms at 0.5×–2×. Not run on GDI
-(unchanged: the engine draws its own markers there), on Windows, or under the replay harness (no
-simulation code changed).
+(unchanged: the engine draws its own markers there) or on Windows. The draw order differs from
+the engine's where a record's target circle or build rect meets art (above). The replay gate ran
+the resource test groups, whose input `tagpu_mark.c` is: all passed.
 
 ## Appendix — addresses & offsets
 
