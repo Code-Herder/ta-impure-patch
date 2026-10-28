@@ -987,11 +987,13 @@ kbot builder); TA Zero's geothermal plants make no EnergyMake (Quick Build is of
 **The click window**, the same at both types (`sim.js` `CLICK_TIME`, `CLICK_BOX`;
 `tagpu_wikisim.c` the same): a left release on the map is a click when its press is under 25 ticks
 old and the release point under 32 world units from the press point on each axis; any other release
-is a box, and a box that catches nothing deselects. That is the engine's test at
+is a box. That is the engine's test at
 `0x4993E9..0x499441`: the press is stamped with the clock `0x4B6340` (MEASURED at 30 units a second,
 so 25 units are 25 ticks) and the world point's x and z words, and the release compares the last
 point before it with the press's, so a wobble that comes back is a click. The 4 world units past
-which the stage draws the box only decide the drawing.
+which the stage draws the box only decide the drawing. Try it counts the window in the stage's
+ticks too, as every rule of the simulation is counted (it reads no clock), so at 2× it is half the
+engine's 833 ms, and on a paused stage a hold never runs out.
 
 Type 1 is the rows the stage played before. At type 0 (`sim.js` `leftClick`, `rightPress0`;
 `tagpu_wikisim.c` the same), with nothing armed on the map:
@@ -1439,8 +1441,9 @@ simulations*, above):
 - **Metal maps**: uniform metal ground is not a deposit (the order click there is a move); a
   distinct richer patch is.
 - **Fog**: unexplored (black) cells do not count; grey-fogged ones do.
-- **Selection**: left-click a unit, left-drag a box; at type 1 a left click on empty ground
-  deselects, at type 0 a right press does.
+- **Selection**: left-click a unit, left-drag a box; a left release is a click only inside the
+  click window (under 25 ticks and under 32 world units on each axis), else a box; at type 1 a
+  left click on empty ground deselects, at type 0 a right press does.
 - **Orders**: the order click with nothing to build is a move, or the assist over an unfinished
   building of the player's.
 
