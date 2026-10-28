@@ -390,7 +390,7 @@ into the address bar):
 | Knob | Values (default first) | What it does |
 |---|---|---|
 | `ordstyle` | `gaf` · `proc` · `off` | the engine's art; the procedural markers `tagpu_order.c` draws today, by its own constants and ink rule (`seq_ink`); nothing |
-| `ordsize` | `world` · `screen` · `int` · `clamp` | canvas pixels per texel: the zoom (the engine's pixel magnified with the world); 1; the zoom rounded, at least 1; the zoom held in `ordmin..ordmax` (1..2) |
+| `ordsize` | `screen` · `world` · `int` · `clamp` | canvas pixels per texel: 1, the art at its own size at every zoom; the zoom (the engine's pixel magnified with the world); the zoom rounded, at least 1; the zoom held in `ordmin..ordmax` (1..2) |
 | `ordfilter` | `nearest` · `sharp` · `linear` | `sharp` keeps each texel flat and blends only the screen pixel across a texel edge |
 | `ordspace` | `screen` · `world` · `octave` | the dot spacing: 48 screen px from each leg's start; 48 world units; 48·2^k world units with k the zoom's octave. The dots move 48 px/s under all three |
 | `ordanim` | `engine` · `cursor` | the sprite's frame rule, above |
@@ -405,15 +405,21 @@ at the ground point under the pointer and **ctrl-click** picks the unit within 4
 undo and clear are buttons. Each queue edit is written back into the URL, so a hand-built queue
 is a link.
 
-**What the zooms showed** [OBSERVED 2026-10-27, contact sheets of `orders-engine`,
-`orders-tuned` and `orders-proc` on `tascene-orders.json` at 0.25×, 0.5×, 1×, 1.5×, 2×, 3×, 4×,
+**What the zooms showed** [OBSERVED 2026-10-27, contact sheets of the engine's art at
+`world` size and spacing, at `clamp`/`sharp`/`octave`, and `ordstyle=proc`, on `tascene-orders.json` at 0.25×, 0.5×, 1×, 1.5×, 2×, 3×, 4×,
 one fixed game tick]:
 
 - **The engine's rule does not survive a zoom.** Scaled with the world, `pathicon` is a 3-px
   speck at 0.25× and a 44-px block at 4×, where the dots stand 192 px apart and one fits on
   screen. At 1× it is the engine's frame.
-- **`clamp` 1..2 with `sharp`** (`orders-tuned`, now with `screen` spacing) reads at every zoom:
-  the arrows are 11–22 px. With `octave` spacing instead, the dots stand 34–68 px apart on screen
+- **The defaults hold the whole line still under a zoom**: `ordsize=screen` and
+  `ordspace=screen` draw the art at its own size (the arrow 11 px, the move star 27–35 px),
+  48 px apart, moving 48 px a second, at every zoom, which is the engine's picture at 1×.
+  `orders-tuned` is that look. Any size rule that follows the zoom (`world`, `int`, `clamp`)
+  makes the markers grow and shrink while the wheel turns, which reads as the line changing
+  rather than the camera moving.
+- **`clamp` 1..2 with `sharp`** reads at every zoom too, the arrows 11–22 px, but grows with a
+  zoom in. With `octave` spacing instead, the dots stand 34–68 px apart on screen
   and crossing an octave adds or drops every other dot and moves none (each octave's dots are a
   subset of the finer one's, the march being one continuous distance); the pass rate then
   swings between 0.7 and 1.4 dots a second. At 0.25× the waypoint stars are large against the
@@ -451,7 +457,7 @@ changed.
 | `restored-relief` | everything the exploration lane has |
 | `orders-engine` | Classic with the engine's order art scaled with the world, a dot every 48 world units |
 | `orders-proc` | Classic with the order markers tagpu draws today (`tagpu_order.c`), on its world spacing |
-| `orders-tuned` | the engine's order art at 1–2 texels a pixel, sharp-filtered, its dots 48 px apart on screen at every zoom |
+| `orders-tuned` | the engine's order art at its own size, its dots 48 px apart and 48 px a second on screen, at every zoom |
 
 `serve` and `shot` reuse `ta3do`'s existing `Viewer` (`ThreadingHTTPServer`) and `shoot`
 (`--headless=new` Chrome on a private X display, ANGLE/SwiftShader) rather than growing a
