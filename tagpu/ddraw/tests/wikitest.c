@@ -276,7 +276,7 @@ static void view(WIKISIM* s, int map)
     }
     key("locked", 0); str(v->locked >= 0 ? name(s, v->locked) : NULL);
     key("clock", 0); printf("%d", v->clock);
-    key("waiting", 0); str(v->waiting == WIKI_UNTIL_IDLE ? "idle" : NULL);
+    key("waiting", 0); str(v->waiting == WIKI_UNTIL_IDLE ? "idle" : v->waiting == WIKI_UNTIL_ARRIVED ? "arrived" : NULL);
     key("stalled", 0); fputs(v->stalled ? "true" : "false", stdout);
     key("cob", 0);
     if (v->has_cob) printf("[%lu,%lu]", (unsigned long)(v->cob_hash >> 32), (unsigned long)(v->cob_hash & 0xFFFFFFFFu));

@@ -2280,15 +2280,19 @@ static void feed(WIKISIM* s, int t)
     }
 }
 
-/* the wait's state: WIKI_UNTIL_IDLE, no unit of the player's holds a build or a reclaim order */
-static int idle(const WIKISIM* s)
+/* the wait's state holds: WIKI_UNTIL_IDLE, no unit of the player's holds a build or a reclaim
+   order; WIKI_UNTIL_ARRIVED, none holds a move order */
+static int holds(const WIKISIM* s, int until)
 {
     int i, j;
     for (i = 0; i < s->nunit; i++) {
         const WIKIUNIT* u = s->unit[i];
         if (u->owner != 0) continue;
-        for (j = 0; j < u->norder; j++)
-            if (u->order[j].k == WIKI_ORDER_BUILD || u->order[j].k == WIKI_ORDER_RECLAIM) return 0;
+        for (j = 0; j < u->norder; j++) {
+            const int k = u->order[j].k;
+            if (until == WIKI_UNTIL_IDLE ? k == WIKI_ORDER_BUILD || k == WIKI_ORDER_RECLAIM : k == WIKI_ORDER_MOVE)
+                return 0;
+        }
     }
     return 1;
 }
@@ -2320,7 +2324,7 @@ void tagpu_wikisim_input(WIKISIM* s, const WIKIINPUT* ev)
 void tagpu_wikisim_step(WIKISIM* s)
 {
     const int t = s->tick + 1;
-    if (s->waiting && idle(s)) s->waiting = 0;
+    if (s->waiting && holds(s, s->waiting)) s->waiting = 0;
     else if (s->waiting && t - s->wait_from > s->wait_max) s->stalled = 1;
     if (!s->waiting) feed(s, ++s->clock);
     drop_work(s);

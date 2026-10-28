@@ -115,9 +115,10 @@ typedef struct {
 
 enum { WIKI_IN_MOVE = 1, WIKI_IN_BUILD = 2, WIKI_IN_CAPTION = 4, WIKI_IN_UNTIL = 8 };
 
-/* A DEMO'S WAIT (sim.js's UNTILS): the state a wait holds the demo's clock for. IDLE: no unit of
-   the player's holds a build or a reclaim order. WIKI_UNTIL_MAX bounds its max, in ticks. */
-enum { WIKI_UNTIL_IDLE = 1 };
+/* A DEMO'S WAIT (sim.js's UNTILS, in its order): the state a wait holds the demo's clock for.
+   IDLE: no unit of the player's holds a build or a reclaim order. ARRIVED: no unit of the
+   player's holds a move order. WIKI_UNTIL_MAX bounds its max, in ticks. */
+enum { WIKI_UNTIL_IDLE = 1, WIKI_UNTIL_ARRIVED = 2 };
 #define WIKI_UNTIL_MAX 3600
 
 /* One input of a demo's timeline, or one the player gives Try it yourself. */

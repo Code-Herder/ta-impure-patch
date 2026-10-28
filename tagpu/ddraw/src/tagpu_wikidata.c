@@ -371,14 +371,15 @@ static int input(R* r, const TJV* v, WIKIINPUT* in)
     if ((c = tj_get(v, "until"))) {
         const TJV* m = tj_get(v, "max");
         const TJV* k;
-        if (!tj_is(c, TJ_STR) || strcmp(c->str, "idle")) return refuse(r, "a wait names no state the sim knows", NULL);
+        if (!tj_is(c, TJ_STR) || (strcmp(c->str, "idle") && strcmp(c->str, "arrived")))
+            return refuse(r, "a wait names no state the sim knows", NULL);
         if (!m || !tj_is(m, TJ_NUM) || m->num != floor(m->num) || !(m->num >= 1 && m->num <= WIKI_UNTIL_MAX))
             return refuse(r, "a wait has no max of 1 to 3600 ticks", NULL);
         for (k = v->first; k; k = k->next)
             if (strcmp(k->key, "at") && strcmp(k->key, "until") && strcmp(k->key, "max"))
                 return refuse(r, "a wait carries another input", NULL);
         in->has |= WIKI_IN_UNTIL;
-        in->until = WIKI_UNTIL_IDLE;
+        in->until = strcmp(c->str, "idle") ? WIKI_UNTIL_ARRIVED : WIKI_UNTIL_IDLE;
         in->until_max = (int)m->num;
     }
     return key_of(r, tj_get(v, "down"), &in->down) && key_of(r, tj_get(v, "up"), &in->up);

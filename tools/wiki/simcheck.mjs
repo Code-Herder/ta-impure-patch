@@ -199,6 +199,10 @@ const QUICKBUILD = {
     const [c1, c2] = presses(d, 'order'), f1 = r.frames[c1], f2 = r.frames[c2], l1 = lands(r, d, 'order')[0];
     ok(!f1.v.ghost && f1.v.cursor.shape === 'move', 'over broad metal ground: no ghost, a move cursor');
     ok(kinds(r.frames[l1 + 1].o.ck) === 'move', `the click there is a move (${kinds(r.frames[l1 + 1].o.ck)})`);
+    // the demo waits for the walk instead of timing its next click to it: the constructor has stopped at its place
+    const pre = r.frames[c2 - 1], ck = pre.v.units.find(u => u.id === 'ck'), mv = r.frames[l1 + 1].o.ck[0];
+    ok(pre.o.ck.length === 0 && Math.hypot(ck.x - mv.x, ck.z - mv.z) <= 32,
+      `${r.ty('ARMCK')} had arrived before the next click (${Math.round(ck.x)}, ${Math.round(ck.z)})`);
     ok(f2.v.ghost && f2.v.ghost.type === r.ty('ARMMEX') && whole(f2.v.ghost, DEP.R), `over the separate deposit: the ${r.ty('ARMMEX')} ghost`);
     const m = fresh(r.last.v, r.ty('ARMMEX'));
     ok(m.length === 1 && whole(m[0], DEP.R) && m[0].built === 1, `${r.ty('ARMMEX')} built on the separate deposit`);
@@ -278,20 +282,20 @@ const RULES = {
   /* the heading (research/notes/ingame-wiki.md, "The simulation's contract"): a unit vector, turned at once, computed
      with + - * / and sqrt only. Each expectation is the rule's own arithmetic, so it is exact. */
   'a step faces its direction'(entry) {
-    // every step of a move faces from where it starts to the target, and the tick it arrives on (no step) keeps the
-    // last step's facing
+    // every step of a move along a clear straight line faces from where it starts to the target, and the tick it
+    // arrives on (no step) keeps the last step's facing
     const s = WikiSim.create(entry, { scene: { selected: ['pw'] } }), pw = () => s.view().units.find(u => u.id === 'pw');
     let p = pw(), ok = p.hx === 0 && p.hz === 1, steps = 0, arrived = 0;
-    s.input({ move: [496, 296] }); s.input({ down: 'rmb' }); s.input({ up: 'rmb' });
+    s.input({ move: [100, 60] }); s.input({ down: 'rmb' }); s.input({ up: 'rmb' });
     while (s.orders('pw').length && steps < 400) {
-      const dx = 496 - p.x, dz = 296 - p.z, d = Math.sqrt(dx * dx + dz * dz);
+      const dx = 100 - p.x, dz = 60 - p.z, d = Math.sqrt(dx * dx + dz * dz);
       s.step(); steps++;
       const q = pw();
       if (d > 0) ok = ok && q.hx === dx / d && q.hz === dz / d;
       else { arrived++; ok = ok && q.hx === p.hx && q.hz === p.hz; }
       p = q;
     }
-    return ok && steps > 100 && arrived === 1 && p.x === 496 && p.z === 296;
+    return ok && steps > 100 && arrived === 1 && p.x === 100 && p.z === 60;
   },
   'a builder in range faces its target'(entry) {
     // ARMCK stands 32 world units from the unfinished extractor's footprint, inside its BuildDistance of 40
@@ -320,7 +324,67 @@ const RULES = {
     const f = s.view().units.find(u => u.id === 'f'), d = Math.sqrt(53);
     return f.hx === -2 / d && f.hz === 7 / d;
   },
+  /* MOVEMENT (research/notes/ingame-wiki.md, "How units move"): bodies never overlap, a unit walks round what stands
+     in its way, and a unit whose place is taken stops close by. Each case also holds every tick to `apart`. */
+  'a unit walks round a structure in its way'(entry) {
+    // the Peewee's straight line to the far side of the geothermal plant crosses it
+    const s = WikiSim.create(entry, { scene: { selected: ['pw'] } }), pw = () => s.view().units.find(u => u.id === 'pw');
+    s.input({ move: [272, 32] }); s.input({ down: 'rmb' }); s.input({ up: 'rmb' });
+    let ok = apart(s.view()), beside = false, t = 0;
+    for (; t < 600 && s.orders('pw').length; t++) {
+      s.step();
+      const p = pw();
+      ok = ok && apart(s.view());
+      if (p.z > 64 && p.z < 128 && (p.x <= 224 || p.x >= 320)) beside = true;
+    }
+    return ok && beside && pw().x === 272 && pw().z === 32;
+  },
+  'a unit walks round a unit that stands'(entry) {
+    // an idle constructor stands on the Peewee's straight line, at its middle
+    const s = WikiSim.create(entry, { scene: { selected: ['pw'], units: [{ id: 'post', type: 'ARMCK', at: [200, 300] }] } });
+    const pw = () => s.view().units.find(u => u.id === 'pw');
+    s.input({ move: [144, 424] }); s.input({ down: 'rmb' }); s.input({ up: 'rmb' });
+    let ok = apart(s.view()), t = 0;
+    for (; t < 600 && s.orders('pw').length; t++) { s.step(); ok = ok && apart(s.view()); }
+    const post = s.view().units.find(u => u.id === 'post');
+    return ok && pw().x === 144 && pw().z === 424 && post.x === 200 && post.z === 300;
+  },
+  'two units sent to one place: the second stops close by'(entry) {
+    // a move spreads its units 24 apart, closer than two 32-wide bodies: the one there first takes its place, and
+    // the other stops beside it with its move ended
+    const s = WikiSim.create(entry, { scene: { selected: ['ck', 'ack'] } }), at = id => s.view().units.find(u => u.id === id);
+    s.input({ move: [400, 400] }); s.input({ down: 'rmb' }); s.input({ up: 'rmb' });
+    const goal = s.orders('ack')[0];
+    let ok = apart(s.view()), t = 0;
+    for (; t < 1200 && (s.orders('ck').length || s.orders('ack').length); t++) { s.step(); ok = ok && apart(s.view()); }
+    const ck = at('ck'), ack = at('ack'), off = Math.hypot(ack.x - goal.x, ack.z - goal.z);
+    return ok && t < 1200 && ck.x === 388 && ck.z === 400 && off > 0 && off <= 32;
+  },
+  'a build waits for the units on its site, which step off it'(entry) {
+    // a Peewee stands across the extractor's site; the constructor's build starts once it has stepped off
+    const s = WikiSim.create(entry, { scene: { selected: ['ck'], units: [{ id: 'stand', type: 'ARMPW', at: [396, 72] }] } });
+    s.input({ move: [376, 72] }); s.input({ down: 'rmb' }); s.input({ up: 'rmb' });
+    const o = s.orders('ck')[0], site = o && o.k === 'build' ? [o.ox * 16, o.oz * 16, (o.ox + 3) * 16, (o.oz + 3) * 16] : null;
+    const on = u => site && u.x + 16 > site[0] && u.x - 16 < site[2] && u.z + 16 > site[1] && u.z - 16 < site[3];
+    let ok = !!site && on(s.view().units.find(u => u.id === 'stand')), raised = null, t = 0;
+    for (; t < 900 && !(raised && raised.built === 1); t++) {
+      s.step();
+      ok = ok && apart(s.view());
+      raised = fresh(s.view(), 'ARMMEX')[0] || null;
+    }
+    return ok && t < 900 && !on(s.view().units.find(u => u.id === 'stand'));
+  },
 };
+
+/* no two bodies overlap: each unit's footprint box about its centre, touching allowed */
+function apart(v) {
+  const r = u => [u.x - u.fx * 8, u.z - u.fz * 8, u.x + u.fx * 8, u.z + u.fz * 8];
+  for (let i = 0; i < v.units.length; i++) for (let j = i + 1; j < v.units.length; j++) {
+    const a = r(v.units[i]), b = r(v.units[j]);
+    if (a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]) return false;
+  }
+  return true;
+}
 
 /* ---- buildshapes: the placement gesture (tagpu_place.c). Its checks read the queue of ARMCK ('ck') around each
    release and the preview just before it; the expected sites are tagpu_placegeo.c's for the demo's press and release
@@ -1082,6 +1146,8 @@ for (const c of contexts()) {
         if (TRACE) console.log(`  ${d.id} log:`, r.log.map(e => `${e.t} ${e.what} ${e.type}@${e.ox},${e.oz}`).join('; '));
         // a demo's ticks are its clock's, which a wait holds while the sim's own tick runs on
         ok(!r.last.v.stalled, `no wait ran past its max (clock ${r.last.v.clock}, waiting ${r.last.v.waiting})`);
+        const met = r.all.findIndex(f => !apart(f.v));
+        ok(met < 0, `no two bodies overlap${met < 0 ? '' : ` (tick ${r.all[met].t})`}`);
         const notes = r.sim.cobNotes().filter(n => n);
         ok(!notes.length, `no type's script quarantined${notes.length ? ` (${notes.join('; ')})` : ''}`);
         if (off) {
