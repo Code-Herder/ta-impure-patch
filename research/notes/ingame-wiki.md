@@ -133,6 +133,10 @@ Two entries, both under Quality of Life → Building: **Quick Build: Resource Ex
 - **Columns** take fixed shares of the window and scale with it; long names wrap.
 - **A mod that turns the feature off**: a red circle with "Turned off in this mod" on the entry's
   page, and the same mark on its row in the tree. Its demos still play.
+- **A demo stopped at a build the mod's sidebar cannot reach** shows the same badge on the page
+  while it holds (`wiki.js` `off = locked(entry()) || v.locked`; in the DLL `WIKIPAGE.sim_locked`,
+  set from the view's `locked`). The tree's mark stays the data's alone. `wikilaycheck.py` holds
+  it to the mockup (`1080-tazero-buildshapes-locked`).
 
 ### The art
 
@@ -697,8 +701,32 @@ All MEASURED 2026-10-27 on this tree.
   setups, in every captured state but the cursor, the minimap's content and TA Zero's run-time
   states. The positional reader agrees with an emulation of the engine's parser on all 1581
   .GUI files of the six setups.
-- **The game's demos** (`wiki_regression.py demos`) played the 21 demos on retail's own sidebar
-  layout, every hash equal to `simparity.mjs --hash --layout` on the layout the check wrote.
+- **The game's demos** (`wiki_regression.py demos`, (d1)) play the 21 demos on the sidebar layout
+  a demo would start on, every hash equal to `simparity.mjs --hash --layout` on the layout the
+  check wrote. (d4)'s mockup beside the game runs in the game look on the stock pack's sidebar.
+- **Try it in the game** (`wiki_regression.py try`) arms each demo's builds through the stage's
+  sidebar, as described [above](#try-it-yourself-in-the-game). In (t2c) NEXT and PREV page the
+  ARMCK, ORDERS shows the side's GEN and BUILD its page again, and STOP disarms and empties the
+  orders. Every step is read back from `sim.js` fed the logged inputs, once its hash equals the
+  game's (`sideview.mjs --dump`).
+- **Every mod in the game** (`wiki_regression.py all mods`) plays one game a compatibility setup
+  on a private 2560 × 1440 display:
+    - **(b1)** the setup's own sidebar, cropped from the engine's frame below the minimap, against
+      `sidedump.mjs` on the setup's pack, greyed as the engine's snapshot of the screen has it:
+      with nothing selected, and with an ARMCK placed and selected where the pack gives it pages;
+    - **(b2)** the layout every demo starts on is the mod's, `tagpu_wiki.layout.json` equal to the
+      pack's, and all 21 hashes equal to `simparity.mjs --hash --layout` of that file;
+    - **(b3)** Quick Build demo 1 held at tick 10: the presented frame's column, each client pixel
+      mapped back to the texel its nearest sampling shows, against the composer on the pack for
+      the same view (`sideview.mjs --play --compose`);
+    - **(b4)** Build Lines demo 1 played: where the mod's sidebar cannot reach its first build it
+      holds at that tick under the badge, and elsewhere it plays past it.
+
+  (b1) and (b3) make one chain: the stage equals the composer on the pack and the wiki's state,
+  and the composer on the pack and the engine's state equals the engine's own sidebar. MEASURED
+  2026-10-27 under Wine: all six setups passed (retail, Escalation, Total Mayhem 11.3.0, ProTA
+  4.8, TA Zero alpha 5, Twilight 2.0b98), 0 pixels differing in every comparison. (b4) held TA
+  Zero's demo at its lock, tick 20, and played past it in the other five.
 
 **The game's files for the checks.**
 
@@ -708,7 +736,9 @@ All MEASURED 2026-10-27 on this tree.
 - The state dump `tagpu_wiki.json` gains three fields: `side_h`, the running simulation's
   column rows, 0 without one; `layout_src`, one of `"mod"`, `"fixture"`, `"none"`, or `""`
   with no simulation; and `layout`, the layout itself, which `simparity.mjs --try` and
-  `sideview.mjs --dump` replay.
+  `sideview.mjs --dump` replay. `tools/wiki/sideview.mjs` plays `sim.js` to a dump's state and
+  prints its view (`--dump`), or plays a demo to a tick and composes its column (`--play
+  --compose`).
 - Layout names are written as their UTF-8 bytes, as both readers count them.
 
 ## The first entry: Quick Build: Resource Extractors
@@ -1150,10 +1180,22 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
   sees demos and a Try it whose buttons differ from theirs; following `main+0x37EFA` is the plan's
   decision 18, and the engine map's *What each Interface Type does with a press* is its input.
   Captions and the keys strip do not follow the player's key bindings (decision 19).
-- **The sidebar's paths not run in the game.** The game's demos and Try it ran on retail's own
-  layout. The fixture's path (a mod's layout refused, or the loader unable to start) and the
-  "loading…" wait are held to the mockup by `simparity.mjs` and `stagecheck.mjs`, not seen in
-  the game.
+- **The sidebar's paths not run in the game.** The fixture's fallback (a mod's layout refused, or
+  the asset loader unable to start) and the "loading…" wait are covered by reading the code and
+  by the loader's native fuzz (`assetcheck.py fuzz-side`), and held to the mockup by
+  `simparity.mjs` and `stagecheck.mjs`. No compatibility setup triggers them and no test lever
+  does, so the game has not been seen taking them.
+- **TA Zero's player side.** The wiki takes the side from the entry's units, so TA Zero's layout
+  names ARM (its sides are GOK, ARM and CORE, `player_side` 1) and the wiki shows ARMGEN and
+  ARMMAIN2, where a TA Zero skirmish player is GOK. Its (b1) therefore compares only GOKMAIN2.
+  Decision 17 (the player's own side) closes this.
+- **What the mods check does not read from the engine.** The pressed state (b1) gives the ARMCK's
+  page (the BUILD tab and ARMMOVEORD drawn pressed) is copied from the captures' comparison, not read
+  from the engine's snapshot. (b4) finds the badge by its red disc in the frame; the dump carries
+  no badge field.
+- **The mods check's coverage.** At 2560 × 1440 a 768-row column is drawn at 0.85 to 0.89 client
+  pixels a game pixel, so (b3) samples 71 to 79 % of its texels (retail's 480 rows, at 1.43, all
+  of them). Every texel needs a display of about 4K.
 - **What the composed column does not show.** It matches the game's captures except for the
   cursor over the column, which no capture compared; the minimap's content, which is the stage
   map's and not the game's; and TA Zero's run-time states.
