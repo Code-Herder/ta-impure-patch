@@ -1932,7 +1932,8 @@ def sidedump(pack, args, png):
     r = subprocess.run(["node", str(TREE / "tools/wiki/sidedump.mjs"), "--pack", str(pack), *map(str, args),
                         "--out", str(png)], capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, f"sidedump {' '.join(map(str, args))}: {r.stderr.strip()}"
-    return r.stdout.split(": ")[2].split(",")[0]
+    # its line names `<side> <screen>, ...`; the screen is the layout's key
+    return r.stdout.split(": ")[2].split(",")[0].split()[-1]
 
 
 def live_sidebar(c, inst, pack, out, row):
