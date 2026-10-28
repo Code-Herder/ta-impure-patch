@@ -224,6 +224,7 @@ import struct
 import subprocess
 import sys
 import time
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 from resource_regression import CHECK_FAILURES, TACLI, TREE, Check, tacli_api
@@ -802,12 +803,13 @@ def mockup_shot(state, path):
     sidebar is the mod's (`mod`, a tools/wiki/sidepacks.py pack name, stock by default), its pack
     loaded before the demo is read. `look` "game" draws the stage in the game's graphics and the
     sidebar in the mod's pictures, as the game draws both (gfx=game, on the GPU as
-    tools/wiki/stage3dcheck.py renders it); without it the stage is the whitebox."""
+    tools/wiki/stage3dcheck.py renders it); without it the stage is the whitebox. tools/wiki/serve.py
+    serves it, so its demo plays with the units' scripts as the game's does."""
     sys.path.insert(0, str(TREE / "tools/wiki"))
     import wikilaycheck as wl
     from PIL import Image
     gw, gh = state["res"]
-    httpd = wl.serve()
+    httpd = SourceFileLoader("wikiserve", str(TREE / "tools/wiki/serve.py")).load_module().server(quiet=True)
     tmp = path.parent / f".mock{os.getpid()}"
     tmp.mkdir(parents=True, exist_ok=True)
     cfg = tmp / "pw.json"

@@ -210,6 +210,20 @@ class Handler(SimpleHTTPRequestHandler):
             super().log_message(fmt, *args)
 
 
+class QuietHandler(Handler):
+    def log_message(self, fmt, *args):
+        pass
+
+
+def server(bind="127.0.0.1", port=0, quiet=False):
+    """The mockup's server -- the tree's files and /cob -- answering on a daemon thread, for a tool that drives the
+    page with the units' scripts (tools/wiki/stage3dcheck.py); port 0 takes a free one."""
+    Handler.host = Host()
+    httpd = ThreadingHTTPServer((bind, port), functools.partial(QuietHandler if quiet else Handler, directory=str(ROOT)))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--bind", default="127.0.0.1")

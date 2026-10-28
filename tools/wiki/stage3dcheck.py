@@ -34,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 TREE = Path(__file__).resolve().parents[2]
@@ -66,10 +67,11 @@ def read_ppm(path):
 
 
 class Mockup:
-    """One headless browser on the mockup, served from the tree as wikilaycheck.py serves it."""
+    """One headless browser on the mockup, served by tools/wiki/serve.py, so the page plays its demos with the units'
+    scripts as the game's wiki does (without /cob it plays them without)."""
 
     def __init__(self, gpu):
-        self.httpd = wl.serve()
+        self.httpd = SourceFileLoader("wikiserve", str(Path(__file__).with_name("serve.py"))).load_module().server(quiet=True)
         self.tmp = Path(tempfile.mkdtemp(prefix="stage3d-"))
         cfg = self.tmp / "pw.json"
         cfg.write_text(json.dumps({"browser": {"browserName": "chromium",
@@ -94,6 +96,7 @@ class Mockup:
               " if (!window.WikiGfx || WikiGfx.state() !== 'ready') return JSON.stringify({ err: 'gfx ' + (window.WikiGfx && WikiGfx.state()) });"
               " const S = WikiPage.state; if (S.playing) document.querySelector('#c-play').click();"
               " const sim = WikiPage.sim();"
+              " if (sim.view().cob === null) return JSON.stringify({ err: 'the page plays without the scripts of the units' });"
               f" while (sim.tick < {tick} && !sim.done) sim.step();"
               " let r = null;"
               " for (let i = 0; i < 400; i++) { r = WikiGfx.frame(S.entry, sim.view(), sim.tick); if (r && r.complete) break; await sleep(50); }"
