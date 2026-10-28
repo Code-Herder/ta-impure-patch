@@ -297,8 +297,8 @@ static void view_bound(WIKISTAGEVIEW* v)
     v->caption[WIKISTAGE_CAPTION - 1] = 0;
 }
 
-/* the record into the layout's page state: the page's fields, and the caption and the keys the
-   demo's view holds */
+/* the record into the layout's page state: the page's fields, and the caption, the keys and the
+   locked build the demo's view holds */
 static void page_of(WIKIPAGE* st, const TAGPU_PK_WIKI* w, const WIKISTAGEVIEW* v)
 {
     int i;
@@ -316,6 +316,7 @@ static void page_of(WIKIPAGE* st, const TAGPU_PK_WIKI* w, const WIKISTAGEVIEW* v
     st->held[sizeof st->held - 1] = 0;
     st->caption[0] = 0;
     st->keys = 0;
+    st->sim_locked = v && v->locked >= 0;
     if (v) {
         if (v->has_caption) lstrcpynA(st->caption, v->caption, sizeof st->caption);
         for (i = 0; i < WIKI_NKEYS; i++)

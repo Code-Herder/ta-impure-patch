@@ -62,6 +62,7 @@ CASES = [
     ("4k-stock-quickbuild-folded", (3840, 2160), "mod=stock&entry=quickbuild", {"fold": ["t.0.0"]}),
     ("4k-esc-buildshapes-scrolled", (3840, 2160), "mod=escalation&entry=buildshapes", {"scroll": {"text": "half"}}),
     ("3440-tazero-quickbuild-held", (3440, 1440), "mod=tazero&entry=quickbuild&demo=5", {"held": "c-try", "tick": 40}),
+    ("1080-tazero-buildshapes-locked", (1920, 1080), "mod=tazero&entry=buildshapes&demo=2", {}),
     ("3440-stock-buildshapes-allfolded", (3440, 1440), "mod=stock&entry=buildshapes&rewind=0", {"fold": ["t.0"]}),
     ("1024-esc-quickbuild", (1024, 768), "mod=escalation&entry=quickbuild", {"tick": 100}),
     ("1024-stock-buildshapes-scrolled", (1024, 768), "mod=stock&entry=buildshapes&demo=2",
@@ -193,7 +194,8 @@ COLLECT = r"""async () => {
   const sim = WikiPage.sim();
   const state = { W: f.width, H: f.height, bar: 32, rewind: S.rewind, open: S.open, entry: leaves.indexOf(S.entry), demo: S.demo,
     fold: [...S.fold].map(p => nodes.findIndex(n => n.p === p)), scroll: ['tree', 'demos', 'text'].map(k => scroll[k].top),
-    playing: S.playing, done: !!(sim && sim.done && !S.try), speed: S.speed, try: S.try, mod: S.mod, held: A.held ? A.held.replace('c-', '') : '',
+    playing: S.playing, done: !!(sim && sim.done && !S.try), speed: S.speed, try: S.try, mod: S.mod,
+    sim_locked: !!(sim && sim.view().locked), held: A.held ? A.held.replace('c-', '') : '',
     caption: $('#caption').textContent, keys: [...document.querySelectorAll('#keys .kc')].map(e => e.textContent), fallback, sizes };
   return JSON.stringify({ state, els, u, scroll, frame: [f.left, f.top] });
 }"""
@@ -396,10 +398,12 @@ def main():
             # 34 wider than the screen and tall enough draws the frame at the screen's own size
             run("resize", str(gw + 34), str(gh + 900))
             run("goto", f"http://127.0.0.1:{httpd.server_address[1]}/tools/wiki/mockup/index.html?res={gw}x{gh}&open&skin=kit&{query}")
+            # the mod's sidebar pack waited for too: a demo started before it arrived restarts on its
+            # layout, which can stop it at a build that layout cannot reach, under the badge
             for _ in range(80):
                 ok = result(run("eval", "() => !!(window.WikiPage && document.querySelectorAll('#text p').length"
                                 " && document.querySelector('#win canvas.skin') && getComputedStyle(document.querySelector('#e-title')).fontFamily.includes('Oswald')"
-                                " && document.fonts.status === 'loaded')").stdout)
+                                " && document.fonts.status === 'loaded' && !document.querySelector('#sidebar-note').textContent.startsWith('loading'))").stdout)
                 if ok:
                     break
                 time.sleep(0.1)

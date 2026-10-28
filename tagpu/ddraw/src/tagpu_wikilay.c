@@ -700,7 +700,8 @@ static void entry_col(C* c, R col)
     const WIKIENTRY* e = entry(c);
     const double gap = U(c, g->entry_gap), x = col.x + U(c, g->entry_pad[1]), w = col.w - 2 * U(c, g->entry_pad[1]);
     const double top = col.y + U(c, g->entry_pad[0]), ch = col.h - U(c, g->entry_pad[0]);
-    const int wink = light(c, c->l->part[P_WINDOW]), off = !has_demo(c), lk = locked(c, c->st->entry);
+    const int wink = light(c, c->l->part[P_WINDOW]), off = !has_demo(c);
+    const int lk = locked(c, c->st->entry) || c->st->sim_locked;
     const char* title = e ? (e->title ? e->title : e->id) : S_CHOOSE;
     const char* sub = e && e->subtitle ? e->subtitle : "";
     double th, sh, bh, ph, fixed, srow, y, ctl_h = U(c, g->ctl_h), cap_h = U(c, g->caption_h), keys_h = U(c, g->keys_h);

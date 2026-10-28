@@ -50,6 +50,9 @@ typedef struct {
     int      speed;             /* 1 or 2: 1x or 2x is down                                     */
     int      try_it;            /* Try it yourself has the stage                                */
     int      mod;               /* MOD_* (tagpu_mod.h): the mod a lock is read for              */
+    int      sim_locked;        /* the demo stopped at a build this mod's sidebar cannot reach
+                                   (the view's `locked`): the badge shows, as for an entry the
+                                   data locks (wiki.js `off`)                                   */
     char     held[HUD_KEYLEN];  /* the key of the control held down; "" none                    */
     char     caption[WIKI_CAPTION]; /* the demo's caption, UTF-8; "" none                       */
     unsigned keys;              /* bit WIKI_KEY_* (tagpu_wikidata.h): held in the demo's view   */

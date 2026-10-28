@@ -218,6 +218,7 @@ int main(int argc, char** argv)
     st->done = tj_is(tj_get(S, "done"), TJ_TRUE);
     st->speed = (int)tj_num(tj_get(S, "speed"), 1);
     st->try_it = tj_is(tj_get(S, "try"), TJ_TRUE);
+    st->sim_locked = tj_is(tj_get(S, "sim_locked"), TJ_TRUE);
     st->mod = mod_of(tj_str(tj_get(S, "mod"), "stock"));
     snprintf(st->held, sizeof st->held, "%s", tj_str(tj_get(S, "held"), ""));
     snprintf(st->caption, sizeof st->caption, "%s", tj_str(tj_get(S, "caption"), ""));
