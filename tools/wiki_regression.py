@@ -198,9 +198,9 @@ Twilight), one game a setup, under the run lock (the plan's landing 6i; the side
        is the chain stage == composer(pack, the wiki's state) and composer(pack, the engine's
        state) == the engine: one pack, one composer, the states apart only where the wiki sets
        them (decision 7 greys every order but STOP);
-  (b4) Build Lines demo 1 played: where the mod's sidebar cannot reach its first build (TA Zero) it
-       holds at that tick, playing, with the "Turned off in this mod" badge above the stage;
-       elsewhere it plays past it, no badge;
+  (b4) Build Lines demo 1 played in the player's context: where sim.js, replaying the dump's ctx,
+       locks it (a role with no unit, or a build the sidebar cannot reach) it holds at that tick with
+       the "Turned off in this mod" badge above the stage; elsewhere it plays past it, no badge;
   (w4) Esc closes the window;
   (w5) each stage drew what the report resolved: a ground that resolved in 3D on every frame of the
        line, one that did not as the whitebox on every frame.
@@ -2125,8 +2125,8 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
           f"texels sampled; the minimap {'composed' if v['composed']['minimap'] else 'left to the whitebox'}")
     assert bad == 0, f"(b3) {bad} pixels of the stage's column differ from the composer (out: {out / 'sidebar.png'})"
 
-    # (b4) the demo TA Zero cannot reach, played: locked at its first build there, with the badge, and
-    # playing on past it elsewhere
+    # (b4) the demo played in the player's context: held at sim.js's lock with the badge where sim.js
+    # locks it, playing on past its first build elsewhere
     entry, node, k, at = SIDE_LOCK
     r = subprocess.run(["node", str(TREE / "tools/wiki/sideview.mjs"),
                         *map(str, ("--play", entry, k + 1, at + 60, "--layout", layf, "--ctx", ctxf))],
