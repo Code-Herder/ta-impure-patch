@@ -1512,7 +1512,7 @@ simulations*, above):
 
 **The placement gesture**, following `tagpu_place.c` function for function (`evaluate`,
 `toggles`, `take_offs`, `classify`, `ring_target`, `remove_taken` and `append_sites` as `commit`,
-`place_button` as the press and the release; `take_offs` and `remove_taken`, which replaces
+`tagpu_place_button` as the press and the release; `take_offs` and `remove_taken`, which replaces
 `remove_toggled`, as they stand on the wiki branch, which carries the take-off fix
 `34b1b586` that `main` does not have yet). In `sim.js`, `tagpu_placegeo.c`'s `place_shape` and
 `place_ring` are ported line for line, integer arithmetic included (checked against the compiled C
