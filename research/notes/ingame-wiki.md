@@ -23,13 +23,17 @@ draws the mod's own files, read in the running game's order ([below](#the-3d-sta
 landing 6i). Beside the map the stage shows the running mod's left sidebar, its minimap and the
 page the engine would show, and its build menu is the only one: a scripted build is the cursor's
 trip to the button, and in Try it yourself the player presses it
-([below](#the-left-sidebar-on-the-stage), [the sidebar plan](ingame-wiki-sidebar-plan.html)).
+([below](#the-left-sidebar-on-the-stage)). Every demo plays the player's own side in the running
+mod: its units, their figures and their display names are that side's own, picked from the mod's
+files by one rule that names no mod, and the demo plays, and its captions name, the buttons of the
+player's Interface Type ([below](#the-per-mod-tutorials)). The owner's decisions for the sidebar
+and the tutorials are [below](#the-sidebar-and-the-per-mod-tutorials-the-owners-decisions).
 
 | What | Where |
 |---|---|
 | The tree of categories and entries | `art/wiki/tree.json` |
 | One entry: its text, its mods, its demos | `art/wiki/entries/<id>.json` |
-| The mockup, which reads only those files | `tools/wiki/mockup/` (`index.html`, `wiki.js`, `wiki.css`, `sim.js`, `stage.js`; under `gfx=game` also `scene.js`, `gfx.js` and `tools/tascene-render.js`) |
+| The mockup, which reads only those files | `tools/wiki/mockup/` (`index.html`, `wiki.js`, `wiki.css`, `sim.js`, `text.js`, `stage.js`; under `gfx=game` also `scene.js`, `gfx.js` and `tools/tascene-render.js`) |
 | The window's art kit | `art/wiki/kit/` (`kit.json` and `parts/`), in `art/hud/kit.json`'s format, fitted by `tools/hudart/fit.py --set wiki` from the parts as cut in `art/wiki-full/kit/` |
 | The stage's fallback cursor icons, the controls' glyphs and the tree's marks | `cursor_*.png`, `i_play`, `i_pause`, `i_replay`, `i_open`, `i_shut` and `i_dot` in the kit, written by `tools/wiki/cursors.sh` from `stage.js` `cursorShape` and `tools/wiki/mockup/glyphs.js` |
 | The window's layout numbers and its text roles | `art/wiki/layout.json`, which `wiki.js` sets as custom properties of the frame (`--w-` and the number's path) for `wiki.css`, and which the DLL reads |
@@ -47,6 +51,10 @@ trip to the button, and in Try it yourself the player presses it
 | The sidebar's fallback layouts | `art/wiki/side/fixture.json` (480 rows) and `fixture-tall.json` (768 rows), synthetic |
 | The sidebar in the mockup | `tools/wiki/mockup/side.js` (the column's composer); `sim.js` (the layout's check, the router, the buttons and the build trip); each installed mod's pack under the gitignored `tools/wiki/mockup/gfx/side/<mod>/`, written by `tools/wiki/sidepacks.py` through `gfx.py --side-only` |
 | The sidebar in the DLL | `tagpu_wikiasset.c` (`tagpu_wikiside_load`, the reading) over `tagpu_guifile.c` (the .GUI files by position); `tagpu_wikiside.c` (the composer); the router and the buttons in `tagpu_wikisim.c`, the column's ops in `tagpu_wikistage.c` |
+| Each side's casting, by the cast rule | `tools/wiki/gfx.py` (`side_casting`, into each pack's `side.json` by `tools/wiki/sidepacks.py`, which checks the stock identity); in the DLL `tagpu_wikiasset.c` (`tagpu_wikiside_load`) |
+| The fixture's castings | `tools/wiki/casting-fixture.json`: `identity` (the entries' own types and figures), `shifted` (invented figures, a 3 × 3 builder and a 4 × 4 geothermal plant with four interior G cells), `unbound` (`identity` without the wall) |
+| The text filled for the side and the interface | `tools/wiki/mockup/text.js`; in the DLL `tagpu/ddraw/src/tagpu_wikitext.c`; `node tools/wiki/textparity.mjs [--wine]` holds the two equal |
+| Every check that plays no game, in one run | `tools/wiki_regression.py - offline` |
 | The sidebar's checks | `node tools/wiki/sidecheck.mjs` (with `tagpu/ddraw/tests/wikisidetest.c`); `python3 tools/wiki/assetcheck.py --side`; `tools/wiki/sidedump.mjs` (a pack's column for a state, as a PNG) and `tools/wiki/sideview.mjs` (`sim.js` at a game dump's state) |
 | The window in the game | `tagpu_wiki.c` (input, pause, the page's state and the demo's simulation; game thread), `tagpu_wikistate.c` (`tagpu_wikilay.c` and `tagpu_wikistage.c` on the record) and `tagpu_vk_hud.c` (drawing; render thread) — [GPU status](gpu-status.html) §2.12c |
 | The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|try|recorded|asset|stage3d|units --launch`, `tools/wiki_regression.py <name> mp`, `tools/wiki_regression.py all mods --shots DIR` (the 3D stage under each supported setup: [below](#the-3d-stage-under-the-mods)); `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's; `units --shots DIR` does the same with the units, then the facing, the `nounit=` lever, the render thread's time and a reclaim in the game; `try` replays two demos through Try it yourself's stage as device input and holds the game's simulation to `simparity.mjs --try` |
@@ -195,9 +203,9 @@ Show Down at 1024x768, Interface Type 1): nothing of the player's mobile selecte
 menu, `cursornormal` again, at every point of the map. The build cursor `0x4197D0` installs no
 cursor: in mode `0x0E` over the map `0x499200` calls it in place of the picker, so the cursor stays
 the one the click on the menu installed. Quick Build's ghost changes the packet alone
-(`tagpu_resource.c`), so over a deposit the cursor is the selection's: `cursormove` [INFERRED: the
-deposit hover itself was not measured; the scenario tool would not place `lushmetal3` on Show
-Down]. The sims' shape follows: the build-menu mode, else a mobile unit of the player's selected,
+(`tagpu_resource.c`), so over a deposit the cursor is the selection's: `cursormove`, MEASURED
+2026-10-28 with an ARMCK selected over a deposit and over a vent, index 14 at Interface Type 0 on
+retail and at type 1 in Twilight. The sims' shape follows: the build-menu mode, else a mobile unit of the player's selected,
 else none (`cursor_shape` in both); Quick Build's ghost no longer makes it a build cursor.
 
 - **The art** is the 3D asset load's (`tagpu_wikiasset.c` `cursors_load`): `<anims>\cursors.GAF`
@@ -278,7 +286,82 @@ A geothermal plant needs one of its footprint cells (yard `G`) on a feature with
 a 1 × 1 vent (the site test `0x47D2E0`). Their footprints, extraction, geothermal
 output, build times, worker times, speeds, build distances and build lists are read once from the
 stock unit files and written into `quickbuild.json` as plain numbers, with the unit they came
-from. No game file is copied. A mod's own figures are not shown: the demos are the stock game's.
+from. No game file is copied. These authored types and figures are what a demo plays on the
+fixture, with no sidebar, or under a mod whose layout is refused. On the running mod's own layout
+each unit is its cast's type in the player's side instead, with that mod's figures
+([below](#the-per-mod-tutorials)).
+
+### The sidebar and the per-mod tutorials: the owner's decisions
+
+Decisions 1 to 12 (2026-10-27) made [the left sidebar on the stage](#the-left-sidebar-on-the-stage);
+13 to 26 (2026-10-27 and 28) made [the per-mod tutorials](#the-per-mod-tutorials). Both are built
+as stated except where a line says otherwise.
+
+1. **The sidebar is inside the stage, at the map's scale**: a slice of the game's screen, the
+   running mod's left sidebar then the map, one game pixel each. A demo that shows it gets a wider
+   stage; the map's framing is unchanged.
+2. **The wiki's own build column is retired**; the mod's sidebar is the only build menu. It is a
+   per-demo flag, on when the scene gives the player a constructor, and Try it shows it whenever
+   the player has one on the stage. *As built*: a **mobile** builder (MaxVelocity > 0,
+   WorkerTime > 0).
+3. **A click on a build button shows the game's pressed frame**, held about half a second in a
+   demo, and pressed while the button is down in Try it.
+4. **A demo names the unit, never a position**: its build is resolved against the mod's pages for
+   the selected builder, through PREV/NEXT when needed; a builder that cannot build it shows the
+   "Turned off in this mod" state.
+5. **One picture rule for every mod, never a list of mod names**: the page's GAF frame, else the
+   unit's download picture, else `unitpics\<UNIT>.PCX`, else a labelled button, checked against
+   each compatibility setup's own sidebar in game (all six match, *The checks* below).
+6. **The minimap comes with it**: the demo's map, the unit dots, the camera box; live in Try it,
+   never clickable.
+7. **In Try it the build buttons, PREV/NEXT, ORDERS/BUILD and STOP work**; every other order button
+   is greyed until an entry needs it.
+8. **HUD scale is ignored**: the stage keeps TA's native proportions.
+9. **The stage maps are 40 × 30 cells**, so retail's 480-row sidebar fits beside the map; a 768-row
+   one leaves a band under the map, the map top-aligned.
+10. **A scripted `build` with the sidebar plays out** as the cursor's trip to the button and back;
+    every demo was re-timed once by hand, and the data's ticks are exactly what plays.
+11. **Build buttons the entry does not define are greyed.**
+12. **A demo whose build has no equivalent in the mod stops at that tick under the entry's badge**,
+    and only when the mod truly has none (decision 13).
+13. **Each mod gets a tutorial that works in it**, built from the mod's own equivalents of the units
+    the entry uses, wherever the feature is on.
+14. **Equivalents come from a general rule over each unit's own data**: no list of mod names, no
+    override files; the in-game check shows what the rule picked per mod. *As amended by 20.*
+15. **The mod's own figures**: footprint, extraction, build time, speed and build distance from the
+    mod's unit files.
+16. **Text names roles** (`{builder}`, `{mex}`), filled with the unit's in-game display name in the
+    running mod, never its internal name.
+17. **The tutorial uses the player's own side in the current game**; the mockup has a side
+    selector.
+18. **The wiki follows the player's Interface Type** (`main+0x37EFA`) in demos and in Try it: demos
+    name actions (select, order, cancel), mapped to the player's buttons, and captions name the
+    button the player uses; the mockup has an interface selector.
+19. **Keys follow the player's key bindings where they can be rebound**; game speed is not followed
+    (the wiki keeps its own 1× and 2×). *Closed by 21.*
+20. **The rule ranks by tech level, then the mod's own menu order** (amending 14's alphabetical
+    tie-break, which picked wrong units in the stock game itself), and "of the demo's movement
+    class" is dropped: no unit field tells movement class across mods.
+21. **Decision 19 is closed: nothing is rebindable.** TA's keys are a table in the executable
+    (`0x495EB7..0x495ECD`), `impure.cfg` has no binding, and the mods' key settings are TADR's,
+    whose code never runs beside Impure. Key names live in one table on each side (`KEYCAP` in
+    `wiki.js`, `tagpu_wikidata_key_name`), so a rebinding feature would change one place.
+22. **In a replay the tutorial follows the controlled player's side**, the one the engine's own
+    sidebar follows.
+23. **Quick Build picks from the build menu the player sees**, not the engine's AI build list
+    (CANBUILD), as its own simulation landing before the tutorials (the live check confirmed that
+    Twilight's Quick Build offers the AI's extractor: *Gaps*).
+24. **A demo of a feature the mod turns off plays under the badge, and its claims are not checked
+    there**: a named rule over the entry's own turned-off list, never a list of mods in the check.
+25. **A scene that a mod makes false is redesigned, not narrowed**: Build Lines' ring around a
+    queued build was reworked so every claim holds for every builder.
+26. **One demo length for every mod**: the geothermal demo's tail is 465 ticks, set by the slowest
+    plant (Twilight's CORE), and the stock game holds the finished plant longer.
+
+**Settled from the engine, not asked**: the page shown follows the engine's router (nothing
+selected: MAIN2; exactly one unit, a builder: its pages; anything else: GEN); a build arms when
+its button is released inside it; a constructor's queued build carries no `+N`; MAIN2's KILLS,
+LOSSES and TOTALUNITS labels have no writer; the side's art is the controlled player's side's.
 
 ## The mockup's controls
 
@@ -290,6 +373,8 @@ A strip above the stage, outside the game frame:
 | Window size | share of the screen, default 90 % | `size=90` |
 | Mode | single player (pauses) or multiplayer (keeps running) | `mode=sp` / `mode=mp` |
 | Detected mod | Stock, Total Mayhem, ProTA, Twilight, Escalation, TA Zero, unknown | `mod=escalation` |
+| Side | the side the tutorial plays, among the sidebar layout's sides; with the mod's own pack as the layout the demo plays that side's casting | `side=CORE` (by name, without case; the layout's first side when it names none) |
+| Interface | the Interface Type: right-click (1, the default) or left-click (0) | `iface=1` / `iface=0` |
 | Open, entry, demo | the wiki open on an entry and a demo | `open&entry=quickbuild&demo=3` |
 | Try it | Try it yourself on that demo's scene | `try` |
 | Rewind button | shown (a live recorded skirmish) or absent | `rewind=1` / `rewind=0` |
@@ -498,8 +583,8 @@ column is:
 - under it, the page the engine's router would show for the selection.
 
 Its build buttons, PREV and NEXT, the ORDERS and BUILD tabs and STOP work as the game's do.
-Every other order button is drawn greyed. The owner's decisions and what is still planned are
-[the sidebar plan](ingame-wiki-sidebar-plan.html). The engine facts are the engine map's [*The
+Every other order button is drawn greyed. The owner's decisions are 1 to 12
+[above](#the-sidebar-and-the-per-mod-tutorials-the-owners-decisions). The engine facts are the engine map's [*The
 left sidebar: its pages, its buttons and who takes a
 press*](exe-reverse-engineering.html#the-left-sidebar-its-pages-its-buttons-and-who-takes-a-press-disassembled-measured-2026-10-27).
 
@@ -659,18 +744,27 @@ the code.
 It reads every file by the engine's path rule, the language's folder first, with a 0-byte file
 counting as missing:
 
-- `<units>\*.FBI`: `UnitName`, `Side` and `canstop`;
-- `<gamedata>\sidedata.TDF`: each side's `name`, `nameprefix` and `intgaf`;
+- `<units>\*.FBI`: `UnitName`, `canstop`, the display name and the cast rule's fields (*The
+  per-mod tutorials*, below), the first file listed winning for a UnitName (`0x488B10`);
+- `<gamedata>\sidedata.TDF`: each side's `name`, `nameprefix`, `intgaf` and `commander`;
 - `<download>\*.TDF`, read by position;
-- each player type's pages and orders page, their download fill, and each side's MAIN2 and GEN;
+- each side's MAIN2 and GEN, and the pages and orders page of each type the side's casting
+  names, read with that side's own prefix, with their download fill (every side with MAIN2 and
+  GEN is a layout side; the sidebar is refused only when no side has them);
 - the pictures by decision 5's rule:
     - for an order, tab or pager: `<anims>\<SCREEN>.GAF`, then commongui, then commongui's
       generic picture;
     - for a build button: the page's own picture by the engine's rule, then
       `<anims>\<UNIT>_gadget.GAF`, then `<unitpics>\<UNIT>.PCX`, else a labelled button;
-- PANELSIDE;
+- each layout side's PANELSIDE;
 - `fx.GAF`'s dots;
 - the palette, its `.ALP` and `.SHD`, and `guipal`.
+
+Mayhem's and ProTA's build pictures come by that rule from their own `commongui.GAF`, under the
+gadget's name (the engine's second lookup, after the screen's own GAF), not from `unitpics` PCX
+files their DLLs draw; and TA Zero's pages are templates its `ZBuildMenu` `_h` files fill by the
+stock download rule (the engine map's *The left sidebar*). MEASURED from the packs `gfx.py`
+resolves.
 
 A GAF is read only in the 64 KiB archive pages its lookups touch: Escalation's `fx.GAF` is 82 MB
 (`TAGPU_HPI_READMAX` bounds a read's range, not the file).
@@ -687,10 +781,6 @@ A GAF is read only in the 64 KiB archive pages its lookups touch: Escalation's `
 **Where it departs from the engine**, as `gfx.py` does (the two are compared with each other, not
 with the engine):
 
-- **The player's side.** The stage has no PlayerInfo, so the side comes from the first unit of
-  the wiki's first entry whose FBI `Side` names a side. Failing that, it is the side whose
-  `nameprefix` begins the unit's type (the longest prefix), else side 0. TA Zero's human units
-  say `NotForAI_Arm`, which names no side.
 - **A build button with only commongui's generic picture** skips that picture and keeps the
   .GUI's rect, where the engine would shrink a 64 × 64 slot to a 96 × 20 `BUTTONS0` frame.
 - **A download entry whose `BUTTON + 4` is no gadget of its page** is skipped and reported. The
@@ -701,25 +791,28 @@ with the engine):
 
 ### The checks
 
-All MEASURED 2026-10-27 on this tree.
+The offline checks were MEASURED 2026-10-28 on this tree, the game's on 2026-10-27, before each
+side had its own types.
 
-- **`simparity.mjs`** plays every demo three times through both simulations: with the fixture's
-  sidebar, with `fixture-tall.json`'s 768-row column and with none, 63 plays. It replays the 35
-  rule cases and the 67 refusal cases (the `sidebar` flag, the trip's data rule, every bound of
-  the layout on both sides of it), then the 13 malformed-data cases, and compares the trip's
-  constants. All equal, natively and with `--wine`.
+- **`simparity.mjs`** plays every demo through both simulations with the fixture's sidebar, with
+  `fixture-tall.json`'s 768-row column and with none, each in the eight contexts of *The
+  simulation's contract* (below): 504 plays. It replays the 46 rule cases and the 173 refusal
+  cases (the `sidebar` flag, the trip's data rule, every bound of the layout on both sides of it,
+  the context, the binding and the scene's fit), reads 24 castings and layouts back, then the 21
+  malformed-data cases, and compares the trip's constants. All equal, natively and with `--wine`.
 - **`stagecheck.mjs`** pairs the stage's ops with `stage.js`'s calls, the `side` range and the
   greyed buttons' groups included: 5376 frames, the fixture at three sizes, the tall fixture at
   1920 × 1080 and no sidebar at three sizes. With a sidebar it draws the whitebox column, the
   game look's image with its minimap, and the image without it, over a stand-in image.
 - **`sidecheck.mjs`** compares the two composers byte for byte (with
-  `tagpu/ddraw/tests/wikisidetest.c`): 8 packs and 4176 frames. Two packs are synthetic,
-  generated from a fixed seed to take every branch of the composer. The other six are the
-  compat setups' own packs, present locally.
+  `tagpu/ddraw/tests/wikisidetest.c`), every side of every pack at both Interface Types with its
+  casting: 8 packs and 18 740 frames. Two packs are synthetic, generated from a fixed seed to take
+  every branch of the composer. The other six are the compat setups' own packs, present locally.
 - **`assetcheck.py --side`** compares the DLL's loader (`wikiassettest side`) with `gfx.py
   --side-only` per compat setup: the layout, every picture's source and frames, PANELSIDE, the
-  dots, the minimap's tables and bases, the greyed tint, each type's `canstop` and the sheet byte
-  for byte. `fuzz-side` damages synthetic files. All six setups equal.
+  dots, the minimap's tables and bases, the greyed tint and the sheet byte for byte, and per side
+  its PANELSIDE, its types and its casting, the display names under `--language` and the 3D
+  load's unit types. `fuzz-side` damages synthetic files. All six setups equal.
 - **The composed column against the game.** `tools/wiki/sidedump.mjs` composes a pack's column
   for a named state as a PNG, and it equals the game's own sidebar pixel for pixel in all six
   setups, in every captured state but the cursor, the minimap's content and TA Zero's run-time
@@ -727,7 +820,12 @@ All MEASURED 2026-10-27 on this tree.
   .GUI files of the six setups.
 - **The game's demos** (`wiki_regression.py demos`, (d1)) play the 21 demos on the sidebar layout
   a demo would start on, every hash equal to `simparity.mjs --hash --layout` on the layout the
-  check wrote. (d4)'s mockup beside the game runs in the game look on the stock pack's sidebar.
+  check wrote (2026-10-27). `tagpu_wiki.check` now plays them for every side of that layout, with
+  the side's casting on the mod's layout, at both Interface Types, and logs
+  `<entry>/<demo>/<side>/<iface> <hash>`, which `simparity.mjs --hash --side S --iface I` prints;
+  (d1) and (b2) compare every key, with `--pack` the side pack of the game's layout when it is the
+  mod's, and fail on a context played on one side only, a different hash or a demo refused on one
+  side only. (d4)'s mockup beside the game runs in the game look on the stock pack's sidebar.
 - **Try it in the game** (`wiki_regression.py try`) arms each demo's builds through the stage's
   sidebar, as described [above](#try-it-yourself-in-the-game). In (t2c) NEXT and PREV page the
   ARMCK, ORDERS shows the side's GEN and BUILD its page again, and STOP disarms and empties the
@@ -765,21 +863,246 @@ All MEASURED 2026-10-27 on this tree.
   --compose`).
 - Layout names are written as their UTF-8 bytes, as both readers count them.
 
+## The per-mod tutorials
+
+**Every demo plays the player's side of the running mod, in the player's Interface Type.** An
+entry names each of its units by a **cast** -- `builder`, `advbuilder`, `mex`, `moho`, `geo`,
+`walker`, `tower`, `wall`, `solar` -- and a side's **casting** answers every cast with one of that
+side's own types: its FBI figures, its G cells and its in-game display name. The text names units
+and mouse buttons by tokens, filled with the casting's names and the player's buttons. The owner's
+decisions are 13 to 26 [above](#the-sidebar-and-the-per-mod-tutorials-the-owners-decisions); the
+engine facts are the engine map's *The wiki's per-mod tutorials* and *What each Interface Type does
+with a press* ([engine map](exe-reverse-engineering.html)).
+
+### The cast rule
+
+It names no mod, lists no unit and reads no unit's `Side=`; `gfx.py` (`side_casting`) and
+`tagpu_wikiasset.c` run it per layout side, the sides of sidedata that have MAIN2 and GEN, in the
+engine's order.
+
+- **The walk.** Breadth-first from the side's `commander` (sidedata's `[SIDEk]`, matched without
+  case) through each type's **menu**: the units of its build buttons on its numbered pages as the
+  sidebar reads them for that side (the page probe, else `<prefix>DL` with the download fill; the
+  greyed pass; the 15- and 31-character name cuts and the role order of `0x41AA00`), in (page,
+  gadget) order, hidden and greyed buttons left out, each unit once. The order in which units are
+  first met ranks them by tech level (their depth from the commander) first and by the mod's own
+  menu order second, which is total, so no tie is left to break.
+- **The predicates**, over each FBI as the engine parses it (integers as `atoi`, figures as `strtod`
+  of the first number, a missing key 0, `BMcode` included):
+    - *mobile*: BMcode ≠ 0 and MaxVelocity > 0; *structure*: BMcode 0 and both footprint sides > 0;
+    - *builder*: Builder bit 0 and WorkerTime > 0; *land*: no CanFly, and MinWaterDepth absent or
+      ≤ 0;
+    - *extractor*: a structure with ExtractsMetal > 0; *geothermal*: a structure, not an
+      extractor, whose yard holds a G cell; *plain*: a land structure that is neither and not a
+      builder.
+
+| cast | the pick |
+|---|---|
+| builder | the first unit met, the commander excluded, that is a mobile land builder whose menu holds a land extractor |
+| mex | the land extractor on the builder's menu with the greatest ExtractsMetal; equal, the earlier on the menu |
+| geo | the land geothermal plant on the builder's menu with the greatest EnergyMake − EnergyUse; equal, the earlier |
+| advbuilder | the first unit met, the builder excluded, that is a mobile land builder whose menu holds a land extractor stronger than the mex |
+| moho | the strongest land extractor on the advbuilder's menu that is stronger than the mex |
+| walker | the first mobile land non-builder on the menu of the first unit met whose menu holds the builder |
+| tower | the first plain structure on the builder's menu with a Weapon1 |
+| wall | the first plain structure on the builder's menu with no Weapon1 and TEDClass `FORT` (without case) |
+| solar | the first plain structure on the builder's menu with EnergyMake − EnergyUse > 0 (a solar collector's energy is a negative EnergyUse: retail ARMSOLAR's is −20) |
+
+- A cast the rule cannot fill, or whose type's footprint is not 1 to 16 cells a side
+  (`WIKI_FP_MAX`, the width of a G row's mask), is **unbound**, and the loader's report says why.
+- **What pins it: the stock identity.** On the stock game it gives ARM exactly the types and
+  figures the entries author, cast for cast, name and build list included, and CORE their
+  counterparts (`sidepacks.py` `stock_identity`, run on every stock pack).
+
+**The picks** (MEASURED offline 2026-10-28, `gfx.py --side-only` over the six compatibility
+setups; the C loader's are the same, `assetcheck.py --side`). No cast is unbound in any of the 13
+sides, and no strength is tied anywhere.
+
+| setup / side | builder | advbuilder | mex | moho | geo | walker | tower | wall | solar |
+|---|---|---|---|---|---|---|---|---|---|
+| stock ARM | ARMCK | ARMACK | ARMMEX | ARMMOHO | ARMGEO | ARMPW | ARMLLT | ARMDRAG | ARMSOLAR |
+| stock CORE | CORCK | CORACK | CORMEX | CORMOHO | CORGEO | CORAK | CORLLT | CORDRAG | CORSOLAR |
+| Mayhem, ProTA: ARM / CORE | as stock | | | | | | | | |
+| Twilight ARM | ARMCK | ARMACK | ARMAMEX | ARMMOHO_TWILIGHT | ARMGEO | ARMFLEA (1 × 1) | ARMLLT | ARMDRAG | ARMSOLAR |
+| Twilight CORE | CORCK | CORACK | COREXP | CORMEXP | CORGEO | CORAK | CORLLT | CORDRAG | CORSOLAR |
+| Escalation ARM | ARMCK | ARMACK | ARMMEX | ARMMOHO | ARMGEO | ARMMARK | ARMLLT | ARMDRAG | ARMSOLAR |
+| Escalation CORE | CORCK | CORACK | CORMEX | CORMOHO | CORGEO | CORVOYR | CORLLT | CORDRAG | CORSOLAR |
+| TA Zero GOK | GoKT1ConHover (3 × 3) | GoKT2ConHover (4 × 4) | GoKT1Mex | GoKT2Mex | GoKT1Geo (5 × 5) | GoKT1ScoutHover (3 × 3) | GoKT1PDTurret | GoKT1PD | GoKT1PGen (3 × 3) |
+| TA Zero ARM | ArmT1FEKbot | ArmT2ConTank (4 × 4) | ArmT1Mex | ArmT2Mex | ArmT1Geo (5 × 5) | ArmT1ReconHover | ArmT1PDTurret | ArmT1PD | ArmT1Solar |
+| TA Zero CORE | CoreT1ConTank (3 × 3) | CoreT2ConTank (4 × 4) | CoreT1Mex | CoreT2Mex | CoreT1Geo (5 × 5) | CoreT1ScoutBike | CoreT1PDTurret | CoreT1PD | CoreT1PGen (3 × 3) |
+
+A footprint in brackets differs from stock ARM's. The towers and walls are 2 × 2 everywhere, so
+Build Lines' counts keep their premise. Picks that read oddly but break no demo: TA Zero ARM's
+advbuilder is a tank (its T2 tank factory comes first on the commander's menu); Twilight's mex is
+its stealth extractor, the strongest on the menu; Escalation's walkers are radar kbots; TA Zero's
+walkers are scouts, its GOK builder a hover and its CORE builder a tank (neither side has a T1
+kbot builder); TA Zero's geothermal plants make no EnergyMake (Quick Build is off there).
+
+### Casts, tokens and actions in the data
+
+- **Every unit of an entry names its cast** (`"cast": "builder"`), and no two units of one entry
+  name the same one; both loaders refuse otherwise. The authored types and figures stay: they are
+  stock ARM's, which the rule reproduces.
+- **Tokens.** In an entry's title, subtitle and paragraphs, its demos' titles and every caption:
+    - `{builder}` … `{solar}` (lower case only): the bound cast's display name (its type when the
+      name is empty); with no casting or an unbound cast, the name of the entry's unit with that
+      cast, else its key;
+    - `{order}` / `{Order}`: `right-click` / `Right-click` at Interface Type 1, `left-click` /
+      `Left-click` at any other value; `{select}` / `{Select}`: `click` / `Click`;
+      `{cancel}` / `{Cancel}`: `right-click` / `Right-click`; key names are written as they are.
+
+  A token is a `{` and everything to the next `}`. Both loaders refuse an entry with a `{` and no
+  `}`, `{}`, a name that is neither a cast nor a button word, a capitalised cast or a cast no unit
+  of the entry has, so a typo fails the build and never the player. The fill is presentation only:
+  the simulation and its hash keep the raw text, so a hash depends on neither the language nor the
+  side's names. One pure function fills, `text.js` `fillText` and `tagpu_wikitext_fill`, cut at a
+  UTF-8 character as the stage's copy cuts.
+- **Actions.** A demo's press names what it does: `select` (the left button at both types),
+  `order` (the right button at type 1, the left at type 0), `cancel` (the right button at both);
+  `lmb` and `rmb` stay for presses that are one button at both types (a placement, a sidebar
+  press). The simulation resolves the actions once, at creation, into its own copy of the script,
+  and then holds it to **the data rule**: a press of a button already held, or a release of one
+  that is up, refuses the demo with the input's tick. `simcheck.mjs` plays every demo at both
+  types, so an authored overlap fails there and never reaches a player.
+
+### The two interface types in the simulations
+
+Type 1 is the rows the stage played before. At type 0 (`sim.js` `leftClick`, `rightPress0`;
+`tagpu_wikisim.c` the same), with nothing armed on the map:
+
+- **a left click** -- the release of a press that went down on the map and never became a box --
+  is Quick Build's choice first, exactly as type 1's right click gives it (Impure's gate is on the
+  left click at type 0, `tagpu_resource.c`); else over a unit of the player's, an unfinished
+  building with a builder selected is assisted and any other unit selected; else the selected
+  mobile units move, and with none nothing happens. The order lands **at the release**, where type
+  1's right press orders at the press.
+- **a right press** deselects every unit; with Ctrl it does nothing, since the engine's Ctrl +
+  right press hands the mouse to a view mode (`0x41CC60`) and the stage has no camera to move.
+
+Everything armed, every sidebar press, box drags and the minimap are the same at both types; an
+armed right press disarms at both. The engine's type-0 rows were MEASURED in game on 2026-10-28 (the
+engine map has the numbers): the move at the release, Quick Build on a deposit and a vent, the
+assist on an unfinished building with cursor 6, the right press's deselect. [INFERRED]: an
+unfinished building of the player's with no builder selected is selected.
+
+### The bound entry: the casting's figures and G cells
+
+- **With a casting the simulation plays its own copy of the entry** (`sim.js` `binder`,
+  `tagpu_wikisim.c`): each def of a bound cast takes the casting's type, display name, footprint,
+  BuildTime, WorkerTime, BuildDistance, MaxVelocity, ExtractsMetal, EnergyMake, `canstop` and G
+  cells, and a build list by cast (def j is on it when def j's cast is on the cast's menu). A def
+  of an unbound cast keeps the authored one. Indices do not move, so the scene and the inputs name
+  the same defs, and the copy lives and dies with the simulation.
+- **A context is refused** -- shown on the stage in its own words -- when the Interface Type is not
+  0 or 1, the side is not one of the layout's, a unit has no cast, two units share one, two defs
+  bind one type, or a scene structure's bound footprint leaves the placeable interior (cells 1 to
+  w − 2) or overlaps one placed before it ("`<id>`'s `<type>` does not fit the scene"). No context
+  of the six setups is refused.
+- **Only G cells take a vent.** A geothermal plant needs a vent under one of its yard's G cells,
+  and the vent it anchors to is the one under a G cell, as the engine's site test `0x47D2E0` and
+  Impure's `geo_anchor` read it. Retail's plants are G throughout, so no stock hash moved; every
+  other setup's plant has G only inside its yard (MEASURED in Mayhem in game: a vent under an outer
+  cell refused, under a G cell placed).
+- **Display names**: the FBI's `<language>name` when the key exists, else `name`, its first 31
+  bytes (the engine's `def+0x00` is 0x20 bytes), converted from Windows-1252 to UTF-8 (a byte with
+  no character there becomes `?`), the UnitName when that is empty; at most 94 bytes
+  (`WIKI_TITLE_MAX`). The language is the game's own, `0x51FB50`, copied on the game thread
+  (`gfx.py` takes `--language`, English by default). MEASURED in game with `language=french`: the
+  engine's names are the French keys with their trailing blanks gone and their accents in
+  Windows-1252.
+
+### Locks, and the claims a turned-off feature does not check
+
+- **A demo locks** -- holds its frame under the entry's "Turned off in this mod" badge -- at the
+  first of: a scene unit of an unbound cast (tick 0), a `build` of an unbound cast (its tick), a
+  build the layout cannot reach (its tick). The first lock wins, the tick finishes, and the lock
+  holds with the sidebar off too. A Try it whose scene holds a unit of an unbound cast is locked
+  at tick 0, input ignored, and Back to demo works. In the six setups no cast is unbound, so no
+  demo locks for one.
+- **An entry the mod turns off** (its own `lockedIn`: Quick Build in Escalation, TA Zero and an
+  unidentified mod) plays under the badge, its demos to their end. `simcheck.mjs --pack` plays
+  them and does **not** check their claims there, saying so ("locked: claims not checked") and
+  naming the entries (decision 24): the badge already says the demo does not apply, and the rule
+  reads the entry's own list, never a list of mods. TA Zero makes two of Quick Build's claims false
+  (its cancel, and geothermal plants that make no energy).
+- **A scene a mod makes false is redesigned** (decision 25). Build Lines' ring around a queued
+  build brings its own builder into the map's top left and stands the far solar collector in the
+  bottom right, 615 world units away, so every side's builder is still walking at the ring click
+  (tick 336; TA Zero's builders start the far one at 349 and 357). Quick Build's helpers demo walks
+  its walker toward the far corner, so a walker of up to 2.8 world units a tick stays in the box
+  and keeps walking at both types. The geothermal demo's tail is 465 ticks, set by Twilight
+  CORE's plant (decision 26).
+
+### The side, the Interface Type and the text in the game
+
+The game thread reads the controlled player's side and `main+0x37EFA == 1` at every packet fill
+and plays the demo on them; the render thread fills the page's text from the record's two values
+(*Which layout, and when a demo shows it*, above, has the rule; [GPU status](gpu-status.html)
+§2.12c the sites).
+
+- **The side is the engine sidebar's**: PlayerInfo `+0x95` of the record `main+0x2A42` names. In a
+  replay that is the viewer's record, 10, whose side byte was the recorded player's in both
+  replays measured (decision 22). A side byte that maps to no layout side plays the fixture with no
+  casting, so a wrong byte shows another side's tutorial and reads nothing outside the published
+  block.
+- **A change of side or Interface Type restarts the open window's demo** at the next fill, and the
+  log says `wiki: the player's side is S and the interface type I`.
+- **Why the text is filled on the render thread**: the title, subtitle, paragraphs, demo titles
+  and tree leaves are read by the layout (`tagpu_wikilay_build`) on the render thread. Filling them
+  there is a pure function of the wiki's data and the published casting, both immutable and never
+  freed, and of two values the record carries by value, so the render thread reads nothing the
+  game thread writes, and the record carries two small values rather than every text of the window
+  filled. The caption alone is filled on the game thread, where the stage's view is copied.
+
+### The checks
+
+All MEASURED 2026-10-28 on this tree (native gcc with AddressSanitizer and UndefinedBehaviorSanitizer
+unless said).
+
+- **`simcheck.mjs`** plays every demo with the fixture in eight contexts (the authored types, and
+  the `identity`, `shifted` and `unbound` castings, each at types 1 and 0): 21 of 21 pass in each,
+  `identity` held to the authored play frame for frame, and `unbound` stopping under the badge
+  where its wall is built (five Build Lines demos at tick 0, the ring around a queued build at 206).
+  **`--pack`** plays each mod's pack in every side at both types: stock, Mayhem, ProTA and Twilight
+  21 of 21 in every side; Escalation and TA Zero Build Lines' 10 of 10 in every side, and Quick
+  Build's 11 played with their claims unchecked.
+- **`simparity.mjs`**: 504 demo plays (21 demos × the fixture, the tall fixture and no sidebar ×
+  the eight contexts), 46 rule cases, 173 refusal cases, 24 castings and layouts read back and 21
+  malformed-data cases, all equal.
+- **`textparity.mjs`**: 18 castings at Interface Type 1, 0, 2 and −1 over both entries and 24 edge
+  strings, 12 600 fills and 27 656 cut fills, equal byte for byte.
+- **`assetcheck.py --side`**: the DLL's loader equal to `gfx.py --side-only` in all six setups,
+  the castings (2 sides × 9 casts bound in five setups, 3 × 9 in TA Zero), the per-side types and
+  PANELSIDE, the display names and the 3D load's unit types included; the sidebar loads in 244 to
+  436 ms in that sanitised native build.
+- **The game** (2026-10-28, retail as CORE under Wine): the log said `the player's side is 1 and
+  the interface type 1`; the Quick Build demo's caption read "Construction Kbot selected. Pick the
+  Metal Extractor in the build menu." over CORCK's figures; `tagpu_wiki.check` played 84 demos (2
+  sides × 2 types × 21), none refused, and all 84 hashes equal `simparity.mjs --hash --pack` on the
+  stock pack, compared afterwards from the log. After a typed `+iface 0` the log said `the interface type 0`
+  and the click demo's caption read "Left-click builds it." where it had read "Right-click".
+- **`tools/wiki_regression.py - offline`** runs, in one run with no lock, `simcheck` (plain,
+  `--null-layout` and `--pack` for each pack present), `simparity` and `textparity` natively and
+  `--wine`, `sidecheck`, `stagecheck` and `scenecheck`: 522 s, all passing. `assetcheck.py --side`
+  and `wikilaycheck.py` are run on their own.
+
 ## The first entry: Quick Build: Resource Extractors
 
 The feature is [Resource snapping and Quick Build](tadr-port/resource-snapping.md). BAR's names
-for the same ideas are *Quick Build Extractor* (its widget) and *Upgrade T1 » T2*. Its demos:
+for the same ideas are *Quick Build Extractor* (its widget) and *Upgrade T1 » T2*. Its demos, named here in stock ARM's units, as the fixture plays them; on a mod's own layout each
+unit is its side's cast, and "the order click" is the right click at Interface Type 1 and the left
+click at type 0:
 
 | # | Demo | What the player sees |
 |---|---|---|
 | 1 | Snap onto the deposit | an ARMMEX placed from the build menu near a deposit lands on it (search radius 3) |
 | 2 | Hold Alt to place exactly | with Alt held the ghost stays where the cursor is |
-| 3 | Click a deposit to build | with a constructor selected, hovering a deposit shows the ghost; a right-click builds, no build menu |
+| 3 | Right-click a deposit to build (Left-click at type 0) | with a constructor selected, hovering a deposit shows the ghost; the order click builds, no build menu |
 | 4 | The best extractor that fits | ARMCK and ARMACK selected: ARMMOHO where it fits; on a deposit too small for it, ARMMEX |
-| 5 | Queue several with Shift | Shift+right-click deposit after deposit; the mode stays on |
-| 6 | Cancel a queued one | Shift+right-click its site again |
+| 5 | Queue several with Shift | Shift + the order click, deposit after deposit; the mode stays on |
+| 6 | Cancel a queued one | Shift + the order click on its site again |
 | 7 | Helpers assist | in a mixed selection, the builders that cannot make it guard the ones that can |
-| 8 | Upgrade your extractor | right-click a finished ARMMEX with ARMACK selected: reclaimed, then ARMMOHO built |
+| 8 | Upgrade your extractor | the order click on a finished ARMMEX with ARMACK selected: reclaimed, then ARMMOHO built |
 | 9 | Geothermal vents | the same click on a vent builds ARMGEO |
 | 10 | Metal maps | on uniform metal ground a click is a move; only a richer deposit builds |
 | 11 | Fog | an unexplored deposit does not snap; one under grey fog does |
@@ -803,7 +1126,7 @@ not.
 | 5 | Hollow rectangle | Shift+Alt+Ctrl+drag from bottom right to top left: fourteen ARMDRAG round the edge, from beside the press back to it |
 | 6 | Spacing | a Shift-drag line of seven ARMDRAG; Alt+Z twice mid-drag spreads it to five, then four, at once; released; armed again the next line starts spread, and Alt+X twice brings it back to seven |
 | 7 | Ring around a building | Shift+Ctrl over the ARMSOLAR previews twelve ARMDRAG round it; a press and release orders them |
-| 8 | Ring around a queued build | two ARMSOLAR queued by Shift-click; Shift+Ctrl over the second, still only a queued square, rings it |
+| 8 | Ring around a queued build | the demo's own ARMCK, top left, queues two ARMSOLAR by Shift-click, the far one in the bottom right and then a near one; it is still walking to the first when Shift+Ctrl over the second, still only a queued square, rings it |
 | 9 | Placing it again removes it | a row of five ARMLLT; dragging back over three shows them yellow and the release takes them off, adding nothing; a Shift-click on a fourth takes it off too |
 | 10 | Change the shape mid-drag | one drag: a line, Alt makes it a filled rectangle, Ctrl hollow, and the release orders the hollow one; a second drag is cancelled by a right press, which also disarms |
 
@@ -844,20 +1167,28 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
   "subtitle": "…",
   "text": ["paragraph", "…"],
   "lockedIn": ["escalation", "tazero", "unknown"],
-  "units": { "ARMMEX": { "footprint": [2, 2], "extracts": 0.001, "…": "…", "from": "ARMMEX.fbi" } },
+  "units": { "ARMMEX": { "cast": "mex", "footprint": [3, 3], "extracts": 0.001, "…": "…", "from": "ARMMEX.fbi" } },
   "scene": { "…": "the map every demo starts from" },
   "demos": [ { "id": "snap", "title": "Snap onto the deposit",
                "scene": { "…": "additions to the entry's scene" },
-               "inputs": [ { "at": 0, "move": [120, 80] }, { "at": 30, "down": "rmb" },
-                           { "at": 32, "up": "rmb" }, { "at": 30, "caption": "…" } ],
+               "inputs": [ { "at": 0, "move": [120, 80] }, { "at": 30, "down": "order" },
+                           { "at": 32, "up": "order" }, { "at": 30, "caption": "{order} the {mex}…" } ],
                "end": 240 } ] }
 ```
 
 - **Time is in simulation ticks**, 30 a second, so a demo plays the same at any frame rate and the
   game's version can be compared tick by tick.
 - **Positions are world units** (a cell is 16), the game's own.
-- **Keys and buttons**: `shift`, `alt`, `ctrl`, `z`, `x`, `lmb`, `rmb`. A `z` or `x` down steps
-  again while the key is held, as an auto-repeat does.
+- **Keys and buttons**: `shift`, `alt`, `ctrl`, `z`, `x`, `lmb`, `rmb`, and the actions `select`,
+  `order` and `cancel`, which the simulation turns into a button by the Interface Type (*Casts,
+  tokens and actions in the data*, above). A `z` or `x` down steps again while the key is held, as
+  an auto-repeat does.
+- **A unit's `cast`** is one of the nine casts, required, and no two units of an entry share one.
+  `"vent": true` makes every footprint cell a G cell; an optional `"g": [[dx, dz], …]` lists the
+  G cells when they are fewer (no entry needs it). A unit with G cells and a footprint past 16
+  cells a side is refused.
+- **Text** -- the title, subtitle, paragraphs, demo titles and captions -- names units by cast
+  tokens and buttons by `{order}`, `{select}` and `{cancel}` (above); any other `{…}` is refused.
 - **`{ "build": "ARMMEX" }`** arms a building (the manual placement mode). With the sidebar on it
   is the cursor's trip to the button (*The rules*, above), and both simulations refuse to play a
   demo that breaks the trip's data rule (`sim.js` `checkTrips`, `tagpu_wikidata_trips`): the build names a type; nothing but a caption stands in its trip,
@@ -933,9 +1264,8 @@ layout breaking any of them is refused whole and no index read out of it address
 
 ```json
 { "format": 1, "note": "…", "width": 128, "height": 480,
-  "sides": [ { "name": "ARM", "prefix": "ARM", "main2": "ARMMAIN2", "gen": "ARMGEN" } ],
-  "player_side": 0,
-  "types": { "ARMCK": { "pages": ["ARMCK1", "ARMCK2", "ARMCK3", "ARMCK4"], "orders": null } },
+  "sides": [ { "name": "ARM", "prefix": "ARM", "main2": "ARMMAIN2", "gen": "ARMGEN",
+               "types": { "ARMCK": { "pages": ["ARMCK1", "ARMCK2", "ARMCK3", "ARMCK4"], "orders": null } } } ],
   "screens": { "ARMCK1": { "y": 128, "w": 128, "h": 352, "gadgets": [
                  { "name": "ARMMEX", "role": "build", "unit": "ARMMEX", "rect": [4, 32, 60, 60] },
                  { "name": "ARMPREV", "role": "prev", "rect": [4, 228, 58, 20] } ] } } }
@@ -949,10 +1279,18 @@ layout breaking any of them is refused whole and no index read out of it address
   pixels, and optionally `grey` and `hidden`, booleans. The roles are `orders`, `buildtab`,
   `build`, `prev`, `next`, `stop` and `order`, as `0x41AA00` tells them apart by name. A build
   button's `unit` is its type, or `null` (greyed) when its name is no type.
-- **`sides`** lists 1 to 8 sides, each with a name, its prefix and its MAIN2 and GEN screens;
-  **`player_side`** is one of them.
-- **`types`** holds only the types with a page, at most 64 with distinct names, each with at most
-  7 numbered page screens and its orders page or `null`, and at least one of the two.
+- **`sides`** lists 1 to 8 sides, each with a name, its prefix, its MAIN2 and GEN screens and its
+  `types`. The simulation plays the side its context names; nothing in the layout says which side
+  is the player's.
+- **A side's `types`** holds only the types with a page that its casting names, each with at most
+  7 numbered page screens and its orders page or `null`, and at least one of the two; its pages
+  are read with that side's prefix, so one type may have other pages in another side. At most 64
+  over all the sides. A type's name is upper case, as the build buttons spell it (the engine
+  compares names without case, `0x488B10`).
+- **A mod's pack** (`gfx/side/<mod>/side.json`, gitignored) carries, beside the layout, `casting`,
+  index-aligned with `sides`: per side its `commander` and `casts`, each cast's type, title,
+  footprint, figures, `canstop`, `vent` and `g`, and `builds` naming casts, or `null` when unbound,
+  and the rule's `report` (why each pick); and `art.panelside`, a list a side.
 - **The bounds**: at most 48 screens and 64 gadgets a screen. A name, with its terminator, fits 32
   bytes in UTF-8. A layout that names a screen that is not in `screens` is refused. `note` and any
   key not named here are ignored.
@@ -968,10 +1306,22 @@ C sim from a recording of their calls on `sim.js`, and compares every answer the
 hash after every view included. A rule case must finish with one sim before it makes the next: the
 recording replays one at a time. For each demo and case it names the first differing tick or call
 and field. Last, it loads data the loader must survive or refuse (`wikitest.c`'s `malformed`
-cases). MEASURED 2026-10-27: all 21 demos played three times (the fixture's sidebar, the 768-row
-fixture's and none: 63 plays) and 35 rule cases equal, all 67 refusal cases alike and all 13
-malformed-data cases as stated, both natively (gcc, with AddressSanitizer and
+cases). Every demo plays with the fixture's sidebar, the 768-row fixture's and none, each in eight
+contexts: the entry's own types and the `identity`, `shifted` and `unbound` castings of
+`tools/wiki/casting-fixture.json`, each at Interface Type 1 and 0. MEASURED 2026-10-28: 504 demo
+plays and 46 rule cases equal, all 173 refusal cases alike, 24 castings and layouts read back
+alike and all 21 malformed-data cases as stated, natively (gcc, with AddressSanitizer and
 UndefinedBehaviorSanitizer) and with `--wine` (the DLL's compiler and flags, run under Wine).
+
+- **The context.** `WikiSim.play(entry, demo, layout, ctx)` and `create`, and
+  `tagpu_wikisim_init(…, const WIKISIMCTX* ctx, …)`, take `{side, casting, iface}`: the layout's
+  side the player plays, that side's casting or none (the entry's own types), and the Interface
+  Type. An absent context (NULL in C) is side 0, no casting and type 1, the interface the demos are
+  authored in. LIFETIME: the casting and the layout must outlive the simulation; in the DLL both
+  lie in the published WIKISIDE block, immutable and never freed. The bound entry, the resolved
+  script and the type-0 rows are [above](#the-per-mod-tutorials).
+- **The hash's first step** is the tick, `done`, the side (−1 without a sidebar) and the Interface
+  Type; `locked` is hashed with the sidebar off too. The captions enter it raw.
 
 - **Bit for bit, by construction.** Both visit units in creation order, use no clock and no
   randomness, and compute on doubles with + − × ÷ and sqrt only, each rounded once. The DLL
@@ -1038,7 +1388,9 @@ UndefinedBehaviorSanitizer) and with `--wine` (the DLL's compiler and flags, run
 
 **What it implements, from the feature's own rules** (`resource-snapping.md`), following
 `tagpu_resource.c` function for function (`site`, `snapped_site`, `distinct`, `same_plan`,
-`find_cancel`, `queued`, `quick_choice`, `plans_block`, `site_known`, `fits`):
+`find_cancel`, `queued`, `quick_choice`, `plans_block`, `site_known`, `fits`). "The order click" is
+the right click at Interface Type 1 and the left click at type 0 (*The two interface types in the
+simulations*, above):
 
 - **Manual snapping** (a build-menu extractor or geothermal plant): candidates within a square
   radius of 3 cells; a mex scores the footprint cells whose metal is strictly above
@@ -1049,19 +1401,21 @@ UndefinedBehaviorSanitizer) and with `--wine` (the DLL's compiler and flags, run
   Alt bypasses snapping.
 - **Quick Build** (no build-menu mode, at least one selected builder able to build a resource
   building): hovering empty ground over a distinct deposit or a vent shows the ghost of the
-  strongest option the selection can build that fits; a right-click orders it, replacing the
-  participating builders' orders, and Shift+right-click appends. The mode stays on.
+  strongest option the selection can build that fits; the order click orders it, replacing the
+  participating builders' orders, and Shift + the order click appends. The mode stays on.
   Selected builders that cannot build it guard those that can. Units that cannot build keep their
   orders.
-- **A queued site**: hovering it shows its ghost; Shift+right-click removes the selected builders'
+- **A queued site**: hovering it shows its ghost; Shift + the order click removes the selected builders'
   matching plans; a plain repeat click changes nothing.
 - **Upgrade**: hovering a finished extractor the player owns, with a selection that can build a
   strictly stronger one that fits, shows that one; the click orders a reclaim, then the build.
-- **Metal maps**: uniform metal ground is not a deposit (a right-click there is a move); a
+- **Metal maps**: uniform metal ground is not a deposit (the order click there is a move); a
   distinct richer patch is.
 - **Fog**: unexplored (black) cells do not count; grey-fogged ones do.
-- **Selection**: left-click a unit, left-drag a box, left-click empty ground to deselect.
-- **Orders**: a right-click with nothing to build is a move.
+- **Selection**: left-click a unit, left-drag a box; at type 1 a left click on empty ground
+  deselects, at type 0 a right press does.
+- **Orders**: the order click with nothing to build is a move, or the assist over an unfinished
+  building of the player's.
 
 **The placement gesture**, following `tagpu_place.c` function for function (`evaluate`,
 `toggles`, `take_offs`, `classify`, `ring_target`, `remove_taken` and `append_sites` as `commit`,
@@ -1195,10 +1549,40 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
   checked by `wiki_regression.py demos`, whose `tagpu_wiki.check` hashes must equal
   `simparity.mjs --hash`. `stagecheck.mjs` builds
   the stage natively (x86-64, SSE); the DLL compiles it for SSE2, but no check runs the i686 build.
-- **The demos are the stock game's.** The sidebar is the running mod's, but the units, their
-  figures and the captions are stock ARM's: a mod with other extractors or other build lists shows
-  the stock demos, and a demo whose build the mod's sidebar cannot reach stops under the badge. The
-  per-mod tutorials are [the sidebar plan](ingame-wiki-sidebar-plan.html)'s decisions 13 to 17.
+- **The per-mod tutorials have been played in one setup in game.** Retail as CORE at both
+  Interface Types (*The per-mod tutorials*, *The checks*); the six setups at both types, each
+  demo's `<entry>/<demo>/<side>/<iface>` hash from `tagpu_wiki.check` against
+  `simparity.mjs --hash --pack`, with pictures for the owner, have not been run, and neither has the
+  mods check (b1)–(b4) since each side got its own types.
+- **The sidebar's load time with the cast rule is not measured in game.** The budget is
+  `wikiside: loaded in N ms` under 1500 ms on the reference setup in Twilight and TA Zero, the
+  largest walks. Offline, in `assetcheck.py`'s sanitised native build, the six setups load in 244
+  to 436 ms.
+- **A restart with the window open has not been seen live.** A fill given another side or
+  Interface Type restarts the open window's demo, but a player cannot change either while the wiki
+  holds input: the typed command and the options screen both need the window closed. What has been
+  seen is the next open after a change, playing the new type.
+- **`tagpu_wikilay_check` builds without the castings' names.** The art loader's overflow check
+  fills the page at Interface Type 1, whose words are the longer, with each entry's own names; a
+  casting whose names are longer is not checked there, and a frame that overflows draws the ops
+  that fit (`tagpu_wikistate.c` says so once).
+- **Twilight's Quick Build demos wait for Quick Build to read the build menu.** The casting reads
+  the build menu, where Quick Build on `main` reads the AI list, CANBUILD. MEASURED 2026-10-28 in
+  Twilight as ARM at type 1 with an ARMCK selected: a click on a deposit ordered AAIMEXX, the AI
+  list's extractor, where the casting's mex is ARMAMEX, and a click on a vent gave a move, no
+  geothermal plant. The Quick Build menu landing (decision 23), a simulation landing of its own,
+  lands on `main` before this one.
+- **The code page is inferred.** The display names are converted as Windows-1252; the French bytes
+  measured are the same letters in Latin-1. No game run has shown the wiki's own text in another
+  language; `assetcheck.py --language` compares the two loaders' names offline.
+- **The replay's side rests on two replays.** `main+0x2A42` is 10 in a replay and record 10's side
+  byte was the recorded player's in both measured; that the replay always seats it so is
+  [INFERRED].
+- **Type 0's untested rows.** An unfinished building of the player's clicked with no builder
+  selected is selected in both simulations [INFERRED: its cursor was not measured]; the engine's
+  Ctrl + right press (`0x41CC60`, a view mode) is not modelled, and `main+0x2CDF` was never seen at
+  1 in game; no scene has a unit of another player, so the engine's attack cursor over one never
+  arises.
 - **The mixed interface value is shown as left-click.** The typed command `IFace` stores any
   integer and the registry load's clamp is signed, so `main+0x37EFA` can hold a value outside 0
   and 1. The engine's four `== 1` readers then take the type-0 branch and its two `!= 0` readers
@@ -1209,10 +1593,6 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
   by the loader's native fuzz (`assetcheck.py fuzz-side`), and held to the mockup by
   `simparity.mjs` and `stagecheck.mjs`. No compatibility setup triggers them and no test lever
   does, so the game has not been seen taking them.
-- **TA Zero's player side.** The wiki takes the side from the entry's units, so TA Zero's layout
-  names ARM (its sides are GOK, ARM and CORE, `player_side` 1) and the wiki shows ARMGEN and
-  ARMMAIN2, where a TA Zero skirmish player is GOK. Its (b1) therefore compares only GOKMAIN2.
-  Decision 17 (the player's own side) closes this.
 - **What the mods check does not read from the engine.** The pressed state (b1) gives the ARMCK's
   page (the BUILD tab and ARMMOVEORD drawn pressed) is copied from the captures' comparison, not read
   from the engine's snapshot. (b4) finds the badge by its red disc in the frame; the dump carries
@@ -1236,7 +1616,6 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
 - **The arrow cursor is drawn by no demo.** Every demo keeps a mobile unit selected or a building
   armed, so `cursornormal` is seen in game as the build cursor only; the arrow shows the same
   sequence. The stage's other cursor situations (selecting, reclaiming, attacking) are not modelled.
-- **The Quick Build deposit hover's cursor is inferred, not measured** (the cursor section above).
 - **What draws the geothermal steam plume is not established**: a feature animation or the
   engine's particles. `gfx=game` shows the vent's frame 0, without a plume.
 - **`gfx=game` departs from the game in known ways**: a textured face of other than four vertices
