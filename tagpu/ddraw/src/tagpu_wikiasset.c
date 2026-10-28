@@ -3067,12 +3067,13 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
             lay->side[side_map[i]].gen = screen_at(&S, gen) >= 0 ? remap[screen_at(&S, gen)] : -1;
         }
         lay->nside = nlay_side;
-        lay->player_side = side_map[ps];
         lay->ntype = ntype;
+        /* the types read are the player's side's: their pages and its DL are read with its prefix */
         for (k = 0; k < ntype; k++) {
             WIKIPAGES* t = &lay->type[k];
             int p;
             scopy(t->name, types[k].name, sizeof t->name);
+            t->side = side_map[ps];
             t->npage = types[k].last;
             for (p = 1; p <= types[k].last; p++) {
                 char name[WIKI_SIDE_NAME + 8];
@@ -3189,7 +3190,7 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
             unsigned char* blk;
             WIKISIDE* w;
             size_t rep_at;
-            int si;
+            int si, j, n;
             /* the report first, so the block can carry it */
             sb_raw(&S.rep, "],\"refused\":null,\"folders\":{\"gui\":");
             sb_q(&S.rep, in->names.gui, 0);
@@ -3215,22 +3216,24 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
                 sb_q(&S.rep, lay->screen[lay->side[i].main2].name, 0);
                 sb_raw(&S.rep, ",\"gen\":");
                 sb_q(&S.rep, lay->screen[lay->side[i].gen].name, 0);
-                sb_raw(&S.rep, "}");
-            }
-            sb_raw(&S.rep, "],\"player_side\":%d,\"types\":{", lay->player_side);
-            for (i = 0; i < lay->ntype; i++) {
-                sb_raw(&S.rep, "%s", i ? "," : "");
-                sb_q(&S.rep, lay->type[i].name, 0);
-                sb_raw(&S.rep, ":{\"pages\":[");
-                for (k = 0; k < lay->type[i].npage; k++) {
-                    sb_raw(&S.rep, "%s", k ? "," : "");
-                    sb_q(&S.rep, lay->screen[lay->type[i].page[k]].name, 0);
+                sb_raw(&S.rep, ",\"types\":{");
+                for (j = 0, n = 0; j < lay->ntype; j++) {
+                    const WIKIPAGES* t = &lay->type[j];
+                    if (t->side != i) continue;
+                    sb_raw(&S.rep, "%s", n++ ? "," : "");
+                    sb_q(&S.rep, t->name, 0);
+                    sb_raw(&S.rep, ":{\"pages\":[");
+                    for (k = 0; k < t->npage; k++) {
+                        sb_raw(&S.rep, "%s", k ? "," : "");
+                        sb_q(&S.rep, lay->screen[t->page[k]].name, 0);
+                    }
+                    sb_raw(&S.rep, "],\"orders\":");
+                    sb_q(&S.rep, t->orders >= 0 ? lay->screen[t->orders].name : NULL, 0);
+                    sb_raw(&S.rep, "}");
                 }
-                sb_raw(&S.rep, "],\"orders\":");
-                sb_q(&S.rep, lay->type[i].orders >= 0 ? lay->screen[lay->type[i].orders].name : NULL, 0);
-                sb_raw(&S.rep, "}");
+                sb_raw(&S.rep, "}}");
             }
-            sb_raw(&S.rep, "},\"screens\":{");
+            sb_raw(&S.rep, "],\"screens\":{");
             for (i = 0; i < lay->nscreen; i++) {
                 const WIKISCREEN* w2 = &lay->screen[i];
                 sb_raw(&S.rep, "%s", i ? "," : "");

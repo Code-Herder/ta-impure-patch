@@ -533,13 +533,13 @@ static void sring(B* c, const SBOX* b, double s, uint32_t col)
     ring(c, b->x + s / 2, b->y + s / 2, b->w - s, b->h - s, s, col);
 }
 
-/* a whitebox button's name: its unit, or its gadget name without the player's side's prefix
-   (ARMORDERS -> ORDERS). The layout is checked (tagpu_wikilayout_check), so every name in it is
-   terminated inside its array and the player's side is one of its sides. */
+/* a whitebox button's name: its unit, or its gadget name without the prefix of side 0, the side
+   every simulation plays (tagpu_wikisim.c CTX_SIDE) (ARMORDERS -> ORDERS). The layout is checked
+   (tagpu_wikilayout_check), so every name in it is terminated inside its array and it has a
+   side 0. */
 static const char* named(const WIKILAYOUT* L, const WIKIGADGET* g)
 {
-    const char* prefix = L->player_side >= 0 && L->player_side < L->nside && L->player_side < WIKI_SIDE_SIDES
-                       ? L->side[L->player_side].prefix : "";
+    const char* prefix = L->nside >= 1 ? L->side[0].prefix : "";
     const size_t n = strlen(prefix);
     if (g->role == WIKI_ROLE_BUILD && g->unit[0]) return g->unit;
     if (n && strlen(g->name) > n && !strncmp(g->name, prefix, n)) return g->name + n;

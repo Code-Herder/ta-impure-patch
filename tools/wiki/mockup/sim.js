@@ -118,8 +118,9 @@ const WikiSim = (() => {
      Every bound below is one tagpu_wikidata.h's WIKICASTDEF holds; a casting breaking one is refused whole. */
   const CASTS = ['builder', 'advbuilder', 'mex', 'moho', 'geo', 'walker', 'tower', 'wall', 'solar'];   // WIKI_CAST_* order
   const FIGURES = ['buildTime', 'workerTime', 'buildDistance', 'maxVelocity', 'extracts', 'energyMake'];
-  // WIKI_FP_MAX: a footprint's side on each axis, the width of a G row's bit mask; WIKI_ID_MAX: a type name's field
-  const FP_MAX = 16, ID_MAX = 24;
+  // WIKI_FP_MAX: a footprint's side on each axis, the width of a G row's bit mask; WIKI_ID_MAX: a type name's field;
+  // WIKI_TITLE_MAX: a display name's field, 31 code-page bytes (def+0x00 is 0x20 bytes) at most 3 UTF-8 bytes each
+  const FP_MAX = 16, ID_MAX = 24, TITLE_MAX = 94;
   /* a type's G cells, `g`: [[dx, dz], ...] inside its footprint, the yard cells with bit 0x80 (0x8F, the only yard
      code carrying it, 0x42CF9D..0x42D06B, DISASSEMBLED). `vent` says whether it has one; with no `g`, `vent: true` is
      a yard all G, as stock's ARMGEO is. Refused: a cell off the footprint, or a `vent` that disagrees with `g`. */
@@ -142,7 +143,7 @@ const WikiSim = (() => {
       /* a name of digits alone is refused because a JS object lists integer keys first, so the bound entry's types
          would leave definition order, which Quick Build's ties and every unit loop read; no UnitName measured is one */
       if (!obj(k) || !fitsIn(k.type, ID_MAX) || !k.type || /^[0-9]+$/.test(k.type)) no(`${at} has no type name of 1 to ${ID_MAX - 1} bytes, not all digits`);
-      if (!fitsIn(k.title, SIDE_NAME)) no(`${at} has no title of at most ${SIDE_NAME - 1} bytes`);
+      if (!fitsIn(k.title, TITLE_MAX)) no(`${at} has no title of at most ${TITLE_MAX - 1} bytes`);
       const f = k.footprint;
       if (!Array.isArray(f) || f.length !== 2 || !f.every(v => int(v) && v >= 1 && v <= FP_MAX)) no(`${at}: the footprint is not two integers 1..${FP_MAX}`);
       // the figures divide and step: a build time of 0 would fill a building in no time at all, and a negative or

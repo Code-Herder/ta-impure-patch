@@ -850,7 +850,7 @@ static void layout_json(FILE* f, const WIKILAYOUT* L)
 {
     /* sim.js ROLES, by WIKI_ROLE_* */
     static const char* const ROLE[WIKI_NROLES] = { "orders", "buildtab", "build", "prev", "next", "stop", "order" };
-    int i, j;
+    int i, j, k, n;
     fprintf(f, "{\"format\":1,\"width\":%d,\"height\":%d,\"sides\":[", L->width, L->height);
     for (i = 0; i < L->nside && i < WIKI_SIDE_SIDES; i++) {
         const WIKISIDEDEF* s = &L->side[i];
@@ -862,24 +862,25 @@ static void layout_json(FILE* f, const WIKILAYOUT* L)
         ustr(f, L->screen[s->main2].name, WIKI_SIDE_NAME);
         fprintf(f, ",\"gen\":");
         ustr(f, L->screen[s->gen].name, WIKI_SIDE_NAME);
-        fputc('}', f);
-    }
-    fprintf(f, "],\"player_side\":%d,\"types\":{", L->player_side);
-    for (i = 0; i < L->ntype && i < WIKI_SIDE_TYPES; i++) {
-        const WIKIPAGES* t = &L->type[i];
-        fprintf(f, "%s", i ? "," : "");
-        ustr(f, t->name, WIKI_SIDE_NAME);
-        fprintf(f, ":{\"pages\":[");
-        for (j = 0; j < t->npage && j < WIKI_SIDE_PAGES; j++) {
-            fprintf(f, "%s", j ? "," : "");
-            ustr(f, L->screen[t->page[j]].name, WIKI_SIDE_NAME);
+        fprintf(f, ",\"types\":{");
+        for (j = 0, n = 0; j < L->ntype && j < WIKI_SIDE_TYPES; j++) {
+            const WIKIPAGES* t = &L->type[j];
+            if (t->side != i) continue;
+            fprintf(f, "%s", n++ ? "," : "");
+            ustr(f, t->name, WIKI_SIDE_NAME);
+            fprintf(f, ":{\"pages\":[");
+            for (k = 0; k < t->npage && k < WIKI_SIDE_PAGES; k++) {
+                fprintf(f, "%s", k ? "," : "");
+                ustr(f, L->screen[t->page[k]].name, WIKI_SIDE_NAME);
+            }
+            fprintf(f, "],\"orders\":");
+            if (t->orders >= 0) ustr(f, L->screen[t->orders].name, WIKI_SIDE_NAME);
+            else fputs("null", f);
+            fputc('}', f);
         }
-        fprintf(f, "],\"orders\":");
-        if (t->orders >= 0) ustr(f, L->screen[t->orders].name, WIKI_SIDE_NAME);
-        else fputs("null", f);
-        fputc('}', f);
+        fputs("}}", f);
     }
-    fprintf(f, "},\"screens\":{");
+    fprintf(f, "],\"screens\":{");
     for (i = 0; i < L->nscreen && i < WIKI_SIDE_SCREENS; i++) {
         const WIKISCREEN* s = &L->screen[i];
         fprintf(f, "%s", i ? "," : "");

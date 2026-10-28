@@ -17,9 +17,16 @@
    each answered by one line.
 
    `wikitest refuse FILE` reads cases two lines each, {"name", "scripted": 0|1, "layout": the
-   layout or null} and then the entry, and makes a sim of the entry's first demo with that
-   layout: through the entry's loader, the layout's and tagpu_wikisim_init. It prints
-   "accepted <name>" or "refused <name>: why" per case; simparity.mjs asks sim.js the same.
+   layout or null, "iface": 0|1, "casting": a side's casting record or null} and then the entry,
+   and makes a sim of the entry's first demo with that layout: through the casting's reader, the
+   entry's loader, the layout's, the data rule of the demo's script resolved at `iface` (a
+   scripted demo's, as sim.js's resolve()) and tagpu_wikisim_init. It prints "accepted <name>" or
+   "refused <name>: why" per case; simparity.mjs asks text.js's checkEntry and sim.js the same.
+
+   `wikitest data FILE` reads items two lines each, {"kind": "casting"|"layout", "name"} and then
+   the JSON, reads each with tagpu_wikidata_casting or tagpu_wikidata_layout_json, and prints
+   what it read as one JSON line: {"ok": true, ...the struct in sim.js's names} or {"ok": false,
+   "why"}. simparity.mjs computes the same from sim.js's checkCasting and checkLayout.
 
    `wikitest constants` prints the build trip's constants as one JSON line, in sim.js's names.
 
@@ -298,10 +305,11 @@ static int demos(const char* path, const char* layout)
     char* pak = slurp(path, &n);
     WIKIDATA* d;
     WIKILAYOUT* lay = NULL;
-    int i, j;
+    int i, j, rc = 0;
     if (!pak) { fprintf(stderr, "wikitest: cannot read %s\n", path); return 2; }
     if (!(d = tagpu_wikidata_load((const unsigned char*)pak, n, err, sizeof err))) {
         fprintf(stderr, "wikitest: %s\n", err);
+        free(pak);
         return 2;
     }
     snprintf(file, sizeof file, "side/%s.json", layout ? layout : "-");
@@ -317,20 +325,26 @@ static int demos(const char* path, const char* layout)
             WIKISIM s;
             if (!tagpu_wikisim_init(&s, e, &e->demo[j], 1, lay, err, sizeof err)) {
                 fprintf(stderr, "wikitest: %s/%s: %s\n", e->id, e->demo[j].id, err);
-                return 2;
+                rc = 2;
+                goto done;
             }
             frame(&s, e->id, e->demo[j].id, 1);
             while (!s.done) {
                 tagpu_wikisim_step(&s);
                 frame(&s, e->id, e->demo[j].id, s.done);
             }
-            if (s.oom) { fprintf(stderr, "wikitest: %s/%s ran out of memory\n", e->id, e->demo[j].id); return 2; }
+            if (s.oom) {
+                fprintf(stderr, "wikitest: %s/%s ran out of memory\n", e->id, e->demo[j].id);
+                rc = 2;
+            }
             tagpu_wikisim_free(&s);
+            if (rc) goto done;
         }
+done:
     tagpu_wikidata_free(d);
     free(lay);
     free(pak);
-    return 0;
+    return rc;
 }
 
 /* The trace's lines, each parsed; a caption the sim keeps points into its line's tree, so every
@@ -358,6 +372,13 @@ static void case_end(CASE* c)
     c->live = 0;
 }
 
+/* a message on stderr; 2, the exit of a run that could not go on */
+static int cannot(const char* what)
+{
+    fprintf(stderr, "wikitest: %s\n", what);
+    return 2;
+}
+
 static int trace(const char* path)
 {
     static CASE c;
@@ -365,15 +386,16 @@ static int trace(const char* path)
     size_t n;
     char* text = slurp(path, &n);
     char *line, *end;
+    int rc = 0;
     if (!text) { fprintf(stderr, "wikitest: cannot read %s\n", path); return 2; }
-    for (line = text; *line; line = end) {
+    for (line = text; *line && !rc; line = end) {
         TJDOC* doc;
         const TJV* v;
         const char* op;
         for (end = line; *end && *end != '\n'; end++) {}
         if (*end) *end++ = 0;
         if (!*line) continue;
-        if (!(doc = tagpu_json_parse(line, strlen(line), err, sizeof err))) { fprintf(stderr, "wikitest: %s\n", err); return 2; }
+        if (!(doc = tagpu_json_parse(line, strlen(line), err, sizeof err))) { rc = cannot(err); break; }
         v = tagpu_json_root(doc);
         op = tj_str(tj_get(v, "op"), "");
         if (!strcmp(op, "create")) {
@@ -382,40 +404,74 @@ static int trace(const char* path)
             char* next;
             case_end(&c);
             if (layout && !tj_is(layout, TJ_NULL) && !(c.lay = tagpu_wikidata_layout_json(layout, err, sizeof err))) {
-                fprintf(stderr, "wikitest: %s\n", err);
-                return 2;
+                tagpu_json_free(doc);
+                rc = cannot(err);
+                break;
             }
             tagpu_json_free(doc);
             for (next = end; *end && *end != '\n'; end++) {}
             if (*end) *end++ = 0;
-            if (!tagpu_wikidata_entry(&c.e, next, strlen(next), err, sizeof err)
-                || !tagpu_wikisim_init(&c.s, &c.e, c.e.ndemo ? &c.e.demo[0] : NULL, scripted, c.lay, err, sizeof err)) {
-                fprintf(stderr, "wikitest: %s\n", err);
-                return 2;
+            if (!tagpu_wikidata_entry(&c.e, next, strlen(next), err, sizeof err)) { rc = cannot(err); break; }
+            if (!tagpu_wikisim_init(&c.s, &c.e, c.e.ndemo ? &c.e.demo[0] : NULL, scripted, c.lay, err, sizeof err)) {
+                tagpu_wikidata_entry_free(&c.e);
+                rc = cannot(err);
+                break;
             }
             c.live = 1;
             continue;
         }
-        if (!c.live || c.ndoc == (int)(sizeof c.doc / sizeof c.doc[0])) { fprintf(stderr, "wikitest: %s before a create, or too many\n", op); return 2; }
+        if (!c.live || c.ndoc == (int)(sizeof c.doc / sizeof c.doc[0])) {
+            fprintf(stderr, "wikitest: %s before a create, or too many\n", op);
+            tagpu_json_free(doc);
+            rc = 2;
+            break;
+        }
         c.doc[c.ndoc++] = doc;
         if (!strcmp(op, "input")) {
             WIKIINPUT in;
-            if (!tagpu_wikidata_input(&c.e, tj_get(v, "ev"), &in, err, sizeof err)) { fprintf(stderr, "wikitest: %s\n", err); return 2; }
-            tagpu_wikisim_input(&c.s, &in);
+            if (!tagpu_wikidata_input(&c.e, tj_get(v, "ev"), &in, err, sizeof err)) rc = cannot(err);
+            else tagpu_wikisim_input(&c.s, &in);
         } else if (!strcmp(op, "step")) tagpu_wikisim_step(&c.s);
         else if (!strcmp(op, "view")) { view(&c.s, 1); putchar('\n'); }
         else if (!strcmp(op, "orders")) { orders(&c.s, tj_str(tj_get(v, "id"), "")); putchar('\n'); }
         else if (!strcmp(op, "done")) puts(c.s.done ? "true" : "false");
         else if (!strcmp(op, "tick")) printf("%d\n", c.s.tick);
         else if (!strcmp(op, "hash")) { hash(&c.s); putchar('\n'); }
-        else { fprintf(stderr, "wikitest: no op %s\n", op); return 2; }
+        else { fprintf(stderr, "wikitest: no op %s\n", op); rc = 2; }
     }
     case_end(&c);
     free(text);
-    return 0;
+    return rc;
 }
 
 /* ---- refusals, case by case ---- */
+
+/* One case's verdict: 1 accepted, else 0 with why in `err`. The steps are sim.js's make() in its
+   order, each one the C side has: the casting's reader (checkCasting, which sim.js's binder
+   calls first), the entry's loader (text.js's checkEntry among its refusals), the layout's, the
+   data rule of the resolved script and tagpu_wikisim_init. tagpu_wikisim_init takes no context,
+   so it plays the entry's own types at interface type 1, and the data rule at the case's `iface`
+   is asked here; simparity.mjs gives it no case whose verdict the binding or the interface type
+   of the sim itself decides. */
+static int refuse_case(const TJV* v, const char* entry, char* err, size_t errn)
+{
+    const TJV *layout = tj_get(v, "layout"), *casting = tj_get(v, "casting");
+    const int scripted = (int)tj_num(tj_get(v, "scripted"), 0), iface = (int)tj_num(tj_get(v, "iface"), 1);
+    WIKICASTING k;
+    WIKIENTRY e;
+    WIKILAYOUT* lay = NULL;
+    WIKISIM s;
+    int ok;
+    if (casting && !tj_is(casting, TJ_NULL) && !tagpu_wikidata_casting(casting, &k, err, errn)) return 0;
+    if (!tagpu_wikidata_entry(&e, entry, strlen(entry), err, errn)) return 0;
+    ok = !(layout && !tj_is(layout, TJ_NULL) && !(lay = tagpu_wikidata_layout_json(layout, err, errn)))
+      && !(scripted && e.ndemo && !tagpu_wikidata_buttons(&e.demo[0], iface, err, errn))
+      && tagpu_wikisim_init(&s, &e, e.ndemo ? &e.demo[0] : NULL, scripted, lay, err, errn);
+    if (ok) tagpu_wikisim_free(&s);
+    tagpu_wikidata_entry_free(&e);
+    free(lay);
+    return ok;
+}
 
 static int refuse(const char* path)
 {
@@ -423,43 +479,129 @@ static int refuse(const char* path)
     size_t n;
     char* text = slurp(path, &n);
     char *line, *end;
+    int rc = 0;
     if (!text) { fprintf(stderr, "wikitest: cannot read %s\n", path); return 2; }
     for (line = text; *line; line = end) {
         TJDOC* doc;
-        const TJV *v, *layout;
+        const TJV* v;
         char name[128], *entry;
-        WIKIENTRY e;
-        WIKILAYOUT* lay = NULL;
-        WIKISIM s;
-        int scripted, ok;
         for (end = line; *end && *end != '\n'; end++) {}
         if (*end) *end++ = 0;
         if (!*line) continue;
         for (entry = end; *end && *end != '\n'; end++) {}
         if (*end) *end++ = 0;
-        if (!(doc = tagpu_json_parse(line, strlen(line), err, sizeof err))) { fprintf(stderr, "wikitest: %s\n", err); return 2; }
+        if (!(doc = tagpu_json_parse(line, strlen(line), err, sizeof err))) { rc = cannot(err); break; }
         v = tagpu_json_root(doc);
         snprintf(name, sizeof name, "%s", tj_str(tj_get(v, "name"), "?"));
-        scripted = (int)tj_num(tj_get(v, "scripted"), 0);
-        layout = tj_get(v, "layout");
         err[0] = 0;
-        ok = tagpu_wikidata_entry(&e, entry, strlen(entry), err, sizeof err);
-        if (ok && layout && !tj_is(layout, TJ_NULL) && !(lay = tagpu_wikidata_layout_json(layout, err, sizeof err))) {
-            tagpu_wikidata_entry_free(&e);
-            ok = 0;
-        }
-        if (ok) {
-            if (tagpu_wikisim_init(&s, &e, e.ndemo ? &e.demo[0] : NULL, scripted, lay, err, sizeof err)) tagpu_wikisim_free(&s);
-            else ok = 0;
-            tagpu_wikidata_entry_free(&e);
-        }
-        if (ok) printf("accepted %s\n", name);
+        if (refuse_case(v, entry, err, sizeof err)) printf("accepted %s\n", name);
         else printf("refused %s: %s\n", name, err);
-        free(lay);
         tagpu_json_free(doc);
     }
     free(text);
-    return 0;
+    return rc;
+}
+
+/* ---- castings and layouts, read and written back ---- */
+
+static void casting_out(const WIKICASTING* k)
+{
+    static const char* const FIG[6] = { "buildTime", "workerTime", "buildDistance", "maxVelocity", "extracts", "energyMake" };
+    int c, i;
+    fputs("{\"ok\":true,\"casts\":[", stdout);
+    for (c = 0; c < WIKI_NCAST; c++) {
+        const WIKICASTDEF* d = &k->cast[c];
+        const double fig[6] = { d->build_time, d->worker_time, d->build_distance, d->max_velocity, d->extracts, d->energy_make };
+        if (c) putchar(',');
+        if (!d->bound) { fputs("null", stdout); continue; }
+        putchar('{');
+        key("type", 1); str(d->type);
+        key("title", 0); str(d->title);
+        key("fx", 0); printf("%d", d->fx);
+        key("fz", 0); printf("%d", d->fz);
+        for (i = 0; i < 6; i++) { key(FIG[i], 0); num(fig[i]); }
+        key("canstop", 0); printf("%d", d->canstop);
+        key("vent", 0); printf("%d", d->vent);
+        key("g", 0);
+        for (i = 0; i < WIKI_FP_MAX; i++) printf("%c%u", i ? ',' : '[', (unsigned)d->g[i]);
+        putchar(']');
+        key("builds", 0); printf("%u", (unsigned)d->builds);
+        putchar('}');
+    }
+    puts("]}");
+}
+
+static void layout_out(const WIKILAYOUT* L)
+{
+    int i, j, k, n;
+    printf("{\"ok\":true,\"height\":%d,\"screens\":[", L->height);
+    for (i = 0; i < L->nscreen; i++) { if (i) putchar(','); str(L->screen[i].name); }
+    fputs("],\"sides\":[", stdout);
+    for (i = 0; i < L->nside; i++) {
+        const WIKISIDEDEF* d = &L->side[i];
+        if (i) putchar(',');
+        putchar('{');
+        key("name", 1); str(d->name);
+        key("prefix", 0); str(d->prefix);
+        key("main2", 0); str(L->screen[d->main2].name);
+        key("gen", 0); str(L->screen[d->gen].name);
+        key("types", 0);
+        putchar('{');
+        for (j = 0, n = 0; j < L->ntype; j++) {
+            const WIKIPAGES* t = &L->type[j];
+            if (t->side != i) continue;
+            key(t->name, n++ == 0);
+            putchar('{');
+            key("pages", 1);
+            putchar('[');
+            for (k = 0; k < t->npage; k++) { if (k) putchar(','); str(L->screen[t->page[k]].name); }
+            putchar(']');
+            key("orders", 0); str(t->orders >= 0 ? L->screen[t->orders].name : NULL);
+            putchar('}');
+        }
+        fputs("}}", stdout);
+    }
+    puts("]}");
+}
+
+static int data(const char* path)
+{
+    char err[256];
+    size_t n;
+    char* text = slurp(path, &n);
+    char *line, *end;
+    int rc = 0;
+    if (!text) { fprintf(stderr, "wikitest: cannot read %s\n", path); return 2; }
+    for (line = text; *line && !rc; line = end) {
+        TJDOC *head, *doc;
+        char* item;
+        for (end = line; *end && *end != '\n'; end++) {}
+        if (*end) *end++ = 0;
+        if (!*line) continue;
+        for (item = end; *end && *end != '\n'; end++) {}
+        if (*end) *end++ = 0;
+        if (!(head = tagpu_json_parse(line, strlen(line), err, sizeof err))) { rc = cannot(err); break; }
+        if (!(doc = tagpu_json_parse(item, strlen(item), err, sizeof err))) {
+            tagpu_json_free(head);
+            rc = cannot(err);
+            break;
+        }
+        err[0] = 0;
+        if (!strcmp(tj_str(tj_get(tagpu_json_root(head), "kind"), ""), "casting")) {
+            WIKICASTING k;
+            if (tagpu_wikidata_casting(tagpu_json_root(doc), &k, err, sizeof err)) casting_out(&k);
+            else { fputs("{\"ok\":false,\"why\":", stdout); str(err); puts("}"); }
+        } else {
+            WIKILAYOUT* L = tagpu_wikidata_layout_json(tagpu_json_root(doc), err, sizeof err);
+            if (L) layout_out(L);
+            else { fputs("{\"ok\":false,\"why\":", stdout); str(err); puts("}"); }
+            free(L);
+        }
+        tagpu_json_free(doc);
+        tagpu_json_free(head);
+    }
+    free(text);
+    return rc;
 }
 
 static int constants(void)
@@ -588,6 +730,25 @@ static int facing_case(const char* name, const char* facing, int refused, double
     return said(ok, name, why);
 }
 
+/* an entry of one type, ARMX, whose record is `unit`: refused when `refused`, else loaded with
+   cast `cast` and G rows `g` (its first four), compared exactly */
+static int unit_case(const char* name, const char* unit, int refused, int cast, const unsigned* g)
+{
+    char text[512], err[256], why[512];
+    WIKIENTRY e;
+    int loaded, ok, i;
+    snprintf(text, sizeof text, "{\"format\":1,\"id\":\"u\",\"units\":{\"ARMX\":%s},\"scene\":{\"map\":{\"w\":8,\"h\":8}}}", unit);
+    err[0] = 0;
+    loaded = tagpu_wikidata_entry(&e, text, strlen(text), err, sizeof err);
+    snprintf(why, sizeof why, "%s: cast %d, g %u %u %u %u; expected %scast %d, g %u %u %u %u", loaded ? "loaded" : err,
+             loaded ? e.def[0].cast : -2, loaded ? e.def[0].g[0] : 0, loaded ? e.def[0].g[1] : 0, loaded ? e.def[0].g[2] : 0,
+             loaded ? e.def[0].g[3] : 0, refused ? "a refusal, not " : "", cast, g[0], g[1], g[2], g[3]);
+    ok = refused ? !loaded : loaded && e.def[0].cast == cast;
+    for (i = 0; !refused && ok && i < WIKI_FP_MAX; i++) ok = e.def[0].g[i] == (i < 4 ? g[i] : 0);
+    if (loaded) tagpu_wikidata_entry_free(&e);
+    return said(ok, name, why);
+}
+
 static int malformed(void)
 {
     int ok = 1;
@@ -609,6 +770,19 @@ static int malformed(void)
     ok &= facing_case("facing-an-object", "{\"x\":1,\"z\":0}", 1, 0, 0);
     ok &= facing_case("facing-square-underflows", "[1e-200,0]", 1, 0, 0);
     ok &= facing_case("facing-square-overflows", "[1e200,0]", 1, 0, 0);
+    {
+        static const unsigned none[4] = { 0, 0, 0, 0 }, listed[4] = { 2, 0, 8, 0 }, all[4] = { 7, 7, 0, 0 },
+                              row16[4] = { 0xFFFF, 0, 0, 0 };
+        ok &= unit_case("cast-named", "{\"cast\":\"geo\",\"footprint\":[2,2],\"buildTime\":1}", 0, WIKI_CAST_GEO, none);
+        ok &= unit_case("cast-absent", "{\"footprint\":[2,2],\"buildTime\":1}", 0, -1, none);
+        ok &= unit_case("cast-unknown", "{\"cast\":\"Geo\",\"footprint\":[2,2],\"buildTime\":1}", 0, -1, none);
+        ok &= unit_case("g-listed", "{\"footprint\":[4,4],\"buildTime\":1,\"vent\":true,\"g\":[[1,0],[3,2]]}", 0, -1, listed);
+        ok &= unit_case("g-vent-all", "{\"footprint\":[3,2],\"buildTime\":1,\"vent\":true}", 0, -1, all);
+        ok &= unit_case("g-vent-all-16", "{\"footprint\":[16,1],\"buildTime\":1,\"vent\":true}", 0, -1, row16);
+        /* the G rows hold 16 cells a side: sim.js would play it, the C refuses it (tagpu_wikidata.h) */
+        ok &= unit_case("g-footprint-past-16", "{\"footprint\":[17,2],\"buildTime\":1,\"vent\":true}", 1, -1, none);
+        ok &= unit_case("no-g-footprint-past-16", "{\"footprint\":[17,2],\"buildTime\":1,\"g\":[]}", 0, -1, none);
+    }
     (void)ok;
     return 0;
 }
@@ -618,9 +792,11 @@ int main(int argc, char** argv)
     if ((argc == 3 || argc == 4) && !strcmp(argv[1], "demos")) return demos(argv[2], argc == 4 ? argv[3] : NULL);
     if (argc == 3 && !strcmp(argv[1], "trace")) return trace(argv[2]);
     if (argc == 3 && !strcmp(argv[1], "refuse")) return refuse(argv[2]);
+    if (argc == 3 && !strcmp(argv[1], "data")) return data(argv[2]);
     if (argc == 2 && !strcmp(argv[1], "constants")) return constants();
     if (argc == 2 && !strcmp(argv[1], "malformed")) return malformed();
-    fprintf(stderr, "usage: wikitest demos PAK [LAYOUT] | wikitest trace FILE | wikitest refuse FILE | wikitest constants"
+    fprintf(stderr, "usage: wikitest demos PAK [LAYOUT] | wikitest trace FILE | wikitest refuse FILE | wikitest data FILE"
+            " | wikitest constants"
             " | wikitest malformed\n");
     return 2;
 }

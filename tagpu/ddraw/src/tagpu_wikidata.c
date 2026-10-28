@@ -10,11 +10,45 @@
 #define FOOTPRINT_MAX 64    /* tagpu_placegeo.c's bound on a footprint, which its arithmetic rests on */
 #define TREE_MAX      1024  /* nodes of the tree */
 
-static const char* const KEY_NAMES[WIKI_NKEYS] = { "shift", "alt", "ctrl", "z", "x", "lmb", "rmb" };
+/* sim.js's KEYS then ACTIONS, in WIKI_KEY_* and WIKI_ACT_* order */
+static const char* const KEY_NAMES[WIKI_NKEYNAMES] = { "shift", "alt", "ctrl", "z", "x", "lmb", "rmb",
+                                                       "select", "order", "cancel" };
+/* sim.js's and text.js's CASTS, in WIKI_CAST_* order */
+static const char* const CAST_NAMES[WIKI_NCAST] = { "builder", "advbuilder", "mex", "moho", "geo",
+                                                    "walker", "tower", "wall", "solar" };
 
 const char* tagpu_wikidata_key_name(int key)
 {
-    return key >= 0 && key < WIKI_NKEYS ? KEY_NAMES[key] : NULL;
+    return key >= 0 && key < WIKI_NKEYNAMES ? KEY_NAMES[key] : NULL;
+}
+
+int tagpu_wikidata_button(int key, int iface)
+{
+    return key == WIKI_ACT_SELECT ? WIKI_KEY_LMB : key == WIKI_ACT_CANCEL ? WIKI_KEY_RMB
+         : key == WIKI_ACT_ORDER ? (iface == 1 ? WIKI_KEY_RMB : WIKI_KEY_LMB) : key;
+}
+
+/* a cast by name, or -1 */
+static int cast_of(const char* s)
+{
+    int c;
+    for (c = 0; s && c < WIKI_NCAST; c++)
+        if (!strcmp(CAST_NAMES[c], s)) return c;
+    return -1;
+}
+
+/* A number as JS's String() writes it, for messages that quote sim.js's: the shortest %g that
+   reads back as the same double, which is the digits JS gives for every value a message here
+   quotes (ticks, small integers and their fractions). */
+static const char* jsnum(char* out, size_t n, double v)
+{
+    int p;
+    for (p = 1; p < 17; p++) {
+        snprintf(out, n, "%.*g", p, v);
+        if (strtod(out, NULL) == v) return out;
+    }
+    snprintf(out, n, "%.17g", v);
+    return out;
 }
 
 int tagpu_wikidata_def(const WIKIENTRY* e, const char* name)
@@ -136,7 +170,7 @@ static int key_of(R* r, const TJV* v, int* key)
     int k;
     *key = -1;
     if (!s) return 1;
-    for (k = 0; k < WIKI_NKEYS; k++)
+    for (k = 0; k < WIKI_NKEYNAMES; k++)
         if (!strcmp(KEY_NAMES[k], s)) { *key = k; return 1; }
     return refuse(r, "no key", s);
 }
@@ -154,6 +188,32 @@ static int canstop(R* r, const TJV* v, int* out)
     return 1;
 }
 
+/* A type's G cells into rows of WIKI_FP_MAX bits, sim.js's checkG and gCell: `g` lists them as
+   [dx, dz] inside the fx x fz footprint, and `vent` is set exactly when that list is not empty;
+   with no `g`, a `vent` type is all G (stock's ARMGEO) and any other has none. The G cell is the
+   yard code 0x8F, the only one carrying bit 0x80 (0x42CF9D..0x42D06B, DISASSEMBLED). THE BOUND:
+   the caller holds fx and fz to WIKI_FP_MAX for a type with a G cell, and every cell set here is
+   inside fx x fz, so no bit lands past a row or a row past the array. 0 when `g` breaks the rule. */
+static int g_rows(const TJV* g, int vent, int fx, int fz, uint16_t* rows)
+{
+    const TJV* c;
+    int dz;
+    memset(rows, 0, WIKI_FP_MAX * sizeof *rows);
+    if (!g) {
+        for (dz = 0; vent && dz < fz; dz++) rows[dz] = (uint16_t)((1u << fx) - 1);
+        return 1;
+    }
+    if (!tj_is(g, TJ_ARR) || !vent != !g->n) return 0;
+    for (c = g->first; c; c = c->next) {
+        const TJV *x = tj_at(c, 0), *z = tj_at(c, 1);
+        if (!tj_is(c, TJ_ARR) || c->n != 2 || !tj_is(x, TJ_NUM) || !tj_is(z, TJ_NUM) || x->num != floor(x->num)
+            || z->num != floor(z->num) || !(x->num >= 0 && x->num < fx) || !(z->num >= 0 && z->num < fz))
+            return 0;
+        rows[(int)z->num] |= (uint16_t)(1u << (int)x->num);
+    }
+    return 1;
+}
+
 static int defs(R* r, WIKIENTRY* e, const TJV* units)
 {
     const TJV* u;
@@ -168,6 +228,7 @@ static int defs(R* r, WIKIENTRY* e, const TJV* units)
         if (!*u->key || strlen(u->key) >= sizeof d->name) return refuse(r, "a type name is empty or too long:", u->key);
         strcpy(d->name, u->key);
         d->title = tj_str(tj_get(u, "name"), NULL);
+        d->cast = cast_of(tj_str(tj_get(u, "cast"), NULL));
         if (!integer(r, tj_at(tj_get(u, "footprint"), 0), 1, FOOTPRINT_MAX, &d->fx, "a footprint")
             || !integer(r, tj_at(tj_get(u, "footprint"), 1), 1, FOOTPRINT_MAX, &d->fz, "a footprint"))
             return 0;
@@ -178,6 +239,15 @@ static int defs(R* r, WIKIENTRY* e, const TJV* units)
         d->extracts       = tj_num(tj_get(u, "extracts"), 0);
         d->energy_make    = tj_num(tj_get(u, "energyMake"), 0);
         d->vent           = tj_is(tj_get(u, "vent"), TJ_TRUE);
+        /* WIKI_FP_MAX: the G rows' width; no entry's G type comes near it (ARMGEO is 4 x 4) */
+        if (d->vent && (d->fx > WIKI_FP_MAX || d->fz > WIKI_FP_MAX))
+            return refuse(r, "a type with G cells has a footprint past 16 a side:", d->name);
+        if (!g_rows(tj_get(u, "g"), d->vent, d->fx, d->fz, d->g)) {
+            char why[WIKI_ID_MAX + 112];
+            snprintf(why, sizeof why, "unit %s: g is not a list of G cells inside the footprint, held by vent exactly "
+                     "when it is not empty", d->name);
+            return refuse(r, why, NULL);
+        }
         if (!canstop(r, tj_get(u, "canstop"), &d->canstop)) return 0;
         if (!(d->build_time > 0)) return refuse(r, "no positive buildTime for", d->name);
     }
@@ -353,6 +423,94 @@ void tagpu_wikidata_entry_free(WIKIENTRY* e)
     memset(e, 0, sizeof *e);
 }
 
+/* ---- the text's tokens: text.js's checkText and checkEntry, which is their specification ---- */
+
+/* text.js's BUTTONS: the action words, the capital form starting a sentence */
+static const char* const BUTTON_NAMES[] = { "order", "Order", "select", "Select", "cancel", "Cancel" };
+
+/* the index JS gives byte `at` of the UTF-8 text `s`: its UTF-16 code units before it, one per
+   character and two for a character past U+FFFF (a 4-byte sequence) */
+static long utf16_at(const char* s, const char* at)
+{
+    long n = 0;
+    for (; s < at; s++) {
+        const unsigned char b = (unsigned char)*s;
+        if ((b & 0xC0) != 0x80) n += b >= 0xF0 ? 2 : 1;
+    }
+    return n;
+}
+
+/* text.js's checkText: a token is a "{" and everything up to the next "}"; its name is a cast of
+   `casts` (bit c: a unit of the entry has cast c) or a button. Refused: a "{" with no "}" after
+   it, a name neither cast nor button (a capitalised cast and "{}" among them: a display name
+   carries its own capitals), and a cast no unit of the entry has. A "}" alone is text. 1, or 0
+   with why in `why`. */
+static int text_check(const char* s, unsigned casts, char* why, size_t n)
+{
+    const char *a, *b;
+    for (a = s; s && (a = strchr(a, '{')); a = b + 1) {
+        size_t len, k;
+        int c;
+        if (!(b = strchr(a + 1, '}'))) {
+            snprintf(why, n, "the \"{\" at %ld starts no token", utf16_at(s, a));
+            return 0;
+        }
+        len = (size_t)(b - a - 1);
+        for (c = 0; c < WIKI_NCAST && !(strlen(CAST_NAMES[c]) == len && !strncmp(CAST_NAMES[c], a + 1, len)); c++) {}
+        if (c < WIKI_NCAST) {
+            if ((casts >> c) & 1) continue;
+            snprintf(why, n, "{%.*s}: no unit of the entry has that cast", (int)len, a + 1);
+            return 0;
+        }
+        for (k = 0; k < sizeof BUTTON_NAMES / sizeof *BUTTON_NAMES; k++)
+            if (strlen(BUTTON_NAMES[k]) == len && !strncmp(BUTTON_NAMES[k], a + 1, len)) break;
+        if (k == sizeof BUTTON_NAMES / sizeof *BUTTON_NAMES) {
+            snprintf(why, n, "{%.*s} is not a token", (int)len, a + 1);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* one shown text through text_check, refusing the entry with where it stands; a text that is not
+   a string is never shown, so it holds no token */
+static int text_ok(R* r, const TJV* v, unsigned casts, const char* where)
+{
+    char why[160], msg[256];
+    if (!tj_is(v, TJ_STR) || text_check(v->str, casts, why, sizeof why)) return 1;
+    snprintf(msg, sizeof msg, "%s: %s", where, why);
+    return refuse(r, msg, NULL);
+}
+
+/* text.js's checkEntry, in its order: the title, the subtitle, each paragraph, then each demo's
+   title and its inputs' captions; the first refusal is the one reported */
+static int tokens(R* r, const WIKIENTRY* e, const TJV* root)
+{
+    const TJV *c, *d, *in;
+    char where[96], num[32];
+    unsigned casts = 0;
+    int i;
+    for (i = 0; i < e->ndef; i++)
+        if (e->def[i].cast >= 0) casts |= 1u << e->def[i].cast;
+    if (!text_ok(r, tj_get(root, "title"), casts, "title") || !text_ok(r, tj_get(root, "subtitle"), casts, "subtitle"))
+        return 0;
+    for (c = tj_is(tj_get(root, "text"), TJ_ARR) ? tj_get(root, "text")->first : NULL, i = 0; c; c = c->next, i++) {
+        snprintf(where, sizeof where, "text[%d]", i);
+        if (!text_ok(r, c, casts, where)) return 0;
+    }
+    for (d = tj_is(tj_get(root, "demos"), TJ_ARR) ? tj_get(root, "demos")->first : NULL, i = 0; d; d = d->next, i++) {
+        snprintf(where, sizeof where, "demos[%d].title", i);
+        if (!text_ok(r, tj_get(d, "title"), casts, where)) return 0;
+        for (in = tj_is(tj_get(d, "inputs"), TJ_ARR) ? tj_get(d, "inputs")->first : NULL; in; in = in->next) {
+            const TJV* at = tj_get(in, "at");
+            snprintf(where, sizeof where, "demos[%d] caption at %s", i,
+                     tj_is(at, TJ_NUM) ? jsnum(num, sizeof num, at->num) : "undefined");
+            if (!text_ok(r, tj_get(in, "caption"), casts, where)) return 0;
+        }
+    }
+    return 1;
+}
+
 int tagpu_wikidata_entry(WIKIENTRY* e, const char* text, size_t len, char* err, size_t errn)
 {
     R r;
@@ -381,6 +539,7 @@ int tagpu_wikidata_entry(WIKIENTRY* e, const char* text, size_t len, char* err, 
     else
         for (c = tj_is(tj_get(root, "demos"), TJ_ARR) ? tj_get(root, "demos")->first : NULL; c; c = c->next)
             if (!demo(&r, c, &e->demo[i++])) break;
+    if (!r.failed) tokens(&r, e, root);
     if (r.failed) {
         tagpu_wikidata_entry_free(e);
         return 0;
@@ -388,34 +547,71 @@ int tagpu_wikidata_entry(WIKIENTRY* e, const char* text, size_t len, char* err, 
     return 1;
 }
 
-/* ---- the build trip's data rule ------------------------------------------------------------ */
+/* ---- the data rules of a demo's script ---------------------------------------------------- */
 
 /* the simulation's order: by tick, then file order */
-static int trip_order(const void* a, const void* b)
+static int script_order(const void* a, const void* b)
 {
     const WIKIINPUT* x = *(const WIKIINPUT* const*)a;
     const WIKIINPUT* y = *(const WIKIINPUT* const*)b;
     return x->at < y->at ? -1 : x->at > y->at ? 1 : x < y ? -1 : x > y;
 }
 
+/* the demo's inputs in the simulation's order, an array the caller frees; NULL with a message
+   in `err` when memory runs out */
+static const WIKIINPUT** script(const WIKIDEMO* d, char* err, size_t errn)
+{
+    const WIKIINPUT** in = (const WIKIINPUT**)malloc(((size_t)d->ninput + 1) * sizeof *in);
+    int i;
+    if (!in) {
+        if (err && errn) snprintf(err, errn, "wiki demo %s: out of memory", d->id ? d->id : "?");
+        return NULL;
+    }
+    for (i = 0; i < d->ninput; i++) in[i] = &d->input[i];
+    qsort((void*)in, (size_t)d->ninput, sizeof *in, script_order);
+    return in;
+}
+
+int tagpu_wikidata_buttons(const WIKIDEMO* d, int iface, char* err, size_t errn)
+{
+    const WIKIINPUT** in = script(d, err, errn);
+    int i, k, held[2] = { 0, 0 }, ok = 1;
+    if (!in) return 0;
+    for (i = 0; ok && i < d->ninput; i++) {
+        /* the press first, then the release: sim.js reads `down` before `up` in one input */
+        const int key[2] = { tagpu_wikidata_button(in[i]->down, iface), tagpu_wikidata_button(in[i]->up, iface) };
+        for (k = 0; ok && k < 2; k++) {
+            const int down = k == 0, b = key[k] == WIKI_KEY_LMB ? 0 : key[k] == WIKI_KEY_RMB ? 1 : -1;
+            char num[32];
+            if (b < 0) continue;
+            if (down == held[b]) {
+                if (err && errn)
+                    snprintf(err, errn, "demo %s: at tick %s the %s of %s %s", d->id ? d->id : "?",
+                             jsnum(num, sizeof num, in[i]->at), down ? "press" : "release", KEY_NAMES[key[k]],
+                             down ? "while it is held" : "while it is up");
+                ok = 0;
+            }
+            held[b] = down;
+        }
+    }
+    free((void*)in);
+    return ok;
+}
+
 static int trip_no(char* err, size_t errn, const WIKIDEMO* d, const WIKIINPUT* e, const char* what)
 {
+    char num[32];
     if (err && errn)
-        snprintf(err, errn, "wiki demo %s: the build at tick %.17g %s", d->id ? d->id : "?", e->at, what);
+        snprintf(err, errn, "wiki demo %s: the build at tick %s %s", d->id ? d->id : "?", jsnum(num, sizeof num, e->at), what);
     return 0;
 }
 
-int tagpu_wikidata_trips(const WIKIDEMO* d, char* err, size_t errn)
+int tagpu_wikidata_trips(const WIKIDEMO* d, int iface, char* err, size_t errn)
 {
     const double end = d->has_end ? d->end : INFINITY;
-    const WIKIINPUT** in = (const WIKIINPUT**)malloc(((size_t)d->ninput + 1) * sizeof *in);
+    const WIKIINPUT** in = script(d, err, errn);
     int i, j, lmb = 0, ok = 1;
-    if (!in) {
-        snprintf(err, errn, "wiki demo %s: out of memory", d->id ? d->id : "?");
-        return 0;
-    }
-    for (i = 0; i < d->ninput; i++) in[i] = &d->input[i];
-    qsort((void*)in, (size_t)d->ninput, sizeof *in, trip_order);
+    if (!in) return 0;
     for (i = 0; ok && i < d->ninput; i++) {
         const WIKIINPUT* e = in[i];
         if (e->has & WIKI_IN_BUILD) {
@@ -432,8 +628,8 @@ int tagpu_wikidata_trips(const WIKIDEMO* d, char* err, size_t errn)
                 ok = trip_no(err, errn, d, e, "has another input standing in its trip");
             else if (!(end >= e->at + WIKI_TRIP)) ok = trip_no(err, errn, d, e, "has the demo end inside its trip");
         }
-        if (e->down == WIKI_KEY_LMB) lmb = 1;
-        if (e->up == WIKI_KEY_LMB) lmb = 0;
+        if (tagpu_wikidata_button(e->down, iface) == WIKI_KEY_LMB) lmb = 1;
+        if (tagpu_wikidata_button(e->up, iface) == WIKI_KEY_LMB) lmb = 0;
     }
     free((void*)in);
     return ok;
@@ -492,16 +688,17 @@ int tagpu_wikilayout_check(const WIKILAYOUT* L, char* err, size_t errn)
             || d->gen < 0 || d->gen >= L->nscreen)
             return lay_no(err, errn, "a side has no name, prefix, or MAIN2 and GEN screens", NULL);
     }
-    if (L->player_side < 0 || L->player_side >= L->nside)
-        return lay_no(err, errn, "player_side is not one of the sides", NULL);
-    /* WIKI_SIDE_TYPES: WIKI_MAX_DEFS, the unit types one entry can name */
-    if (L->ntype < 0 || L->ntype > WIKI_SIDE_TYPES) return lay_no(err, errn, "more than 64 types", NULL);
+    /* WIKI_SIDE_TYPES: WIKIPAGES' table, one row per (type, side) over every side */
+    if (L->ntype < 0 || L->ntype > WIKI_SIDE_TYPES) return lay_no(err, errn, "more than 64 types over the sides", NULL);
     for (i = 0; i < L->ntype; i++) {
         const WIKIPAGES* t = &L->type[i];
         if (!terminated(t->name)) return lay_no(err, errn, "a type's name is not terminated", NULL);
-        /* one entry per type: the simulation finds a unit's pages by its type's name */
+        if (t->side < 0 || t->side >= L->nside) return lay_no(err, errn, "a type is in no side:", t->name);
+        /* one row per (type, side): the simulation finds a unit's pages by its type's name in the
+           side it plays */
         for (j = 0; j < i; j++)
-            if (!strcmp(L->type[j].name, t->name)) return lay_no(err, errn, "a type is named twice:", t->name);
+            if (L->type[j].side == t->side && !strcmp(L->type[j].name, t->name))
+                return lay_no(err, errn, "a type is named twice in one side:", t->name);
         /* WIKI_SIDE_PAGES: the page is unit+0x110 bits 23..25, a 3-bit field, so the engine
            reaches at most 7 numbered pages */
         if (t->npage < 0 || t->npage > WIKI_SIDE_PAGES) return lay_no(err, errn, "more than 7 pages for", t->name);
@@ -568,8 +765,7 @@ static int lay_gadget(const TJV* v, WIKIGADGET* g)
 static int lay_read(const TJV* root, WIKILAYOUT* L, char* err, size_t errn)
 {
     const TJV *c, *g, *screens = tj_get(root, "screens"), *sides = tj_get(root, "sides");
-    const TJV* types = tj_get(root, "types");
-    int i;
+    int i, n = 0;
     if (!tj_is(root, TJ_OBJ) || !tj_is(tj_get(root, "format"), TJ_NUM) || tj_get(root, "format")->num != 1)
         return lay_no(err, errn, "format is not 1", NULL);
     L->format = 1;
@@ -604,23 +800,25 @@ static int lay_read(const TJV* root, WIKILAYOUT* L, char* err, size_t errn)
         if (!tj_is(c, TJ_OBJ) || !lay_name(tj_get(c, "name"), d->name, 0) || !lay_name(tj_get(c, "prefix"), d->prefix, 1)
             || (d->main2 = lay_screen(L, tj_get(c, "main2"))) < 0 || (d->gen = lay_screen(L, tj_get(c, "gen"))) < 0)
             return lay_no(err, errn, "a side has no name, prefix, or MAIN2 and GEN screens", NULL);
+        if (!tj_is(tj_get(c, "types"), TJ_OBJ)) return lay_no(err, errn, "a side's types is not an object:", d->name);
+        n += tj_get(c, "types")->n;
     }
-    if (!lay_int(tj_get(root, "player_side"), 0, WIKI_SIDE_SIDES - 1, &L->player_side))
-        return lay_no(err, errn, "player_side is not one of the sides", NULL);
-    if (!tj_is(types, TJ_OBJ) || types->n > WIKI_SIDE_TYPES)
-        return lay_no(err, errn, "types is not an object of at most 64", NULL);
-    for (c = types->first; c; c = c->next) {
-        WIKIPAGES* t = &L->type[L->ntype++];
-        const TJV *pages = tj_get(c, "pages"), *orders = tj_get(c, "orders");
-        if (strlen(c->key) >= WIKI_SIDE_NAME) return lay_no(err, errn, "a type's name is too long:", c->key);
-        strcpy(t->name, c->key);
-        if (!tj_is(c, TJ_OBJ) || !tj_is(pages, TJ_ARR) || pages->n > WIKI_SIDE_PAGES)
-            return lay_no(err, errn, "a type has no list of at most 7 page screens:", c->key);
-        for (g = pages->first; g; g = g->next)
-            if ((t->page[t->npage++] = lay_screen(L, g)) < 0) return lay_no(err, errn, "a page is not a screen for", c->key);
-        if (tj_is(orders, TJ_NULL)) t->orders = -1;
-        else if ((t->orders = lay_screen(L, orders)) < 0) return lay_no(err, errn, "orders is not a screen or null for", c->key);
-    }
+    /* WIKI_SIDE_TYPES: counted over every side before one row is written */
+    if (n > WIKI_SIDE_TYPES) return lay_no(err, errn, "more than 64 types over the sides", NULL);
+    for (c = sides->first, i = 0; c; c = c->next, i++)
+        for (g = tj_get(c, "types")->first; g; g = g->next) {
+            WIKIPAGES* t = &L->type[L->ntype++];
+            const TJV *pages = tj_get(g, "pages"), *orders = tj_get(g, "orders"), *p;
+            if (strlen(g->key) >= WIKI_SIDE_NAME) return lay_no(err, errn, "a type's name is too long:", g->key);
+            strcpy(t->name, g->key);
+            t->side = i;
+            if (!tj_is(g, TJ_OBJ) || !tj_is(pages, TJ_ARR) || pages->n > WIKI_SIDE_PAGES)
+                return lay_no(err, errn, "a type has no list of at most 7 page screens:", g->key);
+            for (p = pages->first; p; p = p->next)
+                if ((t->page[t->npage++] = lay_screen(L, p)) < 0) return lay_no(err, errn, "a page is not a screen for", g->key);
+            if (tj_is(orders, TJ_NULL)) t->orders = -1;
+            else if ((t->orders = lay_screen(L, orders)) < 0) return lay_no(err, errn, "orders is not a screen or null for", g->key);
+        }
     return tagpu_wikilayout_check(L, err, errn);
 }
 
@@ -657,6 +855,118 @@ WIKILAYOUT* tagpu_wikidata_layout_pak(const unsigned char* pak, size_t npak, con
         return NULL;
     }
     return tagpu_wikidata_layout((const char*)t, n, err, errn);
+}
+
+/* ---- a side's casting: sim.js's checkCasting, which is its specification ------------------- */
+
+static int cast_no(char* err, size_t errn, WIKICASTING* c, const char* what)
+{
+    if (err && errn) snprintf(err, errn, "the casting is refused: %s", what);
+    memset(c, 0, sizeof *c);
+    return 0;
+}
+
+/* sim.js's FIGURES, in its order, and where each lands */
+static double* figure(WIKICASTDEF* k, int i)
+{
+    double* const at[6] = { &k->build_time, &k->worker_time, &k->build_distance, &k->max_velocity, &k->extracts,
+                            &k->energy_make };
+    return at[i];
+}
+static const char* const FIGURES[6] = { "buildTime", "workerTime", "buildDistance", "maxVelocity", "extracts", "energyMake" };
+
+/* one bound cast's record into `k`, 1; else 0 with why in `why` */
+static int cast_def(const TJV* v, const char* at, WIKICASTDEF* k, char* why, size_t n)
+{
+    const TJV *t = tj_get(v, "type"), *f = tj_get(v, "footprint"), *cs = tj_get(v, "canstop"), *vt = tj_get(v, "vent");
+    const TJV *b = tj_get(v, "builds"), *x;
+    size_t len;
+    int i;
+    k->bound = 1;
+    /* THE BOUND: 1..WIKI_ID_MAX - 1 bytes fit `type` with its terminator. Not all digits: a JS
+       object lists integer keys first, so sim.js's bound entry would leave definition order */
+    if (!tj_is(v, TJ_OBJ) || !tj_is(t, TJ_STR) || !(len = strlen(t->str)) || len >= WIKI_ID_MAX
+        || strspn(t->str, "0123456789") == len) {
+        snprintf(why, n, "%s has no type name of 1 to %d bytes, not all digits", at, WIKI_ID_MAX - 1);
+        return 0;
+    }
+    memcpy(k->type, t->str, len + 1);
+    /* WIKI_TITLE_MAX: the title and its terminator fit `title` */
+    if (!tj_is(tj_get(v, "title"), TJ_STR) || (len = strlen(tj_get(v, "title")->str)) >= WIKI_TITLE_MAX) {
+        snprintf(why, n, "%s has no title of at most %d bytes", at, WIKI_TITLE_MAX - 1);
+        return 0;
+    }
+    memcpy(k->title, tj_get(v, "title")->str, len + 1);
+    /* WIKI_FP_MAX: the G rows' width */
+    if (!tj_is(f, TJ_ARR) || f->n != 2 || !lay_int(tj_at(f, 0), 1, WIKI_FP_MAX, &k->fx) || !lay_int(tj_at(f, 1), 1, WIKI_FP_MAX, &k->fz)) {
+        snprintf(why, n, "%s: the footprint is not two integers 1..%d", at, WIKI_FP_MAX);
+        return 0;
+    }
+    /* the figures divide and step: a build time of 0 would fill a building in no time at all,
+       and a negative or infinite speed or reach would leave the world's arithmetic */
+    for (i = 0; i < 6; i++) {
+        if (!(x = tj_get(v, FIGURES[i]))) continue;
+        if (!tj_is(x, TJ_NUM) || !(x->num >= 0 && x->num < INFINITY)) {
+            snprintf(why, n, "%s: %s is not a finite number >= 0", at, FIGURES[i]);
+            return 0;
+        }
+        *figure(k, i) = x->num;
+    }
+    if (!(k->build_time > 0)) { snprintf(why, n, "%s: buildTime is not above 0", at); return 0; }
+    if (cs && (!tj_is(cs, TJ_NUM) || cs->num != floor(cs->num) || !isfinite(cs->num))) {
+        snprintf(why, n, "%s: canstop is not an integer", at);
+        return 0;
+    }
+    /* sim.js's (canstop & 1) === 1: JS's & takes the integer modulo 2^32, which keeps its parity */
+    k->canstop = cs && fmod(fabs(cs->num), 2.0) == 1.0;
+    if (vt && !tj_is(vt, TJ_TRUE) && !tj_is(vt, TJ_FALSE)) { snprintf(why, n, "%s: vent is not a boolean", at); return 0; }
+    k->vent = tj_is(vt, TJ_TRUE);
+    /* fx and fz are within WIKI_FP_MAX above, the bound g_rows rests on */
+    if (!g_rows(tj_get(v, "g"), k->vent, k->fx, k->fz, k->g)) {
+        snprintf(why, n, "%s: g is not a list of G cells inside the footprint, held by vent exactly when it is not empty", at);
+        return 0;
+    }
+    if (b) {
+        int ok = tj_is(b, TJ_ARR);
+        for (x = ok ? b->first : NULL; x; x = x->next) {
+            const int c = tj_is(x, TJ_STR) ? cast_of(x->str) : -1;
+            if (c < 0) { ok = 0; break; }
+            k->builds |= (uint16_t)(1u << c);
+        }
+        if (!ok) { snprintf(why, n, "%s: builds is not a list of casts", at); return 0; }
+    }
+    return 1;
+}
+
+int tagpu_wikidata_casting(const TJV* v, WIKICASTING* c, char* err, size_t errn)
+{
+    const TJV *casts = tj_get(v, "casts"), *m, *o;
+    char why[200], at[32];
+    int i;
+    memset(c, 0, sizeof *c);
+    if (!tj_is(v, TJ_OBJ) || !tj_is(casts, TJ_OBJ)) return cast_no(err, errn, c, "casts is not an object");
+    for (m = casts->first; m; m = m->next) {
+        if (cast_of(m->key) < 0) {
+            snprintf(why, sizeof why, "%s is not a cast", m->key);
+            return cast_no(err, errn, c, why);
+        }
+        for (o = casts->first; o != m; o = o->next)
+            if (!strcmp(o->key, m->key)) {
+                snprintf(why, sizeof why, "%s is named twice", m->key);
+                return cast_no(err, errn, c, why);
+            }
+    }
+    for (i = 0; i < WIKI_NCAST; i++) {
+        const TJV* k = tj_get(casts, CAST_NAMES[i]);
+        if (!k) {
+            snprintf(why, sizeof why, "%s is absent (null is the unbound cast)", CAST_NAMES[i]);
+            return cast_no(err, errn, c, why);
+        }
+        if (tj_is(k, TJ_NULL)) continue;
+        snprintf(at, sizeof at, "cast %s", CAST_NAMES[i]);
+        if (!cast_def(k, at, &c->cast[i], why, sizeof why)) return cast_no(err, errn, c, why);
+    }
+    return 1;
 }
 
 /* ---- the tree ------------------------------------------------------------------------------- */

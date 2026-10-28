@@ -24,6 +24,10 @@
    arithmetic below can overflow: a wild cursor answers as off the map */
 #define CELL_BOUND (1 << 20)
 
+/* The context sim.js's context() gives a sim created with none: the layout's side 0, which every
+   checked layout has (tagpu_wikilayout_check: 1 to 8 sides), and interface type 1. Every sim
+   plays it: tagpu_wikisim_init takes no context. */
+enum { CTX_SIDE = 0, CTX_IFACE = 1 };
 enum { KIND_NONE, KIND_MEX, KIND_GEO };
 enum { HOW_BUILD, HOW_RECLAIM };
 /* where the cursor is (sim.js over()); NONE: a mouse button that has not gone down */
@@ -747,13 +751,14 @@ static int gadget_at(const WIKISIM* s, int screen, const WIKIUNIT* shown, double
    shows the side's MAIN2; EXACTLY ONE selected unit whose type has pages shows its numbered page
    while bit 22 is set, else its orders page (<NAME>0.GUI) when the type has one; anything else,
    two builders of one type included, shows the side's GEN, with the unit shown when there is
-   exactly one. GEN and MAIN2 are the player's side's. The sim routes after every input and every
-   tick, where the engine re-routes a frame or more later: a known difference of at most a frame.
+   exactly one. GEN and MAIN2 are those of the side the sim plays (CTX_SIDE). The sim routes after
+   every input and every tick, where the engine re-routes a frame or more later: a known
+   difference of at most a frame.
    A screen change drops the capture, as the engine's page swap reloads the screen and its
    gadgets. */
 static void route(WIKISIM* s)
 {
-    const WIKISIDEDEF* side = &s->lay->side[s->lay->player_side];
+    const WIKISIDEDEF* side = &s->lay->side[CTX_SIDE];
     const WIKIPAGES* T;
     WIKIUNIT* u = NULL;
     int i, nsel = 0, screen;
@@ -2260,11 +2265,12 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     s->lay = lay && (scripted && d && d->has_sidebar ? d->sidebar : scene_builder(e, a) || scene_builder(e, b))
            ? lay : NULL;
     s->trips = scripted && s->lay;
-    if (s->trips && d && !tagpu_wikidata_trips(d, err, errn)) return 0;
+    if (s->trips && d && !tagpu_wikidata_trips(d, CTX_IFACE, err, errn)) return 0;
+    /* a type's pages are the ones of the side the sim plays: a type is found by (name, side) */
     for (i = 0; i < e->ndef; i++) {
         s->ltype[i] = -1;
         for (k = 0; s->lay && k < s->lay->ntype; k++)
-            if (!strcmp(s->lay->type[k].name, e->def[i].name)) s->ltype[i] = k;
+            if (s->lay->type[k].side == CTX_SIDE && !strcmp(s->lay->type[k].name, e->def[i].name)) s->ltype[i] = k;
     }
     s->cap = -1;
     s->locked = -1;
