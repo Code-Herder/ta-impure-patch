@@ -430,8 +430,30 @@ void tagpu_wikidata_entry_free(WIKIENTRY* e)
 
 /* ---- the text's tokens: text.js's checkText and checkEntry, which is their specification ---- */
 
-/* text.js's BUTTONS: the action words, the capital form starting a sentence */
-static const char* const BUTTON_NAMES[] = { "order", "Order", "select", "Select", "cancel", "Cancel" };
+/* text.js's BUTTONS: each button token's name and its word, [interface type 0, type 1], the capital
+   form starting a sentence. Type 0 orders with the left button and type 1 with the right; both
+   select with the left button and cancel with the right, as the demos' actions resolve
+   (tagpu_wikidata_button), so only {order} follows the interface type. */
+static const struct { const char* name; const char* word[2]; } BUTTONS[] = {
+    { "order",  { "left-click",  "right-click" } }, { "Order",  { "Left-click",  "Right-click" } },
+    { "select", { "click",       "click" } },       { "Select", { "Click",       "Click" } },
+    { "cancel", { "right-click", "right-click" } }, { "Cancel", { "Right-click", "Right-click" } },
+};
+#define NBUTTON (sizeof BUTTONS / sizeof *BUTTONS)
+
+static int button_of(const char* s, size_t len)
+{
+    size_t k;
+    for (k = 0; k < NBUTTON; k++)
+        if (strlen(BUTTONS[k].name) == len && !strncmp(BUTTONS[k].name, s, len)) return (int)k;
+    return -1;
+}
+
+const char* tagpu_wikidata_button_word(const char* s, size_t len, int iface)
+{
+    const int k = button_of(s, len);
+    return k < 0 ? NULL : BUTTONS[k].word[iface == 1 ? 1 : 0];
+}
 
 /* the index JS gives byte `at` of the UTF-8 text `s`: its UTF-16 code units before it, one per
    character and two for a character past U+FFFF (a 4-byte sequence) */
@@ -454,7 +476,7 @@ static int text_check(const char* s, unsigned casts, char* why, size_t n)
 {
     const char *a, *b;
     for (a = s; s && (a = strchr(a, '{')); a = b + 1) {
-        size_t len, k;
+        size_t len;
         int c;
         if (!(b = strchr(a + 1, '}'))) {
             snprintf(why, n, "the \"{\" at %ld starts no token", utf16_at(s, a));
@@ -467,9 +489,7 @@ static int text_check(const char* s, unsigned casts, char* why, size_t n)
             snprintf(why, n, "{%.*s}: no unit of the entry has that cast", (int)len, a + 1);
             return 0;
         }
-        for (k = 0; k < sizeof BUTTON_NAMES / sizeof *BUTTON_NAMES; k++)
-            if (strlen(BUTTON_NAMES[k]) == len && !strncmp(BUTTON_NAMES[k], a + 1, len)) break;
-        if (k == sizeof BUTTON_NAMES / sizeof *BUTTON_NAMES) {
+        if (button_of(a + 1, len) < 0) {
             snprintf(why, n, "{%.*s} is not a token", (int)len, a + 1);
             return 0;
         }
@@ -487,8 +507,55 @@ static int text_ok(R* r, const TJV* v, unsigned casts, const char* where)
     return refuse(r, msg, NULL);
 }
 
+/* THE CAPTION'S BOUND, text.js's captionWorst: the most bytes caption `s` can fill to, whatever the
+   casting and the interface type -- its own bytes with a button token at its longer word and a
+   cast token at the longer of WIKI_TITLE_MAX - 1 bytes, past which tagpu_wikidata_casting keeps
+   every casting's names, and the entry's own name for that cast, which an unbound cast reads
+   (tagpu_wikitext_words). Only for a text text_check accepted: every token is a cast or a
+   button. */
+static size_t caption_worst(const char* s, const WIKIENTRY* e)
+{
+    const char *a = s, *b, *z;
+    size_t n = 0;
+    while ((b = strchr(a, '{')) != NULL && (z = strchr(b + 1, '}')) != NULL) {
+        const size_t len = (size_t)(z - b - 1);
+        const int k = button_of(b + 1, len);
+        size_t word = 0;
+        int c, i;
+        if (k >= 0) {
+            const size_t w0 = strlen(BUTTONS[k].word[0]), w1 = strlen(BUTTONS[k].word[1]);
+            word = w0 > w1 ? w0 : w1;
+        } else {
+            word = WIKI_TITLE_MAX - 1;
+            for (c = 0; c < WIKI_NCAST && !(strlen(CAST_NAMES[c]) == len && !strncmp(CAST_NAMES[c], b + 1, len)); c++) {}
+            for (i = 0; c < WIKI_NCAST && i < e->ndef; i++)
+                if (e->def[i].cast == c) {
+                    const char* own = e->def[i].title && e->def[i].title[0] ? e->def[i].title : e->def[i].name;
+                    if (strlen(own) > word) word = strlen(own);
+                    break;
+                }
+        }
+        n += (size_t)(b - a) + word;
+        a = z + 1;
+    }
+    return n + strlen(a);
+}
+
+/* a caption that passed text_check through the caption's bound, refusing the entry with where it
+   stands */
+static int caption_ok(R* r, const TJV* v, const WIKIENTRY* e, const char* where)
+{
+    char msg[256];
+    size_t n;
+    if (!tj_is(v, TJ_STR) || (n = caption_worst(v->str, e)) < WIKI_CAPTION_MAX) return 1;
+    snprintf(msg, sizeof msg, "%s: it can fill to %lu bytes, more than the %d a caption holds", where,
+             (unsigned long)n, WIKI_CAPTION_MAX - 1);
+    return refuse(r, msg, NULL);
+}
+
 /* text.js's checkEntry, in its order: the title, the subtitle, each paragraph, then each demo's
-   title and its inputs' captions; the first refusal is the one reported */
+   title and its inputs' captions, each caption through the caption's bound after its tokens; the
+   first refusal is the one reported */
 static int tokens(R* r, const WIKIENTRY* e, const TJV* root)
 {
     const TJV *c, *d, *in;
@@ -510,7 +577,8 @@ static int tokens(R* r, const WIKIENTRY* e, const TJV* root)
             const TJV* at = tj_get(in, "at");
             snprintf(where, sizeof where, "demos[%d] caption at %s", i,
                      tj_is(at, TJ_NUM) ? jsnum(num, sizeof num, at->num) : "undefined");
-            if (!text_ok(r, tj_get(in, "caption"), casts, where)) return 0;
+            if (!text_ok(r, tj_get(in, "caption"), casts, where) || !caption_ok(r, tj_get(in, "caption"), e, where))
+                return 0;
         }
     }
     return 1;

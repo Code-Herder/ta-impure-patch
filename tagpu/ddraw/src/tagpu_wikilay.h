@@ -33,7 +33,8 @@
 
 #define WIKI_MAXHOT    160      /* the hit map: TAGPU_CMD_WIKI's hits (bound: tagpu_wikilay.c)   */
 #define WIKI_MAXNODE   1024     /* the tree's nodes the loader keeps: one fold bit each           */
-#define WIKI_CAPTION   256      /* the caption's bytes, with its terminator                       */
+#define WIKI_CAPTION   WIKI_CAPTION_MAX /* the caption's bytes, with its terminator: every loaded
+                                           caption's fill fits                                  */
 
 /* the three panels that scroll, the order of WIKIPAGE.scroll and the keys scroll:tree,
    scroll:demos and scroll:text */
@@ -102,8 +103,8 @@ typedef struct {
 /* What one build answers besides its ops: each panel's scroll as drawn and its limit, its
    scrollbar as drawn (the track, h 0 when the panel shows none, and the thumb's top and length on
    it, so a press is read against the thumb the player saw), the stage's rect inside its bezel (the
-   stage draws there and a click on it is read there), and the window. A closed window answers
-   zeros. */
+   stage draws there and a click on it is read there), the window, and whether the caption's lines
+   passed its strip, whose overflow is hidden. A closed window answers zeros. */
 typedef struct {
     float   scroll[WIKI_NSCROLL];
     float   scroll_max[WIKI_NSCROLL];
@@ -111,6 +112,7 @@ typedef struct {
     float   thumb_y[WIKI_NSCROLL], thumb_h[WIKI_NSCROLL];
     HUDRECT stage;
     HUDRECT window;
+    int     caption_cut;        /* the strip shows only the caption's first lines */
 } WIKIFRAME;
 
 typedef struct WIKILAY WIKILAY;
@@ -145,7 +147,7 @@ const char*   tagpu_wikilay_mod_name(int mod);
 /* The ops for page `st` over the wiki `d`, into `out` (about 500 KB: never on a stack), and what
    the frame answers into `fr`. The state's indices are bounded against the data: an entry or a
    demo it does not have reads as none. Returns 0 with the reason in `err` only for a missing
-   argument or no memory for the build's text buffers (about 30 KB); `out->overflow` is set when an
+   argument or no memory for the build's text buffers (about 51 KB); `out->overflow` is set when an
    op, a text or a hit did not fit and was dropped. */
 int           tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
                                   const WIKIPAGE* st, HUDOPS* out, WIKIFRAME* fr, char* err, size_t errn);
@@ -155,14 +157,22 @@ int           tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const WIK
    `overflow` -- in each of these states on each of three screens, 1024 x 768, 1280 x 720 and
    3840 x 1080, every scroll at 0: the window closed with its button held, open with its close
    button held, and every entry's every demo playing at 1x and ended at 2x with Try it yourself
-   held. Else 0 with the first failure in `err`. The build itself refuses only a missing argument
-   or its memory, so the states test the op, run, text, hit and group bounds; another scroll, a
-   held key, a caption, a casting's names or another screen is not built here -- the states are
-   filled at interface type 1, whose words are the longer, with each entry's own names -- and a
-   frame that overflows all the same is drawn with the ops that fit (tagpu_wikistate.c says so
-   once). `scratch` takes the ops
-   of the states tried. A load-time call: any thread, before the layout is published. */
+   held. Each state is filled at interface type 1, whose words are the longer, with each entry's
+   own names, with each of the `ncasting` castings given, and with the two worst castings there
+   can be (every display name of 31 characters, the engine's cut: 31 of three bytes, the
+   WIKI_TITLE_MAX - 1 bytes, as one unbreakable word, and 16 of them broken by spaces into the
+   most lines). With the entry's own names and each casting
+   given, every caption of the demo is built in turn and must show whole in its strip
+   (WIKIFRAME.caption_cut); with the worst casts, the demo's longest caption only, for the ops
+   (the strip clips the rest of a caption's lines, which then make no op). Else 0 with the first
+   failure in `err`. The build itself refuses only a missing argument or its memory, so the states
+   test the op, run, text, hit and group bounds; another scroll, a held key or another screen is
+   not built here, and a frame that overflows all the same is drawn with the ops that fit
+   (tagpu_wikistate.c says so once). `scratch` takes the ops of the states tried. A load-time
+   call: any thread, before the layout is published; the game's passes no casting, its side
+   loading later, and tools/wiki/wikilaycheck.c passes every pack's. */
 int           tagpu_wikilay_check(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
-                                  HUDOPS* scratch, char* err, size_t errn);
+                                  const WIKICASTING* castings, int ncasting, HUDOPS* scratch,
+                                  char* err, size_t errn);
 
 #endif

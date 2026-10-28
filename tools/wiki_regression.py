@@ -2337,9 +2337,10 @@ def offline_checks():
     """OFFLINE_CHECKS: every check of the wiki that plays no game, in one run -- the mockup's demos on the fixture,
     without a sidebar and on each side pack present (tools/wiki/sidepacks.py builds them, gitignored), then the DLL's
     code against the mockup's: the simulation (simparity), the text's fill (textparity), each natively and under
-    Wine as the DLL is built, the sidebar's column (sidecheck), the stage's ops (stagecheck) and the 3D scene
-    (scenecheck). Each runs to its end whatever the one before said; a check that cannot run (its exit 2) fails the
-    run like one that differs. Takes no lock: none of them plays a game."""
+    Wine as the DLL is built, the sidebar's column (sidecheck), the stage's ops (stagecheck), the 3D scene
+    (scenecheck) and the window's load-time check over every pack's castings (wikilaycheck --check-only). Each runs
+    to its end whatever the one before said; a check that cannot run (its exit 2) fails the run like one that
+    differs. Takes no lock: none of them plays a game."""
     packs = sorted(d for d in (TREE / "tools/wiki/mockup/gfx/side").glob("*") if (d / "side.json").is_file())
     wiki = TREE / "tools/wiki"
     runs = [("simcheck", [wiki / "simcheck.mjs"]), ("simcheck --null-layout", [wiki / "simcheck.mjs", "--null-layout"])]
@@ -2348,15 +2349,17 @@ def offline_checks():
              ("textparity", [wiki / "textparity.mjs"]), ("textparity --wine", [wiki / "textparity.mjs", "--wine"]),
              ("sidecheck", [wiki / "sidecheck.mjs"]), ("stagecheck", [wiki / "stagecheck.mjs"]),
              ("scenecheck", [wiki / "scenecheck.mjs"])]
+    runs = [(name, ["node", *cmd]) for name, cmd in runs]
+    runs += [("wikilaycheck --check-only", [sys.executable, wiki / "wikilaycheck.py", "--check-only"])]
     if not packs:
         print("wiki offline: no side pack present (tools/wiki/sidepacks.py builds them): the mods' runs are left out")
     failed = []
     for name, cmd in runs:
         t0 = time.monotonic()
-        r = subprocess.run(["node", *map(str, cmd)], capture_output=True, text=True, cwd=TREE)
+        r = subprocess.run(list(map(str, cmd)), capture_output=True, text=True, cwd=TREE)
         # the check's own verdict, the line it starts with its name (sidecheck prints its packs after it), else the last
         out = r.stdout.strip().splitlines() or r.stderr.strip().splitlines() or [""]
-        own = Path(str(cmd[0])).stem + ":"
+        own = Path(str(cmd[1])).stem + ":"
         last = next((ln for ln in out if ln.startswith(own)), out[-1])
         verdict = "passed" if r.returncode == 0 else "CANNOT RUN" if r.returncode == 2 else "FAILED"
         print(f"wiki offline: {name}: {verdict} ({r.returncode}, {time.monotonic() - t0:.0f} s): {last[:300]}")

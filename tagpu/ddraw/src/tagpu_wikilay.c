@@ -767,10 +767,11 @@ static void entry_col(C* c, R col)
     c->fr->stage.x = (float)(stage.x / c->px); c->fr->stage.y = (float)(stage.y / c->px);
     c->fr->stage.w = (float)(stage.w / c->px); c->fr->stage.h = (float)(stage.h / c->px);
     y += srow + gap;
-    /* the caption: a fixed height, so a caption appearing cannot move the stage; overflow hidden */
+    /* the caption: a fixed height, so a caption appearing cannot move the stage; overflow hidden,
+       so a line past the strip is cut (to a sixty-fourth of a pixel, Chrome's LayoutUnit) */
     {
         R cap = rect(x, y, w, cap_h);
-        block(c, R_CAPTION, g->line, c->st->caption, x, y, w, wink, &cap, 1);
+        c->fr->caption_cut = block(c, R_CAPTION, g->line, c->st->caption, x, y, w, wink, &cap, 1) > cap_h + 1.0 / 64;
         y += cap_h + gap;
     }
     /* the keys strip: a keycap a key held, "+" between, centred in the strip's height */
@@ -891,7 +892,7 @@ int tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
         if (err && errn) snprintf(err, errn, "wikilay: no layout, data, faces, page or screen");
         return 0;
     }
-    /* the context holds a text's pens: about 30 KB, off the render thread's stack */
+    /* the context holds a text's pens and its fills: about 51 KB, off the render thread's stack */
     if (!(c = (C*)malloc(sizeof *c))) {
         if (err && errn) snprintf(err, errn, "wikilay: out of memory");
         return 0;
@@ -926,13 +927,34 @@ static int check_build(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f, 
     return 1;
 }
 
-int tagpu_wikilay_check(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f, HUDOPS* scratch,
-                        char* err, size_t errn)
+/* THE WORST CASTINGS: every cast bound, its display name 31 em dashes (U+2014, Windows-1252 0x97,
+   three bytes of UTF-8 each), the WIKI_TITLE_MAX - 1 bytes of the engine's 31-byte cut and a
+   glyph as wide as any, as one word the rules cannot break; and 16 of them with a space between
+   each, 31 characters again, which break into the most lines */
+static void worst_casting(WIKICASTING* k, int broken)
 {
-    /* the icons the window and the stage draw: the build draws a button without an icon it lacks,
-       so their absence is refused here rather than drawn as a blank control */
-    static const char* const ICON[] = { "i_wiki", "i_play", "i_pause", "i_replay", "i_open", "i_shut",
-                                        "i_dot", "cursor_arrow", "cursor_move", "cursor_build" };
+    char name[WIKI_TITLE_MAX];
+    size_t n = 0;
+    int i, c;
+    for (i = 0; i < 31; i++) {
+        if (broken && (i & 1)) { name[n++] = ' '; continue; }
+        name[n++] = (char)0xE2; name[n++] = (char)0x80; name[n++] = (char)0x94;
+    }
+    name[n] = 0;
+    memset(k, 0, sizeof *k);
+    for (c = 0; c < WIKI_NCAST; c++) {
+        k->cast[c].bound = 1;
+        snprintf(k->cast[c].type, sizeof k->cast[c].type, "WORST");
+        memcpy(k->cast[c].title, name, n + 1);
+    }
+}
+
+/* every state of tagpu_wikilay_check on every screen, filled with casting `k` (NULL: each entry's
+   own names), `who` naming it; `whole`: each caption of a demo in turn, and it must show whole,
+   else the longest */
+static int check_states(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f, const WIKICASTING* k, const char* who,
+                        int whole, HUDOPS* scratch, char* err, size_t errn)
+{
     /* THE SCREENS, in device pixels: 4:3, 16:9 and 32:9. The unit is the height / 720, so the
        window's width in units -- what the text wraps to, and so how many lines and ops a page
        makes -- follows the aspect; these are the common aspects at either end and the one
@@ -940,9 +962,75 @@ int tagpu_wikilay_check(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
     static const float SCREEN[][2] = { { 1024, 768 }, { 1280, 720 }, { 3840, 1080 } };
     WIKIPAGE st;
     WIKIFRAME fr;
-    int i, e, k, pass, s;
+    WIKIWORDS w;
+    int e, j, dm, pass, s;
+    for (s = 0; s < (int)(sizeof SCREEN / sizeof *SCREEN); s++) {
+        memset(&st, 0, sizeof st);
+        st.W = SCREEN[s][0];
+        st.H = SCREEN[s][1];
+        st.bar = 24;
+        st.entry = -1;
+        st.speed = 1;
+        st.iface = 1;
+        st.casting = k;
+        snprintf(st.held, sizeof st.held, "wiki");
+        if (!check_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
+        st.open = 1;
+        snprintf(st.held, sizeof st.held, "close");
+        if (!check_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
+        snprintf(st.held, sizeof st.held, "try");
+        for (e = 0; e < d->nentry; e++) {
+            const WIKIENTRY* en = &d->entry[e];
+            tagpu_wikitext_words(&w, en, k, 1);
+            for (dm = 0; dm < (en->ndemo > 0 ? en->ndemo : 1); dm++) {
+                const WIKIDEMO* de = dm < en->ndemo ? &en->demo[dm] : NULL;
+                int longest = -1;
+                size_t most = 0;
+                /* the demo's captions, the first state with none: -1 stands for "" */
+                for (j = 0; de && j < de->ninput; j++) {
+                    char fill[WIKI_CAPTION];
+                    if (!(de->input[j].has & WIKI_IN_CAPTION) || !de->input[j].caption) continue;
+                    tagpu_wikitext_fill(de->input[j].caption, &w, fill, sizeof fill);
+                    if (longest < 0 || strlen(fill) > most) { longest = j; most = strlen(fill); }
+                }
+                for (j = whole ? -1 : longest; j < (whole && de ? de->ninput : longest + 1); j++) {
+                    if (j >= 0 && (!(de->input[j].has & WIKI_IN_CAPTION) || !de->input[j].caption)) continue;
+                    st.caption[0] = 0;
+                    if (j >= 0) tagpu_wikitext_fill(de->input[j].caption, &w, st.caption, sizeof st.caption);
+                    for (pass = 0; pass < 2; pass++) {
+                        st.entry = e;
+                        st.demo = dm;
+                        st.playing = !pass;
+                        st.done = pass;
+                        st.speed = 1 + pass;
+                        if (!check_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
+                        if (whole && fr.caption_cut) {
+                            if (err && errn)
+                                snprintf(err, errn, "wiki layout: %s/%s's caption at tick %g passes its strip at %.0fx%.0f "
+                                         "with %s", en->id, de->id, de->input[j].at, st.W, st.H, who);
+                            return 0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return 1;
+}
+
+int tagpu_wikilay_check(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
+                        const WIKICASTING* castings, int ncasting, HUDOPS* scratch,
+                        char* err, size_t errn)
+{
+    /* the icons the window and the stage draw: the build draws a button without an icon it lacks,
+       so their absence is refused here rather than drawn as a blank control */
+    static const char* const ICON[] = { "i_wiki", "i_play", "i_pause", "i_replay", "i_open", "i_shut",
+                                        "i_dot", "cursor_arrow", "cursor_move", "cursor_build" };
+    WIKICASTING worst;
+    char who[48];
+    int i, b;
     if (err && errn) err[0] = 0;
-    if (!l || !d || !f || !scratch) {
+    if (!l || !d || !f || !scratch || (ncasting > 0 && !castings)) {
         if (err && errn) snprintf(err, errn, "wikilay: no layout, data, faces or scratch to check");
         return 0;
     }
@@ -956,30 +1044,15 @@ int tagpu_wikilay_check(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
         if (err && errn) snprintf(err, errn, "wiki kit: no `toast` style for the stage");
         return 0;
     }
-    for (s = 0; s < (int)(sizeof SCREEN / sizeof *SCREEN); s++) {
-        memset(&st, 0, sizeof st);
-        st.W = SCREEN[s][0];
-        st.H = SCREEN[s][1];
-        st.bar = 24;
-        st.entry = -1;
-        st.speed = 1;
-        st.iface = 1;
-        snprintf(st.held, sizeof st.held, "wiki");
-        if (!check_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
-        st.open = 1;
-        snprintf(st.held, sizeof st.held, "close");
-        if (!check_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
-        snprintf(st.held, sizeof st.held, "try");
-        for (e = 0; e < d->nentry; e++)
-            for (k = 0; k < (d->entry[e].ndemo > 0 ? d->entry[e].ndemo : 1); k++)
-                for (pass = 0; pass < 2; pass++) {
-                    st.entry = e;
-                    st.demo = k;
-                    st.playing = !pass;
-                    st.done = pass;
-                    st.speed = 1 + pass;
-                    if (!check_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
-                }
+    if (!check_states(l, d, f, NULL, "the entry's own names", 1, scratch, err, errn)) return 0;
+    for (i = 0; i < ncasting; i++) {
+        snprintf(who, sizeof who, "casting %d", i);
+        if (!check_states(l, d, f, &castings[i], who, 1, scratch, err, errn)) return 0;
+    }
+    for (b = 0; b < 2; b++) {
+        worst_casting(&worst, b);
+        if (!check_states(l, d, f, &worst, b ? "the worst names broken" : "the worst names", 0, scratch, err, errn))
+            return 0;
     }
     return 1;
 }

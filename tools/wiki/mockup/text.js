@@ -20,6 +20,11 @@ const WikiText = (() => {
     select: ['click', 'click'], Select: ['Click', 'Click'],
     cancel: ['right-click', 'right-click'], Cancel: ['Right-click', 'Right-click'],
   };
+  /* TITLE_MAX: sim.js's, a display name and its terminator (31 code-page bytes at 3 UTF-8 bytes each, and 1). CAPTION_MAX:
+     a caption filled and its terminator, the DLL's WIKI_CAPTION_MAX: the record's caption field, which checkEntry keeps
+     every caption's fill within whatever the casting */
+  const TITLE_MAX = 94, CAPTION_MAX = 512;
+  const utf8 = s => new TextEncoder().encode(s).length;
   const isCast = n => CASTS.includes(n);
   const isButton = n => Object.prototype.hasOwnProperty.call(BUTTONS, n);
 
@@ -74,8 +79,25 @@ const WikiText = (() => {
     }
   }
 
+  /* THE CAPTION'S BOUND: the most UTF-8 bytes caption `raw` can fill to, whatever the casting and the interface type --
+     its own bytes with a button token at its longer word and a cast token at the longer of TITLE_MAX - 1 bytes, past
+     which checkCasting keeps every casting's names, and the entry's own name for that cast, which an unbound cast reads
+     (words). Only for a text checkText accepted: every token is a cast or a button */
+  function captionWorst(raw, entry) {
+    const s = String(raw), own = words(entry, null, 1).cast;
+    let n = 0, i = 0;
+    for (;;) {
+      const a = s.indexOf('{', i), b = a < 0 ? -1 : s.indexOf('}', a + 1);
+      if (b < 0) return n + utf8(s.slice(i));
+      const name = s.slice(a + 1, b);
+      n += utf8(s.slice(i, a)) + (isButton(name) ? Math.max(...BUTTONS[name].map(utf8))
+        : Math.max(TITLE_MAX - 1, own[name] != null ? utf8(own[name]) : 0));
+      i = b + 1;
+    }
+  }
+
   /* every text an entry shows -- its title, subtitle and paragraphs, each demo's title and its inputs' captions --
-     through checkText; null, or the first refusal with where it stands */
+     through checkText, each caption then through its bound; null, or the first refusal with where it stands */
   function checkEntry(e) {
     const units = (e && e.units) || {};
     const casts = new Set(Object.keys(units).map(k => units[k] && units[k].cast).filter(isCast));
@@ -83,12 +105,19 @@ const WikiText = (() => {
     (Array.isArray(e.text) ? e.text : []).forEach((p, i) => texts.push([`text[${i}]`, p]));
     (Array.isArray(e.demos) ? e.demos : []).forEach((d, i) => {
       texts.push([`demos[${i}].title`, d && d.title]);
-      for (const ev of (d && Array.isArray(d.inputs) ? d.inputs : [])) if (ev && 'caption' in ev) texts.push([`demos[${i}] caption at ${ev.at}`, ev.caption]);
+      for (const ev of (d && Array.isArray(d.inputs) ? d.inputs : [])) if (ev && 'caption' in ev) texts.push([`demos[${i}] caption at ${ev.at}`, ev.caption, true]);
     });
-    for (const [where, t] of texts) { const why = checkText(t, casts); if (why) return `${where}: ${why}`; }
+    for (const [where, t, caption] of texts) {
+      const why = checkText(t, casts);
+      if (why) return `${where}: ${why}`;
+      if (caption && typeof t === 'string') {
+        const n = captionWorst(t, e);
+        if (n >= CAPTION_MAX) return `${where}: it can fill to ${n} bytes, more than the ${CAPTION_MAX - 1} a caption holds`;
+      }
+    }
     return null;
   }
 
-  return { CASTS, BUTTONS, words, fillText, checkText, checkEntry };
+  return { CASTS, BUTTONS, TITLE_MAX, CAPTION_MAX, words, fillText, checkText, captionWorst, checkEntry };
 })();
 if (typeof module !== 'undefined') module.exports = WikiText;

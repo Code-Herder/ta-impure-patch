@@ -2,6 +2,12 @@
 """wikilaycheck.py -- the DLL's wiki window (tagpu_wikilay.c) against the mockup's (tools/wiki/mockup/).
 
     python3 tools/wiki/wikilaycheck.py [--keep DIR]
+    python3 tools/wiki/wikilaycheck.py --check-only
+
+First, and alone with --check-only (no browser), the layout's load-time check, tagpu_wikilay_check as the game
+runs it, with every casting of every side pack present under tools/wiki/mockup/gfx/side/ (gitignored, built by
+tools/wiki/sidepacks.py) besides the entries' own names and the worst castings: the page must build whole and every
+caption of a real casting show whole in its strip (wikilaycheck.c --check).
 
 For each case below it opens the mockup headless (playwright-cli, as tools/hudart/laycheck.py
 does) at the case's resolution, one CSS pixel a device pixel -- the game's grid -- with the
@@ -370,6 +376,7 @@ def main():
     keep = None
     if len(sys.argv) == 3 and sys.argv[1] == "--keep":
         keep = Path(sys.argv[2])
+    only = sys.argv[1:] == ["--check-only"]
     t0 = time.time()
     tmp = Path(tempfile.mkdtemp(prefix="wikilaycheck"))
     exe, pak = tmp / "wikilaycheck", tmp / "wikipak.bin"
@@ -383,6 +390,13 @@ def main():
                         capture_output=True, text=True)
     if pk.returncode:
         sys.exit("wikilaycheck: hudpak failed\n" + pk.stderr)
+    packs = sorted(str(p) for p in (ROOT / "tools/wiki/mockup/gfx/side").glob("*/side.json"))
+    ck = subprocess.run([str(exe), "--check", str(ROOT / "art/hud"), str(ROOT / "art/wiki"), str(pak), *packs],
+                        capture_output=True, text=True)
+    print((ck.stdout or ck.stderr).strip())
+    if ck.returncode or only:
+        shutil.rmtree(tmp, ignore_errors=True)
+        return ck.returncode
     faces = face_metrics()
     kitparts = list(json.loads((ROOT / "art/wiki/kit/kit.json").read_text())["parts"])
     roles = json.loads((ROOT / "art/wiki/layout.json").read_text())["roles"]

@@ -168,7 +168,9 @@ static int parts(HUDART* a, const PARTS* at, char* err, size_t errn, double* mpx
    here is the wiki's alone: the HUD stands.
    THE KIT AND THE DATA ARE CHECKED HERE, before the button is ever drawn (tagpu_wikilay_check):
    every icon and style the window and the stage draw, and the page built in its closed, open and
-   every entry's every demo states at 4:3, 16:9 and 32:9 with nothing dropped. */
+   every entry's every demo states at 4:3, 16:9 and 32:9 with nothing dropped, filled with each
+   entry's own names and with the worst castings there can be. The side's castings load later, on
+   their own thread: tools/wiki/wikilaycheck.c checks every pack's. */
 static void wiki_load(void)
 {
     char err[256];
@@ -218,7 +220,7 @@ static void wiki_load(void)
         faces.face[i].descent = f->descent;
     }
     if (!(scratch = (HUDOPS*)malloc(sizeof *scratch))) snprintf(err, sizeof err, "out of memory");
-    else if (!tagpu_wikilay_check(wl, s_wiki.data, &faces, scratch, err, sizeof err) && !err[0])
+    else if (!tagpu_wikilay_check(wl, s_wiki.data, &faces, NULL, 0, scratch, err, sizeof err) && !err[0])
         snprintf(err, sizeof err, "the page's layout refused the kit");
     free(scratch);
     if (err[0]) {

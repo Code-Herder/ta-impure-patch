@@ -10,8 +10,10 @@
    paragraphs, each demo's title and every caption its inputs carry -- and a table of edge strings (EDGES, below:
    the token rule's corners, unknown names, characters of two to four bytes) with every casting: none, each of
    tools/wiki/casting-fixture.json's, each of every pack present under tools/wiki/mockup/gfx/side/ (gitignored,
-   built by tools/wiki/sidepacks.py) and one made here whose display names are empty, wide or past the Basic
-   Multilingual Plane; each at the interface values 0, 1, 2 and -1. It then fills each at interface 1 into the
+   built by tools/wiki/sidepacks.py), one made here whose display names are empty, wide or past the Basic
+   Multilingual Plane and one whose every name is WIKI_TITLE_MAX - 1 bytes; each at the interface values 0, 1, 2 and
+   -1. Every caption's fill in every one of those must fit the record's caption (text.js CAPTION_MAX - 1 bytes) and
+   stay within the bound text.js's captionWorst gave it, which the loaders hold every caption to. It then fills each at interface 1 into the
    buffer sizes that test the cut -- 0 to 3 bytes, the fill's length - 3 to its length + 1, and every size whose cut
    falls inside a character -- the C side by tagpu_wikitext_fill's bound, text.js's fill cut by the same rule here
    (cutBytes). Every fill must be made on both sides, once, with the same bytes and the same cut flag.
@@ -119,13 +121,17 @@ function castings() {
   Object.assign(wide.casts.geo, { title: '™'.repeat(31) });
   wide.casts.walker = null;
   list.push({ name: 'wide names', v: wide });
+  // the caption's worst case: every cast bound to a name of WIKI_TITLE_MAX - 1 bytes, 31 characters of three
+  const worst = JSON.parse(JSON.stringify(fixture.identity[0]));
+  for (const k of Object.values(worst.casts)) k.title = '\u2014'.repeat(31);
+  list.push({ name: 'worst names', v: worst });
   return list;
 }
 
 const show = b => { const s = JSON.stringify(b.toString('utf8')); return s.length > 120 ? `${s.slice(0, 117)}...` : s; };
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'textparity-'));
-let failed = 0, fills = 0, cuts = 0, refused = 0;
+let failed = 0, fills = 0, cuts = 0, refused = 0, captions = 0;
 try {
   const wikitexttest = build(tmp);
   run('python3', [path.join(ROOT, 'tools/hudpak.py'), '--set', 'wiki', path.join(ROOT, 'art/wiki'), path.join(tmp, 'wiki.bin')]);
@@ -143,7 +149,8 @@ try {
     console.log(`DIFFER casting ${list[l.refused].name}: the C reader refuses it (${l.why}), text.js fills with it`);
   }
 
-  /* what text.js gives, by the line's key: every fill at every interface into the whole buffer, then the cut's sizes */
+  /* what text.js gives, by the line's key: every fill at every interface into the whole buffer, then the cut's sizes;
+     and every caption's fill against the caption's bound */
   const want = new Map(), key = l => `${l.e}|${l.c}|${l.i}|${l.n}|${l.w}`;
   for (const id of ids) {
     const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
@@ -153,6 +160,14 @@ try {
         const w = WikiText.words(entry, C.v, i);
         for (const [where, raw] of texts(entry))
           want.set(key({ e: id, c, i, n: WHOLE, w: where }), { ...cutBytes(WikiText.fillText(raw, w), WHOLE), name: C.name, cutCase: false });
+        for (const [where, raw] of texts(entry).filter(([where]) => where.endsWith('.caption'))) {
+          const n = Buffer.byteLength(WikiText.fillText(raw, w), 'utf8'), bound = WikiText.captionWorst(raw, entry);
+          captions++;
+          if (n >= WikiText.CAPTION_MAX || n > bound) {
+            failed++;
+            console.log(`DOES NOT FIT ${id} ${where} (${C.name}, interface ${i}): ${n} bytes, its bound ${bound}, the caption's ${WikiText.CAPTION_MAX - 1}`);
+          }
+        }
       }
       const w = WikiText.words(entry, C.v, 1);
       for (const [where, raw] of texts(entry)) {
@@ -192,6 +207,6 @@ try {
 if (process.exitCode !== 2) {
   const variant = WINE ? 'i686 under Wine' : 'native';
   console.log(failed ? `${failed} differ (of ${fills} fills and ${cuts} cut fills compared${refused ? `, ${refused} castings refused by C` : ''}; C fill: ${variant})`
-    : `0 differ: all ${fills} fills and ${cuts} cut fills equal, byte for byte (C fill: ${variant})`);
+    : `0 differ: all ${fills} fills and ${cuts} cut fills equal, byte for byte, and all ${captions} caption fills fit (C fill: ${variant})`);
   process.exitCode = failed ? 1 : 0;
 }

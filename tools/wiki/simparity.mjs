@@ -314,6 +314,14 @@ function refusalCases(entry) {
   text('a token in a demo title', 'refused', e => { e.demos = { base: { title: '{Mex}' } }; });
   text('a cast token in a paragraph', 'accepted', e => { e.text = ['The {advbuilder} builds the {moho}.']; });
   text('a cast token of a unit with no cast', 'refused', e => { delete e.units.ARMPW.cast; e.text = ['{walker}']; });
+  /* text.js's caption bound, CAPTION_MAX - 1 bytes: a button at its longer word ({Order} 11, {select} 5), a cast at the
+     longer of 93 bytes and the entry's own name -- 5 casts and 2 buttons 481 bytes */
+  const seven = '{builder}{mex}{Order}{geo}{select}{moho}{advbuilder}';
+  text('a caption whose fill can reach 511 bytes', 'accepted', caption(seven + 'x'.repeat(30)));
+  text('a caption whose fill can reach 512 bytes', 'refused', caption(seven + 'x'.repeat(31)));
+  text('a caption at the bound by an entry name past 93 bytes', 'accepted', e => { e.units.ARMCK.name = '\u00e9'.repeat(51); caption(seven + 'x'.repeat(21))(e); });
+  text('a caption past the bound by an entry name past 93 bytes', 'refused', e => { e.units.ARMCK.name = '\u00e9'.repeat(51); caption(seven + 'x'.repeat(22))(e); });
+  text('a long text that is no caption', 'accepted', e => { e.text = [seven.repeat(4)]; });
   // a unit's G cells, sim.js's checkG
   text('a G cell inside the footprint', 'accepted', e => { e.units.ARMGEO.g = [[0, 0], [3, 3]]; });
   text('a G cell off the footprint', 'refused', e => { e.units.ARMGEO.g = [[4, 0]]; });

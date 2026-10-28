@@ -2,16 +2,6 @@
 #include <string.h>
 #include "tagpu_wikitext.h"
 
-/* text.js's BUTTONS: each action's word, [interface type 0, type 1], the capital form starting a
-   sentence. Type 0 orders with the left button and type 1 with the right; both select with the left
-   button and cancel with the right, as the demos' actions resolve (tagpu_wikidata_button), so only
-   {order} follows the interface type. tagpu_wikidata.c's BUTTON_NAMES is the same list of names,
-   which its loader admits as tokens. */
-static const struct { const char* name; const char* word[2]; } BUTTONS[] = {
-    { "order",  { "left-click",  "right-click" } }, { "Order",  { "Left-click",  "Right-click" } },
-    { "select", { "click",       "click" } },       { "Select", { "Click",       "Click" } },
-    { "cancel", { "right-click", "right-click" } }, { "Cancel", { "Right-click", "Right-click" } },
-};
 
 void tagpu_wikitext_words(WIKIWORDS* w, const WIKIENTRY* e, const WIKICASTING* casting, int iface)
 {
@@ -35,11 +25,9 @@ void tagpu_wikitext_words(WIKIWORDS* w, const WIKIENTRY* e, const WIKICASTING* c
 /* the word of the token named by the `len` bytes at `s`, or NULL: text.js's wordOf */
 static const char* word_of(const char* s, size_t len, const WIKIWORDS* w)
 {
-    size_t k;
+    const char* b = tagpu_wikidata_button_word(s, len, w->iface);
     int c;
-    for (k = 0; k < sizeof BUTTONS / sizeof *BUTTONS; k++)
-        if (strlen(BUTTONS[k].name) == len && !memcmp(BUTTONS[k].name, s, len))
-            return BUTTONS[k].word[w->iface == 1 ? 1 : 0];
+    if (b) return b;
     for (c = 0; c < WIKI_NCAST; c++) {
         const char* name = tagpu_wikidata_cast_name(c);
         if (strlen(name) == len && !memcmp(name, s, len)) return w->cast[c];

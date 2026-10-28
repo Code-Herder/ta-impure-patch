@@ -58,6 +58,10 @@ enum { WIKI_CAST_BUILDER, WIKI_CAST_ADVBUILDER, WIKI_CAST_MEX, WIKI_CAST_MOHO, W
    bytes, DISASSEMBLED), and each Windows-1252 byte is at most 3 bytes of UTF-8 once converted
    (U+20AC and U+2122 are the widest), so 31 x 3 + 1. sim.js's TITLE_MAX. */
 #define WIKI_TITLE_MAX 94
+/* A caption filled, with its terminator: the stage record's and the page's caption fields. The
+   loader refuses an entry one of whose captions could fill past it (text.js's CAPTION_MAX), so no
+   casting and no interface type can cut a loaded caption. */
+#define WIKI_CAPTION_MAX 512
 
 /* A unit type: its figures from the stock unit file, as the entry carries them. */
 typedef struct {
@@ -198,6 +202,10 @@ const char* tagpu_wikidata_key_name(int key);
 
 /* sim.js's and text.js's name of a cast: "builder", "advbuilder", ... "solar"; NULL out of range. */
 const char* tagpu_wikidata_cast_name(int cast);
+
+/* text.js's BUTTONS: the word of the button token named by the `len` bytes at `s` at interface
+   type `iface` (1 exactly when 1, else 0), or NULL when no button has that name. */
+const char* tagpu_wikidata_button_word(const char* s, size_t len, int iface);
 
 /* A key or an action as interface type `iface` presses it, sim.js's button(): select is the left
    button at both types, cancel the right one at both, order the right one at type 1 and the left

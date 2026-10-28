@@ -1,6 +1,13 @@
-/* wikilaycheck.c -- tagpu_wikilay's ops for a page the mockup dumped, as JSON on stdout.
+/* wikilaycheck.c -- tagpu_wikilay's ops for a page the mockup dumped, as JSON on stdout; or the
+   layout's load-time check over every pack's castings.
 
      wikilaycheck <art/hud dir> <art/wiki dir> <wikipak.bin> <state.json>
+     wikilaycheck --check <art/hud dir> <art/wiki dir> <wikipak.bin> [side.json ...]
+
+   --check runs tagpu_wikilay_check as the game's load does, in the game's faces at their own sizes
+   (no browser fallback), with every casting of each side.json given besides the entries' own names
+   and the worst castings: exit 0 when the page builds whole and every caption shows whole in its
+   strip, 1 with the first failure.
 
    The data and the layout's numbers are read out of the archive the DLL embeds (tools/hudpak.py
    --set wiki), the kit from art/wiki/kit/ (not packed yet), the text styles and faces from art/hud/
@@ -141,6 +148,39 @@ static int mod_of(const char* s)
     return MOD_UNKNOWN;
 }
 
+/* --check: tagpu_wikilay_check with every casting of each pack's side.json, in the game's faces */
+static int check_packs(const WIKILAY* l, const WIKIDATA* d, const char* huddir, int npack, char** pack, HUDOPS* o)
+{
+    WIKIFACES f;
+    WIKICASTING* all = NULL;
+    char err[256];
+    int n = 0, k;
+    memset(&f, 0, sizeof f);
+    faces(&f, huddir);
+    for (k = 0; k < npack; k++) {
+        size_t len;
+        char* text = slurp(pack[k], &len);
+        TJDOC* doc = text ? tagpu_json_parse(text, len, err, sizeof err) : NULL;
+        const TJV *list = doc ? tj_get(tagpu_json_root(doc), "casting") : NULL, *v;
+        if (!tj_is(list, TJ_ARR)) { fprintf(stderr, "wikilaycheck: %s holds no casting list\n", pack[k]); return 2; }
+        for (v = list->first; v; v = v->next) {
+            if (!(all = (WIKICASTING*)realloc(all, (size_t)(n + 1) * sizeof *all))) { fprintf(stderr, "wikilaycheck: out of memory\n"); return 2; }
+            if (!tagpu_wikidata_casting(v, &all[n], err, sizeof err)) { fprintf(stderr, "wikilaycheck: %s: %s\n", pack[k], err); return 1; }
+            n++;
+        }
+        tagpu_json_free(doc);
+        free(text);
+    }
+    if (!tagpu_wikilay_check(l, d, &f, all, n, o, err, sizeof err)) {
+        printf("wikilaycheck: the load-time check FAILED: %s\n", err);
+        return 1;
+    }
+    printf("wikilaycheck: the load-time check passed: the page builds whole with the entries' own names, %d castings of "
+           "%d packs and the worst castings, and every caption shows whole in its strip but the worst castings'\n", n, npack);
+    free(all);
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     char path[1024], err[256];
@@ -157,10 +197,15 @@ int main(int argc, char** argv)
     WIKIFRAME fr;
     HUDOPS* o = (HUDOPS*)malloc(sizeof(HUDOPS));
     const HUDLAY* kit;
-    int i, j;
+    int i, j, check = argc >= 5 && !strcmp(argv[1], "--check");
     double px;
 
-    if (argc != 5) { fprintf(stderr, "usage: wikilaycheck <art/hud dir> <art/wiki dir> <wikipak.bin> <state.json>\n"); return 2; }
+    if (check) { argv++; argc--; }
+    if (!check && argc != 5) {
+        fprintf(stderr, "usage: wikilaycheck <art/hud dir> <art/wiki dir> <wikipak.bin> <state.json>\n"
+                        "       wikilaycheck --check <art/hud dir> <art/wiki dir> <wikipak.bin> [side.json ...]\n");
+        return 2;
+    }
     snprintf(path, sizeof path, "%s/layout.json", argv[1]);
     if (!(hl = slurp(path, &nl))) { fprintf(stderr, "wikilaycheck: cannot read %s\n", path); return 2; }
     snprintf(path, sizeof path, "%s/kit.json", argv[1]);
@@ -177,7 +222,7 @@ int main(int argc, char** argv)
     snprintf(path, sizeof path, "%s/kit", argv[2]);
     if (!(l = tagpu_wikilay_load(lt, nl, kt, nk, png_size, path, hud, err, sizeof err))) { fprintf(stderr, "wikilaycheck: %s\n", err); return 1; }
     kit = tagpu_wikilay_kit(l);
-    printf("{\"lights\":{");
+    if (!check) printf("{\"lights\":{");
     for (i = 0; i < tagpu_hudlay_nparts(kit); i++) {
         const HUDPART* k = tagpu_hudlay_part(kit, i);
         unsigned char* img = NULL;
@@ -188,8 +233,9 @@ int main(int argc, char** argv)
             lt_ = tagpu_wikilay_face_light(img, (int)w, (int)h, k->kind == HK_NINE ? k->slice : NULL, 0);
         free(img);
         tagpu_wikilay_light(l, i, lt_);
-        printf("%s\"%s\":%d", i ? "," : "", k->name, lt_);
+        if (!check) printf("%s\"%s\":%d", i ? "," : "", k->name, lt_);
     }
+    if (check) return check_packs(l, d, argv[1], argc - 4, argv + 4, o);
     printf("},\n");
 
     if (!(stt = slurp(argv[4], &n)) || !(sd = tagpu_json_parse(stt, n, err, sizeof err))) { fprintf(stderr, "wikilaycheck: state: %s\n", err); return 2; }

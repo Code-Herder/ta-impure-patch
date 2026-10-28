@@ -30,7 +30,7 @@
 #define WIKISTAGE_SITES   PLACE_MAX_SITES       /* a gesture never has more                   */
 #define WIKISTAGE_QUEUED  256
 #define WIKISTAGE_LINES   512
-#define WIKISTAGE_CAPTION 256                   /* 255 bytes and the terminator               */
+#define WIKISTAGE_CAPTION WIKI_CAPTION_MAX      /* every loaded caption's fill fits           */
 #define WIKISTAGE_LABEL   WIKI_ID_MAX           /* 23 bytes and the terminator                */
 
 /* what the copy could not carry, one bit for each bound */
