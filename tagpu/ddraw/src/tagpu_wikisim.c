@@ -823,8 +823,8 @@ static void press_side(WIKISIM* s, int key)
 }
 
 /* WHO TAKES A MOUSE PRESS, DISASSEMBLED. IdleTick runs the GUI pump 0x4A9FD0 (0x499992) before the
-   in-play handler 0x499200 (0x499A1C), and the pump's poll 0x4AB5D0 pops a record whose point is
-   inside the screen's window, its gadget 0 (0x4A1680, the inclusive test 0x4A1920 at 0x4AB63E),
+   in-play handler 0x499200 (called through main+0x391F5 at 0x499A1C), and the pump's poll
+   0x4AB5D0 pops a record whose point is inside the screen's window, its gadget 0 (0x4A1680, the inclusive test 0x4A1920 at 0x4AB63E),
    and leaves a record outside it that carries a button (0x4AB647..0x4AB64D: its wParam's MK_
    bits). A press on the screen, on a gadget or not, is the GUI's alone; the handler sees only the
    releases IdleTick copies after the pump (0x4999EF..0x499A04). Every other press, the minimap's
@@ -1062,7 +1062,8 @@ static WIKIHOVER hover(WIKISIM* s)
 }
 
 /* the evaluation the stage shows, as tagpu_place.c's current() lets the packet have it: only while
-   the building it was made for is still the one armed; NULL for none */
+   the building it was made for is still the one armed; NULL for none. With the sidebar off as
+   well as on, as sim.js's `placed`. */
 static const WIKIPLACE* placed(const WIKISIM* s)
 {
     return s->place.kind != PLACE_NONE && s->mode == s->place.type ? &s->place : NULL;
@@ -1310,8 +1311,8 @@ static void commit(WIKISIM* s, const WIKIPLACE* p)
 /* mirrors tagpu_place.c's release (place_button): Shift up first drops the gesture and the building
    stays armed; a one-site gesture ending at the cursor is the stock Shift-click itself; anything
    else commits the last evaluation. A release over the sidebar reaches tagpu_place.c too: IdleTick
-   hands the in-play handler a button's release the GUI pump took (0x4999CB..0x499A04, then
-   0x499A1C), and the route at 0x4993BF passes it to place_button wherever the cursor is. Its
+   hands the in-play handler a button's release the GUI pump took (0x4999CB..0x499A04, then the
+   call through main+0x391F5 at 0x499A1C), and the route at 0x4993BF passes it to place_button wherever the cursor is. Its
    record is never the evaluated one there (the evaluation stands as the map left it), so it is
    never the stock Shift-click: it commits the evaluation the map last made. */
 static void release(WIKISIM* s)
@@ -1346,7 +1347,7 @@ static void disarm(WIKISIM* s)
    Shift disarms the building armed since as well: 0x4992D8..0x49930F tests bit 5, not the mode.
    tagpu_place.c leaves the bit too (it sets it only on a commit), and ends its gesture when the
    armed type changes (its evaluate, `s_gesture.type != c.type`), so a gesture outlives a re-arm
-   of its own type only. */
+   of its own type only. With the sidebar off as well as on, as sim.js's `arm`. */
 static void arm(WIKISIM* s, int t)
 {
     if (s->mode != t) s->has_gesture = 0;

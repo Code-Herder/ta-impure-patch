@@ -1205,7 +1205,8 @@ const WikiSim = (() => {
     return sim;
   }
 
-  // a layout is checked whole before any sim reads it; null or absent is no sidebar, today's stage
+  // a layout is checked whole before any sim reads it; null or absent is no sidebar: the map alone on the stage,
+  // with the placement rules (arm keeping the Shift bit and a same-type gesture, placed) as with one
   const checked = layout => layout == null ? null : checkLayout(layout);
   return {
     create: (entry, demo, layout) => make(entry, demo, false, checked(layout)),

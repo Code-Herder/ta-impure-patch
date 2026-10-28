@@ -265,10 +265,11 @@ typedef struct {
    or create (Try it yourself on the demo's scene: no script, never done). `d` may be NULL for the
    entry's scene alone.
 
-   `lay` is the sidebar's layout, or NULL for none. LIFETIME: it points into WIKIDATA.fixture or
-   the asset loader's arena, both immutable and never freed, so the sim (and the render thread,
-   through the view's screen index) may hold it; a caller giving any other layout keeps it alive
-   and unwritten as long as the sim. The sidebar is on when `lay` is given and, for play, the
+   `lay` is the sidebar's layout, or NULL for none. LIFETIME: it is WIKIDATA.fixture or the layout
+   inside the published WIKISIDE block (that block's own allocation, tagpu_wikiasset.h), both
+   immutable and never freed, so the sim may hold it; the render thread resolves its own copy
+   of the pointer from the view's WIKISTAGE_LAYOUT_* value. A caller giving any other layout keeps
+   it alive and unwritten as long as the sim. The sidebar is on when `lay` is given and, for play, the
    demo's `sidebar` says so, by default (and always for create) when the scene gives the player a
    mobile builder (owner 0, MaxVelocity > 0, WorkerTime > 0).
 

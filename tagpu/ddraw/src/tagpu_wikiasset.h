@@ -41,8 +41,9 @@
        render thread may read -- the WIKI3D below, the stages, the models, the frames, the report --
        lives in it, written by the loader alone before the one interlocked store that publishes it.
      - THE LOADER READS NO ENGINE MEMORY AND PAINTS NOTHING. Its inputs arrive by value (the mount
-       list, the current directory, the language and the folder names, copied on the game thread at
-       the wiki's first open; the wiki's data, immutable and never freed); it opens its own
+       list, the current directory, the language and the folder names, copied on the game thread
+       when the load starts -- the wiki's first open, or the parity check's trigger
+       (tagpu_wiki.check), which starts it with the window closed; the wiki's data, immutable and never freed); it opens its own
        read-only handles; it touches no atlas and no device (tagpu_gaf.c decodes through static
        buffers, so painting is the render thread's).
 
@@ -314,7 +315,8 @@ int tagpu_wikiside_minimap(const WIKI3DSTAGE* st, const unsigned char* alp, unsi
 
 #ifdef _WIN32
 /* The load, started once on a thread of its own with `in`, which it takes and frees; later calls
-   free `in` and return. The game thread, at the wiki's first open. The thread loads the sidebar
+   free `in` and return. The game thread, at the wiki's first open or at the parity check's
+   trigger (tagpu_wiki.check), whichever comes first. The thread loads the sidebar
    first and publishes it (tagpu_wikiside_get), then the 3D assets (tagpu_wiki3d_get). */
 void          tagpu_wikiasset_start(WIKI3DIN* in);
 

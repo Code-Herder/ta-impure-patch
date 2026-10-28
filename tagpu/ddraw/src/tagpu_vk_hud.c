@@ -48,7 +48,11 @@
    writes them in prepare's uploads and reads them in the draws of the frame that recorded those;
    tagpu_vk_hud_down destroys them from the seam's teardown (vk_down, passes_down) -- the render
    thread's, or the window owner's after it has joined the render thread -- behind
-   vkDeviceWaitIdle, so no submitted frame still names one.
+   vkDeviceWaitIdle, so no submitted frame still names one. The one other call, prepare's when
+   build() fails, waits for nothing and needs nothing: the pass is UNBUILT there, every object
+   it frees was made by that failing build in the same call, and no frame has recorded a draw or
+   an upload with one (the uploads and the draws start only once the pass is READY), so none is
+   in a submitted command buffer.
 
    IT KNOWS NOTHING ABOUT A WINDOW, and reads no engine state: everything arrives in its
    arguments or in the loaded HUD and wiki (tagpu_hudart.h), which are immutable. */

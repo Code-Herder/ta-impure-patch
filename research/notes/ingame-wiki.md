@@ -588,6 +588,13 @@ the code.
   first build: tick 0 or 20 in Build Lines, tick 20 in the three Quick Build demos that arm one.
 - **Try it never sends `build`.** The player presses the sidebar. A simulation made with
   `create`, simcheck's rule cases among them, keeps `build` as an instant arm.
+- **Two placement rules hold with the sidebar off as well**, deliberately and in both
+  simulations: arming a building (`arm`) keeps the Shift-placement bit (`shift_placed`) and keeps
+  the gesture when the type armed is the same one, as the engine's arm at `0x41AB89`/`0x41AB9C`
+  leaves `main+0x2CC6` and `tagpu_place.c` ends a gesture only on another type; and the stage
+  shows an evaluation only while the building it was made for is still armed (`placed`, as
+  `tagpu_place.c`'s `current()`). So a demo without the sidebar is not the earlier simulation plus
+  the view's `locked` field: these two rules change what it does too.
 
 ### How it is drawn
 
@@ -1105,8 +1112,7 @@ three:
   structures, a geothermal plant with a vent under it; a mobile unit never blocks a site, where
   the engine's test refuses one standing on it;
 - the gesture: Shift released after a placement disarms at once, where the engine disarms at the
-  first mouse record that finds Shift up; arming a building clears the Shift-placement bit
-  [INFERRED: when the engine clears it is not established]; order nodes flagged `0x40000`, which
+  first mouse record that finds Shift up; order nodes flagged `0x40000`, which
   the engine's toggle matches but does not remove, do not exist in the sim; the one-site Shift-click
   orders only builders whose build list has the building, where the engine orders every selected
   builder (the same under stock input, which arms a building for one unit only).
