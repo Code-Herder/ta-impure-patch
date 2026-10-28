@@ -85,6 +85,15 @@ note and `roadmap.md` and deleted.
 23. **Quick Build picks from the build menu the player sees**, not the engine's AI build list
     (CANBUILD), if the live check confirms it reads the AI list: a separate simulation landing, before
     the tutorials landing (2026-10-28).
+24. **A demo of a feature the mod turns off plays under the badge, and its claims are not checked
+    there** (2026-10-28): the badge already says the demo does not apply, so a claim that mod makes false
+    (TA Zero: Quick Build cancel, geothermal plants with no energy) is not a failure. A named rule over
+    the entry's own turned-off list, never a list of mods in the check.
+25. **A scene that a mod makes false is redesigned, not narrowed** (2026-10-28): buildshapes ringqueued
+    is reworked so every claim holds for every builder (TA Zero's hovers finished the far solar before
+    the ring click).
+26. **One demo length for every mod** (2026-10-28): the geothermal demo's tail is 465 ticks, set by the
+    slowest plant (Twilight CORE), and stock holds the finished plant longer.
 
 **Settled from the engine, not asked:** the page shown follows the engine's own router (nothing
 selected: the mod's `MAIN2` screen; exactly one unit selected, a builder: its numbered pages; anything
