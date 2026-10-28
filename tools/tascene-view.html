@@ -289,9 +289,14 @@
        ordfilter=<f> nearest (default) | sharp (each texel flat, only the
                      pixel across a texel edge blended: even texels at a
                      scale that is not whole) | linear
-       ordspace=<s>  the dot spacing: screen (default) 48 canvas px at every
-                     zoom, laid out from each leg's start, so the line looks
-                     and moves the same at every zoom; world 48 world units,
+       ordspace=<s>  the dot spacing: lod (default) pinned to the map, 48 x
+                     2^k world units at the zoom's level k, the dots between
+                     the next level's fading with the fraction, as a mipmap
+                     does: a zoom fades dots in or out and moves none, and
+                     at zoom 1 it is the engine's line; screen 48 canvas px
+                     at every zoom, laid out from each leg's start, which
+                     slides the dots over the map during a zoom; world 48
+                     world units,
                      the dots held to the map; octave 48 x 2^k world units,
                      k the zoom's octave, each octave's dots every other dot
                      of the one below, so a zoom adds or drops dots and
@@ -1197,7 +1202,7 @@ const ORD_KNOBS = {
   style: ["gaf", "proc", "off"],
   size: ["screen", "world", "int", "clamp"],
   filter: ["nearest", "sharp", "linear"],
-  space: ["screen", "world", "octave"],
+  space: ["lod", "screen", "world", "octave"],
   anim: ["engine", "cursor"],
   tick: ["int", "smooth"],
   dots: ["all", "active"],
@@ -1747,8 +1752,23 @@ async function main() {
       if (len < 1 || !s) return;
       const age = Math.max(0, t - issue);
       const wrap = (v, m) => ((v % m) + m) % m;
-      let step, phase;
-      if (o.space === "screen") {
+      let step, phase, fade = 1, coarseOdd = 0;
+      if (o.space === "lod") {
+        // LOD: the dots are pinned to the map by the world march, and the
+        // spacing follows the zoom's level the way a mipmap does. At level
+        // k = floor(-log2 zoom) the dots stand 48 x 2^k world units apart;
+        // every other one is also a dot of level k + 1, and the ones between
+        // fade out as the zoom falls toward that level. So a zoom in fades
+        // new dots in halfway between the standing ones, a zoom out fades
+        // every other one away, and no dot moves on the map or pops. At
+        // zoom 1 every dot is full and 48 apart: the engine's line
+        const lv = -Math.log2(zoom), k = Math.floor(lv + 1e-9);
+        step = 48 * Math.pow(2, k);
+        fade = 1 - (lv - k);
+        const c0 = wrap(L.march - at[0], 2 * step);    // the next level's phase
+        phase = c0 % step;
+        coarseOdd = c0 >= step ? 1 : 0;                 // which of these are its dots
+      } else if (o.space === "screen") {
         // SCREEN: 48 px apart and 48 px a second at every zoom, so the line
         // looks the same at every zoom. Laid out from the leg's start in
         // screen px, so a zoom keeps each dot's distance from the waypoint
@@ -1767,9 +1787,12 @@ async function main() {
       const ink = ordInk.pathicon;
       for (let c = phase, i = 0; c < len && i < 4096; c += step, i++) {
         const f = c / len;
-        const [px, py] = proj([A[0] + dx * f, A[1] + dy * f, A[2] + dz * f]);
-        if (o.style === "gaf") blit(s.frames[fi], px, py, o.dotAlpha);
-        else quad(px - 2.4, py - 2.4, px + 2.4, py + 2.4, -1, -1, 1, 1, 1, 1, ink);
+        const a = (i & 1) === coarseOdd ? 1 : fade;
+        if (a > 0.004) {
+          const [px, py] = proj([A[0] + dx * f, A[1] + dy * f, A[2] + dz * f]);
+          if (o.style === "gaf") blit(s.frames[fi], px, py, o.dotAlpha * a);
+          else quad(px - 2.4, py - 2.4, px + 2.4, py + 2.4, -1, -1, 1, 1, 1, a, ink);
+        }
         fi = (fi + 1) % nf;
       }
     };

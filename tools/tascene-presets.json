@@ -48,8 +48,8 @@
       "about": "Classic with the order markers tagpu draws today (tagpu_order.c): a 2.4-px disc per route dot and a breathing crosshair, in the art's ink. Wipe it against orders-tuned."
     },
     "orders-tuned": {
-      "q": "lane=classic&ordstyle=gaf&ordsize=screen&ordspace=screen",
-      "about": "The engine's order art made to read the same at every zoom: drawn at its own size, one texel a pixel, with the dots 48 px apart on screen and moving 48 px a second, so a zoom changes neither the size, the spacing nor the speed of the line. At zoom 1 it is the engine's picture."
+      "q": "lane=classic&ordstyle=gaf&ordsize=screen&ordspace=lod",
+      "about": "The engine's order art made to read the same at every zoom: drawn at its own size, one texel a pixel, with the dots pinned to the map and moving 48 px a second, every other one fading in or out as the zoom crosses a level, so a zoom changes neither the size nor the speed of the line and never slides a dot. At zoom 1 it is the engine's picture."
     }
   }
 }
