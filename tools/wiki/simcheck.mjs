@@ -39,7 +39,7 @@
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { cobHost, scripts } from './cobhost.mjs';
+import { cobHost, scripts, sounds, soundSource } from './cobhost.mjs';
 const WikiSim = createRequire(import.meta.url)('./mockup/sim.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const TRACE = process.argv.includes('--trace');
@@ -62,7 +62,7 @@ function contexts() {
   const packs = [...(PACK_DIR ? subdirs(`${PACK_DIR}/stage`) : []), ...subdirs(`${ROOT}tools/wiki/mockup/gfx`)];
   if (!Object.keys(scripts(packs)).length) return cs;
   const host = cobHost();
-  return [...cs, ...cs.map(c => ({ ...c, label: `${c.label}+scripts`, ctx: { ...c.ctx, cob: host.forPacks(packs) } }))];
+  return [...cs, ...cs.map(c => ({ ...c, label: `${c.label}+scripts`, ctx: { ...c.ctx, cob: host.forPacks(packs), snd: soundSource(packs) } }))];
 }
 function baseContexts() {
   if (PACK) {
@@ -1037,7 +1037,36 @@ const CTX_SHAPES_RULES = {
 
 const CHECKS = { quickbuild: QUICKBUILD, buildshapes: BUILDSHAPES };
 // the sidebar's rules use quickbuild's scene: two builder types and a Peewee
-export const ENTRY_RULES = { quickbuild: { ...RULES, ...SIDE_RULES, ...CTX_RULES }, buildshapes: { ...BUILDSHAPES_RULES, ...CTX_SHAPES_RULES } };
+/* THE SOUND the player's own actions make (tagpu_wikisim.h, THE SOUND), which no demo shows: a click that selects, a box
+   of several, a placement on a refused site and one on a deposit, with the sounds of the gfx packs under
+   tools/wiki/mockup/gfx/ (gitignored: the units' categories are the player's install's), the source simparity.mjs gives
+   the C side as well. Without a pack there is no source and the rule says so. */
+const GFX_PACKS = () => {
+  const d = `${ROOT}tools/wiki/mockup/gfx`;
+  return fs.existsSync(d) ? fs.readdirSync(d).sort().map(x => `${d}/${x}`).filter(x => fs.existsSync(`${x}/scene.json`)) : [];
+};
+const SOUND_RULES = {
+  'the player\'s clicks say select, SelectMultipleUnits, notoktobuild and oktobuild, one reply a second'(entry) {
+    const snd = soundSource(GFX_PACKS());
+    if (!Object.keys(sounds(GFX_PACKS())).length) return 'no gfx pack: no sound source';
+    const s = WikiSim.create(entry, { scene: { selected: [] } }, FIXTURE, { ...T1, snd });
+    const names = v => v.sound.events.map(([, k, n]) => (k ? `kind${k}` : WikiSim.SND_NAMES[n])).join(' ');
+    const steps = n => { for (let i = 0; i < n; i++) { s.step(); s.view(); } };
+    click(s, [304, 176], 'lmb');                                   // select ck: heard on the next tick's consumer
+    steps(2);
+    click(s, [352, 176], 'lmb');                                   // select ack within the gap: queued, then text only
+    steps(40);
+    s.input({ move: [290, 160] }); s.input({ down: 'lmb' }); s.input({ move: [370, 190] }); s.input({ up: 'lmb' });
+    steps(2);
+    s.input({ build: 'ARMMEX' });
+    click(s, [272, 96], 'lmb', ['alt']);                           // on the geothermal plant, unsnapped: refused
+    click(s, [376, 72], 'lmb');                                    // deposit B: placed
+    steps(400);
+    const v = s.view();
+    return `${v.sound.total} events: ${names(v)}`;
+  },
+};
+export const ENTRY_RULES = { quickbuild: { ...RULES, ...SIDE_RULES, ...CTX_RULES, ...SOUND_RULES }, buildshapes: { ...BUILDSHAPES_RULES, ...CTX_SHAPES_RULES } };
 
 /* decision 12 for an unbound cast: the tick and the authored type a demo stops on in this casting -- tick 0 for a
    scene unit of an unbound cast, else the first `build` of one -- or null when it plays to its end */

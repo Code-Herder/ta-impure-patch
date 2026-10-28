@@ -57,6 +57,15 @@ int  tagpu_menu_leave_ready(void);
    calls it. */
 int  tagpu_menu_single_player(void);
 int  tagpu_menu_pause_hold(int on, int* was);
+/* The player's sound settings as the engine's sound entries test them, for the in-game wiki's own
+   mixer (tagpu_wikisound.c), game thread: fxvol (main+0x37F0C, the Options slider's 0..), Sound
+   Mode (main+0x37F19 & 7: 0 off), speechfx (main+0x37F19 bit 0x40: unit replies on), unitchat
+   (main+0x37F17, 0..10), NoDirectSound (0x51E690) and UseWindowsSound (0x51E694). 0 when there is
+   no main block. */
+typedef struct {
+    int fxvol, mode, speech, unitchat, no_dsound, win_sound;
+} TAGPU_SOUNDSET;
+int  tagpu_menu_sound(TAGPU_SOUNDSET* out);
 /* The Config panel, while it is open: 1 with its box on the screen the composite draws, in the
    frame's pixels, inclusive -- where panel_rect has the engine draw it, moved by the world
    region's shift as the composite moves it. 0 while it is closed. Game thread: the UI mirror

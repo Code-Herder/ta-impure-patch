@@ -89,6 +89,7 @@
 #include "tagpu_wiki.h"
 #include "tagpu_wikistate.h"
 #include "tagpu_wikiasset.h"
+#include "tagpu_wikisound.h"
 #include "tagpu_wikitext.h"
 #include "tagpu_replays.h"
 #include "tagpu_pak.h"
@@ -351,8 +352,61 @@ static void held(const char* key)
     lstrcpynA(s_held, key, sizeof s_held);
 }
 
+/* ---- the sound -------------------------------------------------------------------------------
+
+   THE SIMULATION'S SOUNDS ARE PLAYED HERE, on the game thread after each fill's steps: every event
+   the view's ring holds past the last one played, in the order made (tagpu_wikisim.h, THE SOUND),
+   through the wiki's own mixer (tagpu_wikisound.h), which applies the player's settings. The ring
+   holds WIKI_SND_LOG events and a fill steps at most STEPS_MAX ticks, so an event is lost only to
+   a burst the ring cannot hold; a loss is counted and said with the demo's tally. The page's own
+   buttons say `Options`, as the engine's in-game menu controls do. */
+static int s_heard;                             /* the demo's events played: its snd_total then  */
+static int s_lost;                              /* events the ring let go before they were played */
+static char s_sndDemo[2 * WIKI_ID_MAX + 16];    /* "<entry>/<demo>" of s_sim, for the tally      */
+
+static const WIKI3DSOUND* sound_of(void);
+
+/* a press on one of the page's controls: the engine's in-game menu controls say `Options` */
+static void button_sound(void)
+{
+    tagpu_wikisound_named(sound_of(), WIKI_SNDNAME_OPTIONS);
+}
+
+static void sound_drain(const WIKIVIEW* v)
+{
+    static const unsigned char PRIORITY[WIKI_SND_KINDS] = WIKI_SND_PRIORITIES;
+    const WIKI3DSOUND* snd = sound_of();
+    const int first = v->snd_total - v->nsnd;
+    int i;
+    if (!v->has_sound) return;
+    if (s_heard < first) {
+        s_lost += first - s_heard;
+        s_heard = first;
+    }
+    /* BOUND: i runs over the view's own events, [0, nsnd) */
+    for (i = s_heard - first; i >= 0 && i < v->nsnd; i++) {
+        const WIKISNDEV* e = &v->snd[i];
+        if (e->kind > 0 && e->kind < WIKI_SND_KINDS) tagpu_wikisound_reply(snd, e->cat, e->kind, e->variant, PRIORITY[e->kind]);
+        else if (!e->kind) tagpu_wikisound_named(snd, e->name);
+    }
+    s_heard = v->snd_total;
+}
+
+/* the demo's sound, said once as it is let go: what it made and what of it played */
+static void sound_tally(void)
+{
+    int played, failed, silent;
+    tagpu_wikisound_tally(&played, &failed, &silent);
+    if (s_simOn && s_sim.snd_on && (s_heard || played || failed || silent))
+        tagpu_logf("wiki sound: the demo %s made %d sound(s): %d Play call(s) succeeded, %d failed, %d silent by the "
+                   "settings or a missing WAV, %d lost", s_sndDemo, s_heard, played, failed, silent, s_lost);
+    s_heard = 0;
+    s_lost = 0;
+}
+
 static void sim_free(void)
 {
+    sound_tally();
     if (s_simOn) tagpu_wikisim_free(&s_sim);
     s_simOn = 0;
 }
@@ -611,15 +665,44 @@ static int cob_type(void* c, const char* name, WIKICOBTYPE* out)
 }
 static WIKICOBSRC s_cobsrc = { NULL, cob_type };
 
-static int scripts_now(const WIKICOBSRC** src)
+/* a type's sounds, with its model only, as gfx.py gives a mesh its `sound` (tagpu_wikiasset.h) */
+static int snd_type(void* c, const char* name, WIKISNDTYPE* out)
+{
+    const WIKI3D* w = (const WIKI3D*)c;
+    int i;
+    for (i = 0; i < w->nunit; i++) {
+        const WIKI3DUNIT* u = &w->unit[i];
+        if (_stricmp(u->name, name) || !u->ok) continue;
+        out->cat = u->sound_cat;
+        memcpy(out->count, u->sound_count, sizeof out->count);
+        return 1;
+    }
+    return 0;
+}
+static WIKISNDSRC s_sndsrc = { NULL, snd_type };
+
+/* the published load's sound, NULL while there is none (the page's buttons play from it too) */
+static const WIKI3DSOUND* sound_of(void)
+{
+    const WIKI3D* w = NULL;
+    if (s_assets == ASSETS_FAILED || tagpu_wiki3d_answer(&w) == WIKISIDE_PENDING || !w) return NULL;
+    return &w->sound;
+}
+
+/* THE UNITS' SCRIPTS AND SOUNDS come from the one 3D load, both or neither, as simparity.mjs
+   gives sim.js both with --scripts; `*snd` may be NULL when only the scripts are asked */
+static int scripts_now(const WIKICOBSRC** src, const WIKISNDSRC** snd)
 {
     const WIKI3D* w = NULL;
     const int st = s_assets == ASSETS_FAILED ? WIKISIDE_REFUSED : tagpu_wiki3d_answer(&w);
     *src = NULL;
+    if (snd) *snd = NULL;
     if (st == WIKISIDE_PENDING) return 0;
     if (w) {
         s_cobsrc.ctx = (void*)w;
+        s_sndsrc.ctx = (void*)w;
         *src = &s_cobsrc;
+        if (snd) *snd = &s_sndsrc;
     }
     return 1;
 }
@@ -648,6 +731,7 @@ static int context_now(const WIKIDATA* d, const WIKILAYOUT** lay, int* src, WIKI
     ctx->cast = NULL;
     ctx->iface = s_iface;
     ctx->cob = NULL;
+    ctx->snd = NULL;
     *cast = -1;
     if (!layout_now(d, lay, src, &blk)) return 0;
     if (blk) {
@@ -661,7 +745,7 @@ static int context_now(const WIKIDATA* d, const WIKILAYOUT** lay, int* src, WIKI
             *src = *lay ? WIKISTAGE_LAYOUT_FIXTURE : WIKISTAGE_LAYOUT_NONE;
         }
     }
-    return scripts_now(&ctx->cob);
+    return scripts_now(&ctx->cob, &ctx->snd);
 }
 
 /* wiki.js `start`: the selected demo afresh, scripted, its clock from now; in Try it yourself its
@@ -701,6 +785,7 @@ static void start(void)
         lstrcpynA(s_msg, err, sizeof s_msg);
         return;
     }
+    snprintf(s_sndDemo, sizeof s_sndDemo, "%s/%s%s", e->id, e->demo[s_demo].id, s_try ? " (try it)" : "");
     s_lay = lay;
     s_laySrc = src;
     s_ctx = ctx;
@@ -743,6 +828,7 @@ static void page_close(void)
 {
     try_release_all(1);
     sim_free();
+    tagpu_wikisound_release();
     s_want = 0;
     s_drag = -1;
     tagpu_logf("wiki: the page cost this thread at most %.3f ms in one frame over %u frames",
@@ -786,32 +872,41 @@ static void page_press(const char* key)
         !strcmp(key, "try"))
         held(key);
     if (!d) return;
-    if ((i = key_index(key, "fold:", d->nnode < folds ? d->nnode : folds)) >= 0)
+    if ((i = key_index(key, "fold:", d->nnode < folds ? d->nnode : folds)) >= 0) {
+        button_sound();
         s_fold[i >> 5] ^= 1u << (i & 31);
-    else if ((i = key_index(key, "entry:", d->nnode)) >= 0) {
+    } else if ((i = key_index(key, "entry:", d->nnode)) >= 0) {
+        button_sound();
         if (d->node[i].entry >= 0 && d->node[i].entry != s_entry) {
             s_try = 0;
             pick(d->node[i].entry, 0);
         }
     } else if (entry_of(d) && (i = key_index(key, "demo:", entry_of(d)->ndemo)) >= 0) {
+        button_sound();
         s_try = 0;
         pick(s_entry, i);
     } else if (!strcmp(key, "try")) {
+        button_sound();
         if (entry_of(d) && s_demo >= 0 && s_demo < entry_of(d)->ndemo) {
             s_try = !s_try;
             s_playing = 1;
             start();
         }
     } else if (!strcmp(key, "play")) {
+        button_sound();
         if (done()) start();
         else s_playing = !s_playing;
     } else if (!strcmp(key, "replay")) {
+        button_sound();
         s_playing = 1;
         start();
-    } else if (!strcmp(key, "x1"))
+    } else if (!strcmp(key, "x1")) {
+        button_sound();
         s_speed = 1;
-    else if (!strcmp(key, "x2"))
+    } else if (!strcmp(key, "x2")) {
+        button_sound();
         s_speed = 2;
+    }
 }
 
 /* EVERY SCROLL IS CLAMPED TO THE LIMITS OF THE FRAME THE PLAYER SAW: the hit map's, taken from
@@ -931,6 +1026,7 @@ static void page_fill(TAGPU_PK_WIKI* w)
         /* THE CAPTION IS SHOWN FILLED (tagpu_wikitext.h); the view keeps it raw, as the hash does */
         if (tagpu_wikitext_fill(v->caption, &s_words, w->stage.caption, sizeof w->stage.caption))
             t |= WIKISTAGE_TRUNC_CAPTION;
+        sound_drain(v);
         /* after the last read of `v`: a call on the simulation ends the view's lifetime */
         t |= tagpu_wikistage_pose(&w->stage, &s_sim);
         w->stage.tick = s_sim.tick;
@@ -1036,13 +1132,14 @@ static void check(void)
     const WIKILAYOUT* lay = NULL;
     const WIKISIDE* blk = NULL;
     const WIKICOBSRC* cob = NULL;
+    const WIKISNDSRC* snd = NULL;
     LARGE_INTEGER t0, t1;
     char err[160];
     int i, j, k, ifc, nside, n = 0, bad = 0, src = WIKISTAGE_LAYOUT_NONE;
     FILE* f;
     if (!d) { tagpu_logf("wiki check: the wiki's data is not loaded"); return; }
     layout_now(d, &lay, &src, &blk);
-    scripts_now(&cob);
+    scripts_now(&cob, &snd);
     nside = lay && lay->nside > 0 ? (lay->nside < WIKI_SIDE_SIDES ? lay->nside : WIKI_SIDE_SIDES) : 1;
     if ((f = fopen(CHECK_LAYOUT ".tmp", "wb"))) {
         if (lay) layout_json(f, lay);
@@ -1051,7 +1148,7 @@ static void check(void)
         if (fclose(f) != 0 || !MoveFileExA(CHECK_LAYOUT ".tmp", CHECK_LAYOUT, MOVEFILE_REPLACE_EXISTING))
             tagpu_logf("wiki check: %s could not be written (%lu)", CHECK_LAYOUT, (unsigned long)GetLastError());
     }
-    tagpu_logf("wiki check: the sidebar layout is %s, in %s; the units' scripts are %s", src == WIKISTAGE_LAYOUT_MOD ? "the mod's"
+    tagpu_logf("wiki check: the sidebar layout is %s, in %s; the units' scripts and sounds are %s", src == WIKISTAGE_LAYOUT_MOD ? "the mod's"
                : src == WIKISTAGE_LAYOUT_FIXTURE ? "the fixture" : "none", CHECK_LAYOUT, cob ? "on" : "off");
     QueryPerformanceCounter(&t0);
     for (k = 0; k < nside; k++)
@@ -1060,7 +1157,7 @@ static void check(void)
                 for (j = 0; j < d->entry[i].ndemo; j++) {
                     const WIKIENTRY* e = &d->entry[i];
                     /* the contexts start() can give: the side's casting only on the mod's layout */
-                    const WIKISIMCTX ctx = { k, blk ? &blk->casting[k] : NULL, ifc, cob };
+                    const WIKISIMCTX ctx = { k, blk ? &blk->casting[k] : NULL, ifc, cob, snd };
                     WIKISIM* s = (WIKISIM*)malloc(sizeof *s);
                     long t = 0;
                     int ty;
@@ -1589,7 +1686,7 @@ int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again, int side, int if
         const WIKICOBSRC* cob;
         int src;
         assets_start();
-        if (layout_now(data(), &lay, &src, NULL) && scripts_now(&cob)) {
+        if (layout_now(data(), &lay, &src, NULL) && scripts_now(&cob, NULL)) {
             DeleteFileA(CHECK_ASK);
             check();
         }

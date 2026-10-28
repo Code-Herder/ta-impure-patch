@@ -54,7 +54,9 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "tagpu_vfs.h"
+#include "tagpu_wav.h"
 #include "tagpu_wikidata.h"
+#include "tagpu_wikisim.h"
 
 #define WIKI3D_NAMEMAX  32              /* a feature section, a unit type, a folder: the engine's 0x20 */
 
@@ -168,7 +170,50 @@ typedef struct {
     int32_t     offset[WIKI3D_MAXPIECE][3];
     int16_t     parent[WIKI3D_MAXPIECE];
     int32_t     top;
+    /* ITS SOUNDS (tagpu_wikisim.h WIKISNDTYPE), with its model only, as gfx.py gives a mesh one:
+       its FBI's SoundCategory as def+0x20E holds it (0x42CC54..0x42CCB6: absent 0, else the first
+       sound.TDF section whose name equals it without case, else its atoi), -1 for a category
+       outside the file's sections -- the engine's read 0x47FD70 is unbounded, this one is not --
+       and that section's variant count per kind (0x42F580) */
+    int         sound_cat;
+    int32_t     sound_count[WIKI_SND_KINDS];
 } WIKI3DUNIT;
+
+/* THE SOUND THE STAGE PLAYS (tagpu_wikisound.c), read on the loader's thread with the models and
+   immutable once published with them: the WAVs of every category a resolved unit has, for the
+   kinds the wiki says (tagpu_wikisim.h, THE SOUND), and of the button sounds' allsound names.
+   A WAV opens as `sounds\<name>.WAV` by 0x4290F0's path, the language's folder first, and is
+   kept only as tagpu_wav.h's rule accepts it: a variant whose file is missing or refused is
+   silent. tools/wiki/gfx.py `write_sounds` is the mockup's twin.
+   BOUNDED: at most WIKI3D_CLIPS distinct files, WIKI3D_SNDCATS categories and WIKI3D_SNDVARS
+   variants over them all; past a bound the rest is silent and the load says so. Each clip's
+   samples are a copy in the arena. */
+#define WIKI3D_CLIPS    256
+#define WIKI3D_SNDCATS  64
+#define WIKI3D_SNDVARS  4096
+#define WIKI3D_CLIPNAME 256             /* allsound's `sound` is read into 0x100 bytes, a variant's
+                                           WAV name into 0x40 (0x4C48C0)                         */
+typedef struct {
+    char                 name[WIKI3D_CLIPNAME];
+    int                  channels, bits, rate, align;
+    const unsigned char* data;
+    uint32_t             bytes;
+} WIKI3DCLIP;
+/* a category: its sound.TDF section and, per kind, its variants var[first .. first + n), each a
+   clip index or -1; n is at most the unit's count for the kind */
+typedef struct {
+    int index;
+    int first[WIKI_SND_KINDS], n[WIKI_SND_KINDS];
+} WIKI3DSNDCAT;
+typedef struct {
+    int                 ncategory;      /* sound.TDF's sections                                  */
+    int                 ncat;
+    const WIKI3DSNDCAT* cat;
+    const int16_t*      var;
+    int                 named[WIKI_NSNDNAME];   /* a clip index, -1 none                          */
+    int                 nclip;
+    const WIKI3DCLIP*   clip;
+} WIKI3DSOUND;
 
 typedef struct {
     int                nstage, nunit;
@@ -179,6 +224,7 @@ typedef struct {
        player's <anims>\cursors.GAF in the engine's form (cursornormal, cursormove, cursornormal;
        arrow and build share one copy), or NULL when it did not resolve */
     const void*        cursor[3];
+    WIKI3DSOUND        sound;
     uint32_t           base;            /* the arena's address as its pointer fields hold it     */
     uint32_t           bytes;           /* the arena's bytes in use, from `base`                 */
 } WIKI3D;

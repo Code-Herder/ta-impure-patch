@@ -4,6 +4,7 @@
    in C's spelling (siteOk is site_ok), so that a change to one is found in the other. Where a JS
    value can be undefined, a C value that every comparison treats alike stands in for it: NaN for
    a metal value read off the map, -1 for no vent and for no building armed. */
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,8 +37,9 @@
 #define CELL_BOUND (1 << 20)
 
 /* The context sim.js's context() gives a sim created with none: the layout's side 0, which every
-   checked layout has (tagpu_wikilayout_check: 1 to 8 sides), no casting, and Interface Type 1. */
-static const WIKISIMCTX CTX_NONE = { 0, NULL, 1, NULL };
+   checked layout has (tagpu_wikilayout_check: 1 to 8 sides), no casting, Interface Type 1, and
+   neither scripts nor sound. */
+static const WIKISIMCTX CTX_NONE = { 0, NULL, 1, NULL, NULL };
 enum { KIND_NONE, KIND_MEX, KIND_GEO };
 enum { HOW_BUILD, HOW_RECLAIM };
 /* where the cursor is (sim.js over()); NONE: a mouse button that has not gone down */
@@ -176,6 +178,11 @@ static XZ map_cursor(const WIKISIM* s)
 
 /* ---- units: each one on the heap, so a pointer to it holds while the list grows ---- */
 
+/* the sound's two entries (THE SOUND, below the spray), which the rules call where the engine's do */
+static void notice(WIKISIM* s, const WIKIUNIT* u, int kind);
+static void notice_active(WIKISIM* s, WIKIUNIT* u);
+static void sound_named(WIKISIM* s, int name);
+
 /* ---- the units' scripts: the in-game wiki's COB host (tagpu_wikicob.h), sim.js's COB, facts,
    stance, cobCall, extractorSpeed and spawn ---- */
 
@@ -270,6 +277,7 @@ static void spawn(WIKISIM* s, WIKIUNIT* u)
         cob_call(s, u, "SetSpeed", WIKICOB_ARGS, 1, &a);
     }
     if (u->built >= 1 && def(s, u->type)->activate_when_built) tagpu_wikicob_activate(s->cob, u->cob, 1);
+    notice_active(s, u);
 }
 
 /* a unit joins the world, appended in the room new_unit made for it. With the sidebar it carries
@@ -919,6 +927,15 @@ static void act(WIKISIM* s, const WIKIGADGET* g)
     WIKIUNIT* u = s->shown;
     const int n = u ? npages(s, u->type) : 0;
     int i, t;
+    /* THE BUTTON'S SOUND, 0x41AA00's: ORDERS `ordersbutton` (0x41AB04), BUILD `buildbutton`
+       (0x41AB45), a build button that arms `addbuild` (0x41ABA3), STOP `immediateorders` (its
+       branch jumps to 0x41A0EA); PREV and NEXT only set flags there, and the page step 0x41BDE0
+       plays `nextbuildmenu` (0x41BF01) when a unit with pages is shown */
+    if (g->role == WIKI_ROLE_ORDERS) sound_named(s, WIKI_SNDNAME_ORDERSBUTTON);
+    else if (g->role == WIKI_ROLE_BUILDTAB) sound_named(s, WIKI_SNDNAME_BUILDBUTTON);
+    else if (g->role == WIKI_ROLE_STOP) sound_named(s, WIKI_SNDNAME_IMMEDIATE);
+    else if ((g->role == WIKI_ROLE_PREV || g->role == WIKI_ROLE_NEXT) && n) sound_named(s, WIKI_SNDNAME_NEXTBUILDMENU);
+    else if (g->role == WIKI_ROLE_BUILD && (t = unit_def(s, g)) >= 0 && !mobile(s, t)) sound_named(s, WIKI_SNDNAME_ADDBUILD);
     if ((g->role == WIKI_ROLE_PREV || g->role == WIKI_ROLE_NEXT) && n) {
         u->page = g->role == WIKI_ROLE_NEXT ? (u->page == n ? 1 : u->page + 1) : (u->page < 2 ? n : u->page - 1);
         u->bp = 1;
@@ -1443,7 +1460,11 @@ static void commit(WIKISIM* s, const WIKIPLACE* p)
             if (push_order(s, u, &o)) changed++;
         }
     }
-    if (changed) s->shift_placed = 1;
+    /* stock's `oktobuild`, once a gesture, as tagpu_place.c's commit plays it */
+    if (changed) {
+        s->shift_placed = 1;
+        sound_named(s, WIKI_SNDNAME_OKTOBUILD);
+    }
 }
 
 /* mirrors tagpu_place.c's release (place_button): Shift up first drops the gesture and the building
@@ -1682,7 +1703,12 @@ static void place_click(WIKISIM* s, int shift)
     const WIKIHOVER h = map_hover(s);
     XZ at;
     int i, j;
-    if (h.kind != WIKI_HOVER_PLACE || !h.ok) return;
+    /* stock's click 0x498F70: a site the build cursor found refused says `notoktobuild` and keeps the
+       building armed (0x49901D); a placed one says `oktobuild` (0x498FA4) */
+    if (h.kind != WIKI_HOVER_PLACE || !h.ok) {
+        sound_named(s, WIKI_SNDNAME_NOTOKTOBUILD);
+        return;
+    }
     at = centre(s, h.type, h.ox, h.oz);
     for (i = 0; i < s->nunit; i++) {
         WIKIUNIT* u = s->unit[i];
@@ -1696,6 +1722,7 @@ static void place_click(WIKISIM* s, int shift)
             assign(s, u, &o, 1, shift);
         }
     }
+    sound_named(s, WIKI_SNDNAME_OKTOBUILD);
     if (!shift) disarm(s);
     else s->shift_placed = 1;
 }
@@ -1711,7 +1738,8 @@ static void select_units(WIKISIM* s, int shift, int box)
     if (box) {
         const double x0 = s->drag_x0 < x ? s->drag_x0 : x, x1 = s->drag_x0 > x ? s->drag_x0 : x;
         const double z0 = s->drag_z0 < z ? s->drag_z0 : z, z1 = s->drag_z0 > z ? s->drag_z0 : z;
-        int any_mobile = 0;
+        const WIKIUNIT* last = NULL;
+        int any_mobile = 0, picked = 0;
         for (i = 0; i < s->nunit; i++) {
             u = s->unit[i];
             if (u->owner == 0 && u->x >= x0 && u->x <= x1 && u->z >= z0 && u->z <= z1 && mobile(s, u->type)) any_mobile = 1;
@@ -1720,9 +1748,16 @@ static void select_units(WIKISIM* s, int shift, int box)
             for (i = 0; i < s->nunit; i++) s->unit[i]->sel = 0;
         for (i = 0; i < s->nunit; i++) {
             u = s->unit[i];
-            if (u->owner == 0 && u->x >= x0 && u->x <= x1 && u->z >= z0 && u->z <= z1 && (!any_mobile || mobile(s, u->type)))
+            if (u->owner == 0 && u->x >= x0 && u->x <= x1 && u->z >= z0 && u->z <= z1 && (!any_mobile || mobile(s, u->type))) {
                 u->sel = 1;
+                last = u;
+                picked++;
+            }
         }
+        /* the box's sound (0x48C65A..0x48C681): one unit selected says its select, more the allsound
+           SelectMultipleUnits, none nothing */
+        if (picked == 1) notice(s, last, WIKI_SND_SELECT);
+        else if (picked > 1) sound_named(s, WIKI_SNDNAME_MULTI);
         return;
     }
     u = unit_at(s, x, z);
@@ -1732,6 +1767,8 @@ static void select_units(WIKISIM* s, int shift, int box)
             for (i = 0; i < s->nunit; i++) s->unit[i]->sel = 0;
             u->sel = 1;
         }
+        /* the click's select says it when its unit is left selected (0x48C8B9, 0x48C997) */
+        if (u->sel) notice(s, u, WIKI_SND_SELECT);
     } else if (!shift)
         for (i = 0; i < s->nunit; i++) s->unit[i]->sel = 0;
 }
@@ -1908,7 +1945,7 @@ static int reach(const WIKISIM* s, WIKIUNIT* u, BOX b)
    work state 0x403E0C and the step 0x41BA60 never read +0x10F): no progress on a work until its
    script has set INBUILDSTANCE once, though the job is its own from now, which its StartBuilding
    goes for */
-static void credit(const WIKISIM* s, WIKIUNIT* u, WIKIUNIT* st, int how)
+static void credit(WIKISIM* s, WIKIUNIT* u, WIKIUNIT* st, int how)
 {
     const double dx = st->x - u->x, dz = st->z - u->z, d = sqrt(dx * dx + dz * dz);
     const double w = def(s, u->type)->worker_time / def(s, st->type)->build_time / TPS * s->PACE;
@@ -1922,6 +1959,12 @@ static void credit(const WIKISIM* s, WIKIUNIT* u, WIKIUNIT* st, int how)
     if (!(u->stanced && !strcmp(u->work, st->id))) {
         if (!stance(s, u)) return;
         u->stanced = 1;
+    }
+    /* a reclaim says working once an order, when its work first goes on (ReclaimUnit's state after
+       the stance wait, 0x4048BE); credit runs only for a unit with a first order */
+    if (how == HOW_RECLAIM && u->norder && u->order[0].serial != u->said) {
+        u->said = u->order[0].serial;
+        notice(s, u, WIKI_SND_WORKING);
     }
     if (how == HOW_BUILD) st->work_build += w;
     else st->work_reclaim += w;
@@ -2108,6 +2151,102 @@ static void spray_tick(WIKISIM* s, int t)
     s->nburst = k;
 }
 
+/* ---- THE SOUND (tagpu_wikisim.h), sim.js's sound functions ---- */
+
+static const unsigned char SND_PRIORITY[WIKI_SND_KINDS] = WIKI_SND_PRIORITIES;
+static const unsigned char SND_INTERVAL[WIKI_SND_KINDS] = WIKI_SND_INTERVALS;
+/* THE WIKI'S GENERATOR for a reply's variant, in place of the CRT rand 0x47FD70 draws from: the
+   unit's id (FNV-1a 32 over its bytes), the kind and the tick, 0..0x7FFF as rand's */
+static int32_t snd_draw(const char* id, int kind, int tick)
+{
+    uint32_t h = 0x811C9DC5u;
+    for (; *id; id++) h = (h ^ (unsigned char)*id) * 0x01000193u;
+    return (int32_t)(mix32(mix32(h + (uint32_t)kind * 0x9E3779B9u) ^ (uint32_t)tick) & 0x7FFFu);
+}
+
+/* an event into the ring; the count stops at INT_MAX, the ring's place wraps by itself */
+static void sound_event(WIKISIM* s, int kind, int name, int cat, int variant)
+{
+    WIKISNDEV* v = &s->snd[s->snd_total % WIKI_SND_LOG];
+    v->tick = s->now;
+    v->kind = kind;
+    v->name = name;
+    v->cat = cat;
+    v->variant = variant;
+    if (s->snd_total < INT_MAX - WIKI_SND_LOG) s->snd_total++;
+}
+
+/* 0x47F1A0's play by name: at once, no queue, no cooldown */
+static void sound_named(WIKISIM* s, int name)
+{
+    if (s->snd_on && name >= 0 && name < WIKI_NSNDNAME) sound_event(s, 0, name, -1, 0);
+}
+
+/* 0x47F780 then 0x47FAD0: the viewed player's unit, then the kind's cooldown, a notice of its kind
+   already queued, a full queue's last entry dropped, and the notice in before the first entry of a
+   lower priority */
+static void notice(WIKISIM* s, const WIKIUNIT* u, int kind)
+{
+    WIKISNDQ* e;
+    int i, k;
+    if (!s->snd_on || s->snd_quiet || u->owner != 0 || kind <= 0 || kind >= WIKI_SND_KINDS) return;
+    if (s->now < s->snd_next[kind]) return;
+    for (i = 0; i < s->nsndq; i++)
+        if (s->sndq[i].kind == kind) return;
+    if (s->nsndq == WIKI_SND_QUEUE) s->nsndq--;
+    for (k = 0; k < s->nsndq && SND_PRIORITY[s->sndq[k].kind] >= SND_PRIORITY[kind]; k++) {}
+    memmove(&s->sndq[k + 1], &s->sndq[k], (size_t)(s->nsndq - k) * sizeof *s->sndq);
+    e = &s->sndq[k];
+    memset(e, 0, sizeof *e);
+    e->kind = kind;
+    e->tick = s->now;
+    e->type = u->type;
+    e->priority = SND_PRIORITY[kind];
+    snprintf(e->unit, sizeof e->unit, "%s", u->id);
+    s->nsndq++;
+}
+
+/* ACTIVATION as the state setter 0x48B090 notices it, for a unit whose script runs: a change since
+   the last look says activate or deactivate */
+static void notice_active(WIKISIM* s, WIKIUNIT* u)
+{
+    int on;
+    if (!s->cob || !u->cob || tagpu_wikicob_resting(s->cob, u->cob)) return;
+    on = tagpu_wikicob_value(s->cob, u->cob, WIKICOB_ACTIVATION) != 0;
+    if (on == u->active) return;
+    u->active = on;
+    notice(s, u, on ? WIKI_SND_ACTIVATE : WIKI_SND_DEACTIVATE);
+}
+
+/* THE CONSUMER 0x47F680, once a tick after its work: entry 0 leaves the queue, with sound only a
+   gap after the last reply, which it then is; with sound and a variant to pick (0x47FD70's count
+   gate), the reply is made and the kind's next time written. BOUND: the queue's type is a def index
+   notice() took from a unit, below WIKI_MAX_DEFS, and its kind is below WIKI_SND_KINDS. */
+static void sound_tick(WIKISIM* s)
+{
+    WIKISNDQ e;
+    int32_t count;
+    int play;
+    if (!s->snd_on || !s->nsndq) return;
+    e = s->sndq[0];
+    memmove(&s->sndq[0], &s->sndq[1], (size_t)(s->nsndq - 1) * sizeof *s->sndq);
+    s->nsndq--;
+    play = s->now >= s->snd_last + WIKI_SND_GAP;
+    if (play) s->snd_last = s->now;
+    count = e.type >= 0 && e.type < WIKI_MAX_DEFS ? s->snd_count[e.type][e.kind] : 0;
+    if (!play || count <= 0) return;
+    sound_event(s, e.kind, -1, s->snd_cat[e.type], (int)((int64_t)snd_draw(e.unit, e.kind, s->now) * count / 0x8000));
+    s->snd_next[e.kind] = s->now + 30 * SND_INTERVAL[e.kind];
+}
+
+/* an order's first run says ok (0x438880 at its handler's start), unless the scene gave it */
+static void begin(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* o)
+{
+    if (o->serial == u->begun) return;
+    u->begun = o->serial;
+    if (o->serial > s->scene_serial) notice(s, u, WIKI_SND_OK);
+}
+
 static void advance(WIKISIM* s)
 {
     int i;
@@ -2118,6 +2257,7 @@ static void advance(WIKISIM* s)
         u->worked = 0;
         u->stepped = 0;
         u->spray = 0;
+        u->completed = 0;
         u->work_build = u->work_reclaim = 0;
     }
     s->nemit = 0;
@@ -2127,8 +2267,12 @@ static void advance(WIKISIM* s)
         WIKIUNIT* st;
         WIKIORDER* o = u->norder ? &u->order[0] : NULL;
         if (!o || !mobile(s, u->type) || o->k == WIKI_ORDER_GUARD) continue;
+        begin(s, u, o);
         if (o->k == WIKI_ORDER_MOVE) {
-            if (walk(s, u, o->x, o->z, 0)) shift_order(u);
+            if (walk(s, u, o->x, o->z, 0)) {
+                shift_order(u);
+                notice(s, u, WIKI_SND_ARRIVED);
+            }
             continue;
         }
         if (o->k == WIKI_ORDER_RECLAIM) {
@@ -2140,9 +2284,14 @@ static void advance(WIKISIM* s)
         if (st && st->built >= 1) { shift_order(u); continue; }
         if (!reach(s, u, box(s, o->type, o->ox, o->oz))) continue;
         if (!st) {
-            if (!site_ok(s, o->type, o->ox, o->oz, NULL)) { shift_order(u); continue; }
+            if (!site_ok(s, o->type, o->ox, o->oz, NULL)) {
+                shift_order(u);
+                notice(s, u, WIKI_SND_CANT);
+                continue;
+            }
             if (!(st = new_unit(s, o->type, u->owner, 0, NULL, NULL))) continue;
             place(s, st, o->ox, o->oz);
+            notice(s, u, WIKI_SND_BUILD);
         }
         credit(s, u, st, HOW_BUILD);
     }
@@ -2151,6 +2300,7 @@ static void advance(WIKISIM* s)
         WIKIUNIT* g;
         WIKIORDER* o = u->norder ? &u->order[0] : NULL;
         if (!o || o->k != WIKI_ORDER_GUARD) continue;
+        begin(s, u, o);
         if (!(g = by_id(s, o->target))) { shift_order(u); continue; }
         if (g->job) {
             WIKIUNIT* j = g->job;
@@ -2163,6 +2313,7 @@ static void advance(WIKISIM* s)
         if (st->work_build && st->built < 1) {
             st->built += st->work_build;
             if (st->built > 1) st->built = 1;
+            st->completed = st->built >= 1;
             /* 0x41B8D0: a structure finished whose FBI says ActivateWhenBuilt is switched on (0x41B9A6) */
             if (st->built >= 1 && s->cob && st->cob && def(s, st->type)->activate_when_built)
                 tagpu_wikicob_activate(s->cob, st->cob, 1);
@@ -2176,6 +2327,15 @@ static void advance(WIKISIM* s)
                 i--;
             }
         }
+    }
+    /* THE NOTICES OF THE WORK, in creation order whatever order the work was credited in: a change
+       of ACTIVATION the completion made, then each builder whose build finished this tick, as each
+       builder's handler finds the build complete (0x403F39, 0x40422F) */
+    for (i = 0; i < s->nunit; i++) notice_active(s, s->unit[i]);
+    for (i = 0; s->snd_on && i < s->nunit; i++) {
+        WIKIUNIT* u = s->unit[i];
+        const WIKIUNIT* t = u->job_id[0] && u->job_how == HOW_BUILD ? by_id(s, u->job_id) : NULL;
+        if (t && t->completed) notice(s, u, WIKI_SND_COMPLETE);
     }
     /* orders whose work is over end now, so the next one starts on the next tick */
     for (i = 0; i < s->nunit; i++) {
@@ -2229,6 +2389,8 @@ static void advance(WIKISIM* s)
             cob_call(s, u, "StopMoving", WIKICOB_NOW, 0, NULL);
         u->moving = u->stepped;
     }
+    /* a run-now start or a query in the turns can set ACTIVATION too */
+    for (i = 0; i < s->nunit; i++) notice_active(s, s->unit[i]);
     /* no pointer to a reclaimed unit outlives the tick */
     for (i = 0; i < s->nunit; i++) s->unit[i]->job = NULL;
 }
@@ -2312,6 +2474,7 @@ static void drop_work(WIKISIM* s)
 /* the player's input stands between two ticks: the view of the tick the sim stands at shows it */
 void tagpu_wikisim_input(WIKISIM* s, const WIKIINPUT* ev)
 {
+    s->now = s->tick;
     input(s, ev);
     drop_work(s);
     cursor_tick(s, s->tick);
@@ -2320,6 +2483,8 @@ void tagpu_wikisim_input(WIKISIM* s, const WIKIINPUT* ev)
 void tagpu_wikisim_step(WIKISIM* s)
 {
     const int t = s->tick + 1;
+    int i;
+    s->now = t;
     if (s->waiting && idle(s)) s->waiting = 0;
     else if (s->waiting && t - s->wait_from > s->wait_max) s->stalled = 1;
     if (!s->waiting) feed(s, ++s->clock);
@@ -2328,9 +2493,11 @@ void tagpu_wikisim_step(WIKISIM* s)
     if (s->cob) {
         const int n = facts(s);
         tagpu_wikicob_slice(s->cob, s->fact, n);
+        for (i = 0; i < s->nunit; i++) notice_active(s, s->unit[i]);
     }
     advance(s);
     spray_tick(s, t);
+    sound_tick(s);
     s->tick = t;
     /* a lock ends the demo on its own tick, which then holds under the entry's badge */
     s->done = s->clock >= s->end || s->locked >= 0 || s->stalled;
@@ -2518,6 +2685,15 @@ const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s)
     v->part_cut = s->part_cut;
     v->nburst = s->nburst;
     v->burst = s->burst;
+    v->has_sound = s->snd_on;
+    memcpy(v->snd_next, s->snd_next, sizeof v->snd_next);
+    v->snd_last = s->snd_last;
+    v->nsndq = s->nsndq;
+    v->sndq = s->sndq;
+    v->snd_total = s->snd_total;
+    v->nsnd = s->snd_total < WIKI_SND_LOG ? s->snd_total : WIKI_SND_LOG;
+    for (i = 0; i < v->nsnd; i++) s->vsnd[i] = s->snd[(s->snd_total - v->nsnd + i) % WIKI_SND_LOG];
+    v->snd = s->vsnd;
     v->mode = s->mode;
     /* the column, only with the sidebar on; the type the demo stopped on, with it or without */
     if ((v->has_side = s->lay != NULL)) side_view(s, &v->side);
@@ -2693,6 +2869,30 @@ uint64_t tagpu_wikisim_hash(const WIKISIM* s)
         for (k = 0; k < 12; k++) fnv_int(&h, e->box[k / 6][k % 6]);
         fnv_int(&h, e->due);
         fnv_int(&h, (int)e->key);
+    }
+    fnv_int(&h, s->snd_on);
+    if (s->snd_on) {
+        const int n = s->snd_total < WIKI_SND_LOG ? s->snd_total : WIKI_SND_LOG;
+        for (i = 0; i < WIKI_SND_KINDS; i++) fnv_int(&h, s->snd_next[i]);
+        fnv_int(&h, s->snd_last);
+        fnv_int(&h, s->nsndq);
+        for (i = 0; i < s->nsndq; i++) {
+            const WIKISNDQ* e = &s->sndq[i];
+            fnv_int(&h, e->kind);
+            fnv_int(&h, e->tick);
+            fnv_str(&h, e->unit);
+            fnv_str(&h, def(s, e->type)->name);
+            fnv_int(&h, e->priority);
+        }
+        fnv_int(&h, s->snd_total);
+        for (i = 0; i < n; i++) {
+            const WIKISNDEV* e = &s->snd[(s->snd_total - n + i) % WIKI_SND_LOG];
+            fnv_int(&h, e->tick);
+            fnv_int(&h, e->kind);
+            fnv_int(&h, e->name);
+            fnv_int(&h, e->cat);
+            fnv_int(&h, e->variant);
+        }
     }
     return h;
 }
@@ -2986,9 +3186,34 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
             !(s->burst = (WIKISPRAY*)calloc(WIKI_SPRAY_BURSTS, sizeof *s->burst)))
             goto oom;
     }
+    /* THE UNITS' SOUNDS, before any unit so a scene unit's spawn can say its activation: each type's
+       category and counts from the context's source by name; a count below 0 is none */
+    if (ctx->snd) {
+        /* a demo is a scene of a game under way: its last reply is a gap past, so the first one has
+           sound (the engine's level start zeroes it, 0x47EE30, which would silence every demo's
+           first second) */
+        s->snd_on = 1;
+        s->snd_last = -WIKI_SND_GAP;
+        for (i = 0; i < s->entry->ndef && i < WIKI_MAX_DEFS; i++) {
+            WIKISNDTYPE t;
+            memset(&t, 0, sizeof t);
+            if (!ctx->snd->type(ctx->snd->ctx, s->entry->def[i].name, &t)) {
+                memset(&t, 0, sizeof t);
+                t.cat = -1;
+            }
+            s->snd_cat[i] = t.cat;
+            for (k = 0; k < WIKI_SND_KINDS; k++) s->snd_count[i][k] = t.count[k] > 0 ? t.count[k] : 0;
+        }
+    }
+    /* the scene's units say nothing as it is laid out: an engine level's units are there before
+       its first second, which has no reply with sound (the queue's last time starts at 0) */
+    s->snd_quiet = 1;
     if ((r = scene_units(s, a, err, errn)) > 0 && b) r = scene_units(s, b, err, errn);
+    s->snd_quiet = 0;
     if (r < 0) goto oom;
     if (!r) goto refused;
+    /* the orders the scene gave its units, every serial up to here, say no ok */
+    s->scene_serial = s->next_serial;
     for (i = 0; sel && i < sel->nselected; i++) {
         WIKIUNIT* u = by_id(s, sel->selected[i]);
         if (!u) {

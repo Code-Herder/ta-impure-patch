@@ -53,7 +53,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { cobHost, scripts } from './cobhost.mjs';
+import { cobHost, scripts, sounds, soundSource } from './cobhost.mjs';
 
 const require = createRequire(import.meta.url);
 const WikiSim = require('./mockup/sim.js');
@@ -127,6 +127,15 @@ function stateHash(sim, v) {
   int(v.partsCut ? 1 : 0);
   int(v.bursts.length);
   for (const e of v.bursts) for (const w of e) int(w);
+  int(v.sound ? 1 : 0);
+  if (v.sound) {
+    const d = v.sound;
+    for (const x of d.next) int(x);
+    int(d.last); int(d.queue.length);
+    for (const [kind, tick, unit, type, prio] of d.queue) { int(kind); int(tick); str(unit); str(type); int(prio); }
+    int(d.total);
+    for (const e of d.events) for (const w of e) int(w);
+  }
   return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0');
 }
 
@@ -136,6 +145,9 @@ function stateHash(sim, v) {
 const GFX = path.join(ROOT, 'tools/wiki/mockup/gfx');
 const PACKS = fs.existsSync(GFX) ? fs.readdirSync(GFX).sort().map(d => path.join(GFX, d)).filter(d => fs.existsSync(path.join(d, 'scene.json'))) : [];
 const SCRIPTS = scripts(PACKS);
+/* THE UNITS' SOUNDS, from the same packs, given wherever the scripts are: the game's sim has both from its one 3D load
+   or neither (tagpu_wiki.c scripts_now) */
+const SOUNDS = sounds(PACKS);
 const COBS = Object.keys(SCRIPTS).length ? [false, true] : [false];
 let host = null;
 const HOST = () => (host ??= cobHost());
@@ -197,7 +209,8 @@ if (process.argv.includes('--hash')) {
   const side = Number(arg('--side') ?? 0), iface = Number(arg('--iface') ?? 1);
   const stages = dir && fs.existsSync(path.join(dir, 'stage')) ? fs.readdirSync(path.join(dir, 'stage')).sort().map(d => path.join(dir, 'stage', d)) : [];
   const cob = process.argv.includes('--scripts') ? HOST().forPacks([...stages, ...PACKS]) : null;
-  const ctx = { side, casting: pack ? pack.casting[side] ?? null : null, iface, cob };
+  const snd = cob ? soundSource([...stages, ...PACKS]) : null;
+  const ctx = { side, casting: pack ? pack.casting[side] ?? null : null, iface, cob, snd };
   const tree = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/tree.json'), 'utf8'));
   const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
   for (const id of new Set(tree.tree.flatMap(leaves))) {
@@ -223,7 +236,8 @@ if (tryAt >= 0) {
   const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${dump.entry}.json`), 'utf8'));
   const demo = entry.demos.find(d => d.id === dump.demo);
   if (!demo) { console.error(`simparity --try: no demo ${dump.entry}/${dump.demo}`); process.exit(2); }
-  const ctx = dump.ctx ? { ...dump.ctx, cob: dump.ctx.cob ? HOST().forPacks(PACKS) : null } : undefined;
+  const ctx = dump.ctx ? { ...dump.ctx, cob: dump.ctx.cob ? HOST().forPacks(PACKS) : null,
+                           snd: dump.ctx.cob ? soundSource(PACKS) : null } : undefined;
   const sim = WikiSim.create(entry, demo, 'layout' in dump ? dump.layout : FIXTURE, ctx);
   for (const [t, kind, a, b] of dump.try_log) {
     while (sim.tick < t) sim.step();
@@ -519,12 +533,16 @@ try {
   const ids = [...new Set(tree.tree.flatMap(leaves))];
   for (const name of Object.keys(CASTINGS))
     fs.writeFileSync(path.join(tmp, `casting-${name}.json`), JSON.stringify(CASTINGS[name][0]));
-  fs.writeFileSync(path.join(tmp, 'cob.json'), JSON.stringify(Object.fromEntries(Object.entries(SCRIPTS).map(([n, t]) =>
-    [n, { cob: t.cob, visible: t.visible, offset: t.offset, parent: t.parent, top: t.top }]))));
+  fs.writeFileSync(path.join(tmp, 'cob.json'), JSON.stringify(Object.fromEntries([...new Set([...Object.keys(SCRIPTS), ...Object.keys(SOUNDS)])].map(n => {
+    const t = SCRIPTS[n];
+    return [n, { ...(t ? { cob: t.cob, visible: t.visible, offset: t.offset, parent: t.parent, top: t.top } : {}),
+                 ...(SOUNDS[n] ? { sound: SOUNDS[n] } : {}) }];
+  }))));
   if (!COBS.includes(true)) console.log('note   no gfx pack under tools/wiki/mockup/gfx/ holds a script: the demos play without their units\' scripts only');
   for (const cob of COBS) for (const side of ['fixture', 'fixture-tall', null]) for (const cname of [null, ...Object.keys(CASTINGS)]) for (const iface of [1, 0]) {
     const layout = side && SIDE(side), named = `${side || 'no sidebar'}, ${cname || 'own types'}, type ${iface}${cob ? ', scripts' : ''}`;
-    const ctx = { side: 0, casting: cname ? CASTINGS[cname][0] : null, iface, cob: cob ? HOST().forPacks(PACKS) : null };
+    const ctx = { side: 0, casting: cname ? CASTINGS[cname][0] : null, iface, cob: cob ? HOST().forPacks(PACKS) : null,
+                  snd: cob ? soundSource(PACKS) : null };
     const cout = lines(wikitest(['demos', 'wiki.bin', side || '-', cname ? `casting-${cname}.json` : '-', String(iface), cob ? 'cob.json' : '-']));
     let at = 0;
     for (const id of ids) {
@@ -580,7 +598,7 @@ try {
   const record = (make, scripted) => (entry, demo, layout, ctx) => {
     const sim = make(entry, demo, layout, ctx), k = made++;
     // a context's script source is wikitest's COB file, named by `cob: true`
-    const c = ctx ? { ...ctx, cob: ctx.cob ? true : undefined } : null;
+    const c = ctx ? { ...ctx, cob: ctx.cob ? true : undefined, snd: ctx.snd ? true : undefined } : null;
     ops.push(JSON.stringify({ op: 'create', sim: k, scripted, layout: layout ?? null, ctx: c }), JSON.stringify({ ...entry, demos: [demo || {}] }));
     const ask = (op, v) => { ops.push(JSON.stringify({ ...op, sim: k })); expected.push(v); return v; };
     return {

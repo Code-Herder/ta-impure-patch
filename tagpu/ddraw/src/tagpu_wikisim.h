@@ -113,6 +113,114 @@ typedef struct {
     uint32_t key;
 } WIKISPRAY;
 
+/* THE SOUND (research/notes/ingame-wiki-cob-plan.md, decisions 12 and 13, L5): what the engine would
+   say for the wiki's units and buttons, as the wiki's simulation state. The engine's own entries are
+   never called (they spend the game's cooldowns and its notice queue); their rules are repeated
+   here, DISASSEMBLED from the retail executable:
+
+   A UNIT'S REPLY is a notice, 0x47F780(unit, kind, text): only for a unit of the viewed player
+   (unit+0xFF == main+0x2A43; the wiki's owner 0), alive and not dying. Its push 0x47FAD0 refuses
+   it while GameTime < the kind's next time (0x47FAF0, `jb`) and while a notice of its kind is
+   queued (0x47FB0A); a full queue of WIKI_SND_QUEUE drops its last entry, shown as text only
+   (0x47FB27 calls 0x47FD70(7, 0, 1)); the notice goes in before the first entry of a lower
+   priority (0x47FBA4..0x47FBC0), {kind, GameTime, unit, priority}. The consumer 0x47F680, once
+   a main-loop pass (0x4999A6) -- here once a tick, after the tick's work -- takes entry 0: with
+   sound only when GameTime >= the last reply's time + WIKI_SND_GAP ([q+0xA1], set to 30 at the
+   queue's creation 0x47EE07), and then the last time is GameTime whatever follows (0x47F6D7). The
+   player 0x47FD70 picks a variant of the unit's sounds.tdf category (def+0x20E) for the kind,
+   rand() * count / 0x8000 (0x47FDC6..0x47FDD6), and under four gates -- priority > 10 - unitchat,
+   count > 0, sound asked for, speechfx (main+0x37F19 bit 0x40) -- writes the kind's next time,
+   GameTime + 30 x its interval (0x47FEFD), even when fxvol, Sound Mode or NoDirectSound then
+   silence the play (0x47FEB0..0x47FEC2 jump to the write). A level's start empties the queue and
+   zeroes the last time and every next time (0x47EE30, from 0x491898), so a level's own units say
+   nothing in its first second. A wiki sim is a scene of a game under way: its scene's units say
+   nothing as they are laid out, and it starts with every next time 0 and the last reply
+   WIKI_SND_GAP before tick 0, so the first reply the demo or the player causes is heard.
+
+   WHAT THE WIKI KEEPS of those gates: count and the sound asked for are simulation state; unitchat
+   and speechfx are the player's settings and are applied where the sound is played
+   (tagpu_wiki.c), with the simulation run at their defaults (unitchat 10, so every kind's priority
+   passes; speechfx on: the options' defaults 0x45C59C, 0x45C5D2). So a player who lowered
+   unitchat hears the kinds it lets through, but the next time of a kind it silences is written
+   here where the engine leaves it unwritten. GameTime is the tick being stepped, or between two
+   ticks the tick the sim stands at. The variant is the wiki's own generator (snd_draw), never
+   the CRT rand.
+
+   THE TRIGGERS, each the engine's: select (kind 1) when a click leaves its unit selected
+   (0x48C8B9, 0x48C997) or a box selects exactly one (0x48C668), and the allsound name
+   SelectMultipleUnits when a box selects more (0x48C681); ok (5) when a unit's order is first run
+   (0x438880 at each order handler's start, gated on the order node's +0x42 bit 0x2000, which it
+   clears; that every order a click gives carries the bit is [INFERRED]: where it is set was not
+   found), never for the scene's own orders; arrived (6) when a move ends (Move_Ground 0x4031FB);
+   cant (7) when a builder in range finds its site refused, the wiki's analogue of MobileBuild's
+   first failed site test (0x403CDF; the engine then retries ten times 30 ticks apart, the wiki
+   drops the order at once); build (9) when a builder places a nanoframe (0x403DA0); unitcomplete
+   (8) for each builder whose build finished this tick (0x403F39, 0x40422F); working (11) when a
+   reclaim first makes progress on an order (ReclaimUnit after its stance wait, 0x4048BE);
+   activate (3) and deactivate (4) when ACTIVATION changes for a unit whose script runs (0x48B110,
+   0x48B135 in the state setter 0x48B090). A NAMED SOUND (0x47F1A0, an allsound.tdf name, played
+   at once, no queue and no cooldown) for the sidebar's buttons as 0x41AA00 plays them -- ORDERS
+   `ordersbutton` (0x41AB04), BUILD `buildbutton` (0x41AB45), a build button that arms `addbuild`
+   (0x41ABA3), PREV and NEXT `nextbuildmenu` when they step a page (0x41BF01), STOP
+   `immediateorders` (0x419CF2 -> 0x41A0EA) -- and for a placement, `oktobuild` and `notoktobuild`
+   (0x498FA4, 0x49901D in stock's click, `oktobuild` once a gesture in tagpu_place.c's commit).
+
+   NOT POSITIONAL: the reply 0x47FD70 plays by file through 0x4D0640(name, -585, 0) and the named
+   sound through 0x4CF570(buffer, -585, 0), neither with a point, so no event carries one: the
+   engine attenuates neither by its camera, and the stage's camera attenuates nothing either.
+
+   BOUNDED: the queue holds WIKI_SND_QUEUE entries; the events are a ring of WIKI_SND_LOG, which
+   the player drains after every frame's steps (tagpu_wiki.c) and the hash reads whole. */
+#define WIKI_SND_KINDS  24          /* the kind table 0x5086D8's records, 24 bytes each           */
+#define WIKI_SND_QUEUE  8           /* 0x51E68C's entries, 0x11 bytes each, count at +0x99        */
+#define WIKI_SND_GAP    30          /* [q+0xA1]: one reply with sound a second                    */
+#define WIKI_SND_LOG    32
+/* the kind table 0x5086D8's priority (+4) and interval in seconds (+8) by kind, dumped from the
+   retail executable's .data; sim.js SND_PRIORITY and SND_INTERVAL are the same */
+#define WIKI_SND_PRIORITIES { 0, 10, 9, 4, 4, 5, 3, 8, 3, 4, 3, 2, 7, 7, 7, 7, 4, 10, 10, 10, 10, 10, 10, 10 }
+#define WIKI_SND_INTERVALS  { 0, 0, 20, 2, 2, 1, 4, 1, 3, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0 }
+
+enum { WIKI_SND_SELECT = 1, WIKI_SND_ACTIVATE = 3, WIKI_SND_DEACTIVATE = 4, WIKI_SND_OK = 5,
+       WIKI_SND_ARRIVED = 6, WIKI_SND_CANT = 7, WIKI_SND_COMPLETE = 8, WIKI_SND_BUILD = 9,
+       WIKI_SND_WORKING = 11 };
+
+/* the allsound.tdf names the wiki plays, by index, and their spelling: the strings the engine's
+   callers push to 0x47F1A0 (0x508D8C, 0x509660, 0x509650, 0x5026B8, 0x5027EC, 0x5027F8, 0x502850,
+   0x50271C), and "Options" as the in-game menu's controls and tagpu_menu.c's play it. allsound.tdf's
+   names match without case (0x4F8A70). sim.js SND_NAMES and tools/wiki/gfx.py SND_NAMES spell the
+   same list. */
+enum { WIKI_SNDNAME_MULTI, WIKI_SNDNAME_OKTOBUILD, WIKI_SNDNAME_NOTOKTOBUILD, WIKI_SNDNAME_ADDBUILD,
+       WIKI_SNDNAME_BUILDBUTTON, WIKI_SNDNAME_ORDERSBUTTON, WIKI_SNDNAME_NEXTBUILDMENU,
+       WIKI_SNDNAME_IMMEDIATE, WIKI_SNDNAME_OPTIONS, WIKI_NSNDNAME };
+#define WIKI_SNDNAME_STRINGS { "SelectMultipleUnits", "oktobuild", "notoktobuild", "addbuild", "buildbutton", \
+                               "ordersbutton", "nextbuildmenu", "immediateorders", "Options" }
+
+/* A unit type's sounds as the simulation needs them: its sounds.tdf category (-1 none) and, per
+   kind, the variant count the engine reads at rec + 0x40 + 12 x kind. */
+typedef struct {
+    int     cat;
+    int32_t count[WIKI_SND_KINDS];
+} WIKISNDTYPE;
+
+/* Where a sim's sounds come from: for the type named `name` its WIKISNDTYPE into `out`, 1; 0 when
+   the source has none, which leaves the type silent. NULL in WIKISIMCTX: no sound at all. */
+typedef struct WIKISNDSRC {
+    void* ctx;
+    int (*type)(void* ctx, const char* name, WIKISNDTYPE* out);
+} WIKISNDSRC;
+
+/* a queued reply, 0x47FAD0's entry: the unit by id and type, which the play reads its category by */
+typedef struct {
+    int  kind, tick, type, priority;
+    char unit[WIKI_ID_MAX];
+} WIKISNDQ;
+
+/* a sound the simulation made: a reply (`kind` 1..23, `name` -1, its category and variant) or a
+   named sound (`kind` 0, `name` a WIKI_SNDNAME_*, `cat` -1, `variant` 0), on `tick` */
+typedef struct {
+    int tick, kind, name, cat, variant;
+} WIKISNDEV;
+
 enum { WIKI_ORDER_MOVE, WIKI_ORDER_BUILD, WIKI_ORDER_RECLAIM, WIKI_ORDER_GUARD };
 
 typedef struct {
@@ -160,6 +268,10 @@ typedef struct WIKIUNIT {
     int              spray, spray_type, spray_at;
     double           spray_x, spray_z;
     char             spray_id[WIKI_ID_MAX], spray_on[WIKI_ID_MAX];
+    /* the sound's triggers: the serial of the order whose first run said ok (0 none), of the order
+       whose reclaim said working, whether the job credited this tick was a build that finished,
+       and ACTIVATION as the last notice saw it */
+    int              begun, said, completed, active;
 } WIKIUNIT;
 
 enum { WIKI_SITE_PLACE, WIKI_SITE_REFUSED, WIKI_SITE_REMOVE };
@@ -265,6 +377,15 @@ typedef struct {
     int              part_cut;      /* a particle or a burst was past its bound */
     int              nburst;        /* the second bursts waiting for their tick, in the order made */
     const WIKISPRAY* burst;
+    int              has_sound;     /* the sim makes sound: the fields below are its */
+    int              snd_next[WIKI_SND_KINDS];  /* each kind's next time (0x5086EC + 24 x kind) */
+    int              snd_last;      /* the last reply with sound's time, [q+0x9D]            */
+    int              nsndq;         /* the queue, highest priority first                     */
+    const WIKISNDQ*  sndq;
+    int              snd_total;     /* the events made since the sim was made                */
+    int              nsnd;          /* the last min(snd_total, WIKI_SND_LOG), oldest first:
+                                       event i is the (snd_total - nsnd + i)-th from 0         */
+    const WIKISNDEV* snd;
     int              mode;          /* the armed type, or -1: contextual */
     int              has_side;      /* the sidebar is on: side is the view's */
     WIKIVSIDE        side;
@@ -292,6 +413,7 @@ typedef struct {
     const WIKICASTING* cast;        /* that side's casting, or NULL: the entry's own types */
     int                iface;       /* the Interface Type: 0 left-click, 1 right-click */
     const WIKICOBSRC*  cob;         /* the units' scripts, or NULL; read during init only */
+    const WIKISNDSRC*  snd;         /* the units' sounds, or NULL; read during init only */
 } WIKISIMCTX;
 
 struct WIKISIMBOUND;
@@ -360,6 +482,22 @@ typedef struct {
     WIKISPRAY*       burst;
     int              nburst, nemit, part_cut;
 
+    /* the sound (THE SOUND, above), with a source only: each type's category and counts, the
+       time `now` (the tick being stepped, or between ticks the tick the sim stands at), the
+       cooldowns, the queue, the last reply's time, the events as a ring at snd_total %
+       WIKI_SND_LOG, the serial of the last order the scene gave, which says no ok, and while the
+       scene is laid out (snd_quiet, 0 after init) no notice at all */
+    int              snd_on, snd_quiet;
+    int              snd_cat[WIKI_MAX_DEFS];
+    int32_t          snd_count[WIKI_MAX_DEFS][WIKI_SND_KINDS];
+    int              now;
+    int              snd_next[WIKI_SND_KINDS];
+    WIKISNDQ         sndq[WIKI_SND_QUEUE];
+    int              nsndq, snd_last;
+    WIKISNDEV        snd[WIKI_SND_LOG];
+    int              snd_total;
+    int              scene_serial;
+
     /* the sidebar, sim.js's sb; `lay` NULL: off for the sim's whole life */
     const WIKILAYOUT* lay;
     int              trips;         /* a scripted demo with the sidebar: a build is its trip */
@@ -389,6 +527,7 @@ typedef struct {
     WIKIVSITE*       vqueued;
     WIKIVLINE*       vline;
     WIKIVSITE        vsite[PLACE_MAX_SITES];
+    WIKISNDEV        vsnd[WIKI_SND_LOG];
     int              cvunit, cvqueued, cvline;
     int              oom;           /* an allocation failed: the sim went on without what it could not add */
 } WIKISIM;
@@ -483,11 +622,17 @@ int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
      9. the nano spray: the particle count, and each particle's x, y, z, its step's x, y, z, its
         end and its colour, in the view's order; then part_cut (0 or 1) and the waiting second
         bursts' count, and each one's twelve box words (the first box's, then the second's), its
-        due tick and its key, in the view's order.
+        due tick and its key, in the view's order;
+    10. the sound: 1 when the sim has a sound source, then each of the WIKI_SND_KINDS kinds' next
+        time, the last reply's time, the queue's count and each entry's kind, tick, unit id, type
+        name and priority, then the events made since the sim was made (a count) and the last
+        min(that count, WIKI_SND_LOG) of them, oldest first, each one's tick, kind, name, category
+        and variant; or 0 alone without a source.
    The view's other fields follow from these: queued sites and order lines from the units and
    their orders, the cursor's shape from the mode and the selection, a site's order number from
    the states, footprints from the types, the pace from the entry. The tick the cursor's shape
    began is history rather than state, and is left out. */
 uint64_t tagpu_wikisim_hash(const WIKISIM* s);
+
 
 #endif

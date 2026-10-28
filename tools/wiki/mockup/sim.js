@@ -19,7 +19,9 @@
    A sim is made for a context, ctx = {side, casting, iface} (the owner's decisions 13-18): the layout's side the
    player plays, that side's casting (the mod's own unit for each of an entry's casts, or null for the entry's own
    types), and the Interface Type, 0 left-click or 1 right-click. An absent ctx is side 0, no casting and type 1, the
-   interface the demos are authored in. tagpu_wikisim.c's WIKISIMCTX is the same three.
+   interface the demos are authored in. tagpu_wikisim.c's WIKISIMCTX is the same three, and the sources of the units'
+   scripts (ctx.cob, cob.js) and sounds (ctx.snd: type(name) answers {cat, count}, the type's sounds.tdf category
+   and its variant count per kind, or null for a silent type).
 
    Runs in a page (the global WikiSim) and under node (module.exports). */
 const WikiSim = (() => {
@@ -35,12 +37,22 @@ const WikiSim = (() => {
   const CLICK_TIME = 25, CLICK_BOX = 32;
   // tagpu_placegeo.h's caps, and tagpu_place.c's on one commit; a unit's list never holds more than PLACE_LIST_CAP
   const PLACE_MAX_SITES = 256, PLACE_SPACING_MAX = 16, PLACE_ORDER_BUDGET = 4096, PLACE_LIST_CAP = 1024;
-  // tagpu_wikicob.h: WIKICOB_UNITS, the units one host spawns over its life, and the INBUILDSTANCE value id
-  const COB_UNITS = 1024, COB_INBUILDSTANCE = 5;
+  // tagpu_wikicob.h: WIKICOB_UNITS, the units one host spawns over its life, and the ACTIVATION and INBUILDSTANCE ids
+  const COB_UNITS = 1024, COB_ACTIVATION = 1, COB_INBUILDSTANCE = 5;
   // tagpu_wikistage.h: the stage view's units, its pose pool and one posed model's primitives
   const STAGE_UNITS = 128, STAGE_POSE = 4096, STAGE_PIECES = 256;
   // tagpu_wikisim.h, THE NANO SPRAY: the live particles and the second bursts waiting, at most
   const SPRAY_PARTS = 1024, SPRAY_BURSTS = 256;
+  /* tagpu_wikisim.h, THE SOUND: the kind table 0x5086D8's priority and interval in seconds by kind, the notice queue's
+     entries, the gap between two replies with sound, the events kept, and the allsound names the wiki plays by
+     WIKI_SNDNAME_* */
+  const SND_PRIORITY = [0, 10, 9, 4, 4, 5, 3, 8, 3, 4, 3, 2, 7, 7, 7, 7, 4, 10, 10, 10, 10, 10, 10, 10];
+  const SND_INTERVAL = [0, 0, 20, 2, 2, 1, 4, 1, 3, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0];
+  const SND_KINDS = 24, SND_QUEUE = 8, SND_GAP = 30, SND_LOG = 32, INT_MAX = 2147483647;
+  const SND = { select: 1, activate: 3, deactivate: 4, ok: 5, arrived: 6, cant: 7, complete: 8, build: 9, working: 11 };
+  const SND_NAMES = ['SelectMultipleUnits', 'oktobuild', 'notoktobuild', 'addbuild', 'buildbutton', 'ordersbutton',
+    'nextbuildmenu', 'immediateorders', 'Options'];
+  const SNDNAME = Object.fromEntries(SND_NAMES.map((n, i) => [n, i]));
   /* A DEMO'S WAIT, {"at", "until", "max"} (research/notes/ingame-wiki-cob-plan.md, decision 10): the demo's clock
      stops at `at` until the state `until` names holds, at most `max` ticks, after which the demo stops and says so.
      UNTILS are the states; "idle": no unit of the player's holds a build or a reclaim order. UNTIL_MAX bounds `max`. */
@@ -310,7 +322,7 @@ const WikiSim = (() => {
     if (!(c.iface === 0 || c.iface === 1)) throw new Error(`the interface type ${c.iface} is not 0 or 1`);
     if (layout && !(int(c.side) && c.side >= 0 && c.side < layout.sides.length)) throw new Error(`side ${c.side} is not one of the layout's sides`);
     if (!(c.casting == null || obj(c.casting))) throw new Error('the casting is not an object or null');
-    return { side: layout ? c.side : -1, casting: c.casting ?? null, iface: c.iface, cob: c.cob || null };
+    return { side: layout ? c.side : -1, casting: c.casting ?? null, iface: c.iface, cob: c.cob || null, snd: c.snd || null };
   }
 
   /* ---- actions (decision 18): a demo's press names what it does, and the Interface Type names the button ----
@@ -423,6 +435,69 @@ const WikiSim = (() => {
       if (COB.spawn(defIndex.indexOf(u.type), facts()) !== u.cob) throw new Error(`the COB host numbered ${u.id} otherwise`);
       if (def(u.type).extracts > 0) cobCall(u, 'SetSpeed', 'args', [extractorSpeed(u)]);
       if (u.built >= 1 && (def(u.type).activatewhenbuilt & 1) === 1) COB.activate(u.cob, 1);
+      noticeActive(u);
+    }
+
+    /* ---- THE SOUND (tagpu_wikisim.h), tagpu_wikisim.c's sound functions line for line: each type's category and
+       counts from ctx.snd, the time `now` (the tick being stepped, or between ticks the tick the sim stands at), the
+       kinds' next times, the notice queue, the last reply's time, and the events, a ring at the count made modulo
+       SND_LOG. Without a source nothing of it changes. ---- */
+    const SNDT = ctx.snd ? new Map(defIndex.map(t => {
+      const got = ctx.snd.type(t);
+      return [t, got ? { cat: got.cat, count: Array.from({ length: SND_KINDS }, (_, k) => Math.max(0, got.count[k] | 0)) }
+        : { cat: -1, count: new Array(SND_KINDS).fill(0) }];
+    })) : null;
+    // a demo is a scene of a game under way: its last reply is a gap past (tagpu_wikisim.c init)
+    let now = 0, sndLast = -SND_GAP, sndTotal = 0;
+    const sndNext = new Array(SND_KINDS).fill(0), sndQ = [], sndRing = new Array(SND_LOG).fill(null);
+    const sceneOrders = new Set();   // the orders the scene gave, which say no ok
+    let sceneQuiet = true;           // while the scene is laid out its units say nothing (tagpu_wikisim.c snd_quiet)
+    // THE WIKI'S GENERATOR for a reply's variant: the unit's id (FNV-1a 32 over its UTF-8 bytes), the kind and the tick
+    const sndDraw = (id, kind, tick) => {
+      let h = 0x811c9dc5;
+      for (const b of new TextEncoder().encode(id)) h = Math.imul(h ^ b, 0x01000193) >>> 0;
+      return mix32((mix32((h + Math.imul(kind, 0x9e3779b9)) >>> 0) ^ tick) >>> 0) & 0x7fff;
+    };
+    function soundEvent(kind, name, cat, variant) {
+      sndRing[sndTotal % SND_LOG] = [now, kind, name, cat, variant];
+      if (sndTotal < INT_MAX - SND_LOG) sndTotal++;
+    }
+    // 0x47F1A0's play by name: at once, no queue, no cooldown
+    function soundNamed(name) { if (SNDT) soundEvent(0, SNDNAME[name], -1, 0); }
+    // 0x47F780 then 0x47FAD0: the viewed player's unit, the kind's cooldown, one of its kind queued, a full queue's last
+    // dropped, and in before the first of a lower priority
+    function notice(u, kind) {
+      if (!SNDT || sceneQuiet || u.owner !== 0) return;
+      if (now < sndNext[kind]) return;
+      if (sndQ.some(e => e.kind === kind)) return;
+      if (sndQ.length === SND_QUEUE) sndQ.pop();
+      let k = 0;
+      while (k < sndQ.length && SND_PRIORITY[sndQ[k].kind] >= SND_PRIORITY[kind]) k++;
+      sndQ.splice(k, 0, { kind, tick: now, unit: u.id, type: u.type, priority: SND_PRIORITY[kind] });
+    }
+    // ACTIVATION as the state setter 0x48B090 notices it, for a unit whose script runs
+    function noticeActive(u) {
+      if (!COB || !u.cob || COB.resting(u.cob)) return;
+      const on = COB.value(u.cob, COB_ACTIVATION) !== 0 ? 1 : 0;
+      if (on === (u.active || 0)) return;
+      u.active = on;
+      notice(u, on ? SND.activate : SND.deactivate);
+    }
+    // THE CONSUMER 0x47F680, once a tick after its work
+    function soundTick() {
+      if (!SNDT || !sndQ.length) return;
+      const e = sndQ.shift(), play = now >= sndLast + SND_GAP;
+      if (play) sndLast = now;
+      const count = SNDT.get(e.type).count[e.kind];
+      if (!play || count <= 0) return;
+      soundEvent(e.kind, -1, SNDT.get(e.type).cat, Math.trunc(sndDraw(e.unit, e.kind, now) * count / 0x8000));
+      sndNext[e.kind] = now + 30 * SND_INTERVAL[e.kind];
+    }
+    // an order's first run says ok (0x438880 at its handler's start), unless the scene gave it
+    function begin(u, o) {
+      if (o === u.begun) return;
+      u.begun = o;
+      if (!sceneOrders.has(o)) notice(u, SND.ok);
     }
 
     /* ---- units. Each faces along a unit vector (hx, hz); walk says why a vector. ---- */
@@ -467,12 +542,14 @@ const WikiSim = (() => {
     for (const s of S.units) {
       const u = add(s.type, s.owner ?? 0, s.at[0], s.at[1], s.built ?? 1, s.id, s.label, facing(s.facing));
       u.orders = (s.orders || []).slice(0, PLACE_LIST_CAP).map(o => ({ k: 'move', x: o.move[0], z: o.move[1] }));
+      for (const o of u.orders) sceneOrders.add(o);
       if (mobile(u.type)) continue;
       const b = box(u.type, u.ox, u.oz);
       if (!(b.ox >= 1 && b.oz >= 1 && b.ox + b.fx < W && b.oz + b.fz < H) ||
           units.some(v => v !== u && !mobile(v.type) && overlap(b, box(v.type, v.ox, v.oz))))
         throw new Error(`${u.id}'s ${u.type} does not fit the scene`);
     }
+    sceneQuiet = false;
     /* DECISION 12 FOR AN UNBOUND CAST: a scene unit of an unbound type stops the demo on tick 0 under the entry's
        badge, the first such unit in creation order naming it (input() does the same for a `build` on its tick) */
     const unbound = t => defined(t) && D[t].unbound === true;
@@ -826,6 +903,12 @@ const WikiSim = (() => {
        takes in any mode but 14, which comes before any release could commit it. */
     function act(g) {
       const u = sb.shown, n = u ? npages(u.type) : 0;
+      // THE BUTTON'S SOUND, 0x41AA00's (tagpu_wikisim.c act)
+      if (g.role === 'orders') soundNamed('ordersbutton');
+      else if (g.role === 'buildtab') soundNamed('buildbutton');
+      else if (g.role === 'stop') soundNamed('immediateorders');
+      else if ((g.role === 'prev' || g.role === 'next') && n) soundNamed('nextbuildmenu');
+      else if (g.role === 'build' && defined(g.unit) && !mobile(g.unit)) soundNamed('addbuild');
       if ((g.role === 'prev' || g.role === 'next') && n) {
         u.page = g.role === 'next' ? (u.page === n ? 1 : u.page + 1) : (u.page < 2 ? n : u.page - 1);
         u.bp = true;
@@ -1075,7 +1158,8 @@ const WikiSim = (() => {
           u.orders.push({ k: 'build', type: t, ox: s.cx, oz: s.cz }); changed++;
         });
       });
-      if (changed) st.shiftPlaced = true;
+      // stock's `oktobuild`, once a gesture, as tagpu_place.c's commit plays it
+      if (changed) { st.shiftPlaced = true; soundNamed('oktobuild'); }
     }
     /* THE RELEASE: Shift up first drops the gesture and the building stays armed; a one-site gesture ending at the
        cursor is the stock Shift-click itself; anything else commits the last evaluation. A release over the sidebar
@@ -1184,13 +1268,15 @@ const WikiSim = (() => {
        instead of adding one, and the placement sets the Shift-placement bit: releasing Shift then disarms. */
     function placeClick(shift) {
       const h = mapHover();
-      if (!h.ok) return;
+      // stock's click 0x498F70: a refused site says `notoktobuild` and keeps the building armed, a placed one `oktobuild`
+      if (!h.ok) { soundNamed('notoktobuild'); return; }
       const at = centre(h.type, h.ox, h.oz);
       for (const u of builders()) if (canBuild(u, h.type)) {
         const k = shift ? u.orders.findIndex(o => o.k === 'build' && within(at, centre(o.type, o.ox, o.oz))) : -1;
         if (k >= 0) u.orders.splice(k, 1);
         else assign(u, [{ k: 'build', type: h.type, ox: h.ox, oz: h.oz }], shift);
       }
+      soundNamed('oktobuild');
       if (!shift) disarm();
       else st.shiftPlaced = true;
     }
@@ -1203,12 +1289,17 @@ const WikiSim = (() => {
         const pick = inBox.some(u => mobile(u.type)) ? inBox.filter(u => mobile(u.type)) : inBox;
         if (!shift) for (const u of units) u.sel = false;
         for (const u of pick) u.sel = true;
+        // the box's sound (0x48C65A..0x48C681): one unit says its select, more the allsound SelectMultipleUnits
+        if (pick.length === 1) notice(pick[0], SND.select);
+        else if (pick.length > 1) soundNamed('SelectMultipleUnits');
         return;
       }
       const u = unitAt(x, z);
       if (u && u.owner === 0) {
         if (shift) u.sel = !u.sel;
         else { for (const v of units) v.sel = false; u.sel = true; }
+        // the click's select says it when its unit is left selected (0x48C8B9, 0x48C997)
+        if (u.sel) notice(u, SND.select);
       } else if (!shift) for (const v of units) v.sel = false;
     }
 
@@ -1413,18 +1504,21 @@ const WikiSim = (() => {
         /* the build orders' stance wait (0x438700, at the work's start: MobileBuild's work state 0x403E0C and the step
            0x41BA60 never read +0x10F): no progress on a work until the builder's script has set INBUILDSTANCE once */
         if (!(u.stanced && u.work === s)) { if (!stance(u)) return; u.stanced = true; }
+        // a reclaim says working once an order, when its work first goes on (0x4048BE)
+        if (how === 'reclaim' && u.orders[0] && u.orders[0] !== u.said) { u.said = u.orders[0]; notice(u, SND.working); }
         const w = work.get(s) || { build: 0, reclaim: 0 };
         w[how] += def(u.type).workerTime / def(s.type).buildTime / TPS * PACE;
         work.set(s, w);
         // the step made progress: the unit's turn sprays at the structure as it stands now
         u.spray = { how, id: s.id, type: s.type, x: s.x, z: s.z };
       };
-      for (const u of units) { u.stepped = false; u.spray = null; }
+      for (const u of units) { u.stepped = false; u.spray = null; u.completed = false; }
       nemit = 0;
       for (const u of units) {
         const o = u.orders[0];
         if (!o || !mobile(u.type) || o.k === 'guard') continue;
-        if (o.k === 'move') { if (walk(u, o.x, o.z, 0)) u.orders.shift(); continue; }
+        begin(u, o);
+        if (o.k === 'move') { if (walk(u, o.x, o.z, 0)) { u.orders.shift(); notice(u, SND.arrived); } continue; }
         if (o.k === 'reclaim') {
           const s = byId(o.target);
           if (!s) { u.orders.shift(); continue; }
@@ -1435,8 +1529,9 @@ const WikiSim = (() => {
         if (s && s.built >= 1) { u.orders.shift(); continue; }
         if (!reach(u, box(o.type, o.ox, o.oz))) continue;
         if (!s) {
-          if (!siteOk(o.type, o.ox, o.oz, null)) { u.orders.shift(); log('refused', u, o.type); continue; }
+          if (!siteOk(o.type, o.ox, o.oz, null)) { u.orders.shift(); notice(u, SND.cant); log('refused', u, o.type); continue; }
           s = place({ id: `u${nextId++}`, type: o.type, owner: u.owner, built: 0, reclaimed: 0, orders: [], sel: false, label: o.type }, o.ox, o.oz);
+          notice(u, SND.build);
           log('started', s);
         }
         credit(u, s, 'build');
@@ -1444,6 +1539,7 @@ const WikiSim = (() => {
       for (const u of units) {
         const o = u.orders[0];
         if (!o || o.k !== 'guard') continue;
+        begin(u, o);
         const g = byId(o.target);
         if (!g) { u.orders.shift(); continue; }
         const j = jobs.get(g);
@@ -1453,6 +1549,7 @@ const WikiSim = (() => {
       for (const [s, w] of work) {
         if (w.build && s.built < 1) {
           s.built = Math.min(1, s.built + w.build);
+          s.completed = s.built >= 1;
           if (s.built >= 1) {
             log('finished', s);
             // 0x41B8D0: a structure finished whose FBI says ActivateWhenBuilt is switched on (0x41B9A6)
@@ -1463,6 +1560,13 @@ const WikiSim = (() => {
           s.reclaimed = Math.min(1, s.reclaimed + w.reclaim);
           if (s.reclaimed >= 1) { units = units.filter(v => v !== s); if (COB && s.cob) COB.remove(s.cob); log('reclaimed', s); }
         }
+      }
+      // THE NOTICES OF THE WORK, in creation order: a change of ACTIVATION the completion made, then each builder whose
+      // build finished this tick (0x403F39, 0x40422F)
+      for (const u of units) noticeActive(u);
+      for (const u of units) {
+        const j = jobs.get(u);
+        if (j && j.how === 'build' && units.includes(j.s) && j.s.completed) notice(u, SND.complete);
       }
       for (const u of units) {  // orders whose work is over end now, so the next one starts on the next tick
         const o = u.orders[0];
@@ -1496,6 +1600,8 @@ const WikiSim = (() => {
         else if (!u.stepped && u.moving) cobCall(u, 'StopMoving', 'now');
         u.moving = u.stepped;
       }
+      // a run-now start or a query in the turns can set ACTIVATION too
+      for (const u of units) noticeActive(u);
     }
     /* AN ORDER THE PLAYER TAKES AWAY ends its work at once: the order's destructor starts StopBuilding when the input
        is handled (0x43A251), before the next tick's slice */
@@ -1557,17 +1663,19 @@ const WikiSim = (() => {
       st.cursorShape = k;
     };
 
-    sim.input = ev => { input(ev); dropWork(); cursorTick(sim.tick); };
+    sim.input = ev => { now = sim.tick; input(ev); dropWork(); cursorTick(sim.tick); };
     sim.step = () => {
       const t = sim.tick + 1;
+      now = t;
       if (wait && idle()) wait = null;
       else if (wait && t - wait.from > wait.max) stalled = true;
       if (!wait) feed(++clock);
       dropWork();
       // the slice: every unit's DoScriptsNow(1), before its orders and its movement (0x48ADEB)
-      if (COB) COB.slice(facts());
+      if (COB) { COB.slice(facts()); for (const u of units) noticeActive(u); }
       advance();
       sprayTick(t);
+      soundTick();
       sim.tick = t;
       // a lock ends the demo on its own tick, which then holds under the entry's badge
       sim.done = clock >= end || sb.locked !== null || stalled;
@@ -1651,6 +1759,14 @@ const WikiSim = (() => {
         parts: parts.map(p => p.slice()), partsCut,
         // the second bursts waiting, in the order made, each [its two boxes' twelve words, due, key]
         bursts: bursts.map(e => [...e.box[0], ...e.box[1], e.due, e.key]),
+        /* the sound, null without a source: each kind's next time, the last reply's time, the queue (each [kind, tick,
+           unit id, type, priority], highest priority first), the events made, and the last min(total, SND_LOG) events
+           oldest first, each [tick, kind, name, category, variant] (tagpu_wikisim.h, WIKISNDEV) */
+        sound: SNDT ? {
+          next: sndNext.slice(), last: sndLast, queue: sndQ.map(e => [e.kind, e.tick, e.unit, e.type, e.priority]),
+          total: sndTotal, events: Array.from({ length: Math.min(sndTotal, SND_LOG) },
+            (_, i) => sndRing[(sndTotal - Math.min(sndTotal, SND_LOG) + i) % SND_LOG].slice()),
+        } : null,
       };
     };
 
@@ -1678,6 +1794,8 @@ const WikiSim = (() => {
     button,
     // the trip's fixed budget and its table, which tagpu_wikisim.h #defines and simparity compares
     TRIP, TRIP_DOWN, TRIP_UP, TRIP_ROWS,
+    // the allsound names a named sound's `name` indexes (tagpu_wikisim.h WIKI_SNDNAME_*)
+    SND_NAMES,
     // the shapes alone, for checks against tagpu_placegeo.c
     shapes: { placeShape, placeRing },
   };

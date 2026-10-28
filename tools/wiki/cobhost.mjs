@@ -107,3 +107,18 @@ export function scripts(packs) {
   }
   return has;
 }
+
+/* every type a sound of `packs` is given for, the first pack's whose scene has its mesh: name -> {cat, count}, the
+   type's sounds.tdf category and its variant count per kind (gfx.py `unit_sound`); `source(packs)` is that as sim.js's
+   ctx.snd, which answers null for a type with none */
+export function sounds(packs) {
+  const has = {};
+  for (const pack of packs) {
+    const file = path.join(path.resolve(ROOT, pack), 'scene.json');
+    if (!fs.existsSync(file)) continue;
+    const meshes = (JSON.parse(fs.readFileSync(file, 'utf8')).units || {}).meshes || {};
+    for (const [name, m] of Object.entries(meshes)) if (m.sound && !has[name]) has[name] = m.sound;
+  }
+  return has;
+}
+export const soundSource = packs => { const has = sounds(packs); return { type: name => has[name] || null }; };
