@@ -84,6 +84,7 @@
 #include "tagpu_wiki.h"
 #include "tagpu_wikistate.h"
 #include "tagpu_wikiasset.h"
+#include "tagpu_wikitext.h"
 #include "tagpu_replays.h"
 #include "tagpu_pak.h"
 
@@ -319,6 +320,9 @@ static unsigned s_costFrames;
 static uint32_t s_trunc;                        /* the copy's WIKISTAGE_TRUNC_* already said     */
 static int      s_saidHead;                     /* a stage the packet could not carry, said      */
 static uint32_t s_shot;                         /* the last capture asked for, 0 none            */
+static WIKIWORDS s_words;                       /* the running demo's fill words (start): they
+                                                   point into its entry, which the DLL never
+                                                   frees, and into nothing else                  */
 
 static const WIKIDATA* data(void)
 {
@@ -586,6 +590,9 @@ static void start(void)
     if (!d) { s_want = 1; return; }                  /* the data loads on its own thread       */
     if (!e) return;
     if (s_demo < 0 || s_demo >= e->ndemo) { lstrcpynA(s_msg, "no demo", sizeof s_msg); return; }
+    /* THE FILL'S WORDS are the entry's authored names at interface 1, the mockup's defaults.
+       TODO(2E): the running side's casting and the player's interface type, from the fill */
+    tagpu_wikitext_words(&s_words, e, NULL, 1);
     if (!layout_now(d, &lay, &src)) {
         s_want = 1;
         lstrcpynA(s_msg, "loading\xE2\x80\xA6", sizeof s_msg);
@@ -817,7 +824,11 @@ static void page_fill(TAGPU_PK_WIKI* w)
     lstrcpynA(w->msg, s_msg, sizeof w->msg);
     w->shot = s_shot;
     if (s_simOn && e) {
-        t = tagpu_wikistage_copy(&w->stage, tagpu_wikisim_view(&s_sim), e, s_laySrc);
+        const WIKIVIEW* v = tagpu_wikisim_view(&s_sim);
+        t = tagpu_wikistage_copy(&w->stage, v, e, s_laySrc) & ~WIKISTAGE_TRUNC_CAPTION;
+        /* THE CAPTION IS SHOWN FILLED (tagpu_wikitext.h); the view keeps it raw, as the hash does */
+        if (tagpu_wikitext_fill(v->caption, &s_words, w->stage.caption, sizeof w->stage.caption))
+            t |= WIKISTAGE_TRUNC_CAPTION;
         w->stage.tick = s_sim.tick;
         w->has_stage = 1;
         if (t & ~s_trunc) {

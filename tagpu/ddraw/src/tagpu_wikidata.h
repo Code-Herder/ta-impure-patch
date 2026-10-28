@@ -196,6 +196,9 @@ int tagpu_wikidata_def(const WIKIENTRY* e, const char* name);
    "order", "cancel"; NULL out of range. */
 const char* tagpu_wikidata_key_name(int key);
 
+/* sim.js's and text.js's name of a cast: "builder", "advbuilder", ... "solar"; NULL out of range. */
+const char* tagpu_wikidata_cast_name(int cast);
+
 /* A key or an action as interface type `iface` presses it, sim.js's button(): select is the left
    button at both types, cancel the right one at both, order the right one at type 1 and the left
    one at any other; a key comes back as given. */

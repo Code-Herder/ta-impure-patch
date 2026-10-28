@@ -22,6 +22,11 @@ const char* tagpu_wikidata_key_name(int key)
     return key >= 0 && key < WIKI_NKEYNAMES ? KEY_NAMES[key] : NULL;
 }
 
+const char* tagpu_wikidata_cast_name(int cast)
+{
+    return cast >= 0 && cast < WIKI_NCAST ? CAST_NAMES[cast] : NULL;
+}
+
 int tagpu_wikidata_button(int key, int iface)
 {
     return key == WIKI_ACT_SELECT ? WIKI_KEY_LMB : key == WIKI_ACT_CANCEL ? WIKI_KEY_RMB
