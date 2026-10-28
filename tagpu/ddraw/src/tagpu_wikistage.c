@@ -297,6 +297,9 @@ typedef struct {
     uint8_t             grp;                /* the group every op made now is drawn in, 0 none */
 } B;
 
+/* every group the build makes is one the HUD pass can draw, which holds HUD_MAXGRP of them */
+typedef char wikistage_groups_fit[WIKI_MAXGRP <= HUD_MAXGRP ? 1 : -1];
+
 static void mark(B* c, int range, int type)
 {
     c->range = (uint8_t)range;
