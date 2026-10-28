@@ -687,7 +687,7 @@ the `main+0x531` GUI pointer, which `replay-globals.tsv` now leaves with the vie
 near 60 ticks/s at 20 and 30 ticks/s at 10; startup, pauses and comparison work
 prevent inferring a whole-harness speedup from these runs.
 
-**Games and checks.** `-j` (default 8, at most 16) is the number of games at once: each worker
+**Games and checks.** `-j` (default 12, at most 16) is the number of games at once: each worker
 plays one lane at a time. A free worker takes the queued lane first in the order X, U, K, L, W, R,
 P, F, Q — the forks, rewind and takeover lanes are the longest chains and cannot start before
 their fixture's L — and the L lanes are queued fixtures with those lanes first, then the longer
