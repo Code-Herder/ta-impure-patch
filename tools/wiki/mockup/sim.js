@@ -514,7 +514,7 @@ const WikiSim = (() => {
        reach in this layout */
     const sb = { screen: null, shown: null, cap: null, downOn: {}, locked: null };
     const screenOf = n => LAY.screens[n];
-    // a point of the stage in the column's own pixels is (x + 128, z); the minimap's 128 x 128 there takes no click
+    // a point of the stage in the column's own pixels is (x + 128, z); the minimap's 128 x 128 there holds no gadget
     const onMinimap = (x, z) => x + SIDE_W >= 0 && x + SIDE_W < MINIMAP && z >= 0 && z < MINIMAP;
     /* the engine's hit tests (the pump's 0x4AA1F6..0x4AA216, the button handler's 0x4A6B79..0x4A6B95 on the press
        and 0x4A6E84..0x4A6EAC on the release) take the whole pixels x .. x + w - 1 and y .. y + h - 1, DISASSEMBLED.
@@ -626,6 +626,21 @@ const WikiSim = (() => {
       const g = screenOf(sb.screen).gadgets[i];
       if (pressActs(g)) { sb.cap = null; act(g); }
       else sb.cap = { i, b };
+    }
+    /* WHO TAKES A MOUSE PRESS, DISASSEMBLED. IdleTick runs the GUI pump 0x4A9FD0 (0x499992) before the in-play
+       handler 0x499200 (0x499A1C), and the pump's poll 0x4AB5D0 pops a record whose point is inside the screen's window,
+       its gadget 0 (0x4A1680, the inclusive test 0x4A1920 at 0x4AB63E), and leaves a record outside it that carries a
+       button (0x4AB647..0x4AB64D: its wParam's MK_ bits). A press on the screen, on a gadget or not, is the GUI's
+       alone; the handler sees only the releases IdleTick copies after the pump (0x4999EF..0x499A04). Every other
+       press, the minimap's and the column's rows outside the screen included, reaches the handler, whose
+       WM_RBUTTONDOWN calls 0x499100 at 0x4993AC wherever the point is; with an order armed (main+0x2CC3 != 1) that
+       is the cancel, and it reads neither the point nor the Interface Type (0x499107..0x49915F). The sim does nothing
+       else there: a press with nothing armed depends on the Interface Type (0x499162, 0x499567), and a left press
+       with a building armed goes to the placement click 0x498F70 (0x4993BF -> 0x4995B3), not established off the
+       viewport. */
+    function onScreen() {
+      const s = screenOf(sb.screen), { x, z } = st.cursor;
+      return inRect([0, s.y, s.w, s.h], x + SIDE_W, z);
     }
     // the release of the captured button: inside its gadget, still live, it acts; outside, nothing
     function releaseSide() {
@@ -969,10 +984,9 @@ const WikiSim = (() => {
       if (ev.down === 'z' || ev.down === 'x') { st.held.add(ev.down); stepSpacing(ev.down); }
       else if (ev.down && !st.held.has(ev.down)) {
         st.held.add(ev.down);
-        const shift = st.held.has('shift'), where = over();
-        // a mouse button's press over the column is the column's; over the dead band it is nobody's
-        if (ev.down === 'lmb' || ev.down === 'rmb') sb.downOn[ev.down] = where;
-        if (where === 'side' && (ev.down === 'lmb' || ev.down === 'rmb')) pressSide(ev.down);
+        const shift = st.held.has('shift'), where = over(), mouse = ev.down === 'lmb' || ev.down === 'rmb';
+        if (mouse) sb.downOn[ev.down] = where;
+        if (mouse && where === 'side' && onScreen()) pressSide(ev.down);
         else if (where === 'map') {
           // with a building armed a left press carrying Shift starts a gesture at the cursor site instead of placing
           if (ev.down === 'lmb') {
@@ -982,6 +996,8 @@ const WikiSim = (() => {
           }
           if (ev.down === 'rmb') { st.drag = null; rightClick(shift); }
         }
+        // off the map and off the screen the right press is the in-play handler's cancel and nothing else
+        else if (ev.down === 'rmb' && st.mode) disarm();
       }
       if (ev.up && st.held.has(ev.up)) {
         st.held.delete(ev.up);

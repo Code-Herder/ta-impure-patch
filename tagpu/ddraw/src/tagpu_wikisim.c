@@ -657,7 +657,7 @@ static void arm(WIKISIM* s, int t);
 static const WIKISCREEN* screen_of(const WIKISIM* s, int i) { return &s->lay->screen[i]; }
 
 /* a point of the stage in the column's own pixels is (x + 128, z); the minimap's 128 x 128 there
-   takes no click */
+   holds no gadget */
 static int on_minimap(double x, double z)
 {
     return x + WIKI_SIDE_W >= 0 && x + WIKI_SIDE_W < WIKI_SIDE_MINIMAP && z >= 0 && z < WIKI_SIDE_MINIMAP;
@@ -820,6 +820,25 @@ static void press_side(WIKISIM* s, int key)
         s->cap = i;
         s->cap_key = key;
     }
+}
+
+/* WHO TAKES A MOUSE PRESS, DISASSEMBLED. IdleTick runs the GUI pump 0x4A9FD0 (0x499992) before the
+   in-play handler 0x499200 (0x499A1C), and the pump's poll 0x4AB5D0 pops a record whose point is
+   inside the screen's window, its gadget 0 (0x4A1680, the inclusive test 0x4A1920 at 0x4AB63E),
+   and leaves a record outside it that carries a button (0x4AB647..0x4AB64D: its wParam's MK_
+   bits). A press on the screen, on a gadget or not, is the GUI's alone; the handler sees only the
+   releases IdleTick copies after the pump (0x4999EF..0x499A04). Every other press, the minimap's
+   and the column's rows outside the screen included, reaches the handler, whose WM_RBUTTONDOWN
+   calls 0x499100 at 0x4993AC wherever the point is; with an order armed (main+0x2CC3 != 1) that
+   is the cancel, and it reads neither the point nor the Interface Type (0x499107..0x49915F). The
+   sim does nothing else there: a press with nothing armed depends on the Interface Type
+   (0x499162, 0x499567), and a left press with a building armed goes to the placement click
+   0x498F70 (0x4993BF -> 0x4995B3), not established off the viewport. */
+static int on_screen(const WIKISIM* s)
+{
+    const WIKISCREEN* sc = screen_of(s, s->screen);
+    const double px = s->cursor_x + WIKI_SIDE_W, pz = s->cursor_z;
+    return px >= 0 && px < sc->w && pz >= sc->y && pz < sc->y + sc->h;
 }
 
 /* the release of the captured button: inside its gadget, still live, it acts; outside, nothing */
@@ -1565,10 +1584,8 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
         s->held[ev->down] = 1;
         shift = s->held[WIKI_KEY_SHIFT];
         where = over(s);
-        /* a mouse button's press over the column is the column's; over the dead band it is
-           nobody's */
         if (mouse) s->down_on[ev->down] = where;
-        if (where == OVER_SIDE && mouse) press_side(s, ev->down);
+        if (mouse && where == OVER_SIDE && on_screen(s)) press_side(s, ev->down);
         else if (where == OVER_MAP) {
             /* with a building armed a left press carrying Shift starts a gesture at the cursor
                site instead of placing */
@@ -1590,6 +1607,9 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
                 right_click(s, shift);
             }
         }
+        /* off the map and off the screen the right press is the in-play handler's cancel and
+           nothing else */
+        else if (ev->down == WIKI_KEY_RMB && s->mode >= 0) disarm(s);
     }
     if (ev->up >= 0 && ev->up < WIKI_NKEYS && s->held[ev->up]) {
         s->held[ev->up] = 0;

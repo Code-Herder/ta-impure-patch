@@ -562,6 +562,39 @@ const SIDE_RULES = {
     press(s, centre(FIXTURE, 'ARMCK1', 'ARMMEX'), 'rmb');
     return s.view().mode === 'build:ARMMEX';
   },
+  /* the in-play handler's cancel: a right press it gets disarms whatever the point (0x4993AC -> 0x499100), and it gets
+     every press outside the screen's window (the pump's poll 0x4AB5D0) -- the minimap, the column's rows below the
+     screen, the band under a short map */
+  'a right press off the screen disarms a building armed and orders nothing'(entry) {
+    const off = at => {
+      const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, FIXTURE);
+      press(s, centre(FIXTURE, 'ARMCK1', 'ARMMEX'));
+      s.input({ move: at }); s.input({ down: 'rmb' });
+      const v = s.view();
+      s.input({ up: 'rmb' });
+      return v.mode === 'contextual' && s.view().mode === 'contextual' && s.orders('ck').length === 0 &&
+        selIds(s.view()) === 'ck' && s.view().side.screen === 'ARMCK1';
+    };
+    const MH = entry.scene.map.h * 16;
+    return off([-SIDE_W + 60, 128 + 352 + 20]) && off([-SIDE_W + 64, 64]) && off([60, MH + 8]);
+  },
+  /* a right press on the screen is the GUI's alone (0x4AB5D0 pops it), so the handler's cancel never sees it: an empty
+     spot or a greyed button keeps the building armed, and a live build button arms its own on the right release, as
+     the left one would (0x41AA00 reads which button only for a factory's queue, 0x41AC09) */
+  'a right press on the screen keeps a building armed, and a build button arms its own on the release'(entry) {
+    const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, FIXTURE);
+    press(s, centre(FIXTURE, 'ARMCK1', 'ARMMEX'));
+    press(s, [-SIDE_W + 2, 128 + 2], 'rmb');
+    const empty = s.view().mode;
+    press(s, centre(FIXTURE, 'ARMCK1', 'ARMSOLAR'), 'rmb');
+    const grey = s.view().mode;
+    press(s, centre(FIXTURE, 'ARMCK1', 'ARMNEXT'));
+    s.input({ move: centre(FIXTURE, 'ARMCK2', 'ARMGEO') }); s.input({ down: 'rmb' });
+    const held = s.view().mode;
+    s.input({ up: 'rmb' });
+    return empty === 'build:ARMMEX' && grey === 'build:ARMMEX' && held === 'build:ARMMEX' && s.view().mode === 'build:ARMGEO' &&
+      s.orders('ck').length === 0;
+  },
   'PREV from page 1 shows the last page'(entry) {
     const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, FIXTURE);
     press(s, centre(FIXTURE, 'ARMCK1', 'ARMPREV'));
