@@ -805,7 +805,8 @@ of landings 3 and 4*). Track C, the stage offline, committed before it (`978ac43
   at compile time.
 - **The record.** `TAGPU_PK_WIKI` carries `WIKIPAGE`'s state and, last, the stage's
   `WIKISTAGEVIEW`; its area is `TAGPU_PK_WIKI_HEAD` bytes with no demo shown and the whole record
-  with one, so the 60 KB view travels only while the window shows it. The render thread copies the
+  with one, so the view -- 145 624 bytes on the i686 build, 80 KB of it the units' pose pool --
+  travels only while the window shows it. The render thread copies the
   view out of the packet and bounds every count and string before building from it.
 - **The command record** carries, beside the hit map, each panel's scroll as drawn, its limit and
   its scrollbar's track and thumb in client pixels; the take bounds each number as data.
@@ -836,7 +837,7 @@ of landings 3 and 4*). Track C, the stage offline, committed before it (`978ac43
   scrollbars, the demo's tick, `done`, its state hash, and the most one fill of the open page has
   cost the game thread (`cost_max_ms`, also logged at each close): timed from the record's start in
   `tagpu_wiki_fill` to its placing in the packet (`tagpu_wiki_carried`), so the demo's steps, the
-  view's copy into the record and the record's 60 KB copy into the slot (`append_area`), and not
+  view's copy into the record and the record's copy into the slot (`append_area`), and not
   the check or the dump.
 - **The glyphs** (a commit of its own, the recommended fix pending the owner): play, pause, replay
   and the tree's marks are kit icons drawn from `tools/wiki/mockup/glyphs.js`, in the mockup and

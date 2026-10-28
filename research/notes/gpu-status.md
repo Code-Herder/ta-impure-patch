@@ -4474,7 +4474,7 @@ there.
 
 | site | what we do there | thread |
 |---|---|---|
-| `fill_frame` (`tagpu_packet_pub.c`), after the effects' models | `tagpu_wiki_fill`, given by value the controlled player's side (PlayerInfo `+0x95` of the record `main+0x1B63 + 0x14B·byte[main+0x2A42]`, the record index held below eleven, -1 when it or the pointer does not validate; `wiki_side`) and `main+0x37EFA == 1` (`wiki_iface`), read there: a pair other than the last restarts the open window's demo. One `TAGPU_PK_WIKI` record (open, the pause taken, the pointer's client point, the held control, the page's selection, folds, scrolls and playback, and the text's context -- the Interface Type and the layout side whose casting names the units, which the render thread fills the page's text with) into the packet's last area `wiki_off`/`wiki_len`; while open, the demo's `WIKISIM` stepped by the clock (at most 8 ticks) and its view copied by value into the record's `stage` (`tagpu_wikistage_copy`), the area then 60 KB longer; none, and the window closed, when the HUD's pass is off (GDI, or the pass refused) or the wiki's layout refused (`tagpu_wikistate_refused`). A whole record that does not fit sets `TAGPU_PK_TRUNC_WIKI` (`0x1000000`) and is placed as its head (`tagpu_wiki_head_only`: no stage, a message on it), the shortfall still the whole record's so the slot's growth aims at the stage; a head that does not fit either carries no record, and the first fill of the next publish closes the window (`tagpu_wiki_carried` records what the published fill carried; a fill redone for the same publish, `s_fillAgain`, does not count). The trigger `tagpu_wiki.check` (every demo played to its end for every side of the layout and both Interface Types, each `tagpu_wikisim_hash` logged as `<entry>/<demo>/<side>/<iface> <hash>`) is answered from the fill, `tagpu_wiki.dump` (writes `tagpu_wiki.json`, with the bytes carried) from `tagpu_wiki_carried` after the record is placed | game |
+| `fill_frame` (`tagpu_packet_pub.c`), after the effects' models | `tagpu_wiki_fill`, given by value the controlled player's side (PlayerInfo `+0x95` of the record `main+0x1B63 + 0x14B·byte[main+0x2A42]`, the record index held below eleven, -1 when it or the pointer does not validate; `wiki_side`) and `main+0x37EFA == 1` (`wiki_iface`), read there: a pair other than the last restarts the open window's demo. One `TAGPU_PK_WIKI` record (open, the pause taken, the pointer's client point, the held control, the page's selection, folds, scrolls and playback, and the text's context -- the Interface Type and the layout side whose casting names the units, which the render thread fills the page's text with) into the packet's last area `wiki_off`/`wiki_len`; while open, the demo's `WIKISIM` stepped by the clock (at most 8 ticks) and its view copied by value into the record's `stage` (`tagpu_wikistage_copy`), then each unit's posed model into the view's pose pool (`tagpu_wikistage_pose`: each primitive's MOVE, TURN and flags out of `tagpu_wikisim_model`, 4096 `WIKISTAGEPIECE`s of 20 bytes over all the units, a unit's run `pose_at`/`pose_n`; a unit past the pool or `WIKISTAGE_PIECES` draws at rest and sets `WIKISTAGE_TRUNC_POSE`), the record then `sizeof(TAGPU_PK_WIKI)` = 145 944 bytes on the i686 build against a 320-byte head; none, and the window closed, when the HUD's pass is off (GDI, or the pass refused) or the wiki's layout refused (`tagpu_wikistate_refused`). A whole record that does not fit sets `TAGPU_PK_TRUNC_WIKI` (`0x1000000`) and is placed as its head (`tagpu_wiki_head_only`: no stage, a message on it), the shortfall still the whole record's so the slot's growth aims at the stage; a head that does not fit either carries no record, and the first fill of the next publish closes the window (`tagpu_wiki_carried` records what the published fill carried; a fill redone for the same publish, `s_fillAgain`, does not count). The trigger `tagpu_wiki.check` (every demo played to its end for every side of the layout and both Interface Types, each `tagpu_wikisim_hash` logged as `<entry>/<demo>/<side>/<iface> <hash>`) is answered from the fill, `tagpu_wiki.dump` (writes `tagpu_wiki.json`, with the bytes carried) from `tagpu_wiki_carried` after the record is placed | game |
 | `frame_valid` (`tagpu_packet.c`) | refuses a wiki area whose length is neither `TAGPU_PK_WIKI_HEAD` (no stage) nor `sizeof(TAGPU_PK_WIKI)`, or that lies outside the slot | render |
 | `tagpu_overlay_draw`, after `tagpu_hudstate_present` | `tagpu_wikistate_present`: the record laid out by `tagpu_wikilay_build` in the wiki unit (screen height / 720), its titles, subtitle, paragraphs, demo titles and tree leaves filled as they are read (`tagpu_wikitext_fill`) for the record's Interface Type and layout side, whose casting `casting_of` takes from the published WIKISIDE through `tagpu_wikiside_get` -- immutable and never freed, the side bounded against `WIKI_SIDE_SIDES` and the layout's sides, anything else filling with each entry's own names -- the button in the bar's own pixels from `tagpu_hud_live`, in the rewind button's slot unless the same frame's live HUD draws that button; the stage's view copied out of the packet, every count bounded and every string ended, and built by `tagpu_wikistage_build` inside the page's bezel, each op tagged with its range (`WIKISTAGE_IN_*`); the stage's cursor decoded once from the published arena's sequences through the presented palette (`tagpu_pal_live`) into a 16-cell sprite sheet, again when `tagpu_pal_serial` moves, and sized by the sharp layer's `cursorscale=` (`tagpu_gui_cursor_scale`, written by `tagpu_gui_present`'s poll on the same thread); `tagpu_vk_hud.c` sends the sheet whole as `HUD_TEX_SPRITE` when its generation moves. **The sidebar**: the view names its layout by a value (`WIKISTAGE_LAYOUT_NONE`, `_FIXTURE`, `_MOD`), resolved here to a layout this thread holds itself (`side_resolve`: the fixture of the wiki's published data, or the running mod's through `tagpu_wikiside_get`; a `_MOD` that does not answer `WIKISIDE_READY` resolves to none, and the stage draws the column and its minimap alone; a value out of range draws no sidebar, `view_bound`). With the mod's layout, `side_bind` composes the column every frame (`tagpu_wikiside_compose`, 128 × 1024 RGBA8, with the PANELSIDE of the side the view names, bounded by the composer against the layout's sides) and bumps its generation exactly when the indices, the coverage or the rows differ from the last column's, compared byte for byte (two buffers, the new column composed into the one not drawn; 5.9 µs a frame for 480 rows and 12.9 µs for 1024 when nothing changed, i686 under Wine, MEASURED 2026-10-27); `tagpu_vk_hud.c` sends it whole as `HUD_TEX_SIDE` (sampled nearest) when the generation moves, and hides the `HOP_SIDE` instances of a frame whose generation the device does not hold yet (`hide_tex`), so a column is never drawn from another frame's texels. The texture is made with the pass (one more descriptor set in the pool) and freed in `tagpu_vk_hud_down` | render |
 | `tagpu_overlay_draw`, after `tagpu_wikistate_present` | `tagpu_wikiworld_frame`: the stage's ground in 3D for this frame (§2.12d) -- the terrain, feature and target hand-overs from the view `tagpu_wikistate_scene` answers and the arena `tagpu_wiki3d_get` published, each stamped with the frame | render |
@@ -4497,7 +4497,8 @@ own COB VM `tagpu_cobvm.c`, with one host a simulation, its units' scripts copie
 published 3D arena when the simulation is made (`tagpu_wiki.c` `scripts_now`, `cob_type`). No demo,
 Try it or parity check starts while `tagpu_wiki3d_answer` is pending. The host reads and writes no
 engine memory and no engine script object -- its units, their COB objects and its random number
-generator are its own -- so it adds no field to the lists below; the engine addresses it names are
+generator are its own -- so it adds no field to the lists below, and neither do the poses it sets,
+which reach the render thread only as the record's pose pool (§2.12d); the engine addresses it names are
 the facts it imitates ([the COB plan](ingame-wiki-cob-plan.html), *The wiki host*). Its slice costs
 about 70 µs over a demo's units; with the scripts on, the wiki's page cost the game thread at most
 0.358 ms in a frame over 1222 frames, and `tagpu_wiki.check` played its 84 demos in 89 ms
@@ -4583,10 +4584,20 @@ renderer draw its units and ghosts.
   name once a stage (`types_build`), each type's node run walked with `tagpu_model_walk` and every
   node checked to lie inside the arena **before** it is handed over; a type that fails is drawn as
   the box (`resolved`, bit t). Each record goes to the wiki bake as a piece run
-  (`tagpu_pbw_unit`, key `ghost` 1, so units and ghosts of a type share one geometry) and is posed
-  at rest: one rotation about the root's rest point, `(cs, 0, sn; 0, 1, 0; -sn, 0, cs)` on the
-  engine-held nodes, which is the engine's body turn of the matching heading (`0x4CB590` in the
-  engine map); a piece `Create()` hides takes visibility 0, one it marks dont-cache 1. The camera is
+  (`tagpu_pbw_unit`, key `ghost` 1, so units and ghosts of a type share one geometry). **A unit
+  its script poses** takes the pose the record's pool carries (`pose_of`, `pose_compose`):
+  `tagpu_native.c` `posed_pose`'s composition, P = parent · T(rest offset from the parent + MOVE) ·
+  R(TURN) down the tree, through `tagpu_wikiasset.c`'s `posed_of` map from the stage's walk to the
+  posed order; at the root the facing below stands for the body turn, about the root's rest point,
+  with the root's MOVE outside it; a node the posed order does not hold, or whose parent never
+  resolves, keeps the rest pose; the flags give `posed_pose`'s words (hidden: an all-zero matrix
+  and visibility 0; visible and cached 3; dont-cache 1; shaded by bit 2 once any visible piece
+  carries it). `rot2`, `m43_mul` and `piece_local` are `tagpu_posemath.h`'s, which
+  `tagpu_native.c` includes too, so the game's units and the stage's are posed by one arithmetic.
+  **A ghost, and a unit no script poses or whose run `pose_of` refuses,** is posed at rest: one
+  rotation about the root's rest point, `(cs, 0, sn; 0, 1, 0; -sn, 0, cs)` on the engine-held
+  nodes, which is the engine's body turn of the matching heading (`0x4CB590` in the engine map); a
+  piece `Create()` hides takes visibility 0, one it marks dont-cache 1. The camera is
   the map's corner at zoom 1 (`depthScale` 512, the scaffold rect the whole map), the light the
   Classic one. From the packet's option word: the shadow kind (bit 2 Shadow: a structure's slant
   when its type has one; bit 3 as well: a mobile unit's silhouette; never for a nanoframe or a
@@ -4678,11 +4689,18 @@ renderer draw its units and ghosts.
   only the binder writes it). `types_build` then re-checks every node of a type's run against the
   arena's used extent (`WIKI3D.base`, `bytes`) on its value before the run is kept, so a loader
   that broke that rule makes a box. *The arena outlives every hand-over*: it is immutable and never freed. *The
-  pose is a function of the record*: the rest pose and the record's yaw, nothing read from a unit
-  of the game.
+  pose is a function of the record*: the rest pose, the record's yaw and the view's pose pool,
+  nothing read from a unit of the game. *The pool is data*: the game thread writes it into the
+  record and the render thread reads it from the packet's copy, so `pose_of` bounds every number
+  of it before use -- the slot against the view's `nunit` and `WIKISTAGE_UNITS`, `npose` against
+  `WIKISTAGE_POSE`, `pose_at` and `pose_n` inside `npose`, `pose_n` equal to the type's primitive
+  count and the type's run the `nwalk` nodes `posed_of` was made against -- and `pose_compose`
+  bounds each `posed_of` entry by that count; a run that fails any of them draws the rest pose.
 - **Not done here**: 3D features in the image (a stage whose description names one falls back to
   the whitebox; no stage names one); the wiki's device memory is computed from the sizes it
-  creates, not read back (the plan's section 1); the GDI lane draws no wiki at all.
+  creates, not read back (the plan's section 1); the GDI lane draws no wiki at all; the poses'
+  cost -- the 80 KB pool copied at every fill that shows the stage, every posed unit composed
+  every frame -- is not measured.
 ### 2.13 Sub-tick pose interpolation (`tagpu_lerp.c`, OFF by default, `tagpu_lerp.on`) — 2026-09-09
 
 The design, the invariants and the gate results are [smooth motion](smooth-motion.html); this is

@@ -29,9 +29,9 @@ files by one rule that names no mod, and the demo plays, and its captions name, 
 player's Interface Type ([below](#the-per-mod-tutorials)). The owner's decisions for the sidebar
 and the tutorials are [below](#the-sidebar-and-the-per-mod-tutorials-the-owners-decisions). The
 units run their own COB scripts in both simulations, through one C host on our own COB VM: a
-builder works only once its script has taken its build stance, and the Quick Build demos wait for
-the work to be done; the stage does not draw the scripts' poses yet
-([the COB plan](ingame-wiki-cob-plan.html), L3a built, L3b open; [below](#the-units-scripts)).
+builder works only once its script has taken its build stance, the Quick Build demos wait for
+the work to be done, and the stage draws the poses the scripts set, in the game and in the mockup
+([the COB plan](ingame-wiki-cob-plan.html), L3a and L3b built; [below](#the-units-scripts)).
 
 | What | Where |
 |---|---|
@@ -52,6 +52,7 @@ the work to be done; the stage does not draw the scripts' poses yet
 | The stage in the DLL | `tagpu/ddraw/src/tagpu_wikistage.c`: a view copied by value, built into HUD ops, each tagged with its range; `tagpu_wikiscene.c`: the ground's cells, feature quads and fog grid; `tagpu_wikiworld.c`: the 3D stage's producer for the wiki's copies of the world passes — [GPU status](gpu-status.html) §2.12d |
 | The 3D ground's check, C against the mockup | `node tools/wiki/scenecheck.mjs`, with `tagpu/ddraw/tests/wikiscenetest.c`; in the game, `tools/wiki/stage3dcheck.py` over `wiki_regression.py stage3d`'s captures |
 | The stage's check, C against `stage.js` | `node tools/wiki/stagecheck.mjs`, with `tagpu/ddraw/tests/wikistagetest.c` |
+| The units' poses | in the DLL `tagpu_wikistage.c` `tagpu_wikistage_pose` (the pose pool, game thread) and `tagpu_wikiworld.c` `pose_compose` (render thread) over `tagpu_posemath.h`; in the mockup `tools/wiki/mockup/pose.js`; `tools/wiki/posecheck.py` holds `pose.js` to tacob's composition |
 | The sidebar's fallback layouts | `art/wiki/side/fixture.json` (480 rows) and `fixture-tall.json` (768 rows), synthetic |
 | The sidebar in the mockup | `tools/wiki/mockup/side.js` (the column's composer); `sim.js` (the layout's check, the router, the buttons and the build trip); each installed mod's pack under the gitignored `tools/wiki/mockup/gfx/side/<mod>/`, written by `tools/wiki/sidepacks.py` through `gfx.py --side-only` |
 | The sidebar in the DLL | `tagpu_wikiasset.c` (`tagpu_wikiside_load`, the reading) over `tagpu_guifile.c` (the .GUI files by position); `tagpu_wikiside.c` (the composer); the router and the buttons in `tagpu_wikisim.c`, the column's ops in `tagpu_wikistage.c` |
@@ -409,7 +410,7 @@ they were not re-disassembled for this table.
 | Metal deposit | A map **feature** with `metal=` and footprint 3 × 3: on lush maps `lushmetal1..3` (`metals.gaf`, `seqname` frame 0). The metal a mex reads is the feature-grid byte `+7`, which `0x422040` writes from the definition; the sprite is only the picture. | The feature pass, which has no metal case: `tagpu_feat.c` `tagpu_feat_gather` → `draw_feature`; `tagpu_vk_feat.c` `tagpu_vk_feat_record`. `tagpu_featown.c` skips the engine leaf `0x46A610`. | The description's deposit feature, frame 0 of its sequence at its GAF hotspot, through tagpu's sprite shader (`classicSprites`) |
 | Geothermal vent | A map feature with `geothermal=1`, footprint 1 × 1: on lush maps `lushvent01..03` (`lushvents.gaf`, `geovent0N`) | The feature pass, as for metal | The description's vent feature, as for metal |
 | Grey fog, unexplored ground | The engine's fog grid, built by `0x4843C0` from the line-of-sight counters and the mapped bits | No separate pass. Each world pass applies `tagpu_glsl.h`: `TAGPU_GLSL_FOG_TERRAIN` paints unexplored ground palette index 0 (black), `TAGPU_GLSL_FOG_GREY_RGB` turns a fogged pixel into its R+G+B mean, and `TAGPU_GLSL_FOG_DISCARD` hides units and effects outside sight. The grid is rebuilt by `tagpu_terrown.c` `terr_fogtick` and, zoomed out, by `tagpu_fogwide.c`. | The view's fog cells in the engine's grid form (`scene.js` `fogGrid`: one entry a 32-unit block, two corner masks), on terrain and features. Units and ghosts take none ([the 3D stage's plan](ingame-wiki-3d-stage-plan.html), section 7). When the ground falls back, the whitebox's fog overlays |
-| Units and buildings | Each unit's 3DO, posed by its COB script. Faces are textured with GAF frames; a team-coloured face takes frame *k* = the player's logo colour. | The pose is copied by `tagpu_packet_pub.c` `fill_pieces` and composed by `tagpu_native.c` `posed_pose`. `tagpu_posebake.c` `tagpu_posebake_unit` bakes it, `tagpu_posedraw.c` `tagpu_posedraw_unit` hands it over, and `tagpu_vk_unit.c` `tagpu_vk_unit_record` draws it. Team colour: `tagpu_packet_pub.c` `player_logo` reads PlayerInfo `+0x96`; `tagpu_render3do.c` `face_texframe` takes that frame of a team-coloured face's sequence. | The 3DO as the engine holds it (in each node with a selection primitive, that face swapped to 0 and skipped, the rest sorted by mean Y), at rest with what Create() hides left out, its faces bound by the engine's rules with the owner's logo frame, through tagpu's unit shader (`classicUnits`). A mobile unit faces the way the simulation says; a structure faces TA's default heading `0x8000`. The Classic shadows first: a mobile unit's silhouette, a structure's slant |
+| Units and buildings | Each unit's 3DO, posed by its COB script. Faces are textured with GAF frames; a team-coloured face takes frame *k* = the player's logo colour. | The pose is copied by `tagpu_packet_pub.c` `fill_pieces` and composed by `tagpu_native.c` `posed_pose`. `tagpu_posebake.c` `tagpu_posebake_unit` bakes it, `tagpu_posedraw.c` `tagpu_posedraw_unit` hands it over, and `tagpu_vk_unit.c` `tagpu_vk_unit_record` draws it. Team colour: `tagpu_packet_pub.c` `player_logo` reads PlayerInfo `+0x96`; `tagpu_render3do.c` `face_texframe` takes that frame of a team-coloured face's sequence. | The 3DO as the engine holds it (in each node with a selection primitive, that face swapped to 0 and skipped, the rest sorted by mean Y), posed by its script as the game's stage poses it (`pose.js`), or at rest with what Create() hides left out for a unit no script poses and every ghost, its faces bound by the engine's rules with the owner's logo frame, back faces culled as the game's body pipeline culls them, through tagpu's unit shader (`classicUnits`). A mobile unit faces the way the simulation says; a structure faces TA's default heading `0x8000`. The Classic shadows first: a mobile unit's silhouette, a structure's slant |
 | Selection | The engine's box `0x46A530`, in GUI colour `0x0A` | `tagpu_native.c` `selbox_emit` → `tagpu_mark.c` `tagpu_mark_emit_selbox` → `tagpu_vk_mark.c` `tagpu_vk_mark_record`. `tagpu_markown.c` `mark_selbox` redirects the engine's box. | The whitebox brackets, over the image (R2) |
 | Placement ghost | The armed building's 3DO, `build_unit_id` at `main+0x2CC4`, at rest, heading `0x8000`, alpha 0.40 | `tagpu_native.c` `ghost_record` → `ghost_one` (alpha set in `ghost_armed`) → `tagpu_vk_unit.c` `tagpu_vk_unit_record_ghosts`. The square under it is the next row's. | The building's model, untinted, alpha 0.40, depth writes off, after every unit; its green or red square over the image |
 | The build square, and a gesture's sites | Outlines in the GUI colour table at `main+0xDCB`. `0x0A` is green, `0x04` red (refused), `0x0E` yellow (takes a queued order off). These are table indices, not palette indices: stock reads them as palette `0xE9`, `0xD5` and `0xC2` (`terrain-depth.md`, the live read on Two Continents). | `tagpu_mark.c` `gather_cursor` (the single square, coloured by `region_flags` bit 6) and `gather_place` (one square per site), both through `square_emit`. The site colours are `tagpu_place.h` `PLACE_OK`, `PLACE_BLOCKED` and `PLACE_TOGGLE`, assigned by `tagpu_place.c` `classify`. `ghost_record` adds a ghost at each site. | A ghost at each site, whatever its colour, as in the game; the squares and the order numbers over the image |
@@ -453,7 +454,12 @@ readers:
 - **The units**: `units\<UnitName>.FBI`; its `Objectname`, else the UnitName, names
   `objects3d\<name>.3DO`; `scripts\<UnitName>.COB` gives Create()'s hides, and is written beside
   the mesh as `units/<type>.cob` with its posed model's order and visible flags (the mesh's
-  `script`; `posed_order`), for the units' scripts. A face binds to the
+  `script`; `posed_order`), for the units' scripts. Every piece's faces are written, Create()'s
+  hides included, since a script can show what Create() hid: `units/<type>.pieces.bin` gives each
+  vertex its piece (u16: the body's vertices, then the slant's, then the wire's) and the mesh's
+  `pieces` table each piece's parent, cumulative rest offset in the file's axes, and whether
+  Create() hides it or marks it dont-cache, both in the posed order (the walk's order for a type
+  without a script). A face binds to the
   first GAF of the texture bank (`textures\*.GAF` without `logos.GAF`) that has its name, else to
   `logos.GAF`, as a team face when the entry has exactly 10 frames, else to flat colour `0xD1`.
   One mesh is written per owner the entry's scenes use, with the slant casters and the wire's
@@ -475,16 +481,15 @@ code is the tascene lab's parity lane, factored into `tools/tascene-render.js`, 
 `stage.js` draws the target into the map's rect, bilinear. Without `gfx/index.json`, `gfx=game`
 stays on the whitebox and the controls strip says "game graphics: run tools/wiki/gfx.py".
 
-**What the stage does not draw yet.** The units' scripts run ([below](#the-units-scripts)), but
-the stage draws the rest pose with what Create() hides left out, not the pieces the scripts move
-(the COB plan's L3b), so:
+**The units' poses.** The stage draws each unit in the pose its script sets
+([below](#the-units-scripts)): a kbot's legs walk, a constructor opens and aims its nanolathe, an
+extractor's arms turn. A unit that runs no script (none loaded, its type quarantined) and every
+ghost draw the rest pose with what Create() hides left out. In the mockup `pose.js` composes the
+host's posed model over the pack's piece table as `tagpu_wikiworld.c` `pose_compose` does, in
+float32 step for step, and `gfx.js` culls the bodies' and the shadows' back faces as the game's
+body pipeline does (`tagpu_vk_unit.c`), so a turned piece shows the face the game shows.
 
-- every unit stands in its rest pose;
-- a kbot's legs do not walk and a constructor does not aim its nano-lathe;
-- an extractor's arms do not turn, and a building's doors and panels stay as the 3DO has them
-  at rest.
-
-The nano spray is the engine's particles (`PK_PART` kind 5, drawn by `tagpu_fx.c`
+**What the stage does not draw yet.** The nano spray is the engine's particles (`PK_PART` kind 5, drawn by `tagpu_fx.c`
 `tagpu_fx_gather`), and it starts at the point COB `QueryNanoPiece` returns; neither the stage nor
 the mockup draws it yet (the COB plan's L4).
 
@@ -1610,6 +1615,17 @@ both fold into theirs, holds them to the same calls.
   two queued pieces takes its game time: stock's ARMCK takes about 268 ticks a queued piece, and
   the Build Lines demos keep fixed tails long enough for the pieces their claims read
   ([the COB plan](ingame-wiki-cob-plan.html), *The demo's wait*).
+- **The poses.** What a unit's script poses is drawn, not simulated: the poses are outside the
+  view and the state hash. In the DLL the page fill copies each unit's posed model (each
+  primitive's MOVE, TURN and flags) after the view's copy into the stage record's pose pool,
+  `WIKISTAGEPIECE pose[WIKISTAGE_POSE]` (4096 primitives over all the units, `pose_at` and
+  `pose_n` a unit; `tagpu_wikistage_pose`); a unit with more than `WIKISTAGE_PIECES` (256) or past
+  the pool draws at rest and sets `WIKISTAGE_TRUNC_POSE`. In the mockup `serve.py`'s `models` op
+  answers every unit's model block (`{"models": {unit: base64}}`, `tagpu_wikicob_model`'s
+  PrimitiveStructs in the posed order), `cob.js` `model(unit)` asks once after each call, and
+  `sim.js` `poses()` gives them aligned with `view().units`, null for a unit no script poses;
+  `gfx.js` `frame(entry, v, tick, dir, poses)` draws them ([the COB plan](ingame-wiki-cob-plan.html),
+  *Drawing*).
 - **The page** asks `tools/wiki/serve.py` for its host; served without it, or with no gfx pack
   built, it plays without the scripts and says why in the console, as it says a quarantined type's
   note. Run the mockup with `serve.py`.
@@ -1668,8 +1684,8 @@ both fold into theirs, holds them to the same calls.
   the stage natively (x86-64, SSE); the DLL compiles it for SSE2, but no check runs the i686 build.
 - **The units' scripts are checked on the entries' units only.** `simcheck.mjs --pack` plays the
   six setups' stage units with their own scripts, none quarantined; no setup's whole script corpus
-  has been run through the host (the COB plan's L3c), and the poses the scripts set are not drawn
-  (L3b). GET answers what the flat stage has: piece and unit heights 0, a piece's position the
+  has been run through the host (the COB plan's L3c), and `posecheck.py` holds the drawn poses to
+  tacob's composition on the stock pack's types only. GET answers what the flat stage has: piece and unit heights 0, a piece's position the
   unit's, XZ_ATAN without the unit's heading.
 - **The per-mod tutorials have been played in one setup in game.** Retail as CORE at both
   Interface Types (*The per-mod tutorials*, *The checks*); the six setups at both types, each
@@ -1746,11 +1762,13 @@ both fold into theirs, holds them to the same calls.
   takes the lab's corner collapse (the engine textures four-vertex faces); an animated texture shows
   frame 0; the Gamma curve is not applied; the Shading option is taken as on, the game's default.
   Its units follow the game's own rules (`gfx.js`, `tascene-render.js` `emitUnits` with
-  `engineShade`): the model turned by the record's yaw after the loader's half turn, a structure and
+  `engineShade`): the model turned by the record's yaw after the loader's half turn, a posed unit
+  composed by `pose.js`, back faces culled for the bodies and the shadows, a structure and
   every ghost on the engine's lit rows from its vertex normals (`gfx.py` `vertex_normals`), any
   other unit on the neutral row, a textured quad mapped and shaded over its own frame, and the
   nanoframe's wire on the line grid thickened to `ss`. `stage3dcheck.py` compares the whole image
-  with the game's own: see the 3D stage's plan, landing 6h, for what it measured.
+  with the game's own: see the 3D stage's plan, landing 6h, for what it measured, and the COB
+  plan's *L3b's gate* for the image with the poses.
 - **A stage whose description names a 3D feature (a wreck) is drawn as the whitebox**, in the
   game and in `gfx=game` alike: no stage names one.
 

@@ -1,11 +1,11 @@
 # Our own COB VM, and the in-game wiki's units animated by it, planned
 
 **Written** 2026-10-27. **L1 and L2 are built** (the core, tacob on it, the shared rules, the
-wiki's units recorded and replayed), and **L3a is built** (2026-10-28, on `worktree-wiki-anim`):
-the wiki's units run their scripts in both simulations through one host, the scripts gate the
-builds, and the demos wait on the work. L3 was cut into L3a to L3c on 2026-10-28; **L3b** (the
-poses drawn) and **L3c** (the corpus gate), L4 and L5 are not started (see *The landings*). The
-wiki's specification is still
+wiki's units recorded and replayed), and **L3a and L3b are built** (2026-10-28, on
+`worktree-wiki-anim`): the wiki's units run their scripts in both simulations through one host,
+the scripts gate the builds, the demos wait on the work, and the stage draws the poses the scripts
+set, in the game and in the mockup. **L3c** (the corpus gate), L4 and L5 are not started (see *The
+landings*). The wiki's specification is still
 [the in-game wiki](ingame-wiki.html) and its mockup, which stays the 1:1 spec of the DLL wiki. The
 engine facts below carry their address and are the engine map's
 ([*The COB engine — mapped by us*](exe-reverse-engineering.html)); a fact this plan needs and the map
@@ -15,11 +15,11 @@ it disassembles it. When the work closes this file is folded into the wiki's not
 
 ## Why
 
-The wiki's stage draws each unit from its script's `Create()` hides alone (`tagpu_cobscan.c`): every
-unit stands in its rest pose, a kbot's legs do not walk, a constructor does not unfold its
-nanolathe, an extractor's arms do not turn, and there is no nano spray ([the wiki's
-note](ingame-wiki.html), *What the stage does not draw yet*). Animating them needs a COB VM the
-wiki can run. The wiki runs one (L3a); drawing what it poses is L3b.
+Before this work the wiki's stage drew each unit from its script's `Create()` hides alone
+(`tagpu_cobscan.c`): every unit in its rest pose, a kbot's legs still, a constructor's nanolathe
+folded, an extractor's arms unturned, and no nano spray. Animating them needs a COB VM the wiki can
+run. The wiki runs one (L3a) and draws what it poses (L3b); the nano spray is L4 ([the wiki's
+note](ingame-wiki.html), *What the stage does not draw yet*).
 
 The one VM we have outside the engine is tacob's, in Python, byte-identical to the engine on nine
 cobtrace fixtures ([tacob](tacob-design.html), landing 3). It has already drifted from the game:
@@ -328,11 +328,52 @@ clock, the wait, `stalled` and the host's hash (`tagpu_wikisim.h`, item 8).
   *Queue several with Shift* plays 1054 ticks with the scripts and 570 without (MEASURED
   2026-10-28).
 
-**Drawing.** The stage already draws units through the game's posed program with a pose array per
-piece (`tagpu_wikiworld.c`, 12 floats a piece, with per-piece visibility and shade); the PrimitiveStructs
-the core writes are composed into it the way `tagpu_native.c` `posed_pose` composes the engine's,
-over the posed model's node order (above) rather than the readers' walk the rest pose uses today.
-The mockup does the same in `gfx.js` with the poses the server answers.
+**Drawing** (L3b). The stage draws units through the game's posed program with a pose array per
+piece (`tagpu_wikiworld.c`, 12 floats a piece, with per-piece visibility and shade), and fills it
+from the PrimitiveStructs the core writes, composed the way `tagpu_native.c` `posed_pose` composes
+the engine's:
+
+- **The game thread copies the poses into the record.** After the view's copy, the page fill
+  (`tagpu_wiki.c` `page_fill`) calls `tagpu_wikistage_pose`, which takes each copied unit's posed
+  model from the simulation (`tagpu_wikisim_model`, over the host's `tagpu_wikicob_model`: NULL for
+  a unit no script poses) and copies three fields of each primitive -- the MOVE delta in 16.16, the
+  TURN about x, y, z and the flags (`TAGPU_COBVM_VISIBLE`, `_CACHED`, `_SHADED`) -- into the stage
+  view's pose pool, `WIKISTAGEPIECE pose[WIKISTAGE_POSE]` (4096 primitives over all the units),
+  each unit naming its run by `pose_at` and `pose_n`. A unit whose model has more than
+  `WIKISTAGE_PIECES` (256, WIKI3D's bound) primitives, or does not fit what is left of the pool,
+  keeps `pose_n` 0 and draws at rest, and the fill sets `WIKISTAGE_TRUNC_POSE` (`0x200`), logged
+  once a demo as `wiki: the demo <entry>/<demo>'s view did not fit the record (cut 0x200)`. The pool
+  rides in the frame packet with the rest of the view, by value.
+- **The 3D load maps the two piece orders.** The stage bakes and draws a type in the readers' walk
+  (`tagpu_model_walk`), the core holds primitives in the posed order; `unit_script`
+  (`tagpu_wikiasset.c`) records for each of the walk's `nwalk` nodes the posed primitive it is,
+  `posed_of[g]`, -1 for a node the posed order does not hold.
+- **The render thread composes them** (`tagpu_wikiworld.c`). `pose_of` takes a unit's run from the
+  packet as data: never for a ghost; the record's slot below the view's `nunit` and
+  `WIKISTAGE_UNITS`; `npose` at most the pool; `pose_at` and `pose_n` inside `npose`; `pose_n`
+  equal to the type's primitive count and the type's run the `nwalk` nodes the map was made
+  against. Anything else draws the rest pose. `pose_compose` then builds `posed_pose`'s tree,
+  P = parent · T(rest offset from the parent + MOVE) · R(TURN), each entry of `posed_of` bounded by
+  the run's count; at the root the stage's facing matrix stands for the body turn, about the root's
+  rest point, with the root's MOVE outside it, so a script that poses nothing draws exactly the
+  rest pose. A node the posed order does not hold, or whose parent never resolves, keeps the rest
+  pose turned onto the facing. The words are `posed_pose`'s: hidden (flag bit 0 clear) an all-zero
+  matrix and visibility 0, visible and cached 3, visible and dont-cache 1 (no slant), and a piece
+  shaded by bit 2 once any visible piece carries it.
+- **One arithmetic.** `rot2` (the engine's pair rotator `0x4B7173` without its rounding),
+  `m43_mul` and `piece_local` are `tagpu_posemath.h`'s, pure functions that `tagpu_native.c` (the
+  game's units) and `tagpu_wikiworld.c` (the stage's) both include.
+- **The mockup does the same.** `gfx.py` writes every piece's faces, `Create()`'s hides included,
+  each vertex's piece (`units/<type>.pieces.bin`, u16: the body's vertices, then the slant's, then
+  the wire's) and the mesh's `pieces` table in the posed order (parent, cumulative rest offset in
+  the file's axes, hidden at create, dont-cache); `serve.py`'s `models` op answers every unit's
+  model block, `cob.js` `model()` asks once after each call, `sim.js` `poses()` gives them aligned
+  with the view's units, outside the view and the state hash, and `pose.js` composes them as
+  `pose_compose` does, in float32 step for step; `gfx.js` draws a posed unit from them and every
+  other unit, and every ghost, at rest. Its bodies and shadows now cull back faces as the game's
+  body pipeline does (`tagpu_vk_unit.c`, *BACK FACES CULLED*): a turned piece shows the face that
+  now runs clockwise on the engine's screen, and the opened ARMCK's shell panel showed its grey
+  side without it.
 
 ## The landings
 
@@ -341,7 +382,7 @@ The mockup does the same in `gfx.js` with the poses the server answers.
 | **L1** — built 2026-10-27 | `tagpu_cobvm.{c,h}`: the core on the layout above, the host interface, the effect log, the observer; the shared extension functions factored out of `tagpu_patches.c`; tacob on the core through ctypes, **its Python VM deleted**, `tacob-build.py` cross-compiling it; the reentrancy check | the nine fixtures byte-exact through tacob on the core; `test_tacob.py`; native tests of the core under UBSan and ASan; the layout's static asserts; the DLL builds |
 | **L2** — built 2026-10-27 | live cobtrace + posedump fixtures for the wiki's units doing the wiki's actions — ARMCK and ARMACK walking, starting, assisting and stopping a build, reclaiming; ARMMEX and ARMMOHO built, activated, spinning at a set metal value; ARMGEO activating; ARMPW walking — and one exercising the extensions (records 9 and 10, the getters) | each fixture byte-exact through the core |
 | **L3a** — built 2026-10-28 | the host (`tagpu_wikicob`), the calls and the gating in both simulations, the facts, the quarantine, `until` waits and the 11 Quick Build demos converted, the posed order in the DLL's asset load, the three-state 3D answer the demos wait for, `activatewhenbuilt` through every reader, the mockup's server and node host, the scripts in the packs | `simparity.mjs`, `simcheck.mjs` (every demo's claim with the scripts running), `wiki_regression.py` |
-| **L3b** | poses drawn: the core's PrimitiveStructs composed over the posed order in the C stage and in the mockup; until then the stage draws every unit in its rest pose with `Create()`'s hides | a look at every demo in game and in the mockup; the stage's checks |
+| **L3b** — built 2026-10-28 | poses drawn: the core's PrimitiveStructs copied into the stage view's pose pool on the game thread and composed over the posed order on the render thread (`tagpu_wikistage_pose`, `pose_compose`, `tagpu_posemath.h`); in the mockup `gfx.py`'s piece tables, `serve.py`'s `models`, `sim.js` `poses()`, `pose.js`, and back faces culled as the game culls them (*Drawing*) | `stage3dcheck.py` (the game's stage against the mockup's, with the poses), `posecheck.py`, `simparity.mjs`, `simcheck.mjs`, `scenecheck.mjs`, `stagecheck.mjs`, `sidecheck.mjs`, `textparity.mjs`; the demos watched in game |
 | **L3c** | the corpus gate: every compatibility setup's scripts through the host, a refusal named | the gate itself, clean over every setup |
 | **L4** | the nano spray and `emit-sfx`: the engine's emitters ported, the wiki generator, drawn through the stage's instance of the particle draw | the spray's look against a game capture of the same build |
 | **L5** | sound: the mixer, the triggers, the cooldowns, WebAudio in the mockup | a demo heard in game and in the mockup; the player's settings honoured; an MP game's own sounds unchanged with the wiki open |
@@ -370,11 +411,40 @@ fixtures — no file the sidebar's landing touches.
 - `tools/test_cobvm.py`'s `WikiHost` tests: no writable static in the host, two hosts on two
   threads, the quarantines, `SET ACTIVATION` through the setter's rule.
 
+**L3b's gate**, MEASURED 2026-10-28 on the reference setup:
+
+- `stage3dcheck.py` over `wiki_regression.py stage3d`'s 18 captures, the mockup drawing the poses:
+  all 18 within the owner's tolerances. A Build Lines capture at tick 330 needed the mockup's back-face
+  cull: without it, the opened ARMCK's shell panel was grey where the game shows its
+  team-coloured face.
+- `posecheck.py`: on the stock pack's 9 types (ARMCK, ARMDRAG, ARMLLT, ARMSOLAR, ARMACK, ARMGEO,
+  ARMMEX, ARMMOHO, ARMPW), 6 random poses each (a MOVE of up to 8 units and any TURN on every piece,
+  a random facing), every body vertex of `pose.js` within 0.000076 model units of tacob's
+  `_compose` (the tolerance is 1/1024); the start pose composes to the rest pose exactly, and a
+  hidden piece leaves the body and the wire, an uncached one the slant.
+- `gfx.py`'s rest arrays byte for byte what the packs held before every piece was carried, on the
+  stock pack and the six mod packs.
+- `simparity.mjs` 1008 plays equal; `simcheck.mjs`, `scenecheck.mjs`, `stagecheck.mjs`,
+  `sidecheck.mjs` and `textparity.mjs` pass; the demos recorded in game on video.
+
 ### Gaps open
 
-- **The stage does not draw the poses** (L3b). The scripts run and gate the builds, but every unit
-  is still drawn in its rest pose with `Create()`'s hides: a kbot's legs, a nanolathe, an
-  extractor's arms do not move on the stage.
+- **`posecheck.py` covers the stock pack only.** The mod packs' types are drawn by the same code,
+  and `stage3dcheck.py` compares the game with the mockup on retail's captures; no check holds a mod's
+  posed models to tacob's composition. It is not in `wiki_regression.py - offline` either: it runs
+  by hand.
+- **The pose pool is bounded at 4096 primitives a view** (`WIKISTAGE_POSE`), filled in unit order;
+  a unit past it draws at rest in the game, logged once a demo (`cut 0x200`), while the mockup,
+  which has no pool, draws it posed. The most pieces of any type in the stock and six mod packs is
+  49, so 83 such units fit; no demo's unit count has been checked against the bound.
+- **The poses ride every frame.** The pool is copied into the record at every fill the stage is
+  shown, all 80 KB of it whatever changed (the record grew from 63 512 to 145 944 bytes on the
+  i686 build), and the render thread composes every posed unit every frame; neither cost has been
+  measured.
+- **A dont-shade piece's row is carried as a normal in the mockup.** `pose.js` gives each vertex of
+  a piece without the shaded flag the normal (0, 3.1, 0), whose `emitUnits` row is
+  trunc(3.1 × 5) = 15 at every facing, standing for the engine's default row 15 that
+  `tagpu_posedraw.c` gives such a piece directly. A change to `emitUnits`' row rule changes it.
 - **The corpus gate is not built** (L3c): no compatibility setup's scripts have been run through
   the host beyond the six packs' stage units, which `simcheck.mjs --pack` plays without a
   quarantine.
