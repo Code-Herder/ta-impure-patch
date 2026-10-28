@@ -937,7 +937,9 @@ def gadget_record(sec, index, where, report):
             report.append({"element": f"{where}#{index}", "note": f"{key} {v!r} is not an integer: read as "
                            f"{atoi(v)}, as the engine's atoi reads it"})
     n = {key: atoi(v) for key, v in nums.items()}
-    rec = {"index": index, "id": n["id"], "name": ck.get("name", ""), "x": n["xpos"], "y": n["ypos"],
+    # the name is read into the record's 16 bytes at +2 by 0x4C48C0(.., 0x10), which copies and ends the string at
+    # its 16th byte (0x4AD39C, 0x4C4949..0x4C4951): 15 characters
+    rec = {"index": index, "id": n["id"], "name": ck.get("name", "")[:NAME_GUI], "x": n["xpos"], "y": n["ypos"],
            "w": n["width"], "h": n["height"], "attribs": n["attribs"], "commonattribs": n["commonattribs"],
            "active": n["active"], "gaffile": n["gaffile"] & 1, "grey": n["grayedout"] & 1, "stages": n["stages"],
            "text": k.get("text", ""), "panel": k.get("panel", ""), "filled": False}
@@ -983,7 +985,8 @@ def read_downloads(eng, report):
             k = s["keys"]
             if "unitmenu" not in k:
                 continue
-            out.append((k["unitmenu"], atoi(k.get("menu")), atoi(k.get("button")), k.get("unitname", ""), path))
+            # UNITNAME read by 0x4C48C0(.., 0x20) (0x42DED8): 31 characters
+            out.append((k["unitmenu"], atoi(k.get("menu")), atoi(k.get("button")), k.get("unitname", "")[:NAME_DL], path))
     report.append({"element": "download", "folder": eng.dirs["download"], "entries": len(out), "empty files": empty})
     return out
 
@@ -1265,31 +1268,42 @@ def gadget_picture(art, g, role, unit, bank_name, where, report):
     return pic, rect
 
 
+# The names a page's buttons are read and pressed by (DISASSEMBLED): a .GUI gadget's name is 15 characters
+# (0x4AD39C), a download entry's 31 (0x42DED8), and the fill copies the entry's whole name into the record (strcpy,
+# 0x41AE84..0x41AEAC); a press reads the record's name cut to 16 characters (0x49FED0: strncpy 0x10, [0x10] = 0).
+NAME_GUI, NAME_DL, NAME_PRESS = 15, 31, 16
+
+
 def gadget_role(g, units):
-    """The role 0x41AA00 gives the button's name, in its order: a unit type first (0x488B10), then the substrings
-    PREV, NEXT, ORDERS, BUILD (strstr, case-sensitive), then commonattribs bit 2 (a build button whose name is no
-    type: greyed), then STOP; any other button is an order. Returns (role, unit or None)."""
-    name = g["name"]
-    if g["commonattribs"] & 4 and name.lower() in units:
-        return "build", units[name.lower()]["name"].upper()
+    """The role the build pages' handler 0x41AA00 gives a press of the button, in its order: the name cut to 16
+    characters (0x49FED0), then the case-sensitive substrings PREV, NEXT, ORDERS, BUILD of that cut name (strstr,
+    0x41AA75..0x41AB30) -- a pager or tab whatever else it names -- then a unit type by that cut name (0x488B10 at
+    0x41AA39, tested at 0x41AB5D; the press arms it, or queues a mobile one), whatever the commonattribs; then
+    commonattribs bit 2 (a build button whose name is no type) and STOP; any other button is an order. Returns (role,
+    unit or None)."""
+    press = g["name"][:NAME_PRESS]
     for sub, role in (("PREV", "prev"), ("NEXT", "next"), ("ORDERS", "orders"), ("BUILD", "buildtab")):
-        if sub in name:
+        if sub in press:
             return role, None
+    if press.lower() in units:
+        return "build", units[press.lower()]["name"].upper()
     if g["commonattribs"] & 4:
         return "build", None
-    return ("stop" if "STOP" in name else "order"), None
+    return ("stop" if "STOP" in g["name"] else "order"), None
 
 
-def button_state(g, units, page, hide_pagers):
+def button_state(g, units, page, hide_pagers, nrec):
     """A button as the layout holds it: (role, unit, grey, hidden). `page` is the build page number or None for a
-    side's screen; `hide_pagers` hides PREV and NEXT on a type with no numbered page."""
+    side's screen, `nrec` the page's record count (its sections); `hide_pagers` hides PREV and NEXT on a type with no
+    numbered page. Its grey is the file's (after the download fill), but for the greyed pass 0x41B045..0x41B096,
+    which runs on a numbered page only, over records 0 .. N-1 with N the header's +0xB6 = the sections less one
+    (0x41B054, 0x41B094): a record of commonattribs bit 2 there is greyed exactly when its whole name is no type
+    (0x488B10 at 0x41B07A, 0x4A1200 writes record i), so the last record keeps the file's grey."""
     role, unit = gadget_role(g, units)
-    if role == "build" and page:
-        # the greyed pass 0x41B04E..0x41B096: on a numbered page a build button naming a type is UN-greyed and
-        # any other greyed, whatever the file says (0x4A1200 both ways; the Q4 scout answer)
-        grey = unit is None
+    if page and g["index"] < nrec - 1 and g["commonattribs"] & 4:
+        grey = g["name"].lower() not in units
     else:
-        grey = bool(g["grey"]) or (role == "build" and unit is None)
+        grey = bool(g["grey"])
     hidden = not g["active"] or (hide_pagers and role in ("prev", "next"))
     return role, unit, grey, hidden
 
@@ -1364,7 +1378,7 @@ def build_screen(art, name, file, path, where, recs, units, page, hide_pagers, r
             continue
         if g["id"] != 1:
             continue
-        role, unit, grey, hidden = button_state(g, units, page, hide_pagers)
+        role, unit, grey, hidden = button_state(g, units, page, hide_pagers, len(recs))
         pic, rect = gadget_picture(art, g, role, unit, file, f"{name}#{g['index']}", report)
         x, y, w, h = rect
         cw, ch = min(x + w, header["w"]) - max(x, 0), min(y + h, header["h"]) - max(y, 0)
@@ -1518,7 +1532,7 @@ def menu_of(eng, units, downloads, tname, prefix, cache):
                 for g in recs[1:]:
                     if g is None or g["id"] != 1:
                         continue
-                    role, unit, grey, hidden = button_state(g, units, page, False)
+                    role, unit, grey, hidden = button_state(g, units, page, False, len(recs))
                     if role == "build" and unit and not grey and not hidden and unit.lower() not in out:
                         out.append(unit.lower())
         except SideError:

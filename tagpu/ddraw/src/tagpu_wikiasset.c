@@ -1564,6 +1564,14 @@ static void unit_report(SB* b, const LOADER* L, const WIKI3DUNIT* u, const UNITR
 #define GREY_ROW       (32 - 0x14)  /* GUI_ButtonDraw's box-shader level -20 (push at 0x4A69B6) */
 
 #define TITLE_RAW  0x1F         /* the display name's bytes: def+0x00 is 0x20 bytes             */
+/* The names a page's buttons are read and pressed by (DISASSEMBLED): a .GUI gadget's name is read
+   into the record's 16 bytes at +2 by 0x4C48C0(.., 0x10), which copies and ends the string at its
+   last byte (0x4AD39C, 0x4C4949..0x4C4951), and a download entry's UNITNAME by 0x4C48C0(.., 0x20)
+   (0x42DED8); the fill copies the entry's whole name into the record (strcpy, 0x41AE84..0x41AEAC);
+   a press reads the record's name cut to 16 characters (0x49FED0: strncpy 0x10, [0x10] = 0). */
+#define NAME_GUI   15
+#define NAME_DL    31
+#define NAME_PRESS 16
 
 /* An FBI's UNITINFO as the cast rule and the casting read it (gfx.py `unit_record`): integers as
    the engine's atoi (tagpu_guifile_num: `num` saturated for comparisons, `bits` for flag tests),
@@ -2332,7 +2340,7 @@ static int dl_each(void* ctx, const TAGPU_VFILE* f)
         if (!side_grow(S, (void**)&S->dl, &S->cdl, S->ndl + 1, sizeof *S->dl)) break;
         e = &S->dl[S->ndl++];
         scopy(e->unitmenu, um, sizeof e->unitmenu);
-        scopy(e->unitname, tagpu_guifile_get(g, sec, "unitname"), sizeof e->unitname);
+        scopy(e->unitname, tagpu_guifile_get(g, sec, "unitname"), NAME_DL + 1);
         /* MENU and BUTTON through 0x4C46C0, 0 when missing; both are bytes in the engine's entry
            (MENU read at 0x41AE48, BUTTON stored at 0x42DEE7 and read at 0x41AE57), cut where used */
         tagpu_guifile_num(tagpu_guifile_get(g, sec, "menu"), NULL, &e->menu);
@@ -2373,7 +2381,7 @@ static void gadget_record(SIDE* S, const TAGPU_GUIFILE* g, int sec, int index, c
     num_field(S, tagpu_guifile_get(g, sec, "grayedout"), "grayedout", where, index, NULL, &b);
     r->grey = b & 1u;
     num_field(S, tagpu_guifile_get(g, sec, "stages"), "stages", where, index, &r->stages, NULL);
-    scopy(r->name, tagpu_guifile_get(g, com, "name"), sizeof r->name);
+    scopy(r->name, tagpu_guifile_get(g, com, "name"), NAME_GUI + 1);
     scopy(r->text, tagpu_guifile_get(g, sec, "text"), sizeof r->text);
     scopy(r->panel, tagpu_guifile_get(g, sec, "panel"), sizeof r->panel);
     if (r->w < 0 || r->h < 0) {
@@ -2621,24 +2629,40 @@ static void gadget_picture(SIDE* S, const SREC* g, int role, const char* unit, c
     for (k = p->nf; k < 3; k++) p->f[k] = -1;
 }
 
-/* the role 0x41AA00 gives a button's name, in its order: a unit type first (0x488B10), then the
-   substrings PREV, NEXT, ORDERS, BUILD (strstr, case-sensitive), then commonattribs bit 2 (a build
-   button whose name is no type: greyed), then STOP; any other button is an order. `unit` gets the
-   type's UnitName upper-cased, or "". */
+/* The role the build pages' handler 0x41AA00 gives a press of the button, in its order: the name
+   cut to 16 characters (0x49FED0), then the case-sensitive substrings PREV, NEXT, ORDERS, BUILD of
+   that cut name (strstr, 0x41AA75..0x41AB30) -- a pager or tab whatever else it names -- then a
+   unit type by that cut name (0x488B10 at 0x41AA39, tested at 0x41AB5D: the press arms it, or
+   queues a mobile one), whatever the commonattribs; then commonattribs bit 2 (a build button whose
+   name is no type) and STOP; any other button is an order. `unit` gets the type's UnitName
+   upper-cased, or "". */
 static int gadget_role(const SIDE* S, const SREC* g, char* unit, size_t nunit)
 {
     static const struct { const char* sub; int role; } subs[] = {
         { "PREV", WIKI_ROLE_PREV }, { "NEXT", WIKI_ROLE_NEXT }, { "ORDERS", WIKI_ROLE_ORDERS }, { "BUILD", WIKI_ROLE_BUILDTAB } };
+    char press[NAME_PRESS + 1];
     const SUNIT* u;
     int k;
     unit[0] = 0;
-    if (g->common & 4u && (u = unit_get(S, g->name)) != NULL) {
+    snprintf(press, sizeof press, "%s", g->name);
+    for (k = 0; k < 4; k++) if (strstr(press, subs[k].sub)) return subs[k].role;
+    if ((u = unit_get(S, press)) != NULL) {
         upcpy(unit, u->name, nunit);
         return WIKI_ROLE_BUILD;
     }
-    for (k = 0; k < 4; k++) if (strstr(g->name, subs[k].sub)) return subs[k].role;
     if (g->common & 4u) return WIKI_ROLE_BUILD;
     return strstr(g->name, "STOP") ? WIKI_ROLE_STOP : WIKI_ROLE_ORDER;
+}
+
+/* THE GREYED PASS 0x41B045..0x41B096, which runs on a numbered page only, over records 0 .. N-1
+   with N the header's +0xB6 = the sections less one (0x41B054, 0x41B094): a record of
+   commonattribs bit 2 there is greyed exactly when its whole name is no type (0x488B10 at 0x41B07A;
+   0x4A1200 writes record i), so the page's last record, and every record of page 0 and of a side's
+   screen, keeps the file's grey (after the download fill). `n` is the page's record count. */
+static int button_grey(const SIDE* S, const SREC* g, int page, int n)
+{
+    if (page > 0 && g->index < n - 1 && (g->common & 4u)) return !unit_get(S, g->name);
+    return (int)g->grey;
 }
 
 /* the panel's picture (the id-0 stage case 0x4A84F2..0x4A8658): `panel=` in the screen's bank,
@@ -2820,10 +2844,7 @@ static int screen_build(SIDE* S, const char* name, const char* file, int page, i
         }
         if (g->id != 1) continue;
         role = gadget_role(S, g, unit, sizeof unit);
-        /* the greyed pass 0x41B04E..0x41B096: on a numbered page a build button naming a type is
-           UN-greyed and any other greyed, whatever the file says (0x4A1200 both ways) */
-        if (role == WIKI_ROLE_BUILD && page > 0) grey = !unit[0];
-        else grey = g->grey || (role == WIKI_ROLE_BUILD && !unit[0]);
+        grey = button_grey(S, g, page, n);
         rect[0] = g->x; rect[1] = g->y; rect[2] = g->w; rect[3] = g->h;
         gadget_picture(S, g, role, unit, file, &pic, rect);
         x0 = rect[0] > 0 ? rect[0] : 0;
@@ -2936,10 +2957,9 @@ static int dl_mine(const SIDE* S, const SUNIT* u, int* mine)
 /* gfx.py `menu_of`: menu(T) for the side whose prefix is `prefix`, cached in `cache` (one SMENU a
    unit, shared by the sides of one prefix): the units of T's build buttons on its numbered pages
    as the layout reads them -- the page probe, else <prefix>DL, the download fill, the greyed pass
-   -- hidden and greyed buttons left out. On a numbered page a button names a type exactly when it
-   is live (the greyed pass 0x41B04E..0x41B096), so a button counts when it is a gadget (id 1)
-   with commonattribs bit 2, whose name is a type, and active. A page the layout would refuse
-   leaves T with no menu, as the layout then holds no page of T. Nothing is reported. */
+   -- hidden and greyed buttons left out: a button counts when it is a gadget (id 1), active, not
+   greyed (button_grey) and its role a build of a type (gadget_role). A page the layout would
+   refuse leaves T with no menu, as the layout then holds no page of T. Nothing is reported. */
 static const SMENU* menu_of(SIDE* S, SMENU* cache, int t, const char* prefix, int* mine)
 {
     SMENU* m = &cache[t];
@@ -2965,9 +2985,12 @@ static const SMENU* menu_of(SIDE* S, SMENU* cache, int t, const char* prefix, in
         }
         fill_downloads(S, r, n, p, mine, nmine, file);
         for (i = 1; i < n; i++) {
+            char unit[WIKI_SIDE_NAME];
             const SUNIT* x;
             int at;
-            if (!r[i].ok || r[i].id != 1 || !(r[i].common & 4u) || !r[i].active || !(x = unit_get(S, r[i].name))) continue;
+            if (!r[i].ok || r[i].id != 1 || !r[i].active || button_grey(S, &r[i], p, n) ||
+                gadget_role(S, &r[i], unit, sizeof unit) != WIKI_ROLE_BUILD || !unit[0] || !(x = unit_get(S, unit)))
+                continue;
             at = (int)(x - S->unit);
             if (menu_has(m, at)) continue;
             if (!side_grow(S, (void**)&m->u, &m->cap, m->n + 1, sizeof *m->u)) break;
