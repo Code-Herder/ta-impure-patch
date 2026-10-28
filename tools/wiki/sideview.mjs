@@ -3,12 +3,15 @@
    units' orders, and optionally the column composed from a pack as the stage draws it (side.js, as wiki.js sideArt).
 
    usage: node tools/wiki/sideview.mjs --dump FILE [--compose DIR --out PNG]
-          node tools/wiki/sideview.mjs --play ENTRY DEMO TICK --layout FILE [--compose DIR --out PNG]
+          node tools/wiki/sideview.mjs --play ENTRY DEMO TICK --layout FILE [--ctx FILE] [--compose DIR --out PNG]
      --dump FILE    Try it yourself as the game played it: the wiki's state dump (tagpu_wiki.json), its scene made with
-                    WikiSim.create on the dump's `layout` and fed its `try_log` at the logged ticks, up to its tick --
-                    simparity.mjs --try's replay, whose hash the dump's must equal before this view describes the game
+                    WikiSim.create on the dump's `layout` in the dump's `ctx` (side, interface type, casting) and fed
+                    its `try_log` at the logged ticks, up to its tick -- simparity.mjs --try's replay, whose hash the
+                    dump's must equal before this view describes the game
      --play         a scripted demo (DEMO counts from 1) on the layout FILE (tagpu_wiki.layout.json; `null` for none),
                     played to TICK or to its end, as tagpu_wiki.shot holds it
+     --ctx FILE     the context --play plays in, as the dump's `ctx` writes it ({side, iface, casting}); sim.js's
+                    default (side 0, no casting, type 1) without it
      --compose DIR  the column through the pack in DIR (tools/wiki/sidepacks.py's gfx/side/<mod>/), with the entry's
                     minimap base, written to PNG at one pixel a game pixel (alpha 0 where nothing is painted)
 
@@ -38,7 +41,7 @@ if (argv.includes('--dump')) {
   entry = entryOf(dump.entry);
   const demo = entry.demos.find(d => d.id === dump.demo);
   if (!demo) fail(2, `no demo ${dump.entry}/${dump.demo}`);
-  sim = WikiSim.create(entry, demo, dump.layout ?? null);
+  sim = WikiSim.create(entry, demo, dump.layout ?? null, dump.ctx || undefined);
   for (const [t, kind, a, b] of dump.try_log) {
     while (sim.tick < t) sim.step();
     sim.input(kind === 'move' ? { move: [a, b] } : { [kind]: a });
@@ -51,7 +54,8 @@ if (argv.includes('--dump')) {
   entry = entryOf(id);
   const demo = entry.demos[Number(n) - 1];
   if (!demo) fail(2, `${id} has no demo ${n}`);
-  sim = WikiSim.play(entry, demo, JSON.parse(fs.readFileSync(lf, 'utf8')));
+  const cf = opt('--ctx');
+  sim = WikiSim.play(entry, demo, JSON.parse(fs.readFileSync(lf, 'utf8')), cf ? JSON.parse(fs.readFileSync(cf, 'utf8')) : undefined);
   while (!sim.done && sim.tick < Number(tick)) sim.step();
 } else fail(2, '--dump FILE or --play ENTRY DEMO TICK --layout FILE');
 

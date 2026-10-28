@@ -83,8 +83,9 @@ page, on the same launch as sp:
   (p6) Esc closes and frees the demo; reopened, the selection stands and the demo starts afresh.
 demos, on the same launch as sp:
   (d1) tagpu_wiki.check plays every demo to its end in the game, on the sidebar layout a demo would
-       start on, and every logged hash equals `node tools/wiki/simparity.mjs --hash --layout` on the
-       layout the game wrote beside it;
+       start on, on each of its sides at both interface types, and every logged hash equals `node
+       tools/wiki/simparity.mjs --hash --layout --side --iface` on the layout the game wrote beside it
+       (with --pack, the side pack of that layout, when it is the mod's);
   (d2) a demo runs about 30 ticks a second at 1x and twice that at 2x;
   (d3) play pauses (the tick stands), replay restarts, an ended demo holds its last frame and
        play starts it again;
@@ -187,8 +188,8 @@ Twilight), one game a setup, under the run lock (the plan's landing 6i; the side
        beside each (.screen.png); each stage's ground line, its types line (in 3D, and the boxes) and
        a whole periodic line of its frames;
   (b2) the check (tagpu_wiki.check): the layout every demo starts on is the mod's, its file
-       tagpu_wiki.layout.json equal to the pack's layout, and every demo's hash equal to
-       `simparity.mjs --hash --layout` of that file;
+       tagpu_wiki.layout.json equal to the pack's layout, and every demo's hash on each side at both
+       interface types equal to `simparity.mjs --hash --layout --pack --side --iface` of that file;
   (b3) Quick Build demo 1 held at tick 10 (the ARMCK selected, its first page at rest; TA Zero, which
        has no ARMCK page, its side's GEN): the presented frame's sidebar column, each client pixel
        mapped back to the texel its nearest sampling shows, equal to the composer on the pack for
@@ -725,13 +726,65 @@ def real_pointer(c, x, y):
     raise AssertionError(f"the real pointer reads {d['ptr'] if d else None}, not {want}")
 
 
-def simparity_hashes(layout):
-    """sim.js's hashes of every demo on the sidebar layout file `layout`, the one the game's check
-    played on and wrote (tagpu_wiki.layout.json: the running mod's, or the fixture)."""
-    r = subprocess.run(["node", str(TREE / "tools/wiki/simparity.mjs"), "--hash", "--layout", str(layout)],
-                       capture_output=True, text=True, timeout=300)
-    assert r.returncode == 0, f"simparity --hash: {r.stderr.strip()}"
-    return dict(ln.split() for ln in r.stdout.splitlines() if ln.strip())
+# a line of the game's check (tagpu_wiki.c check): `<entry>/<demo>/<side>/<iface> <hash>`, or the same key and
+# `did not start - <why>` for a demo the DLL's loader or sim refused
+CHECK_LINE = re.compile(r"wiki check: (\S+?/\S+?/\d+/\d+) (?:([0-9a-f]{16})|did not start - .*)$")
+REFUSED = "refused"
+
+
+def check_hashes(lines):
+    """The game's check as `{entry/demo/side/iface: hash}`, REFUSED for a demo that did not start."""
+    out = {}
+    for ln in lines:
+        if (m := CHECK_LINE.search(ln)):
+            out[m.group(1)] = m.group(2) or REFUSED
+    return out
+
+
+def simparity_hashes(layout, pack=None):
+    """sim.js's hashes of every demo in every context the game's check plays (tagpu_wiki.c check): each side of the
+    sidebar layout file `layout` (tagpu_wiki.layout.json, the one the check played on and wrote: the running mod's,
+    the fixture, or null and one side) at Interface Type 0 and 1, with that side's casting from the side pack `pack`
+    when the layout is the mod's -- the check gives a casting on the mod's layout only. Keyed as check_hashes keys
+    the game's lines; REFUSED where sim.js refuses the demo."""
+    lay = json.loads(Path(layout).read_text())
+    want = {}
+    for k in range(len(lay["sides"]) if lay else 1):
+        for i in (0, 1):
+            cmd = ["node", str(TREE / "tools/wiki/simparity.mjs"), "--hash", "--layout", str(layout), "--side", str(k),
+                   "--iface", str(i), *(["--pack", str(pack)] if pack else [])]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            assert r.returncode == 0, f"simparity --hash --side {k} --iface {i}: {r.stderr.strip()}"
+            for ln in r.stdout.splitlines():
+                if ln.strip():
+                    key, val = ln.split(None, 1)
+                    want[f"{key}/{k}/{i}"] = REFUSED if val.startswith("refused") else val.strip()
+    return want
+
+
+def check_against(got, want, what):
+    """The game's check equal to sim.js's, key for key: the same contexts played, each hash equal, and a demo
+    refused on one side exactly when it is on the other. A difference fails naming its keys."""
+    missing, extra = sorted(set(want) - set(got)), sorted(set(got) - set(want))
+    differ = sorted(k for k in set(want) & set(got) if got[k] != want[k])
+    assert not (missing or extra or differ), \
+        f"{what} the game's check and simparity --hash differ: " + "; ".join(
+            f"{name} {', '.join(f'{k} (game {got.get(k)}, sim.js {want.get(k)})' for k in keys[:12])}"
+            f"{f' and {len(keys) - 12} more' if len(keys) > 12 else ''}"
+            for name, keys in (("not played in the game:", missing), ("played only in the game:", extra),
+                               ("differ:", differ)) if keys)
+    return len(want)
+
+
+def pack_for_layout(layout):
+    """The side pack whose layout is the game's (tagpu_wiki.layout.json), whose castings the check plays on the mod's
+    layout: the one pack under SIDE_PACKS with the same layout, or a failure naming why."""
+    game = layout_norm(json.loads(Path(layout).read_text()))
+    hits = [d for d in sorted(SIDE_PACKS.glob("*")) if (d / "side.json").is_file()
+            and layout_norm(json.loads((d / "side.json").read_text())["layout"]) == game]
+    assert len(hits) == 1, (f"the game's layout {layout} is the layout of {len(hits)} side packs "
+                            f"({', '.join(d.name for d in hits) or 'none: tools/wiki/sidepacks.py builds them'})")
+    return hits[0]
 
 
 def tick_rate(c, seconds=4.0):
@@ -808,13 +861,13 @@ def demos(c, shots, res):
         assert time.monotonic() < end, "(d1) no `wiki check: N demos played` line in 120 s"
         time.sleep(0.5)
     lay = c.found(start, r"wiki check: the sidebar layout is ")
-    print(f"wiki demos: (d1) {lay.split('wiki check: ', 1)[1] if lay else 'no sidebar layout line'}")
-    want = simparity_hashes(c.gamedir / "tagpu_wiki.layout.json")
-    got = dict(m.groups() for ln in c.log[start:] if (m := re.search(r"wiki check: (\S+/\S+) ([0-9a-f]{16})$", ln)))
-    differ = sorted(k for k in want if got.get(k) != want[k])
-    assert not differ and len(got) == len(want), \
-        f"(d1) the game's hashes differ from simparity --hash for {differ or sorted(set(got) ^ set(want))}"
-    print(f"wiki demos: (d1) {line.split('wiki check: ', 1)[1]}; all {len(want)} hashes equal simparity --hash")
+    assert lay, "(d1) no `wiki check: the sidebar layout is` line"
+    print(f"wiki demos: (d1) {lay.split('wiki check: ', 1)[1]}")
+    layf = c.gamedir / "tagpu_wiki.layout.json"
+    pack = pack_for_layout(layf) if "the mod's" in lay else None
+    n = check_against(check_hashes(c.log[start:]), simparity_hashes(layf, pack), "(d1)")
+    print(f"wiki demos: (d1) {line.split('wiki check: ', 1)[1]}; all {n} hashes (every side at both interface types"
+          f"{f', with {pack.name} castings' if pack else ''}) equal simparity --hash")
 
     d = c.open_wiki(expect_pause=True)
     d = wait_dump(c, lambda d: d["drawn_open"] and d["sim"], "(d2) the page was not drawn")
@@ -934,14 +987,17 @@ def try_view(c, d, what):
     return json.loads(r.stdout)
 
 
-def view_side(lay, sv, what):
-    """The layout side a view of the sidebar shows, as its `index` names it (sim.js view.side.index): its types hold
-    the shown builder's pages and its GEN is the ORDERS tab's screen. The view is sideview.mjs's replay of the game's
-    Try it, so this is the side the replay plays, which is the game's as long as the two are given the same context:
-    today neither the DLL's sim nor the dump carries one (the per-mod tutorials' parts 2B and 2E), and both play layout
-    side 0; once the dump carries the player's side, the replay plays it and this reads it."""
-    k = sv.get("index") if sv else None
-    assert isinstance(k, int) and 0 <= k < len(lay["sides"]), f"{what}: the view names no side of the layout: {sv}"
+def view_side(d, sv, what):
+    """The layout side the game's wiki plays, from its state dump `d`: `ctx.side`, the side its simulation was made
+    for, which on the mod's layout is the engine's own (`engine_side`, the controlled player's PlayerInfo+0x95). Its
+    types hold the shown builder's pages and its GEN is the ORDERS tab's screen. The view `sv` is sideview.mjs's replay
+    of the dump, made with the same ctx, so it must show that side too."""
+    lay, ctx = d["layout"], d.get("ctx") or {}
+    k = ctx.get("side")
+    assert isinstance(k, int) and 0 <= k < len(lay["sides"]), f"{what}: the dump's ctx names no side of the layout: {ctx}"
+    if d["layout_src"] == "mod":
+        assert k == d["engine_side"], f"{what}: the wiki plays side {k} on the mod's layout, the engine's is {d['engine_side']}"
+    assert sv and sv.get("index") == k, f"{what}: sim.js's replay shows side {sv and sv.get('index')}, the game side {k}: {sv}"
     return lay["sides"][k]
 
 
@@ -997,8 +1053,9 @@ class Stage:
         to T's page (a tie goes to NEXT, as the build trip goes), then T's button. The page reached
         and the mode armed are read back from the simulation."""
         v = self.view(what)
-        sv, lay = v["side"], self.c.dump()["layout"]
-        types = view_side(lay, sv, what)["types"]
+        d = self.c.dump()
+        sv, lay = v["side"], d["layout"]
+        types = view_side(d, sv, what)["types"]
         assert sv["type"] in types, f"{what}: the sidebar shows no builder's page: {sv}"
         pages = types[sv["type"]]["pages"]
         holds = [k for k, n in enumerate(pages, 1) if any(g["role"] == "build" and g.get("unit") == T
@@ -1077,7 +1134,7 @@ def side_controls(c, d):
     lay = d["layout"]
     v = st.view("(t2c)")
     sv = v["side"]
-    shown = view_side(lay, sv, "(t2c)")
+    shown = view_side(d, sv, "(t2c)")
     pages = shown["types"][sv["type"]]["pages"]
     n, page, screen = len(pages), sv["page"], sv["screen"]
     gen = shown["gen"]
@@ -1159,7 +1216,7 @@ def try_it(c, shot=None):
         d = wait_dump(c, lambda d: d["try"] and d["sim"] and d["side_h"] > 0, "(t1) Try it yourself did not take the stage")
         v = try_view(c, d, "(t1)")
         sv = v["side"]
-        types = view_side(d["layout"], sv, "(t1)")["types"]
+        types = view_side(d, sv, "(t1)")["types"]
         assert sv["page"] == 1 and sv["type"] in types and sv["screen"] == types[sv["type"]]["pages"][0], \
             f"(t1) {entry}/{demo}: Try it's sidebar is not its builder's first page: {sv}"
         print(f"wiki try: (t1) {entry}/{demo}: Try it took the stage, its sidebar the {d['layout_src']} layout's "
@@ -2009,15 +2066,13 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
     pack_lay = json.loads((pack / "side.json").read_text())["layout"]
     assert layout_norm(game_lay) == layout_norm(pack_lay), \
         f"(b2) the game's layout {layf} is not the pack's {pack / 'side.json'}"
-    want = simparity_hashes(layf)
     c.mark()
-    got = dict(m.groups() for ln in c.log[start:] if (m := re.search(r"wiki check: (\S+/\S+) ([0-9a-f]{16})$", ln)))
-    differ = sorted(k for k in want if got.get(k) != want[k])
-    assert not differ and len(got) == len(want), f"(b2) the game's hashes differ from simparity --hash for {differ}"
+    nhash = check_against(check_hashes(c.log[start:]), simparity_hashes(layf, pack), "(b2)")
     row["layout"] = {"screens": len(game_lay["screens"]), "height": game_lay["height"],
                      "types": {s["name"]: sorted(s["types"]) for s in game_lay["sides"]}}
     print(f"wiki mods: {row['setup']}: (b2) {src.split('wiki check: ', 1)[1]}, equal to the pack's "
-          f"({row['layout']}); {line.split('wiki check: ', 1)[1]}; all {len(want)} hashes equal simparity --hash")
+          f"({row['layout']}); {line.split('wiki check: ', 1)[1]}; all {nhash} hashes (every side at both interface "
+          f"types, with the pack's castings) equal simparity --hash")
 
     # (b3) the stage's column at a state, against the composer on the pack for the same view
     entry, demo, tick = SIDE_STATE
@@ -2032,8 +2087,11 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
     shot = out / f"stage-{entry}-d{demo}-t{tick}.window.png"
     window_grab(display, d, shot)
     comp = out / f"stage-{entry}-d{demo}-t{tick}.composed.png"
+    # the context the game's demo plays in, side, interface type and casting, for sim.js's play of it
+    ctxf = out / "stage-ctx.json"
+    ctxf.write_text(json.dumps(d["ctx"]))
     r = subprocess.run(["node", str(TREE / "tools/wiki/sideview.mjs"),
-                        *map(str, ("--play", entry, demo, tick, "--layout", layf, "--compose", pack, "--out", comp))],
+                        *map(str, ("--play", entry, demo, tick, "--layout", layf, "--ctx", ctxf, "--compose", pack, "--out", comp))],
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, f"sideview: {r.stderr.strip()}"
     v = json.loads(r.stdout)
@@ -2070,7 +2128,8 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
     # (b4) the demo TA Zero cannot reach, played: locked at its first build there, with the badge, and
     # playing on past it elsewhere
     entry, node, k, at = SIDE_LOCK
-    r = subprocess.run(["node", str(TREE / "tools/wiki/sideview.mjs"), *map(str, ("--play", entry, k + 1, at + 60, "--layout", layf))],
+    r = subprocess.run(["node", str(TREE / "tools/wiki/sideview.mjs"),
+                        *map(str, ("--play", entry, k + 1, at + 60, "--layout", layf, "--ctx", ctxf))],
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, f"sideview: {r.stderr.strip()}"
     v = json.loads(r.stdout)
