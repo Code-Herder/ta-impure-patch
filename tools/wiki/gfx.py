@@ -1461,7 +1461,7 @@ def fill_downloads(recs, page, entries, name, report):
 
 # ---- the cast rule: each side's own units for the casts a wiki demo plays
 #
-# research/notes/ingame-wiki-sidebar-plan.md decisions 14 and 20. A unit's place in a demo is its CAST; a side's answer
+# research/notes/ingame-wiki.md, the owner's decisions 14 and 20. A unit's place in a demo is its CAST; a side's answer
 # to every cast is its CASTING. The rule names no mod, lists no unit and reads no unit's `Side=`: it walks a side's
 # build menus breadth-first from the side's commander, so tech level ranks first and the mod's own menu order second,
 # and it tests each candidate's own FBI figures. What pins it: on the stock game it gives ARM exactly the types the

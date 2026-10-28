@@ -16,8 +16,8 @@
    drag); `lmb` stays for a press that is the left button in both types and none of the actions, placing an armed
    building. research/notes/ingame-wiki.md, *The data format*.
 
-   No demo writes `sidebar`, so each takes sim.js's default, decision 2 of
-   research/notes/ingame-wiki-sidebar-plan.md: the sidebar is shown when the scene gives the player a mobile builder.
+   No demo writes `sidebar`, so each takes sim.js's default, the owner's decision 2
+   in research/notes/ingame-wiki.md: the sidebar is shown when the scene gives the player a mobile builder.
    ARMCK and ARMACK stand in this entry's scene, so every demo here shows it. */
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
@@ -41,8 +41,8 @@ const units = {
   ARMPW: { cast: 'walker', footprint: [2, 2], buildTime: 1452, maxVelocity: 1.8, canstop: 1, name: 'Peewee', from: 'ARMPW.fbi' },
 };
 
-/* the map, 40 x 30 cells, 480 rows: as tall as stock TA's sidebar beside it (decision 9 of
-   research/notes/ingame-wiki-sidebar-plan.md). Deposits: A 5x5 (a Moho fits), B C E 3x3, S 3x3 between the map's
+/* the map, 40 x 30 cells, 480 rows: as tall as stock TA's sidebar beside it (the owner's
+   decision 9 in research/notes/ingame-wiki.md). Deposits: A 5x5 (a Moho fits), B C E 3x3, S 3x3 between the map's
    unbuildable top row and a finished ARMGEO (no Moho site over it is legal), D 3x3 under the player's finished
    ARMMEX, R 3x3 beside the broad metal band, one deposit in the black corner and one under grey fog. Vents: a free
    one, and the one under the ARMGEO. The metal ground and the fog cover whole tiles (even cells): the stage's ground

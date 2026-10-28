@@ -2911,7 +2911,7 @@ static int type_pages(SIDE* S, const char* tname, const int* mine, int nmine, in
 }
 
 /* ---- the cast rule (gfx.py `side_casting`; tagpu_wikiasset.h, THE CASTING) ----
-   research/notes/ingame-wiki-sidebar-plan.md decisions 14 and 20. Units are SIDE.unit indices
+   research/notes/ingame-wiki.md, the owner's decisions 14 and 20. Units are SIDE.unit indices
    throughout, so a name the layout cannot hold still has its place. */
 
 static const char* const CAST_NAME[WIKI_NCAST] = { "builder", "advbuilder", "mex", "moho", "geo", "walker", "tower", "wall",

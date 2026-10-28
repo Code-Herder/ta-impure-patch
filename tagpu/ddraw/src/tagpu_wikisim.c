@@ -1526,14 +1526,18 @@ static void select_units(WIKISIM* s, int shift);
 
 /* TYPE 0, a left click on the map with nothing armed: the release of a press that went down on the
    map and never became a box (0x499421..0x499441 call 0x498F70), so its order lands at the release
-   where type 1's lands at the press. DISASSEMBLED, not measured: the runner's measurement M3
-   checks the outcomes and their tick. In order: Quick Build's choice; else over a unit of the
+   where type 1's lands at the press. In order: Quick Build's choice; else over a unit of the
    player's, an unfinished building with a selected builder is assisted (cursor 6,
    0x43EDB6..0x43EE42) and any other is selected as a click selects (cursor 0xF, 0x48C7F0); else
    the selected mobile units of the player's move (0x48CF30, Shift appends), and with none nothing
-   happens. [INFERRED] that an unfinished building of the player's with no builder selected is
-   selected: 0x43EDB6 gives 0xF only over a finished unit (+0x104 == 0.0), so the engine may show
-   another cursor there. */
+   happens. MEASURED in game 2026-10-28 (stock ARM skirmish, an ARMCK selected): the move order
+   appears after the release, Quick Build takes a deposit and a vent, an unfinished ARMSOLAR is
+   assisted, a click on the ARMCK selects it, and the cursor is 14 over ground, a deposit and a
+   vent, 6 over the unfinished building and 15 over a finished unit of the player's. [INFERRED]
+   that an unfinished building of the player's with no builder selected is selected: 0x43EDB6
+   gives 0xF only over a finished unit (+0x104 == 0.0), so the engine may show another cursor
+   there. [INFERRED] that a unit of another player under the cursor gives the move: no measured
+   scene had one. */
 static void left_click(WIKISIM* s, int shift)
 {
     WIKIUNIT* u;
@@ -1547,10 +1551,12 @@ static void left_click(WIKISIM* s, int shift)
     } else move_order(s, shift);
 }
 
-/* TYPE 0, a right press on the map with nothing armed (0x499172..0x499196, DISASSEMBLED): with
-   Ctrl it calls 0x41CC60, which hands the mouse to a view mode (main+0x2CDF = 1, the camera
-   follow released, the cursor centred) that the stage, having no camera to move, does not model;
-   without Ctrl every unit is deselected (0x48BD00). */
+/* TYPE 0, a right press on the map with nothing armed (0x499172..0x499196, DISASSEMBLED): without
+   Ctrl every unit is deselected (0x48BD00), at the press (MEASURED 2026-10-28: the ARMCK was no
+   longer selected before the release). With Ctrl it calls 0x41CC60, which hands the mouse to a
+   view mode (main+0x2CDF = 1, the camera follow released, the cursor centred) that the stage,
+   having no camera to move, does not model; the selection stays (MEASURED), and main+0x2CDF read
+   0 after the press, so the view mode itself was not seen. */
 static void right_press0(WIKISIM* s)
 {
     int i;

@@ -4,8 +4,8 @@
    without a pack, or under the whitebox look, it draws the whitebox column instead (stage.js, drawSide).
 
    compose() is a pure integer function: art, layout and view in, palette indices and coverage out. The DLL's
-   tagpu_wikiside.c is to be its port, compared byte for byte (research/notes/ingame-wiki-sidebar-plan.md and its
-   spec, section 5.2). Every frame rect is checked against the sheet when the pack loads (read), so compose never
+   tagpu_wikiside.c is to be its port, compared byte for byte (research/notes/ingame-wiki.md, *The left sidebar on the
+   stage*, "How it is drawn"). Every frame rect is checked against the sheet when the pack loads (read), so compose never
    reads outside the sheet, and every write is clipped to the column.
 
    Runs in a page (the global WikiSide) and under node (module.exports), as sim.js does. */

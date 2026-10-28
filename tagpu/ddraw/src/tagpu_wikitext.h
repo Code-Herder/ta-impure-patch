@@ -4,7 +4,7 @@
    is its specification, rule for rule. An entry's title, subtitle and paragraphs, its demos' titles
    and their captions name units by cast ({builder}) and mouse buttons by action ({order}); the fill
    puts in the display names of the side the tutorial plays and the words of the player's interface
-   type (research/notes/ingame-wiki-sidebar-plan.md, decisions 16 and 18). Filling is presentation
+   type (research/notes/ingame-wiki.md, the owner's decisions 16 and 18). Filling is presentation
    only: the simulation and its hash keep the raw text.
 
    THE TOKEN RULE, text.js's: a token is a "{" and everything up to the next "}"; a "}" on its own,

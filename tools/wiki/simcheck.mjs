@@ -523,7 +523,8 @@ const BUILDSHAPES_RULES = {
   },
 };
 
-/* ---- the sidebar (research/notes/ingame-wiki-sidebar-plan.md; sim.js "the sidebar's rules" and "the build trip") ----
+/* ---- the sidebar (research/notes/ingame-wiki.md, *The left sidebar on the stage*; sim.js "the sidebar's rules" and
+   "the build trip") ----
    Every build input of a demo played with a layout is a trip: it is never locked on the fixture, it arms its
    building on the release at t + TRIP_UP and not before, the cursor is back where it stood at t + TRIP, and it goes
    through the pages written here. A path is the page shown at the build's tick, then each pager press up to the
@@ -884,7 +885,8 @@ const SIDE_RULES = {
 
 /* ---- the context (sim.js `context`, `resolve`, `binder`; decisions 12-18): the Interface Type's rows, the resolved
    script's data rule, G cells, locks for an unbound cast, and what a context or a casting is refused for. Each case
-   names its context; the type-0 rows are DISASSEMBLED and await the runner's M3, so these pin the sim to the spec. */
+   names its context. The type-0 rows were MEASURED in game on 2026-10-28 except two [INFERRED] ones (sim.js
+   `leftClick`), so these pin the sim to the engine's outcomes. */
 const T0 = { side: 0, casting: null, iface: 0 }, T1 = { side: 0, casting: null, iface: 1 };
 const click = (s, at, b, mods = []) => { s.input({ move: at }); for (const k of mods) s.input({ down: k }); s.input({ down: b }); s.input({ up: b }); for (const k of mods) s.input({ up: k }); };
 const refuses = f => { try { f(); return false; } catch (e) { return e.message; } };

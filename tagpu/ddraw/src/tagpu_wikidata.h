@@ -48,7 +48,7 @@ enum { WIKI_KEY_SHIFT, WIKI_KEY_ALT, WIKI_KEY_CTRL, WIKI_KEY_Z, WIKI_KEY_X, WIKI
        WIKI_ACT_SELECT = WIKI_NKEYS, WIKI_ACT_ORDER, WIKI_ACT_CANCEL, WIKI_NKEYNAMES };
 
 /* sim.js's CASTS, in its order: a unit's place in the demos, which a side's casting answers with
-   one of the mod's types (research/notes/ingame-wiki-sidebar-plan.md, decisions 13-15) */
+   one of the mod's types (research/notes/ingame-wiki.md, the owner's decisions 13-15) */
 enum { WIKI_CAST_BUILDER, WIKI_CAST_ADVBUILDER, WIKI_CAST_MEX, WIKI_CAST_MOHO, WIKI_CAST_GEO,
        WIKI_CAST_WALKER, WIKI_CAST_TOWER, WIKI_CAST_WALL, WIKI_CAST_SOLAR, WIKI_NCAST };
 /* A footprint's side, each axis, in a casting, and the width of a G row's bit mask: sim.js's
@@ -243,7 +243,7 @@ int tagpu_wikidata_casting(const TJV* v, WIKICASTING* c, char* err, size_t errn)
 /* ---- the left sidebar's layout: the running mod's (tagpu_wikiasset.c reads it from the mod's
    .GUI files) or the fixture's (art/wiki/side/fixture.json, our own numbers, in WIKIPAK). The
    same schema as sim.js's checkLayout, which is its specification; research/notes/
-   ingame-wiki-sidebar-plan.md says what the sidebar is.
+   ingame-wiki.md, *The left sidebar on the stage*, says what the sidebar is.
 
    Screens are referred to by their index in `screen`, never by a pointer, so a layout is one
    block with no pointers in it: a producer fills it, tagpu_wikilayout_check bounds it, and from

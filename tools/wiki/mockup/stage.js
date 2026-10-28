@@ -43,7 +43,7 @@ const WikiStage = (() => {
   // fog over ground, the map's and the minimap's: grey half over seen-before ground, black over unexplored
   const fogColour = f => f === 2 || f === 'black' ? 'rgba(0,0,0,.9)' : 'rgba(128,128,128,.5)';
 
-  /* ---- THE GAME'S LEFT SIDEBAR (research/notes/ingame-wiki-sidebar-plan.md; spec section 5) ----
+  /* ---- THE GAME'S LEFT SIDEBAR (research/notes/ingame-wiki.md, *The left sidebar on the stage*) ----
      The column is x in [-128, 0) of the stage at one game pixel a world unit, whatever the HUD scale (decision 8), and
      v.side.h rows tall. In the game look it is one image (side.js composes it from the mod's pack); otherwise it is
      this whitebox, every element an op: the column, the minimap -- its well, the ground's shades and the fog one

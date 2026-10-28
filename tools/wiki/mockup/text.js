@@ -1,6 +1,6 @@
 /* text.js -- the wiki's shown text, filled in. An entry's title, subtitle and paragraphs, its demos' titles and their
    captions name units by cast ({builder}) and mouse buttons by action ({order}); fillText puts in the display names of
-   the side the tutorial plays and the buttons of the player's interface type (research/notes/ingame-wiki-sidebar-plan.md,
+   the side the tutorial plays and the buttons of the player's interface type (research/notes/ingame-wiki.md, the owner's
    decisions 16 and 18). Filling is presentation only: the sim and its hash keep the raw text, so neither depends on the
    language, the side's names or the interface type. tagpu_wikitext.c fills by the same rules and the same words.
 

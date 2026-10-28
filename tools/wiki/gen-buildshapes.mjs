@@ -17,8 +17,8 @@
    press that drops a drag); `lmb` stays for a press that is the left button in both types and none of the actions,
    placing an armed building and dragging a shape. research/notes/ingame-wiki.md, *The data format*.
 
-   No demo writes `sidebar`, so each takes sim.js's default, decision 2 of
-   research/notes/ingame-wiki-sidebar-plan.md: the sidebar is shown when the scene gives the player a mobile builder.
+   No demo writes `sidebar`, so each takes sim.js's default, the owner's decision 2
+   in research/notes/ingame-wiki.md: the sidebar is shown when the scene gives the player a mobile builder.
    ARMCK stands in this entry's scene, so every demo here shows it. */
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
@@ -38,8 +38,8 @@ const units = {
   ARMSOLAR: { cast: 'solar', footprint: [5, 5], buildTime: 2495, name: 'Solar Collector', from: 'ARMSOLAR.fbi' },
 };
 
-/* the map, 40 x 30 cells of plain ground, 480 rows: as tall as stock TA's sidebar beside it (decision 9 of
-   research/notes/ingame-wiki-sidebar-plan.md). ARMCK stands left of centre; a finished ARMSOLAR (cells 20..24 x
+/* the map, 40 x 30 cells of plain ground, 480 rows: as tall as stock TA's sidebar beside it (the owner's
+   decision 9 in research/notes/ingame-wiki.md). ARMCK stands left of centre; a finished ARMSOLAR (cells 20..24 x
    9..13) is the building to ring and the obstacle a line is refused on. Every demo plays in rows 0..23; rows 24..29
    are plain ground. */
 const scene = {
