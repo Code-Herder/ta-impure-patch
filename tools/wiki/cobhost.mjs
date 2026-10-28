@@ -14,6 +14,7 @@
    forPack(pack) is the object sim.js takes as ctx.cob (research/notes/ingame-wiki-cob-plan.md, *The wiki host*): its
    open(names) makes a host for those type names, each script read from that gfx pack, and returns the world, whose
    calls answer the host's state. */
+import fs from 'node:fs';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { createRequire } from 'node:module';
@@ -74,6 +75,25 @@ export function cobHost() {
   return {
     request,
     forPack: pack => ({ open: names => cobWorld(request, names.map(n => n && { name: n, pack: path.relative(ROOT, path.resolve(ROOT, pack)) })) }),
+    // each type's script from the first of `packs` whose scene names it, as scripts(packs) lists them
+    forPacks: packs => {
+      const has = scripts(packs);
+      return { open: names => cobWorld(request, names.map(n => has[n] ? { name: n, pack: has[n].pack } : null)) };
+    },
     close: () => { worker.postMessage('close'); },
   };
+}
+
+/* every type a script of `packs` (gfx pack folders) is for, the first pack's where two name one: name -> {pack (repository-
+   relative), cob (the script's absolute path), visible (its posed model's visible flags)} */
+export function scripts(packs) {
+  const has = {};
+  for (const pack of packs) {
+    const dir = path.resolve(ROOT, pack), file = path.join(dir, 'scene.json');
+    if (!fs.existsSync(file)) continue;
+    const meshes = (JSON.parse(fs.readFileSync(file, 'utf8')).units || {}).meshes || {};
+    for (const [name, m] of Object.entries(meshes))
+      if (m.script && !has[name]) has[name] = { pack: path.relative(ROOT, dir), cob: path.join(dir, m.script.file), visible: m.script.visible };
+  }
+  return has;
 }

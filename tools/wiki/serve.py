@@ -12,7 +12,7 @@ wiki runs them (research/notes/ingame-wiki-cob-plan.md, *The wiki host*). The pa
 synchronous requests; tools/wiki/cobhost.mjs gives node's checks the same calls over --stdio.
 
 A request is a JSON object with `op`:
-  new     {"types": [{"name", "pack"} | null, ...]} -> {"world": id, "notes": [...], ...state}: a host for the types, in the
+  new     {"types": [{"name", "pack"} | null, ...]} -> {"world": id, ...state}: a host for the types, in the
           simulation's type order; each named type's script and posed order are read from the gfx pack folder
           `pack` (a path under tools/wiki/mockup/gfx/, which tools/wiki/gfx.py writes: units/<type>.cob and the
           scene.json mesh's `script`), a type without them (null, or none in the pack) runs no script
@@ -24,7 +24,8 @@ A request is a JSON object with `op`:
   free    {"world"} -> {}
 `facts` is a list of [unit, owner, x, z, left, health] rows (tagpu_wikicob.h WIKICOBFACT; `left` a number the
 float32 holds exactly). The state every call answers is {"values": {unit: [the 21 values]}, "resting": [units],
-"hash": 16 hex digits (tagpu_wikicob_hash from the FNV-1a offset basis)}, every handle from 1 to the last.
+"notes": [each type's quarantine note, "" for none], "hash": 16 hex digits (tagpu_wikicob_hash from the FNV-1a
+offset basis)}, every handle from 1 to the last.
 An error answers {"error": why}."""
 import argparse
 import ctypes as C
@@ -82,7 +83,7 @@ class Host:
 
     def __init__(self):
         self.lib = library()
-        self.worlds = {}            # id -> (handle, units)
+        self.worlds = {}            # id -> [handle, the last unit's handle, the type count]
         self.next = 1
         self.lock = threading.Lock()
 
@@ -117,12 +118,11 @@ class Host:
             raise ValueError(err.value.decode("latin-1"))
         wid = self.next
         self.next += 1
-        self.worlds[wid] = [h, 0]
+        self.worlds[wid] = [h, 0, len(specs)]       # handle, the last unit's handle, the type count
         while len(self.worlds) > WORLDS_MAX:
             old = min(self.worlds)
             self.lib.tagpu_wikicob_free(self.worlds.pop(old)[0])
-        notes = [self.lib.tagpu_wikicob_note(h, i).decode("latin-1") for i in range(len(specs))]
-        return {"world": wid, "notes": notes, **self.state(self.worlds[wid])}
+        return {"world": wid, **self.state(self.worlds[wid])}
 
     def facts(self, rows):
         arr = (Fact * max(1, len(rows)))()
@@ -131,10 +131,11 @@ class Host:
         return arr, len(rows)
 
     def state(self, w):
-        h, n = w
+        h, n, ntypes = w
         values = {str(u): [self.lib.tagpu_wikicob_value(h, u, k) for k in range(VALUES)] for u in range(1, n + 1)}
         resting = [u for u in range(1, n + 1) if self.lib.tagpu_wikicob_resting(h, u)]
-        return {"values": values, "resting": resting,
+        notes = [self.lib.tagpu_wikicob_note(h, i).decode("latin-1") for i in range(ntypes)]
+        return {"values": values, "resting": resting, "notes": notes,
                 "hash": f"{self.lib.tagpu_wikicob_hash(h, FNV_BASIS):016x}"}
 
     def call(self, req):

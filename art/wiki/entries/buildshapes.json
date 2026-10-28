@@ -133,7 +133,7 @@
         {"at":440,"up":"shift"},
         {"at":440,"caption":"Let go of Shift: the building is put away, as in TA."}
       ],
-      "end": 590
+      "end": 740
     },
     {
       "id": "line",
@@ -414,7 +414,7 @@
         {"at":260,"up":"shift"},
         {"at":260,"caption":"Released: twelve queued. The {builder} builds them in that order."}
       ],
-      "end": 590
+      "end": 740
     },
     {
       "id": "hollow",
@@ -644,7 +644,7 @@
         {"at":198,"up":"shift"},
         {"at":198,"caption":"Press and release without dragging: the ring is ordered."}
       ],
-      "end": 528
+      "end": 618
     },
     {
       "id": "ringqueued",

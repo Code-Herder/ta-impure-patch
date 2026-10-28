@@ -4,7 +4,8 @@
    cobWorld(request, specs) makes a host for the simulation's types (specs[i] {name, pack} or null, in the
    simulation's type order) and returns its world, whose calls are tagpu_wikicob.h's: spawn, call, slice, remove,
    each sent through `request` (one synchronous call answering serve.py's JSON), and value, resting, hash and notes
-   read from the state the last call answered. `request` is a synchronous XMLHttpRequest to POST /cob in the page
+   (each type's quarantine note, "" for none; a type is quarantined when it is made or when its script faults) read
+   from the state the last call answered. `request` is a synchronous XMLHttpRequest to POST /cob in the page
    (cobPage) and tools/wiki/cobhost.mjs's worker under node.
 
    Runs in a page (the global WikiCob) and under node (module.exports). */
@@ -17,7 +18,7 @@ const WikiCob = (() => {
     let st = made;
     const take = got => { st = got; return got; };
     return {
-      notes: made.notes,
+      get notes() { return st.notes; },
       spawn: (type, facts) => take(request({ op: 'spawn', world: id, type, facts })).unit,
       call: (unit, script, how, args, facts) =>
         take(request({ op: 'call', world: id, unit, script, how: HOW[how], args: args || [], facts })).r,

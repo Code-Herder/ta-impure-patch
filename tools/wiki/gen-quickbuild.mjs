@@ -147,7 +147,7 @@ demo('bestfit', 'The best extractor that fits', { selected: ['ck', 'ack'], curso
   .say('{builder} and {advbuilder} selected: together they can build both extractors.').wait(25)
   .to([248, 284], 50).say('The {moho} fits this deposit, and it is the strongest: the {advbuilder} will build it.').wait(55)
   .path([[210, 150], [266, 40]], 60).say('This deposit is wedged against the edge: no room for the {moho}, so the {mex}.').wait(55)
-  .click('order').say('{Order}: the {builder} builds the {mex}, the {advbuilder} helps.').wait(100)
+  .click('order').say('{Order}: the {builder} builds the {mex}, the {advbuilder} helps.').wait(20).until(WAIT_MAX).wait(30)
   .to([248, 284], 60).wait(10).click('order').say('Back on the big deposit: the {moho}, and the {builder} helps.'));
 
 /* The claim is that the builder holds all three at once, so the third click must land before the first extractor is

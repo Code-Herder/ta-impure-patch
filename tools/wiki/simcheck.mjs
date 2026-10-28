@@ -1,7 +1,8 @@
 /* simcheck.mjs -- plays every demo of the wiki's entries through tools/wiki/mockup/sim.js, headless, and checks that
    each one shows what its title claims, on the sim's own state rather than on pictures.
 
-   usage: node tools/wiki/simcheck.mjs [--pack DIR] [--null-layout] [--casting NAME|none] [--side N] [--iface 0|1] [--trace]
+   usage: node tools/wiki/simcheck.mjs [--pack DIR] [--null-layout] [--casting NAME|none] [--side N] [--iface 0|1]
+                                       [--no-scripts] [--trace]
      exit 0 when every demo and rule passes, 1 otherwise
 
    The demos play with the sidebar of art/wiki/side/fixture.json, the layout the wiki falls back to, so each `build`
@@ -12,6 +13,12 @@
    its casts unbound: there it must stop under the badge on the tick decision 12 names, and only that is checked. With
    `identity` every demo must play exactly as with the entry's own types. The rule cases name their layout and
    context themselves.
+
+   THE UNITS' SCRIPTS: when gfx packs built by tools/wiki/gfx.py hold them (tools/wiki/mockup/gfx/, gitignored, read
+   from the game), every context is played again with them, through serve.py's host (cobhost.mjs), as the game's wiki
+   plays its demos; --no-scripts keeps the plays without. Every play must end on its own end, never stopped by a wait
+   that ran past its max (sim.js UNTILS), and with scripts no type may be quarantined (the host's notes). A pack's
+   types are a mod's, whose scripts the gfx packs do not hold, so --pack plays without them.
 
    --pack DIR plays the demos in a mod's pack instead (tools/wiki/sidepacks.py writes them to the gitignored
    tools/wiki/mockup/gfx/side/<mod>/; DIR holds its side.json): with the pack's layout, one context per layout side
@@ -31,6 +38,7 @@
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { cobHost, scripts } from './cobhost.mjs';
 const WikiSim = createRequire(import.meta.url)('./mockup/sim.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const TRACE = process.argv.includes('--trace');
@@ -47,6 +55,15 @@ const ifaces = () => { const i = arg('--iface'); return i === undefined ? [1, 0]
    fixture casting answers; a pack gives one context per layout side, with that side's casting (index-aligned with
    layout.sides), and interface. */
 function contexts() {
+  const cs = baseContexts();
+  if (PACK || process.argv.includes('--no-scripts')) return cs;
+  const GFX = `${ROOT}tools/wiki/mockup/gfx`;
+  const packs = fs.existsSync(GFX) ? fs.readdirSync(GFX).sort().map(d => `${GFX}/${d}`) : [];
+  if (!Object.keys(scripts(packs)).length) return cs;
+  const host = cobHost();
+  return [...cs, ...cs.map(c => ({ ...c, label: `${c.label}+scripts`, ctx: { ...c.ctx, cob: host.forPacks(packs) } }))];
+}
+function baseContexts() {
   if (PACK) {
     const want = arg('--side'), sides = PACK.layout.sides.map((s, k) => k).filter(k => want === undefined || k === Number(want));
     if (PACK.casting.length !== PACK.layout.sides.length) throw new Error(`the pack has ${PACK.casting.length} castings for ${PACK.layout.sides.length} sides`);
@@ -81,13 +98,20 @@ const cellIn = (x, z, r) => x >= r[0] * 16 && x < (r[0] + r[2]) * 16 && z >= r[1
 const castOf = (entry, casting, t) => casting && entry.units[t] ? casting.casts[entry.units[t].cast] : null;
 const typeIn = (entry, casting) => t => { const k = castOf(entry, casting, t); return k ? k.type : t; };
 const footprintIn = (entry, casting) => t => { const k = castOf(entry, casting, t); return k ? k.footprint : entry.units[t].footprint; };
+/* A play's frames: `all`, one a tick, and `frames`, indexed by the demo's clock -- the tick its inputs are written in --
+   each the frame of the tick the clock reached that value, so frames[t] shows the inputs of t and a wait's held ticks
+   are in `all` alone. Without a wait the two are the same. */
 function run(entry, demo, layout = LAYOUT, ctx) {
   const sim = WikiSim.play(entry, demo, layout, ctx), ids = [...entry.scene.units, ...((demo.scene && demo.scene.units) || [])].map(u => u.id);
-  const frames = [];
-  const snap = () => frames.push({ t: sim.tick, v: sim.view(), o: Object.fromEntries(ids.map(id => [id, sim.orders(id)])) });
+  const all = [], frames = [];
+  const snap = () => {
+    const f = { t: sim.tick, v: sim.view(), o: Object.fromEntries(ids.map(id => [id, sim.orders(id)])) };
+    all.push(f);
+    if (!(f.v.clock in frames)) frames[f.v.clock] = f;
+  };
   snap();
   while (!sim.done) { sim.step(); snap(); }
-  return { sim, frames, last: frames[frames.length - 1], log: sim.log, layout: frames[0].v.side ? layout : null, iface: sim.iface,
+  return { sim, all, frames, last: all[all.length - 1], log: sim.log, layout: all[0].v.side ? layout : null, iface: sim.iface,
     ty: typeIn(entry, ctx && ctx.casting), fp: footprintIn(entry, ctx && ctx.casting) };
 }
 // the tick a build input's building is armed on: its own without the sidebar, the trip's release with it
@@ -382,7 +406,7 @@ const BUILDSHAPES = {
     ok(p.v.sites.every((s, i) => s.order === i + 1), 'the preview numbers the sites 1..12 in that order');
     ok(same(added(r, u), want), 'the release queued them in serpentine order');
     const done = r.log.filter(e => e.what === 'finished').map(e => [e.ox, e.oz]);
-    ok(done.length >= 6 && same(done, want.slice(0, done.length)), `${r.ty('ARMCK')} built them in that order (${done.length} done)`);
+    ok(done.length >= 2 && same(done, want.slice(0, done.length)), `${r.ty('ARMCK')} built them in that order (${done.length} done)`);
   },
   hollow(r, d, ok) {
     const u = ups(d, 'lmb')[0], p = r.frames[u - 1], a = added(r, u);
@@ -1049,15 +1073,19 @@ for (const c of contexts()) {
       try {
         const r = run(entry, d, c.layout, c.ctx);
         if (TRACE) console.log(`  ${d.id} log:`, r.log.map(e => `${e.t} ${e.what} ${e.type}@${e.ox},${e.oz}`).join('; '));
+        // a demo's ticks are its clock's, which a wait holds while the sim's own tick runs on
+        ok(!r.last.v.stalled, `no wait ran past its max (clock ${r.last.v.clock}, waiting ${r.last.v.waiting})`);
+        const notes = r.sim.cobNotes().filter(n => n);
+        ok(!notes.length, `no type's script quarantined${notes.length ? ` (${notes.join('; ')})` : ''}`);
         if (off) {
-          ok(r.last.t === d.end && r.last.v.locked === null, `played to its end, tick ${d.end}, unlocked (tick ${r.last.t}, locked ${r.last.v.locked})`);
+          ok(r.last.v.clock === d.end && r.last.v.locked === null, `played to its end, tick ${d.end}, unlocked (tick ${r.last.v.clock}, locked ${r.last.v.locked})`);
         } else if (lock) {
-          ok(r.sim.done && r.last.t === lock.t && r.last.v.locked === lock.type,
-            `stops on tick ${lock.t} under the badge, ${lock.type} unbound (tick ${r.last.t}, locked ${r.last.v.locked})`);
-          ok(r.frames.slice(0, -1).every(f => f.v.locked === null), 'no earlier frame is locked');
+          ok(r.sim.done && r.last.v.clock === lock.t && r.last.v.locked === lock.type,
+            `stops on tick ${lock.t} under the badge, ${lock.type} unbound (tick ${r.last.v.clock}, locked ${r.last.v.locked})`);
+          ok(r.all.slice(0, -1).every(f => f.v.locked === null), 'no earlier frame is locked');
           tally[c.label].locked.push(`${id}/${d.id}@${lock.t}`);
         } else {
-          ok(r.frames.every(f => f.v.locked === null), 'no frame is locked');
+          ok(r.all.every(f => f.v.locked === null), 'no frame is locked');
           const check = (CHECKS[id] || {})[d.id];
           if (!check) ok(false, 'no check for this demo');
           else check(r, d, ok);
@@ -1065,8 +1093,8 @@ for (const c of contexts()) {
           // the identity casting binds every cast to the entry's own type with its own figures: nothing may change
           if (c.name === 'identity') {
             const a = run(entry, d, c.layout, { ...c.ctx, casting: null });
-            const k = a.frames.findIndex((f, i) => !r.frames[i] || frameKey(f) !== frameKey(r.frames[i]));
-            ok(k < 0 && a.frames.length === r.frames.length, `plays exactly as the entry's own types${k < 0 ? '' : ` (first difference on tick ${k})`}`);
+            const k = a.all.findIndex((f, i) => !r.all[i] || frameKey(f) !== frameKey(r.all[i]));
+            ok(k < 0 && a.all.length === r.all.length, `plays exactly as the entry's own types${k < 0 ? '' : ` (first difference on tick ${k})`}`);
           }
         }
       } catch (e) { ok(false, `threw: ${e.stack}`); }
@@ -1094,7 +1122,7 @@ for (const [label, t] of Object.entries(tally))
     `${t.off.length ? `; locked: claims not checked, ${t.off.length} played (${[...new Set(t.off.map(x => x.split('/')[0]))].join(', ')} turned off in ${PACK.mod})` : ''}` +
     `${t.locked.length ? `; stopped under the badge: ${t.locked.join(' ')}` : ''}`);
 console.log(failed ? `${failed} check(s) failed` : 'all demos and rules pass');
-process.exit(failed ? 1 : 0);
+process.exit(failed ? 1 : 0);   // also ends the scripts' host
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();

@@ -2,21 +2,22 @@
    tagpu_wikidata.c and tagpu_wikisim.c, compiled natively (or for Windows, run under Wine), write
    what they see as JSON lines, and simparity.mjs compares them with sim.js's, field by field.
 
-   `wikitest demos PAK [LAYOUT [CASTING IFACE]]` loads PAK, an archive of art/wiki/
+   `wikitest demos PAK [LAYOUT [CASTING IFACE [COB]]]` loads PAK, an archive of art/wiki/
    (tools/hudpak.py --set wiki), as the DLL loads WIKIPAK, plays every demo of every entry to its
    end with the sidebar layout LAYOUT (the archive's side/LAYOUT.json; none when absent or "-"),
    in the context of side 0, the casting the file CASTING holds (one side's record; none when
-   absent or "-") and Interface Type IFACE (1 when absent), and prints one line per tick from 0:
+   absent or "-"), Interface Type IFACE (1 when absent) and the units' scripts the file COB
+   names (none when absent or "-"; see cob_load), and prints one line per tick from 0:
    {"entry", "demo", "t", "h": tagpu_wikisim_hash as 16 hex digits, "v": the view, "o": every
    unit's orders by id}. The view carries the map on the first and the last tick only: nothing
    writes it after the scene is laid out. A demo the sim refuses in that context is one line,
    {"entry", "demo", "refused": why}.
 
-   `wikitest trace FILE` replays a recording of sim.js calls (simparity.mjs makes it from
+   `wikitest trace FILE [COB]` replays a recording of sim.js calls (simparity.mjs makes it from
    simcheck.mjs's rule cases), one JSON line per call, each naming its sim by "sim", the order it
    was made in (TRACE_SIMS of them live at once): {"op": "create", "scripted": 0|1,
-   "layout": the layout or null, "ctx": {"side", "iface", "casting": a side's record or null} or
-   null} followed by a line holding the entry, whose only demo is the one the sim is made from;
+   "layout": the layout or null, "ctx": {"side", "iface", "casting": a side's record or null,
+   "cob": true for the scripts COB names} or null} followed by a line holding the entry, whose only demo is the one the sim is made from;
    {"op": "input", "ev": the input}; {"op": "step"}; and the queries {"op": "view"},
    {"op": "orders", "id"}, {"op": "done"}, {"op": "tick"}, {"op": "side"}, {"op": "iface"} and
    {"op": "hash"}, each answered by one line.
@@ -274,10 +275,85 @@ static void view(WIKISIM* s, int map)
         putchar('}');
     }
     key("locked", 0); str(v->locked >= 0 ? name(s, v->locked) : NULL);
+    key("clock", 0); printf("%d", v->clock);
+    key("waiting", 0); str(v->waiting == WIKI_UNTIL_IDLE ? "idle" : NULL);
+    key("stalled", 0); fputs(v->stalled ? "true" : "false", stdout);
+    key("cob", 0);
+    if (v->has_cob) printf("[%lu,%lu]", (unsigned long)(v->cob_hash >> 32), (unsigned long)(v->cob_hash & 0xFFFFFFFFu));
+    else fputs("null", stdout);
     putchar('}');
 }
 
 /* the state hash as 16 hex digits, in two halves: mingw's printf need not know %llx */
+/* ---- the units' scripts: what the DLL reads from the game's archives, here from files ---- */
+
+/* COB, the file `demos` and `trace` take: a JSON object of type name -> {"cob": the path of its
+   script, "visible": its posed model's visible flags}, which simparity.mjs writes from the gfx
+   packs (tools/wiki/gfx.py) sim.js's host reads the same scripts from. A type it does not name
+   has no script. Each script is read once and lives until the run ends. */
+#define COB_TYPES 64
+static struct {
+    char           name[WIKI_ID_MAX];
+    unsigned char* cob;
+    size_t         ncob;
+    unsigned char  visible[WIKICOB_PIECES];
+    int            pieces;
+} s_cob[COB_TYPES];
+static int s_ncob;
+
+static int cob_load(const char* path)
+{
+    char err[256];
+    size_t n;
+    char* text = slurp(path, &n);
+    TJDOC* doc = text ? tagpu_json_parse(text, n, err, sizeof err) : NULL;
+    const TJV* c;
+    int ok = doc != NULL;
+    if (!doc) fprintf(stderr, "wikitest: %s: %s\n", path, text ? err : "cannot read it");
+    for (c = doc ? tagpu_json_root(doc)->first : NULL; ok && c; c = c->next) {
+        const TJV *f = tj_get(c, "cob"), *vis = tj_get(c, "visible"), *e;
+        if (s_ncob == COB_TYPES || strlen(c->key) >= WIKI_ID_MAX || !tj_is(f, TJ_STR)) {
+            fprintf(stderr, "wikitest: %s: %s is not a script\n", path, c->key);
+            ok = 0;
+            break;
+        }
+        snprintf(s_cob[s_ncob].name, WIKI_ID_MAX, "%s", c->key);
+        if (!(s_cob[s_ncob].cob = (unsigned char*)slurp(f->str, &s_cob[s_ncob].ncob))) {
+            fprintf(stderr, "wikitest: cannot read %s\n", f->str);
+            ok = 0;
+            break;
+        }
+        for (e = tj_is(vis, TJ_ARR) ? vis->first : NULL; e && s_cob[s_ncob].pieces < WIKICOB_PIECES; e = e->next)
+            s_cob[s_ncob].visible[s_cob[s_ncob].pieces++] = (unsigned char)tj_num(e, 0);
+        s_ncob++;
+    }
+    tagpu_json_free(doc);
+    free(text);
+    return ok;
+}
+
+static int cob_type(void* ctx, const char* name, WIKICOBTYPE* out)
+{
+    int i;
+    (void)ctx;
+    for (i = 0; i < s_ncob; i++)
+        if (!strcmp(s_cob[i].name, name)) {
+            out->cob = s_cob[i].cob;
+            out->ncob = s_cob[i].ncob;
+            out->pieces = s_cob[i].pieces;
+            out->visible = s_cob[i].visible;
+            return 1;
+        }
+    return 0;
+}
+
+static const WIKICOBSRC COB_SRC = { NULL, cob_type };
+
+static void cob_free(void)
+{
+    while (s_ncob) free(s_cob[--s_ncob].cob);
+}
+
 static void hash(const WIKISIM* s)
 {
     const uint64_t h = tagpu_wikisim_hash(s);
@@ -318,7 +394,7 @@ static int casting_file(const char* path, WIKICASTING* k)
     return ok;
 }
 
-static int demos(const char* path, const char* layout, const char* casting, int iface)
+static int demos(const char* path, const char* layout, const char* casting, int iface, int cob)
 {
     char err[256], file[96];
     size_t n;
@@ -331,6 +407,7 @@ static int demos(const char* path, const char* layout, const char* casting, int 
     ctx.side = 0;
     ctx.cast = casting && strcmp(casting, "-") ? &k : NULL;
     ctx.iface = iface;
+    ctx.cob = cob ? &COB_SRC : NULL;
     if (ctx.cast && !casting_file(casting, &k)) return 2;
     if (!(pak = slurp(path, &n))) { fprintf(stderr, "wikitest: cannot read %s\n", path); return 2; }
     if (!(d = tagpu_wikidata_load((const unsigned char*)pak, n, err, sizeof err))) {
@@ -453,6 +530,7 @@ static int trace(const char* path)
             ctx.side = (int)tj_num(tj_get(cv, "side"), 0);
             ctx.iface = (int)tj_num(tj_get(cv, "iface"), 1);
             ctx.cast = casting && !tj_is(casting, TJ_NULL) ? &c->cast : NULL;
+            ctx.cob = tj_is(tj_get(cv, "cob"), TJ_TRUE) ? &COB_SRC : NULL;
             if ((layout && !tj_is(layout, TJ_NULL) && !(c->lay = tagpu_wikidata_layout_json(layout, err, sizeof err)))
                 || (ctx.cast && !tagpu_wikidata_casting(casting, &c->cast, err, sizeof err))) {
                 tagpu_json_free(doc);
@@ -844,14 +922,25 @@ static int malformed(void)
 
 int main(int argc, char** argv)
 {
-    if ((argc == 3 || argc == 4 || argc == 6) && !strcmp(argv[1], "demos"))
-        return demos(argv[2], argc >= 4 ? argv[3] : NULL, argc == 6 ? argv[4] : NULL, argc == 6 ? atoi(argv[5]) : 1);
-    if (argc == 3 && !strcmp(argv[1], "trace")) return trace(argv[2]);
+    int rc;
+    if ((argc == 3 || argc == 4 || argc == 6 || argc == 7) && !strcmp(argv[1], "demos")) {
+        const int cob = argc == 7 && strcmp(argv[6], "-");
+        if (cob && !cob_load(argv[6])) return 2;
+        rc = demos(argv[2], argc >= 4 ? argv[3] : NULL, argc >= 6 ? argv[4] : NULL, argc >= 6 ? atoi(argv[5]) : 1, cob);
+        cob_free();
+        return rc;
+    }
+    if ((argc == 3 || argc == 4) && !strcmp(argv[1], "trace")) {
+        if (argc == 4 && strcmp(argv[3], "-") && !cob_load(argv[3])) return 2;
+        rc = trace(argv[2]);
+        cob_free();
+        return rc;
+    }
     if (argc == 3 && !strcmp(argv[1], "refuse")) return refuse(argv[2]);
     if (argc == 3 && !strcmp(argv[1], "data")) return data(argv[2]);
     if (argc == 2 && !strcmp(argv[1], "constants")) return constants();
     if (argc == 2 && !strcmp(argv[1], "malformed")) return malformed();
-    fprintf(stderr, "usage: wikitest demos PAK [LAYOUT [CASTING IFACE]] | wikitest trace FILE | wikitest refuse FILE | wikitest data FILE"
+    fprintf(stderr, "usage: wikitest demos PAK [LAYOUT [CASTING IFACE [COB]]] | wikitest trace FILE [COB] | wikitest refuse FILE | wikitest data FILE"
             " | wikitest constants"
             " | wikitest malformed\n");
     return 2;

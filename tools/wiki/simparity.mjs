@@ -52,6 +52,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { cobHost, scripts } from './cobhost.mjs';
 
 const require = createRequire(import.meta.url);
 const WikiSim = require('./mockup/sim.js');
@@ -61,7 +62,8 @@ const DDRAW = path.join(ROOT, 'tagpu/ddraw');
 const SIDE = name => JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/side/${name}.json`), 'utf8'));
 const FIXTURE = SIDE('fixture');
 const WINE = process.argv.includes('--wine');
-const SRCS = ['src/tagpu_wikidata.c', 'src/tagpu_json.c', 'src/tagpu_pak.c', 'src/tagpu_placegeo.c'];
+const SRCS = ['src/tagpu_wikidata.c', 'src/tagpu_json.c', 'src/tagpu_pak.c', 'src/tagpu_placegeo.c',
+  'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c'];
 
 /* ---- the state hash: 64-bit FNV-1a, its halves in two uint32s so that no BigInt is needed ---- */
 const KEYS = ['shift', 'alt', 'ctrl', 'z', 'x', 'lmb', 'rmb'];               // WIKI_KEY_* order
@@ -116,6 +118,9 @@ function stateHash(sim, v) {
     int(d.h); str(d.screen); str(d.unit); int(d.page); int(d.state.length); for (const x of d.state) int(x); str(d.under);
   }
   str(v.locked);
+  int(v.clock); int(v.waiting === 'idle' ? 1 : 0); int(v.stalled ? 1 : 0);
+  int(v.cob ? 1 : 0);
+  if (v.cob) for (const half of [v.cob[1], v.cob[0]]) for (let k = 0; k < 4; k++) byte((half >>> (8 * k)) & 255);
   return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0');
 }
 
@@ -131,7 +136,7 @@ function run(cmd, args, opts = {}) {
 function build(tmp) {
   if (WINE) {
     // the simulation and the loader, which normalises the scenes' facings, on SSE2 as the Makefile compiles them
-    const exe = path.join(DDRAW, 'tests/wikitest.exe'), sse = ['src/tagpu_wikisim.c', 'src/tagpu_wikidata.c'];
+    const exe = path.join(DDRAW, 'tests/wikitest.exe'), sse = ['src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_wikicob.c'];
     const cc = 'i686-w64-mingw32-gcc', flags = ['-Iinc', '-Isrc', '-O2', '-Wall', '-std=c99'];
     const objs = sse.map(src => path.join(tmp, path.basename(src, '.c') + '.o'));
     sse.forEach((src, i) => run(cc, [...flags, '-msse2', '-mfpmath=sse', '-mincoming-stack-boundary=2', '-c', '-o', objs[i], src], { cwd: DDRAW }));
@@ -143,7 +148,7 @@ function build(tmp) {
     return (args) => run('wine', [exe, ...args], { cwd: tmp, env });
   }
   const exe = path.join(DDRAW, 'tests/wikitest-native.exe');   // `.exe` so the tree's *.exe ignore covers it
-  run('gcc', ['-std=c99', '-Wall', '-Wextra', '-Werror', '-Isrc', '-O1', '-g', '-fsanitize=address,undefined',
+  run('gcc', ['-std=c99', '-Wall', '-Wextra', '-Werror', '-Isrc', '-Iinc', '-O1', '-g', '-fsanitize=address,undefined',
     '-fno-sanitize-recover=all', '-o', exe, 'tests/wikitest.c', 'src/tagpu_wikisim.c', ...SRCS, '-lm'], { cwd: DDRAW });
   return (args) => run(exe, args, { cwd: tmp });
 }
@@ -481,6 +486,16 @@ function dataItems() {
   return items;
 }
 
+/* THE UNITS' SCRIPTS: every gfx pack tools/wiki/gfx.py built under tools/wiki/mockup/gfx/ (gitignored, read from the
+   game), each type's script from the first that holds it. sim.js asks them of serve.py's host through cobhost.mjs and
+   wikitest reads the same files; without a pack the demos play without scripts only. */
+const GFX = path.join(ROOT, 'tools/wiki/mockup/gfx');
+const PACKS = fs.existsSync(GFX) ? fs.readdirSync(GFX).sort().map(d => path.join(GFX, d)).filter(d => fs.existsSync(path.join(d, 'scene.json'))) : [];
+const SCRIPTS = scripts(PACKS);
+const COBS = Object.keys(SCRIPTS).length ? [false, true] : [false];
+let host = null;
+const HOST = () => (host ??= cobHost());
+
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'simparity-'));
 let failed = 0, demos = 0, cases = 0, differ = 0, malformed = 0, bad = 0, refusals = 0, refuseBad = 0, datas = 0, dataBad = 0;
 try {
@@ -493,10 +508,12 @@ try {
   const ids = [...new Set(tree.tree.flatMap(leaves))];
   for (const name of Object.keys(CASTINGS))
     fs.writeFileSync(path.join(tmp, `casting-${name}.json`), JSON.stringify(CASTINGS[name][0]));
-  for (const side of ['fixture', 'fixture-tall', null]) for (const cname of [null, ...Object.keys(CASTINGS)]) for (const iface of [1, 0]) {
-    const layout = side && SIDE(side), named = `${side || 'no sidebar'}, ${cname || 'own types'}, type ${iface}`;
-    const ctx = { side: 0, casting: cname ? CASTINGS[cname][0] : null, iface };
-    const cout = lines(wikitest(['demos', 'wiki.bin', side || '-', cname ? `casting-${cname}.json` : '-', String(iface)]));
+  fs.writeFileSync(path.join(tmp, 'cob.json'), JSON.stringify(Object.fromEntries(Object.entries(SCRIPTS).map(([n, t]) => [n, { cob: t.cob, visible: t.visible }]))));
+  if (!COBS.includes(true)) console.log('note   no gfx pack under tools/wiki/mockup/gfx/ holds a script: the demos play without their units\' scripts only');
+  for (const cob of COBS) for (const side of ['fixture', 'fixture-tall', null]) for (const cname of [null, ...Object.keys(CASTINGS)]) for (const iface of [1, 0]) {
+    const layout = side && SIDE(side), named = `${side || 'no sidebar'}, ${cname || 'own types'}, type ${iface}${cob ? ', scripts' : ''}`;
+    const ctx = { side: 0, casting: cname ? CASTINGS[cname][0] : null, iface, cob: cob ? HOST().forPacks(PACKS) : null };
+    const cout = lines(wikitest(['demos', 'wiki.bin', side || '-', cname ? `casting-${cname}.json` : '-', String(iface), cob ? 'cob.json' : '-']));
     let at = 0;
     for (const id of ids) {
       const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
@@ -550,7 +567,9 @@ try {
   let ops, expected, made;
   const record = (make, scripted) => (entry, demo, layout, ctx) => {
     const sim = make(entry, demo, layout, ctx), k = made++;
-    ops.push(JSON.stringify({ op: 'create', sim: k, scripted, layout: layout ?? null, ctx: ctx ?? null }), JSON.stringify({ ...entry, demos: [demo || {}] }));
+    // a context's script source is wikitest's COB file, named by `cob: true`
+    const c = ctx ? { ...ctx, cob: ctx.cob ? true : undefined } : null;
+    ops.push(JSON.stringify({ op: 'create', sim: k, scripted, layout: layout ?? null, ctx: c }), JSON.stringify({ ...entry, demos: [demo || {}] }));
     const ask = (op, v) => { ops.push(JSON.stringify({ ...op, sim: k })); expected.push(v); return v; };
     return {
       input(ev) { ops.push(JSON.stringify({ op: 'input', sim: k, ev })); sim.input(ev); },
@@ -577,7 +596,7 @@ try {
       let verdict;
       try { verdict = check(entry); } catch (e) { verdict = `threw ${e.message}`; }
       fs.writeFileSync(path.join(tmp, 'trace.jsonl'), ops.join('\n') + '\n');
-      const got = lines(wikitest(['trace', 'trace.jsonl'])).map(l => JSON.parse(l));
+      const got = lines(wikitest(['trace', 'trace.jsonl', 'cob.json'])).map(l => JSON.parse(l));
       let first = got.length !== expected.length ? { at: 'answers.length', c: got.length, j: expected.length } : null;
       for (let i = 0; !first && i < got.length; i++) { const d = diff(got[i], expected[i], `answer ${i}`); if (d) first = d; }
       cases++;
@@ -651,6 +670,7 @@ try {
   process.exitCode = 2;
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
+  if (host) host.close();
 }
 if (process.exitCode !== 2) {
   const variant = WINE ? 'i686 under Wine' : 'native';
