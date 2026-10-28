@@ -20,8 +20,9 @@ page's controls and the demos playing on the stage.
     wiki_regression.py <name> mp                     a two-player network game on Wine, started by
                                                       tools/compat/tacompat.py's launcher
     wiki_regression.py all|<setup>[,<setup>...] mods --shots DIR
-                                                      the 3D stage under each setup of the
-                                                      compatibility suite, one at a time
+                                                      the 3D stage and the sidebar under each
+                                                      setup of the compatibility suite, one game
+                                                      a setup
 
 `sp` and `recorded` play scenarios/place-basic.json at --res (default 1920x1080) with the launch's
 hold (tagpu_hold.on), held at GameTime 120 and then let run, under the run lock (tools/runlock.py).
@@ -87,22 +88,30 @@ demos, on the same launch as sp:
   (d3) play pauses (the tick stands), replay restarts, an ended demo holds its last frame and
        play starts it again;
   (d4) each entry with a demo paused mid-play; with --shots DIR the game's frame and the mockup's
-       at the same screen, entry, demo and tick, side by side (`<res>-<entry>-<demo>-t<tick>`);
+       at the same screen, entry, demo and tick, side by side (`<res>-<entry>-<demo>-t<tick>`), the
+       mockup in the game look with the stock pack's sidebar (sidebar=mod&mod=stock&gfx=game);
   (d5) the most one fill of the open page cost the game thread, logged.
 try, on the same launch as sp:
   (t1) Quick Build's `snap` and then Build Lines' `line` selected, and Try it yourself pressed: the
-       stage is the player's, and the drawn frame shows its build menu (`build:<type>` controls);
+       stage is the player's, with the sidebar on (the dump's `side_h` rows) showing its builder's
+       first page;
   (t2) the demo's inputs given as device input: each world point turned into the client point the
        dump's stage draws it at (tagpu_wikistage_fit inverted, from the `stage` hit and the frame's
        unit), moves as `dmove:`, the left button as `ddown:`/`dup:` there, Shift as `down:`/`up:`,
-       a build as a click on the menu's button. Paused, the dump's log of what the game gave its
-       simulation holds the demo's presses, releases and builds in order, every move within a
-       pixel of the demo's point, and its state hash equals sim.js fed the same logged inputs at
-       the same ticks (`simparity.mjs --try`). With --shot, the presented frame is grabbed before
-       `snap`'s click and before `line`'s first release, the line's sites on the stage;
-  (t2b) exactly one cursor: the pointer over the build menu, the frame holds one of the game's cursor
-       frames, none on the stage; over the stage's centre, one, on the stage (needs tools/wiki/gfx.py's
-       pack, as cursor does);
+       a build as a player arms it on the stage's sidebar -- PREV or NEXT pressed the nearer way
+       round to the building's page, then its button, each a press and a release inside. Paused,
+       the dump's log of what the game gave its simulation holds the demo's presses and releases
+       and the sidebar's in order, every move within a pixel of the point it was given at, and its
+       state hash equals sim.js fed the same logged inputs at the same ticks (`simparity.mjs
+       --try`); sim.js's view of it (tools/wiki/sideview.mjs --dump) then gives the page each pager
+       reached and the building each button armed. With --shot, the presented frame is grabbed
+       before `snap`'s click and before `line`'s first release, the line's sites on the stage;
+  (t2c) on the sidebar, read back the same way: NEXT and PREV page the ARMCK, the ORDERS tab shows
+       the side's GEN and the BUILD tab its page again, and STOP disarms the building armed and
+       empties the orders;
+  (t2b) exactly one cursor: the pointer over the sidebar's BUILD tab and over the stage's centre,
+       one, on the stage; over the play control, off the stage, the player's alone (needs
+       tools/wiki/gfx.py's pack, as cursor does);
   (t3) Shift and the left button held on the stage when Back to demo is pressed are let go in the
        simulation, and their late releases are taken, nothing owed;
   (t4) Ctrl and the left button held when Esc closes the window: let go, nothing owed after their
@@ -161,15 +170,35 @@ the game's frames as the mockup draws them):
        cropped side by side (`<res>-cursor-real.pair.png`);
   (c3) Esc closes the window.
 mods, per setup of tools/compat/setups.json (`all`: retail, Escalation, Total Mayhem, ProTA, TA Zero,
-Twilight), under the run lock (the plan's landing 6i):
+Twilight), one game a setup, under the run lock (the plan's landing 6i; the sidebar's spec, 2E):
   (w1) the setup's folder built by tacompat's prepare_wine with this tree's DLL, started on a private
-       Xvfb and walked into a skirmish on the suite's map (tacompat.wine_skirmish);
+       2560x1440 Xvfb (the game takes the display's size) and walked into a skirmish on the suite's
+       map (tacompat.wine_skirmish);
+  (b1) the setup's own sidebar against the composer: the engine's frame cropped to the column, rows
+       128 down to the layout's height, equal pixel for pixel to tools/wiki/sidedump.mjs on the
+       setup's pack (tools/wiki/sidepacks.py) with each gadget greyed as the engine's snapshot of
+       the screen has it -- nothing selected, and an ARMCK placed and selected where the pack gives
+       it pages (its first page);
   (w2) the wiki opened: the 3D asset load's line, and its report tagpu_wiki3d.json copied to
        DIR/<setup>/ -- which archive each ground source, feature, unit file and texture came from;
   (w3) Quick Build demo 3 at tick 180 and Build Lines demo 2 at tick 100 captured through
        tagpu_wiki.shot (DIR/<setup>/<entry>-d<demo>-t<tick>.game.png) with the whole display grabbed
        beside each (.screen.png); each stage's ground line, its types line (in 3D, and the boxes) and
        a whole periodic line of its frames;
+  (b2) the check (tagpu_wiki.check): the layout every demo starts on is the mod's, its file
+       tagpu_wiki.layout.json equal to the pack's layout, and every demo's hash equal to
+       `simparity.mjs --hash --layout` of that file;
+  (b3) Quick Build demo 1 held at tick 10 (the ARMCK selected, its first page at rest; TA Zero, which
+       has no ARMCK page, its side's GEN): the presented frame's sidebar column, each client pixel
+       mapped back to the texel its nearest sampling shows, equal to the composer on the pack for
+       the same view (tools/wiki/sideview.mjs --play --compose); DIR/<setup>/sidebar.png puts the
+       stage's column, the composed one and the engine's own sidebar side by side. With (b1) this
+       is the chain stage == composer(pack, the wiki's state) and composer(pack, the engine's
+       state) == the engine: one pack, one composer, the states apart only where the wiki sets
+       them (decision 7 greys every order but STOP);
+  (b4) Build Lines demo 1 played: where the mod's sidebar cannot reach its first build (TA Zero) it
+       holds at that tick, playing, with the "Turned off in this mod" badge above the stage;
+       elsewhere it plays past it, no badge;
   (w4) Esc closes the window;
   (w5) each stage drew what the report resolved: a ground that resolved in 3D on every frame of the
        line, one that did not as the whitebox on every frame.
@@ -183,6 +212,7 @@ mp:
       closes it, and both peers still run, with no desync line in either log.
 """
 import argparse
+import itertools
 import json
 import math
 import os
@@ -713,7 +743,11 @@ def tick_rate(c, seconds=4.0):
 
 def mockup_shot(state, path):
     """The mockup at the same state -- the screen, the entry, the demo paused at the tick -- grabbed
-    headless by playwright-cli, one CSS pixel a device pixel, as wikilaycheck.py opens it."""
+    headless by playwright-cli, one CSS pixel a device pixel, as wikilaycheck.py opens it. The
+    sidebar is the mod's (`mod`, a tools/wiki/sidepacks.py pack name, stock by default), its pack
+    loaded before the demo is read. `look` "game" draws the stage in the game's graphics and the
+    sidebar in the mod's pictures, as the game draws both (gfx=game, on the GPU as
+    tools/wiki/stage3dcheck.py renders it); without it the stage is the whitebox."""
     sys.path.insert(0, str(TREE / "tools/wiki"))
     import wikilaycheck as wl
     from PIL import Image
@@ -722,18 +756,26 @@ def mockup_shot(state, path):
     tmp = path.parent / f".mock{os.getpid()}"
     tmp.mkdir(parents=True, exist_ok=True)
     cfg = tmp / "pw.json"
+    game = state.get("look") == "game"
+    launch = {"ignoreDefaultArgs": ["--hide-scrollbars"]}
+    if game:
+        import stage3dcheck
+        launch.update(headless=True, args=stage3dcheck.GPU_ARGS["vulkan"])
     cfg.write_text(json.dumps({"browser": {"contextOptions": {"deviceScaleFactor": 1, "viewport": {"width": 1200, "height": 900}},
-                                           "launchOptions": {"ignoreDefaultArgs": ["--hide-scrollbars"]}}}))
+                                           "launchOptions": launch}}))
     pw = ["playwright-cli", f"-s=wikishot{os.getpid()}", f"--config={cfg}"]
     run = lambda *a: subprocess.run(pw + list(a), capture_output=True, text=True, cwd=tmp)
     try:
         run("open", "about:blank")
         run("resize", str(gw + 34), str(gh + 900))
         run("goto", f"http://127.0.0.1:{httpd.server_address[1]}/tools/wiki/mockup/index.html?res={gw}x{gh}&open&skin=kit"
-                    f"&mod=stock&rewind=0&entry={state['entry']}&demo={state['demo_n'] + 1}")
-        for _ in range(100):
+                    f"&sidebar=mod&mod={state.get('mod', 'stock')}&rewind=0{'&gfx=game' if game else ''}"
+                    f"&entry={state['entry']}&demo={state['demo_n'] + 1}")
+        for _ in range(300 if game else 100):
             if wl.result(run("eval", "() => !!(window.WikiPage && WikiPage.sim() && document.fonts.status === 'loaded'"
-                                     " && document.querySelector('#win canvas.skin'))").stdout):
+                                     " && document.querySelector('#win canvas.skin')"
+                                     " && !document.querySelector('#sidebar-note').textContent.startsWith('loading')"
+                                     f"{' && WikiGfx.ready(WikiPage.state.entry)' if game else ''})").stdout):
                 break
             time.sleep(0.1)
         v = wl.result(run("eval", "async () => { const S = WikiPage.state, $ = s => document.querySelector(s);"
@@ -813,8 +855,9 @@ def demos(c, shots, res):
     wait_dump(c, lambda d: d["speed"] == 1, "(d3) x1 did not set 1x")
     print("wiki demos: (d3) pause, replay, the last frame held and played again")
 
-    # (d4) each entry with a demo paused mid-play, grabbed beside the mockup at the same state; past
-    # tick 150, which leaves some nine seconds of either demo for the pause to land in
+    # (d4) each entry with a demo paused mid-play, grabbed beside the mockup at the same state -- the
+    # retail game's, so the stock pack's sidebar -- past tick 150, which leaves some nine seconds of
+    # either demo for the pause to land in
     for node, entry, k, demo, at in ((2, "quickbuild", 0, "snap", 150), (3, "buildshapes", 1, "line", 150)):
         d = c.dump()
         if d["entry"] != entry:
@@ -831,8 +874,8 @@ def demos(c, shots, res):
             shots.mkdir(parents=True, exist_ok=True)
             base = shots / f"{res}-{entry}-{demo}-t{d['tick']}"
             grab(c, base.with_suffix(".game.png"))
-            mockup_shot({"res": [int(v) for v in res.split("x")], "entry": entry, "demo_n": k, "tick": d["tick"]},
-                        base.with_suffix(".mockup.png"))
+            mockup_shot({"res": [int(v) for v in res.split("x")], "entry": entry, "demo_n": k, "tick": d["tick"],
+                         "mod": "stock", "look": "game"}, base.with_suffix(".mockup.png"))
         press(c, d, "play")
         print(f"wiki demos: (d4) {entry}/{demo} paused at tick {d['tick']}")
 
@@ -847,6 +890,7 @@ def demos(c, shots, res):
 TRY_DEMOS = (("quickbuild", 2, "snap", 83), ("buildshapes", 3, "line", 60))   # (entry, its tree node,
                                          # the demo, the input before which the stage is grabbed)
 TRY_KEYS = {"shift": "shift", "alt": "alt", "ctrl": "ctrl", "z": "z", "x": "x"}
+SIDE_W = 128                             # the sidebar's column, in the stage's world units left of x = 0
 
 
 def demo_inputs(entry, demo_id):
@@ -862,22 +906,112 @@ def stage_fit(d):
     x0, y0, x1, y1 = Wiki.hit(d, "stage")
     u, (mw, mh), cell, side = d["u"], d["map"], 16, d.get("side_h", 0)
     pad = 6 * u
-    cx0, cw, ch = (-128, 128 + mw * cell, max(mh * cell, side)) if side > 0 else (0, mw * cell, mh * cell)
+    cx0, cw, ch = (-SIDE_W, SIDE_W + mw * cell, max(mh * cell, side)) if side > 0 else (0, mw * cell, mh * cell)
     s = min((x1 - x0 - 2 * pad) / cw, (y1 - y0 - 2 * pad) / ch)
     return s, x0 + (x1 - x0 - cw * s) / 2 - cx0 * s, y0 + (y1 - y0 - ch * s) / 2
+
+
+def try_view(c, d, what):
+    """Try it yourself as the game played it, read back through sim.js: the dump's state hash must
+    equal simparity.mjs --try's -- sim.js fed the inputs the dump logged at the ticks it logged them
+    -- and then tools/wiki/sideview.mjs --dump's view describes the game's simulation: the routed
+    screen, its page and gadget states, the armed mode, the selection's orders."""
+    assert not d["try_cut"], f"{what}: the dump's log of Try it was cut ({d['try_cut']} inputs)"
+    dumpf = c.gamedir / "tagpu_wiki.try.json"
+    dumpf.write_text(json.dumps(d))
+    try:
+        r = subprocess.run(["node", str(TREE / "tools/wiki/simparity.mjs"), "--try", str(dumpf)], capture_output=True,
+                           text=True, timeout=300)
+        assert r.returncode == 0, f"simparity --try: {r.stderr.strip()}"
+        assert r.stdout.strip() == d["hash"], \
+            f"{what}: the game's Try it hashes {d['hash']} at tick {d['tick']}, sim.js fed its inputs {r.stdout.strip()}"
+        r = subprocess.run(["node", str(TREE / "tools/wiki/sideview.mjs"), "--dump", str(dumpf)], capture_output=True,
+                           text=True, timeout=300)
+        assert r.returncode == 0, f"sideview --dump: {r.stderr.strip()}"
+    finally:
+        dumpf.unlink(missing_ok=True)
+    return json.loads(r.stdout)
+
+
+def side_centre(lay, screen, i):
+    """Gadget i of a layout screen: its centre in the stage's world units, where the build trip
+    presses it (sim.js centreOf)."""
+    s = lay["screens"][screen]
+    gx, gy, gw, gh = s["gadgets"][i]["rect"]
+    return -SIDE_W + gx + gw / 2, s["y"] + gy + gh / 2
+
+
+def side_gadget(lay, screen, pred, what):
+    i = next((k for k, g in enumerate(lay["screens"][screen]["gadgets"]) if pred(g) and not g.get("hidden")), None)
+    assert i is not None, f"{what}: {screen} has no such gadget"
+    return i
+
+
+class Stage:
+    """The Try it stage's client geometry (stage_fit) and the presses given on its sidebar: each
+    a move onto the gadget's centre, the left button down and up there -- a release inside, where
+    the engine's buttons act (0x4A6AE0), a tab having acted on the press already. Every world
+    point given is kept, so the log's moves can be checked against them."""
+
+    def __init__(self, c, d):
+        self.c = c
+        self.s, self.ox, self.oz = stage_fit(d)
+        self.points, self.want = [], []
+
+    def client(self, x, z):
+        return round(self.ox + x * self.s), round(self.oz + z * self.s)
+
+    def press(self, lay, screen, i):
+        x, z = side_centre(lay, screen, i)
+        at = self.client(x, z)
+        self.c.keys("dmove:%d,%d" % at, "ddown:%d,%d" % at, "dup:%d,%d" % at)
+        self.points.append((x, z))
+        self.want += [["down", "lmb"], ["up", "lmb"]]
+        return at
+
+    def view(self, what):
+        return try_view(self.c, self.c.dump(), what)
+
+    def arm(self, T, what):
+        """T armed through the sidebar, as a player arms it: the pager pressed the nearer way round
+        to T's page (a tie goes to NEXT, as the build trip goes), then T's button. The page reached
+        and the mode armed are read back from the simulation."""
+        v = self.view(what)
+        sv, lay = v["side"], self.c.dump()["layout"]
+        assert sv and sv["type"] in lay["types"], f"{what}: the sidebar shows no builder's page: {sv}"
+        pages = lay["types"][sv["type"]]["pages"]
+        holds = [k for k, n in enumerate(pages, 1) if any(g["role"] == "build" and g.get("unit") == T
+                                                          for g in lay["screens"][n]["gadgets"])]
+        assert holds, f"{what}: no page of {sv['type']} holds {T}"
+        n, page, p = len(pages), sv["page"], holds[0]
+        k_next, k_prev = (p - page) % n, (page - p) % n
+        role = "next" if k_next <= k_prev else "prev"
+        for _ in range(min(k_next, k_prev)):
+            self.press(lay, pages[page - 1], side_gadget(lay, pages[page - 1], lambda g: g["role"] == role, what))
+            page = page % n + 1 if role == "next" else (page - 2) % n + 1
+        v = self.view(what)
+        assert v["side"]["screen"] == pages[p - 1] and v["side"]["page"] == p, \
+            f"{what}: {min(k_next, k_prev)} x {role.upper()} did not reach page {p} ({pages[p - 1]}): {v['side']}"
+        i = side_gadget(lay, pages[p - 1], lambda g: g["role"] == "build" and g.get("unit") == T, what)
+        assert v["side"]["state"][i] == 0, f"{what}: {T}'s button on {pages[p - 1]} is not live: state {v['side']['state'][i]}"
+        self.press(lay, pages[p - 1], i)
+        v = self.view(what)
+        assert v["mode"] == f"build:{T}", f"{what}: the release on {T}'s button armed {v['mode']}"
+        return min(k_next, k_prev), role, p
 
 
 def replay_try(c, d, entry, demo_id, grab_at=None, shot=None):
     """One demo's inputs (art/wiki/entries/<entry>.json) given to Try it yourself as device input:
     each world point turned into the client point the dump's stage shows it at (stage_fit
     inverted), a move as `dmove:`, the left button as `ddown:`/`dup:` there, the right as
-    `down:rbutton`/`up:rbutton` where the pointer is, a key as `down:`/`up:`, a build as a click on
-    the build menu's button the drawn frame shows; captions are the demo's own and are skipped. With
-    `grab_at`, the presented frame is grabbed to `shot` before that input is given. The world inputs
-    the demo would give, in order, without its moves."""
-    s, ox, oz = stage_fit(d)
+    `down:rbutton`/`up:rbutton` where the pointer is, a key as `down:`/`up:`, a build as a player
+    arms it on the stage's sidebar (Stage.arm), the pointer then brought back to the demo's point;
+    captions are the demo's own and are skipped. With `grab_at`, the presented frame is grabbed to
+    `shot` before that input is given. The Stage, holding what the simulation must have been given
+    without its moves, and every world point given."""
+    st = Stage(c, d)
     at = None
-    pending, want = [], []
+    pending, arms = [], []
 
     def flush():
         if pending:
@@ -890,13 +1024,14 @@ def replay_try(c, d, entry, demo_id, grab_at=None, shot=None):
             time.sleep(1.0)
             grab(c, shot)
         if "move" in ev:
-            at = (round(ox + ev["move"][0] * s), round(oz + ev["move"][1] * s))
+            at = st.client(*ev["move"])
+            st.points.append(tuple(ev["move"]))
             pending.append("dmove:%d,%d" % at)
         for kind in ("down", "up"):
             k = ev.get(kind)
             if k is None:
                 continue
-            want.append([kind, k])
+            st.want.append([kind, k])
             if k in ("lmb", "rmb"):
                 assert at, f"{entry}/{demo_id}: a button before any move"
                 pending.append(("ddown:%d,%d" if kind == "down" else "dup:%d,%d") % at if k == "lmb"
@@ -904,27 +1039,72 @@ def replay_try(c, d, entry, demo_id, grab_at=None, shot=None):
             else:
                 pending.append(f"{kind}:{TRY_KEYS[k]}")
         if "build" in ev:
-            want.append(["build", ev["build"]])
-            key = "build:" + (ev["build"] or "none")
             flush()
-            d = wait_dump(c, lambda d: key in keys_of(d, "build:"), f"the build menu shows no {key}")
-            x, y = c.centre(c.hit(d, key))
-            c.keys(f"ddown:{x},{y}", f"dup:{x},{y}")
+            arms.append((ev["build"], *st.arm(ev["build"], f"(t2) {entry}/{demo_id}: {ev['build']}")))
+            if at:
+                pending.append("dmove:%d,%d" % at)
     flush()
-    return want, s
+    return st, arms
+
+
+def side_controls(c, d):
+    """(t2c) the sidebar's other controls, on the ARMCK the last demo left armed and ordered: NEXT
+    and PREV page it, ORDERS shows the side's GEN and BUILD its page again (tabs act on the press),
+    and STOP disarms and empties the orders; each read back from the simulation, whose hash equals
+    the game's at every read."""
+    st = Stage(c, d)
+    lay = d["layout"]
+    v = st.view("(t2c)")
+    sv = v["side"]
+    pages = lay["types"][sv["type"]]["pages"]
+    n, page, screen = len(pages), sv["page"], sv["screen"]
+    gen = lay["sides"][lay["player_side"]]["gen"]
+    steps = []
+    for role, want in (("next", page % n + 1), ("prev", page)):
+        st.press(lay, screen, side_gadget(lay, screen, lambda g: g["role"] == role, "(t2c)"))
+        v = st.view(f"(t2c) {role.upper()}")
+        assert v["side"]["page"] == want and v["side"]["screen"] == pages[want - 1], \
+            f"(t2c) {role.upper()} on {screen} did not show page {want}: {v['side']}"
+        screen = v["side"]["screen"]
+        steps.append(f"{role.upper()} -> {screen}")
+    for role, want in (("orders", gen), ("buildtab", screen)):
+        st.press(lay, v["side"]["screen"], side_gadget(lay, v["side"]["screen"], lambda g: g["role"] == role, "(t2c)"))
+        v = st.view(f"(t2c) {role}")
+        assert v["side"]["screen"] == want, f"(t2c) the {role} tab did not show {want}: {v['side']}"
+        steps.append(f"{role} -> {want}")
+    before = {u: len(o) for u, o in v["orders"].items()}
+    assert v["mode"] != "contextual" and any(before.values()), \
+        f"(t2c) STOP needs a building armed and an order to clear: mode {v['mode']}, orders {before}"
+    st.press(lay, screen, side_gadget(lay, screen, lambda g: g["role"] == "stop", "(t2c)"))
+    v = st.view("(t2c) STOP")
+    assert v["mode"] == "contextual" and not any(v["orders"].values()), \
+        f"(t2c) STOP left mode {v['mode']} and orders {v['orders']}"
+    steps.append(f"STOP: {before} orders and the armed building -> none")
+    d = c.dump()
+    got = [[k, a] for _, k, a, *_ in d["try_log"] if k != "move"]
+    assert got[-len(st.want):] == st.want, f"(t2c) the game gave its simulation {got[-len(st.want):]}, the presses {st.want}"
+    print(f"wiki try: (t2c) on the sidebar: {'; '.join(steps)}; tick {d['tick']}, hash {d['hash']} equal to sim.js's")
+    return d
 
 
 def one_cursor(c, d):
-    """(t2b) Try it shows exactly one cursor: with the pointer over the build menu the player's alone
-    and none on the stage, over the stage's centre one, on the stage -- the stage's, the player's
-    hidden. Found against the game's own frames (tools/wiki/gfx.py's pack), as cursor's (c2)."""
+    """(t2b) Try it shows exactly one cursor: with the pointer over a gadget of the stage's sidebar,
+    one, on the stage, and over the stage's centre one, on the stage -- the stage's, the player's
+    hidden; over the page's play control, off the stage, the player's alone. Found against the
+    game's own frames (tools/wiki/gfx.py's pack), as cursor's (c2)."""
     import numpy as np
     from PIL import Image
     frames = sprite_frames()
     x0, y0, x1, y1 = c.hit(d, "stage")
+    st = Stage(c, d)
+    v = st.view("(t2b)")
+    lay = d["layout"]
+    gx, gz = side_centre(lay, v["side"]["screen"],
+                         side_gadget(lay, v["side"]["screen"], lambda g: g["role"] == "buildtab", "(t2b)"))
     path = c.gamedir / "tagpu_wiki.cursor.png"
-    for where, at, on_stage in (("the build menu", c.centre(c.hit(d, "build:none")), 0),
-                                ("the stage", ((x0 + x1) // 2, (y0 + y1) // 2), 1)):
+    for where, at, on_stage in (("the sidebar's BUILD tab", st.client(gx, gz), 1),
+                                ("the stage", ((x0 + x1) // 2, (y0 + y1) // 2), 1),
+                                ("the play control", c.centre(c.hit(d, "play")), 0)):
         c.keys("dmove:%d,%d" % at)
         time.sleep(1.0)
         grab(c, path)
@@ -939,8 +1119,8 @@ def one_cursor(c, d):
 
 
 def try_it(c, shot=None):
-    """(t1)..(t5): Try it yourself driven by device input on the stage, its simulation against
-    sim.js fed what the game logged."""
+    """(t1)..(t5): Try it yourself driven by device input on the stage and its sidebar, its
+    simulation against sim.js fed what the game logged."""
     held_at(c, HELD_AT)
     d = c.open_wiki(expect_pause=True)
     d = wait_dump(c, lambda d: d["drawn_open"] and d["sim"], "(t1) the page was not drawn")
@@ -954,50 +1134,48 @@ def try_it(c, shot=None):
             press(c, d, f"demo:{k}")
             d = wait_dump(c, lambda d: d["demo"] == demo, f"(t1) demo:{k} did not select {entry}/{demo}")
         press(c, d, "try")
-        d = wait_dump(c, lambda d: d["try"] and keys_of(d, "build:"), "(t1) Try it yourself did not take the stage")
-        print(f"wiki try: (t1) {entry}/{demo}: Try it took the stage, its build menu {keys_of(d, 'build:')}")
+        d = wait_dump(c, lambda d: d["try"] and d["sim"] and d["side_h"] > 0, "(t1) Try it yourself did not take the stage")
+        v = try_view(c, d, "(t1)")
+        sv = v["side"]
+        assert sv and sv["page"] == 1 and sv["screen"] == d["layout"]["types"][sv["type"]]["pages"][0], \
+            f"(t1) {entry}/{demo}: Try it's sidebar is not its builder's first page: {sv}"
+        print(f"wiki try: (t1) {entry}/{demo}: Try it took the stage, its sidebar the {d['layout_src']} layout's "
+              f"{sv['screen']} ({sv['type']} page 1 of {len(d['layout']['types'][sv['type']]['pages'])}), "
+              f"{d['side_h']} rows")
 
         shot_n = shot and Path(shot).with_name(f"{Path(shot).stem}-{entry}-{demo}{Path(shot).suffix}")
         if shot:
-            # the control for the hidden cursor: the pointer over the build menu, off the stage
-            c.keys("dmove:%d,%d" % c.centre(c.hit(d, "build:none")))
+            # the control for the hidden cursor: the pointer over a page control, off the stage
+            c.keys("dmove:%d,%d" % c.centre(c.hit(d, "play")))
             time.sleep(1.0)
-            grab(c, Path(shot).with_name(f"{Path(shot).stem}-{entry}-{demo}-menu{Path(shot).suffix}"))
-        want, s = replay_try(c, d, entry, demo, grab_at, shot_n)
+            grab(c, Path(shot).with_name(f"{Path(shot).stem}-{entry}-{demo}-page{Path(shot).suffix}"))
+        st, arms = replay_try(c, d, entry, demo, grab_at, shot_n)
         press(c, wait_dump(c, lambda d: d["playing"], "(t2) Try it is not playing"), "play")
         d = wait_dump(c, lambda d: not d["playing"], "(t2) play did not pause Try it")
         got = [[k, a] for _, k, a, *_ in d["try_log"] if k != "move"]
-        assert got == want, f"(t2) {entry}/{demo}: the game gave its simulation {got}, the demo {want}"
-        assert not d["try_cut"], f"(t2) the dump's log of Try it was cut ({d['try_cut']} inputs)"
+        assert got == st.want, f"(t2) {entry}/{demo}: the game gave its simulation {got}, the demo and the sidebar {st.want}"
         moves = [(x, z) for _, k, x, z in (e for e in d["try_log"] if e[1] == "move")]
-        demo_pts = [tuple(ev["move"]) for ev in demo_inputs(entry, demo) if "move" in ev]
-        far = [m for m in moves if min(math.hypot(m[0] - p[0], m[1] - p[1]) for p in demo_pts) > 0.75 / s]
-        assert not far, f"(t2) {len(far)} of {len(moves)} moves landed more than a pixel off the demo's points: {far[:4]}"
-        dumpf = c.gamedir / "tagpu_wiki.try.json"
-        dumpf.write_text(json.dumps(d))
-        r = subprocess.run(["node", str(TREE / "tools/wiki/simparity.mjs"), "--try", str(dumpf)], capture_output=True,
-                           text=True, timeout=300)
-        dumpf.unlink(missing_ok=True)
-        assert r.returncode == 0, f"simparity --try: {r.stderr.strip()}"
-        assert r.stdout.strip() == d["hash"], \
-            f"(t2) {entry}/{demo}: the game's Try it hashes {d['hash']} at tick {d['tick']}, sim.js fed its inputs {r.stdout.strip()}"
+        far = [m for m in moves if min(math.hypot(m[0] - p[0], m[1] - p[1]) for p in st.points) > 0.75 / st.s]
+        assert not far, f"(t2) {len(far)} of {len(moves)} moves landed more than a pixel off the points given: {far[:4]}"
+        try_view(c, d, f"(t2) {entry}/{demo}")
         print(f"wiki try: (t2) {entry}/{demo} replayed through the stage: {len(d['try_log'])} inputs "
-              f"({len(moves)} moves, every one within a pixel of the demo's point), tick {d['tick']}, "
-              f"hash {d['hash']} equal to sim.js's")
+              f"({len(moves)} moves, every one within a pixel of its point), "
+              + ", ".join(f"{T} armed on page {p} after {k} x {role.upper()}" for T, k, role, p in arms)
+              + f"; tick {d['tick']}, hash {d['hash']} equal to sim.js's")
         press(c, d, "play")
         d = wait_dump(c, lambda d: d["playing"], "(t2) play did not start Try it again")
 
+    d = side_controls(c, d)
     one_cursor(c, d)
 
     # (t3) a button and a key held when Try it is left: both let go in the simulation, and their late
     # releases are taken -- nothing reaches the engine
-    s, ox, oz = stage_fit(d)
     x0, y0, x1, y1 = c.hit(d, "stage")
     cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
     c.keys("down:shift", f"ddown:{cx},{cy}")
     d = wait_dump(c, lambda d: d["try_down"] == ["shift", "lmb"], "(t3) the held Shift and left button are not in Try it's set")
     press(c, d, "try")
-    d = wait_dump(c, lambda d: not d["try"] and not keys_of(d, "build:"), "(t3) Back to demo did not return the demo")
+    d = wait_dump(c, lambda d: not d["try"], "(t3) Back to demo did not return the demo")
     assert d["try_down"] == [], f"(t3) leaving Try it left {d['try_down']} held"
     c.keys("up:shift", f"dup:{cx},{cy}")
     d = c.dump()
@@ -1006,7 +1184,7 @@ def try_it(c, shot=None):
 
     # (t4) held when the window closes (Esc): released, and nothing owed once let go
     press(c, d, "try")
-    d = wait_dump(c, lambda d: d["try"] and keys_of(d, "build:"), "(t4) Try it did not take the stage again")
+    d = wait_dump(c, lambda d: d["try"] and d["sim"], "(t4) Try it did not take the stage again")
     c.keys("down:ctrl", f"ddown:{cx},{cy}")
     d = wait_dump(c, lambda d: d["try_down"] == ["ctrl", "lmb"], "(t4) the held Ctrl and left button are not in Try it's set")
     c.keys("esc")
@@ -1578,11 +1756,328 @@ def mp(name):
             tacompat.stop_wine(g)
 
 
+MODS_SCREEN = "2560x1440"                     # the private display, and so the game's screen (private_xvfb)
 # the setups the wiki's 3D stage is measured under, as tools/compat/setups.json names them
 MODS_SETUPS = ("retail", "escalation", "mayhem-11.3.0", "prota-4.8", "tazero-alpha5", "twilight-2.0b98")
 # (entry, demo, tick) captured under each: a construction among Quick Build's units, and the
 # gesture's ghosts on Build Lines' stage (the first frames of UNITS_SHOTS for each entry)
 MODS_SHOTS = (("quickbuild", 3, 180), ("buildshapes", 2, 100))
+
+
+# the sidebar's checks under each setup (mods (b1)..(b4)): the stage's state, the demo at a tick where its ARMCK
+# stands selected on its first page at rest (TA Zero: its side's GEN, the ARMCK having no page there), and the
+# demo whose build trip TA Zero cannot reach, which locks at its first build (tick 20) and plays on elsewhere
+SIDE_STATE = ("quickbuild", 1, 10)
+SIDE_LOCK = ("buildshapes", 3, 0, 20)         # (entry, its tree node, the demo's index, its first build's tick)
+LOCK_RGB = (0xD0, 0x18, 0x18)                 # the badge's disc (tagpu_wikilay.c LOCK_RGB, wiki.css .lock)
+SIDE_PACKS = TREE / "tools/wiki/mockup/gfx/side"
+
+
+def pack_of(setup):
+    """The setup's sidebar pack (tools/wiki/sidepacks.py, gitignored: drawn from the game's files)."""
+    sys.path.insert(0, str(TREE / "tools/wiki"))
+    import sidepacks
+    mod = next((m for m, s in sidepacks.SETUPS.items() if s == setup), None)
+    assert mod and (SIDE_PACKS / mod / "side.json").exists(), \
+        f"no sidebar pack for {setup}: run tools/wiki/sidepacks.py {mod or ''}"
+    return mod, SIDE_PACKS / mod
+
+
+def private_xvfb(size):
+    """A private X server of `size`, its display number read off its readiness pipe as
+    tacompat.start_xvfb reads it: the game follows the display's size (impure.cfg
+    resolution=native), and the stage's sidebar is drawn at 768 rows a mod, so a 1440-row screen
+    shows nine in ten of its rows where a 1024-row one shows six."""
+    sys.path.insert(0, str(TREE / "tools/compat"))
+    import tacompat
+    r, w = os.pipe()
+    p = subprocess.Popen(["Xvfb", "-displayfd", str(w), "-screen", "0", f"{size}x24", "-nolisten", "tcp"],
+                         pass_fds=(w,), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    os.close(w)
+    try:
+        answer = tacompat.xvfb_reply(r)
+    finally:
+        os.close(r)
+    if not re.fullmatch(rb"\d+\n", answer) or p.poll() is not None:
+        tacompat.stop_xvfb(p)
+        raise AssertionError(f"Xvfb did not start: {answer!r}")
+    p.tacompat_display = int(answer)
+    return p
+
+
+def window_grab(display, d, path):
+    """The game's client window on a private display, grabbed: of the windows titled as the game's
+    (one is its frame), the one the engine's screen fills, so the picture's pixels are the client
+    points the dump's hit map names."""
+    r = subprocess.run(["xwininfo", "-root", "-tree"], env={**os.environ, "DISPLAY": f":{display}"},
+                       capture_output=True, text=True, timeout=10)
+    wins = [(m.group(1), int(m.group(2)), int(m.group(3))) for m in
+            re.finditer(r'^\s+(0x[0-9a-f]+) "Total Annihilation[^"]*": \([^)]*\)\s+(\d+)x(\d+)', r.stdout, re.M)]
+    vx, vy, vw, vh = d["viewport"]
+    fits = sorted((w * h, wid) for wid, w, h in wins if w >= vx + vw and h >= vy + vh)
+    assert fits, f"no game window holds the viewport {d['viewport']}: {wins}"
+    r = subprocess.run(["import", "-display", f":{display}", "-window", fits[0][1], str(path)],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, f"import: {r.stderr.strip()}"
+
+
+def png_rgba(path):
+    import numpy as np
+    from PIL import Image
+    return np.asarray(Image.open(path).convert("RGBA")).copy()
+
+
+def column_diff(cap, comp, layout, screen, rows):
+    """The engine's capture (RGBA, the column at its left edge) against a composed column, over
+    `rows`, as tools/wiki/sidedump.mjs's comparisons with the phase-1 captures read them: a pixel
+    the composer left unpainted differs. The count, and the gadgets (or `panel`) holding them."""
+    import numpy as np
+    y0, y1 = rows
+    a, b = cap[y0:y1, :128, :3].astype(int), comp[y0:y1, :, :3].astype(int)
+    bad = np.any(a != b, axis=2) | (comp[y0:y1, :, 3] == 0)
+    where = set()
+    s = layout["screens"][screen]
+    for y, x in zip(*np.nonzero(bad)):
+        y += y0
+        g = next((g["name"] for g in reversed(s["gadgets"]) if g["rect"][0] <= x < g["rect"][0] + g["rect"][2]
+                  and s["y"] + g["rect"][1] <= y < s["y"] + g["rect"][1] + g["rect"][3]), None)
+        where.add(g or ("the minimap" if y < 128 else "panel"))
+    return int(bad.sum()), sorted(where)
+
+
+def sidedump(pack, args, png):
+    r = subprocess.run(["node", str(TREE / "tools/wiki/sidedump.mjs"), "--pack", str(pack), *map(str, args),
+                        "--out", str(png)], capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, f"sidedump {' '.join(map(str, args))}: {r.stderr.strip()}"
+    return r.stdout.split(": ")[2].split(",")[0]
+
+
+def live_sidebar(c, inst, pack, out, row):
+    """(b1) the setup's own sidebar against the composer on its pack, by the phase-1 method (the
+    captures in .data/wiki-sidebar/captures/): the engine's frame (`tacli shot`, one pixel a game
+    pixel) cropped to the column, its rows from 128 down to the layout's height, against
+    tools/wiki/sidedump.mjs on the pack with each gadget greyed as the engine's own snapshot of the
+    screen has it (`tacli ui`, `--live`). Nothing selected (the player's side's MAIN2); then,
+    where the pack gives ARMCK pages, an ARMCK placed beside the commander and selected (its first
+    page, the BUILD tab and the move-order button current, as the engine draws them for it)."""
+    name, lay = inst["name"], json.loads((pack / "side.json").read_text())["layout"]
+    H = lay["height"]
+    got = {}
+
+    def capture(state):
+        full, ui = out / f"live-{state}.full.png", out / f"live-{state}.ui.json"
+        tacli("shot", name, "-o", full, timeout=120)
+        snap = json.loads(tacli("ui", name, "--json", timeout=60))
+        ui.write_text(json.dumps(snap))
+        return png_rgba(full), snap, ui
+
+    cap, snap, ui = capture("main2")
+    gui = snap["gui"].upper()
+    assert gui.endswith("MAIN2.GUI"), f"(b1) nothing selected, the engine shows {snap['gui']}, not a MAIN2"
+    screen = sidedump(pack, ["--live", ui, "--screen", "main2", "--side", gui[:-len("MAIN2.GUI")]], out / "live-main2.composed.png")
+    n, where = column_diff(cap, png_rgba(out / "live-main2.composed.png"), lay, screen, (128, H))
+    got["main2"] = (screen, n, where)
+    assert n == 0, f"(b1) {snap['gui']}: {n} pixels of rows 128..{H - 1} differ from the composer, in {where}"
+
+    if "ARMCK" in lay["types"]:
+        roster = c.call("roster", "--json")["units"]
+        com = next(u for u in roster if u["owner"] == 0)
+        cx, cz = com["world"]
+        sc = {"format": "ta-scenario/1", "description": "An ARMCK of the player's beside its commander, for the sidebar.",
+              "seed": 20261027, "on_error": "abort", "setup": {"clear_existing": False},
+              "units": [{"id": "ck", "type": "ARMCK", "owner": 0, "pos": [cx, cz + 200], "facing": 0}]}
+        scen = out / "live-ck.json"
+        scen.write_text(json.dumps(sc, indent=1))
+        tacli("scenario", "apply", name, scen, timeout=180)
+        end = time.monotonic() + 60
+        while "ARMCK" not in c.units:
+            for u in c.call("roster", "--json")["units"]:
+                if u["owner"] == 0 and u["type"].upper() == "ARMCK":
+                    c.units["ARMCK"] = u["engine_index"]
+            assert "ARMCK" in c.units or time.monotonic() < end, "(b1) the ARMCK never reached the roster"
+            time.sleep(1)
+        try:
+            c.select("ARMCK")
+            time.sleep(1.0)
+            cap, snap, ui = capture("armck")
+        finally:
+            c.call("eye", "--release")
+        page = lay["types"]["ARMCK"]["pages"][0]
+        current = [g["name"] for g in lay["screens"][page]["gadgets"] if g["role"] == "buildtab"] + ["ARMMOVEORD"]
+        screen = sidedump(pack, ["--live", ui, "--type", "ARMCK", "--page", 1, "--pressed", ",".join(current)],
+                          out / "live-armck.composed.png")
+        n, where = column_diff(cap, png_rgba(out / "live-armck.composed.png"), lay, screen, (128, H))
+        got["armck"] = (screen, n, where)
+        assert n == 0, f"(b1) {snap['gui']}: {n} pixels of rows 128..{H - 1} differ from the composer, in {where}"
+    row["live"] = got
+    print(f"wiki mods: {row['setup']}: (b1) the engine's own sidebar equals the composer on the pack, rows 128..{H - 1}: "
+          + "; ".join(f"{k} {s} ({n} differ)" for k, (s, n, _w) in got.items()))
+
+
+def layout_norm(L):
+    """A layout as the sim reads it, for comparing the game's tagpu_wiki.layout.json with the
+    pack's: a gadget's absent `grey`/`hidden` is false and its absent `unit` null."""
+    out = json.loads(json.dumps(L))
+    for s in out.get("screens", {}).values():
+        for g in s["gadgets"]:
+            g["grey"], g["hidden"], g["unit"] = bool(g.get("grey")), bool(g.get("hidden")), g.get("unit")
+    out.pop("note", None)
+    return out
+
+
+def column_rect(d, H):
+    """The client rect [x0, y0, x1, y1) the stage draws its sidebar's image into, HOP_SIDE's: the
+    128-unit column left of the map's origin (stage_fit), from the stage's top, H rows, each edge
+    snapped as tagpu_wikistage.c's snapd snaps it."""
+    s, ox, oz = stage_fit(d)
+    snap = lambda v: math.floor(v + 0.5 + 1 / 64)
+    return [snap(ox - SIDE_W * s), snap(oz), snap(ox), snap(oz + H * s)]
+
+
+def sample(img, rect, H):
+    """The client pixels of the column's rect, and the texel column and row each samples: both
+    texels where a pixel's centre falls on the edge between two, which the sampler may round
+    either way (the centre of client pixel p lands at texel (p + 0.5 - x0) * 128 / w)."""
+    import numpy as np
+    x0, y0, x1, y1 = rect
+    eps = 1e-6
+
+    def texels(n0, n1, n):
+        u = (np.arange(n0, n1) + 0.5 - n0) * n / (n1 - n0)
+        return np.clip(np.floor(u - eps), 0, n - 1).astype(int), np.clip(np.floor(u + eps), 0, n - 1).astype(int)
+    return img[y0:y1, x0:x1], texels(x0, x1, SIDE_W), texels(y0, y1, H)
+
+
+def stage_vs(img, rect, comp, H):
+    """Each client pixel of the column's rect against the composed texel it samples (either, on an
+    edge): (differing pixels, pixels compared, the texels sampled, the column resampled to texels
+    with an unsampled texel magenta)."""
+    import numpy as np
+    shown, (tx0, tx1), (ty0, ty1) = sample(img, rect, H)
+    ok = np.zeros(shown.shape[:2], bool)
+    for ty in (ty0, ty1):
+        for tx in (tx0, tx1):
+            ok |= np.all(shown == comp[ty][:, tx][:, :, :3].astype(int), axis=2)
+    grid = np.zeros((H, SIDE_W, 3), np.uint8)
+    grid[:] = (255, 0, 255)
+    grid[np.ix_(ty1, tx1)] = shown.astype(np.uint8)
+    seen = np.zeros((H, SIDE_W), bool)
+    seen[np.ix_(ty1, tx1)] = True
+    return int((~ok).sum()), int(ok.size), int(seen.sum()), grid
+
+
+def stage_sidebar(c, display, gamedir, pack, out, row):
+    """(b2)..(b4) the wiki's sidebar under the setup."""
+    import numpy as np
+    from PIL import Image
+    # (b2) the layout every demo starts on is the mod's, and the game plays every demo on it to
+    # the hash sim.js gives on the same file
+    start = c.mark()
+    (gamedir / "tagpu_wiki.check").write_text("")
+    line = wait_line(c, start, r"wiki check: \d+ demos played", "(b2) the check", 120)
+    src = wait_line(c, start, r"wiki check: the sidebar layout is ", "(b2) the check's layout line", 5)
+    assert "the mod's" in src, f"(b2) {src.split('wiki check: ', 1)[1]}"
+    layf = out / "tagpu_wiki.layout.json"
+    shutil.copyfile(gamedir / "tagpu_wiki.layout.json", layf)
+    game_lay = json.loads(layf.read_text())
+    pack_lay = json.loads((pack / "side.json").read_text())["layout"]
+    assert layout_norm(game_lay) == layout_norm(pack_lay), \
+        f"(b2) the game's layout {layf} is not the pack's {pack / 'side.json'}"
+    want = simparity_hashes(layf)
+    c.mark()
+    got = dict(m.groups() for ln in c.log[start:] if (m := re.search(r"wiki check: (\S+/\S+) ([0-9a-f]{16})$", ln)))
+    differ = sorted(k for k in want if got.get(k) != want[k])
+    assert not differ and len(got) == len(want), f"(b2) the game's hashes differ from simparity --hash for {differ}"
+    row["layout"] = {"screens": len(game_lay["screens"]), "types": sorted(game_lay["types"]), "height": game_lay["height"],
+                     "sides": [s["name"] for s in game_lay["sides"]], "player_side": game_lay["player_side"]}
+    print(f"wiki mods: {row['setup']}: (b2) {src.split('wiki check: ', 1)[1]}, equal to the pack's "
+          f"({row['layout']}); {line.split('wiki check: ', 1)[1]}; all {len(want)} hashes equal simparity --hash")
+
+    # (b3) the stage's column at a state, against the composer on the pack for the same view
+    entry, demo, tick = SIDE_STATE
+    start = c.mark()
+    (gamedir / "tagpu_wiki.shot").write_text(f"{entry} {demo} {tick}\n")
+    wait_line(c, start, r"wiki: shot \d+ asked", f"(b3) {entry} {demo} {tick}")
+    d = wait_dump(c, lambda d: d["tick"] == tick and not d["playing"] and d["side_h"] > 0, f"(b3) {entry} {demo} not held at {tick}")
+    assert d["layout_src"] == "mod", f"(b3) the demo started on the {d['layout_src']} layout"
+    c.keys("dmove:%d,%d" % c.centre(c.hit(d, "close")))
+    time.sleep(1.5)
+    d = c.dump()
+    shot = out / f"stage-{entry}-d{demo}-t{tick}.window.png"
+    window_grab(display, d, shot)
+    comp = out / f"stage-{entry}-d{demo}-t{tick}.composed.png"
+    r = subprocess.run(["node", str(TREE / "tools/wiki/sideview.mjs"),
+                        *map(str, ("--play", entry, demo, tick, "--layout", layf, "--compose", pack, "--out", comp))],
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, f"sideview: {r.stderr.strip()}"
+    v = json.loads(r.stdout)
+    H = v["side"]["h"]
+    img, rect, cm = png_rgba(shot)[:, :, :3].astype(int), column_rect(d, H), png_rgba(comp)
+    # the rect as snapped, or the placement within a pixel of each edge that matches the most texels,
+    # which the line names when it is not the snapped one
+    best = (rect, stage_vs(img, rect, cm, H))
+    for dx0, dy0, dx1, dy1 in itertools.product((-1, 0, 1), repeat=4) if best[1][0] else ():
+        rr = [rect[0] + dx0, rect[1] + dy0, rect[2] + dx1, rect[3] + dy1]
+        res = stage_vs(img, rr, cm, H)
+        if res[0] < best[1][0]:
+            best = (rr, res)
+    rr, (bad, painted, seen, grid) = best
+    s = stage_fit(d)[0]
+    row["stage"] = {"screen": v["side"]["screen"], "rect": rr, "snapped": rect, "scale": round(s, 4), "differ": bad, "pixels": painted,
+                    "texels": seen, "of": SIDE_W * H, "minimap": v["composed"]["minimap"]}
+    # the picture for the owner: the stage's column as drawn, the composer's for the same view, and
+    # the engine's own sidebar (its first page with the ARMCK selected, else nothing selected)
+    live = out / ("live-armck.full.png" if (out / "live-armck.full.png").exists() else "live-main2.full.png")
+    lv = png_rgba(live)[:H, :SIDE_W, :3]
+    pair = np.full((H, 3 * SIDE_W + 16, 3), (255, 0, 255), np.uint8)
+    pair[:, :SIDE_W] = grid
+    pair[:, SIDE_W + 8:2 * SIDE_W + 8] = cm[:, :, :3]
+    pair[:lv.shape[0], 2 * SIDE_W + 16:] = lv
+    Image.fromarray(pair).resize((pair.shape[1] * 2, H * 2), Image.NEAREST).save(out / "sidebar.png")
+    print(f"wiki mods: {row['setup']}: (b3) {entry} demo {demo} held at tick {tick}: the stage's column "
+          f"({v['side']['screen']}, the shown unit's page {v['side']['page']}) drawn at {s:.3f} client pixels a game "
+          f"pixel into {rr}{'' if rr == rect else f' (the stage snaps it to {rect})'}: {bad} of {painted} pixels differ "
+          f"from the composer on the pack, {seen} of {SIDE_W * H} "
+          f"texels sampled; the minimap {'composed' if v['composed']['minimap'] else 'left to the whitebox'}")
+    assert bad == 0, f"(b3) {bad} pixels of the stage's column differ from the composer (out: {out / 'sidebar.png'})"
+
+    # (b4) the demo TA Zero cannot reach, played: locked at its first build there, with the badge, and
+    # playing on past it elsewhere
+    entry, node, k, at = SIDE_LOCK
+    r = subprocess.run(["node", str(TREE / "tools/wiki/sideview.mjs"), *map(str, ("--play", entry, k + 1, at + 60, "--layout", layf))],
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, f"sideview: {r.stderr.strip()}"
+    v = json.loads(r.stdout)
+    d = c.dump()
+    if d["entry"] != entry:
+        press(c, d, f"entry:{node}")
+        d = wait_dump(c, lambda d: d["entry"] == entry and f"demo:{k}" in keys_of(d, "demo:"), f"(b4) entry:{node}")
+    t0 = press(c, d, f"demo:{k}")
+    d = wait_dump(c, lambda d: d["playing"] and fresh(d, t0) and d["tick"] >= 0, f"(b4) demo:{k} did not start")
+    time.sleep(3.0)
+    d = c.dump()
+    time.sleep(1.5)
+    d2 = c.dump()
+    c.keys("dmove:%d,%d" % c.centre(c.hit(d2, "close")))
+    time.sleep(1.0)
+    shot = out / f"lock-{entry}-d{k + 1}.window.png"
+    window_grab(display, d2, shot)
+    img = png_rgba(shot)[:, :, :3].astype(int)
+    sx0, sy0, sx1, _ = c.hit(d2, "stage")
+    above = img[d2["viewport"][1]:sy0, sx0:sx1]
+    red = int(np.all(np.abs(above - LOCK_RGB) <= 8, axis=2).sum())
+    if v["locked"]:
+        assert d["done"] and d2["done"] and d["tick"] == d2["tick"] == v["tick"] == at, \
+            f"(b4) {entry} demo {k + 1}: ticks {d['tick']} -> {d2['tick']}, done {d['done']}, not held at {at} (sim.js: {v})"
+        assert red > 0, f"(b4) {entry} demo {k + 1} held at its lock, but no badge above the stage ({shot})"
+    else:
+        assert d2["tick"] > d["tick"] > at and not red, \
+            f"(b4) {entry} demo {k + 1}: ticks {d['tick']} -> {d2['tick']}, {red} badge pixels (sim.js: not locked)"
+    row["lock"] = {"locked": v["locked"], "ticks": [d["tick"], d2["tick"]], "badge_px": red}
+    print(f"wiki mods: {row['setup']}: (b4) {entry} demo {k + 1} played: "
+          + (f"held at its lock, tick {d['tick']} -> {d2['tick']} over 1.5 s, {v['locked']} out of reach, the badge "
+             f"shown ({red} pixels of its disc)" if v["locked"] else
+             f"past its first build at tick {at}, tick {d['tick']} -> {d2['tick']}, no badge"))
 
 
 def mods_setup(tacompat, setup, dll, out):
@@ -1591,12 +2086,15 @@ def mods_setup(tacompat, setup, dll, out):
     from PIL import Image
     row = {"setup": setup["name"], "boxes": [], "pass": False}
     out.mkdir(parents=True, exist_ok=True)
-    xv = tacompat.start_xvfb()
+    mod, pack = pack_of(setup["name"])
+    row["pack"] = mod
+    xv = private_xvfb(MODS_SCREEN)
     try:
         inst = tacompat.prepare_wine(setup, dll, xv.tacompat_display, suffix="-wk")
-    finally:
+    except BaseException:
         tacompat.stop_xvfb(xv)
-    g = tacompat.start_wine(inst, None)
+        raise
+    g = tacompat.start_wine(inst, xv.tacompat_display, display_server=xv)
     display, gamedir, t0, seen = g["display"], inst["gamedir"], time.time(), set()
 
     def poll(step):
@@ -1626,6 +2124,8 @@ def mods_setup(tacompat, setup, dll, out):
 
         c = Wiki.__new__(Wiki)
         c.attach(inst["name"])
+        live_sidebar(c, inst, pack, out, row)
+        poll("b1")
         start = c.mark()
         d = c.open_wiki(expect_pause=True)
         row["screen"] = "%dx%d" % tuple(d["game"])
@@ -1667,6 +2167,8 @@ def mods_setup(tacompat, setup, dll, out):
             print(f"wiki mods: {setup['name']}: (w3) {entry} demo {demo} tick {tick}: "
                   f"{armed.split('wiki3d: ', 1)[1]}; {row['stages'][entry]}; {row['types'][entry]}; "
                   f"{m.group(1)} of {m.group(2)} frames drew the image")
+        stage_sidebar(c, display, gamedir, pack, out, row)
+        poll("b4")
         c.keys("esc")
         wait_dump(c, lambda d: not d["open"], "(w4) Esc did not close the window")
         time.sleep(2)
@@ -1709,6 +2211,8 @@ def mods_table(rows):
         print(f"== {r['setup']}: {'PASS' if r['pass'] else 'FAIL - ' + r.get('why', '')}")
         print(f"   {r.get('load')}; the screen {r.get('screen')}; boxes: {r['boxes'] or 'none'}; "
               f"the first mounts {[arc(m['archive']) for m in rep.get('mounts', [])][:4]}")
+        print(f"   sidebar ({r.get('pack')}'s pack): the engine's {r.get('live')}; the layout {r.get('layout')}; "
+              f"the stage {r.get('stage')}; the lock {r.get('lock')}")
         for st in rep.get("stages", []):
             srcs = "; ".join(f"{s['map']} <- {arc(s['from'])}" + ("" if s["ok"] else f" ({s['why']})")
                              for s in st.get("sources", []))
