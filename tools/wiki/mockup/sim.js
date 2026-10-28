@@ -1477,6 +1477,11 @@ const WikiSim = (() => {
     sim.cobNotes = () => COB ? COB.notes.slice() : [];
     // the host's handle on a unit by id, for the stage's pose and a check; 0 for none
     sim.cobUnit = id => { const u = byId(id); return u && u.cob || 0; };
+    /* THE UNITS' POSES, index-aligned with view().units: each unit's posed model as its script leaves it (cob.js
+       `model`), null for a unit that runs no script; all null without a host. What the stage draws, as
+       tagpu_wikistage.c `tagpu_wikistage_pose` copies it for the game's; not the view, so neither the state hash
+       nor the view the C sim is compared on carries it. */
+    sim.poses = () => units.map(u => COB && u.cob ? COB.model(u.cob) : null);
     sim.view = () => {
       // the gesture's sites replace the cursor's single square; none (an empty ring) leaves the square standing
       const p = placed() && st.place.sites.length ? st.place : null;

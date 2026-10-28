@@ -44,6 +44,13 @@ D1/D2). Each element is resolved or refused by name:
   the record's yaw (the stage's turn of the model as the engine holds it). Beside the mesh: each vertex's engine
   normal and its quad's four corners' (`*.normals.bin`, 15 floats a vertex), and per owner each vertex's quad frame
   (`*.<owner>.quad.bin`, 8 floats: tagpu_posebake.c `quad_frame`'s corner point, its (a, b) and the frame's rect).
+- **The pieces** (COB L3b): every piece's faces are in the mesh, the slant casters and the wire, Create()'s hides
+  included, because a script can show what Create hid. `*.pieces.bin` gives each vertex its piece (u16: the body's
+  vertices, then the slant's, then the wire's), and the mesh's `pieces` table, one row a piece, its parent, its
+  cumulative rest offset in the file's axes and whether Create() hides it or marks it dont-cache. Both are in the
+  posed order (`script.order` maps it to the tree's pre-order walk) for a type with a script, in the walk's order
+  for one without. The rest pose leaves out a hidden piece's vertices, and an uncached one's slant casters; a posed
+  unit draws by its script's flags (tools/wiki/mockup/pose.js).
 - **Textures** (A4, A5): the texture bank is `textures\\*.GAF` in enumeration order without `logos.GAF`; a face's
   name binds to the first GAF in bank order that has the entry; on a miss to `textures\\logos.GAF`, as a team face
   (the owner's frame) only when the entry has exactly 10 frames; when neither has it, the face is flat colour 0xD1.
@@ -591,7 +598,9 @@ def bind(eng, tex, owner, binds):
 
 
 def unit_meshes(eng, models, owners):
-    """Every (type, owner)'s mesh in tascene's format, the slant casters and wire edges per type, and the atlas."""
+    """Every (type, owner)'s mesh in tascene's format, the slant casters and wire edges per type, and the atlas. Every
+    piece is emitted, Create()'s hides too; `piece`, `slantPiece` and `wirePiece` give each vertex its piece's index in
+    the tree's pre-order walk, and `walk` each piece's row of write_units' table, in that order."""
     binds, frames = {}, {}
     plan = {}
     for name, (label, root, hidden, uncached, facts) in models.items():
@@ -613,73 +622,86 @@ def unit_meshes(eng, models, owners):
                            lambda r, f=f: f.pixels[r * f.width:(r + 1) * f.width], UNIT_PAD)
         rects[key] = (x / aw, y / ah, (x + f.width) / aw, (y + f.height) / ah, f.transparent)
     for name, (label, root, hidden, uncached, facts) in models.items():
-        out = {"owners": {}, "quads": {}, "slant": [], "wire": [], "normals": [], "faces": 0, "flatMiss": 0}
+        nodes = [p for p, _ in root.walk()]
+        walk = {id(p): k for k, p in enumerate(nodes)}
+        out = {"owners": {}, "quads": {}, "slant": [], "wire": [], "normals": [], "faces": 0, "flatMiss": 0,
+               "piece": [], "slantPiece": [], "wirePiece": [], "walk": [None] * len(nodes)}
         for owner in owners:
             verts, quads = [], []
             stats = {"faces": 0, "flatMiss": 0}
 
-            def emit(piece, ox, oy, oz):
+            def emit(piece, ox, oy, oz, parent):
                 px, py, pz = ox + piece.offset[0], oy + piece.offset[1], oz + piece.offset[2]
-                if piece.name.lower() not in hidden:
-                    faces, skip0 = engine_faces(piece)
-                    vn = vertex_normals(piece, faces, skip0) if owner == owners[0] else None
-                    for i, prim in enumerate(faces):
-                        if (i == 0 and skip0) or len(prim.indices) < 3:
-                            continue
-                        if any(ix >= len(piece.vertices) for ix in prim.indices):
-                            continue
-                        pts = [(px + piece.vertices[ix][0], py + piece.vertices[ix][1], pz + piece.vertices[ix][2])
-                               for ix in prim.indices]
-                        if owner == owners[0]:
-                            # the structure shadow's casters (0x45A610): every face of a cached piece
-                            if piece.name.lower() not in uncached:
-                                for k in range(1, len(pts) - 1):
-                                    for c in (pts[0], pts[k], pts[k + 1]):
-                                        out["slant"].extend(c)
-                            # the nanoframe's wire (0x458FA0): every face as a closed outline
-                            for e in range(len(pts)):
-                                out["wire"].extend(pts[e]); out["wire"].extend(pts[(e + 1) % len(pts)])
-                        rect = None
-                        flat = (prim.color & 0xFF) / 255.0
-                        if prim.texture:
-                            got = bind(eng, prim.texture, owner, binds)
-                            if got:
-                                rect = rects[got[0]]
-                            else:
-                                flat = FLAT_MISS / 255.0
+                k = walk[id(piece)]
+                hid = piece.name.lower() in hidden
+                first = owner == owners[0]
+                if first:
+                    out["walk"][k] = {"parent": parent, "off": [px, py, pz], "hidden": hid,
+                                      "uncached": piece.name.lower() in uncached}
+                faces, skip0 = engine_faces(piece)
+                vn = vertex_normals(piece, faces, skip0) if first else None
+                for i, prim in enumerate(faces):
+                    if (i == 0 and skip0) or len(prim.indices) < 3:
+                        continue
+                    if any(ix >= len(piece.vertices) for ix in prim.indices):
+                        continue
+                    pts = [(px + piece.vertices[ix][0], py + piece.vertices[ix][1], pz + piece.vertices[ix][2])
+                           for ix in prim.indices]
+                    if first:
+                        # the structure shadow's casters (0x45A610): every face, cast while its piece is visible
+                        # and cached
+                        for j in range(1, len(pts) - 1):
+                            for c in (pts[0], pts[j], pts[j + 1]):
+                                out["slant"].extend(c)
+                                out["slantPiece"].append(k)
+                        # the nanoframe's wire (0x458FA0): every face as a closed outline
+                        for e in range(len(pts)):
+                            out["wire"].extend(pts[e]); out["wire"].extend(pts[(e + 1) % len(pts)])
+                            out["wirePiece"].extend((k, k))
+                    rect = None
+                    flat = (prim.color & 0xFF) / 255.0
+                    if prim.texture:
+                        got = bind(eng, prim.texture, owner, binds)
+                        if got:
+                            rect = rects[got[0]]
+                        else:
+                            flat = FLAT_MISS / 255.0
+                            if not hid:
                                 stats["flatMiss"] += 1
+                    if not hid:
                         stats["faces"] += 1
-                        n = len(pts)
-                        qf = quad_frame(piece, prim.indices) if rect and n == 4 else None
-                        for k in range(1, n - 1):        # fanned from vertex 0
-                            for slot in (0, k, k + 1):
-                                if vn is not None:
-                                    # the vertex's own normal, then the quad's four corners' (its own four times
-                                    # for any other face), as tagpu_posebake.c `geom_emit` carries them
-                                    out["normals"].extend(vn[prim.indices[slot]])
-                                    for c in range(4):
-                                        out["normals"].extend(vn[prim.indices[c]] if n == 4 else vn[prim.indices[slot]])
-                                if qf:
-                                    a, b = qf
-                                    quads.extend((1.0 if slot == 1 else a if slot == 2 else 0.0,
-                                                  1.0 if slot == 3 else b if slot == 2 else 0.0,
-                                                  a, b, rect[0], rect[1], rect[2], rect[3]))
-                                else:
-                                    quads.extend((0.0, 0.0, 1.0, 1.0, -1.0, -1.0, -1.0, -1.0))
-                                vx, vy, vz = pts[slot]
-                                if rect:
-                                    # the engine maps a whole GAF frame across the face's four corners; an n-gon
-                                    # collapses onto them, as tascene's parity lane does
-                                    c = slot if n <= 4 else slot * 4 // n
-                                    u = rect[2] if c in (1, 2) else rect[0]
-                                    v = rect[3] if c >= 2 else rect[1]
-                                    verts.extend((vx, vy, vz, u, v, 0.0, (rect[4] if rect[4] is not None else 0) / 255.0))
-                                else:
-                                    verts.extend((vx, vy, vz, -1.0, -1.0, flat, -1.0))
+                    n = len(pts)
+                    qf = quad_frame(piece, prim.indices) if rect and n == 4 else None
+                    for j in range(1, n - 1):        # fanned from vertex 0
+                        for slot in (0, j, j + 1):
+                            if vn is not None:
+                                # the vertex's own normal, then the quad's four corners' (its own four times
+                                # for any other face), as tagpu_posebake.c `geom_emit` carries them
+                                out["normals"].extend(vn[prim.indices[slot]])
+                                for c in range(4):
+                                    out["normals"].extend(vn[prim.indices[c]] if n == 4 else vn[prim.indices[slot]])
+                                out["piece"].append(k)
+                            if qf:
+                                a, b = qf
+                                quads.extend((1.0 if slot == 1 else a if slot == 2 else 0.0,
+                                              1.0 if slot == 3 else b if slot == 2 else 0.0,
+                                              a, b, rect[0], rect[1], rect[2], rect[3]))
+                            else:
+                                quads.extend((0.0, 0.0, 1.0, 1.0, -1.0, -1.0, -1.0, -1.0))
+                            vx, vy, vz = pts[slot]
+                            if rect:
+                                # the engine maps a whole GAF frame across the face's four corners; an n-gon
+                                # collapses onto them, as tascene's parity lane does
+                                c = slot if n <= 4 else slot * 4 // n
+                                u = rect[2] if c in (1, 2) else rect[0]
+                                v = rect[3] if c >= 2 else rect[1]
+                                verts.extend((vx, vy, vz, u, v, 0.0, (rect[4] if rect[4] is not None else 0) / 255.0))
+                            else:
+                                verts.extend((vx, vy, vz, -1.0, -1.0, flat, -1.0))
                 for child in piece.children:
-                    emit(child, px, py, pz)
+                    emit(child, px, py, pz, k)
 
-            emit(root, 0.0, 0.0, 0.0)
+            emit(root, 0.0, 0.0, 0.0, -1)
             out["owners"][owner] = verts
             out["quads"][owner] = quads
             out["faces"], out["flatMiss"] = stats["faces"], stats["flatMiss"]
@@ -750,11 +772,19 @@ def write_units(out, eng, entry, report, types):
         rec["wireFile"], rec["wireVerts"] = f"units/{key}.wire.bin", len(p["wire"]) // 3
         # the script and its posed order, for the COB host the mockup's server runs (tools/wiki/serve.py)
         shit = eng.open(eng.dirs["scripts"], name, "COB")
+        order = list(range(len(p["walk"])))
         if shit:
             (out / f"units/{key}.cob").write_bytes(shit[0])
             posed = posed_order(root, shit[0])
-            rec["script"] = {"file": f"units/{key}.cob", "order": [k for k, _ in posed],
-                             "visible": [int(v) for _, v in posed]}
+            order = [k for k, _ in posed]
+            rec["script"] = {"file": f"units/{key}.cob", "order": order, "visible": [int(v) for _, v in posed]}
+        # the pieces in the order the host's posed model holds them, so a primitive's index is its row and its
+        # vertices' piece (tools/wiki/mockup/pose.js composes the script's pose over this table)
+        at = {k: i for i, k in enumerate(order)}
+        rec["pieces"] = [{**p["walk"][k], "parent": at.get(p["walk"][k]["parent"], -1)} for k in order]
+        ids = [at[k] for k in p["piece"] + p["slantPiece"] + p["wirePiece"]]
+        (out / f"units/{key}.pieces.bin").write_bytes(struct.pack(f"<{len(ids)}H", *ids))
+        rec["pieceFile"] = f"units/{key}.pieces.bin"
         meshes[name] = rec
     return {"atlas": {"w": aw, "h": ah, "file": "units/atlas.r8.bin", "rgba": None, "pad": tascene.UNIT_PAD,
                       "frames": frame_rects},

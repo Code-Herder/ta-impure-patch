@@ -13,7 +13,9 @@
      grid (scene.js) -- or neither, when the pack's ground did not resolve: the ground falls back whole, and stage.js
      draws its whitebox ground under an image that is clear there;
    - every unit with a resolved model, its Classic silhouette or slant shadow first, then the bodies, a nanoframe in
-     the engine's staging and then its wire; units take no fog;
+     the engine's staging and then its wire; units take no fog. A unit whose script poses it (the frame's `poses`,
+     sim.js `poses`) draws that pose, composed by pose.js as the game's stage composes it; any other, and every
+     ghost, draws the rest pose with Create()'s hides;
    - the ghosts last, alpha 0.40, depth writes off: the placement ghost, the gesture's sites, the queued builds.
    `complete` is false when anything this frame expected was not drawn; stage.js then draws the whitebox whole. */
 window.WikiGfx = (() => {
@@ -72,17 +74,33 @@ window.WikiGfx = (() => {
     const T = ground ? await Promise.all([bin(dir + pack.map.atlas.file), bin(dir + pack.map.tilemap.file)]) : null;
     const F = ground && pack.features && pack.features.count
       ? await Promise.all([bin(dir + pack.features.atlas.file), bin(dir + pack.features.instances)]) : null;
-    const meshes = {}, slants = {}, wires = {}, normals = {}, quads = {}, U = pack.units;
+    /* EACH TYPE'S ARRAYS: what the rest pose draws (meshes, slants, wires, normals, quads), and, from a pack that
+       carries every piece with its piece table (gfx.py, *The pieces*), the whole arrays a script's pose is drawn from
+       (`full`). The rest pose is the whole arrays less Create()'s hides (pose.js `rest`). */
+    const meshes = {}, slants = {}, wires = {}, normals = {}, quads = {}, full = {}, U = pack.units;
     const units = U.atlas ? await bin(dir + U.atlas.file) : null;
     for (const [type, m] of Object.entries(U.meshes || {})) {
-      const [s, w, nv] = await Promise.all([bin(dir + m.slantFile), bin(dir + m.wireFile), bin(dir + m.normalsFile)]);
+      const [s, w, nv, pc] = await Promise.all([bin(dir + m.slantFile), bin(dir + m.wireFile), bin(dir + m.normalsFile),
+        m.pieceFile ? bin(dir + m.pieceFile) : null]);
       for (const [owner, file] of Object.entries(m.files)) {
         const key = `${type}.${owner}`;
-        meshes[key] = f32(await bin(dir + file)); slants[key] = f32(s); wires[key] = f32(w); normals[key] = f32(nv);
-        quads[key] = f32(await bin(dir + m.quadFiles[owner]));
+        const all = { mesh: f32(await bin(dir + file)), quad: f32(await bin(dir + m.quadFiles[owner])), normals: f32(nv),
+                      slant: f32(s), wire: f32(w) };
+        if (pc) {
+          const ids = new Uint16Array(pc.buffer, pc.byteOffset, pc.byteLength >> 1), nb = m.verts, ns = m.slantVerts;
+          Object.assign(all, { bp: ids.subarray(0, nb), sp: ids.subarray(nb, nb + ns), wp: ids.subarray(nb + ns) });
+          // the piece arrays index the table and run alongside every array, or the pack is not this file's format
+          if (ids.length !== nb + ns + m.wireVerts || all.mesh.length !== 7 * nb || all.quad.length !== 8 * nb ||
+              all.normals.length !== 15 * nb || all.slant.length !== 3 * ns || all.wire.length !== 3 * m.wireVerts ||
+              !m.pieces || ids.some(i => i >= m.pieces.length))
+            throw new Error(`${dir}: ${type}'s piece arrays do not match its mesh`);
+          full[key] = all;
+        }
+        const r = pc ? WikiPose.rest(all, m.pieces) : all;
+        meshes[key] = r.mesh; slants[key] = r.slant; wires[key] = r.wire; normals[key] = r.normals; quads[key] = r.quad;
       }
     }
-    return new Stage(pack, { pal, shd, tv, tf, sv, sf, uv, uf, T, F, units, meshes, slants, wires, normals, quads });
+    return new Stage(pack, { pal, shd, tv, tf, sv, sf, uv, uf, T, F, units, meshes, slants, wires, normals, quads, full });
   }
 
   function Stage(pack, d) {
@@ -144,15 +162,27 @@ window.WikiGfx = (() => {
        record's turn is applied after that half turn, which is the turn's own negation. */
     const held = ([cs, sn]) => [-cs, -sn];
 
+    /* THE SCRIPT'S POSE of record `r`, as tagpu_wikiworld.c `pose_of` takes it: a unit's (never a ghost's) posed model
+       at its slot in `poses`, with as many primitives as its type has pieces; the arrays pose.js `model` poses from it,
+       in the held model turned onto the record's facing, so emitUnits draws them with the yaw [1, 0]. null draws the
+       rest pose. */
+    function posedOf(r, poses) {
+      if (r.ghost || !poses || r.slot < 0 || r.slot >= poses.length) return null;
+      const p = poses[r.slot], all = d.full[r.key], table = (pack.units.meshes[r.type] || {}).pieces;
+      if (!p || !all || !table || p.n !== table.length) return null;
+      return WikiPose.model(all, table, p, r.yaw[0], r.yaw[1]);
+    }
+
     /* THE NANOFRAME WIRE OF ONE RANGE, as the game draws it (tagpu_vk_unit.c `wire_records`, tagpu_posedraw.c WVS):
        every face outline posed as emitUnits poses the body, each end at 1/65536 and on the line grid
        (floor(SS * p), tagpu_line.h), one band of six vertices an edge (tagpu_glsl.h `taBand`, 2 game pixels about
        the segment) that the fragment stage cuts to 0x4CC7AB's walk thickened to SS; the depth and the height carried
        along the segment, one notch nearer than the surface it traces (+0.15), on the flat path in the second
-       oscillator's colour. `at` counts vertices; `r` is emitUnits' range, whose yaw is already the held one. */
+       oscillator's colour. `at` counts vertices; `r` is emitUnits' range, whose yaw is already the held one, or [1, 0]
+       for a posed record's edges, which pose.js has turned; `w` the range's wire edges. */
     const BAND = 2.0;
-    function wire(r, at) {
-      const w = d.wires[r.inst.type], [cs, sn] = r.yaw, [hotX, hotY] = r.hot, wx = r.inst.pos[0], wz = r.inst.pos[1];
+    function wire(r, at, w) {
+      const [cs, sn] = r.yaw, [hotX, hotY] = r.hot, wx = r.inst.pos[0], wz = r.inst.pos[1];
       const need = (at + (w.length / 6) * 6) * TR.UVST;
       if (wout.length < need) { const g = new Float32Array(need * 2); g.set(wout); wout = g; }
       if (lout.length < need / TR.UVST * 4) { const g = new Float32Array(need / TR.UVST * 8); g.set(lout); lout = g; }
@@ -192,8 +222,9 @@ window.WikiGfx = (() => {
       return n;
     }
 
-    /* One frame of the view `v` at `tick`. Returns { complete, ground, resolved }. */
-    function render(v, tick) {
+    /* One frame of the view `v` at `tick`, its units posed by `poses` (sim.js `poses`; null: every unit at rest).
+       Returns { complete, ground, resolved }. */
+    function render(v, tick, poses) {
       const sc = WS.build(v, pack, tick);
       const fog = sc.fog;
       const f = { GW, GH, zoom: 1, zoomC: [0, 0], depth: pack.depth, vp: [0, 0, GW, GH], SS,
@@ -238,17 +269,25 @@ window.WikiGfx = (() => {
       const recs = sc.units.concat(sc.ghosts);
       let refused = 0;
       if (cu && recs.length && layer('units')) {
-        let need = 0;
-        for (const r of recs) need += ((d.meshes[r.key] || []).length / TR.UNIT_STRIDE + (d.slants[r.key] || []).length / 3) * TR.UVST;
-        if (out.length < need) { out = new Float32Array(need); qout = new Float32Array(need / TR.UVST * TR.QVST); }
         /* THE GAME'S SHADE RULE (tagpu_wikiworld.c `unit_one`, tagpu_posedraw.c VS): a structure, and every ghost, on
            the engine's lit rows from its vertex normals; any other unit on the neutral row. The stage takes the
-           Shading option as on, the game's default. */
-        const inst = recs.map(r => ({ ...r, type: r.key, agl: 0, yaw: held(r.yaw),
-          engineShade: { lit: r.ghost || !(pack.units.meshes[r.type] || {}).mobile, normals: d.normals[r.key],
-                         quad: d.quads[r.key] } }));
-        const { n } = TR.emitUnits({ instances: inst, meshData: d.meshes, slantData: d.slants, meshTop, out, qout, D: pack.depth,
+           Shading option as on, the game's default. A posed record's arrays are its own this frame, under a key of
+           its slot's. */
+        const meshOf = { ...d.meshes }, slantOf = { ...d.slants }, wireOf = { ...d.wires }, posedKeys = [];
+        const inst = recs.map(r => {
+          const lit = r.ghost || !(pack.units.meshes[r.type] || {}).mobile, pz = posedOf(r, poses);
+          if (!pz) return { ...r, type: r.key, agl: 0, yaw: held(r.yaw), engineShade: { lit, normals: d.normals[r.key], quad: d.quads[r.key] } };
+          const key = `${r.key}@${r.slot}`;
+          meshOf[key] = pz.mesh; slantOf[key] = pz.slant; wireOf[key] = pz.wire; posedKeys.push(key);
+          return { ...r, type: key, agl: 0, yaw: [1, 0], engineShade: { lit, normals: pz.normals, quad: pz.quad } };
+        });
+        let need = 0;
+        for (const i of inst) need += ((meshOf[i.type] || []).length / TR.UNIT_STRIDE + (slantOf[i.type] || []).length / 3) * TR.UVST;
+        if (out.length < need) { out = new Float32Array(need); qout = new Float32Array(need / TR.UVST * TR.QVST); }
+        const { n } = TR.emitUnits({ instances: inst, meshData: meshOf, slantData: slantOf, meshTop, out, qout, D: pack.depth,
           r0, E, W, vpL: 0, vpT: 0, w16: mw, h16: mh, heights, neutral, dir: pack.palette.neutral[1] }, look);
+        // emitUnits caches each key's top; a posed key's arrays are this frame's alone
+        for (const k of posedKeys) delete meshTop[k];
         refused = recs.length - look.unitRanges.length;
         gl.bindBuffer(gl.ARRAY_BUFFER, ua.vbo);
         gl.bufferData(gl.ARRAY_BUFFER, out.subarray(0, n * TR.UVST), gl.DYNAMIC_DRAW);
@@ -273,7 +312,7 @@ window.WikiGfx = (() => {
         // each nanoframe's wire, after every body
         let wn = 0;
         const wr = [];
-        for (const r of look.unitRanges) if (!r.inst.ghost && r.inst.nano) { const k = wire(r, wn); wr.push([wn, k]); wn += k; }
+        for (const r of look.unitRanges) if (!r.inst.ghost && r.inst.nano) { const k = wire(r, wn, wireOf[r.inst.type]); wr.push([wn, k]); wn += k; }
         if (wn) {
           gl.bindVertexArray(wa.vao);
           gl.bindBuffer(gl.ARRAY_BUFFER, wa.vbo);
@@ -309,9 +348,10 @@ window.WikiGfx = (() => {
   /* The stage's image for `entry` showing view `v` at `tick`: { canvas, complete, ground, resolved }, or null while the
      game graphics are off or the entry's pack is loading. A pack that fails to load leaves the stage whitebox. `dir`
      is the pack's folder under gfx/: the entry's own by default, or a mod's (side/<mod>/stage/<entry>, gfx.py
-     --stages), which holds that mod's units for the casting the view is bound to. */
+     --stages), which holds that mod's units for the casting the view is bound to. `poses` is sim.js `poses()` for the
+     view, null to draw every unit at rest. */
   const shown = {};                     // entry id -> the folder its last frame was drawn from
-  function frame(entry, v, tick, dir = entry) {
+  function frame(entry, v, tick, dir = entry, poses = null) {
     if (!on() || !entry || !index || !index.entries || !index.entries[entry]) return null;
     shown[entry] = dir;
     let st = stages[dir];
@@ -321,7 +361,7 @@ window.WikiGfx = (() => {
     }
     if (st instanceof Promise || st.error) return null;
     try {
-      const r = st.render(v, tick);
+      const r = st.render(v, tick, poses);
       return { canvas: st.canvas, ...r };
     } catch (x) { console.error('wiki gfx:', x); stages[dir] = { error: x }; return null; }
   }

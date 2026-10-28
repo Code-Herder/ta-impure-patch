@@ -21,6 +21,9 @@ A request is a JSON object with `op`:
   slice   {"world", "facts"} -> state
   activate {"world", "unit", "on"} -> {"r", ...state}: the state setter 0x48B090(unit, 1, on)
   remove  {"world", "unit"} -> state
+  models  {"world"} -> {"models": {unit: base64}}: each unit's posed model block as tagpu_wikicob_model gives it
+          (its PrimitiveStructs in the posed order), a unit that runs no script left out; it changes nothing, so it
+          answers no state. The page asks once a drawn frame after a call (cob.js `model`).
   free    {"world"} -> {}
 `facts` is a list of [unit, owner, x, z, left, health] rows (tagpu_wikicob.h WIKICOBFACT; `left` a number the
 float32 holds exactly). The state every call answers is {"values": {unit: [the 21 values]}, "resting": [units],
@@ -28,6 +31,7 @@ float32 holds exactly). The state every call answers is {"values": {unit: [the 2
 offset basis)}, every handle from 1 to the last.
 An error answers {"error": why}."""
 import argparse
+import base64
 import ctypes as C
 import functools
 import json
@@ -44,6 +48,7 @@ FNV_BASIS = 0xCBF29CE484222325
 WORLDS_MAX = 64                     # the oldest world goes when a page never frees its own
 VALUES = 21                         # WIKICOB_VALUES
 PIECES = 256                        # WIKICOB_PIECES
+PRIM_BASE, PRIM_BYTES = 0x22, 0x36  # TAGPU_COBVM_PRIM_BASE, _PRIM_BYTES: TAGPU_COBVM_MODEL_BYTES(n)
 
 
 class Type(C.Structure):
@@ -80,6 +85,8 @@ def bind(lib):
     lib.tagpu_wikicob_note.restype = C.c_char_p
     lib.tagpu_wikicob_hash.argtypes = [C.c_void_p, C.c_uint64]
     lib.tagpu_wikicob_hash.restype = C.c_uint64
+    lib.tagpu_wikicob_model.argtypes = [C.c_void_p, C.c_int, C.POINTER(C.c_int)]
+    lib.tagpu_wikicob_model.restype = C.c_void_p
     return lib
 
 
@@ -144,6 +151,18 @@ class Host:
         return {"values": values, "resting": resting, "notes": notes,
                 "hash": f"{self.lib.tagpu_wikicob_hash(h, FNV_BASIS):016x}"}
 
+    def models(self, w):
+        """Every unit's posed model block, base64, by handle; the block is the host's until its next call, so it is
+        copied out under the lock."""
+        h, n, _ntypes = w
+        out = {}
+        for u in range(1, n + 1):
+            k = C.c_int(0)
+            at = self.lib.tagpu_wikicob_model(h, u, C.byref(k))
+            if at and 0 < k.value <= PIECES:
+                out[str(u)] = base64.b64encode(C.string_at(at, PRIM_BASE + k.value * PRIM_BYTES)).decode("ascii")
+        return out
+
     def call(self, req):
         op = req.get("op")
         with self.lock:
@@ -177,6 +196,8 @@ class Host:
             if op == "remove":
                 self.lib.tagpu_wikicob_remove(h, req["unit"])
                 return self.state(w)
+            if op == "models":
+                return {"models": self.models(w)}
             raise ValueError(f"no op {op!r}")
 
     def answer(self, line):

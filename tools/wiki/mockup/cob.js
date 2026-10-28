@@ -5,18 +5,30 @@
    simulation's type order) and returns its world, whose calls are tagpu_wikicob.h's: spawn, call, slice, remove,
    each sent through `request` (one synchronous call answering serve.py's JSON), and value, resting, hash and notes
    (each type's quarantine note, "" for none; a type is quarantined when it is made or when its script faults) read
-   from the state the last call answered. `request` is a synchronous XMLHttpRequest to POST /cob in the page
-   (cobPage) and tools/wiki/cobhost.mjs's worker under node.
+   from the state the last call answered. model(unit) is the unit's posed model as tagpu_wikicob_model leaves it
+   (pose.js `parse`), null for a unit that runs no script: one `models` request answers every unit until the next
+   call, so a page that draws several frames between two ticks asks once. `request` is a synchronous XMLHttpRequest
+   to POST /cob in the page (cobPage) and tools/wiki/cobhost.mjs's worker under node.
 
    Runs in a page (the global WikiCob) and under node (module.exports). */
 const WikiCob = (() => {
   const HOW = { now: 0, later: 1, args: 2 };   // WIKICOB_NOW, WIKICOB_LATER, WIKICOB_ARGS
+  // pose.js reads the model block: the page's global, node's module
+  const WikiPoseRef = () => typeof WikiPose !== 'undefined' ? WikiPose : require('./pose.js');
 
   function cobWorld(request, specs) {
     const made = request({ op: 'new', types: specs, seed: 1 });
     const id = made.world;
-    let st = made;
-    const take = got => { st = got; return got; };
+    let st = made, models = null, parsed = {};
+    const take = got => { st = got; models = null; parsed = {}; return got; };
+    function model(unit) {
+      if (!models) models = request({ op: 'models', world: id }).models;
+      if (!(unit in parsed)) {
+        const b64 = models[unit];
+        parsed[unit] = b64 ? WikiPoseRef().parse(Uint8Array.from(atob(b64), ch => ch.charCodeAt(0))) : null;
+      }
+      return parsed[unit];
+    }
     return {
       get notes() { return st.notes; },
       spawn: (type, facts) => take(request({ op: 'spawn', world: id, type, facts })).unit,
@@ -29,6 +41,7 @@ const WikiCob = (() => {
       resting: unit => st.resting.includes(unit),
       // tagpu_wikicob_hash from the FNV-1a offset basis, as two uint32 halves
       hash: () => [parseInt(st.hash.slice(0, 8), 16), parseInt(st.hash.slice(8), 16)],
+      model,
       free: () => request({ op: 'free', world: id }),
     };
   }

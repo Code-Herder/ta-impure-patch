@@ -334,6 +334,11 @@ function view() {
   if (!sim) return null;
   try { return sim.view(); } catch (x) { fail(x); return null; }
 }
+// the units' poses for the 3D stage (sim.js `poses`): one request to the COB host after each tick
+function poses() {
+  if (!sim) return null;
+  try { return sim.poses(); } catch (x) { fail(x); return null; }
+}
 /* the 3D pack the stage draws from: a sim bound to a mod's casting draws from that mod's stage packs, which hold its
    units (gfx.py --stages), where it has one for the entry; any other from the entry's own */
 function stageDir() {
@@ -349,7 +354,7 @@ const CURSORS = WikiStage.loadCursors('gfx/');
 let IMG = null;                       // the last frame's 3D answer, for scripted checks
 function draw() {
   const g = stage.getContext('2d'), v = view();
-  const r = v && window.WikiGfx ? WikiGfx.frame(S.entry, v, sim ? sim.tick : 0, stageDir()) : null;
+  const r = v && window.WikiGfx ? WikiGfx.frame(S.entry, v, sim ? sim.tick : 0, stageDir(), poses()) : null;
   IMG = r && { complete: r.complete, ground: r.ground, resolved: [...r.resolved], refused: r.refused };
   const image = r && r.complete ? {
     ground: r.ground, resolved: t => r.resolved.has(t),
