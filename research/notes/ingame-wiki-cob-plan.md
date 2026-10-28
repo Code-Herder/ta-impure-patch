@@ -7,7 +7,9 @@ the scripts gate the builds, the demos wait on the work, and the stage draws the
 set, in the game and in the mockup; **L3c**, the corpus gate, is built with one refusal open
 (ZZZ, below); **L4a**, the nano spray, is built (2026-10-28): a builder at work sprays from the
 piece its script's `QueryNanoPiece` names, as the engine's particles, in both simulations and on
-the stage (*The spray*). L4b (`emit-sfx`) and L5 (sound) are planned (see *The landings*). The wiki's specification is still
+the stage (*The spray*); **L5**, sound, is built (2026-10-28): the wiki's units and sidebar say
+what the engine would say, as simulation state in both simulations, through a DirectSound object
+of the wiki's own (*Sound*). L4b (`emit-sfx`) is planned (see *The landings*). The wiki's specification is still
 [the in-game wiki](ingame-wiki.html) and its mockup, which stays the 1:1 spec of the DLL wiki. The
 engine facts below carry their address and are the engine map's
 ([*The COB engine — mapped by us*](exe-reverse-engineering.html)); a fact this plan needs and the map
@@ -75,7 +77,9 @@ the VMs drifting apart as COB features are added.
     (volume, NoDirectSound `0x51E690`, UseWindowsSound `0x51E694`), attenuated by the stage's camera;
     WebAudio with the same rules in the mockup. The engine's sound entries (`0x47F0C0`, `0x47F1A0`,
     `0x47F300`) are not called: they attenuate by the game's camera and spend its 24 per-kind
-    cooldowns (`0x5086EC`).
+    cooldowns (`0x5086EC`). (Only `0x47F300`, the combat sounds, attenuates by the camera: a reply
+    and a named sound carry no point, so the wiki attenuates nothing by the stage's camera either;
+    the engine map corrected it, *Sound*.)
 13. **What sounds**: the unit's sounds.tdf categories on the engine's own triggers (select, ok,
     cant, build, working, unitcomplete, activate, deactivate, arrived where the engine plays it);
     the sidebar's button sounds; the engine's cooldowns reproduced as wiki state. No combat sounds;
@@ -470,6 +474,99 @@ spray: two emitters, fifteen order handlers* and *The nano particle*.
 - **Only with the scripts.** Without a host (`ctx.cob` absent, `WIKISIMCTX.cob` NULL) no unit
   sprays: the pool is not allocated and `sim.js`'s turn returns before the spray.
 
+## Sound
+
+L5. The wiki's units and its sidebar say what the engine would say, as the wiki's simulation
+state, played through a DirectSound object of the wiki's own. The engine's side, every fact with
+its address: the engine map's *The unit replies, the named sounds and the player's sound
+settings*.
+
+- **Never the engine's entries.** No engine sound function is called -- not `0x47F0C0`,
+  `0x47F1A0` or `0x47F300`, not the notice queue `0x47F780` -- so the game's 24 per-kind cooldowns
+  (`0x5086EC`), its notice queue and its buffers stay the game's, and the game's own sounds are
+  neither ducked nor delayed while the wiki is open.
+- **The events are simulation state, in both simulations** (`tagpu_wikisim.c` *THE SOUND*,
+  `sim.js`'s sound functions, line for line). The engine's rules are repeated as the wiki's own
+  state: a notice is refused while its kind's next time is ahead (`0x47FAF0`) or while one of its
+  kind is queued (`0x47FB0A`); a full queue of eight drops its last entry; the new one goes in
+  before the first of a lower priority (`0x47FBA4..0x47FBC0`). Once a tick, after the tick's work,
+  the consumer takes entry 0 and makes a reply only 30 ticks after the last one
+  (`WIKI_SND_GAP`, `[q+0xA1]`, set to 30 at `0x47EE07`), then writes the kind's next time,
+  tick + 30 × the kind table's interval (`0x47FEFD`). The variant is the wiki's own stateless
+  generator (`snd_draw`, `sndDraw`: FNV-1a of the unit's id mixed with the kind and the tick,
+  0..`0x7FFF` as `rand`'s), never the CRT `rand` 0x47FD70 draws from and never the host's. An
+  event is `{tick, kind, name, category, variant}`: ids only, no pointer and no position. The
+  cooldowns, the last reply's time, the queue and the events are item 10 of the state hash
+  (`tagpu_wikisim.h`), so `simparity.mjs` holds them equal tick for tick. The events are a ring
+  of `WIKI_SND_LOG` = 32 that the game thread drains after every fill's steps (at most 8 ticks),
+  counting any it lost.
+- **The triggers**, each the engine's (the engine map lists the sites): select (kind 1) when a
+  click leaves its unit selected or a box takes exactly one, `SelectMultipleUnits` when a box
+  takes more; ok (5) at an order's first run, never for the scene's own orders; arrived (6) when a
+  move ends; cant (7) when a builder in range finds its site refused; build (9) when a builder
+  places a nanoframe; unitcomplete (8) for each builder whose build finished this tick; working
+  (11) when a reclaim first makes progress on an order; activate (3) and deactivate (4) when a
+  scripted unit's ACTIVATION changes. A scene's units say nothing while it is laid out
+  (`snd_quiet`).
+- **The button sounds.** The stage's sidebar plays the allsound names `0x41AA00` plays -- ORDERS
+  `ordersbutton`, BUILD `buildbutton`, a build button that arms a structure `addbuild`, STOP
+  `immediateorders`, PREV and NEXT `nextbuildmenu` when they step a page -- and a placement
+  `oktobuild` (once a gesture, as `tagpu_place.c`'s commit plays it) or `notoktobuild` on a refused
+  site (`0x498FA4`, `0x49901D`): these are simulation events too (kind 0 and a name), in the hash.
+  The page's own controls (the tree, the demos, play, replay, ×1, ×2, Try it) say `Options`, as the
+  engine's in-game menu controls do; those are UI, played at once by `tagpu_wiki.c` and `wiki.js`,
+  and not hashed.
+- **Volume by construction.** The player's Options slider does not set a buffer volume: it sets
+  the process's wave-out volume (`waveOutSetVolume(fxvol << 10)`, `0x45BCC0` → `0x4D0070`), which
+  reaches the wiki's buffers as it reaches the engine's, so the wiki applies no fxvol of its own and
+  only the engine's per-play −585 (−5.85 dB, `0x47FED0`, `0x47F17A`). Neither the reply nor the
+  named sound passes a point (`0x4D0640(file, −585, 0)`, `0x4CF570(set, −585, 0)`), so Sound
+  Mode's off-screen −1585 and its 3D placement, which only the combat sounds `0x47F300` get, do not
+  apply: the stage's camera attenuates nothing.
+- **The player's settings at play time** (`tagpu_menu_sound`, game thread, plain reads):
+  UseWindowsSound (`0x51E694`), NoDirectSound (`0x51E690`), fxvol 0 (`main+0x37F0C`) or Sound Mode
+  0 (`main+0x37F19 & 7`) silence every sound; a reply also needs speechfx (bit `0x40`) and a
+  priority above 10 − unitchat (`main+0x37F17`). The engine plays a reply through `PlaySoundA`
+  under UseWindowsSound; the wiki is silent there instead.
+- **The mixer** (`tagpu_wikisound.c`). A DirectSound object of its own, made by the
+  `DirectSoundCreate` of the `dsound.dll` the game imports (IAT `0x4FC044`), at the first sound
+  after an open, on the game thread, `DSSCL_PRIORITY` on the game's window as the engine's
+  (`0x4CEFBB`) and without global focus, so it is silent while the game is not in front, as the
+  engine's is. A create that fails leaves the wiki silent for the process and says so once; the
+  engine's object is never borrowed. A clip's first play makes its buffer (`DSBCAPS_STATIC |
+  DSBCAPS_CTRLVOLUME`) from the published samples, and up to `WIKISOUND_VOICES` = 4 copies of it
+  as `0x4CF570` keeps them: a stopped copy is reused, else a new duplicate, else the copy with the
+  largest play cursor restarts. A lost buffer is restored and refilled once. `tagpu_wikisound_release`
+  stops and lets everything go when the wiki closes, which the level's teardown does first
+  (`tagpu_wiki_level_end`, from the teardown wrap's entry to `0x491B60`), never at DLL detach.
+  It logs the create's result once, each buffer made, and per demo the Play calls that succeeded,
+  failed, or were left silent by the settings or a missing WAV, and any events lost.
+- **No archive read on the game thread.** The 3D asset load reads, on its own thread, each
+  resolved unit's FBI `SoundCategory` over `<gamedata>\sound.TDF` as the engine does (absent 0;
+  else the first section whose name matches it without case; else its `atoi`; a number outside
+  the sections is −1, silent, where the engine's read is unbounded), the variant counts per kind
+  (`<key>`, then `<key>1`, `<key>2`, … until the first missing, `0x42F580`), the WAVs of every used
+  category for the kinds the wiki says, and the button sounds' WAVs through `allsound.TDF`
+  (`0x42F7E0`: each section's `sound`, the first of a name winning, at most 255 names), each opened
+  as `sounds\<name>.WAV` by the built path, the language's folder first (`tagpu_vfs_find_built`).
+  `tagpu_wav.c` keeps a WAV only as PCM, 1 or 2 channels, 8 or 16 bits, 1000..192000 Hz, its
+  chunks bounded by the file's length; anything else is a silent clip. The samples are copied into
+  the arena and published immutable with the WIKI3D (`WIKI3DSOUND`), never freed, so a buffer made
+  from them never outlives them. Bounds: 256 clips, 64 categories, 4096 variants over all, 256 a
+  kind of a category, 16 MB of samples, 8 MB a file; past one the rest is silent and the load says
+  so.
+- **Only with the scripts.** The sound source comes from the same 3D load as the scripts, both or
+  neither (`scripts_now`), so a demo without the scripts makes no sound, and a check that plays
+  none hears none.
+- **In the mockup**, `gfx.py` writes each pack's `sounds.json` (each type's category and counts,
+  each used category's WAVs per kind, the button sounds', what was refused) and copies the WAVs
+  into the gitignored pack (`tools/wiki/mockup/gfx/`); `cobhost.mjs` gives node's checks the same
+  source. `sound.js` plays the simulation's events through WebAudio by the same rules: −5.85 dB
+  times fxvol's default share, `(27 << 10) / 0xFFFF`, as the gain (the page has no process
+  volume), the engine's defaults for every other setting, four voices a WAV, nothing positional.
+  The page is silent until the browser lets audio start (the first click), and a WAV not decoded
+  yet when its event comes is skipped.
+
 ## The landings
 
 | | What | Gate |
@@ -481,7 +578,7 @@ spray: two emitters, fifteen order handlers* and *The nano particle*.
 | **L3c** — built 2026-10-28, one refusal open | the corpus gate, `tools/wiki/cobcorpus.py`: every compatibility setup's unit types through the host (Create, 600 slices, the wiki's calls and a state-setter Deactivate/Activate), a refusal named | the gate itself, clean over every setup: clean but for ZZZ (below) |
 | **L4a** — built 2026-10-28 | the nano spray: `QueryNanoPiece` on the engine's schedule and the piece's origin through the host (`tagpu_wikicob_query`, `tagpu_wikicob_origin`, the model's shape in `WIKICOBTYPE`), the engine's emitters and particle class repeated in both simulations as state in the hash, the wiki's own generator, the particles bounded and copied into the stage record, drawn as the engine's 2 × 2 dots (*The spray*) | `simparity.mjs` natively and `--wine`; `stagecheck.mjs`'s scripted lane; `tools/test_cobvm.py`'s query and origin tests; the host's origins against `pose.js` |
 | **L4b** — planned | `emit-sfx`: the engine's EMIT_SFX emitters (`0x480EB0`: fire `0x472330`, the wakes `0x472430`, bubbles `0x472530`, the smokes `0x472810` and `0x4728F0`) from the effect log the host now drops | the effect drawn against a game capture of the same script |
-| **L5** | sound: the mixer, the triggers, the cooldowns, WebAudio in the mockup | a demo heard in game and in the mockup; the player's settings honoured; an MP game's own sounds unchanged with the wiki open |
+| **L5** — built 2026-10-28 | sound: the triggers, the queue and the cooldowns as state in both simulations (hash item 10), the sound.TDF and allsound.TDF reads and the WAVs on the loader thread (`tagpu_wav.c`), the mixer on our own DirectSound object (`tagpu_wikisound.c`), the player's settings read where the engine reads them (`tagpu_menu_sound`), the sidebar's and the page's button sounds, WebAudio in the mockup (`sound.js`) (*Sound*) | a demo heard in game and in the mockup; the player's settings honoured; an MP game's own sounds unchanged with the wiki open |
 
 L1 and L2 touch `tagpu_cobvm.*`, `tagpu_cob_safe.*`, `tagpu_patches.c`, `tools/tacob*` and the
 fixtures — no file the sidebar's landing touches.
@@ -550,6 +647,26 @@ L4b starts when the wiki shows a unit that emits.
   stock pack and the six mod packs.
 - `simparity.mjs` 1008 plays equal; `simcheck.mjs`, `scenecheck.mjs`, `stagecheck.mjs`,
   `sidecheck.mjs` and `textparity.mjs` pass; the demos recorded in game on video.
+
+**L5's offline gate**, MEASURED 2026-10-28 on the reference setup:
+
+- `simparity.mjs`: all 1008 demo plays and 48 rule cases equal tick for tick with the sound in the
+  state hash (item 10), natively (AddressSanitizer and UndefinedBehaviorSanitizer) and with
+  `--wine`. The new rule case, *the player's clicks say select, SelectMultipleUnits, notoktobuild
+  and oktobuild, one reply a second* (`simcheck.mjs` `SOUND_RULES`), drives a click, a second click
+  inside the gap, a box of several and two placements through both simulations with the packs'
+  sounds; without a gfx pack it has no source and says so.
+- `simcheck.mjs`: every demo and rule passes, and on each of the six packs under `--pack`.
+- `tests/wavtest.py`: `tagpu_wav.c` under the sanitizers on its built-in hostile files (truncated,
+  huge RIFF, fmt and data lengths, non-PCM, a wrong block align, data before fmt) and on every
+  truncation of each file; 281 of 281 files (273 WAVs from the packs) judged alike by the C parser
+  and `gfx.py` `wav_pcm`.
+- `assetcheck.py`: the native load's sound report (each unit's category and counts, each used
+  category's WAVs per kind, the button sounds') equal to the Python reference over the install.
+- `stagecheck.mjs`, `scenecheck.mjs`, `sidecheck.mjs`, `textparity.mjs` and `tools/test_cobvm.py`
+  pass.
+- The packs: stock 13 categories and 34 WAVs, Mayhem 14 and 38, ProTA 14 and 37, Twilight 16 and
+  49, Escalation 15 and 38, TA Zero 23 and 53 with one refused (below).
 
 ### Gaps open
 
@@ -634,6 +751,38 @@ L4b starts when the wiki shows a unit that emits.
   validator's `malloc`/`free` routed through the registry's wrappers, which the swap program does
   when the core becomes the game's interpreter.
 
+- **The sound has no place.** An event carries no position, where L5's plan gave it the unit's
+  point and decision 12 an attenuation by the stage's camera: the engine plays a reply and a named
+  sound without a point (`0x4D0640(file, −585, 0)`, `0x4CF570(set, −585, 0)`), so neither does the
+  wiki, and Sound Mode's off-screen and 3D rules (the combat sounds' alone) are not repeated.
+- **The simulation runs at the default settings.** It makes its replies as at unitchat 10 with
+  speechfx on (every kind's priority passes), and the player's values apply only at play time
+  (`tagpu_wikisound_reply`). A kind the player's settings silence still writes its cooldown in the
+  wiki, where the engine leaves it unwritten when unitchat or speechfx refuses it (the engine
+  writes it when fxvol, Sound Mode or NoDirectSound silences it, as the wiki does). Under
+  UseWindowsSound the engine plays replies through `PlaySoundA`; the wiki is silent.
+- **A demo starts one gap after its last reply.** The simulation starts with the last reply 30
+  ticks before tick 0, so the first reply a demo or the player causes is heard; an engine level
+  starts at 0 (`0x47EE30`), which would silence every demo's first second.
+- **cant fires once.** The wiki drops a refused build at once and says cant once; MobileBuild says
+  it at the first failure, retries every 30 ticks and says it again past ten failures
+  (`0x403CDF`, `0x403D10`).
+- **256 variants of one kind of one category are read** (`SND_KEYVARS`), 4096 over all; the
+  simulation draws among all of the category's variants, so one past the bound plays silent.
+- **TA Zero's `hovsmof1` has no file**: its category names a WAV no source holds, so that variant
+  is silent in the game's wiki and null in the pack (`gfx.py` refuses it: "no file", by the
+  engine's lookup it repeats).
+- **The button sounds are the in-game menu's.** The page's controls say `Options`, which the
+  engine's in-game menu plays; the wiki has no engine counterpart for a tree or demo list, so the
+  choice is ours.
+- **The wave-out volume reaching our buffers is [INFERRED]**: `waveOutSetVolume` sets the
+  process's wave volume, which a second DirectSound object's buffers should follow as the
+  engine's do; it has not been measured on Windows or under Wine, and neither has the effect, if
+  any, of a second object at `DSSCL_PRIORITY` on the game's window beside the engine's.
+- **`thread-split.allow`'s `tagpu_menu.c` line names the sound settings' reads** -- `main+0x37F0C`,
+  `main+0x37F17`, `main+0x37F19`, `0x51E690`, `0x51E694`, read-only on the game thread -- the
+  owner's decision of 2026-10-28.
+
 ## Research each landing owes
 
 - **L1** (answered 2026-10-27): every vtable slot the opcodes reach, the flag bits and the model's
@@ -686,5 +835,12 @@ L4b starts when the wiki shows a unit that emits.
 - **L4b**: the fire `0x472330`, wake `0x472430` and bubble `0x472530` emitters' particle counts,
   lifetimes, velocities and draws; the smoke emitters' puff count past `0x474ECE`; and what the
   wiki's HEALTH would have to be for `SmokeUnit` to emit.
-- **L5**: every caller of `0x47F0C0` / `0x47F1A0` / `0x47F300` for the events the wiki has, the
-  cooldown rule (`0x47FAF0`, `0x47FEFD`), the volume settings' storage, the sounds.tdf reader.
+- **L5** (answered 2026-10-28, the engine map's *The unit replies, the named sounds and the
+  player's sound settings*, DISASSEMBLED): the notice sites of the wiki's events and the 230 named
+  sounds' callers; the push, the consumer's fixed 30-tick gap (`[q+0xA1]` = 30, `0x47EE07`) and
+  the cooldown, written even when fxvol, Sound Mode or NoDirectSound silences the play
+  (`0x47FEA8..0x47FEFD`); fxvol as the wave-out volume (`0x45BCC0` → `0x4D0070`); the four voices
+  of `0x4CF570`; sound.TDF's variants (`0x42F580`) and the category's rule (`0x42CC54..0x42CCB8`:
+  a name with no section is its `atoi`, not the section count); ackfx and buildfx read by no
+  playback; no nanolathe loop sound, and none from YARD_OPEN. `demo-recorder-s2-events.md` §4.3
+  had the gap as the previous reply's length, and is corrected.

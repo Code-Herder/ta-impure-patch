@@ -31,8 +31,11 @@ and the tutorials are [below](#the-sidebar-and-the-per-mod-tutorials-the-owners-
 units run their own COB scripts in both simulations, through one C host on our own COB VM: a
 builder works only once its script has taken its build stance, the Quick Build demos wait for
 the work to be done, the stage draws the poses the scripts set, in the game and in the mockup,
-and a builder at work sprays the engine's nano particles from the piece its script names
-([the COB plan](ingame-wiki-cob-plan.html), L3a, L3b and L4a built; [below](#the-units-scripts)).
+and a builder at work sprays the engine's nano particles from the piece its script names; the
+units and the sidebar say what the engine would say -- select, ok, arrived, build, the button
+sounds -- through a DirectSound object of the wiki's own, at the player's volume
+([the COB plan](ingame-wiki-cob-plan.html), L3a, L3b, L4a and L5 built; [below](#the-units-scripts),
+[*The units' sounds*](#the-units-sounds)).
 
 | What | Where |
 |---|---|
@@ -66,6 +69,8 @@ and a builder at work sprays the engine's nano particles from the piece its scri
 | The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|try|recorded|asset|stage3d|units --launch`, `tools/wiki_regression.py <name> mp`, `tools/wiki_regression.py all mods --shots DIR` (the 3D stage under each supported setup: [below](#the-3d-stage-under-the-mods)); `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's; `units --shots DIR` does the same with the units, then the facing, the `nounit=` lever, the render thread's time and a reclaim in the game; `try` replays two demos through Try it yourself's stage as device input and holds the game's simulation to `simparity.mjs --try` |
 | The units' scripts | `tagpu/ddraw/src/tagpu_wikicob.c`, the host on `tagpu_cobvm.c`, which the DLL's simulation calls in-process; the mockup's `sim.js` reaches the same C through `tools/wiki/serve.py` (`POST /cob`, from the page through `tools/wiki/mockup/cob.js`) and, under node, `tools/wiki/cobhost.mjs` (`serve.py --stdio`) |
 | The nano spray | the particles in both simulations (`tagpu_wikisim.c` *THE NANO SPRAY*, `sim.js`'s spray functions), the piece's origin from the host (`tagpu_wikicob_query`, `tagpu_wikicob_origin`); drawn by `tagpu_wikistage.c` and `stage.js` ([the COB plan](ingame-wiki-cob-plan.html), *The spray*) |
+| The sound | the events in both simulations (`tagpu_wikisim.c` *THE SOUND*, `sim.js`'s sound functions); in the DLL the WAVs read on the 3D load's thread (`tagpu_wikiasset.c` `sound_load`, parsed by `tagpu/ddraw/src/tagpu_wav.c`) and played by `tagpu/ddraw/src/tagpu_wikisound.c`; in the mockup `tools/wiki/mockup/sound.js` over the pack's `sounds.json` and WAVs, which `gfx.py` copies from the install into the gitignored `tools/wiki/mockup/gfx/` ([below](#the-units-sounds)) |
+| The sound's checks | `python3 tagpu/ddraw/tests/wavtest.py` (the WAV parser on hostile files, and against `gfx.py` `wav_pcm` on every pack WAV); `assetcheck.py`'s `sound` element; `simparity.mjs` (hash item 10) and `simcheck.mjs`'s sound rule |
 | Serving it | `python3 tools/wiki/serve.py`: the repository with `Cache-Control: no-cache`, and the units' scripts at `POST /cob`; then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
 
@@ -1402,11 +1407,13 @@ as stated, natively (gcc, with AddressSanitizer and UndefinedBehaviorSanitizer) 
 (the DLL's compiler and flags, run under Wine).
 
 - **The context.** `WikiSim.play(entry, demo, layout, ctx)` and `create`, and
-  `tagpu_wikisim_init(…, const WIKISIMCTX* ctx, …)`, take `{side, casting, iface, cob}`: the
+  `tagpu_wikisim_init(…, const WIKISIMCTX* ctx, …)`, take `{side, casting, iface, cob, snd}`: the
   layout's side the player plays, that side's casting or none (the entry's own types), the
-  Interface Type, and where the units' scripts come from or none (`ctx.cob`, a `WIKICOBSRC` in C,
-  read during init only; *The units' scripts*, below). An absent context (NULL in C) is side 0, no
-  casting, type 1, the interface the demos are authored in, and no scripts. LIFETIME: the casting and the layout must outlive the simulation; in the DLL both
+  Interface Type, where the units' scripts come from or none (`ctx.cob`, a `WIKICOBSRC` in C,
+  read during init only; *The units' scripts*, below), and where their sounds come from or none
+  (`ctx.snd`, a `WIKISNDSRC`: a type's sounds.tdf category and variant counts, read during init
+  only; *The units' sounds*, below). An absent context (NULL in C) is side 0, no
+  casting, type 1, the interface the demos are authored in, and neither scripts nor sound. LIFETIME: the casting and the layout must outlive the simulation; in the DLL both
   lie in the published WIKISIDE block, immutable and never freed. The bound entry, the resolved
   script and the type-0 rows are [above](#the-per-mod-tutorials).
 - **The hash's first step** is the tick, `done`, the side (−1 without a sidebar) and the Interface
@@ -1414,7 +1421,10 @@ as stated, natively (gcc, with AddressSanitizer and UndefinedBehaviorSanitizer) 
   demo's clock, the wait, `stalled`, then 1 and the scripts' host's own hash, or 0 alone without a
   host (`tagpu_wikisim.h`, item 8), and then the nano spray: the particle count and each
   particle's x, y, z, its step, its end and its colour, in the order made, then `part_cut` and the
-  waiting second bursts, each its two boxes, its due tick and its key (item 9).
+  waiting second bursts, each its two boxes, its due tick and its key (item 9); last, the sound:
+  1 and each kind's next time, the last reply's time, the queue (each entry's kind, tick, unit,
+  type and priority), the events made and the last 32 of them (tick, kind, name, category,
+  variant), or 0 alone without a source (item 10).
 
 - **Bit for bit, by construction.** Both visit units in creation order, use no clock and no
   randomness, and compute on doubles with + − × ÷ and sqrt only, each rounded once. The DLL
@@ -1596,7 +1606,9 @@ the keys held; the caption; a gesture's sites (`sites`: centre, footprint, `stat
 `shape`, and the armed building's `spacing`; the demo's `clock`, `waiting` (the state a wait holds
 it for, or none), `stalled`, and `cob`, the scripts' host's hash as two 32-bit halves; and the
 nano spray's live particles, `parts` (each `[x, y, z, step x, y, z, end, colour]`, 16.16 world
-units, x, altitude, z; `npart` and `part` in C) and `partsCut` (`part_cut`: a bound dropped one).
+units, x, altitude, z; `npart` and `part` in C) and `partsCut` (`part_cut`: a bound dropped one);
+and `sound`, null without a source: `next` (each kind's next time), `last`, `queue`, `total` and
+`events` (the last 32, oldest first; `snd_next`, `snd_last`, `sndq`, `snd_total`, `snd` in C).
 
 ### The units' scripts
 
@@ -1665,6 +1677,45 @@ both fold into theirs, holds them to the same calls.
 - **What it costs**: the host's slice over a demo's units is about 70 µs; with the scripts the page
   cost the game thread at most 0.358 ms in a frame over 1222 frames, and *Queue several with
   Shift* plays 1054 ticks where it played 570 (MEASURED 2026-10-28).
+
+### The units' sounds
+
+The units and the stage's sidebar say what the engine would say, and what they say is simulation
+state ([the COB plan](ingame-wiki-cob-plan.html), *Sound*, which has the engine's rules and
+addresses and the gaps).
+
+- **The events.** Both simulations make a reply on the engine's triggers (select, ok, arrived,
+  cant, build, unitcomplete, working, activate, deactivate) through the engine's notice rules --
+  a per-kind cooldown, one of a kind queued, eight entries by priority, one reply with sound every
+  30 ticks -- and a named sound, played at once, for the sidebar's buttons and a placement
+  (`ordersbutton`, `buildbutton`, `addbuild`, `nextbuildmenu`, `immediateorders`, `oktobuild`,
+  `notoktobuild`, `SelectMultipleUnits`). A reply's variant comes from the wiki's own stateless
+  generator. The events, the cooldowns, the last reply's time and the queue are item 10 of the
+  state hash, so `simparity.mjs` holds them equal; an event is ids only (tick, kind, name,
+  category, variant), with no position: the engine plays neither kind of sound at a point.
+- **The source** is the 3D load's, with the scripts, both or neither (`tagpu_wiki.c`
+  `scripts_now`): each unit type's sounds.tdf category and its variant count per kind
+  (`WIKISNDTYPE`). In the mockup it is the pack's `sounds.json`, through `sound.js` `source` in the
+  page and `cobhost.mjs` `soundSource` under node; `tests/wikicobfile.h` reads a type's `"sound"`
+  for `wikitest`.
+- **Played on the game thread** after each fill's steps (`tagpu_wiki.c` `sound_drain`), through
+  `tagpu_wikisound.c`: the wiki's own DirectSound object, the player's settings applied at each
+  play (fxvol and Sound Mode 0, NoDirectSound and UseWindowsSound silence it; a reply also needs
+  speechfx and unitchat), the engine's −585 a play and nothing for fxvol, which reaches the
+  wiki's buffers as the process's wave volume. The page's own controls say `Options`, outside the
+  simulation. In the mockup `sound.js` plays the same events through WebAudio at the engine's
+  default settings.
+- **The WAVs** are the player's install's, read on the 3D load's thread and kept only as PCM by
+  `tagpu_wav.c`; `gfx.py` copies the ones a pack needs into the gitignored
+  `tools/wiki/mockup/gfx/` (`<pack>/sounds/<n>.wav`, named by `sounds.json`). None is committed:
+  `.gitignore` has no `*.wav` rule outside the packs, and the pre-commit hook's content check is
+  what refuses a game WAV elsewhere.
+- **The checks**: `tagpu/ddraw/tests/wavtest.py` (the parser under AddressSanitizer and
+  UndefinedBehaviorSanitizer on hostile files and every truncation, and against `gfx.py`
+  `wav_pcm` on every pack WAV); `assetcheck.py`'s `sound` element (the native load's categories,
+  counts, WAVs and button sounds against the Python reference); `simparity.mjs` with the sound in
+  the hash and `simcheck.mjs`'s rule *the player's clicks say select, SelectMultipleUnits,
+  notoktobuild and oktobuild, one reply a second*.
 
 ## Gaps
 
