@@ -391,9 +391,9 @@ kbot that reclaims a wreck and then guards the lab. The overlay is the engine's 
   own marches and opacities, and an order queued by hand records the marches as they stood when
   it was issued.
 - The sprite shows frame `(gameTime / (2 · frame 0's ticks)) % count` (`0x439740`) at
-  `ordalpha` 0.5: `PALETTE.ALP` is a half-and-half mix (measured, engine map). The dots are
-  drawn at `orddotalpha`, 1 as the engine copies them. Both are sliders in the status bar;
-  neither touches `ordstyle=proc`, which stays opaque. `ordanim=cursor`
+  `ordalpha` 0.7, more solid than `PALETTE.ALP`'s half-and-half mix (measured, engine map),
+  which `orders-engine` keeps. The dots are drawn at `orddotalpha`, 1 as the engine copies
+  them. Both are sliders in the status bar. `ordanim=cursor`
   instead steps each frame after its own ticks, the mouse cursor's rule, twice as fast for
   `cursormove`.
 - The clock is 30 ticks a second, in whole ticks (`ordtick=int`) as the engine steps, or
@@ -410,7 +410,7 @@ into the address bar):
 
 | Knob | Values (default first) | What it does |
 |---|---|---|
-| `ordstyle` | `gaf` · `proc` · `off` | the engine's art; the procedural markers `tagpu_order.c` drew before it took the art (a 2.4-px disc and a breathing crosshair in the ink of frame 0's brightest index holding at least a twentieth of its opaque texels); nothing |
+| `ordstyle` | `gaf` · `off` | the engine's art; nothing |
 | `ordsize` | `screen` · `world` · `int` · `clamp` | canvas pixels per texel: 1, the art at its own size at every zoom; the zoom (the engine's pixel magnified with the world); the zoom rounded, at least 1; the zoom held in `ordmin..ordmax` (1..2) |
 | `ordfilter` | `nearest` · `sharp` · `linear` | `sharp` keeps each texel flat and blends only the screen pixel across a texel edge |
 | `ordspace` | `lod` · `screen` · `world` · `octave` | the dot spacing: pinned to the map at 48·2^k world units for the zoom's level k, the dots a level change adds or drops fading in or out over `ordfade` ms; 48 screen px from each leg's start; 48 world units; 48·2^k world units with k the nearest level, no fade. The dots move 48 px/s under all four |
@@ -428,7 +428,7 @@ undo and clear are buttons. Each queue edit is written back into the URL, so a h
 is a link.
 
 **What the zooms showed** [OBSERVED 2026-10-27, contact sheets of the engine's art at
-`world` size and spacing, at `clamp`/`sharp`/`octave`, and `ordstyle=proc`, on `tascene-orders.json` at 0.25×, 0.5×, 1×, 1.5×, 2×, 3×, 4×,
+`world` size and spacing, at `clamp`/`sharp`/`octave`, and the procedural markers the DLL then drew, on `tascene-orders.json` at 0.25×, 0.5×, 1×, 1.5×, 2×, 3×, 4×,
 one fixed game tick]:
 
 - **The engine's rule does not survive a zoom.** Scaled with the world, `pathicon` is a 3-px
@@ -500,7 +500,6 @@ above, not a capture.
 | `restored` | the undithered atlases and nothing else changed |
 | `restored-relief` | everything the exploration lane has |
 | `orders-engine` | Classic with the engine's order art scaled with the world, a dot every 48 world units |
-| `orders-proc` | Classic with the order markers tagpu draws today (`tagpu_order.c`), on its world spacing |
 | `orders-tuned` | the engine's order art at its own size, its dots pinned to the map and fading across zoom levels, 48 px a second |
 
 `serve` and `shot` reuse `ta3do`'s existing `Viewer` (`ThreadingHTTPServer`) and `shoot`

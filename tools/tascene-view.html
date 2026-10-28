@@ -278,9 +278,7 @@
      wipe, and re-presented every display frame on a 30 Hz game clock, so the
      world under them is not redrawn to animate them. There is no fog and
      nothing draws over them. Per side:
-       ordstyle=<s>  gaf (default: the engine's art) | proc (what tagpu draws
-                     today, tagpu_order.c: a 2.4-px disc per dot and a
-                     breathing crosshair, opaque, in the art's ink) | off
+       ordstyle=<s>  gaf (default: the engine's art) | off
        ordsize=<s>   canvas px per texel: screen (default) = 1 at every zoom,
                      the art at its own size, as the engine draws it at 1x;
                      world = the zoom, the engine's pixel magnified with the
@@ -316,8 +314,7 @@
        ordalpha=<a>  the sprite's opacity, default 0.7, the game's (the
                      engine's ALP blend is 0.5)
        orddotalpha=<a> the route dots' opacity, default 1 (the engine's)
-                     Both are sliders in the status bar; neither touches
-                     ordstyle=proc, which stays what the game draws today
+                     Both are sliders in the status bar
      Global: orders=<unit>:<cmd>@<x>,<z>;<cmd>#<handle>|<unit>:… replaces the
      scenario's queues, ordunit=<id> is the unit being ordered, ordtime=<t> is
      the clock under shot=1 (default 0). Serving, SHIFT-click queues the order
@@ -1136,35 +1133,28 @@ void main(){
 // ---------------------------------------------------------------------------
 // ORDER MARKERS (header, ORDER MARKERS). Drawn straight onto the canvas after
 // the composite, so an animation tick redraws only this layer and never the
-// world. Vertices are canvas px with row 0 at the top; one stride-9 layout for
-// all three primitives: x,y, u,v, mode,alpha, r,g,b.
+// world. Vertices are canvas px with row 0 at the top: x,y, u,v (atlas
+// texels), alpha.
 const ORD_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec2 aPos;
-layout(location=1) in vec2 aUV;     // atlas texels (sprite) or -1..1 (disc)
-layout(location=2) in vec2 aMA;     // mode, alpha
-layout(location=3) in vec3 aCol;    // the solid colour of a disc or a bar
+layout(location=1) in vec2 aUV;     // atlas texels
+layout(location=2) in float aA;     // alpha
 uniform vec2 uCanvas;
-out vec2 vUV; flat out vec2 vMA; flat out vec3 vCol;
+out vec2 vUV; flat out float vA;
 void main(){
   gl_Position = vec4(aPos.x/uCanvas.x*2.0-1.0, 1.0-aPos.y/uCanvas.y*2.0, 0.0, 1.0);
-  vUV = aUV; vMA = aMA; vCol = aCol;
+  vUV = aUV; vA = aA;
 }`;
 const ORD_FS = `#version 300 es
 precision highp float;
-in vec2 vUV; flat in vec2 vMA; flat in vec3 vCol;
+in vec2 vUV; flat in float vA;
 out vec4 frag;
 uniform sampler2D uOrd;   // RGBA, every texel its palette colour, (0,0,0,0) at the key
 uniform int uFilter;      // 0 nearest, 1 sharp, 2 linear
 void main(){
-  int mode = int(vMA.x + 0.5);
   vec4 c;
-  if (mode == 1) {                          // a disc, its edge one pixel soft
-    float r = length(vUV);
-    c = vec4(vCol, 1.0) * clamp((1.0 - r) / max(fwidth(r), 1e-4) + 0.5, 0.0, 1.0);
-  } else if (mode == 2) {
-    c = vec4(vCol, 1.0);                    // a bar
-  } else if (uFilter == 0) {
+  if (uFilter == 0) {
     c = texelFetch(uOrd, ivec2(floor(vUV)), 0);
   } else {
     vec2 t = vUV;
@@ -1177,7 +1167,7 @@ void main(){
     }
     c = texture(uOrd, t / vec2(textureSize(uOrd, 0)));
   }
-  frag = c * vMA.y;                         // premultiplied
+  frag = c * vA;                            // premultiplied
 }`;
 
 // What each scenario order draws: the order descriptor's marker mask (+0x0C)
@@ -1207,7 +1197,7 @@ const ORD_OPACITY = [["alpha", "sprite opacity", "ordalpha"],
                      ["dotAlpha", "dot opacity", "orddotalpha"]];
 // the overlay's knobs, `ord<key>`; the first value of each is the default
 const ORD_KNOBS = {
-  style: ["gaf", "proc", "off"],
+  style: ["gaf", "off"],
   size: ["screen", "world", "int", "clamp"],
   filter: ["nearest", "sharp", "linear"],
   space: ["lod", "screen", "world", "octave"],
@@ -1640,8 +1630,7 @@ async function main() {
   };
 
   let ordProg = null, ORDU = {}, ordVAO = null, ordVBO = null;
-  let ordVerts = new Float32Array(9 * 6 * 4096);
-  const ordInk = {};                // sequence name -> [r, g, b] 0..1
+  let ordVerts = new Float32Array(5 * 6 * 4096);
   if (OS) {
     const ab = await fetchBin(OS.atlas.file);
     const rects = [];
@@ -1650,36 +1639,15 @@ async function main() {
     tex2D(gl, 15, gl.RGBA8, OS.atlas.w, OS.atlas.h, gl.RGBA, gl.UNSIGNED_BYTE,
           baseAtlas(ab, OS.atlas.w, OS.atlas.h, rects, 0), gl.LINEAR);
     gl.activeTexture(gl.TEXTURE0);
-    // THE INK tagpu_order.c's procedural markers take from the art they
-    // replace (seq_ink): of frame 0's indices holding at least a twentieth of
-    // its opaque texels, the brightest by 2R + 5G + B
-    for (const [name, s] of Object.entries(OS.seqs)) {
-      const f = s.frames[0], hist = new Map();
-      let n = 0;
-      for (let y = 0; y < f.h; y++)
-        for (let x = 0; x < f.w; x++) {
-          const v = ab[(f.y + y) * OS.atlas.w + f.x + x];
-          if (v === f.ck) continue;
-          hist.set(v, (hist.get(v) || 0) + 1); n++;
-        }
-      let best = -1, lum = -1;
-      for (const [v, c] of hist) {
-        if (c < Math.max(1, Math.floor(n / 20))) continue;
-        const l = 2 * palBuf[v * 4] + 5 * palBuf[v * 4 + 1] + palBuf[v * 4 + 2];
-        if (l > lum) { lum = l; best = v; }
-      }
-      ordInk[name] = best < 0 ? [1, 1, 1]
-                   : [palBuf[best * 4] / 255, palBuf[best * 4 + 1] / 255, palBuf[best * 4 + 2] / 255];
-    }
     ordProg = program(gl, ORD_VS, ORD_FS, "orders");
     ORDU = uniforms(gl, ordProg, ["uCanvas", "uOrd", "uFilter"]);
     ordVAO = gl.createVertexArray(); ordVBO = gl.createBuffer();
     gl.bindVertexArray(ordVAO);
     gl.bindBuffer(gl.ARRAY_BUFFER, ordVBO);
-    const sizes = [2, 2, 2, 3], offs = [0, 8, 16, 24];
-    for (let i = 0; i < 4; i++) {
+    const sizes = [2, 2, 1], offs = [0, 8, 16];
+    for (let i = 0; i < 3; i++) {
       gl.enableVertexAttribArray(i);
-      gl.vertexAttribPointer(i, sizes[i], gl.FLOAT, false, 9 * 4, offs[i]);
+      gl.vertexAttribPointer(i, sizes[i], gl.FLOAT, false, 5 * 4, offs[i]);
     }
     gl.bindVertexArray(null);
   }
@@ -1697,17 +1665,16 @@ async function main() {
   function orderVerts(L, side, tReal) {
     const o = L.ord;
     let n = 0;
-    const push = (x, y, u, v, m, a, c) => {
-      if (n + 9 > ordVerts.length) {
+    const push = (x, y, u, v, a) => {
+      if (n + 5 > ordVerts.length) {
         const g = new Float32Array(ordVerts.length * 2); g.set(ordVerts); ordVerts = g;
       }
-      ordVerts.set([x, y, u, v, m, a, c[0], c[1], c[2]], n); n += 9;
+      ordVerts.set([x, y, u, v, a], n); n += 5;
     };
-    const quad = (x0, y0, x1, y1, u0, v0, u1, v1, m, a, c) => {
-      push(x0, y0, u0, v0, m, a, c); push(x1, y0, u1, v0, m, a, c); push(x0, y1, u0, v1, m, a, c);
-      push(x1, y0, u1, v0, m, a, c); push(x1, y1, u1, v1, m, a, c); push(x0, y1, u0, v1, m, a, c);
+    const quad = (x0, y0, x1, y1, u0, v0, u1, v1, a) => {
+      push(x0, y0, u0, v0, a); push(x1, y0, u1, v0, a); push(x0, y1, u0, v1, a);
+      push(x1, y0, u1, v0, a); push(x1, y1, u1, v1, a); push(x0, y1, u0, v1, a);
     };
-    const NOC = [0, 0, 0];
     // the zoomed frame's projection: tagpu's (wx - eyeX + 128, wz - alt/2 -
     // eyeY + 32) about the viewport corner, which is what every pass here does
     const proj = (p) => [vpL + (p[0] - E[0]) * zoom, vpT + (p[2] - p[1] / 2 - E[1]) * zoom];
@@ -1731,24 +1698,14 @@ async function main() {
     const blit = (f, hx, hy, a) => {
       let x0 = hx - f.hx * scale, y0 = hy - f.hy * scale;
       if (o.filter === "nearest") { x0 = Math.round(x0); y0 = Math.round(y0); }
-      quad(x0, y0, x0 + f.w * scale, y0 + f.h * scale, f.x, f.y, f.x + f.w, f.y + f.h, 0, a, NOC);
+      quad(x0, y0, x0 + f.w * scale, y0 + f.h * scale, f.x, f.y, f.x + f.w, f.y + f.h, a);
     };
     const sprite = (name, P) => {
       const s = OS.seqs[name];
       if (!s) return;
       const [hx, hy] = proj(P);
       const k = frameOf(s);
-      if (o.style === "gaf") { blit(s.frames[k], hx, hy, o.alpha); return; }
-      // tagpu_order.c draw_sprite: a crosshair breathing on the same frame
-      // index, opaque, in the sequence's ink, one pixel wide. The opacity
-      // knobs leave it alone: this style is what the game draws today
-      const a = s.frames.length > 1 ? k / (s.frames.length - 1) : 0;
-      const out = 4 + 5 * a, inn = 1.5 + 2 * a, c = ordInk[name];
-      const cx = Math.floor(hx) + 0.5, cy = Math.floor(hy) + 0.5;
-      quad(cx - out, cy - 0.5, cx - inn, cy + 0.5, 0, 0, 0, 0, 2, 1, c);
-      quad(cx + inn, cy - 0.5, cx + out, cy + 0.5, 0, 0, 0, 0, 2, 1, c);
-      quad(cx - 0.5, cy - out, cx + 0.5, cy - inn, 0, 0, 0, 0, 2, 1, c);
-      quad(cx - 0.5, cy + inn, cx + 0.5, cy + out, 0, 0, 0, 0, 2, 1, c);
+      blit(s.frames[k], hx, hy, o.alpha);
     };
     // 0x4394E0: a dot every 48 world units from `a` towards `b`, the frame
     // stepping once per dot. The first dot is the node's own march, the side's
@@ -1799,14 +1756,12 @@ async function main() {
       }
       const nf = s.frames.length;
       let fi = Math.floor(age / Math.max(1, s.frames[0].d)) % nf;
-      const ink = ordInk.pathicon;
       for (let c = phase, i = 0; c < len && i < 4096; c += step, i++) {
         const f = c / len;
         const a = alphaOf ? alphaOf(c) : 1;
         if (a > 0.004) {
           const [px, py] = proj([A[0] + dx * f, A[1] + dy * f, A[2] + dz * f]);
-          if (o.style === "gaf") blit(s.frames[fi], px, py, o.dotAlpha * a);
-          else quad(px - 2.4, py - 2.4, px + 2.4, py + 2.4, -1, -1, 1, 1, 1, a, ink);
+          blit(s.frames[fi], px, py, o.dotAlpha * a);
         }
         fi = (fi + 1) % nf;
       }
@@ -1829,7 +1784,7 @@ async function main() {
         pos = P;
       }
     }
-    return n / 9;
+    return n / 5;
   }
 
   // THE MARCH: how far a side's dots have travelled, twice over. marchPx
@@ -1902,7 +1857,7 @@ async function main() {
       const nv = orderVerts(L, i, tNow);
       if (!nv) continue;
       gl.uniform1i(ORDU.uFilter, ["nearest", "sharp", "linear"].indexOf(L.ord.filter));
-      gl.bufferData(gl.ARRAY_BUFFER, ordVerts.subarray(0, nv * 9), gl.DYNAMIC_DRAW);
+      gl.bufferData(gl.ARRAY_BUFFER, ordVerts.subarray(0, nv * 5), gl.DYNAMIC_DRAW);
       gl.drawArrays(gl.TRIANGLES, 0, nv);
     }
     gl.bindVertexArray(null);
@@ -2729,7 +2684,7 @@ async function main() {
         `<label for="ord-${k}"><span>${label}</span></label>` +
         `<input type="range" id="ord-${k}" data-ordrange="${k}" min="0" max="1" step="0.05" ` +
         `value="${o[k]}"><b data-ordval="${k}">${o[k].toFixed(2)}</b>`).join("") +
-      `<span>(the gaf style; proc stays opaque, as the game draws it)</span></div>`,
+      `</div>`,
       `<div class="row modes"><span>queue</span><b>${ordActive ?? "no unit"}</b>` +
       `<span>${nq} orders</span>${cmds}` +
       `<button data-ordedit="undo">undo</button><button data-ordedit="clear">clear</button>` +
