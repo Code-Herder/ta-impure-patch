@@ -1050,7 +1050,7 @@ for (const c of contexts()) {
         const r = run(entry, d, c.layout, c.ctx);
         if (TRACE) console.log(`  ${d.id} log:`, r.log.map(e => `${e.t} ${e.what} ${e.type}@${e.ox},${e.oz}`).join('; '));
         if (off) {
-          ok(r.sim.done, `played to its end (tick ${r.last.t})`);
+          ok(r.last.t === d.end && r.last.v.locked === null, `played to its end, tick ${d.end}, unlocked (tick ${r.last.t}, locked ${r.last.v.locked})`);
         } else if (lock) {
           ok(r.sim.done && r.last.t === lock.t && r.last.v.locked === lock.type,
             `stops on tick ${lock.t} under the badge, ${lock.type} unbound (tick ${r.last.t}, locked ${r.last.v.locked})`);
