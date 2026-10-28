@@ -1,0 +1,2 @@
+landing-review: model=claude-opus-5-5 effort=medium range=8efa19ab..1940b7f9 findings=1 acted=1 rejected=0 date=2026-10-28
+Delta review of the commits after the first review (c73c077c, 1940b7f9). 1 MEDIUM: claim() used centre distance only, so a builder with BuildDistance under its half width arriving by its body held no claim and a unit on its site (or its own edge) never left: fixed in b1907a31 (a claim also holds with the body within one step of the site), two rule cases that hang without it.
