@@ -72,9 +72,9 @@ typedef struct {
    engine's black (palette index 0) over the whole column; PANELSIDE; the minimap -- the base
    under the fog, the dots, the camera box; the routed screen -- its panel picture, then each
    drawn gadget's frame for its state, a greyed one tinted. Returns out->h, or 0 with nothing
-   composed when the view has no sidebar, its layout is not the art's own (the pictures are
-   parallel to that layout's gadgets), its rows are out of 1..WIKI_SIDE_ROWS or the art has no
-   sheet. */
+   composed when the view has no sidebar, its layout is not the mod's (WIKISTAGE_LAYOUT_MOD:
+   the published art's own layout, to whose gadgets its pictures are parallel), its rows are out
+   of 1..WIKI_SIDE_ROWS or the art has no sheet. */
 int  tagpu_wikiside_compose(const WIKISIDE* art, const WIKISTAGEVIEW* v, const unsigned char* base, int nbase,
                             WIKISIDECOL* out);
 

@@ -198,7 +198,7 @@ int main(int argc, char** argv)
             for (;;) {
                 if (s.tick % 30 == 0 || s.done) {
                     int k;
-                    tagpu_wikistage_copy(&v, tagpu_wikisim_view(&s), e, s.lay);
+                    tagpu_wikistage_copy(&v, tagpu_wikisim_view(&s), e, s.lay ? WIKISTAGE_LAYOUT_FIXTURE : WIKISTAGE_LAYOUT_NONE);
                     v.tick = s.tick;
                     tagpu_wikiscene_fog(v.fog, v.w, v.h, &fog);
                     printf("{\"e\":\"%s\",\"d\":\"%s\",\"t\":%d,\"fog\":", e->id, e->demo[j].id, s.tick);

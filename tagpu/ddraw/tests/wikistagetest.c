@@ -178,8 +178,9 @@ bad:
 /* THE SIDEBAR'S STAND-IN ART, stagecheck.mjs's `sideArt`: the stage reads of a WIKISIDE only
    whether each gadget's picture is a label and that label's text, so gadget i of screen k is a
    label when (7k + i) % 3 is 0, its text "" (the gadget's name) when k + i is even and "L<k>.<i>"
-   when it is odd, and every other gadget a one-frame picture. The layout is a copy of `lay`, and
-   the simulation runs on that copy, so the view names the art's own layout. */
+   when it is odd, and every other gadget a one-frame picture. The layout is a copy of `lay`, the
+   simulation runs on that copy, and the view names it as the mod's (WIKISTAGE_LAYOUT_MOD), so
+   it resolves to the art's own layout. */
 static WIKISIDE* side_art(const WIKILAYOUT* lay)
 {
     WIKISIDE* sd = (WIKISIDE*)calloc(1, sizeof *sd);
@@ -251,8 +252,9 @@ static int ops(char** a)
             for (;;) {
                 if (s.tick % 30 == 0 || s.done) {
                     const int phase = (s.tick / 30) % 3;
-                    tagpu_wikistage_copy(&v, tagpu_wikisim_view(&s), e, s.lay);
+                    tagpu_wikistage_copy(&v, tagpu_wikisim_view(&s), e, WIKISTAGE_LAYOUT_MOD);
                     v.tick = s.tick;            /* the copy leaves it: tagpu_wiki.c sets it so */
+                    art.side_layout = sd ? &sd->layout : NULL;
                     art.side = sd && phase ? sd : NULL;
                     art.side_minimap = phase == 1;
                     tagpu_wikistage_build(&v, NULL, r, u, (s.tick / 30) % 2 == 0, &art, &o);

@@ -72,6 +72,13 @@ int  tagpu_wikistate_refused(void);
    draws no sprite op). The texels hold until the next `present`. */
 const unsigned char* tagpu_wikistate_sprites(unsigned* gen);
 
+/* THE STAGE'S COMPOSED SIDEBAR COLUMN the stage's HOP_SIDE op draws from (tagpu_wikiside.h):
+   HUD_SIDE_W x HUD_SIDE_H texels, R8G8B8A8 premultiplied, the column's rows from the top and
+   transparent below them, and in `*gen` its generation, which moves whenever its texels do; 0
+   while none has been composed (the stage then has no HOP_SIDE op). The texels hold until the
+   next `present`: RENDER THREAD ONLY, as the composition is. */
+const unsigned char* tagpu_wikistate_side(unsigned* gen);
+
 /* The command record's wiki part: what the last frame drawn answered. */
 void tagpu_wikistate_cmd(TAGPU_CMD_WIKI* out);
 

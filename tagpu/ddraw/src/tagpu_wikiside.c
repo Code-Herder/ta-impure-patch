@@ -140,7 +140,7 @@ int tagpu_wikiside_compose(const WIKISIDE* art, const WIKISTAGEVIEW* v, const un
         return 0;
     L = &art->layout;
     H = v->side.h;
-    if (v->layout != L || H < 1 || H > WIKI_SIDE_ROWS) return 0;
+    if (v->layout_src != WIKISTAGE_LAYOUT_MOD || H < 1 || H > WIKI_SIDE_ROWS) return 0;
     out->h = H;
     memset(out->idx, CLEAR, (size_t)COL * (size_t)H);
     memset(out->a, 1, (size_t)COL * (size_t)H);

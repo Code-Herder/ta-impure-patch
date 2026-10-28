@@ -72,7 +72,7 @@ static void site8(WIKISTAGESITE* d, const WIKIVSITE* s)
     d->order = (uint16_t)(s->order > 0 && s->order < 65536 ? s->order : 0);
 }
 
-uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIENTRY* e, const WIKILAYOUT* lay)
+uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIENTRY* e, int layout_src)
 {
     uint32_t t = 0;
     int i, x, z, n;
@@ -82,8 +82,8 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
     out->has_ghost = out->has_drag = out->has_caption = 0;
     out->ntype = 0;
     out->has_side = 0;
+    out->layout_src = WIKISTAGE_LAYOUT_NONE;
     memset(&out->side, 0, sizeof out->side);
-    out->layout = NULL;
     out->locked = -1;
     if (!v || v->w <= 0 || v->h <= 0) return 0;
 
@@ -173,7 +173,7 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
     if (v->has_side) {
         const WIKIVSIDE* sd = &v->side;
         out->has_side = 1;
-        out->layout = lay;
+        out->layout_src = (uint8_t)(layout_src > 0 && layout_src < WIKISTAGE_LAYOUT_N ? layout_src : WIKISTAGE_LAYOUT_NONE);
         out->side.h = (int16_t)(sd->h > 0 && sd->h <= WIKI_SIDE_ROWS ? sd->h : 0);
         out->side.screen = (int16_t)(sd->screen >= 0 && sd->screen < WIKI_SIDE_SCREENS ? sd->screen : -1);
         n = sd->nstate > 0 ? sd->nstate < WIKI_SIDE_GADGETS ? sd->nstate : WIKI_SIDE_GADGETS : 0;
@@ -549,9 +549,10 @@ static const char* named(const WIKILAYOUT* L, const WIKIGADGET* g)
 static void side(B* c, const WIKISTAGEVIEW* v, const WIKISTAGEART* art, double ox, double oz, double s, double top)
 {
     const double H = v->side.h;
-    const WIKILAYOUT* L = v->layout;
+    const WIKILAYOUT* L = art->side_layout;
     /* the mod's pictures belong to their own layout's gadgets (wiki.js sideArt) */
-    const struct WIKISIDE* im = art->side && L && L == &art->side->layout ? art->side : NULL;
+    const struct WIKISIDE* im = art->side && v->layout_src == WIKISTAGE_LAYOUT_MOD && L && L == &art->side->layout
+                              ? art->side : NULL;
     const WIKISCREEN* scr;
     int i, x, z;
     if (im) {

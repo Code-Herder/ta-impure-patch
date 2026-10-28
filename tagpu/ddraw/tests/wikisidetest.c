@@ -246,7 +246,7 @@ static int compose(char** a)
                 }
                 if (sampled(w, &was, s.tick, s.done)) {
                     int h;
-                    tagpu_wikistage_copy(&v, w, e, s.lay);
+                    tagpu_wikistage_copy(&v, w, e, WIKISTAGE_LAYOUT_MOD);
                     h = tagpu_wikiside_compose(sd, &v, base, base ? (int)nbase : 0, &col);
                     key(e->id, e->demo[j].id, s.tick);
                     put32(h);

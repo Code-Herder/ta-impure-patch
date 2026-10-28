@@ -13,6 +13,7 @@
 #include "tagpu_gui.h"
 #include "tagpu_pal.h"
 #include "tagpu_wikiasset.h"
+#include "tagpu_wikiside.h"
 
 static HUDOPS        s_ops;             /* the page's; 400 KB, never on a stack                  */
 static WIKISTAGEOPS  s_stage;           /* the stage's; 0.9 MB                                   */
@@ -192,6 +193,83 @@ const unsigned char* tagpu_wikistate_sprites(unsigned* gen)
     return s_sprite;
 }
 
+/* ---- the sidebar ---------------------------------------------------------------------------------
+   THE VIEW NAMES ITS LAYOUT BY A VALUE (WIKISTAGE_LAYOUT_*), resolved here to a layout this thread
+   holds itself: the fixture of the wiki's data, published with the art this thread draws from, or
+   the running mod's, read through tagpu_wikiside_get, whose interlocked read pairs with the
+   loader's one publishing store, so the block is whole; both are immutable and never freed. The
+   game thread names the mod's only after it read WIKISIDE_READY, which is final, so a READY is
+   always here to resolve it; a record that says otherwise is resolved to no layout, and the stage
+   draws the column and its minimap alone, as stage.js does with no layout. A source out of range
+   draws no sidebar at all (view_bound). The mod's pictures are used only with the mod's layout. */
+static const WIKILAYOUT* side_resolve(const WIKISTAGEVIEW* v, const WIKIART* art, const WIKISIDE** side)
+{
+    const WIKISIDE* s = NULL;
+    *side = NULL;
+    if (!v || !v->has_side) return NULL;
+    if (v->layout_src == WIKISTAGE_LAYOUT_FIXTURE) return art->data ? art->data->fixture : NULL;
+    if (v->layout_src != WIKISTAGE_LAYOUT_MOD || tagpu_wikiside_get(&s) != WIKISIDE_READY || !s) return NULL;
+    *side = s;
+    return &s->layout;
+}
+
+/* THE COMPOSED COLUMN (tagpu_wikiside.h), the texels of HUD_TEX_SIDE the stage's HOP_SIDE op draws:
+   composed every frame from the frame's view, and its RGBA remade, with a new generation, only
+   when the indices, the coverage, the rows or the art differ from the last frame's (FNV-1a 32 over
+   them), which tagpu_vk_hud.c sends whole when the generation moves. This thread's alone. */
+static WIKISIDECOL    s_col;                                      /* 256 KB               */
+static unsigned char  s_colRgba[HUD_SIDE_W * HUD_SIDE_H * 4];     /* 512 KB               */
+static uint32_t       s_colHash;
+static const WIKISIDE* s_colOf;
+static unsigned       s_colGen;         /* bumped at every new column; 0: none yet            */
+
+typedef char side_texture_fits[HUD_SIDE_W == WIKI_SIDE_W && HUD_SIDE_H == WIKI_SIDE_ROWS ? 1 : -1];
+
+static uint32_t fnv(uint32_t h, const unsigned char* p, size_t n)
+{
+    size_t i;
+    for (i = 0; i < n; i++) h = (h ^ p[i]) * 16777619u;
+    return h;
+}
+
+/* this frame's column for view `v` on the mod's art, into s_sart: 1 when the stage draws it as
+   its image, 0 for the whitebox column (no art, a view not on its layout, nothing composed) */
+static int side_bind(const WIKISTAGEVIEW* v, const WIKIART* art, const WIKISIDE* side)
+{
+    const WIKI3D* w3 = tagpu_wiki3d_get();
+    const WIKI3DSTAGE* st = NULL;
+    uint32_t h;
+    int i;
+    s_sart.side = NULL;
+    s_sart.side_minimap = 0;
+    if (!side || !v) return 0;
+    /* the stage's minimap picture: the asset arena's, by the entry's id, NULL until it is loaded */
+    if (w3 && art->data && s_entry >= 0 && s_entry < art->data->nentry)
+        for (i = 0; i < w3->nstage; i++)
+            if (!strcmp(w3->stage[i].entry, art->data->entry[s_entry].id)) { st = &w3->stage[i]; break; }
+    if (!tagpu_wikiside_compose(side, v, st ? st->minimap : NULL, st && st->minimap ? st->mm_w * st->mm_h : 0, &s_col))
+        return 0;
+    h = fnv(2166136261u, s_col.idx, (size_t)WIKI_SIDE_W * (size_t)s_col.h);
+    h = fnv(h, s_col.a, (size_t)WIKI_SIDE_W * (size_t)s_col.h);
+    h = fnv(h, (const unsigned char*)&s_col.h, sizeof s_col.h);
+    if (h != s_colHash || side != s_colOf || !s_colGen) {
+        memset(s_colRgba, 0, sizeof s_colRgba);
+        tagpu_wikiside_rgba(side, &s_col, s_colRgba);
+        s_colHash = h;
+        s_colOf = side;
+        if (++s_colGen == 0) s_colGen = 1;
+    }
+    s_sart.side = side;
+    s_sart.side_minimap = s_col.minimap;
+    return 1;
+}
+
+const unsigned char* tagpu_wikistate_side(unsigned* gen)
+{
+    *gen = s_colGen;
+    return s_colRgba;
+}
+
 /* THE RECORD'S STAGE IS DATA until bounded: every count held to its array, every string ended
    inside its own, so the build cannot read past the copy whatever the record held */
 static void view_bound(WIKISTAGEVIEW* v)
@@ -206,6 +284,13 @@ static void view_bound(WIKISTAGEVIEW* v)
     HOLD(v->nqueued, WIKISTAGE_QUEUED);
     HOLD(v->nline, WIKISTAGE_LINES);
     HOLD(v->ntype, WIKI_MAX_DEFS);
+    /* the sidebar: a source no layout answers to draws none (side_resolve); its rows, states and
+       the unit under the cursor held to their arrays, the locked type to the types */
+    if (v->has_side != 1 || v->layout_src >= WIKISTAGE_LAYOUT_N) v->has_side = 0;
+    HOLD(v->side.h, WIKI_SIDE_ROWS);
+    HOLD(v->side.nstate, WIKI_SIDE_GADGETS);
+    if (v->side.under < -1 || v->side.under >= v->nunit) v->side.under = -1;
+    if (v->locked < -1 || v->locked >= v->ntype) v->locked = -1;
 #undef HOLD
     for (i = 0; i < v->nunit; i++) v->unit[i].label[WIKISTAGE_LABEL - 1] = 0;
     for (i = 0; i < WIKI_MAX_DEFS; i++) v->type[i][WIKISTAGE_LABEL - 1] = 0;
@@ -318,6 +403,11 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
         memcpy(msg, w->msg, sizeof msg);
         msg[sizeof msg - 1] = 0;
         sprites_bind();
+        {
+            const WIKISIDE* side;
+            s_sart.side_layout = side_resolve(sv, art, &side);
+            side_bind(sv, art, side);
+        }
         tagpu_wikistage_build(sv, msg[0] ? msg : NULL, s_fr.stage, u, !w->try_it || s_tryPtr, &s_sart, &s_stage);
         s_haveStage = 1;
         s_stageRect = s_fr.stage;
@@ -341,6 +431,9 @@ static HUDOPLIST stage_list(void)
     l.nrun = s_stage.nrun < WIKI_MAXRUN ? s_stage.nrun : WIKI_MAXRUN;
     l.text = s_stage.text;
     l.ntext = s_stage.ntext < WIKI_TEXTMAX ? s_stage.ntext : WIKI_TEXTMAX;
+    /* the whitebox sidebar's greyed buttons, one group each: without them the draw skips their ops */
+    l.grp = s_stage.grp;
+    l.ngrp = s_stage.ngrp < WIKI_MAXGRP ? s_stage.ngrp : WIKI_MAXGRP;
     return l;
 }
 

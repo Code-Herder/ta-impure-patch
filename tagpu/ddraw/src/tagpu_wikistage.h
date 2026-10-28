@@ -7,7 +7,7 @@
    canvas call with its op within 1/64 of a pixel.
 
    PURE. It names no engine address, holds no global and reads only its arguments: the view by
-   value (WIKISTAGEVIEW) and the sidebar layout and art it names, both immutable and never freed,
+   value (WIKISTAGEVIEW) and the sidebar layout and art the caller resolves for it, both immutable,
    the stage's rect in HUD units and u, the device pixels a unit. So the render thread can build
    the picture from a packet record while the game thread steps the simulation that made it, and
    a native build of this file is the check's.
@@ -72,6 +72,11 @@ typedef struct {
 
 typedef struct { float from_x, from_z, to_x, to_z; uint8_t kind; } WIKISTAGELINE;
 
+/* WHICH LAYOUT THE SIMULATION RUNS ON, as the view names it: a value, so the record stays a
+   record of values (tagpu_wikipk.h). The render thread resolves it to a layout it holds itself
+   (WIKISTAGEART.side_layout): the wiki data's fixture, or the published WIKISIDE's own. */
+enum { WIKISTAGE_LAYOUT_NONE, WIKISTAGE_LAYOUT_FIXTURE, WIKISTAGE_LAYOUT_MOD, WIKISTAGE_LAYOUT_N };
+
 /* THE SIDEBAR, WIKIVSIDE as the stage draws it (tagpu_wikisim.h): the column's rows, the routed
    screen, each gadget's state and the unit under the cursor, the last as an index of the view's
    `unit`. The copy holds each to its array; the render thread bounds `screen` against the
@@ -115,12 +120,8 @@ typedef struct {
     double         pace;
     int16_t        mode;                /* the armed type, or -1: contextual               */
     uint8_t        has_side;            /* the sidebar is on: the stage draws its column   */
+    uint8_t        layout_src;          /* WIKISTAGE_LAYOUT_*: the layout `side` indexes   */
     WIKISTAGESIDE  side;
-    /* THE LAYOUT THE SIMULATION RUNS ON, NULL without the sidebar. The one pointer in the view,
-       and a lifetime, not a value: it points into WIKIDATA.fixture or a published WIKISIDE
-       (tagpu_wikiasset.h), each immutable once checked and never freed, so the render thread
-       may read through it whenever the record was filled. */
-    const WIKILAYOUT* layout;
     int16_t        locked;              /* the type a scripted build could not reach in
                                            this layout, an index into `type`; -1 none      */
     int16_t        ntype;
@@ -131,10 +132,10 @@ typedef struct {
 /* THE COPY. `v` (NULL for none) and the entry `e` it was made from into `out`, every array to its
    bound and every string cut at a character, by value: a WIKIVIEW's arrays live in its WIKISIM
    and hold only until the next call on it, so nothing that outlives the call may point into
-   them. `lay` is the layout the simulation was started with (tagpu_wikisim_init), kept as the
-   view's `layout` while its sidebar is on. Returns the WIKISTAGE_TRUNC_* bits, which are also
-   out->trunc. */
-uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIENTRY* e, const WIKILAYOUT* lay);
+   them. `layout_src` (WIKISTAGE_LAYOUT_*) names the layout the simulation was started with
+   (tagpu_wikisim_init), kept as the view's while its sidebar is on. Returns the
+   WIKISTAGE_TRUNC_* bits, which are also out->trunc. */
+uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIENTRY* e, int layout_src);
 
 /* ---- the picture ---------------------------------------------------------------------------- */
 
@@ -214,12 +215,17 @@ typedef struct {
                                            tagpu_gui.on's cursorscale= (1 by default)      */
     WIKISTAGELOG     log;               /* NULL: none                                      */
     void*            log_ctx;
+    /* THE LAYOUT THE VIEW'S `layout_src` NAMES, resolved by the caller to one it holds (NULL:
+       none, and a sidebar draws its column and minimap alone). It must be immutable while the
+       build runs; the DLL's are WIKIDATA.fixture and the published WIKISIDE's, never freed. */
+    const WIKILAYOUT*      side_layout;
     /* THE SIDEBAR IN THE MOD'S OWN PICTURES, or NULL for the whitebox column: the published
        WIKISIDE whose column this frame composed (tagpu_wikiside_compose), used only for a view
-       whose layout is that block's own, since its pictures are parallel to that layout's
-       gadgets. The column is then one HOP_SIDE op, and a gadget whose picture is a label a
-       whitebox button over it (wiki.js sideArt). `side_minimap` 0: the composed column has no
-       minimap (no base picture for this stage), and the whitebox's is drawn over it. */
+       on the mod's layout that is this block's own (`side_layout` == &side->layout), since its
+       pictures are parallel to that layout's gadgets. The column is then one HOP_SIDE op, and a
+       gadget whose picture is a label a whitebox button over it (wiki.js sideArt).
+       `side_minimap` 0: the composed column has no minimap (no base picture for this stage),
+       and the whitebox's is drawn over it. */
     const struct WIKISIDE* side;
     int              side_minimap;
 } WIKISTAGEART;

@@ -80,8 +80,9 @@ page, on the same launch as sp:
        the text scrolls past two notches; (p4), (p5) and (p7) are not run where it does not scroll;
   (p6) Esc closes and frees the demo; reopened, the selection stands and the demo starts afresh.
 demos, on the same launch as sp:
-  (d1) tagpu_wiki.check plays every demo to its end in the game, and every logged hash equals
-       `node tools/wiki/simparity.mjs --hash`;
+  (d1) tagpu_wiki.check plays every demo to its end in the game, on the sidebar layout a demo would
+       start on, and every logged hash equals `node tools/wiki/simparity.mjs --hash --layout` on the
+       layout the game wrote beside it;
   (d2) a demo runs about 30 ticks a second at 1x and twice that at 2x;
   (d3) play pauses (the tick stands), replay restarts, an ended demo holds its last frame and
        play starts it again;
@@ -693,9 +694,11 @@ def real_pointer(c, x, y):
     raise AssertionError(f"the real pointer reads {d['ptr'] if d else None}, not {want}")
 
 
-def simparity_hashes():
-    r = subprocess.run(["node", str(TREE / "tools/wiki/simparity.mjs"), "--hash"], capture_output=True, text=True,
-                       timeout=300)
+def simparity_hashes(layout):
+    """sim.js's hashes of every demo on the sidebar layout file `layout`, the one the game's check
+    played on and wrote (tagpu_wiki.layout.json: the running mod's, or the fixture)."""
+    r = subprocess.run(["node", str(TREE / "tools/wiki/simparity.mjs"), "--hash", "--layout", str(layout)],
+                       capture_output=True, text=True, timeout=300)
     assert r.returncode == 0, f"simparity --hash: {r.stderr.strip()}"
     return dict(ln.split() for ln in r.stdout.splitlines() if ln.strip())
 
@@ -755,13 +758,15 @@ def demos(c, shots, res):
     """(d1)..(d6): the demos' parity in the game, their clock, the controls, captures beside the
     mockup's, and what the page costs the game thread."""
     held_at(c, HELD_AT)
-    want = simparity_hashes()
     start = c.mark()
     (c.gamedir / "tagpu_wiki.check").write_text("")
     end = time.monotonic() + 120
     while not (line := c.found(start, r"wiki check: \d+ demos played")):
         assert time.monotonic() < end, "(d1) no `wiki check: N demos played` line in 120 s"
         time.sleep(0.5)
+    lay = c.found(start, r"wiki check: the sidebar layout is ")
+    print(f"wiki demos: (d1) {lay.split('wiki check: ', 1)[1] if lay else 'no sidebar layout line'}")
+    want = simparity_hashes(c.gamedir / "tagpu_wiki.layout.json")
     got = dict(m.groups() for ln in c.log[start:] if (m := re.search(r"wiki check: (\S+/\S+) ([0-9a-f]{16})$", ln)))
     differ = sorted(k for k in want if got.get(k) != want[k])
     assert not differ and len(got) == len(want), \
@@ -850,14 +855,16 @@ def demo_inputs(entry, demo_id):
 
 
 def stage_fit(d):
-    """tagpu_wikistage_fit on the stage the dump's hit map drew: the map's scale and corner in client
-    pixels, from the stage's canvas -- its `stage` hit -- and the frame's unit, as both of the
-    game's threads fit it."""
+    """tagpu_wikistage_fit on the stage the dump's hit map drew: the map's scale and the client
+    pixel of its world origin, from the stage's canvas -- its `stage` hit -- and the frame's unit,
+    as both of the game's threads fit it. The content is the map and, with the sidebar on (the
+    dump's `side_h` rows), the 128-unit column left of it, as tall as the taller of the two."""
     x0, y0, x1, y1 = Wiki.hit(d, "stage")
-    u, (mw, mh), cell = d["u"], d["map"], 16
+    u, (mw, mh), cell, side = d["u"], d["map"], 16, d.get("side_h", 0)
     pad = 6 * u
-    s = min((x1 - x0 - 2 * pad) / (mw * cell), (y1 - y0 - 2 * pad) / (mh * cell))
-    return s, x0 + (x1 - x0 - mw * cell * s) / 2, y0 + (y1 - y0 - mh * cell * s) / 2
+    cx0, cw, ch = (-128, 128 + mw * cell, max(mh * cell, side)) if side > 0 else (0, mw * cell, mh * cell)
+    s = min((x1 - x0 - 2 * pad) / cw, (y1 - y0 - 2 * pad) / ch)
+    return s, x0 + (x1 - x0 - cw * s) / 2 - cx0 * s, y0 + (y1 - y0 - ch * s) / 2
 
 
 def replay_try(c, d, entry, demo_id, grab_at=None, shot=None):
