@@ -1148,8 +1148,9 @@ static void check(void)
         if (fclose(f) != 0 || !MoveFileExA(CHECK_LAYOUT ".tmp", CHECK_LAYOUT, MOVEFILE_REPLACE_EXISTING))
             tagpu_logf("wiki check: %s could not be written (%lu)", CHECK_LAYOUT, (unsigned long)GetLastError());
     }
-    tagpu_logf("wiki check: the sidebar layout is %s, in %s; the units' scripts and sounds are %s", src == WIKISTAGE_LAYOUT_MOD ? "the mod's"
-               : src == WIKISTAGE_LAYOUT_FIXTURE ? "the fixture" : "none", CHECK_LAYOUT, cob ? "on" : "off");
+    tagpu_logf("wiki check: the sidebar layout is %s, in %s; the units' scripts are %s, their sounds %s",
+               src == WIKISTAGE_LAYOUT_MOD ? "the mod's" : src == WIKISTAGE_LAYOUT_FIXTURE ? "the fixture" : "none",
+               CHECK_LAYOUT, cob ? "on" : "off", snd ? "on" : "off");
     QueryPerformanceCounter(&t0);
     for (k = 0; k < nside; k++)
         for (ifc = 0; ifc <= 1; ifc++)

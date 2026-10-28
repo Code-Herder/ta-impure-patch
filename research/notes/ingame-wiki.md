@@ -882,11 +882,12 @@ side had its own types.
 
 - `tagpu_wiki.check` writes the layout it plays on to `tagpu_wiki.layout.json`, in the layout
   schema, or `null` for none. It logs `wiki check: the sidebar layout is the mod's / the fixture
-  / none ...; the units' scripts are on / off` and waits, as a demo does, for the loader's answer
-  and the 3D load's. After a demo's hash it logs each quarantined type's note
-  (`<TYPE>'s script is quarantined - <note>`) and a demo a wait stopped (`stopped: a wait ran
-  past its max`); `wiki_regression.py` passes `--scripts` to `simparity.mjs --hash` when the log
-  says the scripts are on.
+  / none ...; the units' scripts are on / off, their sounds on / off` and waits, as a demo does,
+  for the loader's answer and the 3D load's. After a demo's hash it logs each quarantined type's
+  note (`<TYPE>'s script is quarantined - <note>`) and a demo a wait stopped (`stopped: a wait ran
+  past its max`); `wiki_regression.py` passes `--scripts` to `simparity.mjs --hash` -- which gives
+  sim.js the units' scripts and their sounds together, as the game's one 3D load does -- when the
+  log says both are on, and fails when the line does not say or says they differ.
 - The state dump `tagpu_wiki.json` gains three fields: `side_h`, the running simulation's
   column rows, 0 without one; `layout_src`, one of `"mod"`, `"fixture"`, `"none"`, or `""`
   with no simulation; and `layout`, the layout itself, which `simparity.mjs --try` and
