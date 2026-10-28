@@ -48,7 +48,7 @@
 #include "render_vk.h"
 
 #define D_STRIDE  0x249u
-#define D_FLAGS   0x241       /* u32: bit 11 VTOL (the resolver's VTOL_RECLAIM test, 0x440170) */
+#define D_FLAGS   0x241       /* u32: bit 11 VTOL (the resolver's VTOL_RECLAIM test, 0x43F68E) */
 #define D_TAGS    0x245       /* u32: bit 0x400 canreclamate (0x43E65C, 0x43F4F7)             */
 #define D_SPEED   0x192       /* i32 maxvelocity, 16.16                                       */
 #define D_REACH   0x212       /* u16 builddistance                                            */
@@ -70,7 +70,7 @@
 #define FD_ENERGY 0xEC        /* float                                                        */
 #define FD_METAL  0xF0        /* float                                                        */
 #define FD_TOP    0xFA        /* u8 the feature's height                                      */
-#define FD_RECL   0x80        /* FD_MASK's bit 7: reclaimable (0x43E75A, 0x440167)            */
+#define FD_RECL   0x80        /* FD_MASK's bit 7: reclaimable (0x43E75A, 0x43F681)            */
 #define FD_BODYSEQ  0xAC      /* GAF sequence: the static body (tagpu_feat.c, the feature pass) */
 #define FD_BODYANIM 0xCC      /* anim state: the animating body, FD_MASK bit 1                */
 #define WR_BODYANIM 0x04      /* a GAF wreck record's anim state: its body                    */
@@ -286,7 +286,7 @@ static int reclaimable(const unsigned char* def) { return (def[FD_MASK] & FD_REC
 
 /* the order bytes of the reclaim family, 0x438760's answer for the engine's own names at
    0x5016C4 RECLAIM, 0x501B68 VTOL_RECLAIM and 0x5052F0 RESURRECT, the strings the resolver
-   passes it (0x440187, 0x440176, 0x44004C); 0 for a name it does not find */
+   passes it (0x440187, 0x43F694, 0x44004C); 0 for a name it does not find */
 static int actions(void)
 {
     if (!s_actOk) {
@@ -315,11 +315,12 @@ static char* reclaimer(const TagpuWorld* w, unsigned slot)
 }
 
 /* The representative: the first selected reclaimer. Whether the resolver's answer for a feature
-   is of the reclaim family depends on nothing of the unit but its def's +0x245 bit 0x400 and its
-   player's mapped bit (0x43F4F7..0x44018F), and every unit of the block has the same player, so
-   that answer for this unit is every one's. Which order of the family it is does depend on the
-   unit (VTOL_RECLAIM for a def with +0x241 bit 11, 0x44016F..0x440181), so the commit asks the
-   resolver again for each builder. */
+   is of the reclaim family depends on nothing of the unit but its def's +0x245 bit 0x400
+   (0x43F4FD) and its player's mapped bit (mode 12's case, 0x43F4F7..0x43F6AA), and every unit of
+   the block has the same player, so that answer for this unit is every one's. Which order of the
+   family it is does depend on the unit (RESURRECT for a def with +0x245 bit 0x800, 0x43F5A2;
+   VTOL_RECLAIM for one with +0x241 bit 11, 0x43F68E..0x43F69F), so the commit asks the resolver
+   again for each builder. */
 static char* representative(const TagpuWorld* w)
 {
     unsigned i;
@@ -332,10 +333,11 @@ static char* representative(const TagpuWorld* w)
 
 /* The order the resolver 0x43F0E0 gives `u` for mode 12 with no target unit at `pos`, when it is
    of the reclaim family; 0 otherwise. The resolver answers through its first argument (a byte,
-   0 on refusal, 0x4401E3). Of the reclaim case's answers only RECLAIM, VTOL_RECLAIM and
-   RESURRECT take a feature: with no reclaimable feature at `pos` a unit whose def has +0x245
-   bit 0x80 is given VTOL_MOVE (0x5016CC) or MOVE_GROUND (0x5052E4) instead (0x44019D..0x4401D9,
-   DISASSEMBLED), so a non-zero answer alone does not say a feature is taken. */
+   0 on refusal, 0x4401E3). Mode 12 goes through the table at 0x4401EC to 0x43F4F7, whose answers
+   with no target unit are RESURRECT (0x43F612), VTOL_RECLAIM or RECLAIM (0x43F68A..0x43F6A5) or 0
+   (0x43F6AA, 0x4401DC) -- the family or nothing (DISASSEMBLED). The family test is the guard on
+   that: the same tests' copy in the contextual case (0x43FF38..0x4401D9) can answer VTOL_MOVE
+   (0x5016CC) or MOVE_GROUND (0x5052E4), so a non-zero answer is taken only when it reclaims. */
 static unsigned char feature_order(const char* u, const int pos[3])
 {
     int out = -1;
@@ -403,7 +405,7 @@ static int floor16(int v) { return v >= 0 ? v / 16 : -((15 - v) / 16); }
 
    WHY THIS IS THE RESOLVER'S ACCEPTANCE: for no target unit the resolver gives a reclaimer a
    reclaim-family order exactly when the feature 0x4815A0 finds at `pos` is reclaimable and the
-   mapped bit at `pos` is set (0x43F4F7..0x44018F); the representative is a reclaimer; `pos` lies
+   mapped bit at `pos` is set (mode 12's case, 0x43F4F7..0x43F6AA); the representative is a reclaimer; `pos` lies
    in the anchor's footprint, so 0x4815A0 finds this anchor, directly or by its hop; and 0x408090
    is the same mapped arithmetic. The commit asks the resolver itself before every order and
    counts a refusal as a mismatch, the self-check of this equivalence, which must read 0. The
