@@ -69,10 +69,47 @@ rocks, ring and popup undrawn.
 | | What | Gate |
 |---|---|---|
 | **L1** — LANDED 2026-10-29 with L2 and L3 | the mockup: the layout's quickkey and `reclaim` role (`gfx.py`, `checkLayout`), features in `sim.js` and the stage description (`stagemap.py`'s recipe), the sweep in `sim.js`, its drawing in the mockup, `gen-reclaim.mjs` and the seven demos, the claims in `simcheck.mjs` | `simcheck.mjs` on every pack and casting; the demos watched in the mockup by the owner |
-| **The grown map** — built, not landed, lands with L1 and L2 | the owner's answer on the popup (below): with the sidebar a stage's map grows to the column (`tagpu_wiki_map_rows`, `sim.js` *THE MAP*), the descriptions' ground 48 rows deep, the column at most 768 rows, the game look and the DLL's world drawing the map's top rows, each minimap built on its map's rows; mockup and DLL both | `simcheck.mjs` on every pack (passes); `scenecheck.mjs` and `assetcheck.py`'s stages (pass on a tree without the reclaim entry); the sim, side and stage parity with L2's |
+| **The grown map** — LANDED 2026-10-29 with L1 | the owner's answer on the popup (below): with the sidebar a stage's map grows to the column (`tagpu_wiki_map_rows`, `sim.js` *THE MAP*), the descriptions' ground 48 rows deep, the column at most 768 rows, the game look and the DLL's world drawing the map's top rows, each minimap built on its map's rows; mockup and DLL both | `simcheck.mjs` on every pack (passes); `scenecheck.mjs` and `assetcheck.py`'s stages (pass on a tree without the reclaim entry); the sim, side and stage parity with L2's |
 | **L2** — LANDED 2026-10-29 with L1 and L3 | the DLL's simulation: `tagpu_wikisim.c` and the loaders (`tagpu_wikidata.c`: the entry's `features` table, a scene's `features`, `kind`, the inputs `reclaim` and `pick`, the key `e`, the layout's `key`, a cast's `canreclamate`). Everything sim.js gained that the C side must mirror: the feature table and its checks (`checkFeature`), blocking features in `siteOk`, the spawn and `bodies`; the sweep (`popup`, `keyPress`, `reclaimPress`/`Move`/`Release`, `sweepCommit`, `sweepSplit` from `tagpu_sweepgeo.c`); the feature reclaim order (`featWork`: the walk to touch, the countdown `trunc(15 + (e+m)/2)` taken 2 a call every 2 ticks, the payout, the spray while above 15, the kind-7 notice for a feature gone); the trips `reclaim` and `pick`; the sound `specialorders`; the view's `mode`, `feats`, `gone` and `reclaim` | `simparity.mjs` natively and `--wine`; `wikitest`'s malformed cases |
 | **L3** — LANDED 2026-10-29 with L1 and L2 | the DLL's drawing: the features on the whitebox ground and out of the 3D image once reclaimed, the sweep's brackets, ring, readout, popup and the kind's tag through the wiki's HUD ops, the game's `cursorreclamate`, E from Try it, the RECLAIM lock's badge | `stagecheck.mjs`; `wiki_regression.py` in all six compatibility setups; the demos watched in game |
-| **L4** — later | 3D wrecks on the stage, mockup and game, swapped into the METAL demos | `stage3dcheck.py` |
+| **L4** — in progress, worktree-qol_shift | 3D wrecks on the stage, mockup and game, swapped into the three METAL demos (*L4: 3D wrecks*, below) | `simcheck.mjs`, `simparity.mjs`, `stagecheck.mjs`, `scenecheck.mjs`, `stage3dcheck.py`, `wiki_regression.py` in the six setups |
+
+## L4: 3D wrecks
+
+**The owner's answers (2026-10-29).** The three METAL demos -- *A METAL ring*, *Shift queues
+another ring*, *Without Shift it replaces* -- move from the rocks to wrecks; *E and a click*,
+*Pick the kind*, *An ENERGY ring* and *Cancel* keep the rocks and trees. The wrecks are a battle's
+aftermath: mixed ARM and CORE corpses (`*_dead`) and a few heaps (`*_heap`), with greenworld's
+trees still among them, so the METAL ring is seen to leave the energy alone.
+
+**What the engine does with a placed 3D feature** [DISASSEMBLED 2026-10-29]. A map's features are
+spawned by `SpawnFeatureOnMap 0x423C50(cell, def, 0, 0, 0xA)`, position and turn null. A def with
+`+0xFE` bit 0 clear takes a wreck-pool record (`main+0x1420B`, stride `0x30`) and, with no
+position given (`0x423E26`), the record's `+0x08` and `+0x10` are the footprint's centre in 16.16
+(`(2·col + fx) << 19`, `(2·row + fz) << 19`, `0x423E3D..0x423E68`), `+0x0C` the ground's height
+there (`0x485070`, `0x423E70`); with no turn (`0x423E95`) `+0x20..+0x25` are zero; `+0x04` the
+Object3do `0x45A8D0` instantiates from the def's template `+0x98` (`0x423EBB..0x423ECB`), its own
+pose. The native wreck pass draws that record as a feature: owner 0, no lit shading, no shadow of
+its own, at the feature depth `3 + 4·row` (`tagpu_native.c`, the husk gather).
+
+**The steps**, each its own commit:
+
+1. **The data.** The entry's `features` table takes a 3D feature's `object` (its 3DO, from the
+   section's `object=`); `gen-reclaim.mjs` adds the corpses and heaps and a second scene, `field`,
+   greenworld ground with the wrecks and trees, which the METAL demos play `on`; `stagemap.py`
+   writes `reclaim.field.json` and checks every row, `object` included, against the install. Both
+   loaders (`sim.js` `checkData`, `tagpu_wikidata.c`) read `object` and bound it as a name.
+2. **The whitebox.** A feature with an `object` is a wreck: drawn as its footprint in its own
+   colour, beside the rock's and the tree's (`stage.js`, `tagpu_wikistage.c`; the view's feature
+   `rock` flag becomes a look).
+3. **The mockup's 3D.** `gfx.py` packs a stage's 3D feature as a mesh beside the units (owner 0
+   only) instead of refusing the ground; `gfx.js` draws each feature still standing as a record
+   at its footprint's centre, unturned, on the neutral row, no shadow, at the feature depth.
+4. **The game's 3D.** `tagpu_wikiworld.c` takes a 3D feature instead of refusing the ground: a
+   type from the arena's model and a record per feature standing (`tagpu_wikiscene_models`), the
+   reclaimed ones left out by the view's `gone`, within `WIKIWORLD_FEAT3D`.
+5. **The checks.** `simcheck`'s METAL rules on wrecks, `scenecheck` pairs the records,
+   `stage3dcheck.py` the image against the game's, and the regressions in the six setups.
 
 ## What L1 built
 
