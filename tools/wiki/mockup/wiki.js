@@ -625,5 +625,5 @@ Promise.all([load(), loadFixtures()]).then(() => {
 });
 requestAnimationFrame(loop);
 // the page's state, its running simulation and the sidebar layout it runs on, for scripted checks of the mockup
-window.WikiPage = { state: S, sim: () => sim, image: () => IMG, layout: () => simLayout, context: () => simCtx };
+window.WikiPage = { state: S, sim: () => sim, stageId, image: () => IMG, layout: () => simLayout, context: () => simCtx };
 })();

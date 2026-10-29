@@ -99,7 +99,7 @@ class Mockup:
               " if (sim.view().cob === null) return JSON.stringify({ err: 'the page plays without the scripts of the units' });"
               f" while (sim.tick < {tick} && !sim.done) sim.step();"
               " let r = null;"
-              " for (let i = 0; i < 400; i++) { r = WikiGfx.frame(stageId(), sim.view(), sim.tick, undefined, sim.poses()); if (r && r.complete) break; await sleep(50); }"
+              " for (let i = 0; i < 400; i++) { r = WikiGfx.frame(WikiPage.stageId(), sim.view(), sim.tick, undefined, sim.poses()); if (r && r.complete) break; await sleep(50); }"
               " if (!r || !r.complete) return JSON.stringify({ err: 'no complete image', r: r && { complete: r.complete, refused: r.refused, glError: r.glError } });"
               " return JSON.stringify({ tick: sim.tick, url: r.canvas.toDataURL('image/png'),"
               "   renderer: (() => { const g = document.createElement('canvas').getContext('webgl2');"
