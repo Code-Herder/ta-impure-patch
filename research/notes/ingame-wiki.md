@@ -46,7 +46,7 @@ sounds -- through a DirectSound object of the wiki's own, at the player's volume
 | The stage's fallback cursor icons, the controls' glyphs and the tree's marks | `cursor_*.png`, `i_play`, `i_pause`, `i_replay`, `i_open`, `i_shut` and `i_dot` in the kit, written by `tools/wiki/cursors.sh` from `stage.js` `cursorShape` and `tools/wiki/mockup/glyphs.js` |
 | The window's layout numbers and its text roles | `art/wiki/layout.json`, which `wiki.js` sets as custom properties of the frame (`--w-` and the number's path) for `wiki.css`, and which the DLL reads |
 | The stage in 3D, as the game will draw it | `tools/wiki/gfx.py` resolves each stage description and each entry's units from the local install into the gitignored `tools/wiki/mockup/gfx/`; under `gfx=game`, `scene.js` turns each view into model records and the fog grid, and `gfx.js` renders them with `tools/tascene-render.js` (tagpu's own shaders, which the tascene lab shares) |
-| The stage's ground as references: which tile of which map in each square, which feature on which cell | `art/wiki/stage/<entry>.json`, written and checked against the local install by `tools/wiki/stagemap.py` (`tiles`, `build`, `check`) through `tools/wiki/tavfs.py`, the engine's file precedence in Python; not packed yet |
+| The stage's ground as references: which tile of which map in each square, which feature on which cell | `art/wiki/stage/<entry>.<scene>.json`, one per scene of an entry, written and checked against the local install by `tools/wiki/stagemap.py` (`tiles`, `build`, `check`) through `tools/wiki/tavfs.py`, the engine's file precedence in Python; packed into `WIKIPAK` with the entries |
 | The demos' generators; the headless check of every demo | `tools/wiki/gen-quickbuild.mjs`, `tools/wiki/gen-buildshapes.mjs`; `tools/wiki/simcheck.mjs` |
 | The data in the DLL | `art/wiki/` (`tree.json`, `layout.json`, the entries) packed by `tools/hudpak.py --set wiki` into the resource `WIKIPAK`; read by `tagpu/ddraw/src/tagpu_wikidata.c` (through `tagpu_pak.c`, the archive reader the HUD shares) |
 | The window's layout in the DLL | `tagpu/ddraw/src/tagpu_wikilay.c`: pure, the HUD stack's ops, text and hit boxes for a page state (`WIKIPAGE`) |
@@ -416,7 +416,7 @@ they were not re-disassembled for this table.
 
 | Stage element | Game asset | Impure code that draws it in game | `gfx=game` in the mockup |
 |---|---|---|---|
-| Ground | The map's TNT tiles: the tile set `*(main+0x14283)`, 32 × 32 8-bpp, and the tile map `*(main+0x1428B)`, one u16 per 32-pixel cell | `tagpu_terr.c` `ensure_atlas` (the R8 atlas, 64 tiles a row, 34-texel pitch) and `tagpu_terr_gather`; `tagpu_vk_terr.c` `tagpu_vk_terr_record`. `tagpu_terrown.c` `terr_fill` suppresses the engine's blit `0x483FA0`. | The stage description's tiles (`art/wiki/stage/<entry>.json`), in the same atlas form, through tagpu's terrain shader (`tascene-render.js` `classicTerrain`) |
+| Ground | The map's TNT tiles: the tile set `*(main+0x14283)`, 32 × 32 8-bpp, and the tile map `*(main+0x1428B)`, one u16 per 32-pixel cell | `tagpu_terr.c` `ensure_atlas` (the R8 atlas, 64 tiles a row, 34-texel pitch) and `tagpu_terr_gather`; `tagpu_vk_terr.c` `tagpu_vk_terr_record`. `tagpu_terrown.c` `terr_fill` suppresses the engine's blit `0x483FA0`. | The stage description's tiles (`art/wiki/stage/<entry>.<scene>.json`), in the same atlas form, through tagpu's terrain shader (`tascene-render.js` `classicTerrain`) |
 | Metal deposit | A map **feature** with `metal=` and footprint 3 × 3: on lush maps `lushmetal1..3` (`metals.gaf`, `seqname` frame 0); on greenworld maps the rocks `RockMetal2`, `RockMetal1`, `RockMetal`, `RockMetal3` of `features\green\metal.tdf` (`metal=` 86, 127, 187, 223; `rocks.gaf`), which the stage draws. The metal a mex reads is the feature-grid byte `+7`, which `0x422040` writes from the definition; the sprite is only the picture. | The feature pass, which has no metal case: `tagpu_feat.c` `tagpu_feat_gather` → `draw_feature`; `tagpu_vk_feat.c` `tagpu_vk_feat_record`. `tagpu_featown.c` skips the engine leaf `0x46A610`. | The description's deposit feature, frame 0 of its sequence at its GAF hotspot, through tagpu's sprite shader (`classicSprites`) |
 | Geothermal vent | A map feature with `geothermal=1`, footprint 1 × 1: on lush maps `lushvent01..03` (`lushvents.gaf`, `geovent0N`); on greenworld maps `GreenVent01..10` and `Geothermal` (`greenvents.gaf`), which the stage draws | The feature pass, as for metal | The description's vent feature, as for metal |
 | Grey fog, unexplored ground | The engine's fog grid, built by `0x4843C0` from the line-of-sight counters and the mapped bits | No separate pass. Each world pass applies `tagpu_glsl.h`: `TAGPU_GLSL_FOG_TERRAIN` paints unexplored ground palette index 0 (black), `TAGPU_GLSL_FOG_GREY_RGB` turns a fogged pixel into its R+G+B mean, and `TAGPU_GLSL_FOG_DISCARD` hides units and effects outside sight. The grid is rebuilt by `tagpu_terrown.c` `terr_fogtick` and, zoomed out, by `tagpu_fogwide.c`. | The view's fog cells in the engine's grid form (`scene.js` `fogGrid`: one entry a 32-unit block, two corner masks), on terrain and features. Units and ghosts take none ([the 3D stage's plan](ingame-wiki-3d-stage-plan.html), section 7). When the ground falls back, the whitebox's fog overlays |
@@ -1176,13 +1176,16 @@ click at type 0:
 | 7 | Helpers assist | in a mixed selection, the builders that cannot make it guard the ones that can |
 | 8 | Upgrade your extractor | the order click on a finished ARMMEX with ARMACK selected: reclaimed, then ARMMOHO built |
 | 9 | Geothermal vents | the same click on a vent builds ARMGEO |
-| 10 | Metal maps | on uniform metal ground a click is a move; only a richer deposit builds |
+| 10 | Metal maps | on a metal map, metal ground everywhere, the order click is a move (its own scene, `metal`) |
 | 11 | Fog | an unexplored deposit does not snap; one under grey fog does |
 
 Every demo ends on its work done: after its last input it waits until no unit of the player's
 holds a build or a reclaim order (at most 1800 ticks), then plays 60 more; *The best extractor
 that fits* also waits between its two clicks, and *Metal maps* waits for its constructor to arrive
-before its second (`gen-quickbuild.mjs` `until`, `TAIL`, `WAIT_MAX`). The ring and helpers demos
+(`gen-quickbuild.mjs` `until`, `TAIL`, `WAIT_MAX`). *Metal maps* plays on the entry's `metal` scene,
+a 40 × 30 map of metal ground everywhere at Over Crude Water's SurfaceMetal of 255, and shows only
+that the order click there is a move; that a deposit with plain ground round it is one is every
+other demo's. The ring and helpers demos
 need their unit still walking at a click instead; a path round something only lengthens a walk, so
 that holds.
 
@@ -1246,15 +1249,15 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
 ### `art/wiki/entries/<id>.json`
 
 ```json
-{ "format": 1, "id": "quickbuild",
+{ "format": 2, "id": "quickbuild",
   "title": "Quick Build: Resource Extractors",
   "subtitle": "…",
   "text": ["paragraph", "…"],
   "lockedIn": ["escalation", "tazero", "unknown"],
   "units": { "ARMMEX": { "cast": "mex", "footprint": [3, 3], "extracts": 0.001, "…": "…", "from": "ARMMEX.fbi" } },
-  "scene": { "…": "the map every demo starts from" },
+  "scenes": { "green": { "…": "the map a demo starts from" }, "metal": { "…": "another" } },
   "demos": [ { "id": "snap", "title": "Snap onto the deposit",
-               "scene": { "…": "additions to the entry's scene" },
+               "scene": { "…": "additions to the scene it plays on" },
                "inputs": [ { "at": 0, "move": [120, 80] }, { "at": 30, "down": "order" },
                            { "at": 32, "up": "order" }, { "at": 30, "caption": "{order} the {mex}…" } ],
                "end": 240 } ] }
@@ -1302,28 +1305,36 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
   finished, or made whole in a scene, with it set is switched on: its script's `Activate` runs
   (`0x41B9A6`, `0x48612F`). The entries give it to ARMMEX, ARMMOHO, ARMGEO and ARMSOLAR, and the
   castings carry it for every cast (`gfx.py`, `tagpu_wikiasset.c`, `casting-fixture.json`).
-- **The scene**: the map's size in cells, its `surfaceMetal`, its metal as rectangles of a value,
+- **The scenes**: an entry's `scenes` names one or more, in order, and a demo plays on the one its
+  `"on"` names, the first when it names none (Quick Build's *Metal maps* is `"on": "metal"`); Try
+  it yourself starts from the demo's scene. A name is 1 to 16 of `a`–`z` and `0`–`9`, a letter
+  first, and is the stage's: each scene has its own ground,
+  `art/wiki/stage/<entry>.<scene>.json` (below). Every scene's map is the
+  first one's size, so the stage keeps one size from demo to demo; both simulations refuse an entry
+  that breaks a rule of this bullet, a demo `on` no scene of the entry, and an entry that is not
+  format 2 (`sim.js` `sceneOf`, `tagpu_wikidata_entry`).
+- **A scene**: the map's size in cells, its `surfaceMetal`, its metal as rectangles of a value,
   its vents, its fog rectangles (`grey` or `black`), the units (type, owner, position, finished or
   not, and optionally move orders and a `facing`), and which are selected. `"facing": [x, z]` is
   any vector with a length, normalised on load; without it a unit faces `(0, 1)`, and a building
   faces `(0, 1)` whatever it gives.
-- **The ground's grid**: the map's size, every fog rectangle and every broad metal rectangle (one
-  that touches both opposite edges of the map on an axis) are whole tiles, even numbers of cells,
-  because the stage's ground is drawn in the map's 32-unit tiles and its fog in the engine's 32-unit
-  blocks. A demo adds no metal, vent or fog: the stage's ground is the entry's. `stagemap.py check`
-  refuses both.
+- **The ground's grid**: the map's size and every fog rectangle are whole tiles, even numbers of
+  cells, because the stage's ground is drawn in the map's 32-unit tiles and its fog in the engine's
+  32-unit blocks. A scene has no broad metal rectangle (one that touches both opposite edges of the
+  map on an axis): no ground draws one, and a metal map is a scene of its own whose `surfaceMetal` is
+  its ground. A demo adds no metal, vent or fog: the stage's ground is the scene's. `stagemap.py
+  check` refuses all three.
 
-### `art/wiki/stage/<entry>.json`
+### `art/wiki/stage/<entry>.<scene>.json`
 
-The stage's ground for one entry's scene, by reference to the player's own files; written by
+The stage's ground for one scene of an entry, by reference to the player's own files; written by
 `tools/wiki/stagemap.py build`, never by hand.
 
 ```json
-{ "format": 1, "entry": "quickbuild",
+{ "format": 2, "entry": "quickbuild", "scene": "green",
   "cells": [40, 30],
-  "sources": [ { "map": "maps\\evad river confluence.tnt", "tiles": 3098 },
-               { "map": "maps\\metal heck.tnt", "tiles": 583 } ],
-  "tileset": [ [0, 0, "fd32b023"], [0, 1, "b69db994"], "…", [1, 170, "8cb0058f"] ],
+  "sources": [ { "map": "maps\\evad river confluence.tnt", "tiles": 3098 } ],
+  "tileset": [ [0, 0, "fd32b023"], [0, 1, "b69db994"], "…" ],
   "tilemap": [ 0, 1, 2, 3, 0, 1, 2, 3, "…" ],
   "features": [ { "name": "rockmetal3", "cell": [14, 16] },
                 { "name": "greenvent01", "cell": [28, 9] },
@@ -1343,26 +1354,36 @@ The stage's ground for one entry's scene, by reference to the player's own files
   read and a section found all follow the engine's precedence: loose first, then the first archive
   in mount order, the first pattern read out of the player's executable (`tools/wiki/tavfs.py`;
   [the 3D stage's plan](ingame-wiki-3d-stage-plan.html), section 5).
-- **`stagemap.py build`** derives it from the entry's scene and the recipe the script holds; the
-  greenworld recipe, which both entries use, draws only the base game's files:
+- **`stagemap.py build`** derives it from the scene and the recipe its name picks (the script's
+  `RECIPES`: a scene's name is its world's, so `green` is greenworld in every entry). Both recipes
+  draw only the base game's files. **`green`**, which both entries use:
   - **the ground is a map editor section**, greenflat01 (Cavedog's flat grass, one 4 × 4-tile
     block that joins itself edge to edge), laid from the map's top-left corner and repeated. The
     section is read from `worlds.hpi`, which the engine mounts as any `*.HPI` and no map loads, so
     each of its tiles is referenced by its index in Evad River Confluence (`totala2.hpi`), which
     holds all sixteen byte for byte. Only the author's install needs `worlds.hpi`;
-  - the metal-ground tile over each broad metal rectangle (Metal Heck's tile 170);
   - **each deposit is the greenworld rock whose `metal=` is the deposit's value**, so the picture is
     the value: every deposit is one 3 × 3 rectangle of 86, 127, 187 or 223, the four rocks of
     `features\green\metal.tdf` (the world's water ores, in `watermetal.tdf`, repeat those values);
   - **each vent is a greenworld vent**, a different one for each;
   - **decoration breaks the section's repeat**: one smudge or scar of greenworld (they block nothing
     and hold no metal, so the simulation has nothing to learn about them) per 8 × 8 cells where one
-    fits, 2 cells clear of every deposit and vent and off broad metal, placed by a seeded xorshift so
-    every build writes the same file.
+    fits, 2 cells clear of every deposit and vent, placed by a xorshift seeded with the stage's name
+    so every build writes the same file.
+
+  **`metal`**, Quick Build's *Metal maps*:
+  - **the ground is a crop of a metal map**, the 40 × 30 cells of Over Crude Water (`totala2.hpi`)
+    from cell (422, 370), inside its central plaza: 93 different tiles, every cell at the plate's
+    height of 139, and no feature of the map anchored where its footprint could reach into the
+    window. The build refuses a crop that is not flat or that a feature reaches, so no picture of the
+    map's own expects a feature or a slope the stage does not have;
+  - **decoration**: the metal world's pipe holes (`features\metal\pipes.tdf`, `totala1.hpi`: the
+    ground marks a reclaimed pipe leaves, blocking nothing), one per 16 × 16 cells where one fits,
+    six on this stage.
 
   `stagemap.py tiles <map>` lists a map's flat, featureless, tileable tiles and draws a contact
   sheet into the gitignored `tools/wiki/mockup/gfx/`.
-- **`stagemap.py check`** exits 0 when every entry's description resolves on the local install —
+- **`stagemap.py check`** exits 0 when every scene's description resolves on the local install —
   every map with its tile count, every tile with its hash, every feature section — fits its scene
   (each deposit's feature footprint is its metal rectangle and its `metal=` the rectangle's value,
   each vent a vent feature on its cell, every other feature one that blocks nothing, no two

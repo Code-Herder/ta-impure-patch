@@ -300,18 +300,19 @@ instance buffers.
 
 ### 4. The stage description: committed indices and names, resolved against the player's archives
 
-**One file per entry's scene**, `art/wiki/stage/<entry>.json`, keyed by the entry's id (the entry
-files do not change). Packed into `WIKIPAK` by `tools/hudpak.py --set wiki` (6e, which reads it).
+**One file per scene of an entry**, `art/wiki/stage/<entry>.<scene>.json`, keyed by the entry's id
+and the scene's name (an entry's `scenes`, [the wiki's note](ingame-wiki.html), *The data format*).
+Packed into `WIKIPAK` by `tools/hudpak.py --set wiki` (6e, which reads it); the DLL holds one
+`WIKI3DSTAGE` per scene, and `tagpu_wiki3d_stage` finds the one a demo plays on.
 
 ```json
-{ "format": 1, "entry": "quickbuild",
-  "cells": [40, 24],
-  "sources": [ { "map": "maps\\Crossing Two Rivers.tnt", "tiles": 4096 },
-               { "map": "maps\\<a metal world map>.tnt", "tiles": 2310 } ],
-  "tileset": [ [0, 13, "9f3a17c2"], [1, 402, "c0d11e88"] ],
-  "tilemap": [ 0, 0, 0, 1, … ],
-  "features": [ { "name": "lushmetal3", "cell": [14, 16] },
-                { "name": "lushvent01", "cell": [28, 9] } ] }
+{ "format": 2, "entry": "quickbuild", "scene": "green",
+  "cells": [40, 30],
+  "sources": [ { "map": "maps\\evad river confluence.tnt", "tiles": 3098 } ],
+  "tileset": [ [0, 0, "fd32b023"], [0, 1, "b69db994"] ],
+  "tilemap": [ 0, 1, 2, 3, … ],
+  "features": [ { "name": "rockmetal3", "cell": [14, 16] },
+                { "name": "greenvent01", "cell": [28, 9] } ] }
 ```
 
 - `cells` must equal the scene's map; `tilemap` is `cells/2` tiles a side (a TNT tile is 32 world
@@ -330,15 +331,15 @@ section 5's rules in Python (`tools/ta3do`'s HPI and GAF readers, `tools/tascene
 readers):
 - `stagemap.py tiles <map>`: the map's flat, featureless, tileable tiles with their indices and a
   contact sheet into the gitignored `tools/wiki/mockup/gfx/` for the author to look at.
-- `stagemap.py build`: the description from a recipe held in the script, as `gen-quickbuild.mjs`
-  holds the demos — a ground tile, a metal-ground tile over the scene's metal-ground rects, a
-  deposit feature centred on each deposit, a vent feature on each vent cell — writing only the
-  JSON above.
+- `stagemap.py build`: the description from the recipe the scene's name picks, held in the script
+  as `gen-quickbuild.mjs` holds the demos — a ground (a map editor section repeated, or a flat crop
+  of a shipped map), a deposit feature on each deposit, a vent feature on each vent cell, and a
+  seeded scatter of decoration that blocks nothing — writing only the JSON above.
 - `stagemap.py check`: resolves every description against the install and checks it against its
-  entry's scene: every map and tile found with its count and hash; every feature found; each
-  deposit feature's footprint over a metal rect of the scene and each vent feature on a vent cell;
-  every metal-ground rect and fog rect of the scene aligned to whole tiles (even cells; question 5).
-  Exit 1 naming each failure.
+  scene: every map and tile found with its count and hash; every feature found; each deposit
+  feature's footprint a metal rect of the scene with its value, and each vent feature on a vent
+  cell; every fog rect aligned to whole tiles (even cells; question 5), and no broad metal rect,
+  which no ground draws. Exit 1 naming each failure.
 
 **Resolution in the DLL** (6e, on the 3D loader thread): each source TNT opened by the engine's
 rule (section 5), its header bounds-checked, its tile count compared, only the referenced tiles
@@ -595,16 +596,15 @@ hold indices, names, counts and hashes only, and the pre-commit hook's provenanc
 the parity checks).
 
 **Status (2026-10-26): built on the wiki branch, not landed.**
-- **The rects**: the metal-ground strip is now `[34, 0, 6, 24]`, the black fog `[0, 0, 8, 8]`. The
-  strip shrinks rather than grows because at `[32, 0, 8, 24]` deposit R (`[29, 19, 3, 3]`) would
-  touch it and join the band, and *Metal maps* would lose its deposit; the fog grows by one row,
-  over nothing a demo uses. No input of any demo changed.
-- **The descriptions**: `art/wiki/stage/quickbuild.json` and `buildshapes.json`. The ground is
-  greenworld's, drawn from the base game: the map editor's greenflat01 section by Evad River
-  Confluence's tiles, the greenworld rock whose `metal=` is each deposit's value, greenworld vents
-  and a scatter of smudges and scars; the metal ground is Metal Heck's tile 170 (`totala2.hpi`, 583
-  tiles), because the metal worlds' most used flat tiles are the dark void between their plates.
-  The recipe and its rules: [the wiki's note](ingame-wiki.html), *`art/wiki/stage/<entry>.json`*.
+- **The rects**: the black fog is `[0, 0, 8, 8]`, whole tiles. No scene has a metal-ground strip:
+  *Metal maps* plays on Quick Build's own `metal` scene, metal ground everywhere.
+- **The descriptions**: `art/wiki/stage/quickbuild.green.json`, `quickbuild.metal.json` and
+  `buildshapes.green.json`. The green ground is greenworld's, drawn from the base game: the map
+  editor's greenflat01 section by Evad River Confluence's tiles, the greenworld rock whose `metal=`
+  is each deposit's value, greenworld vents and a scatter of smudges and scars. The metal ground is a
+  flat 40 × 30 crop of Over Crude Water's central plaza (`totala2.hpi`) with a few of the metal
+  world's pipe holes. The recipes and their rules: [the wiki's note](ingame-wiki.html),
+  *`art/wiki/stage/<entry>.<scene>.json`*.
 - **`tavfs.py`** mounts the patterns in the engine's order, the first read out of the executable at
   `0x5028CC`/`0x5028D8`, and takes an archive by the engine's trailer rule: any four year bytes,
   because OpenHAPIFile overwrites the file's year with `"0000"` before comparing with
