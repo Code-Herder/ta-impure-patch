@@ -1374,8 +1374,8 @@ The stage's ground for one scene of an entry, by reference to the player's own f
 
   **`metal`**, Quick Build's *Metal maps*:
   - **the ground is a crop of a metal map**, the 40 × 30 cells of Over Crude Water (`totala2.hpi`)
-    from cell (422, 370), inside its central plaza: 93 different tiles, every cell at the plate's
-    height of 139, and no feature of the map anchored where its footprint could reach into the
+    from cell (420, 370), inside its central plaza: 80 different tiles, every vertex its cells draw
+    with at the plate's height of 139, and no feature of the map anchored where its footprint could reach into the
     window. The build refuses a crop that is not flat or that a feature reaches, so no picture of the
     map's own expects a feature or a slope the stage does not have;
   - **decoration**: the metal world's pipe holes (`features\metal\pipes.tdf`, `totala1.hpi`: the

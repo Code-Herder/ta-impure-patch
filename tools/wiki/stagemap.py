@@ -77,13 +77,13 @@ DECOR_TRIES = 32
 # Per scene name: the world whose deposits, vents and decoration it takes, and its ground -- a `section` and the
 # shipped map whose tiles it is drawn with, or a `crop` of a map from a cell. Evad River Confluence (totala2.hpi, the
 # base game) holds every tile of greenflat01. Over Crude Water (totala2.hpi) is a metal map whose centre is a plaza of
-# plate at one height; the crop at cell (422, 370) is its window of the stage's size with the most different tiles,
-# 93 for 40 x 30 cells, and its holes are the metal world's own ground marks, a few, one in 16 x 16 cells.
+# plate at one height; the crop at cell (420, 370) is a window of the stage's size inside it whose every vertex is at
+# that height, 80 different tiles for 40 x 30 cells, and its holes are the metal world's own ground marks, a few, one in 16 x 16 cells.
 RECIPES = {
     "green": {"world": "greenworld", "patches": "features\\green\\metal.tdf",
               "section": ("sections\\greenworld\\flat\\greenflat01.sct", "maps\\evad river confluence.tnt"),
               "decoration": ("smudges", "scars")},
-    "metal": {"world": "metal", "crop": ("maps\\over crude water.tnt", (422, 370)),
+    "metal": {"world": "metal", "crop": ("maps\\over crude water.tnt", (420, 370)),
               "decoration": ("holes",), "block": 16},
 }
 
@@ -176,7 +176,8 @@ def ground_refs(vfs, maps, ground, tw, th):
 
 def crop_refs(vfs, maps, crop, w, h):
     """[(source map, tile index)] for a w x h-cell tilemap: the map's tiles from cell (x0, z0), a whole tile, refused
-    unless every cell of the window has one height and no feature of the map is anchored where its footprint could
+    unless every height the window's cells draw with has one value (a height is a vertex, so a cell also takes the
+    next column's and row's, past the window's far edge too) and no feature of the map is anchored where its footprint could
     reach into it (up to the widest footprint any feature section of the install declares, up and left of it)."""
     source, (x0, z0) = crop
     tnt, _where, err = maps.get(source)
@@ -185,7 +186,8 @@ def crop_refs(vfs, maps, crop, w, h):
     if x0 % TILE_CELLS or z0 % TILE_CELLS or x0 < 0 or z0 < 0 or x0 + w > tnt.w16 or z0 + h > tnt.h16:
         raise Fail(f"{source}: a {w} x {h} crop at cell ({x0}, {z0}) is not whole tiles inside its {tnt.w16} x {tnt.h16}")
     hs = tnt.heights()
-    if len({hs[z * tnt.w16 + x] for z in range(z0, z0 + h) for x in range(x0, x0 + w)}) != 1:
+    z1, x1 = min(z0 + h + 1, tnt.h16), min(x0 + w + 1, tnt.w16)
+    if len({hs[z * tnt.w16 + x] for z in range(z0, z1) for x in range(x0, x1)}) != 1:
         raise Fail(f"{source}: the crop at cell ({x0}, {z0}) is not flat")
     reach = max(max(body_footprint(b)) for b, _p, _w in vfs.features().values())
     near = [(c, r) for c, r, _i in tnt.feature_indices() if x0 - reach < c < x0 + w and z0 - reach < r < z0 + h]
