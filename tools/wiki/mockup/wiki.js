@@ -260,18 +260,26 @@ for (const ev of ['mousedown', 'mouseup', 'click', 'dblclick', 'wheel', 'context
 $('#win').addEventListener('contextmenu', e => e.preventDefault());
 $('#tree').onclick = e => {
   const f = e.target.closest('[data-fold]');
-  if (f) { S.fold.has(f.dataset.fold) ? S.fold.delete(f.dataset.fold) : S.fold.add(f.dataset.fold); renderTree(); return; }
+  if (f) { buttonSound(); S.fold.has(f.dataset.fold) ? S.fold.delete(f.dataset.fold) : S.fold.add(f.dataset.fold); renderTree(); return; }
   const l = e.target.closest('[data-entry]');
+  if (l) buttonSound();
   if (l && l.dataset.entry !== S.entry) { S.try = false; pick(l.dataset.entry, 0); }
 };
-$('#demos').onclick = e => { const d = e.target.closest('[data-demo]'); if (d) { S.try = false; pick(S.entry, +d.dataset.demo); } };
+$('#demos').onclick = e => { const d = e.target.closest('[data-demo]'); if (d) { buttonSound(); S.try = false; pick(S.entry, +d.dataset.demo); } };
 
 /* ---- playback: a demo plays when selected, at 30 ticks a second (60 at 2x), and holds its last frame when done;
    Try it yourself creates the same scene with no inputs and hands the stage to the player ---- */
 let sim = null, simErr = null, acc = 0, simLayout = null, simCtx = null;
+/* THE SOUND (sound.js): the sim's events played after each frame's steps, `heard` of them so far; the root of the stage
+   pack's folder holds the sounds.json the sim takes its source from, as the game's sim takes it from the 3D load that
+   gives the scripts */
+let heard = 0;
+const soundRoot = () => { const d = stageDir(); return `gfx/${d.slice(0, d.lastIndexOf('/') + 1)}`; };
+// a press on one of the page's controls: the engine's in-game menu controls say `Options` (tagpu_wiki.c button_sound)
+const buttonSound = () => { if (typeof WikiSound !== 'undefined') WikiSound.named(soundRoot(), 'Options'); };
 function fail(x) { simErr = x && x.message || String(x); console.error('wiki sim:', x); sim = null; }
 function start() {
-  sim = null; simErr = null; acc = 0; releaseAll();
+  sim = null; simErr = null; acc = 0; heard = 0; releaseAll();
   const e = entry(), d = demo();
   if (!d) return;
   if (typeof WikiSim === 'undefined') { simErr = 'sim.js is not loaded'; return; }
@@ -281,7 +289,8 @@ function start() {
   /* THE UNITS' SCRIPTS run on tools/wiki/serve.py's host, from the gfx pack the stage draws (cob.js). Served any other
      way, or with no pack built, the page plays without them and says why in the console. */
   const cob = typeof WikiCob !== 'undefined' ? WikiCob.cobPage(`tools/wiki/mockup/gfx/${stageDir()}`) : null;
-  try { sim = make(cob ? { ...simCtx, cob } : simCtx); }
+  const snd = cob && typeof WikiSound !== 'undefined' ? WikiSound.source(soundRoot()) : null;
+  try { sim = make(cob ? { ...simCtx, cob, snd } : simCtx); }
   catch (x) {
     if (!cob || !/COB host/.test(x && x.message)) fail(x);
     else {
@@ -302,11 +311,11 @@ function advance(dt) {
   acc = Math.min(acc + dt * TICK * S.speed, 8);       // a stalled tab catches up a few ticks, not seconds of them
   while (acc >= 1 && sim && !held()) { try { sim.step(); } catch (x) { fail(x); } acc--; }
 }
-$('#c-play').onclick = () => { if (held()) start(); else S.playing = !S.playing; controls(); };
-$('#c-replay').onclick = () => { S.playing = true; start(); };   // in Try it yourself, the scene afresh
-$('#c-x1').onclick = () => { S.speed = 1; controls(); };
-$('#c-x2').onclick = () => { S.speed = 2; controls(); };
-$('#c-try').onclick = () => { S.try = !S.try; S.playing = true; start(); };
+$('#c-play').onclick = () => { buttonSound(); if (held()) start(); else S.playing = !S.playing; controls(); };
+$('#c-replay').onclick = () => { buttonSound(); S.playing = true; start(); };   // in Try it yourself, the scene afresh
+$('#c-x1').onclick = () => { buttonSound(); S.speed = 1; controls(); };
+$('#c-x2').onclick = () => { buttonSound(); S.speed = 2; controls(); };
+$('#c-try').onclick = () => { buttonSound(); S.try = !S.try; S.playing = true; start(); };
 function controls() {
   const has = !!demo(), set = (id, v) => { const el = $(id); if (el.textContent !== v) el.textContent = v; };
   const pause = S.playing && !held();
@@ -354,6 +363,7 @@ const CURSORS = WikiStage.loadCursors('gfx/');
 let IMG = null;                       // the last frame's 3D answer, for scripted checks
 function draw() {
   const g = stage.getContext('2d'), v = view();
+  if (v && typeof WikiSound !== 'undefined') heard = WikiSound.drain(soundRoot(), v, heard);
   const r = v && window.WikiGfx ? WikiGfx.frame(S.entry, v, sim ? sim.tick : 0, stageDir(), poses()) : null;
   IMG = r && { complete: r.complete, ground: r.ground, resolved: [...r.resolved], refused: r.refused };
   const image = r && r.complete ? {

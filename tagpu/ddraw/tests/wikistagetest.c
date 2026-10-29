@@ -208,7 +208,7 @@ static int ops(char** a, const char* cob)
 {
     static WIKISTAGEVIEW v;
     static WIKISTAGEOPS o;
-    const WIKISIMCTX ctx = { 0, NULL, 1, &COB_SRC };
+    const WIKISIMCTX ctx = { 0, NULL, 1, &COB_SRC, NULL };
     char err[256];
     size_t n;
     char* pak = slurp(a[0], &n);

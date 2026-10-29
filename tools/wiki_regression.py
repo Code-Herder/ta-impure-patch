@@ -868,7 +868,12 @@ def demos(c, shots, res):
     print(f"wiki demos: (d1) {lay.split('wiki check: ', 1)[1]}")
     layf = c.gamedir / "tagpu_wiki.layout.json"
     pack = pack_for_layout(layf) if "the mod's" in lay else None
-    n = check_against(check_hashes(c.log[start:]), simparity_hashes(layf, pack, "scripts are on" in lay), "(d1)")
+    # the check names both of its sources; simparity --hash --scripts gives sim.js both or neither, as the game's one 3D
+    # load does, so a line that says otherwise, or does not say, is a failure rather than a guess
+    src = re.search(r"the units' scripts are (on|off), their sounds (on|off)", lay)
+    assert src, f"(d1) the check's line does not say whether the units' scripts and sounds are on: {lay}"
+    assert src.group(1) == src.group(2), f"(d1) the game's check has scripts {src.group(1)} but sounds {src.group(2)}"
+    n = check_against(check_hashes(c.log[start:]), simparity_hashes(layf, pack, src.group(1) == "on"), "(d1)")
     print(f"wiki demos: (d1) {line.split('wiki check: ', 1)[1]}; all {n} hashes (every side at both interface types"
           f"{f', with {pack.name} castings' if pack else ''}) equal simparity --hash")
 
