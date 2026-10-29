@@ -495,7 +495,8 @@ const WikiSim = (() => {
     const FD = obj(entry.features) ? entry.features : {};
     for (const [n, d] of Object.entries(FD)) checkFeature(n, d);
     if (S.features.length > FEATS_MAX) throw new Error(`the scene has more than ${FEATS_MAX} features`);
-    const feats = [];
+    // gone: the anchor cells of the features reclaimed so far, in order, which the game look's image no longer draws
+    const feats = [], gone = [];
     S.features.forEach((f, k) => {
       const at = `feature ${k} of the scene`;
       if (!obj(f) || typeof f.name !== 'string' || !own(FD, f.name)) throw new Error(`${at} names no feature of the entry`);
@@ -2224,6 +2225,7 @@ const WikiSim = (() => {
         if (u.rc.c <= 0) {
           u.rc.paid = true;
           feats.splice(feats.indexOf(f), 1);
+          gone.push([f.ox, f.oz]);
           log('reclaimed', { id: f.id, type: f.name, ox: f.ox, oz: f.oz });
         } else if (u.rc.c > 15) u.spray = { how: 'feature', f };
       };
@@ -2517,7 +2519,8 @@ const WikiSim = (() => {
         pace: PACE,
         mode: st.rmode ? 'reclaim' : st.mode ? `build:${st.mode}` : 'contextual',
         // the features still standing, each by its id, its section name and its footprint at its anchor cell
-        feats: feats.map(f => ({ id: f.id, name: f.name, ox: f.ox, oz: f.oz, fx: f.fx, fz: f.fz })),
+        feats: feats.map(f => ({ id: f.id, name: f.name, ox: f.ox, oz: f.oz, fx: f.fx, fz: f.fz, metal: f.metal, energy: f.energy })),
+        gone: gone.map(c => [c[0], c[1]]),
         reclaim,
         // the column, only with the sidebar on: the layout side it shows (its prefix and PANELSIDE are the stage's), its
         // rows, the routed screen, the shown unit and its page, each gadget's state, the unit under the cursor over the

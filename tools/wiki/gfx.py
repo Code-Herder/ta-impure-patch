@@ -256,7 +256,7 @@ class Gaf:
 
 # --------------------------------------------------------------------------- the game's cursors
 
-CURSOR_SEQ = {"arrow": "cursornormal", "move": "cursormove", "build": "cursornormal"}   # WIKI_CURSOR_*'s sequences
+CURSOR_SEQ = {"arrow": "cursornormal", "move": "cursormove", "build": "cursornormal", "reclaim": "cursorreclamate"}   # WIKI_CURSOR_*'s sequences
 SPRITE_CELL, SPRITE_CELLS = 64, 16                       # tagpu_hudlay.h HUD_SPRITE_CELL, HUD_SPRITE_CELLS
 
 
@@ -1165,8 +1165,10 @@ def gadget_record(sec, index, where, report):
     ck, k = (com["keys"] if com else {}), sec["keys"]
     nums = {"id": ck.get("id"), "xpos": ck.get("xpos"), "ypos": ck.get("ypos"), "width": ck.get("width"),
             "height": ck.get("height"), "attribs": ck.get("attribs"), "commonattribs": ck.get("commonattribs"),
-            "active": ck.get("active"), "gaffile": ck.get("gaffile"), "quickkey": ck.get("quickkey"),
-            "grayedout": k.get("grayedout"),
+            "active": ck.get("active"), "gaffile": ck.get("gaffile"),
+            # quickkey is a button key, the gadget's own section's beside grayedout, not a COMMON one (ARMGEN.GUI's
+            # ARMRECLAIM: `quickkey=101;` after its [COMMON] block)
+            "quickkey": k.get("quickkey"), "grayedout": k.get("grayedout"),
             "stages": k.get("stages")}
     for key, v in nums.items():
         if v is not None and not plain_int(v):

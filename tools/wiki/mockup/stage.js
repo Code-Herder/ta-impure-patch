@@ -24,7 +24,15 @@ const WikiStage = (() => {
   // layout.json's `toast`: Oswald 700, no letter-spacing, no case change, no shadow -- the HUD's one plain line
   const FACE = { style: 'toast', family: 'Oswald', weight: 700 };
   // the kit's cursor icons by the view's cursor shape, each drawn centred on the pointer where the game's did not load
-  const CURSOR = { arrow: 'cursor_arrow', move: 'cursor_move', build: 'cursor_build' };
+  const CURSOR = { arrow: 'cursor_arrow', move: 'cursor_move', build: 'cursor_build', reclaim: 'cursor_arrow' };
+  /* THE RECLAIM SWEEP's colours, as tagpu_sweep.c picks them: a target's bracket in the kind's (METAL palette 224, ENERGY
+     208, ALL the GUI's placed green 0x0A), the ring in the placed green, the readout's text in GUI 0x0F, every stroke
+     edged in GUI 0x00; the whitebox's stand-ins for the GUI's entries. A scene feature on the whitebox ground: a rock
+     (it holds metal) or a tree. */
+  const SWEEP = { kind: { metal: '#d3dbff', energy: '#ffff00', all: '#2bd248' }, ring: '#2bd248', text: '#f0f0ea', edge: '#000000',
+    plate: '#2e2e2a', bar: '#55554f', lit: '#6e6e66', label: '#e8e8e2', hot: '#ffffff' };
+  const FEAT_WB = { rock: '#9a9288', rockEdge: '#5e584e', tree: '#4f8a3a', treeEdge: '#2b5220' };
+  const KIND_NAME = { metal: 'METAL', energy: 'ENERGY', all: 'ALL' };
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   // a device coordinate rounded to the pixel an edge is drawn on, as the game snaps a part's box (tagpu_hud_snap)
   const snap = v => Math.floor(v + 0.5 + 1 / 64);
@@ -254,6 +262,14 @@ const WikiStage = (() => {
         g.beginPath(); g.arc(X(p.x), Z(p.z), r * .5, 0, 2 * Math.PI); g.stroke();
         g.beginPath(); g.moveTo(X(p.x) - r, Z(p.z)); g.lineTo(X(p.x) + r, Z(p.z)); g.moveTo(X(p.x), Z(p.z) - r); g.lineTo(X(p.x), Z(p.z) + r); g.stroke();
       }
+      // the scene's features still standing, at their footprints: a rock or a tree
+      for (const f of v.feats || []) {
+        const x0 = X(f.ox * cell), y0 = Z(f.oz * cell), w = (+f.fx || 1) * cp, h = (+f.fz || 1) * cp, lw = Math.max(1, U);
+        const rock = +f.metal > 0;
+        g.fillStyle = rock ? FEAT_WB.rock : FEAT_WB.tree; g.fillRect(x0, y0, w, h);
+        g.lineWidth = lw; g.strokeStyle = rock ? FEAT_WB.rockEdge : FEAT_WB.treeEdge;
+        g.strokeRect(x0 + lw / 2, y0 + lw / 2, w - lw, h - lw);
+      }
       // fog, in fogColour's
       const fog = M.fog || [];
       for (let z = 0; z < mh; z++) for (let x = 0; x < mw; x++) {
@@ -355,6 +371,7 @@ const WikiStage = (() => {
       const d = v.drag, x0 = X(Math.min(d.x0, d.x1)), y0 = Z(Math.min(d.z0, d.z1));
       g.strokeStyle = '#f2f6e8'; g.lineWidth = Math.max(1, U); g.strokeRect(x0, y0, Math.abs(d.x1 - d.x0) * s, Math.abs(d.z1 - d.z0) * s);
     }
+    if (v.reclaim) { mark('over'); drawSweep(g, v, { X, Z, cell, cp, U, text, measure }); }
     /* THE CURSOR: the game's own when the cursors are loaded (loadCursors), as the game draws the player's
        (tagpu_gui_surf.c sharp_cursor) -- the frame its animation shows `o.tick - v.cursor.since` ticks after the shape
        began, at `scale` device pixels an art pixel whatever the map's scale or the HUD's, the frame's hotspot on the
@@ -396,7 +413,87 @@ const WikiStage = (() => {
     if (+v.pace > 1) readout(`construction ×${+v.pace}`, true);
     // the armed building's spacing: the mockup's readout, at the stage's bottom left; the game specifies none yet
     if (+v.spacing > 0) readout(`Spacing: ${+v.spacing}`, false);
+    // the kind's tag beside the cursor while reclaim is armed, (13, 20) game px off its point as the game puts it
+    if (v.reclaim && cur) {
+      const t = KIND_NAME[v.reclaim.kind] || '', sz = Math.round(8.5 * U), h = 12 * U, tw = measure(t, sz);
+      const x0 = snap(X(cur.x) + 13 * U), y0 = snap(Z(cur.z) + 20 * U);
+      g.fillStyle = SWEEP.edge; g.fillRect(x0, y0, tw + 6 * U, h);
+      text(t, x0 + 3 * U, y0 + h / 2, sz, 'left', SWEEP.kind[v.reclaim.kind] || SWEEP.text);
+    }
     return { s, ox, oz, cell, mw, mh, x0: C.x0, cw: C.w, ch: C.h, cursor: drew };
+  }
+
+  /* THE RECLAIM SWEEP (tagpu_mark.c gather_sweep, tagpu_gui_surf.c sharp_sweep): every target's corner brackets and the
+     reclaimable feature under the cursor's, the ring dashed round its centre's square, the readout above it, and the
+     popup off RECLAIM's row. Every stroke is the game's heavy one: SW_COLOUR of colour with SW_EDGE of black each side,
+     here in the stage's game px (U). The ring is the game's polygon: 2 pi r / 8 points, 16 to 256, dashed 6 on 4 off;
+     a bracket's arm is 30 % of the box's shorter side, 7 to 20. The popup is the whitebox's stand-in for Impure's own
+     art: the plate, the tongue to the button, a bar a kind with the kind in force lit and the row under the pointer's
+     label lit. */
+  function drawSweep(g, v, k) {
+    const R = v.reclaim, { X, Z, cell, cp, U, text, measure } = k;
+    const COL = 3 * U, EDGE = 1 * U;
+    const heavy = (path, col, dash) => {
+      g.lineCap = 'butt'; g.setLineDash(dash || []);
+      g.strokeStyle = SWEEP.edge; g.lineWidth = COL + 2 * EDGE; g.beginPath(); path(); g.stroke();
+      g.strokeStyle = col; g.lineWidth = COL; g.beginPath(); path(); g.stroke();
+      g.setLineDash([]);
+    };
+    const featBox = id => { const f = (v.feats || []).find(f => f.id === id);
+      return f && { x: X(f.ox * cell), y: Z(f.oz * cell), w: (+f.fx || 1) * cp, h: (+f.fz || 1) * cp }; };
+    const bracket = (b, col) => {
+      const arm = clamp(Math.min(b.w, b.h) * 0.3, 7 * U, 20 * U), x1 = b.x + b.w, y1 = b.y + b.h;
+      heavy(() => {
+        for (const [x, y, dx, dy] of [[b.x, b.y, 1, 1], [x1, b.y, -1, 1], [b.x, y1, 1, -1], [x1, y1, -1, -1]]) {
+          g.moveTo(x + dx * arm, y); g.lineTo(x, y); g.lineTo(x, y + dy * arm);
+        }
+      }, col);
+    };
+    const kc = SWEEP.kind[R.kind] || SWEEP.ring;
+    for (const id of R.targets || []) { const b = featBox(id); if (b) bracket(b, kc); }
+    if (R.hover) { const b = featBox(R.hover); if (b) bracket(b, kc); }
+    if (R.ring) {
+      const { x, z, r } = R.ring, n = clamp(Math.trunc(2 * Math.PI * r / 8), 16, 256);
+      heavy(() => {
+        for (let i = 0; i <= n; i++) {
+          const a = 2 * Math.PI * (i % n) / n, px = X(x + Math.round(r * Math.cos(a))), py = Z(z + Math.round(r * Math.sin(a)));
+          if (i) g.lineTo(px, py); else g.moveTo(px, py);
+        }
+      }, SWEEP.ring, [6 * U, 4 * U]);
+      g.fillStyle = SWEEP.edge; g.fillRect(X(x) - 2.5 * U, Z(z) - 2.5 * U, 5 * U, 5 * U);
+      g.fillStyle = SWEEP.ring; g.fillRect(X(x) - 1.5 * U, Z(z) - 1.5 * U, 3 * U, 3 * U);
+      // the readout: 22 game px above the ring's top, the kind, the counts and the sums, or that the ring holds none
+      const sz = Math.round(8.5 * U), cx = X(x), ty = Z(z - r) - 22 * U;
+      const none = { metal: 'NO WRECKS HERE', energy: 'NO TREES HERE', all: 'NO FEATURES HERE' };
+      const lines = [[`[${KIND_NAME[R.kind]}]`, SWEEP.text]];
+      if (!R.wrecks && !R.trees) lines.push([none[R.kind], SWEEP.text]);
+      else {
+        const pl = (n, w) => `${n} ${w}${n > 1 ? 'S' : ''}`;
+        lines.push([[R.wrecks ? pl(R.wrecks, 'WRECK') : '', R.trees ? pl(R.trees, 'TREE') : ''].filter(Boolean).join('  '),
+          R.kind === 'all' ? SWEEP.text : kc]);
+        const sums = [R.metal >= 0.5 ? `+${Math.round(R.metal)} METAL` : '', R.energy >= 0.5 ? `+${Math.round(R.energy)} ENERGY` : ''].filter(Boolean).join('   ');
+        if (sums) lines.push([sums, SWEEP.text]);
+      }
+      lines.forEach(([t, col], i) => {
+        const w = measure(t, sz) + 6 * U, y = ty + (i - 1) * 13 * U;
+        g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(cx - w / 2, y - 6 * U, w, 12 * U);
+        text(t, cx, y, sz, 'center', col);
+      });
+    }
+    const P = R.popup;
+    if (P && v.side) {
+      const rect = (r, col) => { g.fillStyle = col; g.fillRect(X(r[0]), Z(r[1]), r[2] * k.s1, r[3] * k.s1); };
+      k.s1 = (X(1) - X(0));
+      rect(P.tongue, SWEEP.plate); rect(P.rect, SWEEP.plate);
+      ['metal', 'energy', 'all'].forEach((kind, i) => {
+        const r = P.rows[i];
+        rect(r, kind === R.kind ? SWEEP.lit : SWEEP.bar);
+        // the pip: the kind in force lit in its colour
+        g.fillStyle = kind === R.kind ? SWEEP.kind[kind] : SWEEP.edge;
+        g.fillRect(X(r[0] + 4), Z(r[1] + 6), 6 * k.s1, 6 * k.s1);
+        text(KIND_NAME[kind], X(r[0] + 16), Z(r[1] + r[3] / 2), Math.round(8 * U), 'left', i === P.hot ? SWEEP.hot : SWEEP.label);
+      });
+    }
   }
 
   /* THE CURSOR SHAPES the icons are rasterised from (tools/wiki/cursors.sh), at U pixels a unit with the pointer at

@@ -1183,7 +1183,7 @@ const RECLAIM = {
   },
   replace(r, d, ok) {
     const t = ups(d, 'lmb')[0], before = r.frames[t - 1], after = r.frames[t + 1];
-    ok((before.o.a || []).some(o => o.k === 'move'), 'the move was queued before the ring');
+    ok((before.o.a || []).some(o => o.k === 'move'), 'moves were queued before the ring');
     ok((after.o.a || []).length && (after.o.a || []).every(o => o.k === 'reclaim' && o.feat !== undefined), `the ring replaced it with reclaims (${(after.o.a || []).map(o => o.k)})`);
     ok(rockOrTree(r, fIds(after.o.a), 'rock'), 'rocks only, METAL picked');
   },

@@ -136,9 +136,11 @@ demo('shift', 'Shift queues another ring', { kind: 'metal' }, T => T
   .up('shift').say('Let go of Shift: reclaim is put away.').wait(150));
 
 demo('replace', 'Without Shift it replaces', { selected: ['a'], kind: 'metal' }, T => T
-  .to(C(36, 3), 40).wait(5).click('order').say('The {builder} is ordered to move.').to([300, 260], 40).reclaim().wait(10)
+  .down('shift').to(C(37, 2), 40).wait(5).click('order').to(C(37, 27), 30).wait(5).click('order')
+  .to(C(2, 27), 30).wait(5).click('order').up('shift').say('The {builder} has a route of moves queued.')
+  .to([300, 260], 30).reclaim().wait(10)
   .to(C(21, 10), 40).wait(8).down('lmb').to(C(25, 10), 45).wait(20)
-  .up('lmb').say('A ring without Shift replaces its orders: the move is gone, the rocks are its work now.').wait(200));
+  .up('lmb').say('A ring without Shift replaces its orders: the moves are gone, the rocks are its work now.').wait(200));
 
 demo('cancel', 'Cancel', { selected: ['a'] }, T => T
   .say('A {cancel} during the drag ends the ring and keeps reclaim armed.').reclaim().wait(10)
@@ -153,7 +155,7 @@ const entry = {
   title: 'Reclaim Sweep',
   subtitle: 'With RECLAIM armed, drag a ring to reclaim everything of one kind in it, shared out between your constructors.',
   text: [
-    'Select your constructors and press E, or click RECLAIM: reclaim is armed. A {select}-click on a rock, a tree or a wreck reclaims it, as in TA.',
+    'Select your constructors and press E, or click RECLAIM: reclaim is armed. A {select} on a rock, a tree or a wreck reclaims it, as in TA.',
     'A popup beside RECLAIM picks what a ring takes: METAL (rocks and wrecks), ENERGY (trees) or ALL. Press E again to step through them, or click a row. The tag at the cursor shows the kind, and the game keeps your choice for next time.',
     'Press and drag a ring on the map. Everything of the kind inside it is marked as you drag; features of the other kind are not, and a click on one orders nothing. Release, and the marked features are shared out between your selected constructors, each taking the nearest one left to where it will be.',
     'Without Shift a ring replaces your constructors\' orders, as a click does, but keeps their reclaims of anything in the ring. With Shift it adds to them, and reclaim stays armed until you let go of Shift.',

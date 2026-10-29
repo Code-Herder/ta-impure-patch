@@ -247,8 +247,11 @@ window.WikiGfx = (() => {
         terr.draw(f, g.n);
       }
       if (spr && layer('features')) {
+        // a feature the view says was reclaimed is drawn no more: its anchor cell leaves this frame's anchors
+        let live = anchors;
+        if (v.gone && v.gone.length) { live = anchors.slice(); for (const [x, z] of v.gone) delete live[z * mw + x]; }
         const got = TR.gatherFeatures({ lab: false, mirror: false, r0, E, W, vpL: 0, vpT: 0, w16: mw, h16: mh, heights,
-          anchors, mapAnchors: anchors, defs: pack.features.defs, atlas: pack.features.atlas, D: pack.depth });
+          anchors: live, mapAnchors: live, defs: pack.features.defs, atlas: pack.features.atlas, D: pack.depth });
         if (got) {
           // EACH CORNER'S OWN WORLD POINT for the fog lookup, as the game's feature gather gives it (tagpu_feat.c
           // emit_frame: the anchor plus the corner's offset from the projected anchor), so a deposit across a fog
