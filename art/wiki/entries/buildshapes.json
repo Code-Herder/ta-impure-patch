@@ -131,9 +131,11 @@
         {"at":402,"down":"lmb"},
         {"at":405,"up":"lmb"},
         {"at":440,"up":"shift"},
-        {"at":440,"caption":"Let go of Shift: the building is put away, as in TA."}
+        {"at":440,"caption":"Let go of Shift: the building is put away, as in TA."},
+        {"at":441,"until":"built","max":1800},
+        {"at":443,"until":"built","max":1800}
       ],
-      "end": 740
+      "end": 504
     },
     {
       "id": "line",
@@ -412,9 +414,11 @@
         {"at":260,"up":"lmb"},
         {"at":260,"up":"alt"},
         {"at":260,"up":"shift"},
-        {"at":260,"caption":"Released: twelve queued. The {builder} builds them in that order."}
+        {"at":260,"caption":"Released: twelve queued. The {builder} builds them in that order."},
+        {"at":261,"until":"built","max":1800},
+        {"at":263,"until":"built","max":1800}
       ],
-      "end": 740
+      "end": 324
     },
     {
       "id": "hollow",
@@ -642,9 +646,10 @@
         {"at":198,"up":"lmb"},
         {"at":198,"up":"ctrl"},
         {"at":198,"up":"shift"},
-        {"at":198,"caption":"Press and release without dragging: the ring is ordered."}
+        {"at":198,"caption":"Press and release without dragging: the ring is ordered."},
+        {"at":199,"until":"built","max":1800}
       ],
-      "end": 618
+      "end": 260
     },
     {
       "id": "ringqueued",

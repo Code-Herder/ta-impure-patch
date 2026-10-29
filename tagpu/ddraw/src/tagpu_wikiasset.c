@@ -24,6 +24,7 @@
 #include <windows.h>
 #include "tagpu_log.h"
 #include "tagpu_model3do.h"
+#include "tagpu_wikisound.h"
 #define LOG tagpu_logf
 #else
 #define LOG(...) (fprintf(stderr, __VA_ARGS__), fputc('\n', stderr))
@@ -90,6 +91,7 @@ typedef char check_node[(N_VCOUNT == O_NVERT && N_FCOUNT == O_NFACE && N_SELPRIM
 #define CAP_3DO     (8u << 20)
 #define CAP_GAF     (32u << 20)
 #define CAP_COB     (1u << 20)
+#define CAP_WAV     (8u << 20)
 #define FEAT_MAX    1024        /* features one description may place                          */
 #define SRC_MAX     16
 #define TILESET_MAX 4096
@@ -1347,6 +1349,8 @@ typedef struct {
     char        hides_why[64];  /* "" unless the mask was refused                               */
     char        uncached_why[64];
     char        why[200];
+    int         has_sndcat;     /* the FBI's SoundCategory, cut to 0x42CC5A's 100 bytes        */
+    char        sndcat[100];
 } UNITREC;
 
 /* THE TWO PIECE ORDERS the mask joins, over a model of this arena: tagpu_model3do.h's
@@ -1573,8 +1577,13 @@ static void unit_load(LOADER* L, const char* type, WIKI3DUNIT* u, UNITREC* r)
         } else {
             /* 0x42BF40 reads UnitName and Objectname into 0x20 bytes each; a missing Objectname is
                the UnitName (0x42C0D1) */
+            const char* sc = tagpu_tdf_get(t, sec, "SoundCategory");
             un = tagpu_tdf_get(t, sec, "UnitName");
             on = tagpu_tdf_get(t, sec, "Objectname");
+            if (sc) {
+                r->has_sndcat = 1;
+                snprintf(r->sndcat, sizeof r->sndcat, "%s", sc);
+            }
             strncpy(r->unitname, un ? un : "", sizeof r->unitname - 1);
             strncpy(r->object, on ? on : r->unitname, sizeof r->object - 1);
             /* the facts the stage draws it by (WIKI3DUNIT) */
@@ -1610,6 +1619,261 @@ static void unit_load(LOADER* L, const char* type, WIKI3DUNIT* u, UNITREC* r)
     if (!u->ok) LOG("wiki3d: the unit type %s stays a whitebox box - %s", type, r->why);
 }
 
+/* ---- sound (WIKI3DSOUND) ------------------------------------------------------------------------ */
+
+/* the kind table 0x5086D8's keys (+0xC) by kind, 1..23, and the kinds the wiki says (tagpu_wikisim.h) */
+static const char* const SND_KEY[WIKI_SND_KINDS] = {
+    NULL, "select", "underattack", "activate", "deactivate", "ok", "arrived", "cant", "unitcomplete", "build",
+    "repair", "working", "load", "unload", "cloak", "uncloak", "capture", "count5", "count4", "count3",
+    "count2", "count1", "count0", "canceldestruct" };
+static const int SND_WIKI_KIND[] = { WIKI_SND_SELECT, WIKI_SND_ACTIVATE, WIKI_SND_DEACTIVATE, WIKI_SND_OK,
+                                     WIKI_SND_ARRIVED, WIKI_SND_CANT, WIKI_SND_COMPLETE, WIKI_SND_BUILD,
+                                     WIKI_SND_WORKING };
+#define SND_BYTES (16u << 20)   /* the samples kept over all clips: the stock stages' need 1 MB */
+
+#define SND_KEYVARS 256         /* variants read of one kind of one category */
+
+typedef struct {
+    LOADER*     L;
+    WIKI3DCLIP* clip;
+    int         nclip, silent, cut;     /* cut: a bound left something out */
+    uint32_t    bytes;
+} SNDLOAD;
+
+/* the clip of WAV `name`, loaded once by name without case; -1 for none. A file missing, refused by
+   tagpu_wav.h's rule, past the clip or byte bound, or out of arena is a clip with no samples: its
+   variant is silent, and the load logs why once. */
+static int clip_get(SNDLOAD* S, const char* name)
+{
+    WIKI3DCLIP* c;
+    TAGPU_VFILE f;
+    TAGPU_WAV w;
+    unsigned char* blob;
+    char why[200] = "";
+    uint32_t at;
+    int i;
+    if (!name || !name[0]) return -1;
+    for (i = 0; i < S->nclip; i++)
+        if (!tagpu_hpi_stricmp(S->clip[i].name, name, WIKI3D_CLIPNAME)) return i;
+    if (S->nclip == WIKI3D_CLIPS) {
+        S->cut = 1;
+        return -1;
+    }
+    c = &S->clip[S->nclip];
+    memset(c, 0, sizeof *c);
+    snprintf(c->name, sizeof c->name, "%s", name);
+    if (!tagpu_vfs_find_built(S->L->vfs, "sounds", name, "WAV", &f)) snprintf(why, sizeof why, "no source holds it");
+    else if ((blob = load(S->L, &f, CAP_WAV, why, sizeof why)) != NULL) {
+        if (!tagpu_wav_parse(blob, f.size, &w, why, sizeof why)) {
+        } else if (w.bytes > SND_BYTES - S->bytes) snprintf(why, sizeof why, "past the sound's %u MB", SND_BYTES >> 20);
+        else if (!(at = alloc(&S->L->a, w.bytes))) snprintf(why, sizeof why, "the arena is full");
+        else {
+            memcpy(AT(&S->L->a, at), w.data, w.bytes);
+            c->data = AT(&S->L->a, at);
+            c->bytes = w.bytes;
+            c->channels = w.channels;
+            c->bits = w.bits;
+            c->rate = w.rate;
+            c->align = w.align;
+            S->bytes += w.bytes;
+        }
+        free(blob);
+    }
+    if (!c->data) {
+        S->silent++;
+        LOG("wiki3d: the sound %s is silent - %s", name, why);
+    }
+    return S->nclip++;
+}
+
+/* the variants of `key` in sound.TDF section `sec` (0x42F580: `<key>` when present, then `<key>1`,
+   `<key>2`, ... up to the first missing): their count, and with `out` each value into out[i] */
+static int variants(const TAGPU_GUIFILE* t, int sec, const char* key, const char** out, int max)
+{
+    char k[64];
+    const char* v = tagpu_guifile_get(t, sec, key);
+    int n = 0, i;
+    if (v) {
+        if (out && n < max) out[n] = v;
+        n++;
+    }
+    for (i = 1;; i++) {
+        snprintf(k, sizeof k, "%s%d", key, i);
+        if (!(v = tagpu_guifile_get(t, sec, k))) break;
+        if (out && n < max) out[n] = v;
+        n++;
+    }
+    return n;
+}
+
+static TAGPU_GUIFILE* gamedata_tdf(LOADER* L, const char* name)
+{
+    TAGPU_VFILE f;
+    unsigned char* blob;
+    TAGPU_GUIFILE* t = NULL;
+    char why[200] = "";
+    if (!tagpu_vfs_find_built(L->vfs, L->in->names.gamedata, name, "TDF", &f) || !(blob = load(L, &f, CAP_TEXT, why, sizeof why)))
+        return NULL;
+    if (!(t = tagpu_guifile_parse(blob, f.size, why, sizeof why))) LOG("wiki3d: %s is refused - %s", f.path, why);
+    free(blob);
+    return t;
+}
+
+/* THE SOUND of the resolved units (WIKI3DSOUND), after them: each one's category and counts from its
+   FBI's SoundCategory (`sndcat`, has_sndcat 0 when absent) over <gamedata>\sound.TDF (0x42F580),
+   then the clips of every used category's variants for the wiki's kinds, then the button sounds'
+   by <gamedata>\allsound.TDF (0x42F7E0): each section's `sound`, its name cut to 31 characters,
+   the first section of a name winning, at most 255 names (0x429470). Both files are read by
+   position, as the engine's parser builds them (tagpu_guifile.h). */
+static void sound_load(LOADER* L, WIKI3DUNIT* unit, const UNITREC* rec, int nunit, WIKI3DSOUND* out)
+{
+    static const char* const NAMES[WIKI_NSNDNAME] = WIKI_SNDNAME_STRINGS;
+    TAGPU_GUIFILE* t = gamedata_tdf(L, "sound");
+    TAGPU_GUIFILE* all;
+    SNDLOAD S;
+    WIKI3DSNDCAT* cat = NULL;
+    int16_t* var = NULL;
+    uint32_t at;
+    int i, k, j, nsec = t ? tagpu_guifile_count(t, 0) : 0, nvar = 0;
+    memset(out, 0, sizeof *out);
+    memset(&S, 0, sizeof S);
+    S.L = L;
+    for (i = 0; i < WIKI_NSNDNAME; i++) out->named[i] = -1;
+    out->ncategory = nsec;
+    for (i = 0; i < nunit; i++) {
+        WIKI3DUNIT* u = &unit[i];
+        u->sound_cat = -1;
+        if (!u->ok) continue;
+        {
+            /* absent: 0 (0x42CC61); every answer, that one too, is then bounded by the sections */
+            long long num = 0;
+            if (rec[i].has_sndcat) {
+                for (j = 0; j < nsec; j++) {
+                    char nm[64];
+                    snprintf(nm, sizeof nm, "%s", tagpu_guifile_name(t, tagpu_guifile_child(t, 0, j)));
+                    if (!tagpu_hpi_stricmp(nm, rec[i].sndcat, sizeof rec[i].sndcat)) break;
+                }
+                if (j < nsec) num = j;
+                else tagpu_guifile_num(rec[i].sndcat, &num, NULL);
+            }
+            u->sound_cat = num >= 0 && num < nsec ? (int)num : -1;
+        }
+        if (u->sound_cat >= 0) {
+            const int sec = tagpu_guifile_child(t, 0, u->sound_cat);
+            for (k = 1; k < WIKI_SND_KINDS; k++) u->sound_count[k] = variants(t, sec, SND_KEY[k], NULL, 0);
+        }
+    }
+    if (!(at = alloc(&L->a, WIKI3D_CLIPS * sizeof *S.clip))) {
+        tagpu_guifile_free(t);
+        LOG("wiki3d: the sound is silent - the arena is full");
+        return;
+    }
+    S.clip = (WIKI3DCLIP*)AT(&L->a, at);
+    if (nsec && (at = alloc(&L->a, WIKI3D_SNDCATS * sizeof *cat)) != 0) cat = (WIKI3DSNDCAT*)AT(&L->a, at);
+    if (cat && (at = alloc(&L->a, WIKI3D_SNDVARS * sizeof *var)) != 0) var = (int16_t*)AT(&L->a, at);
+    /* every category a resolved unit has, once, in the units' order */
+    for (i = 0; var && i < nunit; i++) {
+        const int c = unit[i].sound_cat;
+        WIKI3DSNDCAT* g;
+        int sec;
+        if (c < 0) continue;
+        for (j = 0; j < out->ncat && cat[j].index != c; j++) {}
+        if (j < out->ncat) continue;
+        if (out->ncat == WIKI3D_SNDCATS) {
+            S.cut = 1;
+            continue;
+        }
+        g = &cat[out->ncat++];
+        memset(g, 0, sizeof *g);
+        g->index = c;
+        sec = tagpu_guifile_child(t, 0, c);
+        for (j = 0; j < (int)(sizeof SND_WIKI_KIND / sizeof *SND_WIKI_KIND); j++) {
+            const char* v[SND_KEYVARS];
+            const int kd = SND_WIKI_KIND[j];
+            int n = variants(t, sec, SND_KEY[kd], v, SND_KEYVARS), m;
+            if (n > SND_KEYVARS || n > WIKI3D_SNDVARS - nvar) {
+                n = n < SND_KEYVARS ? n : SND_KEYVARS;
+                if (n > WIKI3D_SNDVARS - nvar) n = WIKI3D_SNDVARS - nvar;
+                S.cut = 1;
+            }
+            g->first[kd] = nvar;
+            g->n[kd] = n;
+            for (m = 0; m < n; m++) {
+                char wav[64];
+                snprintf(wav, sizeof wav, "%s", v[m]);      /* 0x4C48C0 reads 0x40 bytes */
+                var[nvar++] = (int16_t)clip_get(&S, wav);
+            }
+        }
+    }
+    tagpu_guifile_free(t);
+    if ((all = gamedata_tdf(L, "allsound")) != NULL) {
+        const int n = tagpu_guifile_count(all, 0);
+        for (k = 0; k < WIKI_NSNDNAME; k++) {
+            int seen = 0;
+            for (i = 0; i < n; i++) {
+                const int sec = tagpu_guifile_child(all, 0, i);
+                char nm[32], prev[32];
+                snprintf(nm, sizeof nm, "%s", tagpu_guifile_name(all, sec));
+                for (j = 0; j < i; j++) {
+                    snprintf(prev, sizeof prev, "%s", tagpu_guifile_name(all, tagpu_guifile_child(all, 0, j)));
+                    if (!tagpu_hpi_stricmp(prev, nm, sizeof nm)) break;
+                }
+                if (j < i) continue;
+                if (++seen > 255) break;
+                if (!tagpu_hpi_stricmp(nm, NAMES[k], sizeof nm)) {
+                    char wav[256];
+                    const char* v = tagpu_guifile_get(all, sec, "sound");
+                    snprintf(wav, sizeof wav, "%s", v ? v : "");
+                    out->named[k] = clip_get(&S, wav);
+                    break;
+                }
+            }
+        }
+        tagpu_guifile_free(all);
+    }
+    out->cat = cat;
+    out->var = var;
+    out->nclip = S.nclip;
+    out->clip = S.clip;
+    LOG("wiki3d: the sound - %d of %d sound.TDF categories in use, %d WAVs (%d silent), %u KB of samples%s", out->ncat,
+        nsec, S.nclip, S.silent, (unsigned)(S.bytes >> 10), S.cut ? "; past a bound, the rest is silent" : "");
+}
+
+/* a clip in the report: its WAV name as the file names it, null when it is silent */
+static void clip_report(SB* b, const WIKI3DSOUND* snd, int c)
+{
+    sb_q(b, c >= 0 && c < snd->nclip && snd->clip[c].data ? snd->clip[c].name : NULL, 1);
+}
+
+/* WIKI3DSOUND as tools/wiki/assetcheck.py's reference has it: sound.TDF's section count, each
+   category in use with its variants' WAVs per kind the wiki says, and each button sound's */
+static void sound_report(SB* b, const WIKI3DSOUND* snd)
+{
+    static const char* const NAMES[WIKI_NSNDNAME] = WIKI_SNDNAME_STRINGS;
+    int i, j, k;
+    sb_raw(b, ",\"sound\":{\"categories\":%d,\"cats\":[", snd->ncategory);
+    for (i = 0; i < snd->ncat; i++) {
+        const WIKI3DSNDCAT* c = &snd->cat[i];
+        sb_raw(b, "%s{\"index\":%d,\"kinds\":{", i ? "," : "", c->index);
+        for (j = 0; j < (int)(sizeof SND_WIKI_KIND / sizeof *SND_WIKI_KIND); j++) {
+            const int kd = SND_WIKI_KIND[j];
+            sb_raw(b, "%s\"%d\":[", j ? "," : "", kd);
+            for (k = 0; k < c->n[kd]; k++) {
+                if (k) sb_raw(b, ",");
+                clip_report(b, snd, snd->var[c->first[kd] + k]);
+            }
+            sb_raw(b, "]");
+        }
+        sb_raw(b, "}}");
+    }
+    sb_raw(b, "],\"named\":{");
+    for (i = 0; i < WIKI_NSNDNAME; i++) {
+        sb_raw(b, "%s\"%s\":", i ? "," : "", NAMES[i]);
+        clip_report(b, snd, snd->named[i]);
+    }
+    sb_raw(b, "}}");
+}
+
 static void unit_report(SB* b, const LOADER* L, const WIKI3DUNIT* u, const UNITREC* r)
 {
     sb_raw(b, "{\"name\":");
@@ -1639,6 +1903,13 @@ static void unit_report(SB* b, const LOADER* L, const WIKI3DUNIT* u, const UNITR
                u->slant ? "true" : "false", u->shadow ? "true" : "false");
     else
         sb_raw(b, ",\"facts\":null");
+    if (u->ok) {
+        int k;
+        sb_raw(b, ",\"sound\":{\"cat\":%d,\"count\":[", u->sound_cat);
+        for (k = 0; k < WIKI_SND_KINDS; k++) sb_raw(b, "%s%d", k ? "," : "", (int)u->sound_count[k]);
+        sb_raw(b, "]}");
+    } else
+        sb_raw(b, ",\"sound\":null");
     sb_raw(b, ",\"ok\":%s,\"why\":", u->ok ? "true" : "false");
     sb_q(b, u->ok ? NULL : r->why, 0);
     sb_raw(b, "}");
@@ -4227,6 +4498,7 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISI
     STAGEREC* srec = NULL;
     UNITREC* urec = NULL;
     CURREC cur;
+    WIKI3DSOUND snd;
     uint32_t w_at, st_at = 0, un_at = 0, rep_at, assets;
     const WIKIDATA* d = in->data;
     char (*names)[WIKI_ID_MAX] = NULL;
@@ -4234,6 +4506,8 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISI
     memset(&L, 0, sizeof L);
     memset(&b, 0, sizeof b);
     memset(&cur, 0, sizeof cur);
+    memset(&snd, 0, sizeof snd);
+    for (i = 0; i < WIKI_NSNDNAME; i++) snd.named[i] = -1;
     cur.frames[0] = cur.frames[1] = cur.frames[2] = -1;
     L.in = in;
     L.a.base = base;
@@ -4286,6 +4560,7 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISI
         bank_all(&L);
         bind_all(&L);
         cursors_load(&L, &cur);
+        if (nunit) sound_load(&L, (WIKI3DUNIT*)AT(&L.a, un_at), urec, nunit, &snd);
     } else
         snprintf(cur.why, sizeof cur.why, "the sources did not open");
     assets = L.a.used;
@@ -4347,7 +4622,9 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISI
         if (i) sb_raw(&b, ",");
         unit_report(&b, &L, (const WIKI3DUNIT*)AT(&L.a, un_at) + i, &urec[i]);
     }
-    sb_raw(&b, "],\"arena_bytes\":%lu}\n", (unsigned long)assets);
+    sb_raw(&b, "]");
+    sound_report(&b, &snd);
+    sb_raw(&b, ",\"arena_bytes\":%lu}\n", (unsigned long)assets);
     /* the report has the reserve to itself */
     L.a.cap = cap;
     L.a.full = 0;
@@ -4360,6 +4637,7 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISI
         w->unit = nunit ? (const WIKI3DUNIT*)AT(&L.a, un_at) : NULL;
         w->report = (const char*)AT(&L.a, rep_at);
         for (k = 0; k < 3; k++) w->cursor[k] = cur.seq[k];
+        w->sound = snd;
         w->base = base32;
         w->bytes = L.a.used;
     }
@@ -4475,6 +4753,9 @@ static DWORD WINAPI loader(LPVOID p)
             (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)f.QuadPart, (unsigned long)w->bytes, (void*)base,
             so, w->nstage, uo, w->nunit);
     }
+    /* THE WIKI'S SOUND OBJECT, made here and not on the game thread (tagpu_wikisound.h), before the
+       WIKI3D is published, so the first sound finds it whole */
+    if (!in->sound_off) tagpu_wikisound_make(&w->sound, in->hwnd);
     publish_3d(w);
     free(in);
     return 0;

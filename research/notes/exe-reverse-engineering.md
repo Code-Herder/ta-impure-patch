@@ -10430,8 +10430,12 @@ test, and re-validation `0x4089A0` never re-asks `0x49ABB0`.
   (`+0` index, `+4` GameTime, `+8` unit, `+0xC` text, `+0x10` priority), count `+0x99`, an index
   already queued refused. The consumer is `0x47F680`, called once per main-loop pass (`0x4999A6`),
   which plays an entry through `0x47FD70`; `0x47FCA0`, which also calls `0x47FD70`, has no caller. The per-index next time `0x5086EC + 24·index` (`0x50871C` for "Under Attack") is
-  written at `0x47FEFD` only when the entry's sound plays. MEASURED: with sound off it stays 0
-  while the text repeats.
+  written at `0x47FEFD` only when the player `0x47FD70`'s four gates pass -- priority above 10 −
+  unitchat, a variant count above 0, sound asked for, speechfx -- and then whether or not fxvol,
+  Sound Mode or NoDirectSound silences the play (*The unit replies, the named sounds and the
+  player's sound settings*). MEASURED: with sound off it stayed 0 while the text repeated; which
+  gate held it is not recorded, and fxvol 0 alone would not [the category's `underattack` count
+  of 0, or speechfx off, would: INFERRED].
 - **`+0xFA`, the recently-hit byte: its every writer** — the hit (`0x467954`), the unit tick's
   decrement (`0x48ADF0..0x48ADFC`, beside AutoAim's call `0x48ADDA`), the create (`0x485C12`, 0) and
   the saved game's restore (`0x4872CC`, from the save; written out at `0x487975`). `0x4225EC` (a feature
@@ -15840,6 +15844,192 @@ owns it (`impure.cfg`'s `mixingbuffers`, renderers.md 2.10b). The engine side:
   32 through two minutes of the fight, never above, the sequence at 83 146; the same fight with the
   store at 8 held `+0x30` at 8. Effect sounds also need the registry's `fxvol` (`main+0x37F0C`)
   above zero, which `tacli` sets to 0 on every silent launch.
+
+### The unit replies, the named sounds and the player's sound settings [DISASSEMBLED 2026-10-28]
+
+What the in-game wiki's own mixer repeats (`tagpu_wikisim.h` *THE SOUND*, `tagpu_wikisound.h`;
+[the COB plan](ingame-wiki-cob-plan.html), *Sound*). The wiki calls none of these functions. Every
+fact below was read in the retail executable (`i686-w64-mingw32-objdump -d -M intel`); callers by a
+rel32 `E8`/`E9` scan of `.text` plus a grep of every operand in the full listing. Pointers stored
+in data and computed jumps were not searched unless a line says so. The notice queue's table,
+priorities and the replay-side facts are in
+[the demo recorder's events](tadr-port/demo-recorder-s2-events.html) §1.8 and §4.
+
+**The settings.** `main+0x37F0C` **fxvol**, dword: the registry loader `0x42F9A0` stores it at
+`0x43070E` (default 27, `0x43071B`), and the options' reset `0x45C570` writes 27 again
+(`0x45C575`). `main+0x37F19`, a byte of bits: `& 7` **Sound Mode** (0 off; the reset makes it 1,
+`0x45C5B6..0x45C5C6`), bit 3 RestoreVolume, bit 4 **ackfx**, bit 5 **buildfx**, bit 6 **speechfx**
+(the reset sets all three, `0x45C584`, `0x45C590`, `0x45C59C`). `main+0x37F17` **unitchat**, a
+byte 0..10 (the reset writes 10, `0x45C5D2`). `0x51E690` **NoDirectSound** and `0x51E694`
+**UseWindowsSound**, dwords, set by the sound init `0x47ED40` (one caller, `0x491352` in
+`UIPipelinesInit 0x491200`) from `totala.ini`'s `[Preferences]` through `0x49F5A0`
+(GetPrivateProfileIntA, *The per-player unit cap* above): `0x47ED58`, `0x47ED6D`. UseWindowsSound also
+sets NoDirectSound (`0x47ED8A`), so the DirectSound object is never made under it, and a
+`DirectSoundCreate` that answers no driver sets NoDirectSound too (`0x47EDCA`).
+- **ackfx and buildfx are read by no playback.** Every operand `main+0x37F19` in `.text` lies in
+  the registry's load and save (`0x42FDF4..0x431428`), the options screen (`0x45C584..0x45E095`)
+  or the sound module, whose five reads test `& 7` (`0x47F116`, `0x47F2CD`, `0x47F34C`,
+  `0x47FEB2`) or bit `0x40` (`0x47FE18`) [operand search only: a copy of the byte taken into a
+  register elsewhere would not show].
+- **fxvol is not a buffer volume.** `0x45BCC0` (one caller, start-up's `0x49147C`) passes
+  `fxvol << 10` (`0x45BCE5..0x45BCEB`) to `0x4D0070`, and so do the options screen's sites
+  `0x45BDB2`, `0x45BE72` and `0x45BF32` (`0x45BDA5..0x45BDB2`; 0x4D0070's other 12 callers, the
+  registry's `WaveOutVolume` at `0x42FF02` among them, were not read). `0x4D0070` clamps it to
+  0..`0xFFFF` and calls `waveOutSetVolume` (IAT `0x4FC3D0`) with the value in both halves for every
+  wave-out device `0..[obj+0x10]` (`0x4D0092..0x4D00BC`). The Options slider's `thick` is 64
+  ([GUI gadgets](gui-gadgets.html)), so 64 is full volume. Whether a buffer of a second
+  DirectSound object in the process follows the wave-out volume as the engine's do, on Windows and
+  under Wine, is [INFERRED], not measured: the wiki relies on it and applies no fxvol of its own.
+
+**The engine's DirectSound object.** `0x4CEF90(11025, 16, 2, hwnd)` on the sound object
+`*(main+0x10)` (from `0x47EDB0`, hwnd `[[main+0xC]+0x40]`): `DirectSoundCreate(NULL, &[obj+0x24],
+NULL)` at `0x4CEFA8` (thunk `0x4FB002`, IAT `0x4FC044`, imported from `DSOUND.dll`), then
+`SetCooperativeLevel(hwnd, 2)` = `DSSCL_PRIORITY` (`push 2` at `0x4CEFBB`, the call `0x4CEFC1`).
+Its sounds are played on the game thread (the consumer below, the projectile and order code);
+there is no audio thread of the engine's.
+
+**The named sound `0x47F0C0(index, broadcast)`** (`ret 8`) plays allsound's buffer set
+`[main+0x33A13 + 4·index]` (index `0xFFFF` plays nothing, `0x47F0C7`). UseWindowsSound branches
+first (`0x47F0D9`) to `0x49F6A0` or `0x49F680`. Then fxvol 0, Sound Mode 0 or NoDirectSound
+returns without a sound (`0x47F10C..0x47F127`); otherwise `0x4CF570(set, −585, 0)` at `0x47F180`
+(`push 0xFFFFFDB7` at `0x47F17A`), or the looping `0x4CF540` when `0x51E69C` is set. **No point is
+passed**, so it is not positional. `0x47F1A0(name, broadcast)` finds the index by a linear
+`0x4F8A70` over the 32-byte names at `main+0x33E13` below the count `main+0x33A0F`; `0x4F8A70` is
+the CRT `_stricmp`, so `oktobuild` and `OKTOBUILD` are one name.
+- **The table** is built at the level's init by `0x42F7E0` (one caller, `0x49137D`): it zeroes the
+  count (`0x42F808`), opens `<gamedata>\allsound.TDF` by the built path `0x4290F0`, and for each
+  section passes its name and `sound` key to `0x429470`, which skips a name already held and
+  refuses past 255 entries (`0x4294F0`: count + 1 below `0x100`), loading `sounds\<wav>.WAV` into
+  the set.
+- **The names the wiki plays** (the engine's callers push them as immediates; all 230 call sites
+  were listed): the box select's `SelectMultipleUnits` (`0x508D8C`, `0x48C681`); placement's
+  `oktobuild` (`0x509660`, `0x498FA4` in the click `0x498F70`) and `notoktobuild` (`0x509650`,
+  `0x49901D`); the sidebar's, in `0x41AA00`: ORDERS `ordersbutton` (`0x5027F8`, `0x41AB04`), BUILD
+  `buildbutton` (`0x5027EC`, `0x41AB45`), a build button that arms a structure `addbuild`
+  (`0x5026B8`, `0x41ABA3`, after writing `main+0x2CC3` = 14 and the type to `main+0x2CC4`), STOP
+  `immediateorders` (`0x50271C`, `0x419CF2` jumping to `0x41A0EA`); PREV and NEXT, through the
+  dispatcher `0x41C180` (NEXT `0x41BDE0` at `0x41C1A5`, PREV `0x41BF10` at `0x41C1C2`), play
+  `nextbuildmenu` (`0x502850`) at `0x41BF01` and `0x41C04C` on every press: the exits for no unit
+  shown or a unit with no pages (`0x41BDF2`, `0x41BE1F`, `0x41BF21`) jump to the play. The in-game
+  menu's controls play `Options`. Every caller passes a fixed name; none takes one from a gadget.
+
+**The voices: `0x4CF570(set, volume, point)`** (`ret 0xC`). A set is four `IDirectSoundBuffer*`.
+The loop `0x4CF5E5..0x4CF631` (`cmp esi,4`) takes the first copy whose `GetStatus` (vtable `+0x24`)
+answers 0, stopped; it remembers an empty slot, and of the playing copies the one with the
+largest play cursor (`GetCurrentPosition`, vtable `+0x10`, `0x4CF615`). With none stopped it
+duplicates copy 0 into the empty slot (`IDirectSound::DuplicateSoundBuffer`, the object's
+`[+0x24]` vtable `+0x14`, `0x4CF666`), else it restarts the copy furthest through with
+`SetCurrentPosition(0)` (vtable `+0x34`, `0x4CF696`). So one sound plays at most four times at
+once. A 3D object (`[obj+4]`) with a point sets the copy's position, minimum and maximum distance
+(`0x4CF6C3..0x4CF70E`); **with no point it sets the copy's 3D mode to 2, disabled** (`0x4CF713..0x4CF71E`).
+A failing `GetStatus` returns at once (`0x4CF5F8`).
+
+**The reply: the notice queue's consumer `0x47F680`**, called once a main-loop pass (`0x4999A6`).
+- **The push `0x47FAD0`** refuses a kind while GameTime `main+0x38A47` is below its next time
+  `[0x5086EC + 0x18·kind]` (`0x47FAF0`, `jb`), and a kind already queued (`0x47FB0A`); with eight
+  queued it shows the last as text only (`0x47FD70(7, 0, 1)` at `0x47FB27`) and drops it; the new
+  entry goes in before the first of a lower priority (`0x47FBA4..0x47FBC0`, `jl`: an equal one
+  stays ahead).
+- **The gap is fixed, not the previous reply's length.** The consumer takes entry 0 and plays it
+  with sound only when GameTime ≥ `[q+0x9D] + [q+0xA1]` (`0x47F6BB`, `jb`), then stores GameTime
+  in `[q+0x9D]` (`0x47F6D7`) whether or not a sound follows. `[q+0xA1]` is 30 and `[q+0xA5]` 150,
+  set when the queue is made (`0x47EE07`, `0x47EE11`; `0x47F960`, which sets them too, has no
+  `E8` caller). So at most one reply with sound a second, whatever its WAV's length.
+- **The player `0x47FD70(entry, sound, text)`**: the category is `[unit+0x92]+0x20E`, the record
+  `[main+0x37E13] + 0x160·cat` (unbounded), the count `[rec + 0x40 + 0xC·kind]`, the variant the
+  CRT `rand` (`0x4E4870`) × count / `0x8000` (`0x47FDC6..0x47FDD6`). The four gates: priority >
+  10 − unitchat (`0x47FDEC..0x47FDFB`), count > 0 (`0x47FE01`), `sound` set (`0x47FE10`), speechfx
+  (`0x47FE18`). Past them the file `sounds\<wav>.WAV` is built by `0x4290F0` (`0x47FE70`) --
+  `honk`, or `sing` when (GameTime / 30) & 7 is nonzero, while `0x51E698` is set (`0x47FE25..0x47FE4D`;
+  the `+Sing` command's handler `0x4172E0` toggles it, its record at `0x501E64`). UseWindowsSound
+  plays it through `0x49F6C0` (`PlaySoundA`, IAT `0x4FC3D4`, `0x47FE75..0x47FE83`); otherwise
+  fxvol 0, Sound Mode 0 or NoDirectSound skips the play (`0x47FEA8..0x47FEC2`) and
+  `0x4D0640(file, −585, 0)` plays it (`0x47FED0`, `0x47FED6`), which is `0x4D02A0(file, 1, −585, 0)`:
+  the file opened through the archive layer and played by name each time, **no point passed**.
+  **Every one of those branches then writes the kind's next time**, GameTime + 30 × interval
+  (`0x47FEE1..0x47FEFD`, the interval `[0x5086E0 + 0x18·kind]`): a reply silenced by fxvol, Sound
+  Mode, NoDirectSound or played through PlaySoundA still spends its cooldown. Only the four gates
+  leave it unwritten (`0x47FDFB..0x47FE1F` jump to `0x47FF03`).
+- **The kind table `0x5086D8`**, 24 records of 24 bytes `{+0 kind, +4 priority, +8 interval in
+  seconds, +0xC sounds.tdf key, +0x10 default text, +0x14 next time}` (dumped from `.data`):
+  1 select p10 i0 · 2 underattack p9 i20 · 3 activate p4 i2 · 4 deactivate p4 i2 · 5 ok p5 i1 ·
+  6 arrived p3 i4 · 7 cant p8 i1 · 8 unitcomplete p3 i3 · 9 build p4 i2 · 10 repair p3 i1 ·
+  11 working p2 i1 · 12 load, 13 unload, 14 cloak, 15 uncloak p7 i1 · 16 capture p4 i1 ·
+  17..22 count5..count0 p10 i0 · 23 canceldestruct p10 i0.
+
+**`<gamedata>\sound.TDF`: `0x42F580`** (one caller, `0x42F8A2` inside `0x42F7E0`). The count
+`main+0x37E17` is the file's sections and the table `main+0x37E13` holds one 0x160-byte record
+each: the section's name cut to 63 characters (`0x42F67E`), then for kinds 1..23 (the key pointer
+walks `0x5086FC..0x508924`) at `+0x40 + 0xC·kind` `{count, wavs, texts}`. A kind's variants are
+`<key>` (`0x42F694`, kept only when present), then `<key>1`, `<key>2`, … by `"%s%i"` (`0x504338`,
+`0x42F6A6`) until the first missing one (`0x42F6F1`); each value is read into 0x40 bytes (`0x42F472`)
+and its text from `<key…>text` (`"%s%s"`, `0x42F491`). The WAVs are not loaded here: a reply opens
+its file at play time.
+
+**A unit's category, def `+0x20E`** (the FBI loader, `0x42CC54..0x42CCB8`): `soundcategory`
+(`0x5039A8`) read into 100 bytes (`push 0x64`, `0x42CC5A`); **absent, 0** (`0x42CCB8` stores the
+zero `esi`); present, the index of the first record whose name matches it by `_stricmp`
+(`0x42CC74..0x42CCA0`); no match, its `atoi` (`0x42CCA7`). The play reads the record unbounded, so
+a number past the file's sections addresses past the table.
+
+**The triggers the wiki repeats**, each a `0x47F780(unit, kind, text)` push, the kind the immediate
+pushed (82 sites; [the demo recorder's events](tadr-port/demo-recorder-s2-events.html) §1.8 has
+select, ok and `0x48B090`'s):
+- select, kind 1: the box `0x48C668` when exactly one unit was taken (`ebp == 1`, `0x48C65A`),
+  else `SelectMultipleUnits` (`0x48C681`), none returning first (`0x48C64A`); a click's `0x48C8B9`,
+  `0x48C997`.
+- ok, kind 5: one push, `0x438899` in `0x438880`, which speaks once an order (it clears the
+  order's `+0x42` bit `0x2000` first, `0x438883..0x43888B`). Thirty handlers call it at their
+  start, Move_Ground (`0x40322D`), ReclaimUnit (`0x4047C1`) and Follow_Ground (`0x40670C`,
+  `0x406800`) among them; MobileBuild (`0x403A20..0x403F6F`) never does, so a build order says no
+  ok [DISASSEMBLED: the 30 calls of `0x438880` listed, none in that range].
+- arrived, kind 6: Move_Ground (`0x4031D0`) says it in state 1 only on its goal event `0x20`
+  (`0x4031EB..0x403206`, result 5); without it (a give-up, `0x40`) the order ends silent with
+  result 9 (`0x403209`). State 0 says ok (`0x40322D`) and starts the move (`0x438930(order+0x22,
+  order+0x36 + 4)`, `0x403232..0x40323F`), whose goal `0x44CF60` keeps the goal's footprint cell,
+  `(P − (fx << 19) + 0x80000) >> 20` on the 16.16 position for each axis (`0x44CF7F..0x44CFA7`,
+  the footprint the unit's `+0x7E`/`+0x80`), and the squared radius `((radius) / 16)²`
+  (`0x44CFBA..0x44CFC8`); its test `0x44D310` passes when the unit's cell `+0x76`/`+0x78` (the
+  same rounding, `0x48AA00..0x48AA32` in the position setter `0x48A9F0`) is within it. The ground
+  mover's tick `0x44F1A0` posts `0x20` when the test passes (`0x44F1B2..0x44F1BE`). A click's move
+  carries `+0x36` = 0: the map click `0x4991E2..0x4991F5` passes type 0 to `0x48CF30`, which hands
+  it on to `0x43AFC0` (`0x48D1D9..0x48D1F4`), and `0x43ADC0` to the node constructor `0x43A0C0`,
+  which stores it at `+0x36` (`0x43A116`); so the radius is (0 + 4) >> 4 = 0, the goal's own cell.
+  `0x4032C2` is in the handler `0x403260`, which says arrived on `0x20` and then queues
+  SELFDESTRUCT (`0x501520`, `0x4032C7..0x4032F7`); on `0x40` it ends silent. `0x40FA53`, VTOL_Move
+  (`0x40FA20`), says it in state 2 only when no order follows (`[order+0x4A]` = 0,
+  `0x40FA43..0x40FA48`).
+- cant, kind 7: about 40 sites, each with a failure text. MobileBuild's site test
+  `0x47DB70(def, 0, cell, 1)` (`0x403CC7`) fails on an occupied cell as on a refused one; it
+  notices at the first failure only (`[order+0x3E]` = 0, zeroed in state 0 at `0x403B19`;
+  `0x403CD0..0x403CDF`, "Waiting for target area to clear", `0x50155C`), then counts the failure
+  and waits 30 ticks (`0x439E80(30)`, `0x403CE4..0x403CEF`); failures 2 to 11 retry silently, and
+  the twelfth, the counter past 10 (`0x403D03`), notices "Target area was blocked" (`0x501544`,
+  `0x403D10`) and ends the order (result 8). Before that test, a move that gave up (`0x40`,
+  `0x403B63`) is measured: `floor(|unit − site centre|)` (the 16.16 distance's high word,
+  `0x403B6C..0x403BA9`) less `trunc(8 · hypot(unit fx, fz))` (`0x4FC910` = 8.0, `0x403BD6`) plus
+  `trunc(−8 · hypot(site fx, fz))` (`0x4FC918` = −8.0, `0x403C1A`); past the builder's
+  BuildDistance (def `+0x212`, `0x403C32`) it notices "I can't reach the construction site"
+  (`0x501580`, `0x403C45`) and ends the order; within it, the site test follows (`0x403C59`).
+- build, kind 9 "Starting construction" (`0x5012F8`): BuildingBuild `0x402937`, MobileBuild
+  `0x403DA0`, `0x4140D4`.
+- unitcomplete, kind 8: BuildingBuild `0x402B10` (the table's "Nanolathe Complete"), MobileBuild
+  `0x403F39` and HelpBuild `0x40422F` ("Building complete", `0x501530`), `0x41430C`.
+- working, kind 11: `0x404571`, ReclaimUnit `0x4048BE`, `0x404C6E`, `0x404FF1`, `0x414942`,
+  `0x414D20`; none in BuildingBuild or MobileBuild.
+- repair, kind 10: `0x402491`, `0x4056FE`, `0x4057A1`, `0x415219`, `0x415298`.
+- activate and deactivate, kinds 3 and 4: `0x48B110`, `0x48B135` in the state setter `0x48B090`.
+
+**Negative results.** No nanolathe loop sound: a build's sound is the one-shot reply of kind 9,
+and no build handler plays a sound per tick [the 82 notice sites and the 230 named-sound sites
+read; a loop sound would need `0x47F210`, whose two callers are `0x426453` and `0x45DD5D`]. The
+factory's yard `0x47DAC0` (YARD_OPEN, `0x47DAC0..0x47DB11`) makes no direct call of `0x47F780`,
+`0x47F1A0`, `0x47F300` or `0x47F610` (its callees `0x47D970`, `0x47C790` and `0x440A40` were not
+searched). A script makes no sound: `PLAY_SOUND`
+(`0x10072000`) kills its thread (*The COB engine*). Only `0x47F300`, the combat sounds (fire,
+burst, impact; [the demo recorder's events](tadr-port/demo-recorder-s2-events.html) §4.2), and
+`0x47F610` (treeburn) pass a point, so Sound Mode's off-screen −1585 and its 3D placement apply to
+those alone, never to a reply or a named sound.
 
 ### The two fog lattices, and the minimap's four surfaces [VERIFIED 2026-09-12, landing 4b and 4c]
 

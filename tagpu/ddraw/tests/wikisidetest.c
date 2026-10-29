@@ -237,7 +237,7 @@ done:
 static int compose(char** a, const char* ctxfile)
 {
     static WIKICASTING casting;
-    WIKISIMCTX ctx = { 0, NULL, 1, NULL };
+    WIKISIMCTX ctx = { 0, NULL, 1, NULL, NULL };
     static WIKISTAGEVIEW v;
     static WIKISIDECOL col;
     static unsigned char rgba[WIKI_SIDE_W * WIKI_SIDE_ROWS * 4];

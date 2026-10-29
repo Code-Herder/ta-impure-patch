@@ -68,12 +68,13 @@ DDRAW = REPO / "tagpu" / "ddraw"
 EXE = DDRAW / "tests" / "wikiassettest-native.exe"
 sys.path.insert(0, str(HERE))
 import tavfs  # noqa: E402
+import gfx as gfxpy  # noqa: E402
 
 ta3do = tavfs.ta3do
 tascene = tavfs.tascene
 
 SRCS = ["tests/wikiassettest.c", "src/tagpu_hpi.c", "src/tagpu_vfs.c", "src/tagpu_tdf.c", "src/tagpu_json.c",
-        "src/tagpu_pak.c", "src/tagpu_wikidata.c", "src/tagpu_cobscan.c", "src/tagpu_guifile.c"]
+        "src/tagpu_pak.c", "src/tagpu_wikidata.c", "src/tagpu_cobscan.c", "src/tagpu_guifile.c", "src/tagpu_wav.c"]
 NAME_VAS = {"units": 0x503920, "textures": 0x503720, "logos": 0x504734, "logos_gaf": 0x503704,
             "objects3d": 0x5036E4, "scripts": 0x503740, "anims": 0x502E30, "features": 0x502C7C}
 FEATURE_BITS = ["animating", "animtrans", "shadtrans", "flamable", "geothermal", "blocking", "reclaimable",
@@ -592,6 +593,7 @@ def reference(gamedir, exe, language, mounts=None, casting=None):
                 u["unitname"], u["object"] = un or None, low(obj) or None
                 mobile = atoi(sec.get("bmcode"), 1) != 0
                 slant = not mobile and atoi(sec.get("digger"), 0) == 0
+                u["soundcategory"] = sec.get("soundcategory")
                 u["facts"] = {"mobile": mobile, "slant": slant,
                               "shadow": atoi(sec.get("noshadow"), 0) == 0 and
                               (slant or (atoi(sec.get("canhover"), 0) == 0 and atoi(sec.get("floater"), 0) == 0))}
@@ -653,7 +655,61 @@ def reference(gamedir, exe, language, mounts=None, casting=None):
             s["frames"] = gaf.frames(so) if so is not None else None
         cur["ok"] = all(s["frames"] is not None for s in cur["sequences"])
         cur["why"] = None if cur["ok"] else "refused"
-    rep.update(bank=bank, logos=logos, cursors=cur, stages=stages, units=units)
+    # THE SOUND (tagpu_wikiasset.c sound_load, gfx.py `unit_sound` and `write_sounds`): each resolved unit's category
+    # over <gamedata>\sound.TDF read by position, the categories in use in the units' order with their variants' WAVs for
+    # the kinds the wiki says, and the button sounds' through allsound.TDF; a WAV gfx.py's PCM rule refuses is null
+    gd = tavfs.exe_cstr(exe_blob, 0x503360)
+
+    def sections(name):
+        _p, hit = E.find_built(gd, name, "TDF")
+        try:
+            return tavfs.tdf_sections(E.read(hit)) if hit else []
+        except tavfs.TdfError:
+            return []
+
+    def variants(keys, key):
+        out = [keys[key][:63]] if key in keys else []
+        i = 1
+        while f"{key}{i}" in keys:
+            out.append(keys[f"{key}{i}"][:63])
+            i += 1
+        return out
+
+    def clip(name):
+        if not name:
+            return None
+        _p, hit = E.find_built("sounds", name, "WAV")
+        return name.lower() if hit and gfxpy.wav_pcm(E.read(hit)) is None else None
+
+    table = sections("sound")
+    snd = {"categories": len(table), "cats": [], "named": {}}
+    for u in units:
+        sc = u.pop("soundcategory", None)
+        if not u["ok"]:
+            u["sound"] = None
+            continue
+        if sc is None:
+            cat = 0
+        else:
+            sc = sc[:99]
+            cat = next((i for i, t in enumerate(table) if t["_name"][:63].lower() == sc.lower()), None)
+            cat = atoi(sc, 0) if cat is None else cat
+        cat = cat if 0 <= cat < len(table) else -1
+        u["sound"] = {"cat": cat, "count": [0] + [len(variants(table[cat]["keys"], k)) if cat >= 0 else 0
+                                                  for k in gfxpy.SND_KEYS[1:]]}
+        if cat >= 0 and all(c["index"] != cat for c in snd["cats"]):
+            snd["cats"].append({"index": cat, "kinds": {str(k): [clip(w) for w in variants(table[cat]["keys"], gfxpy.SND_KEYS[k])]
+                                                        for k in gfxpy.SND_WIKI_KINDS}})
+    allsound = {}
+    for sec in sections("allsound"):
+        nm = sec["_name"][:31].lower()
+        if nm not in allsound and len(allsound) < 255:
+            allsound[nm] = sec["keys"].get("sound", "")[:255]
+    snd["named"] = {n: clip(allsound.get(n.lower())) for n in gfxpy.SND_NAMES}
+    for u in units:
+        u.pop("soundcategory", None)
+        u.setdefault("sound", None)
+    rep.update(bank=bank, logos=logos, cursors=cur, stages=stages, units=units, sound=snd)
     return rep
 
 

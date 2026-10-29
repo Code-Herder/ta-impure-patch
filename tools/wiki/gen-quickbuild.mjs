@@ -107,9 +107,10 @@ function TL(start) {
        timeline is the same. A caption meant for the trip is given before the build, on its tick. */
     build(b) { inputs.push({ at: t, build: b }); t += TRIP; return T; },
     say(s) { inputs.push({ at: t, caption: s }); return T; },
-    /* the demo's clock stops until no unit of the player's holds a build or a reclaim order, at most `max` ticks
-       (sim.js UNTILS); the wait takes a tick of its own, after the last input's, which no other input shares */
-    until(max) { t += 1; inputs.push({ at: t, until: 'idle', max }); t += 1; return T; },
+    /* the demo's clock stops until the state holds, at most `max` ticks (sim.js UNTILS): 'idle', no unit of the
+       player's holds a build or a reclaim order; 'arrived', none holds a move order. The wait takes a tick of its
+       own, after the last input's, which no other input shares */
+    until(max, state = 'idle') { t += 1; inputs.push({ at: t, until: state, max }); t += 1; return T; },
   };
   return T;
 }
@@ -198,7 +199,7 @@ demo('geo', 'Geothermal vents', { selected: ['ck'] }, T => T
 demo('metalmap', 'Metal maps', { selected: ['ck'] }, T => T
   .say('{builder} selected. The right side is uniform metal ground.').wait(25)
   .to([568, 120], 55).say('Broad metal ground is not a deposit: no ghost, the cursor says move.').wait(35)
-  .click('order').say('{Order}: the {builder} just moves there.').wait(30)
+  .click('order').say('{Order}: the {builder} just moves there.').wait(5).until(WAIT_MAX, 'arrived')
   .to([490, 330], 50).say('A deposit with plain ground around it is one: the ghost appears.').wait(35)
   .click('order').say('{Order} builds it.'));
 

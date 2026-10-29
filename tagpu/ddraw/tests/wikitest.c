@@ -276,7 +276,7 @@ static void view(WIKISIM* s, int map)
     }
     key("locked", 0); str(v->locked >= 0 ? name(s, v->locked) : NULL);
     key("clock", 0); printf("%d", v->clock);
-    key("waiting", 0); str(v->waiting == WIKI_UNTIL_IDLE ? "idle" : NULL);
+    key("waiting", 0); str(v->waiting == WIKI_UNTIL_IDLE ? "idle" : v->waiting == WIKI_UNTIL_ARRIVED ? "arrived" : v->waiting == WIKI_UNTIL_BUILT ? "built" : NULL);
     key("stalled", 0); fputs(v->stalled ? "true" : "false", stdout);
     key("cob", 0);
     if (v->has_cob) printf("[%lu,%lu]", (unsigned long)(v->cob_hash >> 32), (unsigned long)(v->cob_hash & 0xFFFFFFFFu));
@@ -300,6 +300,37 @@ static void view(WIKISIM* s, int map)
         printf("%d,%lu]", e->due, (unsigned long)e->key);
     }
     putchar(']');
+    key("sound", 0);
+    if (v->has_sound) {
+        putchar('{');
+        key("next", 1);
+        putchar('[');
+        for (i = 0; i < WIKI_SND_KINDS; i++) printf("%s%d", i ? "," : "", v->snd_next[i]);
+        putchar(']');
+        key("last", 0); printf("%d", v->snd_last);
+        key("queue", 0);
+        putchar('[');
+        for (i = 0; i < v->nsndq; i++) {
+            const WIKISNDQ* q = &v->sndq[i];
+            printf("%s[%d,%d,", i ? "," : "", q->kind, q->tick);
+            str(q->unit);
+            putchar(',');
+            str(name(s, q->type));
+            printf(",%d]", q->priority);
+        }
+        putchar(']');
+        key("total", 0); printf("%d", v->snd_total);
+        key("events", 0);
+        putchar('[');
+        for (i = 0; i < v->nsnd; i++)
+            printf("%s[%d,%d,%d,%d,%d]", i ? "," : "", v->snd[i].tick, v->snd[i].kind, v->snd[i].name, v->snd[i].cat,
+                   v->snd[i].variant);
+        putchar(']');
+        key("cant", 0);
+        putchar('[');
+        for (i = 0; i < v->nunit; i++) printf("%s%d", i ? "," : "", v->unit[i].cant);
+        fputs("]}", stdout);
+    } else fputs("null", stdout);
     putchar('}');
 }
 
@@ -361,6 +392,7 @@ static int demos(const char* path, const char* layout, const char* casting, int 
     ctx.cast = casting && strcmp(casting, "-") ? &k : NULL;
     ctx.iface = iface;
     ctx.cob = cob ? &COB_SRC : NULL;
+    ctx.snd = cob ? &SND_SRC : NULL;
     if (ctx.cast && !casting_file(casting, &k)) return 2;
     if (!(pak = slurp(path, &n))) { fprintf(stderr, "wikitest: cannot read %s\n", path); return 2; }
     if (!(d = tagpu_wikidata_load((const unsigned char*)pak, n, err, sizeof err))) {
@@ -484,6 +516,7 @@ static int trace(const char* path)
             ctx.iface = (int)tj_num(tj_get(cv, "iface"), 1);
             ctx.cast = casting && !tj_is(casting, TJ_NULL) ? &c->cast : NULL;
             ctx.cob = tj_is(tj_get(cv, "cob"), TJ_TRUE) ? &COB_SRC : NULL;
+            ctx.snd = tj_is(tj_get(cv, "snd"), TJ_TRUE) ? &SND_SRC : NULL;
             if ((layout && !tj_is(layout, TJ_NULL) && !(c->lay = tagpu_wikidata_layout_json(layout, err, sizeof err)))
                 || (ctx.cast && !tagpu_wikidata_casting(casting, &c->cast, err, sizeof err))) {
                 tagpu_json_free(doc);
@@ -548,6 +581,8 @@ static int refuse_case(const TJV* v, const char* entry, char* err, size_t errn)
     ctx.side = (int)tj_num(tj_get(v, "side"), 0);
     ctx.iface = (int)tj_num(tj_get(v, "iface"), 1);
     ctx.cast = casting && !tj_is(casting, TJ_NULL) ? &k : NULL;
+    ctx.cob = NULL;
+    ctx.snd = NULL;
     if (ctx.cast && !tagpu_wikidata_casting(casting, &k, err, errn)) return 0;
     if (!tagpu_wikidata_entry(&e, entry, strlen(entry), err, errn)) return 0;
     ok = !(layout && !tj_is(layout, TJ_NULL) && !(lay = tagpu_wikidata_layout_json(layout, err, errn)))

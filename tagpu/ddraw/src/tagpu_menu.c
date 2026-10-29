@@ -159,6 +159,12 @@ typedef void  (__cdecl   *void_fn)(void);
 /* the in-game wiki's two engine facts (tagpu_menu_single_player, tagpu_menu_pause_hold) */
 #define OFF_NETGAME       0x2A44u       /* u8: bit 0 a network game            */
 #define OFF_PAUSE         0x38A51u      /* u16: bit 0 single player's pause    */
+/* the player's sound settings, as 0x47F0C0 and 0x47FD70 test them (tagpu_menu_sound) */
+#define OFF_FXVOL         0x37F0Cu      /* dword: 0 skips every play (0x47FEA8, 0x47F10C)       */
+#define OFF_UNITCHAT      0x37F17u      /* u8: a reply passes when its priority > 10 - this     */
+#define OFF_SOUNDBITS     0x37F19u      /* u8: & 7 Sound Mode, 0x40 speechfx                    */
+#define VA_NODSOUND       0x0051E690u   /* int: the engine has no DirectSound                   */
+#define VA_WINSOUND       0x0051E694u   /* int: plays through PlaySoundA, not DirectSound       */
 #define VA_SETLABEL       0x004A07D0u   /* (gi, name, text): the TOP screen, by name; copies 0x80
                                            bytes and sets gi+0xCCA itself (0x4A085E) */
 #define VA_YESORNO        0x00460680u   /* the in-game YESORNO opener, void cdecl */
@@ -1636,6 +1642,25 @@ int tagpu_menu_single_player(void)
 {
     char* main_p = *(char**)TA_MAIN;
     return main_p && !(*(const unsigned char*)(main_p + OFF_NETGAME) & 1);
+}
+
+/* THE SOUND SETTINGS, read where the engine's own entries read them (DISASSEMBLED: the reply player
+   0x47FD70 at 0x47FDEC, 0x47FE18, 0x47FE75, 0x47FEA8..0x47FEC2; the named player 0x47F0C0). Plain
+   reads of the engine's own fields on its own thread; nothing is written. */
+int tagpu_menu_sound(TAGPU_SOUNDSET* out)
+{
+    char* main_p = *(char**)TA_MAIN;
+    unsigned char bits;
+    memset(out, 0, sizeof *out);
+    if (!main_p) return 0;
+    bits = *(const unsigned char*)(main_p + OFF_SOUNDBITS);
+    out->fxvol = *(const int*)(main_p + OFF_FXVOL);
+    out->mode = bits & 7;
+    out->speech = (bits & 0x40) != 0;
+    out->unitchat = *(const unsigned char*)(main_p + OFF_UNITCHAT);
+    out->no_dsound = *(const int*)VA_NODSOUND != 0;
+    out->win_sound = *(const int*)VA_WINSOUND != 0;
+    return 1;
 }
 
 /* SINGLE PLAYER'S PAUSE IS BIT 0 OF main+0x38A51. A skirmish frame tests it at 0x496920

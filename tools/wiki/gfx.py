@@ -19,6 +19,7 @@ One tascene-format pack a wiki entry, `gfx/<entry>/scene.json` and its binaries:
              per owner the entry's scenes use (a team face takes that owner's logo frame), the structure shadow's
              slant casters, the nanoframe's wire edges, and the frames in an R8 atlas
   palette/   PALETTE.PAL and PALETTE.SHD
+  sounds/    the WAVs the units' sound categories and the sidebar's buttons play, named by sounds.json
   shaders    gfx/shaders/, tagpu's GLSL extracted from the C sources (the repository's, not the game's)
 
 and gfx/index.json, which names each entry's pack and carries the whole resolution report; and the game's cursors,
@@ -773,6 +774,140 @@ def stage_types(entry, casting=None):
     return names
 
 
+# THE SOUND KIND TABLE 0x5086D8's keys (+0xC) by kind, 1..23; the kinds the wiki says (tagpu_wikisim.h); the allsound
+# names it plays (WIKI_SNDNAME_*, sim.js SND_NAMES)
+SND_KEYS = [None, "select", "underattack", "activate", "deactivate", "ok", "arrived", "cant", "unitcomplete", "build",
+            "repair", "working", "load", "unload", "cloak", "uncloak", "capture", "count5", "count4", "count3",
+            "count2", "count1", "count0", "canceldestruct"]
+SND_WIKI_KINDS = (1, 3, 4, 5, 6, 7, 8, 9, 11)
+SND_NAMES = ("SelectMultipleUnits", "oktobuild", "notoktobuild", "addbuild", "buildbutton", "ordersbutton",
+             "nextbuildmenu", "immediateorders", "Options")
+SND_KINDS = 24
+
+
+def sound_table(eng):
+    """`<gamedata>\\sound.TDF` as 0x42F580 reads it, cached on `eng`: one record a top-level section in file order,
+    {"name": its name cut to 63 characters (0x42F67E), "wav": per kind 0..23 the variants' WAV names}. A kind's
+    variants are `<key>` when present, then `<key>1`, `<key>2`, ... up to the first one missing (0x42F694..0x42F6F1),
+    each value cut to 63 characters (0x4C48C0's 0x40). A file missing or refused is no category at all."""
+    if getattr(eng, "_sound", None) is None:
+        hit = eng.load(eng.dirs["gamedata"], "sound", "TDF")
+        recs = []
+        try:
+            secs = tavfs.tdf_sections(hit[0]) if hit else []
+        except tavfs.TdfError:
+            secs = []
+        for sec in secs:
+            keys, wav = sec["keys"], [[] for _ in range(SND_KINDS)]
+            for k in range(1, SND_KINDS):
+                key = SND_KEYS[k]
+                if key in keys:
+                    wav[k].append(keys[key][:63])
+                i = 1
+                while f"{key}{i}" in keys:
+                    wav[k].append(keys[f"{key}{i}"][:63])
+                    i += 1
+            recs.append({"name": sec["_name"][:63], "wav": wav})
+        eng._sound = recs
+    return eng._sound
+
+
+def unit_sound(eng, fbi):
+    """{"cat", "count"} for a unit whose FBI's fields are `fbi` (`fbi_fields`): its category as def+0x20E holds it,
+    none (-1) outside the table, and the category's variant count per kind (all 0 for none)."""
+    table = sound_table(eng)
+    v = fbi.get("soundcategory")
+    if v is None:
+        cat = 0
+    else:
+        v = v[:99]                                  # 0x42CC5A reads 100 bytes
+        cat = next((i for i, r in enumerate(table) if r["name"].lower() == v.lower()), None)
+        if cat is None:
+            cat = atoi(v)
+    if not 0 <= cat < len(table):
+        return {"cat": -1, "count": [0] * SND_KINDS}
+    return {"cat": cat, "count": [len(w) for w in table[cat]["wav"]]}
+
+
+def wav_pcm(blob):
+    """tagpu_wav.c's rule: a RIFF WAVE file whose `fmt ` chunk is PCM (tag 1), 1 or 2 channels, 8 or 16 bits, a rate
+    of 1000..192000 Hz and a block align of channels x bits / 8, and a `data` chunk after it holding at least 4 bytes
+    of whole frames within the file (DSBSIZE_MIN). None when it passes, else why not."""
+    if len(blob) < 12 or blob[:4] != b"RIFF" or blob[8:12] != b"WAVE":
+        return "not a RIFF WAVE file"
+    end = min(len(blob), 8 + struct.unpack_from("<I", blob, 4)[0])
+    at, fmt = 12, None
+    while at + 8 <= end:
+        cid, n = blob[at:at + 4], struct.unpack_from("<I", blob, at + 4)[0]
+        body = at + 8
+        if cid == b"fmt ":
+            if n < 16 or body + 16 > end:
+                return "a short fmt chunk"
+            tag, ch, rate, _bps, align, bits = struct.unpack_from("<HHIIHH", blob, body)
+            if tag != 1:
+                return f"format tag {tag}, not PCM"
+            if ch not in (1, 2) or bits not in (8, 16) or not 1000 <= rate <= 192000 or align != ch * bits // 8:
+                return f"{ch} channels, {bits} bits, {rate} Hz, align {align}"
+            fmt = (ch, bits)
+        elif cid == b"data":
+            if fmt is None:
+                return "data before fmt"
+            frames = min(n, end - body) // (fmt[0] * fmt[1] // 8)
+            return None if frames * (fmt[0] * fmt[1] // 8) >= 4 else "under 4 bytes of whole frames"
+        if n > end - body:
+            break
+        at = body + n + (n & 1)
+    return "no data chunk"
+
+
+def write_sounds(eng, out_root, types):
+    """`<out_root>/sounds.json` and the WAVs it names, `sounds/<n>.wav`: each mesh type's `sound` (`types`, the first
+    entry's of a name), which the mockup's sim reads as its sound source (sound.js); for each category they use its
+    name and, per kind the wiki says, the variants' files in variant order, null for one missing or refused; the
+    file of each button sound's allsound name, as 0x42F7E0 binds the names (each section's `sound`, the first
+    section of a name winning, at most 255: 0x429470); and what was refused. A WAV opens as `sounds\\<wav>.WAV` by
+    the built path (0x4290F0), the language folder first."""
+    table = sound_table(eng)
+    files, refused, n = {}, [], [0]
+    (out_root / "sounds").mkdir(parents=True, exist_ok=True)
+    for old in (out_root / "sounds").glob("*.wav"):
+        old.unlink()
+
+    def wav(name):
+        if not name:
+            return None
+        if name.lower() not in files:
+            hit = eng.load("sounds", name, "WAV")
+            why = "no file" if hit is None else wav_pcm(hit[0])
+            if why:
+                refused.append({"wav": name, "why": why})
+                files[name.lower()] = None
+            else:
+                f = f"sounds/{n[0]}.wav"
+                n[0] += 1
+                (out_root / f).write_bytes(hit[0])
+                files[name.lower()] = f
+        return files[name.lower()]
+
+    allsound, hit = {}, eng.load(eng.dirs["gamedata"], "allsound", "TDF")
+    try:
+        for sec in tavfs.tdf_sections(hit[0]) if hit else []:
+            name = sec["_name"][:31].lower()
+            if name not in allsound and len(allsound) < 255:
+                allsound[name] = sec["keys"].get("sound", "")[:255]
+    except tavfs.TdfError:
+        pass
+    cats = {t["cat"] for t in types.values()}
+    doc = {"categories": len(table), "types": types,
+           "cats": {str(c): {"name": table[c]["name"],
+                             "kinds": {str(k): [wav(w) for w in table[c]["wav"][k]] for k in SND_WIKI_KINDS}}
+                    for c in sorted(cats) if 0 <= c < len(table)},
+           "named": {nm: wav(allsound.get(nm.lower())) for nm in SND_NAMES}}
+    doc["refused"] = refused
+    (out_root / "sounds.json").write_text(json.dumps(doc, indent=1) + "\n")
+    return doc
+
+
 def write_units(out, eng, entry, report, types):
     models, refused = {}, {}
     for name in types:
@@ -792,6 +927,8 @@ def write_units(out, eng, entry, report, types):
         label, root, hidden, uncached, facts = models[name]
         key = name.lower()
         rec = {"label": label, "files": {}, **facts, "faces": p["faces"], "flatMiss": p["flatMiss"]}
+        fbi = eng.open(eng.dirs["units"], name, "FBI")
+        rec["sound"] = unit_sound(eng, fbi_fields(fbi[0].decode("latin-1", "replace")))
         for owner, verts in p["owners"].items():
             f = f"units/{key}.{owner}.bin"
             (out / f).write_bytes(struct.pack(f"<{len(verts)}f", *verts))
@@ -2006,7 +2143,7 @@ def write_stages(eng, entries, stage_dir, out_root, palette, shdb, casting=None)
     (out_root / "shaders").mkdir(exist_ok=True)
     for name, src in tascene.extract_shaders(tascene.SHADER_SET).items():
         (out_root / "shaders" / name).write_text(src)
-    index, full = {}, {}
+    index, full, types = {}, {}, {}
     for entry in entries:
         dpath = stage_dir / f"{entry['id']}.json"
         desc = json.loads(dpath.read_text()) if dpath.exists() else None
@@ -2016,9 +2153,14 @@ def write_stages(eng, entries, stage_dir, out_root, palette, shdb, casting=None)
         index[entry["id"]] = {"scene": f"{entry['id']}/scene.json", "ground": scene["ground"]["ok"],
                               "units": sorted(scene["units"]["meshes"]), "refused": scene["units"]["refused"]}
         full[entry["id"]] = scene["report"]
+        for name, m in scene["units"]["meshes"].items():
+            types.setdefault(name, m["sound"])
         g = "ground ok" if scene["ground"]["ok"] else f"ground FALLS BACK: {scene['ground']['miss']}"
         print(f"  {entry['id']}: {g}; units {', '.join(sorted(scene['units']['meshes'])) or 'none'}"
               + (f"; refused {', '.join(scene['units']['refused'])}" if scene["units"]["refused"] else ""))
+    snd = write_sounds(eng, out_root, types)
+    print(f"  sounds: {len(snd['cats'])} categories, {len(list((out_root / 'sounds').glob('*.wav')))} WAVs"
+          + (f"; refused {', '.join(r['wav'] + ' (' + r['why'] + ')' for r in snd['refused'])}" if snd["refused"] else ""))
     return index, full
 
 
