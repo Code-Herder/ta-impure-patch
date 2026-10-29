@@ -13,10 +13,10 @@
      test, the colours. It runs after the engine has written the cursor rectangle, the altitude
      and bit 6 for this record, so the cursor site is the engine's (snapped by the resource
      module's before-observer when that applies).
-   - a stub at 0x4993BF, the mode != 1 branch of the click routing, takes the press and the
-     release.
-   - a before-observer on the handler's entry ends the gesture when a record is handled in any
-     other mode (handler_entry).
+   - the click routing's stub at 0x4993BF (tagpu_route.c) hands it the press and the release of
+     a mode-14 record (tagpu_place_button).
+   - the before-observer on the handler's entry (tagpu_route.c) ends the gesture when a record is
+     handled in any other mode (tagpu_place_entry).
 
    Everything here is game-thread state and UI: the simulation never reads it, and what a commit
    causes -- order nodes made and removed through the engine's own roots -- is engine state the
@@ -25,6 +25,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "tagpu_place.h"
+#include "tagpu_route.h"
 #include "tagpu_placegeo.h"
 #include "tagpu_engine.h"
 #include "tagpu_limits.h"
@@ -48,11 +49,7 @@
 #define M_GUICOL 0x0DCB      /* the GUI colour byte array, the build square's colours */
 
 #define VA_CURSOR      0x004197D0u
-#define VA_HANDLER     0x00499200u
 #define VA_SITE_CALL   0x004198C6u
-#define VA_ROUTE       0x004993BFu
-#define VA_ROUTE_CLICK 0x004993CBu
-#define VA_ROUTE_FRAME 0x004995B8u
 
 /* The caps. A commit makes at most PLACE_ORDER_BUDGET orders (sites x builders): the preview
    cuts the shape to what would be ordered. A builder's list stops growing at PLACE_LIST_CAP
@@ -76,16 +73,10 @@ typedef int (__stdcall* KeyDown)(int);
 typedef unsigned short (__stdcall* HoverUnit)(void);
 typedef void (__stdcall* Sound)(const char*, int);
 
-typedef struct {
-    char *ta, *defs, *units;
-    unsigned ndefs, nslots, first, last;
-    int player;
-} World;
-
 /* One evaluation's or one commit's view: the armed type, the site test's arguments and the
    builder set, held as slot indices. */
 typedef struct {
-    World w;
+    TagpuWorld w;
     const char* def;
     unsigned type;
     int fx, fz;
@@ -148,56 +139,6 @@ static unsigned s_depth;
 static unsigned s_cEval, s_cCommit, s_cIssued, s_cRemoved, s_cRed, s_cMismatch, s_cTrunc,
                 s_cListCap, s_cPlanCap;
 
-static int world(World* w)
-{
-    char *end, *player;
-    uintptr_t first, last, distance;
-    memset(w, 0, sizeof *w);
-    w->ta = *(char**)TA_MAIN_PP;
-    if (!w->ta) return 0;
-    w->player = *(unsigned char*)(w->ta + OFF_WATCHED);
-    if (w->player >= 10 || tagpu_puppet_seat(w->player)) return 0;
-    w->ndefs = *(unsigned*)(w->ta + OFF_UDEFCOUNT);
-    if (!w->ndefs || w->ndefs > TAGPU_LIM_TYPES) return 0;
-    w->defs = *(char**)(w->ta + D_BASE);
-    w->units = *(char**)(w->ta + OFF_UNIT_BEGIN);
-    end = *(char**)(w->ta + OFF_UNIT_END);
-    if (!w->defs || !w->units || (uintptr_t)end < (uintptr_t)w->units) return 0;
-    distance = (uintptr_t)end - (uintptr_t)w->units;
-    if (distance % UNIT_STRIDE || distance / UNIT_STRIDE >= TAGPU_PK_DESIGN_SLOTS) return 0;
-    w->nslots = *(unsigned short*)(w->ta + OFF_UNITSLOTS);
-    if (w->nslots != (unsigned)(distance / UNIT_STRIDE) + 1) return 0;
-    /* the player's block, validated against the array's own first and last slots */
-    player = w->ta + 0x1B63 + w->player * 0x14B;
-    first = (uintptr_t)*(char**)(player + 0x67); last = (uintptr_t)*(char**)(player + 0x6B);
-    if (first < (uintptr_t)w->units || last < first || last > (uintptr_t)end ||
-        (first - (uintptr_t)w->units) % UNIT_STRIDE ||
-        (last - (uintptr_t)w->units) % UNIT_STRIDE) return 0;
-    w->first = (unsigned)((first - (uintptr_t)w->units) / UNIT_STRIDE);
-    w->last = (unsigned)((last - (uintptr_t)w->units) / UNIT_STRIDE);
-    return 1;
-}
-
-/* an alive, not excluded unit at `slot`, or NULL */
-static char* unit(const World* w, unsigned slot)
-{
-    char* u;
-    unsigned flags;
-    if (!slot || slot >= w->nslots) return NULL;
-    u = w->units + slot * UNIT_STRIDE;
-    flags = *(unsigned*)(u + U_FLAGS);
-    return (flags & 0x10000000u) && !(flags & 0x4000u) ? u : NULL;
-}
-
-static unsigned def_id(const World* w, const char* u)
-{
-    uintptr_t d = (uintptr_t)*(char* const*)(u + U_TYPE), base = (uintptr_t)w->defs, offset;
-    if (d < base) return 0;
-    offset = d - base;
-    if (offset % D_STRIDE || offset / D_STRIDE >= w->ndefs) return 0;
-    return (unsigned)(offset / D_STRIDE);
-}
-
 static int footprint(const char* d, int* x, int* z)
 {
     *x = *(short*)(d + 0x14A); *z = *(short*)(d + 0x14C);
@@ -225,7 +166,7 @@ static unsigned cell_word(int cx, int cz)
 
 static int key_down(int id) { return ((KeyDown)0x004C1B80u)(id) != 0; }
 
-static int build_node(const World* w, const char* n)
+static int build_node(const TagpuWorld* w, const char* n)
 {
     const char* first = *(const char* const*)0x00512344u;
     const char* last = *(const char* const*)0x00512348u;
@@ -247,10 +188,10 @@ static int build_node(const World* w, const char* n)
    CANBUILD is not consulted: 0x419670 does not consult it either. */
 static unsigned char builder_action(const Ctx* c, unsigned slot)
 {
-    const char* u = unit(&c->w, slot);
+    const char* u = tagpu_route_unit(&c->w, slot);
     unsigned id, flags;
     if (!u || *(unsigned char*)(u + U_OWNER) != c->w.player ||
-        !(*(unsigned*)(u + U_FLAGS) & 0x10u) || !(id = def_id(&c->w, u))) return 0;
+        !(*(unsigned*)(u + U_FLAGS) & 0x10u) || !(id = tagpu_route_def_id(&c->w, u))) return 0;
     flags = *(unsigned*)(c->w.defs + id * D_STRIDE + D_FLAGS);
     if (!(flags & 0x40u)) return 0;
     return (flags & 0x800u) ? c->vtol : c->ground;
@@ -262,7 +203,7 @@ static unsigned char builder_action(const Ctx* c, unsigned slot)
 static char* live_builder(const Ctx* c, unsigned b)
 {
     unsigned char a = builder_action(c, c->slot[b]);
-    return a && a == c->action[b] ? unit(&c->w, c->slot[b]) : NULL;
+    return a && a == c->action[b] ? tagpu_route_unit(&c->w, c->slot[b]) : NULL;
 }
 
 /* The view of this record: mode 14, the armed type bounded by UNITINFOCount, its footprint,
@@ -272,7 +213,7 @@ static char* live_builder(const Ctx* c, unsigned b)
 static int context(Ctx* c, int builders)
 {
     unsigned i;
-    if (!world(&c->w) || *(unsigned char*)(c->w.ta + M_MODE) != 14) return 0;
+    if (!tagpu_route_world(&c->w) || *(unsigned char*)(c->w.ta + M_MODE) != 14) return 0;
     c->type = *(unsigned short*)(c->w.ta + M_TYPE);
     if (!c->type || c->type >= c->w.ndefs) return 0;
     c->def = c->w.defs + c->type * D_STRIDE;
@@ -300,7 +241,7 @@ static int snapshot(const Ctx* c)
     unsigned b;
     s_nplan = 0;
     for (b = 0; b < c->nb; b++) {
-        const char *u = unit(&c->w, c->slot[b]), *n;
+        const char *u = tagpu_route_unit(&c->w, c->slot[b]), *n;
         unsigned place;
         if (!u) continue;
         for (n = *(const char* const*)(u + U_ORDERS), place = 0; n && place < LIST_WALK;
@@ -400,10 +341,10 @@ static void take_offs(const Ctx* c, Site* s, unsigned n, int ring)
 static int ring_target(const Ctx* c, int* tx, int* tz, int* tw, int* th)
 {
     unsigned id = ((HoverUnit)0x0048CD80u)(), i;
-    const char* u = id ? unit(&c->w, id) : NULL;
+    const char* u = id ? tagpu_route_unit(&c->w, id) : NULL;
     int px, pz;
     if (u && *(const unsigned short*)(u + U_INDEX) == id) {
-        unsigned d = def_id(&c->w, u);
+        unsigned d = tagpu_route_def_id(&c->w, u);
         if (d && footprint(c->w.defs + d * D_STRIDE, tw, th)) {
             *tx = origin(*(const int*)(u + U_XFIX), *tw);
             *tz = origin(*(const int*)(u + U_YFIX), *th);
@@ -482,30 +423,6 @@ static unsigned budget(unsigned n, unsigned builders)
 }
 
 static void end_gesture(void) { s_gesture.active = 0; }
-
-/* The mouse object's current move record, six dwords at +0x196: the one an empty ring's peek and
-   pop hand IdleTick. The object is the static 0x51F320 WinMain gives 0x4B5990, so it lives as long
-   as the process; the window procedure writes the record on this thread (0x4C2360). */
-static void stale_move(int out[6])
-{
-    const char* mouse = *(const char* const*)0x0051FBD0u;
-    if (mouse) memcpy(out, mouse + 0x196, 6 * sizeof(int));
-    else memset(out, 0, 6 * sizeof(int));
-}
-
-/* THE SAME MOVE, WHEREVER IT NOW SAYS THE POINTER IS. Only the move arm's copy 0x4C2360 writes
-   dwords 2..5 of +0x196 (wParam, the clock, the message, the double-click flag). Its x and y
-   are rewritten without them, on this thread: by the three cursor polls from GetCursorPos
-   (0x4C24F2, 0x4C2624, 0x4C28C0), and by vpwide's repair of main+0x2C76 under zoom
-   (tagpu_vpwide.c). Zoomed, those disagree -- the move message carries the unzoomed position,
-   the poll the screen one -- so a copy taken at the press and IdleTick's copy a frame later
-   differ in x and y alone (MEASURED 2026-10-25 on the reference setup at about zoom 0.35:
-   1573,1382 at the press, 1841,1185 after, the same clock 0x85E53). A new move message
-   rewrites all six, the input reset 0x4B5A88 zeroes wParam; either differs here. */
-static int same_move(const int a[6], const int b[6])
-{
-    return !memcmp(a + 2, b + 2, 4 * sizeof(int));
-}
 
 /* The type's UnitName (def +0x20, 32 bytes inline, the FBI's own name such as ARMSOLAR):
    copied and NUL-checked inside the field, 0 when it has none. */
@@ -594,15 +511,15 @@ static void evaluate(void)
        its ring empty IdleTick copies the mouse object's current move record (+0x196, 0x4C2D73)
        to main+0x2C76, so every IdleTick between the press and the next move reads the move made
        BEFORE the press -- Shift alone in wParam (MEASURED 2026-10-25, the button held) -- and
-       that one must not end the gesture. It is the record the press saw (stale_move), its x and
-       y aside (same_move); only a later move rewrites the rest (0x4C2360, from the window
+       that one must not end the gesture. It is the record the press saw (tagpu_route_stale_move),
+       its x and y aside (tagpu_route_same_move); only a later move rewrites the rest (0x4C2360, from the window
        procedure's WM_MOUSEMOVE). Identity, not time: the records' clock ticks at 30 Hz (0x4B6340)
        and wraps short of 2^32. A move message in the press's own clock tick that repeats the
        stale one's wParam is not told apart: the gesture then outlives a release the handler never
        saw until the next move or press, which shows a preview and orders nothing -- an order
        needs a release this route takes, and a press ends the gesture first. */
     if (s_eval.rec[4] == WM_MOUSEMOVE && !(s_eval.rec[2] & MK_LBUTTON) &&
-        !same_move(s_eval.rec, s_gesture.stale)) end_gesture();
+        !tagpu_route_same_move(s_eval.rec, s_gesture.stale)) end_gesture();
     if (s_gesture.type != c.type) end_gesture();
     /* the engine's rectangle is already snapped: x0 = 16 * the site's first cell (0x419849) */
     s_eval.cur_cx = *(const int*)(c.w.ta + M_RECT) >> 4;
@@ -612,7 +529,7 @@ static void evaluate(void)
     /* Live keys, not the record's wParam: a modifier pressed without moving the mouse changes
        the shape at once. */
     shift = key_down(KEY_SHIFT); ctrl = key_down(KEY_CONTROL); alt = key_down(KEY_MENU);
-    /* Shift up: nothing previews -- a release now drops the gesture (place_button) -- but the
+    /* Shift up: nothing previews -- a release now drops the gesture (tagpu_place_button) -- but the
        gesture lives on, so that release is still consumed rather than placing on stock's path */
     if (!shift || (!ctrl && !s_gesture.active)) return;
     if (!context(&c, 1)) return;
@@ -795,9 +712,7 @@ static const char* current(void)
     return player < 10 && !tagpu_puppet_seat(player) ? ta : NULL;
 }
 
-/* The click routing's verdict for the record `rec` (the handler's stack copy) with message
-   `msg`: 0 stock, 1 consumed, 2 run stock's click on this record. */
-static int __cdecl place_button(const int* rec, unsigned msg)
+int tagpu_place_button(const int* rec, unsigned msg)
 {
     const char* ta = current();
     if (!ta) { end_gesture(); return 0; }
@@ -811,7 +726,7 @@ static int __cdecl place_button(const int* rec, unsigned msg)
             memcmp(s_eval.rec, rec, sizeof s_eval.rec)) return 0;
         s_gesture.active = 1; s_gesture.type = s_eval.type;
         s_gesture.cx = (int16_t)s_eval.cur_cx; s_gesture.cz = (int16_t)s_eval.cur_cz;
-        stale_move(s_gesture.stale);
+        tagpu_route_stale_move(s_gesture.stale);
         return 1;
     }
     if (msg != WM_LBUTTONUP || !s_gesture.active) return 0;
@@ -819,7 +734,7 @@ static int __cdecl place_button(const int* rec, unsigned msg)
     /* Shift released before the button: the gesture is dropped, the building stays armed --
        unless an earlier placement of this Shift hold set main+0x2CC6 bit 5, when 0x4992D8
        disarms at the first record that finds Shift up, as stock does; that record's handler
-       entry then ends the gesture (handler_entry) */
+       entry then ends the gesture (tagpu_place_entry) */
     if (!key_down(KEY_SHIFT)) return 1;
     /* one site at this release's own cursor: stock's Shift-click, byte for byte -- its toggle,
        its sound, its recorded click (0x4995B3), its 0x20 bit; 0x419670 reads its Shift from
@@ -921,73 +836,22 @@ void tagpu_place_level_end(void)
         s_cListCap = s_cPlanCap = 0;
 }
 
-/* THE IN-PLAY HANDLER'S ENTRY, 0x499200 (IdleTick's per-mode call at 0x499A1C, through
-   main+0x391F5): a record handled in any mode but 14 ends the gesture. In mode 1 the routing
-   skips the route (0x4993BD) and 0x4197D0 is not called, so neither of the other hooks sees a
-   disarm -- a right press (0x499100), Shift up after a Shift placement (0x4992D8), a group
-   recall (0x48D9A0 -> 0x495860) or the order check -- nor the release that follows it. Every
-   disarm is followed by this entry in mode 1 before any re-arm: arming again takes a left click
-   on the build menu, which cannot come while the gesture's own button is held, so the
-   gesture's release (or, over the panel, the next record) is handled in mode 1 first. A
-   before-observer: the handler runs unchanged. */
-static int __cdecl handler_entry(void* entry_esp)
+/* A record handled in any mode but 14 ends the gesture. In mode 1 the routing skips the route
+   (0x4993BD) and 0x4197D0 is not called, so neither of the other hooks sees a disarm -- a right
+   press (0x499100), Shift up after a Shift placement (0x4992D8), a group recall (0x48D9A0 ->
+   0x495860) or the order check -- nor the release that follows it. Every disarm is followed by
+   this entry in mode 1 before any re-arm: arming again takes a left click on the build menu,
+   which cannot come while the gesture's own button is held, so the gesture's release (or, over
+   the panel, the next record) is handled in mode 1 first. */
+void tagpu_place_entry(void)
 {
     const char* ta = *(const char* const*)TA_MAIN_PP;
-    (void)entry_esp;
     if (s_gesture.active && (!ta || *(const unsigned char*)(ta + M_MODE) != 14)) end_gesture();
-    return 0;
-}
-
-/* THE ROUTE AT 0x4993BF. The click routing's mode != 1 branch, DISASSEMBLED:
-       0x4993BF  81 FA 01 02 00 00   cmp edx,0x201        ; edx: the record's message
-       0x4993C5  0F 85 ED 01 00 00   jne 0x4995B8         ; the frame: anything but a press
-       0x4993CB  8D 4C 24 0C         lea ecx,[esp+0xc]    ; the handler's record copy
-       0x4993CF  51                  push ecx
-       0x4993D0  E9 DE 01 00 00      jmp 0x4995B3         ; call 0x498F70, the click
-   All 22 bytes are matched; the first 12 become `jmp stub` and seven NOPs. No branch in the
-   image lands on 0x4993C0..0x4993CA and no absolute reference names them (a scan of the
-   disassembly and of the file), so nothing enters the NOPs. The stub asks place_button and
-   takes one of three ways: 1, consumed, to the frame 0x4995B8; 2, stock's click on this record,
-   to 0x4993CB; 0, the two original instructions. pushad/popad keep every register; EFLAGS
-   differ on ways 1 and 2 only, and neither target reads a flag before writing one (0x4995B8 is
-   `call 0x496790`; 0x4993CB is `lea`, `push`, `jmp` to a call). Written at attach, before the
-   game thread can run the handler. */
-static int install_route(void)
-{
-    static const unsigned char want[22] = {
-        0x81,0xFA,0x01,0x02,0x00,0x00, 0x0F,0x85,0xED,0x01,0x00,0x00,
-        0x8D,0x4C,0x24,0x0C, 0x51, 0xE9,0xDE,0x01,0x00,0x00 };
-    unsigned char patch[12];
-    unsigned char *s, *p;
-    int32_t rel;
-    if (memcmp((const void*)(uintptr_t)VA_ROUTE, want, sizeof want)) return 0;
-    if (!(s = p = tagpu_detour_stub())) return 0;
-    *p++ = 0x60;                                            /* pushad                    */
-    *p++ = 0x8D; *p++ = 0x44; *p++ = 0x24; *p++ = 0x2C;     /* lea eax,[esp+0x2C]: the record, [esp+0xc] before pushad */
-    *p++ = 0x52;                                            /* push edx: the message     */
-    *p++ = 0x50;                                            /* push eax: the record      */
-    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(uintptr_t)place_button); p += 4;
-    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x08;                  /* add esp,8                 */
-    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x01;                  /* cmp eax,1                 */
-    *p++ = 0x61;                                            /* popad: the flags stand    */
-    *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, VA_ROUTE_FRAME); p += 4;  /* je: consumed   */
-    *p++ = 0x0F; *p++ = 0x87; tagpu_detour_rel(p, VA_ROUTE_CLICK); p += 4;  /* ja: the click  */
-    memcpy(p, want, 6); p += 6;                             /* cmp edx,0x201             */
-    *p++ = 0x0F; *p++ = 0x85; tagpu_detour_rel(p, VA_ROUTE_FRAME); p += 4;  /* jne           */
-    *p++ = 0xE9; tagpu_detour_rel(p, VA_ROUTE_CLICK);                       /* jmp           */
-    rel = (int32_t)((unsigned)(uintptr_t)s - (VA_ROUTE + 5));
-    patch[0] = 0xE9;
-    memcpy(patch + 1, &rel, 4);
-    memset(patch + 5, 0x90, sizeof patch - 5);
-    if (!tagpu_detour_write(VA_ROUTE, patch, sizeof patch)) { tagpu_detour_stub_free(s); return 0; }
-    return 1;
 }
 
 void tagpu_place_init(void)
 {
     static const unsigned char build[] = {0x83,0xEC,0x14,0x8B,0x15,0xE8,0x1D,0x51,0x00};
-    /* mov eax,[0x511DE8]; sub esp,0x18 */
-    static const unsigned char handler[] = {0xA1,0xE8,0x1D,0x51,0x00,0x83,0xEC,0x18};
     const unsigned char* call = (const unsigned char*)(uintptr_t)VA_SITE_CALL;
     if (call[0] != 0xE8) {
         tagpu_logf("place: the build cursor's site test (0x4198C6) is not a call; not armed");
@@ -998,14 +862,10 @@ void tagpu_place_init(void)
         tagpu_logf("place: incompatible build cursor (0x4197D0); not armed");
         return;
     }
-    /* the route first: until s_armed is set, place_button answers stock */
-    if (!install_route()) {
-        tagpu_logf("place: incompatible click routing (0x4993BF); not armed");
-        return;
-    }
-    if (!tagpu_detour_bytes_ok(VA_HANDLER, handler, sizeof handler) ||
-        !tagpu_detour_observe(VA_HANDLER, handler, sizeof handler, handler_entry, NULL)) {
-        tagpu_logf("place: observer on the in-play handler (0x499200) refused; not armed");
+    /* until s_armed is set, tagpu_place_button answers stock */
+    if (!tagpu_route_ok(TAGPU_ROUTE_STUB | TAGPU_ROUTE_ENTRY)) {
+        tagpu_logf("place: the click route (0x4993BF) or the handler's entry (0x499200) is not "
+                   "installed; not armed");
         return;
     }
     if (!tagpu_detour_observe(VA_CURSOR, build, sizeof build, cursor_before, cursor_after)) {

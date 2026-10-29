@@ -20,6 +20,7 @@
 #include "dd.h"
 #include "tagpu_opt.h"
 #include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
+#include "tagpu_gui.h"
 #include "tagpu_zoom.h"
 #include "tagpu_menu.h"
 #include "tagpu_detour.h"
@@ -1731,6 +1732,7 @@ void tagpu_zoom_frame_end(void)
     rec.follow_seen   = s_followSeen;
     tagpu_input_cmd(&rec);
     tagpu_hudstate_cmd(&rec.hud);
+    tagpu_gui_sweep_cmd(&rec.sweep);
     tagpu_wikistate_cmd(&rec.wiki);
     tagpu_cmd_post(&rec);
 }

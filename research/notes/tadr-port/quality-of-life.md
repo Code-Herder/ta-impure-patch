@@ -403,8 +403,11 @@ examined together rather than inferring absence from module names:
   do not implement the preview-key reader.
 - `tagpu_order.c` draws stock SHIFT orders/ranges/queued ghosts; `tagpu_resource.c` implements
   manual mex/geo snapping and contextual Quick Build; `tagpu_place.c` (2026-10-25) lays lines,
-  rectangles and rings ([What Impure does](#what-impure-does)). Reclaim snapping, dragging, build
-  spacing, blocker kickout and other construction behavior controls remain unimplemented.
+  rectangles and rings ([What Impure does](#what-impure-does)); `tagpu_sweep.c` (2026-10-28) is an
+  area reclaim by kind — with RECLAIM armed a dragged ring orders the selected reclaimers to take
+  its wrecks, trees or both, split nearest-first ([gpu-status §2.110](../gpu-status.md)). Build spacing is
+  `placespacing=` (Alt+Z / Alt+X). Reclaim snapping, blocker kickout and other construction
+  behavior controls remain unimplemented.
 - `tagpu_mark.c` draws health/group markers, without reload bars or stockpile/transport counters.
   Team-coloured models and ghosts are separate from construction/reclaim effect colouring.
 - `tagpu_menu.c` exposes renderer/display and resource settings, without the other listed TADR options/panels.

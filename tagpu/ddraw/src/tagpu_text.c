@@ -292,6 +292,14 @@ int tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff)
     return 1;
 }
 
+int tagpu_text_width(const char* s)
+{
+    char draw[STRMAX];
+    int w = 0, h = 0;
+    if (!s || !*s || !measure(s, draw, sizeof draw, &w, &h)) return 0;
+    return w;
+}
+
 /* The atlas as bytes, for a backend to upload. Render thread, exactly like
    every other entry point here. */
 const unsigned char* tagpu_text_atlas(unsigned* gen)

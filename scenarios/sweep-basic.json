@@ -1,0 +1,194 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The reclaim sweep (tools/sweep_regression.py): ARMCOM and two ARMCK on Two Continents beside six armcs_dead wrecks and eight Tree1 trees (the map's own tree type), interleaved, every one within 250 world units of a builder and at least 55 from the next, so the builders' sight maps them within seconds. Both commanders are listed, so the seats keep their storage under clear_existing. What a ring holds is read from the engine's feature grid, so a native feature near the scene joins the expectation rather than failing it.",
+ "seed": 20261026,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": {
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0,
+    "metal": 5000,
+    "energy": 5000
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "com",
+   "type": "ARMCOM",
+   "owner": 0,
+   "pos": [
+    1000,
+    1200
+   ]
+  },
+  {
+   "id": "ck",
+   "type": "ARMCK",
+   "owner": 0,
+   "pos": [
+    1150,
+    1250
+   ]
+  },
+  {
+   "id": "ck2",
+   "type": "ARMCK",
+   "owner": 0,
+   "pos": [
+    1150,
+    1330
+   ]
+  },
+  {
+   "id": "keep",
+   "type": "CORCOM",
+   "owner": 1,
+   "pos": [
+    9000,
+    9000
+   ]
+  }
+ ],
+ "features": [
+  {
+   "id": "w0",
+   "type": "armcs_dead",
+   "pos": [
+    1300,
+    1250
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w1",
+   "type": "armcs_dead",
+   "pos": [
+    1380,
+    1300
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w2",
+   "type": "armcs_dead",
+   "pos": [
+    1340,
+    1180
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w3",
+   "type": "armcs_dead",
+   "pos": [
+    1300,
+    1400
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w4",
+   "type": "armcs_dead",
+   "pos": [
+    1000,
+    1450
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w5",
+   "type": "armcs_dead",
+   "pos": [
+    1080,
+    1500
+   ],
+   "facing": 0
+  },
+  {
+   "id": "t0",
+   "type": "Tree1",
+   "pos": [
+    1220,
+    1170
+   ]
+  },
+  {
+   "id": "t1",
+   "type": "Tree1",
+   "pos": [
+    1260,
+    1330
+   ]
+  },
+  {
+   "id": "t2",
+   "type": "Tree1",
+   "pos": [
+    1240,
+    1230
+   ]
+  },
+  {
+   "id": "t3",
+   "type": "Tree1",
+   "pos": [
+    1370,
+    1390
+   ]
+  },
+  {
+   "id": "t4",
+   "type": "Tree1",
+   "pos": [
+    1200,
+    1450
+   ]
+  },
+  {
+   "id": "t5",
+   "type": "Tree1",
+   "pos": [
+    1040,
+    1390
+   ]
+  },
+  {
+   "id": "t6",
+   "type": "Tree1",
+   "pos": [
+    1150,
+    1480
+   ]
+  },
+  {
+   "id": "t7",
+   "type": "Tree1",
+   "pos": [
+    950,
+    1320
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   1200,
+   1330
+  ]
+ }
+}

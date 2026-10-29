@@ -18,6 +18,13 @@ typedef struct TAGPU_FXVIEW {
                                     here; valid for this frame only, never cached */
     int eyeX, eyeY, vpL, vpT;    /* the PREDICTED eye and the true viewport, from the packet */
     int gw, gh, ss;
+    /* THE COMPOSITE'S SCALE: `devPx` device px a game px, vp_w / gw, and
+       `devres` 1 when the composite reads the ss target itself (tagpu_native.c,
+       "the world at the device's resolution") rather than its resolve to the
+       game resolution. A width that belongs to the device -- the reclaim
+       sweep's strokes -- is converted through these. */
+    float devPx;
+    int   devres;
     int mirror;                  /* the map edge: 1 mirror, 0 black (this frame) */
     float zoom, zoomCx, zoomCy;  /* the native pass's view zoom                */
     /* THE EFFECTS BAND'S SEQUENCE (tagpu_fx.c, "the effects band"): model k
