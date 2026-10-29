@@ -1175,6 +1175,30 @@ const SOUND_RULES = {
     const v = s.view();
     return `${v.sound.total} events: ${names(v)}`;
   },
+  /* MobileBuild's first failure of its site test says cant once an order ("Waiting for target area to clear",
+     0x403CDF), and a build order says no ok (MobileBuild never calls 0x438880): the Peewee stands on the site, the
+     constructor says cant once while it steps off, then builds */
+  'a builder whose site a unit stands on says cant once, no ok, and builds once it is clear'(entry) {
+    const snd = soundSource(GFX_PACKS());
+    if (!Object.keys(sounds(GFX_PACKS())).length) return 'no gfx pack: no sound source';
+    const s = WikiSim.create(entry, { scene: { selected: [] } }, FIXTURE, { ...T1, snd });
+    click(s, [304, 176], 'lmb');                                   // select ck
+    for (let i = 0; i < 40; i++) s.step();
+    s.input({ build: 'ARMMEX' });
+    click(s, [256, 176], 'lmb');                                   // on the Peewee
+    let cant = 0, ok = 0, seen = 0;
+    for (let i = 0; i < 600; i++) {
+      s.step();
+      const v = s.view();
+      for (const [, k] of v.sound.events.slice(Math.max(0, v.sound.events.length - (v.sound.total - seen)))) {
+        if (k === 7) cant++;
+        if (k === 5) ok++;
+      }
+      seen = v.sound.total;
+    }
+    const built = s.view().units.some(u => u.type === 'ARMMEX' && u.built > 0 && u.id !== 'mex');
+    return cant === 1 && ok === 0 && built;
+  },
 };
 export const ENTRY_RULES = { quickbuild: { ...RULES, ...SIDE_RULES, ...CTX_RULES, ...SOUND_RULES }, buildshapes: { ...BUILDSHAPES_RULES, ...CTX_SHAPES_RULES } };
 

@@ -2706,12 +2706,51 @@ static void sound_tick(WIKISIM* s)
     s->snd_next[e.kind] = s->now + 30 * SND_INTERVAL[e.kind];
 }
 
-/* an order's first run says ok (0x438880 at its handler's start), unless the scene gave it */
+/* an order's first run says ok (0x438880 at its handler's start, the one kind-5 push, 0x438899),
+   unless the scene gave it; a build order's never does: MobileBuild, 0x403A20..0x403F6F, does not
+   call 0x438880 */
 static void begin(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* o)
 {
     if (o->serial == u->begun) return;
     u->begun = o->serial;
-    if (o->serial > s->scene_serial) notice(s, u, WIKI_SND_OK);
+    if (o->serial > s->scene_serial && o->k != WIKI_ORDER_BUILD) notice(s, u, WIKI_SND_OK);
+}
+
+/* u's first order has said cant for its taken site */
+static int cant_said(const WIKIUNIT* u)
+{
+    return u->norder && u->cant == u->order[0].serial;
+}
+
+/* the cell a footprint `f` cells wide stands on at world coordinate `p`, rounded as the engine
+   rounds both the unit's (+0x76/+0x78, 0x48AA00..0x48AA32) and a move's goal (0x44CF60):
+   (P - (f << 19) + 0x80000) >> 20 on 16.16 fixed point */
+static int foot_cell(double p, int f)
+{
+    return (int)floor((p - f * (CELL / 2) + CELL / 2) / CELL);
+}
+
+/* the engine's arrival for a move: its goal test 0x44D310 passes when the unit's footprint cell is
+   within ((order+0x36 + 4) >> 4) cells of the goal's (0x44CF60's radius, from Move_Ground
+   0x403232..0x40323F); a click's move carries +0x36 = 0 (0x4991E2 pushes type 0 through 0x48CF30
+   and 0x43AFC0, which 0x43A116 stores there), so the radius is 0: the goal's own cell */
+static int in_goal_cell(const WIKISIM* s, const WIKIUNIT* u, double x, double z)
+{
+    return foot_cell(u->x, fpx(s, u->type)) == foot_cell(x, fpx(s, u->type)) &&
+           foot_cell(u->z, fpz(s, u->type)) == foot_cell(z, fpz(s, u->type));
+}
+
+/* MobileBuild's reach when the builder's move gave up (event 0x40, 0x403B63..0x403C39): the
+   whole world units between it and the site's centre, less trunc(8 x its footprint's diagonal)
+   and trunc(8 x the site's), beyond its BuildDistance (def+0x212) */
+static int out_of_reach(const WIKISIM* s, const WIKIUNIT* u, int t, int ox, int oz)
+{
+    const XZ c = centre(s, t, ox, oz);
+    const double dx = u->x - c.x, dz = u->z - c.z;
+    const double uf = sqrt((double)fpx(s, u->type) * fpx(s, u->type) + (double)fpz(s, u->type) * fpz(s, u->type));
+    const double sf = sqrt((double)fpx(s, t) * fpx(s, t) + (double)fpz(s, t) * fpz(s, t));
+    const double d = floor(sqrt(dx * dx + dz * dz)) - trunc(8.0 * uf) + trunc(-8.0 * sf);
+    return d > def(s, u->type)->build_distance;
 }
 
 static void advance(WIKISIM* s)
@@ -2736,21 +2775,28 @@ static void advance(WIKISIM* s)
         WIKIUNIT* u = s->unit[i];
         WIKIUNIT* st;
         WIKIORDER* o;
+        int r;
         if (!mobile(s, u->type)) continue;
+        o = u->norder ? &u->order[0] : NULL;
+        /* the order's handler runs wherever the unit stands, so its ok comes before any step off
+           a claim */
+        if (o) begin(s, u, o);
         if (evacuate(s, u)) {
             u->evacuated = 1;
             continue;
         }
-        o = u->norder ? &u->order[0] : NULL;
         if (!o || o->k == WIKI_ORDER_GUARD) continue;
-        begin(s, u, o);
         if (o->k == WIKI_ORDER_MOVE) {
             const TARGET t = to_point(o, o->x, o->z);
-            const int r = go(s, u, &t);
-            if (r == GO_ARRIVED || r == GO_STUCK) shift_order(u);
-            /* a stuck move ends without arriving: the engine says arrived only where its move
-               reaches the goal (Move_Ground 0x4031FB, 0x4032C2; 0x40FA53) */
-            if (r == GO_ARRIVED) notice(s, u, WIKI_SND_ARRIVED);
+            int arrived;
+            r = go(s, u, &t);
+            if (r != GO_ARRIVED && r != GO_STUCK) continue;
+            /* Move_Ground says arrived on its goal test's event 0x20 alone (0x4031EB..0x4031FB); a
+               give-up (0x40) ends the order silent. A stuck move ends where the engine's mover
+               would give up, unless it already stands in the goal's cell */
+            arrived = r == GO_ARRIVED || in_goal_cell(s, u, o->x, o->z);
+            shift_order(u);
+            if (arrived) notice(s, u, WIKI_SND_ARRIVED);
             continue;
         }
         if (o->k == WIKI_ORDER_RECLAIM) {
@@ -2760,9 +2806,20 @@ static void advance(WIKISIM* s)
         }
         st = structure_at(s, o->type, o->ox, o->oz);
         if (st && st->built >= 1) { shift_order(u); continue; }
-        if (!reach(s, o, u, o->type, o->ox, o->oz)) continue;
+        {
+            const TARGET g = to_site(s, o, u, rect_of(s, o->type, o->ox, o->oz));
+            r = go(s, u, &g);
+        }
+        if (r == GO_STUCK && out_of_reach(s, u, o->type, o->ox, o->oz)) {
+            /* "I can't reach the construction site" (0x403C45) ends the order; a give-up within
+               reach goes on to the site as an arrival does (0x403C59) */
+            shift_order(u);
+            notice(s, u, WIKI_SND_CANT);
+            continue;
+        }
+        if (r != GO_ARRIVED && r != GO_STUCK) continue;
         if (!st) {
-            const WIKIRECT r = rect_of(s, o->type, o->ox, o->oz);
+            const WIKIRECT rect = rect_of(s, o->type, o->ox, o->oz);
             int k, taken = 0;
             if (!site_ok(s, o->type, o->ox, o->oz, NULL)) {
                 shift_order(u);
@@ -2770,10 +2827,18 @@ static void advance(WIKISIM* s)
                 continue;
             }
             /* the site waits until no unit stands on it; those that do step off it, its claim
-               (evacuate) */
+               (evacuate). MobileBuild's site test (0x47DB70 at 0x403CC7) fails on an occupied
+               cell, and its first failure an order says cant ("Waiting for target area to
+               clear", 0x403CDF) */
             for (k = 0; k < s->nunit && !taken; k++)
-                taken = mobile(s, s->unit[k]->type) && hits(body(s, s->unit[k]), r);
-            if (taken) continue;
+                taken = mobile(s, s->unit[k]->type) && hits(body(s, s->unit[k]), rect);
+            if (taken) {
+                if (u->cant != o->serial) {
+                    u->cant = o->serial;
+                    notice(s, u, WIKI_SND_CANT);
+                }
+                continue;
+            }
             if (!(st = new_unit(s, o->type, u->owner, 0, NULL, NULL))) continue;
             place(s, st, o->ox, o->oz);
             notice(s, u, WIKI_SND_BUILD);
@@ -2785,7 +2850,6 @@ static void advance(WIKISIM* s)
         WIKIUNIT* g;
         WIKIORDER* o = u->norder ? &u->order[0] : NULL;
         if (!o || o->k != WIKI_ORDER_GUARD || u->evacuated) continue;
-        begin(s, u, o);
         if (!(g = by_id(s, o->target))) { shift_order(u); continue; }
         if (g->job) {
             WIKIUNIT* j = g->job;
@@ -3077,6 +3141,7 @@ const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s)
             w->built = u->built;
             w->reclaimed = u->reclaimed;
             w->label = u->label;
+            w->cant = cant_said(u);
         }
     v->unit = s->vunit;
 
@@ -3389,6 +3454,7 @@ uint64_t tagpu_wikisim_hash(const WIKISIM* s)
             fnv_int(&h, e->cat);
             fnv_int(&h, e->variant);
         }
+        for (i = 0; i < s->nunit; i++) fnv_int(&h, cant_said(s->unit[i]));
     }
     return h;
 }

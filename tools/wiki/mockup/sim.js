@@ -498,12 +498,33 @@ const WikiSim = (() => {
       soundEvent(e.kind, -1, SNDT.get(e.type).cat, Math.trunc(sndDraw(e.unit, e.kind, now) * count / 0x8000));
       sndNext[e.kind] = now + 30 * SND_INTERVAL[e.kind];
     }
-    // an order's first run says ok (0x438880 at its handler's start), unless the scene gave it
+    // an order's first run says ok (0x438880 at its handler's start, the one kind-5 push, 0x438899), unless the scene
+    // gave it; a build order's never does: MobileBuild, 0x403A20..0x403F6F, does not call 0x438880
     function begin(u, o) {
       if (o === u.begun) return;
       u.begun = o;
-      if (!sceneOrders.has(o)) notice(u, SND.ok);
+      if (!sceneOrders.has(o) && o.k !== 'build') notice(u, SND.ok);
     }
+    // the cell a footprint f cells wide stands on at world coordinate p, rounded as the engine rounds both the unit's
+    // (+0x76/+0x78, 0x48AA00..0x48AA32) and a move's goal (0x44CF60): (P - (f << 19) + 0x80000) >> 20 on 16.16 fixed point
+    const footCell = (p, f) => Math.floor((p - f * (CELL / 2) + CELL / 2) / CELL);
+    /* the engine's arrival for a move: its goal test 0x44D310 passes when the unit's footprint cell is within
+       ((order+0x36 + 4) >> 4) cells of the goal's (0x44CF60's radius, from Move_Ground 0x403232..0x40323F); a click's
+       move carries +0x36 = 0 (0x4991E2 pushes type 0 through 0x48CF30 and 0x43AFC0, which 0x43A116 stores there), so the
+       radius is 0: the goal's own cell */
+    const inGoalCell = (u, x, z) => {
+      const [fx, fz] = fp(u.type);
+      return footCell(u.x, fx) === footCell(x, fx) && footCell(u.z, fz) === footCell(z, fz);
+    };
+    /* MobileBuild's reach when the builder's move gave up (event 0x40, 0x403B63..0x403C39): the whole world units
+       between it and the site's centre, less trunc(8 x its footprint's diagonal) and trunc(8 x the site's), beyond its
+       BuildDistance (def+0x212) */
+    const outOfReach = (u, t, ox, oz) => {
+      const c = centre(t, ox, oz), dx = u.x - c.x, dz = u.z - c.z;
+      const [ufx, ufz] = fp(u.type), [sfx, sfz] = fp(t);
+      const uf = Math.sqrt(ufx * ufx + ufz * ufz), sf = Math.sqrt(sfx * sfx + sfz * sfz);
+      return Math.floor(Math.sqrt(dx * dx + dz * dz)) - Math.trunc(8 * uf) + Math.trunc(-8 * sf) > def(u.type).buildDistance;
+    };
 
     /* ---- units. Each faces along a unit vector (hx, hz); walk says why a vector. ---- */
     // built: the buildings of the player's finished so far; builtWaits: the "built" waits begun
@@ -1802,16 +1823,20 @@ const WikiSim = (() => {
       nemit = 0;
       for (const u of units) {
         if (!mobile(u.type)) continue;
-        if (evacuate(u)) { u.evacuated = true; continue; }
         const o = u.orders[0];
+        // the order's handler runs wherever the unit stands, so its ok comes before any step off a claim
+        if (o) begin(u, o);
+        if (evacuate(u)) { u.evacuated = true; continue; }
         if (!o || o.k === 'guard') continue;
-        begin(u, o);
         if (o.k === 'move') {
           const r = go(u, toPoint(o, o.x, o.z));
-          if (r === ARRIVED || r === STUCK) u.orders.shift();
-          // a stuck move ends without arriving: the engine says arrived only where its move reaches the goal
-          // (Move_Ground 0x4031FB, 0x4032C2; 0x40FA53)
-          if (r === ARRIVED) notice(u, SND.arrived);
+          if (r !== ARRIVED && r !== STUCK) continue;
+          // Move_Ground says arrived on its goal test's event 0x20 alone (0x4031EB..0x4031FB); a give-up (0x40) ends the
+          // order silent. A stuck move ends where the engine's mover would give up, unless it already stands in the
+          // goal's cell
+          const arrived = r === ARRIVED || inGoalCell(u, o.x, o.z);
+          u.orders.shift();
+          if (arrived) notice(u, SND.arrived);
           continue;
         }
         if (o.k === 'reclaim') {
@@ -1822,12 +1847,25 @@ const WikiSim = (() => {
         }
         let s = structureAt(o.type, o.ox, o.oz);
         if (s && s.built >= 1) { u.orders.shift(); continue; }
-        if (!reach(o, u, o.type, o.ox, o.oz)) continue;
+        const r = go(u, toSite(o, u, rectOf(o.type, o.ox, o.oz)));
+        if (r === STUCK && outOfReach(u, o.type, o.ox, o.oz)) {
+          // "I can't reach the construction site" (0x403C45) ends the order; a give-up within reach goes on to the site
+          // as an arrival does (0x403C59)
+          u.orders.shift();
+          notice(u, SND.cant);
+          continue;
+        }
+        if (r !== ARRIVED && r !== STUCK) continue;
         if (!s) {
           if (!siteOk(o.type, o.ox, o.oz, null)) { u.orders.shift(); notice(u, SND.cant); log('refused', u, o.type); continue; }
-          // the site waits until no unit stands on it; those that do step off it, its claim (evacuate)
-          const r = rectOf(o.type, o.ox, o.oz);
-          if (units.some(v => mobile(v.type) && hits(body(v), r))) continue;
+          /* the site waits until no unit stands on it; those that do step off it, its claim (evacuate). MobileBuild's
+             site test (0x47DB70 at 0x403CC7) fails on an occupied cell, and its first failure an order says cant
+             ("Waiting for target area to clear", 0x403CDF) */
+          const rect = rectOf(o.type, o.ox, o.oz);
+          if (units.some(v => mobile(v.type) && hits(body(v), rect))) {
+            if (u.cant !== o) { u.cant = o; notice(u, SND.cant); }
+            continue;
+          }
           s = place({ id: `u${nextId++}`, type: o.type, owner: u.owner, built: 0, reclaimed: 0, orders: [], sel: false, label: o.type }, o.ox, o.oz);
           notice(u, SND.build);
           log('started', s);
@@ -1837,7 +1875,6 @@ const WikiSim = (() => {
       for (const u of units) {
         const o = u.orders[0];
         if (!o || o.k !== 'guard' || u.evacuated) continue;
-        begin(u, o);
         const g = byId(o.target);
         if (!g) { u.orders.shift(); continue; }
         const j = jobs.get(g);
@@ -2061,12 +2098,14 @@ const WikiSim = (() => {
         // the second bursts waiting, in the order made, each [its two boxes' twelve words, due, key]
         bursts: bursts.map(e => [...e.box[0], ...e.box[1], e.due, e.key]),
         /* the sound, null without a source: each kind's next time, the last reply's time, the queue (each [kind, tick,
-           unit id, type, priority], highest priority first), the events made, and the last min(total, SND_LOG) events
-           oldest first, each [tick, kind, name, category, variant] (tagpu_wikisim.h, WIKISNDEV) */
+           unit id, type, priority], highest priority first), the events made, the last min(total, SND_LOG) events
+           oldest first, each [tick, kind, name, category, variant] (tagpu_wikisim.h, WIKISNDEV), and each unit's 1 when
+           its first order's taken site has said cant */
         sound: SNDT ? {
           next: sndNext.slice(), last: sndLast, queue: sndQ.map(e => [e.kind, e.tick, e.unit, e.type, e.priority]),
           total: sndTotal, events: Array.from({ length: Math.min(sndTotal, SND_LOG) },
             (_, i) => sndRing[(sndTotal - Math.min(sndTotal, SND_LOG) + i) % SND_LOG].slice()),
+          cant: units.map(u => u.orders[0] && u.cant === u.orders[0] ? 1 : 0),
         } : null,
       };
     };

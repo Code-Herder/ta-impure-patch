@@ -502,9 +502,15 @@ settings*.
   counting any it lost.
 - **The triggers**, each the engine's (the engine map lists the sites): select (kind 1) when a
   click leaves its unit selected or a box takes exactly one, `SelectMultipleUnits` when a box
-  takes more; ok (5) at an order's first run, never for the scene's own orders; arrived (6) when a
-  move reaches its place (one that ends stuck says nothing); cant (7) when a builder in range finds its site refused; build (9) when a builder
-  places a nanoframe; unitcomplete (8) for each builder whose build finished this tick; working
+  takes more; ok (5) at an order's first run, wherever the unit stands, before it steps off a
+  claim, never for the scene's own orders and never for a build order (MobileBuild does not call
+  `0x438880`); arrived (6) when a move ends in the goal's footprint cell, the engine's goal test
+  (`0x44D310` with a click move's radius 0): on arrival, or stuck in that cell, and a move stuck
+  elsewhere says nothing, as Move_Ground's give-up; cant (7) when a builder in range finds its site
+  refused, once an order when it finds its site taken ("Waiting for target area to clear"), and
+  when its move gave up beyond BuildDistance by MobileBuild's measure ("I can't reach the
+  construction site", the order then dropped; a give-up within it goes on to the site); build (9)
+  when a builder places a nanoframe; unitcomplete (8) for each builder whose build finished this tick; working
   (11) when a reclaim first makes progress on an order; activate (3) and deactivate (4) when a
   scripted unit's ACTIVATION changes. A scene's units say nothing while it is laid out
   (`snd_quiet`).
@@ -548,11 +554,11 @@ settings*.
   failed `GetStatus` plays nothing (`0x4CF5F8`), and with every voice busy the one with the largest
   play cursor restarts; where the engine duplicates at a busy set's first overlap the voice is
   already made, and reaching one the make could not duplicate, every voice before it busy, plays
-  nothing, as the engine's failed duplicate does (`0x4CF66D`). Duplicating on the game thread cost the page's frame up to 8.1 ms under
-  Wine; with every voice made off it the worst frame is 1.1 ms and the slowest DirectSound call
-  2 µs (MEASURED 2026-10-28, the demos' check with sound playing; that the duplicate was the cost
-  is [INFERRED]: the first run timed no call). Each demo's log line names its slowest call. The wiki's close stops
-  every voice (`tagpu_wikisound_stop`), which the level's teardown does first
+  nothing, as the engine's failed duplicate does (`0x4CF66D`). Duplicating on the game thread cost
+  the page's frame up to 8.1 ms under Wine; with every voice made off it the worst frame is 1.1 ms
+  and the slowest DirectSound call 2 µs (MEASURED 2026-10-28, the demos' check with sound playing;
+  that the duplicate was the cost is [INFERRED]: the first run timed no call). Each demo's log line
+  names its slowest call. The wiki's close stops every voice (`tagpu_wikisound_stop`), which the level's teardown does first
   (`tagpu_wiki_level_end`, from the teardown wrap's entry to `0x491B60`). It logs the create's
   result once with the buffers made, each clip refused, and per demo the Play calls that
   succeeded, failed, or were left silent by the settings, no object or a missing WAV, and any
@@ -785,8 +791,11 @@ L4b starts when the wiki shows a unit that emits.
   starts at 0 (`0x47EE30`), which would silence every demo's first second.
 - **cant fires once.** The wiki drops a refused build at once and says cant once; MobileBuild says
   it at the first failure, retries every 30 ticks and says it again past ten failures
-  (`0x403CDF`, `0x403D10`). A site a unit stands on waits for it to step off without a word,
-  where MobileBuild's first failure says cant, "Waiting for target area to clear" (`0x403CD0`).
+  (`0x403CDF`, `0x403D10`). A taken site says cant once an order, as the engine's first failure,
+  but the wiki tries it again every tick while its units step off and never gives up, where
+  MobileBuild tries every 30 ticks and drops the order at the twelfth failure with "Target area was
+  blocked" (`0x403D03..0x403D10`): a 30-tick retry would hold every taken-site start up to 29 ticks
+  past the movement's step-off, which the demos' timelines are not cut for.
 - **256 variants of one kind of one category are read** (`SND_KEYVARS`), 4096 over all; the
   simulation draws among all of the category's variants, so one past the bound plays silent.
 - **TA Zero's `hovsmof1` has no file**: its category names a WAV no source holds, so that variant

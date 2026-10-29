@@ -135,6 +135,7 @@ function stateHash(sim, v) {
     for (const [kind, tick, unit, type, prio] of d.queue) { int(kind); int(tick); str(unit); str(type); int(prio); }
     int(d.total);
     for (const e of d.events) for (const w of e) int(w);
+    for (const c of d.cant) int(c);
   }
   return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0');
 }

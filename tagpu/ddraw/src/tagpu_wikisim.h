@@ -280,9 +280,9 @@ typedef struct WIKIUNIT {
     double           spray_x, spray_z;
     char             spray_id[WIKI_ID_MAX], spray_on[WIKI_ID_MAX];
     /* the sound's triggers: the serial of the order whose first run said ok (0 none), of the order
-       whose reclaim said working, whether the job credited this tick was a build that finished,
-       and ACTIVATION as the last notice saw it */
-    int              begun, said, completed, active;
+       whose reclaim said working, of the order whose taken site said cant, whether the job
+       credited this tick was a build that finished, and ACTIVATION as the last notice saw it */
+    int              begun, said, cant, completed, active;
 } WIKIUNIT;
 
 /* a body another unit's step must not newly overlap: a unit's, or a claim's (u NULL) */
@@ -322,6 +322,7 @@ typedef struct {
     int         type, owner, fx, fz, selected;
     double      x, z, hx, hz, built, reclaimed;
     const char* label;
+    int         cant;   /* its first order's taken site has said cant (sim.js's sound.cant) */
 } WIKIVUNIT;
 
 /* a ghost, a queued site or a gesture's site: a building's centre and footprint */
@@ -661,7 +662,8 @@ int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
         time, the last reply's time, the queue's count and each entry's kind, tick, unit id, type
         name and priority, then the events made since the sim was made (a count) and the last
         min(that count, WIKI_SND_LOG) of them, oldest first, each one's tick, kind, name, category
-        and variant; or 0 alone without a source.
+        and variant, then each unit's 1 when its first order's taken site has said cant, else 0, in
+        the view's order; or 0 alone without a source.
    The view's other fields follow from these: queued sites and order lines from the units and
    their orders, the cursor's shape from the mode and the selection, a site's order number from
    the states, footprints from the types, the pace from the entry. The tick the cursor's shape

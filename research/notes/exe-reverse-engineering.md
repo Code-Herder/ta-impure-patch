@@ -15978,11 +15978,39 @@ select, ok and `0x48B090`'s):
 - select, kind 1: the box `0x48C668` when exactly one unit was taken (`ebp == 1`, `0x48C65A`),
   else `SelectMultipleUnits` (`0x48C681`), none returning first (`0x48C64A`); a click's `0x48C8B9`,
   `0x48C997`.
-- arrived, kind 6: Move_Ground `0x4031FB`, `0x4032C2`; `0x40FA53`.
-- cant, kind 7: about 40 sites, each with a failure text. MobileBuild's site test notices it at
-  the first failure only (`[order+0x3E]` = 0, `0x403CD0..0x403CDF`, "Waiting for target area to
-  clear"), then counts the failure and waits 30 ticks (`0x439E80(30)`, `0x403CE4..0x403CEF`); past
-  ten failures it notices again, "Target area was blocked" (`0x403D03..0x403D10`).
+- ok, kind 5: one push, `0x438899` in `0x438880`, which speaks once an order (it clears the
+  order's `+0x42` bit `0x2000` first, `0x438883..0x43888B`). Thirty handlers call it at their
+  start, Move_Ground (`0x40322D`), ReclaimUnit (`0x4047C1`) and Follow_Ground (`0x40670C`,
+  `0x406800`) among them; MobileBuild (`0x403A20..0x403F6F`) never does, so a build order says no
+  ok [DISASSEMBLED: the 30 calls of `0x438880` listed, none in that range].
+- arrived, kind 6: Move_Ground (`0x4031D0`) says it in state 1 only on its goal event `0x20`
+  (`0x4031EB..0x403206`, result 5); without it (a give-up, `0x40`) the order ends silent with
+  result 9 (`0x403209`). State 0 says ok (`0x40322D`) and starts the move (`0x438930(order+0x22,
+  order+0x36 + 4)`, `0x403232..0x40323F`), whose goal `0x44CF60` keeps the goal's footprint cell,
+  `(P − (fx << 19) + 0x80000) >> 20` on the 16.16 position for each axis (`0x44CF7F..0x44CFA7`,
+  the footprint the unit's `+0x7E`/`+0x80`), and the squared radius `((radius) / 16)²`
+  (`0x44CFBA..0x44CFC8`); its test `0x44D310` passes when the unit's cell `+0x76`/`+0x78` (the
+  same rounding, `0x48AA00..0x48AA32` in the position setter `0x48A9F0`) is within it. The ground
+  mover's tick `0x44F1A0` posts `0x20` when the test passes (`0x44F1B2..0x44F1BE`). A click's move
+  carries `+0x36` = 0: the map click `0x4991E2..0x4991F5` passes type 0 to `0x48CF30`, which hands
+  it on to `0x43AFC0` (`0x48D1D9..0x48D1F4`), and `0x43ADC0` to the node constructor `0x43A0C0`,
+  which stores it at `+0x36` (`0x43A116`); so the radius is (0 + 4) >> 4 = 0, the goal's own cell.
+  `0x4032C2` is in the handler `0x403260`, which says arrived on `0x20` and then queues
+  SELFDESTRUCT (`0x501520`, `0x4032C7..0x4032F7`); on `0x40` it ends silent. `0x40FA53`, VTOL_Move
+  (`0x40FA20`), says it in state 2 only when no order follows (`[order+0x4A]` = 0,
+  `0x40FA43..0x40FA48`).
+- cant, kind 7: about 40 sites, each with a failure text. MobileBuild's site test
+  `0x47DB70(def, 0, cell, 1)` (`0x403CC7`) fails on an occupied cell as on a refused one; it
+  notices at the first failure only (`[order+0x3E]` = 0, zeroed in state 0 at `0x403B19`;
+  `0x403CD0..0x403CDF`, "Waiting for target area to clear", `0x50155C`), then counts the failure
+  and waits 30 ticks (`0x439E80(30)`, `0x403CE4..0x403CEF`); failures 2 to 11 retry silently, and
+  the twelfth, the counter past 10 (`0x403D03`), notices "Target area was blocked" (`0x501544`,
+  `0x403D10`) and ends the order (result 8). Before that test, a move that gave up (`0x40`,
+  `0x403B63`) is measured: `floor(|unit − site centre|)` (the 16.16 distance's high word,
+  `0x403B6C..0x403BA9`) less `trunc(8 · hypot(unit fx, fz))` (`0x4FC910` = 8.0, `0x403BD6`) plus
+  `trunc(−8 · hypot(site fx, fz))` (`0x4FC918` = −8.0, `0x403C1A`); past the builder's
+  BuildDistance (def `+0x212`, `0x403C32`) it notices "I can't reach the construction site"
+  (`0x501580`, `0x403C45`) and ends the order; within it, the site test follows (`0x403C59`).
 - build, kind 9 "Starting construction" (`0x5012F8`): BuildingBuild `0x402937`, MobileBuild
   `0x403DA0`, `0x4140D4`.
 - unitcomplete, kind 8: BuildingBuild `0x402B10` (the table's "Nanolathe Complete"), MobileBuild

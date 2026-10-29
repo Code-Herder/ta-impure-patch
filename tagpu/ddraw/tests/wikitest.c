@@ -325,6 +325,10 @@ static void view(WIKISIM* s, int map)
         for (i = 0; i < v->nsnd; i++)
             printf("%s[%d,%d,%d,%d,%d]", i ? "," : "", v->snd[i].tick, v->snd[i].kind, v->snd[i].name, v->snd[i].cat,
                    v->snd[i].variant);
+        putchar(']');
+        key("cant", 0);
+        putchar('[');
+        for (i = 0; i < v->nunit; i++) printf("%s%d", i ? "," : "", v->unit[i].cant);
         fputs("]}", stdout);
     } else fputs("null", stdout);
     putchar('}');
