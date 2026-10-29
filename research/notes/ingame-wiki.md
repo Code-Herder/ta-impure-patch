@@ -333,8 +333,11 @@ as stated except where a line says otherwise.
 7. **In Try it the build buttons, PREV/NEXT, ORDERS/BUILD and STOP work**; every other order button
    is greyed until an entry needs it.
 8. **HUD scale is ignored**: the stage keeps TA's native proportions.
-9. **The stage maps are 40 × 30 cells**, so retail's 480-row sidebar fits beside the map; a 768-row
-   one leaves a band under the map, the map top-aligned.
+9. **The stage maps are 40 × 30 cells, and with the sidebar a map grows to the column** (the owner,
+   2026-10-29: "extend map to fit the sidebar of the mod always"): downward, by whole 32-unit tiles,
+   until it is at least as tall as the column, so no band lies under it. Retail's 480-row column
+   keeps 40 × 30; every compatibility setup's 768-row one makes it 40 × 48. The rule is
+   `tagpu_wiki_map_rows` (`sim.js` *THE MAP*).
 10. **A scripted `build` with the sidebar plays out** as the cursor's trip to the button and back;
     every demo was re-timed once by hand, and the data's ticks are exactly what plays.
 11. **Build buttons the entry does not define are greyed.**
@@ -731,8 +734,9 @@ the code.
 ### How it is drawn
 
 - **The content rect.** With the sidebar, the stage's content is x ∈ [−128, map width) and
-  z ∈ [0, the taller of the map and the column), in world units. The map stays at the top, and
-  the band under a shorter map is only R0's background.
+  z ∈ [0, the taller of the map and the column), in world units, which is the map: the simulation
+  grows the map to the column (decision 9). The page's fit of a press takes the map's rows from the
+  same `tagpu_wiki_map_rows` as the simulation, with the drawn frame's column.
 - **The fit.** `tagpu_wikistage_fit(w, h, side_h, …)` fits that rect with the pad of 6 units. It
   is the one function the render thread draws with and the game thread turns a click into a stage
   point with. Without the sidebar it is the map's fit to the bit.
@@ -1389,7 +1393,7 @@ The stage's ground for one scene of an entry, by reference to the player's own f
 
 ```json
 { "format": 2, "entry": "quickbuild", "scene": "green",
-  "cells": [40, 30],
+  "cells": [40, 48],
   "sources": [ { "map": "maps\\evad river confluence.tnt", "tiles": 3098 } ],
   "tileset": [ [0, 0, "fd32b023"], [0, 1, "b69db994"], "…" ],
   "tilemap": [ 0, 1, 2, 3, 0, 1, 2, 3, "…" ],
@@ -1398,8 +1402,11 @@ The stage's ground for one scene of an entry, by reference to the player's own f
                 { "name": "smudge04", "cell": [5, 7] }, "…" ] }
 ```
 
-- **`cells`** is the scene's map; **`tilemap`** is `cells / 2` tiles a side, row-major, each an
-  index into `tileset`.
+- **`cells`** is the ground: the scene's columns and always 48 rows (`GROUND_ROWS`, the 768-row
+  deepest column over 16), whatever the scene's rows; **`tilemap`** is `cells / 2` tiles a side,
+  row-major, each an index into `tileset`. A stage's map takes the ground's top rows -- the scene's,
+  or as many as it grew to beside the column -- and a feature whose footprint ends below the map's
+  last row is not on that map (`gfx.js` `Stage`, `tagpu_wikiscene_ground`).
 - **A `tileset` row** is `[source, tile index in that TNT, FNV-1a 32 of the tile's 1024 bytes]`,
   and a **source**'s `tiles` is its TNT's tile count. The map path is the engine's (`\` between
   components, compared without case). The hash and the count are identity checks: a map of the same
@@ -1426,12 +1433,15 @@ The stage's ground for one scene of an entry, by reference to the player's own f
   - **decoration breaks the section's repeat**: one smudge or scar of greenworld (they block nothing
     and hold no metal, so the simulation has nothing to learn about them) per 8 × 8 cells where one
     fits, 2 cells clear of every deposit and vent, placed by a xorshift seeded with the stage's name
-    so every build writes the same file.
+    so every build writes the same file. The scene's rows are decorated first and alone, then the
+    rows below them with a seed of their own, so a stage that does not grow shows exactly what the
+    scene alone would.
 
   **`metal`**, Quick Build's *Metal maps*:
-  - **the ground is a crop of a metal map**, the 40 × 30 cells of Over Crude Water (`totala2.hpi`)
-    from cell (420, 370), inside its central plaza: 80 different tiles, every vertex its cells draw
-    with at the plate's height of 139, and no feature of the map anchored where its footprint could reach into the
+  - **the ground is a crop of a metal map**, the 40 × 48 cells of Over Crude Water (`totala2.hpi`)
+    from cell (420, 370), inside its central plaza: 81 different tiles, every vertex its cells draw
+    with at the plate's height of 139 (no 40 × 64 window near it is flat at that height, one reason
+    the deepest column is 768 rows: [the reclaim plan](ingame-wiki-reclaim-plan.html), *Gaps open*), and no feature of the map anchored where its footprint could reach into the
     window. The build refuses a crop that is not flat or that a feature reaches, so no picture of the
     map's own expects a feature or a slope the stage does not have;
   - **decoration**: the metal world's pipe holes (`features\metal\pipes.tdf`, `totala1.hpi`: the
@@ -1469,7 +1479,7 @@ layout breaking any of them is refused whole and no index read out of it address
 
 - **`width`** is 128, the engine's panel. **`height`** is the column's rows, the larger of 480
   (PANELSIDE) and the lowest screen's end.
-- **A screen** has its row `y` in the column and its `w` (1..128) and `h`, ending by row 1024,
+- **A screen** has its row `y` in the column and its `w` (1..128) and `h`, ending by row 768,
   the composed column's texture.
 - **A gadget** has a non-empty `name`, a `role` and a `rect` inside its screen, in the screen's
   pixels, and optionally `grey` and `hidden`, booleans, and `key`, its quickkey (1 to 255): the
@@ -1922,7 +1932,8 @@ addresses and the gaps).
 - **The stage's budget holds the data's map, not the largest.** Cells and fog are one op a cell,
   as the canvas calls them. By `tagpu_wikistage.h`'s count, a 40 × 30 map's cells, grid and fog
   come to about 3750 ops, the whitebox minimap's to at most 2 × 1200 + 128 more and the sidebar's
-  buttons to about 200, against `WIKI_MAXOP` 16384. A square map past about 70 cells a side, fogged everywhere, drops ops and
+  buttons to about 200, against `WIKI_MAXOP` 16384; a 40 × 48 map has 1.6 times the cells, about
+  6000 and 3970 by the same counts [INFERRED: scaled, not measured]. A square map past about 70 cells a side, fogged everywhere, drops ops and
   edges the stage in red.
 - **The controls' glyphs and the tree's marks are kit icons, pending the owner.** No HUD face has
   play, pause, replay, the folds' triangles or the entry's dot, so both the mockup and the game

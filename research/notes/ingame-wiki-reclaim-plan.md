@@ -68,6 +68,7 @@ L2 would leave the game with no wiki at all. L1 is committed on the worktree; it
 | | What | Gate |
 |---|---|---|
 | **L1** — built, not landed | the mockup: the layout's quickkey and `reclaim` role (`gfx.py`, `checkLayout`), features in `sim.js` and the stage description (`stagemap.py`'s recipe), the sweep in `sim.js`, its drawing in the mockup, `gen-reclaim.mjs` and the seven demos, the claims in `simcheck.mjs` | `simcheck.mjs` on every pack and casting; the demos watched in the mockup by the owner |
+| **The grown map** — built, not landed, lands with L1 and L2 | the owner's answer on the popup (below): with the sidebar a stage's map grows to the column (`tagpu_wiki_map_rows`, `sim.js` *THE MAP*), the descriptions' ground 48 rows deep, the column at most 768 rows, the game look and the DLL's world drawing the map's top rows, each minimap built on its map's rows; mockup and DLL both | `simcheck.mjs` on every pack (passes); `scenecheck.mjs` and `assetcheck.py`'s stages (pass on a tree without the reclaim entry); the sim, side and stage parity with L2's |
 | **L2** — planned, lands with L1 | the DLL's simulation: `tagpu_wikisim.c` and the loaders (`tagpu_wikidata.c`: the entry's `features` table, a scene's `features`, `kind`, the inputs `reclaim` and `pick`, the key `e`, the layout's `key`, a cast's `canreclamate`). Everything sim.js gained that the C side must mirror: the feature table and its checks (`checkFeature`), blocking features in `siteOk`, the spawn and `bodies`; the sweep (`popup`, `keyPress`, `reclaimPress`/`Move`/`Release`, `sweepCommit`, `sweepSplit` from `tagpu_sweepgeo.c`); the feature reclaim order (`featWork`: the walk to touch, the countdown `trunc(15 + (e+m)/2)` taken 2 a call every 2 ticks, the payout, the spray while above 15, the kind-7 notice for a feature gone); the trips `reclaim` and `pick`; the sound `specialorders`; the view's `mode`, `feats`, `gone` and `reclaim` | `simparity.mjs` natively and `--wine`; `wikitest`'s malformed cases |
 | **L3** — planned | the DLL's drawing: features removed from the stage's ground as they are reclaimed, the sweep's ring, brackets, popup and tag through the wiki's HUD ops, the queued markers | `wiki_regression.py` in all six compatibility setups; the demos watched in game |
 | **L4** — later | 3D wrecks on the stage, mockup and game, swapped into the METAL demos | `stage3dcheck.py` |
@@ -89,20 +90,29 @@ L2 would leave the game with no wiki at all. L1 is committed on the worktree; it
   reclaimed feature's anchor from its image. The popup is the whitebox's stand-in for Impure's
   own sweep art, which L3 draws in the game.
 
-## Questions for the owner
+## The owner's answers (2026-10-29)
 
-- **The readout's words.** The game's readout counts every metal feature as a WRECK, so the METAL
-  ring over rocks reads "8 WRECKS" (`tagpu_mark.c` `sw_readout`). The stage says what the game
-  says; whether the game should say ROCKS for a 2D feature is a change to the sweep itself.
-- **The popup on a short map.** The popup follows RECLAIM's row but stays on the map, and the
-  stage's map (480 rows) is shorter than a 640- or 768-row column, so on the stage it often sits
-  at the map's bottom, well above the button.
-- **Queued markers under Shift.** The stage draws its own order lines for the selected units at
-  all times rather than the stock markers only under Shift.
+- **The readout's words: kept for now.** The game's readout counts every metal feature as a WRECK,
+  so the METAL ring over rocks reads "8 WRECKS" (`tagpu_mark.c` `sw_readout`), and the stage says
+  what the game says.
+- **The popup on a short map: the map grows to the column, always.** The popup follows RECLAIM's
+  row but stays on the map, and a 30-row map was shorter than a 768-row column, so the popup sat at
+  the map's bottom, well above the button. The map now grows to the column (*The grown map* above;
+  `ingame-wiki.md` decision 9), so it sits beside RECLAIM's row.
+- **Queued markers under Shift: as they are.** The stage draws its own order lines for the selected
+  units at all times rather than the stock markers only under Shift.
 
 ## Gaps open
 
 - Retail's E on a build page (decision 2).
 - 3D features (decision 3).
 - `stagecheck.mjs` and `simparity.mjs` cannot run while the C loader refuses the entry: both are
-  L2's and L3's gates.
+  L2's and L3's gates. On a tree without the entry they still differ, by what L1 added that the C
+  side does not yet mirror (the view's `feats`, `canreclamate`, a gadget's `key`, the fixture's
+  STOP and RECLAIM buttons), so the grown map's sim, side and stage parity are proved with L2's.
+- A column deeper than 768 rows does not exist on the stage: the pack builders (`gfx.py`
+  `check_panel`, `tagpu_wikiasset.c`) leave out a screen that ends below row 768, and `checkLayout`
+  and `tagpu_wikidata.c` refuse a layout that has one. Past it the map would outgrow the ground, and
+  a deeper ground would need another metal crop: around cell (420, 370), in cells 300..560 by
+  200..440, no 40-wide window at the plate's height of 139 is flat and feature-free 64 rows down
+  (MEASURED 2026-10-29 with `stagemap.py`'s `crop_refs`); Seven Islands has one at (556, 40).
