@@ -413,7 +413,7 @@ const down = new Set();                // the buttons and keys sent down and not
 function send(ev) { if (!sim || !S.try || sim.done) return; try { sim.input(ev); } catch (x) { fail(x); } }
 function releaseAll() { for (const k of down) send({ up: k }); down.clear(); }
 // the pointer as a stage point clamped to the content rect: the map, and the sidebar with it. The sim decides what is
-// under it (the column, the map, or the dead band under a map shorter than the column)
+// under it (the column or the map)
 function world(e) {
   if (!FIT) return null;
   const r = stage.getBoundingClientRect(), px = (e.clientX - r.left) * stage.width / r.width, pz = (e.clientY - r.top) * stage.height / r.height;

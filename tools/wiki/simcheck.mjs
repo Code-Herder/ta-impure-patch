@@ -798,7 +798,7 @@ const SIDE_RULES = {
   },
   /* the in-play handler's cancel: a right press it gets disarms whatever the point (0x4993AC -> 0x499100), and it gets
      every press outside the screen's window (the pump's poll 0x4AB5D0) -- the minimap, the column's rows below the
-     screen, the band under a short map */
+     screen */
   'a right press off the screen disarms a building armed and orders nothing'(entry) {
     const off = at => {
       const s = WikiSim.create(entry, { scene: { selected: ['ck'] } }, FIXTURE);
@@ -809,8 +809,7 @@ const SIDE_RULES = {
       return v.mode === 'contextual' && s.view().mode === 'contextual' && s.orders('ck').length === 0 &&
         selIds(s.view()) === 'ck' && s.view().side.screen === 'ARMCK1';
     };
-    const MH = first(entry).map.h * 16;
-    return off([-SIDE_W + 60, 128 + 352 + 20]) && off([-SIDE_W + 64, 64]) && off([60, MH + 8]);
+    return off([-SIDE_W + 60, 128 + 352 + 20]) && off([-SIDE_W + 64, 64]);
   },
   /* a left press off the screen reaches stock's click 0x498F70 (place_button returns 0 off the viewport), which places
      the building once at the point clamped to the view, snapped: the sim's clamp is onto the map, and the deposit at
@@ -828,11 +827,10 @@ const SIDE_RULES = {
       if (shift) s.input({ up: 'shift' });
       return { pressed, armed, released, after: s.view().mode };
     };
-    const MH = first(entry).map.h * 16, below = run([-SIDE_W + 60, 128 + 352 + 20], false), held = run([-SIDE_W + 60, 128 + 352 + 20], true);
-    const band = run([40, MH + 8], false), mini = run([-SIDE_W + 64, 64], false);
+    const below = run([-SIDE_W + 60, 128 + 352 + 20], false), held = run([-SIDE_W + 60, 128 + 352 + 20], true);
+    const mini = run([-SIDE_W + 64, 64], false);
     return below.pressed === 'ARMMEX@1,26' && below.armed === 'contextual' && below.released === 1 &&
       held.pressed === 'ARMMEX@1,26' && held.armed === 'build:ARMMEX' && held.released === 1 && held.after === 'contextual' &&
-      band.pressed === 'ARMMEX@1,26' && band.armed === 'contextual' &&
       mini.pressed === '' && mini.armed === 'build:ARMMEX' && mini.released === 0;
   },
   /* a right press on the screen is the GUI's alone (0x4AB5D0 pops it), so the handler's cancel never sees it: an empty

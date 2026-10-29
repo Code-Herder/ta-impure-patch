@@ -165,8 +165,8 @@ const WikiStage = (() => {
     const s = Math.min((W - 2 * pad) / c.w, (H - 2 * pad) / c.h);
     return { s, ox: (W - c.w * s) / 2 - c.x0 * s, oz: (H - c.h * s) / 2 };
   }
-  /* The content rect of a view: the map's, or with the column (v.side) the column and the map, as tall as the taller.
-     The map stays at the top; the band under a map shorter than the column is only R0's background (decision 9). */
+  /* The content rect of a view: the map's, or with the column (v.side) the column and the map, as tall as the taller,
+     which is the map: the sim grows a map with the column until it is as tall (decision 9). */
   function content(v) {
     const M = v.map, cell = +M.cell || 16, mw = (+M.w || 1) * cell, mh = (+M.h || 1) * cell;
     return v.side ? { x0: -SIDE_W, w: SIDE_W + mw, h: Math.max(mh, +v.side.h || 0) } : { x0: 0, w: mw, h: mh };
@@ -181,8 +181,7 @@ const WikiStage = (() => {
      drawn, or null without a map.
 
      THE THREE OP RANGES (research/notes/ingame-wiki-3d-stage-plan.md, section 3). Everything drawn here belongs to one:
-     - R0, under the image: the stage's background, which also fills the band under a map shorter than the sidebar
-       (and the message of an absent view);
+     - R0, under the image: the stage's background (and the message of an absent view);
      - side, the game's left sidebar (drawSide), whole in every look: it never overlaps the map's rect, so it is
        drawn under the image;
      - R1, the whole whitebox stage: the ground (cells, grid, vents, fog), then every element below;

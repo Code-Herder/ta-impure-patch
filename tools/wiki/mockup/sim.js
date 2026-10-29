@@ -92,7 +92,7 @@ const WikiSim = (() => {
      casting names; its pages are read with its own prefix, so one type name may have other pages in another side.
      The sim reads the side ctx.side names, MAIN2, GEN and types alike. */
   const SIDE_W = 128, SIDE_MIN_H = 480, MINIMAP = 128;
-  const SIDE_SCREENS = 48, SIDE_GADGETS = 64, SIDE_PAGES = 7, SIDE_TYPES = 64, SIDE_ROWS = 1024, SIDE_SIDES = 8, SIDE_NAME = 32;
+  const SIDE_SCREENS = 48, SIDE_GADGETS = 64, SIDE_PAGES = 7, SIDE_TYPES = 64, SIDE_ROWS = 768, SIDE_SIDES = 8, SIDE_NAME = 32;
   const ROLES = ['orders', 'buildtab', 'build', 'prev', 'next', 'stop', 'order'];
   function checkLayout(L) {
     const no = what => { throw new Error(`the sidebar layout is refused: ${what}`); };
@@ -111,7 +111,8 @@ const WikiSim = (() => {
       if (!fits(n)) no(`screen ${n} has a name too long`);
       if (!obj(s) || !int(s.y) || !int(s.w) || !int(s.h) || s.y < 0 || s.w < 1 || s.w > SIDE_W || s.h < 1)
         no(`screen ${n} has no integer y, w and h within the column`);
-      // SIDE_ROWS: the composed column's texture is 128 x 1024
+      /* SIDE_ROWS: the deepest column, 768 rows, every compatibility setup's: a map grows to the column, and every
+         stage description's ground is 768 / CELL rows deep (tools/wiki/stagemap.py GROUND_ROWS) */
       if (s.y + s.h > SIDE_ROWS) no(`screen ${n} ends below row ${SIDE_ROWS}`);
       rows = Math.max(rows, s.y + s.h);
       // SIDE_GADGETS: a screen's gadget table, and view.side.state's length
@@ -458,7 +459,17 @@ const WikiSim = (() => {
     const entry = B ? B.entry : entryIn, demo = B ? B.demo(demoIn) : demoIn;
     const S = merge(entry, demo), D = entry.units, defIndex = Object.keys(D);
     if (!KINDS.includes(S.kind)) throw new Error(`the scene's reclaim kind ${JSON.stringify(S.kind)} is not one of ${KINDS}`);
-    const W = S.map.w, H = S.map.h, SM = S.map.surfaceMetal || 0, PACE = (entry.pace && entry.pace.build) || 1;
+    const ON = !!layout && (() => {
+      const builder = S.units.some(s => (s.owner ?? 0) === 0 && own(D, s.type) && D[s.type].maxVelocity > 0 && D[s.type].workerTime > 0);
+      return scripted && demo && typeof demo.sidebar === 'boolean' ? demo.sidebar : builder;
+    })();
+    /* THE MAP: the scene's, grown downward with the sidebar on by whole 32-unit tiles until it is at least as tall as
+       the column, so no band lies under it and every row of the column has the map beside it. The column is at most
+       SIDE_ROWS rows (checkLayout), so H is at most SIDE_ROWS / CELL, the rows every stage description's ground holds
+       (tools/wiki/stagemap.py GROUND_ROWS). The scene's content is checked against the scene's own rows (SH), so it
+       is the same scene in every context; the rules of play read the map. */
+    const W = S.map.w, SH = S.map.h, H = ON ? Math.max(SH, 2 * Math.ceil(layout.height / (2 * CELL))) : SH;
+    const SM = S.map.surfaceMetal || 0, PACE = (entry.pace && entry.pace.build) || 1;
     const metal = new Array(W * H).fill(SM), fog = new Array(W * H).fill(0);
     const fill = (a, [x, z, w, h], v) => {
       for (let j = Math.max(0, z); j < Math.min(H, z + h); j++) for (let i = Math.max(0, x); i < Math.min(W, x + w); i++) a[j * W + i] = v;
@@ -503,7 +514,7 @@ const WikiSim = (() => {
       if (!Array.isArray(f.at) || f.at.length !== 2 || !f.at.every(int)) throw new Error(`${at}: at is not an anchor cell`);
       const d = FD[f.name], [fx, fz] = d.footprint, [ox, oz] = f.at, id = f.id ?? `f${k + 1}`;
       if (typeof id !== 'string' || !fitsIn(id, 32) || feats.some(g => g.id === id)) throw new Error(`${at}: the id is not a new name`);
-      if (ox < 0 || oz < 0 || ox + fx > W || oz + fz > H) throw new Error(`${at} is not on the map`);
+      if (ox < 0 || oz < 0 || ox + fx > W || oz + fz > SH) throw new Error(`${at} is not on the map`);
       const g = { id, name: f.name, ox, oz, fx, fz, x: (ox + fx / 2) * CELL, z: (oz + fz / 2) * CELL, metal: d.metal || 0,
         energy: d.energy || 0, height: d.height || 0, blocking: !!d.blocking, reclaimable: !!d.reclaimable };
       if (feats.some(e => e.ox < g.ox + g.fx && g.ox < e.ox + e.fx && e.oz < g.oz + g.fz && g.oz < e.oz + e.fz))
@@ -524,10 +535,6 @@ const WikiSim = (() => {
        the cursor unclamped, and `build` arms at once. */
     if (scripted && demo && 'sidebar' in demo && typeof demo.sidebar !== 'boolean')
       throw new Error(`demo ${demo.id}: sidebar is not a boolean`);
-    const ON = !!layout && (() => {
-      const builder = S.units.some(s => (s.owner ?? 0) === 0 && mobile(s.type) && def(s.type).workerTime > 0);
-      return scripted && demo && typeof demo.sidebar === 'boolean' ? demo.sidebar : builder;
-    })();
     const LAY = ON ? layout : null, SIDE = ON ? LAY.sides[ctx.side] : null;
     const typePages = t => ON && own(SIDE.types, t) ? SIDE.types[t] : null;
     const npages = t => { const T = typePages(t); return T ? T.pages.length : 0; };
@@ -700,7 +707,7 @@ const WikiSim = (() => {
        tagpu_wikisim_init refuses it. Mobile units never block. */
     /* A SCENE'S MOBILE UNIT STARTS CLEAR (research/notes/ingame-wiki.md, *How units move*): at its authored centre,
        or, when its body there would overlap a scene structure or a mobile scene unit before it -- a casting's bigger
-       units can -- at the nearest centre a whole number of cells away whose body overlaps neither and lies on the map:
+       units can -- at the nearest centre a whole number of cells away whose body overlaps neither and lies on the scene's map:
        nearest by distance, then by z, then by x, at most SPREAD cells either way. With none it stands where authored,
        and the step rule lets it walk out. The structures stay where authored. Settled before any unit enters, since
        entering starts its script, which may read where it stands. */
@@ -716,7 +723,7 @@ const WikiSim = (() => {
         if (!mobile(s.type)) return;
         const free = (x, z) => {
           const a = rectAt(s.type, x, z);
-          if (!(a[0] >= 0 && a[1] >= 0 && a[2] <= W * CELL && a[3] <= H * CELL)) return false;
+          if (!(a[0] >= 0 && a[1] >= 0 && a[2] <= W * CELL && a[3] <= SH * CELL)) return false;
           return S.units.every((v, m) => (mobile(v.type) && m >= k) || !clash(a, rectAt(v.type, spot[m][0], spot[m][1]))) &&
             feats.every(f => !f.blocking || !clash(a, featRect(f)));
         };
@@ -734,7 +741,7 @@ const WikiSim = (() => {
       for (const o of u.orders) sceneOrders.add(o);
       if (mobile(u.type)) continue;
       const b = box(u.type, u.ox, u.oz);
-      if (!(b.ox >= 1 && b.oz >= 1 && b.ox + b.fx < W && b.oz + b.fz < H) ||
+      if (!(b.ox >= 1 && b.oz >= 1 && b.ox + b.fx < W && b.oz + b.fz < SH) ||
           units.some(v => v !== u && !mobile(v.type) && overlap(b, box(v.type, v.ox, v.oz))) || feats.some(f => overlap(b, f)))
         throw new Error(`${u.id}'s ${u.type} does not fit the scene`);
     }
@@ -985,13 +992,11 @@ const WikiSim = (() => {
 
     /* ---- the sidebar's rules; none of them runs with the sidebar off ---- */
     const MW = W * CELL, MH = H * CELL;
-    /* where the cursor is: the column left of x = 0, the map, or the dead band under a map shorter than the column.
-       The map is closed at its far edges because the stage clamps a pointer beyond them onto exactly W x 16 or
-       H x 16, which the map rules have always read as the map. */
+    /* where the cursor is: the column left of x = 0, else the map, which is as tall as the column. The map is closed
+       at its far edges because the stage clamps a pointer beyond them onto exactly W x 16 or H x 16, which the map
+       rules have always read as the map. */
     function over() {
-      if (!ON) return 'map';
-      const { x, z } = st.cursor;
-      return x < 0 ? 'side' : x <= MW && z <= MH ? 'map' : 'dead';
+      return ON && st.cursor.x < 0 ? 'side' : 'map';
     }
     // the cursor the map rules read: clamped onto the map, so a drag released over the column selects up to its edge
     const mapCursor = () => ON ? { x: Math.min(Math.max(st.cursor.x, 0), MW), z: Math.min(Math.max(st.cursor.z, 0), MH) } : st.cursor;
@@ -1759,9 +1764,7 @@ const WikiSim = (() => {
            without it the press disarms (0x498FC0); no gesture starts, and the release adds nothing. MEASURED
            2026-10-27, Interface Type 1, 1024 x 768: a press at (60, 600), below the screen, placed one site at the
            clamped point (1148, 6416), snapped to (1144, 6424). The sim's clamp onto the map stands for the engine's
-           onto the view, because the stage shows the map where the game shows a view. The band under a short map
-           has no engine equivalent: the game's scroll keeps its view on the map [INFERRED], so the nearest rule is
-           the same clamp. The minimap stays inert (the owner's decision 6), where the game would place at its world
+           onto the view, because the stage shows the map where the game shows a view. The minimap stays inert (the owner's decision 6), where the game would place at its world
            point. A right press there is the handler's cancel and nothing else. */
         else if (ev.down === 'lmb' && st.mode && !onMinimap(st.cursor.x, st.cursor.z)) placeClick(shift);
         else if (ev.down === 'rmb' && (st.mode || st.rmode)) disarm();

@@ -29,7 +29,7 @@ window.WikiGfx = (() => {
   const LAYERS = (q => q === null ? null : new Set(q.split(',')))(new URLSearchParams(location.search).get('layers'));
   const layer = n => !LAYERS || LAYERS.has(n);
   let index = null, state = 'none';     // none, loading, ready, missing
-  const stages = {};                    // pack folder -> a Stage, or a promise of one, or an error
+  const stages = {};                    // `<pack folder>@<rows>` -> a Stage, or a promise of one, or an error
 
   const bin = async u => { const r = await fetch(u); if (!r.ok) throw new Error(`${u}: ${r.status}`); return new Uint8Array(await r.arrayBuffer()); };
   const f32 = b => new Float32Array(b.buffer, b.byteOffset, b.byteLength >> 2);
@@ -63,8 +63,8 @@ window.WikiGfx = (() => {
   }
   function url(q) { if (mode === 'game') q.set('gfx', 'game'); if (SS !== 2) q.set('ss', SS); }
 
-  /* ---- one entry's stage: its pack, its own WebGL2 context and target ---- */
-  async function open(id) {
+  /* ---- one entry's stage at a map's rows: its pack, its own WebGL2 context and target ---- */
+  async function open(id, rows) {
     const dir = `${BASE}${id}/`, pack = await fetch(dir + 'scene.json').then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
     const sh = n => fetch(dir + pack.shaders + n).then(r => r.text());
     const [pal, shd, tv, tf, sv, sf, uv, uf] = await Promise.all([bin(dir + pack.palette.file),
@@ -100,11 +100,16 @@ window.WikiGfx = (() => {
         meshes[key] = r.mesh; slants[key] = r.slant; wires[key] = r.wire; normals[key] = r.normals; quads[key] = r.quad;
       }
     }
-    return new Stage(pack, { pal, shd, tv, tf, sv, sf, uv, uf, T, F, units, meshes, slants, wires, normals, quads, full });
+    return new Stage(pack, { pal, shd, tv, tf, sv, sf, uv, uf, T, F, units, meshes, slants, wires, normals, quads, full }, rows);
   }
 
-  function Stage(pack, d) {
-    const [mw, mh] = pack.cells, GW = mw * 16, GH = mh * 16, FW = GW * SS, FH = GH * SS;
+  /* THE STAGE OF A MAP `rows` TALL: the pack's ground is the description's (tools/wiki/stagemap.py GROUND_ROWS deep),
+     and the stage draws its top `rows` -- the tilemap's first rows / 2 rows of tiles and the features whose footprint
+     ends by row `rows` -- as tagpu_wikiworld.c does: a feature across the map's bottom edge is not on this map. */
+  function Stage(pack, d, rows) {
+    if (!(Number.isInteger(rows) && rows >= 2 && rows % 2 === 0 && rows <= pack.cells[1]))
+      throw new Error(`a map of ${rows} rows: the pack's ground holds ${pack.cells[1]}, in whole tiles`);
+    const mw = pack.cells[0], mh = rows, GW = mw * 16, GH = mh * 16, FW = GW * SS, FH = GH * SS;
     const canvas = document.createElement('canvas');
     canvas.width = FW; canvas.height = FH;
     const gl = canvas.getContext('webgl2', { antialias: false, alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: true });
@@ -123,7 +128,10 @@ window.WikiGfx = (() => {
         sprVBO = gl.createBuffer();
         spr = TR.classicSprites(gl, d.sv, d.sf, sprVBO, pack.features, d.F[0], d.pal);
         const inst = new Uint16Array(d.F[1].buffer, d.F[1].byteOffset, d.F[1].byteLength >> 1);
-        for (let i = 0; i < inst.length; i += 3) anchors[inst[i + 1] * mw + inst[i]] = inst[i + 2];
+        for (let i = 0; i < inst.length; i += 3) {
+          const def = pack.features.defs[inst[i + 2]];
+          if (def && inst[i + 1] + def.footz <= mh) anchors[inst[i + 1] * mw + inst[i]] = inst[i + 2];
+        }
       }
     }
     let cu = null, ua = null, wa = null;
@@ -364,21 +372,22 @@ window.WikiGfx = (() => {
   const shown = {};                     // stage -> the folder its last frame was drawn from
   function frame(entry, v, tick, dir = entry, poses = null) {
     if (!on() || !entry || !index || !index.entries || !index.entries[entry]) return null;
-    shown[entry] = dir;
-    let st = stages[dir];
+    const key = `${dir}@${v.map.h}`;
+    shown[entry] = key;
+    let st = stages[key];
     if (!st) {
-      stages[dir] = open(dir).then(s => { stages[dir] = s; }, x => { console.error('wiki gfx:', x); stages[dir] = { error: x }; });
+      stages[key] = open(dir, v.map.h).then(s => { stages[key] = s; }, x => { console.error('wiki gfx:', x); stages[key] = { error: x }; });
       return null;
     }
     if (st instanceof Promise || st.error) return null;
     try {
       const r = st.render(v, tick, poses);
       return { canvas: st.canvas, ...r };
-    } catch (x) { console.error('wiki gfx:', x); stages[dir] = { error: x }; return null; }
+    } catch (x) { console.error('wiki gfx:', x); stages[key] = { error: x }; return null; }
   }
   // what a scripted check reads: whether an entry's stage has settled -- drawn in 3D, or failed and so whitebox -- or,
   // with the graphics off or gfx/ absent, that nothing is coming
-  const ready = entry => { const st = stages[shown[entry] || entry]; return mode !== 'game' || state === 'missing' ||
+  const ready = entry => { const st = stages[shown[entry]]; return mode !== 'game' || state === 'missing' ||
     (state === 'ready' && !!st && !(st instanceof Promise)); };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', control); else control();

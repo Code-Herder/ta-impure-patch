@@ -26,11 +26,14 @@ Every scene of every entry has a description, and `build` derives it from the sc
   is one 4 x 4 block repeated). Sections are read from worlds.hpi, which the engine mounts as any `*.HPI` but which no
   map loads, so each section tile is referenced by its index in a shipped map that holds the same 1024 bytes; the
   recipe names that map, and a section tile it lacks fails the build. Only the author's install needs worlds.hpi:
-  the description names the map. A crop is the scene's size of a map's tiles from a cell of it, which must be flat
+  the description names the map. A crop is the ground's size of a map's tiles from a cell of it, which must be flat
   ground no feature of the map reaches into, so no picture of the map's own expects a feature or a slope the stage
   does not have. Broad metal ground (a rect that touches both opposite map edges on an axis, which sim.js
   `distinct` never takes for a deposit) has no ground of its own: a scene with one fails the build, and a metal map
   is a scene of its own whose SurfaceMetal is its ground.
+- **The ground is GROUND_ROWS deep**, whatever the scene's rows: with the sidebar on, sim.js grows a stage's map down
+  to the column's height, and a stage draws its description's top rows. The scene's own rows are decorated first and
+  alone, so a stage that does not grow looks as the scene alone would.
 - **Each deposit is one metal patch of the ground's world**: the feature of the recipe's patch file (the world's
   land patches; its water ones live in another file and repeat their values) whose `description=` is Metal, whose
   footprint is the deposit's and whose `metal=` is the deposit's value, so the picture is the value (greenworld's
@@ -76,6 +79,7 @@ SCT_VERSION = 2    # every section of the retail worlds.hpi
 DECOR_BLOCK = 8    # cells: greenflat01's 4 x 4-tile repeat, a recipe's `block` unless it says otherwise
 DECOR_CLEAR = 2    # cells kept clear round a deposit or a vent
 DECOR_TRIES = 32
+GROUND_ROWS = 48   # cells: every description's ground is this deep, the tallest map a stage grows to (sim.js SIDE_MAX_H / CELL)
 
 # Per scene name: the world whose deposits, vents and decoration it takes, and its ground -- a `section` and the
 # shipped map whose tiles it is drawn with, or a `crop` of a map from a cell. Evad River Confluence (totala2.hpi, the
@@ -287,28 +291,28 @@ def overlaps(a, b, gap=0):
             and a[1] < b[1] + b[3] + gap and b[1] < a[1] + a[3] + gap)
 
 
-def decorate(vfs, sid, recipe, w, h, keep_clear):
-    """One decoration a block of the recipe's where one fits: DECOR_CLEAR cells from `keep_clear`, a cell from
-    another decoration, inside the map."""
+def decorate(vfs, seed, recipe, w, z0, z1, keep_clear, placed):
+    """`placed` and one decoration a block of the recipe's in rows z0..z1 where one fits: DECOR_CLEAR cells from
+    `keep_clear`, a cell from another decoration, inside those rows."""
     names = decorations(vfs, recipe["world"], recipe.get("decoration", ()))
     if not names:
-        return []
+        return placed
     block = recipe.get("block", DECOR_BLOCK)
-    rng = xorshift(int(fnv1a32(sid.encode()), 16))
-    placed = []
-    for bz in range(0, h, block):
+    rng = xorshift(int(fnv1a32(seed.encode()), 16))
+    placed = list(placed)
+    for bz in range(z0, z1, block):
         for bx in range(0, w, block):
             for _ in range(DECOR_TRIES):
                 name = names[next(rng) % len(names)]
                 fx, fz = footprint(vfs, name)
                 x, z = bx + next(rng) % block, bz + next(rng) % block
                 foot = (x, z, fx, fz)
-                if (x + fx > w or z + fz > h or any(overlaps(foot, r, DECOR_CLEAR) for r in keep_clear)
+                if (x + fx > w or z + fz > z1 or any(overlaps(foot, r, DECOR_CLEAR) for r in keep_clear)
                         or any(overlaps(foot, p[1], 1) for p in placed)):
                     continue
                 placed.append((name, foot))
                 break
-    return [{"name": n, "cell": [f[0], f[1]]} for n, f in placed]
+    return placed
 
 
 # --------------------------------------------------------------------------- the scene
@@ -364,7 +368,9 @@ def build_one(vfs, maps, entry, name):
     w, h = scene["map"]["w"], scene["map"]["h"]
     if w % TILE_CELLS or h % TILE_CELLS:
         raise Fail(f"{sid}: the map's {w} x {h} cells are not whole tiles")
-    tw, th = w // TILE_CELLS, h // TILE_CELLS
+    if h > GROUND_ROWS:
+        raise Fail(f"{sid}: the map's {h} rows are more than the ground's {GROUND_ROWS}")
+    tw, th = w // TILE_CELLS, GROUND_ROWS // TILE_CELLS
     sources, tileset = [], []
 
     def row(ref):
@@ -376,7 +382,7 @@ def build_one(vfs, maps, entry, name):
             tileset.append(key)
         return tileset.index(key)
 
-    refs = (crop_refs(vfs, maps, recipe["crop"], w, h) if "crop" in recipe
+    refs = (crop_refs(vfs, maps, recipe["crop"], w, GROUND_ROWS) if "crop" in recipe
             else ground_refs(vfs, maps, recipe["section"], tw, th))
     tilemap = [row(ref) for ref in refs]
     for m in scene.get("metal", []):
@@ -405,7 +411,10 @@ def build_one(vfs, maps, entry, name):
         fx, fz = footprint(vfs, f["name"])
         features.append({"name": f["name"], "cell": list(f["at"])})
         clear.append((f["at"][0], f["at"][1], fx, fz))
-    features += decorate(vfs, sid, recipe, w, h, clear)
+    # the scene's rows first, so a stage that does not grow is decorated as the scene alone would be
+    placed = decorate(vfs, sid, recipe, w, 0, h, clear, [])
+    placed = decorate(vfs, sid + "/ground", recipe, w, h, GROUND_ROWS, clear, placed)
+    features += [{"name": n, "cell": [f[0], f[1]]} for n, f in placed]
 
     counts = []
     for path in sources:
@@ -413,7 +422,7 @@ def build_one(vfs, maps, entry, name):
         if err:
             raise Fail(err)
         counts.append({"map": path, "tiles": tnt.tiles})
-    return {"format": FORMAT, "entry": eid, "scene": name, "cells": [w, h], "sources": counts,
+    return {"format": FORMAT, "entry": eid, "scene": name, "cells": [w, GROUND_ROWS], "sources": counts,
             "tileset": tileset, "tilemap": tilemap, "features": features}
 
 
@@ -478,10 +487,12 @@ def check_one(vfs, maps, entry, name, fails):
     if desc.get("format") != FORMAT or desc.get("entry") != eid or desc.get("scene") != name:
         say(f"format {desc.get('format')} entry {desc.get('entry')!r} scene {desc.get('scene')!r}, "
             f"want {FORMAT} {eid!r} {name!r}")
-    if desc.get("cells") != [w, h]:
-        say(f"cells {desc.get('cells')}, the scene's map is {[w, h]}")
+    if desc.get("cells") != [w, GROUND_ROWS]:
+        say(f"cells {desc.get('cells')}, want the scene's {w} columns and the ground's {GROUND_ROWS} rows")
     if w % TILE_CELLS or h % TILE_CELLS:
         say(f"the map's {w} x {h} cells are not whole tiles")
+    if h > GROUND_ROWS:
+        say(f"the map's {h} rows are more than the ground's {GROUND_ROWS}")
 
     # the ground draws no broad metal, the fog grid draws whole blocks, and a demo on the scene adds neither
     for m in scene.get("metal", []):
@@ -518,12 +529,12 @@ def check_one(vfs, maps, entry, name, fails):
         if got != t[2]:
             say(f"tileset row {k}: {sources[t[0]]['map']} tile {t[1]} hashes {got}, the description says {t[2]}")
     tm = desc.get("tilemap", [])
-    if len(tm) != (w // TILE_CELLS) * (h // TILE_CELLS):
-        say(f"tilemap holds {len(tm)} tiles, the map {(w // TILE_CELLS) * (h // TILE_CELLS)}")
+    if len(tm) != (w // TILE_CELLS) * (GROUND_ROWS // TILE_CELLS):
+        say(f"tilemap holds {len(tm)} tiles, the ground {(w // TILE_CELLS) * (GROUND_ROWS // TILE_CELLS)}")
     if any(not isinstance(v, int) or not 0 <= v < len(tileset) for v in tm):
         say("a tilemap value is not a tileset row")
 
-    # every feature resolves and sits inside the map; deposits and vents carry their rules' pictures
+    # every feature resolves and sits inside the ground; deposits and vents carry their rules' pictures
     rects = scene.get("metal", [])
     vents = vent_cells(scene)
     deps, vfeats, feet = [], [], []
@@ -538,8 +549,8 @@ def check_one(vfs, maps, entry, name, fails):
         body = hit[0]
         fx, fz = body_footprint(body)
         if not (isinstance(cell, list) and len(cell) == 2 and 0 <= cell[0] and cell[0] + fx <= w
-                and 0 <= cell[1] and cell[1] + fz <= h):
-            say(f"feature {feat} at {cell}: its {fx} x {fz} footprint leaves the map")
+                and 0 <= cell[1] and cell[1] + fz <= GROUND_ROWS):
+            say(f"feature {feat} at {cell}: its {fx} x {fz} footprint leaves the ground")
             continue
         foot = [cell[0], cell[1], fx, fz]
         if any(overlaps(foot, other) for other in feet):

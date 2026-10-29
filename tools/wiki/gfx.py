@@ -969,7 +969,15 @@ def write_units(out, eng, entry, report, types):
 # --------------------------------------------------------------------------- the left sidebar
 
 # The bounds the sim's layout holds (tools/wiki/mockup/sim.js checkLayout, tagpu_wikisim.h's WIKILAYOUT)
-SIDE_W, SIDE_MIN_H, SIDE_ROWS = 128, 480, 1024
+# SIDE_ROWS: the deepest column, the rows of every stage's ground (stagemap.py GROUND_ROWS x 16, sim.js SIDE_ROWS)
+SIDE_W, SIDE_MIN_H, SIDE_ROWS = 128, 480, 768
+GROUND_ROWS = SIDE_ROWS // 16   # cells: every stage description's ground (stagemap.py GROUND_ROWS)
+
+
+def map_rows(scene_rows, column):
+    """sim.js's map with the sidebar on: the scene's rows, grown by whole tiles until the map is as tall as the
+    column's `column` rows."""
+    return max(scene_rows, 2 * -(-column // 32))
 SIDE_SCREENS, SIDE_GADGETS, SIDE_PAGES, SIDE_TYPES = 48, 64, 7, 64
 SHEET_W = 1024
 MINIMAP_SPAN = 126         # 0x466780: the minimap picture's long side
@@ -1114,13 +1122,13 @@ def minimap_geometry(W, H):
     return w, h, (MINIMAP_SPAN - w) // 2, 0
 
 
-def minimap_base(desc, tiles, alp):
+def minimap_base(desc, tiles, alp, rows):
     """The minimap picture the engine generates for a map with no TNT picture (0x466780): a 2w x 2h surface sampled
     from the tiles, shrunk 2:1 by 0x4B95A0 through the ALP table, out = T[T[a][b]][T[c][d]] with a, b the top pair
     and c, d the bottom pair (first index the row). The extent is the stage map's, not the engine's scroll extent,
     which would cut the stage's bottom rows off (research/notes/ingame-wiki.md, *How it is drawn*). Returns
-    (w, h, offx, offy, w*h indices)."""
-    mw, mh = desc["cells"]
+    (w, h, offx, offy, w*h indices) for the map of the description's top `rows` rows."""
+    mw, mh = desc["cells"][0], rows
     W, H = mw * 16, mh * 16
     w, h, offx, offy = minimap_geometry(W, H)
     cols, tmap, n = mw // 2, desc["tilemap"], len(tiles)
@@ -1900,11 +1908,11 @@ def cast_record(u, builds):
             "energyMake": u["energymake"], "vent": bool(u["g"]), "g": u["g"], "builds": builds}
 
 
-def side_pack(eng, mod, descs, out, pal, report):
+def side_pack(eng, mod, descs, rows, out, pal, report):
     """The sidebar pack of one install (research/notes/ingame-wiki.md, *The data format*): side.json, sheet.bin,
     pal.bin, seen.bin, greyed.bin and the minimap bases. Every side with MAIN2 and GEN screens is a layout side, with
-    its casting and the pages of its cast types. Returns the side.json object; raises SideError when no side has its
-    screens."""
+    its casting and the pages of its cast types. `rows` holds each stage's scene rows, which its map grows from beside
+    this column. Returns the side.json object; raises SideError when no side has its screens."""
     units = unit_index(eng, report)
     sides = read_sides(eng, report)
     downloads = read_downloads(eng, report)
@@ -2051,10 +2059,11 @@ def side_pack(eng, mod, descs, out, pal, report):
         except Miss as e:
             report.append({"element": f"minimap {eid}", "refused": str(e)})
             continue
-        w, h, ox, oy, px = minimap_base(desc, tiles, alp)
+        mh = map_rows(rows[eid], height)
+        w, h, ox, oy, px = minimap_base(desc, tiles, alp, mh)
         (out / "minimap").mkdir(parents=True, exist_ok=True)
         (out / f"minimap/{eid}.bin").write_bytes(px)
-        bases[eid] = {"file": f"minimap/{eid}.bin", "w": w, "h": h, "offx": ox, "offy": oy, "cells": desc["cells"]}
+        bases[eid] = {"file": f"minimap/{eid}.bin", "w": w, "h": h, "offx": ox, "offy": oy, "cells": [desc["cells"][0], mh]}
     report.append({"element": "minimap", "gui": gui_from, "alp": alp_from, "bases": sorted(bases)})
 
     # the sheet: every frame key becomes [sx, sy, w, h, hx, hy]; a button's hotspot is 0 because GUI_ButtonDraw
@@ -2116,20 +2125,23 @@ def build_entry(eng, entry, name, desc, out, palette_block, alp, types):
     try:
         if desc is None:
             raise Miss(f"no stage description for {entry['id']}.{name}")
-        if list(desc["cells"]) != [m["w"], m["h"]]:
-            raise Miss(f"the description's cells {desc['cells']} are not the scene's map")
+        if list(desc["cells"]) != [m["w"], GROUND_ROWS] or m["h"] > GROUND_ROWS:
+            raise Miss(f"the description's cells {desc['cells']} are not the scene's {m['w']} columns and the ground's "
+                       f"{GROUND_ROWS} rows")
         tiles, feats = resolve_ground(eng, desc, report)
         mapblock, features = write_ground(out, desc, tiles, feats)
         ground["ok"] = True
-        # the minimap's base with this install's shrink table; a mod's own is in its side pack (side_pack)
-        w, h, ox, oy, px = minimap_base(desc, tiles, alp)
+        # the minimap's base of the scene's map with this install's shrink table; a mod's own, of the map grown beside
+        # its column, is in its side pack (side_pack)
+        w, h, ox, oy, px = minimap_base(desc, tiles, alp, m["h"])
         (out / "minimap.bin").write_bytes(px)
         minimap = {"file": "minimap.bin", "w": w, "h": h, "offx": ox, "offy": oy}
     except Miss as e:
         ground["miss"] = str(e)
         report.append({"element": "ground", "refused": str(e)})
     units = write_units(out, eng, entry, report, types)
-    scene = {"format": "ta-scene/1", "wiki": FORMAT, "entry": entry["id"], "scene": name, "cells": [m["w"], m["h"]],
+    # cells: the ground's, of which a stage draws its map's top rows (gfx.js Stage)
+    scene = {"format": "ta-scene/1", "wiki": FORMAT, "entry": entry["id"], "scene": name, "cells": [m["w"], GROUND_ROWS],
              "ground": ground, "map": mapblock, "features": features, "units": units, "minimap": minimap,
              "palette": palette_block, "shaders": "../shaders/",
              "depth": {"terrain": 0.10, "scale": 512.0, "flat0": 0.40, "flatSpan": 0.10, "tall0": 3.0,
@@ -2223,20 +2235,20 @@ def main(argv=None):
         return 2
     palette = [(pal[0][i * 4], pal[0][i * 4 + 1], pal[0][i * 4 + 2]) for i in range(256)]
     entries = [json.loads(f.read_text()) for f in sorted(ENTRIES.glob("*.json"))]
-    descs = {}
+    descs, rows = {}, {}
     for entry in entries:
         for name, sc in entry["scenes"].items():
             sid = f"{entry['id']}.{name}"
             dpath = stage_dir / f"{sid}.json"
             desc = json.loads(dpath.read_text()) if dpath.exists() else None
-            if desc and list(desc["cells"]) != [sc["map"]["w"], sc["map"]["h"]]:
+            if desc and (list(desc["cells"]) != [sc["map"]["w"], GROUND_ROWS] or sc["map"]["h"] > GROUND_ROWS):
                 desc = None
-            descs[sid] = desc
+            descs[sid], rows[sid] = desc, sc["map"]["h"]
     if args.side_only:
         out = out_root / "side" / args.mod
         report = []
         try:
-            pack = side_pack(eng, args.mod, descs, out, palette, report)
+            pack = side_pack(eng, args.mod, descs, rows, out, palette, report)
         except SideError as e:
             print(f"gfx.py: no sidebar pack for {args.mod}: {e}", file=sys.stderr)
             return 1
