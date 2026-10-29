@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=high range=main..66c94725 findings=5 acted=5 rejected=0 date=2026-10-29 -- two reviewers (correctness; cross-thread/state); payout a call late (MEDIUM, disassembled 0x404C8B/0x43B897/0x404D66), 3D feature want before the dead mask, Ctrl+E, anchor past the last row, stale size comments; fixed in f3548ddf
