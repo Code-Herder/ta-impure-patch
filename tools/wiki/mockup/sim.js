@@ -228,7 +228,7 @@ const WikiSim = (() => {
     const scene = s => s && s.units ? { ...s, units: s.units.map(u => own(to, u.type) ? { ...u, type: to[u.type] } : u) } : s;
     const demo = d => d && { ...d, scene: scene(d.scene),
       inputs: d.inputs && d.inputs.map(e => typeof e.build === 'string' && own(to, e.build) ? { ...e, build: to[e.build] } : e) };
-    const bound = { ...entry, units, scene: scene(entry.scene) };
+    const bound = { ...entry, units, scenes: Object.fromEntries(Object.entries(entry.scenes).map(([n, s]) => [n, scene(s)])) };
     if (entry.demos) bound.demos = entry.demos.map(demo);
     return { entry: bound, demo };
   }
@@ -311,10 +311,28 @@ const WikiSim = (() => {
   // 0x43AFC0's predicate: within 16 world units of the node on both axes, inclusive
   const within = (p, q) => Math.abs(p.x - q.x) <= 16 && Math.abs(p.z - q.z) <= 16;
 
-  /* the entry's scene with the demo's additions: units, metal, vents and fog appended; selected and cursor
+  /* THE ENTRY'S SCENES (format 2): `scenes` names each, in order, and a demo plays on the one its `on` names, the first
+     when it names none. Every scene has the first one's map size, so the stage keeps one size from demo to demo of an
+     entry. tagpu_wikidata.c refuses at load what this refuses as a demo starts. */
+  const SCENE_NAME = /^[a-z][a-z0-9]{0,15}$/;
+  function sceneOf(entry, demo) {
+    if (entry.format !== 2) throw new Error('the entry is not format 2');
+    const names = obj(entry.scenes) ? Object.keys(entry.scenes) : [];
+    if (!names.length) throw new Error('the entry has no scenes');
+    for (const n of names) {
+      if (!SCENE_NAME.test(n)) throw new Error(`the scene name ${JSON.stringify(n)} is not 1 to 16 of a-z and 0-9, a letter first`);
+      const m = obj(entry.scenes[n]) && entry.scenes[n].map, m0 = entry.scenes[names[0]].map;
+      if (!obj(m) || m.w !== m0.w || m.h !== m0.h) throw new Error(`the scene ${n}'s map is not the first scene's size`);
+    }
+    const on = demo && demo.on !== undefined ? demo.on : names[0];
+    if (typeof on !== 'string' || !own(entry.scenes, on)) throw new Error(`the demo is on ${JSON.stringify(on)}, no scene of the entry`);
+    return entry.scenes[on];
+  }
+
+  /* the demo's scene with the demo's additions: units, metal, vents and fog appended; selected and cursor
      replaced when the demo gives them */
   function merge(entry, demo) {
-    const a = entry.scene, b = (demo && demo.scene) || {};
+    const a = sceneOf(entry, demo), b = (demo && demo.scene) || {};
     const cat = k => [...(a[k] || []), ...(b[k] || [])];
     return { map: a.map, metal: cat('metal'), vents: cat('vents'), fog: cat('fog'),
       units: cat('units'), selected: b.selected ?? a.selected ?? [], cursor: b.cursor ?? a.cursor ?? [0, 0] };
@@ -358,6 +376,7 @@ const WikiSim = (() => {
 
   function make(entryIn, demoIn, scripted, layout, ctxIn) {
     const ctx = context(layout, ctxIn), IFACE = ctx.iface;
+    sceneOf(entryIn, demoIn);   // the scenes are checked before the binding reads them
     // the bound entry and demo are this sim's own copies: they live as long as it does, and nothing else holds them
     const B = ctx.casting ? binder(entryIn, ctx.casting) : null;
     const entry = B ? B.entry : entryIn, demo = B ? B.demo(demoIn) : demoIn;
@@ -2130,6 +2149,8 @@ const WikiSim = (() => {
     checkLayout,
     // the casting's bounds, and the bound entry (its titles name the casts' units for the text's role words)
     checkCasting, bindEntry, CASTS,
+    // the scene a demo plays on (null: the first), refused as tagpu_wikidata_entry refuses the entry
+    sceneOf,
     // the button an action presses at an Interface Type, for the keys strip and the captions' button words
     button,
     // the trip's fixed budget and its table, which tagpu_wikisim.h #defines and simparity compares

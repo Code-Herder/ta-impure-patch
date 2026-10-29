@@ -18,7 +18,7 @@
 
    No demo writes `sidebar`, so each takes sim.js's default, the owner's decision 2
    in research/notes/ingame-wiki.md: the sidebar is shown when the scene gives the player a mobile builder.
-   ARMCK and ARMACK stand in this entry's scene, so every demo here shows it. */
+   ARMCK and ARMACK stand in both of this entry's scenes, so every demo here shows it. */
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 const { TRIP } = createRequire(import.meta.url)('./mockup/sim.js');
@@ -42,20 +42,17 @@ const units = {
   ARMPW: { cast: 'walker', footprint: [2, 2], buildTime: 1452, maxVelocity: 1.8, canstop: 1, name: 'Peewee', from: 'ARMPW.fbi' },
 };
 
-/* the map, 40 x 30 cells, 480 rows: as tall as stock TA's sidebar beside it (the owner's
-   decision 9 in research/notes/ingame-wiki.md). Every deposit is 3x3, one greenworld metal rock's footprint, and its
+/* THE GREEN SCENE, every demo's but one: a 40 x 30-cell map, 480 rows, as tall as stock TA's sidebar beside it (the
+   owner's decision 9 in research/notes/ingame-wiki.md). Every deposit is 3x3, one greenworld metal rock's footprint, and its
    value is that rock's `metal=` (RockMetal2 86, RockMetal1 127, RockMetal 187, RockMetal3 223, totala1.hpi), so the
    stage draws the rock whose value the deposit holds (tools/wiki/stagemap.py refuses any other value). Deposits: A
    with room round it for a Moho, B C E, S between the map's unbuildable top row and a finished ARMGEO (no Moho site
-   over it is legal), D under the player's finished ARMMEX, R beside the broad metal band, one deposit in the black
-   corner and one under grey fog. Vents: a free
-   one, and the one under the ARMGEO. The metal ground and the fog cover whole tiles (even cells): the stage's ground
-   is drawn in the map's 2 x 2-cell tiles and its fog in the engine's 32-unit blocks, so a rect off that grid has no
-   picture (research/notes/ingame-wiki-3d-stage-plan.md, section 4; tools/wiki/stagemap.py check refuses one). R
-   keeps two background columns between it and the band, so it stays a deposit of its own. The band runs the map's
-   full height: one that stopped short of the bottom edge would be a deposit (sim.js distinct). Every demo plays in
-   rows 0..23; rows 24..29 hold only plain ground and the band. */
-const scene = {
+   over it is legal), D under the player's finished ARMMEX, R on the open right side, one deposit in the black corner
+   and one under grey fog. Vents: a free one, and the one under the ARMGEO. The fog covers whole tiles (even cells):
+   the stage's fog is drawn in the engine's 32-unit blocks, so a rect off that grid has no picture
+   (research/notes/ingame-wiki-3d-stage-plan.md, section 4). Every demo plays in rows 0..23; rows 24..29 hold only
+   plain ground. */
+const green = {
   map: { w: 40, h: 30, surfaceMetal: 0 },
   metal: [
     { rect: [14, 16, 3, 3], v: 223 },                                    // A
@@ -64,8 +61,7 @@ const scene = {
     { rect: [3, 10, 3, 3], v: 86 },                                      // E
     { rect: [15, 1, 3, 3], v: 127 },                                     // S
     { rect: [26, 15, 3, 3], v: 86 },                                     // D
-    { rect: [34, 0, 6, 30], v: 40 },                                     // broad metal ground, edge to edge
-    { rect: [29, 19, 3, 3], v: 187 },                                    // R, closed by background cells
+    { rect: [29, 19, 3, 3], v: 187 },                                    // R
     { rect: [2, 2, 3, 3], v: 127 },                                      // in the black corner
     { rect: [3, 18, 3, 3], v: 86 },                                      // under grey fog
   ],
@@ -81,6 +77,17 @@ const scene = {
   selected: [],
   cursor: [304, 140],
 };
+
+/* THE METAL SCENE, the Metal maps demo's: the same map size, metal ground everywhere at Over Crude Water's
+   SurfaceMetal of 255 (totala2.hpi), as on a metal map, so there is no deposit anywhere; the constructor stands where
+   it stands in the green scene. Its ground is that map's own (tools/wiki/stagemap.py). */
+const metal = {
+  map: { w: 40, h: 30, surfaceMetal: 255 },
+  units: [{ id: 'ck', type: 'ARMCK', at: [304, 176] }],
+  selected: [],
+  cursor: [304, 140],
+};
+const scenes = { green, metal };
 
 // a timeline: the cursor glides with a move every 2 ticks, eased at both ends
 function TL(start) {
@@ -122,11 +129,11 @@ function TL(start) {
    (MEASURED 2026-10-28). */
 const TAIL = 60, WAIT_MAX = 1800;
 const demos = [];
-function demo(id, title, add, fn) {
-  const T = TL(add.cursor || scene.cursor);
+function demo(id, title, add, fn, on = 'green') {
+  const T = TL(add.cursor || scenes[on].cursor);
   fn(T);
   T.until(WAIT_MAX);
-  demos.push({ id, title, scene: add, inputs: T.inputs, end: T.t + TAIL });
+  demos.push({ id, title, ...(on === 'green' ? {} : { on }), scene: add, inputs: T.inputs, end: T.t + TAIL });
 }
 
 demo('snap', 'Snap onto the deposit', { selected: ['ck'] }, T => T
@@ -196,12 +203,11 @@ demo('geo', 'Geothermal vents', { selected: ['ck'] }, T => T
   .to([456, 154], 55).say('Over a vent the ghost is the {geo}.').wait(35)
   .click('order').say('{Order} builds it on the vent.'));
 
+/* the deposit half of the lesson, a deposit with plain ground round it, is every other demo's */
 demo('metalmap', 'Metal maps', { selected: ['ck'] }, T => T
-  .say('{builder} selected. The right side is uniform metal ground.').wait(25)
-  .to([568, 120], 55).say('Broad metal ground is not a deposit: no ghost, the cursor says move.').wait(35)
-  .click('order').say('{Order}: the {builder} just moves there.').wait(5).until(WAIT_MAX, 'arrived')
-  .to([490, 330], 50).say('A deposit with plain ground around it is one: the ghost appears.').wait(35)
-  .click('order').say('{Order} builds it.'));
+  .say('{builder} selected. On a metal map the ground is metal everywhere.').wait(25)
+  .to([472, 120], 55).say('Metal ground is not a deposit: no ghost, the cursor says move.').wait(35)
+  .click('order').say('{Order}: the {builder} just moves there.').wait(5).until(WAIT_MAX, 'arrived'), 'metal');
 
 demo('fog', 'Fog', { selected: ['ck'] }, T => T
   .say('{builder} selected, {mex} picked from the build menu.').wait(20).build('ARMMEX').wait(5)
@@ -210,7 +216,7 @@ demo('fog', 'Fog', { selected: ['ck'] }, T => T
   .click('lmb').say('{Select}: placed on the deposit.'));
 
 const entry = {
-  format: 1, id: 'quickbuild',
+  format: 2, id: 'quickbuild',
   title: 'Quick Build: Resource Extractors',
   subtitle: 'Extractors and geothermal plants land on their deposit or vent, and a constructor builds one with a single {order}.',
   text: [
@@ -222,7 +228,7 @@ const entry = {
   ],
   lockedIn: ['escalation', 'tazero', 'unknown'],
   pace: { build: 32 },
-  units, scene, demos,
+  units, scenes, demos,
 };
 fs.mkdirSync(`${ROOT}art/wiki/entries`, { recursive: true });
 // small values on one line, the rest expanded: an input per line

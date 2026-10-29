@@ -1,5 +1,5 @@
 {
-  "format": 1,
+  "format": 2,
   "id": "buildshapes",
   "title": "Build Lines, Grids and Rings",
   "subtitle": "With a building armed, Shift-drag lays a whole line, rectangle or wall of it, and Shift+Ctrl rings a building.",
@@ -57,11 +57,13 @@
       "from": "ARMSOLAR.fbi"
     }
   },
-  "scene": {
-    "map": {"w":40,"h":30,"surfaceMetal":0},
-    "units": [{"id":"ck","type":"ARMCK","at":[120,200]},{"id":"sol","type":"ARMSOLAR","at":[360,184]}],
-    "selected": ["ck"],
-    "cursor": [240,120]
+  "scenes": {
+    "green": {
+      "map": {"w":40,"h":30,"surfaceMetal":0},
+      "units": [{"id":"ck","type":"ARMCK","at":[120,200]},{"id":"sol","type":"ARMSOLAR","at":[360,184]}],
+      "selected": ["ck"],
+      "cursor": [240,120]
+    }
   },
   "demos": [
     {

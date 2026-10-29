@@ -19,7 +19,7 @@
 
    No demo writes `sidebar`, so each takes sim.js's default, the owner's decision 2
    in research/notes/ingame-wiki.md: the sidebar is shown when the scene gives the player a mobile builder.
-   ARMCK stands in this entry's scene, so every demo here shows it. */
+   ARMCK stands in this entry's one scene, so every demo here shows it. */
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 const { TRIP } = createRequire(import.meta.url)('./mockup/sim.js');
@@ -188,7 +188,7 @@ demo('reshape', 'Change the shape mid-drag', {}, T => T
   .click('cancel').say('...and a {cancel} cancels it and puts the building away.').wait(20).up('lmb').wait(10).up('shift'), 180);
 
 const entry = {
-  format: 1, id: 'buildshapes',
+  format: 2, id: 'buildshapes',
   title: 'Build Lines, Grids and Rings',
   subtitle: 'With a building armed, Shift-drag lays a whole line, rectangle or wall of it, and Shift+Ctrl rings a building.',
   text: [
@@ -201,7 +201,7 @@ const entry = {
   ],
   lockedIn: [],
   pace: { build: 24 },
-  units, scene, demos,
+  units, scenes: { green: scene }, demos,
 };
 fs.mkdirSync(`${ROOT}art/wiki/entries`, { recursive: true });
 // small values on one line, the rest expanded: an input per line

@@ -80,9 +80,14 @@ function baseContexts() {
 }
 
 // the quickbuild entry's deposits and vents, in cells: [x, z, w, h]
-const DEP = { A: [13, 15, 5, 5], B: [22, 3, 3, 3], E: [3, 10, 3, 3], S: [15, 1, 3, 3], D: [26, 15, 3, 3], R: [29, 19, 3, 3],
+const DEP = { A: [13, 15, 5, 5], B: [22, 3, 3, 3], E: [3, 10, 3, 3], S: [15, 1, 3, 3], D: [26, 15, 3, 3],
   black: [2, 2, 3, 3], grey: [3, 18, 3, 3] };
 const VENT = [28, 9];
+
+/* the entry's first scene, every demo's that names no `on`, and the entry with that scene edited by `f` (`alone`: the
+   only scene left, for an edit to its map size, which every other scene must share) */
+const first = e => e.scenes[Object.keys(e.scenes)[0]];
+const withFirst = (e, f, alone = false) => ({ ...e, scenes: { ...(alone ? {} : e.scenes), [Object.keys(e.scenes)[0]]: f(first(e)) } });
 
 const foot = u => [Math.round(u.x / 16 - u.fx / 2), Math.round(u.z / 16 - u.fz / 2), u.fx, u.fz];
 // how many cells of rectangle r the footprint of u (a view unit, ghost or queued site) covers
@@ -103,7 +108,7 @@ const footprintIn = (entry, casting) => t => { const k = castOf(entry, casting, 
    each the frame of the tick the clock reached that value, so frames[t] shows the inputs of t and a wait's held ticks
    are in `all` alone. Without a wait the two are the same. */
 function run(entry, demo, layout = LAYOUT, ctx) {
-  const sim = WikiSim.play(entry, demo, layout, ctx), ids = [...entry.scene.units, ...((demo.scene && demo.scene.units) || [])].map(u => u.id);
+  const sim = WikiSim.play(entry, demo, layout, ctx), ids = [...WikiSim.sceneOf(entry, demo).units, ...((demo.scene && demo.scene.units) || [])].map(u => u.id);
   const all = [], frames = [];
   const snap = () => {
     const f = { t: sim.tick, v: sim.view(), o: Object.fromEntries(ids.map(id => [id, sim.orders(id)])) };
@@ -196,16 +201,14 @@ const QUICKBUILD = {
     ok(g.length === 1 && holds(g[0], VENT) && g[0].built === 1, `${r.ty('ARMGEO')} built on the vent`);
   },
   metalmap(r, d, ok) {
-    const [c1, c2] = presses(d, 'order'), f1 = r.frames[c1], f2 = r.frames[c2], l1 = lands(r, d, 'order')[0];
-    ok(!f1.v.ghost && f1.v.cursor.shape === 'move', 'over broad metal ground: no ghost, a move cursor');
+    const [c1] = presses(d, 'order'), f1 = r.frames[c1], l1 = lands(r, d, 'order')[0];
+    ok(f1.v.map.metal.every(v => v === f1.v.map.surfaceMetal && v > 0), 'the metal scene: metal ground everywhere');
+    ok(!f1.v.ghost && f1.v.cursor.shape === 'move', 'over metal ground: no ghost, a move cursor');
     ok(kinds(r.frames[l1 + 1].o.ck) === 'move', `the click there is a move (${kinds(r.frames[l1 + 1].o.ck)})`);
-    // the demo waits for the walk instead of timing its next click to it: the constructor has stopped at its place
-    const pre = r.frames[c2 - 1], ck = pre.v.units.find(u => u.id === 'ck'), mv = r.frames[l1 + 1].o.ck[0];
-    ok(pre.o.ck.length === 0 && Math.hypot(ck.x - mv.x, ck.z - mv.z) <= 32,
-      `${r.ty('ARMCK')} had arrived before the next click (${Math.round(ck.x)}, ${Math.round(ck.z)})`);
-    ok(f2.v.ghost && f2.v.ghost.type === r.ty('ARMMEX') && whole(f2.v.ghost, DEP.R), `over the separate deposit: the ${r.ty('ARMMEX')} ghost`);
-    const m = fresh(r.last.v, r.ty('ARMMEX'));
-    ok(m.length === 1 && whole(m[0], DEP.R) && m[0].built === 1, `${r.ty('ARMMEX')} built on the separate deposit`);
+    // the demo waits for the walk instead of ending on a timed tail: the constructor has stopped at its place
+    const ck = r.last.v.units.find(u => u.id === 'ck'), mv = r.frames[l1 + 1].o.ck[0];
+    ok(r.last.o.ck.length === 0 && Math.hypot(ck.x - mv.x, ck.z - mv.z) <= 32,
+      `${r.ty('ARMCK')} had arrived by the end (${Math.round(ck.x)}, ${Math.round(ck.z)})`);
   },
   fog(r, d, ok) {
     const near = r.frames.filter(f => f.v.ghost && Math.abs(f.v.cursor.x - 104) <= 2 && Math.abs(f.v.cursor.z - 88) <= 2);
@@ -217,12 +220,13 @@ const QUICKBUILD = {
   },
 };
 
-/* rules no quickbuild demo shows, checked on its entry's scene: the classifier compares with SurfaceMetal alone
-   (tagpu_resource.c distinct), so a richer patch joined to broad metal ground is refused like the ground; and only a
-   played demo ends */
+/* rules no quickbuild demo shows, checked on its entry's scenes: the classifier compares with SurfaceMetal alone
+   (tagpu_resource.c distinct), so a richer patch joined to broad metal ground, a band from edge to edge, is refused
+   like the ground; and only a played demo ends */
 const RULES = {
-  'a richer patch inside the broad metal band is not a deposit'(entry) {
-    const s = WikiSim.create(entry, { scene: { selected: ['ck'], metal: [{ rect: [35, 10, 3, 3], v: 200 }] } });
+  'a richer patch inside a broad metal band is not a deposit'(entry) {
+    const s = WikiSim.create(entry, { scene: { selected: ['ck'],
+      metal: [{ rect: [34, 0, 6, 30], v: 40 }, { rect: [35, 10, 3, 3], v: 200 }] } });
     s.input({ move: [36 * 16 + 8, 11 * 16 + 8] });
     return !s.view().ghost && s.view().cursor.shape === 'move';
   },
@@ -255,13 +259,13 @@ const RULES = {
      and a Shift assist each stop at 1024 orders, and an upgrade's reclaim and build go in together or not at all */
   'every Shift append stops at 1024 orders'(entry) {
     // each sim is done with before the next is made: simparity.mjs replays one at a time
-    const full = (id, n, extra = {}) => WikiSim.create({ ...entry, scene: { ...entry.scene,
-      units: entry.scene.units.map(u => u.id !== id ? u : { ...u, orders: Array.from({ length: n }, () => ({ move: [304, 176] })) }) } },
+    const full = (id, n, extra = {}) => WikiSim.create(withFirst(entry, g => ({ ...g,
+      units: g.units.map(u => u.id !== id ? u : { ...u, orders: Array.from({ length: n }, () => ({ move: [304, 176] })) }) })),
       { scene: { selected: [id], ...extra } });
     const rmb = (s, at) => { s.input({ move: at }); s.input({ down: 'shift' }); s.input({ down: 'rmb' }); s.input({ up: 'rmb' }); s.input({ up: 'shift' }); };
     const last = s => s.orders(s.view().units.find(u => u.selected).id).slice(-1)[0];
     const n = s => s.orders(s.view().units.find(u => u.selected).id).length;
-    // over the broad metal band: no Quick Build choice, a move
+    // over plain ground: no Quick Build choice, a move
     const move = full('ck', 1023);
     rmb(move, [568, 184]); const m1 = n(move) === 1024 && last(move).k === 'move' && last(move).x === 568;
     rmb(move, [584, 200]); const m2 = n(move) === 1024 && last(move).x === 568;
@@ -595,8 +599,8 @@ function gesture(s, keys, from, to) {
 }
 // the entry with a 1 x 1 stand-in ARMCK can build: the entry's buildings are all 2 x 2 or larger, and neighbouring 1 x 1
 // sites are the ones 16 world units apart, inside 0x43AFC0's reach of each other
-function withTiny(entry, scene = entry.scene) {
-  const e = { ...entry, units: { ...entry.units, TINY: { footprint: [1, 1], buildTime: 10, from: 'a 1 x 1 stand-in' } }, scene };
+function withTiny(entry, e0 = entry) {
+  const e = { ...e0, units: { ...entry.units, TINY: { footprint: [1, 1], buildTime: 10, from: 'a 1 x 1 stand-in' } } };
   e.units.ARMCK = { ...e.units.ARMCK, builds: [...e.units.ARMCK.builds, 'TINY'] };
   return e;
 }
@@ -647,14 +651,14 @@ const BUILDSHAPES_RULES = {
     return cs.length === 11 && !cs.some(c => same(c, [25, 9])) && q.length === 12 && q[0] === '25,9';
   },
   'a gesture places at most 256 sites'(entry) {
-    const e = withTiny(entry, { ...entry.scene, map: { w: 64, h: 64, surfaceMetal: 0 } });
+    const e = withTiny(entry, withFirst(entry, g => ({ ...g, map: { w: 64, h: 64, surfaceMetal: 0 } }), true));
     const s = WikiSim.create(e, { scene: {} }); s.input({ build: 'TINY' });
     const v = gesture(s, ['shift', 'alt'], [24, 24], [62 * 16, 62 * 16]);
     return v.sites.length === 256 && builds(s.orders('ck')).length === 256;
   },
   'a queue stops growing at 1024 orders'(entry) {
-    const e = { ...entry, scene: { ...entry.scene, units: entry.scene.units.map(u => u.id !== 'ck' ? u
-      : { ...u, orders: Array.from({ length: 1020 }, () => ({ move: [120, 200] })) }) } };
+    const e = withFirst(entry, g => ({ ...g, units: g.units.map(u => u.id !== 'ck' ? u
+      : { ...u, orders: Array.from({ length: 1020 }, () => ({ move: [120, 200] })) }) }));
     const s = WikiSim.create(e, { scene: {} }); s.input({ build: 'ARMDRAG' });
     gesture(s, ['shift'], S2(4, 3), S2(16, 3));
     return s.orders('ck').length === 1024 && builds(s.orders('ck')).length === 4;
@@ -737,8 +741,8 @@ const stateOf = (v, name) => v.side.state[FIXTURE.screens[v.side.screen].gadgets
 const selIds = v => v.units.filter(u => u.selected).map(u => u.id).join(' ');
 const fixtureWith = (types, screens) => ({ ...FIXTURE, sides: [{ ...FIXTURE.sides[0], types: { ...FIXTURE.sides[0].types, ...types } }],
   screens: { ...FIXTURE.screens, ...screens } });
-const withOrders = (entry, ids) => ({ ...entry, scene: { ...entry.scene,
-  units: entry.scene.units.map(u => ids.includes(u.id) ? { ...u, orders: [{ move: [120, 120] }, { move: [200, 120] }] } : u) } });
+const withOrders = (entry, ids) => withFirst(entry, g => ({ ...g,
+  units: g.units.map(u => ids.includes(u.id) ? { ...u, orders: [{ move: [120, 120] }, { move: [200, 120] }] } : u) }));
 /* stand-ins for STOP's rules: a static unit with canstop, as turrets and factories have it, and a mobile one without,
    neither a builder */
 const withStoppers = entry => ({ ...entry, units: { ...entry.units,
@@ -805,7 +809,7 @@ const SIDE_RULES = {
       return v.mode === 'contextual' && s.view().mode === 'contextual' && s.orders('ck').length === 0 &&
         selIds(s.view()) === 'ck' && s.view().side.screen === 'ARMCK1';
     };
-    const MH = entry.scene.map.h * 16;
+    const MH = first(entry).map.h * 16;
     return off([-SIDE_W + 60, 128 + 352 + 20]) && off([-SIDE_W + 64, 64]) && off([60, MH + 8]);
   },
   /* a left press off the screen reaches stock's click 0x498F70 (place_button returns 0 off the viewport), which places
@@ -824,7 +828,7 @@ const SIDE_RULES = {
       if (shift) s.input({ up: 'shift' });
       return { pressed, armed, released, after: s.view().mode };
     };
-    const MH = entry.scene.map.h * 16, below = run([-SIDE_W + 60, 128 + 352 + 20], false), held = run([-SIDE_W + 60, 128 + 352 + 20], true);
+    const MH = first(entry).map.h * 16, below = run([-SIDE_W + 60, 128 + 352 + 20], false), held = run([-SIDE_W + 60, 128 + 352 + 20], true);
     const band = run([40, MH + 8], false), mini = run([-SIDE_W + 64, 64], false);
     return below.pressed === 'ARMMEX@1,26' && below.armed === 'contextual' && below.released === 1 &&
       held.pressed === 'ARMMEX@1,26' && held.armed === 'build:ARMMEX' && held.released === 1 && held.after === 'contextual' &&
@@ -1128,7 +1132,7 @@ const CTX_RULES = {
     const b = WikiSim.bindEntry(entry, c), demo = entry.demos.find(d => d.id === 'click');
     const r = run(entry, demo, null, { ...T1, casting: c }), built = fresh(r.last.v, 'XARMMEX');
     return same(Object.keys(b.units), Object.keys(entry.units).map(t => `X${t}`)) && same(b.units.XARMCK.builds, ['XARMMEX', 'XARMGEO']) &&
-      b.units.XARMCK.name === 'Construction KBot' && b.scene.units.every(u => u.type[0] === 'X') &&
+      b.units.XARMCK.name === 'Construction KBot' && Object.values(b.scenes).every(g => g.units.every(u => u.type[0] === 'X')) &&
       built.length === 1 && built[0].built === 1 && !r.last.v.units.some(u => u.type === 'ARMMEX');
   },
 };
@@ -1207,7 +1211,7 @@ export const ENTRY_RULES = { quickbuild: { ...RULES, ...SIDE_RULES, ...CTX_RULES
 function expectedLock(entry, d, casting) {
   if (!casting) return null;
   const off = Object.keys(entry.units).filter(t => casting.casts[entry.units[t].cast] === null);
-  const scene = [...entry.scene.units, ...((d.scene && d.scene.units) || [])].find(u => off.includes(u.type));
+  const scene = [...WikiSim.sceneOf(entry, d).units, ...((d.scene && d.scene.units) || [])].find(u => off.includes(u.type));
   if (scene) return { t: 0, type: scene.type };
   const b = d.inputs.map((e, i) => [e, i]).sort((x, y) => x[0].at - y[0].at || x[1] - y[1]).map(p => p[0]).find(e => off.includes(e.build));
   return b ? { t: b.at, type: b.build } : null;
