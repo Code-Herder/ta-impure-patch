@@ -1103,8 +1103,9 @@ static int tj_int(const TJV* v, int* out)
 }
 
 /* THE DESCRIPTION (the plan's section 4), checked before anything is read through it: its entry
-   and scene, its cells against the scene's map, each source, each tileset row's source and hash, each tilemap
-   index against the tileset, each feature's cell inside the map. */
+   and scene, its cells the scene's columns and WIKI_GROUND_ROWS rows (a map takes the top rows of
+   its ground, tagpu_wiki_map_rows), each source, each tileset row's source and hash, each tilemap
+   index against the tileset, each feature's cell inside the ground. */
 static int stage_parse(LOADER* L, const WIKIENTRY* e, const WIKISCENE* sc, const TJV* r, WIKI3DSTAGE* st, STAGEREC* s)
 {
     const TJV *x, *v;
@@ -1116,9 +1117,10 @@ static int stage_parse(LOADER* L, const WIKIENTRY* e, const WIKISCENE* sc, const
     if (tj_num(tj_get(r, "format"), 0) != 2) { snprintf(why, nwhy, "not format 2"); return 0; }
     if (strcmp(tj_str(tj_get(r, "entry"), ""), e->id)) { snprintf(why, nwhy, "its entry is not %s", e->id); return 0; }
     if (strcmp(tj_str(tj_get(r, "scene"), ""), sc->name)) { snprintf(why, nwhy, "its scene is not %s", sc->name); return 0; }
-    if (!tj_int(tj_at(c, 0), &s->w) || !tj_int(tj_at(c, 1), &s->h) || s->w != sc->w || s->h != sc->h ||
-        (s->w & 1) || (s->h & 1) || s->w <= 0 || s->h <= 0 || s->w > WIKI_MAP_MAX || s->h > WIKI_MAP_MAX) {
-        snprintf(why, nwhy, "its cells are not the scene's map of %d x %d, even", sc->w, sc->h);
+    if (!tj_int(tj_at(c, 0), &s->w) || !tj_int(tj_at(c, 1), &s->h) || s->w != sc->w || s->h != WIKI_GROUND_ROWS ||
+        sc->h > WIKI_GROUND_ROWS || (s->w & 1) || s->w <= 0 || s->w > WIKI_MAP_MAX) {
+        snprintf(why, nwhy, "its cells are not the scene's %d columns, even, and the ground's %d rows over the "
+                 "scene's %d", sc->w, WIKI_GROUND_ROWS, sc->h);
         return 0;
     }
     for (v = (x = tj_get(r, "sources")) && tj_is(x, TJ_ARR) ? x->first : NULL; v; v = v->next) {
@@ -1170,7 +1172,7 @@ static int stage_parse(LOADER* L, const WIKIENTRY* e, const WIKISCENE* sc, const
         const char* n = tj_str(tj_get(v, "name"), NULL);
         if (!n || !*n || strlen(n) >= WIKI3D_NAMEMAX || !tj_int(tj_at(tj_get(v, "cell"), 0), &f->cx) ||
             !tj_int(tj_at(tj_get(v, "cell"), 1), &f->cz) || f->cx < 0 || f->cz < 0 || f->cx >= s->w || f->cz >= s->h) {
-            snprintf(why, nwhy, "feature %d is not {name, cell} inside the map", i);
+            snprintf(why, nwhy, "feature %d is not {name, cell} inside the ground", i);
             return 0;
         }
         strcpy(f->name, n);
@@ -4441,16 +4443,16 @@ done:
     return out;
 }
 
-int tagpu_wikiside_minimap(const WIKI3DSTAGE* st, const unsigned char* alp, unsigned char* out,
+int tagpu_wikiside_minimap(const WIKI3DSTAGE* st, int rows, const unsigned char* alp, unsigned char* out,
                            int* w, int* h, int* offx, int* offy)
 {
     int W, H, mw, mh, cols, sw, shh, x, y, n;
     unsigned char* src;
     if (!st || !st->ok || !st->tiles || !st->tilemap || !alp || st->w < 2 || st->h < 2 || st->w & 1 || st->h & 1 ||
-        st->w > WIKI_MAP_MAX || st->h > WIKI_MAP_MAX || st->ntile < 1)
+        st->w > WIKI_MAP_MAX || st->h > WIKI_MAP_MAX || st->ntile < 1 || rows < 2 || rows & 1 || rows > st->h)
         return 0;
     W = st->w * 16;
-    H = st->h * 16;
+    H = rows * 16;
     if (W >= H) { mw = 126; mh = 126 * H / W; *offx = 0; *offy = (126 - mh) / 2; }
     else { mw = 126 * W / H; mh = 126; *offx = (126 - mw) / 2; *offy = 0; }
     if (mw < 1 || mh < 1) return 0;
@@ -4555,8 +4557,11 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISI
                 unsigned char mm[126 * 126];
                 uint32_t at;
                 stage_load(&L, &d->entry[i], &d->entry[i].scenes[k], st, &srec[j]);
-                /* the sidebar's minimap of this stage, with the sidebar's shrink table */
-                if (side && tagpu_wikiside_minimap(st, side->alp, mm, &st->mm_w, &st->mm_h, &st->mm_offx, &st->mm_offy) &&
+                /* the sidebar's minimap of this stage, with the sidebar's shrink table, of the map grown
+                   beside the sidebar's column: the only map a minimap is drawn on (tagpu_wikiside.h) */
+                if (side) st->mm_rows = tagpu_wiki_map_rows(d->entry[i].scenes[k].h, side->layout.height);
+                if (side && tagpu_wikiside_minimap(st, st->mm_rows, side->alp, mm, &st->mm_w, &st->mm_h, &st->mm_offx,
+                                                   &st->mm_offy) &&
                     (at = alloc(&L.a, (uint32_t)(st->mm_w * st->mm_h))) != 0) {
                     memcpy(AT(&L.a, at), mm, (size_t)(st->mm_w * st->mm_h));
                     st->minimap = AT(&L.a, at);

@@ -790,8 +790,8 @@ int tagpu_wikilayout_check(const WIKILAYOUT* L, char* err, size_t errn)
     for (i = 0; i < L->nscreen; i++) {
         const WIKISCREEN* s = &L->screen[i];
         if (!terminated(s->name)) return lay_no(err, errn, "a screen's name is not terminated", NULL);
-        /* within the column, and y + h <= WIKI_SIDE_ROWS: the composed column's texture is
-           128 x 1024; y >= 0 first, so WIKI_SIDE_ROWS - y cannot overflow */
+        /* within the column, and y + h <= WIKI_SIDE_ROWS, the deepest column; y >= 0 first, so
+           WIKI_SIDE_ROWS - y cannot overflow */
         if (s->y < 0 || s->w < 1 || s->w > WIKI_SIDE_W || s->h < 1 || s->h > WIKI_SIDE_ROWS - s->y)
             return lay_no(err, errn, "a screen is not within the column:", s->name);
         if (s->y + s->h > rows) rows = s->y + s->h;

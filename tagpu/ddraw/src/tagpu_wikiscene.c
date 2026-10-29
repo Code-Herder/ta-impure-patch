@@ -94,12 +94,15 @@ int tagpu_wikiscene_ground(const WSCENEGROUND* g, WSCENE* out)
        (DrawGameScreen): 16 rows above the eye's and the view's rows + 32, 10 columns left and the
        view's columns + 12, clamped to the map less its last row and column, which the engine's
        sweep never reaches -- nothing anchored there is drawn. An anchor cell takes the last
-       feature the description places on it, as the lab's anchor table does. */
+       feature the description places on it, as the lab's anchor table does. The ground is deeper
+       than a map that has not grown to it (tagpu_wiki_map_rows), so a feature whose footprint
+       ends past the map's last row is not on this map, as gfx.js's Stage leaves it out. */
     for (i = 0; i < g->w * g->h; i++) anchor[i] = -1;
     for (i = 0; i < g->nfeat; i++) {
         const WSCENEFEAT* f = &g->feat[i];
-        if (f->cx < 0 || f->cz < 0 || f->cx >= g->w || f->cz >= g->h) return 0;
+        if (f->cx < 0 || f->cz < 0 || f->cx >= g->w) return 0;
         if (f->nbody > WIKISCENE_SUBS || f->nshadow > WIKISCENE_SUBS || f->fx < 0 || f->fz < 0) return 0;
+        if (f->cz + f->fz > g->h) continue;
         anchor[f->cz * g->w + f->cx] = (int16_t)i;
     }
     r0 = (0 >> 4) - 16;

@@ -146,6 +146,7 @@ static void lever(unsigned frame)
    before this frame's hand-overs are published. */
 static const WIKI3DSTAGE* s_stage;      /* the ground built, or NULL                              */
 static int                s_groundOk;
+static int                s_stageRows;      /* the rows of the map s_stage's ground was built for */
 static WSCENE             s_scene;
 static WSCENEFEAT         s_sfeat[WIKISCENE_FEATS];
 static const unsigned char* s_sframe[WIKISCENE_FEATS][2][WIKISCENE_SUBS];  /* [feat][shadow][sub]       */
@@ -233,7 +234,8 @@ static int verts(int b, const WSCENEQUAD* q, int n)
     return 1;
 }
 
-static const char* ground_build(const WIKI3DSTAGE* st)
+/* the ground of a map `map_rows` tall, the top of the stage's (tagpu_wikiscene_ground) */
+static const char* ground_build(const WIKI3DSTAGE* st, int map_rows)
 {
     WSCENEGROUND g;
     int i, rows, h, maxdim = tagpu_vk_max_image_dim();
@@ -256,7 +258,7 @@ static const char* ground_build(const WIKI3DSTAGE* st)
             !frames_of(f->seqshad, s_sframe[i][1], t->shadow, &t->nshadow))
             return "a feature's frame is not one the readers take";
     }
-    g.w = st->w; g.h = st->h;
+    g.w = st->w; g.h = map_rows;
     g.ntile = st->ntile;
     g.tilemap = st->tilemap;
     g.nfeat = st->nfeat;
@@ -690,13 +692,15 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     if (v->w <= 0 || v->h <= 0 || v->w > WIKISCENE_MAP || v->h > WIKISCENE_MAP) return;
     if (f->packet) s_gfx = f->packet->gfx_opt;
     /* THE GROUND FALLS BACK WHOLE (the plan's section 3): a stage the loader could not resolve, or
-       whose cells are not this view's map, is the whitebox's, and the units are drawn over it */
-    if (!st || !st->ok || st->w != v->w || st->h != v->h) st = NULL;
+       whose ground is not this view's map's columns or not as deep as its rows, is the whitebox's,
+       and the units are drawn over it. A map takes the top v->h rows of its stage's ground. */
+    if (!st || !st->ok || st->w != v->w || v->h > st->h || (v->h & 1)) st = NULL;
     /* a device with no image size yet (bring-up, a re-pick) builds nothing and latches nothing:
-       the stage is built on the first frame that has one */
-    if (st && st != s_stage && tagpu_vk_max_image_dim() > 0) {
-        const char* why = ground_build(st);
+       the stage is built on the first frame that has one, and again when the map's rows change */
+    if (st && (st != s_stage || v->h != s_stageRows) && tagpu_vk_max_image_dim() > 0) {
+        const char* why = ground_build(st, v->h);
         s_stage = st;
+        s_stageRows = v->h;
         s_groundOk = why == NULL;
         if (why)
             tagpu_logf("wiki3d: stage %s.%s: the ground falls back to the whitebox - %s", st->entry, st->scene, why);
@@ -705,7 +709,7 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
                        "shadow(s), a %dx%d terrain atlas, %d feature frame(s)", st->entry, st->scene, st->ntile,
                        s_scene.ncell, s_scene.nbody, s_scene.nshadow, ATLAS_W, s_tatlasH, s_fatlas.n);
     }
-    s_ground = st && st == s_stage && s_groundOk;
+    s_ground = st && st == s_stage && v->h == s_stageRows && s_groundOk;
 
     /* THE MODEL RECORDS, of the types the arena resolved for this entry */
     if (a != s_tA || entry != s_tEntry || s_leverSerial != s_tLever ||

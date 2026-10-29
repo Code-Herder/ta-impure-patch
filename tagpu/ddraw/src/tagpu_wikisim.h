@@ -450,7 +450,8 @@ typedef struct {
     struct WIKISIMBOUND* bound;
     unsigned char    unbound[WIKI_MAX_DEFS];    /* type i is of a cast the casting leaves
                                                    unbound: a scene unit or a build of it locks */
-    int              W, H;
+    int              W, H;          /* the map: the scene's W x SH, grown to H rows beside the column */
+    int              SH;
     double           SM, PACE;
     double*          metal;
     unsigned char*   fog;

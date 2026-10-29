@@ -116,7 +116,8 @@ typedef struct {
     char              entry[WIKI_ID_MAX];
     char              scene[WIKI_SCENE_MAX];
     int               ok;
-    int               w, h;             /* cells; the tiles are w/2 x h/2                       */
+    int               w, h;             /* the ground's cells, w the scene's and h WIKI_GROUND_ROWS;
+                                           the tiles are w/2 x h/2, and a map takes the top rows  */
     int               ntile;
     const unsigned char* tiles;         /* ntile x 1024 bytes, 32 x 32 palette indices each, in
                                            the description's tileset order                        */
@@ -128,6 +129,7 @@ typedef struct {
        when the ground did not resolve or the sidebar was refused (the minimap is the whitebox's) */
     const unsigned char* minimap;
     int               mm_w, mm_h, mm_offx, mm_offy;
+    int               mm_rows;          /* the rows of the map it shows (tagpu_wiki_map_rows)  */
 } WIKI3DSTAGE;
 
 #define WIKI3D_MAXPIECE 256             /* TAGPU_PBMAXPIECE: the readers' piece bound            */
@@ -421,13 +423,13 @@ typedef struct WIKISIDE {
 const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** report);
 
 /* THE MINIMAP PICTURE the engine generates for a map with no TNT picture (0x466780), over a
-   resolved stage: the stage map's extent W x H (cells x 16), not the engine's scroll extent, which
-   would cut the stage's bottom rows off; the long side 126 pixels, the short one trunc(126 * short
+   resolved stage's map of its ground's top `rows` rows: the map's extent W x H (cells x 16), not
+   the engine's scroll extent, which would cut the stage's bottom rows off; the long side 126 pixels, the short one trunc(126 * short
    / long), centred on the short axis. A 2w x 2h surface sampled from the tiles, shrunk 2:1 by
    0x4B95A0 through `alp`: out = T[T[a][b]][T[c][d]], a, b the top pair and c, d the bottom pair.
    Writes w * h indices to `out` (at most 126 * 126) and the geometry; 0 when the stage has no
-   resolved ground or odd cells. Pure. */
-int tagpu_wikiside_minimap(const WIKI3DSTAGE* st, const unsigned char* alp, unsigned char* out,
+   resolved ground, odd cells, or `rows` odd or past its ground. Pure. */
+int tagpu_wikiside_minimap(const WIKI3DSTAGE* st, int rows, const unsigned char* alp, unsigned char* out,
                            int* w, int* h, int* offx, int* offy);
 
 #ifdef _WIN32

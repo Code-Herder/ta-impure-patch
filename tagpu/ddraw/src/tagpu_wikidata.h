@@ -278,7 +278,23 @@ int tagpu_wikidata_casting(const TJV* v, WIKICASTING* c, char* err, size_t errn)
 #define WIKI_SIDE_W        128   /* the engine's panel width, whatever the HUD scale */
 #define WIKI_SIDE_MIN_H    480   /* the PANELSIDE picture's rows: the column is never shorter */
 #define WIKI_SIDE_MINIMAP  128   /* the minimap's square at the column's top, never clickable */
-#define WIKI_SIDE_ROWS     1024  /* the composed column's texture is 128 x 1024 */
+/* the deepest column, every compatibility setup's: a stage's map grows to its column
+   (tagpu_wiki_map_rows), and every stage description's ground is WIKI_SIDE_ROWS / 16 rows deep
+   (tools/wiki/stagemap.py GROUND_ROWS); the composed column's texture is 128 x WIKI_SIDE_ROWS */
+#define WIKI_SIDE_ROWS     768
+#define WIKI_GROUND_ROWS   (WIKI_SIDE_ROWS / 16)  /* cells: every stage description's ground */
+
+/* THE MAP'S ROWS, sim.js THE MAP: a scene of `scene_rows` beside a column of `column_rows` (0 for
+   none) is grown downward by whole 32-unit tiles until it is at least as tall as the column, so no
+   band lies under it. A column outside 1..WIKI_SIDE_ROWS grows nothing, so the rows are at most
+   the larger of the scene's and WIKI_GROUND_ROWS. The game thread's simulation, the page's fit of
+   a press onto the drawn stage (tagpu_wiki.c stage_world) and the loader's minimap all take the
+   map from here, so they cannot disagree on it. */
+static inline int tagpu_wiki_map_rows(int scene_rows, int column_rows)
+{
+    const int grown = column_rows > 0 && column_rows <= WIKI_SIDE_ROWS ? 2 * ((column_rows + 31) / 32) : 0;
+    return grown > scene_rows ? grown : scene_rows;
+}
 #define WIKI_SIDE_SCREENS  48
 #define WIKI_SIDE_GADGETS  64    /* a screen's gadgets, and the length of the view's states */
 #define WIKI_SIDE_PAGES    7     /* the page is unit+0x110 bits 23..25: at most 7 numbered pages */

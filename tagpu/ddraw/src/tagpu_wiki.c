@@ -514,9 +514,8 @@ static void try_release_all(int send)
    snapped rect the render thread fitted the map into (tagpu_wikistage_canvas) -- and its unit,
    with tagpu_wikistage_fit, the one function both threads fit with; clamped to the content
    rect -- the map, and with the sidebar the column left of it, as tall as the taller -- as wiki.js
-   `world`: the simulation decides what lies under the point (the column, the map, or the dead
-   band under a map shorter than the column). The map is the entry's scene's, the simulation's
-   only map. THE FIT IS THE DRAWN FRAME'S: the sidebar's rows are those of the view that frame
+   `world`: the simulation decides what lies under the point (the column or the map). The map is
+   the entry's scene's, grown beside the column as the simulation grows it. THE FIT IS THE DRAWN FRAME'S: the sidebar's rows are those of the view that frame
    drew (TAGPU_CMD_WIKI.side_h), not the running simulation's, which may have turned its sidebar
    on or off since -- a press is mapped through what the player saw, never through a column no
    frame has shown. The frame must have drawn the window open, for the entry selected now, with a
@@ -532,8 +531,10 @@ static int stage_world(int cx, int cy, double* wx, double* wz)
     for (i = 0; i < s_hit.n && !h; i++)
         if (!strncmp(s_hit.hit[i].key, "stage", TAGPU_WIKI_KEY)) h = &s_hit.hit[i];
     if (!h || cx < h->x0 || cx >= h->x1 || cy < h->y0 || cy >= h->y1) return 0;
-    /* every scene of an entry has the first one's map size (tagpu_wikidata_entry), so the fit is the entry's */
-    tagpu_wikistage_fit(e->scenes[0].w, e->scenes[0].h, s_hit.side_h, h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &f);
+    /* every scene of an entry has the first one's map size (tagpu_wikidata_entry), so the fit is the
+       entry's map grown beside the drawn frame's column, as the simulation grows it */
+    tagpu_wikistage_fit(e->scenes[0].w, tagpu_wiki_map_rows(e->scenes[0].h, s_hit.side_h), s_hit.side_h,
+                        h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &f);
     if (!(f.s > 0)) return 0;
     x = (cx - h->x0 - f.ox) / f.s;
     z = (cy - h->y0 - f.oz) / f.s;

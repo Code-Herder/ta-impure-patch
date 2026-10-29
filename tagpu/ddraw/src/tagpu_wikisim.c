@@ -43,7 +43,7 @@ static const WIKISIMCTX CTX_NONE = { 0, NULL, 1, NULL, NULL };
 enum { KIND_NONE, KIND_MEX, KIND_GEO };
 enum { HOW_BUILD, HOW_RECLAIM };
 /* where the cursor is (sim.js over()); NONE: a mouse button that has not gone down */
-enum { OVER_NONE, OVER_SIDE, OVER_MAP, OVER_DEAD };
+enum { OVER_NONE, OVER_SIDE, OVER_MAP };
 
 static const WIKITRIPROW TRIP_ROWS[WIKI_TRIP_NROWS] = WIKI_TRIP_ROWS;
 /* Every row ends on the button's down, or it would arm at another tick in another mod; and the
@@ -152,15 +152,13 @@ static BOX box(const WIKISIM* s, int t, int ox, int oz)
     return b;
 }
 
-/* Where the cursor is: the column left of x = 0, the map, or the dead band under a map shorter
-   than the column. The map is closed at its far edges because the stage clamps a pointer beyond
-   them onto exactly W x 16 or H x 16, which the map rules have always read as the map. With the
-   sidebar off everything is the map. */
+/* Where the cursor is: the column left of x = 0, else the map, which is as tall as the column.
+   The map is closed at its far edges because the stage clamps a pointer beyond them onto exactly
+   W x 16 or H x 16, which the map rules have always read as the map. With the sidebar off
+   everything is the map. */
 static int over(const WIKISIM* s)
 {
-    if (!s->lay) return OVER_MAP;
-    if (s->cursor_x < 0) return OVER_SIDE;
-    return s->cursor_x <= s->W * CELL && s->cursor_z <= s->H * CELL ? OVER_MAP : OVER_DEAD;
+    return s->lay && s->cursor_x < 0 ? OVER_SIDE : OVER_MAP;
 }
 
 /* sim.js's Math.min(Math.max(v, 0), m): a v at or below 0, -0 included, gives +0 */
@@ -3529,14 +3527,14 @@ static const WIKISCENEUNIT* scene_unit(const WIKISCENE* a, const WIKISCENE* b, i
     return k < a->nunit ? &a->unit[k] : &b->unit[k - a->nunit];
 }
 
-/* scene unit k's body at (x, z) lies on the map and overlaps no scene structure and no mobile
+/* scene unit k's body at (x, z) lies on the scene's map and overlaps no scene structure and no mobile
    scene unit before k, at the place spot[] settled for it */
 static int scene_free(const WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, const double* spot, int k,
                       double x, double z)
 {
     const WIKIRECT r = scene_rect(s, scene_unit(a, b, k)->def, x, z);
     int m;
-    if (!on_map(s, r)) return 0;
+    if (!(r.x0 >= 0 && r.z0 >= 0 && r.x1 <= s->W * CELL && r.z1 <= s->SH * CELL)) return 0;
     for (m = 0; m < scene_n(a, b); m++) {
         const int t = scene_unit(a, b, m)->def;
         if (mobile(s, t) && m >= k) continue;
@@ -3612,7 +3610,7 @@ static int scene_units(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, char*
             const WIKIUNIT* v = s->unit[j];
             if (v != u && !mobile(s, v->type) && overlap(fb, box(s, v->type, v->ox, v->oz))) break;
         }
-        if (!(fb.ox >= 1 && fb.oz >= 1 && fb.ox + fb.fx < s->W && fb.oz + fb.fz < s->H) || j < s->nunit) {
+        if (!(fb.ox >= 1 && fb.oz >= 1 && fb.ox + fb.fx < s->W && fb.oz + fb.fz < s->SH) || j < s->nunit) {
             snprintf(err, errn, "%s's %s does not fit the scene", u->id, def(s, u->type)->name);
             free(spot);
             return 0;
@@ -3748,7 +3746,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     const WIKISCENE* a = &e->scenes[d ? d->on : 0];
     const WIKISCENE* b = d ? &d->scene : NULL;
     const WIKISCENE* sel = b && b->has_selected ? b : a->has_selected ? a : NULL;
-    const size_t cells = (size_t)a->w * a->h;
+    size_t cells;
     int i, k, r;
     memset(s, 0, sizeof *s);
     /* a layout is checked whole before any sim reads it, as sim.js's checked() does; every index
@@ -3788,8 +3786,15 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     }
     s->cap = -1;
     s->locked = -1;
+    /* THE MAP (tagpu_wiki_map_rows): the checked layout's height is its column's rows, at most
+       WIKI_SIDE_ROWS, so H is at most 48, the rows every stage description's ground holds
+       (tools/wiki/stagemap.py GROUND_ROWS) and within WIKI_MAP_MAX. The scene's content is checked
+       against the scene's own rows (SH), so it is the same scene in every context; the rules of play
+       read H. */
     s->W = a->w;
-    s->H = a->h;
+    s->SH = a->h;
+    s->H = tagpu_wiki_map_rows(a->h, s->lay ? s->lay->height : 0);
+    cells = (size_t)s->W * s->H;
     s->SM = a->surface_metal;
     s->PACE = e->pace;
     s->mode = -1;

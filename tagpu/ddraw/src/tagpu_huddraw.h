@@ -35,7 +35,7 @@ enum { HUDM_PART, HUDM_SOLID, HUDM_SHADE, HUDM_DOT, HUDM_GLYPH, HUDM_LINE, HUDM_
 #define HUD_TEX_SPRITE (-5)
 #define HUD_TEX_SIDE   (-6)
 #define HUD_SIDE_W     128          /* WIKI_SIDE_W: the column's width                        */
-#define HUD_SIDE_H     1024         /* WIKI_SIDE_ROWS: the most rows a layout may have        */
+#define HUD_SIDE_H     768          /* WIKI_SIDE_ROWS: the most rows a layout may have        */
 typedef struct { int tex, first, count; } HUDBATCH;
 
 /* A GROUP'S REGION OF THE LAYER IMAGE (tagpu_huddraw.c, THE GROUPS), in its pixels from its top

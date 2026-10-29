@@ -56,9 +56,10 @@ typedef struct {
 } WSCENEFEAT;
 
 typedef struct {
-    int                  w, h;          /* cells; the tile map is w/2 x h/2                     */
+    int                  w, h;          /* the map's cells: the stage's ground is w/2 tiles wide and
+                                           at least h/2 deep, of which the map takes the top rows  */
     int                  ntile;         /* the tile set's size: every tile map entry is under it */
-    const uint16_t*      tilemap;
+    const uint16_t*      tilemap;       /* row-major, w/2 a row: the map's rows are its first    */
     int                  nfeat;
     const WSCENEFEAT* feat;
 } WSCENEGROUND;
@@ -139,7 +140,8 @@ int  tagpu_wikiscene_models(const WIKISTAGEVIEW* v, const WSCENETYPE* types, int
 
 /* THE GROUND: `g`'s cells and quads into `out`. Returns 1 when the ground can be drawn whole, 0
    with out->refused set when it cannot -- a map past WIKISCENE_MAP, a tile map entry past the
-   set, a feature off the map or past a bound -- and then nothing of it is to be drawn. */
+   set, a feature left of, above or right of the map or past a bound -- and then nothing of it is
+   to be drawn. A feature whose footprint ends below the map is not on it, and left out. */
 int  tagpu_wikiscene_ground(const WSCENEGROUND* g, WSCENE* out);
 
 /* THE FOG: a view's `fog` (w x h cells, 0 clear, 1 grey, 2 black; WIKISTAGEVIEW.fog) into `out`.

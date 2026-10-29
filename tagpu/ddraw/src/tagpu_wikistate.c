@@ -219,10 +219,10 @@ static const WIKILAYOUT* side_resolve(const WIKISTAGEVIEW* v, const WIKIART* art
    column drawn last, and compared with that one byte for byte -- its rows, its indices and its
    coverage -- so the RGBA is remade, with a new generation that tagpu_vk_hud.c sends whole, exactly
    when a texel can differ, never on a hash's say-so: a frame never shows another frame's column as
-   its own. The comparison is two memcmp over at most 2 x 128 x 1024 bytes on columns that agree:
-   MEASURED 2026-10-27 at 5.9 us for a 480-row column and 12.9 us for 1024 rows, i686 -O2 -msse2
-   under Wine on the reference setup (1.5 and 3.2 us native x86-64). This thread's alone. */
-static WIKISIDECOL    s_col[2];                                   /* 256 KB each          */
+   its own. The comparison is two memcmp over at most 2 x 128 x WIKI_SIDE_ROWS bytes on columns
+   that agree: MEASURED 2026-10-27 at 5.9 us for a 480-row column and 12.9 us for 1024 rows, i686
+   -O2 -msse2 under Wine on the reference setup (1.5 and 3.2 us native x86-64). This thread's alone. */
+static WIKISIDECOL    s_col[2];                                   /* 192 KB each          */
 static int            s_colCur;         /* s_col[s_colCur] is the column s_colRgba holds        */
 static unsigned char  s_colRgba[HUD_SIDE_W * HUD_SIDE_H * 4];     /* 512 KB               */
 static const WIKISIDE* s_colOf;
@@ -251,9 +251,11 @@ static int side_bind(const WIKISTAGEVIEW* v, const WIKIART* art, const WIKISIDE*
     /* the stage's minimap picture: the asset arena's, the demo's scene's, NULL until it is loaded */
     if (w3 && art->data && s_entry >= 0 && s_entry < art->data->nentry)
         st = tagpu_wiki3d_stage(w3, &art->data->entry[s_entry], s_demo);
+    /* a stage's minimap picture is of one map's rows: the view's map takes it only when they are its */
+    if (st && (!st->minimap || st->mm_rows != v->h)) st = NULL;
     /* the side the view shows, whose PANELSIDE is drawn: data, bounded by the composer against the
        layout's sides */
-    if (!tagpu_wikiside_compose(side, v, v->side.index, st ? st->minimap : NULL, st && st->minimap ? st->mm_w * st->mm_h : 0, c))
+    if (!tagpu_wikiside_compose(side, v, v->side.index, st ? st->minimap : NULL, st ? st->mm_w * st->mm_h : 0, c))
         return 0;
     if (!s_colGen || side != s_colOf || !col_same(c, &s_col[s_colCur])) {
         memset(s_colRgba, 0, sizeof s_colRgba);
