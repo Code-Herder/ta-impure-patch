@@ -836,7 +836,11 @@ def mockup_shot(state, path):
                 break
             time.sleep(0.1)
         v = wl.result(run("eval", "async () => { const S = WikiPage.state, $ = s => document.querySelector(s);"
-                                  " if (S.playing) $('#c-play').click(); const sim = WikiPage.sim();"
+                                  # the demo afresh and paused in one task, whatever the load left it at: past
+                                  # the tick, or done (play on a done demo restarts it playing), and no frame
+                                  # runs between the two
+                                  " $('#c-replay').click(); if (S.playing) $('#c-play').click();"
+                                  " const sim = WikiPage.sim();"
                                   f" while (sim.tick < {state['tick']} && !sim.done) sim.step();"
                                   " for (let i = 0; i < 4; i++) await new Promise(r => requestAnimationFrame(r));"
                                   " const f = $('#frame').getBoundingClientRect();"
@@ -921,9 +925,10 @@ def demos(c, shots, res):
     # retail game's, so the stock pack's sidebar -- past tick 150, which leaves some nine seconds of
     # either building demo for the pause to land in, and the METAL ring past 190, its drag nearly
     # out, about two seconds before its release at tick 248 (a pause that lands later shows the
-    # rocks ordered instead)
+    # rocks ordered instead), and the ENERGY ring past 812, its two trees reclaimed (778, 805) and
+    # so gone from the game look's image, about two seconds before the demo's end at 878
     for node, entry, k, demo, at in ((2, "quickbuild", 0, "snap", 150), (3, "buildshapes", 1, "line", 150),
-                                     (5, "reclaim", 2, "metal", 190)):
+                                     (5, "reclaim", 2, "metal", 190), (5, "reclaim", 3, "energy", 812)):
         d = c.dump()
         if d["entry"] != entry:
             press(c, d, f"entry:{node}")

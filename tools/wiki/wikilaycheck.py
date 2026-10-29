@@ -100,6 +100,9 @@ COLLECT = r"""async () => {
   if (A.speed) $(A.speed === 2 ? '#c-x2' : '#c-x1').click();
   if (A.try) { $('#c-try').click(); await raf(); await raf(); }
   if (A.tick != null) {
+    // the demo afresh and paused in one task, whatever the load left it at: past the tick, or done (play
+    // on a done demo restarts it playing), and no frame runs between the two
+    $('#c-replay').click();
     if (S.playing) $('#c-play').click();
     const sim = WikiPage.sim();
     while (sim && sim.tick < A.tick && !sim.done) sim.step();
