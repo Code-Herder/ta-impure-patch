@@ -40,7 +40,7 @@ const WikiSide = (() => {
     return best;
   }
   /* THE COLUMN, 128 x layout.height, for one view (ingame-wiki.md, *How it is drawn*). `art` is a pack read by read();
-     `base` the minimap's base picture (geometry's w x h palette indices: the pack's art.minimap.bases[entry]) or null,
+     `base` the minimap's base picture (geometry's w x h palette indices: the pack's art.minimap.bases[stage]) or null,
      when the minimap is left to the whitebox (the result's `minimap` false); mapW and mapH the stage map's extent in
      world units. In order: the engine's black (CLEAR) over the whole column; PANELSIDE; the minimap -- the base under
      the fog, the dots, the camera box; the routed screen -- its panel picture, then each drawn gadget's frame for its
@@ -153,7 +153,7 @@ const WikiSide = (() => {
     const problems = [], art = { screens: {} };
     if (!json || json.format !== 1) return { layout: null, art: null, minimap: {}, problems: ['side.json: format is not 1'] };
     const A = json.art || {}, sh = A.sheet || {};
-    // the minimap's base per entry: a file beside side.json, w x h palette indices; compose checks its size
+    // the minimap's base per stage, `<entry>.<scene>`: a file beside side.json, w x h palette indices; compose checks its size
     const minimap = {};
     for (const [id, b] of Object.entries((A.minimap && A.minimap.bases) || {}))
       if (b && typeof b.file === 'string' && !b.file.includes('..')) minimap[id] = { file: b.file };

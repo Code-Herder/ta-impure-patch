@@ -334,11 +334,29 @@ function refusalCases(entry) {
   bind('every type renamed', 'accepted', () => {}, C => { for (const k of Object.values(C.casts)) if (k) k.type = `X${k.type}`; });
   // a scene its bound footprints do not fit
   bind('a bound footprint past the interior', 'refused', () => {}, C => { C.casts.geo.footprint = [16, 16]; });
-  const mex2 = e => { e.scene.units.push({ id: 'mex2', type: 'ARMMEX', at: [496, 264] }); };
+  const mex2 = e => { Object.values(e.scenes)[0].units.push({ id: 'mex2', type: 'ARMMEX', at: [496, 264] }); };
   bind('a second extractor beside the first', 'accepted', mex2, () => {}, false);
   bind('a bound footprint over a structure placed before it', 'refused', mex2, C => { C.casts.mex.footprint = [5, 5]; });
   bind('a bound footprint that still fits', 'accepted', () => {}, C => { C.casts.mex.footprint = [4, 4]; });
   bind('an unbound scene unit locks, never refuses', 'accepted', () => {}, C => { C.casts.geo = null; });
+  // the scenes (sim.js sceneOf): a demo on the one its `on` names, the first by default, every map the first one's size
+  const scn = (name, want, edit, d = {}) => { const e = clone(entry); edit(e);
+    cases.push({ name, want, scripted: 1, layout: FIXTURE, ...CTX, entry: { ...e, demos: [{ ...base, ...d }] } }); };
+  const first = e => Object.values(e.scenes)[0], second = e => { e.scenes.two = clone(first(e)); };
+  scn('a demo on a second scene', 'accepted', second, { on: 'two' });
+  scn('a demo on no scene of the entry', 'refused', second, { on: 'three' });
+  scn('a demo on a number', 'refused', second, { on: 1 });
+  scn('a demo on null', 'refused', second, { on: null });
+  scn('a second scene of another size', 'refused', e => { second(e); e.scenes.two.map = { ...e.scenes.two.map, w: 42 }; });
+  scn('a second scene of another size, the demo on the first', 'refused',
+    e => { second(e); e.scenes.two.map = { ...e.scenes.two.map, h: 32 }; }, { on: Object.keys(entry.scenes)[0] });
+  scn('no scenes', 'refused', e => { e.scenes = {}; });
+  scn('scenes an array', 'refused', e => { e.scenes = [first(e)]; });
+  scn('a scene name with a capital', 'refused', e => { e.scenes = { Green: first(e) }; });
+  scn('a scene name starting with a digit', 'refused', e => { e.scenes = { '2d': first(e) }; });
+  scn('a scene name of 17 bytes', 'refused', e => { e.scenes = { ['a'.repeat(17)]: first(e) }; });
+  scn('a scene name of 16 bytes', 'accepted', e => { e.scenes = { ['a'.repeat(16)]: first(e) }; });
+  scn('format 1', 'refused', e => { e.format = 1; });
   // text.js's tokens: title, subtitle, paragraphs, demo titles and captions
   const caption = c => e => { e.demos = { base: { inputs: [{ at: 0, caption: c }, ...base.inputs] } }; };
   text('every token kind', 'accepted', caption('{builder} {Order} {order} {Select} {select} {Cancel} {cancel} {mex} {geo}'));

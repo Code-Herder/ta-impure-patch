@@ -245,14 +245,12 @@ static int side_bind(const WIKISTAGEVIEW* v, const WIKIART* art, const WIKISIDE*
     const WIKI3D* w3 = tagpu_wiki3d_get();
     const WIKI3DSTAGE* st = NULL;
     WIKISIDECOL* c = &s_col[s_colCur ^ 1];
-    int i;
     s_sart.side = NULL;
     s_sart.side_minimap = 0;
     if (!side || !v) return 0;
-    /* the stage's minimap picture: the asset arena's, by the entry's id, NULL until it is loaded */
+    /* the stage's minimap picture: the asset arena's, the demo's scene's, NULL until it is loaded */
     if (w3 && art->data && s_entry >= 0 && s_entry < art->data->nentry)
-        for (i = 0; i < w3->nstage; i++)
-            if (!strcmp(w3->stage[i].entry, art->data->entry[s_entry].id)) { st = &w3->stage[i]; break; }
+        st = tagpu_wiki3d_stage(w3, &art->data->entry[s_entry], s_demo);
     /* the side the view shows, whose PANELSIDE is drawn: data, bounded by the composer against the
        layout's sides */
     if (!tagpu_wikiside_compose(side, v, v->side.index, st ? st->minimap : NULL, st && st->minimap ? st->mm_w * st->mm_h : 0, c))

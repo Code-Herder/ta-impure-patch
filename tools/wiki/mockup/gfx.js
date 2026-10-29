@@ -353,12 +353,12 @@ window.WikiGfx = (() => {
     return { canvas, render, pack };
   }
 
-  /* The stage's image for `entry` showing view `v` at `tick`: { canvas, complete, ground, resolved }, or null while the
-     game graphics are off or the entry's pack is loading. A pack that fails to load leaves the stage whitebox. `dir`
-     is the pack's folder under gfx/: the entry's own by default, or a mod's (side/<mod>/stage/<entry>, gfx.py
-     --stages), which holds that mod's units for the casting the view is bound to. `poses` is sim.js `poses()` for the
+  /* The image of stage `entry` (`<entry>.<scene>`, the index's key) showing view `v` at `tick`: { canvas, complete,
+     ground, resolved }, or null while the game graphics are off or the stage's pack is loading. A pack that fails to
+     load leaves the stage whitebox. `dir` is the pack's folder under gfx/: the stage's own by default, or a mod's
+     (side/<mod>/stage/<entry>.<scene>, gfx.py --stages), which holds that mod's units for the casting the view is bound to. `poses` is sim.js `poses()` for the
      view, null to draw every unit at rest. */
-  const shown = {};                     // entry id -> the folder its last frame was drawn from
+  const shown = {};                     // stage -> the folder its last frame was drawn from
   function frame(entry, v, tick, dir = entry, poses = null) {
     if (!on() || !entry || !index || !index.entries || !index.entries[entry]) return null;
     shown[entry] = dir;

@@ -3744,7 +3744,8 @@ static int resolve(WIKISIM* s, const WIKIDEMO* d)
 int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int scripted, const WIKILAYOUT* lay,
                        const WIKISIMCTX* ctx, char* err, size_t errn)
 {
-    const WIKISCENE* a = &e->scene;
+    /* the scene the demo plays on: `on` is an index tagpu_wikidata_entry bounded by nscene */
+    const WIKISCENE* a = &e->scenes[d ? d->on : 0];
     const WIKISCENE* b = d ? &d->scene : NULL;
     const WIKISCENE* sel = b && b->has_selected ? b : a->has_selected ? a : NULL;
     const size_t cells = (size_t)a->w * a->h;

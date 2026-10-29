@@ -10,7 +10,8 @@ nothing derived from the game is ever committed (CLAUDE.md, *Nothing from the or
 `gfx=game` reads gfx/index.json and draws the stage with tools/tascene-render.js, tagpu's own shaders; without the
 folder it stays on the whitebox. research/notes/ingame-wiki-3d-stage-plan.md section 9 is the design.
 
-One tascene-format pack a wiki entry, `gfx/<entry>/scene.json` and its binaries:
+One tascene-format pack a stage, one stage per scene of a wiki entry, `gfx/<entry>.<scene>/scene.json` and its
+binaries:
 
   terrain/   the stage description's tile set as tagpu_terr.c's R8 atlas (64 tiles a row, 34-texel pitch), its
              tile map (one u16 a 32-unit tile, an index into that set) and a zero height grid (the stage is flat)
@@ -22,7 +23,7 @@ One tascene-format pack a wiki entry, `gfx/<entry>/scene.json` and its binaries:
   sounds/    the WAVs the units' sound categories and the sidebar's buttons play, named by sounds.json
   shaders    gfx/shaders/, tagpu's GLSL extracted from the C sources (the repository's, not the game's)
 
-and gfx/index.json, which names each entry's pack and carries the whole resolution report; and the game's cursors,
+and gfx/index.json, which names each stage's pack and carries the whole resolution report; and the game's cursors,
 gfx/cursors.json and its sheet gfx/cursors.rgba, which the stage draws its pointer with in either look.
 
 THE RULES ARE THE ENGINE'S, through tools/wiki/tavfs.py (loose first, then the first archive in the engine's mount
@@ -61,7 +62,7 @@ D1/D2). Each element is resolved or refused by name:
 
 Colour is palette colour: no restorer runs (the plan's question 7: the stage is Classic).
 
-Each entry pack also carries `minimap.bin`, the minimap picture the engine generates from the stage's tiles
+Each stage pack also carries `minimap.bin`, the minimap picture the engine generates from the stage's tiles
 (`minimap_base`), shrunk with this install's palettes\\PALETTE.ALP.
 
 THE SIDEBAR PACK (`--side-only --mod <m>`; tools/wiki/sidepacks.py runs it once per compat setup) is the mod's left
@@ -77,10 +78,10 @@ binaries (research/notes/ingame-wiki.md, *The data format*, a mod's pack). side.
            `pal.bin` (PALETTE.PAL as 256 RGBA), PANELSIDE of each layout side, each screen's panel picture, one
            picture a button (`pics[i]` belongs to `layout.screens[S].gadgets[i]`) and its labels, `greyed.bin` (the
            tint over a greyed button, greyed_table), the minimap dots, and the minimap's colours:
-           `unexplored` and `box` (GUI colours 0 and 0x0E), `seen.bin` (the grey remap) and one base per entry,
-           `minimap/<entry>.bin`, shrunk with that install's own PALETTE.ALP
+           `unexplored` and `box` (GUI colours 0 and 0x0E), `seen.bin` (the grey remap) and one base per stage,
+           `minimap/<entry>.<scene>.bin`, shrunk with that install's own PALETTE.ALP
   report   every element's source, and every refusal, by name
-and with `--stages`, `gfx/side/<m>/stage/`: the entry packs above, laid out as in gfx/ (`<entry>/scene.json`,
+and with `--stages`, `gfx/side/<m>/stage/`: the stage packs above, laid out as in gfx/ (`<entry>.<scene>/scene.json`,
 `palette/`, `shaders/`, `index.json`), resolved from the mod's install and holding, beside each entry's own unit
 types, every side's type for each cast the entry's units name (`stage_types`). The mockup draws a demo bound to the
 mod's casting from these, so each side shows its own models.
@@ -752,7 +753,7 @@ def unit_meshes(eng, models, owners):
 def entry_owners(entry):
     """Every owner the entry's scenes give a unit, and 0, the player."""
     owners = {0}
-    for sc in [entry.get("scene", {})] + [d.get("scene", {}) for d in entry.get("demos", [])]:
+    for sc in list(entry.get("scenes", {}).values()) + [d.get("scene", {}) for d in entry.get("demos", [])]:
         for u in sc.get("units", []) or []:
             if isinstance(u.get("owner"), int):
                 owners.add(u["owner"])
@@ -2096,14 +2097,16 @@ def side_pack(eng, mod, descs, out, pal, report):
 
 # --------------------------------------------------------------------------- main
 
-def build_entry(eng, entry, desc, out, palette_block, alp, types):
+def build_entry(eng, entry, name, desc, out, palette_block, alp, types):
+    """The stage pack of the entry's scene `name`."""
     report = []
     ground = {"ok": False, "miss": None}
     mapblock = features = minimap = None
+    m = entry["scenes"][name]["map"]
     try:
         if desc is None:
-            raise Miss(f"no stage description for {entry['id']}")
-        if list(desc["cells"]) != [entry["scene"]["map"]["w"], entry["scene"]["map"]["h"]]:
+            raise Miss(f"no stage description for {entry['id']}.{name}")
+        if list(desc["cells"]) != [m["w"], m["h"]]:
             raise Miss(f"the description's cells {desc['cells']} are not the scene's map")
         tiles, feats = resolve_ground(eng, desc, report)
         mapblock, features = write_ground(out, desc, tiles, feats)
@@ -2116,8 +2119,7 @@ def build_entry(eng, entry, desc, out, palette_block, alp, types):
         ground["miss"] = str(e)
         report.append({"element": "ground", "refused": str(e)})
     units = write_units(out, eng, entry, report, types)
-    cells = [entry["scene"]["map"]["w"], entry["scene"]["map"]["h"]]
-    scene = {"format": "ta-scene/1", "wiki": FORMAT, "entry": entry["id"], "cells": cells,
+    scene = {"format": "ta-scene/1", "wiki": FORMAT, "entry": entry["id"], "scene": name, "cells": [m["w"], m["h"]],
              "ground": ground, "map": mapblock, "features": features, "units": units, "minimap": minimap,
              "palette": palette_block, "shaders": "../shaders/",
              "depth": {"terrain": 0.10, "scale": 512.0, "flat0": 0.40, "flatSpan": 0.10, "tall0": 3.0,
@@ -2128,10 +2130,10 @@ def build_entry(eng, entry, desc, out, palette_block, alp, types):
 
 
 def write_stages(eng, entries, stage_dir, out_root, palette, shdb, casting=None):
-    """Every entry's stage pack under `out_root`, with the palette and the shaders beside them: `<entry>/scene.json`,
-    `palette/`, `shaders/`. The units are stage_types(entry, casting): a mod's pack (`casting` its side pack's list)
-    holds every side's units for the entry's casts as well as the entry's own. Returns (the index's `entries`, each
-    entry's resolution report)."""
+    """Every stage's pack under `out_root`, one per scene of each entry, with the palette and the shaders beside them:
+    `<entry>.<scene>/scene.json`, `palette/`, `shaders/`. The units are stage_types(entry, casting): a mod's pack
+    (`casting` its side pack's list) holds every side's units for the entry's casts as well as the entry's own.
+    Returns (the index's `entries`, keyed `<entry>.<scene>`, and each stage's resolution report)."""
     alp, _how = install_alp(eng, palette)
     (out_root / "palette").mkdir(parents=True, exist_ok=True)
     (out_root / "palette/pal.bin").write_bytes(bytes(b for c in palette for b in (*c, 255)))
@@ -2144,19 +2146,20 @@ def write_stages(eng, entries, stage_dir, out_root, palette, shdb, casting=None)
     for name, src in tascene.extract_shaders(tascene.SHADER_SET).items():
         (out_root / "shaders" / name).write_text(src)
     index, full, types = {}, {}, {}
-    for entry in entries:
-        dpath = stage_dir / f"{entry['id']}.json"
+    for entry, name in ((e, n) for e in entries for n in e["scenes"]):
+        sid = f"{entry['id']}.{name}"
+        dpath = stage_dir / f"{sid}.json"
         desc = json.loads(dpath.read_text()) if dpath.exists() else None
-        out = out_root / entry["id"]
+        out = out_root / sid
         out.mkdir(exist_ok=True)
-        scene = build_entry(eng, entry, desc, out, palette_block, alp, stage_types(entry, casting))
-        index[entry["id"]] = {"scene": f"{entry['id']}/scene.json", "ground": scene["ground"]["ok"],
-                              "units": sorted(scene["units"]["meshes"]), "refused": scene["units"]["refused"]}
-        full[entry["id"]] = scene["report"]
-        for name, m in scene["units"]["meshes"].items():
-            types.setdefault(name, m["sound"])
+        scene = build_entry(eng, entry, name, desc, out, palette_block, alp, stage_types(entry, casting))
+        index[sid] = {"scene": f"{sid}/scene.json", "ground": scene["ground"]["ok"],
+                      "units": sorted(scene["units"]["meshes"]), "refused": scene["units"]["refused"]}
+        full[sid] = scene["report"]
+        for t, m in scene["units"]["meshes"].items():
+            types.setdefault(t, m["sound"])
         g = "ground ok" if scene["ground"]["ok"] else f"ground FALLS BACK: {scene['ground']['miss']}"
-        print(f"  {entry['id']}: {g}; units {', '.join(sorted(scene['units']['meshes'])) or 'none'}"
+        print(f"  {sid}: {g}; units {', '.join(sorted(scene['units']['meshes'])) or 'none'}"
               + (f"; refused {', '.join(scene['units']['refused'])}" if scene["units"]["refused"] else ""))
     snd = write_sounds(eng, out_root, types)
     print(f"  sounds: {len(snd['cats'])} categories, {len(list((out_root / 'sounds').glob('*.wav')))} WAVs"
@@ -2212,11 +2215,13 @@ def main(argv=None):
     entries = [json.loads(f.read_text()) for f in sorted(ENTRIES.glob("*.json"))]
     descs = {}
     for entry in entries:
-        dpath = stage_dir / f"{entry['id']}.json"
-        desc = json.loads(dpath.read_text()) if dpath.exists() else None
-        if desc and list(desc["cells"]) != [entry["scene"]["map"]["w"], entry["scene"]["map"]["h"]]:
-            desc = None
-        descs[entry["id"]] = desc
+        for name, sc in entry["scenes"].items():
+            sid = f"{entry['id']}.{name}"
+            dpath = stage_dir / f"{sid}.json"
+            desc = json.loads(dpath.read_text()) if dpath.exists() else None
+            if desc and list(desc["cells"]) != [sc["map"]["w"], sc["map"]["h"]]:
+                desc = None
+            descs[sid] = desc
     if args.side_only:
         out = out_root / "side" / args.mod
         report = []

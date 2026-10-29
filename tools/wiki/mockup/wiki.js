@@ -103,6 +103,12 @@ async function load() {
 }
 const entry = () => (S.entry && ENT[S.entry] && !ENT[S.entry].error) ? ENT[S.entry] : null;
 const demo = () => { const e = entry(); return e && Array.isArray(e.demos) ? e.demos[S.demo] || null : null; };
+/* the stage the demo plays on, `<entry>.<scene>`: its packs (gfx.py) and its minimap base are per scene */
+const stageId = () => {
+  const e = entry(), d = demo();
+  if (!e || !e.scenes || typeof e.scenes !== 'object') return null;
+  return `${e.id}.${d && typeof d.on === 'string' ? d.on : Object.keys(e.scenes)[0]}`;
+};
 const locked = e => !!(e && Array.isArray(e.lockedIn) && e.lockedIn.includes(S.mod));
 /* every text an entry shows goes through text.js's fillText with the words of the context the sim plays -- the
    side's casting, or the entry's own types without one, and the Interface Type -- and the sim keeps the raw text */
@@ -184,8 +190,8 @@ function sideNote() {
     : p.refused ? `${S.mod}'s layout refused: the fixture` : p.art ? `${S.mod}'s pack` : `${S.mod}'s pack, no pictures`;
 }
 const gameLook = () => $('#gfx').value === 'game';
-/* the minimap's base picture for an entry's stage map, in the mod's own palette and shrink table: the pack's
-   art.minimap.bases[entry]; none leaves the minimap to the whitebox. Fetched once per mod and entry */
+/* the minimap's base picture for a stage, in the mod's own palette and shrink table: the pack's
+   art.minimap.bases[<entry>.<scene>]; none leaves the minimap to the whitebox. Fetched once per mod and stage */
 function minimapBase(p, id) {
   const b = id && p.minimap && p.minimap[id], key = `${S.mod}/${id}`;
   if (!b) return null;
@@ -202,7 +208,7 @@ const SIDECV = document.createElement('canvas');
 function sideArt(v, layout) {
   const p = pack();
   if (!v || !v.side || !gameLook() || !p || !p.art || layout !== p.layout) return null;
-  const c = WikiSide.compose(p.art, p.layout, v, minimapBase(p, S.entry), v.map.w * v.map.cell, v.map.h * v.map.cell);
+  const c = WikiSide.compose(p.art, p.layout, v, minimapBase(p, stageId()), v.map.w * v.map.cell, v.map.h * v.map.cell);
   if (SIDECV.width !== WikiSide.COL || SIDECV.height !== c.h) { SIDECV.width = WikiSide.COL; SIDECV.height = c.h; }
   SIDECV.getContext('2d').putImageData(new ImageData(WikiSide.rgba(p.art, c), WikiSide.COL, c.h), 0, 0);
   const pics = p.art.screens[v.side.screen];
@@ -349,10 +355,10 @@ function poses() {
   try { return sim.poses(); } catch (x) { fail(x); return null; }
 }
 /* the 3D pack the stage draws from: a sim bound to a mod's casting draws from that mod's stage packs, which hold its
-   units (gfx.py --stages), where it has one for the entry; any other from the entry's own */
+   units (gfx.py --stages), where it has one for the stage; any other from the stage's own */
 function stageDir() {
-  const p = pack();
-  return simCtx && simCtx.casting && p && p.stages && p.stages[S.entry] ? `side/${S.mod}/stage/${S.entry}` : S.entry;
+  const p = pack(), id = stageId();
+  return simCtx && simCtx.casting && p && p.stages && p.stages[id] ? `side/${S.mod}/stage/${id}` : id;
 }
 /* the stage's drawing is stage.js's. Under gfx=game, gfx.js first renders this frame's view in 3D; a COMPLETE image is
    drawn between the op ranges R0 and R2, and anything less leaves the whole whitebox (stage.js, draw()) */
@@ -364,7 +370,7 @@ let IMG = null;                       // the last frame's 3D answer, for scripte
 function draw() {
   const g = stage.getContext('2d'), v = view();
   if (v && typeof WikiSound !== 'undefined') heard = WikiSound.drain(soundRoot(), v, heard);
-  const r = v && window.WikiGfx ? WikiGfx.frame(S.entry, v, sim ? sim.tick : 0, stageDir(), poses()) : null;
+  const r = v && window.WikiGfx ? WikiGfx.frame(stageId(), v, sim ? sim.tick : 0, stageDir(), poses()) : null;
   IMG = r && { complete: r.complete, ground: r.ground, resolved: [...r.resolved], refused: r.refused };
   const image = r && r.complete ? {
     ground: r.ground, resolved: t => r.resolved.has(t),

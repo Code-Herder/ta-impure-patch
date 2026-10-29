@@ -8,8 +8,9 @@
    a WIKISIDE, plays every demo of every entry in PAK (tools/hudpak.py --set wiki) on its layout in
    the context CTX names, and at every sampled tick (`sampled` below) copies the view of the entry
    the sim plays (tagpu_wikistage_copy over WIKISIM.entry, the bound entry with a casting, as
-   tagpu_wiki.c copies it) and composes its column for the view's side over DIR/bases/<entry>.bin,
-   the stage's minimap picture, when that file exists. CTX is a JSON file, sim.js's ctx:
+   tagpu_wiki.c copies it) and composes its column for the view's side over
+   DIR/bases/<entry>.<scene>.bin, the minimap picture of the stage the demo plays on, when that
+   file exists. CTX is a JSON file, sim.js's ctx:
    {"side": k, "iface": 0 | 1, "casting": a pack's casting record | null}; without it the sims are
    made with none (side 0, no casting, Interface Type 1). Per
    frame, to stdout: the key "<entry>/<demo>/<tick>" as a little-endian u16 length and its bytes,
@@ -256,17 +257,18 @@ static int compose(char** a, const char* ctxfile)
     if (ctxfile && !context(ctxfile, &ctx, &casting)) return 2;
     for (i = 0; i < d->nentry; i++) {
         const WIKIENTRY* e = &d->entry[i];
-        char name[256];
-        size_t nbase;
-        unsigned char* base;
-        snprintf(name, sizeof name, "bases/%s.bin", e->id);
-        base = file_in(a[1], name, &nbase);
         for (j = 0; j < e->ndemo; j++) {
+            char name[256];
+            size_t nbase;
+            unsigned char* base;
             WIKISIM s;
+            snprintf(name, sizeof name, "bases/%s.%s.bin", e->id, e->scenes[e->demo[j].on].name);
+            base = file_in(a[1], name, &nbase);
             if (!tagpu_wikisim_init(&s, e, &e->demo[j], 1, &sd->layout, ctxfile ? &ctx : NULL, err, sizeof err)) {
                 key(e->id, e->demo[j].id, 0);
                 put32(-1);
                 put32(0);
+                free(base);
                 continue;
             }
             STATES prev, was;
@@ -298,8 +300,8 @@ static int compose(char** a, const char* ctxfile)
                 tagpu_wikisim_step(&s);
             }
             tagpu_wikisim_free(&s);
+            free(base);
         }
-        free(base);
     }
     tagpu_wikidata_free(d);
     free(sd);

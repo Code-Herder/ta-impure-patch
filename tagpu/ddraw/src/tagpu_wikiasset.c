@@ -1102,10 +1102,10 @@ static int tj_int(const TJV* v, int* out)
     return 1;
 }
 
-/* THE DESCRIPTION (the plan's section 4), checked before anything is read through it: its entry,
-   its cells against the entry's map, each source, each tileset row's source and hash, each tilemap
+/* THE DESCRIPTION (the plan's section 4), checked before anything is read through it: its entry
+   and scene, its cells against the scene's map, each source, each tileset row's source and hash, each tilemap
    index against the tileset, each feature's cell inside the map. */
-static int stage_parse(LOADER* L, const WIKIENTRY* e, const TJV* r, WIKI3DSTAGE* st, STAGEREC* s)
+static int stage_parse(LOADER* L, const WIKIENTRY* e, const WIKISCENE* sc, const TJV* r, WIKI3DSTAGE* st, STAGEREC* s)
 {
     const TJV *x, *v;
     int i, k, ntm;
@@ -1113,11 +1113,12 @@ static int stage_parse(LOADER* L, const WIKIENTRY* e, const TJV* r, WIKI3DSTAGE*
     const TJV* c = tj_get(r, "cells");
     char* why = s->why;
     const size_t nwhy = sizeof s->why;
-    if (tj_num(tj_get(r, "format"), 0) != 1) { snprintf(why, nwhy, "not format 1"); return 0; }
+    if (tj_num(tj_get(r, "format"), 0) != 2) { snprintf(why, nwhy, "not format 2"); return 0; }
     if (strcmp(tj_str(tj_get(r, "entry"), ""), e->id)) { snprintf(why, nwhy, "its entry is not %s", e->id); return 0; }
-    if (!tj_int(tj_at(c, 0), &s->w) || !tj_int(tj_at(c, 1), &s->h) || s->w != e->scene.w || s->h != e->scene.h ||
+    if (strcmp(tj_str(tj_get(r, "scene"), ""), sc->name)) { snprintf(why, nwhy, "its scene is not %s", sc->name); return 0; }
+    if (!tj_int(tj_at(c, 0), &s->w) || !tj_int(tj_at(c, 1), &s->h) || s->w != sc->w || s->h != sc->h ||
         (s->w & 1) || (s->h & 1) || s->w <= 0 || s->h <= 0 || s->w > WIKI_MAP_MAX || s->h > WIKI_MAP_MAX) {
-        snprintf(why, nwhy, "its cells are not the entry's map of %d x %d, even", e->scene.w, e->scene.h);
+        snprintf(why, nwhy, "its cells are not the scene's map of %d x %d, even", sc->w, sc->h);
         return 0;
     }
     for (v = (x = tj_get(r, "sources")) && tj_is(x, TJ_ARR) ? x->first : NULL; v; v = v->next) {
@@ -1182,7 +1183,7 @@ static int stage_parse(LOADER* L, const WIKIENTRY* e, const TJV* r, WIKI3DSTAGE*
     return 1;
 }
 
-static void stage_load(LOADER* L, const WIKIENTRY* e, WIKI3DSTAGE* st, STAGEREC* s)
+static void stage_load(LOADER* L, const WIKIENTRY* e, const WIKISCENE* sc, WIKI3DSTAGE* st, STAGEREC* s)
 {
     char name[64];
     const unsigned char* text;
@@ -1191,12 +1192,13 @@ static void stage_load(LOADER* L, const WIKIENTRY* e, WIKI3DSTAGE* st, STAGEREC*
     uint32_t tiles_at;
     int i, ok = 1;
     strncpy(st->entry, e->id, sizeof st->entry - 1);
-    snprintf(name, sizeof name, "stage/%s.json", e->id);
+    strncpy(st->scene, sc->name, sizeof st->scene - 1);
+    snprintf(name, sizeof name, "stage/%s.%s.json", e->id, sc->name);
     if (!(text = tagpu_pak_file(L->in->pak, L->in->npak, name, &ntext))) {
         snprintf(s->why, sizeof s->why, "WIKIPAK has no %s", name);
         s->refused = 1;
     } else if (!(doc = tagpu_json_parse((const char*)text, ntext, s->why, sizeof s->why)) ||
-               !stage_parse(L, e, tagpu_json_root(doc), st, s)) {
+               !stage_parse(L, e, sc, tagpu_json_root(doc), st, s)) {
         s->refused = 1;
     }
     tagpu_json_free(doc);
@@ -1284,7 +1286,7 @@ static void stage_load(LOADER* L, const WIKIENTRY* e, WIKI3DSTAGE* st, STAGEREC*
     st->ok = ok;
     if (!ok) snprintf(s->why, sizeof s->why, "a source, tile or feature did not resolve: the ground falls back whole");
 done:
-    if (!st->ok) LOG("wiki3d: the stage %s falls back to the whitebox - %s", e->id, s->why);
+    if (!st->ok) LOG("wiki3d: the stage %s.%s falls back to the whitebox - %s", e->id, sc->name, s->why);
 }
 
 static void stage_report(SB* b, const LOADER* L, const WIKI3DSTAGE* st, const STAGEREC* s)
@@ -1292,6 +1294,8 @@ static void stage_report(SB* b, const LOADER* L, const WIKI3DSTAGE* st, const ST
     int i;
     sb_raw(b, "{\"entry\":");
     sb_q(b, st->entry, 0);
+    sb_raw(b, ",\"scene\":");
+    sb_q(b, st->scene, 0);
     if (s->refused) {
         sb_raw(b, ",\"ok\":false,\"why\":");
         sb_q(b, s->why, 0);
@@ -4502,7 +4506,7 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISI
     uint32_t w_at, st_at = 0, un_at = 0, rep_at, assets;
     const WIKIDATA* d = in->data;
     char (*names)[WIKI_ID_MAX] = NULL;
-    int i, k, s, n = 0, nunit = 0, nsides, nstage = d ? d->nentry : 0;
+    int i, j, k, s, n = 0, nunit = 0, nsides, nstage = 0;
     memset(&L, 0, sizeof L);
     memset(&b, 0, sizeof b);
     memset(&cur, 0, sizeof cur);
@@ -4517,6 +4521,8 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISI
     L.a.commit = commit;
     L.a.committed = commit ? 0 : cap;
     if (!(w_at = alloc(&L.a, sizeof *w))) return NULL;
+    /* a stage per scene, entry by entry in the scenes' order */
+    for (i = 0; d && i < d->nentry; i++) nstage += d->entry[i].nscene;
     if (nstage && (!(st_at = alloc(&L.a, (uint32_t)(nstage * sizeof(WIKI3DSTAGE)))) ||
                    !(srec = (STAGEREC*)calloc((size_t)nstage, sizeof *srec))))
         nstage = 0;
@@ -4526,9 +4532,9 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISI
        entries' types times one plus the sides, the most the loops below can add. */
     nsides = side ? side->layout.nside : 0;
     if (nsides < 0 || nsides > WIKI_SIDE_SIDES) nsides = 0;
-    for (i = 0; i < nstage; i++) nunit += d->entry[i].ndef * (1 + nsides);
+    for (i = 0; d && i < d->nentry; i++) nunit += d->entry[i].ndef * (1 + nsides);
     if (nunit && !(names = (char (*)[WIKI_ID_MAX])calloc((size_t)nunit, sizeof *names))) nunit = 0;
-    for (i = 0; names && i < nstage; i++) {
+    for (i = 0; names && i < d->nentry; i++) {
         const WIKIENTRY* e = &d->entry[i];
         for (k = 0; k < e->ndef; k++) n = add_name(names, n, e->def[k].name);
         for (s = 0; s < nsides; s++)
@@ -4543,18 +4549,19 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISI
         nunit = 0;
     L.vfs = vfs ? vfs : tagpu_vfs_open(in->cwd, (const char (*)[TAGPU_VFS_PATHMAX])in->arc, in->narc, in->names.language);
     if (L.vfs) {
-        for (i = 0; i < nstage; i++) {
-            WIKI3DSTAGE* st = (WIKI3DSTAGE*)AT(&L.a, st_at) + i;
-            unsigned char mm[126 * 126];
-            uint32_t at;
-            stage_load(&L, &d->entry[i], st, &srec[i]);
-            /* the sidebar's minimap of this stage, with the sidebar's shrink table */
-            if (side && tagpu_wikiside_minimap(st, side->alp, mm, &st->mm_w, &st->mm_h, &st->mm_offx, &st->mm_offy) &&
-                (at = alloc(&L.a, (uint32_t)(st->mm_w * st->mm_h))) != 0) {
-                memcpy(AT(&L.a, at), mm, (size_t)(st->mm_w * st->mm_h));
-                st->minimap = AT(&L.a, at);
+        for (i = 0, j = 0; nstage && i < d->nentry; i++)
+            for (k = 0; k < d->entry[i].nscene; k++, j++) {
+                WIKI3DSTAGE* st = (WIKI3DSTAGE*)AT(&L.a, st_at) + j;
+                unsigned char mm[126 * 126];
+                uint32_t at;
+                stage_load(&L, &d->entry[i], &d->entry[i].scenes[k], st, &srec[j]);
+                /* the sidebar's minimap of this stage, with the sidebar's shrink table */
+                if (side && tagpu_wikiside_minimap(st, side->alp, mm, &st->mm_w, &st->mm_h, &st->mm_offx, &st->mm_offy) &&
+                    (at = alloc(&L.a, (uint32_t)(st->mm_w * st->mm_h))) != 0) {
+                    memcpy(AT(&L.a, at), mm, (size_t)(st->mm_w * st->mm_h));
+                    st->minimap = AT(&L.a, at);
+                }
             }
-        }
         for (i = 0; i < nunit; i++) unit_load(&L, names[i], (WIKI3DUNIT*)AT(&L.a, un_at) + i, &urec[i]);
         /* every model is in: the bank is searched once for every name they hold, then bound */
         bank_all(&L);
@@ -4781,6 +4788,16 @@ const WIKI3D* tagpu_wiki3d_get(void)
 {
     const WIKI3D* w;
     return tagpu_wiki3d_answer(&w) == WIKISIDE_READY ? w : NULL;
+}
+
+const WIKI3DSTAGE* tagpu_wiki3d_stage(const WIKI3D* w, const WIKIENTRY* e, int demo)
+{
+    /* `on` is an index tagpu_wikidata_entry bounded by nscene */
+    const char* scene = e->scenes[demo >= 0 && demo < e->ndemo ? e->demo[demo].on : 0].name;
+    int i;
+    for (i = 0; w && i < w->nstage; i++)
+        if (!strcmp(w->stage[i].entry, e->id) && !strcmp(w->stage[i].scene, scene)) return &w->stage[i];
+    return NULL;
 }
 
 /* ORDERING: an interlocked read, a full barrier, pairs with publish_3d's store; the block is never

@@ -17,8 +17,8 @@
                       JSON, as the sidebar captures keep it). Its `active` is not read: the redraw loop skips an
                       inactive gadget (0x4A915D) and so leaves the pixels it had when the screen loaded, which is
                       what a capture shows for a gadget the router made inactive (Escalation's ARMUNLOAD)
-     --entry ID       the minimap: that entry's base picture in the pack over its stage map, all explored, no units;
-                      without it the minimap is left out
+     --entry ID       the minimap: the base picture in the pack of stage ID, `<entry>.<scene>` (an entry alone is its
+                      first scene), over its map, all explored, no units; without it the minimap is left out
      --out FILE       the PNG (default: <the system's temporary folder>/sidedump/<mod>-<screen>.png; it is drawn
                       from the game's files, so never inside the repository)
 
@@ -146,9 +146,12 @@ function main() {
 
   let base = null, map = null, W = 0, H = 0;
   if (o.entry) {
-    const b = p.minimap[o.entry], e = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries', `${o.entry}.json`), 'utf8'));
-    const mw = e.scene.map.w, mh = e.scene.map.h;
-    if (!b) { console.error(`sidedump: the pack has no minimap for ${o.entry}`); return 1; }
+    // the stage `<entry>.<scene>`; an entry alone names its first scene
+    const [eid, scene] = o.entry.split('.'), e = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries', `${eid}.json`), 'utf8'));
+    const sc = e.scenes[scene || Object.keys(e.scenes)[0]], sid = `${eid}.${scene || Object.keys(e.scenes)[0]}`;
+    if (!sc) { console.error(`sidedump: ${eid} has no scene ${scene}`); return 1; }
+    const b = p.minimap[sid], mw = sc.map.w, mh = sc.map.h;
+    if (!b) { console.error(`sidedump: the pack has no minimap for ${sid}`); return 1; }
     base = new Uint8Array(fs.readFileSync(path.join(dir, b.file)));
     map = { w: mw, h: mh, cell: 16, fog: [] };
     W = mw * 16; H = mh * 16;

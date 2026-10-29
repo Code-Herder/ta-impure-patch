@@ -674,7 +674,7 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     HUDRECT stage;
     LARGE_INTEGER t0;
     float u, org[2];
-    int ox, oy, entry, demo, i, x0, y0, x1, y1, ss;
+    int ox, oy, entry, demo, x0, y0, x1, y1, ss;
     uint32_t shot;
     const WIKI3DSTAGE* st = NULL;
     int gw, gh, nrec, nunit;
@@ -686,8 +686,7 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     if (!tagpu_wikistate_scene(f->frame_counter, &v, &entry, &demo, &shot, &stage, &u, &ox, &oy)) return;
     if (!(a = tagpu_wiki3d_get()) || !(art = tagpu_wikiart_get()) || !art->data) return;
     if (entry < 0 || entry >= art->data->nentry) return;
-    for (i = 0; i < a->nstage; i++)
-        if (!strcmp(a->stage[i].entry, art->data->entry[entry].id)) { st = &a->stage[i]; break; }
+    st = tagpu_wiki3d_stage(a, &art->data->entry[entry], demo);
     if (v->w <= 0 || v->h <= 0 || v->w > WIKISCENE_MAP || v->h > WIKISCENE_MAP) return;
     if (f->packet) s_gfx = f->packet->gfx_opt;
     /* THE GROUND FALLS BACK WHOLE (the plan's section 3): a stage the loader could not resolve, or
@@ -700,10 +699,10 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
         s_stage = st;
         s_groundOk = why == NULL;
         if (why)
-            tagpu_logf("wiki3d: stage %s: the ground falls back to the whitebox - %s", st->entry, why);
+            tagpu_logf("wiki3d: stage %s.%s: the ground falls back to the whitebox - %s", st->entry, st->scene, why);
         else
-            tagpu_logf("wiki3d: stage %s: the ground in 3D - %d tiles, %d cells, %d feature quad(s) and %d "
-                       "shadow(s), a %dx%d terrain atlas, %d feature frame(s)", st->entry, st->ntile,
+            tagpu_logf("wiki3d: stage %s.%s: the ground in 3D - %d tiles, %d cells, %d feature quad(s) and %d "
+                       "shadow(s), a %dx%d terrain atlas, %d feature frame(s)", st->entry, st->scene, st->ntile,
                        s_scene.ncell, s_scene.nbody, s_scene.nshadow, ATLAS_W, s_tatlasH, s_fatlas.n);
     }
     s_ground = st && st == s_stage && s_groundOk;

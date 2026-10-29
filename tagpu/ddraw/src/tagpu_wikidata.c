@@ -299,7 +299,7 @@ static int scene_unit(R* r, const TJV* v, WIKISCENEUNIT* u)
     return 1;
 }
 
-/* the entry's scene (`entry` set: its map counts) or a demo's additions */
+/* one of the entry's scenes (`entry` set: its map counts) or a demo's additions */
 static int scene(R* r, const TJV* v, WIKISCENE* s, int entry)
 {
     const TJV* c;
@@ -341,6 +341,37 @@ static int scene(R* r, const TJV* v, WIKISCENE* s, int entry)
     c = tj_get(v, "cursor");
     if ((s->has_cursor = c && !tj_is(c, TJ_NULL)) && !point(r, c, &s->cursor, "the cursor")) return 0;
     if (!s->selected && !(s->selected = (const char**)zalloc(r, 0, sizeof *s->selected))) return 0;
+    return 1;
+}
+
+/* sim.js SCENE_NAME: 1 to 16 of a-z and 0-9, a letter first */
+static int scene_name(const char* s)
+{
+    size_t i;
+    if (!(s[0] >= 'a' && s[0] <= 'z')) return 0;
+    for (i = 1; s[i]; i++)
+        if (i >= WIKI_SCENE_MAX - 1 || !((s[i] >= 'a' && s[i] <= 'z') || (s[i] >= '0' && s[i] <= '9'))) return 0;
+    return 1;
+}
+
+/* THE ENTRY'S SCENES, sim.js sceneOf: an object of one or more named scenes in the file's order,
+   every map the first one's size. A name given twice is refused: JSON.parse would keep the last
+   and this reader the first, so the two would play different scenes. */
+static int scenes(R* r, WIKIENTRY* e, const TJV* v)
+{
+    const TJV *c, *k;
+    int i = 0;
+    if (!tj_is(v, TJ_OBJ) || !v->n) return refuse(r, "has no scenes", NULL);
+    if (!(e->scenes = (WIKISCENE*)zalloc(r, (size_t)(e->nscene = v->n), sizeof *e->scenes))) return 0;
+    for (c = v->first; c; c = c->next, i++) {
+        if (!scene_name(c->key)) return refuse(r, "a scene's name is not 1 to 16 of a-z and 0-9, a letter first", c->key);
+        for (k = v->first; k != c; k = k->next)
+            if (!strcmp(k->key, c->key)) return refuse(r, "names a scene twice", c->key);
+        e->scenes[i].name = c->key;
+        if (!scene(r, c, &e->scenes[i], 1)) return 0;
+        if (e->scenes[i].w != e->scenes[0].w || e->scenes[i].h != e->scenes[0].h)
+            return refuse(r, "a scene's map is not the first scene's size", c->key);
+    }
     return 1;
 }
 
@@ -402,6 +433,12 @@ static int demo(R* r, const TJV* v, WIKIDEMO* d)
     d->id = tj_str(tj_get(v, "id"), NULL);
     d->title = tj_str(tj_get(v, "title"), NULL);
     r->where = d->id ? d->id : "?";
+    /* the scene it plays on, sim.js sceneOf: `on` names one of the entry's, the first when absent */
+    if ((c = tj_get(v, "on"))) {
+        if (!tj_is(c, TJ_STR)) return refuse(r, "a demo's on is not a scene's name", NULL);
+        for (d->on = 0; d->on < r->e->nscene && strcmp(r->e->scenes[d->on].name, c->str); d->on++) {}
+        if (d->on == r->e->nscene) return refuse(r, "a demo is on no scene of the entry", c->str);
+    }
     if (!scene(r, tj_get(v, "scene"), &d->scene, 0)) return 0;
     d->ninput = count(inputs);
     if (!(d->input = (WIKIINPUT*)zalloc(r, (size_t)d->ninput, sizeof *d->input))) return 0;
@@ -439,7 +476,8 @@ void tagpu_wikidata_entry_free(WIKIENTRY* e)
         free(e->demo[i].input);
     }
     free(e->demo);
-    scene_free(&e->scene);
+    for (i = 0; e->scenes && i < e->nscene; i++) scene_free(&e->scenes[i]);
+    free(e->scenes);
     free(e->def);
     free((void*)e->text);
     free((void*)e->locked_in);
@@ -622,11 +660,11 @@ int tagpu_wikidata_entry(WIKIENTRY* e, const char* text, size_t len, char* err, 
     /* the mockup's `(entry.pace && entry.pace.build) || 1` */
     pace = tj_num(tj_get(tj_get(root, "pace"), "build"), 0);
     e->pace = pace ? pace : 1;
-    if (tj_num(tj_get(root, "format"), 0) != 1) refuse(&r, "is not format 1", NULL);
+    if (tj_num(tj_get(root, "format"), 0) != 2) refuse(&r, "is not format 2", NULL);
     else if (!strings(&r, tj_get(root, "text"), &e->text, &e->ntext)) {}
     else if (!strings(&r, tj_get(root, "lockedIn"), &e->locked_in, &e->nlocked)) {}
     else if (!defs(&r, e, tj_get(root, "units"))) {}
-    else if (!scene(&r, tj_get(root, "scene"), &e->scene, 1)) {}
+    else if (!scenes(&r, e, tj_get(root, "scenes"))) {}
     else if (!(e->demo = (WIKIDEMO*)zalloc(&r, (size_t)(e->ndemo = count(tj_get(root, "demos"))), sizeof *e->demo))) {}
     else
         for (c = tj_is(tj_get(root, "demos"), TJ_ARR) ? tj_get(root, "demos")->first : NULL; c; c = c->next)

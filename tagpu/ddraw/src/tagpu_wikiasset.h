@@ -4,8 +4,8 @@
    engine's rules on a loader thread of their own, into one arena (research/notes/
    ingame-wiki-3d-stage-plan.md, sections 4, 5 and 8, landing 6e).
 
-   WHAT IT LOADS. For every entry of the wiki's data, its stage description (art/wiki/stage/
-   <entry>.json in WIKIPAK): each source map's TNT opened by the engine's path rule and its header
+   WHAT IT LOADS. For every scene of every entry of the wiki's data, its stage description
+   (art/wiki/stage/<entry>.<scene>.json in WIKIPAK): each source map's TNT opened by the engine's path rule and its header
    checked, its tile count compared, and only the tiles the description names read and their
    FNV-1a 32 compared; each feature section from the first features\**\*.tdf that holds it (in the
    engine's enumeration order), with its sequences (a 2D feature) or its model (a 3D one). And for
@@ -110,9 +110,11 @@ typedef struct {
     int         ok;
 } WIKI3DFEAT;
 
-/* A stage's ground. When `ok` is 0 nothing of it is drawn in 3D: the whitebox's ground is. */
+/* A stage's ground, one per scene of an entry. When `ok` is 0 nothing of it is drawn in 3D: the
+   whitebox's ground is. */
 typedef struct {
     char              entry[WIKI_ID_MAX];
+    char              scene[WIKI_SCENE_MAX];
     int               ok;
     int               w, h;             /* cells; the tiles are w/2 x h/2                       */
     int               ntile;
@@ -449,6 +451,11 @@ int           tagpu_wikiside_get(const WIKISIDE** out);
 /* The published load, or NULL while it runs and for good when it failed before publishing (the
    log says why). Any thread; immutable once returned and never freed. */
 const WIKI3D* tagpu_wiki3d_get(void);
+
+/* The stage demo `demo` of entry `e` plays on -- its `on` scene; the first scene for -1 or any
+   index that is not one of the entry's demos -- or NULL when `w` holds none. Any thread: `w` and
+   `e` are immutable. */
+const WIKI3DSTAGE* tagpu_wiki3d_stage(const WIKI3D* w, const WIKIENTRY* e, int demo);
 
 /* THE LOAD'S ANSWER, as the sidebar's (WIKISIDE_*): PENDING while the loader runs, READY with
    `*out` the load, or REFUSED for good when it failed. PENDING too before the load is started

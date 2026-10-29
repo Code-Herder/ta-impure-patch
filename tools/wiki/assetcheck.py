@@ -486,9 +486,11 @@ def reference(gamedir, exe, language, mounts=None, casting=None):
     stages, units = [], []
     pending_models = []                     # (dict to fill, path, where, model, why) once bound
 
-    for eid in entries:
-        desc = json.loads((REPO / f"art/wiki/stage/{eid}.json").read_text())
-        st = {"entry": eid, "cells": desc["cells"], "sources": [], "tiles": [], "features": []}
+    # a stage per scene, entry by entry in the scenes' order, as the native load makes them
+    scenes = [(eid, name) for eid in entries for name in json.loads((REPO / f"art/wiki/entries/{eid}.json").read_text())["scenes"]]
+    for eid, name in scenes:
+        desc = json.loads((REPO / f"art/wiki/stage/{eid}.{name}.json").read_text())
+        st = {"entry": eid, "scene": name, "cells": desc["cells"], "sources": [], "tiles": [], "features": []}
         ok = True
         srcs = []
         for s in desc["sources"]:
@@ -764,7 +766,7 @@ def against_gfx(native, gamedir, exe):
         resolved = json.loads(out.read_text())
         gfx = resolved["entries"]
     bad, n = [], 0
-    stages = {s["entry"]: s for s in native["stages"]}
+    stages = {f"{s['entry']}.{s['scene']}": s for s in native["stages"]}
     units = {u["name"]: u for u in native["units"]}
 
     def same(where, a, b):

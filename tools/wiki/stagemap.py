@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""stagemap.py -- writes and checks art/wiki/stage/<entry>.json, the in-game wiki stage's ground, as references.
+"""stagemap.py -- writes and checks art/wiki/stage/<entry>.<scene>.json, the in-game wiki stage's ground, as references.
 
     PY=.venv-undither/bin/python                       # the main checkout's venv
     $PY tools/wiki/stagemap.py tiles "maps\\Crossing Two Rivers.tnt"   # candidate ground tiles + a contact sheet
-    $PY tools/wiki/stagemap.py build                   # every entry's description, from RECIPES below
+    $PY tools/wiki/stagemap.py build                   # every scene's description, from RECIPES below
     $PY tools/wiki/stagemap.py check                   # exit 0 when every description resolves and fits its scene
 
 Every command reads the local install (--gamedir, else TA3DO_GAMEDIR, else Steam's default library) through
@@ -18,15 +18,19 @@ written, and nothing derived from one but the hash: CLAUDE.md, *Nothing from the
 and the fallback rule are research/notes/ingame-wiki-3d-stage-plan.md section 4; the data format section of
 research/notes/ingame-wiki.md states the file.
 
-`build` derives the description from the entry's scene and its recipe:
+Every scene of every entry has a description, and `build` derives it from the scene and the recipe its name picks
+(RECIPES: the scene's name is its world's, so `green` is greenworld wherever it stands):
 
-- **The ground is a section of the map editor's**, laid from the map's top-left corner and repeated: a section is
-  Cavedog's block of tiles made to join edge to edge (greenflat01, 32 x 32 tiles, is one 4 x 4 block repeated).
-  Sections are read from worlds.hpi, which the engine mounts as any `*.HPI` but which no map loads, so each section
-  tile is referenced by its index in a shipped map that holds the same 1024 bytes; the recipe names that map, and a
-  section tile it lacks fails the build. Only the author's install needs worlds.hpi: the description names the map.
-- **The metal-ground tile** over each broad metal rect (one that touches both opposite map edges on an axis, which
-  sim.js `distinct` never takes for a deposit).
+- **The ground is a section of the map editor's or a crop of a shipped map.** A section is laid from the map's
+  top-left corner and repeated: it is Cavedog's block of tiles made to join edge to edge (greenflat01, 32 x 32 tiles,
+  is one 4 x 4 block repeated). Sections are read from worlds.hpi, which the engine mounts as any `*.HPI` but which no
+  map loads, so each section tile is referenced by its index in a shipped map that holds the same 1024 bytes; the
+  recipe names that map, and a section tile it lacks fails the build. Only the author's install needs worlds.hpi:
+  the description names the map. A crop is the scene's size of a map's tiles from a cell of it, which must be flat
+  ground no feature of the map reaches into, so no picture of the map's own expects a feature or a slope the stage
+  does not have. Broad metal ground (a rect that touches both opposite map edges on an axis, which sim.js
+  `distinct` never takes for a deposit) has no ground of its own: a scene with one fails the build, and a metal map
+  is a scene of its own whose SurfaceMetal is its ground.
 - **Each deposit is one metal patch of the ground's world**: the feature of the recipe's patch file (the world's
   land patches; its water ones live in another file and repeat their values) whose `description=` is Metal, whose
   footprint is the deposit's and whose `metal=` is the deposit's value, so the picture is the value (greenworld's
@@ -34,19 +38,21 @@ research/notes/ingame-wiki.md states the file.
   deposit that is not exactly one such feature fails the build.
 - **Each vent is a vent of the ground's world** (`geothermal=1`), taken in the order the TDFs enumerate, a different
   one for each vent while they last.
-- **Decoration breaks up the section's repeat**: one feature per DECOR_BLOCK x DECOR_BLOCK cells (the 4 x 4-tile
-  repeat), a ground mark of the recipe's categories that blocks nothing and holds no metal, so the stage's
-  simulation has nothing to learn about it. It keeps DECOR_CLEAR cells from every deposit and vent, so their outline
-  reads alone, stays off broad metal ground, and is placed by a seeded xorshift, the same on every build.
+- **Decoration breaks up the ground**: one feature per block of the recipe's `block` cells a side (greenflat01's
+  4 x 4-tile repeat, 8 cells, by default), a ground mark of the recipe's categories that blocks nothing and holds
+  no metal, so the stage's simulation has nothing to learn about it. It keeps DECOR_CLEAR cells from every deposit
+  and vent, so their outline reads alone, and is placed by a xorshift seeded with the stage's name, the same on
+  every build.
 
-`check` resolves every description against the install and against its entry's scene, and compares it with what
-`build` writes now.
+`check` resolves every description against the install and against its scene, and compares it with what `build`
+writes now.
 
 The contact sheet `tiles` draws goes to tools/wiki/mockup/gfx/, which is gitignored: it is the game's pixels.
 """
 
 import argparse
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -59,27 +65,26 @@ SHEETS = HERE / "mockup" / "gfx"
 sys.path.insert(0, str(HERE))
 import tavfs  # noqa: E402
 
-FORMAT = 1
+FORMAT = 2
 CELL = 16          # world units a cell
 TILE_CELLS = 2     # a TNT tile is 32 world units, two cells a side
 TILE_BYTES = 1024
 SCT_VERSION = 2    # every section of the retail worlds.hpi
-DECOR_BLOCK = 8    # cells: greenflat01's 4 x 4-tile repeat
+DECOR_BLOCK = 8    # cells: greenflat01's 4 x 4-tile repeat, a recipe's `block` unless it says otherwise
 DECOR_CLEAR = 2    # cells kept clear round a deposit or a vent
 DECOR_TRIES = 32
 
-METAL_WORLD = "maps\\metal heck.tnt"
-
-# Per entry: the ground section and the shipped map whose tiles it is drawn with, the world whose deposits, vents and
-# decoration it takes, and the metal-ground tile (source map, tile index). Evad River Confluence (totala2.hpi, the
-# base game) holds every tile of greenflat01. Metal Heck's tile stands for metal ground because the metal worlds'
-# most used flat tiles are the dark void between their plates.
-GREEN = {"world": "greenworld", "patches": "features\\green\\metal.tdf",
-         "ground": ("sections\\greenworld\\flat\\greenflat01.sct", "maps\\evad river confluence.tnt"),
-         "decoration": ("smudges", "scars")}
+# Per scene name: the world whose deposits, vents and decoration it takes, and its ground -- a `section` and the
+# shipped map whose tiles it is drawn with, or a `crop` of a map from a cell. Evad River Confluence (totala2.hpi, the
+# base game) holds every tile of greenflat01. Over Crude Water (totala2.hpi) is a metal map whose centre is a plaza of
+# plate at one height; the crop at cell (422, 370) is its window of the stage's size with the most different tiles,
+# 93 for 40 x 30 cells, and its holes are the metal world's own ground marks, a few, one in 16 x 16 cells.
 RECIPES = {
-    "quickbuild": {**GREEN, "metalground": (METAL_WORLD, 170)},
-    "buildshapes": GREEN,
+    "green": {"world": "greenworld", "patches": "features\\green\\metal.tdf",
+              "section": ("sections\\greenworld\\flat\\greenflat01.sct", "maps\\evad river confluence.tnt"),
+              "decoration": ("smudges", "scars")},
+    "metal": {"world": "metal", "crop": ("maps\\over crude water.tnt", (422, 370)),
+              "decoration": ("holes",), "block": 16},
 }
 
 
@@ -169,6 +174,29 @@ def ground_refs(vfs, maps, ground, tw, th):
             for j in range(th) for i in range(tw)]
 
 
+def crop_refs(vfs, maps, crop, w, h):
+    """[(source map, tile index)] for a w x h-cell tilemap: the map's tiles from cell (x0, z0), a whole tile, refused
+    unless every cell of the window has one height and no feature of the map is anchored where its footprint could
+    reach into it (up to the widest footprint any feature section of the install declares, up and left of it)."""
+    source, (x0, z0) = crop
+    tnt, _where, err = maps.get(source)
+    if err:
+        raise Fail(err)
+    if x0 % TILE_CELLS or z0 % TILE_CELLS or x0 < 0 or z0 < 0 or x0 + w > tnt.w16 or z0 + h > tnt.h16:
+        raise Fail(f"{source}: a {w} x {h} crop at cell ({x0}, {z0}) is not whole tiles inside its {tnt.w16} x {tnt.h16}")
+    hs = tnt.heights()
+    if len({hs[z * tnt.w16 + x] for z in range(z0, z0 + h) for x in range(x0, x0 + w)}) != 1:
+        raise Fail(f"{source}: the crop at cell ({x0}, {z0}) is not flat")
+    reach = max(max(body_footprint(b)) for b, _p, _w in vfs.features().values())
+    near = [(c, r) for c, r, _i in tnt.feature_indices() if x0 - reach < c < x0 + w and z0 - reach < r < z0 + h]
+    if near:
+        raise Fail(f"{source}: features of the map are anchored at {near[:4]}, within {reach} cells of the crop")
+    tm = tnt.tilemap()
+    at = lambda i, j: int.from_bytes(tm[2 * (j * tnt.mw + i):2 * (j * tnt.mw + i) + 2], "little")
+    return [(source, at(x0 // TILE_CELLS + i, z0 // TILE_CELLS + j))
+            for j in range(h // TILE_CELLS) for i in range(w // TILE_CELLS)]
+
+
 def footprint(vfs, name):
     hit = vfs.feature(name)
     if hit is None:
@@ -176,8 +204,15 @@ def footprint(vfs, name):
     return body_footprint(hit[0])
 
 
+def atoi(v, default):
+    """C's atoi over a TDF value: its leading integer, `default` when it has none. A section missing a `;` runs the
+    next key into the value (one of the install's features reads `10\\r\\n\\theight=120`), and atoi still reads 10."""
+    m = re.match(r"\s*([-+]?\d+)", str(v or ""))
+    return int(m.group(1)) if m else default
+
+
 def body_footprint(body):
-    return int(float(body.get("footprintx", 1) or 1)), int(float(body.get("footprintz", 1) or 1))
+    return atoi(body.get("footprintx"), 1) or 1, atoi(body.get("footprintz"), 1) or 1
 
 
 def body_metal(body):
@@ -226,23 +261,23 @@ def overlaps(a, b, gap=0):
             and a[1] < b[1] + b[3] + gap and b[1] < a[1] + a[3] + gap)
 
 
-def decorate(vfs, eid, recipe, w, h, keep_clear, broad_rects):
-    """One decoration a DECOR_BLOCK block where one fits: DECOR_CLEAR cells from `keep_clear`, off `broad_rects`,
-    a cell from another decoration, inside the map."""
+def decorate(vfs, sid, recipe, w, h, keep_clear):
+    """One decoration a block of the recipe's where one fits: DECOR_CLEAR cells from `keep_clear`, a cell from
+    another decoration, inside the map."""
     names = decorations(vfs, recipe["world"], recipe.get("decoration", ()))
     if not names:
         return []
-    rng = xorshift(int(fnv1a32(eid.encode()), 16))
+    block = recipe.get("block", DECOR_BLOCK)
+    rng = xorshift(int(fnv1a32(sid.encode()), 16))
     placed = []
-    for bz in range(0, h, DECOR_BLOCK):
-        for bx in range(0, w, DECOR_BLOCK):
+    for bz in range(0, h, block):
+        for bx in range(0, w, block):
             for _ in range(DECOR_TRIES):
                 name = names[next(rng) % len(names)]
                 fx, fz = footprint(vfs, name)
-                x, z = bx + next(rng) % DECOR_BLOCK, bz + next(rng) % DECOR_BLOCK
+                x, z = bx + next(rng) % block, bz + next(rng) % block
                 foot = (x, z, fx, fz)
                 if (x + fx > w or z + fz > h or any(overlaps(foot, r, DECOR_CLEAR) for r in keep_clear)
-                        or any(overlaps(foot, r) for r in broad_rects)
                         or any(overlaps(foot, p[1], 1) for p in placed)):
                     continue
                 placed.append((name, foot))
@@ -294,15 +329,15 @@ def tile_aligned(rect):
 
 # --------------------------------------------------------------------------- build
 
-def build_one(vfs, maps, entry):
-    eid = entry["id"]
-    recipe = RECIPES.get(eid)
+def build_one(vfs, maps, entry, name):
+    eid, sid = entry["id"], f"{entry['id']}.{name}"
+    recipe = RECIPES.get(name)
     if recipe is None:
-        raise Fail(f"{eid}: no recipe in stagemap.py RECIPES")
-    scene = entry["scene"]
+        raise Fail(f"{sid}: no recipe for a scene {name} in stagemap.py RECIPES")
+    scene = entry["scenes"][name]
     w, h = scene["map"]["w"], scene["map"]["h"]
     if w % TILE_CELLS or h % TILE_CELLS:
-        raise Fail(f"{eid}: the map's {w} x {h} cells are not whole tiles")
+        raise Fail(f"{sid}: the map's {w} x {h} cells are not whole tiles")
     tw, th = w // TILE_CELLS, h // TILE_CELLS
     sources, tileset = [], []
 
@@ -315,40 +350,32 @@ def build_one(vfs, maps, entry):
             tileset.append(key)
         return tileset.index(key)
 
-    surface = scene["map"].get("surfaceMetal", 0)
-    if surface > 0 and "metalground" in recipe:
-        tilemap = [row(recipe["metalground"])] * (tw * th)
-    else:
-        tilemap = [row(ref) for ref in ground_refs(vfs, maps, recipe["ground"], tw, th)]
+    refs = (crop_refs(vfs, maps, recipe["crop"], w, h) if "crop" in recipe
+            else ground_refs(vfs, maps, recipe["section"], tw, th))
+    tilemap = [row(ref) for ref in refs]
     for m in scene.get("metal", []):
-        if not broad(m["rect"], w, h):
-            continue
-        if "metalground" not in recipe:
-            raise Fail(f"{eid}: broad metal {m['rect']} and no metalground tile in its recipe")
-        mg = row(recipe["metalground"])
-        x, z, rw, rh = m["rect"]
-        for j in range(z // TILE_CELLS, (z + rh) // TILE_CELLS):
-            for i in range(x // TILE_CELLS, (x + rw) // TILE_CELLS):
-                tilemap[j * tw + i] = mg
+        if broad(m["rect"], w, h):
+            raise Fail(f"{sid}: broad metal {m['rect']}, which no ground draws: a metal map is a scene of its own")
 
     features, clear = [], []
     values = {tuple(m["rect"]): m["v"] for m in scene.get("metal", [])}
     for x, z, bw, bh, g in deposits(scene):
         if len(g) != 1:
-            raise Fail(f"{eid}: the deposit at {[x, z, bw, bh]} joins {len(g)} metal rects; one patch draws one")
-        name = deposit_feature(vfs, recipe["patches"], (bw, bh), values[tuple(g[0])])
-        features.append({"name": name, "cell": [x, z]})
+            raise Fail(f"{sid}: the deposit at {[x, z, bw, bh]} joins {len(g)} metal rects; one patch draws one")
+        if "patches" not in recipe:
+            raise Fail(f"{sid}: a deposit at {[x, z, bw, bh]} and no metal patches in its recipe")
+        feat = deposit_feature(vfs, recipe["patches"], (bw, bh), values[tuple(g[0])])
+        features.append({"name": feat, "cell": [x, z]})
         clear.append((x, z, bw, bh))
     vents = vent_cells(scene)
     if vents:
         names = [n for n, b in of_world(vfs, recipe["world"]) if body_vent(b)]
         if not names:
-            raise Fail(f"{eid}: vents and no {recipe['world']} vent feature")
+            raise Fail(f"{sid}: vents and no {recipe['world']} vent feature")
         for k, c in enumerate(vents):
             features.append({"name": names[k % len(names)], "cell": c})
             clear.append((c[0], c[1], 1, 1))
-    broad_rects = [tuple(m["rect"]) for m in scene.get("metal", []) if broad(m["rect"], w, h)]
-    features += decorate(vfs, eid, recipe, w, h, clear, broad_rects)
+    features += decorate(vfs, sid, recipe, w, h, clear)
 
     counts = []
     for path in sources:
@@ -356,7 +383,7 @@ def build_one(vfs, maps, entry):
         if err:
             raise Fail(err)
         counts.append({"map": path, "tiles": tnt.tiles})
-    return {"format": FORMAT, "entry": eid, "cells": [w, h], "sources": counts,
+    return {"format": FORMAT, "entry": eid, "scene": name, "cells": [w, h], "sources": counts,
             "tileset": tileset, "tilemap": tilemap, "features": features}
 
 
@@ -367,7 +394,7 @@ def dumps(desc):
     tm = desc["tilemap"]
     rows = [", ".join(str(v) for v in tm[k:k + tw]) for k in range(0, len(tm), tw)]
     lines = ["{", f'  "format": {desc["format"]},', f'  "entry": {j(desc["entry"])},',
-             f'  "cells": {j(desc["cells"])},']
+             f'  "scene": {j(desc["scene"])},', f'  "cells": {j(desc["cells"])},']
     lines.append('  "sources": [' + ",".join(f"\n    {j(s)}" for s in desc["sources"]) + "\n  ],")
     lines.append('  "tileset": [' + ",".join(f"\n    {j(t)}" for t in desc["tileset"]) + "\n  ],")
     lines.append('  "tilemap": [' + ",".join(f"\n    {r}" for r in rows) + "\n  ],")
@@ -381,18 +408,23 @@ def load_entries():
     return [json.loads(p.read_text()) for p in sorted(ENTRIES.glob("*.json"))]
 
 
+def stages(entries):
+    """(entry, scene name) for every scene of every entry: a stage each."""
+    return [(e, n) for e in entries for n in e["scenes"]]
+
+
 def cmd_build(vfs, args):
     maps = Maps(vfs)
     STAGE.mkdir(parents=True, exist_ok=True)
     bad = 0
-    for entry in load_entries():
+    for entry, name in stages(load_entries()):
         try:
-            desc = build_one(vfs, maps, entry)
+            desc = build_one(vfs, maps, entry, name)
         except Fail as e:
             print(f"FAIL {e}")
             bad += 1
             continue
-        path = STAGE / f"{entry['id']}.json"
+        path = STAGE / f"{entry['id']}.{name}.json"
         path.write_text(dumps(desc))
         print(f"wrote {path.relative_to(REPO)}: {len(desc['tileset'])} tiles from "
               f"{len(desc['sources'])} maps, {len(desc['features'])} features")
@@ -401,36 +433,37 @@ def cmd_build(vfs, args):
 
 # --------------------------------------------------------------------------- check
 
-def check_one(vfs, maps, entry, fails):
-    eid = entry["id"]
-    say = lambda msg: fails.append(f"{eid}: {msg}")
-    path = STAGE / f"{eid}.json"
+def check_one(vfs, maps, entry, name, fails):
+    eid, sid = entry["id"], f"{entry['id']}.{name}"
+    say = lambda msg: fails.append(f"{sid}: {msg}")
+    path = STAGE / f"{sid}.json"
     if not path.is_file():
         return say(f"no {path.relative_to(REPO)} (stagemap.py build)")
     try:
         desc = json.loads(path.read_text())
     except ValueError as e:
         return say(f"{path.relative_to(REPO)}: {e}")
-    scene = entry["scene"]
+    scene = entry["scenes"][name]
     w, h = scene["map"]["w"], scene["map"]["h"]
-    if desc.get("format") != FORMAT or desc.get("entry") != eid:
-        say(f"format {desc.get('format')} entry {desc.get('entry')!r}, want {FORMAT} {eid!r}")
+    if desc.get("format") != FORMAT or desc.get("entry") != eid or desc.get("scene") != name:
+        say(f"format {desc.get('format')} entry {desc.get('entry')!r} scene {desc.get('scene')!r}, "
+            f"want {FORMAT} {eid!r} {name!r}")
     if desc.get("cells") != [w, h]:
         say(f"cells {desc.get('cells')}, the scene's map is {[w, h]}")
     if w % TILE_CELLS or h % TILE_CELLS:
         say(f"the map's {w} x {h} cells are not whole tiles")
 
-    # every rect the ground draws in tiles or the fog grid draws in blocks is whole tiles; a demo can add none
+    # the ground draws no broad metal, the fog grid draws whole blocks, and a demo on the scene adds neither
     for m in scene.get("metal", []):
-        if broad(m["rect"], w, h) and not tile_aligned(m["rect"]):
-            say(f"metal ground {m['rect']} is not whole tiles (even cells)")
+        if broad(m["rect"], w, h):
+            say(f"broad metal {m['rect']}, which no ground draws: a metal map is a scene of its own")
     for f in scene.get("fog", []):
         if not tile_aligned(f["rect"]):
             say(f"{f['kind']} fog {f['rect']} is not whole tiles (even cells)")
     for d in entry.get("demos", []):
         add = d.get("scene") or {}
         for k in ("metal", "vents", "fog"):
-            if add.get(k):
+            if d.get("on", next(iter(entry["scenes"]))) == name and add.get(k):
                 say(f"demo {d['id']} adds {k}, which the stage's ground does not show")
 
     # every source and tile resolves, with its count and hash
@@ -461,38 +494,38 @@ def check_one(vfs, maps, entry, fails):
         say("a tilemap value is not a tileset row")
 
     # every feature resolves and sits inside the map; deposits and vents carry their rules' pictures
-    rects = [m for m in scene.get("metal", []) if not broad(m["rect"], w, h)]
+    rects = scene.get("metal", [])
     vents = vent_cells(scene)
     deps, vfeats, feet = [], [], []
     for f in desc.get("features", []):
-        name, cell = f.get("name", ""), f.get("cell")
-        hit = vfs.feature(name)
+        feat, cell = f.get("name", ""), f.get("cell")
+        hit = vfs.feature(feat)
         if hit is None:
-            say(f"feature {name}: no section in any features\\*.tdf")
+            say(f"feature {feat}: no section in any features\\*.tdf")
             continue
         body = hit[0]
-        fx, fz = int(float(body.get("footprintx", 1) or 1)), int(float(body.get("footprintz", 1) or 1))
+        fx, fz = body_footprint(body)
         if not (isinstance(cell, list) and len(cell) == 2 and 0 <= cell[0] and cell[0] + fx <= w
                 and 0 <= cell[1] and cell[1] + fz <= h):
-            say(f"feature {name} at {cell}: its {fx} x {fz} footprint leaves the map")
+            say(f"feature {feat} at {cell}: its {fx} x {fz} footprint leaves the map")
             continue
         foot = [cell[0], cell[1], fx, fz]
         if any(overlaps(foot, other) for other in feet):
-            say(f"feature {name} at {cell}: its footprint overlaps another feature's")
+            say(f"feature {feat} at {cell}: its footprint overlaps another feature's")
         feet.append(foot)
         if body_metal(body) > 0:
             under = [m for m in rects if m["rect"] == foot]
             if not under:
-                say(f"deposit feature {name} at {cell}: its footprint is no metal rect of the scene")
+                say(f"deposit feature {feat} at {cell}: its footprint is no metal rect of the scene")
             elif under[0]["v"] != body_metal(body):
-                say(f"deposit feature {name} at {cell}: metal={body_metal(body):g}, its rect holds {under[0]['v']}")
+                say(f"deposit feature {feat} at {cell}: metal={body_metal(body):g}, its rect holds {under[0]['v']}")
             deps.append(foot)
         elif body_vent(body):
             if cell not in vents:
-                say(f"vent feature {name} at {cell}: on no vent cell of the scene")
+                say(f"vent feature {feat} at {cell}: on no vent cell of the scene")
             vfeats.append(cell)
         elif str(body.get("blocking", "1")).strip() != "0":
-            say(f"decoration {name} at {cell}: it blocks units, which the stage's simulation does not know")
+            say(f"decoration {feat} at {cell}: it blocks units, which the stage's simulation does not know")
     for x, z, bw, bh, _g in deposits(scene):
         if not any(x <= d[0] and d[0] + d[2] <= x + bw and z <= d[1] and d[1] + d[3] <= z + bh for d in deps):
             say(f"the deposit at {[x, z, bw, bh]} has no deposit feature")
@@ -502,7 +535,7 @@ def check_one(vfs, maps, entry, fails):
 
     # and the file is what build writes from the scene and the recipe today
     try:
-        want = dumps(build_one(vfs, maps, entry))
+        want = dumps(build_one(vfs, maps, entry, name))
     except Fail as e:
         return say(f"build: {e}")
     if path.read_text() != want:
@@ -513,12 +546,12 @@ def cmd_check(vfs, args):
     maps = Maps(vfs)
     fails = []
     entries = load_entries()
-    for entry in entries:
-        check_one(vfs, maps, entry, fails)
-    known = {e["id"] for e in entries}
+    for entry, name in stages(entries):
+        check_one(vfs, maps, entry, name, fails)
+    known = {f"{e['id']}.{n}" for e, n in stages(entries)}
     for p in sorted(STAGE.glob("*.json")):
         if p.stem not in known:
-            fails.append(f"{p.relative_to(REPO)}: no entry {p.stem}")
+            fails.append(f"{p.relative_to(REPO)}: no scene {p.stem} of an entry")
     for path, (tnt, where, err) in sorted(maps.got.items()):
         if not err:
             print(f"  {path}: {where}, {tnt.tiles} tiles")
@@ -532,7 +565,7 @@ def cmd_check(vfs, args):
         print(f"FAIL {f}")
     if fails:
         return 1
-    print(f"stagemap: {len(entries)} descriptions resolve and fit their scenes")
+    print(f"stagemap: {len(known)} descriptions resolve and fit their scenes")
     return 0
 
 
@@ -604,8 +637,8 @@ def main(argv=None):
     t = sub.add_parser("tiles", help="a map's flat, featureless, tileable tiles and a contact sheet")
     t.add_argument("map", help='the TNT path as the engine opens it, e.g. "maps\\\\Crossing Two Rivers.tnt"')
     t.add_argument("--count", type=int, default=40, help="how many tiles to list (default 40)")
-    sub.add_parser("build", help="write art/wiki/stage/<entry>.json for every entry")
-    sub.add_parser("check", help="resolve every description against the install and its entry's scene")
+    sub.add_parser("build", help="write art/wiki/stage/<entry>.<scene>.json for every scene of every entry")
+    sub.add_parser("check", help="resolve every description against the install and its scene")
     args = ap.parse_args(argv)
     try:
         vfs = tavfs.Vfs(tavfs.find_install(args.gamedir), args.exe)

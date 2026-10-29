@@ -95,9 +95,10 @@ function synthetic(name, layout, seed, opts, entries) {
     if (k % 4 !== 3) screens[sn].panel = { f: frame(int(100, 130), Math.min(SH, int(60, s.h + 20)), int(-4, 4), int(-4, 4)), key: key() };
   });
   const bases = {};
-  entries.forEach((e, i) => {
-    const m = WikiSide.geometry(e.scene.map.w * 16, e.scene.map.h * 16), want = opts.bases[i % opts.bases.length];
-    if (want !== 'none') bases[e.id] = bytes(m.w * m.h - (want === 'short' ? 1 : 0));
+  // a base per stage, `<entry>.<scene>`, every scene of an entry being its first one's size
+  entries.flatMap(e => Object.keys(e.scenes).map(n => [`${e.id}.${n}`, e.scenes[n].map])).forEach(([id, map], i) => {
+    const m = WikiSide.geometry(map.w * 16, map.h * 16), want = opts.bases[i % opts.bases.length];
+    if (want !== 'none') bases[id] = bytes(m.w * m.h - (want === 'short' ? 1 : 0));
   });
   const art = {
     sheet: { file: 'sheet.bin', w: SW, h: SH }, palette: 'pal.bin',
@@ -113,7 +114,7 @@ function synthetic(name, layout, seed, opts, entries) {
     greyed: opts.tables ? bytes(256) : null, bases };
 }
 
-/* a real pack as side.js's load() reads it, its minimap pictures by entry */
+/* a real pack as side.js's load() reads it, its minimap pictures by stage */
 function realPack(mod) {
   const dir = path.join(PACKS, mod), json = JSON.parse(fs.readFileSync(path.join(dir, 'side.json'), 'utf8')), A = json.art || {};
   const bin = f => { if (!f) return null; const p = path.join(dir, f); return fs.existsSync(p) ? new Uint8Array(fs.readFileSync(p)) : null; };
@@ -280,7 +281,8 @@ try {
             else if (!v.side) { if (c.h !== 0) differ(key, `no sidebar in sim.js's view, ${c.h} rows from the C side`); }
             else if (v.side.index !== k) differ(key, `the view shows side ${v.side.index}`);
             else {
-              const M = v.map, cell = M.cell || 16, base = pack.bases[entry.id] || null;
+              const sid = `${entry.id}.${typeof demo.on === 'string' ? demo.on : Object.keys(entry.scenes)[0]}`;
+              const M = v.map, cell = M.cell || 16, base = pack.bases[sid] || null;
               const js = WikiSide.compose(p.art, L, v, base, M.w * cell, M.h * cell), rgba = WikiSide.rgba(p.art, js);
               st.side++; st.minimap += js.minimap ? 1 : 0; st.under += v.side.under != null ? 1 : 0;
               st.pressed += v.side.state.filter(x => x === 1).length; st.greyed += v.side.state.filter(x => x === 2).length;

@@ -2,10 +2,11 @@
    tagpu_wikisim.c, tagpu_wikistage.c (the record's copy) and tagpu_wikiscene.c, compiled natively,
    write the stage's scene as JSON lines, and scenecheck.mjs pairs them with the mockup's.
 
-   `wikiscenetest PAK GROUNDS` reads every entry's ground from GROUNDS, a text file scenecheck.mjs
-   writes out of the mockup's pack (tools/wiki/gfx.py) -- per entry a line `ENTRY W H NTILE NFEAT`,
+   `wikiscenetest PAK GROUNDS` reads every stage's ground from GROUNDS, a text file scenecheck.mjs
+   writes out of the mockup's packs (tools/wiki/gfx.py), one stage per scene of an entry -- per stage
+   a line `STAGE W H NTILE NFEAT`, STAGE being `<entry>.<scene>`,
    a line of the W/2 x H/2 tile map, and a line per feature `CX CZ FX FZ HEIGHT FLAGS NBODY
-   [W H HX HY CK SUBALP]... NSHADOW [...]` -- and writes, per entry, one line
+   [W H HX HY CK SUBALP]... NSHADOW [...]` -- and writes, per stage, one line
    {"e", "ground": {"refused", "gw", "gh", "cells": [[col, row, tile]...], "shadow": [[x0, y0, x1,
    y1, enc, mode, sub, feat, wax, waz]...], "body": [...]}}; then plays every demo of every entry in
    PAK (tools/hudpak.py --set wiki) to its end, and at tick 0, every 30th tick and the last copies
@@ -108,8 +109,8 @@ static int ground(FILE* f, char* entry, size_t n)
     return 1;
 }
 
-/* the unit types the mockup's packs resolved, from TYPES: per entry a line `ENTRY N` and N lines
-   `NAME MOBILE SLANT SHADOW`; a type an entry does not list there is a box */
+/* the unit types the mockup's packs resolved, from TYPES: per stage a line `STAGE N` and N lines
+   `NAME MOBILE SLANT SHADOW`; a type a stage does not list there is a box */
 #define MAXENTRY 64
 static char s_tent[MAXENTRY][64];
 static char s_tname[MAXENTRY][WIKI_MAX_DEFS][64];
@@ -136,7 +137,7 @@ static int types(FILE* f)
 
 /* the view's model records as {"m": [[type, owner, ghost, shadow, nanoOn, slot, x, z, cs, sn, enc,
    alpha, nanoT, nanoC0, nanoC1, nanoC2, wire]...], "nu": units}, the view's types matched to the
-   entry's resolved ones by name, as the stage's producer matches them to the arena's */
+   stage's resolved ones by name, as the stage's producer matches them to the arena's */
 static void models(const WIKISTAGEVIEW* v, const char* id)
 {
     static WSCENEMODEL m[WIKISCENE_MODELS];
@@ -210,7 +211,9 @@ int main(int argc, char** argv)
                             printf("%s%u,%u", k ? "," : "", fog.grid[k] & 0xFFu, fog.grid[k] >> 8);
                         fputs("]}", stdout);
                     }
-                    models(&v, e->id);
+                    /* the types the demo's stage resolved: its scene's pack, `<entry>.<scene>` */
+                    snprintf(entry, sizeof entry, "%s.%s", e->id, e->scenes[e->demo[j].on].name);
+                    models(&v, entry);
                     puts("}");
                 }
                 if (s.done) break;

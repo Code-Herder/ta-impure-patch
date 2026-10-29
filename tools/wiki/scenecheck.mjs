@@ -234,8 +234,10 @@ try {
           }
           nframes++;
           if (bad) { code = 1; console.log(`DIFFER ${key} fog: ${bad}`); }
-          if (c && packs[id]) {
-            const why = pairModels(c, WikiScene.build(v, packs[id], sim.tick));
+          // the stage the demo plays on, `<entry>.<scene>`: the pack the mockup draws it from
+          const sid = `${id}.${typeof demo.on === 'string' ? demo.on : Object.keys(entry.scenes)[0]}`;
+          if (c && packs[sid]) {
+            const why = pairModels(c, WikiScene.build(v, packs[sid], sim.tick));
             if (why) { code = 1; console.log(`DIFFER ${key} models: ${why}`); }
           }
           cfog.delete(key);

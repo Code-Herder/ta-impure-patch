@@ -532,7 +532,8 @@ static int stage_world(int cx, int cy, double* wx, double* wz)
     for (i = 0; i < s_hit.n && !h; i++)
         if (!strncmp(s_hit.hit[i].key, "stage", TAGPU_WIKI_KEY)) h = &s_hit.hit[i];
     if (!h || cx < h->x0 || cx >= h->x1 || cy < h->y0 || cy >= h->y1) return 0;
-    tagpu_wikistage_fit(e->scene.w, e->scene.h, s_hit.side_h, h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &f);
+    /* every scene of an entry has the first one's map size (tagpu_wikidata_entry), so the fit is the entry's */
+    tagpu_wikistage_fit(e->scenes[0].w, e->scenes[0].h, s_hit.side_h, h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &f);
     if (!(f.s > 0)) return 0;
     x = (cx - h->x0 - f.ox) / f.s;
     z = (cy - h->y0 - f.oz) / f.s;
@@ -1570,8 +1571,8 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
         }
     }
     /* the stage's fit as stage_world takes it: the drawn frame's unit, map and sidebar rows */
-    fprintf(f, "],\"u\":%.17g,\"map\":[%d,%d],\"side_h\":%d,\"view_drawn\":%d", (double)s_hit.u, e ? e->scene.w : 0,
-            e ? e->scene.h : 0, (int)s_hit.side_h, (int)s_hit.view);
+    fprintf(f, "],\"u\":%.17g,\"map\":[%d,%d],\"side_h\":%d,\"view_drawn\":%d", (double)s_hit.u, e ? e->scenes[0].w : 0,
+            e ? e->scenes[0].h : 0, (int)s_hit.side_h, (int)s_hit.view);
     /* the sidebar layout the simulation was started with, as simparity.mjs --try gives it to sim.js
        (null: none), and which one it is; and its context, sim.js's ctx, the casting written whole */
     fprintf(f, ",\"layout_src\":\"%s\"", !s_simOn ? "" : s_laySrc == WIKISTAGE_LAYOUT_MOD ? "mod"

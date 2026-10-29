@@ -33,6 +33,7 @@
 #include "tagpu_json.h"
 
 #define WIKI_ID_MAX   24    /* a unit id or a unit type, with its terminator */
+#define WIKI_SCENE_MAX 17   /* a scene's name, a-z and 0-9 with a letter first, with its terminator */
 #define WIKI_MAX_DEFS 64    /* the unit types of one entry: a build list is a mask over them */
 /* Cells a side of an entry's map; the loader refuses a larger one. The DLL's packet carries the
    map by value, at most 128 x 128 cells, and a 700-pixel stage still gives 5 px a cell; the
@@ -97,10 +98,12 @@ typedef struct {
     WIKIPOINT*       move;              /* its move orders, in order */
 } WIKISCENEUNIT;
 
-/* The entry's scene, or a demo's additions to it: the demo's units, metal, vents and fog go after
-   the entry's, and its selection and cursor replace the entry's when it gives them. Only the
-   entry's map counts. */
+/* One of the entry's scenes, or a demo's additions to the one it plays on: the demo's units,
+   metal, vents and fog go after the scene's, and its selection and cursor replace the scene's when
+   it gives them. Only the entry's scenes have a name and a map. */
 typedef struct {
+    const char*      name;              /* the entry's scene: 1..WIKI_SCENE_MAX-1 bytes; NULL for
+                                           a demo's additions                                     */
     int              w, h;              /* cells */
     double           surface_metal;
     int              nmetal, nvent, nfog, nunit, nselected;
@@ -139,7 +142,8 @@ typedef struct {
 typedef struct {
     const char*      id;
     const char*      title;
-    WIKISCENE        scene;
+    int              on;                /* the index in WIKIENTRY.scenes of the scene it plays on */
+    WIKISCENE        scene;             /* its additions */
     int              ninput;
     WIKIINPUT*       input;             /* in file order; the sim plays them by `at` */
     int              has_end;
@@ -157,7 +161,8 @@ typedef struct {
     const char**     locked_in;         /* the mods that turn the feature off */
     double           pace;              /* construction and reclaim run this many times faster */
     WIKIDEF*         def;               /* in the file's order, which breaks the sim's ties */
-    WIKISCENE        scene;
+    int              nscene;            /* 1 or more, every map the first one's size */
+    WIKISCENE*       scenes;            /* in the file's order: a demo with no `on` plays on the first */
     WIKIDEMO*        demo;
     TJDOC*           doc;               /* the strings above live in it */
 } WIKIENTRY;

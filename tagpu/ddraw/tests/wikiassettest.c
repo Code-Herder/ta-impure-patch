@@ -271,7 +271,7 @@ static int cmd_load(int argc, char** argv)
 }
 
 /* The sidebar's load as the DLL's loader thread runs it -- the sidebar, then the 3D load with it --
-   printed as {"side": <its report>, "minimap": {<entry>: {w, h, offx, offy, fnv} or null},
+   printed as {"side": <its report>, "minimap": {<entry>.<scene>: {w, h, offx, offy, fnv} or null},
    "units": [<name>...]}: the report tagpu_wikiside.json holds, each stage's minimap picture and
    the 3D load's unit types. The frames' bound the block promises is checked again here. */
 static int cmd_side(int argc, char** argv)
@@ -300,7 +300,7 @@ static int cmd_side(int argc, char** argv)
     printf("{\"side\":%s,\"minimap\":{", report);
     for (i = 0; w && i < w->nstage; i++) {
         const WIKI3DSTAGE* st = &w->stage[i];
-        printf("%s\"%s\":", i ? "," : "", st->entry);
+        printf("%s\"%s.%s\":", i ? "," : "", st->entry, st->scene);
         if (st->minimap)
             printf("{\"w\":%d,\"h\":%d,\"offx\":%d,\"offy\":%d,\"fnv\":\"%08lx\"}", st->mm_w, st->mm_h, st->mm_offx,
                    st->mm_offy, (unsigned long)fnv(FNV0, st->minimap, (size_t)(st->mm_w * st->mm_h)));
@@ -860,8 +860,10 @@ static WIKIDATA* synth_data(void)
     static WIKIENTRY e;
     static WIKIDEF def[3];
     static WIKISCENEUNIT u[3];
+    static WIKISCENE sc;
     memset(&d, 0, sizeof d);
     memset(&e, 0, sizeof e);
+    memset(&sc, 0, sizeof sc);
     memset(def, 0, sizeof def);
     memset(u, 0, sizeof u);
     strcpy(def[0].name, "ARMCK");
@@ -874,8 +876,11 @@ static WIKIDATA* synth_data(void)
     e.id = "fuzz";
     e.ndef = 3;
     e.def = def;
-    e.scene.nunit = 3;
-    e.scene.unit = u;
+    sc.name = "green";
+    sc.nunit = 3;
+    sc.unit = u;
+    e.nscene = 1;
+    e.scenes = &sc;
     d.nentry = 1;
     d.entry = &e;
     return &d;

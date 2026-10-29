@@ -1847,9 +1847,16 @@ def mp(name):
 MODS_SCREEN = "2560x1440"                     # the private display, and so the game's screen (private_xvfb)
 # the setups the wiki's 3D stage is measured under, as tools/compat/setups.json names them
 MODS_SETUPS = ("retail", "escalation", "mayhem-11.3.0", "prota-4.8", "tazero-alpha5", "twilight-2.0b98")
-# (entry, demo, tick) captured under each: a construction among Quick Build's units, and the
-# gesture's ghosts on Build Lines' stage (the first frames of UNITS_SHOTS for each entry)
-MODS_SHOTS = (("quickbuild", 3, 180), ("buildshapes", 2, 100))
+# (entry, demo, tick) captured under each: a construction among Quick Build's units, the Metal maps demo on
+# Quick Build's metal stage, and the gesture's ghosts on Build Lines' stage (the first frames of UNITS_SHOTS for
+# each entry)
+MODS_SHOTS = (("quickbuild", 3, 180), ("quickbuild", 10, 100), ("buildshapes", 2, 100))
+
+
+def stage_of(entry, demo):
+    """The stage demo `demo` (from 1) of `entry` plays on, `<entry>.<scene>`: its `on`, else the first scene."""
+    e = json.loads((TREE / f"art/wiki/entries/{entry}.json").read_text())
+    return f"{entry}.{e['demos'][demo - 1].get('on', next(iter(e['scenes'])))}"
 
 
 # the sidebar's checks under each setup (mods (b1)..(b4)): the stage's state, the demo at a tick where its ARMCK
@@ -2246,8 +2253,9 @@ def mods_setup(tacompat, setup, dll, out):
                                window=False)
             Image.open(ppm).save(ppm.with_suffix(".png"))
             ppm.unlink()
-            ln = wait_line(c, start, rf"wiki3d: stage {entry}: the ground", f"(w3) no ground line for {entry}")
-            row["stages"][entry] = ln.split(f"stage {entry}: ", 1)[1]
+            sid = stage_of(entry, demo)
+            ln = wait_line(c, start, rf"wiki3d: stage {re.escape(sid)}: the ground", f"(w3) no ground line for {sid}")
+            row["stages"][sid] = ln.split(f"stage {sid}: ", 1)[1]
             ln = wait_line(c, start, rf"wiki3d: {entry}: the types in 3D:", f"(w3) no types line for {entry}")
             row["types"][entry] = ln.split(f"{entry}: ", 1)[1]
             # a whole periodic line over frames of this stage alone: the second one from here
@@ -2255,11 +2263,11 @@ def mods_setup(tacompat, setup, dll, out):
             wait_line(c, mark, DRAWN, f"(w3) {entry}: no frame line", 180)
             mark = c.mark()
             m = re.search(DRAWN, wait_line(c, mark, DRAWN, f"(w3) {entry}: no frame line", 180))
-            row["drawn"][entry] = (int(m.group(1)), int(m.group(2)))
+            row["drawn"][sid] = (int(m.group(1)), int(m.group(2)))
             screen_grab(f"{entry}-d{demo}-t{tick}.screen.png")
             poll("w3")
             print(f"wiki mods: {setup['name']}: (w3) {entry} demo {demo} tick {tick}: "
-                  f"{armed.split('wiki3d: ', 1)[1]}; {row['stages'][entry]}; {row['types'][entry]}; "
+                  f"{armed.split('wiki3d: ', 1)[1]}; {row['stages'][sid]}; {row['types'][entry]}; "
                   f"{m.group(1)} of {m.group(2)} frames drew the image")
         stage_sidebar(c, display, gamedir, pack, out, row)
         poll("b4")
@@ -2270,7 +2278,7 @@ def mods_setup(tacompat, setup, dll, out):
         # (w5) the claim: a ground the report resolved is drawn in 3D on every frame, one it did not
         # is the whitebox on every frame
         for st in report["stages"]:
-            e = st["entry"]
+            e = f"{st['entry']}.{st['scene']}"
             if e not in row["stages"]:
                 continue
             in3d = row["stages"][e].startswith("the ground in 3D")
@@ -2312,8 +2320,9 @@ def mods_table(rows):
                              for s in st.get("sources", []))
             feats = sorted({f"{f['name']} <- {arc(f.get('from'))}/{arc(f.get('gaf_from'))}" + ("" if f["ok"] else " MISS")
                             for f in st.get("features", [])})
-            print(f"   stage {st['entry']}: ok={st['ok']} {st.get('why') or ''} | {srcs} | {', '.join(feats)}")
-            print(f"     drawn: {r.get('stages', {}).get(st['entry'])}; {r.get('drawn', {}).get(st['entry'])} frames")
+            sid = f"{st['entry']}.{st['scene']}"
+            print(f"   stage {sid}: ok={st['ok']} {st.get('why') or ''} | {srcs} | {', '.join(feats)}")
+            print(f"     drawn: {r.get('stages', {}).get(sid)}; {r.get('drawn', {}).get(sid)} frames")
             print(f"     {r.get('types', {}).get(st['entry'])}")
         for u in rep.get("units", []):
             md = u.get("model") or {}

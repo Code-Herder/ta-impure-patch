@@ -810,10 +810,10 @@ static int tree_case(const char* name, const char* tree, int nodes)
 static int entry_case(void)
 {
     static const char TEXT[] =
-        "{\"format\":1,\"id\":\"m\",\"text\":{\"a\":\"x\",\"b\":\"y\"},"
+        "{\"format\":2,\"id\":\"m\",\"text\":{\"a\":\"x\",\"b\":\"y\"},"
         "\"units\":{\"ARMMEX\":{\"footprint\":[2,2],\"buildTime\":10}},"
-        "\"scene\":{\"map\":{\"w\":8,\"h\":8},\"metal\":{\"r\":1},\"vents\":{\"v\":[1,1]},"
-        "\"units\":{\"u\":{\"type\":\"ARMMEX\",\"at\":[1,1]}},\"selected\":{\"s\":\"u\"}},"
+        "\"scenes\":{\"g\":{\"map\":{\"w\":8,\"h\":8},\"metal\":{\"r\":1},\"vents\":{\"v\":[1,1]},"
+        "\"units\":{\"u\":{\"type\":\"ARMMEX\",\"at\":[1,1]}},\"selected\":{\"s\":\"u\"}}},"
         "\"demos\":{\"d\":{}}}";
     WIKIENTRY e;
     char err[256], why[320];
@@ -821,9 +821,9 @@ static int entry_case(void)
     err[0] = 0;
     ok = tagpu_wikidata_entry(&e, TEXT, sizeof TEXT - 1, err, sizeof err);
     snprintf(why, sizeof why, "%s: text %d, metal %d, vents %d, units %d, selected %d, demos %d",
-             ok ? "loaded" : err, ok ? e.ntext : -1, ok ? e.scene.nmetal : -1, ok ? e.scene.nvent : -1,
-             ok ? e.scene.nunit : -1, ok ? e.scene.nselected : -1, ok ? e.ndemo : -1);
-    ok = ok && !e.ntext && !e.scene.nmetal && !e.scene.nvent && !e.scene.nunit && !e.scene.nselected
+             ok ? "loaded" : err, ok ? e.ntext : -1, ok ? e.scenes[0].nmetal : -1, ok ? e.scenes[0].nvent : -1,
+             ok ? e.scenes[0].nunit : -1, ok ? e.scenes[0].nselected : -1, ok ? e.ndemo : -1);
+    ok = ok && !e.ntext && !e.scenes[0].nmetal && !e.scenes[0].nvent && !e.scenes[0].nunit && !e.scenes[0].nselected
          && !e.ndemo;
     tagpu_wikidata_entry_free(&e);
     return said(ok, "entry-lists-as-objects", why);
@@ -837,16 +837,16 @@ static int facing_case(const char* name, const char* facing, int refused, double
     WIKIENTRY e;
     int loaded, ok;
     snprintf(text, sizeof text,
-             "{\"format\":1,\"id\":\"f\",\"units\":{\"ARMCK\":{\"footprint\":[2,2],\"buildTime\":10,"
-             "\"maxVelocity\":1}},\"scene\":{\"map\":{\"w\":8,\"h\":8},\"units\":[{\"type\":\"ARMCK\","
-             "\"at\":[40,40]%s%s}]}}", facing ? ",\"facing\":" : "", facing ? facing : "");
+             "{\"format\":2,\"id\":\"f\",\"units\":{\"ARMCK\":{\"footprint\":[2,2],\"buildTime\":10,"
+             "\"maxVelocity\":1}},\"scenes\":{\"g\":{\"map\":{\"w\":8,\"h\":8},\"units\":[{\"type\":\"ARMCK\","
+             "\"at\":[40,40]%s%s}]}}}", facing ? ",\"facing\":" : "", facing ? facing : "");
     err[0] = 0;
     loaded = tagpu_wikidata_entry(&e, text, strlen(text), err, sizeof err);
-    if (loaded && e.scene.nunit != 1) snprintf(err, sizeof err, "loaded %d units", e.scene.nunit);
-    ok = loaded && e.scene.nunit == 1;
+    if (loaded && e.scenes[0].nunit != 1) snprintf(err, sizeof err, "loaded %d units", e.scenes[0].nunit);
+    ok = loaded && e.scenes[0].nunit == 1;
     snprintf(why, sizeof why, "%s: (%.17g, %.17g), expected %s(%.17g, %.17g)", ok ? "loaded" : err,
-             ok ? e.scene.unit[0].hx : 0.0, ok ? e.scene.unit[0].hz : 0.0, refused ? "a refusal, not " : "", hx, hz);
-    ok = refused ? !loaded : ok && e.scene.unit[0].hx == hx && e.scene.unit[0].hz == hz;
+             ok ? e.scenes[0].unit[0].hx : 0.0, ok ? e.scenes[0].unit[0].hz : 0.0, refused ? "a refusal, not " : "", hx, hz);
+    ok = refused ? !loaded : ok && e.scenes[0].unit[0].hx == hx && e.scenes[0].unit[0].hz == hz;
     if (loaded) tagpu_wikidata_entry_free(&e);
     return said(ok, name, why);
 }
@@ -858,7 +858,7 @@ static int unit_case(const char* name, const char* unit, int refused, int cast, 
     char text[512], err[256], why[512];
     WIKIENTRY e;
     int loaded, ok, i;
-    snprintf(text, sizeof text, "{\"format\":1,\"id\":\"u\",\"units\":{\"ARMX\":%s},\"scene\":{\"map\":{\"w\":8,\"h\":8}}}", unit);
+    snprintf(text, sizeof text, "{\"format\":2,\"id\":\"u\",\"units\":{\"ARMX\":%s},\"scenes\":{\"g\":{\"map\":{\"w\":8,\"h\":8}}}}", unit);
     err[0] = 0;
     loaded = tagpu_wikidata_entry(&e, text, strlen(text), err, sizeof err);
     snprintf(why, sizeof why, "%s: cast %d, g %u %u %u %u; expected %scast %d, g %u %u %u %u", loaded ? "loaded" : err,

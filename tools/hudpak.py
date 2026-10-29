@@ -11,7 +11,7 @@ A set names the files of one folder:
           the parts as PNG, the faces as TrueType, and the licence texts, so the faces never
           travel without them. The default.
     wiki  art/wiki/, the resource WIKIPAK: tree.json and the entries (src/tagpu_wikidata.c),
-          the stage descriptions stage/<entry>.json (src/tagpu_wikiasset.c, which resolves them
+          the stage descriptions stage/<entry>.<scene>.json (src/tagpu_wikiasset.c, which resolves them
           against the player's archives), the sidebar layouts side/<name>.json, fixture.json
           the one the wiki falls back to (src/tagpu_wikidata.c), layout.json, the window's
           numbers (src/tagpu_wikilay.c), and the window's kit,
