@@ -475,14 +475,15 @@ static int try_held(int k)
     return -1;
 }
 
-/* `k` sent down: once while it is held, or every time for Z and X, which step on each down */
+/* `k` sent down: once while it is held, or every time for Z and X, which step on each down, and
+   for E, a key the sidebar's buttons take on each down */
 static void try_down(int k)
 {
     if (!try_on()) return;
     if (try_held(k) < 0) {
         if (s_ndown >= WIKI_NKEYS) return;
         s_down[s_ndown++] = k;
-    } else if (k != WIKI_KEY_Z && k != WIKI_KEY_X)
+    } else if (k != WIKI_KEY_Z && k != WIKI_KEY_X && k != WIKI_KEY_E)
         return;
     try_send(TRY_DOWN, k, 0, 0);
 }
@@ -598,7 +599,8 @@ static int alt_held(void)
 }
 
 /* a key-down (`down`) or key-up of `vk` while the window is open: Z and X with Alt step the armed
-   building's spacing, every down, an auto-repeat included, as the game steps again; Shift, Alt and
+   building's spacing, every down, an auto-repeat included, as the game steps again; E is a key to
+   the sidebar's buttons (RECLAIM's quickkey), every down as the GUI pump takes each; Shift, Alt and
    Ctrl go down once and up */
 static void try_key(unsigned vk, int down)
 {
@@ -606,8 +608,11 @@ static void try_key(unsigned vk, int down)
     if (!down) {
         if (m >= 0) try_up(m);
         if (z >= 0) try_up(z);
+        if (vk == 'E') try_up(WIKI_KEY_E);
     } else if (z >= 0 && alt_held())
         try_down(z);
+    else if (vk == 'E')
+        try_down(WIKI_KEY_E);
     else if (m >= 0)
         try_down(m);
 }
@@ -1117,7 +1122,10 @@ static void layout_json(FILE* f, const WIKILAYOUT* L)
                 if (g->unit[0]) ustr(f, g->unit, WIKI_SIDE_NAME);
                 else fputs("null", f);
             }
-            fprintf(f, ",\"grey\":%s,\"key\":%d,\"hidden\":%s}", g->grey ? "true" : "false", g->key, g->hidden ? "true" : "false");
+            fprintf(f, ",\"grey\":%s", g->grey ? "true" : "false");
+            /* a quickkey as the pack writes one: only when the button has it */
+            if (g->key) fprintf(f, ",\"key\":%d", g->key);
+            fprintf(f, ",\"hidden\":%s}", g->hidden ? "true" : "false");
         }
         fprintf(f, "]}");
     }

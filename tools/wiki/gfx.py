@@ -257,7 +257,7 @@ class Gaf:
 # --------------------------------------------------------------------------- the game's cursors
 
 CURSOR_SEQ = {"arrow": "cursornormal", "move": "cursormove", "build": "cursornormal", "reclaim": "cursorreclamate"}   # WIKI_CURSOR_*'s sequences
-SPRITE_CELL, SPRITE_CELLS = 64, 16                       # tagpu_hudlay.h HUD_SPRITE_CELL, HUD_SPRITE_CELLS
+SPRITE_CELL, SPRITE_CELLS = 64, 32                       # tagpu_hudlay.h HUD_SPRITE_CELL, HUD_SPRITE_CELLS
 
 
 def cursors(eng, palette, out_root):
@@ -270,7 +270,7 @@ def cursors(eng, palette, out_root):
     got = eng.gaf(eng.dirs["anims"], "cursors")
     rep = {"gaf": got[1].lower() if got else None, "from": got[2].lower() if got else None,
            "sequences": [{"name": CURSOR_SEQ[k], "frames": len(got[0].seqs[CURSOR_SEQ[k]][1])
-                          if got and CURSOR_SEQ[k] in got[0].seqs else None} for k in ("arrow", "move", "build")]}
+                          if got and CURSOR_SEQ[k] in got[0].seqs else None} for k in ("arrow", "move", "build", "reclaim")]}
     sheet = bytearray(SPRITE_CELL * SPRITE_CELLS * SPRITE_CELL * 4)
     frames, seq, placed = [], {}, {}
     for shape, name in CURSOR_SEQ.items():

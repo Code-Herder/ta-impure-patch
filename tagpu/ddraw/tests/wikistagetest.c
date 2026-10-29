@@ -6,7 +6,7 @@
    face FILE with `spacing` em of letter-spacing (upper-cased when UPPER is 1) at a size of one,
    one line out each: the advance a size multiplies, which stage.js's recorded measureText gives.
 
-   `wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD AW AH MW MH BW BH SPRITES LAYOUT X Y W H U [COB]`
+   `wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD RECLAIM AW AH MW MH BW BH RW RH SPRITES LAYOUT X Y W H U [COB]`
    plays every demo of every entry in PAK (tools/hudpak.py --set wiki) to its end, with the
    sidebar of LAYOUT (a file of PAK, side/fixture.json say; - for none) and with COB the units'
    scripts that file names (tests/wikicobfile.h), as sim.js plays with serve.py's host -- the nano
@@ -15,7 +15,7 @@
    X Y W H, in units, at U device pixels a unit, with the cursor left out of every frame whose
    tick / 30 is odd (as Try it yourself leaves it while the pointer is off the stage): the text in
    style STYLE, measured in FONT;
-   the kit's cursors the parts ARROW, MOVE and BUILD, AW x AH, MW x MH and BW x BH units; the game
+   the kit's cursors the parts ARROW, MOVE, BUILD and RECLAIM, AW x AH, MW x MH, BW x BH and RW x RH units; the game
    cursors' frames those of SPRITES (`sprites` below). With a layout, the sidebar's art is the
    stand-in `side_art` below, in the frames whose tick / 30 is 1 or 2 past a multiple of 3 (with
    its minimap in the first, without in the second), and the whitebox column in the rest.
@@ -145,7 +145,7 @@ static void frame(const WIKISTAGEOPS* o, const WIKISTAGEVIEW* v, const char* e, 
 }
 
 /* The game cursors' frames, stagecheck.mjs's stand-ins: SPRITES is "-" for none (every shape draws
-   its kit icon), else a file of whitespace-separated numbers: the scale, three shapes' `n first
+   its kit icon), else a file of whitespace-separated numbers: the scale, the four shapes' `n first
    loop` by WIKI_CURSOR_*, then every cell's `w h hx hy dur` */
 static int sprites(WIKISTAGEART* art, const char* path)
 {
@@ -154,7 +154,7 @@ static int sprites(WIKISTAGEART* art, const char* path)
     if (!strcmp(path, "-")) return 1;
     if (!(f = fopen(path, "r"))) { fprintf(stderr, "wikistagetest: cannot read %s\n", path); return 0; }
     if (fscanf(f, "%f", &art->spr_scale) != 1) goto bad;
-    for (k = 0; k < 3; k++) {
+    for (k = 0; k < WIKI_CURSOR_N; k++) {
         unsigned n, first, loop;
         if (fscanf(f, "%u %u %u", &n, &first, &loop) != 3 || first + n > HUD_SPRITE_CELLS) goto bad;
         art->seq[k].n = (uint8_t)n;
@@ -230,22 +230,22 @@ static int ops(char** a, const char* cob)
     art.style = (int16_t)atoi(a[4]);
     art.measure = measure;
     art.measure_ctx = &f;
-    for (k = 0; k < 3; k++) {
+    for (k = 0; k < WIKI_CURSOR_N; k++) {
         art.cursor[k] = (int16_t)atoi(a[5 + k]);
-        art.cursor_w[k] = (float)atof(a[8 + 2 * k]);
-        art.cursor_h[k] = (float)atof(a[9 + 2 * k]);
+        art.cursor_w[k] = (float)atof(a[9 + 2 * k]);
+        art.cursor_h[k] = (float)atof(a[10 + 2 * k]);
     }
-    if (!sprites(&art, a[14])) return 2;
-    if (strcmp(a[15], "-")) {
-        WIKILAYOUT* lay = tagpu_wikidata_layout_pak((const unsigned char*)pak, n, a[15], err, sizeof err);
+    if (!sprites(&art, a[17])) return 2;
+    if (strcmp(a[18], "-")) {
+        WIKILAYOUT* lay = tagpu_wikidata_layout_pak((const unsigned char*)pak, n, a[18], err, sizeof err);
         if (!lay || !(sd = side_art(lay))) {
-            fprintf(stderr, "wikistagetest: %s: %s\n", a[15], lay ? "no memory" : err);
+            fprintf(stderr, "wikistagetest: %s: %s\n", a[18], lay ? "no memory" : err);
             return 2;
         }
         free(lay);
     }
-    r.x = (float)atof(a[16]); r.y = (float)atof(a[17]); r.w = (float)atof(a[18]); r.h = (float)atof(a[19]);
-    u = atof(a[20]);
+    r.x = (float)atof(a[19]); r.y = (float)atof(a[20]); r.w = (float)atof(a[21]); r.h = (float)atof(a[22]);
+    u = atof(a[23]);
     for (i = 0; i < d->nentry; i++)
         for (j = 0; j < d->entry[i].ndemo; j++) {
             const WIKIENTRY* e = &d->entry[i];
@@ -296,7 +296,7 @@ static int measure_file(char** a)
 int main(int argc, char** argv)
 {
     if (argc == 6 && !strcmp(argv[1], "measure")) return measure_file(argv + 2);
-    if ((argc == 23 || argc == 24) && !strcmp(argv[1], "ops")) return ops(argv + 2, argc == 24 ? argv[23] : NULL);
+    if ((argc == 26 || argc == 27) && !strcmp(argv[1], "ops")) return ops(argv + 2, argc == 27 ? argv[26] : NULL);
     fprintf(stderr, "usage: wikistagetest measure FONT SPACING UPPER FILE\n"
                     "       wikistagetest ops PAK FONT SPACING UPPER STYLE ARROW MOVE BUILD AW AH MW MH BW BH SPRITES LAYOUT X Y W H U [COB]\n");
     return 2;

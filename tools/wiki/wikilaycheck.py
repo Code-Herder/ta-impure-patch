@@ -82,7 +82,7 @@ CASES = [
     ("1080-stock-quickbuild-iface0", (1920, 1080), "mod=stock&entry=quickbuild&iface=0", {"tick": 75}),
 ]
 
-KEYNAME = {"Shift": "shift", "Alt": "alt", "Ctrl": "ctrl", "Z": "z", "X": "x", "Left-click": "lmb", "Right-click": "rmb"}
+KEYNAME = {"Shift": "shift", "Alt": "alt", "Ctrl": "ctrl", "Z": "z", "X": "x", "E": "e", "Left-click": "lmb", "Right-click": "rmb"}
 
 COLLECT = r"""async () => {
   const A = ACTIONS, PARTS = KITPARTS, CPS = FALLBACK, ROLES = ROLEMAP;

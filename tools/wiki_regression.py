@@ -919,8 +919,11 @@ def demos(c, shots, res):
 
     # (d4) each entry with a demo paused mid-play, grabbed beside the mockup at the same state -- the
     # retail game's, so the stock pack's sidebar -- past tick 150, which leaves some nine seconds of
-    # either demo for the pause to land in
-    for node, entry, k, demo, at in ((2, "quickbuild", 0, "snap", 150), (3, "buildshapes", 1, "line", 150)):
+    # either building demo for the pause to land in, and the METAL ring past 190, its drag nearly
+    # out, about two seconds before its release at tick 248 (a pause that lands later shows the
+    # rocks ordered instead)
+    for node, entry, k, demo, at in ((2, "quickbuild", 0, "snap", 150), (3, "buildshapes", 1, "line", 150),
+                                     (5, "reclaim", 2, "metal", 190)):
         d = c.dump()
         if d["entry"] != entry:
             press(c, d, f"entry:{node}")
@@ -2015,11 +2018,12 @@ def live_sidebar(c, inst, pack, out, row):
 
 def layout_norm(L):
     """A layout as the sim reads it, for comparing the game's tagpu_wiki.layout.json with the
-    pack's: a gadget's absent `grey`/`hidden` is false and its absent `unit` null."""
+    pack's: a gadget's absent `grey`/`hidden` is false, its absent `unit` null and its absent `key` 0."""
     out = json.loads(json.dumps(L))
     for s in out.get("screens", {}).values():
         for g in s["gadgets"]:
             g["grey"], g["hidden"], g["unit"] = bool(g.get("grey")), bool(g.get("hidden")), g.get("unit")
+            g["key"] = g.get("key", 0)
     out.pop("note", None)
     return out
 

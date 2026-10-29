@@ -229,9 +229,9 @@ typedef struct {
     const WIKI3DUNIT*  unit;
     const char*        report;          /* the JSON tagpu_wiki3d.dump writes, NUL-terminated     */
     /* the game's cursor each shape shows, by WIKI_CURSOR_* (tagpu_wikisim.h): a sequence of the
-       player's <anims>\cursors.GAF in the engine's form (cursornormal, cursormove, cursornormal;
-       arrow and build share one copy), or NULL when it did not resolve */
-    const void*        cursor[3];
+       player's <anims>\cursors.GAF in the engine's form (cursornormal, cursormove, cursornormal,
+       cursorreclamate; arrow and build share one copy), or NULL when it did not resolve */
+    const void*        cursor[WIKI_CURSOR_N];
     WIKI3DSOUND        sound;
     uint32_t           base;            /* the arena's address as its pointer fields hold it     */
     uint32_t           bytes;           /* the arena's bytes in use, from `base`                 */

@@ -998,12 +998,12 @@ static void feature_report(SB* b, const LOADER* L, const FEATDEF* d)
    first, then 0x4B8C60 loads it), and from it the sequences the shapes show (tagpu_wikisim.h,
    WIKI_CURSOR_*) found as 0x4B8D40 finds a name, each copied once in the engine's form. A sequence
    that is absent or refused leaves its shapes on the kit's icons. */
-static const char* const CURSOR_SEQ[3] = { "cursornormal", "cursormove", "cursornormal" };
+static const char* const CURSOR_SEQ[WIKI_CURSOR_N] = { "cursornormal", "cursormove", "cursornormal", "cursorreclamate" };
 
 typedef struct {
     char        gaf[TAGPU_VFS_PATHMAX], from[64], why[200];
-    int         frames[3];              /* -1: not found or refused                              */
-    const void* seq[3];
+    int         frames[WIKI_CURSOR_N];  /* -1: not found or refused                              */
+    const void* seq[WIKI_CURSOR_N];
 } CURREC;
 
 static void cursors_load(LOADER* L, CURREC* r)
@@ -1012,7 +1012,7 @@ static void cursors_load(LOADER* L, CURREC* r)
     unsigned char* blob;
     GAF g;
     int k;
-    for (k = 0; k < 3; k++) r->frames[k] = -1;
+    for (k = 0; k < WIKI_CURSOR_N; k++) r->frames[k] = -1;
     if (!tagpu_vfs_find_built(L->vfs, L->in->names.anims, "cursors", "GAF", &f)) {
         snprintf(r->why, sizeof r->why, "no source holds %s\\cursors.gaf", L->in->names.anims);
         return;
@@ -1023,7 +1023,7 @@ static void cursors_load(LOADER* L, CURREC* r)
         free(blob);
         return;
     }
-    for (k = 0; k < 3; k++) {
+    for (k = 0; k < WIKI_CURSOR_N; k++) {
         int j, s, n = 0;
         uint32_t at;
         for (j = 0; j < k && strcmp(CURSOR_SEQ[j], CURSOR_SEQ[k]); j++) {}
@@ -1047,7 +1047,7 @@ static void cursors_report(SB* b, const CURREC* r)
     sb_raw(b, ",\"from\":");
     sb_q(b, r->gaf[0] ? r->from : NULL, 1);
     sb_raw(b, ",\"sequences\":[");
-    for (k = 0; k < 3; k++) {
+    for (k = 0; k < WIKI_CURSOR_N; k++) {
         sb_raw(b, "%s{\"name\":\"%s\",\"frames\":", k ? "," : "", CURSOR_SEQ[k]);
         if (r->frames[k] >= 0) sb_raw(b, "%d}", r->frames[k]); else sb_raw(b, "null}");
         if (!r->seq[k]) ok = 0;
@@ -4663,7 +4663,7 @@ const WIKI3D* tagpu_wiki3d_load(const WIKI3DIN* in, TAGPU_VFS* vfs, const WIKISI
         w->nunit = nunit;
         w->unit = nunit ? (const WIKI3DUNIT*)AT(&L.a, un_at) : NULL;
         w->report = (const char*)AT(&L.a, rep_at);
-        for (k = 0; k < 3; k++) w->cursor[k] = cur.seq[k];
+        for (k = 0; k < WIKI_CURSOR_N; k++) w->cursor[k] = cur.seq[k];
         w->sound = snd;
         w->base = base32;
         w->bytes = L.a.used;

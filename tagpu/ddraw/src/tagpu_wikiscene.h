@@ -144,6 +144,13 @@ int  tagpu_wikiscene_models(const WIKISTAGEVIEW* v, const WSCENETYPE* types, int
    to be drawn. A feature whose footprint ends below the map is not on it, and left out. */
 int  tagpu_wikiscene_ground(const WSCENEGROUND* g, WSCENE* out);
 
+/* THE FEATURES RECLAIMED: dead[k] (WIKISCENE_FEATS of them) set for each feature k of the ground
+   `sc` whose anchor cell is one of the `ngone` cells `gone` (WIKISTAGEVIEW.gone); a quad of a dead
+   feature is not drawn. gfx.js drops the same cells from the anchors its gather sweeps, and the
+   sweep's order is the quads' order, so leaving those quads out is that gather. A cell off the
+   ground names none. Returns how many are set. */
+int  tagpu_wikiscene_dead(const WSCENE* sc, const int16_t (*gone)[2], int ngone, uint8_t* dead);
+
 /* THE FOG: a view's `fog` (w x h cells, 0 clear, 1 grey, 2 black; WIKISTAGEVIEW.fog) into `out`.
    The stage's fog rects are whole tiles, so each 32-unit block is uniform and its top-left cell
    stands for it. out->on is 0 when no cell is fogged. */

@@ -143,6 +143,27 @@ int tagpu_wikiscene_ground(const WSCENEGROUND* g, WSCENE* out)
     return 1;
 }
 
+int tagpu_wikiscene_dead(const WSCENE* sc, const int16_t (*gone)[2], int ngone, uint8_t* dead)
+{
+    const int w = sc->gw / 16, h = sc->gh / 16;
+    int i, n = 0;
+    memset(dead, 0, WIKISCENE_FEATS);
+    /* the anchor table is w x h, and the ground refuses a map past WIKISCENE_MAP, so a cell
+       inside it indexes the table */
+    if (sc->refused || w > WIKISCENE_MAP || h > WIKISCENE_MAP) return 0;
+    for (i = 0; i < ngone; i++) {
+        const int x = gone[i][0], z = gone[i][1];
+        int k;
+        if (x < 0 || z < 0 || x >= w || z >= h) continue;
+        k = sc->anchor[z * w + x];
+        if (k >= 0 && k < WIKISCENE_FEATS && !dead[k]) {
+            dead[k] = 1;
+            n++;
+        }
+    }
+    return n;
+}
+
 void tagpu_wikiscene_fog(const uint8_t* fog, int w, int h, WSCENEFOG* out)
 {
     int bw, bh, bx, bz, i, any = 0;

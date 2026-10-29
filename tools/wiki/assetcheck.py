@@ -646,7 +646,7 @@ def reference(gamedir, exe, language, mounts=None, casting=None):
     for slot, p, where, m, why in pending_models:
         slot.update(model_report(p, where, m, why, bank, logos))
     # the game's cursors: <anims>\cursors.GAF by the path rule, and the sequences each shape shows (WIKI_CURSOR_*)
-    seqs = ["cursornormal", "cursormove", "cursornormal"]
+    seqs = ["cursornormal", "cursormove", "cursornormal", "cursorreclamate"]
     p, hit = E.find_built(names["anims"], "cursors", "GAF")
     cur = {"gaf": p.lower() if hit else None, "from": low(hit[1]) if hit else None,
            "sequences": [{"name": n, "frames": None} for n in seqs], "ok": False, "why": "refused"}

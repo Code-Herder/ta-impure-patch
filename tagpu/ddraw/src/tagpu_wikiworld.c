@@ -158,6 +158,11 @@ static TAGPU_GAFENT       s_fents[FATLAS_MAX];
 static TAGPU_GAFATLAS     s_fatlas;
 static float*             s_fv[2];      /* shadows, bodies: 6 vertices a quad, FVST floats each    */
 static int                s_fvCap[2];
+/* the vertices of the features still standing, this frame's, when the view has reclaimed some:
+   sized with s_fv by the ground's build, so a frame never allocates */
+static float*             s_fl[2];
+static int                s_flCap[2];
+static uint8_t            s_dead[WIKISCENE_FEATS];
 
 /* the frame a feature's sequence draws: its first, as the mockup's pack takes it (gfx.py) and the
    engine's feature pass draws a static feature (tagpu_feat.c `tagpu_gaf_seq_frame(seq, 0)`) */
@@ -304,7 +309,32 @@ static const char* ground_build(const WIKI3DSTAGE* st, int map_rows)
     tagpu_gaf_atlas_frame(&s_fatlas);
     if (!verts(0, s_scene.shadow, s_scene.nshadow) || !verts(1, s_scene.body, s_scene.nbody))
         return "a feature's frame did not fit the atlas";
+    for (i = 0; i < 2; i++) {
+        const int n = (i ? s_scene.nbody : s_scene.nshadow) * 6;
+        if (n > s_flCap[i]) {
+            float* p = (float*)realloc(s_fl[i], (size_t)n * FVST * sizeof(float));
+            if (!p) return "no memory for the features' vertices";
+            s_fl[i] = p;
+            s_flCap[i] = n;
+        }
+    }
     return NULL;
+}
+
+/* THE FEATURES STANDING: each bucket's quads whose feature is not dead, their vertices copied in
+   order into s_fl, which the ground's build sized for every quad; *n their vertices */
+static const float* live_verts(int b, int* n)
+{
+    const WSCENEQUAD* q = b ? s_scene.body : s_scene.shadow;
+    const int nq = b ? s_scene.nbody : s_scene.nshadow;
+    int i, m = 0;
+    for (i = 0; i < nq; i++) {
+        if (q[i].feat >= 0 && q[i].feat < WIKISCENE_FEATS && s_dead[q[i].feat]) continue;
+        memcpy(s_fl[b] + (size_t)m * 6 * FVST, s_fv[b] + (size_t)i * 6 * FVST, 6 * FVST * sizeof(float));
+        m++;
+    }
+    *n = m * 6;
+    return s_fl[b];
 }
 
 /* this frame's hand-overs and target */
@@ -768,8 +798,14 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     /* THE FEATURES, both buckets as the ground's build left them, under the same fog */
     if (s_wantFeat && !s_noFeat) {
         memset(&s_feat, 0, sizeof s_feat);
-        s_feat.shadow = s_fv[0]; s_feat.nShadow = s_scene.nshadow * 6;
-        s_feat.body = s_fv[1]; s_feat.nBody = s_scene.nbody * 6;
+        /* a feature the view says was reclaimed is drawn no more (gfx.js drops its anchor) */
+        if (v->ngone && tagpu_wikiscene_dead(&s_scene, v->gone, v->ngone, s_dead)) {
+            s_feat.shadow = live_verts(0, &s_feat.nShadow);
+            s_feat.body = live_verts(1, &s_feat.nBody);
+        } else {
+            s_feat.shadow = s_fv[0]; s_feat.nShadow = s_scene.nshadow * 6;
+            s_feat.body = s_fv[1]; s_feat.nBody = s_scene.nbody * 6;
+        }
         s_feat.gw = (float)s_scene.gw; s_feat.gh = (float)s_scene.gh;
         s_feat.zoom = 1.0f;
         s_feat.zoomCx = (float)s_scene.gw * 0.5f; s_feat.zoomCy = (float)s_scene.gh * 0.5f;

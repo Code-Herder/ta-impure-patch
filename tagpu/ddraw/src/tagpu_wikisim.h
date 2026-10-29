@@ -342,7 +342,7 @@ typedef struct { int kind, type, ox, oz, ok; } WIKIHOVER;
    choosing one and the click on the menu installed cursornormal. */
 /* With reclaim armed it is cursorreclamate over the map, RECLAIM; sim.js's reclaimCursor says where
    it is the arrow instead. */
-enum { WIKI_CURSOR_ARROW, WIKI_CURSOR_MOVE, WIKI_CURSOR_BUILD, WIKI_CURSOR_RECLAIM };
+enum { WIKI_CURSOR_ARROW, WIKI_CURSOR_MOVE, WIKI_CURSOR_BUILD, WIKI_CURSOR_RECLAIM, WIKI_CURSOR_N };
 
 /* ---- the view: what the stage draws, sim.js's view() field for field ---- */
 

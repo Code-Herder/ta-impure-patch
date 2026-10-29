@@ -53,7 +53,10 @@ static const char* const ROLE[R_N] = { "window_title", "entry_title", "category"
 #define S_X2        "2\xC3\x97"             /* 2× */
 #define S_TRY       "Try it yourself"
 #define S_BACK      "Back to demo"
-static const char* const KEYCAP[WIKI_NKEYS] = { "Shift", "Alt", "Ctrl", "Z", "X", "Left-click", "Right-click" };
+/* a keycap a WIKI_KEY_*, in their order: one for every key, which the assert holds, so no key held
+   shows another's name or none */
+static const char* const KEYCAP[] = { "Shift", "Alt", "Ctrl", "Z", "X", "E", "Left-click", "Right-click" };
+typedef char wikilay_keycaps_fit[sizeof KEYCAP / sizeof *KEYCAP == WIKI_NKEYS ? 1 : -1];
 
 /* the colours the CSS gives outright */
 #define INK         0x1D1D1Bu               /* text on a light face (wiki.js paintParts --ink)   */

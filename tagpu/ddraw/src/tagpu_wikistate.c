@@ -71,7 +71,8 @@ static void stage_log(void* ctx, const char* line)
 /* 0 when the art lacks what the stage draws with: the layout refuses the session then */
 static int art_bind(const WIKIART* a)
 {
-    static const char* const CURSOR[3] = { "cursor_arrow", "cursor_move", "cursor_build" };
+    /* the kit's icons by WIKI_CURSOR_* (stage.js CURSOR): reclaim draws the arrow's */
+    static const char* const CURSOR[WIKI_CURSOR_N] = { "cursor_arrow", "cursor_move", "cursor_build", "cursor_arrow" };
     const HUDGLOBALS* g = tagpu_hudlay_globals(a->draw.lay);
     int i;
     s_art = a;
@@ -88,7 +89,7 @@ static int art_bind(const WIKIART* a)
     s_toastFace = a->draw.style_face[s_sart.style];
     s_sart.measure = stage_measure;
     s_sart.log = stage_log;
-    for (i = 0; i < 3; i++) {
+    for (i = 0; i < WIKI_CURSOR_N; i++) {
         const int k = tagpu_hudlay_part_index(a->draw.lay, CURSOR[i]);
         const HUDPART* p = k >= 0 ? tagpu_hudlay_part(a->draw.lay, k) : NULL;
         s_sart.cursor[i] = (int16_t)k;
@@ -110,12 +111,12 @@ static int art_bind(const WIKIART* a)
    the cell and its count by the sheet, before a texel is written. The decode, the sheet and its
    generation are this thread's alone, as is the HUD pass that uploads it. A shape whose frames do
    not fit, or did not resolve, keeps n = 0 and draws its kit icon. */
-static unsigned char  s_sprite[HUD_SPRITE_CELLS * HUD_SPRITE_CELL * HUD_SPRITE_CELL * 4];  /* 256 KB */
+static unsigned char  s_sprite[HUD_SPRITE_CELLS * HUD_SPRITE_CELL * HUD_SPRITE_CELL * 4];  /* 512 KB */
 static unsigned char  s_dec[HUD_SPRITE_CELL * HUD_SPRITE_CELL];
 static unsigned       s_spriteGen;      /* bumped at every rebuild; 0: no sheet                  */
 static unsigned       s_spritePal;      /* the palette serial it was decoded through             */
 static const WIKI3D*  s_spriteOf;       /* the load it was decoded from                          */
-static WIKISTAGESEQ   s_seq[3];
+static WIKISTAGESEQ   s_seq[WIKI_CURSOR_N];
 static WIKISTAGESPR   s_spr[HUD_SPRITE_CELLS];
 static int            s_saidUnfit;      /* a shape that does not fit was logged: said once, as each
                                            palette change decodes the same frames again          */
@@ -169,7 +170,7 @@ static void sprites_bind(void)
         int k, j, cell = 0;
         memset(s_seq, 0, sizeof s_seq);
         memset(s_spr, 0, sizeof s_spr);
-        for (k = 0; k < 3; k++) {
+        for (k = 0; k < WIKI_CURSOR_N; k++) {
             for (j = 0; j < k && w3->cursor[j] != w3->cursor[k]; j++) {}
             if (j < k) s_seq[k] = s_seq[j];
             else if (w3->cursor[k] && !sprite_seq((const unsigned char*)w3->cursor[k], pal, &cell, &s_seq[k]) &&
@@ -290,6 +291,11 @@ static void view_bound(WIKISTAGEVIEW* v)
     HOLD(v->nline, WIKISTAGE_LINES);
     HOLD(v->ntype, WIKI_MAX_DEFS);
     if (v->npart > WIKISTAGE_PARTS) v->npart = WIKISTAGE_PARTS;
+    /* the features and the sweep: the counts to their arrays; the build bounds each target, the
+       hover and the kind it reads */
+    HOLD(v->nfeat, WIKISTAGE_FEATS);
+    HOLD(v->ngone, WIKISTAGE_FEATS);
+    HOLD(v->sweep.ntarget, WIKISTAGE_FEATS);
     /* the sidebar: a source no layout answers to draws none (side_resolve); its rows, states and
        the unit under the cursor held to their arrays, the locked type to the types */
     if (v->has_side != 1 || v->layout_src >= WIKISTAGE_LAYOUT_N) v->has_side = 0;
@@ -297,7 +303,7 @@ static void view_bound(WIKISTAGEVIEW* v)
     HOLD(v->side.nstate, WIKI_SIDE_GADGETS);
     if (v->side.index < -1 || v->side.index >= WIKI_SIDE_SIDES) v->side.index = -1;
     if (v->side.under < -1 || v->side.under >= v->nunit) v->side.under = -1;
-    if (v->locked < -1 || v->locked >= v->ntype) v->locked = -1;
+    if (v->locked != WIKI_LOCK_RECLAIM && (v->locked < -1 || v->locked >= v->ntype)) v->locked = -1;
 #undef HOLD
     for (i = 0; i < v->nunit; i++) v->unit[i].label[WIKISTAGE_LABEL - 1] = 0;
     for (i = 0; i < WIKI_MAX_DEFS; i++) v->type[i][WIKISTAGE_LABEL - 1] = 0;
@@ -339,7 +345,7 @@ static void page_of(WIKIPAGE* st, const TAGPU_PK_WIKI* w, const WIKISTAGEVIEW* v
     st->held[sizeof st->held - 1] = 0;
     st->caption[0] = 0;
     st->keys = 0;
-    st->sim_locked = v && v->locked >= 0;
+    st->sim_locked = v && (v->locked >= 0 || v->locked == WIKI_LOCK_RECLAIM);
     if (v) {
         if (v->has_caption) lstrcpynA(st->caption, v->caption, sizeof st->caption);
         for (i = 0; i < WIKI_NKEYS; i++)

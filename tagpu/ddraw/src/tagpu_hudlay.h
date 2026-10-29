@@ -150,9 +150,10 @@ enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART, HOP
                                into r, sampled nearest: a game cursor (tagpu_wikistage.c) */
 
 /* THE SPRITE SHEET: HUD_SPRITE_CELLS cells of HUD_SPRITE_CELL x HUD_SPRITE_CELL RGBA texels side by
-   side, a frame in the top left of its cell. TA's largest cursor frame is 52 x 53. */
+   side, a frame in the top left of its cell. TA's largest cursor frame is 52 x 53; the stage's
+   shapes take 20 frames of retail's cursors.gaf (cursornormal 1, cursormove 8, cursorreclamate 11). */
 #define HUD_SPRITE_CELL   64
-#define HUD_SPRITE_CELLS  16
+#define HUD_SPRITE_CELLS  32
 
 typedef struct {
     uint8_t  kind, flags;

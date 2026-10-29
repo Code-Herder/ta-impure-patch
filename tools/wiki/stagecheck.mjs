@@ -167,7 +167,11 @@ function recorder(em, asked) {
   const layer = (range, type) => { tag = { range, type }; };
   const font = s => { const m = /^(\d+) ([\d.e+-]+)px (.+)$/.exec(s); if (!m) throw new Error(`a font the check does not read: ${s}`);
     return { weight: +m[1], size: +m[2], family: m[3] }; };
-  /* a polyline stroked by the canvas dash rule: the pattern from its first point, running on round its corners */
+  /* a polyline stroked by the canvas dash rule: the pattern from its first point, running on round its corners. A
+     dash that ends within DASH_EPS of a corner ends there: a polyline on whole world units puts dash ends on its
+     corners exactly, where the last bit of a length decides (Math.hypot here, sqrt in the C), and the tolerance holds
+     the two to one answer. tagpu_wikistage.c poly takes the same. */
+  const DASH_EPS = 1e-9;
   function stroke(pts, closed) {
     const lw = g.lineWidth, c = colour(g.strokeStyle), pat = dash.length ? dash : [Infinity, 0];
     let k = 0, rem = pat[0], open = null;
@@ -186,8 +190,8 @@ function recorder(em, asked) {
           out.push(piece);
         }
         t += step; rem -= step;
-        if (rem <= 0) { k ^= 1; rem = pat[k]; }
-        else if (t >= L && k === 0) open = piece;
+        if (rem <= DASH_EPS) { k ^= 1; rem = pat[k]; if (L - t <= DASH_EPS) t = L; }
+        else if (t >= L - DASH_EPS && k === 0) { open = piece; t = L; }
       }
       if (i + 2 === pts.length && !closed) open = null;
     }
@@ -265,21 +269,25 @@ try {
     const png = fs.readFileSync(path.join(kitDir, 'parts', `${name}.png`)), pw = png.readUInt32BE(16), ph = png.readUInt32BE(20);
     icons[name] = { img: { name }, pw, ph, w: pw / kit[name].scale, h: ph / kit[name].scale };
   }
-  const cursorArgs = ['arrow', 'move', 'build'].map(s => String(part.indexOf(WikiStage.CURSOR[s])));
-  const sizeArgs = ['arrow', 'move', 'build'].flatMap(s => { const ic = icons[WikiStage.CURSOR[s]]; return [ic.w, ic.h].map(v => v.toPrecision(17)); });
+  const SHAPES = ['arrow', 'move', 'build', 'reclaim'];                     // WIKI_CURSOR_*
+  const cursorArgs = SHAPES.map(s => String(part.indexOf(WikiStage.CURSOR[s])));
+  const sizeArgs = SHAPES.flatMap(s => { const ic = icons[WikiStage.CURSOR[s]]; return [ic.w, ic.h].map(v => v.toPrecision(17)); });
 
-  /* ---- the game's cursors, stand-ins: cursors.gaf's own cursornormal and cursormove (size, hotspot, ticks), and for
+  /* ---- the game's cursors, stand-ins: cursors.gaf's own cursornormal and cursormove (size, hotspot, ticks), for
      build a two-frame sequence with a negative hotspot that does not loop, so the animator's every branch and the
-     hotspot's truncation toward zero are drawn; each size at its own scale (cursorscale=) ---- */
+     hotspot's truncation toward zero are drawn, and for reclaim a frame of its own; each size at its own scale
+     (cursorscale=) ---- */
   const CELL = +/#define HUD_SPRITE_CELL\s+(\d+)/.exec(fs.readFileSync(path.join(DDRAW, 'src/tagpu_hudlay.h'), 'utf8'))[1];
-  const SPR = [[10, 20, 0, 0, 10], ...[27, 29, 31, 33, 35, 33, 31, 29].map(e => [e, e, e >> 1, e >> 1, 8]), [21, 23, -15, -3, 10], [21, 23, -15, -3, 7]];
-  const SEQ = { arrow: { first: 0, n: 1, loop: 1 }, move: { first: 1, n: 8, loop: 1 }, build: { first: 9, n: 2, loop: 0 } };
+  const SPR = [[10, 20, 0, 0, 10], ...[27, 29, 31, 33, 35, 33, 31, 29].map(e => [e, e, e >> 1, e >> 1, 8]), [21, 23, -15, -3, 10], [21, 23, -15, -3, 7],
+    [25, 22, 3, 2, 10]];
+  const SEQ = { arrow: { first: 0, n: 1, loop: 1 }, move: { first: 1, n: 8, loop: 1 }, build: { first: 9, n: 2, loop: 0 },
+    reclaim: { first: 11, n: 1, loop: 1 } };
   const SCALE = [1, 1.5, 2];
   const cursorsAt = k => ({ sheet: { name: 'sheet' }, scale: SCALE[k], seq: SEQ,
     frames: SPR.map(([w, h, hx, hy, dur], i) => ({ sx: i * CELL, w, h, hx, hy, dur })) });
   const spriteFile = k => {
     const f = path.join(tmp, `sprites${k}.txt`);
-    fs.writeFileSync(f, [SCALE[k], ...['arrow', 'move', 'build'].map(s => `${SEQ[s].n} ${SEQ[s].first} ${SEQ[s].loop}`),
+    fs.writeFileSync(f, [SCALE[k], ...SHAPES.map(s => `${SEQ[s].n} ${SEQ[s].first} ${SEQ[s].loop}`),
       ...SPR.map(r => r.join(' '))].join('\n') + '\n');
     return f;
   };

@@ -10,7 +10,7 @@ const LAY = await fetch(ART + 'layout.json').then(r => { if (!r.ok) throw new Er
 const TICK = 30;                      // simulation ticks a second, the game's
 const MODS = ['stock', 'mayhem', 'prota', 'twilight', 'escalation', 'tazero', 'unknown'];
 const RES = [...$('#res').options].map(o => o.value);
-const KEYCAP = { shift: 'Shift', alt: 'Alt', ctrl: 'Ctrl', z: 'Z', x: 'X', lmb: 'Left-click', rmb: 'Right-click' };
+const KEYCAP = { shift: 'Shift', alt: 'Alt', ctrl: 'Ctrl', z: 'Z', x: 'X', e: 'E', lmb: 'Left-click', rmb: 'Right-click' };
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
 
@@ -433,16 +433,20 @@ stage.addEventListener('contextmenu', e => e.preventDefault());
 const MOD = { Shift: 'shift', Alt: 'alt', Control: 'ctrl' };
 // Z and X with Alt step the armed building's spacing; every down is sent, an auto-repeat included, as the game steps again
 const STEP = { KeyZ: 'z', KeyX: 'x' };
+// E is a key to the sidebar's buttons (RECLAIM's quickkey), every down as the GUI takes each
+const KEY = { KeyE: 'e' };
 window.addEventListener('keydown', e => {
   if (e.key === 'Escape' && S.open) { e.preventDefault(); setOpen(false); return; }
   const z = STEP[e.code];
   if (z && e.altKey && S.open && S.try) { e.preventDefault(); down.add(z); send({ down: z }); return; }
+  const q = KEY[e.code];
+  if (q && S.open && S.try) { e.preventDefault(); down.add(q); send({ down: q }); return; }
   const m = MOD[e.key]; if (!m || !S.open || !S.try) return;
   e.preventDefault();                  // Alt would otherwise open the browser's menu and keep the key
   if (!down.has(m)) { down.add(m); send({ down: m }); }
 });
 window.addEventListener('keyup', e => {
-  const m = MOD[e.key] || STEP[e.code];
+  const m = MOD[e.key] || STEP[e.code] || KEY[e.code];
   if (m && down.has(m)) { e.preventDefault(); down.delete(m); send({ up: m }); }
 });
 window.addEventListener('blur', releaseAll);

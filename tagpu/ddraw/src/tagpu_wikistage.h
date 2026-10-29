@@ -35,6 +35,7 @@
 #define WIKISTAGE_LINES   512
 #define WIKISTAGE_CAPTION WIKI_CAPTION_MAX      /* every loaded caption's fill fits           */
 #define WIKISTAGE_LABEL   WIKI_ID_MAX           /* 23 bytes and the terminator                */
+#define WIKISTAGE_FEATS   WIKI_FEATS_MAX        /* a scene never has more                     */
 
 /* what the copy could not carry, one bit for each bound */
 #define WIKISTAGE_TRUNC_MAP     0x001u          /* the map is wider or taller: its top left    */
@@ -87,6 +88,32 @@ typedef struct {
 } WIKISTAGESITE;
 
 typedef struct { float from_x, from_z, to_x, to_z; uint8_t kind; } WIKISTAGELINE;
+
+/* A FEATURE STANDING (tagpu_wikisim.h WIKIVFEAT): its anchor cell and footprint, and whether it
+   holds metal, which draws it as a rock on the whitebox, else a tree */
+typedef struct {
+    int16_t ox, oz;
+    uint8_t fx, fz;
+    uint8_t rock;
+} WIKISTAGEFEAT;
+
+/* THE RECLAIM SWEEP while reclaim is armed (tagpu_wikisim.h WIKIVSWEEP): the kind, the ring and
+   its targets as indices into the view's `feat`, the readout's counts and sums, the feature under
+   the cursor (-1 none) and the popup, its rects in the stage's world units from the map's corner.
+   Data on the render thread: a target or the hover is bounded against `nfeat`, the kind against
+   WIKI_NKINDS, the popup's row under the pointer against the rows, where they are read. */
+typedef struct {
+    uint8_t  kind;                      /* WIKI_KIND_*                                     */
+    uint8_t  has_ring, has_popup;
+    int8_t   hot;                       /* the popup's row under the pointer, -1 none      */
+    int16_t  hover;
+    int32_t  ring_x, ring_z, ring_r;
+    int16_t  ntarget;
+    uint16_t target[WIKISTAGE_FEATS];
+    int16_t  wrecks, trees;
+    double   metal, energy;
+    int16_t  rect[4], rows[WIKI_NKINDS][4], tongue[4];
+} WIKISTAGESWEEP;
 
 /* ONE PARTICLE OF THE NANO SPRAY (tagpu_wikisim.h WIKIVPART): its point in 16.16 world units --
    x, altitude, z -- and its palette index, 0xA1..0xA7. Data on the render thread: the colour is
@@ -153,7 +180,9 @@ typedef struct {
     WIKISTAGESIDE  side;
     int16_t        locked;              /* the type the demo stopped on (WIKIVIEW.locked),
                                            with the sidebar on or off, an index into
-                                           `type`; -1 none: the page shows its badge       */
+                                           `type`, or WIKI_LOCK_RECLAIM for a RECLAIM the
+                                           layout cannot reach; -1 none: the page shows
+                                           its badge                                       */
     int16_t        ntype;
     char           type[WIKI_MAX_DEFS][WIKISTAGE_LABEL];    /* the types' names: a queued
                                            site's and the ghost's label                    */
@@ -162,6 +191,13 @@ typedef struct {
                                                                the simulation made it      */
     uint16_t       npose;
     WIKISTAGEPIECE pose[WIKISTAGE_POSE];                    /* the units' posed models     */
+    int16_t        nfeat, ngone;
+    WIKISTAGEFEAT  feat[WIKISTAGE_FEATS];                   /* the features standing       */
+    int16_t        gone[WIKISTAGE_FEATS][2];                /* the anchor cells of those
+                                                               reclaimed, which the game
+                                                               look's image leaves out     */
+    uint8_t        rmode;               /* reclaim is armed: `sweep` holds                 */
+    WIKISTAGESWEEP sweep;
 } WIKISTAGEVIEW;
 
 /* THE COPY. `v` (NULL for none) and the entry `e` it was made from into `out`, every array to its
@@ -245,12 +281,14 @@ typedef struct {
     int16_t          style;             /* layout.json's `toast` style: the stage's text   */
     WIKISTAGEMEASURE measure;           /* never NULL                                      */
     void*            measure_ctx;
-    int16_t          cursor[3];         /* the kit's cursor_arrow, cursor_move and
-                                           cursor_build, by WIKI_CURSOR_*; -1 absent: the
-                                           icons a shape whose game cursor did not load
-                                           draws instead                                   */
-    float            cursor_w[3], cursor_h[3];  /* their sizes in units: pw / scale        */
-    WIKISTAGESEQ     seq[3];            /* the game's cursor of each shape                 */
+    int16_t          cursor[WIKI_CURSOR_N]; /* the kit's icon of each shape (WIKI_CURSOR_*):
+                                           cursor_arrow, cursor_move, cursor_build and, for
+                                           reclaim, cursor_arrow; -1 absent: the icons a
+                                           shape whose game cursor did not load draws
+                                           instead                                         */
+    float            cursor_w[WIKI_CURSOR_N], cursor_h[WIKI_CURSOR_N];  /* their sizes in
+                                           units: pw / scale                               */
+    WIKISTAGESEQ     seq[WIKI_CURSOR_N];    /* the game's cursor of each shape             */
     WIKISTAGESPR     spr[HUD_SPRITE_CELLS];
     float            spr_scale;         /* device pixels an art pixel: the game cursor's,
                                            tagpu_gui.on's cursorscale= (1 by default)      */

@@ -84,6 +84,8 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
     out->ntype = 0;
     out->npart = 0;
     out->npose = 0;
+    out->nfeat = out->ngone = 0;
+    out->rmode = 0;
     out->has_side = 0;
     out->layout_src = WIKISTAGE_LAYOUT_NONE;
     memset(&out->side, 0, sizeof out->side);
@@ -168,6 +170,53 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
     }
     out->npart = (uint16_t)n;
 
+    /* the features and the sweep: a scene holds at most WIKI_FEATS_MAX features, the arrays' size,
+       so none is cut; a target or the hover that names no feature copied is left out */
+    n = v->nfeat < WIKISTAGE_FEATS ? v->nfeat : WIKISTAGE_FEATS;
+    for (i = 0; i < n; i++) {
+        const WIKIVFEAT* sf = &v->feat[i];
+        WIKISTAGEFEAT* d = &out->feat[i];
+        d->ox = (int16_t)sf->ox;
+        d->oz = (int16_t)sf->oz;
+        d->fx = (uint8_t)(sf->fx > 0 && sf->fx < 256 ? sf->fx : 1);
+        d->fz = (uint8_t)(sf->fz > 0 && sf->fz < 256 ? sf->fz : 1);
+        d->rock = (uint8_t)(sf->metal > 0);
+    }
+    out->nfeat = (int16_t)n;
+    n = v->ngone < WIKISTAGE_FEATS ? v->ngone : WIKISTAGE_FEATS;
+    for (i = 0; i < n; i++) {
+        out->gone[i][0] = (int16_t)v->gone[2 * i];
+        out->gone[i][1] = (int16_t)v->gone[2 * i + 1];
+    }
+    out->ngone = (int16_t)n;
+    if (v->rmode) {
+        const WIKIVSWEEP* sw = &v->sweep;
+        WIKISTAGESWEEP* d = &out->sweep;
+        int k;
+        memset(d, 0, sizeof *d);
+        out->rmode = 1;
+        d->kind = (uint8_t)(sw->kind >= 0 && sw->kind < WIKI_NKINDS ? sw->kind : WIKI_KIND_ALL);
+        d->has_ring = (uint8_t)(sw->has_ring != 0);
+        d->ring_x = sw->ring_x;
+        d->ring_z = sw->ring_z;
+        d->ring_r = sw->ring_r;
+        for (k = 0; k < sw->ntarget && k < WIKISTAGE_FEATS; k++)
+            if (sw->target[k] >= 0 && sw->target[k] < out->nfeat) d->target[d->ntarget++] = (uint16_t)sw->target[k];
+        d->wrecks = (int16_t)sw->wrecks;
+        d->trees = (int16_t)sw->trees;
+        d->metal = sw->metal;
+        d->energy = sw->energy;
+        d->hover = (int16_t)(sw->hover >= 0 && sw->hover < out->nfeat ? sw->hover : -1);
+        d->has_popup = (uint8_t)(sw->has_popup != 0);
+        for (k = 0; k < 4; k++) {
+            int r;
+            d->rect[k] = (int16_t)sw->rect[k];
+            d->tongue[k] = (int16_t)sw->tongue[k];
+            for (r = 0; r < WIKI_NKINDS; r++) d->rows[r][k] = (int16_t)sw->rows[r][k];
+        }
+        d->hot = (int8_t)(sw->hot >= 0 && sw->hot < WIKI_NKINDS ? sw->hot : -1);
+    }
+
     out->cursor_x = v->cursor_x;
     out->cursor_z = v->cursor_z;
     out->cursor_shape = (uint8_t)v->cursor_shape;
@@ -204,7 +253,7 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
     }
     /* A LOCK REACHES THE PAGE WITH THE SIDEBAR OFF TOO: a scene unit or a build of a cast the
        casting leaves unbound stops a demo that has no sidebar, and the page's badge says so */
-    out->locked = (int16_t)(v->locked >= 0 && v->locked < WIKI_MAX_DEFS ? v->locked : -1);
+    out->locked = (int16_t)(v->locked >= 0 && v->locked < WIKI_MAX_DEFS ? v->locked : v->locked == WIKI_LOCK_RECLAIM ? WIKI_LOCK_RECLAIM : -1);
     n = e->ndef < WIKI_MAX_DEFS ? e->ndef : WIKI_MAX_DEFS;
     for (i = 0; i < n; i++)
         if (cut(out->type[i], sizeof out->type[i], e->def[i].name)) t |= WIKISTAGE_TRUNC_LABEL;
@@ -398,7 +447,11 @@ static int line(B* c, double x0, double y0, double x1, double y1, double lw, uin
 }
 
 /* a polyline's stroke (the header of this file): `np` points, dashed `on`, `off` from its first
-   point, or undashed with `on` HUGE_VAL; `closed` when its last point is its first */
+   point, or undashed with `on` HUGE_VAL; `closed` when its last point is its first. A dash that
+   ends within DASH_EPS device pixels of a corner ends there: a polyline on whole world units (the
+   sweep's ring) puts dash ends on its corners exactly, where the last bit of a length decides,
+   and tools/wiki/stagecheck.mjs's recorder takes the same tolerance. */
+#define DASH_EPS 1e-9
 static void poly(B* c, const double* pt, int np, int closed, double lw, uint32_t col, double on, double off)
 {
     const double pat[2] = { on, off };
@@ -424,8 +477,14 @@ static void poly(B* c, const double* pt, int np, int closed, double lw, uint32_t
                 at = line(c, ax + dx * (t / L), ay + dy * (t / L), ax + dx * ((t + step) / L), ay + dy * ((t + step) / L), lw, col);
             t += step;
             rem -= step;
-            if (rem <= 0) { k ^= 1; rem = pat[k]; }
-            else if (t >= L && k == 0) last = at;
+            if (rem <= DASH_EPS) {
+                k ^= 1;
+                rem = pat[k];
+                if (L - t <= DASH_EPS) t = L;
+            } else if (t >= L - DASH_EPS && k == 0) {
+                last = at;
+                t = L;
+            }
         }
         /* an open polyline's last point joins nothing; a closed one's joins its first dash */
         if (i + 2 == np && !closed) last = -1;
@@ -663,6 +722,132 @@ static void side(B* c, const WIKISTAGEVIEW* v, const WIKISTAGEART* art, double o
     }
 }
 
+#define X(v_) (ox + (v_) * s)
+#define Z(v_) (oz + (v_) * s)
+/* ---- THE RECLAIM SWEEP, stage.js `drawSweep` (tagpu_mark.c gather_sweep, tagpu_gui_surf.c
+   sharp_sweep): every target's corner brackets and the reclaimable feature under the cursor's, the
+   ring dashed round its centre's square, the readout above it, and the popup off RECLAIM's row.
+   Every stroke is the game's heavy one: 3 game px of colour with 1 of black each side. The ring is
+   the game's polygon: 2 pi r / 8 points, 16 to 256, dashed 6 on 4 off; a bracket's arm is 30 % of
+   the box's shorter side, 7 to 20 game px. The popup is the whitebox's stand-in for Impure's own
+   art. Colours: a target's bracket in the kind's (METAL palette 224, ENERGY 208, ALL the GUI's
+   placed green 0x0A), the ring in the placed green, the readout's text in GUI 0x0F, every stroke
+   edged in GUI 0x00; the whitebox's stand-ins for the GUI's entries. ---- */
+static const char* const KIND_NAME[WIKI_NKINDS] = { "METAL", "ENERGY", "ALL" };
+static const uint32_t SW_KIND[WIKI_NKINDS] = { 0xd3dbff, 0xffff00, 0x2bd248 };
+#define SW_RING  0x2bd248
+#define SW_TEXT  0xf0f0ea
+#define SW_EDGE  0x000000
+#define SW_PLATE 0x2e2e2a
+#define SW_BAR   0x55554f
+#define SW_LIT   0x6e6e66
+#define SW_LABEL 0xe8e8e2
+#define SW_HOT   0xffffff
+#define JS_PI    3.141592653589793      /* Math.PI */
+
+/* a heavy polyline: the black edge's stroke, then the colour's, each its own pass over every
+   subpath as the canvas strokes a path; `np[k]` points a subpath */
+static void heavy(B* c, const double* pt, const int* np, int nsub, uint32_t col, double on, double off)
+{
+    const double COL = 3 * c->u, EDGE = 1 * c->u;
+    int pass, k, at;
+    for (pass = 0; pass < 2; pass++)
+        for (k = at = 0; k < nsub; at += 2 * np[k], k++)
+            poly(c, pt + at, np[k], 0, pass ? COL : COL + 2 * EDGE, pass ? col : HEX(SW_EDGE), on, off);
+}
+
+static void bracket(B* c, double x, double y, double w, double h, uint32_t col)
+{
+    const double U = c->u, arm = fmin(fmax(fmin(w, h) * 0.3, 7 * U), 20 * U), x1 = x + w, y1 = y + h;
+    const double cn[4][4] = { { x, y, 1, 1 }, { x1, y, -1, 1 }, { x, y1, 1, -1 }, { x1, y1, -1, -1 } };
+    const int np[4] = { 3, 3, 3, 3 };
+    double pt[24];
+    int k;
+    for (k = 0; k < 4; k++) {
+        double* p = pt + 6 * k;
+        p[0] = cn[k][0] + cn[k][2] * arm; p[1] = cn[k][1];
+        p[2] = cn[k][0]; p[3] = cn[k][1];
+        p[4] = cn[k][0]; p[5] = cn[k][1] + cn[k][3] * arm;
+    }
+    heavy(c, pt, np, 4, col, HUGE_VAL, 0);
+}
+
+/* JavaScript's Math.round: half-way up */
+static double jsround(double v) { return floor(v + 0.5); }
+
+static void sweep(B* c, const WIKISTAGEVIEW* v, double ox, double oz, double s, double cell, double cp)
+{
+    double ring_pt[2 * 257];
+    const WIKISTAGESWEEP* R = &v->sweep;
+    const double U = c->u;
+    const int kd = R->kind < WIKI_NKINDS ? R->kind : WIKI_KIND_ALL;
+    const uint32_t kc = HEX(SW_KIND[kd]);
+    int i;
+#define FB(f_) X((f_)->ox * cell), Z((f_)->oz * cell), (f_)->fx * cp, (f_)->fz * cp
+    for (i = 0; i < R->ntarget && i < WIKISTAGE_FEATS; i++)
+        if (R->target[i] < v->nfeat) bracket(c, FB(&v->feat[R->target[i]]), kc);
+    if (R->hover >= 0 && R->hover < v->nfeat) bracket(c, FB(&v->feat[R->hover]), kc);
+#undef FB
+    if (R->has_ring) {
+        const double x = R->ring_x, z = R->ring_z, r = R->ring_r;
+        const double tn = trunc(2 * JS_PI * r / 8);
+        const int n = (int)fmin(fmax(tn, 16), 256), np = n + 1;
+        const double sz = floor(8.5 * U + 0.5), cx = X(x), ty = Z(z - r) - 22 * U;
+        static const char* const NONE[WIKI_NKINDS] = { "NO WRECKS HERE", "NO TREES HERE", "NO FEATURES HERE" };
+        char line[3][96];
+        uint32_t lc[3];
+        int nl = 0;
+        for (i = 0; i <= n; i++) {
+            const double a = 2 * JS_PI * (i % n) / n;
+            ring_pt[2 * i] = X(x + jsround(r * cos(a)));
+            ring_pt[2 * i + 1] = Z(z + jsround(r * sin(a)));
+        }
+        heavy(c, ring_pt, &np, 1, HEX(SW_RING), 6 * U, 4 * U);
+        rect(c, X(x) - 2.5 * U, Z(z) - 2.5 * U, 5 * U, 5 * U, HEX(SW_EDGE));
+        rect(c, X(x) - 1.5 * U, Z(z) - 1.5 * U, 3 * U, 3 * U, HEX(SW_RING));
+        /* the readout: 22 game px above the ring's top, the kind, the counts and the sums, or that
+           the ring holds none */
+        snprintf(line[nl], sizeof line[nl], "[%s]", KIND_NAME[kd]);
+        lc[nl++] = HEX(SW_TEXT);
+        if (!R->wrecks && !R->trees) {
+            snprintf(line[nl], sizeof line[nl], "%s", NONE[kd]);
+            lc[nl++] = HEX(SW_TEXT);
+        } else {
+            char w[40] = "", t[40] = "", m[40] = "", e[40] = "";
+            if (R->wrecks) snprintf(w, sizeof w, "%d WRECK%s", R->wrecks, R->wrecks > 1 ? "S" : "");
+            if (R->trees) snprintf(t, sizeof t, "%d TREE%s", R->trees, R->trees > 1 ? "S" : "");
+            snprintf(line[nl], sizeof line[nl], "%s%s%s", w, *w && *t ? "  " : "", t);
+            lc[nl++] = kd == WIKI_KIND_ALL ? HEX(SW_TEXT) : kc;
+            if (R->metal >= 0.5) snprintf(m, sizeof m, "+%.0f METAL", jsround(R->metal));
+            if (R->energy >= 0.5) snprintf(e, sizeof e, "+%.0f ENERGY", jsround(R->energy));
+            if (*m || *e) {
+                snprintf(line[nl], sizeof line[nl], "%s%s%s", m, *m && *e ? "   " : "", e);
+                lc[nl++] = HEX(SW_TEXT);
+            }
+        }
+        for (i = 0; i < nl; i++) {
+            const double w = measure(c, line[i], sz) + 6 * U, y = ty + (i - 1) * 13 * U;
+            rect(c, cx - w / 2, y - 6 * U, w, 12 * U, rgba(0, 0, 0, .55));
+            text(c, line[i], cx, y, sz, 1, lc[i]);
+        }
+    }
+    if (R->has_popup && v->has_side) {
+#define PR(r_, col_) rect(c, X((r_)[0]), Z((r_)[1]), (r_)[2] * s, (r_)[3] * s, (col_))
+        PR(R->tongue, HEX(SW_PLATE));
+        PR(R->rect, HEX(SW_PLATE));
+        for (i = 0; i < WIKI_NKINDS; i++) {
+            const int16_t* r = R->rows[i];
+            PR(r, HEX(i == kd ? SW_LIT : SW_BAR));
+            /* the pip: the kind in force lit in its colour */
+            rect(c, X(r[0] + 4), Z(r[1] + 6), 6 * s, 6 * s, HEX(i == kd ? SW_KIND[i] : SW_EDGE));
+            text(c, KIND_NAME[i], X(r[0] + 16), Z(r[1] + r[3] / 2.0), floor(8 * U + 0.5), 0, HEX(i == R->hot ? SW_HOT : SW_LABEL));
+        }
+#undef PR
+    }
+}
+#undef X
+#undef Z
+
 /* stage.js `readout`: a line on a dark plate at the stage's bottom, right or left */
 static void readout(B* c, const char* t, int right)
 {
@@ -754,6 +939,15 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
             circle(&c, vx, vz, r * .5 + lw / 2, lw, HEX(0x2a2a28));
             line(&c, vx - r, vz, vx + r, vz, lw, HEX(0x2a2a28));
             line(&c, vx, vz - r, vx, vz + r, lw, HEX(0x2a2a28));
+        }
+        /* the scene's features still standing, at their footprints: a rock or a tree */
+        for (i = 0; i < v->nfeat; i++) {
+            const WIKISTAGEFEAT* ft = &v->feat[i];
+            const double x0 = X(ft->ox * cell), y0 = Z(ft->oz * cell), w = ft->fx * cp, h = ft->fz * cp, lw = fmax(1, U);
+            /* the tree's green and the rock's edge as channels: their hex reads as an engine address
+               to the source checks */
+            rect(&c, x0, y0, w, h, ft->rock ? HEX(0x9a9288) : rgba(79, 138, 58, 1));
+            ring(&c, x0 + lw / 2, y0 + lw / 2, w - lw, h - lw, lw, ft->rock ? rgba(94, 88, 78, 1) : HEX(0x2b5220));
         }
         /* fog: grey half over seen-before ground, black over unexplored */
         for (z = 0; z < mh; z++)
@@ -867,12 +1061,13 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
             const double x0 = X(fmin(v->drag_x0, v->drag_x1)), y0 = Z(fmin(v->drag_z0, v->drag_z1));
             ring(&c, x0, y0, fabs((double)v->drag_x1 - v->drag_x0) * s, fabs((double)v->drag_z1 - v->drag_z0) * s, fmax(1, U), HEX(0xf2f6e8));
         }
+        if (v->rmode) sweep(&c, v, ox, oz, s, cell, cp);
         /* THE CURSOR: the game's own, as sharp_cursor (tagpu_gui_surf.c) draws the player's -- the
            frame its animation shows, at `spr_scale` device pixels an art pixel whatever the map's
            scale or the HUD's, the hotspot on the pointer's device pixel. Else, for a shape whose
            frames did not load, its kit icon centred on the point, in the box stage.js snaps. Neither
            when the caller leaves the cursor out. */
-        const WIKISTAGESEQ* sq = cursor && v->cursor_shape < 3 ? &art->seq[v->cursor_shape] : NULL;
+        const WIKISTAGESEQ* sq = cursor && v->cursor_shape < WIKI_CURSOR_N ? &art->seq[v->cursor_shape] : NULL;
         if (sq && sq->n > 0) {
             const int f = tagpu_wikistage_cursor_frame(art->spr + sq->first, sq->n, sq->loop,
                                                        (long)v->tick - v->cursor_since);
@@ -890,7 +1085,7 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
                     out->cursor = (int)(p - out->op);
                 }
             }
-        } else if (cursor && v->cursor_shape < 3 && art->cursor[v->cursor_shape] >= 0) {
+        } else if (cursor && v->cursor_shape < WIKI_CURSOR_N && art->cursor[v->cursor_shape] >= 0) {
             const int k = v->cursor_shape;
             const double w = art->cursor_w[k] * U, h = art->cursor_h[k] * U;
             const double a = X(v->cursor_x) - w / 2, b = Z(v->cursor_z) - h / 2;
@@ -911,6 +1106,16 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
             char t[32];
             snprintf(t, sizeof t, "Spacing: %d", v->spacing);
             readout(&c, t, 0);
+        }
+        /* the kind's tag beside the cursor while reclaim is armed, (13, 20) game px off its point
+           as the game puts it */
+        if (v->rmode && cursor) {
+            const int kd = v->sweep.kind < WIKI_NKINDS ? v->sweep.kind : WIKI_KIND_ALL;
+            const char* t = KIND_NAME[kd];
+            const double sz = floor(8.5 * U + 0.5), h = 12 * U, tw = measure(&c, t, sz);
+            const double x0 = snapd(X(v->cursor_x) + 13 * U), y0 = snapd(Z(v->cursor_z) + 20 * U);
+            rect(&c, x0, y0, tw + 6 * U, h, HEX(SW_EDGE));
+            text(&c, t, x0 + 3 * U, y0 + h / 2, sz, 0, HEX(SW_KIND[kd]));
         }
 #undef X
 #undef Z
