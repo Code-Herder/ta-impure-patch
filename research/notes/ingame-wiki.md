@@ -1235,6 +1235,48 @@ Shift-click* and *Filled rectangle* wait until two pieces are finished and *Ring
 building* until one is (`until: "built"`), then play 60 ticks; the others end a fixed tail after
 their last input, since their claims read only the shape and the queue.
 
+## The third entry: Reclaim Sweep
+
+The feature is the reclaim sweep ([gpu-status §2.110](gpu-status.html), `tagpu_sweep.c`, the
+split in `tagpu_sweepgeo.c`). Its plan, the owner's decisions and the landing state are in
+[the reclaim entry's plan](ingame-wiki-reclaim-plan.html). It is built in the mockup and waits
+for the DLL's simulation to land with it: the game's loader refuses the entry today.
+
+| # | Demo | What the player sees |
+|---|---|---|
+| 1 | E and a click | one ARMCK: reclaim armed, a click on the lone rock orders it and puts reclaim away, as stock's click does; the rock is reclaimed and gone |
+| 2 | Pick the kind | E steps METAL → ENERGY → ALL, the popup's lit bar and the cursor's tag following; a click on the popup's METAL row picks it |
+| 3 | A METAL ring | two ARMCK, METAL: the ring over the rock field brackets the rocks and leaves the three trees; the release shares the rocks out, nearest first |
+| 4 | An ENERGY ring | over the grove: only the trees are bracketed, the two rocks stay |
+| 5 | Shift queues another ring | two rings with Shift held: the second ring's targets go after the first's, reclaim stays armed, and letting go of Shift puts it away |
+| 6 | Without Shift it replaces | ARMCK has a route of three moves queued; a ring without Shift replaces them with the rocks |
+| 7 | Cancel | the cancel action mid-drag ends the ring and keeps reclaim armed; a ring over plain ground orders nothing and stays armed; a cancel outside a drag puts reclaim away |
+
+**Mods that lock it off:** none.
+
+**What E reaches.** Retail puts RECLAIM on the ORDERS pages alone (`ARMGEN`, `CORGEN`), and a key
+reaches only the shown screen's buttons, so E arms reclaim only while ORDERS is up; Escalation,
+Total Mayhem, ProTA, TA Zero and Twilight put RECLAIM on every build page, so E works from any of
+them. A demo therefore arms reclaim by the `reclaim` trip, which goes through ORDERS when the page
+shown has no RECLAIM, and presses E only once reclaim is armed.
+
+**The units and features.** ARMCK as in the other entries, with `canreclamate` 1. The features are
+greenworld's own, every figure as `features\green\rocks.tdf` and `trees.tdf` state it, which
+`stagemap.py check` holds the entry to:
+
+| Feature | Footprint | Metal | Energy | Height |
+|---|---|---|---|---|
+| rock2 | 3 × 3 | 100 | | 20 |
+| rock4 | 2 × 2 | 75 | | 20 |
+| rock05 | 2 × 2 | 50 | | 20 |
+| rock07 | 1 × 1 | 50 | | 10 |
+| rock08 | 1 × 1 | 25 | | 10 |
+| tree1 .. tree5 | 1 × 1 | | 250 | 40 |
+
+All block units and are reclaimable. A rock takes ARMCK `2 ⌈⌊15 + metal/2⌋ / 2⌉` ticks once it
+touches it (52 for rock4, 66 for rock2), a tree 140: the countdown is not scaled by WorkerTime
+(`exe-reverse-engineering.md`, the Reclaim handler `0x404AD0`).
+
 ## The data format
 
 ### `art/wiki/tree.json`
@@ -1316,7 +1358,21 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
   format 2 (`sim.js` `sceneOf`, `tagpu_wikidata_entry`).
 - **A scene**: the map's size in cells, its `surfaceMetal`, its metal as rectangles of a value,
   its vents, its fog rectangles (`grey` or `black`), the units (type, owner, position, finished or
-  not, and optionally move orders and a `facing`), and which are selected. `"facing": [x, z]` is
+  not, and optionally move orders and a `facing`), which are selected, its `features` and the
+  reclaim sweep's `kind` (`metal`, `energy` or `all`, the last when absent).
+- **An entry's `features`** names the feature types its scenes place, each with its `footprint`
+  (1 to 16 cells a side), `metal`, `energy` (0 to 10^7, 0 when absent), `height`, `blocking`,
+  `reclaimable` and the TDF it was read from; **a scene's `features`** places them, each
+  `{ "id", "name", "at": [cx, cz] }` at its anchor cell, at most 256; the simulation refuses one
+  off the map, on another feature or under a structure (`sim.js` `checkFeature` and the scene's
+  layout), and `stagemap.py check` refuses one on a deposit's patch, whose feature the stage
+  draws there, and a demo that adds one, since the stage's ground is the scene's. A blocking
+  feature is a body the units walk round and a site refuses.
+- **`{ "reclaim": true }`** arms reclaim through RECLAIM, the cursor's trip to the button as a
+  build's is (`sim.js` `planReclaim`, the ORDERS tab first when the page shown has no RECLAIM),
+  with the build trip's data rule; without the sidebar it arms at once. **`{ "pick": "metal" }`**
+  clicks the popup's row of that kind, a trip of `PICK` 60 ticks there and back with its own data
+  rule; without the sidebar it sets the kind at once. **`{ "down": "e" }`** presses E. `"facing": [x, z]` is
   any vector with a length, normalised on load; without it a unit faces `(0, 1)`, and a building
   faces `(0, 1)` whatever it gives.
 - **The ground's grid**: the map's size and every fog rectangle are whole tiles, even numbers of
@@ -1416,7 +1472,9 @@ layout breaking any of them is refused whole and no index read out of it address
 - **A screen** has its row `y` in the column and its `w` (1..128) and `h`, ending by row 1024,
   the composed column's texture.
 - **A gadget** has a non-empty `name`, a `role` and a `rect` inside its screen, in the screen's
-  pixels, and optionally `grey` and `hidden`, booleans. The roles are `orders`, `buildtab`,
+  pixels, and optionally `grey` and `hidden`, booleans, and `key`, its quickkey (1 to 255): the
+  `quickkey=` of the button's own section in its .GUI, after the `[COMMON]` block (`ARMGEN.GUI`'s
+  ARMRECLAIM has 101, `e`). The roles are `orders`, `buildtab`,
   `build`, `prev`, `next`, `stop` and `order`, as `0x41AA00` tells them apart by name. A build
   button's `unit` is its type, or `null` (greyed) when its name is no type.
 - **`sides`** lists 1 to 8 sides, each with a name, its prefix, its MAIN2 and GEN screens and its
