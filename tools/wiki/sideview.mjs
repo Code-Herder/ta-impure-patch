@@ -50,11 +50,13 @@ function withScripts(ctx) {
   return { ...ctx, cob: (host ??= cobHost()).forPacks(packs) };
 }
 
-let entry, sim;
+let entry, sim, demo;
+// the stage the demo plays on, `<entry>.<scene>`, as wiki.js stageId names it: the pack's minimap bases are per scene
+const stageId = () => `${entry.id}.${typeof demo.on === 'string' ? demo.on : Object.keys(entry.scenes)[0]}`;
 if (argv.includes('--dump')) {
   const dump = JSON.parse(fs.readFileSync(opt('--dump'), 'utf8'));
   entry = entryOf(dump.entry);
-  const demo = entry.demos.find(d => d.id === dump.demo);
+  demo = entry.demos.find(d => d.id === dump.demo);
   if (!demo) fail(2, `no demo ${dump.entry}/${dump.demo}`);
   sim = WikiSim.create(entry, demo, dump.layout ?? null, withScripts(dump.ctx) || undefined);
   for (const [t, kind, a, b] of dump.try_log) {
@@ -67,7 +69,7 @@ if (argv.includes('--dump')) {
   const lf = opt('--layout');
   if (!lf) fail(2, '--play needs --layout FILE');
   entry = entryOf(id);
-  const demo = entry.demos[Number(n) - 1];
+  demo = entry.demos[Number(n) - 1];
   if (!demo) fail(2, `${id} has no demo ${n}`);
   const cf = opt('--ctx');
   sim = WikiSim.play(entry, demo, JSON.parse(fs.readFileSync(lf, 'utf8')), cf ? withScripts(JSON.parse(fs.readFileSync(cf, 'utf8'))) : undefined);
@@ -94,7 +96,7 @@ if (packDir) {
   const j = JSON.parse(fs.readFileSync(path.join(packDir, 'side.json'), 'utf8')), A = j.art || {};
   const p = WikiSide.read(j, bin(A.sheet && A.sheet.file), bin(A.palette), bin(A.minimap && A.minimap.seen), bin(A.greyed));
   if (!p.art) fail(1, `${packDir}: no art: ${p.problems.join('; ')}`);
-  const b = p.minimap[entry.id];
+  const b = p.minimap[stageId()];
   const base = b ? bin(b.file) : null;
   const c = WikiSide.compose(p.art, p.layout, v, base, v.map.w * v.map.cell, v.map.h * v.map.cell);
   const rgba = WikiSide.rgba(p.art, c);
