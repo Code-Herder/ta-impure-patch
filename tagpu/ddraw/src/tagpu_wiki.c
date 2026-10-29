@@ -1501,10 +1501,10 @@ static void casting_json(FILE* f, const WIKICASTING* c)
         fputs(",\"title\":", f);
         ustr(f, k->title, sizeof k->title);
         fprintf(f, ",\"footprint\":[%d,%d],\"buildTime\":%.17g,\"workerTime\":%.17g,\"buildDistance\":%.17g,"
-                   "\"maxVelocity\":%.17g,\"extracts\":%.17g,\"energyMake\":%.17g,\"canstop\":%d,\"activatewhenbuilt\":%d,"
-                   "\"vent\":%s,\"g\":[",
+                   "\"maxVelocity\":%.17g,\"extracts\":%.17g,\"energyMake\":%.17g,\"canstop\":%d,\"canreclamate\":%d,"
+                   "\"activatewhenbuilt\":%d,\"vent\":%s,\"g\":[",
                 k->fx, k->fz, k->build_time, k->worker_time, k->build_distance, k->max_velocity, k->extracts,
-                k->energy_make, k->canstop, k->activate_when_built, k->vent ? "true" : "false");
+                k->energy_make, k->canstop, k->canreclamate, k->activate_when_built, k->vent ? "true" : "false");
         for (z = n = 0; z < WIKI_FP_MAX; z++)
             for (x = 0; x < WIKI_FP_MAX; x++)
                 if (k->g[z] >> x & 1u) fprintf(f, "%s[%d,%d]", n++ ? "," : "", x, z);

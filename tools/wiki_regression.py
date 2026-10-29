@@ -73,7 +73,7 @@ skill's window grab).
 page, on the same launch as sp:
   (p1) the open picks the tree's first entry and its first demo, playing, and draws every control;
   (p2) entry:3 selects the second entry, demo:1 its second demo, afresh;
-  (p3) fold:1 folds the Building category (no entry row drawn) and unfolds it;
+  (p3) fold:1 folds the Building category (Building's entry rows not drawn) and unfolds it;
   (p4) two wheel notches down over the text scroll it two steps, one up one back, each held to
        the limit the drawn frame posted;
   (p5) the text's thumb dragged 12 px scrolls it by the travel the drawn frame gave it;
@@ -674,10 +674,11 @@ def page(c, shot=None):
     if shot:
         grab(c, shot)
 
+    # Building's leaves are nodes 2 and 3; Reclaiming's entry, node 5, is drawn either way
     press(c, d, "fold:1")
-    d = wait_dump(c, lambda d: d["folds"] == [1] and not keys_of(d, "entry:"), "(p3) fold:1 did not fold Building")
+    d = wait_dump(c, lambda d: d["folds"] == [1] and keys_of(d, "entry:") == ["entry:5"], "(p3) fold:1 did not fold Building")
     press(c, d, "fold:1")
-    d = wait_dump(c, lambda d: d["folds"] == [] and keys_of(d, "entry:") == ["entry:2", "entry:3"],
+    d = wait_dump(c, lambda d: d["folds"] == [] and keys_of(d, "entry:") == ["entry:2", "entry:3", "entry:5"],
                   "(p3) fold:1 did not unfold Building")
     print("wiki page: (p3) Building folded and unfolded")
 
@@ -993,8 +994,12 @@ def try_view(c, d, what):
         r = subprocess.run(["node", str(TREE / "tools/wiki/simparity.mjs"), "--try", str(dumpf)], capture_output=True,
                            text=True, timeout=300)
         assert r.returncode == 0, f"simparity --try: {r.stderr.strip()}"
-        assert r.stdout.strip() == d["hash"], \
-            f"{what}: the game's Try it hashes {d['hash']} at tick {d['tick']}, sim.js fed its inputs {r.stdout.strip()}"
+        if r.stdout.strip() != d["hash"]:
+            # kept for an offline replay: simparity.mjs --try <it>
+            kept = c.gamedir / "tagpu_wiki.try.differ.json"
+            kept.write_text(dumpf.read_text())
+            raise AssertionError(f"{what}: the game's Try it hashes {d['hash']} at tick {d['tick']}, sim.js fed its inputs "
+                                 f"{r.stdout.strip()}; the dump kept in {kept}")
         r = subprocess.run(["node", str(TREE / "tools/wiki/sideview.mjs"), "--dump", str(dumpf)], capture_output=True,
                            text=True, timeout=300)
         assert r.returncode == 0, f"sideview --dump: {r.stderr.strip()}"
