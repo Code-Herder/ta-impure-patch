@@ -88,7 +88,7 @@
       {"name": "ARMATTACK", "role": "order", "rect": [66, 60, 58, 24]},
       {"name": "ARMPATROL", "role": "order", "rect": [4, 88, 58, 24]},
       {"name": "ARMREPAIR", "role": "order", "rect": [66, 88, 58, 24]},
-      {"name": "ARMRECLAIM", "role": "order", "rect": [4, 116, 58, 24]}
+      {"name": "ARMRECLAIM", "role": "order", "rect": [4, 116, 58, 24], "key": 101}
     ]}
   }
 }

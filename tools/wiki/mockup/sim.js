@@ -51,7 +51,7 @@ const WikiSim = (() => {
   const SND_KINDS = 24, SND_QUEUE = 8, SND_GAP = 30, SND_LOG = 32, INT_MAX = 2147483647;
   const SND = { select: 1, activate: 3, deactivate: 4, ok: 5, arrived: 6, cant: 7, complete: 8, build: 9, working: 11 };
   const SND_NAMES = ['SelectMultipleUnits', 'oktobuild', 'notoktobuild', 'addbuild', 'buildbutton', 'ordersbutton',
-    'nextbuildmenu', 'immediateorders', 'Options'];
+    'nextbuildmenu', 'immediateorders', 'Options', 'specialorders'];
   const SNDNAME = Object.fromEntries(SND_NAMES.map((n, i) => [n, i]));
   /* A DEMO'S WAIT, {"at", "until", "max"} (research/notes/ingame-wiki-cob-plan.md, decision 10): the demo's clock
      stops at `at` until the state `until` names holds, at most `max` ticks, after which the demo stops and says so.
@@ -62,7 +62,12 @@ const WikiSim = (() => {
      on the state its next input or its claim needs instead of timing it to a walk, whose length the units in the
      way decide. UNTIL_MAX bounds `max`. */
   const UNTILS = ['idle', 'arrived', 'built'], UNTIL_MAX = 3600;
-  const KEYS = ['shift', 'alt', 'ctrl', 'z', 'x', 'lmb', 'rmb'];
+  const KEYS = ['shift', 'alt', 'ctrl', 'z', 'x', 'e', 'lmb', 'rmb'];
+  /* THE RECLAIM SWEEP's kinds, tagpu_sweep.h's SWEEP_METAL, SWEEP_ENERGY and SWEEP_ALL in order (the popup's rows top
+     down); the press travel past which a press is a ring (tagpu_sweep.c DRAG_PX, screen pixels, the stage's world
+     units at zoom 1) and the ring's bound (RING_MAX_WU); the popup, in the engine's 1x pixels (POP_X, POP_W, POP_H) */
+  const KINDS = ['metal', 'energy', 'all'], RECL_DRAG = 7, RING_MAX = 4096, POP_X = 129, POP_W = 124, POP_H = 72;
+  const SWEEP_LIST_CAP = 1024;
   const sq = v => v * v;
   const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
   const obj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -78,10 +83,11 @@ const WikiSim = (() => {
 
      The layout: {format: 1, width: 128, height,
      sides: [{name, prefix, main2, gen, types: {TYPE: {pages: [screen of page 1, ...], orders: screen or null}}}],
-     screens: {NAME: {y, w, h, gadgets: [{name, role, rect: [x, y, w, h], unit, grey, hidden}]}}}.
+     screens: {NAME: {y, w, h, gadgets: [{name, role, rect: [x, y, w, h], unit, grey, hidden, key}]}}}.
      A screen's y is its row in the column and a gadget's rect is in its screen's pixels. role is orders, buildtab,
      build, prev, next, stop or order, as 0x41AA00 tells them apart by name; a build button's unit is its unit type,
-     or null (greyed) when the name is none; hidden marks an inactive gadget. Labels, fonts and the panel picture
+     or null (greyed) when the name is none; hidden marks an inactive gadget; key is the record's quickkey +0x13A, 1..255,
+     absent for none. Labels, fonts and the panel picture
      are not gadgets here: they are the art's. A side's types are the types with a page (def+0x22E != 0) that side's
      casting names; its pages are read with its own prefix, so one type name may have other pages in another side.
      The sim reads the side ctx.side names, MAIN2, GEN and types alike. */
@@ -119,6 +125,7 @@ const WikiSim = (() => {
             r[0] + r[2] > s.w || r[1] + r[3] > s.h) no(`${at}: the rect is not inside the screen`);
         if (g.role === 'build' && !(g.unit === null || name(g.unit))) no(`${at}: a build button's unit is not a name or null`);
         for (const k of ['grey', 'hidden']) if (k in g && typeof g[k] !== 'boolean') no(`${at}: ${k} is not a boolean`);
+        if ('key' in g && !(int(g.key) && g.key >= 1 && g.key <= 255)) no(`${at}: key is not 1..255`);
       });
     }
     if (L.height !== rows) no(`height is not ${rows}, the column's rows`);
@@ -166,6 +173,22 @@ const WikiSim = (() => {
     if (!Array.isArray(d.g) || !!d.vent !== d.g.length > 0 ||
         !d.g.every(c => Array.isArray(c) && c.length === 2 && int(c[0]) && int(c[1]) && c[0] >= 0 && c[0] < fx && c[1] >= 0 && c[1] < fz))
       throw new Error(`${at}: g is not a list of G cells inside the footprint, held by vent exactly when it is not empty`);
+  }
+  /* A FEATURE'S FIGURES, as an entry's `features` table gives them from its TDF section (tools/wiki/gen-reclaim.mjs):
+     footprint [fx, fz] cells, 1..FEAT_FOOT (the reach a feature's centre has from its anchor, tagpu_sweep.c FOOT_MAX);
+     metal and energy (FeatureDef +0xF0 and +0xEC), at least 0 and below FEAT_AMOUNT; height (+0xFA), 0..255;
+     blocking and reclaimable (+0xFE bit 7) as booleans. Every bound is one tagpu_wikidata.c holds. */
+  const FEAT_FOOT = 16, FEAT_AMOUNT = 1e7, FEATS_MAX = 256;
+  function checkFeature(n, d) {
+    const at = `feature ${n}`;
+    if (!fitsIn(n, 32) || !n.length) throw new Error(`${at}: the name is not 1 to 31 bytes`);
+    const f = obj(d) && d.footprint;
+    if (!Array.isArray(f) || f.length !== 2 || !f.every(v => int(v) && v >= 1 && v <= FEAT_FOOT))
+      throw new Error(`${at}: footprint is not two integers 1..${FEAT_FOOT}`);
+    for (const k of ['metal', 'energy'])
+      if (k in d && !(typeof d[k] === 'number' && d[k] >= 0 && d[k] < FEAT_AMOUNT)) throw new Error(`${at}: ${k} is not 0..${FEAT_AMOUNT}`);
+    if ('height' in d && !(int(d.height) && d.height >= 0 && d.height <= 255)) throw new Error(`${at}: height is not 0..255`);
+    for (const k of ['blocking', 'reclaimable']) if (k in d && typeof d[k] !== 'boolean') throw new Error(`${at}: ${k} is not a boolean`);
   }
   function checkCasting(C) {
     const no = what => { throw new Error(`the casting is refused: ${what}`); };
@@ -306,6 +329,53 @@ const WikiSim = (() => {
     for (let k = 0; k < across; k++) put(tx + k * fx, tz - fz);
     return out;
   }
+  /* ---- tagpu_sweepgeo.c, line for line: the reclaim sweep's ring, its order and its split. Positions are world
+     units and small integers, so a squared distance is exact in a double as the C's uint64 is. ---- */
+  const SWEEP_MAX_TARGETS = 1024;
+  const dist2 = (ax, az, bx, bz) => sq(ax - bx) + sq(az - bz);
+  const sweepInside = (cx, cz, r, x, z) => r >= 0 && Math.abs(x - cx) <= r && Math.abs(z - cz) <= r && dist2(x, z, cx, cz) <= r * r;
+  // the targets' indices nearest (cx, cz) first; ties by z, then x, then index: a total order, so one result
+  function sweepOrder(t, cx, cz) {
+    const idx = t.slice(0, SWEEP_MAX_TARGETS).map((_, i) => i);
+    const d = idx.map(i => dist2(t[i].x, t[i].z, cx, cz));
+    return idx.sort((a, b) => d[a] - d[b] || t[a].z - t[b].z || t[a].x - t[b].x || a - b);
+  }
+  /* the ticks a Reclaim order works on a feature, 2 a working call: the handler 0x404AD0 sets the countdown to
+     trunc(15 + (energy + metal) / 2) and takes 2 off it a call; no worker-time term enters it */
+  const reclaimCountdown = (energy, metal) => Math.floor(15 + ((energy > 0 ? energy : 0) + (metal > 0 ? metal : 0)) / 2);
+  const sweepReclaimTicks = (energy, metal) => 2 * Math.ceil(reclaimCountdown(energy, metal) / 2);
+  /* the split: until no target is left or no builder can take one, the builder with the least load that has room and
+     can reach a remaining target (ties: lowest index) takes the remaining target nearest its point; its load grows by
+     travel + ticks, travel = max(0, d - reach) / speed. b is [{x, z, speed, reach, load, room}], updated in place;
+     returns [{who, seq}] in assignment order. */
+  function sweepSplit(b, t) {
+    const nt = Math.min(t.length, SWEEP_MAX_TARGETS), taken = new Array(nt).fill(false), stuck = new Array(b.length).fill(false), out = [];
+    for (let left = nt; left; ) {
+      let best = -1, near = -1, bd = 0;
+      for (let i = 0; i < b.length; i++)
+        if (b[i].room && !stuck[i] && (best < 0 || b[i].load < b[best].load)) best = i;
+      if (best < 0) break;
+      const s = b[best];
+      for (let k = 0; k < nt; k++) {
+        if (taken[k]) continue;
+        const dk = dist2(s.x, s.z, t[k].x, t[k].z);
+        if (near < 0 || dk < bd) { near = k; bd = dk; }
+      }
+      const d = Math.sqrt(bd);
+      let travel;
+      if (!(s.speed > 0)) {
+        if (!(d <= s.reach)) { stuck[best] = true; continue; }
+        travel = 0;
+      } else travel = d > s.reach ? (d - s.reach) / s.speed : 0;
+      s.load += travel + t[near].ticks;
+      s.x = t[near].x; s.z = t[near].z;
+      s.room--;
+      taken[near] = true; left--;
+      out.push({ who: best, seq: near });
+    }
+    return out;
+  }
+
   // the footprint's first cell for a centre at world v: 0x4197D0's rounding, floor((v - 8f + 8) / 16), half up
   const origin = (v, f) => Math.floor((v - 8 * f + 8) / CELL);
   // 0x43AFC0's predicate: within 16 world units of the node on both axes, inclusive
@@ -329,13 +399,14 @@ const WikiSim = (() => {
     return entry.scenes[on];
   }
 
-  /* the demo's scene with the demo's additions: units, metal, vents and fog appended; selected and cursor
-     replaced when the demo gives them */
+  /* the demo's scene with the demo's additions: units, features, metal, vents and fog appended; selected, cursor and
+     the reclaim kind replaced when the demo gives them */
   function merge(entry, demo) {
     const a = sceneOf(entry, demo), b = (demo && demo.scene) || {};
     const cat = k => [...(a[k] || []), ...(b[k] || [])];
-    return { map: a.map, metal: cat('metal'), vents: cat('vents'), fog: cat('fog'),
-      units: cat('units'), selected: b.selected ?? a.selected ?? [], cursor: b.cursor ?? a.cursor ?? [0, 0] };
+    return { map: a.map, metal: cat('metal'), vents: cat('vents'), fog: cat('fog'), units: cat('units'),
+      features: cat('features'), selected: b.selected ?? a.selected ?? [], cursor: b.cursor ?? a.cursor ?? [0, 0],
+      kind: b.kind ?? a.kind ?? 'all' };
   }
 
   /* THE CONTEXT, refused as tagpu_wikisim_init refuses it: an Interface Type other than 0 or 1 (the DLL maps the
@@ -381,6 +452,7 @@ const WikiSim = (() => {
     const B = ctx.casting ? binder(entryIn, ctx.casting) : null;
     const entry = B ? B.entry : entryIn, demo = B ? B.demo(demoIn) : demoIn;
     const S = merge(entry, demo), D = entry.units, defIndex = Object.keys(D);
+    if (!KINDS.includes(S.kind)) throw new Error(`the scene's reclaim kind ${JSON.stringify(S.kind)} is not one of ${KINDS}`);
     const W = S.map.w, H = S.map.h, SM = S.map.surfaceMetal || 0, PACE = (entry.pace && entry.pace.build) || 1;
     const metal = new Array(W * H).fill(SM), fog = new Array(W * H).fill(0);
     const fill = (a, [x, z, w, h], v) => {
@@ -397,6 +469,10 @@ const WikiSim = (() => {
     /* FBI canstop, def+0x245 bit 3: the FBI reader 0x42BF40 stores the key's `and 1` at 0x42C90B..0x42C936 with a
        default of 0, so a type whose FBI has no canstop has none (DISASSEMBLED); an entry's absent key reads the same */
     const canStop = t => (def(t).canstop & 1) === 1;
+    /* FBI canreclamate, def+0x245 bit 0x400 (the FBI reader 0x42BF40 at 0x42C9EF..0x42CA1A): the resolver's first test
+       for a reclaim (0x43F4FD) and what makes RECLAIM live (0x41B509..0x41B512, below); an absent key reads 0, as
+       canstop's does [INFERRED: the reader's default] */
+    const canReclaim = t => (def(t).canreclamate & 1) === 1;
     for (const t of defIndex) checkG(`unit ${t}`, D[t], D[t].footprint);
     // a resource building: a mex extracts metal, a geothermal plant needs a vent under a G cell of its yard
     const kind = t => def(t).extracts > 0 ? 'mex' : def(t).vent ? 'geo' : null;
@@ -405,6 +481,36 @@ const WikiSim = (() => {
     const strength = t => kind(t) === 'mex' ? def(t).extracts : def(t).energyMake || 0;
     const canBuild = (u, t) => (def(u.type).builds || []).includes(t);
     const defined = t => typeof t === 'string' && own(D, t);
+
+    /* ---- THE FEATURES (research/notes/ingame-wiki-reclaim-plan.md): the entry's `features` table names each by its TDF
+       section, and a scene places one at its anchor cell, the footprint's top-left, as the TNT and LoadFeature 0x4224B0
+       place a map's. A blocking one stands in the way as a structure does; a reclaimable one is a reclaim's target, and
+       goes when its reclaim pays out (FeatureDie at 0x423965). The stage draws them from its description; the view
+       names the ones still standing. ---- */
+    const FD = obj(entry.features) ? entry.features : {};
+    for (const [n, d] of Object.entries(FD)) checkFeature(n, d);
+    if (S.features.length > FEATS_MAX) throw new Error(`the scene has more than ${FEATS_MAX} features`);
+    const feats = [];
+    S.features.forEach((f, k) => {
+      const at = `feature ${k} of the scene`;
+      if (!obj(f) || typeof f.name !== 'string' || !own(FD, f.name)) throw new Error(`${at} names no feature of the entry`);
+      if (!Array.isArray(f.at) || f.at.length !== 2 || !f.at.every(int)) throw new Error(`${at}: at is not an anchor cell`);
+      const d = FD[f.name], [fx, fz] = d.footprint, [ox, oz] = f.at, id = f.id ?? `f${k + 1}`;
+      if (typeof id !== 'string' || !fitsIn(id, 32) || feats.some(g => g.id === id)) throw new Error(`${at}: the id is not a new name`);
+      if (ox < 0 || oz < 0 || ox + fx > W || oz + fz > H) throw new Error(`${at} is not on the map`);
+      const g = { id, name: f.name, ox, oz, fx, fz, x: (ox + fx / 2) * CELL, z: (oz + fz / 2) * CELL, metal: d.metal || 0,
+        energy: d.energy || 0, height: d.height || 0, blocking: !!d.blocking, reclaimable: !!d.reclaimable };
+      if (feats.some(e => e.ox < g.ox + g.fx && g.ox < e.ox + e.fx && e.oz < g.oz + g.fz && g.oz < e.oz + e.fz))
+        throw new Error(`${at} overlaps another feature`);
+      feats.push(g);
+    });
+    const featRect = f => [f.ox * CELL, f.oz * CELL, (f.ox + f.fx) * CELL, (f.oz + f.fz) * CELL];
+    const featById = id => feats.find(f => f.id === id) || null;
+    // the feature whose footprint holds the cell under (x, z), as 0x4815A0 finds one at a position through its anchor
+    const featAt = (x, z) => {
+      const cx = Math.floor(x / CELL), cz = Math.floor(z / CELL);
+      return feats.find(f => cx >= f.ox && cx < f.ox + f.fx && cz >= f.oz && cz < f.oz + f.fz) || null;
+    };
 
     /* ---- the sidebar: on or off for the sim's whole life ----
        A demo shows it when its `sidebar` says so, by default when the scene gives the player a mobile builder; Try it
@@ -522,7 +628,8 @@ const WikiSim = (() => {
     function begin(u, o) {
       if (o === u.begun) return;
       u.begun = o;
-      if (!sceneOrders.has(o) && o.k !== 'build') notice(u, SND.ok);
+      // a feature's Reclaim never says ok: 0x404AD0 calls no 0x438880, where ReclaimUnit does (0x4047C1)
+      if (!sceneOrders.has(o) && o.k !== 'build' && o.feat === undefined) notice(u, SND.ok);
     }
     // the cell a footprint f cells wide stands on at world coordinate p, rounded as the engine rounds both the unit's
     // (+0x76/+0x78, 0x48AA00..0x48AA32) and a move's goal (0x44CF60): (P - (f << 19) + 0x80000) >> 20 on 16.16 fixed point
@@ -604,7 +711,8 @@ const WikiSim = (() => {
         const free = (x, z) => {
           const a = rectAt(s.type, x, z);
           if (!(a[0] >= 0 && a[1] >= 0 && a[2] <= W * CELL && a[3] <= H * CELL)) return false;
-          return S.units.every((v, m) => (mobile(v.type) && m >= k) || !clash(a, rectAt(v.type, spot[m][0], spot[m][1])));
+          return S.units.every((v, m) => (mobile(v.type) && m >= k) || !clash(a, rectAt(v.type, spot[m][0], spot[m][1]))) &&
+            feats.every(f => !f.blocking || !clash(a, featRect(f)));
         };
         for (let d2 = 0; d2 <= 2 * SPREAD * SPREAD; d2++)
           for (let j = -SPREAD; j <= SPREAD; j++) for (let i = -SPREAD; i <= SPREAD; i++)
@@ -621,7 +729,7 @@ const WikiSim = (() => {
       if (mobile(u.type)) continue;
       const b = box(u.type, u.ox, u.oz);
       if (!(b.ox >= 1 && b.oz >= 1 && b.ox + b.fx < W && b.oz + b.fz < H) ||
-          units.some(v => v !== u && !mobile(v.type) && overlap(b, box(v.type, v.ox, v.oz))))
+          units.some(v => v !== u && !mobile(v.type) && overlap(b, box(v.type, v.ox, v.oz))) || feats.some(f => overlap(b, f)))
         throw new Error(`${u.id}'s ${u.type} does not fit the scene`);
     }
     sceneQuiet = false;
@@ -665,6 +773,8 @@ const WikiSim = (() => {
       const b = box(t, ox, oz);
       if (!interior(t, ox, oz)) return false;
       for (const u of structures()) if (u !== ignore && overlap(b, box(u.type, u.ox, u.oz))) return false;
+      // a blocking feature in the yard refuses it [INFERRED: the site test 0x47D2E0's feature cells; no entry builds over one]
+      for (const f of feats) if (f.blocking && overlap(b, f)) return false;
       if (kind(t) === 'geo' && !ventsUnderG(t, ox, oz).length) return false;
       return true;
     }
@@ -854,7 +964,10 @@ const WikiSim = (() => {
        this Shift hold, so releasing Shift disarms; spacing: empty cells between neighbours, per building type;
        place: the last evaluation of the gesture (tagpu_place.c's s_eval) */
     const st = { cursor: { x: S.cursor[0], z: S.cursor[1] }, held: new Set(), mode: null, drag: null, caption: null, hover: null,
-      gesture: null, shiftPlaced: false, spacing: {}, place: null };
+      gesture: null, shiftPlaced: false, spacing: {}, place: null,
+      // reclaim armed (main+0x2CC3 == 12, exclusive with a building armed), the sweep's kind, its ring gesture (the press
+      // point, the last point over the map, past the threshold or not), and a popup press taken
+      rmode: false, kind: S.kind, rg: null };
     function unitAt(x, z) {
       let hit = null;
       for (const u of units) {
@@ -914,7 +1027,12 @@ const WikiSim = (() => {
            the branch that computes them. 0x41A120 never un-greys: that a route to the screen already shown reloads it,
            so a STOP greyed for one selection is live again for the next, is [INFERRED]. */
         case 'stop': return selected().some(u => u.owner === 0 && canStop(u.type)) ? +pressed : 2;
-        case 'order': return 2;
+        /* RECLAIM is live while some selected unit of the player's has canreclamate: the router ORs def+0x245 bit
+           0x400 over them (0x41B509..0x41B512, packed into main+0x37EC1 bit 0x20 at 0x41B6DA..0x41B6F7) and 0x41A120
+           greys RECLAIM when the bit is clear (0x41A38C..0x41A3AF), DISASSEMBLED. It is a toggle (attribs 64): its
+           face shows frame 1 while reclaim is armed, and every disarm resets STOP's radio group, RECLAIM's, so the
+           frame follows the mode */
+        case 'order': return isReclaim(g) && reclaimers().length ? +(pressed || st.rmode) : 2;
         default: return +pressed;
       }
     }
@@ -991,10 +1109,11 @@ const WikiSim = (() => {
       } else if (g.role === 'orders' && n) u.bp = false;
       else if (g.role === 'buildtab' && n) u.bp = true;
       else if (g.role === 'stop') {
-        st.mode = null; st.gesture = null;
+        st.mode = null; st.gesture = null; st.rmode = false; st.rg = null;
         for (const v of selected()) if (v.owner === 0) v.orders = [];
       }
       else if (g.role === 'build' && defined(g.unit) && !mobile(g.unit)) arm(g.unit);
+      else if (isReclaim(g)) toggleReclaim();
       route();
     }
     /* a press over the column: a tab drops the capture (0x4A6C28) and acts now; any other button is captured, either
@@ -1025,6 +1144,165 @@ const WikiSim = (() => {
       const c = sb.cap, s = screenOf(sb.screen), g = s.gadgets[c.i], { x, z } = st.cursor;
       sb.cap = null;
       if (live(gadgetState(g, sb.shown, false)) && inside(s, g, x, z)) act(g);
+    }
+
+    /* ---- THE RECLAIM SWEEP (tagpu_sweep.c; research/notes/gpu-status.md section 2.110), rule for rule over the sim's
+       features. With reclaim armed a press on the map that travels RECL_DRAG or more is a ring round the press point;
+       its release orders the selected reclaimers to take the features of the chosen kind it holds, split nearest-first
+       between them. A shorter press is stock's click. A popup off RECLAIM's row picks the kind, and RECLAIM's own key
+       cycles it. ---- */
+    const reclaimers = () => selected().filter(u => u.owner === 0 && canReclaim(u.type));
+    // RECLAIM: an order button whose name holds RECLAIM, the orders handler's strstr (0x419F56)
+    const isReclaim = g => g.role === 'order' && g.name.includes('RECLAIM');
+    // the routed screen's first RECLAIM, its index, -1 for none (tagpu_sweep.c reclaim_gadget)
+    const reclaimIndex = () => ON ? screenOf(sb.screen).gadgets.findIndex(isReclaim) : -1;
+    // tagpu_sweep.c kind_ok: the kind's amount is above 0, ALL takes any
+    const kindOk = f => st.kind === 'metal' ? f.metal > 0 : st.kind === 'energy' ? f.energy > 0 : true;
+    // a target of the kind by the click's own rules: reclaimable and mapped at its centre (0x408090)
+    const takes = f => f.reclaimable && kindOk(f) && seen(Math.floor(f.x / CELL), Math.floor(f.z / CELL));
+    /* ARMING AND DISARMING, the orders handler's RECLAIM branch (0x419F3D..0x419FAF): the toggle on writes mode 12
+       (0x419F8A), off mode 1 (0x419F71); both play specialorders, and neither writes the Shift-placement bit, the cursor
+       or an order. Mode 12 replaces a building armed, and its gesture goes with it. */
+    function toggleReclaim() {
+      if (st.rmode) { st.rmode = false; st.rg = null; }
+      else { st.mode = null; st.gesture = null; st.drag = null; st.rmode = true; }
+      soundNamed('specialorders');
+    }
+    /* THE POPUP, tagpu_sweep.c popup_rect at the stage's scale: 124 x 72 at x POP_X of the column (one past the map's
+       left edge), its middle centred on RECLAIM's row and held inside the map's rows, while reclaim is armed and RECLAIM
+       is on the routed screen, shown and live; its three rows 112 x 18, 21 apart; the tongue to the button's row. In the
+       stage's coordinates: x from the map's left edge, z the column's row. null for none. */
+    function popup() {
+      const i = reclaimIndex();
+      if (!st.rmode || i < 0) return null;
+      const s = screenOf(sb.screen), g = s.gadgets[i];
+      if (g.hidden || !live(gadgetState(g, sb.shown, false))) return null;
+      const by = s.y + g.rect[1], hi = Math.min(MH, LAY.height) - POP_H;
+      if (hi < 0) return null;
+      const y0 = Math.min(Math.max(by + Math.trunc(g.rect[3] / 2) - POP_H / 2, 0), hi), x0 = POP_X - SIDE_W;
+      return {
+        rect: [x0, y0, POP_W, POP_H],
+        rows: [0, 1, 2].map(k => [x0 + 6, y0 + 6 + 21 * k, 112, 18]),
+        tongue: [124 - SIDE_W, Math.min(Math.max(by + 4, y0 + 6), y0 + POP_H - 24), 6, 18],
+      };
+    }
+    const onPopup = P => !!P && over() === 'map' && inRect(P.rect, st.cursor.x, st.cursor.z);
+    /* A KEY, tagpu_sweep_char then the GUI pump's match: with reclaim armed, RECLAIM's own quickkey on the routed screen
+       cycles the kind and the engine never sees it; any other key goes to the pump, which offers it to the screen's
+       buttons in file order (0x4A6AE0, matched through tolower and toupper at 0x4A70FB..0x4A7129), and the first live
+       one with that quickkey acts as its click does; a greyed one refuses at once (0x4A6B10) and an inactive one is
+       skipped. Only E is a key of the sim. */
+    const lower = c => c >= 65 && c <= 90 ? c + 32 : c, upper = c => c >= 97 && c <= 122 ? c - 32 : c;
+    const keyIs = (g, c) => !!g.key && (c === lower(g.key) || c === upper(g.key));
+    function keyPress(k) {
+      if (!ON) return;
+      const c = k.charCodeAt(0), s = screenOf(sb.screen), i = reclaimIndex();
+      if (st.rmode && i >= 0 && live(gadgetState(s.gadgets[i], sb.shown, false)) && keyIs(s.gadgets[i], c)) {
+        st.kind = KINDS[(KINDS.indexOf(st.kind) + 1) % KINDS.length];
+        return;
+      }
+      const g = s.gadgets.find(g => !g.hidden && keyIs(g, c) && live(gadgetState(g, sb.shown, false)));
+      if (g) { sb.cap = null; act(g); }
+    }
+    /* A LEFT PRESS ON THE MAP WITH RECLAIM ARMED: on the popup it picks the row under it (between rows nothing) and is
+       taken; anywhere else it starts the gesture at the press point (tagpu_sweep_button). */
+    function reclaimPress() {
+      const P = popup();
+      if (onPopup(P)) {
+        const r = P.rows.findIndex(q => inRect(q, st.cursor.x, st.cursor.z));
+        if (r >= 0) st.kind = KINDS[r];
+        return;
+      }
+      const c = mapCursor();
+      st.rg = { x0: c.x, z0: c.z, x1: c.x, z1: c.z, drag: false };
+    }
+    // the drag follows the pointer while it is over the map (region bit 1), and is a ring once it has gone RECL_DRAG
+    function reclaimMove() {
+      if (!st.rg || over() !== 'map') return;
+      const c = mapCursor();
+      st.rg.x1 = c.x; st.rg.z1 = c.z;
+      if (Math.sqrt(sq(c.x - st.rg.x0) + sq(c.z - st.rg.z0)) >= RECL_DRAG) st.rg.drag = true;
+    }
+    // where an order stands, for the split's start: a move's point, a build's site, a reclaim's target; a guard none
+    const orderPoint = o => o.k === 'move' ? { x: o.x, z: o.z } : o.k === 'build' ? centre(o.type, o.ox, o.oz) :
+      o.k === 'reclaim' ? (o.feat !== undefined ? { x: o.x, z: o.z } : byId(o.target)) : null;
+    // the ring of gesture g: its centre, the press point in whole world units, and the drag's length, bounded
+    const ringOf = g => ({ x: Math.floor(g.x0), z: Math.floor(g.z0), r: Math.trunc(Math.min(Math.sqrt(sq(g.x1 - g.x0) + sq(g.z1 - g.z0)), RING_MAX)) });
+    /* WHICH FEATURES A RING HOLDS (enumerate): every feature whose centre is inside it that `takes` holds, nearest the
+       centre first, then by z, then x, then the anchor cell */
+    function ringTargets(ring) {
+      const t = feats.filter(f => sweepInside(ring.x, ring.z, ring.r, f.x, f.z) && takes(f));
+      const d = f => dist2(f.x, f.z, ring.x, ring.z), cell = f => f.oz * W + f.ox;
+      return t.sort((a, b) => d(a) - d(b) || a.z - b.z || a.x - b.x || cell(a) - cell(b)).slice(0, SWEEP_MAX_TARGETS);
+    }
+    // the stock tail of an order click (0x4958C0): with Shift the Shift-placement bit, so releasing Shift disarms;
+    // without it mode 1 and the bit cleared
+    function clickTail(shift) {
+      if (shift) st.shiftPlaced = true;
+      else { st.rmode = false; st.rg = null; st.shiftPlaced = false; }
+    }
+    /* STOCK'S CLICK IN MODE 12, at the release (the route's 2, tagpu_sweep_button): a feature under the pointer that the
+       kind takes is ordered to every selected reclaimer -- replacing its orders, or with Shift toggled as 0x43AFC0 does
+       (a reclaim of it within 16 world units taken off instead of one added) -- and the click's tail runs. A feature of
+       the other kind shows cursornormal and its click orders nothing; nothing reclaimable under the pointer orders
+       nothing either and keeps the mode [INFERRED for empty ground]. A unit under the pointer is not modelled. */
+    function reclaimClick(shift) {
+      const c = mapCursor(), f = featAt(c.x, c.z);
+      if (!f || !takes(f)) return;
+      for (const u of reclaimers()) {
+        const k = shift ? u.orders.findIndex(o => o.k === 'reclaim' && o.feat !== undefined && within(f, o)) : -1;
+        if (k >= 0) u.orders.splice(k, 1);
+        else assign(u, [{ k: 'reclaim', feat: f.id, x: f.x, z: f.z }], shift);
+      }
+      clickTail(shift);
+    }
+    /* THE COMMIT, tagpu_sweep.c commit: the ring's targets; without Shift every order of every reclaimer but the reclaims
+       on those targets goes (cancel_others); targets a reclaimer already has queued are dropped (drop_queued); each
+       reclaimer's split inputs from its list (builder_inputs: it starts at its last positioned order, its load the
+       queued feature reclaims' travel and ticks from where it stands); the split; every assignment appended. Its tail
+       runs only when it ordered or took something off, so an empty ring keeps reclaim armed. */
+    function sweepCommit(g, shift) {
+      const ring = ringOf(g), bs = reclaimers();
+      let targets = ringTargets(ring), cancelled = 0;
+      if (!bs.length) return;
+      const onRing = o => o.k === 'reclaim' && o.feat !== undefined && targets.some(f => f.id === o.feat);
+      if (targets.length) {
+        if (!shift) for (const u of bs) { const n = u.orders.length; u.orders = u.orders.filter(onRing); cancelled += n - u.orders.length; }
+        targets = targets.filter(f => !bs.some(u => u.orders.some(o => o.k === 'reclaim' && o.feat === f.id)));
+      }
+      let issued = 0;
+      if (targets.length) {
+        const ins = bs.map(u => {
+          const d = def(u.type), b = { x: u.x, z: u.z, speed: d.maxVelocity, reach: d.buildDistance || 0, load: 0, room: 0 };
+          let px = u.x, pz = u.z;
+          for (const o of u.orders) {
+            const p = orderPoint(o);
+            if (p) { b.x = p.x; b.z = p.z; }
+            const f = o.k === 'reclaim' && o.feat !== undefined ? featById(o.feat) : null;
+            if (f) {
+              const dd = Math.sqrt(sq(f.x - px) + sq(f.z - pz));
+              b.load += (b.speed > 0 && dd > b.reach ? (dd - b.reach) / b.speed : 0) + sweepReclaimTicks(f.energy, f.metal);
+              px = f.x; pz = f.z;
+            }
+          }
+          b.room = u.orders.length >= SWEEP_LIST_CAP ? 0 : SWEEP_LIST_CAP - u.orders.length;
+          return b;
+        });
+        for (const a of sweepSplit(ins, targets.map(f => ({ x: f.x, z: f.z, ticks: sweepReclaimTicks(f.energy, f.metal) })))) {
+          const f = targets[a.seq];
+          bs[a.who].orders.push({ k: 'reclaim', feat: f.id, x: f.x, z: f.z });
+          issued++;
+        }
+      }
+      if (issued || cancelled) clickTail(shift);
+    }
+    /* THE RELEASE of a press that went down on the map with reclaim armed: past the threshold it commits wherever it
+       lands; below it, a click over the map, and off the map nothing */
+    function reclaimRelease() {
+      const g = st.rg, shift = st.held.has('shift');
+      st.rg = null;
+      if (g.drag) sweepCommit(g, shift);
+      else if (over() === 'map') reclaimClick(shift);
     }
 
     /* THE BUILD TRIP. A data input {build: T} at tick t arms nothing itself: it becomes generated inputs, a glide, the
@@ -1064,15 +1342,33 @@ const WikiSim = (() => {
       if (gadgetAt(TP.pages[p - 1], u, at.x, at.z) !== gi) return null;
       return { k, presses, button: at };
     }
+    /* THE RECLAIM TRIP's plan: RECLAIM on the routed screen, live, pressed where it is; else the screen's live ORDERS
+       tab (a tab acts on its press) and then RECLAIM on the screen ORDERS routes to, the shown type's orders page or the
+       side's GEN; each point checked to land on its gadget. null: RECLAIM cannot be reached here. */
+    function planReclaim() {
+      const u = sb.shown, find = name => screenOf(name).gadgets.findIndex(g => isReclaim(g) && live(gadgetState(g, u, false)));
+      const at = (name, i) => { const s = screenOf(name), p = centreOf(s, s.gadgets[i]); return gadgetAt(name, u, p.x, p.z) === i ? p : null; };
+      let i = find(sb.screen);
+      if (i >= 0) { const b = at(sb.screen, i); return b ? { k: 0, presses: [], button: b } : null; }
+      const s = screenOf(sb.screen), ti = s.gadgets.findIndex(g => g.role === 'orders' && live(gadgetState(g, u, false)));
+      const TP = u && typePages(u.type);
+      if (ti < 0 || !TP) return null;
+      const tab = at(sb.screen, ti), to = TP.orders || SIDE.gen;
+      if (!tab || (i = find(to)) < 0) return null;
+      const b = at(to, i);
+      return b ? { k: 1, presses: [tab], button: b } : null;
+    }
     /* THE GLIDE, exact in both languages: step i of n from a to b is a + trunc((b - a) * (i*i*(3n - 2i)) / (n*n*n)),
        each axis, evaluated in that order. Step n is b itself: the formula reaches b only when b - a is a whole
        number, and the cursor must stand exactly on the button and exactly back where it started. */
     const glideAt = (a, b, i, n) => i === n ? b : a + Math.trunc((b - a) * (i * i * (3 * n - 2 * i)) / (n * n * n));
+    // T: the type a build trip arms, or null for the reclaim trip
     function trip(T) {
-      const t = feeding, plan = planTrip(T);
+      const t = feeding, plan = T === null ? planReclaim() : planTrip(T);
       /* OWNER QUESTION Q-O2, the recommended answer: a build this layout cannot reach stops the demo here, holding the
-         frame under the entry's "Turned off in this mod" badge (decision 4), rather than playing on unarmed */
-      if (!plan) { lock(T); return; }
+         frame under the entry's "Turned off in this mod" badge (decision 4), rather than playing on unarmed; so does
+         a RECLAIM it cannot reach */
+      if (!plan) { lock(T === null ? 'RECLAIM' : T); return; }
       const a = { x: st.cursor.x, z: st.cursor.z }, R = TRIP_ROWS[plan.k], B = plan.button;
       const push = (dt, ev) => gen.push({ at: t + dt, ev });
       const glide = (from, to, n, t0) => {
@@ -1103,10 +1399,11 @@ const WikiSim = (() => {
       const captionOnly = e => Object.keys(e).every(k => k === 'at' || k === 'caption');
       let lmb = false;
       script.forEach((e, i) => {
-        if ('build' in e) {
-          const at = `demo ${demo.id}: the build at tick ${e.at}`;
-          if (typeof e.build !== 'string' || !e.build) throw new Error(`${at} names no type`);
-          if (!Object.keys(e).every(k => k === 'at' || k === 'build' || k === 'caption')) throw new Error(`${at} carries another input`);
+        if ('build' in e || 'reclaim' in e) {
+          const what = 'build' in e ? 'build' : 'reclaim', at = `demo ${demo.id}: the ${what} at tick ${e.at}`;
+          if (what === 'build' && (typeof e.build !== 'string' || !e.build)) throw new Error(`${at} names no type`);
+          if (what === 'reclaim' && e.reclaim !== true) throw new Error(`${at} is not true`);
+          if (!Object.keys(e).every(k => k === 'at' || k === what || k === 'caption')) throw new Error(`${at} carries another input`);
           if (lmb) throw new Error(`${at} starts with the left button held`);
           const f = script.slice(i + 1).find(f => f.at < e.at + TRIP && !captionOnly(f));
           if (f) throw new Error(`${at}: an input at tick ${f.at} stands in its trip, which ends at ${e.at + TRIP}`);
@@ -1254,13 +1551,13 @@ const WikiSim = (() => {
 
     /* ---- orders ---- */
     // leaving the build-menu mode ends the gesture and clears the Shift-placement bit with it
-    const disarm = () => { st.mode = null; st.gesture = null; st.shiftPlaced = false; };
+    const disarm = () => { st.mode = null; st.gesture = null; st.shiftPlaced = false; st.rmode = false; st.rg = null; };
     /* ARMING a building, the build button's branch of 0x41AA00, DISASSEMBLED: main+0x2CC3 = 0x0E (0x41AB89) and the
        type at main+0x2CC4 (0x41AB9C), and no write to main+0x2CC6. So a Shift-placement made earlier in this Shift
        hold keeps bit 5, and releasing Shift disarms the building armed since as well: 0x4992D8..0x49930F tests bit 5,
        not the mode. tagpu_place.c leaves the bit too (it sets it only on a commit), and ends its gesture when the armed
        type changes (its evaluate, `s_gesture.type != c.type`), so a gesture outlives a re-arm of its own type only. */
-    const arm = t => { if (st.mode !== t) st.gesture = null; st.mode = t; st.drag = null; };
+    const arm = t => { if (st.mode !== t) st.gesture = null; st.mode = t; st.drag = null; st.rmode = false; st.rg = null; };
     /* a click's orders for one unit: they replace its list, or with Shift are appended to it -- all of them or, when
        they would take the list past PLACE_LIST_CAP, none, so an upgrade's reclaim never goes in without its build */
     const assign = (u, os, shift) => {
@@ -1398,26 +1695,40 @@ const WikiSim = (() => {
         else if (ev.build) arm(ev.build);
         else { disarm(); st.drag = null; }
       }
+      // a `reclaim` arms reclaim through RECLAIM: a trip to the button with the sidebar on, at once without it
+      if (ev.reclaim) { if (TRIPS) trip(null); else if (!st.rmode) toggleReclaim(); }
       if (ev.move) {
         st.cursor = { x: ev.move[0], z: ev.move[1] };
         const c = mapCursor();
         if (st.drag && sq(c.x - st.drag.x0) + sq(c.z - st.drag.z0) > DRAG * DRAG) st.drag.active = true;
+        reclaimMove();
       }
       if (ev.down === 'z' || ev.down === 'x') { st.held.add(ev.down); stepSpacing(ev.down); }
+      else if (ev.down === 'e') { st.held.add('e'); keyPress('e'); }
       else if (ev.down && !st.held.has(ev.down)) {
         st.held.add(ev.down);
         const shift = st.held.has('shift'), where = over(), mouse = ev.down === 'lmb' || ev.down === 'rmb';
         if (mouse) sb.downOn[ev.down] = where;
-        if (mouse && where === 'side' && onScreen()) pressSide(ev.down);
+        /* A RIGHT PRESS WHILE A RECLAIM DRAG'S LEFT PRESS IS HELD, wherever it lands, ends the drag and keeps reclaim
+           armed; the window procedure takes it and its release before the engine or the GUI sees either
+           (tagpu_sweep_mouse) */
+        if (ev.down === 'rmb' && st.rg) { st.rg = null; sb.downOn.rmb = null; }
+        else if (mouse && where === 'side' && onScreen()) pressSide(ev.down);
         else if (where === 'map') {
           // with a building armed a left press carrying Shift starts a gesture at the cursor site instead of placing
           if (ev.down === 'lmb') {
-            if (st.mode && shift) st.gesture = cursorSite();
+            if (st.rmode) reclaimPress();
+            else if (st.mode && shift) st.gesture = cursorSite();
             else if (st.mode) placeClick(false);
             else { const c = mapCursor(); st.drag = { x0: c.x, z0: c.z, t: feeding, active: false }; }
           }
           // with a building armed a right press cancels it at both types (0x499100, MEASURED at type 1)
-          if (ev.down === 'rmb') { st.drag = null; if (st.mode) disarm(); else if (IFACE) rightClick(shift); else rightPress0(); }
+          // with a building or reclaim armed a right press is the handler's cancel
+          if (ev.down === 'rmb') {
+            st.drag = null;
+            if (st.mode || st.rmode) disarm();
+            else if (IFACE) rightClick(shift); else rightPress0();
+          }
         }
         /* OFF THE MAP AND OFF THE SCREEN a left press with a building armed places it once, at the press. The handler
            finds bit 1 clear, so place_button returns 0 at the route 0x4993BF and stock's click 0x498F70 runs; the
@@ -1431,14 +1742,15 @@ const WikiSim = (() => {
            the same clamp. The minimap stays inert (the owner's decision 6), where the game would place at its world
            point. A right press there is the handler's cancel and nothing else. */
         else if (ev.down === 'lmb' && st.mode && !onMinimap(st.cursor.x, st.cursor.z)) placeClick(shift);
-        else if (ev.down === 'rmb' && st.mode) disarm();
+        else if (ev.down === 'rmb' && (st.mode || st.rmode)) disarm();
       }
       if (ev.up && st.held.has(ev.up)) {
         st.held.delete(ev.up);
         // a release runs the map rules only for a press that went down on the map
         if (sb.cap && sb.cap.b === ev.up) releaseSide();
         else if (sb.downOn[ev.up] === 'map') {
-          if (ev.up === 'lmb' && st.gesture) release();
+          if (ev.up === 'lmb' && st.rg) reclaimRelease();
+          else if (ev.up === 'lmb' && st.gesture) release();
           else if (ev.up === 'lmb' && st.drag) {
             // a box is the same at both types; a click is type 1's select and type 0's leftClick
             const d = st.drag, c = mapCursor(), shift = st.held.has('shift');
@@ -1527,6 +1839,7 @@ const WikiSim = (() => {
     function bodies(u) {
       const out = [];
       for (const v of units) if (v !== u) out.push({ r: body(v), u: v });
+      for (const f of feats) if (f.blocking) out.push({ r: featRect(f), u: null });
       for (const v of units) if (mobile(v.type)) { const r = claim(v); if (r) out.push({ r, u: null }); }
       return out;
     }
@@ -1541,6 +1854,9 @@ const WikiSim = (() => {
       const bd = def(u.type).buildDistance;
       return { x: (r[0] + r[2]) / 2, z: (r[1] + r[3]) / 2, r, stop: bd, clip: 0, plan: bd, body: r, order: o, kind: 1 };
     };
+    /* a feature's Reclaim walks until the footprints touch: its goal 0x44D8A0 is the ring of cells round the feature's
+       footprint widened by the unit's, which 0x44DCB0 passes when the unit's cell lies on it; BuildDistance is not read */
+    const toFeat = (o, f) => { const r = featRect(f); return { x: f.x, z: f.z, r, stop: 0, clip: 0, plan: CELL, body: r, order: o, kind: 1 }; };
     const toUnit = (o, g) => ({ x: g.x, z: g.z, r: [g.x, g.z, g.x, g.z], stop: FOLLOW, clip: FOLLOW, plan: FOLLOW, body: body(g), order: o, kind: 2 });
     const inRange = (x, z, b, tgt, within) => rectDist(x, z, tgt.r) <= within || (!!tgt.body && meets(b, tgt.body));
 
@@ -1784,21 +2100,44 @@ const WikiSim = (() => {
        its origin, the unit's facing turns it as the stage turns the model (a type that does not move at the heading
        (0, 1)), and the structure's box is the target; a reclaim only every second tick from its first on that
        structure */
+    // the nano piece's point: QueryNanoPiece names the piece and the host gives its origin, turned by the unit's facing
+    function nanoPoint(u) {
+      const fixed = !mobile(u.type), cs = fixed ? -1 : -u.hz, sn = fixed ? 0 : u.hx;
+      const q = u.cob ? COB.query(u.cob, 'QueryNanoPiece', [0, 0, 0, 0], facts()) : { r: 0 };
+      const piece = q.r > 0 ? q.io[0] : 0;
+      const o = u.cob ? COB.origin(u.cob, piece) : { turned: [0, 0, 0], base: [0, 0, 0] };
+      return [
+        (((fix16(u.x) + trunc32(cs * o.turned[0] + sn * o.turned[2])) | 0) + o.base[0]) | 0,
+        (o.turned[1] + o.base[1]) | 0,
+        (((fix16(u.z) - trunc32(-sn * o.turned[0] + cs * o.turned[2])) | 0) - o.base[2]) | 0,
+      ];
+    }
+    // one reverse emission from box `target` to point `pt` (0x472200), its second burst due on the next tick
+    function emitReverse(u, target, pt, t) {
+      const e = { box: [target, sprayBox(pt, pt)], key: sprayKey(u.id, nemit++), due: t + 1 };
+      if (!sprayBurst(e, t)) return;
+      if (bursts.length < SPRAY_BURSTS) bursts.push(e); else partsCut = true;
+    }
+    /* A FEATURE'S RECLAIM SPRAYS from the feature's box to the nano piece, twice a call with the same arguments
+       (0x404D3B, 0x404D4C): the box from the anchor cell's corner, FootprintX x FootprintZ cells wide and the feature's
+       height (+0xFA) tall over the ground (0x404CC9..0x404D37), the stage's ground being 0 */
+    function sprayFeature(u, f, t) {
+      const pt = nanoPoint(u);
+      const lo = [fix16(f.ox * CELL), 0, fix16(f.oz * CELL)], hi = [fix16((f.ox + f.fx) * CELL), fix16(f.height), fix16((f.oz + f.fz) * CELL)];
+      const target = sprayBox(lo, hi);
+      emitReverse(u, target, pt, t);
+      emitReverse(u, target, pt, t);
+    }
     function spray(u, t) {
-      const sp = u.spray, [fx, fz] = fp(sp.type), fixed = !mobile(u.type), cs = fixed ? -1 : -u.hz, sn = fixed ? 0 : u.hx;
+      const sp = u.spray;
+      if (sp.how === 'feature') { sprayFeature(u, sp.f, t); return; }
+      const [fx, fz] = fp(sp.type);
       if (sp.how === 'reclaim') {
         if (u.sprayAt && u.sprayOn === sp.id && t - u.sprayAt < 2) return;
         u.sprayAt = t;
         u.sprayOn = sp.id;
       }
-      const q = u.cob ? COB.query(u.cob, 'QueryNanoPiece', [0, 0, 0, 0], facts()) : { r: 0 };
-      const piece = q.r > 0 ? q.io[0] : 0;
-      const o = u.cob ? COB.origin(u.cob, piece) : { turned: [0, 0, 0], base: [0, 0, 0] };
-      const pt = [
-        (((fix16(u.x) + trunc32(cs * o.turned[0] + sn * o.turned[2])) | 0) + o.base[0]) | 0,
-        (o.turned[1] + o.base[1]) | 0,
-        (((fix16(u.z) - trunc32(-sn * o.turned[0] + cs * o.turned[2])) | 0) - o.base[2]) | 0,
-      ];
+      const pt = nanoPoint(u);
       const lo = [(fix16(sp.x) - fx * 0x80000) | 0, 0, (fix16(sp.z) - fz * 0x80000) | 0];
       const hi = [(fix16(sp.x) + fx * 0x80000) | 0, COB.top(defIndex.indexOf(sp.type)), (fix16(sp.z) + fz * 0x80000) | 0];
       const point = sprayBox(pt, pt), target = sprayBox(lo, hi);
@@ -1837,6 +2176,36 @@ const WikiSim = (() => {
         // the step made progress: the unit's turn sprays at the structure as it stands now
         u.spray = { how, id: s.id, type: s.type, x: s.x, z: s.z };
       };
+      /* THE RECLAIM HANDLER ON A FEATURE, 0x404AD0, DISASSEMBLED (research/notes/exe-reverse-engineering.md, *The
+         reclaim sweep's engine side*): every call looks the feature up at the order's point, and with none says
+         "Reclamation failed" (kind 7, 0x404AF8) and ends. The walk until the footprints touch; a walk that gives up ends
+         the order silent (result 8). Arrived, the countdown trunc(15 + (energy + metal) / 2) (0x404BBA..0x404BDC) and
+         StartBuilding; the stance wait (0x404C5A); the working reply once (0x404C6E); then a working call every 2 ticks
+         (0x439E80(2) at 0x404C77) takes 2 off it: at 0 or below it pays out and the feature goes (0x4237D0, FeatureDie),
+         above 15 it sprays (0x404CB5). The countdown, the next call's tick and whether it paid are the unit's (u.rc). */
+      const featWork = (u, o) => {
+        const f = featById(o.feat), t = sim.tick + 1;
+        if (!f) { u.orders.shift(); u.rc = null; notice(u, SND.cant); return; }
+        if (!u.rc || u.rc.o !== o) {
+          const r = go(u, toFeat(o, f));
+          if (r === STUCK) { u.orders.shift(); return; }
+          if (r !== ARRIVED) return;
+          u.rc = { o, c: reclaimCountdown(f.energy, f.metal), next: t, paid: false };
+        }
+        const dx = f.x - u.x, dz = f.z - u.z, d = Math.sqrt(dx * dx + dz * dz);
+        if (d > 0) { u.hx = dx / d; u.hz = dz / d; }
+        jobs.set(u, { s: f, how: 'feature' });
+        if (!(u.stanced && u.work === f)) { if (!stance(u)) return; u.stanced = true; }
+        if (u.orders[0] !== u.said) { u.said = u.orders[0]; notice(u, SND.working); }
+        if (t < u.rc.next) return;
+        u.rc.next = t + 2;
+        u.rc.c -= 2;
+        if (u.rc.c <= 0) {
+          u.rc.paid = true;
+          feats.splice(feats.indexOf(f), 1);
+          log('reclaimed', { id: f.id, type: f.name, ox: f.ox, oz: f.oz });
+        } else if (u.rc.c > 15) u.spray = { how: 'feature', f };
+      };
       // went: the unit stepped on the last tick, so this tick's planners walk round it only if it stood
       for (const u of units) { u.went = !!u.stepped; u.stepped = false; u.spray = null; u.evacuated = false; u.completed = false; }
       nemit = 0;
@@ -1858,6 +2227,7 @@ const WikiSim = (() => {
           if (arrived) notice(u, SND.arrived);
           continue;
         }
+        if (o.k === 'reclaim' && o.feat !== undefined) { featWork(u, o); continue; }
         if (o.k === 'reclaim') {
           const s = byId(o.target);
           if (!s) { u.orders.shift(); continue; }
@@ -1927,6 +2297,8 @@ const WikiSim = (() => {
         const o = u.orders[0];
         if (!o) continue;
         if (o.k === 'build') { const s = structureAt(o.type, o.ox, o.oz); if (s && s.built >= 1) u.orders.shift(); }
+        // a feature's reclaim ends with its payout (result 5); another reclaimer of it finds it gone on its next call
+        else if (o.k === 'reclaim' && o.feat !== undefined) { if (u.rc && u.rc.o === o && u.rc.paid) { u.orders.shift(); u.rc = null; } }
         else if ((o.k === 'reclaim' || o.k === 'guard') && !byId(o.target)) u.orders.shift();
       }
       if (!COB) return;
@@ -1940,7 +2312,7 @@ const WikiSim = (() => {
          keeps its class 1), one that stood this tick and stepped the last StopMoving, both run-now. */
       for (const u of units) {
         const j = jobs.get(u);
-        const target = j && units.includes(j.s) && !(j.how === 'build' && j.s.built >= 1) ? j.s : null;
+        const target = j && (j.how === 'feature' ? feats.includes(j.s) : units.includes(j.s) && !(j.how === 'build' && j.s.built >= 1)) ? j.s : null;
         let ended = null;
         if (u.work && u.work !== target) {
           cobCall(u, 'StopBuilding', 'later'); ended = u.work.id; u.work = null; u.workOrder = null; u.stanced = false;
@@ -2006,7 +2378,16 @@ const WikiSim = (() => {
        else a selection holding a mobile unit of the player's, else none. Quick Build's ghost changes nothing here: it
        is drawn from the packet and leaves the engine's cursor as the selection has it. Off the map it is the arrow:
        the GUI shows cursornormal [INFERRED, capture C5]. */
-    const cursorShape = () => over() !== 'map' ? 'arrow' : st.mode ? 'build' : selected().some(u => u.owner === 0 && mobile(u.type)) ? 'move' : 'arrow';
+    /* With reclaim armed it is cursorreclamate [INFERRED: the chooser's answer in mode 12 everywhere on the map], but
+       cursornormal (the engine's "nothing", 0x13) over the popup and over a feature the resolver would reclaim that is
+       not of the chosen kind (tagpu_sweep_cursor). */
+    const reclaimCursor = () => {
+      const c = mapCursor(), f = featAt(c.x, c.z);
+      if (onPopup(popup())) return 'arrow';
+      return st.kind !== 'all' && f && f.reclaimable && seen(Math.floor(f.x / CELL), Math.floor(f.z / CELL)) && !kindOk(f) ? 'arrow' : 'reclaim';
+    };
+    const cursorShape = () => over() !== 'map' ? 'arrow' : st.rmode ? reclaimCursor() : st.mode ? 'build' :
+      selected().some(u => u.owner === 0 && mobile(u.type)) ? 'move' : 'arrow';
     // the sequence a shape shows: the build cursor is the arrow's cursornormal
     const cursorSeq = k => k === 'build' ? 'arrow' : k;
     /* THE SHAPE AFTER EVERY CHANGE, and `now`, the first tick that shows it, as the tick its animation began when it
@@ -2070,7 +2451,7 @@ const WikiSim = (() => {
       for (const u of units) if (u.sel) {
         let from = [u.x, u.z];
         for (const o of u.orders) {
-          const t = o.k === 'move' ? { x: o.x, z: o.z } : o.k === 'build' ? centre(o.type, o.ox, o.oz) : byId(o.target);
+          const t = orderPoint(o) || byId(o.target);
           if (!t) continue;
           lines.push({ from, to: [t.x, t.z], kind: o.k });
           from = [t.x, t.z];
@@ -2080,6 +2461,22 @@ const WikiSim = (() => {
       for (const u of units) for (const o of u.orders) if (o.k === 'build') owners.set(`${o.type}@${o.ox},${o.oz}`, u.owner);
       // every change of the shape -- an input, a tick, the scene -- records it (cursorTick)
       const shape = st.cursorShape, since = st.cursorSince;
+      /* THE SWEEP as tagpu_sweep_fill publishes it: while reclaim is armed, the kind; during a drag past the threshold
+         the ring, its targets and the readout's counts and sums (a feature with metal counts as a wreck, one with
+         energy alone as a tree); otherwise the feature under the pointer the kind takes, bracketed; and the popup
+         with the row under the pointer, -1 for none */
+      let reclaim = null;
+      if (st.rmode) {
+        const P = popup(), R = st.rg && st.rg.drag ? ringOf(st.rg) : null, T = R ? ringTargets(R) : [];
+        const c = mapCursor(), hf = !st.rg && over() === 'map' && !onPopup(P) ? featAt(c.x, c.z) : null;
+        reclaim = {
+          kind: st.kind, ring: R, targets: T.map(f => f.id),
+          wrecks: T.filter(f => f.metal > 0).length, trees: T.filter(f => !(f.metal > 0) && f.energy > 0).length,
+          metal: T.reduce((a, f) => a + f.metal, 0), energy: T.reduce((a, f) => a + f.energy, 0),
+          hover: hf && takes(hf) ? hf.id : null,
+          popup: P ? { ...P, hot: onPopup(P) ? P.rows.findIndex(q => inRect(q, st.cursor.x, st.cursor.z)) : -1 } : null,
+        };
+      }
       return {
         map: { w: W, h: H, cell: CELL, surfaceMetal: SM, metal: metal.slice(), fog: fog.slice(), vents: vents.map(v => ({ x: (v.cx + 0.5) * CELL, z: (v.cz + 0.5) * CELL })) },
         units: units.map(u => ({ id: u.id, type: u.type, owner: u.owner, x: u.x, z: u.z, hx: u.hx, hz: u.hz, fx: fp(u.type)[0], fz: fp(u.type)[1],
@@ -2097,7 +2494,10 @@ const WikiSim = (() => {
         drag: st.drag && st.drag.active ? { x0: st.drag.x0, z0: st.drag.z0, x1: mapCursor().x, z1: mapCursor().z } : null,
         caption: st.caption,
         pace: PACE,
-        mode: st.mode ? `build:${st.mode}` : 'contextual',
+        mode: st.rmode ? 'reclaim' : st.mode ? `build:${st.mode}` : 'contextual',
+        // the features still standing, each by its id, its section name and its footprint at its anchor cell
+        feats: feats.map(f => ({ id: f.id, name: f.name, ox: f.ox, oz: f.oz, fx: f.fx, fz: f.fz })),
+        reclaim,
         // the column, only with the sidebar on: the layout side it shows (its prefix and PANELSIDE are the stage's), its
         // rows, the routed screen, the shown unit and its page, each gadget's state, the unit under the cursor over the
         // map (the minimap's high dot)

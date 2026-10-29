@@ -1165,7 +1165,8 @@ def gadget_record(sec, index, where, report):
     ck, k = (com["keys"] if com else {}), sec["keys"]
     nums = {"id": ck.get("id"), "xpos": ck.get("xpos"), "ypos": ck.get("ypos"), "width": ck.get("width"),
             "height": ck.get("height"), "attribs": ck.get("attribs"), "commonattribs": ck.get("commonattribs"),
-            "active": ck.get("active"), "gaffile": ck.get("gaffile"), "grayedout": k.get("grayedout"),
+            "active": ck.get("active"), "gaffile": ck.get("gaffile"), "quickkey": ck.get("quickkey"),
+            "grayedout": k.get("grayedout"),
             "stages": k.get("stages")}
     for key, v in nums.items():
         if v is not None and not plain_int(v):
@@ -1177,6 +1178,9 @@ def gadget_record(sec, index, where, report):
     rec = {"index": index, "id": n["id"], "name": ck.get("name", "")[:NAME_GUI], "x": n["xpos"], "y": n["ypos"],
            "w": n["width"], "h": n["height"], "attribs": n["attribs"], "commonattribs": n["commonattribs"],
            "active": n["active"], "gaffile": n["gaffile"] & 1, "grey": n["grayedout"] & 1, "stages": n["stages"],
+           # the record's u8 quickkey +0x13A, the key the button handler 0x4A6AE0 matches through tolower and toupper
+           # (0x4A70FB..0x4A7129); the byte of the atoi [INFERRED: the store's width]
+           "key": n["quickkey"] & 0xFF,
            "text": k.get("text", ""), "panel": k.get("panel", ""), "filled": False}
     if rec["w"] < 0 or rec["h"] < 0:
         report.append({"element": f"{where}#{index}", "refused": f"a negative size {rec['w']} x {rec['h']}"})
@@ -1635,6 +1639,8 @@ def build_screen(art, name, file, path, where, recs, units, page, hide_pagers, r
         if role == "build":
             lg["unit"] = unit
         lg["grey"] = grey
+        if g["key"]:
+            lg["key"] = g["key"]
         if hidden:
             lg["hidden"] = True
         gadgets.append(lg)
