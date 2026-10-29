@@ -1147,6 +1147,105 @@ const CTX_SHAPES_RULES = {
   },
 };
 
+/* THE RECLAIM SWEEP's rules no demo shows, played through Try it (create) on the entry's scene: two ARMCK, a and b, a
+   lone rock2 centred (232, 72), the field of rocks and three trees round (330, 170), the grove round (490, 340), and
+   plain ground round (100, 400). fixture-tall.json's build pages carry RECLAIM, with E its quickkey. */
+const TALL = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/side/fixture-tall.json`, 'utf8'));
+const featIds = v => v.feats.map(f => f.id);
+const drag = (s, from, to, mods = []) => {
+  s.input({ move: from }); for (const k of mods) s.input({ down: k });
+  s.input({ down: 'lmb' }); s.input({ move: to }); s.input({ up: 'lmb' }); for (const k of mods) s.input({ up: k });
+};
+const RECLAIM_RULES = {
+  'without the sidebar a reclaim arms at once, a second keeps it armed, and a right press disarms'(entry) {
+    const s = WikiSim.create(entry, { scene: { selected: ['a'] } }, null, T1);
+    s.input({ reclaim: true }); s.input({ reclaim: true }); s.input({ move: [100, 400] });
+    const armed = s.view().mode === 'reclaim' && s.view().cursor.shape === 'reclaim' && s.view().reclaim.kind === 'all';
+    s.input({ down: 'rmb' }); s.input({ up: 'rmb' });
+    return armed && s.view().mode === 'contextual' && s.view().reclaim === null && s.orders('a').length === 0;
+  },
+  'a click on a rock orders every selected reclaimer; with Shift it stays armed and a second Shift-click takes it off'(entry) {
+    const s = WikiSim.create(entry, { scene: {} }, null, T1);
+    s.input({ reclaim: true }); s.input({ down: 'shift' });
+    click(s, [232, 72], 'lmb');
+    const on = kinds(s.orders('a')) === 'reclaim' && s.orders('a')[0].feat === 'lone' && s.orders('b')[0].feat === 'lone' &&
+      s.view().mode === 'reclaim';
+    click(s, [232, 72], 'lmb');
+    const off = s.orders('a').length === 0 && s.orders('b').length === 0 && s.view().mode === 'reclaim';
+    s.input({ up: 'shift' });
+    return on && off && s.view().mode === 'contextual';
+  },
+  'METAL picked: a tree shows the arrow and its click orders nothing; a rock shows the reclaim cursor and is bracketed'(entry) {
+    const s = WikiSim.create(entry, { scene: { kind: 'metal' } }, null, T1);
+    s.input({ reclaim: true }); s.input({ move: [312, 168] });
+    const tree = s.view().cursor.shape === 'arrow' && s.view().reclaim.hover === null;
+    click(s, [312, 168], 'lmb');
+    const none = s.orders('a').length === 0 && s.view().mode === 'reclaim';
+    s.input({ move: [232, 72] });
+    return tree && none && s.view().cursor.shape === 'reclaim' && s.view().reclaim.hover === 'lone';
+  },
+  'an empty ring keeps reclaim armed; a ring commits, splits its rocks and without Shift disarms'(entry) {
+    const s = WikiSim.create(entry, { scene: { kind: 'metal' } }, null, T1);
+    s.input({ reclaim: true });
+    drag(s, [100, 400], [100, 440]);
+    const empty = s.view().mode === 'reclaim' && s.orders('a').length === 0;
+    s.input({ move: [330, 170] }); s.input({ down: 'lmb' }); s.input({ move: [330, 260] });
+    const ring = s.view().reclaim.ring, marked = s.view().reclaim.targets;
+    s.input({ up: 'lmb' });
+    const all = [...s.orders('a'), ...s.orders('b')];
+    return empty && ring && ring.r === 90 && marked.length > 2 && !marked.some(id => id[0] === 't') &&
+      all.length === marked.length && all.every(o => o.k === 'reclaim' && marked.includes(o.feat)) &&
+      s.orders('a').length > 0 && s.orders('b').length > 0 && s.view().mode === 'contextual';
+  },
+  'a right press mid-drag ends the ring and keeps reclaim armed, and its release orders nothing'(entry) {
+    const s = WikiSim.create(entry, { scene: {} }, null, T1);
+    s.input({ reclaim: true }); s.input({ move: [330, 170] }); s.input({ down: 'lmb' }); s.input({ move: [330, 260] });
+    s.input({ down: 'rmb' });
+    const gone = s.view().reclaim.ring === null && s.view().mode === 'reclaim';
+    s.input({ up: 'rmb' }); s.input({ up: 'lmb' });
+    return gone && s.view().mode === 'reclaim' && s.orders('a').length === 0 && s.orders('b').length === 0;
+  },
+  'the sidebar: E presses RECLAIM, lit while armed; E again cycles the kind, a row of the popup picks one, a click between rows nothing'(entry) {
+    const s = WikiSim.create(entry, { scene: { selected: ['a'] } }, TALL, T1);
+    const i = TALL.screens[s.view().side.screen].gadgets.findIndex(g => g.name === 'ARMRECLAIM');
+    const live = s.view().side.state[i] === 0;
+    s.input({ down: 'e' }); s.input({ up: 'e' });
+    const byKey = s.view().mode === 'reclaim' && s.view().reclaim.kind === 'all';
+    const lit = s.view().side.state[i] === 1;
+    s.input({ down: 'e' }); s.input({ up: 'e' });
+    const metal = s.view().reclaim.kind === 'metal', P = s.view().reclaim.popup;
+    const row = r => [r[0] + r[2] / 2, r[1] + r[3] / 2];
+    click(s, row(P.rows[1]), 'lmb');
+    const energy = s.view().reclaim.kind === 'energy';
+    click(s, [P.rows[1][0] + 10, P.rows[1][1] + P.rows[1][3] + 1], 'lmb');
+    return live && byKey && lit && metal && energy && s.view().reclaim.kind === 'energy' && s.view().mode === 'reclaim' &&
+      s.orders('a').length === 0;
+  },
+  'E on the stock sidebar\'s build page, which has no RECLAIM, does nothing; on GEN, with two builders, it arms'(entry) {
+    const one = WikiSim.create(entry, { scene: { selected: ['a'] } }, FIXTURE, T1);
+    one.input({ down: 'e' }); one.input({ up: 'e' });
+    const two = WikiSim.create(entry, { scene: {} }, FIXTURE, T1);
+    two.input({ down: 'e' }); two.input({ up: 'e' });
+    return one.view().mode === 'contextual' && two.view().side.screen === 'ARMGEN' && two.view().mode === 'reclaim';
+  },
+  'a rock reclaimed is gone, and the other reclaimer\'s order on it ends'(entry) {
+    const s = WikiSim.create(entry, { scene: {} }, null, T1);
+    s.input({ reclaim: true }); click(s, [232, 72], 'lmb');
+    let t = 0;
+    while (featIds(s.view()).includes('lone') && t++ < 3000) s.step();
+    for (let k = 0; k < 4; k++) s.step();
+    return t < 3000 && s.view().gone.some(c => c[0] === 13 && c[1] === 3) && s.orders('a').length === 0 && s.orders('b').length === 0;
+  },
+  'a scene\'s features are refused off the map, over another or under a taken id, and a kind or a pick not of the three'(entry) {
+    const no = scene => !!refuses(() => WikiSim.create(entry, { scene }, null, T1));
+    const bad = inputs => !!refuses(() => WikiSim.play(entry, { id: 'r', inputs, end: 200 }, null, T1));
+    return no({ features: [{ name: 'rock2', at: [38, 3] }] }) && no({ features: [{ name: 'rock2', at: [13, 4] }] }) &&
+      no({ features: [{ id: 'lone', name: 'rock07', at: [2, 2] }] }) && no({ features: [{ name: 'nothing', at: [2, 2] }] }) &&
+      no({ kind: 'wood' }) && !no({ features: [{ name: 'rock07', at: [2, 2] }] }) &&
+      bad([{ at: 1, pick: 'wood' }]) && bad([{ at: 1, reclaim: 1 }]) && !bad([{ at: 1, pick: 'metal' }]);
+  },
+};
+
 /* THE RECLAIM SWEEP's demos (research/notes/ingame-wiki-reclaim-plan.md): what each ring marked, who was ordered what,
    and whether reclaim was still armed after it. A frame after an input's tick shows what the input did. */
 const fIds = os => (os || []).filter(o => o.k === 'reclaim' && o.feat !== undefined).map(o => o.feat);
@@ -1262,7 +1361,8 @@ const SOUND_RULES = {
     return cant === 1 && ok === 0 && built;
   },
 };
-export const ENTRY_RULES = { quickbuild: { ...RULES, ...SIDE_RULES, ...CTX_RULES, ...SOUND_RULES }, buildshapes: { ...BUILDSHAPES_RULES, ...CTX_SHAPES_RULES } };
+export const ENTRY_RULES = { quickbuild: { ...RULES, ...SIDE_RULES, ...CTX_RULES, ...SOUND_RULES }, buildshapes: { ...BUILDSHAPES_RULES, ...CTX_SHAPES_RULES },
+  reclaim: RECLAIM_RULES };
 
 /* decision 12 for an unbound cast: the tick and the authored type a demo stops on in this casting -- tick 0 for a
    scene unit of an unbound cast, else the first `build` of one -- or null when it plays to its end */

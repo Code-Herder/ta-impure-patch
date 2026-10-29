@@ -63,11 +63,11 @@ const DDRAW = path.join(ROOT, 'tagpu/ddraw');
 const SIDE = name => JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/side/${name}.json`), 'utf8'));
 const FIXTURE = SIDE('fixture');
 const WINE = process.argv.includes('--wine');
-const SRCS = ['src/tagpu_wikidata.c', 'src/tagpu_json.c', 'src/tagpu_pak.c', 'src/tagpu_placegeo.c',
+const SRCS = ['src/tagpu_wikidata.c', 'src/tagpu_json.c', 'src/tagpu_pak.c', 'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c',
   'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c'];
 
 /* ---- the state hash: 64-bit FNV-1a, its halves in two uint32s so that no BigInt is needed ---- */
-const KEYS = ['shift', 'alt', 'ctrl', 'z', 'x', 'lmb', 'rmb'];               // WIKI_KEY_* order
+const KEYS = ['shift', 'alt', 'ctrl', 'z', 'x', 'e', 'lmb', 'rmb'];          // WIKI_KEY_* order
 const ORDER = { move: 0, build: 1, reclaim: 2, guard: 3 };                   // WIKI_ORDER_*
 const SHAPE = { line: 1, axis: 2, rect: 3, hollow: 4, ring: 5 };             // PLACE_*, PLACE_NONE 0
 const STATE = { place: 0, refused: 1, remove: 2 };                           // WIKI_SITE_*
@@ -100,6 +100,7 @@ function stateHash(sim, v) {
       int(ORDER[o.k]);
       if (o.k === 'move') { dbl(o.x); dbl(o.z); }
       else if (o.k === 'build') { str(o.type); int(o.ox); int(o.oz); }
+      else if (o.k === 'reclaim') { str(o.feat ?? o.target); int(o.feat !== undefined ? 1 : 0); if (o.feat !== undefined) { dbl(o.x); dbl(o.z); } }
       else str(o.target);
     }
   }
@@ -109,7 +110,7 @@ function stateHash(sim, v) {
   for (const s of v.sites) { dbl(s.x); dbl(s.z); int(STATE[s.state]); }
   dbl(v.cursor.x); dbl(v.cursor.z);
   for (const k of KEYS) int(v.keys.includes(k) ? 1 : 0);
-  str(v.mode === 'contextual' ? '' : v.mode.slice('build:'.length));
+  str(v.mode.startsWith('build:') ? v.mode.slice('build:'.length) : '');
   int(v.spacing ?? -1);
   int(v.drag ? 1 : 0); if (v.drag) { dbl(v.drag.x0); dbl(v.drag.z0); }
   str(v.caption);
@@ -136,6 +137,16 @@ function stateHash(sim, v) {
     int(d.total);
     for (const e of d.events) for (const w of e) int(w);
     for (const c of d.cant) int(c);
+  }
+  int(v.feats.length);
+  for (const f of v.feats) { str(f.id); str(f.name); int(f.ox); int(f.oz); }
+  int(v.gone.length);
+  for (const [x, z] of v.gone) { int(x); int(z); }
+  int(v.reclaim ? 1 : 0);
+  if (v.reclaim) {
+    int(WikiSim.KINDS.indexOf(v.reclaim.kind));
+    int(v.reclaim.ring ? 1 : 0);
+    if (v.reclaim.ring) { int(v.reclaim.ring.x); int(v.reclaim.ring.z); int(v.reclaim.ring.r); }
   }
   return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0');
 }
@@ -165,7 +176,7 @@ function run(cmd, args, opts = {}) {
 function build(tmp) {
   if (WINE) {
     // the simulation and the loader, which normalises the scenes' facings, on SSE2 as the Makefile compiles them
-    const exe = path.join(DDRAW, 'tests/wikitest.exe'), sse = ['src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_wikicob.c'];
+    const exe = path.join(DDRAW, 'tests/wikitest.exe'), sse = ['src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_wikicob.c', 'src/tagpu_sweepgeo.c'];
     const cc = 'i686-w64-mingw32-gcc', flags = ['-Iinc', '-Isrc', '-O2', '-Wall', '-std=c99'];
     const objs = sse.map(src => path.join(tmp, path.basename(src, '.c') + '.o'));
     sse.forEach((src, i) => run(cc, [...flags, '-msse2', '-mfpmath=sse', '-mincoming-stack-boundary=2', '-c', '-o', objs[i], src], { cwd: DDRAW }));
@@ -388,6 +399,40 @@ function refusalCases(entry) {
   text('a G cell without vent', 'refused', e => { e.units.ARMMEX.g = [[0, 0]]; });
   text('no G cell without vent', 'accepted', e => { e.units.ARMMEX.g = []; });
   text('a G cell not two integers', 'refused', e => { e.units.ARMGEO.g = [[0.5, 0]]; });
+  // the reclaim entry's data (sim.js checkFeature, the scene's features and kind, the reclaim and pick inputs and trips)
+  const ROCK = { footprint: [2, 2], metal: 50, height: 20, blocking: true, reclaimable: true };
+  const feats = (f, placed) => e => { e.features = f; first(e).features = placed; };
+  scn('a feature placed', 'accepted', feats({ rock: ROCK }, [{ name: 'rock', at: [2, 24] }]));
+  scn('features not an object', 'refused', feats([ROCK], []));
+  scn('a feature footprint of 16', 'accepted', feats({ rock: { ...ROCK, footprint: [16, 2] } }, []));
+  scn('a feature footprint of 17', 'refused', feats({ rock: { ...ROCK, footprint: [17, 2] } }, []));
+  scn('a feature metal just below 1e7', 'accepted', feats({ rock: { ...ROCK, metal: 9999999.5 } }, []));
+  scn('a feature metal of 1e7', 'refused', feats({ rock: { ...ROCK, metal: 1e7 } }, []));
+  scn('a feature energy below 0', 'refused', feats({ rock: { ...ROCK, energy: -1 } }, []));
+  scn('a feature height of 256', 'refused', feats({ rock: { ...ROCK, height: 256 } }, []));
+  scn('a feature blocking 1', 'refused', feats({ rock: { ...ROCK, blocking: 1 } }, []));
+  scn('a feature name of 32 bytes', 'refused', feats({ ['r'.repeat(32)]: ROCK }, []));
+  scn('65 features', 'refused', feats(Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`r${i}`, ROCK])), []));
+  scn('64 features', 'accepted', feats(Object.fromEntries(Array.from({ length: 64 }, (_, i) => [`r${i}`, ROCK])), []));
+  scn('a scene feature naming none', 'refused', feats({ rock: ROCK }, [{ name: 'stone', at: [2, 24] }]));
+  scn('a scene feature off the map', 'refused', feats({ rock: ROCK }, [{ name: 'rock', at: [39, 24] }]));
+  scn('a scene feature below the scene\'s rows', 'refused', feats({ rock: ROCK }, [{ name: 'rock', at: [2, 29] }]));
+  scn('a scene feature over another', 'refused', feats({ rock: ROCK }, [{ name: 'rock', at: [2, 24] }, { name: 'rock', at: [3, 25] }]));
+  scn('two scene features under one id', 'refused', feats({ rock: ROCK }, [{ id: 'x', name: 'rock', at: [2, 24] }, { id: 'x', name: 'rock', at: [6, 24] }]));
+  scn('a scene feature under a structure', 'refused', feats({ rock: ROCK }, [{ name: 'rock', at: [16, 5] }]));
+  scn('a scene kind of metal', 'accepted', e => { first(e).kind = 'metal'; });
+  scn('a scene kind of wood', 'refused', e => { first(e).kind = 'wood'; });
+  demo('a reclaim trip with room', 'accepted', { inputs: [{ at: 5, reclaim: true }], end: 5 + T });
+  demo('a reclaim not true', 'refused', { inputs: [{ at: 5, reclaim: 1 }], end: 5 + T });
+  demo('a reclaim not true without the sidebar', 'refused', { sidebar: false, inputs: [{ at: 5, reclaim: 'yes' }], end: 5 + T });
+  demo('an input inside a reclaim trip', 'refused', { inputs: [{ at: 5, reclaim: true }, { at: 40, down: 'lmb' }], end: 5 + T });
+  demo('the end inside a reclaim trip', 'refused', { inputs: [{ at: 5, reclaim: true }], end: 4 + T });
+  demo('a reclaim carrying a build', 'refused', { inputs: [{ at: 5, reclaim: true, build: 'ARMMEX' }], end: 5 + T });
+  demo('a pick trip with room', 'accepted', { inputs: [{ at: 5, reclaim: true }, { at: 5 + T, pick: 'metal' }], end: 5 + T + WikiSim.PICK });
+  demo('a pick naming no kind', 'refused', { inputs: [{ at: 5, pick: 'wood' }], end: 5 + T });
+  demo('an input inside a pick trip', 'refused', { inputs: [{ at: 5, pick: 'all' }, { at: 5 + WikiSim.PICK - 1, move: [1, 1] }], end: 200 });
+  demo('an input on a pick trip\'s last tick', 'accepted', { inputs: [{ at: 5, pick: 'all' }, { at: 5 + WikiSim.PICK, move: [1, 1] }], end: 200 });
+  demo('a pick with the left button held', 'refused', { inputs: [{ at: 1, down: 'lmb' }, { at: 5, pick: 'energy' }], end: 200 });
   // the casting's reader, sim.js's checkCasting; each edit leaves the entry's own types bound to themselves
   const tower = f => C => f(C.casts.tower, C);
   cast('the identity casting', 'accepted', () => {});
@@ -421,6 +466,9 @@ function refusalCases(entry) {
   cast('canstop 3', 'accepted', tower(k => { k.canstop = 3; }));
   cast('canstop 1.5', 'refused', tower(k => { k.canstop = 1.5; }));
   cast('canstop true', 'refused', tower(k => { k.canstop = true; }));
+  cast('canreclamate 1', 'accepted', tower(k => { k.canreclamate = 1; }));
+  cast('canreclamate 1.5', 'refused', tower(k => { k.canreclamate = 1.5; }));
+  cast('canreclamate true', 'refused', tower(k => { k.canreclamate = true; }));
   cast('activatewhenbuilt 3', 'accepted', tower(k => { k.activatewhenbuilt = 3; }));
   cast('activatewhenbuilt 0.5', 'refused', tower(k => { k.activatewhenbuilt = 0.5; }));
   cast('vent 1', 'refused', tower(k => { k.vent = 1; }));
@@ -460,7 +508,7 @@ function refusalCases(entry) {
   lay('one type name in two sides', 'accepted', L => { core(L).ARMCK = { pages: ['ARMCK2'], orders: null }; });
   for (const [n, want] of [[8, 'accepted'], [9, 'refused']])
     lay(`${n} sides`, want, L => { L.sides = Array.from({ length: n }, (_, i) => ({ ...L.sides[0], name: `S${i}` })); });
-  for (const [n, want] of [[1024, 'accepted'], [1025, 'refused']])
+  for (const [n, want] of [[768, 'accepted'], [769, 'refused']])
     lay(`a screen ending at row ${n}`, want, L => { L.screens.TALL = screen(n - 128); L.height = n; });
   lay('no sides', 'refused', L => { L.sides = []; });
   lay('a screen 129 wide', 'refused', L => { L.screens.ARMMAIN2.w = 129; });
@@ -476,6 +524,11 @@ function refusalCases(entry) {
   lay('a gadget with no name', 'refused', L => { ck1(L)[0].name = ''; });
   lay('a build button with no unit key', 'refused', L => { delete ck1(L)[2].unit; });
   lay('a build button whose unit is empty', 'refused', L => { ck1(L)[2].unit = ''; });
+  lay('a quickkey of 101', 'accepted', L => { ck1(L)[0].key = 101; });
+  lay('a quickkey of 255', 'accepted', L => { ck1(L)[0].key = 255; });
+  lay('a quickkey of 0', 'refused', L => { ck1(L)[0].key = 0; });
+  lay('a quickkey of 256', 'refused', L => { ck1(L)[0].key = 256; });
+  lay('a quickkey not an integer', 'refused', L => { ck1(L)[0].key = 'e'; });
   lay('grey not a boolean', 'refused', L => { ck1(L)[2].grey = 1; });
   lay('hidden not a boolean', 'refused', L => { ck1(L)[2].hidden = null; });
   lay('a player_side key is read past', 'accepted', L => { L.player_side = 5; });
@@ -512,6 +565,7 @@ function castingOut(C) {
     const o = { type: k.type, title: k.title, fx, fz };
     for (const n of ['buildTime', 'workerTime', 'buildDistance', 'maxVelocity', 'extracts', 'energyMake']) o[n] = k[n] ?? 0;
     return { ...o, canstop: (k.canstop & 1) === 1 ? 1 : 0, activatewhenbuilt: (k.activatewhenbuilt & 1) === 1 ? 1 : 0,
+      canreclamate: (k.canreclamate & 1) === 1 ? 1 : 0,
       vent: k.vent ? 1 : 0, g,
       builds: (k.builds || []).reduce((m, b) => m | (1 << WikiSim.CASTS.indexOf(b)), 0) };
   });
@@ -660,7 +714,8 @@ try {
   /* ---- the build trip's constants ---- */
   {
     const c = JSON.parse(wikitest(['constants']));
-    const j = { TRIP: WikiSim.TRIP, TRIP_DOWN: WikiSim.TRIP_DOWN, TRIP_UP: WikiSim.TRIP_UP, TRIP_ROWS: WikiSim.TRIP_ROWS };
+    const j = { TRIP: WikiSim.TRIP, TRIP_DOWN: WikiSim.TRIP_DOWN, TRIP_UP: WikiSim.TRIP_UP, PICK: WikiSim.PICK,
+      PICK_DOWN: WikiSim.PICK_DOWN, PICK_UP: WikiSim.PICK_UP, TRIP_ROWS: WikiSim.TRIP_ROWS };
     const d = diff(c, j, '');
     cases++;
     if (d) { failed++; console.log(`DIFFER the build trip's constants: ${d.at}: C ${show(d.c)}, sim.js ${show(d.j)}`); }

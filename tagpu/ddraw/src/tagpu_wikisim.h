@@ -72,6 +72,17 @@
 
 typedef struct { int glide, hold, gap, back, hover; } WIKITRIPROW;
 
+/* THE PICK TRIP, sim.js's PICK, PICK_DOWN and PICK_UP: a scripted `pick` of a kind at tick t is
+   the glide to the popup's row of that kind, its press at t + WIKI_PICK_DOWN and release at
+   t + WIKI_PICK_UP, and the glide back, WIKI_PICK ticks whatever the layout; the row is where the
+   popup stands when the pick is fed. A `reclaim` is the build trip's to RECLAIM (WIKI_TRIP). */
+#define WIKI_PICK       60
+#define WIKI_PICK_DOWN  20
+#define WIKI_PICK_UP    26
+
+/* the lock of a RECLAIM the layout cannot reach: WIKIVIEW.locked and the hash name it "RECLAIM" */
+#define WIKI_LOCK_RECLAIM (-2)
+
 /* THE NANO SPRAY (research/notes/ingame-wiki-cob-plan.md, L4a): the engine's nano particles
    (0x4720D0 forward for a build, 0x472200 reverse for a reclaim; their class 0x4FD5B8) as the
    wiki's simulation state. A builder whose work is credited this tick asks its script's
@@ -192,9 +203,9 @@ enum { WIKI_SND_SELECT = 1, WIKI_SND_ACTIVATE = 3, WIKI_SND_DEACTIVATE = 4, WIKI
    same list. */
 enum { WIKI_SNDNAME_MULTI, WIKI_SNDNAME_OKTOBUILD, WIKI_SNDNAME_NOTOKTOBUILD, WIKI_SNDNAME_ADDBUILD,
        WIKI_SNDNAME_BUILDBUTTON, WIKI_SNDNAME_ORDERSBUTTON, WIKI_SNDNAME_NEXTBUILDMENU,
-       WIKI_SNDNAME_IMMEDIATE, WIKI_SNDNAME_OPTIONS, WIKI_NSNDNAME };
+       WIKI_SNDNAME_IMMEDIATE, WIKI_SNDNAME_OPTIONS, WIKI_SNDNAME_SPECIAL, WIKI_NSNDNAME };
 #define WIKI_SNDNAME_STRINGS { "SelectMultipleUnits", "oktobuild", "notoktobuild", "addbuild", "buildbutton", \
-                               "ordersbutton", "nextbuildmenu", "immediateorders", "Options" }
+                               "ordersbutton", "nextbuildmenu", "immediateorders", "Options", "specialorders" }
 
 /* A unit type's sounds as the simulation needs them: its sounds.tdf category (-1 none) and, per
    kind, the variant count the engine reads at rec + 0x40 + 12 x kind. */
@@ -230,9 +241,20 @@ typedef struct {
                                        sim.js's order object, whose identity a COB work rests on */
     int    type;                    /* BUILD: the building's type */
     int    ox, oz;                  /* BUILD: its footprint's first cell */
-    double x, z;                    /* MOVE: where to */
-    char   target[WIKI_ID_MAX];     /* RECLAIM, GUARD: the unit's id */
+    double x, z;                    /* MOVE: where to; a feature's RECLAIM: its centre */
+    int    feat;                    /* RECLAIM: the target is a feature, `target` its id */
+    char   target[WIKI_ID_MAX];     /* RECLAIM, GUARD: the unit's id, or the feature's */
 } WIKIORDER;
+
+/* A FEATURE STANDING on the map, sim.js's feats: its id, its row of the entry's table and that
+   row's figures, its anchor cell and its centre */
+typedef struct {
+    char   id[WIKI_ID_MAX];
+    int    def;
+    int    ox, oz, fx, fz;
+    double x, z, metal, energy;
+    int    height, blocking, reclaimable;
+} WIKIFEAT;
 
 /* a rect in world units; the movement's bodies (tagpu_wikisim.c, MOVEMENT) */
 typedef struct { double x0, z0, x1, z1; } WIKIRECT;
@@ -279,6 +301,11 @@ typedef struct WIKIUNIT {
     int              spray, spray_type, spray_at;
     double           spray_x, spray_z;
     char             spray_id[WIKI_ID_MAX], spray_on[WIKI_ID_MAX];
+    int              spray_box[5];      /* a feature's spray: its ox, oz, fx, fz and height */
+    /* a feature's reclaim (0x404AD0): the serial of the order it is for (0 none), its countdown,
+       the tick of its next working call and whether it paid out; and whether `work` names a
+       feature */
+    int              rc_serial, rc_c, rc_next, rc_paid, work_feat;
     /* the sound's triggers: the serial of the order whose first run said ok (0 none), of the order
        whose reclaim said working, of the order whose taken site said cant, whether the job
        credited this tick was a build that finished, and ACTIVATION as the last notice saw it */
@@ -313,9 +340,39 @@ typedef struct { int kind, type, ox, oz, ok; } WIKIHOVER;
    the packet's alone and writes no engine cursor (tagpu_resource.c); a building armed from the
    build menu, cursornormal again, because 0x499200 calls the build cursor 0x4197D0 instead of
    choosing one and the click on the menu installed cursornormal. */
-enum { WIKI_CURSOR_ARROW, WIKI_CURSOR_MOVE, WIKI_CURSOR_BUILD };
+/* With reclaim armed it is cursorreclamate over the map, RECLAIM; sim.js's reclaimCursor says where
+   it is the arrow instead. */
+enum { WIKI_CURSOR_ARROW, WIKI_CURSOR_MOVE, WIKI_CURSOR_BUILD, WIKI_CURSOR_RECLAIM };
 
 /* ---- the view: what the stage draws, sim.js's view() field for field ---- */
+
+/* a feature standing, sim.js's view.feats: its id (the sim's), its row of the entry's table, its
+   anchor cell, footprint and amounts */
+typedef struct {
+    const char* id;
+    int         def, ox, oz, fx, fz;
+    double      metal, energy;
+} WIKIVFEAT;
+
+/* THE SWEEP as tagpu_sweep_fill publishes it, sim.js's view.reclaim: while reclaim is armed, the
+   kind; during a drag past the threshold the ring (whole world units), its targets as indices into
+   the view's feat in the ring's order, and the readout's counts and sums (a feature with metal is
+   a wreck, one with energy alone a tree); otherwise the feature under the pointer the kind takes,
+   bracketed (an index into feat, -1 none); and the popup, its rows and its tongue in the stage's
+   coordinates (x from the map's left edge, z the column's row), with the row under the pointer
+   (-1 none) */
+typedef struct {
+    int    kind;                    /* WIKI_KIND_* */
+    int    has_ring, ring_x, ring_z, ring_r;
+    int    ntarget;
+    int    target[WIKI_FEATS_MAX];
+    int    wrecks, trees;
+    double metal, energy;
+    int    hover;
+    int    has_popup;
+    int    rect[4], rows[WIKI_NKINDS][4], tongue[4];
+    int    hot;
+} WIKIVSWEEP;
 
 typedef struct {
     const char* id;
@@ -405,12 +462,20 @@ typedef struct {
                                        event i is the (snd_total - nsnd + i)-th from 0         */
     const WIKISNDEV* snd;
     int              mode;          /* the armed type, or -1: contextual */
+    int              rmode;         /* reclaim is armed (mode is -1 then): sweep is the view's */
+    WIKIVSWEEP       sweep;
+    int              nfeat;         /* the features standing, in the scene's order */
+    const WIKIVFEAT* feat;
+    int              ngone;         /* the anchor cells of the features reclaimed so far, in order:
+                                       gone[2k], gone[2k + 1] */
+    const int*       gone;
     int              has_side;      /* the sidebar is on: side is the view's */
     WIKIVSIDE        side;
     int              locked;        /* the type the demo stopped on, with the sidebar or without,
                                        or -1 while it plays: a scripted build the layout cannot
                                        reach, or a scene unit or a build of a cast the casting
-                                       leaves unbound */
+                                       leaves unbound; WIKI_LOCK_RECLAIM for a scripted reclaim
+                                       or pick the layout cannot reach */
 } WIKIVIEW;
 
 /* The context a sim is made for, sim.js's ctx. tagpu_wikisim_init refuses an iface other than 0
@@ -476,6 +541,16 @@ typedef struct {
     int              shift_placed;
     int              spacing[WIKI_MAX_DEFS];
     WIKIPLACE        place;
+    /* the reclaim sweep: armed (main+0x2CC3 == 12, exclusive with a building armed), its kind, and
+       its gesture -- the press point, the last point over the map, past the threshold or not */
+    int              rmode, kind, has_rg, rg_drag;
+    double           rg_x0, rg_z0, rg_x1, rg_z1;
+
+    /* the features standing, sim.js's feats, in the scene's order; the anchor cells of those
+       reclaimed, gone[2k], gone[2k + 1]; both at most WIKI_FEATS_MAX */
+    WIKIFEAT*        feat;
+    int              nfeat, ngone;
+    int*             gone;
 
     /* the script: the demo's inputs resolved at `iface` (each action its button) into `resolved`,
        the sim's own copy, then ordered by tick, file order breaking ties */
@@ -550,6 +625,7 @@ typedef struct {
     WIKIVLINE*       vline;
     WIKIVSITE        vsite[PLACE_MAX_SITES];
     WIKISNDEV        vsnd[WIKI_SND_LOG];
+    WIKIVFEAT        vfeat[WIKI_FEATS_MAX];
     int              cvunit, cvqueued, cvline;
     /* the movement's scratch: one unit's bodies (two a unit: its own and a claim, and the site it
        heads for) and the walking
@@ -579,6 +655,11 @@ typedef struct {
    it alive and unwritten as long as the sim. The sidebar is on when `lay` is given and, for play, the
    demo's `sidebar` says so, by default (and always for create) when the scene gives the player a
    mobile builder (owner 0, MaxVelocity > 0, WorkerTime > 0).
+
+   THE FEATURES (sim.js's): the entry's scene's, then the demo's, each named by its id or f<k + 1>
+   for the k-th, refused when its footprint leaves the scene's map, overlaps another feature or its
+   id is taken. A blocking one stands in the way of a unit's walk, a scene unit's spread and a site;
+   a scene structure overlapping any feature refuses the scene.
 
    `ctx` is the context (WIKISIMCTX); NULL is sim.js's absent ctx: side 0, no casting, Interface
    Type 1, the interface the demos are authored in.
@@ -641,7 +722,8 @@ int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
         hx, hz (its facing), selected (0 or 1), built, reclaimed, label; then the orders
         tagpu_wikisim_orders answers for its id: their count, and each one's kind
         (WIKI_ORDER_*), then for a move x, z (doubles), for a build the type name and ox, oz,
-        for a reclaim or a guard the target id;
+        for a guard the target id, for a reclaim the target id and 1 with the feature's centre
+        x, z (doubles) for a feature, or 0 for a unit;
      4. the ghost: 1 and its type name, x, z (doubles) and ok (0 or 1), or 0;
      5. the gesture's sites: the shape (PLACE_*, PLACE_NONE without sites), the count, and each
         site's x, z (doubles) and state (WIKI_SITE_*);
@@ -664,9 +746,13 @@ int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
         name and priority, then the events made since the sim was made (a count) and the last
         min(that count, WIKI_SND_LOG) of them, oldest first, each one's tick, kind, name, category
         and variant, then each unit's 1 when its first order's taken site has said cant, else 0, in
-        the view's order; or 0 alone without a source.
+        the view's order; or 0 alone without a source;
+    11. the features standing: their count and each one's id, its table row's name and its anchor
+        cell ox, oz; the gone count and each cell's ox, oz; then 1 when reclaim is armed, its kind
+        (WIKI_KIND_*) and the ring: 1 and its x, z and r, or 0; or 0 alone.
    The view's other fields follow from these: queued sites and order lines from the units and
-   their orders, the cursor's shape from the mode and the selection, a site's order number from
+   their orders, the cursor's shape from the mode and the selection, the sweep's targets, readout,
+   hover and popup from the features, the ring and the cursor, a site's order number from
    the states, footprints from the types, the pace from the entry. The tick the cursor's shape
    began is history rather than state, and is left out. */
 uint64_t tagpu_wikisim_hash(const WIKISIM* s);

@@ -179,7 +179,7 @@ const WikiSim = (() => {
      footprint [fx, fz] cells, 1..FEAT_FOOT (the reach a feature's centre has from its anchor, tagpu_sweep.c FOOT_MAX);
      metal and energy (FeatureDef +0xF0 and +0xEC), at least 0 and below FEAT_AMOUNT; height (+0xFA), 0..255;
      blocking and reclaimable (+0xFE bit 7) as booleans. Every bound is one tagpu_wikidata.c holds. */
-  const FEAT_FOOT = 16, FEAT_AMOUNT = 1e7, FEATS_MAX = 256;
+  const FEAT_FOOT = 16, FEAT_AMOUNT = 1e7, FEATS_MAX = 256, FEAT_DEFS = 64;
   function checkFeature(n, d) {
     const at = `feature ${n}`;
     if (!fitsIn(n, 32) || !n.length) throw new Error(`${at}: the name is not 1 to 31 bytes`);
@@ -347,8 +347,12 @@ const WikiSim = (() => {
     return idx.sort((a, b) => d[a] - d[b] || t[a].z - t[b].z || t[a].x - t[b].x || a - b);
   }
   /* the ticks a Reclaim order works on a feature, 2 a working call: the handler 0x404AD0 sets the countdown to
-     trunc(15 + (energy + metal) / 2) and takes 2 off it a call; no worker-time term enters it */
-  const reclaimCountdown = (energy, metal) => Math.floor(15 + ((energy > 0 ? energy : 0) + (metal > 0 ? metal : 0)) / 2);
+     trunc(15 + (energy + metal) / 2) and takes 2 off it a call; no worker-time term enters it. The amounts are the
+     FeatureDef's floats (+0xEC, +0xF0), as tagpu_sweepgeo.c's sweep_reclaim_ticks takes them */
+  const reclaimCountdown = (energy, metal) => {
+    const e = Math.fround(energy), m = Math.fround(metal);
+    return Math.floor(15 + ((e > 0 ? e : 0) + (m > 0 ? m : 0)) / 2);
+  };
   const sweepReclaimTicks = (energy, metal) => 2 * Math.ceil(reclaimCountdown(energy, metal) / 2);
   /* the split: until no target is left or no builder can take one, the builder with the least load that has room and
      can reach a remaining target (ties: lowest index) takes the remaining target nearest its point; its load grows by
@@ -503,7 +507,10 @@ const WikiSim = (() => {
        place a map's. A blocking one stands in the way as a structure does; a reclaimable one is a reclaim's target, and
        goes when its reclaim pays out (FeatureDie at 0x423965). The stage draws them from its description; the view
        names the ones still standing. ---- */
-    const FD = obj(entry.features) ? entry.features : {};
+    if ('features' in entry && !obj(entry.features)) throw new Error('the entry\'s features is not an object');
+    const FD = entry.features || {};
+    // FEAT_DEFS: tagpu_wikidata.c's table of an entry's features
+    if (Object.keys(FD).length > FEAT_DEFS) throw new Error(`the entry has more than ${FEAT_DEFS} features`);
     for (const [n, d] of Object.entries(FD)) checkFeature(n, d);
     if (S.features.length > FEATS_MAX) throw new Error(`the scene has more than ${FEATS_MAX} features`);
     // gone: the anchor cells of the features reclaimed so far, in order, which the game look's image no longer draws
@@ -513,7 +520,7 @@ const WikiSim = (() => {
       if (!obj(f) || typeof f.name !== 'string' || !own(FD, f.name)) throw new Error(`${at} names no feature of the entry`);
       if (!Array.isArray(f.at) || f.at.length !== 2 || !f.at.every(int)) throw new Error(`${at}: at is not an anchor cell`);
       const d = FD[f.name], [fx, fz] = d.footprint, [ox, oz] = f.at, id = f.id ?? `f${k + 1}`;
-      if (typeof id !== 'string' || !fitsIn(id, 32) || feats.some(g => g.id === id)) throw new Error(`${at}: the id is not a new name`);
+      if (typeof id !== 'string' || !fitsIn(id, ID_MAX) || feats.some(g => g.id === id)) throw new Error(`${at}: the id is not a new name`);
       if (ox < 0 || oz < 0 || ox + fx > W || oz + fz > SH) throw new Error(`${at} is not on the map`);
       const g = { id, name: f.name, ox, oz, fx, fz, x: (ox + fx / 2) * CELL, z: (oz + fz / 2) * CELL, metal: d.metal || 0,
         energy: d.energy || 0, height: d.height || 0, blocking: !!d.blocking, reclaimable: !!d.reclaimable };
@@ -938,7 +945,8 @@ const WikiSim = (() => {
        or EnergyMake that fits wins, the first in definition order on a tie; between a mex and a geothermal plant, the
        one whose centre is nearer the cursor. */
     function quickChoice(shift) {
-      if (st.mode || st.held.has('alt')) return null;
+      // Quick Build offers in the contextual mode only, main+0x2CC3 == 1 (tagpu_resource.c's gate): not with reclaim armed
+      if (st.mode || st.rmode || st.held.has('alt')) return null;
       const { x, z } = mapCursor(), target = unitAt(x, z);
       let desired = null, old = 0;
       if (target) {
@@ -1284,11 +1292,12 @@ const WikiSim = (() => {
       let issued = 0;
       if (targets.length) {
         const ins = bs.map(u => {
-          const d = def(u.type), b = { x: u.x, z: u.z, speed: d.maxVelocity, reach: d.buildDistance || 0, load: 0, room: 0 };
-          let px = u.x, pz = u.z;
+          // the game's builder_inputs reads every position in whole world units, a 16.16 word >> 16
+          const d = def(u.type), b = { x: Math.floor(u.x), z: Math.floor(u.z), speed: d.maxVelocity, reach: d.buildDistance || 0, load: 0, room: 0 };
+          let px = b.x, pz = b.z;
           for (const o of u.orders) {
             const p = orderPoint(o);
-            if (p) { b.x = p.x; b.z = p.z; }
+            if (p) { b.x = Math.floor(p.x); b.z = Math.floor(p.z); }
             const f = o.k === 'reclaim' && o.feat !== undefined ? featById(o.feat) : null;
             if (f) {
               const dd = Math.sqrt(sq(f.x - px) + sq(f.z - pz));
@@ -2292,8 +2301,9 @@ const WikiSim = (() => {
         if (!o || o.k !== 'guard' || u.evacuated) continue;
         const g = byId(o.target);
         if (!g) { u.orders.shift(); continue; }
+        // a guarded unit reclaiming a feature is followed: the wiki's guard helps only a structure's work
         const j = jobs.get(g);
-        if (j) { if (reach(o, u, j.s.type, j.s.ox, j.s.oz)) credit(u, j.s, j.how); }
+        if (j && j.how !== 'feature') { if (reach(o, u, j.s.type, j.s.ox, j.s.oz)) credit(u, j.s, j.how); }
         else go(u, toUnit(o, g));
       }
       for (const [s, w] of work) {
@@ -2379,6 +2389,12 @@ const WikiSim = (() => {
       if (!(int(e.max) && e.max >= 1 && e.max <= UNTIL_MAX)) throw new Error(`${at} has no max of 1 to ${UNTIL_MAX} ticks`);
       if (!Object.keys(e).every(k => k === 'at' || k === 'until' || k === 'max')) throw new Error(`${at} carries another input`);
       if (script.some(f => f !== e && f.at === e.at)) throw new Error(`${at} shares its tick with another input`);
+    }
+    /* THE DATA RULE OF A RECLAIM AND A PICK, refused here as tagpu_wikidata.c refuses it whatever plays the demo:
+       `reclaim` is true and `pick` one of KINDS (checkTrips holds the trips' ticks with the sidebar on) */
+    for (const e of script) {
+      if ('reclaim' in e && e.reclaim !== true) throw new Error(`demo ${demo.id}: the reclaim at tick ${e.at} is not true`);
+      if ('pick' in e && !KINDS.includes(e.pick)) throw new Error(`demo ${demo.id}: the pick at tick ${e.at} names no kind`);
     }
     /* THE DEMO'S CLOCK: the tick its inputs, its trips and its end are written in. It runs with the sim's own tick
        except while a wait holds it (wait: {until, max, from}, from the tick it began); a wait that runs past its max

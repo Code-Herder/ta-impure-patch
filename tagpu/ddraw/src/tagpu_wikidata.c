@@ -11,8 +11,10 @@
 #define TREE_MAX      1024  /* nodes of the tree */
 
 /* sim.js's KEYS then ACTIONS, in WIKI_KEY_* and WIKI_ACT_* order */
-static const char* const KEY_NAMES[WIKI_NKEYNAMES] = { "shift", "alt", "ctrl", "z", "x", "lmb", "rmb",
+static const char* const KEY_NAMES[WIKI_NKEYNAMES] = { "shift", "alt", "ctrl", "z", "x", "e", "lmb", "rmb",
                                                        "select", "order", "cancel" };
+/* sim.js's KINDS, in WIKI_KIND_* order */
+static const char* const KIND_NAMES[WIKI_NKINDS] = { "metal", "energy", "all" };
 /* sim.js's and text.js's CASTS, in WIKI_CAST_* order */
 static const char* const CAST_NAMES[WIKI_NCAST] = { "builder", "advbuilder", "mex", "moho", "geo",
                                                     "walker", "tower", "wall", "solar" };
@@ -25,6 +27,20 @@ const char* tagpu_wikidata_key_name(int key)
 const char* tagpu_wikidata_cast_name(int cast)
 {
     return cast >= 0 && cast < WIKI_NCAST ? CAST_NAMES[cast] : NULL;
+}
+
+const char* tagpu_wikidata_kind_name(int kind)
+{
+    return kind >= 0 && kind < WIKI_NKINDS ? KIND_NAMES[kind] : NULL;
+}
+
+/* a sweep kind by name, or -1 */
+static int kind_of(const char* s)
+{
+    int k;
+    for (k = 0; s && k < WIKI_NKINDS; k++)
+        if (!strcmp(KIND_NAMES[k], s)) return k;
+    return -1;
 }
 
 int tagpu_wikidata_button(int key, int iface)
@@ -61,6 +77,14 @@ int tagpu_wikidata_def(const WIKIENTRY* e, const char* name)
     int i;
     for (i = 0; i < e->ndef; i++)
         if (!strcmp(e->def[i].name, name)) return i;
+    return -1;
+}
+
+int tagpu_wikidata_feat(const WIKIENTRY* e, const char* name)
+{
+    int i;
+    for (i = 0; name && i < e->nfeat; i++)
+        if (!strcmp(e->feat[i].name, name)) return i;
     return -1;
 }
 
@@ -180,7 +204,7 @@ static int key_of(R* r, const TJV* v, int* key)
     return refuse(r, "no key", s);
 }
 
-/* An FBI flag (canstop, activatewhenbuilt) as sim.js reads it, `(v & 1) === 1`: a number whose
+/* An FBI flag (canstop, canreclamate, activatewhenbuilt) as sim.js reads it, `(v & 1) === 1`: a number whose
    integer part is odd, or true, is 1; absent, null or false is 0. JS's `&` takes the integer part
    modulo 2^32, which keeps its parity. Anything else (a string JS would coerce) is refused. */
 static int fbi_flag(R* r, const TJV* v, const char* key, int* out)
@@ -254,6 +278,7 @@ static int defs(R* r, WIKIENTRY* e, const TJV* units)
             return refuse(r, why, NULL);
         }
         if (!fbi_flag(r, tj_get(u, "canstop"), "canstop", &d->canstop)) return 0;
+        if (!fbi_flag(r, tj_get(u, "canreclamate"), "canreclamate", &d->canreclamate)) return 0;
         if (!fbi_flag(r, tj_get(u, "activatewhenbuilt"), "activatewhenbuilt", &d->activate_when_built)) return 0;
         if (!(d->build_time > 0)) return refuse(r, "no positive buildTime for", d->name);
     }
@@ -265,6 +290,69 @@ static int defs(R* r, WIKIENTRY* e, const TJV* units)
             int k = b->type == TJ_STR ? tagpu_wikidata_def(e, b->str) : -1;
             if (k >= 0) e->def[i].builds |= (uint64_t)1 << k;
         }
+    }
+    return 1;
+}
+
+/* THE ENTRY'S FEATURES, sim.js's checkFeature over each row of `features`, an object (absent: none)
+   of at most WIKI_FEAT_DEFS rows; an absent figure reads 0 and an absent flag false. The `from`
+   key and any other the schema does not name are read past. */
+static int features(R* r, WIKIENTRY* e, const TJV* v)
+{
+    const TJV* f;
+    int i = 0;
+    if (!v) return !!(e->feat = (WIKIFEATDEF*)zalloc(r, 0, sizeof *e->feat));
+    if (!tj_is(v, TJ_OBJ)) return refuse(r, "features is not an object", NULL);
+    if (v->n > WIKI_FEAT_DEFS) return refuse(r, "has more than 64 features", NULL);
+    if (!(e->feat = (WIKIFEATDEF*)zalloc(r, (size_t)(e->nfeat = v->n), sizeof *e->feat))) return 0;
+    for (f = v->first; f; f = f->next, i++) {
+        WIKIFEATDEF* d = &e->feat[i];
+        const TJV *fp = tj_get(f, "footprint"), *k;
+        static const char* const AMOUNT[2] = { "metal", "energy" };
+        static const char* const FLAG[2] = { "blocking", "reclaimable" };
+        int j;
+        /* THE BOUND: the name and its terminator fit WIKIFEATDEF.name */
+        if (!*f->key || strlen(f->key) >= sizeof d->name) return refuse(r, "a feature's name is not 1 to 31 bytes:", f->key);
+        for (j = 0; j < i; j++)
+            if (!strcmp(e->feat[j].name, f->key)) return refuse(r, "names a feature twice:", f->key);
+        strcpy(d->name, f->key);
+        if (!tj_is(f, TJ_OBJ) || !tj_is(fp, TJ_ARR) || fp->n != 2
+            || !integer(r, tj_at(fp, 0), 1, WIKI_FEAT_FOOT, &d->fx, "a feature's footprint")
+            || !integer(r, tj_at(fp, 1), 1, WIKI_FEAT_FOOT, &d->fz, "a feature's footprint"))
+            return refuse(r, "a feature's footprint is not two integers 1..16:", d->name);
+        for (j = 0; j < 2; j++) {
+            double* out = j ? &d->energy : &d->metal;
+            if (!(k = tj_get(f, AMOUNT[j]))) continue;
+            if (!tj_is(k, TJ_NUM) || !(k->num >= 0 && k->num < WIKI_FEAT_AMOUNT))
+                return refuse(r, "a feature's metal or energy is not 0..1e7:", d->name);
+            *out = k->num;
+        }
+        if ((k = tj_get(f, "height")) && !integer(r, k, 0, 255, &d->height, "a feature's height")) return 0;
+        for (j = 0; j < 2; j++) {
+            int* out = j ? &d->reclaimable : &d->blocking;
+            if (!(k = tj_get(f, FLAG[j]))) continue;
+            if (!tj_is(k, TJ_TRUE) && !tj_is(k, TJ_FALSE)) return refuse(r, "a feature's flag is not a boolean:", d->name);
+            *out = tj_is(k, TJ_TRUE);
+        }
+    }
+    return 1;
+}
+
+/* a scene's feature: its table row by name and its anchor cell; sim.js refuses one off the map, over
+   another or with an id already taken as it lays the scene out, which tagpu_wikisim_init does too */
+static int scene_feat(R* r, const TJV* v, WIKISCENEFEAT* f)
+{
+    const TJV *at = tj_get(v, "at"), *id = tj_get(v, "id");
+    if (!tj_is(v, TJ_OBJ) || (f->def = tagpu_wikidata_feat(r->e, tj_str(tj_get(v, "name"), NULL))) < 0)
+        return refuse(r, "a scene's feature names no feature of the entry", NULL);
+    if (!tj_is(at, TJ_ARR) || at->n != 2 || !integer(r, tj_at(at, 0), -1000000, 1000000, &f->ox, "a feature's anchor")
+        || !integer(r, tj_at(at, 1), -1000000, 1000000, &f->oz, "a feature's anchor"))
+        return refuse(r, "a scene's feature has no anchor cell", NULL);
+    /* sim.js: `f.id ?? f${k + 1}`, a string of 1..23 bytes; the sim names an absent one */
+    if (id && !tj_is(id, TJ_NULL)) {
+        if (!tj_is(id, TJ_STR) || strlen(id->str) >= sizeof f->id) return refuse(r, "a feature's id is not a name of at most 23 bytes", NULL);
+        strcpy(f->id, id->str);
+        if (!f->id[0]) return refuse(r, "a feature's id is empty", NULL);
     }
     return 1;
 }
@@ -315,7 +403,9 @@ static int scene(R* r, const TJV* v, WIKISCENE* s, int entry)
     s->nvent = count(tj_get(v, "vents"));
     s->nfog = count(tj_get(v, "fog"));
     s->nunit = count(tj_get(v, "units"));
-    if (!(s->metal = (WIKIMETAL*)zalloc(r, (size_t)s->nmetal, sizeof *s->metal))
+    s->nfeat = count(tj_get(v, "features"));
+    if (!(s->feat = (WIKISCENEFEAT*)zalloc(r, (size_t)s->nfeat, sizeof *s->feat))
+        || !(s->metal = (WIKIMETAL*)zalloc(r, (size_t)s->nmetal, sizeof *s->metal))
         || !(s->vent = (WIKIPOINT*)zalloc(r, (size_t)s->nvent, sizeof *s->vent))
         || !(s->fog = (WIKIFOG*)zalloc(r, (size_t)s->nfog, sizeof *s->fog))
         || !(s->unit = (WIKISCENEUNIT*)zalloc(r, (size_t)s->nunit, sizeof *s->unit)))
@@ -335,6 +425,12 @@ static int scene(R* r, const TJV* v, WIKISCENE* s, int entry)
     }
     for (c = tj_is(tj_get(v, "units"), TJ_ARR) ? tj_get(v, "units")->first : NULL, i = 0; c; c = c->next, i++)
         if (!scene_unit(r, c, &s->unit[i])) return 0;
+    for (c = tj_is(tj_get(v, "features"), TJ_ARR) ? tj_get(v, "features")->first : NULL, i = 0; c; c = c->next, i++)
+        if (!scene_feat(r, c, &s->feat[i])) return 0;
+    /* `kind` replaces the entry's when given, the mockup's `??`; sim.js refuses one not of KINDS */
+    c = tj_get(v, "kind");
+    if ((s->has_kind = c && !tj_is(c, TJ_NULL)) && (s->kind = kind_of(tj_str(c, NULL))) < 0)
+        return refuse(r, "a scene's reclaim kind is not one of metal, energy, all", NULL);
     /* `selected` and `cursor` replace the entry's when given: the mockup's `??`, so null is absent */
     c = tj_get(v, "selected");
     if ((s->has_selected = c && !tj_is(c, TJ_NULL)) && !strings(r, c, &s->selected, &s->nselected)) return 0;
@@ -382,7 +478,9 @@ static int input(R* r, const TJV* v, WIKIINPUT* in)
     in->build = -1;
     in->at = tj_num(tj_get(v, "at"), 0);
     for (c = tj_is(v, TJ_OBJ) ? v->first : NULL; c; c = c->next)
-        if (strcmp(c->key, "at") && strcmp(c->key, "caption") && strcmp(c->key, "build")) in->extra = 1;
+        if (strcmp(c->key, "at") && strcmp(c->key, "caption") && strcmp(c->key, "build") && strcmp(c->key, "reclaim")
+            && strcmp(c->key, "pick"))
+            in->extra = 1;
     if (tj_get(v, "caption")) {
         in->has |= WIKI_IN_CAPTION;
         in->caption = text_or_null(tj_get(v, "caption"));
@@ -390,6 +488,16 @@ static int input(R* r, const TJV* v, WIKIINPUT* in)
     if ((c = tj_get(v, "build"))) {
         in->has |= WIKI_IN_BUILD;
         if (text_or_null(c) && !type_of(r, c, &in->build)) return 0;
+    }
+    /* sim.js's data rule of a reclaim and a pick, refused whatever plays the demo: `reclaim` is
+       true, `pick` one of KINDS */
+    if ((c = tj_get(v, "reclaim"))) {
+        if (!tj_is(c, TJ_TRUE)) return refuse(r, "a reclaim is not true", NULL);
+        in->has |= WIKI_IN_RECLAIM;
+    }
+    if ((c = tj_get(v, "pick"))) {
+        if ((in->pick = kind_of(tj_str(c, NULL))) < 0) return refuse(r, "a pick names no kind", NULL);
+        in->has |= WIKI_IN_PICK;
     }
     if ((c = tj_get(v, "move")) && !tj_is(c, TJ_NULL)) {
         in->has |= WIKI_IN_MOVE;
@@ -461,6 +569,7 @@ static void scene_free(WIKISCENE* s)
 {
     int i;
     for (i = 0; s->unit && i < s->nunit; i++) free(s->unit[i].move);
+    free(s->feat);
     free(s->metal);
     free(s->vent);
     free(s->fog);
@@ -479,6 +588,7 @@ void tagpu_wikidata_entry_free(WIKIENTRY* e)
     for (i = 0; e->scenes && i < e->nscene; i++) scene_free(&e->scenes[i]);
     free(e->scenes);
     free(e->def);
+    free(e->feat);
     free((void*)e->text);
     free((void*)e->locked_in);
     if (e->doc) tagpu_json_free(e->doc);
@@ -664,6 +774,7 @@ int tagpu_wikidata_entry(WIKIENTRY* e, const char* text, size_t len, char* err, 
     else if (!strings(&r, tj_get(root, "text"), &e->text, &e->ntext)) {}
     else if (!strings(&r, tj_get(root, "lockedIn"), &e->locked_in, &e->nlocked)) {}
     else if (!defs(&r, e, tj_get(root, "units"))) {}
+    else if (!features(&r, e, tj_get(root, "features"))) {}
     else if (!scenes(&r, e, tj_get(root, "scenes"))) {}
     else if (!(e->demo = (WIKIDEMO*)zalloc(&r, (size_t)(e->ndemo = count(tj_get(root, "demos"))), sizeof *e->demo))) {}
     else
@@ -728,11 +839,20 @@ int tagpu_wikidata_buttons(const WIKIDEMO* d, int iface, char* err, size_t errn)
     return ok;
 }
 
+#define TRIPS_IN (WIKI_IN_BUILD | WIKI_IN_RECLAIM | WIKI_IN_PICK)
+
+/* the trip an input is, sim.js's `what`: the first of build, reclaim and pick it carries */
+static const char* trip_what(const WIKIINPUT* e)
+{
+    return (e->has & WIKI_IN_BUILD) ? "build" : (e->has & WIKI_IN_RECLAIM) ? "reclaim" : "pick";
+}
+
 static int trip_no(char* err, size_t errn, const WIKIDEMO* d, const WIKIINPUT* e, const char* what)
 {
     char num[32];
     if (err && errn)
-        snprintf(err, errn, "wiki demo %s: the build at tick %s %s", d->id ? d->id : "?", jsnum(num, sizeof num, e->at), what);
+        snprintf(err, errn, "wiki demo %s: the %s at tick %s %s", d->id ? d->id : "?", trip_what(e),
+                 jsnum(num, sizeof num, e->at), what);
     return 0;
 }
 
@@ -744,19 +864,22 @@ int tagpu_wikidata_trips(const WIKIDEMO* d, int iface, char* err, size_t errn)
     if (!in) return 0;
     for (i = 0; ok && i < d->ninput; i++) {
         const WIKIINPUT* e = in[i];
-        if (e->has & WIKI_IN_BUILD) {
+        if (e->has & TRIPS_IN) {
+            const unsigned what = (e->has & WIKI_IN_BUILD) ? WIKI_IN_BUILD : (e->has & WIKI_IN_RECLAIM) ? WIKI_IN_RECLAIM : WIKI_IN_PICK;
+            const int span = what == WIKI_IN_PICK ? WIKI_PICK : WIKI_TRIP;
             /* the inputs after it in the simulation's order are those of its tick fed after it
                and those of later ticks, so the first one past its trip ends the search */
-            for (j = i + 1; j < d->ninput && in[j]->at < e->at + WIKI_TRIP; j++)
-                if ((in[j]->has & WIKI_IN_BUILD) || in[j]->extra) break;
-            /* the game has no button that arms nothing: a demo disarms with a right-click */
-            if (e->build < 0) ok = trip_no(err, errn, d, e, "names no type");
-            else if (e->extra) ok = trip_no(err, errn, d, e, "carries another input");
+            for (j = i + 1; j < d->ninput && in[j]->at < e->at + span; j++)
+                if ((in[j]->has & TRIPS_IN) || in[j]->extra) break;
+            /* the game has no button that arms nothing: a demo disarms with a right-click; a reclaim
+               and a pick were held to `true` and to a kind by the loader */
+            if (what == WIKI_IN_BUILD && e->build < 0) ok = trip_no(err, errn, d, e, "names no type");
+            else if (e->extra || (e->has & TRIPS_IN & ~what)) ok = trip_no(err, errn, d, e, "carries another input");
             /* the trip presses the left button itself */
             else if (lmb) ok = trip_no(err, errn, d, e, "starts with the left button held");
-            else if (j < d->ninput && in[j]->at < e->at + WIKI_TRIP)
+            else if (j < d->ninput && in[j]->at < e->at + span)
                 ok = trip_no(err, errn, d, e, "has another input standing in its trip");
-            else if (!(end >= e->at + WIKI_TRIP)) ok = trip_no(err, errn, d, e, "has the demo end inside its trip");
+            else if (!(end >= e->at + span)) ok = trip_no(err, errn, d, e, "has the demo end inside its trip");
         }
         if (tagpu_wikidata_button(e->down, iface) == WIKI_KEY_LMB) lmb = 1;
         if (tagpu_wikidata_button(e->up, iface) == WIKI_KEY_LMB) lmb = 0;
@@ -801,7 +924,7 @@ int tagpu_wikilayout_check(const WIKILAYOUT* L, char* err, size_t errn)
         for (j = 0; j < s->ngadget; j++) {
             const WIKIGADGET* g = &s->gadget[j];
             if (!terminated(g->name) || !g->name[0] || g->role < 0 || g->role >= WIKI_NROLES || !terminated(g->unit)
-                || (g->grey != 0 && g->grey != 1) || (g->hidden != 0 && g->hidden != 1))
+                || (g->grey != 0 && g->grey != 1) || (g->hidden != 0 && g->hidden != 1) || g->key < 0 || g->key > 255)
                 return lay_no(err, errn, "a gadget has no name, no known role or a flag not 0 or 1 on", s->name);
             /* a rect inside its screen: a hit or a pressed frame never reads outside the screen it
                belongs to; x, y >= 0 first, so neither difference can overflow */
@@ -889,6 +1012,8 @@ static int lay_gadget(const TJV* v, WIKIGADGET* g)
         return 0;
     /* a build button's unit is a name, or null for none; sim.js reads no other role's */
     if (g->role == WIKI_ROLE_BUILD && !tj_is(u, TJ_NULL) && !lay_name(u, g->unit, 0)) return 0;
+    /* the quickkey, 1..255 when given, 0 for none */
+    if (tj_get(v, "key") && !lay_int(tj_get(v, "key"), 1, 255, &g->key)) return 0;
     return lay_flag(tj_get(v, "grey"), &g->grey) && lay_flag(tj_get(v, "hidden"), &g->hidden);
 }
 
@@ -1009,7 +1134,7 @@ static const char* const FIGURES[6] = { "buildTime", "workerTime", "buildDistanc
 static int cast_def(const TJV* v, const char* at, WIKICASTDEF* k, char* why, size_t n)
 {
     const TJV *t = tj_get(v, "type"), *f = tj_get(v, "footprint"), *cs = tj_get(v, "canstop"), *vt = tj_get(v, "vent");
-    const TJV *aw = tj_get(v, "activatewhenbuilt");
+    const TJV *aw = tj_get(v, "activatewhenbuilt"), *cr = tj_get(v, "canreclamate");
     const TJV *b = tj_get(v, "builds"), *x;
     size_t len;
     int i;
@@ -1050,6 +1175,11 @@ static int cast_def(const TJV* v, const char* at, WIKICASTDEF* k, char* why, siz
     }
     /* sim.js's (canstop & 1) === 1: JS's & takes the integer modulo 2^32, which keeps its parity */
     k->canstop = cs && fmod(fabs(cs->num), 2.0) == 1.0;
+    if (cr && (!tj_is(cr, TJ_NUM) || cr->num != floor(cr->num) || !isfinite(cr->num))) {
+        snprintf(why, n, "%s: canreclamate is not an integer", at);
+        return 0;
+    }
+    k->canreclamate = cr && fmod(fabs(cr->num), 2.0) == 1.0;
     if (aw && (!tj_is(aw, TJ_NUM) || aw->num != floor(aw->num) || !isfinite(aw->num))) {
         snprintf(why, n, "%s: activatewhenbuilt is not an integer", at);
         return 0;

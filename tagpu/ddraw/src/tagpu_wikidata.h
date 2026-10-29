@@ -45,7 +45,7 @@
    ACTIONS, in its order: what a demo's press does, which the interface type turns into a mouse
    button (tagpu_wikidata_button). A simulation holds keys only: an index into its held[] is
    below WIKI_NKEYS, and an action reaches it resolved. */
-enum { WIKI_KEY_SHIFT, WIKI_KEY_ALT, WIKI_KEY_CTRL, WIKI_KEY_Z, WIKI_KEY_X, WIKI_KEY_LMB, WIKI_KEY_RMB, WIKI_NKEYS,
+enum { WIKI_KEY_SHIFT, WIKI_KEY_ALT, WIKI_KEY_CTRL, WIKI_KEY_Z, WIKI_KEY_X, WIKI_KEY_E, WIKI_KEY_LMB, WIKI_KEY_RMB, WIKI_NKEYS,
        WIKI_ACT_SELECT = WIKI_NKEYS, WIKI_ACT_ORDER, WIKI_ACT_CANCEL, WIKI_NKEYNAMES };
 
 /* sim.js's CASTS, in its order: a unit's place in the demos, which a side's casting answers with
@@ -78,8 +78,39 @@ typedef struct {
                                        holding it */
     int         activate_when_built;/* FBI activatewhenbuilt, def+0x241 bit 18: a structure
                                        finished, or made whole, is switched on (0x41B9A6) */
+    int         canreclamate;       /* FBI canreclamate, def+0x245 bit 0x400: RECLAIM is live for
+                                       a selection holding it, and the sweep orders it */
     uint64_t    builds;             /* bit i: its build list names type i of the entry */
 } WIKIDEF;
+
+/* A FEATURE of the entry's `features` table, sim.js's checkFeature: its TDF section's name and
+   figures as tools/wiki/gen-reclaim.mjs reads them. footprint 1..WIKI_FEAT_FOOT cells (the reach
+   tagpu_sweep.c's FOOT_MAX gives a feature's centre from its anchor); metal (FeatureDef +0xF0)
+   and energy (+0xEC) at least 0 and below WIKI_FEAT_AMOUNT; height (+0xFA) 0..255; blocking, and
+   reclaimable (+0xFE bit 7). An entry has at most WIKI_FEAT_DEFS, a scene at most WIKI_FEATS_MAX
+   placed, the entry's and the demo's together. */
+#define WIKI_FEAT_NAME   32
+#define WIKI_FEAT_FOOT   16
+#define WIKI_FEAT_AMOUNT 1e7
+#define WIKI_FEAT_DEFS   64
+#define WIKI_FEATS_MAX   256
+typedef struct {
+    char   name[WIKI_FEAT_NAME];    /* 1..31 bytes */
+    int    fx, fz;
+    double metal, energy;
+    int    height, blocking, reclaimable;
+} WIKIFEATDEF;
+
+/* a scene's feature: the table's row and its anchor cell, the footprint's top-left */
+typedef struct {
+    char   id[WIKI_ID_MAX];         /* "" when the scene gives none: the sim names it */
+    int    def;                     /* an index of WIKIENTRY.feat */
+    int    ox, oz;
+} WIKISCENEFEAT;
+
+/* THE RECLAIM SWEEP'S KINDS, sim.js's KINDS in its order (tagpu_sweep.h's SWEEP_METAL,
+   SWEEP_ENERGY and SWEEP_ALL; the popup's rows top down) */
+enum { WIKI_KIND_METAL, WIKI_KIND_ENERGY, WIKI_KIND_ALL, WIKI_NKINDS };
 
 typedef struct { int x, z, w, h; double v; } WIKIMETAL;      /* cells, and the metal value     */
 typedef struct { int x, z, w, h; int black; } WIKIFOG;       /* cells; black unexplored, else grey */
@@ -106,17 +137,20 @@ typedef struct {
                                            a demo's additions                                     */
     int              w, h;              /* cells */
     double           surface_metal;
-    int              nmetal, nvent, nfog, nunit, nselected;
+    int              nmetal, nvent, nfog, nunit, nselected, nfeat;
     WIKIMETAL*       metal;
     WIKIPOINT*       vent;
     WIKIFOG*         fog;
     WIKISCENEUNIT*   unit;
-    int              has_selected, has_cursor;
+    WIKISCENEFEAT*   feat;
+    int              has_selected, has_cursor, has_kind;
     const char**     selected;          /* unit ids */
     WIKIPOINT        cursor;
+    int              kind;              /* has_kind: the sweep's kind it starts with, WIKI_KIND_* */
 } WIKISCENE;
 
-enum { WIKI_IN_MOVE = 1, WIKI_IN_BUILD = 2, WIKI_IN_CAPTION = 4, WIKI_IN_UNTIL = 8 };
+/* RECLAIM: arm reclaim through RECLAIM (`reclaim: true`); PICK: click the popup's row of `pick` */
+enum { WIKI_IN_MOVE = 1, WIKI_IN_BUILD = 2, WIKI_IN_CAPTION = 4, WIKI_IN_UNTIL = 8, WIKI_IN_RECLAIM = 16, WIKI_IN_PICK = 32 };
 
 /* A DEMO'S WAIT (sim.js's UNTILS, in its order): the state a wait holds the demo's clock for.
    IDLE: no unit of the player's holds a build or a reclaim order. ARRIVED: no unit of the
@@ -134,9 +168,10 @@ typedef struct {
     int              build;             /* WIKI_IN_BUILD: the type armed, or -1 to leave the mode */
     const char*      caption;           /* WIKI_IN_CAPTION: the caption, NULL to clear it */
     int              until, until_max;  /* WIKI_IN_UNTIL: the WIKI_UNTIL_* and its max, ticks */
-    int              extra;             /* a demo's input names a key besides at, caption and
-                                           build: it is no caption alone, which a build trip's
-                                           ticks admit (tagpu_wikidata_trips) */
+    int              pick;              /* WIKI_IN_PICK: the WIKI_KIND_* */
+    int              extra;             /* a demo's input names a key besides at, caption, build,
+                                           reclaim and pick: it is no caption alone, which a
+                                           trip's ticks admit (tagpu_wikidata_trips) */
 } WIKIINPUT;
 
 typedef struct {
@@ -156,11 +191,12 @@ typedef struct {
     const char*      id;
     const char*      title;
     const char*      subtitle;
-    int              ntext, nlocked, ndef, ndemo;
+    int              ntext, nlocked, ndef, ndemo, nfeat;
     const char**     text;              /* paragraphs */
     const char**     locked_in;         /* the mods that turn the feature off */
     double           pace;              /* construction and reclaim run this many times faster */
     WIKIDEF*         def;               /* in the file's order, which breaks the sim's ties */
+    WIKIFEATDEF*     feat;              /* the `features` table, in the file's order */
     int              nscene;            /* 1 or more, every map the first one's size */
     WIKISCENE*       scenes;            /* in the file's order: a demo with no `on` plays on the first */
     WIKIDEMO*        demo;
@@ -211,12 +247,18 @@ WIKIDATA* tagpu_wikidata_load_resource(char* err, size_t errn);
 /* A type of the entry by name, or -1. */
 int tagpu_wikidata_def(const WIKIENTRY* e, const char* name);
 
-/* sim.js's name of a key or an action: "shift", "alt", "ctrl", "z", "x", "lmb", "rmb", "select",
-   "order", "cancel"; NULL out of range. */
+/* sim.js's name of a key or an action: "shift", "alt", "ctrl", "z", "x", "e", "lmb", "rmb",
+   "select", "order", "cancel"; NULL out of range. */
 const char* tagpu_wikidata_key_name(int key);
 
 /* sim.js's and text.js's name of a cast: "builder", "advbuilder", ... "solar"; NULL out of range. */
 const char* tagpu_wikidata_cast_name(int cast);
+
+/* sim.js's name of a sweep kind: "metal", "energy", "all"; NULL out of range. */
+const char* tagpu_wikidata_kind_name(int kind);
+
+/* A feature of the entry's table by name, or -1. */
+int tagpu_wikidata_feat(const WIKIENTRY* e, const char* name);
 
 /* text.js's BUTTONS: the word of the button token named by the `len` bytes at `s` at interface
    type `iface` (1 exactly when 1, else 0), or NULL when no button has that name. */
@@ -250,6 +292,7 @@ typedef struct {
                                     /* finite, >= 0, build_time > 0; an absent one reads 0 */
     int      canstop;               /* (canstop & 1), as WIKIDEF's */
     int      activate_when_built;   /* (activatewhenbuilt & 1), as WIKIDEF's */
+    int      canreclamate;          /* (canreclamate & 1), as WIKIDEF's */
     int      vent;                  /* has a G cell */
     uint16_t g[WIKI_FP_MAX];        /* as WIKIDEF's; inside fx x fz */
     uint16_t builds;                /* bit c: its build menu holds cast c's type */
@@ -259,8 +302,8 @@ typedef struct { WIKICASTDEF cast[WIKI_NCAST]; } WIKICASTING;
 
 /* A side's casting from its JSON record ({"casts": {...}}; `side`, `commander`, `report` and any
    other key are read past) into `c`, held to every bound of sim.js's checkCasting: all nine casts
-   given, each null or a record whose type, title, footprint, figures, canstop, activatewhenbuilt,
-   vent, g and builds
+   given, each null or a record whose type, title, footprint, figures, canstop, canreclamate,
+   activatewhenbuilt, vent, g and builds
    hold. Beyond it, a cast named twice is refused (a JSON object keeps one of them for sim.js).
    1, or 0 with a message in `err` and `c` zeroed: a refused casting is not used at all. */
 int tagpu_wikidata_casting(const TJV* v, WIKICASTING* c, char* err, size_t errn);
@@ -311,6 +354,7 @@ typedef struct {
     int  role;                      /* WIKI_ROLE_* */
     char unit[WIKI_SIDE_NAME];      /* a build button's unit type; "" for none (null) */
     int  grey, hidden;
+    int  key;                       /* the record's quickkey +0x13A, 1..255; 0 for none */
     int  x, y, w, h;                /* in its screen's pixels, inside the screen */
 } WIKIGADGET;
 
@@ -364,9 +408,10 @@ WIKILAYOUT* tagpu_wikidata_layout(const char* text, size_t len, char* err, size_
 WIKILAYOUT* tagpu_wikidata_layout_json(const TJV* v, char* err, size_t errn);
 WIKILAYOUT* tagpu_wikidata_layout_pak(const unsigned char* pak, size_t npak, const char* path, char* err, size_t errn);
 
-/* THE BUILD TRIP'S DATA RULE, sim.js's checkTrips, for a demo that plays with the sidebar: every
-   `build` names a type, carries no other input and finds the left button up; no input but a
-   caption stands in its trip, the ticks (t, t + WIKI_TRIP), nor after it within tick t; and the
+/* THE TRIPS' DATA RULE, sim.js's checkTrips, for a demo that plays with the sidebar: every
+   `build` names a type, a `reclaim` and a `pick` are trips too; each carries no other input and
+   finds the left button up; no input but a caption stands in its trip, the ticks (t, t + WIKI_TRIP)
+   for a build or a reclaim and (t, t + WIKI_PICK) for a pick, nor after it within tick t; and the
    demo lasts the whole trip. The inputs are read in the simulation's order (by tick, then file
    order), each action as its button at `iface`, as sim.js reads its resolved script. 1 when it
    holds, else 0 with a message in `err`. tagpu_wikisim_init asks it exactly where sim.js throws:

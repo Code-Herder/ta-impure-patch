@@ -1117,7 +1117,7 @@ static void layout_json(FILE* f, const WIKILAYOUT* L)
                 if (g->unit[0]) ustr(f, g->unit, WIKI_SIDE_NAME);
                 else fputs("null", f);
             }
-            fprintf(f, ",\"grey\":%s,\"hidden\":%s}", g->grey ? "true" : "false", g->hidden ? "true" : "false");
+            fprintf(f, ",\"grey\":%s,\"key\":%d,\"hidden\":%s}", g->grey ? "true" : "false", g->key, g->hidden ? "true" : "false");
         }
         fprintf(f, "]}");
     }

@@ -219,13 +219,16 @@ $(addprefix res, $(ALLEXTS)): inc/tagpu_wikipak.bin
 # 9298 frames of the demos differ from sim.js in a last bit; built so, none), so the simulation,
 # and the loader that normalises the scenes' facings for it (src/tagpu_wikidata.h), compute on
 # SSE2 instead (MEASURED 2026-10-26, the loader's x / sqrt(x*x + z*z) over 3720 facings: built for
-# x87, 1804 differ from sim.js in a bit; built so, none). The units' scripts' host
+# x87, 1804 differ from sim.js in a bit; built so, none). The reclaim sweep's split
+# (src/tagpu_sweepgeo.h), which the wiki's sim calls as the game's sweep does, sums its loads in
+# double, so it computes on SSE2 with them. The units' scripts' host
 # (src/tagpu_wikicob.h) answers GET's angles and distances in double, and the mockup asks the same C
 # built natively (tools/wiki/serve.py), so it computes on SSE2 too. The game's threads align the
 # stack to 4 bytes only, so they realign where SSE needs more. tools/wiki/simparity.mjs --wine
 # checks the build under Wine.
 $(addprefix src/tagpu_wikisim, $(ALLEXTS)) $(addprefix src/tagpu_wikidata, $(ALLEXTS)) \
-$(addprefix src/tagpu_wikicob, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
+$(addprefix src/tagpu_wikicob, $(ALLEXTS)) $(addprefix src/tagpu_sweepgeo, $(ALLEXTS)): \
+    CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
 
 # THE WIKI'S STAGE (src/tagpu_wikistage.h) computes its pixels in double by the mockup's stage.js
 # arithmetic, and floors and snaps some of them, so it computes on SSE2 for the same reason: an

@@ -127,6 +127,11 @@ static void orders(const WIKISIM* s, const char* id)
             key("type", 0); str(name(s, o[i].type));
             key("ox", 0); printf("%d", o[i].ox);
             key("oz", 0); printf("%d", o[i].oz);
+        } else if (o[i].k == WIKI_ORDER_RECLAIM && o[i].feat) {
+            /* sim.js's feature reclaim: {k, feat, x, z} */
+            key("feat", 0); str(o[i].target);
+            key("x", 0); num(o[i].x);
+            key("z", 0); num(o[i].z);
         } else { key("target", 0); str(o[i].target); }
         putchar('}');
     }
@@ -138,7 +143,7 @@ static void view(WIKISIM* s, int map)
     static const char* const STATE[] = { "place", "refused", "remove" };
     static const char* const SHAPE[] = { NULL, "line", "axis", "rect", "hollow", "ring" };
     static const char* const LINE[] = { "move", "build", "reclaim", "guard" };
-    static const char* const CURSOR[] = { "arrow", "move", "build" };
+    static const char* const CURSOR[] = { "arrow", "move", "build", "reclaim" };
     const WIKIVIEW* v = tagpu_wikisim_view(s);
     int i, first = 1;
     putchar('{');
@@ -254,11 +259,63 @@ static void view(WIKISIM* s, int map)
     key("caption", 0); str(v->caption);
     key("pace", 0); num(v->pace);
     key("mode", 0);
-    if (v->mode >= 0) {
+    if (v->rmode) str("reclaim");
+    else if (v->mode >= 0) {
         char m[WIKI_ID_MAX + 8];
         snprintf(m, sizeof m, "build:%s", name(s, v->mode));
         str(m);
     } else str("contextual");
+    key("feats", 0);
+    putchar('[');
+    for (i = 0; i < v->nfeat; i++) {
+        const WIKIVFEAT* f = &v->feat[i];
+        if (i) putchar(',');
+        putchar('{');
+        key("id", 1); str(f->id);
+        key("name", 0); str(s->entry->feat[f->def].name);
+        key("ox", 0); printf("%d", f->ox);
+        key("oz", 0); printf("%d", f->oz);
+        key("fx", 0); printf("%d", f->fx);
+        key("fz", 0); printf("%d", f->fz);
+        key("metal", 0); num(f->metal);
+        key("energy", 0); num(f->energy);
+        putchar('}');
+    }
+    putchar(']');
+    key("gone", 0);
+    putchar('[');
+    for (i = 0; i < v->ngone; i++) printf("%s[%d,%d]", i ? "," : "", v->gone[2 * i], v->gone[2 * i + 1]);
+    putchar(']');
+    key("reclaim", 0);
+    if (v->rmode) {
+        const WIKIVSWEEP* w = &v->sweep;
+        putchar('{');
+        key("kind", 1); str(tagpu_wikidata_kind_name(w->kind));
+        key("ring", 0);
+        if (w->has_ring) printf("{\"x\":%d,\"z\":%d,\"r\":%d}", w->ring_x, w->ring_z, w->ring_r);
+        else fputs("null", stdout);
+        key("targets", 0);
+        putchar('[');
+        for (i = 0; i < w->ntarget; i++) {
+            if (i) putchar(',');
+            str(v->feat[w->target[i]].id);
+        }
+        putchar(']');
+        key("wrecks", 0); printf("%d", w->wrecks);
+        key("trees", 0); printf("%d", w->trees);
+        key("metal", 0); num(w->metal);
+        key("energy", 0); num(w->energy);
+        key("hover", 0); str(w->hover >= 0 ? v->feat[w->hover].id : NULL);
+        key("popup", 0);
+        if (w->has_popup) {
+            int k;
+            printf("{\"rect\":[%d,%d,%d,%d],\"rows\":[", w->rect[0], w->rect[1], w->rect[2], w->rect[3]);
+            for (k = 0; k < WIKI_NKINDS; k++)
+                printf("%s[%d,%d,%d,%d]", k ? "," : "", w->rows[k][0], w->rows[k][1], w->rows[k][2], w->rows[k][3]);
+            printf("],\"tongue\":[%d,%d,%d,%d],\"hot\":%d}", w->tongue[0], w->tongue[1], w->tongue[2], w->tongue[3], w->hot);
+        } else fputs("null", stdout);
+        putchar('}');
+    } else fputs("null", stdout);
     if (v->has_side) {
         key("side", 0);
         putchar('{');
@@ -274,7 +331,7 @@ static void view(WIKISIM* s, int map)
         key("under", 0); str(v->side.under[0] ? v->side.under : NULL);
         putchar('}');
     }
-    key("locked", 0); str(v->locked >= 0 ? name(s, v->locked) : NULL);
+    key("locked", 0); str(v->locked >= 0 ? name(s, v->locked) : v->locked == WIKI_LOCK_RECLAIM ? "RECLAIM" : NULL);
     key("clock", 0); printf("%d", v->clock);
     key("waiting", 0); str(v->waiting == WIKI_UNTIL_IDLE ? "idle" : v->waiting == WIKI_UNTIL_ARRIVED ? "arrived" : v->waiting == WIKI_UNTIL_BUILT ? "built" : NULL);
     key("stalled", 0); fputs(v->stalled ? "true" : "false", stdout);
@@ -642,6 +699,7 @@ static void casting_out(const WIKICASTING* k)
         for (i = 0; i < 6; i++) { key(FIG[i], 0); num(fig[i]); }
         key("canstop", 0); printf("%d", d->canstop);
         key("activatewhenbuilt", 0); printf("%d", d->activate_when_built);
+        key("canreclamate", 0); printf("%d", d->canreclamate);
         key("vent", 0); printf("%d", d->vent);
         key("g", 0);
         for (i = 0; i < WIKI_FP_MAX; i++) printf("%c%u", i ? ',' : '[', (unsigned)d->g[i]);
@@ -729,7 +787,8 @@ static int constants(void)
 {
     static const WIKITRIPROW rows[WIKI_TRIP_NROWS] = WIKI_TRIP_ROWS;
     int k;
-    printf("{\"TRIP\":%d,\"TRIP_DOWN\":%d,\"TRIP_UP\":%d,\"TRIP_ROWS\":[", WIKI_TRIP, WIKI_TRIP_DOWN, WIKI_TRIP_UP);
+    printf("{\"TRIP\":%d,\"TRIP_DOWN\":%d,\"TRIP_UP\":%d,\"PICK\":%d,\"PICK_DOWN\":%d,\"PICK_UP\":%d,\"TRIP_ROWS\":[",
+           WIKI_TRIP, WIKI_TRIP_DOWN, WIKI_TRIP_UP, WIKI_PICK, WIKI_PICK_DOWN, WIKI_PICK_UP);
     for (k = 0; k < WIKI_TRIP_NROWS; k++)
         printf("%s{\"glide\":%d,\"hold\":%d,\"gap\":%d,\"back\":%d,\"hover\":%d}", k ? "," : "", rows[k].glide,
                rows[k].hold, rows[k].gap, rows[k].back, rows[k].hover);

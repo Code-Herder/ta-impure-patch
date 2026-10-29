@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "tagpu_sweepgeo.h"
 #include "tagpu_wikisim.h"
 
 #define CELL    WIKI_CELL
@@ -41,7 +42,7 @@
    neither scripts nor sound. */
 static const WIKISIMCTX CTX_NONE = { 0, NULL, 1, NULL, NULL };
 enum { KIND_NONE, KIND_MEX, KIND_GEO };
-enum { HOW_BUILD, HOW_RECLAIM };
+enum { HOW_BUILD, HOW_RECLAIM, HOW_FEATURE };
 /* where the cursor is (sim.js over()); NONE: a mouse button that has not gone down */
 enum { OVER_NONE, OVER_SIDE, OVER_MAP };
 
@@ -59,6 +60,10 @@ typedef char trip_row1_fits[TRIP_FITS(1, WIKI_TRIP_ROW1) ? 1 : -1];
 typedef char trip_row2_fits[TRIP_FITS(2, WIKI_TRIP_ROW2) ? 1 : -1];
 typedef char trip_row3_fits[TRIP_FITS(3, WIKI_TRIP_ROW3) ? 1 : -1];
 typedef char trip_rows_four[WIKI_TRIP_NROWS == 4 ? 1 : -1];
+/* the pick trip's inputs -- its glide, the row's down and up and the glide back -- fit trip_in too */
+typedef char pick_fits[WIKI_PICK_DOWN + 2 + (WIKI_PICK - WIKI_PICK_UP) <= WIKI_TRIP_EVENTS ? 1 : -1];
+/* every push_order a sweep's split makes fits the list: its room is SWEEP_LIST_CAP less the list */
+#define SWEEP_LIST_CAP PLACE_LIST_CAP
 
 /* quickChoice's and site's answer, a candidate building: sim.js's `c` */
 typedef struct {
@@ -113,6 +118,12 @@ static int g_cell(const WIKISIM* s, int t, int dx, int dz)
 /* mirrors tagpu_resource.c strength: ExtractsMetal for a mex, EnergyMake otherwise */
 static double strength(const WIKISIM* s, int t) { return kind(s, t) == KIND_MEX ? def(s, t)->extracts : def(s, t)->energy_make; }
 static int can_build(const WIKISIM* s, const WIKIUNIT* u, int t) { return (int)((def(s, u->type)->builds >> t) & 1); }
+/* FBI canreclamate, def+0x245 bit 0x400 (the FBI reader 0x42BF40 at 0x42C9EF..0x42CA1A): the
+   resolver's first test for a reclaim (0x43F4FD) and what makes RECLAIM live (0x41B509..0x41B512) */
+static int is_reclaimer(const WIKISIM* s, const WIKIUNIT* u)
+{
+    return u->sel && u->owner == 0 && def(s, u->type)->canreclamate;
+}
 /* the layout's pages of a type, NULL for none or with the sidebar off */
 static const WIKIPAGES* type_pages(const WIKISIM* s, int t)
 {
@@ -410,6 +421,65 @@ static uint64_t available(const WIKISIM* s)
     return ts;
 }
 
+/* the selected units of the player's that can reclaim, sim.js's reclaimers().length */
+static int nreclaimers(const WIKISIM* s)
+{
+    int i, n = 0;
+    for (i = 0; i < s->nunit; i++) n += is_reclaimer(s, s->unit[i]);
+    return n;
+}
+
+/* ---- THE FEATURES (research/notes/ingame-wiki-reclaim-plan.md), sim.js's: the entry's `features`
+   table names each by its TDF section, and a scene places one at its anchor cell, the footprint's
+   top-left, as the TNT and LoadFeature 0x4224B0 place a map's. A blocking one stands in the way as
+   a structure does; a reclaimable one is a reclaim's target, and goes when its reclaim pays out
+   (FeatureDie at 0x423965). ---- */
+
+static BOX feat_box(const WIKIFEAT* f)
+{
+    BOX b;
+    b.ox = f->ox;
+    b.oz = f->oz;
+    b.fx = f->fx;
+    b.fz = f->fz;
+    return b;
+}
+
+static WIKIFEAT* feat_by_id(const WIKISIM* s, const char* id)
+{
+    int i;
+    for (i = 0; i < s->nfeat; i++)
+        if (!strcmp(s->feat[i].id, id)) return &s->feat[i];
+    return NULL;
+}
+
+/* the feature whose footprint holds the cell under (x, z), as 0x4815A0 finds one at a position
+   through its anchor */
+static WIKIFEAT* feat_at(const WIKISIM* s, double x, double z)
+{
+    const int cx = cell_of(x), cz = cell_of(z);
+    int i;
+    for (i = 0; i < s->nfeat; i++) {
+        WIKIFEAT* f = &s->feat[i];
+        if (cx >= f->ox && cx < f->ox + f->fx && cz >= f->oz && cz < f->oz + f->fz) return f;
+    }
+    return NULL;
+}
+
+/* the feature leaves the list and its anchor cell is gone, which the game look's image no longer
+   draws. THE BOUND: gone holds WIKI_FEATS_MAX cells and each feature leaves once. */
+static void feat_remove(WIKISIM* s, WIKIFEAT* f)
+{
+    const int k = (int)(f - s->feat);
+    if (s->ngone < WIKI_FEATS_MAX) {
+        s->gone[2 * s->ngone] = f->ox;
+        s->gone[2 * s->ngone + 1] = f->oz;
+        s->ngone++;
+    }
+    memmove(&s->feat[k], &s->feat[k + 1], (size_t)(s->nfeat - k - 1) * sizeof *s->feat);
+    s->nfeat--;
+}
+
 /* ---- plans: the player's build orders; one is started once its building stands at its site ---- */
 
 static int started(const WIKISIM* s, const WIKIORDER* o) { return structure_at(s, o->type, o->ox, o->oz) != NULL; }
@@ -441,6 +511,10 @@ static int site_ok(const WIKISIM* s, int t, int ox, int oz, const WIKIUNIT* igno
         const WIKIUNIT* u = s->unit[i];
         if (!mobile(s, u->type) && u != ignore && overlap(b, box(s, u->type, u->ox, u->oz))) return 0;
     }
+    /* a blocking feature in the yard refuses it [INFERRED: the site test 0x47D2E0's feature cells;
+       no entry builds over one] */
+    for (i = 0; i < s->nfeat; i++)
+        if (s->feat[i].blocking && overlap(b, feat_box(&s->feat[i]))) return 0;
     if (kind(s, t) == KIND_GEO) {
         for (i = 0; i < s->nvent && !vent_under_g(s, &s->vent[i], t, ox, oz); i++) {}
         if (i == s->nvent) return 0;
@@ -729,7 +803,9 @@ static int quick_choice(WIKISIM* s, int shift, CHOICE* out)
     CHOICE best[3];
     int t, desired = KIND_NONE, have[3] = { 0, 0, 0 };
     double old = 0;
-    if (s->mode >= 0 || s->held[WIKI_KEY_ALT]) return 0;
+    /* Quick Build offers in the contextual mode only, main+0x2CC3 == 1 (tagpu_resource.c's gate):
+       not with reclaim armed */
+    if (s->mode >= 0 || s->rmode || s->held[WIKI_KEY_ALT]) return 0;
     target = unit_at(s, x, z);
     if (target) {
         if (target->owner != 0 || mobile(s, target->type) || target->built < 1 || !(desired = kind(s, target->type)))
@@ -785,6 +861,10 @@ static WIKIUNIT* unit_at(const WIKISIM* s, double x, double z)
 
 static void disarm(WIKISIM* s);
 static void arm(WIKISIM* s, int t);
+static void toggle_reclaim(WIKISIM* s);
+
+/* RECLAIM: an order button whose name holds RECLAIM, the orders handler's strstr (0x419F56) */
+static int is_reclaim(const WIKIGADGET* g) { return g->role == WIKI_ROLE_ORDER && strstr(g->name, "RECLAIM") != NULL; }
 
 static const WIKISCREEN* screen_of(const WIKISIM* s, int i) { return &s->lay->screen[i]; }
 
@@ -830,7 +910,12 @@ static int build_live(const WIKISIM* s, const WIKIGADGET* g, const WIKIUNIT* sho
    simulation). STOP is live while some selected unit of the player's has canstop: the router
    0x41B2E0 ORs def+0x245 bit 3 over the controlled player's selected units (0x41B4AC) and 0x41A120
    greys STOP when the OR is clear (0x41A2F3), DISASSEMBLED. That 0x41A120 un-greys it for the next
-   selection, because a route to the screen shown reloads it, is [INFERRED]. */
+   selection, because a route to the screen shown reloads it, is [INFERRED].
+   RECLAIM is live while some selected unit of the player's has canreclamate: the router ORs
+   def+0x245 bit 0x400 over them (0x41B509..0x41B512, packed into main+0x37EC1 bit 0x20 at
+   0x41B6DA..0x41B6F7) and 0x41A120 greys RECLAIM when the bit is clear (0x41A38C..0x41A3AF),
+   DISASSEMBLED. It is a toggle (attribs 64): its face shows frame 1 while reclaim is armed, and
+   every disarm resets STOP's radio group, RECLAIM's, so the frame follows the mode. */
 static int gadget_state(const WIKISIM* s, const WIKIGADGET* g, const WIKIUNIT* shown, int pressed)
 {
     const int n = shown ? npages(s, shown->type) : 0;
@@ -844,7 +929,7 @@ static int gadget_state(const WIKISIM* s, const WIKIGADGET* g, const WIKIUNIT* s
         for (i = 0; i < s->nunit; i++)
             if (s->unit[i]->sel && s->unit[i]->owner == 0 && def(s, s->unit[i]->type)->canstop) return pressed;
         return 2;
-    case WIKI_ROLE_ORDER:    return 2;
+    case WIKI_ROLE_ORDER:    return is_reclaim(g) && nreclaimers(s) ? (pressed || s->rmode) : 2;
     default:                 return pressed;
     }
 }
@@ -944,9 +1029,12 @@ static void act(WIKISIM* s, const WIKIGADGET* g)
     else if (g->role == WIKI_ROLE_STOP) {
         s->mode = -1;
         s->has_gesture = 0;
+        s->rmode = 0;
+        s->has_rg = 0;
         for (i = 0; i < s->nunit; i++)
             if (s->unit[i]->sel && s->unit[i]->owner == 0) s->unit[i]->norder = 0;
     } else if (g->role == WIKI_ROLE_BUILD && (t = unit_def(s, g)) >= 0 && !mobile(s, t)) arm(s, t);
+    else if (is_reclaim(g)) toggle_reclaim(s);
     route(s);
 }
 
@@ -1020,6 +1108,415 @@ static void side_view(const WIKISIM* s, WIKIVSIDE* v)
     if (under) snprintf(v->under, sizeof v->under, "%s", under->id);
 }
 
+/* ---- THE RECLAIM SWEEP (tagpu_sweep.c; research/notes/gpu-status.md section 2.110), sim.js's,
+   rule for rule over the sim's features. With reclaim armed a press on the map that travels
+   RECL_DRAG or more is a ring round the press point; its release orders the selected reclaimers
+   to take the features of the chosen kind it holds, split nearest-first between them
+   (tagpu_sweepgeo.c, which the game's sweep calls too). A shorter press is stock's click. A popup
+   off RECLAIM's row picks the kind, and RECLAIM's own key cycles it. ---- */
+
+static void assign(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* os, int n, int shift);
+
+/* the press travel past which a press is a ring (tagpu_sweep.c DRAG_PX, screen pixels, the
+   stage's world units at zoom 1) and the ring's bound (RING_MAX_WU); the popup, in the engine's
+   1x pixels (POP_X, POP_W, POP_H) */
+#define RECL_DRAG 7
+#define RING_MAX  4096
+#define POP_X     129
+#define POP_W     124
+#define POP_H     72
+
+/* the routed screen's first RECLAIM, its index, -1 for none (tagpu_sweep.c reclaim_gadget) */
+static int reclaim_index(const WIKISIM* s)
+{
+    const WIKISCREEN* sc;
+    int i;
+    if (!s->lay) return -1;
+    sc = screen_of(s, s->screen);
+    for (i = 0; i < sc->ngadget; i++)
+        if (is_reclaim(&sc->gadget[i])) return i;
+    return -1;
+}
+
+/* tagpu_sweep.c kind_ok: the kind's amount is above 0, ALL takes any */
+static int kind_ok(const WIKISIM* s, const WIKIFEAT* f)
+{
+    return s->kind == WIKI_KIND_METAL ? f->metal > 0 : s->kind == WIKI_KIND_ENERGY ? f->energy > 0 : 1;
+}
+
+/* a target of the kind by the click's own rules: reclaimable and mapped at its centre (0x408090) */
+static int takes(const WIKISIM* s, const WIKIFEAT* f)
+{
+    return f->reclaimable && kind_ok(s, f) && seen(s, cell_of(f->x), cell_of(f->z));
+}
+
+/* ARMING AND DISARMING, the orders handler's RECLAIM branch (0x419F3D..0x419FAF): the toggle on
+   writes mode 12 (0x419F8A), off mode 1 (0x419F71); both play specialorders, and neither writes
+   the Shift-placement bit, the cursor or an order. Mode 12 replaces a building armed, and its
+   gesture goes with it. */
+static void toggle_reclaim(WIKISIM* s)
+{
+    if (s->rmode) {
+        s->rmode = 0;
+        s->has_rg = 0;
+    } else {
+        s->mode = -1;
+        s->has_gesture = 0;
+        s->has_drag = 0;
+        s->rmode = 1;
+    }
+    sound_named(s, WIKI_SNDNAME_SPECIAL);
+}
+
+typedef struct { int rect[4], rows[WIKI_NKINDS][4], tongue[4]; } POPUP;
+
+static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+/* THE POPUP, tagpu_sweep.c popup_rect at the stage's scale: 124 x 72 at x POP_X of the column (one
+   past the map's left edge), its middle centred on RECLAIM's row and held inside the map's rows,
+   while reclaim is armed and RECLAIM is on the routed screen, shown and live; its three rows 112 x
+   18, 21 apart; the tongue to the button's row. In the stage's coordinates: x from the map's left
+   edge, z the column's row. 0 for none. */
+static int popup(const WIKISIM* s, POPUP* P)
+{
+    const int i = reclaim_index(s);
+    const WIKISCREEN* sc;
+    const WIKIGADGET* g;
+    int by, hi, x0, y0, k;
+    if (!s->rmode || i < 0) return 0;
+    sc = screen_of(s, s->screen);
+    g = &sc->gadget[i];
+    if (g->hidden || !live(gadget_state(s, g, s->shown, 0))) return 0;
+    by = sc->y + g->y;
+    hi = (s->H * CELL < s->lay->height ? s->H * CELL : s->lay->height) - POP_H;
+    if (hi < 0) return 0;
+    y0 = clampi(by + g->h / 2 - POP_H / 2, 0, hi);
+    x0 = POP_X - WIKI_SIDE_W;
+    P->rect[0] = x0;
+    P->rect[1] = y0;
+    P->rect[2] = POP_W;
+    P->rect[3] = POP_H;
+    for (k = 0; k < WIKI_NKINDS; k++) {
+        P->rows[k][0] = x0 + 6;
+        P->rows[k][1] = y0 + 6 + 21 * k;
+        P->rows[k][2] = 112;
+        P->rows[k][3] = 18;
+    }
+    P->tongue[0] = 124 - WIKI_SIDE_W;
+    P->tongue[1] = clampi(by + 4, y0 + 6, y0 + POP_H - 24);
+    P->tongue[2] = 6;
+    P->tongue[3] = 18;
+    return 1;
+}
+
+static int in_box(const int r[4], double x, double z) { return x >= r[0] && x < r[0] + r[2] && z >= r[1] && z < r[1] + r[3]; }
+
+static int on_popup(const WIKISIM* s, const POPUP* P)
+{
+    return P && over(s) == OVER_MAP && in_box(P->rect, s->cursor_x, s->cursor_z);
+}
+
+/* the popup's row under the pointer, -1 for none */
+static int popup_row(const WIKISIM* s, const POPUP* P)
+{
+    int k;
+    for (k = 0; k < WIKI_NKINDS; k++)
+        if (in_box(P->rows[k], s->cursor_x, s->cursor_z)) return k;
+    return -1;
+}
+
+/* A KEY, tagpu_sweep_char then the GUI pump's match: with reclaim armed, RECLAIM's own quickkey on
+   the routed screen cycles the kind and the engine never sees it; any other key goes to the pump,
+   which offers it to the screen's buttons in file order (0x4A6AE0, matched through tolower and
+   toupper at 0x4A70FB..0x4A7129), and the first live one with that quickkey acts as its click does;
+   a greyed one refuses at once (0x4A6B10) and an inactive one is skipped. Only E is a key of the
+   sim. */
+static int key_is(const WIKIGADGET* g, int c)
+{
+    const int lo = g->key >= 'A' && g->key <= 'Z' ? g->key + 32 : g->key, up = g->key >= 'a' && g->key <= 'z' ? g->key - 32 : g->key;
+    return g->key && (c == lo || c == up);
+}
+
+static void key_press(WIKISIM* s, int c)
+{
+    const WIKISCREEN* sc;
+    int i, j;
+    if (!s->lay) return;
+    sc = screen_of(s, s->screen);
+    i = reclaim_index(s);
+    if (s->rmode && i >= 0 && live(gadget_state(s, &sc->gadget[i], s->shown, 0)) && key_is(&sc->gadget[i], c)) {
+        s->kind = (s->kind + 1) % WIKI_NKINDS;
+        return;
+    }
+    for (j = 0; j < sc->ngadget; j++) {
+        const WIKIGADGET* g = &sc->gadget[j];
+        if (!g->hidden && key_is(g, c) && live(gadget_state(s, g, s->shown, 0))) {
+            s->cap = -1;
+            act(s, g);
+            return;
+        }
+    }
+}
+
+/* A LEFT PRESS ON THE MAP WITH RECLAIM ARMED: on the popup it picks the row under it (between rows
+   nothing) and is taken; anywhere else it starts the gesture at the press point
+   (tagpu_sweep_button) */
+static void reclaim_press(WIKISIM* s)
+{
+    POPUP P;
+    XZ c;
+    if (popup(s, &P) && on_popup(s, &P)) {
+        const int r = popup_row(s, &P);
+        if (r >= 0) s->kind = r;
+        return;
+    }
+    c = map_cursor(s);
+    s->has_rg = 1;
+    s->rg_drag = 0;
+    s->rg_x0 = s->rg_x1 = c.x;
+    s->rg_z0 = s->rg_z1 = c.z;
+}
+
+/* the drag follows the pointer while it is over the map (region bit 1), and is a ring once it has
+   gone RECL_DRAG */
+static void reclaim_move(WIKISIM* s)
+{
+    XZ c;
+    if (!s->has_rg || over(s) != OVER_MAP) return;
+    c = map_cursor(s);
+    s->rg_x1 = c.x;
+    s->rg_z1 = c.z;
+    if (sqrt(sq(c.x - s->rg_x0) + sq(c.z - s->rg_z0)) >= RECL_DRAG) s->rg_drag = 1;
+}
+
+/* where an order stands, for the split's start and the order lines: a move's point, a build's
+   site, a reclaim's target; a guard none, nor a reclaim of a unit gone. 1 with the point in *p. */
+static int order_point(const WIKISIM* s, const WIKIORDER* o, XZ* p)
+{
+    const WIKIUNIT* u;
+    if (o->k == WIKI_ORDER_MOVE || (o->k == WIKI_ORDER_RECLAIM && o->feat)) {
+        p->x = o->x;
+        p->z = o->z;
+        return 1;
+    }
+    if (o->k == WIKI_ORDER_BUILD) {
+        *p = centre(s, o->type, o->ox, o->oz);
+        return 1;
+    }
+    if (o->k != WIKI_ORDER_RECLAIM || !(u = by_id(s, o->target))) return 0;
+    p->x = u->x;
+    p->z = u->z;
+    return 1;
+}
+
+typedef struct { int32_t x, z, r; } RING;
+
+/* the ring of the gesture: its centre, the press point in whole world units, and the drag's
+   length, bounded. The press point is a cursor clamped onto the map, so it is a small number. */
+static RING ring_of(const WIKISIM* s)
+{
+    const double d = sqrt(sq(s->rg_x1 - s->rg_x0) + sq(s->rg_z1 - s->rg_z0));
+    RING R;
+    R.x = (int32_t)floor(s->rg_x0);
+    R.z = (int32_t)floor(s->rg_z0);
+    R.r = (int32_t)trunc(d < RING_MAX ? d : RING_MAX);
+    return R;
+}
+
+/* the ring's order: nearest the centre first, then by z, then x, then the anchor cell */
+static int ring_before(const WIKISIM* s, const RING* R, const WIKIFEAT* a, const WIKIFEAT* b)
+{
+    const double da = sq(a->x - R->x) + sq(a->z - R->z), db = sq(b->x - R->x) + sq(b->z - R->z);
+    if (da != db) return da < db;
+    if (a->z != b->z) return a->z < b->z;
+    if (a->x != b->x) return a->x < b->x;
+    return a->oz * s->W + a->ox < b->oz * s->W + b->ox;
+}
+
+/* WHICH FEATURES A RING HOLDS (enumerate): every feature whose centre is inside it that `takes`
+   holds, in the ring's order, into idx[] as indices into s->feat; their count. A feature's centre
+   is a whole number of world units: (ox + fx / 2) x 16. */
+static int ring_targets(const WIKISIM* s, const RING* R, int* idx)
+{
+    int i, j, n = 0;
+    for (i = 0; i < s->nfeat; i++) {
+        const WIKIFEAT* f = &s->feat[i];
+        if (!sweep_inside(R->x, R->z, R->r, (int32_t)f->x, (int32_t)f->z) || !takes(s, f)) continue;
+        for (j = n; j > 0 && ring_before(s, R, f, &s->feat[idx[j - 1]]); j--) idx[j] = idx[j - 1];
+        idx[j] = i;
+        n++;
+    }
+    return n;
+}
+
+/* a reclaim of feature f */
+static WIKIORDER order_feat(const WIKIFEAT* f)
+{
+    WIKIORDER o;
+    memset(&o, 0, sizeof o);
+    o.k = WIKI_ORDER_RECLAIM;
+    o.feat = 1;
+    o.x = f->x;
+    o.z = f->z;
+    snprintf(o.target, sizeof o.target, "%s", f->id);
+    return o;
+}
+
+/* the stock tail of an order click (0x4958C0): with Shift the Shift-placement bit, so releasing
+   Shift disarms; without it mode 1 and the bit cleared */
+static void click_tail(WIKISIM* s, int shift)
+{
+    if (shift) s->shift_placed = 1;
+    else {
+        s->rmode = 0;
+        s->has_rg = 0;
+        s->shift_placed = 0;
+    }
+}
+
+/* STOCK'S CLICK IN MODE 12, at the release (the route's 2, tagpu_sweep_button): a feature under the
+   pointer that the kind takes is ordered to every selected reclaimer -- replacing its orders, or
+   with Shift toggled as 0x43AFC0 does (a reclaim of it within 16 world units taken off instead of
+   one added) -- and the click's tail runs. A feature of the other kind shows cursornormal and its
+   click orders nothing; nothing reclaimable under the pointer orders nothing either and keeps the
+   mode [INFERRED for empty ground]. A unit under the pointer is not modelled. */
+static void reclaim_click(WIKISIM* s, int shift)
+{
+    const XZ c = map_cursor(s);
+    const WIKIFEAT* f = feat_at(s, c.x, c.z);
+    WIKIORDER o;
+    XZ at;
+    int i, j;
+    if (!f || !takes(s, f)) return;
+    o = order_feat(f);
+    at.x = f->x;
+    at.z = f->z;
+    for (i = 0; i < s->nunit; i++) {
+        WIKIUNIT* u = s->unit[i];
+        int k = -1;
+        if (!is_reclaimer(s, u)) continue;
+        for (j = 0; shift && j < u->norder && k < 0; j++) {
+            XZ q;
+            q.x = u->order[j].x;
+            q.z = u->order[j].z;
+            if (u->order[j].k == WIKI_ORDER_RECLAIM && u->order[j].feat && within(at, q)) k = j;
+        }
+        if (k >= 0) splice_orders(u, k, 1);
+        else assign(s, u, &o, 1, shift);
+    }
+    click_tail(s, shift);
+}
+
+/* a reclaim of one of the ring's targets, idx[0..n) into s->feat */
+static int on_ring(const WIKISIM* s, const WIKIORDER* o, const int* idx, int n)
+{
+    int k;
+    if (o->k != WIKI_ORDER_RECLAIM || !o->feat) return 0;
+    for (k = 0; k < n; k++)
+        if (!strcmp(s->feat[idx[k]].id, o->target)) return 1;
+    return 0;
+}
+
+/* THE COMMIT, tagpu_sweep.c commit: the ring's targets; without Shift every order of every
+   reclaimer but the reclaims on those targets goes (cancel_others); targets a reclaimer already has
+   queued are dropped (drop_queued); each reclaimer's split inputs from its list (builder_inputs: it
+   starts at its last positioned order, its load the queued feature reclaims' travel and ticks from
+   where it stands, every position in whole world units, a 16.16 word >> 16); the split; every
+   assignment appended. Its tail runs only when it ordered or took something off, so an empty ring
+   keeps reclaim armed. THE BOUND: a scene has at most WIKI_FEATS_MAX features, so idx[] and the
+   split's tables hold every target; a builder's room is SWEEP_LIST_CAP less its list, so every
+   assignment fits it. */
+static void sweep_commit(WIKISIM* s, const RING* R, int shift)
+{
+    int idx[WIKI_FEATS_MAX];
+    SweepTarget T[WIKI_FEATS_MAX];
+    uint16_t who[WIKI_FEATS_MAX], seq[WIKI_FEATS_MAX];
+    SweepBuilder* B;
+    WIKIUNIT** bs;
+    int nt = ring_targets(s, R, idx), nb = 0, cancelled = 0, issued = 0, i, j, k;
+    unsigned m;
+    if (!(bs = (WIKIUNIT**)malloc(((size_t)s->nunit + 1) * sizeof *bs))) { s->oom = 1; return; }
+    for (i = 0; i < s->nunit; i++)
+        if (is_reclaimer(s, s->unit[i])) bs[nb++] = s->unit[i];
+    if (!nb) { free(bs); return; }
+    if (nt) {
+        if (!shift)
+            for (i = 0; i < nb; i++) {
+                WIKIUNIT* u = bs[i];
+                for (j = k = 0; j < u->norder; j++)
+                    if (on_ring(s, &u->order[j], idx, nt)) u->order[k++] = u->order[j];
+                cancelled += u->norder - k;
+                u->norder = k;
+            }
+        for (i = k = 0; i < nt; i++) {
+            int queued = 0;
+            for (j = 0; j < nb && !queued; j++) {
+                int q;
+                for (q = 0; q < bs[j]->norder && !queued; q++)
+                    queued = bs[j]->order[q].k == WIKI_ORDER_RECLAIM && bs[j]->order[q].feat
+                          && !strcmp(bs[j]->order[q].target, s->feat[idx[i]].id);
+            }
+            if (!queued) idx[k++] = idx[i];
+        }
+        nt = k;
+    }
+    if (nt) {
+        if (!(B = (SweepBuilder*)calloc((size_t)nb, sizeof *B))) { s->oom = 1; free(bs); return; }
+        for (i = 0; i < nb; i++) {
+            const WIKIUNIT* u = bs[i];
+            double px, pz;
+            B[i].x = (int32_t)floor(u->x);
+            B[i].z = (int32_t)floor(u->z);
+            B[i].speed = def(s, u->type)->max_velocity;
+            B[i].reach = def(s, u->type)->build_distance;
+            px = B[i].x;
+            pz = B[i].z;
+            for (j = 0; j < u->norder; j++) {
+                const WIKIORDER* o = &u->order[j];
+                const WIKIFEAT* f = o->k == WIKI_ORDER_RECLAIM && o->feat ? feat_by_id(s, o->target) : NULL;
+                XZ p;
+                if (order_point(s, o, &p)) {
+                    B[i].x = (int32_t)floor(p.x);
+                    B[i].z = (int32_t)floor(p.z);
+                }
+                if (f) {
+                    const double dd = sqrt(sq(f->x - px) + sq(f->z - pz));
+                    B[i].load += (B[i].speed > 0 && dd > B[i].reach ? (dd - B[i].reach) / B[i].speed : 0)
+                               + sweep_reclaim_ticks((float)f->energy, (float)f->metal);
+                    px = f->x;
+                    pz = f->z;
+                }
+            }
+            B[i].room = u->norder >= SWEEP_LIST_CAP ? 0u : (uint32_t)(SWEEP_LIST_CAP - u->norder);
+        }
+        for (i = 0; i < nt; i++) {
+            T[i].x = (int32_t)s->feat[idx[i]].x;
+            T[i].z = (int32_t)s->feat[idx[i]].z;
+            T[i].ticks = sweep_reclaim_ticks((float)s->feat[idx[i]].energy, (float)s->feat[idx[i]].metal);
+        }
+        m = sweep_split(B, (unsigned)nb, T, (unsigned)nt, who, seq);
+        for (i = 0; i < (int)m; i++) {
+            const WIKIORDER o = order_feat(&s->feat[idx[seq[i]]]);
+            push_order(s, bs[who[i]], &o);
+            issued++;
+        }
+        free(B);
+    }
+    free(bs);
+    if (issued || cancelled) click_tail(s, shift);
+}
+
+/* THE RELEASE of a press that went down on the map with reclaim armed: past the threshold it
+   commits wherever it lands; below it, a click over the map, and off the map nothing */
+static void reclaim_release(WIKISIM* s)
+{
+    const int shift = s->held[WIKI_KEY_SHIFT], drag = s->rg_drag;
+    const RING R = ring_of(s);
+    s->has_rg = 0;
+    if (drag) sweep_commit(s, &R, shift);
+    else if (over(s) == OVER_MAP) reclaim_click(s, shift);
+}
+
 /* ---- the build trip: a scripted `build` input played out through the sidebar ----
    A data input {build: T} at tick t arms nothing itself: it becomes generated inputs, a glide, the
    pager presses and the button's own press, that go through exactly the path the player's clicks
@@ -1034,7 +1531,7 @@ enum { GEN_MOVE, GEN_DOWN, GEN_UP };
    cast the casting leaves unbound (decision 12), with the sidebar or without. */
 static void lock(WIKISIM* s, int t)
 {
-    if (s->locked < 0) s->locked = t;
+    if (s->locked == -1) s->locked = t;
 }
 
 static void gen_push(WIKISIM* s, int at, int kind, double x, double z)
@@ -1115,6 +1612,46 @@ static int plan_trip(const WIKISIM* s, int T, TRIPPLAN* plan)
     return gadget_at(s, TP->page[p - 1], u, plan->button.x, plan->button.z) == gi;
 }
 
+/* THE RECLAIM TRIP's plan: RECLAIM on the routed screen, live, pressed where it is; else the
+   screen's live ORDERS tab (a tab acts on its press) and then RECLAIM on the screen ORDERS routes
+   to, the shown type's orders page or the side's GEN; each point checked to land on its gadget.
+   0: RECLAIM cannot be reached here. */
+static int find_reclaim(const WIKISIM* s, int screen)
+{
+    const WIKISCREEN* sc = screen_of(s, screen);
+    int i;
+    for (i = 0; i < sc->ngadget; i++)
+        if (is_reclaim(&sc->gadget[i]) && live(gadget_state(s, &sc->gadget[i], s->shown, 0))) return i;
+    return -1;
+}
+
+/* the centre of gadget i of `screen`, when a press there lands on it */
+static int press_at(const WIKISIM* s, int screen, int i, XZ* p)
+{
+    const WIKISCREEN* sc = screen_of(s, screen);
+    *p = centre_of(sc, &sc->gadget[i]);
+    return gadget_at(s, screen, s->shown, p->x, p->z) == i;
+}
+
+static int plan_reclaim(const WIKISIM* s, TRIPPLAN* plan)
+{
+    const WIKIUNIT* u = s->shown;
+    const WIKISCREEN* sc = screen_of(s, s->screen);
+    const WIKIPAGES* TP;
+    int i = find_reclaim(s, s->screen), ti, to;
+    if (i >= 0) {
+        plan->k = 0;
+        return press_at(s, s->screen, i, &plan->button);
+    }
+    for (ti = 0; ti < sc->ngadget && !(sc->gadget[ti].role == WIKI_ROLE_ORDERS && live(gadget_state(s, &sc->gadget[ti], u, 0))); ti++) {}
+    TP = u ? type_pages(s, u->type) : NULL;
+    if (ti == sc->ngadget || !TP) return 0;
+    to = TP->orders >= 0 ? TP->orders : s->lay->side[s->side].gen;
+    if (!press_at(s, s->screen, ti, &plan->press[0]) || (i = find_reclaim(s, to)) < 0) return 0;
+    plan->k = 1;
+    return press_at(s, to, i, &plan->button);
+}
+
 /* THE GLIDE, exact in both languages: step i of n from a to b is
    a + trunc((b - a) * (i*i*(3n - 2i)) / (n*n*n)), each axis, evaluated in that order. Step n is b
    itself: the formula reaches b only when b - a is a whole number, and the cursor must stand
@@ -1130,6 +1667,7 @@ static void glide(WIKISIM* s, int t, XZ from, XZ to, int n, int t0)
     for (i = 1; i <= n; i++) gen_push(s, t + t0 + i, GEN_MOVE, glide_at(from.x, to.x, i, n), glide_at(from.z, to.z, i, n));
 }
 
+/* T: the type a build trip arms, or -1 for the reclaim trip */
 static void trip(WIKISIM* s, int T)
 {
     const int t = s->feeding;
@@ -1139,9 +1677,9 @@ static void trip(WIKISIM* s, int T)
     int j;
     /* OWNER QUESTION Q-O2, the recommended answer: a build this layout cannot reach stops the demo
        here, holding the frame under the entry's "Turned off in this mod" badge (decision 4),
-       rather than playing on unarmed */
-    if (!plan_trip(s, T, &plan)) {
-        lock(s, T);
+       rather than playing on unarmed; so does a RECLAIM it cannot reach */
+    if (!(T < 0 ? plan_reclaim(s, &plan) : plan_trip(s, T, &plan))) {
+        lock(s, T < 0 ? WIKI_LOCK_RECLAIM : T);
         return;
     }
     if (s->trip_next == s->ntrip_in) s->ntrip_in = s->trip_next = 0;
@@ -1167,6 +1705,31 @@ static void trip(WIKISIM* s, int T)
     gen_push(s, t + WIKI_TRIP_DOWN, GEN_DOWN, 0, 0);
     gen_push(s, t + WIKI_TRIP_UP, GEN_UP, 0, 0);
     glide(s, t, plan.button, a, WIKI_TRIP - WIKI_TRIP_UP, WIKI_TRIP_UP);
+}
+
+/* the pick trip: no popup to click stops the demo as a RECLAIM it cannot reach does */
+static void pick_trip(WIKISIM* s, int k)
+{
+    const int t = s->feeding;
+    POPUP P;
+    XZ a, B;
+    int i;
+    if (!popup(s, &P)) {
+        lock(s, WIKI_LOCK_RECLAIM);
+        return;
+    }
+    if (s->trip_next == s->ntrip_in) s->ntrip_in = s->trip_next = 0;
+    a.x = s->cursor_x;
+    a.z = s->cursor_z;
+    B.x = P.rows[k][0] + P.rows[k][2] / 2.0;
+    B.z = P.rows[k][1] + P.rows[k][3] / 2.0;
+    for (i = 1; i <= WIKI_PICK_DOWN; i++)
+        gen_push(s, t + i, GEN_MOVE, glide_at(a.x, B.x, i, WIKI_PICK_DOWN), glide_at(a.z, B.z, i, WIKI_PICK_DOWN));
+    gen_push(s, t + WIKI_PICK_DOWN, GEN_DOWN, 0, 0);
+    gen_push(s, t + WIKI_PICK_UP, GEN_UP, 0, 0);
+    for (i = 1; i <= WIKI_PICK - WIKI_PICK_UP; i++)
+        gen_push(s, t + WIKI_PICK_UP + i, GEN_MOVE, glide_at(B.x, a.x, i, WIKI_PICK - WIKI_PICK_UP),
+                 glide_at(B.z, a.z, i, WIKI_PICK - WIKI_PICK_UP));
 }
 
 static void evaluate(WIKISIM* s, WIKIPLACE* p);
@@ -1498,6 +2061,8 @@ static void disarm(WIKISIM* s)
     s->mode = -1;
     s->has_gesture = 0;
     s->shift_placed = 0;
+    s->rmode = 0;
+    s->has_rg = 0;
 }
 
 /* ARMING a building, the build button's branch of 0x41AA00, DISASSEMBLED: main+0x2CC3 = 0x0E
@@ -1512,6 +2077,8 @@ static void arm(WIKISIM* s, int t)
     if (s->mode != t) s->has_gesture = 0;
     s->mode = t;
     s->has_drag = 0;
+    s->rmode = 0;
+    s->has_rg = 0;
 }
 
 /* a click's orders for one unit: they replace its list, or with Shift are appended to it -- all
@@ -1803,16 +2370,32 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
             s->has_drag = 0;
         }
     }
+    /* a `reclaim` arms reclaim through RECLAIM: a trip to the button with the sidebar on, at once
+       without it; a `pick` clicks the popup's row of that kind: a trip there with the sidebar on,
+       the kind at once without it */
+    if (ev->has & WIKI_IN_RECLAIM) {
+        if (s->trips) trip(s, -1);
+        else if (!s->rmode) toggle_reclaim(s);
+    }
+    if ((ev->has & WIKI_IN_PICK) && ev->pick >= 0 && ev->pick < WIKI_NKINDS) {
+        if (s->trips) pick_trip(s, ev->pick);
+        else s->kind = ev->pick;
+    }
     if (ev->has & WIKI_IN_MOVE) {
         XZ c;
         s->cursor_x = ev->move.x;
         s->cursor_z = ev->move.z;
         c = map_cursor(s);
         if (s->has_drag && sq(c.x - s->drag_x0) + sq(c.z - s->drag_z0) > DRAG * DRAG) s->drag_active = 1;
+        reclaim_move(s);
     }
     if (ev->down == WIKI_KEY_Z || ev->down == WIKI_KEY_X) {
         s->held[ev->down] = 1;
         step_spacing(s, ev->down);
+    } else if (ev->down == WIKI_KEY_E) {
+        /* every down, an auto-repeat included, is a key to the GUI */
+        s->held[WIKI_KEY_E] = 1;
+        key_press(s, 'e');
     } else if (ev->down >= 0 && ev->down < WIKI_NKEYS && !s->held[ev->down]) {
         const int mouse = ev->down == WIKI_KEY_LMB || ev->down == WIKI_KEY_RMB;
         int shift, where;
@@ -1820,12 +2403,19 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
         shift = s->held[WIKI_KEY_SHIFT];
         where = over(s);
         if (mouse) s->down_on[ev->down] = where;
-        if (mouse && where == OVER_SIDE && on_screen(s)) press_side(s, ev->down);
+        /* A RIGHT PRESS WHILE A RECLAIM DRAG'S LEFT PRESS IS HELD, wherever it lands, ends the drag
+           and keeps reclaim armed; the window procedure takes it and its release before the engine
+           or the GUI sees either (tagpu_sweep_mouse) */
+        if (ev->down == WIKI_KEY_RMB && s->has_rg) {
+            s->has_rg = 0;
+            s->down_on[WIKI_KEY_RMB] = OVER_NONE;
+        } else if (mouse && where == OVER_SIDE && on_screen(s)) press_side(s, ev->down);
         else if (where == OVER_MAP) {
-            /* with a building armed a left press carrying Shift starts a gesture at the cursor
-               site instead of placing */
+            /* with reclaim armed a left press is the sweep's; with a building armed a left press
+               carrying Shift starts a gesture at the cursor site instead of placing */
             if (ev->down == WIKI_KEY_LMB) {
-                if (s->mode >= 0 && shift) {
+                if (s->rmode) reclaim_press(s);
+                else if (s->mode >= 0 && shift) {
                     s->gesture = cursor_site(s);
                     s->has_gesture = 1;
                 } else if (s->mode >= 0) place_click(s, 0);
@@ -1839,10 +2429,10 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
                 }
             }
             /* with a building armed a right press cancels it at both types (0x499100, MEASURED
-               at type 1) */
+               at type 1), and with reclaim armed it is the same handler's cancel */
             if (ev->down == WIKI_KEY_RMB) {
                 s->has_drag = 0;
-                if (s->mode >= 0) disarm(s);
+                if (s->mode >= 0 || s->rmode) disarm(s);
                 else if (s->iface) right_click(s, shift);
                 else right_press0(s);
             }
@@ -1856,21 +2446,20 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
            nothing. MEASURED 2026-10-27, Interface Type 1, 1024 x 768: a press at (60, 600), below
            the screen, placed one site at the clamped point (1148, 6416), snapped to
            (1144, 6424). The sim's clamp onto the map stands for the engine's onto the view,
-           because the stage shows the map where the game shows a view. The band under a short
-           map has no engine equivalent: the game's scroll keeps its view on the map [INFERRED],
-           so the nearest rule is the same clamp. The minimap stays inert (the owner's decision 6),
-           where the game would place at its world point. A right press there is the handler's
+           because the stage shows the map where the game shows a view. The minimap stays inert
+           (the owner's decision 6), where the game would place at its world point. A right press there is the handler's
            cancel and nothing else. */
         else if (ev->down == WIKI_KEY_LMB && s->mode >= 0 && !on_minimap(s->cursor_x, s->cursor_z))
             place_click(s, shift);
-        else if (ev->down == WIKI_KEY_RMB && s->mode >= 0) disarm(s);
+        else if (ev->down == WIKI_KEY_RMB && (s->mode >= 0 || s->rmode)) disarm(s);
     }
     if (ev->up >= 0 && ev->up < WIKI_NKEYS && s->held[ev->up]) {
         s->held[ev->up] = 0;
         /* a release runs the map rules only for a press that went down on the map */
         if (s->cap >= 0 && s->cap_key == ev->up) release_side(s);
         else if (s->down_on[ev->up] == OVER_MAP) {
-            if (ev->up == WIKI_KEY_LMB && s->has_gesture) release(s);
+            if (ev->up == WIKI_KEY_LMB && s->has_rg) reclaim_release(s);
+            else if (ev->up == WIKI_KEY_LMB && s->has_gesture) release(s);
             else if (ev->up == WIKI_KEY_LMB && s->has_drag) {
                 /* a box is the same at both types; a click is type 1's select and type 0's left_click */
                 const XZ c = map_cursor(s);
@@ -1991,18 +2580,29 @@ static int claim(const WIKISIM* s, const WIKIUNIT* u, WIKIRECT* out)
         || rect_gap(body(s, u), *out) <= def(s, u->type)->max_velocity;
 }
 
-/* every body but u's into s->obs: the units' in creation order, then the claims in their
-   claimants' order; their count, or -1 when the scratch cannot grow. It holds one more, the site
-   go() adds. */
+/* a feature's footprint in world units */
+static WIKIRECT feat_rect(const WIKIFEAT* f)
+{
+    return rect(f->ox * CELL, f->oz * CELL, (f->ox + f->fx) * CELL, (f->oz + f->fz) * CELL);
+}
+
+/* every body but u's into s->obs: the units' in creation order, then the blocking features', then
+   the claims in their claimants' order; their count, or -1 when the scratch cannot grow. It holds
+   one more, the site go() adds. */
 static int bodies(WIKISIM* s, const WIKIUNIT* u)
 {
     int i, n = 0;
     WIKIRECT r;
-    if (!grow(s, (void**)&s->obs, &s->cobs, 2 * s->nunit + 1, sizeof *s->obs)) return -1;
+    if (!grow(s, (void**)&s->obs, &s->cobs, 2 * s->nunit + s->nfeat + 1, sizeof *s->obs)) return -1;
     for (i = 0; i < s->nunit; i++)
         if (s->unit[i] != u) {
             s->obs[n].r = body(s, s->unit[i]);
             s->obs[n++].u = s->unit[i];
+        }
+    for (i = 0; i < s->nfeat; i++)
+        if (s->feat[i].blocking) {
+            s->obs[n].r = feat_rect(&s->feat[i]);
+            s->obs[n++].u = NULL;
         }
     for (i = 0; i < s->nunit; i++)
         if (mobile(s, s->unit[i]->type) && claim(s, s->unit[i], &r)) {
@@ -2064,6 +2664,23 @@ static TARGET to_unit(const WIKISIM* s, const WIKIORDER* o, const WIKIUNIT* g)
     t.has_body = 1;
     t.serial = o->serial;
     t.kind = TARGET_UNIT;
+    return t;
+}
+
+/* a feature's Reclaim walks until the footprints touch: its goal 0x44D8A0 is the ring of cells round
+   the feature's footprint widened by the unit's, which 0x44DCB0 passes when the unit's cell lies on
+   it; BuildDistance is not read */
+static TARGET to_feat(const WIKIORDER* o, const WIKIFEAT* f)
+{
+    TARGET t;
+    memset(&t, 0, sizeof t);
+    t.x = f->x;
+    t.z = f->z;
+    t.r = t.body = feat_rect(f);
+    t.has_body = 1;
+    t.plan = CELL;
+    t.serial = o->serial;
+    t.kind = TARGET_SITE;
     return t;
 }
 
@@ -2421,7 +3038,7 @@ static void credit(WIKISIM* s, WIKIUNIT* u, WIKIUNIT* st, int how)
     u->job = st;
     u->job_how = how;
     snprintf(u->job_id, sizeof u->job_id, "%s", st->id);
-    if (!(u->stanced && !strcmp(u->work, st->id))) {
+    if (!(u->stanced && !u->work_feat && !strcmp(u->work, st->id))) {
         if (!stance(s, u)) return;
         u->stanced = 1;
     }
@@ -2557,26 +3174,74 @@ static int spray_burst(WIKISIM* s, const WIKISPRAY* e, int tick)
    its first on that structure: a new order's first step sprays at once (its counter reset at
    0x404845), and no two ticks running ever spray the same reclaim (0x404A4E re-arms the order at
    2 ticks, 0x439E80). */
-static void spray(WIKISIM* s, WIKIUNIT* u, int t)
+/* the nano piece's point: QueryNanoPiece names the piece and the host gives its origin, turned by
+   the unit's facing */
+static void nano_point(WIKISIM* s, const WIKIUNIT* u, int32_t pt[3])
 {
-    const WIKIDEF* d = def(s, u->spray_type);
-    int32_t io[4] = { 0, 0, 0, 0 }, turned[3], base[3], pt[3], lo[3], hi[3];
+    int32_t io[4] = { 0, 0, 0, 0 }, turned[3], base[3];
     const int fixed = !mobile(s, u->type);
     const double cs = fixed ? -1.0 : -u->hz, sn = fixed ? 0.0 : u->hx;
-    WIKISPRAY e;
-    int piece = 0, n, k;
-    if (!s->part) return;
-    if (u->spray - 1 == HOW_RECLAIM) {
-        if (u->spray_at && !strcmp(u->spray_on, u->spray_id) && t - u->spray_at < 2) return;
-        u->spray_at = t;
-        snprintf(u->spray_on, sizeof u->spray_on, "%s", u->spray_id);
-    }
-    n = facts(s);
+    int piece = 0;
+    const int n = facts(s);
     if (tagpu_wikicob_query(s->cob, u->cob, "QueryNanoPiece", io, s->fact, n) > 0) piece = io[0];
     tagpu_wikicob_origin(s->cob, u->cob, piece, turned, base);
     pt[0] = add32(add32(fix16(u->x), trunc32(cs * turned[0] + sn * turned[2])), base[0]);
     pt[1] = add32(turned[1], base[1]);
     pt[2] = sub32(sub32(fix16(u->z), trunc32(-sn * turned[0] + cs * turned[2])), base[2]);
+}
+
+/* one reverse emission from box `target` to point `pt` (0x472200), its second burst due on the
+   next tick */
+static void emit_reverse(WIKISIM* s, const WIKIUNIT* u, const int32_t target[6], const int32_t pt[3], int t)
+{
+    WIKISPRAY e;
+    memcpy(e.box[0], target, sizeof e.box[0]);
+    spray_box(pt, pt, e.box[1]);
+    e.key = spray_key(u->id, s->nemit++);
+    e.due = t + 1;
+    if (!spray_burst(s, &e, t)) return;
+    if (s->nburst < WIKI_SPRAY_BURSTS) s->burst[s->nburst++] = e;
+    else s->part_cut = 1;
+}
+
+/* A FEATURE'S RECLAIM SPRAYS from the feature's box to the nano piece, twice a call with the same
+   arguments (0x404D3B, 0x404D4C): the box from the anchor cell's corner, FootprintX x FootprintZ
+   cells wide and the feature's height (+0xFA) tall over the ground (0x404CC9..0x404D37), the
+   stage's ground being 0 */
+static void spray_feature(WIKISIM* s, WIKIUNIT* u, int t)
+{
+    const int* f = u->spray_box;
+    int32_t pt[3], lo[3], hi[3], target[6];
+    nano_point(s, u, pt);
+    lo[0] = fix16(f[0] * CELL);
+    lo[1] = 0;
+    lo[2] = fix16(f[1] * CELL);
+    hi[0] = fix16((f[0] + f[2]) * CELL);
+    hi[1] = fix16(f[4]);
+    hi[2] = fix16((f[1] + f[3]) * CELL);
+    spray_box(lo, hi, target);
+    emit_reverse(s, u, target, pt, t);
+    emit_reverse(s, u, target, pt, t);
+}
+
+static void spray(WIKISIM* s, WIKIUNIT* u, int t)
+{
+    const WIKIDEF* d;
+    int32_t pt[3], lo[3], hi[3];
+    WIKISPRAY e;
+    int k;
+    if (!s->part) return;
+    if (u->spray - 1 == HOW_FEATURE) {
+        spray_feature(s, u, t);
+        return;
+    }
+    d = def(s, u->spray_type);
+    if (u->spray - 1 == HOW_RECLAIM) {
+        if (u->spray_at && !strcmp(u->spray_on, u->spray_id) && t - u->spray_at < 2) return;
+        u->spray_at = t;
+        snprintf(u->spray_on, sizeof u->spray_on, "%s", u->spray_id);
+    }
+    nano_point(s, u, pt);
     lo[0] = sub32(fix16(u->spray_x), d->fx * 0x80000);
     hi[0] = add32(fix16(u->spray_x), d->fx * 0x80000);
     lo[1] = 0;
@@ -2711,7 +3376,10 @@ static void begin(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* o)
 {
     if (o->serial == u->begun) return;
     u->begun = o->serial;
-    if (o->serial > s->scene_serial && o->k != WIKI_ORDER_BUILD) notice(s, u, WIKI_SND_OK);
+    /* a feature's Reclaim never says ok: 0x404AD0 calls no 0x438880, where ReclaimUnit does
+       (0x4047C1) */
+    if (o->serial > s->scene_serial && o->k != WIKI_ORDER_BUILD && !(o->k == WIKI_ORDER_RECLAIM && o->feat))
+        notice(s, u, WIKI_SND_OK);
 }
 
 /* u's first order has said cant for its taken site */
@@ -2749,6 +3417,81 @@ static int out_of_reach(const WIKISIM* s, const WIKIUNIT* u, int t, int ox, int 
     const double sf = sqrt((double)fpx(s, t) * fpx(s, t) + (double)fpz(s, t) * fpz(s, t));
     const double d = floor(sqrt(dx * dx + dz * dz)) - trunc(8.0 * uf) + trunc(-8.0 * sf);
     return d > def(s, u->type)->build_distance;
+}
+
+/* the countdown a Reclaim order sets on a feature (0x404BBA..0x404BDC): trunc(15 + (energy + metal)
+   / 2) of the FeatureDef's floats (+0xEC, +0xF0), as tagpu_sweepgeo.c's sweep_reclaim_ticks reads
+   them; the loader holds both below WIKI_FEAT_AMOUNT, so it fits an int */
+static int reclaim_countdown(double energy, double metal)
+{
+    const double e = (float)energy, m = (float)metal;
+    return (int)floor(15 + ((e > 0 ? e : 0) + (m > 0 ? m : 0)) / 2);
+}
+
+/* THE RECLAIM HANDLER ON A FEATURE, 0x404AD0, DISASSEMBLED (research/notes/exe-reverse-engineering.md,
+   *The reclaim sweep's engine side*): every call looks the feature up at the order's point, and
+   with none says "Reclamation failed" (kind 7, 0x404AF8) and ends. The walk until the footprints
+   touch; a walk that gives up ends the order silent (result 8). Arrived, the countdown and
+   StartBuilding; the stance wait (0x404C5A); the working reply once (0x404C6E); then a working
+   call every 2 ticks (0x439E80(2) at 0x404C77) takes 2 off it: at 0 or below it pays out and the
+   feature goes (0x4237D0, FeatureDie), above 15 it sprays (0x404CB5). The countdown, the next
+   call's tick and whether it paid are the unit's (rc_*). `o` is u's first order. */
+static void feat_work(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* o)
+{
+    WIKIFEAT* f = feat_by_id(s, o->target);
+    const int t = s->tick + 1;
+    double dx, dz, d;
+    if (!f) {
+        shift_order(u);
+        u->rc_serial = 0;
+        notice(s, u, WIKI_SND_CANT);
+        return;
+    }
+    if (u->rc_serial != o->serial) {
+        const TARGET g = to_feat(o, f);
+        const int r = go(s, u, &g);
+        if (r == GO_STUCK) {
+            shift_order(u);
+            return;
+        }
+        if (r != GO_ARRIVED) return;
+        u->rc_serial = o->serial;
+        u->rc_c = reclaim_countdown(f->energy, f->metal);
+        u->rc_next = t;
+        u->rc_paid = 0;
+    }
+    dx = f->x - u->x;
+    dz = f->z - u->z;
+    d = sqrt(dx * dx + dz * dz);
+    if (d > 0) {
+        u->hx = dx / d;
+        u->hz = dz / d;
+    }
+    u->job = NULL;
+    u->job_how = HOW_FEATURE;
+    snprintf(u->job_id, sizeof u->job_id, "%s", f->id);
+    if (!(u->stanced && u->work_feat && !strcmp(u->work, f->id))) {
+        if (!stance(s, u)) return;
+        u->stanced = 1;
+    }
+    if (o->serial != u->said) {
+        u->said = o->serial;
+        notice(s, u, WIKI_SND_WORKING);
+    }
+    if (t < u->rc_next) return;
+    u->rc_next = t + 2;
+    u->rc_c -= 2;
+    if (u->rc_c <= 0) {
+        u->rc_paid = 1;
+        feat_remove(s, f);
+    } else if (u->rc_c > 15) {
+        u->spray = HOW_FEATURE + 1;
+        u->spray_box[0] = f->ox;
+        u->spray_box[1] = f->oz;
+        u->spray_box[2] = f->fx;
+        u->spray_box[3] = f->fz;
+        u->spray_box[4] = f->height;
+    }
 }
 
 static void advance(WIKISIM* s)
@@ -2795,6 +3538,10 @@ static void advance(WIKISIM* s)
             arrived = r == GO_ARRIVED || in_goal_cell(s, u, o->x, o->z);
             shift_order(u);
             if (arrived) notice(s, u, WIKI_SND_ARRIVED);
+            continue;
+        }
+        if (o->k == WIKI_ORDER_RECLAIM && o->feat) {
+            feat_work(s, u, o);
             continue;
         }
         if (o->k == WIKI_ORDER_RECLAIM) {
@@ -2849,6 +3596,8 @@ static void advance(WIKISIM* s)
         WIKIORDER* o = u->norder ? &u->order[0] : NULL;
         if (!o || o->k != WIKI_ORDER_GUARD || u->evacuated) continue;
         if (!(g = by_id(s, o->target))) { shift_order(u); continue; }
+        /* a guarded unit reclaiming a feature is followed: the wiki's guard helps only a
+           structure's work (its job is NULL then) */
         if (g->job) {
             WIKIUNIT* j = g->job;
             if (reach(s, o, u, j->type, j->ox, j->oz)) credit(s, u, j, g->job_how);
@@ -2896,6 +3645,13 @@ static void advance(WIKISIM* s)
         if (!o) continue;
         if (o->k == WIKI_ORDER_BUILD) {
             if ((st = structure_at(s, o->type, o->ox, o->oz)) && st->built >= 1) shift_order(u);
+        } else if (o->k == WIKI_ORDER_RECLAIM && o->feat) {
+            /* a feature's reclaim ends with its payout (result 5); another reclaimer of it finds
+               it gone on its next call */
+            if (u->rc_serial == o->serial && u->rc_paid) {
+                shift_order(u);
+                u->rc_serial = 0;
+            }
         } else if ((o->k == WIKI_ORDER_RECLAIM || o->k == WIKI_ORDER_GUARD) && !by_id(s, o->target))
             shift_order(u);
     }
@@ -2912,20 +3668,27 @@ static void advance(WIKISIM* s)
        its target above. */
     for (i = 0; s->cob && i < s->nunit; i++) {
         WIKIUNIT* u = s->unit[i];
-        const WIKIUNIT* t = u->job_id[0] ? by_id(s, u->job_id) : NULL;
+        /* a feature's work holds while the feature stands */
+        const int feat = u->job_id[0] && u->job_how == HOW_FEATURE;
+        const WIKIUNIT* t = u->job_id[0] && !feat ? by_id(s, u->job_id) : NULL;
+        const WIKIFEAT* tf = feat ? feat_by_id(s, u->job_id) : NULL;
+        const char* tid;
         char ended[WIKI_ID_MAX] = "";
         if (t && u->job_how == HOW_BUILD && t->built >= 1) t = NULL;
-        if (u->work[0] && (!t || strcmp(u->work, t->id))) {
+        tid = t ? t->id : tf ? tf->id : NULL;
+        if (u->work[0] && (!tid || u->work_feat != (tf != NULL) || strcmp(u->work, tid))) {
             cob_call(s, u, "StopBuilding", WIKICOB_LATER, 0, NULL);
             snprintf(ended, sizeof ended, "%s", u->work);
             u->work[0] = 0;
             u->work_serial = 0;
+            u->work_feat = 0;
             u->stanced = 0;
         }
-        if (t && !u->work[0]) {
+        if (tid && !u->work[0]) {
             const int32_t heading = 0;
             cob_call(s, u, "StartBuilding", WIKICOB_ARGS, 1, &heading);
-            snprintf(u->work, sizeof u->work, "%s", t->id);
+            snprintf(u->work, sizeof u->work, "%s", tid);
+            u->work_feat = tf != NULL;
             u->work_serial = u->norder ? u->order[0].serial : 0;
         }
         /* a work that ended this tick sprays its last step by its own cadence, which is forgotten
@@ -2951,11 +3714,25 @@ static void advance(WIKISIM* s)
 /* THE CURSOR'S SHAPE (WIKI_CURSOR_*, the game's cursor for each): the build-menu mode, else a
    selection holding a mobile unit of the player's, else none. Quick Build's ghost changes nothing
    here: it is drawn from the packet and leaves the engine's cursor as the selection has it. Off
-   the map it is the arrow: the GUI shows cursornormal [INFERRED, capture C5]. */
+   the map it is the arrow: the GUI shows cursornormal [INFERRED, capture C5]. With reclaim armed it
+   is cursorreclamate [INFERRED: the chooser's answer in mode 12 everywhere on the map], but
+   cursornormal (the engine's "nothing", 0x13) over the popup and over a feature the resolver would
+   reclaim that is not of the chosen kind (tagpu_sweep_cursor). */
+static int reclaim_cursor(const WIKISIM* s)
+{
+    const XZ c = map_cursor(s);
+    const WIKIFEAT* f = feat_at(s, c.x, c.z);
+    POPUP P;
+    if (popup(s, &P) && on_popup(s, &P)) return WIKI_CURSOR_ARROW;
+    return s->kind != WIKI_KIND_ALL && f && f->reclaimable && seen(s, cell_of(f->x), cell_of(f->z)) && !kind_ok(s, f)
+         ? WIKI_CURSOR_ARROW : WIKI_CURSOR_RECLAIM;
+}
+
 static int cursor_shape(const WIKISIM* s)
 {
     int i;
     if (over(s) != OVER_MAP) return WIKI_CURSOR_ARROW;
+    if (s->rmode) return reclaim_cursor(s);
     if (s->mode >= 0) return WIKI_CURSOR_BUILD;
     for (i = 0; i < s->nunit; i++)
         if (s->unit[i]->sel && s->unit[i]->owner == 0 && mobile(s, s->unit[i]->type)) return WIKI_CURSOR_MOVE;
@@ -3024,6 +3801,7 @@ static void drop_work(WIKISIM* s)
         cob_call(s, u, "StopBuilding", WIKICOB_LATER, 0, NULL);
         u->work[0] = 0;
         u->work_serial = 0;
+        u->work_feat = 0;
         u->stanced = 0;
         u->spray_at = 0;
     }
@@ -3058,7 +3836,7 @@ void tagpu_wikisim_step(WIKISIM* s)
     sound_tick(s);
     s->tick = t;
     /* a lock ends the demo on its own tick, which then holds under the entry's badge */
-    s->done = s->clock >= s->end || s->locked >= 0 || s->stalled;
+    s->done = s->clock >= s->end || s->locked != -1 || s->stalled;
     if (s->lay) route(s);
     s->hover = hover(s);
     cursor_tick(s, t);
@@ -3194,18 +3972,17 @@ const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s)
         if (!u->sel) continue;
         for (j = 0; j < u->norder; j++) {
             const WIKIORDER* o = &u->order[j];
+            const WIKIUNIT* g;
             double tx, tz;
-            if (o->k == WIKI_ORDER_MOVE) { tx = o->x; tz = o->z; }
-            else if (o->k == WIKI_ORDER_BUILD) {
-                const XZ c = centre(s, o->type, o->ox, o->oz);
-                tx = c.x;
-                tz = c.z;
-            } else {
-                const WIKIUNIT* t = by_id(s, o->target);
-                if (!t) continue;
-                tx = t->x;
-                tz = t->z;
-            }
+            XZ p;
+            /* a guard's line goes to its unit */
+            if (order_point(s, o, &p)) {
+                tx = p.x;
+                tz = p.z;
+            } else if ((g = by_id(s, o->target))) {
+                tx = g->x;
+                tz = g->z;
+            } else continue;
             if (!grow(s, (void**)&s->vline, &s->cvline, v->nline + 1, sizeof *s->vline)) break;
             s->vline[v->nline].from_x = fx;
             s->vline[v->nline].from_z = fz;
@@ -3254,6 +4031,57 @@ const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s)
     for (i = 0; i < v->nsnd; i++) s->vsnd[i] = s->snd[(s->snd_total - v->nsnd + i) % WIKI_SND_LOG];
     v->snd = s->vsnd;
     v->mode = s->mode;
+    v->nfeat = s->nfeat;
+    for (i = 0; i < s->nfeat; i++) {
+        const WIKIFEAT* f = &s->feat[i];
+        WIKIVFEAT* w = &s->vfeat[i];
+        w->id = f->id;
+        w->def = f->def;
+        w->ox = f->ox;
+        w->oz = f->oz;
+        w->fx = f->fx;
+        w->fz = f->fz;
+        w->metal = f->metal;
+        w->energy = f->energy;
+    }
+    v->feat = s->vfeat;
+    v->ngone = s->ngone;
+    v->gone = s->gone;
+    /* THE SWEEP as tagpu_sweep_fill publishes it (WIKIVSWEEP) */
+    if ((v->rmode = s->rmode)) {
+        WIKIVSWEEP* w = &v->sweep;
+        POPUP P;
+        const int pop = popup(s, &P);
+        memset(w, 0, sizeof *w);
+        w->kind = s->kind;
+        w->hover = -1;
+        w->hot = -1;
+        if ((w->has_ring = s->has_rg && s->rg_drag)) {
+            const RING R = ring_of(s);
+            w->ring_x = R.x;
+            w->ring_z = R.z;
+            w->ring_r = R.r;
+            w->ntarget = ring_targets(s, &R, w->target);
+            for (i = 0; i < w->ntarget; i++) {
+                const WIKIFEAT* f = &s->feat[w->target[i]];
+                if (f->metal > 0) w->wrecks++;
+                else if (f->energy > 0) w->trees++;
+                w->metal += f->metal;
+                w->energy += f->energy;
+            }
+        }
+        if (!s->has_rg && over(s) == OVER_MAP && !(pop && on_popup(s, &P))) {
+            const XZ c = map_cursor(s);
+            const WIKIFEAT* f = feat_at(s, c.x, c.z);
+            if (f && takes(s, f)) w->hover = (int)(f - s->feat);
+        }
+        if ((w->has_popup = pop)) {
+            memcpy(w->rect, P.rect, sizeof w->rect);
+            memcpy(w->rows, P.rows, sizeof w->rows);
+            memcpy(w->tongue, P.tongue, sizeof w->tongue);
+            w->hot = on_popup(s, &P) ? popup_row(s, &P) : -1;
+        }
+    }
     /* the column, only with the sidebar on; the type the demo stopped on, with it or without */
     if ((v->has_side = s->lay != NULL)) side_view(s, &v->side);
     v->locked = s->locked;
@@ -3350,6 +4178,13 @@ uint64_t tagpu_wikisim_hash(const WIKISIM* s)
                 fnv_str(&h, def(s, o->type)->name);
                 fnv_int(&h, o->ox);
                 fnv_int(&h, o->oz);
+            } else if (o->k == WIKI_ORDER_RECLAIM) {
+                fnv_str(&h, o->target);
+                fnv_int(&h, o->feat ? 1 : 0);
+                if (o->feat) {
+                    fnv_double(&h, o->x);
+                    fnv_double(&h, o->z);
+                }
             } else fnv_str(&h, o->target);
         }
     }
@@ -3396,7 +4231,7 @@ uint64_t tagpu_wikisim_hash(const WIKISIM* s)
         for (i = 0; i < v.nstate; i++) fnv_int(&h, v.state[i]);
         fnv_str(&h, v.under);
     }
-    fnv_str(&h, s->locked >= 0 ? def(s, s->locked)->name : "");
+    fnv_str(&h, s->locked >= 0 ? def(s, s->locked)->name : s->locked == WIKI_LOCK_RECLAIM ? "RECLAIM" : "");
 
     fnv_int(&h, s->clock);
     fnv_int(&h, s->waiting);
@@ -3454,6 +4289,27 @@ uint64_t tagpu_wikisim_hash(const WIKISIM* s)
         }
         for (i = 0; i < s->nunit; i++) fnv_int(&h, cant_said(s->unit[i]));
     }
+
+    fnv_int(&h, s->nfeat);
+    for (i = 0; i < s->nfeat; i++) {
+        fnv_str(&h, s->feat[i].id);
+        fnv_str(&h, s->entry->feat[s->feat[i].def].name);
+        fnv_int(&h, s->feat[i].ox);
+        fnv_int(&h, s->feat[i].oz);
+    }
+    fnv_int(&h, s->ngone);
+    for (i = 0; i < 2 * s->ngone; i++) fnv_int(&h, s->gone[i]);
+    fnv_int(&h, s->rmode);
+    if (s->rmode) {
+        fnv_int(&h, s->kind);
+        fnv_int(&h, s->has_rg && s->rg_drag);
+        if (s->has_rg && s->rg_drag) {
+            const RING R = ring_of(s);
+            fnv_int(&h, R.x);
+            fnv_int(&h, R.z);
+            fnv_int(&h, R.r);
+        }
+    }
     return h;
 }
 
@@ -3489,6 +4345,8 @@ void tagpu_wikisim_free(WIKISIM* s)
     free(s->vunit);
     free(s->vqueued);
     free(s->vline);
+    free(s->feat);
+    free(s->gone);
     memset(s, 0, sizeof *s);
 }
 
@@ -3527,8 +4385,8 @@ static const WIKISCENEUNIT* scene_unit(const WIKISCENE* a, const WIKISCENE* b, i
     return k < a->nunit ? &a->unit[k] : &b->unit[k - a->nunit];
 }
 
-/* scene unit k's body at (x, z) lies on the scene's map and overlaps no scene structure and no mobile
-   scene unit before k, at the place spot[] settled for it */
+/* scene unit k's body at (x, z) lies on the scene's map and overlaps no scene structure, no mobile
+   scene unit before k, at the place spot[] settled for it, and no blocking feature */
 static int scene_free(const WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, const double* spot, int k,
                       double x, double z)
 {
@@ -3540,6 +4398,8 @@ static int scene_free(const WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, 
         if (mobile(s, t) && m >= k) continue;
         if (hits(r, scene_rect(s, t, spot[2 * m], spot[2 * m + 1]))) return 0;
     }
+    for (m = 0; m < s->nfeat; m++)
+        if (s->feat[m].blocking && hits(r, feat_rect(&s->feat[m]))) return 0;
     return 1;
 }
 
@@ -3580,7 +4440,7 @@ static void scene_spots(const WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b
 static int scene_units(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, char* err, size_t errn)
 {
     const int n = scene_n(a, b);
-    int i, j;
+    int i, j, k = 0;
     double* spot = (double*)malloc((size_t)(n + 1) * 2 * sizeof *spot);
     if (!spot) return -1;
     scene_spots(s, a, b, spot);
@@ -3610,13 +4470,71 @@ static int scene_units(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, char*
             const WIKIUNIT* v = s->unit[j];
             if (v != u && !mobile(s, v->type) && overlap(fb, box(s, v->type, v->ox, v->oz))) break;
         }
-        if (!(fb.ox >= 1 && fb.oz >= 1 && fb.ox + fb.fx < s->W && fb.oz + fb.fz < s->SH) || j < s->nunit) {
+        for (k = 0; j == s->nunit && k < s->nfeat && !overlap(fb, feat_box(&s->feat[k])); k++) {}
+        if (!(fb.ox >= 1 && fb.oz >= 1 && fb.ox + fb.fx < s->W && fb.oz + fb.fz < s->SH) || j < s->nunit || k < s->nfeat) {
             snprintf(err, errn, "%s's %s does not fit the scene", u->id, def(s, u->type)->name);
             free(spot);
             return 0;
         }
     }
     free(spot);
+    return 1;
+}
+
+/* THE SCENE'S FEATURES, sim.js's: the entry's scene's, then the demo's, each its table row at its
+   anchor cell, named by its id or f<k + 1>; refused when it leaves the scene's map, overlaps a
+   feature before it, or takes an id given before it. 1, or 0 with the refusal in `err`, or -1 when
+   memory ran out. THE BOUND: at most WIKI_FEATS_MAX, the view's and the sweep's tables; each row
+   index is one the loader resolved against the entry's table, which the bound entry shares. */
+static int scene_feats(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, char* err, size_t errn)
+{
+    const int n = a->nfeat + (b ? b->nfeat : 0);
+    int k, j;
+    if (n > WIKI_FEATS_MAX) {
+        snprintf(err, errn, "the scene has more than %d features", WIKI_FEATS_MAX);
+        return 0;
+    }
+    if (!(s->feat = (WIKIFEAT*)calloc((size_t)n + 1, sizeof *s->feat)) || !(s->gone = (int*)calloc(2 * WIKI_FEATS_MAX, sizeof *s->gone)))
+        return -1;
+    for (k = 0; k < n; k++) {
+        const WIKISCENEFEAT* sf = k < a->nfeat ? &a->feat[k] : &b->feat[k - a->nfeat];
+        const WIKIFEATDEF* d;
+        WIKIFEAT* f = &s->feat[k];
+        if (sf->def < 0 || sf->def >= s->entry->nfeat) {
+            snprintf(err, errn, "feature %d of the scene names no feature of the entry", k);
+            return 0;
+        }
+        d = &s->entry->feat[sf->def];
+        if (sf->id[0]) snprintf(f->id, sizeof f->id, "%s", sf->id);
+        else snprintf(f->id, sizeof f->id, "f%d", k + 1);
+        for (j = 0; j < k && strcmp(s->feat[j].id, f->id); j++) {}
+        if (j < k) {
+            snprintf(err, errn, "feature %d of the scene: the id is not a new name", k);
+            return 0;
+        }
+        f->def = sf->def;
+        f->ox = sf->ox;
+        f->oz = sf->oz;
+        f->fx = d->fx;
+        f->fz = d->fz;
+        if (f->ox < 0 || f->oz < 0 || f->ox + f->fx > s->W || f->oz + f->fz > s->SH) {
+            snprintf(err, errn, "feature %d of the scene is not on the map", k);
+            return 0;
+        }
+        f->x = (f->ox + f->fx / 2.0) * CELL;
+        f->z = (f->oz + f->fz / 2.0) * CELL;
+        f->metal = d->metal;
+        f->energy = d->energy;
+        f->height = d->height;
+        f->blocking = d->blocking;
+        f->reclaimable = d->reclaimable;
+        for (j = 0; j < k && !overlap(feat_box(&s->feat[j]), feat_box(f)); j++) {}
+        if (j < k) {
+            snprintf(err, errn, "feature %d of the scene overlaps another feature", k);
+            return 0;
+        }
+    }
+    s->nfeat = n;
     return 1;
 }
 
@@ -3692,6 +4610,7 @@ static int bind(WIKISIM* s, const WIKIENTRY* e, const WIKICASTING* k, char* err,
         d->vent = c->vent;
         memcpy(d->g, c->g, sizeof d->g);
         d->canstop = c->canstop;
+        d->canreclamate = c->canreclamate;
         d->activate_when_built = c->activate_when_built;
         for (j = 0; j < e->ndef; j++)
             if ((c->builds >> e->def[j].cast) & 1) d->builds |= (uint64_t)1 << j;
@@ -3857,6 +4776,10 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     }
     /* the scene's units say nothing as it is laid out: an engine level's units are there before
        its first second, which has no reply with sound (the queue's last time starts at 0) */
+    /* the sweep's kind the scene starts with: the demo's, else the entry's scene's, else ALL */
+    s->kind = b && b->has_kind ? b->kind : a->has_kind ? a->kind : WIKI_KIND_ALL;
+    if ((r = scene_feats(s, a, b, err, errn)) < 0) goto oom;
+    if (!r) goto refused;
     s->snd_quiet = 1;
     r = scene_units(s, a, b, err, errn);
     s->snd_quiet = 0;
@@ -3892,7 +4815,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     if (s->lay) route(s);
     if ((k = unbound_in_scene(s, a, b)) >= 0) lock(s, k);
     feed(s, 0);
-    s->done = s->locked >= 0;
+    s->done = s->locked != -1;
     s->hover = hover(s);
     s->cursor_shape = cursor_shape(s);
     s->cursor_since = 0;

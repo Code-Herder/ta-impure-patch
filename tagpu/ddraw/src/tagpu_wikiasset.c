@@ -1959,7 +1959,7 @@ static void unit_report(SB* b, const LOADER* L, const WIKI3DUNIT* u, const UNITR
    fractional figures as strtod over the first decimal number (fbi_strtod), a missing key 0. */
 typedef struct {
     char      name[SNAME];              /* the UnitName as its FBI spells it                     */
-    int       canstop, activate_when_built, src, order;
+    int       canstop, canreclamate, activate_when_built, src, order;
     char      path[TAGPU_VFS_PATHMAX];
     long long bmcode, canfly, fx, fz;
     uint32_t  builder;
@@ -2007,6 +2007,7 @@ typedef struct {
     int       index, ok, filled;
     long long id, x, y, w, h, active, stages, attribs;
     uint32_t  attr, common, gaffile, grey;      /* the low bits, for flag tests               */
+    uint32_t  key;                              /* the quickkey, its low byte                 */
     char      name[SNAME], orig[SNAME], text[WIKISIDE_TEXT], panel[SNAME];
 } SREC;
 
@@ -2586,6 +2587,9 @@ static int fbi_each(void* ctx, const TAGPU_VFILE* f)
         /* canstop is def+0x245 bit 3, 0 when the key is missing (0x42C90B..0x42C936) */
         tagpu_guifile_num(tagpu_guifile_get(g, sec, "canstop"), NULL, &bits);
         u->canstop = (int)(bits & 1u);
+        /* canreclamate is def+0x245 bit 0x400, the key's `and 1` (0x42C9EF..0x42CA1A) */
+        tagpu_guifile_num(tagpu_guifile_get(g, sec, "canreclamate"), NULL, &bits);
+        u->canreclamate = (int)(bits & 1u);
         /* activatewhenbuilt is def+0x241 bit 18, the key's `and 1` (0x42C6B9..0x42C6DE) */
         tagpu_guifile_num(tagpu_guifile_get(g, sec, "activatewhenbuilt"), NULL, &bits);
         u->activate_when_built = (int)(bits & 1u);
@@ -2764,6 +2768,12 @@ static void gadget_record(SIDE* S, const TAGPU_GUIFILE* g, int sec, int index, c
     r->gaffile = b & 1u;
     num_field(S, tagpu_guifile_get(g, sec, "grayedout"), "grayedout", where, index, NULL, &b);
     r->grey = b & 1u;
+    /* quickkey is a button key, the gadget's own section's beside grayedout, not a COMMON one
+       (ARMGEN.GUI's ARMRECLAIM: `quickkey=101;` after its [COMMON] block); the record's u8 +0x13A,
+       which the button handler 0x4A6AE0 matches through tolower and toupper (0x4A70FB..0x4A7129),
+       the atoi's low byte [INFERRED: the store's width] */
+    num_field(S, tagpu_guifile_get(g, sec, "quickkey"), "quickkey", where, index, NULL, &b);
+    r->key = b & 0xFFu;
     num_field(S, tagpu_guifile_get(g, sec, "stages"), "stages", where, index, &r->stages, NULL);
     scopy(r->name, tagpu_guifile_get(g, com, "name"), NAME_GUI + 1);
     scopy(r->text, tagpu_guifile_get(g, sec, "text"), sizeof r->text);
@@ -3253,6 +3263,7 @@ static int screen_build(SIDE* S, const char* name, const char* file, int page, i
         lg->role = role;
         scopy(lg->unit, unit, sizeof lg->unit);
         lg->grey = grey;
+        lg->key = (int)g->key;
         lg->hidden = !g->active || (hide_pagers && (role == WIKI_ROLE_PREV || role == WIKI_ROLE_NEXT));
         lg->x = (int)x0; lg->y = (int)y0; lg->w = (int)cw; lg->h = (int)ch;
         c->pic[c->ng] = pic;
@@ -3608,6 +3619,7 @@ static void cast_fill(const SUNIT* u, uint16_t builds, WIKICASTDEF* k)
     k->extracts = u->extracts;
     k->energy_make = u->energymake;
     k->canstop = u->canstop;
+    k->canreclamate = u->canreclamate;
     k->activate_when_built = u->activate_when_built;
     k->vent = u->has_g;
     memcpy(k->g, u->g, sizeof k->g);
@@ -3660,7 +3672,8 @@ static void casting_json(SB* b, const SIDE* S, const SSIDE* sd, const SCASTING* 
         sb_num(b, k->build_distance);
         sb_raw(b, ",\"maxVelocity\":");
         sb_num(b, k->max_velocity);
-        sb_raw(b, ",\"canstop\":%d,\"activatewhenbuilt\":%d,\"extracts\":", k->canstop, k->activate_when_built);
+        sb_raw(b, ",\"canstop\":%d,\"canreclamate\":%d,\"activatewhenbuilt\":%d,\"extracts\":", k->canstop, k->canreclamate,
+               k->activate_when_built);
         sb_num(b, k->extracts);
         sb_raw(b, ",\"energyMake\":");
         sb_num(b, k->energy_make);
@@ -4231,7 +4244,9 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
                         sb_raw(&S.rep, ",\"unit\":");
                         sb_q(&S.rep, g->unit[0] ? g->unit : NULL, 0);
                     }
-                    sb_raw(&S.rep, ",\"grey\":%s%s}", g->grey ? "true" : "false", g->hidden ? ",\"hidden\":true" : "");
+                    sb_raw(&S.rep, ",\"grey\":%s", g->grey ? "true" : "false");
+                    if (g->key) sb_raw(&S.rep, ",\"key\":%d", g->key);
+                    sb_raw(&S.rep, "%s}", g->hidden ? ",\"hidden\":true" : "");
                 }
                 sb_raw(&S.rep, "]}");
             }

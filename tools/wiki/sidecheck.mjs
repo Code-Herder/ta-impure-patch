@@ -45,7 +45,7 @@ const ROOT = new URL('../../', import.meta.url).pathname;
 const DDRAW = path.join(ROOT, 'tagpu/ddraw');
 const PACKS = path.join(ROOT, 'tools/wiki/mockup/gfx/side');
 const SRCS = ['src/tagpu_wikiside.c', 'src/tagpu_wikistage.c', 'src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_json.c',
-  'src/tagpu_pak.c', 'src/tagpu_placegeo.c',
+  'src/tagpu_pak.c', 'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c',
   'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c'];
 const COL = WikiSide.COL;
 // WIKISIDE_FROM_*: where a picture came from; the composer tells only a label from the rest
