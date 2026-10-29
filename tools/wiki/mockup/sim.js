@@ -210,6 +210,7 @@ const WikiSim = (() => {
       for (const n of FIGURES) if (n in k && !(typeof k[n] === 'number' && k[n] >= 0 && k[n] < Infinity)) no(`${at}: ${n} is not a finite number >= 0`);
       if (!(k.buildTime > 0)) no(`${at}: buildTime is not above 0`);
       if ('canstop' in k && !int(k.canstop)) no(`${at}: canstop is not an integer`);
+      if ('canreclamate' in k && !int(k.canreclamate)) no(`${at}: canreclamate is not an integer`);
       if ('activatewhenbuilt' in k && !int(k.activatewhenbuilt)) no(`${at}: activatewhenbuilt is not an integer`);
       if ('vent' in k && typeof k.vent !== 'boolean') no(`${at}: vent is not a boolean`);
       checkG(at, k, f);
@@ -218,7 +219,7 @@ const WikiSim = (() => {
     return C;
   }
   /* THE BOUND ENTRY: the entry with every unit of a bound cast replaced by the casting's type, under the type's name,
-     with the casting's title (as `name`), footprint, figures, canstop, activatewhenbuilt and G cells, and a build list that holds unit j
+     with the casting's title (as `name`), footprint, figures, canstop, canreclamate, activatewhenbuilt and G cells, and a build list that holds unit j
      of the entry exactly when the casting's build list names j's cast. A unit of an unbound cast keeps the authored
      definition, marked `unbound`, and its build list keeps only the entry's own units, renamed as they are. The
      units keep their order, so the scene's units and a `build` point at the same definitions as before; the scene's
@@ -243,6 +244,7 @@ const WikiSim = (() => {
         builds: names.filter(j => (k.builds || []).includes(entry.units[j].cast)).map(j => to[j]) };
       for (const n of FIGURES) if (n in k) b[n] = k[n];
       if ('canstop' in k) b.canstop = k.canstop;
+      if ('canreclamate' in k) b.canreclamate = k.canreclamate;
       if ('activatewhenbuilt' in k) b.activatewhenbuilt = k.activatewhenbuilt;
       if (k.vent) b.vent = true;
       if (k.g && k.g.length) b.g = k.g.map(c => [c[0], c[1]]);
@@ -266,6 +268,9 @@ const WikiSim = (() => {
      the glide from the pager to the button, and the hover on it until TRIP_DOWN. tagpu_wikisim.h #defines the same
      table; simparity compares them. */
   const TRIP = 90, TRIP_DOWN = 45, TRIP_UP = 60;
+  /* THE PICK TRIP, a scripted `pick` of a kind: the glide to the popup's row, its press at PICK_DOWN and release at
+     PICK_UP, and the glide back, PICK ticks whatever the layout; the row is where the popup stands when the pick is fed */
+  const PICK = 60, PICK_DOWN = 20, PICK_UP = 26;
   const TRIP_ROWS = [
     { glide: 30, hold: 0, gap: 0, back: 0, hover: 15 },
     { glide: 12, hold: 15, gap: 3, back: 12, hover: 3 },
@@ -1392,6 +1397,18 @@ const WikiSim = (() => {
       push(TRIP_UP, { up: 'lmb' });
       glide(B, a, TRIP - TRIP_UP, TRIP_UP);
     }
+    // the pick trip: no popup to click stops the demo as a RECLAIM it cannot reach does
+    function pickTrip(k) {
+      const t = feeding, P = popup();
+      if (!P) { lock('RECLAIM'); return; }
+      const r = P.rows[KINDS.indexOf(k)], a = { x: st.cursor.x, z: st.cursor.z };
+      const B = { x: r[0] + r[2] / 2, z: r[1] + r[3] / 2 };
+      const push = (dt, ev) => gen.push({ at: t + dt, ev });
+      for (let i = 1; i <= PICK_DOWN; i++) push(i, { move: [glideAt(a.x, B.x, i, PICK_DOWN), glideAt(a.z, B.z, i, PICK_DOWN)] });
+      push(PICK_DOWN, { down: 'lmb' });
+      push(PICK_UP, { up: 'lmb' });
+      for (let i = 1; i <= PICK - PICK_UP; i++) push(PICK_UP + i, { move: [glideAt(B.x, a.x, i, PICK - PICK_UP), glideAt(B.z, a.z, i, PICK - PICK_UP)] });
+    }
     /* THE DATA RULE, refused here as tagpu_wikidata.c's loader refuses it: with the sidebar on, a build names a type;
        nothing but a caption stands in its trip, the ticks (t, t + TRIP), nor after it in tick t; the demo lasts the
        whole trip; and the left button is up when it starts, as the trip's own presses need it. */
@@ -1399,15 +1416,17 @@ const WikiSim = (() => {
       const captionOnly = e => Object.keys(e).every(k => k === 'at' || k === 'caption');
       let lmb = false;
       script.forEach((e, i) => {
-        if ('build' in e || 'reclaim' in e) {
-          const what = 'build' in e ? 'build' : 'reclaim', at = `demo ${demo.id}: the ${what} at tick ${e.at}`;
+        if ('build' in e || 'reclaim' in e || 'pick' in e) {
+          const what = 'build' in e ? 'build' : 'reclaim' in e ? 'reclaim' : 'pick', at = `demo ${demo.id}: the ${what} at tick ${e.at}`;
+          const span = what === 'pick' ? PICK : TRIP;
           if (what === 'build' && (typeof e.build !== 'string' || !e.build)) throw new Error(`${at} names no type`);
           if (what === 'reclaim' && e.reclaim !== true) throw new Error(`${at} is not true`);
+          if (what === 'pick' && !KINDS.includes(e.pick)) throw new Error(`${at} names no kind`);
           if (!Object.keys(e).every(k => k === 'at' || k === what || k === 'caption')) throw new Error(`${at} carries another input`);
           if (lmb) throw new Error(`${at} starts with the left button held`);
-          const f = script.slice(i + 1).find(f => f.at < e.at + TRIP && !captionOnly(f));
-          if (f) throw new Error(`${at}: an input at tick ${f.at} stands in its trip, which ends at ${e.at + TRIP}`);
-          if (!(end >= e.at + TRIP)) throw new Error(`${at}: the demo ends at ${end}, inside its trip`);
+          const f = script.slice(i + 1).find(f => f.at < e.at + span && !captionOnly(f));
+          if (f) throw new Error(`${at}: an input at tick ${f.at} stands in its trip, which ends at ${e.at + span}`);
+          if (!(end >= e.at + span)) throw new Error(`${at}: the demo ends at ${end}, inside its trip`);
         }
         if (e.down === 'lmb') lmb = true;
         if (e.up === 'lmb') lmb = false;
@@ -1697,6 +1716,8 @@ const WikiSim = (() => {
       }
       // a `reclaim` arms reclaim through RECLAIM: a trip to the button with the sidebar on, at once without it
       if (ev.reclaim) { if (TRIPS) trip(null); else if (!st.rmode) toggleReclaim(); }
+      // a `pick` clicks the popup's row of that kind: a trip there with the sidebar on, the kind at once without it
+      if (ev.pick) { if (TRIPS) pickTrip(ev.pick); else st.kind = ev.pick; }
       if (ev.move) {
         st.cursor = { x: ev.move[0], z: ev.move[1] };
         const c = mapCursor();
@@ -2554,7 +2575,7 @@ const WikiSim = (() => {
     // the button an action presses at an Interface Type, for the keys strip and the captions' button words
     button,
     // the trip's fixed budget and its table, which tagpu_wikisim.h #defines and simparity compares
-    TRIP, TRIP_DOWN, TRIP_UP, TRIP_ROWS,
+    TRIP, TRIP_DOWN, TRIP_UP, TRIP_ROWS, PICK, PICK_DOWN, PICK_UP, KINDS,
     // the allsound names a named sound's `name` indexes (tagpu_wikisim.h WIKI_SNDNAME_*)
     SND_NAMES,
     // a wait's states, tagpu_wikidata.h's WIKI_UNTIL_* from 1

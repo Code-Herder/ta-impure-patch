@@ -1305,6 +1305,8 @@ def unit_record(path, where, k, language):
             "buildtime": strtod(k.get("buildtime")), "builddistance": strtod(k.get("builddistance")),
             # canstop is def+0x245 bit 3, 0 when the key is missing (0x42C90B..0x42C936; the Q4 scout answer)
             "canstop": atoi(k.get("canstop")) & 1,
+            # canreclamate is def+0x245 bit 0x400, the key's `and 1` (0x42C9EF..0x42CA1A)
+            "canreclamate": atoi(k.get("canreclamate")) & 1,
             # activatewhenbuilt is def+0x241 bit 18, the key's `and 1` (0x42C6B9..0x42C6DE)
             "activatewhenbuilt": atoi(k.get("activatewhenbuilt")) & 1,
             "title": display_name(k, language, name)}
@@ -1891,7 +1893,7 @@ def cast_record(u, builds):
     layout's build buttons spell it, and `builds` naming casts, not types."""
     return {"type": u["name"].upper(), "title": u["title"], "footprint": [u["fx"], u["fz"]],
             "buildTime": u["buildtime"], "workerTime": u["workertime"], "buildDistance": u["builddistance"],
-            "maxVelocity": u["maxvelocity"], "canstop": u["canstop"],
+            "maxVelocity": u["maxvelocity"], "canstop": u["canstop"], "canreclamate": u["canreclamate"],
             "activatewhenbuilt": u["activatewhenbuilt"], "extracts": u["extractsmetal"],
             "energyMake": u["energymake"], "vent": bool(u["g"]), "g": u["g"], "builds": builds}
 

@@ -38,10 +38,13 @@ Every scene of every entry has a description, and `build` derives it from the sc
   deposit that is not exactly one such feature fails the build.
 - **Each vent is a vent of the ground's world** (`geothermal=1`), taken in the order the TDFs enumerate, a different
   one for each vent while they last.
+- **The scene's own features** (an entry's `features` table and a scene's `features`, which the simulation knows: the
+  reclaim entry's rocks and trees) stand at their anchor cells as the scene places them, each its TDF section; the
+  entry's figures for it (footprint, metal, energy, height, blocking, reclaimable) must be the section's.
 - **Decoration breaks up the ground**: one feature per block of the recipe's `block` cells a side (greenflat01's
   4 x 4-tile repeat, 8 cells, by default), a ground mark of the recipe's categories that blocks nothing and holds
   no metal, so the stage's simulation has nothing to learn about it. It keeps DECOR_CLEAR cells from every deposit
-  and vent, so their outline reads alone, and is placed by a xorshift seeded with the stage's name, the same on
+  and vent and from every scene feature, so their outline reads alone, and is placed by a xorshift seeded with the stage's name, the same on
   every build.
 
 `check` resolves every description against the install and against its scene, and compares it with what `build`
@@ -225,6 +228,27 @@ def body_vent(body):
     return str(body.get("geothermal", "0")).strip() == "1"
 
 
+def scene_figures(body):
+    """A scene feature's figures as the entry states them (sim.js checkFeature): its footprint, metal (+0xF0) and
+    energy (+0xEC), height (+0xFA), and blocking and reclaimable (+0xFE bit 7). Height, blocking and reclaimable must be
+    stated by the section: the engine's defaults for a missing key are not established here, so a section that leaves
+    one out is refused rather than guessed at."""
+    for k in ("height", "blocking", "reclaimable"):
+        if k not in body:
+            raise Fail(f"its section states no {k}")
+    fx, fz = body_footprint(body)
+    return {"footprint": [fx, fz], "metal": body_metal(body), "energy": float(body.get("energy", 0) or 0),
+            "height": atoi(body["height"], 0), "blocking": atoi(body["blocking"], 0) == 1,
+            "reclaimable": atoi(body["reclaimable"], 0) == 1}
+
+
+def entry_figures(d):
+    """The entry's figures for a feature, with sim.js's defaults for the keys it may leave out."""
+    return {"footprint": list(d["footprint"]), "metal": float(d.get("metal", 0)), "energy": float(d.get("energy", 0)),
+            "height": d.get("height", 0), "blocking": bool(d.get("blocking", False)),
+            "reclaimable": bool(d.get("reclaimable", False))}
+
+
 def of_world(vfs, world):
     """[(name, section)] of the world's feature sections, in the order the TDFs enumerate."""
     return [(name, body) for name, (body, _p, _w) in vfs.features().items()
@@ -377,6 +401,10 @@ def build_one(vfs, maps, entry, name):
         for k, c in enumerate(vents):
             features.append({"name": names[k % len(names)], "cell": c})
             clear.append((c[0], c[1], 1, 1))
+    for f in scene.get("features", []):
+        fx, fz = footprint(vfs, f["name"])
+        features.append({"name": f["name"], "cell": list(f["at"])})
+        clear.append((f["at"][0], f["at"][1], fx, fz))
     features += decorate(vfs, sid, recipe, w, h, clear)
 
     counts = []
@@ -464,7 +492,7 @@ def check_one(vfs, maps, entry, name, fails):
             say(f"{f['kind']} fog {f['rect']} is not whole tiles (even cells)")
     for d in entry.get("demos", []):
         add = d.get("scene") or {}
-        for k in ("metal", "vents", "fog"):
+        for k in ("metal", "vents", "fog", "features"):
             if d.get("on", next(iter(entry["scenes"]))) == name and add.get(k):
                 say(f"demo {d['id']} adds {k}, which the stage's ground does not show")
 
@@ -499,6 +527,8 @@ def check_one(vfs, maps, entry, name, fails):
     rects = scene.get("metal", [])
     vents = vent_cells(scene)
     deps, vfeats, feet = [], [], []
+    own = {(f["name"], tuple(f["at"])) for f in scene.get("features", [])}
+    figures = entry.get("features", {})
     for f in desc.get("features", []):
         feat, cell = f.get("name", ""), f.get("cell")
         hit = vfs.feature(feat)
@@ -515,6 +545,16 @@ def check_one(vfs, maps, entry, name, fails):
         if any(overlaps(foot, other) for other in feet):
             say(f"feature {feat} at {cell}: its footprint overlaps another feature's")
         feet.append(foot)
+        if (feat, tuple(cell)) in own:
+            try:
+                got = scene_figures(body)
+            except Fail as e:
+                say(f"scene feature {feat} at {cell}: {e}")
+                continue
+            want = entry_figures(figures[feat]) if feat in figures else None
+            if want != got:
+                say(f"scene feature {feat} at {cell}: the entry gives {want}, its section {got}")
+            continue
         if body_metal(body) > 0:
             under = [m for m in rects if m["rect"] == foot]
             if not under:

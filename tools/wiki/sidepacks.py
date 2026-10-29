@@ -123,7 +123,7 @@ def check_layout(pack: Path):
 # casting carries every FBI's EnergyMake (a construction kbot's 8 among them), and the sims read energyMake only as a
 # geothermal plant's strength, so it is compared where the entry states it and nowhere else.
 FIGURES = (("footprint", None), ("buildTime", 0), ("workerTime", 0), ("buildDistance", 0), ("maxVelocity", 0),
-           ("canstop", 0), ("activatewhenbuilt", 0), ("extracts", 0), ("vent", False))
+           ("canstop", 0), ("canreclamate", 0), ("activatewhenbuilt", 0), ("extracts", 0), ("vent", False))
 
 
 def stock_identity(pack):

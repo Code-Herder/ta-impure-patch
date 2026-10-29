@@ -5,7 +5,7 @@
    The demos are the placement gesture of tagpu/ddraw/src/tagpu_place.c (research/notes/tadr-port/quality-of-life.md,
    "What Impure does") played through sim.js. A demo's cursor glides with a move every two ticks, so its inputs are
    generated here; change a demo here and regenerate. The unit figures are the stock game's, read once from the retail
-   unit files (each row's `from`); nothing of the game is copied. `canstop` and `activatewhenbuilt` are written only for the
+   unit files (each row's `from`); nothing of the game is copied. `canstop`, `canreclamate` and `activatewhenbuilt` are written only for the
    types whose FBI sets them: the engine reads a missing key as 0 (sim.js canStop), and so does the sim.
 
    Each unit names its `cast`, its place in the demos: where a side's casting applies, the sim plays that side's type
@@ -29,7 +29,7 @@ const ROOT = new URL('../../', import.meta.url).pathname;
 const S = (cx, cz, f = 2) => [(cx + f / 2) * 16, (cz + f / 2) * 16];
 
 const units = {
-  ARMCK: { cast: 'builder', footprint: [2, 2], buildTime: 5597, workerTime: 80, buildDistance: 40, maxVelocity: 0.8, canstop: 1,
+  ARMCK: { cast: 'builder', footprint: [2, 2], buildTime: 5597, workerTime: 80, buildDistance: 40, maxVelocity: 0.8, canstop: 1, canreclamate: 1,
     builds: ['ARMSOLAR', 'ARMWIN', 'ARMESTOR', 'ARMMSTOR', 'ARMMEX', 'ARMMAKR', 'ARMLAB', 'ARMVP', 'ARMAP', 'ARMSY', 'ARMLLT', 'ARMRAD',
       'ARMALAB', 'ARMGEO', 'ARMHLT', 'ARMRL', 'ARMDRAG', 'ARMGUARD', 'ARMHP'],
     name: 'Construction KBot', from: 'ARMCK.fbi; build list: the stock build menu, every button in page order' },

@@ -22,6 +22,7 @@
       "buildDistance": 40,
       "maxVelocity": 0.8,
       "canstop": 1,
+      "canreclamate": 1,
       "builds": [
         "ARMSOLAR",
         "ARMWIN",

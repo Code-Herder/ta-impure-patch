@@ -21,6 +21,7 @@
       "buildDistance": 40,
       "maxVelocity": 0.8,
       "canstop": 1,
+      "canreclamate": 1,
       "builds": [
         "ARMSOLAR",
         "ARMWIN",
@@ -53,6 +54,7 @@
       "buildDistance": 60,
       "maxVelocity": 0.6,
       "canstop": 1,
+      "canreclamate": 1,
       "builds": ["ARMLAB","ARMARAD","ARMFUS","ARMMOHO","ARMBRTHA","ARMSILO","ARMANNI","ARMAMD","ARMASP"],
       "name": "Adv. Construction Kbot",
       "from": "ARMACK.fbi; build list: the stock build menu, the first nine buttons in page order"

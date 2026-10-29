@@ -16,6 +16,7 @@
             "buildDistance": 40,
             "maxVelocity": 0.8,
             "canstop": 1,
+            "canreclamate": 1,
             "builds": ["mex","geo","tower","wall","solar"]
           },
           "advbuilder": {
@@ -27,6 +28,7 @@
             "buildDistance": 60,
             "maxVelocity": 0.6,
             "canstop": 1,
+            "canreclamate": 1,
             "builds": ["moho"]
           },
           "mex": {"type":"ARMMEX","title":"Metal Extractor","footprint":[3,3],"buildTime":1800,"extracts":0.001,"activatewhenbuilt":1},
@@ -62,6 +64,7 @@
             "buildDistance": 40,
             "maxVelocity": 1.1,
             "canstop": 1,
+            "canreclamate": 1,
             "builds": ["mex","geo","tower","wall","solar"]
           },
           "advbuilder": {
@@ -73,6 +76,7 @@
             "buildDistance": 60,
             "maxVelocity": 0.45,
             "canstop": 1,
+            "canreclamate": 1,
             "builds": ["moho"]
           },
           "mex": {"type":"ARMMEX","title":"Metal Extractor","footprint":[3,3],"buildTime":2400,"extracts":0.001,"activatewhenbuilt":1},
@@ -108,6 +112,7 @@
             "buildDistance": 40,
             "maxVelocity": 0.8,
             "canstop": 1,
+            "canreclamate": 1,
             "builds": ["mex","geo","tower","solar"]
           },
           "advbuilder": {
@@ -119,6 +124,7 @@
             "buildDistance": 60,
             "maxVelocity": 0.6,
             "canstop": 1,
+            "canreclamate": 1,
             "builds": ["moho"]
           },
           "mex": {"type":"ARMMEX","title":"Metal Extractor","footprint":[3,3],"buildTime":1800,"extracts":0.001,"activatewhenbuilt":1},

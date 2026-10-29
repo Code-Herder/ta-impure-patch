@@ -4,7 +4,7 @@
 
    A demo's cursor glides with a move every two ticks, so its inputs are generated here rather than written by hand;
    change a demo here and regenerate. The unit figures are the stock game's, read once from the retail unit files
-   (each row's `from`); nothing of the game is copied. `canstop` and `activatewhenbuilt` are written only for the
+   (each row's `from`); nothing of the game is copied. `canstop`, `canreclamate` and `activatewhenbuilt` are written only for the
    types whose FBI sets them: the engine reads a missing key as 0 (sim.js canStop), and so does the sim.
 
    Each unit names its `cast`, its place in the demos: where a side's casting applies, the sim plays that side's type
@@ -27,11 +27,11 @@ const C = c => c * 16 + 8;                  // a cell's centre in world units
 const at = (cx, cz) => [C(cx), C(cz)];
 
 const units = {
-  ARMCK: { cast: 'builder', footprint: [2, 2], buildTime: 5597, workerTime: 80, buildDistance: 40, maxVelocity: 0.8, canstop: 1,
+  ARMCK: { cast: 'builder', footprint: [2, 2], buildTime: 5597, workerTime: 80, buildDistance: 40, maxVelocity: 0.8, canstop: 1, canreclamate: 1,
     builds: ['ARMSOLAR', 'ARMWIN', 'ARMESTOR', 'ARMMSTOR', 'ARMMEX', 'ARMMAKR', 'ARMLAB', 'ARMVP', 'ARMAP', 'ARMSY', 'ARMLLT', 'ARMRAD',
       'ARMALAB', 'ARMGEO', 'ARMHLT', 'ARMRL', 'ARMDRAG', 'ARMGUARD', 'ARMHP'],
     name: 'Construction KBot', from: 'ARMCK.fbi; build list: the stock build menu, every button in page order' },
-  ARMACK: { cast: 'advbuilder', footprint: [2, 2], buildTime: 13432, workerTime: 160, buildDistance: 60, maxVelocity: 0.6, canstop: 1,
+  ARMACK: { cast: 'advbuilder', footprint: [2, 2], buildTime: 13432, workerTime: 160, buildDistance: 60, maxVelocity: 0.6, canstop: 1, canreclamate: 1,
     builds: ['ARMLAB', 'ARMARAD', 'ARMFUS', 'ARMMOHO', 'ARMBRTHA', 'ARMSILO', 'ARMANNI', 'ARMAMD', 'ARMASP'],
     name: 'Adv. Construction Kbot', from: 'ARMACK.fbi; build list: the stock build menu, the first nine buttons in page order' },
   ARMMEX: { cast: 'mex', footprint: [3, 3], extracts: 0.001, buildTime: 1800, activatewhenbuilt: 1, name: 'Metal Extractor', from: 'ARMMEX.fbi' },

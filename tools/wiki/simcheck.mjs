@@ -1149,7 +1149,67 @@ const CTX_SHAPES_RULES = {
   },
 };
 
-const CHECKS = { quickbuild: QUICKBUILD, buildshapes: BUILDSHAPES };
+/* THE RECLAIM SWEEP's demos (research/notes/ingame-wiki-reclaim-plan.md): what each ring marked, who was ordered what,
+   and whether reclaim was still armed after it. A frame after an input's tick shows what the input did. */
+const fIds = os => (os || []).filter(o => o.k === 'reclaim' && o.feat !== undefined).map(o => o.feat);
+const featName = (r, id) => (r.all[0].v.feats.find(f => f.id === id) || {}).name || '';
+const rockOrTree = (r, ids, w) => ids.every(id => featName(r, id).startsWith(w));
+// the features whose centre the ring holds, and of those the ones of kind w (rock or tree)
+const inRing = (r, ring) => r.all[0].v.feats.filter(f => Math.hypot((f.ox + f.fx / 2) * 16 - ring.x, (f.oz + f.fz / 2) * 16 - ring.z) <= ring.r).map(f => f.id);
+const RECLAIM = {
+  click(r, d, ok) {
+    const t = ups(d, 'lmb')[0], f = r.frames[t + 1];
+    ok(r.frames[t - 1].v.mode === 'reclaim', 'reclaim armed by the trip to RECLAIM before the click');
+    ok(fIds(f.o.a).join() === 'lone' && f.v.mode === 'contextual', `the click ordered the rock and put reclaim away (${fIds(f.o.a)}, ${f.v.mode})`);
+    ok(r.log.some(l => l.what === 'reclaimed' && l.id === 'lone') && !r.last.v.feats.some(x => x.id === 'lone'), 'the rock was reclaimed and is gone');
+    ok(r.all.every(f => !f.v.reclaim || !f.v.reclaim.ring), 'no ring was drawn');
+  },
+  kind(r, d, ok) {
+    const seq = [];
+    for (const f of r.all) if (f.v.reclaim && seq[seq.length - 1] !== f.v.reclaim.kind) seq.push(f.v.reclaim.kind);
+    ok(seq.join(' ') === 'all metal energy all metal', `E cycled METAL, ENERGY, ALL and the popup's row picked METAL (${seq.join(' ')})`);
+    ok(r.all.filter(f => f.v.reclaim).every(f => f.v.reclaim.popup), 'the popup showed while reclaim was armed');
+    ok(r.all.every(f => !(f.o.a || []).length), 'nothing was ordered');
+  },
+  metal(r, d, ok) { ringCheck(r, d, ok, 'rock', 'tree'); },
+  energy(r, d, ok) { ringCheck(r, d, ok, 'tree', 'rock'); },
+  shift(r, d, ok) {
+    const [u1, u2] = ups(d, 'lmb'), s = ups(d, 'shift')[0], f1 = r.frames[u1 + 1], f2 = r.frames[u2 + 1];
+    const q1 = [...fIds(f1.o.a), ...fIds(f1.o.b)], q2 = [...fIds(f2.o.a), ...fIds(f2.o.b)];
+    ok(q1.length && f1.v.mode === 'reclaim', `the first ring queued ${q1.length} and reclaim stayed armed`);
+    ok(q1.every(id => q2.includes(id) || r.log.some(l => l.what === 'reclaimed' && l.id === id && l.t <= u2)) && q2.length > q1.length - 2,
+      `the second ring added to the first's (${q1} then ${q2})`);
+    ok(r.frames[s + 1].v.mode === 'contextual', 'letting go of Shift put reclaim away');
+  },
+  replace(r, d, ok) {
+    const t = ups(d, 'lmb')[0], before = r.frames[t - 1], after = r.frames[t + 1];
+    ok((before.o.a || []).some(o => o.k === 'move'), 'the move was queued before the ring');
+    ok((after.o.a || []).length && (after.o.a || []).every(o => o.k === 'reclaim' && o.feat !== undefined), `the ring replaced it with reclaims (${(after.o.a || []).map(o => o.k)})`);
+    ok(rockOrTree(r, fIds(after.o.a), 'rock'), 'rocks only, METAL picked');
+  },
+  cancel(r, d, ok) {
+    const [c1, c2] = presses(d, 'cancel'), [u1, u2] = ups(d, 'lmb');
+    ok(r.frames[c1 - 1].v.reclaim && r.frames[c1 - 1].v.reclaim.ring, 'a ring was being dragged');
+    ok(r.frames[c1 + 1].v.reclaim && !r.frames[c1 + 1].v.reclaim.ring && r.frames[c1 + 1].v.mode === 'reclaim', 'the cancel ended the ring and kept reclaim armed');
+    ok(r.frames[u1 + 1].v.mode === 'reclaim' && !(r.frames[u1 + 1].o.a || []).length, 'its release ordered nothing');
+    ok(r.frames[u2 - 1].v.reclaim.ring && !r.frames[u2 - 1].v.reclaim.targets.length, 'the second ring holds nothing');
+    ok(r.frames[u2 + 1].v.mode === 'reclaim' && !(r.frames[u2 + 1].o.a || []).length, 'the empty ring ordered nothing and kept reclaim armed');
+    ok(r.frames[c2 + 1].v.mode === 'contextual', 'a cancel outside a drag put reclaim away');
+  },
+};
+// a ring of kind w, in a field holding features of kind x too: only w marked, every target ordered once between both
+function ringCheck(r, d, ok, w, x) {
+  const t = ups(d, 'lmb')[0], pre = r.frames[t - 1].v.reclaim, post = r.frames[t + 1];
+  const T = (pre && pre.targets) || [], inside = pre && pre.ring ? inRing(r, pre.ring) : [];
+  ok(T.length >= 4 && rockOrTree(r, T, w), `the ring marked ${w}s only (${T})`);
+  ok(inside.some(id => featName(r, id).startsWith(x)) && !T.some(id => featName(r, id).startsWith(x)), `the ${x}s inside it were not marked`);
+  const a = fIds(post.o.a), b = fIds(post.o.b), got = [...a, ...b].sort();
+  ok(got.join() === [...T].sort().join() && a.length && b.length, `every target ordered once, shared between both (${a} / ${b})`);
+  ok(post.v.mode === 'contextual', 'released without Shift: reclaim put away');
+  ok(r.log.some(l => l.what === 'reclaimed' && T.includes(l.id)), 'a target was reclaimed before the end');
+}
+
+const CHECKS = { quickbuild: QUICKBUILD, buildshapes: BUILDSHAPES, reclaim: RECLAIM };
 // the sidebar's rules use quickbuild's scene: two builder types and a Peewee
 /* THE SOUND the player's own actions make (tagpu_wikisim.h, THE SOUND), which no demo shows: a click that selects, a box
    of several, a placement on a refused site and one on a deposit, with the sounds of the gfx packs under
