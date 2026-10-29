@@ -2215,8 +2215,10 @@ const WikiSim = (() => {
          "Reclamation failed" (kind 7, 0x404AF8) and ends. The walk until the footprints touch; a walk that gives up ends
          the order silent (result 8). Arrived, the countdown trunc(15 + (energy + metal) / 2) (0x404BBA..0x404BDC) and
          StartBuilding; the stance wait (0x404C5A); the working reply once (0x404C6E); then a working call every 2 ticks
-         (0x439E80(2) at 0x404C77) takes 2 off it: at 0 or below it pays out and the feature goes (0x4237D0, FeatureDie),
-         above 15 it sprays (0x404CB5). The countdown, the next call's tick and whether it paid are the unit's (u.rc). */
+         (0x439E80(2) at 0x404C77) takes 2 off it, and above 15 sprays (0x404CB5). At 0 or below that call ends its state
+         (result 1, 0x404C8B) with the next call armed 2 ticks on, and that call pays out and the feature goes (state 5,
+         0x404D60: 0x4237D0, FeatureDie) -- after the entry's lookup, so a feature gone in between fails as above. The
+         countdown, the next call's tick, the payout due and whether it paid are the unit's (u.rc). */
       const featWork = (u, o) => {
         const f = featById(o.feat), t = sim.tick + 1;
         if (!f) { u.orders.shift(); u.rc = null; notice(u, SND.cant); return; }
@@ -2224,7 +2226,7 @@ const WikiSim = (() => {
           const r = go(u, toFeat(o, f));
           if (r === STUCK) { u.orders.shift(); return; }
           if (r !== ARRIVED) return;
-          u.rc = { o, c: reclaimCountdown(f.energy, f.metal), next: t, paid: false };
+          u.rc = { o, c: reclaimCountdown(f.energy, f.metal), next: t, due: false, paid: false };
         }
         const dx = f.x - u.x, dz = f.z - u.z, d = Math.sqrt(dx * dx + dz * dz);
         if (d > 0) { u.hx = dx / d; u.hz = dz / d; }
@@ -2233,13 +2235,16 @@ const WikiSim = (() => {
         if (u.orders[0] !== u.said) { u.said = u.orders[0]; notice(u, SND.working); }
         if (t < u.rc.next) return;
         u.rc.next = t + 2;
-        u.rc.c -= 2;
-        if (u.rc.c <= 0) {
+        if (u.rc.due) {
           u.rc.paid = true;
           feats.splice(feats.indexOf(f), 1);
           gone.push([f.ox, f.oz]);
           log('reclaimed', { id: f.id, type: f.name, ox: f.ox, oz: f.oz });
-        } else if (u.rc.c > 15) u.spray = { how: 'feature', f };
+          return;
+        }
+        u.rc.c -= 2;
+        if (u.rc.c <= 0) u.rc.due = true;
+        else if (u.rc.c > 15) u.spray = { how: 'feature', f };
       };
       // went: the unit stepped on the last tick, so this tick's planners walk round it only if it stood
       for (const u of units) { u.went = !!u.stepped; u.stepped = false; u.spray = null; u.evacuated = false; u.completed = false; }

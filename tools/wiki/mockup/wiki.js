@@ -433,14 +433,15 @@ stage.addEventListener('contextmenu', e => e.preventDefault());
 const MOD = { Shift: 'shift', Alt: 'alt', Control: 'ctrl' };
 // Z and X with Alt step the armed building's spacing; every down is sent, an auto-repeat included, as the game steps again
 const STEP = { KeyZ: 'z', KeyX: 'x' };
-// E is a key to the sidebar's buttons (RECLAIM's quickkey), every down as the GUI takes each
+// E is a key to the sidebar's buttons (RECLAIM's quickkey), every down as the GUI takes each; not under Ctrl, where the
+// game's key translator pushes another code (tagpu_wiki.c try_key)
 const KEY = { KeyE: 'e' };
 window.addEventListener('keydown', e => {
   if (e.key === 'Escape' && S.open) { e.preventDefault(); setOpen(false); return; }
   const z = STEP[e.code];
   if (z && e.altKey && S.open && S.try) { e.preventDefault(); down.add(z); send({ down: z }); return; }
   const q = KEY[e.code];
-  if (q && S.open && S.try) { e.preventDefault(); down.add(q); send({ down: q }); return; }
+  if (q && !e.ctrlKey && S.open && S.try) { e.preventDefault(); down.add(q); send({ down: q }); return; }
   const m = MOD[e.key]; if (!m || !S.open || !S.try) return;
   e.preventDefault();                  // Alt would otherwise open the browser's menu and keep the key
   if (!down.has(m)) { down.add(m); send({ down: m }); }

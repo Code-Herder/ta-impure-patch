@@ -3433,9 +3433,11 @@ static int reclaim_countdown(double energy, double metal)
    with none says "Reclamation failed" (kind 7, 0x404AF8) and ends. The walk until the footprints
    touch; a walk that gives up ends the order silent (result 8). Arrived, the countdown and
    StartBuilding; the stance wait (0x404C5A); the working reply once (0x404C6E); then a working
-   call every 2 ticks (0x439E80(2) at 0x404C77) takes 2 off it: at 0 or below it pays out and the
-   feature goes (0x4237D0, FeatureDie), above 15 it sprays (0x404CB5). The countdown, the next
-   call's tick and whether it paid are the unit's (rc_*). `o` is u's first order. */
+   call every 2 ticks (0x439E80(2) at 0x404C77) takes 2 off it, and above 15 sprays (0x404CB5).
+   At 0 or below that call ends its state (result 1, 0x404C8B) with the next call armed 2 ticks
+   on, and that call pays out and the feature goes (state 5, 0x404D60: 0x4237D0, FeatureDie) --
+   after the entry's lookup, so a feature gone in between fails as above. The countdown, the next
+   call's tick, the payout due and whether it paid are the unit's (rc_*). `o` is u's first order. */
 static void feat_work(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* o)
 {
     WIKIFEAT* f = feat_by_id(s, o->target);
@@ -3458,6 +3460,7 @@ static void feat_work(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* o)
         u->rc_serial = o->serial;
         u->rc_c = reclaim_countdown(f->energy, f->metal);
         u->rc_next = t;
+        u->rc_due = 0;
         u->rc_paid = 0;
     }
     dx = f->x - u->x;
@@ -3480,11 +3483,15 @@ static void feat_work(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* o)
     }
     if (t < u->rc_next) return;
     u->rc_next = t + 2;
-    u->rc_c -= 2;
-    if (u->rc_c <= 0) {
+    if (u->rc_due) {
         u->rc_paid = 1;
         feat_remove(s, f);
-    } else if (u->rc_c > 15) {
+        return;
+    }
+    u->rc_c -= 2;
+    if (u->rc_c <= 0)
+        u->rc_due = 1;
+    else if (u->rc_c > 15) {
         u->spray = HOW_FEATURE + 1;
         u->spray_box[0] = f->ox;
         u->spray_box[1] = f->oz;

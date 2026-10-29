@@ -14808,10 +14808,14 @@ the table `0x404D8C` (states 0..5). State 1 sets the countdown `order+0x36 = 15 
 metal) / 2` (`0x404BBA..0x404BDC`: `fld [def+0xEC]`, `fadd [def+0xF0]`, `fmul` by −0.5 at
 `0x4FC940`, `fsubr` 15.0 at `0x4FC944`, `0x4E43A0` [INFERRED: `_ftol`], the store at `0x404BDC`);
 state 4 takes 2 off it per working call (`0x404C7C..0x404C84`, after `0x439E80(2)` at `0x404C77`)
-and tests it at `0x404C89`: at 0 or below the same call pays out (state 5, `0x4237D0` at
-`0x404D66`). `0x439E80(2)` re-arms the order two ticks on, so the calls are two ticks apart and a
-countdown C0 takes `ceil(C0 / 2)` calls, its payout `2 · (ceil(C0 / 2) − 1)` ticks after the first
-[DISASSEMBLED 2026-10-29]. **No worker-time term**: nothing in `0x404AD0..0x404D8B` reads the
+and tests it at `0x404C89`: above 0 it carries on, at 0 or below it returns 1 without paying
+(`0x404C8B`). The controller takes 1 as "next state" (the jump table `0x43BAA4`, entry 1 →
+`0x43B897`, `inc byte [order+5]`) and loops, and the order's timer bit set by `0x439E80(2)`
+(`order+6 |= 1`, `order+0xA = now + 2`) skips it there (`0x43B817..0x43B81D`) until the two ticks
+are up; state 5 then pays out (`0x4237D0` at `0x404D66`, result 5) -- after the entry's lookup,
+so a feature gone in between fails as above. The calls are two ticks apart and a countdown C0
+takes `ceil(C0 / 2)` working calls, its payout `2 · ceil(C0 / 2)` ticks after the first
+[DISASSEMBLED 2026-10-29; the timer skip assumes no `unit+0xBA` event is pending]. **No worker-time term**: nothing in `0x404AD0..0x404D8B` reads the
 unit def's `+0x1FE` or `+0x212` or the feature's build time. Between the first call and the
 payout the order sprays only while the countdown is above 15 (`0x404CB5`), from two reverse
 emissions a call (`0x404D3B`, `0x404D4C`). **The spray's source box** (`0x404CC9..0x404D37`): the

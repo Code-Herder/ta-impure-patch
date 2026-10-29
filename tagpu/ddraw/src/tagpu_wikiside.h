@@ -55,8 +55,8 @@ static inline void tagpu_wikiside_dot(int tx, int tz, const WIKISIDEMAP* m, int 
 }
 
 /* The composed column: `h` rows of WIKI_SIDE_W palette indices and their coverage, 1 where a
-   pixel is painted -- which the engine's black clear makes every pixel of the column. About
-   256 KB: never on a stack. */
+   pixel is painted -- which the engine's black clear makes every pixel of the column. 192 KB:
+   never on a stack. */
 typedef struct {
     int           h;                    /* the view's column, 1 .. WIKI_SIDE_ROWS; 0 none        */
     int           minimap;              /* the minimap's picture is composed in it; 0 leaves the

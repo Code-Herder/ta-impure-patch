@@ -598,6 +598,12 @@ static int alt_held(void)
            s_engKey[VK_RMENU] || s_owedKey[VK_RMENU];
 }
 
+static int ctrl_held(void)
+{
+    return s_engKey[VK_CONTROL] || s_owedKey[VK_CONTROL] || s_engKey[VK_LCONTROL] || s_owedKey[VK_LCONTROL] ||
+           s_engKey[VK_RCONTROL] || s_owedKey[VK_RCONTROL];
+}
+
 /* a key-down (`down`) or key-up of `vk` while the window is open: Z and X with Alt step the armed
    building's spacing, every down, an auto-repeat included, as the game steps again; E is a key to
    the sidebar's buttons (RECLAIM's quickkey), every down as the GUI pump takes each; Shift, Alt and
@@ -611,7 +617,8 @@ static void try_key(unsigned vk, int down)
         if (vk == 'E') try_up(WIKI_KEY_E);
     } else if (z >= 0 && alt_held())
         try_down(z);
-    else if (vk == 'E')
+    else if (vk == 'E' && !ctrl_held())       /* under Ctrl the engine's translator pushes vk + 0x69
+                                                  (0x4C2129..0x4C2136), which no quickkey is */
         try_down(WIKI_KEY_E);
     else if (m >= 0)
         try_down(m);

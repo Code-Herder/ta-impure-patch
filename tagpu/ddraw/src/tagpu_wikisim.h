@@ -305,7 +305,7 @@ typedef struct WIKIUNIT {
     /* a feature's reclaim (0x404AD0): the serial of the order it is for (0 none), its countdown,
        the tick of its next working call and whether it paid out; and whether `work` names a
        feature */
-    int              rc_serial, rc_c, rc_next, rc_paid, work_feat;
+    int              rc_serial, rc_c, rc_next, rc_due, rc_paid, work_feat;
     /* the sound's triggers: the serial of the order whose first run said ok (0 none), of the order
        whose reclaim said working, of the order whose taken site said cant, whether the job
        credited this tick was a build that finished, and ACTIVATION as the last notice saw it */

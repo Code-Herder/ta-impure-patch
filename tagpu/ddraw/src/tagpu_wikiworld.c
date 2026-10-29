@@ -709,7 +709,8 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     int ox, oy, entry, demo, x0, y0, x1, y1, ss;
     uint32_t shot;
     const WIKI3DSTAGE* st = NULL;
-    int gw, gh, nrec, nunit;
+    int gw, gh, nrec, nunit, nShadow = 0, nBody = 0;
+    const float *shadow = NULL, *body = NULL;
 
     s_have = s_terrHave = s_featHave = s_tgtHave = 0;
     QueryPerformanceCounter(&t0);
@@ -755,7 +756,17 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     gw = v->w * 16;
     gh = v->h * 16;
     s_wantTerr = s_ground;
-    s_wantFeat = s_ground && s_scene.nshadow + s_scene.nbody > 0;
+    /* a feature the view says was reclaimed is drawn no more (gfx.js drops its anchor); features are
+       wanted only while a quad is left, since the pass refuses an empty hand-over and a wanted pass
+       that draws nothing drops the whole image */
+    if (s_ground && v->ngone && tagpu_wikiscene_dead(&s_scene, v->gone, v->ngone, s_dead)) {
+        shadow = live_verts(0, &nShadow);
+        body = live_verts(1, &nBody);
+    } else if (s_ground) {
+        shadow = s_fv[0]; nShadow = s_scene.nshadow * 6;
+        body = s_fv[1]; nBody = s_scene.nbody * 6;
+    }
+    s_wantFeat = s_ground && nShadow + nBody > 0;
     s_wantUnit = nrec > 0;
     s_unitWhole = units_frame(f, v, nrec, nunit, gw, gh, ss) && !s_noUnits;
     s_nRec += (unsigned)nrec;
@@ -798,14 +809,8 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     /* THE FEATURES, both buckets as the ground's build left them, under the same fog */
     if (s_wantFeat && !s_noFeat) {
         memset(&s_feat, 0, sizeof s_feat);
-        /* a feature the view says was reclaimed is drawn no more (gfx.js drops its anchor) */
-        if (v->ngone && tagpu_wikiscene_dead(&s_scene, v->gone, v->ngone, s_dead)) {
-            s_feat.shadow = live_verts(0, &s_feat.nShadow);
-            s_feat.body = live_verts(1, &s_feat.nBody);
-        } else {
-            s_feat.shadow = s_fv[0]; s_feat.nShadow = s_scene.nshadow * 6;
-            s_feat.body = s_fv[1]; s_feat.nBody = s_scene.nbody * 6;
-        }
+        s_feat.shadow = shadow; s_feat.nShadow = nShadow;
+        s_feat.body = body; s_feat.nBody = nBody;
         s_feat.gw = (float)s_scene.gw; s_feat.gh = (float)s_scene.gh;
         s_feat.zoom = 1.0f;
         s_feat.zoomCx = (float)s_scene.gw * 0.5f; s_feat.zoomCy = (float)s_scene.gh * 0.5f;

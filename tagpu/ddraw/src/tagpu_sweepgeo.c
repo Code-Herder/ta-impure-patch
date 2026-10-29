@@ -55,8 +55,9 @@ void sweep_order(const SweepTarget* t, unsigned n, int32_t cx, int32_t cz, uint1
 /* The Reclaim handler 0x404AD0 sets the order's countdown +0x36 to _ftol(15 + (energy + metal)
    / 2), truncated (0x404BBA..0x404BDC: `fmul` by -0.5 at 0x4FC940, `fsubr` 15.0 at 0x4FC944);
    each working call re-arms 2 ticks (0x439E80(2) at 0x404C77) and takes 2 off it (0x404C7C..
-   0x404C84), and the call that takes it to 0 or below pays out. So C0 = trunc(15 + (e + m) / 2)
-   needs ceil(C0 / 2) calls, 2 ticks apart; no worker-time term enters it (DISASSEMBLED). */
+   0x404C84); the call that takes it to 0 or below ends its state (result 1, 0x404C8B) and the
+   call after it, 2 ticks on, pays out (state 5, 0x404D66). So C0 = trunc(15 + (e + m) / 2) is
+   paid 2 * ceil(C0 / 2) ticks after the first call; no worker-time term enters it (DISASSEMBLED). */
 uint32_t sweep_reclaim_ticks(float energy, float metal)
 {
     double e = energy > 0.0f ? (double)energy : 0.0;

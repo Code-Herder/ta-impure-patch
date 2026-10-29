@@ -102,7 +102,8 @@ int tagpu_wikiscene_ground(const WSCENEGROUND* g, WSCENE* out)
         const WSCENEFEAT* f = &g->feat[i];
         if (f->cx < 0 || f->cz < 0 || f->cx >= g->w) return 0;
         if (f->nbody > WIKISCENE_SUBS || f->nshadow > WIKISCENE_SUBS || f->fx < 0 || f->fz < 0) return 0;
-        if (f->cz + f->fz > g->h) continue;
+        /* the anchor's own row too: a zero-depth footprint on the row past the last ends on the map */
+        if (f->cz >= g->h || f->cz + f->fz > g->h) continue;
         anchor[f->cz * g->w + f->cx] = (int16_t)i;
     }
     r0 = (0 >> 4) - 16;

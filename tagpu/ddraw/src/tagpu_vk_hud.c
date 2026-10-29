@@ -35,11 +35,11 @@
    tagpu_huddraw into the same instance range after the HUD's two layers, on the same glyph atlas,
    with its kit's parts uploaded after the HUD's and numbered after them (a wiki batch's texture is
    its part's index plus s_nparts). Its stage's cursor is the game's own, drawn from one more image,
-   the sprite sheet tagpu_wikistate.c decodes (HUD_TEX_SPRITE): 256 KB of RGBA8, sent whole as the
+   the sprite sheet tagpu_wikistate.c decodes (HUD_TEX_SPRITE): 512 KB of RGBA8, sent whole as the
    chart is when its generation moves, cleared after the build so a draw always binds a written
    image, and its sprites hidden in a frame whose ops name a generation the device does not hold.
    Its sidebar, in the running mod's pictures, is one more (HUD_TEX_SIDE): the column
-   tagpu_wikistate.c composes each frame, 512 KB of RGBA8 sampled nearest, under the same rules --
+   tagpu_wikistate.c composes each frame, 384 KB of RGBA8 sampled nearest, under the same rules --
    sent whole when its generation moves, cleared after the build, hidden while the device holds
    another generation's.
 

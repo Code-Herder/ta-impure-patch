@@ -926,7 +926,7 @@ def demos(c, shots, res):
     # retail game's, so the stock pack's sidebar -- past tick 150, which leaves some nine seconds of
     # either building demo for the pause to land in, and the METAL ring past 190, its drag nearly
     # out, about two seconds before its release at tick 248 (a pause that lands later shows the
-    # rocks ordered instead), and the ENERGY ring past 812, its two trees reclaimed (778, 805) and
+    # rocks ordered instead), and the ENERGY ring past 812, its two trees reclaimed (780, 807) and
     # so gone from the game look's image, about two seconds before the demo's end at 878
     for node, entry, k, demo, at in ((2, "quickbuild", 0, "snap", 150), (3, "buildshapes", 1, "line", 150),
                                      (5, "reclaim", 2, "metal", 190), (5, "reclaim", 3, "energy", 812)):
@@ -2096,8 +2096,12 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
     pack_lay = json.loads((pack / "side.json").read_text())["layout"]
     assert layout_norm(game_lay) == layout_norm(pack_lay), \
         f"(b2) the game's layout {layf} is not the pack's {pack / 'side.json'}"
+    # the check runs the units' scripts and their sounds when the packs hold them, and its line says which, as (d1) reads it
+    scr = re.search(r"the units' scripts are (on|off), their sounds (on|off)", src)
+    assert scr, f"(b2) the check's line does not say whether the units' scripts and sounds are on: {src}"
+    assert scr.group(1) == scr.group(2), f"(b2) the game's check has scripts {scr.group(1)} but sounds {scr.group(2)}"
     c.mark()
-    nhash = check_against(check_hashes(c.log[start:]), simparity_hashes(layf, pack), "(b2)")
+    nhash = check_against(check_hashes(c.log[start:]), simparity_hashes(layf, pack, scr.group(1) == "on"), "(b2)")
     row["layout"] = {"screens": len(game_lay["screens"]), "height": game_lay["height"],
                      "types": {s["name"]: sorted(s["types"]) for s in game_lay["sides"]}}
     print(f"wiki mods: {row['setup']}: (b2) {src.split('wiki check: ', 1)[1]}, equal to the pack's "
