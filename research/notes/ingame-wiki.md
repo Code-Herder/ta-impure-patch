@@ -554,27 +554,28 @@ where the plan's first version and the mockup differed.
 
 ## The 3D stage under the mods
 
-**What each supported setup shows** (MEASURED 2026-10-27 on the reference setup, Wine, each setup
-of `tools/compat/setups.json` built as the compatibility suite builds it, on a private Xvfb with the
-RTX presenting, at 1280 × 1024 and ss 2; `tools/wiki_regression.py all mods --shots DIR`, one setup
-at a time under the run lock, about a minute each). Each run: a skirmish on Two Continents, the wiki
-opened, its asset report `tagpu_wiki3d.json` read, Quick Build demo 3 at tick 180 and Build Lines
-demo 2 at tick 100 captured through `tagpu_wiki.shot` with the whole display grabbed beside each,
-a whole 300-frame line of each stage, and the display polled for any window that is not the game's
-own, an `ErrorLog.txt` and the process at every step. The stage resolves through the engine's own
+**What each supported setup shows** (MEASURED on the reference setup, Wine, each setup of
+`tools/compat/setups.json` built as the compatibility suite builds it, on a private Xvfb with the
+RTX presenting, ss 2; `tools/wiki_regression.py all mods --shots DIR`, one setup at a time under the
+run lock, about a minute each; the units 2026-10-27, the ground 2026-10-28). Each run: a skirmish on
+Two Continents, the wiki opened, its asset report `tagpu_wiki3d.json` read, Quick Build demo 3 at
+tick 180, Quick Build demo 10 (*Metal maps*, the `metal` scene) at tick 100 and Build Lines demo 2
+at tick 100 captured through `tagpu_wiki.shot` with the whole display grabbed beside each, a whole
+300-frame line of each stage, and the display polled for any window that is not the game's own, an
+`ErrorLog.txt` and the process at every step. The stage resolves through the engine's own
 mount list in the engine's order (the plan's section 5), so the archive named is the one the
 running game reads that file from.
 
-| Setup | First archive; units folder | Ground: the two TNTs; the deposit and vent | Units: FBI and COB; 3DO; textures | Fell back | Error boxes | Pass |
+| Setup | First archive; units folder | Ground: the TNTs; the features' TDFs and frames | Units: FBI and COB; 3DO; textures | Fell back | Error boxes | Pass |
 |---|---|---|---|---|---|---|
-| retail | `rev31.gp3`; `units` | `tactics6.hpi` (Crossing Two Rivers), `totala2.hpi` (Metal Heck); TDFs `rev31.gp3`, frames `btdata.ccx` | `rev31.gp3`; `totala1.hpi`; `rev31.gp3` | nothing | none | yes |
-| Escalation (`escalation`) | `taesc.gp3`; `unitsE` | the same TNTs; TDFs `taesc.gp3`, frames `btdata.ccx` | `taesc.gp3` for all nine; `taesc.gp3` for all nine (every shape its own); `btdata.ccx`, the team faces `taesc.gp3`, one animated face of ARMGEO `txesc.ufo` | nothing | none | yes |
+| retail | `rev31.gp3`; `units` | `totala2.hpi` (Evad River Confluence, Over Crude Water); TDFs `totala1.hpi`, frames `btdata.ccx` | `rev31.gp3`; `totala1.hpi`; `rev31.gp3` | nothing | none | yes |
+| Escalation (`escalation`) | `taesc.gp3`; `unitsE` | the same TNTs; TDFs `taesc.gp3`, frames `btdata.ccx`, the deposits' TDF and frames `taesc.gp3` | `taesc.gp3` for all nine; `taesc.gp3` for all nine (every shape its own); `btdata.ccx`, the team faces `taesc.gp3`, one animated face of ARMGEO `txesc.ufo` | nothing | none | yes |
 | Total Mayhem (`mayhem-11.3.0`) | `mayhem.gp3`; `units` | the same TNTs; TDFs `mayhem.gp3`, frames `btdata.ccx` | `mayhem.gp3`; `mayhem.gp3` but ARMLLT and ARMSOLAR, `totala1.hpi` (Mayhem ships their FBIs, not their models); `mayhem.gp3` | nothing | none | yes |
-| ProTA (`prota-4.8`) | `prota.gp3`; `units` | the same TNTs; TDFs `prota.gp3`, frames `btdata.ccx` | `prota.gp3` for all nine, file and model alike; `prota.gp3` | nothing | none | yes |
-| TA Zero (`tazero-alpha5`) | `taz31.gp3`; `ZUnits` | the same TNTs; TDFs `taz31.gp3`, frames `btdata.ccx` | none: `ZUnits\` holds none of the nine (its 270 FBIs are TA Zero's own sides) | all nine types are the whitebox's boxes; the ground is 3D | none | yes |
-| Twilight (`twilight-2.0b98`) | its own `rev31.gp3`; `units` | the same TNTs; TDFs and frames `rev31.gp3` | `rev31.gp3`; `totala1.hpi` but ARMLLT, `rev31.gp3` (the stock shape); `rev31.gp3` | nothing | none | yes |
+| ProTA (`prota-4.8`) | `prota.gp3`; `units` | the same TNTs; TDFs `prota.gp3`, frames `btdata.ccx`, the smudges' TDF and frames `prota.gp3` | `prota.gp3` for all nine, file and model alike; `prota.gp3` | nothing | none | yes |
+| TA Zero (`tazero-alpha5`) | `taz31.gp3`; `ZUnits` | the same TNTs; TDFs `taz31.gp3` and `totala1.hpi`, frames `btdata.ccx` | none: `ZUnits\` holds none of the nine (its 270 FBIs are TA Zero's own sides) | all nine types are the whitebox's boxes; the ground is 3D | none | yes |
+| Twilight (`twilight-2.0b98`) | its own `rev31.gp3`; `units` | the same TNTs; TDFs `totala1.hpi`, frames `rev31.gp3`; the deposits' TDF and frames `ta_features_2013.ccx` | `rev31.gp3`; `totala1.hpi` but ARMLLT, `rev31.gp3` (the stock shape); `rev31.gp3` | nothing | none | yes |
 
-- **Every setup drew both stages' ground in 3D on 300 of 300 frames**, the image whole: the ground
+- **Every setup drew all three stages' ground in 3D on 300 of 300 frames**, the image whole: the ground
   in 3D on the five setups whose units resolved, and under TA Zero the ground in 3D with every unit
   a box over it (R2), as the plan's section 3 says a type the running game does not have is drawn.
 - **The units are the mod's own.** Every unit model a mod ships is the one drawn: Escalation's nine
