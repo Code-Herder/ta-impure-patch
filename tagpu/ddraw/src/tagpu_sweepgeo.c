@@ -52,15 +52,17 @@ void sweep_order(const SweepTarget* t, unsigned n, int32_t cx, int32_t cz, uint1
     }
 }
 
-/* The Reclaim handler 0x404AD0 sets the order's countdown +0x36 to 15 + (energy + metal) / 2
-   (0x404BBA..0x404BDC: `fmul` by -0.5 at 0x4FC940, `fsubr` 15.0 at 0x4FC944) and takes 2 off it
-   each working call (0x404C7C..0x404C84); no worker-time term enters it. DISASSEMBLED; one call
-   a unit tick is [INFERRED]. */
+/* The Reclaim handler 0x404AD0 sets the order's countdown +0x36 to _ftol(15 + (energy + metal)
+   / 2), truncated (0x404BBA..0x404BDC: `fmul` by -0.5 at 0x4FC940, `fsubr` 15.0 at 0x4FC944);
+   each working call re-arms 2 ticks (0x439E80(2) at 0x404C77) and takes 2 off it (0x404C7C..
+   0x404C84), and the call that takes it to 0 or below pays out. So C0 = trunc(15 + (e + m) / 2)
+   needs ceil(C0 / 2) calls, 2 ticks apart; no worker-time term enters it (DISASSEMBLED). */
 uint32_t sweep_reclaim_ticks(float energy, float metal)
 {
     double e = energy > 0.0f ? (double)energy : 0.0;
     double m = metal > 0.0f ? (double)metal : 0.0;
-    double v = ceil((15.0 + (e + m) / 2.0) / 2.0);
+    double c0 = floor(15.0 + (e + m) / 2.0);
+    double v = 2.0 * ceil(c0 / 2.0);
     return v >= 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)v;
 }
 

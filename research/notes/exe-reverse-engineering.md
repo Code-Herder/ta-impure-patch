@@ -14684,9 +14684,13 @@ to `+0x2CC3`), and the one register store, `0x419BC9`, is in the uncalled setter
 button handler `0x4A6AE0` (`0x4AA24C`, by the gadget-type table `0x4AA810`), which matches it against the gadget's `+0x13A` through `tolower`
 `0x4E5A30` and `toupper` `0x4E71C0` (`0x4A70FB..0x4A7129`, the C-locale fast paths read as `+0x20`
 / `−0x20` on `A..Z` / `a..z`); a toggle (`+0x1B` bit `0x40`) flips `status_init`
-(`0x4A7132..0x4A713E`), a radio (`0x10`) sets it, then the gadget is redrawn (`0x4A5F40`),
-actuated (`0x4A0340`) and the key popped (`0x4A716A`). So the RECLAIM quickkey pressed while armed
-turns the toggle off and the actuation writes mode 1. A letter reaches that ring only through
+(`0x4A7132..0x4A713E`), a radio (`0x10`) sets it, then the gadget is redrawn (`0x4A5F40`), its
+radio group reset (`0x4A0340`: with a non-zero `assoc`, every other `id 1` gadget of that `assoc`
+has its `status_init` zeroed and is redrawn, `0x4A036D..0x4A03E1`) and the key popped
+(`0x4A716A`); the handler returns 1, the pump publishes the gadget's index at `GUI+0x60`
+(`0x4AA675`) and the orders handler `0x419BE0` reads it (`0x419BFA`, `0x419F3D`). A click's release
+inside the rect does the same (`0x4A6CB2..0x4A6CC8`) [DISASSEMBLED 2026-10-29]. So the RECLAIM
+quickkey pressed while armed turns the toggle off and `0x419BE0`'s RECLAIM branch writes mode 1. A letter reaches that ring only through
 `WM_CHAR`: the keydown translator `0x4C1D50(vk, sys)` reads Ctrl with `GetAsyncKeyState`
 (`0x4C1D54..0x4C1D6A`), pushes nothing for a key with neither `sys` nor Ctrl (`0x4C20EA..0x4C20F4`),
 and for `A..Z` pushes `vk + 0x69` under Ctrl (`0x4C2129..0x4C2136`) or the lower-case letter
@@ -14794,9 +14798,14 @@ the table `0x404D8C` (states 0..5). State 1 sets the countdown `order+0x36 = 15 
 metal) / 2` (`0x404BBA..0x404BDC`: `fld [def+0xEC]`, `fadd [def+0xF0]`, `fmul` by −0.5 at
 `0x4FC940`, `fsubr` 15.0 at `0x4FC944`, `0x4E43A0` [INFERRED: `_ftol`], the store at `0x404BDC`);
 state 4 takes 2 off it per working call (`0x404C7C..0x404C84`, after `0x439E80(2)` at `0x404C77`)
-and tests it at `0x404C89`. **No worker-time term**: nothing in `0x404AD0..0x404D8B` reads the
-unit def's `+0x1FE` or the feature's build time. The sweep's split weighs a target by
-`ceil(countdown / 2)` calls, one call a unit tick [INFERRED].
+and tests it at `0x404C89`: at 0 or below the same call pays out (state 5, `0x4237D0` at
+`0x404D66`). `0x439E80(2)` re-arms the order two ticks on, so the calls are two ticks apart and a
+countdown C0 takes `ceil(C0 / 2)` calls, its payout `2 · (ceil(C0 / 2) − 1)` ticks after the first
+[DISASSEMBLED 2026-10-29]. **No worker-time term**: nothing in `0x404AD0..0x404D8B` reads the
+unit def's `+0x1FE` or `+0x212` or the feature's build time. Between the first call and the
+payout the order sprays only while the countdown is above 15 (`0x404CB5`), from two reverse
+emissions a call (`0x404D3B`, `0x404D4C`). The sweep's split weighs a target by
+`2 · ceil(C0 / 2)` ticks (`sweep_reclaim_ticks`).
 
 **What the sweep calls and why each is safe to call there.** All from the in-play handler on the
 game thread, where stock's click calls the same roots: the resolver `0x43F0E0` once a target and

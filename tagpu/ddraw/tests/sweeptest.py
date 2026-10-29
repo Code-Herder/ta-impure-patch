@@ -37,11 +37,12 @@ def order(targets, cx, cz):
 
 
 def reclaim_ticks(energy, metal):
-    """The Reclaim handler's countdown, 15 + (energy + metal) / 2, at 2 a working call, rounded
-    up (sweep_reclaim_ticks; 0x404BBA..0x404BDC and 0x404C7C). Negative or NaN counts as 0."""
+    """The Reclaim handler's ticks, 2 a working call: the countdown trunc(15 + (energy + metal) / 2)
+    at 2 a call, rounded up (sweep_reclaim_ticks; 0x404BBA..0x404BDC, 0x404C77, 0x404C7C).
+    Negative or NaN counts as 0."""
     e = energy if energy > 0 else 0.0
     m = metal if metal > 0 else 0.0
-    return int(math.ceil((15.0 + (e + m) / 2.0) / 2.0))
+    return 2 * int(math.ceil(math.floor(15.0 + (e + m) / 2.0) / 2.0))
 
 
 def order_sweep(builders, targets):
@@ -266,8 +267,8 @@ def main(argv):
         t.expect(mine == want, f"order around ({cx},{cz}) of {len(ts)}: native {mine[:12]}, "
                                f"want {want[:12]}")
 
-    ticks = [((0, 0), 8), ((0, 250), 70), ((204, 0), 59), ((2900, 0), 733), ((-5, 0), 8),
-             ((float("nan"), 0), 8), ((125.5, 33.25), 48)]
+    ticks = [((0, 0), 16), ((0, 250), 140), ((204, 0), 118), ((2900, 0), 1466), ((-5, 0), 16),
+             ((float("nan"), 0), 16), ((125.5, 33.25), 94), ((3, 0), 16), ((5, 0), 18)]
     got = native([f"ticks {e} {m}" for (e, m), _ in ticks])
     for ((e, m), want), ans in zip(ticks, got):
         t.expect(int(ans) == want and reclaim_ticks(e, m) == want,

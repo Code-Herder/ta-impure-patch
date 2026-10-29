@@ -23,8 +23,9 @@ int      sweep_inside(int32_t cx, int32_t cz, int32_t r, int32_t x, int32_t z);
    at most SWEEP_MAX_TARGETS; more are not ordered. */
 void     sweep_order(const SweepTarget* t, unsigned n, int32_t cx, int32_t cz, uint16_t* idx);
 
-/* The ticks a Reclaim order works on a feature of `energy` and `metal`, rounded up:
-   ceil((15 + (energy + metal) / 2) / 2). A negative or NaN amount counts as 0. */
+/* The ticks a Reclaim order works on a feature of `energy` and `metal`: 2 ticks a working call,
+   ceil(C0 / 2) calls for the countdown C0 = trunc(15 + (energy + metal) / 2). A negative or NaN
+   amount counts as 0. */
 uint32_t sweep_reclaim_ticks(float energy, float metal);
 
 /* The split, deterministic: until no target is left or no builder can take one, the builder
