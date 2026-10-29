@@ -7643,6 +7643,13 @@ when `main+0x37EBE` bit 4 asks. A selection sets that bit (`0x41C110`).
 - **STOP** (`0x502714`) is greyed when `main+0x37EC1` bit 0 is clear (`0x41A2F3`). The router
   packs that bit from `def+0x245` bit 3 (`0x41B4AC`), the FBI's `canstop`, which the FBI reader
   `0x42BF40` stores as `and 1` at `0x42C90B..0x42C936`, 0 when the key is missing.
+- **RECLAIM** (`0x5016C4`) is greyed when `main+0x37EC1` bit `0x20` is clear (`0x41A38C..0x41A3AF`:
+  the test, then `0x49FE60` for the gadget and `0x4A1200(.., 1)`). The router sets its flag for a
+  selected unit whose `def+0x245` has bit `0x400` (`0x41B509..0x41B512`: `shr 10`, `test 1`) and
+  packs it as bit 13 of the word `main+0x37EC0` (`0x41B6DA..0x41B6F7`); the FBI reader stores that
+  bit from `canreclamate` (`0x503A74`) as `and 1`, `shl 10` (`0x42C9EF..0x42CA1A`), 0 when the key is
+  missing [DISASSEMBLED 2026-10-29]. The wiki's RECLAIM is live by the same rule
+  (`tagpu_wikisim.c` `gadget_state`).
 - **The other order buttons** follow the same rule. Each is greyed by its own bit of the
   router's flags `main+0x37EC0..0x37EC2` (MOVE `0x37EC0` bit 7 at `0x41A2CB`, ATTACK `0x37EC1`
   bit 1 at `0x41A31B`, …), which the router packs from the selection's `def+0x245` bits
@@ -14675,9 +14682,12 @@ the placement's own hooks are in the section above; this is what cursor mode 12 
 terminated at `+0x10`) and tests it with `strstr(name, "RECLAIM")` — the needle at `0x5016C4`, the call to
 the C runtime's `strstr` `0x4E49B0` at `0x419F56` — so **any gadget whose name contains RECLAIM**
 arms it (ARMRECLAIM, CORRECLAIM, a mod's GOKRECLAIM). With the gadget's `status_init` (`+0x138`)
-0 it writes mode 1 (`0x419F71`); otherwise mode `0x0C` at `0x419F8A` (`c6 81 c3 2c 00 00 0c`),
+0 it writes mode 1 (`0x419F71`) and jumps to the shared tail `0x41A06D`, which clears `main+0x2CC6`
+bit 3 (`0x41A079`) and plays `specialorders` (`0x41A080`); otherwise mode `0x0C` at `0x419F8A` (`c6 81 c3 2c 00 00 0c`),
 clears `main+0x2CC6` bit 3 (`0x419F96`) and plays `specialorders` (`0x5026E4`) through `0x47F1A0`
-at `0x419F9D`. **`0x419F8A` is the only store of `0x0C` to `main+0x2CC3`** (a scan of every store
+at `0x419F9D`, returning at `0x419FAE` (`ret 8`); a name without RECLAIM goes on at `0x419FB1`.
+**So arming and disarming both play `specialorders`**, and neither touches bit 5, the
+Shift-placement bit (`0x419F3D..0x419FAF`). **`0x419F8A` is the only store of `0x0C` to `main+0x2CC3`** (a scan of every store
 to `+0x2CC3`), and the one register store, `0x419BC9`, is in the uncalled setter `0x419BC0`.
 
 **The quickkey toggles it off.** The GUI pump `0x4A9FD0` hands the character ring's key to the
@@ -14792,8 +14802,8 @@ fix armed the bound is the stub's. The sweep asks it for every candidate feature
 representative reclaimer's player bounded to one of the ten player records first.
 
 **The reclaim order's countdown, `0x404AD0`.** Each call finds the feature at `order+0x22`
-(`0x421DA0` at `0x404AE9`); none (`0xFFFF`) logs "Reclamation failed" (`0x501638`, `0x47F780`) and
-returns 8; a def without `+0xFE` bit 7 returns 8 (`0x404B2A`). The state byte `order+5` indexes
+(`0x421DA0` at `0x404AE9`); none (`0xFFFF`) logs "Reclamation failed" (`0x501638`, pushed at
+`0x404AF8` with the kind 7, through `0x47F780`) and returns 8; a def without `+0xFE` bit 7 returns 8 (`0x404B2A`). The state byte `order+5` indexes
 the table `0x404D8C` (states 0..5). State 1 sets the countdown `order+0x36 = 15 + (energy +
 metal) / 2` (`0x404BBA..0x404BDC`: `fld [def+0xEC]`, `fadd [def+0xF0]`, `fmul` by −0.5 at
 `0x4FC940`, `fsubr` 15.0 at `0x4FC944`, `0x4E43A0` [INFERRED: `_ftol`], the store at `0x404BDC`);
@@ -14804,7 +14814,22 @@ countdown C0 takes `ceil(C0 / 2)` calls, its payout `2 · (ceil(C0 / 2) − 1)` 
 [DISASSEMBLED 2026-10-29]. **No worker-time term**: nothing in `0x404AD0..0x404D8B` reads the
 unit def's `+0x1FE` or `+0x212` or the feature's build time. Between the first call and the
 payout the order sprays only while the countdown is above 15 (`0x404CB5`), from two reverse
-emissions a call (`0x404D3B`, `0x404D4C`). The sweep's split weighs a target by
+emissions a call (`0x404D3B`, `0x404D4C`). **The spray's source box** (`0x404CC9..0x404D37`): the
+anchor cell's corner, each cell coordinate `<< 20` (16 world units in 16.16, `0x404CCD..0x404CDA`);
+the far corner that plus the def's `+0x94` and `+0x96` `<< 20` [INFERRED: FootprintX and
+FootprintZ] (`0x404CEB..0x404D0D`); the bottom the ground height `0x485070` answers
+(`0x404CE6`) and the top that plus the def's byte `+0xFA` `<< 16`, the height (`0x404D17..0x404D2D`);
+both emissions are called with the same box and the nano piece's point (`0x404D37` stores the last
+corner). The wiki's stage, whose ground is 0, sprays from the same box (`tagpu_wikisim.c`
+`spray_feature`, sim.js `sprayFeature`).
+
+**The walk's arrival, `0x44DCB0(x, z)`** (thiscall, `ret 8`): 1 exactly on the border cells of
+the rect at `this+0x08..+0x14` -- `x` equal to `+0x08` or `+0x0C` with `z` in `[+0x10, +0x14]`,
+or `z` equal to `+0x10` or `+0x14` with `x` in `[+0x08, +0x0C]` (`0x44DCB9..0x44DCF7`), 0
+otherwise [DISASSEMBLED 2026-10-29]. For a feature's reclaim that rect is the ring of cells round
+the feature's footprint widened by the unit's [INFERRED: from the goal `0x44D8A0` builds], so the
+unit works from where the footprints touch and BuildDistance is never read; the wiki's walk stops
+on the same ring (`to_feat`). The sweep's split weighs a target by
 `2 · ceil(C0 / 2)` ticks (`sweep_reclaim_ticks`).
 
 **What the sweep calls and why each is safe to call there.** All from the in-play handler on the

@@ -60,17 +60,18 @@ empty ring (`tools/wiki/gen-reclaim.mjs`).
 
 ## The landings
 
-**L1 and L2 land together.** The DLL loads the wiki as one archive and refuses the whole of it
-when one entry does not parse (`tagpu_wikidata_load`), and today's loader knows neither an entry's
+**L1, L2 and L3 land together.** The DLL loads the wiki as one archive and refuses the whole of it
+when one entry does not parse (`tagpu_wikidata_load`), and main's loader knows neither an entry's
 `features` nor the inputs `reclaim`, `pick` and the key `e`, so the entry in `tree.json` without
-L2 would leave the game with no wiki at all. L1 is committed on the worktree; it waits for L2.
+L2 would leave the game with no wiki at all; and without L3 the game would play the entry with its
+rocks, ring and popup undrawn.
 
 | | What | Gate |
 |---|---|---|
 | **L1** — built, not landed | the mockup: the layout's quickkey and `reclaim` role (`gfx.py`, `checkLayout`), features in `sim.js` and the stage description (`stagemap.py`'s recipe), the sweep in `sim.js`, its drawing in the mockup, `gen-reclaim.mjs` and the seven demos, the claims in `simcheck.mjs` | `simcheck.mjs` on every pack and casting; the demos watched in the mockup by the owner |
 | **The grown map** — built, not landed, lands with L1 and L2 | the owner's answer on the popup (below): with the sidebar a stage's map grows to the column (`tagpu_wiki_map_rows`, `sim.js` *THE MAP*), the descriptions' ground 48 rows deep, the column at most 768 rows, the game look and the DLL's world drawing the map's top rows, each minimap built on its map's rows; mockup and DLL both | `simcheck.mjs` on every pack (passes); `scenecheck.mjs` and `assetcheck.py`'s stages (pass on a tree without the reclaim entry); the sim, side and stage parity with L2's |
-| **L2** — planned, lands with L1 | the DLL's simulation: `tagpu_wikisim.c` and the loaders (`tagpu_wikidata.c`: the entry's `features` table, a scene's `features`, `kind`, the inputs `reclaim` and `pick`, the key `e`, the layout's `key`, a cast's `canreclamate`). Everything sim.js gained that the C side must mirror: the feature table and its checks (`checkFeature`), blocking features in `siteOk`, the spawn and `bodies`; the sweep (`popup`, `keyPress`, `reclaimPress`/`Move`/`Release`, `sweepCommit`, `sweepSplit` from `tagpu_sweepgeo.c`); the feature reclaim order (`featWork`: the walk to touch, the countdown `trunc(15 + (e+m)/2)` taken 2 a call every 2 ticks, the payout, the spray while above 15, the kind-7 notice for a feature gone); the trips `reclaim` and `pick`; the sound `specialorders`; the view's `mode`, `feats`, `gone` and `reclaim` | `simparity.mjs` natively and `--wine`; `wikitest`'s malformed cases |
-| **L3** — planned | the DLL's drawing: features removed from the stage's ground as they are reclaimed, the sweep's ring, brackets, popup and tag through the wiki's HUD ops, the queued markers | `wiki_regression.py` in all six compatibility setups; the demos watched in game |
+| **L2** — built 2026-10-29, lands with L1 and L3 | the DLL's simulation: `tagpu_wikisim.c` and the loaders (`tagpu_wikidata.c`: the entry's `features` table, a scene's `features`, `kind`, the inputs `reclaim` and `pick`, the key `e`, the layout's `key`, a cast's `canreclamate`). Everything sim.js gained that the C side must mirror: the feature table and its checks (`checkFeature`), blocking features in `siteOk`, the spawn and `bodies`; the sweep (`popup`, `keyPress`, `reclaimPress`/`Move`/`Release`, `sweepCommit`, `sweepSplit` from `tagpu_sweepgeo.c`); the feature reclaim order (`featWork`: the walk to touch, the countdown `trunc(15 + (e+m)/2)` taken 2 a call every 2 ticks, the payout, the spray while above 15, the kind-7 notice for a feature gone); the trips `reclaim` and `pick`; the sound `specialorders`; the view's `mode`, `feats`, `gone` and `reclaim` | `simparity.mjs` natively and `--wine`; `wikitest`'s malformed cases |
+| **L3** — built 2026-10-29, lands with L1 and L2 | the DLL's drawing: the features on the whitebox ground and out of the 3D image once reclaimed, the sweep's brackets, ring, readout, popup and the kind's tag through the wiki's HUD ops, the game's `cursorreclamate`, E from Try it, the RECLAIM lock's badge | `stagecheck.mjs`; `wiki_regression.py` in all six compatibility setups; the demos watched in game |
 | **L4** — later | 3D wrecks on the stage, mockup and game, swapped into the METAL demos | `stage3dcheck.py` |
 
 ## What L1 built
@@ -90,6 +91,36 @@ L2 would leave the game with no wiki at all. L1 is committed on the worktree; it
   reclaimed feature's anchor from its image. The popup is the whitebox's stand-in for Impure's
   own sweep art, which L3 draws in the game.
 
+## What L2 and L3 built
+
+- **The loader** (`tagpu_wikidata.c`) reads an entry's `features` table (at most 64; a name under
+  32 bytes, a footprint of 1..16, amounts in 0..1e7, height 0..255, the flags booleans), a scene's
+  `features` (the name, `at`, an optional id under 24 bytes) and `kind`, the inputs `reclaim`
+  (only `true`) and `pick` (a kind), their trips, the key `e`, a gadget's `key` (1..255) and a
+  cast's `canreclamate`. The pack (`tagpu_wikiasset.c`) reads a button's `quickkey` from its own
+  section and the FBI's `canreclamate`, as `gfx.py` does, and the cursor sequence
+  `cursorreclamate`.
+- **The simulation** (`tagpu_wikisim.c`), rule for rule with `sim.js`: a scene's features (at most
+  256) as blocking bodies and targets, RECLAIM's live state and toggle, the popup, the E key, the
+  ring and its targets, the commit split by `tagpu_sweepgeo.c` itself (built on SSE2 with the
+  wiki's simulation, whose sums are in double), and the feature reclaim order: the walk to the ring
+  round the footprints, the countdown, the payout, the spray from the feature's box, the kind-7
+  notice for a feature gone; in the view and the state hash. `sim.js` gained what the port found:
+  builders' and orders' points floored as the game's `builder_inputs` floors them, the countdown
+  on float amounts, a guard that follows a unit reclaiming a feature, Quick Build off while reclaim
+  is armed, and the data rules the C loader holds (the feature id's 24 bytes, the 64-row table).
+- **The stage** (`tagpu_wikistage.c`): the features on the whitebox ground, the sweep as
+  `stage.js` `drawSweep` draws it and the kind's tag at the cursor; the 3D image leaves out a
+  reclaimed feature's quads (`tagpu_wikiscene_dead`, `tagpu_wikiworld.c`), as `gfx.js` drops its
+  anchor. A dash ending on a corner within 1e-9 px ends there, in `poly` and in `stagecheck.mjs`'s
+  recorder alike: the ring's corners are whole world units, and the last bit of a length decided
+  the corner otherwise.
+- **The checks.** `simparity.mjs` adds the entry's 336 plays, nine reclaim rule cases and 39
+  refusal cases (features, kinds, the two inputs and their trips, quickkeys, `canreclamate`):
+  1344 plays, 66 rule cases and 232 refusals equal natively and under Wine. `simcheck.mjs` gains
+  the rule cases; `stagecheck.mjs` pairs all 8576 frames (`cursorreclamate` among its stand-in
+  sequences); `sidecheck`, `scenecheck`, `textparity` and `assetcheck.py` pass.
+
 ## The owner's answers (2026-10-29)
 
 - **The readout's words: kept for now.** The game's readout counts every metal feature as a WRECK,
@@ -106,10 +137,11 @@ L2 would leave the game with no wiki at all. L1 is committed on the worktree; it
 
 - Retail's E on a build page (decision 2).
 - 3D features (decision 3).
-- `stagecheck.mjs` and `simparity.mjs` cannot run while the C loader refuses the entry: both are
-  L2's and L3's gates. On a tree without the entry they still differ, by what L1 added that the C
-  side does not yet mirror (the view's `feats`, `canreclamate`, a gadget's `key`, the fixture's
-  STOP and RECLAIM buttons), so the grown map's sim, side and stage parity are proved with L2's.
+- The popup is the whitebox's stand-in in the game too: Impure's own sweep art is not drawn on the
+  stage.
+- `scenecheck.mjs` pairs the ground's quads once a stage, not a frame, so the 3D image's dropped
+  features are not paired against `gfx.js`'s gather; the rule is one line in each (drop the anchor,
+  or the quads of its feature).
 - A column deeper than 768 rows does not exist on the stage: the pack builders (`gfx.py`
   `check_panel`, `tagpu_wikiasset.c`) leave out a screen that ends below row 768, and `checkLayout`
   and `tagpu_wikidata.c` refuse a layout that has one. Past it the map would outgrow the ground, and

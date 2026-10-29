@@ -225,12 +225,12 @@ retail and at type 1 in Twilight. The sims' shape follows: the build-menu mode, 
 else none (`cursor_shape` in both); Quick Build's ghost no longer makes it a build cursor.
 
 - **The art** is the 3D asset load's (`tagpu_wikiasset.c` `cursors_load`): `<anims>\cursors.GAF`
-  by the engine's path rule (`0x429700("cursors")`, language variant first), `cursornormal` and
-  `cursormove` found as `0x4B8D40` finds a name and copied in the engine's form into the arena,
-  which is immutable once published and never freed; WIKI3D `cursor[3]` by shape, and a `cursors`
+  by the engine's path rule (`0x429700("cursors")`, language variant first), `cursornormal`,
+  `cursormove` and `cursorreclamate` found as `0x4B8D40` finds a name and copied in the engine's form into the arena,
+  which is immutable once published and never freed; WIKI3D `cursor[WIKI_CURSOR_N]` by shape, and a `cursors`
   element in the report (GAF, source, each sequence's frames). A mod that renames `anims` is
   followed. The render thread decodes the frames through the presented palette, as the sharp layer
-  resolves the player's cursor, into a sprite sheet of 16 cells of 64x64 RGBA (`tagpu_wikistate.c`
+  resolves the player's cursor, into a sprite sheet of 32 cells of 64x64 RGBA (`tagpu_wikistate.c`
   `sprites_bind`), again when that palette moves; each frame is bounded by the cell and the count
   by the sheet, and a shape whose frames do not fit or did not resolve keeps its kit icon. The HUD
   pass holds the sheet as one more texture (`HUD_TEX_SPRITE`, `tagpu_vk_hud.c`), sent whole when
@@ -431,7 +431,7 @@ they were not re-disassembled for this table.
 | Order lines | TA draws no lines. It draws marching `pathicon` route dots, a waypoint sprite, target circles and range circles. | `tagpu_order.c` `draw_dots`, `draw_sprite` (the engine's own frames, one texel a screen pixel, out of `tagpu_order_art`'s atlas), `draw_circle`, `draw_ranges` | The whitebox's dashed lines, over the image |
 | Construction progress | The unit's build fraction: unit `+0x104`, the fraction remaining, staged as the engine's nano frame (`0x458D30` / `0x458DD0`) | `tagpu_render3do.c` `tagpu_r3d_nano_state` stages it; the unit shader in `tagpu_native.c` applies it, and the wire is `tagpu_posedraw.c` `pd_record`. A unit being reclaimed is not a nanoframe: the engine's reclaim lowers its hit points and leaves `+0x104` alone (`exe-reverse-engineering.md`, *A reclaimed unit is never a nanoframe*). | `tagpu_r3d_nano_state` ported line for line (`scene.js` `nanoState`) into the same shader, then the wire, every face's outline, after every body. A unit being reclaimed is drawn finished, as the game draws it |
 | Nano spray | The engine's nano particles (vtable `0x4FD5B8`, layer 6), palette `0xA1..0xA7`, each a `DrawBar` of 2 × 2 pixels (`0x473A00`; `exe-reverse-engineering.md`, *The nano particle*) | In the game `tagpu_packet_pub.c` gathers them (`PK_PART` kind 5) and `tagpu_sfx.c` / `tagpu_fx.c` draw each as a 2 × 2 quad. On the stage the wiki's own particles (`tagpu_wikisim.c`) are drawn by `tagpu_wikistage.c` as 2 × 2 game-pixel rects in the retail palette's RGB, over the image | The same rects (`stage.js`), over the image, in both looks |
-| Cursor | `anims/cursors.gaf`, chosen by the engine's picker `0x43E490` into `main+0x2CBE` from `cursor_ary` (`exe-reverse-engineering.md`, the cursor table): `cursornormal`, `cursormove`, `cursorselect`, … | `tagpu_gui_surf.c` `tagpu_gui_cursor_frame` takes the frame from the packet; `sharp_cursor` draws it last in the UI's sharp layer. | The same frames from the player's `cursors.gaf` (`cursornormal` for the arrow and build placement, `cursormove` animating with a mobile unit selected), at the same size and hotspot, over the image (R2); the kit's icons where they did not resolve |
+| Cursor | `anims/cursors.gaf`, chosen by the engine's picker `0x43E490` into `main+0x2CBE` from `cursor_ary` (`exe-reverse-engineering.md`, the cursor table): `cursornormal`, `cursormove`, `cursorselect`, … | `tagpu_gui_surf.c` `tagpu_gui_cursor_frame` takes the frame from the packet; `sharp_cursor` draws it last in the UI's sharp layer. | The same frames from the player's `cursors.gaf` (`cursornormal` for the arrow and build placement, `cursormove` animating with a mobile unit selected, `cursorreclamate` with reclaim armed), at the same size and hotspot, over the image (R2); the kit's icons where they did not resolve |
 | The left sidebar | The engine's own column: PANELSIDE, the minimap, the routed .GUI screen and its gadgets' GAF frames (the engine map's *The left sidebar*) | `tagpu_wikiside.c` composes the column the engine would show into `HUD_TEX_SIDE`, drawn by one `HOP_SIDE` op in the HUD pass (`tagpu_vk_hud.c`; [GPU status](gpu-status.html) §2.12c) | `side.js` `compose`, the same composer, from the mod's pack |
 | Keys strip | None: the game has no such strip | Only the wiki draws one, under its own stage: `tagpu_wikilay.c` lays out the keycaps of the keys the demo's view holds, drawn by the replay HUD's stack (`tagpu_huddraw.c`, `tagpu_hudtext.c`, `tagpu_vk_hud.c`). | Unchanged |
 
@@ -1243,8 +1243,10 @@ their last input, since their claims read only the shape and the queue.
 
 The feature is the reclaim sweep ([gpu-status §2.110](gpu-status.html), `tagpu_sweep.c`, the
 split in `tagpu_sweepgeo.c`). Its plan, the owner's decisions and the landing state are in
-[the reclaim entry's plan](ingame-wiki-reclaim-plan.html). It is built in the mockup and waits
-for the DLL's simulation to land with it: the game's loader refuses the entry today.
+[the reclaim entry's plan](ingame-wiki-reclaim-plan.html). Both simulations play it and both
+stages draw it: the features on the ground (and out of the game look's image once reclaimed), the
+sweep's brackets, ring, readout and popup, the kind's tag at the cursor and the game's
+`cursorreclamate`; E reaches RECLAIM from Try it yourself as from the game's keyboard.
 
 | # | Demo | What the player sees |
 |---|---|---|
