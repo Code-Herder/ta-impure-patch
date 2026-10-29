@@ -14694,11 +14694,14 @@ before the engine sees it, which keeps the whole key from it.
 exactly two call sites in the image and no stored address: `0x499297` in the in-play handler,
 after `push eax` at `0x499296` (`50 E8 84 3F FF FF`, the byte loaded at `0x499290`), and
 `0x491D36`, after `push ecx` at `0x491D35` (`51 E8 E5 B4 FF FF`, the byte loaded at `0x491D2F`),
-in `0x491D18..0x491D6C`, a copy of the handler's hover-and-cursor block outside the handler. Both
-push a whole register of which only the low byte is the mode, read nothing after the call but
-EAX, and reload `main` at once (`0x49929C`, `0x491D3B`); each then compares the answer with
-`main+0x2CBE` and stores it (`0x4992AD`, `0x491D4C`). The sweep rewrites both rel32 fields to
-wrappers that call `0x48D220` and may answer `0x13` instead — the engine's own "nothing", stored
+in `0x491D18..0x491D6C`, a copy of the handler's hover-and-cursor block inside `0x491CC0` --
+**which nothing calls**: no `call` or jump in `.text` reaches it and no four-byte value anywhere in
+the file falls in `0x491CC0..0x491D6F` [DISASSEMBLED 2026-10-28, an instruction scan and a literal
+scan], so in the engine `0x499297` is the one call that runs. Both push a whole register of which
+only the low byte is the mode, read nothing after the call but EAX, and reload `main` at once
+(`0x49929C`, `0x491D3B`); each then compares the answer with `main+0x2CBE` and stores it
+(`0x4992AD`, `0x491D4C`). The sweep rewrites the live call's rel32 to a wrapper that calls
+`0x48D220` and may answer `0x13` instead, and leaves the dead copy alone — the engine's own "nothing", stored
 by the handler at `0x49925D` and returned by `0x43E490`'s default at `0x43F098`.
 
 **The router's three hooks** (`tagpu_route.c`, written at attach, each byte-matched first): the
@@ -14766,8 +14769,8 @@ The block `0x43FF38..0x4401D9` is **not** mode 12's: it is reached only from the
 the shared tails `0x44004C`, `0x440183`, `0x4401C2` and `0x4401C7`). It repeats the reclaim
 choice — `RESURRECT` (`0x43FF40..0x44004C`), the mapped test and reclaimable feature
 (`0x440065..0x44016E`, the `+0xFE` test at `0x440167`), `VTOL_RECLAIM` by `+0x241` bit 11
-(`0x440170..0x440181`, the name loaded at `0x440176`; `tagpu_sweep.c` cites this copy, as
-`0x44016F..0x440181`, for mode 12's test, which is `0x43F68A..0x43F69F`) or `RECLAIM`
+(`0x440170..0x440181`, the name loaded at `0x440176`; mode 12's own test is `0x43F68A..0x43F69F`, the one
+`tagpu_sweep.c` cites) or `RECLAIM`
 (`0x440187`) — and falls back,
 for a def with `+0x245` bit `0x80` and a non-zero first dword of the unit, to `VTOL_MOVE`
 (`0x5016CC`) or `MOVE_GROUND` (`0x5052E4`) by the same bit 11 (`0x44019D..0x4401D9`). That

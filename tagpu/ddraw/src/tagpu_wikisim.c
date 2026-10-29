@@ -1446,11 +1446,11 @@ static void commit(WIKISIM* s, const WIKIPLACE* p)
     if (changed) s->shift_placed = 1;
 }
 
-/* mirrors tagpu_place.c's release (place_button): Shift up first drops the gesture and the building
+/* mirrors tagpu_place.c's release (tagpu_place_button): Shift up first drops the gesture and the building
    stays armed; a one-site gesture ending at the cursor is the stock Shift-click itself; anything
    else commits the last evaluation. A release over the sidebar reaches tagpu_place.c too: IdleTick
    hands the in-play handler a button's release the GUI pump took (0x4999CB..0x499A04, then the
-   call through main+0x391F5 at 0x499A1C), and the route at 0x4993BF passes it to place_button wherever the cursor is. Its
+   call through main+0x391F5 at 0x499A1C), and the route at 0x4993BF passes it to tagpu_place_button wherever the cursor is. Its
    record is never the evaluated one there (the evaluation stands as the map left it), so it is
    never the stock Shift-click: it commits the evaluation the map last made. */
 static void release(WIKISIM* s)
@@ -1811,7 +1811,7 @@ static void input(WIKISIM* s, const WIKIINPUT* ev)
             }
         }
         /* OFF THE MAP AND OFF THE SCREEN a left press with a building armed places it once, at
-           the press. The handler finds bit 1 clear, so place_button returns 0 at the route
+           the press. The handler finds bit 1 clear, so tagpu_place_button returns 0 at the route
            0x4993BF and stock's click 0x498F70 runs; the resource module's gate there re-runs the
            build cursor 0x4197D0 on the point 0x498DA0 clamped to the view's edge (0x498E32..), and
            0x419670 places that site. Shift keeps the building armed (bit 5, 0x498FB4), and

@@ -137,6 +137,10 @@ static int s_armed;
 static unsigned char s_kind = SWEEP_ALL;
 static Gesture s_g;
 static unsigned char s_taken[2];     /* a press the window procedure consumed, per button */
+/* the left button as the window procedure last passed it to the engine: a press passed sets it,
+   a release passed clears it. A drag's right press or Esc is taken only while it is set, so the
+   release they would end it for has not gone into the engine's ring yet (tagpu_sweep_mouse). */
+static unsigned char s_lheld;
 /* The order bytes of RECLAIM, VTOL_RECLAIM and RESURRECT, by the engine's own names. The order
    descriptor array they index is fixed for a level, so they are found once a level. */
 static TAGPU_CMD_SWEEP s_drawn;      /* the popup the render thread last drew (tagpu_sweep_take) */
@@ -161,7 +165,8 @@ static unsigned s_cCancelled, s_cStale;
 
 _Static_assert(TAGPU_PK_SWEEP_TARGETS == SWEEP_MAX_TARGETS, "the packet's targets are the ring's");
 
-static int pointer_on_popup(void);
+static int pointer_on_popup(const char* ta);
+static int popup_live(const char* ta);
 static int inside(const int16_t r[4], int x, int y);
 static int row_at(int x, int y);
 static void pointer_screen(int* x, int* y);
@@ -532,11 +537,15 @@ static int target_of(unsigned n, int cell)
 }
 
 /* The ring's target a node reclaims, or -1: a reclaim-family node whose feature, found at its
-   position as the Reclaim handler finds it (0x421DA0 at order +0x22), is one of the targets. */
-static int node_target(const Grid* g, const char* node, unsigned n)
+   position as the Reclaim handler finds it (0x421DA0 at order +0x22), is one of the targets.
+   `doomed` marks a node the next append takes off: 0x43ADC0 destroys the head of +0x5C while it
+   carries 0x4000 (0x43AE7C..0x43AECE), on every call, append or not -- so a leading run of such
+   nodes reclaims nothing that lasts, and its targets are queued again. */
+static int node_target(const Grid* g, const char* node, unsigned n, int doomed)
 {
     Feat f;
-    if (!family((unsigned char)node[4]) || !feature_at(g, (const int*)(node + N_POS), &f)) return -1;
+    if (doomed || !family((unsigned char)node[4]) || !feature_at(g, (const int*)(node + N_POS), &f))
+        return -1;
     return target_of(n, f.cell);
 }
 
@@ -560,12 +569,16 @@ static unsigned cancel_others(const TagpuWorld* w, const Grid* g, unsigned n, un
     for (b = 0; b < nb; b++) {
         const char *u = live_builder(w, b), *node;
         unsigned place = 0, nc = 0;
+        int lead = 1;
         if (!u) continue;
         for (node = *(const char* const*)(u + U_ORDERS); node && place < LIST_WALK;
              node = *(const char* const*)(node + N_NEXT), place++) {
             const int* pos = (const int*)(node + N_POS);
+            unsigned fl;
             if (*(const char* const*)(node + N_OWNER) != u) break;
-            if ((*(const unsigned*)(node + N_FLAGS) & 0x40004u) || node_target(g, node, n) >= 0) continue;
+            fl = *(const unsigned*)(node + N_FLAGS);
+            lead = lead && (fl & 0x4000u);
+            if ((fl & 0x40004u) || node_target(g, node, n, lead) >= 0) continue;
             s_cut[nc].place = (uint16_t)place;
             s_cut[nc].action = (unsigned char)node[4];
             s_cut[nc].x = pos[0];
@@ -604,12 +617,13 @@ static unsigned drop_queued(const TagpuWorld* w, const Grid* g, unsigned n, unsi
     for (b = 0; b < nb; b++) {
         const char *u = live_builder(w, b), *node;
         unsigned steps = 0;
+        int lead = 1, t;
         if (!u) continue;
         for (node = *(const char* const*)(u + U_ORDERS); node && steps++ < LIST_WALK;
              node = *(const char* const*)(node + N_NEXT)) {
-            int t;
             if (*(const char* const*)(node + N_OWNER) != u) break;
-            if ((t = node_target(g, node, n)) >= 0) s_drop[t] = 1;
+            lead = lead && (*(const unsigned*)(node + N_FLAGS) & 0x4000u);
+            if ((t = node_target(g, node, n, lead)) >= 0) s_drop[t] = 1;
         }
     }
     for (i = k = 0; i < n; i++)
@@ -707,7 +721,7 @@ static void gesture_update(const TagpuWorld* w)
     if (sqrt(dx * dx + dz * dz) * zoom() >= DRAG_PX) s_g.drag = 1;
 }
 
-int tagpu_sweep_cursor(int mode, int idx, int handler)
+int tagpu_sweep_cursor(int mode, int idx)
 {
     TagpuWorld w;
     Grid g;
@@ -715,10 +729,10 @@ int tagpu_sweep_cursor(int mode, int idx, int handler)
     const char* rep;
     const int* point;
     if (mode != 12 || !live(&w)) return idx;
-    if (handler) gesture_update(&w);
+    gesture_update(&w);
     /* the popup lies over the world: a click there picks a row (tagpu_sweep_mouse) and must read
        as no order to the engine's click, which the window procedure keeps it from anyway */
-    if (pointer_on_popup()) return CURSOR_NONE;
+    if (pointer_on_popup(w.ta)) return CURSOR_NONE;
     if (s_kind == SWEEP_ALL) return idx;
     point = (const int*)(w.ta + M_POINT);
     if (!grid(w.ta, &g) || !feature_at(&g, point, &f) || !(rep = representative(&w))) return idx;
@@ -772,7 +786,15 @@ int tagpu_sweep_button(const int* rec, unsigned msg)
     end();
     /* a click: stock's, on this record, byte for byte -- every selected reclaimer takes this
        feature, Shift keeps the order armed, the recorder sees its click (0x4995B3) */
-    if (!d.drag) { s_cClick++; return 2; }
+    /* below the threshold but off the viewport (a flick onto the minimap or the panel, its moves
+       merged into one record there) is no click on the ground the press chose: nothing */
+    if (!d.drag) {
+        if (!(*(const unsigned char*)(w.ta + M_REGION) & 2)) return 1;
+        s_cClick++;
+        return 2;
+    }
+    /* past the threshold the release commits wherever it lands -- over the panel too, which the
+       route hands over in mode 12 as well: the radius is the last viewport record's */
     commit(&w, &d, (rec[2] & MK_SHIFT) != 0);
     return 1;
 }
@@ -804,12 +826,18 @@ static const unsigned char* reclaim_gadget(const char* ta, const unsigned char**
     return NULL;
 }
 
-/* the modal screens and the chat line, which own the keyboard: main+0x37EBE & 0x865 or
-   main+0x2BEE & 0xE0 (the order check's test, 0x491D76..0x491DA2), and main+0x57D */
-static int keyboard_taken(const char* ta)
+/* a menu over the world: main+0x37EBE & 0x865 or main+0x2BEE & 0xE0, the order check's test
+   (0x491D76..0x491DA2) */
+static int menu_over(const char* ta)
 {
     return (*(const uint16_t*)(ta + M_SCREENS) & 0x865u) ||
-           (*(const unsigned char*)(ta + M_SCREENS2) & 0xE0u) || *(const int*)(ta + M_FIELD) != -1;
+           (*(const unsigned char*)(ta + M_SCREENS2) & 0xE0u);
+}
+
+/* the modal screens and the chat line main+0x57D, which own the keyboard */
+static int keyboard_taken(const char* ta)
+{
+    return menu_over(ta) || *(const int*)(ta + M_FIELD) != -1;
 }
 
 static unsigned ascii_lower(unsigned c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
@@ -834,7 +862,7 @@ int tagpu_sweep_char(unsigned ch)
     if (keyboard_taken(w.ta)) return 0;
     /* Esc: the drag, not the order (stock Esc disarms, the in-game key switch's case 0x1B) */
     if (ch == 0x1B) {
-        if (!s_g.active) return 0;
+        if (!s_g.active || !s_lheld) return 0;
         end();
         return 1;
     }
@@ -861,26 +889,40 @@ int tagpu_sweep_mouse(int gx, int gy, int down, int right)
     int b = right ? 1 : 0, row;
     if (!down) {
         if (s_taken[b]) { s_taken[b] = 0; return 1; }
+        if (!right) s_lheld = 0;
         return 0;
     }
+    /* a press decides afresh: a taken press whose release never came (let go outside the
+       window, with no capture to bring it back) must not swallow the next press's release */
+    s_taken[b] = 0;
     if (right) {
-        if (!s_g.active) return 0;
+        /* THE RIGHT PRESS ENDS ONLY A DRAG WHOSE RELEASE IS STILL TO COME. s_g is the handler's
+           state, which reaches the release only when IdleTick hands its record over; s_lheld is
+           this procedure's, set and cleared in the order the messages arrive. With both set
+           the release is behind this press, so it finds the gesture ended and orders nothing;
+           a press after a release passed goes to the engine, and the release commits. */
+        if (!s_g.active || !s_lheld) return 0;
         end();
         s_taken[1] = 1;
         return 1;
     }
-    if (!s_drawn.drawn || !live(&w)) return 0;
-    tagpu_hud_to_screen(&gx, &gy);
-    if (!inside(s_drawn.pop, gx, gy)) return 0;
-    if ((row = row_at(gx, gy)) >= 0 && (unsigned)row != s_kind) set_kind((unsigned)row);
-    s_taken[0] = 1;
-    return 1;
+    if (live(&w) && popup_live(w.ta)) {
+        tagpu_hud_to_screen(&gx, &gy);
+        if (inside(s_drawn.pop, gx, gy)) {
+            if ((row = row_at(gx, gy)) >= 0 && (unsigned)row != s_kind) set_kind((unsigned)row);
+            s_taken[0] = 1;
+            return 1;
+        }
+    }
+    s_lheld = 1;
+    return 0;
 }
 
 void tagpu_sweep_cancel(void)
 {
     end();
     s_taken[0] = s_taken[1] = 0;
+    s_lheld = 0;
 }
 
 static int coord_ok(int v) { return v >= -TAGPU_PK_PLACE_COORD && v <= TAGPU_PK_PLACE_COORD; }
@@ -1048,6 +1090,7 @@ static int popup_rect(const char* ta, Popup* P)
     int H = (int)g_ddraw.height, y0, lo, hi, i, r[4];
     memset(P, 0, sizeof *P);
     P->q8 = 256;
+    if (menu_over(ta)) return 0;
     if (!(P->g = reclaim_gadget(ta, &c0)) || !P->g[G_ACTIVE] || (*(const uint16_t*)(P->g + G_GREY) & 1))
         return 0;
     tagpu_hud_live(NULL, NULL, &P->q8);
@@ -1117,10 +1160,17 @@ static int row_at(int x, int y)
     return -1;
 }
 
-static int pointer_on_popup(void)
+/* The popup as drawn, while no menu lies over the world: a menu's screen is drawn over the
+   popup's place, and its clicks are the menu's. */
+static int popup_live(const char* ta)
+{
+    return s_drawn.drawn && !menu_over(ta);
+}
+
+static int pointer_on_popup(const char* ta)
 {
     int x, y;
-    if (!s_drawn.drawn) return 0;
+    if (!popup_live(ta)) return 0;
     pointer_screen(&x, &y);
     return inside(s_drawn.pop, x, y);
 }
@@ -1188,7 +1238,7 @@ int tagpu_sweep_fill(TAGPU_PK_SWEEP* h, TAGPU_PK_SWEEPITEM* it, unsigned max, un
                 h->energy = energy < 1e9f ? energy : 1e9f;
             }
         } else if (!s_g.active && (*(const unsigned char*)(w.ta + M_REGION) & 2) &&
-                   !pointer_on_popup()) {
+                   !pointer_on_popup(w.ta)) {
             Feat f;
             int pos[3];
             if (feature_at(&g, (const int*)(w.ta + M_POINT), &f) && takes(&f, player, s_kind, pos)) {
@@ -1235,8 +1285,10 @@ static void drawn_log(void)
 void tagpu_sweep_take(const TAGPU_CMD_SWEEP* c)
 {
     int i, ok;
-    if (!c) memset(&s_drawn, 0, sizeof s_drawn);
-    else if (c->pass) {
+    /* a frame whose sharp layer did not run presented no popup (tagpu_gui_present returns before
+       it, or the overlay is off), so nothing of the popup is on the screen to be clicked */
+    if (!c || !c->pass) memset(&s_drawn, 0, sizeof s_drawn);
+    else {
         ok = c->drawn == 1 && rect_sane(c->pop);
         for (i = 0; i < 3 && ok; i++) ok = rect_sane(c->row[i]);
         if (ok) s_drawn = *c;

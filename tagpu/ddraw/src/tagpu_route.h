@@ -7,8 +7,7 @@
 #include <stdint.h>
 
 /* The sites, for tagpu_route_ok: the click routing's stub at 0x4993BF, the before-observer on
-   the handler's entry 0x499200, and the two calls of the cursor chooser 0x48D220 (0x499297 inside
-   the handler, 0x491D36 outside it). */
+   the handler's entry 0x499200, and the cursor chooser 0x48D220's call 0x499297 in the handler. */
 #define TAGPU_ROUTE_STUB   1u
 #define TAGPU_ROUTE_ENTRY  2u
 #define TAGPU_ROUTE_CURSOR 4u

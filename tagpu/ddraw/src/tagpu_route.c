@@ -10,8 +10,9 @@
    - the stub at 0x4993BF, which asks the armed mode's client what to do with the record;
    - a before-observer on the handler's entry, where each client ends its own gesture when a
      record is handled in another mode;
-   - the two calls of the cursor chooser, 0x499297 inside the handler and 0x491D36 in the same
-     block outside it, which tagpu_sweep.c filters.
+   - the cursor chooser's call 0x499297, which tagpu_sweep.c filters. Its one other call,
+     0x491D36, lies in 0x491CC0, which nothing calls: no call or jump in .text and no four-byte
+     value in the file inside it (DISASSEMBLED), so it is left alone.
 
    Cursor modes are exclusive, so each record has at most one client, and in every other mode the
    record is stock's. Everything here is game-thread state: the simulation never reads it. */
@@ -37,8 +38,7 @@
 #define VA_ROUTE_CLICK 0x004993CBu
 #define VA_ROUTE_FRAME 0x004995B8u
 #define VA_CHOOSER     0x0048D220u
-#define VA_CURSOR_IN   0x00499296u   /* push eax; call 0x48D220 (0x499297) */
-#define VA_CURSOR_OUT  0x00491D35u   /* push ecx; call 0x48D220 (0x491D36) */
+#define VA_CURSOR      0x00499296u   /* push eax; call 0x48D220 (0x499297) */
 
 static unsigned s_ok;
 
@@ -191,33 +191,28 @@ static int install_route(void)
     return 1;
 }
 
-/* THE CURSOR CHOOSER'S TWO CALLS. 0x48D220(order) is stdcall, `ret 4`, and reads only the low
-   byte of its argument (DISASSEMBLED); both callers push the cursor mode main+0x2CC3 as that
-   argument, read nothing after the call but EAX, and reload main from 0x511DE8 at once
-   (0x49929C, 0x491D3B) -- so a stdcall function of one dword returning in EAX, which preserves
-   what the C ABI preserves, stands in for it exactly. Each wrapper calls the chooser itself and
-   hands its answer to tagpu_sweep_cursor, which returns it unchanged outside the sweep. */
+/* THE CURSOR CHOOSER'S CALL. 0x48D220(order) is stdcall, `ret 4`, and reads only the low byte
+   of its argument (DISASSEMBLED); the handler pushes the cursor mode main+0x2CC3 as that
+   argument, reads nothing after the call but EAX, and reloads main from 0x511DE8 at once
+   (0x49929C) -- so a stdcall function of one dword returning in EAX, which preserves what the C
+   ABI preserves, stands in for it exactly. The wrapper calls the chooser itself and hands its
+   answer to tagpu_sweep_cursor, which returns it unchanged outside the sweep. */
 typedef int (__stdcall* Chooser)(int);
 
-static int __stdcall cursor_handler(int mode)       /* 0x499297: inside the handler */
+static int __stdcall cursor_handler(int mode)
 {
-    return tagpu_sweep_cursor(mode & 0xFF, ((Chooser)VA_CHOOSER)(mode), 1);
+    return tagpu_sweep_cursor(mode & 0xFF, ((Chooser)VA_CHOOSER)(mode));
 }
 
-static int __stdcall cursor_refresh(int mode)       /* 0x491D36: the same block outside it */
-{
-    return tagpu_sweep_cursor(mode & 0xFF, ((Chooser)VA_CHOOSER)(mode), 0);
-}
-
-/* One site: the push of the mode and the call, `50 E8 84 3F FF FF` at 0x499296 and
-   `51 E8 E5 B4 FF FF` at 0x491D35, each decoded to 0x48D220 before anything is written; then the
-   call's rel32 (the four bytes after E8) is rewritten to reach `fn`, relative to the call's own
-   end. Nothing else in the tree writes either call (a grep of src/). */
-static int cursor_matches(unsigned va, unsigned char push)
+/* The site: the push of the mode and the call, `50 E8 84 3F FF FF` at 0x499296, decoded to
+   0x48D220 before anything is written; then the call's rel32 (the four bytes after E8) is
+   rewritten to reach `fn`, relative to the call's own end. Nothing else in the tree writes the
+   call (a grep of src/). */
+static int cursor_matches(unsigned va)
 {
     const unsigned char* p = (const unsigned char*)(uintptr_t)va;
     int32_t rel;
-    if (p[0] != push || p[1] != 0xE8) return 0;
+    if (p[0] != 0x50 || p[1] != 0xE8) return 0;
     memcpy(&rel, p + 2, 4);
     return va + 6 + (unsigned)rel == VA_CHOOSER;
 }
@@ -240,13 +235,11 @@ void tagpu_route_init(void)
         s_ok |= TAGPU_ROUTE_ENTRY;
     else tagpu_logf("route: the in-play handler's entry (0x499200) holds other bytes or refused "
                     "its observer; not installed");
-    if (!cursor_matches(VA_CURSOR_IN, 0x50) || !cursor_matches(VA_CURSOR_OUT, 0x51))
-        tagpu_logf("route: a call of the cursor chooser (0x499297 or 0x491D36) holds other bytes; "
-                   "not installed");
-    else if (!cursor_write(VA_CURSOR_IN, (void*)cursor_handler) ||
-             !cursor_write(VA_CURSOR_OUT, (void*)cursor_refresh))
-        tagpu_logf("route: a call of the cursor chooser could not be written; not installed");
+    if (!cursor_matches(VA_CURSOR))
+        tagpu_logf("route: the cursor chooser's call (0x499297) holds other bytes; not installed");
+    else if (!cursor_write(VA_CURSOR, (void*)cursor_handler))
+        tagpu_logf("route: the cursor chooser's call could not be written; not installed");
     else s_ok |= TAGPU_ROUTE_CURSOR;
     if (s_ok == (TAGPU_ROUTE_STUB | TAGPU_ROUTE_ENTRY | TAGPU_ROUTE_CURSOR))
-        tagpu_logf("route: armed (stub 0x4993BF, entry 0x499200, cursor 0x499297 0x491D36)");
+        tagpu_logf("route: armed (stub 0x4993BF, entry 0x499200, cursor 0x499297)");
 }

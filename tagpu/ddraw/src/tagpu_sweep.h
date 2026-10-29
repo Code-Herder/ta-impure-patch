@@ -27,10 +27,10 @@ void tagpu_sweep_level_end(void);
 int tagpu_sweep_button(const int* rec, unsigned msg);
 /* The in-play handler's entry, before the record is handled (tagpu_route.c). */
 void tagpu_sweep_entry(void);
-/* The cursor index the handler stores in main+0x2CBE: `idx`, the chooser's answer for `mode`,
-   or 0x13 where a click would take a feature of the other kind. `handler` is 1 at the call
-   inside the in-play handler, whose record the gesture follows (tagpu_route.c). */
-int tagpu_sweep_cursor(int mode, int idx, int handler);
+/* The cursor index the in-play handler stores in main+0x2CBE: `idx`, the chooser's answer for
+   `mode`, or 0x13 where a click would take a feature of the other kind. The gesture follows the
+   handler's record here (tagpu_route.c). */
+int tagpu_sweep_cursor(int mode, int idx);
 
 /* A character the window procedure delivers (tagpu_shield.c): 1 when the sweep took it -- Esc
    during a drag, or the RECLAIM gadget's quickkey while armed -- and the engine must not see it. */

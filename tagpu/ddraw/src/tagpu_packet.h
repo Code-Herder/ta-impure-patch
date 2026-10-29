@@ -336,18 +336,16 @@ typedef struct TAGPU_PK_PLACE {
 #define TAGPU_PK_PLACE_COORD   0x100000  /* a world coordinate's sanity bound    */
 
 /* THE RECLAIM SWEEP (tagpu_sweep.c, on the game thread, copied BY VALUE): at
-   most one header, while RECLAIM is armed or a selected builder has reclaim
-   orders, and its items. The ring is drawn through its points, each target and
-   the feature under the cursor bracketed, the readout written from the
-   header's counts and sums, each builder's queue drawn as a path through its
-   features, and the popup and the cursor's tag drawn from the header. The acquire
+   most one header, while RECLAIM is armed, and its items. The ring is drawn
+   through its points, each target and the feature under the cursor bracketed,
+   the readout written from the header's counts and sums, and the popup and
+   the cursor's tag drawn from the header. The acquire
    bounds every field below (tagpu_packet.c), so a consumer reads them as
    given: the header's kind, style, hot row and flags to their enums, its rects
    ordered and within +-TAGPU_PK_SWEEP_RECT, its centre and radius within
    +-TAGPU_PK_PLACE_COORD and its sums finite and within [0, 1e9]; every item's
    kind to its enum, its point within +-TAGPU_PK_PLACE_COORD, its size within
-   [1, TAGPU_PK_SWEEP_BOXMAX] world px, its top within [0, 255] and its `n` to
-   its kind's range; an item table only beside a header. */
+   [1, TAGPU_PK_SWEEP_BOXMAX] world px; an item table only beside a header. */
 typedef struct TAGPU_PK_SWEEP {
     uint8_t  flags;           /* TAGPU_PK_SW_*                                  */
     uint8_t  kind;            /* 0 METAL, 1 ENERGY, 2 ALL                       */

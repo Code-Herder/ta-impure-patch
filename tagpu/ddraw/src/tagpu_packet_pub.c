@@ -2912,7 +2912,7 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
        because the ghost masks fill_builds writes cover the sites' types ---- */
     e = fill_place(p, &cursor, &nplace);
     if (e > need) need = e;
-    /* ---- the reclaim sweep: 77 KB at most ---- */
+    /* ---- the reclaim sweep: 26 KB at most (the header and 1281 items of 20 B) ---- */
     e = fill_sweep(p, &cursor);
     if (e > need) need = e;
     /* ---- the build-orders table (the ghost pass) ---- */
