@@ -1264,8 +1264,15 @@ const RECLAIM = {
   kind(r, d, ok) {
     const seq = [];
     for (const f of r.all) if (f.v.reclaim && seq[seq.length - 1] !== f.v.reclaim.kind) seq.push(f.v.reclaim.kind);
-    ok(seq.join(' ') === 'all metal energy all metal', `E cycled METAL, ENERGY, ALL and the popup's row picked METAL (${seq.join(' ')})`);
-    ok(r.all.filter(f => f.v.reclaim).every(f => f.v.reclaim.popup), 'the popup showed while reclaim was armed');
+    // without the sidebar there is no RECLAIM button for E to reach and no popup beside it: the pick, like a build,
+    // takes effect at once
+    if (r.layout) {
+      ok(seq.join(' ') === 'all metal energy all metal', `E cycled METAL, ENERGY, ALL and the popup's row picked METAL (${seq.join(' ')})`);
+      ok(r.all.filter(f => f.v.reclaim).every(f => f.v.reclaim.popup), 'the popup showed while reclaim was armed');
+    } else {
+      ok(seq.join(' ') === 'all metal', `E reached nothing and the pick chose METAL (${seq.join(' ')})`);
+      ok(r.all.every(f => !f.v.reclaim || !f.v.reclaim.popup), 'no popup was shown');
+    }
     ok(r.all.every(f => !(f.o.a || []).length), 'nothing was ordered');
   },
   metal(r, d, ok) { ringCheck(r, d, ok, 'rock', 'tree'); },
