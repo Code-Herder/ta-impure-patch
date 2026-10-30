@@ -632,9 +632,10 @@ about a millisecond between them.
   foot. `build` only placed the map's own features until this fixture needed
   wrecks: a scenario feature with a GAF `seqname` now joins the anchor list,
   and one whose def names a 3DO `object` rides the unit mesh path posed by its
-  facing — the engine draws it with the same 3DO renderer. Not A/B'd against
-  the game yet: the wrecks' depth keys are a unit's, where the engine sorts
-  them as features.
+  facing — the engine draws it with the same 3DO renderer. Its depth key is
+  the features' band, `tall0 + rel · rowStep` (`emitUnits` keys any `feature`
+  instance so), as the native pass sorts a wreck (`encBase` 3); not A/B'd
+  against the game.
 
 Cross-checks that passed without a game running: the unit exporter produces
 **189 triangles for ARMCOM, the same count `ta3do render` reports**, and the

@@ -115,8 +115,9 @@ typedef struct {
 #define WSCENE_SH_SLANT 2               /* a structure's slant                                     */
 
 /* A 3D FEATURE OF THE GROUND (a wreck, a heap: its section names a model), which the unit pass
-   draws: its anchor cell and footprint, in the stage description's order */
-#define WIKISCENE_WRECKS 64             /* WIKIWORLD_FEAT3D: the stage's 3D features            */
+   draws: its anchor cell and footprint, in the stage description's order. The placements are
+   bounded by the stage's features; the distinct models by WIKIWORLD_FEAT3D. */
+#define WIKISCENE_WRECKS WIKISCENE_FEATS
 typedef struct { int16_t cx, cz, fx, fz; } WSCENEWRECK;
 
 typedef struct {
@@ -139,7 +140,9 @@ typedef struct {
 
 /* THE RECORDS of view `v` at its tick, into `out` (WIKISCENE_MODELS of them): the units first, in
    the view's order, then the ground's 3D features (`wrecks`, `nwreck` of them, at most
-   WIKISCENE_WRECKS) whose anchor cell the view has not reclaimed -- `*nunit` records together,
+   WIKISCENE_WRECKS) on the map's rows whose anchor cell the view has not reclaimed (a feature
+   whose footprint ends below the map is not on it, as the ground leaves a 2D one out) --
+   `*nunit` records together,
    the opaque window's -- then the ghosts in tagpu_native.c `ghost_record`'s order: the placement
    ghost, each gesture site's, each queued site's not yet started. A unit's record is made only for
    a type `types` marks ok (`ntype` of them; the rest are boxes) and an owner of the eight. Returns

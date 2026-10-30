@@ -2071,8 +2071,10 @@ addresses and the gaps).
   `engineShade`): the model turned by the record's yaw after the loader's half turn, a posed unit
   composed by `pose.js`, back faces culled for the bodies and the shadows, a structure and
   every ghost on the engine's lit rows from its vertex normals (`gfx.py` `vertex_normals`), any
-  other unit on the neutral row, a textured quad mapped and shaded over its own frame, and the
-  nanoframe's wire on the line grid thickened to `ss`. `stage3dcheck.py` compares the whole image
+  other unit on the neutral row, a textured quad mapped and shaded over its own frame, an
+  untextured face with no flat colour (an index outside 2..254) neither drawn nor outlined but
+  still casting its slant, as the game's bake skips it (`tagpu_render3do.c` `face_colour`; the
+  wrecks carry dozens of such faces), and the nanoframe's wire on the line grid thickened to `ss`. `stage3dcheck.py` compares the whole image
   with the game's own: see the 3D stage's plan, landing 6h, for what it measured, and the COB
   plan's *L3b's gate* for the image with the poses.
 - **A 3D feature (a wreck, a heap: its section names a model) is drawn through the unit pass**,

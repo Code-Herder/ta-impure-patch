@@ -102,8 +102,8 @@ its own, at the feature depth `3 + 4·row` (`tagpu_native.c`, the husk gather).
 2. **The whitebox.** A feature with an `object` is a wreck: drawn as its footprint in its own
    colour, beside the rock's and the tree's (`stage.js`, `tagpu_wikistage.c`; the view's feature
    `rock` flag becomes a look).
-3. **The mockup's 3D.** `gfx.py` packs a stage's 3D feature as a mesh beside the units (owner 0
-   only) instead of refusing the ground; `gfx.js` draws each feature still standing as a record
+3. **The mockup's 3D.** `gfx.py` packs a stage's 3D feature as a mesh beside the units (the
+   record takes owner 0) instead of refusing the ground; `gfx.js` draws each feature still standing as a record
    at its footprint's centre, unturned, on the neutral row, no shadow, at the feature depth.
 4. **The game's 3D.** `tagpu_wikiworld.c` takes a 3D feature instead of refusing the ground: a
    type from the arena's model and a record per feature standing (`tagpu_wikiscene_models`), the
@@ -126,7 +126,8 @@ its own, at the feature depth `3 + 4·row` (`tagpu_native.c`, the husk gather).
   a feature as a tree, a rock or a wreck (`#687078`, edge `#33383e`), `stage.js` `FEAT_WB` and
   `tagpu_wikistage.c` by the same look. `simcheck.mjs` judges a ring's kinds by that look.
 - **The 3D.** `gfx.py` leaves a 3D feature out of the ground and packs its model as a mesh beside
-  the units (`feature:<object>`, owner 0, facts `feature`, no sound, no script), listing the
+  the units (`feature:<object>`, for each owner the entry names, the record taking owner 0;
+  facts `feature`, no sound, no script), listing the
   stage's `features3d`; `scene.js` `wrecks` and `tagpu_wikiscene_models` make a record per one
   not reclaimed, after the units, by the engine's placement above; `tascene-render.js` keys a
   feature record in the features' band (`tall0`). In the game `ground_build` sets them apart,
@@ -198,8 +199,15 @@ its own, at the feature depth `3 + 4·row` (`tagpu_native.c`, the husk gather).
 ## Gaps open
 
 - Retail's E on a build page (decision 2).
-- A wreck on the stage is not burnt, not damaged and leaves no heap when reclaimed: a reclaim
-  removes it whole, as it does a rock. The `nounit=` lever does not reach a wreck.
+- A wreck on the stage is not burnt or damaged (so it leaves no `featuredead` heap), and its
+  reclaim spawns no `featurereclamate` successor (FeatureDef `+0xF8`, `0x423710`): it is removed
+  whole, as a rock is. The `nounit=` and `nofeat` levers do not reach a wreck.
+- A wreck takes no fog: it is a record of the unit pass, which takes none on the stage, where the
+  native husk gather hides one on unexplored cells and darkens it under grey (`tagpu_native.c`).
+  No scene puts a wreck under fog; a scene that does draws it unfogged in the mockup and the game
+  alike.
+- The live game may draw the engine's own shadow of a 3D wreck (`tagpu_native.c`, the FShadow
+  note); the stage draws none, as the native husk pass does.
 - The popup is the whitebox's stand-in in the game too: Impure's own sweep art is not drawn on the
   stage.
 - `scenecheck.mjs` pairs the ground's quads once a stage, not a frame, so the 3D image's dropped

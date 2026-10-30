@@ -16,7 +16,7 @@
    mockup.
 
    AND THE UNITS AS THEIR MODELS: tagpu_wikiscene.c's model records (every unit and every ghost
-   whose type the arena resolved), each baked by the wiki's instance of the geometry bake from the
+   whose type the arena resolved, and every 3D feature of a ground in 3D), each baked by the wiki's instance of the geometry bake from the
    arena's model and posed at rest, turned onto its facing, by the wiki's posed program -- the
    posed-draw hand-over the wiki's unit pass draws from, in the game's order (the units, then the
    ghosts' window). The bake, the material layer and the posed program take their `_frame` calls
@@ -25,7 +25,8 @@
    each inside it, and left no word of a file that a reader follows (tagpu_wikiasset.h). Each type's
    piece run is the readers' walk of its model, and every node of it is re-checked against the
    arena's used extent before the run is kept -- a bound on the pointer's value, not a probe -- so
-   a type whose walk does not stay inside is a box.
+   a type whose walk does not stay inside is a box, and a 3D feature whose walk does not falls
+   its stage's ground back whole (`wrecks_build`).
 
    A stage whose ground did not resolve still draws its units: the image then carries no ground
    (`ground` 0), and the whitebox's ground is drawn under it (tagpu_wikistate_image).
@@ -57,9 +58,10 @@
 
 #include "tagpu_wikistage.h"            /* WIKISTAGE_UNITS, WIKISTAGE_SITES */
 
-/* THE 3D FEATURES ONE STAGE CAN HOLD: a feature whose section names a model (a wreck such as
-   `armmex_dead`) is drawn through the unit pass, so each takes a bake entry beside the units. The
-   stage description's reader refuses a description with more. */
+/* THE 3D FEATURE MODELS ONE STAGE CAN HOLD: a feature whose section names a model (a wreck such
+   as `armmex_dead`) is drawn through the unit pass, so each distinct section takes a bake entry
+   beside the units. The stage description's reader refuses a description with more; the
+   placements are bounded by the stage's features (WIKISCENE_WRECKS). */
 #define WIKIWORLD_FEAT3D   64u
 
 /* THE WIKI INSTANCES' TAGPU_PB_FRAMEMAX (tagpu_scene.h): the entries one frame of the stage may ask

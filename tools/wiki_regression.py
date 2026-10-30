@@ -1315,12 +1315,12 @@ DRAWN = r"wiki3d: frame \d+: .*; (\d+) of (\d+) frame\(s\) drew the image; .*ren
         r"and the passes ([\d.]+) ms a frame on average, the passes at most ([\d.]+) ms"
 # (entry, demo, ticks): the mockup's sim (tools/wiki/mockup/sim.js) puts a nanoframe in Quick Build 3 at
 # 267..287, the reclaim in Quick Build 8 at 171..180 and the upgrade's nanoframe after it, the gesture's
-# ghosts in Build Lines 2 and 4 from tick 0, Quick Build 9's ARMCK walking toward +x at 115..207, and Reclaim 3's
+# ghosts in Build Lines 2 and 4 from tick 0, Quick Build 9's ARMCK walking toward +x at 164..233, and Reclaim 3's
 # field of wrecks (3D features through the unit pass) all nine standing at 300 and two of them reclaimed by 500
 UNITS_SHOTS = (("quickbuild", 3, (180, 277)), ("quickbuild", 8, (120, 175, 300)),
-               ("buildshapes", 2, (100, 350)), ("buildshapes", 4, (100, 350)), ("quickbuild", 9, (150,)),
+               ("buildshapes", 2, (100, 350)), ("buildshapes", 4, (100, 350)), ("quickbuild", 9, (170,)),
                ("reclaim", 3, (300, 500)))
-FACING = ("quickbuild", 9, 150)
+FACING = ("quickbuild", 9, 170)
 NOUNIT = ("quickbuild", 3, 180)
 UNIT_MS = 0.5
 

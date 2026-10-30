@@ -273,6 +273,7 @@ int tagpu_wikiscene_models(const WIKISTAGEVIEW* v, const WSCENETYPE* types, int 
         const WSCENEWRECK* w = &wrecks[i];
         WSCENEMODEL* m = &out[n];
         int g, gone = 0;
+        if (w->cz < 0 || w->cz + w->fz > v->h) continue;
         for (g = 0; g < v->ngone && g < WIKISTAGE_FEATS && !gone; g++)
             gone = v->gone[g][0] == w->cx && v->gone[g][1] == w->cz;
         if (gone) continue;

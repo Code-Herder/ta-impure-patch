@@ -368,10 +368,15 @@ def resolve_ground(eng, desc, report):
             raise Miss(f"feature {f['name']}: no section in any {eng.dirs['features']}\\*.tdf")
         body, tdf, where = hit
         rec = {"name": f["name"].lower(), "cell": f["cell"], "body": body, "tdf": tdf, "from": where}
-        obj = (body.get("object") or "").strip()
-        if obj:
-            fx = int(str(body.get("footprintx", "1")).strip() or 1)
-            fz = int(str(body.get("footprintz", "1")).strip() or 1)
+        # a section that names an `object` at all is a 3D feature, as the game's reader takes it
+        # (tagpu_wikiasset.c: tagpu_tdf_get), an empty one a model that does not resolve; its footprint
+        # reads 0 when absent, as LoadFeature's does there
+        if "object" in body:
+            obj = (body.get("object") or "").strip()
+            if not obj:
+                raise Miss(f"feature {f['name']}: its object= names no model")
+            fx = atoi(body.get("footprintx")) & 0xFFFF
+            fz = atoi(body.get("footprintz")) & 0xFFFF
             models3d.append({"name": rec["name"], "object": obj.lower(), "cell": list(f["cell"]), "footprint": [fx, fz]})
             report.append({"element": "feature", "name": rec["name"], "cell": f["cell"], "tdf": tdf, "from": where,
                            "object": obj})
@@ -693,6 +698,11 @@ def unit_meshes(eng, models, owners):
                         continue
                     pts = [(px + piece.vertices[ix][0], py + piece.vertices[ix][1], pz + piece.vertices[ix][2])
                            for ix in prim.indices]
+                    # A FACE THAT PAINTS NOTHING: no texture, and a colour index outside 2..254, which the game's
+                    # bake skips in the body and the wire as the engine's rasteriser does (tagpu_render3do.c
+                    # `face_colour`, tagpu_posebake.c); the slant still casts it. A texture name no bank holds
+                    # is bound to FLAT_MISS, a colour, and paints.
+                    paints = bool(prim.texture) or 1 < prim.color < 255
                     if first:
                         # the structure shadow's casters (0x45A610): every face, cast while its piece is visible
                         # and cached
@@ -700,6 +710,9 @@ def unit_meshes(eng, models, owners):
                             for c in (pts[0], pts[j], pts[j + 1]):
                                 out["slant"].extend(c)
                                 out["slantPiece"].append(k)
+                    if not paints:
+                        continue
+                    if first:
                         # the nanoframe's wire (0x458FA0): every face as a closed outline
                         for e in range(len(pts)):
                             out["wire"].extend(pts[e]); out["wire"].extend(pts[(e + 1) % len(pts)])

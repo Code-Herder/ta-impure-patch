@@ -155,7 +155,6 @@ static const unsigned char* s_sframe[WIKISCENE_FEATS][2][WIKISCENE_SUBS];  /* [f
 static WSCENEWRECK        s_wreck[WIKISCENE_WRECKS];
 static const WIKI3DFEAT*  s_wfeat[WIKISCENE_WRECKS];
 static int                s_nwreck;
-typedef char wikiworld_wrecks_fit[WIKISCENE_WRECKS == WIKIWORLD_FEAT3D ? 1 : -1];
 static unsigned char*     s_tatlas;     /* ATLAS_W x s_tatlasH palette indices                    */
 static int                s_tatlasH;
 static unsigned           s_tatlasSerial;

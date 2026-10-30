@@ -946,8 +946,8 @@ and the engine's fog; units still as whitebox boxes, now over the 3D ground (R2)
   corner, grey fog over the lower-left patch, the whitebox boxes, brackets and squares over the
   image, nothing torn or offset.
 
-**Not done here**: units, ghosts and 3D features in the image (6h); a stage whose description
-names a 3D feature is drawn as the whitebox. The image's composite is LINEAR over a rect snapped to
+**Not done here**: units and ghosts in the image (6h), and 3D features (the reclaim entry's L4,
+[its plan](ingame-wiki-reclaim-plan.html)). The image's composite is LINEAR over a rect snapped to
 whole pixels, so the image may sit up to half a pixel from the fit; the mockup snaps it the same
 way, and the ops are drawn from the unsnapped fit in both.
 

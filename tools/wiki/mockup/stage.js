@@ -27,8 +27,8 @@ const WikiStage = (() => {
   const CURSOR = { arrow: 'cursor_arrow', move: 'cursor_move', build: 'cursor_build', reclaim: 'cursor_arrow' };
   /* THE RECLAIM SWEEP's colours, as tagpu_sweep.c picks them: a target's bracket in the kind's (METAL palette 224, ENERGY
      208, ALL the GUI's placed green 0x0A), the ring in the placed green, the readout's text in GUI 0x0F, every stroke
-     edged in GUI 0x00; the whitebox's stand-ins for the GUI's entries. A scene feature on the whitebox ground: a rock
-     (it holds metal) or a tree. */
+     edged in GUI 0x00; the whitebox's stand-ins for the GUI's entries. A scene feature on the whitebox ground: a wreck
+     (its row names a model), a rock (it holds metal) or a tree. */
   const SWEEP = { kind: { metal: '#d3dbff', energy: '#ffff00', all: '#2bd248' }, ring: '#2bd248', text: '#f0f0ea', edge: '#000000',
     plate: '#2e2e2a', bar: '#55554f', lit: '#6e6e66', label: '#e8e8e2', hot: '#ffffff' };
   const FEAT_WB = { rock: '#9a9288', rockEdge: '#5e584e', tree: '#4f8a3a', treeEdge: '#2b5220', wreck: '#687078', wreckEdge: '#33383e' };

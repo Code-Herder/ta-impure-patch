@@ -90,9 +90,11 @@ const WikiScene = (() => {
      0, unlit, with no shadow of its own, in the features' depth band 3 + 4 row (tagpu_native.c, the husk gather). */
   function wrecks(v, pack) {
     const gone = new Set((v.gone || []).map(([x, z]) => `${x},${z}`)), out = [];
-    const mh = pack.cells ? pack.cells[1] : 1, D = pack.depth || { tall0: 3, rowStep: 4 };
+    const mh = pack.cells ? pack.cells[1] : 1, rows = +v.map.h || 0, D = pack.depth || { tall0: 3, rowStep: 4 };
     for (const f of pack.features3d || []) {
       const m = pack.units && pack.units.meshes && pack.units.meshes[f.key];
+      // a footprint ending below the map's rows is not on this map, as the ground leaves a 2D feature out
+      if (f.cell[1] < 0 || f.cell[1] + f.footprint[1] > rows) continue;
       if (!m || !m.files['0'] || gone.has(`${f.cell[0]},${f.cell[1]}`)) continue;
       const x = F((2 * f.cell[0] + f.footprint[0]) * 8), z = F((2 * f.cell[1] + f.footprint[1]) * 8);
       const row = Math.min(mh - 1, Math.max(0, z >> 4));
