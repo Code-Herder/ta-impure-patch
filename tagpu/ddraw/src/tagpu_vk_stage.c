@@ -295,11 +295,11 @@ static int banded_one(const TAGPU_VKPASS* d, const TAGPU_VKSTAGE* st, VkDeviceSi
     return 1;
 }
 
-/* A whole page: in the frame's command buffer when it fits, banded when not.
-   Only the whole-page callers reach it (tagpu_vk_stage.h). */
+/* A whole page: in the frame's command buffer when it fits and `banded` is 0,
+   banded otherwise. Only the whole-page callers reach it (tagpu_vk_stage.h). */
 static int upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* st,
                   VkImage img, int had, int x, int y, int w, int h, int bpp,
-                  FILL fill, void* ctx)
+                  FILL fill, void* ctx, int banded)
 {
     VkDeviceSize row = (VkDeviceSize)w * bpp;
     VkDeviceSize bytes = row * (VkDeviceSize)h;
@@ -311,7 +311,7 @@ static int upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* st,
     /* IT FITS: into the frame's own command buffer, as the passes always did.
        The bytes stay held until this frame's submit completes, which is the
        seam's fence on this slot. */
-    if (off + bytes <= st->cap) {
+    if (!banded && off + bytes <= st->cap) {
         fill(ctx, st->map + off, 0, h);
         barrier_in(cb, img, had);
         copy_band(cb, st->buf, off, img, x, y, w, h);
@@ -382,7 +382,7 @@ int tagpu_vk_stage_expand(const TAGPU_VKPASS* d, VkCommandBuffer cb,
     if (!idx || !pal) return 0;
     e.idx = idx; e.key = key; e.pal = pal; e.alpha = alpha;
     e.pitch = pitch; e.x = x; e.y = y; e.w = w;
-    return upload(d, cb, st, img, had, x, y, w, h, 4, fill_expand, &e);
+    return upload(d, cb, st, img, had, x, y, w, h, 4, fill_expand, &e, 0);
 }
 
 /* The regions of one in-frame copy. Render thread only, and filled and used
@@ -617,7 +617,17 @@ int tagpu_vk_stage_copy(const TAGPU_VKPASS* d, VkCommandBuffer cb,
     COPY c;
     if (!src) return 0;
     c.src = src; c.pitch = pitch; c.rowBytes = w * bpp;
-    return upload(d, cb, st, img, had, 0, 0, w, h, bpp, fill_copy, &c);
+    return upload(d, cb, st, img, had, 0, 0, w, h, bpp, fill_copy, &c, 0);
+}
+
+int tagpu_vk_stage_copy_banded(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st,
+                               VkImage img, int had, const unsigned char* src,
+                               int pitch, int w, int h, int bpp)
+{
+    COPY c;
+    if (!src) return 0;
+    c.src = src; c.pitch = pitch; c.rowBytes = w * bpp;
+    return upload(d, VK_NULL_HANDLE, st, img, had, 0, 0, w, h, bpp, fill_copy, &c, 1);
 }
 
 void tagpu_vk_stage_down(const TAGPU_VKPASS* d)

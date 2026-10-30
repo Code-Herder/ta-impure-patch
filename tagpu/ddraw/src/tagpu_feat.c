@@ -194,6 +194,38 @@ static int s_mirrorAsked;              /* the atlas mirror has been asked for */
 static volatile LONG s_mfWant, s_mfHaveOk, s_mfHaveLevel;
 static int s_rlistAsked;               /* ...or the published restore list    */
 
+/* THE ATLAS MIRROR AND THE RESTORE LIST, asked for together: on the arm beat,
+   and in the gather the moment `atlas_setup` has given the atlas its
+   dimensions -- before the level's first lookup paints into it. The second
+   ask is the one that matters: the Vulkan edition draws only from the
+   mirror, so a mirror that waited for the beat would leave the session's
+   first level without a feature for up to 30 frames after its ground.
+
+   THE MIRROR. Asking marks every painted entry reserved, and
+   tagpu_gaf_atlas_get PAINTS a reserved entry before it returns it, so by
+   the time a quad carries a UV those texels are in the mirror. Entries
+   nothing draws may stay stale in it; nothing samples them. 8 MB with its
+   key plane, so it is asked OF THE CONSUMER, NOT OF THE LEVER:
+   `tagpu_vk_armed()` is true whenever `tagpu_vk.on` exists, whether or not
+   anything will consume the mirror, and these latches are one-way, so once
+   asked the memory is held for the process's life.
+   `tagpu_vk_owns_present()` is exactly "a Vulkan pass will run in this
+   process", which is the question, and one load to answer, so the gather may
+   ask it. `s_mirrorAsked` is set only on SUCCESS, so a request made before
+   the atlas has its dimensions is retried.
+
+   THE RESTORE LIST. Under Classic++ `assets=1` the Vulkan restorer paints
+   the restored twin from this list, which is the only way the restored twin
+   exists at all. Asked until it takes, exactly as the mirror is, because the
+   knob is allowed to move mid-session. */
+static void consumer_ask(void)
+{
+    if (!s_mirrorAsked && s_atlas.dim > 0 && tagpu_vk_owns_present())
+        s_mirrorAsked = tagpu_gaf_atlas_mirror(&s_atlas);
+    if (s_mirrorAsked && !s_rlistAsked && tagpu_classicpp_assets())
+        s_rlistAsked = tagpu_gaf_atlas_restore_vk(&s_atlas);
+}
+
 int tagpu_feat_armed(unsigned frame_counter)
 {
     int was;
@@ -241,34 +273,7 @@ int tagpu_feat_armed(unsigned frame_counter)
        nothing. */
     s_ab = GetFileAttributesA(ABFILE) != INVALID_FILE_ATTRIBUTES;
     if (!s_ab) s_abDone = 0;
-    /* THE ATLAS MIRROR, on this beat and not per frame --
-       tagpu_vk_armed() is two file-attribute queries and a pass that asked
-       every frame would make them on every frame of ordinary play, where the
-       answer is no and stays no.
-
-       IT IS ASKED FOR HERE, AND THIS RUNS BEFORE THE GATHER, which is what
-       makes the hand-over correct on the first frame that has one rather than
-       a few frames later: asking marks every painted entry reserved, and
-       tagpu_gaf_atlas_get PAINTS a reserved entry before it returns it, so by
-       the time a quad carries a UV those texels are in the mirror. Entries
-       nothing draws may stay stale in it; nothing samples them.
-       4 MB, so it is paid for only while the Vulkan lane is armed -- and
-       `s_mirrorAsked` is set only on SUCCESS, so a request made before the
-       atlas has its dimensions (the first frames of a session) is retried. */
-    /* ASKED OF THE CONSUMER, NOT OF THE LEVER. `tagpu_vk_armed()` is true
-    whenever `tagpu_vk.on` exists, whether or not anything will consume the
-    mirror -- and these latches are one-way, so once asked the memory is held
-    for the process's life. `tagpu_vk_owns_present()` is exactly "a Vulkan
-    pass will run in this process", which is the question. */
-    if (!s_mirrorAsked && s_atlas.dim > 0 && tagpu_vk_owns_present())
-        s_mirrorAsked = tagpu_gaf_atlas_mirror(&s_atlas);
-    /* AND THE RESTORE LIST. Under Classic++ `assets=1` the Vulkan restorer
-       paints the restored twin from this list, which is the only way the
-       restored twin exists at all. Polled
-       on every beat until it takes, exactly as the mirror is, because the
-       knob is allowed to move mid-session. */
-    if (s_mirrorAsked && !s_rlistAsked && tagpu_classicpp_assets())
-        s_rlistAsked = tagpu_gaf_atlas_restore_vk(&s_atlas);
+    consumer_ask();
     if (s_passive) tagpu_featown_set_skip(0);
     if (was != 1) {
         char b[160];
@@ -1294,6 +1299,7 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     if (!s_atlas.made) {
         atlas_setup();
         if (!s_atlas.made) return feat_bail();
+        consumer_ask();
     }
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
     /* the allowance's frame, after the reset and before the first lookup */

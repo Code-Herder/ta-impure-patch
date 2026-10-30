@@ -27,7 +27,7 @@
        defers a paint past it to a later frame. A repack's move is recorded
        into `cb` too (tagpu_vk_stage_move).
      * OUTSIDE PLAY, A WHOLE PAGE GOES IN BANDS (`tagpu_vk_stage_expand`,
-       `tagpu_vk_stage_copy`) of whole rows through this module's own command
+       `tagpu_vk_stage_copy`, `tagpu_vk_stage_copy_banded`) of whole rows through this module's own command
        buffer. Each band is written into the free part of the slot's buffer,
        copied by a submit of its own, and WAITED ON before the next band
        overwrites the same bytes. The fence is the ordering: no band is written
@@ -193,6 +193,17 @@ void tagpu_vk_stage_move_drop(const TAGPU_VKPASS* d, TAGPU_VKMOVEBUF* mb);
 int  tagpu_vk_stage_copy(const TAGPU_VKPASS* d, VkCommandBuffer cb,
                          TAGPU_VKSTAGE* st, VkImage img, int had,
                          const unsigned char* src, int pitch, int w, int h, int bpp);
+
+/* The same whole image, ALWAYS BANDED, however small: never an in-frame copy,
+   so the slot's buffer is left as it was found and every band of the next
+   call goes through the same free part. For a caller that sends many images
+   at one of the whole-page events and needs all of them on the device before
+   its frame draws: in-frame copies would fill the buffer after a few, and
+   every image after them would band through the scraps they left. One submit
+   and one wait per band, so it is for those events only. Same answers. */
+int  tagpu_vk_stage_copy_banded(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st,
+                                VkImage img, int had, const unsigned char* src,
+                                int pitch, int w, int h, int bpp);
 
 /* This module's command pool and fence, with the device. Called by the seam
    after every pass's `_down`, behind its vkDeviceWaitIdle. */

@@ -11,9 +11,9 @@
    persistently mapped, coherent buffer, and the seam's fence wait at the top of its present is
    what proves the slot's range free (tagpu_vk_pass.h).
 
-   THE PARTS ARE UPLOADED ONCE PER BUILD, whole, through tagpu_vk_stage_copy: a pass's first
-   upload after it is built is one of the events the banded path is for (tagpu_vk_stage.h). That
-   fills mip level 0 and leaves it SHADER_READ_ONLY_OPTIMAL; the rest of each chain is blitted
+   THE PARTS ARE UPLOADED ONCE PER BUILD, whole and all in one frame, through
+   tagpu_vk_stage_copy_banded: a pass's first upload after it is built is one of the events the
+   banded path is for (tagpu_vk_stage.h). That fills mip level 0 and leaves it SHADER_READ_ONLY_OPTIMAL; the rest of each chain is blitted
    down from it, linearly, in this frame's command buffer. The parts are premultiplied, so a
    linear average is the right one.
 
@@ -794,21 +794,21 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art, const WIKIART* wart)
 
 /* ---- the uploads ----------------------------------------------------------------------------- */
 
-/* The parts, whole, each followed by its chain, from where the last frame stopped: 23 MB of
-   them against a slot's 2 MiB, so they take a dozen frames, and the HUD draws once the last is
-   there. A part that would not fit what this frame's buffer has left waits for the next frame,
-   where it is the first copy: in the frame's own command buffer when it fits the slot's whole
-   buffer, banded when it does not -- the parts larger than the cap, uploaded once after the pass is
-   built, which is the banded path's own event (tagpu_vk_stage.h). 1 all sent, 0 more next
-   frame, -1 the device. */
+/* The parts, whole, each followed by its chain, ALL ON THE FRAME THAT FIRST ASKS: 39 MB of them
+   against a slot's 2 MiB, every one banded through the whole buffer (tagpu_vk_stage_copy_banded),
+   so the HUD and the wiki button draw on the first frame after the pass is built. Sent as
+   in-frame copies, they would take a dozen frames, the first few filling the buffer and every
+   part after them waiting for the next frame. The price is one submit and one wait a band, about a
+   hundred of them, on a frame that is one of the banded path's own events: a pass's first upload
+   after it is built (tagpu_vk_stage.h). The buffer is left as it was found, so the glyph atlas's
+   whole first upload follows through it in the same frame. 1 all sent, 0 more next frame (a band
+   could not begin, nothing submitted), -1 the device. */
 static int send_parts(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* st, const HUDART* art,
                       const WIKIART* wart)
 {
     for (; s_nsent < s_nparts + s_nwparts; s_nsent++) {
         const HUDIMG* im = s_nsent < s_nparts ? &art->img[s_nsent] : &wart->draw.img[s_nsent - s_nparts];
-        int r;
-        if (st->used && !tagpu_vk_stage_fits(st, (VkDeviceSize)im->w * im->h * 4)) return 0;
-        r = tagpu_vk_stage_copy(d, cb, st, s_part[s_nsent].img, 0, im->rgba, im->w * 4, im->w, im->h, 4);
+        int r = tagpu_vk_stage_copy_banded(d, st, s_part[s_nsent].img, 0, im->rgba, im->w * 4, im->w, im->h, 4);
         if (r <= 0) return r;
         blit_chain(cb, &s_part[s_nsent]);
     }
@@ -1101,17 +1101,22 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (s_state == ST_REFUSED) return 0;
     hud = tagpu_hudstate_frame(d->frame, &st, &px, &ox, &oy) && px > 0;
     wiki = tagpu_wikistate_frame(d->frame, &wpage, &wstage, &wover, &wpx, &wox, &woy) && wpx > 0;
-    if (!hud && !wiki) return 0;
-    if (slot >= d->slots || slot >= TAGPU_VK_SLOTS || w == 0 || h == 0) return 0;
 
     /* NOTHING IS BUILT UNTIL THE HUD HAS LOADED: tagpu_hudart decodes the parts on a thread of
-       its own, and the HUD appears on the first frame after it has published them. Every way the
-       HUD cannot draw for the session is told to tagpu_hudstate_refuse. */
+       its own, and the HUD appears on the first frame after it has published them. THE LOAD
+       STARTS ON THE LANE'S FIRST FRAME, the shell's included, before the test below for anything
+       to draw: the HUD's and the wiki's art take most of a second to decode (`hud: loaded` and
+       `wiki: loaded` in the log), which is spent in the shell, so a game's first frame finds them
+       loaded and the wiki button and the replay HUD appear with the world. The loader reads only
+       the DLL's own resources, never the game's. Every way the HUD cannot draw for the session is
+       told to tagpu_hudstate_refuse. */
     if (!(art = tagpu_hudart_get())) {
         if (tagpu_hudart_failed()) tagpu_hudstate_refuse("its art did not load");
         else tagpu_hudart_start();
         return 0;
     }
+    if (!hud && !wiki) return 0;
+    if (slot >= d->slots || slot >= TAGPU_VK_SLOTS || w == 0 || h == 0) return 0;
     /* THE PASS IS BUILT ONCE THE WIKI'S LOAD HAS ENDED TOO, loaded or failed: it follows the HUD's
        on the same thread, and its parts are textures of the same pass */
     if (!tagpu_wikiart_done()) return 0;
@@ -1247,10 +1252,12 @@ int tagpu_vk_hud_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (sg->buf) tagpu_vk_stage_drop(d, sg);
     } else if (tagpu_vk_stage_begin(d, sg, TAGPU_VK_STAGE_CAP, (VkDeviceSize)4096 * 4)) {
         if (!s_sent) {
+            DWORD t0 = GetTickCount();
             if ((r = send_parts(d, cb, sg, art, wart)) < 0) goto lost;
             if (r > 0) {
                 s_sent = 1;
-                plog(d, "hud: the parts are on the device");
+                plog(d, "hud: the parts are on the device - %d images in %lu ms", s_nparts + s_nwparts,
+                     (unsigned long)(GetTickCount() - t0));
             }
         }
         if (s_sent && (r = send_atlas(d, cb, sg)) < 0) goto lost;

@@ -107,6 +107,37 @@ static int  s_log = 0, s_lines = 1, s_models = 1, s_sprites = 1, s_expl = 1, s_d
 static int  s_passive = 0;             /* gather + log only; engine keeps drawing */
 static unsigned s_armCheck = 0;
 
+/* THE ATLAS MIRROR AND THE RESTORE LIST, asked for together: on the arm beat,
+   and in the gather the moment `atlas_setup` has given the atlas its
+   dimensions, before the first lookup paints into it -- tagpu_feat.c's
+   `consumer_ask`, for the same reason: the Vulkan edition draws only from the
+   mirror, and nothing is published until it exists (`fx_publish`).
+
+   THE MIRROR. Asking marks every painted entry reserved, and
+   tagpu_gaf_atlas_get PAINTS a reserved entry before it returns it, so by the
+   time a quad carries a UV those texels are in the mirror as well as in the
+   texture. 8 MB with its key plane, so it is asked OF THE CONSUMER, NOT OF
+   THE LEVER: these latches are one-way, so once asked the memory is held for
+   the process's life; `tagpu_vk_armed()` is true whenever `tagpu_vk.on`
+   exists, including under a renderer where the lever arms nothing, and the
+   mirror would be paid for with no consumer at all.
+   `tagpu_vk_owns_present()` is exactly "a Vulkan pass will run in this
+   process", which is the question, and one load to answer. `s_mirrorAsked`
+   is set only on SUCCESS, so a request made before the atlas has its
+   dimensions is retried.
+
+   THE RESTORE LIST. Under Classic++ `assets=1` the Vulkan lane restores the
+   atlas itself, from this list; it is the only route by which a restored twin
+   exists at all. Asked until it takes, exactly as the mirror is, because the
+   knob is allowed to move mid-session. */
+static void consumer_ask(void)
+{
+    if (!s_mirrorAsked && s_atlas.dim > 0 && tagpu_vk_owns_present())
+        s_mirrorAsked = tagpu_gaf_atlas_mirror(&s_atlas);
+    if (s_mirrorAsked && !s_rlistAsked && tagpu_classicpp_assets())
+        s_rlistAsked = tagpu_gaf_atlas_restore_vk(&s_atlas);
+}
+
 static void read_arm(unsigned frame_counter)
 {
     if (s_armed >= 0 && frame_counter - s_armCheck < 30) return;
@@ -145,34 +176,7 @@ static void read_arm(unsigned frame_counter)
     /* the A/B lever, on the same beat as the arm (tagpu_feat.c's shape) */
     s_ab = GetFileAttributesA(ABFILE) != INVALID_FILE_ATTRIBUTES;
     if (!s_ab) s_abDone = 0;
-    /* THE ATLAS MIRROR, on this beat and not per frame --
-       tagpu_vk_armed() is two file-attribute queries, and a pass that asked
-       every frame would make them on every frame of ordinary play, where the
-       answer is no and stays no.
-
-       IT IS ASKED FOR HERE, AND THIS RUNS BEFORE THE GATHER, which is what
-       makes the hand-over correct on the first frame that has one rather than
-       a few frames later: asking marks every painted entry reserved, and
-       tagpu_gaf_atlas_get PAINTS a reserved entry before it returns it, so by
-       the time a quad carries a UV those texels are in the mirror as well as
-       in the texture. 4 MB, so it is paid for only while the Vulkan lane is
-       armed -- and `s_mirrorAsked` is set only on SUCCESS, so a request made
-       before the atlas has its dimensions is retried. */
-    /* ASKED OF THE CONSUMER, NOT OF THE LEVER. These latches are one-way, so
-       once asked the memory is held for the process's life; `tagpu_vk_armed()`
-       is true whenever `tagpu_vk.on` exists, including under a renderer where
-       the lever arms nothing, and the mirror would be paid for with no
-       consumer at all. `tagpu_vk_owns_present()` is exactly "a Vulkan pass
-       will run in this process", which is the question. */
-    if (!s_mirrorAsked && s_atlas.dim > 0 && tagpu_vk_owns_present())
-        s_mirrorAsked = tagpu_gaf_atlas_mirror(&s_atlas);
-    /* AND THE RESTORE LIST. Under Classic++ `assets=1` the Vulkan lane
-       restores the atlas itself, from this list; it is the only route by
-       which a restored twin exists at all. Polled
-       on every beat until it takes, exactly as the mirror is, because the
-       knob is allowed to move mid-session. */
-    if (s_mirrorAsked && !s_rlistAsked && tagpu_classicpp_assets())
-        s_rlistAsked = tagpu_gaf_atlas_restore_vk(&s_atlas);
+    consumer_ask();
     /* the engine skip is armed by a successful gather (below), never by the
        file alone; passive turns it off here */
     if (s_passive) tagpu_fxown_set_skip(0);
@@ -1111,6 +1115,9 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
     if (!s_atlas.made) {
         atlas_setup();
         if (!s_atlas.made) return 0;
+        /* only while the pass is armed, as the beat asks: particles alone
+           gather here too */
+        if (fxOn) consumer_ask();
     }
     /* the frame's capability bits, from the packet: bit5 the ALP alpha table
        is enabled, bit7 the LHT one. Read by the publisher, on the game thread. */
@@ -1226,7 +1233,7 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
     int fogBad = 0;                    /* fog wanted, no grid: publish nothing */
     int b;
     /* NOTHING IS PUBLISHED UNTIL A VULKAN PASS WILL RUN. `s_mirrorAsked` is
-       the latch the arm beat sets the first time `tagpu_vk_owns_present()`
+       the latch `consumer_ask` sets the first time `tagpu_vk_owns_present()`
        says yes and the mirror is allocated; while it is 0 nothing will ever
        take the hand-over, and the stores below are pure cost that is not paid.
        IT IS A ONE-WAY LATCH: nothing clears it for the life of the process.

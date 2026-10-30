@@ -254,10 +254,15 @@ The owner's decisions:
   reads, and `tagpu_hudlay_load` resolves it into structs once. A field missing or of the wrong
   type stops the load, and the log names it (`hud: NOT loaded - …`). The load also runs every
   rule once on a state that takes every branch, so a layout that loads cannot fail to build.
-- **Decoding is off the frame.** The first frame that has a HUD to draw starts the loader
-  (`tagpu_hudart_start`), a thread of its own that decodes the parts, premultiplies them and
-  opens the faces, then publishes the result with one interlocked store; the HUD draws nothing
-  until then. MEASURED 2026-10-25 on the reference setup, the fitted kit: `hud: loaded 66 parts
+- **Decoding is off the frame, and done in the shell.** The Vulkan lane's first frame starts the
+  loader (`tagpu_hudart_start`, from `tagpu_vk_hud_prepare` before its test for anything to draw),
+  a thread of its own that decodes the parts, premultiplies them and opens the faces, then the
+  wiki's art, and publishes each with one interlocked store; the HUD draws nothing until then. The
+  loader reads only the DLL's resources, so it runs while the menus are up, and a game's first
+  frame finds the art loaded: the wiki button and the replay HUD appear with the world. Started at
+  the first in-game frame instead, the two loads (`hud: loaded … in 355 ms`, `wiki: loaded … in
+  409 ms`, MEASURED 2026-10-30 at 1920 × 1080 on the reference setup) put the buttons most of a
+  second behind the world. MEASURED 2026-10-25 on the reference setup, the fitted kit: `hud: loaded 66 parts
   (8.8 Mpx) and 3 faces in 343 ms`, against 21.2 Mpx in 862 ms for the same build with the parts
   as cut.
 - **The decoded parts stay for the session**, 35.2 MB of RGBA. Every teardown and resize brings
@@ -271,16 +276,15 @@ The owner's decisions:
 
 ### The uploads
 
-- **The parts go once per build, across frames.** Their level 0 totals 35.2 MB against a slot's
-  2 MiB staging cap (`TAGPU_VK_STAGE_CAP`, `tagpu_vk_stage.h`), so they take several frames:
-  each frame resumes where the last stopped (`s_nsent`), a banded part uses none of a frame's
-  room, and the rest go as many as fit it.
-- **A part that does not fit what is left of this frame's buffer waits** to be the next frame's
-  first copy. That copy goes in the frame's own command buffer when it fits the whole buffer,
-  and banded when it does not. The banded ones are the nine parts over 2 MiB: `win_one`,
-  `picker_one`, `rail_forks`, `rail_one`, `tp_one`, `live_one`, `foot_one`, `head_one` and `row_one`,
-  sized from their PNGs. A pass's first upload after it is
-  built is the event the banded path is for (`tagpu_vk_stage.h`).
+- **The parts go once per build, all in one frame.** Their level 0 totals 38.7 MB with the
+  wiki's kit (92 images) against a slot's 2 MiB staging cap (`TAGPU_VK_STAGE_CAP`,
+  `tagpu_vk_stage.h`), and every one goes through `tagpu_vk_stage_copy_banded`: banded through
+  the whole buffer, one submit and one wait a band, never an in-frame copy, so the buffer is as
+  free for the last part as for the first, and the glyph atlas's whole first upload follows in the
+  same frame. As in-frame copies they would take a dozen frames, the first few parts filling the
+  buffer and every one after them waiting for the next. A pass's first upload after it is built
+  is the event the banded path is for (`tagpu_vk_stage.h`). MEASURED 2026-10-30 at 1920 × 1080
+  on the reference setup: `hud: the parts are on the device - 92 images in 14 ms`.
 - **The mip chains are made on the GPU.** After a part's level 0 lands, `blit_chain` blits each
   level down from the one above with `vkCmdBlitImage` and a linear filter, in the frame's command
   buffer. The parts are premultiplied, so a linear average is the right one.
