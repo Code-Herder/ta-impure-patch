@@ -294,11 +294,11 @@ const HUD = (() => {
 
   /* ---- proposed, live rewind: a button beside the Impure Config sprocket in the top bar, and the strip it opens under
      the bar over the paused game: the transport, the track up to now, the time, Play from here and Back to now. The
-     button is placed in the top bar's own pixels (entry.bar tall), scaled with it; the sprocket is the engine's, drawn by
-     the page's backdrop ---- */
+     button is placed in the top bar's own pixels (entry.bar tall), scaled with it, an emblem with no plate: its part is the
+     whole button. The sprocket is the wiki's layer's (tools/wiki/mockup/), drawn here by the page's backdrop ---- */
   function live(st) {
     const E = L.proposed.live.entry, S = L.proposed.live.strip, k = st.frame.top / E.bar;
-    let h = button({ act: 'rewind', icon: { name: E.icon.name, padf: E.icon.padf } }, E, { x: st.W - (E.r + E.s) * k, y: E.t * k, w: E.s * k, h: E.s * k }, st, st.live.open);
+    let h = button({ act: 'rewind' }, E, { x: st.W - (E.r + E.s) * k, y: E.t * k, w: E.s * k, h: E.s * k }, st, st.live.open);
     if (!st.live.open) return h;
     const x = st.frame.panel + S.l, w = st.W - S.r - x, y = st.frame.top + S.t, ih = S.h - 2 * S.pad;
     let inner = '', cx = S.pad;

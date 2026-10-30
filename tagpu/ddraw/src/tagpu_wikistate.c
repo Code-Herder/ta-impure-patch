@@ -339,6 +339,7 @@ static void page_of(WIKIPAGE* st, const TAGPU_PK_WIKI* w, const WIKISTAGEVIEW* v
     st->speed = w->speed == 2 ? 2 : 1;
     st->try_it = w->try_it;
     st->mod = w->mod;
+    st->config = w->config <= 2 ? w->config : 0;
     st->iface = w->iface == 1;
     st->casting = casting_of(w->cast_side);
     memcpy(st->held, w->held, sizeof st->held);

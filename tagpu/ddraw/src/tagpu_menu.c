@@ -74,6 +74,9 @@
 #include "tagpu_art.h"
 #include "tagpu_replays.h"
 #include "tagpu_hudinput.h"
+#include "tagpu_hudstate.h"
+#include "tagpu_hudart.h"
+#include "tagpu_wikistate.h"
 
 /* the engine's Visuals options: the section "owned by the store" below */
 static void eng_push(int what);
@@ -351,6 +354,7 @@ static int    s_fresh;                  /* the next open is the PLAYER'S open  *
 static int    s_fileWas;                /* the trigger file, sampled on edges  */
 static int    s_pressed;                /* the sprocket is held down           */
 static int    s_drawTrigger;            /* the post-GUI observer is installed  */
+static int    s_barCog;                 /* tagpu_menu_bar_cog: game thread     */
 static unsigned char s_trigPix[TS_COUNT][TRIG * TRIG];
 static unsigned char s_trigFrame[TS_COUNT][0x18];
 
@@ -1570,12 +1574,26 @@ int tagpu_menu_click(int gx, int gy, int down)
    0x4C5E70). No GUI screen owns the top bar (every in-game panel is the side
    panel at (0,128) 128x352) and a gadget is drawn into its panel's own w*h
    surface at panel-relative coordinates, so a gadget at x=980 has nowhere to
-   be drawn. That is why this is ours and not a gadget. */
+   be drawn. That is why this is ours and not a gadget.
+
+   ON THE VULKAN LANE THE WIKI'S LAYER DRAWS IT INSTEAD, as the emblem its wiki button and the
+   rewind button share (tagpu_wikilay.c, wiki_button), and the engine's sprocket is not blitted.
+   The test is the wiki fill's own -- the HUD's pass stands and the wiki's layout has not refused
+   (tagpu_wiki_fill) -- and the wiki's art is loaded, so a frame that skips the blit is a frame
+   whose packet carries a wiki record saying so. The press stays here: the hit-test above is on
+   this rect, whoever draws it. A frame the render thread then does not draw the wiki on (its
+   layout refuses the kit on binding it, or the record does not fit the packet) shows no sprocket
+   for that frame; the next fill sees the refusal and the engine draws it again. */
 static void draw_trigger(void)
 {
     int x, y, st, cx, cy;
 
+    s_barCog = 0;
     if (!s_drawTrigger) return;
+    if (tagpu_hudstate_on() && !tagpu_wikistate_refused() && tagpu_wikiart_get()) {
+        s_barCog = s_pressed || s_gm ? 2 : 1;
+        return;
+    }
     trigger_rect(&x, &y);
     cx = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
     cy = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
@@ -1583,6 +1601,11 @@ static void draw_trigger(void)
        : (cx >= x && cx < x + TRIG && cy >= y && cy < y + TRIG) ? TS_OVER
        : TS_NORMAL;
     ((gaf_blit_fn)VA_GAFBLIT)(NULL, s_trigFrame[st], x, y);
+}
+
+int tagpu_menu_bar_cog(void)
+{
+    return s_barCog;
 }
 
 static int __cdecl before_postgui(void* entry_esp)

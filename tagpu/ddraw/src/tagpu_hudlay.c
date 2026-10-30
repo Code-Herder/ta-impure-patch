@@ -808,8 +808,10 @@ static void takeover(C* c, R tb)
 /* ---- live rewind: a button beside the Impure Config sprocket in the top bar, and the strip it
    opens under the bar over the paused game -- the transport, the track up to now, the time, Play
    from here and Back to now. The button is placed in the top bar's own pixels (entry.bar tall),
-   scaled with it, as the engine places the sprocket (tagpu_menu.c, trigger_rect). The sprocket is
-   the engine's art and the engine draws it, so the mockup's stand-in for it is not drawn here.
+   scaled with it, as the engine places the sprocket (tagpu_menu.c, trigger_rect). It is an emblem
+   with no plate behind it: its part is the whole button and its pressed part the whole button
+   down, with no icon on a face. The sprocket is not drawn here: the wiki's layer draws it beside
+   the wiki button (tagpu_wikilay.c, wiki_button).
    THE BUTTON IS THE TOP LAYER (HOPF_TOP): the engine's UI paints the whole bar, so an op under it
    would be painted over, and the Vulkan pass draws this layer after the UI composite.
    THE STRIP IS THE TOP LAYER TOO: the engine draws its message lines at the world's top left, in
@@ -841,7 +843,6 @@ static void live(C* c)
 
     memset(&b, 0, sizeof b);
     b.key = "rewind";
-    b.icon = obj(c, E, "icon");
     c->top = 1;
     button(c, &b, E, box(st->W - (num(c, E, "r") + num(c, E, "s")) * k, num(c, E, "t") * k, es, es), st->rw_down);
     c->top = 0;

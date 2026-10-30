@@ -57,6 +57,9 @@ typedef struct TAGPU_PK_WIKI {
     uint8_t  try_it;            /* Try it yourself has the stage                             */
     int16_t  mod;               /* MOD_* (tagpu_mod.h): the mod a lock is read for           */
     uint8_t  has_stage;         /* `stage` is carried                                        */
+    uint8_t  config;            /* the Config sprocket the top bar shows from this layer: 0 none
+                                   (the engine drew its own), 1 up, 2 down (tagpu_menu_bar_cog).
+                                   Data: the render thread draws none for any other value     */
     /* THE CONTEXT THE TEXT IS FILLED FOR, by value (tagpu_wiki.c, *the context*): the render
        thread fills the page's titles, subtitle, paragraphs, demo titles and tree leaves with the
        words of each entry under it (tagpu_wikilay.h WIKIPAGE) -- the same pair the running demo

@@ -250,6 +250,7 @@ int main(int argc, char** argv)
     st->H = (float)tj_num(tj_get(S, "H"), 0);
     st->bar = (float)tj_num(tj_get(S, "bar"), 32);
     st->rewind = tj_is(tj_get(S, "rewind"), TJ_TRUE);
+    st->config = (int)tj_num(tj_get(S, "config"), 0);
     st->open = tj_is(tj_get(S, "open"), TJ_TRUE);
     st->entry = (int)tj_num(tj_get(S, "entry"), -1);
     st->demo = (int)tj_num(tj_get(S, "demo"), 0);

@@ -203,7 +203,7 @@ COLLECT = r"""async () => {
                   track: [...client(e).slice(0, 2), (e.offsetWidth - e.clientWidth) / u, e.clientHeight / u],
                   page: [e.getBoundingClientRect().right - (e.offsetWidth - e.clientWidth), e.getBoundingClientRect().top, e.clientHeight] }; }
   const sim = WikiPage.sim();
-  const state = { W: f.width, H: f.height, bar: 32, rewind: S.rewind, open: S.open, entry: leaves.indexOf(S.entry), demo: S.demo,
+  const state = { W: f.width, H: f.height, bar: 32, rewind: S.rewind, config: $('#b-gear').matches('.pressed, .on') ? 2 : 1, open: S.open, entry: leaves.indexOf(S.entry), demo: S.demo,
     fold: [...S.fold].map(p => nodes.findIndex(n => n.p === p)), scroll: ['tree', 'demos', 'text'].map(k => scroll[k].top),
     playing: S.playing, done: !!(sim && sim.done && !S.try), speed: S.speed, try: S.try, mod: S.mod,
     sim_locked: !!(sim && sim.view().locked), held: A.held ? A.held.replace('c-', '') : '',

@@ -533,7 +533,7 @@ function drawIcon(g, im, W, H, f) {
 /* every [data-part] box painted with its part at the resolution's pixels, again only when its part, its glyph or its
    size changes. A pressed or active box (.on, .sel, .pressed) shows its _down part, a selected row row_selected; a box
    with data-glyph gets the first of its icons the kit has, unless its part is a whole one with the glyph painted on --
-   the controls' play, pause and replay, and the close and wiki buttons -- and a tree row's mark is an icon part of its
+   the controls' play, pause and replay, and the close button -- and a tree row's mark is an icon part of its
    own: no HUD face has these characters, so glyphs.js draws them all as kit icons. The box's text ink follows its
    face: dark on a light face, the style's own colour on a dark one */
 function paintParts() {

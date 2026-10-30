@@ -48,6 +48,9 @@ typedef struct {
                                    rewind button                                                */
     int      rewind;            /* this frame draws the live HUD's rewind button: the wiki button
                                    stands left of it, else in its slot                          */
+    int      config;            /* the Config sprocket this frame draws in the top bar: 0 none (the
+                                   engine draws its own), 1 up, 2 down (tagpu_menu.h
+                                   tagpu_menu_bar_cog). Drawn only: its press is tagpu_menu.c's */
     int      open;              /* the window is drawn; closed, only the button is              */
     int      entry;             /* the selected entry, an index of WIKIDATA.entry; -1 none      */
     int      demo;              /* the selected demo of that entry                              */

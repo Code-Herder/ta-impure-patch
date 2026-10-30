@@ -1836,6 +1836,7 @@ int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again, int side, int if
     w->entry = w->demo = -1;
     w->iface = (uint8_t)s_iface;
     w->cast_side = -1;
+    w->config = (uint8_t)tagpu_menu_bar_cog();
     if (mouse_last_client(&cx, &cy)) {
         w->ptr_x = (int16_t)(cx < -32768 ? -32768 : cx > 32767 ? 32767 : cx);
         w->ptr_y = (int16_t)(cy < -32768 ? -32768 : cy > 32767 ? 32767 : cy);

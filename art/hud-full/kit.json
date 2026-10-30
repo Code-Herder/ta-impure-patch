@@ -324,10 +324,6 @@
    "kind": "icon",
    "scale": 8.75
   },
-  "i_rewind": {
-   "kind": "icon",
-   "scale": 12.0
-  },
   "i_selections": {
    "kind": "icon",
    "scale": 12.5
@@ -579,25 +575,13 @@
    },
    "xtile": true
   },
-  "rewind_button": {
-   "kind": "nine",
-   "scale": 9.75,
-   "slice": [
-    20,
-    21,
-    20,
-    16
-   ]
+  "rewind_emblem": {
+   "kind": "whole",
+   "scale": 10.0
   },
-  "rewind_button_down": {
-   "kind": "nine",
-   "scale": 9.917,
-   "slice": [
-    27,
-    15,
-    10,
-    24
-   ]
+  "rewind_emblem_down": {
+   "kind": "whole",
+   "scale": 10.0
   },
   "row_one": {
    "kind": "grid",

@@ -105,7 +105,7 @@ one small archive.
 | `DLL_PROCESS_ATTACH` | write `impure-patch.ufo` unconditionally, with a version stamp: six files — the panel (`impure/render.gui`, `anims/render.gaf`), the front end's `impure/visuals.gui` + `anims/visuals.gaf`, and the in-game `impure/visualrt.gui` + `anims/visualrt.gaf`, which replaces the stock screen — or a mod's — with Gamma, Restore and Undo. The four Visuals files go in only when the dialog-build observer can arm — not under `tagpu_menu.off` — and the redirect below sends GUI_Load to them only once it has, since they drop the stock toggles and route Restore/Undo to us. `DDRAW.dll` is TotalA.exe's first static import, so this precedes `InitTAHPIAry 0x41D4C0`'s `*.UFO` glob by the loader's rules | — |
 | `0x4AA99F` (observer in `GUI_Load`, no return hijack) | **the redirect**: for `RENDER.GUI`, and for `VISUALS.GUI` / `VISUALRT.GUI` while their handlers are in, rewrite GUI_Load's local copy of the gui prefix (`[esp]`, checked to be `esp+0x38`) to `impure\`, so our screens load from a folder only our archive has — whatever a mod calls its gui folder (`guiE`, `guiM`, `guiP`) and whatever it ships there. `gi+0x9B6` itself is never written. It lands only after the archive was written, and nothing of ours is armed without it: GUI_Load faults on a missing file | game |
 | `DrawGameScreen 0x468CF0` (observer) | the per-frame tick: sample the trigger file on its edges, open or close, re-assert `main+0x37EA0`, and recover if the screen was freed under us | game |
-| `0x46A308` (observer, post-GUI) | blit the sprocket into the back buffer with `CopyGafToContext 0x4B7F90(NULL, frame, x, y)` | game |
+| `0x46A308` (observer, post-GUI) | blit the sprocket into the back buffer with `CopyGafToContext 0x4B7F90(NULL, frame, x, y)` -- on GDI, or while the wiki cannot draw it; otherwise blit nothing and leave the sprocket to the wiki's layer, up or down (`tagpu_menu_bar_cog`, carried by the same frame's wiki record) | game |
 | `GUIMEMSTRUCT+0x08` (our `OnCommand`) | advance the row, `GUIGADGET_SetStatus 0x4A1080` for every row, `grayedout` for Shadow quality, set the repaint flag `gi+0xCCA` via `0x49FA90`, and **answer the pump with `0x4AB0A0(gi)`** (`gi->UIChange_f = -1`). **It writes no file** | game |
 | `tagpu_shield.c`, both paths | `tagpu_menu_click()` — the sprocket's hit test, from `deliver_mouse()` (injected) and from the wndproc before the shield's gate (real) | game |
 | `tagpu_zoom.c`, two entry points | `tagpu_menu_owns_point()` — the zoom transform must leave a point the menu owns alone. The panel hangs over the world and the transform's gate is geometric, so at any zoom ≠ 1 a row click was bent away and **no row worked**; `tagpu_zoom_drop_mouse` must not treat it as the display-only ring either | game |
@@ -262,6 +262,20 @@ own `w×h` surface at panel-relative coordinates, so a gadget at `x=1876` has no
 drawn. It is 28×28 at `(w−16−28, 2)`, sharing `MARGIN = 16` with the panel at `(w−16−304, 32)`
 so the two right edges land on one line — measured at both 1024 (988, 704) and 1920 (1876,
 1600).
+
+**Who draws it.** On GDI the engine's blitter draws the code-made sprocket (`sprocket`,
+`build_trigger`: eight teeth in palette indices, normal, hover and pressed). On the Vulkan lane,
+whenever the wiki is drawn -- the HUD's pass stands, the wiki's layout has not refused and its art
+is loaded -- the observer blits nothing and the wiki's layer draws the kit's `config_emblem` in the
+same 28-bar-pixel slot, the emblem the wiki and rewind buttons share, `config_emblem_down` while
+the sprocket is held or the panel is open (`wiki_button`, `tagpu_wikilay.c`). The decision is taken
+on the game thread inside `DrawGameScreen` and read by the same frame's wiki fill after the draw,
+so a frame that skips the blit is a frame whose packet says the wiki draws it. Only drawing moved:
+the hit test is still `tagpu_menu_click` on this rect, and the wiki puts no control there. Two
+gaps: the emblem has no hover state (neither has the wiki button nor the rewind button), and a
+frame whose wiki record does not reach the screen -- the layout refuses the kit when the render
+thread binds it, or the record does not fit the packet -- shows no sprocket for that frame; the
+next fill sees a refusal and the engine draws it again.
 
 **Known cost.** The engine rebuilds the whole in-game GUI stack on a world click, and the
 panel hangs over the world, so clicking a row costs one frame of the panel being re-pushed.

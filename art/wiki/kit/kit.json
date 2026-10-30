@@ -63,6 +63,14 @@
     11.092
    ]
   },
+  "config_emblem": {
+   "kind": "whole",
+   "scale": 5.0
+  },
+  "config_emblem_down": {
+   "kind": "whole",
+   "scale": 5.0
+  },
   "cursor_arrow": {
    "kind": "icon",
    "scale": 3.333
@@ -102,10 +110,6 @@
   "i_shut": {
    "kind": "icon",
    "scale": 3.286
-  },
-  "i_wiki": {
-   "kind": "icon",
-   "scale": 5.25
   },
   "keycap": {
    "kind": "nine",
@@ -148,25 +152,13 @@
     5.272
    ]
   },
-  "wikibtn": {
-   "kind": "nine",
-   "scale": 4.997,
-   "slice": [
-    9.783,
-    11.244,
-    12.717,
-    13.2
-   ]
+  "wiki_emblem": {
+   "kind": "whole",
+   "scale": 5.0
   },
-  "wikibtn_down": {
-   "kind": "nine",
-   "scale": 4.999,
-   "slice": [
-    21.148,
-    10.818,
-    11.803,
-    18.193
-   ]
+  "wiki_emblem_down": {
+   "kind": "whole",
+   "scale": 5.0
   },
   "window": {
    "kind": "nine",

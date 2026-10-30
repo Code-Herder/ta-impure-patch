@@ -33,9 +33,10 @@
    and data-part list them, the first the kit has. The control glyphs and the tree's marks are
    icons because no HUD face has their characters (tools/wiki/mockup/glyphs.js draws them) */
 enum { P_WINDOW, P_CLOSE, P_CLOSE_DOWN, P_PANEL, P_ROW, P_ROW_SEL, P_BEZEL, P_BUTTON, P_BUTTON_DOWN,
-       P_BADGE, P_KEYCAP, P_WIKIBTN, P_WIKIBTN_DOWN, P_N };
+       P_BADGE, P_KEYCAP, P_WIKI, P_WIKI_DOWN, P_CONFIG, P_CONFIG_DOWN, P_N };
 static const char* const PART[P_N] = { "window", "close", "close_down", "panel", "row", "row_selected",
-    "bezel", "button", "button_down", "badge", "keycap", "wikibtn", "wikibtn_down" };
+    "bezel", "button", "button_down", "badge", "keycap", "wiki_emblem", "wiki_emblem_down", "config_emblem",
+    "config_emblem_down" };
 
 /* layout.json `roles`, the text of each element */
 enum { R_WINDOW_TITLE, R_ENTRY_TITLE, R_CATEGORY, R_ENTRY, R_DEMO, R_DEMO_NUM, R_SUBTITLE, R_TEXT,
@@ -83,7 +84,7 @@ enum { FILL_TITLE, FILL_SUB, FILL_ROW, FILL_N };    /* the texts filled at once:
 
 /* layout.json's numbers, in units unless named */
 typedef struct {
-    double btn_side, btn_top, btn_right[2];
+    double btn_side, btn_top, btn_right[2], btn_config;
     double share, font, line;               /* the window's share (percent), its font, its line height */
     double wt[4], wx[4], wb[4], gap, pn[4], bz[4];   /* geom.kit: wt l r t h, wx r t w h, the quads t r b l */
     double title_pad;
@@ -107,7 +108,7 @@ struct WIKILAY {
     HUDLAY*          kit;
     WG               g;
     int              part[P_N];
-    int              icon_close, icon_wiki;     /* -1: the kit has none */
+    int              icon_close;                /* -1: the kit has none */
     int              icon_play, icon_pause, icon_replay, icon_open, icon_shut, icon_dot;
     int              role[R_N];                 /* a style index */
     int              nstyle;
@@ -856,19 +857,25 @@ static void window_(C* c)
     entry_col(c, rect(body.x + t0 + gap + t1 + gap, body.y, t2, body.h));
 }
 
-/* ---- the wiki button (#b-wiki): in the top bar's own pixels, left of the rewind button or in its
-   slot, down while the window is open ---------------------------------------------------------- */
+/* ---- the top bar's buttons, in its own pixels: the wiki button (#b-wiki), left of the rewind
+   button or in its slot, down while the window is open; and the Config sprocket (#b-gear) in the
+   engine's slot for it (tagpu_menu.c, trigger_rect), when the page says this frame draws it. Each is
+   an emblem with no plate: its part is the whole button, its _down part the whole button pressed.
+   THE SPROCKET IS DRAWN, NOT A CONTROL: its press and release are tagpu_menu.c's, on the engine's
+   rect, so it puts nothing in the wiki's hit map and a press on it reaches the menu as before. --- */
 
 static void wiki_button(C* c)
 {
     const WG* g = &c->l->g;
     const double k = c->st->bar / 32;
-    const double side = U(c, g->btn_side * k);
-    R b = rect(c->st->W - U(c, g->btn_right[c->st->rewind ? 0 : 1] * k) - side, U(c, g->btn_top * k), side, side);
+    const double side = U(c, g->btn_side * k), top = U(c, g->btn_top * k);
+    R b = rect(c->st->W - U(c, g->btn_right[c->st->rewind ? 0 : 1] * k) - side, top, side, side);
     int down = c->st->open || !strcmp(c->st->held, "wiki");
-    art(c, c->l->part[down ? P_WIKIBTN_DOWN : P_WIKIBTN], b, NULL);
+    art(c, c->l->part[down ? P_WIKI_DOWN : P_WIKI], b, NULL);
     hot(c, b, NULL, "wiki");
-    glyph(c, c->l->icon_wiki, b);
+    if (c->st->config)
+        art(c, c->l->part[c->st->config == 2 ? P_CONFIG_DOWN : P_CONFIG],
+            rect(c->st->W - U(c, g->btn_config * k) - side, top, side, side), NULL);
 }
 
 /* ---- the entry points ------------------------------------------------------------------------- */
@@ -972,6 +979,7 @@ static int check_states(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
         st.W = SCREEN[s][0];
         st.H = SCREEN[s][1];
         st.bar = 24;
+        st.config = 2;          /* the sprocket's op in every state, as a frame that draws it has */
         st.entry = -1;
         st.speed = 1;
         st.iface = 1;
@@ -1027,7 +1035,7 @@ int tagpu_wikilay_check(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
 {
     /* the icons the window and the stage draw: the build draws a button without an icon it lacks,
        so their absence is refused here rather than drawn as a blank control */
-    static const char* const ICON[] = { "i_wiki", "i_play", "i_pause", "i_replay", "i_open", "i_shut",
+    static const char* const ICON[] = { "i_play", "i_pause", "i_replay", "i_open", "i_shut",
                                         "i_dot", "cursor_arrow", "cursor_move", "cursor_build" };
     WIKICASTING worst;
     char who[48];
@@ -1086,6 +1094,7 @@ static int read_layout(WIKILAY* l, const TJV* L, char* err, size_t errn)
     g->btn_side = rd(&x, "button", "side", -1);
     g->btn_top = rd(&x, "button", "top", -1);
     for (i = 0; i < 2; i++) g->btn_right[i] = rd(&x, "button", "right", i);
+    g->btn_config = rd(&x, "button", "config", -1);
     g->share = rd(&x, "window", "share", -1);
     g->font = rd(&x, "window", "font", -1);
     g->line = rd(&x, "window", "line", -1);
@@ -1162,7 +1171,6 @@ WIKILAY* tagpu_wikilay_load(const char* layout, size_t nlayout, const char* kit,
         if ((l->part[i] = find_part(l->kit, PART[i])) < 0) { snprintf(err, errn, "wiki kit: no part '%s'", PART[i]); goto done; }
     l->icon_close = find_part(l->kit, "i_close");
     if (l->icon_close < 0) l->icon_close = find_part(l->kit, "i_x");
-    l->icon_wiki = find_part(l->kit, "i_wiki");
     l->icon_play = find_part(l->kit, "i_play");
     l->icon_pause = find_part(l->kit, "i_pause");
     l->icon_replay = find_part(l->kit, "i_replay");

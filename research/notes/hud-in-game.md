@@ -1023,8 +1023,10 @@ frame visit.
 - **The layout** (`live`, `tagpu_hudlay.c`, a port of hud.js `live`): the button at
   `(W − (entry.r + entry.s)·k, entry.t·k)`, `entry.s·k` square, with `k = top / entry.bar` — the
   bar's own pixels, as the engine places the sprocket (`trigger_rect`, `tagpu_menu.c`: x
-  `w − 44`, y 2, 28 square), so the button sits 3 bar pixels left of it. The sprocket is the
-  engine's: the mockup's backdrop carries it, and the HUD draws none. **The strip's play is drawn
+  `w − 44`, y 2, 28 square), so the button sits 3 bar pixels left of it. The button is an emblem
+  with no plate: `rewind_emblem` is the whole button, `rewind_emblem_down` the whole button down,
+  and nothing is drawn on a face (the entry has no `icon`). The HUD draws no sprocket: the wiki's
+  layer does on this lane (`tagpu_wikilay.c`, `wiki_button`), and the mockup's backdrop carries one. **The strip's play is drawn
   disabled** (`off` in `layout.json`, the mockup too): the rewind holds the past paused and has no
   verb that plays it toward now (the owner's choice for this round). Play from here is drawn
   pressed while it is armed. The toast draws in both modes.

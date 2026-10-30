@@ -2,12 +2,12 @@
    open and folded marks of a category and the dot of an entry. No HUD face has these characters, so they are kit icons,
    which tools/wiki/cursors.sh rasterises once from shape() below into art/wiki-full/kit/ and the fit carries into
    art/wiki/kit/; the mockup (wiki.js, data-glyph and data-part) and the DLL (tagpu_wikilay.c) both draw those PNGs. They
-   follow the kit's own icons, i_close and i_wiki: a pale fill inside a black edge, which reads on a light face and on a
+   follow the kit's own close icon, i_close: a pale fill inside a black edge, which reads on a light face and on a
    dark one alike.
 
    Runs in a page (the global WikiGlyphs) and under node (module.exports), as stage.js does. */
 const WikiGlyphs = (() => {
-  const FILL = '#cdc8a0', EDGE = '#000';      // the fill and the edge of i_close and i_wiki
+  const FILL = '#cdc8a0', EDGE = '#000';      // the fill and the edge of i_close
   const LINE = 0.7;                           // the edge's width, units
   /* each glyph's box in units: an icon is drawn as large as fits the box it is given (wiki.js drawIcon), so the box's
      margins are the room a glyph keeps round it -- a control's glyph is drawn at 0.6 of its button, a mark fills its
