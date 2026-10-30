@@ -1917,11 +1917,13 @@ def private_xvfb(size):
     os.close(w)
     try:
         answer = tacompat.xvfb_reply(r)
+        if not re.fullmatch(rb"\d+\n", answer) or p.poll() is not None:
+            raise AssertionError(f"Xvfb did not start: {answer!r}")
+    except BaseException:
+        tacompat.stop_xvfb(p)
+        raise
     finally:
         os.close(r)
-    if not re.fullmatch(rb"\d+\n", answer) or p.poll() is not None:
-        tacompat.stop_xvfb(p)
-        raise AssertionError(f"Xvfb did not start: {answer!r}")
     p.tacompat_display = int(answer)
     return p
 
@@ -2404,12 +2406,21 @@ def offline_runs():
     return runs
 
 
-def offline_one(name, cmd, popen=subprocess.Popen, env=None):
+def offline_one(name, cmd, popen=subprocess.Popen, env=None, done=lambda p: None, bound=None):
     """One offline check to its end: its verdict line printed, and its exit code -- 2 is a check that could not run,
-    which fails like one that differs. `popen` starts it: the gate's own, which ends it with the gate."""
+    which fails like one that differs. `popen` starts it and `done` lets it go: the gate's own (Lanes), which end
+    it with the gate; past `bound` seconds it is hung, ended and fails."""
     t0 = time.monotonic()
     p = popen(list(map(str, cmd)), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=TREE, env=env)
-    stdout, stderr = p.communicate()
+    try:
+        stdout, stderr = p.communicate(timeout=bound)
+    except subprocess.TimeoutExpired:
+        Lanes.end(p)
+        stdout, stderr = p.communicate()
+        print(f"wiki offline: {name}: FAILED (still running after {bound} s, ended)", flush=True)
+        return 124, f"still running after {bound} s, ended"
+    finally:
+        done(p)
     # the check's own verdict, the line it starts with its name (sidecheck prints its packs after it), else the last
     out = stdout.strip().splitlines() or stderr.strip().splitlines() or [""]
     own = Path(str(cmd[1])).stem + ":"
@@ -2474,11 +2485,28 @@ class Lanes:
                 pass
 
     def end_all(self):
+        """Every live lane asked at once, then killed together past one GATE_STOP_S: never one wait a lane."""
         with self.lock:
             self.stopping = True
             live = list(self.live)
         for p in live:
-            self.end(p)
+            try:
+                os.killpg(p.pid, 2)
+            except ProcessLookupError:
+                pass
+        deadline = time.monotonic() + GATE_STOP_S
+        for p in live:
+            try:
+                p.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                pass
+        for p in live:
+            if p.poll() is None:
+                try:
+                    os.killpg(p.pid, 9)
+                except ProcessLookupError:
+                    pass
+                p.wait()
 
 
 def gate_lane(lanes, cmd, log, env):
@@ -2544,7 +2572,7 @@ def gate(shots, jobs, offline_jobs, modes, setups):
     def lane_offline(name, cmd, wenv):
         J.start("offline", name)
         try:
-            code, line = offline_one(name, cmd, lanes.popen, wenv)
+            code, line = offline_one(name, cmd, lanes.popen, wenv, lanes.done, GATE_LANE_S)
         except (Exception, SystemExit) as e:        # noqa: BLE001 -- the lane's verdict, never the gate's crash
             code, line = 2, f"could not run: {type(e).__name__}: {e}"
         J.finish("offline", name, verdict(code), line)
@@ -2585,8 +2613,14 @@ def gate(shots, jobs, offline_jobs, modes, setups):
         wenv = {**env, "WINEPREFIX": str(wine.prefix)} if wine else env
         made = []
         for m in modes:
-            xv = private_xvfb(GATE_RES)
-            servers.add(xv)
+            # held until the server is in `servers`, where the clean-up finds it: a signal between the two would
+            # leave it running in a session of its own
+            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+            try:
+                xv = private_xvfb(GATE_RES)
+                servers.add(xv)
+            finally:
+                signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM})
             made.append((m, gate_instance(f"wikigate-{m}", "--display", f":{xv.tacompat_display}"), xv))
         futs = [checks.submit(lane_offline, n, c, wenv if "--wine" in map(str, c) else env) for n, c in offline]
         futs += [games.submit(lane_mode, m, inst, xv) for m, inst, xv in made]
@@ -2594,15 +2628,23 @@ def gate(shots, jobs, offline_jobs, modes, setups):
         done = [f.result() for f in futs]
         bad = [f"{kind} {name}" for kind, name, code, _ in done if code]
         state = "fail" if bad else "pass"
+    except BaseException as e:
+        state = "stopped" if isinstance(e, KeyboardInterrupt) else "unrun"
+        raise
     finally:
-        if state == "stopped":
+        # the clean-up runs to its end: a second Ctrl-C or SIGTERM inside it would leave lanes playing under a
+        # released lock, so both are ignored until it is done
+        old_int = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        if state in ("stopped", "unrun"):
             lanes.end_all()
         games.shutdown(wait=True, cancel_futures=True)
         checks.shutdown(wait=True, cancel_futures=True)
         for xv in list(servers):
             tacompat.stop_xvfb(xv)
-        signal.signal(signal.SIGTERM, old_term)
         J.end(state)
+        signal.signal(signal.SIGTERM, old_term)
+        signal.signal(signal.SIGINT, old_int)
     print(f"wiki gate: {len(done) - len(bad)} of {len(done)} lanes passed in {time.monotonic() - t0:.0f} s"
           f"{'; failed: ' + ', '.join(bad) if bad else ''}; the logs in {shots}")
     assert not bad, f"the lanes {', '.join(bad)} did not pass"
