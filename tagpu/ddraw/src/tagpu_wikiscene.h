@@ -114,8 +114,15 @@ typedef struct {
 #define WSCENE_SH_SIL   1               /* a mobile unit's silhouette                              */
 #define WSCENE_SH_SLANT 2               /* a structure's slant                                     */
 
+/* A 3D FEATURE OF THE GROUND (a wreck, a heap: its section names a model), which the unit pass
+   draws: its anchor cell and footprint, in the stage description's order */
+#define WIKISCENE_WRECKS 64             /* WIKIWORLD_FEAT3D: the stage's 3D features            */
+typedef struct { int16_t cx, cz, fx, fz; } WSCENEWRECK;
+
 typedef struct {
-    uint8_t  type;                      /* the view's type index                                   */
+    uint8_t  type;                      /* the view's type index; a wreck's, its index in the
+                                           caller's WSCENEWRECK list                               */
+    uint8_t  wreck;                     /* a 3D feature: owner 0, unturned, unlit, no shadow       */
     uint8_t  owner;                     /* its team colour: the frame of a team face, 0..7         */
     uint8_t  ghost;                     /* a build ghost: alpha 0.40, depth writes off, no shadow  */
     uint8_t  shadow;                    /* WSCENE_SH_*                                             */
@@ -123,20 +130,22 @@ typedef struct {
     int16_t  slot;                      /* a unit's index in the view, -1 for a ghost              */
     float    x, z;                      /* its anchor, world units: on the flat stage, target px   */
     float    cs, sn;                    /* its yaw: the model's +z turned onto its facing          */
-    float    enc;                       /* its depth row's key: 1 + 4 (z >> 4)                     */
+    float    enc;                       /* its depth row's key: 1 + 4 (z >> 4), a wreck's 3 + 4 row */
     float    alpha;
     float    nanoT, nanoC[3], nanoWire; /* tagpu_nanostage.h, when nanoOn                          */
 } WSCENEMODEL;
 
-#define WIKISCENE_MODELS (WIKISTAGE_UNITS + 1 + WIKISTAGE_SITES + WIKISTAGE_QUEUED)
+#define WIKISCENE_MODELS (WIKISTAGE_UNITS + WIKISCENE_WRECKS + 1 + WIKISTAGE_SITES + WIKISTAGE_QUEUED)
 
 /* THE RECORDS of view `v` at its tick, into `out` (WIKISCENE_MODELS of them): the units first, in
-   the view's order -- `*nunit` of them -- then the ghosts in tagpu_native.c `ghost_record`'s
-   order: the placement ghost, each gesture site's, each queued site's not yet started. A record
-   is made only for a type `types` marks ok (`ntype` of them; the rest are boxes) and an owner of
-   the eight. Returns the count. tools/wiki/mockup/scene.js `build` is the specification. */
+   the view's order, then the ground's 3D features (`wrecks`, `nwreck` of them, at most
+   WIKISCENE_WRECKS) whose anchor cell the view has not reclaimed -- `*nunit` records together,
+   the opaque window's -- then the ghosts in tagpu_native.c `ghost_record`'s order: the placement
+   ghost, each gesture site's, each queued site's not yet started. A unit's record is made only for
+   a type `types` marks ok (`ntype` of them; the rest are boxes) and an owner of the eight. Returns
+   the count. tools/wiki/mockup/scene.js `build` is the specification. */
 int  tagpu_wikiscene_models(const WIKISTAGEVIEW* v, const WSCENETYPE* types, int ntype,
-                            WSCENEMODEL* out, int* nunit);
+                            const WSCENEWRECK* wrecks, int nwreck, WSCENEMODEL* out, int* nunit);
 
 /* THE GROUND: `g`'s cells and quads into `out`. Returns 1 when the ground can be drawn whole, 0
    with out->refused set when it cannot -- a map past WIKISCENE_MAP, a tile map entry past the

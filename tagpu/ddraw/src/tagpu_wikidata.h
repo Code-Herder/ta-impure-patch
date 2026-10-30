@@ -87,8 +87,9 @@ typedef struct {
    figures as tools/wiki/gen-reclaim.mjs reads them. footprint 1..WIKI_FEAT_FOOT cells (the reach
    tagpu_sweep.c's FOOT_MAX gives a feature's centre from its anchor); metal (FeatureDef +0xF0)
    and energy (+0xEC) at least 0 and below WIKI_FEAT_AMOUNT; height (+0xFA) 0..255; blocking, and
-   reclaimable (+0xFE bit 7). An entry has at most WIKI_FEAT_DEFS, a scene at most WIKI_FEATS_MAX
-   placed, the entry's and the demo's together. */
+   reclaimable (+0xFE bit 7); object, a 3D feature's model (the section's `object=`, a wreck or a
+   heap), which the whitebox draws as a wreck, "" for a 2D feature. An entry has at most
+   WIKI_FEAT_DEFS, a scene at most WIKI_FEATS_MAX placed, the entry's and the demo's together. */
 #define WIKI_FEAT_NAME   32
 #define WIKI_FEAT_FOOT   16
 #define WIKI_FEAT_AMOUNT 1e7
@@ -99,6 +100,7 @@ typedef struct {
     int    fx, fz;
     double metal, energy;
     int    height, blocking, reclaimable;
+    char   object[WIKI_FEAT_NAME];  /* 1..31 bytes, or "" */
 } WIKIFEATDEF;
 
 /* a scene's feature: the table's row and its anchor cell, the footprint's top-left */

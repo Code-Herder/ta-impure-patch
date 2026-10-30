@@ -180,7 +180,7 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
         d->oz = (int16_t)sf->oz;
         d->fx = (uint8_t)(sf->fx > 0 && sf->fx < 256 ? sf->fx : 1);
         d->fz = (uint8_t)(sf->fz > 0 && sf->fz < 256 ? sf->fz : 1);
-        d->rock = (uint8_t)(sf->metal > 0);
+        d->look = (uint8_t)(sf->wreck ? WIKISTAGE_WRECK : sf->metal > 0 ? WIKISTAGE_ROCK : WIKISTAGE_TREE);
     }
     out->nfeat = (int16_t)n;
     n = v->ngone < WIKISTAGE_FEATS ? v->ngone : WIKISTAGE_FEATS;
@@ -940,14 +940,17 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
             line(&c, vx - r, vz, vx + r, vz, lw, HEX(0x2a2a28));
             line(&c, vx, vz - r, vx, vz + r, lw, HEX(0x2a2a28));
         }
-        /* the scene's features still standing, at their footprints: a rock or a tree */
+        /* the scene's features still standing, at their footprints: a tree, a rock or a wreck, stage.js
+           FEAT_WB's fill and edge by look; the tree's green and the rock's edge as channels, since
+           their hex reads as an engine address to the source checks */
         for (i = 0; i < v->nfeat; i++) {
             const WIKISTAGEFEAT* ft = &v->feat[i];
             const double x0 = X(ft->ox * cell), y0 = Z(ft->oz * cell), w = ft->fx * cp, h = ft->fz * cp, lw = fmax(1, U);
-            /* the tree's green and the rock's edge as channels: their hex reads as an engine address
-               to the source checks */
-            rect(&c, x0, y0, w, h, ft->rock ? HEX(0x9a9288) : rgba(79, 138, 58, 1));
-            ring(&c, x0 + lw / 2, y0 + lw / 2, w - lw, h - lw, lw, ft->rock ? rgba(94, 88, 78, 1) : HEX(0x2b5220));
+            const uint32_t fill[3] = { rgba(79, 138, 58, 1), HEX(0x9a9288), HEX(0x687078) };
+            const uint32_t edge[3] = { HEX(0x2b5220), rgba(94, 88, 78, 1), HEX(0x33383e) };
+            const int k = ft->look <= WIKISTAGE_WRECK ? ft->look : WIKISTAGE_TREE;
+            rect(&c, x0, y0, w, h, fill[k]);
+            ring(&c, x0 + lw / 2, y0 + lw / 2, w - lw, h - lw, lw, edge[k]);
         }
         /* fog: grey half over seen-before ground, black over unexplored */
         for (z = 0; z < mh; z++)

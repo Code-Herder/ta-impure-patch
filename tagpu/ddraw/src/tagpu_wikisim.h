@@ -347,11 +347,12 @@ enum { WIKI_CURSOR_ARROW, WIKI_CURSOR_MOVE, WIKI_CURSOR_BUILD, WIKI_CURSOR_RECLA
 /* ---- the view: what the stage draws, sim.js's view() field for field ---- */
 
 /* a feature standing, sim.js's view.feats: its id (the sim's), its row of the entry's table, its
-   anchor cell, footprint and amounts */
+   anchor cell, footprint and amounts, and whether its row names a model (a wreck) */
 typedef struct {
     const char* id;
     int         def, ox, oz, fx, fz;
     double      metal, energy;
+    int         wreck;
 } WIKIVFEAT;
 
 /* THE SWEEP as tagpu_sweep_fill publishes it, sim.js's view.reclaim: while reclaim is armed, the

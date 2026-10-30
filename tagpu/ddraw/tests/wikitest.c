@@ -279,6 +279,7 @@ static void view(WIKISIM* s, int map)
         key("fz", 0); printf("%d", f->fz);
         key("metal", 0); num(f->metal);
         key("energy", 0); num(f->energy);
+        key("wreck", 0); fputs(f->wreck ? "true" : "false", stdout);
         putchar('}');
     }
     putchar(']');

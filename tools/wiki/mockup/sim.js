@@ -178,7 +178,8 @@ const WikiSim = (() => {
   /* A FEATURE'S FIGURES, as an entry's `features` table gives them from its TDF section (tools/wiki/gen-reclaim.mjs):
      footprint [fx, fz] cells, 1..FEAT_FOOT (the reach a feature's centre has from its anchor, tagpu_sweep.c FOOT_MAX);
      metal and energy (FeatureDef +0xF0 and +0xEC), at least 0 and below FEAT_AMOUNT; height (+0xFA), 0..255;
-     blocking and reclaimable (+0xFE bit 7) as booleans. Every bound is one tagpu_wikidata.c holds. */
+     blocking and reclaimable (+0xFE bit 7) as booleans; object, a 3D feature's model (its section's `object=`, a wreck
+     or a heap), 1..31 bytes, which the whitebox draws as a wreck. Every bound is one tagpu_wikidata.c holds. */
   const FEAT_FOOT = 16, FEAT_AMOUNT = 1e7, FEATS_MAX = 256, FEAT_DEFS = 64;
   function checkFeature(n, d) {
     const at = `feature ${n}`;
@@ -190,6 +191,8 @@ const WikiSim = (() => {
       if (k in d && !(typeof d[k] === 'number' && d[k] >= 0 && d[k] < FEAT_AMOUNT)) throw new Error(`${at}: ${k} is not 0..${FEAT_AMOUNT}`);
     if ('height' in d && !(int(d.height) && d.height >= 0 && d.height <= 255)) throw new Error(`${at}: height is not 0..255`);
     for (const k of ['blocking', 'reclaimable']) if (k in d && typeof d[k] !== 'boolean') throw new Error(`${at}: ${k} is not a boolean`);
+    if ('object' in d && !(typeof d.object === 'string' && d.object.length && fitsIn(d.object, 32)))
+      throw new Error(`${at}: object is not 1 to 31 bytes`);
   }
   function checkCasting(C) {
     const no = what => { throw new Error(`the casting is refused: ${what}`); };
@@ -523,7 +526,7 @@ const WikiSim = (() => {
       if (typeof id !== 'string' || !fitsIn(id, ID_MAX) || feats.some(g => g.id === id)) throw new Error(`${at}: the id is not a new name`);
       if (ox < 0 || oz < 0 || ox + fx > W || oz + fz > SH) throw new Error(`${at} is not on the map`);
       const g = { id, name: f.name, ox, oz, fx, fz, x: (ox + fx / 2) * CELL, z: (oz + fz / 2) * CELL, metal: d.metal || 0,
-        energy: d.energy || 0, height: d.height || 0, blocking: !!d.blocking, reclaimable: !!d.reclaimable };
+        energy: d.energy || 0, height: d.height || 0, blocking: !!d.blocking, reclaimable: !!d.reclaimable, wreck: 'object' in d };
       if (feats.some(e => e.ox < g.ox + g.fx && g.ox < e.ox + e.fx && e.oz < g.oz + g.fz && g.oz < e.oz + e.fz))
         throw new Error(`${at} overlaps another feature`);
       feats.push(g);
@@ -2543,7 +2546,8 @@ const WikiSim = (() => {
         pace: PACE,
         mode: st.rmode ? 'reclaim' : st.mode ? `build:${st.mode}` : 'contextual',
         // the features still standing, each by its id, its section name and its footprint at its anchor cell
-        feats: feats.map(f => ({ id: f.id, name: f.name, ox: f.ox, oz: f.oz, fx: f.fx, fz: f.fz, metal: f.metal, energy: f.energy })),
+        feats: feats.map(f => ({ id: f.id, name: f.name, ox: f.ox, oz: f.oz, fx: f.fx, fz: f.fz, metal: f.metal, energy: f.energy,
+          wreck: f.wreck })),
         gone: gone.map(c => [c[0], c[1]]),
         reclaim,
         // the column, only with the sidebar on: the layout side it shows (its prefix and PANELSIDE are the stage's), its

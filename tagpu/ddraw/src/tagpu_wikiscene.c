@@ -242,7 +242,7 @@ static int model(WSCENEMODEL* m, const WSCENETYPE* types, int ntype, int t, int 
 }
 
 int tagpu_wikiscene_models(const WIKISTAGEVIEW* v, const WSCENETYPE* types, int ntype,
-                           WSCENEMODEL* out, int* nunit)
+                           const WSCENEWRECK* wrecks, int nwreck, WSCENEMODEL* out, int* nunit)
 {
     int n = 0, i, j;
     *nunit = 0;
@@ -262,6 +262,30 @@ int tagpu_wikiscene_models(const WIKISTAGEVIEW* v, const WSCENETYPE* types, int 
             m->nanoOn = (uint8_t)tagpu_nanostage(1.0f - built, (unsigned)i, (unsigned)v->tick,
                                                  &m->nanoT, m->nanoC, &m->nanoWire);
         if (m->nanoOn) m->shadow = WSCENE_SH_NONE;
+        n++;
+    }
+    /* THE GROUND'S 3D FEATURES still standing. The engine's map spawn (SpawnFeatureOnMap 0x423C50,
+       given no position or turn) puts the wreck record at the footprint's centre,
+       ((2 col + fx) << 19, (2 row + fz) << 19) at 0x423E3D..0x423E68, its turn zero at
+       0x423E95..0x423EB7, and tagpu_native.c's husk gather draws it owner 0, unlit, with no shadow
+       of its own, in the features' depth band 3 + 4 row (DISASSEMBLED). */
+    for (i = 0; wrecks && i < nwreck && i < WIKISCENE_WRECKS; i++) {
+        const WSCENEWRECK* w = &wrecks[i];
+        WSCENEMODEL* m = &out[n];
+        int g, gone = 0;
+        for (g = 0; g < v->ngone && g < WIKISTAGE_FEATS && !gone; g++)
+            gone = v->gone[g][0] == w->cx && v->gone[g][1] == w->cz;
+        if (gone) continue;
+        memset(m, 0, sizeof *m);
+        m->type = (uint8_t)i;
+        m->wreck = 1;
+        m->slot = -1;
+        m->x = (float)((2 * w->cx + w->fx) * 8);
+        m->z = (float)((2 * w->cz + w->fz) * 8);
+        m->cs = 1.0f;
+        m->enc = row_key(m->z, v->h) + 2.0f;
+        m->alpha = 1.0f;
+        m->shadow = WSCENE_SH_NONE;
         n++;
     }
     *nunit = n;

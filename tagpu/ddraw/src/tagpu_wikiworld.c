@@ -150,6 +150,12 @@ static int                s_stageRows;      /* the rows of the map s_stage's gro
 static WSCENE             s_scene;
 static WSCENEFEAT         s_sfeat[WIKISCENE_FEATS];
 static const unsigned char* s_sframe[WIKISCENE_FEATS][2][WIKISCENE_SUBS];  /* [feat][shadow][sub]       */
+/* the ground's 3D features, drawn through the unit pass (wrecks_build): each one's cell and
+   footprint, and its arena feature, in the description's order */
+static WSCENEWRECK        s_wreck[WIKISCENE_WRECKS];
+static const WIKI3DFEAT*  s_wfeat[WIKISCENE_WRECKS];
+static int                s_nwreck;
+typedef char wikiworld_wrecks_fit[WIKISCENE_WRECKS == WIKIWORLD_FEAT3D ? 1 : -1];
 static unsigned char*     s_tatlas;     /* ATLAS_W x s_tatlasH palette indices                    */
 static int                s_tatlasH;
 static unsigned           s_tatlasSerial;
@@ -243,30 +249,40 @@ static int verts(int b, const WSCENEQUAD* q, int n)
 static const char* ground_build(const WIKI3DSTAGE* st, int map_rows)
 {
     WSCENEGROUND g;
-    int i, rows, h, maxdim = tagpu_vk_max_image_dim();
+    int i, rows, h, n2d = 0, maxdim = tagpu_vk_max_image_dim();
     unsigned char* atlas;
     memset(s_sframe, 0, sizeof s_sframe);
+    s_nwreck = 0;
     if (st->nfeat < 0 || st->nfeat > WIKISCENE_FEATS) return "more features than the stage holds";
     if (st->ntile < 1 || st->ntile > 65536) return "no tile set";
     for (i = 0; i < st->nfeat; i++) {
         const WIKI3DFEAT* f = &st->feat[i];
-        WSCENEFEAT* t = &s_sfeat[i];
+        WSCENEFEAT* t = &s_sfeat[n2d];
+        /* A 3D FEATURE (its section names a model) is no part of the ground: the unit pass draws it
+           (tagpu_wikiscene_models), as tools/wiki/gfx.py leaves it out of the pack's ground and
+           lists it in features3d */
+        if (f->model) {
+            WSCENEWRECK* w = &s_wreck[s_nwreck];
+            if (s_nwreck >= WIKISCENE_WRECKS) return "more 3D features than the stage holds";
+            w->cx = (int16_t)f->cx; w->cz = (int16_t)f->cz;
+            w->fx = (int16_t)f->fx; w->fz = (int16_t)f->fz;
+            s_wfeat[s_nwreck++] = f;
+            continue;
+        }
         memset(t, 0, sizeof *t);
         t->cx = (int16_t)f->cx; t->cz = (int16_t)f->cz;
         t->fx = (int16_t)f->fx; t->fz = (int16_t)f->fz;
         t->height = (int16_t)f->height;
         t->flags = f->flags;
-        /* the mockup's pack refuses the ground for one as well (tools/wiki/gfx.py), and the image is
-           the mockup's: no stage description names one */
-        if (f->model) return "a 3D feature, which the mockup's ground does not take either";
-        if (!frames_of(f->seq, s_sframe[i][0], t->body, &t->nbody) ||
-            !frames_of(f->seqshad, s_sframe[i][1], t->shadow, &t->nshadow))
+        if (!frames_of(f->seq, s_sframe[n2d][0], t->body, &t->nbody) ||
+            !frames_of(f->seqshad, s_sframe[n2d][1], t->shadow, &t->nshadow))
             return "a feature's frame is not one the readers take";
+        n2d++;
     }
     g.w = st->w; g.h = map_rows;
     g.ntile = st->ntile;
     g.tilemap = st->tilemap;
-    g.nfeat = st->nfeat;
+    g.nfeat = n2d;
     g.feat = s_sfeat;
     if (!tagpu_wikiscene_ground(&g, &s_scene)) return "the ground is past a bound of the scene";
     if (s_scene.ncell * TAGPU_TERR_ICOMP > (int)(sizeof s_cells / sizeof s_cells[0])) return "too many cells";
@@ -451,6 +467,27 @@ static void types_build(const WIKI3D* a, const WIKISTAGEVIEW* v, int entry, cons
     memcpy(s_tNames, v->type, sizeof s_tNames);
 }
 
+/* THE 3D FEATURES' RUNS, for the ground just built: each model's walk, every node inside the
+   arena, as types_build makes a type's. A model the walk refuses or that leaves the arena refuses
+   the ground whole, as gfx.py falls the mockup's ground back for a model it cannot resolve. */
+static TYPERUN s_wrun[WIKISCENE_WRECKS];
+static const char* wrecks_build(const WIKI3D* a)
+{
+    int i, k;
+    for (i = 0; i < s_nwreck; i++) {
+        TYPERUN* r = &s_wrun[i];
+        r->u = NULL;
+        r->np = tagpu_model_walk(s_wfeat[i]->model, r->node, TAGPU_PBMAXPIECE);
+        for (k = 0; k < r->np; k++)
+            if (!in_arena(a, r->node[k])) break;
+        if (r->np <= 0 || k < r->np) {
+            r->np = 0;
+            return "a 3D feature's model walk is refused or leaves the arena";
+        }
+    }
+    return NULL;
+}
+
 /* the engine's option word as the last packet carried it: bit 2 Shadow, bit 3 TShadow (the
    silhouette), bit 5 Shading (tagpu_packet.h `gfx_opt`). The wiki can be open with no packet; it
    keeps the last one's. */
@@ -566,7 +603,8 @@ static int unit_one(const WSCENEMODEL* m, const TYPERUN* r, const WIKISTAGEVIEW*
     TAGPU_PDUNIT q;
     float rot[12];
     int i, k, npose;
-    if (!u || r->np <= 0) return 0;
+    /* a wreck's run has no unit: no script pose, nothing hidden, never lit (its record says so) */
+    if ((!u && !m->wreck) || r->np <= 0) return 0;
     for (i = 0; i < r->np; i++) {
         memset(&s_pc[i], 0, sizeof s_pc[i]);
         s_pc[i].flags = 1;
@@ -589,7 +627,7 @@ static int unit_one(const WSCENEMODEL* m, const TYPERUN* r, const WIKISTAGEVIEW*
     rot[0] = m->cs;  rot[2] = m->sn;
     rot[5] = 1.0f;
     rot[8] = -m->sn; rot[10] = m->cs;
-    pose = pose_of(v, m, u, r, &npose);
+    pose = u ? pose_of(v, m, u, r, &npose) : NULL;
     if (pose) pose_compose(u, bg, pose, npose, rot, s_pose, s_shaded, s_pvis);
     else for (i = 0; i < bg->nparts; i++) {
         float* o = s_pose + (size_t)i * 12;
@@ -604,10 +642,10 @@ static int unit_one(const WSCENEMODEL* m, const TYPERUN* r, const WIKISTAGEVIEW*
         }
         s_shaded[i] = 1;
         s_pvis[i] = 3;
-        if (u->hides > 0 && (u->hidden[i >> 5] >> (i & 31) & 1u)) {
+        if (u && u->hides > 0 && (u->hidden[i >> 5] >> (i & 31) & 1u)) {
             memset(o, 0, 12 * sizeof *o);
             s_pvis[i] = 0;
-        } else if (u->uncaches > 0 && (u->uncached[i >> 5] >> (i & 31) & 1u)) {
+        } else if (u && u->uncaches > 0 && (u->uncached[i >> 5] >> (i & 31) & 1u)) {
             s_pvis[i] = 1;
         }
     }
@@ -640,8 +678,8 @@ static int unit_one(const WSCENEMODEL* m, const TYPERUN* r, const WIKISTAGEVIEW*
     if ((s_gfx & 4u) && m->shadow == WSCENE_SH_SLANT) q.shKind = TAGPU_PDSH_SLANT;
     else if ((s_gfx & 4u) && (s_gfx & 8u) && m->shadow == WSCENE_SH_SIL) q.shKind = TAGPU_PDSH_SIL;
     /* the engine's lit rasteriser for a structure under Shading, and for a ghost -- a preview of
-       one -- under the same option (ghost_one) */
-    q.lit = (s_gfx & 0x20u) && (m->ghost || !u->mobile);
+       one -- under the same option (ghost_one); a wreck on the neutral row, tagpu_native.c's husk */
+    q.lit = !m->wreck && (s_gfx & 0x20u) && (m->ghost || !u->mobile);
     tagpu_posedraw_unit(&q);
     return 1;
 }
@@ -679,7 +717,8 @@ static int units_frame(const TAGPU_FRAME* f, const WIKISTAGEVIEW* v, int nrec, i
     pv.shNeutral = tagpu_r3d_shade_neutral();
     if (nunit) {
         tagpu_posedraw_begin(&pv);
-        for (i = 0; i < nunit; i++) refused += !unit_one(&s_rec[i], &s_run[s_rec[i].type], v);
+        for (i = 0; i < nunit; i++)
+            refused += !unit_one(&s_rec[i], s_rec[i].wreck ? &s_wrun[s_rec[i].type] : &s_run[s_rec[i].type], v);
         tagpu_posedraw_end();
     }
     if (nrec > nunit) {
@@ -730,6 +769,7 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
        the stage is built on the first frame that has one, and again when the map's rows change */
     if (st && (st != s_stage || v->h != s_stageRows) && tagpu_vk_max_image_dim() > 0) {
         const char* why = ground_build(st, v->h);
+        if (!why) why = wrecks_build(a);
         s_stage = st;
         s_stageRows = v->h;
         s_groundOk = why == NULL;
@@ -748,7 +788,7 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
         memcmp(s_tNames, v->type, sizeof s_tNames))
         types_build(a, v, entry, art->data->entry[entry].id);
     nrec = tagpu_wikiscene_models(v, s_types, v->ntype < WIKI_MAX_DEFS ? v->ntype : WIKI_MAX_DEFS,
-                                  s_rec, &nunit);
+                                  s_ground ? s_wreck : NULL, s_ground ? s_nwreck : 0, s_rec, &nunit);
     if (!s_ground && !nrec) return;
 
     /* ONE ss FOR THE FRAME: the target is sized by it and every pass's hand-over carries it */

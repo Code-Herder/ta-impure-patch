@@ -277,16 +277,16 @@ window.WikiGfx = (() => {
           spr.draw(got.shadow.length / TR.SVST, got.body.length / TR.SVST, got.shadow.length / TR.SVST);
         }
       }
-      const recs = sc.units.concat(sc.ghosts);
+      const recs = sc.units.concat(sc.wrecks, sc.ghosts);
       let refused = 0;
       if (cu && recs.length && layer('units')) {
         /* THE GAME'S SHADE RULE (tagpu_wikiworld.c `unit_one`, tagpu_posedraw.c VS): a structure, and every ghost, on
-           the engine's lit rows from its vertex normals; any other unit on the neutral row. The stage takes the
-           Shading option as on, the game's default. A posed record's arrays are its own this frame, under a key of
-           its slot's. */
+           the engine's lit rows from its vertex normals; any other unit, and a 3D feature (tagpu_native.c's husk:
+           lit 0), on the neutral row. The stage takes the Shading option as on, the game's default. A posed record's
+           arrays are its own this frame, under a key of its slot's. */
         const meshOf = { ...d.meshes }, slantOf = { ...d.slants }, wireOf = { ...d.wires }, posedKeys = [];
         const inst = recs.map(r => {
-          const lit = r.ghost || !(pack.units.meshes[r.type] || {}).mobile, pz = posedOf(r, poses);
+          const lit = !r.feature && (r.ghost || !(pack.units.meshes[r.type] || {}).mobile), pz = r.feature ? null : posedOf(r, poses);
           if (!pz) return { ...r, type: r.key, agl: 0, yaw: held(r.yaw), engineShade: { lit, normals: d.normals[r.key], quad: d.quads[r.key] } };
           const key = `${r.key}@${r.slot}`;
           meshOf[key] = pz.mesh; slantOf[key] = pz.slant; wireOf[key] = pz.wire; posedKeys.push(key);

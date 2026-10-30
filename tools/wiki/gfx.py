@@ -329,7 +329,9 @@ def tile_atlas(tiles):
 
 
 def resolve_ground(eng, desc, report):
-    """The description's tiles and features, every one checked; raises Miss naming the first failure."""
+    """The description's tiles and features, every one checked; raises Miss naming the first failure. Returns
+    (tiles, the 2D features the ground draws, the 3D ones): a section with an `object=` (a wreck, a heap) is a 3D
+    feature, drawn through the unit pass as a model record (write_units), not on the ground."""
     maps = {}
     for i, src in enumerate(desc["sources"]):
         hit = eng.vfs.open(src["map"])
@@ -359,15 +361,21 @@ def resolve_ground(eng, desc, report):
     n = len(tiles)
     if any(not (isinstance(v, int) and 0 <= v < n) for v in desc["tilemap"]):
         raise Miss("the tile map names a tile the tile set does not have")
-    feats = []
+    feats, models3d = [], []
     for f in desc["features"]:
         hit = eng.feature(f["name"])
         if hit is None:
             raise Miss(f"feature {f['name']}: no section in any {eng.dirs['features']}\\*.tdf")
         body, tdf, where = hit
         rec = {"name": f["name"].lower(), "cell": f["cell"], "body": body, "tdf": tdf, "from": where}
-        if (body.get("object") or "").strip():
-            raise Miss(f"feature {f['name']}: a 3D feature ({body['object']}), which the stage's ground does not take")
+        obj = (body.get("object") or "").strip()
+        if obj:
+            fx = int(str(body.get("footprintx", "1")).strip() or 1)
+            fz = int(str(body.get("footprintz", "1")).strip() or 1)
+            models3d.append({"name": rec["name"], "object": obj.lower(), "cell": list(f["cell"]), "footprint": [fx, fz]})
+            report.append({"element": "feature", "name": rec["name"], "cell": f["cell"], "tdf": tdf, "from": where,
+                           "object": obj})
+            continue
         filename = (body.get("filename") or "").strip()
         got = eng.gaf(eng.dirs["anims"], filename) if filename else None
         if got is None:
@@ -384,7 +392,7 @@ def resolve_ground(eng, desc, report):
         feats.append(rec)
         report.append({"element": "feature", "name": rec["name"], "cell": f["cell"], "tdf": tdf, "from": where,
                        "gaf": gpath, "gafFrom": gwhere})
-    return tiles, feats
+    return tiles, feats, models3d
 
 
 def write_ground(out, desc, tiles, feats):
@@ -909,7 +917,26 @@ def write_sounds(eng, out_root, types):
     return doc
 
 
-def write_units(out, eng, entry, report, types):
+def resolve_feature_model(eng, obj, report):
+    """resolve_unit's tuple for a 3D feature's model `obj` (its section's `object=`): no script, no FBI; a feature casts
+    no shadow of its own and is shaded on the neutral row (tagpu_native.c, the husk gather: owner 0, lit 0, shadow 0)."""
+    mhit = eng.open(eng.dirs["objects3d"], obj, "3DO")
+    if mhit is None:
+        raise Miss(f"{obj}: no {eng.dirs['objects3d']}\\{obj}.3DO")
+    try:
+        root = ta3do.parse_3do(mhit[0])
+    except (struct.error, ValueError, IndexError, RecursionError) as e:
+        raise Miss(f"{obj}: {mhit[1]} does not parse: {e}")
+    facts = {"shadow": False, "slant": False, "mobile": False, "feature": True}
+    report.append({"element": "feature model", "name": obj, "model": mhit[1], "modelFrom": mhit[2], "facts": facts})
+    return obj.lower(), root, set(), set(), facts
+
+
+# a 3D feature's mesh key beside the units' type names, which are a unit file's name and so never begin so
+FEAT_KEY = "feature:"
+
+
+def write_units(out, eng, entry, report, types, models3d=()):
     models, refused = {}, {}
     for name in types:
         try:
@@ -917,6 +944,12 @@ def write_units(out, eng, entry, report, types):
         except Miss as e:
             refused[name] = str(e)
             report.append({"element": "unit", "name": name, "refused": str(e)})
+    for obj in sorted({m["object"] for m in models3d}):
+        try:
+            models[FEAT_KEY + obj] = resolve_feature_model(eng, obj, report)
+        except Miss as e:
+            refused[FEAT_KEY + obj] = str(e)
+            report.append({"element": "feature model", "name": obj, "refused": str(e)})
     owners = entry_owners(entry)
     (out / "units").mkdir(parents=True, exist_ok=True)
     if not models:
@@ -926,10 +959,10 @@ def write_units(out, eng, entry, report, types):
     meshes = {}
     for name, p in plan.items():
         label, root, hidden, uncached, facts = models[name]
-        key = name.lower()
+        key = name.lower().replace(FEAT_KEY, "feature_")
         rec = {"label": label, "files": {}, **facts, "faces": p["faces"], "flatMiss": p["flatMiss"]}
-        fbi = eng.open(eng.dirs["units"], name, "FBI")
-        rec["sound"] = unit_sound(eng, fbi_fields(fbi[0].decode("latin-1", "replace")))
+        fbi = None if facts.get("feature") else eng.open(eng.dirs["units"], name, "FBI")
+        rec["sound"] = unit_sound(eng, fbi_fields(fbi[0].decode("latin-1", "replace"))) if fbi else None
         for owner, verts in p["owners"].items():
             f = f"units/{key}.{owner}.bin"
             (out / f).write_bytes(struct.pack(f"<{len(verts)}f", *verts))
@@ -945,7 +978,7 @@ def write_units(out, eng, entry, report, types):
         rec["slantFile"], rec["slantVerts"] = f"units/{key}.slant.bin", len(p["slant"]) // 3
         rec["wireFile"], rec["wireVerts"] = f"units/{key}.wire.bin", len(p["wire"]) // 3
         # the script and its posed order, for the COB host the mockup's server runs (tools/wiki/serve.py)
-        shit = eng.open(eng.dirs["scripts"], name, "COB")
+        shit = None if facts.get("feature") else eng.open(eng.dirs["scripts"], name, "COB")
         order = list(range(len(p["walk"])))
         if shit:
             (out / f"units/{key}.cob").write_bytes(shit[0])
@@ -2055,7 +2088,7 @@ def side_pack(eng, mod, descs, rows, out, pal, report):
             continue
         sub = []
         try:
-            tiles, _feats = resolve_ground(eng, desc, sub)
+            tiles, _feats, _models3d = resolve_ground(eng, desc, sub)
         except Miss as e:
             report.append({"element": f"minimap {eid}", "refused": str(e)})
             continue
@@ -2121,6 +2154,7 @@ def build_entry(eng, entry, name, desc, out, palette_block, alp, types):
     report = []
     ground = {"ok": False, "miss": None}
     mapblock = features = minimap = None
+    models3d = []
     m = entry["scenes"][name]["map"]
     try:
         if desc is None:
@@ -2128,7 +2162,7 @@ def build_entry(eng, entry, name, desc, out, palette_block, alp, types):
         if list(desc["cells"]) != [m["w"], GROUND_ROWS] or m["h"] > GROUND_ROWS:
             raise Miss(f"the description's cells {desc['cells']} are not the scene's {m['w']} columns and the ground's "
                        f"{GROUND_ROWS} rows")
-        tiles, feats = resolve_ground(eng, desc, report)
+        tiles, feats, models3d = resolve_ground(eng, desc, report)
         mapblock, features = write_ground(out, desc, tiles, feats)
         ground["ok"] = True
         # the minimap's base of the scene's map with this install's shrink table; a mod's own, of the map grown beside
@@ -2139,10 +2173,19 @@ def build_entry(eng, entry, name, desc, out, palette_block, alp, types):
     except Miss as e:
         ground["miss"] = str(e)
         report.append({"element": "ground", "refused": str(e)})
-    units = write_units(out, eng, entry, report, types)
+    units = write_units(out, eng, entry, report, types, models3d)
+    # the 3D features, each by its mesh's key (FEAT_KEY) at its anchor cell: scene.js draws the ones the view has not
+    # reclaimed; with any of their models missing the ground falls back whole
+    missing = sorted({m["object"] for m in models3d if FEAT_KEY + m["object"] not in units["meshes"]})
+    if ground["ok"] and missing:
+        ground = {"ok": False, "miss": f"a 3D feature's model did not resolve: {', '.join(missing)}"}
+        report.append({"element": "ground", "refused": ground["miss"]})
+    features3d = [{"key": FEAT_KEY + m["object"], "name": m["name"], "cell": m["cell"], "footprint": m["footprint"]}
+                  for m in models3d] if ground["ok"] else []
     # cells: the ground's, of which a stage draws its map's top rows (gfx.js Stage)
     scene = {"format": "ta-scene/1", "wiki": FORMAT, "entry": entry["id"], "scene": name, "cells": [m["w"], GROUND_ROWS],
-             "ground": ground, "map": mapblock, "features": features, "units": units, "minimap": minimap,
+             "ground": ground, "map": mapblock, "features": features, "features3d": features3d, "units": units,
+             "minimap": minimap,
              "palette": palette_block, "shaders": "../shaders/",
              "depth": {"terrain": 0.10, "scale": 512.0, "flat0": 0.40, "flatSpan": 0.10, "tall0": 3.0,
                        "rowStep": 4.0, "unit0": 1.0, "shadowTall": 0.30, "shadowFlat": 0.03},
@@ -2179,7 +2222,8 @@ def write_stages(eng, entries, stage_dir, out_root, palette, shdb, casting=None)
                       "units": sorted(scene["units"]["meshes"]), "refused": scene["units"]["refused"]}
         full[sid] = scene["report"]
         for t, m in scene["units"]["meshes"].items():
-            types.setdefault(t, m["sound"])
+            if m["sound"] is not None:          # a 3D feature has no sound
+                types.setdefault(t, m["sound"])
         g = "ground ok" if scene["ground"]["ok"] else f"ground FALLS BACK: {scene['ground']['miss']}"
         print(f"  {sid}: {g}; units {', '.join(sorted(scene['units']['meshes'])) or 'none'}"
               + (f"; refused {', '.join(scene['units']['refused'])}" if scene["units"]["refused"] else ""))

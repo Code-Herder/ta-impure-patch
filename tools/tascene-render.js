@@ -642,9 +642,10 @@ function emitUnits(p, L) {
     // view), so there is room for a few dozen; beyond that they share the last
     // key and interleave, which is wrong but visible rather than mysterious.
     const airMax = Math.floor((D.scale - D.unit0) / D.rowStep) - 1;
+    // a 3D feature (a wreck) sits in the features' band, tall0 + rel * rowStep, as the native pass keys a husk
     const enc = agl > 0
       ? D.unit0 + Math.min(nRows + 12 + nAir++, airMax) * D.rowStep
-      : D.unit0 + rel * D.rowStep;
+      : (inst.feature ? D.tall0 : D.unit0) + rel * D.rowStep;
     const wldX = wx, wldZ = wz - (wy >> 1);
     const P = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
     const first = n;

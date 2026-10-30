@@ -147,7 +147,8 @@ stage3d, on the same launch as sp (research/notes/ingame-wiki-3d-stage-plan.md, 
 units, on the same launch as sp (the plan's landing 6h):
   (u1) the open's 3D asset load ends and the first stage's types line names every type in 3D;
   (u2) at ss 2, Quick Build 3 and 8 (a construction, a reclaim, the upgrade's nanoframe), Build
-       Lines 2 and 4 (the gesture's ghosts) and Quick Build 9 (an ARMCK walking toward +x) held at
+       Lines 2 and 4 (the gesture's ghosts), Quick Build 9 (an ARMCK walking toward +x) and Reclaim 3
+       (the field's wrecks, all standing and then two reclaimed) held at
        fixed ticks through tagpu_wiki.shot, each capture written to DIR as in stage3d with the
        presented frame grabbed beside it;
   (u3) tools/wiki/stage3dcheck.py over DIR, the unit pixels within question 8's tolerance;
@@ -1314,9 +1315,11 @@ DRAWN = r"wiki3d: frame \d+: .*; (\d+) of (\d+) frame\(s\) drew the image; .*ren
         r"and the passes ([\d.]+) ms a frame on average, the passes at most ([\d.]+) ms"
 # (entry, demo, ticks): the mockup's sim (tools/wiki/mockup/sim.js) puts a nanoframe in Quick Build 3 at
 # 267..287, the reclaim in Quick Build 8 at 171..180 and the upgrade's nanoframe after it, the gesture's
-# ghosts in Build Lines 2 and 4 from tick 0, and Quick Build 9's ARMCK walking toward +x at 115..207
+# ghosts in Build Lines 2 and 4 from tick 0, Quick Build 9's ARMCK walking toward +x at 115..207, and Reclaim 3's
+# field of wrecks (3D features through the unit pass) all nine standing at 300 and two of them reclaimed by 500
 UNITS_SHOTS = (("quickbuild", 3, (180, 277)), ("quickbuild", 8, (120, 175, 300)),
-               ("buildshapes", 2, (100, 350)), ("buildshapes", 4, (100, 350)), ("quickbuild", 9, (150,)))
+               ("buildshapes", 2, (100, 350)), ("buildshapes", 4, (100, 350)), ("quickbuild", 9, (150,)),
+               ("reclaim", 3, (300, 500)))
 FACING = ("quickbuild", 9, 150)
 NOUNIT = ("quickbuild", 3, 180)
 UNIT_MS = 0.5

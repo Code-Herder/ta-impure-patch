@@ -31,7 +31,7 @@ const WikiStage = (() => {
      (it holds metal) or a tree. */
   const SWEEP = { kind: { metal: '#d3dbff', energy: '#ffff00', all: '#2bd248' }, ring: '#2bd248', text: '#f0f0ea', edge: '#000000',
     plate: '#2e2e2a', bar: '#55554f', lit: '#6e6e66', label: '#e8e8e2', hot: '#ffffff' };
-  const FEAT_WB = { rock: '#9a9288', rockEdge: '#5e584e', tree: '#4f8a3a', treeEdge: '#2b5220' };
+  const FEAT_WB = { rock: '#9a9288', rockEdge: '#5e584e', tree: '#4f8a3a', treeEdge: '#2b5220', wreck: '#687078', wreckEdge: '#33383e' };
   const KIND_NAME = { metal: 'METAL', energy: 'ENERGY', all: 'ALL' };
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   // a device coordinate rounded to the pixel an edge is drawn on, as the game snaps a part's box (tagpu_hud_snap)
@@ -261,12 +261,12 @@ const WikiStage = (() => {
         g.beginPath(); g.arc(X(p.x), Z(p.z), r * .5, 0, 2 * Math.PI); g.stroke();
         g.beginPath(); g.moveTo(X(p.x) - r, Z(p.z)); g.lineTo(X(p.x) + r, Z(p.z)); g.moveTo(X(p.x), Z(p.z) - r); g.lineTo(X(p.x), Z(p.z) + r); g.stroke();
       }
-      // the scene's features still standing, at their footprints: a rock or a tree
+      // the scene's features still standing, at their footprints: a wreck, a rock or a tree
       for (const f of v.feats || []) {
         const x0 = X(f.ox * cell), y0 = Z(f.oz * cell), w = (+f.fx || 1) * cp, h = (+f.fz || 1) * cp, lw = Math.max(1, U);
-        const rock = +f.metal > 0;
-        g.fillStyle = rock ? FEAT_WB.rock : FEAT_WB.tree; g.fillRect(x0, y0, w, h);
-        g.lineWidth = lw; g.strokeStyle = rock ? FEAT_WB.rockEdge : FEAT_WB.treeEdge;
+        const look = f.wreck ? 'wreck' : +f.metal > 0 ? 'rock' : 'tree';
+        g.fillStyle = FEAT_WB[look]; g.fillRect(x0, y0, w, h);
+        g.lineWidth = lw; g.strokeStyle = FEAT_WB[look + 'Edge'];
         g.strokeRect(x0 + lw / 2, y0 + lw / 2, w - lw, h - lw);
       }
       // fog, in fogColour's

@@ -89,12 +89,13 @@ typedef struct {
 
 typedef struct { float from_x, from_z, to_x, to_z; uint8_t kind; } WIKISTAGELINE;
 
-/* A FEATURE STANDING (tagpu_wikisim.h WIKIVFEAT): its anchor cell and footprint, and whether it
-   holds metal, which draws it as a rock on the whitebox, else a tree */
+/* A FEATURE STANDING (tagpu_wikisim.h WIKIVFEAT): its anchor cell and footprint, and its look on
+   the whitebox: a wreck when its row names a model, else a rock when it holds metal, else a tree */
+enum { WIKISTAGE_TREE, WIKISTAGE_ROCK, WIKISTAGE_WRECK };
 typedef struct {
     int16_t ox, oz;
     uint8_t fx, fz;
-    uint8_t rock;
+    uint8_t look;                       /* WIKISTAGE_TREE .. WIKISTAGE_WRECK */
 } WIKISTAGEFEAT;
 
 /* THE RECLAIM SWEEP while reclaim is armed (tagpu_wikisim.h WIKIVSWEEP): the kind, the ring and

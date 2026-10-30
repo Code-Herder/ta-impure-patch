@@ -84,12 +84,31 @@ const WikiScene = (() => {
              shadow: !!m.shadow, slant: !!m.slant, alpha: 1, ghost: false, nano: null, slot: -1, ...extra };
   }
 
-  /* The view `v`, the pack and the tick -> { units, ghosts, fog, resolved }. A unit's slot is its index in the view,
+  /* THE STAGE'S 3D FEATURES (a wreck, a heap) still standing: the pack's list (gfx.py features3d) less the anchors the
+     view says were reclaimed. The engine's map spawn (SpawnFeatureOnMap 0x423C50, no position or turn given) puts the
+     wreck record at the footprint's centre, 0x423E3D..0x423E68, unturned, 0x423EAC, and the native pass draws it owner
+     0, unlit, with no shadow of its own, in the features' depth band 3 + 4 row (tagpu_native.c, the husk gather). */
+  function wrecks(v, pack) {
+    const gone = new Set((v.gone || []).map(([x, z]) => `${x},${z}`)), out = [];
+    const mh = pack.cells ? pack.cells[1] : 1, D = pack.depth || { tall0: 3, rowStep: 4 };
+    for (const f of pack.features3d || []) {
+      const m = pack.units && pack.units.meshes && pack.units.meshes[f.key];
+      if (!m || !m.files['0'] || gone.has(`${f.cell[0]},${f.cell[1]}`)) continue;
+      const x = F((2 * f.cell[0] + f.footprint[0]) * 8), z = F((2 * f.cell[1] + f.footprint[1]) * 8);
+      const row = Math.min(mh - 1, Math.max(0, z >> 4));
+      out.push({ type: f.key, key: `${f.key}.0`, owner: 0, pos: [x, z], yaw: [1, 0], enc: D.tall0 + row * D.rowStep,
+                 shadow: false, slant: false, alpha: 1, ghost: false, feature: true, nano: null, slot: -1 });
+    }
+    return out;
+  }
+
+  /* The view `v`, the pack and the tick -> { units, wrecks, ghosts, fog, resolved }. A unit's slot is its index in the view,
      the id its nanoframe's oscillators start from. A unit under construction is a nanoframe and casts no shadow
      (tagpu_native.c, build-state.md 7); one being reclaimed is neither (the engine's reclaim hits its hit points). */
   function build(v, pack, tick) {
-    const out = { units: [], ghosts: [], fog: null, resolved: new Set(Object.keys((pack.units || {}).meshes || {})) };
+    const out = { units: [], wrecks: [], ghosts: [], fog: null, resolved: new Set(Object.keys((pack.units || {}).meshes || {})) };
     if (!v || !v.map) return out;
+    out.wrecks = wrecks(v, pack);
     out.fog = fogGrid(v.map.fog, +v.map.w || 0, +v.map.h || 0);
     (v.units || []).forEach((u, i) => {
       const built = u.built == null ? 1 : Math.min(1, Math.max(0, F(+u.built)));
@@ -113,6 +132,6 @@ const WikiScene = (() => {
     return out;
   }
 
-  return { build, nanoState, fogGrid, yaw, GHOST_ALPHA };
+  return { build, wrecks, nanoState, fogGrid, yaw, GHOST_ALPHA };
 })();
 if (typeof module !== 'undefined') module.exports = WikiScene;

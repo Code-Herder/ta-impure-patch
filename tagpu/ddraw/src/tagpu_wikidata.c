@@ -334,6 +334,10 @@ static int features(R* r, WIKIENTRY* e, const TJV* v)
             if (!tj_is(k, TJ_TRUE) && !tj_is(k, TJ_FALSE)) return refuse(r, "a feature's flag is not a boolean:", d->name);
             *out = tj_is(k, TJ_TRUE);
         }
+        /* THE BOUND: the model's name and its terminator fit WIKIFEATDEF.object */
+        if ((k = tj_get(f, "object")) && (!tj_is(k, TJ_STR) || !*k->str || strlen(k->str) >= sizeof d->object))
+            return refuse(r, "a feature's object is not 1 to 31 bytes:", d->name);
+        if (k) strcpy(d->object, k->str);
     }
     return 1;
 }

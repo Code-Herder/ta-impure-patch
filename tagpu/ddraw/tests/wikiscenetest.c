@@ -109,20 +109,24 @@ static int ground(FILE* f, char* entry, size_t n)
     return 1;
 }
 
-/* the unit types the mockup's packs resolved, from TYPES: per stage a line `STAGE N` and N lines
-   `NAME MOBILE SLANT SHADOW`; a type a stage does not list there is a box */
+/* the unit types the mockup's packs resolved, from TYPES: per stage a line `STAGE N M`, N lines
+   `NAME MOBILE SLANT SHADOW` and M lines `KEY CX CZ FX FZ`, the stage's 3D features (gfx.py
+   features3d); a type a stage does not list there is a box */
 #define MAXENTRY 64
 static char s_tent[MAXENTRY][64];
 static char s_tname[MAXENTRY][WIKI_MAX_DEFS][64];
 static WSCENETYPE s_types[MAXENTRY][WIKI_MAX_DEFS];
 static int  s_ntypes[MAXENTRY], s_nent;
+static char s_wname[MAXENTRY][WIKISCENE_WRECKS][64];
+static WSCENEWRECK s_wrecks[MAXENTRY][WIKISCENE_WRECKS];
+static int  s_nwrecks[MAXENTRY];
 
 static int types(FILE* f)
 {
     char name[64];
-    int n, k;
-    while (fscanf(f, "%63s %d", name, &n) == 2) {
-        if (s_nent >= MAXENTRY || n < 0 || n > WIKI_MAX_DEFS) return -1;
+    int n, nw, k;
+    while (fscanf(f, "%63s %d %d", name, &n, &nw) == 3) {
+        if (s_nent >= MAXENTRY || n < 0 || n > WIKI_MAX_DEFS || nw < 0 || nw > WIKISCENE_WRECKS) return -1;
         memcpy(s_tent[s_nent], name, sizeof name);
         for (k = 0; k < n; k++) {
             int mo, sl, sh;
@@ -130,14 +134,22 @@ static int types(FILE* f)
             s_types[s_nent][k].ok = 1; s_types[s_nent][k].mobile = (uint8_t)mo;
             s_types[s_nent][k].slant = (uint8_t)sl; s_types[s_nent][k].shadow = (uint8_t)sh;
         }
+        for (k = 0; k < nw; k++) {
+            int cx, cz, fx, fz;
+            if (fscanf(f, "%63s %d %d %d %d", s_wname[s_nent][k], &cx, &cz, &fx, &fz) != 5) return -1;
+            s_wrecks[s_nent][k].cx = (int16_t)cx; s_wrecks[s_nent][k].cz = (int16_t)cz;
+            s_wrecks[s_nent][k].fx = (int16_t)fx; s_wrecks[s_nent][k].fz = (int16_t)fz;
+        }
+        s_nwrecks[s_nent] = nw;
         s_ntypes[s_nent++] = n;
     }
     return 0;
 }
 
 /* the view's model records as {"m": [[type, owner, ghost, shadow, nanoOn, slot, x, z, cs, sn, enc,
-   alpha, nanoT, nanoC0, nanoC1, nanoC2, wire]...], "nu": units}, the view's types matched to the
-   stage's resolved ones by name, as the stage's producer matches them to the arena's */
+   alpha, nanoT, nanoC0, nanoC1, nanoC2, wire, wreck]...], "nu": units and wrecks}, the view's types
+   matched to the stage's resolved ones by name, as the stage's producer matches them to the
+   arena's; a wreck's type is its key */
 static void models(const WIKISTAGEVIEW* v, const char* id)
 {
     static WSCENEMODEL m[WIKISCENE_MODELS];
@@ -148,15 +160,17 @@ static void models(const WIKISTAGEVIEW* v, const char* id)
     for (k = 0; k < v->ntype && e < s_nent; k++)
         for (j = 0; j < s_ntypes[e]; j++)
             if (!strcmp(v->type[k], s_tname[e][j])) ty[k] = s_types[e][j];
-    n = tagpu_wikiscene_models(v, ty, v->ntype, m, &nu);
+    n = tagpu_wikiscene_models(v, ty, v->ntype, e < s_nent ? s_wrecks[e] : NULL, e < s_nent ? s_nwrecks[e] : 0,
+                               m, &nu);
     printf(",\"nu\":%d,\"m\":[", nu);
     for (k = 0; k < n; k++)
-        printf("%s[\"%s\",%d,%d,%d,%d,%d,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g]", k ? "," : "",
-               m[k].type < v->ntype ? v->type[m[k].type] : "?", m[k].owner, m[k].ghost, m[k].shadow,
+        printf("%s[\"%s\",%d,%d,%d,%d,%d,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%d]", k ? "," : "",
+               m[k].wreck ? (e < s_nent && m[k].type < s_nwrecks[e] ? s_wname[e][m[k].type] : "?")
+                          : m[k].type < v->ntype ? v->type[m[k].type] : "?", m[k].owner, m[k].ghost, m[k].shadow,
                m[k].nanoOn, m[k].slot, m[k].x, m[k].z, m[k].cs, m[k].sn, m[k].enc, m[k].alpha,
                m[k].nanoOn ? m[k].nanoT : 0.0f, m[k].nanoOn ? m[k].nanoC[0] : 0.0f,
                m[k].nanoOn ? m[k].nanoC[1] : 0.0f, m[k].nanoOn ? m[k].nanoC[2] : 0.0f,
-               m[k].nanoOn ? m[k].nanoWire : 0.0f);
+               m[k].nanoOn ? m[k].nanoWire : 0.0f, m[k].wreck);
     putchar(']');
 }
 

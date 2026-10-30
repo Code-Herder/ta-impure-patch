@@ -4050,6 +4050,7 @@ const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s)
         w->fz = f->fz;
         w->metal = f->metal;
         w->energy = f->energy;
+        w->wreck = s->entry->feat[f->def].object[0] != 0;
     }
     v->feat = s->vfeat;
     v->ngone = s->ngone;

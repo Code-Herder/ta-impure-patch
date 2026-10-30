@@ -93,6 +93,8 @@ RECIPES = {
     "metal": {"world": "metal", "crop": ("maps\\over crude water.tnt", (420, 370)),
               "decoration": ("holes",), "block": 16},
 }
+# a scene of greenworld named for what stands on it: the reclaim entry's battle aftermath
+RECIPES["field"] = RECIPES["green"]
 
 
 def fnv1a32(data: bytes) -> str:
@@ -234,23 +236,26 @@ def body_vent(body):
 
 def scene_figures(body):
     """A scene feature's figures as the entry states them (sim.js checkFeature): its footprint, metal (+0xF0) and
-    energy (+0xEC), height (+0xFA), and blocking and reclaimable (+0xFE bit 7). Height, blocking and reclaimable must be
-    stated by the section: the engine's defaults for a missing key are not established here, so a section that leaves
-    one out is refused rather than guessed at."""
+    energy (+0xEC), height (+0xFA), blocking and reclaimable (+0xFE bit 7), and a 3D feature's model (`object=`, which
+    clears +0xFE bit 0). Height, blocking and reclaimable must be stated by the section: the engine's defaults for a
+    missing key are not established here, so a section that leaves one out is refused rather than guessed at."""
     for k in ("height", "blocking", "reclaimable"):
         if k not in body:
             raise Fail(f"its section states no {k}")
     fx, fz = body_footprint(body)
-    return {"footprint": [fx, fz], "metal": body_metal(body), "energy": float(body.get("energy", 0) or 0),
-            "height": atoi(body["height"], 0), "blocking": atoi(body["blocking"], 0) == 1,
-            "reclaimable": atoi(body["reclaimable"], 0) == 1}
+    out = {"footprint": [fx, fz], "metal": body_metal(body), "energy": float(body.get("energy", 0) or 0),
+           "height": atoi(body["height"], 0), "blocking": atoi(body["blocking"], 0) == 1,
+           "reclaimable": atoi(body["reclaimable"], 0) == 1}
+    if (body.get("object") or "").strip():
+        out["object"] = body["object"].strip()
+    return out
 
 
 def entry_figures(d):
     """The entry's figures for a feature, with sim.js's defaults for the keys it may leave out."""
     return {"footprint": list(d["footprint"]), "metal": float(d.get("metal", 0)), "energy": float(d.get("energy", 0)),
             "height": d.get("height", 0), "blocking": bool(d.get("blocking", False)),
-            "reclaimable": bool(d.get("reclaimable", False))}
+            "reclaimable": bool(d.get("reclaimable", False)), **({"object": d["object"]} if "object" in d else {})}
 
 
 def of_world(vfs, world):

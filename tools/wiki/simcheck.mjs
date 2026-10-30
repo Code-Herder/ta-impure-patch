@@ -1249,9 +1249,13 @@ const RECLAIM_RULES = {
 /* THE RECLAIM SWEEP's demos (research/notes/ingame-wiki-reclaim-plan.md): what each ring marked, who was ordered what,
    and whether reclaim was still armed after it. A frame after an input's tick shows what the input did. */
 const fIds = os => (os || []).filter(o => o.k === 'reclaim' && o.feat !== undefined).map(o => o.feat);
-const featName = (r, id) => (r.all[0].v.feats.find(f => f.id === id) || {}).name || '';
-const rockOrTree = (r, ids, w) => ids.every(id => featName(r, id).startsWith(w));
-// the features whose centre the ring holds, and of those the ones of kind w (rock or tree)
+// a feature's look, as the whitebox draws it: a wreck (its row names a model), a rock (it holds metal) or a tree
+const featKind = (r, id) => {
+  const f = r.all[0].v.feats.find(g => g.id === id) || {};
+  return f.wreck ? 'wreck' : +f.metal > 0 ? 'rock' : 'tree';
+};
+const ofKind = (r, ids, w) => ids.every(id => featKind(r, id) === w);
+// the features whose centre the ring holds
 const inRing = (r, ring) => r.all[0].v.feats.filter(f => Math.hypot((f.ox + f.fx / 2) * 16 - ring.x, (f.oz + f.fz / 2) * 16 - ring.z) <= ring.r).map(f => f.id);
 const RECLAIM = {
   click(r, d, ok) {
@@ -1275,7 +1279,7 @@ const RECLAIM = {
     }
     ok(r.all.every(f => !(f.o.a || []).length), 'nothing was ordered');
   },
-  metal(r, d, ok) { ringCheck(r, d, ok, 'rock', 'tree'); },
+  metal(r, d, ok) { ringCheck(r, d, ok, 'wreck', 'tree'); },
   energy(r, d, ok) { ringCheck(r, d, ok, 'tree', 'rock'); },
   shift(r, d, ok) {
     const [u1, u2] = ups(d, 'lmb'), s = ups(d, 'shift')[0], f1 = r.frames[u1 + 1], f2 = r.frames[u2 + 1];
@@ -1289,7 +1293,7 @@ const RECLAIM = {
     const t = ups(d, 'lmb')[0], before = r.frames[t - 1], after = r.frames[t + 1];
     ok((before.o.a || []).some(o => o.k === 'move'), 'moves were queued before the ring');
     ok((after.o.a || []).length && (after.o.a || []).every(o => o.k === 'reclaim' && o.feat !== undefined), `the ring replaced it with reclaims (${(after.o.a || []).map(o => o.k)})`);
-    ok(rockOrTree(r, fIds(after.o.a), 'rock'), 'rocks only, METAL picked');
+    ok(ofKind(r, fIds(after.o.a), 'wreck'), 'wrecks only, METAL picked');
   },
   cancel(r, d, ok) {
     const [c1, c2] = presses(d, 'cancel'), [u1, u2] = ups(d, 'lmb');
@@ -1305,8 +1309,8 @@ const RECLAIM = {
 function ringCheck(r, d, ok, w, x) {
   const t = ups(d, 'lmb')[0], pre = r.frames[t - 1].v.reclaim, post = r.frames[t + 1];
   const T = (pre && pre.targets) || [], inside = pre && pre.ring ? inRing(r, pre.ring) : [];
-  ok(T.length >= 4 && rockOrTree(r, T, w), `the ring marked ${w}s only (${T})`);
-  ok(inside.some(id => featName(r, id).startsWith(x)) && !T.some(id => featName(r, id).startsWith(x)), `the ${x}s inside it were not marked`);
+  ok(T.length >= 4 && ofKind(r, T, w), `the ring marked ${w}s only (${T})`);
+  ok(inside.some(id => featKind(r, id) === x) && !T.some(id => featKind(r, id) === x), `the ${x}s inside it were not marked`);
   const a = fIds(post.o.a), b = fIds(post.o.b), got = [...a, ...b].sort();
   ok(got.join() === [...T].sort().join() && a.length && b.length, `every target ordered once, shared between both (${a} / ${b})`);
   ok(post.v.mode === 'contextual', 'released without Shift: reclaim put away');

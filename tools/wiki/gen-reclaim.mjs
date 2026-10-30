@@ -41,6 +41,21 @@ const features = {
   tree4: { footprint: [1, 1], energy: 250, height: 40, blocking: true, reclaimable: true, from: 'features\\green\\trees.tdf [tree4]' },
   tree5: { footprint: [1, 1], energy: 250, height: 40, blocking: true, reclaimable: true, from: 'features\\green\\trees.tdf [tree5]' },
 };
+/* a battle's wrecks, every figure as its section states it: the corpses (`*_dead`), which block, and the heaps a corpse
+   leaves (`*_heap`), which do not; `object` is the section's model, a 3D feature the stage draws through the unit pass */
+const wreck = (name, object, metal, height, blocking, tdf) =>
+  ({ footprint: [2, 2], metal, height, blocking, reclaimable: true, object, from: `features\\corpses\\${tdf}.tdf [${name}]` });
+Object.assign(features, {
+  armpw_dead: wreck('armpw_dead', 'armpw_dead', 42, 40, true, 'arm_corpses'),
+  armham_dead: wreck('armham_dead', 'armham_dead', 121, 40, true, 'arm_corpses'),
+  armllt_dead: wreck('armllt_dead', 'armllt_dead', 210, 20, true, 'arm_corpses'),
+  corak_dead: wreck('corak_dead', 'corak_dead', 45, 20, true, 'core_corpses'),
+  corck_dead: wreck('corck_dead', 'corck_dead', 104, 20, true, 'core_corpses'),
+  corthud_dead: wreck('corthud_dead', 'corthud_dead', 118, 20, true, 'core_corpses'),
+  armpw_heap: wreck('armpw_heap', '2x2f', 21, 4, false, 'arm_heaps'),
+  armllt_heap: wreck('armllt_heap', '2x2b', 105, 4, false, 'arm_heaps'),
+  corak_heap: wreck('corak_heap', '2x2c', 22, 4, false, 'core_heaps'),
+});
 
 /* the map, 40 x 30 cells of greenworld grass. Two ARMCK stand left of centre, clear of the popup's columns (cells 0..7,
    which it covers beside RECLAIM's row); a lone rock above them; a field of rocks with three trees among it; a grove of
@@ -63,6 +78,20 @@ const scene = {
     F('tree1', [28, 19], 'g1'), F('tree2', [30, 18], 'g2'), F('tree3', [32, 19], 'g3'), F('tree4', [29, 21], 'g4'),
     F('tree5', [33, 21], 'g5'), F('tree1', [31, 23], 'g6'), F('tree3', [28, 23], 'g7'), F('tree2', [34, 24], 'g8'),
     F('rock07', [31, 21], 'g9'), F('rock4', [26, 21], 'g10'),
+  ],
+  selected: ['a', 'b'],
+  cursor: [300, 260],
+};
+/* the METAL demos' field: the same map and builders, and where the rock field stands a battle's aftermath -- the
+   corpses and heaps of both sides on the rocks' ground, round cell (21, 10), with the same three trees among them */
+const field = {
+  map: scene.map,
+  units: scene.units,
+  features: [
+    F('corthud_dead', [19, 5], 'w1'), F('corak_dead', [22, 6], 'w2'), F('armpw_dead', [18, 8], 'w3'),
+    F('armham_dead', [24, 9], 'w4'), F('armllt_heap', [15, 9], 'w5'), F('armllt_dead', [21, 11], 'w6'),
+    F('corck_dead', [17, 12], 'w7'), F('armpw_heap', [20, 14], 'w8'), F('corak_heap', [25, 13], 'w9'),
+    F('tree1', [23, 9], 't1'), F('tree4', [19, 10], 't2'), F('tree2', [16, 11], 't3'),
   ],
   selected: ['a', 'b'],
   cursor: [300, 260],
@@ -98,10 +127,11 @@ function TL(start) {
 
 const WAIT_MAX = 1800, TAIL = 60;
 const demos = [];
-function demo(id, title, add, fn, tail = TAIL) {
+// `on`: the scene the demo plays on, the entry's first (green) when absent
+function demo(id, title, add, fn, tail = TAIL, on) {
   const T = TL(add.cursor || scene.cursor);
   fn(T);
-  demos.push({ id, title, scene: add, inputs: T.inputs, end: T.t + tail });
+  demos.push({ id, title, ...(on ? { on } : {}), scene: add, inputs: T.inputs, end: T.t + tail });
 }
 
 demo('click', 'E and a click', { selected: ['a'] }, T => T
@@ -118,8 +148,8 @@ demo('kind', 'Pick the kind', { selected: ['a'] }, T => T
 demo('metal', 'A METAL ring', { kind: 'metal' }, T => T
   .say('Two {builder}s, METAL picked. Press and drag a ring.').reclaim().wait(10)
   .to(C(21, 10), 40).wait(8).down('lmb')
-  .to(C(26, 10), 50).say('The rocks in the ring are marked. The trees among them are not.').wait(50)
-  .up('lmb').say('Released: the rocks are shared out, each {builder} taking the nearest.').wait(240));
+  .to(C(26, 10), 50).say('The wrecks in the ring are marked. The trees among them are not.').wait(50)
+  .up('lmb').say('Released: the wrecks are shared out, each {builder} taking the nearest.').wait(240), TAIL, 'field');
 
 demo('energy', 'An ENERGY ring', { kind: 'energy' }, T => T
   .say('ENERGY picked. Ring the grove.').reclaim().wait(10)
@@ -133,14 +163,14 @@ demo('shift', 'Shift queues another ring', { kind: 'metal' }, T => T
   .say('One ring queued. Another, still holding Shift...').wait(20)
   .to(C(23, 12), 35).wait(8).down('lmb').to(C(26, 12), 35).wait(15).up('lmb')
   .say('...goes after it.').wait(30)
-  .up('shift').say('Let go of Shift: reclaim is put away.').wait(150));
+  .up('shift').say('Let go of Shift: reclaim is put away.').wait(150), TAIL, 'field');
 
 demo('replace', 'Without Shift it replaces', { selected: ['a'], kind: 'metal' }, T => T
   .down('shift').to(C(37, 2), 40).wait(5).click('order').to(C(37, 27), 30).wait(5).click('order')
   .to(C(2, 27), 30).wait(5).click('order').up('shift').say('The {builder} has a route of moves queued.')
   .to([300, 260], 30).reclaim().wait(10)
   .to(C(21, 10), 40).wait(8).down('lmb').to(C(25, 10), 45).wait(20)
-  .up('lmb').say('A ring without Shift replaces its orders: the moves are gone, the rocks are its work now.').wait(200));
+  .up('lmb').say('A ring without Shift replaces its orders: the moves are gone, the wrecks are its work now.').wait(200), TAIL, 'field');
 
 demo('cancel', 'Cancel', { selected: ['a'] }, T => T
   .say('A {cancel} during the drag ends the ring and keeps reclaim armed.').reclaim().wait(10)
@@ -163,7 +193,7 @@ const entry = {
     'In the stock game E reaches RECLAIM only while its ORDERS page is up; the mods that show the orders on every page let E work from any page.',
   ],
   lockedIn: [],
-  units, features, scenes: { green: scene }, demos,
+  units, features, scenes: { green: scene, field }, demos,
 };
 fs.mkdirSync(`${ROOT}art/wiki/entries`, { recursive: true });
 // small values on one line, the rest expanded: an input per line

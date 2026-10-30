@@ -125,21 +125,23 @@ const near = (a, b) => Math.abs(a - b) <= TOL;
 const F = Math.fround;   // the C side prints a float in 9 digits, which reads back as that float
 
 /* one frame's model records: the C side's row [type, owner, ghost, shadow, nanoOn, slot, x, z, cs, sn, enc, alpha,
-   nanoT, nanoC0..2, wire] against scene.js's record; null when they pair */
+   nanoT, nanoC0..2, wire, wreck] against scene.js's record, the units and the wrecks the opaque window's; null when
+   they pair */
 function pairModels(c, js) {
-  const want = [...js.units, ...js.ghosts];
-  if (c.nu !== js.units.length) return `${c.nu} unit records in C, ${js.units.length} in the mockup`;
+  const want = [...js.units, ...js.wrecks, ...js.ghosts], nu = js.units.length + js.wrecks.length;
+  if (c.nu !== nu) return `${c.nu} unit and wreck records in C, ${nu} in the mockup`;
   if (c.m.length !== want.length) return `${c.m.length} records in C, ${want.length} in the mockup`;
   for (let i = 0; i < want.length; i++) {
     const r = c.m[i], m = want[i], n = m.nano;
     const kind = !m.shadow ? 0 : m.slant ? 2 : 1;
     const same = r[0] === m.type && r[1] === m.owner && r[2] === +m.ghost && r[3] === kind && r[4] === +!!n &&
       r[5] === m.slot && near(r[6], m.pos[0]) && near(r[7], m.pos[1]) && near(r[8], m.yaw[0]) && near(r[9], m.yaw[1]) &&
-      near(r[10], m.enc) && near(r[11], m.alpha) &&
+      near(r[10], m.enc) && near(r[11], m.alpha) && r[17] === +!!m.feature &&
       (!n || (r[12] === n.t && [n.c[0], n.c[1], n.c[2], n.wire].every((x, k) => F(r[13 + k]) === F(x))));
     if (!same) return `record ${i}: C ${show(r)}, mockup ${show({ ...m, files: undefined })}`;
     nmodels++;
     if (n) nnano++;
+    if (m.feature) nwreck++;
   }
   return null;
 }
@@ -147,7 +149,7 @@ const show = v => JSON.stringify(v, (k, x) => typeof x === 'number' ? +x.toFixed
 
 const t0 = Date.now();
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'scenecheck-'));
-let code = 0, nmodels = 0, nnano = 0;
+let code = 0, nmodels = 0, nnano = 0, nwreck = 0;
 try {
   if (!fs.existsSync(path.join(PACK, 'index.json'))) throw new CannotRun(`no pack at ${PACK}: run tools/wiki/gfx.py`);
   const index = JSON.parse(fs.readFileSync(path.join(PACK, 'index.json'), 'utf8'));
@@ -159,7 +161,9 @@ try {
     const dir = path.join(PACK, id), pack = JSON.parse(fs.readFileSync(path.join(dir, 'scene.json'), 'utf8'));
     packs[id] = pack;
     const meshes = Object.entries((pack.units || {}).meshes || {});
-    types += `${id} ${meshes.length}\n` + meshes.map(([t, m]) => `${t} ${+!!m.mobile} ${+!!m.slant} ${+!!m.shadow}\n`).join('');
+    const wr = pack.features3d || [];
+    types += `${id} ${meshes.length} ${wr.length}\n` + meshes.map(([t, m]) => `${t} ${+!!m.mobile} ${+!!m.slant} ${+!!m.shadow}\n`).join('')
+      + wr.map(f => `${f.key} ${f.cell[0]} ${f.cell[1]} ${f.footprint[0]} ${f.footprint[1]}\n`).join('');
     if (!pack.ground.ok) { console.log(`scenecheck: ${id}: the pack's ground fell back (${pack.ground.miss}) - not paired`); continue; }
     grounds[id] = mockupGround(dir, pack);
     text += groundText(id, dir, pack, grounds[id].feats);
@@ -251,7 +255,7 @@ try {
   const s = ((Date.now() - t0) / 1000).toFixed(1);
   if (code) console.log(`scenecheck: DIFFER (${s} s)`);
   else console.log(`scenecheck: all equal -- ${nground} grounds (${ncell} cells exactly, ${nquad} feature quads within 1/64), ` +
-                   `fog on ${nframes} frames (${nfogged} fogged) byte for byte, ${nmodels} model records (${nnano} nanoframes) (${s} s)`);
+                   `fog on ${nframes} frames (${nfogged} fogged) byte for byte, ${nmodels} model records (${nnano} nanoframes, ${nwreck} wrecks) (${s} s)`);
 } catch (x) {
   if (!(x instanceof CannotRun)) throw x;
   console.log(`scenecheck: cannot run: ${x.message}`);
