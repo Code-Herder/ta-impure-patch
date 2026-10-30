@@ -830,13 +830,19 @@ def mockup_shot(state, path):
         run("goto", f"http://127.0.0.1:{httpd.server_address[1]}/tools/wiki/mockup/index.html?res={gw}x{gh}&open&skin=kit"
                     f"&sidebar=mod&mod={state.get('mod', 'stock')}&rewind=0{'&gfx=game' if game else ''}"
                     f"&entry={state['entry']}&demo={state['demo_n'] + 1}")
-        for _ in range(300 if game else 100):
-            if wl.result(run("eval", "() => !!(window.WikiPage && WikiPage.sim() && document.fonts.status === 'loaded'"
-                                     " && document.querySelector('#win canvas.skin')"
-                                     " && !document.querySelector('#sidebar-note').textContent.startsWith('loading')"
-                                     f"{' && WikiGfx.ready(WikiPage.state.entry)' if game else ''})").stdout):
-                break
-            time.sleep(0.1)
+        # THE PAGE READY, waited for inside the page in one call (a playwright-cli call is a process, a
+        # second each): the fonts, the window, the mod's sidebar pack, and with the game look the
+        # demo's stage -- WikiGfx keys a stage `<entry>.<scene>`, WikiPage.stageId() -- or the wait's
+        # bound fails the grab, which a picture of a page still loading would otherwise pass
+        bound = 30000 if game else 10000
+        ready = wl.result(run("eval", "async () => { const ok = () => !!(window.WikiPage && WikiPage.sim()"
+                                      " && document.fonts.status === 'loaded' && document.querySelector('#win canvas.skin')"
+                                      " && !document.querySelector('#sidebar-note').textContent.startsWith('loading')"
+                                      f"{' && WikiGfx.ready(WikiPage.stageId())' if game else ''});"
+                                      f" const t0 = performance.now(); while (!ok() && performance.now() - t0 < {bound})"
+                                      " await new Promise(r => setTimeout(r, 50)); return ok(); }").stdout)
+        assert ready is True, f"the mockup page was not ready within {bound / 1000:.0f} s ({state['entry']}, " \
+                                f"demo {state['demo_n'] + 1}{', game look' if game else ''}): {ready}"
         v = wl.result(run("eval", "async () => { const S = WikiPage.state, $ = s => document.querySelector(s);"
                                   # the demo afresh and paused in one task, whatever the load left it at: past
                                   # the tick, or done (play on a done demo restarts it playing), and no frame
