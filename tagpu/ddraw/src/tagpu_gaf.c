@@ -905,8 +905,9 @@ size_t tagpu_gaf_mip_chain(int dim, int mip)
     return tagpu_gaf_mip_off(dim, mip) + tagpu_gaf_mip_bytes(dim, mip);
 }
 
-/* Arm the published restore list (tagpu_gaf.h). Polled on the owner's arm
-   beat, so the lever is allowed to appear mid-session: a latch that is only
+/* Arm the published restore list (tagpu_gaf.h). Polled by its owner
+   (`consumer_ask` in tagpu_feat.c and tagpu_fx.c: the arm beat, and the
+   gather that builds the atlas), so the lever is allowed to appear mid-session: a latch that is only
    ever tested at start-up reads as "off" for a session the owner turned it on
    during. [tagpu_terr.c carries the same
    poll for the terrain atlas, whose restore is a fixed list rather than a

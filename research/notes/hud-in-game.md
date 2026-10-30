@@ -265,7 +265,7 @@ The owner's decisions:
   second behind the world. MEASURED 2026-10-25 on the reference setup, the fitted kit: `hud: loaded 66 parts
   (8.8 Mpx) and 3 faces in 343 ms`, against 21.2 Mpx in 862 ms for the same build with the parts
   as cut.
-- **The decoded parts stay for the session**, 35.2 MB of RGBA. Every teardown and resize brings
+- **The decoded parts stay for the session**, 35.5 MB of RGBA (the wiki's kit 5.5 MB more). Every teardown and resize brings
   the pass down, and its images are uploaded again from these. Nothing writes or frees the
   loaded HUD afterwards, which is why any thread may read it without a lock.
 - **Each part is its own image, with mipmaps.** The parts are drawn at 1.1 (1080p, 75 %) to 4.5
@@ -276,7 +276,7 @@ The owner's decisions:
 
 ### The uploads
 
-- **The parts go once per build, all in one frame.** Their level 0 totals 38.7 MB with the
+- **The parts go once per build, all in one frame.** Their level 0 totals 41.0 MB with the
   wiki's kit (92 images) against a slot's 2 MiB staging cap (`TAGPU_VK_STAGE_CAP`,
   `tagpu_vk_stage.h`), and every one goes through `tagpu_vk_stage_copy_banded`: banded through
   the whole buffer, one submit and one wait a band, never an in-frame copy, so the buffer is as
@@ -1316,10 +1316,9 @@ the render thread.
 ## Open
 
 - **The HUD font** is not decided; Oswald and Barlow Condensed are the mockup's.
-- **Address space.** The decoded parts stay for the session, 35.2 MB of a 32-bit process, and
-  the archive stays mapped with the DLL, 11.9 MB. The art loads on the first frame with a HUD
-  state, which since the live rewind is the first frame of a live recorded skirmish on the Vulkan
-  lane too, not only of a replay.
+- **Address space.** The decoded parts stay for the session, 41.0 MB with the wiki's kit in a
+  32-bit process, and the archive stays mapped with the DLL, 12.0 MB. The art loads on the Vulkan
+  lane's first frame, in the shell, whether or not a game with a HUD follows.
 - **`rail_one` is packed but never drawn.** The DLL draws the housing as `rail_forks` (the
   `proposed` section, which the game always draws); `rail_one` is the mockup's `prop=0` housing,
   1.2 MB of the archive and 0.9 Mpx decoded.

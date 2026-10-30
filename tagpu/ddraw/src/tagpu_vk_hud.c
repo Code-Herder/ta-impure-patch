@@ -720,8 +720,8 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art, const WIKIART* wart)
     /* the wiki's kit after the HUD's; one that does not fit leaves the wiki undrawn, not the HUD */
     s_nwparts = wart ? tagpu_hudlay_nparts(wart->draw.lay) : 0;
     if (s_nparts + s_nwparts > MAXPART) {
-        plog(d, "wiki: %d kit parts past the HUD's %d, more than the pass holds - the wiki is not drawn",
-             s_nwparts, s_nparts);
+        plog(d, "wiki: %d kit parts past the HUD's %d, more than the pass holds", s_nwparts, s_nparts);
+        tagpu_wikistate_refuse("its kit does not fit the HUD's pass");
         s_nwparts = 0;
     }
 
@@ -794,7 +794,7 @@ static int build(const TAGPU_VKPASS* d, const HUDART* art, const WIKIART* wart)
 
 /* ---- the uploads ----------------------------------------------------------------------------- */
 
-/* The parts, whole, each followed by its chain, ALL ON THE FRAME THAT FIRST ASKS: 39 MB of them
+/* The parts, whole, each followed by its chain, ALL ON THE FRAME THAT FIRST ASKS: 41 MB of them
    against a slot's 2 MiB, every one banded through the whole buffer (tagpu_vk_stage_copy_banded),
    so the HUD and the wiki button draw on the first frame after the pass is built. Sent as
    in-frame copies, they would take a dozen frames, the first few filling the buffer and every

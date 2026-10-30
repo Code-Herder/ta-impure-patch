@@ -507,6 +507,12 @@ void tagpu_wikistate_image(unsigned frame, int image, int ground, const uint32_t
     s_stage.n = under;
 }
 
+void tagpu_wikistate_refuse(const char* why)
+{
+    if (InterlockedExchange(&s_refused, 1) == 0)
+        tagpu_logf("wiki: %s - the wiki is not drawn this session", why);
+}
+
 int tagpu_wikistate_refused(void)
 {
     return InterlockedCompareExchange(&s_refused, 0, 0) != 0;

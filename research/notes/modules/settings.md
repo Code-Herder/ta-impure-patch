@@ -264,18 +264,24 @@ so the two right edges land on one line — measured at both 1024 (988, 704) and
 1600).
 
 **Who draws it.** On GDI the engine's blitter draws the code-made sprocket (`sprocket`,
-`build_trigger`: eight teeth in palette indices, normal, hover and pressed). On the Vulkan lane,
-whenever the wiki is drawn -- the HUD's pass stands, the wiki's layout has not refused and its art
-is loaded -- the observer blits nothing and the wiki's layer draws the kit's `config_emblem` in the
-same 28-bar-pixel slot, the emblem the wiki and rewind buttons share, `config_emblem_down` while
-the sprocket is held or the panel is open (`wiki_button`, `tagpu_wikilay.c`). The decision is taken
-on the game thread inside `DrawGameScreen` and read by the same frame's wiki fill after the draw,
-so a frame that skips the blit is a frame whose packet says the wiki draws it. Only drawing moved:
-the hit test is still `tagpu_menu_click` on this rect, and the wiki puts no control there. Two
-gaps: the emblem has no hover state (neither has the wiki button nor the rewind button), and a
-frame whose wiki record does not reach the screen -- the layout refuses the kit when the render
-thread binds it, or the record does not fit the packet -- shows no sprocket for that frame; the
-next fill sees a refusal and the engine draws it again.
+`build_trigger`: eight teeth in palette indices, normal, hover and pressed). On the Vulkan lane
+the wiki's layer draws the kit's `config_emblem` in the same 28-bar-pixel slot, the emblem the
+wiki and rewind buttons share, `config_emblem_down` while the sprocket is held or the panel is open
+(`wiki_button`, `tagpu_wikilay.c`), and the observer blits nothing -- but only while the last
+published packet carried a wiki record (`tagpu_wiki_shown`), the HUD's pass stands, the wiki has
+not refused and its art is loaded. The skip is taken inside `DrawGameScreen` and every wiki record
+filled after it, by the same thread after the same draw, carries it (`TAGPU_PK_WIKI.config`).
+Every state that keeps the wiki off the screen for good fails one of those tests -- a refusal of
+the HUD's pass or of the wiki (its layout, or a kit the pass has no room for), a publisher that
+fills nothing, records that do not fit the packet -- so the engine draws the sprocket again from
+the next draw. Only drawing moved: the hit test is still `tagpu_menu_click` on this rect, and the
+wiki puts no control there. Gaps: the emblem has no hover state (neither has the wiki button nor
+the rewind button); the engine's draws for a screenshot or the movie recorder (`0x495C76`,
+`0x495E66`, `0x4962C2`) leave the sprocket out on the Vulkan lane; and the two halves are not
+paired on the screen -- the blit reaches it through the GUI's op ring and the skip through the
+frame packet, which publishes only fresh frames -- so at a change of state (a press, the panel
+opening, a refusal, the session's first in-play frame) the screen can show both sprockets or
+neither for one frame.
 
 **Known cost.** The engine rebuilds the whole in-game GUI stack on a world click, and the
 panel hangs over the world, so clicking a row costs one frame of the panel being re-pushed.

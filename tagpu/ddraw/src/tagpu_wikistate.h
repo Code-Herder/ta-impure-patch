@@ -66,6 +66,11 @@ int  tagpu_wikistate_cursor(unsigned frame);
    missing argument or its own memory, so that memory is what is left to refuse. */
 int  tagpu_wikistate_refused(void);
 
+/* RENDER THREAD: the wiki cannot be drawn for the rest of the session for a reason outside its
+   layout -- the HUD's pass has no room for its kit (tagpu_vk_hud.c). Said once; then
+   tagpu_wikistate_refused answers 1 as for the layout's own refusal. */
+void tagpu_wikistate_refuse(const char* why);
+
 /* THE GAME'S CURSORS' SPRITE SHEET the stage's HOPF_SPRITE ops draw from (tagpu_hudlay.h):
    HUD_SPRITE_CELLS x HUD_SPRITE_CELL by HUD_SPRITE_CELL texels, R8G8B8A8 premultiplied, and in
    `*gen` its generation, which moves whenever its texels do; 0 while there is none (the stage then

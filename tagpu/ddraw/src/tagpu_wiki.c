@@ -1775,6 +1775,7 @@ static void assets_start(void)
 /* 1 when the packet carried nothing of the last fill tagpu_wiki_carried was told of, not even its
    head, so the frame drawn from it shows no wiki and posts an empty hit map */
 static int s_cut;
+static int s_shown;                     /* tagpu_wiki_shown                                      */
 static int s_ask;                       /* this fill answers the triggers                        */
 
 int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again, int side, int iface)
@@ -1809,6 +1810,7 @@ int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again, int side, int if
         /* THE WIKI IS OPEN ONLY WHERE IT CAN BE SEEN AND CLOSED: the lane fell back to GDI, the
            HUD's pass refused, or the wiki's layout refused, so no frame will draw the window
            again */
+        s_shown = 0;
         if (s_open) wiki_close("the wiki can no longer be drawn");
         if (!s_saidOff) {
             s_saidOff = 1;
@@ -1890,11 +1892,17 @@ void tagpu_wiki_carried(const TAGPU_PK_WIKI* w, uint32_t carried)
         s_costT0.QuadPart = 0;
     }
     s_cut = carried == 0;
+    s_shown = carried != 0;
     if (s_ask && GetFileAttributesA(DUMP_ASK) != INVALID_FILE_ATTRIBUTES) {
         DeleteFileA(DUMP_ASK);
         dump(w, carried);
     }
     if (s_ask) tagpu_wikiasset_poll();
+}
+
+int tagpu_wiki_shown(void)
+{
+    return s_shown;
 }
 
 void tagpu_wiki_level_end(void)

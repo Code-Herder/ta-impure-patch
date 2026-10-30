@@ -76,6 +76,7 @@
 #include "tagpu_hudinput.h"
 #include "tagpu_hudstate.h"
 #include "tagpu_hudart.h"
+#include "tagpu_wiki.h"
 #include "tagpu_wikistate.h"
 
 /* the engine's Visuals options: the section "owned by the store" below */
@@ -190,8 +191,9 @@ static const unsigned char DRAW_STOLEN[6] = { 0x81, 0xEC, 0x14, 0x02, 0x00, 0x00
 /* 0x46A308: `mov edx,ds:0x511de8`, immediately after DrawGameScreen's own GUI
    draw (0x46A303 calls 0x4AB170) and before the flip. That is where the
    trigger goes: over the finished bar, through the engine's own blitter, so
-   it lands in the back buffer every flip presents -- rather than in a layer
-   of our own that the engine's surface and `tacli shot` would both miss. */
+   it lands in the back buffer every flip presents. On the Vulkan lane the
+   wiki's layer draws it instead while the wiki is drawn (draw_trigger), and
+   then the engine's surface and `tacli shot` do not show it. */
 static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 };
 
 /* ---- the geometry, from tools/guipanel.py (the source of truth) ---------- */
@@ -1578,19 +1580,24 @@ int tagpu_menu_click(int gx, int gy, int down)
 
    ON THE VULKAN LANE THE WIKI'S LAYER DRAWS IT INSTEAD, as the emblem its wiki button and the
    rewind button share (tagpu_wikilay.c, wiki_button), and the engine's sprocket is not blitted.
-   The test is the wiki fill's own -- the HUD's pass stands and the wiki's layout has not refused
-   (tagpu_wiki_fill) -- and the wiki's art is loaded, so a frame that skips the blit is a frame
-   whose packet carries a wiki record saying so. The press stays here: the hit-test above is on
-   this rect, whoever draws it. A frame the render thread then does not draw the wiki on (its
-   layout refuses the kit on binding it, or the record does not fit the packet) shows no sprocket
-   for that frame; the next fill sees the refusal and the engine draws it again. */
+   The blit is skipped only while the last published packet carried a wiki record
+   (tagpu_wiki_shown), the HUD's pass stands, the wiki has not refused and its art is loaded, and
+   every record filled after a skipping draw carries the skip (TAGPU_PK_WIKI.config, set by this
+   frame's fill after this draw on this thread). Every state that keeps the wiki's layer off the
+   screen for good -- a refusal, a publisher that fills nothing, records that do not fit the
+   packet -- fails one of those tests, so the engine draws the sprocket again from the next draw.
+   WHAT IS NOT PAIRED: these pixels reach the screen through the GUI's op ring and the skip
+   through the frame packet, which publishes only fresh frames, so at a change -- a press, the
+   panel opening, a refusal -- the screen can show the engine's sprocket and the emblem, or
+   neither, for one frame. The press stays here: the hit-test above is on this rect, whoever
+   draws it. */
 static void draw_trigger(void)
 {
     int x, y, st, cx, cy;
 
     s_barCog = 0;
     if (!s_drawTrigger) return;
-    if (tagpu_hudstate_on() && !tagpu_wikistate_refused() && tagpu_wikiart_get()) {
+    if (tagpu_wiki_shown() && tagpu_hudstate_on() && !tagpu_wikistate_refused() && tagpu_wikiart_get()) {
         s_barCog = s_pressed || s_gm ? 2 : 1;
         return;
     }
