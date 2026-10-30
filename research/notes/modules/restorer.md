@@ -25,8 +25,10 @@ one row. The lever is gone as a name; the `restorevk:` log prefix stays, being t
 lane tag rather than the lever.
 
 **"Read at attach, latched per pass" was never true of those sites and is not a constraint.**
-Both were already POLLED — the GAF one on each owner's 30-frame arm beat, the terrain one on its
-own — so the latch takes on the first beat at which the answer is yes. The latch is a LIFETIME:
+Both are POLLED — the GAF one by each owner's `consumer_ask` (`tagpu_feat.c`, `tagpu_fx.c`), on
+its 30-frame arm beat and in the gather that builds the atlas, together with the atlas's CPU
+mirror, so a level's first frame already has both; the terrain one on its own — so the latch takes
+on the first ask at which the answer is yes. The latch is a LIFETIME:
 it guards one `malloc` whose address a consumer holds raw for the rest of the frame, which is
 why it must not be re-taken. Turning the knob OFF is answered where it always was, by the
 publishers' `restored` flag and by `tagpu_vk_restore.c`'s `may_draw`, which put `uRestored` back
