@@ -1182,7 +1182,7 @@ unless said).
   wall clock: the frames are counted at rest (`tagpu_wiki3d.count`), the demo's pace is judged on
   its own clock, its pauses land on their ticks (`tagpu_wiki.pause`), and a stage's cost is its
   work, its milliseconds only said. MEASURED 2026-10-30 at `-j 6` on the reference setup: the whole
-  gate, 36 lanes, in 361 s, against some 105 minutes one after another ([the plan](wiki-gate-plan.md)).
+  gate, 36 lanes, in 347 s, against some 105 minutes one after another ([the plan](wiki-gate-plan.md)).
 
 ## The first entry: Quick Build: Resource Extractors
 
