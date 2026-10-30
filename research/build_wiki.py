@@ -831,7 +831,8 @@ def address_index_md() -> str:
                 kind, cell = "row in ", line.split("|")[1]
             else:
                 continue
-            for a in dict.fromkeys(addr.findall(cell)):
+            # a link's target is not a name: `[x](p.html#0x4866d0-...)` keys nothing
+            for a in dict.fromkeys(addr.findall(re.sub(r"\]\([^)]*\)", "]", cell))):
                 entries.setdefault("0x" + a.upper(), []).append(
                     f"{kind}[{name[:120]}](../{slug}.html#{here})")
     out = ["# Engine map — address index", "",

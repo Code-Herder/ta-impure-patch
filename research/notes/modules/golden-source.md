@@ -158,7 +158,7 @@ an oracle rather than instrumentation, which is why it stays.
   on the pairing compares the two numbers itself.
 * **SETTLED 2026-09-20: the level teardown is GAME-THREAD ONLY — on the evidence of a
   measurement and a standing instrument, not of the call graph.** The survey is in
-  [exe-reverse-engineering](../exe-reverse-engineering.html), *Who enters `0x491B60`*; the short
+  [the level teardown `0x491B60`](../engine/memory.md#who-enters-it-and-on-which-thread), *Who enters it*; the short
   form:
   * `0x491B60`'s **address is never taken anywhere in the image**, and there is no `.reloc`, so
     its entry set is closed: six direct calls and nothing else. That is the part the static work

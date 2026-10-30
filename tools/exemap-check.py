@@ -69,7 +69,8 @@ def entries(path: str):
             cell = line.split("|")[1]
         else:
             continue
-        for a in dict.fromkeys(ADDR.findall(cell)):
+        # a link's target is not a name: `[x](p.md#0x4866d0-...)` keys nothing
+        for a in dict.fromkeys(ADDR.findall(re.sub(r"\]\([^)]*\)", "]", cell))):
             if a.upper().startswith("4"):
                 yield norm(a), i, section
 

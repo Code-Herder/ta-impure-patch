@@ -84,7 +84,7 @@ static unsigned s_captures, s_unchanged, s_refused, s_norequest;
    teardown `0x491B60` was surveyed and measured on 2026-09-20 and is
    game-thread only -- its address is never taken, so its six call sites are all
    of them, and every teardown measured came in on the game thread
-   (exe-reverse-engineering.md, "Who enters 0x491B60"; note that the identity
+   (engine/memory.md, 0x491B60 "Who enters it"; note that the identity
    rests on the measurement, because all six sites are dispatched through a
    function pointer and the call graph stops there). The test stays because
    it is one compare and it keeps this module correct without depending on that

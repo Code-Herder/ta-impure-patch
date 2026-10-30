@@ -3038,8 +3038,8 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
 
        NO FOREIGN TEARDOWN HAS EVER BEEN OBSERVED and this line is therefore
        belt-and-braces -- said so that nobody reads it as evidence that one
-       happens. The survey is in exe-reverse-engineering.md, "Who enters
-       0x491B60": the teardown's address is never taken, so its six call sites
+       happens. The survey is in research/notes/engine/memory.md, the level teardown
+       0x491B60, "Who enters it": the teardown's address is never taken, so its six call sites
        are the complete set; but all six are dispatched through the engine's
        state-handler pointer, so the call graph cannot settle the thread and
        the answer is the measurement -- four teardowns over two UI paths, all
