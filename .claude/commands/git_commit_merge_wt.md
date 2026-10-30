@@ -234,10 +234,22 @@ main in). Decide from it:
   A `MISSING` line means the engine map was not updated for this landing. It is also how a
   comment that cites an address the note spells differently gets caught (on G13k the code said
   `0x45A658`, the `je`, where the note had the `test` at `0x45A655`) — make them agree.
+- **Are the sites it writes in the hook map?** Every engine address the landing *writes* — a
+  detour, a call-site redirect, a byte or dword patch — needs a row in
+  `research/notes/modules/hook-map.md`: VA, what it is, the module, the mechanism. The tool
+  finds the sites on the diff's added lines from the installer calls themselves
+  (`tagpu_detour_*`, `patch_bytes`, a module's own `VirtualProtect`) and the tables and
+  wrappers that feed them:
+  ```
+  tools/hookmap-check.py            # exit 1 on a MISSING site; --all lists the whole tree
+  ```
+  A `MISSING` line is a row to write. An `UNRESOLVED` line is an installer call whose site is
+  computed at run time (the takeover's writes into TADR's DLL are the standing case): check it
+  by hand. A site the landing stops writing loses its row. Engine **fields** the landing writes
+  go in the same note's *fields we write* table; no tool finds those, so read the diff for them.
 - **Did the module docs move?** For engine code the landing must also touch
   `research/notes/roadmap.md` (capability row and gate entry), and the note in
-  `research/notes/modules/` of every module whose behaviour changed —
-  `modules/hook-map.md` too if it adds a hook or writes an engine field it did not write before.
+  `research/notes/modules/` of every module whose behaviour changed.
   `.claude/skills/ta-*/SKILL.md` only if how you drive or measure the game changed. Check the
   shape as well as the presence: a module-note diff that only *adds* a section named after this
   landing is the journal, not the doc — rewrite it into the sections it changes.
@@ -280,9 +292,10 @@ patched:
   the commit's, the `landing-review:` note's and the plan note's). A new module gets a new note,
   registered in `research/build_wiki.py`'s `PAGES`. `modules/log-*.md`,
   `modules/status-snapshot.md` and `gpu-status.md` are frozen and take no writes.
-- `research/notes/modules/hook-map.md` — the **"State we read, and the fields we write"** table
-  and the hook mechanisms. Anything newly written, or newly written *from a second thread*,
-  gets its row here, replacing the row it supersedes.
+- `research/notes/modules/hook-map.md` — the register of every engine site we write (one row
+  per site, or one row naming a patch's group of sites; `tools/hookmap-check.py` finds the ones
+  missing) and the **"State we read, and the fields we write"** table. Anything newly written,
+  or newly written *from a second thread*, gets its row, replacing the row it supersedes.
 - `research/notes/roadmap.md` — the capability row and the gate entry, **including the gaps the
   landing did not close**. For a multi-landing gate the row is a summary and a link to the plan
   note, never the landing log (next).

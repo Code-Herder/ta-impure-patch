@@ -189,8 +189,12 @@ pass lands with it.
   the numbers). **Negative results count** — a function with no callers, one loop that
   bounds-tests and one that does not. Update it as fully as the work allows; these addresses
   are the expensive part of this project and get re-derived every time they are not written down.
-- **Then the module docs**: the module's note in `research/notes/modules/` (one per module;
-  `modules/hook-map.md` holds the hook mechanisms and the *fields we write* table),
+- **The hook map — `research/notes/modules/hook-map.md` — gets a row for every engine site the
+  work writes** (a detour, a redirect, a byte patch: VA, what it is, module, mechanism) and for
+  every engine field it writes, in its *fields we write* table. `tools/hookmap-check.py` names
+  each written site on the diff's added lines that has no row; a site we stop writing loses its
+  row.
+- **Then the module docs**: the module's note in `research/notes/modules/` (one per module),
   `roadmap.md`'s gate row and entry, and the `ta-*` skill if how you drive or measure the game
   changed — by that skill's own *Maintaining this skill* rules: state the present, replace
   rather than annotate, and keep the landing's story in the note.

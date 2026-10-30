@@ -1,6 +1,6 @@
 # The hook map — mechanisms, state we read and the fields we write
 
-How the stack patches the engine, every engine field it writes and from which thread, and the byte patches with no hook.
+The register of every engine site the DLL writes — VA, what it is, the module, the mechanism — and of every engine field it writes and from which thread. Kept like the [engine map](../exe-reverse-engineering.md): each landing adds a row for each site and field it writes and removes the rows of the ones it stops writing; `tools/hookmap-check.py` names every written site with no row (`--all` for the whole tree).
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the gate's plan note. Section numbers are those of the retired [GPU status](../gpu-status.md) page, which indexes them.*
 
