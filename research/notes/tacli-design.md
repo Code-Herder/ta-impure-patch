@@ -550,8 +550,12 @@ tacli remote add <name> --ssh <user>@<host> [--key <file>] --from <player folder
   verb aimed at it refuses, `rm` included, until it is fixed or removed by hand; the loops over
   every instance (`ls`, the slot and window layout of a local launch) skip it with a warning, so
   it cannot block a local launch. The same holds for a remote instance whose `remote` record is
-  unusable. `save_meta` writes `instance.json.tmp` and moves it over the file, so a crash leaves
-  the old metadata or the new, never half.
+  unusable. `save_meta` writes a temporary file of its own beside it and moves it over the file,
+  so a crash, or two commands saving at once, leaves one whole file, never half.
+- **A metadata file that is gone is an instance that is not there.** It is only ever replaced
+  whole or removed by `rm`, so a reader reads it once, never tests and then reads, and takes a
+  missing file as no instance: `ls`, listing while another `tacli` removes an instance it has
+  just found, leaves that one out instead of failing.
 
 ### Routing
 
