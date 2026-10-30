@@ -4723,8 +4723,12 @@ renderer draw its units and ghosts.
   `part` (§2.12c) -- are drawn as 2D dots by the stage's ops in the range over the image, 2 × 2
   game pixels each, after the units; they take no depth and no fog shader, only the stage's own
   fog-cell test.
-- **Not done here**: 3D features in the image (a stage whose description names one falls back to
-  the whitebox; no stage names one); the wiki's device memory is computed from the sizes it
+- **3D features** (a wreck, a heap) are records of the unit pass, after the units in the opaque
+  window: `tagpu_wikiworld.c` `wrecks_build` walks each arena feature's model once a stage, every
+  node checked inside the arena as a type's run is, and `unit_one` draws it with no pose, nothing
+  hidden and `lit` 0, at the record `tagpu_wikiscene_models` makes ([the in-game wiki](ingame-wiki.html)).
+  A walk refused falls the ground back whole.
+- **Not done here**: the wiki's device memory is computed from the sizes it
   creates, not read back (the plan's section 1); the GDI lane draws no wiki at all; the poses'
   and the spray's cost -- the 80 KB pool and the 16 KB of particles in the record at every fill
   that shows the stage, every posed unit composed every frame -- is not measured.

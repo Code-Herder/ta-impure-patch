@@ -872,7 +872,8 @@ and the engine's fog; units still as whitebox boxes, now over the 3D ground (R2)
   orders them, and the atlas's border and pitch are the terrain pass's), and the features' own
   `TAGPU_GAFATLAS` (512 square, 128 entries, a key plane, no allowance) painted then, with every
   quad's six vertices as `emit_frame` makes them; every frame the fog grid and the three
-  hand-overs. A stage with a 3D feature falls back whole (no unit pass is drawn yet). The lever
+  hand-overs. A 3D feature is no part of the ground: the unit pass draws it (the reclaim entry's
+  L4, [its plan](ingame-wiki-reclaim-plan.html)). The lever
   `tagpu_wiki3d.on`: `off`, `nomap`, `nofeat`.
 - `src/tagpu_scene_wiki.h` (new): the seam's declarations of the wiki's world, terrain and feature
   entry points, written out and checked: `tagpu_wikiworld.c`, compiled with `TAGPU_SCENE_WIKI`,
@@ -979,8 +980,9 @@ the game's options give them; a type the running game does not have stays a box.
   on the engine's lit rows from its vertex normals, any other unit on the neutral row; a textured
   quad mapped and shaded over its own frame; the nanoframe's wire on the line grid thickened to
   `ss`.
-- 3D features through the unit path are **not built**: no stage names one, and both sides still
-  fall back to the whitebox for one.
+- 3D features through the unit path were built afterwards, by the reclaim entry's L4
+  ([its plan](ingame-wiki-reclaim-plan.html)): a record per standing feature, between the units and
+  the ghosts.
 
 **Invariants**: every node pointer handed to the wiki bake lies inside the arena, which the
 producer checks before the call (a bound on a value, not a probe); the wiki bake sees only the

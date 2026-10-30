@@ -72,7 +72,7 @@ rocks, ring and popup undrawn.
 | **The grown map** — LANDED 2026-10-29 with L1 | the owner's answer on the popup (below): with the sidebar a stage's map grows to the column (`tagpu_wiki_map_rows`, `sim.js` *THE MAP*), the descriptions' ground 48 rows deep, the column at most 768 rows, the game look and the DLL's world drawing the map's top rows, each minimap built on its map's rows; mockup and DLL both | `simcheck.mjs` on every pack (passes); `scenecheck.mjs` and `assetcheck.py`'s stages (pass on a tree without the reclaim entry); the sim, side and stage parity with L2's |
 | **L2** — LANDED 2026-10-29 with L1 and L3 | the DLL's simulation: `tagpu_wikisim.c` and the loaders (`tagpu_wikidata.c`: the entry's `features` table, a scene's `features`, `kind`, the inputs `reclaim` and `pick`, the key `e`, the layout's `key`, a cast's `canreclamate`). Everything sim.js gained that the C side must mirror: the feature table and its checks (`checkFeature`), blocking features in `siteOk`, the spawn and `bodies`; the sweep (`popup`, `keyPress`, `reclaimPress`/`Move`/`Release`, `sweepCommit`, `sweepSplit` from `tagpu_sweepgeo.c`); the feature reclaim order (`featWork`: the walk to touch, the countdown `trunc(15 + (e+m)/2)` taken 2 a call every 2 ticks, the payout, the spray while above 15, the kind-7 notice for a feature gone); the trips `reclaim` and `pick`; the sound `specialorders`; the view's `mode`, `feats`, `gone` and `reclaim` | `simparity.mjs` natively and `--wine`; `wikitest`'s malformed cases |
 | **L3** — LANDED 2026-10-29 with L1 and L2 | the DLL's drawing: the features on the whitebox ground and out of the 3D image once reclaimed, the sweep's brackets, ring, readout, popup and the kind's tag through the wiki's HUD ops, the game's `cursorreclamate`, E from Try it, the RECLAIM lock's badge | `stagecheck.mjs`; `wiki_regression.py` in all six compatibility setups; the demos watched in game |
-| **L4** — in progress, worktree-qol_shift | 3D wrecks on the stage, mockup and game, swapped into the three METAL demos (*L4: 3D wrecks*, below) | `simcheck.mjs`, `simparity.mjs`, `stagecheck.mjs`, `scenecheck.mjs`, `stage3dcheck.py`, `wiki_regression.py` in the six setups |
+| **L4** — LANDED 2026-10-29 | 3D wrecks on the stage, mockup and game, swapped into the three METAL demos (*L4: 3D wrecks*, below) | `simcheck.mjs`, `simparity.mjs`, `stagecheck.mjs`, `scenecheck.mjs`, `stage3dcheck.py`, `wiki_regression.py` in the six setups |
 
 ## L4: 3D wrecks
 
@@ -110,6 +110,31 @@ its own, at the feature depth `3 + 4·row` (`tagpu_native.c`, the husk gather).
    reclaimed ones left out by the view's `gone`, within `WIKIWORLD_FEAT3D`.
 5. **The checks.** `simcheck`'s METAL rules on wrecks, `scenecheck` pairs the records,
    `stage3dcheck.py` the image against the game's, and the regressions in the six setups.
+
+## What L4 built
+
+- **The data.** `features` rows take `object`, the section's model, which `checkFeature` and
+  `tagpu_wikidata.c` bound as a 1..31-byte name and `stagemap.py check` holds to the section's
+  `object=`. `gen-reclaim.mjs` adds six corpses (`armpw_dead`, `armham_dead`, `armllt_dead`,
+  `corak_dead`, `corck_dead`, `corthud_dead`, which block) and three heaps (`armpw_heap`,
+  `armllt_heap`, `corak_heap`, which do not), every figure as its section states it, and the scene
+  `field`: green's map and builders, the nine wrecks round cell (21, 10) where the rocks stand on
+  green, and trees 1, 4 and 2 among them. *A METAL ring*, *Shift queues another ring* and *Without
+  Shift it replaces* play `on: 'field'` with their captions saying wrecks; `stagemap.py`'s recipe
+  `field` is green's, and writes `reclaim.field.json`.
+- **The whitebox.** The view's feature carries `wreck` (its row names a model); the whitebox draws
+  a feature as a tree, a rock or a wreck (`#687078`, edge `#33383e`), `stage.js` `FEAT_WB` and
+  `tagpu_wikistage.c` by the same look. `simcheck.mjs` judges a ring's kinds by that look.
+- **The 3D.** `gfx.py` leaves a 3D feature out of the ground and packs its model as a mesh beside
+  the units (`feature:<object>`, owner 0, facts `feature`, no sound, no script), listing the
+  stage's `features3d`; `scene.js` `wrecks` and `tagpu_wikiscene_models` make a record per one
+  not reclaimed, after the units, by the engine's placement above; `tascene-render.js` keys a
+  feature record in the features' band (`tall0`). In the game `ground_build` sets them apart,
+  `wrecks_build` walks each model (every node inside the arena) and `unit_one` draws them unposed
+  and unlit; a walk refused falls the ground back whole, as a model `gfx.py` cannot resolve does.
+- **The checks.** `scenecheck.mjs` pairs the wreck records (527 over the three demos);
+  `wiki_regression.py units` captures *A METAL ring* at ticks 300 (nine standing) and 500 (two
+  reclaimed) against the mockup through `stage3dcheck.py`.
 
 ## What L1 built
 
@@ -173,7 +198,8 @@ its own, at the feature depth `3 + 4·row` (`tagpu_native.c`, the husk gather).
 ## Gaps open
 
 - Retail's E on a build page (decision 2).
-- 3D features (decision 3).
+- A wreck on the stage is not burnt, not damaged and leaves no heap when reclaimed: a reclaim
+  removes it whole, as it does a rock. The `nounit=` lever does not reach a wreck.
 - The popup is the whitebox's stand-in in the game too: Impure's own sweep art is not drawn on the
   stage.
 - `scenecheck.mjs` pairs the ground's quads once a stage, not a frame, so the 3D image's dropped

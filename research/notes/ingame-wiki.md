@@ -1252,10 +1252,10 @@ sweep's brackets, ring, readout and popup, the kind's tag at the cursor and the 
 |---|---|---|
 | 1 | E and a click | one ARMCK: reclaim armed, a click on the lone rock orders it and puts reclaim away, as stock's click does; the rock is reclaimed and gone |
 | 2 | Pick the kind | E steps METAL → ENERGY → ALL, the popup's lit bar and the cursor's tag following; a click on the popup's METAL row picks it |
-| 3 | A METAL ring | two ARMCK, METAL: the ring over the rock field brackets the rocks and leaves the three trees; the release shares the rocks out, nearest first |
+| 3 | A METAL ring | two ARMCK, METAL, on the `field` scene: the ring over a battle's wrecks brackets them and leaves the three trees among them; the release shares the wrecks out, nearest first |
 | 4 | An ENERGY ring | over the grove: only the trees are bracketed, the two rocks stay |
-| 5 | Shift queues another ring | two rings with Shift held: the second ring's targets go after the first's, reclaim stays armed, and letting go of Shift puts it away |
-| 6 | Without Shift it replaces | ARMCK has a route of three moves queued; a ring without Shift replaces them with the rocks |
+| 5 | Shift queues another ring | on `field`, two rings with Shift held: the second ring's targets go after the first's, reclaim stays armed, and letting go of Shift puts it away |
+| 6 | Without Shift it replaces | on `field`, ARMCK has a route of three moves queued; a ring without Shift replaces them with the wrecks |
 | 7 | Cancel | the cancel action mid-drag ends the ring and keeps reclaim armed; a ring over plain ground orders nothing and stays armed; a cancel outside a drag puts reclaim away |
 
 **Mods that lock it off:** none.
@@ -1279,7 +1279,23 @@ greenworld's own, every figure as `features\green\rocks.tdf` and `trees.tdf` sta
 | rock08 | 1 × 1 | 25 | | 10 |
 | tree1 .. tree5 | 1 × 1 | | 250 | 40 |
 
-All block units and are reclaimable. A rock takes ARMCK `2 ⌈⌊15 + metal/2⌋ / 2⌉` ticks once it
+The `field` scene's wrecks are 3D features (each section names its model, `object=`), every figure
+as `features\corpses\arm_corpses.tdf`, `core_corpses.tdf`, `arm_heaps.tdf` and `core_heaps.tdf`
+state it, all 2 × 2:
+
+| Feature | Model | Metal | Height | Blocks |
+|---|---|---|---|---|
+| armpw_dead | armpw_dead | 42 | 40 | yes |
+| armham_dead | armham_dead | 121 | 40 | yes |
+| armllt_dead | armllt_dead | 210 | 20 | yes |
+| corak_dead | corak_dead | 45 | 20 | yes |
+| corck_dead | corck_dead | 104 | 20 | yes |
+| corthud_dead | corthud_dead | 118 | 20 | yes |
+| armpw_heap | 2x2f | 21 | 4 | no |
+| armllt_heap | 2x2b | 105 | 4 | no |
+| corak_heap | 2x2c | 22 | 4 | no |
+
+The rocks and trees all block units; every feature is reclaimable. A rock takes ARMCK `2 ⌈⌊15 + metal/2⌋ / 2⌉` ticks once it
 touches it (52 for rock4, 66 for rock2), a tree 140: the countdown is not scaled by WorkerTime
 (`exe-reverse-engineering.md`, the Reclaim handler `0x404AD0`).
 
@@ -2059,8 +2075,15 @@ addresses and the gaps).
   nanoframe's wire on the line grid thickened to `ss`. `stage3dcheck.py` compares the whole image
   with the game's own: see the 3D stage's plan, landing 6h, for what it measured, and the COB
   plan's *L3b's gate* for the image with the poses.
-- **A stage whose description names a 3D feature (a wreck) is drawn as the whitebox**, in the
-  game and in `gfx=game` alike: no stage names one.
+- **A 3D feature (a wreck, a heap: its section names a model) is drawn through the unit pass**,
+  in the game and in `gfx=game` alike: `gfx.py` packs its model as a mesh beside the units and
+  lists the stage's `features3d`, and `scene.js` `wrecks` and `tagpu_wikiscene_models` make a
+  record for each one the view has not reclaimed, between the units and the ghosts -- at its
+  footprint's centre, unturned, owner 0, on the neutral row, with no shadow, in the features'
+  depth band `3 + 4·row`, as `SpawnFeatureOnMap 0x423C50` places a map's and the native husk
+  gather draws it. A model that does not resolve falls the stage's ground back whole. The
+  whitebox draws one as its footprint in the wreck's grey. Reclaim's `field` stage is the one that
+  names them ([the reclaim entry's plan](ingame-wiki-reclaim-plan.html), L4).
 
 ## Open issues in the placement code
 
