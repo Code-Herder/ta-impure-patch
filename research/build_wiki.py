@@ -60,7 +60,6 @@ SUBTITLE = "How the Total Annihilation community adds engine features to a close
 PAGES = [
     ("project-map",                "Project map",                 "Overview"),
     ("roadmap",                    "GPU renderer roadmap",        "Overview"),
-    ("gpu-status",                 "GPU status, hooks & limits",  "Overview"),
     ("field-notes",                "Field notes & gotchas",       "Overview"),
 
     ("frame-composition",          "Frame composition (G3)",      "Renderer"),
@@ -87,6 +86,37 @@ PAGES = [
     ("frame-packet-exchange",      "Frame packet exchange (design)", "Renderer"),
     ("gpu-posing",                 "GPU posing for 3DOs (G16)",   "Renderer"),
     ("smooth-motion",              "Smooth unit movement & animation", "Renderer"),
+
+    ("modules/hook-map",                  "Hook map & fields we write", "Modules"),
+    ("modules/camera-zoom",               "Camera & zoom", "Modules"),
+    ("modules/markers",                   "World-space markers", "Modules"),
+    ("modules/engine-ui",                 "The engine's UI", "Modules"),
+    ("modules/colour",                    "Palette, Gamma & full colour", "Modules"),
+    ("modules/units",                     "Unit renderer", "Modules"),
+    ("modules/build-ghost",               "Build ghost", "Modules"),
+    ("modules/shadows",                   "Classic hard shadow", "Modules"),
+    ("modules/effects",                   "Effects' models", "Modules"),
+    ("modules/map-edge",                  "Mirrored map edge", "Modules"),
+    ("modules/restorer",                  "Restorer", "Modules"),
+    ("modules/vulkan-backend",            "Vulkan backend", "Modules"),
+    ("modules/golden-source",             "Golden source", "Modules"),
+    ("modules/readouts",                  "FPS readout & HUD scale", "Modules"),
+    ("modules/settings",                  "Defaults, settings & options screen", "Modules"),
+    ("modules/reclaim",                   "Deferred reclamation", "Modules"),
+    ("modules/recorder",                  "Recorder, playback & replay HUD", "Modules"),
+    ("modules/engine-patches",            "Raised limits & engine defects", "Modules"),
+    ("modules/tadr-exclusion",            "Keeping TADR out", "Modules"),
+    ("modules/data-keys",                 "Weapon keys & veterancy", "Modules"),
+    ("modules/cob-compat",                "Guarded COB compatibility", "Modules"),
+    ("modules/resource-snapping",         "Resource snapping & Quick Build", "Modules"),
+    ("modules/status-snapshot",           "Status snapshot (frozen)", "Modules"),
+    ("modules/log-g16-pose-race",         "Log: pose race (frozen)", "Modules"),
+    ("modules/log-frame-packet",          "Log: frame packet (frozen)", "Modules"),
+    ("modules/log-g19-vulkan-port",       "Log: G19 Vulkan port (frozen)", "Modules"),
+    ("modules/log-vulkan-only-1",         "Log: Vulkan-only 1 (frozen)", "Modules"),
+    ("modules/log-vulkan-only-2",         "Log: Vulkan-only 2 (frozen)", "Modules"),
+    ("modules/log-vulkan-only-3",         "Log: Vulkan-only 3 (frozen)", "Modules"),
+    ("gpu-status",                 "GPU status (retired index)", "Modules"),
 
     ("tacli-design",               "tacli — launcher & driver",   "Tooling"),
     ("capture-workflows",          "Capture workflows & limits", "Tooling"),
@@ -165,13 +195,14 @@ PAGES = [
 # "<folder>/<name>" and renders to site/<folder>/<name>.html, so a relative link between
 # notes is the same path in the repo and on the site. A note added to the folder is listed
 # in its section without being registered in PAGES; register it to choose its label and order.
-FOLDERS = {"tadr-port": "TADR port", "compat": "Compatibility"}
+FOLDERS = {"modules": "Modules", "tadr-port": "TADR port", "compat": "Compatibility"}
 
-SECTION_ORDER = ["Overview", "Renderer", "Tooling", "Mechanism", "TADR port", "Projects",
+SECTION_ORDER = ["Overview", "Renderer", "Modules", "Tooling", "Mechanism", "TADR port", "Projects",
                  "Compatibility", "Reference", "Survey"]
 SECTION_BLURB = {
     "Overview": "Where the project stands, and the gotchas that cost time",
     "Renderer": "The GPU renderer: TA's draw paths mapped, and our passes",
+    "Modules": "Each module of the DLL as it is now, one note each, edited in place — and the frozen landing logs",
     "Tooling": "Driving the game from a CLI — instances, input, UI, scenarios",
     "Mechanism": "How the patching actually works",
     "TADR port": "Bringing TADR's engine features into our stack — the rules, then one plan per feature group",

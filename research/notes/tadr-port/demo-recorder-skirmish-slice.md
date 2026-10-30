@@ -2059,7 +2059,7 @@ counted) and the names (`RK_COUNT_NAME`).
   functions. They chain after the puppet gates, so on a puppet they count only what the gates let
   through. The broadcast starts, the start sites, `QueryNanoPiece`, the order dispatch and the
   footprint writers count too, for S3c-3's UNCOVERED; nothing compares them.
-- **Sinks**: 21 count-only observers (the [hook map](../gpu-status.md#26e-the-demo-recorder-tagpu_recorderc-tagpu_recwriterc-every-game-by-default)):
+- **Sinks**: 21 count-only observers (the [hook map](../modules/recorder.md#26e-the-demo-recorder-tagpu_recorderc-tagpu_recwriterc-every-game-by-default)):
   the explosion add, the COB thread allocation keyed by the script's name (read only through the
   engine's own bound on the index), the four sound entries, the projectile init, the three shot
   paths, the impact `0x499EB0` and ten particle emitters. The plan's sink on the particle pool's
