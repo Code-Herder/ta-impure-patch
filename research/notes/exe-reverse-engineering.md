@@ -384,7 +384,7 @@ made, or its page cannot be made writable. Each, and why:
 | the reclaim's anchor mark `0x423892` | simulation | without it a group reclaim pays once per builder |
 | the saved features on the border `0x43265A` | simulation | a loaded game silently lacks the border's features; retail has no saved multiplayer game, so the class follows from what the fix changes, the game's own state |
 | a saved feature's record `0x4250C0`, `0x425185` | simulation | as the border fix |
-| whole build lists `0x42DA58`, `0x42DAC7`, `0x42BEAF`, `0x42BEC3` | simulation | a builder's list is what the AI's pick `0x40BDB0` and the build menu offer |
+| whole build lists `0x42DA58`, `0x42DAC7`, `0x42BEAF`, `0x42BEC3` | simulation | a builder's list is what the AI's pick `0x40BDB0` chooses from; the build menu does not read it (*A builder's build list*) |
 | the download menus `0x42DCF0` | simulation | its records feed the builders' lists (`0x42BE30`) and the build menus |
 | unique sync keys `0x42BD29` | simulation | a player without it keeps colliding keys, which the host's walk `0x46D9E3` answers with the first type that has them |
 | weapon IDs `0x42E468`, `0x49D280`, `0x424575`, `0x455FB8` | simulation | the `0x0F` hit flag is a wire format; in the raised build these are the raise's own rows |
@@ -577,13 +577,11 @@ cycles for water", which was never measured and is wrong; the pixel half of the 
   handled: `.hpi`, `.ufo`, `.ccx`, `.gp3`. The engine's hardcoded top-level directory
   names live in `.data`: `units` `0x503920`, `weapons` `0x50392C`, `features`
   `0x502C7C`, `scripts` `0x503740`. [VERIFIED]
-- **Whether the loader is table-driven — and thus whether a *new* archive type could
-  be registered — is NOT established.** Nobody has published the mount/enumeration
-  routine. The precise **override precedence order between archive types is also
-  unverified**: the definitive TAU thread on the subject
-  (`tauniverse.com/forum/showthread.php?t=39737`, "Requesting help about hpi, ccx,
-  gp3, ufo priorities") is behind Cloudflare and could not be read. Do not trust any
-  ordering rule you have not tested. [GAP]
+- **The mount routine and the precedence are now disassembled**: *Where the engine looks for
+  archives* (the mount order, `InitTAHPIAry 0x41D4C0`) and *How the engine resolves a path, a
+  unit's files and a model's textures* (loose first, then the first archive in mount order; each
+  path listed once in an enumeration). Whether a *new* archive type could be registered is not
+  established.
 - TA registers itself with DirectPlay under the exe name `totala.exe`
   (`ta-forever/gpgnet4ta`). [VERIFIED]
 
@@ -598,8 +596,8 @@ effect-pool limits; the HPI/SQSH format.
 **Folklore, or unverified** — the 0x90A50/0x90A60 unit-cap offsets (repeated
 everywhere, never with a disassembly justification); the semantics of most `+debug`
 commands; the "5000 unit patch" family, circulating as prebuilt binaries with no
-published byte tables; the ini keys' availability on retail v3.1; all archive
-precedence claims.
+published byte tables; the ini keys' availability on retail v3.1. (The archive precedence, once folklore, is
+disassembled: *How the engine resolves a path*.)
 
 **Heuristic:** a claim tracing to TADR source is testable and probably right — the code
 refuses to apply a patch whose `expected` bytes don't match. A forum post quoting a
@@ -612,8 +610,9 @@ file offset with no disassembly should be verified before you build on it.
    loadable into a disassembler. Reconstructing a symbol table from
    `HardCodeFunctions.cpp` + `tamem.h` would be a genuinely valuable, and quite
    mechanical, first contribution.
-2. **The archive mount routine and override precedence.** The highest-value unknown
-   for a modding project, and it is blocked partly by TAU being unreachable.
+2. **The archive mount routine and override precedence** — no longer a gap here: both are
+   disassembled in *Where the engine looks for archives* and *How the engine resolves a path, a
+   unit's files and a model's textures*.
 3. **The command table's own base address and length.** We know entries are
    `{name, fn, level}`, we know one entry's run-level byte is at `0x501DF4`, and we
    know how to *append* a table — but the built-in table's start address and entry

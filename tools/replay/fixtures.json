@@ -338,6 +338,14 @@
              [64, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "6296", "4900", "--unit", "41", "--expect", "ARMFAV"]]],
    "end": 525
   },
+  "cob-getters": {
+   "load": "replay-cob-getters.json",
+   "sources": ["tagpu/ddraw/src/tagpu_cob_safe.c", "tagpu/ddraw/inc/tagpu_cob_safe.h",
+               "tools/cob_ext_fixture.py", "research/notes/evidence/cobtrace/extension.bos"],
+   "steps": [[150, "run", ["tools/cob_ext_fixture.py", "check", "{instance}"]]],
+   "end": 1500,
+   "content": {"run": ["tools/cob_ext_fixture.py", "{gamedir}"], "files": ["cobext.ufo"]}
+  },
   "stock-teleport": {
    "load": "replay-teleport.json",
    "dll": "stock",
@@ -410,6 +418,10 @@
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
     "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_buildmenu.c",
+    "tagpu/ddraw/src/tagpu_buildmenu.h",
+    "tagpu/ddraw/src/tagpu_guifile.c",
+    "tagpu/ddraw/src/tagpu_guifile.h",
     "tagpu/ddraw/src/tagpu_profiles.c",
     "tagpu/ddraw/src/tagpu_profiles.h",
     "tagpu/ddraw/inc/tagpu_mod.h",
@@ -458,6 +470,10 @@
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
     "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_buildmenu.c",
+    "tagpu/ddraw/src/tagpu_buildmenu.h",
+    "tagpu/ddraw/src/tagpu_guifile.c",
+    "tagpu/ddraw/src/tagpu_guifile.h",
     "tagpu/ddraw/src/tagpu_profiles.c",
     "tagpu/ddraw/src/tagpu_profiles.h",
     "tagpu/ddraw/inc/tagpu_mod.h",
@@ -507,6 +523,10 @@
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
     "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_buildmenu.c",
+    "tagpu/ddraw/src/tagpu_buildmenu.h",
+    "tagpu/ddraw/src/tagpu_guifile.c",
+    "tagpu/ddraw/src/tagpu_guifile.h",
     "tagpu/ddraw/src/tagpu_profiles.c",
     "tagpu/ddraw/src/tagpu_profiles.h",
     "tagpu/ddraw/inc/tagpu_mod.h",
@@ -579,6 +599,10 @@
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
     "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_buildmenu.c",
+    "tagpu/ddraw/src/tagpu_buildmenu.h",
+    "tagpu/ddraw/src/tagpu_guifile.c",
+    "tagpu/ddraw/src/tagpu_guifile.h",
     "tagpu/ddraw/src/tagpu_profiles.c",
     "tagpu/ddraw/src/tagpu_profiles.h",
     "tagpu/ddraw/inc/tagpu_mod.h",
@@ -630,6 +654,10 @@
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
     "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_buildmenu.c",
+    "tagpu/ddraw/src/tagpu_buildmenu.h",
+    "tagpu/ddraw/src/tagpu_guifile.c",
+    "tagpu/ddraw/src/tagpu_guifile.h",
     "tagpu/ddraw/src/tagpu_profiles.c",
     "tagpu/ddraw/src/tagpu_profiles.h",
     "tagpu/ddraw/inc/tagpu_mod.h",
@@ -678,6 +706,10 @@
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
     "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_buildmenu.c",
+    "tagpu/ddraw/src/tagpu_buildmenu.h",
+    "tagpu/ddraw/src/tagpu_guifile.c",
+    "tagpu/ddraw/src/tagpu_guifile.h",
     "tagpu/ddraw/src/tagpu_profiles.c",
     "tagpu/ddraw/src/tagpu_profiles.h",
     "tagpu/ddraw/inc/tagpu_mod.h",
@@ -726,6 +758,10 @@
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
     "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_buildmenu.c",
+    "tagpu/ddraw/src/tagpu_buildmenu.h",
+    "tagpu/ddraw/src/tagpu_guifile.c",
+    "tagpu/ddraw/src/tagpu_guifile.h",
     "tagpu/ddraw/src/tagpu_profiles.c",
     "tagpu/ddraw/src/tagpu_profiles.h",
     "tagpu/ddraw/inc/tagpu_mod.h",
@@ -774,6 +810,10 @@
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
     "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_buildmenu.c",
+    "tagpu/ddraw/src/tagpu_buildmenu.h",
+    "tagpu/ddraw/src/tagpu_guifile.c",
+    "tagpu/ddraw/src/tagpu_guifile.h",
     "tagpu/ddraw/src/tagpu_profiles.c",
     "tagpu/ddraw/src/tagpu_profiles.h",
     "tagpu/ddraw/inc/tagpu_mod.h",
@@ -822,6 +862,10 @@
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
     "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_buildmenu.c",
+    "tagpu/ddraw/src/tagpu_buildmenu.h",
+    "tagpu/ddraw/src/tagpu_guifile.c",
+    "tagpu/ddraw/src/tagpu_guifile.h",
     "tagpu/ddraw/src/tagpu_profiles.c",
     "tagpu/ddraw/src/tagpu_profiles.h",
     "tagpu/ddraw/inc/tagpu_mod.h",
@@ -874,6 +918,10 @@
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
     "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_buildmenu.c",
+    "tagpu/ddraw/src/tagpu_buildmenu.h",
+    "tagpu/ddraw/src/tagpu_guifile.c",
+    "tagpu/ddraw/src/tagpu_guifile.h",
     "tagpu/ddraw/src/tagpu_profiles.c",
     "tagpu/ddraw/src/tagpu_profiles.h",
     "tagpu/ddraw/inc/tagpu_mod.h",
@@ -926,6 +974,10 @@
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
     "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_buildmenu.c",
+    "tagpu/ddraw/src/tagpu_buildmenu.h",
+    "tagpu/ddraw/src/tagpu_guifile.c",
+    "tagpu/ddraw/src/tagpu_guifile.h",
     "tagpu/ddraw/src/tagpu_profiles.c",
     "tagpu/ddraw/src/tagpu_profiles.h",
     "tagpu/ddraw/inc/tagpu_mod.h",
@@ -975,6 +1027,10 @@
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
     "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_buildmenu.c",
+    "tagpu/ddraw/src/tagpu_buildmenu.h",
+    "tagpu/ddraw/src/tagpu_guifile.c",
+    "tagpu/ddraw/src/tagpu_guifile.h",
     "tagpu/ddraw/src/tagpu_profiles.c",
     "tagpu/ddraw/src/tagpu_profiles.h",
     "tagpu/ddraw/inc/tagpu_mod.h",
@@ -1025,6 +1081,10 @@
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
     "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_buildmenu.c",
+    "tagpu/ddraw/src/tagpu_buildmenu.h",
+    "tagpu/ddraw/src/tagpu_guifile.c",
+    "tagpu/ddraw/src/tagpu_guifile.h",
     "tagpu/ddraw/src/tagpu_profiles.c",
     "tagpu/ddraw/src/tagpu_profiles.h",
     "tagpu/ddraw/inc/tagpu_mod.h",
@@ -1075,6 +1135,10 @@
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
     "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_buildmenu.c",
+    "tagpu/ddraw/src/tagpu_buildmenu.h",
+    "tagpu/ddraw/src/tagpu_guifile.c",
+    "tagpu/ddraw/src/tagpu_guifile.h",
     "tagpu/ddraw/src/tagpu_profiles.c",
     "tagpu/ddraw/src/tagpu_profiles.h",
     "tagpu/ddraw/inc/tagpu_mod.h",
@@ -1123,6 +1187,10 @@
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
     "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_buildmenu.c",
+    "tagpu/ddraw/src/tagpu_buildmenu.h",
+    "tagpu/ddraw/src/tagpu_guifile.c",
+    "tagpu/ddraw/src/tagpu_guifile.h",
     "tagpu/ddraw/src/tagpu_profiles.c",
     "tagpu/ddraw/src/tagpu_profiles.h",
     "tagpu/ddraw/inc/tagpu_mod.h",
@@ -1177,6 +1245,10 @@
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
     "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_buildmenu.c",
+    "tagpu/ddraw/src/tagpu_buildmenu.h",
+    "tagpu/ddraw/src/tagpu_guifile.c",
+    "tagpu/ddraw/src/tagpu_guifile.h",
     "tagpu/ddraw/src/tagpu_profiles.c",
     "tagpu/ddraw/src/tagpu_profiles.h",
     "tagpu/ddraw/inc/tagpu_mod.h",
@@ -1227,6 +1299,10 @@
    "sources": [
     "tagpu/ddraw/src/tagpu_resource.c",
     "tagpu/ddraw/src/tagpu_resource.h",
+    "tagpu/ddraw/src/tagpu_buildmenu.c",
+    "tagpu/ddraw/src/tagpu_buildmenu.h",
+    "tagpu/ddraw/src/tagpu_guifile.c",
+    "tagpu/ddraw/src/tagpu_guifile.h",
     "tagpu/ddraw/src/tagpu_profiles.c",
     "tagpu/ddraw/src/tagpu_profiles.h",
     "tagpu/ddraw/inc/tagpu_mod.h",
@@ -1277,6 +1353,56 @@
     "--gamedir",
     "{gamedir}"
    ]
+  },
+  "place-basic": {
+   "load": "place-basic.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_place.c",
+    "tagpu/ddraw/src/tagpu_place.h",
+    "tagpu/ddraw/src/tagpu_placegeo.c",
+    "tagpu/ddraw/src/tagpu_placegeo.h",
+    "tagpu/ddraw/src/tagpu_route.c",
+    "tagpu/ddraw/src/tagpu_route.h",
+    "tools/place_regression.py",
+    "tools/resource_regression.py"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/place_regression.py",
+      "{instance}",
+      "replay"
+     ]
+    ]
+   ],
+   "end": 2400
+  },
+  "sweep-basic": {
+   "load": "sweep-basic.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_route.c",
+    "tagpu/ddraw/src/tagpu_route.h",
+    "tagpu/ddraw/src/tagpu_sweep.c",
+    "tagpu/ddraw/src/tagpu_sweep.h",
+    "tagpu/ddraw/src/tagpu_sweepgeo.c",
+    "tagpu/ddraw/src/tagpu_sweepgeo.h",
+    "tools/sweep_regression.py",
+    "tools/resource_regression.py"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/sweep_regression.py",
+      "{instance}",
+      "replay"
+     ]
+    ]
+   ],
+   "end": 2400
   }
  },
  "broad": {

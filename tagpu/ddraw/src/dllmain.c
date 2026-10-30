@@ -10,6 +10,7 @@
 #include "config.h"
 #include "hook.h"
 #include "indeo.h"
+#include "tagpu_wiki.h"
 #include "tagpu_takeover.h"
 #include "tagpu_patches.h"
 #include "tagpu_limits.h"
@@ -26,6 +27,9 @@
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_resource.h"
+#include "tagpu_place.h"
+#include "tagpu_route.h"
+#include "tagpu_sweep.h"
 #include "tagpu_datakeys.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_recorder.h"
@@ -97,6 +101,10 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            After the config tool's return above, so opening the tool never rotates the
            player's logs. */
         tagpu_log_init();
+
+        /* tagpu: the in-game wiki's cursor lock (tagpu_wiki.h), which fake_GetCursorPos takes
+           once a DirectDraw object exists -- long after this. */
+        tagpu_wiki_init();
 
         /* tagpu: in a tacli test launch, TotalA.exe's registry is a file (tagpu_regstore.h).
            Before anything else of ours, and long before TotalA.exe's entry point: the
@@ -343,6 +351,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            disjoint from every detour above; `tagpu_menu.off` disables it. */
         tagpu_menu_init();
         tagpu_resource_init();
+        /* the in-play handler's shared hooks, before both of their clients (tagpu_route.h) */
+        tagpu_route_init();
+        /* after the resource module: its observer on 0x4197D0 must come first (tagpu_place.h) */
+        tagpu_place_init();
+        tagpu_sweep_init();
 
         /* tagpu: the frame packet's publisher (tagpu_packet_pub.h): ONE more
            observer on DrawGameScreen 0x468CF0, chained AFTER the menu's -- its

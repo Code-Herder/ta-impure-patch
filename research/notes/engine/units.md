@@ -613,8 +613,9 @@ mover's `0x2F` at `+0x118`; mover offsets below are the mover's own):
   a single at `[esp+0x24]`. With M the def's `+0x1FA` it takes `trunc(fn · M)` and `trunc(fo · M)`
   through `0x4E43A0` (`0x41BB72`, `0x41BB7D`) -- `fistp qword` under a control word with RC set to
   chop, so a truncation, of each single times M at the FPU's precision -- and their difference d
-  (`0x41BB8E..0x41BB90`). For an amount below 0 (an unbuild; the reclaim `0x41BCD0` passes
-  `−(def +0x1EA · n) / def +0x186`) it stores fn (`0x41BC16`) and the HP `max(movsx(+0x108) + d,
+  (`0x41BB8E..0x41BB90`). For an amount below 0 (an unbuild: `0x41BCD0`, called only by GetBuilt
+  at `0x402F6B`, passes `−(def +0x1EA · n) / def +0x186`; a reclaim never comes here, *A reclaimed
+  unit is never a nanoframe*) it stores fn (`0x41BC16`) and the HP `max(movsx(+0x108) + d,
   0)` (`0x41BBFA..0x41BC22`, `setle`/`dec`/`and`). For an amount of 0 or more it asks the builder's
   ledger (`0x4011C0`, `0x41BC60`) and only when that grants it stores the HP `movsx(+0x108) + d`
   capped at M by an unsigned compare (`cmp eax, ecx; jb` at `0x41BC7F`) and fn (`0x41BC96`); both
@@ -923,6 +924,21 @@ two bytes past the block (`0x42BEC3..0x42BED3`). The AI's pick `0x40BDB0`, its d
 `0x46887B..0x468982` and the uncalled `0x4894F0` loop to the count; the other readers test the
 pointer only ([limits-evidence §8](../tadr-port/limits-evidence.md) lists them). The def clone `0x42B370`
 runs before `0x42D9BB`/`0x42D9C7` zero the pair, and the teardown frees each copy (`0x42DC52`).
+
+- **Every builder gets a copy.** The pair is zeroed for every def, and a def with the builder bit
+  `+0x241 & 0x40` goes on to the copy (`0x42D9B5..0x42D9CD`). A builder with no `[CANBUILD]`
+  section, or no subsection of its own name in it, jumps past the reads straight to the copy
+  (`0x42D9EC`, `0x42DA01` → `0x42DAA7`) and gets a non-NULL block of count 0.
+- **The appender ignores MENU.** `0x42BE30` appends every download entry of the builder, whatever
+  its `MENU` (`0x42BE9E..0x42BED1`), so an entry with no `MENU`, which no build page shows, is still
+  on the list.
+- **No order is made from it.** The build menu's placement dispatch `0x419670` gives every selected
+  builder (`+0x241` bit `0x40`) a `MOBILEBUILD` or `VTOL_MOBILEBUILD` of `main+0x2CC4`
+  (`0x41975E..0x4197A9`) and reads no list; nor do the order roots or MobileBuild `0x403A20`.
+  Its walkers are the AI's (`0x40BDB0`, `0x408149`, `0x408781`), the debug listing and the
+  uncalled `0x4894F0`. So the list is what the AI builds from, not what a player's menu offers:
+  Impure's Quick Build reads each constructor's build menu instead (*The left sidebar*, below,
+  and *Resource placement and contextual order contracts*).
 
 **The fix**, `fix_build_list`: a block holding `n` entries has room for `bl_room(n)` — 30, then
 powers of two from 64 — and each writer grows its block through `0x4D83B0` before the entry that

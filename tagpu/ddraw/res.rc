@@ -4,6 +4,10 @@
 /* The replay HUD: art/hud/ packed by tools/hudpak.py (Makefile, THE HUD ARCHIVE). */
 HUDPAK RCDATA "inc/tagpu_hudpak.bin"
 
+/* The in-game wiki's tree, entries and window kit: art/wiki/ packed by tools/hudpak.py --set wiki
+   (Makefile, THE WIKI ARCHIVE). */
+WIKIPAK RCDATA "inc/tagpu_wikipak.bin"
+
 /* The Classic++ restorer's models: unditherer/models/<name>.w32.bin, zstd-compressed by the
    Makefile (THE RESTORER'S MODELS) and read by tagpu_restore_core.c load_weights. */
 RMODEL_FULL RCDATA "inc/tagpu_rmodel_full.zst"

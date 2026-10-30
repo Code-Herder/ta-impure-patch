@@ -1,0 +1,31 @@
+# log: run 20261027-194146-268 part 1 of tagpu_cobtrace.log, started 2026-10-27 19:41:46
+# tagpu_cobtrace v1	filter=,COBEXT,	columns: S tick unit type script slot source args… | R tick unit slot script value | X tick unit script source | K tick unit slot script by | D tick unit slot value | H tick unit slot script pc depth
+S	25	2	COBEXT	Create	0	E	
+S	25	2	COBEXT	sleeper	1	C:0	
+S	25	2	COBEXT	sleeper	2	C:0	
+S	25	2	COBEXT	sleeper	3	C:0	
+S	25	2	COBEXT	sleeper	4	C:0	
+S	25	2	COBEXT	sleeper	5	C:0	
+S	25	2	COBEXT	sleeper	6	C:0	
+S	25	2	COBEXT	sleeper	7	C:0	
+S	25	2	COBEXT	prober	8	C:0	
+S	25	2	COBEXT	min_id	9	L:8	
+R	25	2	9	min_id	1
+S	26	2	COBEXT	max_id	9	L:8	
+R	26	2	9	max_id	5000
+S	27	2	COBEXT	my_id	9	L:8	
+R	27	2	9	my_id	2
+S	28	2	COBEXT	my_owner	9	L:8	
+R	28	2	9	my_owner	0
+S	29	2	COBEXT	my_build_left	9	L:8	
+R	29	2	9	my_build_left	0
+S	30	2	COBEXT	nobodys_build_left	9	L:8	
+R	30	2	9	nobodys_build_left	-1
+S	31	2	COBEXT	allied_with_me	9	L:8	
+R	31	2	9	allied_with_me	1
+S	32	2	COBEXT	allied_past_the_array	9	L:8	
+R	32	2	9	allied_past_the_array	0
+S	33	2	COBEXT	mine_is_local	9	L:8	
+R	33	2	9	mine_is_local	1
+S	34	2	COBEXT	my_kills	9	L:8	
+R	34	2	9	my_kills	0

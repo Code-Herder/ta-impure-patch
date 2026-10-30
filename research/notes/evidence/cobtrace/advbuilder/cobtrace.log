@@ -1,0 +1,657 @@
+# log: run 20261027-193454-268 part 1 of tagpu_cobtrace.log, started 2026-10-27 19:34:54
+# tagpu_cobtrace v1	filter=,ARMACK,	columns: S tick unit type script slot source args… | R tick unit slot script value | X tick unit script source | K tick unit slot script by | D tick unit slot value | H tick unit slot script pc depth
+S	28	2	ARMACK	Create	0	E	
+S	28	2	ARMACK	InitState	1	L:0	
+R	28	2	1	InitState	0
+S	29	2	ARMACK	SmokeUnit	1	C:0	
+S	29	2	ARMACK	MotionControl	2	C:0	
+R	29	2	0	Create	0
+S	29	2	ARMACK	stand	0	L:2	
+S	29	2	ARMACK	StartMoving	3	E	
+R	29	2	3	StartMoving	0
+R	35	2	0	stand	0
+S	35	2	ARMACK	walk	0	L:2	
+R	64	2	0	walk	0
+S	64	2	ARMACK	walk	0	L:2	
+R	93	2	0	walk	0
+S	93	2	ARMACK	walk	0	L:2	
+R	122	2	0	walk	0
+S	122	2	ARMACK	walk	0	L:2	
+R	151	2	0	walk	0
+S	151	2	ARMACK	walk	0	L:2	
+R	180	2	0	walk	0
+S	180	2	ARMACK	walk	0	L:2	
+R	209	2	0	walk	0
+S	209	2	ARMACK	walk	0	L:2	
+S	224	2	ARMACK	StopMoving	3	E	
+R	224	2	3	StopMoving	0
+S	225	2	ARMACK	StartBuilding	3	E	1220
+S	226	2	ARMACK	RequestState	4	C:3	0
+R	226	2	3	StartBuilding	0
+S	226	2	ARMACK	Go	3	L:4	
+S	227	2	ARMACK	open	5	L:3	
+R	238	2	0	walk	0
+S	238	2	ARMACK	stand	0	L:2	
+R	245	2	0	stand	0
+S	245	2	ARMACK	stand	0	L:2	
+R	252	2	0	stand	0
+S	252	2	ARMACK	stand	0	L:2	
+R	259	2	0	stand	0
+S	259	2	ARMACK	stand	0	L:2	
+R	266	2	0	stand	0
+S	266	2	ARMACK	stand	0	L:2	
+R	273	2	0	stand	0
+S	273	2	ARMACK	stand	0	L:2	
+R	280	2	0	stand	0
+S	280	2	ARMACK	stand	0	L:2	
+R	287	2	0	stand	0
+S	287	2	ARMACK	stand	0	L:2	
+R	294	2	0	stand	0
+S	294	2	ARMACK	stand	0	L:2	
+R	294	2	5	open	0
+R	297	2	3	Go	0
+R	297	2	4	RequestState	0
+S	297	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	297	2	3	QueryNanoPiece	0
+S	298	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	298	2	3	QueryNanoPiece	0
+S	299	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	299	2	3	QueryNanoPiece	0
+S	300	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	300	2	3	QueryNanoPiece	0
+R	301	2	0	stand	0
+S	301	2	ARMACK	stand	0	L:2	
+S	301	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	301	2	3	QueryNanoPiece	0
+S	302	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	302	2	3	QueryNanoPiece	0
+S	303	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	303	2	3	QueryNanoPiece	0
+S	304	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	304	2	3	QueryNanoPiece	0
+S	305	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	305	2	3	QueryNanoPiece	0
+S	306	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	306	2	3	QueryNanoPiece	0
+S	307	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	307	2	3	QueryNanoPiece	0
+R	308	2	0	stand	0
+S	308	2	ARMACK	stand	0	L:2	
+S	308	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	308	2	3	QueryNanoPiece	0
+S	309	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	309	2	3	QueryNanoPiece	0
+S	310	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	310	2	3	QueryNanoPiece	0
+S	311	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	311	2	3	QueryNanoPiece	0
+S	312	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	312	2	3	QueryNanoPiece	0
+S	313	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	313	2	3	QueryNanoPiece	0
+S	314	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	314	2	3	QueryNanoPiece	0
+R	315	2	0	stand	0
+S	315	2	ARMACK	stand	0	L:2	
+S	315	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	315	2	3	QueryNanoPiece	0
+S	316	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	316	2	3	QueryNanoPiece	0
+S	317	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	317	2	3	QueryNanoPiece	0
+S	318	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	318	2	3	QueryNanoPiece	0
+S	319	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	319	2	3	QueryNanoPiece	0
+S	320	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	320	2	3	QueryNanoPiece	0
+S	321	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	321	2	3	QueryNanoPiece	0
+R	322	2	0	stand	0
+S	322	2	ARMACK	stand	0	L:2	
+S	322	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	322	2	3	QueryNanoPiece	0
+S	323	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	323	2	3	QueryNanoPiece	0
+S	324	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	324	2	3	QueryNanoPiece	0
+S	325	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	325	2	3	QueryNanoPiece	0
+S	326	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	326	2	3	QueryNanoPiece	0
+S	327	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	327	2	3	QueryNanoPiece	0
+S	328	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	328	2	3	QueryNanoPiece	0
+R	329	2	0	stand	0
+S	329	2	ARMACK	stand	0	L:2	
+S	329	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	329	2	3	QueryNanoPiece	0
+S	330	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	330	2	3	QueryNanoPiece	0
+S	331	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	331	2	3	QueryNanoPiece	0
+S	332	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	332	2	3	QueryNanoPiece	0
+S	333	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	333	2	3	QueryNanoPiece	0
+S	334	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	334	2	3	QueryNanoPiece	0
+S	335	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	335	2	3	QueryNanoPiece	0
+R	336	2	0	stand	0
+S	336	2	ARMACK	stand	0	L:2	
+S	336	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	336	2	3	QueryNanoPiece	0
+S	337	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	337	2	3	QueryNanoPiece	0
+S	338	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	338	2	3	QueryNanoPiece	0
+S	339	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	339	2	3	QueryNanoPiece	0
+S	340	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	340	2	3	QueryNanoPiece	0
+S	341	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	341	2	3	QueryNanoPiece	0
+S	342	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	342	2	3	QueryNanoPiece	0
+R	343	2	0	stand	0
+S	343	2	ARMACK	stand	0	L:2	
+S	343	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	343	2	3	QueryNanoPiece	0
+S	344	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	344	2	3	QueryNanoPiece	0
+S	345	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	345	2	3	QueryNanoPiece	0
+S	346	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	346	2	3	QueryNanoPiece	0
+S	347	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	347	2	3	QueryNanoPiece	0
+S	348	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	348	2	3	QueryNanoPiece	0
+S	349	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	349	2	3	QueryNanoPiece	0
+R	350	2	0	stand	0
+S	350	2	ARMACK	stand	0	L:2	
+S	350	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	350	2	3	QueryNanoPiece	0
+S	351	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	351	2	3	QueryNanoPiece	0
+S	352	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	352	2	3	QueryNanoPiece	0
+S	353	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	353	2	3	QueryNanoPiece	0
+S	354	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	354	2	3	QueryNanoPiece	0
+S	355	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	355	2	3	QueryNanoPiece	0
+S	356	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	356	2	3	QueryNanoPiece	0
+R	357	2	0	stand	0
+S	357	2	ARMACK	stand	0	L:2	
+S	357	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	357	2	3	QueryNanoPiece	0
+S	358	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	358	2	3	QueryNanoPiece	0
+S	359	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	359	2	3	QueryNanoPiece	0
+S	360	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	360	2	3	QueryNanoPiece	0
+S	361	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	361	2	3	QueryNanoPiece	0
+S	362	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	362	2	3	QueryNanoPiece	0
+S	363	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	363	2	3	QueryNanoPiece	0
+R	364	2	0	stand	0
+S	364	2	ARMACK	stand	0	L:2	
+S	364	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	364	2	3	QueryNanoPiece	0
+S	365	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	365	2	3	QueryNanoPiece	0
+S	366	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	366	2	3	QueryNanoPiece	0
+S	367	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	367	2	3	QueryNanoPiece	0
+S	368	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	368	2	3	QueryNanoPiece	0
+S	369	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	369	2	3	QueryNanoPiece	0
+S	370	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	370	2	3	QueryNanoPiece	0
+R	371	2	0	stand	0
+S	371	2	ARMACK	stand	0	L:2	
+S	371	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	371	2	3	QueryNanoPiece	0
+S	372	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	372	2	3	QueryNanoPiece	0
+S	373	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	373	2	3	QueryNanoPiece	0
+S	374	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	374	2	3	QueryNanoPiece	0
+S	375	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	375	2	3	QueryNanoPiece	0
+S	376	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	376	2	3	QueryNanoPiece	0
+S	377	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	377	2	3	QueryNanoPiece	0
+R	378	2	0	stand	0
+S	378	2	ARMACK	stand	0	L:2	
+S	378	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	378	2	3	QueryNanoPiece	0
+S	379	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	379	2	3	QueryNanoPiece	0
+S	380	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	380	2	3	QueryNanoPiece	0
+S	381	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	381	2	3	QueryNanoPiece	0
+S	382	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	382	2	3	QueryNanoPiece	0
+S	383	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	383	2	3	QueryNanoPiece	0
+S	384	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	384	2	3	QueryNanoPiece	0
+R	385	2	0	stand	0
+S	385	2	ARMACK	stand	0	L:2	
+S	385	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	385	2	3	QueryNanoPiece	0
+S	386	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	386	2	3	QueryNanoPiece	0
+S	387	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	387	2	3	QueryNanoPiece	0
+S	388	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	388	2	3	QueryNanoPiece	0
+S	389	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	389	2	3	QueryNanoPiece	0
+S	390	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	390	2	3	QueryNanoPiece	0
+S	391	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	391	2	3	QueryNanoPiece	0
+R	392	2	0	stand	0
+S	392	2	ARMACK	stand	0	L:2	
+S	392	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	392	2	3	QueryNanoPiece	0
+S	393	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	393	2	3	QueryNanoPiece	0
+S	394	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	394	2	3	QueryNanoPiece	0
+S	395	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	395	2	3	QueryNanoPiece	0
+S	396	2	ARMACK	QueryNanoPiece	3	E	0,0,0,0
+R	396	2	3	QueryNanoPiece	0
+S	396	2	ARMACK	StopBuilding	3	E	
+S	397	2	ARMACK	RequestState	4	C:3	1
+R	397	2	3	StopBuilding	0
+S	397	2	ARMACK	Stop	3	L:4	
+R	399	2	0	stand	0
+S	399	2	ARMACK	stand	0	L:2	
+S	400	2	ARMACK	close	5	L:3	
+R	406	2	0	stand	0
+S	406	2	ARMACK	stand	0	L:2	
+R	413	2	0	stand	0
+S	413	2	ARMACK	stand	0	L:2	
+R	420	2	0	stand	0
+S	420	2	ARMACK	stand	0	L:2	
+R	427	2	0	stand	0
+S	427	2	ARMACK	stand	0	L:2	
+R	434	2	0	stand	0
+S	434	2	ARMACK	stand	0	L:2	
+R	441	2	0	stand	0
+S	441	2	ARMACK	stand	0	L:2	
+R	445	2	5	close	0
+R	446	2	3	Stop	0
+R	446	2	4	RequestState	0
+R	448	2	0	stand	0
+S	448	2	ARMACK	stand	0	L:2	
+R	455	2	0	stand	0
+S	455	2	ARMACK	stand	0	L:2	
+R	462	2	0	stand	0
+S	462	2	ARMACK	stand	0	L:2	
+R	469	2	0	stand	0
+S	469	2	ARMACK	stand	0	L:2	
+R	476	2	0	stand	0
+S	476	2	ARMACK	stand	0	L:2	
+R	483	2	0	stand	0
+S	483	2	ARMACK	stand	0	L:2	
+R	490	2	0	stand	0
+S	490	2	ARMACK	stand	0	L:2	
+R	497	2	0	stand	0
+S	497	2	ARMACK	stand	0	L:2	
+R	504	2	0	stand	0
+S	504	2	ARMACK	stand	0	L:2	
+R	511	2	0	stand	0
+S	511	2	ARMACK	stand	0	L:2	
+R	518	2	0	stand	0
+S	518	2	ARMACK	stand	0	L:2	
+R	525	2	0	stand	0
+S	525	2	ARMACK	stand	0	L:2	
+R	532	2	0	stand	0
+S	532	2	ARMACK	stand	0	L:2	
+R	539	2	0	stand	0
+S	539	2	ARMACK	stand	0	L:2	
+R	546	2	0	stand	0
+S	546	2	ARMACK	stand	0	L:2	
+R	553	2	0	stand	0
+S	553	2	ARMACK	stand	0	L:2	
+R	560	2	0	stand	0
+S	560	2	ARMACK	stand	0	L:2	
+R	567	2	0	stand	0
+S	567	2	ARMACK	stand	0	L:2	
+R	574	2	0	stand	0
+S	574	2	ARMACK	stand	0	L:2	
+R	581	2	0	stand	0
+S	581	2	ARMACK	stand	0	L:2	
+R	588	2	0	stand	0
+S	588	2	ARMACK	stand	0	L:2	
+R	595	2	0	stand	0
+S	595	2	ARMACK	stand	0	L:2	
+R	602	2	0	stand	0
+S	602	2	ARMACK	stand	0	L:2	
+R	609	2	0	stand	0
+S	609	2	ARMACK	stand	0	L:2	
+R	616	2	0	stand	0
+S	616	2	ARMACK	stand	0	L:2	
+R	623	2	0	stand	0
+S	623	2	ARMACK	stand	0	L:2	
+R	630	2	0	stand	0
+S	630	2	ARMACK	stand	0	L:2	
+R	637	2	0	stand	0
+S	637	2	ARMACK	stand	0	L:2	
+R	644	2	0	stand	0
+S	644	2	ARMACK	stand	0	L:2	
+R	651	2	0	stand	0
+S	651	2	ARMACK	stand	0	L:2	
+R	658	2	0	stand	0
+S	658	2	ARMACK	stand	0	L:2	
+R	665	2	0	stand	0
+S	665	2	ARMACK	stand	0	L:2	
+R	672	2	0	stand	0
+S	672	2	ARMACK	stand	0	L:2	
+R	679	2	0	stand	0
+S	679	2	ARMACK	stand	0	L:2	
+R	686	2	0	stand	0
+S	686	2	ARMACK	stand	0	L:2	
+R	693	2	0	stand	0
+S	693	2	ARMACK	stand	0	L:2	
+R	700	2	0	stand	0
+S	700	2	ARMACK	stand	0	L:2	
+R	707	2	0	stand	0
+S	707	2	ARMACK	stand	0	L:2	
+R	714	2	0	stand	0
+S	714	2	ARMACK	stand	0	L:2	
+R	721	2	0	stand	0
+S	721	2	ARMACK	stand	0	L:2	
+R	728	2	0	stand	0
+S	728	2	ARMACK	stand	0	L:2	
+R	735	2	0	stand	0
+S	735	2	ARMACK	stand	0	L:2	
+R	742	2	0	stand	0
+S	742	2	ARMACK	stand	0	L:2	
+R	749	2	0	stand	0
+S	749	2	ARMACK	stand	0	L:2	
+R	756	2	0	stand	0
+S	756	2	ARMACK	stand	0	L:2	
+R	763	2	0	stand	0
+S	763	2	ARMACK	stand	0	L:2	
+R	770	2	0	stand	0
+S	770	2	ARMACK	stand	0	L:2	
+R	777	2	0	stand	0
+S	777	2	ARMACK	stand	0	L:2	
+R	784	2	0	stand	0
+S	784	2	ARMACK	stand	0	L:2	
+R	791	2	0	stand	0
+S	791	2	ARMACK	stand	0	L:2	
+R	798	2	0	stand	0
+S	798	2	ARMACK	stand	0	L:2	
+R	805	2	0	stand	0
+S	805	2	ARMACK	stand	0	L:2	
+R	812	2	0	stand	0
+S	812	2	ARMACK	stand	0	L:2	
+R	819	2	0	stand	0
+S	819	2	ARMACK	stand	0	L:2	
+R	826	2	0	stand	0
+S	826	2	ARMACK	stand	0	L:2	
+R	833	2	0	stand	0
+S	833	2	ARMACK	stand	0	L:2	
+R	840	2	0	stand	0
+S	840	2	ARMACK	stand	0	L:2	
+R	847	2	0	stand	0
+S	847	2	ARMACK	stand	0	L:2	
+R	854	2	0	stand	0
+S	854	2	ARMACK	stand	0	L:2	
+R	861	2	0	stand	0
+S	861	2	ARMACK	stand	0	L:2	
+R	868	2	0	stand	0
+S	868	2	ARMACK	stand	0	L:2	
+R	875	2	0	stand	0
+S	875	2	ARMACK	stand	0	L:2	
+R	882	2	0	stand	0
+S	882	2	ARMACK	stand	0	L:2	
+R	889	2	0	stand	0
+S	889	2	ARMACK	stand	0	L:2	
+R	896	2	0	stand	0
+S	896	2	ARMACK	stand	0	L:2	
+R	903	2	0	stand	0
+S	903	2	ARMACK	stand	0	L:2	
+R	910	2	0	stand	0
+S	910	2	ARMACK	stand	0	L:2	
+R	917	2	0	stand	0
+S	917	2	ARMACK	stand	0	L:2	
+R	924	2	0	stand	0
+S	924	2	ARMACK	stand	0	L:2	
+R	931	2	0	stand	0
+S	931	2	ARMACK	stand	0	L:2	
+R	938	2	0	stand	0
+S	938	2	ARMACK	stand	0	L:2	
+R	945	2	0	stand	0
+S	945	2	ARMACK	stand	0	L:2	
+R	952	2	0	stand	0
+S	952	2	ARMACK	stand	0	L:2	
+R	959	2	0	stand	0
+S	959	2	ARMACK	stand	0	L:2	
+R	966	2	0	stand	0
+S	966	2	ARMACK	stand	0	L:2	
+R	973	2	0	stand	0
+S	973	2	ARMACK	stand	0	L:2	
+R	980	2	0	stand	0
+S	980	2	ARMACK	stand	0	L:2	
+R	987	2	0	stand	0
+S	987	2	ARMACK	stand	0	L:2	
+R	994	2	0	stand	0
+S	994	2	ARMACK	stand	0	L:2	
+R	1001	2	0	stand	0
+S	1001	2	ARMACK	stand	0	L:2	
+R	1008	2	0	stand	0
+S	1008	2	ARMACK	stand	0	L:2	
+R	1015	2	0	stand	0
+S	1015	2	ARMACK	stand	0	L:2	
+R	1022	2	0	stand	0
+S	1022	2	ARMACK	stand	0	L:2	
+R	1029	2	0	stand	0
+S	1029	2	ARMACK	stand	0	L:2	
+R	1036	2	0	stand	0
+S	1036	2	ARMACK	stand	0	L:2	
+R	1043	2	0	stand	0
+S	1043	2	ARMACK	stand	0	L:2	
+R	1050	2	0	stand	0
+S	1050	2	ARMACK	stand	0	L:2	
+R	1057	2	0	stand	0
+S	1057	2	ARMACK	stand	0	L:2	
+R	1064	2	0	stand	0
+S	1064	2	ARMACK	stand	0	L:2	
+R	1071	2	0	stand	0
+S	1071	2	ARMACK	stand	0	L:2	
+R	1078	2	0	stand	0
+S	1078	2	ARMACK	stand	0	L:2	
+R	1085	2	0	stand	0
+S	1085	2	ARMACK	stand	0	L:2	
+R	1092	2	0	stand	0
+S	1092	2	ARMACK	stand	0	L:2	
+R	1099	2	0	stand	0
+S	1099	2	ARMACK	stand	0	L:2	
+R	1106	2	0	stand	0
+S	1106	2	ARMACK	stand	0	L:2	
+R	1113	2	0	stand	0
+S	1113	2	ARMACK	stand	0	L:2	
+R	1120	2	0	stand	0
+S	1120	2	ARMACK	stand	0	L:2	
+R	1127	2	0	stand	0
+S	1127	2	ARMACK	stand	0	L:2	
+R	1134	2	0	stand	0
+S	1134	2	ARMACK	stand	0	L:2	
+R	1141	2	0	stand	0
+S	1141	2	ARMACK	stand	0	L:2	
+R	1148	2	0	stand	0
+S	1148	2	ARMACK	stand	0	L:2	
+R	1155	2	0	stand	0
+S	1155	2	ARMACK	stand	0	L:2	
+R	1162	2	0	stand	0
+S	1162	2	ARMACK	stand	0	L:2	
+R	1169	2	0	stand	0
+S	1169	2	ARMACK	stand	0	L:2	
+R	1176	2	0	stand	0
+S	1176	2	ARMACK	stand	0	L:2	
+R	1183	2	0	stand	0
+S	1183	2	ARMACK	stand	0	L:2	
+R	1190	2	0	stand	0
+S	1190	2	ARMACK	stand	0	L:2	
+R	1197	2	0	stand	0
+S	1197	2	ARMACK	stand	0	L:2	
+R	1204	2	0	stand	0
+S	1204	2	ARMACK	stand	0	L:2	
+R	1211	2	0	stand	0
+S	1211	2	ARMACK	stand	0	L:2	
+R	1218	2	0	stand	0
+S	1218	2	ARMACK	stand	0	L:2	
+R	1225	2	0	stand	0
+S	1225	2	ARMACK	stand	0	L:2	
+R	1232	2	0	stand	0
+S	1232	2	ARMACK	stand	0	L:2	
+R	1239	2	0	stand	0
+S	1239	2	ARMACK	stand	0	L:2	
+R	1246	2	0	stand	0
+S	1246	2	ARMACK	stand	0	L:2	
+R	1253	2	0	stand	0
+S	1253	2	ARMACK	stand	0	L:2	
+R	1260	2	0	stand	0
+S	1260	2	ARMACK	stand	0	L:2	
+R	1267	2	0	stand	0
+S	1267	2	ARMACK	stand	0	L:2	
+R	1274	2	0	stand	0
+S	1274	2	ARMACK	stand	0	L:2	
+R	1281	2	0	stand	0
+S	1281	2	ARMACK	stand	0	L:2	
+R	1288	2	0	stand	0
+S	1288	2	ARMACK	stand	0	L:2	
+R	1295	2	0	stand	0
+S	1295	2	ARMACK	stand	0	L:2	
+R	1302	2	0	stand	0
+S	1302	2	ARMACK	stand	0	L:2	
+R	1309	2	0	stand	0
+S	1309	2	ARMACK	stand	0	L:2	
+R	1316	2	0	stand	0
+S	1316	2	ARMACK	stand	0	L:2	
+R	1323	2	0	stand	0
+S	1323	2	ARMACK	stand	0	L:2	
+R	1330	2	0	stand	0
+S	1330	2	ARMACK	stand	0	L:2	
+R	1337	2	0	stand	0
+S	1337	2	ARMACK	stand	0	L:2	
+R	1344	2	0	stand	0
+S	1344	2	ARMACK	stand	0	L:2	
+R	1351	2	0	stand	0
+S	1351	2	ARMACK	stand	0	L:2	
+R	1358	2	0	stand	0
+S	1358	2	ARMACK	stand	0	L:2	
+R	1365	2	0	stand	0
+S	1365	2	ARMACK	stand	0	L:2	
+R	1372	2	0	stand	0
+S	1372	2	ARMACK	stand	0	L:2	
+R	1379	2	0	stand	0
+S	1379	2	ARMACK	stand	0	L:2	
+R	1386	2	0	stand	0
+S	1386	2	ARMACK	stand	0	L:2	
+R	1393	2	0	stand	0
+S	1393	2	ARMACK	stand	0	L:2	
+R	1400	2	0	stand	0
+S	1400	2	ARMACK	stand	0	L:2	
+R	1407	2	0	stand	0
+S	1407	2	ARMACK	stand	0	L:2	
+R	1414	2	0	stand	0
+S	1414	2	ARMACK	stand	0	L:2	
+R	1421	2	0	stand	0
+S	1421	2	ARMACK	stand	0	L:2	
+R	1428	2	0	stand	0
+S	1428	2	ARMACK	stand	0	L:2	
+R	1435	2	0	stand	0
+S	1435	2	ARMACK	stand	0	L:2	
+R	1442	2	0	stand	0
+S	1442	2	ARMACK	stand	0	L:2	
+R	1449	2	0	stand	0
+S	1449	2	ARMACK	stand	0	L:2	
+R	1456	2	0	stand	0
+S	1456	2	ARMACK	stand	0	L:2	
+R	1463	2	0	stand	0
+S	1463	2	ARMACK	stand	0	L:2	
+R	1470	2	0	stand	0
+S	1470	2	ARMACK	stand	0	L:2	
+R	1477	2	0	stand	0
+S	1477	2	ARMACK	stand	0	L:2	
+R	1484	2	0	stand	0
+S	1484	2	ARMACK	stand	0	L:2	
+R	1491	2	0	stand	0
+S	1491	2	ARMACK	stand	0	L:2	
+R	1498	2	0	stand	0
+S	1498	2	ARMACK	stand	0	L:2	
+R	1505	2	0	stand	0
+S	1505	2	ARMACK	stand	0	L:2	
+R	1512	2	0	stand	0
+S	1512	2	ARMACK	stand	0	L:2	
+R	1519	2	0	stand	0
+S	1519	2	ARMACK	stand	0	L:2	
+R	1526	2	0	stand	0
+S	1526	2	ARMACK	stand	0	L:2	
+R	1533	2	0	stand	0
+S	1533	2	ARMACK	stand	0	L:2	
+R	1540	2	0	stand	0
+S	1540	2	ARMACK	stand	0	L:2	
+R	1547	2	0	stand	0
+S	1547	2	ARMACK	stand	0	L:2	
+R	1554	2	0	stand	0
+S	1554	2	ARMACK	stand	0	L:2	
+R	1561	2	0	stand	0
+S	1561	2	ARMACK	stand	0	L:2	
+R	1568	2	0	stand	0
+S	1568	2	ARMACK	stand	0	L:2	
+R	1575	2	0	stand	0
+S	1575	2	ARMACK	stand	0	L:2	
+R	1582	2	0	stand	0
+S	1582	2	ARMACK	stand	0	L:2	
+R	1589	2	0	stand	0
+S	1589	2	ARMACK	stand	0	L:2	
+R	1596	2	0	stand	0
+S	1596	2	ARMACK	stand	0	L:2	
+R	1603	2	0	stand	0
+S	1603	2	ARMACK	stand	0	L:2	
+R	1610	2	0	stand	0
+S	1610	2	ARMACK	stand	0	L:2	
+R	1617	2	0	stand	0
+S	1617	2	ARMACK	stand	0	L:2	
+R	1624	2	0	stand	0
+S	1624	2	ARMACK	stand	0	L:2	
+R	1631	2	0	stand	0
+S	1631	2	ARMACK	stand	0	L:2	
+R	1638	2	0	stand	0
+S	1638	2	ARMACK	stand	0	L:2	
+R	1645	2	0	stand	0
+S	1645	2	ARMACK	stand	0	L:2	
+R	1652	2	0	stand	0
+S	1652	2	ARMACK	stand	0	L:2	
+R	1659	2	0	stand	0
+S	1659	2	ARMACK	stand	0	L:2	
+R	1666	2	0	stand	0
+S	1666	2	ARMACK	stand	0	L:2	
+R	1673	2	0	stand	0
+S	1673	2	ARMACK	stand	0	L:2	
+R	1680	2	0	stand	0
+S	1680	2	ARMACK	stand	0	L:2	

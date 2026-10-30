@@ -125,25 +125,43 @@ typedef struct {
      HOP_LINE   a straight stroke with butt ends, from (r.x, r.y) to (r.x + r.w, r.y + r.h), `size`
                 units wide: an SVG <line>;
      HOP_CHART  the chart's lines (HUDOPS `chart`) in the box r, every group composited in order
-                and the whole at the op's opacity: an SVG <g opacity> of polylines. */
-enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART };
+                and the whole at the op's opacity: an SVG <g opacity> of polylines;
+     HOP_SIDE   the in-game wiki stage's left sidebar, composed in the running mod's pictures
+                (tagpu_wikiside.h): the top-left `size` x `shade` texels of HUD_TEX_SIDE drawn
+                whole into r, sampled nearest, as HOPF_SPRITE draws a cell (tagpu_wikistage.c). */
+enum { HOP_PART, HOP_SOLID, HOP_DOT, HOP_TEXT, HOP_HOT, HOP_LINE, HOP_CHART, HOP_SIDE };
 #define HOPF_DIM    1u      /* the dim filter of a player who is out (layout.json `dim`) */
 #define HOPF_SHADE  2u      /* HOP_SOLID: an inner shadow `shade` units deep, black 55 % */
 #define HOPF_RING   4u      /* HOP_SOLID: an inset edge `size` units deep inside r, drawn as
                                four solids between r and r inset by `size`, every edge snapped
-                               once and shared by the sides that meet on it (tagpu_huddraw.c) */
+                               once and shared by the sides that meet on it (tagpu_huddraw.c).
+                               HOP_DOT: the band `size` units deep inside the circle inscribed in
+                               r, unsnapped as a canvas arc is -- a canvas arc's stroke, or, as
+                               deep as the radius, its fill (tagpu_wikistage.c) */
 #define HOPF_DROP   8u      /* HOP_SOLID: CSS box-shadow 0 `size` `shade` round the box r, in the
                                op's colour, painted outside r only */
 #define HOPF_BASE   16u     /* HOP_TEXT: an SVG <text>, r.x its anchor and r.y its baseline;
                                `centre` is its text-anchor, 0 start, 1 middle, 2 end */
 #define HOPF_TOP    32u     /* an op of the top layer, drawn after the engine's UI */
+#define HOPF_INK    64u     /* HOP_TEXT: in its runs' colour with neither the style's shadow nor
+                               its outline: the dark ink of text on a light face (tagpu_wikilay.c) */
+#define HOPF_SPRITE 128u    /* HOP_PART: not a kit part but cell `part` of the sprite sheet
+                               (HUD_TEX_SPRITE), its top-left `size` x `shade` texels drawn whole
+                               into r, sampled nearest: a game cursor (tagpu_wikistage.c) */
+
+/* THE SPRITE SHEET: HUD_SPRITE_CELLS cells of HUD_SPRITE_CELL x HUD_SPRITE_CELL RGBA texels side by
+   side, a frame in the top left of its cell. TA's largest cursor frame is 52 x 53; the stage's
+   shapes take 20 frames of retail's cursors.gaf (cursornormal 1, cursormove 8, cursorreclamate 11). */
+#define HUD_SPRITE_CELL   64
+#define HUD_SPRITE_CELLS  32
 
 typedef struct {
     uint8_t  kind, flags;
     int16_t  part;          /* HOP_PART: the kit index                                    */
     HUDRECT  r;
     HUDRECT  clip;          /* w < 0: none                                                */
-    uint32_t rgba;          /* HOP_SOLID, HOP_DOT: the colour; HOP_PART: 0xFFFFFF00 | opacity */
+    uint32_t rgba;          /* HOP_SOLID, HOP_DOT, HOP_LINE: the colour; HOP_PART, HOP_TEXT:
+                               0xFFFFFF00 | opacity                                          */
     float    shade;         /* HOPF_SHADE                                                 */
     int16_t  style;         /* HOP_TEXT: the style's index in layout.json `styles`        */
     uint8_t  centre;        /* HOP_TEXT: 1 centred, 2 to the box's right, 0 from its left */
@@ -254,6 +272,16 @@ typedef int (*HUDPNGSIZE)(void* ctx, const char* part, int* w, int* h);
 HUDLAY*           tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, size_t nkit,
                                     HUDPNGSIZE png_size, void* ctx, char* err, size_t errn);
 void              tagpu_hudlay_free(HUDLAY* l);
+/* A kit with no layout -- the in-game wiki's (tagpu_hudart.c, tagpu_wikilay.c) -- parsed by the
+   same part reader: its parts, and, when `styles` is not NULL, the styles and the measure of that
+   loaded layout, whose faces draw its text and which must outlive this one. NULL with the reason
+   in `err`. Never built with: it has no layout to build, so tagpu_hudlay_build must never be given
+   it; tagpu_hudlay_expand, _nparts and _part read only the parts. */
+HUDLAY*           tagpu_hudlay_load_kit(const HUDLAY* styles, const char* kit, size_t nkit,
+                                        HUDPNGSIZE png_size, void* ctx, char* err, size_t errn);
+/* A part's index in the kit, a style's in `styles` (HUDGLOBALS.style), by name; -1 when absent. */
+int               tagpu_hudlay_part_index(const HUDLAY* l, const char* name);
+int               tagpu_hudlay_style_index(const HUDLAY* l, const char* name);
 /* How wide a string is set in style `style` (HUDGLOBALS.style) at `size` units, in units: the
    faces' measure (tagpu_hudtext_width), which the layout itself has no faces for. A box sized
    to its text -- the toast -- asks it; until it is given one, such a box keeps its least width.

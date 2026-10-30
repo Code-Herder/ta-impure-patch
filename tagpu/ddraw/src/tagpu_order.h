@@ -35,14 +35,16 @@
    measured in ui-markers.md 6.2, where clearing on the way in put a hole in
    11% of presents because the engine runs this block ~83 times per frame.
 
-   NATIVE RESOLUTION, DELIBERATELY. The markers are re-drawn as geometry, not
+   NATIVE RESOLUTION, DELIBERATELY. The lines are re-drawn as geometry, not
    as magnified 1997 art: real arcs instead of the engine's 16 chords, one
-   SCREEN pixel of line width at any zoom, a round dot where `pathicon` put one
-   and a crosshair on the engine's own animation phase where `cursor_ary` put
-   one. Same spacing (one dot per 48 world px), same phase (+48 px per 30
-   ticks), same colours — the dot and crosshair inks are read out of the GAF
-   frames the engine would have blitted. It is TA's iconography drawn properly,
-   not a restyle; the rest of the HUD is still TA's art.
+   SCREEN pixel of line width at any zoom. The route dots and the waypoint
+   sprites are the engine's own art (`pathicon` and `cursor_ary`, decoded into
+   an atlas of ours, `tagpu_order_art`) drawn at their own size, one texel a
+   screen pixel at every zoom, so at 1x they are the engine's picture. What a
+   zoom does to the route line is research/notes/tascene-design.md's *The
+   order markers*: the dots stay on the map, their spacing follows the zoom by
+   whole doublings, and the dots a change of spacing adds or drops fade in or
+   out over 300 ms, so a zoom slides no dot and leaves none part-visible.
 
    THE SHOWRANGES LABELS. Every circle both limbs draw carries the engine's own
    label string at the engine's own point on it, rasterised through TA's
@@ -88,9 +90,23 @@ int  tagpu_order_copy_builds(TAGPU_PK_BUILD* dst, int max);
    sprite reached by delegation from the route-dot drawer). Inert otherwise. */
 void tagpu_order_trace_drawer(int bit, const void* node, const int* pos, int flag);
 
+/* THE ORDER ART: every frame of the cursor table's sequences (`cursor_ary`,
+   `main+0x1487F`, the route dot `pathicon` at index 21), one PALETTE INDEX a
+   texel in a TAGPU_ORDART_W x TAGPU_ORDART_H atlas, every texel a frame does
+   not draw holding `*key`. Written once, on the game thread, and never again:
+   NULL until then, the finished bytes after (tagpu_order.c, `art_build`). */
+#define TAGPU_ORDART_W 512
+#define TAGPU_ORDART_H 512
+typedef struct TAGPU_ORDART_FRAME {
+    short          x, y, w, h;      /* its texels in the atlas               */
+    short          hx, hy;          /* the hotspot: the anchor's texel       */
+    unsigned short dur;             /* 30 Hz ticks it is shown               */
+} TAGPU_ORDART_FRAME;
+const unsigned char* tagpu_order_art(int* key);
+
 /* ---- present thread ---- */
 /* Walk the published arena and emit this frame's marker geometry through
-   tagpu_mark.c's line and triangle buckets. Returns the number of arena
+   tagpu_mark.c's line, art and text buckets. Returns the number of arena
    records drawn. Called from tagpu_mark_gather, because the geometry lands in
    that pass's buckets and its draw slot is the engine's own. */
 int  tagpu_order_gather(const TAGPU_FXVIEW* v);

@@ -924,7 +924,14 @@ is latched here, not in any `.GUI` gadget record. The frame packet carries it as
 **`0x4197D0` — who fills `0x2C92..0x2CA6`: the footprint snapped around the world point
 [DISASSEMBLED 2026-09-23; MEASURED the same day].** `cdecl()`, no arguments, `ret`. Two call
 sites, both behind "pointer on the world (`0x2CC6` bit 1) and mode `0x0E`": `0x499241` in the
-mode-6 mouse handler, right after `0x498DA0`, and `0x491CDB` inside `0x491CC0` (`ret 4`). It
+mode-6 mouse handler, right after `0x498DA0` (the bit tested at `0x499236`, the mode at `0x499238`), and `0x491CDB` inside `0x491CC0` (`ret 4`).
+`0x491CC0` itself has no `call` and no jump in `.text` and no absolute reference anywhere in the
+file [DISASSEMBLED 2026-10-25: an instruction-level scan and a scan for the four-byte literal], so
+in the engine `0x499241` is the one caller that runs; Impure's resource gate on `0x498F70` calls
+it once more before a mode-14 left click (`tagpu_resource.c`, `click`). **It is not
+re-entrant**: its only calls are the site test at `0x4198C6`, `0x47C780` (`0x4198F5`) and
+`0x47D820` (`0x4198FE`); stock `0x47D2E0` calls only `0x485010`, which calls nothing, and the other
+two call nothing, so nothing under it reaches either caller. It
 reads nothing about the screen — only the world point `main+0x2CAA` that `0x498DA0` just
 left there (x, y, z in 16.16) — so **the square follows the world point, and every question of
 where it lands relative to the pointer is a question about `0x498DA0`'s input and about where
@@ -947,14 +954,19 @@ return ok
 So the square's centre is within **8 world px** of the world point on each axis, at every zoom:
 that is the snap, and at 7.7× it is up to 62 screen px. Measured at 1920×1080 on `ARMSOLAR`
 (5×5 cells), the pointer's engine point at world x 1940: corners `1904..1984`, centre 1944. `0x47D2E0` is the site
-test (disassembled, *A queued site is taken ground*, below); `0x47C780` / `0x47D820` are the
-placement altitude for a valid and a blocked site *[INFERRED]* — neither was disassembled.
+test (disassembled, *A queued site is taken ground*, below); `0x47C780` is `mov eax,[0x51E684];
+ret`, the altitude the site test left in its scratch for a valid site, and `0x47D820` the
+altitude of a blocked one (both DISASSEMBLED; `0x47D820`'s walk is in the table of *Resource
+placement and contextual order contracts*).
 
 **A queued site is taken ground — `0x47D2E0`, the stamp `0x47CC30` and the click's orders
 [DISASSEMBLED 2026-09-29; MEASURED the same day].** The build cursor asks `0x47D2E0` (stdcall
 `(def, cell, 0, player)`, `ret 0x10`, the call at `0x4198C6`) and shows its answer as `main+0x2CC6`
 bit 6; a click on red plays `notoktobuild` (`0x509650`) and orders nothing (`0x498F86` →
-`0x499016`), on green `0x419670` issues the order. The test walks the footprint's cells and, per cell,
+`0x499016`), on green `0x419670` issues the order. The test is `0x498F86 test byte
+[main+0x2CC6],0x40 / je 0x499016`: bit 6 **set** means the site is free, and the click falls
+through to `0x419670` (`0x498F98`) and `oktobuild` (`0x509660`, `0x47F1A0` at `0x498FA4`); bit 6
+clear takes the refusal, which keeps the mode. The test walks the footprint's cells and, per cell,
 takes the def's yardmap byte (`def+0x14E`, `fx·fz` bytes, row-major): a byte with bit 2 or 4 whose
 cell's unit word (`+0x00`) is non-zero and not the caller's own id refuses the site (`0x47D54C..0x47D561`).
 That word is written by the stamp `0x47CC30` of a unit that exists, into the cells whose byte has bit 4
@@ -968,15 +980,25 @@ What a click orders, for the queue's sake. `0x419670` orders each unit of the co
 (`main+0x2A42`) that is selected (`+0x110` bit 4) and whose def has `+0x241` bit 6, with the action name
 `MOBILEBUILD` (`0x502654`) or, when the def's `+0x241` bit 11 is set, `VTOL_MOBILEBUILD` (`0x502640`),
 through `0x438760` and `0x43AFC0`; the position is `((2·cx + fx) << 19, alt << 16, (2·cz + fz) << 19)`
-with `cx`, `cz` the footprint's first cell. `0x43AFC0` with Shift (the click's `+8` bit 2, the mouse
+with `cx`, `cz` the footprint's first cell. Those two flag tests (`0x419755`, `0x41976A`) are the
+only tests of a unit in `0x419670..0x4197C2`: **no alive (`+0x110` bit 28) or excluded (bit 14) test
+and no CANBUILD test**, so every selected builder of the block gets the order whatever its build
+list [DISASSEMBLED 2026-10-25]. Under stock input that set is one unit: the interface arms a
+building only with exactly one unit selected — MEASURED 2026-10-25, ARMCK and ARMCV selected
+together, or two ARMCK, give `ARMGEN.GUI` with ARMBUILD greyed, one ARMCK gives `ARMCK1.GUI` with
+ARMBUILD enabled — and a group recall disarms (*A build placement and the units it orders*,
+below). `0x438760` finds the descriptor through `0x4F8A70`, the C runtime's case-insensitive
+compare (it tests the locale at `0x52A010` first, `0x4F8A7C`), so `MOBILEBUILD` matches the
+descriptor named `MobileBuild`. `0x43AFC0` with Shift (the click's `+8` bit 2, the mouse
 message's `MK_SHIFT`) first scans the unit's `+0x5C` list for a node of the same action whose x and z lie
 within ±`0x100000` (16 world units) of the new position (`0x43B00F..0x43B029`) and, on a match,
-destroys it instead of adding one; without Shift `0x43ADC0` destroys every order of the unit whose flags
-`+0x42` lack bit 4. The descriptors (`0x4FC6E8` family, `+0x0C` mask, `+0x11` flags): MobileBuild mask `0x13`
+destroys it instead of adding one (the full predicate and the `0x40000` case: *Contextual
+cancellation through the native order roots*); without Shift `0x43ADC0` destroys every order of the
+unit whose flags `+0x42` lack bit 4. The descriptors (`0x4FC6E8` family, `+0x0C` mask, `+0x11` flags): MobileBuild mask `0x13`
 flags `0x100508`, VTOL_MobileBuild `0x03` / `0x100508`, HelpBuild `0x18` / `0x100208`, BuildingBuild `0x00` /
 `0x10010C` (bit 4 set: a factory's queue survives the wipe), BuildWeapon `0x00` / `0x0C0140`. A factory's or
 a mobile factory's queue is count nodes made with a NULL position, which `0x43A0C0` zeroes (`0x43A14E`).
-`0x4C1B80(0xF9)` (stdcall, `ret 4`) is `GetKeyState(VK_SHIFT)` through the table at `0x4C1C48` (`0x4C1BB5`),
+`0x4C1B80(0xF9)` (stdcall, `ret 4`) is `GetAsyncKeyState(VK_SHIFT)` (IAT `0x4FC350`) through the table at `0x4C1C48` (`0x4C1BB5`),
 the modifier test of the order mode's release (`0x4992E6`) and of the menu's ±5.
 
 **The fix** (`build_site_test`, `tagpu_patches.c`, local): the call at `0x4198C6` goes to a wrapper that
@@ -1031,6 +1053,13 @@ otherwise:    0xF
 and the inner rect, `{l+1, t+1, r-1, b-1}`, re-tests `main[0x2CC3]` at `0x469EF4`: build mode
 reuses the same colour byte, anything else takes `gui[0]`. So build placement is a 2 px
 single-colour outline and the band box is white over black.
+
+**One square, or one per site.** While a multi-building placement previews several sites
+(`tagpu_place.c`, [gpu-status §2.109](../gpu-status.html)), every site is drawn as this block draws
+its one square, in the site's GUI colour: on Vulkan the marker pass applies this gate and this
+projection to each site's rectangle; on GDI the redirect of both `0x4BF8C0` calls (`0x469EC5`,
+`0x469F1E`, `tagpu_markown.c`) draws, for each site, the engine's own rectangle moved by the
+site's offset from `main+0x2C92..0x2CA6`, so the engine's projection and inset stand.
 
 **`DrawTranspRectangle 0x4BF8C0`** — `stdcall(ctx, RECT*, colour) ret 0xC`. Two paths on
 `ctx == NULL` (`0x4BF8C6`): the null path fetches a global draw context through `0x4C5E70`
@@ -1389,6 +1418,65 @@ rewriting a handler dword in `.rdata` after `0x43C050` has run changes nothing.
 The engine indexes this with the raw type byte and no bound at all, here and at the three
 handler dispatches. With a live end pointer in `0x512348` the bound costs two loads, so ours
 takes it.
+
+**What each order type draws** [READ 2026-10-27 from the three `.rdata` sources at `0x4FC6E8`,
+`0x4FCA18` and `0x4FC490`, 25-byte stride, sorted by name as `0x43C050` sorts them]. Every record
+whose `+0x0C` mask or `+0x10` cursor index is non-zero; the 68th record, the empty-named one at
+`0x4FD288`, has neither. Mask bits are the walker's (`0x439B30`): `0x01` build-site rect, `0x02`
+target sprite plus the route dots for the hovered unit, `0x04` target circle, `0x08` target sprite,
+`0x10` range circles. **No stock record sets `0x04`**, so the target-circle drawer `0x4399F0` is
+reached by no order in an unmodified game. Cursor names are `cursor_ary`'s (below).
+
+| Mask | Cursor | Order types (type byte) |
+| --- | --- | --- |
+| `0x12` | `cursormove` | Move_Ground `0x1A` |
+| `0x12` | `cursorpatrol` | Patrol `0x1D`, RepairPatrol `0x22` |
+| `0x12` | `cursorreclamate` | Reclaim `0x20`, ReclaimUnit `0x21`, Resurrect `0x25` |
+| `0x12` | `cursorrepair` | RepairUnit `0x23` |
+| `0x12` | `cursordefend` | Follow_Ground `0x12` |
+| `0x18` | `cursorrepair` | HelpBuild `0x17`, RepairUnitNoMove `0x24` |
+| `0x13` / `0x03` | none (index 0) | MobileBuild `0x19` / VTOL_MobileBuild `0x36` |
+| `0x10` | `cursorselect` | Standby `0x29`, Standby_Mine `0x2A` |
+| `0x08` | `cursorattack` | AirToAir `0x03`, AirToGround `0x04`, AirToGroundHover `0x05`, Attack_Chase `0x06`, Attack_Kamikaze `0x07`, Attack_NoMove `0x08`, AttackSpecial `0x09`, Suppress `0x2E` |
+| `0x08` | others | AirStrike `0x02` (`cursorairstrike`), Capture `0x0E` (`cursorcapture`), Ground_Pickup `0x14` (`cursorload`), Ground_Unload `0x15` (`cursorunload`), Teleport `0x2F` (`cursorteleport`), VTOL_HelpBuild `0x33` (`cursorrepair`), VTOL_Landing `0x35` (`cursormove`), VTOL_Pickup `0x39` (`cursorpickup`), VTOL_Unload `0x41` (`cursorteleport`) |
+| `0x02` | as named | QMove `0x1E`, VTOL_Move `0x37` (`cursormove`); QPatrol `0x1F`, VTOL_Patrol `0x38`, VTOL_RepairPatrol `0x3C` (`cursorpatrol`); VTOL_Follow `0x31` (`cursordefend`); VTOL_Reclaim `0x3A`, VTOL_ReclaimUnit `0x3B` (`cursorreclamate`); VTOL_RepairUnit `0x3D` (`cursorrepair`) |
+
+The rest carry mask 0 with cursor 19 `cursornormal` (Park `0x1C` 14 `cursormove`, VTOL_Standby
+`0x40` 15 `cursorselect`) and draw nothing: the walker ANDs the mask before any drawer runs.
+**An attack draws its sprite and no route dots** (`0x08` only), so a queue's dots skip the leg
+into an attack target and resume from it, since the sprite still moves `pos`.
+
+**The art these name** (`anims/cursors.gaf`, retail): `pathicon` is ONE 11×11 frame, hotspot
+5,5, so the route dots' per-dot frame step `0x4394E0` takes changes nothing on stock data and the
+march is the 48-unit phase alone. `cursormove` is eight 8-tick frames, so at the sprite's
+`(gameTime / (2·8)) % 8` it cycles in 128 ticks, 4.3 s — half the speed of the same sequence as
+the mouse cursor, which steps each frame after its own 8 ticks (`0x4B8BF0`). Across
+`cursor_ary[1..21]` the retail sequences hold **238 frames**, no sequence longer than 64 frames
+and no frame over 64 texels on a side, and **no frame draws a texel of palette index 0**, so 0 can
+key out what a frame does not draw [MEASURED 2026-10-27, `tagpu_order.c` `art_build`'s log line
+`order: art 238 frame(s) of the cursor table, 0 left out, key 0, rows to 321 of 512`].
+
+**The waypoint sprite is translucent, every pixel of it; the route dots are solid**
+[DISASSEMBLED 2026-10-27]. `0x4399BB` calls `AlphaCompsteBuf2OFFScreen 0x4B8500`. Every
+`cursors.gaf` frame is RLE (`+0x09` = 1), so it takes `0x4B86AA call 0x4CC057` with the table
+`[prog+0xC0]` (`0x4B8691`), the ALP table. That loop writes BOTH run kinds through it, as
+`dst = table[src·256 + dst]`: repeat runs at `0x4CC156..0x4CC167` and literal runs at
+`0x4CC17F..0x4CC18C` and `0x4CC1A4..0x4CC1B1`. Only transparent runs skip. The dots go through
+`CopyGafToContext 0x4B7F90`, and `pathicon`'s sub-frame byte `+0x0B` is 0, so they never take its
+composite branch (`0x4B7FF7`) and are copied opaque.
+**MEASURED 2026-10-27 under the GDI backend** (`gdi.on`, no other pass armed, so every marker
+pixel is the engine's): an ARMCK on Two Continents with three queued `Move_Ground` and a
+`RepairPatrol`, the game paused at tick 2174, SHIFT held and the pointer on the unit. Each pixel
+under a sprite was predicted from the same frame taken before the orders existed. Of the three
+`cursormove` sprites' texels, 94 % are exactly `ALP[art·256 + ground]` and 6–9 % the art's own
+colour (the route dot the engine draws over each waypoint). Of `cursorpatrol`'s 181, 100 % are
+the blend. Each `pathicon` dot is 57 of 57 texels opaque and 0 blended. The frames are the
+drawer's `(0x38A47 / (2·period)) % count`: 7 for `cursormove` (identical to frame 1) and 8 for
+`cursorpatrol`. The presented GDI window differs from `tacli shot`'s frame by one pixel, under the
+pointer. The ALP blend is a 50 % mix: `palettes\PALETTE.ALP` at `[src·256 + dst]`
+lands within 20 RGB units of the palette colour nearest the half-and-half mix for 57 % of 300
+random pairs, against 14–15 % at a 25/75 weight either way round [MEASURED 2026-10-27; the misses are palette
+quantisation].
 
 ### `0x438C00` — the build-site footprint rect
 

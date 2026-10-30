@@ -138,6 +138,31 @@ void tagpu_settings_set_restoreoff(const char* key);
    answer to "is it on disk yet". 0 under tagpu_defaults.off. */
 int  tagpu_settings_restoreoff_saved(const char* key);
 
+/* The placement's spacing per building type, keyed by unit name (case-insensitive): empty cells
+   between neighbouring sites, 1..TS_SPACING_MAX; a type at 0 has no entry. At most
+   TS_SPACING_SAVED types, each name of [A-Za-z0-9_-]. Nothing is loaded or kept under
+   tagpu_defaults.off. GAME THREAD (tagpu_place.c), under the store's lock: the load at attach,
+   before the render thread exists; `put` hands over the module's whole table and, with `wait`
+   0, never waits -- the render thread holds the lock across its file writes, and the game
+   thread must not wait on one in play -- answering 0 when the lock was busy, for a later try.
+   The render thread writes the change at its next flush. */
+#include <stddef.h>
+#define TS_SPACING_NAME  32
+#define TS_SPACING_MAX   16
+#define TS_SPACING_SAVED 64
+typedef struct { char name[TS_SPACING_NAME]; int cells; } TsSpacing;
+int  tagpu_settings_spacing_load(TsSpacing* out, int max);
+int  tagpu_settings_put_spacing(const TsSpacing* table, int n, int wait);
+int  tagpu_settings_spacing_name_ok(const char* name, size_t len);
+
+/* The reclaim sweep's kind (tagpu_sweep.c), `reclaimkind=metal|energy|all`: 0 METAL, 1 ENERGY,
+   2 ALL, the default. A malformed value leaves ALL and is logged once; nothing is loaded or kept
+   under tagpu_defaults.off. GAME THREAD, as the spacing: the load at attach, before the render
+   thread exists; `put` with `wait` 0 never waits and answers 0 when the lock was busy, for a
+   later try; the render thread writes the change at its next flush. */
+int  tagpu_settings_reclaim_kind(void);
+int  tagpu_settings_put_reclaim_kind(int kind, int wait);
+
 /* The windowed frame: x, y and the client size, 0,0 for the size the game
    asks for. 0 when the store has none; answered under tagpu_defaults.off too.
    Read at attach (tagpu_cfg.c). */

@@ -126,11 +126,11 @@ iteration, bounded by `[ControlsAry+0xB6] + 1`. [BINARY-VERIFIED]
 |---|---|---|---|
 | `+0x00` | `u8` | **`id`** — gadget type | [BINARY-VERIFIED] `0x4A916D`, `0x4A4DA4` |
 | `+0x01` | `u8` | **`assoc`** — radio/group id | [BINARY-VERIFIED] `0x4A6A71` |
-| `+0x02` | `char[16]` | **`name`** — the selector | [BINARY-VERIFIED] `0x49FE7D` + `strncmp(...,0x10)` |
+| `+0x02` | `char[16]` | **`name`** — the selector; not always terminated in the record | [BINARY-VERIFIED] `0x49FE7D` + `strstr` `0x4E49B0` (`0x49FE83..0x49FE8F`): a lookup finds the first record whose name **contains** the one asked for |
 | `+0x13` | `i16` | **`xpos`** | [BINARY-VERIFIED] `0x49FD3D`, `0x4AD3BB` |
 | `+0x15` | `i16` | **`ypos`** | [BINARY-VERIFIED] `0x49FD49` |
-| `+0x17` | `i16` | **`width`** | [BINARY-VERIFIED] `0x4A1BB5` |
-| `+0x19` | `i16` | **`height`** | [BINARY-VERIFIED] `0x4A1B8F` |
+| `+0x17` | `i16` | **`width`** — a button's is rewritten at load to its face's (below) | [BINARY-VERIFIED] `0x4A1BB5`, `0x4A812E` |
+| `+0x19` | `i16` | **`height`** — likewise | [BINARY-VERIFIED] `0x4A1B8F`, `0x4A8136` |
 | `+0x1B` | `i32` | `attribs` | [BINARY-VERIFIED] `0x4A3F..` |
 | `+0x1F` / `+0x23` | `i32` | `colorf` / `colorb` | [CORPUS] |
 | `+0x27` | `u8` | `texturenumber` | [CORPUS] |
@@ -171,7 +171,7 @@ exactly this against a 16-byte string. [BINARY-VERIFIED]
 | `+0x136` | `stages` — number of states (0/2 = plain button or toggle, >2 = cycle) | [LIVE] |
 | `+0x137` | `status_curnt` — current stage | [LIVE] |
 | `+0x138` | `status_init` (`i16`) | [BINARY-VERIFIED] `0x4A6A95` |
-| `+0x13A` | `quickkey` — **`u8`**, the ASCII accelerator (`'S'` for SINGLE, `'E'` for EXIT, matching the underlined letter on screen). The corpus calls it an `i16`; the high byte is a separate field. | [LIVE] |
+| `+0x13A` | `quickkey` — **`u8`**, the ASCII accelerator (`'S'` for SINGLE, `'E'` for EXIT, matching the underlined letter on screen). The corpus calls it an `i16`; the high byte is a separate field. The button handler `0x4A6AE0` matches the ring's key against `tolower` and `toupper` of it (`0x4A70FB..0x4A7129`), then flips a toggle's `status_init` (`+0x1B` bit `0x40`, `0x4A7132..0x4A713E`) or sets a radio's (`0x10`), resets its radio group (`0x4A0340`) and hands its index to the screen's handler, as a click's release does | [LIVE]; the match [DISASSEMBLED 2026-10-26] |
 | `+0x13C` | `grayedout` — **`u16`, and only bit 0 is the flag**. The corpus calls it an `i32`; it is not. Both engine writers do a read-modify-write that preserves bits 1..15 — the `.GUI` parser at `0x4ADD3E` and `GUIGADGET_SetGrayed 0x4A1250` at `0x4A12D0`, each `xor/and 1/xor` then **`mov WORD`**. A 32-bit store clears those bits and `+0x13E`/`+0x13F` with them. | [BINARY-VERIFIED] `0x4ADD3E`, `0x4A12D0` |
 
 **The face a button draws** [DISASSEMBLED 2026-10-01]. At load (`0x4A7F70`, the stretch
@@ -180,10 +180,14 @@ commongui; failing both, a `CHECKBOX`-flagged one takes `CHECKBOX` (`0x509908`),
 `stagebuttn%d` (`0x5098F8`, at most 4), and a plain one `BUTTONS0` (`0x5098EC`). Of a plain one's
 frames 0, 4, 8, … it keeps the one with the least `|w − frame w| + |h − frame h|` (`0x4A80C5..
 0x4A810F`) as its base frame (`+0x13B`) and zeroes every frame's hotspot (`0x4A80AC`), so the face
-is drawn at the record's corner at the face's own size whatever the record says (`0x4A6188`).
+is drawn at the record's corner at the face's own size (`0x4A6188`). The loader then keeps the
+face's sequence at `+0x2F` (`0x4A8113`) and writes the base frame's width and height
+(`GAF_SequenceIndex2Frame 0x4B7F30(sequence, +0x13B)`, the frame's first two words) over the
+record's `+0x17`/`+0x19` (`0x4A812B..0x4A8136`), so after the load a button's rect is its face's
+and no longer the `.GUI` file's [DISASSEMBLED 2026-10-27].
 Retail's `BUTTONS0` sizes, every fourth frame: 16×16, 321×20, 120×20, 96×20, 112×20, 80×20, 96×31
-(MEASURED in `commongui.gaf`; Escalation's `TAESC.gp3` has the same). A button whose rect is not
-one of these is drawn at the nearest one, over or short of its rect.
+(MEASURED in `commongui.gaf`; Escalation's `TAESC.gp3` has the same). A button whose `.GUI` rect is
+not one of these is drawn at the nearest one, over or short of that rect.
 
 ### 2.4 Listbox — `id 2`
 
@@ -601,7 +605,7 @@ a 640x480 surface in an instance launched at 1024x768, and `ARMCOM1.GUI` reports
 
 | VA | Signature (verified) | Use to us |
 |---|---|---|
-| `0x49FE60` | `stdcall int GUI_FindGadgetByName(GUI0IDControl* ctrls, const char* name)` → index or `-1`; `ret 8` | The name→index rule we mirror. Case-insensitive, 16-byte bounded. |
+| `0x49FE60` | `stdcall int GUI_FindGadgetByName(GUI0IDControl* ctrls, const char* name)` → index or `-1`; `ret 8` | The name→index rule. **A substring search, case-sensitive**: records 1..`[ctrls+0xB6]` in order, each name the haystack of `strstr(record name, name)` (`0x4E49B0`, a byte compare), the first match wins (`0x49FE7D..0x49FEA2`). So `"STOP"` finds the first gadget whose name contains STOP, and the in-game orders menu arms reclaim for any gadget whose name contains RECLAIM by the same test (`0x419F56`). [DISASSEMBLED 2026-10-26] |
 | `0x4AB060` | `stdcall BOOL IsOnTop(GUIInfo*, const char* name)`; `ret 8` | "Am I on screen X" — the breadcrumb/`wait --gui` semantic |
 | `0x4A9660` | `stdcall void GUI_Pop(GUIInfo*)` | Why the stack is a stack |
 | `0x49FD20` | `stdcall void ToGadgetLocal(GUIInfo*, gadget*, rect6* out)`; `ret 0xC` | Proves the coordinate space |
@@ -754,9 +758,11 @@ an actionability check needs both tests. `SINGLE.GUI`'s `AnyMsn` is the `active=
   `GAMES`, the scrollbar `SLIDER`, the textfield `GAMENAME` and `LOAD` / `CANCEL` /
   `DELETE`. It is the only screen reachable without multiplayer that carries all three
   deferred surfaces at once, which makes it the test bed for them.
-  `SAVEGAME.GUI`, `SAVELIST.GUI`, `OPTION.GUI` and `CMENU.GUI` ship in `totala1.hpi` but
+  `SAVEGAME.GUI`, `OPTION.GUI` and `CMENU.GUI` ship in `totala1.hpi` but
   **no string in the exe names them** — they are dead files, and reading them as the live
-  save UI wastes a session. The same is true of `SELCAMP` / `SELCAMPX` / `NEWCAMP` /
+  save UI wastes a session. `SAVELIST.GUI` is named (`0x505F64`), but by the unit-restrictions
+  screen `RESTRICT2.GUI`'s `Save` button (`0x44B990`, from `0x44C5D9`), not by the save game
+  (exe map, *A level starts paused*) [DISASSEMBLED 2026-10-26]. The same is true of `SELCAMP` / `SELCAMPX` / `NEWCAMP` /
   `MISSION` / `MISSIONX` / `SIDESEL` / `SELSIDE` / `METAL` / `ENERGY` / `GAMMA`: the
   campaign screen this binary loads is `NEWGAME.GUI`, and the gamma slider lives in
   `VISUALS.GUI`. Check a `.GUI` name against the exe's string table before spending a

@@ -1839,13 +1839,9 @@ static void __cdecl bl_download_append(unsigned int* regs)
     regs[PR_EDX] = (unsigned int)(size_t)list;
 }
 
-/* CLASS: simulation, fail closed. A builder's list is what the AI's pick 0x40BDB0 and the
-   build menu offer, so a player without it builds by a different list. */
-static int s_buildListsLive;
-SIM_VAR(s_buildListsLive, SIM_INSTALL);
-
-int tagpu_build_lists_live(void) { return s_buildListsLive && s_limState == 1; }
-
+/* CLASS: simulation, fail closed. A builder's list is what the AI's pick 0x40BDB0 chooses
+   from, so an AI player without it builds by a different list. The build menu does not read
+   it (exe-reverse-engineering.md, *A builder's build list*). */
 static int fix_build_list(void)
 {
     FIXSITE site[4] = {
@@ -1867,9 +1863,7 @@ static int fix_build_list(void)
     fix_branch(&site[1], 0xE8, b);
     site[1].now[5] = 0xEB; site[1].now[6] = 0x15;          /* jmp 0x42DAE3, past the rep movs */
     fix_branch(&site[3], 0xE8, c);
-    int result = fix_table(site, 4, "whole build lists");
-    s_buildListsLive = result == FIX_TABLE;
-    return result;
+    return fix_table(site, 4, "whole build lists");
 }
 
 SIM_FEATURE(download_records, SIM_PUPPET_RUNS, "battle");
@@ -11003,7 +10997,7 @@ static unsigned char* lim_emit(unsigned char* p, const unsigned char* op, int n,
     return p + n + 4;
 }
 
-SIM_FEATURE(cob_guard, SIM_PUPPET_RUNS, "battle resource-core-upgrade");
+SIM_FEATURE(cob_guard, SIM_PUPPET_RUNS, "battle resource-core-upgrade cob-getters");
 
 typedef int (__attribute__((thiscall)) *CobNativeGet)(char*, int, int, int, int, int);
 static CobNativeGet s_cobNativeGet;
@@ -11414,7 +11408,7 @@ static unsigned __cdecl cob_run_step(unsigned* regs)
             int piece = record->stack[record->sp - 1];
             /* The transport packet has one byte for the piece. 0xFF means
                hidden cargo (0x48AC99), not piece 255 of a larger model. */
-            if (piece != -1 && (piece < 0 || piece >= 255 || (unsigned)piece >= f->program->model_pieces))
+            if (!tagpu_cob_attach_piece_ok(piece, f->program->model_pieces))
                 cob_fault(f->name, record->pc, "attachment piece exceeds its model or wire representation");
         }
         if (!cob_live_unit(*(char**)0x00511DE8u, id)) {
@@ -11437,7 +11431,7 @@ static unsigned __cdecl cob_run_step(unsigned* regs)
            and waits on child -1. RETURN only compares that sentinel with the
            returning slot (0x4B1A12); it never indexes through it. START drops
            refused arguments so repeated starts cannot fill the parent's stack. */
-        if (slot >= 0 || kind == 0x10061000u) record->sp -= (int32_t)argc;
+        record->sp -= (int32_t)tagpu_cob_parent_pops(kind, slot, argc);
         record->pc += 3;
         if (kind == 0x10062000u) {
             record->child = slot;
@@ -11728,44 +11722,65 @@ static char* cob_caller(char* ta, char* cob)
     return cob_live_unit(ta, (int)(delta / 0x118u));
 }
 
+/* tagpu_cob_getter's world over the engine's units. Every owner it hands out comes from
+   cob_live_unit, so is below 10. */
+typedef struct { char* ta; char* cob; } CobGetCtx;
+
+static void cob_facts(const char* unit, TagpuCobUnitFacts* out)
+{
+    out->id = *(const unsigned short*)(unit + 0xA8);
+    out->owner = (unsigned char)unit[0xFF];
+    out->kills = *(const unsigned short*)(unit + 0xB8);
+    out->remaining = *(const float*)(unit + 0x104);
+}
+
+static int cob_world_unit(void* ctx, int32_t id, TagpuCobUnitFacts* out)
+{
+    char* unit = cob_live_unit(((CobGetCtx*)ctx)->ta, id);
+    if (unit) cob_facts(unit, out);
+    return unit != NULL;
+}
+
+static int cob_world_caller(void* ctx, TagpuCobUnitFacts* out)
+{
+    char* unit = cob_caller(((CobGetCtx*)ctx)->ta, ((CobGetCtx*)ctx)->cob);
+    if (unit) cob_facts(unit, out);
+    return unit != NULL;
+}
+
+static int cob_world_allied(void* ctx, uint32_t own, uint32_t owner)
+{
+    return ((CobGetCtx*)ctx)->ta[0x1B63u + own * 0x14Bu + 0x108u + owner] != 0;
+}
+
+static int cob_world_local(void* ctx, uint32_t owner)
+{
+    unsigned kind;
+    /* a puppet seat's unit answers what the recording machine's did (tagpu_puppet.h) */
+    if (tagpu_puppet_seat(owner)) return tagpu_puppet_local(owner);
+    kind = (unsigned char)((CobGetCtx*)ctx)->ta[0x1B63u + owner * 0x14Bu + 0x73u];
+    return kind == 1 || kind == 2;
+}
+
 static int __attribute__((thiscall)) cob_get(char* cob, int key, int a, int b, int c, int d)
 {
-    char* ta = *(char**)0x00511DE8u;
-    char* caller;
-    char* target;
-    unsigned owner;
-    if (key >= 9 && key <= 11 && !cob_live_unit(ta, a)) return 0;
-    if (key == 7 || key == 8) {
-        const unsigned* file = *(const unsigned**)(cob + 8);
-        const unsigned* model = *(const unsigned**)(cob + TAGPU_COB_MODEL_OFFSET);
-        if (a < 0 || !file || !model || (unsigned)a >= file[2] || (unsigned)a >= model[0]) return 0;
-    }
-    if (key != 32 && (key < 69 || key > 75))
-        return s_cobNativeGet(cob, key, a, b, c, d);
-    if (key == 69) return 1;
-    if (key == 70) {
-        unsigned slots = ta ? *(const unsigned short*)(ta + 0x14351) : 0;
-        return slots ? (int)slots - 1 : 0;
-    }
-    caller = cob_caller(ta, cob);
-    if (key == 32) return caller ? *(const unsigned short*)(caller + 0xB8) * 100 : 0;
-    if (key == 71) return caller ? *(const unsigned short*)(caller + 0xA8) : 0;
-    target = cob_live_unit(ta, a);
-    if (!target) return key == 72 || key == 73 ? -1 : 0;
-    owner = (unsigned char)target[0xFF];
-    if (key == 72) return (int)owner;
-    if (key == 73) return tagpu_cob_build_left(*(const float*)(target + 0x104));
-    if (key == 74) {
-        unsigned own;
-        if (!caller) return 0;
-        own = (unsigned char)caller[0xFF];
-        return ta[0x1B63u + own * 0x14Bu + 0x108u + owner] != 0;
-    }
-    /* a puppet seat's unit answers what the recording machine's did (tagpu_puppet.h); `owner` is
-       below 10 by cob_live_unit */
-    if (tagpu_puppet_seat(owner)) return tagpu_puppet_local(owner);
-    owner = (unsigned char)ta[0x1B63u + owner * 0x14Bu + 0x73u];
-    return owner == 1 || owner == 2;
+    CobGetCtx ctx;
+    TagpuCobWorld w;
+    const unsigned* file = *(const unsigned**)(cob + 8);
+    const unsigned* model = *(const unsigned**)(cob + TAGPU_COB_MODEL_OFFSET);
+    int32_t value;
+    ctx.ta = *(char**)0x00511DE8u;
+    ctx.cob = cob;
+    w.ctx = &ctx;
+    w.slots = ctx.ta ? *(const unsigned short*)(ctx.ta + 0x14351) : 0;
+    w.script_pieces = file ? file[2] : 0;
+    w.model_pieces = model ? model[0] : 0;
+    w.unit = cob_world_unit;
+    w.caller = cob_world_caller;
+    w.allied = cob_world_allied;
+    w.local = cob_world_local;
+    if (tagpu_cob_getter(&w, key, a, &value)) return value;
+    return s_cobNativeGet(cob, key, a, b, c, d);
 }
 
 static void cob_get_sites(void)

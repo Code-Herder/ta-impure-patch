@@ -1,6 +1,11 @@
 /* The offscreen world target and the draw that puts it on the frame.
-   The header carries the argument; this is the mechanism. */
+   The header carries the argument; this is the mechanism.
 
+   TWO INSTANCES: compiled for the game's world and, under TAGPU_SCENE_WIKI, for
+   the wiki's stage, each with its own statics; tagpu_scene.h names where the
+   wiki's draws its hand-over from and what it may call. */
+
+#include "tagpu_scene.h"            /* first: the wiki instance's names and sizes */
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>

@@ -44,6 +44,7 @@
 #include "tagpu_replay.h"
 #include "tagpu_gaf.h"        /* TAGPU_GAF_EXACT: the badges are drawn as drawn */
 #include "tagpu_gui.h"        /* tagpu_gui_asset_exact: so are the ground and the plate */
+#include "tagpu_wikiasset.h"  /* WIKI3DNAMES: tagpu_replays_asset_names */
 
 /* ---- engine addresses ------------------------------------------------------------------------ */
 #define TA_MAIN          0x00511DE8u    /* TAdynmemStruct**                                     */
@@ -355,6 +356,11 @@ static int style_index(const char* style)
 static const char* mod_style(void)
 {
     return s_mods[s_mod < 0 ? MOD_UNKNOWN : s_mod].style;
+}
+
+int tagpu_replays_style_index(void)
+{
+    return style_index(mod_style());
 }
 
 /* ================================================================================================
@@ -1690,6 +1696,77 @@ static const char* running_mod(void)
         if ((m = mod_by_archive(name)) != NULL) return m;
     }
     return s_mods[MOD_RETAIL].name;
+}
+
+/* THE MOUNT LIST FOR THE IN-GAME WIKI'S ASSET LOADER (tagpu_wikiasset.h), copied by value at the
+   wiki's first open, on the game thread: the same list running_mod reads, every archive's full
+   path in mount order. BOUND: the count, capped at `max`; a path read within its 0x104 bytes, one
+   the mount left unterminated given as "" (the loader names it refused). */
+int tagpu_replays_archive_paths(char (*out)[ARC_PATHMAX], int max)
+{
+    const char* gfx = *(const char* const*)VA_GFX_PP;
+    const char* const* list;
+    int n, i;
+    if (!gfx || !(list = *(const char* const* const*)(gfx + GFX_ARC_LIST))) return 0;
+    n = *(const int*)(gfx + GFX_ARC_COUNT);
+    if (n > max) n = max;
+    for (i = 0; i < n; i++) {
+        const char* path = list[i] ? list[i] + ARC_PATH : NULL;
+        const size_t k = path ? strnlen(path, ARC_PATHMAX) : ARC_PATHMAX;
+        if (k == ARC_PATHMAX) out[i][0] = 0;
+        else memcpy(out[i], path, k + 1);
+    }
+    return n < 0 ? 0 : n;
+}
+
+/* THE NAMES THE ASSET LOADER RESOLVES WITH, copied beside the list: the `language` value
+   0x51FB50 that the path builder 0x4290F0 puts in "<dir>-<language>\", which only WinMain's init
+   writes: the command-line parser 0x49EE30 (called at 0x49E8D2) copies each argument that starts
+   with neither '-' nor '/' there (0x49EEF4), the registry value "language" is read into it
+   (0x42F980 at 0x49E9F7) only while it is still empty (0x49E9D6..0x49E9DE), and "english" stands
+   in when both left it empty (0x49E9FC..0x49EA27); and the asset folders' names in
+   the running process's .data, which a mod renames in place: in the executable file (Escalation's
+   `unitsE`, TA Zero's `ZUnits` and `logoz`: the 3D stage plan's batch D2), or from its loader
+   DLL's DllMain before the engine's entry point (Mayhem's `guiM`, ProTA's `gamedatP`: the sidebar
+   scout's Q6), so a copy of the live strings carries either. Every engine instruction that names
+   one of the folders passes it as a path or pattern [INFERRED: none writes it]. The game thread,
+   which runs the engine's own loads, is the one copying.
+   The sidebar's, each DISASSEMBLED as pushed by the code that reads the files (and the string
+   read out of the retail executable): gui 0x502820 (the page probe 0x42D82A, the page loader
+   0x41AD2C), gamedata 0x503360 (the sidedata reader 0x429EB1), unitpics 0x505FE4 (0x44C188,
+   0x494421), download 0x503730 (the download reader 0x42DD0E), commongui 0x50925C (0x491542, into
+   0x4AEEE0), palettes 0x5031BC and PALETTE 0x5033A4 (the PALETTE.ALP path built for 0x4290F0 at
+   0x42E14B..0x42E15B, as for .SHD at 0x42E1E0), guipal 0x5031C8 (0x49810E).
+   BOUND: each string within its buffer; one that is not terminated there is given as "", which
+   resolves nothing. */
+#define VA_LANGUAGE   0x0051FB50u
+static void engine_name(char* out, size_t cap, uintptr_t va)
+{
+    const char* s = (const char*)va;
+    const size_t k = strnlen(s, cap);
+    if (k == cap) out[0] = 0;
+    else memcpy(out, s, k + 1);
+}
+
+void tagpu_replays_asset_names(struct WIKI3DNAMES* n)
+{
+    engine_name(n->language, sizeof n->language, VA_LANGUAGE);
+    engine_name(n->units, sizeof n->units, 0x00503920u);
+    engine_name(n->textures, sizeof n->textures, 0x00503720u);
+    engine_name(n->logos, sizeof n->logos, 0x00504734u);
+    engine_name(n->logos_gaf, sizeof n->logos_gaf, 0x00503704u);
+    engine_name(n->objects3d, sizeof n->objects3d, 0x005036E4u);
+    engine_name(n->scripts, sizeof n->scripts, 0x00503740u);
+    engine_name(n->anims, sizeof n->anims, 0x00502E30u);
+    engine_name(n->features, sizeof n->features, 0x00502C7Cu);
+    engine_name(n->gui, sizeof n->gui, 0x00502820u);
+    engine_name(n->gamedata, sizeof n->gamedata, 0x00503360u);
+    engine_name(n->unitpics, sizeof n->unitpics, 0x00505FE4u);
+    engine_name(n->download, sizeof n->download, 0x00503730u);
+    engine_name(n->commongui, sizeof n->commongui, 0x0050925Cu);
+    engine_name(n->palettes, sizeof n->palettes, 0x005031BCu);
+    engine_name(n->palette, sizeof n->palette, 0x005033A4u);
+    engine_name(n->guipal, sizeof n->guipal, 0x005031C8u);
 }
 
 /* The main menu's version text as RT_GAME_VERSION takes it: printable, 1 to 7 characters, else

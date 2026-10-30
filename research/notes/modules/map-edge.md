@@ -12,10 +12,11 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1
 black: C5 of [BAR camera & full-colour Classic](../bar-camera-port.html), the lab's `edge=mirror`
 (`tools/tascene-view.html`) ported to the two world passes that draw ground. The centre clamp
 (G20a) is what brings it into view — up to W/2 past an edge at 1×, and at a corner three
-quarters of the view at every zoom. The ground past the map is the map's own tiles, texel for
-texel, each flipped across every edge it is past; on it stand the map's own features, flipped
-across a side edge and upright across the top and bottom. Units stay on the map, and the minimap
-is unchanged. Nothing here patches or writes the engine. It adds one hook, a stub at LoadMap's
+quarters of the view at every zoom. The map ends where stock's view ends, at the engine's scroll
+extent (below). The ground past it is the map's own tiles, texel for texel, each flipped across
+every edge it is past; on it stand the map's own features, flipped across a side edge and upright
+across the top and bottom, a copy above or below that would reach across the map's border left
+out whole. Units stay on the map, and the minimap is unchanged. Nothing here patches or writes the engine. It adds one hook, a stub at LoadMap's
 join `0x483B53` on the loader thread, which reads the TNT's feature records once a load (below,
 §2.16 and §2.5).
 
@@ -28,8 +29,32 @@ launch draws black. The render thread re-reads it with the native pass's 30-fram
 `native: map edge = mirror` or `= black` on every change. It is not a render key: the preset never
 rewrites it, `derive_style()` never reads it, and the row is never greyed by the Classic lane.
 
+**Where the map ends: the engine's area** (`tagpu_fx.h` `tagpu_edge_area`). Every edge pass ends
+the map at the **scroll extent** `main+0x1422B`/`+0x1422F` — the map's pixel size less 32 px wide
+and 128 px tall, written by `0x4833B0` at the level load ([engine map](../exe-reverse-engineering.html),
+"LoadMap's feature placement, and a saved game") and carried in the packet as `map_pxw/h` — in
+32-px tile cells, not at the tile map's own size (the PLOT grid × 16). Stock's camera clamp
+`0x41C3C0` holds the eye in `[0, extent − view]`, so stock never shows a pixel past the extent,
+and the strip between the two is art no player saw. Not all of it is unbuildable: pass 1 of
+`0x4833B0` masks the last two 16-px columns of every row, but pass 3 walks up each column only
+while `row·16 − h/2` is past the extent's height (`0x48354D..0x483557`, `jle` out at the first row
+that is not) and masks the cell above the one it tested, so on raised ground at the bottom edge
+some of the bottom strip stays buildable (at `h ≥ 32` its top row, at `h = 64` two rows). **The strip is often unpainted.** Painted Desert's last
+tile column holds the editor's blank tile 0, flat palette blue (123, 151, 255), in rows 32..63; a
+survey of the 275 stock TNTs found flat blank tiles in that strip on 9 maps — Yerrot Mountains
+204 cells, Plains and Passes 118, Ring Atoll 96, Painted Desert 32, exp1cc02 14, Metal Maze 12,
+Ashap Plateau 3, Silent Slayers 2, Sink the Battleship 2 — and inside the playable area on none.
+A fold at the tile map's edge would draw that strip as the map and reflect the blue into the
+edge. `tagpu_edge_area(extent_px, cells32)` is `extent_px / 32` **bounded to
+`[1, cells32]`**, `cells32` the tile map's own width or height that the caller indexes with, so a
+cell folded into `[0, area)` by `tagpu_edge_reflect` indexes the tile map whatever the packet
+says; an extent that is not positive or not inside the map answers the whole map. All 275 stock
+TNTs have even 16-px dimensions, so every stock extent is a whole number of tiles. The camera's
+centre range ends at the same words (§2.3c), so the view centre stops where the fold is.
+
 **Terrain: an off-map cell is one more instance** (`tagpu_terr_gather`). Every cell of the gather
-rect past the map takes the tile of the cell it folds to, `tagpu_edge_reflect(m, n)` — the lab's
+rect past the area (`areaC` × `areaR`, from the packet's `map_pxw/h`; only the row stride stays the
+tile map's) takes the tile of the cell it folds to, `tagpu_edge_reflect(m, n)` — the lab's
 triangle wave, `p = m mod 2n` taken into `[0, 2n)`, `p` or `2n − 1 − p`, so any distance past the
 map lands on a map cell and says whether the axis turned over. The instance carries the tile
 column with `TAGPU_TERR_MIRROR` (0x2000), each flipped axis's `TAGPU_TERR_FLIP` (0x4000), and on a
@@ -44,7 +69,7 @@ no fog of war and no light, and returns.
 
 - **The tone, `TAGPU_GLSL_EDGE_FN`, is the lab's `EDGE_TONE` at the owner's knobs:** `o = max(−w,
   w − uMapPx, 0)` per axis, `t = |o| / 1536`, the colour mixed 0.75 toward its RGB mean, times 0.5,
-  times `1 − t`. `w` is the point drawn on the tile grid and `uMapPx` the map's 32-px cells × 32
+  times `1 − t`. `w` is the point drawn on the tile grid and `uMapPx` the area's 32-px cells × 32
   (`TAGPU_TERRHAND.mapPxW/H`, the block's last vec2 at 184; the terrain block stays 192 B). One copy
   for both passes, so a tree and the ground under it cannot drift apart.
 - **The nudge, reflected.** `TAGPU_EDGE_NUDGE` moves every map quad 1/32 game px the same way on
@@ -73,7 +98,10 @@ no fog of war and no light, and returns.
   takes the same floor ([terrain depth](../terrain-depth.html)).
 - **`skipped` is still the off-map count under black**; under mirror the heartbeat's `mirror=N`
   counts the cells drawn past the map (`terr: … off-map=0 mirror=705 …` at the north-west corner at
-  0.5× on Two Continents).
+  0.5× on Two Continents). The same line prints the tile map and the area side by side:
+  `terr: grid=… map=289x292 area=288x288 …` on Painted Desert (MEASURED 2026-10-25). Under black
+  a cell past the area is skipped like any other off-map cell, so the hidden strip is black there
+  too, as stock's view never reached it.
 
 **Features: the map's own, as its TNT lays them out.** **The rule (the owner's ruling): the
 mirror's map is the MAP FILE alone** — what the map's TNT places, never what a game, a saved game,
@@ -138,12 +166,27 @@ TNT feature that one of those spawns destroys still is.
   row — so the lookups index by a row under `mapH` and a column under `mapW`, and each row's
   bucket is ordered by column, by this side's own test and not by the publisher's order (which is
   row-major already, so nothing is dropped there).
-- **The gather** (`mirror_gather`, after the map's own anchors): every cell past the map of the
-  rect the engine would sweep — the unclamped rect for a copy the right way round, the rect
-  mirrored about the view for a turned one (below) — takes the map's anchor at the cell it folds
-  to. Cells in
-  the map's last row or column are skipped, as the engine's sweep skips them. **It walks anchors,
-  not cells**: a sweep row splits at the folds into runs of at most one map width, each a copy of
+- **A feature is the map's by where it is DRAWN, not by its anchor.** Its drawn point is
+  `draw_feature`'s `wax = col·16 + hx`, `waz = row·16 + hz − lift` (`hx`, `hz` half the footprint,
+  `lift` the 2×2 height term `>> 3`, at most 127 px). Under the mirror the anchor loop drops a
+  feature of the map's own drawn at or past the area (`wax ≥ s_areaW·16` or `waz ≥ s_areaH·16`,
+  `s_areaW/H` the area in 16-px cells, two per tile, at most the map's), and `mirror_feature`
+  takes exactly the features that test keeps as the sources of the copies: a source drawn past
+  the area has no copy, and one anchored in the hidden strip but drawn above the fold has its
+  copies. A band above or below the map takes only sources drawn below the map's top, `waz ≥ 0`,
+  since one drawn above it would put its copy's base on the map's rows.
+- **The gather** (`mirror_gather`, after the map's own anchors) folds at the area. Its rows come
+  in **bands**: band 0 is the map, an odd band the map turned over and an even one the map the
+  right way round, `b` areas' heights away, and a copy in band `b` sits on sweep row `b·H + srow`,
+  or `(b + 1)·H − 1 − srow` turned over. Since a feature is drawn fewer than `MF_LIFT_ROWS` (8)
+  rows above its anchor, a source anchored up to that far past the area is still the map's, and
+  its copy's row lies up to that far inside the neighbouring band: **each row is asked of its own
+  band and of a neighbour within 8 rows**, and every (row, band) pair names one source row, so no
+  copy is emitted twice. Every cell of the rect the engine would sweep — the unclamped rect for a
+  copy the right way round, the rect mirrored about the view for a turned one (below) — takes the
+  map's anchor at the cell it folds to; a source row must lie under the table's last row
+  (`s_mfH − 1`), and a source column under the area and under the map's last column
+  (`lastCol`), which the engine's sweep never reaches. **It walks anchors, not cells**: a sweep row splits at the folds into runs of at most one map width, each a copy of
   the source row the right way round (copy `q = floor(col / mapW)` even) or turned (odd), and each
   run is one pass over the row's bucket, at the cost of the anchors alone. MEASURED 2026-09-24 on a
   diagnostic build, Two Continents' north-west corner at 3840 × 2160 and 0.25× (a 944 × 560-cell
@@ -166,10 +209,23 @@ TNT feature that one of those spawns destroys still is.
     over the view reflected, `tuc0 = ceil(right edge / 16) + 10 − nCols`. A copy is drawn exactly
     when its source would be, so the side strip is the map's picture reflected up to the view's
     edge.
-  - **A copy the view cannot show is not emitted**: a row past the top while the view does not
-    reach above the map, or past the bottom while it does not reach below, and a copy `q` whose
-    columns `[q·mapW, (q + 1)·mapW)` (in cells) miss the view. The fragment stage would discard
-    every sample of it.
+  - **A copy whose columns miss the view is not emitted**: a copy `q` whose columns
+    `[q·mapW, (q + 1)·mapW)` (16-px cells, `mapW` the area's width) miss the view, since the fragment stage would discard
+    every sample of it. Rows are not culled per band; `emit_frame` drops a quad wholly off the
+    view.
+  - **A copy above or below the map that would reach across its border is not drawn**
+    (`frame_crosses`). The copies there stand upright, so the one nearest the line would lay its
+    crown over the map's last rows (below) or its foot over the first (above), and one cut at the
+    line is a tree without a top. Every frame the copy would emit, its shadow (when shadows draw)
+    and its body, is tested as `emit_frame` places it — each sub-frame at its own hotspot, `y0 =
+    waz − hotY`, `y1 = y0 + h` — and the copy is dropped when `y1 > 0` above the map or `y0 <
+    s_areaH·16` below it. The frames are resolved once (`copy_frame`) and those are the frames
+    emitted; an animating feature's state is read once (`tagpu_gaf_state_seq`: its sequence and
+    frame index together) and the copy is judged on every frame of that sequence, so the decision
+    holds while it animates and nothing of a drawn copy crosses the line. **The owner's choice
+    (2026-10-25)** among four drawings — copies clipped at the line, unclipped over the map, the
+    crossing ones dropped, or turned upside down; the upside-down and the clipped upright ones
+    were rejected.
 - **The depth keys** (`KEYRECT`, `map_key`, `mirror_key`). **The map's own features keep main's
   keys**, taken over the engine's sweep rect clamped to the map with the mirror on or off, so an
   on-map feature sorts against units and 3D wrecks exactly as it does under black; `map_key` is
@@ -194,18 +250,22 @@ TNT feature that one of those spawns destroys still is.
   format as in D24, which tie the same flats (§2.91, 0 px on `feat-forest`). Main draws the
   map that way; a mirror keyed to continue the order would stack those same flats differently
   from the map it reflects, and a copy keyed as its source repeats the map's picture exactly.
-- **The fragment stage** reads the mode as bits: `TAGPU_FEAT_MIRROR` (4), `TAGPU_FEAT_OFFROW` (8)
-  when the copy's rows lie past the top or bottom, and the copy's column index `q` biased by 1024
-  above bit 4 — the gather emits no copy outside `[−1024, 1024)`, so every mode stays under 2¹⁵
-  and the float attribute carries it exactly. **Each copy draws only in its own columns**, as the
-  ground does — a quad reaching across a fold would lay one copy's feature over the next copy's
-  reflection of it — and an off-row copy never draws on the map's rows, where it would cover the
-  map (a mirrored tree just past the bottom edge stands in front of the map's last rows by the
-  painter's order) or, in a corner, the side copy that reflects it. **While the mirror draws, the
-  map's own quads keep to the map's columns** (`uClip`, the block's int at 40): past a side edge
-  the picture is the map reflected, and a tree's overhang there would cover the reflection of the
-  tree itself; across the top and bottom the copies stand upright, so the overhang is kept, and
-  under a black edge nothing is clipped. **Every one of these clips tests the sample's point
+- **The fragment stage** reads the mode as bits: `TAGPU_FEAT_MIRROR` (4) and the copy's column
+  index `q` biased by 1024 above bit 4 — the gather emits no copy outside `[−1024, 1024)`, so
+  every mode stays under 2¹⁵ and the float attribute carries it exactly. **Each copy draws only
+  in its own columns**, as the ground does — a quad reaching across a fold would lay one copy's
+  feature over the next copy's reflection of it. **A copy above or below the map is drawn whole**:
+  the gather has already left out every one that would cross the border, so no row clip is
+  needed. **While the mirror draws, the map's own quads keep to the map's columns** (`uClip`, the
+  block's int at 40): past a side edge the picture is the map reflected, and a tree's overhang
+  there would cover the reflection of the tree itself; across the top and bottom the copies stand
+  upright, so the overhang is kept. **Under a black edge nothing of the map's own draws past the
+  area on the right or at the bottom** (`s.x ≥ uMapPx.x || s.y ≥ uMapPx.y`): the engine's sweep
+  reaches anchors in the hidden strip (rows and columns up to the map's last but one), and
+  clipping the pixel rather than dropping the anchor keeps the part of such a tree that reaches
+  up into the area, which is what stock's viewport, cut at the same line, showed; the left and
+  top are not clipped. `uMapPx` is the area on the tile grid (`s_areaW·16`, `s_areaH·16`), the
+  terrain's own. **Every one of these clips tests the sample's point
   moved to the ground's side of a fold**, `s = vWorld + e` with `e = TAGPU_EDGE_NUDGE / zoom`
   world px (`uNudgeW`), never `vWorld` itself. The terrain puts every fold — the map's four edges
   and each copy's own `x = q·W` — at the fold less `e` on screen, so a sample belongs to the side
@@ -258,6 +318,20 @@ draws no feature on the map or past it that frame, so no bail gives a bare mirro
 map; and a gather that runs mirrors exactly when the sync said so, since the sync has already
 checked the level, the dimensions and the copy the gather tests again. A load whose list was not
 built leaves the level with none, and the sync keeps the edge black.
+
+**MEASURED 2026-10-25, the fold at the area:**
+
+- **The picture reads as its reflection about the fold.** The correlation of the picture with its
+  own reflection about the fold line, all at the area's fold: Painted Desert's right fold 0.972
+  at 1× (terrain and its rocks), and in its bottom-right corner at 0.5× 0.927 on the right fold
+  and 0.93 on the bottom one; Assault on Suburbia's bottom fold 0.79 with the terrain alone.
+- **The lab mirrors as the game does**: on Assault on Suburbia's bottom edge the lab's mirror
+  and the game's differ by more than 8 levels at 0.04 % of the pixels.
+- **The camera's far ends** are in §2.3c (Painted Desert, Assault on Suburbia).
+
+The blocks below, 2026-09-24 and 2026-09-25, were measured with the fold and the camera's far
+ends at the tile map's own edge, the PLOT grid × 16; their south-east eye `(10304, 12448)` on Two
+Continents was the corner of that range.
 
 **MEASURED 2026-09-24** — Two Continents, `feat-forest` at 1024 × 768, `ss=2`, the reference setup's
 discrete GPU on a private Xvfb display:
@@ -490,6 +564,36 @@ launch a mode:
 - **A map with more than 65 536 features** is mirrored with its first 65 536 in row order.
 - **Under the GDI renderer nothing is built**, since nothing would draw it.
 - **The mirror carries no fog of war, no light and no units** — by the owner's call, as in the lab.
+- **Units and 3D wrecks are not clipped or dropped at the area.** Only the terrain and the GAF
+  features end at the extent; the unit pass draws whatever stands in the hidden strip. Units can
+  stand in part of it: the load mask leaves the bottom strip buildable on raised ground (above),
+  so a structure there is drawn over the mirror.
+- **A map whose 16-px dimensions are odd folds a tile short.** `tagpu_edge_area` rounds the
+  extent down to a whole tile, so on such a map (no stock one: all 275 TNTs are even) the last
+  16 px of the map that stock shows are drawn as mirror.
+- **The Classic++ restorer still sees the hidden strip.** Its neighbourhood keys (`nb_build`)
+  are built over the whole tile map, so the ring of the area's last column and row is read from
+  the hidden column's and rows' texels, which the mirror no longer draws beside them.
+- **The lab and the wiki mockup set the cut's uniforms.** Both run this pass's fragment stage,
+  extracted from `tagpu_feat.c`, through `tascene-render.js`'s `classicSprites`, whose `use()`
+  requires `uMapPx` and takes `uClip` as the pass publishes them: the lab the area × 32 and
+  `clip` = the mirror, the mockup the stage's tile map × 32 and 0 (the stage's cells are even, so
+  that is its target's own size and the cut discards no sample inside it). Left unset, `uMapPx`
+  reads (0, 0) and the black-edge cut discards every sample of the map's own features.
+- **The lab's black edge is not the game's.** The lab clamps the feature sweep to the area, and
+  its own sprites carry the anchor's drawn point as their world point, not each pixel's, so the
+  fragment-stage cut keeps or drops a whole sprite: under a black edge a tree anchored in the
+  hidden strip but drawn above the line is drawn in the game and not in the lab, and an on-map
+  tree's overhang past the line is cut in the game and not in the lab.
+- **Under a black edge the cut holds while the engine draws the ground.** The feature pass cuts
+  the map's own features at the area whenever the mirror is off, including frames whose terrain
+  the engine draws (the terrain pass handed back: its watchdog, `passive`). At zoom below 1 the
+  engine's pass then draws the hidden strip's ground and the trees standing on it are cut.
+- **A map whose area is under 8 rows tall** (`MF_LIFT_ROWS`; no stock map) misses the mirror
+  copies of a source two bands away; no index is affected.
+- **Under the debug `Edge` command** the extent can name less than the tile map or more; the
+  camera's far end takes the smaller of the extent and the tile map, and `tagpu_edge_area` answers
+  the whole tile map for an extent past it.
 
 **Risky spots for a review.** The LoadMap stub: its stolen bytes, the frame offsets it reads
 through `regs + 8`, and that every path joins there; `mapfeat_at_load`'s emulation of the spawn
@@ -503,13 +607,17 @@ flags' spare-bit bound, the fold flags and the vertex stage's decode and nudge; 
 origin (`div32_floor`) and what else reads `s_rectTx0`; the fold for negative and far distances;
 `mf_keep`'s order test and `mirror_gather`'s runs (`floor_div`, the copy's parity, copy 0 skipped on an
 on-map row, a turned copy walked in its source's order and broken off at the run's low column);
-the turned window `tuc0` against the engine's 10-left, 2-right sweep, and the view cull's row and
-copy tests; `map_key` as the one computation of the map's keys (the anchor loop calls it, and it
+the turned window `tuc0` against the engine's 10-left, 2-right sweep, and the view cull's copy
+test; `tagpu_edge_area`'s bound (`[1, cells32]`) and that the terrain, the feature pass and
+`camera_range` all read the packet's `map_pxw/h`; the bands (`floor_div(row, H)`, the neighbour
+within `MF_LIFT_ROWS`, the parity tests that keep a pair from naming one source row twice) and the
+drawn-position test that both the anchor loop and `mirror_feature` make; `frame_crosses` against
+`emit_frame`'s placement of shadow, body and sub-frames; `map_key` as the one computation of the map's keys (the anchor loop calls it, and it
 must stay bit-identical to main's inline arithmetic under x87 excess precision), and
 `mirror_key`'s source-column clamp and its off-row flat bands against the unit, wreck and effects
 keys; the mode's copy field (`TAGPU_FEAT_COPY_*`, bounded to `[−1024, 1024)` so the float
-attribute is exact) and the fragment stage's per-copy and off-row discards, each testing
-`s = vWorld + e`; `uClip` at 40 and `uNudgeW` at 44 in the 48-byte block, `uClip` set only while
+attribute is exact) and the fragment stage's per-copy discard and the map's own clip (`uClip`: the map's columns under the
+mirror, the area's right and bottom under black), each testing `s = vWorld + e`; `uClip` at 40 and `uNudgeW` at 44 in the 48-byte block, `uClip` set only while
 the gather mirrors; the tie rule's nudge (`TAGPU_EDGE_NUDGE_PX / zoom`, `+x` on a turned quad) and
 the world corners taken after it; `mapfeat_unpark` at every
 join, under the lock, before the build's first check; the table's place in the fill and cut order

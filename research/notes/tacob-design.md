@@ -52,7 +52,7 @@ prefix]`. The owner cannot obtain the Cavedog BOS sources.
 
 | Branch | Decision |
 |---|---|
-| Where the VM lives | **Python, with the compiler.** One language, one definition of the opcode semantics; the compiler's output is executed by the same code in the unit tests; the VM is verifiable against the engine's oracles from a plain script. A JavaScript VM in the page (60 fps, no per-tick call) was considered and rejected: two implementations of the semantics that would drift. The page polls one pose frame per tick over localhost, about a millisecond a call. |
+| Where the VM lives | **`tagpu/ddraw/src/tagpu_cobvm.c`, the one COB VM outside the engine, loaded through ctypes** ([its plan](ingame-wiki-cob-plan.html)). The in-game wiki links the same file and the game is to run it, so there is one definition of the opcode semantics for every program that runs a script; a second VM in Python or JavaScript would drift from it. tacob compiles it on first use from the checkout (`build/cobvm/<hash>/`, keyed by its sources) and the packaged folder ships it beside `tacob.exe`; running from source therefore needs a C compiler. The page polls one pose frame per tick over localhost, about a millisecond a call. |
 | Source of truth | **BOS.** COB is a build artifact. Opening a stock unit decompiles it once into a project; from then on you edit BOS and every save compiles. |
 | Round-trip gate | **Every stock COB decompiles and recompiles byte-identical** — the code words, the entry table, the script names, the piece names and the static count. Whole-file identity (the name area's layout) is only claimed against Scriptor itself. |
 | Dialect | **The community's Scriptor BOS, whole**, plus a C-preprocessor subset. See §The BOS dialect. |
@@ -76,10 +76,11 @@ prefix]`. The owner cannot obtain the Cavedog BOS sources.
 ## Architecture
 
 ```
-tools/tacob                      stdlib-only Python
+tools/tacob                      stdlib-only Python, and the VM in C
   bos: lexer, preprocessor, parser  -> AST
   cob: assembler (AST -> words), disassembler (words -> ops), decompiler (ops -> AST -> BOS)
-  vm : threads, pieces, statics, the eight-record pool, tick stepping
+  vm : tagpu_cobvm.c through ctypes (CobVM), retail rules (eight records) unless asked for
+       Impure's; the host answers get/rand and takes the effects into the director's world
   director: per-class scenarios, the weapon-slot protocols, the unit state record
   serve: local HTTP (stdlib) -> /state /pose /trace /events /source, and the POSTs
           /build /transport /event /world /pack /template
@@ -87,10 +88,15 @@ tools/tacob-edit.html            CodeMirror 6 + three.js, loads the project's GL
 tools/tacob-setup.html           the first-run picker: the game folder and the unit
 tools/tacob-include/*.h          our own standard headers, values verified against the engine
 tools/test_tacob.py              unittest: hand-built COBs, round trips, VM stepping, the paths
+tools/test_cobvm.py              the core under UBSan and ASan: the nine fixtures, the two builds'
+                                 rules, the effect log, refusals, the shared getters, two threads
 
 tools/tacob_app.py               the packaged entry point (`gui` is the default subcommand)
 tools/tacob.spec                 PyInstaller onedir; the three scripts ship as *data*
 tools/tacob-build.py             vendor · verify · wine-setup · build · check   (host side)
+                                 (`build` first cross-compiles the VM, x86_64-w64-mingw32-gcc for
+                                 the prefix's amd64 Python, into build/cobvm-win64/cobvm.dll, which
+                                 the spec ships beside tacob.exe)
 ```
 
 The page never reads a COB. It gets the piece tree from the GLB (node names = 3DO piece names,

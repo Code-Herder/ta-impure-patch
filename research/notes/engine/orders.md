@@ -211,6 +211,186 @@ that also calls `0x43ADC0` — do not read the `call 0x43adc0` at `0x43B09D` and
 `0x43B120` as the same site. It keeps a factory's queue as count nodes (*Replay state design*,
 in the demo recorder section).
 
+### The reclaim sweep's engine side: arming, the cursor chooser's calls, the reclaim click and its tail, the resolver's reclaim case [DISASSEMBLED 2026-10-26..28]
+
+What the reclaim sweep (`tagpu_sweep.c`, its hooks in `tagpu_route.c`; [gpu-status
+§2.110](../modules/reclaim-sweep.html#2110-the-reclaim-sweep-tagpu_sweepc-tagpu_sweepgeoc-tagpu_routec-2026-10-28)) rests on, every fact from `objdump -d -M intel` of
+`pristine/TotalA.exe.pristine` unless it says otherwise. The handler's head, the click routing and
+the placement's own hooks are in the section above; this is what cursor mode 12 adds.
+
+**Arming: mode 12 means "armed through the RECLAIM gadget".** The orders menu's handler (the
+`0x419BE0` chain the section above lists) copies the actuated gadget's name (`0x49FED0` at
+`0x419F47`: the record's 16 bytes at `+0x02`, through `0x4E4760` with a count of 16 [INFERRED: `strncpy`],
+terminated at `+0x10`) and tests it with `strstr(name, "RECLAIM")` — the needle at `0x5016C4`, the call to
+the C runtime's `strstr` `0x4E49B0` at `0x419F56` — so **any gadget whose name contains RECLAIM**
+arms it (ARMRECLAIM, CORRECLAIM, a mod's GOKRECLAIM). With the gadget's `status_init` (`+0x138`)
+0 it writes mode 1 (`0x419F71`) and jumps to the shared tail `0x41A06D`, which clears `main+0x2CC6`
+bit 3 (`0x41A079`) and plays `specialorders` (`0x41A080`); otherwise mode `0x0C` at `0x419F8A` (`c6 81 c3 2c 00 00 0c`),
+clears `main+0x2CC6` bit 3 (`0x419F96`) and plays `specialorders` (`0x5026E4`) through `0x47F1A0`
+at `0x419F9D`, returning at `0x419FAE` (`ret 8`); a name without RECLAIM goes on at `0x419FB1`.
+**So arming and disarming both play `specialorders`**, and neither touches bit 5, the
+Shift-placement bit (`0x419F3D..0x419FAF`). **`0x419F8A` is the only store of `0x0C` to `main+0x2CC3`** (a scan of every store
+to `+0x2CC3`), and the one register store, `0x419BC9`, is in the uncalled setter `0x419BC0`.
+
+**The quickkey toggles it off.** The GUI pump `0x4A9FD0` hands the character ring's key to the
+button handler `0x4A6AE0` (`0x4AA24C`, by the gadget-type table `0x4AA810`), which matches it against the gadget's `+0x13A` through `tolower`
+`0x4E5A30` and `toupper` `0x4E71C0` (`0x4A70FB..0x4A7129`, the C-locale fast paths read as `+0x20`
+/ `−0x20` on `A..Z` / `a..z`); a toggle (`+0x1B` bit `0x40`) flips `status_init`
+(`0x4A7132..0x4A713E`), a radio (`0x10`) sets it, then the gadget is redrawn (`0x4A5F40`), its
+radio group reset (`0x4A0340`: with a non-zero `assoc`, every other `id 1` gadget of that `assoc`
+has its `status_init` zeroed and is redrawn, `0x4A036D..0x4A03E1`) and the key popped
+(`0x4A716A`); the handler returns 1, the pump publishes the gadget's index at `GUI+0x60`
+(`0x4AA675`) and the orders handler `0x419BE0` reads it (`0x419BFA`, `0x419F3D`). A click's release
+inside the rect does the same (`0x4A6CB2..0x4A6CC8`) [DISASSEMBLED 2026-10-29]. So the RECLAIM
+quickkey pressed while armed turns the toggle off and `0x419BE0`'s RECLAIM branch writes mode 1. A letter reaches that ring only through
+`WM_CHAR`: the keydown translator `0x4C1D50(vk, sys)` reads Ctrl with `GetAsyncKeyState`
+(`0x4C1D54..0x4C1D6A`), pushes nothing for a key with neither `sys` nor Ctrl (`0x4C20EA..0x4C20F4`),
+and for `A..Z` pushes `vk + 0x69` under Ctrl (`0x4C2129..0x4C2136`) or the lower-case letter
+(`0x4C213D`, reached only from `WM_SYSKEYDOWN`'s call). The sweep takes the quickkey's `WM_CHAR`
+before the engine sees it, which keeps the whole key from it.
+
+**The cursor chooser's two calls.** `0x48D220(order)` is stdcall (`ret 4` at `0x48D397`,
+`0x48D3BE`, `0x48D410`) and reads its argument as a byte (`mov dl,[esp+0x28]`, `0x48D257`). It has
+exactly two call sites in the image and no stored address: `0x499297` in the in-play handler,
+after `push eax` at `0x499296` (`50 E8 84 3F FF FF`, the byte loaded at `0x499290`), and
+`0x491D36`, after `push ecx` at `0x491D35` (`51 E8 E5 B4 FF FF`, the byte loaded at `0x491D2F`),
+in `0x491D18..0x491D6C`, a copy of the handler's hover-and-cursor block inside `0x491CC0` --
+**which nothing calls**: no `call` or jump in `.text` reaches it and no four-byte value anywhere in
+the file falls in `0x491CC0..0x491D6F` [DISASSEMBLED 2026-10-28, an instruction scan and a literal
+scan], so in the engine `0x499297` is the one call that runs. Both push a whole register of which
+only the low byte is the mode, read nothing after the call but EAX, and reload `main` at once
+(`0x49929C`, `0x491D3B`); each then compares the answer with `main+0x2CBE` and stores it
+(`0x4992AD`, `0x491D4C`). The sweep rewrites the live call's rel32 to a wrapper that calls
+`0x48D220` and may answer `0x13` instead, and leaves the dead copy alone — the engine's own "nothing", stored
+by the handler at `0x49925D` and returned by `0x43E490`'s default at `0x43F098`.
+
+**The router's three hooks** (`tagpu_route.c`, written at attach, each byte-matched first): the
+two rel32 fields above (`0x499298..0x49929B`, `0x491D37..0x491D3A`), the before-observer on the
+handler's entry `0x499200`, and the 12-byte stub over `0x4993BF` (`E9 rel32` and seven `90`; the
+stub's three ways are the section above's). No branch in `.text` lands on `0x4993C0..0x4993CA`,
+the bytes the jump and the NOPs cover, and no absolute reference in the file names an address
+there (a branch scan and a literal scan of the pristine file, 2026-10-28). The stub dispatches on
+`main+0x2CC3`: 14 to the placement, 12 to the sweep, every other mode stock's.
+
+**Mode 12's cursor, `0x43E490` case 12 (`0x43E65C`).** The unit def's `+0x245` bit `0x400`
+(`0x43E65C..0x43E665`); the mapped test, inline (`0x43E66B..0x43E6CF`: the word at
+`main+0x14273`, bit `main+0x2A43`, the player's `+0x80`/`+0x84` dimensions); then the feature at
+the point, `0x43E6D5..0x43E754`: `0x4815A0` gives the cell; a word below `0xFFFB` is an anchor
+whose def index is bounded by the count `main+0x14253` (`0x43E6F5`); `0xFFFE` is a footprint tile
+whose anchor is `cell − (byte[+0xA]·W + byte[+0xB])` cells back (`0x43E71D..0x43E736`, 13 bytes a
+cell), and the word found there must be below `0xFFFB` (`0x43E73C`) — **the hop's def index is not
+bounded by the count, and nothing tests that the hop stays on the grid**. A def with `+0xFE` bit 7
+(`0x43E75A`) answers `0x0B` (`cursorreclamate`, `0x43E763`); anything else goes on at `0x43E770`.
+The sweep's own lookup (`tagpu_sweep.c`, `feature_of`) repeats the rule with the two missing
+bounds added.
+
+**The click and its tail.** With a cursor below `0x11` other than `0x0F` (select) the click
+`0x498F70` issues the order
+(`0x48CF30` at `0x499087`) and then, when the record's `+8` has bit 2 (Shift), sets
+`main+0x2CC6` bit 5 and returns (`0x499092..0x4990A0`); otherwise it writes mode 1, clears bit 5
+and resets STOP's radio group (`0x4990A3..0x4990F1`: `0x49FE60([[main+0x531]+4], "STOP")`, then
+`0x4A6A40`). From `0x11` up it does nothing, but for the Interface Type 1 deselect in mode 1
+(`0x499041..0x49906A`). **No sound on this path.** `0x4958C0(keep)` (`ret 4`) is that same tail as
+a function: `keep` ≠ 0 → bit 5 (`0x4958CD`); else mode 1 (`0x4958D7`), bit 5 cleared, the STOP
+reset (`0x4958FD..0x49591F`). It reads `[main+0x531]` and its `+4` with no test. **It has no caller
+and no stored address in the image** (a call scan and a literal scan); the sweep calls it after a
+commit.
+
+**`0x49FE60(ctrls, name)` is a substring search.** `ret 8`; the count is `ControlsAry[0]`'s i16
+`+0xB6` (`0x49FE67`), the walk starts at `ControlsAry + 0x15D`, record 1's name (`0x49FE7D`), and
+each record's name is the haystack of `strstr(record name, name)` (`0x49FE83..0x49FE8F`, a
+case-sensitive byte compare inside `0x4E49B0`); the first match returns its index (`0x49FEAE`),
+the walk steps `0x15B` (`0x49FE99`) to the count (`0x49FEA2`), and a miss returns −1 (`0x49FEA4`).
+So `"STOP"` finds the first gadget whose name contains STOP, and the sweep finds its RECLAIM
+gadget by the same rule the arming uses.
+
+**A gadget's rect after the load.** The face loader (`0x4A7F70`, [gui-gadgets](../gui-gadgets.html)
+*The face a button draws*) keeps the face's GAF sequence at `+0x2F` (`0x4A8113`) and then writes
+the base frame's width and height (`GAF_SequenceIndex2Frame 0x4B7F30(sequence, +0x13B)`, its
+first two words) into the record's `+0x17`/`+0x19` (`0x4A812B..0x4A8136`, the store `0x4A812E`).
+So a loaded button's rect is its face's, not the `.GUI` file's; the popup anchors to it.
+
+**The order resolver's reclaim case, `0x43F0E0` mode 12.** The mode is `(byte)mode − 1` into the
+jump table `0x4401EC` (`0x43F12D..0x43F14D`, table entry 11 = `0x43F4F7`); `edi` holds the target
+unit throughout (`0x43F0E8`). The case: the def's `+0x245` bit `0x400` (`0x43F4FD`, else refused);
+the feature at `pos` (`0x43F50B..0x43F58A`, the same lookup as above); with `+0x245` bit `0x800`,
+the mapped bit and a reclaimable feature, `RESURRECT` (`0x43F5A5..0x43F612` → `0x44004C`); else
+with the mapped bit (`0x43F623..0x43F67B`) and a feature whose def has `+0xFE` bit 7
+(`0x43F67D..0x43F688`), `VTOL_RECLAIM` (`0x501B68`) when the def's `+0x241` bit 11 is set
+(`0x43F68A..0x43F69F` → the name tail `0x4401C7`) or `RECLAIM` (`0x5016C4`, `0x43F6A5` →
+`0x440183`, the name pushed at `0x440187` and resolved by `0x438760` at `0x44018F`); else, with a
+target unit, `VTOL_RECLAIMUNIT` (`0x501B48`, `0x43F6B2..0x43F6C6`) or `RECLAIMUNIT` (`0x501B5C`,
+`0x43FA33`); with none, the answer byte is 0 (`0x43F6AA..0x43F6AC` → `0x4401DC`, the store at
+`0x4401E3`). **So with no target unit mode 12 answers a reclaim-family order or nothing.**
+
+The block `0x43FF38..0x4401D9` is **not** mode 12's: it is reached only from the contextual case
+(table entry 0, `0x43F9E9`, its Interface Type 0 arm at `0x43FE35`; a scan of every branch into
+`0x43FE35..0x4401DB` from outside it finds only `0x43F9F6` and `0x43FA0D` there, and otherwise
+the shared tails `0x44004C`, `0x440183`, `0x4401C2` and `0x4401C7`). It repeats the reclaim
+choice — `RESURRECT` (`0x43FF40..0x44004C`), the mapped test and reclaimable feature
+(`0x440065..0x44016E`, the `+0xFE` test at `0x440167`), `VTOL_RECLAIM` by `+0x241` bit 11
+(`0x440170..0x440181`, the name loaded at `0x440176`; mode 12's own test is `0x43F68A..0x43F69F`, the one
+`tagpu_sweep.c` cites) or `RECLAIM`
+(`0x440187`) — and falls back,
+for a def with `+0x245` bit `0x80` and a non-zero first dword of the unit, to `VTOL_MOVE`
+(`0x5016CC`) or `MOVE_GROUND` (`0x5052E4`) by the same bit 11 (`0x44019D..0x4401D9`). That
+fallback is the contextual click's move, not an answer mode 12 can give.
+
+**`PositionInPlayerMapped 0x408090(player, pos)`** answers 0 off the player's grid: the column
+`x >> 5` against `+0x80` and the row `(z − alt/2) >> 5` against `+0x84` (`0x4080B5..0x4080BF`),
+`xor eax,eax; ret 8` at `0x4080C1..0x4080C4`. The line-of-sight fix's stub replaces
+`0x408095..0x4080C0` (*Line of sight at the map's edge*, the census row `0x4080B9`), so with that
+fix armed the bound is the stub's. The sweep asks it for every candidate feature, with the
+representative reclaimer's player bounded to one of the ten player records first.
+
+**The reclaim order's countdown, `0x404AD0`.** Each call finds the feature at `order+0x22`
+(`0x421DA0` at `0x404AE9`); none (`0xFFFF`) logs "Reclamation failed" (`0x501638`, pushed at
+`0x404AF8` with the kind 7, through `0x47F780`) and returns 8; a def without `+0xFE` bit 7 returns 8 (`0x404B2A`). The state byte `order+5` indexes
+the table `0x404D8C` (states 0..5). State 1 sets the countdown `order+0x36 = 15 + (energy +
+metal) / 2` (`0x404BBA..0x404BDC`: `fld [def+0xEC]`, `fadd [def+0xF0]`, `fmul` by −0.5 at
+`0x4FC940`, `fsubr` 15.0 at `0x4FC944`, `0x4E43A0` [INFERRED: `_ftol`], the store at `0x404BDC`);
+state 4 takes 2 off it per working call (`0x404C7C..0x404C84`, after `0x439E80(2)` at `0x404C77`)
+and tests it at `0x404C89`: above 0 it carries on, at 0 or below it returns 1 without paying
+(`0x404C8B`). The controller takes 1 as "next state" (the jump table `0x43BAA4`, entry 1 →
+`0x43B897`, `inc byte [order+5]`) and loops, and the order's timer bit set by `0x439E80(2)`
+(`order+6 |= 1`, `order+0xA = now + 2`) skips it there (`0x43B817..0x43B81D`) until the two ticks
+are up; state 5 then pays out (`0x4237D0` at `0x404D66`, result 5) -- after the entry's lookup,
+so a feature gone in between fails as above. The calls are two ticks apart and a countdown C0
+takes `ceil(C0 / 2)` working calls, its payout `2 · ceil(C0 / 2)` ticks after the first
+[DISASSEMBLED 2026-10-29; the timer skip assumes no `unit+0xBA` event is pending]. **No worker-time term**: nothing in `0x404AD0..0x404D8B` reads the
+unit def's `+0x1FE` or `+0x212` or the feature's build time. Between the first call and the
+payout the order sprays only while the countdown is above 15 (`0x404CB5`), from two reverse
+emissions a call (`0x404D3B`, `0x404D4C`). **The spray's source box** (`0x404CC9..0x404D37`): the
+anchor cell's corner, each cell coordinate `<< 20` (16 world units in 16.16, `0x404CCD..0x404CDA`);
+the far corner that plus the def's `+0x94` and `+0x96` `<< 20` [INFERRED: FootprintX and
+FootprintZ] (`0x404CEB..0x404D0D`); the bottom the ground height `0x485070` answers
+(`0x404CE6`) and the top that plus the def's byte `+0xFA` `<< 16`, the height (`0x404D17..0x404D2D`);
+both emissions are called with the same box and the nano piece's point (`0x404D37` stores the last
+corner). The wiki's stage, whose ground is 0, sprays from the same box (`tagpu_wikisim.c`
+`spray_feature`, sim.js `sprayFeature`).
+
+**The walk's arrival, `0x44DCB0(x, z)`** (thiscall, `ret 8`): 1 exactly on the border cells of
+the rect at `this+0x08..+0x14` -- `x` equal to `+0x08` or `+0x0C` with `z` in `[+0x10, +0x14]`,
+or `z` equal to `+0x10` or `+0x14` with `x` in `[+0x08, +0x0C]` (`0x44DCB9..0x44DCF7`), 0
+otherwise [DISASSEMBLED 2026-10-29]. For a feature's reclaim that rect is the ring of cells round
+the feature's footprint widened by the unit's [INFERRED: from the goal `0x44D8A0` builds], so the
+unit works from where the footprints touch and BuildDistance is never read; the wiki's walk stops
+on the same ring (`to_feat`). The sweep's split weighs a target by
+`2 · ceil(C0 / 2)` ticks (`sweep_reclaim_ticks`).
+
+**What the sweep calls and why each is safe to call there.** All from the in-play handler on the
+game thread, where stock's click calls the same roots: the resolver `0x43F0E0` once a target and
+builder before each order; `0x43ADC0(action, 1, unit, NULL, pos, 0, 0)` for every order (append;
+`0x43AFC0` with Shift would toggle off a same-action node within ±16 units, *Contextual
+cancellation*); `0x439F80` for the nodes a ring without Shift takes off, each re-found by a fresh
+walk (no node pointer survives the destructor `0x43A1F0`); `0x4958C0(shift)` after a commit that
+ordered or removed anything; `0x408090`, `0x485070` and `0x438760` (the three family names
+`0x5016C4`, `0x501B68`, `0x5052F0`) as pure reads.
+
+**Gaps.** The contextual block's `0x4401AA` test (the unit's first dword) is not identified. The
+hovered-unit path of `0x43E490` case 12 from `0x43E770` was not traced. The radius feature scan
+`0x47EA40` (callers `0x405B93`, `0x41564F`) is not used and its arguments are not mapped.
+
 ## Direct AI order activity observer
 
 DISASSEMBLED against the pristine 3.1 executable: `0x408C40` has one direct
@@ -306,6 +486,7 @@ are an instruction-level `call rel32` scan of `.text`, not a scan of address-sha
 | `0x43AFC0` | Ordinary mouse order dispatch, `stdcall(action, shift, unit, target, pos, param1, param2)`, `ret 28`. Called at `0x4197A9` (manual build) and `0x48D1F4` (contextual command). A build's param1 is the definition ID; an upgrade uses the resolved reclaim action then an appended build |
 | `0x438760` | Action-name lookup, thiscall `(output_byte*, name)`; 109 direct callers, including manual dispatch `0x4197A4`. Resource dispatch asks for `MOBILEBUILD` (`0x502654`) or `VTOL_MOBILEBUILD` (`0x502640`) according to the builder's fly bit |
 | `0x43F0E0` | Action resolver, `stdcall(index*, mode, unit, target, pos)`; returns the caller's output pointer; refusal writes action byte zero (`0x4401E3`), which native dispatch rejects at `0x48D0AF`. Guard is mode 7, reclaim mode 12. There are 28 direct callers; context dispatch uses `0x48D0A0`, script orders `0x4804A3`, and constructor/assist paths `0x487D5B`..`0x487F8C`. Resource input asks the resolver instead of assuming every selected builder can reclaim or Guard |
+| `0x41ACE0`'s calls | **Quick Build's candidates are each selected constructor's build menu** (owner decision 23), read by `tagpu_resource.c` `build_menu` as the page loader reads it, on the GAME thread inside `quick_choice`'s callers (the gates above and the packet fill), never inside an engine file call. Per page from `tagpu_buildmenu_pages(def+0x241 bit 31, def+0x22E)`: the probe `0x4290F0(buf[1024], 0x502820, "<NAME><page>.GUI", 0x502828)` + `0x4BBC40`, else `<prefix>DL` with the watched player's side (bounded below min(`main+0x37F39`, 5), prefix `strnlen < 4`); GUI_Load's path from `main+0xECF` (`strnlen < 0x100`); the file through `0x4BB5B0`/`0x4BBD00`/`0x4BB710`/`0x4BB7C0`/`0x4BB5D0`, 1 byte to 1 MiB, the read exactly the size; the builder's download entries from records below `[main+0x391C7]`, five a record; `0x488B10`'s answer masked to its word and bounded below the def count. The rule is `tagpu_buildmenu.c`; the table holds type numbers per def table (base `main+0x1439B` and count `main+0x1438F`, which the teardown `0x42DB90` frees (`0x42DCCB`) and zeroes (`0x42DCE6`) and the menu-time loader `0x42A8D0` allocates anew, `0x4D83B0` at `0x42AA8A` stored at `0x42AA98`), level generation and side. CANBUILD `+0x152`/`+0x156` is not read |
 | `0x48CD80`, `0x48D220` | Hovered-unit query and context resolution; callers respectively `0x491D18`/`0x499278` and `0x491D36`/`0x499297`. Hovered unit ID is stored at `main+0x2CBA`; feature ID is `+0x2CBC` |
 | `0x481930` | Explored-map setter, six callers: `0x4818E6`, `0x48269C`, `0x48279B`, `0x482901`, `0x482A94`, `0x482C08`. Uses the player's map bit, not its seat number; allocation `0x483CF6`..`0x483D25` is W×H/4 u16 entries for even W/H |
 | `0x422040` | Applies indestructible metal-spot feature values to grid byte `+7`; only caller `0x483D7D`. The cell's feature ID must be below `0xFFFB`, its definition's metal float `+0xF0` nonzero and flags `+0xFF & 2` set. Uses definition footprint `+0x94/+0x96`, bounds helper `0x481550`, and float conversion `0x4E43A0`. This is how the private synthetic fixture supplies metal values |
@@ -437,11 +618,10 @@ Unit flags `+0x110`: alive `0x10000000`, selected `0x10`, excluded `0x4000`, str
 `u16 +0x76/+0x78`, footprint size `+0x7E/+0x80`.
 
 Definitions: footprint shorts `+0x14A/+0x14C`, yard pointer `+0x14E` (allocated as FootX×FootZ by
-`0x42CF30`), CANBUILD count `+0x152` and u16-array pointer `+0x156`. The existing whole-build-list
-patch maintains `bl_room(count)` at every allocator/copy/append; resource hooks require its
-complete installed state. `s_buildListsLive` is `SIM_INSTALL`, set from the deferred patch-table
-registration; its public predicate also requires `s_limState == 1`. This prevents input using a
-count bound without the allocation bound. Building movement code is byte `+0x22F == 0`, builder
+`0x42CF30`). Quick Build's candidates come from the builder's build menu (the `0x41ACE0` row
+above), not from CANBUILD `+0x152`/`+0x156`, so the resource hooks do not depend on the
+whole-build-list patch. The menu reads the page count byte `+0x22E`, the orders-page bit
+`+0x241` bit 31, the type word `+0x21E` and the name `+0x20`. Building movement code is byte `+0x22F == 0`, builder
 bit `+0x241 & 0x40`, fly bit `+0x241 & 0x800`; worker time is u16 `+0x1FE`, repair capability
 `+0x245 & 0x200`. Metal extraction and energy output floats `+0x1CE/+0x1C2` must be finite and
 positive. Geo recognition scans the complete bounded yard for byte `0x8F`, at most 64×64 cells.
@@ -476,13 +656,26 @@ the target comparison. With no match, `0x43B08A`..`0x43B09D` appends through `0x
 `[esp+0x24]`; a non-head removal sets `+0x42 & 0x10000` at `0x43B068`. The calls at
 `0x43B075` and `0x43B07B` destruct (`0x43A1F0`) and free (`0x4B4F20`) it, then return
 without creating an order. The root is used by manual placement `0x4197A9`, contextual orders
-`0x48D1F4` and the resource input path.
+`0x48D1F4` and the resource input path. A match flagged `0x40000` removes nothing and adds
+nothing: the node was found on the main chain, the unlink searches the `+0x60` chain for it, and
+the call returns at `0x43B054..0x43B058` (`ret 0x1C`; or `0x43B044` → `0x43B0A2` when that chain is empty)
+[INFERRED: a node is on one chain only]. **The consequence for repeated Shift-clicks**: the match
+is the first node of the action within ±16 inclusive, whatever its build type, so two 1×1 sites
+16 world units apart toggle each other, and a run of stock Shift-clicks along a line of 1×1
+buildings alternates add and remove [DISASSEMBLED 2026-10-25, `0x43AFC0..0x43B0A6`].
 
 The destructor calls the action handler with flags 2 at `0x43A21A` when node byte `+6 & 2`
-is set. Flags `+0x42 & 0x400000` run the native `StopMoving` script lookup/start at
-`0x43A227`..`0x43A258` (`0x4B07C0`, `0x4B0B00`, `0x456190`). Its `+0x52` object cleanup
-at `0x43A264`..`0x43A2A4` can invoke virtual destructors. A head removal also calls
-`0x489800(unit,3)` at `0x43A2B9`; the `0x10000` flag skips that call for non-heads.
+is set. Flags `+0x42 & 0x400000` run the native `StopBuilding` script (`0x505104`) lookup/start at
+`0x43A227`..`0x43A258` (`0x4B07C0`, `0x4B0B00`, `0x456190`) and clear the bit (`0x43A25D`). Its
+`+0x52` object cleanup at `0x43A264`..`0x43A2A4` can invoke virtual destructors. A head removal
+also calls `0x489800(unit,3)` at `0x43A2B9`, which resets the unit's slots 0..2 and queues a COB
+start of `TargetCleared` (`0x508D58`, `push` at `0x489893`, through `0x4B0A70`) for each slot it
+resets; the `0x10000` flag skips that call for non-heads [DISASSEMBLED 2026-10-25]. **Flag
+`0x40000` is never on a `+0x5C` node:** the constructor is its one writer (from the descriptor's
+`+0x11`, `0x43A18F..0x43A196`; every immediate OR into `+0x42` in `.text` is `0x10000`,
+`0x400000`, `0x2000` or `0x8000`), and both linkers put a node carrying it on `+0x60` —
+`0x43A020` (`0x43A07D..0x43A09D`) and `0x43ADC0` (`0x43AEF0..0x43AF2B`) [DISASSEMBLED
+2026-10-25]. So `0x43AFC0`'s `0x40000` case, a match on the `+0x5C` scan, is never reached.
 `0x489650` at `0x43A2C1` releases the target reference at `node+0x12`. Thus cancellation
 can re-enter engine handlers, and retaining an order-node pointer across the root is unsafe.
 
@@ -509,7 +702,15 @@ proof. After reclaim removal no node pointer is used. Helpers' Guards remain int
 stdcall layout and `ret 28` as `0x43AFC0`. It constructs a `0x56`-byte node through
 `0x4B4F10`/`0x43A0C0` at `0x43ADC4`..`0x43ADF4`, preserves existing non-temporary work with
 Shift, and replaces removable work without Shift (`0x43AE02`..`0x43AE59`). The native temporary
-head cleanup and linking retain their normal descriptor flags (`0x43AE5B`..`0x43AFB1`). It does
+head cleanup and linking retain their normal descriptor flags (`0x43AE5B`..`0x43AFB1`). In
+detail [DISASSEMBLED 2026-10-25]: without Shift, and when the new node lacks `+0x42` bit `0x40`,
+every main-chain node lacking bit 4 is destroyed; then, on every call unless the new node has
+`0x40000`, the chain's head is destroyed while it carries `0x4000` (`0x43AE72..0x43AECE`). The new
+node gets `+0x42 |= 1`, and `|= 0x2000` without Shift (`0x43AEE7`). A node with `0x40020` is linked
+at the head of its chain (`+0x60` for `0x40000`, else `+0x5C`) and takes the old head's `0x4000`.
+Any other node gets `0x1000` and is linked **after the node carrying `0x1000`**, whose bit is
+cleared (`0x43AF84`), or at the tail when none does, or as the head of an empty chain
+(`0x43AFA4`). So consecutive appends land in call order, each after the one before. It does
 not run the mouse root's proximity toggle. New Quick reclaim/build orders use this root, ensuring
 that Shift can append a distinct adjacent site. Its 27 direct callers are `0x4029A5`, `0x402E5E`,
 `0x402EFA`, `0x403DC5`, `0x408064`, `0x4082B0`, `0x408421`, `0x408453`, `0x4085A1`, `0x4140F3`,
@@ -823,7 +1024,7 @@ word at `+0x137`. This is the allocation bound, not a readable-page probe.
 Resource raw coordinates are captured after the `0x499221` conversion independently of zoom.
 With zoom disabled, the installed wrapper calls pristine `0x498DA0` directly before capture;
 no zoom conversion or viewport rect write runs. Resource hooks require that producer
-installation to be live, in addition to the complete CANBUILD allocation patch.
+installation to be live.
 
 The resolver's mode-7 branch at `0x43F4C7` requires definition `+0x245` bit `0x20`
 (CanGuard) and a nonzero relationship at `0x43F4D4`. Mode 12 starts at `0x43F4F7` and

@@ -430,15 +430,32 @@ static const struct { const char* name; unsigned bit; } SCN_SWITCHES[] = {
     { "radar", 0x200 }, { "shootall", 0x400 }, { 0, 0 }
 };
 
-/* TA's own order table [TA_MemoryStructures.pas:6-21]. There is no attack-move;
-   the CLI rejects the word and offers `attack` at a coordinate instead.
+/* The command types of TA's order mapper Type2Index 0x43F0E0, which jumps on type - 1 through
+   the table 0x4401EC (0x43F141..0x43F14D) [DISASSEMBLED]; the numbering is TADR's
+   [TA_MemoryStructures.pas:6-21] except stop's. There is no attack-move; the CLI rejects the word and offers
+   `attack` at a coordinate instead.
+   `stop` is type 10, although TADR names type 1 BUTTON_ORDER_STOP. Type 1 (0x43F9E9) is the
+   right click's contextual default command: with no target and the position (0,0,0) it gives a
+   ground unit Move_Ground (action 26) to the map's corner (MEASURED 2026-10-27, an ARMCK, 3 of
+   3). Type 10 goes to 0x43F82C, which looks up the script action "STOP" (0x502714) through
+   0x438760 and tests nothing of the unit, its def or a target [DISASSEMBLED]. That is the action
+   the sidebar's STOP button gives each selected unit: 0x419CE5 looks up the same string, and
+   0x48CF30 hands it to ORDERS_NewMainOrder2Unit 0x43AFC0 with no target and a NULL position
+   (0x48D1D9..0x48D1F4). The zero position passed below makes the same node: without Shift
+   0x43AFC0 hands the position only through 0x43ADC0 to the node constructor 0x43A0C0, which
+   stores (0,0,0) for a NULL one (0x43A13A..0x43A164) and clears the node's +0x42 bit 0x400
+   (0x43A1A7..0x43A1B3), a bit Stop's descriptor flags (0, the static record 0x4FC490, +0x11)
+   never set [DISASSEMBLED]. This is the order alone: the button's own writes stay the button's,
+   which disarms an armed build (main+0x2CC3 = 1, 0x419CC2), clears main+0x2CC6 bit 3
+   (0x419CCE..0x419CD8) and plays `immediateorders` through 0x47F1A0 (0x41A0EA)
+   (exe-reverse-engineering.md, *STOP and ATTACK*).
    `teleport` (11) is the engine's own Teleport, which stock play never issues: Type2Index
    0x43F0E0 jumps on the type (0x43F14D) to 0x43F813, which names the script action "TELEPORT"
    for any unit with no test of the def (DISASSEMBLED), and the action's handler 0x406AA0 moves
    every other unit inside the box the ordering unit's def gives about it (+0x15E..+0x172) to
    the order's position, offset kept (scenario-format.md, *Order vocabulary*). */
 static const struct { const char* name; int id; } SCN_ORDERTYPES[] = {
-    { "stop", 1 }, { "move", 2 }, { "attack", 3 }, { "blast", 4 }, { "unload", 5 },
+    { "stop", 10 }, { "move", 2 }, { "attack", 3 }, { "blast", 4 }, { "unload", 5 },
     { "load", 6 }, { "defend", 7 }, { "repair", 8 }, { "patrol", 9 }, { "teleport", 11 },
     { "reclaim", 12 }, { "capture", 13 }, { "mobilebuild", 14 }, { 0, 0 }
 };
@@ -1482,7 +1499,11 @@ static void create_features(void)
 
         fe->feat = SpawnFeatureOnMap(plot, (short)fe->defIdx, pos, turn, 10);
 
-        if (!fe->feat)
+        /* A NULL return is not a refusal for a 2-D feature (a tree): 0x423C50 creates a
+           feature object only for a def without +0xFE bit 0 (0x423D96) and returns it,
+           else 0 (the local zeroed at 0x423C60). Its sprite branch writes the def into the
+           anchor cell's +8 at 0x423EE5, so that word is the placement fact. DISASSEMBLED. */
+        if (!fe->feat && *(unsigned short*)((char*)plot + 8) != (unsigned short)fe->defIdx)
         {
             fe->ok = 0;
             g_failed++;

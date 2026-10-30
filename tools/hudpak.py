@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
-"""hudpak.py -- pack the replay HUD (art/hud/) into the one archive the DLL embeds.
+"""hudpak.py -- pack a folder of art/ into an archive the DLL embeds.
 
-    python3 tools/hudpak.py <art/hud> <out.bin>
+    python3 tools/hudpak.py [--set hud|wiki] <folder> <out.bin>
 
-The DLL reads art/hud/ as the mockup does -- layout.json and kit.json as JSON, the parts as PNG,
-the faces as TrueType -- so nothing here converts: the files go in as they are, behind a
-directory, and res.rc embeds the result as the RCDATA resource HUDPAK (src/tagpu_hudart.c reads
-it). The licence texts go in too, so the faces never travel without them.
+The DLL reads its art as the mockups do, so nothing here converts: the files go in as they are,
+behind a directory, and res.rc embeds the result as an RCDATA resource (src/tagpu_pak.h reads it).
+A set names the files of one folder:
+
+    hud   art/hud/, the resource HUDPAK (src/tagpu_hudart.c): layout.json and kit.json as JSON,
+          the parts as PNG, the faces as TrueType, and the licence texts, so the faces never
+          travel without them. The default.
+    wiki  art/wiki/, the resource WIKIPAK: tree.json and the entries (src/tagpu_wikidata.c),
+          the stage descriptions stage/<entry>.<scene>.json (src/tagpu_wikiasset.c, which resolves them
+          against the player's archives), the sidebar layouts side/<name>.json, fixture.json
+          the one the wiki falls back to (src/tagpu_wikidata.c), layout.json, the window's
+          numbers (src/tagpu_wikilay.c), and the window's kit,
+          kit/kit.json and its parts as PNG (src/tagpu_hudart.c), as tools/hudart/fit.py --set
+          wiki fits them from art/wiki-full/kit/.
 
 THE STANDARD LIBRARY ONLY, like tools/artbake.py: the build's Python is the bare python3 CI has.
 
@@ -21,15 +31,25 @@ import sys
 from pathlib import Path
 
 VERSION = 1
-KEEP = ("layout.json", "kit.json", "parts/*.png", "fonts/*.ttf", "fonts/*.txt")
+# per set: the globs it keeps, and the files it cannot do without
+SETS = {
+    "hud": (("layout.json", "kit.json", "parts/*.png", "fonts/*.ttf", "fonts/*.txt"), ("layout.json", "kit.json")),
+    "wiki": (("tree.json", "layout.json", "entries/*.json", "stage/*.json", "side/*.json", "kit/kit.json", "kit/parts/*.png"),
+             ("tree.json", "layout.json", "side/fixture.json", "kit/kit.json")),
+}
 
 
 def main():
-    if len(sys.argv) != 3:
+    args = sys.argv[1:]
+    name = "hud"
+    if args[:1] == ["--set"] and len(args) >= 2:
+        name, args = args[1], args[2:]
+    if len(args) != 2 or name not in SETS:
         sys.exit(__doc__)
-    root, out = Path(sys.argv[1]), Path(sys.argv[2])
-    files = sorted({p for g in KEEP for p in root.glob(g) if p.is_file()})
-    for need in ("layout.json", "kit.json"):
+    keep, needs = SETS[name]
+    root, out = Path(args[0]), Path(args[1])
+    files = sorted({p for g in keep for p in root.glob(g) if p.is_file()})
+    for need in needs:
         if not (root / need).is_file():
             sys.exit(f"hudpak: {root / need} is missing")
     names = [p.relative_to(root).as_posix().encode() for p in files]

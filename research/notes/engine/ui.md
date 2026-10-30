@@ -52,8 +52,9 @@ at `0x5122D4` with its length at `0x5122DC`, its count at `0x5122E0` and a flag 
 **The file primitives it and the fix use** [DISASSEMBLED 2026-09-28]:
 
 - `0x4290F0(out, dir, name, ext)`, `stdcall`, `ret 0x10`: `0x49F580` returns the `language`
-  value (`0x51FB50`, read from the registry value named at `0x5097E8` by `0x42F980` at
-  `0x49E9F7` and set to "english" when empty, `0x49E9FC..0x49EA27`), so it first tries
+  value (`0x51FB50`: a non-option command-line argument, else the registry value named at
+  `0x5097E8` read by `0x42F980` at `0x49E9F7`, else "english", `0x49E9FC..0x49EA27`; the
+  language's two writers are under *The wiki's per-mod tutorials*), so it first tries
   `"%s-%s\%s"` (`0x503378`) — `Maps-english\name` on an English install — and keeps it if
   `0x4BB5B0` opens it (closed again with `0x4BB5D0`); otherwise `dir\name`. Either way, with an `ext`, `0x4BB0F0` cuts the name at its last dot and
   `"." + ext` is appended. It writes `out` with no bound.
@@ -112,6 +113,76 @@ is absent at launch (an archive installed only some of the time) is replaced in 
 the options load, where stock kept it and fell back in memory when the SKIRMISH screen could not
 load its `.ota` (`0x47BCD7`).
 
+### The in-game wiki's engine questions: the four input channels, the network bit `main+0x2A44` and the pause [DISASSEMBLED 2026-10-25]
+
+The in-game wiki (`tagpu_wiki.c`, [the plan](../ingame-wiki-plan.html), landing 2) holds every input
+channel while its window is open and pauses single player. It reads two engine bits and writes one,
+all on the game thread through `tagpu_menu.c` (`tagpu_menu_single_player`,
+`tagpu_menu_pause_hold`); everything else it does is outside engine memory.
+
+**The four channels TA reads input through, and only these.** The import table names no
+DirectInput library (`objdump -p` of `pristine/TotalA.exe.pristine`).
+
+| Channel | Engine sites | What it drives |
+|---|---|---|
+| Messages to TA's window procedure | The only pushers of the key and mouse rings: `WM_KEYDOWN` → `0x4C1D50` at `0x4B5D8E`, `WM_SYSKEYDOWN` at `0x4B5DC3`, `WM_CHAR` → `0x4C1B20` at `0x4B5DEA`, the buttons → `0x4C2E30` at `0x4B5F51` (*Who pushes the two rings*). `WM_MOUSEMOVE` pushes nothing but writes the mouse object's `+0x196`/`+0x19A` (`0x51F4B6`/`0x51F4BA`) | orders, selection, hotkeys, chat |
+| `GetCursorPos`, IAT `0x4FC2E4` | `0x4C2610`, where the mouse thread `0x4C2990` stores `+0x196` every ~33 ms (*The engine's mouse thread*); `0x41CEE7` (the scroll poll's warp-back), `0x4C24DE`, `0x4C28AA`, and the wrapper `0x4C2310`, which no `call` names. Every `call [0x4FC2E4]` | the scroll poll's edge test (an exact equality on the outermost pixel, `0x4C2340` at `0x41CEC5`), the in-play handler `0x499200`'s region test and hover, the recorder's cursor sample `main+0x2CAA` |
+| `GetAsyncKeyState`, IAT `0x4FC350` | the hotkey sampler `0x4C1B80` (`0x4C1BA3..0x4C1C2F`, eight sites); the keydown translator's Ctrl test `0x4C1D56` | the arrow scroll (hotkeys `0xF4..0xF7` in `0x41CE90`); the Shift test `0x4992D8` |
+| `GetKeyState`, IAT `0x4FC2EC` | one site, `0x425F6E` (`VK_SHIFT`, front end), and the thunk `0x49F7D6` | the front end only |
+
+Beside the `GetKeyState` thunk `0x49F7D6` (`jmp [0x4FC2EC]`) sits the `GetCursorPos` thunk
+`0x49F7CA` (`jmp [0x4FC2E4]`); neither is named by a `call`, a `jmp` or an absolute pointer in the
+image (*`GetCursorPos` is the IAT slot*, below) [DISASSEMBLED 2026-10-26].
+
+The three polls reach cnc-ddraw's `fake_GetCursorPos`, `fake_GetAsyncKeyState` and
+`fake_GetKeyState` (`winapi_hooks.c`), which answer the frozen point and 0 while the wiki holds
+input. The mouse thread's poll is the one caller on another thread, and the one poll that stores
+what it reads (the live point, in `g_ddraw.cursor`): it tests the capture word and makes that store
+under the lock the wiki's open and close hold, so each poll's store falls wholly before or after the
+open. The key polls store nothing, and an interlocked read of the word orders them.
+
+**Where the frozen pointer leaves the in-play handler.** The frozen point is the opening press, on
+the wiki button in the top bar. `0x499200` finds it on neither the minimap nor the viewport
+(`0x49922C..0x499252`), sets `cursornormal` (`0x49925D`) and jumps past the build cursor
+`0x4197D0` and the hover query `0x48CD80`: no placement ghost, no hover tooltip. The button spans
+bar rows 2..29, never the outermost row the scroll poll's edge test asks for. **Shift reads up**:
+after a Shift placement (`main+0x2CC6` bit 5) the test at `0x4992D8` runs for every mouse record
+after the region test and disarms the building, as letting go of Shift would.
+
+**The network bit, `main+0x2A44` bit 0.** The frame callback takes its network branch on it at
+`0x4967E7` (`test [eax+0x2a44],bl; je 0x496918`), which calls the scheduler (`0x4967F3`) and the
+step (`0x49680C`) and never reaches the pause test `0x496920`. Every store whose operand carries
+the displacement `0x2A44`: bit 0 set only in the front end (`0x426D34`, `0x42700C`, `0x4277DF`,
+`0x427B02`, `0x427C0F`, `0x428478`), cleared only in play or its teardown (`0x41EFEC`, `0x450E10`,
+`0x4523D2`, `0x496AB4`, `0x496B38`); the `or word, di` at `0x49982F` stores 4 (`edi = 4` at
+`0x499603`), bit 2. So a level single player at the wiki's open is single player at its close.
+A pause bit set locally in a network game would stall only this player [INFERRED: the scheduler
+tests it, `0x4953D9`, and the Pause key keeps the peers together only through its `0x19`
+broadcast], so the wiki writes the bit only with bit 0 of `0x2A44` clear.
+
+**The pause, `main+0x38A51` bit 0** (the section above has every store). The wiki's write is the
+Pause key's read-modify-write of bit 0 (`0x4960AA..0x4960BC`) without the `0x19` message: set at
+the open when clear, cleared at the close only when it set it, and at the level's end
+(`tagpu_reclaim`'s teardown wrap) forgotten without a write. Every engine writer in play is reached
+only through input the wiki holds -- the Pause key (`0x4960BC`), the in-game menu (`0x460E00`,
+`0x460A33`) and its LOADGAME screens (`0x49306D`, `0x493330`), key `0xE3` (`0x49990E`), the options
+opener `0x45CFC0` (`0x45D0A1`), the chat command `MakePoster` (`0x495B7E`, put back at `0x495DD2`
+in the same call) -- or through a peer's message `0x19` (`0x45597A`), which a single-player level
+never receives. The rest are the front end's (`0x44B6F0`, `0x44BE61`) or the load's (`0x49720A`).
+Impure's own writers that put a pause back later without input -- the live rewind's end and the
+replay HUD's Leave -- are kept off by the wiki refusing to open while either is in flight
+([the plan](../ingame-wiki-plan.html), *The pause*).
+
+**What the PAUSED icon does under the window.** `igpaused` is drawn at `0x46A107..0x46A13E` in the
+middle of the world while bit 0 is set (*The frame's HUD extras*); the wiki's window, drawn after
+the engine's frame and its UI, covers the middle of the screen, so the icon is drawn but not seen
+while the window is open. MEASURED 2026-10-25 on the Vulkan lane at 1920 × 1080 (Xvfb,
+`place-basic.json`, single player paused by the wiki): a window grab with the window open shows no
+`PAUSED` anywhere; the engine's top bar, side panel and bottom bar show round the window.
+
+**The key ring's indices** `0x51F48E` (enqueue) and `0x51F492` (dequeue) are what the game test
+reads to show no key reached the engine while the window was open (`tools/wiki_regression.py`).
+
 ### The download menus' records — `0x42DCF0` [DISASSEMBLED + MEASURED 2026-09-24]
 
 **The records.** `0x42DCF0` (tag `DOWNLOADMENU`, loader thread) makes one 0xBD-byte record per
@@ -150,6 +221,773 @@ in both builds. With the check bounded, a 12-entry file flags its first unit onl
 record, it flagged the 1st, 6th and 11th. The 120 stock types flagged are the same either way.
 `0x42BD40..0x42BE20` is the same check as a function of its own, with the same walk to
 `[main+0x391C7]` (`0x42BDF1`), and has no call and no absolute reference: dead, and left unpatched.
+
+### The left sidebar: its pages, its buttons and who takes a press [DISASSEMBLED + MEASURED 2026-10-27]
+
+The in-game wiki's stage draws the running mod's left sidebar and simulates its build menu
+([the in-game wiki](../ingame-wiki.html), *The left sidebar on the stage*). `tagpu_wikiasset.c` and
+`tagpu_guifile.c` read the mod's files by the rules below, `tagpu_wikisim.c` repeats the router
+and the buttons, and `tagpu_wikiside.c` composes the column the way the engine composes its own.
+None of them calls these functions or reads engine memory; `tagpu_replays.c` copies the folder
+names on the game thread (*The folder names*, below). Disassembled from
+`pristine/TotalA.exe.pristine` (`objdump -d -M intel`). The archive facts were MEASURED from the
+six compatibility setups' files. The live rows were MEASURED 2026-10-27 on retail under Wine at
+1024 × 768, Interface Type 1 (`main+0x37EFA` = 1), on a scenario with one ARMCK and three ARMPW,
+with the mouse record `main+0x2C76`, the order byte `main+0x2CC3`, the region bits `main+0x2CC6`
+and ARMCK's order chain read back after every step.
+
+**The column, top to bottom.**
+
+- `0x467D70` fills the HUD surface with palette index 0 (SurfaceFill `0x4C6890`, called at
+  `0x467D87`), then blits frame 0 of the player's side's `PANELSIDE` (the sequence name
+  `0x5033D4`) from `<anims>\<intgaf>.GAF`, where `intgaf` comes from sidedata's `[SIDE%d]`. It
+  passes the frame's own hotspot as the point (`0x467E30..0x467E3C`), and CopyGafToContext
+  `0x4B7F90` subtracts it again, so the frame lands at (0, 0) whatever its hotspot. TA Zero's
+  hotspot is (64, 64); retail's ARMINT `PANELSIDE` is 129 × 480.
+- The minimap's 128 × 128 square at (0, 0). The base picture comes from `0x466780` (*The
+  minimap, located*): its long side is 126 pixels and its short side `trunc(126 · short / long)`,
+  centred on the short axis, over the scroll extent `main+0x1422B`/`+0x1422F`. For a map with no
+  TNT picture, `0x466780` generates one: a 2w × 2h surface sampled from the tiles, shrunk 2:1 by
+  `0x4B95A0`. The shrink computes `out = T[T[a][b]][T[c][d]]`, with a, b the top pair and c, d
+  the bottom pair and the first index the row (`0x4B9604..0x4B9657`). T is the 64 KB table at
+  `globals+0xC0`.
+    - **Fog**, `0x466C20`: an unexplored cell takes GUI colour 0. An explored cell out of sight
+      takes the 256-byte grey remap at `globals+0xCC` of its base pixel (`0x466D33..0x466D44`).
+    - **Dots**, `0x466DC0`: each unit gets a `radlogo` frame (its owner's PlayerInfo `+0x96`) from
+      `fx.GAF`, and the unit under the pointer also gets `radlogohigh` frame 0.
+    - **The camera box**, `0x466B70`, is drawn in GUI colour `0x0E` (`main+0xDD9`).
+- The top screen at (0, 128).
+
+**The colour tables a mod brings.** Each was MEASURED by reproducing it from the setups' files.
+
+- **T** is filled once per process. `0x42E140(main+0x143A7)` has one caller, `0x49138F` in
+  `UIPipelinesInit 0x491200`. It builds the path `palettes\PALETTE.ALP` by pushing
+  `0x5033A0`, `0x5033A4` and `0x5031BC` at `0x42E14B..0x42E155` and calling the path builder
+  `0x4290F0` at `0x42E15B`. If the open test answers a size, it loads the file. Otherwise
+  `0x4BA750` generates the table and the result is written to the cache:
+    - T[r][r] = r;
+    - every other cell is the palette entry nearest to the floor mean of the two colours, channel
+      by channel. The search is `0x4BA9D0`: a ±40 window over the list `0x4BA920` sorts by R+G+B
+      (an exchange sort with a strict `>`), keeping the least squared distance.
+
+    Every setup ships the file, so the file decides. Retail's equals the generator's output from
+    retail's PALETTE.PAL in all 65 536 cells. The mods' files are not the formula: they differ from
+    it in 508 cells (Twilight) up to 53 378 (Escalation, TA Zero), and they are not symmetric.
+    `0x42E1D0` builds the `.SHD` path the same way (`0x5033A4` pushed at `0x42E1E0`).
+
+- **The grey remap** is `0x4BAD30(pal)`. Its one caller is `0x42E2F5` in `0x42E2F0`, which runs
+  once, at `0x4913C3`. Each entry is the palette entry nearest to (v, v, v), with
+  v = floor((R + G + B) / 3). No file is read.
+- **The GUI colour table** `main+0xDCB` is 256 bytes (`GUIInfo` `main+0x519` + `0x8B2`).
+  `0x4AC7D0(gi, pal, src)` matches each colour of `palettes\guipal.PAL` to the first PALETTE.PAL
+  entry at the least L1 distance (`0x4AC7FF..0x4AC88F`). The fill that matters in game is the one
+  at game entry, `0x498148`, whose path takes `guipal` `0x5031C8` (pushed at `0x49810E`). The
+  reproduction from retail's files gives the live table, `00 04 02 06 D5 05 CB 55 5A 09 E9 20 D3
+  FD C2 FF`. Mayhem's and ProTA's own PALETTE.PAL change entry 6, and Mayhem's entry 12 as well.
+  In all six setups, unexplored ground is palette `0x00` and the camera box `0xC2`.
+- **`globals` is `0x51F320`, a static block in `.data`.** WinMain hands it to `0x4B5980` (called
+  at `0x49E977`), which stores it at `0x51FBD0` (`0x4B5990`). WinMain also stores the same
+  address at `main+0xC` (`0x49E9B0`). So `*(main+0xC)` and `GetTAProgramStruct 0x4B6220` name one
+  block.
+
+**The page router `0x41B2E0`.** Its one caller is the frame callback at `0x4969B4`, which runs it
+when `main+0x37EBE` bit 4 asks. A selection sets that bit (`0x41C110`).
+
+- **One unit already shown.** If the shown unit `main+0x37E9C` is set and alive, the router routes
+  that unit alone and leaves the order flags as they were (`0x41B38E` → `0x41B749`).
+- **Otherwise it counts the selection.** It counts the controlled player's (`main+0x2A42`) live
+  units with `+0x110` bit 4 and ORs their defs' `+0x245` bits (`0x41B3C4..0x41B547`). Then:
+    - **Nothing selected:** `0x491D70(0)`, the pop back to the player's side's `%sMAIN2.GUI`
+      (`0x509570`). `0x491D70(force)` clears the shown unit `main+0x37E9C` (`0x491DA5`), then, while
+      a screen is up (`GUIInfo+0x18`), stops at one whose name is `main+0x37EA0` (`0x4AB060`, a
+      16-character compare of the top screen's name without case [INFERRED from the call to
+      `0x4FAB50`]) and otherwise drops the top screen (`0x4A9660` [INFERRED: the pop]). The name at
+      `main+0x37EA0` is MAIN2's, written by `sprintf` at `0x497BA4`. When the interface is busy
+      (`main+0x37EBE` bit 11 or any of bits `0x65`, or `main+0x2BEE & 0xE0`) and `force` is 0, it
+      pops nothing and sets `0x37EBE` bit 4 (`0x491D97`), so the router runs again later.
+    - **Exactly one unit**, whose type has `def+0x22E` ≠ 0 and either a page (`+0x110` bit 22 set
+      and bits 23..25 above 0) or an orders page (`def+0x241` bit 31: `<NAME>0.GUI` exists):
+      `%s%d.GUI` (`0x502838`) with the type's name and that page, 0 being the orders page. It is
+      loaded by `0x41ACE0`, whose one call is `0x41B83A`. The page is `+0x110` bits 23..25 when
+      bit 22 is set, else 0, and page 0 is shown only with `def+0x241` bit 31
+      (`0x41B77D..0x41B79E`). The name is `def+0x20` cut at 31 characters: `strncpy` of 0x20 bytes
+      into a local, then its byte 31 cleared (`[esp+0x6F]`), and the `sprintf` that makes the file name
+  is the call at `0x41B7E9` (`0x41B7A6..0x41B7E9`).
+    - **Anything else**, two builders of one type included: `0x41B0F0` (called at `0x41B871` and
+      `0x41B883`), which loads the side's `%sGEN.GUI` (`0x50282C`).
+- **The side's screens are the player's.** GEN, MAIN2 and DL belong to the player's side, not the
+  unit's. The prefix is `nameprefix` (key `0x5048EC`) of sidedata's `[SIDE%d]`, copied to
+  `main+0x37F5B + side · 0x232` by the sidedata reader `0x431A60` (`0x431B26..0x431B66`). The side
+  is the player's PlayerInfo `+0x95`. A build page is named by the unit's type. `nameprefix` is
+  read with a size of 4 (`0x4C48C0(local, "nameprefix", 4)`, `0x431B26..0x431B3B`), so a prefix
+  holds at most three characters.
+- Retail ships no `<NAME>0.GUI`; TA Zero does. The router runs a frame or more after the selection
+  changes.
+
+**The order buttons' greyed state, `0x41A120(unit)`.**
+
+- **How a button is found and greyed.** `0x49FE60(panel, s)` finds each order gadget: the first
+  gadget, 1..totalgadgets, whose name contains `s` (`strstr` `0x4E49B0`). `0x4A1200(gi, i, 1)`
+  greys it when the router's flag is clear.
+- **STOP** (`0x502714`) is greyed when `main+0x37EC1` bit 0 is clear (`0x41A2F3`). The router
+  packs that bit from `def+0x245` bit 3 (`0x41B4AC`), the FBI's `canstop`, which the FBI reader
+  `0x42BF40` stores as `and 1` at `0x42C90B..0x42C936`, 0 when the key is missing.
+- **RECLAIM** (`0x5016C4`) is greyed when `main+0x37EC1` bit `0x20` is clear (`0x41A38C..0x41A3AF`:
+  the test, then `0x49FE60` for the gadget and `0x4A1200(.., 1)`). The router sets its flag for a
+  selected unit whose `def+0x245` has bit `0x400` (`0x41B509..0x41B512`: `shr 10`, `test 1`) and
+  packs it as bit 13 of the word `main+0x37EC0` (`0x41B6DA..0x41B6F7`); the FBI reader stores that
+  bit from `canreclamate` (`0x503A74`) as `and 1`, `shl 10` (`0x42C9EF..0x42CA1A`), 0 when the key is
+  missing [DISASSEMBLED 2026-10-29]. The wiki's RECLAIM is live by the same rule
+  (`tagpu_wikisim.c` `gadget_state`).
+- **The other order buttons** follow the same rule. Each is greyed by its own bit of the
+  router's flags `main+0x37EC0..0x37EC2` (MOVE `0x37EC0` bit 7 at `0x41A2CB`, ATTACK `0x37EC1`
+  bit 1 at `0x41A31B`, …), which the router packs from the selection's `def+0x245` bits
+  (`0x41B44E..0x41B524`) [INFERRED: one FBI ability key a bit, as bit 3 is `canstop`]. Bit 9 is
+  set by no key of its own: the FBI reader copies bit 10 into it (`0x42CA3B..0x42CA4F`).
+- **The tabs.** BUILD and ORDERS take their state from bit 22 (`0x4A11C0`) when a unit with pages is shown,
+  and are greyed otherwise.
+- **Nothing here un-greys.** `0x41A120` never clears the greyed bit. That a re-route un-greys STOP
+  by reloading the screen is [INFERRED].
+- **`canstop` is not mobility.** MEASURED from the FBIs: retail's 278 have 152 mobile and 53
+  static units with it, 21 of those static builders (the factories), and the turrets (ARMLLT)
+  have it. The 73 without it are all static (ARMSOLAR, ARMMEX, ARMDRAG, ARMESTOR, …).
+
+**The build pages: their count, their files and the download fill.**
+
+- **The page count.** The def load probes `<gui>\<NAME>0.GUI`, `1`, `2` … (`0x42D800..0x42D8CB`;
+  the folder `0x502820` is pushed at `0x42D82A`) through the path builder `0x4290F0` and the open
+  test `0x4BBC40`, which answers the file's size. `<NAME>0.GUI` answering sets `def+0x241` bit 31,
+  the orders page, and its absence clears it (`0x42D830..0x42D855`). `def+0x22E`, a byte, is then
+  (`0x42D85B..0x42D8CB`):
+    - when `<NAME>1.GUI` answers, the first index of 1, 2, … that does not;
+    - else 1 when `<NAME>0.GUI` answers;
+    - else 0.
+
+  So a 0-byte file stops the count exactly as a missing one does; ProTA ships 32 such stubs,
+  `armck3.gui` among them.
+  The download records (*The download menus' records — `0x42DCF0`*) raise the count to an entry's
+  `MENU` (`0x42DF60..0x42DFB4`).
+- **A new unit's page.** A unit whose type has `def+0x22E` > 1 is created with bit 22 set and
+  page 1 (`0x485CD5..0x485CF1`). Any other unit is created with bits 22..25 clear.
+- **The page file.** `0x41ACE0(unit, name, page)` returns at once unless the unit is complete
+  (`unit+0x104` = 0.0, `0x41ACF1..0x41AD02`). It probes `<gui>\<NAME><page>.GUI` through
+  `0x4290F0(buf, 0x502820, name, "GUI")` (`0x502820` pushed at `0x41AD2C`) and the open test
+  `0x4BBC40`. When that answers 0, it builds `%sDL` (`0x502818`) instead, with the watched
+  player's side prefix: `main+0x37F5B + side · 0x232`, side = PlayerInfo `+0x95` of the record
+  `main+0x1B63 + main[0x2A42] · 0x14B` (its `+0x27`, `0x41AD61..0x41AD94`; the PlayerInfo pointer and
+  its side byte are read at `0x41AD61..0x41AD66`, with no NULL test and no bound on the side). Either name goes to
+  GUI_Load `0x4AA8F0(main+0x519, name, 0)` (`0x41ADD9`).
+- **GUI_Load's file is not the probe's.** GUI_Load builds its path as `strncpy(path, gi+0x9B6,
+  0x100)` (gi = `main+0x519`, so the prefix is `main+0xECF`, `guis\` from `0x502820`, set at
+  `0x4914CE`) followed by the name (`0x4AA989..0x4AA9DF`), then `0x4BAFF0(path, path, "GUI")`
+  (`0x4AAA06`): the path is cut at the last `.` found scanning back from its end before any `\`,
+  and `.` + `GUI` appended (`0x4BB024..0x4BB03F`, then `0x4BB042..0x4BB093`). It has no language
+  folder; the probe's `0x4290F0` tries `<folder>-<language>\` first (*The file primitives*, in
+  the saved-map section). `0x4BAFF0` is `stdcall`, `ret 0xC`.
+- **The download fill.** `0x41ACE0` then walks every download record and every entry, in file
+  order (`0x41AE0F..0x41AEFF`): the entry loop is `0x41AE24..0x41AEAE` (entry stride `0x25`,
+  `0x41AEC8`) and the record stride `0xBD` is added at `0x41AEEF`. An entry is placed when its builder word is the unit's type
+  (`0x41AE38`) and its `MENU`, zero-extended from its byte, minus 1 is the page
+  (`0x41AE48..0x41AE4D`). It writes gadget `BUTTON + 4` of `ControlsAry` (stride `0x15B`,
+  `0x41AE5E..0x41AE73`) **with no bound against the screen's gadget count**. `BUTTON` is a byte
+  as well: the reader stores it with `mov BYTE PTR [ecx+edi+0x7], al` (`0x42DEE7`) and the fill
+  reads it with `mov al, BYTE PTR [ebp+ecx+0x7]` over a cleared `eax` (`0x41AE51`, `0x41AE57`)
+  before the `add eax, 4` (`0x41AE5E`), so the slot is `(BUTTON & 0xFF) + 4`, 4..259
+  (DISASSEMBLED). The fill:
+    - clears its greyed bit (`0x41AE77`);
+    - sets commonattribs 4 (`0x41AE80`);
+    - sets its name to the entry's `UNITNAME` (`0x41AE84..0x41AEAC`), a `strcpy` of the whole
+      name, up to 31 characters: a name of 17 or more runs past the 16-byte name field over the
+      record's geometry from `+0x13`;
+    - sets `+0xB4` bit 0 (`0x41AEAE`), which makes its picture `<anims>\<NAME>_gadget.GAF`.
+
+    A `MENU` of 0 gives −1 and is never placed. TA Zero's pages are templates of 12 `IGPATCH`
+    slots that this stock fill fills from its `ZBuildMenu\*_h<n>.tdf` (`MENU` 2 or 3, `BUTTON`
+    0..11); its `_a<n>`/`_d<n>` files carry no `MENU` and reach only the `CANBUILD` lists. MEASURED
+    over TAZ31.gp3's 303 files; TA Zero's exe and DLLs leave this code unpatched. The download reader `0x42DCF0` skips a section without `UNITMENU`
+    (`0x42DE20`) and reads `MENU` and `BUTTON` through `0x4C46C0`, 0 when missing.
+
+- **The gadget record**, `0x15B` bytes, as the COMMON reader `0x4AD350` fills it
+  (`0x4AD36A..0x4AD482`): `id` `+0`, `assoc` `+1` (bytes); `name` `+2`, 16 bytes, 15 characters
+  (`0x4C48C0(…, 0x10)` at `0x4AD3A7`, which copies at most the size and clears the last byte,
+  `0x4C4951`); `xpos` `+0x13`, `ypos` `+0x15`, `width` `+0x17`, `height` `+0x19`
+  (words); `attribs` `+0x1B`, `colorf` `+0x1F`, `colorb` `+0x23` (dwords); `active` `+0x29` and
+  `commonattribs` `+0x2A` (bytes). A section without COMMON leaves the record as it was
+  (`0x4AD361`). The button reader `0x4ADC70` takes the greyed bit, `+0x13C` bit 0, from the
+  section's own `grayedout`.
+- **The pagers.** When `def+0x22E` < 2, `0x41ACE0` sets the screen's `%sPREV`/`%sNEXT`
+  (`0x5027E4`, `0x5027DC`) inactive through `0x4A0570` → `0x4A03F0`.
+- **MEASURED.** Retail ARMCK has `ARMCK1..3.GUI`, and `download\armhp.tdf` gives MENU 5 and
+  BUTTON 0, so ARMCK has four pages. In game the fourth is `ARMDL`, holding ARMHP and five
+  `IGPATCH`. Mayhem's and ProTA's loaders point the download folder at `downloadsM` and
+  `downloadP`, which neither setup ships, so both load no download entries.
+
+**The greyed pass, `0x41B045..0x41B096`,** runs on a numbered page only: page 0 skips it
+(`0x41B045..0x41B04C`), and the side's GEN and MAIN2 are not loaded through `0x41ACE0` at all. It
+walks records 0 (the index cleared at `0x41B054`) to N − 1, N being the header's `+0xB6` (`movsx`
+at `0x41B065`; the loop bound `0x41B094`), which the reader sets to the section count − 1 (`0x4AED48`, below). Each record there
+with commonattribs bit 2 (`0x41B073`) is greyed or un-greyed by whether `0x488B10` knows its
+**whole** name (`0x41B07A`, the record's `+2` read at `0x41B079`; `0x4A1200(gi, i, found ? 0 : 1)`,
+`0x41B07F..0x41B088`, which writes bit 0 of record `i` itself, `[[gi+0x18]+4] + i · 0x15B + 0x13C`,
+`0x4A120B..0x4A1237`), whatever the file said. Record 0, the panel, is tested too. So `IGPATCH` is greyed, and so is a page's button for a type the mod does not load;
+and **the page's last record is never visited**, so it keeps the file's grey after the download
+fill, as every record of page 0 and of a side's screen does. DISASSEMBLED 2026-10-28; the wiki's
+menu reader follows it (`tagpu_wikiasset.c` `button_grey`, `gfx.py`), which changed no pick,
+page or sheet byte in the six compatibility setups.
+
+`0x488B10(name)` is a binary search over the defs `main+0x1439B`, from def[1] (count
+`main+0x1438F`, stride `0x249`). It compares `def+0x20`, the FBI's `UnitName`, with `_stricmp`
+`0x4F8A70`, and answers the type word `def+0x21E`, or 0. The loader sorts the array by that key
+(`0x42D56E..0x42D604`). The answer is in `ax` only: `mov ax,[ebp+0x21E]` (`0x488BC1`) or
+`xor ax,ax` (`0x488BD3`), the upper half of `eax` left from the search, so a caller takes the word
+(the handler tests `bx`, `0x41AB5D`).
+
+**Negative result: a constructor's build button carries no `+N`.** `0x4199B0` writes each
+commonattribs-4 button's text `+0xB6` as `"+%d"` (`0x502660`) of `0x439D80(unit, type)`, or "".
+`0x439D80` sums `+0x3A` over that type's order nodes. A constructor's build order is made by
+`0x419670` → `0x43AFC0(…, 0)`, and `0x43B08A..0x43B09D` pass that 0 to `0x43ADC0` as the amount,
+so the sum is 0. Only a factory's queue counts (`0x43B0B0` adds the amount). The capture of
+ARMCK with three ARMMEX queued shows no `+N` in any of the six setups.
+
+**Negative result: MAIN2's labels have no writer.** `ARMMAIN2.GUI` holds its panel (`ARMPAN2`,
+128 × 352) and three id-5 labels, KILLS, LOSSES and TOTALUNITS, with empty text.
+
+- The exe has no upper-case `KILLS` or `LOSSES`.
+- `Kills` and `Losses` (`0x502BB8`, `0x502BB0`) are used only by the stats screen (`0x42003D`)
+  and the save code (`0x4661F2`).
+- `TOTALUNITS` (`0x504888`) is used only by sidedata's top-bar reader (`0x431F54`).
+- MAIN2's handler `0x494890` does nothing with them.
+
+So MAIN2 shows its panel and nothing else [INFERRED: that no other route writes their `+0xB6`].
+The captures of MAIN2 in the six setups agree.
+
+**The .GUI grammar, `0x4C2F60`, and the gadget reader `0x4AEAC0`.** One TDF parser serves every
+TDF the exe reads (26 call sites).
+
+- **Loading.** A file of size 0 is refused and nothing is parsed (`0x4C2F9A`). The text ends at
+  its first NUL (`0x4C30A8` makes the file a C string).
+- **The file layer as `0x4C2F60` calls it** (`0x4C2F60..0x4C30FF`), every call `stdcall`:
+    - open `0x4BB5B0(path)`, `ret 4`: a handle, or NULL (`0x4C2F71`);
+    - size `0x4BBD00(h)`, `ret 4` (`0x4C2F8B`); a size ≤ 0 skips the read (`0x4C2F9C`);
+    - seek `0x4BB710(h, pos)`, `ret 8`, to 0 (`0x4C2FB5`);
+    - read `0x4BB7C0(h, buf, n)`, `ret 0xC`, which answers the bytes read; a negative answer
+      fails (`0x4C2FBD..0x4C2FC4`);
+    - close `0x4BB5D0(h)`, `ret 4` (`0x4C30FF`).
+
+  The buffer comes from `0x4D83B0` (`0x4C2FA4`), which the loader does not NULL-check. The open
+  test `0x4BBC40(path)`, `ret 4`, opens, takes the size and closes, and answers the size or 0.
+  Quick Build reads a build page through these same calls into a buffer of its own
+  (`tagpu_resource.c` `page_bytes`).
+- **Comments.** `0x4C33A0` blanks them once over the whole text before the parse, inside values
+  too:
+    - a line comment runs up to the next LF;
+    - a block comment runs to the first star-slash, not nested.
+- **Blanks** are space, TAB, CR and LF.
+- **Sections and keys.**
+    - `]`, `=` and `;` are each searched for through the rest of the text, so a value missing its
+      `;` runs on to the next one. Retail `ARMGEN.GUI`'s `attribs=256` swallows `colorf=15`.
+    - A section name may be empty or repeated; both are kept, in file order.
+    - At the top level a stray `}` ends the parse silently.
+    - A key given twice keeps the LAST value, matched without case (`0x4C3F98..0x4C403C` replaces
+      it). The getters (`0x4C46C0`, an `atoi` with a default) find the same entry.
+- **The parse proper** is `0x4C3E40`, which builds one node per section by recursive descent.
+- **Errors.** A missing `]`, `{`, `=` or `;`, or the end of the text inside a section, shows
+  "Parse error in .TDF File!" and exits (`0x4B6290`).
+- **The reader.** `0x4AEAC0` (one caller, GUI_Load `0x4AAA9E`) walks the top-level sections by
+  index, `0x4C3490(i)`, which is bounded by the child count. It fills one `0x15B`-byte gadget
+  record per section: COMMON comes from the section's first child named COMMON (`0x4AD355` →
+  `0x4C3410`), and the button keys from the section itself (`0x4ADC70`). Afterwards it sets
+  HEADER `+0xB6` (totalgadgets) to the section count − 1 (`0x4AED48`): the number a HEADER
+  states is never read.
+- **Negative result: no bound against the allocation.** The records are written with no bound
+  against GUI_Load's allocation of 200 records (`0x4AAA68`).
+
+So retail `ARMCK1.GUI`'s repeated `GADGET2..GADGET6` are ten gadgets, and a reader that merges
+sections of one name (`tagpu_tdf`) cannot read a .GUI. MEASURED: `tools/wiki/tavfs.py`'s
+positional reader agrees with an instruction-for-instruction emulation of `0x4C2F60` on all
+1581 .GUI files of the six setups. ARMCK1.GUI has 18 sections.
+
+**A screen's pictures.**
+
+- **The panel**, the id-0 case of the stage pass (`0x4A84F2..0x4A8658`). It looks up `panel=` in
+  `<anims>\<SCREEN>.GAF`, then in commongui (`0x50925C`), then takes commongui's `BackTile` with
+  its hotspots zeroed (`0x4A8638..0x4A8656`). `0x4B0230` (called at `0x4A9127`) draws a
+  one-frame picture once, at (0, 0) minus its hotspot, untiled. A picture of two or more frames
+  is drawn as a 3 × 3 nine-slice of frame 0's size (`0x4B0344..0x4B0439`), its last row and
+  column pulled back to end at the panel's edge (`0x4B03C3..0x4B03CE`, `0x4B03E9..0x4B03F0`).
+- **A button**, the id-1 case (`0x4A8B4B`). It looks up its name in the screen's bank, then in
+  commongui (`0x4A8BA1..0x4A8BF7`), with base frame `+0x13B` 0. When neither has it, it takes
+  commongui's generic `CHECKBOX`, `stagebuttn%d` or `BUTTONS0` at the frame nearest the gadget's
+  size (`0x4A8C00..0x4A8DC9`). **The gadget is then resized to its picture's frame**
+  (`0x4A8DCB..0x4A8DF3`), so a pictured button's hit rect is the picture's, not the .GUI's.
+- **A download slot** (`+0xB4` bit 0, set by the fill above or by `gaffile=1;` in COMMON,
+  `0x4AD4C1`) takes `<anims>\<NAME>_gadget.GAF`'s sequence named `<NAME>` (`_gadget` is
+  `0x509970`), with no fallback (`0x4A83E2..0x4A84D8`).
+- **`unitpics` is not a build-menu picture.** The string `unitpics` (`0x505FE4`) has two users,
+  RESTRICT2 (`0x44C188`) and UNITINFOx (`0x494421`). The wiki's picture rule still takes
+  `<unitpics>\<UNIT>.PCX` before a labelled button, but no stock screen draws one.
+
+**The frame a button draws, and the press.** In GUI_ButtonDraw `0x4A5F40` (*A greyed gadget is
+the grey remap, then the box shader at -20*), the frame is chosen at `0x4A6071..0x4A616D`.
+
+- **Not greyed and held:** the pressed word `+0x138` is nonzero, and the frame is base `+0x13B`
+  plus it (`0x4A6110..0x4A614B`).
+- **The lookup.** `0x4B7F30(seq, frame)`, called at `0x4A616D`, answers NULL past the sequence's
+  count, and the test `0x4A6172..0x4A6176` then skips the blit. So a held button whose picture has one frame draws
+  no picture, and the panel under it shows. In the six setups only `IGPATCH` has one frame.
+- **The hotspot.** The blit adds the frame's hotspot back before CopyGafToContext subtracts it
+  (`0x4A6188..0x4A61BE`), so a button's frame lands with its top left on the gadget's. Retail's
+  `*_gadget.GAF` frames all carry hotspot (281, 171) and still draw in place.
+- **Greyed:** the grey remap `0x4BFE10`, then the box shader `0x4BF4D0` at level −20 (push
+  `0xFFFFFFEC` at `0x4A69B6`). Both run over the gadget's whole rect, the frame's transparent
+  pixels included (`0x4A699B..0x4A69BA`). Neither runs for attribs `0x80` or `0x100`.
+
+**CopyGafToContext `0x4B7F90` and subframes.** A frame with subframes (`+0x0A` nonzero) is drawn by
+calling itself for each subframe in order with the SAME destination point
+(`0x4B7FC8..0x4B801A`). Each subframe lands at that point minus its own hotspot (`hotX` `+4`,
+`hotY` `+6`, signed; `0x4B804A..0x4B805A`), over its own transparent index. commongui's order,
+tab and pager pictures are such stacks. MEASURED: a column that pasted the subframes at (0, 0)
+differed from the captures, and one that layers them matches. The offline reader of this rule, shared by every
+Python tool, is `tools/ta3do`'s `gaf_compose`.
+
+**The hit test and who wins an overlap**, in the GUI pump `0x4A9FD0`.
+
+- **The hit test.** Both tests are inline and take the whole pixels x .. x + w − 1 and
+  y .. y + h − 1, relative to the panel: the pump's hover at `0x4AA1F6..0x4AA216` and the button
+  handler's at `0x4A6B79..0x4A6B95` (press) and `0x4A6E84..0x4A6EAC` (release).
+- **The scan.** The pump offers each event to gadgets 1..N in file order and stops at the first
+  whose handler returns 1 (`0x4AA549..0x4AA54E`). An inactive gadget (`+0x29` = 0) is skipped
+  before anything else (`0x4AA1CE..0x4AA1D3`). A greyed one's handler, `0x4A6AE0`, returns 0 at
+  once (`0x4A6B10..0x4A6B19`): no capture, no action and no quick key, though the pump still
+  records it as hovered.
+- **A plain button** acts on the release. On the press each button holding the point drops the
+  capture `gi+0x64` and takes it (`0x4A6BAC`, then `0x49FC50` at `0x4A6BB3`) and returns 0, so the
+  scan goes on and **the LAST one in file order holds it**. At the release only the captor
+  passes `gi+0x64 == idx` and acts, and only if the release is inside it.
+- **A tab** (attribs `0x10`, ORDERS and BUILD) acts on its own press (`0x4A6C14`). It drops any
+  capture (`0x4A6C28`) and returns 1 (`0x4A6CD4`), so **the FIRST tab holding the point wins**
+  over anything before or after it.
+- **Which button.** `0x4A6AE0` accepts the press edge of either button through `0x4AB510`
+  (`0x201`/`0x203` left, `0x204`/`0x206` right) and records which in `gi+0x58` through
+  `0x4AB690` (1 left, 2 right). A plain button acts once `0x4AB5B0(gi, 3)` sees neither `MK_`
+  bit.
+- **Then the screen's handler.** For a captured button released inside, `0x4A9E98` stores its
+  index at `gi+0x60`, and `0x4AA797` calls the screen's handler.
+
+**The build pages' handler, `0x41AA00`.** It is stored at screen `+8` by the page loader
+(`0x41ADEA`) and the GEN loader (`0x41B171`) and has no direct caller. It takes the actuated
+gadget's name cut to 16 characters (`0x49FED0`: `strncpy` of 0x10 bytes, then byte `[0x10]` = 0,
+`0x49FEE0..0x49FEFF`; the handler clears its copy's byte 16 again, `0x41AA33`) and the type of that
+cut name (`0x488B10` at `0x41AA39`). The greyed pass looks up the whole name, so a filled name of 17
+characters or more can be un-greyed and still arm nothing. It then tests, in this order -- the cut
+name's substrings by the case-sensitive `strstr` `0x4E49B0` (`0x41AA75..0x41AB30`) before the
+type, which `0x41AB5D` tests whatever the gadget's commonattribs:
+
+- **the pagers and the tabs**, by substring (`strstr` `0x4E49B0`, case-sensitive, on the
+  16-character copy, `0x41AA75..0x41AB30`). `PREV` (`0x502810`) sets `main+0x37EBF` bit 0,
+  `NEXT` (`0x502808`) sets `main+0x37EBE` bit 7, `ORDERS` (`0x50274C`) sets `0x37EBF` bit 1 and
+  plays `ordersbutton`, and `BUILD` (`0x502754`) sets `0x37EBF` bit 2 and plays `buildbutton`.
+  The dispatcher `0x41C180` (its one call, `0x4992CD`) then calls NEXT `0x41BDE0` or PREV
+  `0x41BF10`:
+    - NEXT `0x41BDE0(arg)` makes the page 1 after the last, else page + 1, sets bit 22, and
+      plays `nextbuildmenu` (`arg` = 0, `0x41BE8F..0x41BEE8`). With `arg` ≠ 0 the orders state
+      (bit 22 clear) steps to page 1 and the last page to the orders state, bit 22 cleared
+      (`0x41BE33..0x41BE87`). Either way page + 1 is taken in the 3-bit field, bits 23..25
+      (`and edx,0x3800000`, `0x41BE7F`, `0x41BECE`), so page 7 steps to 0: the numbered pages a
+      player can reach are 1..min(`def+0x22E` − 1, 7);
+    - PREV makes the page the last when it is below 2, else page − 1, and sets bit 22;
+    - the last page is `def+0x22E` − 1;
+    - BUILD sets the shown unit's bit 22 and ORDERS clears it, and both re-route.
+
+    The in-game keys call NEXT and PREV too (`0x49608F`, `0x496083`).
+
+- **A type whose def byte `+0x22F` is 0** is armed: the type must be nonzero (`test bx,bx`,
+  `0x41AB5D`) and its byte 0 (`0x41AB7F`). The arm writes `main+0x2CC3` =
+  `0x0E` (`0x41AB89`) and the type to `main+0x2CC4` (`0x41AB9C`), plays `addbuild`, and writes
+  nothing to `main+0x2CC6`. Which button armed it is never read.
+- **Anything else** goes to the stage gadgets `0x41A490`, then to the orders `0x419BE0` (its one
+  call, `0x41ABCC`). If neither acts and the shown unit is selected, it is the factory's queue:
+  `0x4AB6B0` (`return gi+0x58`) chooses the sign, +1 for the left button and −1 for the right,
+  and Shift (`0x4C1B80(0xF9)`) makes it ±5, for `0x419B00` (`0x41AC3C`).
+
+**Negative result: `0x4AB6B0` has exactly two callers,** `0x41AC09` and `0x41AC21`, both in this
+factory branch. The structure arm, STOP, PREV, NEXT, ORDERS and BUILD read no button, and **no
+GUI code reads `main+0x37EFA`**: its 19 references all lie outside `0x4A0000..0x4AFFFF`. `tagpu_place.c`
+reads none either.
+
+**STOP and ATTACK.** In `0x419BE0` the name is tested for `MOVE`, then for `STOP` (`0x502714`, at
+`0x419CA4`).
+
+- **The STOP branch** is `0x419CB6..0x419CF2`:
+    - it writes `main+0x2CC3` = 1 (`0x419CC2`), which replaces an armed build's `0x0E`, so **STOP
+      disarms**;
+    - it clears `main+0x2CC6` bit 3 (`0x419CCE..0x419CD8`) and leaves bit 5;
+    - it gives the order `0x438760("STOP")` (`0x419CE5`; the action byte is built in place in the
+      argument slot, `mov ecx,esp`) through the order issuer
+      `0x48CF30(main+0x2C76, 0, STOP, 0, 0, 0)` (`0x419CED`), which hands every selected unit of
+      the controlled player the order through `0x43AFC0` (`0x48D1F4`), with no `canstop` test;
+    - it ends at the shared tail `0x41A0EA`, which plays `immediateorders` (`0x50271C`) through
+      `0x47F1A0`.
+- **What each unit receives** [DISASSEMBLED]. `0x48CF30(record, type, action, pos, p1, p2)`,
+  `ret 0x18`, with `type` 0 skips the mapper `0x43F0E0` and uses `action` (`0x48CF4E`,
+  `0x48D083..0x48D089`). The descriptor's flags (`0x438830`, `+0x11`) decide two things: bit 9
+  makes the unit under the cursor (`main+0x2CBA`) the target (`0x48CF5E..0x48CFA4`), and bit 1
+  with a position spreads the units about it (`0x48D111..0x48D1D3`). Stop's flags are 0 (its
+  static record `0x4FC490`: status `Stopping`, handler `0x401C20` at `+0x04`, flags at `+0x11`),
+  so the target is 0; the position is NULL because the button passes NULL. The walk is the controlled player's `+0x67..+0x6B` units
+  (`0x48CFAC..0x48CFCC`) with `+0x110` bit 4, minus the target; it skips `Standing_FireOrder`
+  (`0x50120C`) for a def without `+0x245` bit 1 and `Standing_MoveOrder` (`0x501220`) for one
+  without bit 0 (`0x48D0B7..0x48D10B`). Each unit gets
+  `0x43AFC0(STOP, shift, unit, 0, NULL, 0, 0)` (`0x48D1D9..0x48D1F4`). Without Shift
+  `0x43AFC0` passes the position only through `0x43ADC0` to the node constructor `0x43A0C0`,
+  which stores (0,0,0) for a NULL one (`0x43A13A..0x43A164`) and clears the node's `+0x42` bit
+  `0x400` for it (`0x43A1A7..0x43A1B3`); Stop's flags, which the constructor copies to `+0x42`,
+  do not carry that bit, so a zero position and a NULL one make the same Stop node.
+- **Stop's handler `0x401C20`** (`ret 0xC`, the unit the first argument, the node the second)
+  announces the order once (`0x438880`: node `+0x42` bit 13 → `0x47F780(unit, 5, 0)`, the unit
+  being the node's `+0x0E`; `0x47F780` speaks only for a unit of the viewed player `main+0x2A43`,
+  `0x47F78B..0x47F799`), clears
+  weapon slots 0, 1 and 2's targets (`ClearTarget 0x48A0F0`, `0x401C2C..0x401C43`), and for a
+  flying type (`def+0x241` bit 11) whose `+0x110 & 3` is 2 [INFERRED: in the air] links a
+  `VTOL_LANDIFCAN` node (`0x5012BC`, `0x401C67..0x401C99`); it returns 5. MEASURED 2026-10-27
+  on Comet Catcher, an ARMCK walking to (3600, 6450): after the ARMSTOP button the order chain
+  is one Standby (action 41) at (0,0,0) and the unit holds its position to 0.1 world units for
+  15 s, and the mode byte goes 14 → 1.
+- **The scenario applier's `stop` is this order** (`tagpu_scenario.c`, `SCN_ORDERTYPES`): command
+  type 10, which the mapper `0x43F0E0` sends to `0x43F82C`, `0x438760("STOP")` with no test,
+  issued through `0x43AFC0` with no target and the zero position. MEASURED 2026-10-27 on the same
+  setup, `tacli order --unit` and `--sel`: the chain becomes one Standby (41) and the unit holds
+  its position to 0.1 world units for 15 s, as after the button; the mode byte stays 14 with a
+  build armed, because the disarm is the button's and not the order's. Command type 1 is not
+  Stop although TADR names it `BUTTON_ORDER_STOP`: it is the right click's contextual default
+  (`0x43F9E9`), and with no target and the position (0,0,0) it gave the ARMCK Move_Ground
+  (action 26) to (0,0,0), 3 of 3.
+- **The ATTACK branch begins at `0x419CF7`.** It takes the name again and compares it with
+  `ATTACK` (`0x50270C`) at `0x419D0A`. Mayhem's loader rewrites `0x419CFE..0x419D4E` (its
+  "teleport button" patch, read from its patch list): that range lies in ATTACK's branch, not
+  STOP's.
+- Not established: what STOP does with Shift held. `0x48CF30` passes `[main+0x2C76+8]` bit 2
+  [INFERRED: `MK_SHIFT`] as the queue flag.
+
+**The Shift-placement bit, `main+0x2CC6` bit 5.**
+
+- **Set** by a placement's or a command's click whose record has Shift (`0x498FB4`, `0x499097`).
+  `0x4958CD` sets it too, but in `0x4958C0`, which has no caller.
+- **Cleared** by every disarm, each writing `0x2CC3` = 1 and resetting STOP's radio group:
+    - the right press's cancel (`0x499127`, in `0x499100`);
+    - Shift's release (`0x4992FA..0x49930F`);
+    - the key switch's cancel (`0x495F36`);
+    - the clicks without Shift (`0x498FC0`, `0x4990A3`);
+    - the helper `0x495860`;
+    - the level's UI reset `0x4917D0` (`0x491817`).
+- **What survives it.** The arm leaves the bit, and the Shift-release test `0x4992D8..0x49930F`
+  reads the bit, not the mode. So a building armed during a Shift hold that has already placed is
+  disarmed by that Shift's release.
+
+**Who takes a mouse press: the GUI pump runs before the in-play handler.** IdleTick `0x499890`
+calls the pump `0x4A9FD0` at `0x499992`, then the state's handler through `[main+0x391F5]`
+(`0x499A1C`; `0x499200` in play).
+
+- **The pump's take.** Its poll `0x4AB5D0` takes a record inside the top screen's window, gadget
+  0 (`0x4A1680`, the inclusive test `0x4A1920` at `0x4AB63E`). It leaves a record outside the
+  window that carries a button (`0x4AB647..0x4AB64D`, the wParam's `MK_` bits). A press on the
+  screen, on a gadget or not, is the GUI's alone.
+- **The releases.** IdleTick copies a `0x202`/`0x205` release to `main+0x2C76` for the handler
+  anyway (`0x4999CB..0x499A04`; the release case is `0x4999EF..0x499A04`), so a release over the screen reaches the handler (*Every pop is
+  conditional*, above).
+- **The world point.** `0x498DA0` sets the region bits:
+    - off a box drag (bit 3 clear), a point in the minimap rect `main+0x142BB` sets bit 0 and maps
+      to the minimap's world point (`0x498DE4`);
+    - any other point is clamped to the viewport rect `main+0x37E27..0x37E33` and offset by the eye
+      (`0x498E32..0x498E93`), and bit 1 says whether it lies inside the viewport
+      (`0x498EAD..0x498EBC`);
+    - bit 2 is bit 0 or bit 1 (`0x498ECE..0x498EE6`).
+
+    So **off the map and off the minimap, the world point is the view's nearest edge**.
+
+- **A right press.** `WM_RBUTTONDOWN` calls `0x499100` (`0x4993AC`) wherever the point is. With
+  an order armed (`0x2CC3` ≠ 1), `0x499107..0x49915F` sets the byte to 1, clears bit 5 and resets
+  STOP's radio group (`0x49FE60(menu, "STOP")`, `0x4A6A40`), and reads neither the point nor
+  `main+0x37EFA`. Impure's resource gate at `0x499100` acts only on its own quick choice (mode 1
+  and the viewport bit, `tagpu_resource.c`).
+- **The build cursor.** `0x4197D0`, the only caller of `tagpu_place.c`'s evaluation, runs only
+  with the cursor in the viewport (`0x499236..0x499241`). So a drag released over the column
+  commits the shape the map last showed, and never a stock Shift-click.
+- **Bit 4 is the minimap drag.** It is set at `0x49919D` (type 0, right press) and `0x499574`
+  (type 1, left press). `0x499348..0x49937D` ends it at that button's release, else calls
+  `0x41D0F0` [INFERRED: the scroll]. It is not a right release over the panel.
+- **The rest of the order cascade.** `0x43F9EF` reads `main+0x37EFA` inside the order resolver
+  `0x43F0E0`: it is the case for order type 1 (`0x43F141..0x43F14D`, table `0x4401EC`, index
+  type − 1, entry 0 → `0x43F9E9`). The rest of that case was not traced; with no target and the
+  position (0,0,0) it orders a ground unit to (0,0,0) (MEASURED, *STOP and ATTACK* above).
+
+**What each Interface Type does with a press** (the input to the wiki's interface types,
+[the in-game wiki](../ingame-wiki.html), *The per-mod tutorials*). DISASSEMBLED, the rows marked
+MEASURED live; the type-0 rows' live numbers are in *The wiki's per-mod tutorials*, below.
+
+| where / state / input | Type 0 (left-click orders) | Type 1 (right-click orders) | same? |
+|---|---|---|---|
+| map, idle, L press | the selection box starts, bit 3 (`0x4994AC..0x4994FD`) | the same | yes |
+| map, idle, L drag released | box select `0x48C390`; an empty box deselects (`0x499459`) | the same | yes |
+| map, idle, L click (short, `0x499421..0x499441` → `0x498F70`) | cursor `0x0F` selects (`0x48C7F0`); a cursor index below `0x11` orders through `0x48CF30` (Shift appends, bit 5); Impure's Quick Build is on this button (`tagpu_resource.c`, the gate at `0x498F70`). MEASURED: the move lands at the release; a deposit or a vent gives Quick Build's order; an own unfinished building with a builder selected gives the assist | `0x0F` selects; else it deselects (`0x499046..0x49905C`; Impure's patch at `0x499041` keeps that, and the cursor patch makes the cursors contextual) | no |
+| map, idle, R press | Ctrl: `0x41CC60`, which hands the mouse to a view mode (below); else deselect `0x48BD00` + `0x491D70(1)` (`0x499172..0x499196`). MEASURED: the selection is cleared at the press, and kept with Ctrl | the order `0x48CF30` at the point (bit 2, `0x4991D5..0x4991F5`), on the press; Impure's Quick Build here (the gate at `0x499100`). MEASURED | no |
+| map, R release | nothing | nothing, MEASURED | yes |
+| map, armed, L press | `0x4993BF` → the router (`tagpu_route.c`) → `tagpu_place_button` (Shift starts a gesture) or `0x498F70` → the placement `0x419670`; Shift keeps it armed (bit 5) | the same | yes |
+| map, armed, R press | the cancel `0x499100`, no order | the same, MEASURED | yes |
+| minimap, idle, L press | the click `0x498F70` at the minimap's world point (`0x4995AA..0x4995B3`) | the minimap drag, bit 4 (`0x499567..0x499576`), ending at the L release (`0x499368`) | no |
+| minimap, idle, R press | the minimap drag, bit 4 (`0x49919D`), ending at the R release (`0x499360`) | the order `0x48CF30` at the minimap's world point [INFERRED] | no |
+| minimap, or a column row outside the screen, armed, R press | the cancel | the cancel, MEASURED at (60, 600) | yes |
+| a column row outside the screen, idle, L or R | nothing | nothing, MEASURED | yes |
+| outside the screen and the viewport, armed, L press | `0x4993BF` → `tagpu_place_button` answers 0 (bit 1 clear) → `0x498F70`; the resource gate re-runs `0x4197D0` on the clamped point and `0x419670` places that site, at the press | the same, MEASURED | yes |
+| the screen, any press (an empty area, a greyed button) | the GUI's; no cancel | the same, MEASURED (an armed R press and release inside the screen kept the building armed) | yes |
+| the screen: a structure's build button, R press and release inside | arms it (`0x41AA00` reads no button) | the same, MEASURED | yes |
+| the screen: a factory's unit button | L +1, R −1, Shift ±5 | the same | yes |
+| the screen: PREV, NEXT, STOP with R | act on the release, as with L | the same | yes |
+| the screen: ORDERS, BUILD with R | act on the press, as with L | the same | yes |
+| a press on the screen, released on the map | the GUI's release only, no order | the same, MEASURED | yes |
+
+**MEASURED live** (the scenario of the introduction, Interface Type 1):
+
+- A right press on the map ordered at the press. ARMCK's chain took a move (action 26) to the
+  press's world point (1720, 6416) before the release, and the release changed nothing.
+- A right press at (60, 600), on the column below ARMCK1's screen, gave no order, and its release
+  on the map gave none. With ARMSOLAR armed, a right press on the map or on the column disarmed
+  at the press (`0x2CC3` 14 → 1) and ordered nothing.
+- A selection box dragged onto the column stopped at the view's left edge: its far corner read
+  world x 1148, the eye's x, at screen x 127, 60 and 20, and followed the pointer's y on every
+  move (world z 6266, 6066, 6466 at screen y 450, 250, 650). Released there, it selected the two
+  ARMPW the clamped box held.
+- A Shift-drag line of ARMMEX released over the column with Shift held committed the shape the
+  map last showed: seven orders, `place: commit shape=line sites=7`.
+- An armed left press at (60, 600) placed one ARMSOLAR at the press, at the clamped point
+  (1148, 6416), snapped to (1144, 6424). Without Shift the byte went to 1; with Shift it stayed
+  14 until Shift went up. On the minimap at (64, 64) the same press placed at the minimap's world
+  point (3146, 3862), snapped to (3144, 3864).
+- With ARMMEX armed, a right press and release at (2, 130), inside the screen, kept it armed. A
+  right press and release on the ARMSOLAR button armed ARMSOLAR (type 78 → 112) at the release,
+  armed or not before.
+
+**The folder names a mod renames**, as `tagpu_replays.c` copies them from the running process
+([GPU status](../gpu-status.html) §2.12c). Each is DISASSEMBLED as pushed by the code that reads
+the files:
+
+| folder | VA | pushed at |
+|---|---|---|
+| `guis` | `0x502820` | the page probe `0x42D82A`, the page loader `0x41AD2C` |
+| `gamedata` | `0x503360` | the sidedata reader `0x429EB1` |
+| `unitpics` | `0x505FE4` | `0x44C188`, `0x494421` |
+| `download` | `0x503730` | the download reader `0x42DD0E` |
+| `commongui` | `0x50925C` | `0x491542`, into `0x4AEEE0` |
+| `palettes`, `PALETTE` | `0x5031BC`, `0x5033A4` | the PALETTE.ALP path, `0x42E14B..0x42E15B`; .SHD at `0x42E1E0` |
+| `guipal` | `0x5031C8` | `0x49810E` |
+
+- **Mayhem and ProTA rename them at run time.** Their `dplayx.dll` applies a patch list from its
+  own resource in `DllMain`, before the engine's entry point. Mayhem's list makes `guis` `guiM`
+  (the byte at `0x502823`) and `unitpics` `unitpicM` (the byte at `0x505FEB`); ProTA's makes
+  `guiP`, `unitpicsP` and `gamedatP`. Their `DownloadPath` settings write `0x503730`. MEASURED
+  live at each setup's main menu: Mayhem `guiM`, `gamedata`, `unitpicM`, `downloadsM`; ProTA
+  `guiP`, `gamedatP`, `unitpicsP`, `downloadP`; `commongui` unrenamed in both.
+- **TA Zero renames them in its executable's `.data`**: `ZGui`, `ZGameDat`, `ZBuildMenu` and
+  `ZUnitPic` (and `units` → `ZUnits`), MEASURED by comparing its exe with the retail one.
+- **The format strings the names are built with are read from the retail exe** and are not
+  followed when a mod patches them: `%s%d.GUI` `0x502838`, `%sGEN.GUI` `0x50282C`,
+  `%sMAIN2.GUI` `0x509570`, `%sDL` `0x502818`, `_gadget` `0x509970`, `PANELSIDE` `0x5033D4` and
+  `sidedata` `0x503410`. Mayhem's and ProTA's patch lists touch none of them (MEASURED), and the
+  composed columns match the captures in all six setups.
+- **Not checked live:** the archive pattern `0x5028CC` that Mayhem's and ProTA's loaders rewrite.
+
+**Not engine addresses**, though the landing gate's address grep matches them:
+
+- `0x55554F` in `tagpu_wikistage.c` is the whitebox button colour `SIDE_BUTTON`.
+- `0x502823` and `0x505FEB` in `tools/wiki/sidepacks.py` are the single bytes Mayhem's loader
+  patches inside `guis` and `unitpics`.
+
+### The wiki's per-mod tutorials: the controlled player's side, the Interface Type, a unit's display name, the G cells and the type-0 clicks [DISASSEMBLED + MEASURED 2026-10-28]
+
+The in-game wiki plays its demos with the player's own side's units and in the player's own
+Interface Type ([the in-game wiki](../ingame-wiki.html), *The per-mod tutorials*). Two of the facts
+below are read live, by `tagpu_packet_pub.c` (`wiki_side`, `wiki_iface`) at every packet fill, on
+the game thread, in game. The rest are rules the wiki repeats from the mod's files on the asset
+loader's thread (`tagpu_wikiasset.c`, mirrored by `tools/wiki/gfx.py`) or in its two simulations
+(`tagpu_wikisim.c`, `tools/wiki/mockup/sim.js`), which call none of these functions.
+Disassembled from `pristine/TotalA.exe.pristine` (`objdump -d -M intel`). The live rows were
+MEASURED 2026-10-28 under Wine through `tacli peek`, on scripted skirmishes under retail, TA Zero
+alpha 5, Total Mayhem 11.3.0 and Twilight 2.0b98 and on two Impure replays.
+
+**The controlled player's side** -- the read the wiki copies.
+
+- **Where the engine reads it.** The page loader `0x41ACE0`, when `<guis>\<NAME><page>.GUI` does
+  not answer (`0x41AD58..0x41AD5F`), takes `p` = byte `main+0x2A42` (`0x41AD1C`), the record
+  `main + 0x1B63 + 0x14B·p` (`0x41AD23..0x41AD3C`: `(33p · 5) · 2 + p`), its PlayerInfo pointer at
+  `+0x27` (`0x41AD61`) and the side byte `PlayerInfo+0x95` (`0x41AD66`). The side picks the prefix
+  `main + 0x37F5B + 0x232·side` (`0x41AD6C..0x41AD7F`) for `%sDL` (`0x502818`, `sprintf` at
+  `0x41AD94`).
+- **Negative result: no test.** Neither `p`, nor the pointer at `+0x27`, nor the side byte is
+  bounded or tested for NULL on that path.
+- **MEASURED**, `main+0x2A42`, the side byte and sidedata's prefixes at `main+0x37F5B`:
+
+| game | `0x2A42` | side | prefixes | the engine's screen |
+|---|---|---|---|---|
+| retail skirmish as ARM | 0 | 0 | ARM, COR | |
+| retail skirmish as CORE | 0 | 1 | ARM, COR | |
+| TA Zero skirmish, `Player0Side` 0, 1, 2 | 0 | 0, 1, 2 | GOK, ARM, COR | `GOKMAIN2`, `ARMMAIN2`, `CORMAIN2` |
+| Impure replay of the CORE skirmish | 10 | 1 | ARM, COR | |
+| Impure replay of the ARM skirmish | 10 | 0 | ARM, COR | |
+| the CORE replay from record 0's view (`main+0x2A43` 0) | 10 | 1 | ARM, COR | |
+
+  In a replay `main+0x2A42` is 10, the viewer's record, whatever record is viewed, and record 10's
+  side byte was the recorded player's in both replays [INFERRED from these two: that the replay
+  always seats it so].
+- **Impure's copy** (`tagpu_packet_pub.c` `wiki_side`) holds `p` below main's eleven player
+  records (built by `0x463BE0`, from `0x41D98B`), filters the pointer with `ptr_ok` as a sanity
+  check on its value, and returns the byte as data: the wiki maps it through the loaded layout's
+  `side_of_engine`, and a side that maps to none plays the fixture. Its lifetime argument is the
+  engine's own: the router dereferences the same record on the same thread in game (`0x41AD61`).
+
+**The Interface Type `main+0x37EFA`: its writers.** Its readers are listed in *The cursor
+chain* (below); the four that decide the left button test `== 1` (`0x43E505`, `0x43F9EF`,
+`0x499046`, `0x499567`), the right press (`0x499162`) and a minimap drag's release (`0x499352`)
+test `!= 0`.
+
+- **The registry load** `0x42F9AF..0x42F9EB`: `0x4B69D0("Total Annihilation" 0x5032E8,
+  "Interface Type" 0x504708)`. A failed read stores 0 (`0x42F9E5..0x42F9EB`), so a fresh install
+  plays the left-click interface. A value above 1 becomes 1 by a **signed** compare (`cmp eax, 1;
+  jle` at `0x42F9CD`), so a negative value passes.
+- **The options screen** stores the LEFTCLICK gadget's value at `0x45EB3E`.
+- **The typed command `IFace`.** Its command table entry at `0x501D5C` is {`0x502428` "IFace",
+  `0x416D20`, 1}, after ScrollSpeed's {`0x502430`, `0x416CF0`, 1} at `0x501D50`. The handler
+  (`0x416D20..0x416D3E`) stores `0x4B73E0(1, 0)` -- the command's argument 1 as an integer
+  through `0x4E4F70` when the argument count `[ecx+0xD0]` exceeds 1, else 0
+  (`0x4B73E0..0x4B7403`) -- **unclamped**, then calls `0x430F00` [INFERRED: the settings save; it
+  reads `0x37EFA` at `0x430F08`, and the registry value follows every store measured below].
+- **MEASURED** on a retail skirmish, the int and the registry value read back after each step:
+  1 after the launch (tacli writes 1); typed `+iface 0` → 0; `+iface 1` → 1; `+iface 2` → **2**,
+  stored as it was typed; `+iface 1` → 1; the options' LEFTCLICK toggled in game → 0, then 1. A
+  value outside {0, 1} is therefore reachable, and is a mixed interface: the `== 1` readers take
+  the type-0 rows and the right press the type-1 one [INFERRED: not played]. Impure's copy
+  (`wiki_iface`) is `== 1`, so the wiki plays the left-click interface for any value but 1.
+
+**A unit's display name**, `def+0x00`.
+
+- **The FBI reader `0x42BF40`** reads `unitname` (`0x503878`) into `def+0x20`, 0x20 bytes, through
+  `0x4C48C0` (called at `0x42BFA7`); `name` (`0x503884`) into `def+0x00`, 0x20 bytes, through
+  `0x4C58A0` (`0x42BFAC..0x42BFBB`); and `description` (`0x503EBC`) into `def+0x40`, 0x40 bytes,
+  the same way (`0x42BFC0..0x42BFD2`).
+- **`0x4C58A0` tries the language's key first.** It builds `<0x51FDC0><key>` on its stack
+  (`0x4C58B3..0x4C5900`), looks it up through `0x4C48C0` (`0x4C592D`), and only when that fails
+  the plain key (`0x4C5956`). `0x4C48C0` copies at most n bytes and writes a NUL over the last
+  (`0x4C4949..0x4C4951`), so `def+0x00` holds at most 31 bytes.
+- **`0x51FDC0` is the language.** `0x4C54F0(…, lang)` compares `lang` with it (`_stricmp`
+  `0x4F8A70` at `0x4C5500`) and copies it there (`0x4C55A2`); its one call (`0x49EA33`) passes
+  `0x51FB50`, which has two writers, both in WinMain's init. The command-line parser `0x49EE30`
+  (called at `0x49E8D2`) splits the line with `strtok` on space and tab (`0x509890`) and copies
+  each token that starts with neither `-` nor `/` there, unbounded (`0x49EEDB..0x49EEF4`), so the
+  last such argument stands. The registry value "language" (`0x5097E8`) is read into it by
+  `0x42F980` at `0x49E9F7` only while it is still empty (`0x49E9D6..0x49E9DE`: `strlen`, then
+  `jne` past the read), and "english" (`0x504AB8`, `0x49EA04`) stands in when both left it empty
+  (`0x49E9FC`). DISASSEMBLED.
+- **MEASURED** on a retail skirmish with the instance's registry `language=french`: `0x51FB50`
+  and `0x51FDC0` both "french"; ARMCK's `def+0x00` "Kbot de construction" (its FBI's
+  `FrenchName=Kbot de construction  ;` arrives without the trailing blanks), ARMACK's "Kbot de
+  constr. évolué" with byte `0xE9` for each é, ARMSEER's "Prophète" with `0xE8`; `def+0x40` "Niveau
+  Tech 1" and "Niveau Tech 2"; `def+0x20` the UnitName. The bottom bar draws ARMACK's name with its
+  accents. The code page is Windows-1252 [INFERRED: those bytes are the same letters in
+  Windows-1252 and in Latin-1].
+- **The wiki's rule** (`tagpu_wikiasset.c`, `gfx.py` `display_name`): the FBI's `<language>name`
+  when the key exists, else `name`, its first 31 bytes, converted from Windows-1252 to UTF-8 (a
+  byte with no character there becomes `?`), the UnitName when that is empty, so a title takes up
+  to 93 bytes, 94 with its terminator (`WIKI_TITLE_MAX`). The language is the one `tagpu_replays.c`
+  copies from `0x51FB50`.
+
+**A missing `BMcode` reads 0** (a structure): `esi` is zeroed at `0x42C0F0` and pushed as the
+default of the `BMcode` read at `0x42C401`, with no write to `esi` between. The cast rule's
+*mobile* and *structure* predicates read it that way.
+
+**The geothermal test: only G cells count.** The yard code `G` is `0x8F`, the only yard code with
+bit `0x80` (`0x42CF9D..0x42D06B`; *Geo identity* in the resource section has the cell walk).
+`0x47D2E0` walks the footprint: a yard cell with bit `0x80` (`0x47D684`) sets a "holds G" flag
+(`[esp+0x28]`, `0x47D68F`), and when the feature under that cell -- a def below `0xFFFB` bounded
+by the feature count `main+0x14253`, a `0xFFFE` alias resolved to its anchor through the cell's
+`+0xA`/`+0xB` (`0x47D6C7..0x47D6E4`), anything else none -- has FeatureDef `+0xFE` bit `0x20`
+(`0x47D708`), a "G on a vent" flag (`[esp+0x2C]`, `0x47D711`). After the walk a yard that holds G
+with no G cell on a vent is refused (`0x47D75B..0x47D769` → `0x47D80F`). A vent under a cell
+that is not G does not count.
+
+- **MEASURED** in Total Mayhem 11.3.0: ARMGEO, 4 × 4 with G only in its inner 2 × 2, armed from
+  the build menu at Interface Type 0 with Impure's snapping and Quick Build off, and placed with
+  the vent under footprint cell (0, 0) or (3, 1) was refused (no order); under (1, 1) or (2, 2)
+  it was placed (a build order of type 107).
+- **MEASURED offline** over the six compatibility setups' FBIs: every geothermal plant outside
+  retail has G only inside its yard (4 × 4 with 4 G cells in Mayhem, ProTA, Twilight and
+  Escalation; TA Zero 5 × 5 with 9), retail's all 16 cells.
+- **The wiki's rule**: a geothermal plant needs a vent under a G cell (`sim.js` `siteOk`,
+  `tagpu_wikisim.c`), and the vent it anchors to is the one under a G cell, as Impure's
+  `geo_anchor` (`tagpu_resource.c`) reads it.
+
+**The type-0 clicks** (the table above, its type-0 column).
+
+- **A left release is a click** when the press is less than 25 clock units old (30 a second,
+  MEASURED) and the release point less than 32 world units from the press point on x and on z
+  (`0x499421..0x499441`, the clock `0x4B6340`; *The cursor chain*, below, has the pseudo-code and
+  the points it compares); it then calls `0x498F70` (`0x4995AE..0x4995B3`), at both Interface
+  Types. So a click's order
+  lands at the release, where type 1's right press orders at the press.
+- **The type-0 cursor over a unit**, `0x43EDB6..0x43EE42` (type 0's branch of the order-1 case;
+  type 1 jumps to `0x43EB02` at `0x43E50C`): when `0x4899B0` answers non-zero for the unit under
+  the cursor -- a thiscall on the acting unit that tests its def's `+0x245` bit 9 and the
+  target's `+0x108` against the target def's `+0x1FA`, its `+0x110 & 3` and a height bound
+  [INFERRED: "can repair or assist it"] -- and that unit's `+0x104` is not 0.0 (the float at
+  `0x4FD2E8`; the unit unfinished), it gives 6;
+  else a unit of the controlled player's (`+0xFF` == `main+0x2A42`) with `+0x110` bit `0x20`,
+  `+0x104` == 0.0 and `+0xFB` == 0, whose `+0x86` is NULL or has `+0x110` bit 30, gives `0xF`.
+- **The right press with nothing armed** (`0x499162..0x499196`): type 0 over the viewport
+  (region bit 1, `0x499172`) calls `0x41CC60` when the record's `+8` has bit 3 (`MK_CONTROL`,
+  `0x49917A`), else deselects every unit (`0x48BD00`) and pops to MAIN2 (`0x491D70(1)`); over the
+  minimap (bit 0) it starts the minimap drag (`0x49919D`).
+- **`0x41CC60`** releases the camera follow (`0x41C390`'s three stores, inlined at
+  `0x41CC6A..0x41CC84`), calls `0x4C2470`, sets `main+0x2CDF` = 1 (`0x41CC95`), copies the mouse
+  record `main+0x2C76` (24 bytes) to `main+0x2CC7` (`0x41CCA4..0x41CCB7`), stores the eye
+  `main+0x1431F`/`+0x14323` divided by 16 at `+0x24`/`+0x28` of that copy, and the screen's
+  half-size at `+0x1C`/`+0x20`, and centres the cursor there (`0x4C22F0` at half of `0x4B6700` and
+  `0x4B6710`). While `main+0x2CDF` is set the mouse handler gives every record to `0x41CD50`
+  (`0x499387..0x499391`). A mouse-owned view mode [INFERRED: a drag scroll]; the wiki does not
+  model it, and a type-0 Ctrl + right press does nothing in its simulations.
+- **MEASURED** on a retail skirmish at Interface Type 0, an ARMCK selected, its order chain and
+  `main+0x2CBE` (the cursor) read back:
+
+| the pointer over | cursor | a left click (press, then release) |
+|---|---|---|
+| ground | 14 (`cursormove`) | the chain unchanged after the press (Standby, action 41, at GameTime 1115); a move (action 26) to (300, 32, 760) after the release (GameTime 1137); ARMCK still selected |
+| a metal deposit | 14 | after the release, Quick Build's order: `resource: quick type=78`, a build (action 25) of type 78, ARMMEX, at (376, 32, 376) |
+| a geothermal vent | 14 | after the release, Quick Build's build of type 60 at (640, 32, 384) |
+| an own unfinished ARMSOLAR | 6 | after the release, action 23 with the ARMSOLAR as its target, at (720, 32, 640): the assist |
+| an own finished ARMESTOR, an own ARMPW, the ARMCK itself | 15 (`0xF`) | |
+| the ARMCK, nothing selected | 15 | the click selected it |
+
+  A right press cleared the selection at the press and gave no order (the chain stayed Standby),
+  `main+0x2CDF` 0. A Ctrl + right press kept the selection, and `main+0x2CC7` held the mouse
+  record's point (292, 644), but `main+0x2CDF` read 0 after the press, after the release with Ctrl
+  held and after Ctrl's release, in two runs; why it was never seen at 1 is not established.
+- **The wiki's rows** (`sim.js` `leftClick`, `rightPress0`; `tagpu_wikisim.c` the same): a type-0
+  left click on the map with nothing armed is Quick Build's choice first, else over a unit of the
+  player's the assist (an unfinished building, a builder selected) or a select, else a move of the
+  selected mobile units, at the release; a right press deselects, and with Ctrl does nothing.
+  [INFERRED]: an unfinished building of the player's with no builder selected is selected (the
+  cursor there was not measured).
+
+**The build menu's names**, as the wiki's menu reader cuts them (`tagpu_wikiasset.c`
+`gadget_role`, `gfx.py`):
+
+- a .GUI gadget's name is read into the record's 16 bytes at `+2` by `0x4C48C0(.., 0x10)`
+  (`0x4AD39C`), so it keeps 15 characters;
+- a download entry's `UNITNAME` (`0x503F54`) by `0x4C48C0(.., 0x20)` (`0x42DED8`), 31 characters,
+  and the fill copies it whole into the record (`strcpy`, `0x41AE84..0x41AEAC`);
+- the greyed pass reads the record's whole name (above), and a press its 16-character cut
+  (`0x49FED0`, above).
+
+  MEASURED offline: following these (and the greyed pass's range) changed no pick, page, picture
+  or sheet byte in the six setups, and added units to two setups' menus (Mayhem's ARMEMP gains
+  EMPMAKENUKE; six of Escalation's builders gain a button each), none of them picked by a cast.
 
 ### The stockpile bar's divide — `0x439D41` [DISASSEMBLED 2026-09-25]
 

@@ -18,6 +18,13 @@ typedef struct TAGPU_FXVIEW {
                                     here; valid for this frame only, never cached */
     int eyeX, eyeY, vpL, vpT;    /* the PREDICTED eye and the true viewport, from the packet */
     int gw, gh, ss;
+    /* THE COMPOSITE'S SCALE: `devPx` device px a game px, vp_w / gw, and
+       `devres` 1 when the composite reads the ss target itself (tagpu_native.c,
+       "the world at the device's resolution") rather than its resolve to the
+       game resolution. A width that belongs to the device -- the reclaim
+       sweep's strokes -- is converted through these. */
+    float devPx;
+    int   devres;
     int mirror;                  /* the map edge: 1 mirror, 0 black (this frame) */
     float zoom, zoomCx, zoomCy;  /* the native pass's view zoom                */
     /* THE EFFECTS BAND'S SEQUENCE (tagpu_fx.c, "the effects band"): model k
@@ -65,6 +72,29 @@ static __inline int tagpu_edge_reflect(int m, int n, int* flip)
     if (p < n) { *flip = 0; return p; }
     *flip = 1;
     return 2 * n - 1 - p;
+}
+
+/* WHERE THE MAP ENDS FOR EVERY EDGE PASS: the engine's scroll extent
+   (`main+0x1422B`/`+0x1422F`, the packet's `map_pxw/h`), in 32-px tile cells.
+   The extent is the map's pixel size less 32 and 128 (`0x4833B0`), and stock
+   never shows a pixel past it: its camera clamp `0x41C3C0` holds the eye in
+   `[0, extent - view]`. The strip between the extent and the tile map's own
+   size is therefore art no player saw -- often the map editor's blank tile
+   (Painted Desert's blue column) -- and the load-time mask makes its right
+   strip unbuildable, and its bottom strip wherever the ground's projected y
+   lies past the extent (exe map, "A saved game's features"). So the mirror
+   folds HERE, and
+   that strip is drawn as the reflection of the map beside it.
+   Every stock map's extent is a whole number of tiles (all 275 TNTs have even
+   16-px dimensions); a custom map whose extent is not rounds down to the tile.
+   THE BOUND: the answer is in [1, cells32], `cells32` being the tile map's own
+   width or height that the caller indexes with, so a cell folded into
+   [0, answer) by tagpu_edge_reflect indexes the tile map. An extent that is not
+   positive, or not inside the map, answers the whole map. */
+static __inline int tagpu_edge_area(int extent_px, int cells32)
+{
+    int n = extent_px > 0 ? extent_px / 32 : 0;
+    return n > 0 && n < cells32 ? n : cells32;
 }
 
 /* ONE EFFECTS MODEL, already rasterised: its runs are `nrun` entries of

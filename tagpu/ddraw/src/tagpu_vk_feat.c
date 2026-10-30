@@ -1,6 +1,10 @@
 /* tagpu_vk_feat.c -- the feature pass (trees, rocks, splats, GAF wreckage)
    drawn by Vulkan. Contract: tagpu_vk_feat.h. A world pass that depth-tests.
 
+   TWO INSTANCES: compiled for the game's world and, under TAGPU_SCENE_WIKI, for
+   the wiki's stage, each with its own statics; tagpu_scene.h names where the
+   wiki's draws its hand-over from and what it may call.
+
    IT IS NOT A SECOND IMPLEMENTATION OF THE PASS. Everything arrives through
    `tagpu_feat_handover` (tagpu_feat.h): the vertices are the two arrays the
    gather filled, the uniforms are the view's numbers, the texels are CPU-side
@@ -118,6 +122,7 @@
    A PASS READS NO ENGINE STATE: every value comes from the gather's
    hand-over, so this file is not on thread-split.allow and must never be. */
 
+#include "tagpu_scene.h"            /* first: the wiki instance's names and sizes */
 #include "tagpu_vk_pass.h"
 #include "tagpu_vk_restore.h"
 #include "tagpu_vk_stage.h"

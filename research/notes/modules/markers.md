@@ -155,7 +155,9 @@ the same fix one layer up, and is not done.
 **The order block is PORTED, not captured, since G13o.** `tagpu_order.c` re-derives §3 of
 [UI markers](../ui-markers.html) — the driver's three selection rules, the walker's
 capability-mask dispatch and its `pos` chaining, and all five leaf drawers — and draws them
-at native resolution in `tagpu_mark.c`'s pass. A capture could never reach past the
+in `tagpu_mark.c`'s pass: the lines and circles as native-resolution geometry, the route dots
+and the waypoint sprite as the engine's own `cursors.gaf` frames, one texel a screen pixel at
+every zoom, out of an atlas the game thread decodes once ([UI markers](../ui-markers.html) §6.5). A capture could never reach past the
 OFFSCREEN's own width and height, and the offscreen is screen-sized while `vpwide` lets the
 projection run far outside it, so at zoom < 1 the engine's own clipper threw the outer ring's
 markers away before our buffer saw them.

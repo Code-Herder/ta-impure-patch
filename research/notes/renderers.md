@@ -1341,6 +1341,7 @@ exception: nothing but the menu ever wrote it and it was never released, so it i
 | `edge` | `mirror` | `mirror` or `black`: what the view shows past the map ([GPU status](gpu-status.html) §2.90). Not a render key, so the preset never rewrites it; `tagpu_mirror.on`/`.off` are its levers |
 | `mixingbuffers` | 32 | 8, 16, 24 or 32: the sounds the engine plays at once. No row; not a Visuals value, but the same loader reads it |
 | `vsync` | 1 | on: the present waits for the vertical blank, and the frame limiter keeps a backstop just above the monitor's rate; off: nothing holds the frame rate. The only pacing there is (§2.10c) |
+| `placespacing` | none | `NAME:n,NAME:n`: the multi-building placement's spacing per building type, by its unit name (`ARMSOLAR:2`), `n` 1..16 empty cells between neighbouring sites; a type at 0 has no entry, at most 64 types, a name of `[A-Za-z0-9_-]` only. No row: Alt+Z / Alt+X with a building armed step it ([quality of life](tadr-port/quality-of-life.html#what-impure-does)) |
 | `replayhud` | 100 | 75, 100, 125 or 150: the replay HUD's own scale, in percent; one HUD unit is the screen height / 720 times it, whatever `hudscale` is ([The replay HUD in game](hud-in-game.html)). No settings row: the HUD's own scale button writes it, cycling the four |
 
 **The preset is derived, so Classic++ can improve under a player.** While `style` is `classic`
@@ -1371,6 +1372,14 @@ exists means the file it would back up is not the original, and that step is ref
 MEASURED 2026-09-23 on a hand-staged v0.2 gamedir:
 every file renamed, `penumbra=0.1` kept alone in the cfg, the game up borderless-fullscreen from
 the store.
+
+**The placement's spacing is written by the render thread at its next flush**, as a menu change
+is. The place module keeps the game thread's own table, loaded from the store at attach, and
+hands a changed table over with `TryEnterCriticalSection`: the render thread holds the store's
+lock across its file write, and the game thread never waits on it in play. A hand-over that finds
+the lock busy is offered again at the next step or evaluation, and at the level's end, outside
+play, it waits. A unit name outside `[A-Za-z0-9_-]` steps in play but is not saved, and the log
+says so.
 
 **The windowed frame is saved to the store**, by `cfg_save` on the way out: `window=x,y,w,h`,
 where `w,h = 0,0` is cnc-ddraw's "the size the game asks for". A frame that a mode would leave

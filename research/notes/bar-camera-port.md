@@ -57,7 +57,7 @@ what replaces it.
 
 | rule | the game today — **deleted** | BAR — **the game's only camera** |
 |---|---|---|
-| **clamp** (how far it pans) | `window`: eye ∈ [−d, map − W + d], where d = ⌊W/2 · (1 − 1/z)⌉ above 1× and 0 at or below it (`zoom_eye_range`). Zoomed out, the map edge stops W/2 from the screen centre | `centre`: the world point at the view centre stays on the map at **every** zoom, so eye ∈ [−W/2, map − W/2]. The map's edge can reach the middle of the screen |
+| **clamp** (how far it pans) | `window`: eye ∈ [−d, map − W + d], where d = ⌊W/2 · (1 − 1/z)⌉ above 1× and 0 at or below it (`zoom_eye_range`). Zoomed out, the map edge stops W/2 from the screen centre | `centre`: the world point at the view centre stays on the map at **every** zoom, so eye ∈ [−W/2, map − W/2], the map in TA's terms the scroll extent (C2). The map's edge can reach the middle of the screen |
 | **zoom in** | holds the world point under the pointer | the same |
 | **zoom out** | holds the world point under the pointer | `centre`: the camera pulls straight back, and the view centre holds |
 | **notch** | ×1.1 on a target *level*, snapped to exactly 1 inside (0.999, 1.001) | ×(1 − 0.14 n) on the camera *distance*, which is 1/z. That is ×1.163 in and ×0.877 out, so in-then-out lands on 1.020, not 1 |
@@ -175,18 +175,21 @@ five changes. C1–C4 are camera changes (G20a); C5 draws (G20b).
 
 **C2 — the centre clamp [BUILT, G20a].**
 
-* **The range.** `camera_range()` is the one function: lo = −W/2 and hi = map − W/2, with W the
-  **true** viewport, or the engine's own [0, extent − W]. `zoom_eye_range` (the game thread's
-  inputs) and `range_pk` (the packet's `vp`, `map_pxw/h`, `map_w16/h16` and the new
-  `cam_centre`) both call it, which is the invariant the pre-clamp rests on.
-* **Two sizes.** `map` is the map's own size, the PLOT grid `main+0x14233`/`+0x14237` × 16 —
-  the tile map the lab and the terrain pass draw, and where the mirror (C5) reflects. `extent` is
-  the scroll extent `main+0x1422B`/`+0x1422F`, the map less 32 px wide and 128 px tall, which the
-  engine's clamp `0x41C3C0` and its inline target clamps read. The view centre stops at the map's
-  edge, as the lab's does (Two Continents: `(10304, 12448)` at 1024x768, not the extent's
-  `(10272, 12320)`). The engine's range and the pointer's guards stay on the extent, the bound they are
-  built on: the 128-px bottom margin is `GetTPosition`'s search window (engine map,
-  "Engine defects we patch").
+* **The range.** `camera_range()` is the one function: lo = −W/2 and hi = extent − W/2, with W
+  the **true** viewport, or the engine's own [0, extent − W]. `zoom_eye_range` (the game thread's
+  inputs) and `range_pk` (the packet's `vp`, `map_pxw/h` and `cam_centre`) both call it, which is
+  the invariant the pre-clamp rests on.
+* **The map is the scroll extent.** `extent` is `main+0x1422B`/`+0x1422F`, the map's pixel size
+  less 32 px wide and 128 px tall, written by `0x4833B0` at the load, and read by the engine's
+  clamp `0x41C3C0` and its inline target clamps. Stock never shows a pixel past it, and the strip
+  between it and the tile map (the PLOT grid `main+0x14233`/`+0x14237` × 16) is unbuildable on the
+  right, unbuildable at the bottom wherever its projected y lies past the extent, and on 9 stock
+  maps holds the editor's blank tile, so the view centre stops at the extent's edge,
+  in the game and in the lab, and the mirror (C5) folds there (gpu-status §2.90, "Where the map
+  ends"). MEASURED 2026-10-25 at 1024x768: the eye settles at `x = 8768` (at 1×) and `y = 8864`
+  (at 0.5×) against Painted Desert's right and bottom edges (extent 9216 × 9216). The pointer's guards are on the extent
+  too, the bound they are built on: the 128-px bottom margin is `GetTPosition`'s search window
+  (engine map, "Engine defects we patch").
 * **Which range is in force.** The centre range holds only on a draw whose ground is ours
   (`s_gCentre = installed && terr`), because the engine's terrain pass `0x483FA0` has no bound on
   its tile index; the terrain latch is set from the same request right after the apply, so the
@@ -217,9 +220,9 @@ five changes. C1–C4 are camera changes (G20a); C5 draws (G20b).
 map, **at every zoom**, with `vpwide`'s widened rect below 1× adding W/(2z) − W/2 more. Before
 G20a the eye reached −0.4375 W at 8× and never went below 0 at or under 1×. The full table, with
 the instruction behind each bound, is [exe reverse engineering](exe-reverse-engineering.html)
-§"Who reads the eye". Moving the far ends from the extent's edge to the map's (32 px right,
-128 px down) changed no verdict: no row's bound reads where the centre range ends. The rows this
-note listed:
+§"Who reads the eye". It was run for far ends at the tile map's edge, 32 px right of and 128 px
+below the extent's, so it covers the range in force, which ends at the extent; no row's bound
+reads where the centre range ends. The rows this note listed:
 
 | reader | bound |
 |---|---|
@@ -278,20 +281,27 @@ the rest of `R` and the residual on it rather than banking them.
   beats the store, which beats the compiled default. `tagpu_defaults.off` skips the store and the
   play defaults, so a control launch draws `black`. Past the map there is always something to
   draw once the view centre can reach the edge: up to W/2 at 1×, and up to 2 W at 0.25×.
-* **Terrain.** Off-map cells join the terrain instances. Each one carries the tile of the cell it
-  reflects to, found with the lab's triangle wave `reflect(m, n)`, and a flip bit per axis. It is
+* **Where the map ends.** Every edge pass folds at the engine's area, the scroll extent in 32-px
+  tiles (`tagpu_fx.h` `tagpu_edge_area`, bounded to the tile map's own count), the line the
+  camera's centre range ends at (C2), so the hidden strip past it is drawn as the reflection.
+* **Terrain.** Cells past the area join the terrain instances. Each one carries the tile of the
+  cell it reflects to, found with the lab's triangle wave `reflect(m, n)`, and a flip bit per axis. It is
   drawn with the lab's tone: `edgeT` from the distance to the map on the tile grid, the grey mix,
   the dim, and the linear fade. This is `EDGE_TONE` in the lab, which ports as GLSL → SPIR-V like
   every lab shader.
 * **Features.** They are gathered past the map from the **map's own** anchors (the TNT's, not a
   scenario's):
+  * A feature is the map's by where it is **drawn**, not by its anchor: one drawn past the area
+    is past the map (dropped from the map's own under the mirror, and no source of a copy), and
+    one anchored in the hidden strip but drawn above the fold has its copies.
   * They are flipped across a side edge and stand upright across the top and bottom.
   * A y-mirrored anchor **adds** the half height rather than subtracting it, because the art has
     the height baked in.
   * A copy takes its source's depth key and is emitted in its source's order, so it stacks as
     the map does.
-  * Each copy draws only in its own columns, and a copy past the top or bottom never on the map's
-    rows, or the painter's order lets a mirrored tree cover the last rows.
+  * Each copy draws only in its own columns. A copy past the top or bottom is drawn whole, or —
+    when its shadow or body would reach across the map's border — not at all (the owner's choice
+    among clipped, unclipped, dropped and upside-down copies).
 * **Units stay on the map.** The minimap is unchanged, as BAR's is.
 
 The game's terrain is instanced: `tagpu_terr.c`'s vertex stage reads one quad plus a per-instance
@@ -329,7 +339,7 @@ tile taken from the reflected cell and its flip bits in spare bits of the instan
   texel after it, and at the wheel's other levels the samples within 1/32 ÷ zoom world px before a
   texel boundary read the next texel (the ground's samples do the same). Which zooms carry exact
   ties is the viewport width's parity. Every fold clip — the copies' own columns, the map's own
-  under the mirror, the off rows — tests the sample's point moved by that same distance, so a
+  columns under the mirror, the area's right and bottom under black — tests the sample's point moved by that same distance, so a
   sample on a fold falls on the ground's side of it. With the
   copies swept over the reflected rect, emitted in their source's order, kept to their own columns
   and keyed as their sources, the side strips are the map reflected at 0.25×, 0.5× and 1× to

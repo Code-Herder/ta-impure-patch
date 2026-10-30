@@ -59,14 +59,12 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v);
    map edge's mirror of a feature, drawn in the edge's tone. The fragment stage
    reads the mode as bits (tagpu_feat.c's FS). */
 #define TAGPU_FEAT_MIRROR 4
-/* ...and which copy of the map a mirrored quad belongs to, so the fragment
-   stage keeps it inside that copy: OFFROW when the copy's rows lie past the
-   map's top or bottom, and the copy's column index q (the map is copy 0, its
-   reflection to the left -1, to the right 1) above COPY_SHIFT, biased by
-   COPY_BIAS so the field is never negative. The gather emits no quad of a copy
+/* ...and which column of copies a mirrored quad belongs to, so the fragment
+   stage keeps it inside those columns: the copy's column index q (the map is
+   copy 0, its reflection to the left -1, to the right 1) above COPY_SHIFT,
+   biased by COPY_BIAS so the field is never negative. The gather emits no quad of a copy
    outside [-COPY_BIAS, COPY_BIAS), so every mode stays under 2^15 and a float
    vertex attribute carries it exactly. */
-#define TAGPU_FEAT_OFFROW     8
 #define TAGPU_FEAT_COPY_SHIFT 4
 #define TAGPU_FEAT_COPY_BIAS  1024
 

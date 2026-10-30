@@ -24,7 +24,7 @@ centre-ons and the stepper's follow source write it, and `0x41C3C0` never touch 
 
 | VA | What it is |
 | --- | --- |
-| **`0x41C3C0`** | **The eye clamp.** `eyeX = clamp(eyeX, 0, extentW − W)`, the same for Y, `extent` the **scroll extent** `main+0x1422B`/`+0x1422F` (read at `0x41C3C6`/`0x41C3DA`) — the map less 32 and 128 px, not the map's size ("Engine defects we patch") — then `0x466B70(main+0x142CB)` to refill the minimap's view rect — every path through it ends in that one call. TADR calls it `ScrollMinimap`, which describes the tail rather than the job. **12 call sites:** `0x41C59F`, `0x41C898`, `0x41C9CC`, `0x41CC16`, `0x41CC37`, `0x41CC52`, `0x41CDE1`, `0x41D054`, `0x41D184`, `0x41D26B`, `0x41D319`, `0x41D459`. **With `zoom.on` it never runs:** `tagpu_zoom`'s `leaf_call` replaces it on every call, and the replacement clamps to the camera's centre range `[−W/2, map − W/2]`, `map` the PLOT grid × 16, on draws whose ground is ours and to this function's own `[0, extent − W]` otherwise (`gpu-status.md` §2.3c). **Measured live 2026-09-23**, 1024x768, `W = 896`, `H = 704`, Two Continents (map 10752 x 12800, extent 10720 x 12672), each edge scrolled into (`keys mouse:1023,400` and the other three): the eye settles at `x = −448` and `x = 10304`, `y = −352` and `y = 12448`, at 0.25x, 1x and 8x alike — the map's own corners on the view-centre pixel. |
+| **`0x41C3C0`** | **The eye clamp.** `eyeX = clamp(eyeX, 0, extentW − W)`, the same for Y, `extent` the **scroll extent** `main+0x1422B`/`+0x1422F` (read at `0x41C3C6`/`0x41C3DA`) — the map less 32 and 128 px, not the map's size ("Engine defects we patch") — then `0x466B70(main+0x142CB)` to refill the minimap's view rect — every path through it ends in that one call. TADR calls it `ScrollMinimap`, which describes the tail rather than the job. **12 call sites:** `0x41C59F`, `0x41C898`, `0x41C9CC`, `0x41CC16`, `0x41CC37`, `0x41CC52`, `0x41CDE1`, `0x41D054`, `0x41D184`, `0x41D26B`, `0x41D319`, `0x41D459`. **With `zoom.on` it never runs:** `tagpu_zoom`'s `leaf_call` replaces it on every call, and the replacement clamps to the camera's centre range `[−W/2, extent − W/2]` on draws whose ground is ours and to this function's own `[0, extent − W]` otherwise (`gpu-status.md` §2.3c). Both end at the extent because stock never shows a pixel past it: the strip between the extent and the tile map's own size is unbuildable (`0x4833B0`, "LoadMap's feature placement, and a saved game") and on 9 stock maps holds the editor's blank tile, and our edge passes fold the mirrored map edge at the same line (`gpu-status.md` §2.90, "Where the map ends"). **Measured live**, 1024x768, `W = 896`, `H = 704`: 2026-09-23 on Two Continents (map 10752 x 12800, extent 10720 x 12672), each edge scrolled into (`keys mouse:1023,400` and the other three), the eye settles at `x = −448` and `y = −352` against the left and top edges at 0.25x, 1x and 8x alike — the map's corner on the view-centre pixel; 2026-10-25 on Painted Desert (extent 9216 x 9216) at `x = 8768` and `y = 8864` against the right and bottom edges, `extent − W/2` and `extent − H/2`, and on Assault on Suburbia (extent 8064 tall) at `y = 7712`. |
 | `0x41C450` | The same clamp shape for the *target* pair — and it has **no callers**. Dead code; an `E8`/`E9` scan of `.text` finds nothing pointing at it. |
 | `0x41C4C0` | `SetCamera(x, y, smooth)`, stdcall, `ret 0xC`. **Two arms** [DISASSEMBLED 2026-09-23]: with `smooth == 0` (`0x41C4C7 je 0x41C574`) it writes the **eye**, calls `0x41C3C0` (`0x41C59F`) and copies the clamped eye into the target; with `smooth != 0` it writes the **target** (`0x41C4D6`, `0x41C4E6`) and clamps it **inline** against `[0, extent − view]` (`0x41C4F1`, `0x41C505`) in the block `0x41C4EC..0x41C5C5`, never calling `0x41C3C0`. The eye arm falls into the tail `0x41C5C6`: `mov eax, ds:0x511DE8`, clear fog bit 3 (`and word [eax+0x14281], 0xFFF7`), `pop esi`, `ret 0xC`. The smooth block leaves by three routes with the same clear and the same `pop esi; ret 0xC`: its own early exits at `0x41C554` and `0x41C570`, and `0x41C55A`'s `jle 0x41C5CB`, which enters the tail past its `mov`. Callers: `0x495C68`, `0x495E11` (the screenshot tiler `0x495A30`), `0x497060`, `0x4978C9` (game-screen entry / load). **The smooth arm is unreachable** [VERIFIED 2026-09-23]: all four callers push `smooth = 0` (`push 0` at `0x495C5E`, `0x495DCB`, `0x49703E`, `0x4978C5`, each the first of the three pushes), and `0x41C4C0` occurs nowhere in the image as a 32-bit value — no function pointer, no table — so `0x41C4C7`'s `je` is always taken. `tagpu_zoom` therefore leaves the block alone. |
 | **`0x41CA10`** | **The per-frame camera stepper.** One caller, `0x495599`. It first picks a follow source (next row); with none it takes `je 0x41CB4A`. Where eye ≠ target it sets bit 1 of `main+0x142F1` ("camera moved"), **clears bit 3 of `main+0x14281`** — the screen fog grid's own is-current flag — then moves the eye *halfway* toward the target, capped at ±`0x140` (320 px) per axis per frame, and hands the result to `0x41C3C0`. It never writes the target. *[CORRECTED 2026-09-10: this row said `0x41CA30`, which is mid-function — the byte there is the LAST byte of the 7-byte `mov WORD PTR [ecx+0x1434B], ax` at `0x41CA2A`, and an `E8`/`E9` scan of `.text` finds nothing calling it. `0x41CA10` is the prologue (`mov ecx, ds:0x511DE8; push ebp; push esi; xor ebp, ebp`).]* |
@@ -126,7 +126,9 @@ the eye, and they do not agree:
 
 The audit behind the camera's centre range (`gpu-status.md` §2.3c): every function in `.text`
 that loads `main+0x1431F`/`+0x14323`, asked whether an eye anywhere in `[−W/2, map − W/2]` — `map` the map's own size (the PLOT grid ×
-16), whose far edges lie 32 px right of and 128 px below the scroll extent's; W the true
+16), whose far edges lie 32 px right of and 128 px below the scroll extent's, a range that holds
+the centre range in force, `[−W/2, min(extent, map) − W/2]` (the debug `Edge` command can name an
+extent past the map, and the far end takes the map's then); W the true
 viewport, up to 1792x1016 — with, below 1x, `vpwide`'s rect widened to four times the
 true one about its centre, can make it index memory out of bounds. A value used only to project
 onto the screen and then clipped or tested against a rect is **projection only**. Grouped by
@@ -170,8 +172,28 @@ the debug `Edge` command, or through `0x4815F0`'s `0xFFFE` cells on a path not a
 (`0x4C1C48`, index bytes at `0x4C1C6C`); the SHIFT entry `0xF9` lands at `0x4C1BB5`, which is
 `push 0x10; call ds:0x4FC350` (`GetAsyncKeyState`) then **`and al,0xfe`** — masking off bit 0,
 the "pressed since last call" bit — before `neg ax; sbb eax,eax; neg eax` normalises to 0/1.
-All nine stubs in the `0x4C1BA1..0x4C1D56` block do the same mask, so nothing in the engine
+All eight key stubs (`0x4C1BA1..0x4C1C3E`) do the same mask, as does the keydown translator's own
+Ctrl poll at `0x4C1D56` (`0x4C1D5C`); the ninth entry, `0x4C1C41`, answers 0. So nothing in the engine
 reads the consumable bit and an extra poll of our own cannot steal an edge.
+
+**The ids [DISASSEMBLED 2026-10-25].** `id − 0x20` above `0xDB` answers 0 (`0x4C1B87`); the index
+bytes map exactly eight ids onto a key, the rest onto the zero entry: `0x20` SPACE, `0xF4`..`0xF7`
+LEFT, UP, RIGHT, DOWN, `0xF9` SHIFT, `0xFA` CONTROL, `0xFB` MENU (Alt). 17 direct callers. Every
+key goes to `GetAsyncKeyState` (IAT `0x4FC350`), so the answer is the key's state at the call, not
+the state carried by the message being handled; cnc-ddraw's `fake_GetAsyncKeyState` answers the
+input Impure injects.
+
+**Alt+Z and Alt+X do nothing in play [DISASSEMBLED 2026-10-25].** The keydown translator
+`0x4C1D50` (which takes `WM_SYSKEYDOWN` too, `0x4B5DC3`) pushes a letter lower-cased (`0x4C213D`),
+or as `letter + 0x69` with Ctrl held (`0x4C212D`); Alt changes nothing there. The in-game key switch
+`0x495E90` (index bytes `0x496694`, jump table `0x4965F4`) sends `z` and `x`, and `Z` and `X`, to its
+default `0x4965CE`, which calls the debug keys `0x4956C0(key)` (`gpu-status.md` §2.6f gates them
+on a puppet) only while `main+0x3923B` bit 1 is set [not traced further]. The GUI dispatch zeroes the key it
+hands its gadgets while Alt is down (`0x4AA219..0x4AA232`: `0x4C1B80(0xFB)`, then `not` and `and`),
+and the window procedure returns 0 for `WM_SYSCOMMAND` with `SC_KEYMENU` (`0x4B5D9C` → `0x4B5DFC`,
+`cmp eax,0xF100`), so the system menu never opens. Impure takes the two keys with a building armed
+(mode 14) for the placement's spacing, before TA's window procedure sees them (`tagpu_shield.c`,
+`tagpu_place_key`); outside mode 14 they reach the game as before.
 
 ## The mouse object, its event ring, and the two ways the cursor gets drawn — mapped by us
 
@@ -227,6 +249,30 @@ differently on the input path (`gpu-status.md` §2.3d).
 | `0x4C2D60(rec*)` | ring **pop**: copies the tail entry out and advances the tail; when `head == tail` it copies `[obj+0x196]` instead. `ret 4` |
 | `0x4C2DE0(rec*)` | the same **without** advancing the tail — a peek. Returns 1 when it took a real ring entry, 0 when it fell back to `[obj+0x196]` |
 | `0x4C2340(rec*)` | copy 6 dwords **out of** `[obj+0x196]`, no ring, no poll. 5 call sites |
+
+**After a press, IdleTick re-reads the move made before it.** With the ring empty, IdleTick's peek
+and pop copy `[obj+0x196]` (`0x4C2D73`, `0x4C2DF3`) into `main+0x2C76`, and only a later
+`WM_MOUSEMOVE` rewrites it (`0x4C2360` from `0x4B5EA4`). So once the press has been popped, every
+IdleTick until the pointer moves hands the in-play handler the move record from **before** the
+press, without `MK_LBUTTON` in its wParam. MEASURED 2026-10-25: `msg 0x200 wParam 0x4` (Shift
+alone) for a second with Shift and the left button held. The records' times cannot tell the two
+apart reliably: a move's (`0x4B5E70`), a press or release's (`0x4B5ED1`) and a double-click's
+(`0x4B5F1D`) are each `GetTickCount() · [obj+0xE8] / 1000` inline, `0x4B6340`'s formula, at 30 a
+second (`+0xE8` reads 30, *The scheduler, the clock and the test pacing*), and wrap short of 2^32; the placement
+module tells them apart by the record's identity (`tagpu_place.c`, `stale_move`).
+
+**That identity is dwords 2..5, never x and y.** `0x4C2360` is the only writer of the record's
+wParam, clock, message and double-click flag (`[obj+0x19E..0x1AD]`); its x and y are rewritten
+without them, on the game thread, by each drawing poll from `GetCursorPos` — `0x4C24F2`/`0x4C24F8`
+in `0x4C24B0`, `0x4C2624`/`0x4C262A` in `0x4C25E0`, `0x4C28C0`/`0x4C28C6` in `0x4C2870` [DISASSEMBLED]
+— and by vpwide's repair of `main+0x2C76` (`tagpu_vpwide.c`, `vpw_mouse_world_impl`). The other
+`+0x196` stores in the image (`0x42B52A..0x42B566`, `0x42C165..0x42C1E0`, `0x42CDC7`) are a struct
+copy and the weapon parser on other objects, not the mouse object. Zoomed, the two writers disagree:
+the move message carries the unzoomed position (`tagpu_zoom_mouse_lparam`), the poll the screen one,
+so a copy taken at the press and IdleTick's copy a frame later differ in x and y alone. MEASURED
+2026-10-25 on the reference setup at about zoom 0.35: `1573,1382` at the press, `1841,1185` after,
+the same clock `0x85E53`; a whole-record compare took 25 of 38 Shift-clicks for a lost release and
+ordered nothing.
 
 **The lParam unpack, per arm.** Each of the three arms above unpacks the position with the same
 two instructions, and they are the bytes `vpwide` patches to `MOVSX ECX,CX` / `SAR EAX,0x10`:
@@ -483,7 +529,7 @@ off `objdump` in this session unless a row says otherwise.]
 | `0x490B30` | `SetInputMode(mode)` *[INFERRED]*. Stores `mode` at `main+0x391F1` and installs the matching per-event handler into `main+0x391F5`, off a jump table at `0x490C14` (modes 0–7). 11 call sites. **Mode 6 is in-game** — the value a dozen sites elsewhere test for (`0x4289F1`, `0x45053A`, `0x476C75`, `0x476CA5`, `0x476E5B`, `0x478DB6`) | disassembly |
 | `0x499200` | the **mode-6 (in-game) mouse handler**: `rep movsd` six dwords from `main+0x2C76` onto the stack, `call 0x498DA0`, then choose and set the cursor. **No `call` site anywhere**: the 4-byte literal `0x00499200` occurs in the image only as the immediate of the two `mov dword [main+0x391F5],0x499200` stores at `0x490BC5` (mode 6’s arm) and `0x498455` | disassembly + a scan for the literal across all sections |
 | `0x498DA0` | mouse → world point, map cell and hovered feature. One call site, `0x499221` — the one `vpwide` redirects (`gpu-status.md` §2.3b) | disassembly |
-| `0x48CD80` | the unit-under-cursor lookup *[INFERRED]*; its return is stored as a WORD to `main+0x2CBA` at `0x499283`. **Not disassembled** — known only by that call site and by the field's live behaviour | call site + live read |
+| `0x48CD80` | `GetUnitAtMouse`, no arguments, `ret`; its return is stored as a WORD to `main+0x2CBA` at `0x499283`. Callers `0x491D18` and `0x499278`; **in build placement the handler skips it** (`0x499241` jumps past `0x499278`). It reads the dispatched point `main+0x2C76`/`+0x2C7A`. Inside the viewport rect `main+0x37E27` (`0x4B6720`) it walks the HotUnits ids (`main+0x1435F`, count `+0x14367`), skips a unit whose `+0xA6` is 0, hit-tests each through `0x48C6A0(unit, &point)`, ranks the hits by a key computed from the `+0x92` record's `+0x176`..`+0x17E` [the key's meaning not traced], and returns the winner's `+0xA8` word. Inside the minimap rect `main+0x142BB` it returns the id of the nearest 10-byte entry of `main+0x14363` (count `+0x1436B`) whose squared distance from the point is below 4. Otherwise 0. Its own stores go to its stack frame | disassembly, 2026-10-25 |
 | `0x48D220` | `CorretCursor_InGame(orderByte)` — returns the cursor index to show. Two call sites: `0x491D36` and `0x499297`. `ret 4` | name [CORPUS] (TADR, `tools/ta_symbols.txt`); body from disassembly |
 | `0x43E490` | the per-candidate cursor mapper: `(orderByte, candidate, hoveredUnit, &worldPos)` → cursor index, `ret 0x10`. **Exactly one caller, `0x48D3E4`**, and the literal `0x0043E490` appears nowhere in the image — no dispatch table, no indirect call | disassembly + literal scan |
 | `0x4AB400` | `SetUICursor(uiCtx, gafSequence)` — 12 call sites, of which **five are inside `0x499200`**: `0x4992C8` (the cursor block below) plus `0x499560`, `0x4995A3`, `0x49966D`, `0x4997F7` in its button handling | name [CORPUS]; call sites from disassembly |
@@ -627,6 +673,42 @@ seven by driving the game and reading `main+0x2CBE` back, and `cursormove` and
 `cursorreclamate` additionally by reading their sprites out of the GL framebuffer. `pathicon` at
 21 agrees with `ui-markers.md` §3, which already had the route dots at `main+0x148D3`.
 
+**How the installed cursor animates** (DISASSEMBLED 2026-10-27, for the in-game wiki's stage,
+which draws the same frames by the same rule: `tagpu_wikistage_cursor_frame`).
+
+| VA | What | How established |
+| --- | --- | --- |
+| `0x4AB400` | `SetUICursor(ctx, seq)`, `ret 8`, ctx `main+0x519` at every in-game site: `ctx+0x2C = seq` (`0x4AB410`), the animation state at `ctx+0x30` started by `0x4B8B30(ctx+0x30, seq, 0)` (`0x4AB414`), `ctx+0x5C` bit 0 set (animating, `0x4AB41D`), then the frame `0x4B7EE0` names handed to `0x4C2B20` (`0x4AB422..0x4AB428`). It starts the sequence over on every call; each in-game caller stores `main+0x2CBE` and calls only when the index changed (above), so an unchanged cursor keeps animating | disassembly |
+| `0x4B8B30` | animation state init `(state, seq, frame)`, `ret 0xC`: `+0x00` the frame (0 when the asked one is not below the sequence's u16 count `seq+0`, `0x4B8B40..0x4B8B4E`), `+0x08` the sequence, `+0x02` the countdown = that frame's u16 ticks `seq+0x2C+8·frame` (`0x4B8B5B`; `0xFFFF` with no sequence), `+0x04` the loop byte `seq+2` | disassembly |
+| `0x4B8BF0` | animation advance `(state, dt)`, `ret 8`: returns at once with no sequence or a count ≤ 1 (`0x4B8BFB`, unsigned); else subtracts dt from the signed 16-bit countdown (`0x4B8C06`) and, while it is ≤ 0, steps the frame (`0x4B8C11`) and adds the new frame's ticks (`0x4B8C3D`). Past the last frame it goes back to 0 when the loop byte is set (`0x4B8C23`), else clears the sequence (`0x4B8C4B`): nothing is drawn after a non-looping sequence ends | disassembly |
+| `0x4B8B90` | a one-tick step of the same state: a countdown of 2 or more is decremented (`0x4B8BE1`); below that the frame steps with the same wrap or clear and the countdown is reloaded [its callers not traced] | disassembly |
+| `0x4B7EE0` | the state's current frame: `[seq + 0x28 + 8·frame]`, 0 with no sequence | disassembly |
+| `0x4AB5D0` | the UI context's update, from `0x4AA00A` in `0x4A9FD0`: with `ctx+0x5C` bit 0 set it calls `0x4B8BF0(ctx+0x30, ctx+0x9A)` (`0x4AB5F0`) and, when the frame changed, hands the new one to `0x4C2B20` (`0x4AB5FF..0x4AB605`) | disassembly |
+| `0x4A9FD0` | the GUI pump: `ctx+0x9A = 0x4B6340() − ctx+0x96`, then `ctx+0x96` = now (`0x4A9FEE..0x4AA004`): the cursor counts down in the 30 Hz ticks of `0x4B6340` elapsed since the last pump | disassembly |
+
+So a frame's second dword in the GAF's sequence table is its duration in 30 Hz ticks, read as a
+u16, and the sequence's byte `+2` is its loop flag. In `cursors.gaf` (retail, `rev31.gp3`):
+`cursornormal` is one 10x20 frame, hotspot 0,0; `cursormove` is eight frames of 8 ticks, looping,
+27x27 to 35x35 and back (hotspots 13,13 to 17,17), frames 5..7 repeating 3..1 texel for texel.
+
+**Which cursor build placement shows** (MEASURED 2026-10-27, `main+0x2CBE` read back on Show Down,
+1024x768, Interface Type 1, through `tacli peek`): nothing selected, 19 `cursornormal`; an ARMCK
+selected, over ground, 14 `cursormove`, the sprite record changing between reads (animating);
+ARMMEX armed from the build menu (`main+0x2CC3` = 14), at every probe point over the map, 19
+`cursornormal`, the record constant. It follows from the gate above: in mode `0x0E` over the
+viewport `0x499200` calls the build cursor `0x4197D0` and installs nothing, and `0x4197D0` calls
+no `SetUICursor`, so the cursor is the one the click on the menu left — `cursornormal`, which the
+handler installs off both regions (`0x49925D`). The same holds for the twin `0x491CC0`. The mapper's
+order-14 case `0x43E828` (`cursorfindsite`, 16) is reached only through `CorretCursor_InGame`,
+which build placement over the viewport skips. **Not measured:** a constructor over a deposit with
+Impure's Quick Build ghost showing; Quick Build writes only the packet (`tagpu_resource.c`), so
+the engine's contextual cursor stands [INFERRED: `cursormove`].
+
+**`0x429700` serves the cursors** as it serves every animation bank: `0x429C9A` asks it for
+`"cursors"`, and a miss builds `<anims>\cursors.GAF` (`0x502E30`) through `0x4290F0`, the
+language variant first, and loads it with `0x4B8C60` (the section on the animation-bank cache
+above). The wiki's asset load resolves the same path (`tagpu_wikiasset.c` `cursors_load`).
+
 **Globals this chain owns.**
 
 | Field | What |
@@ -724,8 +806,17 @@ button's own release. Both extend the bit table in the cursor section above; bit
 **A left click is a short, still drag.** There is no click event: the press opens a box and the
 release decides. `0x4B6340` is the clock it times that with — `GetTickCount()` (import
 `0x4FC0DC`, resolved from the import table) multiplied by `*(0x51FBD0)+0xE8` and divided by
-1000, so it counts game time, not wall time *[the multiplier's own meaning was not chased]*.
-`0x19` = 25 of those units, and 0x20 = 32 pixels on each axis.
+1000 (`0x4B6340..0x4B6361`), so it counts wall time in units of one rate-th of a second; the rate
+`*(0x51FBD0)+0xE8` was MEASURED at 30 (2026-10-28), so the `0x19` = 25 units are about 833 ms.
+The press (`0x4994B4..0x499533`) stamps `main+0x2CB6` with the clock (the call at `0x4994BC`, the
+store `0x4994C7`) and stores the cursor's world point -- the words `main+0x2CAC`, `+0x2CB0`,
+`+0x2CB4`, x, height and z -- at `+0x2C92`, `+0x2C96`, `+0x2C9A` and again at `+0x2C9E`,
+`+0x2CA2`, `+0x2CA6`. While the box is open every message but the release rewrites the second
+three from the current point (`0x49946A..0x49949B`). The release (`0x4993E9..0x499441`) compares
+`|+0x2C92 − +0x2C9E|` and `|+0x2C9A − +0x2CA6|` with 0x20: the world x and z of the press against
+the last point before the release, so the 32 are world units on each axis, and a cursor that
+wanders and comes back still clicks. DISASSEMBLED. The wiki's simulations take the same window
+(`sim.js` `CLICK_TIME`, `CLICK_BOX`) at both Interface Types, in ticks, 30 a second.
 
 **`0x498F70` — the left click's action, and the only reader of `main+0x2CBE` that is not a
 change test.** One call site, `0x4995B3`, which every left-button path above jumps to.
@@ -740,7 +831,7 @@ change test.** One call site, `0x4995B3`, which every left-button path above jum
 0x49905C      { 0x48BD00(); 0x491D70(1); done }           ; -> deselect everything
           done                                            ; -> nothing at all
 0x49906D  act: 0x48CF30(&rec, cl, main+0x2CAA, 0, 0, 0)   ; issue order `cl` at the world point
-          main[0x2CC3] = 1; play 0x502714; clear 0x2CC6 bit 5
+          main[0x2CC3] = 1; clear 0x2CC6 bit 5; reset STOP's radio ("STOP" 0x502714)
 ```
 
 `cmp dl, 0x11` is the whole of the left button's interface-type behaviour, standing on the fact
@@ -753,11 +844,12 @@ belong to the classic arm and are **not reachable** from `0x43EB02`. So at type 
 own rule is exactly "15 selects the unit, everything else deselects", and the compare expresses
 it without a second interface-type read.
 
-**`0x499100` — the right button down.** Also one call site, `0x49939B`.
+**`0x499100` — the right button down.** Also one call site, `0x4993AC`.
 
 ```
 0x499100  if (main[0x2CC3] != 1)                  ; a command button is pressed ->
-              { main[0x2CC3] = 1; play 0x502714; done }   ; right click CANCELS it
+              { main[0x2CC3] = 1; clear 0x2CC6 bit 5;     ; right click CANCELS it
+                reset STOP's radio (0x49FE60(menu, "STOP" 0x502714), 0x4A6A40); done }
 0x499162  if (main[0x37EFA] != 0) {               ; Interface Type 1: right orders
 0x4991D5      if (main[0x2CC6] & 0x04)            ; pointer on the viewport or the minimap
                   0x48CF30(&rec, 1, main+0x2CAA, 0, 0, 0)   ; issue the contextual order
@@ -842,7 +934,9 @@ and only these three sources can be what `0x499027` reads.
 - **`main+0x2CBE` has exactly one behavioural reader.** It has **28** `.text` references: 13
   stores, 13 store-if-changed tests immediately in front of one (`0x491C8A`, `0x491CEC`,
   `0x491D41`, `0x49258B`, `0x496A67`, `0x497F94`, `0x4991AC`, `0x499254`, `0x4992A2`,
-  `0x49953E`, `0x499581`, `0x49964B`, `0x4997D5`), the save at `0x443702` that `0x4437B5`
+  `0x49953E`, `0x499581`, `0x49964B`, `0x4997D5`; `0x499254` compares with 19 directly, while
+  `0x4992A2` loads the byte with `movsx` and `0x4992A9` compares it with the index `0x48D220` returned
+  for the mode `main+0x2CC3`), the save at `0x443702` that `0x4437B5`
   restores through `0x491C80`, and `0x499027` — the one place the value decides anything.
   **Two of the 13 stores take a caller's index rather than a literal** (`0x491C95`,
   `0x491D4C`, both inside `SetCursor 0x491C80`), so the set of *values* is not closed by this
@@ -871,7 +965,7 @@ record `main+0x1B63 + 0x14B·main+0x2A42`, units
 (`0x41975E..0x41976A`), through `0x438760` and `0x43AFC0` (`0x4197A4`, `0x4197A9`). The free clears
 bits 4 and 5 of `+0x110` (`0x486DE8`), so a freed unit leaves that set.
 
-The engine ends an order mode in five places, each writing `0x2CC3` = 1, clearing `0x2CC6` bit 5
+The engine ends an order mode in six places, each writing `0x2CC3` = 1, clearing `0x2CC6` bit 5
 (`0x20`, the order kept while a modifier is held; the release test is `0x4992D8`) and resetting
 the radio group of the menu's STOP gadget — `0x49FE60(menu, "STOP")` (the name at `0x502714`)
 finds it and `0x4A6A40` resets it: the right button `0x499110` (in `0x499100`, called at
@@ -881,11 +975,13 @@ handler `0x498F70`, after `0x48CF30` has issued the command at `0x499087`, for a
 `main+0x2CBE` below `0x11` other than `0x0F`; type `0x0F` hands the click to `0x48C7F0` and returns at `0x49903E`,
 and from `0x11` up it returns at `0x4990F6` unless `0x37EFA` is 1 and the byte 1), and the placement's
 own left click on a clear site `0x498FC0`, after `0x419670` has issued the build
-(`0x498F93..0x498FA4`). In both clicks a press whose record has `+8` bit 2 keeps the mode and
+(`0x498F93..0x498FA4`); and the helper `0x495860` (the write at `0x49586A`), whose six callers include
+the group recall (below). In both clicks a press whose record has `+8` bit 2 keeps the mode and
 sets the flag instead (`0x498FB4`, `0x499097`). A left click on a blocked site plays the refusal and keeps it
-(`0x499016`). `0x4958D7`, in `0x4958C0`, writes the byte too and is dead: `0x4958C0` has no
-caller and its address is stored nowhere; so is the setter `0x419BC0`, which stores its argument
-at `0x419BC9`. The command modes are armed by the orders menu's handler, one value per gadget
+(`0x499016`). `0x4958D7`, in `0x4958C0`, writes the byte too: `0x4958C0` has no caller in the
+image and its address is stored nowhere, and the reclaim sweep calls it as stock's click tail
+(*The reclaim sweep's engine side*, below). The setter `0x419BC0`, which stores its argument at
+`0x419BC9`, has no caller either. The command modes are armed by the orders menu's handler, one value per gadget
 (the names compared through `0x4E49B0`): MOVE 2 (`0x419C6A`), ATTACK 3 (`0x419D44`), BLAST 4
 (`0x419DB9`), UNLOAD 5 (`0x41A066`), LOAD 6 (`0x41A0D7`), DEFEND 7 (`0x419E2D`), REPAIR 8
 (`0x419EA1`), PATROL 9 (`0x419F16`), RECLAIM `0xC` (`0x419F8A`), CAPTURE `0xD` (`0x419FFB`); pressing
@@ -908,7 +1004,15 @@ always drop the unit**: when `0x37EBE & 0x865` or `0x2BEE & 0xE0` is set and the
 leaving the tracked unit and its menu up; the frame drops it later (`0x496986..0x4969C9`: through
 `0x41B2E0` once the flags clear, or by zeroing `0x37E9C` while they hold). Otherwise it clears
 `0x37E9C` (`0x491DA5`) and pops the GUI. The keys `0x495E90` write the byte only at their cancel
-`0x495F36`, so recalling a group leaves the placement armed over the new selection. **In stock a
+`0x495F36`, and **recalling a group disarms the placement**: the recall `0x48D9A0` (one caller,
+`0x495FFD` in the key switch) ends with an unconditional `call 0x495860` at `0x48DBE2` (every
+branch of the function rejoins before it; its one `ret` is `0x48DC10`), and `0x495860` writes
+`0x2CC3` = 1, clears `0x2CC6` bit 5 and resets the STOP radio as the cancels above do
+[DISASSEMBLED 2026-10-25]. MEASURED 2026-10-25: with a building armed for one ARMCK, `alt+3`
+recalled a group and `0x2CC3` went from 14 to 1. On that instance the plain digits were weapon keys
+(`main+0x37F07` bit 0 clear) and the groups went through Alt. `0x495860` has six callers
+(`0x48BDE6`, `0x48BF09`, `0x48C00A`, `0x48C11E`, `0x48D721`, `0x48DBE2`); the other five were not
+traced. **In stock a
 placement outlives the units it would order** — MEASURED 2026-09-26 with
 `tools/b6-tracked-death.sh` on main `8d033d1`: after the CORCK's death `0x2CC3` stayed `0x0E`
 and `0x2CC4` 246, and the square and our build ghost stayed on the pointer.
@@ -965,6 +1069,85 @@ and the engine's deferred drop took the dead unit's menu down (`CORMAIN2.GUI` on
 (`0x488603`), sends it (`0x451DF0` at `0x488693`) and kills the unit at `0x4886A4` (`0x489BB0`)
 over `0x4885E9..0x4886A4`; to a local player it creates the unit for the receiver (`0x488700`)
 and kills the old one with 30 000 damage (`0x4887D0`). The capture reaches it at `0x4046C5`.
+
+### The placement's mouse path, and several buildings in one gesture [DISASSEMBLED + MEASURED 2026-10-25]
+
+What a build placement (order byte `0x0E`) does with one mouse record, in the order the in-play
+handler `0x499200` runs it, and where `tagpu_place.c` hooks it ([gpu-status
+§2.109](../gpu-status.html)).
+
+**The record and the world point.** The head copies the six dwords of `main+0x2C76` to its stack
+(`0x499210..0x49921A`, `rep movsd` into `[esp+0xc]`) and passes the copy to `0x498DA0`
+(`0x499221`). `0x498DA0` reads only the copy's x and y, through `ebp` (`[ebp+0]`, `[ebp+4]`), and
+writes no dword through it; its own stores into the main block are `+0x2CC6` (the region bits),
+`+0x2C8E` (the cell, `0x498F2E`) and `+0x2CBC` (the feature, `0x498F5D`), and it hands `+0x2CAA` to
+`0x484B50` as the out-parameter for the world point (`0x498EF1`). Nothing between the copy and the
+build cursor writes `main+0x2C76`, so the record the build cursor's call sees and the copy the
+click routing hands on hold the same six dwords: an observer of `0x4197D0` can tell the record it
+evaluated by value. With region bit 1 and the byte `0x0E` the head calls `0x4197D0` (`0x499241`)
+and jumps to `0x4992CD`, past the hover query `0x48CD80` and the cursor choice `0x48D220`. The
+Shift-release test `0x4992D8` (bit 5 set and `0x4C1B80(0xF9)` up → the cancel at `0x4992FA`) runs
+next, on the same record, before the click routing.
+
+**The red test is the engine's own call.** The build cursor judges its site with whatever the
+call at `0x4198C6` targets — stock `0x47D2E0`, or `build_site_test` when queued_site is armed
+(`tagpu_patches.c`) — with the arguments `0x4198A0..0x4198C6` push: the def, the cell word, 0 and
+the controlled player's record `main + 0x1B63 + main[0x2A42] · 0x14B` (`0x4198BA`, `lea
+ecx,[ecx+eax*2+0x1b63]` with `ecx = main + p` and `eax = 165·p`). Its bit 0 becomes `0x2CC6` bit 6
+(`0x4198D1..0x4198E1`), the bit the click tests at `0x498F86`.
+
+**The click routing, byte for byte.** The message is the copy's fifth dword, `[esp+0x1C]`
+(`0x49939B`). A right press is taken first (`0x49939F` → `0x499100`, the cancel). Then:
+
+```
+0x4993B6  80 B9 C3 2C 00 00 01   cmp byte [ecx+0x2CC3],1
+0x4993BD  74 16                  je  0x4993D5            ; no order armed: the contextual path
+0x4993BF  81 FA 01 02 00 00      cmp edx,0x201
+0x4993C5  0F 85 ED 01 00 00      jne 0x4995B8            ; anything but a press: the frame
+0x4993CB  8D 4C 24 0C            lea ecx,[esp+0xC]       ; the handler's copy of the record
+0x4993CF  51                     push ecx
+0x4993D0  E9 DE 01 00 00         jmp 0x4995B3            ; call 0x498F70, the click
+```
+
+So **stock places on the press** (`WM_LBUTTONDOWN`) and ignores the moves, the release (`0x202`)
+and the double click (`0x203`, which Windows sends in place of the second press): each fails the
+`cmp` and goes straight to the frame. `0x4995B3` is `call 0x498F70`, the click's one call site
+(the demo recorder redirects it, `tagpu_recorder.c` `CLICK_LEFT_CALL`); `0x4995B8` is `call
+0x496790`, the frame, and reads no flag before it; nor does `0x4993CB` before its call. No branch
+in `.text` lands on `0x4993BF..0x4993D4` and no absolute reference in the file names an address
+there (an instruction-level scan and a literal scan, 2026-10-25).
+
+**Impure's three hooks** (all on the game thread inside this handler, written at attach; the
+entry observer and the stub are the router's, `tagpu_route.c`, which hands a mode-14 record to
+`tagpu_place.c` and a mode-12 one to the reclaim sweep): a before-observer on the handler's entry
+`0x499200` (stolen `A1 E8 1D 51 00 83 EC 18`) whose placement client ends a gesture whenever a
+record is handled in a mode other than 14 — in mode 1 the routing
+skips the route (`0x4993BD`) and `0x4197D0` is not called, so neither other hook sees a disarm
+(the right press `0x499100`, Shift up after a Shift placement `0x4992D8`, a group recall
+`0x48D9A0` → `0x495860`, the order check) or the release after it, and re-arming takes a left
+click on the build menu, which cannot come while the gesture's own button is held; an after-observer on `0x4197D0`, chained after the resource module's before-observer,
+which evaluates the gesture once the engine has written the rectangle, the altitude and bit 6
+for the record; and a 12-byte stub over `0x4993BF` (`E9 rel32` and seven `90`, written after all
+22 bytes above match) that asks the armed mode's client about each press and release and takes
+one of three ways: consumed (to `0x4995B8`), stock's click on this record (to `0x4993CB`), or the two original
+instructions. The stub keeps every register (`pushad`/`popad`); only EFLAGS differ on the first
+two ways, and neither target reads a flag. What the commit then calls is the order roots of
+*Contextual cancellation through the native order roots* (`0x439F80`, `0x43ADC0`), the sound
+`0x47F1A0("oktobuild", 0)` and the bit-5 store of `0x498FB4`.
+
+**What the module reads for it.** `0x4C1B80` for Shift, Ctrl and Alt at each evaluation (the ids:
+*`KeyboardHotkeySampler 0x4C1B80`*); `0x48CD80` for the ring's unit, asked on the same record that
+the handler skipped it for; `0x438760` for the two build actions, with the engine's own names at
+`0x502654` and `0x502640`; each selected builder's order chain, bounded and owner-checked; the
+site test, `0x47C780` and `0x47D820` per site, with `0x51E684`/`0x51E688` saved and put back
+(`0x47C770` is `mov eax,[0x51E688]; ret`, called at `0x40A4D6`, `0x40A4E5` and `0x40A76A`, AI code
+that runs from the frame's ticks after the handler [INFERRED: not traced to the tick]). The record
+re-read after a press is the mouse object's (*After a press, IdleTick re-reads the move made
+before it*); the module recognises it by its six dwords.
+
+**Gaps.** The other five callers of the disarm `0x495860` were not identified, and `0x4956C0`'s
+debug keys were not traced (*Alt+Z and Alt+X do nothing in play*). The ranking key of `0x48CD80`'s
+hits is not established.
 
 ### The viewport rect at game entry — what builds it, and why it will not patch [BINARY-VERIFIED 2026-09-11]
 

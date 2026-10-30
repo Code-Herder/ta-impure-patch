@@ -83,6 +83,11 @@ void tagpu_gui_present(const TAGPU_FRAME* f);
    reference wants it, and ours is the sharp layer's. */
 void tagpu_gui_cursor_frame(const struct TAGPU_PACKET* packet);
 
+/* The device pixels the sharp layer draws the player's cursor at, an art pixel: tagpu_gui.on's
+   `cursorscale=`, 1 by default, clamped to 0.25..8. RENDER THREAD ONLY: tagpu_gui_present's poll
+   writes it there, so a reader on that thread sees the value this frame's cursor is drawn at. */
+float tagpu_gui_cursor_scale(void);
+
 /* THE ENGINE'S CURSORS PULSE (gui-renderer.md 13.5, 17 and 23): the move
    cursor cycles 27x27 to 35x35, one pixel per side per step, so a rect taken
    from one frame's sprite can be one animation step behind the sprite the
@@ -100,6 +105,11 @@ struct TAGPU_PACKET;
    writer, no ordering owed — a frame either side of the change costs one frame
    of the engine's own minimap. */
 void tagpu_gui_set_want_minimap(int on, unsigned int frame_counter);
+/* The reclaim popup as this render frame's sharp layer drew it, for the command record
+   (tagpu_zoom_frame_end), and emptied: a frame whose layer did not run posts `pass` 0. Render
+   thread. */
+struct TAGPU_CMD_SWEEP;
+void tagpu_gui_sweep_cmd(struct TAGPU_CMD_SWEEP* out);
 int  tagpu_gui_want_minimap(void);
 /* THE LEVEL'S MINIMAP PICTURE IS ACKNOWLEDGED, NOT ASSUMED. The publisher puts
    it in a packet and the mailbox is latest-wins: a packet the render thread
@@ -269,10 +279,10 @@ typedef struct TAGPU_GUIOP {
 /* ---- THE SHARP LAYER -----------------------------------------------------
    One RGBA8 at DEVICE resolution, row 0 the viewport's TOP, cleared to
    (0,0,0,0) every frame and composited above the mirror where its alpha says
-   it has coverage. It is not a twin and not an op stream: it has three clients
+   it has coverage. It is not a twin and not an op stream: it has four clients
    drawn in a FIXED order -- the harness's flat quads, the minimap (base, then
-   its view box), then the cursor, which covers the minimap where the two
-   overlap -- so what crosses is the short ORDERED
+   its view box), the reclaim popup and tag, then the cursor, which covers the
+   others where they overlap -- so what crosses is the short ORDERED
    list of quads they produced, at most `TAGPU_GUI_SDRAW_MAX` of them.
 
    EVERY FIELD HERE IS RESOLVED BY THE RENDER HALF AND NONE IS RE-DERIVED,
@@ -296,9 +306,10 @@ typedef struct TAGPU_GUISDRAW {
     int   ck;                   /* CURSOR: the atlas entry's colour key      */
 } TAGPU_GUISDRAW;
 
-/* 2 harness quads + 1 cursor + 1 minimap base + 4 view-box edges = 8. Doubled,
-   because a bound wants room and this one is carried BY VALUE. */
-#define TAGPU_GUI_SDRAW_MAX 16
+/* 2 harness quads + 1 cursor + 1 minimap base + 4 view-box edges + the reclaim
+   popup's 8 (plate, tongue, three bars, three labels) and its tag = 17. Nearly
+   doubled, because a bound wants room and this one is carried BY VALUE. */
+#define TAGPU_GUI_SDRAW_MAX 32
 
 typedef struct TAGPU_GUIHAND {
     /* THE FRAME THIS WAS PUBLISHED ON. `tagpu_gui_handover` refuses any other:

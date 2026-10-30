@@ -70,6 +70,7 @@
 #include "tagpu_opt.h"
 #include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_native.h"
+#include "tagpu_posemath.h"
 #include "tagpu_render3do.h"
 #include "tagpu_scaffold.h"
 #include "tagpu_fx.h"
@@ -848,15 +849,6 @@ static void pose_rest_block_init(void)
     filled = 1;
 }
 
-/* the engine's pair rotator 0x4B7173 without its rounding: a' = a*cos -
-   b*sin, b' = a*sin + b*cos (DISASSEMBLED; 0x4B6CC0 composes three of them) */
-static void rot2(float c, float s, float* a, float* b)
-{
-    float na = *a * c - *b * s;
-    *b = *a * s + *b * c;
-    *a = na;
-}
-
 /* ---- THE SELECTION RECT (`DrawUnitSelectBoxRect 0x46A530`, ui-markers.md §1) ----
    Drawn by tagpu_vk_mark.c out of tagpu_mark.c's bucket. The geometry below
    was measured against the engine's own box (ui-markers.md §1, "what it took
@@ -1000,7 +992,7 @@ static int selbox_emit(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* pu,
    came out at 2e-5 model units over every piece of a walking Peewee:
 
      - turn[0] rotates about X, turn[1] about Y, turn[2] about Z, each the
-       positive-angle rot2 above at 65536 = 360 degrees. NOT the index order
+       positive-angle rot2 (tagpu_posemath.h) at 65536 = 360 degrees. NOT the index order
        of the triple 0x4B6CC0 itself takes, whose FIRST word turns (x,y);
      - the ORDER is Z, then X, then Y -- read out of the engine, not guessed:
        UNITS_PieceOffset 0x43DEF0 composes through 0x4B6CC0, which rotates the
@@ -1015,42 +1007,9 @@ static int selbox_emit(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* pu,
        the cobtrace fixtures' posed vertices from these rules and diffs them
        against P_VBUF, and its residual equals this pass's own err= per dump.
 
-   research/notes/model-import.md carries the derivation and the numbers. */
+   research/notes/model-import.md carries the derivation and the numbers;
+   tagpu_posemath.h holds the arithmetic, shared with the wiki's stage. */
 
-
-/* o = a * b, both 4x3 row-major (rows of {m0,m1,m2,t}) */
-static void m43_mul(const float* a, const float* b, float* o)
-{
-    int r, c;
-    for (r = 0; r < 3; r++) {
-        for (c = 0; c < 3; c++)
-            o[r*4+c] = a[r*4+0]*b[0*4+c] + a[r*4+1]*b[1*4+c] + a[r*4+2]*b[2*4+c];
-        o[r*4+3] = a[r*4+0]*b[0*4+3] + a[r*4+1]*b[1*4+3] +
-                   a[r*4+2]*b[2*4+3] + a[r*4+3];
-    }
-}
-
-/* T(d) * R(turn), as a 4x3. R is built by rotating the basis vectors through
-   the very same rot2 sequence a vertex would take, so the matrix cannot
-   disagree with the convention above. */
-static void piece_local(const unsigned short* turn, const float* d, float* o)
-{
-    const float K = 6.2831853f / 65536.0f;
-    float c0 = cosf((float)turn[0] * K), s0 = sinf((float)turn[0] * K);
-    float c1 = cosf((float)turn[1] * K), s1 = sinf((float)turn[1] * K);
-    float c2 = cosf((float)turn[2] * K), s2 = sinf((float)turn[2] * K);
-    int j;
-    for (j = 0; j < 3; j++) {
-        float x = j == 0 ? 1.0f : 0.0f;
-        float y = j == 1 ? 1.0f : 0.0f;
-        float z = j == 2 ? 1.0f : 0.0f;
-        if (turn[2]) rot2(c2, s2, &x, &y);      /* about Z */
-        if (turn[0]) rot2(c0, s0, &y, &z);      /* about X */
-        if (turn[1]) rot2(c1, s1, &x, &z);      /* about Y */
-        o[0*4+j] = x; o[1*4+j] = y; o[2*4+j] = z;
-    }
-    o[0*4+3] = d[0]; o[1*4+3] = d[1]; o[2*4+3] = d[2];
-}
 
 /* ---- the level generation, and the caches keyed on a template -----------
    THE HAZARD IT EXISTS FOR. A model template tree is shared by every unit of
@@ -1421,6 +1380,7 @@ static float s_ghostAlpha = 0.40f;
 static unsigned s_ghostCheck = 0;
 static int   s_ghostLogged = -1;     /* the armed state the log last named */
 static unsigned s_ghostCurs = 0, s_ghostQueue = 0, s_ghostDrawn = 0;
+static unsigned s_ghostSites = 0;    /* placement sites' ghosts recorded      */
 static unsigned s_ghostNoBake = 0, s_ghostTrunc = 0;
 static unsigned s_ghostMasked = 0;   /* ghosts drawn with a mask row          */
 static unsigned s_ghostMaskMiss = 0; /* rows refused: another root or count   */
@@ -1745,6 +1705,41 @@ static int ghost_one(const TAGPU_PACKET* pk, unsigned mid,
 
 static int ghost_offscreen(float ax, float ay, int evpL, int evpT, int evw, int evh);
 
+/* The anchor of the ghost that stands on a build square `br` (two corners as
+   {x, altitude, z}, world px, 0x4197D0's layout): 0 when the square is dropped
+   or the anchor is off screen.
+
+   THE SQUARE'S OWN SANITY BOUND, and its own halving. The marker pass
+   (tagpu_mark.c, square_emit) projects the two corners and drops the rect when
+   any of them lands past ±0x100000; a
+   ghost averaged from a rect the square refuses would draw where the square
+   does not. The same projection here also bounds the midpoint adds below, so a
+   sentinel rect cannot overflow them. And the altitude is halved the way the
+   square halves it — `>> 1` per corner, engine truncation, not the unit pass's
+   float — so the ghost sits ON its square rather than up to half a world pixel
+   above it. */
+static int ghost_square_anchor(const int32_t* br, int eyeX, int eyeY, int vpL, int vpT,
+                               int evpL, int evpT, int evw, int evh,
+                               float* fx, float* fz, float* ay)
+{
+    float l = (float)br[0] - (float)eyeX + (float)vpL;
+    float r = (float)br[3] - (float)eyeX + (float)vpL;
+    float t = (float)(br[2] - (br[1] >> 1)) - (float)eyeY + (float)vpT;
+    float b = (float)(br[5] - (br[4] >> 1)) - (float)eyeY + (float)vpT;
+    if (!(l >= -1048576.0f && l <= 1048576.0f &&
+          r >= -1048576.0f && r <= 1048576.0f &&
+          t >= -1048576.0f && t <= 1048576.0f &&
+          b >= -1048576.0f && b <= 1048576.0f)) return 0;
+    *fx = (float)(br[0] + br[3]) * 0.5f;
+    *fz = (float)(br[2] + br[5]) * 0.5f;
+    /* the square's centre, in the WORLD-space half of the anchor (the part
+       that has not had the eye subtracted yet): the mean of its two edges,
+       each with the engine's own truncating halving */
+    *ay = *fz - (float)((br[1] >> 1) + (br[4] >> 1)) * 0.5f;
+    return !ghost_offscreen(*fx - (float)eyeX + (float)vpL, *ay - (float)eyeY + (float)vpT,
+                            evpL, evpT, evw, evh);
+}
+
 /* THE BUILD GHOST'S RECORD, called once per frame from tagpu_native_frame
    after the units: collect the cursor ghost and the queue ghosts and record
    them. `ghost_pieces` walks the 3DO tree, `ghost_offscreen` is a cull in
@@ -1758,8 +1753,9 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
                        int evpL, int evpT, int evw, int evh)
 {
     const TAGPU_PK_BUILD* bs;
-    unsigned nb, k;
-    int haveCursor = 0;
+    const TAGPU_PK_PLACE* pl = NULL;
+    unsigned nb, np = 0, k;
+    int haveCursor = 0, square;
     float cfx = 0.0f, cfz = 0.0f, cay = 0.0f;
 
     if (!s_ghostOn || !pk || !pk->in_game) return;
@@ -1786,9 +1782,9 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
     if ((frame_counter % 300) == 0) {
         char b[224];
         _snprintf(b, sizeof b,
-                  "ghost: curs=%u queue=%u drawn=%u built=%u nobake=%u trunc=%u"
+                  "ghost: curs=%u sites=%u queue=%u drawn=%u built=%u nobake=%u trunc=%u"
                   " masked=%u maskmiss=%u maskcut=%u alpha=%.2f",
-                  s_ghostCurs, s_ghostQueue, s_ghostDrawn, s_ghostBuilt,
+                  s_ghostCurs, s_ghostSites, s_ghostQueue, s_ghostDrawn, s_ghostBuilt,
                   s_ghostNoBake, s_ghostTrunc, s_ghostMasked, s_ghostMaskMiss,
                   s_ghostMaskCut, s_ghostAlpha);
         nlog(b);
@@ -1799,8 +1795,7 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
        draws from it rather than one drawing its hidden pieces. */
     if (pk->truncated & TAGPU_PK_TRUNC_GHOSTMASK) { s_ghostMaskCut++; return; }
     /* the cursor: the square's own gate — mode 14, and either the band bit or
-       the mouse inside the rect the engine can NAME (gather_cursor's test) —
-       plus a build type the udef bound accepts.
+       the mouse inside the rect the engine can NAME (gather_cursor's test).
 
        AND THE SQUARE MUST BE OURS AT ALL. This ghost is the twin of the build
        placement square, which lives in the marker pass's cursor layer, so it
@@ -1812,44 +1807,26 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
        and the engine's own square is drawn at its UNZOOMED 1x projection, so
        at any zoom != 1 the building and its square would be in different
        places. */
-    if (tagpu_mark_cursor_ours() &&
-        pk->cursor_mode == 0x0E && pk->build_unit_id != 0 &&
-        pk->build_unit_id < pk->udef_count &&
-        (pk->region_flags & 8 ||
-         (pk->mouse[0] >= pk->vp_addr[0] && pk->mouse[0] <= pk->vp_addr[2] &&
-          pk->mouse[1] >= pk->vp_addr[1] && pk->mouse[1] <= pk->vp_addr[3]))) {
-        const int* br = pk->build_rect;   /* the corners, world px: x, altitude, z */
-        /* THE SQUARE'S OWN SANITY BOUND, and its own halving. gather_cursor
-           projects the two corners and drops the rect when any of them lands
-           past ±0x100000; a ghost averaged from a rect the square refuses
-           would draw where the square does not. The same projection here also
-           bounds the midpoint adds below, so a sentinel rect cannot overflow
-           them. And the altitude is halved the way the square halves it —
-           `>> 1` per corner, engine truncation, not the unit pass's float —
-           so the ghost sits ON its square rather than up to half a world
-           pixel above it. */
-        float l = (float)br[0] - (float)eyeX + (float)vpL;
-        float r = (float)br[3] - (float)eyeX + (float)vpL;
-        float t = (float)(br[2] - (br[1] >> 1)) - (float)eyeY + (float)vpT;
-        float b = (float)(br[5] - (br[4] >> 1)) - (float)eyeY + (float)vpT;
-        if (l >= -1048576.0f && l <= 1048576.0f &&
-            r >= -1048576.0f && r <= 1048576.0f &&
-            t >= -1048576.0f && t <= 1048576.0f &&
-            b >= -1048576.0f && b <= 1048576.0f) {
-            cfx = (float)(br[0] + br[3]) * 0.5f;
-            cfz = (float)(br[2] + br[5]) * 0.5f;
-            /* the square's centre, in the WORLD-space half of the anchor (the
-               part that has not had the eye subtracted yet): the mean of its
-               two edges, each with the engine's own truncating halving */
-            cay = cfz - (float)((br[1] >> 1) + (br[4] >> 1)) * 0.5f;
-            haveCursor = !ghost_offscreen(cfx - (float)eyeX + (float)vpL,
-                                          cay - (float)eyeY + (float)vpT,
-                                          evpL, evpT, evw, evh);
-        }
+    square = tagpu_mark_cursor_ours() && pk->cursor_mode == 0x0E &&
+             (pk->region_flags & 8 ||
+              (pk->mouse[0] >= pk->vp_addr[0] && pk->mouse[0] <= pk->vp_addr[2] &&
+               pk->mouse[1] >= pk->vp_addr[1] && pk->mouse[1] <= pk->vp_addr[3]));
+    /* A MULTI-BUILDING PLACEMENT'S SITES replace the cursor's square, so they
+       replace its ghost too: one ghost per site, each on its own square exactly
+       as the cursor ghost stands on the cursor's (gather_place draws the
+       squares). Every site gets one, whatever its colour, as the cursor ghost
+       does whatever bit 6 says. The acquire bounds `n_place` to its cap and
+       every site's type under udef_count, the model id's own bound. */
+    if (square && tagpu_pk_place_replaces(pk)) {
+        pl = tagpu_pk_place(pk);
+        np = pl ? pk->n_place : 0u;
+    } else if (square && pk->build_unit_id != 0 && pk->build_unit_id < pk->udef_count) {
+        haveCursor = ghost_square_anchor(pk->build_rect, eyeX, eyeY, vpL, vpT,
+                                         evpL, evpT, evw, evh, &cfx, &cfz, &cay);
     }
     bs = tagpu_pk_builds(pk);
     nb = pk->n_builds;
-    if (!haveCursor && (!bs || !nb)) return;
+    if (!haveCursor && !np && (!bs || !nb)) return;
 
     /* THE GHOST'S OWN WINDOW, and it says so: the A/B's capture must never be
        bracketed around it (tagpu_posedraw.h), and this window is not always the
@@ -1866,6 +1843,14 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
         s_ghostCurs++;
         s_ghostDrawn += ghost_one(pk, pk->build_unit_id, cfx, cfz, cay,
                   &s_pv, eyeX, eyeY, vpL, vpT, r0);
+    }
+    for (k = 0; k < np; k++) {
+        float fx, fz, ay;
+        if (!pl[k].type) continue;
+        if (!ghost_square_anchor(pl[k].rect, eyeX, eyeY, vpL, vpT, evpL, evpT, evw, evh,
+                                 &fx, &fz, &ay)) continue;
+        s_ghostSites++;
+        s_ghostDrawn += ghost_one(pk, pl[k].type, fx, fz, ay, &s_pv, eyeX, eyeY, vpL, vpT, r0);
     }
     for (k = 0; k < nb; k++) {
         float fx, fz;
@@ -2800,6 +2785,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         fv.vpL = vpL; fv.vpT = vpT; fv.vw = vw; fv.vh = vh; fv.scafOn = scafOn;
         fv.evpL = evpL; fv.evpT = evpT; fv.evw = evw; fv.evh = evh;
         fv.gw = gw; fv.gh = gh; fv.ss = ss; fv.fogMode = fogMode;
+        fv.devPx = (gw > 0 && f->vp_w > 0) ? (float)f->vp_w / (float)gw : 1.0f;
+        fv.devres = devres;
         /* THE MAP EDGE, one answer for every gather in the frame, and
            mirrored only while the feature pass holds the level's features
            when it draws features at all (tagpu_feat_mapfeat_sync): ground and

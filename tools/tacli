@@ -4388,11 +4388,14 @@ SCN_FORMAT = "ta-scenario/1"
 # from the tree this tacli was run from, for the same reason built_dll() does.
 SCENARIOS = Path(__file__).resolve().parent.parent / "scenarios"
 
-# The engine's own order names and their script indices [TA_MemoryStructures.pas].
-# The indices are reference only and never reach the wire: the fork resolves the
-# name through ScriptAction_Name2Index, against the live game, like everything else.
-# There is no attack-move in Total Annihilation; `attack` at a coordinate is the idiom.
-SCN_ORDERS = {"stop": 1, "move": 2, "attack": 3, "blast": 4, "unload": 5, "load": 6,
+# The engine's own order names and the command types its order mapper
+# ScriptAction_Type2Index 0x43F0E0 takes for them. The types are reference only and
+# never reach the wire: the wire carries the name, and the fork's SCN_ORDERTYPES maps
+# it to the type it hands the mapper in the live game. `stop` is type 10, the STOP
+# button's own action; type 1 is the right click's contextual default
+# (tagpu_scenario.c, SCN_ORDERTYPES). There is no attack-move in Total Annihilation;
+# `attack` at a coordinate is the idiom.
+SCN_ORDERS = {"stop": 10, "move": 2, "attack": 3, "blast": 4, "unload": 5, "load": 6,
               "defend": 7, "repair": 8, "patrol": 9, "teleport": 11, "reclaim": 12,
               "capture": 13, "mobilebuild": 14}
 SCN_ORDER_ALIASES = {"guard": "defend"}

@@ -103,9 +103,6 @@ a texel with no coverage is additive light (the effects' flashes) and takes the 
     refusal; `tagpu_vk_world_down` frees them with the device or a resize. **MEASURED 2026-09-24**
     (§2.88): against the target path at `ss=1`, 69.6 % of the world's channels exact at Gamma 16 and
     75.2 % at Gamma 6, the rest off by 1; byte-identical at Gamma 12.
-- `tagpu_order.c`'s `seq_ink` reads the packet's `pal[]` directly, the same unscaled table, from
-  the packet the order walk already holds; its question is a luminance ranking over one sprite's
-  colours, which no uniform scale moves.
 
 **Everything in `tagpu_pal.h` is render-thread only**: its entry points resolve into shared
 snapshots, so a call from the game thread would race them. The heartbeat's `palchg=`,

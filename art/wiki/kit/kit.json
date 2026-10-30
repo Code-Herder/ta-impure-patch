@@ -1,0 +1,183 @@
+{
+ "format": 1,
+ "parts": {
+  "badge": {
+   "kind": "nine",
+   "scale": 5.022,
+   "slice": [
+    5.423,
+    52,
+    5.915,
+    52
+   ],
+   "xtile": true
+  },
+  "bezel": {
+   "kind": "nine",
+   "scale": 5.045,
+   "slice": [
+    32.697,
+    94,
+    32.697,
+    94
+   ],
+   "xtile": true
+  },
+  "button": {
+   "kind": "nine",
+   "scale": 3.333,
+   "slice": [
+    8.506,
+    16.788,
+    8.506,
+    16.788
+   ]
+  },
+  "button_down": {
+   "kind": "nine",
+   "scale": 3.333,
+   "slice": [
+    7.198,
+    16.788,
+    3.272,
+    16.788
+   ]
+  },
+  "close": {
+   "kind": "nine",
+   "scale": 3.309,
+   "slice": [
+    3.333,
+    5.586,
+    6.333,
+    7.886
+   ]
+  },
+  "close_down": {
+   "kind": "nine",
+   "scale": 3.309,
+   "slice": [
+    11.585,
+    5.872,
+    6.62,
+    11.092
+   ]
+  },
+  "cursor_arrow": {
+   "kind": "icon",
+   "scale": 3.333
+  },
+  "cursor_build": {
+   "kind": "icon",
+   "scale": 3.346
+  },
+  "cursor_move": {
+   "kind": "icon",
+   "scale": 3.333
+  },
+  "i_close": {
+   "kind": "icon",
+   "scale": 1.726
+  },
+  "i_dot": {
+   "kind": "icon",
+   "scale": 3.286
+  },
+  "i_open": {
+   "kind": "icon",
+   "scale": 3.286
+  },
+  "i_pause": {
+   "kind": "icon",
+   "scale": 3.4
+  },
+  "i_play": {
+   "kind": "icon",
+   "scale": 3.4
+  },
+  "i_replay": {
+   "kind": "icon",
+   "scale": 3.4
+  },
+  "i_shut": {
+   "kind": "icon",
+   "scale": 3.286
+  },
+  "i_wiki": {
+   "kind": "icon",
+   "scale": 5.25
+  },
+  "keycap": {
+   "kind": "nine",
+   "scale": 3.339,
+   "slice": [
+    4.267,
+    7.953,
+    3.282,
+    7.953
+   ]
+  },
+  "panel": {
+   "kind": "nine",
+   "scale": 5.06,
+   "slice": [
+    25.213,
+    62,
+    25.213,
+    62
+   ],
+   "xtile": true
+  },
+  "row": {
+   "kind": "nine",
+   "scale": 3.332,
+   "slice": [
+    5.604,
+    7.579,
+    7.253,
+    8.567
+   ]
+  },
+  "row_selected": {
+   "kind": "nine",
+   "scale": 3.332,
+   "slice": [
+    4.945,
+    7.579,
+    5.604,
+    5.272
+   ]
+  },
+  "wikibtn": {
+   "kind": "nine",
+   "scale": 4.997,
+   "slice": [
+    9.783,
+    11.244,
+    12.717,
+    13.2
+   ]
+  },
+  "wikibtn_down": {
+   "kind": "nine",
+   "scale": 4.999,
+   "slice": [
+    21.148,
+    10.818,
+    11.803,
+    18.193
+   ]
+  },
+  "window": {
+   "kind": "nine",
+   "scale": 5.052,
+   "slice": [
+    116.025,
+    209,
+    25.114,
+    128
+   ],
+   "xtile": true
+  }
+ }
+}

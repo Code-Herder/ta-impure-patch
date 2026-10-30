@@ -3444,8 +3444,7 @@ golden source with holes in it is the more expensive mistake.
 >
 > *(An earlier revision of this line also listed "`OP.seq`'s other readers" as open. There are
 > none — both reviewers swept the tree 2026-09-22 and `OP::seq` and `tagpu_terrown_fill_seq` have
-> no surviving reader anywhere. `tagpu_order.c`'s `r->seq` is an unrelated cursor-sprite pointer
-> and `tagpu_packet.c`'s `m->seq` is the command ring.)*
+> no surviving reader anywhere. `tagpu_packet.c`'s `m->seq` is the command ring.)*
 >
 > Two residuals the review named, both cosmetic-worst-case and neither fixed here:
 >

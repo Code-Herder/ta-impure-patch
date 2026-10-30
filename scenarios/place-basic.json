@@ -1,0 +1,65 @@
+{
+ "format": "ta-scenario/1",
+ "description": "Multi-building placement (tools/place_regression.py): ARMCK and ARMMLV beside an ARMSOLAR on Comet Catcher's plateau west of the centre, cells 66..124 x 350..415 all at height 55 with no feature but one at cell 111,379 (read from the map's TNT). The shapes are laid out north of the builders (rows 356..387), the ring round the solar. The commanders stay, so the seats keep their storage; the nearest start position lies over 1100 world units from the plateau.",
+ "seed": 20261025,
+ "on_error": "abort",
+ "setup": {
+  "map": "Comet Catcher",
+  "res": "1024x768",
+  "clear_existing": false,
+  "switches": {
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0,
+    "metal": 5000,
+    "energy": 5000
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "kbot",
+   "type": "ARMCK",
+   "owner": 0,
+   "pos": [
+    1120,
+    6320
+   ]
+  },
+  {
+   "id": "minelayer",
+   "type": "ARMMLV",
+   "owner": 0,
+   "pos": [
+    1320,
+    6320
+   ]
+  },
+  {
+   "id": "solar",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    1600,
+    5800
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   1450,
+   5980
+  ]
+ }
+}

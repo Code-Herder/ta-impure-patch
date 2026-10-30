@@ -550,11 +550,13 @@ class Worker:
             hold.unlink(missing_ok=True)
 
     def test_render(self):
-        """The test render profile (TEST_RENDER) in the instance's store, every other line kept,
-        and the present cap's lever."""
+        """The test render profile (TEST_RENDER) in the instance's store, with no placement
+        spacing (a test group's gestures lay touching sites) and no reclaim kind (a test group's
+        sweep starts at ALL), every other line kept, and the present cap's lever."""
         store = self.gamedir / "impure.cfg"
         lines = store.read_text().splitlines() if store.exists() else []
-        keep = [ln for ln in lines if ln.partition("=")[0].strip().lower() not in TEST_RENDER]
+        keep = [ln for ln in lines
+                if ln.partition("=")[0].strip().lower() not in (*TEST_RENDER, "placespacing", "reclaimkind")]
         store.write_text("\n".join(keep + [f"{k}={v}" for k, v in TEST_RENDER.items()]) + "\n")
         (self.gamedir / "tagpu_presentcap.on").write_text(f"{PRESENT_CAP}\n")
 
@@ -4795,7 +4797,7 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="record each fixture and check it on puppets")
     r.add_argument("fixtures", nargs="+", help="fixture names, or `all`")
-    r.add_argument("-j", type=int, default=8, help="games at once (default 8)")
+    r.add_argument("-j", type=int, default=12, help="games at once (default 12)")
     r.add_argument("--dll", help="the build under test (default the tree's, its coverage twin "
                                  "with --cover)")
     r.add_argument("--stock-dll", help="the stock-limits build, for a fixture that names it")
@@ -4809,7 +4811,7 @@ def main(argv=None):
     m = sub.add_parser("measure", help="scenarios recorded and played on the coverage builds: "
                                        "the functions each reaches")
     m.add_argument("scenarios", nargs="+", help="fixture names, or scenario names in scenarios/")
-    m.add_argument("-j", type=int, default=8, help="games at once (default 8)")
+    m.add_argument("-j", type=int, default=12, help="games at once (default 12)")
     m.add_argument("--end", type=int, default=1800, help="GameTime each is recorded to")
     m.add_argument("--out", help="the run's folder")
     m.set_defaults(func=cmd_measure, dll=None, stock_dll=None, keep=True)
@@ -4818,13 +4820,13 @@ def main(argv=None):
     la.add_argument("--base", default="main", help="the branch the landing goes to")
     la.add_argument("--check", action="store_true",
                     help="exit 0 when a passing replay-roundtrip note covers HEAD")
-    la.add_argument("-j", type=int, default=8, help="games at once (default 8)")
+    la.add_argument("-j", type=int, default=12, help="games at once (default 12)")
     la.add_argument("--keep", action="store_true", help="keep the passing dumps")
     la.add_argument("--out", help="the run's folder")
     la.set_defaults(func=cmd_landing, dll=None, stock_dll=None)
     br = sub.add_parser("broad", help="the broad tier: every fixture, and what none exercised")
     br.add_argument("--release", metavar="DLL", help="this release DLL, without reach")
-    br.add_argument("-j", type=int, default=8, help="games at once (default 8)")
+    br.add_argument("-j", type=int, default=12, help="games at once (default 12)")
     br.add_argument("--out", help="the run's folder")
     br.set_defaults(func=cmd_broad, dll=None, stock_dll=None)
     tk = sub.add_parser("takeover", help="L, K and F alone: a fixture recorded, taken over, and "

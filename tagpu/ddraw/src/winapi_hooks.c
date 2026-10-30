@@ -26,6 +26,7 @@
 #include "ddpalette.h"
 #include "palette.h"
 #include "tagpu_shield.h"
+#include "tagpu_wiki.h"
 #include "tagpu_recorder.h"
 #include "tagpu_window.h"
 
@@ -51,6 +52,24 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
     if (!g_ddraw.ref || !g_ddraw.hwnd || !g_ddraw.width)
         return real_GetCursorPos(lpPoint);
 
+    /* THE IN-GAME WIKI'S CAPTURE (tagpu_wiki.c): while its window is open this answers the point
+       of the press that opened it, and stores nothing in g_ddraw.cursor. The engine's mouse thread
+       0x4C2990 calls this through 0x4C2610 about every 33 ms, beside the game thread's polls. This
+       test is the quick answer; the one the store rests on is tagpu_wiki_cursor_store's, below,
+       made under the lock the wiki's open and close hold, so a poll that read the word clear and
+       was preempted before its store stores nothing once the window has opened. */
+    if (tagpu_wiki_holds_input())
+    {
+        LONG fx, fy;
+        tagpu_wiki_frozen(&fx, &fy);
+        if (lpPoint)
+        {
+            lpPoint->x = fx;
+            lpPoint->y = fy;
+        }
+        return TRUE;
+    }
+
     POINT pt;
 
     if (!real_GetCursorPos(&pt))
@@ -63,7 +82,8 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
         !tagpu_shield_on() &&
         (!g_config.windowed || real_ScreenToClient(g_ddraw.hwnd, &pt)))
     {
-        int x, y;
+        int x, y, outside = 0;
+        LONG ax, ay;
 
         /* THE POINTER THAT IS NOT OVER THE PICTURE. TA polls this ~700
            times a launch and its edge-scroll test `0x41CE90` fires on an EXACT
@@ -87,7 +107,7 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
         {
             x = (int)g_ddraw.width / 2;
             y = (int)g_ddraw.height / 2;
-            mouse_forget_client();      /* our cursor must not be drawn there */
+            outside = 1;                /* our cursor must not be drawn there */
         }
         else
         {
@@ -112,13 +132,12 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
             tagpu_hud_to_engine(&x, &y);
         }
 
-        InterlockedExchange((LONG*)&g_ddraw.cursor.x, x);
-        InterlockedExchange((LONG*)&g_ddraw.cursor.y, y);
+        tagpu_wiki_cursor_store(x, y, outside, &ax, &ay);
 
         if (lpPoint)
         {
-            lpPoint->x = x;
-            lpPoint->y = y;
+            lpPoint->x = ax;
+            lpPoint->y = ay;
         }
 
         return TRUE;
@@ -1002,6 +1021,12 @@ SHORT WINAPI fake_GetKeyState(int nVirtKey)
 {
     SHORT injected;
 
+    /* the in-game wiki's capture: every key reads up while its window is open (tagpu_wiki.c) */
+    if (tagpu_wiki_holds_input())
+    {
+        return 0;
+    }
+
     /* the armed shield answers every poll from the injected state — this is what
        makes ctrl/shift combos land, and it holds whether or not we have focus */
     if (tagpu_shield_key_state(nVirtKey, FALSE, &injected))
@@ -1020,6 +1045,13 @@ SHORT WINAPI fake_GetKeyState(int nVirtKey)
 SHORT WINAPI fake_GetAsyncKeyState(int vKey)
 {
     SHORT injected;
+
+    /* the in-game wiki's capture, as fake_GetKeyState: the hotkey sampler 0x4C1B80 and the
+       keydown translator's Ctrl test 0x4C1D56 read every key up while its window is open */
+    if (tagpu_wiki_holds_input())
+    {
+        return 0;
+    }
 
     if (tagpu_shield_key_state(vKey, TRUE, &injected))
     {

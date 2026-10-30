@@ -10,9 +10,9 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1
 
 The [28-row QoL audit](../tadr-port/quality-of-life.md) compares current Impure functions with the
 actual DLLs and opt-ins shipped by supported mods. Our build ghosts/`PreviewPieces`, health/
-group/order/range markers, world zoom, HUD scaling and replay playback/seeking already cover
-part of the interface. Native snapping, queue editing, construction controls and allied panels
-remain missing. Escalation/Twilight ship rotation support but no checked content enables it; Escalation's
+group/order/range markers, world zoom, HUD scaling, replay playback/seeking and BAR-style line,
+rectangle and ring placement (§2.109) and the reclaim sweep (§2.110) already cover part of the interface. Native snapping, queue
+editing, build spacing, construction controls and allied panels remain missing. Escalation/Twilight ship rotation support but no checked content enables it; Escalation's
 opponent-facing preview key remains unsupported. Newer development modules are distinguished
 from native bundle features. This is a documentation audit, not a new hook or engine write.
 
@@ -62,7 +62,7 @@ own sprite, drawn under the pointer at every zoom and left alone by the composit
 | Smoke, fire, wakes, nanolathe | G12f | `fxown`: one detour on the layer walker |
 | Features (trees, rocks, splats, wreckage) | G13a | `featown`: one detour on the feature leaf |
 | Terrain tiles + the fog overlay | G13b | `terrown`: two detours; the terrain skip path key-fills the viewport |
-| Past the map's edge — the engine's black | G20b | nothing of the engine's changes: the terrain and feature passes draw the map reflected there, in the lab's tone, with the map's own features as its TNT lays them out, read on the loader thread once a load (`edge`, §2.90) |
+| Past the map's edge — the engine's black | G20b | nothing of the engine's changes: the terrain and feature passes draw the map reflected there, folded at the engine's scroll extent (the map's end as stock shows it), in the lab's tone, with the map's own features as its TNT lays them out, read on the loader thread once a load (`edge`, §2.90) |
 | Fog of war *as drawn* | G13c | one shared rule (`tagpu_glsl.h`) in all four native passes |
 | Health bars, order markers, group digits, ShowRanges labels, build cursor, band box, selection rect | G13d, cursor G13n, order block G13o, text G13p | `markown`: 14 call-site redirects + 1 detour, and **nothing world-anchored is captured any more**. Health bars, the selection rect, the build cursor and drag band box are re-drawn from engine state; **G13o ported the order-marker block** (`tagpu_order.c`) as a game-thread snapshot of the order lists at `0x469BFC`; **G13p ported the text** (`tagpu_text.c`) — the group digit at `0x469CF9` and the `ShowRanges` labels — by calling TA's own glyph blitter `0x4CCF60` with a buffer of ours. Window A is retired and the identity blend LUT with it; the post-fog capture is deleted (the clean cut, §2.39), and `mark.on=nocursor` hands the cursors back to the engine |
 | Mouse cursor position, clicks, minimap view rect, scroll rate | G13e, cured G13m, **cursor ours again G17c** | `tagpu_zoom.c`; G13m made the engine's own cursor correct by telling it the truth about the pointer, and the zoom composite stopped touching it (§2.3d). **Since G17c the cursor is DRAWN BY US** — 1× device pixels at every `k`, from the client point the message carried, into the GL UI renderer's sharp layer — and the engine's is erased from the frame by two cooperating exemptions, the UI layer's rect discard and the world composite's `uCurs` ([GL UI renderer](../gui-renderer.html) §17). §2.3d's rule is unchanged and still what keeps the two in the same place |

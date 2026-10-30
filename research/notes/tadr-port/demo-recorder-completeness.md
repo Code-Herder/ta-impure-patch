@@ -687,7 +687,7 @@ the `main+0x531` GUI pointer, which `replay-globals.tsv` now leaves with the vie
 near 60 ticks/s at 20 and 30 ticks/s at 10; startup, pauses and comparison work
 prevent inferring a whole-harness speedup from these runs.
 
-**Games and checks.** `-j` (default 8, at most 16) is the number of games at once: each worker
+**Games and checks.** `-j` (default 12, at most 16) is the number of games at once: each worker
 plays one lane at a time. A free worker takes the queued lane first in the order X, U, K, L, W, R,
 P, F, Q — the forks, rewind and takeover lanes are the longest chains and cannot start before
 their fixture's L — and the L lanes are queued fixtures with those lanes first, then the longer
@@ -1045,6 +1045,15 @@ The owner approved one additional UI-only count exception on 2026-10-05: the nat
 immediate-command click (`0x41A0F1` → `0x47F1A0("immediateorders", 0)`, return `0x41A0F6`),
 including Stop. The recording player's click is absent on puppets, as the console click already
 is. Command orders, reclaim/build effects and carried simulation state remain checked.
+
+The owner approved another on 2026-10-25: the multi-building placement's `oktobuild`
+(`tagpu_place.c`, its commit plays `0x47F1A0(0x509660, 0)` once a gesture that added or removed an
+order, as the stock click plays it at `0x498FA4`). The row is `0x47F1A0 dll * absent`: the
+recording player's own mouse, which a puppet host never makes. Its caller column `dll` matches
+every caller inside Impure's DLL, so the menu's and the Replays browser's sounds (`tagpu_menu.c`,
+`tagpu_replays.c`) fall under it too. The orders the gesture makes are recorded and checked; the
+test group that carries them is `place-basic` ([quality-of-life](quality-of-life.md), *What
+Impure does*).
 
 Resource fixtures may name a `preflight` command before the live recording: native frontend
 Undo assertions or an engine catalogue refresh for changed private test content. Its failure

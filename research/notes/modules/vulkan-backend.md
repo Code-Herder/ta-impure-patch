@@ -384,7 +384,7 @@ check that its picture did not); `stencilok` now 1 wherever `dfmt` is set.
 — the world target's own pixels, `ss` to a game pixel — thickened to `w = ss` pixels across its
 minor axis, each end a `w` × `w` block, decided in integer arithmetic in the fragment stage. One rule for every preset:
 smooth when supersampled, and at `ss = 1` the engine's own line by construction. That covers the
-order markers (waypoint crosshairs), queued build sites, selection rects, lasers and lightning,
+order markers' target and range circles, queued build sites, selection rects, lasers and lightning,
 and the nanoframe wire. The owner's decision and the gate's numbers are in
 [Hardware portability](../hardware-portability.html), decision 4 and the G21b block; this section is
 the map of what implements it.

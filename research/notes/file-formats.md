@@ -699,7 +699,8 @@ file has offsets.]
 | 0x06 | `yPosition` (`u16`) | hotspot/anchor Y |
 | 0x08 | `Background`/transparency index (`u8`) | palette index treated as transparent |
 | 0x09 | `Compressed` (`u8`) | 0 = raw 8-bpp; nonzero = RLE (below) |
-| 0x0A | `FramePointers` (`u16`) | number of sub-frames (>0 → this "frame" is a stack of sub-frames) |
+| 0x0A | sub-frame count (`u8`) | >0 → this "frame" is a stack of sub-frames, `PtrFrameBits` then the offset of a table of that many `u32` frame offsets. `Gaf.h` declares `FramePointers` a `u16`; `CopyGafToContext 0x4B7F90` reads the byte [DISASSEMBLED, [exe-reverse-engineering](exe-reverse-engineering.html) `0x4B7F90`] |
+| 0x0B | alpha-blit flag (`u8`) | a sub-frame with it set is drawn through `AlphaCompsteBuf2OFFScreen 0x4B8500` instead [DISASSEMBLED]; 0 in every frame and sub-frame of the stock files [MEASURED, 23 598 frames]. The exe map's `0x4B7F90` row measures SKIRMISH's side-button sub-frames taking that arm, so something after the file sets the byte in memory; what is not established |
 | 0x0C | `Unknown0` (`u32`) | |
 | 0x10 | `PtrFrameBits` | offset→pixel data (pointer in memory) |
 | 0x14 | `FPS`/unknown (`u32`) | |
@@ -713,6 +714,20 @@ consumed:
 - else → **literal run**: copy the next `(mask >> 2) + 1` bytes verbatim.
 
 Uncompressed frames are just `Width×Height` bytes, row-major. [VERIFIED `gaf.cpp:200-256`]
+
+**A stack draws none of its own pixels.** `0x4B7F90` calls itself for each sub-frame in order with
+the same destination point, and each lands at that point minus its own hotspot over its own
+transparent index [DISASSEMBLED, `0x4B7FC8..0x4B805A`]. A picture of the frame is therefore its
+sub-frames composed into its own `Width×Height` box at (frame hotspot − sub-frame hotspot + c, …),
+later ones over earlier ones.
+
+**A stack is one level deep.** The GAF loader `0x4B8C60` rebases each sub-frame offset and that
+sub-frame's `+0x10`, and never the entries of a sub-frame's own table [DISASSEMBLED,
+`0x4B8CC0..0x4B8CF5`]: a nested table reaches memory as file offsets the blit would read as
+pointers. In stock data only `anims/` carries stacks — 14 114 of its frames (the commongui order and
+pager buttons, the foliage, rock and building features), none nested [MEASURED]. `tools/ta3do`'s
+`gaf_compose` is the offline reader of these rules, the one every Python tool shares, and it refuses
+a sub-frame with sub-frames of its own, as the wiki sidebar's loader (`tagpu_wikiasset.c`) does.
 
 **For the renderer:** resolve each 3DO primitive's `pTextureName` to a GAF frame, expand it to
 RGBA via the palette (treat `Background` index as alpha 0), and upload as a texture (an atlas
@@ -821,10 +836,14 @@ repack. `.ccx`/`.ufo` open with the same tools by extension-agnostic sniffing of
 Learned while writing `tools/hpipack.py` (a writer *and* reader for this container),
 by watching which archives `InitTAHPIAry` (`0x41D4C0`) accepts:
 
-- **The last 36 bytes of the file must be the literal
-  `Copyright 1997 Cavedog Entertainment`** (`1998` in the later packs; the year is
-  patched in from a 4-byte string at `0x50390C` before the compare). The open routine
-  (`0x4BDD70`) seeks to the end and `strcmp`s; anything else is not an archive, silently.
+- **The last 36 bytes of the file must read `Copyright <year> Cavedog Entertainment`, for
+  any four year bytes.** The retail archives carry `1997`, `1998`, `1999` (`corplas.ufo`) and
+  `2000` (`CorNecro.ufo`). The open routine (`0x4BDD70`) seeks to the end and reads the 36
+  bytes, finds `"0000"` (`0x50390C`) in its template `"Copyright 0000 Cavedog Entertainment"`
+  (`0x4FDBF0`) with `0x4E49B0`, copies those four bytes over the same place in what it read
+  (`0x4E4760`, `0x4BDE72..0x4BDE98`) and compares the two inline (`0x4BDEA0..0x4BDED4`):
+  so the year is never compared [DISASSEMBLED 2026-10-26]. Anything else is not an archive,
+  silently.
   It is read raw — outside the whole-file XOR. Every third-party HPI tool appends it;
   a hand-rolled writer that forgets it produces a file every *reader* accepts and the
   *engine* ignores.

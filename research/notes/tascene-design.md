@@ -146,6 +146,10 @@ pack/
   shaders/terrain.*        extracted from tagpu_terr.c
   shaders/sprite.*         extracted from tagpu_feat.c
   shaders/unit.*           extracted from tagpu_native.c
+  orders/atlas.r8.bin      every sequence of anims/cursors.gaf -- the order
+                           markers' art -- 1024 wide, one transparent texel
+                           around each frame; `orders.seqs` in the manifest
+                           names each frame's rect, hotspot and ticks
 
   --undither only, for the exploration lane, same layout as the R8 beside it:
   terrain/atlas.rgba.bin   features/atlas.rgba.bin   units/atlas.rgba.bin
@@ -189,6 +193,8 @@ A **unit instance** in `scene.json` carries `type`, `pos`, `facing`, `id`, and s
 - **`alt`** — present only when the scenario gave an explicit `height`. It is an ABSOLUTE
   altitude, and the viewer subtracts the ground it actually has under the unit, so the builder
   never has to read the height map.
+- **`orders`** — the scenario unit's `orders` list (`cmd` with `to` or `target`), copied as it
+  is. The viewer draws it as a shift-queue; see *The order markers* below.
 
 `serve` and `shot` also stage two **checked-in** files into the pack directory so
 the page can fetch them same-origin: `tascene-view.html` itself and
@@ -255,8 +261,8 @@ The page's whole state is the query string — that is the point: a look is a li
 | `a=<query>` `b=<query>` `wipe=<0..1>` | **the wipe** — see below |
 | `lane=<lane>` | **`classic`** or **`classicpp`** — the renderers' names since 2026-09-03. **Nothing named shows both**: a bare page, or one with only `eye`/`zoom`/`ss`, is the wipe with Classic left and Classic++ right; under `shot=1` a bare query is Classic alone, because `tascene shot pack` with no options is the parity ritual's baseline and a shot measures. The names: *Classic* is what tagpu draws today, *Classic++* the lab renderer at its defaults; `parity` / `explore` are accepted and are what the code and this note call the lanes, because "the lane with a parity claim" is the property that matters here. `classic++` cannot be spelled in a query string (a `+` is a space). Naming any Classic++ parameter selects it on its own; naming one *and* `lane=classic` is an error rather than a silent winner, because the renderers do not blend |
 | `zoom=<z>` | (global) view zoom, `0.25`–`8`, default 1 — `tagpu_zoom.c`'s range. The viewport shows `vw/z × vh/z` world units centred where the zoom-1 view is centred; the eye stays the zoom-1 top-left, as in the game. Every builder sweeps the zoomed extent and places vertices at scale 1, and the shaders scale about the viewport corner by `uZoom` — tagpu's own transform with its centre moved to the corner, the same picture — so **zoom 1 is byte-identical** (ritual md5s unchanged, `lane=classicpp&zoom=1` = 0 differing pixels). The wheel changes it live with the game's notch and tween, and moves the eye by the camera below. Only zoom 1 carries a parity claim: tagpu resamples differently at other zooms and no A/B has been run there |
-| (the camera) | (global) **one camera, the game's, which is BAR's** (Beyond All Reason, on the Recoil engine) for pan and zoom — `tagpu_zoom.c`, [BAR camera port](bar-camera-port.html) Part 1. There is no knob. **The clamp** is Recoil's `SpringController` `Update()`: the ground point at the screen centre is clamped to the map, so `eye ∈ [−W/2, map − W/2]` and the map's edge reaches the middle of the screen at every zoom (`tagpu_zoom.c`'s `camera_range`). **Zooming in** holds the world point under the pointer; **zooming out** pulls straight back and the centre holds (`CamSpringZoomOutFromMousePos` is off in BAR). **The notch** is 14 % of the camera's distance `1/z` (BAR's `ScrollWheelSpeed` −20 × `SpringController`'s 0.007), so ×1.163 in and ×0.877 out — in-then-out does not come back — with the target clamped to 0.25..8 and one within a thousandth of 1 snapped to 1. **The tween** is Recoil's default `CamTransitionMode` 0: the drawn camera goes from wherever it is to the new pose over `CameraTransition(0.25)` along `1 − (1 − t)^4`, an ease-out; the lab lerps centre and `1/zoom`, which is the 3D camera's position here, so a zoom along the pointer's ray holds its point throughout, and a notch mid-tween starts a new tween from the drawn pose toward the previous target times the notch. **Drag and the arrow keys are divided by the zoom**, so the world moves by the pointer's own distance at every zoom; grabbing the map mid-zoom lands the zoom first. Checked by driving the wheel headless (playwright-cli, a `WheelEvent` on the canvas): from `eye=3000,3000` one notch in at `(900,600)` lands on `(3045,3030)` at 1.163, the game's own figure; two notches out move no eye; the arrow keys stop at the map corner `(−448,−352)`, a notch out there moves nothing and a notch in at `(900,650)` gives `(−396,−310)`, as the game's arithmetic does; one notch in reaches 1/0.86 on frame 15 of a fake 60 Hz clock with 24 % of it on frame 1 (headless SwiftShader renders a few frames a second at game resolution, whatever the canvas) |
-| `edge=<what>` | **past the map's edge**, both lanes: `black` (default, the game's) or `mirror` — BAR's Map Edge Extension (on by default there: the map reflected past each edge from the 1024² minimap texture, 30 % luma, bending away and fading) in TA's own terms. The same tiles texel for texel — a cell reflects across every edge it is past, as a triangle wave, and swapping a quad's two `u` (or `v`) flips its texels exactly — in the fog of war's grey (the engine's grey table is `(R+G+B)/3` then the nearest palette colour, `0x4BAD30`; Classic++ takes the plain RGB mean, as `TAGPU_GLSL_FOG_GREY_RGB` does), dimmed, and fading smoothly to black, **in full colour in both lanes**. Classic takes each texel's palette colour — exactly the colour it draws — and darkens that; the mirror is not something the engine draws, so there is no palette to stay inside, and an 8-bit fade has to either band or dither. Both were tried (2026-09-23): a 4×4 ordered dither across four bands read as a screen-door grid over the mirror, and without it the palette's darkening — a nearest-colour search landed on olive and brown, the palette having almost no dark neutral greys, and even the engine's own shade table (`PALETTE.SHD`, row 0 black, row 15 neutral) left about fifteen contour bands over open water. TA never dithers when it darkens, and a dither is what Classic++ exists to take out, so the dither is opt-in. The grey is the RGB mean, as `TAGPU_GLSL_FOG_GREY_RGB` takes it, not snapped to the palette the way the engine's own fog grey (`0x4BAD30`) is. Rendered this way the Classic mirror is Classic++'s tone over the original, still dithered, texels. Unlit — mirrored art is lit from wherever the reflection sent the painted light. **The map's own features are mirrored with it** — the TNT's anchors, the first `features.map` of the instance list, never a scenario's: each off-map cell takes the anchor of the cell it reflects (skipping the last row and column, which the engine's sweep never draws), the sprite flipped across a side edge and upright across the top and bottom, in the same tone. Two rules make it read as the terrain's: a **y reflection mirrors where the source is DRAWN**, so the half-height is added rather than taken off (the tile art has the height baked in; taken off, a tree on a hill lands the hill's height short of the art it stood on), and **a mirrored feature never covers the map** — one just south of the edge wins the painter's order over the last rows and would hide their own trees, so the shader discards inside the map's rectangle. Units stay on the map. The mirror's sweep starts from a **floor** of the zoomed window's corner, not the engine's toward-zero division the parity grid keeps: this window starts past the top or left edge, where toward zero starts the sweep a cell late and leaves up to 31 px of the view's leading edge undrawn (192 screen px at 8×). Knobs: **`edgedim`** (brightness at the edge, 0.5), **`edgegrey`** (0 = the colour, 1 = the fog's grey; 0.75), **`edgefade`** (world px to black, 1536), **`edgesteps`** (bands, 0 = smooth), **`edgedither`** (0; 1 = the 4×4 ordered dither across the bands). With `edgesteps=4&edgedither=1` Classic++ reproduces the first version byte for byte. `edge=black` is byte-identical to the viewer before the knob: the parity baseline, `lane=classicpp` and a zoomed-out frame past the edge all keep their md5 |
+| (the camera) | (global) **one camera, the game's, which is BAR's** (Beyond All Reason, on the Recoil engine) for pan and zoom — `tagpu_zoom.c`, [BAR camera port](bar-camera-port.html) Part 1. There is no knob. **The clamp** is Recoil's `SpringController` `Update()`: the ground point at the screen centre is clamped to the map, and the map ends where stock's view ends, at the engine's scroll extent (the tile map less 32 px wide and 128 px tall, `w16·16 − 32` × `h16·16 − 128` here), so `eye ∈ [−W/2, extent − W/2]` and the map's edge reaches the middle of the screen at every zoom (`tagpu_zoom.c`'s `camera_range`). **Zooming in** holds the world point under the pointer; **zooming out** pulls straight back and the centre holds (`CamSpringZoomOutFromMousePos` is off in BAR). **The notch** is 14 % of the camera's distance `1/z` (BAR's `ScrollWheelSpeed` −20 × `SpringController`'s 0.007), so ×1.163 in and ×0.877 out — in-then-out does not come back — with the target clamped to 0.25..8 and one within a thousandth of 1 snapped to 1. **The tween** is Recoil's default `CamTransitionMode` 0: the drawn camera goes from wherever it is to the new pose over `CameraTransition(0.25)` along `1 − (1 − t)^4`, an ease-out; the lab lerps centre and `1/zoom`, which is the 3D camera's position here, so a zoom along the pointer's ray holds its point throughout, and a notch mid-tween starts a new tween from the drawn pose toward the previous target times the notch. **Drag and the arrow keys are divided by the zoom**, so the world moves by the pointer's own distance at every zoom; grabbing the map mid-zoom lands the zoom first. Checked by driving the wheel headless (playwright-cli, a `WheelEvent` on the canvas): from `eye=3000,3000` one notch in at `(900,600)` lands on `(3045,3030)` at 1.163, the game's own figure; two notches out move no eye; the arrow keys stop at the map corner `(−448,−352)`, a notch out there moves nothing and a notch in at `(900,650)` gives `(−396,−310)`, as the game's arithmetic does; one notch in reaches 1/0.86 on frame 15 of a fake 60 Hz clock with 24 % of it on frame 1 (headless SwiftShader renders a few frames a second at game resolution, whatever the canvas) |
+| `edge=<what>` | **past the map's edge**, both lanes: `black` (default, the game's) or `mirror` — BAR's Map Edge Extension (on by default there: the map reflected past each edge from the 1024² minimap texture, 30 % luma, bending away and fading) in TA's own terms. The same tiles texel for texel — a cell reflects across every edge it is past, as a triangle wave, and swapping a quad's two `u` (or `v`) flips its texels exactly — in the fog of war's grey (the engine's grey table is `(R+G+B)/3` then the nearest palette colour, `0x4BAD30`; Classic++ takes the plain RGB mean, as `TAGPU_GLSL_FOG_GREY_RGB` does), dimmed, and fading smoothly to black, **in full colour in both lanes**. Classic takes each texel's palette colour — exactly the colour it draws — and darkens that; the mirror is not something the engine draws, so there is no palette to stay inside, and an 8-bit fade has to either band or dither. Both were tried (2026-09-23): a 4×4 ordered dither across four bands read as a screen-door grid over the mirror, and without it the palette's darkening — a nearest-colour search landed on olive and brown, the palette having almost no dark neutral greys, and even the engine's own shade table (`PALETTE.SHD`, row 0 black, row 15 neutral) left about fifteen contour bands over open water. TA never dithers when it darkens, and a dither is what Classic++ exists to take out, so the dither is opt-in. The grey is the RGB mean, as `TAGPU_GLSL_FOG_GREY_RGB` takes it, not snapped to the palette the way the engine's own fog grey (`0x4BAD30`) is. Rendered this way the Classic mirror is Classic++'s tone over the original, still dithered, texels. Unlit — mirrored art is lit from wherever the reflection sent the painted light. **The map's own features are mirrored with it** — the TNT's anchors, the first `features.map` of the instance list, never a scenario's: each off-map cell takes the anchor of the cell it reflects (skipping the last row and column, which the engine's sweep never draws), the sprite flipped across a side edge and upright across the top and bottom, in the same tone. **The map ends at the engine's area**, as the game's does (`edgeArea`, the game's `tagpu_edge_area`): the scroll extent in 32-px tiles, at most the tile map's own count. The ground and the features fold there, the strip between it and the tile map — art no stock view showed, the editor's blank tile on 9 stock maps — is drawn as the reflection, and under `edge=black` the ground and the features' sweep stop at the area's cells. **A feature is the map's by where it is DRAWN**: under the mirror the map's own sweep drops one drawn past the area, and the mirror's sources are exactly the ones it keeps, taken band by band (the map, turned over, the right way round) with each row asked of its own band and of a neighbour within 8 rows, since a feature is drawn under 8 rows above its anchor. Three rules make it read as the terrain's: a **y reflection mirrors where the source is DRAWN**, so the half-height is added rather than taken off (the tile art has the height baked in; taken off, a tree on a hill lands the hill's height short of the art it stood on); **a side copy stays off the map**, the shader discarding inside the map's rectangle, where its overhang would lay a reflected tree over the tree it reflects; and **a copy above or below is drawn whole or not at all** — one whose shadow or body would reach across the map's border is dropped (`crosses`). Units stay on the map. Measured against the game on Assault on Suburbia's bottom edge (2026-10-25): the two mirrors differ by more than 8 levels at 0.04 % of the pixels. The map's own sprites run `tagpu_feat.c`'s fragment stage with its `uMapPx` (the area) and `uClip` (the mirror) set as the game sets them (`tascene-render.js` `classicSprites.use`); unset, `uMapPx` is (0, 0) and the black-edge cut discards every one. The mirror's sweep starts from a **floor** of the zoomed window's corner, not the engine's toward-zero division the parity grid keeps: this window starts past the top or left edge, where toward zero starts the sweep a cell late and leaves up to 31 px of the view's leading edge undrawn (192 screen px at 8×). Knobs: **`edgedim`** (brightness at the edge, 0.5), **`edgegrey`** (0 = the colour, 1 = the fog's grey; 0.75), **`edgefade`** (world px to black, 1536), **`edgesteps`** (bands, 0 = smooth), **`edgedither`** (0; 1 = the 4×4 ordered dither across the bands). With `edgesteps=4&edgedither=1` Classic++ reproduces the first version byte for byte. `edge=black` is byte-identical to the viewer before the knob: the parity baseline, `lane=classicpp` and a zoomed-out frame past the edge all keep their md5 |
 
 ### Exploration-lane parameters
 
@@ -319,6 +325,169 @@ be a wipe. Everything else is per side: the top-level query is the base and each
 side's own query overrides it, so `?eye=X,Y&a=engine&b=relief` shares the camera
 and differs only in the look.
 
+### The order markers  [BUILT 2026-10-27, worktree-waypoint_gfx]
+
+**Why it is here.** When the order pass was ported (G13o, [UI markers](ui-markers.html) §6),
+`tagpu_order.c` drew a 2.4-px disc for each route dot and a crosshair for each waypoint sprite
+instead of the engine's art. The lab put the engine's own art back, on a real map, so how it
+looks at each zoom could be judged before the DLL changed. The DLL now draws the art by the
+lab's defaults ([UI markers](ui-markers.html) §6.5); what differs is under *The DLL* below.
+
+**What it draws, and by which rule.** `build` packs every sequence of `anims/cursors.gaf` (22,
+`orders/atlas.r8.bin`), and each scenario unit's `orders` list rides its instance.
+`scenarios/tascene-orders.json` is the fixture: tascene-base with a Peewee's move–move–patrol,
+a second Peewee's long leg over the hill, a Flash's attack on the ground, and a construction
+kbot that reclaims a wreck and then guards the lab. The overlay is the engine's walk
+(`0x439B30`, [UI markers](ui-markers.html) §3.2) with nothing changed but the size:
+
+- `pos` starts at the unit (on the terrain, or `agl` above it, as the unit pass puts it), and
+  every order whose descriptor mask has bit 1 or 3 draws its `cursor_ary` sprite at its target
+  and moves `pos` there. The mask and cursor per scenario `cmd` come from the descriptor table
+  ([engine map](exe-reverse-engineering.html), "What each order type draws"); which record a
+  `cmd` issues for a ground unit is [INFERRED] from the names. So an **attack draws its sprite
+  and no dots**.
+- A bit-1 order on the **hovered** unit also draws the route dots from `pos` to the target
+  (`0x4394E0`): a `pathicon` frame every 48 world units of the straight 3-D line, the first at
+  the distance the dots have marched since the order was issued, wrapped to the spacing. A
+  merely selected unit gets the sprites only. `orddots=all` (the default) hovers every unit,
+  `active` only the one being ordered.
+- **The line moves at one speed at every zoom.** The engine's rule is a dot every 48 world
+  units, marching `(age % 30) · 48 / 30`. Stock TA has no zoom, so there world units are screen
+  pixels. A zoomed view has to pick one, and the eye reads the line's speed as how many dots
+  pass a point each second, which is speed over spacing: both have to be constant on screen.
+  Kept in world units, the dots ran faster the further you zoomed in (192 px/s at 4×). With
+  only the speed on screen, they ran faster the further you zoomed out, because at 0.25× they
+  stood 12 px apart and four passed each second.
+- **Spacing fixed on screen slides the dots over the map during a zoom.** `ordspace=screen`
+  lays the dots 48 px apart from each leg's start, with a march counted in screen pixels
+  (`marchPx`). It gives one dot a second at every zoom (MEASURED, frozen `performance.now`
+  advanced 250 ms: 12.6, 11.7, 12.1 px at 0.25×, 1×, 3×, and 1.28, 0.99, 1.01 dots a second).
+  But a zoom stretches the map about the cursor while each dot keeps its screen distance from
+  the leg's start, so the dots slip back along the line toward the start, the farther ones the
+  most; on a long leg the slip outruns the march and the line seems to run backward. Pinned to
+  the map and fixed on screen cannot both hold through a continuous zoom.
+- **So the default, `ordspace=lod`, pins the dots to the map and fades them in and out over
+  time when the zoom changes their spacing level**, as map renderers do for a dashed line. All
+  levels share one lattice: at level `j` the dots stand `48 · 2^j` world units apart, every other
+  one also a dot of level `j + 1`. The zoom picks the level, `−log2 zoom` rounded, held until the
+  zoom is 0.65 of a level past it so a zoom resting on a boundary does not flicker, which puts the
+  dots 31–75 px apart on screen. A dot belongs to the coarsest level it is on (the trailing zeros
+  of its index on the finest level drawn) and is drawn at that level's opacity, which walks toward
+  1 for the zoom's level and coarser and 0 for finer, at `1/ordfade` per millisecond of wall clock
+  (`lodStep`, `ordfade` 300 ms). So when a zoom changes the level, the dots it adds fade in to
+  full and the ones it drops fade out to nothing, and **at rest every dot is fully opaque or
+  gone**. A shot lands on the targets at once. At zoom 1 the level is 0, every dot 48 apart: the
+  engine's line. The march is in world units, 1.6 a tick divided by the zoom (`ordMarch`),
+  accumulated rather than computed from the clock, so a zoom changes only how fast it goes.
+  MEASURED: the dots of a 1× frame carried through the zoom to 1.3× land within 0.4 px (median,
+  1.0 at the 90th percentile, 33 dots) of the 1.3× frame's dots, against 9.8 px (19.5) under
+  `screen`; the dots move 11.7, 11.7 and 12.1 px per 250 ms at 0.5×, 1× and 2×. OBSERVED with a
+  frozen `performance.now` stepped 60 ms at a time in the live page: four notches out from 1×
+  (to 0.59×, level 0 → 1) fade every other dot out by +300 ms and leave the rest fully opaque;
+  five notches back in fade the new dots in, full by +480 ms. (An earlier version faded by the
+  zoom's fraction of a level, which left the in-between dots part-visible for as long as the
+  zoom rested between levels.) `world` and `octave` share the world march; `octave` changes
+  level at the same rounding without the fade or the hold, so its dots pop. Each side keeps its
+  own marches and opacities, and an order queued by hand records the marches as they stood when
+  it was issued.
+- The sprite shows frame `(gameTime / (2 · frame 0's ticks)) % count` (`0x439740`) at
+  `ordalpha` 0.7, more solid than `PALETTE.ALP`'s half-and-half mix (measured, engine map),
+  which `orders-engine` keeps. The dots are drawn at `orddotalpha`, 1 as the engine copies
+  them. Both are sliders in the status bar. `ordanim=cursor`
+  instead steps each frame after its own ticks, the mouse cursor's rule, twice as fast for
+  `cursormove`.
+- The clock is 30 ticks a second, in whole ticks (`ordtick=int`) as the engine steps, or
+  `smooth`. A shot reads `ordtime=` (default 0), so it is deterministic.
+
+**Where it draws.** Onto the canvas after the composite, at canvas resolution, scissored to the
+viewport and to each side's half of the wipe, so the two renderers and any two looks wipe
+against each other like everything else. Every display frame re-presents the composite with
+the markers over it; the world is redrawn only when the camera moves. Not drawn: the fog that
+darkens the engine's markers, and the health bars that paint over them — the lab has neither.
+
+**The knobs** (per side; the status bar toggles them live on every side and writes them back
+into the address bar):
+
+| Knob | Values (default first) | What it does |
+|---|---|---|
+| `ordstyle` | `gaf` · `off` | the engine's art; nothing |
+| `ordsize` | `screen` · `world` · `int` · `clamp` | canvas pixels per texel: 1, the art at its own size at every zoom; the zoom (the engine's pixel magnified with the world); the zoom rounded, at least 1; the zoom held in `ordmin..ordmax` (1..2) |
+| `ordfilter` | `nearest` · `sharp` · `linear` | `sharp` keeps each texel flat and blends only the screen pixel across a texel edge |
+| `ordspace` | `lod` · `screen` · `world` · `octave` | the dot spacing: pinned to the map at 48·2^k world units for the zoom's level k, the dots a level change adds or drops fading in or out over `ordfade` ms; 48 screen px from each leg's start; 48 world units; 48·2^k world units with k the nearest level, no fade. The dots move 48 px/s under all four |
+| `ordanim` | `engine` · `cursor` | the sprite's frame rule, above |
+| `ordtick` | `int` · `smooth` | whole ticks or a continuous clock |
+| `orddots` | `all` · `active` | which units draw their route dots |
+| `ordalpha` | 0.7 | the sprite's opacity (a slider). The engine's ALP blend is 0.5; 0.7 is the owner's choice for the look (2026-10-27), `orders-engine` keeps 0.5 |
+| `orddotalpha` | 1 | the route dots' opacity (a slider) |
+| `ordfade` | 300 | ms for a dot to fade fully in or out when `ordspace=lod` changes level |
+
+`orders=<unit>:<cmd>@<x>,<z>;<cmd>#<handle>|…` replaces the scenario's queues and `ordunit=`
+names the unit being ordered. Serving, **shift-click** queues the order picked in the status bar
+at the ground point under the pointer and **ctrl-click** picks the unit within 48 world units;
+undo and clear are buttons. Each queue edit is written back into the URL, so a hand-built queue
+is a link.
+
+**What the zooms showed** [OBSERVED 2026-10-27, contact sheets of the engine's art at
+`world` size and spacing, at `clamp`/`sharp`/`octave`, and the procedural markers the DLL then drew, on `tascene-orders.json` at 0.25×, 0.5×, 1×, 1.5×, 2×, 3×, 4×,
+one fixed game tick]:
+
+- **The engine's rule does not survive a zoom.** Scaled with the world, `pathicon` is a 3-px
+  speck at 0.25× and a 44-px block at 4×, where the dots stand 192 px apart and one fits on
+  screen. At 1× it is the engine's frame.
+- **The defaults hold the line steady under a zoom**: `ordsize=screen` and `ordspace=lod` draw
+  the art at its own size (the arrow 11 px, the move star 27–35 px), pinned to the map, moving
+  48 px a second, at every zoom, which is the engine's picture at 1×.
+  `orders-tuned` is that look. Any size rule that follows the zoom (`world`, `int`, `clamp`)
+  makes the markers grow and shrink while the wheel turns, which reads as the line changing
+  rather than the camera moving.
+- **`clamp` 1..2 with `sharp`** reads at every zoom too, the arrows 11–22 px, but grows with a
+  zoom in. With `octave` spacing instead, the dots stand 34–68 px apart on screen
+  and crossing an octave adds or drops every other dot and moves none (each octave's dots are a
+  subset of the finer one's, the march being one continuous distance); the pass rate then
+  swings between 0.7 and 1.4 dots a second. At 0.25× the waypoint stars are large against the
+  shrunken world; `ordmin` below 1 is the knob for that.
+- **`sharp` is what makes a non-whole scale look like pixel art**: at 1.5× `nearest` draws the
+  arrow's arms one and two pixels wide by turns, `sharp` evens them, `linear` blurs them. At
+  whole scales `sharp` and `nearest` are the same picture.
+- **`world` size with `octave` spacing does not mix**: at 3× the 33-px arrows sit 36 px apart.
+  Size and spacing want the same rule.
+
+**Checked against the game** [MEASURED 2026-10-27, the GDI backend, engine map "What each order
+type draws"]: the waypoint sprite is ALP-blended over the ground pixel for pixel, the route dots
+are opaque, and the sprite's frame is the drawer's `gameTime / (2·period)` rule. Those are the
+three things `ordalpha=0.5` and `ordanim=engine` assume. The capture also showed the factory
+case does not apply here: a right-click with a Kbot Lab selected (Interface Type 1) queued no
+order at all, so a factory's rally markers were not captured.
+
+**The DLL** ([UI markers](ui-markers.html) §6.5 is the mechanism). On the Vulkan lane
+`tagpu_order.c` draws this section's defaults out of an atlas of the same `cursors.gaf`
+frames: `ordsize=screen` (one texel a screen pixel, the corner on the device grid),
+`ordspace=lod` with the same constants (`48 · 2^j`, the 0.65 hold, the 300 ms fade, eight levels
+either side of the zoom's), `ordanim=engine`, the sprite at opacity 0.70 and the dots opaque.
+Where it differs from the lab:
+
+- **Every leg marches from the same anchor, 0.** The lab, like the engine, starts a leg's dots
+  at the distance marched since its order was issued. The DLL keeps one march for the whole
+  route line, so every leg's dots stand at the same phase from its start. A dot's FRAME still
+  counts from the order's age (`(age / frame 0's ticks) % count`, then one frame a dot), which on
+  stock data, where `pathicon` is one frame, changes nothing.
+- **The march counts game ticks.** It adds `1.6 / zoom` world units for each game tick seen since
+  the last frame, 1.6 screen pixels a tick at every zoom, and only for a step of 1 to 30 ticks: a
+  step back or a longer one moves nothing. So a paused game freezes the dots and the game speed
+  scales them; the 48 px a second is at 30 ticks a second. The fade between levels runs on the
+  wall clock, as in the lab.
+- **The sprite is an alpha blend, not `PALETTE.ALP`.** 0.70 of the frame's palette colour over
+  what is drawn, in full colour, chosen 2026-10-27 to read more solidly than the engine's 50/50
+  table; the DLL has no 0.5 setting.
+
+**Gaps.** The lab's frame has not been pixel-diffed against a game frame at the same eye.
+The ALP palette lookup is approximated in full colour (a plain 50 % mix), and so are the
+sub-pixel sprite placement and the per-tick integer projection. Under `ordspace=lod` a dot
+fades by opacity alone, at its own size; a pathicon with more than one frame would step its
+frame by the fine level's dot index, so a dot's frame can change at a level — in the DLL as
+here. The DLL's march speed has not been measured in game: it is the arithmetic the lab measured
+above, not a capture.
+
 ### The presets  (`tools/tascene-presets.json`)
 
 | Name | What it is for |
@@ -330,6 +499,8 @@ and differs only in the look.
 | `half-relief` | `relief=0.5`, the middle of that axis |
 | `restored` | the undithered atlases and nothing else changed |
 | `restored-relief` | everything the exploration lane has |
+| `orders-engine` | Classic with the engine's order art scaled with the world, a dot every 48 world units |
+| `orders-tuned` | the engine's order art at its own size, its dots pinned to the map and fading across zoom levels, 48 px a second |
 
 `serve` and `shot` reuse `ta3do`'s existing `Viewer` (`ThreadingHTTPServer`) and `shoot`
 (`--headless=new` Chrome on a private X display, ANGLE/SwiftShader) rather than growing a
@@ -461,9 +632,10 @@ about a millisecond between them.
   foot. `build` only placed the map's own features until this fixture needed
   wrecks: a scenario feature with a GAF `seqname` now joins the anchor list,
   and one whose def names a 3DO `object` rides the unit mesh path posed by its
-  facing — the engine draws it with the same 3DO renderer. Not A/B'd against
-  the game yet: the wrecks' depth keys are a unit's, where the engine sorts
-  them as features.
+  facing — the engine draws it with the same 3DO renderer. Its depth key is
+  the features' band, `tall0 + rel · rowStep` (`emitUnits` keys any `feature`
+  instance so), as the native pass sorts a wreck (`encBase` 3); not A/B'd
+  against the game.
 
 Cross-checks that passed without a game running: the unit exporter produces
 **189 triangles for ARMCOM, the same count `ta3do render` reports**, and the

@@ -283,6 +283,10 @@ int tagpu_feat_armed(unsigned frame_counter)
 /* the map the atlas's entries belong to (see tagpu_feat_gather) */
 static const char* s_mapGrid;
 static int         s_mapW, s_mapH;
+/* the engine's area in 16-px cells, this frame's (tagpu_edge_area): where the
+   mirror folds and the map's own pixels stop. Two per tile cell, so the two
+   passes fold at the same line; at most s_mapW / s_mapH. */
+static int         s_areaW, s_areaH;
 
 /* the map's own features, then the map edge's mirror of them (B_MSHADOW,
    B_MBODY): drawn in this order, so the mirror's two are the last */
@@ -400,18 +404,16 @@ static const char* FS =
        ground under it (tagpu_terr.c). EACH COPY OF THE MAP DRAWS ONLY IN ITS
        OWN COLUMNS, as the ground does: a turned copy is its source reflected,
        and a quad that reached across a fold would lay one copy's feature over
-       the next copy's reflection of it. And a copy of rows past the top or
-       bottom never draws on the map's own rows: there it would cover the map
-       -- a mirrored tree just south of the edge stands in FRONT of the last
-       rows by the painter's order -- or, in a corner, the side copy that is
-       the reflection of that map. vWorld is the sample's own point on the tile
+       the next copy's reflection of it. A copy past the top or bottom stands
+       upright and is drawn whole: a mirrored tree just south of the edge
+       reaches up over the map's last rows, in front of them by the painter's
+       order, as the forest it continues would. vWorld is the sample's own point on the tile
        grid (the gather moves the quad, not the point), and `s` is it moved to
        the ground's side of a fold (above). The hole is the base atlas's, as
        below. */
     "  if ((m & " FEAT_S(TAGPU_FEAT_MIRROR) ") != 0) {\n"
     "    float x0 = float((m >> " FEAT_S(TAGPU_FEAT_COPY_SHIFT) ") - " FEAT_S(TAGPU_FEAT_COPY_BIAS) ") * uMapPx.x;\n"
     "    if (s.x < x0 || s.x >= x0 + uMapPx.x) discard;\n"
-    "    if ((m & " FEAT_S(TAGPU_FEAT_OFFROW) ") != 0 && s.y >= 0.0 && s.y < uMapPx.y) discard;\n"
     "    vec4 mb = texture(uBase, vUV);\n"
     "    if (mb.a < 0.5) discard;\n"
     "    vec4 mt = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
@@ -423,8 +425,17 @@ static const char* FS =
        side edge the picture is the map reflected, and a tree's overhang there
        would cover the reflection of the tree itself. Past the top and bottom
        the copies stand upright, not reflected, so the painter's order stands
-       there and the overhang is kept. Under a black edge nothing is clipped. */
-    "  if (uClip == 1 && (s.x < 0.0 || s.x >= uMapPx.x)) discard;\n"
+       there and the overhang is kept.
+       UNDER A BLACK EDGE, NOTHING OF THE MAP'S OWN DRAWS PAST THE ENGINE'S
+       AREA ON THE RIGHT OR AT THE BOTTOM. The engine's sweep reaches anchors
+       in the strip between that area and the tile map (rows and columns up to
+       the map's last but one), so a tree there would otherwise stand on the
+       black; clipping the pixel rather than dropping the anchor keeps the part
+       of such a tree that reaches up into the area, which is what stock's
+       viewport, cut at the same line, showed. Under the mirror the anchor
+       loop drops those trees instead (draw_feature). */
+    "  if (uClip == 1 ? (s.x < 0.0 || s.x >= uMapPx.x)\n"
+    "                 : (s.x >= uMapPx.x || s.y >= uMapPx.y)) discard;\n"
     /* features are terrain furniture: the engine draws them under the fog
        overlay, so they stay visible in grey */
     TAGPU_GLSL_FOG_DISCARD
@@ -689,6 +700,12 @@ static void draw_feature(const TAGPU_FXVIEW* v, const TAGPU_PACKET* pk,
     /* the engine's projection, +128/+32 baked in as (col+8)*16 / (row+2)*16 */
     wax = col * 16 + (fx * 16) / 2;
     waz = row * 16 + (fz * 16) / 2 - ((h00 + h01 + h10 + h11) >> 3);
+    /* UNDER THE MIRROR, A FEATURE DRAWN PAST THE ENGINE'S AREA IS PAST THE
+       MAP: its place there is the reflection's, and mirror_feature takes
+       exactly the features this test keeps as the sources of the copies. Under
+       a black edge it is drawn, and the fragment stage cuts it at the area, as
+       stock's viewport did. */
+    if (s_clip && (wax >= s_areaW * 16 || waz >= s_areaH * 16)) return;
     sx = wax + 128 - v->eyeX;
     sy = waz + 32 - v->eyeY;
     /* `light=` is applied HERE, by baking 1.0 -- a billboard has no normal, so
@@ -803,6 +820,11 @@ static int feat_bail(void)
    (`mapW > 4096` in the gather): every array below is sized by it, so an index
    under the map's own dimension is under the array's. */
 #define MF_DIM 4096
+/* THE ROWS A FEATURE IS DRAWN ABOVE ITS ANCHOR, a bound: the projection takes
+   `lift` = (four height bytes) >> 3 <= 127 px off the anchor's row and adds
+   back half the footprint, so a feature drawn on the map is anchored fewer
+   than 128 px = 8 rows past it (mirror_gather's bands) */
+#define MF_LIFT_ROWS 8
 static TAGPU_PK_MAPFEAT s_mf[TAGPU_PK_MAX_MAPFEAT];   /* the copy, by row     */
 static int              s_mfRow[MF_DIM + 1];          /* row starts into s_mf */
 static int              s_mfCur[MF_DIM];              /* the bucketing's cursors */
@@ -996,18 +1018,66 @@ static float mirror_key(const TAGPU_FXVIEW* v, const KEYRECT* k, int row, int co
     }
 }
 
-/* one of the map's anchors, mirrored to sweep cell (row, col); `copy` is
-   its mode bits past the plain mode (TAGPU_FEAT_MIRROR and the copy it
-   belongs to, tagpu_feat.h) */
+/* Whether frame `g`, placed with its hotspot at tile-grid row `waz` as
+   emit_frame places it (each sub-frame at its own hotspot, to the same depth),
+   reaches across the map's top (`top`) or bottom border. A frame the reader
+   refuses draws nothing and crosses nothing. */
+static int frame_crosses(const unsigned char* g, int waz, int top, int depth)
+{
+    int sub, k;
+    if (depth > 4) return 0;
+    g = tagpu_gaf_frame_sane(g);
+    if (!g) return 0;
+    sub = g[TAGPU_GF_SUBN];
+    if (sub) {
+        for (k = 0; k < sub; k++)
+            if (frame_crosses(tagpu_gaf_subframe(g, k), waz, top, depth + 1)) return 1;
+        return 0;
+    }
+    {
+        const int y0 = waz - *(const short*)(g + TAGPU_GF_HOTY);
+        const int y1 = y0 + *(const unsigned short*)(g + TAGPU_GF_H);
+        return top ? y1 > 0 : y0 < s_areaH * 16;
+    }
+}
+
+/* The frame a copy draws -- frame 0 of `seq`, or, animating, the current frame
+   of the animation state `st` -- and in *crosses whether a copy in `band` at
+   tile-grid row `waz` would reach across the map's border with any frame it
+   can show: that one frame, or every frame of the animation's sequence. The
+   state's sequence and index are read once (tagpu_gaf_state_seq), so the
+   frame returned is one of the frames tested. The walk is bounded by the
+   sequence's own count, which tagpu_gaf_seq_frame refuses past 4096. */
+static const unsigned char* copy_frame(const char* st, const char* seq, int animating,
+                                       int band, int waz, int* crosses)
+{
+    const unsigned char* g;
+    int frame = 0, n, i;
+    *crosses = 0;
+    if (animating) seq = tagpu_gaf_state_seq(st, &frame);
+    g = tagpu_gaf_seq_frame(seq, frame);
+    if (!g || band == 0) return g;
+    if (!animating) { *crosses = frame_crosses(g, waz, band < 0, 0); return g; }
+    n = tagpu_gaf_seq_nframes(seq);
+    if (n > 4096) n = 0;
+    for (i = 0; i < n && !*crosses; i++)
+        *crosses = frame_crosses(tagpu_gaf_seq_frame(seq, i), waz, band < 0, 0);
+    return g;
+}
+
+/* one of the map's anchors, mirrored to sweep cell (row, col) in `band` of
+   the picture (mirror_gather: 0 is the map's, below 0 above it, above 0 below
+   it), and `copy` is its mode bits past the plain mode (TAGPU_FEAT_MIRROR and
+   the copy it belongs to, tagpu_feat.h) */
 static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
                            const char* fdefs, int nDefs, int shadowsOn,
                            const KEYRECT* k, int row, int col,
-                           int flipX, int flipY, int copy)
+                           int flipX, int flipY, int band, int copy)
 {
     const char* def;
     const char* shadSeq;
     const char* bodySeq;
-    const unsigned char* g;
+    const unsigned char *shG, *boG;
     unsigned mask;
     int fx, fz, hx, hz, wax, waz, sx, sy, flat, animating;
     float enc;
@@ -1020,6 +1090,17 @@ static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
     if (fx < 0 || fx > MAXFOOT) { fx = 1; s_c.junk++; }
     if (fz < 0 || fz > MAXFOOT) { fz = 1; s_c.junk++; }
     mask = *(const unsigned char*)(def + FD_MASK);
+    hx = (fx * 16) / 2; hz = (fz * 16) / 2;
+    /* A SOURCE IS THE MAP'S WHEN IT IS DRAWN ON THE MAP: the point the map's
+       own draw puts it at (draw_feature's wax, waz) inside the engine's area,
+       the test the anchor loop makes, so every feature the map shows has its
+       copies and none it hides has one. A band above or below the map takes
+       only sources drawn below the map's top: one drawn above it would have
+       its copy's base on the map's rows. */
+    {
+        const int swax = m->col * 16 + hx, swaz = m->row * 16 + hz - m->lift;
+        if (swax >= s_areaW * 16 || swaz >= s_areaH * 16 || (band != 0 && swaz < 0)) return;
+    }
     s_c.mirrored++;
     /* THE PROJECTION, REFLECTED (the lab's buildFeatures). A reflection
        reverses the cells a footprint spans, so a mirrored feature ENDS on the
@@ -1028,7 +1109,6 @@ static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
        bottom edge the feature moves by the height the other way: the half
        height is ADDED where the map's own takes it off. Upright either way --
        only a side edge turns the sprite over. */
-    hx = (fx * 16) / 2; hz = (fz * 16) / 2;
     wax = flipX ? (col + 1) * 16 - hx : col * 16 + hx;
     waz = flipY ? (row + 1) * 16 - hz + m->lift : row * 16 + hz - m->lift;
     sx = wax + 128 - v->eyeX;
@@ -1037,31 +1117,38 @@ static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
     shadSeq = *(const char* const*)(def + FD_SHADSEQ);
     bodySeq = *(const char* const*)(def + FD_BODYSEQ);
     animating = (mask & 2) != 0;
+    /* A COPY ABOVE OR BELOW THE MAP THAT WOULD REACH ACROSS ITS BORDER IS NOT
+       DRAWN. The copies stand upright, so the one nearest the line would lay
+       its crown over the map's last rows (below) or its foot over the first
+       (above), and a copy cut at the line is a tree without a top. The frames
+       are resolved once (copy_frame) and those are the frames emitted, and an
+       animating feature is judged on every frame of its sequence, so the
+       decision does not change as it animates and nothing of a copy that is
+       drawn crosses the line. */
+    {
+        const int wantSh = shadSeq && shadowsOn && s_shadow;
+        int xs = 0, xb = 0;
+        shG = wantSh ? copy_frame(def + FD_SHADANIM, shadSeq, animating, band, waz, &xs) : NULL;
+        boG = bodySeq ? copy_frame(def + FD_BODYANIM, bodySeq, animating, band, waz, &xb) : NULL;
+        if (xs || xb) return;
+    }
     {
         /* WHOLE OR NOT AT ALL, as for the map's own (the gather's loop) */
         const int nSh = s_nv[B_MSHADOW], nBo = s_nv[B_MBODY];
         const unsigned dN = s_atlas.deferN;
-        if (shadSeq && shadowsOn && s_shadow) {
-            g = animating ? tagpu_gaf_state_frame(def + FD_SHADANIM)
-                          : tagpu_gaf_seq_frame(shadSeq, 0);
-            if (g) {
-                s_bucketCur = B_MSHADOW;
-                s_encCur = enc - (flat ? 0.03f : 0.3f);
-                emit_frame(v, g, sx, sy, wax, waz,
-                           ((mask & 8) ? MODE_ALPHA : MODE_OPAQUE) | copy,
-                           1.0f, flipX, 0);
-            }
+        if (shG) {
+            s_bucketCur = B_MSHADOW;
+            s_encCur = enc - (flat ? 0.03f : 0.3f);
+            emit_frame(v, shG, sx, sy, wax, waz,
+                       ((mask & 8) ? MODE_ALPHA : MODE_OPAQUE) | copy,
+                       1.0f, flipX, 0);
         }
         /* the engine gates both body paths on the static sequence pointer */
-        if (bodySeq) {
-            g = animating ? tagpu_gaf_state_frame(def + FD_BODYANIM)
-                          : tagpu_gaf_seq_frame(bodySeq, 0);
-            if (g) {
-                s_bucketCur = B_MBODY; s_encCur = enc;
-                emit_frame(v, g, sx, sy, wax, waz,
-                           ((mask & 4) ? MODE_ALPHA : MODE_OPAQUE) | copy,
-                           1.0f, flipX, 0);
-            }
+        if (boG) {
+            s_bucketCur = B_MBODY; s_encCur = enc;
+            emit_frame(v, boG, sx, sy, wax, waz,
+                       ((mask & 4) ? MODE_ALPHA : MODE_OPAQUE) | copy,
+                       1.0f, flipX, 0);
         }
         if (s_atlas.deferN != dN) {
             s_nv[B_MSHADOW] = nSh; s_nv[B_MBODY] = nBo;
@@ -1090,8 +1177,8 @@ static int floor_div(int a, int b)
    odd), so each run is one pass over the row's bucket (ordered by `mf_keep`)
    and a cell with no anchor costs nothing -- at a 3840 x 2160 corner at 0.25x
    the sweep is 944 x 560 cells and a map row has a handful of anchors. Every
-   index is bounded: a row by the fold into [0, mapH), a bucket by `s_mfRow`,
-   and every column from the bucket is under mapW.
+   index is bounded: a source row by the table's own rows (`srcRows`), a
+   bucket by `s_mfRow`, and every column from the bucket is under the map's.
    EVERY RUN IS EMITTED IN ITS SOURCE ROW'S ORDER, a turned one right to left
    on the screen: the runs follow the rows down, and each run takes the
    bucket in the order the map's own anchors come (row-major, the engine's
@@ -1111,55 +1198,78 @@ static int floor_div(int a, int b)
 static void mirror_gather(const TAGPU_FXVIEW* v, const char* fdefs, int nDefs,
                           int shadowsOn, const KEYRECT* k)
 {
-    const int mapW = s_mfW, mapH = s_mfH;
+    /* THE FOLD IS THE ENGINE'S AREA (s_areaW/H, at most the map's by
+       tagpu_edge_area, which the gather has checked are the table's). A
+       column past the area, or the map's last one the engine's sweep never
+       reaches, is not a source (`lastCol`). Rows are chosen by where a
+       feature is DRAWN, not where it is anchored (`srcRows`, and
+       mirror_feature's test). */
+    const int mapW = s_areaW, mapH = s_areaH;
+    const int lastCol = mapW < s_mfW - 1 ? mapW : s_mfW - 1;
+    const int srcRows = s_mfH - 1;
     const int c0 = k->uc0, c1 = k->uc0 + k->ucols;
     const int t0 = k->tuc0, t1 = k->tuc0 + k->ucols;
     const int s0 = c0 < t0 ? c0 : t0, s1 = c1 > t1 ? c1 : t1;
     /* the view, the gather's rect in world px */
     const int vx0 = v->eyeX + (v->evpL - v->vpL), vx1 = vx0 + v->evw;
-    const int vy0 = v->eyeY + (v->evpT - v->vpT), vy1 = vy0 + v->evh;
     int row;
     if (k->ucols <= 0 || k->ucols > MF_DIM || k->urows <= 0 || mapW <= 0 || mapH <= 0) return;
     for (row = k->ur0; row < k->ur0 + k->urows; row++) {
-        int offRow = row < 0 || row >= mapH, flipY = 0, srow = row, a0, a1, q;
-        /* A COPY THE VIEW CANNOT SHOW IS NOT EMITTED: the fragment stage keeps
-           every copy inside its own columns, and a row past the top or bottom
-           inside its band, so a copy whose region misses the view draws
-           nothing. The copies left are the ones whose sources the view holds
-           (mirror_key). */
-        if (row < 0 ? vy0 >= 0 : row >= mapH && vy1 <= mapH * 16) continue;
-        if (offRow) srow = tagpu_edge_reflect(row, mapH, &flipY);
-        if (srow >= mapH - 1) continue;
-        a0 = s_mfRow[srow]; a1 = s_mfRow[srow + 1];
-        if (a0 == a1) continue;
-        for (q = floor_div(s0, mapW); q * mapW < s1; q++) {
-            const int base = q * mapW, turned = q & 1;
-            const int w0 = turned ? t0 : c0, w1 = turned ? t1 : c1;
-            const int lo = base > w0 ? base : w0, hi = base + mapW < w1 ? base + mapW : w1;
-            int copy, j;
-            /* the map's own cells are the anchor loop's */
-            if (!offRow && q == 0) continue;
-            if (lo >= hi || base * 16 >= vx1 || (base + mapW) * 16 <= vx0) continue;
-            /* THE MODE'S COPY FIELD IS BOUNDED BEFORE IT IS BUILT (tagpu_feat.h):
-               q + COPY_BIAS is in [0, 2 COPY_BIAS), so the mode stays under 2^15 */
-            if (q < -TAGPU_FEAT_COPY_BIAS || q >= TAGPU_FEAT_COPY_BIAS) continue;
-            copy = TAGPU_FEAT_MIRROR | (offRow ? TAGPU_FEAT_OFFROW : 0) |
-                   ((q + TAGPU_FEAT_COPY_BIAS) << TAGPU_FEAT_COPY_SHIFT);
-            if (!turned) {
-                for (j = a0; j < a1; j++) {
-                    const int scol = s_mf[j].col, col = base + scol;
-                    if (scol >= mapW - 1 || col >= hi) break;
-                    if (col < lo) continue;
-                    mirror_feature(v, &s_mf[j], fdefs, nDefs, shadowsOn, k, row, col,
-                                   0, flipY, copy);
-                }
-            } else {
-                for (j = a0; j < a1; j++) {
-                    const int scol = s_mf[j].col, col = base + mapW - 1 - scol;
-                    if (scol >= mapW - 1 || col < lo) break;
-                    if (col >= hi) continue;
-                    mirror_feature(v, &s_mf[j], fdefs, nDefs, shadowsOn, k, row, col,
-                                   1, flipY, copy);
+        /* THE BANDS A ROW TAKES COPIES FROM. Band b of the picture is the map
+           (b = 0), or the map turned over (b odd) or the right way round (b
+           even) b maps' heights away, and a copy in band b sits on sweep row
+           b H + srow, or (b + 1) H - 1 - srow turned over. A source is the
+           map's when it is DRAWN on the map, `waz` in [0, H 16) -- and a
+           feature is drawn `lift - hz` above its anchor, which is under
+           MF_LIFT_ROWS rows. So a source anchored up to that far past the
+           area is still the map's, and its copy's row lies up to that far
+           inside the neighbouring band: each row is asked of its own band and
+           of a neighbour it is that near. Every (row, band) pair names one
+           source row, so no copy is emitted twice. The neighbours are enough
+           for an area at least MF_LIFT_ROWS rows tall, every stock map's; a
+           shorter one misses the copies of a source two bands away, and
+           indexes nothing it should not. */
+        const int b0 = floor_div(row, mapH);
+        int bands[3], nb = 0, i;
+        bands[nb++] = b0;
+        if (((b0 + 1) & 1) && row >= (b0 + 1) * mapH - MF_LIFT_ROWS) bands[nb++] = b0 + 1;
+        if (!((b0 - 1) & 1) && row < b0 * mapH + MF_LIFT_ROWS) bands[nb++] = b0 - 1;
+        for (i = 0; i < nb; i++) {
+            const int band = bands[i], flipY = band & 1, offRow = band != 0;
+            const int srow = flipY ? (band + 1) * mapH - 1 - row : row - band * mapH;
+            int a0, a1, q;
+            /* the table's bound: s_mfRow has a start for every row under s_mfH */
+            if (srow < 0 || srow >= srcRows) continue;
+            a0 = s_mfRow[srow]; a1 = s_mfRow[srow + 1];
+            if (a0 == a1) continue;
+            for (q = floor_div(s0, mapW); q * mapW < s1; q++) {
+                const int base = q * mapW, turned = q & 1;
+                const int w0 = turned ? t0 : c0, w1 = turned ? t1 : c1;
+                const int lo = base > w0 ? base : w0, hi = base + mapW < w1 ? base + mapW : w1;
+                int copy, j;
+                /* the map's own cells are the anchor loop's */
+                if (!offRow && q == 0) continue;
+                if (lo >= hi || base * 16 >= vx1 || (base + mapW) * 16 <= vx0) continue;
+                /* THE MODE'S COPY FIELD IS BOUNDED BEFORE IT IS BUILT (tagpu_feat.h):
+                   q + COPY_BIAS is in [0, 2 COPY_BIAS), so the mode stays under 2^15 */
+                if (q < -TAGPU_FEAT_COPY_BIAS || q >= TAGPU_FEAT_COPY_BIAS) continue;
+                copy = TAGPU_FEAT_MIRROR | ((q + TAGPU_FEAT_COPY_BIAS) << TAGPU_FEAT_COPY_SHIFT);
+                if (!turned) {
+                    for (j = a0; j < a1; j++) {
+                        const int scol = s_mf[j].col, col = base + scol;
+                        if (scol >= lastCol || col >= hi) break;
+                        if (col < lo) continue;
+                        mirror_feature(v, &s_mf[j], fdefs, nDefs, shadowsOn, k, row, col,
+                                       0, flipY, band, copy);
+                    }
+                } else {
+                    for (j = a0; j < a1; j++) {
+                        const int scol = s_mf[j].col, col = base + mapW - 1 - scol;
+                        if (scol >= lastCol || col < lo) break;
+                        if (col >= hi) continue;
+                        mirror_feature(v, &s_mf[j], fdefs, nDefs, shadowsOn, k, row, col,
+                                       1, flipY, band, copy);
+                    }
                 }
             }
         }
@@ -1238,6 +1348,9 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
         if (s_mapGrid) tagpu_gaf_atlas_forget(&s_atlas);
         s_mapGrid = fdefs; s_mapW = mapW; s_mapH = mapH;
     }
+    s_areaW = 2 * tagpu_edge_area(pk->map_pxw, mapW / 2);
+    s_areaH = 2 * tagpu_edge_area(pk->map_pxh, mapH / 2);
+    if (s_areaW <= 0 || s_areaH <= 0) return feat_bail();     /* a map under 32 px */
 
     /* The engine's own sweep rect and its edge clamps (DrawGameScreen), run
        over the ZOOM's viewport rather than the engine's (TAGPU_FXVIEW.evpL):
@@ -1457,9 +1570,9 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.body   = s_verts[B_BODY];   s_pub.nBody   = s_nv[B_BODY];
     s_pub.mshadow = s_verts[B_MSHADOW]; s_pub.nMShadow = s_nv[B_MSHADOW];
     s_pub.mbody   = s_verts[B_MBODY];   s_pub.nMBody   = s_nv[B_MBODY];
-    /* the map on the TILE grid, as the terrain's uMapPx (tagpu_terr.c): the
-       two passes test the one edge */
-    s_pub.mapPxW = (float)((s_mapW / 2) * 32); s_pub.mapPxH = (float)((s_mapH / 2) * 32);
+    /* the engine's area on the TILE grid, as the terrain's uMapPx
+       (tagpu_terr.c): the two passes test the one edge */
+    s_pub.mapPxW = (float)(s_areaW * 16); s_pub.mapPxH = (float)(s_areaH * 16);
     s_pub.clip = s_clip;
     s_pub.gw = (float)v->gw; s_pub.gh = (float)v->gh;
     s_pub.zoom = v->zoom > 0.0f ? v->zoom : 1.0f;

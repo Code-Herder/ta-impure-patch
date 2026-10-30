@@ -14,6 +14,8 @@
 #include "tagpu_native.h"
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
+#include "tagpu_place.h"
+#include "tagpu_placegeo.h"
 
 #define TA_MAINPP    0x00511DE8u
 
@@ -158,8 +160,21 @@ static void __stdcall mark_transp(void* ctx, void* rect, int colour)
        clipped away long before our buffer sees it. Skipping is also what stops
        an engine-drawn rect standing in our frame as a ghost at the unzoomed
        position, exactly as for the selection rect above. */
+    int sites[PLACE_MAX_SITES][4];
+    unsigned char colours[PLACE_MAX_SITES];
+    unsigned i, n;
     if (g_cursor) return;
-    ((void (__stdcall *)(void*, void*, int))PASS_TRANSP_VA)(ctx, rect, colour);
+    /* A placement gesture's sites stand in for the build square, each drawn as the engine
+       draws its own: the engine's rectangle moved by the site's offset (tagpu_place.c), so the
+       projection stays the engine's. Both calls of the block come here, the outer and the
+       inset one, and each gets its own set. */
+    n = tagpu_place_gdi_rects((const int*)rect, sites, colours, PLACE_MAX_SITES);
+    if (!n) {
+        ((void (__stdcall *)(void*, void*, int))PASS_TRANSP_VA)(ctx, rect, colour);
+        return;
+    }
+    for (i = 0; i < n; i++)
+        ((void (__stdcall *)(void*, void*, int))PASS_TRANSP_VA)(ctx, sites[i], colours[i]);
 }
 
 /* The selection rectangle is the one marker the engine draws INSIDE the unit

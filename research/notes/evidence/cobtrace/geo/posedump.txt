@@ -1,0 +1,6 @@
+posedump: tick=524 idx=2 o3=095EB270 nparts=5 yaw=32003 body=(0,32003,0) live=(0,32003,0)
+posedump: p0 base off=(0,0,0) move=(0,0,0) turn=(0,0,0)
+posedump: p1 smoke HIDDEN off=(1210093,3747119,-310060) move=(0,0,0) turn=(0,0,0)
+posedump: p2 pieces off=(0,0,0) move=(0,0,0) turn=(0,0,0)
+posedump: p3 explode1 HIDDEN off=(1228800,1310720,-1966080) move=(0,0,0) turn=(0,0,0)
+posedump: p4 explode2 HIDDEN off=(-1228800,1310720,-1966080) move=(0,0,0) turn=(0,0,0)

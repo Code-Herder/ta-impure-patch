@@ -177,11 +177,23 @@ unit names by scanning the live definition table. This design follows its recipe
 
 ## Order vocabulary
 
-TA's own order names, from the engine's button/order table [VERIFIED,
-`TA_MemoryStructures.pas:6-21`]:
+TA's own order names and the command types the fork hands the order mapper
+`ScriptAction_Type2Index` `0x43F0E0` for them. The wire carries the name; the number is the
+fork's. Every number is TADR's button/order table's [`TA_MemoryStructures.pas:6-21`] except
+`stop`'s: TADR numbers it 1, and type 1 in the mapper is not Stop (below).
 
-`stop`(1) `move`(2) `attack`(3) `blast`(4) `unload`(5) `load`(6) `defend`(7) `repair`(8)
+`stop`(10) `move`(2) `attack`(3) `blast`(4) `unload`(5) `load`(6) `defend`(7) `repair`(8)
 `patrol`(9) `teleport`(11) `reclaim`(12) `capture`(13) `mobilebuild`(14)
+
+`stop` is the sidebar STOP button's own order: type 10 sends the mapper to `0x43F82C`, which looks
+up the script action `"STOP"` with no test of the unit [DISASSEMBLED], the action the button
+gives every selected unit through `0x43AFC0`; its handler `0x401C20` clears the unit's weapon
+targets. TADR's type 1 (`BUTTON_ORDER_STOP`) is not Stop: in the mapper
+it is the right click's contextual default, which with no target orders a move to the map's
+corner. MEASURED 2026-10-27, an ARMCK walking on Comet Catcher: after `stop`, by `--unit` or
+`--sel`, its chain is one Standby (action 41) and it does not move for 15 s, as after the button.
+The button also disarms an armed build; the order does not, so an armed build stays armed
+([exe-reverse-engineering](exe-reverse-engineering.html) §"STOP and ATTACK").
 
 `teleport` is the engine's own Teleport, which no stock button issues (the order buttons' click
 handler names `ATTACK` alone, [deep-total-mayhem.md](deep-total-mayhem.md)). For type 11
@@ -347,7 +359,7 @@ Every call is `__stdcall` and every address is from the merged community symbol 
 | snap to ground | read `FeatureMap[(x>>20) + (z>>20)*FeatureMapSizeX].height` | `main+0x14287` | TADR's own height rule; feature cells are **16 world units**, `FeatureStruct` stride `0x0D`, `height` at `+0x04`. |
 | feature name → id | `FeatureName2ID(name)` | `0x422DD0` | Only a feature the level loaded: a name it did not load is an error ("no feature named … in this game"). TADR's `TAMap.PlaceFeatureOnMap` falls back to `LoadFeature 0x4224B0`, which is not safe in a live game: it searches the TDF index `[0x511FB4]`, which the level load frees and zeroes (`0x4223E0` at `0x4918DE`, the store at `0x422452`), so it reads through NULL at `0x4224BB` (DISASSEMBLED). |
 | feature grid cell | `GetGridPosPLOT(x/16, z/16)` → `PlotGrid*` | `0x481550` | `SpawnFeatureOnMap` wants the cell, not the coordinate. |
-| place a feature | `SpawnFeatureOnMap(gridPlot, defIdx, position, volume, playerId)` | `0x423C50` | Silent and instant. `position` is 16.16 `(x, altitude, depth)`; `volume` is the `{bank, pitch, heading}` word triple; `playerId = 10` is what TADR passes for a map feature. [VERIFIED live] |
+| place a feature | `SpawnFeatureOnMap(gridPlot, defIdx, position, volume, playerId)` | `0x423C50` | Silent and instant. `position` is 16.16 `(x, altitude, depth)`; `volume` is the `{bank, pitch, heading}` word triple; `playerId = 10` is what TADR passes for a map feature. [VERIFIED live] It returns the feature object for a 3-D def only: a 2-D (GAF) def such as a tree, `+0xFE` bit 0 set, gets no object and returns NULL on success, so the applier takes the anchor cell's `+8` word holding the def as the placement fact (`0x423C60` zeroes the return, `0x423EE5` writes the word) [DISASSEMBLED 2026-10-26] |
 | order name → script index | `ScriptAction_Type2Index(&idx, orderType, unit, target, pos)` → `char*` | `0x43F0E0` | **Not** `ScriptAction_Name2Index`. TADR's `SendOrder` resolves the *per-unit* script index from the order type, the unit and its target; the returned `char*` points at the byte to pass on, and `NULL` means this unit cannot take that order. Its `ScriptAction_Index2Handler` (`0x438830`) call is dead — that function is a pure `base + *ecx*25` address computation whose result TADR discards. |
 | issue an order | `ORDERS_NewMainOrder2Unit(*scriptIdx, shift, unit, target, position, 0, 0)` | `0x43AFC0` | `position` is **three 16.16 dwords in `(x, altitude, depth)`** — the SAME convention as the create call, no transpose. This row said the opposite until 2026-09-04 and every scenario's orders were wrong with it; see *There is no coordinate asymmetry*. **`shift = 0` also DELETES the unit's existing orders** before linking, when the new order's own flags `+0x42` lack `0x40` (`0x43ADC0`, `0x43AE02..0x43AE59`, the test at `0x43AE0E..0x43AE12`), so only the last order per entity survives. [BINARY-VERIFIED] |
 | remove a unit silently | `UNITS_KillUnit(unit, 0)` | `0x4864B0` | Mode `0` = the "recreate proc" path (no explosion). Mode `3` is a normal death **with** wreckage. Park `ActiveCommanderDeath` at 0 across the sweep — see below. |

@@ -296,6 +296,20 @@ not `0x470EB0`. Their callers, classified:
   `0x481128`): 0 and 1 fire `0x472330` (returning to `0x481015`, `0x481034`), 2–5 the wake `0x472430`
   (`0x481051`, `0x48106E`, `0x48108B`, `0x4810A8`), `0x101` grey smoke `0x472810` (`0x4810BE`),
   `0x102` black smoke `0x4728F0` (`0x48111D`), `0x103` bubbles `0x472530` at sea level (`0x481107`).
+  **What the emitters are given** [DISASSEMBLED 2026-10-28, for the in-game wiki's L4b]: the unit is
+  reposed first (`0x45AB10`, `0x480EFC`) and the piece index is not bounded. A type with bit
+  `0x100` takes one point, the unit's position plus the piece's posed origin, `prim+0x16`,
+  `+0x1A` and the negated `+0x1E` (`0x480F0A..0x480F50`); types 0–5 take two, the unit's position
+  plus the piece's first two posed vertices, each (x, y, −z), from the array `prim+0x22` points at
+  (`0x480F59..0x480FDA`). Then fire `0x472330(p1, p2, 1, 6, 7)` for type 0 and `(…, 1, 7, 7)` for
+  type 1; the wake `0x472430(p1, p2, 0x10, 2)` and `(p1, p2, 8, 2)` for 2 and 3, the same with
+  the two points swapped for 4 and 5; grey and black smoke `0x472810(&p, 9)` and `0x4728F0(&p, 9)`;
+  bubbles `0x472530(p, q, 8, 7)`, q the same point at sea level, its altitude the byte
+  `main+0x1427F` << 16 (`0x4810D4..0x481102`). A smoke emitter initialises
+  its Smoke2 object with life 0 (`0x472867..0x472874`, the fifth argument; init `0x474D50`) and
+  makes one puff a call [INFERRED from `edi = 1` at `0x474ECE` in its spawn; the loop not traced].
+  The fire (vtable `0x4FD5D8`), wake (`0x4FD5F8`) and bubble emitters' particle counts, lifetimes
+  and velocities are not established.
 - **The explosion draw.** `0x421550` is called from the explosion draw `0x420B00` (`0x420B18`; the
   draw from DrawGameScreen at `0x469B2C`) and from `0x4211A0` (`0x4211B3`), which has no caller; it
   emits a flying piece's smoke `0x472810` at `0x421583` and its fire `0x472AB0` at `0x4215AA`
@@ -530,7 +544,9 @@ function `0x496790` skips the scheduler `0x495230` and the tick `0x495490` (`0x4
 `0x49693E`). The scheduler tests it as well (`0x4953D9`), the pause icon `igpaused` shows it (`0x46A107`;
 `0x46A2A8` beside it tests bit 1, not the pause), and the pause key flips it and puts the new bit into a message `0x19`
 (`0x4960AA..0x4960E0`) [INFERRED: `0x451DF0` sends it to the peers]; the `0x19` receiver stores a
-peer's bit (`0x455967..0x45597A`). Bits 1 and 2 are the scheduler's: bit 1 its lag flag
+peer's bit (`0x455967..0x45597A`, when the message's byte 1 is 0; the packet dispatcher's switch at
+`0x45486D` indexes the table `0x455F84` by the type minus 2, and entry 23, at `0x455FE0`, is
+`0x45593D`) [DISASSEMBLED 2026-10-26]. Bits 1 and 2 are the scheduler's: bit 1 its lag flag
 (`0x49535C`, `0x495367`), tested only by the corner icon `0x46A2A8`; bit 2 the live speed below the
 chosen one, stored on every call (`0x49527A..0x495299`); **bit 2 has no reader**
 [DISASSEMBLED 2026-10-12: every instruction carrying the displacement `0x38A51` but the
@@ -542,10 +558,20 @@ state, bit 2 following the wall clock through the trim and bit 1 the peers' lag,
 recorder leaves them (`replay-globals.tsv`, `pacingbits`, the owner's decision 2026-10-12): MEASURED 2026-10-12 under a load average of 63–87, a live
 recording held bit 2 set at GameTime 721 where its playings held it clear. Every other store of the word: set bit 0 at `0x44BE61`, `0x45D0A1` (in `0x45CFC0`,
 outside mode 3), `0x460E00` (the in-game menu's open, outside mode 3), `0x49306D` and `0x493330`
-(the LOADGAME screens); clear it at `0x44B6F0` (in the battle room's code [INFERRED from its
-neighbours]), `0x460A33` (the in-game menu's close, outside mode 3), `0x49720A` (the loader's
-network branch) and `0x49990E` (key `0xE3` in state 7's handler `0x499880`); `0x495B6D` clears it
-for a step and `0x495DC2` puts back the bit `0x495B85` saved.
+(the LOADGAME screens, `LOADGAME.GUI` `0x50936C`); clear it at `0x44B6F0`, `0x460A33` (the in-game
+menu's close, outside mode 3), `0x49720A` (the loader's network branch) and `0x49990E` (key `0xE3`
+in state 7's handler `0x499880`). **`0x44B6F0` and `0x44BE61` are the unit-restrictions screen's
+save lists**, not the battle room's: `0x44B6F0` is in `0x44B690`, the handler that `0x44B990`
+installs at `0x44B9B9` on the screen it opens from `SAVELIST.GUI` (`0x505F64`), and `0x44BE61` is
+in `0x44BC10`; `RESTRICT2.GUI`'s handler `0x44C420` (installed at `0x44C834`, the screen named at
+`0x50608C`) calls `0x44BC10` at `0x44C5AC` for its control `Load` (`0x506000`) and `0x44B990` at
+`0x44C5D9` for `Save` (`0x50218C`). **`0x495A30` clears it and puts it back within one call**: it
+saves bit 0 at `0x495B85` and clears it at `0x495B7E`, and stores the saved bit back at `0x495DD2`.
+Its one caller is `0x417738`, in `0x417600` with the string `BIGSHOT` (`0x5024F4`), and `0x417600`
+is the chat command `MakePoster`, the row `{0x502254 "MakePoster", 0x417600, 2}` at `0x501FB4` of
+the command table `0x501F48` [DISASSEMBLED 2026-10-26: every instruction storing to the
+displacement `0x38A51`, the stores read at their addresses]. Impure's in-game wiki writes bit 0 in a
+single-player level (*The in-game wiki's engine questions*, below).
 
 **The defect.** Leaving a level through the in-game menu (EXIT, MAINMENU, yes) opens the menu,
 which sets the bit, and never closes it, so the bit outlives the level. The loader `0x497180`

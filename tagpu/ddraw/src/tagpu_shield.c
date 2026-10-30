@@ -17,8 +17,11 @@
 #include "tagpu_shield.h"
 #include "tagpu_menu.h"
 #include "tagpu_hudinput.h"
+#include "tagpu_wiki.h"
 #include "mouse.h"
 #include "tagpu_zoom.h"
+#include "tagpu_place.h"
+#include "tagpu_sweep.h"
 #include "tagpu_gui.h"
 #include "tagpu_input.h"
 #include "tagpu_log.h"
@@ -173,6 +176,7 @@ static LRESULT to_game(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
         tagpu_gui_wheel(msg, wparam, lparam);
         if (tagpu_zoom_drop_mouse(msg, lparam))
             return 0;
+        tagpu_wiki_engine_got(msg, wparam);
         return CallWindowProcA(g_ddraw.wndproc, hwnd, msg, wparam,
                                tagpu_zoom_mouse_lparam(msg, lparam));
     }
@@ -185,7 +189,21 @@ static void deliver_key(HWND hwnd, int vk, BOOL up)
     UINT scan = MapVirtualKeyA((UINT)vk, 0 /* MAPVK_VK_TO_VSC */);
     LPARAM lparam = 1 | ((LPARAM)scan << 16) | (up ? ((LPARAM)3 << 30) : 0);
 
+    /* the in-game wiki first: while it is open it takes every key, and a key-down it took has its
+       key-up taken too, which still lets the virtual key go so the engine is never left holding
+       it (tagpu_wiki.c, THE PAIRED PRESS) */
+    if (tagpu_wiki_key((unsigned)vk, up))
+    {
+        if (up) set_key(vk, FALSE);
+        return;
+    }
+
     set_key(vk, !up);
+
+    /* Alt+Z / Alt+X with a building armed step the placement's spacing and reach the game no
+       further, as on the real path below; Alt is virtual here, so the module asks for it */
+    if (!up && tagpu_place_key((unsigned)vk, 0))
+        return;
 
     to_game(hwnd, up ? WM_KEYUP : WM_KEYDOWN, (WPARAM)vk, lparam);
 
@@ -200,10 +218,13 @@ static void deliver_key(HWND hwnd, int vk, BOOL up)
         for (int i = 0; i < 256; i++)
             keys[i] = (BYTE)((s_down[i] ? 0x80 : 0) | (s_toggle[i] ? 1 : 0));
 
-        if (ToAscii((UINT)vk, scan, keys, &ch, 0) == 1)
+        /* the reclaim sweep's keys reach the game no further, as on the real path below */
+        if (ToAscii((UINT)vk, scan, keys, &ch, 0) == 1 && !tagpu_sweep_char(ch & 0xFF))
             to_game(hwnd, WM_CHAR, (WPARAM)(ch & 0xFF), lparam);
     }
 }
+
+static int deliver_engine(HWND hwnd, int code, int gx, int gy, int dev_x, int dev_y, const WPARAM* real_wp);
 
 /* What became of an injected mouse event: TAGPU_DELIVER_*, for its acknowledgement. */
 static int deliver_mouse(HWND hwnd, int code, int gx, int gy)
@@ -261,6 +282,37 @@ static int deliver_mouse(HWND hwnd, int code, int gx, int gy)
         gy = min(max(gy, 0), (int)g_ddraw.height - 1);
     }
 
+    /* THE IN-GAME WIKI, BEFORE THE ENGINE'S POINT IS STORED: while it is open the engine's point
+       stays where the opening press left it, so a move it takes stores nothing, and a press or a
+       wheel notch it takes is dropped whole; a release it takes still lets the virtual button go
+       (tagpu_wiki.c). Closed, it takes a press on its button and the release of a press it took.
+       The release of a button the engine holds, made while it is open, goes on at the frozen
+       point, which g_ddraw.cursor already holds, with no client point. */
+    switch (tagpu_wiki_mouse(code, dev_x, dev_y, gx, gy))
+    {
+    case 0:
+        break;
+    case TAGPU_WIKI_FROZEN:
+    {
+        LONG fx, fy;
+        tagpu_wiki_frozen(&fx, &fy);
+        return deliver_engine(hwnd, code, (int)fx, (int)fy, -1, -1, NULL);
+    }
+    default:
+        if (code == TAGPU_M_LUP) set_key(VK_LBUTTON, FALSE);
+        else if (code == TAGPU_M_RUP) set_key(VK_RBUTTON, FALSE);
+        else if (code == TAGPU_M_MUP) set_key(VK_MBUTTON, FALSE);
+        return TAGPU_DELIVER_MENU;
+    }
+    return deliver_engine(hwnd, code, gx, gy, dev_x, dev_y, NULL);
+}
+
+/* The engine's half of a mouse event at engine point (gx, gy), client point (dev_x, dev_y) or -1:
+   the point stored, the sprocket and the replay HUD offered it, the display-only ring's drop, and
+   the message. `real_wp` is a hardware message's own wParam, or NULL to build it from the virtual
+   state. TAGPU_DELIVER_*. */
+static int deliver_engine(HWND hwnd, int code, int gx, int gy, int dev_x, int dev_y, const WPARAM* real_wp)
+{
     InterlockedExchange((LONG*)&g_ddraw.cursor.x, gx);
     InterlockedExchange((LONG*)&g_ddraw.cursor.y, gy);
 
@@ -285,18 +337,20 @@ static int deliver_mouse(HWND hwnd, int code, int gx, int gy)
     case TAGPU_M_WHEELDN: msg = WM_MOUSEWHEEL; wheel = -WHEEL_DELTA; break;
     }
 
-    /* The render-options sprocket owns its own 28x28 of the top bar, and the
-       replay HUD its controls; both are hit-tested HERE as well as on the
-       real-message path below: with the shield armed this is the ONLY path a
-       tacli instance's clicks take, and with it disarmed it is the only path a
-       player's do not. A press one consumes is dropped whole -- no message and
+    /* The render-options sprocket owns its own 28x28 of the top bar, the
+       replay HUD its controls, and the reclaim sweep a right press during its
+       drag and a left press on its popup; all three are hit-tested HERE as well as on the real-message path
+       below: with the shield armed this is the ONLY path a tacli instance's
+       clicks take, and with it disarmed it is the only path a player's do not.
+       A press one consumes is dropped whole -- no message and
        no virtual key state, which the engine polls -- and its release is
        dropped too, but always clears the key so the engine is never left
        holding a button. The HUD is hit in client pixels, so only a device
        injection can reach it; a click in the engine's own space passes under
        it to the engine. */
     if ((vk == VK_LBUTTON && tagpu_menu_click(gx, gy, down)) ||
-        ((vk == VK_LBUTTON || vk == VK_RBUTTON) && tagpu_hudinput_button(dev_x, dev_y, gx, gy, down, vk == VK_RBUTTON)))
+        ((vk == VK_LBUTTON || vk == VK_RBUTTON) && tagpu_hudinput_button(dev_x, dev_y, gx, gy, down, vk == VK_RBUTTON)) ||
+        ((vk == VK_LBUTTON || vk == VK_RBUTTON) && tagpu_sweep_mouse(gx, gy, down, vk == VK_RBUTTON)))
     {
         if (!down) set_key(vk, FALSE);
         return TAGPU_DELIVER_MENU;
@@ -322,6 +376,7 @@ static int deliver_mouse(HWND hwnd, int code, int gx, int gy)
     if (s_down[VK_MBUTTON]) wparam |= MK_MBUTTON;
     if (s_down[VK_SHIFT])   wparam |= MK_SHIFT;
     if (s_down[VK_CONTROL]) wparam |= MK_CONTROL;
+    if (real_wp) wparam = *real_wp;
 
     if (wheel) wparam = MAKEWPARAM((WORD)wparam, (WORD)(short)wheel);
 
@@ -345,7 +400,14 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
         return TRUE;
 
     case WM_TAGPU_CHAR:
-        to_game(hwnd, WM_CHAR, wparam, 1);
+        if (tagpu_wiki_char())
+        {
+            tagpu_input_delivered((unsigned)lparam, TAGPU_DELIVER_MENU);
+            *result = 0;
+            return TRUE;
+        }
+        if (!tagpu_sweep_char((unsigned)(wparam & 0xFF)))
+            to_game(hwnd, WM_CHAR, wparam, 1);
         tagpu_input_delivered((unsigned)lparam, TAGPU_DELIVER_ENGINE);
         *result = 0;
         return TRUE;
@@ -354,6 +416,32 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
         tagpu_input_delivered(TAGPU_SEQ(wparam),
                               deliver_mouse(hwnd, (int)(wparam & TAGPU_M_CODE),
                                             (short)LOWORD(lparam), (short)HIWORD(lparam)));
+        *result = 0;
+        return TRUE;
+    }
+
+    /* The in-game wiki, on the REAL path, before the sprocket and the replay HUD and before the
+       shield's own gate: while its window is open it takes every input message, so neither the
+       engine nor the controls under the window see one (tagpu_wiki.c, THE CAPTURE). The release
+       of a button the engine holds goes to the engine at the frozen point, by the injected path's
+       own delivery -- cnc-ddraw's would store the release's live point in g_ddraw.cursor -- unless
+       the shield is armed, which swallows every hardware message anyway. */
+    switch (tagpu_wiki_message(msg, wparam, lparam))
+    {
+    case 0:
+        break;
+    case TAGPU_WIKI_FROZEN:
+        if (!tagpu_shield_on())
+        {
+            LONG fx, fy;
+            tagpu_wiki_frozen(&fx, &fy);
+            deliver_engine(hwnd, msg == WM_LBUTTONUP ? TAGPU_M_LUP : msg == WM_RBUTTONUP ? TAGPU_M_RUP
+                                                                                       : TAGPU_M_MUP,
+                           (int)fx, (int)fy, -1, -1, &wparam);
+        }
+        *result = 0;
+        return TRUE;
+    default:
         *result = 0;
         return TRUE;
     }
@@ -375,8 +463,12 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
         int cy = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
         int right = msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_RBUTTONDBLCLK;
         int down = msg != WM_LBUTTONUP && msg != WM_RBUTTONUP;
+        /* the reclaim sweep follows the engine's view of the mouse: with the shield armed the
+           player's buttons never reach the engine, so they neither end its drag nor pick a row
+           of its popup */
         int took = (!right && msg != WM_LBUTTONDBLCLK && tagpu_menu_click(cx, cy, down)) ||
-                   tagpu_hudinput_button(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), cx, cy, down, right);
+                   tagpu_hudinput_button(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), cx, cy, down, right) ||
+                   (!tagpu_shield_on() && tagpu_sweep_mouse(cx, cy, down, right));
 
         if (took)
         {
@@ -388,10 +480,30 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
     /* The window lost the mouse: a release may never come, so the HUD's drag ends here. The
        messages go on as before. */
     if (msg == WM_KILLFOCUS || msg == WM_CAPTURECHANGED || (msg == WM_ACTIVATEAPP && !wparam))
+    {
         tagpu_hudinput_cancel();
+        tagpu_wiki_cancel();
+        tagpu_sweep_cancel();
+    }
 
     if (!tagpu_shield_on())
+    {
+        /* Alt+Z / Alt+X with a building armed: the placement's spacing, the player's keys only
+           while the shield lets them through. A letter under Alt is WM_SYSKEYDOWN. */
+        if ((msg == WM_SYSKEYDOWN || msg == WM_KEYDOWN) &&
+            tagpu_place_key((unsigned)wparam, msg == WM_SYSKEYDOWN))
+        {
+            *result = 0;
+            return TRUE;
+        }
+        /* the reclaim sweep's keys: Esc during a drag, the RECLAIM gadget's quickkey while armed */
+        if (msg == WM_CHAR && tagpu_sweep_char((unsigned)(wparam & 0xFF)))
+        {
+            *result = 0;
+            return TRUE;
+        }
         return FALSE;
+    }
 
     switch (msg)
     {

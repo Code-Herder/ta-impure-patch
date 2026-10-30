@@ -1,0 +1,52 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The demo recorder's `cob-getters` test group (tools/replay/fixtures.json): two COBEXT, the generated unit tools/cob_ext_fixture.py installs (ARMSOLAR's model and FBI, its script research/notes/evidence/cobtrace/extension.bos), one of the human seat and one of the AI seat, so each calls the port-F getters 32 and 69..75 from record 9 and the owner, alliance and local answers come from two seats. The group's check step reads every answer off the cobtrace R lines and judges it against the engine's own state. shootall is off and a solar has no weapon, so nothing fights and the AI's unit keeps the level running.",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "mine",
+   "type": "COBEXT",
+   "owner": 0,
+   "pos": [
+    2600,
+    1200
+   ],
+   "facing": 0
+  },
+  {
+   "id": "theirs",
+   "type": "COBEXT",
+   "owner": 1,
+   "pos": [
+    4200,
+    2400
+   ],
+   "facing": 0
+  }
+ ],
+ "camera": {
+  "center_on": "mine"
+ }
+}

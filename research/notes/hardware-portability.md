@@ -95,7 +95,7 @@ line rule for the default mode.
      `w = 1` and the thickening is the identity, so every step reduces to the game-grid walk and
      the clip below, with no second path (`tagpu_line.h`). Measured 0 px against the game-grid
      model (the G21b block).
-   - It covers every line kind: the order markers (waypoint crosshairs), queued build sites
+   - It covers every line kind: the order markers' target and range circles, queued build sites
      (`0x438C00`), selection rectangles, effect lines (lasers, lightning) and the **nanoframe
      wire**, which is ported so that `wideLines` can go. The wire stays depth-tested; its
      fragment depth is the segment's by construction, and the +0.15 bias that puts it in front

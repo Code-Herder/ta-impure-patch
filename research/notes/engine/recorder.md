@@ -120,7 +120,11 @@ The 3D creation branch `0x423D96..0x423EDB` reads that root at `0x423EBB`, passe
 It uses the wreck pool `main+0x1420B`, stride `0x30`, and free bookkeeping at `+0x1421B`;
 records receive definition `+0x2C`, tick `+0x26`, position `+8/+0x0C/+0x10` and rotation
 `+0x20/+0x24`. The tile receives definition `+8`, record index `+0x0A`, and flag bit 0
-at `0x423ED9`; the GAF branch begins at `0x423EDD`. **Negative result:** traversing the
+at `0x423ED9`; the GAF branch begins at `0x423EDD`. Only the 3D branch gives the spawn a
+return value (the local zeroed at `0x423C60`, set at `0x423E15`, returned at `0x424038`): a GAF
+feature such as a tree is placed by the anchor cell's `+8` word alone (`0x423EE5`, with `+0x0A`
+zeroed at `0x423EE9`) and the spawn returns 0 for it, as for the refusals (def `0xFFFF` at
+`0x423C6A`; `0xFFFC` writes the word and returns 0, `0x423C7D..0x423C85`). **Negative result:** traversing the
 GAF fields of a 3D definition crashed the initial inventory. A pointer sanity check would
 not repair that type error; branching on the engine's discriminator did.
 
@@ -1799,8 +1803,9 @@ held at 301 after a run at the turbo's k = 1): `main+0x38A3F` read 0 and an arro
 moved nothing; at the game's own pacing it read 1 and the arrow scrolled. A level held at a
 launch's first step keeps the load's value and scrolls. The page that a selected unit's build
 menu opens on comes from the same frame callback: `0x4969A4` tests bit 4 of `main+0x37EBE` (set
-by the selection, `0x41C110`), `0x4969A8` clears it and `0x4969B4` calls `0x41B2E0` [INFERRED: the
-page's opener], so the page is up by the frame after the selecting click.
+by the selection, `0x41C110`), `0x4969A8` clears it and `0x4969B4` calls the page router `0x41B2E0`
+(*The left sidebar: its pages, its buttons and who takes a press*), so the page is up by the frame
+after the selecting click.
 
 
 **Corrections to this map's earlier lines**, each re-read here: `0x416390` (`call 0x424840; ret 4`)
@@ -2299,6 +2304,11 @@ its OnCommand `0x460340` (`0x4604CB`), which stores 1 to the restart flag `main+
 is `0x4996FB`); otherwise `0x460898..0x46089F` passes the
 message on through `0x4AB0A0`. The replay's RESTART gate answers 0 for this one test on a puppet
 level, so the menu stays open (`tagpu_replay.c`, THE RESTART GATE).
+
+**The main menu's backdrop call, `0x426447`** [DISASSEMBLED 2026-10-27]. Inside the builder
+`0x4263B0`, `call 0x4288D0` at `0x426447` loads the backdrop; the next instruction, `0x42644C`
+(`push 0`, `push 0x5031D4`, seven bytes), is the Replays screen's site S2 (`tagpu_replays.c`), after
+the builder has written the screen's OnCommand slot `+0x08` at `0x426432`.
 
 **The main menu's return `0x4270A9` and `0x512C80`** [DISASSEMBLED 2026-10-06]. After the main
 menu's builder `0x4263B0` returns at `0x4270A9`, the shell reads the dword `0x512C80`

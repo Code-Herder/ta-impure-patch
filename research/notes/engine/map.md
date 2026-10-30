@@ -374,7 +374,10 @@ plot over.
 
 **What keeps stock off it.** `main+0x1422B`/`+0x1422F` is not the map's size. It is the **scroll
 extent**, the map's pixel width less 32 and its height less 128, written at the level load
-(`0x4833C4`, `0x4833E0`). The engine's camera clamp `0x41C3C0` holds the eye in
+(`0x4833B8..0x4833E0` [DISASSEMBLED]: `mov ecx,[main+0x14223]; sub ecx,0x20`, stored at `0x4833C4`;
+`mov edx,[main+0x14227]; sub edx,0x80`, stored at `0x4833E0`) — and the end of the map as stock shows it: no stock view reaches a pixel
+past it, which is why our camera's centre range and the mirrored map edge end there too
+(`gpu-status.md` §2.3c, §2.90). The engine's camera clamp `0x41C3C0` holds the eye in
 `[0, extent − view]`, the viewport arm clamps the pointer to the rect, and the minimap's click
 rect ends at `mmY + mmH − 1`. So every point `0x498DA0` produces has `y ≤ mapH − 129`, and
 GetTPosition's answer is below `(mapH − 144) + 144 = mapH`, on the map. **The 128-px bottom margin
@@ -516,7 +519,7 @@ the BAR camera replaced.
   in-play draw. The pass then sees the eye at 0, so its window leaves the map only where the view
   is larger than the map, off the far edge, and no strip arises. Without `tagpu_zoom.on` the
   engine's clamp alternates as in stock.
-- **Our camera's centre range** `[−W/2, map − W/2]` takes the eye below 0 at every left and top
+- **Our camera's centre range** `[−W/2, extent − W/2]` takes the eye below 0 at every left and top
   edge of any map, at any zoom, but it is in force only on draws whose terrain latch is up, and
   terrown takes the pass away on exactly those draws ([gpu-status](../gpu-status.html) §2.3c). Every
   other draw starts from an eye the apply clamped into `[0, extent − W]`, so the centre range
@@ -660,7 +663,7 @@ record exactly once.
 |---|---|---|
 | `0x423550` `FeatureDie(x, y, reclaimed)` | stdcall, `ret 0xC`. Resolves a multi-cell feature's anchor and writes it back over its own `x`/`y` (`0x423580`). A 3DO feature, or a GAF one with no sequence for the event (FeatureDef `+0xC4/+0xC8` reclaim, `+0xBC/+0xC0` death), goes to `0x4236EF`: `push ebx/ebp/esi; call 0x423710`. Otherwise a cell already marked (flags bit 0) returns, and the rest takes a record, stores the def (`+0x2C`), `reclaimed` as bit 1 of `+0x2F`, x/y (`+0x28`/`+0x2A`) and the sequences, and marks the cell (`+0x0A` = the record, flags bit 0) | **pool empty: `0x42361D` sets `eax = count`, `0x423651` `jge 0x4236F7` returns having done nothing** — the fork's engine fix retargets that jge to a stub that reloads `x`/`y` from the arguments and jumps to `0x4236EF` |
 | `0x423710` the swap `(x, y, reclaimed)` | stdcall, `ret 0xC`. A non-anchor cell (def `≥ 0xFFFB`) returns at once. The successor is FeatureDef `+0xF8` (`featurereclamate`) when `reclaimed`, else `+0xF4` (`featuredead`); a marked cell's record bit 1 overrides to `+0xF8`. Then `FEATURES_Destroy 0x4246B0` with force 0 and `0x423C50` for the successor. Force 0 refuses an indestructible def (FeatureDef `+0xFF` bit 1, `0x42471E`), and `0x423C50`'s own clear then refuses too (`0x423D71`), so **an indestructible feature is left as it was**. Two callers: `0x4236F2` (FeatureDie's no-sequence path) and `0x424495` (a sequence that has ended, in `0x424050`) | frees the record through `0x4246B0` |
-| `0x423C50` `SpawnFeatureOnMap(plot, def, pos, turn, v)` | clears the footprint with `0x4246B0` on every occupied cell, then a 3DO def takes a record | **pool empty: `0x423DB9`/`0x423DDF` return 0 with nothing created** — a unit dies without a corpse, and the footprint was already cleared |
+| `0x423C50` `SpawnFeatureOnMap(plot, def, pos, turn, v)` | clears the footprint with `0x4246B0` on every occupied cell, then a 3DO def takes a record. **Its place and turn** [DISASSEMBLED 2026-10-29]: `pos` given (`0x423E26`, `je` on null), the record's `+0x08/+0x0C/+0x10` are a copy of it; null, as every map load passes it (`0x483A7E`, `0x483ADE`, `0x483B38`), `+0x08` and `+0x10` are the footprint's centre in 16.16, `(2·col + fx) << 19` and `(2·row + fz) << 19` from the def's `+0x94/+0x96` (`0x423E3D..0x423E68`), and `+0x0C` the ground's height there, `0x485070(pos) << 16` (`0x423E70..0x423E85`). `turn` given (`0x423E95`), `+0x20..+0x25` are a copy; null, they are zero (`0x423EAC..0x423EB7`). Then the Object3do from the def's template `+0x98` (`0x423EBB..0x423ECB`). The in-game wiki's stage places a wreck by this rule ([the reclaim entry](../ingame-wiki-reclaim-plan.html)) | **pool empty: `0x423DB9`/`0x423DDF` return 0 with nothing created** — a unit dies without a corpse, and the footprint was already cleared |
 | `0x4233A0` `(x, y, flag)`, the burn: starts the feature's burn sequence, FeatureDef `+0xB4`, and draws its spread countdown `+0x2E` (`0x4234C2`; [the demo recorder's features](#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)) | returns if the def has no `+0xB4` sequence or the cell is marked | pool empty: `0x42340D`/`0x423439` return — the feature does not burn |
 | `0x4232A0` | a bare allocator: returns the free head, or the count for "none" | no `E8` caller |
 | `0x424050` | the feature tick, one caller `0x495585` in the game tick; walks the **active** list only, moves a settled record to `+0x14217` (`0x4242B8`), and swaps a feature whose sequence has ended (`0x424495`); the whole of it: [the demo recorder's features](#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30) | — |
@@ -2205,6 +2208,18 @@ its `0xFFFE` compare (`0x483439`, `0x483455`, `0x4834CC`, `0x483572`, `0x4835E8`
 | 2 | down each column from the top, while the projected y, row·16 − height/2, is negative | `0x4834D3` |
 | 3 | up each column from the bottom, while row·16 − height/2 is past the extent's height `main+0x1422F` — the cell ONE ROW ABOVE the one tested (`sub eax, W·13`) | `0x483579` |
 | 4 | only when `[main+0x391E9]+0xD44` is set (a lava world [INFERRED]): every cell whose 2×2 minimum height `+0x06` is at or below the sea level `main+0x1427F` | `0x4835EF` |
+
+**The extent written here is where our edge passes end the map.** Pass 1 masks exactly the 32 px
+the extent's width leaves off (`edi = [main+0x14233] − 2`, `0x4833EC..0x4833F8`, then the cell
+and the one after it, `+0x08` and `+0x15` of a 13-byte cell), so the strip between the extent and
+the tile map's right strip is ground nobody can build on as well as ground no stock view shows;
+its bottom strip is masked only while pass 3's projected test holds, so on raised ground at the
+bottom edge some of it stays buildable. `tagpu_fx.h`
+`tagpu_edge_area` turns the extent (the packet's `map_pxw/h`, copied from these two words) into
+32-px tile cells, bounded to the tile map's own count, and the terrain pass, the feature pass and
+the lab fold the mirrored map edge there; the camera's centre range ends at the same words
+(`gpu-status.md` §2.3c, §2.90). A survey of the 275 stock TNTs found the editor's blank tile in
+that strip on 9 maps and inside the playable area on none.
 
 A spawn onto `0xFFFD` is refused by `FEATURES_Destroy` (a def at `0xFFFB` and up). A new game's TNT
 features are down when the mask runs, so their ANCHORS survive it, but a footprint cell of theirs

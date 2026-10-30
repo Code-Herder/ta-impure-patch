@@ -103,6 +103,30 @@ def make_gaf(name: str, width: int, height: int, rows) -> bytes:
     return blob
 
 
+def make_gaf_stack(root) -> bytes:
+    """A one-entry GAF whose frame is `root`: a node is a dict of w, h, hx, hy, key, and either
+    `pixels` (raw, row-major) or `subs` (nodes, written as that frame's sub-frame table); `alpha`
+    sets the byte at +0x0B."""
+    blob = bytearray(struct.pack("<III", 0x00010100, 1, 0) + struct.pack("<I", 16))
+    blob += struct.pack("<HIH32s", 1, 1, 0, b"STACK")
+    frame_entry_at = len(blob)
+    blob += bytes(8)
+
+    def put(node):
+        at = len(blob)
+        blob.extend(bytes(24))
+        subs = node.get("subs") or []
+        offsets = [put(sub) for sub in subs]
+        ptr = len(blob)
+        blob.extend(struct.pack(f"<{len(offsets)}I", *offsets) if subs else bytes(node["pixels"]))
+        struct.pack_into("<HHhhBBBBIII", blob, at, node["w"], node["h"], node["hx"], node["hy"],
+                         node["key"], 0, len(subs), node.get("alpha", 0), 0, ptr, 0)
+        return at
+
+    struct.pack_into("<II", blob, frame_entry_at, put(root), 0)
+    return bytes(blob)
+
+
 def rle_row(*runs) -> bytes:
     body = b"".join(runs)
     return struct.pack("<H", len(body)) + body
@@ -302,6 +326,59 @@ class TestGaf(unittest.TestCase):
         blob = make_gaf("T", 4, 1, [rle_row(transparent_run(4))])
         frame = ta3do.gaf_frame(blob, ta3do.gaf_entries(blob)["T"])
         self.assertEqual(set(frame.pixels), {9})
+
+
+class TestGafStack(unittest.TestCase):
+    """A frame with sub-frames as CopyGafToContext 0x4B7F90 draws it: every leaf at the frame's
+    hotspot less its own, in order, its own transparent pixels skipped; one level deep, as the
+    loader 0x4B8C60 rebases it."""
+
+    # 6 x 4 box, hotspot (3, 2), key 0. A leaf lands at (3 - its hx + c, 2 - its hy + r).
+    STACK = dict(w=6, h=4, hx=3, hy=2, key=0, subs=[
+        # at (0, 0); its 7 is a hole
+        dict(w=3, h=2, hx=3, hy=2, key=7, pixels=[1, 7, 1,
+                                                    1, 1, 1]),
+        # at (3, 2): it draws index 0, the frame's key, and its own key 5 stays a hole
+        dict(w=2, h=2, hx=0, hy=0, key=5, pixels=[0, 5,
+                                                   2, 3]),
+        # at (5, 0): one pixel in the box, one past its right edge
+        dict(w=2, h=1, hx=-2, hy=2, key=9, pixels=[4, 4]),
+        # at (1, 0), after the first leaf: fills its hole, and its own hole (8) at (2, 0) leaves
+        # the first leaf's pixel; +0x0B (the alpha-blit flag) does not make it a stack
+        dict(w=2, h=1, hx=2, hy=2, key=8, alpha=1, pixels=[6, 8]),
+    ])
+
+    def test_leaves_compose_at_their_hotspots(self):
+        blob = make_gaf_stack(self.STACK)
+        offset = ta3do.gaf_entries(blob)["STACK"]
+        frame, outside = ta3do.gaf_compose(blob, offset)
+        k = 5   # 0 is drawn, so the key is the lowest index no layer draws
+        self.assertEqual((frame.width, frame.height, frame.transparent), (6, 4, k))
+        self.assertEqual(list(frame.pixels), [1, 6, 1, k, k, 4,
+                                              1, 1, 1, k, k, k,
+                                              k, k, k, 0, k, k,
+                                              k, k, k, 2, 3, k])
+        self.assertEqual(outside, 1)
+        same = ta3do.gaf_frame(blob, offset)
+        self.assertEqual((list(same.pixels), same.transparent), (list(frame.pixels), k))
+
+    def test_a_nested_stack_is_refused(self):
+        # the loader 0x4B8C60 rebases one level of sub-frames, so the engine cannot draw this one
+        blob = make_gaf_stack(dict(w=2, h=2, hx=0, hy=0, key=0, subs=[
+            dict(w=1, h=1, hx=0, hy=0, key=0, pixels=[1]),
+            dict(w=2, h=2, hx=0, hy=0, key=0, subs=[
+                dict(w=1, h=1, hx=0, hy=0, key=0, pixels=[2])])]))
+        with self.assertRaises(ta3do.GafError):
+            ta3do.gaf_frame(blob, ta3do.gaf_entries(blob)["STACK"])
+
+    def test_a_cycle_is_refused(self):
+        blob = bytearray(make_gaf_stack(dict(w=1, h=1, hx=0, hy=0, key=0, subs=[
+            dict(w=1, h=1, hx=0, hy=0, key=0, pixels=[1])])))
+        offset = ta3do.gaf_entries(bytes(blob))["STACK"]
+        table = struct.unpack_from("<I", blob, offset + 16)[0]
+        struct.pack_into("<I", blob, table, offset)
+        with self.assertRaises(ta3do.GafError):
+            ta3do.gaf_frame(bytes(blob), offset)
 
 
 # --------------------------------------------------------------------------- 3DO

@@ -666,7 +666,8 @@ world* and *under* nothing.
 
 **The captured post-fog layer no longer exists.** The clean cut (`a2b1333`, 2026-09-20) deleted
 `TAGPU_MK_TEX_LAYER` and the `markown` capture behind it, so the list below is one kind shorter
-today. The pass draws the selection rects (depth-tested), the order triangles, lines and labels,
+today. The pass draws the selection rects (depth-tested), the order art (route dots and waypoint
+sprites, the pass's one blended draw), lines and labels,
 the health bars, the group digits, and last the cursors — the build square and the band box —
 which are now the one draw with the fog off. `mark.on=nocursor` hands the cursors back to the
 engine and fills nothing of ours. The tables record the pass as measured on 2026-09-17.

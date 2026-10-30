@@ -6,10 +6,6 @@
    left untouched. The exe on disk is never modified. */
 void tagpu_apply_patches(void);
 
-/* All CANBUILD writers/copies maintain bl_room(count), established at attach.
-   Input features that walk a list require this allocation bound. */
-int tagpu_build_lists_live(void);
-
 /* The wire-robustness landing's heartbeat section (sim-fixes.md B3): records accepted per
    receiver, drops, the morph/recreate/ghost oracles (evidence §10) and the sender-block observe.
    DLL counters only; returns _snprintf's count. */

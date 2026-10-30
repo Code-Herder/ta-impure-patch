@@ -108,6 +108,9 @@ PAGES = [
     ("modules/tadr-exclusion",            "Keeping TADR out", "Modules"),
     ("modules/data-keys",                 "Weapon keys & veterancy", "Modules"),
     ("modules/cob-compat",                "Guarded COB compatibility", "Modules"),
+    ("modules/wiki",                      "In-game wiki", "Modules"),
+    ("modules/placement",                 "Several buildings in one gesture", "Modules"),
+    ("modules/reclaim-sweep",             "Reclaim sweep", "Modules"),
     ("modules/resource-snapping",         "Resource snapping & Quick Build", "Modules"),
     ("modules/status-snapshot",           "Status snapshot (frozen)", "Modules"),
     ("modules/log-g16-pose-race",         "Log: pose race (frozen)", "Modules"),
@@ -132,6 +135,7 @@ PAGES = [
     ("hud-art",                    "HUD art: painted, cut, sliced", "Tooling"),
     ("hud-layout",                 "HUD layout: one source",      "Tooling"),
     ("hud-in-game",                "HUD in game: the plan",       "Tooling"),
+    ("ingame-wiki",                "In-game wiki: the design",    "Tooling"),
     ("windowed-mode",              "Windowed mode",               "Tooling"),
 
     ("binary-patches",            "The core mechanism",        "Mechanism"),

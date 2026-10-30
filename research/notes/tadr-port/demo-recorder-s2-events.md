@@ -924,9 +924,10 @@ All in-game plays go through the 0x47Fxxx module; every caller of 0x4CF570, 0x4D
   - Hence §6 D1.
 - **How a reply plays: `0x47F680`**, the queue's consumer, called once per main-loop pass from
   0x499890 at 0x4999A6.
-  - It hands entry 0 to `0x47FD70(entry, playSound, showText)`. Sound is allowed only when the
-    previous reply has finished (`main+0x38A47` ≥ `[q+0x9D]` + `[q+0xA1]`); otherwise the text
-    shows without sound.
+  - It hands entry 0 to `0x47FD70(entry, playSound, showText)`. Sound is allowed only 30 ticks
+    after the last reply with sound (`main+0x38A47` ≥ `[q+0x9D]` + `[q+0xA1]`, `[q+0xA1]` = 30
+    from the queue's creation `0x47EE07`), whatever that reply's length; otherwise the text shows
+    without sound.
   - 0x47FD70 picks a variant with the **CRT `rand`**: the category is `def+0x20E`, the record
     `[main+0x37E13] + cat·0x160`, the count `rec + kind·12 + 0x40`.
   - It plays `sounds\….WAV` by file through **0x4D0640**.
@@ -1069,11 +1070,12 @@ Format 23 (2026-10-13) records BeginTransport at its start `0x4113EF` after all,
    0x499890 once per main-loop pass. It is not 0x47FCA0, which has no caller; its two calls of
    0x47FD70 (0x47FCD9, 0x47FCF8) are dead. This affects `data-keys-evidence.md:664` and the
    engine map ~5195.
-   - 0x47F680 also withholds a reply's sound while the previous one plays: the
-     `main+0x38A47` test against `[q+0x9D]` + `[q+0xA1]`.
+   - 0x47F680 also withholds a reply's sound for 30 ticks after the last one with sound: the
+     `main+0x38A47` test against `[q+0x9D]` + `[q+0xA1]`, the gap a constant 30, not the
+     previous WAV's length.
 3. **The next time.** 0x47FD70 writes the kind's next time (+30·interval, 0x47FEFD) whenever its
-   four gates pass, **even with fxvol 0**. The engine map's line reads as though the play must
-   happen.
+   four gates pass, **even with fxvol 0**, Sound Mode 0, NoDirectSound or UseWindowsSound
+   (the engine map, *The unit replies, the named sounds and the player's sound settings*).
 4. **The `0x13` branch.** The receiver's positional branch is unreachable from stock. Both
    senders (0x47F0C0 at 0x47F14C, and 0x47F300 before its sight test) write byte [1] = 1, so
    0x45561A always takes 0x47F0C0.

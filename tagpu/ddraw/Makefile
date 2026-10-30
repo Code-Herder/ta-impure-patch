@@ -87,13 +87,25 @@ endif
 
 SRCS     := $(wildcard src/*.c) $(wildcard src/*/*.c) res.rc
 OBJS     := $(addsuffix $(OBJEXT), $(basename $(SRCS)))
+
+# THE WIKI'S SCENE (src/tagpu_scene.h): the seven files that draw one world scene are compiled a
+# second time, with -DTAGPU_SCENE_WIKI, into the in-game wiki's stage -- src/<name>.wiki.o beside
+# the game's src/<name>.o, each in every build's suffix -- and both copies are linked. The two
+# share no static, which C's linkage guarantees; the link fails on a symbol tagpu_scene.h did not
+# rename, and scene-check below on a call from a wiki copy into a module only the game has.
+SCENE_SRCS := src/tagpu_vk_world.c src/tagpu_vk_terr.c src/tagpu_vk_feat.c src/tagpu_vk_unit.c \
+              src/tagpu_posedraw.c src/tagpu_posebake.c src/tagpu_render3do.c
+SCENE_OBJS := $(addsuffix .wiki$(OBJEXT), $(basename $(SCENE_SRCS)))
+OBJS     += $(SCENE_OBJS)
+
 DEPS     := $(filter %.d, $(OBJS:.o=.d))
 # Every build's object suffix: a rule that names one object names it in all four builds.
 # `clean` removes every build's objects, whichever LIMITS or COVER it is run with.
 ALLEXTS  := .o .stock.o .cover.o .stock.cover.o
-ALLOBJS  := $(foreach e, $(ALLEXTS), $(addsuffix $(e), $(basename $(SRCS))))
+ALLOBJS  := $(foreach e, $(ALLEXTS), $(addsuffix $(e), $(basename $(SRCS))) \
+                                     $(addsuffix .wiki$(e), $(basename $(SCENE_SRCS))))
 
-.PHONY: clean all thread-split spirv log-check replay-layout logtest arttest windowtest vklifetime codectest
+.PHONY: clean all thread-split spirv log-check replay-layout scene-check logtest arttest windowtest vklifetime codectest
 all: $(TARGET)
 
 %.o: %.rc
@@ -116,6 +128,9 @@ all: $(TARGET)
 
 %.stock.cover.o: %.rc
 	$(WINDRES) -J rc $< $@ || windres -J rc $< $@
+
+$(SCENE_OBJS): src/%.wiki$(OBJEXT): src/%.c
+	$(CC) $(CPPFLAGS) -DTAGPU_SCENE_WIKI $(CFLAGS) -c -o $@ $<
 
 # THE THREAD-SPLIT RULE (frame-packet-exchange §10): a source file that is
 # not on thread-split.allow may not name an engine address, include tagpu_engine.h,
@@ -144,6 +159,13 @@ spirv:
 # is the one writer (inc/tagpu_log.h). Same placement as the two rules above.
 log-check:
 	../../tools/log-check.sh .
+
+# THE SCENE RULE (src/tagpu_scene.h): no wiki copy of a world pass may call into a module only the
+# game's world has. tools/scene-check.sh reads every wiki object's undefined symbols and fails on
+# one that another object of ours defines and its allow list does not name. It reads objects, so
+# it depends on every object of the link and the link waits for it: it cannot race the compiler.
+scene-check: $(OBJS)
+	../../tools/scene-check.sh $(SCENE_OBJS) -- $(filter-out $(SCENE_OBJS), $(OBJS))
 
 # THE REPLAY LAYOUT, GLOBALS, LANES AND HOLD TABLE (tools/replay-layout-gen.py,
 # tools/replay-globals-gen.py, tools/replay-lanes-gen.py, tools/replay-hold-gen.py):
@@ -180,6 +202,46 @@ inc/tagpu_hudpak.bin: ../../tools/hudpak.py $(HUD_SRCS)
 
 $(addprefix res, $(ALLEXTS)): inc/tagpu_hudpak.bin
 
+# THE WIKI ARCHIVE (tools/hudpak.py --set wiki; src/tagpu_wikidata.h, src/tagpu_hudart.h): the
+# in-game wiki's tree, entries and fitted window kit under art/wiki/, packed by the same tool in the
+# same format into inc/tagpu_wikipak.bin, which res.rc embeds as the RCDATA resource WIKIPAK.
+# Generated and never committed, as the HUD's.
+WIKI_DIR  := ../../art/wiki
+WIKI_SRCS := $(shell find $(WIKI_DIR) -type d -o -type f 2>/dev/null)
+inc/tagpu_wikipak.bin: ../../tools/hudpak.py $(WIKI_SRCS)
+	python3 ../../tools/hudpak.py --set wiki $(WIKI_DIR) $@
+
+$(addprefix res, $(ALLEXTS)): inc/tagpu_wikipak.bin
+
+# THE WIKI'S SIMULATION (src/tagpu_wikisim.h) agrees with the mockup's sim.js bit for bit, which
+# needs every double rounded once per operation, as JavaScript rounds it. The x87 unit this build
+# otherwise computes on keeps 80-bit intermediates (MEASURED 2026-10-25: built for x87, 1196 of the
+# 9298 frames of the demos differ from sim.js in a last bit; built so, none), so the simulation,
+# and the loader that normalises the scenes' facings for it (src/tagpu_wikidata.h), compute on
+# SSE2 instead (MEASURED 2026-10-26, the loader's x / sqrt(x*x + z*z) over 3720 facings: built for
+# x87, 1804 differ from sim.js in a bit; built so, none). The reclaim sweep's split
+# (src/tagpu_sweepgeo.h), which the wiki's sim calls as the game's sweep does, sums its loads in
+# double, so it computes on SSE2 with them. The units' scripts' host
+# (src/tagpu_wikicob.h) answers GET's angles and distances in double, and the mockup asks the same C
+# built natively (tools/wiki/serve.py), so it computes on SSE2 too. The game's threads align the
+# stack to 4 bytes only, so they realign where SSE needs more. tools/wiki/simparity.mjs --wine
+# checks the build under Wine.
+$(addprefix src/tagpu_wikisim, $(ALLEXTS)) $(addprefix src/tagpu_wikidata, $(ALLEXTS)) \
+$(addprefix src/tagpu_wikicob, $(ALLEXTS)) $(addprefix src/tagpu_sweepgeo, $(ALLEXTS)): \
+    CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
+
+# THE WIKI'S STAGE (src/tagpu_wikistage.h) computes its pixels in double by the mockup's stage.js
+# arithmetic, and floors and snaps some of them, so it computes on SSE2 for the same reason: an
+# 80-bit intermediate can carry a value across a pixel edge stage.js does not cross.
+# tools/wiki/stagecheck.mjs checks a native build of it.
+$(addprefix src/tagpu_wikistage, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
+
+# THE WIKI'S SCENE (src/tagpu_wikiscene.h) stages a nanoframe by truncating a single-precision
+# product (tagpu_nanostage.h, `nano * 255.0f`) as the mockup's scene.js truncates Math.fround's,
+# so it computes on SSE2 too: an 80-bit product can land on the other side of a whole number.
+# tools/wiki/scenecheck.mjs checks a native build of it.
+$(addprefix src/tagpu_wikiscene, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
+
 # THE RESTORER'S MODELS (src/tagpu_restore_core.c load_weights): unditherer/models/<name>.w32.bin,
 # compressed by zstd into inc/tagpu_rmodel_<name>.zst, which res.rc embeds as RMODEL_<NAME>.
 # Generated and never committed, like the HUD archive. The frame records its content size, which
@@ -202,7 +264,7 @@ $(addprefix res, $(ALLEXTS)): $(RMODELS:%=inc/tagpu_rmodel_%.zst)
 # feature that names its replay fixtures, so a landing knows which fixtures to run. The check
 # reads the sources, not the objects, and runs beside the state rule for the same reasons; the
 # fixture list and the parser are prerequisites so that a change to either runs it again.
-$(TARGET): $(OBJS) thread-split.allow ../../tools/sim-state-check.sh ../../tools/replay/fixtures.json ../../tools/replay/tafeat.py | thread-split spirv log-check replay-layout
+$(TARGET): $(OBJS) thread-split.allow ../../tools/sim-state-check.sh ../../tools/replay/fixtures.json ../../tools/replay/tafeat.py | thread-split spirv log-check replay-layout scene-check
 	../../tools/sim-state-check.sh . $(OBJEXT)
 	python3 ../../tools/replay/tareplay.py features --check .
 	$(CC) $(LDFLAGS) -o $@ $(OBJS) exports.def $(LIBS)

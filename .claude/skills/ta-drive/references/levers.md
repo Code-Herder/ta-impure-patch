@@ -200,14 +200,15 @@ need `damagebars`, and the damaged tank smokes, so turn `fx`/`sfx` off for a pix
 Driving the camera at a zoom other than 1:
 
 - **The camera keeps the view centre on the map, at every zoom**: the eye ranges over
-  `[−W/2, map − W/2]` (W, H the true viewport, 896x704 at 1024x768; `map` the PLOT grid × 16),
-  so a map edge can reach the middle of the screen. That range holds only while `terr.on` draws
-  the ground; without it the eye stays in the engine's own `[0, extent − W]`, `extent` the scroll
-  extent `main+0x1422B`/`+0x1422F` — the map less 32 px wide and 128 px tall, and **not** the
-  map's size (Two Continents: map 10752x12800, extent 10720x12672). `tacli eye` is clamped into
-  the range in force, so `tacli eye <i> -99999 -99999` puts the map's NW corner at the view
-  centre and `99999 99999` its SE corner. A right-click past the edge orders a move to the nearest
-  point of the extent.
+  `[−W/2, extent − W/2]` (W, H the true viewport, 896x704 at 1024x768), so a map edge can reach
+  the middle of the screen. `extent` is the scroll extent `main+0x1422B`/`+0x1422F` — the tile
+  map less 32 px wide and 128 px tall (Two Continents: tile map 10752x12800, extent 10720x12672),
+  where stock's view ends and where the mirrored edge folds. That range holds only while `terr.on`
+  draws the ground; without it the eye stays in the engine's own `[0, extent − W]`. `tacli eye`
+  is clamped into the range in force, so `tacli eye <i> -99999 -99999` puts the map's NW corner at
+  the view centre and `99999 99999` the extent's SE corner (`8768 8864` on Painted Desert at
+  1024x768). The terrain heartbeat prints both sizes, in 32-px tiles: `terr: … map=289x292
+  area=288x288 …`. A right-click past the edge orders a move to the nearest point of the extent.
 - **A wheel round trip does not land on 1x** (x1.163 then x0.877 is 1.020). Re-anchor by writing
   `1.0` to `tagpu_zoom.txt`, then deleting it. Deleting the file hands over, it does not reset;
   notches sent while the file is present are dropped and logged (`zoom: wheel … ignored -
@@ -424,7 +425,7 @@ that map's size.
 | `gui: twins= …` | 300 | `overflows`, `lost`, `miss`, `reseed` | `references/ui-layer.md` |
 | `surf: golden source WxH on the GAME thread -- captured= unchanged= refused= …` | 300 captures | `refused` | `us avg=` is the game-thread cost (55–58 µs at 1024x768) |
 | `vk: census: frame N: 6 pass(es) drew and 0 claimed (terr= feat= unit= fx= mark= scaf= gui= fps= hud=)` | 300 | | 6 with `gui=1` is the play set; `mark=0` is the marker pass standing down; `hud=1` while the replay HUD draws |
-| `mark: bars= cursor= ordtri= ordline= text=… atlas= zoom=` (`log`) | 120 | | the live zoom is readable here; the file lever logs nothing |
+| `mark: bars= cursor= place= placered= placetake= ordart= ordline= text=… atlas= zoom=` (`log`) | 120 | | the live zoom is readable here; `ordart=` counts the order art's quads (route dots and waypoint sprites); `place=` counts the placement sites drawn, `placered=`/`placetake=` those of them red and yellow; the file lever logs nothing |
 | `order: arena= recs= drawn= lines= dots= …` (`log`) | 120 | | `arena=-1` = SHIFT not held |
 | `… \| hits: bad= bare 09= 0b= over= young owner= by= slots= tables= out 09= 0b= B= stockB= unk= in 09= 0b= owner=A/R by=S/U/R dead= gate= copy exact= bound= unk= held= fallback= holdfail= retry= delay= q=` (after `wire:`, before `ghost:`; the alert fields first, since the `packet:` line is cut at 2040 bytes from its end) | 300 render frames | `bad`, `bare`, `over`; `young owner` whenever `dmgdelay.on` is armed | `owner=` hits applied/refused as the victim's owner; `by=` a bystander's applied as the same unit / applied undecidable / refused as stale; `slots=` the table's count (10·N + 1); `B=` the carried messages' bytes against `stockB=`; `bound=` copies the `0x2C` made with a real lower bound, `unk=` those without; `held=` creates the hold moved, `fallback=` those it gave a slot freed in the last tick, `holdfail=` those it failed, `retry=` Deathmatch respawns that found no slot and wait for their countdown's next fire, about 180 ticks |
 | `… \| ghost:[ LEVER-OFF] over= bad= offthread= unbound= short= q= deep= replay= now= killed= swept= nokill= untracked= inactive= stale= cleared= levels= pos ground= air= none= off=` (after `hits:`, the line's last section; the alert fields and the lever first) | 300 render frames | `over`, `bad`, `offthread`, `unbound`, `short` | `q=` creates held during the load and `replay=` those replayed before the first tick (a `replayed slot …` line each); `now=` creates made in a catch-up tick (a `created slot … in a catch-up tick` line); `killed=` held creates a refused `0x0C` cancelled, `swept=` copies made before state 6 that a kill refused in the catch-up ticks marked dying; `pos ground=`/`air=` dirty creates placed from their move payload, `none=` left at stock's record, `off=` a payload off the map, `unbound=` a reader that is not B3's (B5 refuses to install without B3 armed), `short=` a position read that would pass its message's end; ` LEVER-OFF` with `ghostq.off` |

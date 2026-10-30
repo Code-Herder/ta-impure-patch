@@ -1,11 +1,13 @@
-/* tagpu_hudart.c -- the replay HUD's files, loaded. Contract: tagpu_hudart.h. */
+/* tagpu_hudart.c -- the replay HUD's files, and the in-game wiki's, loaded. Contract:
+   tagpu_hudart.h. */
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "dllmain.h"
 #include "lodepng.h"
 #include "tagpu_log.h"
+#include "tagpu_pak.h"
+#include "tagpu_wikilay.h"
 
 /* the declarations first: the implementation below is included once, and stb_truetype guards
    only its declarations against a second inclusion */
@@ -16,40 +18,32 @@
 static volatile LONG s_started;
 static volatile LONG s_ready;           /* 1: s_art is complete; 2: the load failed */
 static HUDART s_art;
+static volatile LONG s_wready;          /* the same for s_wiki                      */
+static WIKIART s_wiki;
 
-/* ---- the archive (tools/hudpak.py, THE FORMAT) --------------------------------------------- */
+/* ---- the archives (tools/hudpak.py, THE FORMAT; tagpu_pak.h) ----------------------------------- */
 
 static const unsigned char* s_pak;
-static DWORD s_npak;
+static size_t s_npak;
 
-static uint32_t rd32(const unsigned char* p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24); }
-
-/* A file of the archive by its path under art/hud/. Every offset is checked against the
-   archive's size, so a short or damaged resource names nothing rather than reading past it. */
+/* a file of the HUD's archive by its path under art/hud/ */
 static const unsigned char* pak_file(const char* path, size_t* n)
 {
-    uint32_t count, i, plen = (uint32_t)strlen(path);
-    if (!s_pak || s_npak < 12 || memcmp(s_pak, "HPAK", 4) || rd32(s_pak + 4) != 1) return NULL;
-    count = rd32(s_pak + 8);
-    if (count > (s_npak - 12) / 16) return NULL;
-    for (i = 0; i < count; i++) {
-        const unsigned char* e = s_pak + 12 + 16 * i;
-        uint32_t no = rd32(e), nl = rd32(e + 4), off = rd32(e + 8), len = rd32(e + 12);
-        if (no > s_npak || nl > s_npak - no || off > s_npak || len > s_npak - off) return NULL;
-        if (nl == plen && !memcmp(s_pak + no, path, plen)) { *n = len; return s_pak + off; }
-    }
-    return NULL;
+    return tagpu_pak_file(s_pak, s_npak, path, n);
 }
 
-/* a PNG's size from its IHDR, which is always the first chunk */
+/* where a kit's parts are: an archive and the folder in it, `parts/` or `kit/parts/` */
+typedef struct { const unsigned char* pak; size_t npak; const char* dir; } PARTS;
+
+/* a PNG's size from its IHDR, which is always the first chunk; `ctx` a PARTS */
 static int png_size(void* ctx, const char* part, int* w, int* h)
 {
-    char path[64];
+    const PARTS* at = (const PARTS*)ctx;
+    char path[80];
     size_t n;
     const unsigned char* p;
-    (void)ctx;
-    snprintf(path, sizeof path, "parts/%s.png", part);
-    if (!(p = pak_file(path, &n)) || n < 24 || memcmp(p + 12, "IHDR", 4)) return 0;
+    snprintf(path, sizeof path, "%s%s.png", at->dir, part);
+    if (!(p = tagpu_pak_file(at->pak, at->npak, path, &n)) || n < 24 || memcmp(p + 12, "IHDR", 4)) return 0;
     *w = (int)((p[16] << 24) | (p[17] << 16) | (p[18] << 8) | p[19]);
     *h = (int)((p[20] << 24) | (p[21] << 16) | (p[22] << 8) | p[23]);
     return 1;
@@ -134,20 +128,21 @@ static void premultiply(unsigned char* p, size_t n)
     }
 }
 
-static int parts(char* err, size_t errn, double* mpx)
+/* every part of the kit `a->lay`, decoded from `at` into a->img */
+static int parts(HUDART* a, const PARTS* at, char* err, size_t errn, double* mpx)
 {
-    int i, n = tagpu_hudlay_nparts(s_art.lay);
-    if (n > (int)(sizeof s_art.img / sizeof s_art.img[0])) { snprintf(err, errn, "%d parts, more than the HUD holds", n); return 0; }
+    int i, n = tagpu_hudlay_nparts(a->lay);
+    if (n > (int)(sizeof a->img / sizeof a->img[0])) { snprintf(err, errn, "%d parts, more than the HUD holds", n); return 0; }
     *mpx = 0;
     for (i = 0; i < n; i++) {
-        const HUDPART* k = tagpu_hudlay_part(s_art.lay, i);
-        char path[64];
+        const HUDPART* k = tagpu_hudlay_part(a->lay, i);
+        char path[80];
         size_t len;
         const unsigned char* png;
         unsigned w, h, e;
         unsigned char* rgba = NULL;
-        snprintf(path, sizeof path, "parts/%s.png", k->name);
-        if (!(png = pak_file(path, &len))) { snprintf(err, errn, "no %s", path); return 0; }
+        snprintf(path, sizeof path, "%s%s.png", at->dir, k->name);
+        if (!(png = tagpu_pak_file(at->pak, at->npak, path, &len))) { snprintf(err, errn, "no %s", path); return 0; }
         if ((e = lodepng_decode32(&rgba, &w, &h, png, len))) {
             snprintf(err, errn, "%s: %s", path, lodepng_error_text(e));
             return 0;
@@ -158,12 +153,84 @@ static int parts(char* err, size_t errn, double* mpx)
             return 0;
         }
         premultiply(rgba, (size_t)w * h);
-        s_art.img[i].w = (int)w;
-        s_art.img[i].h = (int)h;
-        s_art.img[i].rgba = rgba;
+        a->img[i].w = (int)w;
+        a->img[i].h = (int)h;
+        a->img[i].rgba = rgba;
         *mpx += (double)w * h / 1e6;
     }
     return 1;
+}
+
+/* THE WIKI'S ART, after the HUD's on the same thread: its tree and entries (tagpu_wikidata.c), its
+   page's layout (layout.json, tagpu_wikilay.c) and its window's kit, kit/kit.json and kit/parts/ of
+   WIKIPAK (tools/hudart/fit.py --set wiki). The kit's text is set in the HUD's faces and styles,
+   so its HUDART shares the HUD's faces, which are immutable once the HUD is published. A failure
+   here is the wiki's alone: the HUD stands.
+   THE KIT AND THE DATA ARE CHECKED HERE, before the button is ever drawn (tagpu_wikilay_check):
+   every icon and style the window and the stage draw, and the page built in its closed, open and
+   every entry's every demo states at 4:3, 16:9 and 32:9 with nothing dropped, filled with each
+   entry's own names and with the worst castings there can be. The side's castings load later, on
+   their own thread: tools/wiki/wikilaycheck.c checks every pack's. */
+static void wiki_load(void)
+{
+    char err[256];
+    size_t nk, nl;
+    const char *kt, *lt;
+    const unsigned char* wpak;
+    size_t nwpak;
+    DWORD t0 = GetTickCount();
+    double mpx = 0;
+    WIKILAY* wl = NULL;
+    HUDOPS* scratch = NULL;
+    WIKIFACES faces;
+    PARTS at;
+    int i;
+    err[0] = 0;
+    if (!(s_wiki.data = tagpu_wikidata_load_resource(err, sizeof err))) {}
+    else if (!(wpak = tagpu_pak_resource("WIKIPAK", &nwpak)))
+        snprintf(err, sizeof err, "no WIKIPAK resource");
+    else if (!(kt = (const char*)tagpu_pak_file(wpak, nwpak, "kit/kit.json", &nk)) ||
+             !(lt = (const char*)tagpu_pak_file(wpak, nwpak, "layout.json", &nl)))
+        snprintf(err, sizeof err, "the archive lacks kit/kit.json or layout.json");
+    else if (at.pak = wpak, at.npak = nwpak, at.dir = "kit/parts/",
+             !(wl = tagpu_wikilay_load(lt, nl, kt, nk, png_size, &at, s_art.lay, err, sizeof err))) {}
+    else if ((s_wiki.draw.lay = tagpu_wikilay_kit(wl)), !parts(&s_wiki.draw, &at, err, sizeof err, &mpx)) {}
+    if (err[0]) {
+        tagpu_logf("wiki: NOT loaded - %s", err);
+        InterlockedExchange(&s_wready, 2);
+        return;
+    }
+    /* THE FACE LIGHTNESS, once, from the parts as decoded (premultiplied), before the store that
+       publishes the layout: the ink of every text on a part follows it (wiki.js faceLight) */
+    for (i = 0; i < tagpu_hudlay_nparts(s_wiki.draw.lay); i++) {
+        const HUDPART* k = tagpu_hudlay_part(s_wiki.draw.lay, i);
+        tagpu_wikilay_light(wl, i, tagpu_wikilay_face_light(s_wiki.draw.img[i].rgba, s_wiki.draw.img[i].w,
+                                                            s_wiki.draw.img[i].h, k->kind == HK_NINE ? k->slice : NULL, 1));
+    }
+    s_wiki.lay = wl;
+    s_wiki.draw.nface = s_art.nface;
+    memcpy(s_wiki.draw.face, s_art.face, sizeof s_wiki.draw.face);
+    memcpy(s_wiki.draw.style_face, s_art.style_face, sizeof s_wiki.draw.style_face);
+    /* the check measures with the faces the render thread binds (tagpu_wikistate.c art_bind) */
+    memset(&faces, 0, sizeof faces);
+    for (i = 0; i < tagpu_hudlay_globals(s_wiki.draw.lay)->nstyle && i < 24; i++) {
+        const HUDFACE* f = &s_wiki.draw.face[s_wiki.draw.style_face[i]];
+        faces.face[i].info = &f->info;
+        faces.face[i].ascent = f->ascent;
+        faces.face[i].descent = f->descent;
+    }
+    if (!(scratch = (HUDOPS*)malloc(sizeof *scratch))) snprintf(err, sizeof err, "out of memory");
+    else if (!tagpu_wikilay_check(wl, s_wiki.data, &faces, NULL, 0, scratch, err, sizeof err) && !err[0])
+        snprintf(err, sizeof err, "the page's layout refused the kit");
+    free(scratch);
+    if (err[0]) {
+        tagpu_logf("wiki: NOT loaded - %s", err);
+        InterlockedExchange(&s_wready, 2);
+        return;
+    }
+    tagpu_logf("wiki: loaded %d entries and %d kit parts (%.2f Mpx) in %lu ms", s_wiki.data->nentry,
+               tagpu_hudlay_nparts(s_wiki.draw.lay), mpx, (unsigned long)(GetTickCount() - t0));
+    InterlockedExchange(&s_wready, 1);
 }
 
 static DWORD WINAPI loader(LPVOID unused)
@@ -171,24 +238,25 @@ static DWORD WINAPI loader(LPVOID unused)
     char err[256];
     size_t nl, nk;
     const char *lt, *kt;
-    HRSRC r;
-    HGLOBAL g;
     DWORD t0 = GetTickCount();
     double mpx = 0;
     HUDLAY* lay = NULL;
+    PARTS at;
     (void)unused;
     err[0] = 0;
-    if (!(r = FindResourceA(g_ddraw_module, "HUDPAK", MAKEINTRESOURCEA(10))) || !(g = LoadResource(g_ddraw_module, r))
-        || !(s_pak = (const unsigned char*)LockResource(g)) || !(s_npak = SizeofResource(g_ddraw_module, r)))
+    if (!(s_pak = tagpu_pak_resource("HUDPAK", &s_npak)))
         snprintf(err, sizeof err, "no HUDPAK resource");
     else if (!(lt = (const char*)pak_file("layout.json", &nl)) || !(kt = (const char*)pak_file("kit.json", &nk)))
         snprintf(err, sizeof err, "the archive lacks layout.json or kit.json");
-    else if (!(lay = tagpu_hudlay_load(lt, nl, kt, nk, png_size, NULL, err, sizeof err))) {}
+    else if (at.pak = s_pak, at.npak = s_npak, at.dir = "parts/",
+             !(lay = tagpu_hudlay_load(lt, nl, kt, nk, png_size, &at, err, sizeof err))) {}
     else if ((s_art.lay = lay), !faces(err, sizeof err)) {}
-    else if (!parts(err, sizeof err, &mpx)) {}
+    else if (!parts(&s_art, &at, err, sizeof err, &mpx)) {}
     if (err[0]) {
         tagpu_logf("hud: NOT loaded - %s", err);
+        tagpu_logf("wiki: NOT loaded - it draws in the HUD's faces and pass");
         InterlockedExchange(&s_ready, 2);
+        InterlockedExchange(&s_wready, 2);
         return 0;
     }
     /* the faces are the measure's, so it is given once they are open, and before s_ready
@@ -197,6 +265,7 @@ static DWORD WINAPI loader(LPVOID unused)
     tagpu_logf("hud: loaded %d parts (%.1f Mpx) and %d faces in %lu ms",
                tagpu_hudlay_nparts(s_art.lay), mpx, s_art.nface, (unsigned long)(GetTickCount() - t0));
     InterlockedExchange(&s_ready, 1);
+    wiki_load();
     return 0;
 }
 
@@ -207,6 +276,7 @@ void tagpu_hudart_start(void)
     if (!(t = CreateThread(NULL, 0, loader, NULL, 0, NULL))) {
         tagpu_logf("hud: NOT loaded - CreateThread failed (%lu)", (unsigned long)GetLastError());
         InterlockedExchange(&s_ready, 2);
+        InterlockedExchange(&s_wready, 2);
         return;
     }
     CloseHandle(t);
@@ -220,4 +290,14 @@ int tagpu_hudart_failed(void)
 const HUDART* tagpu_hudart_get(void)
 {
     return InterlockedCompareExchange(&s_ready, 0, 0) == 1 ? &s_art : NULL;
+}
+
+int tagpu_wikiart_done(void)
+{
+    return InterlockedCompareExchange(&s_wready, 0, 0) != 0;
+}
+
+const WIKIART* tagpu_wikiart_get(void)
+{
+    return InterlockedCompareExchange(&s_wready, 0, 0) == 1 ? &s_wiki : NULL;
 }

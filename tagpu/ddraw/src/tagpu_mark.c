@@ -130,6 +130,11 @@
 #define CURSBASE     0
 #define MAXCURSV     (8 * QUADV)             /* two rects, four edges each    */
 #define BARBASE      (CURSBASE + MAXCURSV)   /* and the bars after those      */
+/* The placement's sites (tagpu_place.c, the packet's PK_PLACE): each the
+   square's two rects. A bucket of its own, pushed only on a frame that has
+   sites, rather than a larger MAXCURSV: the cursor region is pushed whole
+   every frame, so a 256-site budget there would be uploaded every frame. */
+#define MAXPLACEV    ((int)TAGPU_PK_MAX_PLACE * MAXCURSV)
 /* The order-marker buckets (tagpu_order.c). Separate arrays rather than more
    regions of s_verts: the bar region's length is decided at gather time, so
    anything at a FIXED offset behind it would have to be uploaded across the
@@ -137,7 +142,7 @@
    triangles instead, with the draw offsets computed at render. */
 /* Sized for tagpu_order.c's MAXORD records at the design point; an overflow
    loses markers and is counted, never written past the end. */
-#define MAXORDT      36000                   /* order triangle verts (dots)  */
+#define MAXORDA      36000                   /* order art verts (6 a frame)  */
 #define MAXORDL      18000                   /* order lines, one record each */
 /* Text quads: the ShowRanges labels (up to twelve per SELECTED unit with the
    toggle on) and one group digit per watched unit, in ONE bucket — 2 400 quads,
@@ -245,12 +250,13 @@ int tagpu_mark_armed(unsigned frame_counter)
    rects (four line records per selected unit). `tagpu_mark_gather` grows both to
    the packet's unit count before anything is emitted into them, and only the
    render thread touches either, so no pointer into one outlives a realloc.
-   The vertex INDEX space is unchanged: the cursor rects are 0..BARBASE-1 in
-   `s_verts`, the bars BARBASE.. in `s_barv`, and the render pushes the two
-   back to back. */
+   Each bucket is written from its own index 0; the render pushes the cursor
+   rects' whole BARBASE vertices and then the bars, so in the pushed block
+   the bars begin at BARBASE. */
 static float  s_verts[BARBASE * MVST];  /* the cursor rects                   */
+static float  s_place[MAXPLACEV * MVST]; /* the placement's sites' rects      */
 static float* s_barv;  static unsigned s_barvCap;  /* bars, in vertices       */
-static float  s_ordt[MAXORDT * MVST];   /* order markers: filled triangles    */
+static float  s_orda[MAXORDA * MVST];   /* order markers: art quads           */
 static float  s_ordl[MAXORDL * MVST];   /* order markers: line records        */
 static float  s_ordx[MAXORDX * MVST];   /* text quads: labels, then digits    */
 static float* s_sel;   static unsigned s_selCap;   /* selection rects, lines  */
@@ -260,7 +266,10 @@ static int   s_lfar;                   /* lines past TAGPU_LINE_FAR           */
 static int   s_nbar;                   /* bars gathered (2 quads each)        */
 static int   s_cBar;                   /* counted, whether emitted or not     */
 static int   s_ncurs;                  /* build cursor / band box verts       */
-static int   s_nordt, s_nordl;         /* order tri verts / lines, this frame */
+static int   s_nplace;                 /* placement site verts, this frame    */
+static int   s_cPlace;                 /* placement sites drawn, this frame   */
+static int   s_cPlaceRed, s_cPlaceTake; /* of them red, and yellow (tagpu_place.h) */
+static int   s_norda, s_nordl;         /* order art verts / lines, this frame */
 static int   s_nordx;                  /* text verts, this frame              */
 /* Where the ShowRanges labels end and the group digits begin. The engine draws
    the labels from inside the order driver at `0x469BFC` and the digit at
@@ -326,6 +335,7 @@ static const char* FS =
        darkens the build cursor. */
     TAGPU_GLSL_FOG_DISCARD
     "  int pi;\n"
+    "  float a = 1.0;\n"
     /* Text is a COVERAGE mask, not a palette image: tagpu_text.c rasterises TA's
        glyphs with (fg,bg,transparent) = (255,0,0), so the texel says only whether
        the glyph covers this fragment and the colour comes from the vertex — which
@@ -335,22 +345,25 @@ static const char* FS =
     "    if (texture(uLayer, vUV).r < 0.5) discard;\n"
     "    pi = int(vCol * 255.0 + 0.5);\n"
     /* a negative u marks the flat path: the vertex carries a palette index
-       instead of a texel (health bars, order dots) */
+       instead of a texel (health bars) */
     "  } else if (vUV.x < 0.0) {\n"
     "    pi = int(vCol * 255.0 + 0.5);\n"
     "  } else {\n"
     "    pi = int(texture(uLayer, vUV).r * 255.0 + 0.5);\n"
     "    if (pi == uKey) discard;\n"
+    /* the order art: a palette-index atlas whose vertices carry the opacity
+       in the colour slot, the one draw this pass blends */
+    "    a = vCol;\n"
     "  }\n"
     /* THE GREY BAND: the RGB rule every world pass takes (renderers.md 2.6).
        LFS below carries the same lines. */
     "  vec3 rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
     TAGPU_GLSL_FOG_GREY_RGB("rgb")
-    "  frag = vec4(rgb, 1.0);\n"
+    "  frag = vec4(rgb, a);\n"
     "}\n";
 /* ---- THE LINE PROGRAM: one rule for every line ----
-   Every line this pass draws -- the order lines, the range arcs, the waypoint
-   crosshairs, the build sites and the selection rects -- is tagpu_line.h's
+   Every line this pass draws -- the order lines, the range arcs, the build
+   sites and the selection rects -- is tagpu_line.h's
    rule: `DrawLine`'s walk (`0x4CC7AB`) on the line grid, the world target's
    own pixels, thickened to ss pixels across its minor axis; at ss = 1 that is
    the engine's line exactly. A line primitive cannot promise any of it: even
@@ -424,22 +437,13 @@ static const char* LFS =
 
 /* ---- the health-bar gather ---- */
 
-static void put_vert(int i, float x, float y, float u, float v, float wx, float wz,
-                     float col)
-{
-    float* o = i < BARBASE ? s_verts + (size_t)i * MVST
-                           : s_barv + (size_t)(i - BARBASE) * MVST;
-    o[0] = x; o[1] = y; o[2] = u; o[3] = v; o[4] = wx; o[5] = wz; o[6] = col;
-    o[7] = 0.0f;                       /* the top layer: no depth test reads it */
-}
-
-/* the order buckets' own writer: same vertex, a different array */
+/* one vertex at index `i` of the bucket `base` */
 static void put_at(float* base, int i, float x, float y, float u, float v,
                    float wx, float wz, float col)
 {
     float* o = base + (size_t)i * MVST;
     o[0] = x; o[1] = y; o[2] = u; o[3] = v; o[4] = wx; o[5] = wz; o[6] = col;
-    o[7] = 0.0f;
+    o[7] = 0.0f;                       /* the top layer: no depth test reads it */
 }
 
 static void put_ord(float* base, int i, float x, float y, float wx, float wz,
@@ -492,18 +496,6 @@ int tagpu_mark_emit_line(float x0, float y0, float x1, float y1,
     if (put_line(s_ordl + (size_t)s_nordl * MVST, x0, y0, x1, y1, nudge, wx, wz,
                  (float)colidx / 255.0f, 0.0f))
         s_nordl++;
-    return 1;
-}
-
-int tagpu_mark_emit_tri(float x0, float y0, float x1, float y1,
-                        float x2, float y2, int colidx, float wx, float wz)
-{
-    float c = (float)colidx / 255.0f;
-    if (s_nordt + 3 > MAXORDT) return 0;
-    put_ord(s_ordt, s_nordt + 0, x0, y0, wx, wz, c);
-    put_ord(s_ordt, s_nordt + 1, x1, y1, wx, wz, c);
-    put_ord(s_ordt, s_nordt + 2, x2, y2, wx, wz, c);
-    s_nordt += 3;
     return 1;
 }
 
@@ -573,26 +565,14 @@ static void snap_device(float* x, float* y)
     *y = (float)((gy - s_zcy) / s_zoom + s_zcy);
 }
 
-/* One string, in the palette index the caller names, anchored at the (x, y) the
-   engine would have passed `DrawTextCustomFont`.
-
-   CONSTANT SCREEN SIZE, like the waypoint crosshair and unlike the health bars:
-   the glyphs are a bitmap font, so scaling the quad with the zoom would be the
-   magnified 1997 art this port exists to stop — a label two pixels tall at
-   0.25x and a blocky one at 4x. `s_px` is one screen pixel in game-frame units,
-   and the vertex shader's zoom multiplies it back out.
-
-   The vertical anchor is the engine's: `0x4CCF60` puts the string's first pixel
-   row at `y - (s8)font+0x02`, not at y. */
-int tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
-                         float wx, float wz)
+/* One atlas rect's quad -- a string's or a glyph's, (ax, ay, w, h) in texels with the blitter's
+   row offset `yoff` -- at the engine's anchor (x, y), into `base` at vertex `i`. Returns the x
+   its right edge lands on, where the blitter's next glyph would start. */
+static float text_quad(float* base, int i, float x, float y, int ax, int ay, int w, int h,
+                       int yoff, int colidx, float wx, float wz)
 {
-    int ax, ay, w, h, yoff, aw = 1, ah = 1;
+    int aw = 1, ah = 1;
     float u0, v0, u1, v1, x1, y0, y1, c;
-    int i = s_nordx;
-
-    if (s_nordx + QUADV > MAXORDX) return 0;
-    if (!tagpu_text_place(s, &ax, &ay, &w, &h, &yoff)) return 0;
     tagpu_text_dims(&aw, &ah);
     u0 = (float)ax / (float)aw;          v0 = (float)ay / (float)ah;
     u1 = (float)(ax + w) / (float)aw;    v1 = (float)(ay + h) / (float)ah;
@@ -614,14 +594,64 @@ int tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
     x1 = x + (float)((double)w * s_px);
     y1 = y0 + (float)((double)h * s_px);
     c  = (float)colidx / 255.0f;
-    put_at(s_ordx, i + 0, x,  y0, u0, v0, wx, wz, c);
-    put_at(s_ordx, i + 1, x1, y0, u1, v0, wx, wz, c);
-    put_at(s_ordx, i + 2, x,  y1, u0, v1, wx, wz, c);
-    put_at(s_ordx, i + 3, x1, y0, u1, v0, wx, wz, c);
-    put_at(s_ordx, i + 4, x1, y1, u1, v1, wx, wz, c);
-    put_at(s_ordx, i + 5, x,  y1, u0, v1, wx, wz, c);
+    put_at(base, i + 0, x,  y0, u0, v0, wx, wz, c);
+    put_at(base, i + 1, x1, y0, u1, v0, wx, wz, c);
+    put_at(base, i + 2, x,  y1, u0, v1, wx, wz, c);
+    put_at(base, i + 3, x1, y0, u1, v0, wx, wz, c);
+    put_at(base, i + 4, x1, y1, u1, v1, wx, wz, c);
+    put_at(base, i + 5, x,  y1, u0, v1, wx, wz, c);
+    return x1;
+}
+
+/* One string, in the palette index the caller names, anchored at the (x, y) the
+   engine would have passed `DrawTextCustomFont`.
+
+   CONSTANT SCREEN SIZE, like the order art and unlike the health bars:
+   the glyphs are a bitmap font, so scaling the quad with the zoom would be the
+   magnified 1997 art this port exists to stop — a label two pixels tall at
+   0.25x and a blocky one at 4x. `s_px` is one screen pixel in game-frame units,
+   and the vertex shader's zoom multiplies it back out.
+
+   The vertical anchor is the engine's: `0x4CCF60` puts the string's first pixel
+   row at `y - (s8)font+0x02`, not at y. */
+int tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
+                         float wx, float wz)
+{
+    int ax, ay, w, h, yoff;
+    if (s_nordx + QUADV > MAXORDX) return 0;
+    if (!tagpu_text_place(s, &ax, &ay, &w, &h, &yoff)) return 0;
+    text_quad(s_ordx, s_nordx, x, y, ax, ay, w, h, yoff, colidx, wx, wz);
     s_nordx += QUADV;
     s_ntext++;
+    return 1;
+}
+
+/* One frame of the order art, its hotspot at (x, y). CONSTANT SCREEN SIZE, as
+   the text is: the frame is `w` game pixels after the zoom whatever the zoom,
+   so one texel is one screen pixel and at 1x the frame is the engine's blit.
+   Its corner goes on the device grid by pre-image (`snap_device`), for the
+   text's reason: a bitmap half a pixel off resolves every texel across two
+   device pixels. The colour slot carries the opacity (FS's art path). */
+int tagpu_mark_emit_art(float x, float y, const struct TAGPU_ORDART_FRAME* f,
+                        float alpha, float wx, float wz)
+{
+    float x0, y0, x1, y1, u0, v0, u1, v1;
+    int i = s_norda;
+    if (s_norda + QUADV > MAXORDA) return 0;
+    x0 = x - (float)((double)f->hx * s_px);
+    y0 = y - (float)((double)f->hy * s_px);
+    snap_device(&x0, &y0);
+    x1 = x0 + (float)((double)f->w * s_px);
+    y1 = y0 + (float)((double)f->h * s_px);
+    u0 = (float)f->x / (float)TAGPU_ORDART_W;          v0 = (float)f->y / (float)TAGPU_ORDART_H;
+    u1 = (float)(f->x + f->w) / (float)TAGPU_ORDART_W; v1 = (float)(f->y + f->h) / (float)TAGPU_ORDART_H;
+    put_at(s_orda, i + 0, x0, y0, u0, v0, wx, wz, alpha);
+    put_at(s_orda, i + 1, x1, y0, u1, v0, wx, wz, alpha);
+    put_at(s_orda, i + 2, x0, y1, u0, v1, wx, wz, alpha);
+    put_at(s_orda, i + 3, x1, y0, u1, v0, wx, wz, alpha);
+    put_at(s_orda, i + 4, x1, y1, u1, v1, wx, wz, alpha);
+    put_at(s_orda, i + 5, x0, y1, u0, v1, wx, wz, alpha);
+    s_norda += QUADV;
     return 1;
 }
 
@@ -632,41 +662,41 @@ int tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
    game-frame units at any zoom but 1x. `put_bar` keeps the integer signature
    for the rects that are the engine's own — the build-cursor footprint and the
    drag band — whose positions come from engine integers and stay bit-exact. */
-static void put_barf(int* nv, float l, float t, float r, float b, int colidx,
-                     float wx, float wz)
+static void put_barf(float* base, int* nv, float l, float t, float r, float b,
+                     int colidx, float wx, float wz)
 {
     float x0 = l, y0 = t, x1 = r + 1.0f, y1 = b + 1.0f;
     float c = (float)colidx / 255.0f;
     int i = *nv;
-    put_vert(i + 0, x0, y0, -1.0f, -1.0f, wx, wz, c);
-    put_vert(i + 1, x1, y0, -1.0f, -1.0f, wx, wz, c);
-    put_vert(i + 2, x0, y1, -1.0f, -1.0f, wx, wz, c);
-    put_vert(i + 3, x1, y0, -1.0f, -1.0f, wx, wz, c);
-    put_vert(i + 4, x1, y1, -1.0f, -1.0f, wx, wz, c);
-    put_vert(i + 5, x0, y1, -1.0f, -1.0f, wx, wz, c);
+    put_at(base, i + 0, x0, y0, -1.0f, -1.0f, wx, wz, c);
+    put_at(base, i + 1, x1, y0, -1.0f, -1.0f, wx, wz, c);
+    put_at(base, i + 2, x0, y1, -1.0f, -1.0f, wx, wz, c);
+    put_at(base, i + 3, x1, y0, -1.0f, -1.0f, wx, wz, c);
+    put_at(base, i + 4, x1, y1, -1.0f, -1.0f, wx, wz, c);
+    put_at(base, i + 5, x0, y1, -1.0f, -1.0f, wx, wz, c);
     *nv = i + QUADV;
 }
 
-static void put_bar(int* nv, int l, int t, int r, int b, int colidx,
+static void put_bar(float* base, int* nv, int l, int t, int r, int b, int colidx,
                     float wx, float wz)
 {
-    put_barf(nv, (float)l, (float)t, (float)r, (float)b, colidx, wx, wz);
+    put_barf(base, nv, (float)l, (float)t, (float)r, (float)b, colidx, wx, wz);
 }
 
 /* one DrawTranspRectangle: the four 1-px edges of the rect in one flat colour,
    every corner inclusive. Normalised because the inner rect is the outer inset
    by 1 and a footprint under 3 px across inverts it — which the engine's own
    line drawer also resolves by swapping the endpoints. */
-static void put_outline(int* nv, int l, int t, int r, int b, int col,
+static void put_outline(float* base, int* nv, int l, int t, int r, int b, int col,
                         float wx, float wz)
 {
     int k;
     if (r < l) { k = l; l = r; r = k; }
     if (b < t) { k = t; t = b; b = k; }
-    put_bar(nv, l, t, r, t, col, wx, wz);          /* top    */
-    put_bar(nv, l, b, r, b, col, wx, wz);          /* bottom */
-    put_bar(nv, l, t, l, b, col, wx, wz);          /* left   */
-    put_bar(nv, r, t, r, b, col, wx, wz);          /* right  */
+    put_bar(base, nv, l, t, r, t, col, wx, wz);          /* top    */
+    put_bar(base, nv, l, b, r, b, col, wx, wz);          /* bottom */
+    put_bar(base, nv, l, t, l, b, col, wx, wz);          /* left   */
+    put_bar(base, nv, r, t, r, b, col, wx, wz);          /* right  */
 }
 
 /* Does the cursor layer belong to US this frame? This is the ONE place that
@@ -683,72 +713,38 @@ int tagpu_mark_cursor_ours(void)
     return s_armed == 1 && s_cursor && !s_passive;
 }
 
-/* the build-cursor footprint and the drag band box — the whole of
-   `0x469DB4..0x469F23`, transcribed in the header comment */
-static void gather_cursor(const TAGPU_FXVIEW* v)
+/* The square's gate, the head of `0x469DB4..0x469F23`: the band box bit, or
+   cursor mode 14 with the dispatched mouse inside the rect the engine can NAME
+   (the packet's vp_addr, the field 0x37E27 as the game thread left it after its
+   own widening — inclusive L, T, R, B, exactly what IsPositionInRect 0x4B6720
+   tests against). Not the true viewport: while zoomed out that rect is
+   deliberately wider, and it is exactly that width which lets a placement in
+   the outer ring pass the gate at all. */
+static int square_gate(const TAGPU_PACKET* pk)
 {
-    /* EVERY WORD HERE IS THE PACKET'S: the
-       GUI colour bytes, the two mode bytes, the dispatched mouse point and the
-       build cursor's two world corners, all copied by the game thread inside
-       the draw that is about to use them. The rect the engine can NAME comes
-       from the packet too: the field 0x37E27 as the game thread
-       left it after its own widening — inclusive L, T, R, B, exactly what
-       IsPositionInRect tests against.
+    const int* vp = pk->vp_addr;
+    int mx = pk->mouse[0], my = pk->mouse[1];
+    if (pk->region_flags & 8) return 1;
+    if (pk->cursor_mode != CUR_BUILD) return 0;
+    return mx >= vp[0] && mx <= vp[2] && my >= vp[1] && my <= vp[3];
+}
 
-       THE GATE IS tagpu_mark_cursor_ours(), NOT AN OPEN-CODED COPY OF IT, so
-       that a client drawing a twin of the build square cannot arm on a
-       different answer than the square itself. The build ghost is that client
-       (tagpu_native.c, ghost_pass): on a different answer -- the marker pass
-       off, or `mark.on=nocursor` -- the translucent building would track the
-       pointer while our square did not, and the engine's own square is drawn
-       at its UNZOOMED 1x projection, so at any zoom != 1 the two would be in
-       different places. */
-    const TAGPU_PACKET* pk = v->packet;
-    const unsigned char* gui;
-    const int* vp = pk ? pk->vp_addr : NULL;
-    int mode, fl, l, t, r, b, idx, outer, inner, nv = CURSBASE;
+/* One square, the rest of `0x469DB4..0x469F23`: the rect `rect` (two corners as {x,
+   altitude, z}, the engine's own order at 0x2C92..0x2CA6) projected as the
+   engine projects it, then the outer outline and the inner one inset by 1.
+   0 for a rect that could not be one, which is dropped rather than turned into
+   a quad. */
+static int square_emit(const TAGPU_FXVIEW* v, float* base, int* nv, const int32_t* rect,
+                       int outer, int inner)
+{
+    int l, t, r, b;
     float wx, wz;
-
-    s_ncurs = 0;
-    if (!tagpu_mark_cursor_ours()) return;
-    if (!pk || !vp) return;
-    gui = pk->gui_col;
-
-    fl   = pk->region_flags;
-    mode = pk->cursor_mode;
-    if (!(fl & 8)) {
-        int mx, my;
-        if (mode != CUR_BUILD) return;
-        mx = pk->mouse[0];
-        my = pk->mouse[1];
-        /* IsPositionInRect 0x4B6720 — inclusive on all four edges. The rect
-           the engine can NAME (the packet's vp_addr, the field as the game
-           thread left it), not the true viewport: while zoomed out that rect
-           is deliberately wider, and it is exactly that width which lets a
-           placement in the outer ring pass the gate at all. */
-        if (mx < vp[0] || mx > vp[2] || my < vp[1] || my > vp[3]) return;
-    }
-
-    /* build_rect is the two corners as {x, altitude, z}, in the engine's own
-       order at 0x2C92..0x2CA6 */
-    l = pk->build_rect[0] - v->eyeX + 0x80;
-    r = pk->build_rect[3] - v->eyeX + 0x80;
-    t = pk->build_rect[2] - (pk->build_rect[1] >> 1) - v->eyeY + 0x20;
-    b = pk->build_rect[5] - (pk->build_rect[4] >> 1) - v->eyeY + 0x20;
-    /* a rect that could not be one is dropped rather than turned into a quad */
+    l = rect[0] - v->eyeX + 0x80;
+    r = rect[3] - v->eyeX + 0x80;
+    t = rect[2] - (rect[1] >> 1) - v->eyeY + 0x20;
+    b = rect[5] - (rect[4] >> 1) - v->eyeY + 0x20;
     if (l < -0x100000 || l > 0x100000 || r < -0x100000 || r > 0x100000 ||
-        t < -0x100000 || t > 0x100000 || b < -0x100000 || b > 0x100000) return;
-
-    /* the colour pair keys off the MODE, not off which arm of the gate let it
-       through — the engine picks it from main+0x2CC3 both times */
-    if (mode == CUR_BUILD) {
-        idx   = (fl & 0x40) ? GUI_GREEN : GUI_BLOCKED;
-        outer = gui[idx];
-        inner = outer;
-    } else {
-        outer = gui[GUI_WHITE];
-        inner = gui[GUI_BLACK];
-    }
+        t < -0x100000 || t > 0x100000 || b < -0x100000 || b > 0x100000) return 0;
 
     /* NORMALISE FIRST, THEN INSET — the engine's order, and the two are not
        interchangeable. `0x469E92`/`0x469EA0` swap the pairs and only then does
@@ -764,9 +760,431 @@ static void gather_cursor(const TAGPU_FXVIEW* v)
        rect's own corner maps to — the same projection layer_quad uses */
     wx = (float)(l - v->vpL + v->eyeX);
     wz = (float)(t - v->vpT + v->eyeY);
-    put_outline(&nv, l, t, r, b, outer, wx, wz);
-    put_outline(&nv, l + 1, t + 1, r - 1, b - 1, inner, wx, wz);
-    s_ncurs = nv - CURSBASE;
+    put_outline(base, nv, l, t, r, b, outer, wx, wz);
+    put_outline(base, nv, l + 1, t + 1, r - 1, b - 1, inner, wx, wz);
+    return 1;
+}
+
+/* the build-cursor footprint and the drag band box — the whole of
+   `0x469DB4..0x469F23`, transcribed in the header comment */
+static void gather_cursor(const TAGPU_FXVIEW* v)
+{
+    /* EVERY WORD HERE IS THE PACKET'S: the
+       GUI colour bytes, the two mode bytes, the dispatched mouse point and the
+       build cursor's two world corners, all copied by the game thread inside
+       the draw that is about to use them.
+
+       THE GATE IS tagpu_mark_cursor_ours(), NOT AN OPEN-CODED COPY OF IT, so
+       that a client drawing a twin of the build square cannot arm on a
+       different answer than the square itself. The build ghost is that client
+       (tagpu_native.c, ghost_pass): on a different answer -- the marker pass
+       off, or `mark.on=nocursor` -- the translucent building would track the
+       pointer while our square did not, and the engine's own square is drawn
+       at its UNZOOMED 1x projection, so at any zoom != 1 the two would be in
+       different places. */
+    const TAGPU_PACKET* pk = v->packet;
+    const unsigned char* gui;
+    int mode, outer, inner, nv = CURSBASE;
+
+    s_ncurs = 0;
+    if (!tagpu_mark_cursor_ours()) return;
+    if (!pk || !square_gate(pk)) return;
+    gui = pk->gui_col;
+    mode = pk->cursor_mode;
+
+    /* the colour pair keys off the MODE, not off which arm of the gate let it
+       through — the engine picks it from main+0x2CC3 both times */
+    if (mode == CUR_BUILD) {
+        /* a multi-building placement's sites replace the square (gather_place) */
+        if (tagpu_pk_place_replaces(pk)) return;
+        outer = gui[(pk->region_flags & 0x40) ? GUI_GREEN : GUI_BLOCKED];
+        inner = outer;
+    } else {
+        outer = gui[GUI_WHITE];
+        inner = gui[GUI_BLACK];
+    }
+    if (square_emit(v, s_verts, &nv, pk->build_rect, outer, inner))
+        s_ncurs = nv - CURSBASE;
+}
+
+/* A MULTI-BUILDING PLACEMENT'S SITES, each drawn exactly as the build square
+   would be drawn there: the square's own gate in mode 14, its projection, its
+   drop, its normalise-then-inset, and both outlines in the GUI colour the site
+   carries (green, red or yellow — tagpu_place.h), as the engine's mode-14 pair
+   takes one colour for both. The packet's acquire bounds every site's colour
+   to those three indices, its coordinates to +-TAGPU_PK_PLACE_COORD and the
+   count to the bucket's TAGPU_PK_MAX_PLACE. */
+static void gather_place(const TAGPU_FXVIEW* v)
+{
+    const TAGPU_PACKET* pk = v->packet;
+    const TAGPU_PK_PLACE* pl;
+    unsigned i;
+    int nv = 0;
+
+    s_nplace = 0; s_cPlace = 0; s_cPlaceRed = 0; s_cPlaceTake = 0;
+    if (!tagpu_mark_cursor_ours()) return;
+    if (!pk || pk->cursor_mode != CUR_BUILD || !square_gate(pk)) return;
+    pl = tagpu_pk_place(pk);
+    if (!pl) return;
+    for (i = 0; i < pk->n_place && nv + MAXCURSV <= MAXPLACEV; i++) {
+        int c = pk->gui_col[pl[i].colour];
+        if (!square_emit(v, s_place, &nv, pl[i].rect, c, c)) continue;
+        s_cPlace++;
+        s_cPlaceRed += pl[i].colour == TAGPU_PK_PLACE_BLOCKED;
+        s_cPlaceTake += pl[i].colour == TAGPU_PK_PLACE_TOGGLE;
+    }
+    s_nplace = nv;
+}
+
+/* ---- THE RECLAIM SWEEP --------------------------------------------------
+   The ring, its targets' brackets, the feature under the cursor and the
+   readout, out of the packet's PK_SWEEP header and items (tagpu_sweep.c, on
+   the game thread, copied by value). Drawn in the cursor layer WITH THE FOG
+   OFF, as the build cursor is: the ring is the player's own gesture.
+
+   THE PROJECTION is the overlays' and the selection rect's: x - eyeX + vpL and
+   z - floor(h / 2) - eyeY + vpT, in the frame's pre-zoom units. A bracket's
+   item is already a rect on that plane, the altitude taken: the feature's
+   visible sprite, or a 3-D wreck's footprint and height (tagpu_sweep.c,
+   `box_item`).
+
+   THE STROKES BELONG TO THE DEVICE. Every bracket, the ring and the queue
+   paths are SW_COLOUR device px of colour with SW_EDGE device px of black on
+   each side, fully opaque, at every zoom, resolution, HUD scale and ss: the
+   owner's ruling, the reclaim UI mockup's HEAVY style. They are drawn with
+   the one line rule of this pass (tagpu_line.h): records on the line grid,
+   each `ss` line-grid px across its minor axis, decided per pixel by LFS. A
+   wider stroke is several records side by side, each moved by a whole
+   record across that axis, and the copies of one walk moved by `ss` abut
+   exactly -- copy k covers [r + k ss - floor(ss/2), r + k ss - floor(ss/2) +
+   ss - 1] -- so the stroke is solid by construction; the last copy overlaps
+   the one before it when the width is no multiple of ss. Along the walk a
+   record reaches floor(ss/2) before its first end and ss - 1 - floor(ss/2)
+   past its last (tagpu_line.h, the major-axis window), so a dash stops
+   within a game px of where it is cut, as the mockup's butt-capped dashes
+   do; a bracket arm, which the mockup square-caps, is a filled rect that
+   carries its cap itself.
+
+   OPAQUE MEANS WHOLE QUANTA. Without devres the target is box-resolved to
+   the game resolution before the composite stretches it by devPx, so a band
+   that starts on an odd line-grid px at ss 2 resolves to two half-covered
+   game px: a line that reads half transparent. So the widths are whole
+   quanta -- `ss` line-grid px, one game px, without devres; one line-grid px
+   with it, where the composite reads the target itself -- and every band
+   starts on a quantum. A quantum is devPx * q / ss device px, so the widths
+   are the nearest whole quanta to SW_COLOUR and SW_EDGE device px, at least
+   one each: exact wherever a device px is a whole number of quanta, and the
+   nearest the frame can carry where it is not (at a devPx of 1.5, two game
+   px of colour are 3 device px and the one of black is 1.5). The colour is
+   never narrower than one record.
+
+   THE DASHES AND THE ARMS are device px as well: the ring 6 on / 4 off, and an
+   arm 30 % of the box's shorter side on the screen, clamped to 7..20.
+
+   What a commit queues is not this pass's: the order markers draw it, as they
+   draw every other queued order (tagpu_order.c).
+
+   BOUND: the acquire bounds every coordinate to +-TAGPU_PK_PLACE_COORD, a box
+   to 1..TAGPU_PK_SWEEP_BOXMAX and the counts to TAGPU_PK_MAX_SWEEP, and
+   devPx is clamped to [0.25, 16]. A line-grid end past SW_FAR is refused
+   (sw_near), which leaves the copies' offsets, a few dozen px, far inside
+   TAGPU_LINE_FAR, the bound tagpu_line_clip's arithmetic holds to. A box past SW_REACH screen px
+   outside the zoom's effective rect makes no line, and a bucket that is full
+   refuses the rest, counted in `s_swover`. */
+#define SW_COLOUR    3.0                       /* device px of colour        */
+#define SW_EDGE      1.0                       /* ...and of black each side   */
+#define SW_MAXCOLQ   6                         /* quanta, at a devPx below 1  */
+#define SW_MAXEDGEQ  2
+#define SW_DASH_ON   6.0                       /* the ring: 6 px on, 4 off   */
+#define SW_DASH_OFF  4.0
+#define SW_ARM_SHARE 0.3                       /* a bracket's arm, of the box's */
+#define SW_ARM_MIN   7.0                       /* shorter side, device px     */
+#define SW_ARM_MAX   20.0
+#define SW_REACH     32
+#define SW_FAR       (TAGPU_LINE_FAR - 65536)
+/* records: a bracket is 8 rects, each about W / ss colour and (W + 2B) / ss
+   black records -- 24 and 40 at ss 2 and a devPx of 1 -- for 1024 targets and
+   the hovered feature, then the ring's dashes; what the cap refuses is counted
+   in `s_swover` */
+#define MAXSWC       65536
+#define MAXSWK       (2 * MAXSWC)              /* their black outline        */
+#define MAXSWQ       (2 * QUADV)               /* the centre dot and its edge */
+#define MAXSWX       (160 * QUADV)             /* the readout's glyphs       */
+static float s_swc[MAXSWC * MVST];
+static float s_swk[MAXSWK * MVST];
+static float s_swq[MAXSWQ * MVST];
+static float s_swx[MAXSWX * MVST];
+static int   s_nswc, s_nswk, s_nswq, s_nswx;
+static int   s_cSweep;                  /* targets bracketed, this frame      */
+static int   s_swover;                  /* lines or glyphs refused, a frame   */
+static int   s_swQ, s_swW, s_swB;       /* the quantum, the colour, the edge: line-grid px */
+static double s_swDev;                  /* line-grid px a device px            */
+
+/* this frame's widths, from the composite's scale (the header above) */
+static void sw_widths(const TAGPU_FXVIEW* v)
+{
+    double k = v->devPx >= 0.25f && v->devPx <= 16.0f ? (double)v->devPx : 1.0;
+    double cell;
+    int wq, bq;
+    s_swQ = v->devres ? 1 : s_ss;
+    cell = k * s_swQ / s_ss;
+    wq = (int)floor(SW_COLOUR / cell + 0.5);
+    bq = (int)floor(SW_EDGE / cell + 0.5);
+    wq = wq < 1 ? 1 : wq > SW_MAXCOLQ ? SW_MAXCOLQ : wq;
+    bq = bq < 1 ? 1 : bq > SW_MAXEDGEQ ? SW_MAXEDGEQ : bq;
+    s_swW = wq * s_swQ;
+    if (s_swW < s_ss) s_swW = s_ss;
+    s_swB = bq * s_swQ;
+    s_swDev = (double)s_ss / k;
+}
+
+/* a pre-zoom point on the line grid, unrounded: ss * Z(p), tagpu_line_px's value before its floor */
+static void sw_grid(double x, double y, double* gx, double* gy)
+{
+    *gx = ((x - s_zcx) * s_zoom + s_zcx) * s_ss;
+    *gy = ((y - s_zcy) * s_zoom + s_zcy) * s_ss;
+}
+
+static int sw_near(double v) { return v >= -SW_FAR && v <= SW_FAR; }
+
+/* ONE RECORD between two line-grid ends, put_line's tail: the A/B oracle's copy before the
+   clip, DrawLine's clip, then the ends' centres. 0 when the bucket is full. */
+static int sw_rec(float* bucket, int* n, int cap, int ax, int ay, int bx, int by, int col)
+{
+    float* o;
+    if (*n >= cap) { s_swover++; return 0; }
+    tagpu_line_ab_add(&s_lab, ax, ay, bx, by, col);
+    if (!tagpu_line_clip(&ax, &ay, &bx, &by, s_clipL, s_clipT, s_clipR, s_clipB,
+                         s_clipW, s_clipH))
+        return 1;
+    o = bucket + (size_t)*n * MVST;
+    o[0] = tagpu_line_centre(ax, s_ss); o[1] = tagpu_line_centre(ay, s_ss);
+    o[2] = tagpu_line_centre(bx, s_ss); o[3] = tagpu_line_centre(by, s_ss);
+    o[4] = 0.0f; o[5] = 0.0f; o[6] = (float)col / 255.0f; o[7] = 0.0f;
+    (*n)++;
+    return 1;
+}
+
+/* A band `width` line-grid px across the minor axis of the walk from a to b (x-major when
+   `xmajor`), its first px `rel` px from the walk's: copies of the walk moved by whole records, the
+   last pulled back to end on the band's edge. A record whose walk is at r covers
+   [r - floor(ss/2), r - floor(ss/2) + ss - 1] across it, hence the floor(ss/2). `width` >= ss. */
+static void sw_copies(float* bucket, int* n, int cap, int ax, int ay, int bx, int by, int xmajor,
+                      int rel, int width, int col)
+{
+    int off = 0;
+    for (;;) {
+        int d;
+        if (off > width - s_ss) off = width - s_ss;
+        d = rel + off + s_ss / 2;
+        if (!(xmajor ? sw_rec(bucket, n, cap, ax, ay + d, bx, by + d, col)
+                     : sw_rec(bucket, n, cap, ax + d, ay, bx + d, by, col)))
+            return;
+        if (off == width - s_ss) return;
+        off += s_ss;
+    }
+}
+
+/* a rect of line-grid px, [x0, x1] x [y0, y1] inclusive, filled with records along its longer
+   side, each walk on its first row or column; each side is at least ss */
+static void sw_fill(float* bucket, int* n, int cap, int x0, int y0, int x1, int y1, int col)
+{
+    int lo = s_ss / 2, hi = s_ss - 1 - s_ss / 2;
+    if (x1 - x0 >= y1 - y0) sw_copies(bucket, n, cap, x0 + lo, y0, x1 - hi, y0, 1, 0, y1 - y0 + 1, col);
+    else                    sw_copies(bucket, n, cap, x0, y0 + lo, x0, y1 - hi, 0, 0, x1 - x0 + 1, col);
+}
+
+/* a rect's black, grown by the edge on every side, then its colour */
+static void sw_rect(int x0, int y0, int x1, int y1, int col, int black)
+{
+    sw_fill(s_swk, &s_nswk, MAXSWK, x0 - s_swB, y0 - s_swB, x1 + s_swB, y1 + s_swB, black);
+    sw_fill(s_swc, &s_nswc, MAXSWC, x0, y0, x1, y1, col);
+}
+
+/* the band start nearest `c` - W / 2 that lies on a quantum: a band centred on `c` */
+static int sw_start(double c)
+{
+    return s_swQ * (int)floor((c - s_swW * 0.5) / s_swQ + 0.5);
+}
+
+/* One stroke between two line-grid ends, centred on the walk across its minor axis, its band
+   starting on a quantum at each end: the black, the colour over it. */
+static void sw_stroke(int ax, int ay, int bx, int by, int col, int black)
+{
+    int xmajor = abs(by - ay) <= abs(bx - ax), h = s_swW / 2;
+    if (xmajor) { ay = sw_start(ay + 0.5) + h; by = sw_start(by + 0.5) + h; }
+    else        { ax = sw_start(ax + 0.5) + h; bx = sw_start(bx + 0.5) + h; }
+    sw_copies(s_swk, &s_nswk, MAXSWK, ax, ay, bx, by, xmajor, -h - s_swB, s_swW + 2 * s_swB, black);
+    sw_copies(s_swc, &s_nswc, MAXSWC, ax, ay, bx, by, xmajor, -h, s_swW, col);
+}
+
+/* a polyline of pre-zoom points, closed or open, dashed `on` / `off` device px along its length
+   on the line grid */
+static void sw_dashed(const double* xs, const double* ys, int n, int closed, double on, double off,
+                      int col, int black)
+{
+    double phase = 0.0, lon = on * s_swDev, period = (on + off) * s_swDev;
+    int i;
+    for (i = 0; i < (closed ? n : n - 1); i++) {
+        int j = (i + 1) % n;
+        double x0, y0, x1, y1, dx, dy, len, t = 0.0;
+        sw_grid(xs[i], ys[i], &x0, &y0);
+        sw_grid(xs[j], ys[j], &x1, &y1);
+        if (!sw_near(x0) || !sw_near(y0) || !sw_near(x1) || !sw_near(y1)) continue;
+        dx = x1 - x0; dy = y1 - y0;
+        len = sqrt(dx * dx + dy * dy);
+        if (!(len > 0.0)) continue;
+        while (t < len) {
+            double step = phase < lon ? lon - phase : period - phase;
+            if (step > len - t) step = len - t;
+            if (phase < lon)
+                sw_stroke((int)floor(x0 + dx * t / len), (int)floor(y0 + dy * t / len),
+                          (int)floor(x0 + dx * (t + step) / len),
+                          (int)floor(y0 + dy * (t + step) / len), col, black);
+            t += step;
+            phase += step;
+            if (phase >= period) phase -= period;
+        }
+    }
+}
+
+/* A box's brackets: four L corners on the rect [x, x + w] x [z, z + d] of the item, each arm a
+   filled rect from the corner's outer edge, square-capped as the mockup's. 1 when drawn. */
+static int sw_bracket(const TAGPU_FXVIEW* v, const TAGPU_PK_SWEEPITEM* e, int col, int black)
+{
+    const double reach = SW_REACH * s_px;
+    double l = (double)e->x - v->eyeX + v->vpL, r = l + e->w;
+    double t = (double)e->z - v->eyeY + v->vpT, b = t + e->d;
+    double gl, gt, gr, gb, side, arm;
+    int L, T, R, B, W = s_swW, A;
+    if (r < v->evpL - reach || l > v->evpL + v->evw + reach ||
+        b < v->evpT - reach || t > v->evpT + v->evh + reach) return 0;
+    sw_grid(l, t, &gl, &gt);
+    sw_grid(r, b, &gr, &gb);
+    if (!sw_near(gl) || !sw_near(gt) || !sw_near(gr) || !sw_near(gb)) return 0;
+    L = sw_start(gl); R = sw_start(gr); T = sw_start(gt); B = sw_start(gb);
+    side = (gr - gl < gb - gt ? gr - gl : gb - gt) / s_swDev;
+    arm = side * SW_ARM_SHARE;
+    arm = arm < SW_ARM_MIN ? SW_ARM_MIN : arm > SW_ARM_MAX ? SW_ARM_MAX : arm;
+    A = s_swQ * (int)floor(arm * s_swDev / s_swQ + 0.5) + W;
+    sw_rect(L, T, L + A - 1, T + W - 1, col, black);         sw_rect(L, T, L + W - 1, T + A - 1, col, black);
+    sw_rect(R + W - A, T, R + W - 1, T + W - 1, col, black); sw_rect(R, T, R + W - 1, T + A - 1, col, black);
+    sw_rect(L, B, L + A - 1, B + W - 1, col, black);         sw_rect(L, B + W - A, L + W - 1, B + W - 1, col, black);
+    sw_rect(R + W - A, B, R + W - 1, B + W - 1, col, black); sw_rect(R, B + W - A, R + W - 1, B + W - 1, col, black);
+    return 1;
+}
+
+/* a string starting at x, glyph by glyph: each is its own atlas entry, so a readout whose
+   numbers change every frame never fills the atlas with strings; the
+   glyphs sit where the blitter's own loop puts them, each at the sum of the widths before it */
+static void sw_text_at(double x, double y, const char* str, int col)
+{
+    float gx = (float)x;
+    for (; *str; str++) {
+        char one[2];
+        int ax, ay, w, h, yoff;
+        one[0] = *str; one[1] = 0;
+        if (s_nswx + QUADV > MAXSWX) { s_swover++; return; }
+        if (!tagpu_text_place(one, &ax, &ay, &w, &h, &yoff)) continue;
+        gx = text_quad(s_swx, s_nswx, gx, (float)y, ax, ay, w, h, yoff, col, 0.0f, 0.0f);
+        s_nswx += QUADV;
+    }
+}
+
+/* ...and centred on x, with the atlas's own width */
+static void sw_text(double x, double y, const char* str, int col)
+{
+    sw_text_at(x - (double)tagpu_text_width(str) * s_px / 2.0, y, str, col);
+}
+
+static void sw_square(double x, double y, double half, int col)
+{
+    float c = (float)col / 255.0f;
+    float x0 = (float)(x - half), y0 = (float)(y - half), x1 = (float)(x + half), y1 = (float)(y + half);
+    if (s_nswq + QUADV > MAXSWQ) return;
+    put_at(s_swq, s_nswq + 0, x0, y0, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    put_at(s_swq, s_nswq + 1, x1, y0, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    put_at(s_swq, s_nswq + 2, x0, y1, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    put_at(s_swq, s_nswq + 3, x1, y0, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    put_at(s_swq, s_nswq + 4, x1, y1, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    put_at(s_swq, s_nswq + 5, x0, y1, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    s_nswq += QUADV;
+}
+
+/* The readout over the ring: `[KIND]`, the counts, the sums -- or that the ring holds none of
+   the kind -- 22 px above the ring's highest point, or 16 px below its lowest when that would
+   come within 30 px of the view's top, and kept 92 px inside its sides. */
+static void sw_readout(const TAGPU_FXVIEW* v, const TAGPU_PK_SWEEP* h, double cx, double top,
+                       double bottom)
+{
+    static const char* const KIND[3] = { "METAL", "ENERGY", "ALL" };
+    static const char* const NONE[3] = { "NO WRECKS HERE", "NO TREES HERE", "NO FEATURES HERE" };
+    char head[16], counts[48], sums[48];
+    double lo = v->evpL + 92.0 * s_px, hi = v->evpL + v->evw - 92.0 * s_px;
+    double ty = top - 22.0 * s_px, x = cx < lo ? lo : cx > hi ? hi : cx;
+    if (ty < v->evpT + 30.0 * s_px) ty = bottom + 16.0 * s_px;
+    if (lo > hi) x = v->evpL + v->evw / 2.0;
+    _snprintf(head, sizeof head, "[%s]", KIND[h->kind]);
+    head[sizeof head - 1] = 0;
+    sw_text(x, ty - 13.0 * s_px, head, h->col[2]);
+    if (!h->nwreck && !h->ntree) {
+        sw_text(x, ty, NONE[h->kind], h->col[2]);
+        return;
+    }
+    counts[0] = sums[0] = 0;
+    if (h->nwreck) _snprintf(counts, sizeof counts, "%u WRECK%s", (unsigned)h->nwreck, h->nwreck > 1 ? "S" : "");
+    if (h->ntree) {
+        size_t at = strlen(counts);
+        _snprintf(counts + at, sizeof counts - at, "%s%u TREE%s", at ? "  " : "", (unsigned)h->ntree,
+                  h->ntree > 1 ? "S" : "");
+    }
+    counts[sizeof counts - 1] = 0;
+    if (h->metal >= 0.5f) _snprintf(sums, sizeof sums, "+%.0f METAL", (double)h->metal);
+    if (h->energy >= 0.5f) {
+        size_t at = strlen(sums);
+        _snprintf(sums + at, sizeof sums - at, "%s+%.0f ENERGY", at ? "   " : "", (double)h->energy);
+    }
+    sums[sizeof sums - 1] = 0;
+    sw_text(x, ty, counts, h->kind == 2 ? h->col[2] : h->col[0]);
+    if (sums[0]) sw_text(x, ty + 13.0 * s_px, sums, h->col[2]);
+}
+
+static void gather_sweep(const TAGPU_FXVIEW* v)
+{
+    const TAGPU_PACKET* pk = v->packet;
+    const TAGPU_PK_SWEEP* h = pk ? tagpu_pk_sweep(pk) : NULL;
+    const TAGPU_PK_SWEEPITEM* it = h ? tagpu_pk_sweepitems(pk) : NULL;
+    double xs[TAGPU_PK_SWEEP_RINGPTS], ys[TAGPU_PK_SWEEP_RINGPTS], top = 0.0, bottom = 0.0;
+    int npt = 0;
+    unsigned i;
+    s_nswc = s_nswk = s_nswq = s_nswx = 0;
+    s_cSweep = 0; s_swover = 0;
+    if (!h) return;
+    sw_widths(v);
+    for (i = 0; i < pk->n_sweepitem; i++) {
+        const TAGPU_PK_SWEEPITEM* e = &it[i];
+        if (e->kind == TAGPU_PK_SWI_RINGPT && npt < (int)TAGPU_PK_SWEEP_RINGPTS) {
+            xs[npt] = (double)e->x - v->eyeX + v->vpL;
+            ys[npt] = (double)e->z - floor((double)e->h * 0.5) - v->eyeY + v->vpT;
+            if (!npt || ys[npt] < top) top = ys[npt];
+            if (!npt || ys[npt] > bottom) bottom = ys[npt];
+            npt++;
+        } else if (e->kind == TAGPU_PK_SWI_BOX) {
+            if (sw_bracket(v, e, e->colour, h->col[3])) s_cSweep++;
+        } else if (e->kind == TAGPU_PK_SWI_HOVER) {
+            sw_bracket(v, e, e->colour, h->col[3]);
+        }
+    }
+    if (!(h->flags & TAGPU_PK_SW_RING)) return;
+    {
+        double cx = (double)h->c[0] - v->eyeX + v->vpL;
+        double cy = (double)h->c[2] - floor((double)h->c[1] * 0.5) - v->eyeY + v->vpT;
+        if (npt >= 3) sw_dashed(xs, ys, npt, 1, SW_DASH_ON, SW_DASH_OFF, h->col[1], h->col[3]);
+        sw_square(cx, cy, 2.5 * s_px, h->col[3]);
+        sw_square(cx, cy, 1.5 * s_px, h->col[1]);
+        if (!npt) top = bottom = cy;
+        sw_readout(v, h, cx, top, bottom);
+    }
 }
 
 /* ---- THE REPLAY'S OVERLAYS ----------------------------------------------
@@ -902,12 +1320,14 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     const TAGPU_PK_UNIT* uu;
     const unsigned char* gui;
     unsigned ui;
-    int watched, nv = BARBASE;
+    int watched, nv = 0;
 
-    s_nbar = 0; s_cBar = 0; s_nordt = 0; s_nordl = 0; s_nordx = 0;
+    s_nbar = 0; s_cBar = 0; s_norda = 0; s_nordl = 0; s_nordx = 0;
     s_nsel = 0; s_selover = 0; s_lfar = 0;
     s_nordxOrd = 0; s_ntext = 0; s_xover = 0;
     s_novt = 0; s_novl = 0; s_novlRing = 0;
+    s_nplace = 0; s_cPlace = 0; s_cPlaceRed = 0; s_cPlaceTake = 0;
+    s_nswc = s_nswk = s_nswq = s_nswx = 0; s_cSweep = 0; s_swover = 0;
     if (!pk || !pk->in_game) return 0;
     /* BEFORE ANYTHING EMITS: a bar per unit at most, a selection rect per unit
        at most, and the unit count is bounded by the packet's own table. A
@@ -941,6 +1361,8 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
        markers are health bars, and neither `damagebars` nor `nobars` has
        anything to say about them */
     gather_cursor(v);
+    gather_place(v);
+    if (s_armed == 1 && !s_passive) gather_sweep(v);
     if (s_armed == 1 && !s_passive) gather_overlay(v);
     if (s_armed == 1 && !s_passive) tagpu_order_gather(v);
     else if (s_passive) tagpu_markown_set_orders(0);
@@ -1077,7 +1499,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
         s_cBar++;
         if (s_passive) continue;      /* the A/B lever: count, let the engine draw */
 
-        put_barf(&nv, x - 17.0f, y - 2.0f, x + 17.0f, y + 2.0f, gui[GUI_BLACK],
+        put_barf(s_barv, &nv, x - 17.0f, y - 2.0f, x + 17.0f, y + 2.0f, gui[GUI_BLACK],
                  wx, wz);
         /* (Health << 5) / maxHP as an UNSIGNED divide, and the thirds through
            the same maxHP/3 the engine's reciprocal multiply produces */
@@ -1086,10 +1508,10 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
         col = hp > 2 * third ? gui[GUI_GREEN]
             : hp > third     ? gui[GUI_YELLOW]
             :                  gui[GUI_RED];
-        put_barf(&nv, x - 16.0f, y - 1.0f, x - 16.0f + (float)w, y + 1.0f, col,
+        put_barf(s_barv, &nv, x - 16.0f, y - 1.0f, x - 16.0f + (float)w, y + 1.0f, col,
                  wx, wz);
     }
-    s_nbar = nv - BARBASE;
+    s_nbar = nv;
     return s_cBar;
 }
 
@@ -1140,6 +1562,7 @@ static void mk_draw(int first, int count, int lines, int text, int fog, int tex,
     s_mkD[s_mkDn].lines = lines; s_mkD[s_mkDn].text = text;
     s_mkD[s_mkDn].fog = fog;     s_mkD[s_mkDn].tex = tex;
     s_mkD[s_mkDn].depth = depth;
+    s_mkD[s_mkDn].blend = tex == TAGPU_MK_TEX_ART;
     s_mkDn++;
 }
 
@@ -1166,7 +1589,7 @@ int tagpu_mark_handover(TAGPU_MKHAND* out, unsigned now)
 
 void tagpu_mark_render(const TAGPU_FXVIEW* v)
 {
-    int total, textBase = 0, selBase = 0, ovtBase, ovlBase;
+    int total, textBase = 0, selBase = 0, ovtBase, ovlBase, placeBase, swBase;
 
     /* THIS PASS BUILDS THE RECORD THE TWIN DRAWS FROM, and nothing else:
        `mk_push` and `mk_draw` are the record and are pure CPU. */
@@ -1185,8 +1608,9 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
         tagpu_markown_set_digits(s_digits);
     }
 
-    if (s_nbar == 0 && s_ncurs == 0 && s_nsel == 0 &&
-        s_nordt == 0 && s_nordl == 0 && s_nordx == 0 && s_novt == 0 && s_novl == 0) return;
+    if (s_nbar == 0 && s_ncurs == 0 && s_nplace == 0 && s_nsel == 0 &&
+        s_norda == 0 && s_nordl == 0 && s_nordx == 0 && s_novt == 0 && s_novl == 0 &&
+        s_nswk == 0 && s_nswc == 0 && s_nswq == 0 && s_nswx == 0) return;
 
     /* ---- the A/B's lever ---- */
     {
@@ -1201,7 +1625,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     }
 
     total = BARBASE + s_nbar;
-    textBase = total + s_nordt + s_nordl;
+    textBase = total + s_norda + s_nordl;
 
     /* ONE CONCATENATION, PUSHED ONCE, so every `first` below indexes the block
        tagpu_vk_mark.c receives. Pushed here rather than per draw because the
@@ -1209,7 +1633,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
        and the geometry drift apart. The record IS the vertex block. */
     mk_push(s_verts, BARBASE);
     if (s_nbar) mk_push(s_barv, s_nbar);
-    if (s_nordt) mk_push(s_ordt, s_nordt);
+    if (s_norda) mk_push(s_orda, s_norda);
     if (s_nordl) mk_push(s_ordl, s_nordl);
     if (s_nordx) mk_push(s_ordx, s_nordx);
     selBase = textBase + s_nordx;
@@ -1218,6 +1642,13 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     if (s_novt) mk_push(s_ovt, s_novt);
     ovlBase = ovtBase + s_novt;
     if (s_novl) mk_push(s_ovl, s_novl);
+    placeBase = ovlBase + s_novl;
+    if (s_nplace) mk_push(s_place, s_nplace);
+    swBase = placeBase + s_nplace;
+    if (s_nswk) mk_push(s_swk, s_nswk);
+    if (s_nswc) mk_push(s_swc, s_nswc);
+    if (s_nswq) mk_push(s_swq, s_nswq);
+    if (s_nswx) mk_push(s_swx, s_nswx);
 
     /* THE SELECTION RECTS FIRST, and depth-tested: the engine draws each one
        inside the unit sweep, immediately before its own unit (`0x4699EB`,
@@ -1235,14 +1666,19 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
        (`0x469CB9`), then the group digit over those (`0x469CF9`), and the build
        cursor last of all — after the fog overlay, which is why it carries no
        fog. */
-    if (s_nordt || s_nordl) {
-        /* the lines are LVS's instances, `ss` target pixels wide -- the rule
-           the effects lines and the nanoframe wire follow too (tagpu_line.h) */
-        if (s_nordt) {
-            mk_draw(total, s_nordt, 0, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE, 0);
+    if (s_norda || s_nordl) {
+        /* the art first, under every order line. The engine interleaves them
+           per record in mask-bit order (`0x439B30`: build rect, dots, target
+           circle, sprite), so its lines can fall either side of its art; one
+           art draw cannot, and art under lines is the order that hides the
+           least of a waypoint (ui-markers.md §6.5). The lines are LVS's
+           instances, `ss` target pixels wide -- the rule the effects lines and
+           the nanoframe wire follow too (tagpu_line.h) */
+        if (s_norda) {
+            mk_draw(total, s_norda, 0, 0, v->fogMode & 1, TAGPU_MK_TEX_ART, 0);
         }
         if (s_nordl) {
-            mk_draw(total + s_nordt, s_nordl, 1, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE, 0);
+            mk_draw(total + s_norda, s_nordl, 1, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE, 0);
         }
     }
     if (s_nordx) {
@@ -1264,10 +1700,20 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
                 v->fogMode & 1, TAGPU_MK_TEX_TEXT, 0);
     }
     /* last, and with the fog off: the engine draws these two rects after its
-       fog overlay and never darkens them */
+       fog overlay and never darkens them, and a placement's sites are the
+       squares that replace its build square */
     if (s_ncurs) {
         mk_draw(CURSBASE, s_ncurs, 0, 0, 0, TAGPU_MK_TEX_NONE, 0);
     }
+    if (s_nplace) {
+        mk_draw(placeBase, s_nplace, 0, 0, 0, TAGPU_MK_TEX_NONE, 0);
+    }
+    /* the reclaim sweep in the same layer: every outline, then the lines over them, the
+       centre dot, the readout */
+    if (s_nswk) mk_draw(swBase, s_nswk, 1, 0, 0, TAGPU_MK_TEX_NONE, 0);
+    if (s_nswc) mk_draw(swBase + s_nswk, s_nswc, 1, 0, 0, TAGPU_MK_TEX_NONE, 0);
+    if (s_nswq) mk_draw(swBase + s_nswk + s_nswc, s_nswq, 0, 0, 0, TAGPU_MK_TEX_NONE, 0);
+    if (s_nswx) mk_draw(swBase + s_nswk + s_nswc + s_nswq, s_nswx, 0, 1, 0, TAGPU_MK_TEX_TEXT, 0);
     /* the replay's overlays, over everything and with the fog off: the click rings, then the
        cursor arrows' fills, then their outlines */
     if (s_novlRing) mk_draw(ovlBase, s_novlRing, 1, 0, 0, TAGPU_MK_TEX_NONE, 0);
@@ -1298,6 +1744,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
         s_mkPub.draws = s_mkD; s_mkPub.ndraw = s_mkDn;
         s_mkPub.text = tagpu_text_atlas(&s_mkPub.textGen);
         tagpu_text_dims(&s_mkPub.textW, &s_mkPub.textH);
+        s_mkPub.art = tagpu_order_art(&s_mkPub.artKey);
+        s_mkPub.artW = TAGPU_ORDART_W; s_mkPub.artH = TAGPU_ORDART_H;
         /* the three tagpu_vk_mark.c binds as textures, as bytes -- same shapes
            tagpu_fx.h uses for the same three */
         s_mkPub.pal = tagpu_pal_engine(); s_mkPub.palSerial = tagpu_pal_engine_serial();
@@ -1325,11 +1773,13 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
             last = v->frame_counter;
             tagpu_text_stats(&nstr, &ndrop);
             _snprintf(b, sizeof b,
-                "mark: bars=%d sel=%d selover=%d cursor=%d ordtri=%d "
+                "mark: bars=%d sel=%d selover=%d cursor=%d place=%d placered=%d placetake=%d "
+                "sweep=%d swover=%d ordart=%d "
                 "ordline=%d far=%d text=%d(lab=%d) "
                 "atlas=%d/%d over=%d key=%d vp=(%d,%d %dx%d) "
                 "zoom=%.2f%s",
-                s_cBar, s_nsel / 4, s_selover, s_ncurs / QUADV, s_nordt / 3,
+                s_cBar, s_nsel / 4, s_selover, s_ncurs / QUADV, s_cPlace, s_cPlaceRed, s_cPlaceTake,
+                s_cSweep, s_swover, s_norda / QUADV,
                 s_nordl, s_lfar,
                 s_ntext, s_nordxOrd / QUADV, nstr, ndrop, s_xover,
                 tagpu_markown_key(), v->vpL, v->vpT, v->vw, v->vh, v->zoom,

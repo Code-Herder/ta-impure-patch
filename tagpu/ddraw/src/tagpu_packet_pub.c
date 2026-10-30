@@ -92,6 +92,8 @@
 #include "tagpu_reclaim.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_resource.h"
+#include "tagpu_place.h"
+#include "tagpu_sweep.h"
 #include "tagpu_profiles.h"
 #include "tagpu_zoom.h"
 #include "tagpu_gui.h"
@@ -111,6 +113,8 @@
                                 THIS thread at the one point it is finished      */
 #include "tagpu_feat.h"      /* whether the mirror wants the map's own features */
 #include "tagpu_hudstate.h"   /* the replay HUD's record, through the replay's own calls */
+#include "tagpu_wiki.h"       /* the in-game wiki's record: Impure's own state, and the two engine
+                                values it follows, read here (wiki_side, wiki_iface) */
 #include "tagpu_hudinput.h"   /* ...and the controls it drew, handed back */
 #include "tagpu_datakeys.h"  /* the build ghost's piece masks, computed on THIS thread */
 #include "tagpu_replay.h"    /* the replay's overlays, built at its frame visit on THIS thread */
@@ -304,6 +308,7 @@ static int      s_fillAgain;
 /* the replay HUD's record, built here and copied into the area: 3.4 KB, off the stack */
 static TAGPU_PK_HUD s_hud;
 static TAGPU_PK_HUDSTAT s_hudstat;
+static TAGPU_PK_WIKI s_wiki;
 
 static unsigned append_area(TAGPU_PACKET* p, unsigned* cursor, const void* src, unsigned len,
                             unsigned* off_out, unsigned* len_out, unsigned trunc_bit)
@@ -363,6 +368,40 @@ typedef char pk_unit_size  [(sizeof(TAGPU_PK_UNIT)   == 104) ? 1 : -1];
 typedef char pk_unit_rsel  [(offsetof(TAGPU_PK_UNIT, pad0) == 85 &&
                              offsetof(TAGPU_PK_UNIT, rsel) == 86) ? 1 : -1];
 typedef char pk_overlay_size[(sizeof(TAGPU_PK_OVERLAY) == 16) ? 1 : -1];
+/* the place table is tagpu_place.h's site byte for byte: fill_place hands the
+   module's own array to append_table as the packet's rows */
+typedef char pk_place_size [(sizeof(TAGPU_PK_PLACE) == 28 &&
+                             sizeof(TagpuPlaceSite) == sizeof(TAGPU_PK_PLACE)) ? 1 : -1];
+typedef char pk_place_layout[(offsetof(TagpuPlaceSite, rect) == offsetof(TAGPU_PK_PLACE, rect) &&
+                              offsetof(TagpuPlaceSite, type) == offsetof(TAGPU_PK_PLACE, type) &&
+                              offsetof(TagpuPlaceSite, colour) == offsetof(TAGPU_PK_PLACE, colour) &&
+                              offsetof(TagpuPlaceSite, pad) == offsetof(TAGPU_PK_PLACE, pad)) ? 1 : -1];
+/* the sweep's two records, field by field: tagpu_sweep.c fills them by name and the marker pass
+   reads them by name, so a padding the compiler chose differently would only move the bytes --
+   but the layout is the one the header's comment states, and the acquire's bounds name it */
+typedef char pk_sweep_size  [(sizeof(TAGPU_PK_SWEEP) == 52 &&
+                              sizeof(TAGPU_PK_SWEEPITEM) == 20) ? 1 : -1];
+typedef char pk_sweep_layout[(offsetof(TAGPU_PK_SWEEP, flags) == 0 &&
+                              offsetof(TAGPU_PK_SWEEP, kind) == 1 &&
+                              offsetof(TAGPU_PK_SWEEP, hot) == 2 &&
+                              offsetof(TAGPU_PK_SWEEP, style) == 3 &&
+                              offsetof(TAGPU_PK_SWEEP, pop) == 4 &&
+                              offsetof(TAGPU_PK_SWEEP, tongue) == 12 &&
+                              offsetof(TAGPU_PK_SWEEP, c) == 20 &&
+                              offsetof(TAGPU_PK_SWEEP, r) == 32 &&
+                              offsetof(TAGPU_PK_SWEEP, nwreck) == 36 &&
+                              offsetof(TAGPU_PK_SWEEP, ntree) == 38 &&
+                              offsetof(TAGPU_PK_SWEEP, metal) == 40 &&
+                              offsetof(TAGPU_PK_SWEEP, energy) == 44 &&
+                              offsetof(TAGPU_PK_SWEEP, col) == 48) ? 1 : -1];
+typedef char pk_sweepitem_layout[(offsetof(TAGPU_PK_SWEEPITEM, kind) == 0 &&
+                                  offsetof(TAGPU_PK_SWEEPITEM, colour) == 1 &&
+                                  offsetof(TAGPU_PK_SWEEPITEM, pad) == 2 &&
+                                  offsetof(TAGPU_PK_SWEEPITEM, x) == 4 &&
+                                  offsetof(TAGPU_PK_SWEEPITEM, h) == 8 &&
+                                  offsetof(TAGPU_PK_SWEEPITEM, z) == 12 &&
+                                  offsetof(TAGPU_PK_SWEEPITEM, w) == 16 &&
+                                  offsetof(TAGPU_PK_SWEEPITEM, d) == 18) ? 1 : -1];
 typedef char pk_piece_size [(sizeof(TAGPU_PK_PIECE)  ==  24) ? 1 : -1];
 typedef char pk_wreck_size [(sizeof(TAGPU_PK_WRECK)  ==  44) ? 1 : -1];
 typedef char pk_anchor_size[(sizeof(TAGPU_PK_ANCHOR) ==  16) ? 1 : -1];
@@ -498,6 +537,50 @@ static int player_logo(const char* ta, unsigned id)
     if (!ptr_ok(pi)) return -1;
     b = *(const unsigned char*)(pi + PI_LOGO);
     return b < PLAYER_COUNT ? (int)b : -1;
+}
+
+/* ---- THE IN-GAME WIKI'S CONTEXT: the controlled player's side and the Interface Type, read
+   here at the fill, on the game thread, in game, and handed to tagpu_wiki_fill by value
+   (tagpu_wiki.c reads no engine memory). ---- */
+#define WIKI_PLAYER_RECORDS 11      /* main's player records: the ten seats and the viewer's, which
+                                       a replay controls (0x2A42 = 10, MEASURED 2026-10-28); all
+                                       eleven built by 0x463BE0 from 0x41D98B (tagpu_recorder.c) */
+#define PI_SIDE             0x95    /* u8 PlayerInfo's side: sidedata's [SIDEn] index            */
+#define OFF_IFACE           0x37EFA /* i32 the Interface Type                                    */
+
+/* THE CONTROLLED PLAYER'S SIDE, as the engine's sidebar router reads it: the record at
+   `main+0x1B63 + 0x14B * byte[main+0x2A42]`, its PlayerInfo at +0x27, the side byte at +0x95
+   (DISASSEMBLED 0x41AD1C..0x41AD66). In a replay 0x2A42 names the viewer's record, whose side the
+   sidebar shows -- the wiki follows what the sidebar shows.
+   LIFETIME: main's eleven PlayerInfo blocks are allocated by the record constructor and nothing
+   frees one (tagpu_recorder.c, the player records), and the router dereferences this one on this
+   thread in game (0x41AD61); this runs on the same thread, in game, between engine calls, so the
+   block is the engine's own live allocation while it is read. ptr_ok is a sanity filter on the
+   pointer's value, not that argument.
+   BOUND: the record index is held below the eleven records; the byte returned is DATA -- the wiki
+   maps it through the published WIKISIDE's side_of_engine, below WIKI_SIDE_SIDES and mapped, else
+   no casting and the fixture -- so a wrong value shows another side's tutorial and never reads
+   memory the engine does not own. -1 when the index or the pointer does not validate. */
+static int wiki_side(const char* ta)
+{
+    const unsigned p = RDU8(ta, OFF_WATCHED);
+    const char* pi;
+    if (p >= WIKI_PLAYER_RECORDS) return -1;
+    pi = *(const char* const*)(ta + OFF_PLAYERS + p * PLAYER_STRIDE + PL_INFO);
+    if (!ptr_ok(pi)) return -1;
+    return RDU8(pi, PI_SIDE);
+}
+
+/* THE INTERFACE TYPE, main+0x37EFA, as the four readers that decide the left button's rows test
+   it, `== 1` (0x43E505, 0x43F9EF, 0x499046, 0x499567, DISASSEMBLED): 1 right-click, anything
+   else left-click. The typed command IFace (0x416D20) stores any integer, unclamped, and the
+   registry load's clamp is signed (0x42F9CD), so a value outside {0, 1} is the engine's mixed
+   interface -- its two `!= 0` readers (0x499162, the right press; 0x499352, a release) take the
+   type-1 branch -- which the wiki shows as the left-click one (research/notes/ingame-wiki.md,
+   Gaps). */
+static int wiki_iface(const char* ta)
+{
+    return RD32(ta, OFF_IFACE) == 1;
 }
 
 /* One live unit's entry. `ta` and `u` are the game thread's own; every value
@@ -2406,6 +2489,49 @@ static void fill_cursor(TAGPU_PACKET* p)
     p->cur_rec = (unsigned)(size_t)rec;
 }
 
+/* THE PLACEMENT'S SITES, COPIED BY VALUE. tagpu_place.c answers on this game
+   thread from its own game-thread state, checked against the cursor mode and
+   type the engine holds at this fill (tagpu_place.h); the rows carry no
+   pointer. At most TAGPU_PK_MAX_PLACE, the cap the acquire checks again with
+   every site's colour, coordinates and type. A table that does not fit sets
+   its bit, and the render thread then draws neither the sites nor the square
+   they replace (tagpu_pk_place_replaces). */
+static TagpuPlaceSite s_plScratch[TAGPU_PK_MAX_PLACE];
+
+static unsigned fill_place(TAGPU_PACKET* p, unsigned* cursor, unsigned* nsites)
+{
+    unsigned n = tagpu_place_sites(s_plScratch, TAGPU_PK_MAX_PLACE);
+    if (n > TAGPU_PK_MAX_PLACE) n = TAGPU_PK_MAX_PLACE;
+    *nsites = n;
+    return append_table(p, cursor, s_plScratch, n, (unsigned)sizeof(TAGPU_PK_PLACE),
+                        &p->off_place, &p->n_place, TAGPU_PK_TRUNC_PLACE);
+}
+
+/* THE RECLAIM SWEEP, COPIED BY VALUE: tagpu_sweep.c answers on this game thread from its own
+   game-thread state and the engine's feature grid, read inside this draw (tagpu_sweep.h). The
+   header and at most TAGPU_PK_MAX_SWEEP items, the caps the acquire checks again with every
+   field; items cut by the cap or by the packet's room set the table's bit, and the marker pass
+   then draws what arrived. */
+static TAGPU_PK_SWEEP     s_swHead;
+static TAGPU_PK_SWEEPITEM s_swItems[TAGPU_PK_MAX_SWEEP];
+
+static unsigned fill_sweep(TAGPU_PACKET* p, unsigned* cursor)
+{
+    unsigned n = 0, need = *cursor, e;
+    int cut = 0;
+    if (!tagpu_sweep_fill(&s_swHead, s_swItems, TAGPU_PK_MAX_SWEEP, &n, &cut)) return need;
+    if (n > TAGPU_PK_MAX_SWEEP) n = TAGPU_PK_MAX_SWEEP;
+    if (cut) p->truncated |= TAGPU_PK_TRUNC_SWEEP;
+    e = append_table(p, cursor, &s_swHead, 1u, (unsigned)sizeof(TAGPU_PK_SWEEP),
+                     &p->off_sweep, &p->n_sweep, TAGPU_PK_TRUNC_SWEEP);
+    if (e > need) need = e;
+    if (!p->n_sweep) return need;      /* no items without their header */
+    e = append_table(p, cursor, s_swItems, n, (unsigned)sizeof(TAGPU_PK_SWEEPITEM),
+                     &p->off_sweepitem, &p->n_sweepitem, TAGPU_PK_TRUNC_SWEEP);
+    if (e > need) need = e;
+    return need;
+}
+
 /* THE BUILD-ORDERS TABLE — the queued builds the order pass is showing site
    rects for, copied out of that pass's own game-thread snapshot (the one the
    squares are drawn from), so the ghost pass and the squares can never drift.
@@ -2414,11 +2540,11 @@ static void fill_cursor(TAGPU_PACKET* p)
 static TAGPU_PK_BUILD s_builds[TAGPU_PK_MAX_BUILDS];
 
 /* THE GHOSTS' PIECE MASKS: one row per type a ghost may be drawn for this
-   frame that hides a piece — the build cursor's type and every type in the
-   table above whose site is not started yet — sorted by type, because the
-   consumer binary-searches it per ghost. tagpu_datakeys computes each type
-   once a level, so a frame costs a pass over the builds and a cache hit per
-   distinct type. A type is taken ONCE through `s_gmSeen`, which is cleared
+   frame that hides a piece — the build cursor's type, every placement site's
+   and every type in the table above whose site is not started yet — sorted by
+   type, because the consumer binary-searches it per ghost. tagpu_datakeys
+   computes each type once a level, so a frame costs a pass over the sites and
+   the builds and a cache hit per distinct type. A type is taken ONCE through `s_gmSeen`, which is cleared
    again from the collected list rather than wholesale. */
 static TAGPU_PK_GHOSTMASK s_gmask[TAGPU_PK_MAX_GHOSTMASK];
 static unsigned           s_gmSeen[TAGPU_LIM_TYPES / 32];
@@ -2432,14 +2558,21 @@ static int gmask_type_cmp(const void* a, const void* b)
    thread's own test for drawing it (cursor mode 0x0E), so every packet the
    cursor ghost is drawn from carries that type's row, or the table's
    TAGPU_PK_TRUNC_GHOSTMASK bit, on which the ghost pass draws nothing. */
-static unsigned fill_ghostmask(TAGPU_PACKET* p, unsigned* cursor, int nb)
+static unsigned fill_ghostmask(TAGPU_PACKET* p, unsigned* cursor, int nb, unsigned nplace)
 {
-    static unsigned short types[TAGPU_PK_MAX_BUILDS + 1];
+    static unsigned short types[TAGPU_PK_MAX_BUILDS + 1 + TAGPU_PK_MAX_PLACE];
     unsigned nt = 0, nm = 0, k, over = 0;
     unsigned cur = p->cursor_mode == 0x0E ? p->build_unit_id : 0u;
     if (cur && cur < TAGPU_LIM_TYPES) {
         s_gmSeen[cur >> 5] |= 1u << (cur & 31);
         types[nt++] = (unsigned short)cur;
+    }
+    for (k = 0; k < nplace; k++) {
+        unsigned t = s_plScratch[k].type;
+        if (!t || t >= TAGPU_LIM_TYPES) continue;
+        if (s_gmSeen[t >> 5] >> (t & 31) & 1) continue;
+        s_gmSeen[t >> 5] |= 1u << (t & 31);
+        types[nt++] = (unsigned short)t;
     }
     for (k = 0; k < (unsigned)nb; k++) {
         unsigned t = s_builds[k].type;
@@ -2462,7 +2595,7 @@ static unsigned fill_ghostmask(TAGPU_PACKET* p, unsigned* cursor, int nb)
                         &p->off_ghostmask, &p->n_ghostmask, TAGPU_PK_TRUNC_GHOSTMASK);
 }
 
-static unsigned fill_builds(TAGPU_PACKET* p, unsigned* cursor)
+static unsigned fill_builds(TAGPU_PACKET* p, unsigned* cursor, unsigned nplace)
 {
     unsigned e, need = *cursor;
     int n = 0;
@@ -2485,7 +2618,7 @@ static unsigned fill_builds(TAGPU_PACKET* p, unsigned* cursor)
        that carries its type (a cut table sets its bit, and the ghost pass
        then draws nothing). What that costs a session with no ghost is one
        cached lookup a frame while a build is on the cursor. */
-    e = fill_ghostmask(p, cursor, n);
+    e = fill_ghostmask(p, cursor, n, nplace);
     if (e > need) need = e;
     return need;
 }
@@ -2646,7 +2779,8 @@ static uint32_t s_fillHead;
 static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
 {
     const char* ta = ta_main();
-    unsigned cursor = sizeof(TAGPU_PACKET), need = sizeof(TAGPU_PACKET), e;
+    unsigned cursor = sizeof(TAGPU_PACKET), need = sizeof(TAGPU_PACKET), e, nplace = 0;
+    uint32_t wlen = 0;
     int L, T, W, H;
     (void)ctx;
 
@@ -2741,8 +2875,9 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
        world tables straight after them, and then the map's own features while
        the mirror is taking them -- the reserve holds all of those at the
        design point (tagpu_packet.c, PK_RESERVE) -- and what an overflow can
-       reach is what follows: the build orders, the replay's overlays, the
-       effects, the UI's render half, the font, and last the effects models' five tables, the one layer
+       reach is what follows: the placement's sites, the build orders, the
+       replay's overlays, the effects, the UI's render half, the font, and last
+       the effects models' five tables, the one layer
        an engine count can drive past the design point (fill_fxmodels). A
        frame below 1x without its fog grids is drawn bare, one without its
        unit tables drops its whole unit hand-over, and one without its
@@ -2773,8 +2908,15 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
        packets ---- */
     e = fill_mapfeat(p, &cursor);
     if (e > need) need = e;
+    /* ---- the placement's sites: 7 KB at most, before the builds table
+       because the ghost masks fill_builds writes cover the sites' types ---- */
+    e = fill_place(p, &cursor, &nplace);
+    if (e > need) need = e;
+    /* ---- the reclaim sweep: 26 KB at most (the header and 1281 items of 20 B) ---- */
+    e = fill_sweep(p, &cursor);
+    if (e > need) need = e;
     /* ---- the build-orders table (the ghost pass) ---- */
-    e = fill_builds(p, &cursor);
+    e = fill_builds(p, &cursor, nplace);
     if (e > need) need = e;
     /* ---- the replay's overlays: 2 KB at most ---- */
     e = fill_overlay(p, &cursor);
@@ -2820,9 +2962,27 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
         e = append_area(p, &cursor, NULL, 6144u, &p->stress_off, &p->stress_len, TAGPU_PK_TRUNC_STRESS);
         if (e > need) need = e;
     }
-    /* ---- the effects models, last ---- */
+    /* ---- the effects models ---- */
     e = fill_fxmodels(p, &cursor);
     if (e > need) need = e;
+    /* ---- the in-game wiki's record, LAST: it can grow without moving or cutting a table
+       before it (tagpu_wikipk.h) ---- */
+    if (tagpu_wiki_fill(&s_wiki, &wlen, s_fillAgain, wiki_side(ta), wiki_iface(ta))) {
+        e = append_area(p, &cursor, &s_wiki, wlen, &p->wiki_off, &p->wiki_len, TAGPU_PK_TRUNC_WIKI);
+        if (e > need) need = e;
+        /* THE STAGE IS CUT BEFORE THE PAGE: a whole record that does not fit is placed as its head,
+           so the window is still drawn and can be closed. The shortfall stays the whole record's,
+           so the growth aims at the stage; the head's own refusal adds nothing to it. A head that
+           does not fit either carries no record, and the wiki closes the window at the next
+           publish's fill (tagpu_wiki.h). */
+        if (!p->wiki_len && wlen > TAGPU_PK_WIKI_HEAD) {
+            const unsigned short_was = s_fillShort;
+            append_area(p, &cursor, &s_wiki, tagpu_wiki_head_only(&s_wiki), &p->wiki_off, &p->wiki_len,
+                        TAGPU_PK_TRUNC_WIKI);
+            s_fillShort = short_was;
+        }
+        tagpu_wiki_carried(&s_wiki, p->wiki_len);
+    }
     p->used_bytes = cursor;
     /* the whole fill's size when a table did not fit (s_fillShort) */
     if (s_fillShort && PKT_ALIGN4(cursor) + s_fillShort > need) need = PKT_ALIGN4(cursor) + s_fillShort;
@@ -3064,6 +3224,8 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
     if (s_installed && !s_countOnly) {
         char* ta = (char*)ta_main();
         tagpu_resource_level_end();
+        tagpu_place_level_end();
+        tagpu_sweep_level_end();
         if (ta) { tagpu_zoom_level_end(ta); tagpu_vpwide_level_end(ta); }
         /* and the terrain latch with it: the shell, the next level's loading
            draws and any screenshot draw before its first in-play one never
@@ -3137,6 +3299,9 @@ static int __cdecl before_draw(void* entry_esp)
         c = tagpu_cmd_take();
         /* the replay HUD's controls as the player last saw them, for a click before the next take */
         tagpu_hudinput_take(c ? &c->hud : NULL);
+        /* the reclaim popup as last drawn, for a click before the next take */
+        tagpu_sweep_take(c ? &c->sweep : NULL);
+        tagpu_wiki_take(c ? &c->wiki : NULL);
         /* THE CAMERA AND THE RECT, THEN THE TERRAIN LATCH: the eye may only
            be off the engine's range, and the rect only wide, on a draw whose
            ground is ours. The render thread's request is read ONCE, the camera

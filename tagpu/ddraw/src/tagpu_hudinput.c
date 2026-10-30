@@ -977,6 +977,11 @@ void tagpu_hudinput_leave_shown(int open)
     }
 }
 
+int tagpu_hudinput_leave_pending(void)
+{
+    return s_leaveWant || s_leaveAsked;
+}
+
 void tagpu_hudinput_level_end(void)
 {
     memset(&s_hit, 0, sizeof s_hit);

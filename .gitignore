@@ -23,6 +23,10 @@
 # ta3do output: models and pictures derived from the game's own assets
 /renders/
 
+# the in-game wiki mockup's 3D stage packs: tiles, features, models, textures and the palette resolved
+# from the local install by tools/wiki/gfx.py -- derived from the game's own files, so never tracked
+/tools/wiki/mockup/gfx/
+
 # tacob projects: decompiled stock BOS and built COBs (game content, never tracked)
 /projects/
 

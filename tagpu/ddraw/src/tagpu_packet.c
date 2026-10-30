@@ -546,6 +546,11 @@ static const char* frame_valid(const void* rec)
             return "replay HUD stats area";
         if (tagpu_pk_hudstat(p)->npt > TAGPU_PK_HUD_POINTS) return "replay HUD stats count";
     }
+    /* the in-game wiki's record: values and no count, so its length is its whole check -- one of
+       its two, the head alone or the whole record with the stage (tagpu_wikipk.h) */
+    if (p->wiki_len && ((p->wiki_len != sizeof(TAGPU_PK_WIKI) && p->wiki_len != TAGPU_PK_WIKI_HEAD) ||
+                        !area_ok(p, p->wiki_off, p->wiki_len)))
+        return "wiki area";
     /* THE FOUR WORLD TABLES. Each is checked ONCE, here, against
        the record's own committed extent, so every consumer indexes with its
        `n_` and nothing else. `area_ok` does the 4-alignment, the "starts after
@@ -584,6 +589,62 @@ static const char* frame_valid(const void* rec)
         for (k = 0; k < p->n_overlay; k++)
             if (ov[k].kind > TAGPU_PK_OV_CLICK || ov[k].player >= TAGPU_PK_OV_PLAYERS)
                 return "overlay item kind or player";
+    }
+    /* the placement's sites: the marker pass sizes its bucket from the cap,
+       indexes gui_col with `colour`, projects `rect` with int arithmetic that
+       the coordinate bound keeps from overflowing, and the ghost pass takes
+       `type` as a model id, which every model id is bounded by */
+    if (!table_ok(p, p->off_place, p->n_place, sizeof(TAGPU_PK_PLACE))) return "place table";
+    if (p->n_place > TAGPU_PK_MAX_PLACE) return "more place sites than the table holds";
+    {
+        const TAGPU_PK_PLACE* pl = tagpu_pk_place(p);
+        unsigned k, c;
+        for (k = 0; k < p->n_place; k++) {
+            if (pl[k].colour != TAGPU_PK_PLACE_BLOCKED && pl[k].colour != TAGPU_PK_PLACE_OK &&
+                pl[k].colour != TAGPU_PK_PLACE_TOGGLE)
+                return "place site colour";
+            for (c = 0; c < 6; c++)
+                if (pl[k].rect[c] < -TAGPU_PK_PLACE_COORD || pl[k].rect[c] > TAGPU_PK_PLACE_COORD)
+                    return "place site coordinate";
+            if (pl[k].type >= p->udef_count) return "place site type";
+        }
+    }
+    /* the reclaim sweep: the marker pass sizes its buckets from the cap, indexes the readout's
+       strings and the popup's rows with the header's enums, and projects every point and
+       footprint with int arithmetic that the coordinate bound keeps from overflowing */
+    if (!table_ok(p, p->off_sweep, p->n_sweep, sizeof(TAGPU_PK_SWEEP))) return "sweep header";
+    if (!table_ok(p, p->off_sweepitem, p->n_sweepitem, sizeof(TAGPU_PK_SWEEPITEM)))
+        return "sweep table";
+    if (p->n_sweep > 1 || p->n_sweepitem > TAGPU_PK_MAX_SWEEP || (p->n_sweepitem && !p->n_sweep))
+        return "sweep counts";
+    if (p->n_sweep) {
+        const TAGPU_PK_SWEEP* h = tagpu_pk_sweep(p);
+        const TAGPU_PK_SWEEPITEM* it = tagpu_pk_sweepitems(p);
+        unsigned k, c;
+        if (h->kind > 2 || h->style > 2 || h->hot < -1 || h->hot > 2 || h->flags > 15)
+            return "sweep header enums";
+        for (c = 0; c < 2; c++) {
+            const int16_t* r = c ? h->tongue : h->pop;
+            if (r[0] > r[2] || r[1] > r[3] || r[0] < -TAGPU_PK_SWEEP_RECT || r[1] < -TAGPU_PK_SWEEP_RECT ||
+                r[2] > TAGPU_PK_SWEEP_RECT || r[3] > TAGPU_PK_SWEEP_RECT)
+                return "sweep popup rect";
+        }
+        for (c = 0; c < 3; c++)
+            if (h->c[c] < -TAGPU_PK_PLACE_COORD || h->c[c] > TAGPU_PK_PLACE_COORD)
+                return "sweep centre";
+        if (h->r < 0 || h->r > TAGPU_PK_PLACE_COORD) return "sweep radius";
+        if (!(h->metal >= 0.0f && h->metal <= 1e9f) || !(h->energy >= 0.0f && h->energy <= 1e9f))
+            return "sweep sums";
+        for (k = 0; k < p->n_sweepitem; k++) {
+            const TAGPU_PK_SWEEPITEM* e = &it[k];
+            if (e->kind > TAGPU_PK_SWI_HOVER) return "sweep item kind";
+            if (e->x < -TAGPU_PK_PLACE_COORD || e->x > TAGPU_PK_PLACE_COORD ||
+                e->h < -TAGPU_PK_PLACE_COORD || e->h > TAGPU_PK_PLACE_COORD ||
+                e->z < -TAGPU_PK_PLACE_COORD || e->z > TAGPU_PK_PLACE_COORD)
+                return "sweep item coordinate";
+            if (e->w < 1 || e->w > TAGPU_PK_SWEEP_BOXMAX || e->d < 1 || e->d > TAGPU_PK_SWEEP_BOXMAX)
+                return "sweep item size";
+        }
     }
     if (p->n_units && p->unit_slots && p->n_units > p->unit_slots) return "more units than slots";
     /* the publisher's own table caps, which the render thread sizes its

@@ -1,0 +1,15 @@
+# log: run 20261027-193855-268 part 1 of tagpu_cobtrace.log, started 2026-10-27 19:38:55
+# tagpu_cobtrace v1	filter=,ARMMOHO,	columns: S tick unit type script slot source args… | R tick unit slot script value | X tick unit script source | K tick unit slot script by | D tick unit slot value | H tick unit slot script pc depth
+S	29	2	ARMMOHO	Create	0	E	
+S	29	2	ARMMOHO	InitState	1	L:0	
+R	29	2	1	InitState	0
+S	29	2	ARMMOHO	SetSpeed	1	E	2352
+S	29	2	ARMMOHO	Activate	2	E	
+S	30	2	ARMMOHO	SmokeUnit	3	C:0	
+R	30	2	0	Create	0
+R	30	2	1	SetSpeed	0
+S	30	2	ARMMOHO	RequestState	0	C:2	0
+R	30	2	2	Activate	0
+S	31	2	ARMMOHO	Go	1	L:0	
+R	31	2	1	Go	0
+R	32	2	0	RequestState	0

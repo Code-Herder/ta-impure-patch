@@ -1,0 +1,5 @@
+# log: run 20261027-194012-268 part 1 of tagpu_cobtrace.log, started 2026-10-27 19:40:12
+# tagpu_cobtrace v1	filter=,ARMGEO,	columns: S tick unit type script slot source args… | R tick unit slot script value | X tick unit script source | K tick unit slot script by | D tick unit slot value | H tick unit slot script pc depth
+S	27	2	ARMGEO	Create	0	E	
+S	27	2	ARMGEO	SmokeUnit	1	C:0	
+R	27	2	0	Create	0

@@ -49,6 +49,23 @@ int  tagpu_menu_click(int gx, int gy, int down);
    open; leave_ready -- the observer that opens Leave's question runs (the menu armed). */
 int  tagpu_menu_modal(void);
 int  tagpu_menu_leave_ready(void);
+/* The in-game wiki's two engine facts (tagpu_wiki.c), game thread. single_player: the level in
+   play is not a network game (main+0x2A44 bit 0 clear), which stays so for the rest of the level.
+   pause_hold: single player's pause bit (main+0x38A51 bit 0) set (`on`) or cleared, its value
+   before in `*was`; 0, writing nothing, when there is no main block or the level is a network
+   game -- it tests single_player itself, so no caller can write the bit in one. Only the wiki
+   calls it. */
+int  tagpu_menu_single_player(void);
+int  tagpu_menu_pause_hold(int on, int* was);
+/* The player's sound settings as the engine's sound entries test them, for the in-game wiki's own
+   mixer (tagpu_wikisound.c), game thread: fxvol (main+0x37F0C, the Options slider's 0..), Sound
+   Mode (main+0x37F19 & 7: 0 off), speechfx (main+0x37F19 bit 0x40: unit replies on), unitchat
+   (main+0x37F17, 0..10), NoDirectSound (0x51E690) and UseWindowsSound (0x51E694). 0 when there is
+   no main block. */
+typedef struct {
+    int fxvol, mode, speech, unitchat, no_dsound, win_sound;
+} TAGPU_SOUNDSET;
+int  tagpu_menu_sound(TAGPU_SOUNDSET* out);
 /* The Config panel, while it is open: 1 with its box on the screen the composite draws, in the
    frame's pixels, inclusive -- where panel_rect has the engine draw it, moved by the world
    region's shift as the composite moves it. 0 while it is closed. Game thread: the UI mirror

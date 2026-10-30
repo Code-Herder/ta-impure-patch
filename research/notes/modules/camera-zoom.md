@@ -852,30 +852,35 @@ view centre to the map and nothing else; [BAR camera port](../bar-camera-port.ht
 is centred on `eye + W/2` at every zoom, `W` being the **true** viewport, so the range is
 
 ```
-eye ∈ [−W/2, map − W/2]            the same at every zoom
+eye ∈ [−W/2, extent − W/2]         the same at every zoom
 ```
 
 and a map edge can reach the middle of the screen, zoomed in or out. The engine's own `0x41C3C0`
-clamps to `[0, extent − W]`, the range that keeps the viewport's edges on the extent's at 1×.
+clamps to `[0, extent − W]`, the range that keeps the viewport's edges on the extent at 1×. The
+centre range's far end takes the smaller of the extent and the tile map's own size (the PLOT grid
+× 16, the packet's `map_w16/h16`): the debug-level `Edge` command writes the extent as the map's
+pixel size less an argument it never clamps (`0x416730`), so a negative one names an extent past
+the tile map, past the far end the eye's readers were audited for.
 
-**Two sizes, and only one of them is the map.** `map` is the map's own size: the PLOT grid
-`main+0x14233`/`+0x14237` (16-px cells) × 16, the extent of the tile map the terrain pass and the
-lab draw. `extent` is the **scroll
-extent** `main+0x1422B`/`+0x1422F`: the map less 32 px wide and 128 px tall, written at the level
-load from the map's pixel size `main+0x14223`/`+0x14227` (`0x4833B8..0x4833E0`, `sub 0x20` and
-`sub 0x80`) and rewritten after that only by the debug-level `Edge` command [DISASSEMBLED]. On Two
-Continents: PLOT 672 × 800 (so the map is 10752 × 12800, which `main+0x14223`/`+0x14227` also
-read), extent 10720 × 12672 [MEASURED]. **The view centre stops at the map's edge**, as the lab's does and
-where the mirrored edge (G20b) reflects. **The engine's range and the pointer's guards stay on the
-extent**, because it is the bound they were built on: the 128-px bottom margin is `GetTPosition`'s
-search window (engine map, "Engine defects we patch"; "The pointer" below).
+**The map is the scroll extent.** `extent` is `main+0x1422B`/`+0x1422F`: the map's pixel size
+`main+0x14223`/`+0x14227` less 32 px wide and 128 px tall, written at the level load
+(`0x4833B8..0x4833E0`, `sub 0x20` and `sub 0x80`) and rewritten after that only by the
+debug-level `Edge` command [DISASSEMBLED]. On Two Continents: PLOT 672 × 800 (so the tile map is
+10752 × 12800, which `main+0x14223`/`+0x14227` also read), extent 10720 × 12672 [MEASURED].
+**Stock never shows a pixel past the extent** — its clamp holds the viewport inside it — so the
+strip between the extent and the tile map's own size is art no player saw, often left unpainted
+by the map's author; the load-time mask makes its right strip unbuildable, and its bottom strip
+wherever the ground's projected y lies past the extent (§2.90, "Where the map ends"). The view centre therefore stops at the extent, and the terrain and feature passes fold the
+mirrored edge at the same line (`tagpu_fx.h` `tagpu_edge_area`, §2.90). **The pointer's guards
+are on the extent too**, the bound they were built on: the 128-px bottom margin is
+`GetTPosition`'s search window (engine map, "Engine defects we patch"; "The pointer" below).
 
 The range is computed in one function, `camera_range()`, from two sets of the same inputs: the game
-thread's (`zoom_eye_range`: `tagpu_vpwide_true_rect`, the extent and the PLOT grid) and the render
-thread's (`range_pk`: the packet's `vp`, `map_pxw/h` — the extent — `map_w16/h16` and
-`cam_centre`), so a step the render thread pre-clamps is accepted by the game thread. The map is
-read from the PLOT grid rather than from `main+0x14223` because the packet already carries the
-grid, so the two threads compute the range from the same words.
+thread's (`zoom_eye_range`: `tagpu_vpwide_true_rect` and the extent) and the render thread's
+(`range_pk`: the packet's `vp`, `map_pxw/h` — the extent's two words — and `cam_centre`), so a
+step the render thread pre-clamps is accepted by the game thread. The terrain and feature passes
+read the same `map_pxw/h` for their fold, so the view centre and the fold stop at the same place
+by construction.
 
 **The centre range is in force only while the ground is ours, and that is the bound it rests
 on.** The engine's terrain pass `0x483FA0` indexes the tile map from the eye with no bounds
@@ -930,8 +935,10 @@ the cursor anchor's pre-clamp use the same one.
 with `vpwide`'s widened rect below 1× — the audit is the engine map's "Who reads the eye" table.
 The one other reader without a lower bound is the map debug overlay `0x418310` (a debug key or
 the "Contour" command), and its one call site `0x468DBA` is redirected to run it only for an eye
-in the engine's own range. **The far ends reach the map's edge, 32 px (right) and 128 px (down)
-past the extent's, and no reader's bound depends on where they are:** each is bounded by its own
+in the engine's own range. **The far ends put the view centre on the extent's right and bottom
+edges, and no reader's bound depends on where they are:** the audit was run for far ends 32 px
+(right) and 128 px (down) further out, at the tile map's own edge, a range the present one lies
+inside, and each is bounded by its own
 compare (the sweep's `PLOT − 1` clips, the fog builder's unsigned tests against the LOS block, the
 cull's rect test, the positional sound's LOS test), by the terrain latch (`0x483FA0`'s eye; its
 window over a view larger than the map by the engine-defect patch at `0x484057`), or by a
@@ -955,13 +962,16 @@ push `smooth = 0`, and its address occurs nowhere in the image as data.
 
 **The minimap box** (`zoom_minimap_rect`) is the engine's box scaled by `1/z` about its centre,
 then held on the minimap **so that it can never invert**. The engine places the box by the
-*extent*, and the view centre reaches the *map's* edge, past it — so near the far edges the box's
-centre lies off the minimap, and at a high zoom the whole shrunken box does. Clamping each edge on
-one side only then left its top below its bottom — measured 2026-09-24 at Two Continents' SE
-corner, 1024x768, minimap `x 10, y 0, 106x126`: top 126 against bottom 125 from 6× on, drawn one
-row below the minimap's last — a box the GUI renderer drops (`R ≥ L && B ≥ T`) and the engine's
-own drawer `0x4BF8C0` would put on the panel below the minimap. Now `114..115 × 125..125` at 6–8×,
-on the minimap's last row. So the **centre** is clamped into
+*extent*, from the viewport's top-left, and the centre range lets that top-left reach W/2 (H/2)
+past the engine's own `extent − W` — so near the far edges the box runs up to half its 1× size
+past the minimap, its centre onto the minimap's edge, and at a high zoom the whole shrunken box
+lies past. Clamping each edge on one side only then left its top below its bottom — measured
+2026-09-24 at Two Continents' SE corner as the range then ended (the eye at `(10304, 12448)`, the
+tile map's corner on the view centre, 32 and 128 px past the present one), 1024x768, minimap
+`x 10, y 0, 106x126`: top 126 against bottom 125 from 6× on, drawn one row below the minimap's
+last — a box the GUI renderer drops (`R ≥ L && B ≥ T`) and the engine's own drawer `0x4BF8C0`
+would put on the panel below the minimap. With the clamp below, `114..115 × 125..125` at 6–8×
+there, on the minimap's last row. So the **centre** is clamped into
 the minimap first and then each edge on **both** sides: the edges leave the rounding in order and
 a clamp to one interval keeps them in order. At 1× an eye in the engine's range keeps the engine's
 own box.
@@ -976,8 +986,8 @@ map:** `GetTPosition`'s answer lies below `(y & ~15) + 144`, so a point with `y 
 mapH − 129` gets an answer on the map, and the 128-px bottom margin is exactly its search window
 (engine map, "Engine defects we patch"). vpwide's replica of `0x498DA0` clamps to the same extent. A
 right-click past the edge therefore orders a move to the nearest point of the extent: the
-pointer's reach stops 32 px short of the map's right edge and 128 px short of its bottom, where
-the view centre does not.
+pointer's reach stops where the view centre does, 32 px short of the tile map's right edge and
+128 px short of its bottom.
 
 **The fog.** The engine's grid builder places its four border completions on the grid's literal
 first and last-but-one rows and columns, which straddle the map edge only while its window
@@ -998,9 +1008,17 @@ against the extent refused the grid the engine builds there and drew those frame
 `y == 0`, `x == screenW − 1`, `y == screenH − 1` — taken from `[obj+0x196]`, and the screen's right
 column is the viewport's right column, so a contracted pointer could never satisfy it.
 
+**MEASURED 2026-10-25, the far ends at the extent** (1024x768, `W = 896`, `H = 704`): on Painted Desert (extent 9216 × 9216; the terrain heartbeat `terr: … map=289x292
+area=288x288`) the eye settles at `x = 8768` (at 1×) and `y = 8864` (at 0.5×) against the right
+and bottom edges, `extent − W/2` and `extent − H/2`; on Assault on Suburbia (extent 8064 tall) at
+`y = 7712` (at 1×).
+
 **MEASURED 2026-09-23** (G20a build, 1024x768, the play defaults, `selbox-facings` on Two
-Continents: map 10752 × 12800, extent 10720 × 12672, `W = 896`, `H = 704`, so the centre range is
-`[−448, 10304] × [−352, 12448]`):
+Continents: map 10752 × 12800, extent 10720 × 12672, `W = 896`, `H = 704`). The range's far ends
+were then the tile map's (the PLOT grid × 16), so the centre range was `[−448, 10304] × [−352,
+12448]`; today's on the same map is `[−448, 10272] × [−352, 12320]` [computed from the extent,
+not measured there]. The near ends are unchanged; the far corners' numbers below are the old
+range's:
 
 * **The corners.** Held at `(−99999, −99999)` the eye and target read `(−448, −352)` at 0.25×, 1×
   and 8×; held at `(99999, 99999)`, `(10304, 12448)` at all three. In a window capture the map's
@@ -1015,9 +1033,9 @@ Continents: map 10752 × 12800, extent 10720 × 12672, `W = 896`, `H = 704`, so 
   `(840.4, 690.0)`: NW `(−448,−352)` → `(393,339)`, NE `(10304,−352)` → `(10304,339)`, SW
   `(−448,12448)` → `(393,12448)`, SE unmoved. `tagpu.log` has no fault or violation line:
   `viol=0 pviol=0 crcbad=0`, `relbad=0 woob=0`, `unacked=(0,0)` on every packet heartbeat.
-* **The lab stops at the same place.** `tascene-view.html` opened past the SE corner and nudged
-  with the arrow keys reads `eye 10304,12448`: the lab's `range()` is `[−vw/2, w16·16 − vw/2]`,
-  the same PLOT grid.
+* **The lab stopped at the same place.** `tascene-view.html` opened past the SE corner and nudged
+  with the arrow keys read `eye 10304,12448`. The lab's `range()` is now `[−vw/2, (w16·16 − 32)
+  − vw/2]` and the same with `h16·16 − 128` — the extent, as the game's.
 * **The picture is untouched inside the old range.** The same instance, `selbox-facings`, the eye
   held at the scenario's own camera `(2376,726)`, one pass armed per capture, the base build
   (`78c22b2`) and this one swapped in the gamedir: the terrain pass at 0.5×, 1× and 2× and the unit
