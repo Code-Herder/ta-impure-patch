@@ -234,10 +234,13 @@ main in). Decide from it:
   A `MISSING` line means the engine map was not updated for this landing. It is also how a
   comment that cites an address the note spells differently gets caught (on G13k the code said
   `0x45A658`, the `je`, where the note had the `test` at `0x45A655`) — make them agree.
-- **Did the module docs move?** For engine code the landing must also touch at least
-  `research/notes/gpu-status.md` (hook map / *fields we write*) and `research/notes/roadmap.md`
-  (capability row and gate entry). `.claude/skills/ta-*/SKILL.md` only if how you drive or
-  measure the game changed.
+- **Did the module docs move?** For engine code the landing must also touch
+  `research/notes/roadmap.md` (capability row and gate entry), and the note in
+  `research/notes/modules/` of every module whose behaviour changed —
+  `modules/hook-map.md` too if it adds a hook or writes an engine field it did not write before.
+  `.claude/skills/ta-*/SKILL.md` only if how you drive or measure the game changed. Check the
+  shape as well as the presence: a module-note diff that only *adds* a section named after this
+  landing is the journal, not the doc — rewrite it into the sections it changes.
 - **Is the landing list still shaped like the work?** If this landing is one of several in a
   gate, the plan note's `## The landings` must match what the work now knows, and the gate row
   must say which landing this was and what is still open — see *When a gate turns out to be
@@ -272,9 +275,14 @@ patched:
 
 **Then the module docs**, each in its own place:
 
-- `research/notes/gpu-status.md` — the §2.x hook map (VA, what it is, mechanism) and the
-  **"State we read, and the fields we write"** table. Anything newly written, or newly written
-  *from a second thread*, belongs in that table.
+- `research/notes/modules/<module>.md` — the module as it now is, **edited in place**: change
+  the sections the work changed, never add one named after the landing (the landing's story is
+  the commit's, the `landing-review:` note's and the plan note's). A new module gets a new note,
+  registered in `research/build_wiki.py`'s `PAGES`. `modules/log-*.md`,
+  `modules/status-snapshot.md` and `gpu-status.md` are frozen and take no writes.
+- `research/notes/modules/hook-map.md` — the **"State we read, and the fields we write"** table
+  and the hook mechanisms. Anything newly written, or newly written *from a second thread*,
+  gets its row here, replacing the row it supersedes.
 - `research/notes/roadmap.md` — the capability row and the gate entry, **including the gaps the
   landing did not close**. For a multi-landing gate the row is a summary and a link to the plan
   note, never the landing log (next).
@@ -298,10 +306,12 @@ note before its first landing; without it a re-cut has nowhere to go.
 - and **a link to the plan note** — `[g19f-plan](g19f-plan.html)`, written the way every other
   cross-link in these notes is.
 
-What a landing measured, what its review found and what it taught goes to its module note
-(`gpu-status.md` §2.x), its commit message, and its `landing-review:` git note — there are 82 of
-those and they carry `findings` / `acted` / `rejected` / `date` in a form nothing else does.
-**None of it goes in the row.** G19f's row reached **5 703 words in a single table cell** and
+What a landing measured and what its review found goes to its commit message, its
+`landing-review:` git note — there are 82 of those and they carry `findings` / `acted` /
+`rejected` / `date` in a form nothing else does — and the plan note's block for that landing.
+What it *taught* about the module goes into the module note as the module's present state,
+edited in place. **None of it goes in the row, and none of it becomes a new module-note section
+named after the landing** — that is how `gpu-status.md` reached 1.8 MB before it was retired. G19f's row reached **5 703 words in a single table cell** and
 G19e's 3 413, which is how the table stopped being readable and how one story came to exist in
 three places at once. The row is what someone opening `roadmap.md` reads to find where the gate
 is; it is not the record. (Rows already oversized stay as they are — they are history, and

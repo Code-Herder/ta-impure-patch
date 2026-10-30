@@ -189,10 +189,19 @@ pass lands with it.
   the numbers). **Negative results count** — a function with no callers, one loop that
   bounds-tests and one that does not. Update it as fully as the work allows; these addresses
   are the expensive part of this project and get re-derived every time they are not written down.
-- **Then the module docs**: `gpu-status.md`'s hook map and its *fields we write* table,
+- **Then the module docs**: the module's note in `research/notes/modules/` (one per module;
+  `modules/hook-map.md` holds the hook mechanisms and the *fields we write* table),
   `roadmap.md`'s gate row and entry, and the `ta-*` skill if how you drive or measure the game
   changed — by that skill's own *Maintaining this skill* rules: state the present, replace
   rather than annotate, and keep the landing's story in the note.
+- **A module note is edited in place, never appended to.** It states the module as it is now:
+  change the sections the work changed, and add none named after a landing. What the landing
+  measured, what its review found and how it got there go to the commit message, the
+  `landing-review:` note and the gate's plan note. A module with no note gets a new
+  `modules/<module>.md`. The frozen notes — `modules/log-*.md`, `modules/status-snapshot.md`
+  and the retired `gpu-status.md`, now an index of where its sections went — take no new
+  writes. **Why:** `gpu-status.md` was written per landing and reached 1.8 MB, two thirds of it
+  sections named after landings, which nobody read and every landing had to add to.
 - **Correct what the work proved wrong.** A stale note is worse than no note.
 - **State the gaps the landing did not close** instead of writing as though it closed them.
 - Mark inferred names `[INFERRED]`; check every claim against the source, never from memory.
