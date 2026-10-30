@@ -1716,8 +1716,9 @@ def unit_state(c, kind):
     return frac, hp
 
 
-# (u7)'s bound on the game's own clock: the reclaim, the ARMCK's walk included, took 7134 ticks
-# (MEASURED 2026-10-30, place-basic.json); a game whose clock stands RECLAIM_STALL_S fails as hung
+# (u7)'s bound on the game's own clock, past which the reads stop: the wall bound it replaces stopped them
+# at 7134 ticks at 1x (MEASURED 2026-10-30, place-basic.json); a game whose clock stands RECLAIM_STALL_S
+# fails as hung
 RECLAIM_TICKS = 12000
 RECLAIM_STALL_S = 60
 
@@ -1748,7 +1749,10 @@ def reclaim(c, shots, res):
             if not grabbed and 0 < hp < hp0 * 0.6:
                 grab(c, shots / f"{res}-reclaim-live.window.png")
                 grabbed = True
-            if hp == 0 or not alive or (len(rows) > 3 and rows[-1][2] == rows[-4][2] == 0) or now - t0 > RECLAIM_TICKS:
+            # gone: HP at 0, or the word past where a finished unit's full HP started -- under a reclaim it only
+            # falls, so a larger one has passed below zero (MEASURED 2026-10-30: 326 read 65534 at the end)
+            if hp == 0 or hp > hp0 or not alive or (len(rows) > 3 and rows[-1][2] == rows[-4][2] == 0) \
+                    or now - t0 > RECLAIM_TICKS:
                 break
             if now != last:
                 last, moved = now, time.monotonic()

@@ -558,6 +558,12 @@ tacli remote add <name> --ssh <user>@<host> [--key <file>] --from <player folder
   instances while another `tacli` removes one they have just found, leave that one out instead
   of failing; `meta()`, which a verb aimed at the instance calls, refuses it as "no such
   instance".
+- **A loop over instances lists the processes once.** An instance's game is the TotalA.exe running
+  from its prefix (`totala_by_prefix`: one `pgrep -x TotalA.exe` and each pid's environment), and
+  `ls`, the launch's slot choice and its window layout each take that map once for the whole loop
+  instead of asking `running()` an instance: a `pgrep` each took 22.4 s over 634 instance folders
+  in `ls` (MEASURED 2026-10-30, the reference setup), against 0.19 s for the one listing, and the
+  wiki gate lists once a window grab.
 
 ### Routing
 

@@ -52,7 +52,7 @@ sounds -- through a DirectSound object of the wiki's own, at the player's volume
 | The window's layout in the DLL | `tagpu/ddraw/src/tagpu_wikilay.c`: pure, the HUD stack's ops, text and hit boxes for a page state (`WIKIPAGE`) |
 | The layout check, C against the mockup | `python3 tools/wiki/wikilaycheck.py`, with `tools/wiki/wikilaycheck.c` |
 | The simulation in the DLL | `tagpu/ddraw/src/tagpu_wikisim.c` |
-| The parity check, C against `sim.js` | `node tools/wiki/simparity.mjs [--wine]`, with `tagpu/ddraw/tests/wikitest.c`; `--hash` prints each demo's final state hash from `sim.js` |
+| The parity check, C against `sim.js` | `node tools/wiki/simparity.mjs [--wine] [--shard K/N]`, with `tagpu/ddraw/tests/wikitest.c`; `--shard` plays every Nth context from the Kth, the cases on shard 1 alone; `--hash` prints each demo's final state hash from `sim.js` |
 | The stage in the DLL | `tagpu/ddraw/src/tagpu_wikistage.c`: a view copied by value, built into HUD ops, each tagged with its range; `tagpu_wikiscene.c`: the ground's cells, feature quads and fog grid; `tagpu_wikiworld.c`: the 3D stage's producer for the wiki's copies of the world passes — [GPU status](gpu-status.html) §2.12d |
 | The 3D ground's check, C against the mockup | `node tools/wiki/scenecheck.mjs`, with `tagpu/ddraw/tests/wikiscenetest.c`; in the game, `tools/wiki/stage3dcheck.py` over `wiki_regression.py stage3d`'s captures |
 | The stage's check, C against `stage.js` | `node tools/wiki/stagecheck.mjs`, with `tagpu/ddraw/tests/wikistagetest.c` |
@@ -67,7 +67,7 @@ sounds -- through a DirectSound object of the wiki's own, at the player's volume
 | The whole gate, at once | `tools/wiki_regression.py - gate --shots DIR [-j N]`: the offline checks and every game lane (each single-player mode on its own instance `wikigate-<mode>`, private registry and private X server, each setup of `mods`) under one hold of the run lock, one step a lane in the runs viewer, each lane's log in DIR ([the plan](wiki-gate-plan.md)) |
 | The sidebar's checks | `node tools/wiki/sidecheck.mjs` (with `tagpu/ddraw/tests/wikisidetest.c`); `python3 tools/wiki/assetcheck.py --side`; `tools/wiki/sidedump.mjs` (a pack's column for a state, as a PNG) and `tools/wiki/sideview.mjs` (`sim.js` at a game dump's state) |
 | The window in the game | `tagpu_wiki.c` (input, pause, the page's state and the demo's simulation; game thread), `tagpu_wikistate.c` (`tagpu_wikilay.c` and `tagpu_wikistage.c` on the record) and `tagpu_vk_hud.c` (drawing; render thread) — [GPU status](gpu-status.html) §2.12c |
-| The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|try|recorded|asset|stage3d|units --launch`, `tools/wiki_regression.py <name> mp`, `tools/wiki_regression.py all mods --shots DIR` (the 3D stage under each supported setup: [below](#the-3d-stage-under-the-mods)); `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's; `units --shots DIR` does the same with the units, then the facing, the `nounit=` lever, the render thread's time and a reclaim in the game; `try` replays two demos through Try it yourself's stage as device input and holds the game's simulation to `simparity.mjs --try` |
+| The game test of the window | `tools/wiki_regression.py <instance> sp|page|demos|try|recorded|asset|stage3d|units --launch`, `tools/wiki_regression.py <name> mp`, `tools/wiki_regression.py all mods --shots DIR` (the 3D stage under each supported setup: [below](#the-3d-stage-under-the-mods)); `demos --shots DIR` grabs each entry's demo mid-play beside the mockup's; `stage3d --shots DIR` captures the 3D stage through the trigger `tagpu_wiki.shot` and compares it with the mockup's; `units --shots DIR` does the same with the units, then the facing, the `nounit=` lever, the stage at rest over the frame count (`tagpu_wiki3d.count`: no work, its render-thread time said) and a reclaim in the game; `try` replays two demos through Try it yourself's stage as device input and holds the game's simulation to `simparity.mjs --try` |
 | The units' scripts | `tagpu/ddraw/src/tagpu_wikicob.c`, the host on `tagpu_cobvm.c`, which the DLL's simulation calls in-process; the mockup's `sim.js` reaches the same C through `tools/wiki/serve.py` (`POST /cob`, from the page through `tools/wiki/mockup/cob.js`) and, under node, `tools/wiki/cobhost.mjs` (`serve.py --stdio`) |
 | The nano spray | the particles in both simulations (`tagpu_wikisim.c` *THE NANO SPRAY*, `sim.js`'s spray functions), the piece's origin from the host (`tagpu_wikicob_query`, `tagpu_wikicob_origin`); drawn by `tagpu_wikistage.c` and `stage.js` ([the COB plan](ingame-wiki-cob-plan.html), *The spray*) |
 | The sound | the events in both simulations (`tagpu_wikisim.c` *THE SOUND*, `sim.js`'s sound functions); in the DLL the WAVs read on the 3D load's thread (`tagpu_wikiasset.c` `sound_load`, parsed by `tagpu/ddraw/src/tagpu_wav.c`) and played by `tagpu/ddraw/src/tagpu_wikisound.c`; in the mockup `tools/wiki/mockup/sound.js` over the pack's `sounds.json` and WAVs, which `gfx.py` copies from the install into the gitignored `tools/wiki/mockup/gfx/` ([below](#the-units-sounds)) |
@@ -1163,7 +1163,10 @@ unless said).
   `--null-layout` and `--pack` for each pack present), `simparity` and `textparity` natively and
   `--wine`, `sidecheck`, `stagecheck`, `scenecheck` and `wikilaycheck.py --check-only`, one after
   another. `assetcheck.py --side` and `wikilaycheck.py` are run on their own.
-- **`tools/wiki_regression.py - gate --shots DIR`** runs those offline checks on four workers and,
+- **`tools/wiki_regression.py - gate --shots DIR`** runs those offline checks on eight workers
+  (`--offline-jobs`), each `simparity` run as four shards (`simparity.mjs --shard K/4`: every
+  fourth of its 48 contexts of demo plays, the rule, refusal, data and malformed cases on shard 1,
+  each shard's C side built in a temporary folder of its own), and,
   on `-j` workers (6 by default), each of `sp`, `page`, `demos`, `try`, `asset`, `stage3d`,
   `units` and `cursor` with `--launch` on its own instance `wikigate-<mode>`, made afresh on its
   own private 1920 × 1080 X server, and `mods` for each of its six setups: each lane the same
@@ -1175,9 +1178,11 @@ unless said).
   one could tear it. All of them are made before the first lane starts. The gate owns its lanes'
   processes and never exits while one runs: on any way out, Ctrl-C and SIGTERM included, it
   starts no more and ends each live one (SIGINT, which runs its clean-up, then SIGKILL after
-  120 s), so the run lock it holds is never released under a lane still playing. MEASURED 2026-10-29 at `-j 6` on
-  the reference setup: the whole gate in 958 s, against some 105 minutes one after another
-  ([the plan](wiki-gate-plan.md)).
+  120 s), so the run lock it holds is never released under a lane still playing. No check in it is decided by the
+  wall clock: the frames are counted at rest (`tagpu_wiki3d.count`), the demo's pace is judged on
+  its own clock, its pauses land on their ticks (`tagpu_wiki.pause`), and a stage's cost is its
+  work, its milliseconds only said. MEASURED 2026-10-30 at `-j 6` on the reference setup: the whole
+  gate, 36 lanes, in 361 s, against some 105 minutes one after another ([the plan](wiki-gate-plan.md)).
 
 ## The first entry: Quick Build: Resource Extractors
 
