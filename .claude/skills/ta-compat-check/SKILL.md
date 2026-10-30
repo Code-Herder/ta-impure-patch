@@ -244,6 +244,14 @@ Run the new setup before writing its `today` — write down what it did, not wha
 - The watcher runs under the **32-bit** PowerShell (`SysWOW64`): a 64-bit one lists only the
   exe among a 32-bit game's modules. Windows PowerShell 5 writes its UTF-8 files with a
   byte-order mark, which the runner strips when it reads them.
+- **The watcher has no window** (`conhost --headless`, `watch_task`). PowerShell's
+  `-WindowStyle Hidden` still makes a console, and a console created after the game's window
+  takes the foreground: the game is then never the focused window, and the intro movie, which
+  plays only while `GetFocus()` is the game's window (`0x47C3A4`), stands still. That reads
+  `impure-inactive` on every setup whose start-up is slow enough to lose the race — the retail
+  exe beside TADR's files, whose takeover does the most work before the window [INFERRED]. A run that stops at the movie
+  with nothing but `gui: movie` in `tagpu.log` is this, not a hang: check which window holds
+  the foreground before suspecting the DLL.
 - **A demo file proves nothing about the recorder**: the 2006 one wrote none in a network game
   while it ran. Its log is the evidence — and only of the DirectPlay way in, never of the
   entry-point one, which leaves the game folder untouched. Reading the process is what covers that.
