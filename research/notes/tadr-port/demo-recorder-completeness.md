@@ -935,7 +935,7 @@ peer's dump. Not in S3c.
 
 Both tiers are built ([S3c-3](demo-recorder-skirmish-slice.md#s3c-3-fixtures-beside-the-code-and-the-gate));
 `tareplay.py run` runs named fixtures. The broad tier's own entries, `fixtures.json`'s `broad`,
-are `limits-tier1` (4 × 1,500 = 6,000 units) with 20 round trips and `cost-four-ai`, a 10-minute
+are `limits-tier1` (4 × 1,499 = 5,996 units, at the 1,500 cap with each cleared commander) with 20 round trips and `cost-four-ai`, a 10-minute
 four-AI game for the cost and size; no landing runs them. Not in S3c: network games and
 per-peer dumps, `limits-tier2` (10 peers, 15,000 units), the compatibility setups and a game loaded
 from a save. The landing run is scoped to the change because the broad tier holds about 28 of 32

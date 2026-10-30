@@ -2291,8 +2291,20 @@ class Win:
         self.root = ntpath.join(self.profile, WIN_ROOT)
         # The 32-bit PowerShell: a 64-bit one lists only the exe and the WOW64 layer among a
         # 32-bit process's modules, never the DLLs it loaded from the game folder.
-        self.powershell32 = ntpath.join(self.one("Write-Output $env:windir"), "SysWOW64",
-                                        "WindowsPowerShell", "v1.0", "powershell.exe")
+        windir = self.one("Write-Output $env:windir")
+        self.powershell32 = ntpath.join(windir, "SysWOW64", "WindowsPowerShell", "v1.0",
+                                        "powershell.exe")
+        self.conhost = ntpath.join(windir, "System32", "conhost.exe")
+
+    def watch_task(self, argument):
+        """Start win-watch.ps1 with no window at all. PowerShell's `-WindowStyle Hidden` still
+        makes a console, and that console takes the foreground when it is created after the
+        game's window, so the game is never the focused window and the intro movie, which plays
+        only while GetFocus() is the game's window (0x47C3A4), stands still. A headless conhost
+        owns the console instead, and a process with no window cannot hold the foreground."""
+        self.task(WIN_WATCH_TASK, self.conhost,
+                  f'--headless "{self.powershell32}" -NoProfile -ExecutionPolicy Bypass '
+                  f'-File {self.path("watch.ps1")} {argument}', self.root)
 
     def run(self, statements, timeout=120.0):
         return self.s.run(statements, timeout=timeout)
@@ -2425,9 +2437,7 @@ def run_windows_setup(w: Win, setup, watch) -> dict:
            f"{not_ours} | Remove-Item -Force"])
     t0 = time.time()
     w.task(WIN_GAME_TASK, ntpath.join(work, "TotalA.exe"), "", work)
-    w.task(WIN_WATCH_TASK, w.powershell32,
-           f"-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File {w.path('watch.ps1')} "
-           f"-Folder {work} -Seconds {watch} -Out {out}", w.root)
+    w.watch_task(f"-Folder {work} -Seconds {watch} -Out {out}")
     events = []
     while time.time() - t0 < watch + 30:
         time.sleep(3)
@@ -2603,9 +2613,7 @@ def windows_smoke(w: Win, setup, seconds):
         if len(before) < 10:
             raise RuntimeError('in-game roster contains fewer than ten scenario units')
         watch_out = w.path('results', name + '.jsonl')
-        w.task(WIN_WATCH_TASK, w.powershell32,
-               f'-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File {w.path("watch.ps1")} '
-               f'-Folder {rem.folder} -Seconds {seconds} -Out {watch_out}', w.root)
+        w.watch_task(f'-Folder {rem.folder} -Seconds {seconds} -Out {watch_out}')
         deadline = time.monotonic() + seconds + 45
         events = []
         while time.monotonic() < deadline:
