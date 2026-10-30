@@ -17,6 +17,8 @@ dll="$root/tagpu/ddraw/ddraw.dll"
 rm -rf "$out"
 mkdir -p "$out"
 cp "$dll" "$out/ddraw.dll"
+# the SIL OFL travels with the fonts packed into the DLL (art/hud/fonts, the HUDPAK resource)
+cp "$root"/art/hud/fonts/OFL-*.txt "$out/"
 sed "s/@VERSION@/$version/g" "$here/README.txt" > "$out/README.txt"
 
 ( cd "$root/dist" && rm -f ta-impure-patch-*.zip && zip -q -r "$name.zip" "$name" )
