@@ -131,10 +131,9 @@ AutoAim and the local block (orders, movement, regeneration) run only for types 
       `0x480DE3`, `0x480E24`). **Negative:** the build step `0x41BA60` writes `+0x104` (`0x41BC16`,
       `0x41BC96`) and never the composite; it calls the finish at `0x41BCBF` when the fraction
       compares equal to 0.0.
-    - **The model's lifetime.** The create stores the model at `0x485DCC` (with a COB) or
-      `0x485E0E` (without) and clears its composite at `0x485DF2` / `0x485E1F`. The destructor
-      `0x4866D0` tests `+0x9E` for NULL (`0x486D99`), calls `FreeObjectState 0x45AAA0` (`0x486D9E`)
-      and nulls `+0x9E` (`0x486DA3`).
+    - **The model's lifetime.** The create stores the model and clears its composite at `0x485DF2` /
+      `0x485E1F`; the destructor frees it
+      ([`FreeObjectState`](memory.md#0x45aaa0-freeobjectstate-the-object3do-destructor)).
     - **A puppet runs no build step.** The unit tick runs a unit's orders only for an owner of
       `+0x73` 1 or 2; any other goes to the reaper (`0x48AEB5..0x48AECD` -> `0x48AFB9`).
 - **A remote copy takes `+0x10E` only through `0x48B090`**, called twice (set the byte's bits,
@@ -529,8 +528,9 @@ follows them bounds each first (`tagpu_datakeys.c`'s `create_hides`). The script
 `0x4B2540` and lives from the level's load to its teardown (`0x42DC3C`, zeroed at `0x42DC41`),
 or to a console `Reload` of its type.
 
-**The block's length is the checksum's.** The loaded script does not record its size, and the
-engine's allocator (`0x4D83B0` → the CRT's `malloc 0x4E8890`) keeps none we can read. But
+**The block's length is the checksum's.** The loaded script does not record its size; the
+allocator does ([`MEM_Size 0x4D8360`](memory.md#0x4d8360-mem_size-the-allocator-knows-a-blocks-size)),
+but that is the heap block's size, which this reading does not use. But
 `0x4BBE50(path, 0)` sizes the block from the file's archive entry (`[[h+8]+4]`) or its
 `filelength` (`0x4E79D0`), and `0x4BBC40(path)` answers the same lookup the same way
 (`0x4BB2E0` with the same mode `0x505F10`, `0x4BBC5A..0x4BBC7E` against `0x4BBE9A..0x4BBEBC`);
@@ -802,9 +802,10 @@ blocked caller is the same eight-record scan in two places — `0x4B19FF` after 
 `0x4B1AB1` after a `signal` kill — each testing `status & 0xFFF00000 == 0x2800000` and
 `+0x18 == the freed slot`.
 
-### The posed model the opcodes write into — `0x45A950` and `0x45AEC0`
+### The posed model the opcodes write into — `0x45AEC0`, and the piece order
 
-`0x45A950(model, scriptfile, unit)` builds the `Object3do` at `unit+0x9E`. It binds the model's
+The scripted builder [`0x45A950`](memory.md#0x45a8d0-0x45a950-the-object3do-builders) builds the
+`Object3do` at `unit+0x9E`. It binds the model's
 nodes to the COB's **piece-name table** (the name compare at `0x45A9FD` → `0x4F8A70`), so the
 `PrimitiveStruct` array is in the COB's piece order, not the 3DO's tree order — ARMPW's array
 slot 0 is `torso`, its COB piece 0, while the 3DO's root node is `ground`. `0x45AEC0` then walks
@@ -828,11 +829,9 @@ the count at `o3+0x00` holds (read `0x45AECA`, incremented `0x45AF35`), its pare
 stored at `+0x32` (`0x45AF6B` / `0x45AF77`), then its child's whole subtree with itself as the
 parent (`[ebp+0x30]`, `0x45AF41..0x45AF44`), then its sibling's with its own parent
 (`[ebp+0x2C]`, `0x45AF60..0x45AF63`); it returns the primitive, stored as the child link `+0x2E`
-and the sibling link `+0x2A`. Then `0x45A950`'s loop (`0x45A9E3..0x45AA70`) runs over the COB's pieces: for piece
-*i* below the primitive count (`0x45A9E8`), it searches the primitives **from index *i* up** for
-the first whose node name `_stricmp`s equal to COB piece *i*'s (`0x45A9FD`), and if that is at
-*j* ≠ *i* it swaps the two whole `0x36`-byte primitives (`0x45AA1A..0x45AA51`); `0x45AF90`
-relinks the tree afterwards (`0x45AA7E`). So a COB piece whose name no node carries drives
+and the sibling link `+0x2A`. Then the builder's loop runs over the COB's pieces: for piece *i* it
+takes the first primitive **from index *i* up** whose node name matches and swaps it into place
+([the loop](memory.md#0x45a8d0-0x45a950-the-object3do-builders)). So a COB piece whose name no node carries drives
 whatever primitive sits at its index, and two nodes of one name go to the first one found at or
 after the index. `tagpu_datakeys.c` reproduces this to find the node a `Create()` `HIDE`
 reaches; on the stock structures it equals a by-name match.
@@ -1395,11 +1394,9 @@ Native `+reload` uses a separate loader call at `0x42D294` and store at `0x42D29
 at `0x42D29F`; otherwise valid unused excess declarations would lose their model bound.
 `0x42D224` requires the availability bit before reload, so a quarantined type remains
 unavailable until a fresh level load rather than being rehabilitated by this command.
-`0x45AE80(root)` is stdcall (`ret 4`); it counts the root and recursively follows
-child `+0x30` and sibling `+0x2C`. `0x45A950` uses the same traversal, allocates
-`34 + 54*N` bytes at `0x45A97F..0x45A98F`, and stores the posed count at model+0.
-The name-ordering loop at `0x45A9CD..0x45AA57` walks COB declarations but skips
-ordinals at or above the posed count (`0x45A9E8`); it never enlarges the model.
+The builder `0x45A950` sizes the object from the template's node count `0x45AE80` and skips
+COB ordinals at or above that count (`0x45A9E8`), so it never enlarges the model
+([its entry](memory.md#0x45a8d0-0x45a950-the-object3do-builders)).
 
 Negative finding: native model getters/setters such as `0x480C30`, `0x480C50`
 and `0x480C7B` do not independently bound the piece. Native save/load also iterate

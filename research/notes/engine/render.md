@@ -245,15 +245,11 @@ the cargo's doubled box. The attach guard should make that unreachable — a str
 attached (`0x48ABC7..0x48AC1D`) — and the bound does not depend on it: `scratch_merge` checks the
 rectangle against the header it is about to be painted by.
 
-**The allocator path.** The engine's `malloc` `0x4D83B0(name, size)` → `0x4D83C0(size)` enters the
-allocator's critical section (`0x4DA780` returns it, `0x528A28`), takes a debug heap when the option
-`0x4D80D0` answers so (`0x4DACF0`, freed through `0x4DB7D0`), else the CRT's `malloc` `0x4E8890`,
-counts the block (`0x4DA7D0(size)`), and applies a fill when the option `0x4D8200` is set
-(`0x4D82C0`). A NULL calls the handler at `[0x5289BC]` in a loop, and the installed handler
-`0x49E700` ends the process. `scratch_alloc` runs the success path by hand, inside the same critical
-section: no block under the debug heap, else `0x4E8890` and, on success, `0x4DA7D0`.
-`0x4D85A0(ptr)` → `0x4D85B0` frees such a block through `0x4D8360`, `0x4DA840` and `0x4E8820`. The
-fill is not applied: every plane is written before it is read.
+**The allocator path.** `scratch_alloc` runs the success path of the engine's allocator
+([`MEM_Alloc`](memory.md#0x4d83b0-mem_alloc-the-named-allocator-mem_allocnamed)) by hand, inside the
+same critical section: no block under the debug heap, else `0x4E8890` and, on success, `0x4DA7D0`,
+so the engine's `MEM_Free` frees it like its own. The `-memset` fill is not applied: every plane is
+written before it is read.
 
 **The invariant.** Every header a writer sets has `w·h ≤ A` (`2h(w+1) ≤ A` for the shadow) and no
 more rows than the smallest table under it, and the merge paints only inside the header's box. It rests on a bound: `A` comes from the frame's own two
@@ -2248,38 +2244,18 @@ both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 
   and `pitch = (w+3) & ~3`, in the object at `that+0x50`. So the *primary* can be a drawing
   destination too — although MEASURED 2026-09-12 across a whole session, no UI blit named it:
   every destination the Phase E observers saw was a `0x4C69F0` object.
-- **`MEM_Free 0x4D85A0(p)` is the one way any engine allocation dies** [VERIFIED 2026-09-12].
-  It is a two-line wrapper (`mov eax,[esp+4]; push eax; call 0x4D85B0; add esp,4; ret`,
-  prologue `8B 44 24 04 50` — five relocatable bytes, which is what makes it detourable), and
-  **`0x4D85B0` has exactly one caller: this**, and it is thread-safe: it takes the allocator's
-  critical section (`0x4DA780`, then `EnterCriticalSection` through `ds:0x4FC198` at `0x4D85C2`
-  [DISASSEMBLED 2026-09-29]) before it touches the heap. 363 sites call `0x4D85A0`, `SurfaceFree
-  0x4C6AC0` among them (`0x4C6ACF`). Its partner is `MEM_Alloc 0x4D83B0(tag, size)` →
-  `0x4D83C0`, which ignores the tag in the shipping build and goes to `0x4DACF0(size, 0)` or
-  `0x4E8890(size)`.
-- **THE ALLOCATOR DOES KNOW A BLOCK'S SIZE: `MEM_Size 0x4D8360(p)`** [VERIFIED 2026-09-16,
-  objdump of the pristine build]. `0x4D85B0` calls it on the free path at `0x4D85E7` and feeds
-  the result to `0x4DA840`, which is the accounting. Its body is a two-way dispatch on the same
-  mode predicate the rest of the allocator uses — `call 0x4D80D0; test al,al` — to
-  `0x4DBAE0(p)` (the private heap's sizer) or `0x4E8FB0(p)` (the CRT `_msize`); it returns 0 for
-  a NULL block and the size in `eax` otherwise. `MEM_Alloc`'s dispatch at `0x4D83D5` tests the
-  same predicate, so the two agree by construction about which heap a block came from.
-  **It takes no lock of its own, but both of its callees do**: `0x4DBAE0` enters the allocator's
-  critical section `0x528A28` first (`0x4DA780`, then `EnterCriticalSection`), and `_msize` takes
-  CRT heap lock 9 (`0x4EAC60(9)`). So it is safe to call from an observer at `MEM_Free`'s entry;
-  the G19f-7 reason for not using it — that it read the heap outside any lock — was wrong. The
-  GUI lane's destructor calls it inside the allocator's section, as `0x4D85B0` does (below).
-  Because a surface's header and pixels are ONE block (`w*h+0x30`, above),
-  `block + 0x30 == the pixel base`, and an observer at this function's entry is exactly a
-  surface destructor — which is what `tagpu_gui_hook.c`'s `before_memfree` is (G18-8): the
-  publisher reads `s->base` at the flip, and what makes that safe is that the table entry
-  cannot outlive the block. MEASURED in game (2026-09-12): **~10 500 calls a second**.
-  **The loader thread makes most of them**: 33 191 frees on threads other than the game thread in
-  one Two Continents load (MEASURED 2026-09-29, two counters at the observer; 33 842 was the
-  2026-09-12 figure), and not one of those blocks held a tracked surface's base. The thread that
-  frees a block is not the thread that draws into it, so an observer that fires off the game
-  thread asks a mirror of the tracked bases instead of the table (`live_hit`,
-  [GUI renderer](../gui-renderer.html) §31).
+- **`MEM_Free` is the surface destructor.** Every engine allocation dies through
+  [`MEM_Free 0x4D85A0`](memory.md#0x4d85a0-mem_free-the-one-way-any-engine-allocation-dies), and
+  [`MEM_Size 0x4D8360`](memory.md#0x4d8360-mem_size-the-allocator-knows-a-blocks-size) is safe to
+  call at its entry. Because a surface's header and pixels are ONE block (`w*h+0x30`, above),
+  `block + 0x30 == the pixel base`, and an observer at `MEM_Free`'s entry is exactly a surface
+  destructor — which is what `tagpu_gui_hook.c`'s `before_memfree` is: the publisher reads
+  `s->base` at the flip, and what makes that safe is that the table entry cannot outlive the block.
+  It calls `MEM_Size` inside the allocator's section, as `0x4D85B0` does (below). Most frees come
+  from the loader thread, and of the 33 191 in one Two Continents load not one block held a tracked
+  surface's base (MEASURED 2026-09-29). The thread that frees a block is not the thread that draws
+  into it, so an observer that fires off the game thread asks a mirror of the tracked bases instead
+  of the table (`live_hit`, [GUI renderer](../gui-renderer.html) §31).
 - **A drawing destination lies inside one block, at an offset that depends on what made it,**
   and the context over it does not say which (every builder writes the same `+0x2C` flags):
   - `0x4C69F0` surfaces: the pixels at `block + 0x30`.
@@ -2307,9 +2283,8 @@ both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 
   copy at `0x466769`. With `block + 0x30` alone neither was retired, and an arrow walk through the
   map list — several picks between two flips — crashed in the publisher's seed of a freed preview
   frame: a read access violation at the end of its heap segment, 95 rows into a 125-pitch entry.
-  The size query costs **~85 ns a call** (MEASURED 2026-09-26, 200v200 on Two Continents, 80 144
-  calls; ~675 frees a second in that battle), so even the ~10 500 a second above is under 0.1 % of
-  one core. No fixture draws the render-type-2 effect, so `0x4B9360`'s frame was not seen
+  The size query costs ~85 ns a call ([`MEM_Size`](memory.md#0x4d8360-mem_size-the-allocator-knows-a-blocks-size)).
+  No fixture draws the render-type-2 effect, so `0x4B9360`'s frame was not seen
   retired live; the test that retires it is the one measured on the SELMAP frames.
 - **`SurfaceFill 0x4C6890(surface, colour)`** — `stdcall`, `ret 8`: fills `h·pitch` bytes at
   `+0xC`; `NULL` ⇒ the back buffer. Prologue `83 EC 64 53 55 56 57`.

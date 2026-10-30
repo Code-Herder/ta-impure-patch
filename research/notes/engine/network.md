@@ -497,17 +497,11 @@ each an optional reference whose 0 the engine itself takes as no unit; both are 
   continuing at `0x48B579`): a carrier past the array becomes 0, `0x48AB70`'s own no parent
   (`0x48ABA9`), counted (`carrier`).
 - **The kill count reads this peer's copy of the victim** [DISASSEMBLED + MEASURED 2026-09-26].
-  The destructor `0x4866D0` runs on every peer and counts a kill only when the attacker
-  `[victim+0xF0]` is non-NULL (`0x48699D..0x4869A5`), the victim's `+0x104` equals `0.0f`
-  (`fld [esi+0x104]; fcomp [0x4FD6F8]`, `0x4869A7..0x4869B8`; the dword at `0x4FD6F8` is 0), and the
-  victim's owner `+0xFF` differs from the killer's player `+0xF4` (`0x4869BA..0x4869C8`); then
-  `inc word [ecx+0xB8]` at `0x4869CA`, the kill count. A non-owner's copy made by a create keeps
-  its `+0x104` until the owner's round robin writes it (above), so a victim that dies before that
-  is counted only on its owner's peer. MEASURED on three peers (`tadr-port/sim-fixes.md`, *Kill
-  counts across peers*): ARMCK dead ~1 s after their create read `+0x104` 1.0 on both non-owners
-  and added 0 / 4 / 0 kills to the towers' copies (killer's owner / victims' owner / bystander);
-  ARMCK dead 40–94 s after it, whose non-owner copies had turned 0.0 at 26–37 s, added the same
-  kills on all three.
+  The destructor runs on every peer and counts a kill only when that peer's copy of the victim
+  reads `+0x104` = 0.0 (the gates, and the three-peer measurement:
+  [its entry](memory.md#0x4866d0-the-unit-destructor-inferred-name-units_destroy), *Who counts a
+  kill*). A non-owner's copy made by a create keeps its `+0x104` until the owner's round robin
+  writes it (above), so a victim that dies before that is counted only on its owner's peer.
 - **The other decoders carry no unit index.** `0x44E9C0` (the `0x490A10` selector's 2): `[1]` flags,
   `[32] × 6` and, under flag bit 0, `[16]` into `+0x24`, which the class's `0x44EA60` (vtable
   `0x4FD3F8` `+0x20`) takes as a signed angle to step toward, by the def's `+0x1BA` over 8 — a

@@ -383,9 +383,8 @@ whole UI is pre-rendered into) and `panel+0xB8`, **overwriting the previous poin
   `0x4D83B0(name, w*h + 0x30)`, then it writes a surface header (`+0x00`/`+0x08` = w, `+0x04` = h,
   `+0x0C` = base+0x30 the pixels, `+0x1C..+0x2C` the clip rect `(0,0,w-1,h-1)`, `+0x10` = `0x2710`,
   `+0x14` = −1, `+0x2C |= 1` with bit 1 cleared).
-* **`0x4D83B0` DROPS THE NAME.** It reads only `[esp+0x8]` — the size — and tail-calls
-  `0x4D83C0(size)`, which takes the allocator's critical section at `ds:0x4FC198`. The name is a
-  heap tag at a higher level; **nothing here looks a surface up by it.**
+* **`0x4D83B0` DROPS THE NAME** ([`MEM_Alloc`](memory.md#0x4d83b0-mem_alloc-the-named-allocator-mem_allocnamed)):
+  **nothing here looks a surface up by it.**
 * **`0x4C6AC0(surf)`** — stdcall `ret 4` — is the free: null-checked, gated on `surf[+0x2C] & 1`
   (the "we own the pixels" bit `0x4C69F0` sets), then `0x4D85A0`.
 * **The frees are SIX sites, not two, and this bullet said two** [CORRECTED 2026-09-18 by landing
@@ -2092,7 +2091,8 @@ On each pick it:
    through `GAF_DrawTransformed 0x4C7580` (`0x46675E`), and frees the temporary (`0x466764`).
    Both are destinations of observed draws — `0x4B7F90` at `0x4666C0` into the temporary,
    `0x4C6890` into the frame, each through a context `0x4B8A80` builds — so both are surfaces
-   to the GUI lane, and both die by `MEM_Free` inside the pick (*`MEM_Free 0x4D85A0`* above).
+   to the GUI lane, and both die by `MEM_Free` inside the pick
+   ([`MEM_Free 0x4D85A0`](memory.md#0x4d85a0-mem_free-the-one-way-any-engine-allocation-dies)).
 
 **`0x4B8DA0(name, w, h)` never writes the key byte.** `ret 0xC`, six callers (`0x420D49`,
 `0x42960D`, `0x4666A4`, `0x4838F5`, `0x495ACD`, `0x495AEE`): it allocates `w·h + 0x18` through the

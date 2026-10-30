@@ -162,7 +162,7 @@ image for a stored address):
 |---|---|
 | the tick `0x424050` | `0x495585` |
 | the spawn `0x423C50` | the console's feature command `0x4163D0` (`0x416412`, stored at file offset `0x100724`); the schema `0x423254`; the swap (`0x4237A3`, `0x4237BE`); the tick (`0x4241A3`, `0x424443`); the saved game's load `0x424C00` (`0x424FBF`, `0x425050`, `0x425180`); LoadMap (`0x483A7E`, `0x483ADE`, `0x483B38`); the corpse `0x486360` (`0x4863F9`, `0x486434`), whose one caller is the destructor (`0x486D6F`) |
-| the destroy `0x4246B0` | the resurrect (`0x40519E`); the console command BurnOne `0x4163A0` (`0x4163C8`, with `force` 1); the swap (`0x423792`, `0x4237B1`); the spawn's footprint (`0x423D6A`); the tick (`0x42442F`); the clear of every feature `0x424840` (`0x42487A`), itself called only by the console command BurnAll `0x416390` (stored in the command table at `0x502040`) |
+| the destroy, `FEATURES_Destroy` | [its entry](memory.md#0x4246b0-features_destroy-the-wreck-path) lists them: the resurrect, BurnOne, the swap, the spawn's footprint, the tick, and BurnAll's clear of every feature |
 | FeatureDie `0x423550` | the reclaim (`0x423965`); the damage (`0x424628`, `0x42465A`); the saved game's load (`0x42507E`, `0x42509D`); the network handler (`0x4554B0`, `0x4554E4`) |
 | the burn `0x4233A0` | the spread (`0x423A4D`, `0x423B55`); the damage (`0x4245C6`); the saved game's load (`0x4250BB`); the network handler (`0x4554CA`) |
 | the damage `0x4244B0` | the network handler (`0x455496`); the area damage (`0x49A626`) |
@@ -228,10 +228,9 @@ caller `0x4164BD`), kill-all `0x486F10` (`0x486FB4`) and the reaper).
   `0x486D58`, `jbe` past the call when 0, the low nibble taken at `0x486D69`). Its other four
   reads of `+0xA` take the high nibble alone (`0x4867DA`, `0x486880`, `0x486CA2`, `0x486D42`), so
   a playing that clears the low nibble removes the corpse and its flare and nothing else.
-- **The unit's model `+0x9E`** is freed only by the destructor, through `FreeObjectState
-  0x45AAA0` at `0x486D9E`, and nulled in the same call (`0x486D93..0x486DA3`; a NULL model is
-  skipped at `0x486D99`). `0x45AAA0`'s two other callers free feature records (`0x4221C4`,
-  `0x42474F`); the unit's other `+0x9E` writers are the create's (`0x485DCC`, `0x485E0E`).
+- **The unit's model `+0x9E`** is freed only by the destructor, after the corpse (`0x486D9E`), and
+  written otherwise only by the create
+  ([`FreeObjectState`'s callers](memory.md#0x45aaa0-freeobjectstate-the-object3do-destructor)).
 
 **Reproduction's source test is the one value a feature call reads from outside the feature
 world** [DISASSEMBLED 2026-10-06]. The spawn, the destroy and the tick read no other unit slot.
@@ -319,7 +318,7 @@ through the def's own field.
 |---|---|---|
 | the tick `0x424050` | `A1 E8 1D 51 00` | a root; its bracket carries the cells that changed since the images |
 | the spawn `0x423C50` | `83 EC 28 53 55` | the cell as `(x, z)`, the def, `v`, which of `pos` and `turn` it was given, and both |
-| the destroy `0x4246B0` | `53 8B 0D E8 1D 51 00` | the cell, `force` |
+| the destroy, `FEATURES_Destroy` | `53 8B 0D E8 1D 51 00` at [`0x4246B0`](memory.md#0x4246b0-features_destroy-the-wreck-path) | the cell, `force` |
 | FeatureDie `0x423550` | `83 EC 08 53 55` | `(x, z, reclaimed)` |
 | the burn `0x4233A0` | `8B 44 24 08 8B 4C 24 04` | `(x, z, flag)` |
 | the damage `0x4244B0` | `8B 0D E8 1D 51 00` | the cell, `x`, `z`, the weapon's ID |
@@ -2186,10 +2185,8 @@ anything not empty (`0xFFFF`) goes to `FEATURES_Destroy 0x4246B0(cell, 0)`, and 
 abandons the spawn **keeping whatever it destroyed so far**. A 3DO def (`+0xFE` bit 0 clear) then
 takes a wreck-pool record, and none left abandons it too. The anchor takes the def, every other
 footprint cell `0xFFFE` with its offset back to the anchor in `+0x0A` (dz) and `+0x0B` (dx).
-**`FEATURES_Destroy 0x4246B0`** resolves a `0xFFFE` cell to its anchor; a def at `0xFFFB` or above
-is refused (the void and border markers), and so is a def with `+0xFF` bit 1; otherwise it frees a
-3DO feature's record, clears the anchor and every `0xFFFE` cell of the def's rectangle, and calls
-`0x440A40`.
+**`FEATURES_Destroy`** refuses a def at `0xFFFB` or above (the void and border markers) and, with
+`force` 0, an indestructible def ([its entry](memory.md#0x4246b0-features_destroy-the-wreck-path)).
 
 **A saved game's features come back later**, from the save: `0x424C00`, called at `0x43265A` from
 the game-load routine `0x432610`, calls `LoadFeature 0x4224B0` (`0x424DE1`)

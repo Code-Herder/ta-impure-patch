@@ -1039,30 +1039,10 @@ byte), `0x486679`–`7D`, `0x486810`–`15`, `0x486F10`–`19` and `0x42B019`–
 - `0x48667E..0x4866B3`: a commander's death (`edi`) with `ActiveCommanderDeath` (`main+0x37EF6`)
   set, for a local player, calls `0x491D70(1)` (deselect everything) and kill-all for `unit+0xFF`.
 
-### The destructor `0x4866D0(rec, mode)`, stdcall, `ret 8`
-
-- `0x4866E0..0x486703`: the unit is the slot `rec+1` names (`[main+0x14357] + idx·0x118`; B3's
-  bound sits at `0x4866E5`); `0x486706` returns for a slot that is not alive.
-- `0x4867BA..0x4867CB`: a carried unit (`+0x86` the transporter) is detached, `0x48AAC0(unit, 0,
-  -1, 1)`.
-- **The cargo loop** `0x4867D0..0x48682A`, while `+0x8A` (the first passenger) is set: kind =
-  3 when the record's kind nibble is 3 and 6 otherwise (`0x4867DA..0x4867EC`); `0x48680B` hits the
-  passenger, `0x489BB0([esi+0xF0], passenger, 30000, kind, 0)`; `0x486810` reloads `+0x8A` and
-  `0x48681D` detaches it. The loop runs on every peer. `0x489BB0` applies the hit through
-  `0x489CE0` (`0x489C89`), which refuses a victim that is not alive or already pending death
-  (`0x489D45`, `0x489D50`), so such a passenger keeps its own kind; stores the kind at `+0xF5`
-  (`0x489DAC`); and sets the pending bit (`+0x110` bit 14, `0x489EE2`) only when the HP reaches 0
-  and the victim's player is local (`0x489ECC..0x489ED8`), so a passenger dies of the loop only on
-  its owner's peer, where the reaper sends its death with that kind (`0x48AFC9`). **Kind 6 comes
-  from nowhere else**: of `0x489BB0`'s twelve callers the others pass 3, 4, 5, 9, 10, 11 or the
-  weapon kind 1 or 2 (`0x499E37`).
-- `0x486D24..0x486D50`: the explosion, as above; `0x486DC7` clears the slot's type (`+0xA6`) and
-  `0x486DCE` its alive bit (the free, *Unit identity on the wire*); `0x486DE8` clears `+0x110` bits
-  4 and 5 (the selection), `0x486DF6` sets `+0x92` to `*(main+0x1439B)`, the type-0 def, and
-  `0x486DFC` decrements the owner's unit count `+0x144`. HP `+0x108` and the owner `+0x96` are
-  left as they were [DISASSEMBLED]. The type-0 def is named "None" and its maxHP `+0x1FA` is 0
-  (MEASURED 2026-10-09), so an emptied slot that keeps a positive HP is one a reader dividing by
-  maxHP must never be handed: *The draw's unit list*, below.
+**The destructor** `0x4866D0(rec, mode)`, which this calls and every other peer's `0x0C` case calls — its slot and B3's bound, the
+cargo loop that deals each passenger 30 000 (the only source of kind 6), the explosion's call at
+`0x486D50`, and what the free clears and leaves (*Unit identity on the wire*) — is
+[its entry](memory.md#0x4866d0-the-unit-destructor-inferred-name-units_destroy).
 
 ### The draw's unit list — HotUnits, its cull `0x48BAE0` and its readers [DISASSEMBLED 2026-10-09]
 

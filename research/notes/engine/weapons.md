@@ -865,9 +865,10 @@ damage steps through `0x489BB0` every half second, so the target's own taken lev
 
 ### The kill increment and where the counts part on two peers
 
-- **`0x4869CA`**, in the destructor `0x4866D0`, is the one increment: `inc word [ecx+0xB8]` with
-  `ecx` = the victim's `+0xF0` (the last attacker), when that is non-NULL, the victim's float
-  `+0x104` equals 0.0 (`0x4FD6F8`), and its owner `+0xFF` differs from `+0xF4`.
+- **`0x4869CA`**, in the destructor, is the one increment of the kill count `+0xB8`, of the
+  victim's last attacker `+0xF0` and behind three gates
+  ([its entry](memory.md#0x4866d0-the-unit-destructor-inferred-name-units_destroy), *Who counts a
+  kill*).
 - **`+0xF0`/`+0xF4` have two writers that matter**: the hit's apply `0x489CE0` (`0x489DBA`,
   `0x489DC0`, only for a hit with an attacker, on the peer that applies it), and the death's
   receive (`0x486778` from the death record's `+7`, `0x486787` from `0x44FE40([rec+3])`).

@@ -642,7 +642,7 @@ one did not fit.
 |---|---|---|
 | `0x4861B3` (`mov eax,esi; pop edi; pop esi; pop ebp`) | the create `0x485F50`'s success exit; the NULL exits (`0x4861BD`, `0x48605A`) are not observed | `esi`, the unit in the slot it took. Five registers are still pushed (`0x4861B5..0x4861B9`, then `ret 0x20`), so the arguments start at `E+0x18`. The first, the owner, is overwritten at `0x485F9C` (`mov [esp+0x18],eax`, the unit type), so the owner is the unit's own `+0x96`; the type is the word at `E+0x1C` (`mov dx,[esp+0x1C]`, `0x486079`), the position the three dwords at `E+0x20`, `finished` the dword at `E+0x2C` (`0x486075`), and `layer` at `E+0x30`, of which the create keeps bits 0–1 (`0x4860F1`). The events of the calls the create makes (its state byte through `0x48B090(1, 1)`, its scripts) come before the create's own |
 | `0x486075` (9 bytes: `mov edi,[esp+0x2C]; mov dx,[esp+0x1C]`) | multiplayer constructor-begin observer, after the selected slot and its B4 birth token are fixed, before type/init/COB work | Same five saved registers and arguments as the success exit; `esi` is the actual selected fixed-array slot, including a first-free slot B4 moved. Copies the same 28-byte arguments/water image into contribution-only root `0x100`. Neither stolen instruction is relative. Ordinary skirmish events remain success-exit observations. |
-| `0x4866D0` (9 bytes) | the destructor `(rec, mode)`'s entry | the record: the victim's `u16` at `+1`, the killer's netid at `+3`, the killer's `u16` at `+7`, the severity at `+9`, the kind at `+0xA`. A call the destructor would make inert (B3's bound at `0x4866E5`, the alive test at `0x486706`) is not recorded; a killer of 0 is none (`0x48675A`). The killer's player by `0x44FE40`'s rule (below); C4's carried decision (`tagpu_tx_carried`); the victim's image as the destructor finds it |
+| the destructor's entry (9 bytes) | [`0x4866D0`](memory.md#0x4866d0-the-unit-destructor-inferred-name-units_destroy) `(rec, mode)` | the record: the victim's `u16` at `+1`, the killer's netid at `+3`, the killer's `u16` at `+7`, the severity at `+9`, the kind at `+0xA`. A call the destructor would make inert (B3's bound at `0x4866E5`, the alive test at `0x486706`) is not recorded; a killer of 0 is none (`0x48675A`). The killer's player by `0x44FE40`'s rule (below); C4's carried decision (`tagpu_tx_carried`); the victim's image as the destructor finds it |
 | `0x41B8D0` (6 bytes) | the build done `(builder, built)`, `ret 8` | both arguments. Its five callers are listed at the table's `0x41B8D0` row above; the build step `0x41BA60` calls it at `0x41BCBF` when the built unit's `+0x104` compares equal to 0.0 (`0x41BCAA..0x41BCBB`), so every build that finishes in play passes here |
 | `0x48B090` (5 bytes) | the state setter `(mask, value)`, `ecx` the unit, `ret 8` | the byte `+0x10E` as the setter will leave it (`0x48B09A..0x48B0D4`), recorded only when it changes, since the setter returns at once otherwise (`0x48B0DE`) |
 | `0x47DAF1` (6 bytes: `mov [esi+0x10F],bl`) | YARD_OPEN `0x47DAC0`'s write, past its refusal `0x47D970`; no branch targets `0x47DAF2..0x47DAF6` | `esi` the structure, `bl` the new `+0x10F`: its bit 2 as `RK_EV_YARD` (*An open yard gives nothing back*), held until its create when the structure is inside it, kept out where THE YARD RULE would refuse it; skirmish recordings only |
@@ -1109,7 +1109,7 @@ level that plays a recording, and otherwise runs the stolen bytes and goes on:
 | `0x4326B0`, the save | `81 EC 04 01 00 00` | 0xC | always |
 | `0x424050`, the feature tick | `A1 E8 1D 51 00` | 0 | from the level's first step, outside the replay's own calls ([the features](map.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)) |
 | `0x423C50`, the spawn | `83 EC 28 53 55` | 0x14 | the same |
-| `0x4246B0`, the destroy | `53 8B 0D E8 1D 51 00` | 8 | the same |
+| the destroy, `FEATURES_Destroy` | `53 8B 0D E8 1D 51 00` at [`0x4246B0`](memory.md#0x4246b0-features_destroy-the-wreck-path) | 8 | the same |
 | `0x423550`, FeatureDie | `83 EC 08 53 55` | 0xC | the same |
 | `0x4233A0`, the burn | `8B 44 24 08 8B 4C 24 04` | 0xC | the same |
 | `0x4244B0`, the damage | `8B 0D E8 1D 51 00` | 0x10 | the same |
@@ -1505,19 +1505,14 @@ before writing anything (*The sight emitter*, below), and the seek counts a refu
 
 **The engine calls a seek makes, and what each does besides its purpose.**
 
-- **The destructor `0x4866D0` with severity 0 and corpse 0** (C4's `tagpu_tx_replay_death`, mode 0):
-  a temporary sight record when the owner is the viewed player (`0x486748`); the objective's death
-  listeners `0x4904C0` (`0x486799`), which do nothing unless the map's `.ota` carries campaign
-  condition keys; the order purge `0x439EB0`; the reply queue purged of the unit (`0x47F8C0`,
-  `0x4867A7`); the control-group setter with −1 (`0x4867AF`); the projectile purge (`0x4867B5`); a
-  carried unit's detach; the grid's clear and the bucket's unlink (`0x47CBD0` at `0x48682D`); the
-  sight removal under true LOS (`0x486845`); **no statistics, no `Killed` script, no explosion and no
-  corpse** (the kind byte 0 jumps `0x48688C` → `0x486A98` → `0x486C9E`; `rec+9` = 0 skips
-  `0x486D24..0x486D50`; `rec+0xA` = 0 skips `0x486D55..0x486D6F`); references to the unit unlinked
-  (`0x489740`); the model to `FreeObjectState`; the owner's live count `+0x144 −= 1`, and **at zero
-  the skirmish elimination `0x47BD70(player)`** (`0x486E54`; the network one `0x450380` at
-  `0x486E32`): the CRT `rand` picks a text (`0x47BD96`), the message ring is written (`0x463CA0` at
-  `0x47BDD5`) and "MessageArrived" plays; `ret 4` at `0x47BDE2`.
+- **The destructor `0x4866D0` with severity 0 and corpse 0** (C4's `tagpu_tx_replay_death`, mode 0)
+  runs every step of [its body](memory.md#0x4866d0-the-unit-destructor-inferred-name-units_destroy)
+  — the temporary sight record, the objective's death listeners, the order, reply and projectile
+  purges, a carried unit's detach, the grid's clear and the sight removal, the free — but **no
+  statistics, no `Killed` script, no explosion and no corpse** (the kind byte 0 jumps `0x48688C` →
+  `0x486A98` → `0x486C9E`; `rec+9` = 0 skips `0x486D24..0x486D50`; `rec+0xA` = 0 skips
+  `0x486D55..0x486D6F`). **At the owner's last unit it runs the skirmish elimination**
+  `0x47BD70(player)` (`0x486E54`), which writes the message ring and plays "MessageArrived".
 - **The create `0x485F50` with the slot given** (argument 8): the init `0x485A40` draws the simulation
   RNG twice (`0x485BDE`, `0x485D1B`) and adds the unit to control group 0 (`0x485D29`); `0x485D40`
   makes the COB object and model and **runs `Create`'s first slice at once** (`0x485DE6`), whose
@@ -1553,12 +1548,11 @@ before writing anything (*The sight emitter*, below), and the seek counts a refu
   not the bucket its owner's image names, which leaves the order the host's); and
   **`0x47CBD0(unit)`** (`ret 4`, one caller, the destructor `0x48682D`): the clear `0x47D0E0`, the
   unlink unless carried, `+0x82 = 0`.
-- **The features' model instances.** The spawn reads the def's template `FeatureDef+0x98`
-  (`0x423EBB`), calls `0x45A8D0` (`0x423EC2`, stdcall `ret 4`; its only other caller is `0x485E09`)
-  and stores the instance at record `+0x04` (`0x423ECB`); nothing tests the template. The teardown
-  purge `0x422170` (one caller, the map-free `0x483DE6`) walks the active and settled lists through
-  the records' i16 `+0x00` (`0x4221CF`) freeing each 3DO record's instance with `0x45AAA0`
-  (`0x4221C4`), then frees the pool: not callable mid-level. `0x45AAA0` is `tagpu_reclaim`'s detour.
+- **The features' model instances** are made by the spawn through
+  [`0x45A8D0`](memory.md#0x45a8d0-0x45a950-the-object3do-builders) (`0x423EC2`, stored at record
+  `+0x04`) and freed by the destroy or by the teardown's purge `0x422170`, through
+  [`FreeObjectState`](memory.md#0x45aaa0-freeobjectstate-the-object3do-destructor) — the purge is not
+  callable mid-level, and `0x45AAA0` is `tagpu_reclaim`'s detour.
 - **The effects.** The particle teardown `0x471DE0` (one caller, the cascade `0x491B9A`) destroys
   every object of each of the ten layers through its own `[vt+0](../1)` and shifts the vector
   (`0x471E0B..0x471E5A`), then frees the vectors and the table; **no engine function empties the

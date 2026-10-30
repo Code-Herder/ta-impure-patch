@@ -161,8 +161,8 @@ store to each slot of `main` listed below, then the routines around them. Establ
 cross-thread audit ([cross-thread engine reads](../cross-thread-engine-reads.md) §4), which needed to
 know, for each field the render thread reads, whether it changes per tick, per map, or never.]
 
-**The two routines that bracket a level.** The teardown cascade `0x491B60` (the one
-`tagpu_reclaim` wraps) frees in this order: `0x485980` the unit array (call at `0x491B95`),
+**The two routines that bracket a level.** The teardown cascade
+([`0x491B60`](#0x491b60-the-level-teardown), the whole call list there) frees the per-map arrays in this order: `0x485980` the unit array (call at `0x491B95`),
 `0x471DE0` the particle layer table (`0x491B9A`), `0x464A00` the players' LOS counters, AI
 objects and `+0xEC` records (`0x491BA9` [DISASSEMBLED 2026-09-28]), `0x466AA0` the minimap
 surfaces (`0x491BAE`),
@@ -224,106 +224,7 @@ load to its teardown, and MAPPED from the map load to the teardown: every in-pla
 both. `tagpu_fogwide` reads them from inside every in-play draw, at the fog site or, on the
 Vulkan renderer, in the publisher's `after` (gpu-status §2.3e).
 
-#### Who enters `0x491B60`, and on which thread
-
-*[BINARY-VERIFIED 2026-09-20. **The first version of this section was wrong in an instructive
-way — the correction is at the foot and is worth reading before trusting any call-site table in
-these notes, including this one.**]*
-
-**The entry set is closed to direct calls.** `0x491B60`'s address is never taken: the 32-bit
-constant `0x00491B60` appears at no offset of the 1 178 624-byte image, and there is no `.reloc`
-section, so a stored address would have to be literal. It therefore cannot be reached through a
-function pointer, a vtable or a dispatch table, and the `E8` sites are all of them. There are
-exactly **six**:
-
-| call site | in function | what it does |
-| --- | --- | --- |
-| `0x460630` | `0x4605C0` | the in-game menu's quit path |
-| `0x491C6A` | `0x491C60` | a three-call shutdown stub (`0x4257A0`, `0x451B60`, the teardown); its only caller is `0x460626`, also in `0x4605C0` |
-| `0x49262C` | `0x492360` | |
-| `0x4996AA` | `0x499200` | sets state **7**, handler `0x499880` |
-| `0x49971D`, `0x4997AF` | `0x499200` | teardown, then `0x491D70(1)`, `0x4A9660`, `0x4257A0`, then state **2** with handler `0x496BB0` — the shell. This is EXITMENU→MAINMENU and EXITMENU→RESTART |
-
-**None of those four functions has a direct caller.** Every one is address-taken and entered
-through the engine's **state-handler slot `[main+0x391F5]`**, dispatched at the single site
-`0x499A1C` (`call dword ptr [eax+0x391F5]`) inside `0x499890`. `0x499200` is installed as the
-in-game handler by the loading-screen handler `0x497F40` (`mov [ecx+0x391F5], 0x499200` at
-`0x498455`, beside `mov [ecx+0x391F1], 6`), and also at `0x490BC5`. The same slot holds
-`0x496BB0`, `0x496B10`, `0x496CE0`, `0x496DB0`, `0x497F40` and `0x499880` — it is the engine's
-whole state machine. `0x496790`, the in-game frame callback, is *not* address-taken; it has
-three direct callers: `0x499200` at `0x4995B8` (in play) and `0x4996A5` (a network game's end,
-after `0x491D70(1)` at `0x499674` and `GUI_Pop 0x4A9660` at `0x499686`), and the loading screen
-at `0x49842F`.
-
-**But THREE OF THE SIX are pinned to the game thread by construction, in the strongest way this
-binary allows.** `0x499200` — the function holding `0x4996AA`, `0x49971D` and `0x4997AF` — also
-calls the in-game frame callback **`0x496790` directly**, at `0x4995B8` and at `0x4996A5`. The
-second of those is the instruction immediately before the teardown call:
-
-```
-0x4996A5   call 0x496790        ; draw the frame
-0x4996AA   call 0x491B60        ; and tear the level down
-```
-
-Same function, same straight line, no branch between them. And `0x496790` is precisely the
-function whose `DrawGameScreen(1, 1)` at `0x4969CD` the fork's publisher gates with
-`on_game_thread()` — a test it applies to *every in-play draw*, hundreds of thousands per
-session, and which has never once counted a foreign one (`foreign=0`). So whatever thread runs
-the frame callback runs these three teardown calls, and that thread is measured continuously,
-not sampled.
-
-**The other three are not pinned statically.** `0x460630` and `0x491C6A` (in `0x4605C0`) and
-`0x49262C` (in `0x492360`) call nothing that is independently tied to a thread; their functions
-are reached through the state slot like the rest, and the graph stops there. For those, the
-evidence is the measurement and the standing instrument, nothing more. Note the asymmetry cuts
-against comfort rather than for it: by `0x499200`'s behaviour the measured teardowns went
-through the three sites that are *also* pinned by construction, so the three that rest on
-measurement alone are the ones least exercised.
-
-What the static work establishes overall is the bound: the entry set is closed, so those six
-sites are all the ways in.
-
-**What the loader thread result really is.** The direct-call transitive closure of `0x497C70` /
-`0x497180` is 1 208 functions and contains neither `0x491B60`, nor the dispatcher `0x499890`,
-nor the state-setter `0x4B4FD0`, nor `0x499200`. That is a **direct-call** result and not a
-proof: the same closure holds 690 indirect call sites across 260 functions.
-
-**Thread creation.** `CreateThread` is the only thread-creation import — no `_beginthread`,
-`_beginthreadex`, `TerminateThread` or fiber API — with exactly **three call sites**
-(`0x4DA27A`, `0x4E616E`, `0x4E780C`). That bounds the spawn *sites*, not the number of threads:
-`0x4E77D0` is a generic CRT spawn wrapper, reachable through the `ret 0xC` wrapper `0x4B6B20`,
-so one site can make many threads. The loader is `push 0x497C70; call 0x4B6B20` at `0x4982C5`,
-through that wrapper, with `0x497C70` calling the body `0x497180` at `0x497CA1`.
-
-**The identity itself is MEASURED, and re-measured on every run.** Four teardowns over two
-distinct UI paths — EXITMENU→MAINMENU ×3 and EXITMENU→RESTART ×1 — all entered `0x491B60` on
-the game thread, with the loader thread alive on a different id at the same moment. A grep of
-the 299 surviving instance logs finds 50 teardowns and no foreign level-end ever recorded. The
-fork now names the entering thread in its teardown line and carries `tdforeign=` in the reclaim
-heartbeat, so the claim is re-checked on every launch, including configurations that session
-could not reproduce.
-
-**Conclusion: the level teardown is game-thread only, on the evidence of the measurement and the
-standing instrument — not of the call graph, which stops at a function pointer.**
-
-> **THE CORRECTION, AND THE METHOD THAT CAUSED IT.** The first version of this section said three
-> of the six call sites were *dead code* inside `0x499100`, which "can only recurse". Every part
-> of that is false. `0x499100` is an ordinary `stdcall` helper running `0x499100..0x4991FB`
-> (`ret 4`, then two `nop`s); it contains no call to the teardown at all. The three calls are in
-> `0x499200`, a **live** state handler — and by its own behaviour it is the quit and restart
-> paths, i.e. almost certainly the very sites the measurement exercised while the note called
-> them unreachable.
->
-> The cause: call sites were attributed to the **nearest preceding `E8` target**, on the
-> assumption that a function starts where something calls it. In this binary the main-loop
-> functions are *never* called — they are stored in `[main+0x391F5]` and dispatched — so they are
-> invisible to that heuristic, and their call sites get charged to whatever ordinary helper
-> happens to sit above them. Two other rows in the table above were wrong the same way
-> (`0x4604A0` for `0x4605C0`, `0x491EC0` for `0x492360`), as was a six-hop "direct call" chain
-> that did not connect. **Take function starts from address-taken constants as well as call
-> targets, and check the claimed function actually contains the call site** — an `objdump` of
-> the boundary costs one command and would have caught all of it.
-
+**Each per-map field, who publishes it and who frees it:**
 
 | Field | What | Published by the load | Freed / nulled by the teardown |
 | --- | --- | --- | --- |
@@ -354,39 +255,88 @@ exactly two of these addresses (`0x45AAA0`, `0x491B60`) and reads none of the ot
 
 ### `0x4866D0` — the unit destructor `[INFERRED name: UNITS_Destroy]`
 
-Frame `sub esp,0x68`, two stack args (a death-message record, a mode), `ret 8` at `0x486E60`.
-Two callers: `0x486679` inside `Send_UnitDeath 0x4864B0` (mode 1) and `0x455423` in the
-message dispatcher `[INFERRED]` (mode 0). At entry `[rec+1]` (word) is the unit id and the unit is
-`main+0x14357` base `+ id·0x118` (`0x4866EE..0x486703`); id 0 makes `esi = 0`, which is what the
-fork's `NullUnitDeathVictim` patch at `0x4866E8` skips to the epilogue. `0x486706` tests the
-alive bit (`[esi+0x110] & 0x10000000`) and skips a dead unit. The tail runs, in this order:
+`stdcall (rec, mode)`: frame `sub esp,0x68`, two stack arguments (a death-message record, a mode),
+epilogue from `0x486E59`, `ret 8` at `0x486E60`. **Two callers, and an E8/E9 scan finds no
+other**: `0x486679` inside `Send_UnitDeath 0x4864B0` (mode 1, on the record Send_UnitDeath has just
+built, `0x486672..0x486679`) and `0x455423` in the `0x0C` case `0x45541C` of the message dispatcher
+(mode 0). So every peer runs it for every death: the victim's owner from Send_UnitDeath, every
+other peer from the `0x0C`. **Deaths do not nest**: nothing the destructor calls calls it, and a
+passenger its cargo loop kills dies later, through the reaper (below) [DISASSEMBLED].
+
+**The slot.** At entry `[rec+1]` (word) is the unit id and the unit is `main+0x14357` base
+`+ id·0x118` (`0x4866EE..0x486703`); nothing bounds the id against the array. Id 0 makes `esi = 0`
+(`0x4866E5..0x4866EC`), so the alive test at `0x486706` (`[esi+0x110] & 0x10000000`) reads
+through NULL; a slot that is not alive returns (`0x486710` → `0x486E59`). Impure's bound (B3, `tagpu_patches.c`
+`wire_s0c`) is a five-byte branch at `0x4866E5` that drops id 0 and an id past the array to that
+epilogue — stock's `push edi` at `0x4866E4` stays, so the epilogue's `pop edi` balances (the spans
+are [network.md](network.md)'s B3 list); TADR's `NullUnitDeathVictim` patches `0x4866E8` for the id-0
+case only.
+
+**The body, in order** (a call with the kind, the severity and the corpse all 0 — C4's replayed
+death, mode 0 — runs every step but the statistics, `Killed`, the explosion and the corpse):
+
+- `0x486748`: a temporary sight record when the owner is the viewed player.
+- `0x486753..0x486787`: the killer `+0xF0` and the killer's player `+0xF4`, from the record (*Who
+  counts a kill*, below).
+- The objective's death listeners `0x4904C0` (`0x486799`), which do nothing unless the map's `.ota`
+  carries campaign condition keys; the order purge `0x439EB0`; the reply queue purged of the unit
+  (`0x47F8C0`, `0x4867A7`); the control-group setter with −1 (`0x4867AF`); the projectile purge
+  (`0x4867B5`).
+- The cargo (below): a carried unit detached (`0x4867BA..0x4867CB`), then the cargo loop
+  `0x4867D0..0x48682A`.
+- The grid's clear and the bucket's unlink, `0x47CBD0` at `0x48682D` (→ `0x47D0E0`); the sight
+  removal under true LOS (`0x486845`).
+- **`Killed`, in mode 0 alone** and when the severity `rec+9` is above 0 (`0x48684A..0x48685A`; the
+  severity read signed, `movsx` and `jle` at `0x486855`): `0x4B0A70("Killed", 0, run-now 1, argc 1,
+  severity, 0, 0, 0)` at `0x486877`. The paths that skip it (`0x486853`, `0x48685A`) join it at
+  `0x48687C`, so nothing after relies on what the call leaves in `eax`, `ecx` or `edx`. The owner's
+  peer ran `Killed` already, as Send_UnitDeath's query ([cob.md](cob.md), *A death's Killed*).
+- The statistics by kind (`0x486880`, *Who counts a kill*, below); the reclaim credit
+  (`0x486C9E..0x486D1E`); the death explosion (`0x486D24..0x486D50`); the corpse
+  (`0x486D55..0x486D6F`).
+- The tail, in this order:
 
 | addr | instruction | what |
 |---|---|---|
-| `0x486D75` | `call 0x489740` | `FreeUnitOrders` |
-| `0x486D8A` | `call [vt+0x50]` (1) | delete the COB script object `unit+0x9A`; nulled at `0x486D8D` |
+| `0x486D75` | `call 0x489740` | `FreeUnitOrders`: the references to the unit unlinked |
+| `0x486D8A` | `call [vt+0x50]` (1) | delete the COB script object `unit+0x9A` (the deleting destructor `0x485E30`); nulled at `0x486D8D` |
+| `0x486D93..0x486D9B` | `mov eax,[esi+0x9E]`; `cmp eax,ebx` at `0x486D99`; `je` | a NULL model skips the free |
 | **`0x486D9E`** | `call 0x45AAA0` | **`FreeObjectState(unit+0x9E)` — the model object is freed here** |
 | **`0x486DA3`** | `mov [esi+0x9E],ebx` (0) | **the pointer is nulled — the instruction after the free returns** |
-| `0x486DB1` / `0x486DB7` | `call 0x43DD10`; `call 0x4B4F20` | `FreeMoveClass` + free of `[unit+0]` |
+| `0x486DB1` / `0x486DB7` | `call 0x43DD10`; `call 0x4B4F20` | `FreeMoveClass` + free of `[unit+0]`, nulled at `0x486DBF` |
 | `0x486DC7` | `mov word [esi+0xA6],0` | the unit's type (the UNITINFO index, the model it draws) cleared: 0 is what first-free's test at `0x486036` takes as a free slot. B4 stamps the free just before it, at `0x486DC1` |
 | **`0x486DCE`** | `and ebp,0xEFFFFFFF` → `[esi+0x110]` | **the alive bit `0x10000000` cleared — after the free** |
-| `0x486DE8` | `and al,0xCF` → `[esi+0x110]` | bits 4 and 5 (selected …) cleared |
-| `0x486DF6` | `mov [esi+0x92],[main+0x1439B]` | the type def reset to a default |
+| `0x486DE8` | `and al,0xCF` → `[esi+0x110]` | bits 4 and 5 (the selection) cleared |
+| `0x486DF6` | `mov [esi+0x92],[main+0x1439B]` | the type def reset to the type-0 def |
 | `0x486DFC` | `dec word [player+0x144]` | the owner's live-unit count, which both creates increment with the dword `+0x140` (`0x486187`/`0x48619C`, `0x486322`/`0x486338`) |
+| `0x486E09..0x486E54` | at a count of 0 | the elimination: `0x450380([owner+4])` at `0x486E32` when `0x435100` answers 3 (a network game), `0x47BD70(owner)` at `0x486E54` when it answers 2 (a skirmish: the CRT `rand` picks a text, `0x47BD96`, the message ring is written, `0x463CA0` at `0x47BDD5`, and "MessageArrived" plays; `ret 4` at `0x47BDE2`) |
+
+HP `+0x108` and the owner `+0x96` are left as they were [DISASSEMBLED]. The type-0 def is named
+"None" and its maxHP `+0x1FA` is 0 (MEASURED 2026-10-09), so an emptied slot that keeps a positive HP
+is one a reader dividing by maxHP must never be handed: the draw's health bars do
+([units.md](units.md#the-draws-unit-list-hotunits-its-cull-0x48bae0-and-its-readers-disassembled-2026-10-09)).
 
 So a reader that gates on the alive bit sees the object freed while the bit still reads set
 (measured live: dead units logged `st=80284101` with `unit+0x9E` already null). Re-reading
 `unit+0x9E` is the correct guard; re-reading the bit is not.
 
 **The cargo, and the corpse** [DISASSEMBLED + MEASURED 2026-09-25]. A unit that is itself cargo
-(`+0x86`) is detached first (`0x48AAC0(unit, 0, −1, 1)` at `0x4867CB`). A unit that carries cargo
-(`+0x8A`, the first carried unit) then deals it 30 000 (`0x7530`) through `0x489BB0(attacker,
-victim, damage, kind, 0)` at `0x48680B`, the attacker its own last attacker `+0xF0`, the kind 3 when
-the record's kind nibble is 3 and 6 otherwise (`0x4867DA..0x4867EC`), and detaches it
-(`0x48681D`). A hit the receiver `0x489CE0` accepts writes its kind into the victim's `+0xF5`
-(`0x489DAC`); one it drops at `0x489D39..0x489D53` (no unit, not alive, bit 14 already set) does not,
-nor does a repair (kind `0x0A`, which adds HP and returns at `0x489D8A`). The unit tick
-reaps a pending-death unit through `Send_UnitDeath 0x4864B0(unit, +0xF5)` (`0x48AFD1`).
+(`+0x86`, the transporter) is detached first (`0x48AAC0(unit, 0, −1, 1)` at `0x4867CB`). While the
+unit carries cargo (`+0x8A`, the first passenger), the loop deals that passenger 30 000 (`0x7530`)
+through `0x489BB0(attacker, victim, damage, kind, 0)` at `0x48680B`, the attacker its own last
+attacker `+0xF0`, the kind 3 when the record's kind nibble is 3 and 6 otherwise
+(`0x4867DA..0x4867EC`), reloads `+0x8A` (`0x486810`) and detaches it (`0x48681D`). The loop runs on
+every peer, and both detaches broadcast a `0x0A` from every peer that runs them
+([units.md](units.md#what-a-death-sends-and-who-removes-a-player)). `0x489BB0` applies the hit
+through `0x489CE0` (`0x489C89`). A hit the receiver accepts writes its kind into the victim's
+`+0xF5` (`0x489DAC`); one it drops at `0x489D39..0x489D53` (no unit, not alive, bit 14 already set,
+`0x489D45`, `0x489D50`) does not, so such a passenger keeps its own kind; nor does a repair (kind
+`0x0A`, which adds HP and returns at `0x489D8A`). It sets the pending bit (`+0x110` bit 14,
+`0x489EE2`) only when the HP reaches 0 and the victim's player is local (`0x489ECC..0x489ED8`), so
+a passenger dies of the loop only on its owner's peer. **Kind 6 comes from nowhere else**: of
+`0x489BB0`'s twelve callers the others pass 3, 4, 5, 9, 10, 11 or the weapon kind 1 or 2
+(`0x499E37`). The unit tick reaps a pending-death unit through `Send_UnitDeath 0x4864B0(unit,
++0xF5)` (`0x48AFD1`).
 `Send_UnitDeath` takes the severity as `(100·(−hp)/maxhp + byte +0xF7) / 2`, clamped to 1..100
 (`0x48655E..0x4865AB`; maxhp the def's `+0x1FA`), and asks the `Killed` script for the corpse type
 (`0x4865C3`). Kind 7 skips the script with corpse type 1 and severity 0; kinds 4, 5 and 9, and a unit
@@ -396,7 +346,10 @@ carries the severity at `rec+9` and the kind and corpse type as the high and low
 type, kind ≠ 7)` (`0x486D55..0x486D6F`), which starts from the def's corpse feature `+0x1BC`, steps
 `type − 1` times through each feature def's FeatureDead (`+0xF4`; the defs at `main+0x1426F`,
 stride `0x100`), and spawns nothing once the index is `0xFFFB` or above; otherwise it spawns at the
-unit's footprint cell (`0x481550(+0x76, +0x78)`, `0x423C50` at `0x4863F9`).
+unit's footprint cell (`0x481550(+0x76, +0x78)`, `0x423C50` at `0x4863F9`). Its other four reads of
+`rec+0x0A` take the high nibble alone (`0x4867DA`, `0x486880`, `0x486CA2`, `0x486D42`)
+([map.md](map.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30),
+*What a playing's corpse call rests on*).
 
 So a carried unit dies at severity 100 whatever its HP was. ARMSTUMP's `Killed` gives corpse type 3
 above severity 50 (`tacob decompile ARMSTUMP`), and `armstump_dead` (feature 123) → `armstump_heap`
@@ -431,8 +384,11 @@ On the counting path:
 - `0x486915..0x486996`: `_stricmp 0x4F8A70` compares, case-insensitively, the unit's type name with a name at `main+0x37F5F`
   indexed by its player's side [INFERRED: the side's commander]. On a match, the killer's player
   `+0x104` + 1 (`0x486981`) and the victim's player `+0x106` + 1 (`0x486996`).
-- `0x48699D..0x4869CA`: **the unit kill count** — the killer's `+0xB8` + 1, gated on `+0xF0` non-NULL,
-  **`+0x104 == 0.0` (`0x4869A7`)**, and `+0xFF ≠ +0xF4`.
+- `0x48699D..0x4869CA`: **the unit kill count** — `inc word [ecx+0xB8]` at `0x4869CA`, `ecx` the
+  killer `+0xF0`, the kill count's one increment. Gated on `+0xF0` non-NULL
+  (`0x48699D..0x4869A5`), **`+0x104 == 0.0`** (`fld [esi+0x104]; fcomp [0x4FD6F8]`,
+  `0x4869A7..0x4869B8`; the dword at `0x4FD6F8` is 0), and the victim's owner `+0xFF` ≠ the
+  killer's player `+0xF4` (`0x4869BA..0x4869C8`).
 
 Two more reads of `+0x104` come after the stats. `0x486C9E..0x486D1E` (kind 5 with a killer) credits
 `(1.0 − +0x104) × def+0x18A` to the killer's `+0xD4` at `0x486CBD`. The credit is scaled by a factor that
@@ -537,8 +493,7 @@ VTLLT1's own copy stayed at 10 through two kills of the joiner's scenario-spawne
 VTTGT0, VTKROG0: none a builder) while the joiner's copy went 0 → 2. It read `+0x104 = 0.0` on both
 peers' copies at a time not tied to the kills, which this analysis predicts is after the round
 robin; the value at the kill was not read. MEASURED on three peers on main (`tadr-port/sim-fixes.md`,
-*Kill counts across peers — measured for B8*; *The kill count reads this peer's copy of the
-victim*, above): ARMCK dead ~1 s after their create added 0 / 4 / 0 kills to the towers' copies
+*Kill counts across peers — measured for B8*): ARMCK dead ~1 s after their create read `+0x104` 1.0 on both non-owners and added 0 / 4 / 0 kills to the towers' copies
 (killer's owner / victims' owner / bystander), those dead 40–94 s after it the same on all three;
 the non-owners' copies turned 0.0 at 26–37 s.
 
@@ -593,9 +548,14 @@ Exactly three callers, each pushing the object:
 
 | caller | path | after the call |
 |---|---|---|
-| `0x486D9E` | unit death (above) | `[unit+0x9E] = 0` |
+| `0x486D9E` | unit death, the destructor's tail (above; a NULL `+0x9E` is skipped at `0x486D99`) | `[unit+0x9E] = 0` at `0x486DA3` |
 | `0x42474F` | `FEATURES_Destroy 0x4246B0`, a 3DO wreck | `[rec+4] = 0` at `0x424754` |
-| `0x4221C4` | the bulk feature purge inside `0x422170` — **reachable only from the level teardown** (below) | nothing nulled |
+| `0x4221C4` | the bulk feature purge `0x422170` (one caller, the map free `0x483DD0` at `0x483DE6`), which walks the active and settled wreck lists through the records' i16 `+0x00` (`0x4221CF`) freeing each 3DO record's object, then frees the pool — **reachable only from the level teardown** (below), so not callable mid-level | nothing nulled per object; the pool pointer is nulled at `0x422214` |
+
+So a unit's `+0x9E` is freed only by the destructor; its other writers are the create's stores of
+a new object (`0x485DCC` with a COB, `0x485E0E` without). A freed object's block can come back as
+another one: the 3D wreck draw's scratch keeps naming a freed husk
+([render.md](render.md#the-3d-wreck-draw-a-husk-borrows-the-unit-pipeline-through-one-shared-scratch-verified-2026-09-14)).
 
 **The fork detours this entry** (`tagpu_reclaim.c`): while armed the call enqueues the object
 instead of freeing it; the real body runs later through a trampoline over the stolen five bytes.
@@ -616,47 +576,193 @@ before then — the allocator evicting it on a wrap — is still the open item o
 
 ### `0x45A8D0` / `0x45A950` — the `Object3do` builders
 
-Size `0x22 + 0x36·n`, `n = 1 + children(node+0x30) + siblings(node+0x2C)` counted by `0x45AE80`
-— ARMPW 15 parts = 844 bytes, CORAK 16 = 898, ARMROCK 13 = 736, the one-piece `armpw_dead` /
-`corak_dead` = 88. Allocated by `0x4D83B0(tag "Object State" @0x506614, size)` and zeroed;
-`+0x08 = 1`, `+0x0C` = the unit (`0x45A9C8`, the scripted builder only), `+0x1E` = the prim tree
-root from `0x45AEC0` / `0x45AF90`. Callers: `0x45A950` from `0x485DC0`
-(`UNITS_CreateModelScripts 0x485D40`), `0x45A8D0` from `0x485E09` (a unit without a script) and
-`0x423EC2` (features: a 3DO wreck record's object). **No per-frame temporaries** — objects are
-built at creation and freed at death only.
+`0x45A8D0(template)` is `stdcall`, `ret 4` (`0x45A941`); `0x45A950(model, scriptfile, unit)` is
+`stdcall`, `ret 0xC` (`0x45AA8F`). Size `0x22 + 0x36·n`, `n = 1 + children(node+0x30) +
+siblings(node+0x2C)` counted by `0x45AE80` (`stdcall`, `ret 4`; it counts the root and recursively
+follows child `+0x30` and sibling `+0x2C`, so it includes the root's own siblings) — ARMPW 15 parts =
+844 bytes, CORAK 16 = 898, ARMROCK 13 = 736, the one-piece `armpw_dead` / `corak_dead` = 88.
+Allocated by `0x4D83B0(tag "Object State" @0x506614, size)` (`0x45A90B`, `0x45A98F`; the size at
+`0x45A97F..0x45A98F` in the scripted builder) and zeroed; `+0x00` = the posed count, `+0x08` = 1,
+`+0x0C` = the unit (`0x45A9C8`, the scripted builder only; a unit without a script gets it written
+by the create, `0x485E14`), `+0x1E` = the prim tree root from `0x45AEC0` / `0x45AF90`.
+
+**The scripted builder binds the primitives to the COB's piece order** [DISASSEMBLED 2026-09-25].
+After `0x45AEC0` has laid the primitives out in pre-order, `0x45A950`'s loop (entered at
+`0x45A9CD` with the script's piece count `[scriptfile+8]`, body and latch `0x45A9E3..0x45AA70`)
+runs over the COB's pieces: for piece *i* below the primitive count
+(`0x45A9E8`; ordinals at or above it are skipped, so the loop never enlarges the object), it
+searches the primitives from index *i* up for the first whose node name `_stricmp`s equal to piece
+*i*'s (`0x45A9FD` → `0x4F8A70`), swaps the two whole `0x36`-byte primitives when that is at *j* ≠ *i*
+(`0x45AA1A..0x45AA51`; no match, or *j* = *i*, goes on at the latch `0x45AA57`), and `0x45AF90` relinks the tree afterwards (`0x45AA7E`). What that order
+means for the opcodes, and the primitive layout `0x45AEC0` writes: [cob.md](cob.md#the-posed-model-the-opcodes-write-into-0x45aec0-and-the-piece-order).
+
+**Callers.** `0x45A950` from `0x485DC0` (`UNITS_CreateModelScripts 0x485D40`, the object stored at
+`unit+0x9E` at `0x485DCC`); `0x45A8D0` from `0x485E09` (a unit without a script, stored at
+`0x485E0E`) and `0x423EC2` (features: the spawn's 3D branch `0x423D96..0x423EDB` reads the def's
+template `FeatureDef+0x98` at `0x423EBB`, tests nothing about it, and stores the object at wreck
+record `+0x04` at `0x423ECB`). **No per-frame temporaries** — objects are built at creation and
+freed at death only.
 
 ### `0x4246B0` `FEATURES_Destroy` — the wreck path
 
-Args (a tile pointer, a flag). `0x42472D` loads the wreck pool `main+0x1420B`, record = pool
-`+ FT_WIDX·0x30`; `test [def+0xFE],1` splits GAF from 3DO wrecks; a 3DO wreck's object is freed
-at `0x42474F` and nulled at `0x424754`; `0x4232F0` runs; then the tile's def index is set to
-`0xFFFF` and its flags bit 0 cleared (`0x42477C` / `0x424780`) — **the tile is unlinked last**,
-so the fork's wreck gather (which reads the tile, then the record, then the object) sees the
-same free-before-unlink shape as the unit path.
+`stdcall (cell, force)`, `ret 8`; prologue `53 8B 0D E8 1D 51 00` (`push ebx; mov ecx,[0x511DE8]`)
+[DISASSEMBLED 2026-10-29]. In order:
+
+- A cell whose def is `0xFFFE` (a footprint cell) is resolved to its anchor through its `+0x0A`
+  (dz) and `+0x0B` (dx) and the map width `main+0x14233` (`0x4246BE..0x4246E6`).
+- **Refusals, returning 0**: a def at `0xFFFB` or above — no feature, the void and border markers
+  (`0x4246EC`, `0x4246F2`); and, when `force` is 0, a FeatureDef (`main+0x1426F + def·0x100`) with
+  `+0xFF` bit 1, the indestructible flag (`0x424715`, `0x42471E`).
+- **The record**, when the cell's flags `+0x0C` bit 0 says it holds one (`0x424727`): `0x42472D`
+  loads the wreck pool `main+0x1420B`, record = pool `+ [cell+0x0A]·0x30`; `test [def+0xFE],1`
+  (`0x424741`) splits GAF from 3DO features, and a 3DO feature's object is freed at `0x42474F`
+  (`FreeObjectState`) and nulled at `0x424754`; then, for either kind, `0x4232F0(index,
+  &main+0x1421B)` (`0x42476F`) frees the record, the free list's head `main+0x1421B` its second argument.
+- **The cells**: the anchor's def is set to `0xFFFF` and its flags bit 0 cleared (`0x42477C` /
+  `0x424780`), then every `0xFFFE` cell of the def's `+0x94` × `+0x96` rectangle the same way
+  (`0x4247B3..0x4247BE`). **The cell is unlinked last**, so the fork's wreck gather (which reads
+  the cell, then the record, then the object) sees the same free-before-unlink shape as the unit
+  path.
+- `0x440A40(the anchor's x and z, the def's size)` (`0x424822`), and 1 (`0x42482A`).
+
+**Callers** (MEASURED over `.text`, `call` and `jmp`, and over the image for a stored address): the
+resurrect (`0x40519E`); the console command BurnOne `0x4163A0` (`0x4163C8`, with `force` 1); the
+swap `0x423710` (`0x423792`, `0x4237B1`); the spawn `0x423C50`'s footprint (`0x423D6A`, `force` 0,
+which abandons the spawn on a refusal and keeps what it destroyed so far); the feature tick
+`0x424050` (`0x42442F`, `force` 0, when a burn's sequence ends); the clear of every feature
+`0x424840` (`0x42487A`), itself called only by the console command BurnAll `0x416390` (stored in
+the command table at `0x502040`). The demo recorder observes the entry
+([map.md](map.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)),
+and the puppet gate refuses it from the level's first step outside the replay's own calls
+([recorder.md](recorder.md#the-puppet-host-its-gates-the-30-tick-deadline-and-the-sight-loop-disassembled-measured-2026-09-30)).
 
 ### `0x491B60` — the level teardown
 
 **No stack arguments**; six bare call sites (`0x460630`, `0x491C6A`, `0x49262C`, `0x4996AA`,
-`0x49971D`, `0x4997AF`), none pushing for it; first five bytes `A1 E8 1D 51 00`
-(`mov eax,[0x511DE8]`), no branch into `0x491B61..64`, resume at `0x491B65`. **Two exits**: `ret`
-at `0x491C59`, and a tail-jump at `0x491C54` (`jmp 0x450DD0`, taken when `0x435100` returns 3)
-— `0x450DD0` reads no stack argument either and returns with a plain `ret` at `0x450E19`, so a
-`call` through the stolen tail returns to the caller on both paths and code can run after it
-(the review caught the first draft of this note claiming a single exit). The body clears
-`main+0x2A44 & ~4`, then the cascade: `0x4CED40`, `0x4CE690(4)`, `0x41DC20`, `0x437D30`,
-**`0x485980`** — the unit teardown: it walks the unit array (`main+0x14357..+0x1435B`, stride
-`0x118`, `0x48599B..0x4859A8`) and calls `Send_UnitDeath 0x4864B0(unit, 8)` for **every unit
-whose model index `[unit+0xA6]` is non-zero**, i.e. every live unit's object is freed through the
-death routine `0x4866D0 → 0x486D9E` — hundreds of `FreeObjectState` calls — then three
-`MEM_Free`s of the unit arrays (the first draft of this note said it never reached
-`FreeObjectState`; the review disproved that) — then `0x471DE0` (destroy every sfx layer),
-`0x420960`, `0x44F6E0`, `0x464A00`, `0x466AA0`, **`0x483DD0`** (→ `0x422170` → the bulk wreck
-`FreeObjectState` loop at `0x4221C4`; `0x483DD0`'s only caller is `0x491BB3` and `0x422170`'s
-only caller is `0x483DE6`, so this is the sole path to that third caller), then `MEM_Free` of
-the game-state arrays (`0x491BC5`, `0x491BD9`, `0x491BED`). **The fork wraps this entry**
-(`tagpu_reclaim.c`) with a pre hook (hold the render thread off, wait for it to leave its pass,
-flush the deferred queue while the registry is alive — or, if it does not leave within a second,
-keep the queue and keep deferring through the cascade) and a post hook (release it).
+`0x49971D`, `0x4997AF`; *Who enters it*, below), none pushing for it; first five bytes
+`A1 E8 1D 51 00` (`mov eax,[0x511DE8]`), no branch into `0x491B61..64`, resume at `0x491B65`.
+**Two exits**: `ret` at `0x491C59`, and a tail-jump at `0x491C54` (`jmp 0x450DD0`, taken when
+`0x435100` on `[main+0x391E9]` returns 3) — `0x450DD0` reads no stack argument either and
+returns with a plain `ret` at `0x450E19`, so a `call` through the stolen tail returns to the
+caller on both paths and code can run after it.
+
+**The body, in order** [DISASSEMBLED 2026-10-29, the pristine build]:
+
+- `main+0x2A44 &= ~4` (`0x491B65`); `0x4CED40` and `0x4CE690(4)`, both on `ecx = [main+0x10]`
+  (`0x491B76`, `0x491B86`); `0x41DC20` (`0x491B8B`); `0x437D30` (`0x491B90`).
+- **`0x485980`** (`0x491B95`), the unit teardown: it walks the unit array
+  (`main+0x14357..+0x1435B`, stride `0x118`, `0x48599B..0x4859A8`) and calls `Send_UnitDeath
+  0x4864B0(unit, 8)` for **every unit whose model index `[unit+0xA6]` is non-zero**, so every live
+  unit's object is freed through the destructor (`0x4866D0` → `0x486D9E`) — hundreds of
+  `FreeObjectState` calls — then three `MEM_Free`s of the unit arrays (the per-map table, above).
+- `0x471DE0` (`0x491B9A`), every particle layer destroyed; `0x420960` (`0x491B9F`; it frees the
+  projectile drawer's two-plane frame at `0x420A09`, [render.md](render.md)); `0x44F6E0`
+  (`0x491BA4`); `0x464A00` (`0x491BA9`), the players' LOS counters, AI objects and `+0xEC`
+  records; `0x466AA0` (`0x491BAE`), the minimap surfaces.
+- **`0x483DD0`** (`0x491BB3`), the map free → `0x422170` → the bulk wreck `FreeObjectState` loop
+  at `0x4221C4`. `0x483DD0`'s only caller is `0x491BB3` and `0x422170`'s only caller is
+  `0x483DE6`, so this is the sole path to that third caller.
+- `MEM_Free` of `main+0x1438B`, `+0x14387`, `+0x14383` (`0x491BC5`, `0x491BD9`, `0x491BED`),
+  the transform's three scratch arrays the level load allocates
+  ([render.md](render.md)'s `0x46BAE0` row), nulled at `0x491BFE..0x491C16`.
+- `0x42E120` (`0x491C1C`); **`0x42DB90`** (`0x491C21`), the model templates and the unit-def
+  array (below); `0x42F3A0` (`0x491C26`); `0x42A570` (`0x491C2B`); `0x499A80` (`0x491C30`), the
+  projectile array; `0x440A00` (`0x491C35`); `0x488BF0` (`0x491C3A`); then the exit test above.
+
+**The fork wraps this entry** (`tagpu_reclaim.c`) with a pre hook (hold the render thread off,
+wait for it to leave its pass, flush the deferred queue while the registry is alive — or, if it
+does not leave within a second, keep the queue and keep deferring through the cascade) and a post
+hook (release it); the render thread is live again as soon as the teardown returns.
+
+#### Who enters it, and on which thread
+
+*[BINARY-VERIFIED 2026-09-20]*
+
+**The entry set is closed to direct calls.** `0x491B60`'s address is never taken: the 32-bit
+constant `0x00491B60` appears at no offset of the 1 178 624-byte image, and there is no `.reloc`
+section, so a stored address would have to be literal. It therefore cannot be reached through a
+function pointer, a vtable or a dispatch table, and the `E8` sites are all of them. There are
+exactly **six**:
+
+| call site | in function | what it does |
+| --- | --- | --- |
+| `0x460630` | `0x4605C0` | the in-game menu's quit path |
+| `0x491C6A` | `0x491C60` | a three-call shutdown stub (`0x4257A0`, `0x451B60`, the teardown); its only caller is `0x460626`, also in `0x4605C0` |
+| `0x49262C` | `0x492360` | |
+| `0x4996AA` | `0x499200` | sets state **7**, handler `0x499880` |
+| `0x49971D`, `0x4997AF` | `0x499200` | teardown, then `0x491D70(1)`, `0x4A9660`, `0x4257A0`, then state **2** with handler `0x496BB0` — the shell. This is EXITMENU→MAINMENU and EXITMENU→RESTART |
+
+**None of those four functions has a direct caller.** Every one is address-taken and entered
+through the engine's **state-handler slot `[main+0x391F5]`**, dispatched at the single site
+`0x499A1C` (`call dword ptr [eax+0x391F5]`) inside `0x499890`. `0x499200` is installed as the
+in-game handler by the loading-screen handler `0x497F40` (`mov [ecx+0x391F5], 0x499200` at
+`0x498455`, beside `mov [ecx+0x391F1], 6`), and also at `0x490BC5`. The same slot holds
+`0x496BB0`, `0x496B10`, `0x496CE0`, `0x496DB0`, `0x497F40` and `0x499880` — it is the engine's
+whole state machine. `0x496790`, the in-game frame callback, is *not* address-taken; it has
+three direct callers: `0x499200` at `0x4995B8` (in play) and `0x4996A5` (a network game's end,
+after `0x491D70(1)` at `0x499674` and `GUI_Pop 0x4A9660` at `0x499686`), and the loading screen
+at `0x49842F`.
+
+**But THREE OF THE SIX are pinned to the game thread by construction, in the strongest way this
+binary allows.** `0x499200` — the function holding `0x4996AA`, `0x49971D` and `0x4997AF` — also
+calls the in-game frame callback **`0x496790` directly**, at `0x4995B8` and at `0x4996A5`. The
+second of those is the instruction immediately before the teardown call:
+
+```
+0x4996A5   call 0x496790        ; draw the frame
+0x4996AA   call 0x491B60        ; and tear the level down
+```
+
+Same function, same straight line, no branch between them. And `0x496790` is precisely the
+function whose `DrawGameScreen(1, 1)` at `0x4969CD` the fork's publisher gates with
+`on_game_thread()` — a test it applies to *every in-play draw*, hundreds of thousands per
+session, and which has never once counted a foreign one (`foreign=0`). So whatever thread runs
+the frame callback runs these three teardown calls, and that thread is measured continuously,
+not sampled.
+
+**The other three are not pinned statically.** `0x460630` and `0x491C6A` (in `0x4605C0`) and
+`0x49262C` (in `0x492360`) call nothing that is independently tied to a thread; their functions
+are reached through the state slot like the rest, and the graph stops there. For those, the
+evidence is the measurement and the standing instrument, nothing more. Note the asymmetry cuts
+against comfort rather than for it: by `0x499200`'s behaviour the measured teardowns went
+through the three sites that are *also* pinned by construction, so the three that rest on
+measurement alone are the ones least exercised.
+
+What the static work establishes overall is the bound: the entry set is closed, so those six
+sites are all the ways in.
+
+**What the loader thread result really is.** The direct-call transitive closure of `0x497C70` /
+`0x497180` is 1 208 functions and contains neither `0x491B60`, nor the dispatcher `0x499890`,
+nor the state-setter `0x4B4FD0`, nor `0x499200`. That is a **direct-call** result and not a
+proof: the same closure holds 690 indirect call sites across 260 functions.
+
+**Thread creation.** `CreateThread` is the only thread-creation import — no `_beginthread`,
+`_beginthreadex`, `TerminateThread` or fiber API — with exactly **three call sites**
+(`0x4DA27A`, `0x4E616E`, `0x4E780C`). That bounds the spawn *sites*, not the number of threads:
+`0x4E77D0` is a generic CRT spawn wrapper, reachable through the `ret 0xC` wrapper `0x4B6B20`,
+so one site can make many threads. The loader is `push 0x497C70; call 0x4B6B20` at `0x4982C5`,
+through that wrapper, with `0x497C70` calling the body `0x497180` at `0x497CA1`.
+
+**The identity itself is MEASURED, and re-measured on every run.** Four teardowns over two
+distinct UI paths — EXITMENU→MAINMENU ×3 and EXITMENU→RESTART ×1 — all entered `0x491B60` on
+the game thread, with the loader thread alive on a different id at the same moment. A grep of
+the 299 surviving instance logs finds 50 teardowns and no foreign level-end ever recorded. The
+fork now names the entering thread in its teardown line and carries `tdforeign=` in the reclaim
+heartbeat, so the claim is re-checked on every launch, including configurations that session
+could not reproduce.
+
+**Conclusion: the level teardown is game-thread only, on the evidence of the measurement and the
+standing instrument — not of the call graph, which stops at a function pointer.**
+
+**A trap for every call-site table in these notes.** Attributing a call site to the **nearest
+preceding `E8` target** assumes a function starts where something calls it. The main-loop
+functions here are *never* called — they are stored in `[main+0x391F5]` and dispatched — so that
+heuristic cannot see them, and their call sites are charged to whatever ordinary helper sits above
+them: `0x499100` above `0x499200` (it is an ordinary `stdcall` helper running
+`0x499100..0x4991FB`, `ret 4` then two `nop`s, and contains no call to the teardown), `0x4604A0`
+above `0x4605C0`, `0x491EC0` above `0x492360`. **Take function starts from address-taken
+constants as well as call targets, and check the claimed function contains the call site** — an
+`objdump` of the boundary costs one command.
 
 ### `0x42D5xx` — the model-pointer table is BUILT here, and every slot in it is written
 
@@ -669,9 +775,9 @@ it is what makes "the ModelId is in range" a safety property rather than a guess
   (`0x42D6AA`). So the count is the table's **length**, not merely a related number — the same
   value bounds the unit defs at `main+0x1439B` at stride `0x249`, which is why one count serves
   both arrays.
-- **The allocator does not zero.** `0x4D83B0` → `0x4D83C0` is a plain malloc wrapper (a tag
-  string, `0x4E8890` or the fussy-heap path, no fill). Nothing about an untouched slot is
-  therefore safe to assume — which is why the next point is the load-bearing one.
+- **The allocator does not zero** ([`MEM_Alloc`](#0x4d83b0-mem_alloc-the-named-allocator-mem_allocnamed)).
+  Nothing about an untouched slot is therefore safe to assume — which is why the next point is the
+  load-bearing one.
 - **Every slot in `[1, count)` is written.** The load loop runs `esi = 1` while
   `esi < [main+0x1438F]` (`0x42D6B6` / `0x42D6BC`) and stores the loaded model to
   `[table + esi*4]` at `0x42D7A2` on every iteration — including the failure path, where
@@ -795,8 +901,8 @@ FBI loader.
 
 ### `0x42DB90` — the model templates are freed here, and only here
 
-`[BINARY-VERIFIED 2026-09-08]` Called once from the teardown cascade, `0x491C21`, the first call
-after `0x485980`'s unit walk. It is what makes a `Model3DONode` tree's lifetime the **level**:
+`[BINARY-VERIFIED 2026-09-08]` Called once from the teardown cascade, `0x491C21`, after the unit
+walk `0x485980` and the map free `0x483DD0` ([the call list](#0x491b60-the-level-teardown)). It is what makes a `Model3DONode` tree's lifetime the **level**:
 
 - it walks the model-pointer table `[main+0x14377]` — the same table the fork calls
   `OFF_MODELPTRS` and indexes with `unit+0xA6` — bounded by the count at `main+0x1438F`, with
@@ -837,18 +943,78 @@ point" above. The drain has not been moved onto it; it could be.)* So `tagpu_rec
 `FreeObjectState` itself (every death first frees what became safe), which is why the most recent
 death's object is held until the next death or the level ends.
 
-### The allocator, from the free side
+### `0x4D83B0` `MEM_Alloc` — the named allocator `[MEM_AllocNamed]`
 
-`MEM_Free 0x4D85A0` → `0x4D85B0`: `EnterCriticalSection` (IAT `0x4FC198`) … `LeaveCriticalSection`
-(`0x4FC194`) around either the "fussy" heap `0x4DB7D0` (byte `0x5289A4`, set by the command-line
-switches `-memfussy` / `-memnofussy` / `-memfrontalign` parsed at `0x4D80D0`) or, by default, the
-CRT `free 0x4E8820`, which itself brackets with `_lock(9)` / `_unlock(9)` (`0x4EAC60` /
-`0x4EACE0`, a lazily created critical section) — **thread-safe from any thread**. `MEM_Alloc
-0x4B4F10` → `0x4D8660` → `0x4D83C0` takes the same section. The CRT `_heap_alloc 0x4E8900` sends
-`(size+15) & ~15 <= __sbh_threshold` (`[0x5109EC] = 0x1E0`, 480 bytes; `_set_sbh_threshold
-0x4F2280` has no callers) to the **small-block heap** `__sbh_alloc_block 0x4F2600` (4 KB pages in
-4 MB regions) and everything larger to `HeapAlloc(_crtheap [0x52B524])`; `_heap_init 0x4F1830`
-creates that heap with `HeapCreate(0, 0x1000, 0)` — serialised.
+`0x4D83B0(tag, size)`, `cdecl` — the caller pops both arguments. **It drops the tag**: it reads only
+`[esp+0x8]`, the size, calls `0x4D83C0(size)` (`0x4D83B5`) and returns its result
+[DISASSEMBLED 2026-10-29]. The tag is a heap tag at a higher level; nothing looks a block up by it.
+`0x4B4F10` → `0x4D8660` → `0x4D83C0` is the untagged path to the same body (the partner of
+`0x4B4F20`, *`MEM_Free`* below).
+
+`0x4D83C0(size)` [DISASSEMBLED 2026-10-29]:
+
+- enters the allocator's critical section (`0x4DA780` returns it, `0x528A28`; `EnterCriticalSection`
+  through `ds:0x4FC198` at `0x4D83CB`);
+- **the dispatch at `0x4D83D5`**: `call 0x4D80D0; test al,al` — the "fussy" heap option, the byte
+  `0x5289A4`, which `0x4D80D0` registers on first use with the command-line switches `-memfussy` /
+  `-memnofussy` / `-memfrontalign` — to the private heap `0x4DACF0(size, 0)` (its blocks freed
+  through `0x4DB7D0`), else the CRT's `malloc 0x4E8890(size)` and, on success, the accounting
+  `0x4DA7D0(size)`;
+- a NULL calls the new handler at `[0x5289BC]` and retries from `0x4D83D5` while one is installed
+  (`0x4D8409..0x4D841F`); the installed handler `0x49E700` ends the process (*The out-of-memory
+  text*, above);
+- **it does not zero.** A fill runs only when the option `0x4D8200` answers (`0x4D8425`; its
+  switches are `-memset` / `-memnoset`, the fill value from `0x4D8260`, `setvalue`), through
+  `0x4D82C0` (`0x4D8436`) — off unless the switch is given [INFERRED: the default the registration
+  passes is 0]. Nothing about an untouched block can be assumed;
+- leaves the section (`LeaveCriticalSection` through `ds:0x4FC194`, `0x4D843F`).
+
+Code that allocates a block the engine will free must take it from here: `scratch_alloc`
+([render.md](render.md#the-composite-scratch-frame-and-the-rasterisers-span-tables)) runs the success path by hand inside the same section,
+and a DLL-heap block handed to the engine's `MEM_Free` is a block of the wrong heap.
+
+### `0x4D85A0` `MEM_Free` — the one way any engine allocation dies
+
+[VERIFIED 2026-09-12] A two-line wrapper (`mov eax,[esp+4]; push eax; call 0x4D85B0; add esp,4;
+ret`, prologue `8B 44 24 04 50` — five relocatable bytes, which is what makes it detourable), and
+**`0x4D85B0` has exactly one caller: this.** `0x4D85B0` returns at once for NULL (`0x4D85B7`), takes
+the allocator's critical section (`0x4DA780`, then `EnterCriticalSection` through `ds:0x4FC198` at
+`0x4D85C2` [DISASSEMBLED 2026-09-29]) and frees through the same dispatch as the allocation: the
+fussy heap `0x4DB7D0(p, 0)` (`0x4D85D4`) or, by default, `MEM_Size 0x4D8360` (`0x4D85E7`) → the
+accounting `0x4DA840` (`0x4D85F0`) → the CRT `free 0x4E8820` (`0x4D85F9`), which itself brackets
+with `_lock(9)` / `_unlock(9)` (`0x4EAC60` / `0x4EACE0`, a lazily created critical section); it
+leaves the section (`ds:0x4FC194`) on both paths — **thread-safe from any thread**.
+
+363 sites call `0x4D85A0`, `SurfaceFree 0x4C6AC0` among them (`0x4C6ACF`); `0x4B4F20` →
+`0x4D8670` → `0x4D85A0` is the untagged path [DISASSEMBLED 2026-10-29]. MEASURED in game
+(2026-09-12): **~10 500 calls a second**, ~675 a second in a 200v200 battle on Two Continents
+(2026-09-26). **The loader thread makes most of them**: 33 191 frees on threads other than the game
+thread in one Two Continents load (MEASURED 2026-09-29, two counters at the observer; 33 842 was the
+2026-09-12 figure). An observer at this entry is a destructor for every engine block — the GUI lane's
+`before_memfree` is one ([render.md](render.md#the-offscreen-object-verified-0x4c69f0)).
+
+### `0x4D8360` `MEM_Size` — the allocator knows a block's size
+
+[VERIFIED 2026-09-16, objdump of the pristine build] `MEM_Size 0x4D8360(p)`, `cdecl`: 0 for a NULL
+block (`0x4D8365..0x4D836C`), otherwise a two-way dispatch on the same mode predicate the rest of
+the allocator uses — `call 0x4D80D0; test al,al` — to `0x4DBAE0(p)` (the private heap's sizer) or
+`0x4E8FB0(p)` (the CRT `_msize`), the size in `eax`. `MEM_Alloc`'s dispatch at `0x4D83D5` tests the
+same predicate, so the two agree by construction about which heap a block came from. `0x4D85B0`
+calls it on the free path at `0x4D85E7` and feeds the result to `0x4DA840`, the accounting.
+**It takes no lock of its own, but both of its callees do**: `0x4DBAE0` enters the allocator's
+critical section `0x528A28` first (`0x4DA780`, then `EnterCriticalSection`), and `_msize` takes CRT
+heap lock 9 (`0x4EAC60(9)`). So it is safe to call from an observer at `MEM_Free`'s entry, and the
+GUI lane's destructor calls it inside the allocator's section, as `0x4D85B0` does. It costs
+**~85 ns a call** (MEASURED 2026-09-26, 200v200 on Two Continents, 80 144 calls), so even the
+~10 500 frees a second above are under 0.1 % of one core.
+
+### The CRT heap beneath them
+
+The CRT `_heap_alloc 0x4E8900` sends `(size+15) & ~15 <= __sbh_threshold` (`[0x5109EC] = 0x1E0`,
+480 bytes; `_set_sbh_threshold 0x4F2280` has no callers) to the **small-block heap**
+`__sbh_alloc_block 0x4F2600` (4 KB pages in 4 MB regions) and everything larger to
+`HeapAlloc(_crtheap [0x52B524])`; `_heap_init 0x4F1830` creates that heap with `HeapCreate(0,
+0x1000, 0)` — serialised.
 
 **The small-block heap decommits pages inside a free.** `__sbh_free_block 0x4F25A0` counts wholly
 free pages (`[0x52A42C]`); when the count reaches 32 it calls `0x4F2470(0x10)`, which walks the
