@@ -350,7 +350,13 @@ class Instance:
         self.unusable = None
         self.seeded_now = None      # the store `_create` just seeded (seed_regstore's record)
         try:
-            meta = json.loads(self.meta_path.read_text()) if self.meta_path.exists() else {}
+            # read, never tested first: an instance another tacli removes between the two
+            # would read as unusable. save_meta replaces the file whole and `rm` removes it,
+            # so the read finds a whole file or none, and none is an instance not there.
+            try:
+                meta = json.loads(self.meta_path.read_text())
+            except FileNotFoundError:
+                meta = {}
             if not isinstance(meta, dict):
                 raise ValueError("not a JSON object")
         except (OSError, ValueError) as e:
@@ -2147,7 +2153,10 @@ def cmd_ls(args):
         if inst.unusable:
             warn(inst.unusable)
             continue
-        meta = json.loads(meta_path.read_text())
+        try:
+            meta = json.loads(meta_path.read_text())
+        except FileNotFoundError:
+            continue            # removed by another tacli since the scan: no longer an instance
         if inst.remote:
             # not asked: `ls` opens no link to another machine
             meta.update(pid=None, running=None, window=None)

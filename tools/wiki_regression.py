@@ -24,6 +24,10 @@ page's controls and the demos playing on the stage.
                                                       setup of the compatibility suite, one game
                                                       a setup
     wiki_regression.py - offline                      the offline checks, no game: OFFLINE_CHECKS
+    wiki_regression.py - gate --shots DIR [-j N]      all of it at once under one hold of the run lock:
+                                                      the offline checks, each single-player mode on
+                                                      its own instance and X server, and each setup
+                                                      of mods, every lane a process (gate)
 
 `sp` and `recorded` play scenarios/place-basic.json at --res (default 1920x1080) with the launch's
 hold (tagpu_hold.on), held at GameTime 120 and then let run, under the run lock (tools/runlock.py).
@@ -2378,14 +2382,13 @@ def mods(names, shots):
     assert not bad, f"failed on {bad}"
 
 
-def offline_checks():
-    """OFFLINE_CHECKS: every check of the wiki that plays no game, in one run -- the mockup's demos on the fixture,
-    without a sidebar and on each side pack present (tools/wiki/sidepacks.py builds them, gitignored), then the DLL's
-    code against the mockup's: the simulation (simparity), the text's fill (textparity), each natively and under
-    Wine as the DLL is built, the sidebar's column (sidecheck), the stage's ops (stagecheck), the 3D scene
-    (scenecheck) and the window's load-time check over every pack's castings (wikilaycheck --check-only). Each runs
-    to its end whatever the one before said; a check that cannot run (its exit 2) fails the run like one that
-    differs. Takes no lock: none of them plays a game."""
+def offline_runs():
+    """OFFLINE_CHECKS: every check of the wiki that plays no game, as (name, argv) -- the mockup's demos on the
+    fixture, without a sidebar and on each side pack present (tools/wiki/sidepacks.py builds them, gitignored), then
+    the DLL's code against the mockup's: the simulation (simparity), the text's fill (textparity), each natively and
+    under Wine as the DLL is built, the sidebar's column (sidecheck), the stage's ops (stagecheck), the 3D scene
+    (scenecheck) and the window's load-time check over every pack's castings (wikilaycheck --check-only). None of
+    them plays a game, and none writes what another reads: they run in any order, at once."""
     packs = sorted(d for d in (TREE / "tools/wiki/mockup/gfx/side").glob("*") if (d / "side.json").is_file())
     wiki = TREE / "tools/wiki"
     runs = [("simcheck", [wiki / "simcheck.mjs"]), ("simcheck --null-layout", [wiki / "simcheck.mjs", "--null-layout"])]
@@ -2398,26 +2401,126 @@ def offline_checks():
     runs += [("wikilaycheck --check-only", [sys.executable, wiki / "wikilaycheck.py", "--check-only"])]
     if not packs:
         print("wiki offline: no side pack present (tools/wiki/sidepacks.py builds them): the mods' runs are left out")
-    failed = []
-    for name, cmd in runs:
-        t0 = time.monotonic()
-        r = subprocess.run(list(map(str, cmd)), capture_output=True, text=True, cwd=TREE)
-        # the check's own verdict, the line it starts with its name (sidecheck prints its packs after it), else the last
-        out = r.stdout.strip().splitlines() or r.stderr.strip().splitlines() or [""]
-        own = Path(str(cmd[1])).stem + ":"
-        last = next((ln for ln in out if ln.startswith(own)), out[-1])
-        verdict = "passed" if r.returncode == 0 else "CANNOT RUN" if r.returncode == 2 else "FAILED"
-        print(f"wiki offline: {name}: {verdict} ({r.returncode}, {time.monotonic() - t0:.0f} s): {last[:300]}")
-        if r.returncode:
-            failed.append(name)
+    return runs
+
+
+def offline_one(name, cmd):
+    """One offline check to its end: its verdict line printed, and its exit code -- 2 is a check that could not run,
+    which fails like one that differs."""
+    t0 = time.monotonic()
+    r = subprocess.run(list(map(str, cmd)), capture_output=True, text=True, cwd=TREE)
+    # the check's own verdict, the line it starts with its name (sidecheck prints its packs after it), else the last
+    out = r.stdout.strip().splitlines() or r.stderr.strip().splitlines() or [""]
+    own = Path(str(cmd[1])).stem + ":"
+    last = next((ln for ln in out if ln.startswith(own)), out[-1])
+    verdict = "passed" if r.returncode == 0 else "CANNOT RUN" if r.returncode == 2 else "FAILED"
+    print(f"wiki offline: {name}: {verdict} ({r.returncode}, {time.monotonic() - t0:.0f} s): {last[:300]}", flush=True)
+    return r.returncode, last[:300]
+
+
+def offline_checks():
+    """offline_runs one after another, each to its end whatever the one before said. Takes no lock."""
+    failed = [name for name, cmd in offline_runs() if offline_one(name, cmd)[0]]
     assert not failed, f"the offline checks {', '.join(failed)} did not pass"
+
+
+GATE_MODES = ("sp", "page", "demos", "try", "asset", "stage3d", "units", "cursor")
+GATE_SHOTS = {"demos", "stage3d", "units", "cursor"}    # the modes that take --shots DIR
+GATE_RES = "1920x1080"                                  # each game lane's private display, and so its game's screen
+GATE_LANE_S = 3600                                      # a lane still running after this is hung, not slow: the
+                                                        # slowest, units, takes some 750 s alone
+
+
+def gate_lane(cmd, log, env):
+    """One lane's process to its end, everything it says into `log`: its exit code and its verdict line, the last
+    line naming the regression's verdict, else the last it printed. A lane past GATE_LANE_S is ended and fails."""
+    with open(log, "w") as f:
+        p = subprocess.Popen(list(map(str, cmd)), stdout=f, stderr=subprocess.STDOUT, cwd=TREE, env=env,
+                             start_new_session=True)
+        try:
+            code = p.wait(timeout=GATE_LANE_S)
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, 15)
+            p.wait()
+            return 124, f"still running after {GATE_LANE_S} s, ended"
+    lines = [ln for ln in Path(log).read_text(errors="replace").splitlines() if ln.strip()]
+    said = [ln for ln in lines if re.match(r"wiki regression \w+: (passed|FAILED)|wiki mods: \S+: (FAILED|\(w4, w5\))", ln)]
+    return code, (said or lines or [""])[-1][:300]
+
+
+def gate(shots, jobs, offline_jobs, modes, setups):
+    """Every part of the wiki's gate at once under one hold of the run lock: the offline checks on `offline_jobs`
+    workers, and on `jobs` workers each game lane -- a mode on its own instance `wikigate-<mode>`, made afresh on its
+    own private X server, and a setup of the mods run -- each a process of this script, so every lane is the
+    command a serial run would give and says the same verdict. The runs viewer shows one step a lane."""
+    sys.path.insert(0, str(TREE / "tools/compat"))
+    import concurrent.futures
+    import tacompat
+    import tarun
+    runlock.hold(TREE, f"wiki_regression gate (-j {jobs})")
+    shots.mkdir(parents=True, exist_ok=True)
+    offline = offline_runs() if offline_jobs else []
+    items = [("offline", [{"id": n, "pool": "offline", "order": k} for k, (n, _) in enumerate(offline)]),
+             ("game", [{"id": m, "pool": "game", "order": k} for k, m in enumerate(modes)]),
+             ("mods", [{"id": n, "pool": "game", "order": len(modes) + k} for k, n in enumerate(setups)])]
+    items = [it for it in items if it[1]]
+    J = tarun.begin("wiki_regression", items, kind="gate", title=f"wiki gate ({len(modes)} modes, {len(setups)} "
+                    f"setups, {len(offline)} offline checks) -j {jobs}", pools={"game": jobs, "offline": max(1, offline_jobs)},
+                    gate=True)
+    me = [sys.executable, "-u", str(Path(__file__).resolve())]
+    env = dict(os.environ)
+
+    def lane_offline(name, cmd):
+        J.start("offline", name)
+        code, line = offline_one(name, cmd)
+        J.finish("offline", name, "pass" if code == 0 else "unrun" if code == 2 else "fail", line)
+        return ("offline", name, code, line)
+
+    def lane_mode(mode):
+        J.start("game", mode)
+        inst = f"wikigate-{mode}"
+        xv = None
+        try:
+            xv = private_xvfb(GATE_RES)
+            if tacli_api().Instance(inst).exists:
+                tacli("rm", inst, "--force", timeout=120)
+            tacli("create", inst, "--display", f":{xv.tacompat_display}", timeout=300)
+            cmd = me + [inst, mode, "--launch", "--res", GATE_RES] + (["--shots", shots / mode] if mode in GATE_SHOTS else [])
+            code, line = gate_lane(cmd, shots / f"{mode}.log", env)
+        except CHECK_FAILURES + (subprocess.SubprocessError, OSError) as e:
+            code, line = 2, f"could not start: {e}"
+        finally:
+            if xv:
+                tacompat.stop_xvfb(xv)
+        J.finish("game", mode, "pass" if code == 0 else "unrun" if code == 2 else "fail", line)
+        print(f"wiki gate: {mode}: {'passed' if code == 0 else 'FAILED'} - {line}", flush=True)
+        return ("game", mode, code, line)
+
+    def lane_setup(name):
+        J.start("mods", name)
+        code, line = gate_lane(me + [name, "mods", "--shots", shots / "mods" / name], shots / f"mods-{name}.log", env)
+        J.finish("mods", name, "pass" if code == 0 else "fail", line)
+        print(f"wiki gate: mods {name}: {'passed' if code == 0 else 'FAILED'} - {line}", flush=True)
+        return ("mods", name, code, line)
+
+    t0 = time.monotonic()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as games, \
+            concurrent.futures.ThreadPoolExecutor(max_workers=max(1, offline_jobs)) as checks:
+        futs = [games.submit(lane_mode, m) for m in modes] + [games.submit(lane_setup, n) for n in setups]
+        futs += [checks.submit(lane_offline, n, c) for n, c in offline]
+        done = [f.result() for f in futs]
+    bad = [f"{kind} {name}" for kind, name, code, _ in done if code]
+    J.end("fail" if bad else "pass")
+    print(f"wiki gate: {len(done) - len(bad)} of {len(done)} lanes passed in {time.monotonic() - t0:.0f} s"
+          f"{'; failed: ' + ', '.join(bad) if bad else ''}; the logs in {shots}")
+    assert not bad, f"the lanes {', '.join(bad)} did not pass"
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("instance")
     p.add_argument("mode", choices=("sp", "page", "demos", "try", "recorded", "asset", "stage3d", "units", "cursor", "mp", "mods",
-                                    "offline"))
+                                    "offline", "gate"))
     p.add_argument("--launch", action="store_true",
                    help="sp/recorded: launch on place-basic.json first, under the run lock")
     p.add_argument("--res", default="1920x1080", help="sp/recorded: the game's resolution")
@@ -2426,12 +2529,19 @@ def main():
                                   "named <stem>-<entry>-<demo>, mid-replay)")
     p.add_argument("--shots", type=Path, help="demos: grab each entry's demo mid-play, and the mockup's, into this folder; "
                                               "stage3d, units: the captures of the wiki's target and the presented frames")
+    p.add_argument("--jobs", "-j", type=int, default=6, help="gate: the game lanes played at once")
+    p.add_argument("--offline-jobs", type=int, default=4, help="gate: the offline checks run at once, 0 for none")
+    p.add_argument("--modes", default=",".join(GATE_MODES), help="gate: the single-player modes, each a lane")
+    p.add_argument("--setups", default=",".join(MODS_SETUPS), help="gate: the mods run's setups, each a lane, '' for none")
     a = p.parse_args()
     t0 = time.monotonic()
     stop = None
     try:
         if a.mode == "offline":
             offline_checks()
+        elif a.mode == "gate":
+            assert a.shots, "gate needs --shots DIR"
+            gate(a.shots, a.jobs, a.offline_jobs, [m for m in a.modes.split(",") if m], [n for n in a.setups.split(",") if n])
         elif a.mode == "mp":
             mp(a.instance)
         elif a.mode == "mods":
