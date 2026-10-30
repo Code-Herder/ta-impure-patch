@@ -438,8 +438,9 @@ class Instance:
         return self.pid() is not None
 
     # -- window -----------------------------------------------------------
-    def window(self):
-        """(window_id, x, y, w, h) of the game's client window, or None.
+    def window(self, pid=None):
+        """(window_id, x, y, w, h) of the game's client window, or None. `pid` is the
+        instance's game when the caller has already listed the processes.
 
         Two X windows share the title; the client is the one whose size matches the
         game resolution. Other apps (browser/Discord) can carry the name as a
@@ -457,7 +458,8 @@ class Instance:
         if meta is None:
             return None             # removed by another tacli: no window of an instance's
         display = meta.get("display") or default_display()
-        pid = self.pid()
+        if pid is None:
+            pid = self.pid()
         patterns = []
         recorded = meta.get("window_title")
         if recorded and recorded != BASE_TITLE:
@@ -1563,12 +1565,13 @@ def _create(inst: Instance, args) -> dict:
     # ever been created walks the grid off the screen after a dozen of them, and
     # stopped instances are the normal state of this directory.
     taken = set()
+    live = totala_by_prefix()       # one process listing, not a pgrep an instance (cmd_ls)
     for meta_path in INSTANCES.glob("*/instance.json"):
         other = Instance(meta_path.parent.name, lenient=True)
         if other.unusable:
             warn(other.unusable)
             continue
-        if other.remote or other.name == args.name or not other.running():
+        if other.remote or other.name == args.name or prefix_key(other.prefix) not in live:
             continue
         try:
             taken.add(json.loads(meta_path.read_text()).get("slot"))
@@ -2163,6 +2166,9 @@ def cmd_launch(args):
 
 def cmd_ls(args):
     rows = []
+    # one process listing for every instance, as the window layout takes it: a pgrep each took
+    # 22.4 s over 634 instances (MEASURED 2026-10-30), and the wiki gate lists once a capture
+    live = totala_by_prefix()
     for meta_path in sorted(INSTANCES.glob("*/instance.json")):
         inst = Instance(meta_path.parent.name, lenient=True)
         if inst.unusable:
@@ -2177,10 +2183,10 @@ def cmd_ls(args):
             meta.update(pid=None, running=None, window=None)
             rows.append(meta)
             continue
-        pid = inst.pid()
+        pid = live.get(prefix_key(inst.prefix))
         meta["pid"] = pid
         meta["running"] = pid is not None
-        meta["window"] = inst.window() if pid else None
+        meta["window"] = inst.window(pid) if pid else None
         meta["shield"] = shield_state(inst)   # the trigger file is the truth
         rows.append(meta)
     if args.json:

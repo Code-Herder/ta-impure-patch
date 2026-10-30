@@ -2,8 +2,10 @@
    tagpu_wikidata.c's reading of the archive the DLL embeds, against the mockup's tools/wiki/mockup/sim.js, tick for
    tick and field by field.
 
-   usage: node tools/wiki/simparity.mjs [--wine]
-     exit 0 when every demo and every rule case agrees and every malformed case loads, 1 when one does not, 2 when the C side cannot be built or run
+   usage: node tools/wiki/simparity.mjs [--wine] [--shard K/N]
+     exit 0 when every demo and every rule case agrees and every malformed case loads, 1 when one does not, 2 when the C side cannot be built or run;
+     --shard K/N (K from 1) plays only every Nth of the demos' contexts, from the Kth, and shard 1 alone the rule, refusal, data and malformed
+     cases: N processes, each building its own C side, check together what one does alone
    usage: node tools/wiki/simparity.mjs --hash [--layout FILE|null] [--pack DIR] [--side N] [--iface 0|1] [--scripts]
      prints `<entry>/<demo> <hash>` for every demo: sim.js's state hash on its last tick, 16 hex digits, the number
      the DLL's tagpu_wikisim_hash must give for the same demo played to its end with the same sidebar layout (by
@@ -63,6 +65,12 @@ const DDRAW = path.join(ROOT, 'tagpu/ddraw');
 const SIDE = name => JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/side/${name}.json`), 'utf8'));
 const FIXTURE = SIDE('fixture');
 const WINE = process.argv.includes('--wine');
+const SHARD_ARG = process.argv.includes('--shard') ? process.argv[process.argv.indexOf('--shard') + 1] : '1/1';
+const [SHARD, SHARDS] = (/^(\d+)\/(\d+)$/.exec(SHARD_ARG) || []).slice(1).map(Number);
+if (!(SHARDS >= 1 && SHARD >= 1 && SHARD <= SHARDS)) {
+  console.error(`simparity: --shard ${SHARD_ARG} is not K/N with 1 <= K <= N`);
+  process.exit(2);
+}
 const SRCS = ['src/tagpu_wikidata.c', 'src/tagpu_json.c', 'src/tagpu_pak.c', 'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c',
   'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c'];
 
@@ -173,10 +181,11 @@ function run(cmd, args, opts = {}) {
   return r.stdout;
 }
 
+/* the C side built into `tmp`, this process's own: shards build at once, so none links over a program another runs */
 function build(tmp) {
   if (WINE) {
     // the simulation and the loader, which normalises the scenes' facings, on SSE2 as the Makefile compiles them
-    const exe = path.join(DDRAW, 'tests/wikitest.exe'), sse = ['src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_wikicob.c', 'src/tagpu_sweepgeo.c'];
+    const exe = path.join(tmp, 'wikitest.exe'), sse = ['src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_wikicob.c', 'src/tagpu_sweepgeo.c'];
     const cc = 'i686-w64-mingw32-gcc', flags = ['-Iinc', '-Isrc', '-O2', '-Wall', '-std=c99'];
     const objs = sse.map(src => path.join(tmp, path.basename(src, '.c') + '.o'));
     sse.forEach((src, i) => run(cc, [...flags, '-msse2', '-mfpmath=sse', '-mincoming-stack-boundary=2', '-c', '-o', objs[i], src], { cwd: DDRAW }));
@@ -187,7 +196,7 @@ function build(tmp) {
     env.WINEDEBUG ??= '-all';
     return (args) => run('wine', [exe, ...args], { cwd: tmp, env });
   }
-  const exe = path.join(DDRAW, 'tests/wikitest-native.exe');   // `.exe` so the tree's *.exe ignore covers it
+  const exe = path.join(tmp, 'wikitest-native');
   run('gcc', ['-std=c99', '-Wall', '-Wextra', '-Werror', '-Isrc', '-Iinc', '-O1', '-g', '-fsanitize=address,undefined',
     '-fno-sanitize-recover=all', '-o', exe, 'tests/wikitest.c', 'src/tagpu_wikisim.c', ...SRCS, '-lm'], { cwd: DDRAW });
   return (args) => run(exe, args, { cwd: tmp });
@@ -612,7 +621,9 @@ try {
                  ...(SOUNDS[n] ? { sound: SOUNDS[n] } : {}) }];
   }))));
   if (!COBS.includes(true)) console.log('note   no gfx pack under tools/wiki/mockup/gfx/ holds a script: the demos play without their units\' scripts only');
+  let context = 0;
   for (const cob of COBS) for (const side of ['fixture', 'fixture-tall', null]) for (const cname of [null, ...Object.keys(CASTINGS)]) for (const iface of [1, 0]) {
+    if (context++ % SHARDS !== SHARD - 1) continue;
     const layout = side && SIDE(side), named = `${side || 'no sidebar'}, ${cname || 'own types'}, type ${iface}${cob ? ', scripts' : ''}`;
     const ctx = { side: 0, casting: cname ? CASTINGS[cname][0] : null, iface, cob: cob ? HOST().forPacks(PACKS) : null,
                   snd: cob ? soundSource(PACKS) : null };
@@ -662,111 +673,113 @@ try {
     if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}) the C sim played ${cout.length - at} frames more`); }
   }
 
-  /* ---- simcheck.mjs's rule cases, recorded on sim.js and replayed through the C sim ---- */
-  const { ENTRY_RULES } = await import('./simcheck.mjs');
-  const { create, play } = WikiSim;
-  /* a case may hold several sims at once (one made, another made, the first asked): each call names its sim by the
-     order it was made in, which wikitest's trace keeps apart */
-  let ops, expected, made;
-  const record = (make, scripted) => (entry, demo, layout, ctx) => {
-    const sim = make(entry, demo, layout, ctx), k = made++;
-    // a context's script source is wikitest's COB file, named by `cob: true`
-    const c = ctx ? { ...ctx, cob: ctx.cob ? true : undefined, snd: ctx.snd ? true : undefined } : null;
-    ops.push(JSON.stringify({ op: 'create', sim: k, scripted, layout: layout ?? null, ctx: c }), JSON.stringify({ ...entry, demos: [demo || {}] }));
-    const ask = (op, v) => { ops.push(JSON.stringify({ ...op, sim: k })); expected.push(v); return v; };
-    return {
-      input(ev) { ops.push(JSON.stringify({ op: 'input', sim: k, ev })); sim.input(ev); },
-      step() { ops.push(JSON.stringify({ op: 'step', sim: k })); sim.step(); },
-      view: () => {
-        const v = ask({ op: 'view' }, sim.view());
-        ask({ op: 'hash' }, stateHash(sim, sim.view()));
-        return v;
-      },
-      orders: id => ask({ op: 'orders', id }, sim.orders(id)),
-      get done() { return ask({ op: 'done' }, sim.done); },
-      get side() { return ask({ op: 'side' }, sim.side); },
-      get iface() { return ask({ op: 'iface' }, sim.iface); },
-      get tick() { return ask({ op: 'tick' }, sim.tick); },
-      get log() { return sim.log; },
+  if (SHARD === 1) {
+    /* ---- simcheck.mjs's rule cases, recorded on sim.js and replayed through the C sim ---- */
+    const { ENTRY_RULES } = await import('./simcheck.mjs');
+    const { create, play } = WikiSim;
+    /* a case may hold several sims at once (one made, another made, the first asked): each call names its sim by the
+       order it was made in, which wikitest's trace keeps apart */
+    let ops, expected, made;
+    const record = (make, scripted) => (entry, demo, layout, ctx) => {
+      const sim = make(entry, demo, layout, ctx), k = made++;
+      // a context's script source is wikitest's COB file, named by `cob: true`
+      const c = ctx ? { ...ctx, cob: ctx.cob ? true : undefined, snd: ctx.snd ? true : undefined } : null;
+      ops.push(JSON.stringify({ op: 'create', sim: k, scripted, layout: layout ?? null, ctx: c }), JSON.stringify({ ...entry, demos: [demo || {}] }));
+      const ask = (op, v) => { ops.push(JSON.stringify({ ...op, sim: k })); expected.push(v); return v; };
+      return {
+        input(ev) { ops.push(JSON.stringify({ op: 'input', sim: k, ev })); sim.input(ev); },
+        step() { ops.push(JSON.stringify({ op: 'step', sim: k })); sim.step(); },
+        view: () => {
+          const v = ask({ op: 'view' }, sim.view());
+          ask({ op: 'hash' }, stateHash(sim, sim.view()));
+          return v;
+        },
+        orders: id => ask({ op: 'orders', id }, sim.orders(id)),
+        get done() { return ask({ op: 'done' }, sim.done); },
+        get side() { return ask({ op: 'side' }, sim.side); },
+        get iface() { return ask({ op: 'iface' }, sim.iface); },
+        get tick() { return ask({ op: 'tick' }, sim.tick); },
+        get log() { return sim.log; },
+      };
     };
-  };
-  WikiSim.create = record(create, 0);
-  WikiSim.play = record(play, 1);
-  for (const id of ids) {
-    const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
-    for (const [what, check] of Object.entries(ENTRY_RULES[id] || {})) {
-      ops = []; expected = []; made = 0;
-      let verdict;
-      try { verdict = check(entry); } catch (e) { verdict = `threw ${e.message}`; }
-      fs.writeFileSync(path.join(tmp, 'trace.jsonl'), ops.join('\n') + '\n');
-      const got = lines(wikitest(['trace', 'trace.jsonl', 'cob.json'])).map(l => JSON.parse(l));
-      let first = got.length !== expected.length ? { at: 'answers.length', c: got.length, j: expected.length } : null;
-      for (let i = 0; !first && i < got.length; i++) { const d = diff(got[i], expected[i], `answer ${i}`); if (d) first = d; }
-      cases++;
-      if (first) {
-        failed++;
-        console.log(`DIFFER rule -- ${what}: ${first.at}: C ${show(first.c)}, sim.js ${show(first.j)}`);
-      } else console.log(`equal  rule -- ${what}: ${expected.length} answers (sim.js's verdict: ${verdict})`);
+    WikiSim.create = record(create, 0);
+    WikiSim.play = record(play, 1);
+    for (const id of ids) {
+      const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
+      for (const [what, check] of Object.entries(ENTRY_RULES[id] || {})) {
+        ops = []; expected = []; made = 0;
+        let verdict;
+        try { verdict = check(entry); } catch (e) { verdict = `threw ${e.message}`; }
+        fs.writeFileSync(path.join(tmp, 'trace.jsonl'), ops.join('\n') + '\n');
+        const got = lines(wikitest(['trace', 'trace.jsonl', 'cob.json'])).map(l => JSON.parse(l));
+        let first = got.length !== expected.length ? { at: 'answers.length', c: got.length, j: expected.length } : null;
+        for (let i = 0; !first && i < got.length; i++) { const d = diff(got[i], expected[i], `answer ${i}`); if (d) first = d; }
+        cases++;
+        if (first) {
+          failed++;
+          console.log(`DIFFER rule -- ${what}: ${first.at}: C ${show(first.c)}, sim.js ${show(first.j)}`);
+        } else console.log(`equal  rule -- ${what}: ${expected.length} answers (sim.js's verdict: ${verdict})`);
+      }
     }
-  }
-  Object.assign(WikiSim, { create, play });
+    Object.assign(WikiSim, { create, play });
 
-  /* ---- the build trip's constants ---- */
-  {
-    const c = JSON.parse(wikitest(['constants']));
-    const j = { TRIP: WikiSim.TRIP, TRIP_DOWN: WikiSim.TRIP_DOWN, TRIP_UP: WikiSim.TRIP_UP, PICK: WikiSim.PICK,
-      PICK_DOWN: WikiSim.PICK_DOWN, PICK_UP: WikiSim.PICK_UP, TRIP_ROWS: WikiSim.TRIP_ROWS };
-    const d = diff(c, j, '');
-    cases++;
-    if (d) { failed++; console.log(`DIFFER the build trip's constants: ${d.at}: C ${show(d.c)}, sim.js ${show(d.j)}`); }
-    else console.log(`equal  the build trip's constants: TRIP ${c.TRIP}, down ${c.TRIP_DOWN}, up ${c.TRIP_UP}, ${c.TRIP_ROWS.length} rows`);
-  }
+    /* ---- the build trip's constants ---- */
+    {
+      const c = JSON.parse(wikitest(['constants']));
+      const j = { TRIP: WikiSim.TRIP, TRIP_DOWN: WikiSim.TRIP_DOWN, TRIP_UP: WikiSim.TRIP_UP, PICK: WikiSim.PICK,
+        PICK_DOWN: WikiSim.PICK_DOWN, PICK_UP: WikiSim.PICK_UP, TRIP_ROWS: WikiSim.TRIP_ROWS };
+      const d = diff(c, j, '');
+      cases++;
+      if (d) { failed++; console.log(`DIFFER the build trip's constants: ${d.at}: C ${show(d.c)}, sim.js ${show(d.j)}`); }
+      else console.log(`equal  the build trip's constants: TRIP ${c.TRIP}, down ${c.TRIP_DOWN}, up ${c.TRIP_UP}, ${c.TRIP_ROWS.length} rows`);
+    }
 
-  /* ---- refusals: both sides accept or refuse alike, as each case wants ---- */
-  {
-    const entry = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries/quickbuild.json'), 'utf8'));
-    const all = refusalCases(entry);
-    fs.writeFileSync(path.join(tmp, 'refuse.jsonl'), all.map(c =>
-      JSON.stringify({ name: c.name, scripted: c.scripted, layout: c.layout, side: c.side, iface: c.iface, casting: c.casting }) + '\n' +
-      JSON.stringify(c.entry) + '\n').join(''));
-    const got = lines(wikitest(['refuse', 'refuse.jsonl']));
-    all.forEach((c, i) => {
-      let js = 'accepted', why = '';
-      try {
-        // text.js's checkEntry is the loader's refusal of the text, which wiki.js asks before any sim is made
-        const bad = WikiText.checkEntry(c.entry);
-        if (bad) throw new Error(bad);
-        (c.scripted ? WikiSim.play : WikiSim.create)(c.entry, c.entry.demos[0], c.layout, { side: c.side, casting: c.casting, iface: c.iface });
-      } catch (e) { js = 'refused'; why = e.message; }
-      const cv = (got[i] || '').startsWith('accepted ') ? 'accepted' : (got[i] || '').startsWith('refused ') ? 'refused' : '(no answer)';
-      refusals++;
-      if (cv === js && js === c.want) console.log(`equal  refusal -- ${c.name}: both ${js}`);
-      else { failed++; refuseBad++; console.log(`DIFFER refusal -- ${c.name}: C ${got[i] || '(none)'}; sim.js ${js}${why ? ` (${why})` : ''}; wanted ${c.want}`); }
-    });
-  }
+    /* ---- refusals: both sides accept or refuse alike, as each case wants ---- */
+    {
+      const entry = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries/quickbuild.json'), 'utf8'));
+      const all = refusalCases(entry);
+      fs.writeFileSync(path.join(tmp, 'refuse.jsonl'), all.map(c =>
+        JSON.stringify({ name: c.name, scripted: c.scripted, layout: c.layout, side: c.side, iface: c.iface, casting: c.casting }) + '\n' +
+        JSON.stringify(c.entry) + '\n').join(''));
+      const got = lines(wikitest(['refuse', 'refuse.jsonl']));
+      all.forEach((c, i) => {
+        let js = 'accepted', why = '';
+        try {
+          // text.js's checkEntry is the loader's refusal of the text, which wiki.js asks before any sim is made
+          const bad = WikiText.checkEntry(c.entry);
+          if (bad) throw new Error(bad);
+          (c.scripted ? WikiSim.play : WikiSim.create)(c.entry, c.entry.demos[0], c.layout, { side: c.side, casting: c.casting, iface: c.iface });
+        } catch (e) { js = 'refused'; why = e.message; }
+        const cv = (got[i] || '').startsWith('accepted ') ? 'accepted' : (got[i] || '').startsWith('refused ') ? 'refused' : '(no answer)';
+        refusals++;
+        if (cv === js && js === c.want) console.log(`equal  refusal -- ${c.name}: both ${js}`);
+        else { failed++; refuseBad++; console.log(`DIFFER refusal -- ${c.name}: C ${got[i] || '(none)'}; sim.js ${js}${why ? ` (${why})` : ''}; wanted ${c.want}`); }
+      });
+    }
 
-  /* ---- castings and layouts read back, field by field; a refused casting by its message ---- */
-  {
-    const items = dataItems();
-    fs.writeFileSync(path.join(tmp, 'data.jsonl'), items.map(it =>
-      JSON.stringify({ kind: it.kind, name: it.name }) + '\n' + JSON.stringify(it.v) + '\n').join(''));
-    const got = lines(wikitest(['data', 'data.jsonl']));
-    items.forEach((it, i) => {
-      const j = it.kind === 'casting' ? castingOut(it.v) : layoutOut(it.v), c = got[i] ? JSON.parse(got[i]) : null;
-      // a layout's refusals are worded by each side on its own; a casting's are sim.js's words
-      if (c && !c.ok && !j.ok && it.kind === 'layout') { c.why = j.why; }
-      const d = c ? diff(c, j, '') : { at: '(no answer)', c: null, j };
-      datas++;
-      if (d) { failed++; dataBad++; console.log(`DIFFER data -- ${it.name}: ${d.at}: C ${show(d.c)}, sim.js ${show(d.j)}`); }
-      else console.log(`equal  data -- ${it.name}: ${j.ok ? 'read alike' : `both refused (${j.why})`}`);
-    });
-  }
+    /* ---- castings and layouts read back, field by field; a refused casting by its message ---- */
+    {
+      const items = dataItems();
+      fs.writeFileSync(path.join(tmp, 'data.jsonl'), items.map(it =>
+        JSON.stringify({ kind: it.kind, name: it.name }) + '\n' + JSON.stringify(it.v) + '\n').join(''));
+      const got = lines(wikitest(['data', 'data.jsonl']));
+      items.forEach((it, i) => {
+        const j = it.kind === 'casting' ? castingOut(it.v) : layoutOut(it.v), c = got[i] ? JSON.parse(got[i]) : null;
+        // a layout's refusals are worded by each side on its own; a casting's are sim.js's words
+        if (c && !c.ok && !j.ok && it.kind === 'layout') { c.why = j.why; }
+        const d = c ? diff(c, j, '') : { at: '(no answer)', c: null, j };
+        datas++;
+        if (d) { failed++; dataBad++; console.log(`DIFFER data -- ${it.name}: ${d.at}: C ${show(d.c)}, sim.js ${show(d.j)}`); }
+        else console.log(`equal  data -- ${it.name}: ${j.ok ? 'read alike' : `both refused (${j.why})`}`);
+      });
+    }
 
-  /* ---- data the loader must survive, built by tests/wikitest.c's `malformed` ---- */
-  for (const l of lines(wikitest(['malformed']))) {
-    malformed++;
-    if (l.startsWith('ok ')) console.log(`equal  malformed -- ${l.slice(3)}`);
-    else { failed++; bad++; console.log(`DIFFER malformed -- ${l}`); }
+    /* ---- data the loader must survive, built by tests/wikitest.c's `malformed` ---- */
+    for (const l of lines(wikitest(['malformed']))) {
+      malformed++;
+      if (l.startsWith('ok ')) console.log(`equal  malformed -- ${l.slice(3)}`);
+      else { failed++; bad++; console.log(`DIFFER malformed -- ${l}`); }
+    }
   }
 } catch (e) {
   if (!(e instanceof CannotRun)) throw e;
@@ -778,6 +791,7 @@ try {
 }
 if (process.exitCode !== 2) {
   const variant = WINE ? 'i686 under Wine' : 'native';
+  if (SHARDS > 1) process.stdout.write(`shard ${SHARD} of ${SHARDS}${SHARD > 1 ? ', its demo plays alone' : ''}: `);
   console.log(failed ? `${differ} of ${demos} demo plays, ${failed - differ - bad - refuseBad - dataBad} of ${cases} rule cases, ${refuseBad} of ${refusals} refusal cases, ${dataBad} of ${datas} data read back and ${bad} of ${malformed} malformed-data cases differ (C sim: ${variant})`
     : `all ${demos} demo plays and ${cases} rule cases equal, tick for tick, all ${refusals} refusal cases alike, all ${datas} castings and layouts read alike and all ${malformed} malformed-data cases loaded (C sim: ${variant})`);
   process.exitCode = failed ? 1 : 0;

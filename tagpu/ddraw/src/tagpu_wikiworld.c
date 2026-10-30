@@ -360,12 +360,25 @@ static TAGPU_TERRHAND  s_terr;
 static TAGPU_FEATHAND  s_feat;
 static TAGPU_WORLDTGT  s_tgt;
 static WSCENEFOG       s_fog;
-/* the log's numbers */
-static unsigned        s_saidAt, s_nFrames, s_nImage;
-static double          s_msProd, s_msSeam, s_msMax;
 static uint32_t        s_shotWant, s_shotDone;
 static char            s_shotWhat[96];
-static unsigned        s_nRec, s_nRefused, s_nUnitFrames;
+
+/* THE LOG'S NUMBERS, each over a window of the stage's drawn frames: the periodic line's, 300 frames
+   of the frame counter, and the count's (THE COUNT, below). The producer leaves its frame's part in
+   s_fr*, which tagpu_wikiworld_drawn adds to both windows when that frame is drawn. */
+typedef struct {
+    unsigned frames, image, rec, unitFrames, refused;
+    double   prod, seam, max;
+} WINSTAT;
+static WINSTAT         s_per, s_cnt;
+static unsigned        s_saidAt;
+static unsigned        s_frRec, s_frUnit, s_frRefused;
+static double          s_frProd;
+/* THE STAGE'S WORK, each count only ever growing: the grounds built (ground_build) and the type
+   records built (types_build); the bake's entries baked and dropped are its own
+   (tagpu_posebake_work). A stage that is up does none of it frame to frame. */
+enum { WORK_GROUND, WORK_TYPES, WORK_BAKED, WORK_DROPPED, WORK_N };
+static unsigned        s_nGround, s_nTypes;
 
 /* ---- the units -------------------------------------------------------------------------------- */
 
@@ -459,6 +472,7 @@ static void types_build(const WIKI3D* a, const WIKISTAGEVIEW* v, int entry, cons
     in3d[sizeof in3d - 1] = boxes[sizeof boxes - 1] = 0;
     tagpu_logf("wiki3d: %s: the types in 3D:%s; the boxes:%s", id, in3d[0] ? in3d : " none",
                boxes[0] ? boxes : " none");
+    s_nTypes++;
     s_tA = a;
     s_tEntry = entry;
     s_tLever = s_leverSerial;
@@ -725,7 +739,7 @@ static int units_frame(const TAGPU_FRAME* f, const WIKISTAGEVIEW* v, int nrec, i
         for (i = nunit; i < nrec; i++) refused += !unit_one(&s_rec[i], &s_run[s_rec[i].type], v);
         tagpu_posedraw_end();
     }
-    s_nRefused += refused != 0;
+    s_frRefused = refused != 0;
     return refused == 0;
 }
 
@@ -734,6 +748,82 @@ static void fog_fields(float* org, float* cols, float* rows)
     org[0] = s_fog.orgx; org[1] = s_fog.orgz;
     *cols = (float)s_fog.cols;
     *rows = (float)s_fog.rows;
+}
+
+static void win_add(WINSTAT* w, int image, double ms)
+{
+    w->frames++;
+    w->image += image != 0;
+    w->rec += s_frRec;
+    w->unitFrames += s_frUnit;
+    w->refused += s_frRefused;
+    w->prod += s_frProd;
+    w->seam += ms;
+    if (ms > w->max) w->max = ms;
+}
+
+static void work_now(unsigned* k)
+{
+    k[WORK_GROUND] = s_nGround;
+    k[WORK_TYPES] = s_nTypes;
+    tagpu_posebake_work(&k[WORK_BAKED], &k[WORK_DROPPED]);
+}
+
+/* THE COUNT, tagpu_wiki3d.count: the stage's next N drawn frames counted on their own and said in
+   one line, the test harness's measure of the stage in place of the periodic line's 300.
+
+   THE WINDOW OPENS ON THE FIRST DRAWN FRAME AFTER THE ASK THAT IS NOT BUSY: no ground, type record,
+   bake or drop since the drawn frame before it, and no record the bake refused. So what the window
+   says is the stage at rest, whatever an earlier change (a lever, a shot, an entry) left in flight,
+   and a stage that works on every frame never opens one: the ask then goes unanswered, which is the
+   failure. Inside the window the work is counted, not filtered: an up stage does none of it.
+
+   The ask is read on the lever's beat, right after the lever, so a count asked once the lever's line
+   is out counts frames under that lever. Render thread only, as everything here; the milliseconds
+   are said, never the window's condition. */
+#define COUNT_ASK  "tagpu_wiki3d.count"
+#define COUNT_MAX  3000u
+static unsigned s_cntAsk, s_cntN, s_cntFrom;
+static int      s_cntState;                     /* 0 none, 1 asked: waiting for a frame at rest, 2 counting */
+static unsigned s_cntBase[WORK_N], s_workSeen[WORK_N];
+
+static void count_ask(unsigned frame)
+{
+    char buf[32];
+    unsigned n = 0;
+    if (frame != s_leverAt) return;             /* the lever's beat: lever() read it this frame */
+    if (tagpu_opt_read(COUNT_ASK, buf, sizeof buf) <= 0) return;
+    DeleteFileA(COUNT_ASK);
+    if (sscanf(buf, "%u", &n) != 1 || n < 1 || n > COUNT_MAX) {
+        tagpu_logf("wiki3d: count: `%s` is not a frame count from 1 to %u - nothing asked", buf, COUNT_MAX);
+        return;
+    }
+    s_cntAsk++;
+    s_cntN = n;
+    s_cntState = 1;
+    tagpu_logf("wiki3d: count %u asked: %u frame(s) of the stage, from the first at rest", s_cntAsk, n);
+}
+
+static void count_frame(unsigned frame, int image, double ms, int busy, const unsigned* k)
+{
+    if (s_cntState == 1 && !busy) {
+        s_cntState = 2;
+        s_cntFrom = frame;
+        memset(&s_cnt, 0, sizeof s_cnt);
+        memcpy(s_cntBase, k, sizeof s_cntBase);
+    }
+    if (s_cntState != 2) return;
+    win_add(&s_cnt, image, ms);
+    if (s_cnt.frames < s_cntN) return;
+    tagpu_logf("wiki3d: count %u: %u of %u frame(s) drew the image, frames %u..%u; the work: %u ground(s), %u type "
+               "record set(s), %u bake(s), %u drop(s), %u frame(s) with a record the bake refused; %.1f model record(s) "
+               "a frame; render thread: the producer %.3f ms and the passes %.3f ms a frame on average, the passes "
+               "at most %.3f ms", s_cntAsk, s_cnt.image, s_cnt.frames, s_cntFrom, frame,
+               k[WORK_GROUND] - s_cntBase[WORK_GROUND], k[WORK_TYPES] - s_cntBase[WORK_TYPES],
+               k[WORK_BAKED] - s_cntBase[WORK_BAKED], k[WORK_DROPPED] - s_cntBase[WORK_DROPPED], s_cnt.refused,
+               s_cnt.unitFrames ? (double)s_cnt.rec / s_cnt.unitFrames : 0.0,
+               s_cnt.prod / s_cnt.frames, s_cnt.seam / s_cnt.frames, s_cnt.max);
+    s_cntState = 0;
 }
 
 void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
@@ -751,8 +841,10 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     const float *shadow = NULL, *body = NULL;
 
     s_have = s_terrHave = s_featHave = s_tgtHave = 0;
+    s_frRec = s_frUnit = s_frRefused = 0;
     QueryPerformanceCounter(&t0);
     lever(f->frame_counter);
+    count_ask(f->frame_counter);
     if (s_leverOff) return;
     if (!tagpu_wikistate_scene(f->frame_counter, &v, &entry, &demo, &shot, &stage, &u, &ox, &oy)) return;
     if (!(a = tagpu_wiki3d_get()) || !(art = tagpu_wikiart_get()) || !art->data) return;
@@ -767,7 +859,9 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     /* a device with no image size yet (bring-up, a re-pick) builds nothing and latches nothing:
        the stage is built on the first frame that has one, and again when the map's rows change */
     if (st && (st != s_stage || v->h != s_stageRows) && tagpu_vk_max_image_dim() > 0) {
-        const char* why = ground_build(st, v->h);
+        const char* why;
+        s_nGround++;
+        why = ground_build(st, v->h);
         if (!why) why = wrecks_build(a);
         s_stage = st;
         s_stageRows = v->h;
@@ -808,8 +902,8 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     s_wantFeat = s_ground && nShadow + nBody > 0;
     s_wantUnit = nrec > 0;
     s_unitWhole = units_frame(f, v, nrec, nunit, gw, gh, ss) && !s_noUnits;
-    s_nRec += (unsigned)nrec;
-    s_nUnitFrames++;
+    s_frRec = (unsigned)nrec;
+    s_frUnit = 1;
     if (s_ground) {
         tagpu_wikiscene_fog(v->fog, v->w, v->h, &s_fog);
         tagpu_gaf_atlas_frame(&s_fatlas);
@@ -888,7 +982,7 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
     }
     s_frame = f->frame_counter;
     s_have = s_tgtHave;
-    s_msProd += ms_since(t0);
+    s_frProd = ms_since(t0);
 }
 
 int tagpu_wikiworld_wants(unsigned frame, WIKIWORLDWANT* w)
@@ -905,22 +999,26 @@ int tagpu_wikiworld_wants(unsigned frame, WIKIWORLDWANT* w)
 
 void tagpu_wikiworld_drawn(unsigned frame, int image, double ms)
 {
+    unsigned k[WORK_N];
+    int busy;
     if (!s_have || s_frame != frame) return;
-    s_nFrames++;
-    s_nImage += image != 0;
-    s_msSeam += ms;
-    if (ms > s_msMax) s_msMax = ms;
+    /* a frame is busy when the stage did work since the last drawn frame -- in this frame's producer,
+       or in one whose frame was not drawn -- or the bake refused one of its records */
+    work_now(k);
+    busy = memcmp(k, s_workSeen, sizeof k) != 0 || s_frRefused;
+    memcpy(s_workSeen, k, sizeof k);
+    win_add(&s_per, image, ms);
+    count_frame(frame, image, ms, busy, k);
     if (frame - s_saidAt >= 300) {
+        const WINSTAT* w = &s_per;
         tagpu_logf("wiki3d: frame %u: %s; %u of %u frame(s) drew the image; %.1f model record(s) a frame, "
                    "%u frame(s) with one the bake refused; render thread: the producer %.3f ms and the "
                    "passes %.3f ms a frame on average, the passes at most %.3f ms",
                    frame, image ? "the image" : "the whitebox (a pass the image needs did not prepare)",
-                   s_nImage, s_nFrames, s_nUnitFrames ? (double)s_nRec / s_nUnitFrames : 0.0, s_nRefused,
-                   s_msProd / s_nFrames, s_msSeam / s_nFrames, s_msMax);
+                   w->image, w->frames, w->unitFrames ? (double)w->rec / w->unitFrames : 0.0, w->refused,
+                   w->prod / w->frames, w->seam / w->frames, w->max);
         s_saidAt = frame;
-        s_nFrames = s_nImage = 0;
-        s_nRec = s_nRefused = s_nUnitFrames = 0;
-        s_msProd = s_msSeam = s_msMax = 0;
+        memset(&s_per, 0, sizeof s_per);
     }
 }
 

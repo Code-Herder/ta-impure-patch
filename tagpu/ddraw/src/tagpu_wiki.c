@@ -78,6 +78,7 @@
 #include "dd.h"
 #include "config.h"
 #include "mouse.h"
+#include "tagpu_opt.h"
 #include "tagpu_shield.h"
 #include "tagpu_menu.h"
 #include "tagpu_hudstate.h"
@@ -104,6 +105,13 @@
    writes the first frame of that view whose image is drawn (tagpu_wikiworld.h) */
 #define SHOT_ASK  "tagpu_wiki.shot"
 #define SHOT_TICK_MAX (30 * 60 * 10)   /* ten minutes of a demo: the steps run on the game thread */
+/* THE TEST HARNESS'S PACING (tools/wiki_regression.py; nothing a player does reaches either):
+   PAUSE_ASK holds `ENTRY DEMO TICK` as SHOT_ASK does, and the fill that reads it picks that demo
+   afresh and plays it -- at the clock's pace, or the turbo's -- until its tick, where it pauses on
+   exactly that tick; TURBO_ON holds K, and while it is there a playing demo steps K ticks a fill in
+   place of the clock's, K at most STEPS_MAX, so a fill costs no more than the clock lets it. */
+#define PAUSE_ASK "tagpu_wiki.pause"
+#define TURBO_ON  "tagpu_wiki.turbo"
 
 enum { B_L = 1, B_R = 2, B_M = 4, B_X = 8 };
 
@@ -311,6 +319,14 @@ static const WIKILAYOUT* s_lay;                 /* the sidebar layout s_sim was 
 static int      s_laySrc;                       /* its WIKISTAGE_LAYOUT_*, the record's value    */
 static LARGE_INTEGER s_qpf, s_last;
 static double   s_acc;                          /* ticks owed, wiki.js `acc`                     */
+/* THE CLOCK'S OWN ACCOUNT since the demo started, which the state dump gives: the seconds it played
+   (each fill's, clamped as the clock clamps it) and the ticks STEPS_MAX took off what they owed. A
+   fill leaves under one tick owed, so the ticks played are WIKI_TPS x the speed x the seconds, less
+   the ticks taken off, to within one: the rule the clock paces by, on its own clock */
+static double   s_clockS, s_clipped;
+static int      s_turbo;                        /* TURBO_ON's K, 0 off                           */
+static int      s_pauseAt = -1;                 /* PAUSE_ASK's tick for the running demo, -1 none */
+static uint32_t s_pauseN;                       /* the last pause asked for, 0 none              */
 static int      s_drag = -1;                    /* the panel whose thumb a left press holds      */
 static int      s_dragReal;                     /* that press came by the real path              */
 static int      s_dragY;
@@ -780,6 +796,8 @@ static void start(void)
     s_nlog = s_logCut = 0;
     sim_free();
     s_acc = 0;
+    s_clockS = s_clipped = 0;
+    s_pauseAt = -1;                                  /* a pause asked is for the demo it picked */
     s_want = 0;
     s_msg[0] = 0;
     s_trunc = 0;
@@ -1002,6 +1020,18 @@ static void bar_drag(int cy)
    256 queued, 512 lines, the nano spray's 1024 particles, the caption and the labels) and of
    tagpu_wikistage_pose (the units' poses, 4096 primitives), and says once what it had to cut --
    a particle the simulation itself dropped included. */
+/* the asked pause reached: the demo stops on its tick, before the step past it */
+static int pause_due(void)
+{
+    if (s_pauseAt < 0 || s_sim.tick < s_pauseAt) return 0;
+    s_playing = 0;
+    s_acc = 0;
+    tagpu_logf("wiki: pause %u: %s demo %d paused at tick %d", (unsigned)s_pauseN, entry_of(data())->id, s_demo + 1,
+               s_sim.tick);
+    s_pauseAt = -1;
+    return 1;
+}
+
 static void page_fill(TAGPU_PK_WIKI* w)
 {
     const WIKIDATA* d = data();
@@ -1017,10 +1047,18 @@ static void page_fill(TAGPU_PK_WIKI* w)
     if (dt < 0) dt = 0;
     if (dt > 0.25) dt = 0.25;
     if (!s_simOn || !s_playing || done()) s_acc = 0;
-    else {
+    else if (s_turbo) {
+        int k;
+        s_acc = 0;
+        for (k = 0; k < s_turbo && !done() && !pause_due(); k++) tagpu_wikisim_step(&s_sim);
+    } else {
+        s_clockS += dt;
         s_acc += dt * WIKI_TPS * s_speed;
-        if (s_acc > STEPS_MAX) s_acc = STEPS_MAX;
-        while (s_acc >= 1 && !done()) {
+        if (s_acc > STEPS_MAX) {
+            s_clipped += s_acc - STEPS_MAX;
+            s_acc = STEPS_MAX;
+        }
+        while (s_acc >= 1 && !done() && !pause_due()) {
             tagpu_wikisim_step(&s_sim);
             s_acc -= 1;
         }
@@ -1561,9 +1599,11 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
             s_hit.scroll_max[0], s_hit.scroll_max[1], s_hit.scroll_max[2]);
     /* the demo: its clock and its state hash (tagpu_wikisim_hash), and what the page cost */
     fprintf(f, "\"playing\":%d,\"speed\":%d,\"sim\":%d,\"tick\":%d,\"done\":%d,\"hash\":\"%016llx\","
-               "\"stage\":%d,\"cost_max_ms\":%.4f,\"cost_frames\":%u,\"msg\":",
+               "\"stage\":%d,\"cost_max_ms\":%.4f,\"cost_frames\":%u,\"clock_s\":%.6f,\"clipped\":%.6f,"
+               "\"turbo\":%d,\"pause_at\":%d,\"msg\":",
             s_playing, s_speed, s_simOn, s_simOn ? s_sim.tick : -1, done(),
-            s_simOn ? (unsigned long long)tagpu_wikisim_hash(&s_sim) : 0ull, w->has_stage, s_costMax, s_costFrames);
+            s_simOn ? (unsigned long long)tagpu_wikisim_hash(&s_sim) : 0ull, w->has_stage, s_costMax, s_costFrames,
+            s_clockS, s_clipped, s_turbo, s_pauseAt);
     jstr(f, s_msg, sizeof s_msg);
     /* the caption as the record carries it, filled, its UTF-8 as it is */
     fprintf(f, ",\"caption\":");
@@ -1626,37 +1666,74 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
     tagpu_logf("wiki: state dumped to %s - open=%d paused=%d hits=%u", DUMP_OUT, s_open, s_paused, s_hit.n);
 }
 
-/* the capture SHOT_ASK asks for: its demo picked, played to its tick and paused */
-static void shot(void)
+/* An ask of `ENTRY DEMO TICK` (SHOT_ASK, PAUSE_ASK) read and removed: 1 with the entry's index, its
+   demo's number from 1 and the tick, 0 with the refusal said */
+static int ask_read(const char* file, int* e, int* demo, int* tick)
 {
     const WIKIDATA* d = data();
     char buf[128], id[64];
     DWORD n = 0;
-    HANDLE h = CreateFileA(SHOT_ASK, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-    int i, demo = 0, tick = 0, e = -1;
-    if (h == INVALID_HANDLE_VALUE) return;
+    HANDLE h = CreateFileA(file, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    int i;
+    *e = -1;
+    if (h == INVALID_HANDLE_VALUE) return 0;
     if (!ReadFile(h, buf, sizeof buf - 1, &n, NULL)) n = 0;
     CloseHandle(h);
-    DeleteFileA(SHOT_ASK);
+    DeleteFileA(file);
     buf[n] = 0;
-    if (!d || sscanf(buf, "%63s %d %d", id, &demo, &tick) != 3) {
-        tagpu_logf("wiki: shot: `%s` is not `ENTRY DEMO TICK`, or the data is not loaded - nothing asked", buf);
-        return;
+    if (!d || sscanf(buf, "%63s %d %d", id, demo, tick) != 3) {
+        tagpu_logf("wiki: %s: `%s` is not `ENTRY DEMO TICK`, or the data is not loaded - nothing asked", file, buf);
+        return 0;
     }
     for (i = 0; i < d->nentry; i++)
-        if (!strcmp(d->entry[i].id, id)) e = i;
-    if (e < 0 || demo < 1 || demo > d->entry[e].ndemo || tick < 0 || tick > SHOT_TICK_MAX) {
-        tagpu_logf("wiki: shot: no entry %s with a demo %d, or tick %d is past %d - nothing asked", id, demo, tick,
+        if (!strcmp(d->entry[i].id, id)) *e = i;
+    if (*e < 0 || *demo < 1 || *demo > d->entry[*e].ndemo || *tick < 0 || *tick > SHOT_TICK_MAX) {
+        tagpu_logf("wiki: %s: no entry %s with a demo %d, or tick %d is past %d - nothing asked", file, id, *demo, *tick,
                    SHOT_TICK_MAX);
-        return;
+        return 0;
     }
+    return 1;
+}
+
+/* the capture SHOT_ASK asks for: its demo picked, played to its tick and paused */
+static void shot(void)
+{
+    int e, demo, tick;
+    if (!ask_read(SHOT_ASK, &e, &demo, &tick)) return;
     s_try = 0;
+    s_pauseAt = -1;
     pick(e, demo - 1);
     while (s_simOn && !s_sim.done && s_sim.tick < tick) tagpu_wikisim_step(&s_sim);
     s_playing = 0;
     s_shot++;
-    tagpu_logf("wiki: shot %u asked: %s demo %d held at tick %d", (unsigned)s_shot, id, demo,
+    tagpu_logf("wiki: shot %u asked: %s demo %d held at tick %d", (unsigned)s_shot, data()->entry[e].id, demo,
                s_simOn ? s_sim.tick : -1);
+}
+
+/* the pause PAUSE_ASK asks for: its demo picked afresh and let play, to pause on its tick (pause_due) */
+static void pause_ask(void)
+{
+    int e, demo, tick;
+    if (!ask_read(PAUSE_ASK, &e, &demo, &tick)) return;
+    s_try = 0;
+    pick(e, demo - 1);
+    s_pauseN++;
+    s_pauseAt = s_simOn ? tick : -1;
+    tagpu_logf("wiki: pause %u asked: %s demo %d to pause at tick %d%s", (unsigned)s_pauseN, data()->entry[e].id, demo,
+               tick, s_simOn ? "" : " - the demo did not start, nothing asked");
+}
+
+/* TURBO_ON, read on the triggers' beat: its K while the file is there, said when it changes */
+static void turbo_read(void)
+{
+    char buf[16];
+    int k = 0;
+    if (tagpu_opt_read(TURBO_ON, buf, sizeof buf) > 0 && sscanf(buf, "%d", &k) == 1)
+        k = k < 1 ? 1 : k > (int)STEPS_MAX ? (int)STEPS_MAX : k;
+    if (k == s_turbo) return;
+    s_turbo = k;
+    if (k) tagpu_logf("wiki: %s: a playing demo steps %d tick(s) a fill, not the clock's", TURBO_ON, k);
+    else tagpu_logf("wiki: %s: gone - the demo plays on the clock", TURBO_ON);
 }
 
 /* THE 3D ASSET LOAD (tagpu_wikiasset.h), started once a process once the wiki's data is loaded,
@@ -1767,9 +1844,12 @@ int tagpu_wiki_fill(TAGPU_PK_WIKI* w, uint32_t* len, int again, int side, int if
         WIKISIMCTX ctx;
         int src, cast;
         assets_start();
-        /* a capture waits, as a demo does, for the context it would start on */
+        /* a capture waits, as a demo does, for the context it would start on, and so does a pause */
         if (s_ask && GetFileAttributesA(SHOT_ASK) != INVALID_FILE_ATTRIBUTES && context_now(data(), &lay, &src, &ctx, &cast))
             shot();
+        if (s_ask && GetFileAttributesA(PAUSE_ASK) != INVALID_FILE_ATTRIBUTES && context_now(data(), &lay, &src, &ctx, &cast))
+            pause_ask();
+        if (s_ask) turbo_read();
         page_fill(w);
         /* the text's context, by value: the running demo's, else the one a demo would start on */
         if (s_simOn) {

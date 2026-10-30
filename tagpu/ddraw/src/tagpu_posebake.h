@@ -184,6 +184,12 @@ typedef struct TAGPU_PBMAT {
    armed. */
 void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen);
 
+/* Render thread: the entries this instance has baked and dropped since the process started, both
+   tables counted, each only ever growing. A stage that holds what it baked bakes and drops nothing
+   frame to frame, which is what the wiki's frame count (tagpu_wikiworld.c, THE COUNT) reads. A
+   refused geometry entry is kept and counts as no bake. */
+void tagpu_posebake_work(unsigned* baked, unsigned* dropped);
+
 /* Bake (or find) the geometry and the material stream for one unit's type.
    `pc` is the unit's PK_PIECE run out of the frame packet and supplies the
    piece list — each entry's `node` is the TYPE's template, so the entry is
