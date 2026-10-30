@@ -553,9 +553,11 @@ tacli remote add <name> --ssh <user>@<host> [--key <file>] --from <player folder
   unusable. `save_meta` writes a temporary file of its own beside it and moves it over the file,
   so a crash, or two commands saving at once, leaves one whole file, never half.
 - **A metadata file that is gone is an instance that is not there.** It is only ever replaced
-  whole or removed by `rm`, so a reader reads it once, never tests and then reads, and takes a
-  missing file as no instance: `ls`, listing while another `tacli` removes an instance it has
-  just found, leaves that one out instead of failing.
+  whole or removed by `rm`, so a reader reads it once (`meta_or_none`), never tests and then
+  reads, and takes a missing file as no instance: `ls` and a launch's window layout, looping over
+  instances while another `tacli` removes one they have just found, leave that one out instead
+  of failing; `meta()`, which a verb aimed at the instance calls, refuses it as "no such
+  instance".
 
 ### Routing
 

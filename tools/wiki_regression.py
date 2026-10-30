@@ -2404,18 +2404,19 @@ def offline_runs():
     return runs
 
 
-def offline_one(name, cmd):
+def offline_one(name, cmd, popen=subprocess.Popen, env=None):
     """One offline check to its end: its verdict line printed, and its exit code -- 2 is a check that could not run,
-    which fails like one that differs."""
+    which fails like one that differs. `popen` starts it: the gate's own, which ends it with the gate."""
     t0 = time.monotonic()
-    r = subprocess.run(list(map(str, cmd)), capture_output=True, text=True, cwd=TREE)
+    p = popen(list(map(str, cmd)), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=TREE, env=env)
+    stdout, stderr = p.communicate()
     # the check's own verdict, the line it starts with its name (sidecheck prints its packs after it), else the last
-    out = r.stdout.strip().splitlines() or r.stderr.strip().splitlines() or [""]
+    out = stdout.strip().splitlines() or stderr.strip().splitlines() or [""]
     own = Path(str(cmd[1])).stem + ":"
     last = next((ln for ln in out if ln.startswith(own)), out[-1])
-    verdict = "passed" if r.returncode == 0 else "CANNOT RUN" if r.returncode == 2 else "FAILED"
-    print(f"wiki offline: {name}: {verdict} ({r.returncode}, {time.monotonic() - t0:.0f} s): {last[:300]}", flush=True)
-    return r.returncode, last[:300]
+    verdict = "passed" if p.returncode == 0 else "CANNOT RUN" if p.returncode == 2 else "FAILED"
+    print(f"wiki offline: {name}: {verdict} ({p.returncode}, {time.monotonic() - t0:.0f} s): {last[:300]}", flush=True)
+    return p.returncode, last[:300]
 
 
 def offline_checks():
@@ -2428,33 +2429,94 @@ GATE_MODES = ("sp", "page", "demos", "try", "asset", "stage3d", "units", "cursor
 GATE_SHOTS = {"demos", "stage3d", "units", "cursor"}    # the modes that take --shots DIR
 GATE_RES = "1920x1080"                                  # each game lane's private display, and so its game's screen
 GATE_LANE_S = 3600                                      # a lane still running after this is hung, not slow: the
-                                                        # slowest, units, takes some 750 s alone
+                                                        # slowest, units, takes some 750 s alone and 863 s at -j 6
+GATE_STOP_S = 120                                       # a lane asked to stop (SIGINT, which runs its finally blocks:
+                                                        # the game stopped, its X server and levers put back) is
+                                                        # killed if it has not exited by then
+GATE_VERDICT = re.compile(r"wiki regression (\w+: passed|FAILED)|wiki mods: \S+: (FAILED|\(w4, w5\))")
 
 
-def gate_lane(cmd, log, env):
+class Lanes:
+    """Every process the gate starts, each in a session of its own, so the gate can end each with all it started.
+    THE LOCK'S LIFETIME: the lanes run under the gate's hold of the run lock (RUNLOCK_HELD, inherited), which the
+    kernel drops when the gate exits -- so the gate never exits while a lane runs: on any way out, a signal
+    included, it stops starting lanes and ends every live one before it returns."""
+
+    def __init__(self):
+        import threading
+        self.lock, self.live, self.stopping = threading.Lock(), set(), False
+
+    def popen(self, cmd, **kw):
+        with self.lock:
+            if self.stopping:
+                raise OSError("the gate is stopping: no new lane")
+            p = subprocess.Popen(cmd, start_new_session=True, **kw)
+            self.live.add(p)
+        return p
+
+    def done(self, p):
+        with self.lock:
+            self.live.discard(p)
+
+    @staticmethod
+    def end(p):
+        """SIGINT to the process's session, then SIGKILL past GATE_STOP_S."""
+        for sig, wait in ((2, GATE_STOP_S), (9, None)):
+            if p.poll() is not None:
+                return
+            try:
+                os.killpg(p.pid, sig)
+            except ProcessLookupError:
+                return
+            try:
+                p.wait(timeout=wait)
+            except subprocess.TimeoutExpired:
+                pass
+
+    def end_all(self):
+        with self.lock:
+            self.stopping = True
+            live = list(self.live)
+        for p in live:
+            self.end(p)
+
+
+def gate_lane(lanes, cmd, log, env):
     """One lane's process to its end, everything it says into `log`: its exit code and its verdict line, the last
     line naming the regression's verdict, else the last it printed. A lane past GATE_LANE_S is ended and fails."""
     with open(log, "w") as f:
-        p = subprocess.Popen(list(map(str, cmd)), stdout=f, stderr=subprocess.STDOUT, cwd=TREE, env=env,
-                             start_new_session=True)
+        p = lanes.popen(list(map(str, cmd)), stdout=f, stderr=subprocess.STDOUT, cwd=TREE, env=env)
         try:
             code = p.wait(timeout=GATE_LANE_S)
         except subprocess.TimeoutExpired:
-            os.killpg(p.pid, 15)
-            p.wait()
+            lanes.end(p)
             return 124, f"still running after {GATE_LANE_S} s, ended"
+        finally:
+            lanes.done(p)
     lines = [ln for ln in Path(log).read_text(errors="replace").splitlines() if ln.strip()]
-    said = [ln for ln in lines if re.match(r"wiki regression \w+: (passed|FAILED)|wiki mods: \S+: (FAILED|\(w4, w5\))", ln)]
+    said = [ln for ln in lines if GATE_VERDICT.match(ln)]
     return code, (said or lines or [""])[-1][:300]
+
+
+def gate_instance(name, *create):
+    """The instance `name` made afresh, with registry hives of its own: lanes running at once must not share the
+    template's hive inode, which Wine rewrites in place (tacli privatise_hives). Made before any lane starts, so no
+    wineserver of the gate is writing the template's hives while they are copied."""
+    if tacli_api().Instance(name).exists:
+        tacli("rm", name, "--force", timeout=120)
+    tacli("create", name, "--private-registry", *create, timeout=300)
+    return tacli_api().Instance(name)
 
 
 def gate(shots, jobs, offline_jobs, modes, setups):
     """Every part of the wiki's gate at once under one hold of the run lock: the offline checks on `offline_jobs`
-    workers, and on `jobs` workers each game lane -- a mode on its own instance `wikigate-<mode>`, made afresh on its
-    own private X server, and a setup of the mods run -- each a process of this script, so every lane is the
-    command a serial run would give and says the same verdict. The runs viewer shows one step a lane."""
+    workers, the Wine ones in a prefix of their own, and on `jobs` workers each game lane -- a mode on its own
+    instance `wikigate-<mode>` with its own registry and its own private X server, and a setup of the mods run
+    (prepare_wine makes each its own) -- each a process of this script, so every lane is the command a serial run
+    would give and says the same verdict. The runs viewer shows one step a lane."""
     sys.path.insert(0, str(TREE / "tools/compat"))
     import concurrent.futures
+    import signal
     import tacompat
     import tarun
     runlock.hold(TREE, f"wiki_regression gate (-j {jobs})")
@@ -2469,48 +2531,78 @@ def gate(shots, jobs, offline_jobs, modes, setups):
                     gate=True)
     me = [sys.executable, "-u", str(Path(__file__).resolve())]
     env = dict(os.environ)
+    lanes = Lanes()
+    servers = set()             # the game lanes' X servers not yet stopped by their lane
+    state = "stopped"
 
-    def lane_offline(name, cmd):
+    def on_term(*_):
+        raise KeyboardInterrupt("SIGTERM")
+
+    def verdict(code):
+        return "pass" if code == 0 else "unrun" if code == 2 else "fail"
+
+    def lane_offline(name, cmd, wenv):
         J.start("offline", name)
-        code, line = offline_one(name, cmd)
-        J.finish("offline", name, "pass" if code == 0 else "unrun" if code == 2 else "fail", line)
+        try:
+            code, line = offline_one(name, cmd, lanes.popen, wenv)
+        except (Exception, SystemExit) as e:        # noqa: BLE001 -- the lane's verdict, never the gate's crash
+            code, line = 2, f"could not run: {type(e).__name__}: {e}"
+        J.finish("offline", name, verdict(code), line)
         return ("offline", name, code, line)
 
-    def lane_mode(mode):
+    def lane_mode(mode, inst, xv):
         J.start("game", mode)
-        inst = f"wikigate-{mode}"
-        xv = None
         try:
-            xv = private_xvfb(GATE_RES)
-            if tacli_api().Instance(inst).exists:
-                tacli("rm", inst, "--force", timeout=120)
-            tacli("create", inst, "--display", f":{xv.tacompat_display}", timeout=300)
-            cmd = me + [inst, mode, "--launch", "--res", GATE_RES] + (["--shots", shots / mode] if mode in GATE_SHOTS else [])
-            code, line = gate_lane(cmd, shots / f"{mode}.log", env)
-        except CHECK_FAILURES + (subprocess.SubprocessError, OSError) as e:
-            code, line = 2, f"could not start: {e}"
+            cmd = me + [inst.name, mode, "--launch", "--res", GATE_RES] + (["--shots", shots / mode] if mode in GATE_SHOTS else [])
+            code, line = gate_lane(lanes, cmd, shots / f"{mode}.log", env)
+        except (Exception, SystemExit) as e:        # noqa: BLE001
+            code, line = 2, f"could not run: {type(e).__name__}: {e}"
         finally:
-            if xv:
-                tacompat.stop_xvfb(xv)
-        J.finish("game", mode, "pass" if code == 0 else "unrun" if code == 2 else "fail", line)
+            servers.discard(xv)
+            tacompat.stop_xvfb(xv)
+        J.finish("game", mode, verdict(code), line)
         print(f"wiki gate: {mode}: {'passed' if code == 0 else 'FAILED'} - {line}", flush=True)
         return ("game", mode, code, line)
 
     def lane_setup(name):
         J.start("mods", name)
-        code, line = gate_lane(me + [name, "mods", "--shots", shots / "mods" / name], shots / f"mods-{name}.log", env)
-        J.finish("mods", name, "pass" if code == 0 else "fail", line)
+        try:
+            code, line = gate_lane(lanes, me + [name, "mods", "--shots", shots / "mods" / name], shots / f"mods-{name}.log", env)
+        except (Exception, SystemExit) as e:        # noqa: BLE001
+            code, line = 2, f"could not run: {type(e).__name__}: {e}"
+        J.finish("mods", name, verdict(code), line)
         print(f"wiki gate: mods {name}: {'passed' if code == 0 else 'FAILED'} - {line}", flush=True)
         return ("mods", name, code, line)
 
     t0 = time.monotonic()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as games, \
-            concurrent.futures.ThreadPoolExecutor(max_workers=max(1, offline_jobs)) as checks:
-        futs = [games.submit(lane_mode, m) for m in modes] + [games.submit(lane_setup, n) for n in setups]
-        futs += [checks.submit(lane_offline, n, c) for n, c in offline]
+    old_term = signal.signal(signal.SIGTERM, on_term)
+    games = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs))
+    checks = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, offline_jobs))
+    try:
+        # every instance made before the first lane starts (gate_instance), each game lane's on its own X server,
+        # which an instance's display is pinned to when it is made
+        wine = gate_instance("wikigate-wine") if any("--wine" in map(str, c) for _, c in offline) else None
+        wenv = {**env, "WINEPREFIX": str(wine.prefix)} if wine else env
+        made = []
+        for m in modes:
+            xv = private_xvfb(GATE_RES)
+            servers.add(xv)
+            made.append((m, gate_instance(f"wikigate-{m}", "--display", f":{xv.tacompat_display}"), xv))
+        futs = [checks.submit(lane_offline, n, c, wenv if "--wine" in map(str, c) else env) for n, c in offline]
+        futs += [games.submit(lane_mode, m, inst, xv) for m, inst, xv in made]
+        futs += [games.submit(lane_setup, n) for n in setups]
         done = [f.result() for f in futs]
-    bad = [f"{kind} {name}" for kind, name, code, _ in done if code]
-    J.end("fail" if bad else "pass")
+        bad = [f"{kind} {name}" for kind, name, code, _ in done if code]
+        state = "fail" if bad else "pass"
+    finally:
+        if state == "stopped":
+            lanes.end_all()
+        games.shutdown(wait=True, cancel_futures=True)
+        checks.shutdown(wait=True, cancel_futures=True)
+        for xv in list(servers):
+            tacompat.stop_xvfb(xv)
+        signal.signal(signal.SIGTERM, old_term)
+        J.end(state)
     print(f"wiki gate: {len(done) - len(bad)} of {len(done)} lanes passed in {time.monotonic() - t0:.0f} s"
           f"{'; failed: ' + ', '.join(bad) if bad else ''}; the logs in {shots}")
     assert not bad, f"the lanes {', '.join(bad)} did not pass"

@@ -383,10 +383,19 @@ class Instance:
     def exists(self) -> bool:
         return self.meta_path.exists()
 
+    def meta_or_none(self) -> "dict | None":
+        """The metadata, read once: None for an instance removed by another tacli
+        (save_meta replaces the file whole and `rm` removes it, so there is no half)."""
+        try:
+            return json.loads(self.meta_path.read_text())
+        except FileNotFoundError:
+            return None
+
     def meta(self) -> dict:
-        if not self.exists:
+        meta = self.meta_or_none()
+        if meta is None:
             die(f"no such instance {self.name!r} (tacli ls)")
-        return json.loads(self.meta_path.read_text())
+        return meta
 
     def save_meta(self, meta: dict):
         """Replace instance.json whole: written under a name of this process's own, then
@@ -444,10 +453,13 @@ class Instance:
         """
         if self.remote:
             return None             # its window is on another machine's desktop
-        display = self.meta().get("display") or default_display()
+        meta = self.meta_or_none()
+        if meta is None:
+            return None             # removed by another tacli: no window of an instance's
+        display = meta.get("display") or default_display()
         pid = self.pid()
         patterns = []
-        recorded = self.meta().get("window_title")
+        recorded = meta.get("window_title")
         if recorded and recorded != BASE_TITLE:
             patterns.append("^" + ere_quote(recorded) + "$")
         patterns.append("^" + ere_quote(BASE_TITLE) + "$")
@@ -481,7 +493,7 @@ class Instance:
         # leftover can be a perfect 1024x768, and weights of size 2, pid 1 would
         # move the leftover. Among our own windows size breaks the tie; with no
         # readable pid anywhere, size alone decides.
-        gw, gh = self.meta().get("res", list(DEFAULT_RES))
+        gw, gh = meta.get("res", list(DEFAULT_RES))
         ranked = []
         for wid in ids:
             env = {**os.environ, "DISPLAY": display}
@@ -1436,7 +1448,10 @@ def place_window(inst: "Instance", display: str):
             continue
         if other.remote or other.name == inst.name or prefix_key(other.prefix) not in live:
             continue
-        if (other.meta().get("display") or default_display()) != display:
+        om = other.meta_or_none()
+        if om is None:
+            continue    # removed by another tacli since the scan
+        if (om.get("display") or default_display()) != display:
             continue    # another X server's windows share no pixels with this one
         ow = other.window()
         if ow:
