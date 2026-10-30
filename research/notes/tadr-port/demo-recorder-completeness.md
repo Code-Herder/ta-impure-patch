@@ -60,7 +60,7 @@ per field or bit range, each with a class, its engine writers and the evidence:
 The rows start from the stock savers, the engine's own inventory of a record: the unit saver
 `0x4876C0` and the player saver `0x4662F0`. A byte a saver writes raw is a value unless shown
 otherwise; a byte it skips or converts needed a class. Every field, its writers and the evidence are
-in the engine map, [*The unit and player records, byte by byte*](../exe-reverse-engineering.md#the-unit-and-player-records-byte-by-byte-the-savers-the-replay-layouts-rows-and-what-the-values-carry-disassembled-measured-2026-09-29).
+in the engine map, [*The unit and player records, byte by byte*](../engine/units.md#the-unit-and-player-records-byte-by-byte-the-savers-the-replay-layouts-rows-and-what-the-values-carry-disassembled-measured-2026-09-29).
 `tools/replay-layout-gen.py` validates the file (known records, classes and tables, the field
 inside its record, no bit in two rows, rows in order, every writer inside the executable's `.text`)
 and generates `inc/tagpu_replay_layout.h`, which carries the file's SHA-256; the link runs
@@ -405,7 +405,7 @@ engine facts are in the engine map's *The nano spray*
 handlers, and a query runs a thread of the unit's COB to its end at once, so the recorder writes
 `RK_EV_QUERY {ID, the query}` where the engine makes each, and a playing makes the same `0x4B0BC0`
 at that place with the engine's arguments
-([the engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)).
+([the engine map](../engine/cob.md#the-owners-cob-queries-disassembled-2026-10-12)).
 The fifth `QueryLandingPad` call, `0x41189C`, is in a function nothing calls.
 
 **COB on a puppet has one writer.** In puppet mode COB's SET, ATTACH and DROP change no engine
@@ -560,7 +560,7 @@ its press and its release (`0x4C2E30`, from the window procedure's `0x201..0x206
 twin's whole clicks move the read index by even steps of a ring of 20 and never change its low
 bit; 9 against 6 differs in that bit. DISASSEMBLED 2026-10-09: the indices and the GUI's copy of
 the popped event are viewer input state the simulation never computes from (the
-[engine map](../exe-reverse-engineering.md#gui-only-writes-found-by-the-resource-replay-fixtures)
+[engine map](../engine/orders.md#gui-only-writes-found-by-the-resource-replay-fixtures)
 has the writers, the readers and the one route from the step), so they are `leave` rows of
 `replay-globals.tsv`, the owner's (2026-10-09): `mousehead` (`0x51F4AE`), `mousetail`
 (`0x51F4B2`), `guimsg` (`main+0x565`), `guidblclick` (`main+0x569`) and `guipopwparam`
@@ -570,7 +570,7 @@ reported, and a passing landing note records it. Armed round trips bound the sch
 before the step caches it, making the frame after T−1 available even when a frame would otherwise
 run several ticks. The guard is on the game thread and affects only puppet pacing while a round
 trip is armed; an unavailable guard refuses the round trip. The
-[engine map](../exe-reverse-engineering.md#the-scheduler-the-clock-and-the-test-pacing-disassembled-measured-2026-10-08)
+[engine map](../engine/sim.md#the-scheduler-the-clock-and-the-test-pacing-disassembled-measured-2026-10-08)
 gives the scheduler's disassembly and the measured tick rates.
 
 **The turbo.** Speed 20 runs about 60 ticks a second because the clock steps 30 times a second
@@ -838,7 +838,7 @@ cannot see an address recorded as a value; the scan looks for one instead.
   `replay-layout.tsv`'s rows are tested against the engine's ranges and reported, not failed:
   stock code stores no address of Impure's DLL there, and their aligned dwords straddle pairs of
   16-bit fields whose value lands in the DLL's 77 MB about 1.8 % of the time (the
-  [engine map](../exe-reverse-engineering.md#the-demo-recorders-counts-and-the-steps-phases-sinks-impacts-emitters-and-the-images-gates-map-disassembled-measured-2026-10-01)).
+  [engine map](../engine/sim.md#the-demo-recorders-counts-and-the-steps-phases-sinks-impacts-emitters-and-the-images-gates-map-disassembled-measured-2026-10-01)).
   **`SIMF_OPAQUE`** declares a plain value whose bits are arbitrary — a random generator's state, a
   hash — recorded and compared as any other and passed over by the scan, which cannot tell such a
   word from an address (`s_windState`, `tagpu_patches.c`). The globals image's counterpart is the
@@ -867,7 +867,7 @@ cannot see an address recorded as a value; the scan looks for one instead.
   fire function live and by the shot receiver on a puppet — whose listed callers are compared
   summed). The receiver builds from the shot event's start, which is the one the live build used
   for every fire function: `0x49D9C0` sends the shooter's centre in its packet, so the recorder
-  records that function's build start from the send's frame ([engine map](../exe-reverse-engineering.md#what-a-shots-packet-says-of-its-start-0x49d9c0-0x49d270-disassembled-measured-2026-10-09)); a
+  records that function's build start from the send's frame ([engine map](../engine/recorder.md#what-a-shots-packet-says-of-its-start-0x49d9c0-0x49d270-disassembled-measured-2026-10-09)); a
   replayed shot that starts elsewhere meets other cells in the collision test `0x49B090`, which
   is what moved battle-los's slot-B impacts by three. The band is the owner's standard: a replay is a good approximation of what the game
   showed, not a tick-exact copy; the roots stay exact. A key table that overflows fails by name.
@@ -1094,7 +1094,7 @@ there plays nothing twice.
 2026-10-08: a known gap, not fixed now). The meteor tick draws its strike points `0x512334` and
 `0x512320` from the CRT's `rand`, as the forced shower `0x438070` draws `0x512334`, whose state is per thread and in neither image, and on the game
 thread the draw path draws from the same stream every frame
-([engine map](../exe-reverse-engineering.md#the-scheduler-the-clock-and-the-test-pacing-disassembled-measured-2026-10-08)).
+([engine map](../engine/sim.md#the-scheduler-the-clock-and-the-test-pacing-disassembled-measured-2026-10-08)).
 A takeover does not restore that state, so two takeovers of one recording at one T part there and
 nowhere else: MEASURED 2026-10-08, tenseat taken over at 931 and dumped at 2731, at a fixed turbo
 k and at speed 20 alike. Closing it needs the stream's state recorded and restored at a takeover,

@@ -216,7 +216,7 @@ These are evidence to investigate, not fixes already implemented here.
   reproduce the accesses live before selecting the storage design.
 - A refused stock `START` leaves arguments on its parent's stack; a refused
   `CALL` can wait forever on slot -1. Thread exhaustion is distinct from stack
-  exhaustion ([engine map](../exe-reverse-engineering.md#the-eight-records-cob0x1c-slot-0xa4)).
+  exhaustion ([engine map](../engine/cob.md#the-eight-records-cob0x1c-slot-0xa4)).
 - TADR's `MaxScriptSlots` expands eight records to 64 of the same `TScriptSlot`
   size; it does not expand each stack. Its `SaveGame` plugin separately replaces
   record serialization. Neither is a proven design for this port.

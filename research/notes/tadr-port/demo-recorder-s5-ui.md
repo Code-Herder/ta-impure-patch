@@ -405,7 +405,7 @@ which called the same replay functions the HUD's do):
 
 - the speeds, GameTime a second over 5 s: 1/2x 15.1, 1x 30.5, 2x 59.1, 4x 118.9, **8x 150.5**
   -- 8x is bounded by the scheduler's clamp, five ticks per step of the 30 Hz clock
-  ([engine map](../exe-reverse-engineering.md#the-scheduler-the-clock-and-the-test-pacing-disassembled-measured-2026-10-08));
+  ([engine map](../engine/sim.md#the-scheduler-the-clock-and-the-test-pacing-disassembled-measured-2026-10-08));
 - seeks 6-34 ms on the small recording; a `tacli replay seek` of the battle to 2701 in 446 ms,
   its dump EQUAL to the recording (`tarec compare --puppet`);
 - Leave and Yes reach the main menu, the browser reopens, the shell's stack is MAINMENU and

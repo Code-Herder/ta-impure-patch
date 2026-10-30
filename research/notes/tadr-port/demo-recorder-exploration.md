@@ -219,7 +219,7 @@ contract. Queue exhaustion must not silently turn a recording labeled complete i
 missing events. Disk writes cannot become a wait in the simulation/render handshake.
 
 These remain candidate production boundaries; §6 reports the temporary transport observation. The temporary capture observer is not part of the production patch. Detailed verified addresses are retained
-in the [engine map](../exe-reverse-engineering.md#demo-recorder-exploration-capture-and-save-boundaries-disassembled-2026-09-28).
+in the [engine map](../engine/recorder.md#demo-recorder-exploration-capture-and-save-boundaries-disassembled-2026-09-28).
 
 ## 4. Two apparent checkpoint shortcuts are unproven
 
@@ -420,7 +420,7 @@ it is not an integrated replay UI or a final playback backend.
 The viewer needs stable recorded unit-block ordering independently of newly assigned network
 IDs. An isolated, byte-checked probe changes the allocation comparisons to use immutable
 recorded-player ranks. Actual transport IDs remain unchanged; the driver also translates the
-killer ID in Impure's carried-death envelope. The [engine map](../exe-reverse-engineering.md#replay-player-names-and-unit-block-ordering-disassembled-measured-2026-09-28)
+killer ID in Impure's carried-death envelope. The [engine map](../engine/recorder.md#replay-player-names-and-unit-block-ordering-disassembled-measured-2026-09-28)
 records the four comparison sites and the invariant the sort requires. This probe is not a
 production patch; failure to initialize it must prevent treating a run as valid.
 
@@ -814,7 +814,7 @@ The retail workload inventory had **92,772 aliases / 9,283 unique addresses**, c
 animation banks, 279 unit-definition slots and 442 feature definitions. An initial traversal
 mistook 3D feature fields for GAF sequences and crashed. The corrected walk branches on the
 engine's feature discriminator (`definition+0xFE` bit 0); invalid type assumptions are not
-repaired with address probes. The [engine map](../exe-reverse-engineering.md#replay-asset-identities-and-procedural-frames-disassembled-source-measured-2026-09-28)
+repaired with address probes. The [engine map](../engine/recorder.md#replay-asset-identities-and-procedural-frames-disassembled-source-measured-2026-09-28)
 records the layouts, call sites, bounds and lifetime limits.
 
 Ordinary relaunches reused all 207 addresses in the first test, so merely launching another
@@ -1131,7 +1131,7 @@ elapsed time as separate concepts. Disassembly confirms that `0x2C` carries the 
 `main+0x38A47` GameTime (`0x48B743..0x48B74E`), which the receiver stores in that
 player’s `+0x18` (`0x48B963`). It is not a globally synchronized peer clock. The simulation
 loop at `0x495490` may execute multiple iterations before the draw: a latest-frame observer
-cannot promise every transition. The [engine map](../exe-reverse-engineering.md#perspective-authority-and-tick-boundary-measured-disassembled-2026-09-28)
+cannot promise every transition. The [engine map](../engine/recorder.md#perspective-authority-and-tick-boundary-measured-disassembled-2026-09-28)
 records its candidate sampling boundary; no recorder hook is installed there. The two peers paused at ticks **3674 and 3683** in this run:
 simultaneous wall-time inspection cannot assume equal tick counters. This does not measure
 a fixed clock offset or prove what equal ticks mean across peers. Define the replay

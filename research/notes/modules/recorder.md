@@ -123,13 +123,13 @@ footprint writers `0x47CC30`, `0x47D0E0` and `0x47C790`, whose `after` runs only
 its acting attaches recorded as `RK_EV_LINK` (`tagpu_recfmt.h`, *THE CONTEST ORDER*). Ten more `call`s go through stubs that
 call the engine's own function: the feature code's six calls of the simulation RNG `0x4B6C30`
 (`0x4234C2`, `0x423A38`, `0x423B40`, `0x424113`, `0x424159`, `0x424167`), the destructor's
-explosion `0x49B000` at `0x486D50` ([the engine map](../exe-reverse-engineering.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)),
+explosion `0x49B000` at `0x486D50` ([the engine map](../engine/map.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30)),
 Teleport's set-position `0x48A9F0` at `0x406BC0`, its move recorded as `RK_EV_PLACE` before the
 call, and the two click actions' only call sites, the left action `0x498F70` at `0x4995B3` and the right
 button's press `0x499100` at `0x4993AC`, each a 17-byte stub that records the click
 (`RK_CLICK` in a skirmish recording, `RECMP_CLICK` from a multiplayer game's contributing game
 thread) and then calls the action with the same argument
-([the engine map](../exe-reverse-engineering.md#the-demo-recorders-perspective-the-clicks-and-the-world-point-disassembled-2026-10-06)).
+([the engine map](../engine/recorder.md#the-demo-recorders-perspective-the-clicks-and-the-world-point-disassembled-2026-10-06)).
 Reproduction's **source test** `0x424185..0x42418E` (`mov ecx,[esp+0x10]; cmp word [ecx],0; jne
 0x4241A8`) is redirected whole to a stub that makes the test through `feat_source`: the stock
 test on the engine's own cell pointer, recorded as `FS_SOURCE` by a multiplayer recording, and
@@ -141,7 +141,7 @@ through a stub that records and then jumps to the function, and so do six calls 
 `0x4113B1`, VTOL_Landing's four `QueryLandingPad` `0x411A35`, `0x411AA6`, `0x411BF5`,
 `0x411CF1`): with `QueryNanoPiece`, the COB queries only an order handler makes, each recorded at
 its place in the step as `RK_EV_QUERY` and its COB noted in the slice markers' start set
-([the engine map](../exe-reverse-engineering.md#the-owners-cob-queries-disassembled-2026-10-12)).
+([the engine map](../engine/cob.md#the-owners-cob-queries-disassembled-2026-10-12)).
 The broadcast observer `0x456218` leaves out the broadcast from `0x411403`, which follows
 BeginTransport's recorded start. The five fire functions' network tests (`0x49D7A0`, `0x49DA92`,
 `0x49DC64`, `0x49DE25`, `0x49DFAF`) are released while a skirmish is recorded, so that each builds
@@ -149,7 +149,7 @@ its `0x0D` on its own stack; the extra weapons' `wpn_tx_fired` hands it over at 
 the send when there is no network (§2.6b); four of the released blocks also run the extra weapons' slot-index splice, which writes no simulation state (`cb_slot_index` says why). That release is the only change to what the engine
 does. The shots and the interceptions come through the extra weapons' callouts, and the extra
 weapons' own TargetCleared through `tagpu_rec_start_named`. Addresses, registers and what each
-hook reads: [the engine map](../exe-reverse-engineering.md#the-demo-recorders-event-sites-disassembled-measured-2026-09-30).
+hook reads: [the engine map](../engine/recorder.md#the-demo-recorders-event-sites-disassembled-measured-2026-09-30).
 
 **The counts (S3c-2): 21 count-only sinks**, `tagpu_detour_observe` with no `after`, byte-matched
 each on its own at `tagpu_rec_init` (`cnt_sinks_init`; one whose bytes differ is left out, named in
@@ -163,7 +163,7 @@ for `0x4B08C0`, the script's name through the engine's own bound; none writes an
 existing observers count too (the roots: the create's exit, the destructor, the build done, the
 state setter, the replies, the nano emitters and the seven feature functions). Prologues and why
 each is a sink:
-[the engine map](../exe-reverse-engineering.md#the-demo-recorders-counts-and-the-steps-phases-sinks-impacts-emitters-and-the-images-gates-map-disassembled-measured-2026-10-01).
+[the engine map](../engine/sim.md#the-demo-recorders-counts-and-the-steps-phases-sinks-impacts-emitters-and-the-images-gates-map-disassembled-measured-2026-10-01).
 
 **The step's phases**, two call-site redirects in the fail-closed table (`fix_step_phases`,
 `tagpu_patches.c`; the log line `enginefix: the step's phases for the demo recorder and its replay
@@ -182,7 +182,7 @@ level it first writes `RK_EV_SLICE` when the unit's COB object had an engine sta
 capture point -- the start set the two observers on `0x4B0B00` and `0x4B0940` fill, keyed by the
 COB's address and emptied by an epoch at every capture point -- and on a level that plays a
 recording the replay may defer the slice to its marker (§2.6f). Site facts:
-[the engine map](../exe-reverse-engineering.md#the-cob-modules-entries-every-start-outside-a-slice-and-the-script-slice-disassembled-2026-10-12).
+[the engine map](../engine/cob.md#the-cob-modules-entries-every-start-outside-a-slice-and-the-script-slice-disassembled-2026-10-12).
 
 **Fields we write:** native protocol initialization writes extended start length
 `0x512AF8`, identified-text length `0x512B84`, callback `0x512ACC` and mask
@@ -195,13 +195,13 @@ player records with their PlayerInfo, the controlled and viewed players, the uni
 sort buckets, GameTime, the game mode and the map's path, the feature grid, the wreck pool, its
 heads and the reproduction cursor, the feature defs, and at the create's exit the new unit's water
 state `+0x10A` (the create writes none of it), each bounded by the engine's own count
-([the engine map](../exe-reverse-engineering.md#the-demo-recorders-capture-where-it-runs-and-what-it-reads-disassembled-measured-2026-09-29)),
+([the engine map](../engine/recorder.md#the-demo-recorders-capture-where-it-runs-and-what-it-reads-disassembled-measured-2026-09-29)),
 and every `SIM_STATE` table Impure declares; and, for S3b, every field of the positive list
 `replay-globals.tsv` (main-block offsets checked against the block's `0x3924D` bytes and `.data`
 addresses against `0x501000..0x52B65C` by its generator), the projectile pool's count and its
 records up to their written extent, bounded by the pool's size, and the explored map
 `*(main+0x14273)`, sized from the grid
-([the engine map](../exe-reverse-engineering.md#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)).
+([the engine map](../engine/recorder.md#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)).
 A dump also reads every player's sight counters (`[rec+0x7C]`, `[rec+0x88]` bytes) and the main
 block and `.data` whole, and carries the counts (`RK_COUNTS`, `RK_COUNT_NAME`), Impure's DLL's
 base and `SizeOfImage` (`RT_DLL`) and each recorded table's layout (`RT_FIELDS`). It no longer reads `tagpu_replay.trigger` itself: the replay's frame visit
@@ -511,9 +511,9 @@ recorded player's view, radar picture included. `tacli replay seek <instance> <T
 running playback to GameTime T, forward or backward, and with `--recording` launches one that
 plays from T ([S3b](../tadr-port/demo-recorder-skirmish-slice.md#s3b-the-globals-and-seeking)). The
 engine facts are
-[the engine map](../exe-reverse-engineering.md#the-puppet-host-its-gates-the-30-tick-deadline-and-the-sight-loop-disassembled-measured-2026-09-30)'s
+[the engine map](../engine/recorder.md#the-puppet-host-its-gates-the-30-tick-deadline-and-the-sight-loop-disassembled-measured-2026-09-30)'s
 and, for the seek,
-[its S3b section](../exe-reverse-engineering.md#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)'s.
+[its S3b section](../engine/recorder.md#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01)'s.
 
 **Taking over** ([S4b](../tadr-port/demo-recorder-s4-takeover.md)): `tacli replay takeover <instance>
 [<recording>] --at T --player P [--difficulty D]`, or `takeover <P> at <T>[ difficulty <D>]` in the
@@ -522,7 +522,7 @@ seek makes it, but with P human and the other recorded seats AI, and the level g
 skirmish from T. The recorder then records the game after T as a new timeline appended to the same
 file, through the handle the takeover opened. A playing of a forked timeline (`--timeline N`) holds
 at each boundary of its chain and crosses it with a seek to the child's first iteration
-([engine map](../exe-reverse-engineering.md#the-takeover-from-a-recording-seat-types-the-ais-objects-passability-and-the-order-nodes-disassembled-2026-10-02)).
+([engine map](../engine/recorder.md#the-takeover-from-a-recording-seat-types-the-ais-objects-passability-and-the-order-nodes-disassembled-2026-10-02)).
 
 **Fork files** ([S4c](../tadr-port/demo-recorder-s4-forks.md)): at most three live
 forks, eviction by last-used time, explicit delete/export and shared ancestor
@@ -588,7 +588,7 @@ record is the viewer's record 10; the seat fill's call `0x47B092`, the settings
 persist's call `0x47B09C`, the start units' calls `0x497963` and `0x497ACD`, and the level init's
 call `0x4919C8` (`E8 C3 2F FD FF`), retargeted to `tagpu_replay_level_players`, which calls
 `0x464990` and then, on the loader thread and only on a level the seating armed, the player init
-`0x464700` on record 10, the viewer's ([the engine map](../exe-reverse-engineering.md#the-replay-viewers-record-player-record-10-and-the-level-inits-call-0x4919c8-disassembled-2026-10-06)); with them an **observer on the
+`0x464700` on record 10, the viewer's ([the engine map](../engine/recorder.md#the-replay-viewers-record-player-record-10-and-the-level-inits-call-0x4919c8-disassembled-2026-10-06)); with them an **observer on the
 settings save `0x430F00`** (`tagpu_detour_observe`, stolen `A1 E8 1D 51 00`, a `before` and an
 `after`), inert unless a recording's options are in. The teardown wrap's post hook (§2.7) calls
 `tagpu_replay_level_after` once `0x491B60` has returned. The step runs from B2's stub at
@@ -714,7 +714,7 @@ and on the loader thread at the allocator ownership boundary and the level init'
   every cell of the feature grid and every record of the wreck pool the recording
   changed, values only under `replay-layout.tsv`'s classes (a cell's def, record and anchor links,
   and a record's links, anchor, def, flags and sequences are compared, never written; a cell's
-  unit slots go in only when each names a unit alive on the host), and the reproduction cursor `main+0x14257` ([the engine map](../exe-reverse-engineering.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30));
+  unit slots go in only when each names a unit alive on the host), and the reproduction cursor `main+0x14257` ([the engine map](../engine/map.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30));
 - at every return of the stamp `0x47CC30`, the clear `0x47D0E0` and the re-claim `0x47C790`, the
   unit slots `+0x00`, `+0x02` and the yard bit `+0x0C` bit 1 of the unit's footprint cells, a cell
   wider each way, put back as they were at the call's entry (`tagpu_puppet.c`, *The footprint

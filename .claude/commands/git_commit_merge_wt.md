@@ -220,20 +220,20 @@ main in). Decide from it:
 
 - **Does the landing touch engine code?** `tagpu/ddraw/src/**`, `tagpu/ddraw/inc/**`,
   or `tools/tacli`. If not, the gate passes — say so and go to Step 5.
-- **Which engine addresses did it touch or read?** Every VA on an *added* line of the code half
-  of the diff (context and removed lines are the previous landing's business):
-  ```
-  git diff main...HEAD -- tagpu tools | grep -E '^\+' | grep -oE '\b0x0*[45][0-9A-Fa-f]{5}\b' | sed -E 's/^0x0*/0x/' | sort -u
-  ```
-  and the `main+0x…` / `+0x…` field offsets the comments name.
-- **Are they in the notes?** Each of those must already be in
+- **Are the addresses it touched or read in the engine map, once?** Every VA on an *added* line
+  of the code half of the diff (context and removed lines are the previous landing's business)
+  must be named somewhere in the engine map — `research/notes/engine/` and
   `research/notes/exe-reverse-engineering.md` (the docs commit is part of `main...HEAD`):
   ```
-  for a in <the list>; do grep -q -i "$a" research/notes/exe-reverse-engineering.md || echo "MISSING $a"; done
+  tools/exemap-check.py             # exit 1 on a MISSING address
   ```
   A `MISSING` line means the engine map was not updated for this landing. It is also how a
   comment that cites an address the note spells differently gets caught (on G13k the code said
-  `0x45A658`, the `je`, where the note had the `test` at `0x45A655`) — make them agree.
+  `0x45A658`, the `je`, where the note had the `test` at `0x45A655`) — make them agree. The
+  `main+0x…` / `+0x…` field offsets the comments name are checked by reading the diff. An
+  `EXTEND` line is a new entry — a section whose heading names the address, or a table row
+  keyed by it — for a function that already has one: fold the new facts into the existing entry
+  and delete the new one, or say in the commit why both stand.
 - **Are the sites it writes in the hook map?** Every engine address the landing *writes* — a
   detour, a call-site redirect, a byte or dword patch — needs a row in
   `research/notes/modules/hook-map.md`: VA, what it is, the module, the mechanism. The tool
@@ -269,9 +269,14 @@ main in). Decide from it:
 **If anything above is missing, do the pass now** and commit it as its own commit ("docs: …")
 before Step 5, so the reviewer reads the claims. The pass itself:
 
-**The engine map first: `research/notes/exe-reverse-engineering.md`.** Update it as fully as the
-work allows. It takes every address the work **touched or merely read**, not only the ones we
-patched:
+**The engine map first: `research/notes/engine/`, one page per engine subsystem** (memory,
+process, sim, units, weapons, map, orders, render, ui, input, network, cob, recorder), entered
+from `research/notes/exe-reverse-engineering.md`. Update it as fully as the work allows. It takes
+every address the work **touched or merely read**, not only the ones we patched. **A function
+that already has an entry gets the new facts in that entry, edited in place** — the wiki's
+`engine/address-index` page lists every entry; a new section is for an area nobody has mapped
+yet, on the page of the subsystem it belongs to, never a section per landing or per project.
+Each entry carries:
 
 - what the function is, in one line, and **its call sites** (an `E8`/`E9` scan of `.text` for the
   target is cheap and it is the fact nobody has when they need it);
@@ -460,7 +465,7 @@ The brief must contain, in the agent's own prompt (it starts with no context):
    `0x400000`, VAs map directly). The disassembly command is
    `i686-w64-mingw32-objdump -d -M intel --start-address=0x… --stop-address=0x… "<exe>"`;
    that patch-site bytes, branch targets and the registers the targets test must be checked
-   against it; which notes hold the static context (`research/notes/exe-reverse-engineering.md`
+   against it; which notes hold the static context (`research/notes/engine/<subsystem>.md`
    and the module note the change cites).
 4. **The docs are part of the review**: a stated address or claim in the diff's notes that the
    disassembly or the code disproves is a finding.

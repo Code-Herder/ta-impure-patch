@@ -173,7 +173,7 @@ vanilla placement in every rounding case. Geo snapping remains independent of th
 These TADR consequences are derived from source. Impure's generated-map regressions separately
 exercise uniform metal equal to the background, uniform metal above it and rich discrete deposits
 on metal ground.
-The [engine map](../exe-reverse-engineering.md#surface-metal-and-the-mex-snap-threshold) records
+The [engine map](../engine/map.md#surface-metal-and-the-mex-snap-threshold) records
 the stock property load and grid initialization that establish the background value's role.
 
 ### Exploration
@@ -404,7 +404,7 @@ every node found so far in one peek, which the DLL evaluates in one game-thread 
 chain is taken only from a round that links the head to its end. A preceding order that a
 comparison keeps is a Guard of an owned unit, read after its first step: unlike a Move it never
 completes on its own, and its compared fields are fixed from that step on
-([the engine map](../exe-reverse-engineering.md#the-ground-guards-node-and-what-the-order-dispatch-does-with-a-handlers-result-disassembled-2026-10-09)).
+([the engine map](../engine/orders.md#the-ground-guards-node-and-what-the-order-dispatch-does-with-a-handlers-result-disassembled-2026-10-09)).
 `resource-refusals` keeps a Move for its Guard-ineligible constructor; the world stays held from
 that order to the comparison, since the click issues every order at once.
 

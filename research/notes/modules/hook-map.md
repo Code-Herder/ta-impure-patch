@@ -108,7 +108,7 @@ transfers bounded child arguments, retains a refused CALL's arguments and dorman
 child `-1` sentinel, and restores validated records/statics/animation and piece
 state on load. These are simulation writes, not renderer-owned state. Local entry chat uses
 the engine's reminder API. The detailed lifetime, ordering and patch inventory are in §2.105
-and [the engine map](../exe-reverse-engineering.html#cob-guarded-runtime-integration-disassembled-measured-2026-09-28).
+and [the engine map](../engine/cob.html#cob-guarded-runtime-integration-disassembled-measured-2026-09-28).
 
 | Where | What |
 |---|---|
