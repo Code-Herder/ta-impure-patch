@@ -591,6 +591,15 @@ WHEEL_UNITS = 48                         # tagpu_wiki.c: a notch scrolls three o
 BURST = 4                                # (p7): real wheel notches sent at once
 
 
+def trigger(path, text):
+    """A trigger file with content written whole: the DLL reads it on its own beat and takes an empty
+    read as a malformed ask, so it is written beside and renamed onto its name, which the reader sees
+    as absent or as all of it."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
 def wait_dump(c, pred, what, seconds=20):
     """The state dump until `pred` holds of it: a press is the game thread's at once, but what a
     frame drew (the hit map, a scroll as drawn) is the next frame's."""
@@ -825,7 +834,7 @@ def turbo(c, k):
     """tagpu_wiki.turbo at k ticks a fill (0: gone, the demo on the clock again), once the game says so"""
     f, start = c.gamedir / "tagpu_wiki.turbo", c.mark()
     if k:
-        f.write_text(f"{k}\n")
+        trigger(f, f"{k}\n")
         wait_line(c, start, r"wiki: tagpu_wiki\.turbo: a playing demo steps", "the turbo was not read")
     else:
         f.unlink(missing_ok=True)
@@ -976,7 +985,7 @@ def demos(c, shots, res):
         for entry, k, demo, at in (("quickbuild", 0, "snap", 150), ("buildshapes", 1, "line", 150),
                                    ("reclaim", 2, "metal", 190), ("reclaim", 3, "energy", 812)):
             start = c.mark()
-            (c.gamedir / "tagpu_wiki.pause").write_text(f"{entry} {k + 1} {at}\n")
+            trigger(c.gamedir / "tagpu_wiki.pause", f"{entry} {k + 1} {at}\n")
             asked = wait_line(c, start, r"wiki: (pause \d+ asked|tagpu_wiki\.pause: )", f"(d4) {entry}/{demo}")
             assert re.search(r" asked: .*\d$", asked), f"(d4) {asked}"
             n = re.search(r"pause (\d+) asked", asked).group(1)
@@ -1391,8 +1400,8 @@ def drawn_window(c, what, want_all):
     milliseconds only said. A stage that works on every frame never comes to rest, and the count is
     never answered."""
     start = c.mark()
-    (c.gamedir / "tagpu_wiki3d.count").write_text(f"{COUNT_FRAMES}\n")
-    asked = wait_line(c, start, r"wiki3d: count (\d+ asked|: )", f"{what}: the count", 60)
+    trigger(c.gamedir / "tagpu_wiki3d.count", f"{COUNT_FRAMES}\n")
+    asked = wait_line(c, start, r"wiki3d: count (\d+ asked|: )|wiki3d: count: ", f"{what}: the count", 60)
     assert " asked: " in asked, f"{what}: {asked}"
     n = re.search(r"count (\d+) asked", asked).group(1)
     m = re.search(COUNTED, wait_line(c, start, rf"wiki3d: count {n}: ", f"{what}: the stage never came to rest", 180))
@@ -1413,8 +1422,8 @@ def shoot(c, shots, res, entry, demo, tick, ss, name=None, window=True):
     ppm = c.gamedir / "tagpu_wiki3d_shot.ppm"
     start = c.mark()
     ppm.unlink(missing_ok=True)
-    (c.gamedir / "tagpu_wiki.shot").write_text(f"{entry} {demo} {tick}\n")
-    asked = wait_line(c, start, r"wiki: shot \d+ (asked|: )|wiki: shot: ", f"{entry} {demo} {tick}")
+    trigger(c.gamedir / "tagpu_wiki.shot", f"{entry} {demo} {tick}\n")
+    asked = wait_line(c, start, r"wiki: shot \d+ asked|wiki: tagpu_wiki\.shot: ", f"{entry} {demo} {tick}")
     assert " asked: " in asked, asked
     n = re.search(r"wiki: shot (\d+) asked", asked).group(1)
     armed = wait_line(c, start, rf"wiki3d: shot {n}: ", f"shot {n} was never armed")
@@ -1496,18 +1505,20 @@ def stage3d_levers(c, shots, res, gamedir, lever):
     # the levers on quickbuild, whose stage has features (buildshapes' has none, so `nofeat` would
     # withhold nothing the image expects there)
     start = c.mark()
-    (gamedir / "tagpu_wiki.shot").write_text("quickbuild 1 30\n")
+    trigger(gamedir / "tagpu_wiki.shot", "quickbuild 1 30\n")
     wait_line(c, start, r"wiki3d: shot \d+: quickbuild", "(s4) quickbuild was not drawn before the levers")
     try:
         for tok in ("nomap", "nofeat"):
             start = c.mark()
-            lever.write_text(tok)
+            trigger(lever, tok)
             wait_line(c, start, rf"wiki3d: tagpu_wiki3d\.on: {tok}", f"(s4) the lever {tok} was not read")
             got = drawn_window(c, f"(s4) under {tok}", want_all=False)
             grab(c, shots / f"{res}-lever-{tok}.window.png")
             print(f"wiki stage3d: (s4) {tok}: {got[0]} of {got[1]} frames drew the image - the whitebox whole")
     finally:
+        gone = c.mark()
         lever.unlink(missing_ok=True)
+    wait_line(c, gone, r"wiki3d: tagpu_wiki3d\.on: the 3D stage on", "(s4) the lever's end was not read")
     got = drawn_window(c, "(s4) the lever gone", want_all=True)
     print(f"wiki stage3d: (s4) the lever gone: {got[0]} of {got[1]} frames drew the image")
     print(f"wiki stage3d: (s5) at rest: nothing built, baked or dropped; render thread: the producer {got[2]:.3f} ms "
@@ -1580,7 +1591,7 @@ def cursor(c, shots, res):
     wait_line(c, start, r"wiki3d: loaded in", "(c1) the 3D asset load", 120)
     for entry, demo, tick, shape in CURSOR_SHOTS:
         start = c.mark()
-        (c.gamedir / "tagpu_wiki.shot").write_text(f"{entry} {demo} {tick}\n")
+        trigger(c.gamedir / "tagpu_wiki.shot", f"{entry} {demo} {tick}\n")
         wait_line(c, start, r"wiki: shot \d+ asked", f"(c1) {entry} {demo} {tick}")
         time.sleep(1.0)
         base = shots / f"{res}-cursor-{entry}-d{demo}-t{tick}"
@@ -1685,7 +1696,7 @@ def units_rest(c, shots, res, gamedir, lever):
 
     try:
         start = c.mark()
-        lever.write_text("nounit=ARMCK")
+        trigger(lever, "nounit=ARMCK")
         wait_line(c, start, r"wiki3d: tagpu_wiki3d\.on: nounit=ARMCK", "(u5) the lever was not read")
         entry, demo, tick = NOUNIT
         out, _ = shoot(c, shots, res, entry, demo, tick, 2, name=f"lever-nounit-{entry}-d{demo}-t{tick}.ppm")
@@ -1700,7 +1711,9 @@ def units_rest(c, shots, res, gamedir, lever):
         print(f"wiki units: (u5) nounit=ARMCK: {line.split('wiki3d: ', 1)[1]}; {got[0]} of {got[1]} frames drew the "
               f"image; {ndiff} px of the capture differ from (u2)'s")
     finally:
+        gone = c.mark()
         lever.unlink(missing_ok=True)
+    wait_line(c, gone, r"wiki3d: tagpu_wiki3d\.on: the 3D stage on", "(u6) the lever's end was not read")
     got = drawn_window(c, "(u6) the lever gone", want_all=True)
     print(f"wiki units: (u6) at rest over {got[1]} frames: nothing built, baked or dropped; render thread: the producer "
           f"{got[2]:.3f} ms and the passes {got[3]:.3f} ms a frame on average, the passes at most {got[4]:.3f} ms ({res})")
@@ -1716,9 +1729,8 @@ def unit_state(c, kind):
     return frac, hp
 
 
-# (u7)'s bound on the game's own clock, past which the reads stop: the wall bound it replaces stopped them
-# at 7134 ticks at 1x (MEASURED 2026-10-30, place-basic.json); a game whose clock stands RECLAIM_STALL_S
-# fails as hung
+# (u7)'s bound on the game's own clock, past which the reads stop: past the 7134 ticks 240 s of 1x ran
+# (MEASURED 2026-10-30, place-basic.json); a game whose clock stands RECLAIM_STALL_S fails as hung
 RECLAIM_TICKS = 12000
 RECLAIM_STALL_S = 60
 
@@ -2218,7 +2230,7 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
     # (b3) the stage's column at a state, against the composer on the pack for the same view
     entry, demo, tick = SIDE_STATE
     start = c.mark()
-    (gamedir / "tagpu_wiki.shot").write_text(f"{entry} {demo} {tick}\n")
+    trigger(gamedir / "tagpu_wiki.shot", f"{entry} {demo} {tick}\n")
     wait_line(c, start, r"wiki: shot \d+ asked", f"(b3) {entry} {demo} {tick}")
     d = wait_dump(c, lambda d: d["tick"] == tick and not d["playing"] and d["side_h"] > 0, f"(b3) {entry} {demo} not held at {tick}")
     assert d["layout_src"] == "mod", f"(b3) the demo started on the {d['layout_src']} layout"

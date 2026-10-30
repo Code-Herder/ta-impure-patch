@@ -827,18 +827,18 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
     return m;
 }
 
-/* ---- the four invalidations --------------------------------------------- */
-/* level teardown (node pointers are recycled by the next level), the mirror
-   latch's first arming (below), an atlas recycle (every UV moves) and the
-   owner (part of the material key). The first three are checked here, once per
-   frame, because every lookup below is on the render thread inside the native
-   pass. */
 void tagpu_posebake_work(unsigned* baked, unsigned* dropped)
 {
     *baked = s_serial - 1;
     *dropped = s_nDrop;
 }
 
+/* ---- the four invalidations --------------------------------------------- */
+/* level teardown (node pointers are recycled by the next level), the mirror
+   latch's first arming (below), an atlas recycle (every UV moves) and the
+   owner (part of the material key). The first three are checked here, once per
+   frame, because every lookup below is on the render thread inside the native
+   pass. */
 void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen)
 {
     unsigned lvl = level_gen;

@@ -321,8 +321,10 @@ static LARGE_INTEGER s_qpf, s_last;
 static double   s_acc;                          /* ticks owed, wiki.js `acc`                     */
 /* THE CLOCK'S OWN ACCOUNT since the demo started, which the state dump gives: the seconds it played
    (each fill's, clamped as the clock clamps it) and the ticks STEPS_MAX took off what they owed. A
-   fill leaves under one tick owed, so the ticks played are WIKI_TPS x the speed x the seconds, less
-   the ticks taken off, to within one: the rule the clock paces by, on its own clock */
+   fill leaves under one tick owed, so between two dumps of a demo playing at one speed on the clock
+   -- no speed change, pause or turbo between them, each of which drops what was owed -- the ticks
+   played are WIKI_TPS x the speed x the seconds, less the ticks taken off, to within one: the rule
+   the clock paces by, on its own clock */
 static double   s_clockS, s_clipped;
 static int      s_turbo;                        /* TURBO_ON's K, 0 off                           */
 static int      s_pauseAt = -1;                 /* PAUSE_ASK's tick for the running demo, -1 none */
@@ -1014,12 +1016,6 @@ static void bar_drag(int cy)
     scroll_to(s_drag, s_dragFrom + (float)(cy - s_dragY) * s_hit.bar[s_drag].per_px);
 }
 
-/* THE FILL STEPS THE DEMO ON THIS THREAD and copies its view by value into the record, so the
-   render thread gets values and never a WIKISIM. The copy keeps every bound of
-   tagpu_wikistage_copy (the map at 128 cells a side, 256 vents, 128 units, the gesture's sites,
-   256 queued, 512 lines, the nano spray's 1024 particles, the caption and the labels) and of
-   tagpu_wikistage_pose (the units' poses, 4096 primitives), and says once what it had to cut --
-   a particle the simulation itself dropped included. */
 /* the asked pause reached: the demo stops on its tick, before the step past it */
 static int pause_due(void)
 {
@@ -1032,6 +1028,12 @@ static int pause_due(void)
     return 1;
 }
 
+/* THE FILL STEPS THE DEMO ON THIS THREAD and copies its view by value into the record, so the
+   render thread gets values and never a WIKISIM. The copy keeps every bound of
+   tagpu_wikistage_copy (the map at 128 cells a side, 256 vents, 128 units, the gesture's sites,
+   256 queued, 512 lines, the nano spray's 1024 particles, the caption and the labels) and of
+   tagpu_wikistage_pose (the units' poses, 4096 primitives), and says once what it had to cut --
+   a particle the simulation itself dropped included. */
 static void page_fill(TAGPU_PK_WIKI* w)
 {
     const WIKIDATA* d = data();

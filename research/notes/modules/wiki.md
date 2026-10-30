@@ -152,7 +152,8 @@ renderer draw its units and ghosts.
   (`wiki3d: count K: D of N frame(s) drew the image, frames A..B; the work: ...; render thread: ...`)
   with the work done over the window and the producer's and the passes' milliseconds. A stage that
   works on every frame never comes to rest and the count goes unanswered. The periodic line, every
-  300 frames, gives the same numbers for people reading the log; the harness reads the count.
+  300 frames, gives the same image, record and time numbers without the work, for people reading
+  the log; the harness reads the count.
 - **The units**, every frame from the same view, through `tagpu_wikiscene_models`
   (`tagpu_wikiscene.c`, equal record for record to `scene.js`: `scenecheck.mjs`): one record a
   unit of a type the arena has (its owner, the record's yaw `(cs, sn) = (-hz, hx)` from the facing,
