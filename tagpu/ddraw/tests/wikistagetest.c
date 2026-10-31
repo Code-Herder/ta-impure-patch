@@ -250,7 +250,9 @@ static int ops(char** a, const char* cob)
         for (j = 0; j < d->entry[i].ndemo; j++) {
             const WIKIENTRY* e = &d->entry[i];
             WIKISIM s;
-            if (!tagpu_wikisim_init(&s, e, &e->demo[j], 1, sd ? &sd->layout : NULL, cob ? &ctx : NULL, err, sizeof err)) {
+            /* a game entry's demo plays its game, the simulation its stage shows (tagpu_wikireplay.h) */
+            const int play = e->frame == WIKI_FRAME_GAME ? WIKI_PLAY_GAME : WIKI_PLAY_DEMO;
+            if (!tagpu_wikisim_init(&s, e, &e->demo[j], play, sd ? &sd->layout : NULL, cob ? &ctx : NULL, err, sizeof err)) {
                 fprintf(stderr, "wikistagetest: %s/%s: %s\n", e->id, e->demo[j].id, err);
                 return 2;
             }

@@ -93,7 +93,7 @@ RECIPES = {
     "metal": {"world": "metal", "crop": ("maps\\over crude water.tnt", (420, 370)),
               "decoration": ("holes",), "block": 16},
 }
-# a scene of greenworld named for what stands on it: the reclaim entry's battle aftermath
+# a scene of greenworld named for what stands on it: the reclaim entry's battle aftermath, Watching's small game
 RECIPES["field"] = RECIPES["green"]
 
 

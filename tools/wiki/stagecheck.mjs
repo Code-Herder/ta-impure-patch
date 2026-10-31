@@ -313,7 +313,8 @@ try {
     entries.forEach((entry, i) => {
       for (const demo of entry.demos) {
         const ctx = sb.cob ? { side: 0, casting: null, iface: 1, cob: (host ??= cobHost()).forPacks(PACKS) } : undefined;
-        const sim = WikiSim.play(entry, demo, sb.layout, ctx);
+        // a game entry's demo plays its game, the simulation its stage shows (replay.js plays it on demand)
+        const sim = entry.frame === 'game' ? WikiSim.game(entry, demo, sb.layout, ctx) : WikiSim.play(entry, demo, sb.layout, ctx);
         for (;;) {
           if (sim.tick % 30 === 0 || sim.done) {
             const v = sim.view();

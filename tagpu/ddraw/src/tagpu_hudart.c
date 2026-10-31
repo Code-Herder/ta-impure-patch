@@ -8,6 +8,7 @@
 #include "tagpu_log.h"
 #include "tagpu_pak.h"
 #include "tagpu_wikilay.h"
+#include "tagpu_wiki.h"
 
 /* the declarations first: the implementation below is included once, and stb_truetype guards
    only its declarations against a second inclusion */
@@ -168,7 +169,7 @@ static int parts(HUDART* a, const PARTS* at, char* err, size_t errn, double* mpx
    here is the wiki's alone: the HUD stands.
    THE KIT AND THE DATA ARE CHECKED HERE, before the button is ever drawn (tagpu_wikilay_check):
    every icon and style the window and the stage draw, and the page built in its closed, open and
-   every entry's every demo states at 4:3, 16:9 and 32:9 with nothing dropped, filled with each
+   every page entry's every demo states at 4:3, 16:9 and 32:9 with nothing dropped, filled with each
    entry's own names and with the worst castings there can be. The side's castings load later, on
    their own thread: tools/wiki/wikilaycheck.c checks every pack's. */
 static void wiki_load(void)
@@ -200,6 +201,8 @@ static void wiki_load(void)
         InterlockedExchange(&s_wready, 2);
         return;
     }
+    /* the page's tree before anything reads it: the check below and every reader after the publish */
+    tagpu_wiki_page_tree(s_wiki.data);
     /* THE FACE LIGHTNESS, once, from the parts as decoded (premultiplied), before the store that
        publishes the layout: the ink of every text on a part follows it (wiki.js faceLight) */
     for (i = 0; i < tagpu_hudlay_nparts(s_wiki.draw.lay); i++) {

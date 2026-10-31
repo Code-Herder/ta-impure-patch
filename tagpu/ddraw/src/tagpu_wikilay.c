@@ -992,6 +992,9 @@ static int check_states(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
         snprintf(st.held, sizeof st.held, "try");
         for (e = 0; e < d->nentry; e++) {
             const WIKIENTRY* en = &d->entry[e];
+            /* a game entry has no theatre layout in the DLL until W3 (ingame-wiki-replay-plan.md),
+               and the page leaves it out of its tree (tagpu_wiki_page_tree); W3 deletes this test */
+            if (en->frame == WIKI_FRAME_GAME) continue;
             tagpu_wikitext_words(&w, en, k, 1);
             for (dm = 0; dm < (en->ndemo > 0 ? en->ndemo : 1); dm++) {
                 const WIKIDEMO* de = dm < en->ndemo ? &en->demo[dm] : NULL;

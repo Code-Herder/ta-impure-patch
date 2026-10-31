@@ -219,7 +219,8 @@ try {
   for (const id of [...new Set(tree.tree.flatMap(leaves))]) {
     const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
     for (const demo of entry.demos) {
-      const sim = WikiSim.play(entry, demo);
+      // a game entry's demo plays its game, the simulation its stage shows (replay.js plays it on demand)
+      const sim = entry.frame === 'game' ? WikiSim.game(entry, demo) : WikiSim.play(entry, demo);
       for (;;) {
         if (sim.tick % 30 === 0 || sim.done) {
           const key = `${id}/${demo.id}/${sim.tick}`, c = cfog.get(key), v = sim.view();

@@ -160,7 +160,9 @@ int           tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const WIK
    `overflow` -- in each of these states on each of three screens, 1024 x 768, 1280 x 720 and
    3840 x 1080, every scroll at 0: the window closed with its button held, open with its close
    button held, and every entry's every demo playing at 1x and ended at 2x with Try it yourself
-   held. Each state is filled at interface type 1, whose words are the longer, with each entry's
+   held -- every entry but a game entry ("frame": "game"), which has no page layout until W3 of
+   research/notes/ingame-wiki-replay-plan.md and which the game's page leaves out of its tree
+   (tagpu_wiki_page_tree). Each state is filled at interface type 1, whose words are the longer, with each entry's
    own names, with each of the `ncasting` castings given, and with the two worst castings there
    can be (every display name of 31 characters, the engine's cut: 31 of three bytes, the
    WIKI_TITLE_MAX - 1 bytes, as one unbreakable word, and 16 of them broken by spaces into the

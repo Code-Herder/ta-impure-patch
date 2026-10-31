@@ -91,6 +91,7 @@
 #include "tagpu_wikistate.h"
 #include "tagpu_wikiasset.h"
 #include "tagpu_wikisound.h"
+#include "tagpu_wikireplay.h"
 #include "tagpu_wikitext.h"
 #include "tagpu_replays.h"
 #include "tagpu_pak.h"
@@ -1193,6 +1194,82 @@ static void layout_json(FILE* f, const WIKILAYOUT* L)
     fprintf(f, "}}");
 }
 
+static double ms_between(LARGE_INTEGER t0, LARGE_INTEGER t1)
+{
+    return s_qpf.QuadPart > 0 ? (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)s_qpf.QuadPart : 0.0;
+}
+
+/* what the check says after a demo's hash: each unit type whose script its simulation quarantined,
+   and a wait that ran past its max */
+static void check_notes(const WIKIENTRY* e, const WIKIDEMO* dm, int k, int ifc, const WIKISIM* s)
+{
+    int ty;
+    for (ty = 0; s && s->cob && ty < e->ndef; ty++)
+        if (tagpu_wikicob_note(s->cob, ty)[0])
+            tagpu_logf("wiki check: %s/%s/%d/%d %s's script is quarantined - %s", e->id, dm->id, k, ifc,
+                       s->entry->def[ty].name, tagpu_wikicob_note(s->cob, ty));
+    if (s && s->stalled)
+        tagpu_logf("wiki check: %s/%s/%d/%d stopped: a wait ran past its max", e->id, dm->id, k, ifc);
+}
+
+/* A GAME ENTRY'S DEMO IN THE CHECK: played as the page will play it, through the replay layer
+   (tagpu_wikireplay.h) with the viewer's script, to its end; its tagpu_wikireplay_hash logged as
+   every hash is, and then its cost -- the game ticks its steps ran (the walker's and the shown
+   game's, a backward seek's new game counted from its tick 0) and the milliseconds, the start's
+   two simulations apart and the dearest step named -- the measurement WIKI_REPLAY_SEEK, _WALK and
+   _FILL are set from. A step's ticks are read off its view before and after, outside the timed
+   call. 1 when it started. */
+static int check_replay(const WIKIENTRY* e, const WIKIDEMO* dm, int k, int ifc, const WIKILAYOUT* lay,
+                        const WIKISIMCTX* ctx)
+{
+    WIKIREPLAY* r = (WIKIREPLAY*)malloc(sizeof *r);
+    WIKIREPLAYVIEW* v = (WIKIREPLAYVIEW*)malloc(2 * sizeof *v);
+    LARGE_INTEGER t0, t1;
+    char err[160];
+    long ticks = 0, steps = 0, worstTicks = 0, ran;
+    double ms = 0, worstMs = 0, startMs, stepMs;
+    QueryPerformanceCounter(&t0);
+    if (!r || !v || !tagpu_wikireplay_init(r, e, dm, WIKI_PLAY_DEMO, lay, ctx, err, sizeof err)) {
+        tagpu_logf("wiki check: %s/%s/%d/%d did not start - %s", e->id, dm->id, k, ifc, r && v ? err : "no memory");
+        free(r);
+        free(v);
+        return 0;
+    }
+    QueryPerformanceCounter(&t1);
+    startMs = ms_between(t0, t1);
+    tagpu_wikireplay_view(r, &v[0]);
+    /* a scripted replay is done at its end clock; the bound holds a script that never is */
+    while (!v[0].done && steps < 1000000L) {
+        QueryPerformanceCounter(&t0);
+        tagpu_wikireplay_step(r);
+        QueryPerformanceCounter(&t1);
+        stepMs = ms_between(t0, t1);
+        tagpu_wikireplay_view(r, &v[1]);
+        ran = (v[1].walked - v[0].walked) + (v[1].gen != v[0].gen ? v[1].game_tick : v[1].game_tick - v[0].game_tick);
+        if (ran < 0) ran = 0;           /* a backward seek that failed left no game: its view says tick 0 */
+        ticks += ran;
+        ms += stepMs;
+        steps++;
+        if (stepMs > worstMs) { worstMs = stepMs; worstTicks = ran; }
+        v[0] = v[1];
+    }
+    tagpu_logf("wiki check: %s/%s/%d/%d %016llx", e->id, dm->id, k, ifc, (unsigned long long)tagpu_wikireplay_hash(r));
+    tagpu_logf("wiki check: the replay %s/%s/%d/%d ran %ld game ticks in %ld steps in %.3f ms (%.2f us a tick), "
+               "started in %.3f ms; its dearest step %ld game ticks in %.3f ms", e->id, dm->id, k, ifc, ticks, steps, ms,
+               ticks > 0 ? ms * 1000.0 / (double)ticks : 0.0, startMs, worstTicks, worstMs);
+    check_notes(e, dm, k, ifc, tagpu_wikireplay_game(r));
+    if (tagpu_wikireplay_game(r) && (tagpu_wikireplay_game(r)->starved || tagpu_wikireplay_game(r)->bad_kill))
+        tagpu_logf("wiki check: %s/%s/%d/%d stopped: %s", e->id, dm->id, k, ifc,
+                   tagpu_wikireplay_game(r)->starved ? "an economy pass could not pay a grant" : "a kill found no unit");
+    if (v[0].stalled) tagpu_logf("wiki check: %s/%s/%d/%d stopped: the viewer's wait ran past its max", e->id, dm->id, k, ifc);
+    if (v[0].failed) tagpu_logf("wiki check: %s/%s/%d/%d stopped: a backward seek could not make the game again", e->id,
+                                dm->id, k, ifc);
+    tagpu_wikireplay_free(r);
+    free(r);
+    free(v);
+    return 1;
+}
+
 /* THE PARITY CHECK OF THE CODE THE GAME RUNS (tools/wiki_regression.py demos): every demo of every
    entry played to its end at once, here on the game thread in the DLL's i686 SSE2 build, on the
    sidebar layout a demo would start on (layout_now) with the units' scripts it would start with
@@ -1200,8 +1277,9 @@ static void layout_json(FILE* f, const WIKILAYOUT* L)
    that layout -- with its casting on the mod's layout -- at both Interface Types, and its
    tagpu_wikisim_hash logged as `<entry>/<demo>/<side>/<iface> <hash>`: the hash
    `node tools/wiki/simparity.mjs --hash --side <side> --iface <iface>` prints for `<entry>/<demo>`
-   (with --pack, on the mod's layout). The layout is written to CHECK_LAYOUT first, for simparity's
-   --layout (null: none). */
+   (with --pack, on the mod's layout). A game entry's demo is played as a replay (check_replay),
+   which the page leaves out of its tree (tagpu_wiki_page_tree) but this check does not. The layout
+   is written to CHECK_LAYOUT first, for simparity's --layout (null: none). */
 static void check(void)
 {
     const WIKIDATA* d = data();
@@ -1211,7 +1289,7 @@ static void check(void)
     const WIKISNDSRC* snd = NULL;
     LARGE_INTEGER t0, t1;
     char err[160];
-    int i, j, k, ifc, nside, n = 0, bad = 0, src = WIKISTAGE_LAYOUT_NONE;
+    int i, j, k, ifc, nside, n = 0, nreplay = 0, bad = 0, src = WIKISTAGE_LAYOUT_NONE;
     FILE* f;
     if (!d) { tagpu_logf("wiki check: the wiki's data is not loaded"); return; }
     layout_now(d, &lay, &src, &blk);
@@ -1235,9 +1313,14 @@ static void check(void)
                     const WIKIENTRY* e = &d->entry[i];
                     /* the contexts start() can give: the side's casting only on the mod's layout */
                     const WIKISIMCTX ctx = { k, blk ? &blk->casting[k] : NULL, ifc, cob, snd, rival_of(blk, k) };
-                    WIKISIM* s = (WIKISIM*)malloc(sizeof *s);
+                    WIKISIM* s;
                     long t = 0;
-                    int ty;
+                    if (e->frame == WIKI_FRAME_GAME) {
+                        if (check_replay(e, &e->demo[j], k, ifc, lay, &ctx)) n++, nreplay++;
+                        else bad++;
+                        continue;
+                    }
+                    s = (WIKISIM*)malloc(sizeof *s);
                     if (!s || !tagpu_wikisim_init(s, e, &e->demo[j], 1, lay, &ctx, err, sizeof err)) {
                         tagpu_logf("wiki check: %s/%s/%d/%d did not start - %s", e->id, e->demo[j].id, k, ifc,
                                    s ? err : "no memory");
@@ -1249,19 +1332,14 @@ static void check(void)
                     while (!s->done && t++ < 1000000L) tagpu_wikisim_step(s);
                     tagpu_logf("wiki check: %s/%s/%d/%d %016llx", e->id, e->demo[j].id, k, ifc,
                                (unsigned long long)tagpu_wikisim_hash(s));
-                    for (ty = 0; s->cob && ty < e->ndef; ty++)
-                        if (tagpu_wikicob_note(s->cob, ty)[0])
-                            tagpu_logf("wiki check: %s/%s/%d/%d %s's script is quarantined - %s", e->id, e->demo[j].id, k,
-                                       ifc, s->entry->def[ty].name, tagpu_wikicob_note(s->cob, ty));
-                    if (s->stalled)
-                        tagpu_logf("wiki check: %s/%s/%d/%d stopped: a wait ran past its max", e->id, e->demo[j].id, k, ifc);
+                    check_notes(e, &e->demo[j], k, ifc, s);
                     tagpu_wikisim_free(s);
                     free(s);
                     n++;
                 }
     QueryPerformanceCounter(&t1);
-    tagpu_logf("wiki check: %d demos played, %d did not start, in %.0f ms", n, bad,
-               s_qpf.QuadPart > 0 ? (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)s_qpf.QuadPart : 0.0);
+    tagpu_logf("wiki check: %d demos played (%d of them as replays), %d did not start, in %.0f ms", n, nreplay, bad,
+               ms_between(t0, t1));
 }
 
 /* A press of button `bit` at client point (cx, cy), engine point (gx, gy), from either path:
@@ -1700,7 +1778,9 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
 }
 
 /* An ask of `ENTRY DEMO TICK` (SHOT_ASK, PAUSE_ASK) read and removed: 1 with the entry's index, its
-   demo's number from 1 and the tick, 0 with the refusal said */
+   demo's number from 1 and the tick, 0 with the refusal said. The entry is looked up among the
+   page tree's leaves, as every pick is (tagpu_wiki_page_tree), so an ask cannot show an entry the
+   page leaves out. */
 static int ask_read(const char* file, int* e, int* demo, int* tick)
 {
     const WIKIDATA* d = data();
@@ -1718,10 +1798,11 @@ static int ask_read(const char* file, int* e, int* demo, int* tick)
         tagpu_logf("wiki: %s: `%s` is not `ENTRY DEMO TICK`, or the data is not loaded - nothing asked", file, buf);
         return 0;
     }
-    for (i = 0; i < d->nentry; i++)
-        if (!strcmp(d->entry[i].id, id)) *e = i;
+    for (i = 0; i < d->nnode; i++)
+        if (d->node[i].entry >= 0 && d->node[i].entry < d->nentry && !strcmp(d->entry[d->node[i].entry].id, id))
+            *e = d->node[i].entry;
     if (*e < 0 || *demo < 1 || *demo > d->entry[*e].ndemo || *tick < 0 || *tick > SHOT_TICK_MAX) {
-        tagpu_logf("wiki: %s: no entry %s with a demo %d, or tick %d is past %d - nothing asked", file, id, *demo, *tick,
+        tagpu_logf("wiki: %s: no entry %s on the page with a demo %d, or tick %d is past %d - nothing asked", file, id, *demo, *tick,
                    SHOT_TICK_MAX);
         return 0;
     }
@@ -1948,4 +2029,33 @@ void tagpu_wiki_level_end(void)
     s_drag = -1;
     s_escClose = 0;
     memset(&s_hit, 0, sizeof s_hit);
+}
+
+/* THE PAGE'S TREE WITHOUT THE GAME ENTRIES (tagpu_wiki.h): a leaf naming one goes, and with it a
+   category every leaf under which is one, its whole span, so no empty heading shows; a category
+   with no leaf at all stays. Compacted in place, preorder kept: a kept node is copied to an index
+   no greater than its own, and the spans are read at or past it, so nothing is read after it was
+   overwritten. Every path that picks an entry goes through these nodes -- the open's first leaf,
+   the presses' entry:N and the shot and pause asks (ask_read) -- and the layout's tree rows walk
+   them, so the page cannot reach an entry they leave out; the layout's check, which walks the
+   entries, skips a game entry itself (tagpu_wikilay.c check_states). THE BOUND: every index read
+   is a node below nnode, and an entry index is bounded by nentry before it is followed. */
+void tagpu_wiki_page_tree(WIKIDATA* d)
+{
+    int i, j, end, leaves, games, n = 0;
+    if (!d || !d->node) return;
+    for (i = 0; i < d->nnode; i = end) {
+        end = i + 1;
+        if (d->node[i].entry < 0)
+            while (end < d->nnode && d->node[end].depth > d->node[i].depth) end++;
+        for (leaves = games = 0, j = i; j < end; j++)
+            if (d->node[j].entry >= 0 && d->node[j].entry < d->nentry) {
+                leaves++;
+                games += d->entry[d->node[j].entry].frame == WIKI_FRAME_GAME;
+            }
+        if (leaves && games == leaves) continue;
+        d->node[n++] = d->node[i];
+        end = i + 1;
+    }
+    d->nnode = n;
 }

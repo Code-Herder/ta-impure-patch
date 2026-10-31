@@ -89,7 +89,8 @@ demos, on the same launch as sp:
   (d1) tagpu_wiki.check plays every demo to its end in the game, on the sidebar layout a demo would
        start on, on each of its sides at both interface types, and every logged hash equals `node
        tools/wiki/simparity.mjs --hash --layout --side --iface` on the layout the game wrote beside it
-       (with --pack, the side pack of that layout, when it is the mod's);
+       (with --pack, the side pack of that layout, when it is the mod's); a game entry's demo is played
+       as a replay, to its end, and the game ticks and milliseconds the check logged for it are printed;
   (d2) a demo's pace on the page's own clock: the ticks played between two dumps equal 30 a second
        times the speed (1x, then 2x) of the seconds the clock played, less the ticks its per-frame
        bound took off, to within a tick -- the rule the clock paces by, which no load can break;
@@ -930,6 +931,10 @@ def demos(c, shots, res):
     n = check_against(check_hashes(c.log[start:]), simparity_hashes(layf, pack, src.group(1) == "on"), "(d1)")
     print(f"wiki demos: (d1) {line.split('wiki check: ', 1)[1]}; all {n} hashes (every side at both interface types"
           f"{f', with {pack.name} castings' if pack else ''}) equal simparity --hash")
+    # a game entry's demos, played as replays: their cost in the game, what the replay layer's step budgets are set from
+    for ln in c.log[start:]:
+        if "wiki check: the replay " in ln:
+            print(f"wiki demos: (d1) {ln.split('wiki check: ', 1)[1]}")
 
     d = c.open_wiki(expect_pause=True)
     d = wait_dump(c, lambda d: d["drawn_open"] and d["sim"], "(d2) the page was not drawn")
