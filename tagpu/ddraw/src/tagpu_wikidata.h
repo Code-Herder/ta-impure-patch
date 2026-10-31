@@ -229,6 +229,11 @@ typedef struct {
 /* An entry's frame: a page (the wiki's tutorial page) or a game (`"frame": "game"`, a small game) */
 enum { WIKI_FRAME_PAGE, WIKI_FRAME_GAME };
 
+/* A game entry's demos, at most: one numbered tab each in the theatre's row, so the row's fixed
+   part fits at 1024 x 768 by construction (tagpu_wikilay_check builds a game entry of this many,
+   locked). sim.js's THEATRE_TABS. */
+#define WIKI_THEATRE_TABS 9
+
 typedef struct {
     const char*      id;
     const char*      title;
