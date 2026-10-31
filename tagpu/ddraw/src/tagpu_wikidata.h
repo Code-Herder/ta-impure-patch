@@ -173,16 +173,24 @@ typedef struct {
 } WIKISCENE;
 
 /* RECLAIM: arm reclaim through RECLAIM (`reclaim: true`); PICK: click the popup's row of `pick`;
-   KILL: a game script's kill of the unit `kill` names */
+   KILL: a game script's kill of the unit `kill` names; HUD: a viewer's press of the replay HUD's
+   control `hud` */
 enum { WIKI_IN_MOVE = 1, WIKI_IN_BUILD = 2, WIKI_IN_CAPTION = 4, WIKI_IN_UNTIL = 8, WIKI_IN_RECLAIM = 16, WIKI_IN_PICK = 32,
-       WIKI_IN_KILL = 64 };
+       WIKI_IN_KILL = 64, WIKI_IN_HUD = 128 };
 
 /* A DEMO'S WAIT (sim.js's UNTILS, in its order): the state a wait holds the demo's clock for.
    IDLE: no unit of the player's holds a build or a reclaim order. ARRIVED: no unit of the
    player's holds a move order. BUILT, a demo's k-th such wait: k buildings of the player's have
-   been finished in the demo. WIKI_UNTIL_MAX bounds its max, in ticks. */
-enum { WIKI_UNTIL_IDLE = 1, WIKI_UNTIL_ARRIVED = 2, WIKI_UNTIL_BUILT = 3 };
+   been finished in the demo. SEEKED, a game entry's viewer's only wait (sim.js checkViewer), not
+   one of sim.js's UNTILS: no seek is pending (tagpu_wikireplay.h). WIKI_UNTIL_MAX bounds its max,
+   in ticks. */
+enum { WIKI_UNTIL_IDLE = 1, WIKI_UNTIL_ARRIVED = 2, WIKI_UNTIL_BUILT = 3, WIKI_UNTIL_SEEKED = 4 };
 #define WIKI_UNTIL_MAX 3600
+
+/* THE REPLAY HUD'S CONTROLS a game entry's viewer's script presses (sim.js's HUD_CONTROLS, in its
+   order; the game's keys, hud-in-game.md). leave:yes is the player's alone, never a script's. */
+enum { WIKI_HUD_PLAY, WIKI_HUD_SPEED, WIKI_HUD_REW, WIKI_HUD_FWD, WIKI_HUD_TRACK, WIKI_HUD_BOOKMARK, WIKI_HUD_LEAVE,
+       WIKI_HUD_LEAVE_NO, WIKI_NHUD };
 
 /* One input of a demo's timeline, or one the player gives Try it yourself. */
 typedef struct {
@@ -195,6 +203,9 @@ typedef struct {
     int              until, until_max;  /* WIKI_IN_UNTIL: the WIKI_UNTIL_* and its max, ticks */
     int              pick;              /* WIKI_IN_PICK: the WIKI_KIND_* */
     const char*      kill;              /* WIKI_IN_KILL: the unit's id, in the entry's document */
+    int              hud;               /* WIKI_IN_HUD: the WIKI_HUD_* pressed */
+    int              to, drag, over;    /* WIKI_IN_HUD, the track: the game tick pressed, and the
+                                           drag's (-1 none) over `over` ticks */
     int              extra;             /* a demo's input names a key besides at, caption, build,
                                            reclaim and pick: it is no caption alone, which a
                                            trip's ticks admit (tagpu_wikidata_trips) */
@@ -222,7 +233,8 @@ typedef struct {
     int              on;                /* the index in WIKIENTRY.scenes of the scene it plays on */
     WIKISCENE        scene;             /* its additions */
     int              ninput;
-    WIKIINPUT*       input;             /* in file order; the sim plays them by `at` */
+    WIKIINPUT*       input;             /* in file order; the sim plays them by `at`. A game entry's:
+                                           the viewer's script, which tagpu_wikireplay plays */
     int              has_end;
     double           end;               /* the tick it ends on */
     int              has_sidebar;       /* `sidebar` given: it decides whether the demo plays with */
@@ -301,6 +313,11 @@ const char* tagpu_wikidata_cast_name(int cast);
 
 /* sim.js's name of a sweep kind: "metal", "energy", "all"; NULL out of range. */
 const char* tagpu_wikidata_kind_name(int kind);
+
+/* sim.js's name of a replay HUD control: "play", "speed", ... "leave:no"; NULL out of range. And
+   the control of a name, or -1. */
+const char* tagpu_wikidata_hud_name(int hud);
+int         tagpu_wikidata_hud(const char* name);
 
 /* A feature of the entry's table by name, or -1. */
 int tagpu_wikidata_feat(const WIKIENTRY* e, const char* name);

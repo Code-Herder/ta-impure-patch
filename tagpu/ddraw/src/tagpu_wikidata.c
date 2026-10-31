@@ -6,6 +6,7 @@
 #include "tagpu_pak.h"
 #include "tagpu_wikidata.h"
 #include "tagpu_wikisim.h"           /* WIKI_TRIP, the build trip's ticks */
+#include "tagpu_wikireplay.h"        /* WIKI_REPLAY_HUD_DOWN, _UP: a HUD press's trip */
 
 #define FOOTPRINT_MAX 64    /* tagpu_placegeo.c's bound on a footprint, which its arithmetic rests on */
 #define TREE_MAX      1024  /* nodes of the tree */
@@ -18,6 +19,8 @@ static const char* const KIND_NAMES[WIKI_NKINDS] = { "metal", "energy", "all" };
 /* sim.js's and text.js's CASTS, in WIKI_CAST_* order */
 static const char* const CAST_NAMES[WIKI_NCAST] = { "builder", "advbuilder", "mex", "moho", "geo",
                                                     "walker", "tower", "wall", "solar", "commander" };
+/* sim.js's HUD_CONTROLS, in WIKI_HUD_* order */
+static const char* const HUD_NAMES[WIKI_NHUD] = { "play", "speed", "rew", "fwd", "track", "bookmark", "leave", "leave:no" };
 
 const char* tagpu_wikidata_key_name(int key)
 {
@@ -32,6 +35,19 @@ const char* tagpu_wikidata_cast_name(int cast)
 const char* tagpu_wikidata_kind_name(int kind)
 {
     return kind >= 0 && kind < WIKI_NKINDS ? KIND_NAMES[kind] : NULL;
+}
+
+const char* tagpu_wikidata_hud_name(int hud)
+{
+    return hud >= 0 && hud < WIKI_NHUD ? HUD_NAMES[hud] : NULL;
+}
+
+int tagpu_wikidata_hud(const char* name)
+{
+    int k;
+    for (k = 0; name && k < WIKI_NHUD; k++)
+        if (!strcmp(HUD_NAMES[k], name)) return k;
+    return -1;
 }
 
 /* a sweep kind by name, or -1 */
@@ -689,6 +705,92 @@ static int game(R* r, const TJV* v, WIKIDEMO* d)
     return 1;
 }
 
+/* whether every key of `v` but `at` is one of the `n` in `keys` */
+static int keys_in(const TJV* v, const char* const* keys, int n)
+{
+    const TJV* k;
+    int i;
+    for (k = v->first; k; k = k->next) {
+        for (i = 0; i < n && strcmp(k->key, keys[i]); i++) {}
+        if (strcmp(k->key, "at") && i == n) return 0;
+    }
+    return 1;
+}
+
+/* AN INPUT OF A GAME ENTRY'S VIEWER'S SCRIPT (sim.js checkViewer, which tagpu_wikireplay plays):
+   exactly one of a caption {at, caption}; the wait {at, until: "seeked", max}, max an integer
+   1..WIKI_UNTIL_MAX; or a press {at, hud} of a WIKI_HUD_* control, for the track with `to` an
+   integer 0..end and `drag` (the same) and `over` (an integer 1..WIKI_UNTIL_MAX) together or
+   neither. leave:yes is the player's, never a script's. */
+static int viewer_input(R* r, const TJV* v, WIKIINPUT* in, int end)
+{
+    static const char* const CAPTION[] = { "caption" }, *const WAIT[] = { "until", "max" }, *const PRESS[] = { "hud" },
+                             *const TRACK[] = { "hud", "to", "drag", "over" };
+    const TJV* c;
+    memset(in, 0, sizeof *in);
+    in->build = in->down = in->up = in->hud = in->drag = -1;
+    in->at = tj_num(tj_get(v, "at"), 0);
+    if ((c = tj_get(v, "hud"))) {
+        if (tj_is(c, TJ_STR) && !strcmp(c->str, "leave:yes")) return refuse(r, "leave:yes is the player's, never a demo's", NULL);
+        if (!tj_is(c, TJ_STR) || (in->hud = tagpu_wikidata_hud(c->str)) < 0)
+            return refuse(r, "a press names no control a demo presses", NULL);
+        in->has |= WIKI_IN_HUD;
+        if (in->hud != WIKI_HUD_TRACK)
+            return keys_in(v, PRESS, 1) ? 1 : refuse(r, "a press carries a key it does not know", NULL);
+        if (!keys_in(v, TRACK, 4)) return refuse(r, "a press carries a key it does not know", NULL);
+        if (!integer(r, tj_get(v, "to"), 0, end, &in->to, "the track's to")) return 0;
+        if (!tj_get(v, "drag") != !tj_get(v, "over")) return refuse(r, "a track's drag and over come together", NULL);
+        if (tj_get(v, "drag")
+            && (!integer(r, tj_get(v, "drag"), 0, end, &in->drag, "the track's drag")
+                || !integer(r, tj_get(v, "over"), 1, WIKI_UNTIL_MAX, &in->over, "the track's over")))
+            return 0;
+        return 1;
+    }
+    if ((c = tj_get(v, "until"))) {
+        if (!tj_is(c, TJ_STR) || strcmp(c->str, "seeked")) return refuse(r, "the viewer's wait is \"seeked\"", NULL);
+        if (!integer(r, tj_get(v, "max"), 1, WIKI_UNTIL_MAX, &in->until_max, "a wait's max")) return 0;
+        if (!keys_in(v, WAIT, 2)) return refuse(r, "a wait carries another input", NULL);
+        in->has |= WIKI_IN_UNTIL;
+        in->until = WIKI_UNTIL_SEEKED;
+        return 1;
+    }
+    if (!tj_get(v, "caption") || !keys_in(v, CAPTION, 1)) return refuse(r, "a viewer's input is no caption, wait or press", NULL);
+    in->has |= WIKI_IN_CAPTION;
+    in->caption = text_or_null(tj_get(v, "caption"));
+    return 1;
+}
+
+/* THE VIEWER'S SCRIPT'S ORDER RULE (sim.js checkViewer): in the order it is fed, by tick then file
+   order, no press and no wait stands in a press's trip, from its tick to its release (at +
+   WIKI_REPLAY_HUD_UP, or for a drag at + WIKI_REPLAY_HUD_DOWN + over), the release's tick
+   included; and no other input shares a wait's tick */
+static int viewer_order(R* r, const WIKIDEMO* d)
+{
+    double release = -INFINITY;
+    int i, k, j;
+    for (i = 0; i < d->ninput; i++) {
+        if (!(d->input[i].has & WIKI_IN_UNTIL)) continue;
+        for (k = 0; k < d->ninput; k++)
+            if (k != i && d->input[k].at == d->input[i].at) return refuse(r, "the viewer's wait shares its tick with another input", NULL);
+    }
+    /* the inputs by tick, then file order, without a copy: the next one is the least (at, index)
+       above the last one taken */
+    for (i = -1, j = 0; j < d->ninput; j++) {
+        const WIKIINPUT* e;
+        int best = -1;
+        for (k = 0; k < d->ninput; k++) {
+            const int after = i < 0 || d->input[k].at > d->input[i].at || (d->input[k].at == d->input[i].at && k > i);
+            if (after && (best < 0 || d->input[k].at < d->input[best].at)) best = k;
+        }
+        e = &d->input[i = best];
+        if (!(e->has & (WIKI_IN_HUD | WIKI_IN_UNTIL))) continue;
+        if (e->at <= release) return refuse(r, "a press or a wait stands in another press's trip", NULL);
+        if (e->has & WIKI_IN_HUD)
+            release = e->at + (e->drag >= 0 ? WIKI_REPLAY_HUD_DOWN + e->over : WIKI_REPLAY_HUD_UP);
+    }
+    return 1;
+}
+
 static int demo(R* r, const TJV* v, WIKIDEMO* d)
 {
     const TJV *c, *inputs = tj_get(v, "inputs"), *end = tj_get(v, "end");
@@ -703,11 +805,21 @@ static int demo(R* r, const TJV* v, WIKIDEMO* d)
         if (d->on == r->e->nscene) return refuse(r, "a demo is on no scene of the entry", c->str);
     }
     if (!scene(r, tj_get(v, "scene"), &d->scene, 0)) return 0;
+    /* a game entry's demo: its game first, whose end bounds the viewer's ticks */
+    c = tj_get(v, "game");
+    if (r->e->frame != WIKI_FRAME_GAME) {
+        if (c) return refuse(r, "game is a game entry's", NULL);
+    } else {
+        for (i = 0; i < d->scene.nunit; i++)
+            if (d->scene.unit[i].owner >= r->e->scenes[d->on].nseat) return refuse(r, "a unit's owner is no seat of its scene", NULL);
+        if (!(d->has_game = game(r, c, d))) return 0;
+    }
     d->ninput = count(inputs);
     if (!(d->input = (WIKIINPUT*)zalloc(r, (size_t)d->ninput, sizeof *d->input))) return 0;
-    for (c = tj_is(inputs, TJ_ARR) ? inputs->first : NULL; c; c = c->next)
+    for (c = tj_is(inputs, TJ_ARR) ? inputs->first : NULL, i = 0; c; c = c->next)
         if (!tj_is(tj_get(c, "at"), TJ_NUM)) return refuse(r, "an input has no tick", NULL);
-        else if (!input(r, c, &d->input[i++], 0)) return 0;
+        else if (d->has_game ? !viewer_input(r, c, &d->input[i++], (int)d->game.end) : !input(r, c, &d->input[i++], 0)) return 0;
+    if (d->has_game && !viewer_order(r, d)) return 0;
     if ((d->has_end = end && !tj_is(end, TJ_NULL)) && !number(r, end, &d->end, "the end")) return 0;
     /* sim.js throws on a `sidebar` that is not a boolean when it plays the demo, and every demo is
        played, so the loader refuses it whatever reads the demo */
@@ -717,13 +829,6 @@ static int demo(R* r, const TJV* v, WIKIDEMO* d)
         d->has_sidebar = 1;
         d->sidebar = tj_is(c, TJ_TRUE);
     }
-    for (i = 0; i < d->scene.nunit; i++)
-        if (r->e->frame == WIKI_FRAME_GAME && d->scene.unit[i].owner >= r->e->scenes[d->on].nseat)
-            return refuse(r, "a unit's owner is no seat of its scene", NULL);
-    c = tj_get(v, "game");
-    if (r->e->frame != WIKI_FRAME_GAME) {
-        if (c) return refuse(r, "game is a game entry's", NULL);
-    } else if (!(d->has_game = game(r, c, d))) return 0;
     r->where = NULL;
     return 1;
 }

@@ -30,10 +30,12 @@
    and castings, which a pack does not change, so the plain run is where they are checked.
 
    THE GAME ENTRIES: every entry under art/wiki/entries/ whose frame is "game", named by the tree or not, plays each
-   demo's game script through WikiSim.game in every context, the opponent's casting beside the player's (the
-   fixture's `rivals`, or under --pack the first other side's), and is checked on its own claims (gameClaims,
-   stallClaims): to its end, never stalled, starved or killing no unit, each kill's wreck and death sound, and the
-   stall case. Their tallies print after the demos', so the demos' lines read as before.
+   distinct game script of its demos through WikiSim.game in every context, the opponent's casting beside the
+   player's (the fixture's `rivals`, or under --pack the first other side's), and is checked on its own claims
+   (gameClaims, stallClaims): to its end, never stalled, starved or killing no unit, each kill's wreck and death sound,
+   and the stall case. Then every demo plays as a replay (replay.js, runReplay) on its game and is checked on every
+   replay's claims (replayClaims: its end, the walk and its markers, the seek claim) and its own (REPLAY_CLAIMS, by the
+   demo's id). Their tallies print after the demos', so the demos' lines read as before.
 
    Imported, it runs nothing and exports ENTRY_RULES, the rule cases per entry id, which call WikiSim.create and
    WikiSim.play through the module object sim.js exports; tools/wiki/simparity.mjs records both, each with its
@@ -47,6 +49,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { cobHost, scripts, sounds, soundSource } from './cobhost.mjs';
 const WikiSim = createRequire(import.meta.url)('./mockup/sim.js');
+const WikiReplay = createRequire(import.meta.url)('./mockup/replay.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const TRACE = process.argv.includes('--trace');
 const FIXTURE = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/side/fixture.json`, 'utf8'));
@@ -1472,6 +1475,161 @@ function stallClaims(entry, d, layout, ctx, ok) {
   ok(r.last.v.game.starved, `in refuse mode the cut game ends starved (tick ${r.last.t})`);
 }
 
+/* ---- THE REPLAYS: every demo of a game entry played by replay.js, its viewer's script moving the game through the
+   HUD (research/notes/ingame-wiki-replay-plan.md, decisions 4, 11 and 17) ---- */
+/* A replay's frames: `all`, the replay's view each demo tick; `F(c)`, the first frame on viewer clock c (the step that
+   fed c; the walk's frames are all on clock 0); `ends`, every seek that ended, each with its demo tick, the game tick
+   it ended on, the replay's view there, the game's view, orders and log, and whether it ended on its target (rather
+   than in a feed that played on); `gv`, the game's view at the end. */
+function runReplay(entry, d, layout, ctx) {
+  const R = WikiReplay.play(entry, d, layout, ctx), all = [R.view()], ends = [];
+  const ids = [...WikiSim.sceneOf(entry, d).units, ...((d.scene && d.scene.units) || [])].map(u => u.id);
+  while (!all[all.length - 1].done) {
+    const prev = all[all.length - 1];
+    R.step();
+    const rv = R.view();
+    all.push(rv);
+    if (prev.game.target >= 0 && rv.game.target < 0 && R.game)
+      ends.push({ tick: rv.tick, T: R.game.tick, rv, v: R.game.view(), o: ids.map(id => R.game.orders(id)), log: R.game.log.slice(),
+        onTarget: R.game.tick === prev.game.target });
+  }
+  const gv = R.game ? R.game.view() : null;
+  R.free();
+  const first = new Map();
+  all.forEach(f => { if (!first.has(f.clock)) first.set(f.clock, f); });
+  return { all, ends, gv, last: all[all.length - 1], F: c => first.get(c), ids };
+}
+// a viewer's presses of `control`, each with its release's clock tick (a drag's: at + HUD_DOWN + over)
+const pressesOf = (d, control) => (d.inputs || []).filter(e => e.hud === control)
+  .map(e => ({ ...e, release: e.at + ('drag' in e ? WikiReplay.HUD_DOWN + e.over : WikiReplay.HUD_UP) }));
+/* THE MARKERS a game's frames give, from a fresh play's seat counters (runGame's frames, each a tick): a seat's lost
+   rising a death, its out set a defeat, in tick then seat order */
+function marksOf(frames) {
+  const marks = [];
+  let prev = frames[0].v.game.seats.map(() => ({ lost: 0, out: false }));
+  for (const f of frames) {
+    f.v.game.seats.forEach((z, k) => {
+      if (z.lost > prev[k].lost) marks.push([f.t, WikiReplay.DEATH, k]);
+      if (z.out && !prev[k].out) marks.push([f.t, WikiReplay.DEFEAT, k]);
+    });
+    prev = f.v.game.seats.map(z => ({ lost: z.lost, out: z.out }));
+  }
+  return marks;
+}
+/* EVERY REPLAY'S CLAIMS: it plays to its end on the viewer's clock, never stalled, failed, stopped or ignoring a press;
+   the walk ends in ceil(end / WALK) steps with the clock and the game still at 0, and its markers are the ones the
+   game's own play gives (`g`, runGame's frames) from the first shown frame on; THE SEEK CLAIM, decision 11's guarantee
+   checked directly: each seek ends on the world -- the game's view and orders -- of a fresh game played straight to
+   that tick; and a seek that ends on its target makes what it played heard (quiet is the game's sound total there). */
+function replayClaims(entry, d, layout, ctx, rr, g, ok) {
+  const end = d.game.end, v = rr.last, W = Math.ceil(end / WikiReplay.WALK);
+  ok(v.done && v.clock === d.end, `played to its end, clock ${d.end} (clock ${v.clock})`);
+  ok(!v.stalled && !v.failed && v.ignored === 0, `never stalled, failed or ignoring a press (${v.stalled}, ${v.failed}, ${v.ignored})`);
+  ok(rr.gv && rr.gv.locked === null && !rr.gv.game.starved && !rr.gv.game.badKill, 'its game never stopped');
+  const walk = rr.all.findIndex(f => f.walked === end);
+  ok(walk === W && rr.all.slice(0, W + 1).every(f => f.clock === 0 && f.game.tick === 0),
+    `the walk ends in ${W} steps with the clock and the game at 0 (step ${walk})`);
+  const want = JSON.stringify(marksOf(g.all));
+  ok(rr.all.slice(W).every(f => JSON.stringify(f.marks) === want), `the markers, ${want}, are the game's own from the first shown frame`);
+  const sim = WikiSim.game(entry, d, layout, ctx, 'refuse');
+  let bad = null;
+  for (const e of [...rr.ends].sort((a, b) => a.T - b.T)) {
+    while (sim.tick < e.T && !sim.done) sim.step();
+    if (sim.tick !== e.T || JSON.stringify([sim.view(), rr.ids.map(id => sim.orders(id))]) !== JSON.stringify([e.v, e.o])) { bad = e; break; }
+  }
+  sim.free();
+  ok(!bad, `each of the ${rr.ends.length} seeks ends on the world of the game played straight to its tick${bad ? ` (not on ${bad.T}, demo tick ${bad.tick})` : ''}`);
+  const loud = rr.ends.filter(e => e.onTarget && e.rv.game.quiet !== (e.v.sound ? e.v.sound.total : 0));
+  ok(!loud.length, `each seek that ends on its target makes what it played heard${loud.length ? ` (not at demo tick ${loud[0].tick})` : ''}`);
+}
+/* EACH DEMO'S OWN CLAIMS, by its id, from the viewer's script's ticks (the authored timings; the claims follow them) */
+const REPLAY_CLAIMS = {
+  // the game tick runs with the clock until the pause's release, holds while paused, and runs on after the next
+  play(d, rr, ok) {
+    const rel = new Set(pressesOf(d, 'play').map(e => e.release));
+    let tick = 0, paused = false, bad = 0;
+    for (let c = 1; c <= d.end; c++) {
+      if (rel.has(c)) paused = !paused;
+      if (!paused) tick++;
+      if (rr.F(c).game.tick !== tick || rr.F(c).game.paused !== paused) bad = bad || c;
+    }
+    ok(rel.size === 2 && !bad, `the game holds while paused and runs a tick a step otherwise (${bad ? `not on clock ${bad}` : 'every clock tick'})`);
+    ok(rr.F(1).game.end === d.game.end, `the track's length is the game's end, ${d.game.end}`);
+  },
+  // the presses give 20, 40, 80, 5, 10, and the game ticks between two equal the accumulator's count at that speed
+  speed(d, rr, ok) {
+    const rel = pressesOf(d, 'speed').map(e => e.release);
+    ok(JSON.stringify(rel.map(r => rr.F(r).game.speed)) === '[20,40,80,5,10]', `the presses give 20, 40, 80, 5 and 10 (${rel.map(r => rr.F(r).game.speed)})`);
+    const spans = [[1, rel[0], 10], ...rel.map((r, i) => [r, i + 1 < rel.length ? rel[i + 1] : d.end + 1, rr.F(r).game.speed])];
+    const off = spans.filter(([a, b, sp]) => rr.F(b - 1).game.tick - (a > 1 ? rr.F(a - 1).game.tick : 0) !== Math.floor(sp * (b - a) / 10));
+    ok(!off.length, `between two presses the game runs floor(speed x steps / 10) ticks${off.length ? ` (not from clock ${off[0][0]})` : ''}`);
+  },
+  // each seek's target is the playhead -/+ STEP clamped, a backward one raises gen, and each ends in ceil(d / SEEK) steps
+  rewfwd(d, rr, ok) {
+    const seeks = [...pressesOf(d, 'fwd').map(e => [e, 1]), ...pressesOf(d, 'rew').map(e => [e, -1])].sort((a, b) => a[0].at - b[0].at);
+    ok(seeks.some(s => s[1] > 0) && seeks.some(s => s[1] < 0), 'it seeks forward and back');
+    for (const [e, dir] of seeks) {
+      const b = rr.F(e.release - 1), p = b.game.playhead, T = Math.min(Math.max(p + dir * WikiReplay.STEP, 0), d.game.end);
+      const back = T < b.game.tick, dist = back ? T : T - b.game.tick, want = Math.max(1, Math.ceil(dist / WikiReplay.SEEK));
+      let k = e.release;
+      while (k < d.end && rr.F(k).game.target >= 0) k++;
+      ok(rr.F(e.release).game.gen === b.game.gen + (back ? 1 : 0) && rr.F(k).game.tick === T && k - e.release + 1 === want,
+        `${dir > 0 ? 'fwd' : 'rew'} at clock ${e.release}: from ${p} to ${T}${back ? ', a new game' : ''}, in ${want} steps (${k - e.release + 1}, gen ${rr.F(e.release).game.gen})`);
+    }
+  },
+  // a seek at the press, one at each tick whose position changed, the release's; the game ends paused on the drag
+  track(d, rr, ok) {
+    const [e] = pressesOf(d, 'track'), P = e.at + WikiReplay.HUD_DOWN;
+    ok(rr.F(P - 1).game.paused, 'paused before the press');
+    const want = c => c === P ? e.to : e.to + Math.trunc(((e.drag - e.to) * (c - P)) / e.over);
+    const off = Array.from({ length: e.over + 1 }, (_, i) => P + i).filter(c => rr.F(c).game.playhead !== want(c));
+    ok(!off.length, `the playhead follows the press and the drag, ${e.to} to ${e.drag}${off.length ? ` (not on clock ${off[0]})` : ''}`);
+    ok(rr.last.game.tick === e.drag && rr.last.game.target < 0, `the game ends on the drag's tick, ${e.drag} (${rr.last.game.tick})`);
+    ok(rr.ends.length > 0, `the seeks end (${rr.ends.length})`);
+  },
+  /* the markers: the commander's death and the defeat of its seat, the walker's death before it; the track pressed at
+     the death's marker lands there with both gone, each one's wreck standing exactly where its cast has one (the
+     stock commander has none) and the placement took it; the track pressed before them finds both units again */
+  markers(d, rr, ok, entry, ctx) {
+    const kills = d.game.inputs.filter(e => 'kill' in e), scene = WikiSim.sceneOf(entry, d).units;
+    const cast = id => entry.units[scene.find(u => u.id === id).type].cast;
+    const cmd = kills.find(e => cast(e.kill) === 'commander'), seat = scene.find(u => u.id === cmd.kill).owner || 0;
+    const mine = scene.filter(u => (u.owner || 0) === seat).map(u => u.id), gone = Math.max(...kills.filter(e => mine.includes(e.kill)).map(e => e.at));
+    const want = [[cmd.at, WikiReplay.DEATH, seat], ...(mine.every(id => kills.some(e => e.kill === id)) ? [[gone, WikiReplay.DEFEAT, seat]] : [])];
+    ok(JSON.stringify(rr.last.marks) === JSON.stringify(want), `the markers are ${JSON.stringify(want)} (${JSON.stringify(rr.last.marks)})`);
+    const [press, back] = pressesOf(d, 'track');
+    ok(press.to === cmd.at, `the track is pressed at the death's marker, ${cmd.at}`);
+    const at = rr.ends.find(x => x.T === cmd.at), other = kills.find(e => e !== cmd && mine.includes(e.kill));
+    if (!at) { ok(false, `a seek ends on ${cmd.at}`); return; }
+    ok(!at.v.units.some(u => u.id === cmd.kill || u.id === other.kill), `at ${cmd.at} ${cmd.kill} and ${other.kill} are gone`);
+    for (const id of [cmd.kill, other.kill]) {
+      const t = scene.find(u => u.id === id).type, k = gameCast(entry, ctx, t), wreck = k ? k.corpse : entry.units[t].corpse;
+      const refused = at.log.some(l => l.what === 'nocorpse' && l.id === id), stands = at.v.feats.some(f => f.id === id);
+      ok(stands === (!!wreck && !refused), `${id}'s wreck ${stands ? 'stands' : 'is absent'}: its cast has ${wreck ? 'one' : 'none'}${refused ? ', which the placement refused' : ''}`);
+    }
+    const before = rr.ends.find(x => x.T === back.to);
+    ok(back.to < other.at && before && mine.every(id => before.v.units.some(u => u.id === id)), `at ${back.to} both of seat ${seat}'s units stand again`);
+  },
+  // one bookmark added at the playhead with its toast; the press within NEAR of it removes it with its toast
+  bookmarks(d, rr, ok) {
+    const [a, b] = pressesOf(d, 'bookmark'), p = rr.F(a.release - 1).game.playhead, q = rr.F(b.release - 1).game.playhead;
+    const A = rr.F(a.release), B = rr.F(b.release);
+    ok(JSON.stringify(A.books) === `[${p}]` && A.toast && A.toast.kind === 'added' && A.toast.value === p && A.toast.at === A.tick,
+      `one added at the playhead, ${p}, with its toast`);
+    ok(Math.abs(q - p) <= WikiReplay.NEAR && B.books.length === 0 && B.toast && B.toast.kind === 'removed' && B.toast.value === p && B.toast.at === B.tick,
+      `the press at ${q}, within ${WikiReplay.NEAR} of it, removes it with its toast`);
+    ok(rr.last.books.length === 0, 'no bookmark is left');
+  },
+  // the question opens and pauses; leave:no closes it and puts the pause back as it was
+  leave(d, rr, ok) {
+    const [a] = pressesOf(d, 'leave'), [b] = pressesOf(d, 'leave:no');
+    const before = rr.F(a.release - 1).game.paused, A = rr.F(a.release), B = rr.F(b.release);
+    ok(A.question && A.question.wasPaused === before && A.game.paused, 'Leave opens the question and pauses');
+    ok(rr.F(b.release - 1).game.tick === A.game.tick, `the game holds while it asks (${A.game.tick})`);
+    ok(B.question === null && B.game.paused === before, 'leave:no closes it and puts the pause back as it was');
+  },
+};
+
 /* THE TURNED-OFF RULE (decision 24): an entry whose own `lockedIn` names the pack's mod is shown in that mod under
    the "Turned off in this mod" badge (wiki.js `locked`, the same list and the same name), which already tells the
    player its demos do not apply there. Its demos still play, and must play to their end without being refused, but
@@ -1542,13 +1700,20 @@ for (const c of contexts()) {
 }
 const games = fs.readdirSync(`${ROOT}art/wiki/entries`).filter(f => f.endsWith('.json')).sort()
   .map(f => [f.slice(0, -5), JSON.parse(fs.readFileSync(`${ROOT}art/wiki/entries/${f}`, 'utf8'))]).filter(([, e]) => e.frame === 'game');
-const gameTally = {};
+const gameTally = {}, replayTally = {};
 for (const c of games.length ? contexts() : []) {
   const t = gameTally[c.label] = { pass: 0, fail: 0, locked: [], refused: [] };
+  const rt = replayTally[c.label] = { pass: 0, fail: 0, locked: [] };
+  /* each game once (demos that share their scene and their game script play the same game), then every demo as a
+     replay on it */
+  const played = new Map();
   for (const [id, entry] of games) for (const d of entry.demos) {
+    const key = JSON.stringify([id, d.on ?? null, d.scene ?? null, d.game]);
     const notes = [], ok = (cond, what) => notes.push([!!cond, what]), lock = gameLock(entry, d, c.ctx);
+    if (played.has(key)) { replayDemo(c, id, entry, d, lock, played.get(key), rt); continue; }
     try {
       const r = runGame(entry, d, c.layout, c.ctx, 'refuse');
+      played.set(key, r);
       const qn = r.cobNotes;
       ok(!qn.length, `no type's script quarantined${qn.length ? ` (${qn.join('; ')})` : ''}`);
       if (lock) {
@@ -1570,7 +1735,33 @@ for (const c of games.length ? contexts() : []) {
     t[pass ? 'pass' : 'fail']++;
     console.log(`${pass ? 'PASS' : 'FAIL'} [${c.label}] game ${id}/${d.id} -- ${d.title}${lock ? ` (stops on tick ${lock.t}: ${lock.type} unbound)` : ''}`);
     for (const [cond, what] of notes) if (!cond || TRACE) console.log(`     ${cond ? 'ok  ' : 'FAIL'} ${what}`);
+    replayDemo(c, id, entry, d, lock, played.get(key), rt);
   }
+}
+/* one demo as a replay in context c, on its game's frames `g` (runGame's): in a context that locks it, the replay must
+   stop under the badge once its game reaches the lock's tick, or end on its clock without reaching it; else every
+   replay's claims and the demo's own */
+function replayDemo(c, id, entry, d, lock, g, rt) {
+  const notes = [], ok = (cond, what) => notes.push([!!cond, what]);
+  try {
+    if (!g) throw new Error('its game did not play');
+    const rr = runReplay(entry, d, c.layout, c.ctx);
+    if (lock) {
+      const reached = rr.gv && rr.gv.locked !== null;
+      ok(rr.last.done && !rr.last.failed && (reached ? rr.gv.locked === lock.type && rr.gv.clock === lock.t : rr.last.clock === d.end),
+        `stops under the badge on game tick ${lock.t}, ${lock.type} unbound, or ends before it (${reached ? `locked on ${rr.gv.clock}` : `clock ${rr.last.clock}`})`);
+      rt.locked.push(`${id}/${d.id}@${lock.t}`);
+    } else {
+      replayClaims(entry, d, c.layout, c.ctx, rr, g, ok);
+      if (REPLAY_CLAIMS[d.id]) REPLAY_CLAIMS[d.id](d, rr, ok, entry, c.ctx);
+      else ok(false, `the demo ${d.id} has claims of its own (REPLAY_CLAIMS)`);
+    }
+  } catch (e) { ok(false, `threw: ${e.stack}`); }
+  const pass = notes.every(n => n[0]);
+  if (!pass) failed++;
+  rt[pass ? 'pass' : 'fail']++;
+  console.log(`${pass ? 'PASS' : 'FAIL'} [${c.label}] replay ${id}/${d.id} -- ${d.title}${lock ? ` (its game stops on tick ${lock.t}: ${lock.type} unbound)` : ''}`);
+  for (const [cond, what] of notes) if (!cond || TRACE) console.log(`     ${cond ? 'ok  ' : 'FAIL'} ${what}`);
 }
 for (const id of PACK ? [] : ids) {
   const entry = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/entries/${id}.json`, 'utf8'));
@@ -1589,6 +1780,9 @@ for (const [label, t] of Object.entries(gameTally))
   console.log(`[${PACK ? `pack ${PACK.mod}${LAYOUT ? '' : ', no sidebar'}` : LAYOUT ? 'fixture' : 'no sidebar'} games ${label}] ${t.pass} pass, ${t.fail} fail` +
     `${t.refused.length ? `; wrecks the placement refused: ${t.refused.join(' ')}` : ''}` +
     `${t.locked.length ? `; stopped under the badge: ${t.locked.join(' ')}` : ''}`);
+for (const [label, t] of Object.entries(replayTally))
+  console.log(`[${PACK ? `pack ${PACK.mod}${LAYOUT ? '' : ', no sidebar'}` : LAYOUT ? 'fixture' : 'no sidebar'} replays ${label}] ${t.pass} pass, ${t.fail} fail` +
+    `${t.locked.length ? `; their games stop under the badge: ${t.locked.join(' ')}` : ''}`);
 console.log(failed ? `${failed} check(s) failed` : 'all demos and rules pass');
 process.exit(failed ? 1 : 0);   // also ends the scripts' host
 }

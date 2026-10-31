@@ -565,7 +565,53 @@ const WikiSim = (() => {
       killed.add(e.kill);
     }
     if (S.features.length + killed.size > FEATS_MAX) throw new Error(`${at}: the scene's features and the kills pass ${FEATS_MAX}`);
+    checkViewer(at, demo, g.end);
     return game;
+  }
+  /* THE VIEWER'S SCRIPT of a game entry's demo, its `inputs` on demo time (decision 4): the data rule, refused here as
+     tagpu_wikidata.c refuses it at load; replay.js plays it, and the simulation never reads it. `inputs` that is not a
+     list reads as empty, as the loader reads one. Each input has a numeric `at` and is exactly one of
+     - a caption, {at, caption};
+     - the viewer's one wait, {at, until: "seeked", max}: max an integer 1..UNTIL_MAX, and no other input on its tick;
+     - a press of the replay HUD's, {at, hud}: hud one of HUD_CONTROLS (leave:yes is the player's alone, never a
+       script's: the presentation's), and for `track` a `to`, an integer 0..the game's end, with `drag` (the same)
+       and `over` (an integer 1..UNTIL_MAX) together or neither.
+     A press's trip runs from its tick to its release, at + HUD_UP, or for a drag at + HUD_DOWN + over; no other press
+     and no wait stands in it, the release's tick included, in the order the inputs are fed (by tick, then file
+     order). A demo's `end`, when given, is a number. */
+  const HUD_CONTROLS = ['play', 'speed', 'rew', 'fwd', 'track', 'bookmark', 'leave', 'leave:no'];
+  // a HUD press's trip is the popup pick's without its glide back (THE PICK TRIP): pressed at HUD_DOWN, released at HUD_UP
+  const HUD_DOWN = PICK_DOWN, HUD_UP = PICK_UP;
+  function checkViewer(at, demo, end) {
+    if ('end' in demo && demo.end !== null && typeof demo.end !== 'number') throw new Error(`${at}: the end is not a number`);
+    const list = Array.isArray(demo.inputs) ? demo.inputs : [];
+    const keys = (e, ks) => Object.keys(e).every(k => k === 'at' || ks.includes(k));
+    const tick = (e, k) => int(e[k]) && e[k] >= 0 && e[k] <= end;
+    for (const e of list) {
+      const w = `${at}: the viewer's input at tick ${obj(e) ? e.at : e}`;
+      if (!obj(e) || typeof e.at !== 'number') throw new Error(`${w} has no tick`);
+      if ('hud' in e) {
+        if (e.hud === 'leave:yes') throw new Error(`${w}: leave:yes is the player's, never a demo's`);
+        if (!HUD_CONTROLS.includes(e.hud)) throw new Error(`${w}: ${JSON.stringify(e.hud)} is no control a demo presses`);
+        if (e.hud !== 'track' ? !keys(e, ['hud']) : !keys(e, ['hud', 'to', 'drag', 'over'])) throw new Error(`${w}: the press carries a key it does not know`);
+        if (e.hud !== 'track') continue;
+        if (!tick(e, 'to')) throw new Error(`${w}: the track's to is not an integer 0..${end}`);
+        if (('drag' in e) !== ('over' in e)) throw new Error(`${w}: drag and over come together`);
+        if ('drag' in e && !tick(e, 'drag')) throw new Error(`${w}: the drag is not an integer 0..${end}`);
+        if ('over' in e && !(int(e.over) && e.over >= 1 && e.over <= UNTIL_MAX)) throw new Error(`${w}: over is not an integer 1..${UNTIL_MAX}`);
+      } else if ('until' in e) {
+        if (e.until !== 'seeked') throw new Error(`${w}: the viewer's wait is "seeked"`);
+        if (!(int(e.max) && e.max >= 1 && e.max <= UNTIL_MAX)) throw new Error(`${w} has no max of 1 to ${UNTIL_MAX} ticks`);
+        if (!keys(e, ['until', 'max'])) throw new Error(`${w}: the wait carries another input`);
+        if (list.some(f => f !== e && obj(f) && f.at === e.at)) throw new Error(`${w}: the wait shares its tick with another input`);
+      } else if (!('caption' in e) || !keys(e, ['caption'])) throw new Error(`${w} is no caption, wait or HUD press`);
+    }
+    let release = -Infinity;
+    for (const e of list.map((e, i) => [e, i]).sort((a, b) => a[0].at - b[0].at || a[1] - b[1]).map(p => p[0])) {
+      if (!('hud' in e) && !('until' in e)) continue;
+      if (e.at <= release) throw new Error(`${at}: the ${'hud' in e ? 'press' : 'wait'} at tick ${e.at} stands in another press's trip`);
+      if ('hud' in e) release = e.at + ('drag' in e ? HUD_DOWN + e.over : HUD_UP);
+    }
   }
   /* a game entry's demo as the game simulation plays it: its game script, the `seat` taken off each input (every one
      is seat 0's), and the game's end and sidebar */
@@ -2940,6 +2986,11 @@ const WikiSim = (() => {
     sim.game = GAME;
     // frees what the sim holds outside itself: its scripts' world in the COB host
     sim.free = () => { if (COB) COB.free(); };
+    /* a game's state between ticks, for the replay layer (replay.js) without a whole view: whether it stopped (a lock,
+       a pass that starved, a kill that found no unit), the sound events made since it was made, and each seat's
+       commanders lost and whether it is out */
+    if (GAME) sim.gameNow = () => ({ stopped: sb.locked !== null || starved || badKill, sound: sndTotal,
+      seats: econ.map(z => ({ lost: z.lost, out: z.out })) });
 
     if (ON) route();
     if (lock0) lock(lock0.type);
@@ -2979,6 +3030,8 @@ const WikiSim = (() => {
     UNTILS,
     // a game's bounds (tagpu_wikidata.h WIKI_SEATS, WIKI_GAME_KILLS, WIKI_GAME_END_MAX) and its death sound's kind
     SEATS, GAME_KILLS, GAME_END_MAX, SND_DEATH,
+    // the viewer's script's controls (tagpu_wikidata.h WIKI_HUD_*, in its order) and a press's trip, for replay.js
+    HUD_CONTROLS, HUD_DOWN, HUD_UP,
     // the shapes alone, for checks against tagpu_placegeo.c
     shapes: { placeShape, placeRing },
   };

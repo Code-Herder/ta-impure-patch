@@ -7,7 +7,8 @@
      --shard K/N (K from 1) plays only every Nth of the demos' contexts, from the Kth, and shard 1 alone the rule, refusal, data and malformed
      cases: N processes, each building its own C side, check together what one does alone
    usage: node tools/wiki/simparity.mjs --hash [--layout FILE|null] [--pack DIR] [--side N] [--iface 0|1] [--scripts]
-     prints `<entry>/<demo> <hash>` for every demo: sim.js's state hash on its last tick, 16 hex digits, the number
+     prints `<entry>/<demo> <hash>` for every demo the tree names: sim.js's state hash on its last tick, 16 hex digits
+     (a game entry's demo: replay.js's replay played to its end, and the replay's hash, tagpu_wikireplay_hash's), the number
      the DLL's tagpu_wikisim_hash must give for the same demo played to its end with the same sidebar layout (by
      default art/wiki/side/fixture.json; `null` for none) in the same context: side N (0 by default), Interface Type
      0 or 1 (1 by default), and with --pack the casting of side N in DIR's side.json, whose layout is then the
@@ -28,19 +29,23 @@
    archive), each in simcheck.mjs's contexts: the entry's own types and each casting of tools/wiki/casting-fixture.json
    (identity, shifted, unbound), each at Interface Type 1 and 0; a demo one side refuses in a context the other must
    refuse too. In each context it then plays every game entry under art/wiki/entries/ (frame "game", named by the tree
-   or not) the same way, each demo's game script through WikiSim.game and wikitest `game` with the fixture casting's
-   rival beside it (casting-fixture.json `rivals`), and the stall case: every seat cut to 200, in stall mode tick for
-   tick and in refuse mode, where it must end starved. It then plays simcheck.mjs's rule cases -- the rules no demo shows -- through both: each case is run
+   or not) the same way, each distinct game script (demos sharing one play the same game) through WikiSim.game and
+   wikitest `game` with the fixture casting's rival beside it (casting-fixture.json `rivals`), and the stall case:
+   every seat cut to 200, in stall mode tick for tick and in refuse mode, where it must end starved; then every demo of
+   it as a replay, through replay.js and wikitest `replay`, demo tick by demo tick -- the replay's view and hash
+   (replayHash, tagpu_wikireplay_hash's twin), the game's view, orders and hash -- and Try it yourself's press trace
+   (TRACE) through replay.js's create and wikitest `replaytrace`. It then plays simcheck.mjs's rule cases -- the rules no demo shows -- through both: each case is run
    against sim.js with every call recorded, `create` and `play` with the layout and the context each was given, the
    recording is
    replayed through the C sim, and every answer the case read (each view, with the state hash after it, orders, done)
    is compared. For each demo and case it names the first differing tick or call and field. It compares the build
-   trip's constants. Then the refusal cases: data, castings, contexts and layouts each side must refuse or accept
+   trip's and the replay layer's constants. Then the refusal cases: data, castings, contexts and layouts each side must refuse or accept
    alike -- the demo's `sidebar`, the build trip's data rule, the text's tokens, the actions' data rule at each
    interface type, a unit's G cells, every bound of the casting and of the layout on both sides of it, the binding of
    an entry to a casting, a scene its bound footprints do not fit, the context's interface type and side, and every
-   data rule of a game entry (its frame, seats, rival and corpse units, its demos' games and their kills) -- each made
-   into a sim by text.js's checkEntry and sim.js and by the C readers and init. Then the data read back: every casting of
+   data rule of a game entry (its frame, seats, rival and corpse units, its demos' games and their kills, and their
+   viewer's scripts, made into replays) -- each made into a sim by text.js's checkEntry and sim.js and by the C readers
+   and init. Then the data read back: every casting of
    tools/wiki/casting-fixture.json and of every pack present under tools/wiki/mockup/gfx/side/ (gitignored, built
    by tools/wiki/sidepacks.py), and every layout of art/wiki/side/ and of those packs, read by tagpu_wikidata.c and
    compared field by field with what sim.js's checkCasting and checkLayout accept, a refused casting by its message.
@@ -63,6 +68,7 @@ import { cobHost, scripts, sounds, soundSource } from './cobhost.mjs';
 
 const require = createRequire(import.meta.url);
 const WikiSim = require('./mockup/sim.js');
+const WikiReplay = require('./mockup/replay.js');
 const WikiText = require('./mockup/text.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const DDRAW = path.join(ROOT, 'tagpu/ddraw');
@@ -75,10 +81,45 @@ if (!(SHARDS >= 1 && SHARD >= 1 && SHARD <= SHARDS)) {
   console.error(`simparity: --shard ${SHARD_ARG} is not K/N with 1 <= K <= N`);
   process.exit(2);
 }
-const SRCS = ['src/tagpu_wikidata.c', 'src/tagpu_json.c', 'src/tagpu_pak.c', 'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c',
+const SRCS = ['src/tagpu_wikidata.c', 'src/tagpu_wikireplay.c', 'src/tagpu_json.c', 'src/tagpu_pak.c', 'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c',
   'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c'];
 
 /* ---- the state hash: 64-bit FNV-1a, its halves in two uint32s so that no BigInt is needed ---- */
+function fnv() {
+  let hi = 0xcbf29ce4, lo = 0x84222325;
+  // h = (h ^ b) * (2^40 + 0x1b3) mod 2^64
+  const byte = b => {
+    lo = (lo ^ b) >>> 0;
+    const t0 = (lo & 0xffff) * 0x1b3, t1 = (lo >>> 16) * 0x1b3 + (t0 >>> 16);
+    hi = (Math.imul(hi, 0x1b3) + (t1 >>> 16) + (lo << 8)) >>> 0;
+    lo = (((t1 & 0xffff) << 16) | (t0 & 0xffff)) >>> 0;
+  };
+  const int = n => { for (let k = 0; k < 4; k++) byte((n >>> (8 * k)) & 255); };
+  const str = s => { const b = utf8.encode(s || ''); int(b.length); for (const c of b) byte(c); };
+  return { byte, int, str, hex: () => hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0') };
+}
+/* THE REPLAY'S HASH, tagpu_wikireplay_hash's twin over replay.js's view, in tagpu_wikireplay.h's order; the game's
+   state hash last, as its low and its high 32 bits */
+function replayHash(R) {
+  const v = R.view(), g = v.game, h = fnv(), ctl = c => WikiReplay.CONTROLS.indexOf(c);
+  const b = x => h.int(x ? 1 : 0);
+  h.int(v.tick); b(v.done); h.int(v.clock); h.int(v.waiting ? 4 : 0); b(v.stalled); h.str(v.caption); b(v.failed); h.int(v.ignored);
+  h.int(g.tick); h.int(g.end); b(g.paused); h.int(g.speed); h.int(g.acc); h.int(g.target); h.int(g.gen); h.int(g.quiet);
+  b(v.cursor);
+  if (v.cursor) {
+    const c = v.cursor;
+    h.int(c.from === null ? -1 : ctl(c.from)); h.int(c.fromValue); h.int(ctl(c.to)); h.int(c.value); h.int(c.at);
+    b(c.drag);
+    if (c.drag) { h.int(c.drag.drag); h.int(c.drag.over); }
+  }
+  h.int(v.books.length); for (const t of v.books) h.int(t);
+  h.int(v.toast ? WikiReplay.TOASTS.indexOf(v.toast.kind) : -1); h.int(v.toast ? v.toast.at : 0); h.int(v.toast ? v.toast.value : 0);
+  b(v.question); b(v.question && v.question.wasPaused);
+  h.int(v.walked); h.int(v.marks.length); for (const m of v.marks) for (const x of m) h.int(x);
+  const gh = R.game ? stateHash(R.game, R.game.view()) : '0000000000000000';
+  h.int(parseInt(gh.slice(8), 16)); h.int(parseInt(gh.slice(0, 8), 16));
+  return h.hex();
+}
 const KEYS = ['shift', 'alt', 'ctrl', 'z', 'x', 'e', 'lmb', 'rmb'];          // WIKI_KEY_* order
 const ORDER = { move: 0, build: 1, reclaim: 2, guard: 3 };                   // WIKI_ORDER_*
 const SHAPE = { line: 1, axis: 2, rect: 3, hollow: 4, ring: 5 };             // PLACE_*, PLACE_NONE 0
@@ -200,7 +241,8 @@ function run(cmd, args, opts = {}) {
 function build(tmp) {
   if (WINE) {
     // the simulation and the loader, which normalises the scenes' facings, on SSE2 as the Makefile compiles them
-    const exe = path.join(tmp, 'wikitest.exe'), sse = ['src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_wikicob.c', 'src/tagpu_sweepgeo.c'];
+    const exe = path.join(tmp, 'wikitest.exe'), sse = ['src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_wikicob.c', 'src/tagpu_sweepgeo.c',
+      'src/tagpu_wikireplay.c'];
     const cc = 'i686-w64-mingw32-gcc', flags = ['-Iinc', '-Isrc', '-O2', '-Wall', '-std=c99'];
     const objs = sse.map(src => path.join(tmp, path.basename(src, '.c') + '.o'));
     sse.forEach((src, i) => run(cc, [...flags, '-msse2', '-mfpmath=sse', '-mincoming-stack-boundary=2', '-c', '-o', objs[i], src], { cwd: DDRAW }));
@@ -246,12 +288,23 @@ if (process.argv.includes('--hash')) {
   const stages = dir && fs.existsSync(path.join(dir, 'stage')) ? fs.readdirSync(path.join(dir, 'stage')).sort().map(d => path.join(dir, 'stage', d)) : [];
   const cob = process.argv.includes('--scripts') ? HOST().forPacks([...stages, ...PACKS]) : null;
   const snd = cob ? soundSource([...stages, ...PACKS]) : null;
-  const ctx = { side, casting: pack ? pack.casting[side] ?? null : null, iface, cob, snd };
+  // the opponent's casting: the first layout side other than the player's, as the DLL's context gives it
+  const rival = pack ? pack.casting[pack.layout.sides.findIndex((x, j) => j !== side)] ?? null : null;
+  const ctx = { side, casting: pack ? pack.casting[side] ?? null : null, iface, cob, snd, rival };
   const tree = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/tree.json'), 'utf8'));
   const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
   for (const id of new Set(tree.tree.flatMap(leaves))) {
     const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
     for (const demo of entry.demos) {
+      // a game entry's demo plays through the replay layer, its viewer's script to its end, and prints the replay's hash
+      if (entry.frame === 'game') {
+        let R;
+        try { R = WikiReplay.play(entry, demo, layout, ctx); } catch (e) { console.log(`${id}/${demo.id} refused ${e.message}`); continue; }
+        while (!R.view().done) R.step();
+        console.log(`${id}/${demo.id} ${replayHash(R)}`);
+        R.free();
+        continue;
+      }
       let sim;
       try { sim = WikiSim.play(entry, demo, layout, ctx); } catch (e) { console.log(`${id}/${demo.id} refused ${e.message}`); continue; }
       while (!sim.done) sim.step();
@@ -296,6 +349,16 @@ const GAMES = fs.readdirSync(path.join(ROOT, 'art/wiki/entries')).filter(f => f.
   .map(f => [f.slice(0, -5), JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries', f), 'utf8'))])
   .filter(([, e]) => e.frame === 'game');
 const WIKI_SEAT_MIN = 200;
+/* THE PRESS TRACE, Try it yourself's presses as [demo tick, control, value], each made after that tick's frame: one
+   during the walk (nothing), the pause and the play, every speed, rew and fwd, a track press and its drag back and
+   forth (a backward seek makes the game again), the bookmarks added and removed, Leave's question with the presses it
+   ignores, leave:no twice (the second ignored), a track before the start and past the end (clamped), play at the end
+   (back to the start), a name that is no control and leave:yes (nothing yet), and rew near the start (clamped) */
+const TRACE = { end: 150, presses: [[3, 'play', 0], [20, 'play', 0], [30, 'play', 0], [40, 'speed', 0], [41, 'speed', 0],
+  [42, 'speed', 0], [43, 'speed', 0], [44, 'speed', 0], [50, 'fwd', 0], [60, 'rew', 0], [70, 'track', 900], [71, 'track', 950],
+  [72, 'track', 880], [73, 'track', 880], [80, 'bookmark', 0], [85, 'bookmark', 0], [86, 'bookmark', 0], [90, 'leave', 0],
+  [91, 'play', 0], [92, 'speed', 0], [93, 'leave', 0], [94, 'leave:no', 0], [95, 'leave:no', 0], [100, 'track', -50],
+  [101, 'track', 99999], [112, 'play', 0], [115, 'bogus', 0], [116, 'leave:yes', 0], [120, 'rew', 0], [130, 'bookmark', 0]] };
 function refusalCases(entry) {
   const clone = v => JSON.parse(JSON.stringify(v));
   const T = WikiSim.TRIP, base = { id: 'm', scene: { selected: ['ck'] }, inputs: [{ at: 5, build: 'ARMMEX' }], end: 5 + T };
@@ -734,6 +797,55 @@ function gameRefusalCases(game, page) {
   // a kill inside a build trip, which the trip's rule refuses as another input
   g('a kill inside a trip', 'refused', (e, d, sc, G) => { G.sidebar = true; G.inputs = [{ at: 10, build: 'ARMSOLAR' }, { at: 20, kill: 'c1' }]; });
   g('a kill after a trip', 'accepted', (e, d, sc, G) => { G.sidebar = true; G.inputs = [{ at: 10, build: 'ARMSOLAR' }, { at: 10 + T, kill: 'c1' }]; });
+
+  /* THE VIEWER'S SCRIPT (sim.js checkViewer, the C loader's viewer_input and viewer_order), each case played as a
+     replay (tagpu_wikireplay_init, WikiReplay.play): the demo's inputs replaced by `inputs` */
+  const R = (name, want, inputs, edit = () => {}) => g(`viewer: ${name}`, want, (e, d, sc, G) => { d.inputs = inputs; edit(e, d, sc, G); });
+  const last = () => cases[cases.length - 1];
+  const replay = (...a) => { R(...a); last().replay = true; };
+  game.demos.forEach(d => g(`the authored demo ${d.id} as a replay`, 'accepted', e => { e.demos = [clone(d)]; }));
+  cases.slice(-game.demos.length).forEach(c => { c.replay = true; });
+  const UP = WikiReplay.HUD_UP, DOWN = WikiReplay.HUD_DOWN, end = game.demos[0].game.end;
+  replay('a caption, a wait and every control', 'accepted', [{ at: 0, caption: 'x' }, ...WikiReplay.CONTROLS.map((c, i) =>
+    ({ at: 10 + 40 * i, hud: c, ...(c === 'track' ? { to: 100 } : {}) })), { at: 400, until: 'seeked', max: 60 }]);
+  replay('no inputs', 'accepted', []);
+  replay('inputs not a list: read as none', 'accepted', { a: 1 });
+  replay('an unknown control', 'refused', [{ at: 10, hud: 'pause' }]);
+  replay('leave:yes', 'refused', [{ at: 10, hud: 'leave:yes' }]);
+  replay('a control that is no string', 'refused', [{ at: 10, hud: 3 }]);
+  replay('a press with no tick', 'refused', [{ hud: 'play' }]);
+  replay('a button with a to', 'refused', [{ at: 10, hud: 'play', to: 5 }]);
+  replay('a button with a seat', 'refused', [{ at: 10, hud: 'play', seat: 0 }]);
+  replay('a track without to', 'refused', [{ at: 10, hud: 'track' }]);
+  for (const [v, want] of [[0, 'accepted'], [end, 'accepted'], [-1, 'refused'], [end + 1, 'refused'], [1.5, 'refused'], ['5', 'refused']])
+    replay(`a track to ${JSON.stringify(v)}`, want, [{ at: 10, hud: 'track', to: v }]);
+  for (const [v, want] of [[0, 'accepted'], [end, 'accepted'], [-1, 'refused'], [end + 1, 'refused']])
+    replay(`a drag to ${v}`, want, [{ at: 10, hud: 'track', to: 100, drag: v, over: 10 }]);
+  for (const [v, want] of [[1, 'accepted'], [3600, 'accepted'], [0, 'refused'], [3601, 'refused'], [2.5, 'refused']])
+    replay(`a drag over ${v}`, want, [{ at: 10, hud: 'track', to: 100, drag: 200, over: v }]);
+  replay('a drag without over', 'refused', [{ at: 10, hud: 'track', to: 100, drag: 200 }]);
+  replay('an over without drag', 'refused', [{ at: 10, hud: 'track', to: 100, over: 10 }]);
+  replay('a press on the last one\'s release', 'refused', [{ at: 10, hud: 'play' }, { at: 10 + UP, hud: 'play' }]);
+  replay('a press after the last one\'s release', 'accepted', [{ at: 10, hud: 'play' }, { at: 11 + UP, hud: 'play' }]);
+  replay('a press on a drag\'s release', 'refused', [{ at: 10, hud: 'track', to: 100, drag: 200, over: 30 }, { at: 10 + DOWN + 30, hud: 'play' }]);
+  replay('a press after a drag\'s release', 'accepted', [{ at: 10, hud: 'track', to: 100, drag: 200, over: 30 }, { at: 11 + DOWN + 30, hud: 'play' }]);
+  replay('two presses on one tick', 'refused', [{ at: 10, hud: 'play' }, { at: 10, hud: 'speed' }]);
+  replay('a press inside a trip, listed first', 'refused', [{ at: 20, hud: 'speed' }, { at: 10, hud: 'play' }]);
+  replay('a caption inside a trip', 'accepted', [{ at: 10, hud: 'play' }, { at: 15, caption: 'x' }]);
+  replay('a wait inside a trip', 'refused', [{ at: 10, hud: 'play' }, { at: 20, until: 'seeked', max: 60 }]);
+  replay('a wait after a trip', 'accepted', [{ at: 10, hud: 'play' }, { at: 11 + UP, until: 'seeked', max: 60 }]);
+  replay('a wait sharing its tick with a caption', 'refused', [{ at: 10, until: 'seeked', max: 60 }, { at: 10, caption: 'x' }]);
+  replay('a wait until idle', 'refused', [{ at: 10, until: 'idle', max: 60 }]);
+  for (const [v, want] of [[1, 'accepted'], [3600, 'accepted'], [0, 'refused'], [3601, 'refused']])
+    replay(`a wait's max ${v}`, want, [{ at: 10, until: 'seeked', max: v }]);
+  replay('a wait with a caption', 'refused', [{ at: 10, until: 'seeked', max: 60, caption: 'x' }]);
+  replay('a caption with a move', 'refused', [{ at: 10, caption: 'x', move: [1, 1] }]);
+  replay('a caption null', 'accepted', [{ at: 10, caption: null }]);
+  replay('an input of at alone', 'refused', [{ at: 10 }]);
+  for (const k of [{ move: [10, 10] }, { down: 'lmb' }, { up: 'lmb' }, { build: 'ARMMEX' }, { reclaim: true }, { pick: 'all' }, { kill: 'c1' }, { seat: 0 }])
+    replay(`a game input, ${Object.keys(k)[0]}`, 'refused', [{ at: 10, ...k }]);
+  replay('a demo end that is no number', 'refused', [], (e, d) => { d.end = '300'; });
+  replay('a demo with no end', 'accepted', [], (e, d) => { delete d.end; });
   return cases;
 }
 
@@ -804,6 +916,7 @@ try {
     return [n, { ...(t ? { cob: t.cob, visible: t.visible, offset: t.offset, parent: t.parent, top: t.top } : {}),
                  ...(SOUNDS[n] ? { sound: SOUNDS[n] } : {}) }];
   }))));
+  fs.writeFileSync(path.join(tmp, 'trace.json'), JSON.stringify(TRACE));
   if (!COBS.includes(true)) console.log('note   no gfx pack under tools/wiki/mockup/gfx/ holds a script: the demos play without their units\' scripts only');
   let context = 0;
   for (const cob of COBS) for (const side of ['fixture', 'fixture-tall', null]) for (const cname of [null, ...Object.keys(CASTINGS)]) for (const iface of [1, 0]) {
@@ -866,7 +979,13 @@ try {
        STALL CASE, every seat's settings cut to SEAT_MIN so that the builds run dry: in stall mode tick for tick, and in
        refuse mode, which must end starved on the same pass in both ---- */
     const gctx = { ...ctx, rival: cname ? RIVALS[cname] : null };
-    for (const [id, entry] of GAMES) {
+    for (const [id, whole] of GAMES) {
+      /* each game once: demos that share their scene and their game script play the same game, tick for tick, in
+         both simulations, so the game pass plays the first of them (the replay pass below plays every demo) */
+      const games = new Set(), entry = { ...whole, demos: whole.demos.filter(d => {
+        const k = JSON.stringify([d.on ?? null, d.scene ?? null, d.game]);
+        return !games.has(k) && games.add(k);
+      }) };
       const cut = { ...entry, scenes: Object.fromEntries(Object.entries(entry.scenes).map(([n, sc]) =>
         [n, { ...sc, seats: sc.seats.map(z => ({ ...z, metal: WIKI_SEAT_MIN, energy: WIKI_SEAT_MIN })) }])) };
       for (const [e, mode, scripted, tag] of [[entry, 'refuse', 2, ''], [cut, 'stall', 3, ' stall'], [cut, 'refuse', 2, ' starved']]) {
@@ -885,6 +1004,65 @@ try {
         }
         if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}, game${tag}) the C sim played ${cout.length - at} frames more`); }
       }
+    }
+
+    /* ---- THE REPLAY PASS: every demo of every game entry through replay.js's play and wikitest `replay`, in this
+       context, demo tick by demo tick -- the replay's view and hash, the game's view, orders and hash; then THE PRESS
+       TRACE, Try it yourself (create) on the entry's first demo with TRACE's presses ---- */
+    // one replay against the C lines from `at` on, which it consumes; `presses` for Try it, else the viewer's script
+    const compareReplay = (id, demo, make, named, presses) => {
+      let R, why = null;
+      try { R = make(); } catch (e) { why = e.message; }
+      if (why !== null || (at < cout.length && 'refused' in JSON.parse(cout[at]))) {
+        const c = at < cout.length ? JSON.parse(cout[at]) : null;
+        if (c && c.entry === id && c.demo === demo.id) at++;
+        demos++;
+        if (c && 'refused' in c && why !== null) console.log(`equal  ${id}/${demo.id} (${named}): both refused (${why})`);
+        else {
+          failed++;
+          differ++;
+          console.log(`DIFFER ${id}/${demo.id} (${named}): C ${c && 'refused' in c ? `refused (${c.refused})` : 'played'}, replay.js ${why !== null ? `refused (${why})` : 'played'}`);
+          while (at < cout.length && JSON.parse(cout[at]).demo === demo.id && JSON.parse(cout[at]).entry === id) at++;
+        }
+        if (R) R.free();
+        return;
+      }
+      let first = null, ticks = 0;
+      for (;;) {
+        const rv = R.view(), last = rv.done || (presses && R.tick >= presses.end), g = R.game;
+        const v = g ? g.view() : null;
+        if (v && !(R.tick === 0 || last)) delete v.map;
+        const j = { entry: id, demo: demo.id, t: R.tick, h: replayHash(R), r: rv, gh: g ? stateHash(g, g.view()) : null, v,
+          o: g ? Object.fromEntries(v.units.map(u => [u.id, g.orders(u.id)])) : null };
+        if (at >= cout.length) { first = { t: R.tick, at: '(the C replay ended early)', c: null, j: null }; break; }
+        const d = diff(JSON.parse(cout[at++]), j, '');
+        if (d && !first) first = { t: R.tick, ...d };
+        ticks++;
+        if (last) break;
+        if (presses) for (const [t, c, x] of presses.presses) if (t === R.tick) R.press(c, x);
+        R.step();
+      }
+      R.free();
+      demos++;
+      if (first) {
+        failed++;
+        differ++;
+        console.log(`DIFFER ${id}/${demo.id} (${named}) at demo tick ${first.t}: ${first.at}: C ${show(first.c)}, replay.js ${show(first.j)}`);
+        while (at < cout.length && JSON.parse(cout[at]).demo === demo.id && JSON.parse(cout[at]).entry === id) at++;
+      } else console.log(`equal  ${id}/${demo.id} (${named}): ${ticks} demo ticks`);
+    };
+    for (const [id, entry] of GAMES) {
+      fs.writeFileSync(path.join(tmp, 'game.json'), JSON.stringify(entry));
+      const args = ['wiki.bin', 'game.json', side || '-', cname ? `casting-${cname}.json` : '-', cname ? `rival-${cname}.json` : '-',
+        String(iface), cob ? 'cob.json' : '-'];
+      cout = lines(wikitest(['replay', ...args]));
+      at = 0;
+      for (const demo of entry.demos) compareReplay(id, demo, () => WikiReplay.play(entry, demo, layout, gctx), `${named}, replay`, null);
+      if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}, replay) the C replay played ${cout.length - at} frames more`); }
+      cout = lines(wikitest(['replaytrace', ...args, 'trace.json']));
+      at = 0;
+      compareReplay(id, entry.demos[0], () => WikiReplay.create(entry, entry.demos[0], layout, gctx), `${named}, press trace`, TRACE);
+      if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}, press trace) the C replay played ${cout.length - at} frames more`); }
     }
   }
 
@@ -941,12 +1119,16 @@ try {
     /* ---- the build trip's constants ---- */
     {
       const c = JSON.parse(wikitest(['constants']));
+      const W = WikiReplay;
       const j = { TRIP: WikiSim.TRIP, TRIP_DOWN: WikiSim.TRIP_DOWN, TRIP_UP: WikiSim.TRIP_UP, PICK: WikiSim.PICK,
-        PICK_DOWN: WikiSim.PICK_DOWN, PICK_UP: WikiSim.PICK_UP, TRIP_ROWS: WikiSim.TRIP_ROWS };
+        PICK_DOWN: WikiSim.PICK_DOWN, PICK_UP: WikiSim.PICK_UP, TRIP_ROWS: WikiSim.TRIP_ROWS,
+        REPLAY: { CONTROLS: W.CONTROLS, SPEEDS: W.SPEEDS, SPEED0: W.SPEED0, SEEK: W.SEEK, WALK: W.WALK, STEP: W.STEP, NEAR: W.NEAR,
+          BOOKS: W.BOOKS, MARKS: W.MARKS, FILL: W.FILL, HUD_DOWN: W.HUD_DOWN, HUD_UP: W.HUD_UP, DEATH: W.DEATH, DEFEAT: W.DEFEAT,
+          GAME_END_MAX: W.GAME_END_MAX } };
       const d = diff(c, j, '');
       cases++;
-      if (d) { failed++; console.log(`DIFFER the build trip's constants: ${d.at}: C ${show(d.c)}, sim.js ${show(d.j)}`); }
-      else console.log(`equal  the build trip's constants: TRIP ${c.TRIP}, down ${c.TRIP_DOWN}, up ${c.TRIP_UP}, ${c.TRIP_ROWS.length} rows`);
+      if (d) { failed++; console.log(`DIFFER the build trip's and the replay's constants: ${d.at}: C ${show(d.c)}, sim.js ${show(d.j)}`); }
+      else console.log(`equal  the build trip's and the replay's constants: TRIP ${c.TRIP}, down ${c.TRIP_DOWN}, up ${c.TRIP_UP}, ${c.TRIP_ROWS.length} rows; seek ${c.REPLAY.SEEK}, walk ${c.REPLAY.WALK}, ${c.REPLAY.CONTROLS.length} controls`);
     }
 
     /* ---- refusals: both sides accept or refuse alike, as each case wants ---- */
@@ -955,7 +1137,7 @@ try {
       const all = [...refusalCases(entry), ...GAMES.flatMap(([, game]) => gameRefusalCases(game, entry))];
       fs.writeFileSync(path.join(tmp, 'refuse.jsonl'), all.map(c =>
         JSON.stringify({ name: c.name, scripted: c.scripted, layout: c.layout, side: c.side, iface: c.iface, casting: c.casting,
-                         rival: c.rival ?? null }) + '\n' +
+                         rival: c.rival ?? null, replay: !!c.replay }) + '\n' +
         JSON.stringify(c.entry) + '\n').join(''));
       const got = lines(wikitest(['refuse', 'refuse.jsonl']));
       all.forEach((c, i) => {
@@ -965,7 +1147,8 @@ try {
           const bad = WikiText.checkEntry(c.entry);
           if (bad) throw new Error(bad);
           const ctx = { side: c.side, casting: c.casting, iface: c.iface, rival: c.rival ?? null };
-          if (c.scripted >= 2) WikiSim.game(c.entry, c.entry.demos[0], c.layout, ctx, c.scripted === 3 ? 'stall' : 'refuse');
+          if (c.replay) WikiReplay.play(c.entry, c.entry.demos[0], c.layout, ctx).free();
+          else if (c.scripted >= 2) WikiSim.game(c.entry, c.entry.demos[0], c.layout, ctx, c.scripted === 3 ? 'stall' : 'refuse');
           else (c.scripted ? WikiSim.play : WikiSim.create)(c.entry, c.entry.demos[0], c.layout, ctx);
         } catch (e) { js = 'refused'; why = e.message; }
         const cv = (got[i] || '').startsWith('accepted ') ? 'accepted' : (got[i] || '').startsWith('refused ') ? 'refused' : '(no answer)';

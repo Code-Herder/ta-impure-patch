@@ -223,11 +223,15 @@ $(addprefix res, $(ALLEXTS)): inc/tagpu_wikipak.bin
 # (src/tagpu_sweepgeo.h), which the wiki's sim calls as the game's sweep does, sums its loads in
 # double, so it computes on SSE2 with them. The units' scripts' host
 # (src/tagpu_wikicob.h) answers GET's angles and distances in double, and the mockup asks the same C
-# built natively (tools/wiki/serve.py), so it computes on SSE2 too. The game's threads align the
+# built natively (tools/wiki/serve.py), so it computes on SSE2 too. The replay layer
+# (src/tagpu_wikireplay.h) computes on integers, its one double the demo's end the clock is compared
+# with, exactly; it is the simulation's caller in the replay demos and builds with it. The game's
+# threads align the
 # stack to 4 bytes only, so they realign where SSE needs more. tools/wiki/simparity.mjs --wine
 # checks the build under Wine.
 $(addprefix src/tagpu_wikisim, $(ALLEXTS)) $(addprefix src/tagpu_wikidata, $(ALLEXTS)) \
-$(addprefix src/tagpu_wikicob, $(ALLEXTS)) $(addprefix src/tagpu_sweepgeo, $(ALLEXTS)): \
+$(addprefix src/tagpu_wikicob, $(ALLEXTS)) $(addprefix src/tagpu_sweepgeo, $(ALLEXTS)) \
+$(addprefix src/tagpu_wikireplay, $(ALLEXTS)): \
     CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
 
 # THE WIKI'S STAGE (src/tagpu_wikistage.h) computes its pixels in double by the mockup's stage.js
