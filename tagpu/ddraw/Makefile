@@ -246,6 +246,12 @@ $(addprefix src/tagpu_wikistage, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -min
 # tools/wiki/scenecheck.mjs checks a native build of it.
 $(addprefix src/tagpu_wikiscene, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
 
+# THE WIKI'S BARS (src/tagpu_wikibar.h) fill to a truncated double quotient and print the metal
+# rates by a rounding rule in double, as the mockup's bar.js does, so they compute on SSE2 too: an
+# 80-bit intermediate can carry a fill's end or a rounded tenth across a whole number.
+# tools/wiki/barcheck.mjs checks a native build of it.
+$(addprefix src/tagpu_wikibar, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
+
 # THE RESTORER'S MODELS (src/tagpu_restore_core.c load_weights): unditherer/models/<name>.w32.bin,
 # compressed by zstd into inc/tagpu_rmodel_<name>.zst, which res.rc embeds as RMODEL_<NAME>.
 # Generated and never committed, like the HUD archive. The frame records its content size, which
