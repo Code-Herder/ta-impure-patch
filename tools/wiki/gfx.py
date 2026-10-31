@@ -834,7 +834,8 @@ def sound_table(eng):
     return eng._sound
 
 
-WEAPON_SLOTS = 256
+# the shipped DLL's weapon array, tagpu/ddraw/inc/tagpu_limits.h TAGPU_LIM_WEAPONS with the raised limits
+WEAPON_SLOTS = 4096
 
 
 def weapon_table(eng):

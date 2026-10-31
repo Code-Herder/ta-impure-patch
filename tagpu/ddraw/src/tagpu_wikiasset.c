@@ -19,6 +19,7 @@
 #include "tagpu_vfs.h"
 #include "tagpu_wikiworld.h"
 #include "tagpu_wikiasset.h"
+#include "tagpu_limits.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -1731,10 +1732,12 @@ static TAGPU_GUIFILE* gamedata_tdf(LOADER* L, const char* name)
 /* THE WEAPON TABLE as the weapon load 0x42E310 fills it: every section of every weapons\*.tdf in
    the listing's order (0x42E371) goes to the slot its ID names (0x42E440, read at 0x42E463 as the
    engine reads a TDF number; absent -1), a later section of the same ID overwriting an earlier one;
-   an ID outside the slots fills none [INFERRED]. Each slot keeps the section's name (0x42E490) and
-   its soundhit. The folder is the literal the load lists: WIKI3DNAMES holds no copy of it. A file
-   the parser refuses holds no section. gfx.py `weapon_table` is the twin. */
-#define WEAPON_SLOTS 256
+   an ID outside the slots fills none [INFERRED]. The slots are the running build's weapon array,
+   TAGPU_LIM_WEAPONS (4096 with the raised limits, stock's 256 under LIMITS=stock), so a mod's
+   weapon of a raised ID is found as the game finds it. Each slot keeps the section's name
+   (0x42E490) and its soundhit. The folder is the literal the load lists: WIKI3DNAMES holds no copy
+   of it. A file the parser refuses holds no section. gfx.py `weapon_table` is the twin. */
+#define WEAPON_SLOTS TAGPU_LIM_WEAPONS
 typedef struct {
     int  used, has_hit;
     char name[WIKI3D_CLIPNAME];
