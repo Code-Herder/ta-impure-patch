@@ -1,5 +1,6 @@
 /* tagpu_wikistate.c -- the in-game wiki's render-thread half. Contract: tagpu_wikistate.h. */
 #include <windows.h>
+#include <math.h>
 #include <string.h>
 #include "tagpu.h"
 #include "tagpu_wikistate.h"
@@ -14,6 +15,8 @@
 #include "tagpu_pal.h"
 #include "tagpu_wikiasset.h"
 #include "tagpu_wikiside.h"
+#include "tagpu_wikibar.h"
+#include "tagpu_wikiframe.h"
 
 static HUDOPS        s_ops;             /* the page's; 400 KB, never on a stack                  */
 static WIKISTAGEOPS  s_stage;           /* the stage's; 0.9 MB                                   */
@@ -45,6 +48,41 @@ static HUDRECT  s_stageRect;
 static int      s_split;                /* tagpu_wikistate_image ran for s_frame                */
 static HUDOP    s_over[WIKI_MAXOP];     /* the ops over the image, in their order; 0.8 MB       */
 static int      s_nover;
+
+/* ---- a frame:game stage: its record and its HUD --------------------------------------------------
+   THE STAGE HUD IS THIS THREAD'S OWN: its state and its ops are these statics, never the replay
+   HUD's (tagpu_hudstate.c's state, tagpu_vk_hud.c's ops), which are in use when the wiki is open
+   over a replay; the game thread never reads them, and their hits enter the wiki's map only, never
+   tagpu_hudstate_drawn's, so the stage can never drive the real replay. */
+#define WIKISTATE_TOPMAX 64             /* the frame's TOP range: Leave's question and the viewer's
+                                           cursor, about a dozen ops (tagpu_wikistage.c frame_top) */
+static WIKIFRAMEREC s_rec;              /* the record's frame, copied and bounded as data        */
+static int          s_frameOn;          /* this frame's stage is a game frame with its record     */
+static HUDSTATE     s_hst;              /* 35 KB                                                  */
+static HUDOPS       s_hops;             /* 0.5 MB                                                 */
+static int          s_hudOn;            /* s_hops holds this frame's stage HUD                    */
+static float        s_hpx;              /* its unit: the frame's height / 720 device pixels       */
+static int          s_hox, s_hoy;       /* the frame's corner on the attachment                   */
+static int          s_cv[4];            /* the stage's canvas on the attachment: x0 y0 x1 y1      */
+static WIKIFRAMEDLG s_dlg;              /* Leave's question, canvas device pixels                 */
+static int          s_dlgX, s_dlgY;     /* the canvas's corner on the attachment                  */
+static HUDOP        s_top[WIKISTATE_TOPMAX];
+static int          s_ntop, s_saidTop;
+/* THE FRAME'S BARS (tagpu_wikibar.h): composed when what they are composed of changes -- the
+   published sidebar art, which is immutable, and the side, the colour and the frame's size -- and
+   only then, which is exact, since the composer is pure and its numbers are fixed: the viewed
+   record is the viewer's, whose every number is 0 (presentation spec 3.5). A new composition moves
+   the generation, which tagpu_vk_hud.c sends whole. This thread's alone. */
+static uint8_t          s_barIdx[WIKIBAR_W * WIKIBAR_H];          /* 128 KB               */
+static unsigned char    s_barRgba[WIKIBAR_W * WIKIBAR_H * 4];     /* 512 KB               */
+static unsigned         s_barGen;       /* bumped at every new composition; 0: none yet       */
+static int              s_barW;         /* its width, -1 when the key composes nothing        */
+static const WIKISIDE*  s_barOf;
+static int              s_barSide = -2, s_barColour = -1, s_barWg, s_barHg;
+/* what the stage HUD costs this thread, told when the window closes */
+static LARGE_INTEGER    s_qpf;
+static double           s_costHud, s_costBar;
+static unsigned         s_costFrames;
 
 /* ---- what the page and the stage need of the loaded art: set once, from the published art,
    which is immutable (tagpu_hudart.h) ---- */
@@ -279,6 +317,155 @@ const unsigned char* tagpu_wikistate_side(unsigned* gen)
     return s_colRgba;
 }
 
+const unsigned char* tagpu_wikistate_bar(unsigned* gen)
+{
+    *gen = s_barGen;
+    return s_barRgba;
+}
+
+/* the bars for the bounded record on `side`'s art in a frame Wg x Hg: their width, 0 for the
+   whitebox strips */
+static int bar_bind(const WIKISIDE* side, int Wg, int Hg)
+{
+    static const WIKIBARNUM ZERO;
+    if (!side) return 0;
+    if (side != s_barOf || s_rec.side != s_barSide || s_rec.colour != s_barColour || Wg != s_barWg || Hg != s_barHg) {
+        s_barOf = side;
+        s_barSide = s_rec.side;
+        s_barColour = s_rec.colour;
+        s_barWg = Wg;
+        s_barHg = Hg;
+        s_barW = s_rec.side < 0 ? -1 : tagpu_wikibar_compose(side, s_rec.side, s_rec.colour, Wg, Hg, &ZERO, s_barIdx);
+        if (s_barW > 0) {
+            tagpu_wikibar_rgba(side, s_barIdx, s_barW, s_barRgba);
+            if (++s_barGen == 0) s_barGen = 1;
+        }
+    }
+    return s_barW > 0 && s_barGen ? s_barW : 0;
+}
+
+static double elapsed_ms(const LARGE_INTEGER* t0)
+{
+    LARGE_INTEGER t1;
+    QueryPerformanceCounter(&t1);
+    return s_qpf.QuadPart > 0 ? (double)(t1.QuadPart - t0->QuadPart) * 1000.0 / (double)s_qpf.QuadPart : 0;
+}
+
+/* THE STAGE HUD of a frame view `v` on the canvas of this frame's stage at `u`, from the bounded
+   record (presentation spec 5.4): the fit, the frame's size and its HUD unit, the HUD's corner --
+   the screen's corner, the canvas's and the frame's snapped one, all whole device pixels, so the
+   HUD's own snap rules give the pixels the replay HUD gives on a screen of the frame's size --
+   build 1 for the boxes, the viewer's point on them, build 2 with the point (a demo) or the
+   player's pointer (Try it) for the hint, which is drawn last and moves no box
+   (tagpu_hudlay.c hint), and the bars. Fills `sf` for the stage's build. With no HUD art yet the
+   stage draws no HUD and takes no hit on it this frame. */
+static void frame_hud(const WIKISTAGEVIEW* v, const WIKISIDE* side, float u, const TAGPU_PK_WIKI* w, WIKISTAGEFRAME* sf)
+{
+    const HUDART* hart = tagpu_hudart_get();
+    const WIKIART* art = s_art;
+    WIKISTAGEFIT fit;
+    LARGE_INTEGER t0;
+    char err[160];
+    double X0, Y0, cw, ch, fx, fy, x, y;
+    int Wg, Hg;
+    QueryPerformanceCounter(&t0);
+    tagpu_wikistage_canvas(s_fr.stage, u, &X0, &Y0, &cw, &ch);
+    tagpu_wikistage_fit(v->w, v->h, v->has_side ? v->side.h : 0, 1, cw, ch, u, &fit);
+    tagpu_wikiframe_size(v->w, v->h, v->has_side ? v->side.h : 0, &Wg, &Hg);
+    tagpu_wikiframe_dialog(&fit, Wg, Hg, &s_dlg);
+    fx = tagpu_hud_snap((float)(fit.ox + fit.x0 * fit.s));
+    fy = tagpu_hud_snap((float)(fit.oz + fit.z0 * fit.s));
+    s_hpx = (float)(Hg * fit.s / WIKIFRAME_HUD_H);
+    s_dlgX = s_ox + (int)floor(X0 + 0.5);
+    s_dlgY = s_oy + (int)floor(Y0 + 0.5);
+    s_hox = s_dlgX + (int)fx;
+    s_hoy = s_dlgY + (int)fy;
+    s_cv[0] = s_dlgX;
+    s_cv[1] = s_dlgY;
+    s_cv[2] = s_dlgX + (int)floor(cw + 0.5);
+    s_cv[3] = s_dlgY + (int)floor(ch + 0.5);
+    memset(sf, 0, sizeof *sf);
+    sf->cursor_x = sf->cursor_y = NAN;
+    sf->question = s_rec.question;
+    sf->held = (uint8_t)(w->leave_held <= 2 ? w->leave_held : 0);
+    if (art && art->lay) {
+        double side_, top, right, config;
+        tagpu_wikilay_button(art->lay, &side_, &top, &right, &config);
+        sf->btn_side = (int16_t)side_;
+        sf->btn_top = (int16_t)top;
+        sf->btn_right = (int16_t)right;
+        sf->btn_config = (int16_t)config;
+    }
+    if (hart && s_hpx > 0) {
+        tagpu_wikiframe_hudstate(&s_rec, Wg, Hg, s_hpx, side, &s_hst);
+        s_hst.mx = s_hst.my = -1;
+        if (tagpu_hudlay_build(hart->lay, &s_hst, &s_hops, err, sizeof err)) {
+            s_hudOn = 1;
+            if (s_rec.cur.on) {
+                /* the rest point is the map's centre; No is the question's, NaN while it is not drawn */
+                const double rx = (fit.ox + v->w * WIKI_CELL / 2.0 * fit.s - fx) / s_hpx;
+                const double ry = (fit.oz + v->h * WIKI_CELL / 2.0 * fit.s - fy) / s_hpx;
+                const double nx = s_rec.question ? (s_dlg.no.x + s_dlg.no.w / 2.0 - fx) / s_hpx : NAN;
+                const double ny = s_rec.question ? (s_dlg.no.y + s_dlg.no.h / 2.0 - fy) / s_hpx : NAN;
+                tagpu_wikiframe_point(&s_rec, &s_hops, s_hpx, tagpu_hudlay_globals(hart->lay)->track_ends, rx, ry, nx, ny,
+                                      &x, &y);
+                s_hst.mx = (float)x;
+                s_hst.my = (float)y;
+                sf->cursor_x = fx + x * s_hpx;
+                sf->cursor_y = fy + y * s_hpx;
+            } else if (w->try_it && w->ptr_x >= s_cv[0] && w->ptr_x < s_cv[2] && w->ptr_y >= s_cv[1] && w->ptr_y < s_cv[3]) {
+                s_hst.mx = (float)((w->ptr_x - s_hox) / (double)s_hpx);
+                s_hst.my = (float)((w->ptr_y - s_hoy) / (double)s_hpx);
+            }
+            if (s_hst.mx >= 0 && !tagpu_hudlay_build(hart->lay, &s_hst, &s_hops, err, sizeof err)) s_hudOn = 0;
+        }
+        if (!s_hudOn) {
+            InterlockedExchange(&s_refused, 1);
+            tagpu_logf("wiki: the stage HUD's layout refused (%s) - the wiki is not drawn this session", err);
+        }
+    }
+    {
+        const double hud = elapsed_ms(&t0);
+        QueryPerformanceCounter(&t0);
+        sf->bar_w = (int16_t)bar_bind(side, Wg, Hg);
+        s_costBar = fmax(s_costBar, elapsed_ms(&t0));
+        s_costHud = fmax(s_costHud, hud);
+        s_costFrames++;
+    }
+}
+
+/* THE TOP RANGE OUT OF THE STAGE'S OPS, in place and in order (as tagpu_wikistate_image splits):
+   Leave's question and the viewer's cursor, drawn after the stage HUD whatever the image. An op
+   past WIKISTATE_TOPMAX is dropped, said once. */
+static void top_split(void)
+{
+    int i, n = s_stage.n < WIKI_MAXOP ? s_stage.n : WIKI_MAXOP, keep = 0, cut = 0;
+    s_ntop = 0;
+    for (i = 0; i < n; i++) {
+        if (s_stage.range[i] != WIKISTAGE_IN_TOP) {
+            if (i == s_curAt && s_curList == 1) s_curAt = keep;
+            s_stage.range[keep] = s_stage.range[i];
+            s_stage.rtype[keep] = s_stage.rtype[i];
+            s_stage.op[keep++] = s_stage.op[i];
+        } else if (s_ntop < WIKISTATE_TOPMAX) {
+            if (i == s_curAt && s_curList == 1) {
+                s_curList = 3;
+                s_curAt = s_ntop;
+            }
+            s_top[s_ntop++] = s_stage.op[i];
+        } else {
+            if (i == s_curAt && s_curList == 1) s_curList = 0;
+            cut++;
+        }
+    }
+    s_stage.n = keep;
+    if (cut && !s_saidTop) {
+        s_saidTop = 1;
+        tagpu_logf("wiki: %d ops of the frame's question and cursor past %d were dropped (said once)", cut,
+                   WIKISTATE_TOPMAX);
+    }
+}
+
 /* THE RECORD'S STAGE IS DATA until bounded: every count held to its array, every string ended
    inside its own, so the build cannot read past the copy whatever the record held */
 static void view_bound(WIKISTAGEVIEW* v)
@@ -363,6 +550,9 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
     const struct TAGPU_PACKET* pk = f->packet;
     const TAGPU_PK_WIKI* w;
     const WIKISTAGEVIEW* sv;
+    const WIKIFRAMEREC* rec;
+    const WIKISIDE* side = NULL;
+    WIKISTAGEFRAME sf;
     const WIKIART* art;
     const HUDSTATE* hs;
     char err[160], msg[sizeof w->msg];
@@ -370,6 +560,8 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
     int vw = f->vp_w, vh = f->vp_h, pw = 128, bh = 32, q8 = 256, hox, hoy;
 
     s_have = s_haveStage = s_viewOk = s_viewSide = s_split = s_nover = s_curList = 0;
+    s_frameOn = s_hudOn = s_ntop = 0;
+    if (!s_qpf.QuadPart) QueryPerformanceFrequency(&s_qpf);
     if (s_refused || !pk || !pk->in_game || !(w = tagpu_pk_wiki(pk))) return;
     /* THE ART LOADS ON ITS OWN THREAD (tagpu_hudart.c), started by whichever half asks first; the
        wiki draws from the first frame after it is published */
@@ -418,6 +610,13 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
     s_demo = w->demo;
     s_shot = w->shot;
     s_open = w->open;
+    /* the stage HUD's cost, told when the window closes (lane watch reads it) */
+    if (!w->open && s_costFrames) {
+        tagpu_logf("wiki: the stage HUD cost the render thread at most %.3f ms in one frame (its two builds), "
+                   "the bars at most %.3f ms, over %u frames", s_costHud, s_costBar, s_costFrames);
+        s_costHud = s_costBar = 0;
+        s_costFrames = 0;
+    }
     s_ptr = w->ptr_x >= 0 && w->ptr_y >= 0;
     /* EXACTLY ONE CURSOR IN TRY IT YOURSELF (wiki.js draw): the stage draws the simulation's
        cursor only while the record's pointer lies inside the stage's canvas as this frame places
@@ -439,18 +638,25 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
         memcpy(msg, w->msg, sizeof msg);
         msg[sizeof msg - 1] = 0;
         sprites_bind();
-        {
-            const WIKISIDE* side;
-            s_sart.side_layout = side_resolve(sv, art, &side);
-            side_bind(sv, art, side);
+        s_sart.side_layout = side_resolve(sv, art, &side);
+        side_bind(sv, art, side);
+        /* A GAME FRAME'S RECORD, carried exactly with the stage: copied, then bounded before any
+           read, against the published side's layout and badge frames, or the whitebox's */
+        if (sv && sv->frame && (rec = tagpu_pk_wiki_frame(pk)) != NULL && rec->on) {
+            memcpy(&s_rec, rec, sizeof s_rec);
+            tagpu_wikiframe_bound(&s_rec, side ? side->layout.nside : WIKI_SIDE_SIDES, side ? side->nlogo : WIKI_LOGOS);
+            s_frameOn = 1;
+            frame_hud(sv, side, u, w, &sf);
         }
-        tagpu_wikistage_build(sv, msg[0] ? msg : NULL, s_fr.stage, u, !w->try_it || s_tryPtr, NULL, &s_sart, &s_stage);
+        tagpu_wikistage_build(sv, msg[0] ? msg : NULL, s_fr.stage, u, !w->try_it || s_tryPtr, s_frameOn ? &sf : NULL,
+                              &s_sart, &s_stage);
         s_haveStage = 1;
         s_stageRect = s_fr.stage;
         if (s_stage.cursor >= 0 && s_stage.cursor < s_stage.n && s_stage.cursor < WIKI_MAXOP) {
             s_curList = 1;
             s_curAt = s_stage.cursor;
         }
+        top_split();
     }
     s_px = u;
     s_frame = f->frame_counter;
@@ -522,27 +728,36 @@ int tagpu_wikistate_refused(void)
     return InterlockedCompareExchange(&s_refused, 0, 0) != 0;
 }
 
-int tagpu_wikistate_frame(unsigned frame, HUDOPLIST* page, HUDOPLIST* stage, HUDOPLIST* over, float* px,
-                          int* ox, int* oy)
+int tagpu_wikistate_frame(unsigned frame, WIKILISTS* out)
 {
+    memset(out, 0, sizeof *out);
     if (!s_have || s_frame != frame) return 0;
-    *page = tagpu_huddraw_list(&s_ops);
-    memset(stage, 0, sizeof *stage);
-    memset(over, 0, sizeof *over);
-    stage->watch = over->watch = -1;
+    out->page = tagpu_huddraw_list(&s_ops);
+    out->stage.watch = out->over.watch = out->top.watch = -1;
     if (s_haveStage) {
-        *stage = stage_list();
-        stage->watch = s_curList == 1 ? s_curAt : -1;
+        out->stage = stage_list();
+        out->stage.watch = s_curList == 1 ? s_curAt : -1;
         if (s_nover) {
-            *over = *stage;
-            over->op = s_over;
-            over->n = s_nover;
-            over->watch = s_curList == 2 ? s_curAt : -1;
+            out->over = out->stage;
+            out->over.op = s_over;
+            out->over.n = s_nover;
+            out->over.watch = s_curList == 2 ? s_curAt : -1;
+        }
+        if (s_ntop) {
+            out->top = out->stage;
+            out->top.op = s_top;
+            out->top.n = s_ntop;
+            out->top.watch = s_curList == 3 ? s_curAt : -1;
         }
     }
-    *px = s_px;
-    *ox = s_ox;
-    *oy = s_oy;
+    out->hud = s_hudOn ? &s_hops : NULL;
+    out->px = s_px;
+    out->ox = s_ox;
+    out->oy = s_oy;
+    out->hpx = s_hpx;
+    out->hox = s_hox;
+    out->hoy = s_hoy;
+    out->open = s_open;
     return 1;
 }
 
@@ -553,28 +768,74 @@ static int16_t dev(int o, double snapped)
     return (int16_t)(r < -32768.0 ? -32768 : r > 32767.0 ? 32767 : r);
 }
 
+/* the hit map's room: every page control, every stage HUD control and the question's four */
+_Static_assert(WIKI_MAXHOT == 160 && HUD_MAXHOT == 128, "TAGPU_CMD_WIKIHITS counts the page's and the HUD's controls");
+_Static_assert(TAGPU_CMD_WIKIHITS == WIKI_MAXHOT + HUD_MAXHOT + 4, "the hit map holds every control drawn");
+
+/* one hit, in device pixels on the attachment; 0 when the map is full */
+static int hit_add(int16_t x0, int16_t y0, int16_t x1, int16_t y1, const char* key, int src, int* cut)
+{
+    TAGPU_CMD_WIKIHIT* t;
+    if (s_map.n >= TAGPU_CMD_WIKIHITS) { (*cut)++; return 0; }
+    t = &s_map.hit[s_map.n++];
+    t->x0 = x0; t->y0 = y0; t->x1 = x1; t->y1 = y1;
+    t->src = (uint8_t)src;
+    lstrcpynA(t->key, key, sizeof t->key);
+    return 1;
+}
+
+/* the page's controls of its top layer (`top` 1: About, the drawer) or of its base layer, last first */
+static void page_hits(int top, int* cut)
+{
+    int i;
+    for (i = s_ops.n - 1; i >= 0; i--) {
+        const HUDOP* p = &s_ops.op[i];
+        if (p->kind != HOP_HOT || ((p->flags & HOPF_TOP) != 0) != top) continue;
+        hit_add(dev(s_ox, tagpu_hud_snap(p->r.x * s_px)), dev(s_oy, tagpu_hud_snap(p->r.y * s_px)),
+                dev(s_ox, tagpu_hud_edge(p->r.x, p->r.w, s_px)), dev(s_oy, tagpu_hud_edge(p->r.y, p->r.h, s_px)),
+                s_ops.text + p->run, WIKIHIT_PAGE, cut);
+    }
+}
+
 void tagpu_wikistate_drawn(int drew, int cursor)
 {
-    int i, cut = 0;
+    int i, top, cut = 0;
     memset(&s_map, 0, offsetof(TAGPU_CMD_WIKI, hit));
     s_map.n = 0;
     s_drew = s_stageCursor = 0;
     if (!drew || !s_have) return;
     s_stageCursor = cursor;
-    /* topmost first: the build paints in order, so the last control painted is on top. The
-       stage holds no control */
-    for (i = s_ops.n - 1; i >= 0; i--) {
-        const HUDOP* p = &s_ops.op[i];
-        TAGPU_CMD_WIKIHIT* t;
-        if (p->kind != HOP_HOT) continue;
-        if (s_map.n >= TAGPU_CMD_WIKIHITS) { cut++; continue; }
-        t = &s_map.hit[s_map.n++];
-        t->x0 = dev(s_ox, tagpu_hud_snap(p->r.x * s_px));
-        t->y0 = dev(s_oy, tagpu_hud_snap(p->r.y * s_px));
-        t->x1 = dev(s_ox, tagpu_hud_edge(p->r.x, p->r.w, s_px));
-        t->y1 = dev(s_oy, tagpu_hud_edge(p->r.y, p->r.h, s_px));
-        lstrcpynA(t->key, s_ops.text + p->run, sizeof t->key);
+    /* THE HIT ORDER, topmost first, because what is drawn over a thing takes its click: the page's
+       top layer (About and the drawer lie over the stage); Leave's question while it is open, its
+       frame round it counting as No; the stage HUD's controls, its top layer then its base, each
+       box cut to the stage's canvas; then the page's base layer, under all of them. Within each,
+       the build paints in order, so the last control painted is on top. */
+    page_hits(1, &cut);
+    if (s_frameOn && s_hudOn && s_rec.question) {
+        static const char* const KEY[4] = { "yes", "no", "dialog", "outside" };
+        const WIKIFRAMEBOX* b[4] = { &s_dlg.yes, &s_dlg.no, &s_dlg.panel, &s_dlg.frame };
+        for (i = 0; i < 4; i++)
+            hit_add(dev(s_dlgX, b[i]->x), dev(s_dlgY, b[i]->y), dev(s_dlgX, b[i]->x + b[i]->w), dev(s_dlgY, b[i]->y + b[i]->h),
+                    KEY[i], WIKIHIT_DIALOG, &cut);
     }
+    if (s_frameOn && s_hudOn)
+        for (top = 1; top >= 0; top--)
+            for (i = s_hops.n - 1; i >= 0; i--) {
+                const HUDOP* p = &s_hops.op[i];
+                int x0, y0, x1, y1;
+                if (p->kind != HOP_HOT || ((p->flags & HOPF_TOP) != 0) != top) continue;
+                x0 = dev(s_hox, tagpu_hud_snap(p->r.x * s_hpx));
+                y0 = dev(s_hoy, tagpu_hud_snap(p->r.y * s_hpx));
+                x1 = dev(s_hox, tagpu_hud_edge(p->r.x, p->r.w, s_hpx));
+                y1 = dev(s_hoy, tagpu_hud_edge(p->r.y, p->r.h, s_hpx));
+                if (x0 < s_cv[0]) x0 = s_cv[0];
+                if (y0 < s_cv[1]) y0 = s_cv[1];
+                if (x1 > s_cv[2]) x1 = s_cv[2];
+                if (y1 > s_cv[3]) y1 = s_cv[3];
+                if (x1 <= x0 || y1 <= y0) continue;
+                hit_add((int16_t)x0, (int16_t)y0, (int16_t)x1, (int16_t)y1, s_hops.text + p->run, WIKIHIT_HUD, &cut);
+            }
+    page_hits(0, &cut);
     if (cut && !s_mapCut) {
         s_mapCut = 1;
         tagpu_logf("wiki: %d controls past the hit map's %u are not clickable (said once)", cut,
@@ -604,6 +865,14 @@ void tagpu_wikistate_drawn(int drew, int cursor)
     s_map.entry = (int16_t)s_page.entry;
     s_map.view = (uint8_t)(s_haveStage && s_viewOk);
     s_map.side_h = (int16_t)s_viewSide;
+    /* a game frame: its world takes no click (tagpu_wiki.c stage_world), and the stage HUD's
+       playhead run as drawn turns a pointer into a tick (TAGPU_CMD_WIKI hud_x0) */
+    s_map.frame = (uint8_t)(s_haveStage && s_viewOk && s_view.frame);
+    if (s_frameOn && s_hudOn && s_hops.track_x1 > s_hops.track_x0) {
+        s_map.hud_x0 = dev(s_hox, tagpu_hud_snap(s_hops.track_x0 * s_hpx));
+        s_map.hud_x1 = dev(s_hox, tagpu_hud_snap(s_hops.track_x1 * s_hpx));
+        s_map.hud_end = s_rec.end;
+    }
     s_drew = 1;
 }
 

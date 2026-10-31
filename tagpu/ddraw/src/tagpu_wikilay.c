@@ -1464,6 +1464,14 @@ void tagpu_wikilay_free(WIKILAY* l)
 
 const HUDLAY* tagpu_wikilay_kit(const WIKILAY* l) { return l->kit; }
 
+void tagpu_wikilay_button(const WIKILAY* l, double* side, double* top, double* right, double* config)
+{
+    *side = l->g.btn_side;
+    *top = l->g.btn_top;
+    *right = l->g.btn_right[1];
+    *config = l->g.btn_config;
+}
+
 void tagpu_wikilay_light(WIKILAY* l, int part, int lt)
 {
     if (l && part >= 0 && part < MAXPART) l->light[part] = (unsigned char)(lt != 0);

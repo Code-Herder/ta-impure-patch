@@ -137,6 +137,11 @@ void          tagpu_wikilay_free(WIKILAY* l);
 /* The kit, for the draw: HOP_PART ops index its parts. */
 const HUDLAY* tagpu_wikilay_kit(const WIKILAY* l);
 
+/* art/wiki/layout.json's `button`, in the top bar's own pixels: the wiki button's square side, its
+   top, its right inset in the rewind button's slot (`right[1]`) and the Config sprocket's -- where
+   a frame:game stage draws Impure's emblems in its frame's top bar (WIKISTAGEFRAME). */
+void tagpu_wikilay_button(const WIKILAY* l, double* side, double* top, double* right, double* config);
+
 /* THE FACE LIGHTNESS RULE (wiki.js faceLight): a part's face is light when its middle, inside its
    slices, scaled to 8 x 8 and its opaque pixels (alpha above 128) averaged at 0.3 R + 0.59 G +
    0.11 B, is above a grey of 120; text on a light face is drawn in dark ink with no shadow. Here

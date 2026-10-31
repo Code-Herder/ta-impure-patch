@@ -48,7 +48,8 @@ const WikiReplay = (() => {
      Yes (WIKI_HUD_LEAVE_YES) */
   const CONTROLS = Sim.HUD_CONTROLS, HUD_DOWN = Sim.HUD_DOWN, HUD_UP = Sim.HUD_UP, PRESSES = [...CONTROLS, 'leave:yes'];
   const SPEEDS = [5, 10, 20, 40, 80], SPEED0 = 10;
-  const SEEK = 256, WALK = 256, STEP = 300, NEAR = 90, BOOKS = 64, MARKS = Sim.GAME_KILLS + Sim.SEATS, FILL = 512;
+  // SEEK, WALK and FILL are set from the tick's cost in the game: tagpu_wikireplay.h states the measurement
+  const SEEK = 64, WALK = 64, STEP = 300, NEAR = 90, BOOKS = 64, MARKS = Sim.GAME_KILLS + Sim.SEATS, FILL = 64;
   // a marker's kind, tagpu_hudlay.h's HUD_MK_DEATH and HUD_MK_DEFEAT; a toast's, WIKI_TOAST_*
   const DEATH = 0, DEFEAT = 1, TOASTS = ['added', 'removed'];
 

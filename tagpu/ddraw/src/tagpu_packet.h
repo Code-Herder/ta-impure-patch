@@ -1351,6 +1351,9 @@ static __inline const TAGPU_PK_WIKI* tagpu_pk_wiki(const TAGPU_PACKET* p)
 /* its stage, or NULL: carried only by a record of the whole length (TAGPU_PK_WIKI_HEAD) */
 static __inline const WIKISTAGEVIEW* tagpu_pk_wiki_stage(const TAGPU_PACKET* p)
 { return p->wiki_len == sizeof(TAGPU_PK_WIKI) ? &tagpu_pk_wiki(p)->stage : (const WIKISTAGEVIEW*)0; }
+/* its frame record, or NULL: carried exactly with the stage (TAGPU_PK_WIKI) */
+static __inline const WIKIFRAMEREC* tagpu_pk_wiki_frame(const TAGPU_PACKET* p)
+{ return p->wiki_len == sizeof(TAGPU_PK_WIKI) ? &tagpu_pk_wiki(p)->frame : (const WIKIFRAMEREC*)0; }
 
 /* ---- lifetime ---- */
 /* DLL attach, before either thread exists — never lazily: reserves the slots

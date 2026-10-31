@@ -18,16 +18,28 @@ struct TAGPU_FRAME;
    none (no record, its art not loaded, its layout refused). */
 void tagpu_wikistate_present(const struct TAGPU_FRAME* f);
 
-/* Render-thread frame `frame`'s wiki: 1 with its three op lists -- the page, then the stage's ops
-   under its 3D image, then those over it (tagpu_wikistage_keep; an empty `over` and every op of
-   the stage under when the frame draws the whitebox) -- the stage lying inside the page's bezel
-   where no later op of the page reaches, so drawing it after the whole page paints as the mockup
-   does; empty stage lists while the window is closed -- the device pixels a wiki unit is and the
-   game screen's top-left corner on the attachment; 0 when there is nothing to draw, or when
-   `present` did not run in that frame. The lists point into this module's buffers, which hold
-   until the next `present`. */
-int  tagpu_wikistate_frame(unsigned frame, HUDOPLIST* page, HUDOPLIST* stage, HUDOPLIST* over, float* px,
-                           int* ox, int* oy);
+/* A FRAME'S WIKI, in paint order (tagpu_vk_hud.c draws them so): the page's base layer, the
+   stage's ops under its 3D image, the image, those over it, a frame:game stage's HUD -- its base
+   layer, then its top layer, in the replay HUD's own art -- then the frame's TOP range (Leave's
+   question, the viewer's cursor), and last the page's top layer: About and the drawer, the only
+   HOPF_TOP ops of the page (tagpu_wikilay.c theatre), which lie over the stage and all of it. The
+   stage lies inside the page's bezel where no later op of the page's base layer reaches. */
+typedef struct {
+    HUDOPLIST     page, stage, over, top;   /* the wiki's kit: page, stage under, stage over, TOP */
+    const HUDOPS* hud;                      /* the stage HUD, NULL none: the HUD's art (tagpu_hudart_get) */
+    float         px;                       /* the wiki's unit and the game screen's corner        */
+    int           ox, oy;
+    float         hpx;                      /* the stage HUD's unit and its frame's corner          */
+    int           hox, hoy;
+    int           open;                     /* the window is drawn open                           */
+} WIKILISTS;
+
+/* Render-thread frame `frame`'s wiki into `out`: 1 with its lists -- empty stage lists and no HUD
+   while the window is closed, an empty `over` and every op of the stage under when the frame draws
+   the whitebox (tagpu_wikistage_keep) -- each in device pixels from the attachment's corner; 0 when
+   there is nothing to draw, or when `present` did not run in that frame. The lists point into this
+   module's buffers, which hold until the next `present`. */
+int  tagpu_wikistate_frame(unsigned frame, WIKILISTS* out);
 
 /* THE STAGE THIS FRAME DRAWS, for the 3D stage's producer (tagpu_wikiworld.h): 1 when frame
    `frame` draws a demo's view -- the record's copy, bounded (`*v`, which holds until the next
@@ -43,8 +55,10 @@ int  tagpu_wikistate_scene(unsigned frame, const WIKISTAGEVIEW** v, int* entry, 
    every op under. Once a frame; a second call for the same frame changes nothing. */
 void tagpu_wikistate_image(unsigned frame, int image, int ground, const uint32_t* resolved);
 
-/* The Vulkan pass has built this frame's wiki ops and will draw them (`drew` 1): the page's
-   controls become the hit map, and its scrolls and scrollbars the command record's; `cursor` 1
+/* The Vulkan pass has built this frame's wiki ops and will draw them (`drew` 1): the controls drawn
+   become the hit map -- the page's, a frame:game stage HUD's and Leave's question's, topmost first
+   (tagpu_wikistate.c, THE HIT ORDER) -- and the page's scrolls and scrollbars and the stage HUD's
+   playhead run the command record's; `cursor` 1
    when the stage's cursor is among what it draws -- its op (the list's `watch`) was given
    instances and none of them is hidden. 0: this frame draws no wiki, and the map is empty. After
    tagpu_wikistate_frame answered 1 for the same frame, or with 0 on any frame. */
@@ -83,6 +97,12 @@ const unsigned char* tagpu_wikistate_sprites(unsigned* gen);
    while none has been composed (the stage then has no HOP_SIDE op). The texels hold until the
    next `present`: RENDER THREAD ONLY, as the composition is. */
 const unsigned char* tagpu_wikistate_side(unsigned* gen);
+
+/* THE FRAME'S BARS the stage's HOP_BAR ops draw from (tagpu_wikibar.h): HUD_BAR_W x HUD_BAR_H texels,
+   R8G8B8A8, the top bar's rows then the bottom bar's, and in `*gen` its generation, which moves
+   whenever its texels do; 0 while none has been composed (the stage then draws the whitebox
+   strips). The texels hold until the next `present`: RENDER THREAD ONLY, as the composition is. */
+const unsigned char* tagpu_wikistate_bar(unsigned* gen);
 
 /* The command record's wiki part: what the last frame drawn answered. */
 void tagpu_wikistate_cmd(TAGPU_CMD_WIKI* out);

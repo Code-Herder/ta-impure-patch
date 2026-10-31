@@ -25,9 +25,15 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "tagpu_wikistage.h"
+#include "tagpu_wikiframe.h"
 
 #define TAGPU_WIKI_KEY     24u      /* a control's key, NUL-terminated                       */
-#define TAGPU_CMD_WIKIHITS 160u     /* the hit map: every control a frame of the wiki draws   */
+/* THE HIT MAP: every control a frame of the wiki draws -- the page's WIKI_MAXHOT, a frame:game
+   stage's HUD's HUD_MAXHOT and Leave's question's four (tagpu_wikistate.c holds the two bounds to
+   these numbers at build time) */
+#define TAGPU_CMD_WIKIHITS (160u + 128u + 4u)   /* TAGPU_CMD_WIKI is 10028 bytes (sizeof, the DLL's
+                                                   compiler): tagpu_packet.c's assert holds the
+                                                   command record to its reserve                  */
 #define TAGPU_WIKI_FOLDS   32u      /* fold words: a bit for each of the tree's 1024 nodes the
                                        loader keeps (WIKI_MAXNODE)                           */
 #define TAGPU_WIKI_NSCROLL 3u       /* the panels that scroll: tree, demos, text (WIKI_SCROLL_*) */
@@ -40,8 +46,11 @@
    TWO LENGTHS. The area is TAGPU_PK_WIKI_HEAD bytes -- everything before `stage` -- while there is
    no stage to draw (the window closed, or no demo), and sizeof(TAGPU_PK_WIKI) with the stage, so
    the 158 KB view (80 KB of it the pose pool, 16 KB the nano spray's particles; MEASURED as
-   sizeof on the DLL's compiler) is carried only while it is shown. The reader takes
-   `stage` only from an area of the whole size (tagpu_pk_wiki_stage). */
+   sizeof on the DLL's compiler) and a frame:game entry's frame record after it (WIKIFRAMEREC,
+   1512 bytes; the whole area 167528, the head 320, MEASURED as sizeof on the DLL's compiler) are
+   carried only while they are shown. The reader takes
+   `stage` and `frame` only from an area of the whole size (tagpu_pk_wiki_stage,
+   tagpu_pk_wiki_frame). */
 typedef struct TAGPU_PK_WIKI {
     uint8_t  open;              /* the window is open: the game takes no input              */
     uint8_t  paused;            /* the wiki holds single player's pause                      */
@@ -60,6 +69,11 @@ typedef struct TAGPU_PK_WIKI {
     uint8_t  config;            /* the Config sprocket the top bar shows from this layer: 0 none
                                    (the engine drew its own), 1 up, 2 down (tagpu_menu_bar_cog).
                                    Data: the render thread draws none for any other value     */
+    uint8_t  about, drawer;     /* the theatre's About panel and its Entries drawer are open; at
+                                   most one, and data: the render thread takes each as 0 or 1  */
+    uint8_t  leave_held;        /* Try it on a replay: the answer of Leave's question held down,
+                                   0 none, 1 Yes, 2 No; data: the render thread draws any other
+                                   value as none                                             */
     /* THE CONTEXT THE TEXT IS FILLED FOR, by value (tagpu_wiki.c, *the context*): the render
        thread fills the page's titles, subtitle, paragraphs, demo titles and tree leaves with the
        words of each entry under it (tagpu_wikilay.h WIKIPAGE) -- the same pair the running demo
@@ -79,16 +93,24 @@ typedef struct TAGPU_PK_WIKI {
     uint32_t shot;              /* the last capture the trigger tagpu_wiki.shot asked for, 0
                                    none: the first frame of this view whose 3D image is drawn
                                    writes it (tagpu_wikiworld.h)                             */
-    WIKISTAGEVIEW stage;        /* the demo's view by value: last, carried only with has_stage */
+    WIKISTAGEVIEW stage;        /* the demo's view by value: carried only with has_stage      */
+    WIKIFRAMEREC  frame;        /* a frame:game entry's frame record (tagpu_wikiframe.h), `on` 0
+                                   for any other entry; DATA, bounded by the render thread's
+                                   tagpu_wikiframe_bound on its own copy before any read     */
 } TAGPU_PK_WIKI;
 #define TAGPU_PK_WIKI_HEAD ((uint32_t)offsetof(TAGPU_PK_WIKI, stage))
 
 /* THE WIKI'S HIT MAP: the controls of the last frame the wiki was drawn on, topmost first, in
-   the window's client pixels, each key as tagpu_wikilay.c makes it. A LEVEL: a frame that did not
+   the window's client pixels, each key as the module that drew it makes it -- tagpu_wikilay.c the
+   page's, tagpu_hudlay.c a frame:game stage's HUD's, tagpu_wikiframe.c Leave's question's -- and
+   `src` (WIKIHIT_*, tagpu_wikiframe.h) the one. The same key can be two controls (the page's
+   `play` and the stage HUD's), so a key is read only with its source. A LEVEL: a frame that did not
    draw the wiki posts n = 0 and drawn = 0. */
 typedef struct TAGPU_CMD_WIKIHIT {
     int16_t  x0, y0, x1, y1;    /* [x0, x1) x [y0, y1)                                       */
     char     key[TAGPU_WIKI_KEY];
+    uint8_t  src;               /* WIKIHIT_PAGE, _HUD or _DIALOG; data: anything else is the
+                                   page's                                                    */
 } TAGPU_CMD_WIKIHIT;
 
 /* A panel's scrollbar as the frame drew it, in client pixels: the track, the thumb's top and
@@ -107,6 +129,11 @@ typedef struct TAGPU_CMD_WIKI {
     uint8_t  view;              /* that frame's stage drew a view, not a message               */
     int16_t  side_h;            /* that view's sidebar rows, 0 without a sidebar: the stage's
                                    fit is the drawn frame's, whatever the simulation runs now */
+    uint8_t  frame;             /* that view was a whole game frame (WIKISTAGEVIEW.frame): the
+                                   stage holds no world point a click could name            */
+    int16_t  hud_x0, hud_x1;    /* the stage HUD's playhead run as drawn, client pixels; equal:
+                                   no track was drawn                                        */
+    int32_t  hud_end;           /* the game tick the run's end stood for (the record's end)   */
     float    u;                 /* the client pixels a wiki unit was on that frame            */
     float    scroll[TAGPU_WIKI_NSCROLL];     /* each panel's scroll as drawn, units           */
     float    scroll_max[TAGPU_WIKI_NSCROLL]; /* and its limit                                 */

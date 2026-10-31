@@ -32,20 +32,29 @@
 #include "tagpu_wikisim.h"
 
 /* replay.js's constants, compared by simparity.mjs: the game ticks a seek and the walk play in
-   one step (provisional: the in-game measurement sets them), rew's and fwd's 10 s and a bookmark's
-   reach of 3 s (hud-in-game.md's keys), the bookmarks held, the markers (a death per kill of a
-   commander, a defeat per seat: a seat's count never rises again, there is no transfer), the most
-   game ticks a page's fill lets a replay run, the speeds in tenths (1/2x to 8x) and the one a
-   replay starts at, and a press's trip: the popup pick's without its glide back. A seek to the
-   end takes at most ceil(WIKI_GAME_END_MAX / WIKI_REPLAY_SEEK) = 22 steps, under decision 11's
-   second, so no snapshot is needed. */
-#define WIKI_REPLAY_SEEK     256
-#define WIKI_REPLAY_WALK     256
+   one step, rew's and fwd's 10 s and a bookmark's reach of 3 s (hud-in-game.md's keys), the
+   bookmarks held, the markers (a death per kill of a commander, a defeat per seat: a seat's count
+   never rises again, there is no transfer), the most game ticks a page's fill lets a replay run,
+   the speeds in tenths (1/2x to 8x) and the one a replay starts at, and a press's trip: the popup
+   pick's without its glide back.
+   SEEK, WALK AND FILL ARE SET FROM THE TICK'S COST IN THE GAME (MEASURED 2026-10-31 by
+   tagpu_wiki.check on every setup of the compatibility suite, the DLL's i686 build under Wine): a
+   tick costs 1.5..3.4 us on average everywhere but Escalation, where it costs 11.8..15.5 us and a
+   256-tick step up to 7.8 ms. Escalation's commanders' scripts scan every unit id from 1 to
+   MAX_ID (WIKICOB_UNITS, 1024) for its height, team, build left and alliance every 2.5..5 s, so
+   about one tick in 55 costs 0.7..1.4 ms natively (gcc -O2, MEASURED with Watching's demos): the
+   cost of a fill is those ticks, not the tick count. 64 ticks a fill bounds Escalation's worst
+   fill at 1.75 ms natively (4.1 ms at 256) and still plays a seek to the end of the longest
+   authored demo (1800 game ticks) in 29 steps, about a second at 1x as decision 11 asks; a seek to
+   WIKI_GAME_END_MAX takes 85, under three seconds, and plays on while the stage holds the last
+   world drawn. */
+#define WIKI_REPLAY_SEEK     64
+#define WIKI_REPLAY_WALK     64
 #define WIKI_REPLAY_STEP     300
 #define WIKI_REPLAY_NEAR     90
 #define WIKI_REPLAY_BOOKS    64
 #define WIKI_REPLAY_MARKS    (WIKI_GAME_KILLS + WIKI_SEATS)
-#define WIKI_REPLAY_FILL     512
+#define WIKI_REPLAY_FILL     64
 #define WIKI_REPLAY_NSPEED   5
 #define WIKI_REPLAY_SPEEDS   { 5, 10, 20, 40, 80 }
 #define WIKI_REPLAY_SPEED0   10
