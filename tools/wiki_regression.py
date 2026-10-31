@@ -724,11 +724,14 @@ def page(c, shot=None):
     if shot:
         grab(c, shot)
 
-    # Building's leaves are nodes 2 and 3; Reclaiming's entry, node 5, is drawn either way
+    # Building's leaves are nodes 2 and 3; Reclaiming's entry, node 5, and the Replays category's Watching, node
+    # WATCH_NODE, are drawn either way
     press(c, d, "fold:1")
-    d = wait_dump(c, lambda d: d["folds"] == [1] and keys_of(d, "entry:") == ["entry:5"], "(p3) fold:1 did not fold Building")
+    d = wait_dump(c, lambda d: d["folds"] == [1] and keys_of(d, "entry:") == ["entry:5", f"entry:{WATCH_NODE}"],
+                  "(p3) fold:1 did not fold Building")
     press(c, d, "fold:1")
-    d = wait_dump(c, lambda d: d["folds"] == [] and keys_of(d, "entry:") == ["entry:2", "entry:3", "entry:5"],
+    d = wait_dump(c, lambda d: d["folds"] == [] and keys_of(d, "entry:") == ["entry:2", "entry:3", "entry:5",
+                                                                             f"entry:{WATCH_NODE}"],
                   "(p3) fold:1 did not unfold Building")
     print("wiki page: (p3) Building folded and unfolded")
 
@@ -2130,13 +2133,15 @@ def watch_v5(c):
                   and any(h.get("src") == HIT_HUD for h in d["hits"]), "(v5) Try it did not start again")
     x0, x1, _ = d["hud_run"]
     tr = hit_of(d, "track", HIT_HUD)
+    k0 = d["replay"]["tick"]
     t0 = time.monotonic()
     c.keys("dclick:%d,%d" % (x1 - 1, (tr[1] + tr[3]) // 2))
     d = wait_dump(c, lambda d: d["replay"]["target"] < 0 and d["replay"]["game_tick"] >= d["replay"]["end"] - 30,
                   "(v5) the seek to the end did not finish", seconds=120)
     secs = time.monotonic() - t0
-    print(f"wiki watch: (v5) a seek to the end ({d['replay']['end']} game ticks) in {secs:.1f} s; the page cost the game "
-          f"thread at most {d['cost_max_ms']:.3f} ms in one frame over {d['cost_frames']} frames")
+    print(f"wiki watch: (v5) a seek to the end ({d['replay']['end']} game ticks) in {secs:.1f} s and "
+          f"{d['replay']['tick'] - k0} demo ticks (the walk {d['replay']['walked']}); the page cost the game thread at "
+          f"most {d['cost_max_ms']:.3f} ms in one frame over {d['cost_frames']} frames")
     start = c.mark()
     c.keys("esc")
     wait_dump(c, lambda d: not d["open"], "(v5) Esc did not close the window")
