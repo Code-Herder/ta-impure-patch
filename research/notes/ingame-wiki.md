@@ -400,6 +400,8 @@ A strip above the stage, outside the game frame:
 | Interface | the Interface Type: right-click (1, the default) or left-click (0) | `iface=1` / `iface=0` |
 | Open, entry, demo | the wiki open on an entry and a demo | `open&entry=quickbuild&demo=3` |
 | Try it | Try it yourself on that demo's scene | `try` |
+| Theatre | the theatre layout of an entry with `"frame": "game"` ([the replay plan](ingame-wiki-replay-plan.md), decision 6), forced on whichever entry is open: the stage across the window's body, one row of the Entries control, the demos' numbered tabs, the demo's title, the controls and About, then the caption. A mockup switch only: no entry declares `frame` yet | `theatre` |
+| About, drawer | the theatre's About panel (the entry's title, subtitle, badge and text, over the stage's right `theatre.about` %) or its Entries drawer (the tree, over the stage's left), never both: About when both are given | `about` / `drawer` |
 | Rewind button | shown (a live recorded skirmish) or absent | `rewind=1` / `rewind=0` |
 | Skin | the kit, or the flat whitebox | `skin=kit` / `skin=whitebox` |
 | Sidebar | the detected mod's pack (the fixture where it has none), the fixture, the 768-row fixture, or none | `sidebar=mod` / `fixture` / `tall` / `off` |

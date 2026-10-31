@@ -101,16 +101,16 @@ canvas.skin { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 
 /* the entry: title, subtitle, the lock badge, the stage, caption, keys, controls, and the text scrolling below */
 #entry { display: flex; flex-direction: column; gap: calc(var(--w-entry-gap) * var(--u)); min-width: 0; min-height: 0; padding: calc(var(--w-entry-pad-0) * var(--u)) calc(var(--w-entry-pad-1) * var(--u)) 0; }
 #e-title { margin: 0; line-height: var(--w-entry-title_line); }
-#badge { position: relative; align-self: flex-start; display: flex; align-items: center; gap: calc(var(--w-badge-gap) * var(--u)); height: calc(var(--w-badge-h) * var(--u));
+#badge, #t-badge { position: relative; align-self: flex-start; display: flex; align-items: center; gap: calc(var(--w-badge-gap) * var(--u)); height: calc(var(--w-badge-h) * var(--u));
   box-sizing: border-box; padding: 0 calc(var(--w-badge-pad) * var(--u)); }
-#badge[hidden] { display: none; }
-#badge i { width: calc(var(--w-badge-dot) * var(--u)); height: calc(var(--w-badge-dot) * var(--u)); border-radius: 50%; background: #d01818; border: 1px solid #5a0808; box-sizing: border-box; }
+#badge[hidden], #t-badge[hidden] { display: none; }
+#badge i, #t-badge i { width: calc(var(--w-badge-dot) * var(--u)); height: calc(var(--w-badge-dot) * var(--u)); border-radius: 50%; background: #d01818; border: 1px solid #5a0808; box-sizing: border-box; }
 .srow { flex: 1 1 0; min-height: calc(var(--w-stage-min) * var(--u)); display: flex; }
 #sbox { flex: 1; min-width: 0; position: relative; }
 #stage { position: absolute; left: calc(var(--bz-l) * var(--u)); right: calc(var(--bz-r) * var(--u)); top: calc(var(--bz-t) * var(--u));
   bottom: calc(var(--bz-b) * var(--u)); width: calc(100% - (var(--bz-l) + var(--bz-r)) * var(--u)); height: calc(100% - (var(--bz-t) + var(--bz-b)) * var(--u)); }
 #stage.try { cursor: none; }
-#ctl button { position: relative; height: calc(var(--w-controls-h) * var(--u)); padding: 0 calc(var(--w-controls-pad) * var(--u)); box-sizing: border-box;
+#ctl button, #t-row button { position: relative; height: calc(var(--w-controls-h) * var(--u)); padding: 0 calc(var(--w-controls-pad) * var(--u)); box-sizing: border-box;
   display: flex; align-items: center; justify-content: center; white-space: nowrap; }
 /* the caption and the keys strip keep fixed heights: a caption or a keycap appearing must not resize the stage under the
    player's cursor */
@@ -118,13 +118,35 @@ canvas.skin { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 
 #keys { flex: none; display: flex; flex-wrap: nowrap; overflow: hidden; gap: calc(var(--w-keys-gap) * var(--u)); align-items: center; height: calc(var(--w-strips-keys) * var(--u)); }
 .kc { position: relative; display: inline-flex; align-items: center; box-sizing: border-box; height: calc(var(--w-keycap-h) * var(--u)); padding: 0 calc(var(--w-keycap-pad) * var(--u)); }
 #ctl { display: flex; gap: calc(var(--w-controls-gap) * var(--u)); align-items: center; }
-#ctl button { min-width: calc(var(--w-controls-min) * var(--u)); }
+#ctl button, #t-row button { min-width: calc(var(--w-controls-min) * var(--u)); }
 #ctl button:disabled { opacity: .45; cursor: default; }
 #ctl .sp { display: flex; gap: calc(var(--w-controls-pair) * var(--u)); }
 #c-try { margin-left: calc(var(--w-controls-try) * var(--u)); }
 #p-text { flex: 0 0 calc(var(--w-text-share) * 1%); }
 #text p { margin: 0 0 calc(var(--w-text-para) * var(--u)); }
 #text .err { color: #c03030; }
+
+/* ---- the theatre: the page of an entry with "frame": "game" (wiki.js arrange). The body is one column: the stage's
+   bezel, then the row, then the caption, the layout's gap between. The row holds the Entries drawer's control, the
+   demos' tabs (ctl_pair apart), the badge, the demo's title in what the rest leaves, and the controls with About.
+   The demos panel and the keys strip are not shown. About and the drawer lie over the stage's content box (the
+   bezel's insets), About at the right, `theatre.about` per cent of the body wide, the drawer at the left, as wide as
+   the tree's column; they are percentages of #sbox, which is the body's width ---- */
+#win.theatre .wb { grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) calc(var(--w-controls-h) * var(--u)) calc(var(--w-strips-caption) * var(--u)); }
+#win.theatre #p-demos, #win.theatre #entry, #win:not(.theatre) #t-row, #win:not(.theatre) #c-about { display: none; }
+#t-row { display: flex; align-items: center; gap: calc(var(--w-controls-gap) * var(--u)); min-width: 0; }
+#tabs { flex: none; display: flex; gap: calc(var(--w-controls-pair) * var(--u)); }
+#t-badge { flex: none; align-self: center; }
+#t-title { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; }
+#win.theatre #ctl { flex: none; }
+#about, #drawer { position: absolute; z-index: 1; top: calc(var(--bz-t) * var(--u)); bottom: calc(var(--bz-b) * var(--u)); box-sizing: border-box; }
+#about[hidden], #drawer[hidden] { display: none; }
+#drawer { left: calc(var(--bz-l) * var(--u)); width: calc(var(--w-columns-0) * 1%); display: grid; }
+#about { right: calc(var(--bz-r) * var(--u)); width: calc(var(--w-theatre-about) * 1%); display: flex; flex-direction: column;
+  gap: calc(var(--w-entry-gap) * var(--u)); padding: calc((var(--pn-t) + var(--w-entry-pad-0)) * var(--u)) calc((var(--pn-r) + var(--w-entry-pad-1)) * var(--u))
+  calc((var(--pn-b) + var(--w-entry-pad-0)) * var(--u)) calc((var(--pn-l) + var(--w-entry-pad-1)) * var(--u)); }
+#win.theatre #p-text { flex: 1 1 0; }
 
 /* ---- the whitebox: flat greys, 1 CSS pixel lines ---- */
 #frame:not(.kit) #win .wt { background: #a7a7a1; border-bottom: 1px solid #1d1d1b; box-sizing: border-box; }
@@ -135,11 +157,12 @@ canvas.skin { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 
 #frame:not(.kit) #tree .row:hover, #frame:not(.kit) #demos li:hover { background: #c2c2bd; }
 #frame:not(.kit) #tree .row, #frame:not(.kit) #demos li { margin-bottom: 0; }
 #frame:not(.kit) #tree .leaf.sel, #frame:not(.kit) #demos li.sel { background: #9d9d97; }
-#frame:not(.kit) #badge { border: 1px solid #8a1010; background: #ecd3d0; --ink: #8a1010; }
+#frame:not(.kit) #badge, #frame:not(.kit) #t-badge { border: 1px solid #8a1010; background: #ecd3d0; --ink: #8a1010; }
 #frame:not(.kit) #sbox { background: #6e6e68; border: 1px solid #1d1d1b; box-sizing: border-box; }
-#frame:not(.kit) #ctl button { background: #b3b3ad; border: 1px solid #1d1d1b; }
-#frame:not(.kit) #ctl button:hover { background: #a2a29c; }
-#frame:not(.kit) #ctl button.on { background: #5c5c56; --ink: #f0f0ea; }
+#frame:not(.kit) #ctl button, #frame:not(.kit) #t-row button { background: #b3b3ad; border: 1px solid #1d1d1b; }
+#frame:not(.kit) #ctl button:hover, #frame:not(.kit) #t-row button:hover { background: #a2a29c; }
+#frame:not(.kit) #ctl button.on, #frame:not(.kit) #t-row button.on { background: #5c5c56; --ink: #f0f0ea; }
+#frame:not(.kit) #about, #frame:not(.kit) #drawer > .pnl { background: #d3d3ce; border: 1px solid #1d1d1b; }
 #frame:not(.kit) .kc { background: #f2f2ee; border: 1px solid #1d1d1b; border-bottom-width: calc(2.5 * var(--u)); border-radius: calc(2.5 * var(--u)); }
 
 /* ---- a kit: the window's part carries the faces, the title sits in its dark title groove ---- */

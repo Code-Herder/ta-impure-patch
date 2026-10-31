@@ -20,9 +20,11 @@ const SKINS = ['kit', 'whitebox'];
 const SIDEBARS = ['mod', 'fixture', 'tall', 'off'];
 /* side: the side asked for by name, matched without case against the sidebar layout's sides (sideIndex), kept as asked
    so a pack that loads after the page still finds it; null or no match is the layout's first side. iface: the
-   Interface Type the demos play, 1 right-click (the interface they are authored in) or 0 left-click */
+   Interface Type the demos play, 1 right-click (the interface they are authored in) or 0 left-click. theatre: the
+   theatre layout forced on whichever entry is open, for viewing it before an entry declares "frame": "game"; about and
+   drawer: the theatre's About panel and its Entries drawer, never both open */
 const S = { res: '1920x1080', size: LAY.window.share, mode: 'sp', mod: 'stock', side: null, iface: 1, skin: 'kit', sidebar: 'mod', rewind: true,
-  open: false, entry: null, demo: 0, try: false, playing: true, speed: 1, fold: new Set() };
+  open: false, entry: null, demo: 0, try: false, playing: true, speed: 1, fold: new Set(), theatre: false, about: false, drawer: false };
 { const q = new URLSearchParams(location.search);
   if (RES.includes(q.get('res'))) S.res = q.get('res');
   if (q.get('size')) S.size = clamp(Math.round(+q.get('size')) || LAY.window.share, 50, 100);
@@ -34,12 +36,15 @@ const S = { res: '1920x1080', size: LAY.window.share, mode: 'sp', mod: 'stock', 
   if (SKINS.includes(q.get('skin'))) S.skin = q.get('skin');
   if (SIDEBARS.includes(q.get('sidebar'))) S.sidebar = q.get('sidebar');
   S.open = q.has('open'); S.entry = q.get('entry'); S.try = q.has('try');
+  S.theatre = q.has('theatre'); S.about = q.has('about'); S.drawer = q.has('drawer') && !S.about;
   if (q.get('demo')) S.demo = Math.max(0, (+q.get('demo') || 1) - 1); }
 function syncURL() {
   const q = new URLSearchParams({ res: S.res, size: S.size, mode: S.mode, mod: S.mod });
   if (S.side) q.set('side', S.side);
   for (const [k, v] of Object.entries({ iface: S.iface, skin: S.skin, sidebar: S.sidebar, rewind: +S.rewind })) q.set(k, v);
-  if (S.open) { q.set('open', ''); if (S.entry) { q.set('entry', S.entry); q.set('demo', S.demo + 1); } if (S.try) q.set('try', ''); }
+  if (S.theatre) q.set('theatre', '');
+  if (S.open) { q.set('open', ''); if (S.entry) { q.set('entry', S.entry); q.set('demo', S.demo + 1); } if (S.try) q.set('try', '');
+    if (theatre()) for (const k of ['about', 'drawer']) if (S[k]) q.set(k, ''); }
   if (window.WikiGfx) WikiGfx.url(q);
   history.replaceState(null, '', '?' + q.toString().replace(/=(?=&|$)/g, ''));
 }
@@ -238,16 +243,56 @@ function renderTree() {
   el.innerHTML = walk(TREE.tree, 't');
 }
 function renderEntry() {
-  const e = entry(), err = S.entry && ENT[S.entry] && ENT[S.entry].error;
+  const e = entry(), err = S.entry && ENT[S.entry] && ENT[S.entry].error, ds = e && Array.isArray(e.demos) ? e.demos : [];
+  arrange();
   $('#e-title').textContent = e ? fill(e, e.title) || e.id : err ? S.entry : TREE ? 'Choose an entry' : '';
   $('#e-sub').textContent = e ? fill(e, e.subtitle) : '';
-  $('#badge').hidden = !locked(e);
-  $('#demos').innerHTML = e && Array.isArray(e.demos) && e.demos.length
-    ? e.demos.map((d, i) => `<li data-part="row" data-demo="${i}"${i === S.demo ? ' class="sel"' : ''}><span class="n">${i + 1}</span><span>${esc(fill(e, d.title) || d.id)}</span></li>`).join('')
+  $('#badge').hidden = $('#t-badge').hidden = !locked(e);
+  $('#demos').innerHTML = ds.length
+    ? ds.map((d, i) => `<li data-part="row" data-demo="${i}"${i === S.demo ? ' class="sel"' : ''}><span class="n">${i + 1}</span><span>${esc(fill(e, d.title) || d.id)}</span></li>`).join('')
     : `<li class="none">${e ? 'No demos' : ''}</li>`;
+  $('#tabs').innerHTML = ds.map((d, i) => `<button data-part="button" data-demo="${i}"${i === S.demo ? ' class="on"' : ''}>${i + 1}</button>`).join('');
+  $('#t-title').textContent = ds[S.demo] ? fill(e, ds[S.demo].title) || ds[S.demo].id : '';
   $('#text').innerHTML = err ? `<p class="err">${esc(err)}</p>` : e ? (e.text || []).map(p => `<p>${esc(fill(e, p))}</p>`).join('') : '';
 }
 function render() { renderTree(); renderEntry(); controls(); syncURL(); }
+
+/* ---- the theatre: the page of an entry with "frame": "game" (research/notes/ingame-wiki-replay-plan.md, decisions 6
+   and 24). Its parts are the normal page's nodes RE-PARENTED, never copied, so every control and every text stays one
+   element: the stage's bezel heads the body, the controls join the row (#t-row) with the drawer's control and the
+   demos' tabs, the title, subtitle, badge and text go into About (#about), and the tree's panel into the drawer
+   (#drawer). The row carries a badge of its own (#t-badge), as the layout's row does. Leaving the theatre puts every
+   node back in the normal page's order. ---- */
+function theatre() { const e = entry(); return !!e && (e.frame === 'game' || S.theatre); }
+function arrange() {
+  const on = theatre(), win = $('#win'), wb = $('#win .wb'), sbox = $('#sbox'), row = $('#t-row');
+  if (on) {
+    wb.prepend(sbox);
+    sbox.after(row);
+    row.after($('#caption'));
+    row.append($('#ctl'));
+    $('#drawer').append($('#p-tree'));
+    $('#about').append($('#e-title'), $('#e-sub'), $('#badge'), $('#p-text'));
+  } else if (win.classList.contains('theatre')) {
+    wb.prepend($('#p-tree'));
+    $('.srow').append(sbox);
+    $('#entry').append($('#e-title'), $('#e-sub'), $('#badge'), $('.srow'), $('#caption'), $('#keys'), $('#ctl'), $('#p-text'));
+    wb.append(row);
+  }
+  win.classList.toggle('theatre', on);
+  $('#about').hidden = !(on && S.about);
+  $('#drawer').hidden = !(on && S.drawer);
+  sizeStage();
+}
+/* About and the drawer: opening one closes the other */
+function panel(k) {
+  buttonSound();
+  const open = !S[k];
+  S.about = S.drawer = false; S[k] = open;
+  arrange(); controls(); syncURL();
+}
+$('#c-about').onclick = () => panel('about');
+$('#c-drawer').onclick = () => panel('drawer');
 
 /* ---- the window ---- */
 function setOpen(o) {
@@ -259,7 +304,8 @@ function pick(id, k) {
   S.entry = id; S.demo = k; S.try = S.try && !!id; S.playing = true;
   start(); render();
 }
-$('#b-wiki').onclick = () => setOpen(!S.open);
+// the window opens with About and the drawer closed
+$('#b-wiki').onclick = () => { if (!S.open) { S.about = S.drawer = false; arrange(); controls(); } setOpen(!S.open); };
 $('#wx').onclick = () => setOpen(false);
 for (const ev of ['mousedown', 'mouseup', 'click', 'dblclick', 'wheel', 'contextmenu'])
   $('#capture').addEventListener(ev, e => { e.preventDefault(); e.stopPropagation(); }, { passive: false });
@@ -267,11 +313,15 @@ $('#win').addEventListener('contextmenu', e => e.preventDefault());
 $('#tree').onclick = e => {
   const f = e.target.closest('[data-fold]');
   if (f) { buttonSound(); S.fold.has(f.dataset.fold) ? S.fold.delete(f.dataset.fold) : S.fold.add(f.dataset.fold); renderTree(); return; }
+  // an entry picked, from the drawer too, closes About and the drawer
   const l = e.target.closest('[data-entry]');
-  if (l) buttonSound();
-  if (l && l.dataset.entry !== S.entry) { S.try = false; pick(l.dataset.entry, 0); }
+  if (!l) return;
+  buttonSound(); S.about = S.drawer = false;
+  if (l.dataset.entry !== S.entry) { S.try = false; pick(l.dataset.entry, 0); }
+  else { arrange(); controls(); syncURL(); }
 };
-$('#demos').onclick = e => { const d = e.target.closest('[data-demo]'); if (d) { buttonSound(); S.try = false; pick(S.entry, +d.dataset.demo); } };
+// a demo's row on the normal page, or its tab in the theatre
+$('#demos').onclick = $('#tabs').onclick = e => { const d = e.target.closest('[data-demo]'); if (d) { buttonSound(); S.try = false; pick(S.entry, +d.dataset.demo); } };
 
 /* ---- playback: a demo plays when selected, at 30 ticks a second (60 at 2x), and holds its last frame when done;
    Try it yourself creates the same scene with no inputs and hands the stage to the player ---- */
@@ -331,6 +381,7 @@ function controls() {
   for (const id of ['#c-play', '#c-replay', '#c-x1', '#c-x2', '#c-try']) $(id).disabled = !has;
   $('#c-x1').classList.toggle('on', S.speed === 1); $('#c-x2').classList.toggle('on', S.speed === 2);
   $('#c-try').classList.toggle('on', S.try);
+  $('#c-about').classList.toggle('on', S.about); $('#c-drawer').classList.toggle('on', S.drawer);
 }
 
 /* ---- the stage: a canvas at the resolution's pixels; the map fitted inside it, letterboxed ---- */
@@ -386,7 +437,7 @@ function draw() {
   stage.classList.toggle('try', tryIt && !!FIT && FIT.cursor);
   // a build this mod's sidebar cannot reach stops the demo under the entry's badge (decision 4)
   const off = locked(entry()) || !!(v && v.locked);
-  if ($('#badge').hidden === off) $('#badge').hidden = !off;
+  for (const b of ['#badge', '#t-badge']) if ($(b).hidden === off) $(b).hidden = !off;
   return v;
 }
 
@@ -566,9 +617,9 @@ window.addEventListener('pointerup', () => { for (const b of document.querySelec
    of each role: ---- */
 const ROLE = {
   window_title: ['#win .wt'], entry_title: ['#e-title'],
-  category: ['#tree .cat'], entry: ['#tree .leaf'], demo: ['#demos li'], demo_num: ['#demos li .n'],
+  category: ['#tree .cat'], entry: ['#tree .leaf'], demo: ['#demos li', '#t-title'], demo_num: ['#demos li .n'],
   subtitle: ['#e-sub'], text: ['#text'], caption: ['#caption'],
-  control: ['#ctl button'], badge: ['#badge'], keycap: ['.kc'], keys: ['#keys'],
+  control: ['#ctl button', '#t-row button'], badge: ['#badge', '#t-badge'], keycap: ['.kc'], keys: ['#keys'],
 };
 /* the layout's other numbers as custom properties of the frame, which wiki.css reads: `--w-` and the number's path,
    a list's items by their index (row.pad -> --w-row-pad-0, --w-row-pad-1) */
