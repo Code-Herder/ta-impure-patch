@@ -148,8 +148,10 @@ const WikiSide = (() => {
      screen's gadgets, a palette or remap of the wrong size refuses that element, which is reported in `problems`
      and falls back as the spec says (a picture to a labelled button; a missing PANELSIDE or panel to nothing; a
      pack without its sheet or palette has no art at all). The layout is returned as found: the caller checks it
-     with WikiSim.checkLayout and falls back to the fixture. */
-  function read(json, sheet, pal, seen, greyed) {
+     with WikiSim.checkLayout and falls back to the fixture.
+     `fonts` ({pack file: bytes}) carries the resource bars' fonts; without it the bars are not read and every side's
+     is null, which is also what a pack without `art.bar` gives: bar.js draws no bar for a null side. */
+  function read(json, sheet, pal, seen, greyed, fonts) {
     const problems = [], art = { screens: {} };
     if (!json || json.format !== 1) return { layout: null, art: null, minimap: {}, problems: ['side.json: format is not 1'] };
     const A = json.art || {}, sh = A.sheet || {};
@@ -205,22 +207,90 @@ const WikiSide = (() => {
       });
       art.screens[name] = out;
     }
+    readBar(A, sides, okFrame, key, fonts, art, problems);
     return { layout: json.layout || null, art, minimap, problems };
   }
 
+  /* THE RESOURCE BARS' ART (gfx.py bar_art): art.bar, one a layout side, null or { top, bot: {f, key}, rects, ecol,
+     mcol, font: bytes }; art.logos, the badge frames ({f, key}) or null; art.gui, the GUI colour table or null. The
+     bounds are gfx.py's, so a pack it wrote passes: every frame inside the sheet; the fifteen rects present, each
+     x1 <= x2 and y1 <= y2 with every coordinate in BAR_COORD (bar.js clips what lands outside its picture); the
+     colours palette indices; at most BAR_LOGOS badge frames; and the font a .fnt image every glyph of which lies
+     inside its bytes (fntProblem). What fails is dropped to null with a problem line. */
+  const BAR_RECTS = ['logo', 'energybar', 'energynum', 'energymax', 'energy0', 'metalbar', 'metalnum', 'metalmax',
+    'metal0', 'totalunits', 'totaltime', 'energyproduced', 'energyconsumed', 'metalproduced', 'metalconsumed'];
+  const BAR_COORD = [-1024, 4096], FNT_MAX = 32, BAR_LOGOS = 32;
+  /* why `b` is not a font bar.js may draw with, or null: the engine's .fnt -- rows at byte 0, the signed row offset
+     at 2, the first code at 3, a u16 offset per code from 4; a glyph is its width, then rows x width bits. The first
+     code must be 0 (a 256-entry table), as tagpu_packet_pub.c holds the engine's own copy to. */
+  function fntProblem(b) {
+    if (!b || b.length < 4 + 2 * 256) return `${b ? b.length : 0} bytes, short of the 256-code table`;
+    const rows = b[0];
+    if (rows < 1 || rows > FNT_MAX) return `${rows} rows`;
+    if (b[3] !== 0) return `first code ${b[3]}, not 0`;
+    for (let c = 0; c < 256; c++) {
+      const o = b[4 + 2 * c] | b[5 + 2 * c] << 8;
+      if (!o) continue;
+      if (o >= b.length) return `glyph ${c} at ${o}, past the file`;
+      const w = b[o];
+      if (w < 1 || w > FNT_MAX) return `glyph ${c} is ${w} wide`;
+      if (o + 1 + Math.ceil(w * rows / 8) > b.length) return `glyph ${c}'s bits run past the file`;
+    }
+    return null;
+  }
+  function readBar(A, sides, okFrame, key, fonts, art, problems) {
+    const pal = v => Number.isInteger(v) && v >= 0 && v < 256;
+    const framed = p => p && okFrame(p.f) ? { f: p.f, key: key(p.key) } : null;
+    if (A.gui == null) art.gui = null;
+    else if (Array.isArray(A.gui) && A.gui.length === 256 && A.gui.every(pal)) art.gui = Uint8Array.from(A.gui);
+    else { art.gui = null; problems.push('gui: not 256 palette indices; no bar is drawn'); }
+    art.logos = null;
+    if (Array.isArray(A.logos)) {
+      const L = A.logos.map(framed);
+      if (L.length < 1 || L.length > BAR_LOGOS) problems.push(`logos: ${L.length} frames, not 1..${BAR_LOGOS}; no badge`);
+      else if (L.some(f => !f)) problems.push('logos: a frame outside the sheet; no badge');
+      else art.logos = L;
+    } else if (A.logos != null) problems.push('logos: not a list; no badge');
+    const B = Array.isArray(A.bar) && fonts ? A.bar : [];
+    art.bar = sides.map((sd, k) => {
+      const b = B[k];
+      if (b == null) return null;
+      const no = why => { problems.push(`bar of ${sd && sd.name}: ${why}; the whitebox bars`); return null; };
+      const top = framed(b.top), bot = framed(b.bot);
+      if (!top || !bot) return no('PANELTOP or PANELBOT is not inside the sheet');
+      const R = b.rects || {}, rects = {};
+      for (const n of BAR_RECTS) {
+        const r = R[n];
+        if (!(Array.isArray(r) && r.length === 4 && r.every(v => Number.isInteger(v) && v >= BAR_COORD[0] && v <= BAR_COORD[1]) &&
+              r[0] <= r[2] && r[1] <= r[3])) return no(`rect ${n} is not x1 <= x2, y1 <= y2 inside ${BAR_COORD.join('..')}`);
+        rects[n] = r;
+      }
+      if (!pal(b.ecol) || !pal(b.mcol)) return no('ecol or mcol is not a palette index');
+      if (typeof b.font !== 'string' || b.font.includes('..')) return no('no font file');
+      const why = fntProblem(fonts[b.font]);
+      if (why) return no(`${b.font}: ${why}`);
+      return { top, bot, rects, ecol: b.ecol, mcol: b.mcol, font: fonts[b.font] };
+    });
+    if (Array.isArray(A.bar) && fonts && A.bar.length !== sides.length) problems.push(`bar: ${A.bar.length} for ${sides.length} sides`);
+  }
+
   /* A pack from `base` (gfx/side/<mod>/), for a page: { layout, casting, art, minimap, problems, report }, or throws
-     when there is no side.json. A missing sheet or palette leaves the layout without art. The casting is returned as
+     when there is no side.json. The bars' fonts are fetched beside the rest. A missing sheet or palette leaves the
+     layout without art. The casting is returned as
      found, index-aligned with layout.sides: the caller checks it with WikiSim.checkCasting, beside the layout. */
   async function load(base) {
     const r = await fetch(base + 'side.json');
     if (!r.ok) throw new Error(`${base}side.json: ${r.status}`);
     const j = await r.json(), A = j.art || {};
     const bin = f => f ? fetch(base + f).then(q => q.ok ? q.arrayBuffer().then(b => new Uint8Array(b)) : null, () => null) : Promise.resolve(null);
-    const [sheet, pal, seen, greyed] = await Promise.all([bin(A.sheet && A.sheet.file), bin(A.palette),
-      bin(A.minimap && A.minimap.seen), bin(A.greyed)]);
-    return { ...read(j, sheet, pal, seen, greyed), casting: j.casting, report: j.report || [], mod: j.mod };
+    const fontFiles = [...new Set((Array.isArray(A.bar) ? A.bar : [])
+      .map(b => b && b.font).filter(f => typeof f === 'string' && !f.includes('..')))];
+    const [sheet, pal, seen, greyed, ...fontBytes] = await Promise.all([bin(A.sheet && A.sheet.file), bin(A.palette),
+      bin(A.minimap && A.minimap.seen), bin(A.greyed), ...fontFiles.map(bin)]);
+    const fonts = Object.fromEntries(fontFiles.map((f, i) => [f, fontBytes[i]]));
+    return { ...read(j, sheet, pal, seen, greyed, fonts), casting: j.casting, report: j.report || [], mod: j.mod };
   }
 
-  return { compose, rgba, read, load, geometry, dotAt, COL };
+  return { compose, rgba, read, load, geometry, dotAt, fntProblem, COL };
 })();
 if (typeof module !== 'undefined') module.exports = WikiSide;

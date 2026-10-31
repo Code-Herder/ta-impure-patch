@@ -79,7 +79,10 @@ binaries (research/notes/ingame-wiki.md, *The data format*, a mod's pack). side.
            picture a button (`pics[i]` belongs to `layout.screens[S].gadgets[i]`) and its labels, `greyed.bin` (the
            tint over a greyed button, greyed_table), the minimap dots, and the minimap's colours:
            `unexplored` and `box` (GUI colours 0 and 0x0E), `seen.bin` (the grey remap) and one base per stage,
-           `minimap/<entry>.<scene>.bin`, shrunk with that install's own PALETTE.ALP
+           `minimap/<entry>.<scene>.bin`, shrunk with that install's own PALETTE.ALP; and the resource bars
+           (tools/wiki/mockup/bar.js): `bar`, per layout side null or its PANELTOP and PANELBOT frames, its fifteen
+           sidedata rects, `ecol`, `mcol` and its font, `fnt/<font>.bin`; `logos`, the badge frames; `gui`, the GUI
+           colour table (0x4AC7D0's 256 entries)
   report   every element's source, and every refusal, by name
 and with `--stages`, `gfx/side/<m>/stage/`: the stage packs above, laid out as in gfx/ (`<entry>.<scene>/scene.json`,
 `palette/`, `shaders/`, `index.json`), resolved from the mod's install and holding, beside each entry's own unit
@@ -121,7 +124,10 @@ VA = {"units": 0x503920, "objects3d": 0x5036E4, "scripts": 0x503740, "textures":
       "palettes": 0x5031BC, "palette": 0x5033A4,
       # the left sidebar's (MEASURED from the pristine exe; exe-reverse-engineering.md, *The left sidebar*)
       "gui": 0x502820, "gamedata": 0x503360, "unitpics": 0x505FE4, "download": 0x503730,
-      "commongui": 0x50925C, "guipal": 0x5031C8}
+      "commongui": 0x50925C, "guipal": 0x5031C8,
+      # the resource bar's: the folder and extension 0x431A60 loads a side's `font` with (0x431BCF..0x431BF1), and
+      # the badge sequence 0x4318C0 looks up in logos.GAF (0x431906) -- DISASSEMBLED
+      "fonts": 0x50338C, "fnt_ext": 0x503394, "logos_seq": 0x504728}
 # the folders --folders may override: the ones a mod's loader renames in memory, after the exe file was read
 FOLDERS = ("gui", "unitpics", "gamedata", "download")
 
@@ -1073,6 +1079,13 @@ SIDE_SCREENS, SIDE_GADGETS, SIDE_PAGES, SIDE_TYPES = 48, 64, 7, 64
 SHEET_W = 1024
 MINIMAP_SPAN = 126         # 0x466780: the minimap picture's long side
 GUI_UNEXPLORED, GUI_BOX = 0x00, 0x0E     # GUI colour table indices: fog 0x466C20, camera box 0x466B70
+# The resource bar's fifteen rects: the sub-sections of [SIDE%d] that 0x431A60 reads into RaceSideData +0x42..+0x122
+# (DISASSEMBLED, 0x431C82..0x4324B9). TOTALUNITS and TOTALTIME are read and never drawn.
+BAR_RECTS = ("logo", "energybar", "energynum", "energymax", "energy0", "metalbar", "metalnum", "metalmax", "metal0",
+             "totalunits", "totaltime", "energyproduced", "energyconsumed", "metalproduced", "metalconsumed")
+BAR_COORD = (-1024, 4096)  # a rect coordinate's bound, side.js read's too: past the widest frame either way
+FNT_MAX = 32               # a font's rows and a glyph's width at most, side.js read's too
+BAR_LOGOS = 32             # the badge frames a pack carries at most, side.js read's too
 # GUI_ButtonDraw 0x4A5F40 and the stage pass's id-1 case 0x4A8B4B read these attribs bits
 ATTR_LAST_GREY, ATTR_CHECKBOX, ATTR_SCROLL, ATTR_ONOFF = 0x100, 0x80, 0x1800, 0x4000
 
@@ -1446,9 +1459,49 @@ def unit_index(eng, report):
     return out
 
 
+def bar_rects(sec):
+    """A [SIDE%d] section's resource-bar rects, {name: [x1, y1, x2, y2]}: each number C's atoi, as the engine reads a
+    TDF, and the first sub-section of a name winning (0x4C3410). A rect the section lacks is absent."""
+    out = {}
+    for sub in sec["sub"]:
+        n = sub["_name"].lower()
+        if n in BAR_RECTS and n not in out:
+            out[n] = [atoi(sub["keys"].get(c)) for c in ("x1", "y1", "x2", "y2")]
+    return out
+
+
+def fnt_problem(blob):
+    """Why `blob` is not a font the bar's text may be drawn with, or None. The format is the engine's `.fnt`: the rows
+    at byte 0, the row offset (signed) at byte 2, the first code at byte 3, then a u16 offset per code; a glyph is its
+    width, then rows x width bits, MSB-first across row boundaries (DrawTextCustomFont 0x4C14F0). The bounds are
+    those tagpu_packet_pub.c holds the engine's own copy to -- first code 0, so the table has 256 entries -- and every
+    glyph's bits inside the file. side.js read applies the same."""
+    n = len(blob)
+    if n < 4 + 2 * 256:
+        return f"{n} bytes, short of the 256-code table"
+    rows = blob[0]
+    if not 1 <= rows <= FNT_MAX:
+        return f"{rows} rows"
+    if blob[3] != 0:
+        return f"first code {blob[3]}, not 0"
+    for c in range(256):
+        o = struct.unpack_from("<H", blob, 4 + 2 * c)[0]
+        if not o:
+            continue
+        if o >= n:
+            return f"glyph {c} at {o}, past the file"
+        w = blob[o]
+        if not 1 <= w <= FNT_MAX:
+            return f"glyph {c} is {w} wide"
+        if o + 1 + -(-w * rows // 8) > n:
+            return f"glyph {c}'s bits run past the file"
+    return None
+
+
 def read_sides(eng, report):
     """`<gamedata>\\sidedata.tdf`'s [SIDE0], [SIDE1], ... up to the first missing one (0x431A60), the first section
-    of a name winning as the engine's lookup 0x4C3410 does: [{name, prefix, intgaf, commander}]."""
+    of a name winning as the engine's lookup 0x4C3410 does: [{name, prefix, intgaf, commander, and the resource
+    bar's font, energycolor, metalcolor (the raw values) and rects}]."""
     hit = eng.load(eng.dirs["gamedata"], "sidedata", "TDF")
     if hit is None:
         raise SideError(f"no {eng.dirs['gamedata']}\\sidedata.tdf")
@@ -1463,7 +1516,8 @@ def read_sides(eng, report):
             break
         k = sec["keys"]
         sides.append({"name": k.get("name", ""), "prefix": k.get("nameprefix", ""), "intgaf": k.get("intgaf", ""),
-                      "commander": k.get("commander", "").strip()})
+                      "commander": k.get("commander", "").strip(), "font": k.get("font", ""),
+                      "energycolor": k.get("energycolor"), "metalcolor": k.get("metalcolor"), "rects": bar_rects(sec)})
     report.append({"element": "sidedata", "path": hit[1], "where": hit[2], "sides": [s["name"] for s in sides]})
     if not sides:
         raise SideError(f"{hit[1]} has no [SIDE0]")
@@ -1486,14 +1540,15 @@ class SideArt:
             self.banks[name.lower()] = self.eng.gaf(self.eng.dirs["anims"], name)
         return self.banks[name.lower()]
 
-    def seq(self, got, name):
+    def seq(self, got, name, count=None):
         """[(frame key, Pixels, hx, hy)] of sequence `name` in bank `got` (first of the name without case,
-        0x4B8D40), each frame as the blit draws it (Gaf.drawn), or None."""
+        0x4B8D40), each frame as the blit draws it (Gaf.drawn), or None. `count`: its first frames only."""
         if got is None or name.lower() not in got[0].seqs:
             return None
         gaf, path, where = got
         out = []
-        for k in range(len(gaf.seqs[name.lower()][1])):
+        n = len(gaf.seqs[name.lower()][1])
+        for k in range(n if count is None else min(count, n)):
             key = f"{path.lower()}:{where}:{name.upper()}:{k}"
             fr, hx, hy, outside = gaf.drawn(name, k)
             if outside and key not in self.frames:
@@ -2056,6 +2111,53 @@ def corpse_record(eng, u):
     return rec, f"{name.lower()} from {tdf} ({where})"
 
 
+def bar_art(eng, art, s, fonts, report):
+    """Side `s`'s resource bar as the engine loads it once a process (0x491200, DISASSEMBLED;
+    research/notes/ingame-wiki-replay-plan.md, *What R0 found*): frame 0 of PANELTOP and PANELBOT from the side's `intgaf` bank (0x429870, 0x429F2B..0x429FE1),
+    and sidedata's fifteen rects, `energycolor`, `metalcolor` and `font` (0x431A60), the font read from
+    `<fonts>\\<font>.<fnt_ext>` by the engine's path rule (0x431BCF..0x431BF1). Every value is checked here as
+    side.js read checks it; a side that fails any check has no bar (the stage draws the whitebox strips) and a
+    report line says why. The font's bytes go into `fonts` ({source: (pack file, bytes)}), one file per source.
+    Returns {top, bot: (frame key, hx, hy), rects, ecol, mcol, font: pack file} or None."""
+    el = f"bar {s['name']}"
+    got = art.bank(s["intgaf"]) if s["intgaf"] else None
+    rects = s["rects"]
+    lo, hi = BAR_COORD
+    ecol, mcol = atoi(s["energycolor"]), atoi(s["metalcolor"])
+    font = eng.load(eng.dirs["fonts"], s["font"], eng.dirs["fnt_ext"]) if s["font"] else None
+    missing = [r for r in BAR_RECTS if r not in rects]
+    bad = [r for r in BAR_RECTS if r in rects and not (all(lo <= v <= hi for v in rects[r]) and
+                                                      rects[r][0] <= rects[r][2] and rects[r][1] <= rects[r][3])]
+    why = None
+    if got is None or not all(q.lower() in got[0].seqs and got[0].seqs[q.lower()][1] for q in ("PANELTOP", "PANELBOT")):
+        why = f"no PANELTOP and PANELBOT in {eng.dirs['anims']}\\{s['intgaf']}.GAF"
+    elif missing:
+        why = f"[SIDE] has no {', '.join(m.upper() for m in missing)}"
+    elif bad:
+        why = f"{', '.join(b.upper() for b in bad)} not x1 <= x2, y1 <= y2 inside {lo}..{hi}"
+    elif not (0 <= ecol <= 255 and 0 <= mcol <= 255):
+        why = f"energycolor {ecol} or metalcolor {mcol} is not a palette index"
+    elif font is None:
+        why = f"no {eng.dirs['fonts']}\\{s['font']}.{eng.dirs['fnt_ext']}"
+    elif fnt_problem(font[0]):
+        why = f"{font[1]}: {fnt_problem(font[0])}"
+    if why:
+        report.append({"element": el, "refused": why})
+        return None
+    source = f"{font[1].lower()}:{font[2]}"
+    if source not in fonts:
+        stem = re.sub(r"[^a-z0-9_-]", "_", s["font"].lower()) or "font"
+        taken = {f for f, _b in fonts.values()}
+        file, n = f"fnt/{stem}.bin", 1
+        while file in taken:
+            file, n = f"fnt/{stem}-{n}.bin", n + 1
+        fonts[source] = (file, font[0])
+    top, bot = art.seq(got, "PANELTOP", 1)[0], art.seq(got, "PANELBOT", 1)[0]
+    report.append({"element": el, "from": got[1], "where": got[2], "font": font[1], "font_where": font[2]})
+    return {"top": (top[0], top[2], top[3]), "bot": (bot[0], bot[2], bot[3]),
+            "rects": {r: rects[r] for r in BAR_RECTS}, "ecol": ecol, "mcol": mcol, "font": fonts[source][0]}
+
+
 def side_pack(eng, mod, descs, rows, out, pal, report):
     """The sidebar pack of one install (research/notes/ingame-wiki.md, *The data format*): side.json, sheet.bin,
     pal.bin, seen.bin, greyed.bin and the minimap bases. Every side with MAIN2 and GEN screens is a layout side, with
@@ -2184,6 +2286,16 @@ def side_pack(eng, mod, descs, rows, out, pal, report):
     report.append({"element": "dots", "from": fx and fx[1], "where": fx and fx[2],
                    "radlogo": len(rad) if rad else None, "high": bool(high)})
 
+    # the resource bar of every layout side, and the badge frames, one a colour (0x4318C0)
+    fonts = {}
+    side_art["bar"] = [bar_art(eng, art, s, fonts, report) for s in kept]
+    lg = eng.logos()
+    seq = eng.dirs["logos_seq"]
+    logos = art.seq(lg, seq) if lg and seq.lower() in lg[0].seqs and len(lg[0].seqs[seq.lower()][1]) <= BAR_LOGOS else None
+    report.append({"element": "logos", "from": lg and lg[1], "where": lg and lg[2], "seq": seq,
+                   **({"frames": len(logos)} if logos else {"refused": f"no {seq} of 1..{BAR_LOGOS} frames in "
+                                                            f"{eng.dirs['textures']}\\{eng.dirs['logos']}.GAF: no badge"})})
+
     # the minimap's tables
     hit = eng.load(eng.dirs["palettes"], eng.dirs["guipal"], "PAL")
     if hit and len(hit[0]) >= 1024:
@@ -2250,7 +2362,18 @@ def side_pack(eng, mod, descs, rows, out, pal, report):
     art_out["minimap"] = {"unexplored": gui[GUI_UNEXPLORED] if gui else None, "box": gui[GUI_BOX] if gui else None,
                           "seen": "seen.bin", "bases": bases}
     art_out["greyed"] = "greyed.bin" if greyed else None
+
+    def framed(key, hx, hy):
+        return {"f": rect(key, hx, hy), "key": art.frames[key].transparent}
+    art_out["bar"] = [None if b is None else {"top": framed(*b["top"]), "bot": framed(*b["bot"]), "rects": b["rects"],
+                                              "ecol": b["ecol"], "mcol": b["mcol"], "font": b["font"]}
+                      for b in side_art["bar"]]
+    art_out["logos"] = [framed(k, hx, hy) for k, _f, hx, hy in logos] if logos else None
+    art_out["gui"] = list(gui) if gui else None
     out.mkdir(parents=True, exist_ok=True)
+    for file, blob in fonts.values():
+        (out / file).parent.mkdir(parents=True, exist_ok=True)
+        (out / file).write_bytes(blob)
     (out / "sheet.bin").write_bytes(sheet)
     (out / "pal.bin").write_bytes(bytes(b for c in pal for b in (*c, 255)))
     (out / "seen.bin").write_bytes(seen)
