@@ -33,6 +33,10 @@ the rules the wiki copies are the recorder's ([S4b, the takeover](tadr-port/demo
 | 13 | The top bar while watching | **The game's: the viewed record's.** At full map that is the viewer's own record, whose storages the player init zeroes, so the bar reads 0 with both fills skipped; under Sight it is that seat's numbers in its side's art. The players column carries every seat's numbers | A replay shows what the game showed. If the zeros are wrong, the fix is the game's, and the wiki follows it |
 | 14 | The bottom bar | **Drawn**: PANELBOT of the viewed side, tiled from x 129 along the screen's last 32 rows, as `0x46A860` draws it | The HUD's dock sits on it in the game; the same art and loader as the top bar |
 | 15 | Sight on the other side | **Today's mixed frame**: the panel and PANELSIDE stay the loaded side's, the two bars take the viewed side's. When the mid-level re-skin (OQ-B, [the takeover](tadr-port/demo-recorder-s4-takeover.md), *The mixed-side interface*) lands in the game, the wiki follows it in the same landing | The stage shows what the game does now |
+| 16 | When the other seats get cursor inputs | **Deferred to Take over (T1) or the overlays (P1)**, whichever first has a demo that gives a seat other than 0 an input; until then both readers refuse a `seat` other than 0, and the opponent acts through its scene's orders | None of Watching's demos gives the opponent an input, so the parity check could not test the state a seat's input changes |
+| 17 | A click on a marker | **The timeline pressed at the marker's time**, a seek there; a marker has no hot area of its own in the game | What the game does |
+| 18 | Running dry | **An authored demo never runs dry**: one whose storage would fall below zero stops, `starved`, and `simcheck.mjs` fails the landing in any context where one does, so no demo's timing is ever the economy's. **In Try it yourself the builds stall at zero** as the engine's do, slowed to what the income meets | Refusing at load is impossible -- only playing it says. Clamping in Try it would show the player something the game does not do |
+| 19 | The opponent's side | **The first side of the running mod's layout that is not the player's**; with one side, the opponent keeps the entry's own types | A rule that names no mod |
 
 ## The entries
 
@@ -42,7 +46,7 @@ the rules the wiki copies are the recorder's ([S4b, the takeover](tadr-port/demo
 2. Speeds, ½× to 8×
 3. Back and forward 10 s
 4. Seek on the timeline: a press, then a drag
-5. Markers: a commander's death and a defeat on the track; a click on one jumps there
+5. Markers: a commander's death and a defeat on the track; the track pressed at one seeks there
 6. Bookmarks: one added at now, and the one within 3 s removed
 7. Leave: the question
 
