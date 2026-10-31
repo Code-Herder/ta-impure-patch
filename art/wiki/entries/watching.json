@@ -162,7 +162,7 @@
   },
   "scenes": {
     "field": {
-      "map": {"w": 40, "h": 30, "surfaceMetal": 0},
+      "map": {"w": 64, "h": 30, "surfaceMetal": 0},
       "seats": [{"name": "Ada", "metal": 1000, "energy": 1000}, {"name": "Bram", "metal": 1000, "energy": 1000}],
       "metal": [{"rect": [6, 22, 3, 3], "v": 187}],
       "units": [

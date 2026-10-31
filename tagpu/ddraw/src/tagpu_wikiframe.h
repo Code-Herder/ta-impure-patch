@@ -29,8 +29,8 @@
 
 struct WIKISIDE;
 
-#define WIKIFRAME_SIDE_W  128               /* the engine's column width, game pixels            */
-#define WIKIFRAME_BAR     32                /* each bar's height, game pixels                     */
+#define WIKIFRAME_SIDE_W  WIKI_FRAME_SIDE_W /* the engine's column width, game pixels            */
+#define WIKIFRAME_BAR     WIKI_FRAME_BAR    /* each bar's height, game pixels                     */
 #define WIKIFRAME_HUD_H   720               /* the HUD unit is the frame's height / 720 (Q3)      */
 #define WIKIFRAME_TOAST   54                /* a toast shows 1.8 s of demo ticks (sim spec 4.7)   */
 

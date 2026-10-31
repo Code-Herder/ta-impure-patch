@@ -519,6 +519,13 @@ const WikiSim = (() => {
         if (!(int(s[n]) && s[n] >= SEAT_MIN && s[n] <= SEAT_MAX)) throw new Error(`${at}: seat ${k}'s ${n} is not an integer ${SEAT_MIN}..${SEAT_MAX}`);
     });
   }
+  /* THE GAME FRAME'S 4:3 BOUND (tagpu_wikidata.h tagpu_wikidata_frame_fits): true when a game entry's map of w x h
+     cells makes a frame the replay HUD fits, 3 Wg >= 4 Hg, 960 units (MEASURED at 1024 x 768: hud-in-game.md). The
+     frame (frame.js size) is SIDE_W + CELL w wide and at most the map grown beside the tallest column (THE MAP, below)
+     and both FRAME_BAR-row bars tall, so the bound holds beside every layout's column. checkGame refuses a game entry
+     that fails it. */
+  const FRAME_BAR = 32;
+  const frameFits = (w, h) => 3 * (SIDE_W + CELL * w) >= 4 * (CELL * Math.max(h, 2 * Math.ceil(SIDE_ROWS / (2 * CELL))) + 2 * FRAME_BAR);
   function checkGame(entry, demo) {
     const game = isGame(entry);
     if (game && 'pace' in entry) throw new Error('a game entry has no pace');
@@ -536,6 +543,11 @@ const WikiSim = (() => {
       checkSeats(`the scene ${n}`, s.seats);
       for (const u of s.units || []) if (!(u.owner == null || (int(u.owner) && u.owner >= 0 && u.owner < s.seats.length)))
         throw new Error(`the scene ${n}: the owner ${u.owner} is no seat of it`);
+    }
+    // every scene has the first's size (sceneOf), so the first's map decides
+    if (game) {
+      const m = entry.scenes[Object.keys(entry.scenes)[0]].map;
+      if (!frameFits(m.w, m.h)) throw new Error(`a game entry's map of ${m.w} x ${m.h} makes a frame narrower than 4:3`);
     }
     if (!demo) return game;
     const at = `demo ${demo.id}`;
@@ -3033,6 +3045,8 @@ const WikiSim = (() => {
     // a game's bounds (tagpu_wikidata.h WIKI_SEATS, WIKI_GAME_KILLS, WIKI_GAME_END_MAX, WIKI_THEATRE_TABS) and its death
     // sound's kind
     SEATS, GAME_KILLS, GAME_END_MAX, THEATRE_TABS, SND_DEATH,
+    // the game frame's 4:3 bound on a game entry's map (checkGame)
+    frameFits,
     // the viewer's script's controls (tagpu_wikidata.h WIKI_HUD_*, in its order) and a press's trip, for replay.js
     HUD_CONTROLS, HUD_DOWN, HUD_UP,
     // the shapes alone, for checks against tagpu_placegeo.c

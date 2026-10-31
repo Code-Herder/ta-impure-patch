@@ -1067,6 +1067,8 @@ int tagpu_wikidata_entry(WIKIENTRY* e, const char* text, size_t len, char* err, 
     else if (!features(&r, e, tj_get(root, "features"))) {}
     else if (!corpses(&r, e, tj_get(root, "units"))) {}
     else if (!scenes(&r, e, tj_get(root, "scenes"))) {}
+    else if (e->frame == WIKI_FRAME_GAME && !tagpu_wikidata_frame_fits(e->scenes[0].w, e->scenes[0].h))
+        refuse(&r, "is a game entry whose map makes a frame narrower than 4:3", NULL);
     else if (!(e->demo = (WIKIDEMO*)zalloc(&r, (size_t)(e->ndemo = count(tj_get(root, "demos"))), sizeof *e->demo))) {}
     else
         for (c = tj_is(tj_get(root, "demos"), TJ_ARR) ? tj_get(root, "demos")->first : NULL; c; c = c->next)
@@ -1077,6 +1079,13 @@ int tagpu_wikidata_entry(WIKIENTRY* e, const char* text, size_t len, char* err, 
         return 0;
     }
     return 1;
+}
+
+int tagpu_wikidata_frame_fits(int w, int h)
+{
+    const int Wg = WIKI_FRAME_SIDE_W + WIKI_CELL * w;
+    const int Hg = WIKI_CELL * tagpu_wiki_map_rows(h, WIKI_SIDE_ROWS) + 2 * WIKI_FRAME_BAR;
+    return 3 * Wg >= 4 * Hg;
 }
 
 /* ---- the data rules of a demo's script ---------------------------------------------------- */

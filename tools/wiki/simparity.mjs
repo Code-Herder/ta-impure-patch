@@ -720,6 +720,16 @@ function gameRefusalCases(game, page) {
   const tabs = n => e => { for (let k = 1; k < n; k++) e.demos.push({ ...clone(game.demos[k % game.demos.length]), id: `tab${k}` }); };
   g(`${WikiSim.THEATRE_TABS} demos`, 'accepted', tabs(WikiSim.THEATRE_TABS));
   g(`${WikiSim.THEATRE_TABS + 1} demos`, 'refused', tabs(WikiSim.THEATRE_TABS + 1));
+  /* the game frame's 4:3 bound (tagpu_wikidata_frame_fits): the narrowest map that makes a 4:3 frame accepted and one
+     cell narrower refused, at rows under the deepest column's (the map grown beside it decides) and at rows past them
+     (the scene's own rows do); every scene's map resized together, as sceneOf asks */
+  const resize = (w, h) => e => { for (const sc of Object.values(e.scenes)) sc.map = { ...sc.map, w, h }; };
+  for (const h of [30, 60]) {
+    let w = 1;
+    while (!WikiSim.frameFits(w, h)) w++;
+    g(`a map ${w} x ${h}, the narrowest 4:3 frame`, 'accepted', resize(w, h));
+    g(`a map ${w - 1} x ${h}, one cell narrower`, 'refused', resize(w - 1, h));
+  }
   p('a rival unit on a page entry', 'refused', e => { e.units.ARMCK.rival = false; });
   p('a corpse on a page entry', 'refused', e => { e.features = { w: { footprint: [1, 1] } }; e.units.ARMCK.corpse = 'w'; });
   p('seats on a page entry', 'refused', (e, d, sc) => { sc.seats = [{ name: 'A', metal: 1000, energy: 1000 }]; });

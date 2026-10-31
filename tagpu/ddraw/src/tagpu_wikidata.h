@@ -411,6 +411,18 @@ static inline int tagpu_wiki_map_rows(int scene_rows, int column_rows)
     const int grown = column_rows > 0 && column_rows <= WIKI_SIDE_ROWS ? 2 * ((column_rows + 31) / 32) : 0;
     return grown > scene_rows ? grown : scene_rows;
 }
+
+/* THE GAME FRAME (tagpu_wikiframe.h): the column's width and each bar's rows, game pixels */
+#define WIKI_FRAME_SIDE_W  128
+#define WIKI_FRAME_BAR     32
+/* THE GAME FRAME'S 4:3 BOUND: 1 when a game entry's map of `w` x `h` cells makes a frame the
+   replay HUD fits, Wg 720 / Hg >= 960 units, i.e. 3 Wg >= 4 Hg (the HUD fits at 4:3, MEASURED at
+   1024 x 768: hud-in-game.md). Wg is 128 + 16 w; Hg is taken at its largest, the map grown beside
+   the tallest column there can be (tagpu_wiki_map_rows with WIKI_SIDE_ROWS) and both bars, so the
+   bound holds beside every layout's column whether the map grows or not. A map of at most
+   WIKI_GROUND_ROWS rows needs w >= 62. tagpu_wikidata_entry refuses a game entry that fails it,
+   as sim.js checkGame does, so every frame the stage draws is at least 4:3 by construction. */
+int tagpu_wikidata_frame_fits(int w, int h);
 #define WIKI_SIDE_SCREENS  48
 #define WIKI_SIDE_GADGETS  64    /* a screen's gadgets, and the length of the view's states */
 #define WIKI_SIDE_PAGES    7     /* the page is unit+0x110 bits 23..25: at most 7 numbered pages */
