@@ -25,9 +25,11 @@
    doubles rounded once per operation (the Makefile builds it for SSE2, as the wiki's other ports),
    `ftol` the engine's 0x4E43A0 under RC=11, truncation. */
 #include <stdint.h>
+#include "tagpu_huddraw.h"
 
-#define WIKIBAR_W 2048          /* the widest bar: frame x 128 .. 128 + 16 x WIKISTAGE_MAP - 1 */
-#define WIKIBAR_H 64            /* the top bar's 32 rows, then the bottom bar's 32             */
+#define WIKIBAR_W HUD_BAR_W     /* the widest bar: frame x 128 .. 128 + 16 x WIKISTAGE_MAP - 1,
+                                   the HUD pass's bar texture, which HOP_BAR samples          */
+#define WIKIBAR_H HUD_BAR_H     /* the top bar's 32 rows, then the bottom bar's 32             */
 
 struct WIKISIDE;
 

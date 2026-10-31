@@ -95,6 +95,9 @@ static int art_bind(const WIKIART* a)
         s_sart.cursor[i] = (int16_t)k;
         if (p && p->scale > 0) { s_sart.cursor_w[i] = (float)p->pw / p->scale; s_sart.cursor_h[i] = (float)p->ph / p->scale; }
     }
+    /* the game frame's emblems in its top bar (stage.js EMBLEM) */
+    s_sart.emblem[0] = (int16_t)tagpu_hudlay_part_index(a->draw.lay, "wiki_emblem");
+    s_sart.emblem[1] = (int16_t)tagpu_hudlay_part_index(a->draw.lay, "config_emblem");
     return 1;
 }
 
@@ -284,6 +287,7 @@ static void view_bound(WIKISTAGEVIEW* v)
 #define HOLD(n, max) do { if ((n) < 0) (n) = 0; if ((n) > (max)) (n) = (max); } while (0)
     HOLD(v->w, WIKISTAGE_MAP);
     HOLD(v->h, WIKISTAGE_MAP);
+    v->frame = (uint8_t)(v->frame != 0);
     HOLD(v->nvent, WIKISTAGE_VENTS);
     HOLD(v->nunit, WIKISTAGE_UNITS);
     HOLD(v->nsite, WIKISTAGE_SITES);
@@ -440,7 +444,7 @@ void tagpu_wikistate_present(const TAGPU_FRAME* f)
             s_sart.side_layout = side_resolve(sv, art, &side);
             side_bind(sv, art, side);
         }
-        tagpu_wikistage_build(sv, msg[0] ? msg : NULL, s_fr.stage, u, !w->try_it || s_tryPtr, &s_sart, &s_stage);
+        tagpu_wikistage_build(sv, msg[0] ? msg : NULL, s_fr.stage, u, !w->try_it || s_tryPtr, NULL, &s_sart, &s_stage);
         s_haveStage = 1;
         s_stageRect = s_fr.stage;
         if (s_stage.cursor >= 0 && s_stage.cursor < s_stage.n && s_stage.cursor < WIKI_MAXOP) {

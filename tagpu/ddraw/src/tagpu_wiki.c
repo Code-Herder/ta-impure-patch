@@ -553,7 +553,7 @@ static int stage_world(int cx, int cy, double* wx, double* wz)
     if (!h || cx < h->x0 || cx >= h->x1 || cy < h->y0 || cy >= h->y1) return 0;
     /* every scene of an entry has the first one's map size (tagpu_wikidata_entry), so the fit is the
        entry's map grown beside the drawn frame's column, as the simulation grows it */
-    tagpu_wikistage_fit(e->scenes[0].w, tagpu_wiki_map_rows(e->scenes[0].h, s_hit.side_h), s_hit.side_h,
+    tagpu_wikistage_fit(e->scenes[0].w, tagpu_wiki_map_rows(e->scenes[0].h, s_hit.side_h), s_hit.side_h, 0,
                         h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &f);
     if (!(f.s > 0)) return 0;
     x = (cx - h->x0 - f.ox) / f.s;

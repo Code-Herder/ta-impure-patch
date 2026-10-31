@@ -395,8 +395,7 @@ const WikiStage = (() => {
     if (v.reclaim) { mark('over'); drawSweep(g, v, { X, Z, cell, cp, U, text, measure }); }
     if (F) {
       g.restore();
-      drawTop(F, o, W, H, U);
-      return { s, ox, oz, cell, mw, mh, x0: C.x0, z0: C.z0, cw: C.w, ch: C.h, cursor: false };
+      return { s, ox, oz, cell, mw, mh, x0: C.x0, z0: C.z0, cw: C.w, ch: C.h, cursor: drawTop(F, o, W, H, U) };
     }
     // the cursor, the view's, at its point (cursorAt)
     const cur = o.cursor !== false && pt(v.cursor);
@@ -485,10 +484,11 @@ const WikiStage = (() => {
 
   /* THE TOP RANGE, on its own canvas over the stage HUD (o.frame.top): Leave's question while it is open, a whitebox at
      YESORNO.GUI's own rects (frame.js dialog) -- the panel with an edge, the title centred, Yes and No, the one held
-     down pressed -- and then the viewer's cursor, the game's arrow at the player's cursor scale */
+     down pressed -- and then the viewer's cursor, the game's arrow at the player's cursor scale. Whether it drew the
+     cursor. */
   function drawTop(F, o, W, H, U) {
     const t = F.top;
-    if (!t) return;
+    if (!t) return false;
     t.setTransform(1, 0, 0, 1, 0, 0); t.clearRect(0, 0, W, H);
     const D = F.question;
     if (D) {
@@ -508,7 +508,7 @@ const WikiStage = (() => {
         say(label, D[key], SIDE_WB.label);
       }
     }
-    if (F.cursor) cursorAt(t, o, F.cursor.x, F.cursor.y, 'arrow', 0, U);
+    return !!F.cursor && cursorAt(t, o, F.cursor.x, F.cursor.y, 'arrow', 0, U);
   }
 
   /* THE RECLAIM SWEEP (tagpu_mark.c gather_sweep, tagpu_gui_surf.c sharp_sweep): every target's corner brackets and the

@@ -32,6 +32,7 @@
 #include "tagpu_cobvm.h"
 #include "tagpu_wikistage.h"
 #include "tagpu_wikiside.h"
+#include "tagpu_wikiframe.h"
 
 /* ---- the copy ------------------------------------------------------------------------------- */
 
@@ -86,6 +87,7 @@ uint32_t tagpu_wikistage_copy(WIKISTAGEVIEW* out, const WIKIVIEW* v, const WIKIE
     out->npose = 0;
     out->nfeat = out->ngone = 0;
     out->rmode = 0;
+    out->frame = 0;
     out->has_side = 0;
     out->layout_src = WIKISTAGE_LAYOUT_NONE;
     memset(&out->side, 0, sizeof out->side);
@@ -273,12 +275,19 @@ void tagpu_wikistage_canvas(HUDRECT stage, double u, double* x0, double* y0, dou
     *h = tagpu_hud_edge(stage.y, stage.h, px) - *y0;
 }
 
-void tagpu_wikistage_fit(int w, int h, int side_h, double stage_w, double stage_h, double u, WIKISTAGEFIT* out)
+void tagpu_wikistage_fit(int w, int h, int side_h, int frame, double stage_w, double stage_h, double u, WIKISTAGEFIT* out)
 {
     const double cell = WIKI_CELL, mw = (w > 0 ? w : 1) * cell, mh = (h > 0 ? h : 1) * cell, pad = 6 * u;
     double sx, sz;
-    /* stage.js `content`: the column left of the map, as tall as the taller of the two */
-    if (side_h > 0) {
+    /* stage.js `content`: the column left of the map, as tall as the taller of the two; the frame
+       the whole game screen from the column's left edge and the top bar's top */
+    out->z0 = 0;
+    if (frame) {
+        out->x0 = -WIKI_SIDE_W;
+        out->z0 = -WIKIFRAME_BAR;
+        out->cw = WIKI_SIDE_W + mw;
+        out->ch = mh + 2 * WIKIFRAME_BAR > side_h ? mh + 2 * WIKIFRAME_BAR : side_h;
+    } else if (side_h > 0) {
         out->x0 = -WIKI_SIDE_W;
         out->cw = WIKI_SIDE_W + mw;
         out->ch = mh > side_h ? mh : side_h;
@@ -291,7 +300,7 @@ void tagpu_wikistage_fit(int w, int h, int side_h, double stage_w, double stage_
     sz = (stage_h - 2 * pad) / out->ch;
     out->s = sx < sz ? sx : sz;
     out->ox = (stage_w - out->cw * out->s) / 2 - out->x0 * out->s;
-    out->oz = (stage_h - out->ch * out->s) / 2;
+    out->oz = (stage_h - out->ch * out->s) / 2 - out->z0 * out->s;
 }
 
 static double snapd(double v) { return floor(v + 0.5 + 1.0 / 64); }
@@ -320,12 +329,12 @@ int tagpu_wikistage_cursor_frame(const WIKISTAGESPR* frames, int n, int loop, lo
     return f;
 }
 
-void tagpu_wikistage_image(int w, int h, int side_h, HUDRECT stage, double u, int* x0, int* y0, int* x1, int* y1)
+void tagpu_wikistage_image(int w, int h, int side_h, int frame, HUDRECT stage, double u, int* x0, int* y0, int* x1, int* y1)
 {
     double cx, cy, cw, ch;
     WIKISTAGEFIT f;
     tagpu_wikistage_canvas(stage, u, &cx, &cy, &cw, &ch);
-    tagpu_wikistage_fit(w, h, side_h, cw, ch, u, &f);
+    tagpu_wikistage_fit(w, h, side_h, frame, cw, ch, u, &f);
     /* the canvas's corner is a whole device pixel (tagpu_wikistage_canvas), so snapping each edge
        from the canvas, as stage.js does, snaps it from the screen too */
     *x0 = (int)(cx + snapd(f.ox));
@@ -347,6 +356,7 @@ int tagpu_wikistage_keep(const WIKISTAGEOPS* o, int i, int image, int ground, co
         t = o->rtype[i];
         return t < WIKI_MAX_DEFS && resolved && (resolved[t >> 5] >> (t & 31) & 1u) ? 0 : 2;
     case WIKISTAGE_IN_LABEL:  return 0;
+    case WIKISTAGE_IN_TOP:    return 2;
     default:               return 2;
     }
 }
@@ -590,17 +600,19 @@ static uint32_t ground(const WIKISTAGEVIEW* v, int i, double top)
 #define SIDE_LABEL   0xe8e8e2
 #define SIDE_BOX     0xf0cc10
 
-/* stage.js drawSide's `box`: a rect of the column in game pixels, x from its left edge */
+/* stage.js drawSide's `box`: a rect of the column in game pixels, x from its left edge, y from
+   the column's row 0, which lies at world z `dz` (drawSide's dz: 0 on a page's stage, -32 in the
+   frame) */
 typedef struct { double x, y, w, h, cx, cy; } SBOX;
-static SBOX sbox(double ox, double oz, double s, double x, double y, double w, double h)
+static SBOX sbox(double ox, double oz, double dz, double s, double x, double y, double w, double h)
 {
     SBOX b;
     b.x = ox + (x - WIKI_SIDE_W) * s;
-    b.y = oz + y * s;
+    b.y = oz + (y + dz) * s;
     b.w = w * s;
     b.h = h * s;
     b.cx = ox + ((x + w / 2) - WIKI_SIDE_W) * s;
-    b.cy = oz + (y + h / 2) * s;
+    b.cy = oz + ((y + h / 2) + dz) * s;
     return b;
 }
 
@@ -623,7 +635,7 @@ static const char* named(const WIKILAYOUT* L, const WIKIGADGET* g, int side)
     return g->name;
 }
 
-static void side(B* c, const WIKISTAGEVIEW* v, const WIKISTAGEART* art, double ox, double oz, double s, double top)
+static void side(B* c, const WIKISTAGEVIEW* v, const WIKISTAGEART* art, double ox, double oz, double dz, double s, double top)
 {
     const double H = v->side.h;
     const WIKILAYOUT* L = art->side_layout;
@@ -633,14 +645,14 @@ static void side(B* c, const WIKISTAGEVIEW* v, const WIKISTAGEART* art, double o
     const WIKISCREEN* scr;
     int i, x, z;
     if (im) {
-        const double x0 = snapd(ox + -WIKI_SIDE_W * s), y0 = snapd(oz + 0 * s);
-        HUDOP* p = op(c, HOP_SIDE, x0, y0, snapd(ox + 0 * s) - x0, snapd(oz + H * s) - y0);
+        const double x0 = snapd(ox + -WIKI_SIDE_W * s), y0 = snapd(oz + (0 + dz) * s);
+        HUDOP* p = op(c, HOP_SIDE, x0, y0, snapd(ox + 0 * s) - x0, snapd(oz + (H + dz) * s) - y0);
         if (p) {
             p->size = WIKI_SIDE_W;
             p->shade = (float)H;
         }
     } else {
-        const SBOX b = sbox(ox, oz, s, 0, 0, WIKI_SIDE_W, H);
+        const SBOX b = sbox(ox, oz, dz, s, 0, 0, WIKI_SIDE_W, H);
         rect(c, b.x, b.y, b.w, b.h, HEX(SIDE_COLUMN));
     }
 
@@ -649,7 +661,7 @@ static void side(B* c, const WIKISTAGEVIEW* v, const WIKISTAGEART* art, double o
            the game look has it */
         const int mw = v->w, mh = v->h, W = mw * WIKI_CELL, Hm = mh * WIKI_CELL;
         WIKISIDEMAP m;
-        SBOX b = sbox(ox, oz, s, 0, 0, WIKI_SIDE_MINIMAP, WIKI_SIDE_MINIMAP);
+        SBOX b = sbox(ox, oz, dz, s, 0, 0, WIKI_SIDE_MINIMAP, WIKI_SIDE_MINIMAP);
         tagpu_wikiside_geometry(W, Hm, &m);
         rect(c, b.x, b.y, b.w, b.h, HEX(SIDE_WELL));
         /* one solid a map cell, its edges on the device pixels the picture's own fractions round to */
@@ -657,8 +669,8 @@ static void side(B* c, const WIKISTAGEVIEW* v, const WIKISTAGEART* art, double o
         do {                                                                                      \
             const double a_ = snapd(ox + ((m.offx + (double)(cx_) * m.w / mw) - WIKI_SIDE_W) * s);  \
             const double b_ = snapd(ox + ((m.offx + (double)((cx_) + 1) * m.w / mw) - WIKI_SIDE_W) * s); \
-            const double c_ = snapd(oz + (m.offy + (double)(cz_) * m.h / mh) * s);                  \
-            const double d_ = snapd(oz + (m.offy + (double)((cz_) + 1) * m.h / mh) * s);            \
+            const double c_ = snapd(oz + ((m.offy + (double)(cz_) * m.h / mh) + dz) * s);           \
+            const double d_ = snapd(oz + ((m.offy + (double)((cz_) + 1) * m.h / mh) + dz) * s);     \
             if (b_ > a_ && d_ > c_) rect(c, a_, c_, b_ - a_, d_ - c_, (col_));                      \
         } while (0)
         for (z = 0; z < mh; z++)
@@ -675,11 +687,11 @@ static void side(B* c, const WIKISTAGEVIEW* v, const WIKISTAGEART* art, double o
             const WIKISTAGEUNIT* u = &v->unit[i];
             int px, py;
             tagpu_wikiside_dot(u->tx, u->tz, &m, W, Hm, &px, &py);
-            circle(c, ox + ((m.offx + px + .5) - WIKI_SIDE_W) * s, oz + (m.offy + py + .5) * s, 1.5 * s, 1.5 * s,
+            circle(c, ox + ((m.offx + px + .5) - WIKI_SIDE_W) * s, oz + ((m.offy + py + .5) + dz) * s, 1.5 * s, 1.5 * s,
                    team(u->owner));
         }
         /* the camera box: the stage shows the whole map, so it is the picture's border */
-        b = sbox(ox, oz, s, m.offx, m.offy, m.w, m.h);
+        b = sbox(ox, oz, dz, s, m.offx, m.offy, m.w, m.h);
         sring(c, &b, s, HEX(SIDE_BOX));
     }
 
@@ -688,7 +700,7 @@ static void side(B* c, const WIKISTAGEVIEW* v, const WIKISTAGEART* art, double o
     if (!L || v->side.screen < 0 || v->side.screen >= L->nscreen || v->side.screen >= WIKI_SIDE_SCREENS) return;
     scr = &L->screen[v->side.screen];
     if (!im) {
-        const SBOX b = sbox(ox, oz, s, 0, scr->y, scr->w, scr->h);
+        const SBOX b = sbox(ox, oz, dz, s, 0, scr->y, scr->w, scr->h);
         rect(c, b.x, b.y, b.w, b.h, HEX(SIDE_PANEL));
     }
     for (i = 0; i < scr->ngadget && i < v->side.nstate && i < WIKI_SIDE_GADGETS; i++) {
@@ -705,7 +717,7 @@ static void side(B* c, const WIKISTAGEVIEW* v, const WIKISTAGEART* art, double o
             lt = memchr(p->text, 0, sizeof p->text) ? p->text : "";
         }
         if (!(st >= 0)) continue;
-        b = sbox(ox, oz, s, g->x, scr->y + g->y, g->w, g->h);
+        b = sbox(ox, oz, dz, s, g->x, scr->y + g->y, g->w, g->h);
         if (st == 2) {
             if (c->o->ngrp >= WIKI_MAXGRP) {
                 c->o->dropped++;
@@ -848,6 +860,139 @@ static void sweep(B* c, const WIKISTAGEVIEW* v, double ox, double oz, double s, 
 #undef X
 #undef Z
 
+/* THE CURSOR at canvas point (px, py), stage.js `cursorAt`: the game's own, as sharp_cursor
+   (tagpu_gui_surf.c) draws the player's -- the frame its animation shows `elapsed` ticks after the
+   shape began, at `spr_scale` device pixels an art pixel whatever the map's scale or the HUD's, the
+   hotspot on the pointer's device pixel. Else, for a shape whose frames did not load, its kit icon
+   centred on the point, in the box stage.js snaps. The op that draws it, or -1. */
+static int cursor_at(B* c, const WIKISTAGEART* art, double px, double py, int shape, long elapsed)
+{
+    const WIKISTAGESEQ* sq;
+    HUDOP* p;
+    if (shape < 0 || shape >= WIKI_CURSOR_N) return -1;
+    sq = &art->seq[shape];
+    if (sq->n > 0) {
+        const int f = tagpu_wikistage_cursor_frame(art->spr + sq->first, sq->n, sq->loop, elapsed);
+        const WIKISTAGESPR* q;
+        float k;
+        double dx, dy;
+        int w, h;
+        if (f < 0) return -1;
+        q = &art->spr[sq->first + f];
+        k = art->spr_scale;
+        dx = snapd(px);
+        dy = snapd(py);
+        w = (int)((float)q->w * k + 0.5f);
+        h = (int)((float)q->h * k + 0.5f);
+        if (!(w > 0 && h > 0) || !(p = op(c, HOP_PART, dx - (int)((float)q->hx * k), dy - (int)((float)q->hy * k), w, h)))
+            return -1;
+        p->flags = HOPF_SPRITE;
+        p->part = (int16_t)(sq->first + f);
+        p->size = q->w;
+        p->shade = q->h;
+        return (int)(p - c->o->op);
+    }
+    if (art->cursor[shape] < 0) return -1;
+    {
+        const double w = art->cursor_w[shape] * c->u, h = art->cursor_h[shape] * c->u;
+        const double a = px - w / 2, b = py - h / 2;
+        const double x0 = snapd(a), y0 = snapd(b);
+        if (!(p = op(c, HOP_PART, x0, y0, snapd(a + w) - x0, snapd(b + h) - y0))) return -1;
+        p->part = art->cursor[shape];
+        return (int)(p - c->o->op);
+    }
+}
+
+/* ---- THE FRAME (stage.js drawFrame, drawTop): the whole game screen of the map's size
+   (tagpu_wikiframe.h), its parts in the game's paint order. Every part's edges are snapped to
+   device pixels: a frame rect from world x, z, w, h, as stage.js's `sbox`. ---- */
+#define FRAME_BLACK 0x000000            /* palette index 0, the engine's clear (side.js)        */
+
+static void fbox(const WIKISTAGEFIT* f, double x, double z, double w, double h, double* b)
+{
+    b[0] = snapd(f->ox + x * f->s);
+    b[1] = snapd(f->oz + z * f->s);
+    b[2] = snapd(f->ox + (x + w) * f->s) - b[0];
+    b[3] = snapd(f->oz + (z + h) * f->s) - b[1];
+}
+
+/* the parts under the world: the screen's black, the column from frame row 0 (dz -32), the top
+   bar at frame (128, 0) and the bottom bar at (128, Hg - 32), each Wg - 128 by 32 -- the composed
+   picture's part 0 and 1 drawn whole and nearest (HOP_BAR), or two whitebox strips without one --
+   then Impure's emblems in the top bar's right end: the wiki emblem in the rewind button's slot (a
+   replay has no rewind) and the sprocket, up and inert, at layout.json's `button` place */
+static void frame_parts(B* c, const WIKISTAGEVIEW* v, const WIKISTAGEART* art, const WIKISTAGEFRAME* fr,
+                        const WIKISTAGEFIT* f, double top)
+{
+    const double bw = f->cw - WIKI_SIDE_W, Hg = f->ch;
+    double b[4];
+    int part;
+    mark(c, WIKISTAGE_IN_R0, 0);
+    fbox(f, -WIKI_SIDE_W, -WIKIFRAME_BAR, f->cw, Hg, b);
+    rect(c, b[0], b[1], b[2], b[3], HEX(FRAME_BLACK));
+    mark(c, WIKISTAGE_IN_SIDE, 0);
+    if (v->has_side) side(c, v, art, f->ox, f->oz, -WIKIFRAME_BAR, f->s, top);
+    for (part = 0; part < 2; part++) {
+        fbox(f, 0, part ? Hg - 2 * WIKIFRAME_BAR : -WIKIFRAME_BAR, bw, WIKIFRAME_BAR, b);
+        if (fr && fr->bar_w > 0) {
+            HUDOP* p = b[2] > 0 && b[3] > 0 ? op(c, HOP_BAR, b[0], b[1], b[2], b[3]) : NULL;
+            if (p) {
+                p->part = (int16_t)part;
+                p->size = (float)bw;
+            }
+        } else
+            rect(c, b[0], b[1], b[2], b[3], HEX(SIDE_COLUMN));
+    }
+    if (!fr || fr->btn_side <= 0) return;
+    for (part = 0; part < 2; part++) {
+        const double r = part ? fr->btn_config : fr->btn_right;
+        fbox(f, f->cw - r - fr->btn_side - WIKI_SIDE_W, fr->btn_top - WIKIFRAME_BAR, fr->btn_side, fr->btn_side, b);
+        if (art->emblem[part] >= 0) {
+            HUDOP* p = op(c, HOP_PART, b[0], b[1], b[2], b[3]);
+            if (p) p->part = art->emblem[part];
+        } else {
+            rect(c, b[0], b[1], b[2], b[3], HEX(SIDE_BUTTON));
+            ring(c, b[0] + f->s / 2, b[1] + f->s / 2, b[2] - f->s, b[3] - f->s, f->s, HEX(SIDE_EDGE));
+        }
+    }
+}
+
+/* a whitebox plate of the question: the solid and an edge `e` deep inside it */
+static void plate(B* c, const WIKIFRAMEBOX* b, double e, uint32_t col)
+{
+    rect(c, b->x, b->y, b->w, b->h, col);
+    ring(c, b->x + e / 2, b->y + e / 2, b->w - e, b->h - e, e, HEX(SIDE_EDGE));
+}
+
+/* a line of the question centred in its rect, in the stage's face at 0.6 of the rect's height */
+static void say(B* c, const char* t, const WIKIFRAMEBOX* b, uint32_t col)
+{
+    text(c, t, b->x + b->w / 2.0, b->y + b->h / 2.0, fmax(1, floor(b->h * 0.6 + 0.5)), 1, col);
+}
+
+/* THE TOP RANGE, over the stage HUD: Leave's question while it is open, a whitebox at YESORNO.GUI's
+   own rects (tagpu_wikiframe_dialog) -- the panel with an edge, the title centred, Yes and No, the
+   one held down pressed -- and then the viewer's cursor, the game's arrow at the player's cursor
+   scale. The cursor's op, or -1. */
+static int frame_top(B* c, const WIKISTAGEART* art, const WIKISTAGEFRAME* fr, const WIKISTAGEFIT* f)
+{
+    mark(c, WIKISTAGE_IN_TOP, 0);
+    if (!fr) return -1;
+    if (fr->question) {
+        const double e = fmax(1, floor(c->u + 0.5));
+        WIKIFRAMEDLG d;
+        tagpu_wikiframe_dialog(f, (int)f->cw, (int)f->ch, &d);
+        plate(c, &d.panel, e, HEX(SIDE_PANEL));
+        say(c, "Leave this replay?", &d.title, HEX(SIDE_LABEL));
+        plate(c, &d.yes, e, HEX(fr->held == 1 ? SIDE_PRESSED : SIDE_BUTTON));
+        say(c, "Yes", &d.yes, HEX(SIDE_LABEL));
+        plate(c, &d.no, e, HEX(fr->held == 2 ? SIDE_PRESSED : SIDE_BUTTON));
+        say(c, "No", &d.no, HEX(SIDE_LABEL));
+    }
+    if (!(fr->cursor_x == fr->cursor_x) || !(fr->cursor_y == fr->cursor_y)) return -1;
+    return cursor_at(c, art, fr->cursor_x, fr->cursor_y, WIKI_CURSOR_ARROW, 0);
+}
+
 /* stage.js `readout`: a line on a dark plate at the stage's bottom, right or left */
 static void readout(B* c, const char* t, int right)
 {
@@ -857,7 +1002,7 @@ static void readout(B* c, const char* t, int right)
 }
 
 int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage, double u, int cursor,
-                          const WIKISTAGEART* art, WIKISTAGEOPS* out)
+                          const WIKISTAGEFRAME* frame, const WIKISTAGEART* art, WIKISTAGEOPS* out)
 {
     static const uint32_t SITE[3] = { 0x2bd248, 0xe62828, 0xf0d020 };
     static const uint32_t LINE[4] = { 0x3ccf3c, 0xf0cc10, 0xe23030, 0x3a86f0 };   /* WIKI_ORDER_* */
@@ -894,16 +1039,29 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
         double s, ox, oz, cp, top = v->surface_metal;
 #define X(v_) (ox + (v_) * s)
 #define Z(v_) (oz + (v_) * s)
-        tagpu_wikistage_fit(mw, mh, v->has_side ? v->side.h : 0, c.W, c.H, u, &f);
+        const HUDRECT canvas = c.clip;
+        tagpu_wikistage_fit(mw, mh, v->has_side ? v->side.h : 0, v->frame, c.W, c.H, u, &f);
         s = f.s; ox = f.ox; oz = f.oz;
         cp = cell * s;
         for (i = 0; i < mw * mh; i++)
             if (v->metal[i] > top) top = v->metal[i];
 
         /* the game's left sidebar, before the map: the cursor and the overlays are drawn over it */
-        if (v->has_side) {
+        if (v->frame) frame_parts(&c, v, art, frame, &f, top);
+        else if (v->has_side) {
             mark(&c, WIKISTAGE_IN_SIDE, 0);
-            side(&c, v, art, ox, oz, s, top);
+            side(&c, v, art, ox, oz, 0, s, top);
+        }
+        /* THE VIEWPORT CLIP, the frame's: the world is drawn under the bars and the column, so none
+           of it lands on them -- every op from the ground through the overlays clips to the
+           viewport, its edges snapped, inside the canvas */
+        if (v->frame) {
+            const double x0 = fmax(snapd(X(0)), 0), y0 = fmax(snapd(Z(0)), 0);
+            const double x1 = fmin(snapd(X(mw * cell)), c.W), y1 = fmin(snapd(Z(f.ch - 2 * WIKIFRAME_BAR)), c.H);
+            c.clip.x = (float)((c.X0 + x0) / u);
+            c.clip.y = (float)((c.Y0 + y0) / u);
+            c.clip.w = (float)(fmax(x1 - x0, 0) / u);
+            c.clip.h = (float)(fmax(y1 - y0, 0) / u);
         }
 
         /* the ground: plain cells light, metal darker by how far it stands above surfaceMetal */
@@ -1065,60 +1223,36 @@ int tagpu_wikistage_build(const WIKISTAGEVIEW* v, const char* msg, HUDRECT stage
             ring(&c, x0, y0, fabs((double)v->drag_x1 - v->drag_x0) * s, fabs((double)v->drag_z1 - v->drag_z0) * s, fmax(1, U), HEX(0xf2f6e8));
         }
         if (v->rmode) sweep(&c, v, ox, oz, s, cell, cp);
-        /* THE CURSOR: the game's own, as sharp_cursor (tagpu_gui_surf.c) draws the player's -- the
-           frame its animation shows, at `spr_scale` device pixels an art pixel whatever the map's
-           scale or the HUD's, the hotspot on the pointer's device pixel. Else, for a shape whose
-           frames did not load, its kit icon centred on the point, in the box stage.js snaps. Neither
-           when the caller leaves the cursor out. */
-        const WIKISTAGESEQ* sq = cursor && v->cursor_shape < WIKI_CURSOR_N ? &art->seq[v->cursor_shape] : NULL;
-        if (sq && sq->n > 0) {
-            const int f = tagpu_wikistage_cursor_frame(art->spr + sq->first, sq->n, sq->loop,
-                                                       (long)v->tick - v->cursor_since);
-            if (f >= 0) {
-                const WIKISTAGESPR* q = &art->spr[sq->first + f];
-                const float k = art->spr_scale;
-                const double dx = snapd(X(v->cursor_x)), dy = snapd(Z(v->cursor_z));
-                const int w = (int)((float)q->w * k + 0.5f), h = (int)((float)q->h * k + 0.5f);
-                HUDOP* p = w > 0 && h > 0 ? op(&c, HOP_PART, dx - (int)((float)q->hx * k), dy - (int)((float)q->hy * k), w, h) : NULL;
-                if (p) {
-                    p->flags = HOPF_SPRITE;
-                    p->part = (int16_t)(sq->first + f);
-                    p->size = q->w;
-                    p->shade = q->h;
-                    out->cursor = (int)(p - out->op);
-                }
+        /* the frame's top range, over the stage HUD, and nothing of the view's own after it: the
+           viewer is not seat 0, so the frame has no cursor of the view's and no readouts */
+        if (v->frame) {
+            c.clip = canvas;
+            out->cursor = frame_top(&c, art, frame, &f);
+        } else {
+            /* the view's cursor at its point (cursor_at); none when the caller leaves it out */
+            if (cursor) out->cursor = cursor_at(&c, art, X(v->cursor_x), Z(v->cursor_z), v->cursor_shape,
+                                                (long)v->tick - v->cursor_since);
+            if (v->pace > 1) {
+                char t[64], n[32];
+                jsnum(n, sizeof n, v->pace);
+                snprintf(t, sizeof t, "construction \xC3\x97%s", n);
+                readout(&c, t, 1);
             }
-        } else if (cursor && v->cursor_shape < WIKI_CURSOR_N && art->cursor[v->cursor_shape] >= 0) {
-            const int k = v->cursor_shape;
-            const double w = art->cursor_w[k] * U, h = art->cursor_h[k] * U;
-            const double a = X(v->cursor_x) - w / 2, b = Z(v->cursor_z) - h / 2;
-            const double x0 = snapd(a), y0 = snapd(b);
-            HUDOP* p = op(&c, HOP_PART, x0, y0, snapd(a + w) - x0, snapd(b + h) - y0);
-            if (p) {
-                p->part = art->cursor[k];
-                out->cursor = (int)(p - out->op);
+            if (v->spacing > 0) {
+                char t[32];
+                snprintf(t, sizeof t, "Spacing: %d", v->spacing);
+                readout(&c, t, 0);
             }
-        }
-        if (v->pace > 1) {
-            char t[64], n[32];
-            jsnum(n, sizeof n, v->pace);
-            snprintf(t, sizeof t, "construction \xC3\x97%s", n);
-            readout(&c, t, 1);
-        }
-        if (v->spacing > 0) {
-            char t[32];
-            snprintf(t, sizeof t, "Spacing: %d", v->spacing);
-            readout(&c, t, 0);
-        }
-        /* the kind's tag beside the cursor while reclaim is armed, (13, 20) game px off its point
-           as the game puts it */
-        if (v->rmode && cursor) {
-            const int kd = v->sweep.kind < WIKI_NKINDS ? v->sweep.kind : WIKI_KIND_ALL;
-            const char* t = KIND_NAME[kd];
-            const double sz = floor(8.5 * U + 0.5), h = 12 * U, tw = measure(&c, t, sz);
-            const double x0 = snapd(X(v->cursor_x) + 13 * U), y0 = snapd(Z(v->cursor_z) + 20 * U);
-            rect(&c, x0, y0, tw + 6 * U, h, HEX(SW_EDGE));
-            text(&c, t, x0 + 3 * U, y0 + h / 2, sz, 0, HEX(SW_KIND[kd]));
+            /* the kind's tag beside the cursor while reclaim is armed, (13, 20) game px off its point
+               as the game puts it */
+            if (v->rmode && cursor) {
+                const int kd = v->sweep.kind < WIKI_NKINDS ? v->sweep.kind : WIKI_KIND_ALL;
+                const char* t = KIND_NAME[kd];
+                const double sz = floor(8.5 * U + 0.5), h = 12 * U, tw = measure(&c, t, sz);
+                const double x0 = snapd(X(v->cursor_x) + 13 * U), y0 = snapd(Z(v->cursor_z) + 20 * U);
+                rect(&c, x0, y0, tw + 6 * U, h, HEX(SW_EDGE));
+                text(&c, t, x0 + 3 * U, y0 + h / 2, sz, 0, HEX(SW_KIND[kd]));
+            }
         }
 #undef X
 #undef Z

@@ -240,6 +240,11 @@ $(addprefix src/tagpu_wikireplay, $(ALLEXTS)): \
 # tools/wiki/stagecheck.mjs checks a native build of it.
 $(addprefix src/tagpu_wikistage, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
 
+# THE WIKI'S FRAME (src/tagpu_wikiframe.h) places the viewer's cursor and Leave's question in double
+# by the mockup's frame.js arithmetic and snaps them to pixels, so it computes on SSE2 with the
+# stage. tools/wiki/framecheck.mjs checks a native build of it.
+$(addprefix src/tagpu_wikiframe, $(ALLEXTS)): CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
+
 # THE WIKI'S SCENE (src/tagpu_wikiscene.h) stages a nanoframe by truncating a single-precision
 # product (tagpu_nanostage.h, `nano * 255.0f`) as the mockup's scene.js truncates Math.fround's,
 # so it computes on SSE2 too: an 80-bit product can land on the other side of a whole number.

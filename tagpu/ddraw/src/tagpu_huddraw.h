@@ -24,9 +24,10 @@ typedef struct {
 enum { HUDM_PART, HUDM_SOLID, HUDM_SHADE, HUDM_DOT, HUDM_GLYPH, HUDM_LINE, HUDM_CHART, HUDM_DROP, HUDM_RING };
 
 /* A run of instances drawn with one texture bound: a part's index, HUD_TEX_ATLAS,
-   HUD_TEX_CHART, HUD_TEX_LAYER, HUD_TEX_SPRITE (the wiki's sprite sheet, tagpu_wikistate.h) or
+   HUD_TEX_CHART, HUD_TEX_LAYER, HUD_TEX_SPRITE (the wiki's sprite sheet, tagpu_wikistate.h),
    HUD_TEX_SIDE (the wiki stage's composed sidebar column, HUD_SIDE_W x HUD_SIDE_H RGBA8, the
-   same).
+   same) or HUD_TEX_BAR (the wiki stage's game frame's two bars, HUD_BAR_W x HUD_BAR_H RGBA8: rows
+   0..31 the top bar, 32..63 the bottom bar, tagpu_wikibar.h).
    A fill samples nothing, so it joins whatever run it falls in rather than breaking it -- except
    a HUD_TEX_LAYER run, which holds only groups' composites, since the pass rescales its uv. */
 #define HUD_TEX_ATLAS  (-2)
@@ -36,6 +37,9 @@ enum { HUDM_PART, HUDM_SOLID, HUDM_SHADE, HUDM_DOT, HUDM_GLYPH, HUDM_LINE, HUDM_
 #define HUD_TEX_SIDE   (-6)
 #define HUD_SIDE_W     128          /* WIKI_SIDE_W: the column's width                        */
 #define HUD_SIDE_H     768          /* WIKI_SIDE_ROWS: the most rows a layout may have        */
+#define HUD_TEX_BAR    (-7)
+#define HUD_BAR_W      2048         /* the widest bar: 16 x WIKISTAGE_MAP, frame x 128 .. Wg - 1 */
+#define HUD_BAR_H      64           /* the top bar's 32 rows, then the bottom bar's 32          */
 typedef struct { int tex, first, count; } HUDBATCH;
 
 /* A GROUP'S REGION OF THE LAYER IMAGE (tagpu_huddraw.c, THE GROUPS), in its pixels from its top
@@ -69,6 +73,22 @@ int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, int layer, float p
                         int w, int h, HUDINST* inst, int cap, HUDBATCH* b, int bcap, int* nb,
                         int* nmain, int* nminst, HUDLAYREG* g, int* ng, HUDSHELF* shelf,
                         int* dropped, int* unfit);
+
+/* THE PARTITION of a frame's builds: `nlist` lists' batches lie in `b` one list after another
+   from b[at[0]], list k's `nbatch[k]` of them at at[k], its first `nmain[k]` the attachment's and
+   the rest its groups' (tagpu_huddraw_build_list's *nb and *nmain). In place, every list's main
+   batches are put first, in list order, then every list's group batches, in list order, and each
+   of the `ng` regions in `g` whose b0 names a moved group batch follows it. MAIN BATCHES FIRST,
+   THEN GROUPS: the pass draws the attachment's batches as runs, and the layer pass records the
+   group runs after the last main batch, so a group batch between two main runs would be drawn on
+   the attachment and a b0 left behind would composite another group's region -- silently. Returns
+   the index in `b` of the first group batch (the end of the main batches), or -1 when the lists do
+   not lie one after another inside [0, nb) or a list's main batches outnumber its batches; `b` is
+   then untouched, as it is when `nb` is above HUD_PARTITION_MAX. A list of no batches is skipped
+   whatever its `at`. */
+#define HUD_PARTITION_MAX 1024      /* the pass's HUD_MAXBATCH (tagpu_vk_hud.c)                */
+int tagpu_huddraw_partition(HUDBATCH* b, int nb, const int* at, const int* nmain, const int* nbatch, int nlist,
+                            HUDLAYREG* g, int ng);
 
 /* AN OP LIST BY POINTER AND COUNT: the arrays a build reads, which a HUDOPS holds at the replay
    HUD's bounds (HUD_MAXOP) and another list of the same HUDOP/HUDRUN/text layout holds at its own

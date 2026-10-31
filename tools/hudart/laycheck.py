@@ -333,7 +333,7 @@ def main():
     tmp = Path(tempfile.mkdtemp(prefix="laycheck"))
     exe = tmp / "laycheck"
     cc = subprocess.run(["gcc", "-O1", "-std=c99", "-Wall", f"-I{SRC}", f"-I{SRC.parent / 'inc'}",
-                         str(ROOT / "tools/hudart/laycheck.c"), str(SRC / "tagpu_json.c"),
+                         str(ROOT / "tools/hudart/laycheck.c"), str(ROOT / "tools/hudart/hudstatejson.c"), str(SRC / "tagpu_json.c"),
                          str(SRC / "tagpu_hudlay.c"), str(SRC / "tagpu_hudtext.c"), "-lm", "-o", str(exe)],
                         capture_output=True, text=True)
     if cc.returncode:

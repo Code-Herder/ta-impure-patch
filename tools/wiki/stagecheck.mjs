@@ -43,6 +43,16 @@
    be its call's, tagpu_wikistage_keep must put each op where stage.js draws it under each image, and the image's
    rect must be tagpu_wikistage_image's.
 
+   THE FRAME (research/notes/ingame-wiki-replay-plan.md, decisions 6 and 20-24). Every frame of a frame:game entry is
+   drawn a second time as the whole game frame: the view filtered to the watcher's (frame.js view, tagpu_wikiframe_view,
+   the column the idle MAIN2 of the layout's side 0) and drawn in stage.js's frame mode -- its black, the column from
+   the top bar's top, the two bars (the bars' picture as one drawImage of a part of the bar canvas, HOP_BAR, on the odd
+   frames k = tick / 30, the whitebox strips on the even), Impure's emblems (the kit's parts while k % 4 < 2, whitebox
+   buttons otherwise), every range from the ground through the overlays clipped to the viewport, and the TOP range on
+   its own canvas: Leave's question on a third of the frames, its answer held as (k / 3) % 3, and the viewer's cursor on
+   the even frames at a canvas point both sides take from k (wikistagetest.c says which). The recording keeps each
+   call's clip -- save, a rect, clip, restore -- and each op's clip must be the call's, the canvas's where there is none.
+
    THE UNITS' SCRIPTS. With a gfx pack built (tools/wiki/gfx.py, gitignored: read from the game), the demos play once
    more with the fixture's sidebar at the first size and the units' scripts -- sim.js through serve.py's host
    (cobhost.mjs), the C side from the same files (tests/wikicobfile.h) -- so the scripted poses and the nano spray's
@@ -51,18 +61,20 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { createRequire } from 'node:module';
 import { cobHost, scripts } from './cobhost.mjs';
 
 const require = createRequire(import.meta.url);
 const WikiSim = require('./mockup/sim.js');
 const WikiStage = require('./mockup/stage.js');
+const WikiFrame = require('./mockup/frame.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const DDRAW = path.join(ROOT, 'tagpu/ddraw');
 const TOL = 1 / 64;
 const SRCS = ['src/tagpu_wikistage.c', 'src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_json.c', 'src/tagpu_pak.c',
   'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c', 'src/tagpu_hudtext.c',
-  'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c'];
+  'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c', 'src/tagpu_wikiframe.c'];
 // the stages: device pixels a unit, the canvas's corner and size in device pixels
 const SIZES = [
   { name: '1920x1080', u: 1.5, x0: 759, y0: 146, w: 1045, h: 532 },
@@ -83,11 +95,29 @@ function run(cmd, args, opts = {}) {
     throw new CannotRun(`${cmd} ${args.join(' ')} failed${r.error ? `: ${r.error.message}` : ` (${r.status})`}\n${r.stderr || ''}`);
   return r.stdout;
 }
+/* the C side's frames, one JSON line each, read from the file its stdout went to: a pass's lines run to more than a
+   string holds, so they are read and paired one at a time */
+function* runLines(cmd, args, file) {
+  const fd = fs.openSync(file, 'w');
+  try { run(cmd, args, { stdio: ['ignore', fd, 'pipe'] }); } finally { fs.closeSync(fd); }
+  const rd = fs.openSync(file, 'r'), buf = Buffer.alloc(1 << 24), dec = new StringDecoder('utf8');
+  let rest = '', n;
+  try {
+    while ((n = fs.readSync(rd, buf, 0, buf.length, null)) > 0) {
+      const parts = (rest + dec.write(buf.subarray(0, n))).split('\n');
+      rest = parts.pop();
+      for (const l of parts) if (l.trim()) yield JSON.parse(l);
+    }
+    rest += dec.end();
+    if (rest.trim()) yield JSON.parse(rest);
+  } finally { fs.closeSync(rd); fs.rmSync(file, { force: true }); }
+}
 
 /* ---- the colours as the canvas parses them, as 0xRRGGBBAA ---- */
 function colour(s) {
   let m;
   if ((m = /^#([0-9a-f]{6})$/i.exec(s))) return (parseInt(m[1], 16) * 256 + 255) >>> 0;
+  if ((m = /^#([0-9a-f]{3})$/i.exec(s))) return colour(`#${[...m[1]].map(c => c + c).join('')}`);
   if ((m = /^rgba?\(([^)]*)\)$/.exec(s))) {
     const v = m[1].split(',').map(Number), a = v.length > 3 ? Math.round(v[3] * 255) : 255;
     return (((Math.round(v[0]) << 24) | (Math.round(v[1]) << 16) | (Math.round(v[2]) << 8) | a) >>> 0);
@@ -96,13 +126,14 @@ function colour(s) {
 }
 
 /* ---- the recording context ---- */
-function recorder(em, asked) {
-  const out = [], tags = [];
-  let path = [], dash = [], tag = null, grp = 0, ga = 1, ngrp = 0;
-  // every shape recorded carries the range the call that made it was drawn in, and its group and that group's opacity
+function recorder(em, asked, W, H) {
+  const out = [], tags = [], saved = [];
+  let path = [], dash = [], tag = null, grp = 0, ga = 1, ngrp = 0, clip = null;
+  // every shape recorded carries the range the call that made it was drawn in, its group and that group's opacity, and
+  // the clip it was drawn under ([x, y, w, h] in canvas pixels; null: the canvas)
   const push = out.push.bind(out);
   // (in place: a dash's stroke is carried round a corner after it is recorded)
-  out.push = sh => { tags.push(tag); sh.grp = grp; sh.ga = ga; return push(sh); };
+  out.push = sh => { tags.push(tag); sh.grp = grp; sh.ga = ga; sh.clip = clip; return push(sh); };
   const g = {
     fillStyle: '#000', strokeStyle: '#000', lineWidth: 1, font: '10px sans-serif', textAlign: 'start', textBaseline: 'alphabetic',
     imageSmoothingQuality: 'low', imageSmoothingEnabled: true,
@@ -111,6 +142,19 @@ function recorder(em, asked) {
     setTransform(a, b, c, d, e, f) { if (a !== 1 || b || c || d !== 1 || e || f) throw new Error('a transform the check does not read'); },
     setLineDash(d) { dash = d.length % 2 ? [...d, ...d] : [...d]; },
     beginPath() { path = []; },
+    save() { saved.push(clip); },
+    restore() { clip = saved.length ? saved.pop() : null; },
+    clearRect() {},
+    rect(x, y, w, h) { path.push({ rect: [x, y, w, h] }); },
+    clip() {
+      // the clip a path of one rect makes, inside the clip in force and the canvas
+      const rs = path.filter(q => q.rect);
+      if (rs.length !== 1 || rs.length !== path.length) throw new Error('a clip the check does not read');
+      const [x, y, w, h] = rs[0].rect, k = clip || [0, 0, W, H];
+      const x0 = Math.max(x, k[0], 0), y0 = Math.max(y, k[1], 0);
+      const x1 = Math.min(x + w, k[0] + k[2], W), y1 = Math.min(y + h, k[1] + k[3], H);
+      clip = [x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0)];
+    },
     moveTo(x, y) { path.push({ pts: [[x, y]], closed: false }); },
     lineTo(x, y) { if (!path.length || path.at(-1).arc) path.push({ pts: [], closed: false }); path.at(-1).pts.push([x, y]); },
     closePath() { if (path.length) path.at(-1).closed = true; },
@@ -161,7 +205,7 @@ function recorder(em, asked) {
       // a cell of the cursors' sheet, or the sidebar's composed column, drawn whole, unsmoothed
       const [sx, sy, sw, sh, x, y, w, h] = a;
       if (g.imageSmoothingEnabled) throw new Error('a sprite drawn smoothed');
-      out.push({ k: img.name === 'side' ? 'side' : 'sprite', sx, sy, sw, sh, x, y, w, h });
+      out.push({ k: img.name === 'side' || img.name === 'bar' ? img.name : 'sprite', sx, sy, sw, sh, x, y, w, h });
     },
   };
   const layer = (range, type) => { tag = { range, type }; };
@@ -201,17 +245,19 @@ function recorder(em, asked) {
 }
 
 /* ---- the ops read back as the same shapes, in the canvas's device pixels ---- */
-const HOP = { PART: 0, SOLID: 1, DOT: 2, TEXT: 3, LINE: 5, SIDE: 7 }, RING = 4, SPRITE = 128;
-function shapes(fr, sz, face, part, icons, cell) {
+const HOP = { PART: 0, SOLID: 1, DOT: 2, TEXT: 3, LINE: 5, SIDE: 7, BAR: 8 }, RING = 4, SPRITE = 128;
+function shapes(fr, sz, face, part, icons, cell, kit) {
   const u = sz.u, X = v => v * u - fr.x0, Y = v => v * u - fr.y0, out = [];
   // each shape's group and the group's opacity, as the recording gives them
   const push = out.push.bind(out);
   for (const [kind, flags, pi, x, y, w, h, cx, cy, cw, ch, rgba, size, style, centre, text, rgb, shade, grp] of fr.ops) {
     out.push = sh => { sh.grp = grp; sh.ga = grp ? fr.grp[grp - 1] : 1; return push(sh); };
-    const clip = [X(cx), Y(cy), cw * u, ch * u];
-    if (Math.abs(clip[0]) > TOL || Math.abs(clip[1]) > TOL || Math.abs(clip[2] - fr.w) > TOL || Math.abs(clip[3] - fr.h) > TOL)
-      out.push({ k: 'clip', clip });
-    else if (kind === HOP.SOLID && !flags) out.push({ k: 'rect', x: X(x), y: Y(y), w: w * u, h: h * u, c: rgba });
+    // the op's clip in canvas pixels, null when it is the canvas
+    const k = [X(cx), Y(cy), cw * u, ch * u];
+    const clip = Math.abs(k[0]) > TOL || Math.abs(k[1]) > TOL || Math.abs(k[2] - fr.w) > TOL || Math.abs(k[3] - fr.h) > TOL ? k : null;
+    const push1 = out.push;
+    out.push = sh => { sh.clip = clip; return push1(sh); };
+    if (kind === HOP.SOLID && !flags) out.push({ k: 'rect', x: X(x), y: Y(y), w: w * u, h: h * u, c: rgba });
     else if (kind === HOP.SOLID && flags === RING) out.push({ k: 'ring', x: X(x), y: Y(y), w: w * u, h: h * u, d: size * u, c: rgba });
     else if (kind === HOP.DOT && flags === RING) out.push({ k: 'circle', cx: X(x) + w * u / 2, cy: Y(y) + h * u / 2, r: w * u / 2, d: size * u, c: rgba });
     else if (kind === HOP.LINE && !flags) out.push({ k: 'line', x0: X(x), y0: Y(y), x1: X(x) + w * u, y1: Y(y) + h * u, w: size * u, c: rgba });
@@ -223,6 +269,12 @@ function shapes(fr, sz, face, part, icons, cell) {
     else if (kind === HOP.SIDE && !flags)
       // HOP_SIDE: the composed column's top-left size x shade texels into the op's box
       out.push({ k: 'side', sx: 0, sy: 0, sw: size, sh: shade, x: X(x), y: Y(y), w: w * u, h: h * u });
+    else if (kind === HOP.BAR && !flags)
+      // HOP_BAR: the bars' picture's rows 32 part.., its top-left size x 32 texels into the op's box
+      out.push({ k: 'bar', sx: 0, sy: 32 * pi, sw: size, sh: 32, x: X(x), y: Y(y), w: w * u, h: h * u });
+    else if (kind === HOP.PART && !flags && icons[part[pi]] && kit[part[pi]].kind !== 'icon')
+      // a whole part (the frame's emblems), drawn into the op's box as it is
+      out.push({ k: 'icon', name: part[pi], x: X(x), y: Y(y), w: w * u, h: h * u });
     else if (kind === HOP.PART && !flags && icons[part[pi]]) {
       // tagpu_hudlay_expand's icon: the part as large as fits the op's box, centred in it
       const ic = icons[part[pi]], bw = w * u, bh = h * u, f = Math.min(bw / ic.pw, bh / ic.ph), iw = ic.pw * f, ih = ic.ph * f;
@@ -235,7 +287,9 @@ function shapes(fr, sz, face, part, icons, cell) {
 /* the first field two shapes differ in, or null */
 function differ(a, b) {
   if (!a || !b || a.k !== b.k) return 'kind';
+  if (!a.clip !== !b.clip || (a.clip && a.clip.some((v, i) => Math.abs(v - b.clip[i]) > TOL))) return 'clip';
   for (const f of Object.keys(a)) {
+    if (f === 'clip') continue;
     if (typeof a[f] === 'number' && f !== 'c' && f !== 'align' ? Math.abs(a[f] - b[f]) > TOL : a[f] !== b[f]) return f;
   }
   return null;
@@ -269,6 +323,15 @@ try {
     const png = fs.readFileSync(path.join(kitDir, 'parts', `${name}.png`)), pw = png.readUInt32BE(16), ph = png.readUInt32BE(20);
     icons[name] = { img: { name }, pw, ph, w: pw / kit[name].scale, h: ph / kit[name].scale };
   }
+  // the frame's emblems: the kit's parts, drawn whole; a frame without them draws whitebox buttons
+  for (const name of Object.values(WikiStage.EMBLEM)) {
+    const png = fs.readFileSync(path.join(kitDir, 'parts', `${name}.png`)), pw = png.readUInt32BE(16), ph = png.readUInt32BE(20);
+    icons[name] = { img: { name }, pw, ph, w: pw / kit[name].scale, h: ph / kit[name].scale };
+  }
+  const plainIcons = Object.fromEntries(Object.entries(icons).filter(([n]) => !Object.values(WikiStage.EMBLEM).includes(n)));
+  const BUTTON = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/layout.json'), 'utf8')).button;
+  const frameArgs = [...['wiki', 'config'].map(k => String(part.indexOf(WikiStage.EMBLEM[k]))),
+    ...[BUTTON.side, BUTTON.top, BUTTON.right[1], BUTTON.config].map(String)];
   const SHAPES = ['arrow', 'move', 'build', 'reclaim'];                     // WIKI_CURSOR_*
   const cursorArgs = SHAPES.map(s => String(part.indexOf(WikiStage.CURSOR[s])));
   const sizeArgs = SHAPES.flatMap(s => { const ic = icons[WikiStage.CURSOR[s]]; return [ic.w, ic.h].map(v => v.toPrecision(17)); });
@@ -319,6 +382,8 @@ try {
           if (sim.tick % 30 === 0 || sim.done) {
             const v = sim.view();
             sb.frames.push({ key: `${ids[i]}/${demo.id}/${sim.tick}`, v, tick: sim.tick });
+            if (entry.frame === 'game')
+              sb.frames.push({ key: `${ids[i]}/${demo.id}/frame/${sim.tick}`, v: WikiFrame.view(v, sb.layout, 0), tick: sim.tick, frame: true });
             if (v.parts.length) { nspray += v.parts.length; nsprayed++; }
           }
           if (sim.done) break;
@@ -344,11 +409,29 @@ try {
   };
   // the cursor left out of every frame whose tick / 30 is odd, as Try it yourself leaves it while the pointer is off
   // the stage (wikistagetest.c draws the same frames without it)
+  /* a frame view's presentation (wikistagetest.c frame_of): by k = tick / 30, the bars' picture on the odd frames, the
+     emblems while k % 4 < 2, the question when k % 3 is 0 with its answer held as (k / 3) % 3, the cursor on the even
+     frames; the TOP range on the recording through a context that names its range */
+  const frameOf = (r, v, sz, tick) => {
+    const k = Math.floor((+tick || 0) / 30), C = WikiStage.content(v), fit = WikiStage.fit(C, sz.w, sz.h, sz.u);
+    const top = new Proxy(r.g, {
+      get(o, key) { r.layer('top'); const x = o[key]; return typeof x === 'function' ? x.bind(o) : x; },
+      set(o, key, x) { r.layer('top'); o[key] = x; return true; },
+    });
+    return {
+      bar: k % 2 ? { draw: (g, part, size, b) => { const sm = g.imageSmoothingEnabled; g.imageSmoothingEnabled = false;
+        g.drawImage({ name: 'bar' }, 0, 32 * part, size, 32, b.x, b.y, b.w, b.h); g.imageSmoothingEnabled = sm; } } : null,
+      button: BUTTON, top, question: k % 3 === 0 ? WikiFrame.dialog(fit, C.w, C.h) : null, held: ['', 'yes', 'no'][Math.floor(k / 3) % 3],
+      cursor: k % 2 ? null : { x: 0.3 * sz.w + (7 * k) % 50, y: 0.45 * sz.h + (5 * k) % 40 },
+    };
+  };
   const draw = (v, sz, em, asked, image, tick, cursors, L) => {
-    const r = recorder(em, asked);
+    const r = recorder(em, asked, sz.w, sz.h);
     const im = image && { ...image, draw: (g, rect) => r.out.push({ k: 'image', ...rect }) };
-    r.fit = WikiStage.draw(r.g, v, { W: sz.w, H: sz.h, U: sz.u, icons, cursors, tick, cursor: Math.floor((+tick || 0) / 30) % 2 === 0,
-      layer: r.layer, image: im, side: { layout: L, art: sideArt(v, L, tick) } });
+    const emblems = !v || !v.frame || Math.floor((+tick || 0) / 30) % 4 < 2;
+    r.fit = WikiStage.draw(r.g, v, { W: sz.w, H: sz.h, U: sz.u, icons: emblems ? icons : plainIcons, cursors, tick,
+      cursor: Math.floor((+tick || 0) / 30) % 2 === 0, layer: r.layer, image: im, side: { layout: L, art: sideArt(v, L, tick) },
+      frame: v && v.frame ? frameOf(r, v, sz, tick) : undefined });
     return r;
   };
   // the stand-in images: what a complete 3D frame may carry
@@ -357,9 +440,9 @@ try {
     { name: 'none resolved', ground: true, resolved: () => false },
     { name: 'ground fallen back', ground: false, resolved: () => true },
   ];
-  const RANGES = ['r0', 'ground', 'box', 'label', 'over', 'side'];        // WIKISTAGE_IN_*
+  const RANGES = ['r0', 'ground', 'box', 'label', 'over', 'side', 'top'];        // WIKISTAGE_IN_*
   const under = t => t.range === 'r0' || t.range === 'side' || t.range === 'ground';
-  const kept = (t, im) => t.range === 'r0' || t.range === 'side' || t.range === 'over' || (t.range === 'ground' && !im.ground) ||
+  const kept = (t, im) => t.range === 'r0' || t.range === 'side' || t.range === 'over' || t.range === 'top' || (t.range === 'ground' && !im.ground) ||
     (t.range === 'box' && !im.resolved(t.type));
   const pair = (js, c, what) => {
     for (let i = 0; i < Math.max(js.length, c.length); i++) {
@@ -382,25 +465,32 @@ try {
   /* ---- each sidebar and size, with the kit's cursors and then the game's: the C side's frames, paired with
      stage.js's ---- */
   let nframes = 0, nops = 0, ndiffer = 0, nsplit = 0, nimage = 0, nsprite = 0, ncur = 0, nside = 0, nsideim = 0, ngrp = 0, nall = 0;
+  let nframe = 0, nbar = 0, nclip = 0, ntop = 0;
   const PASSES = SIDEBARS.flatMap(sb => [false, true].flatMap(sprites => sb.sizes.map((sz, k) => ({ sb, sprites, k,
     sz: { ...sz, name: `${sb.name} ${sprites ? `${sz.name} game cursors x${SCALE[k]}` : sz.name}` } }))));
   for (const { sb, sprites, k: si, sz } of PASSES) {
     const cur = sprites ? cursorsAt(si) : null, frames = sb.frames;
     const rect = [sz.x0 / sz.u, sz.y0 / sz.u, sz.w / sz.u, sz.h / sz.u].map(v => v.toPrecision(17));
-    const cout = run(exe, ['ops', pak, ttf, String(S.spacing || 0), S.upper ? '1' : '0', String(style), ...cursorArgs, ...sizeArgs,
-      sprites ? spriteFile(si) : '-', sb.file || '-', ...rect, sz.u.toPrecision(17), ...(sb.cob ? [cobFile] : [])]).trim().split('\n').map(l => JSON.parse(l));
-    const cby = new Map(cout.map(f => [`${f.e}/${f.d}/${f.t}`, f]));
+    const byKey = new Map(frames.map(f => [f.key, f])), seen = new Set();
+    let ncout = 0;
     nall += frames.length;
-    if (cout.length !== frames.length) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name}: the C side drew ${cout.length} frames, stage.js ${frames.length}`); }
-    for (const f of frames) {
-      const fr = cby.get(f.key);
-      if (!fr) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${f.key}: no C frame`); continue; }
+    for (const fr of runLines(exe, ['ops', pak, ttf, String(S.spacing || 0), S.upper ? '1' : '0', String(style), ...cursorArgs, ...sizeArgs,
+      sprites ? spriteFile(si) : '-', sb.file || '-', ...rect, sz.u.toPrecision(17), ...frameArgs, ...(sb.cob ? [cobFile] : [])],
+      path.join(tmp, 'ops.jsonl'))) {
+      ncout++;
+      const f = byKey.get(`${fr.e}/${fr.d}/${fr.t}`);
+      if (!f || seen.has(f.key)) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${fr.e}/${fr.d}/${fr.t}: a C frame stage.js did not draw`); continue; }
+      seen.add(f.key);
       if (fr.x0 !== sz.x0 || fr.y0 !== sz.y0 || fr.w !== sz.w || fr.h !== sz.h) {
         code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${f.key}: the canvas is ${fr.w}x${fr.h} at ${fr.x0},${fr.y0}`); continue;
       }
       if (fr.dropped || fr.trunc) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${f.key}: dropped ${fr.dropped} ops, truncated ${fr.trunc}`); continue; }
-      const r1 = draw(f.v, sz, em, null, null, f.tick, cur, sb.layout), c = shapes(fr, sz, face, part, icons, CELL);
+      const r1 = draw(f.v, sz, em, null, null, f.tick, cur, sb.layout), c = shapes(fr, sz, face, part, icons, CELL, kit);
       nframes++; nops += c.length; nsprite += c.filter(sh => sh.k === 'sprite').length;
+      if (f.frame) {
+        nframe++; nbar += c.filter(sh => sh.k === 'bar').length; nclip += c.filter(sh => sh.clip).length;
+        ntop += r1.tags.filter(t => t && t.range === 'top').length;
+      }
       if (f.v && f.v.side) nside++;
       nsideim += c.filter(sh => sh.k === 'side').length;
       ngrp += fr.grp.length;
@@ -440,10 +530,12 @@ try {
       }
       if (bad) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${f.key} ${bad}`); }
     }
+    for (const f of frames) if (!seen.has(f.key)) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name} ${f.key}: no C frame`); }
+    if (ncout !== frames.length) { code = 1; ndiffer++; console.log(`DIFFER ${sz.name}: the C side drew ${ncout} frames, stage.js ${frames.length}`); }
   }
   const s = ((Date.now() - t0) / 1000).toFixed(1);
   if (code) console.log(`stagecheck: ${ndiffer} of ${nall} frames DIFFER (${s} s)`);
-  else console.log(`stagecheck: all equal -- ${nframes} frames (${SIDEBARS.map(sb => `${sb.name} ${sb.frames.length} at ${sb.sizes.length} size${sb.sizes.length > 1 ? 's' : ''}`).join(', ')}; each with the kit's cursors and with the game's), ${nops} ops of R1 paired call for op within 1/64 px, ${nsprite} of them game cursor frames; a cursor in ${ncur} frames and its op named in each; a sidebar in ${nside} frames, ${nsideim} of them as the image, ${ngrp} greyed buttons as groups; R0 and R2 over ${nsplit} stand-in images, ${nimage} ops; ${SIDEBARS.some(sb => sb.cob) ? `the units' scripts played, the nano spray in ${nsprayed} frames, ${nspray} particles` : "no gfx pack: the units' scripts not played"} (${s} s)`);
+  else console.log(`stagecheck: all equal -- ${nframes} frames (${SIDEBARS.map(sb => `${sb.name} ${sb.frames.length} at ${sb.sizes.length} size${sb.sizes.length > 1 ? 's' : ''}`).join(', ')}; each with the kit's cursors and with the game's), ${nops} ops of R1 paired call for op within 1/64 px, ${nsprite} of them game cursor frames; a cursor in ${ncur} frames and its op named in each; a sidebar in ${nside} frames, ${nsideim} of them as the image, ${ngrp} greyed buttons as groups; ${nframe} frames as the whole game frame, ${nbar} bar pictures, ${nclip} ops clipped to its viewport, ${ntop} in its top range; R0 and R2 over ${nsplit} stand-in images, ${nimage} ops; ${SIDEBARS.some(sb => sb.cob) ? `the units' scripts played, the nano spray in ${nsprayed} frames, ${nspray} particles` : "no gfx pack: the units' scripts not played"} (${s} s)`);
 } catch (x) {
   if (!(x instanceof CannotRun)) throw x;
   console.log(`stagecheck: cannot run: ${x.message}`);

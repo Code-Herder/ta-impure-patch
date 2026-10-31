@@ -8,7 +8,7 @@
 #include "tagpu_wikiasset.h"
 #include "tagpu_wikistage.h"
 
-typedef char wikibar_w_is_the_widest_frame[WIKIBAR_W == 16 * WIKISTAGE_MAP ? 1 : -1];
+typedef char wikibar_w_is_the_widest_frame[WIKIBAR_W == 16 * WIKISTAGE_MAP && WIKIBAR_H == 64 ? 1 : -1];
 
 #define ROWS        32          /* each bar's rows                                               */
 #define COL         128         /* the frame column the picture's column 0 is                    */

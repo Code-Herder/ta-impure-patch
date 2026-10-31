@@ -636,6 +636,20 @@ static void draw_op(B* c, const HUDOP* op, int* charted)
         colour(in, 0xFFFFFF, (float)(op->rgba & 0xFF) / 255.0f);
         break;
     }
+    case HOP_BAR: {
+        /* the frame's bar `part`: its rows of the bars' picture, the top-left size x 32 texels,
+           whole into the op's box, which the stage snapped to whole device pixels */
+        const float bw = (float)HUD_BAR_W, bh = (float)HUD_BAR_H;
+        if (!(op->size > 0 && op->size <= bw) || op->part < 0 || op->part > 1) break;
+        if (!(in = emit(c, HUD_TEX_BAR, HUDM_PART, snap(op->r.x * px), snap(op->r.y * px),
+                        (float)tagpu_hud_edge(op->r.x, op->r.w, px), (float)tagpu_hud_edge(op->r.y, op->r.h, px), op))) break;
+        in->uv[0] = 0;
+        in->uv[1] = (float)(op->part * (HUD_BAR_H / 2)) / bh;
+        in->uv[2] = op->size / bw;
+        in->uv[3] = (float)((op->part + 1) * (HUD_BAR_H / 2)) / bh;
+        colour(in, 0xFFFFFF, (float)(op->rgba & 0xFF) / 255.0f);
+        break;
+    }
     case HOP_CHART:
         if (!c->ops->chart) break;
         if (!*charted) { chart_prepare(c); *charted = 1; }
@@ -759,6 +773,37 @@ HUDOPLIST tagpu_huddraw_list(const HUDOPS* ops)
     l.chart = &ops->chart;
     l.watch = -1;
     return l;
+}
+
+int tagpu_huddraw_partition(HUDBATCH* b, int nb, const int* at, const int* nmain, const int* nbatch, int nlist,
+                            HUDLAYREG* g, int ng)
+{
+    HUDBATCH tmp[HUD_PARTITION_MAX];
+    int gat[64];                        /* each list's first group batch in the new order */
+    const int start = nlist > 0 ? at[0] : 0;
+    int k, i, end = start, n = 0, nmains = 0;
+    if (nlist < 0 || nlist > 64 || nb < 0 || nb > HUD_PARTITION_MAX || start < 0 || start > nb) return -1;
+    for (k = 0; k < nlist; k++) {
+        if (nbatch[k] < 0 || nmain[k] < 0 || nmain[k] > nbatch[k]) return -1;
+        if (!nbatch[k]) continue;
+        if (at[k] != end || nbatch[k] > nb - end) return -1;
+        end += nbatch[k];
+        nmains += nmain[k];
+    }
+    for (k = 0; k < nlist; k++)
+        for (i = 0; nbatch[k] && i < nmain[k]; i++) tmp[n++] = b[at[k] + i];
+    for (k = 0; k < nlist; k++) {
+        gat[k] = start + n;
+        for (i = nmain[k]; nbatch[k] && i < nbatch[k]; i++) tmp[n++] = b[at[k] + i];
+    }
+    for (i = 0; i < ng; i++)
+        for (k = 0; k < nlist; k++)
+            if (nbatch[k] && g[i].b0 >= at[k] + nmain[k] && g[i].b0 < at[k] + nbatch[k]) {
+                g[i].b0 = gat[k] + g[i].b0 - (at[k] + nmain[k]);
+                break;
+            }
+    memcpy(b + start, tmp, (size_t)n * sizeof *tmp);
+    return start + nmains;
 }
 
 int tagpu_huddraw_build(const HUDART* art, const HUDOPS* ops, int layer, float px, int ox, int oy,
