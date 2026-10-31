@@ -9,8 +9,9 @@
    TA pumps on that thread, the packet's fill, the command record's take and the teardown wrap's
    entry. tagpu_wiki_holds_input, tagpu_wiki_frozen and tagpu_wiki_cursor_store are any thread's,
    the engine's mouse thread among them, through the polls (winapi_hooks.c); tagpu_wiki_init is
-   DllMain's. */
+   DllMain's, and tagpu_wiki_page_tree the wiki loader's. */
 #include <windows.h>
+#include "tagpu_wikidata.h"
 #include "tagpu_wikipk.h"
 
 /* THE REAL PATH: a message at the top of TA's window procedure, from tagpu_shield_wndproc after
@@ -108,5 +109,12 @@ void tagpu_wiki_take(const TAGPU_CMD_WIKI* c);
 /* tagpu_reclaim's teardown wrap, on entry to 0x491B60: the window closes and the pause is
    forgotten, written by nothing -- the level it was taken in is ending. */
 void tagpu_wiki_level_end(void);
+
+/* THE WIKI'S LOADER THREAD (tagpu_hudart.c wiki_load), once, on the data it has just loaded and
+   before it checks and publishes it: the page's tree without the game entries ("frame": "game"),
+   whose page has no theatre layout in the DLL until W3 of research/notes/ingame-wiki-replay-plan.md.
+   W3 deletes this walk, its call and the test in tagpu_wikilay.c check_states. The entries stay
+   loaded: the parity check (tagpu_wiki.check) plays them. */
+void tagpu_wiki_page_tree(WIKIDATA* d);
 
 #endif

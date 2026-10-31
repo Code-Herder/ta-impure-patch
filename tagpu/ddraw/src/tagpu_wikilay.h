@@ -168,8 +168,8 @@ int           tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const WIK
    yourself held -- a game entry's in its theatre, which adds About open with the text scrolled to
    its limit, the drawer open with the tree scrolled to its limit, and Try it yourself -- and entry
    0 made a locked game entry of WIKI_THEATRE_TABS demos, with either label of Try it, the widest
-   row a theatre can have. A theatre is refused when its stage is shorter than
-   theatre.stage_min or its row's fixed part is wider than the body (WIKIFRAME.row_cut). Each
+   row a theatre can have. A theatre is refused when its stage is shorter than theatre.stage_min or
+   its row's fixed part is wider than the body (WIKIFRAME.row_cut). Each
    state is filled at interface type 1, whose words are the longer, with each entry's
    own names, with each of the `ncasting` castings given, and with the two worst castings there
    can be (every display name of 31 characters, the engine's cut: 31 of three bytes, the

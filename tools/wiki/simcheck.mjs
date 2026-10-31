@@ -1649,11 +1649,13 @@ LAYOUT = process.argv.includes('--null-layout') ? null : PACK ? PACK.layout : FI
 const tree = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/tree.json`, 'utf8'));
 const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
 const ids = tree.tree.flatMap(leaves);
+// a game entry the tree names plays below with the others, as games and replays (THE GAME ENTRIES), never as a page demo
+const pageIds = ids.filter(id => JSON.parse(fs.readFileSync(`${ROOT}art/wiki/entries/${id}.json`, 'utf8')).frame !== 'game');
 let failed = 0;
 const tally = {};
 for (const c of contexts()) {
   tally[c.label] = { pass: 0, fail: 0, locked: [], off: [] };
-  for (const id of ids) {
+  for (const id of pageIds) {
     const entry = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/entries/${id}.json`, 'utf8'));
     for (const d of entry.demos) {
       const notes = [], ok = (cond, what) => notes.push([!!cond, what]), lock = expectedLock(entry, d, c.ctx.casting);
