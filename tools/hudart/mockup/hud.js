@@ -647,10 +647,10 @@ const HUD = (() => {
      pixels: Chrome truncates each offset to a sixty-fourth, which leaves a snapped box less than a tenth of a device
      pixel off a whole one, a distance its own pixel snapping takes back out. A pressed face's sink (hud.css) is a
      transform, so its box is placed without it and painted with it. The layer's corner sits on a device pixel. ---- */
-  let layer = null, layerPx = 1;
+  let layer = null, layerPx = 1, layerD = 1;
   const prop = (e, k) => { const v = e.style.getPropertyValue(k); return v === '' ? null : +v; };
   function pin(el) {
-    const d = window.devicePixelRatio || 1, px = layerPx;
+    const d = layerD, px = layerPx;
     const sink = +getComputedStyle(el).getPropertyValue('--press') || 0;
     // (tx, ty): the parent's corner in units; (rx, ry): where it is placed, in device pixels
     const walk = (e, tx, ty, rx, ry) => {
@@ -752,8 +752,13 @@ const HUD = (() => {
       + text(esc(st.toast), { x: Ts.pad, y: 0, w: b.w - 2 * Ts.pad, h: b.h }, Ts.style, { align: 'c' }) + `</div>`;
   }
 
-  // the whole HUD for a state; see index.html for the state's fields
-  function draw(el, st, px) {
+  /* the whole HUD for a state; see index.html for the state's fields. px: device pixels a unit; d: device pixels a CSS
+     pixel, the page's devicePixelRatio by default. The wiki's stage passes its frame's G.k instead: its canvases are
+     drawn at the game resolution's pixels and shown scaled, so the stage HUD's device pixels are those, not the
+     browser's. This file's layer, its pixel scales and its hint are module state, so a page holds one HUD: the replay
+     HUD mockup's, or the wiki's stage HUD. */
+  function draw(el, st, px, d = window.devicePixelRatio || 1) {
+    layerD = d;
     cssUnit = parseFloat(getComputedStyle(el).getPropertyValue('--u')) || 1;
     el.style.setProperty('--press', L.press_shift);
     hintOn = null;

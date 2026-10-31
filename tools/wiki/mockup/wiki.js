@@ -1,7 +1,8 @@
 /* wiki.js -- the in-game wiki's mockup: the game frame and Impure's top bar, the wiki window with its tree, demo list and
    entry, and the stage, where stage.js draws what sim.js's view() says. The content is art/wiki/ (tree.json,
    entries/<id>.json) and the behaviour is sim.js's; this file lays out, draws and forwards input. research/notes/ingame-wiki.md is the
-   specification the game copies. */
+   specification the game copies. An entry with "frame": "game" plays its demos through replay.js on the whole game
+   frame (frame.js), with the replay HUD (tools/hudart/mockup/hud.js) on it. */
 (async () => {
 const $ = s => document.querySelector(s);
 const ART = '../../../art/wiki/', BACKDROP = '../../../research/notes/assets/hud-art/backdrop.png';
@@ -101,7 +102,10 @@ const leaves = (ns, out = []) => { for (const n of ns || []) n.entry ? out.push(
 async function load() {
   try { TREE = await fetch(ART + 'tree.json').then(r => { if (!r.ok) throw new Error(`tree.json: ${r.status}`); return r.json(); }); }
   catch (x) { treeErr = x.message; return; }
-  await Promise.all(leaves(TREE.tree).map(id => fetch(`${ART}entries/${id}.json`)
+  // the entry the URL names is loaded too when the tree does not name it, so an entry can be viewed before it is listed
+  const ids = leaves(TREE.tree);
+  if (S.entry && /^[a-z0-9_]+$/.test(S.entry) && !ids.includes(S.entry)) ids.push(S.entry);
+  await Promise.all(ids.map(id => fetch(`${ART}entries/${id}.json`)
     .then(r => { if (!r.ok) throw new Error(`entries/${id}.json: ${r.status}`); return r.json(); })
     .then(j => { const why = WikiText.checkEntry(j); ENT[id] = why ? { error: `entries/${id}.json: ${why}` } : j; },
       x => { ENT[id] = { error: x.message }; })));
@@ -324,8 +328,12 @@ $('#tree').onclick = e => {
 $('#demos').onclick = $('#tabs').onclick = e => { const d = e.target.closest('[data-demo]'); if (d) { buttonSound(); S.try = false; pick(S.entry, +d.dataset.demo); } };
 
 /* ---- playback: a demo plays when selected, at 30 ticks a second (60 at 2x), and holds its last frame when done;
-   Try it yourself creates the same scene with no inputs and hands the stage to the player ---- */
+   Try it yourself creates the same scene with no inputs and hands the stage to the player. A frame:game entry's demo is
+   a replay instead (replay.js `rep`, `sim` stays null): its viewer's script plays, or in Try it yourself the player
+   presses the stage HUD's controls ---- */
 let sim = null, simErr = null, acc = 0, simLayout = null, simCtx = null;
+let rep = null, repTry = false;
+const frameEntry = () => { const e = entry(); return !!e && e.frame === 'game'; };
 /* THE SOUND (sound.js): the sim's events played after each frame's steps, `heard` of them so far; the root of the stage
    pack's folder holds the sounds.json the sim takes its source from, as the game's sim takes it from the 3D load that
    gives the scripts */
@@ -333,39 +341,60 @@ let heard = 0;
 const soundRoot = () => { const d = stageDir(); return `gfx/${d.slice(0, d.lastIndexOf('/') + 1)}`; };
 // a press on one of the page's controls: the engine's in-game menu controls say `Options` (tagpu_wiki.c button_sound)
 const buttonSound = () => { if (typeof WikiSound !== 'undefined') WikiSound.named(soundRoot(), 'Options'); };
-function fail(x) { simErr = x && x.message || String(x); console.error('wiki sim:', x); sim = null; }
+/* THE REPLAY'S LIFETIME (replay.js): it owns its simulations and their COB worlds, so it is freed whenever it is
+   dropped -- a new start, a failure -- and nothing keeps it after */
+function dropReplay() { if (rep) rep.free(); rep = null; }
+function fail(x) { simErr = x && x.message || String(x); console.error('wiki sim:', x); sim = null; dropReplay(); }
 function start() {
-  sim = null; simErr = null; acc = 0; heard = 0; releaseAll();
+  sim = null; simErr = null; acc = 0; heard = 0; releaseAll(); dropReplay(); frameReset();
   const e = entry(), d = demo();
   if (!d) return;
   if (typeof WikiSim === 'undefined') { simErr = 'sim.js is not loaded'; return; }
   // a demo the layout refuses (an input inside a build's trip, say) shows why on the stage, as a broken entry does
   simLayout = sideLayout(); simCtx = context();
-  const make = ctx => S.try ? WikiSim.create(e, d, simLayout, ctx) : WikiSim.play(e, d, simLayout, ctx);
+  const replay = frameEntry();
+  repTry = replay && S.try;
+  const make = ctx => replay ? (S.try ? WikiReplay.create : WikiReplay.play)(e, d, simLayout, ctx)
+    : S.try ? WikiSim.create(e, d, simLayout, ctx) : WikiSim.play(e, d, simLayout, ctx);
   /* THE UNITS' SCRIPTS run on tools/wiki/serve.py's host, from the gfx pack the stage draws (cob.js). Served any other
      way, or with no pack built, the page plays without them and says why in the console. */
   const cob = typeof WikiCob !== 'undefined' ? WikiCob.cobPage(`tools/wiki/mockup/gfx/${stageDir()}`) : null;
   const snd = cob && typeof WikiSound !== 'undefined' ? WikiSound.source(soundRoot()) : null;
-  try { sim = make(cob ? { ...simCtx, cob, snd } : simCtx); }
+  const made = r => { if (replay) rep = r; else sim = r; };
+  try { made(make(cob ? { ...simCtx, cob, snd } : simCtx)); }
   catch (x) {
     if (!cob || !/COB host/.test(x && x.message)) fail(x);
     else {
       console.warn('wiki sim: playing without the units\' scripts:', x.message);
-      try { sim = make(simCtx); } catch (y) { fail(y); }
+      try { made(make(simCtx)); } catch (y) { fail(y); }
     }
   }
   // a type whose script the host refused plays at rest, its gates open (tagpu_wikicob.h)
-  for (const n of sim ? sim.cobNotes() : []) if (n) console.warn('wiki sim: a script is quarantined:', n);
+  const shown = sim || (rep && rep.game);
+  for (const n of shown ? shown.cobNotes() : []) if (n) console.warn('wiki sim: a script is quarantined:', n);
   controls(); syncURL();
 }
 /* a demo holds its last frame once done. A Try-it sim is never done but by a lock -- its scene holds a unit whose cast
    the side leaves unbound (sim.js, decision 12) -- and then holds the same way: the frame under the entry's badge, no
    tick and no input, as a demo stopped at a build the mod cannot reach does */
-const held = () => !!sim && sim.done;
+const held = () => rep ? rep.view().done : !!sim && sim.done;
 function advance(dt) {
-  if (!S.open || !sim || !S.playing || held()) { acc = 0; return; }
+  if (!S.open || !(sim || rep) || !S.playing || held()) { acc = 0; return; }
   acc = Math.min(acc + dt * TICK * S.speed, 8);       // a stalled tab catches up a few ticks, not seconds of them
+  if (rep) return advanceReplay();
   while (acc >= 1 && sim && !held()) { try { sim.step(); } catch (x) { fail(x); } acc--; }
+}
+/* THE REPLAY'S PACING, the DLL's rule: a frame runs whole steps while their summed cost() -- the game ticks each will
+   run -- stays within WikiReplay.FILL, always at least one, and the demo ticks left over are owed to the next frame.
+   The pacing changes only when a step runs, never what it does: the replay is deterministic in demo ticks. */
+function advanceReplay() {
+  let spent = 0, n = 0;
+  while (acc >= 1 && rep && !held()) {
+    const c = rep.cost();
+    if (n && spent + c > WikiReplay.FILL) break;
+    try { rep.step(); } catch (x) { fail(x); return; }
+    spent += c; n++; acc--;
+  }
 }
 $('#c-play').onclick = () => { buttonSound(); if (held()) start(); else S.playing = !S.playing; controls(); };
 $('#c-replay').onclick = () => { buttonSound(); S.playing = true; start(); };   // in Try it yourself, the scene afresh
@@ -385,14 +414,14 @@ function controls() {
 }
 
 /* ---- the stage: a canvas at the resolution's pixels; the map fitted inside it, letterboxed ---- */
-const stage = $('#stage');
+const stage = $('#stage'), stageTop = $('#stagetop'), stageHud = $('#stagehud');
 let FIT = null;                       // the last fit: canvas pixels a world unit, and the map's offset
 let overStage = false;                // the player's pointer is over the stage's canvas
 function sizeStage() {
   const r = stage.getBoundingClientRect();
   if (!r.width || !r.height) return;                     // the window is closed: keep the last size
   const w = Math.max(1, Math.round(r.width * G.k)), h = Math.max(1, Math.round(r.height * G.k));
-  if (stage.width !== w || stage.height !== h) { stage.width = w; stage.height = h; }
+  for (const c of [stage, stageTop]) if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
 }
 new ResizeObserver(sizeStage).observe($('#sbox'));
 
@@ -419,6 +448,8 @@ const ICONS = WikiStage.loadIcons(ART + 'kit/');
 const CURSORS = WikiStage.loadCursors('gfx/');
 let IMG = null;                       // the last frame's 3D answer, for scripted checks
 function draw() {
+  if (rep) return drawReplay();
+  frameClear();
   const g = stage.getContext('2d'), v = view();
   if (v && typeof WikiSound !== 'undefined') heard = WikiSound.drain(soundRoot(), v, heard);
   const r = v && window.WikiGfx ? WikiGfx.frame(stageId(), v, sim ? sim.tick : 0, stageDir(), poses()) : null;
@@ -440,6 +471,164 @@ function draw() {
   for (const b of ['#badge', '#t-badge']) if ($(b).hidden === off) $(b).hidden = !off;
   return v;
 }
+
+/* ---- the frame: a frame:game entry's replay on the whole game frame (frame.js), its HUD and Leave's question ----
+   One frame of the page is, in order: the replay's view; the game's view, copied only while no seek is pending (a
+   seek's ticks are never shown: the stage holds the last world drawn); the watcher's view of it; the fit; the frame
+   record; the stage HUD laid out by hud.js in #stagehud at 100 % of the frame, its controls' boxes, the viewer's cursor
+   among them and the hint under it; then stage.js's frame, the question and the cursor on #stagetop over the HUD.
+   Every frame lays the HUD out again, one layout a frame as the DLL builds its ops. */
+const S_LEFT = 'In the game, this goes back to the Replays browser.';
+// the replay HUD's layout, kit and parts, from the repository root the check server serves: no stage HUD until then
+let HUD_OK = false;
+HUD.load('../../../art/hud/').then(() => { HUD_OK = true; }, x => console.error('wiki stage HUD:', x));
+const hudSnap = v => Math.floor(v + 0.5 + 1 / 64);   // hud.js snapPx: a box's edge on the device pixel it is drawn on
+/* the frame as last drawn: the game's view and poses held through a seek, the sound's generation and quiet, the
+   record, the frame's corner and its HUD's unit (canvas pixels), its controls' boxes, and the press machine with the
+   player's pointer for Try it yourself */
+let FR = null, PRESS = null, PTR = null;
+function frameReset() { FR = { gv: null, poses: null, tick: 0, gen: -1, quiet: -1, rec: null, hud: null, boxes: [] }; PRESS = WikiFrame.Press(); }
+frameReset();
+function frameClear() {
+  if (stageHud.firstChild) stageHud.innerHTML = '';
+  if (!stageHud.hidden) { stageHud.hidden = true; stageTop.getContext('2d').clearRect(0, 0, stageTop.width, stageTop.height); }
+}
+// the bars in the mod's own art (bar.js) under the game look with the pack's art, as the column is; null for the whitebox
+const BARCV = document.createElement('canvas');
+let barKey = null;
+function barArt(side, colour, Wg, Hg) {
+  const p = pack();
+  if (!gameLook() || !p || !p.art || simLayout !== p.layout || typeof WikiBar === 'undefined') return null;
+  const key = `${S.mod}|${side}|${colour}|${Wg}|${Hg}`;
+  if (key !== barKey) {
+    const c = WikiBar.compose(p.art, side, colour, Wg, Hg);
+    barKey = key;
+    BARCV.width = WikiBar.BAR_W; BARCV.height = WikiBar.BAR_H;
+    if (c) BARCV.getContext('2d').putImageData(new ImageData(WikiBar.rgba(p.art, c), WikiBar.BAR_W, WikiBar.BAR_H), 0, 0);
+    else barKey = `${key}|none`;
+  }
+  if (barKey.endsWith('|none')) return null;
+  return { draw: (g, part, size, r) => { const sm = g.imageSmoothingEnabled; g.imageSmoothingEnabled = false;
+    g.drawImage(BARCV, 0, WikiBar.BAR_H / 2 * part, size, WikiBar.BAR_H / 2, r.x, r.y, r.w, r.h); g.imageSmoothingEnabled = sm; } };
+}
+function drawReplay() {
+  const g = stage.getContext('2d'), W = stage.width, H = stage.height, U = G.gh / 720;
+  let rv;
+  try {
+    rv = rep.view();
+    if (rv.game.target < 0 && rep.game) { FR.gv = rep.game.view(); FR.poses = rep.game.poses(); FR.tick = rep.game.tick; }
+  } catch (x) { fail(x); frameClear(); WikiStage.draw(g, null, { W, H, U, msg: simErr }); return null; }
+  // THE SOUND: what a seek re-simulated is heard already -- each new game or finished seek starts the count at `quiet`
+  if (rv.game.gen !== FR.gen || rv.game.quiet !== FR.quiet) { FR.gen = rv.game.gen; FR.quiet = rv.game.quiet; heard = rv.game.quiet; }
+  if (FR.gv && rv.game.target < 0 && typeof WikiSound !== 'undefined') heard = WikiSound.drain(soundRoot(), FR.gv, heard);
+  const side = simCtx ? simCtx.side : 0, fv = WikiFrame.view(FR.gv, simLayout, side);
+  if (!fv) { frameClear(); FIT = WikiStage.draw(g, null, { W, H, U, msg: 'loading…' }); return null; }
+  const C = WikiStage.content(fv), fit = WikiStage.fit(C, W, H, U), Wg = C.w, Hg = C.h;
+  const fx = hudSnap(fit.ox + C.x0 * fit.s), fy = hudSnap(fit.oz + C.z0 * fit.s), hpx = Hg * fit.s / WikiFrame.HUD_H;
+  const rec = WikiFrame.record(rv, FR.gv, side, repTry, PRESS.held);
+  const p = pack(), art = gameLook() && p && p.art && simLayout === p.layout ? p.art : null;
+  const st = WikiFrame.hudState(rec, Wg, Hg, art);
+  const units = q => ({ x: (q.x - fx) / hpx, y: (q.y - fy) / hpx });
+  const dlg = WikiFrame.dialog(fit, Wg, Hg);
+  let cursor = null;
+  stageHud.hidden = false;
+  if (HUD_OK) {
+    // #stagehud on the frame's corner: the canvas's corner in #sbox plus the frame's, in CSS pixels (device / G.k)
+    const sr = stage.getBoundingClientRect(), br = $('#sbox').getBoundingClientRect(), box = $('#sbox');
+    Object.assign(stageHud.style, { left: `${sr.left - br.left - box.clientLeft + fx / G.k}px`, top: `${sr.top - br.top - box.clientTop + fy / G.k}px`,
+      width: `${Wg * fit.s / G.k}px`, height: `${Hg * fit.s / G.k}px` });
+    stageHud.style.setProperty('--u', `${hpx / G.k}px`);
+    HUD.draw(stageHud, st, hpx, G.k);
+    const down = rec.held && stageHud.querySelector(`.art.hot[data-act="${rec.held}"]`);
+    if (down) HUD.press(down, true);
+    FR.boxes = [...stageHud.querySelectorAll('[data-act], [data-track]')].map(e => ({
+      key: 'track' in e.dataset ? 'track' : e.dataset.act, off: e.classList.contains('off'),
+      ub: (e.dataset.ub || '0 0 0 0').split(' ').map(Number), ends: +e.dataset.ends || 0 }));
+    const M = fv.map, cell = +M.cell || 16;
+    const rest = units({ x: fit.ox + (+M.w || 1) * cell / 2 * fit.s, y: fit.oz + (+M.h || 1) * cell / 2 * fit.s });
+    const no = units({ x: dlg.no.x + dlg.no.w / 2, y: dlg.no.y + dlg.no.h / 2 });
+    if (rec.cur.on) {
+      const pt = WikiFrame.point(rec, FR.boxes, hpx, rest, no);
+      HUD.hint(stageHud, pt.x, pt.y, st);
+      cursor = { x: fx + pt.x * hpx, y: fy + pt.y * hpx };
+    } else {
+      const q = PTR && overStage ? units(PTR) : null;
+      HUD.hint(stageHud, q && q.x, q && q.y, st);
+    }
+  }
+  FR.rec = rec;
+  FR.hud = { fx, fy, hpx, Wg, Hg, dlg };
+  const r = window.WikiGfx ? WikiGfx.frame(stageId(), fv, FR.tick, stageDir(), FR.poses) : null;
+  IMG = r && { complete: r.complete, ground: r.ground, resolved: [...r.resolved], refused: r.refused };
+  const image = r && r.complete ? {
+    ground: r.ground, resolved: t => r.resolved.has(t),
+    draw: (c, b) => { c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'low'; c.drawImage(r.canvas, b.x, b.y, b.w, b.h); },
+  } : null;
+  FIT = WikiStage.draw(g, fv, { W, H, U, icons: ICONS, cursors: CURSORS, tick: FR.tick, cursor: false, image,
+    side: { layout: simLayout, art: sideArt(fv, simLayout) },
+    frame: { bar: barArt(side, rec.colour, Wg, Hg), button: LAY.button, top: stageTop.getContext('2d'),
+      question: rec.question ? dlg : null, held: PRESS.held, cursor } });
+  stage.classList.remove('try');
+  const off = locked(entry()) || !!(FR.gv && FR.gv.locked);
+  for (const b of ['#badge', '#t-badge']) if ($(b).hidden === off) $(b).hidden = !off;
+  return { caption: rv.left ? S_LEFT : rv.caption, keys: [] };
+}
+
+/* ---- Try it yourself on the frame: the player's presses on the stage HUD and on Leave's question go to the press
+   machine (frame.js Press), whose outputs are the replay's presses. A press on the stage is tested first against the
+   question's rects while it is open -- Yes, No, its body, then the frame round it, which counts as No -- then against
+   the stage HUD's controls, topmost first, each box on the device pixels it is drawn on (hud.js hint's rule), and
+   anything else on the stage is taken and does nothing: the viewer is not seat 0, so the world and the column take no
+   click. About and the drawer lie over the stage and take their own clicks first. ---- */
+const frameTry = () => !!rep && repTry && S.try && !held();
+const canvasPoint = e => { const r = stage.getBoundingClientRect(); return { x: (e.clientX - r.left) * stage.width / r.width, y: (e.clientY - r.top) * stage.height / r.height }; };
+const inBox = (b, q) => q.x >= b.x && q.x < b.x + b.w && q.y >= b.y && q.y < b.y + b.h;
+function frameHit(q) {
+  const F = FR.hud;
+  if (!F || !FR.rec) return null;
+  if (FR.rec.question) {
+    for (const [k, b] of [['yes', F.dlg.yes], ['no', F.dlg.no], ['dialog', F.dlg.panel], ['outside', F.dlg.frame]])
+      if (inBox(b, { x: Math.floor(q.x), y: Math.floor(q.y) })) return { src: 'dialog', key: k };
+    return null;
+  }
+  const X = Math.floor(q.x - F.fx + 0.5), Y = Math.floor(q.y - F.fy + 0.5), px = F.hpx;
+  let on = null;
+  for (const b of FR.boxes) {
+    if (b.off) continue;
+    const [x, y, w, h] = b.ub;
+    if (X >= hudSnap(x * px) && X < hudSnap((x + w) * px) && Y >= hudSnap(y * px) && Y < hudSnap((y + h) * px)) on = b;
+  }
+  return on && { src: 'hud', key: on.key };
+}
+/* the track's tick under canvas point q: its x on the playhead's run as drawn, device pixels, clamped to the run, then
+   rounded on the end the track was drawn with (tagpu_hudinput.c seek_at); the replay's seek clamps it again */
+function trackTick(q) {
+  const F = FR.hud, t = FR.boxes.find(b => b.key === 'track');
+  if (!F || !t || !FR.rec) return 0;
+  const x0 = hudSnap((t.ub[0] + t.ends) * F.hpx), x1 = hudSnap((t.ub[0] + t.ub[2] - t.ends) * F.hpx);
+  if (x1 <= x0) return 0;
+  const f = clamp((Math.floor(q.x - F.fx + 0.5) - x0) / (x1 - x0), 0, 1);
+  return Math.trunc(f * FR.rec.end + 0.5);
+}
+// the press machine's outputs made on the replay; Yes ends Try it, and the stage holds the replay it left
+function pressOut(outs) {
+  for (const [c, v] of outs) rep.press(c, v);
+  if (outs.length && rep.view().left) { S.try = false; controls(); syncURL(); }
+}
+stage.addEventListener('mousedown', e => {
+  if (!frameTry()) return;
+  e.preventDefault();
+  const q = canvasPoint(e), h = frameHit(q);
+  if (h) pressOut(PRESS.down(h.src, h.key, e.button !== 0, trackTick(q)));
+});
+window.addEventListener('mousemove', e => { if (frameEntry()) PTR = canvasPoint(e); });
+window.addEventListener('mouseup', e => {
+  if (!frameTry() || !PRESS.held || e.button !== 0) return;
+  const q = canvasPoint(e), h = frameHit(q);
+  pressOut(PRESS.up(h ? h.key : null, trackTick(q)));
+});
+// while the track is held, a seek each frame the pointer's tick changes, as the game seeks during a drag
+function frameDrag() { if (frameTry() && PRESS.held === 'track' && PTR) pressOut(PRESS.drag(trackTick(PTR))); }
 
 /* ---- the strip under the stage: caption and the keys and buttons held ---- */
 let shownKeys = null, shownCap = null;
@@ -649,6 +838,7 @@ function loop(t) {
   const dt = last ? Math.min(.25, (t - last) / 1000) : 0; last = t;
   gameTick(dt);
   if (S.open) {
+    frameDrag();
     advance(dt);
     const v = draw(); strip(v);
     if (held() !== loop.held) { loop.held = held(); controls(); }
@@ -681,5 +871,8 @@ Promise.all([load(), loadFixtures()]).then(() => {
 });
 requestAnimationFrame(loop);
 // the page's state, its running simulation and the sidebar layout it runs on, for scripted checks of the mockup
-window.WikiPage = { state: S, sim: () => sim, stageId, image: () => IMG, layout: () => simLayout, context: () => simCtx };
+// and a frame:game entry's replay, its frame record, and the frame as drawn: its corner and the stage HUD's unit in canvas
+// pixels, its size in game pixels and Leave's question's rects
+window.WikiPage = { state: S, sim: () => sim, replay: () => rep, frame: () => FR && FR.rec, frameDrawn: () => FR && FR.hud,
+  stageId, image: () => IMG, layout: () => simLayout, context: () => simCtx };
 })();

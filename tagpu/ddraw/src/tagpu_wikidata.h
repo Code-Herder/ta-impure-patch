@@ -188,9 +188,11 @@ enum { WIKI_UNTIL_IDLE = 1, WIKI_UNTIL_ARRIVED = 2, WIKI_UNTIL_BUILT = 3, WIKI_U
 #define WIKI_UNTIL_MAX 3600
 
 /* THE REPLAY HUD'S CONTROLS a game entry's viewer's script presses (sim.js's HUD_CONTROLS, in its
-   order; the game's keys, hud-in-game.md). leave:yes is the player's alone, never a script's. */
+   order; the game's keys, hud-in-game.md), WIKI_NHUD of them. leave:yes is the player's alone,
+   never a script's: Try it yourself may press it (replay.js PRESSES, tagpu_wikireplay_press), so it
+   is numbered after the script's controls and has no name the loader reads. */
 enum { WIKI_HUD_PLAY, WIKI_HUD_SPEED, WIKI_HUD_REW, WIKI_HUD_FWD, WIKI_HUD_TRACK, WIKI_HUD_BOOKMARK, WIKI_HUD_LEAVE,
-       WIKI_HUD_LEAVE_NO, WIKI_NHUD };
+       WIKI_HUD_LEAVE_NO, WIKI_NHUD, WIKI_HUD_LEAVE_YES = WIKI_NHUD, WIKI_NPRESS };
 
 /* One input of a demo's timeline, or one the player gives Try it yourself. */
 typedef struct {

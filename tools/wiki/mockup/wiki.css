@@ -110,6 +110,12 @@ canvas.skin { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 
 #stage { position: absolute; left: calc(var(--bz-l) * var(--u)); right: calc(var(--bz-r) * var(--u)); top: calc(var(--bz-t) * var(--u));
   bottom: calc(var(--bz-b) * var(--u)); width: calc(100% - (var(--bz-l) + var(--bz-r)) * var(--u)); height: calc(100% - (var(--bz-t) + var(--bz-b)) * var(--u)); }
 #stage.try { cursor: none; }
+/* the frame's two layers over the stage canvas (wiki.js drawReplay): the stage HUD, which hud.js lays out at the frame's
+   corner, and the canvas of the TOP range (Leave's question, the viewer's cursor), the stage's size and place. Neither
+   takes the pointer: the page tests the stage's presses itself, as the DLL's hit map does */
+#stagehud { right: auto; bottom: auto; pointer-events: none; overflow: hidden; }
+#stagetop { position: absolute; left: calc(var(--bz-l) * var(--u)); top: calc(var(--bz-t) * var(--u)); width: calc(100% - (var(--bz-l) + var(--bz-r)) * var(--u));
+  height: calc(100% - (var(--bz-t) + var(--bz-b)) * var(--u)); pointer-events: none; }
 #ctl button, #t-row button { position: relative; height: calc(var(--w-controls-h) * var(--u)); padding: 0 calc(var(--w-controls-pad) * var(--u)); box-sizing: border-box;
   display: flex; align-items: center; justify-content: center; white-space: nowrap; }
 /* the caption and the keys strip keep fixed heights: a caption or a keycap appearing must not resize the stage under the

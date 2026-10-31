@@ -13,11 +13,12 @@
    only through the controls -- paused, a speed, a seek. Before the replay shows, a second game
    simulation, the walker, plays the script to its end WALK ticks a step and marks each seat's
    commander deaths and its defeat. A seek re-simulates: forward the game plays on, back it is
-   freed, made again and plays from tick 0.
+   freed, made again and plays from tick 0. Leave, then Yes, ends Try it yourself's replay: it is
+   done and `left`.
 
    THE BOUND: a step runs at most max(WIKI_REPLAY_SEEK, WIKI_REPLAY_WALK, 8) game ticks, whatever
    the script or the presses, so a step's cost has a ceiling by construction. Every value a press
-   or the data brings is bounded before it is used: a control against WIKI_NHUD, a tick clamped to
+   or the data brings is bounded before it is used: a control against WIKI_NPRESS, a tick clamped to
    the game, the markers and bookmarks against their arrays.
 
    ENGINE-FREE, WIN32-FREE AND WITHOUT GLOBALS, as tagpu_wikisim.c: one WIKIREPLAY is used by one
@@ -79,6 +80,7 @@ typedef struct {
     int         book[WIKI_REPLAY_BOOKS];        /* sorted                                            */
     int         toast_kind, toast_at, toast_value;  /* toast_kind -1: none                          */
     int         question, was_paused;           /* Leave's question is open, and the pause before it */
+    int         left;                           /* Try it's Yes left the replay: it is done          */
 } WIKIREPLAYVIEW;
 
 /* The replay; the caller owns it and reads nothing of it but through the functions below. */
@@ -95,7 +97,7 @@ typedef struct {
        `failed`, walker once the walk is over) */
     WIKISIM*          game;
     WIKISIM*          walker;
-    int               tick, clock, next, nscript, done, failed, ignored, stalled;
+    int               tick, clock, next, nscript, done, failed, ignored, stalled, scripted, left;
     const WIKIINPUT** script;       /* the viewer's inputs in the order fed: by tick, then file order */
     double            vend;         /* the clock the demo ends on; never for Try it                    */
     int               waiting, wait_from, wait_max;
@@ -125,9 +127,9 @@ void tagpu_wikireplay_step(WIKIREPLAY* r);
    adds at most WIKI_REPLAY_SEEK. */
 int tagpu_wikireplay_cost(const WIKIREPLAY* r);
 
-/* Try it yourself's press, acting at once: a WIKI_HUD_* (anything else does nothing), and for the
-   track the game tick under the pointer, which the seek clamps to the game. Nothing while the
-   replay is done or still walking. */
+/* Try it yourself's press, acting at once: a WIKI_HUD_* below WIKI_NPRESS, the question's Yes
+   included (anything else does nothing), and for the track the game tick under the pointer, which
+   the seek clamps to the game. Nothing while the replay is done or still walking. */
 void tagpu_wikireplay_press(WIKIREPLAY* r, int control, int value);
 
 /* The game simulation shown now, NULL only when `failed`; not const, since tagpu_wikisim_view
@@ -143,7 +145,7 @@ void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v);
    (WIKI_UNTIL_SEEKED or 0), stalled, the caption, failed, ignored; the game's tick, end, paused,
    speed, acc, target, gen, quiet; the cursor: 0, or 1 then from (-1 none), from_value, to, value,
    at, and 1 with drag and over or 0; the bookmark count and each; the toast's kind (-1 none), at
-   and value (0 and 0 with none); the question open and was_paused; walked, the marker count and
+   and value (0 and 0 with none); the question open, was_paused and left; walked, the marker count and
    each marker's tick, kind and seat; last the game simulation's tagpu_wikisim_hash as its low and
    its high 32 bits, or 0 and 0 when `failed`. */
 uint64_t tagpu_wikireplay_hash(const WIKIREPLAY* r);

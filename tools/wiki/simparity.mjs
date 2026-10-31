@@ -114,7 +114,7 @@ function replayHash(R) {
   }
   h.int(v.books.length); for (const t of v.books) h.int(t);
   h.int(v.toast ? WikiReplay.TOASTS.indexOf(v.toast.kind) : -1); h.int(v.toast ? v.toast.at : 0); h.int(v.toast ? v.toast.value : 0);
-  b(v.question); b(v.question && v.question.wasPaused);
+  b(v.question); b(v.question && v.question.wasPaused); b(v.left);
   h.int(v.walked); h.int(v.marks.length); for (const m of v.marks) for (const x of m) h.int(x);
   const gh = R.game ? stateHash(R.game, R.game.view()) : '0000000000000000';
   h.int(parseInt(gh.slice(8), 16)); h.int(parseInt(gh.slice(0, 8), 16));
@@ -353,12 +353,14 @@ const WIKI_SEAT_MIN = 200;
    during the walk (nothing), the pause and the play, every speed, rew and fwd, a track press and its drag back and
    forth (a backward seek makes the game again), the bookmarks added and removed, Leave's question with the presses it
    ignores, leave:no twice (the second ignored), a track before the start and past the end (clamped), play at the end
-   (back to the start), a name that is no control and leave:yes (nothing yet), and rew near the start (clamped) */
+   (back to the start), a name that is no control and leave:yes with no question open (ignored), rew near the start
+   (clamped), and last Leave, then Yes, which ends the replay (left) */
 const TRACE = { end: 150, presses: [[3, 'play', 0], [20, 'play', 0], [30, 'play', 0], [40, 'speed', 0], [41, 'speed', 0],
   [42, 'speed', 0], [43, 'speed', 0], [44, 'speed', 0], [50, 'fwd', 0], [60, 'rew', 0], [70, 'track', 900], [71, 'track', 950],
   [72, 'track', 880], [73, 'track', 880], [80, 'bookmark', 0], [85, 'bookmark', 0], [86, 'bookmark', 0], [90, 'leave', 0],
   [91, 'play', 0], [92, 'speed', 0], [93, 'leave', 0], [94, 'leave:no', 0], [95, 'leave:no', 0], [100, 'track', -50],
-  [101, 'track', 99999], [112, 'play', 0], [115, 'bogus', 0], [116, 'leave:yes', 0], [120, 'rew', 0], [130, 'bookmark', 0]] };
+  [101, 'track', 99999], [112, 'play', 0], [115, 'bogus', 0], [116, 'leave:yes', 0], [120, 'rew', 0], [130, 'bookmark', 0],
+  [140, 'leave', 0], [145, 'leave:yes', 0]] };
 function refusalCases(entry) {
   const clone = v => JSON.parse(JSON.stringify(v));
   const T = WikiSim.TRIP, base = { id: 'm', scene: { selected: ['ck'] }, inputs: [{ at: 5, build: 'ARMMEX' }], end: 5 + T };

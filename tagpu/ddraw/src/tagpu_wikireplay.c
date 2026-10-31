@@ -42,7 +42,7 @@ static int stopped(const WIKISIM* s)
 
 static int is_done(const WIKIREPLAY* r)
 {
-    return r->clock >= r->vend || r->stalled || r->failed || stopped(r->game);
+    return r->clock >= r->vend || r->stalled || r->failed || r->left || stopped(r->game);
 }
 
 /* a seat's lost rising, a death; its out set, a defeat. BOUND: WIKI_REPLAY_MARKS (tagpu_wikireplay.h),
@@ -104,14 +104,26 @@ static void seek(WIKIREPLAY* r, int t)
 }
 
 /* THE CONTROLS, as the game's HUD acts (hud-in-game.md, the keys' table). While Leave's question
-   is open every press but leave:no is ignored, and leave:no with none open is; each ignored press
-   is counted. `c` is a WIKI_HUD_*: the callers bound it. */
+   is open every press but its two answers is ignored, and an answer with none open is, and
+   leave:yes in a replay that plays a script; each ignored press is counted. `c` is a WIKI_HUD_*
+   below WIKI_NPRESS: the callers bound it. */
 static void act(WIKIREPLAY* r, int c, int value)
 {
     int playhead, k, i;
+    const int answer = c == WIKI_HUD_LEAVE_NO || c == WIKI_HUD_LEAVE_YES;
     if (r->failed) return;
-    if (r->question ? c != WIKI_HUD_LEAVE_NO : c == WIKI_HUD_LEAVE_NO) {
+    if (r->question ? !answer : answer) {
         r->ignored++;
+        return;
+    }
+    if (c == WIKI_HUD_LEAVE_YES) {
+        if (r->scripted) {
+            r->ignored++;
+            return;
+        }
+        r->question = 0;
+        r->was_paused = 0;
+        r->left = 1;
         return;
     }
     playhead = r->target >= 0 ? r->target : r->game->tick;
@@ -157,7 +169,7 @@ static void act(WIKIREPLAY* r, int c, int value)
         r->was_paused = r->paused;
         r->paused = 1;
         break;
-    default:
+    default: /* WIKI_HUD_LEAVE_NO */
         r->paused = r->was_paused;
         r->question = 0;
         r->was_paused = 0;
@@ -258,6 +270,7 @@ int tagpu_wikireplay_init(WIKIREPLAY* r, const WIKIENTRY* e, const WIKIDEMO* d, 
     r->e = e;
     r->d = d;
     r->lay = lay;
+    r->scripted = scripted != 0;
     r->has_ctx = ctx != NULL;
     if (ctx) r->ctx = *ctx;
     if (!(r->game = game_new(r, 0, err, errn))) return 0;
@@ -331,7 +344,7 @@ int tagpu_wikireplay_cost(const WIKIREPLAY* r)
 
 void tagpu_wikireplay_press(WIKIREPLAY* r, int control, int value)
 {
-    if (r->done || r->walker || control < 0 || control >= WIKI_NHUD) return;
+    if (r->done || r->walker || control < 0 || control >= WIKI_NPRESS) return;
     act(r, control, value);
     r->done = is_done(r);
 }
@@ -382,6 +395,7 @@ void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v)
     v->toast_value = r->toast_kind >= 0 ? r->toast_value : 0;
     v->question = r->question;
     v->was_paused = r->question ? r->was_paused : 0;
+    v->left = r->left;
 }
 
 /* ---- the replay's hash, in tagpu_wikireplay.h's order ---- */
@@ -457,6 +471,7 @@ uint64_t tagpu_wikireplay_hash(const WIKIREPLAY* r)
     fnv_int(&h, v.toast_value);
     fnv_int(&h, v.question ? 1 : 0);
     fnv_int(&h, v.was_paused ? 1 : 0);
+    fnv_int(&h, v.left ? 1 : 0);
     fnv_int(&h, v.walked);
     fnv_int(&h, v.nmark);
     for (i = 0; i < v.nmark; i++) {

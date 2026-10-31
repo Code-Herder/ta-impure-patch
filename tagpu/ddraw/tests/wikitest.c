@@ -704,6 +704,7 @@ static void replay_view(const WIKIREPLAYVIEW* v)
     key("question", 0);
     if (v->question) printf("{\"wasPaused\":%s}", v->was_paused ? "true" : "false");
     else fputs("null", stdout);
+    key("left", 0); fputs(v->left ? "true" : "false", stdout);
     putchar('}');
 }
 
@@ -763,6 +764,12 @@ static int replay(const char* path, const char* entry, const char* layout, const
     return 0;
 }
 
+/* a press of Try it's by replay.js's name: a control, or the question's Yes, which no script names */
+static int press_of(const char* name)
+{
+    return name && !strcmp(name, "leave:yes") ? WIKI_HUD_LEAVE_YES : tagpu_wikidata_hud(name);
+}
+
 /* Try it yourself on the entry's first demo with the file TRACE's presses, one line a tick */
 static int replaytrace(const char* path, const char* entry, const char* layout, const char* casting, const char* rival,
                        int iface, int cob, const char* tracefile)
@@ -797,7 +804,7 @@ static int replaytrace(const char* path, const char* entry, const char* layout, 
         if (r.done || r.tick >= last) break;
         for (p = tj_is(tj_get(root, "presses"), TJ_ARR) ? tj_get(root, "presses")->first : NULL; p; p = p->next)
             if ((int)tj_num(tj_at(p, 0), -1) == r.tick)
-                tagpu_wikireplay_press(&r, tagpu_wikidata_hud(tj_str(tj_at(p, 1), NULL)), (int)tj_num(tj_at(p, 2), 0));
+                tagpu_wikireplay_press(&r, press_of(tj_str(tj_at(p, 1), NULL)), (int)tj_num(tj_at(p, 2), 0));
         tagpu_wikireplay_step(&r);
     }
     tagpu_wikireplay_free(&r);

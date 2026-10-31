@@ -9,6 +9,10 @@
    demo ticks, one a step, and moves the game only through the HUD's controls: paused, a speed, a seek. Try it yourself
    (create) has no viewer's script: the player's presses come through press(), each acting at once.
 
+   LEAVE, THEN YES, ends Try it yourself's replay (decision 23): leave:yes is a press of create's alone, never a
+   script's (both readers refuse it in a demo) and does nothing in play's. It closes the question and the replay is done
+   and `left`: the page holds its last frame and says that in the game this goes back to the Replays screen.
+
    THE MARKERS come from the simulation, never from the script (decision 2): before the replay shows, a second game
    simulation of the same demo, the walker, plays the game script to its end WALK ticks a step, and each tick a seat's
    commanders lost rising marks a death and its count of units reaching 0 from above a defeat, as the game's walker reads
@@ -40,8 +44,9 @@ const WikiReplay = (() => {
      the game ticks a seek and the walk play in one step (SEEK, WALK), rew's and fwd's 10 s (STEP), a bookmark's reach
      of 3 s (NEAR), the bookmarks and markers held (BOOKS; MARKS: a death per kill of a commander, a defeat per seat),
      the most game ticks a page's fill lets a replay run (FILL, the presentation's), and a press's trip (HUD_DOWN,
-     HUD_UP: the popup pick's without its glide back) */
-  const CONTROLS = Sim.HUD_CONTROLS, HUD_DOWN = Sim.HUD_DOWN, HUD_UP = Sim.HUD_UP;
+     HUD_UP: the popup pick's without its glide back); PRESSES, what Try it may press: the controls and the question's
+     Yes (WIKI_HUD_LEAVE_YES) */
+  const CONTROLS = Sim.HUD_CONTROLS, HUD_DOWN = Sim.HUD_DOWN, HUD_UP = Sim.HUD_UP, PRESSES = [...CONTROLS, 'leave:yes'];
   const SPEEDS = [5, 10, 20, 40, 80], SPEED0 = 10;
   const SEEK = 256, WALK = 256, STEP = 300, NEAR = 90, BOOKS = 64, MARKS = Sim.GAME_KILLS + Sim.SEATS, FILL = 512;
   // a marker's kind, tagpu_hudlay.h's HUD_MK_DEATH and HUD_MK_DEFEAT; a toast's, WIKI_TOAST_*
@@ -62,7 +67,7 @@ const WikiReplay = (() => {
     const vend = scripted && demo.end != null ? demo.end : Infinity;
     let clock = 0, next = 0, wait = null, stalled = false, caption = null, failed = false, ignored = 0, done = false;
     let paused = false, speed = SPEED0, acc = 0, target = -1, gen = 1, quiet = 0;
-    let books = [], toast = null, question = null;
+    let books = [], toast = null, question = null, left = false;
     /* the viewer's cursor: the last trip, {from, fromValue, to, value, at, drag}, from the previous trip's control and
        its final value, the track's tick (-1 for a button), the clock tick it began and the drag's {drag, over}; `pos`
        the track's position, the last tick it sought, which the next trip starts from */
@@ -73,7 +78,7 @@ const WikiReplay = (() => {
 
     const sound = () => R.game.gameNow().sound;
     const stopped = () => R.game !== null && R.game.gameNow().stopped;
-    const isDone = () => clock >= vend || stalled || failed || stopped();
+    const isDone = () => clock >= vend || stalled || failed || left || stopped();
     // a seat's lost rising, a death; its out set, a defeat. BOUND: MARKS (above), and the guard holds it whatever.
     function publish() {
       walker.gameNow().seats.forEach((z, k) => {
@@ -105,10 +110,18 @@ const WikiReplay = (() => {
       acc = 0;
     }
     /* THE CONTROLS, as the game's HUD acts (hud-in-game.md, the keys' table). While Leave's question is open every
-       press but leave:no is ignored, and leave:no with none open is; each ignored press is counted. */
+       press but its two answers is ignored, and an answer with none open is, and leave:yes in a replay that plays a
+       script; each ignored press is counted. */
     function act(c, value) {
       if (failed) return;
-      if (question ? c !== 'leave:no' : c === 'leave:no') { ignored++; return; }
+      const answer = c === 'leave:no' || c === 'leave:yes';
+      if (question ? !answer : answer) { ignored++; return; }
+      if (c === 'leave:yes') {
+        if (scripted) { ignored++; return; }
+        question = null;
+        left = true;
+        return;
+      }
       const playhead = target >= 0 ? target : R.game.tick;
       if (c === 'play') {
         if (playhead === end) { seek(0); paused = false; } else paused = !paused;
@@ -197,17 +210,17 @@ const WikiReplay = (() => {
       if (target >= 0) return Math.min(SEEK, target - R.game.tick);
       return paused ? 0 : Math.min(Math.floor((acc + speed) / 10), end - R.game.tick);
     };
-    /* Try it yourself's press, acting at once: a control of CONTROLS (anything else does nothing), for the track the
-       game tick under the pointer, an integer the seek clamps to the game. None reaches a replay done or still walking,
-       which the page does not show yet. */
+    /* Try it yourself's press, acting at once: one of PRESSES (anything else does nothing), for the track the game tick
+       under the pointer, an integer the seek clamps to the game. None reaches a replay done or still walking, which the
+       page does not show yet. */
     R.press = (c, value) => {
-      if (done || walker || !CONTROLS.includes(c)) return;
+      if (done || walker || !PRESSES.includes(c)) return;
       act(c, value);
       done = isDone();
     };
     /* THE REPLAY'S VIEW (tagpu_wikireplay.h WIKIREPLAYVIEW): the demo tick, the viewer's clock and its state, the game's
        transport, the cursor and the control held down (from the press to the release), the markers and the walk, the
-       bookmarks, the toast and the question. R.game.view() is the world. */
+       bookmarks, the toast, the question and whether Yes left the replay. R.game.view() is the world. */
     R.view = () => {
       const g = R.game, t = cursor;
       const release = t && (t.drag ? t.at + HUD_DOWN + t.drag.over : t.at + HUD_UP);
@@ -219,7 +232,7 @@ const WikiReplay = (() => {
         held: t && clock >= t.at + HUD_DOWN && clock < release ? t.to : null,
         marks: marks.map(m => m.slice()), walked,
         books: books.slice(), toast: toast ? { ...toast } : null,
-        question: question ? { wasPaused: question.wasPaused } : null,
+        question: question ? { wasPaused: question.wasPaused } : null, left,
       };
     };
     // frees every simulation it holds; the replay is not used after
@@ -241,7 +254,7 @@ const WikiReplay = (() => {
   return {
     play: (entry, demo, layout, ctx) => make(entry, demo, layout, ctx, true),
     create: (entry, demo, layout, ctx) => make(entry, demo, layout, ctx, false),
-    CONTROLS, SPEEDS, SPEED0, SEEK, WALK, STEP, NEAR, BOOKS, MARKS, FILL, HUD_DOWN, HUD_UP, DEATH, DEFEAT, TOASTS,
+    CONTROLS, PRESSES, SPEEDS, SPEED0, SEEK, WALK, STEP, NEAR, BOOKS, MARKS, FILL, HUD_DOWN, HUD_UP, DEATH, DEFEAT, TOASTS,
     GAME_END_MAX: Sim.GAME_END_MAX,
   };
 })();
