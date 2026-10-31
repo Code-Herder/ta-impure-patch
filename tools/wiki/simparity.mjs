@@ -491,7 +491,39 @@ function refusalCases(entry) {
   cast('builds naming a type', 'refused', tower(k => { k.builds = ['ARMDRAG']; }));
   cast('builds a string', 'refused', tower(k => { k.builds = 'wall'; }));
   cast('a full record from a pack', 'accepted', tower(k => { Object.assign(k, { workerTime: 0, buildDistance: 0, maxVelocity: 0,
-    canstop: 0, extracts: 0, energyMake: 0, vent: false, g: [], builds: [] }); }));
+    canstop: 0, extracts: 0, energyMake: 0, energyUse: 0, buildCostMetal: 0, buildCostEnergy: 0, metalMake: 0, metalStorage: 0,
+    energyStorage: 0, vent: false, g: [], builds: [], corpse: null }); }));
+  // the commander and the economy's figures
+  cast('the commander absent', 'refused', C => { delete C.casts.commander; });
+  cast('the commander unbound', 'accepted', C => { C.casts.commander = null; });
+  cast('a builds naming the commander', 'accepted', tower(k => { k.builds = ['commander']; }));
+  cast('a build cost below 0', 'refused', tower(k => { k.buildCostMetal = -1; }));
+  cast('a storage a string', 'refused', tower(k => { k.energyStorage = '50'; }));
+  cast('metal made 0.25', 'accepted', tower(k => { k.metalMake = 0.25; }));
+  cast('an energyUse of -20', 'accepted', tower(k => { k.energyUse = -20; }));
+  cast('an energyUse of -9999999', 'accepted', tower(k => { k.energyUse = -9999999; }));
+  cast('an energyUse of 1e7', 'refused', tower(k => { k.energyUse = 1e7; }));
+  cast('an energyUse of -1e7', 'refused', tower(k => { k.energyUse = -1e7; }));
+  cast('an energyUse null', 'refused', tower(k => { k.energyUse = null; }));
+  // the corpse: null, or checkFeature's record and its name
+  const wreck = () => ({ name: 'armllt_dead', footprint: [2, 2], metal: 72, energy: 0, height: 20, blocking: true,
+    reclaimable: true, object: 'armllt_dead' });
+  const corpse = f => tower(k => { k.corpse = wreck(); f(k.corpse, k); });
+  cast('a corpse null', 'accepted', tower(k => { k.corpse = null; }));
+  cast('a corpse record', 'accepted', corpse(() => {}));
+  cast('a corpse of a 2D feature', 'accepted', corpse(f => { delete f.object; }));
+  cast('a corpse of figures absent', 'accepted', corpse(f => { delete f.metal; delete f.energy; delete f.height; delete f.blocking; }));
+  cast('a corpse not an object', 'refused', tower(k => { k.corpse = 'armllt_dead'; }));
+  cast('a corpse with no name', 'refused', corpse(f => { delete f.name; }));
+  cast('a corpse named in 31 bytes', 'accepted', corpse(f => { f.name = 'n'.repeat(31); }));
+  cast('a corpse named in 32 bytes', 'refused', corpse(f => { f.name = 'n'.repeat(32); }));
+  cast('a corpse of footprint 17', 'refused', corpse(f => { f.footprint = [17, 1]; }));
+  cast('a corpse of no footprint', 'refused', corpse(f => { delete f.footprint; }));
+  cast('a corpse of metal 1e7', 'refused', corpse(f => { f.metal = 1e7; }));
+  cast('a corpse of energy below 0', 'refused', corpse(f => { f.energy = -1; }));
+  cast('a corpse of height 256', 'refused', corpse(f => { f.height = 256; }));
+  cast('a corpse blocking 1', 'refused', corpse(f => { f.blocking = 1; }));
+  cast('a corpse of an empty object', 'refused', corpse(f => { f.object = ''; }));
   const screen = (h, gadgets = []) => ({ y: 128, w: 128, h, gadgets });
   const gad = i => ({ name: `G${i}`, role: 'order', rect: [0, 0, 1, 1] });
   const ck1 = L => L.screens.ARMCK1.gadgets;
@@ -572,11 +604,16 @@ function castingOut(C) {
     if (k.g) for (const [dx, dz] of k.g) g[dz] |= 1 << dx;
     else if (k.vent) for (let dz = 0; dz < fz; dz++) g[dz] = (1 << fx) - 1;
     const o = { type: k.type, title: k.title, fx, fz };
-    for (const n of ['buildTime', 'workerTime', 'buildDistance', 'maxVelocity', 'extracts', 'energyMake']) o[n] = k[n] ?? 0;
+    for (const n of ['buildTime', 'workerTime', 'buildDistance', 'maxVelocity', 'extracts', 'energyMake', 'buildCostMetal',
+      'buildCostEnergy', 'metalMake', 'metalStorage', 'energyStorage', 'energyUse']) o[n] = k[n] ?? 0;
+    const f = k.corpse;
     return { ...o, canstop: (k.canstop & 1) === 1 ? 1 : 0, activatewhenbuilt: (k.activatewhenbuilt & 1) === 1 ? 1 : 0,
       canreclamate: (k.canreclamate & 1) === 1 ? 1 : 0,
       vent: k.vent ? 1 : 0, g,
-      builds: (k.builds || []).reduce((m, b) => m | (1 << WikiSim.CASTS.indexOf(b)), 0) };
+      builds: (k.builds || []).reduce((m, b) => m | (1 << WikiSim.CASTS.indexOf(b)), 0),
+      // WIKIFEATDEF: an absent figure 0, an absent flag false, no object ""
+      corpse: f ? { name: f.name, fx: f.footprint[0], fz: f.footprint[1], metal: f.metal ?? 0, energy: f.energy ?? 0,
+        height: f.height ?? 0, blocking: f.blocking ? 1 : 0, reclaimable: f.reclaimable ? 1 : 0, object: f.object ?? '' } : null };
   });
   return { ok: true, casts };
 }

@@ -267,6 +267,8 @@ typedef struct {
        A GAF is read by the archive's 64 KiB page, only the pages its lookups touch: Escalation's
        fx.GAF is 82 MB.
      - <palettes>\<palette>.PAL, .ALP and .SHD and <palettes>\<guipal>.PAL.
+     - <features>\**\*.TDF in the enumeration's order, only while a bound cast's wreck is still
+       sought: the first file holding the section its FBI's `corpse` names.
 
    THE CASTING: every layout side's answer to each of the wiki's casts (WIKICASTING,
    tagpu_wikidata.h), by gfx.py's cast rule (`side_casting`), which names no mod, reads no unit's
@@ -283,7 +285,12 @@ typedef struct {
    for an earlier cast in WIKI_CAST_* order. Tower, wall and solar, the last three, are drawn from
    one list and skip in that order (a tower that makes energy is the tower, not the solar too); the
    other casts' tests already exclude one another, and a last pass makes it a fact whatever the
-   tests: a pick that repeats an earlier cast's is left unbound, with the reason.
+   tests: a pick that repeats an earlier cast's is left unbound, with the reason. The commander
+   is the walk's root itself, when it is mobile; it comes off no menu, so no other cast can take it.
+   Each cast also carries the economy's figures (BuildCostMetal, BuildCostEnergy, EnergyUse,
+   MetalMake, MetalStorage, EnergyStorage) and its wreck, the feature section its `corpse` names
+   (corpse_read in the .c states the rule), none when the section is missing or breaks a feature
+   record's bounds.
    Each cast's display name is the FBI's `<language>name`, else `name` (0x4C58A0 tries the
    language's key first, 0x42BFAC..0x42BFBB reads it into def+0x00), cut to 31 bytes (def+0x00 is
    0x20 bytes) and converted from Windows-1252 [INFERRED: the game's code page] to UTF-8, the
@@ -307,8 +314,8 @@ typedef struct {
        type whose pages are other files than another side's gets screens of its own, named
        <TYPE><page>@<side>.
    And where it departs from gfx.py: a cast whose unit WIKICASTDEF cannot hold -- a UnitName past
-   WIKI_ID_MAX - 1 bytes or all digits, a figure that is not a finite number >= 0, a BuildTime
-   that is not above 0 -- is left unbound and reported, as gfx.py leaves a footprint past
+   WIKI_ID_MAX - 1 bytes or all digits, a figure that is not a finite number >= 0, an EnergyUse
+   of a magnitude past WIKI_ECON_MAX, a BuildTime that is not above 0 -- is left unbound and reported, as gfx.py leaves a footprint past
    WIKI_FP_MAX: tagpu_wikidata_casting's bounds, which the simulation's binding rests on, then hold
    for every casting this file makes. No unit of the six compat setups' castings meets one.
 
@@ -406,7 +413,8 @@ typedef struct WIKISIDE {
        Every bound cast holds tagpu_wikidata_casting's bounds: a type of 1..WIKI_ID_MAX - 1 bytes,
        not all digits, upper-case as the layout's build buttons spell it; a title below
        WIKI_TITLE_MAX bytes of UTF-8; a footprint of 1..WIKI_FP_MAX a side with its G cells inside
-       it; every figure finite and >= 0, the build time above 0. */
+       it; every figure finite and >= 0 but energy_use, whose magnitude is below WIKI_ECON_MAX,
+       the build time above 0; a wreck within a feature record's bounds. */
     WIKICASTING    casting[WIKI_SIDE_SIDES];
     /* sidedata's side s -- the byte the engine keeps at PlayerInfo+0x95 -- as a layout side:
        side_of_engine[s] is the index into layout.side and casting, or -1 for a side with no MAIN2

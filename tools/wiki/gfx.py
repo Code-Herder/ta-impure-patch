@@ -1357,6 +1357,13 @@ def unit_record(path, where, k, language):
             "fx": fx, "fz": fz, "g": [[i % fx, i // fx] for i, c in enumerate(yard) if c == YARD_G],
             "extractsmetal": strtod(k.get("extractsmetal")), "energymake": strtod(k.get("energymake")),
             "energyuse": strtod(k.get("energyuse")), "weapon1": bool((k.get("weapon1") or "").strip()),
+            # the economy's figures: build costs, metal made a second, the storages (def +0x1E6 metal and +0x1E2 energy,
+            # which the economy pass re-sums at 0x4017A1..0x4017C5, DISASSEMBLED; the others' offsets are not mapped)
+            "buildcostmetal": strtod(k.get("buildcostmetal")), "buildcostenergy": strtod(k.get("buildcostenergy")),
+            "metalmake": strtod(k.get("metalmake")), "metalstorage": strtod(k.get("metalstorage")),
+            "energystorage": strtod(k.get("energystorage")),
+            # the wreck's feature section, as spelled
+            "corpse": (k.get("corpse") or "").strip(),
             "fort": (k.get("tedclass") or "").strip().upper() == "FORT",
             "buildtime": strtod(k.get("buildtime")), "builddistance": strtod(k.get("builddistance")),
             # canstop is def+0x245 bit 3, 0 when the key is missing (0x42C90B..0x42C936; the Q4 scout answer)
@@ -1775,8 +1782,12 @@ def fill_downloads(recs, page, entries, name, report):
 # mobile, an extractor, a geothermal plant and a plain building each fail the others' tests, the moho is stronger
 # than the mex, the advbuilder is not the builder), and the last pass makes it a fact whatever the tests: a pick that
 # repeats an earlier cast's is left unbound, with the reason. The DLL's loader (tagpu_wikiasset.c) does the same.
+#
+# The commander is the walk's root itself, so no other cast can take it (the builders and the walker come off menus,
+# the plain casts off the builder's); it is last in CASTS so that every earlier cast keeps its index and every
+# casting's `builds` its meaning.
 
-CASTS = ("builder", "advbuilder", "mex", "moho", "geo", "walker", "tower", "wall", "solar")
+CASTS = ("builder", "advbuilder", "mex", "moho", "geo", "walker", "tower", "wall", "solar", "commander")
 CAST_FP_MAX = 16           # a footprint's side on each axis that the casting holds (WIKI_FP_MAX: one G row a u16)
 
 
@@ -1928,8 +1939,11 @@ def side_casting(units, commander, menu):
             why[c] = (f"the first plain land building on the builder's menu {what}" if picks[c] else
                       f"no plain land building on the builder's menu {what}")
     else:
-        for c in CASTS[1:]:
+        for c in CASTS[1:-1]:
             why[c] = "no builder"
+    picks["commander"] = root if is_mobile(U[root]) else None
+    why["commander"] = ("the side's commander" if picks["commander"] else
+                        f"the side's commander {U[root]['name']} is not mobile")
     for i, c in enumerate(CASTS):
         first = next((d for d in CASTS[:i] if picks[c] and picks[d] == picks[c]), None)
         if first:
@@ -1944,14 +1958,57 @@ def side_casting(units, commander, menu):
                    for c in CASTS]
 
 
-def cast_record(u, builds):
+def cast_record(u, builds, corpse):
     """A bound cast as the casting carries it: the entry's own keys (art/wiki/entries), the type in the case the
-    layout's build buttons spell it, and `builds` naming casts, not types."""
+    layout's build buttons spell it, `builds` naming casts, not types, and `corpse` its wreck (corpse_record)."""
     return {"type": u["name"].upper(), "title": u["title"], "footprint": [u["fx"], u["fz"]],
             "buildTime": u["buildtime"], "workerTime": u["workertime"], "buildDistance": u["builddistance"],
             "maxVelocity": u["maxvelocity"], "canstop": u["canstop"], "canreclamate": u["canreclamate"],
             "activatewhenbuilt": u["activatewhenbuilt"], "extracts": u["extractsmetal"],
-            "energyMake": u["energymake"], "vent": bool(u["g"]), "g": u["g"], "builds": builds}
+            "energyMake": u["energymake"], "energyUse": u["energyuse"], "buildCostMetal": u["buildcostmetal"],
+            "buildCostEnergy": u["buildcostenergy"], "metalMake": u["metalmake"], "metalStorage": u["metalstorage"],
+            "energyStorage": u["energystorage"], "vent": bool(u["g"]), "g": u["g"], "builds": builds,
+            "corpse": corpse}
+
+
+FEAT_NAME_MAX = 31         # a feature record's name and object, bytes (sim.js checkFeature, WIKIFEATDEF)
+FEAT_FOOT_MAX = 16         # its footprint's side (sim.js FEAT_FOOT, WIKI_FEAT_FOOT)
+FEAT_AMOUNT = 1e7          # its metal and energy bound (sim.js FEAT_AMOUNT, WIKI_FEAT_AMOUNT)
+
+
+def corpse_record(eng, u):
+    """A unit's wreck as a casting carries it: (the feature record or None, the reason for the report). The record is
+    sim.js checkFeature's, from the section the FBI's `corpse` names, found as Engine.feature finds it (the first
+    `features\\**\\*.tdf` holding it): footprintx/z as atoi of 16 bits and height of 8 (FeatureDef +0x94/+0x96 and
+    +0xFA, as tagpu_wikiasset.c's feature_resolve reads them), metal and energy as strtod (+0xF0, +0xEC) [INFERRED:
+    LoadFeature 0x4224B0's reader of those two keys is not mapped], blocking and reclaimable as atoi != 0 (+0xFE bits
+    6 and 7), object, a 3D feature's model, when the section names one. The name and the object are lower-cased and
+    must be printable ASCII of 1..31 bytes, the record's bounds, so that both producers write them alike; a record
+    outside checkFeature's bounds is no corpse. tagpu_wikiasset.c's corpse_read is the same rule."""
+    name = u["corpse"]
+    ascii = lambda v: 1 <= len(v) <= FEAT_NAME_MAX and all(" " <= ch <= "~" for ch in v)
+    if not name:
+        return None, "its FBI names no corpse"
+    if not ascii(name):
+        return None, f"its corpse {name} is not 1..{FEAT_NAME_MAX} printable ASCII bytes"
+    hit = eng.feature(name)
+    if hit is None:
+        return None, f"no {eng.dirs['features']}\\**\\*.tdf holds the section {name}"
+    body, tdf, where = hit
+    fx, fz = atoi(body.get("footprintx")) & 0xFFFF, atoi(body.get("footprintz")) & 0xFFFF
+    if not (1 <= fx <= FEAT_FOOT_MAX and 1 <= fz <= FEAT_FOOT_MAX):
+        return None, f"{name}'s footprint {fx} x {fz} is not within 1..{FEAT_FOOT_MAX} a side"
+    metal, energy = strtod(body.get("metal")), strtod(body.get("energy"))
+    if not (0 <= metal < FEAT_AMOUNT and 0 <= energy < FEAT_AMOUNT):
+        return None, f"{name}'s metal or energy is not within 0..{FEAT_AMOUNT:g}"
+    rec = {"name": name.lower(), "footprint": [fx, fz], "metal": metal, "energy": energy,
+           "height": atoi(body.get("height")) & 0xFF, "blocking": atoi(body.get("blocking")) != 0,
+           "reclaimable": atoi(body.get("reclaimable")) != 0}
+    if "object" in body:
+        if not ascii(body["object"]):
+            return None, f"{name}'s object is not 1..{FEAT_NAME_MAX} printable ASCII bytes"
+        rec["object"] = body["object"].lower()
+    return rec, f"{name.lower()} from {tdf} ({where})"
 
 
 def side_pack(eng, mod, descs, rows, out, pal, report):
@@ -1990,9 +2047,12 @@ def side_pack(eng, mod, descs, rows, out, pal, report):
         menu = lambda t, prefix=s["prefix"]: menu_of(eng, units, downloads, t, prefix, menus)
         picks, why = side_casting(units, s["commander"], menu)
         casts = {}
-        for c in CASTS:
+        for c, row in zip(CASTS, why):
             t = picks[c]
-            casts[c] = cast_record(units[t], [d for d in CASTS if picks[d] and picks[d] in menu(t)]) if t else None
+            casts[c], row["corpse"] = None, None
+            if t:
+                corpse, row["corpse"] = corpse_record(eng, units[t])
+                casts[c] = cast_record(units[t], [d for d in CASTS if picks[d] and picks[d] in menu(t)], corpse)
         casting.append({"side": s["name"], "commander": s["commander"], "casts": casts, "report": why})
 
     # each side's types: its bound cast types that have a page, read with that side's prefix (the `<prefix>DL` page

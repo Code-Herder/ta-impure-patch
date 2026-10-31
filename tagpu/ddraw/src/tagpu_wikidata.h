@@ -49,9 +49,11 @@ enum { WIKI_KEY_SHIFT, WIKI_KEY_ALT, WIKI_KEY_CTRL, WIKI_KEY_Z, WIKI_KEY_X, WIKI
        WIKI_ACT_SELECT = WIKI_NKEYS, WIKI_ACT_ORDER, WIKI_ACT_CANCEL, WIKI_NKEYNAMES };
 
 /* sim.js's CASTS, in its order: a unit's place in the demos, which a side's casting answers with
-   one of the mod's types (research/notes/ingame-wiki.md, the owner's decisions 13-15) */
+   one of the mod's types (research/notes/ingame-wiki.md, the owner's decisions 13-15). The
+   commander is last so that every earlier cast keeps its index and every casting's `builds` bit
+   mask its meaning. */
 enum { WIKI_CAST_BUILDER, WIKI_CAST_ADVBUILDER, WIKI_CAST_MEX, WIKI_CAST_MOHO, WIKI_CAST_GEO,
-       WIKI_CAST_WALKER, WIKI_CAST_TOWER, WIKI_CAST_WALL, WIKI_CAST_SOLAR, WIKI_NCAST };
+       WIKI_CAST_WALKER, WIKI_CAST_TOWER, WIKI_CAST_WALL, WIKI_CAST_SOLAR, WIKI_CAST_COMMANDER, WIKI_NCAST };
 /* A footprint's side, each axis, in a casting, and the width of a G row's bit mask: sim.js's
    FP_MAX. An entry's type with G cells is held to it too. */
 #define WIKI_FP_MAX    16
@@ -68,7 +70,7 @@ enum { WIKI_CAST_BUILDER, WIKI_CAST_ADVBUILDER, WIKI_CAST_MEX, WIKI_CAST_MOHO, W
 typedef struct {
     char        name[WIKI_ID_MAX];  /* ARMMEX */
     const char* title;              /* "Metal Extractor"; NULL when the entry gives none */
-    int         cast;               /* WIKI_CAST_*, or -1: no `cast`, or a name not one of the nine */
+    int         cast;               /* WIKI_CAST_*, or -1: no `cast`, or a name not one of the ten */
     int         fx, fz;             /* footprint, cells */
     double      build_time, worker_time, build_distance, max_velocity, extracts, energy_make;
     int         vent;               /* has a G cell: a geothermal plant, needing a vent under one */
@@ -93,6 +95,8 @@ typedef struct {
 #define WIKI_FEAT_NAME   32
 #define WIKI_FEAT_FOOT   16
 #define WIKI_FEAT_AMOUNT 1e7
+/* the bound of a signed economy figure, a cast's energy_use: sim.js's ECON_MAX */
+#define WIKI_ECON_MAX    1e7
 #define WIKI_FEAT_DEFS   64
 #define WIKI_FEATS_MAX   256
 typedef struct {
@@ -253,7 +257,7 @@ int tagpu_wikidata_def(const WIKIENTRY* e, const char* name);
    "select", "order", "cancel"; NULL out of range. */
 const char* tagpu_wikidata_key_name(int key);
 
-/* sim.js's and text.js's name of a cast: "builder", "advbuilder", ... "solar"; NULL out of range. */
+/* sim.js's and text.js's name of a cast: "builder", "advbuilder", ... "commander"; NULL out of range. */
 const char* tagpu_wikidata_cast_name(int cast);
 
 /* sim.js's name of a sweep kind: "metal", "energy", "all"; NULL out of range. */
@@ -292,22 +296,26 @@ typedef struct {
                                        (gfx.py's casts), and the JSON reader refuses it */
     double   build_time, worker_time, build_distance, max_velocity, extracts, energy_make;
                                     /* finite, >= 0, build_time > 0; an absent one reads 0 */
+    double   build_cost_metal, build_cost_energy, metal_make, metal_storage, energy_storage;
+                                    /* the economy's: finite, >= 0; an absent one reads 0 */
+    double   energy_use;            /* |x| < WIKI_ECON_MAX, negative for a solar collector; absent 0 */
     int      canstop;               /* (canstop & 1), as WIKIDEF's */
     int      activate_when_built;   /* (activatewhenbuilt & 1), as WIKIDEF's */
     int      canreclamate;          /* (canreclamate & 1), as WIKIDEF's */
     int      vent;                  /* has a G cell */
     uint16_t g[WIKI_FP_MAX];        /* as WIKIDEF's; inside fx x fz */
     uint16_t builds;                /* bit c: its build menu holds cast c's type */
+    int      has_corpse;            /* 0: `corpse` null or absent, the type leaves no wreck */
+    WIKIFEATDEF corpse;             /* its wreck's feature, held to the entry table's rules */
 } WIKICASTDEF;
 
 typedef struct { WIKICASTDEF cast[WIKI_NCAST]; } WIKICASTING;
 
 /* A side's casting from its JSON record ({"casts": {...}}; `side`, `commander`, `report` and any
-   other key are read past) into `c`, held to every bound of sim.js's checkCasting: all nine casts
+   other key are read past) into `c`, held to every bound of sim.js's checkCasting: all ten casts
    given, each null or a record whose type, title, footprint, figures, canstop, canreclamate,
-   activatewhenbuilt, vent, g and builds
-   hold. Beyond it, a cast named twice is refused (a JSON object keeps one of them for sim.js).
-   1, or 0 with a message in `err` and `c` zeroed: a refused casting is not used at all. */
+   activatewhenbuilt, vent, g, builds and corpse hold. Beyond it, a cast named twice is refused (a
+   JSON object keeps one of them for sim.js). 1, or 0 with a message in `err` and `c` zeroed: a refused casting is not used at all. */
 int tagpu_wikidata_casting(const TJV* v, WIKICASTING* c, char* err, size_t errn);
 
 /* ---- the left sidebar's layout: the running mod's (tagpu_wikiasset.c reads it from the mod's

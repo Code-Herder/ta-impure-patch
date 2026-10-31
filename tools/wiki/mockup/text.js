@@ -10,7 +10,7 @@
    fails the build and never reaches the player; a "}" on its own is plain text. Key names (Shift, Alt, Ctrl, Z, X) are
    literal in the text: nothing in an Impure game rebinds them. */
 const WikiText = (() => {
-  const CASTS = ['builder', 'advbuilder', 'mex', 'moho', 'geo', 'walker', 'tower', 'wall', 'solar'];
+  const CASTS = ['builder', 'advbuilder', 'mex', 'moho', 'geo', 'walker', 'tower', 'wall', 'solar', 'commander'];   // sim.js's
   /* each action's word, [interface type 0, type 1]. Type 0 orders with the left button and type 1 with the right; both
      select with the left button and cancel with the right, as the demos' actions resolve (decision 18), so only
      {order} follows the interface type. {select} and {cancel} read the same at both and exist so that no text spells a

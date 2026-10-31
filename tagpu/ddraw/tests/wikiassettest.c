@@ -737,18 +737,24 @@ static void synth_install(void)
        and, through the download fill of ARMDL, the solar; ARMACK's the moho. ARMWIN makes energy
        and stands before ARMSOLAR on the menu, so the solar must skip the tower to stay a unit of
        its own. ARMCK's display name is past 31 bytes and holds Windows-1252's euro sign and an
-       undefined byte. */
+       undefined byte. ARMCOM, the side's commander and the walk's root, is the commander cast.
+       ARMCK's wreck is a section of a TDF one folder down, named in another case; ARMMEX names a
+       wreck no TDF holds. */
     syn("units/ARMCOM.fbi", make_text("[UNITINFO]{UnitName=ARMCOM;BMcode=1;MaxVelocity=1.25;Builder=1;WorkerTime=300;"
-        "FootprintX=2;FootprintZ=2;BuildTime=50000;}\n"));
+        "FootprintX=2;FootprintZ=2;BuildTime=50000;BuildCostMetal=29854;BuildCostEnergy=34125;EnergyMake=25;MetalMake=1;}\n"));
     syn("units/ARMCK.fbi", make_text("[UNITINFO]\n{\n\tUnitName=ARMCK;\n\tSide=ARM;\n\tcanstop=1;\n\t/* a comment */\n"
         "\tBMcode=1;MaxVelocity=1.1;Builder=1;WorkerTime=80;FootprintX=2;FootprintZ=2;BuildTime=5597;BuildDistance=40;\n"
+        "\tCorpse= ARMCK_Dead ;MetalStorage=50;EnergyStorage=50;EnergyUse=0.1;\n"
         "\tName=Construction KBot;EnglishName=Construction Kbot \x80 with \x81 a name past the cut;\n}\n"));
     syn("units/ARMACK.fbi", make_text("[UNITINFO]{UnitName=ARMACK;BMcode=1;MaxVelocity=1;Builder=1;WorkerTime=180;"
         "FootprintX=2;FootprintZ=2;BuildTime=9000;}\n"));
     syn("units/ARMPW.fbi", make_text("[UNITINFO]{UnitName=ARMPW;BMcode=1;MaxVelocity=2.5;FootprintX=1;FootprintZ=1;BuildTime=1400;"
         "Weapon1=EMG;MinWaterDepth=-10;}\n"));
     syn("units/ARMMEX.fbi", make_text("[UNITINFO]{UnitName=ARMMEX;Side=ARM;FootprintX=2;FootprintZ=2;ExtractsMetal=.001;"
-        "BuildTime=1800;}\n"));
+        "BuildTime=1800;Corpse=armmex_gone;}\n"));
+    syn("features/corpses/armcorpses.tdf", make_text(
+        "[armck_dead]{world=allworld;footprintx=2;footprintz=2;height=20;blocking=1;reclaimable=1;metal=72;energy=0;"
+        "object=ARMCK_DEAD;}\n[armck_heap]{footprintx=2;footprintz=2;metal=36;}\n"));
     syn("units/ARMMOHO.fbi", make_text("[UNITINFO]{UnitName=ARMMOHO;FootprintX=3;FootprintZ=3;ExtractsMetal=0.003e0;BuildTime=14000;}\n"));
     syn("units/ARMGEO.fbi", make_text("[UNITINFO]{UnitName=ARMGEO;FootprintX=4;FootprintZ=4;YardMap=oooo oGGo oGGo oooo;"
         "EnergyMake=250;EnergyUse=+1;BuildTime=13000;}\n"));
@@ -895,6 +901,14 @@ static const char* const SEEDS[] = {
     "[x]\n\n\t {\r\n  key = value with spaces ; }\n",
 };
 
+/* two feature records field for field */
+static int feat_eq(const WIKIFEATDEF* a, const WIKIFEATDEF* b)
+{
+    return !strcmp(a->name, b->name) && a->fx == b->fx && a->fz == b->fz && a->metal == b->metal && a->energy == b->energy &&
+           a->height == b->height && a->blocking == b->blocking && a->reclaimable == b->reclaimable &&
+           !strcmp(a->object, b->object);
+}
+
 /* THE CASTING'S BOUNDS: each casting of the report, read by tagpu_wikidata_casting -- the pack's
    reader, which holds sim.js's checkCasting -- must be accepted and equal the block's, field for
    field. 1 when every side's is. */
@@ -917,8 +931,12 @@ static int casting_agrees(const WIKISIDE* side, const char* rep, char* why, size
             ok = a->bound == b->bound && !strcmp(a->type, b->type) && !strcmp(a->title, b->title) && a->fx == b->fx &&
                  a->fz == b->fz && a->build_time == b->build_time && a->worker_time == b->worker_time &&
                  a->build_distance == b->build_distance && a->max_velocity == b->max_velocity && a->extracts == b->extracts &&
-                 a->energy_make == b->energy_make && a->canstop == b->canstop && a->vent == b->vent &&
-                 !memcmp(a->g, b->g, sizeof a->g) && a->builds == b->builds;
+                 a->energy_make == b->energy_make && a->energy_use == b->energy_use &&
+                 a->build_cost_metal == b->build_cost_metal && a->build_cost_energy == b->build_cost_energy &&
+                 a->metal_make == b->metal_make && a->metal_storage == b->metal_storage &&
+                 a->energy_storage == b->energy_storage && a->canstop == b->canstop && a->vent == b->vent &&
+                 !memcmp(a->g, b->g, sizeof a->g) && a->builds == b->builds && a->has_corpse == b->has_corpse &&
+                 (!a->has_corpse || feat_eq(&a->corpse, &b->corpse));
             if (!ok) snprintf(why, nwhy, "side %d's %s read back differs from the block's", k, CAST_NAME[c]);
         }
     }
@@ -942,7 +960,7 @@ static int cmd_fuzz_side(int argc, char** argv)
     strcpy(in.names.units, "units"); strcpy(in.names.anims, "anims"); strcpy(in.names.gui, "guis");
     strcpy(in.names.gamedata, "gamedata"); strcpy(in.names.unitpics, "unitpics"); strcpy(in.names.download, "download");
     strcpy(in.names.commongui, "commongui"); strcpy(in.names.palettes, "palettes"); strcpy(in.names.palette, "PALETTE");
-    strcpy(in.names.guipal, "guipal");
+    strcpy(in.names.guipal, "guipal"); strcpy(in.names.features, "features");
     in.data = synth_data();
     /* the whole load, round 0 on the undamaged install */
     for (i = 0; i <= cases; i++) {
@@ -1011,6 +1029,12 @@ static int cmd_fuzz_side(int argc, char** argv)
             if (nbound != WIKI_NCAST || strcmp(side->casting[0].cast[0].title, "Construction Kbot \xE2\x82\xAC with ? a na") ||
                 strcmp(side->casting[0].cast[WIKI_CAST_TOWER].type, "ARMWIN") ||
                 strcmp(side->casting[0].cast[WIKI_CAST_SOLAR].type, "ARMSOLAR") ||
+                strcmp(side->casting[0].cast[WIKI_CAST_COMMANDER].type, "ARMCOM") ||
+                side->casting[0].cast[WIKI_CAST_COMMANDER].build_cost_energy != 34125 ||
+                side->casting[0].cast[WIKI_CAST_COMMANDER].has_corpse || side->casting[0].cast[WIKI_CAST_MEX].has_corpse ||
+                !side->casting[0].cast[0].has_corpse || strcmp(side->casting[0].cast[0].corpse.name, "armck_dead") ||
+                strcmp(side->casting[0].cast[0].corpse.object, "armck_dead") || side->casting[0].cast[0].corpse.metal != 72 ||
+                !side->casting[0].cast[0].corpse.blocking || side->casting[0].cast[0].energy_use != 0.1 ||
                 side->casting[0].cast[WIKI_CAST_GEO].g[1] != 6 || side->casting[0].cast[WIKI_CAST_GEO].g[0] ||
                 side->side_of_engine[0] != 0 || side->side_of_engine[1] != -1) {
                 fprintf(stderr, "wikiassettest: the synthetic install's casting is not the rule's\n");

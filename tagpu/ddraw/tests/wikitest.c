@@ -684,12 +684,16 @@ static int refuse(const char* path)
 
 static void casting_out(const WIKICASTING* k)
 {
-    static const char* const FIG[6] = { "buildTime", "workerTime", "buildDistance", "maxVelocity", "extracts", "energyMake" };
+    static const char* const FIG[12] = { "buildTime", "workerTime", "buildDistance", "maxVelocity", "extracts", "energyMake",
+                                         "buildCostMetal", "buildCostEnergy", "metalMake", "metalStorage", "energyStorage",
+                                         "energyUse" };
     int c, i;
     fputs("{\"ok\":true,\"casts\":[", stdout);
     for (c = 0; c < WIKI_NCAST; c++) {
         const WIKICASTDEF* d = &k->cast[c];
-        const double fig[6] = { d->build_time, d->worker_time, d->build_distance, d->max_velocity, d->extracts, d->energy_make };
+        const double fig[12] = { d->build_time, d->worker_time, d->build_distance, d->max_velocity, d->extracts, d->energy_make,
+                                 d->build_cost_metal, d->build_cost_energy, d->metal_make, d->metal_storage, d->energy_storage,
+                                 d->energy_use };
         if (c) putchar(',');
         if (!d->bound) { fputs("null", stdout); continue; }
         putchar('{');
@@ -697,7 +701,7 @@ static void casting_out(const WIKICASTING* k)
         key("title", 0); str(d->title);
         key("fx", 0); printf("%d", d->fx);
         key("fz", 0); printf("%d", d->fz);
-        for (i = 0; i < 6; i++) { key(FIG[i], 0); num(fig[i]); }
+        for (i = 0; i < 12; i++) { key(FIG[i], 0); num(fig[i]); }
         key("canstop", 0); printf("%d", d->canstop);
         key("activatewhenbuilt", 0); printf("%d", d->activate_when_built);
         key("canreclamate", 0); printf("%d", d->canreclamate);
@@ -706,6 +710,22 @@ static void casting_out(const WIKICASTING* k)
         for (i = 0; i < WIKI_FP_MAX; i++) printf("%c%u", i ? ',' : '[', (unsigned)d->g[i]);
         putchar(']');
         key("builds", 0); printf("%u", (unsigned)d->builds);
+        key("corpse", 0);
+        if (!d->has_corpse) fputs("null", stdout);
+        else {
+            const WIKIFEATDEF* f = &d->corpse;
+            putchar('{');
+            key("name", 1); str(f->name);
+            key("fx", 0); printf("%d", f->fx);
+            key("fz", 0); printf("%d", f->fz);
+            key("metal", 0); num(f->metal);
+            key("energy", 0); num(f->energy);
+            key("height", 0); printf("%d", f->height);
+            key("blocking", 0); printf("%d", f->blocking);
+            key("reclaimable", 0); printf("%d", f->reclaimable);
+            key("object", 0); str(f->object);
+            putchar('}');
+        }
         putchar('}');
     }
     puts("]}");

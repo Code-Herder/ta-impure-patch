@@ -159,9 +159,15 @@ const WikiSim = (() => {
      Each unit of an entry names its cast, its place in the demos; a casting answers each cast with one of the mod's
      types for one side, or null when the rule found none (unbound). The casting is a pack's
      (gfx/side/<mod>/side.json `casting`, index-aligned with the layout's sides) or tools/wiki/casting-fixture.json's.
-     Every bound below is one tagpu_wikidata.h's WIKICASTDEF holds; a casting breaking one is refused whole. */
-  const CASTS = ['builder', 'advbuilder', 'mex', 'moho', 'geo', 'walker', 'tower', 'wall', 'solar'];   // WIKI_CAST_* order
-  const FIGURES = ['buildTime', 'workerTime', 'buildDistance', 'maxVelocity', 'extracts', 'energyMake'];
+     Every bound below is one tagpu_wikidata.h's WIKICASTDEF holds; a casting breaking one is refused whole.
+     The commander comes last so that each earlier cast keeps its index, and each casting's `builds` its meaning. */
+  const CASTS = ['builder', 'advbuilder', 'mex', 'moho', 'geo', 'walker', 'tower', 'wall', 'solar', 'commander'];   // WIKI_CAST_* order
+  /* the figures a cast carries and a bound unit takes, each finite and >= 0, from its FBI: the six the world reads, then
+     the economy's build costs, metal made a second and the two storages, which no demo's world reads */
+  const FIGURES = ['buildTime', 'workerTime', 'buildDistance', 'maxVelocity', 'extracts', 'energyMake',
+    'buildCostMetal', 'buildCostEnergy', 'metalMake', 'metalStorage', 'energyStorage'];
+  // ECON_MAX: the bound of a signed economy figure, energyUse (a solar collector's is negative), tagpu_wikidata.h's WIKI_ECON_MAX
+  const ECON_MAX = 1e7;
   // WIKI_FP_MAX: a footprint's side on each axis, the width of a G row's bit mask; WIKI_ID_MAX: a type name's field;
   // WIKI_TITLE_MAX: a display name's field, 31 code-page bytes (def+0x00 is 0x20 bytes) at most 3 UTF-8 bytes each
   const FP_MAX = 16, ID_MAX = 24, TITLE_MAX = 94;
@@ -212,6 +218,7 @@ const WikiSim = (() => {
       // the figures divide and step: a build time of 0 would fill a building in no time at all, and a negative or
       // infinite speed or reach would leave the world's arithmetic
       for (const n of FIGURES) if (n in k && !(typeof k[n] === 'number' && k[n] >= 0 && k[n] < Infinity)) no(`${at}: ${n} is not a finite number >= 0`);
+      if ('energyUse' in k && !(typeof k.energyUse === 'number' && Math.abs(k.energyUse) < ECON_MAX)) no(`${at}: energyUse is not a number of magnitude below ${ECON_MAX}`);
       if (!(k.buildTime > 0)) no(`${at}: buildTime is not above 0`);
       if ('canstop' in k && !int(k.canstop)) no(`${at}: canstop is not an integer`);
       if ('canreclamate' in k && !int(k.canreclamate)) no(`${at}: canreclamate is not an integer`);
@@ -219,6 +226,14 @@ const WikiSim = (() => {
       if ('vent' in k && typeof k.vent !== 'boolean') no(`${at}: vent is not a boolean`);
       checkG(at, k, f);
       if ('builds' in k && !(Array.isArray(k.builds) && k.builds.every(b => CASTS.includes(b)))) no(`${at}: builds is not a list of casts`);
+      /* the cast's wreck, its FBI's `corpse` feature (null or absent: none): a feature record under checkFeature's
+         rules and its section's name. The name is checked first so that checkFeature's messages, which quote it, stay
+         within the C reader's message */
+      if ('corpse' in k && k.corpse !== null) {
+        const f = k.corpse;
+        if (!obj(f) || !fitsIn(f.name, 32) || !f.name.length) no(`${at}: corpse is not a feature record with a name of 1 to 31 bytes`);
+        try { checkFeature(f.name, f); } catch (e) { no(`${at}: corpse: ${e.message}`); }
+      }
     }
     return C;
   }
@@ -228,7 +243,8 @@ const WikiSim = (() => {
      definition, marked `unbound`, and its build list keeps only the entry's own units, renamed as they are. The
      units keep their order, so the scene's units and a `build` point at the same definitions as before; the scene's
      types and the inputs' `build` are renamed with them, captions untouched (the sim and its hash keep raw
-     captions). Every unit names one of the nine casts and no cast twice; two units bound to one name are refused.
+     captions). Every unit names one of the ten casts and no cast twice; two units bound to one name are refused. A
+     cast's corpse stays in the casting: no unit of the bound entry carries one.
      tagpu_wikisim.c builds the same as WIKISIM's own bdef[] (a field of the sim, so it lives and dies with it). */
   function binder(entry, casting) {
     const K = checkCasting(casting).casts, names = Object.keys(entry.units), to = {}, seen = new Set();
@@ -247,6 +263,7 @@ const WikiSim = (() => {
       const b = { cast: d.cast, name: k.title, footprint: [k.footprint[0], k.footprint[1]],
         builds: names.filter(j => (k.builds || []).includes(entry.units[j].cast)).map(j => to[j]) };
       for (const n of FIGURES) if (n in k) b[n] = k[n];
+      if ('energyUse' in k) b.energyUse = k.energyUse;
       if ('canstop' in k) b.canstop = k.canstop;
       if ('canreclamate' in k) b.canreclamate = k.canreclamate;
       if ('activatewhenbuilt' in k) b.activatewhenbuilt = k.activatewhenbuilt;

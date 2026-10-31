@@ -121,18 +121,24 @@ def check_layout(pack: Path):
 
 # An entry unit's figure and the value an absent key stands for: what the bound entry takes from the casting. The
 # casting carries every FBI's EnergyMake (a construction kbot's 8 among them), and the sims read energyMake only as a
-# geothermal plant's strength, so it is compared where the entry states it and nowhere else.
+# geothermal plant's strength, so it is compared where the entry states it and nowhere else; so are the economy's
+# figures, which no demo's world reads.
 FIGURES = (("footprint", None), ("buildTime", 0), ("workerTime", 0), ("buildDistance", 0), ("maxVelocity", 0),
            ("canstop", 0), ("canreclamate", 0), ("activatewhenbuilt", 0), ("extracts", 0), ("vent", False))
+STATED = ("energyMake", "energyUse", "buildCostMetal", "buildCostEnergy", "metalMake", "metalStorage", "energyStorage")
 
 
 def stock_identity(pack):
     """The stock pack's first side ([SIDE0], whose units the wiki's entries author) cast for cast: every entry unit's
     `cast` is bound to that unit's own type, with the entry's figures and name, and builds the casts the entry says it
     builds. Binding stock's entries to stock's casting then changes nothing, which is the check that keeps the
-    general rule honest (gfx.py `side_casting`). Returns the differences."""
+    general rule honest (gfx.py `side_casting`). The commander, which no entry's unit plays yet, is the side's own
+    (sidedata's `commander`). Returns the differences."""
     casting = pack["casting"][0]["casts"]
     bad = []
+    cmd = casting.get("commander")
+    if not cmd or cmd["type"].lower() != pack["casting"][0]["commander"].lower():
+        bad.append(f"the stock commander is {cmd and cmd['type']}, sidedata names {pack['casting'][0]['commander']}")
     for f in sorted(ENTRIES.glob("*.json")):
         e = json.loads(f.read_text())
         units = e["units"]
@@ -149,7 +155,7 @@ def stock_identity(pack):
             if got["type"].lower() != t.lower():
                 bad.append(f"{at}: the stock {c} is {got['type']}")
                 continue
-            figures = FIGURES + ((("energyMake", None),) if "energyMake" in u else ())
+            figures = FIGURES + tuple((k, None) for k in STATED if k in u)
             for key, absent in figures:
                 if got[key] != u.get(key, absent):
                     bad.append(f"{at}: {key} {got[key]!r} in the casting, {u.get(key, absent)!r} in the entry")

@@ -17,7 +17,7 @@ static const char* const KEY_NAMES[WIKI_NKEYNAMES] = { "shift", "alt", "ctrl", "
 static const char* const KIND_NAMES[WIKI_NKINDS] = { "metal", "energy", "all" };
 /* sim.js's and text.js's CASTS, in WIKI_CAST_* order */
 static const char* const CAST_NAMES[WIKI_NCAST] = { "builder", "advbuilder", "mex", "moho", "geo",
-                                                    "walker", "tower", "wall", "solar" };
+                                                    "walker", "tower", "wall", "solar", "commander" };
 
 const char* tagpu_wikidata_key_name(int key)
 {
@@ -1126,13 +1126,68 @@ static int cast_no(char* err, size_t errn, WIKICASTING* c, const char* what)
 }
 
 /* sim.js's FIGURES, in its order, and where each lands */
+#define NFIGURES 11
 static double* figure(WIKICASTDEF* k, int i)
 {
-    double* const at[6] = { &k->build_time, &k->worker_time, &k->build_distance, &k->max_velocity, &k->extracts,
-                            &k->energy_make };
+    double* const at[NFIGURES] = { &k->build_time, &k->worker_time, &k->build_distance, &k->max_velocity, &k->extracts,
+                                   &k->energy_make, &k->build_cost_metal, &k->build_cost_energy, &k->metal_make,
+                                   &k->metal_storage, &k->energy_storage };
     return at[i];
 }
-static const char* const FIGURES[6] = { "buildTime", "workerTime", "buildDistance", "maxVelocity", "extracts", "energyMake" };
+static const char* const FIGURES[NFIGURES] = { "buildTime", "workerTime", "buildDistance", "maxVelocity", "extracts",
+                                               "energyMake", "buildCostMetal", "buildCostEnergy", "metalMake",
+                                               "metalStorage", "energyStorage" };
+
+/* a cast's wreck into `d`, 1; else 0 with why in `why`: sim.js checkCasting's corpse rule, then
+   checkFeature's over the record, in their order and with their messages. The name is bounded
+   first, so a message that quotes it stays within the caller's 200 bytes. */
+static int cast_corpse(const TJV* v, const char* at, WIKIFEATDEF* d, char* why, size_t n)
+{
+    static const char* const AMOUNT[2] = { "metal", "energy" };
+    static const char* const FLAG[2] = { "blocking", "reclaimable" };
+    const TJV *nm = tj_get(v, "name"), *fp = tj_get(v, "footprint"), *k;
+    int j;
+    /* THE BOUND: the name and its terminator fit WIKIFEATDEF.name */
+    if (!tj_is(v, TJ_OBJ) || !tj_is(nm, TJ_STR) || !nm->str[0] || strlen(nm->str) >= sizeof d->name) {
+        snprintf(why, n, "%s: corpse is not a feature record with a name of 1 to 31 bytes", at);
+        return 0;
+    }
+    strcpy(d->name, nm->str);
+    if (!tj_is(fp, TJ_ARR) || fp->n != 2 || !lay_int(tj_at(fp, 0), 1, WIKI_FEAT_FOOT, &d->fx)
+        || !lay_int(tj_at(fp, 1), 1, WIKI_FEAT_FOOT, &d->fz)) {
+        snprintf(why, n, "%s: corpse: feature %s: footprint is not two integers 1..%d", at, d->name, WIKI_FEAT_FOOT);
+        return 0;
+    }
+    for (j = 0; j < 2; j++) {
+        if (!(k = tj_get(v, AMOUNT[j]))) continue;
+        if (!tj_is(k, TJ_NUM) || !(k->num >= 0 && k->num < WIKI_FEAT_AMOUNT)) {
+            snprintf(why, n, "%s: corpse: feature %s: %s is not 0..%.0f", at, d->name, AMOUNT[j], WIKI_FEAT_AMOUNT);
+            return 0;
+        }
+        *(j ? &d->energy : &d->metal) = k->num;
+    }
+    if ((k = tj_get(v, "height")) && !lay_int(k, 0, 255, &d->height)) {
+        snprintf(why, n, "%s: corpse: feature %s: height is not 0..255", at, d->name);
+        return 0;
+    }
+    for (j = 0; j < 2; j++) {
+        if (!(k = tj_get(v, FLAG[j]))) continue;
+        if (!tj_is(k, TJ_TRUE) && !tj_is(k, TJ_FALSE)) {
+            snprintf(why, n, "%s: corpse: feature %s: %s is not a boolean", at, d->name, FLAG[j]);
+            return 0;
+        }
+        *(j ? &d->reclaimable : &d->blocking) = tj_is(k, TJ_TRUE);
+    }
+    /* THE BOUND: the model's name and its terminator fit WIKIFEATDEF.object */
+    if ((k = tj_get(v, "object")) != NULL) {
+        if (!tj_is(k, TJ_STR) || !k->str[0] || strlen(k->str) >= sizeof d->object) {
+            snprintf(why, n, "%s: corpse: feature %s: object is not 1 to 31 bytes", at, d->name);
+            return 0;
+        }
+        strcpy(d->object, k->str);
+    }
+    return 1;
+}
 
 /* one bound cast's record into `k`, 1; else 0 with why in `why` */
 static int cast_def(const TJV* v, const char* at, WIKICASTDEF* k, char* why, size_t n)
@@ -1164,13 +1219,20 @@ static int cast_def(const TJV* v, const char* at, WIKICASTDEF* k, char* why, siz
     }
     /* the figures divide and step: a build time of 0 would fill a building in no time at all,
        and a negative or infinite speed or reach would leave the world's arithmetic */
-    for (i = 0; i < 6; i++) {
+    for (i = 0; i < NFIGURES; i++) {
         if (!(x = tj_get(v, FIGURES[i]))) continue;
         if (!tj_is(x, TJ_NUM) || !(x->num >= 0 && x->num < INFINITY)) {
             snprintf(why, n, "%s: %s is not a finite number >= 0", at, FIGURES[i]);
             return 0;
         }
         *figure(k, i) = x->num;
+    }
+    if ((x = tj_get(v, "energyUse")) != NULL) {
+        if (!tj_is(x, TJ_NUM) || !(fabs(x->num) < WIKI_ECON_MAX)) {
+            snprintf(why, n, "%s: energyUse is not a number of magnitude below %.0f", at, WIKI_ECON_MAX);
+            return 0;
+        }
+        k->energy_use = x->num;
     }
     if (!(k->build_time > 0)) { snprintf(why, n, "%s: buildTime is not above 0", at); return 0; }
     if (cs && (!tj_is(cs, TJ_NUM) || cs->num != floor(cs->num) || !isfinite(cs->num))) {
@@ -1204,6 +1266,10 @@ static int cast_def(const TJV* v, const char* at, WIKICASTDEF* k, char* why, siz
             k->builds |= (uint16_t)(1u << c);
         }
         if (!ok) { snprintf(why, n, "%s: builds is not a list of casts", at); return 0; }
+    }
+    if ((x = tj_get(v, "corpse")) != NULL && !tj_is(x, TJ_NULL)) {
+        if (!cast_corpse(x, at, &k->corpse, why, n)) return 0;
+        k->has_corpse = 1;
     }
     return 1;
 }

@@ -1548,17 +1548,34 @@ static void casting_json(FILE* f, const WIKICASTING* c)
         fputs(",\"title\":", f);
         ustr(f, k->title, sizeof k->title);
         fprintf(f, ",\"footprint\":[%d,%d],\"buildTime\":%.17g,\"workerTime\":%.17g,\"buildDistance\":%.17g,"
-                   "\"maxVelocity\":%.17g,\"extracts\":%.17g,\"energyMake\":%.17g,\"canstop\":%d,\"canreclamate\":%d,"
-                   "\"activatewhenbuilt\":%d,\"vent\":%s,\"g\":[",
+                   "\"maxVelocity\":%.17g,\"extracts\":%.17g,\"energyMake\":%.17g,\"energyUse\":%.17g,"
+                   "\"buildCostMetal\":%.17g,\"buildCostEnergy\":%.17g,\"metalMake\":%.17g,\"metalStorage\":%.17g,"
+                   "\"energyStorage\":%.17g,\"canstop\":%d,\"canreclamate\":%d,\"activatewhenbuilt\":%d,\"vent\":%s,\"g\":[",
                 k->fx, k->fz, k->build_time, k->worker_time, k->build_distance, k->max_velocity, k->extracts,
-                k->energy_make, k->canstop, k->canreclamate, k->activate_when_built, k->vent ? "true" : "false");
+                k->energy_make, k->energy_use, k->build_cost_metal, k->build_cost_energy, k->metal_make, k->metal_storage,
+                k->energy_storage, k->canstop, k->canreclamate, k->activate_when_built, k->vent ? "true" : "false");
         for (z = n = 0; z < WIKI_FP_MAX; z++)
             for (x = 0; x < WIKI_FP_MAX; x++)
                 if (k->g[z] >> x & 1u) fprintf(f, "%s[%d,%d]", n++ ? "," : "", x, z);
         fputs("],\"builds\":[", f);
         for (j = n = 0; j < WIKI_NCAST; j++)
             if (k->builds >> j & 1u) fprintf(f, "%s\"%s\"", n++ ? "," : "", tagpu_wikidata_cast_name(j));
-        fputs("]}", f);
+        fputs("],\"corpse\":", f);
+        if (!k->has_corpse) fputs("null", f);
+        else {
+            const WIKIFEATDEF* w = &k->corpse;
+            fputs("{\"name\":", f);
+            ustr(f, w->name, sizeof w->name);
+            fprintf(f, ",\"footprint\":[%d,%d],\"metal\":%.17g,\"energy\":%.17g,\"height\":%d,\"blocking\":%s,"
+                       "\"reclaimable\":%s", w->fx, w->fz, w->metal, w->energy, w->height, w->blocking ? "true" : "false",
+                    w->reclaimable ? "true" : "false");
+            if (w->object[0]) {
+                fputs(",\"object\":", f);
+                ustr(f, w->object, sizeof w->object);
+            }
+            fputc('}', f);
+        }
+        fputc('}', f);
     }
     fputs("}}", f);
 }

@@ -42,7 +42,7 @@ against an independent Python resolution of the same install.
    `wikiassettest side` against `gfx.py --side-only` with the same names: the layout (every side with its own types),
    every screen's file and panel, every button's picture source (step, file, archive, sequence) and its frames'
    pixels and hotspots, each side's PANELSIDE, the dots, the minimap's colours, tables and bases, the greyed tint
-   and each side's casting -- every cast's type, title, footprint, figures, canstop, G cells and build list; the
+   and each side's casting -- every cast's type, title, footprint, figures, canstop, G cells, build list and wreck; the
    rule's `report` prose is gfx.py's alone -- must be equal, and the sheet byte for byte; and the 3D load's unit types,
    in its order, must be gfx.py's `stage_types` of every entry over the pack's casting. Both halves read the
    display names under --language (english by default). The setups' fixtures must be present
@@ -1057,7 +1057,8 @@ def main():
 def cast_rule_case():
     """gfx.py's cast rule (`side_casting`) over fuzz-side's synthetic units, menus as its install gives them: the
     tower ARMWIN makes energy and stands before ARMSOLAR on the builder's menu, so the solar must skip it for a unit
-    of its own. fuzz-side checks the C rule on the same install. True when every cast is the expected unit."""
+    of its own; the commander is the walk's root. fuzz-side checks the C rule on the same install. True when every
+    cast is the expected unit."""
     import gfx  # noqa: E402
     base = dict(bmcode=0, maxvelocity=0, fx=2, fz=2, builder=0, workertime=0, canfly=0, minwaterdepth=None,
                 extractsmetal=0, g=[], energymake=0, energyuse=0, weapon1=False, fort=False)
@@ -1073,7 +1074,7 @@ def cast_rule_case():
              "armack": ["armmoho"]}
     picks, _why = gfx.side_casting(units, "ARMCOM", lambda t: menus.get(t, []))
     want = {"builder": "armck", "advbuilder": "armack", "mex": "armmex", "moho": "armmoho", "geo": "armgeo",
-            "walker": "armpw", "tower": "armwin", "wall": "armdrag", "solar": "armsolar"}
+            "walker": "armpw", "tower": "armwin", "wall": "armdrag", "solar": "armsolar", "commander": "armcom"}
     if picks != want:
         print(f"assetcheck: gfx.py's cast rule over the synthetic units FAILED: {picks}")
         return False

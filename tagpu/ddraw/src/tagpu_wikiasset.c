@@ -1964,6 +1964,9 @@ typedef struct {
     long long bmcode, canfly, fx, fz;
     uint32_t  builder;
     double    workertime, maxvelocity, mwd, extracts, energymake, energyuse, buildtime, builddistance;
+    double    buildcostmetal, buildcostenergy, metalmake, metalstorage, energystorage;
+    char      corpse[SNAME];            /* the wreck's feature section as spelled, cut to SNAME-1 */
+    size_t    ncorpse;                  /* its length uncut: one past 31 is no corpse             */
     int       has_mwd;                  /* MinWaterDepth given: a unit without it is a land unit  */
     int       weapon1, fort;            /* Weapon1 not blank; TEDClass FORT without case          */
     int       has_g;                    /* the yard holds a G cell (yard_g)                       */
@@ -2608,6 +2611,18 @@ static int fbi_each(void* ctx, const TAGPU_VFILE* f)
         u->energyuse = fbi_strtod(tagpu_guifile_get(g, sec, "energyuse"));
         u->buildtime = fbi_strtod(tagpu_guifile_get(g, sec, "buildtime"));
         u->builddistance = fbi_strtod(tagpu_guifile_get(g, sec, "builddistance"));
+        /* the economy's figures: build costs, metal made a second, the storages (def +0x1E6 metal
+           and +0x1E2 energy, which the economy pass re-sums at 0x4017A1..0x4017C5, DISASSEMBLED;
+           the others' offsets are not mapped) */
+        u->buildcostmetal = fbi_strtod(tagpu_guifile_get(g, sec, "buildcostmetal"));
+        u->buildcostenergy = fbi_strtod(tagpu_guifile_get(g, sec, "buildcostenergy"));
+        u->metalmake = fbi_strtod(tagpu_guifile_get(g, sec, "metalmake"));
+        u->metalstorage = fbi_strtod(tagpu_guifile_get(g, sec, "metalstorage"));
+        u->energystorage = fbi_strtod(tagpu_guifile_get(g, sec, "energystorage"));
+        t = tagpu_guifile_get(g, sec, "corpse");
+        py_strip(&t, &nn);
+        u->ncorpse = nn;
+        snprintf(u->corpse, sizeof u->corpse, "%.*s", (int)(nn < SNAME ? nn : SNAME - 1), t);
         t = tagpu_guifile_get(g, sec, "weapon1");
         py_strip(&t, &nn);
         u->weapon1 = nn > 0;
@@ -3310,7 +3325,7 @@ static int type_pages(SIDE* S, const char* tname, const int* mine, int nmine, in
    throughout, so a name the layout cannot hold still has its place. */
 
 static const char* const CAST_NAME[WIKI_NCAST] = { "builder", "advbuilder", "mex", "moho", "geo", "walker", "tower", "wall",
-                                                   "solar" };
+                                                   "solar", "commander" };
 
 static int is_mobile(const SUNIT* u) { return u->bmcode != 0 && u->maxvelocity > 0; }
 static int is_structure(const SUNIT* u) { return !u->bmcode && u->fx > 0 && u->fz > 0; }
@@ -3416,18 +3431,27 @@ static int menu_holds(SWALK* W, int t, int (*pred)(const SUNIT*))
     return 0;
 }
 
-/* a pick and its reason */
-typedef struct { int pick[WIKI_NCAST]; char why[WIKI_NCAST][200]; } SCASTING;
+/* a pick and its reason; its wreck (corpse_record): sought while `want`, the record when `has`,
+   and the report's line on it */
+typedef struct {
+    int         pick[WIKI_NCAST];
+    char        why[WIKI_NCAST][200];
+    int         want[WIKI_NCAST], has[WIKI_NCAST];
+    WIKIFEATDEF corpse[WIKI_NCAST];
+    char        corpse_why[WIKI_NCAST][200];
+} SCASTING;
 
 /* A cast WIKICASTDEF cannot hold (tagpu_wikiasset.h, where this departs from gfx.py), or NULL:
    tagpu_wikidata_casting's bounds, which the simulation's binding rests on */
 static const char* cast_unfit(const SUNIT* u)
 {
-    const double f[6] = { u->buildtime, u->workertime, u->builddistance, u->maxvelocity, u->extracts, u->energymake };
+    const double f[11] = { u->buildtime, u->workertime, u->builddistance, u->maxvelocity, u->extracts, u->energymake,
+                           u->buildcostmetal, u->buildcostenergy, u->metalmake, u->metalstorage, u->energystorage };
     const size_t n = strlen(u->name);
     int i;
     if (n >= WIKI_ID_MAX || strspn(u->name, "0123456789") == n) return "a UnitName the casting cannot hold";
-    for (i = 0; i < 6; i++) if (!(f[i] >= 0 && f[i] < INFINITY)) return "a figure that is not a finite number >= 0";
+    for (i = 0; i < 11; i++) if (!(f[i] >= 0 && f[i] < INFINITY)) return "a figure that is not a finite number >= 0";
+    if (!(fabs(u->energyuse) < WIKI_ECON_MAX)) return "an EnergyUse of a magnitude past 1e7";
     if (!(u->buildtime > 0)) return "a BuildTime that is not above 0";
     return NULL;
 }
@@ -3474,7 +3498,7 @@ static void side_casting(SWALK* W, const char* commander, int* order, int* depth
     C->pick[WIKI_CAST_BUILDER] = b;
     if (b < 0) {
         snprintf(C->why[WIKI_CAST_BUILDER], 200, "no mobile land builder below the commander has a land extractor on its menu");
-        for (c = 1; c < WIKI_NCAST; c++) snprintf(C->why[c], 200, "no builder");
+        for (c = 1; c < WIKI_CAST_COMMANDER; c++) snprintf(C->why[c], 200, "no builder");
     } else {
         const SMENU* mb = menu(W, b);
         int geo = -1, maker = -1, w = -1, mo = -1;
@@ -3542,6 +3566,11 @@ static void side_casting(SWALK* W, const char* commander, int* order, int* depth
             }
         }
     }
+    /* the commander is the walk's root itself, so no other cast can take it */
+    if (is_mobile(root)) {
+        C->pick[WIKI_CAST_COMMANDER] = order[0];
+        snprintf(C->why[WIKI_CAST_COMMANDER], 200, "the side's commander");
+    } else snprintf(C->why[WIKI_CAST_COMMANDER], 200, "the side's commander %s is not mobile", root->name);
     /* every cast's unit distinct whatever the tests: a pick repeating an earlier cast's is unbound */
     for (c = 1; c < WIKI_NCAST; c++) {
         int d;
@@ -3588,10 +3617,134 @@ static int title_points(const SUNIT* u, unsigned* cp)
     return n;
 }
 
-/* the cast's WIKICASTDEF from its unit, whose fit cast_unfit and the footprint bound have passed.
+/* ---- THE CASTS' WRECKS, gfx.py `corpse_record`: the section the FBI's `corpse` names, found as
+   the 3D loader finds a feature (the first features\**\*.tdf holding it, feat_each), read into
+   sim.js checkFeature's record. footprintx/z are taken as 16 bits and height as 8 (FeatureDef
+   +0x94/+0x96 and +0xFA, as feature_resolve reads them), metal and energy by fbi_strtod (+0xF0,
+   +0xEC) [INFERRED: LoadFeature 0x4224B0's reader of those two keys is not mapped], blocking and
+   reclaimable as != 0 (+0xFE bits 6 and 7). The name and the object are lower-cased and must be
+   printable ASCII of 1..31 bytes, the record's bounds, so the two producers write them alike; a
+   section outside checkFeature's bounds leaves no corpse. ---- */
+
+/* 1 when `s`, `n` bytes, can be a record's name: 1..WIKI_FEAT_NAME - 1 printable ASCII bytes. A
+   byte is read only once `n` is within that bound, so a name SUNIT cut to SNAME - 1 is never read
+   past its copy. */
+static int corpse_ascii(const char* s, size_t n)
+{
+    size_t i;
+    if (n < 1 || n >= WIKI_FEAT_NAME) return 0;
+    for (i = 0; i < n; i++) if (s[i] < ' ' || s[i] > '~') return 0;
+    return 1;
+}
+
+static void lower_ascii(char* d, const char* s, size_t n)
+{
+    size_t i;
+    for (i = 0; i + 1 < n && s[i]; i++) d[i] = (char)(s[i] >= 'A' && s[i] <= 'Z' ? s[i] - 'A' + 'a' : s[i]);
+    d[i] = 0;
+}
+
+/* cast c of `C`, whose unit is `u`: whether its wreck is to be sought in the folder `features`,
+   the reason when it is not */
+static void corpse_want(SCASTING* C, int c, const SUNIT* u, const char* features)
+{
+    if (!u->ncorpse) snprintf(C->corpse_why[c], 200, "its FBI names no corpse");
+    else if (!corpse_ascii(u->corpse, u->ncorpse))
+        snprintf(C->corpse_why[c], 200, "its corpse %s is not 1..%d printable ASCII bytes", u->corpse, WIKI_FEAT_NAME - 1);
+    else {
+        C->want[c] = 1;
+        snprintf(C->corpse_why[c], 200, "no %s\\**\\*.tdf holds the section %s", features, u->corpse);
+    }
+}
+
+/* the record of section `sec` of `t`, the TDF at `path` in source `where`, for cast c of `C`
+   whose unit is `u` */
+static void corpse_read(SCASTING* C, int c, const SUNIT* u, const TAGPU_TDF* t, int sec, const char* path, const char* where)
+{
+    WIKIFEATDEF* d = &C->corpse[c];
+    const char* object = tagpu_tdf_get(t, sec, "object");
+    const double metal = fbi_strtod(tagpu_tdf_get(t, sec, "metal")), energy = fbi_strtod(tagpu_tdf_get(t, sec, "energy"));
+    memset(d, 0, sizeof *d);
+    d->fx = (int)(tagpu_tdf_int(t, sec, "footprintx", 0) & 0xFFFF);
+    d->fz = (int)(tagpu_tdf_int(t, sec, "footprintz", 0) & 0xFFFF);
+    if (!(d->fx >= 1 && d->fx <= WIKI_FEAT_FOOT && d->fz >= 1 && d->fz <= WIKI_FEAT_FOOT)) {
+        snprintf(C->corpse_why[c], 200, "%s's footprint %d x %d is not within 1..%d a side", u->corpse, d->fx, d->fz, WIKI_FEAT_FOOT);
+        return;
+    }
+    if (!(metal >= 0 && metal < WIKI_FEAT_AMOUNT && energy >= 0 && energy < WIKI_FEAT_AMOUNT)) {
+        snprintf(C->corpse_why[c], 200, "%s's metal or energy is not within 0..1e+07", u->corpse);
+        return;
+    }
+    if (object && !corpse_ascii(object, strlen(object))) {
+        snprintf(C->corpse_why[c], 200, "%s's object is not 1..%d printable ASCII bytes", u->corpse, WIKI_FEAT_NAME - 1);
+        return;
+    }
+    lower_ascii(d->name, u->corpse, sizeof d->name);
+    d->metal = metal;
+    d->energy = energy;
+    d->height = (int)(tagpu_tdf_int(t, sec, "height", 0) & 0xFF);
+    d->blocking = tagpu_tdf_int(t, sec, "blocking", 0) != 0;
+    d->reclaimable = tagpu_tdf_int(t, sec, "reclaimable", 0) != 0;
+    if (object) lower_ascii(d->object, object, sizeof d->object);
+    C->has[c] = 1;
+    snprintf(C->corpse_why[c], 200, "%s from %s (%s)", d->name, path, where);
+}
+
+typedef struct { SIDE* S; SCASTING* C; int nside, left; } CORPSEWALK;
+
+/* one feature TDF: every wreck still sought whose section it holds is read from it, so each takes
+   the first file listed that holds its section, as LoadFeature does */
+static int corpse_each(void* ctx, const TAGPU_VFILE* f)
+{
+    CORPSEWALK* w = (CORPSEWALK*)ctx;
+    char why[200];
+    unsigned char* text = tagpu_vfs_load(w->S->vfs, f, CAP_TEXT, why, sizeof why);
+    TAGPU_TDF* t;
+    int k, c;
+    if (!text) return 1;
+    t = tagpu_tdf_parse((const char*)text, f->size);
+    free(text);
+    if (!t) return 1;
+    for (k = 0; k < w->nside; k++)
+        for (c = 0; c < WIKI_NCAST; c++) {
+            SCASTING* C = &w->C[k];
+            const SUNIT* u;
+            int sec;
+            if (!C->want[c]) continue;
+            u = &w->S->unit[C->pick[c]];
+            if ((sec = tagpu_tdf_section(t, 0, u->corpse)) < 0) continue;
+            C->want[c] = 0;
+            w->left--;
+            corpse_read(C, c, u, t, sec, f->path, tagpu_vfs_source(w->S->vfs, f->src));
+        }
+    tagpu_tdf_free(t);
+    return w->left > 0;
+}
+
+/* every bound cast's wreck of the `nside` castings in `C`: one walk of the feature TDFs, and only
+   when some cast names a corpse */
+static void corpses_find(SIDE* S, SCASTING* C, int nside)
+{
+    CORPSEWALK w;
+    int k, c;
+    w.S = S;
+    w.C = C;
+    w.nside = nside;
+    w.left = 0;
+    for (k = 0; k < nside; k++)
+        for (c = 0; c < WIKI_NCAST; c++)
+            if (C[k].pick[c] >= 0) {
+                corpse_want(&C[k], c, &S->unit[C[k].pick[c]], S->in->names.features);
+                w.left += C[k].want[c];
+            }
+    if (w.left) tagpu_vfs_enum(S->vfs, S->in->names.features, "*.tdf", 1, corpse_each, &w);
+}
+
+/* the cast's WIKICASTDEF from its unit, whose fit cast_unfit and the footprint bound have passed,
+   and its wreck, NULL for none.
    BOUND: the title is at most 31 code points of at most 3 UTF-8 bytes (U+20AC and U+2122 are the
    widest), 93 bytes and the terminator, WIKI_TITLE_MAX. */
-static void cast_fill(const SUNIT* u, uint16_t builds, WIKICASTDEF* k)
+static void cast_fill(const SUNIT* u, uint16_t builds, const WIKIFEATDEF* corpse, WIKICASTDEF* k)
 {
     unsigned cp[SNAME];
     int n = title_points(u, cp), i;
@@ -3618,12 +3771,22 @@ static void cast_fill(const SUNIT* u, uint16_t builds, WIKICASTDEF* k)
     k->max_velocity = u->maxvelocity;
     k->extracts = u->extracts;
     k->energy_make = u->energymake;
+    k->energy_use = u->energyuse;
+    k->build_cost_metal = u->buildcostmetal;
+    k->build_cost_energy = u->buildcostenergy;
+    k->metal_make = u->metalmake;
+    k->metal_storage = u->metalstorage;
+    k->energy_storage = u->energystorage;
     k->canstop = u->canstop;
     k->canreclamate = u->canreclamate;
     k->activate_when_built = u->activate_when_built;
     k->vent = u->has_g;
     memcpy(k->g, u->g, sizeof k->g);
     k->builds = builds;
+    if (corpse) {
+        k->has_corpse = 1;
+        k->corpse = *corpse;
+    }
 }
 
 /* a double as JSON, the shortest text that reads back as the same double */
@@ -3677,12 +3840,42 @@ static void casting_json(SB* b, const SIDE* S, const SSIDE* sd, const SCASTING* 
         sb_num(b, k->extracts);
         sb_raw(b, ",\"energyMake\":");
         sb_num(b, k->energy_make);
+        sb_raw(b, ",\"energyUse\":");
+        sb_num(b, k->energy_use);
+        sb_raw(b, ",\"buildCostMetal\":");
+        sb_num(b, k->build_cost_metal);
+        sb_raw(b, ",\"buildCostEnergy\":");
+        sb_num(b, k->build_cost_energy);
+        sb_raw(b, ",\"metalMake\":");
+        sb_num(b, k->metal_make);
+        sb_raw(b, ",\"metalStorage\":");
+        sb_num(b, k->metal_storage);
+        sb_raw(b, ",\"energyStorage\":");
+        sb_num(b, k->energy_storage);
         sb_raw(b, ",\"vent\":%s,\"g\":[", k->vent ? "true" : "false");
         for (n = 0, i = 0; i < k->fx * k->fz; i++)
             if (k->g[i / k->fx] >> (i % k->fx) & 1u) sb_raw(b, "%s[%d,%d]", n++ ? "," : "", i % k->fx, i / k->fx);
         sb_raw(b, "],\"builds\":[");
         for (n = 0, d = 0; d < WIKI_NCAST; d++) if (k->builds >> d & 1u) sb_raw(b, "%s\"%s\"", n++ ? "," : "", CAST_NAME[d]);
-        sb_raw(b, "]}");
+        sb_raw(b, "],\"corpse\":");
+        if (!k->has_corpse) sb_raw(b, "null");
+        else {
+            const WIKIFEATDEF* f = &k->corpse;
+            sb_raw(b, "{\"name\":");
+            sb_q(b, f->name, 0);
+            sb_raw(b, ",\"footprint\":[%d,%d],\"metal\":", f->fx, f->fz);
+            sb_num(b, f->metal);
+            sb_raw(b, ",\"energy\":");
+            sb_num(b, f->energy);
+            sb_raw(b, ",\"height\":%d,\"blocking\":%s,\"reclaimable\":%s", f->height, f->blocking ? "true" : "false",
+                   f->reclaimable ? "true" : "false");
+            if (f->object[0]) {
+                sb_raw(b, ",\"object\":");
+                sb_q(b, f->object, 0);
+            }
+            sb_raw(b, "}");
+        }
+        sb_raw(b, "}");
     }
     sb_raw(b, "},\"report\":[");
     for (c = 0; c < WIKI_NCAST; c++) {
@@ -3690,6 +3883,8 @@ static void casting_json(SB* b, const SIDE* S, const SSIDE* sd, const SCASTING* 
         sb_q(b, K->cast[c].bound ? K->cast[c].type : NULL, 0);
         sb_raw(b, ",\"why\":");
         sb_q(b, C->why[c], 0);
+        sb_raw(b, ",\"corpse\":");
+        sb_q(b, K->cast[c].bound ? C->corpse_why[c] : NULL, 0);
         sb_raw(b, "}");
     }
     sb_raw(b, "]}");
@@ -3928,7 +4123,7 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
     for (k = 0; k < nlay_side && !S.failed; k++) {
         const SSIDE* sd = &S.side[kept[k]];
         SWALK W;
-        int c, d, j;
+        int j;
         for (j = 0; j < k && tagpu_hpi_stricmp(S.side[kept[j]].prefix, sd->prefix, (size_t)-1); j++) {}
         if (j < k) cache[k] = cache[j];
         else if (!(cache[k] = (SMENU*)calloc((size_t)(S.nunit ? S.nunit : 1), sizeof *cache[k]))) { S.failed = 1; break; }
@@ -3937,16 +4132,25 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
         W.prefix = sd->prefix;
         W.mine = mine;
         side_casting(&W, sd->commander, walk, depth, &picks[k]);
+    }
+    if (S.failed) { snprintf(err, sizeof err, "out of memory"); goto done; }
+    corpses_find(&S, picks, nlay_side);
+    for (k = 0; k < nlay_side; k++) {
+        SWALK W;
+        int c, d;
+        W.S = &S;
+        W.cache = cache[k];
+        W.prefix = S.side[kept[k]].prefix;
+        W.mine = mine;
         for (c = 0; c < WIKI_NCAST; c++) {
             uint16_t builds = 0;
             const int t = picks[k].pick[c];
             if (t < 0) continue;
             for (d = 0; d < WIKI_NCAST; d++)
                 if (picks[k].pick[d] >= 0 && menu_has(menu(&W, t), picks[k].pick[d])) builds |= (uint16_t)(1u << d);
-            cast_fill(&S.unit[t], builds, &casting[k].cast[c]);
+            cast_fill(&S.unit[t], builds, picks[k].has[c] ? &picks[k].corpse[c] : NULL, &casting[k].cast[c]);
         }
     }
-    if (S.failed) { snprintf(err, sizeof err, "out of memory"); goto done; }
 
     /* EACH SIDE'S TYPES: its bound casts' types that have a page, read with that side's prefix (the
        <prefix>DL page follows the player's side, 0x41AD6C, and the tutorial plays the player's) */
