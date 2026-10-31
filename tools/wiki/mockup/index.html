@@ -44,14 +44,14 @@
       <div class="wt">Wiki</div>
       <button id="wx" title="Close (Esc)" data-part="close" data-glyph="i_close i_x"><i class="gl">&#10005;</i></button>
       <div class="wb">
-        <div class="pnl" data-part="panel"><nav id="tree" class="scr"></nav></div>
-        <div class="pnl" data-part="panel"><ol id="demos" class="scr"></ol></div>
+        <div class="pnl" id="p-tree" data-part="panel"><nav id="tree" class="scr"></nav></div>
+        <div class="pnl" id="p-demos" data-part="panel"><ol id="demos" class="scr"></ol></div>
         <section id="entry">
           <h2 id="e-title"></h2>
           <div id="e-sub"></div>
           <div id="badge" hidden data-part="badge"><i></i>Turned off in this mod</div>
           <div class="srow">
-            <div id="sbox" data-part="bezel"><canvas id="stage"></canvas></div>
+            <div id="sbox" data-part="bezel"><canvas id="stage"></canvas><div id="drawer" hidden></div><div id="about" data-part="panel" hidden></div></div>
           </div>
           <div id="caption"></div>
           <div id="keys"></div>
@@ -60,9 +60,16 @@
             <button id="c-replay" title="Replay" data-part="button" data-glyph="i_replay"><i class="gl">&#10226;</i></button>
             <span class="sp"><button id="c-x1" data-part="button">1&times;</button><button id="c-x2" data-part="button">2&times;</button></span>
             <button id="c-try" data-part="button"></button>
+            <button id="c-about" data-part="button">About</button>
           </div>
           <div class="pnl" id="p-text" data-part="panel"><div id="text" class="scr"></div></div>
         </section>
+        <div id="t-row">
+          <button id="c-drawer" data-part="button">Entries</button>
+          <span id="tabs"></span>
+          <div id="t-badge" hidden data-part="badge"><i></i>Turned off in this mod</div>
+          <div id="t-title"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -76,7 +83,9 @@ it names none of them), <code>iface=1|0</code> (the Interface Type: 1 right-clic
 <code>sidebar=mod|fixture|tall|off</code> (the game's left sidebar on the stage: the detected mod's layout and, under
 <code>gfx=game</code>, its pictures from the gitignored <code>gfx/side/&lt;mod&gt;/</code>, the fixture of <code>art/wiki/side/</code> where the mod has
 none; a fixture by name; or no sidebar. With the mod's own layout the demos play that side's units, its casting, and
-under <code>gfx=game</code> draw them from the mod's stage packs), <code>skin=kit|whitebox</code>, <code>rewind=0|1</code>, <code>open</code>, <code>entry=</code>, <code>demo=</code> (from 1), <code>try</code>, <code>gfx=whitebox|game</code> (the stage in 3D, as the game draws it, from the packs <code>tools/wiki/gfx.py</code>
+under <code>gfx=game</code> draw them from the mod's stage packs), <code>skin=kit|whitebox</code>, <code>rewind=0|1</code>, <code>open</code>, <code>entry=</code>, <code>demo=</code> (from 1), <code>try</code>, <code>theatre</code> (the theatre layout, which an entry with <code>"frame": "game"</code> takes, forced on
+whichever entry is open: the stage across the window over a row of the demos' numbered tabs), <code>about</code> and <code>drawer</code> (the
+theatre's About panel or its Entries drawer open, About when both are given), <code>gfx=whitebox|game</code> (the stage in 3D, as the game draws it, from the packs <code>tools/wiki/gfx.py</code>
 resolves from the local install into the gitignored <code>gfx/</code>), <code>ss=</code> (its supersampling, default 2).</p>
 <script src="sim.js"></script>
 <script src="pose.js"></script>
