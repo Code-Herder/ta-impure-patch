@@ -2,7 +2,7 @@
 
 ## Status
 
-**Designed 2026-10-30/31 in a design interview with the owner; nothing is built.** The owner
+**Designed 2026-10-30/31 in a design interview with the owner; R0 done, nothing built.** The owner
 wants the in-game wiki to teach the replay system and the live skirmish rewind the way it teaches
 the building and reclaiming features: demos that play on the stage, and Try it yourself. The stage
 shows a small game with a handful of units in a whole game frame -- the top bar, the left sidebar,
@@ -30,6 +30,9 @@ the rules the wiki copies are the recorder's ([S4b, the takeover](tadr-port/demo
 | 10 | The entries | Four, under a new top-level category **Replays** (below). **Chat is left out** -- it would need recorded chat lines, a new input kind -- with one line of text | |
 | 11 | Seeking | **Re-simulation, spread over fills**: a seek plays from tick 0 (or a later start point, if one is added) to the target at most a fixed budget of ticks a fill; the stage holds the last world drawn and the HUD shows the playhead at the target. The first C landing measures a tick's cost. **Snapshots at each refresh only if** a seek to the end of the longest demo takes more than about a second, and then held to the re-simulated world by the state hash at every refresh in the parity check | Safe by construction: the world after a seek is the world after playing to that tick, the hash `simparity.mjs` already checks. A deep copy of `WIKISIM` (a dozen heap blocks and the COB VM's state) is the riskiest code here and is not built before it is needed. A seek in one fill would freeze the frame, unacceptable in multiplayer, where the wiki is open over a running game. 8× needs 8 game ticks a fill at 30 fps, the existing bound |
 | 12 | The order | **Vertical slices, one entry at a time**, each its mockup, then its C, then the game (below) | The mockup is the specification: each entry is corrected in the browser before any C is written for it |
+| 13 | The top bar while watching | **The game's: the viewed record's.** At full map that is the viewer's own record, whose storages the player init zeroes, so the bar reads 0 with both fills skipped; under Sight it is that seat's numbers in its side's art. The players column carries every seat's numbers | A replay shows what the game showed. If the zeros are wrong, the fix is the game's, and the wiki follows it |
+| 14 | The bottom bar | **Drawn**: PANELBOT of the viewed side, tiled from x 129 along the screen's last 32 rows, as `0x46A860` draws it | The HUD's dock sits on it in the game; the same art and loader as the top bar |
+| 15 | Sight on the other side | **Today's mixed frame**: the panel and PANELSIDE stay the loaded side's, the two bars take the viewed side's. When the mid-level re-skin (OQ-B, [the takeover](tadr-port/demo-recorder-s4-takeover.md), *The mixed-side interface*) lands in the game, the wiki follows it in the same landing | The stage shows what the game does now |
 
 ## The entries
 
@@ -92,7 +95,7 @@ The exact keys are W1's to settle in the mockup.
 
 | # | Landing | Carries |
 |---|---|---|
-| R0 | Research, no code | what the engine's resource bar is drawn from and how (DrawGameScreen, the fills at `0x46912E` and `0x469412`); what the side panel shows while a replay is watched (whose MAIN2, whether the viewer can select); how a replay's seats map to `HUDSEAT`; a wiki tick's cost |
+| R0 | Research, no code (**done 2026-10-31**, below) | the resource bar's art and drawing; the side panel while watching; the HUD's inputs; a wiki tick's cost |
 | W1 | Mockup: Watching a replay | `sim.js`: the two clocks, the seats, kills and corpses, the economy and its refusal, seek by re-simulation; `wiki.js`: the theatre layout and the frame (a whitebox top bar, the sidebar, the map, `tools/hudart/mockup/hud.js`'s HUD); the entry's demos |
 | W2 | C: the simulation and the data, equal to W1 | `tagpu_wikisim.c`, `tagpu_wikidata.c`, `simparity.mjs` extended; the tick cost measured in the game |
 | W3 | In the game: the frame on the stage | the theatre layout in `tagpu_wikilay.c` (`wikilaycheck.py`), the HUD built by `tagpu_hudlay_build` (pure: `tagpu_hudlay.h`) inside the stage, the viewer's presses on its controls in Try it yourself, the `wiki_regression.py` lanes |
@@ -105,9 +108,34 @@ Watching goes first because it builds the frame, the two clocks, seek and the ki
 other entry stands on, without forks; Rewind second, the owner's own example, whose fork machinery
 Take over reuses.
 
+## What R0 found
+
+- **The resource bar** is drawn by DrawGameScreen (`0x468E3F..0x46960B`) from art read once a
+  process by `0x491200`: frame 0 of `PANELTOP` and `PANELBOT` from `anims\<intgaf>.GAF` (the
+  side's `intgaf` in `gamedata\sidedata.TDF`, loaded by `0x429870`), the side's rects, fill colours
+  and `fonts\<font>.FNT` from `sidedata.TDF` (`0x431A60`), the colour badge from `logos.GAF`
+  `32xlogos` (`0x4318C0`). PANELTOP is laid once at x 129 and PANELBOT repeated to the screen's
+  edge; then the badge, the two fills with their storage ticks, and the readouts. The stored values
+  ease an eighth of the way a frame and the rates are sampled once a game second. A reproduction in
+  Python matched a capture of our renderer on every pixel but Impure's sprocket (36 464 of 36 832,
+  MEASURED 2026-10-31); Total Mayhem, Twilight, Escalation and TA Zero each differ in art or rects.
+  The engine map gets these facts, verified, in landing B's documentation pass.
+- **The side panel while watching** is `<prefix>MAIN2` of the side the level loaded, the
+  recording's controlled seat's at full map; Sight does not change it. The viewer controls the
+  spectator record, whose unit list is empty, so nothing is selected and no build menu shows
+  [INFERRED from the code: no capture of a Watch's panel exists].
+- **The HUD's inputs**: `tagpu_hudlay_build` needs no change; the stage needs a second `HUDOPS`
+  drawn with the HUD's art and its own hit map. The markers and the stats cover the whole recording,
+  ahead of the playhead, so a replay demo plays its game script to the end once before it shows.
+  `hud.js` runs only in a page: whether a HUD press's cursor trip is simulation state or
+  presentation is W1's to settle.
+- **A tick's cost**: every demo, with the units' scripts, natively at `-O2`: the longest 1 068 ticks
+  in 3.56 ms, the dearest 1 033 ticks in 4.37 ms (4.78 ms with the DLL's compiler under Wine), the
+  worst single tick 33 µs (MEASURED 2026-10-31). A seek needs no snapshots. A seek must count the
+  sound events it re-simulated as heard, or they play at once.
+
 ## Open
 
-- **The side panel while watching** and **the resource bar's art** are R0's.
 - **Sound during a seek and at speed**: a re-simulated tick plays nothing; what the stage plays at
   2× to 8× follows what the game does, which R0 measures [INFERRED until then].
 - **Chat** and **combat** are out of this program. The `ExplodeAs` explosion is a later polish.
