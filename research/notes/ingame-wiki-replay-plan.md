@@ -37,6 +37,11 @@ the rules the wiki copies are the recorder's ([S4b, the takeover](tadr-port/demo
 | 17 | A click on a marker | **The timeline pressed at the marker's time**, a seek there; a marker has no hot area of its own in the game | What the game does |
 | 18 | Running dry | **An authored demo never runs dry**: one whose storage would fall below zero stops, `starved`, and `simcheck.mjs` fails the landing in any context where one does, so no demo's timing is ever the economy's. **In Try it yourself the builds stall at zero** as the engine's do, slowed to what the income meets | Refusing at load is impossible -- only playing it says. Clamping in Try it would show the player something the game does not do |
 | 19 | The opponent's side | **The first side of the running mod's layout that is not the player's**; with one side, the opponent keeps the entry's own types | A rule that names no mod |
+| 20 | The bars' art | **The mod's own, from the first landing**: the top and bottom bars composed from the side's PANELTOP, PANELBOT, badge, rects, colours and font, as R0 mapped them; the separate landing B and its whitebox are dropped | R0's reference renderer matches the game's capture, so a whitebox phase would only be thrown away |
+| 21 | The stage HUD's scale | **100 %**, laid out at its default scale inside the frame | Every player sees the same demo, and the checks compare one layout |
+| 22 | The page's own controls | **Kept** beside the HUD's: the page's play, replay and speed drive the demo, the HUD's the replay inside it | The page stays the same on every entry |
+| 23 | Leave, then Yes, in Try it yourself | **The stage's replay ends**, with a caption saying that in the game this returns to the Replays screen | |
+| 24 | The theatre's arrangement, Leave's question, the bottom bar, the viewer's cursor | Taken as the presentation spec recommends and corrected in the browser at W1: a row of tabs, the transport, Try it and About, the About panel over the stage's right, the tree a drawer, no keys strip; Leave's question at YESORNO's own rectangles, whitebox until a real Watch is measured; the bottom bar as the bare strip (a hovered unit's readout is a gap); the viewer's cursor the game's arrow at the player's cursor scale | |
 
 ## The entries
 
@@ -106,7 +111,6 @@ The exact keys are W1's to settle in the mockup.
 | R1-R3 | Rewind a skirmish, the same three steps | the fork rules, the top bar's rewind button, the strip |
 | T1-T3 | Take over a replay | the picker, the Forks bay, the lanes, the eviction |
 | P1-P3 | Players and the camera | Jump, Follow, Sight (a fog per seat), the overlays, the stats window |
-| B | The mod's own resource bar | after R0, replacing the whitebox |
 
 Watching goes first because it builds the frame, the two clocks, seek and the kills, which every
 other entry stands on, without forks; Rewind second, the owner's own example, whose fork machinery
