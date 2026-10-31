@@ -17,6 +17,9 @@ page's controls and the demos playing on the stage.
     wiki_regression.py <instance> cursor --launch --shots DIR
                                                       the stage's cursor, the game's own sprite,
                                                       against the mockup and the player's cursor
+    wiki_regression.py <instance> watch --launch [--shots DIR]
+                                                      Watching, a frame:game entry: its replay, the stage
+                                                      HUD and Try it's presses on it
     wiki_regression.py <name> mp                     a two-player network game on Wine, started by
                                                       tools/compat/tacompat.py's launcher
     wiki_regression.py all|<setup>[,<setup>...] mods --shots DIR
@@ -127,6 +130,26 @@ try, on the same launch as sp:
   (t4) Ctrl and the left button held when Esc closes the window: let go, nothing owed after their
        releases, and the engine's key ring unmoved over the whole mode;
   (t5) reopened, the window is in Try it, afresh; Back to demo, and Esc.
+watch, on the same launch as sp (the presentation spec's 6.5):
+  (v1) entry:7 picks Watching, drawn as a game frame: the theatre's drawer, demo:0..6, play, replay, x1, x2, try and
+       about are the page's controls (the hit map's `src` 0), the stage HUD's (`src` 1) lie inside the `stage` hit;
+       About puts its text's `scroll:text` first in the map, the drawer its `entry:*` (and closes About);
+  (v2) each demo paused (tagpu_wiki.pause, under the turbo) at each of its viewer's trips' presses: the frame record
+       the game thread placed -- its playhead, nmark, toast, question, held and cur -- and the replay's hash equal
+       replay.js's at the same demo tick in the game's context (`simparity.mjs --hash --frame`);
+  (v3) with --shots DIR, each demo held at a tick (tagpu_wiki.shot) and the presented frame grabbed
+       (`<res>-watching-<demo>-t<tick>.game.png`); play, track, bookmarks and leave also beside the mockup at the same
+       state (the game look, the stock pack): the frame's column and both bars equal pixel for pixel, located by the
+       dump's frame_fit (the render thread's fit of the same canvas), and the world with the HUD over it measured;
+  (v4) Try it on the first demo through device clicks at the stage HUD's controls: play toggles the pause; fwd, fwd,
+       rew move the playhead by +300, +300, -300, clamped; the track pressed at 25 % of its run seeks there to within
+       a pixel's ticks, a 10-move drag to 75 % seeks along it and the release lands there; bookmark gives its toast;
+       leave opens the question, a click on the world outside it is No, the replay as it was; leave and Yes end Try
+       it with the line that says where the game goes. GameTime stands and the key ring's indices stay equal;
+  (v5) the window closed and opened again on Watching, Try it and the track pressed at its end: the seek's time and
+       the most one fill cost the game thread from the open;
+       Esc, and the render thread's stage HUD and bars cost and the pass's peak instances and batches against its
+       caps, from the log.
 recorded:
   (r) the button sits 3 bar pixels left of the rewind button (the two frames' hit maps); the rewind
       button opens the rewind; while it is open a click on the wiki button opens nothing and the log
@@ -214,6 +237,10 @@ Twilight), one game a setup, under the run lock (the plan's landing 6i; the side
   (b4) Build Lines demo 1 played in the player's context: where sim.js, replaying the dump's ctx,
        locks it (a role with no unit, or a build the sidebar cannot reach) it holds at that tick with
        the "Turned off in this mod" badge above the stage; elsewhere it plays past it, no badge;
+  (w6) Watching's first demo held at tick 150 (tagpu_wiki.shot): the game frame's two bars, each client pixel against
+       the texel of bar.js's picture on the setup's pack that its nearest sampling shows, Impure's emblems left out
+       (tools/wiki/barcheck.mjs --compose) -- the per-mod bar art the loader reads (Mayhem's GUI table, TA Zero's three
+       sides and logos, Escalation's NEWINT) as the game draws it;
   (w4) Esc closes the window;
   (w5) each stage drew what the report resolved: a ground that resolved in 3D on every frame of the
        line, one that did not as the whitebox on every frame.
@@ -849,7 +876,9 @@ def mockup_shot(state, path):
     loaded before the demo is read. `look` "game" draws the stage in the game's graphics and the
     sidebar in the mod's pictures, as the game draws both (gfx=game, on the GPU as
     tools/wiki/stage3dcheck.py renders it); without it the stage is the whitebox. tools/wiki/serve.py
-    serves it, so its demo plays with the units' scripts as the game's does."""
+    serves it, so its demo plays with the units' scripts as the game's does. A frame:game entry's demo is its replay,
+    stepped to the demo tick as tagpu_wiki.shot steps the game's. Returns the frame's viewer's cursor, the point it
+    is drawn at in the picture's pixels, or None."""
     sys.path.insert(0, str(TREE / "tools/wiki"))
     import wikilaycheck as wl
     from PIL import Image
@@ -878,7 +907,7 @@ def mockup_shot(state, path):
         # demo's stage -- WikiGfx keys a stage `<entry>.<scene>`, WikiPage.stageId() -- or the wait's
         # bound fails the grab, which a picture of a page still loading would otherwise pass
         bound = 30000 if game else 10000
-        ready = wl.result(run("eval", "async () => { const ok = () => !!(window.WikiPage && WikiPage.sim()"
+        ready = wl.result(run("eval", "async () => { const ok = () => !!(window.WikiPage && (WikiPage.sim() || WikiPage.replay())"
                                       " && document.fonts.status === 'loaded' && document.querySelector('#win canvas.skin')"
                                       " && !document.querySelector('#sidebar-note').textContent.startsWith('loading')"
                                       f"{' && WikiGfx.ready(WikiPage.stageId())' if game else ''});"
@@ -891,17 +920,22 @@ def mockup_shot(state, path):
                                   # the tick, or done (play on a done demo restarts it playing), and no frame
                                   # runs between the two
                                   " $('#c-replay').click(); if (S.playing) $('#c-play').click();"
-                                  " const sim = WikiPage.sim();"
-                                  f" while (sim.tick < {state['tick']} && !sim.done) sim.step();"
+                                  " const sim = WikiPage.sim(), rep = WikiPage.replay();"
+                                  f" if (sim) while (sim.tick < {state['tick']} && !sim.done) sim.step();"
+                                  f" else while (rep.view().tick < {state['tick']} && !rep.view().done) rep.step();"
                                   " for (let i = 0; i < 4; i++) await new Promise(r => requestAnimationFrame(r));"
                                   " const f = $('#frame').getBoundingClientRect();"
-                                  " return JSON.stringify([f.left, f.top, f.width, f.height, sim.tick]); }").stdout)
-        fx, fy, fw, fh, tick = json.loads(v)
+                                  " const F = WikiPage.frameDrawn && WikiPage.frameDrawn(), q = F && F.cursor,"
+                                  " c = $('#stage'), r = c.getBoundingClientRect();"
+                                  " const at = q ? [r.left + q.x * r.width / c.width - f.left, r.top + q.y * r.height / c.height - f.top] : null;"
+                                  " return JSON.stringify([f.left, f.top, f.width, f.height, sim ? sim.tick : rep.view().tick, at]); }").stdout)
+        fx, fy, fw, fh, tick, cursor_at = json.loads(v)
         assert (round(fw), round(fh)) == (gw, gh) and tick == state["tick"], \
             f"the mockup's frame is {fw} x {fh} at tick {tick}, not {gw} x {gh} at {state['tick']}"
         run("screenshot", f"--filename={tmp / 'page.png'}")
         Image.open(tmp / "page.png").crop((round(fx), round(fy), round(fx) + gw, round(fy) + gh)).save(path)
         print(f"wiki: the mockup at the same state grabbed to {path}")
+        return cursor_at
     finally:
         run("close")
         httpd.shutdown()
@@ -1786,6 +1820,342 @@ def reclaim(c, shots, res):
     assert not nano, "(u7) the engine staged the reclaimed unit as a nanoframe"
 
 
+
+# ---- watch: a frame:game entry on the page, Watching (research/notes/ingame-wiki-replay-plan.md; the presentation
+# spec's 6.5) ----
+
+WATCH = "watching"
+WATCH_NODE = 7                                 # entry:7: the tree's Replays > Watching (art/wiki/tree.json)
+WATCH_DEMOS = ("play", "speed", "rewfwd", "track", "markers", "bookmarks", "leave")
+WATCH_PAGE = ("drawer", "play", "replay", "x1", "x2", "try", "about")
+# (v3) each demo held at a tick it shows its point at, no seek pending there (a capture then shows no world): play
+# paused, speed at 2x, fwd's seek done, the track let go, Bram's commander gone, the bookmark's toast, the question
+WATCH_SHOTS = (("play", 150), ("speed", 120), ("rewfwd", 100), ("track", 180), ("markers", 130), ("bookmarks", 90),
+               ("leave", 100))
+WATCH_PAIRED = ("play", "track", "bookmarks", "leave")    # (v3) beside the mockup at the same state
+HIT_PAGE, HIT_HUD, HIT_DIALOG = 0, 1, 2        # TAGPU_CMD_WIKIHIT.src (tagpu_wikiframe.h WIKIHIT_*)
+S_LEFT = "In the game, this goes back to the Replays browser."    # tagpu_wikiframe.h WIKIFRAME_LEFT
+FRAME_KEYS = ("playhead", "nmark", "toast", "question", "held", "cur")   # (v2) the record's fields compared
+
+
+def hit_of(d, key, src):
+    """The drawn frame's control `key` of source `src` (HIT_*): the same key can be the page's and the stage HUD's"""
+    got = [h["rect"] for h in d["hits"] if h["key"] == key and h.get("src", HIT_PAGE) == src]
+    assert got, f"the last frame drawn has no '{key}' control of source {src}: " \
+                f"{[(h['key'], h.get('src')) for h in d['hits']]}"
+    return got[0]
+
+
+def frame_rects(d):
+    """A drawn game frame's parts in client pixels [x0, y0, x1, y1), from the dump's frame_fit (the render thread's
+    fit of the same canvas): the whole frame, its column, its top bar and its bottom bar (stage.js frame mode: the
+    column left of the map's origin, the bars from it to the frame's right edge), each edge snapped as the stage
+    snaps it."""
+    f = d["frame_fit"]
+    cx, cy, s, ox, oz, Wg, Hg = *f["canvas"], f["s"], f["ox"], f["oz"], f["Wg"], f["Hg"]
+    snap = lambda v: math.floor(v + 0.5 + 1 / 64)
+    X = lambda wx: cx + snap(ox + wx * s)
+    Z = lambda wz: cy + snap(oz + wz * s)
+    return {"frame": [X(-128), Z(-32), X(Wg - 128), Z(Hg - 32)], "column": [X(-128), Z(-32), X(0), Z(Hg - 32)],
+            "top": [X(0), Z(-32), X(Wg - 128), Z(0)], "bottom": [X(0), Z(Hg - 64), X(Wg - 128), Z(Hg - 32)],
+            "world": [X(0), Z(0), X(Wg - 128), Z(Hg - 64)]}
+
+
+def watch_open(c):
+    """The wiki opened on Watching, drawn as a game frame: picked from the tree, or already the selection, which a
+    reopened window keeps (its tree is then in the closed drawer)"""
+    d = c.open_wiki(expect_pause=True)
+    d = wait_dump(c, lambda d: d["drawn_open"], "(v1) the page was not drawn")
+    if d["entry"] != WATCH:
+        c.keys("dclick:%d,%d" % c.centre(c.hit(d, f"entry:{WATCH_NODE}")))
+    return wait_dump(c, lambda d: d["entry"] == WATCH and d["drawn_entry"] >= 0 and d.get("drawn_frame")
+                     and any(h.get("src") == HIT_HUD for h in d["hits"]),
+                     "(v1) entry:7 did not draw Watching's game frame with its stage HUD", seconds=60)
+
+
+def watch_v1(c, d):
+    """(v1) the theatre's controls, the stage HUD's inside the stage, and About's and the drawer's over everything"""
+    keys = {(h["key"], h.get("src", HIT_PAGE)) for h in d["hits"]}
+    want = [k for k in WATCH_PAGE + tuple(f"demo:{i}" for i in range(len(WATCH_DEMOS))) if (k, HIT_PAGE) not in keys]
+    assert not want, f"(v1) the theatre has no {want}: {sorted(keys)}"
+    st = hit_of(d, "stage", HIT_PAGE)
+    hud = [h for h in d["hits"] if h.get("src") == HIT_HUD]
+    out = [h["key"] for h in hud if not (st[0] <= h["rect"][0] and h["rect"][2] <= st[2] and st[1] <= h["rect"][1]
+                                         and h["rect"][3] <= st[3])]
+    assert not out, f"(v1) stage HUD controls outside the stage {st}: {out}"
+    assert {"play", "track", "leave"} <= {h["key"] for h in hud}, f"(v1) the stage HUD lacks play, track or leave: " \
+                                                                 f"{sorted(h['key'] for h in hud)}"
+    press(c, d, "about")
+    d = wait_dump(c, lambda d: d["about"] and d["hits"] and d["hits"][0]["key"] == "scroll:text",
+                  "(v1) About did not put its text first in the hit map")
+    press(c, d, "drawer")
+    d = wait_dump(c, lambda d: d["drawer"] and not d["about"] and d["hits"] and d["hits"][0]["key"].startswith("entry:"),
+                  "(v1) the drawer did not put its entries first in the hit map, or left About open")
+    press(c, d, "drawer")
+    d = wait_dump(c, lambda d: not d["drawer"] and not d["about"], "(v1) the drawer did not close")
+    print(f"wiki watch: (v1) the theatre: {len(WATCH_PAGE) + len(WATCH_DEMOS)} page controls, {len(hud)} stage HUD "
+          f"controls inside the stage; About's text and then the drawer's entries topmost")
+    return d
+
+
+def simparity_frames(d, asks):
+    """(v2) replay.js's hash and frame record at each (demo, tick) of `asks` in the dump's context: its layout, side,
+    interface type, the pack of a mod's layout and the units' scripts (simparity.mjs --hash --frame)"""
+    lay = TREE / ".wiki-watch-layout.json"
+    lay.write_text(json.dumps(d["layout"]))
+    try:
+        args = ["--layout", str(lay) if d["layout"] is not None else "null", "--side", str(d["ctx"]["side"]),
+                "--iface", str(d["ctx"]["iface"])]
+        if d["layout_src"] == "mod":
+            args += ["--pack", str(pack_for_layout(lay))]
+        if d["ctx"]["cob"]:
+            args.append("--scripts")
+        r = subprocess.run(["node", str(TREE / "tools/wiki/simparity.mjs"), "--hash", *args, "--frame",
+                            ",".join(f"{WATCH}/{k}@{t}" for k, t in asks)], capture_output=True, text=True, timeout=900)
+    finally:
+        lay.unlink(missing_ok=True)
+    assert r.returncode == 0, f"(v2) simparity --hash --frame: {r.stderr.strip()[-600:]}"
+    out = {}
+    for ln in r.stdout.splitlines():
+        m = re.match(r"frame (\S+?)/(\S+?)@(\d+) ([0-9a-f]{16}) (.*)$", ln)
+        if m:
+            out[(m.group(2), int(m.group(3)))] = (m.group(4), json.loads(m.group(5)))
+    return out
+
+
+def watch_v2(c):
+    """(v2) each demo paused at its trips' presses: the frame record the game thread placed equals replay.js's at
+    that demo tick, and so does the whole replay's hash"""
+    entry = json.loads((TREE / f"art/wiki/entries/{WATCH}.json").read_text())
+    # a trip's press is HUD_DOWN (WIKI_PICK_DOWN, 20) demo ticks after it starts
+    asks = [(dm["id"], ev["at"] + 20) for dm in entry["demos"] for ev in dm["inputs"] if "hud" in ev]
+    got = {}
+    turbo(c, 8)
+    try:
+        for k, t in asks:
+            n = WATCH_DEMOS.index(k) + 1
+            start = c.mark()
+            trigger(c.gamedir / "tagpu_wiki.pause", f"{WATCH} {n} {t}\n")
+            asked = wait_line(c, start, r"wiki: (pause \d+ asked|tagpu_wiki\.pause: )", f"(v2) {k}@{t}")
+            assert re.search(r" asked: .*\d$", asked), f"(v2) {asked}"
+            pn = re.search(r"pause (\d+) asked", asked).group(1)
+            wait_line(c, start, rf"wiki: pause {pn}: ", f"(v2) {k} did not pause at tick {t}", 120)
+            d = wait_dump(c, lambda d: d["demo"] == k and not d["playing"] and d.get("replay"),
+                          f"(v2) {k} is not the paused replay")
+            assert d["tick"] == t, f"(v2) {k} paused at tick {d['tick']}, not {t}"
+            got[(k, t)] = (d["hash"], d["frame"])
+    finally:
+        turbo(c, 0)
+    want = simparity_frames(d, asks)
+    for key, (h, rec) in got.items():
+        assert key in want, f"(v2) simparity gave no frame for {key}"
+        wh, wrec = want[key]
+        bad = [f for f in FRAME_KEYS if f != "nmark" and rec[f] != wrec[f]] + \
+              (["nmark"] if rec["nmark"] != wrec["nmark"] else [])
+        assert not bad, f"(v2) {key}: the record's {bad} differ: game {[rec[f] for f in bad]}, replay.js {[wrec[f] for f in bad]}"
+        assert h == wh, f"(v2) {key}: the replay's hash {h}, replay.js's {wh}"
+    print(f"wiki watch: (v2) {len(got)} trips' presses over {len(WATCH_DEMOS)} demos: each record's "
+          f"{', '.join(FRAME_KEYS)} and the replay's hash equal replay.js's")
+
+
+def watch_shot(c, demo, tick):
+    """A demo held at a tick through tagpu_wiki.shot (stepped there in one fill, as the mockup's capture is), once
+    the game frame drawn is that one's: the dump"""
+    n = WATCH_DEMOS.index(demo) + 1
+    start = c.mark()
+    trigger(c.gamedir / "tagpu_wiki.shot", f"{WATCH} {n} {tick}\n")
+    asked = wait_line(c, start, r"wiki: shot \d+ asked|wiki: tagpu_wiki\.shot: ", f"(v3) {demo} {tick}")
+    assert " asked: " in asked and asked.endswith(f"held at tick {tick}"), f"(v3) {asked}"
+    d = wait_dump(c, lambda d: d["demo"] == demo and not d["playing"] and d.get("frame_fit"),
+                  f"(v3) {demo} at {tick} was not drawn as a frame", seconds=60)
+    time.sleep(1.0)          # the held frame presented
+    return d
+
+
+def region_diff(a, b, r, texels=None, skip=None, over=()):
+    """(pixels that differ, pixels compared, the largest channel difference) over client rect r of two captures. With
+    `texels` (tw, th), r shows a picture of tw x th texels sampled nearest: a pixel whose centre lies exactly on the
+    edge between two texels may show either, so there it may equal b's pixel on either side of that edge. The GPU's
+    sampler and the browser's round apart there: MEASURED 2026-10-31 on Watching at 1920 x 1080, one client column of
+    the column and one row of the top bar, each centred on an edge, and no other pixel of either. `skip` (x0, x1):
+    client columns left out; `over`, client rects [x0, y0, x1, y1) of what is drawn over the picture, each left out
+    with the pixel round it, where its edge's filtered art blends into the picture."""
+    import numpy as np
+    x0, y0, x1, y1 = r
+    A, B = a[y0:y1, x0:x1, :3].astype(int), b[y0:y1, x0:x1, :3].astype(int)
+    if A.size == 0 or A.shape != B.shape:
+        return 0, 0, 0
+    ok = np.all(A == B, axis=2)
+    if texels:
+        eps = 1e-6
+        for axis, n, t in ((1, x1 - x0, texels[0]), (0, y1 - y0, texels[1])):
+            u = (np.arange(n) + 0.5) * t / n
+            edge = np.abs(u - np.round(u)) < eps
+            for k in (-1, 1):
+                Bk = np.roll(B, -k, axis=axis)
+                eq = np.all(A == Bk, axis=2)
+                ok |= eq & (edge[None, :] if axis == 1 else edge[:, None])
+    if skip:
+        ok[:, max(0, skip[0] - x0):max(0, skip[1] - x0)] = True
+    for q in over:
+        ok[max(0, q[1] - 1 - y0):max(0, q[3] + 1 - y0), max(0, q[0] - 1 - x0):max(0, q[2] + 1 - x0)] = True
+    dif = np.abs(A - B).max(axis=2)
+    return int((~ok).sum()), int(ok.size), int(dif[~ok].max()) if (~ok).any() else 0
+
+
+def watch_v3(c, shots, res):
+    """(v3) each demo held at its tick and the presented frame grabbed; four of them beside the mockup at the same
+    state (the game look, the stock pack): the column and both bars pixel-equal, the world and the HUD over it
+    measured"""
+    import numpy as np
+    shots.mkdir(parents=True, exist_ok=True)
+    for demo, tick in WATCH_SHOTS:
+        d = watch_shot(c, demo, tick)
+        base = shots / f"{res}-{WATCH}-{demo}-t{tick}"
+        grab(c, base.with_suffix(".game.png"))
+        base.with_suffix(".frame.json").write_text(json.dumps({"frame_fit": d["frame_fit"], "rects": frame_rects(d),
+                                                               "hud": [h for h in d["hits"] if h.get("src") == HIT_HUD]}))
+        if demo not in WATCH_PAIRED:
+            continue
+        at = mockup_shot({"res": [int(v) for v in res.split("x")], "entry": WATCH, "demo_n": WATCH_DEMOS.index(demo),
+                          "tick": tick, "mod": "stock", "look": "game"}, base.with_suffix(".mockup.png"))
+        g, m = png_rgba(base.with_suffix(".game.png")), png_rgba(base.with_suffix(".mockup.png"))
+        R, f = frame_rects(d), d["frame_fit"]
+        hud = [h["rect"] for h in d["hits"] if h.get("src") == HIT_HUD]   # the stage HUD's controls, over the bars
+        # and the viewer's cursor, the game's sprite of at most HUD_SPRITE_CELL (64) texels about its point
+        if at:
+            hud.append([round(at[0]) - 64, round(at[1]) - 64, round(at[0]) + 64, round(at[1]) + 64])
+        said = []
+        # Impure's emblems on the top bar, frame x Wg - 75 .. Wg - 17 (the presentation spec's 3.4): kit parts each
+        # renderer scales with its own filter, measured with the HUD, not held to the bars' equality
+        cx, s_, ox = f["canvas"][0], f["s"], f["ox"]
+        emb = [cx + math.floor(ox + (f["Wg"] - 128 - k) * s_ + 0.5 + 1 / 64) for k in (76, 16)]
+        # the column one texel a game pixel from the frame's top (HUD_TEX_SIDE), each bar Wg - 128 x 32 (HUD_TEX_BAR)
+        for part, tex in (("column", (128, f["Hg"])), ("top", (f["Wg"] - 128, 32)), ("bottom", (f["Wg"] - 128, 32))):
+            n, of, mx = region_diff(g, m, R[part], tex, emb if part == "top" else None, hud)
+            assert of > 0, f"(v3) {demo}@{tick}: the {part} rect {R[part]} is empty"
+            assert n == 0, f"(v3) {demo}@{tick}: {n} of {of} pixels of the {part} differ from the mockup's (up to {mx})"
+            said.append(f"{part} {of} px equal")
+        n, of, mx = region_diff(g, m, [emb[0], R["top"][1], emb[1], R["top"][3]])
+        said.append(f"the emblems {n} of {of} px differ (up to {mx})")
+        n, of, mx = region_diff(g, m, R["world"])
+        said.append(f"world and HUD {n} of {of} px differ (up to {mx})")
+        print(f"wiki watch: (v3) {demo} at tick {tick}: {'; '.join(said)}")
+    print(f"wiki watch: (v3) {len(WATCH_SHOTS)} demos grabbed to {shots}")
+
+
+def watch_v4(c):
+    """(v4) Try it on demo 1 through the stage HUD's controls, device clicks at their centres"""
+    def hud_click(d, key):
+        c.keys("dclick:%d,%d" % c.centre(hit_of(d, key, HIT_HUD)))
+
+    def settled(what, pred=lambda d: True):
+        return wait_dump(c, lambda d: d.get("replay") and d["replay"]["target"] < 0 and d.get("drawn_frame") and pred(d),
+                         what, seconds=60)
+    gt0, ring0 = c.gametime(), c.ring()
+    d = c.dump()
+    press(c, d, "demo:0")
+    d = wait_dump(c, lambda d: d["demo"] == "play", "(v4) demo:0 did not pick Watching's first demo")
+    press(c, d, "try")
+    d = settled("(v4) Try it did not start the replay for the player",
+                lambda d: d["try"] and d["replay"]["try"] and any(h.get("src") == HIT_HUD for h in d["hits"]))
+    p0 = d["replay"]["paused"]
+    hud_click(d, "play")
+    d = settled("(v4) play did not toggle the pause", lambda d: d["replay"]["paused"] != p0)
+    if not d["replay"]["paused"]:
+        hud_click(d, "play")
+        d = settled("(v4) play did not pause", lambda d: d["replay"]["paused"])
+    end = d["replay"]["end"]
+    for key, delta in (("fwd", 300), ("fwd", 300), ("rew", -300)):
+        was = d["replay"]["playhead"]
+        hud_click(d, key)
+        want = min(max(was + delta, 0), end)
+        d = settled(f"(v4) {key} did not move the playhead from {was} to {want}", lambda d: d["replay"]["playhead"] == want)
+    # the track: pressed at 25 % of its run, dragged in 10 moves to 75 %, let go there
+    x0, x1, hend = d["hud_run"]
+    tr = hit_of(d, "track", HIT_HUD)
+    y = (tr[1] + tr[3]) // 2
+    per = hend / max(1, x1 - x0)
+    at = lambda f: x0 + round(f * (x1 - x0))
+    tick = lambda x: math.trunc(min(1, max(0, (x - x0) / (x1 - x0))) * hend + 0.5)
+    c.keys("dmove:%d,%d" % (at(0.25), y), "ddown:%d,%d" % (at(0.25), y))
+    d = wait_dump(c, lambda d: d["replay"]["press_held"] == "track", "(v4) the track was not held")
+    assert abs(d["replay"]["playhead"] - round(0.25 * hend)) <= per + 1, \
+        f"(v4) the press at 25 % sought {d['replay']['playhead']}, not {round(0.25 * hend)}"
+    seen = []
+    for k in range(1, 11):
+        x = at(0.25 + 0.05 * k)
+        c.keys("dmove:%d,%d" % (x, y))
+        d = wait_dump(c, lambda d: abs(d["replay"]["playhead"] - tick(x)) <= per + 1,
+                      f"(v4) the drag to {x} did not seek to {tick(x)}")
+        seen.append(d["replay"]["playhead"])
+    c.keys("dup:%d,%d" % (at(0.75), y))
+    d = settled("(v4) the track's release did not land at 75 %",
+                lambda d: not d["replay"]["press_held"] and abs(d["replay"]["playhead"] - tick(at(0.75))) <= per + 1)
+    hud_click(d, "bookmark")
+    d = settled("(v4) bookmark gave no toast", lambda d: d["frame"]["toast"])
+    toast = d["frame"]["toast"]
+    paused = d["replay"]["paused"]
+    hud_click(d, "leave")
+    d = settled("(v4) leave did not open the question", lambda d: d["frame"]["question"])
+    # outside the dialog, on the frame's world: No at once
+    out = hit_of(d, "outside", HIT_DIALOG)
+    dl = hit_of(d, "dialog", HIT_DIALOG)
+    c.keys("dclick:%d,%d" % ((out[0] + dl[0]) // 2, (dl[1] + dl[3]) // 2))
+    d = settled("(v4) a click outside the question did not close it", lambda d: not d["frame"]["question"])
+    assert d["replay"]["paused"] == paused, f"(v4) No left the replay paused={d['replay']['paused']}, not {paused}"
+    hud_click(d, "leave")
+    d = settled("(v4) leave did not open the question again", lambda d: d["frame"]["question"])
+    c.keys("dclick:%d,%d" % c.centre(hit_of(d, "yes", HIT_DIALOG)))
+    d = wait_dump(c, lambda d: d.get("replay") and d["replay"]["left"] and not d["try"] and d["caption"] == S_LEFT,
+                  "(v4) Yes did not end Try it with the line that says where the game goes")
+    assert c.gametime() == gt0, f"(v4) GameTime ran under the page: {gt0} -> {c.gametime()}"
+    assert c.ring() == ring0, f"(v4) the engine's key ring moved: {ring0} -> {c.ring()}"
+    print(f"wiki watch: (v4) Try it on {WATCH}/play: play toggled the pause, fwd fwd rew moved the playhead by 300 "
+          f"each, the track pressed at 25 % sought {round(0.25 * hend)} and followed a 10-move drag ({seen[0]}..{seen[-1]}) "
+          f"to 75 %, bookmark said '{toast}', a click outside the question was No, and Yes left; GameTime stood and the "
+          f"key ring stayed equal; no replay HUD is underway in this skirmish, and the stage's hits are the wiki's map's")
+    return d
+
+
+def watch_v5(c):
+    """(v5) the costs: one fill's most during Try it's seek to the end, the render thread's stage HUD and bars, the
+    pass's peak against its caps. The window is closed and opened again first: the page's cost is counted from its
+    open, and the shots above step a whole replay in one fill, which no player's fill does."""
+    c.keys("esc")
+    wait_dump(c, lambda d: not d["open"], "(v5) Esc did not close the window")
+    d = watch_open(c)
+    press(c, d, "try")
+    d = wait_dump(c, lambda d: d.get("replay") and d["replay"]["try"] and d["try"]
+                  and any(h.get("src") == HIT_HUD for h in d["hits"]), "(v5) Try it did not start again")
+    x0, x1, _ = d["hud_run"]
+    tr = hit_of(d, "track", HIT_HUD)
+    t0 = time.monotonic()
+    c.keys("dclick:%d,%d" % (x1 - 1, (tr[1] + tr[3]) // 2))
+    d = wait_dump(c, lambda d: d["replay"]["target"] < 0 and d["replay"]["game_tick"] >= d["replay"]["end"] - 30,
+                  "(v5) the seek to the end did not finish", seconds=120)
+    secs = time.monotonic() - t0
+    print(f"wiki watch: (v5) a seek to the end ({d['replay']['end']} game ticks) in {secs:.1f} s; the page cost the game "
+          f"thread at most {d['cost_max_ms']:.3f} ms in one frame over {d['cost_frames']} frames")
+    start = c.mark()
+    c.keys("esc")
+    wait_dump(c, lambda d: not d["open"], "(v5) Esc did not close the window")
+    for rx in (r"wiki: the stage HUD cost the render thread", r"wiki: its frames peaked at"):
+        print(f"wiki watch: (v5) {wait_line(c, start, rx, f'(v5) no `{rx}` line', 30).split('] ', 1)[-1]}")
+
+
+def watch(c, shots, res):
+    """(v1)..(v5): Watching, a frame:game entry, on the page"""
+    held_at(c, HELD_AT)
+    d = watch_open(c)
+    d = watch_v1(c, d)
+    watch_v2(c)
+    if shots:
+        watch_v3(c, shots, res)
+    watch_v4(c)
+    watch_v5(c)
+
+
 def hud(c):
     return json.loads(tacli("hud", c.name, "show", "--json", timeout=180))
 
@@ -2323,6 +2693,56 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
              f"past its first build at tick {at}, tick {d['tick']} -> {d2['tick']}, no badge"))
 
 
+MODS_WATCH = ("play", 150)                    # (w6) Watching's first demo, paused, no seek pending
+
+
+def mods_bars(c, display, pack, out, row):
+    """(w6) Watching's first demo held at a tick through tagpu_wiki.shot: the frame's two bars, each client pixel
+    against the texel of bar.js's picture on the setup's pack (side and badge colour the record's, every number 0)
+    its nearest sampling shows (either, on an edge, as the column's check takes it), Impure's emblems' columns left
+    out (the stage draws them over the bar, from the kit). A side the pack has no bars for draws the whitebox strips
+    and is said, not compared."""
+    import numpy as np
+    demo, tick = MODS_WATCH
+    d = watch_shot(c, demo, tick)
+    png = out / f"{WATCH}-{demo}-t{tick}.window.png"
+    window_grab(display, d, png)
+    img = png_rgba(png)
+    f, raw = d["frame_fit"], out / "bars.rgba"
+    r = subprocess.run(["node", str(TREE / "tools/wiki/barcheck.mjs"), "--compose", str(pack), str(d["ctx"]["side"]),
+                        str(d["frame"]["colour"]), str(f["Wg"]), str(f["Hg"]), str(raw)],
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, f"(w6) barcheck --compose: {r.stderr.strip()[-400:]}"
+    if r.stdout.strip() == "none":
+        row["bars"] = "none: the pack has no bars for the side"
+        print(f"wiki mods: (w6) {pack.name} side {d['ctx']['side']}: bar.js composes no bars, the stage the whitebox")
+        return
+    w = int(r.stdout.strip())
+    assert w == f["Wg"] - 128, f"(w6) bar.js's bars are {w} wide, the frame's {f['Wg'] - 128}"
+    comp = np.frombuffer(raw.read_bytes(), np.uint8).reshape(64, 2048, 4)[:, :, :3].astype(int)
+    R, eps, said = frame_rects(d), 1e-6, []
+
+    def texels(n0, n1, n):
+        u = (np.arange(n0, n1) + 0.5 - n0) * n / (n1 - n0)
+        return np.clip(np.floor(u - eps), 0, n - 1).astype(int), np.clip(np.floor(u + eps), 0, n - 1).astype(int)
+    for part, row0 in (("top", 0), ("bottom", 32)):
+        x0, y0, x1, y1 = R[part]
+        shown = img[y0:y1, x0:x1, :3].astype(int)
+        (tx0, tx1), (ty0, ty1) = texels(x0, x1, w), texels(y0, y1, 32)
+        ok = np.zeros(shown.shape[:2], bool)
+        for ty in (ty0, ty1):
+            for tx in (tx0, tx1):
+                ok |= np.all(shown == comp[row0 + ty][:, tx], axis=2)
+        if part == "top":
+            # the emblems: frame x Wg - 75 .. Wg - 17 (the presentation spec's 3.4), bar texels from 128 less
+            ok[:, (tx1 >= f["Wg"] - 76 - 128) & (tx0 < f["Wg"] - 16 - 128)] = True
+        bad = int((~ok).sum())
+        assert bad == 0, f"(w6) {bad} of {ok.size} pixels of the {part} bar differ from bar.js on {pack.name}"
+        said.append(f"{part} {ok.size} px")
+    row["bars"] = ", ".join(said) + " equal to bar.js"
+    print(f"wiki mods: (w6) {WATCH}/{demo} at tick {tick} on {pack.name}, side {d['ctx']['side']}: the {row['bars']}")
+
+
 def mods_setup(tacompat, setup, dll, out):
     """(w1)..(w5) on one setup: its folder as a player has it, started on a private Xvfb and walked
     into a skirmish, the wiki opened on both entries. The row, passed or with why it failed."""
@@ -2410,6 +2830,8 @@ def mods_setup(tacompat, setup, dll, out):
                   f"{got[0]} of {got[1]} frames drew the image")
         stage_sidebar(c, display, gamedir, pack, out, row)
         poll("b4")
+        mods_bars(c, display, pack, out, row)
+        poll("w6")
         c.keys("esc")
         wait_dump(c, lambda d: not d["open"], "(w4) Esc did not close the window")
         time.sleep(2)
@@ -2453,7 +2875,7 @@ def mods_table(rows):
         print(f"   {r.get('load')}; the screen {r.get('screen')}; boxes: {r['boxes'] or 'none'}; "
               f"the first mounts {[arc(m['archive']) for m in rep.get('mounts', [])][:4]}")
         print(f"   sidebar ({r.get('pack')}'s pack): the engine's {r.get('live')}; the layout {r.get('layout')}; "
-              f"the stage {r.get('stage')}; the lock {r.get('lock')}")
+              f"the stage {r.get('stage')}; the lock {r.get('lock')}; the frame's bars {r.get('bars')}")
         for st in rep.get("stages", []):
             srcs = "; ".join(f"{s['map']} <- {arc(s['from'])}" + ("" if s["ok"] else f" ({s['why']})")
                              for s in st.get("sources", []))
@@ -2550,8 +2972,8 @@ def offline_checks():
     assert not failed, f"the offline checks {', '.join(failed)} did not pass"
 
 
-GATE_MODES = ("sp", "page", "demos", "try", "asset", "stage3d", "units", "cursor")
-GATE_SHOTS = {"demos", "stage3d", "units", "cursor"}    # the modes that take --shots DIR
+GATE_MODES = ("sp", "page", "demos", "try", "asset", "stage3d", "units", "cursor", "watch")
+GATE_SHOTS = {"demos", "stage3d", "units", "cursor", "watch"}    # the modes that take --shots DIR
 GATE_RES = "1920x1080"                                  # each game lane's private display, and so its game's screen
 GATE_LANE_S = 3600                                      # a lane still running after this is hung, not slow: the
                                                         # slowest, units, takes some 750 s alone and 863 s at -j 6
@@ -2767,8 +3189,8 @@ def gate(shots, jobs, offline_jobs, modes, setups):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("instance")
-    p.add_argument("mode", choices=("sp", "page", "demos", "try", "recorded", "asset", "stage3d", "units", "cursor", "mp", "mods",
-                                    "offline", "gate"))
+    p.add_argument("mode", choices=("sp", "page", "demos", "try", "recorded", "asset", "stage3d", "units", "cursor", "watch",
+                                    "mp", "mods", "offline", "gate"))
     p.add_argument("--launch", action="store_true",
                    help="sp/recorded: launch on place-basic.json first, under the run lock")
     p.add_argument("--res", default="1920x1080", help="sp/recorded: the game's resolution")
@@ -2776,7 +3198,8 @@ def main():
                                   "(page: on the second entry and its second demo, at (p2); try: one a demo, "
                                   "named <stem>-<entry>-<demo>, mid-replay)")
     p.add_argument("--shots", type=Path, help="demos: grab each entry's demo mid-play, and the mockup's, into this folder; "
-                                              "stage3d, units: the captures of the wiki's target and the presented frames")
+                                              "stage3d, units: the captures of the wiki's target and the presented frames; "
+                                              "watch: each Watching demo's frame, four beside the mockup's")
     p.add_argument("--jobs", "-j", type=int, default=6, help="gate: the game lanes played at once")
     p.add_argument("--offline-jobs", type=int, default=8, help="gate: the offline checks run at once, 0 for none")
     p.add_argument("--modes", default=",".join(GATE_MODES), help="gate: the single-player modes, each a lane")
@@ -2815,6 +3238,8 @@ def main():
                     units(c, a.shots, a.res)
                 elif a.mode == "cursor":
                     cursor(c, a.shots, a.res)
+                elif a.mode == "watch":
+                    watch(c, a.shots, a.res)
                 else:
                     recorded(c)
             finally:

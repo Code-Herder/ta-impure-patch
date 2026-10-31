@@ -2043,6 +2043,23 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
     /* the stage's fit as stage_world takes it: the drawn frame's unit, map and sidebar rows */
     fprintf(f, "],\"u\":%.17g,\"map\":[%d,%d],\"side_h\":%d,\"view_drawn\":%d", (double)s_hit.u, e ? e->scenes[0].w : 0,
             e ? e->scenes[0].h : 0, (int)s_hit.side_h, (int)s_hit.view);
+    /* a whole game frame as the drawn frame fitted it, from the same canvas and the same function the
+       render thread draws it with (tagpu_wikistage_fit, `frame` 1): the canvas's client corner, the
+       scale, the map's origin on the canvas and the frame's size in game pixels -- what the lanes
+       locate its column, its bars and its HUD by in a capture */
+    if (s_hit.frame && s_repOn && s_frameHave) {
+        const TAGPU_CMD_WIKIHIT* h = NULL;
+        for (i = 0; i < s_hit.n && !h; i++)
+            if (!strncmp(s_hit.hit[i].key, "stage", TAGPU_WIKI_KEY)) h = &s_hit.hit[i];
+        if (h) {
+            WIKISTAGEFIT ft;
+            int Wg, Hg;
+            tagpu_wikistage_fit(s_frameView.w, s_frameView.h, s_hit.side_h, 1, h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &ft);
+            tagpu_wikiframe_size(s_frameView.w, s_frameView.h, s_hit.side_h, &Wg, &Hg);
+            fprintf(f, ",\"frame_fit\":{\"canvas\":[%d,%d],\"s\":%.17g,\"ox\":%.17g,\"oz\":%.17g,\"Wg\":%d,\"Hg\":%d}",
+                    h->x0, h->y0, ft.s, ft.ox, ft.oz, Wg, Hg);
+        }
+    }
     /* the sidebar layout the simulation was started with, as simparity.mjs --try gives it to sim.js
        (null: none), and which one it is; and its context, sim.js's ctx, the casting written whole */
     fprintf(f, ",\"layout_src\":\"%s\"", !demo_on() ? "" : s_laySrc == WIKISTAGE_LAYOUT_MOD ? "mod"

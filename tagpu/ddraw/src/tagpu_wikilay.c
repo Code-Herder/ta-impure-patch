@@ -923,11 +923,10 @@ static void about_panel(C* c, R box)
    shrinks (flex 1 1 0): it takes the row's free space and clips its line to it, so every control
    keeps its size and place whatever the title. `row_cut` says the fixed part did not fit.
 
-   ABOUT AND THE DRAWER ARE THE PAGE'S ONLY HOPF_TOP OPS, so they are a layer of their own, for the
-   wiki's pass to draw after the stage and the stage's HUD, which they lie over, and they are
-   built last, so the hit map (topmost first) holds their controls before the stage's. The wiki's
-   pass in tagpu_vk_hud.c draws the page's base layer only, so until it draws the top layer after
-   the stage, neither shows in the game. At most one is built: About when both are set. */
+   ABOUT AND THE DRAWER ARE THE PAGE'S ONLY HOPF_TOP OPS, so they are a layer of their own, which
+   the wiki's pass in tagpu_vk_hud.c draws last, after the stage and the stage's HUD that they lie
+   over, and which the hit map (tagpu_wikistate.c) puts before every other control. At most one is
+   built: About when both are set. */
 static void theatre(C* c, R body)
 {
     const WG* g = &c->l->g;

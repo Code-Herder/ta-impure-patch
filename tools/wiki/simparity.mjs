@@ -7,6 +7,7 @@
      --shard K/N (K from 1) plays only every Nth of the demos' contexts, from the Kth, and shard 1 alone the rule, refusal, data and malformed
      cases: N processes, each building its own C side, check together what one does alone
    usage: node tools/wiki/simparity.mjs --hash [--layout FILE|null] [--pack DIR] [--side N] [--iface 0|1] [--scripts]
+                                            [--frame ENTRY/DEMO@TICK[,...]]
      prints `<entry>/<demo> <hash>` for every demo the tree names: sim.js's state hash on its last tick, 16 hex digits
      (a game entry's demo: replay.js's replay played to its end, and the replay's hash, tagpu_wikireplay_hash's), the number
      the DLL's tagpu_wikisim_hash must give for the same demo played to its end with the same sidebar layout (by
@@ -69,6 +70,7 @@ import { cobHost, scripts, sounds, soundSource } from './cobhost.mjs';
 const require = createRequire(import.meta.url);
 const WikiSim = require('./mockup/sim.js');
 const WikiReplay = require('./mockup/replay.js');
+const WikiFrame = require('./mockup/frame.js');
 const WikiText = require('./mockup/text.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
 const DDRAW = path.join(ROOT, 'tagpu/ddraw');
@@ -293,6 +295,11 @@ if (process.argv.includes('--hash')) {
   const ctx = { side, casting: pack ? pack.casting[side] ?? null : null, iface, cob, snd, rival };
   const tree = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/tree.json'), 'utf8'));
   const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
+  /* --frame: a game entry's demo ticks at which its replay's hash and frame record are printed as well, `frame
+     ENTRY/DEMO@TICK HASH RECORD`, the record frame.js's for the viewer's script (tools/wiki_regression.py watch (v2)
+     compares the game's dump with it) */
+  const frames = (arg('--frame') || '').split(',').filter(Boolean).map(f => /^(\S+?\/\S+?)@(\d+)$/.exec(f))
+    .filter(Boolean).map(m => [m[1], Number(m[2])]);
   for (const id of new Set(tree.tree.flatMap(leaves))) {
     const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
     for (const demo of entry.demos) {
@@ -300,6 +307,12 @@ if (process.argv.includes('--hash')) {
       if (entry.frame === 'game') {
         let R;
         try { R = WikiReplay.play(entry, demo, layout, ctx); } catch (e) { console.log(`${id}/${demo.id} refused ${e.message}`); continue; }
+        const at = frames.filter(([k]) => k === `${id}/${demo.id}`).map(([, t]) => t).sort((a, b) => a - b);
+        for (const t of at) {
+          while (!R.view().done && R.view().tick < t) R.step();
+          const rec = WikiFrame.record(R.view(), R.game ? R.game.view() : null, side, false, null);
+          console.log(`frame ${id}/${demo.id}@${R.view().tick} ${replayHash(R)} ${JSON.stringify(rec)}`);
+        }
         while (!R.view().done) R.step();
         console.log(`${id}/${demo.id} ${replayHash(R)}`);
         R.free();

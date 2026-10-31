@@ -4,6 +4,10 @@
    usage: node tools/wiki/barcheck.mjs [--js] [--pack DIR]
      exit 0 when every check holds, 1 when one fails, 2 when it cannot run; --js runs the JavaScript halves alone
      (the capture and the reader), building nothing
+   usage: node tools/wiki/barcheck.mjs --compose DIR SIDE COLOUR WG HG OUT
+     bar.js's bars of pack DIR's layout side SIDE with badge colour COLOUR in a frame WG x HG, the numbers all 0 (the
+     viewer's record, as the stage draws them): OUT gets the RGBA, BAR_W x BAR_H x 4 bytes, and the bars' width is
+     printed, or `none` when bar.js composes nothing (tools/wiki_regression.py mods (w6) reads both)
 
    THE CAPTURE. research/notes/assets/hud-art/backdrop.png is a 1280 x 720 replay frame of our renderer at full map:
    the viewer's record, ARM, colour 4, every number 0 and both storages 0 (MEASURED: the badge matches colour 4's
@@ -96,6 +100,14 @@ function readPack(dir) {
   const fonts = {};
   for (const b of Array.isArray(A.bar) ? A.bar : []) if (b && typeof b.font === 'string' && !b.font.includes('..')) fonts[b.font] = bin(b.font);
   return { json, ...WikiSide.read(json, bin(A.sheet && A.sheet.file), bin(A.palette), bin(A.minimap && A.minimap.seen), bin(A.greyed), fonts) };
+}
+if (process.argv[2] === '--compose') {
+  const [dir, side, colour, Wg, Hg, out] = process.argv.slice(3);
+  const p = readPack(dir), c = p.art ? WikiBar.compose(p.art, Number(side), Number(colour), Number(Wg), Number(Hg)) : null;
+  if (!c) { console.log('none'); process.exit(0); }
+  fs.writeFileSync(out, WikiBar.rgba(p.art, c));
+  console.log(c.w);
+  process.exit(0);
 }
 
 /* ---- the capture ---- */
