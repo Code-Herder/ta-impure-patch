@@ -418,9 +418,12 @@ const stage = $('#stage'), stageTop = $('#stagetop'), stageHud = $('#stagehud');
 let FIT = null;                       // the last fit: canvas pixels a world unit, and the map's offset
 let overStage = false;                // the player's pointer is over the stage's canvas
 function sizeStage() {
-  const r = stage.getBoundingClientRect();
+  const r = stage.getBoundingClientRect(), f = frame.getBoundingClientRect();
   if (!r.width || !r.height) return;                     // the window is closed: keep the last size
-  const w = Math.max(1, Math.round(r.width * G.k)), h = Math.max(1, Math.round(r.height * G.k));
+  // the device pixels the game's stage covers (tagpu_wikistage_canvas): each edge snapped from the frame's corner, so
+  // the size is the snapped right edge less the snapped left one, not the width rounded
+  const snap = v => Math.floor(v + 0.5 + 1 / 64), x0 = (r.left - f.left) * G.k, y0 = (r.top - f.top) * G.k;
+  const w = Math.max(1, snap(x0 + r.width * G.k) - snap(x0)), h = Math.max(1, snap(y0 + r.height * G.k) - snap(y0));
   for (const c of [stage, stageTop]) if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
 }
 new ResizeObserver(sizeStage).observe($('#sbox'));
@@ -557,7 +560,7 @@ function drawReplay() {
     }
   }
   FR.rec = rec;
-  FR.hud = { fx, fy, hpx, Wg, Hg, dlg };
+  FR.hud = { fx, fy, hpx, Wg, Hg, dlg, cursor };
   const r = window.WikiGfx ? WikiGfx.frame(stageId(), fv, FR.tick, stageDir(), FR.poses) : null;
   IMG = r && { complete: r.complete, ground: r.ground, resolved: [...r.resolved], refused: r.refused };
   const image = r && r.complete ? {
@@ -568,6 +571,7 @@ function drawReplay() {
     side: { layout: simLayout, art: sideArt(fv, simLayout) },
     frame: { bar: barArt(side, rec.colour, Wg, Hg), button: LAY.button, top: stageTop.getContext('2d'),
       question: rec.question ? dlg : null, held: PRESS.held, cursor } });
+  FR.hud.emblems = FIT ? FIT.emblems : null;
   stage.classList.remove('try');
   const off = locked(entry()) || !!(FR.gv && FR.gv.locked);
   for (const b of ['#badge', '#t-badge']) if ($(b).hidden === off) $(b).hidden = !off;
@@ -872,7 +876,7 @@ Promise.all([load(), loadFixtures()]).then(() => {
 requestAnimationFrame(loop);
 // the page's state, its running simulation and the sidebar layout it runs on, for scripted checks of the mockup
 // and a frame:game entry's replay, its frame record, and the frame as drawn: its corner and the stage HUD's unit in canvas
-// pixels, its size in game pixels and Leave's question's rects
+// pixels, its size in game pixels, Leave's question's rects, the viewer's cursor and the emblems' boxes, in canvas pixels
 window.WikiPage = { state: S, sim: () => sim, replay: () => rep, frame: () => FR && FR.rec, frameDrawn: () => FR && FR.hud,
   stageId, image: () => IMG, layout: () => simLayout, context: () => simCtx };
 })();

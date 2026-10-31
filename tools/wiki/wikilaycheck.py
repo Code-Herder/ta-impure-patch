@@ -55,13 +55,16 @@ SRC = ROOT / "tagpu" / "ddraw" / "src"
 TOL_CSS = 0.07
 # a thumb is painted on whole pixels: the DLL's and Chrome's may round its edge apart by one
 TOL_THUMB_PX = 1.0
+# the stage HUD's cursor is a point in doubles on both sides
+TOL_CURSOR_PX = 1e-6
 
 # (name, resolution, the mockup's URL switches, what is done to the page before it is read):
 # fold -- category rows clicked, by their path in the tree; speed -- 1x or 2x pressed; held -- a
 # control held down; tick -- the demo paused and stepped to that tick, so its caption and keys
 # show; scroll -- each panel's scroll, in pixels, or "max" or "half" of its limit; try -- Try it
 # yourself pressed; about, drawer -- the theatre's About or its Entries drawer opened (#c-about,
-# #c-drawer clicked)
+# #c-drawer clicked); question -- a game entry's replay paused at the first tick its Leave question
+# is open
 CASES = [
     ("1080-stock-quickbuild", (1920, 1080), "mod=stock&entry=quickbuild", {}),
     ("1080-esc-quickbuild-locked", (1920, 1080), "mod=escalation&entry=quickbuild", {"tick": 75}),
@@ -81,18 +84,17 @@ CASES = [
     ("1024-stock-quickbuild-try", (1024, 768), "mod=stock&entry=quickbuild", {"try": True}),
     # Interface Type 0: the button words of the titles, the paragraphs and the caption are the left-click ones
     ("1080-stock-quickbuild-iface0", (1920, 1080), "mod=stock&entry=quickbuild&iface=0", {"tick": 75}),
-    # the theatre, the page of an entry with "frame": "game", forced on the tree's entries by the
-    # mockup's `theatre` switch, which wikilaycheck.c mirrors by making the open entry a game entry:
-    # its row of numbered tabs, About over the stage's right with the entry's text, the Entries
-    # drawer with the tree
-    ("1024-stock-theatre", (1024, 768), "mod=stock&entry=quickbuild&theatre", {"tick": 60}),
-    ("1080-esc-theatre-about-scrolled", (1920, 1080), "mod=escalation&entry=quickbuild&demo=4&theatre",
+    # the theatre, the page of a game entry, Watching: its row of numbered tabs, About over the
+    # stage's right with the entry's text, the Entries drawer with the tree, and on its stage the
+    # game frame with its HUD, the viewer's cursor and Leave's question (the stage HUD, paired
+    # apart: STAGEHUD below)
+    ("1024-stock-watching", (1024, 768), "mod=stock&entry=watching", {"tick": 60}),
+    ("1080-esc-watching-about-scrolled", (1920, 1080), "mod=escalation&entry=watching&demo=4",
      {"about": True, "scroll": {"text": "max"}}),
-    ("1024-stock-theatre-about", (1024, 768), "mod=stock&entry=buildshapes&theatre", {"about": True}),
-    ("720-tazero-theatre-drawer", (1280, 720), "mod=tazero&entry=buildshapes&demo=7&theatre",
+    ("720-tazero-watching-drawer", (1280, 720), "mod=tazero&entry=watching&demo=7",
      {"drawer": True, "scroll": {"tree": "half"}}),
-    ("4k-stock-theatre-try-held", (3840, 2160), "mod=stock&entry=reclaim&demo=2&theatre", {"held": "c-try", "speed": 2}),
-    ("3440-mayhem-theatre-about", (3440, 1440), "mod=mayhem&entry=reclaim&demo=7&theatre", {"about": True, "tick": 90}),
+    ("4k-stock-watching-try-held", (3840, 2160), "mod=stock&entry=watching&demo=2", {"held": "c-try", "speed": 2}),
+    ("3440-mayhem-watching-question", (3440, 1440), "mod=mayhem&entry=watching&demo=7", {"question": True}),
 ]
 
 KEYNAME = {"Shift": "shift", "Alt": "alt", "Ctrl": "ctrl", "Z": "z", "X": "x", "E": "e", "Left-click": "lmb", "Right-click": "rmb"}
@@ -112,13 +114,14 @@ COLLECT = r"""async () => {
   for (const p of A.fold || []) $(`[data-fold="${p}"]`).click();
   if (A.speed) $(A.speed === 2 ? '#c-x2' : '#c-x1').click();
   if (A.try) { $('#c-try').click(); await raf(); await raf(); }
-  if (A.tick != null) {
+  if (A.tick != null || A.question) {
     // the demo afresh and paused in one task, whatever the load left it at: past the tick, or done (play
-    // on a done demo restarts it playing), and no frame runs between the two
+    // on a done demo restarts it playing), and no frame runs between the two; a game entry steps its replay
     $('#c-replay').click();
     if (S.playing) $('#c-play').click();
-    const sim = WikiPage.sim();
-    while (sim && sim.tick < A.tick && !sim.done) sim.step();
+    const sim = WikiPage.sim(), rp = WikiPage.replay();
+    if (rp) while (!rp.view().done && (A.question ? !rp.view().question : rp.view().tick < A.tick)) rp.step();
+    else while (sim && sim.tick < A.tick && !sim.done) sim.step();
   }
   if (A.about) $('#c-about').click();
   if (A.drawer) $('#c-drawer').click();
@@ -146,7 +149,7 @@ COLLECT = r"""async () => {
   const els = [];
   const shown = e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden' && !e.closest('[hidden]');
   for (const e of document.querySelectorAll('#frame [data-part]')) {
-    if (!shown(e) || !e._pk) continue;
+    if (!shown(e) || !e._pk || e.closest('#stagehud')) continue;
     const r = B(e), k = clipOf(e);
     if (k && !overlapY(r, k)) continue;
     els.push({ kind: 'part', part: e._pk.split('|')[1], r, top: top(e) });
@@ -178,7 +181,8 @@ COLLECT = r"""async () => {
   const walker = document.createTreeWalker($('#frame'), NodeFilter.SHOW_TEXT);
   for (let t = walker.nextNode(); t; t = walker.nextNode()) {
     const e = t.parentElement;
-    if (!e.closest('#win, #b-wiki') || e.closest('.gl') || !shown(e) || !t.data.trim()) continue;
+    // the stage HUD is the game's replay HUD over the stage, paired apart (STAGEHUD)
+    if (!e.closest('#win, #b-wiki') || e.closest('.gl, #stagehud') || !shown(e) || !t.data.trim()) continue;
     const cs = getComputedStyle(e);
     ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
     const lines = [], rg = document.createRange();
@@ -221,8 +225,31 @@ COLLECT = r"""async () => {
     scroll[k] = { top: e.scrollTop / u, max: (e.scrollHeight - e.clientHeight) / u, bar: e.offsetWidth - e.clientWidth,
                   track: [...client(e).slice(0, 2), (e.offsetWidth - e.clientWidth) / u, e.clientHeight / u],
                   page: [e.getBoundingClientRect().right - (e.offsetWidth - e.clientWidth), e.getBoundingClientRect().top, e.clientHeight] }; }
+  /* THE STAGE HUD of a game entry: the frame record, the map and the column the frame is made of, and the frame as
+     drawn -- its corner, each control's device box (hud.js data-dev, from #stagehud's corner), the cursor, the emblems
+     and Leave's question -- in page device pixels (one CSS pixel a device pixel) */
+  let stagehud = null;
+  const FD = WikiPage.frameDrawn(), rec = WikiPage.frame(), rp = WikiPage.replay();
+  if (FD && rec && rp && rp.game) {
+    // the canvas's corner on the device pixel the game's stage starts on (tagpu_wikistage_canvas): the browser places
+    // it at a fraction, which the game's grid does not have
+    const sr = $('#stage').getBoundingClientRect(), snap = v => Math.floor(v + 0.5 + 1 / 64);
+    const cx = snap(sr.left - f.left), cy = snap(sr.top - f.top);
+    const gm = rp.game.view().map, sd = WikiFrame.idleSide(WikiPage.layout(), (WikiPage.context() || {}).side || 0);
+    const at = b => [cx + b.x, cy + b.y, b.w, b.h];
+    stagehud = { rec, map: [gm.w, gm.h], side_h: sd ? sd.h : 0, Wg: FD.Wg, Hg: FD.Hg, hpx: FD.hpx,
+      canvas: [cx, cy, $('#stage').width, $('#stage').height], corner: [cx + FD.fx, cy + FD.fy],
+      // each enabled control by laycheck.py's key, the game's HOP_HOT name: its act and its value, team, seat or fork
+      hot: [...$('#stagehud').querySelectorAll('[data-act], [data-track]')].filter(e => e.dataset.dev && !e.classList.contains('off') && shown(e))
+        .map(e => ['track' in e.dataset ? 'track' : e.dataset.act + (e.dataset.val != null ? ':' + e.dataset.val : e.dataset.team != null
+          ? ':' + e.dataset.team : e.dataset.seat != null ? ':' + e.dataset.seat : e.dataset.fork != null ? ':' + e.dataset.fork : ''),
+          ...e.dataset.dev.split(' ').map((n, i) => +n + (i % 2 ? cy + FD.fy : cx + FD.fx))]),
+      cursor: FD.cursor ? [cx + FD.cursor.x, cy + FD.cursor.y] : null,
+      emblems: (FD.emblems || []).map(at),
+      dialog: rec.question ? Object.fromEntries(['panel', 'title', 'yes', 'no'].map(k => [k, at(FD.dlg[k])])) : null };
+  }
   const sim = WikiPage.sim();
-  const state = { W: f.width, H: f.height, bar: 32, rewind: S.rewind, config: $('#b-gear').matches('.pressed, .on') ? 2 : 1, open: S.open, entry: leaves.indexOf(S.entry), demo: S.demo,
+  const state = { stagehud, res: S.res, W: f.width, H: f.height, bar: 32, rewind: S.rewind, config: $('#b-gear').matches('.pressed, .on') ? 2 : 1, open: S.open, entry: leaves.indexOf(S.entry), demo: S.demo,
     fold: [...S.fold].map(p => nodes.findIndex(n => n.p === p)), scroll: ['tree', 'demos', 'text'].map(k => scroll[k].top),
     playing: S.playing, done: !!(sim && sim.done && !S.try), speed: S.speed, try: S.try, mod: S.mod,
     sim_locked: !!(sim && sim.view().locked), held: A.held ? A.held.replace('c-', '') : '',
@@ -395,6 +422,52 @@ def thumbs(run, tmp, dom):
     return out
 
 
+def stage_hud(c, d):
+    """STAGEHUD: a game entry's stage HUD, the game's (wikilaycheck.c stagehud) against the mockup's, on the mockup's
+    own frame record. The frame's size, its canvas and its corner, every control's device box by its key, the emblems
+    and Leave's question are drawn on whole device pixels and must be equal; the viewer's cursor is a point, within
+    TOL_CURSOR_PX. Returns the disagreements, 0 for a page with no game entry's stage on either side."""
+    if c is None and d is None:
+        return 0
+    if c is None or d is None:
+        print(f"  stagehud only the {'DLL' if d is None else 'mockup'} draws one <-- DIFFERS")
+        return 1
+    bad, notes = 0, []
+
+    def same(what, a, b, tol=0.0):
+        nonlocal bad
+        if a is None and b is None:
+            return
+        if a is None or b is None or len(a) != len(b) or any(abs(x - y) > tol for x, y in zip(a, b)):
+            bad += 1
+            notes.append(f"{what}: DLL {a} mockup {b}")
+    same("the frame Wg x Hg", [c["Wg"], c["Hg"]], [d["Wg"], d["Hg"]])
+    same("the canvas", c["canvas"], [round(v) for v in d["canvas"]])
+    same("the frame's corner", c["corner"], [round(v) for v in d["corner"]])
+    keys = sorted({h[0] for h in c["hot"]} | {h[0] for h in d["hot"]})
+    paired = 0
+    for k in keys:
+        a = sorted(h[1:] for h in c["hot"] if h[0] == k)
+        b = sorted([round(v) for v in h[1:]] for h in d["hot"] if h[0] == k)
+        paired += min(len(a), len(b))
+        same(f"the control {k!r}", [v for r in a for v in r], [v for r in b for v in r])
+    same("the cursor", c.get("cursor"), d.get("cursor"), TOL_CURSOR_PX)
+    same("the emblems", [v for r in c["emblems"] for v in r], [round(v) for r in d["emblems"] for v in r])
+    dc, dd = c.get("dialog"), d.get("dialog")
+    if (dc is None) != (dd is None):
+        bad += 1
+        notes.append(f"Leave's question: {'DLL' if dc else 'mockup'} alone")
+    elif dc:
+        for k in ("panel", "title", "yes", "no"):
+            same(f"the question's {k}", dc[k], [round(v) for v in dd[k]])
+    flag = " <-- DIFFERS" if bad else ""
+    print(f"  stagehud frame {c['Wg']} x {c['Hg']}, {paired} controls paired, cursor {'on' if c.get('cursor') else 'off'}, "
+          f"{'question open' if dc else 'no question'}{flag}")
+    for n in notes[:8]:
+        print(f"        {n}")
+    return bad
+
+
 def main():
     keep = None
     if len(sys.argv) == 3 and sys.argv[1] == "--keep":
@@ -406,7 +479,9 @@ def main():
     cc = subprocess.run(["gcc", "-O1", "-std=c99", "-Wall", f"-I{SRC}", f"-I{SRC.parent / 'inc'}",
                          str(ROOT / "tools/wiki/wikilaycheck.c"), *(str(SRC / f) for f in (
                              "tagpu_wikilay.c", "tagpu_wikitext.c", "tagpu_hudlay.c", "tagpu_hudtext.c", "tagpu_wikidata.c", "tagpu_json.c",
-                             "tagpu_pak.c", "lodepng.c")), "-lm", "-o", str(exe)], capture_output=True, text=True)
+                             "tagpu_pak.c", "lodepng.c", "tagpu_wikiframe.c", "tagpu_wikistage.c", "tagpu_wikisim.c", "tagpu_placegeo.c",
+                             "tagpu_sweepgeo.c", "tagpu_wikicob.c", "tagpu_cobvm.c", "tagpu_cob_safe.c")), "-lm", "-o", str(exe)],
+                        capture_output=True, text=True)
     if cc.returncode:
         sys.exit("wikilaycheck: the native build failed\n" + cc.stderr)
     pk = subprocess.run([sys.executable, str(ROOT / "tools/hudpak.py"), "--set", "wiki", str(ROOT / "art/wiki"), str(pak)],
@@ -456,6 +531,9 @@ def main():
             if not v:
                 sys.exit(f"wikilaycheck: the mockup gave nothing for {name}\n{r.stdout[-2000:]}\n{r.stderr}")
             dom = json.loads(v)
+            # a screen the mockup does not list falls back to its default, which the frame's size alone can miss
+            if dom["state"]["res"] != f"{gw}x{gh}":
+                sys.exit(f"wikilaycheck: {name}: the mockup shows {dom['state']['res']}, not the case's {gw}x{gh}: it lists no such screen")
             if (dom["state"]["W"], dom["state"]["H"]) != (gw, gh):
                 sys.exit(f"wikilaycheck: {name}: the frame is {dom['state']['W']} x {dom['state']['H']}, not the screen's {gw} x {gh}")
             dom["state"]["keys"] = [KEYNAME[k] for k in dom["state"]["keys"]]
@@ -533,6 +611,7 @@ def main():
                 for c, d in sorted(pairs, key=lambda p: -max(abs(a - b) for a, b in zip(p[0].get('cmp', p[0]['r']), p[1].get('cmp', p[1]['r']))))[:3]:
                     if max(abs(a - b) for a, b in zip(c.get("cmp", c["r"]), d.get("cmp", d["r"]))) > TOL:
                         print(f"        {keys[k](c)!r}: DLL {[round(x, 3) for x in c.get('cmp', c['r'])]} mockup {[round(x, 3) for x in d.get('cmp', d['r'])]}")
+            bad += stage_hud(ops.get("stagehud"), dom["state"].get("stagehud"))
             # each panel's scroll as drawn and its limit
             sc = []
             for i, pn in enumerate(("tree", "demos", "text")):

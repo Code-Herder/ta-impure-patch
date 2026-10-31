@@ -124,7 +124,8 @@ const WikiFrame = (() => {
 
   /* THE STAGE HUD'S STATE, hud.js's (tools/hudart/mockup/index.html state()) from record `rec` in a frame Wg x Hg: a
      screen of the frame's own size at 100 % (Q3), the engine frame the column and both bars, every switch on and
-     nothing folded as a fresh Watch, each seat a team of one, no sight, no follow, no forks. The stats window stays
+     nothing folded as a fresh Watch, each seat a team of one, no sight, no follow, no forks (an empty list: the game's
+     HUD always draws the Forks bay and Take over, hud.js only for a state with a list). The stats window stays
      closed: the DLL's pass has one chart image, the replay HUD's, and the stage must have its own before it opens one.
      `art` the side pack's art for the seats' colours, or null. */
   function hudState(rec, Wg, Hg, art) {
@@ -137,7 +138,7 @@ const WikiFrame = (() => {
       teams: rec.seat.map((_, i) => [i]), folded: [], scroll: 0, sight: -1, follow: -1,
       markers: rec.mark.map(m => ({ t: m.t / TICK, kind: MK_NAMES[m.kind], seat: m.seat })),
       toggles: { cursors: true, clicks: true, selections: true, chat: true, stats: false },
-      toast: rec.toast, stats: { open: false }, ends: T, len: T, fillTo: T,
+      toast: rec.toast, stats: { open: false }, ends: T, len: T, fillTo: T, forks: [],
     };
   }
 

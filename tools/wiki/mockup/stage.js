@@ -245,8 +245,8 @@ const WikiStage = (() => {
     };
     // the game's left sidebar, before the map: the cursor and the overlays are drawn over it
     const F = v.frame ? o.frame || {} : null;
-    if (F) drawFrame(g, v, F, o, { X, Z, s, U, C, label, shade, mark });
-    else if (v.side) { mark('side'); drawSide(g, v, o.side || {}, { X, Z, s, U, label, shade, dz: 0 }); }
+    const emblems = F ? drawFrame(g, v, F, o, { X, Z, s, U, C, label, shade, mark }) : null;
+    if (!F && v.side) { mark('side'); drawSide(g, v, o.side || {}, { X, Z, s, U, label, shade, dz: 0 }); }
     // THE VIEWPORT CLIP, the frame's: the world is drawn under the bars and the column, so none of it lands on them
     if (F) {
       const vp = { x0: snap(X(0)), y0: snap(Z(0)), x1: snap(X(mw * cell)), y1: snap(Z(C.h - 2 * FRAME_BAR)) };
@@ -395,7 +395,7 @@ const WikiStage = (() => {
     if (v.reclaim) { mark('over'); drawSweep(g, v, { X, Z, cell, cp, U, text, measure }); }
     if (F) {
       g.restore();
-      return { s, ox, oz, cell, mw, mh, x0: C.x0, z0: C.z0, cw: C.w, ch: C.h, cursor: drawTop(F, o, W, H, U) };
+      return { s, ox, oz, cell, mw, mh, x0: C.x0, z0: C.z0, cw: C.w, ch: C.h, emblems, cursor: drawTop(F, o, W, H, U) };
     }
     // the cursor, the view's, at its point (cursorAt)
     const cur = o.cursor !== false && pt(v.cursor);
@@ -457,7 +457,8 @@ const WikiStage = (() => {
      whole and nearest (bar.js), or two whitebox strips without one; then Impure's emblems in the top bar's right end,
      the wiki emblem in the rewind button's slot (a replay has no rewind) and the sprocket, up and inert, at
      layout.json's `button` place. Every part's edges are snapped to device pixels. k carries draw()'s X, Z, s, U, the
-     content rect C, label, shade and mark. */
+     content rect C, label, shade and mark. Returns the emblems' boxes in canvas pixels, the wiki's then the sprocket's
+     (the frame's emblems, wikilaycheck.py pairs them with the game's), or null without a `button` place. */
   function drawFrame(g, v, F, o, k) {
     const { X, Z, s, C, mark } = k, sbox = (x, z, w, h) => {
       const x0 = snap(X(x)), y0 = snap(Z(z));
@@ -472,14 +473,14 @@ const WikiStage = (() => {
     const bars = [sbox(0, -FRAME_BAR, bw, FRAME_BAR), sbox(0, Hg - 2 * FRAME_BAR, bw, FRAME_BAR)];
     bars.forEach((b, part) => { if (F.bar) F.bar.draw(g, part, bw, b); else solid(b, SIDE_WB.column); });
     const B = F.button;
-    if (!B) return;
+    if (!B) return null;
     const at = (r, name) => {
       const b = sbox(C.w - r - B.side - SIDE_W, B.top - FRAME_BAR, B.side, B.side), ic = o.icons && o.icons[name];
       if (ic && ic.img) g.drawImage(ic.img, b.x, b.y, b.w, b.h);
       else { solid(b, SIDE_WB.button); g.lineWidth = s; g.strokeStyle = SIDE_WB.edge; g.strokeRect(b.x + s / 2, b.y + s / 2, b.w - s, b.h - s); }
+      return b;
     };
-    at(B.right[1], EMBLEM.wiki);
-    at(B.config, EMBLEM.config);
+    return [at(B.right[1], EMBLEM.wiki), at(B.config, EMBLEM.config)];
   }
 
   /* THE TOP RANGE, on its own canvas over the stage HUD (o.frame.top): Leave's question while it is open, a whitebox at

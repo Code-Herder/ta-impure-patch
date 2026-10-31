@@ -916,6 +916,12 @@ static void fbox(const WIKISTAGEFIT* f, double x, double z, double w, double h, 
     b[3] = snapd(f->oz + (z + h) * f->s) - b[1];
 }
 
+void tagpu_wikistage_emblem(const WIKISTAGEFIT* f, const WIKISTAGEFRAME* fr, int part, double* b)
+{
+    const double r = part ? fr->btn_config : fr->btn_right;
+    fbox(f, f->cw - r - fr->btn_side - WIKI_SIDE_W, fr->btn_top - WIKIFRAME_BAR, fr->btn_side, fr->btn_side, b);
+}
+
 /* the parts under the world: the screen's black, the column from frame row 0 (dz -32), the top
    bar at frame (128, 0) and the bottom bar at (128, Hg - 32), each Wg - 128 by 32 -- the composed
    picture's part 0 and 1 drawn whole and nearest (HOP_BAR), or two whitebox strips without one --
@@ -945,8 +951,7 @@ static void frame_parts(B* c, const WIKISTAGEVIEW* v, const WIKISTAGEART* art, c
     }
     if (!fr || fr->btn_side <= 0) return;
     for (part = 0; part < 2; part++) {
-        const double r = part ? fr->btn_config : fr->btn_right;
-        fbox(f, f->cw - r - fr->btn_side - WIKI_SIDE_W, fr->btn_top - WIKIFRAME_BAR, fr->btn_side, fr->btn_side, b);
+        tagpu_wikistage_emblem(f, fr, part, b);
         if (art->emblem[part] >= 0) {
             HUDOP* p = op(c, HOP_PART, b[0], b[1], b[2], b[3]);
             if (p) p->part = art->emblem[part];

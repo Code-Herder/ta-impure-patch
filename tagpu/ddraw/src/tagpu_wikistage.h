@@ -375,6 +375,10 @@ typedef struct {
                                            the sprocket's (`config`)                       */
 } WIKISTAGEFRAME;
 
+/* Emblem `part` (0 the wiki's, 1 the sprocket) of a frame fitted as `f`, at `fr`'s button place,
+   as the frame draws it: b = x, y, w, h in canvas device pixels, each edge snapped. */
+void tagpu_wikistage_emblem(const WIKISTAGEFIT* f, const WIKISTAGEFRAME* fr, int part, double* b);
+
 /* The stage's ops for `v` into `out`, in stage.js's paint order, on the canvas of `stage` at `u`:
    with the sidebar, its column (WIKISTAGE_IN_SIDE) after the background and before the map.
    A view with no map draws the stage's ground and `msg` (NULL for none). A frame view (v->frame)
