@@ -60,7 +60,8 @@ TOL_THUMB_PX = 1.0
 # fold -- category rows clicked, by their path in the tree; speed -- 1x or 2x pressed; held -- a
 # control held down; tick -- the demo paused and stepped to that tick, so its caption and keys
 # show; scroll -- each panel's scroll, in pixels, or "max" or "half" of its limit; try -- Try it
-# yourself pressed
+# yourself pressed; about, drawer -- the theatre's About or its Entries drawer opened (#c-about,
+# #c-drawer clicked)
 CASES = [
     ("1080-stock-quickbuild", (1920, 1080), "mod=stock&entry=quickbuild", {}),
     ("1080-esc-quickbuild-locked", (1920, 1080), "mod=escalation&entry=quickbuild", {"tick": 75}),
@@ -80,6 +81,18 @@ CASES = [
     ("1024-stock-quickbuild-try", (1024, 768), "mod=stock&entry=quickbuild", {"try": True}),
     # Interface Type 0: the button words of the titles, the paragraphs and the caption are the left-click ones
     ("1080-stock-quickbuild-iface0", (1920, 1080), "mod=stock&entry=quickbuild&iface=0", {"tick": 75}),
+    # the theatre, the page of an entry with "frame": "game", forced on the tree's entries by the
+    # mockup's `theatre` switch, which wikilaycheck.c mirrors by making the open entry a game entry:
+    # its row of numbered tabs, About over the stage's right with the entry's text, the Entries
+    # drawer with the tree
+    ("1024-stock-theatre", (1024, 768), "mod=stock&entry=quickbuild&theatre", {"tick": 60}),
+    ("1080-esc-theatre-about-scrolled", (1920, 1080), "mod=escalation&entry=quickbuild&demo=4&theatre",
+     {"about": True, "scroll": {"text": "max"}}),
+    ("1024-stock-theatre-about", (1024, 768), "mod=stock&entry=buildshapes&theatre", {"about": True}),
+    ("720-tazero-theatre-drawer", (1280, 720), "mod=tazero&entry=buildshapes&demo=7&theatre",
+     {"drawer": True, "scroll": {"tree": "half"}}),
+    ("4k-stock-theatre-try-held", (3840, 2160), "mod=stock&entry=reclaim&demo=2&theatre", {"held": "c-try", "speed": 2}),
+    ("3440-mayhem-theatre-about", (3440, 1440), "mod=mayhem&entry=reclaim&demo=7&theatre", {"about": True, "tick": 90}),
 ]
 
 KEYNAME = {"Shift": "shift", "Alt": "alt", "Ctrl": "ctrl", "Z": "z", "X": "x", "E": "e", "Left-click": "lmb", "Right-click": "rmb"}
@@ -107,6 +120,8 @@ COLLECT = r"""async () => {
     const sim = WikiPage.sim();
     while (sim && sim.tick < A.tick && !sim.done) sim.step();
   }
+  if (A.about) $('#c-about').click();
+  if (A.drawer) $('#c-drawer').click();
   if (A.held) $('#' + A.held).dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
   await raf(); await raf();
   const SCR = { tree: '#tree', demos: '#demos', text: '#text' };
@@ -125,33 +140,37 @@ COLLECT = r"""async () => {
   const inter = (a, k) => { const x0 = Math.max(a[0], k[0]), y0 = Math.max(a[1], k[1]), x1 = Math.min(a[0] + a[2], k[0] + k[2]), y1 = Math.min(a[1] + a[3], k[1] + k[3]);
     return [x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0)]; };
   // the box an element is clipped to: its scroller's client box, or the strip that hides its overflow
-  const clipOf = e => { const s = e.closest('.scr'); if (s) return client(s); const k = e.closest('#caption, #keys, .wt'); return k ? B(k) : null; };
+  const clipOf = e => { const s = e.closest('.scr'); if (s) return client(s); const k = e.closest('#caption, #keys, .wt, #t-title'); return k ? B(k) : null; };
+  // the theatre's About and drawer are the page's top layer (HOPF_TOP), every element inside them
+  const top = e => !!e.closest('#about, #drawer');
   const els = [];
   const shown = e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden' && !e.closest('[hidden]');
   for (const e of document.querySelectorAll('#frame [data-part]')) {
     if (!shown(e) || !e._pk) continue;
     const r = B(e), k = clipOf(e);
     if (k && !overlapY(r, k)) continue;
-    els.push({ kind: 'part', part: e._pk.split('|')[1], r });
+    els.push({ kind: 'part', part: e._pk.split('|')[1], r, top: top(e) });
     const gl = (e.dataset.glyph || '').split(' ').find(q => PARTS.includes(q));
-    if (gl) els.push({ kind: 'part', part: gl, r: [r[0] + r[2] * .2, r[1] + r[3] * .2, r[2] * .6, r[3] * .6] });
+    if (gl) els.push({ kind: 'part', part: gl, r: [r[0] + r[2] * .2, r[1] + r[3] * .2, r[2] * .6, r[3] * .6], top: top(e) });
   }
   const hot = (e, key, box) => { if (!e || !shown(e)) return; let r = box || B(e); const k = clipOf(e); if (k && e.closest('.scr') !== e) r = inter(r, k);
-    if (r[2] > 0 && r[3] > 0) els.push({ kind: 'hot', key, r }); };
+    if (r[2] > 0 && r[3] > 0) els.push({ kind: 'hot', key, r, top: top(e) }); };
   hot($('#b-wiki'), 'wiki'); hot($('#win'), 'window'); hot($('#wx'), 'close');
   for (const [k, sel] of Object.entries(SCR)) hot($(sel), 'scroll:' + k, client($(sel)));
   for (const e of document.querySelectorAll('[data-fold]')) hot(e, 'fold:' + nodes.findIndex(n => n.p === e.dataset.fold));
   for (const e of document.querySelectorAll('[data-entry]')) hot(e, 'entry:' + nodes.findIndex(n => n.entry === e.dataset.entry));
   for (const e of document.querySelectorAll('[data-demo]')) hot(e, 'demo:' + e.dataset.demo);
-  for (const [id, key] of [['c-play', 'play'], ['c-replay', 'replay'], ['c-x1', 'x1'], ['c-x2', 'x2'], ['c-try', 'try']])
+  for (const [id, key] of [['c-play', 'play'], ['c-replay', 'replay'], ['c-x1', 'x1'], ['c-x2', 'x2'], ['c-try', 'try'],
+    ['c-about', 'about'], ['c-drawer', 'drawer']])
     if (!$('#' + id).disabled) hot($('#' + id), key);
   hot($('#stage'), 'stage');
   // the discs: a 1 px border round a fill
-  for (const e of document.querySelectorAll('#win .lock, #badge i')) {
+  for (const e of document.querySelectorAll('#win .lock, #badge i, #t-badge i')) {
     if (!shown(e)) continue;
     const r = B(e), k = clipOf(e), p = 1 / u;
     if (k && !overlapY(r, k)) continue;
-    els.push({ kind: 'dot', rgb: '5a0808', r }, { kind: 'dot', rgb: 'd01818', r: [r[0] + p, r[1] + p, r[2] - 2 * p, r[3] - 2 * p] });
+    els.push({ kind: 'dot', rgb: '5a0808', r, top: top(e) },
+             { kind: 'dot', rgb: 'd01818', r: [r[0] + p, r[1] + p, r[2] - 2 * p, r[3] - 2 * p], top: top(e) });
   }
   // every line of text: its characters grouped by baseline, each character's baseline its box's top plus the
   // ascent of the face it is set in
@@ -180,7 +199,7 @@ COLLECT = r"""async () => {
       const box = [(L.x0 - f.left) / u, (L.top - f.top) / u, (L.x1 - L.x0) / u, (L.bot - L.top) / u];
       if (k && !overlapY(box, k)) continue;
       els.push({ kind: 'text', text: s, r: box, base: (L.base - f.top) / u, size: parseFloat(cs.fontSize) / u,
-                 asc: fm.fontBoundingBoxAscent, desc: fm.fontBoundingBoxDescent, colour: cs.color, shadow: cs.textShadow });
+                 asc: fm.fontBoundingBoxAscent, desc: fm.fontBoundingBoxDescent, colour: cs.color, shadow: cs.textShadow, top: top(e) });
     }
   }
   // the browser's advance of each code point the HUD faces lack, in em, by style
@@ -208,7 +227,8 @@ COLLECT = r"""async () => {
     playing: S.playing, done: !!(sim && sim.done && !S.try), speed: S.speed, try: S.try, mod: S.mod,
     sim_locked: !!(sim && sim.view().locked), held: A.held ? A.held.replace('c-', '') : '',
     caption: $('#caption').textContent, keys: [...document.querySelectorAll('#keys .kc')].map(e => e.textContent), fallback, sizes,
-    iface: S.iface, casting: (WikiPage.context() || {}).casting || null };
+    iface: S.iface, casting: (WikiPage.context() || {}).casting || null,
+    theatre: S.theatre, about: S.about && !!$('#win.theatre'), drawer: S.drawer && !!$('#win.theatre') };
   return JSON.stringify({ state, els, u, scroll, frame: [f.left, f.top] });
 }"""
 
@@ -499,8 +519,12 @@ def main():
                     glyphs |= {c["text"] for c, d in pairs if any(ch in fallback for ch in c["text"])}
                 else:
                     worst = max((max(abs(a - b) for a, b in zip(c["r"], d["r"])) for c, d in pairs), default=0)
-                flag = " <-- DIFFERS" if worst > TOL or oc or od else ""
-                bad += worst > TOL or bool(oc) or bool(od)
+                # the layer: the theatre's About and drawer are the top layer (HOPF_TOP), and nothing else is
+                layer = [(c, d) for c, d in pairs if bool(c.get("top")) != bool(d.get("top"))]
+                if layer:
+                    extra += f", the layer disagrees {len(layer)}"
+                flag = " <-- DIFFERS" if worst > TOL or oc or od or layer else ""
+                bad += worst > TOL or bool(oc) or bool(od) or bool(layer)
                 print(f"  {k:5s} {len(pairs):4d} paired, worst {worst:.4f} units{extra}{flag}")
                 for c in oc[:6]:
                     print(f"        only the DLL:    {keys[k](c)!r} at {[round(x, 2) for x in c['r']]}")

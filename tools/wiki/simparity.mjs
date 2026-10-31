@@ -714,6 +714,10 @@ function gameRefusalCases(game, page) {
   g('frame "page"', 'refused', e => { e.frame = 'page'; });
   g('frame null', 'refused', e => { e.frame = null; });
   g('a pace', 'refused', e => { e.pace = { build: 2 }; });
+  // one numbered tab a demo in the theatre's row: at most THEATRE_TABS (tagpu_wikidata.h WIKI_THEATRE_TABS)
+  const tabs = n => e => { for (let k = 1; k < n; k++) e.demos.push({ ...clone(game.demos[k % game.demos.length]), id: `tab${k}` }); };
+  g(`${WikiSim.THEATRE_TABS} demos`, 'accepted', tabs(WikiSim.THEATRE_TABS));
+  g(`${WikiSim.THEATRE_TABS + 1} demos`, 'refused', tabs(WikiSim.THEATRE_TABS + 1));
   p('a rival unit on a page entry', 'refused', e => { e.units.ARMCK.rival = false; });
   p('a corpse on a page entry', 'refused', e => { e.features = { w: { footprint: [1, 1] } }; e.units.ARMCK.corpse = 'w'; });
   p('seats on a page entry', 'refused', (e, d, sc) => { sc.seats = [{ name: 'A', metal: 1000, energy: 1000 }]; });

@@ -1059,6 +1059,8 @@ int tagpu_wikidata_entry(WIKIENTRY* e, const char* text, size_t len, char* err, 
     if (tj_num(tj_get(root, "format"), 0) != 2) refuse(&r, "is not format 2", NULL);
     else if (c && e->frame != WIKI_FRAME_GAME) refuse(&r, "has a frame other than \"game\"", NULL);
     else if (e->frame == WIKI_FRAME_GAME && tj_get(root, "pace")) refuse(&r, "is a game entry with a pace", NULL);
+    else if (e->frame == WIKI_FRAME_GAME && count(tj_get(root, "demos")) > WIKI_THEATRE_TABS)
+        refuse(&r, "is a game entry with more demos than the theatre's tabs", NULL);
     else if (!strings(&r, tj_get(root, "text"), &e->text, &e->ntext)) {}
     else if (!strings(&r, tj_get(root, "lockedIn"), &e->locked_in, &e->nlocked)) {}
     else if (!defs(&r, e, tj_get(root, "units"))) {}

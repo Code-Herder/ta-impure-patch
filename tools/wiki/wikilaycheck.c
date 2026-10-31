@@ -282,12 +282,19 @@ int main(int argc, char** argv)
     for (e = v ? v->first : NULL; e; e = e->next)
         for (j = 0; j < WIKI_NKEYS; j++)
             if (!strcmp(tagpu_wikidata_key_name(j), tj_str(e, ""))) st->keys |= 1u << j;
+    st->about = tj_is(tj_get(S, "about"), TJ_TRUE);
+    st->drawer = tj_is(tj_get(S, "drawer"), TJ_TRUE);
+    /* the mockup's `theatre` switch forces the theatre on whichever entry is open, so the theatre
+       is checked on the tree's entries whether or not one declares "frame": "game"; the same
+       entry is made a game entry here */
+    if (tj_is(tj_get(S, "theatre"), TJ_TRUE) && st->entry >= 0 && st->entry < d->nentry) d->entry[st->entry].frame = WIKI_FRAME_GAME;
 
     if (!tagpu_wikilay_build(l, d, &f, st, o, &fr, err, sizeof err)) { fprintf(stderr, "wikilaycheck: %s\n", err); return 1; }
     px = st->H / 720.0;
-    printf("\"overflow\":%d,\"frame\":{\"scroll\":[%.4f,%.4f,%.4f],\"max\":[%.4f,%.4f,%.4f],\"stage\":[%.4f,%.4f,%.4f,%.4f]},\"ops\":[\n",
+    printf("\"overflow\":%d,\"frame\":{\"scroll\":[%.4f,%.4f,%.4f],\"max\":[%.4f,%.4f,%.4f],\"stage\":[%.4f,%.4f,%.4f,%.4f],"
+           "\"row_cut\":%d},\"ops\":[\n",
            o->overflow, fr.scroll[0], fr.scroll[1], fr.scroll[2], fr.scroll_max[0], fr.scroll_max[1], fr.scroll_max[2],
-           fr.stage.x, fr.stage.y, fr.stage.w, fr.stage.h);
+           fr.stage.x, fr.stage.y, fr.stage.w, fr.stage.h, fr.row_cut);
     for (i = 0; i < o->n; i++) {
         const HUDOP* p = &o->op[i];
         static const char* kinds[] = { "part", "solid", "dot", "text", "hot", "line", "chart" };
@@ -310,6 +317,7 @@ int main(int argc, char** argv)
             printf(",\"text\":"); json_str(o->text + r->off, r->len);
         }
         if (p->kind == HOP_HOT) { printf(",\"key\":"); json_str(o->text + p->run, (int)strlen(o->text + p->run)); }
+        if (p->flags & HOPF_TOP) printf(",\"top\":1");
         putchar('}');
     }
     printf("\n]}\n");

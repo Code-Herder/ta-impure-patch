@@ -485,7 +485,8 @@ const WikiSim = (() => {
   /* ---- THE GAME ENTRY (research/notes/ingame-wiki-replay-plan.md): an entry whose `frame` is "game" shows a small
      game, and each demo's `game` is its game script, played by a game simulation (WikiSim.game) on game ticks. Its
      data rules, refused here as tagpu_wikidata.c refuses them at load: ----
-     - `frame` absent or "game"; a game entry has no `pace`.
+     - `frame` absent or "game"; a game entry has no `pace` and at most THEATRE_TABS demos, one numbered tab each in
+       the theatre's row (tagpu_wikilay.c), so the row's fixed part fits at 1024 x 768 by construction.
      - a unit may carry `rival` (a boolean: it is the opponent's, cast by the rival casting) and `corpse` (a row of
        the entry's `features`, its wreck) only in a game entry, and any entry's unit the economy's figures, ECON each
        finite and >= 0, energyUse below ECON_MAX in magnitude.
@@ -502,7 +503,7 @@ const WikiSim = (() => {
      - in the merged scene no feature's id (f<k + 1> when it has none) is a unit's explicit id, since a unit's corpse
        takes its id; and its features and the kills together are at most FEATS_MAX, the features table a corpse is
        placed into. ---- */
-  const SEATS = 4, SEAT_NAME = 32, SEAT_MIN = 200, SEAT_MAX = 10000, GAME_KILLS = 64, GAME_END_MAX = 5400;
+  const SEATS = 4, SEAT_NAME = 32, SEAT_MIN = 200, SEAT_MAX = 10000, GAME_KILLS = 64, GAME_END_MAX = 5400, THEATRE_TABS = 9;
   // whether the entry is a game entry; anything but "game" in `frame` refuses it
   function isGame(entry) {
     if (!('frame' in entry)) return false;
@@ -521,6 +522,7 @@ const WikiSim = (() => {
   function checkGame(entry, demo) {
     const game = isGame(entry);
     if (game && 'pace' in entry) throw new Error('a game entry has no pace');
+    if (game && Array.isArray(entry.demos) && entry.demos.length > THEATRE_TABS) throw new Error(`a game entry has at most ${THEATRE_TABS} demos`);
     for (const [t, d] of Object.entries(entry.units || {})) {
       for (const n of ECON) if (n in d && !(typeof d[n] === 'number' && d[n] >= 0 && d[n] < Infinity)) throw new Error(`unit ${t}: ${n} is not a finite number >= 0`);
       if ('energyUse' in d && !(typeof d.energyUse === 'number' && Math.abs(d.energyUse) < ECON_MAX)) throw new Error(`unit ${t}: energyUse is not a number of magnitude below ${ECON_MAX}`);
@@ -3028,8 +3030,9 @@ const WikiSim = (() => {
     SND_NAMES,
     // a wait's states, tagpu_wikidata.h's WIKI_UNTIL_* from 1
     UNTILS,
-    // a game's bounds (tagpu_wikidata.h WIKI_SEATS, WIKI_GAME_KILLS, WIKI_GAME_END_MAX) and its death sound's kind
-    SEATS, GAME_KILLS, GAME_END_MAX, SND_DEATH,
+    // a game's bounds (tagpu_wikidata.h WIKI_SEATS, WIKI_GAME_KILLS, WIKI_GAME_END_MAX, WIKI_THEATRE_TABS) and its death
+    // sound's kind
+    SEATS, GAME_KILLS, GAME_END_MAX, THEATRE_TABS, SND_DEATH,
     // the viewer's script's controls (tagpu_wikidata.h WIKI_HUD_*, in its order) and a press's trip, for replay.js
     HUD_CONTROLS, HUD_DOWN, HUD_UP,
     // the shapes alone, for checks against tagpu_placegeo.c

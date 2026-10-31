@@ -54,6 +54,8 @@ static const char* const ROLE[R_N] = { "window_title", "entry_title", "category"
 #define S_X2        "2\xC3\x97"             /* 2× */
 #define S_TRY       "Try it yourself"
 #define S_BACK      "Back to demo"
+#define S_ENTRIES   "Entries"
+#define S_ABOUT     "About"
 /* a keycap a WIKI_KEY_*, in their order: one for every key, which the assert holds, so no key held
    shows another's name or none */
 static const char* const KEYCAP[] = { "Shift", "Alt", "Ctrl", "Z", "X", "E", "Left-click", "Right-click" };
@@ -102,6 +104,8 @@ typedef struct {
     double keycap_h, keycap_pad;
     double ctl_gap, ctl_pair, ctl_try, ctl_h, ctl_pad, ctl_min;
     double text_share, text_para;
+    double theatre_about, theatre_min;      /* the About panel's share of the body (percent), the
+                                               theatre stage's least height                       */
 } WG;
 
 struct WIKILAY {
@@ -127,6 +131,7 @@ typedef struct {
     WIKIFRAME*       fr;
     double           px;                        /* pixels a unit */
     uint8_t          grp;
+    int              top;                       /* every op is the top layer's (HOPF_TOP)        */
     int              nhot;
     /* one text's code points, their byte offsets and the pen before each, in pixels */
     uint32_t         cp[MAXGLYPH + 1];
@@ -190,6 +195,7 @@ static HUDOP* op(C* c, int kind, R r)
     p = &c->o->op[c->o->n++];
     memset(p, 0, sizeof *p);
     p->kind = (uint8_t)kind;
+    p->flags = (uint8_t)(c->top ? HOPF_TOP : 0u);
     p->grp = c->grp;
     p->part = -1;
     p->r.x = (float)(r.x / c->px); p->r.y = (float)(r.y / c->px);
@@ -699,6 +705,16 @@ static void panel(C* c, int which, R box, LIST list, const char* key)
 
 /* ---- the controls (#ctl): play, replay, 1x and 2x, Try it yourself ----------------------------- */
 
+/* A button's width: its text's between its padding and Chrome's default 2 px border, which the
+   kit skin makes transparent and keeps, and no less than the layout's least */
+static double button_w(C* c, const char* label)
+{
+    const WG* g = &c->l->g;
+    TS t = ts(c, R_CONTROL, g->line);
+    int n = pens(c, &t, label, strlen(label));
+    return fmax(U(c, g->ctl_min), 2 * U(c, g->ctl_pad) + 4 + ceil64(c->pen[n]));
+}
+
 /* A button: its part, down while on or held; its text centred, or its kit glyph (`icon`, -1 none)
    over it with no text; a disabled one faded as one layer and given no control. Chrome's default
    style gives a button a 2 px border, which the kit skin makes transparent and keeps, so it
@@ -707,8 +723,9 @@ static double button(C* c, double x, double y, const char* key, const char* labe
 {
     const WG* g = &c->l->g;
     TS t = ts(c, R_CONTROL, g->line);
+    const double w = button_w(c, label), h = U(c, g->ctl_h);
     int n = pens(c, &t, label, strlen(label));
-    double tw = ceil64(c->pen[n]), w = fmax(U(c, g->ctl_min), 2 * U(c, g->ctl_pad) + 4 + tw), h = U(c, g->ctl_h);
+    double tw = ceil64(c->pen[n]);
     int down = on || !strcmp(c->st->held, key), part = c->l->part[down ? P_BUTTON_DOWN : P_BUTTON];
     R b = rect(x, y, w, h);
     if (off) group_begin(c, OFF_A);
@@ -721,6 +738,81 @@ static double button(C* c, double x, double y, const char* key, const char* labe
     return w;
 }
 
+/* The lock badge's width (#badge, #t-badge): as wide as its content -- padding, the dot, the gap,
+   the text -- for it is never stretched */
+static double badge_w(C* c)
+{
+    const WG* g = &c->l->g;
+    TS t = ts(c, R_BADGE, g->line);
+    int n = pens(c, &t, S_BADGE, strlen(S_BADGE));
+    return U(c, g->badge_pad) + U(c, g->badge_dot) + U(c, g->badge_gap) + ceil64(c->pen[n]) + U(c, g->badge_pad);
+}
+/* The lock badge at (x, y), badge.h tall: its part, the dot and the text centred in its height.
+   Returns its width. */
+static double badge(C* c, double x, double y)
+{
+    const WG* g = &c->l->g;
+    TS t = ts(c, R_BADGE, g->line);
+    const double dot = U(c, g->badge_dot), pad = U(c, g->badge_pad), bh = U(c, g->badge_h);
+    const R b = rect(x, y, badge_w(c), bh);
+    int n = pens(c, &t, S_BADGE, strlen(S_BADGE));
+    art(c, c->l->part[P_BADGE], b, NULL);
+    disc(c, rect(b.x + pad, y + half(bh - dot), dot, dot), NULL);
+    line(c, &t, S_BADGE, 0, n, b.x + pad + dot + U(c, g->badge_gap), y + half(bh - t.L), light(c, c->l->part[P_BADGE]), NULL);
+    return b.w;
+}
+
+/* The stage's bezel `sbox` (#sbox) and the stage inside it (#stage), inset by the bezel's frame:
+   its hot, and its rect answered in the frame */
+static void stage_in(C* c, R sbox)
+{
+    const WG* g = &c->l->g;
+    R stage = rect(sbox.x + U(c, g->bz[3]), sbox.y + U(c, g->bz[0]), lu(sbox.w - (g->bz[3] + g->bz[1]) * c->px),
+                   lu(sbox.h - (g->bz[0] + g->bz[2]) * c->px));
+    art(c, c->l->part[P_BEZEL], sbox, NULL);
+    hot(c, stage, NULL, "stage");
+    c->fr->stage.x = (float)(stage.x / c->px); c->fr->stage.y = (float)(stage.y / c->px);
+    c->fr->stage.w = (float)(stage.w / c->px); c->fr->stage.h = (float)(stage.h / c->px);
+}
+
+/* The caption (#caption) `w` wide at (x, y): a fixed height, so a caption appearing cannot move the
+   stage; overflow hidden, so a line past the strip is cut (to a sixty-fourth of a pixel, Chrome's
+   LayoutUnit) */
+static void caption(C* c, double x, double y, double w)
+{
+    const WG* g = &c->l->g;
+    const double cap_h = U(c, g->caption_h);
+    R cap = rect(x, y, w, cap_h);
+    c->fr->caption_cut = block(c, R_CAPTION, g->line, c->st->caption, x, y, w, light(c, c->l->part[P_WINDOW]), &cap, 1)
+                         > cap_h + 1.0 / 64;
+}
+
+/* The controls (#ctl) from (x, y), each ctl_h tall: play, replay, 1x and 2x, Try it yourself, and
+   in the theatre About (#c-about), which is never disabled. Returns their width; draws only with
+   `emit`. */
+static double controls(C* c, double x, double y, int about, int emit)
+{
+    const WG* g = &c->l->g;
+    const int play = c->st->playing && !c->st->done ? c->l->icon_pause : c->l->icon_play, off = !has_demo(c);
+    const double cg = U(c, g->ctl_gap), pair = U(c, g->ctl_pair);
+    /* each with the space after it: the gap, the pair's between 1x and 2x, and Try it's margin */
+    const struct { const char* key; const char* label; int icon, on, off; double after; } b[] = {
+        { "play", "", play, 0, off, cg },
+        { "replay", "", c->l->icon_replay, 0, off, cg },
+        { "x1", S_X1, -1, c->st->speed == 1, off, pair },
+        { "x2", S_X2, -1, c->st->speed == 2, off, cg + U(c, g->ctl_try) },
+        { "try", c->st->try_it ? S_BACK : S_TRY, -1, c->st->try_it, off, cg },
+        { "about", S_ABOUT, -1, c->st->about != 0, 0, 0 } };
+    const int nb = about ? 6 : 5;
+    double bx = x;
+    int i;
+    for (i = 0; i < nb; i++) {
+        bx += emit ? button(c, bx, y, b[i].key, b[i].label, b[i].icon, b[i].on, b[i].off) : button_w(c, b[i].label);
+        if (i + 1 < nb) bx += b[i].after;
+    }
+    return bx - x;
+}
+
 /* ---- the entry (#entry): a flex column of title, subtitle, badge, the stage row, caption, keys,
    controls and the text, the stage row taking what the others leave ---------------------------- */
 
@@ -730,13 +822,12 @@ static void entry_col(C* c, R col)
     const WIKIENTRY* e = entry(c);
     const double gap = U(c, g->entry_gap), x = col.x + U(c, g->entry_pad[1]), w = col.w - 2 * U(c, g->entry_pad[1]);
     const double top = col.y + U(c, g->entry_pad[0]), ch = col.h - U(c, g->entry_pad[0]);
-    const int wink = light(c, c->l->part[P_WINDOW]), off = !has_demo(c);
+    const int wink = light(c, c->l->part[P_WINDOW]);
     const int lk = locked(c, c->st->entry) || c->st->sim_locked;
     const char* title = e ? filled_or(c, FILL_TITLE, e, e->title, e->id) : S_CHOOSE;
     const char* sub = e ? filled(c, FILL_SUB, e, e->subtitle) : "";
     double th, sh, bh, ph, fixed, srow, y, ctl_h = U(c, g->ctl_h), cap_h = U(c, g->caption_h), keys_h = U(c, g->keys_h);
     int items, k;
-    R sbox, stage;
 
     th = block(c, R_ENTRY_TITLE, g->title_line, title, x, 0, w, 0, NULL, 0);
     sh = block(c, R_SUBTITLE, g->line, sub, x, 0, w, 0, NULL, 0);
@@ -752,32 +843,15 @@ static void entry_col(C* c, R col)
     block(c, R_SUBTITLE, g->line, sub, x, y, w, wink, NULL, 1);
     y += sh + gap;
     if (lk) {
-        /* #badge: align-self flex-start, so as wide as its content: padding, the dot, the gap, the text */
-        TS t = ts(c, R_BADGE, g->line);
-        int n = pens(c, &t, S_BADGE, strlen(S_BADGE));
-        double tw = ceil64(c->pen[n]), dot = U(c, g->badge_dot), pad = U(c, g->badge_pad);
-        R b = rect(x, y, pad + dot + U(c, g->badge_gap) + tw + pad, bh);
-        art(c, c->l->part[P_BADGE], b, NULL);
-        disc(c, rect(b.x + pad, y + half(bh - dot), dot, dot), NULL);
-        line(c, &t, S_BADGE, 0, n, b.x + pad + dot + U(c, g->badge_gap), y + half(bh - t.L), light(c, c->l->part[P_BADGE]), NULL);
+        /* #badge: align-self flex-start, so as wide as its content */
+        badge(c, x, y);
         y += bh + gap;
     }
     /* the stage row: the bezel, the row's full width */
-    sbox = rect(x, y, w, srow);
-    art(c, c->l->part[P_BEZEL], sbox, NULL);
-    stage = rect(sbox.x + U(c, g->bz[3]), sbox.y + U(c, g->bz[0]), lu(sbox.w - (g->bz[3] + g->bz[1]) * c->px),
-                 lu(sbox.h - (g->bz[0] + g->bz[2]) * c->px));
-    hot(c, stage, NULL, "stage");
-    c->fr->stage.x = (float)(stage.x / c->px); c->fr->stage.y = (float)(stage.y / c->px);
-    c->fr->stage.w = (float)(stage.w / c->px); c->fr->stage.h = (float)(stage.h / c->px);
+    stage_in(c, rect(x, y, w, srow));
     y += srow + gap;
-    /* the caption: a fixed height, so a caption appearing cannot move the stage; overflow hidden,
-       so a line past the strip is cut (to a sixty-fourth of a pixel, Chrome's LayoutUnit) */
-    {
-        R cap = rect(x, y, w, cap_h);
-        c->fr->caption_cut = block(c, R_CAPTION, g->line, c->st->caption, x, y, w, wink, &cap, 1) > cap_h + 1.0 / 64;
-        y += cap_h + gap;
-    }
+    caption(c, x, y, w);
+    y += cap_h + gap;
     /* the keys strip: a keycap a key held, "+" between, centred in the strip's height */
     {
         R strip = rect(x, y, w, keys_h);
@@ -805,19 +879,109 @@ static void entry_col(C* c, R col)
         }
         y += keys_h + gap;
     }
-    /* the controls, centred in the row's height (all are ctl_h tall) */
-    {
-        const int play = c->st->playing && !c->st->done ? c->l->icon_pause : c->l->icon_play;
-        double bx = x, cg = U(c, g->ctl_gap);
-        bx += button(c, bx, y, "play", "", play, 0, off) + cg;
-        bx += button(c, bx, y, "replay", "", c->l->icon_replay, 0, off) + cg;
-        bx += button(c, bx, y, "x1", S_X1, -1, c->st->speed == 1, off) + U(c, g->ctl_pair);
-        bx += button(c, bx, y, "x2", S_X2, -1, c->st->speed == 2, off) + cg;
-        bx += U(c, g->ctl_try);
-        button(c, bx, y, "try", c->st->try_it ? S_BACK : S_TRY, -1, c->st->try_it, off);
-        y += ctl_h + gap;
-    }
+    controls(c, x, y, 0, 1);
+    y += ctl_h + gap;
     panel(c, WIKI_SCROLL_TEXT, rect(x, y, w, ph), text_rows, "scroll:text");
+}
+
+/* ---- the theatre (#win.theatre): the page of an entry with "frame": "game", whose stage holds a
+   whole game frame (research/notes/ingame-wiki-replay-plan.md, decisions 6 and 24) ------------- */
+
+/* About (#about): the panel's part over `box`, and inside it, padded by the panel's frame and the
+   entry's padding together, a flex column of the entry's title, its subtitle, the lock badge and
+   the scrolling text, which takes what the others leave. Its text is in the panel's ink. */
+static void about_panel(C* c, R box)
+{
+    const WG* g = &c->l->g;
+    const WIKIENTRY* e = entry(c);
+    const double pt = U(c, g->pn[0] + g->entry_pad[0]), pr = U(c, g->pn[1] + g->entry_pad[1]);
+    const double pb = U(c, g->pn[2] + g->entry_pad[0]), pl = U(c, g->pn[3] + g->entry_pad[1]);
+    const double gap = U(c, g->entry_gap), x = box.x + pl, w = box.w - pl - pr, ch = box.h - pt - pb;
+    const int ink = light(c, c->l->part[P_PANEL]), lk = locked(c, c->st->entry) || c->st->sim_locked;
+    const char* title = filled_or(c, FILL_TITLE, e, e->title, e->id);
+    const char* sub = filled(c, FILL_SUB, e, e->subtitle);
+    double th, sh, bh = lk ? U(c, g->badge_h) : 0, y = box.y + pt;
+    art(c, c->l->part[P_PANEL], box, NULL);
+    th = block(c, R_ENTRY_TITLE, g->title_line, title, x, y, w, ink, NULL, 1);
+    y += th + gap;
+    sh = block(c, R_SUBTITLE, g->line, sub, x, y, w, ink, NULL, 1);
+    y += sh + gap;
+    if (lk) {
+        badge(c, x, y);
+        y += bh + gap;
+    }
+    panel(c, WIKI_SCROLL_TEXT, rect(x, y, w, fmax(0, ch - th - sh - bh - gap * (2 + lk))), text_rows, "scroll:text");
+}
+
+/* The theatre in the window's body: a grid column of the stage's bezel, which takes what the
+   others leave, the row and the caption, the layout's gap between, then About or the drawer over
+   the stage.
+
+   THE ROW (#t-row) is a flex row, the controls' gap between its items: the drawer's control, the
+   demos' tabs (keyed demo:i, as the normal page's list, ctl_pair apart), the badge when locked,
+   the demo's title, and the controls with About. The title is the one item that grows and
+   shrinks (flex 1 1 0): it takes the row's free space and clips its line to it, so every control
+   keeps its size and place whatever the title. `row_cut` says the fixed part did not fit.
+
+   ABOUT AND THE DRAWER ARE THE PAGE'S ONLY HOPF_TOP OPS, so they are a layer of their own, for the
+   wiki's pass to draw after the stage and the stage's HUD, which they lie over, and they are
+   built last, so the hit map (topmost first) holds their controls before the stage's. The wiki's
+   pass in tagpu_vk_hud.c draws the page's base layer only, so until it draws the top layer after
+   the stage, neither shows in the game. At most one is built: About when both are set. */
+static void theatre(C* c, R body)
+{
+    const WG* g = &c->l->g;
+    const WIKIENTRY* e = entry(c);
+    const double gap = U(c, g->gap), row_h = U(c, g->ctl_h), cap_h = U(c, g->caption_h);
+    const double cg = U(c, g->ctl_gap), pair = U(c, g->ctl_pair);
+    const int about = c->st->about != 0, drawer = c->st->drawer && !about, wink = light(c, c->l->part[P_WINDOW]);
+    const int lk = locked(c, c->st->entry) || c->st->sim_locked;
+    const R sbox = rect(body.x, body.y, body.w, body.h - gap - row_h - gap - cap_h);
+    const double ry = sbox.y + sbox.h + gap;
+    double tabs = 0, fixed, x = body.x, tw;
+    char key[HUD_KEYLEN], num[16];
+    int i;
+
+    stage_in(c, sbox);
+
+    /* the row: what its fixed items take, then the title's share */
+    for (i = 0; i < e->ndemo; i++) {
+        snprintf(num, sizeof num, "%d", i + 1);
+        tabs += button_w(c, num) + (i ? pair : 0);
+    }
+    fixed = button_w(c, S_ENTRIES) + tabs + (lk ? badge_w(c) : 0) + controls(c, 0, 0, 1, 0) + cg * (3 + lk);
+    tw = fmax(0, body.w - fixed);
+    c->fr->row_cut = fixed > body.w;
+    x += button(c, x, ry, "drawer", S_ENTRIES, -1, drawer, 0) + cg;
+    for (i = 0; i < e->ndemo; i++) {
+        snprintf(key, sizeof key, "demo:%d", i);
+        snprintf(num, sizeof num, "%d", i + 1);
+        x += button(c, x, ry, key, num, -1, i == c->st->demo, 0) + (i + 1 < e->ndemo ? pair : 0);
+    }
+    x += cg;
+    if (lk) x += badge(c, x, ry + half(row_h - U(c, g->badge_h))) + cg;
+    if (has_demo(c)) {
+        /* #t-title: one line, nowrap, its overflow hidden; centred in the row's height */
+        const char* s = filled_or(c, FILL_ROW, e, e->demo[c->st->demo].title, e->demo[c->st->demo].id);
+        TS t = ts(c, R_DEMO, g->line);
+        int n = pens(c, &t, s, strlen(s));
+        R clip = rect(x, ry + half(row_h - t.L), tw, t.L);
+        line(c, &t, s, 0, n, x, clip.y, wink, &clip);
+    }
+    x += tw + cg;
+    controls(c, x, ry, 1, 1);
+
+    caption(c, body.x, ry + row_h + gap, body.w);
+
+    c->top = 1;
+    if (about) {
+        const double wa = lu(sbox.w * g->theatre_about / 100);
+        about_panel(c, rect(sbox.x + sbox.w - U(c, g->bz[1]) - wa, sbox.y + U(c, g->bz[0]), wa,
+                            sbox.h - U(c, g->bz[0]) - U(c, g->bz[2])));
+    } else if (drawer)
+        panel(c, WIKI_SCROLL_TREE, rect(sbox.x + U(c, g->bz[3]), sbox.y + U(c, g->bz[0]), lu(sbox.w * g->col[0] / 100),
+                                        sbox.h - U(c, g->bz[0]) - U(c, g->bz[2])), tree_rows, "scroll:tree");
+    c->top = 0;
 }
 
 /* ---- the window (#win): its part, title and close, and the body's three columns --------------- */
@@ -845,9 +1009,14 @@ static void window_(C* c)
     art(c, c->l->part[!strcmp(c->st->held, "close") ? P_CLOSE_DOWN : P_CLOSE], wx, NULL);
     hot(c, wx, NULL, "close");
     glyph(c, c->l->icon_close, wx);
-    /* the body: a grid of the two shares and the rest, its gaps between */
+    /* the body: a frame:game entry's theatre, or a grid of the two shares and the rest, its gaps
+       between */
     body = rect(win.x + U(c, g->wb[3]), win.y + U(c, g->wb[0]), win.w - U(c, g->wb[3]) - U(c, g->wb[1]),
                 win.h - U(c, g->wb[0]) - U(c, g->wb[2]));
+    if (entry(c) && entry(c)->frame == WIKI_FRAME_GAME) {
+        theatre(c, body);
+        return;
+    }
     gap = U(c, g->gap);
     t0 = lu(body.w * g->col[0] / 100);
     t1 = lu(body.w * g->col[1] / 100);
@@ -923,10 +1092,12 @@ int tagpu_wikilay_build(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
 static int find_part(const HUDLAY* k, const char* name);
 
 /* one state of the check built: 0, with the state named in `err`, when the build refuses or drops
-   an op, a run, a text, a hit or a group (HUDOPS.overflow) */
+   an op, a run, a text, a hit or a group (HUDOPS.overflow), or, in the theatre, when its stage is
+   shorter than theatre.stage_min or its row's fixed part is wider than the body */
 static int check_build(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f, const WIKIPAGE* st,
                        HUDOPS* scratch, WIKIFRAME* fr, char* err, size_t errn)
 {
+    const int theatre_ = st->open && st->entry >= 0 && st->entry < d->nentry && d->entry[st->entry].frame == WIKI_FRAME_GAME;
     if (!tagpu_wikilay_build(l, d, f, st, scratch, fr, err, errn)) return 0;
     if (scratch->overflow) {
         if (err && errn)
@@ -934,7 +1105,86 @@ static int check_build(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f, 
                      st->W, st->H, st->open ? "open" : "closed", st->entry, st->demo);
         return 0;
     }
+    if (theatre_ && fr->stage.h < l->g.theatre_min) {
+        if (err && errn)
+            snprintf(err, errn, "wiki layout: the theatre's stage is %.1f units tall at %.0fx%.0f, below theatre.stage_min %g",
+                     fr->stage.h, st->W, st->H, l->g.theatre_min);
+        return 0;
+    }
+    if (theatre_ && fr->row_cut) {
+        if (err && errn)
+            snprintf(err, errn, "wiki layout: the theatre's row of %s, %d demos, is wider than the body at %.0fx%.0f",
+                     d->entry[st->entry].id, d->entry[st->entry].ndemo, st->W, st->H);
+        return 0;
+    }
     return 1;
+}
+
+/* THE THEATRE'S OWN STATES of game entry `e`, from the open page `base`: About open with the text
+   scrolled to its limit, the drawer open with the tree scrolled to its limit (the build holds a
+   scroll to its panel's), and Try it yourself */
+static int check_theatre(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f, const WIKIPAGE* base, int e,
+                         HUDOPS* scratch, char* err, size_t errn)
+{
+    WIKIPAGE st = *base;
+    WIKIFRAME fr;
+    st.entry = e;
+    st.demo = 0;
+    st.caption[0] = 0;
+    st.playing = 1;
+    st.done = 0;
+    st.speed = 1;
+    st.about = 1;
+    st.scroll[WIKI_SCROLL_TEXT] = 1e9f;
+    if (!check_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
+    st.about = 0;
+    st.drawer = 1;
+    st.scroll[WIKI_SCROLL_TREE] = 1e9f;
+    if (!check_build(l, d, f, &st, scratch, &fr, err, errn)) return 0;
+    st.drawer = 0;
+    st.try_it = 1;
+    return check_build(l, d, f, &st, scratch, &fr, err, errn);
+}
+
+/* THE TABS' BOUND: a game entry has at most WIKI_THEATRE_TABS demos, which both readers hold to
+   (tagpu_wikidata.h), so the theatre's row is widest with that many tabs, the badge and either
+   label of Try it. Entry 0 made a game entry of WIKI_THEATRE_TABS demos and locked is built so,
+   from the open page `base`, whatever entries the data holds. */
+static int check_tabs(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f, const WIKIPAGE* base,
+                      HUDOPS* scratch, char* err, size_t errn)
+{
+    WIKIDEMO demo[WIKI_THEATRE_TABS];
+    WIKIDATA syn = *d;
+    WIKIENTRY* en;
+    WIKIPAGE st = *base;
+    WIKIFRAME fr;
+    int i, ok = 1;
+    if (d->nentry < 1) return 1;
+    if (!(en = (WIKIENTRY*)malloc((size_t)d->nentry * sizeof *en))) {
+        if (err && errn) snprintf(err, errn, "wikilay: out of memory");
+        return 0;
+    }
+    memcpy(en, d->entry, (size_t)d->nentry * sizeof *en);
+    for (i = 0; i < WIKI_THEATRE_TABS; i++)
+        if (d->entry[0].ndemo > 0) demo[i] = d->entry[0].demo[i % d->entry[0].ndemo];
+        else {
+            memset(&demo[i], 0, sizeof demo[i]);
+            demo[i].id = "";
+        }
+    en[0].frame = WIKI_FRAME_GAME;
+    en[0].ndemo = WIKI_THEATRE_TABS;
+    en[0].demo = demo;
+    syn.entry = en;
+    st.entry = 0;
+    st.demo = WIKI_THEATRE_TABS - 1;
+    st.caption[0] = 0;
+    st.sim_locked = 1;
+    for (i = 0; i < 2 && ok; i++) {
+        st.try_it = i;
+        ok = check_build(l, &syn, f, &st, scratch, &fr, err, errn);
+    }
+    free(en);
+    return ok;
 }
 
 /* THE WORST CASTINGS: every cast bound, its display name 31 em dashes (U+2014, Windows-1252 0x97,
@@ -1024,7 +1274,9 @@ static int check_states(const WIKILAY* l, const WIKIDATA* d, const WIKIFACES* f,
                     }
                 }
             }
+            if (en->frame == WIKI_FRAME_GAME && !check_theatre(l, d, f, &st, e, scratch, err, errn)) return 0;
         }
+        if (!check_tabs(l, d, f, &st, scratch, err, errn)) return 0;
     }
     return 1;
 }
@@ -1142,6 +1394,16 @@ static int read_layout(WIKILAY* l, const TJV* L, char* err, size_t errn)
     g->ctl_min = rd(&x, "controls", "min", -1);
     g->text_share = rd(&x, "text", "share", -1);
     g->text_para = rd(&x, "text", "para", -1);
+    g->theatre_about = rd(&x, "theatre", "about", -1);
+    g->theatre_min = rd(&x, "theatre", "stage_min", -1);
+    if (!x.bad && !(g->theatre_about > 0 && g->theatre_about < 100)) {
+        snprintf(err, errn, "wiki layout: theatre.about is not a share of the body above 0 and below 100");
+        x.bad++;
+    }
+    if (!x.bad && !(g->theatre_min >= g->stage_min)) {
+        snprintf(err, errn, "wiki layout: theatre.stage_min is below stage.min");
+        x.bad++;
+    }
     return !x.bad;
 }
 
