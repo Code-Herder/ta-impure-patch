@@ -41,7 +41,9 @@ against an independent Python resolution of the same install.
    and first archive from sidepacks.py's record where the mod's loader renames them in memory, and the DLL's
    `wikiassettest side` against `gfx.py --side-only --stages` with the same names: the layout (every side with its own types),
    every screen's file and panel, every button's picture source (step, file, archive, sequence) and its frames'
-   pixels and hotspots, each side's PANELSIDE, the dots, the minimap's colours, tables and bases, the greyed tint
+   pixels and hotspots, each side's PANELSIDE, the dots, the minimap's colours, tables and bases, the greyed tint,
+   each side's resource bar (PANELTOP's and PANELBOT's frames and keys, the fifteen rects, the two colours, and its
+   font's path, archive, size and bytes' FNV), the badge's frames and the GUI colour table,
    and each side's casting -- every cast's type, title, footprint, figures, canstop, G cells, build list and wreck; the
    rule's `report` prose is gfx.py's alone -- must be equal, and the sheet byte for byte; and the 3D load's unit types,
    in its order, must be gfx.py's `stage_types` of every entry over the pack's casting, and each one's death sound
@@ -869,6 +871,18 @@ def pack_side(out, mod):
     for eid, b in art["minimap"]["bases"].items():
         bases[eid] = {"w": b["w"], "h": b["h"], "offx": b["offx"], "offy": b["offy"], "fnv": fnv_hex((d / b["file"]).read_bytes())}
     layout = {k: v for k, v in pack["layout"].items() if k != "note"}
+
+    def framed(fk):
+        return {"frame": frame(fk["f"]), "key": fk["key"]}
+
+    def bar(k, b):
+        if b is None:
+            return None
+        src = rep.get(f"bar {pack['layout']['sides'][k]['name']}", {})
+        blob = (d / b["font"]).read_bytes()
+        return {"top": framed(b["top"]), "bot": framed(b["bot"]), "rects": b["rects"], "ecol": b["ecol"], "mcol": b["mcol"],
+                "font": {"path": low_(src.get("font")), "where": low_(src.get("font_where")), "bytes": len(blob),
+                         "fnv": fnv_hex(blob)}}
     return {"refused": None, "layout": layout, "folders": {k: pack["folders"][k] for k in SIDE_FOLDERS},
             "sheet": {"w": sw, "h": art["sheet"]["h"], "fnv": fnv_hex(sheet)}, "pal": fnv_hex((d / art["palette"]).read_bytes()),
             "panelside": [None if ps is None else {"frame": frame(ps["f"]), "key": ps["key"]} for ps in art["panelside"]],
@@ -880,7 +894,10 @@ def pack_side(out, mod):
                         "alp": low_((mm.get("alp") or {}).get("path"))},
             "greyed": fnv_hex((d / art["greyed"]).read_bytes()) if art.get("greyed") else None,
             "casting": [casting_of(c) for c in pack["casting"]],
-            "bases": bases}
+            "bases": bases,
+            "bar": [bar(k, b) for k, b in enumerate(art.get("bar") or [])],
+            "logos": [framed(f) for f in art["logos"]] if art.get("logos") else None,
+            "gui": art.get("gui")}
 
 
 def casting_of(c):
@@ -912,7 +929,8 @@ def native_side(doc):
             "minimap": {"unexplored": mm["unexplored"], "box": mm["box"], "gui": mm["gui"], "seen": mm["seen"],
                         "alp": mm["alp"]["path"]},
             "greyed": art["greyed"], "casting": [casting_of(c) for c in s["casting"]],
-            "bases": {k: v for k, v in doc["minimap"].items() if v is not None}}
+            "bases": {k: v for k, v in doc["minimap"].items() if v is not None},
+            "bar": art["bar"], "logos": art["logos"], "gui": art["gui"]}
 
 
 def against_sidepacks(mods, retail, pak, language="english"):
@@ -990,7 +1008,9 @@ def against_sidepacks(mods, retail, pak, language="english"):
                      f"casts bound), {len(native['units3d'])} 3D unit types "
                      f"({sum(1 for w in native['deaths'].values() if w)} with a death sound), {npic} pictures "
                      f"({', '.join(f'{k} {v}' for k, v in sorted(srcs.items()))}), a {native['sheet']['h']}-row sheet byte "
-                     f"for byte, {len(native['bases'])} minimap bases; {r.stderr.strip().splitlines()[-1].split(': ', 1)[-1]}")
+                     f"for byte, {len(native['bases'])} minimap bases, {sum(1 for b in native['bar'] if b)} of "
+                     f"{len(native['bar'])} sides' bars, {len(native['logos'] or [])} badge frames"
+                     f"{', the GUI table' if native['gui'] else ''}; {r.stderr.strip().splitlines()[-1].split(': ', 1)[-1]}")
     return ok, lines
 
 

@@ -2059,12 +2059,18 @@ typedef struct {
     int       ntitle;
 } SUNIT;
 typedef struct { char unitmenu[SNAME], unitname[SNAME]; uint32_t menu; long long button; int file; } SENTRY;
-typedef struct { char name[SNAME], prefix[SNAME], intgaf[SNAME], commander[SNAME]; } SSIDE;
-
-/* a GAF of <anims>, opened once per name asked and read by the page (bank_get); `ok` 0 when
-   absent or refused */
+/* a [SIDEn] of sidedata: the layout's names, and the resource bar's raw values (read with the
+   engine's atoi; has_rect[r] 0 for a rect the section lacks) */
 typedef struct {
-    char            ask[SNAME];
+    char      name[SNAME], prefix[SNAME], intgaf[SNAME], commander[SNAME], font[SNAME];
+    long long ecol, mcol, rect[WB_N][4];
+    int       has_rect[WB_N];
+} SSIDE;
+
+/* a GAF of <anims> (or <textures>, the badge's), opened once per folder and name asked and read
+   by the page (bank_get); `ok` 0 when absent or refused */
+typedef struct {
+    char            ask[SNAME], dir[WIKI3D_NAMEMAX];
     TAGPU_VFILE     f;
     uint32_t        n, nseq, npage;
     unsigned char** page;               /* npage pages, NULL until read                         */
@@ -2289,17 +2295,18 @@ static void bank_free(SBANK* k)
     free(k->page);
 }
 
-static int side_bank(SIDE* S, const char* name)
+static int side_bank_in(SIDE* S, const char* dir, const char* name)
 {
     SBANK* k;
     int i;
     for (i = 0; i < S->nbank; i++)
-        if (ieq(S->bank[i].ask, name)) return S->bank[i].ok ? i : -1;
+        if (ieq(S->bank[i].ask, name) && ieq(S->bank[i].dir, dir)) return S->bank[i].ok ? i : -1;
     if (!side_grow(S, (void**)&S->bank, &S->cbank, S->nbank + 1, sizeof *S->bank)) return -1;
     k = &S->bank[S->nbank++];
     memset(k, 0, sizeof *k);
     scopy(k->ask, name, sizeof k->ask);
-    if (!side_find(S, S->in->names.anims, name, "GAF", &k->f)) return -1;
+    scopy(k->dir, dir, sizeof k->dir);
+    if (!side_find(S, dir, name, "GAF", &k->f)) return -1;
     memcpy(k->path, k->f.path, sizeof k->path);
     k->src = k->f.src;
     k->n = k->f.size;
@@ -2317,6 +2324,16 @@ static int side_bank(SIDE* S, const char* name)
     }
     k->ok = 1;
     return S->nbank - 1;
+}
+
+static int side_bank(SIDE* S, const char* name) { return side_bank_in(S, S->in->names.anims, name); }
+
+/* the frame count of bank `bk`'s first sequence named `name` without case, 0 when there is none */
+static uint32_t side_seq_frames(SIDE* S, int bk, const char* name)
+{
+    uint32_t so, nf;
+    if (bk < 0 || !name || !name[0] || !(so = gaf_seq_at(S, &S->bank[bk], name)) || !bank_u16(S, &S->bank[bk], so, &nf)) return 0;
+    return nf;
 }
 
 /* gfx.py's ta3do.gaf_frame over a leaf: the frame's pixels decoded into w x h, its transparent
@@ -2524,10 +2541,10 @@ static int frame_add(SIDE* S, const char* key, int w, int h, int hx, int hy, int
     return S->nfr++;
 }
 
-/* SideArt.seq: every frame of sequence `name` of bank `bk`, registered under
-   <path>:<source>:<NAME>:<k>; 0 when the bank or the sequence is absent, or a frame is refused (a
-   frame of no pixels too, which no picture can show) */
-static int side_seq(SIDE* S, int bk, const char* name, SSEQ* q)
+/* SideArt.seq: the first `count` frames of sequence `name` of bank `bk` (every frame for 0),
+   registered under <path>:<source>:<NAME>:<k>; 0 when the bank or the sequence is absent, or a
+   frame is refused (a frame of no pixels too, which no picture can show) */
+static int side_seq_n(SIDE* S, int bk, const char* name, uint32_t count, SSEQ* q)
 {
     SBANK* k;
     uint32_t so, nf, i;
@@ -2537,6 +2554,7 @@ static int side_seq(SIDE* S, int bk, const char* name, SSEQ* q)
     if (bk < 0 || !name || !name[0]) return 0;
     k = &S->bank[bk];
     if (!(so = gaf_seq_at(S, k, name)) || !bank_u16(S, k, so, &nf) || !nf) return 0;
+    if (count && count < nf) nf = count;
     if (!(q->f = (int*)malloc(nf * sizeof *q->f))) { S->failed = 1; return 0; }
     lowcpy(lp, k->path, sizeof lp);
     upcpy(up, name, sizeof up);
@@ -2564,6 +2582,8 @@ static int side_seq(SIDE* S, int bk, const char* name, SSEQ* q)
     }
     return 1;
 }
+
+static int side_seq(SIDE* S, int bk, const char* name, SSEQ* q) { return side_seq_n(S, bk, name, 0, q); }
 
 /* ---- the files ---- */
 
@@ -2763,6 +2783,28 @@ static const SUNIT* unit_get(const SIDE* S, const char* name)
     return NULL;
 }
 
+/* The resource bar's fields of a [SIDEn] as 0x431A60 reads them into RaceSideData (DISASSEMBLED,
+   0x431C0F..0x431C39 the colours, 0x431C82..0x4324B9 the rects): `font`,
+   `energycolor` and `metalcolor`, and the {x1; y1; x2; y2} of each rect sub-section, the first of
+   a name winning (0x4C3410), every number C's atoi. gfx.py `read_sides` and `bar_rects` read the
+   same. */
+static const char* const BAR_RECT[WB_N] = { "LOGO", "ENERGYBAR", "ENERGYNUM", "ENERGYMAX", "ENERGY0", "METALBAR",
+    "METALNUM", "METALMAX", "METAL0", "TOTALUNITS", "TOTALTIME", "ENERGYPRODUCED", "ENERGYCONSUMED", "METALPRODUCED",
+    "METALCONSUMED" };
+static void bar_fields(const TAGPU_GUIFILE* g, int sec, SSIDE* sd)
+{
+    static const char* const corner[4] = { "x1", "y1", "x2", "y2" };
+    int r, c;
+    scopy(sd->font, tagpu_guifile_get(g, sec, "font"), SNAME);
+    tagpu_guifile_num(tagpu_guifile_get(g, sec, "energycolor"), &sd->ecol, NULL);
+    tagpu_guifile_num(tagpu_guifile_get(g, sec, "metalcolor"), &sd->mcol, NULL);
+    for (r = 0; r < WB_N; r++) {
+        const int sub = tagpu_guifile_find(g, sec, BAR_RECT[r]);
+        if ((sd->has_rect[r] = sub >= 0) != 0)
+            for (c = 0; c < 4; c++) tagpu_guifile_num(tagpu_guifile_get(g, sub, corner[c]), &sd->rect[r][c], NULL);
+    }
+}
+
 /* <gamedata>\sidedata.TDF's [SIDE0], [SIDE1], ... up to the first missing one (0x431A60), the first
    section of a name winning as the engine's lookup 0x4C3410 does; 0 with the reason reported */
 static int sides_read(SIDE* S)
@@ -2796,6 +2838,7 @@ static int sides_read(SIDE* S)
             py_strip(&c, &cn);
             snprintf(S->side[S->nside].commander, SNAME, "%.*s", (int)cn, c);
         }
+        bar_fields(g, sec, &S->side[S->nside]);
         S->nside++;
     }
     tagpu_guifile_free(g);
@@ -4064,10 +4107,52 @@ static int frame_inside(const WIKISIDE* w, const WIKISIDEFRAME* q)
     return q->sx >= 0 && q->sy >= 0 && q->w >= 1 && q->h >= 1 && q->sx <= w->sheet_w - q->w && q->sy <= w->sheet_h - q->h;
 }
 
+/* 1 when the `n` bytes at `b` are a font the bars' text may be drawn with, else 0 with the reason
+   in `why`. The format is the engine's .FNT: the rows at byte 0, the signed row offset at 2,
+   the first code at 3, then a u16 offset per code; a glyph is its width, then rows x width bits,
+   MSB-first across row boundaries (DrawTextCustomFont 0x4C14F0, DISASSEMBLED). The first code must
+   be 0, so the table has 256 entries, as tagpu_packet_pub.c holds the engine's own copy to; every
+   glyph's bits lie inside the file. These are the bounds tagpu_wikibar.c's every glyph read rests
+   on; gfx.py `fnt_problem` and side.js `fntProblem` hold the same. */
+static int fnt_ok(const unsigned char* b, uint32_t n, char* why, size_t nwhy)
+{
+    uint32_t c;
+    if (n < 4 + 2 * 256) { snprintf(why, nwhy, "%lu bytes, short of the 256-code table", (unsigned long)n); return 0; }
+    if (b[0] < 1 || b[0] > WIKI_FNT_ROWS) { snprintf(why, nwhy, "%u rows", b[0]); return 0; }
+    if (b[3]) { snprintf(why, nwhy, "first code %u, not 0", b[3]); return 0; }
+    for (c = 0; c < 256; c++) {
+        const uint32_t o = rd16(b + 4 + 2 * c);
+        if (!o) continue;
+        if (o >= n) { snprintf(why, nwhy, "glyph %lu at %lu, past the file", (unsigned long)c, (unsigned long)o); return 0; }
+        if (b[o] < 1 || b[o] > WIKI_FNT_ROWS) { snprintf(why, nwhy, "glyph %lu is %u wide", (unsigned long)c, b[o]); return 0; }
+        if (o + 1 + (b[o] * b[0] + 7) / 8 > n) { snprintf(why, nwhy, "glyph %lu's bits run past the file", (unsigned long)c); return 0; }
+    }
+    return 1;
+}
+
 static int side_frames_inside(const WIKISIDE* w)
 {
     int s, k, i;
+    char why[100];
     for (k = 0; k < WIKI_SIDE_SIDES; k++) if (w->has_panelside[k] && !frame_inside(w, &w->panelside[k])) return 0;
+    /* the bars: a side's only below the layout's count, its frames in the sheet, its font a whole
+       .FNT inside `fnt`; the badge's frames at most WIKI_LOGOS, each in the sheet */
+    for (k = 0; k < WIKI_SIDE_SIDES; k++) {
+        const WIKIBARART* b = &w->bar[k];
+        if (!w->has_bar[k]) continue;
+        if (k >= w->layout.nside || !frame_inside(w, &b->top) || !frame_inside(w, &b->bot) ||
+            b->font_off > WIKI_FNT_BYTES || b->font_len > WIKI_FNT_BYTES - b->font_off ||
+            !fnt_ok(w->fnt + b->font_off, b->font_len, why, sizeof why))
+            return 0;
+        for (i = 0; i < WB_N; i++) {
+            const WIKIBARRECT* r = &b->rect[i];
+            if (r->x1 < WIKIBAR_COORD_LO || r->y1 < WIKIBAR_COORD_LO || r->x2 > WIKIBAR_COORD_HI ||
+                r->y2 > WIKIBAR_COORD_HI || r->x1 > r->x2 || r->y1 > r->y2)
+                return 0;
+        }
+    }
+    if (w->nlogo < 0 || w->nlogo > WIKI_LOGOS) return 0;
+    for (k = 0; k < w->nlogo; k++) if (!frame_inside(w, &w->logo[k])) return 0;
     if (w->has_high && !frame_inside(w, &w->high)) return 0;
     for (k = 0; k < w->nradlogo; k++) if (!frame_inside(w, &w->radlogo[k])) return 0;
     for (s = 0; s < w->layout.nscreen; s++) {
@@ -4139,6 +4224,121 @@ static void casting_notes(SIDE* S, const SSIDE* sd, const WIKICASTING* K, const 
     }
 }
 
+/* THE RESOURCE BARS' ART of a layout side, before the block holds it: its frames as registry
+   indices, and its font's place in the fonts read so far */
+typedef struct {
+    int         ok, top, bot, font_src;
+    WIKIBARRECT rect[WB_N];
+    uint8_t     ecol, mcol;
+    uint32_t    font_off, font_len;
+    char        font_path[TAGPU_VFS_PATHMAX];
+} SBAR;
+
+/* the fonts every side's bar reads, each file once (by its path and source, as gfx.py keeps one
+   pack file a source): WIKI_FNT_BYTES at `b`, `n` in use */
+typedef struct {
+    unsigned char* b;
+    uint32_t       n;
+    int            nfont;
+    struct { char path[TAGPU_VFS_PATHMAX]; int src; uint32_t off, len; } font[WIKI_SIDE_SIDES];
+} SFONTS;
+
+/* gfx.py `bar_art`: side `sd`'s bar, checked in gfx.py's order -- PANELTOP and PANELBOT in its
+   <intgaf>.GAF, the fifteen rects present and inside WIKIBAR_COORD_*, the colours palette indices,
+   the font present and a whole .FNT (fnt_ok) -- and only then its two frames registered, so a
+   refused side adds nothing to the sheet. A refusal leaves `b->ok` 0 with a report line. */
+static void bar_read(SIDE* S, const SSIDE* sd, SFONTS* F, SBAR* b)
+{
+    const WIKI3DNAMES* nm = &S->in->names;
+    const int bk = sd->intgaf[0] ? side_bank(S, sd->intgaf) : -1;
+    char el[SNAME + 8], why[200];
+    TAGPU_VFILE f;
+    SSEQ qt, qb;
+    int r, c, j;
+    memset(b, 0, sizeof *b);
+    snprintf(el, sizeof el, "bar %s", sd->name);
+    if (!side_seq_frames(S, bk, "PANELTOP") || !side_seq_frames(S, bk, "PANELBOT")) {
+        side_rep(S, "refused", "no PANELTOP and PANELBOT in %s\\%s.GAF", el, nm->anims, sd->intgaf);
+        return;
+    }
+    for (r = 0; r < WB_N; r++) {
+        const long long* q = sd->rect[r];
+        if (!sd->has_rect[r]) { side_rep(S, "refused", "[SIDE] has no %s", el, BAR_RECT[r]); return; }
+        for (c = 0; c < 4; c++)
+            if (q[c] < WIKIBAR_COORD_LO || q[c] > WIKIBAR_COORD_HI) break;
+        if (c < 4 || q[0] > q[2] || q[1] > q[3]) {
+            side_rep(S, "refused", "%s not x1 <= x2, y1 <= y2 inside %d..%d", el, BAR_RECT[r], WIKIBAR_COORD_LO, WIKIBAR_COORD_HI);
+            return;
+        }
+        b->rect[r].x1 = (int16_t)q[0]; b->rect[r].y1 = (int16_t)q[1];
+        b->rect[r].x2 = (int16_t)q[2]; b->rect[r].y2 = (int16_t)q[3];
+    }
+    if (sd->ecol < 0 || sd->ecol > 255 || sd->mcol < 0 || sd->mcol > 255) {
+        side_rep(S, "refused", "energycolor %lld or metalcolor %lld is not a palette index", el, sd->ecol, sd->mcol);
+        return;
+    }
+    b->ecol = (uint8_t)sd->ecol;
+    b->mcol = (uint8_t)sd->mcol;
+    if (!sd->font[0] || !side_find(S, nm->fonts, sd->font, nm->fnt_ext, &f)) {
+        side_rep(S, "refused", "no %s\\%s.%s", el, nm->fonts, sd->font, nm->fnt_ext);
+        return;
+    }
+    for (j = 0; j < F->nfont && !(ieq(F->font[j].path, f.path) && F->font[j].src == f.src); j++) {}
+    if (j == F->nfont) {
+        /* BOUND: the fonts of every side within WIKI_FNT_BYTES, each read once */
+        if (f.size > WIKI_FNT_BYTES - F->n || F->nfont == WIKI_SIDE_SIDES) {
+            side_rep(S, "refused", "%s: %lu bytes, past the fonts' %u", el, f.path, (unsigned long)f.size, WIKI_FNT_BYTES);
+            return;
+        }
+        if (!tagpu_vfs_read(S->vfs, &f, 0, f.size, F->b + F->n, why, sizeof why)) {
+            side_rep(S, "refused", "%s: %s", el, f.path, why);
+            return;
+        }
+        if (!fnt_ok(F->b + F->n, f.size, why, sizeof why)) { side_rep(S, "refused", "%s: %s", el, f.path, why); return; }
+        scopy(F->font[j].path, f.path, sizeof F->font[j].path);
+        F->font[j].src = f.src;
+        F->font[j].off = F->n;
+        F->font[j].len = f.size;
+        F->n += f.size;
+        F->nfont++;
+    }
+    b->font_off = F->font[j].off;
+    b->font_len = F->font[j].len;
+    b->font_src = F->font[j].src;
+    scopy(b->font_path, F->font[j].path, sizeof b->font_path);
+    if (!side_seq_n(S, bk, "PANELTOP", 1, &qt)) return;
+    b->top = qt.f[0];
+    free(qt.f);
+    if (!side_seq_n(S, bk, "PANELBOT", 1, &qb)) return;
+    b->bot = qb.f[0];
+    free(qb.f);
+    b->ok = 1;
+}
+
+/* the bars' art of one side in the report, in gfx.py's pack shape (tools/wiki/assetcheck.py
+   compares the two): the frames, the rects by their lower-case names, the colours and the font */
+static void bar_json(SB* rep, const SIDE* S, const SBAR* b, const unsigned char* fonts)
+{
+    int r;
+    char low[24];
+    if (!b->ok) { sb_raw(rep, "null"); return; }
+    sb_raw(rep, "{\"top\":{\"frame\":");
+    frame_json(rep, &S->fr[b->top], S->fr[b->top].hx, S->fr[b->top].hy);
+    sb_raw(rep, ",\"key\":%d},\"bot\":{\"frame\":", S->fr[b->top].tkey);
+    frame_json(rep, &S->fr[b->bot], S->fr[b->bot].hx, S->fr[b->bot].hy);
+    sb_raw(rep, ",\"key\":%d},\"rects\":{", S->fr[b->bot].tkey);
+    for (r = 0; r < WB_N; r++) {
+        lowcpy(low, BAR_RECT[r], sizeof low);
+        sb_raw(rep, "%s\"%s\":[%d,%d,%d,%d]", r ? "," : "", low, b->rect[r].x1, b->rect[r].y1, b->rect[r].x2, b->rect[r].y2);
+    }
+    sb_raw(rep, "},\"ecol\":%d,\"mcol\":%d,\"font\":{\"path\":", b->ecol, b->mcol);
+    sb_q(rep, b->font_path, 1);
+    sb_raw(rep, ",\"where\":");
+    sb_q(rep, tagpu_vfs_source(S->vfs, b->font_src), 1);
+    sb_raw(rep, ",\"bytes\":%lu,\"fnv\":\"%08lx\"}}", (unsigned long)b->font_len,
+           (unsigned long)fnv(FNV0, fonts + b->font_off, b->font_len));
+}
+
 const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** report)
 {
     SIDE S;
@@ -4156,8 +4356,12 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
     SCASTING* picks = NULL;
     WIKICASTING* casting = NULL;
     STYPE* types = NULL;
+    SBAR bars[WIKI_SIDE_SIDES];
+    SFONTS F;
     memset(&S, 0, sizeof S);
     memset(cache, 0, sizeof cache);
+    memset(bars, 0, sizeof bars);
+    memset(&F, 0, sizeof F);
     S.in = in;
     S.vfs = vfs;
     S.common = -1;
@@ -4373,7 +4577,8 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
     {
         SSEQ q;
         int panelside[WIKI_SIDE_SIDES], fx, nrad = 0, high = -1, rad[WIKISIDE_DOTS], dot_key = 0, have_q = 0;
-        SSEQ qr, qh;
+        int nfr_core, npack, nlogo = 0, logo_f[WIKI_LOGOS];
+        SSEQ qr, qh, ql;
         for (k = 0; k < nlay_side; k++) {
             const SSIDE* sd = &S.side[kept[k]];
             const int bk = sd->intgaf[0] ? side_bank(&S, sd->intgaf) : -1;
@@ -4398,6 +4603,23 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
             high = qh.f[0];
             if (!have_q) dot_key = S.fr[qh.f[0]].tkey;
             free(qh.f);
+        }
+        if (S.failed) { snprintf(err, sizeof err, "out of memory"); goto done; }
+
+        /* THE RESOURCE BARS of every layout side, then the badge's frames, registered last, as the
+           pack registers them: the sheet holds `nfr_core` frames before them */
+        nfr_core = S.nfr;
+        if (!(F.b = (unsigned char*)malloc(WIKI_FNT_BYTES))) { snprintf(err, sizeof err, "out of memory"); goto done; }
+        for (k = 0; k < nlay_side; k++) bar_read(&S, &S.side[kept[k]], &F, &bars[k]);
+        {
+            const int lb = side_bank_in(&S, in->names.textures, in->names.logos);
+            const uint32_t nl = side_seq_frames(&S, lb, in->names.logos_seq);
+            if (nl >= 1 && nl <= WIKI_LOGOS && side_seq(&S, lb, in->names.logos_seq, &ql)) {
+                for (k = 0; k < ql.n; k++) logo_f[k] = ql.f[k];
+                nlogo = ql.n;
+                free(ql.f);
+            } else side_rep(&S, "refused", "no %s of 1..%d frames in %s\\%s.GAF: no badge", "logos", in->names.logos_seq,
+                            WIKI_LOGOS, in->names.textures, in->names.logos);
         }
         if (S.failed) { snprintf(err, sizeof err, "out of memory"); goto done; }
 
@@ -4443,13 +4665,15 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
         } else side_rep(&S, "refused", "no %s\\%s.SHD of 32 rows: greyed buttons are drawn untinted", "greyed tint",
                         in->names.palettes, in->names.palette);
 
-        /* THE SHEET: every frame placed in shelves 1024 wide, tallest first */
+        /* THE SHEET: every frame placed in shelves 1024 wide, tallest first. When the bars' and the
+           badge's frames take it past WIKISIDE_SHEET_MAXH it is packed again without them, and the
+           bars are the whitebox strips; past it without them the sidebar is refused. */
         if (!(order = (SFRAME**)malloc((size_t)(S.nfr ? S.nfr : 1) * sizeof *order))) { snprintf(err, sizeof err, "out of memory"); goto done; }
-        for (i = 0; i < S.nfr; i++) order[i] = &S.fr[i];
-        qsort(order, (size_t)S.nfr, sizeof *order, frame_taller);
-        {
+        for (npack = S.nfr;; npack = nfr_core) {
             int x = 0, y = 0, shelf = 0;
-            for (i = 0; i < S.nfr; i++) {
+            for (i = 0; i < npack; i++) order[i] = &S.fr[i];
+            qsort(order, (size_t)npack, sizeof *order, frame_taller);
+            for (i = 0; i < npack; i++) {
                 SFRAME* fr = order[i];
                 if (x + fr->w > WIKISIDE_SHEET_W) { x = 0; y += shelf; shelf = 0; }
                 fr->x = x;
@@ -4458,10 +4682,20 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
                 if (fr->h > shelf) shelf = fr->h;
             }
             sh = y + shelf > 1 ? y + shelf : 1;
+            if (sh <= WIKISIDE_SHEET_MAXH || npack == nfr_core) break;
+            for (k = 0; k < nlay_side; k++)
+                if (bars[k].ok) {
+                    char el[SNAME + 8];
+                    snprintf(el, sizeof el, "bar %s", S.side[kept[k]].name);
+                    side_rep(&S, "refused", "with the bars' frames the sheet is %d rows, past %d", el, sh, WIKISIDE_SHEET_MAXH);
+                    bars[k].ok = 0;
+                }
+            if (nlogo) side_rep(&S, "refused", "with the bars' frames the sheet is %d rows, past %d", "logos", sh, WIKISIDE_SHEET_MAXH);
+            nlogo = 0;
         }
         if (sh > WIKISIDE_SHEET_MAXH) { snprintf(err, sizeof err, "a sheet of %d rows, past %d", sh, WIKISIDE_SHEET_MAXH); goto done; }
         if (!(sheet = (unsigned char*)calloc((size_t)WIKISIDE_SHEET_W * (size_t)sh, 1))) { snprintf(err, sizeof err, "out of memory"); goto done; }
-        for (i = 0; i < S.nfr; i++) {
+        for (i = 0; i < npack; i++) {
             const SFRAME* fr = &S.fr[i];
             int r;
             for (r = 0; r < fr->h; r++)
@@ -4634,7 +4868,24 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
             sb_q(&S.rep, alp_from[0] ? alp_from : NULL, 1);
             sb_raw(&S.rep, "}},\"greyed\":");
             if (has_greyed) sb_raw(&S.rep, "\"%08lx\"", (unsigned long)fnv(FNV0, greyed, 256)); else sb_raw(&S.rep, "null");
-            sb_raw(&S.rep, "}}\n");
+            sb_raw(&S.rep, ",\"bar\":[");
+            for (k = 0; k < nlay_side; k++) {
+                sb_raw(&S.rep, "%s", k ? "," : "");
+                bar_json(&S.rep, &S, &bars[k], F.b);
+            }
+            sb_raw(&S.rep, "],\"logos\":");
+            if (nlogo) {
+                for (k = 0; k < nlogo; k++) {
+                    sb_raw(&S.rep, "%s{\"frame\":", k ? "," : "[");
+                    frame_json(&S.rep, &S.fr[logo_f[k]], S.fr[logo_f[k]].hx, S.fr[logo_f[k]].hy);
+                    sb_raw(&S.rep, ",\"key\":%d}", S.fr[logo_f[k]].tkey);
+                }
+                sb_raw(&S.rep, "]");
+            } else sb_raw(&S.rep, "null");
+            sb_raw(&S.rep, ",\"gui\":");
+            if (has_gui)
+                for (k = 0; k < 256; k++) sb_raw(&S.rep, "%s%d", k ? "," : "[", gui[k]);
+            sb_raw(&S.rep, "%s}}\n", has_gui ? "]" : "null");
             closed = 1;
             if (S.rep.oom || !S.rep.s) { snprintf(err, sizeof err, "out of memory for the report"); goto done; }
             rep_at = head + sheet_n;
@@ -4686,6 +4937,27 @@ const WIKISIDE* tagpu_wikiside_load(const WIKI3DIN* in, TAGPU_VFS* vfs, char** r
                 memcpy(o->label, c->label, sizeof o->label);
             }
             memcpy(w->casting, casting, (size_t)nlay_side * sizeof *casting);
+            for (k = 0; k < nlay_side; k++) {
+                const SBAR* b = &bars[k];
+                WIKIBARART* o = &w->bar[k];
+                if (!(w->has_bar[k] = b->ok)) continue;
+                o->top = sheet_rect(&S.fr[b->top], S.fr[b->top].hx, S.fr[b->top].hy);
+                o->bot = sheet_rect(&S.fr[b->bot], S.fr[b->bot].hx, S.fr[b->bot].hy);
+                o->top_key = S.fr[b->top].tkey;
+                o->bot_key = S.fr[b->bot].tkey;
+                memcpy(o->rect, b->rect, sizeof o->rect);
+                o->ecol = b->ecol;
+                o->mcol = b->mcol;
+                o->font_off = b->font_off;
+                o->font_len = b->font_len;
+            }
+            memcpy(w->fnt, F.b, F.n);
+            w->nlogo = nlogo;
+            for (k = 0; k < nlogo; k++) {
+                w->logo[k] = sheet_rect(&S.fr[logo_f[k]], S.fr[logo_f[k]].hx, S.fr[logo_f[k]].hy);
+                w->logo_key[k] = S.fr[logo_f[k]].tkey;
+            }
+            if ((w->has_gui = has_gui) != 0) memcpy(w->gui, gui, 256);
             for (i = 0; i < WIKI_SIDE_SIDES; i++) w->side_of_engine[i] = side_map[i];
             memcpy(blk + rep_at, S.rep.s, S.rep.n + 1);
             w->report = (const char*)blk + rep_at;
@@ -4743,6 +5015,7 @@ done:
     free(shd);
     free(order);
     free(sheet);
+    free(F.b);
     return out;
 }
 

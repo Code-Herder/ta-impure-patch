@@ -67,7 +67,9 @@
    running process, so it carries both. The language is 0x51FB50: a command-line argument that is
    no option, else the registry's value, else "english" (tagpu_replays.c says where each is
    written). Copied on the game thread (tagpu_replays_asset_names). The sidebar's are `gui` to
-   `guipal`; `palette` is the palette files' base name and `guipal` the GUI palette's. */
+   `guipal`; `palette` is the palette files' base name and `guipal` the GUI palette's. The
+   resource bars' are `fonts` and `fnt_ext`, the folder and extension a side's font is read with,
+   and `logos_seq`, the badge's sequence in <textures>\<logos>.GAF. */
 typedef struct WIKI3DNAMES {
     char language[64];
     char units[WIKI3D_NAMEMAX], textures[WIKI3D_NAMEMAX], logos[WIKI3D_NAMEMAX],
@@ -76,6 +78,7 @@ typedef struct WIKI3DNAMES {
     char gui[WIKI3D_NAMEMAX], gamedata[WIKI3D_NAMEMAX], unitpics[WIKI3D_NAMEMAX],
          download[WIKI3D_NAMEMAX], commongui[WIKI3D_NAMEMAX], palettes[WIKI3D_NAMEMAX],
          palette[WIKI3D_NAMEMAX], guipal[WIKI3D_NAMEMAX];
+    char fonts[WIKI3D_NAMEMAX], fnt_ext[WIKI3D_NAMEMAX], logos_seq[WIKI3D_NAMEMAX];
 } WIKI3DNAMES;
 
 /* What the load reads, all by value except `data`, which is immutable and never freed. */
@@ -267,6 +270,11 @@ typedef struct {
        <anims>\<commongui>.GAF, then commongui's generic picture, for an order, tab or pager; for a
        build button, <anims>\<UNIT>_gadget.GAF, then <unitpics>\<UNIT>.PCX, else a labelled button.
        PANELSIDE of every side from its <anims>\<intgaf>.GAF; the minimap dots from <anims>\fx.GAF.
+     - the resource bars (WIKIBARART below): frame 0 of PANELTOP and PANELBOT from the same
+       <intgaf>.GAF (0x429870, 0x429F2B..0x429FE1); [SIDEn]'s fifteen bar rects, `energycolor`,
+       `metalcolor` and `font` (0x431A60), the font from <fonts>\<font>.<fnt_ext>
+       (0x431BCF..0x431BF1); the badge frames, <textures>\<logos>.GAF's <logos_seq> (0x4318C0);
+       and the GUI colour table, guipal matched into the palette (0x4AC7D0), kept whole.
        A GAF is read by the archive's 64 KiB page, only the pages its lookups touch: Escalation's
        fx.GAF is 82 MB.
      - <palettes>\<palette>.PAL, .ALP and .SHD and <palettes>\<guipal>.PAL.
@@ -321,6 +329,11 @@ typedef struct {
    of a magnitude past WIKI_ECON_MAX, a BuildTime that is not above 0 -- is left unbound and reported, as gfx.py leaves a footprint past
    WIKI_FP_MAX: tagpu_wikidata_casting's bounds, which the simulation's binding rests on, then hold
    for every casting this file makes. No unit of the six compat setups' castings meets one.
+
+   And two bounds gfx.py does not hold, each a refusal of the bars alone, with a report line: the
+   fonts of all sides past WIKI_FNT_BYTES, and a sheet that the bars' and the badge's frames would
+   take past WIKISIDE_SHEET_MAXH rows (the sheet is then packed without them). No compat setup
+   meets either: their fonts are one 2700-byte console.FNT, their sheets under 3100 rows.
 
    ONE BLOCK, IMMUTABLE ONCE PUBLISHED AND NEVER FREED: the WIKISIDE, its sheet and its report are
    one allocation the loader fills alone before the store that publishes it (tagpu_wikiside_get).
@@ -385,6 +398,30 @@ typedef struct {
     WIKISIDELABEL label[WIKISIDE_LABELS];
 } WIKISIDESCREEN;
 
+/* THE RESOURCE BARS' ART of one layout side, as 0x431A60 reads [SIDEn] into RaceSideData and
+   0x429870 the side's PANELTOP and PANELBOT (research/notes/ingame-wiki-replay-plan.md, *What R0
+   found*; tagpu_wikibar.h draws it). The rects are sidedata's {x1; y1; x2; y2} sub-sections in
+   frame pixels, read with the engine's atoi; TOTALUNITS and TOTALTIME are read and never drawn. */
+#define WIKI_FNT_BYTES  65536           /* every side's font, each file once                      */
+#define WIKI_LOGOS      32              /* badge frames kept; a longer sequence gives no badge    */
+#define WIKI_FNT_ROWS   32              /* a font's rows and a glyph's width at most              */
+#define WIKIBAR_COORD_LO (-1024)        /* a rect coordinate's bounds: the composer clips what    */
+#define WIKIBAR_COORD_HI 4096           /*   lands outside its picture                            */
+typedef struct { int16_t x1, y1, x2, y2; } WIKIBARRECT;
+enum { WB_LOGO, WB_ENERGYBAR, WB_ENERGYNUM, WB_ENERGYMAX, WB_ENERGY0, WB_METALBAR, WB_METALNUM,
+       WB_METALMAX, WB_METAL0, WB_TOTALUNITS, WB_TOTALTIME, WB_ENERGYPRODUCED, WB_ENERGYCONSUMED,
+       WB_METALPRODUCED, WB_METALCONSUMED, WB_N };
+typedef struct {
+    WIKISIDEFRAME top, bot;             /* frame 0 of PANELTOP / PANELBOT, in the sheet; each
+                                           drawn with its top left at its point whatever its
+                                           hotspot (0x467A20 adds it back)                      */
+    int           top_key, bot_key;     /* their transparent indices                             */
+    WIKIBARRECT   rect[WB_N];           /* each x1 <= x2, y1 <= y2, inside WIKIBAR_COORD_*       */
+    uint8_t       ecol, mcol;           /* energycolor, metalcolor: palette indices              */
+    uint32_t      font_off, font_len;   /* the side's .FNT image: fnt[font_off .. + font_len),
+                                           checked whole at load (tagpu_wikiasset.c fnt_ok)       */
+} WIKIBARART;
+
 typedef struct WIKISIDE {
     WIKILAYOUT     layout;              /* checked by tagpu_wikilayout_check                      */
     const unsigned char* sheet;         /* sheet_w x sheet_h palette indices                      */
@@ -424,6 +461,22 @@ typedef struct WIKISIDE {
        and GEN screens or none at s. A reader holds s below WIKI_SIDE_SIDES before it indexes:
        sidedata's sides past it are not read. */
     int            side_of_engine[WIKI_SIDE_SIDES];
+    /* THE RESOURCE BARS of each layout side, index-aligned with layout.side: has_bar[k] 0 for a
+       side whose art failed a bound (the stage draws whitebox strips). The fonts every side's
+       font_off/font_len point into are `fnt`; a reader holds a side below layout.nside. */
+    int            has_bar[WIKI_SIDE_SIDES];
+    WIKIBARART     bar[WIKI_SIDE_SIDES];
+    unsigned char  fnt[WIKI_FNT_BYTES];
+    /* the badge: frame c of the logos sequence for colour c, nlogo of them (0..WIKI_LOGOS). THE
+       ENGINE HOLDS NO BOUND on c (record 10's colour 10 crashed at 0x4C74C7,
+       research/notes/engine/recorder.md); a reader holds c below nlogo. */
+    int            nlogo;
+    WIKISIDEFRAME  logo[WIKI_LOGOS];
+    int            logo_key[WIKI_LOGOS];
+    /* THE GUI COLOUR TABLE main+0xDCB, guipal matched into the palette (0x4AC7D0); has_gui 0
+       without guipal.PAL, and then no bar is drawn */
+    int            has_gui;
+    uint8_t        gui[256];
     const char*    report;              /* the JSON tagpu_wikiside.json holds, NUL-terminated     */
 } WIKISIDE;
 

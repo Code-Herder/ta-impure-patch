@@ -1,7 +1,9 @@
-/* barcheck.mjs -- the game frame's bars (tools/wiki/mockup/bar.js) against the game's own pixels.
+/* barcheck.mjs -- the game frame's bars (tools/wiki/mockup/bar.js) against the game's own pixels, and the DLL's
+   composer (tagpu/ddraw/src/tagpu_wikibar.c) against bar.js.
 
-   usage: node tools/wiki/barcheck.mjs --js [--pack DIR]
-     exit 0 when every check holds, 1 when one fails, 2 when it cannot run
+   usage: node tools/wiki/barcheck.mjs [--js] [--pack DIR]
+     exit 0 when every check holds, 1 when one fails, 2 when it cannot run; --js runs the JavaScript halves alone
+     (the capture and the reader), building nothing
 
    THE CAPTURE. research/notes/assets/hud-art/backdrop.png is a 1280 x 720 replay frame of our renderer at full map:
    the viewer's record, ARM, colour 4, every number 0 and both storages 0 (MEASURED: the badge matches colour 4's
@@ -24,10 +26,19 @@
    bits past the file, a glyph 0 or 33 wide, too many badge frames, a GUI table of the wrong length -- drops exactly
    that element to null and says so in a problem line, and bar.js composes nothing for a side without a bar.
 
-   The C half (tagpu_wikibar.c against bar.js) needs the DLL's composer and is run without --js; this tree does
-   not have it. */
+   THE C HALF. tagpu/ddraw/tests/wikibartest.c, built natively with the sanitizers over tagpu_wikibar.c, is handed
+   each pack's bar art as the asset loader fills WIKISIDE (tools/wiki/assetcheck.py --side holds the loader's art
+   equal to the pack's, frame for frame) and composes the same cases as bar.js; every picture's indices, and its RGBA
+   where asked, must be equal byte for byte, and so must the answer whether there is a picture at all. The packs:
+   every one under tools/wiki/mockup/gfx/side/ that is present, and two synthetic ones (the reader's well-formed
+   pack, and the same with a badge rect half outside the picture and strings past its edges). The cases: every
+   layout side (one without a bar too) x Wg 640, 768, 1024, 1280 and 2176 (the widest, 128 + 16 x 128) each with its
+   own Hg x the badge colours 0, 4, the last frame and one past it x the number sets of NUMBERS below; RGBA for the
+   zeros at colour 0; and, on the first pack, the frames outside the composer's bounds. */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import zlib from 'node:zlib';
 import { createRequire } from 'node:module';
 
@@ -35,6 +46,8 @@ const require = createRequire(import.meta.url);
 const WikiSide = require('./mockup/side.js');
 const WikiBar = require('./mockup/bar.js');
 const ROOT = new URL('../../', import.meta.url).pathname;
+const DDRAW = path.join(ROOT, 'tagpu/ddraw');
+const PACKS = path.join(ROOT, 'tools/wiki/mockup/gfx/side');
 const CAPTURE = path.join(ROOT, 'research/notes/assets/hud-art/backdrop.png');
 const opt = name => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : null; };
 const PACK = opt('--pack') || path.join(ROOT, 'tools/wiki/mockup/gfx/side/stock');
@@ -201,12 +214,140 @@ function readerCheck(lines) {
   return failed;
 }
 
+/* ---- the C half ---- */
+const Z = WikiBar.ZERO;
+// the numbers each case shows: every rule of bar.js's strings, fills and ticks, and the values its ftol turns to -2^31
+const NUMBERS = [
+  ['zeros', Z],
+  ['mid', { ...Z, e: 1234.6, m: 345.4, emax: 5000, mmax: 1000, ei: 87.5, eo: -42.3, mi: 3.7, mo: -1.25, raw_e: 1234.6, raw_m: 345.4 }],
+  ['K', { ...Z, e: 123456, emax: 200000, ei: 100000, eo: -100000, m: 10, mmax: 100, mi: 1, mo: -0.5 }],
+  ['positive expense', { ...Z, e: 99999.9, emax: 99999.9, ei: 99999, eo: 100000, m: 1, mmax: 1 }],
+  ['ties', { ...Z, mi: 2.25, mo: 2.35, m: 7.25, mmax: 20 }],
+  ['small ties', { ...Z, mi: -0.05, mo: 0.04, ei: -0.5, eo: -0.5 }],
+  ['storage 0', { ...Z, e: 500, m: 30, raw_e: 500, raw_m: 30 }],
+  ['past storage', { ...Z, e: 6000, emax: 5000, m: 1500, mmax: 1000, raw_e: 6000, raw_m: 1500 }],
+  ['levels', { ...Z, e: 2000, emax: 5000, raw_e: 3000, lev_e: 2500, m: 500, mmax: 1000, raw_m: 400, lev_m: 600 }],
+  ['levels at the ends', { ...Z, e: 1, emax: 10, raw_e: 11, lev_e: 10, m: -3, mmax: -8, raw_m: -1, lev_m: -2 }],
+  ['out of range', { ...Z, e: NaN, emax: Infinity, ei: NaN, eo: NaN, m: 3e9, mmax: 1e12, mi: 123456.75, mo: -98765.45,
+    raw_e: NaN, lev_e: 1 }],
+];
+const FRAMES = [[640, 480], [768, 544], [1024, 768], [1280, 720], [2176, 1088]];
+const FIELDS = ['e', 'm', 'emax', 'mmax', 'ei', 'eo', 'mi', 'mo', 'raw_e', 'raw_m', 'lev_e', 'lev_m'];
+
+function run(cmd, args, opts = {}) {
+  const r = spawnSync(cmd, args, { maxBuffer: 1 << 30, ...opts });
+  if (r.error || r.status !== 0)
+    throw new CannotRun(`${cmd} ${args.join(' ')} failed${r.error ? `: ${r.error.message}` : ` (${r.status})`}\n${r.stderr || ''}`);
+  return r.stdout;
+}
+
+// the pack's art in wikibartest's shape: art.json, sheet.bin, pal.bin and fnt.bin (each distinct font once)
+function writeC(art, dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  const fonts = [], at = new Map();
+  let n = 0;
+  const bar = (art.bar || []).map(b => {
+    if (!b) return null;
+    if (!at.has(b.font)) { at.set(b.font, n); fonts.push(b.font); n += b.font.length; }
+    return { top: b.top, bot: b.bot, rects: ['logo', 'energybar', 'energynum', 'energymax', 'energy0', 'metalbar', 'metalnum',
+      'metalmax', 'metal0', 'totalunits', 'totaltime', 'energyproduced', 'energyconsumed', 'metalproduced', 'metalconsumed']
+      .map(k => b.rects[k]), ecol: b.ecol, mcol: b.mcol, font: [at.get(b.font), b.font.length] };
+  });
+  fs.writeFileSync(path.join(dir, 'art.json'), JSON.stringify({ sheet: [art.sheet.w, art.sheet.h], panelside: art.panelside, bar,
+    logos: art.logos, gui: art.gui ? Array.from(art.gui) : null }));
+  fs.writeFileSync(path.join(dir, 'sheet.bin'), art.sheet.px);
+  fs.writeFileSync(path.join(dir, 'pal.bin'), art.pal);
+  fs.writeFileSync(path.join(dir, 'fnt.bin'), Buffer.concat(fonts.map(f => Buffer.from(f))));
+}
+
+function casesOf(art, edges) {
+  const nlogo = art.logos ? art.logos.length : 0, out = [];
+  const colours = [...new Set([0, 4, nlogo - 1, nlogo])];
+  for (let side = 0; side < art.bar.length; side++)
+    for (const [Wg, Hg] of FRAMES)
+      colours.forEach((colour, ci) => NUMBERS.forEach(([name, num], ni) =>
+        out.push({ side, colour, Wg, Hg, rgba: ci === 0 && ni === 0, num, name })));
+  if (edges)
+    for (const [side, Wg, Hg] of [[0, 128, 544], [0, 129, 544], [0, 128 + WikiBar.BAR_W + 1, 544], [0, 768, 63], [0, 768, 64],
+      [-1, 768, 544], [art.bar.length, 768, 544]])
+      out.push({ side, colour: 0, Wg, Hg, rgba: true, num: NUMBERS[1][1], name: 'bounds' });
+  return out;
+}
+
+function cCheck(lines) {
+  const exe = path.join(DDRAW, 'tests/wikibartest-native.exe');   // `.exe` so the tree's *.exe ignore covers it
+  run('gcc', ['-std=c99', '-Wall', '-Wextra', '-Werror', '-Isrc', '-Iinc', '-O1', '-g', '-fsanitize=address,undefined',
+    '-fno-sanitize-recover=all', '-o', exe, 'tests/wikibartest.c', 'src/tagpu_wikibar.c', 'src/tagpu_json.c', '-lm'],
+  { cwd: DDRAW, encoding: 'utf8' });
+  const packs = [];
+  const synth = mutate => { const s = syntheticPack(); mutate(s.json.art.bar[0].rects); return WikiSide.read(s.json, s.sheet, s.pal, null, null, s.fonts); };
+  packs.push(['synthetic', synth(() => {})]);
+  packs.push(['synthetic edges', synth(R => { R.logo = [100, -5, 140, 40]; R.metal0 = [-3, 1, -3, 1]; R.energymax = [2, 1, 2, 1];
+    R.energynum = [2170, 30, 2170, 30]; R.metalbar = [-1024, -9, 4096, 40]; })]);
+  if (fs.existsSync(PACKS))
+    for (const mod of fs.readdirSync(PACKS).sort())
+      if (fs.existsSync(path.join(PACKS, mod, 'side.json'))) packs.push([mod, readPack(path.join(PACKS, mod))]);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'barcheck-'));
+  let failed = 0;
+  try {
+    packs.forEach(([name, p], pi) => {
+      if (!p.art || !p.art.bar || !p.art.bar.some(b => b)) {
+        failed++;
+        lines.push(`  C: ${name}: side.js reads no bar art: ${p.problems.join('; ')}`);
+        return;
+      }
+      const dir = path.join(tmp, `pack${pi}`), cases = casesOf(p.art, pi === 0);
+      writeC(p.art, dir);
+      fs.writeFileSync(path.join(dir, 'cases.txt'), cases.map(c =>
+        [c.side, c.colour, c.Wg, c.Hg, c.rgba ? 1 : 0, ...FIELDS.map(f => String(c.num[f]))].join(' ')).join('\n') + '\n');
+      const out = path.join(dir, 'out.bin'), fd = fs.openSync(out, 'w');
+      run(exe, ['compose', dir, path.join(dir, 'cases.txt')], { stdio: ['ignore', fd, 'pipe'] });
+      fs.closeSync(fd);
+      const b = fs.readFileSync(out), N = WikiBar.BAR_W * WikiBar.BAR_H;
+      let o = 0, bad = 0, drawn = 0, pictures = 0;
+      for (const c of cases) {
+        const want = WikiBar.compose(p.art, c.side, c.colour, c.Wg, c.Hg, c.num), got = b.readInt32LE(o);
+        const what = `${name} side ${c.side} colour ${c.colour} ${c.Wg} x ${c.Hg} ${c.name}`;
+        o += 4;
+        if ((want ? want.w : -1) !== got) {
+          if (++bad <= 10) lines.push(`  C: ${what}: tagpu_wikibar.c answers ${got}, bar.js ${want ? want.w : 'null'}`);
+          if (got >= 0) o += N + (c.rgba ? 4 * N : 0);
+          continue;
+        }
+        if (got < 0) continue;
+        pictures++;
+        const idx = b.subarray(o, o + N);
+        o += N;
+        let i = 0;
+        while (i < N && idx[i] === want.idx[i]) i++;
+        if (i < N) {
+          if (++bad <= 10) lines.push(`  C: ${what}: the indices DIFFER first at row ${Math.floor(i / WikiBar.BAR_W)}, column ${i % WikiBar.BAR_W}: C ${idx[i]}, bar.js ${want.idx[i]}`);
+        } else if (want.idx.some(v => v)) drawn++;
+        if (c.rgba) {
+          const px = b.subarray(o, o + 4 * N), w2 = WikiBar.rgba(p.art, want);
+          o += 4 * N;
+          if (Buffer.compare(px, Buffer.from(w2.buffer, w2.byteOffset, w2.byteLength)) && ++bad <= 10) lines.push(`  C: ${what}: the RGBA DIFFERS`);
+        }
+      }
+      if (o !== b.length) { bad++; lines.push(`  C: ${name}: wikibartest wrote ${b.length} bytes, the cases ${o}`); }
+      if (bad) { failed++; lines.push(`  C: ${name}: ${bad} of ${cases.length} cases DIFFER`); }
+      else lines.push(`  C: ${name}: ${cases.length} cases equal byte for byte (${pictures} pictures, ${cases.length - pictures} refused alike), ` +
+        `${p.art.bar.filter(b => b).length} of ${p.art.bar.length} sides with bars, ${p.art.logos ? p.art.logos.length : 0} badge frames`);
+      if (pictures && !drawn) { failed++; lines.push(`  C: ${name}: every picture is empty`); }
+    });
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  return failed;
+}
+
 let code = 0;
 try {
-  if (!process.argv.includes('--js')) throw new CannotRun('the C half needs tagpu_wikibar.c, which this tree does not have: run with --js');
+  const JS_ONLY = process.argv.includes('--js');
   const lines = [];
-  const failed = captureCheck(lines) + readerCheck(lines);
-  console.log(failed ? `barcheck: ${failed} checks FAIL` : 'barcheck: bar.js holds -- the capture\'s two bars and the reader');
+  const failed = captureCheck(lines) + readerCheck(lines) + (JS_ONLY ? 0 : cCheck(lines));
+  console.log(failed ? `barcheck: ${failed} checks FAIL` : `barcheck: bar.js holds -- the capture's two bars and the reader` +
+    (JS_ONLY ? '' : '; tagpu_wikibar.c equals it on every pack'));
   for (const l of lines) console.log(l);
   code = failed ? 1 : 0;
 } catch (x) {
