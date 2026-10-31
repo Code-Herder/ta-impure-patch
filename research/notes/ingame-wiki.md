@@ -75,8 +75,10 @@ sounds -- through a DirectSound object of the wiki's own, at the player's volume
 | Serving it | `python3 tools/wiki/serve.py`: the repository with `Cache-Control: no-cache`, and the units' scripts at `POST /cob`; then `http://127.0.0.1:8000/tools/wiki/mockup/` |
 | This page | the decisions, the data format and the simulation's contract |
 
-Two entries, both under Quality of Life → Building: **Quick Build: Resource Extractors** and
-**Build Lines, Grids and Rings** (the Shift-drag placement family, landed on `main` at `90c67078`).
+Three entries, under Quality of Life: in Building, **Quick Build: Resource Extractors** and
+**Build Lines, Grids and Rings** (the Shift-drag placement family); in Reclaiming, **Reclaim
+Sweep**. Four replay entries, under a category of their own, are designed and not built:
+[the replay entries' plan](ingame-wiki-replay-plan.html).
 
 ## The decisions
 
