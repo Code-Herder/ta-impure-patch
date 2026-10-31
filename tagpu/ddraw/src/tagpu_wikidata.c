@@ -243,6 +243,23 @@ static int g_rows(const TJV* g, int vent, int fx, int fz, uint16_t* rows)
     return 1;
 }
 
+/* AN ECONOMY FIGURE of an entry's unit, sim.js checkGame's rule: absent 0; else a number, finite and
+   at least 0, or for `signed_` (energyUse) of magnitude below WIKI_ECON_MAX */
+static int econ_figure(R* r, const TJV* u, const char* key, int signed_, double* out, const char* type)
+{
+    const TJV* v = tj_get(u, key);
+    *out = 0;
+    if (!v) return 1;
+    if (!tj_is(v, TJ_NUM) || !(signed_ ? fabs(v->num) < WIKI_ECON_MAX : v->num >= 0 && v->num < INFINITY)) {
+        char why[WIKI_ID_MAX + 64];
+        snprintf(why, sizeof why, "unit %s: %s is not a finite number %s", type, key,
+                 signed_ ? "of magnitude below 1e7" : ">= 0");
+        return refuse(r, why, NULL);
+    }
+    *out = v->num;
+    return 1;
+}
+
 static int defs(R* r, WIKIENTRY* e, const TJV* units)
 {
     const TJV* u;
@@ -267,6 +284,21 @@ static int defs(R* r, WIKIENTRY* e, const TJV* units)
         d->max_velocity   = tj_num(tj_get(u, "maxVelocity"), 0);
         d->extracts       = tj_num(tj_get(u, "extracts"), 0);
         d->energy_make    = tj_num(tj_get(u, "energyMake"), 0);
+        if (!econ_figure(r, u, "buildCostMetal", 0, &d->build_cost_metal, d->name)
+            || !econ_figure(r, u, "buildCostEnergy", 0, &d->build_cost_energy, d->name)
+            || !econ_figure(r, u, "metalMake", 0, &d->metal_make, d->name)
+            || !econ_figure(r, u, "metalStorage", 0, &d->metal_storage, d->name)
+            || !econ_figure(r, u, "energyStorage", 0, &d->energy_storage, d->name)
+            || !econ_figure(r, u, "energyUse", 1, &d->energy_use, d->name))
+            return 0;
+        /* `rival` and `corpse` are a game entry's (game_defs reads the corpse once the features are);
+           the frame is read before the units */
+        d->corpse = -1;
+        if ((tj_get(u, "rival") || tj_get(u, "corpse")) && e->frame != WIKI_FRAME_GAME)
+            return refuse(r, "rival and corpse are a game entry's: unit", d->name);
+        if (tj_get(u, "rival") && !tj_is(tj_get(u, "rival"), TJ_TRUE) && !tj_is(tj_get(u, "rival"), TJ_FALSE))
+            return refuse(r, "rival is not a boolean: unit", d->name);
+        d->rival = tj_is(tj_get(u, "rival"), TJ_TRUE);
         d->vent           = tj_is(tj_get(u, "vent"), TJ_TRUE);
         /* WIKI_FP_MAX: the G rows' width; no entry's G type comes near it (ARMGEO is 4 x 4) */
         if (d->vent && (d->fx > WIKI_FP_MAX || d->fz > WIKI_FP_MAX))
@@ -391,11 +423,41 @@ static int scene_unit(R* r, const TJV* v, WIKISCENEUNIT* u)
     return 1;
 }
 
+/* A GAME ENTRY'S SCENE'S SEATS, sim.js checkSeats: 1..WIKI_SEATS objects of name, metal and energy
+   and nothing else. THE BOUND: the name and its terminator fit WIKISEAT.name. */
+static int seats(R* r, const TJV* v, WIKISCENE* s)
+{
+    const TJV *c, *k;
+    int i = 0;
+    if (!tj_is(v, TJ_ARR) || v->n < 1 || v->n > WIKI_SEATS) return refuse(r, "a game scene's seats are not a list of 1 to 4", NULL);
+    s->nseat = v->n;
+    for (c = v->first; c; c = c->next, i++) {
+        WIKISEAT* z = &s->seat[i];
+        const char* name = tj_str(tj_get(c, "name"), NULL);
+        if (!tj_is(c, TJ_OBJ)) return refuse(r, "a seat is not an object", NULL);
+        for (k = c->first; k; k = k->next)
+            if (strcmp(k->key, "name") && strcmp(k->key, "metal") && strcmp(k->key, "energy"))
+                return refuse(r, "a seat holds a key it does not know:", k->key);
+        if (!name || !*name || strlen(name) >= sizeof z->name || strchr(name, '{'))
+            return refuse(r, "a seat's name is not 1 to 31 bytes without \"{\"", NULL);
+        strcpy(z->name, name);
+        if (!integer(r, tj_get(c, "metal"), WIKI_SEAT_MIN, WIKI_SEAT_MAX, &z->metal, "a seat's metal")
+            || !integer(r, tj_get(c, "energy"), WIKI_SEAT_MIN, WIKI_SEAT_MAX, &z->energy, "a seat's energy"))
+            return 0;
+    }
+    return 1;
+}
+
 /* one of the entry's scenes (`entry` set: its map counts) or a demo's additions */
 static int scene(R* r, const TJV* v, WIKISCENE* s, int entry)
 {
     const TJV* c;
     int i;
+    /* seats are a game entry's scene's, and every one of its scenes has them */
+    if ((c = tj_get(v, "seats")) && !entry) return refuse(r, "a demo's scene has no seats", NULL);
+    if (entry && r->e->frame == WIKI_FRAME_GAME) {
+        if (!seats(r, c, s)) return 0;
+    } else if (c) return refuse(r, "seats are a game entry's", NULL);
     if (entry) {
         const TJV* map = tj_get(v, "map");
         if (!integer(r, tj_get(map, "w"), 1, WIKI_MAP_MAX, &s->w, "the map's width")
@@ -429,6 +491,9 @@ static int scene(R* r, const TJV* v, WIKISCENE* s, int entry)
     }
     for (c = tj_is(tj_get(v, "units"), TJ_ARR) ? tj_get(v, "units")->first : NULL, i = 0; c; c = c->next, i++)
         if (!scene_unit(r, c, &s->unit[i])) return 0;
+    /* a game scene's unit is one of its seats' (a demo's additions: demo() holds them to its scene's) */
+    for (i = 0; s->nseat && i < s->nunit; i++)
+        if (s->unit[i].owner >= s->nseat) return refuse(r, "a unit's owner is no seat of its scene", NULL);
     for (c = tj_is(tj_get(v, "features"), TJ_ARR) ? tj_get(v, "features")->first : NULL, i = 0; c; c = c->next, i++)
         if (!scene_feat(r, c, &s->feat[i])) return 0;
     /* `kind` replaces the entry's when given, the mockup's `??`; sim.js refuses one not of KINDS */
@@ -475,7 +540,10 @@ static int scenes(R* r, WIKIENTRY* e, const TJV* v)
     return 1;
 }
 
-static int input(R* r, const TJV* v, WIKIINPUT* in)
+/* an input of a demo's script, or with `game` of a game script (sim.js checkGame): there it has no
+   caption and no wait, its `seat` is 0 and read past, as sim.js takes it off before its other rules,
+   and a kill is {at, kill} alone, `extra` as any input but a caption is, so no trip admits it */
+static int input(R* r, const TJV* v, WIKIINPUT* in, int game)
 {
     const TJV* c;
     memset(in, 0, sizeof *in);
@@ -483,8 +551,26 @@ static int input(R* r, const TJV* v, WIKIINPUT* in)
     in->at = tj_num(tj_get(v, "at"), 0);
     for (c = tj_is(v, TJ_OBJ) ? v->first : NULL; c; c = c->next)
         if (strcmp(c->key, "at") && strcmp(c->key, "caption") && strcmp(c->key, "build") && strcmp(c->key, "reclaim")
-            && strcmp(c->key, "pick"))
+            && strcmp(c->key, "pick") && !(game && !strcmp(c->key, "seat")))
             in->extra = 1;
+    if (game) {
+        if (tj_get(v, "caption") || tj_get(v, "until")) return refuse(r, "a game input is a caption or a wait", NULL);
+        if ((c = tj_get(v, "seat")) && !(tj_is(c, TJ_NUM) && c->num == 0)) {
+            char why[96], num[32];
+            snprintf(why, sizeof why, "seat %s: a seat other than 0 has no cursor yet",
+                     tj_is(c, TJ_NUM) ? jsnum(num, sizeof num, c->num) : "?");
+            return refuse(r, why, NULL);
+        }
+        if ((c = tj_get(v, "kill"))) {
+            const TJV* k;
+            for (k = v->first; k; k = k->next)
+                if (strcmp(k->key, "at") && strcmp(k->key, "kill")) return refuse(r, "a kill carries another key:", k->key);
+            if (!tj_is(c, TJ_STR)) return refuse(r, "a kill names no unit", NULL);
+            in->has |= WIKI_IN_KILL;
+            in->kill = c->str;
+            return 1;
+        }
+    }
     if (tj_get(v, "caption")) {
         in->has |= WIKI_IN_CAPTION;
         in->caption = text_or_null(tj_get(v, "caption"));
@@ -535,7 +621,72 @@ int tagpu_wikidata_input(const WIKIENTRY* e, const TJV* v, WIKIINPUT* in, char* 
     r.e = e;
     r.err = err;
     r.errn = errn;
-    return input(&r, v, in);
+    return input(&r, v, in, 0);
+}
+
+/* whether unit id `id` is one of the merged scene's explicit ids: the entry scene's the demo is on
+   and the demo's additions */
+static int scene_has_id(const WIKIENTRY* e, const WIKIDEMO* d, const char* id)
+{
+    const WIKISCENE* sc[2] = { &e->scenes[d->on], &d->scene };
+    int k, i;
+    for (k = 0; k < 2; k++)
+        for (i = 0; i < sc[k]->nunit; i++)
+            if (sc[k]->unit[i].id[0] && !strcmp(sc[k]->unit[i].id, id)) return 1;
+    return 0;
+}
+
+/* A GAME ENTRY'S DEMO'S GAME, sim.js checkGame: {end, inputs, sidebar} and no other key; end an
+   integer 1..WIKI_GAME_END_MAX, sidebar a boolean; each input a game input (input), each kill of a
+   unit of the merged scene by its explicit id, once, at most WIKI_GAME_KILLS, at or before the end.
+   THE BOUND the game simulation's features rest on: no feature of the merged scene takes a unit's id
+   (its id, or f<k + 1> when it has none, sim.js's naming), since a unit's wreck takes the unit's,
+   and the merged scene's features and the kills together are at most WIKI_FEATS_MAX. */
+static int game(R* r, const TJV* v, WIKIDEMO* d)
+{
+    const TJV *c, *k, *inputs = tj_get(v, "inputs");
+    const WIKIENTRY* e = r->e;
+    const WIKISCENE* sc[2] = { &e->scenes[d->on], &d->scene };
+    WIKIGAME* g = &d->game;
+    int i = 0, j, n, q, kills = 0;
+    if (!tj_is(v, TJ_OBJ)) return refuse(r, "a game entry's demo has no game", NULL);
+    for (k = v->first; k; k = k->next)
+        if (strcmp(k->key, "end") && strcmp(k->key, "inputs") && strcmp(k->key, "sidebar"))
+            return refuse(r, "game holds a key it does not know:", k->key);
+    if (!tj_is(tj_get(v, "end"), TJ_NUM)) return refuse(r, "the game's end is not an integer 1..5400", NULL);
+    g->end = tj_get(v, "end")->num;
+    if (!(g->end >= 1 && g->end <= WIKI_GAME_END_MAX) || g->end != floor(g->end))
+        return refuse(r, "the game's end is not an integer 1..5400", NULL);
+    if ((c = tj_get(v, "sidebar"))) {
+        if (!tj_is(c, TJ_TRUE) && !tj_is(c, TJ_FALSE)) return refuse(r, "the game's sidebar is not a boolean", NULL);
+        g->has_sidebar = 1;
+        g->sidebar = tj_is(c, TJ_TRUE);
+    }
+    if (!tj_is(inputs, TJ_ARR)) return refuse(r, "the game's inputs are not a list", NULL);
+    for (q = 0, n = 0; q < 2; q++)
+        for (j = 0; j < sc[q]->nfeat; j++, n++) {
+            char dflt[WIKI_ID_MAX];
+            const char* id = sc[q]->feat[j].id[0] ? sc[q]->feat[j].id : dflt;
+            snprintf(dflt, sizeof dflt, "f%d", n + 1);
+            if (scene_has_id(e, d, id)) return refuse(r, "a feature has a unit's id:", id);
+        }
+    g->ninput = count(inputs);
+    if (!(g->input = (WIKIINPUT*)zalloc(r, (size_t)g->ninput, sizeof *g->input))) return 0;
+    for (c = inputs->first; c; c = c->next) {
+        WIKIINPUT* in = &g->input[i++];
+        if (!tj_is(tj_get(c, "at"), TJ_NUM)) return refuse(r, "a game input has no tick", NULL);
+        if (!input(r, c, in, 1)) return 0;
+        if (!(in->has & WIKI_IN_KILL)) continue;
+        if (!scene_has_id(e, d, in->kill)) return refuse(r, "a kill names no unit of the scene:", in->kill);
+        for (j = 0; j < i - 1; j++)
+            if ((g->input[j].has & WIKI_IN_KILL) && !strcmp(g->input[j].kill, in->kill))
+                return refuse(r, "a unit is killed twice:", in->kill);
+        if (kills == WIKI_GAME_KILLS) return refuse(r, "a game script has more than 64 kills", NULL);
+        if (!(in->at <= g->end)) return refuse(r, "a kill is after the game's end", NULL);
+        kills++;
+    }
+    if (n + kills > WIKI_FEATS_MAX) return refuse(r, "the scene's features and the kills pass 256", NULL);
+    return 1;
 }
 
 static int demo(R* r, const TJV* v, WIKIDEMO* d)
@@ -556,15 +707,23 @@ static int demo(R* r, const TJV* v, WIKIDEMO* d)
     if (!(d->input = (WIKIINPUT*)zalloc(r, (size_t)d->ninput, sizeof *d->input))) return 0;
     for (c = tj_is(inputs, TJ_ARR) ? inputs->first : NULL; c; c = c->next)
         if (!tj_is(tj_get(c, "at"), TJ_NUM)) return refuse(r, "an input has no tick", NULL);
-        else if (!input(r, c, &d->input[i++])) return 0;
+        else if (!input(r, c, &d->input[i++], 0)) return 0;
     if ((d->has_end = end && !tj_is(end, TJ_NULL)) && !number(r, end, &d->end, "the end")) return 0;
     /* sim.js throws on a `sidebar` that is not a boolean when it plays the demo, and every demo is
        played, so the loader refuses it whatever reads the demo */
     if ((c = tj_get(v, "sidebar"))) {
+        if (r->e->frame == WIKI_FRAME_GAME) return refuse(r, "a game entry's demo takes its sidebar in game", NULL);
         if (!tj_is(c, TJ_TRUE) && !tj_is(c, TJ_FALSE)) return refuse(r, "sidebar is not a boolean", NULL);
         d->has_sidebar = 1;
         d->sidebar = tj_is(c, TJ_TRUE);
     }
+    for (i = 0; i < d->scene.nunit; i++)
+        if (r->e->frame == WIKI_FRAME_GAME && d->scene.unit[i].owner >= r->e->scenes[d->on].nseat)
+            return refuse(r, "a unit's owner is no seat of its scene", NULL);
+    c = tj_get(v, "game");
+    if (r->e->frame != WIKI_FRAME_GAME) {
+        if (c) return refuse(r, "game is a game entry's", NULL);
+    } else if (!(d->has_game = game(r, c, d))) return 0;
     r->where = NULL;
     return 1;
 }
@@ -587,6 +746,7 @@ void tagpu_wikidata_entry_free(WIKIENTRY* e)
     for (i = 0; e->demo && i < e->ndemo; i++) {
         scene_free(&e->demo[i].scene);
         free(e->demo[i].input);
+        free(e->demo[i].game.input);
     }
     free(e->demo);
     for (i = 0; e->scenes && i < e->nscene; i++) scene_free(&e->scenes[i]);
@@ -597,6 +757,19 @@ void tagpu_wikidata_entry_free(WIKIENTRY* e)
     free((void*)e->locked_in);
     if (e->doc) tagpu_json_free(e->doc);
     memset(e, 0, sizeof *e);
+}
+
+/* a game entry's units' `corpse`: the row of the entry's features it names (sim.js checkGame) */
+static int corpses(R* r, WIKIENTRY* e, const TJV* units)
+{
+    const TJV* u;
+    int i = 0;
+    for (u = units->first; u; u = u->next, i++) {
+        const TJV* c = tj_get(u, "corpse");
+        if (c && (!tj_is(c, TJ_STR) || (e->def[i].corpse = tagpu_wikidata_feat(e, c->str)) < 0))
+            return refuse(r, "a corpse names no feature of the entry: unit", e->def[i].name);
+    }
+    return 1;
 }
 
 /* ---- the text's tokens: text.js's checkText and checkEntry, which is their specification ---- */
@@ -700,7 +873,7 @@ static size_t caption_worst(const char* s, const WIKIENTRY* e)
             word = WIKI_TITLE_MAX - 1;
             for (c = 0; c < WIKI_NCAST && !(strlen(CAST_NAMES[c]) == len && !strncmp(CAST_NAMES[c], b + 1, len)); c++) {}
             for (i = 0; c < WIKI_NCAST && i < e->ndef; i++)
-                if (e->def[i].cast == c) {
+                if (e->def[i].cast == c && !e->def[i].rival) {
                     const char* own = e->def[i].title && e->def[i].title[0] ? e->def[i].title : e->def[i].name;
                     if (strlen(own) > word) word = strlen(own);
                     break;
@@ -733,8 +906,9 @@ static int tokens(R* r, const WIKIENTRY* e, const TJV* root)
     char where[96], num[32];
     unsigned casts = 0;
     int i;
+    /* a token names the player's casts only: a rival unit's cast is no word of the text */
     for (i = 0; i < e->ndef; i++)
-        if (e->def[i].cast >= 0) casts |= 1u << e->def[i].cast;
+        if (e->def[i].cast >= 0 && !e->def[i].rival) casts |= 1u << e->def[i].cast;
     if (!text_ok(r, tj_get(root, "title"), casts, "title") || !text_ok(r, tj_get(root, "subtitle"), casts, "subtitle"))
         return 0;
     for (c = tj_is(tj_get(root, "text"), TJ_ARR) ? tj_get(root, "text")->first : NULL, i = 0; c; c = c->next, i++) {
@@ -774,11 +948,17 @@ int tagpu_wikidata_entry(WIKIENTRY* e, const char* text, size_t len, char* err, 
     /* the mockup's `(entry.pace && entry.pace.build) || 1` */
     pace = tj_num(tj_get(tj_get(root, "pace"), "build"), 0);
     e->pace = pace ? pace : 1;
+    /* sim.js isGame: `frame` absent, or "game"; a game entry has no pace */
+    c = tj_get(root, "frame");
+    e->frame = c && tj_is(c, TJ_STR) && !strcmp(c->str, "game") ? WIKI_FRAME_GAME : WIKI_FRAME_PAGE;
     if (tj_num(tj_get(root, "format"), 0) != 2) refuse(&r, "is not format 2", NULL);
+    else if (c && e->frame != WIKI_FRAME_GAME) refuse(&r, "has a frame other than \"game\"", NULL);
+    else if (e->frame == WIKI_FRAME_GAME && tj_get(root, "pace")) refuse(&r, "is a game entry with a pace", NULL);
     else if (!strings(&r, tj_get(root, "text"), &e->text, &e->ntext)) {}
     else if (!strings(&r, tj_get(root, "lockedIn"), &e->locked_in, &e->nlocked)) {}
     else if (!defs(&r, e, tj_get(root, "units"))) {}
     else if (!features(&r, e, tj_get(root, "features"))) {}
+    else if (!corpses(&r, e, tj_get(root, "units"))) {}
     else if (!scenes(&r, e, tj_get(root, "scenes"))) {}
     else if (!(e->demo = (WIKIDEMO*)zalloc(&r, (size_t)(e->ndemo = count(tj_get(root, "demos"))), sizeof *e->demo))) {}
     else

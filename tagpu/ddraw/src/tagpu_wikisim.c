@@ -40,7 +40,7 @@
 /* The context sim.js's context() gives a sim created with none: the layout's side 0, which every
    checked layout has (tagpu_wikilayout_check: 1 to 8 sides), no casting, Interface Type 1, and
    neither scripts nor sound. */
-static const WIKISIMCTX CTX_NONE = { 0, NULL, 1, NULL, NULL };
+static const WIKISIMCTX CTX_NONE = { 0, NULL, 1, NULL, NULL, NULL };
 enum { KIND_NONE, KIND_MEX, KIND_GEO };
 enum { HOW_BUILD, HOW_RECLAIM, HOW_FEATURE };
 /* where the cursor is (sim.js over()); NONE: a mouse button that has not gone down */
@@ -3022,6 +3022,21 @@ static int reach(WIKISIM* s, const WIKIORDER* o, WIKIUNIT* u, int t, int ox, int
     return go(s, u, &g) == GO_ARRIVED;
 }
 
+/* THE BUILD'S REQUEST, 0x4011C0 on the BUILDER's ledger (0x41BA60 charges it at 0x41BC5A,
+   `lea ecx,[ebp+0xbc]`, ebp the builder): the request is always added (0x4011D1..0x4011E3) and
+   granted unless either debt is above 0 (0x4011C0..0x4011F6, 0x4011F8..0x401212); the step applies
+   its progress only on a grant (0x41BC65..0x41BC67) */
+static int econ_request(WIKIUNIT* u, double e, double m)
+{
+    WIKILEDGER* L = &u->led;
+    L->eR += e;
+    L->mR += m;
+    if (L->eD > 0 || L->mD > 0) return 0;
+    L->eG += e;
+    L->mG += m;
+    return 1;
+}
+
 /* a builder in range works on st, and turns at once to face its centre (unchanged when it stands
    on the centre); its work waits on its stance (0x438700), at the work's start only (MobileBuild's
    work state 0x403E0C and the step 0x41BA60 never read +0x10F): no progress on a work until its
@@ -3047,6 +3062,20 @@ static void credit(WIKISIM* s, WIKIUNIT* u, WIKIUNIT* st, int how)
     if (how == HOW_RECLAIM && u->norder && u->order[0].serial != u->said) {
         u->said = u->order[0].serial;
         notice(s, u, WIKI_SND_WORKING);
+    }
+    /* in a game, the build's request (econ_request): its increment's part of the structure still
+       unbuilt after this tick's builders before it, as the engine's step updates +0x104 call by
+       call, times the built type's build costs (0x41BB36..0x41BB5C); refused, no progress and no
+       spray. The increment is worker_time / 30 / build_time where the engine's step takes
+       floor(WorkerTime / 30), but the increments of a building sum to 1 in both, so a building
+       costs its build costs */
+    if (s->game && how == HOW_BUILD) {
+        const double left = 1 - st->built - st->work_build;
+        if (left > 0) {
+            const double dd = w < left ? w : left;
+            const WIKIDEF* b = def(s, st->type);
+            if (!econ_request(u, dd * b->build_cost_energy, dd * b->build_cost_metal)) return;
+        }
     }
     if (how == HOW_BUILD) st->work_build += w;
     else st->work_reclaim += w;
@@ -3749,6 +3778,208 @@ static int cursor_shape(const WIKISIM* s)
 /* the sequence a shape shows: the build cursor is the arrow's cursornormal (tagpu_wikisim.h) */
 static int cursor_seq(int shape) { return shape == WIKI_CURSOR_BUILD ? WIKI_CURSOR_ARROW : shape; }
 
+/* ---- THE GAME (WIKI_PLAY_GAME and _STALL only; research/notes/ingame-wiki-replay-plan.md, decisions
+   2, 3, 7 and 18), sim.js's game functions: the seats' counts and economy, the kills and the
+   wrecks. A demo and Try it run none of it, so no state or hash of theirs can change by it. ---- */
+
+/* the seats' unit counts at the end of a step, after the work; `out` once a count goes from above
+   0 to 0. A nanoframe counts: +0x144 is incremented at every create, finished or not (0x486187,
+   0x486322). */
+static void econ_counts(WIKISIM* s)
+{
+    int k, i;
+    for (k = 0; k < s->nseat; k++) {
+        WIKIECON* z = &s->econ[k];
+        int n = 0;
+        for (i = 0; i < s->nunit; i++) n += s->unit[i]->owner == k;
+        if (z->units > 0 && n == 0) z->out = 1;
+        z->units = n;
+    }
+}
+
+/* one resource's settle, 0x401A4D..0x401AB1 then 0x401AB3..0x401B27: the debt paid first, then the
+   grants, from what is stored plus produced; what passes the storage is wasted. The fractions of
+   the debt and of the grants paid out. */
+static void econ_settle(double* cur, double* waste, double P, double D, double G, double max, double* fD, double* fG)
+{
+    const double A = *cur + P;
+    const double rest = A - (D <= A ? D : A);
+    double c, w = 0;
+    *fD = D <= A ? 1 : A / D;
+    *fG = G <= rest ? 1 : rest / G;
+    c = rest - (G <= rest ? G : rest);
+    if (c > max) {
+        w = c - max;
+        c = max;
+    }
+    *cur = c;
+    *waste += w;
+}
+
+/* THE PASS, 0x401360, on ticks 1, 30, 60, ...: sim.js's `pass`, which says it all with the
+   addresses; the arithmetic is sim.js's operation for operation, so the two agree to the bit */
+static void econ_pass(WIKISIM* s)
+{
+    int k, i;
+    for (k = 0; k < s->nseat; k++) {
+        WIKIECON* z = &s->econ[k];
+        double sm = 0, se = 0, EP = 0, ER = 0, EG = 0, ED = 0, MP = 0, MR = 0, MG = 0, MD = 0;
+        double fDe, fGe, fDm, fGm;
+        for (i = 0; i < s->nunit; i++) {
+            WIKIUNIT* u = s->unit[i];
+            const WIKIDEF* d = def(s, u->type);
+            WIKILEDGER* L = &u->led;
+            const double eu = d->energy_use;
+            const int active = u->built >= 1 && d->activate_when_built;
+            if (u->owner != k) continue;
+            if (!mobile(s, u->type)) {
+                if (active) {
+                    int granted = 0;
+                    if (eu >= 0) {
+                        L->eR += eu;
+                        if (!(L->eD > 0)) {
+                            L->eG += eu;
+                            granted = 1;
+                        }
+                    } else
+                        L->eP += -eu;
+                    if (d->extracts > 0 && granted) L->mP += d->extracts * extractor_speed(s, u);
+                }
+            } else if (active || u->stepped) {
+                if (eu >= 0) {
+                    L->eR += eu;
+                    if (!(L->eD > 0)) L->eG += eu;
+                } else
+                    L->eP += -eu;
+            }
+            if (u->built >= 1) {
+                L->eP += d->energy_make;
+                L->mP += d->metal_make;
+                se += d->energy_storage;
+                sm += d->metal_storage;
+            }
+        }
+        for (i = 0; i < s->nunit; i++) {
+            const WIKILEDGER* L = &s->unit[i]->led;
+            if (s->unit[i]->owner != k) continue;
+            EP += L->eP; ER += L->eR; EG += L->eG; ED += L->eD;
+            MP += L->mP; MR += L->mR; MG += L->mG; MD += L->mD;
+        }
+        z->emax = se + (z->cmd_lost ? 0 : z->be);
+        z->mmax = sm + (z->cmd_lost ? 0 : z->bm);
+        z->ei = EP;
+        z->eo = ER;
+        z->mi = MP;
+        z->mo = MR;
+        econ_settle(&z->e, &z->we, EP, ED, EG, z->emax, &fDe, &fGe);
+        econ_settle(&z->m, &z->wm, MP, MD, MG, z->mmax, &fDm, &fGm);
+        for (i = 0; i < s->nunit; i++) {
+            WIKILEDGER* L = &s->unit[i]->led;
+            if (s->unit[i]->owner != k) continue;
+            L->eD = (L->eG - fGe * L->eG) + (L->eD - fDe * L->eD);
+            L->eP = L->eR = L->eG = 0;
+            L->mD = (L->mG - fGm * L->mG) + (L->mD - fDm * L->mD);
+            L->mP = L->mR = L->mG = 0;
+        }
+        if (s->econ_mode == WIKI_ECON_REFUSE && (fDe < 1 || fGe < 1 || fDm < 1 || fGm < 1)) s->starved = 1;
+    }
+}
+
+/* THE WRECK of a finished unit killed, sim.js's `corpse`, which gives the engine's placement rules
+   (0x486360, 0x423C50) with their addresses. BOUND: the features array holds the merged scene's
+   features plus the game script's kills (scene_feats), which the loader holds to WIKI_FEATS_MAX;
+   a kill adds at most one feature and a feature it destroys leaves, so s->nfeat never passes that
+   capacity, and `gone` (WIKI_FEATS_MAX cells) takes each feature at most once. The row is the
+   type's corpse, an index of the bound features table the binder or the loader checked. */
+static void corpse(WIKISIM* s, const WIKIUNIT* u)
+{
+    const WIKIDEF* d = def(s, u->type);
+    const WIKIFEATDEF* fd;
+    WIKIFEAT* f;
+    int ox, oz, x, z, j;
+    if (d->corpse < 0 || d->corpse >= s->entry->nfeat) return;
+    fd = &s->entry->feat[d->corpse];
+    ox = mobile(s, u->type) ? foot_cell(u->x, d->fx) : u->ox;
+    oz = mobile(s, u->type) ? foot_cell(u->z, d->fz) : u->oz;
+    if (ox < 0 || oz < 0 || ox >= s->W || oz >= s->H || ox + fd->fx > s->W || oz + fd->fz > s->H) return;
+    for (z = oz; z < oz + fd->fz; z++)
+        for (x = ox; x < ox + fd->fx; x++)
+            for (j = 0; j < s->nfeat; j++) {
+                const WIKIFEAT* g = &s->feat[j];
+                if (x >= g->ox && x < g->ox + g->fx && z >= g->oz && z < g->oz + g->fz) {
+                    feat_remove(s, &s->feat[j]);
+                    break;
+                }
+            }
+    f = &s->feat[s->nfeat++];
+    memset(f, 0, sizeof *f);
+    snprintf(f->id, sizeof f->id, "%s", u->id);
+    f->def = d->corpse;
+    f->ox = ox;
+    f->oz = oz;
+    f->fx = fd->fx;
+    f->fz = fd->fz;
+    f->x = (ox + fd->fx / 2.0) * CELL;
+    f->z = (oz + fd->fz / 2.0) * CELL;
+    f->metal = fd->metal;
+    f->energy = fd->energy;
+    f->height = fd->height;
+    f->blocking = fd->blocking;
+    f->reclaimable = fd->reclaimable;
+}
+
+/* THE DEATH SOUND of a finished unit killed, sim.js's `deathSound` (tagpu_wikisim.h,
+   WIKI_SND_DEATH): one event at once, for a unit of any seat, the cell under its centre held to
+   the map */
+static void death_sound(WIKISIM* s, const WIKIUNIT* u)
+{
+    int cx = (int)floor(u->x / CELL), cz = (int)floor(u->z / CELL);
+    if (!s->snd_on) return;
+    cx = cx < 0 ? 0 : cx > s->W - 1 ? s->W - 1 : cx;
+    cz = cz < 0 ? 0 : cz > s->H - 1 ? s->H - 1 : cz;
+    sound_event(s, WIKI_SND_DEATH, u->type, -1, cz * s->W + cx);
+}
+
+/* A KILL, the game script's {at, kill}, fed before its tick's drop_work, COB slice and advance:
+   sim.js's `kill`, which gives the engine's facts with their addresses. Its script goes first,
+   through the host's own removal; a finished unit leaves its wreck and makes its death sound; a
+   commander counts as its seat's loss; a builder whose running build is the unfinished structure
+   killed loses that order and says cant.
+   THE INVARIANT, an ordering: between two ticks the only references to a WIKIUNIT are s->unit[] and
+   s->shown -- advance clears every job pointer by the tick's end, and orders, the spray and the
+   sounds name units by id -- and a kill runs in feed, between advances, so remove_unit clearing
+   both leaves nothing that can read the freed unit. The COB handle goes before the unit, and the
+   host never gives a handle twice. */
+static void kill(WIKISIM* s, const char* id)
+{
+    WIKIUNIT* u = id ? by_id(s, id) : NULL;
+    int i;
+    if (!u) {
+        s->bad_kill = 1;
+        return;
+    }
+    s->nkill++;
+    if (s->cob && u->cob) tagpu_wikicob_remove(s->cob, u->cob);
+    if (u->built >= 1) {
+        corpse(s, u);
+        death_sound(s, u);
+    }
+    if (u->owner >= 0 && u->owner < s->nseat && def(s, u->type)->cast == WIKI_CAST_COMMANDER) {
+        s->econ[u->owner].lost++;
+        s->econ[u->owner].cmd_lost = 1;
+    }
+    if (!mobile(s, u->type) && u->built < 1)
+        for (i = 0; i < s->nunit; i++) {
+            WIKIUNIT* v = s->unit[i];
+            const WIKIORDER* o = v->norder ? &v->order[0] : NULL;
+            if (v != u && o && o->k == WIKI_ORDER_BUILD && o->type == u->type && o->ox == u->ox && o->oz == u->oz) {
+                shift_order(v);
+                notice(s, v, WIKI_SND_CANT);
+            }
+        }
+    remove_unit(s, u);
+}
+
 /* THE SHAPE AFTER EVERY CHANGE, and `now`, the first tick that shows it, as the tick its animation
    began when it shows another sequence. The engine installs a cursor only when its index differs
    from the installed one (0x499254, 0x4992A9 compare main+0x2CBE first), so the arrow and the
@@ -3774,7 +4005,8 @@ static void feed(WIKISIM* s, int t)
             s->wait_max = e->until_max;
             s->wait_from = s->tick;
             if (e->until == WIKI_UNTIL_BUILT) s->wait_built = ++s->built_waits;
-        } else input(s, e);
+        } else if (s->game && (e->has & WIKI_IN_KILL)) kill(s, e->kill);
+        else input(s, e);
     }
 }
 
@@ -3841,9 +4073,15 @@ void tagpu_wikisim_step(WIKISIM* s)
     advance(s);
     spray_tick(s, t);
     sound_tick(s);
+    /* a game's counts after the work, then on ticks 1, 30, 60, ... its economy's pass */
+    if (s->game) {
+        econ_counts(s);
+        if (t == 1 || t % TPS == 0) econ_pass(s);
+    }
     s->tick = t;
-    /* a lock ends the demo on its own tick, which then holds under the entry's badge */
-    s->done = s->clock >= s->end || s->locked != -1 || s->stalled;
+    /* a lock ends the demo on its own tick, which then holds under the entry's badge; a game ends as
+       well on a pass that starved and at a kill that found no unit */
+    s->done = s->clock >= s->end || s->locked != -1 || s->stalled || s->starved || s->bad_kill;
     if (s->lay) route(s);
     s->hover = hover(s);
     cursor_tick(s, t);
@@ -4093,6 +4331,22 @@ const WIKIVIEW* tagpu_wikisim_view(WIKISIM* s)
     /* the column, only with the sidebar on; the type the demo stopped on, with it or without */
     if ((v->has_side = s->lay != NULL)) side_view(s, &v->side);
     v->locked = s->locked;
+    /* a game's own part; with no room for the ledgers the part says none (ledger NULL) */
+    v->game = s->game;
+    if (s->game) {
+        v->nseat = s->nseat;
+        v->seat = s->seat;
+        v->econ = s->econ;
+        v->econ_mode = s->econ_mode;
+        v->starved = s->starved;
+        v->bad_kill = s->bad_kill;
+        v->nkill = s->nkill;
+        v->ledger = NULL;
+        if (grow(s, (void**)&s->vledger, &s->cvledger, s->nunit, sizeof *s->vledger)) {
+            for (i = 0; i < s->nunit; i++) s->vledger[i] = s->unit[i]->led;
+            v->ledger = s->vledger;
+        }
+    }
     return v;
 }
 
@@ -4318,6 +4572,41 @@ uint64_t tagpu_wikisim_hash(const WIKISIM* s)
             fnv_int(&h, R.r);
         }
     }
+    if (s->game) {
+        fnv_int(&h, s->nseat);
+        for (i = 0; i < s->nseat; i++) {
+            const WIKIECON* z = &s->econ[i];
+            fnv_int(&h, z->units);
+            fnv_int(&h, z->lost);
+            fnv_int(&h, z->out);
+            fnv_int(&h, z->cmd_lost);
+            fnv_double(&h, z->m);
+            fnv_double(&h, z->mmax);
+            fnv_double(&h, z->mi);
+            fnv_double(&h, z->mo);
+            fnv_double(&h, z->wm);
+            fnv_double(&h, z->e);
+            fnv_double(&h, z->emax);
+            fnv_double(&h, z->ei);
+            fnv_double(&h, z->eo);
+            fnv_double(&h, z->we);
+        }
+        fnv_int(&h, s->econ_mode);
+        fnv_int(&h, s->starved);
+        fnv_int(&h, s->bad_kill);
+        fnv_int(&h, s->nkill);
+        for (i = 0; i < s->nunit; i++) {
+            const WIKILEDGER* L = &s->unit[i]->led;
+            fnv_double(&h, L->eP);
+            fnv_double(&h, L->eR);
+            fnv_double(&h, L->eG);
+            fnv_double(&h, L->eD);
+            fnv_double(&h, L->mP);
+            fnv_double(&h, L->mR);
+            fnv_double(&h, L->mG);
+            fnv_double(&h, L->mD);
+        }
+    }
     return h;
 }
 
@@ -4351,6 +4640,7 @@ void tagpu_wikisim_free(WIKISIM* s)
     free(s->par);
     free(s->heap);
     free(s->vunit);
+    free(s->vledger);
     free(s->vqueued);
     free(s->vline);
     free(s->feat);
@@ -4494,15 +4784,16 @@ static int scene_units(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, char*
    feature before it, or takes an id given before it. 1, or 0 with the refusal in `err`, or -1 when
    memory ran out. THE BOUND: at most WIKI_FEATS_MAX, the view's and the sweep's tables; each row
    index is one the loader resolved against the entry's table, which the bound entry shares. */
-static int scene_feats(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, char* err, size_t errn)
+static int scene_feats(WIKISIM* s, const WIKISCENE* a, const WIKISCENE* b, int kills, char* err, size_t errn)
 {
     const int n = a->nfeat + (b ? b->nfeat : 0);
     int k, j;
-    if (n > WIKI_FEATS_MAX) {
-        snprintf(err, errn, "the scene has more than %d features", WIKI_FEATS_MAX);
+    if (n > WIKI_FEATS_MAX || kills < 0 || n + kills > WIKI_FEATS_MAX) {
+        snprintf(err, errn, "the scene has more than %d features and kills", WIKI_FEATS_MAX);
         return 0;
     }
-    if (!(s->feat = (WIKIFEAT*)calloc((size_t)n + 1, sizeof *s->feat)) || !(s->gone = (int*)calloc(2 * WIKI_FEATS_MAX, sizeof *s->gone)))
+    /* room for a wreck per kill (corpse) */
+    if (!(s->feat = (WIKIFEAT*)calloc((size_t)(n + kills) + 1, sizeof *s->feat)) || !(s->gone = (int*)calloc(2 * WIKI_FEATS_MAX, sizeof *s->gone)))
         return -1;
     for (k = 0; k < n; k++) {
         const WIKISCENEFEAT* sf = k < a->nfeat ? &a->feat[k] : &b->feat[k - a->nfeat];
@@ -4559,51 +4850,81 @@ static int scene_builder(const WIKIENTRY* e, const WIKISCENE* sc)
 }
 
 /* the bound entry: a copy of the entry pointing at its own types, and those types */
+/* the bound entry, its types and, in a game, its features table with the casts' wrecks */
 struct WIKISIMBOUND {
-    WIKIENTRY e;
-    WIKIDEF   def[WIKI_MAX_DEFS];
+    WIKIENTRY   e;
+    WIKIDEF     def[WIKI_MAX_DEFS];
+    WIKIFEATDEF feat[WIKI_FEAT_DEFS];
 };
 
 /* THE BOUND ENTRY, sim.js's binder, into s->bound and s->unbound (tagpu_wikisim.h says what it
-   is). THE BOUND on every index: the entry holds at most WIKI_MAX_DEFS types (the loader), each
-   cast is checked against WIKI_NCAST before it indexes the casting, and the casting's footprints
-   and G rows were held to WIKI_FP_MAX by its reader. 1, or 0 with the refusal in `err` (-1 when
-   memory ran out), and s->entry is the bound entry once it is 1. */
-static int bind(WIKISIM* s, const WIKIENTRY* e, const WIKICASTING* k, char* err, size_t errn)
+   is). A game entry's rival type binds to `rk`, the rival casting, as the player's to `k`, and keeps
+   its own definition, not unbound, when `rk` is NULL; in a game (`game`) each bound type takes its
+   cast's wreck, put over the features table's row of its name or appended to it. THE BOUND on every
+   index: the entry holds at most WIKI_MAX_DEFS types (the loader), each cast is checked against
+   WIKI_NCAST before it indexes the casting, the casting's footprints and G rows were held to
+   WIKI_FP_MAX by its reader, and a wreck past WIKI_FEAT_DEFS rows refuses the sim before it is
+   written. 1, or 0 with the refusal in `err` (-1 when memory ran out), and s->entry is the bound
+   entry once it is 1. */
+static int bind(WIKISIM* s, const WIKIENTRY* e, const WIKICASTING* k, const WIKICASTING* rk, int game, char* err,
+                size_t errn)
 {
     struct WIKISIMBOUND* B;
-    unsigned seen = 0;
+    unsigned seen[2] = { 0, 0 };
     int i, j;
-    if (e->ndef < 0 || e->ndef > WIKI_MAX_DEFS) {
-        snprintf(err, errn, "wiki sim: the entry has %d types", e->ndef);
+    if (e->ndef < 0 || e->ndef > WIKI_MAX_DEFS || e->nfeat < 0 || e->nfeat > WIKI_FEAT_DEFS) {
+        snprintf(err, errn, "wiki sim: the entry has %d types and %d features", e->ndef, e->nfeat);
         return 0;
     }
     for (i = 0; i < e->ndef; i++) {
-        const int c = e->def[i].cast;
+        const int c = e->def[i].cast, r = e->def[i].rival != 0;
         if (c < 0 || c >= WIKI_NCAST) {
             snprintf(err, errn, "unit %s names no cast", e->def[i].name);
             return 0;
         }
-        if ((seen >> c) & 1) {
-            snprintf(err, errn, "two units name the cast %s", tagpu_wikidata_cast_name(c));
+        if ((seen[r] >> c) & 1) {
+            snprintf(err, errn, "two %sunits name the cast %s", r ? "rival " : "", tagpu_wikidata_cast_name(c));
             return 0;
         }
-        seen |= 1u << c;
+        seen[r] |= 1u << c;
     }
     if (!(B = (struct WIKISIMBOUND*)calloc(1, sizeof *B))) return -1;
     s->bound = B;
     B->e = *e;
     B->e.def = B->def;
+    if (game) {
+        if (e->nfeat) memcpy(B->feat, e->feat, (size_t)e->nfeat * sizeof *B->feat);
+        B->e.feat = B->feat;
+    }
     for (i = 0; i < e->ndef; i++) {
         const WIKIDEF* a = &e->def[i];
-        const WIKICASTDEF* c = &k->cast[a->cast];
+        const WIKICASTING* kc = a->rival ? rk : k;
+        const WIKICASTDEF* c = kc ? &kc->cast[a->cast] : NULL;
         WIKIDEF* d = &B->def[i];
-        if (!c->bound) {
+        if (!c || !c->bound) {
             *d = *a;
-            s->unbound[i] = 1;
+            s->unbound[i] = c != NULL;
             continue;
         }
         memset(d, 0, sizeof *d);
+        d->rival = a->rival;
+        d->corpse = -1;
+        d->build_cost_metal = c->build_cost_metal;
+        d->build_cost_energy = c->build_cost_energy;
+        d->metal_make = c->metal_make;
+        d->metal_storage = c->metal_storage;
+        d->energy_storage = c->energy_storage;
+        d->energy_use = c->energy_use;
+        if (game && c->has_corpse) {
+            for (j = 0; j < B->e.nfeat && strcmp(B->feat[j].name, c->corpse.name); j++) {}
+            if (j == WIKI_FEAT_DEFS) {
+                snprintf(err, errn, "the casting's corpses overflow the features table");
+                return 0;
+            }
+            B->feat[j] = c->corpse;
+            if (j == B->e.nfeat) B->e.nfeat++;
+            d->corpse = j;
+        }
         snprintf(d->name, sizeof d->name, "%s", c->type);
         d->title = c->title;
         d->cast = a->cast;
@@ -4621,7 +4942,7 @@ static int bind(WIKISIM* s, const WIKIENTRY* e, const WIKICASTING* k, char* err,
         d->canreclamate = c->canreclamate;
         d->activate_when_built = c->activate_when_built;
         for (j = 0; j < e->ndef; j++)
-            if ((c->builds >> e->def[j].cast) & 1) d->builds |= (uint64_t)1 << j;
+            if (!e->def[j].rival == !a->rival && ((c->builds >> e->def[j].cast) & 1)) d->builds |= (uint64_t)1 << j;
     }
     for (i = 0; i < e->ndef; i++)
         for (j = 0; j < i; j++)
@@ -4673,9 +4994,36 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     const WIKISCENE* a = &e->scenes[d ? d->on : 0];
     const WIKISCENE* b = d ? &d->scene : NULL;
     const WIKISCENE* sel = b && b->has_selected ? b : a->has_selected ? a : NULL;
+    const int game = scripted == WIKI_PLAY_GAME || scripted == WIKI_PLAY_GAME_STALL;
+    WIKIDEMO gd;
     size_t cells;
-    int i, k, r;
+    int i, k, r, kills = 0;
     memset(s, 0, sizeof *s);
+    /* a game entry plays only as a game and a game only from a game entry's demo, so no page demo
+       reaches a branch of the game's */
+    if (game != (e->frame == WIKI_FRAME_GAME)) {
+        snprintf(err, errn, "%s", game ? "the entry is not a game entry: its demos play as demos"
+                                       : "a game entry's demos play as games");
+        return 0;
+    }
+    if (game && !(d && d->has_game)) {
+        snprintf(err, errn, "a game plays a demo's game script");
+        return 0;
+    }
+    /* A GAME plays the demo's game script as sim.js's gameDemo makes it: its inputs, its end and its
+       sidebar (the loader read each input's seat 0 and kept it out of the input). `gd` lives only
+       through init: resolve copies the inputs, and nothing below keeps `d`. */
+    if (game) {
+        gd = *d;
+        gd.ninput = d->game.ninput;
+        gd.input = d->game.input;
+        gd.has_end = 1;
+        gd.end = d->game.end;
+        gd.has_sidebar = d->game.has_sidebar;
+        gd.sidebar = d->game.sidebar;
+        d = &gd;
+        for (i = 0; i < d->ninput; i++) kills += (d->input[i].has & WIKI_IN_KILL) != 0;
+    }
     /* a layout is checked whole before any sim reads it, as sim.js's checked() does; every index
        read out of it below is then in range */
     if (lay && !tagpu_wikilayout_check(lay, err, errn)) return 0;
@@ -4693,7 +5041,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
     }
     s->iface = ctx->iface;
     s->entry = e;
-    if (ctx->cast && (r = bind(s, e, ctx->cast, err, errn)) <= 0) {
+    if (ctx->cast && (r = bind(s, e, ctx->cast, ctx->rival, game, err, errn)) <= 0) {
         if (r < 0) goto oom;
         tagpu_wikisim_free(s);
         return 0;
@@ -4786,7 +5134,7 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
        its first second, which has no reply with sound (the queue's last time starts at 0) */
     /* the sweep's kind the scene starts with: the demo's, else the entry's scene's, else ALL */
     s->kind = b && b->has_kind ? b->kind : a->has_kind ? a->kind : WIKI_KIND_ALL;
-    if ((r = scene_feats(s, a, b, err, errn)) < 0) goto oom;
+    if ((r = scene_feats(s, a, b, kills, err, errn)) < 0) goto oom;
     if (!r) goto refused;
     s->snd_quiet = 1;
     r = scene_units(s, a, b, err, errn);
@@ -4820,10 +5168,26 @@ int tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int sc
         if (!resolve(s, d)) goto oom;
         if (s->trips && !tagpu_wikidata_trips(d, s->iface, err, errn)) goto refused;
     }
+    /* THE GAME'S SEATS, the scene's, with their economy as the level starts it: stored the seat's
+       settings (0x465EF5..0x465F1A), the base storage the same (0x496F64..0x496F97 floor it at 200,
+       which the loader holds every setting to), the storage and the rates 0 until the first pass
+       (0x46478F, 0x464795) */
+    if ((s->game = game)) {
+        s->econ_mode = scripted == WIKI_PLAY_GAME_STALL ? WIKI_ECON_STALL : WIKI_ECON_REFUSE;
+        s->nseat = a->nseat < 0 ? 0 : a->nseat > WIKI_SEATS ? WIKI_SEATS : a->nseat;
+        for (i = 0; i < s->nseat; i++) {
+            s->seat[i] = a->seat[i];
+            s->econ[i].m = s->econ[i].bm = a->seat[i].metal;
+            s->econ[i].e = s->econ[i].be = a->seat[i].energy;
+        }
+    }
     if (s->lay) route(s);
     if ((k = unbound_in_scene(s, a, b)) >= 0) lock(s, k);
+    /* a game's seats counted as the scene stands, then again after the script's tick 0, which may kill */
+    if (s->game) econ_counts(s);
     feed(s, 0);
-    s->done = s->locked != -1;
+    if (s->game) econ_counts(s);
+    s->done = s->locked != -1 || s->bad_kill;
     s->hover = hover(s);
     s->cursor_shape = cursor_shape(s);
     s->cursor_since = 0;

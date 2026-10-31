@@ -30,7 +30,7 @@ const WikiText = (() => {
 
   /* the words a text is filled with: { cast: {cast name: display name}, iface }. `casting` is one side's record of a
      pack's `casting` list, or null for the entry's own types. A cast the casting binds takes its title (its UnitName
-     when the title is empty); any other takes the entry's unit of that cast, by its `name` (its key when it has none),
+     when the title is empty); any other takes the entry's unit of that cast (never a game entry's rival one), by its `name` (its key when it has none),
      so an unbound cast still reads up to the tick its demo locks. `iface` is 1 only when it is exactly 1: the engine's
      left-button readers test main+0x37EFA `== 1` (0x43E505, 0x43F9EF, 0x499046, 0x499567, DISASSEMBLED), so any
      other value plays the left-click interface */
@@ -39,7 +39,7 @@ const WikiText = (() => {
     for (const c of CASTS) {
       const b = bound[c];
       if (b) { cast[c] = b.title || b.type; continue; }
-      const t = Object.keys(units).find(k => units[k] && units[k].cast === c);
+      const t = Object.keys(units).find(k => units[k] && units[k].cast === c && units[k].rival !== true);
       if (t !== undefined) cast[c] = units[t].name || t;
     }
     return { cast, iface: iface === 1 ? 1 : 0 };
@@ -100,7 +100,8 @@ const WikiText = (() => {
      through checkText, each caption then through its bound; null, or the first refusal with where it stands */
   function checkEntry(e) {
     const units = (e && e.units) || {};
-    const casts = new Set(Object.keys(units).map(k => units[k] && units[k].cast).filter(isCast));
+    // a token names the player's casts only: a game entry's rival unit's cast is no word of the text
+    const casts = new Set(Object.keys(units).filter(k => units[k] && units[k].rival !== true).map(k => units[k].cast).filter(isCast));
     const texts = [['title', e.title], ['subtitle', e.subtitle]];
     (Array.isArray(e.text) ? e.text : []).forEach((p, i) => texts.push([`text[${i}]`, p]));
     (Array.isArray(e.demos) ? e.demos : []).forEach((d, i) => {

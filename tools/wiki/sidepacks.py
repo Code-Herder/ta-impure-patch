@@ -122,28 +122,31 @@ def check_layout(pack: Path):
 # An entry unit's figure and the value an absent key stands for: what the bound entry takes from the casting. The
 # casting carries every FBI's EnergyMake (a construction kbot's 8 among them), and the sims read energyMake only as a
 # geothermal plant's strength, so it is compared where the entry states it and nowhere else; so are the economy's
-# figures, which no demo's world reads.
+# figures, which only a game entry's economy reads.
 FIGURES = (("footprint", None), ("buildTime", 0), ("workerTime", 0), ("buildDistance", 0), ("maxVelocity", 0),
            ("canstop", 0), ("canreclamate", 0), ("activatewhenbuilt", 0), ("extracts", 0), ("vent", False))
 STATED = ("energyMake", "energyUse", "buildCostMetal", "buildCostEnergy", "metalMake", "metalStorage", "energyStorage")
 
 
 def stock_identity(pack):
-    """The stock pack's first side ([SIDE0], whose units the wiki's entries author) cast for cast: every entry unit's
-    `cast` is bound to that unit's own type, with the entry's figures and name, and builds the casts the entry says it
-    builds. Binding stock's entries to stock's casting then changes nothing, which is the check that keeps the
-    general rule honest (gfx.py `side_casting`). The commander, which no entry's unit plays yet, is the side's own
+    """The stock pack's first side ([SIDE0], whose units the wiki's entries author) cast for cast, and its second
+    ([SIDE1]) for a game entry's rival units: every entry unit's `cast` is bound to that unit's own type, with the
+    entry's figures and name, builds the casts the entry says it builds among its own side's units, and leaves the
+    wreck the entry's features table gives it. Binding stock's entries to stock's casting then changes nothing, which
+    is the check that keeps the general rule honest (gfx.py `side_casting`). Each side's commander is its own
     (sidedata's `commander`). Returns the differences."""
-    casting = pack["casting"][0]["casts"]
     bad = []
-    cmd = casting.get("commander")
-    if not cmd or cmd["type"].lower() != pack["casting"][0]["commander"].lower():
-        bad.append(f"the stock commander is {cmd and cmd['type']}, sidedata names {pack['casting'][0]['commander']}")
+    for side in pack["casting"][:2]:
+        cmd = side["casts"].get("commander")
+        if not cmd or cmd["type"].lower() != side["commander"].lower():
+            bad.append(f"the stock {side['side']} commander is {cmd and cmd['type']}, sidedata names {side['commander']}")
     for f in sorted(ENTRIES.glob("*.json")):
         e = json.loads(f.read_text())
-        units = e["units"]
-        used = {v.get("cast") for v in units.values()}
+        units, feats = e["units"], e.get("features") or {}
         for t, u in units.items():
+            rival = u.get("rival") is True
+            casting = pack["casting"][1 if rival else 0]["casts"]
+            used = {v.get("cast") for v in units.values() if (v.get("rival") is True) == rival}
             at, c = f"{e['id']} {t}", u.get("cast")
             if c not in casting:
                 bad.append(f"{at}: its cast {c!r} is none of {', '.join(casting)}")
@@ -171,6 +174,14 @@ def stock_identity(pack):
             want = sorted(units[b]["cast"] for b in u.get("builds", []) if b in units and "cast" in units[b])
             if have != want:
                 bad.append(f"{at}: builds {have} of the entry's casts in the casting, {want} in the entry")
+            if "corpse" in u:
+                wreck, row = got.get("corpse"), feats.get(u["corpse"], {})
+                mine = {"name": u["corpse"], "footprint": row.get("footprint"), "metal": row.get("metal", 0),
+                        "energy": row.get("energy", 0), "height": row.get("height", 0),
+                        "blocking": row.get("blocking", False), "reclaimable": row.get("reclaimable", False),
+                        "object": row.get("object")}
+                if wreck != mine:
+                    bad.append(f"{at}: the wreck {wreck} in the casting, {mine} in the entry")
     return bad
 
 

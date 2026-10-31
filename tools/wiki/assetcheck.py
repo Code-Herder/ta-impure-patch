@@ -39,12 +39,14 @@ against an independent Python resolution of the same install.
 6. **The sidebar, per compat setup** (`--side`, or with the rest; `--mods` to choose): each setup's game folder laid
    out as tools/wiki/sidepacks.py lays it out (the retail install, then the setup's files over it), its folder names
    and first archive from sidepacks.py's record where the mod's loader renames them in memory, and the DLL's
-   `wikiassettest side` against `gfx.py --side-only` with the same names: the layout (every side with its own types),
+   `wikiassettest side` against `gfx.py --side-only --stages` with the same names: the layout (every side with its own types),
    every screen's file and panel, every button's picture source (step, file, archive, sequence) and its frames'
    pixels and hotspots, each side's PANELSIDE, the dots, the minimap's colours, tables and bases, the greyed tint
    and each side's casting -- every cast's type, title, footprint, figures, canstop, G cells, build list and wreck; the
    rule's `report` prose is gfx.py's alone -- must be equal, and the sheet byte for byte; and the 3D load's unit types,
-   in its order, must be gfx.py's `stage_types` of every entry over the pack's casting. Both halves read the
+   in its order, must be gfx.py's `stage_types` of every entry over the pack's casting, and each one's death sound
+   -- its ExplodeAs weapon's soundhit WAV, null for a type the stage packs did not resolve or a WAV refused -- must
+   be gfx.py's `death_wav`. Both halves read the
    display names under --language (english by default). The setups' fixtures must be present
    (tools/compat/tacompat.py fetch).
 
@@ -935,8 +937,8 @@ def against_sidepacks(mods, retail, pak, language="english"):
             names = []
             if rec:
                 names = ["--folders", ",".join(f"{k}={v}" for k, v in rec["folders"].items()), "--archive", rec["archive"]]
-            g = subprocess.run([sys.executable, str(HERE / "gfx.py"), "--side-only", "--mod", mod, "--gamedir", str(tree),
-                                "--exe", str(exe), "--out", str(out), "--language", language, *names],
+            g = subprocess.run([sys.executable, str(HERE / "gfx.py"), "--side-only", "--stages", "--mod", mod, "--gamedir",
+                                str(tree), "--exe", str(exe), "--out", str(out), "--language", language, *names],
                                capture_output=True, text=True)
             if g.returncode:
                 lines.append(f"assetcheck: sidebar {mod}: gfx.py made no pack ({g.returncode}): {(g.stdout + g.stderr).strip()[-500:]}")
@@ -954,6 +956,19 @@ def against_sidepacks(mods, retail, pak, language="english"):
             # the 3D load's unit types, which a demo bound to any side's casting draws its models from
             native["units3d"] = doc["units"]
             ref["units3d"] = stage_names(json.loads((out / "side" / mod / "side.json").read_text())["casting"])
+            # each one's death sound by the two rules (tagpu_wikiasset.c death_load, gfx.py death_wav): its WAV's name
+            # for a type the stage packs resolved whose WAV the PCM rule takes, else null
+            native["deaths"] = {t: w and w.lower() for t, w in doc["deaths"].items()}
+            types = json.loads((out / "side" / mod / "stage" / "sounds.json").read_text())["types"]
+            eng = gfxpy.Engine(tree, exe, rec["folders"] if rec else None, rec["archive"] if rec else None, language)
+
+            def death(t):
+                if not (types.get(t) or {}).get("death"):
+                    return None
+                fbi = eng.open(eng.dirs["units"], t, "FBI")
+                w = gfxpy.death_wav(eng, gfxpy.fbi_fields(fbi[0].decode("latin-1", "replace"))) if fbi else None
+                return w and w.lower()
+            ref["deaths"] = {t: death(t) for t in ref["units3d"]}
         bad = diff(native, ref, exact=True)
         if bad:
             ok = False
@@ -972,7 +987,8 @@ def against_sidepacks(mods, retail, pak, language="english"):
                           for sd in lay["sides"])
         lines.append(f"assetcheck: sidebar {mod}: native == gfx.py: {len(lay['screens'])} screens, types {types}, "
                      f"{len(native['casting'])} castings ({sum(1 for c in native['casting'] for k in c['casts'].values() if k)} "
-                     f"casts bound), {len(native['units3d'])} 3D unit types, {npic} pictures "
+                     f"casts bound), {len(native['units3d'])} 3D unit types "
+                     f"({sum(1 for w in native['deaths'].values() if w)} with a death sound), {npic} pictures "
                      f"({', '.join(f'{k} {v}' for k, v in sorted(srcs.items()))}), a {native['sheet']['h']}-row sheet byte "
                      f"for byte, {len(native['bases'])} minimap bases; {r.stderr.strip().splitlines()[-1].split(': ', 1)[-1]}")
     return ok, lines

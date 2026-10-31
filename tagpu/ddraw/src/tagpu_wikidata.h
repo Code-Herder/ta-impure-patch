@@ -73,6 +73,11 @@ typedef struct {
     int         cast;               /* WIKI_CAST_*, or -1: no `cast`, or a name not one of the ten */
     int         fx, fz;             /* footprint, cells */
     double      build_time, worker_time, build_distance, max_velocity, extracts, energy_make;
+    double      build_cost_metal, build_cost_energy, metal_make, metal_storage, energy_storage;
+                                    /* the economy's, as a cast's: finite, >= 0; absent 0 */
+    double      energy_use;         /* |x| < WIKI_ECON_MAX, negative for a solar collector; absent 0 */
+    int         rival;              /* a game entry's: the opponent's unit, cast by the rival casting */
+    int         corpse;             /* a game entry's: its wreck, a row of WIKIENTRY.feat; -1 none */
     int         vent;               /* has a G cell: a geothermal plant, needing a vent under one */
     uint16_t    g[WIKI_FP_MAX];     /* row dz: bit dx set = footprint cell (dx, dz) is a G cell;
                                        the unit's `g`, or every cell when `vent` comes with none */
@@ -125,7 +130,7 @@ typedef struct { double x, z; } WIKIPOINT;                   /* world units     
 typedef struct {
     char             id[WIKI_ID_MAX];   /* "" when the scene gives none: the sim names it */
     int              def;
-    int              owner;
+    int              owner;             /* 0..7; in a game entry one of its scene's seats */
     double           x, z;
     double           built;             /* 1 finished, below it under construction */
     double           hx, hz;            /* "facing" as a unit vector, (0, 1) when absent; the
@@ -134,6 +139,16 @@ typedef struct {
     int              nmove;
     WIKIPOINT*       move;              /* its move orders, in order */
 } WIKISCENEUNIT;
+
+/* A GAME ENTRY'S SEATS (research/notes/ingame-wiki-replay-plan.md): each one a player of the game,
+   the seat being its index; its name (HUDSEAT's) 1..WIKI_SEAT_NAME - 1 bytes with no "{", and its
+   metal and energy, the skirmish's settings, integers WIKI_SEAT_MIN..WIKI_SEAT_MAX. sim.js's
+   SEATS, SEAT_NAME, SEAT_MIN, SEAT_MAX. */
+#define WIKI_SEATS     4
+#define WIKI_SEAT_NAME 32
+#define WIKI_SEAT_MIN  200
+#define WIKI_SEAT_MAX  10000
+typedef struct { char name[WIKI_SEAT_NAME]; int metal, energy; } WIKISEAT;
 
 /* One of the entry's scenes, or a demo's additions to the one it plays on: the demo's units,
    metal, vents and fog go after the scene's, and its selection and cursor replace the scene's when
@@ -153,10 +168,14 @@ typedef struct {
     const char**     selected;          /* unit ids */
     WIKIPOINT        cursor;
     int              kind;              /* has_kind: the sweep's kind it starts with, WIKI_KIND_* */
+    int              nseat;             /* a game entry's scene: 1..WIKI_SEATS; else 0 */
+    WIKISEAT         seat[WIKI_SEATS];
 } WIKISCENE;
 
-/* RECLAIM: arm reclaim through RECLAIM (`reclaim: true`); PICK: click the popup's row of `pick` */
-enum { WIKI_IN_MOVE = 1, WIKI_IN_BUILD = 2, WIKI_IN_CAPTION = 4, WIKI_IN_UNTIL = 8, WIKI_IN_RECLAIM = 16, WIKI_IN_PICK = 32 };
+/* RECLAIM: arm reclaim through RECLAIM (`reclaim: true`); PICK: click the popup's row of `pick`;
+   KILL: a game script's kill of the unit `kill` names */
+enum { WIKI_IN_MOVE = 1, WIKI_IN_BUILD = 2, WIKI_IN_CAPTION = 4, WIKI_IN_UNTIL = 8, WIKI_IN_RECLAIM = 16, WIKI_IN_PICK = 32,
+       WIKI_IN_KILL = 64 };
 
 /* A DEMO'S WAIT (sim.js's UNTILS, in its order): the state a wait holds the demo's clock for.
    IDLE: no unit of the player's holds a build or a reclaim order. ARRIVED: no unit of the
@@ -175,10 +194,27 @@ typedef struct {
     const char*      caption;           /* WIKI_IN_CAPTION: the caption, NULL to clear it */
     int              until, until_max;  /* WIKI_IN_UNTIL: the WIKI_UNTIL_* and its max, ticks */
     int              pick;              /* WIKI_IN_PICK: the WIKI_KIND_* */
+    const char*      kill;              /* WIKI_IN_KILL: the unit's id, in the entry's document */
     int              extra;             /* a demo's input names a key besides at, caption, build,
                                            reclaim and pick: it is no caption alone, which a
                                            trip's ticks admit (tagpu_wikidata_trips) */
 } WIKIINPUT;
+
+/* A GAME ENTRY'S DEMO'S GAME: the game script, played by a game simulation (WIKI_PLAY_GAME) on game
+   ticks. `end` an integer 1..WIKI_GAME_END_MAX; the inputs seat 0's (decision 16: no other seat has a
+   cursor yet), neither caption nor wait, and at most WIKI_GAME_KILLS kills, each of a unit of the
+   merged scene by its explicit id, once, at or before the end. sim.js's GAME_END_MAX, GAME_KILLS. */
+#define WIKI_GAME_KILLS   64
+#define WIKI_GAME_END_MAX 5400
+typedef struct {
+    int              ninput;
+    WIKIINPUT*       input;             /* in file order */
+    double           end;
+    int              has_sidebar, sidebar;
+} WIKIGAME;
+
+/* An entry's frame: a page (the wiki's tutorial page) or a game (`"frame": "game"`, a small game) */
+enum { WIKI_FRAME_PAGE, WIKI_FRAME_GAME };
 
 typedef struct {
     const char*      id;
@@ -191,6 +227,8 @@ typedef struct {
     double           end;               /* the tick it ends on */
     int              has_sidebar;       /* `sidebar` given: it decides whether the demo plays with */
     int              sidebar;           /* the sidebar, else a mobile builder of the player's does */
+    int              has_game;          /* a game entry's demo: its game script */
+    WIKIGAME         game;
 } WIKIDEMO;
 
 typedef struct {
@@ -201,6 +239,7 @@ typedef struct {
     const char**     text;              /* paragraphs */
     const char**     locked_in;         /* the mods that turn the feature off */
     double           pace;              /* construction and reclaim run this many times faster */
+    int              frame;             /* WIKI_FRAME_*; a game entry has no pace (1) */
     WIKIDEF*         def;               /* in the file's order, which breaks the sim's ties */
     WIKIFEATDEF*     feat;              /* the `features` table, in the file's order */
     int              nscene;            /* 1 or more, every map the first one's size */

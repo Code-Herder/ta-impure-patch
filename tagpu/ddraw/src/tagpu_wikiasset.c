@@ -1357,6 +1357,7 @@ typedef struct {
     char        why[200];
     int         has_sndcat;     /* the FBI's SoundCategory, cut to 0x42CC5A's 100 bytes        */
     char        sndcat[100];
+    char        explode[0x80];  /* the FBI's ExplodeAs, read into 0x80 bytes; "" when absent    */
 } UNITREC;
 
 /* THE TWO PIECE ORDERS the mask joins, over a model of this arena: tagpu_model3do.h's
@@ -1584,6 +1585,8 @@ static void unit_load(LOADER* L, const char* type, WIKI3DUNIT* u, UNITREC* r)
             /* 0x42BF40 reads UnitName and Objectname into 0x20 bytes each; a missing Objectname is
                the UnitName (0x42C0D1) */
             const char* sc = tagpu_tdf_get(t, sec, "SoundCategory");
+            const char* ea = tagpu_tdf_get(t, sec, "ExplodeAs");
+            snprintf(r->explode, sizeof r->explode, "%s", ea ? ea : "");
             un = tagpu_tdf_get(t, sec, "UnitName");
             on = tagpu_tdf_get(t, sec, "Objectname");
             if (sc) {
@@ -1725,6 +1728,81 @@ static TAGPU_GUIFILE* gamedata_tdf(LOADER* L, const char* name)
     return t;
 }
 
+/* THE WEAPON TABLE as the weapon load 0x42E310 fills it: every section of every weapons\*.tdf in
+   the listing's order (0x42E371) goes to the slot its ID names (0x42E440, read at 0x42E463 as the
+   engine reads a TDF number; absent -1), a later section of the same ID overwriting an earlier one;
+   an ID outside the slots fills none [INFERRED]. Each slot keeps the section's name (0x42E490) and
+   its soundhit. The folder is the literal the load lists: WIKI3DNAMES holds no copy of it. A file
+   the parser refuses holds no section. gfx.py `weapon_table` is the twin. */
+#define WEAPON_SLOTS 256
+typedef struct {
+    int  used, has_hit;
+    char name[WIKI3D_CLIPNAME];
+    char hit[WIKI3D_CLIPNAME];
+} WEAPONSLOT;
+typedef struct {
+    LOADER*     L;
+    WEAPONSLOT* slot;
+} WEAPONWALK;
+
+static int weapon_each(void* ctx, const TAGPU_VFILE* f)
+{
+    WEAPONWALK* w = (WEAPONWALK*)ctx;
+    char why[200] = "";
+    unsigned char* text = load(w->L, f, CAP_TEXT, why, sizeof why);
+    TAGPU_GUIFILE* t = text ? tagpu_guifile_parse(text, f->size, why, sizeof why) : NULL;
+    int i, n;
+    free(text);
+    if (!t) {
+        LOG("wiki3d: %s holds no weapon - %s", f->path, why);
+        return 1;
+    }
+    n = tagpu_guifile_count(t, 0);
+    for (i = 0; i < n; i++) {
+        const int sec = tagpu_guifile_child(t, 0, i);
+        const char *id = tagpu_guifile_get(t, sec, "ID"), *hit = tagpu_guifile_get(t, sec, "soundhit");
+        long long k = -1;
+        WEAPONSLOT* s;
+        if (id) tagpu_guifile_num(id, &k, NULL);
+        if (k < 0 || k >= WEAPON_SLOTS) continue;
+        s = &w->slot[k];
+        s->used = 1;
+        snprintf(s->name, sizeof s->name, "%s", tagpu_guifile_name(t, sec));
+        s->has_hit = hit != NULL;
+        snprintf(s->hit, sizeof s->hit, "%s", hit ? hit : "");
+    }
+    tagpu_guifile_free(t);
+    return 1;
+}
+
+/* THE DEATH SOUND of each resolved unit (WIKI3DUNIT.death_sound): the destructor explodes a finished
+   unit with its ExplodeAs weapon (def+0x220) through 0x49B000 and 0x499EB0, which on dry ground plays
+   the weapon's soundhit (+0xF6, read at 0x499FE9). ExplodeAs names the first slot whose name equals
+   it without case (0x49E5B0, _stricmp 0x4F8A70); an empty or unknown name takes slot 0, the
+   loader's fallback (0x42CEAD..0x42CEB7) -- DISASSEMBLED. The slot's soundhit is the WAV,
+   sounds\<value>.WAV (0x42EF2A), a clip as the categories' are; no key, an empty value or an empty
+   slot, none [INFERRED: what an empty slot 0 holds at +0xF6]. */
+static void death_load(LOADER* L, SNDLOAD* S, WIKI3DUNIT* unit, const UNITREC* rec, int nunit)
+{
+    WEAPONWALK w;
+    int i, k;
+    w.L = L;
+    if (!(w.slot = (WEAPONSLOT*)calloc(WEAPON_SLOTS, sizeof *w.slot))) {
+        LOG("wiki3d: no death sound - out of memory");
+        return;
+    }
+    tagpu_vfs_enum(L->vfs, "weapons", "*.tdf", 0, weapon_each, &w);
+    for (i = 0; i < nunit; i++) {
+        const WEAPONSLOT* s;
+        if (!unit[i].ok) continue;
+        for (k = 0; rec[i].explode[0] && k < WEAPON_SLOTS; k++)
+            if (w.slot[k].used && !tagpu_hpi_stricmp(w.slot[k].name, rec[i].explode, sizeof w.slot[k].name)) break;
+        s = &w.slot[rec[i].explode[0] && k < WEAPON_SLOTS ? k : 0];
+        if (s->used && s->has_hit && s->hit[0]) unit[i].death_sound = clip_get(S, s->hit);
+    }
+    free(w.slot);
+}
+
 /* THE SOUND of the resolved units (WIKI3DSOUND), after them: each one's category and counts from its
    FBI's SoundCategory (`sndcat`, has_sndcat 0 when absent) over <gamedata>\sound.TDF (0x42F580),
    then the clips of every used category's variants for the wiki's kinds, then the button sounds'
@@ -1749,6 +1827,7 @@ static void sound_load(LOADER* L, WIKI3DUNIT* unit, const UNITREC* rec, int nuni
     for (i = 0; i < nunit; i++) {
         WIKI3DUNIT* u = &unit[i];
         u->sound_cat = -1;
+        u->death_sound = -1;
         if (!u->ok) continue;
         {
             /* absent: 0 (0x42CC61); every answer, that one too, is then bounded by the sections */
@@ -1837,6 +1916,8 @@ static void sound_load(LOADER* L, WIKI3DUNIT* unit, const UNITREC* rec, int nuni
         }
         tagpu_guifile_free(all);
     }
+    /* the deaths' clips after the categories' and the button sounds', as gfx.py numbers them */
+    death_load(L, &S, unit, rec, nunit);
     out->cat = cat;
     out->var = var;
     out->nclip = S.nclip;

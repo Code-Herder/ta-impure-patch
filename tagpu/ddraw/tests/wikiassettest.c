@@ -272,8 +272,8 @@ static int cmd_load(int argc, char** argv)
 
 /* The sidebar's load as the DLL's loader thread runs it -- the sidebar, then the 3D load with it --
    printed as {"side": <its report>, "minimap": {<entry>.<scene>: {w, h, offx, offy, fnv} or null},
-   "units": [<name>...]}: the report tagpu_wikiside.json holds, each stage's minimap picture and
-   the 3D load's unit types. The frames' bound the block promises is checked again here. */
+   "units": [<name>...], "deaths": {<name>: its death's WAV or null}}: the report tagpu_wikiside.json
+   holds, each stage's minimap picture, the 3D load's unit types and each one's death sound. The frames' bound the block promises is checked again here. */
 static int cmd_side(int argc, char** argv)
 {
     static INPUT I;
@@ -308,7 +308,16 @@ static int cmd_side(int argc, char** argv)
     }
     printf("},\"units\":[");
     for (i = 0; w && i < w->nunit; i++) printf("%s\"%s\"", i ? "," : "", w->unit[i].name);
-    printf("]}\n");
+    /* each resolved type's death's WAV as its file names it, null for none or a silent clip */
+    printf("],\"deaths\":{");
+    for (i = 0; w && i < w->nunit; i++) {
+        const WIKI3DUNIT* u = &w->unit[i];
+        const int c = u->ok ? u->death_sound : -1;
+        printf("%s\"%s\":", i ? "," : "", u->name);
+        if (c >= 0 && c < w->sound.nclip && w->sound.clip[c].data) printf("\"%s\"", w->sound.clip[c].name);
+        else printf("null");
+    }
+    printf("}}\n");
     fprintf(stderr, "wikiassettest: the sidebar %s in %.1f ms (%d screens, a %d-row sheet); %d mounts\n",
             side ? "loaded" : "REFUSED", side_ms, side ? side->layout.nscreen : 0, side ? side->sheet_h : 0, I.in.narc);
     tagpu_vfs_close(vfs);

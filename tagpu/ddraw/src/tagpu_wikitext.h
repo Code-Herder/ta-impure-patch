@@ -30,7 +30,7 @@ typedef struct {
 
 /* text.js's words(): cast c's name is the casting's title when the casting binds c (its type when
    the title is empty); else the name of the first of the entry's types in file order whose cast is
-   c, its `name` when the entry gives a non-empty one, else its key; else NULL. `casting` NULL
+   c and that is not a game entry's rival, its `name` when the entry gives a non-empty one, else its key; else NULL. `casting` NULL
    casts nothing, as text.js's null casting: every name then comes from the entry. `iface` is 1 only
    when it is exactly 1: the engine's left-button readers test main+0x37EFA `== 1` (0x43E505,
    0x43F9EF, 0x499046, 0x499567, DISASSEMBLED), so any other value plays the left-click interface.

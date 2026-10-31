@@ -27,7 +27,10 @@
    falls back to, with fixture-tall.json's 768-row column, and with none (both C sides read the layouts out of the
    archive), each in simcheck.mjs's contexts: the entry's own types and each casting of tools/wiki/casting-fixture.json
    (identity, shifted, unbound), each at Interface Type 1 and 0; a demo one side refuses in a context the other must
-   refuse too. It then plays simcheck.mjs's rule cases -- the rules no demo shows -- through both: each case is run
+   refuse too. In each context it then plays every game entry under art/wiki/entries/ (frame "game", named by the tree
+   or not) the same way, each demo's game script through WikiSim.game and wikitest `game` with the fixture casting's
+   rival beside it (casting-fixture.json `rivals`), and the stall case: every seat cut to 200, in stall mode tick for
+   tick and in refuse mode, where it must end starved. It then plays simcheck.mjs's rule cases -- the rules no demo shows -- through both: each case is run
    against sim.js with every call recorded, `create` and `play` with the layout and the context each was given, the
    recording is
    replayed through the C sim, and every answer the case read (each view, with the state hash after it, orders, done)
@@ -35,7 +38,8 @@
    trip's constants. Then the refusal cases: data, castings, contexts and layouts each side must refuse or accept
    alike -- the demo's `sidebar`, the build trip's data rule, the text's tokens, the actions' data rule at each
    interface type, a unit's G cells, every bound of the casting and of the layout on both sides of it, the binding of
-   an entry to a casting, a scene its bound footprints do not fit, the context's interface type and side -- each made
+   an entry to a casting, a scene its bound footprints do not fit, the context's interface type and side, and every
+   data rule of a game entry (its frame, seats, rival and corpse units, its demos' games and their kills) -- each made
    into a sim by text.js's checkEntry and sim.js and by the C readers and init. Then the data read back: every casting of
    tools/wiki/casting-fixture.json and of every pack present under tools/wiki/mockup/gfx/side/ (gitignored, built
    by tools/wiki/sidepacks.py), and every layout of art/wiki/side/ and of those packs, read by tagpu_wikidata.c and
@@ -156,6 +160,17 @@ function stateHash(sim, v) {
     int(v.reclaim.ring ? 1 : 0);
     if (v.reclaim.ring) { int(v.reclaim.ring.x); int(v.reclaim.ring.z); int(v.reclaim.ring.r); }
   }
+  // 12. a game's own part (tagpu_wikisim.h), only in a game
+  if (sim.game) {
+    const g = v.game;
+    int(g.seats.length);
+    for (const z of g.seats) {
+      int(z.units); int(z.lost); int(z.out ? 1 : 0); int(z.cmdLost ? 1 : 0);
+      for (const n of ['m', 'mmax', 'mi', 'mo', 'wm', 'e', 'emax', 'ei', 'eo', 'we']) dbl(z[n]);
+    }
+    int(g.mode === 'stall' ? 1 : 0); int(g.starved ? 1 : 0); int(g.badKill ? 1 : 0); int(g.nkill);
+    for (const L of g.ledgers) for (const x of L) dbl(x);
+  }
   return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0');
 }
 
@@ -274,6 +289,13 @@ if (tryAt >= 0) {
    whose first demo the sim is made from; both sides must accept it or refuse it alike, and as `want` says
    (tests/wikitest.c refuse_case). ---- */
 const CASTINGS = JSON.parse(fs.readFileSync(path.join(ROOT, 'tools/wiki/casting-fixture.json'), 'utf8')).castings;
+// the opponent's casting beside each fixture casting: the fixture layout has one side, so the rival is given apart
+const RIVALS = JSON.parse(fs.readFileSync(path.join(ROOT, 'tools/wiki/casting-fixture.json'), 'utf8')).rivals;
+// every game entry, the tree's or not (frame "game"), in file order
+const GAMES = fs.readdirSync(path.join(ROOT, 'art/wiki/entries')).filter(f => f.endsWith('.json')).sort()
+  .map(f => [f.slice(0, -5), JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries', f), 'utf8'))])
+  .filter(([, e]) => e.frame === 'game');
+const WIKI_SEAT_MIN = 200;
 function refusalCases(entry) {
   const clone = v => JSON.parse(JSON.stringify(v));
   const T = WikiSim.TRIP, base = { id: 'm', scene: { selected: ['ck'] }, inputs: [{ at: 5, build: 'ARMMEX' }], end: 5 + T };
@@ -593,6 +615,128 @@ function refusalCases(entry) {
   return cases;
 }
 
+/* ---- THE GAME ENTRY'S REFUSALS (sim.js checkGame, the C loader's game rules and tagpu_wikisim_init's): each case the
+   game entry `game` (art/wiki/entries/watching.json) or the page entry `page` edited, its first demo played as a
+   game (scripted 2, WIKI_PLAY_GAME; 3 its stall mode) or as a demo (1) ---- */
+function gameRefusalCases(game, page) {
+  const clone = v => JSON.parse(JSON.stringify(v));
+  const cases = [];
+  const CTX = { side: 0, iface: 1, casting: null, rival: null };
+  const g = (name, want, edit, scripted = 2, ctx = {}) => {
+    const e = clone(game);
+    e.demos = [e.demos[0]];
+    edit(e, e.demos[0], e.scenes[Object.keys(e.scenes)[0]], e.demos[0].game);
+    cases.push({ name: `game: ${name}`, want, scripted, layout: FIXTURE, ...CTX, ...ctx, entry: e });
+  };
+  const p = (name, want, edit, scripted = 1) => {
+    const e = clone(page);
+    e.demos = [e.demos[0]];
+    edit(e, e.demos[0], e.scenes[Object.keys(e.scenes)[0]]);
+    cases.push({ name: `game: ${name}`, want, scripted, layout: FIXTURE, ...CTX, entry: e });
+  };
+  const bound = { casting: CASTINGS.identity[0], rival: RIVALS.identity };
+  const T = WikiSim.TRIP;
+  g('the authored game', 'accepted', () => {});
+  g('the authored game in stall mode', 'accepted', () => {}, 3);
+  g('the authored game with no sidebar layout', 'accepted', () => {}, 2, { layout: null });
+  g('bound to identity and its rival', 'accepted', () => {}, 2, bound);
+  for (const r of Object.keys(RIVALS)) g(`bound to ${r} and the rival ${r}`, 'accepted', () => {}, 2, { casting: CASTINGS[r][0], rival: RIVALS[r] });
+  g('bound with no rival casting: the rival units keep their own', 'accepted', () => {}, 2, { casting: CASTINGS.identity[0] });
+  g('played as a demo', 'refused', () => {}, 1);
+  g('Try it on it', 'refused', () => {}, 0);
+  p('a page entry played as a game', 'refused', () => {}, 2);
+  p('a page entry played in stall mode', 'refused', () => {}, 3);
+  p('the page entry as a demo', 'accepted', () => {});
+  // the entry
+  g('frame "page"', 'refused', e => { e.frame = 'page'; });
+  g('frame null', 'refused', e => { e.frame = null; });
+  g('a pace', 'refused', e => { e.pace = { build: 2 }; });
+  p('a rival unit on a page entry', 'refused', e => { e.units.ARMCK.rival = false; });
+  p('a corpse on a page entry', 'refused', e => { e.features = { w: { footprint: [1, 1] } }; e.units.ARMCK.corpse = 'w'; });
+  p('seats on a page entry', 'refused', (e, d, sc) => { sc.seats = [{ name: 'A', metal: 1000, energy: 1000 }]; });
+  p('a page entry\'s economy figures', 'accepted', e => { e.units.ARMCK.buildCostMetal = 120; e.units.ARMCK.energyUse = -3; });
+  p('a buildCostMetal below 0', 'refused', e => { e.units.ARMCK.buildCostMetal = -1; });
+  p('a metalStorage null', 'refused', e => { e.units.ARMCK.metalStorage = null; });
+  p('an energyUse of 1e7', 'refused', e => { e.units.ARMCK.energyUse = 1e7; });
+  p('an energyUse a string', 'refused', e => { e.units.ARMCK.energyUse = '3'; });
+  g('two player units of one cast, bound', 'refused', e => { e.units.ARMCOM2 = { ...e.units.ARMCOM }; }, 2, bound);
+  g('two rival units of one cast, bound', 'refused', e => { e.units.CORAK2 = { ...e.units.CORAK }; }, 2, bound);
+  // a token names the player's casts only (text.js words and checkEntry, tagpu_wikidata.c tokens)
+  g('a token of a cast only a rival unit has', 'refused', e => { e.text = ['The {walker} walks.']; });
+  g('a token of a cast the player and the rival both have', 'accepted', e => { e.text = ['The {commander} builds.']; });
+  g('rival 1', 'refused', e => { e.units.CORAK.rival = 1; });
+  g('rival false', 'accepted', e => { e.units.ARMCK.rival = false; });
+  g('a corpse naming no feature', 'refused', e => { e.units.CORAK.corpse = 'nothing'; });
+  g('a corpse a number', 'refused', e => { e.units.CORAK.corpse = 3; });
+  // the seats
+  g('a scene without seats', 'refused', (e, d, sc) => { delete sc.seats; });
+  g('no seat', 'refused', (e, d, sc) => { sc.seats = []; });
+  g('four seats', 'accepted', (e, d, sc) => { while (sc.seats.length < 4) sc.seats.push({ name: `S${sc.seats.length}`, metal: 1000, energy: 1000 }); });
+  g('five seats', 'refused', (e, d, sc) => { while (sc.seats.length < 5) sc.seats.push({ name: `S${sc.seats.length}`, metal: 1000, energy: 1000 }); });
+  g('a seat name empty', 'refused', (e, d, sc) => { sc.seats[0].name = ''; });
+  g('a seat name of 31 bytes', 'accepted', (e, d, sc) => { sc.seats[0].name = 'n'.repeat(31); });
+  g('a seat name of 32 bytes', 'refused', (e, d, sc) => { sc.seats[0].name = 'n'.repeat(32); });
+  g('a seat name with a brace', 'refused', (e, d, sc) => { sc.seats[0].name = 'A{d'; });
+  g('a seat name a number', 'refused', (e, d, sc) => { sc.seats[0].name = 3; });
+  for (const [n, v, want] of [['metal', 199, 'refused'], ['metal', 200, 'accepted'], ['metal', 10000, 'accepted'], ['metal', 10001, 'refused'],
+    ['energy', 500.5, 'refused'], ['energy', '1000', 'refused'], ['energy', 199, 'refused']])
+    g(`a seat's ${n} ${JSON.stringify(v)}`, want, (e, d, sc) => { sc.seats[1][n] = v; });
+  g('a seat without energy', 'refused', (e, d, sc) => { delete sc.seats[1].energy; });
+  g('a seat with a colour', 'refused', (e, d, sc) => { sc.seats[1].colour = 2; });
+  g('a seat not an object', 'refused', (e, d, sc) => { sc.seats[1] = 'Bram'; });
+  g('seats in the demo\'s scene', 'refused', (e, d) => { d.scene = { seats: [{ name: 'A', metal: 1000, energy: 1000 }] }; });
+  g('an owner past the seats', 'refused', (e, d, sc) => { sc.units[3].owner = 2; });
+  g('a demo unit\'s owner past the seats', 'refused', (e, d) => { d.scene = { units: [{ id: 'x', type: 'CORAK', owner: 2, at: [300, 60] }] }; });
+  g('a demo unit of seat 1', 'accepted', (e, d) => { d.scene = { units: [{ id: 'x', type: 'CORAK', owner: 1, at: [300, 60] }] }; });
+  g('a feature with a unit\'s id', 'refused', (e, d, sc) => { sc.features = [{ id: 'c0', name: 'armck_dead', at: [1, 1] }]; });
+  g('a feature named f1 by default, a unit f1', 'refused', (e, d, sc) => { sc.features = [{ name: 'armck_dead', at: [1, 1] }]; sc.units[0].id = 'f1'; });
+  g('a feature named f1 by default, no unit f1', 'accepted', (e, d, sc) => { sc.features = [{ name: 'armck_dead', at: [1, 1] }]; });
+  // features plus kills: the authored script kills two; 1 x 1 features in rows 0..4 and 28..29, clear of every unit
+  const pebbles = n => Array.from({ length: n }, (_, k) => ({ name: 'pebble', at: k < 200 ? [k % 40, Math.floor(k / 40)] : [k % 40, 28 + Math.floor((k - 200) / 40)] }));
+  for (const [n, want] of [[254, 'accepted'], [255, 'refused']])
+    g(`${n} features and two kills`, want, (e, d, sc) => { e.features.pebble = { footprint: [1, 1], metal: 1 }; sc.features = pebbles(n); });
+  // the demo and its game
+  p('game on a page entry\'s demo', 'refused', (e, d) => { d.game = { end: 100, inputs: [] }; });
+  g('a game demo without game', 'refused', (e, d) => { delete d.game; });
+  g('game null', 'refused', (e, d) => { d.game = null; });
+  g('a key game does not know', 'refused', (e, d, sc, G) => { G.speed = 2; });
+  for (const [v, want] of [[0, 'refused'], [1500, 'accepted'], [5400, 'accepted'], [5401, 'refused'], [1800.5, 'refused'], ['1800', 'refused']])
+    g(`end ${JSON.stringify(v)}`, want, (e, d, sc, G) => { G.end = v; });
+  g('no end', 'refused', (e, d, sc, G) => { delete G.end; });
+  g('game.sidebar "yes"', 'refused', (e, d, sc, G) => { G.sidebar = 'yes'; });
+  g('game.sidebar absent', 'accepted', (e, d, sc, G) => { delete G.sidebar; G.inputs = G.inputs.filter(i => 'kill' in i); });
+  g('a demo-level sidebar', 'refused', (e, d) => { d.sidebar = false; });
+  g('inputs not a list', 'refused', (e, d, sc, G) => { G.inputs = {}; });
+  // the game script's inputs
+  g('a caption', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 200, caption: 'x' }); });
+  g('a wait', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 200, until: 'idle', max: 60 }); });
+  g('seat 1', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 200, seat: 1, move: [10, 10] }); });
+  g('seat "0"', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 200, seat: '0', move: [10, 10] }); });
+  g('seat 0 on a press', 'accepted', (e, d, sc, G) => { G.inputs.push({ at: 200, seat: 0, down: 'select' }, { at: 202, up: 'select' }); });
+  g('an input with no tick', 'refused', (e, d, sc, G) => { G.inputs.push({ move: [10, 10] }); });
+  g('a kill with a move', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 300, kill: 'b0', move: [1, 1] }); });
+  g('a kill with seat 0', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 300, kill: 'b0', seat: 0 }); });
+  g('a kill naming no unit', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 300, kill: 'nobody' }); });
+  g('a kill naming a feature', 'refused', (e, d, sc, G) => { sc.features = [{ id: 'rock', name: 'armck_dead', at: [1, 1] }]; G.inputs.push({ at: 300, kill: 'rock' }); });
+  g('a kill a number', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 300, kill: 3 }); });
+  g('a unit killed twice', 'refused', (e, d, sc, G) => { G.inputs.push({ at: 1600, kill: 'w1' }); });
+  g('a kill after the end', 'refused', (e, d, sc, G) => { G.end = 1499; });
+  g('a kill at the end', 'accepted', (e, d, sc, G) => { G.end = 1500; });
+  g('a kill of a demo scene unit', 'accepted', (e, d, sc, G) => { d.scene = { units: [{ id: 'x', type: 'CORAK', owner: 1, at: [300, 60] }] }; G.inputs.push({ at: 300, kill: 'x' }); });
+  g('a kill of the player\'s commander', 'accepted', (e, d, sc, G) => { G.inputs.push({ at: 300, kill: 'c0' }); });
+  // 64 kills and 65: the demo's scene adds rival walkers to kill
+  for (const [n, want] of [[64, 'accepted'], [65, 'refused']])
+    g(`${n} kills`, want, (e, d, sc, G) => {
+      d.scene = { units: Array.from({ length: n - 2 }, (_, k) => ({ id: `k${k}`, type: 'CORAK', owner: 1, at: [24 + 32 * (k % 19), 600 - 16] })) };
+      d.scene.units.forEach((u, k) => { u.at = [24 + 32 * (k % 19), 72 + 32 * Math.floor(k / 19)]; });
+      G.inputs.push(...d.scene.units.map((u, k) => ({ at: 1600 + k, kill: u.id })));
+    });
+  // a kill inside a build trip, which the trip's rule refuses as another input
+  g('a kill inside a trip', 'refused', (e, d, sc, G) => { G.sidebar = true; G.inputs = [{ at: 10, build: 'ARMSOLAR' }, { at: 20, kill: 'c1' }]; });
+  g('a kill after a trip', 'accepted', (e, d, sc, G) => { G.sidebar = true; G.inputs = [{ at: 10, build: 'ARMSOLAR' }, { at: 10 + T, kill: 'c1' }]; });
+  return cases;
+}
+
 /* ---- the data read back: what sim.js accepts of a casting or a layout, in wikitest's `data` shapes ---- */
 function castingOut(C) {
   try { WikiSim.checkCasting(C); } catch (e) { return { ok: false, why: e.message }; }
@@ -627,6 +771,7 @@ function dataItems() {
   const items = [];
   for (const [name, list] of Object.entries(CASTINGS))
     list.forEach((C, i) => items.push({ kind: 'casting', name: `casting-fixture ${name}[${i}]`, v: C }));
+  for (const [name, C] of Object.entries(RIVALS)) items.push({ kind: 'casting', name: `casting-fixture rivals ${name}`, v: C });
   for (const f of fs.readdirSync(path.join(ROOT, 'art/wiki/side')).filter(f => f.endsWith('.json')).sort())
     items.push({ kind: 'layout', name: `art/wiki/side/${f}`, v: SIDE(f.slice(0, -5)) });
   const packs = path.join(ROOT, 'tools/wiki/mockup/gfx/side');
@@ -650,8 +795,10 @@ try {
   const tree = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/tree.json'), 'utf8'));
   const leaves = n => n.entry ? [n.entry] : (n.children || []).flatMap(leaves);
   const ids = [...new Set(tree.tree.flatMap(leaves))];
-  for (const name of Object.keys(CASTINGS))
+  for (const name of Object.keys(CASTINGS)) {
     fs.writeFileSync(path.join(tmp, `casting-${name}.json`), JSON.stringify(CASTINGS[name][0]));
+    fs.writeFileSync(path.join(tmp, `rival-${name}.json`), JSON.stringify(RIVALS[name]));
+  }
   fs.writeFileSync(path.join(tmp, 'cob.json'), JSON.stringify(Object.fromEntries([...new Set([...Object.keys(SCRIPTS), ...Object.keys(SOUNDS)])].map(n => {
     const t = SCRIPTS[n];
     return [n, { ...(t ? { cob: t.cob, visible: t.visible, offset: t.offset, parent: t.parent, top: t.top } : {}),
@@ -664,13 +811,13 @@ try {
     const layout = side && SIDE(side), named = `${side || 'no sidebar'}, ${cname || 'own types'}, type ${iface}${cob ? ', scripts' : ''}`;
     const ctx = { side: 0, casting: cname ? CASTINGS[cname][0] : null, iface, cob: cob ? HOST().forPacks(PACKS) : null,
                   snd: cob ? soundSource(PACKS) : null };
-    const cout = lines(wikitest(['demos', 'wiki.bin', side || '-', cname ? `casting-${cname}.json` : '-', String(iface), cob ? 'cob.json' : '-']));
+    let cout = lines(wikitest(['demos', 'wiki.bin', side || '-', cname ? `casting-${cname}.json` : '-', String(iface), cob ? 'cob.json' : '-']));
     let at = 0;
-    for (const id of ids) {
-      const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
-      for (const demo of entry.demos) {
+    // one demo through sim.js (`make`) against the C sim's lines from `at` on, which it consumes
+    const compare = (id, demo, make, named) => {
+      {
         let sim, why = null;
-        try { sim = WikiSim.play(entry, demo, layout, ctx); } catch (e) { why = e.message; }
+        try { sim = make(); } catch (e) { why = e.message; }
         // a demo refused in this context: the C side must refuse it too, in one line
         if (why !== null || (at < cout.length && 'refused' in JSON.parse(cout[at]))) {
           const c = at < cout.length ? JSON.parse(cout[at]) : null;
@@ -684,7 +831,7 @@ try {
             console.log(`DIFFER ${id}/${demo.id} (${named}): C ${c && 'refused' in c ? `refused (${c.refused})` : 'played'}, sim.js ${why !== null ? `refused (${why})` : 'played'}`);
             while (at < cout.length && JSON.parse(cout[at]).demo === demo.id && JSON.parse(cout[at]).entry === id) at++;
           }
-          continue;
+          return null;
         }
         let first = null, ticks = 0;
         for (;;) {
@@ -705,9 +852,40 @@ try {
           console.log(`DIFFER ${id}/${demo.id} (${named}) at tick ${first.t}: ${first.at}: C ${show(first.c)}, sim.js ${show(first.j)}`);
           while (at < cout.length && JSON.parse(cout[at]).demo === demo.id && JSON.parse(cout[at]).entry === id) at++;
         } else console.log(`equal  ${id}/${demo.id} (${named}): ${ticks} ticks`);
+        return sim;
       }
+    };
+    for (const id of ids) {
+      const entry = JSON.parse(fs.readFileSync(path.join(ROOT, `art/wiki/entries/${id}.json`), 'utf8'));
+      for (const demo of entry.demos) compare(id, demo, () => WikiSim.play(entry, demo, layout, ctx), named);
     }
     if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}) the C sim played ${cout.length - at} frames more`); }
+
+    /* ---- THE GAME PASS: every game entry under art/wiki/entries/, named by the tree or not, each demo's game script
+       as WikiSim.game and wikitest `game` play it, in this context with the opponent's casting beside it; then THE
+       STALL CASE, every seat's settings cut to SEAT_MIN so that the builds run dry: in stall mode tick for tick, and in
+       refuse mode, which must end starved on the same pass in both ---- */
+    const gctx = { ...ctx, rival: cname ? RIVALS[cname] : null };
+    for (const [id, entry] of GAMES) {
+      const cut = { ...entry, scenes: Object.fromEntries(Object.entries(entry.scenes).map(([n, sc]) =>
+        [n, { ...sc, seats: sc.seats.map(z => ({ ...z, metal: WIKI_SEAT_MIN, energy: WIKI_SEAT_MIN })) }])) };
+      for (const [e, mode, scripted, tag] of [[entry, 'refuse', 2, ''], [cut, 'stall', 3, ' stall'], [cut, 'refuse', 2, ' starved']]) {
+        fs.writeFileSync(path.join(tmp, 'game.json'), JSON.stringify(e));
+        cout = lines(wikitest(['game', 'wiki.bin', 'game.json', side || '-', cname ? `casting-${cname}.json` : '-',
+          cname ? `rival-${cname}.json` : '-', String(iface), cob ? 'cob.json' : '-', String(scripted)]));
+        at = 0;
+        for (const demo of e.demos) {
+          const sim = compare(id, demo, () => WikiSim.game(e, demo, layout, gctx, mode), `${named}, game${tag}`);
+          // the cut game in refuse mode ends starved, unless the context locked it first
+          if (tag === ' starved' && sim && sim.view().locked === null && !sim.view().game.starved) {
+            failed++;
+            differ++;
+            console.log(`DIFFER ${id}/${demo.id} (${named}, game${tag}): the game with every seat at ${WIKI_SEAT_MIN} did not starve`);
+          }
+        }
+        if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}, game${tag}) the C sim played ${cout.length - at} frames more`); }
+      }
+    }
   }
 
   if (SHARD === 1) {
@@ -774,9 +952,10 @@ try {
     /* ---- refusals: both sides accept or refuse alike, as each case wants ---- */
     {
       const entry = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries/quickbuild.json'), 'utf8'));
-      const all = refusalCases(entry);
+      const all = [...refusalCases(entry), ...GAMES.flatMap(([, game]) => gameRefusalCases(game, entry))];
       fs.writeFileSync(path.join(tmp, 'refuse.jsonl'), all.map(c =>
-        JSON.stringify({ name: c.name, scripted: c.scripted, layout: c.layout, side: c.side, iface: c.iface, casting: c.casting }) + '\n' +
+        JSON.stringify({ name: c.name, scripted: c.scripted, layout: c.layout, side: c.side, iface: c.iface, casting: c.casting,
+                         rival: c.rival ?? null }) + '\n' +
         JSON.stringify(c.entry) + '\n').join(''));
       const got = lines(wikitest(['refuse', 'refuse.jsonl']));
       all.forEach((c, i) => {
@@ -785,7 +964,9 @@ try {
           // text.js's checkEntry is the loader's refusal of the text, which wiki.js asks before any sim is made
           const bad = WikiText.checkEntry(c.entry);
           if (bad) throw new Error(bad);
-          (c.scripted ? WikiSim.play : WikiSim.create)(c.entry, c.entry.demos[0], c.layout, { side: c.side, casting: c.casting, iface: c.iface });
+          const ctx = { side: c.side, casting: c.casting, iface: c.iface, rival: c.rival ?? null };
+          if (c.scripted >= 2) WikiSim.game(c.entry, c.entry.demos[0], c.layout, ctx, c.scripted === 3 ? 'stall' : 'refuse');
+          else (c.scripted ? WikiSim.play : WikiSim.create)(c.entry, c.entry.demos[0], c.layout, ctx);
         } catch (e) { js = 'refused'; why = e.message; }
         const cv = (got[i] || '').startsWith('accepted ') ? 'accepted' : (got[i] || '').startsWith('refused ') ? 'refused' : '(no answer)';
         refusals++;

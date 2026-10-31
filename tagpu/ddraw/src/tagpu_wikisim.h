@@ -187,6 +187,14 @@ typedef struct {
 #define WIKI_SND_QUEUE  8           /* 0x51E68C's entries, 0x11 bytes each, count at +0x99        */
 #define WIKI_SND_GAP    30          /* [q+0xA1]: one reply with sound a second                    */
 #define WIKI_SND_LOG    32
+/* A UNIT'S DEATH, an event of a game simulation's (WIKI_PLAY_GAME): kind WIKI_SND_DEATH, `name` the
+   type's index in the entry, `cat` -1 and `variant` the map cell under the unit's centre,
+   cz x W + cx. Past the kinds, so it indexes no per-kind table, and tagpu_wikisound_reply refuses
+   it. The destructor explodes a finished unit through 0x49B000 with its ExplodeAs weapon, whose
+   soundhit 0x499FE9 plays through 0x47F300, gated by the viewed player's sight
+   (0x47F3E8..0x47F4A8) and with no owner test (DISASSEMBLED): the player plays the type's death
+   WAV (WIKISNDTYPE.death) when the viewed seat's fog at the cell is not black. */
+#define WIKI_SND_DEATH  WIKI_SND_KINDS
 /* the kind table 0x5086D8's priority (+4) and interval in seconds (+8) by kind, dumped from the
    retail executable's .data; sim.js SND_PRIORITY and SND_INTERVAL are the same */
 #define WIKI_SND_PRIORITIES { 0, 10, 9, 4, 4, 5, 3, 8, 3, 4, 3, 2, 7, 7, 7, 7, 4, 10, 10, 10, 10, 10, 10, 10 }
@@ -212,6 +220,9 @@ enum { WIKI_SNDNAME_MULTI, WIKI_SNDNAME_OKTOBUILD, WIKI_SNDNAME_NOTOKTOBUILD, WI
 typedef struct {
     int     cat;
     int32_t count[WIKI_SND_KINDS];
+    int     death;                  /* its death's WAV, an index of the load's sound table
+                                       (WIKI3DUNIT.death_sound), -1 none; the simulation does not
+                                       read it */
 } WIKISNDTYPE;
 
 /* Where a sim's sounds come from: for the type named `name` its WIKISNDTYPE into `out`, 1; 0 when
@@ -258,6 +269,22 @@ typedef struct {
 
 /* a rect in world units; the movement's bodies (tagpu_wikisim.c, MOVEMENT) */
 typedef struct { double x0, z0, x1, z1; } WIKIRECT;
+
+/* A UNIT'S ECONOMY LEDGER, a game simulation's: produced, requested, granted and debt per resource,
+   the engine's unit+0xBC/+0xC0/+0xC4/+0xC8 (energy) and +0xD4/+0xD8/+0xDC/+0xE0 (metal), f32 there
+   (research/notes/engine/weapons.md, *The ledger*) */
+typedef struct { double eP, eR, eG, eD, mP, mR, mG, mD; } WIKILEDGER;
+
+/* A SEAT'S ECONOMY, the engine's player record (0x401360, the economy pass): m, e stored (+0x98,
+   +0x8C); bm, be the base storage, the seat's settings (+0xE0, +0xDC); mmax, emax the storage
+   (+0xA8, +0xA4); mi, mo, ei, eo the last pass's income (produced) and spending (requested)
+   (+0x9C, +0xA0, +0x90, +0x94); wm, we the wasted totals (+0xD4, +0xCC); units alive, a nanoframe
+   included (+0x144); lost, the commanders lost (+0x106); out, the count gone from above 0 to 0;
+   cmd_lost, a commander lost (+0x149 bit 0 cleared: the base storage stops counting) */
+typedef struct {
+    double m, e, bm, be, mmax, emax, mi, mo, ei, eo, wm, we;
+    int    units, lost, out, cmd_lost;
+} WIKIECON;
 
 typedef struct WIKIUNIT {
     char             id[WIKI_ID_MAX];
@@ -310,6 +337,7 @@ typedef struct WIKIUNIT {
        whose reclaim said working, of the order whose taken site said cant, whether the job
        credited this tick was a build that finished, and ACTIVATION as the last notice saw it */
     int              begun, said, cant, completed, active;
+    WIKILEDGER       led;               /* a game simulation's; 0 in any other */
 } WIKIUNIT;
 
 /* a body another unit's step must not newly overlap: a unit's, or a claim's (u NULL) */
@@ -477,6 +505,15 @@ typedef struct {
                                        reach, or a scene unit or a build of a cast the casting
                                        leaves unbound; WIKI_LOCK_RECLAIM for a scripted reclaim
                                        or pick the layout cannot reach */
+    /* a game simulation's own part (`game` 1): its seats' names and economies, the economy's mode
+       (0 refuse, 1 stall), whether a pass starved and a kill found no unit, the kills made, and
+       each view unit's ledger, index-aligned with `unit` */
+    int              game;
+    int              nseat;
+    const WIKISEAT*  seat;
+    const WIKIECON*  econ;
+    int              econ_mode, starved, bad_kill, nkill;
+    const WIKILEDGER* ledger;
 } WIKIVIEW;
 
 /* The context a sim is made for, sim.js's ctx. tagpu_wikisim_init refuses an iface other than 0
@@ -498,6 +535,8 @@ typedef struct {
     int                iface;       /* the Interface Type: 0 left-click, 1 right-click */
     const WIKICOBSRC*  cob;         /* the units' scripts, or NULL; read during init only */
     const WIKISNDSRC*  snd;         /* the units' sounds, or NULL; read during init only */
+    const WIKICASTING* rival;       /* the opponent's casting, read by a game entry's rival types
+                                       only, or NULL: they keep their own; the same lifetime as cast */
 } WIKISIMCTX;
 
 struct WIKISIMBOUND;
@@ -507,6 +546,12 @@ struct WIKISIMBOUND;
 typedef struct {
     int              tick, done;
     int              side;          /* the layout side the sidebar shows, -1 with it off */
+    /* A GAME SIMULATION (WIKI_PLAY_GAME, _STALL): the seats of its scene and their economies, the
+       economy's mode (WIKI_ECON_*), whether a pass starved and a kill found no unit, the kills
+       made. 0 and untouched in any other sim. */
+    int              game, econ_mode, nseat, starved, bad_kill, nkill;
+    WIKISEAT         seat[WIKI_SEATS];
+    WIKIECON         econ[WIKI_SEATS];
     int              iface;         /* the Interface Type, 0 or 1 */
 
     /* the entry it plays: the one it was made from, or with a casting the bound entry, which
@@ -627,6 +672,8 @@ typedef struct {
     WIKIVSITE        vsite[PLACE_MAX_SITES];
     WIKISNDEV        vsnd[WIKI_SND_LOG];
     WIKIVFEAT        vfeat[WIKI_FEATS_MAX];
+    WIKILEDGER*      vledger;
+    int              cvledger;
     int              cvunit, cvqueued, cvline;
     /* the movement's scratch: one unit's bodies (two a unit: its own and a claim, and the site it
        heads for) and the walking
@@ -666,11 +713,14 @@ typedef struct {
    Type 1, the interface the demos are authored in.
 
    THE BOUND ENTRY, with a casting (sim.js's binder): every type of the entry names one of the
-   nine casts and no cast twice, or the sim is refused. Type i of a cast the casting binds becomes
-   the casting's type under its name, with its title, footprint, figures, canstop, activatewhenbuilt
-   and G cells, and
-   a build list holding entry type j exactly when the casting's list names j's cast; type i of a
-   cast it leaves unbound keeps the entry's own definition and is marked unbound. Two types bound
+   ten casts and no two types of one side (a game entry's rival types, or the rest) one cast, or
+   the sim is refused. Type i of a cast the casting binds becomes the casting's type under its
+   name, with its title, footprint, figures (the economy's among them), canstop, activatewhenbuilt
+   and G cells, and a build list holding entry type j of its own side exactly when the casting's
+   list names j's cast; type i of a cast it leaves unbound keeps the entry's own definition and is
+   marked unbound. A rival type binds to ctx->rival the same way, and keeps its own definition,
+   not unbound, when ctx->rival is NULL. In a game, each bound type's wreck is its cast's corpse,
+   put over the features table's row of its name or appended to the bound table. Two types bound
    to one name refuse the sim. The indices do not move, so the scene's units and the inputs'
    `build` name the same types as before; captions stay raw (the hash keeps them so).
 
@@ -686,6 +736,14 @@ typedef struct {
    does not have, the resolved script breaks its data rule, a scripted demo with the sidebar on
    breaks the build trip's data rule (tagpu_wikidata_trips), or memory runs out; then `s` holds
    nothing to free. */
+/* `scripted`: TRY is Try it yourself, DEMO a demo's script, GAME a game entry's demo's game script
+   (sim.js's WikiSim.game) with its economy in refuse mode, GAME_STALL the same in stall mode
+   (research/notes/ingame-wiki-replay-plan.md, decision 18): refuse, an authored script, is done,
+   `starved`, at the first pass that cannot pay a grant; stall, a seat the player plays, carries an
+   unpaid grant as the unit's debt, which refuses its requests until a pass pays it. A game entry
+   plays only as a game and a game only from a game entry. */
+enum { WIKI_PLAY_TRY, WIKI_PLAY_DEMO, WIKI_PLAY_GAME, WIKI_PLAY_GAME_STALL };
+enum { WIKI_ECON_REFUSE, WIKI_ECON_STALL };
 int  tagpu_wikisim_init(WIKISIM* s, const WIKIENTRY* e, const WIKIDEMO* d, int scripted, const WIKILAYOUT* lay,
                         const WIKISIMCTX* ctx, char* err, size_t errn);
 void tagpu_wikisim_free(WIKISIM* s);
@@ -751,6 +809,10 @@ int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
     11. the features standing: their count and each one's id, its table row's name and its anchor
         cell ox, oz; the gone count and each cell's ox, oz; then 1 when reclaim is armed, its kind
         (WIKI_KIND_*) and the ring: 1 and its x, z and r, or 0; or 0 alone.
+    12. a game simulation's only (nothing at all in any other): the seat count, and per seat its
+        units, lost, out and cmd_lost, then its m, mmax, mi, mo, wm, e, emax, ei, eo and we; then
+        the economy's mode (0 refuse, 1 stall), starved, bad_kill and the kills made; then each
+        unit's ledger in the view's order, its eP, eR, eG, eD, mP, mR, mG and mD.
    The view's other fields follow from these: queued sites and order lines from the units and
    their orders, the cursor's shape from the mode and the selection, the sweep's targets, readout,
    hover and popup from the features, the ring and the cursor, a site's order number from

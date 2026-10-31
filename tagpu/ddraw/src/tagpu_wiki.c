@@ -710,6 +710,7 @@ static int snd_type(void* c, const char* name, WIKISNDTYPE* out)
         if (_stricmp(u->name, name) || !u->ok) continue;
         out->cat = u->sound_cat;
         memcpy(out->count, u->sound_count, sizeof out->count);
+        out->death = u->death_sound;
         return 1;
     }
     return 0;
@@ -759,6 +760,17 @@ static int scripts_now(const WIKICOBSRC** src, const WIKISNDSRC** snd)
    0 while layout_now's or scripts_now's answer is pending; `*cast` gets the layout side whose
    casting the context holds, -1 none, as soon as layout_now answers, so the text takes the
    casting's names while the 3D load still runs. */
+/* THE OPPONENT'S CASTING (WIKISIMCTX.rival): the first layout side other than `k`, which a game
+   entry's rival types bind to; NULL with no block or no other side. BOUND: the side is below the
+   layout's sides and WIKI_SIDE_SIDES, the casting array's length. Same lifetime as the player's. */
+static const WIKICASTING* rival_of(const WIKISIDE* blk, int k)
+{
+    int r;
+    for (r = 0; blk && r < blk->layout.nside && r < WIKI_SIDE_SIDES; r++)
+        if (r != k) return &blk->casting[r];
+    return NULL;
+}
+
 static int context_now(const WIKIDATA* d, const WIKILAYOUT** lay, int* src, WIKISIMCTX* ctx, int* cast)
 {
     const WIKISIDE* blk;
@@ -767,6 +779,7 @@ static int context_now(const WIKIDATA* d, const WIKILAYOUT** lay, int* src, WIKI
     ctx->iface = s_iface;
     ctx->cob = NULL;
     ctx->snd = NULL;
+    ctx->rival = NULL;
     *cast = -1;
     if (!layout_now(d, lay, src, &blk)) return 0;
     if (blk) {
@@ -774,6 +787,7 @@ static int context_now(const WIKIDATA* d, const WIKILAYOUT** lay, int* src, WIKI
         if (k >= 0 && k < blk->layout.nside && k < WIKI_SIDE_SIDES) {
             ctx->side = k;
             ctx->cast = &blk->casting[k];
+            ctx->rival = rival_of(blk, k);
             *cast = k;
         } else {
             *lay = d ? d->fixture : NULL;
@@ -1220,7 +1234,7 @@ static void check(void)
                 for (j = 0; j < d->entry[i].ndemo; j++) {
                     const WIKIENTRY* e = &d->entry[i];
                     /* the contexts start() can give: the side's casting only on the mod's layout */
-                    const WIKISIMCTX ctx = { k, blk ? &blk->casting[k] : NULL, ifc, cob, snd };
+                    const WIKISIMCTX ctx = { k, blk ? &blk->casting[k] : NULL, ifc, cob, snd, rival_of(blk, k) };
                     WIKISIM* s = (WIKISIM*)malloc(sizeof *s);
                     long t = 0;
                     int ty;

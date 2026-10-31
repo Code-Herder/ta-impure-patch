@@ -29,6 +29,12 @@
    pack's layout holds for the cast type (packPath). The rule cases are not played: they name the fixture's layout
    and castings, which a pack does not change, so the plain run is where they are checked.
 
+   THE GAME ENTRIES: every entry under art/wiki/entries/ whose frame is "game", named by the tree or not, plays each
+   demo's game script through WikiSim.game in every context, the opponent's casting beside the player's (the
+   fixture's `rivals`, or under --pack the first other side's), and is checked on its own claims (gameClaims,
+   stallClaims): to its end, never stalled, starved or killing no unit, each kill's wreck and death sound, and the
+   stall case. Their tallies print after the demos', so the demos' lines read as before.
+
    Imported, it runs nothing and exports ENTRY_RULES, the rule cases per entry id, which call WikiSim.create and
    WikiSim.play through the module object sim.js exports; tools/wiki/simparity.mjs records both, each with its
    layout, and plays them through the DLL's sim that way.
@@ -45,6 +51,8 @@ const ROOT = new URL('../../', import.meta.url).pathname;
 const TRACE = process.argv.includes('--trace');
 const FIXTURE = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/side/fixture.json`, 'utf8'));
 const CASTINGS = JSON.parse(fs.readFileSync(`${ROOT}tools/wiki/casting-fixture.json`, 'utf8')).castings;
+// the opponent's casting beside each fixture casting, which a game entry's rival units bind to
+const RIVALS = JSON.parse(fs.readFileSync(`${ROOT}tools/wiki/casting-fixture.json`, 'utf8')).rivals;
 const { TRIP, TRIP_DOWN, TRIP_UP } = WikiSim;
 const arg = k => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : undefined; };
 /* the pack under --pack (its side.json, whose layout and castings the demos play with) and the layout the demos play
@@ -53,8 +61,9 @@ const arg = k => { const i = process.argv.indexOf(k); return i >= 0 ? process.ar
 let PACK = null, PACK_DIR = null, LAYOUT = FIXTURE;
 const ifaces = () => { const i = arg('--iface'); return i === undefined ? [1, 0] : [Number(i)]; };
 /* the contexts every demo plays in: {label, layout, ctx, casting name}. The fixture layout has one side, which each
-   fixture casting answers; a pack gives one context per layout side, with that side's casting (index-aligned with
-   layout.sides), and interface. */
+   fixture casting answers, with its rival beside it (`rivals`); a pack gives one context per layout side, with that
+   side's casting (index-aligned with layout.sides) and as the rival the first other side's, as the DLL's context
+   gives them (tagpu_wiki.c rival_of), and interface. Only a game entry's rival units read the rival. */
 function contexts() {
   const cs = baseContexts();
   if (process.argv.includes('--no-scripts')) return cs;
@@ -69,14 +78,15 @@ function baseContexts() {
     const want = arg('--side'), sides = PACK.layout.sides.map((s, k) => k).filter(k => want === undefined || k === Number(want));
     if (PACK.casting.length !== PACK.layout.sides.length) throw new Error(`the pack has ${PACK.casting.length} castings for ${PACK.layout.sides.length} sides`);
     if (!sides.length) throw new Error(`no side ${want} in the pack`);
+    const rival = k => { const r = PACK.layout.sides.findIndex((s, j) => j !== k); return r < 0 ? null : PACK.casting[r]; };
     return sides.flatMap(k => ifaces().map(i => ({ label: `${PACK.layout.sides[k].name}/${i}`, name: null, layout: LAYOUT,
-      ctx: { side: k, casting: PACK.casting[k], iface: i } })));
+      ctx: { side: k, casting: PACK.casting[k], iface: i, rival: rival(k) } })));
   }
   const pick = arg('--casting');
   const names = pick === undefined ? [null, ...Object.keys(CASTINGS)] : [pick === 'none' ? null : pick];
   for (const n of names) if (n !== null && !CASTINGS[n]) throw new Error(`no casting ${n} in casting-fixture.json`);
   return names.flatMap(n => ifaces().map(i => ({ label: `${n || 'authored'}/${i}`, name: n, layout: LAYOUT,
-    ctx: { side: 0, casting: n ? CASTINGS[n][0] : null, iface: i } })));
+    ctx: { side: 0, casting: n ? CASTINGS[n][0] : null, iface: i, rival: n ? RIVALS[n] : null } })));
 }
 
 // the quickbuild entry's deposits and vents, in cells: [x, z, w, h]
@@ -1385,6 +1395,83 @@ function expectedLock(entry, d, casting) {
   const b = d.inputs.map((e, i) => [e, i]).sort((x, y) => x[0].at - y[0].at || x[1] - y[1]).map(p => p[0]).find(e => off.includes(e.build));
   return b ? { t: b.at, type: b.build } : null;
 }
+/* ---- THE GAME ENTRIES (research/notes/ingame-wiki-replay-plan.md): every entry under art/wiki/entries/ whose frame
+   is "game", named by the tree or not, each demo's game script played by WikiSim.game in every context ---- */
+// the cast record a game entry's unit `t` binds to: the rival casting's for a rival unit, else the casting's
+const gameCast = (entry, ctx, t) => {
+  const u = entry.units[t], k = u && (u.rival ? ctx.casting && ctx.rival : ctx.casting);
+  return k ? k.casts[u.cast] : undefined;
+};
+// the tick and type a game stops on under the badge: a scene unit, or a build, of a cast its casting leaves unbound
+function gameLock(entry, d, ctx) {
+  const off = Object.keys(entry.units).filter(t => gameCast(entry, ctx, t) === null);
+  const scene = [...WikiSim.sceneOf(entry, d).units, ...((d.scene && d.scene.units) || [])].find(u => off.includes(u.type));
+  if (scene) return { t: 0, type: scene.type };
+  const b = d.game.inputs.map((e, i) => [e, i]).sort((x, y) => x[0].at - y[0].at || x[1] - y[1]).map(p => p[0]).find(e => off.includes(e.build));
+  return b ? { t: b.at, type: b.build } : null;
+}
+// a game entry's demo with every seat's settings cut to the least, so that its builds run dry: THE STALL CASE
+const SEAT_MIN = 200;
+const cutSeats = entry => ({ ...entry, scenes: Object.fromEntries(Object.entries(entry.scenes).map(([n, sc]) =>
+  [n, { ...sc, seats: sc.seats.map(z => ({ ...z, metal: SEAT_MIN, energy: SEAT_MIN })) }])) });
+function runGame(entry, d, layout, ctx, mode) {
+  const sim = WikiSim.game(entry, d, layout, ctx, mode), all = [];
+  const ids = [...WikiSim.sceneOf(entry, d).units, ...((d.scene && d.scene.units) || [])].map(u => u.id);
+  const snap = () => all.push({ t: sim.tick, v: sim.view(), o: Object.fromEntries(ids.map(id => [id, sim.orders(id)])) });
+  snap();
+  while (!sim.done) { sim.step(); snap(); }
+  // the host's notes are read before the sim's world is freed in it
+  const cobNotes = sim.cobNotes().filter(n => n);
+  sim.free();
+  return { sim, all, last: all[all.length - 1], log: sim.log, cobNotes };
+}
+/* A GAME'S CLAIMS, in refuse mode: it plays to its end, never stalled, starved or stopped by a kill that found no unit;
+   no two bodies overlap; each kill of a finished unit whose cast leaves a wreck placed it, or the placement's rule 1
+   or 2 refused it (listed), and an unfinished unit's kill left none; each kill of a finished unit made a death event
+   when the context has a sound source. `notes` lists the refused wrecks. */
+function gameClaims(entry, d, ctx, r, ok, notes) {
+  const v = r.last.v;
+  ok(v.clock === d.game.end && v.locked === null, `played to its end, tick ${d.game.end} (tick ${v.clock}, locked ${v.locked})`);
+  ok(!v.stalled && !v.game.starved && !v.game.badKill, `never stalled, starved or killing no unit (${v.stalled}, ${v.game.starved}, ${v.game.badKill})`);
+  const met = r.all.findIndex(f => !apart(f.v));
+  ok(met < 0, `no two bodies overlap${met < 0 ? '' : ` (tick ${r.all[met].t})`}`);
+  const kills = d.game.inputs.filter(e => 'kill' in e);
+  ok(v.game.nkill === kills.length, `every kill found its unit (${v.game.nkill} of ${kills.length})`);
+  for (const e of kills) {
+    const before = r.all.find(f => f.t === e.at - 1), after = r.all.find(f => f.t === e.at);
+    const u = before && before.v.units.find(x => x.id === e.kill);
+    if (!u || !after) { ok(false, `the kill of ${e.kill} at ${e.at} has its frames`); continue; }
+    const t = Object.keys(entry.units).find(n => (gameCast(entry, ctx, n) || { type: n }).type === u.type);
+    const k = gameCast(entry, ctx, t), wreck = k ? k.corpse : entry.units[t].corpse;
+    const placed = after.v.feats.some(f => f.id === e.kill), refused = r.log.some(l => l.what === 'nocorpse' && l.id === e.kill);
+    if (u.built < 1) ok(!placed && !refused, `the unfinished ${e.kill} killed at ${e.at} left no wreck`);
+    else if (wreck) {
+      ok(placed !== refused, `the kill of ${e.kill} at ${e.at} placed its wreck or the placement refused it (placed ${placed})`);
+      if (refused) notes.push(`${e.kill}@${e.at}`);
+    } else ok(!placed && !refused, `the kill of ${e.kill} at ${e.at}, whose cast leaves no wreck, left none`);
+    if (u.built >= 1 && ctx.snd) {
+      const heard = after.v.sound.events.some(x => x[0] === e.at && x[1] === WikiSim.SND_DEATH);
+      ok(heard, `the kill of ${e.kill} at ${e.at} made a death event`);
+    }
+  }
+}
+/* THE STALL CASE'S CLAIMS: every seat at the least, in stall mode the game never starves and some builder's request is
+   refused -- a debt on a unit whose first order is a build, its structure's progress held still to the next tick -- and
+   in refuse mode the same game ends starved */
+function stallClaims(entry, d, layout, ctx, ok) {
+  const cut = cutSeats(entry), s = runGame(cut, d, layout, ctx, 'stall'), r = runGame(cut, d, layout, ctx, 'refuse');
+  ok(!s.all.some(f => f.v.game.starved), 'in stall mode the cut game never starves');
+  const held = s.all.some((f, i) => i + 1 < s.all.length && f.v.units.some((u, k) => {
+    const o = f.o[u.id], L = f.v.game.ledgers[k];
+    if (!o || !o[0] || o[0].k !== 'build' || !(L[3] > 0 || L[7] > 0)) return false;
+    const site = x => x.v.units.find(w => w.type === o[0].type && Math.round(w.x / 16 - w.fx / 2) === o[0].ox && Math.round(w.z / 16 - w.fz / 2) === o[0].oz);
+    const a = site(f), b = site(s.all[i + 1]);
+    return a && b && a.built < 1 && b.built === a.built;
+  }));
+  ok(held, 'in stall mode a builder in debt holds its structure still');
+  ok(r.last.v.game.starved, `in refuse mode the cut game ends starved (tick ${r.last.t})`);
+}
+
 /* THE TURNED-OFF RULE (decision 24): an entry whose own `lockedIn` names the pack's mod is shown in that mod under
    the "Turned off in this mod" badge (wiki.js `locked`, the same list and the same name), which already tells the
    player its demos do not apply there. Its demos still play, and must play to their end without being refused, but
@@ -1453,6 +1540,38 @@ for (const c of contexts()) {
     }
   }
 }
+const games = fs.readdirSync(`${ROOT}art/wiki/entries`).filter(f => f.endsWith('.json')).sort()
+  .map(f => [f.slice(0, -5), JSON.parse(fs.readFileSync(`${ROOT}art/wiki/entries/${f}`, 'utf8'))]).filter(([, e]) => e.frame === 'game');
+const gameTally = {};
+for (const c of games.length ? contexts() : []) {
+  const t = gameTally[c.label] = { pass: 0, fail: 0, locked: [], refused: [] };
+  for (const [id, entry] of games) for (const d of entry.demos) {
+    const notes = [], ok = (cond, what) => notes.push([!!cond, what]), lock = gameLock(entry, d, c.ctx);
+    try {
+      const r = runGame(entry, d, c.layout, c.ctx, 'refuse');
+      const qn = r.cobNotes;
+      ok(!qn.length, `no type's script quarantined${qn.length ? ` (${qn.join('; ')})` : ''}`);
+      if (lock) {
+        ok(r.sim.done && r.last.v.clock === lock.t && r.last.v.locked === lock.type,
+          `stops on tick ${lock.t} under the badge, ${lock.type} unbound (tick ${r.last.v.clock}, locked ${r.last.v.locked})`);
+        t.locked.push(`${id}/${d.id}@${lock.t}`);
+      } else {
+        gameClaims(entry, d, c.ctx, r, ok, t.refused);
+        stallClaims(entry, d, c.layout, c.ctx, ok);
+        if (c.name === 'identity') {
+          const a = runGame(entry, d, c.layout, { ...c.ctx, casting: null, rival: null }, 'refuse');
+          const k = a.all.findIndex((f, i) => !r.all[i] || frameKey(f) !== frameKey(r.all[i]));
+          ok(k < 0 && a.all.length === r.all.length, `plays exactly as the entry's own types${k < 0 ? '' : ` (first difference on tick ${k})`}`);
+        }
+      }
+    } catch (e) { ok(false, `threw: ${e.stack}`); }
+    const pass = notes.every(n => n[0]);
+    if (!pass) failed++;
+    t[pass ? 'pass' : 'fail']++;
+    console.log(`${pass ? 'PASS' : 'FAIL'} [${c.label}] game ${id}/${d.id} -- ${d.title}${lock ? ` (stops on tick ${lock.t}: ${lock.type} unbound)` : ''}`);
+    for (const [cond, what] of notes) if (!cond || TRACE) console.log(`     ${cond ? 'ok  ' : 'FAIL'} ${what}`);
+  }
+}
 for (const id of PACK ? [] : ids) {
   const entry = JSON.parse(fs.readFileSync(`${ROOT}art/wiki/entries/${id}.json`, 'utf8'));
   for (const [what, check] of Object.entries(ENTRY_RULES[id] || {})) {
@@ -1465,6 +1584,10 @@ for (const id of PACK ? [] : ids) {
 for (const [label, t] of Object.entries(tally))
   console.log(`[${PACK ? `pack ${PACK.mod}${LAYOUT ? '' : ', no sidebar'}` : LAYOUT ? 'fixture' : 'no sidebar'} ${label}] ${t.pass} pass, ${t.fail} fail` +
     `${t.off.length ? `; locked: claims not checked, ${t.off.length} played (${[...new Set(t.off.map(x => x.split('/')[0]))].join(', ')} turned off in ${PACK.mod})` : ''}` +
+    `${t.locked.length ? `; stopped under the badge: ${t.locked.join(' ')}` : ''}`);
+for (const [label, t] of Object.entries(gameTally))
+  console.log(`[${PACK ? `pack ${PACK.mod}${LAYOUT ? '' : ', no sidebar'}` : LAYOUT ? 'fixture' : 'no sidebar'} games ${label}] ${t.pass} pass, ${t.fail} fail` +
+    `${t.refused.length ? `; wrecks the placement refused: ${t.refused.join(' ')}` : ''}` +
     `${t.locked.length ? `; stopped under the badge: ${t.locked.join(' ')}` : ''}`);
 console.log(failed ? `${failed} check(s) failed` : 'all demos and rules pass');
 process.exit(failed ? 1 : 0);   // also ends the scripts' host

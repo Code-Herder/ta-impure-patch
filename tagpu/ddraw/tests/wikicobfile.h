@@ -60,6 +60,7 @@ static int cob_load(const char* path)
         if (tj_is(snd, TJ_OBJ)) {
             s_cob[s_ncob].has_snd = 1;
             s_cob[s_ncob].snd.cat = (int)tj_num(tj_get(snd, "cat"), -1);
+            s_cob[s_ncob].snd.death = -1;   /* the simulation reads no clip */
             for (k = 0, e = tj_is(tj_get(snd, "count"), TJ_ARR) ? tj_get(snd, "count")->first : NULL; e && k < WIKI_SND_KINDS;
                  e = e->next, k++)
                 s_cob[s_ncob].snd.count[k] = (int32_t)tj_num(e, 0);

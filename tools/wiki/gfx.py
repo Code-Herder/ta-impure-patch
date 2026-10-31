@@ -834,10 +834,51 @@ def sound_table(eng):
     return eng._sound
 
 
+WEAPON_SLOTS = 256
+
+
+def weapon_table(eng):
+    """The weapon table as the weapon load 0x42E310 fills it, cached on `eng`: every section of every `weapons\\*.tdf`
+    in the listing's order (0x42E371) goes to the slot its `ID` names (0x42E440, read at 0x42E463 as the engine reads
+    a TDF number, `atoi`; absent -1), a later section of the same ID overwriting an earlier one: per slot
+    0..WEAPON_SLOTS - 1 None or {"name": the section's name (0x42E490), "soundhit": its value or None}. An ID outside
+    the slots fills none [INFERRED]. The folder is the literal the load lists: the executable's folder names the
+    wiki reads (VA) hold no copy of it. A file the engine's parser refuses holds no section."""
+    if getattr(eng, "_weapons", None) is None:
+        slots = [None] * WEAPON_SLOTS
+        for path, where in eng.vfs.enumerate("weapons", "*.tdf", False):
+            try:
+                secs = tavfs.tdf_sections(eng.vfs.read_from(path, where))
+            except tavfs.TdfError:
+                continue
+            for sec in secs:
+                k = atoi(sec["keys"]["id"]) if "id" in sec["keys"] else -1
+                if 0 <= k < WEAPON_SLOTS:
+                    slots[k] = {"name": sec["_name"], "soundhit": sec["keys"].get("soundhit")}
+        eng._weapons = slots
+    return eng._weapons
+
+
+def death_wav(eng, fbi):
+    """THE DEATH SOUND's WAV name of a unit whose FBI's fields are `fbi`, or None: the destructor explodes a finished
+    unit with its ExplodeAs weapon (def+0x220) through 0x49B000 and 0x499EB0, which on dry ground plays the weapon's
+    soundhit (+0xF6, read at 0x499FE9). The FBI's `explodeas`, read into 0x80 bytes, names the first slot whose name
+    equals it without case (0x49E5B0, _stricmp 0x4F8A70); an empty or unknown name takes slot 0, the loader's
+    fallback (0x42CEAD..0x42CEB7) -- DISASSEMBLED. The slot's `soundhit` is the WAV, sounds\\<value>.WAV (0x42EF2A);
+    no key, or an empty slot, no sound [INFERRED: what an empty slot 0 holds at +0xF6]."""
+    slots = weapon_table(eng)
+    name = (fbi.get("explodeas") or "")[:127]
+    k = next((i for i, w in enumerate(slots) if name and w and w["name"].lower() == name.lower()), 0)
+    hit = slots[k]["soundhit"] if slots[k] else None
+    return hit or None
+
+
 def unit_sound(eng, fbi):
-    """{"cat", "count"} for a unit whose FBI's fields are `fbi` (`fbi_fields`): its category as def+0x20E holds it,
-    none (-1) outside the table, and the category's variant count per kind (all 0 for none)."""
+    """{"cat", "count", "death"} for a unit whose FBI's fields are `fbi` (`fbi_fields`): its category as def+0x20E
+    holds it, none (-1) outside the table, the category's variant count per kind (all 0 for none), and its death's
+    WAV name (`death_wav`), None for none."""
     table = sound_table(eng)
+    death = death_wav(eng, fbi)
     v = fbi.get("soundcategory")
     if v is None:
         cat = 0
@@ -847,8 +888,8 @@ def unit_sound(eng, fbi):
         if cat is None:
             cat = atoi(v)
     if not 0 <= cat < len(table):
-        return {"cat": -1, "count": [0] * SND_KINDS}
-    return {"cat": cat, "count": [len(w) for w in table[cat]["wav"]]}
+        return {"cat": -1, "count": [0] * SND_KINDS, "death": death}
+    return {"cat": cat, "count": [len(w) for w in table[cat]["wav"]], "death": death}
 
 
 def wav_pcm(blob):
@@ -884,7 +925,8 @@ def wav_pcm(blob):
 
 def write_sounds(eng, out_root, types):
     """`<out_root>/sounds.json` and the WAVs it names, `sounds/<n>.wav`: each mesh type's `sound` (`types`, the first
-    entry's of a name), which the mockup's sim reads as its sound source (sound.js); for each category they use its
+    entry's of a name), which the mockup's sim reads as its sound source (sound.js), with its `death` the file of its
+    death's WAV, null for none or one missing or refused; for each category they use its
     name and, per kind the wiki says, the variants' files in variant order, null for one missing or refused; the
     file of each button sound's allsound name, as 0x42F7E0 binds the names (each section's `sound`, the first
     section of a name winning, at most 255: 0x429470); and what was refused. A WAV opens as `sounds\\<wav>.WAV` by
@@ -925,6 +967,8 @@ def write_sounds(eng, out_root, types):
                              "kinds": {str(k): [wav(w) for w in table[c]["wav"][k]] for k in SND_WIKI_KINDS}}
                     for c in sorted(cats) if 0 <= c < len(table)},
            "named": {nm: wav(allsound.get(nm.lower())) for nm in SND_NAMES}}
+    # the deaths' files after the categories' and the button sounds', which keep their numbers
+    doc["types"] = {t: {**v, "death": wav(v.get("death"))} for t, v in types.items()}
     doc["refused"] = refused
     (out_root / "sounds.json").write_text(json.dumps(doc, indent=1) + "\n")
     return doc

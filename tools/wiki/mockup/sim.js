@@ -49,6 +49,9 @@ const WikiSim = (() => {
   const SND_PRIORITY = [0, 10, 9, 4, 4, 5, 3, 8, 3, 4, 3, 2, 7, 7, 7, 7, 4, 10, 10, 10, 10, 10, 10, 10];
   const SND_INTERVAL = [0, 0, 20, 2, 2, 1, 4, 1, 3, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0];
   const SND_KINDS = 24, SND_QUEUE = 8, SND_GAP = 30, SND_LOG = 32, INT_MAX = 2147483647;
+  /* a unit's death, an event of a game's: past the kinds, so it indexes no per-kind table and a player that knows no
+     death plays nothing for it (tagpu_wikisim.h WIKI_SND_DEATH) */
+  const SND_DEATH = SND_KINDS;
   const SND = { select: 1, activate: 3, deactivate: 4, ok: 5, arrived: 6, cant: 7, complete: 8, build: 9, working: 11 };
   const SND_NAMES = ['SelectMultipleUnits', 'oktobuild', 'notoktobuild', 'addbuild', 'buildbutton', 'ordersbutton',
     'nextbuildmenu', 'immediateorders', 'Options', 'specialorders'];
@@ -168,6 +171,8 @@ const WikiSim = (() => {
     'buildCostMetal', 'buildCostEnergy', 'metalMake', 'metalStorage', 'energyStorage'];
   // ECON_MAX: the bound of a signed economy figure, energyUse (a solar collector's is negative), tagpu_wikidata.h's WIKI_ECON_MAX
   const ECON_MAX = 1e7;
+  // the economy's figures an entry's unit may carry as a cast does: the five held to >= 0, and energyUse to ECON_MAX
+  const ECON = ['buildCostMetal', 'buildCostEnergy', 'metalMake', 'metalStorage', 'energyStorage'];
   // WIKI_FP_MAX: a footprint's side on each axis, the width of a G row's bit mask; WIKI_ID_MAX: a type name's field;
   // WIKI_TITLE_MAX: a display name's field, 31 code-page bytes (def+0x00 is 0x20 bytes) at most 3 UTF-8 bytes each
   const FP_MAX = 16, ID_MAX = 24, TITLE_MAX = 94;
@@ -239,29 +244,46 @@ const WikiSim = (() => {
   }
   /* THE BOUND ENTRY: the entry with every unit of a bound cast replaced by the casting's type, under the type's name,
      with the casting's title (as `name`), footprint, figures, canstop, canreclamate, activatewhenbuilt and G cells, and a build list that holds unit j
-     of the entry exactly when the casting's build list names j's cast. A unit of an unbound cast keeps the authored
+     of the entry exactly when the casting's build list names j's cast and j is on the unit's own side (a rival or
+     not). A unit of an unbound cast keeps the authored
      definition, marked `unbound`, and its build list keeps only the entry's own units, renamed as they are. The
      units keep their order, so the scene's units and a `build` point at the same definitions as before; the scene's
      types and the inputs' `build` are renamed with them, captions untouched (the sim and its hash keep raw
-     captions). Every unit names one of the ten casts and no cast twice; two units bound to one name are refused. A
-     cast's corpse stays in the casting: no unit of the bound entry carries one.
-     tagpu_wikisim.c builds the same as WIKISIM's own bdef[] (a field of the sim, so it lives and dies with it). */
-  function binder(entry, casting) {
-    const K = checkCasting(casting).casts, names = Object.keys(entry.units), to = {}, seen = new Set();
+     captions). Every unit names one of the ten casts and no two units of one side one cast; two units bound to one
+     name are refused.
+
+     THE OPPONENT (a game entry's `rival` units, the plan's decision 19): a rival unit binds to `rival`'s cast as a
+     player's unit binds to `casting`'s, and keeps its authored definition, not marked unbound, when no rival casting
+     is given.
+
+     THE WRECKS, in a game entry only (`game`): a bound unit's corpse is its cast's (`corpse`, the name of a row of the
+     bound entry's `features`), and the bound entry's features table is the entry's with each such cast's wreck, in
+     unit order, put over the row of its name or appended after the rows; past FEAT_DEFS rows the demo is refused. A
+     unit keeping its authored definition keeps its authored corpse. Outside a game entry a cast's corpse stays in the
+     casting. tagpu_wikisim.c builds the same as WIKISIM's own bdef[] (a field of the sim, so it lives and dies with it). */
+  function binder(entry, casting, rival = null, game = false) {
+    const K = checkCasting(casting).casts, R = rival ? checkCasting(rival).casts : null;
+    const names = Object.keys(entry.units), to = {}, seen = new Set();
+    const isRival = t => entry.units[t].rival === true;
+    // the cast record a unit binds to: null for an unbound cast, undefined for a rival with no rival casting
+    const castFor = t => isRival(t) ? (R ? R[entry.units[t].cast] : undefined) : K[entry.units[t].cast];
     for (const t of names) {
       const c = entry.units[t].cast;
       if (!CASTS.includes(c)) throw new Error(`unit ${t} names no cast`);
-      if (seen.has(c)) throw new Error(`two units name the cast ${c}`);
-      seen.add(c);
-      to[t] = K[c] ? K[c].type : t;
+      if (seen.has(`${isRival(t)}/${c}`)) throw new Error(`two ${isRival(t) ? 'rival ' : ''}units name the cast ${c}`);
+      seen.add(`${isRival(t)}/${c}`);
+      to[t] = castFor(t) ? castFor(t).type : t;
     }
     if (new Set(names.map(t => to[t])).size !== names.length) throw new Error('the casting binds two units to one type');
-    const units = {};
+    const units = {}, features = game ? { ...(entry.features || {}) } : entry.features;
     for (const t of names) {
-      const d = entry.units[t], k = K[d.cast];
-      if (!k) { units[t] = { ...d, unbound: true, builds: (d.builds || []).filter(b => own(entry.units, b)).map(b => to[b]) }; continue; }
-      const b = { cast: d.cast, name: k.title, footprint: [k.footprint[0], k.footprint[1]],
-        builds: names.filter(j => (k.builds || []).includes(entry.units[j].cast)).map(j => to[j]) };
+      const d = entry.units[t], k = castFor(t);
+      if (!k) {
+        units[t] = { ...d, ...(k === null ? { unbound: true } : {}), builds: (d.builds || []).filter(b => own(entry.units, b)).map(b => to[b]) };
+        continue;
+      }
+      const b = { cast: d.cast, ...(isRival(t) ? { rival: true } : {}), name: k.title, footprint: [k.footprint[0], k.footprint[1]],
+        builds: names.filter(j => isRival(j) === isRival(t) && (k.builds || []).includes(entry.units[j].cast)).map(j => to[j]) };
       for (const n of FIGURES) if (n in k) b[n] = k[n];
       if ('energyUse' in k) b.energyUse = k.energyUse;
       if ('canstop' in k) b.canstop = k.canstop;
@@ -269,12 +291,20 @@ const WikiSim = (() => {
       if ('activatewhenbuilt' in k) b.activatewhenbuilt = k.activatewhenbuilt;
       if (k.vent) b.vent = true;
       if (k.g && k.g.length) b.g = k.g.map(c => [c[0], c[1]]);
+      if (game && k.corpse) {
+        const { name, ...row } = k.corpse;
+        features[name] = row;
+        b.corpse = name;
+      }
       units[to[t]] = b;
     }
+    // FEAT_DEFS: tagpu_wikidata.c's table of an entry's features, which the bound one is too
+    if (game && Object.keys(features).length > FEAT_DEFS) throw new Error('the casting\'s corpses overflow the features table');
     const scene = s => s && s.units ? { ...s, units: s.units.map(u => own(to, u.type) ? { ...u, type: to[u.type] } : u) } : s;
     const demo = d => d && { ...d, scene: scene(d.scene),
       inputs: d.inputs && d.inputs.map(e => typeof e.build === 'string' && own(to, e.build) ? { ...e, build: to[e.build] } : e) };
     const bound = { ...entry, units, scenes: Object.fromEntries(Object.entries(entry.scenes).map(([n, s]) => [n, scene(s)])) };
+    if (game) bound.features = features;
     if (entry.demos) bound.demos = entry.demos.map(demo);
     return { entry: bound, demo };
   }
@@ -440,14 +470,107 @@ const WikiSim = (() => {
   }
 
   /* THE CONTEXT, refused as tagpu_wikisim_init refuses it: an Interface Type other than 0 or 1 (the DLL maps the
-     engine's int to these two before it starts a demo), and with a layout a side that is not one of its sides. */
+     engine's int to these two before it starts a demo), and with a layout a side that is not one of its sides. `rival`
+     is the opponent's casting, read only by a game entry's rival units (binder). */
   function context(layout, ctx) {
     const c = ctx == null ? { side: 0, casting: null, iface: 1 } : ctx;
     if (!(c.iface === 0 || c.iface === 1)) throw new Error(`the interface type ${c.iface} is not 0 or 1`);
     if (layout && !(int(c.side) && c.side >= 0 && c.side < layout.sides.length)) throw new Error(`side ${c.side} is not one of the layout's sides`);
     if (!(c.casting == null || obj(c.casting))) throw new Error('the casting is not an object or null');
-    return { side: layout ? c.side : -1, casting: c.casting ?? null, iface: c.iface, cob: c.cob || null, snd: c.snd || null };
+    if (!(c.rival == null || obj(c.rival))) throw new Error('the rival casting is not an object or null');
+    return { side: layout ? c.side : -1, casting: c.casting ?? null, rival: c.rival ?? null, iface: c.iface, cob: c.cob || null,
+      snd: c.snd || null };
   }
+
+  /* ---- THE GAME ENTRY (research/notes/ingame-wiki-replay-plan.md): an entry whose `frame` is "game" shows a small
+     game, and each demo's `game` is its game script, played by a game simulation (WikiSim.game) on game ticks. Its
+     data rules, refused here as tagpu_wikidata.c refuses them at load: ----
+     - `frame` absent or "game"; a game entry has no `pace`.
+     - a unit may carry `rival` (a boolean: it is the opponent's, cast by the rival casting) and `corpse` (a row of
+       the entry's `features`, its wreck) only in a game entry, and any entry's unit the economy's figures, ECON each
+       finite and >= 0, energyUse below ECON_MAX in magnitude.
+     - every scene of a game entry carries `seats`, 1..SEATS objects {name, metal, energy} and nothing else, the seat
+       being the index: a name of 1..SEAT_NAME - 1 bytes with no "{" (HUDSEAT's name field), metal and energy integers
+       SEAT_MIN..SEAT_MAX, the skirmish's settings; every scene unit's `owner` (0 when absent) is one of its seats. A
+       page entry's scenes and every demo's scene carry no `seats`.
+     - a game entry's demo carries `game` {end, inputs, sidebar}: end an integer 1..GAME_END_MAX, inputs a list,
+       sidebar a boolean when given; no demo-level `sidebar`. A page entry's demo carries no `game`.
+     - the game script's inputs: each has a numeric `at`; no caption and no wait (game time is the game
+       simulation's tick, so nothing may hold it); `seat`, when given, is 0 (decision 16: no other seat has a cursor
+       yet); a kill is {at, kill} alone, kill naming a unit of the merged scene by its explicit id, at most once and
+       at most GAME_KILLS kills, at <= end.
+     - in the merged scene no feature's id (f<k + 1> when it has none) is a unit's explicit id, since a unit's corpse
+       takes its id; and its features and the kills together are at most FEATS_MAX, the features table a corpse is
+       placed into. ---- */
+  const SEATS = 4, SEAT_NAME = 32, SEAT_MIN = 200, SEAT_MAX = 10000, GAME_KILLS = 64, GAME_END_MAX = 5400;
+  // whether the entry is a game entry; anything but "game" in `frame` refuses it
+  function isGame(entry) {
+    if (!('frame' in entry)) return false;
+    if (entry.frame !== 'game') throw new Error(`the entry's frame ${JSON.stringify(entry.frame)} is not "game"`);
+    return true;
+  }
+  function checkSeats(at, seats) {
+    if (!Array.isArray(seats) || seats.length < 1 || seats.length > SEATS) throw new Error(`${at}: seats is not a list of 1 to ${SEATS}`);
+    seats.forEach((s, k) => {
+      if (!obj(s) || !Object.keys(s).every(n => ['name', 'metal', 'energy'].includes(n))) throw new Error(`${at}: seat ${k} is not {name, metal, energy}`);
+      if (!fitsIn(s.name, SEAT_NAME) || !s.name.length || s.name.includes('{')) throw new Error(`${at}: seat ${k}'s name is not 1 to ${SEAT_NAME - 1} bytes without "{"`);
+      for (const n of ['metal', 'energy'])
+        if (!(int(s[n]) && s[n] >= SEAT_MIN && s[n] <= SEAT_MAX)) throw new Error(`${at}: seat ${k}'s ${n} is not an integer ${SEAT_MIN}..${SEAT_MAX}`);
+    });
+  }
+  function checkGame(entry, demo) {
+    const game = isGame(entry);
+    if (game && 'pace' in entry) throw new Error('a game entry has no pace');
+    for (const [t, d] of Object.entries(entry.units || {})) {
+      for (const n of ECON) if (n in d && !(typeof d[n] === 'number' && d[n] >= 0 && d[n] < Infinity)) throw new Error(`unit ${t}: ${n} is not a finite number >= 0`);
+      if ('energyUse' in d && !(typeof d.energyUse === 'number' && Math.abs(d.energyUse) < ECON_MAX)) throw new Error(`unit ${t}: energyUse is not a number of magnitude below ${ECON_MAX}`);
+      if (('rival' in d || 'corpse' in d) && !game) throw new Error(`unit ${t}: rival and corpse are a game entry's`);
+      if ('rival' in d && typeof d.rival !== 'boolean') throw new Error(`unit ${t}: rival is not a boolean`);
+      if ('corpse' in d && !(typeof d.corpse === 'string' && obj(entry.features) && own(entry.features, d.corpse)))
+        throw new Error(`unit ${t}: corpse names no feature of the entry`);
+    }
+    for (const [n, s] of Object.entries(entry.scenes)) {
+      if (!game) { if ('seats' in s) throw new Error(`the scene ${n}: seats are a game entry's`); continue; }
+      checkSeats(`the scene ${n}`, s.seats);
+      for (const u of s.units || []) if (!(u.owner == null || (int(u.owner) && u.owner >= 0 && u.owner < s.seats.length)))
+        throw new Error(`the scene ${n}: the owner ${u.owner} is no seat of it`);
+    }
+    if (!demo) return game;
+    const at = `demo ${demo.id}`;
+    if (demo.scene && 'seats' in demo.scene) throw new Error(`${at}: a demo's scene has no seats`);
+    if (!game) { if ('game' in demo) throw new Error(`${at}: game is a game entry's`); return game; }
+    const g = demo.game, seats = sceneOf(entry, demo).seats;
+    if (!obj(g)) throw new Error(`${at} has no game`);
+    if ('sidebar' in demo) throw new Error(`${at}: a game entry's demo takes its sidebar in game`);
+    if (!Object.keys(g).every(k => ['end', 'inputs', 'sidebar'].includes(k))) throw new Error(`${at}: game holds a key it does not know`);
+    if (!(int(g.end) && g.end >= 1 && g.end <= GAME_END_MAX)) throw new Error(`${at}: the game's end is not an integer 1..${GAME_END_MAX}`);
+    if ('sidebar' in g && typeof g.sidebar !== 'boolean') throw new Error(`${at}: the game's sidebar is not a boolean`);
+    if (!Array.isArray(g.inputs)) throw new Error(`${at}: the game's inputs are not a list`);
+    for (const u of (demo.scene && demo.scene.units) || []) if (!(u.owner == null || (int(u.owner) && u.owner >= 0 && u.owner < seats.length)))
+      throw new Error(`${at}: the owner ${u.owner} is no seat of its scene`);
+    const S = merge(entry, demo), ids = new Set(S.units.filter(u => typeof u.id === 'string' && u.id).map(u => u.id));
+    S.features.forEach((f, k) => { if (ids.has(f.id ?? `f${k + 1}`)) throw new Error(`${at}: the feature ${f.id ?? `f${k + 1}`} has a unit's id`); });
+    const killed = new Set();
+    for (const e of g.inputs) {
+      const w = `${at}: the game input at tick ${obj(e) ? e.at : e}`;
+      if (!obj(e) || typeof e.at !== 'number') throw new Error(`${w} has no tick`);
+      if ('caption' in e || 'until' in e) throw new Error(`${w} is a caption or a wait, which a game script has not`);
+      if ('seat' in e && e.seat !== 0) throw new Error(`${w}: seat ${e.seat}: a seat other than 0 has no cursor yet`);
+      if (!('kill' in e)) continue;
+      if (!Object.keys(e).every(k => k === 'at' || k === 'kill')) throw new Error(`${w}: a kill carries another key`);
+      if (typeof e.kill !== 'string' || !ids.has(e.kill)) throw new Error(`${w}: the kill names no unit of the scene`);
+      if (killed.has(e.kill)) throw new Error(`${w}: ${e.kill} is killed twice`);
+      if (killed.size === GAME_KILLS) throw new Error(`${w}: more than ${GAME_KILLS} kills`);
+      if (!(e.at <= g.end)) throw new Error(`${w}: the kill is after the game's end`);
+      killed.add(e.kill);
+    }
+    if (S.features.length + killed.size > FEATS_MAX) throw new Error(`${at}: the scene's features and the kills pass ${FEATS_MAX}`);
+    return game;
+  }
+  /* a game entry's demo as the game simulation plays it: its game script, the `seat` taken off each input (every one
+     is seat 0's), and the game's end and sidebar */
+  const gameDemo = d => ({ id: d.id, on: d.on, scene: d.scene, end: d.game.end, ...('sidebar' in d.game ? { sidebar: d.game.sidebar } : {}),
+    inputs: d.game.inputs.map(e => { if (!('seat' in e)) return e; const { seat, ...r } = e; return r; }) });
 
   /* ---- actions (decision 18): a demo's press names what it does, and the Interface Type names the button ----
      select is the left button in both types, cancel the right one in both, order the right one at type 1 and the left
@@ -475,11 +598,19 @@ const WikiSim = (() => {
     });
   }
 
-  function make(entryIn, demoIn, scripted, layout, ctxIn) {
-    const ctx = context(layout, ctxIn), IFACE = ctx.iface;
-    sceneOf(entryIn, demoIn);   // the scenes are checked before the binding reads them
+  /* `scripted`: false for Try it yourself, true for a demo, 'game' for a game entry's game script (WikiSim.game), whose
+     economy runs in `econMode` (THE ECONOMY, below). A game entry plays only as a game, and a game only from a game
+     entry, so no page demo can reach a branch of the game's. */
+  function make(entryIn, demoGiven, scripted, layout, ctxIn, econMode = 'refuse') {
+    const ctx = context(layout, ctxIn), IFACE = ctx.iface, GAME = scripted === 'game';
+    sceneOf(entryIn, demoGiven);   // the scenes are checked before the binding reads them
+    if (checkGame(entryIn, demoGiven) !== GAME)
+      throw new Error(GAME ? 'the entry is not a game entry: its demos play as demos' : 'a game entry\'s demos play as games');
+    if (GAME && !demoGiven) throw new Error('a game plays a demo\'s game script');
+    if (GAME && econMode !== 'refuse' && econMode !== 'stall') throw new Error(`the economy's mode ${econMode} is not refuse or stall`);
+    const demoIn = GAME ? gameDemo(demoGiven) : demoGiven;
     // the bound entry and demo are this sim's own copies: they live as long as it does, and nothing else holds them
-    const B = ctx.casting ? binder(entryIn, ctx.casting) : null;
+    const B = ctx.casting ? binder(entryIn, ctx.casting, ctx.rival, GAME) : null;
     const entry = B ? B.entry : entryIn, demo = B ? B.demo(demoIn) : demoIn;
     const S = merge(entry, demo), D = entry.units, defIndex = Object.keys(D);
     if (!KINDS.includes(S.kind)) throw new Error(`the scene's reclaim kind ${JSON.stringify(S.kind)} is not one of ${KINDS}`);
@@ -700,6 +831,7 @@ const WikiSim = (() => {
        numbered pages with bit 22 set and page 1; any other unit has neither. */
     function enter(u) {
       if (ON) { const n = npages(u.type); u.bp = n >= 1; u.page = n >= 1 ? 1 : 0; }
+      if (GAME) u.led = { eP: 0, eR: 0, eG: 0, eD: 0, mP: 0, mR: 0, mG: 0, mD: 0 };
       units.push(u);
       spawn(u);
       return u;
@@ -2212,6 +2344,187 @@ const WikiSim = (() => {
       for (const e of due) sprayBurst(e, t);
     }
 
+    /* ---- THE GAME (WikiSim.game only; research/notes/ingame-wiki-replay-plan.md, decisions 2, 3, 7 and 18) ----
+       The seats, their economy, the kills and the wrecks. A page demo builds none of it: every function below runs only
+       when GAME, so no page demo's state or hash can change by it. */
+    // the seats of the scene the game plays on, and each one's record (the engine's player record, named below)
+    const SEATDATA = GAME ? sceneOf(entry, demo).seats : [];
+    /* THE ECONOMY'S STATE, the engine's player record per seat (DISASSEMBLED from 0x401360, the economy pass; the scout
+       batch 1 facts, research/notes/engine/): m, e stored (+0x98, +0x8C); bm, be the base storage (+0xE0, +0xDC), the
+       seat's settings, which the seat setup 0x496EE0 floors at 200 (0x496F64..0x496F97) and the level start 0x465E30
+       also stores as the current (0x465EF5..0x465F1A); mmax, emax the storage (+0xA8, +0xA4), which the player init
+       zeroes (0x46478F, 0x464795) until the first pass (a seat's settings are SEAT_MIN or more, so the floor holds by
+       data); mi, mo, ei, eo the last pass's income and spending (+0x9C,
+       +0xA0, +0x90, +0x94); wm, we the wasted totals (+0xD4, +0xCC); units, the units alive, a nanoframe included
+       (+0x144, incremented at each create 0x486187, 0x486322); lost, the commanders lost (+0x106); out, the count gone
+       from above 0 to 0; cmdLost, the commander lost: +0x149 bit 0 cleared, so the base storage stops counting. */
+    const econ = SEATDATA.map(z => ({ m: z.metal, e: z.energy, bm: z.metal, be: z.energy,
+      mmax: 0, emax: 0, mi: 0, mo: 0, ei: 0, eo: 0, wm: 0, we: 0, units: 0, lost: 0, out: false, cmdLost: false }));
+    /* THE TWO MODES (decision 18): 'refuse', an authored script, stops `starved` at the first pass that cannot pay a
+       grant; 'stall', a seat the player plays, carries an unpaid grant as the unit's debt, and the debt refuses that
+       unit's requests until a pass pays it, as the engine's builds stall at zero */
+    const STALL = GAME && econMode === 'stall';
+    // badKill: a kill found no unit of its id; nkill: the kills made
+    let starved = false, badKill = false, nkill = 0;
+    // the seats' unit counts at the end of a step, after the work: `out` once a count goes from above 0 to 0
+    function counts() {
+      econ.forEach((z, k) => {
+        const n = units.filter(u => u.owner === k).length;
+        if (z.units > 0 && n === 0) z.out = true;
+        z.units = n;
+      });
+    }
+    /* THE BUILD'S REQUEST, 0x4011C0 on the BUILDER's ledger (0x41BA60 charges it at 0x41BC5A, `lea ecx,[ebp+0xbc]`,
+       ebp the builder): the request is always added (0x4011D1..0x4011E3), and granted unless either debt is above 0
+       (0x4011C0..0x4011F6, 0x4011F8..0x401212); the step applies its progress only on a grant (0x41BC65..0x41BC67) */
+    function request(u, e, m) {
+      const L = u.led;
+      L.eR += e; L.mR += m;
+      if (L.eD > 0 || L.mD > 0) return false;
+      L.eG += e; L.mG += m;
+      return true;
+    }
+    /* THE PASS, 0x401360, on ticks 1, 30, 60, ...: the level's init seeds the player's next pass +0xF0 with GameTime 0
+       (0x46470C..0x464715), and the players phase runs a record's pass when +0xF0 <= GameTime and adds 30
+       (0x46507D..0x465092), after GameTime's increment; every seat on the same tick, in seat order, after the units'
+       work (research/notes/engine/sim.md, the players phase follows the unit tick). Per unit of the seat in creation
+       order: a structure (+0x110 bit 29, 0x4013BA) that is active (+0x10E bit 0, 0x4013C5) requests its EnergyUse
+       (0x4013ED..0x401421) or, negative, produces it (0x401429..0x401478), and an extractor whose energy was granted
+       produces ExtractsMetal x its SetSpeed (0x401480..0x4014C8); a mobile unit active or moving (0x401617..0x401622)
+       requests or produces its EnergyUse (0x401641..0x401668); a finished unit (+0x104 == 0.0, 0x4016C5..0x4016D6)
+       produces its EnergyMake and MetalMake (0x4016DC..0x401795) and adds its storages (0x40179B..0x4017C5). Then the
+       seat's sums: the storage with the base while the commander lives (0x401941, 0x401988..0x4019AA), income the
+       produced and spending the REQUESTED (0x4019C6..0x401A2D); per resource the debt paid first, then the grants, from
+       what is stored plus produced (0x401A4D..0x401AB1), and what passes the storage wasted (0x401AB3..0x401B27); and
+       the settle (0x401B3D..0x401BAC), each unit's unpaid share of its grants and its debt its new debt, the rest of
+       its ledger zeroed, the engine's fmul, fsubr and faddp in the engine's order. WHERE THE WIKI DEPARTS: activation
+       is a finished unit whose FBI says ActivateWhenBuilt, which the engine sets at a completion (0x41B9A6) and at a
+       finished create (0x48612F) [INFERRED: no cast unit's script changes its own], and moving is the step this tick
+       (u.stepped) [INFERRED that it agrees with the move-rate class +0x110 & 0xC]; MakesMetal, wind, tidal, cloak,
+       the AI's scaling, the transfers and the reclaim payouts are not modelled (no cast takes such a unit, no seat is
+       an AI, the owner left the payouts out). The ledger is the engine's f32 as a double, as every figure here is. */
+    function pass() {
+      econ.forEach((z, k) => {
+        let sm = 0, se = 0;
+        const mine = units.filter(u => u.owner === k);
+        for (const u of mine) {
+          const d = def(u.type), L = u.led, eu = d.energyUse || 0;
+          const active = u.built >= 1 && (d.activatewhenbuilt & 1) === 1;
+          if (!mobile(u.type)) {
+            if (active) {
+              let granted = false;
+              if (eu >= 0) { L.eR += eu; if (!(L.eD > 0)) { L.eG += eu; granted = true; } }
+              else L.eP += -eu;
+              if ((d.extracts || 0) > 0 && granted) L.mP += d.extracts * extractorSpeed(u);
+            }
+          } else if (active || u.stepped) {
+            if (eu >= 0) { L.eR += eu; if (!(L.eD > 0)) L.eG += eu; }
+            else L.eP += -eu;
+          }
+          if (u.built >= 1) {
+            L.eP += d.energyMake || 0; L.mP += d.metalMake || 0;
+            se += d.energyStorage || 0; sm += d.metalStorage || 0;
+          }
+        }
+        let EP = 0, ER = 0, EG = 0, ED = 0, MP = 0, MR = 0, MG = 0, MD = 0;
+        for (const u of mine) {
+          const L = u.led;
+          EP += L.eP; ER += L.eR; EG += L.eG; ED += L.eD; MP += L.mP; MR += L.mR; MG += L.mG; MD += L.mD;
+        }
+        z.emax = se + (z.cmdLost ? 0 : z.be);
+        z.mmax = sm + (z.cmdLost ? 0 : z.bm);
+        z.ei = EP; z.eo = ER; z.mi = MP; z.mo = MR;
+        // one resource's settle: [the debt's fraction paid, the grants' fraction paid]
+        const settle = (cur, P, D, G, max, waste) => {
+          const A = cur + P;
+          const fD = D <= A ? 1 : A / D, rest = A - (D <= A ? D : A);
+          const fG = G <= rest ? 1 : rest / G;
+          let c = rest - (G <= rest ? G : rest), w = 0;
+          if (c > max) { w = c - max; c = max; }
+          return [fD, fG, c, waste + w];
+        };
+        const [fDe, fGe, e, we] = settle(z.e, EP, ED, EG, z.emax, z.we);
+        const [fDm, fGm, m, wm] = settle(z.m, MP, MD, MG, z.mmax, z.wm);
+        z.e = e; z.we = we; z.m = m; z.wm = wm;
+        for (const u of mine) {
+          const L = u.led;
+          L.eD = (L.eG - fGe * L.eG) + (L.eD - fDe * L.eD); L.eP = L.eR = L.eG = 0;
+          L.mD = (L.mG - fGm * L.mG) + (L.mD - fDm * L.mD); L.mP = L.mR = L.mG = 0;
+        }
+        if (!STALL && (fDe < 1 || fGe < 1 || fDm < 1 || fGm < 1)) starved = true;
+      });
+    }
+    /* THE WRECK of a finished unit killed (decision 3), as the destructor's corpse 0x486360(unit, level, smoke)
+       (called at 0x486D6F) spawns it through 0x423C50 at the unit's cell +0x76/+0x78 (research/notes/engine/map.md):
+       a mobile unit's footprint cell by the engine's own rounding (footCell), a structure's site. In 0x423C50's order:
+       the anchor off the map, none (0x4863C1..0x4863CA); the wreck's footprint past the map's far edge, none, equal
+       accepted (0x423CEC..0x423CF8, 0x423D20..0x423D24); every standing feature with a cell under it, met row by row,
+       destroyed whole (FEATURES_Destroy 0x4246B0 from 0x423D3E..0x423D94) -- here it leaves `feats` and its anchor
+       joins `gone`, as a reclaimed one does, so no two features ever overlap; units under it are not read, the wreck
+       is put on top. The engine abandons a wreck at an indestructible feature (FeatureDef +0xFF bit 1), which no
+       entry's feature is [INFERRED]. The wreck takes the unit's id, which no feature of the scene has (checkGame).
+       BOUND: `feats` and `gone` never pass the scene's features plus the kills, which checkGame holds to FEATS_MAX. */
+    function corpse(u) {
+      const name = typeof def(u.type).corpse === 'string' && own(FD, def(u.type).corpse) ? def(u.type).corpse : null;
+      if (name === null) return;
+      const d = FD[name], [cfx, cfz] = d.footprint;
+      const ox = mobile(u.type) ? footCell(u.x, fp(u.type)[0]) : u.ox, oz = mobile(u.type) ? footCell(u.z, fp(u.type)[1]) : u.oz;
+      if (ox < 0 || oz < 0 || ox >= W || oz >= H || ox + cfx > W || oz + cfz > H) { log('nocorpse', u); return; }
+      for (let z = oz; z < oz + cfz; z++) for (let x = ox; x < ox + cfx; x++) {
+        const f = feats.find(g => x >= g.ox && x < g.ox + g.fx && z >= g.oz && z < g.oz + g.fz);
+        if (f) { feats.splice(feats.indexOf(f), 1); gone.push([f.ox, f.oz]); }
+      }
+      feats.push({ id: u.id, name, ox, oz, fx: cfx, fz: cfz, x: (ox + cfx / 2) * CELL, z: (oz + cfz / 2) * CELL, metal: d.metal || 0,
+        energy: d.energy || 0, height: d.height || 0, blocking: !!d.blocking, reclaimable: !!d.reclaimable, wreck: 'object' in d });
+      log('corpse', u);
+    }
+    /* THE DEATH SOUND of a finished unit killed: the destructor explodes it through 0x49B000, which impacts its ExplodeAs
+       weapon (def+0x220) at the unit with no victim through 0x499EB0, and on dry ground that plays the weapon's
+       soundhit (+0xF6, 0x499FE9) through 0x47F300 (0x499FF2), not sent on the network and gated by the viewed
+       player's sight (0x47F3E8..0x47F4A8), with no owner test (DISASSEMBLED, scout batch 2). One event, at once, for a
+       unit of any seat: kind SND_DEATH, the type's index as its name and the cell under its centre, held to the map,
+       as its variant; the gate is the player's (the viewer's sight is no state of the game's), and the event is made
+       whether or not the type has a WAV, so the state does not depend on the load beyond the source being there. */
+    function deathSound(u) {
+      if (!SNDT) return;
+      const cx = Math.min(Math.max(Math.floor(u.x / CELL), 0), W - 1), cz = Math.min(Math.max(Math.floor(u.z / CELL), 0), H - 1);
+      soundEvent(SND_DEATH, defIndex.indexOf(u.type), -1, cz * W + cx);
+    }
+    /* THE UNIT LEAVES, a kill's or a reclaim's: the list, the sidebar's shown unit (route() clears it at the tick's end
+       anyway) and its script */
+    function removeUnit(u) {
+      units = units.filter(v => v !== u);
+      if (sb.shown === u) sb.shown = null;
+      if (COB && u.cob) COB.remove(u.cob);
+    }
+    /* A KILL (decision 2, the game script's {at, kill}), fed before its tick's dropWork, COB slice and advance. A
+       finished unit leaves its wreck and makes its death sound; an unfinished one neither (Send_UnitDeath stores corpse
+       type 0 when +0x104 != 0.0, 0x4865D2..0x4865E5, and the destructor then skips both the explosion,
+       0x486D2F..0x486D40, and the corpse, 0x486D55..0x486D5A). A commander counts as its seat's loss. A builder whose
+       running build is the unfinished structure killed loses that order and says cant, as MobileBuild answers the
+       destructor's death walk 0x489740 (event 8, 0x403A27) with "Construction terminated" (0x5015A4 through 0x47F780) and
+       result 8; its queued builds of the site stay [INFERRED: only a running order holds the reference, linked at
+       0x403D64]. A building it was making stays as it is; a guard of it and a reclaim of it end by their own rules.
+       THE INVARIANT, an ordering: between two ticks the only references to a unit are `units` and the sidebar's shown
+       unit -- `work` and `jobs` are made anew in each advance, and orders, the spray and the sounds name units by id --
+       and a kill runs between advances, so removeUnit clearing both leaves nothing that reads it; its script goes with
+       it, and a script's handle is never given again (spawn). */
+    function kill(id) {
+      const u = byId(id);
+      if (!u) { badKill = true; return; }
+      nkill++;
+      if (u.built >= 1) { corpse(u); deathSound(u); }
+      const z = econ[u.owner];
+      if (z && def(u.type).cast === 'commander') { z.lost++; z.cmdLost = true; }
+      if (!mobile(u.type) && u.built < 1)
+        for (const v of units) {
+          const o = v.orders[0];
+          if (v !== u && o && o.k === 'build' && o.type === u.type && o.ox === u.ox && o.oz === u.oz) { v.orders.shift(); notice(v, SND.cant); }
+        }
+      removeUnit(u);
+      log('killed', u);
+    }
+
     function advance() {
       const work = new Map(), jobs = new Map();
       // a builder in range works on s, and turns at once to face its centre (unchanged when it stands on the centre)
@@ -2224,6 +2537,18 @@ const WikiSim = (() => {
         if (!(u.stanced && u.work === s)) { if (!stance(u)) return; u.stanced = true; }
         // a reclaim says working once an order, when its work first goes on (0x4048BE)
         if (how === 'reclaim' && u.orders[0] && u.orders[0] !== u.said) { u.said = u.orders[0]; notice(u, SND.working); }
+        /* in a game, the build's request: its increment's part of the structure still unbuilt after this tick's
+           builders before it, as the engine's step updates +0x104 call by call, times the built type's build costs
+           (0x41BB36..0x41BB5C); refused, no progress and no spray. The wiki's increment is workerTime / 30 /
+           buildTime where the engine's step takes floor(WorkerTime / 30), but the increments of a building sum to 1
+           in both, so a building costs its build costs */
+        if (GAME && how === 'build') {
+          const dw = def(u.type).workerTime / def(s.type).buildTime / TPS * PACE, w0 = work.get(s), left = 1 - s.built - (w0 ? w0.build : 0);
+          if (left > 0) {
+            const d = dw < left ? dw : left;
+            if (!request(u, d * (def(s.type).buildCostEnergy || 0), d * (def(s.type).buildCostMetal || 0))) return;
+          }
+        }
         const w = work.get(s) || { build: 0, reclaim: 0 };
         w[how] += def(u.type).workerTime / def(s.type).buildTime / TPS * PACE;
         work.set(s, w);
@@ -2344,7 +2669,7 @@ const WikiSim = (() => {
         }
         if (w.reclaim) {
           s.reclaimed = Math.min(1, s.reclaimed + w.reclaim);
-          if (s.reclaimed >= 1) { units = units.filter(v => v !== s); if (COB && s.cob) COB.remove(s.cob); log('reclaimed', s); }
+          if (s.reclaimed >= 1) { removeUnit(s); log('reclaimed', s); }
         }
       }
       // THE NOTICES OF THE WORK, in creation order: a change of ACTIVATION the completion made, then each builder whose
@@ -2435,6 +2760,7 @@ const WikiSim = (() => {
       while (next < script.length && script[next].at === t) {
         const e = script[next++];
         if ('until' in e) wait = { until: e.until, max: e.max, from: sim.tick, need: e.until === 'built' ? ++builtWaits : 0 };
+        else if (GAME && 'kill' in e) kill(e.kill);
         else input(e);
       }
     };
@@ -2481,9 +2807,15 @@ const WikiSim = (() => {
       advance();
       sprayTick(t);
       soundTick();
+      // a game's counts after the work, then on ticks 1, 30, 60, ... its economy's pass
+      if (GAME) {
+        counts();
+        if (t === 1 || t % TPS === 0) pass();
+      }
       sim.tick = t;
-      // a lock ends the demo on its own tick, which then holds under the entry's badge
-      sim.done = clock >= end || sb.locked !== null || stalled;
+      /* a lock ends the demo on its own tick, which then holds under the entry's badge; a game ends as well on a pass
+         that starved and at a kill that found no unit */
+      sim.done = clock >= end || sb.locked !== null || stalled || starved || badKill;
       if (ON) route();
       st.hover = hover();
       cursorTick(t);
@@ -2595,13 +2927,27 @@ const WikiSim = (() => {
             (_, i) => sndRing[(sndTotal - Math.min(sndTotal, SND_LOG) + i) % SND_LOG].slice()),
           cant: units.map(u => u.orders[0] && u.cant === u.orders[0] ? 1 : 0),
         } : null,
+        /* a game's own part, only in a game (tagpu_wikisim.h, item 12 of the hash): each seat's record (its scene's
+           name, then the economy's state), the economy's mode, whether a pass starved and a kill found no unit, the
+           kills made, and each unit's ledger [eP, eR, eG, eD, mP, mR, mG, mD], index-aligned with `units` */
+        ...(GAME ? { game: {
+          seats: econ.map((z, k) => ({ name: SEATDATA[k].name, ...z })), mode: STALL ? 'stall' : 'refuse', starved, badKill, nkill,
+          ledgers: units.map(u => { const L = u.led; return [L.eP, L.eR, L.eG, L.eD, L.mP, L.mR, L.mG, L.mD]; }),
+        } } : {}),
       };
     };
+    // whether it is a game (WikiSim.game), whose view and hash carry the game's part
+    sim.game = GAME;
+    // frees what the sim holds outside itself: its scripts' world in the COB host
+    sim.free = () => { if (COB) COB.free(); };
 
     if (ON) route();
     if (lock0) lock(lock0.type);
+    // a game's seats counted as the scene stands, then again after the script's tick 0, which may kill
+    if (GAME) counts();
     feed(0);
-    sim.done = sb.locked !== null;
+    if (GAME) counts();
+    sim.done = sb.locked !== null || badKill;
     st.hover = hover();
     st.cursorShape = cursorShape();
     st.cursorSince = 0;
@@ -2614,6 +2960,9 @@ const WikiSim = (() => {
   return {
     create: (entry, demo, layout, ctx) => make(entry, demo, false, checked(layout), ctx),
     play: (entry, demo, layout, ctx) => make(entry, demo, true, checked(layout), ctx),
+    // a game entry's demo's game script, its economy in `mode` 'refuse' (an authored script) or 'stall' (a seat the
+    // player plays)
+    game: (entry, demo, layout, ctx, mode = 'refuse') => make(entry, demo, 'game', checked(layout), ctx, mode),
     // the bounds, for the caller that falls back to the fixture on a refused layout
     checkLayout,
     // the casting's bounds, and the bound entry (its titles name the casts' units for the text's role words)
@@ -2628,6 +2977,8 @@ const WikiSim = (() => {
     SND_NAMES,
     // a wait's states, tagpu_wikidata.h's WIKI_UNTIL_* from 1
     UNTILS,
+    // a game's bounds (tagpu_wikidata.h WIKI_SEATS, WIKI_GAME_KILLS, WIKI_GAME_END_MAX) and its death sound's kind
+    SEATS, GAME_KILLS, GAME_END_MAX, SND_DEATH,
     // the shapes alone, for checks against tagpu_placegeo.c
     shapes: { placeShape, placeRing },
   };

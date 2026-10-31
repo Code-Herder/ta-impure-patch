@@ -185,6 +185,9 @@ typedef struct {
        and that section's variant count per kind (0x42F580) */
     int         sound_cat;
     int32_t     sound_count[WIKI_SND_KINDS];
+    /* ITS DEATH'S SOUND, with its model only: the clip (WIKI3DSOUND.clip) of its ExplodeAs weapon's
+       soundhit, -1 none (tagpu_wikiasset.c sound_load says the rule; gfx.py `death_wav` is its twin) */
+    int         death_sound;
 } WIKI3DUNIT;
 
 /* THE SOUND THE STAGE PLAYS (tagpu_wikisound.c), read on the loader's thread with the models and

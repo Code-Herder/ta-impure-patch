@@ -13,17 +13,23 @@
    writes it after the scene is laid out. A demo the sim refuses in that context is one line,
    {"entry", "demo", "refused": why}.
 
+   `wikitest game PAK ENTRY LAYOUT CASTING RIVAL IFACE COB SCRIPTED` plays every demo of the game
+   entry the file ENTRY holds as a game (SCRIPTED 2, WIKI_PLAY_GAME, or 3, its stall mode) with the
+   arguments demos takes ("-" for none) and the opponent's casting the file RIVAL holds, and prints
+   as demos does; each view carries the game's part, "game", as sim.js's view does.
+
    `wikitest trace FILE [COB]` replays a recording of sim.js calls (simparity.mjs makes it from
    simcheck.mjs's rule cases), one JSON line per call, each naming its sim by "sim", the order it
    was made in (TRACE_SIMS of them live at once): {"op": "create", "scripted": 0|1,
    "layout": the layout or null, "ctx": {"side", "iface", "casting": a side's record or null,
-   "cob": true for the scripts COB names} or null} followed by a line holding the entry, whose only demo is the one the sim is made from;
+   "rival": the opponent's or null, "cob": true for the scripts COB names} or null} followed by a line holding the entry, whose only demo is the one the sim is made from;
    {"op": "input", "ev": the input}; {"op": "step"}; and the queries {"op": "view"},
    {"op": "orders", "id"}, {"op": "done"}, {"op": "tick"}, {"op": "side"}, {"op": "iface"} and
    {"op": "hash"}, each answered by one line.
 
-   `wikitest refuse FILE` reads cases two lines each, {"name", "scripted": 0|1, "layout": the
-   layout or null, "side", "iface", "casting": a side's casting record or null} and then the
+   `wikitest refuse FILE` reads cases two lines each, {"name", "scripted": 0..3 (WIKI_PLAY_*),
+   "layout": the layout or null, "side", "iface", "casting": a side's casting record or null,
+   "rival": the opponent's or null} and then the
    entry, and makes a sim of the entry's first demo with that layout in that context: through the
    casting's reader, the entry's loader, the layout's and tagpu_wikisim_init. It prints
    "accepted <name>" or "refused <name>: why" per case; simparity.mjs asks text.js's checkEntry
@@ -389,6 +395,45 @@ static void view(WIKISIM* s, int map)
         for (i = 0; i < v->nunit; i++) printf("%s%d", i ? "," : "", v->unit[i].cant);
         fputs("]}", stdout);
     } else fputs("null", stdout);
+    /* a game's own part, sim.js's `game`, only in a game */
+    if (v->game) {
+        key("game", 0);
+        putchar('{');
+        key("seats", 1);
+        putchar('[');
+        for (i = 0; i < v->nseat; i++) {
+            const WIKIECON* z = &v->econ[i];
+            const double d[12] = { z->m, z->e, z->bm, z->be, z->mmax, z->emax, z->mi, z->mo, z->ei, z->eo, z->wm, z->we };
+            static const char* const D[12] = { "m", "e", "bm", "be", "mmax", "emax", "mi", "mo", "ei", "eo", "wm", "we" };
+            int k;
+            if (i) putchar(',');
+            putchar('{');
+            key("name", 1); str(v->seat[i].name);
+            for (k = 0; k < 12; k++) { key(D[k], 0); num(d[k]); }
+            key("units", 0); printf("%d", z->units);
+            key("lost", 0); printf("%d", z->lost);
+            key("out", 0); fputs(z->out ? "true" : "false", stdout);
+            key("cmdLost", 0); fputs(z->cmd_lost ? "true" : "false", stdout);
+            putchar('}');
+        }
+        putchar(']');
+        key("mode", 0); str(v->econ_mode == WIKI_ECON_STALL ? "stall" : "refuse");
+        key("starved", 0); fputs(v->starved ? "true" : "false", stdout);
+        key("badKill", 0); fputs(v->bad_kill ? "true" : "false", stdout);
+        key("nkill", 0); printf("%d", v->nkill);
+        key("ledgers", 0);
+        putchar('[');
+        for (i = 0; v->ledger && i < v->nunit; i++) {
+            const WIKILEDGER* L = &v->ledger[i];
+            const double d[8] = { L->eP, L->eR, L->eG, L->eD, L->mP, L->mR, L->mG, L->mD };
+            int k;
+            if (i) putchar(',');
+            putchar('[');
+            for (k = 0; k < 8; k++) { if (k) putchar(','); num(d[k]); }
+            putchar(']');
+        }
+        fputs("]}", stdout);
+    }
     putchar('}');
 }
 
@@ -451,6 +496,7 @@ static int demos(const char* path, const char* layout, const char* casting, int 
     ctx.iface = iface;
     ctx.cob = cob ? &COB_SRC : NULL;
     ctx.snd = cob ? &SND_SRC : NULL;
+    ctx.rival = NULL;
     if (ctx.cast && !casting_file(casting, &k)) return 2;
     if (!(pak = slurp(path, &n))) { fprintf(stderr, "wikitest: cannot read %s\n", path); return 2; }
     if (!(d = tagpu_wikidata_load((const unsigned char*)pak, n, err, sizeof err))) {
@@ -496,13 +542,77 @@ done:
     return rc;
 }
 
+/* every demo of the game entry the file ENTRY holds, its game script played as a game (`scripted`
+   WIKI_PLAY_GAME or _STALL) to its end in the context the arguments give, demos' way, plus the
+   rival casting the file RIVAL holds; one line per tick, as demos prints */
+static int game(const char* path, const char* entry, const char* layout, const char* casting, const char* rival, int iface,
+                int cob, int scripted)
+{
+    char err[256], file[96];
+    size_t n, ne;
+    char *pak, *text;
+    WIKILAYOUT* lay = NULL;
+    WIKICASTING k, rk;
+    WIKISIMCTX ctx;
+    WIKIENTRY e;
+    int j, rc = 0;
+    ctx.side = 0;
+    ctx.cast = casting && strcmp(casting, "-") ? &k : NULL;
+    ctx.rival = rival && strcmp(rival, "-") ? &rk : NULL;
+    ctx.iface = iface;
+    ctx.cob = cob ? &COB_SRC : NULL;
+    ctx.snd = cob ? &SND_SRC : NULL;
+    if ((ctx.cast && !casting_file(casting, &k)) || (ctx.rival && !casting_file(rival, &rk))) return 2;
+    if (!(text = slurp(entry, &ne))) { fprintf(stderr, "wikitest: cannot read %s\n", entry); return 2; }
+    if (!tagpu_wikidata_entry(&e, text, ne, err, sizeof err)) {
+        fprintf(stderr, "wikitest: %s\n", err);
+        free(text);
+        return 2;
+    }
+    if (!(pak = slurp(path, &n))) { fprintf(stderr, "wikitest: cannot read %s\n", path); rc = 2; goto done; }
+    snprintf(file, sizeof file, "side/%s.json", layout ? layout : "-");
+    if (layout && strcmp(layout, "-") && !(lay = tagpu_wikidata_layout_pak((const unsigned char*)pak, n, file, err, sizeof err))) {
+        fprintf(stderr, "wikitest: %s\n", err);
+        rc = 2;
+        goto done;
+    }
+    for (j = 0; j < e.ndemo; j++) {
+        WIKISIM s;
+        if (!tagpu_wikisim_init(&s, &e, &e.demo[j], scripted, lay, &ctx, err, sizeof err)) {
+            putchar('{');
+            key("entry", 1); str(e.id);
+            key("demo", 0); str(e.demo[j].id);
+            key("refused", 0); str(err);
+            fputs("}\n", stdout);
+            continue;
+        }
+        frame(&s, e.id, e.demo[j].id, 1);
+        while (!s.done) {
+            tagpu_wikisim_step(&s);
+            frame(&s, e.id, e.demo[j].id, s.done);
+        }
+        if (s.oom) {
+            fprintf(stderr, "wikitest: %s/%s ran out of memory\n", e.id, e.demo[j].id);
+            rc = 2;
+        }
+        tagpu_wikisim_free(&s);
+        if (rc) break;
+    }
+done:
+    tagpu_wikidata_entry_free(&e);
+    free(text);
+    free(lay);
+    free(pak);
+    return rc;
+}
+
 /* The trace's lines, each parsed; a caption the sim keeps points into its line's tree, so every
    tree of a sim lives until the sim ends. */
 typedef struct {
     WIKIENTRY e;
     WIKISIM   s;
     WIKILAYOUT* lay;
-    WIKICASTING cast;               /* the context's, which the sim holds */
+    WIKICASTING cast, rival;        /* the context's, which the sim holds */
     int       live, id;
     TJDOC*    doc[4096];
     int       ndoc;
@@ -564,7 +674,7 @@ static int trace(const char* path)
         if (!strcmp(op, "create")) {
             const int scripted = (int)tj_num(tj_get(v, "scripted"), 0);
             const TJV *layout = tj_get(v, "layout"), *cv = tj_get(v, "ctx");
-            const TJV* casting = tj_get(cv, "casting");
+            const TJV *casting = tj_get(cv, "casting"), *rival = tj_get(cv, "rival");
             WIKISIMCTX ctx;
             char* next;
             case_end(c);
@@ -575,8 +685,10 @@ static int trace(const char* path)
             ctx.cast = casting && !tj_is(casting, TJ_NULL) ? &c->cast : NULL;
             ctx.cob = tj_is(tj_get(cv, "cob"), TJ_TRUE) ? &COB_SRC : NULL;
             ctx.snd = tj_is(tj_get(cv, "snd"), TJ_TRUE) ? &SND_SRC : NULL;
+            ctx.rival = rival && !tj_is(rival, TJ_NULL) ? &c->rival : NULL;
             if ((layout && !tj_is(layout, TJ_NULL) && !(c->lay = tagpu_wikidata_layout_json(layout, err, sizeof err)))
-                || (ctx.cast && !tagpu_wikidata_casting(casting, &c->cast, err, sizeof err))) {
+                || (ctx.cast && !tagpu_wikidata_casting(casting, &c->cast, err, sizeof err))
+                || (ctx.rival && !tagpu_wikidata_casting(rival, &c->rival, err, sizeof err))) {
                 tagpu_json_free(doc);
                 rc = cannot(err);
                 break;
@@ -628,9 +740,9 @@ static int trace(const char* path)
    tagpu_wikisim_init in the case's context. */
 static int refuse_case(const TJV* v, const char* entry, char* err, size_t errn)
 {
-    const TJV *layout = tj_get(v, "layout"), *casting = tj_get(v, "casting");
+    const TJV *layout = tj_get(v, "layout"), *casting = tj_get(v, "casting"), *rival = tj_get(v, "rival");
     const int scripted = (int)tj_num(tj_get(v, "scripted"), 0);
-    WIKICASTING k;
+    WIKICASTING k, rk;
     WIKISIMCTX ctx;
     WIKIENTRY e;
     WIKILAYOUT* lay = NULL;
@@ -641,7 +753,9 @@ static int refuse_case(const TJV* v, const char* entry, char* err, size_t errn)
     ctx.cast = casting && !tj_is(casting, TJ_NULL) ? &k : NULL;
     ctx.cob = NULL;
     ctx.snd = NULL;
+    ctx.rival = rival && !tj_is(rival, TJ_NULL) ? &rk : NULL;
     if (ctx.cast && !tagpu_wikidata_casting(casting, &k, err, errn)) return 0;
+    if (ctx.rival && !tagpu_wikidata_casting(rival, &rk, err, errn)) return 0;
     if (!tagpu_wikidata_entry(&e, entry, strlen(entry), err, errn)) return 0;
     ok = !(layout && !tj_is(layout, TJ_NULL) && !(lay = tagpu_wikidata_layout_json(layout, err, errn)))
       && tagpu_wikisim_init(&s, &e, e.ndemo ? &e.demo[0] : NULL, scripted, lay, &ctx, err, errn);
@@ -998,6 +1112,13 @@ int main(int argc, char** argv)
         cob_free();
         return rc;
     }
+    if (argc == 10 && !strcmp(argv[1], "game")) {
+        const int cob = strcmp(argv[8], "-") != 0;
+        if (cob && !cob_load(argv[8])) return 2;
+        rc = game(argv[2], argv[3], argv[4], argv[5], argv[6], atoi(argv[7]), cob, atoi(argv[9]));
+        cob_free();
+        return rc;
+    }
     if ((argc == 3 || argc == 4) && !strcmp(argv[1], "trace")) {
         if (argc == 4 && strcmp(argv[3], "-") && !cob_load(argv[3])) return 2;
         rc = trace(argv[2]);
@@ -1008,7 +1129,9 @@ int main(int argc, char** argv)
     if (argc == 3 && !strcmp(argv[1], "data")) return data(argv[2]);
     if (argc == 2 && !strcmp(argv[1], "constants")) return constants();
     if (argc == 2 && !strcmp(argv[1], "malformed")) return malformed();
-    fprintf(stderr, "usage: wikitest demos PAK [LAYOUT [CASTING IFACE [COB]]] | wikitest trace FILE [COB] | wikitest refuse FILE | wikitest data FILE"
+    fprintf(stderr, "usage: wikitest demos PAK [LAYOUT [CASTING IFACE [COB]]]"
+            " | wikitest game PAK ENTRY LAYOUT CASTING RIVAL IFACE COB SCRIPTED"
+            " | wikitest trace FILE [COB] | wikitest refuse FILE | wikitest data FILE"
             " | wikitest constants"
             " | wikitest malformed\n");
     return 2;
