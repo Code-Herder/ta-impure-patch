@@ -327,8 +327,12 @@ if (process.argv.includes('--hash')) {
         const at = frames.filter(([k]) => k === `${id}/${demo.id}`).map(([, t]) => t).sort((a, b) => a - b);
         for (const t of at) {
           while (!R.view().done && R.view().tick < t) R.step();
-          const rec = WikiFrame.record(R.view(), R.game ? R.game.view() : null, side, false, null);
-          console.log(`frame ${id}/${demo.id}@${R.view().tick} ${replayHash(R)} ${JSON.stringify(rec)}`);
+          // the world shown, as wiki.js draws it: a live replay's past simulation while the past is shown, else its
+          // game. `pending`: a seek is under way, when the page holds the last world drawn and a record at this tick
+          // depends on where the frames fell, so the lane compares none there
+          const rv = R.view(), shown = rv.live && rv.live.rw === 'past' ? R.past : R.game;
+          const rec = WikiFrame.record(rv, shown ? shown.view() : null, side, false, null);
+          console.log(`frame ${id}/${demo.id}@${rv.tick} ${replayHash(R)} ${JSON.stringify({ ...rec, pending: rv.game.target >= 0 })}`);
         }
         while (!R.view().done) R.step();
         console.log(`${id}/${demo.id} ${replayHash(R)}`);

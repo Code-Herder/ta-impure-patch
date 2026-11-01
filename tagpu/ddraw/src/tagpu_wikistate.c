@@ -439,7 +439,7 @@ static void frame_hud(const WIKISTAGEVIEW* v, const WIKISIDE* side, float u, con
                 sf->cursor_y = fy + y * s_hpx;
             } else if (s_rec.simcur && !w->try_it && gx == gx && gy == gy) {
                 /* THE ONE CURSOR: a demo's simulation's own, its shape and animation at its world
-                   point; Try it's is the player's pointer, which reaches no game frame's world */
+                   point; Try it's follows the player's pointer (below) */
                 s_hst.mx = (float)gx;
                 s_hst.my = (float)gy;
                 sf->cursor_x = fx + gx * s_hpx;
@@ -449,6 +449,18 @@ static void frame_hud(const WIKISTAGEVIEW* v, const WIKISIDE* side, float u, con
             } else if (w->try_it && w->ptr_x >= s_cv[0] && w->ptr_x < s_cv[2] && w->ptr_y >= s_cv[1] && w->ptr_y < s_cv[3]) {
                 s_hst.mx = (float)((w->ptr_x - s_hox) / (double)s_hpx);
                 s_hst.my = (float)((w->ptr_y - s_hoy) / (double)s_hpx);
+                /* THE ONE CURSOR in Try it: after a fork the simulation's follows the player's pointer
+                   over the world and is the one drawn there, its shape and animation at the pointer
+                   (wiki.js drawReplay). Whether the pointer is on the world is the game thread's one
+                   answer (TAGPU_PK_WIKI.try_world), which also kept the view's ghost, so the two are
+                   never decided apart; the player's own is hidden only in a frame this draws
+                   (tagpu_wikistate_cursor) */
+                if (s_rec.simcur && w->try_world == 1) {
+                    sf->cursor_x = w->ptr_x - s_dlgX;
+                    sf->cursor_y = w->ptr_y - s_dlgY;
+                    sf->cursor_shape = s_rec.sim.shape;
+                    sf->cursor_age = s_rec.sim.age;
+                }
             }
             if (s_hudOn && (rebuild || s_hst.mx >= 0) && !tagpu_hudlay_build(hart->lay, &s_hst, &s_hops, err, sizeof err))
                 s_hudOn = 0;
@@ -902,13 +914,20 @@ void tagpu_wikistate_drawn(int drew, int cursor)
     s_map.entry = (int16_t)s_page.entry;
     s_map.view = (uint8_t)(s_haveStage && s_viewOk);
     s_map.side_h = (int16_t)s_viewSide;
-    /* a game frame: its world takes no click (tagpu_wiki.c stage_world), and the stage HUD's
-       playhead run as drawn turns a pointer into a tick (TAGPU_CMD_WIKI hud_x0) */
+    /* a game frame: its world takes a click only on a live frame in Try it, through the frame's fit
+       (tagpu_wiki.c live_world), and the stage HUD's playhead run as drawn turns a pointer into a
+       tick (TAGPU_CMD_WIKI hud_x0) */
     s_map.frame = (uint8_t)(s_haveStage && s_viewOk && s_view.frame);
     if (s_frameOn && s_hudOn && s_hops.track_x1 > s_hops.track_x0) {
         s_map.hud_x0 = dev(s_hox, tagpu_hud_snap(s_hops.track_x0 * s_hpx));
         s_map.hud_x1 = dev(s_hox, tagpu_hud_snap(s_hops.track_x1 * s_hpx));
         s_map.hud_end = s_rec.end;
+        /* a live strip's run stands for [first, max(G, first)], the bounded record's; the game
+           thread reads it with the run and the serial below, all of this one frame */
+        if (s_rec.live) {
+            s_map.hud_first = s_rec.first;
+            s_map.hud_G = s_rec.G > s_rec.first ? s_rec.G : s_rec.first;
+        }
     }
     /* the replay this map's HUD, run and end are of: the serial of the packet they were drawn from */
     s_map.rep_serial = s_repSerial;

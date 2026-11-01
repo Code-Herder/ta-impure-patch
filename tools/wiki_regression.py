@@ -20,6 +20,9 @@ page's controls and the demos playing on the stage.
     wiki_regression.py <instance> watch --launch [--shots DIR]
                                                       Watching, a frame:game entry: its replay, the stage
                                                       HUD and Try it's presses on it
+    wiki_regression.py <instance> rewind --launch [--shots DIR]
+                                                      Rewind a skirmish, a live entry: its live frame, the
+                                                      records, and Try it's rewind, fork and world input
     wiki_regression.py <name> mp                     a two-player network game on Wine, started by
                                                       tools/compat/tacompat.py's launcher
     wiki_regression.py all|<setup>[,<setup>...] mods --shots DIR
@@ -150,6 +153,28 @@ watch, on the same launch as sp (the presentation spec's 6.5):
        the most one fill cost the game thread from the open;
        Esc, and the render thread's stage HUD and bars cost and the pass's peak instances and batches against its
        caps, from the log.
+rewind, on the same launch as sp (rewind-spec.md 12.6). Every tick it uses is read from art/wiki/entries/rewind.json or
+from simparity's records of it, none written here:
+  (r1) the tree's Rewind drawn as a live game frame: the live HUD's rewind button hit at frame pixels Wg - 75 .. Wg - 48,
+       rows 2..29 (through frame_fit, within a pixel), and none of the replay HUD's controls;
+  (r2) demos steps and chain paused (tagpu_wiki.pause, under the turbo) at ticks spread over each rewind state the
+       demo reaches with no seek running (simparity --hash --frame every 10 ticks, the first, middle and last of each
+       state): the record's FRAME_KEYS, its live block, its bar and its simulation's cursor, f32 for f32, and the
+       replay's hash equal replay.js's;
+  (r3) with --shots DIR, demo play held (tagpu_wiki.shot) at the open strip, the armed second click and the fork's
+       first ticks, and demo button early on with its bar's numbers: each grabbed beside the mockup at the same state,
+       the column and both bars pixel-equal (the emblems' columns and the HUD's controls left out), the emblems and
+       the world measured;
+  (r4) Try it through device clicks: rewind opens the strip (live, track, live_play, live_now drawn; L at G), rew shows
+       the tick 300 back, the track pressed at 30 % and dragged to 60 % shows the drawn span's ticks, Play from here
+       twice forks F1 in stall mode (the fork's time said); then the world through the frame's fit: a click selects
+       seat 0's builder, a click on its column's build button arms it, a green ghost found round it and clicked places
+       it, and the building stands; rewind and Back to now from the open strip close it with L still and the
+       selection and the armed building kept; rewind, rew and Back to now from the past release both, logged on F1;
+       GameTime stands and the key ring's indices stay equal;
+  (r5) reopened, Try it played to tick 1500 and the track clicked at the strip's end: the longest seek's steps and
+       seconds, the most one fill cost the game thread (the target 0.5 ms), the fork's time from (r4); Esc, and the
+       render thread's stage HUD cost from the log.
 recorded:
   (r) the button sits 3 bar pixels left of the rewind button (the two frames' hit maps); the rewind
       button opens the rewind; while it is open a click on the wiki button opens nothing and the log
@@ -241,6 +266,7 @@ Twilight), one game a setup, under the run lock (the plan's landing 6i; the side
        the texel of bar.js's picture on the setup's pack that its nearest sampling shows, Impure's emblems left out
        (tools/wiki/barcheck.mjs --compose) -- the per-mod bar art the loader reads (Mayhem's GUI table, TA Zero's three
        sides and logos, Escalation's NEWINT) as the game draws it;
+  (w7) the same of Rewind's first demo early on, a live frame: its bars against bar.js given the record's numbers;
   (w4) Esc closes the window;
   (w5) each stage drew what the report resolved: a ground that resolved in 3D on every frame of the
        line, one that did not as the whitebox on every frame.
@@ -1901,9 +1927,9 @@ def watch_v1(c, d):
     return d
 
 
-def simparity_frames(d, asks):
-    """(v2) replay.js's hash and frame record at each (demo, tick) of `asks` in the dump's context: its layout, side,
-    interface type, the pack of a mod's layout and the units' scripts (simparity.mjs --hash --frame)"""
+def simparity_frames(d, asks, entry=WATCH):
+    """(v2) replay.js's hash and frame record at each (demo, tick) of `asks` of `entry` in the dump's context: its layout,
+    side, interface type, the pack of a mod's layout and the units' scripts (simparity.mjs --hash --frame)"""
     lay = TREE / ".wiki-watch-layout.json"
     lay.write_text(json.dumps(d["layout"]))
     try:
@@ -1914,14 +1940,14 @@ def simparity_frames(d, asks):
         if d["ctx"]["cob"]:
             args.append("--scripts")
         r = subprocess.run(["node", str(TREE / "tools/wiki/simparity.mjs"), "--hash", *args, "--frame",
-                            ",".join(f"{WATCH}/{k}@{t}" for k, t in asks)], capture_output=True, text=True, timeout=900)
+                            ",".join(f"{entry}/{k}@{t}" for k, t in asks)], capture_output=True, text=True, timeout=900)
     finally:
         lay.unlink(missing_ok=True)
     assert r.returncode == 0, f"(v2) simparity --hash --frame: {r.stderr.strip()[-600:]}"
     out = {}
     for ln in r.stdout.splitlines():
         m = re.match(r"frame (\S+?)/(\S+?)@(\d+) ([0-9a-f]{16}) (.*)$", ln)
-        if m:
+        if m and m.group(1) == entry:
             out[(m.group(2), int(m.group(3)))] = (m.group(4), json.loads(m.group(5)))
     return out
 
@@ -2173,6 +2199,467 @@ def watch(c, shots, res):
         watch_v3(c, shots, res)
     watch_v4(c)
     watch_v5(c)
+
+
+# ---- rewind: a live entry on the page, Rewind a skirmish (rewind-spec.md 12.6) ----
+
+REWIND = "rewind"
+RW_IDLE, RW_OPEN, RW_PAST = 0, 1, 2            # tagpu_wikireplay.h WIKI_RW_*
+ARM_ARMED = 2                                  # WIKI_ARM_ARMED
+ECON_STALL = 1                                 # tagpu_wikisim.h WIKI_ECON_STALL
+LIVE_KEYS = ("live", "rw", "arm", "first", "G", "now", "last", "armR", "simcur")   # (r2) the record's live block
+REPLAY_ONLY = ("play", "leave", "bookmark", "speed", "track")   # the replay HUD's, which an idle live HUD draws none of
+STRIP = ("live", "track", "live_play", "live_now")             # the strip's, drawn while the rewind is open
+REWIND_R2 = ("steps", "chain")                 # (r2) the demos whose records are compared
+REWIND_R3 = "play"                             # (r3) the demo shot at the open strip, the arm and the fork
+REWIND_BAR = ("button", 90)                    # (r3), (w7) the first demo early on, the live game idle: its bar's
+                                               # numbers are seat 0's from tick 0 (rewind-spec.md 7.7)
+REWIND_STRIDE = 10                             # (r2), (r3) simparity's records every this many demo ticks
+
+
+def tree_node(entry):
+    """The tree's node index of `entry` (art/wiki/tree.json in depth-first order, categories counted), the page's
+    `entry:<n>` control"""
+    n = 0
+
+    def walk(nodes):
+        nonlocal n
+        for x in nodes:
+            k, n = n, n + 1
+            if x.get("entry") == entry:
+                return k
+            r = walk(x.get("children", []))
+            if r is not None:
+                return r
+        return None
+    k = walk(json.loads((TREE / "art/wiki/tree.json").read_text())["tree"])
+    assert k is not None, f"art/wiki/tree.json has no entry {entry}"
+    return k
+
+
+def entry_demos(entry):
+    """The entry's demos, by id, in their order (each demo's number from 1 is its index plus one)"""
+    return json.loads((TREE / f"art/wiki/entries/{entry}.json").read_text())["demos"]
+
+
+def hud_click(c, d, key):
+    """A device click at the centre of the stage HUD's control `key` of the drawn frame"""
+    c.keys("dclick:%d,%d" % c.centre(hit_of(d, key, HIT_HUD)))
+
+
+def frame_client(d, x, z):
+    """A world point of the drawn game frame (the column's rows from the top bar's first, as the game simulation
+    takes them) as the client point the frame draws it at: the dump's frame_fit, the render thread's fit"""
+    f = d["frame_fit"]
+    return round(f["canvas"][0] + f["ox"] + x * f["s"]), round(f["canvas"][1] + f["oz"] + z * f["s"])
+
+
+def live_of(d):
+    assert d.get("replay") and d["replay"].get("live"), f"the dump holds no live replay: {d.get('replay')}"
+    return d["replay"]["live"]
+
+
+def rewind_open(c):
+    """The wiki opened on Rewind a skirmish, drawn as a live game frame with its stage HUD"""
+    d = c.open_wiki(expect_pause=True)
+    d = wait_dump(c, lambda d: d["drawn_open"], "(r1) the page was not drawn")
+    if d["entry"] != REWIND:
+        c.keys("dclick:%d,%d" % c.centre(c.hit(d, f"entry:{tree_node(REWIND)}")))
+    return wait_dump(c, lambda d: d["entry"] == REWIND and d.get("drawn_frame") and d.get("frame_fit")
+                     and d["frame"]["live"] and any(h.get("src") == HIT_HUD for h in d["hits"]),
+                     "(r1) the tree did not draw Rewind's live game frame with its stage HUD", seconds=60)
+
+
+def rewind_r1(d):
+    """(r1) the live frame: the live HUD's rewind button at frame pixels Wg - 75 .. Wg - 48, rows 2..29, and no replay
+    control; the wiki's emblem and the sprocket are measured beside the mockup's in (r3)"""
+    hud = {h["key"] for h in d["hits"] if h.get("src") == HIT_HUD}
+    assert "rewind" in hud, f"(r1) the live HUD has no rewind button: {sorted(hud)}"
+    bad = sorted(hud & set(REPLAY_ONLY))
+    assert not bad, f"(r1) the live frame idle draws the replay's controls {bad}"
+    f = d["frame_fit"]
+    snap = lambda v: math.floor(v + 0.5 + 1 / 64)
+    want = [f["canvas"][0] + snap(f["ox"] + (f["Wg"] - 75 - 128) * f["s"]), f["canvas"][1] + snap(f["oz"] + (2 - 32) * f["s"]),
+            f["canvas"][0] + snap(f["ox"] + (f["Wg"] - 47 - 128) * f["s"]), f["canvas"][1] + snap(f["oz"] + (30 - 32) * f["s"])]
+    got = hit_of(d, "rewind", HIT_HUD)
+    assert all(abs(a - b) <= 1 for a, b in zip(got, want)), \
+        f"(r1) the rewind button's hit {got}, not the frame's pixels Wg - 75 .. Wg - 48 x 2..29 at {want}"
+    print(f"wiki rewind: (r1) a live frame {f['Wg']} x {f['Hg']}: the rewind button's hit {got} on frame pixels "
+          f"Wg - 75 .. Wg - 48, rows 2..29 (within a pixel of {want}); the HUD's controls {sorted(hud)}, no replay control")
+
+
+def rewind_frames(d, asks):
+    """simparity.mjs --hash --frame for Rewind at each (demo, tick) of `asks` in the dump's context: the record of the
+    world shown and the replay's hash, keyed (demo, the tick it reached), with `pending` whether a seek runs there"""
+    return simparity_frames(d, asks, REWIND)
+
+
+def rewind_candidates(d, demos):
+    """Every REWIND_STRIDE-th demo tick of each demo of `demos` up to its end and the longest wait past it, through
+    simparity: {demo: [(tick, hash, record), ...]} in tick order"""
+    byid = {dm["id"]: dm for dm in entry_demos(REWIND)}
+    asks = [(k, t) for k in demos for t in range(REWIND_STRIDE, int(byid[k]["end"]) + 600, REWIND_STRIDE)]
+    got = rewind_frames(d, asks)
+    out = {k: [] for k in demos}
+    for (k, t), (h, rec) in sorted(got.items(), key=lambda p: p[0][1]):
+        if k in out and not any(t == q for q, _, _ in out[k]):
+            out[k].append((t, h, rec))
+    # the asks run past the end, so each demo's last tick is the one it ended on, where the game stops without a pause
+    return {k: v[:-1] for k, v in out.items()}
+
+
+def paused_at(c, entry, n, demo, t, what):
+    """Demo number `n` of `entry` played afresh under the turbo and paused on demo tick `t` (tagpu_wiki.pause): the
+    dump"""
+    start = c.mark()
+    trigger(c.gamedir / "tagpu_wiki.pause", f"{entry} {n} {t}\n")
+    asked = wait_line(c, start, r"wiki: (pause \d+ asked|tagpu_wiki\.pause: )", f"{what} {demo}@{t}")
+    assert re.search(r" asked: .*\d$", asked), f"{what} {asked}"
+    pn = re.search(r"pause (\d+) asked", asked).group(1)
+    wait_line(c, start, rf"wiki: pause {pn}: ", f"{what} {demo} did not pause at tick {t}", 120)
+    d = wait_dump(c, lambda d: d["demo"] == demo and not d["playing"] and d.get("replay"), f"{what} {demo} is not the paused replay")
+    assert d["tick"] == t, f"{what} {demo} paused at tick {d['tick']}, not {t}"
+    return d
+
+
+def f32(v):
+    return struct.unpack("<f", struct.pack("<f", float(v)))[0]
+
+
+def record_diff(rec, want):
+    """The fields of a game frame record that differ from replay.js's: FRAME_KEYS, the live block, and the bar's and
+    the simulation cursor's numbers as the f32 each is"""
+    bad = [k for k in FRAME_KEYS + LIVE_KEYS if rec[k] != want[k]]
+    bad += [f"bar.{k}" for k in want["bar"] if f32(rec["bar"][k]) != f32(want["bar"][k])]
+    bad += [f"sim.{k}" for k in ("x", "z") if f32(rec["sim"][k]) != f32(want["sim"][k])]
+    bad += [f"sim.{k}" for k in ("shape", "age") if rec["sim"][k] != want["sim"][k]]
+    return bad
+
+
+def rewind_r2(c, d):
+    """(r2) demos 2 and 5 paused at demo ticks spread over each rewind state the demo reaches, no seek running there:
+    the frame record the game thread placed -- FRAME_KEYS, the live block, the bar and the simulation's cursor -- and
+    the replay's hash equal replay.js's at the same tick in the game's context"""
+    cand = rewind_candidates(d, REWIND_R2)
+    ids = [dm["id"] for dm in entry_demos(REWIND)]
+    turbo(c, 8)
+    said = []
+    try:
+        for k in REWIND_R2:
+            by_rw = {}
+            for t, h, rec in cand[k]:
+                if not rec["pending"]:
+                    by_rw.setdefault(rec["rw"], []).append((t, h, rec))
+            assert {RW_IDLE, RW_OPEN, RW_PAST} <= set(by_rw), f"(r2) {k} reaches the states {sorted(by_rw)} with no seek running"
+            picks = sorted({rows[i][0]: rows[i] for rows in by_rw.values() for i in (0, len(rows) // 2, -1)}.values(),
+                           key=lambda p: p[0])
+            for t, h, want in picks:
+                g = paused_at(c, REWIND, ids.index(k) + 1, k, t, "(r2)")
+                bad = record_diff(g["frame"], want)
+                assert not bad, f"(r2) {k}@{t}: the record's {bad} differ: game {[g['frame'].get(f.split('.')[0]) for f in bad]}, " \
+                                f"replay.js {[want.get(f.split('.')[0]) for f in bad]}"
+                assert g["hash"] == h, f"(r2) {k}@{t}: the replay's hash {g['hash']}, replay.js's {h}"
+            said.append(f"{k} at {len(picks)} ticks ({', '.join(str(p[0]) for p in picks)})")
+    finally:
+        turbo(c, 0)
+    print(f"wiki rewind: (r2) {'; '.join(said)}: each record's {', '.join(FRAME_KEYS + LIVE_KEYS)}, bar and sim, and "
+          f"the replay's hash equal replay.js's")
+
+
+def rewind_shot(c, n, demo, tick):
+    """Demo number `n` of Rewind held at a tick through tagpu_wiki.shot, once the game frame drawn is that one's: the
+    dump"""
+    start = c.mark()
+    trigger(c.gamedir / "tagpu_wiki.shot", f"{REWIND} {n} {tick}\n")
+    asked = wait_line(c, start, r"wiki: shot \d+ asked|wiki: tagpu_wiki\.shot: ", f"{demo} {tick}")
+    assert " asked: " in asked and asked.endswith(f"held at tick {tick}"), asked
+    d = wait_dump(c, lambda d: d["demo"] == demo and not d["playing"] and d.get("frame_fit") and d["tick"] == tick,
+                  f"{demo} at {tick} was not drawn as a frame", seconds=60)
+    time.sleep(1.0)          # the held frame presented
+    return d
+
+
+def rewind_r3(c, d, shots, res):
+    """(r3) demo 3 held at the open strip, the armed second click and the fork's first ticks, and demo 1 early on with
+    its bar's numbers: each presented frame grabbed and the mockup's at the same state beside it -- the column and both
+    bars pixel-equal (the emblems' columns and the HUD's controls left out), the emblems and the world measured"""
+    shots.mkdir(parents=True, exist_ok=True)
+    cand = rewind_candidates(d, (REWIND_R3,))[REWIND_R3]
+    ready = [(t, rec) for t, _, rec in cand if not rec["pending"]]
+    first = lambda pred, what: next((t for t, rec in ready if pred(rec)), None) or \
+        (_ for _ in ()).throw(AssertionError(f"(r3) {REWIND_R3} reaches no {what} with no seek running"))
+    t_open = first(lambda r: r["rw"] == RW_OPEN, "open strip")
+    t_arm = first(lambda r: r["arm"] == ARM_ARMED and r["toast"].startswith("Click again"), "armed second click")
+    t_fork = first(lambda r: r["rw"] == RW_IDLE and r["toast"].startswith("Playing from"), "fork")
+    ids = [dm["id"] for dm in entry_demos(REWIND)]
+    for demo, tick, what in ((REWIND_R3, t_open, "open"), (REWIND_R3, t_arm, "armed"), (REWIND_R3, t_fork, "forked"),
+                             (*REWIND_BAR, "bar")):
+        d = rewind_shot(c, ids.index(demo) + 1, demo, tick)
+        r = d["frame"]
+        assert r["live"], f"(r3) {demo}@{tick}: the record is not live"
+        if what == "bar":
+            assert r["rw"] == RW_IDLE and (r["bar"]["e"] or r["bar"]["m"]) and (r["bar"]["emax"] or r["bar"]["mmax"]), \
+                f"(r3) {demo}@{tick}: the bar has no numbers to show: {r['bar']}, rw {r['rw']}"
+        base = shots / f"{res}-{REWIND}-{demo}-t{tick}"
+        grab(c, base.with_suffix(".game.png"))
+        base.with_suffix(".frame.json").write_text(json.dumps({"frame_fit": d["frame_fit"], "rects": frame_rects(d),
+                                                               "record": r, "hud": [h for h in d["hits"] if h.get("src") == HIT_HUD]}))
+        at = mockup_shot({"res": [int(v) for v in res.split("x")], "entry": REWIND, "demo_n": ids.index(demo),
+                          "tick": tick, "mod": "stock", "look": "game"}, base.with_suffix(".mockup.png"))
+        g, m = png_rgba(base.with_suffix(".game.png")), png_rgba(base.with_suffix(".mockup.png"))
+        R, f = frame_rects(d), d["frame_fit"]
+        hud = [h["rect"] for h in d["hits"] if h.get("src") == HIT_HUD]
+        if at:
+            hud.append([round(at[0]) - 64, round(at[1]) - 64, round(at[0]) + 64, round(at[1]) + 64])
+        cx, s_, ox = f["canvas"][0], f["s"], f["ox"]
+        # a live frame's emblems on the top bar, frame x Wg - 106 .. Wg - 17: the wiki's at right[0], the rewind
+        # button, the sprocket (rewind-spec.md 9.4), kit parts each renderer scales with its own filter
+        emb = [cx + math.floor(ox + (f["Wg"] - 128 - k) * s_ + 0.5 + 1 / 64) for k in (107, 16)]
+        said = []
+        for part, tex in (("column", (128, f["Hg"])), ("top", (f["Wg"] - 128, 32)), ("bottom", (f["Wg"] - 128, 32))):
+            n, of, mx = region_diff(g, m, R[part], tex, emb if part == "top" else None, hud)
+            assert of > 0, f"(r3) {demo}@{tick}: the {part} rect {R[part]} is empty"
+            assert n == 0, f"(r3) {demo}@{tick} ({what}): {n} of {of} pixels of the {part} differ from the mockup's (up to {mx})"
+            said.append(f"{part} {of} px equal")
+        n, of, mx = region_diff(g, m, [emb[0], R["top"][1], emb[1], R["top"][3]])
+        said.append(f"the emblems {n} of {of} px differ (up to {mx})")
+        n, of, mx = region_diff(g, m, R["world"])
+        said.append(f"world and HUD {n} of {of} px differ (up to {mx})")
+        print(f"wiki rewind: (r3) {demo} at tick {tick} ({what}: rw {r['rw']}, arm {r['arm']}, toast {r['toast']!r}, "
+              f"bar e {r['bar']['e']:g} m {r['bar']['m']:g}): {'; '.join(said)}")
+    print(f"wiki rewind: (r3) 4 frames grabbed to {shots}")
+
+
+def settled_live(c, what, pred=lambda d: True, seconds=60):
+    """The dump once the live replay runs no seek and the frame drawn is the running replay's, and `pred` holds"""
+    return wait_dump(c, lambda d: d.get("replay") and d["replay"].get("live") and d.get("drawn_frame")
+                     and (d["replay"]["live"]["past"] is None or d["replay"]["live"]["past"]["target"] < 0) and pred(d),
+                     what, seconds=seconds)
+
+
+def span_tick(d, x):
+    """The track's tick under client column x as the game maps it on the strip's drawn span (tagpu_wiki.c track_tick)"""
+    x0, x1, _ = d["hud_run"]
+    first, G = d["hud_span"]
+    f = min(1, max(0, (x - x0) / (x1 - x0)))
+    return first + math.trunc(f * (max(G, first) - first) + 0.5)
+
+
+def seek_shows(L, T):
+    """The tick shown by a seek to T: clamped to the rewind's span, one before it (rewind-spec.md 7.3)"""
+    return min(max(T, L["first"] + 1), L["last"]) - 1
+
+
+def seat0_builder(d):
+    """Seat 0's first unit whose type the sidebar layout gives pages, as (unit, its type's pages)"""
+    types = d["layout"]["sides"][d["ctx"]["side"]]["types"]
+    w = live_of(d)["world"]
+    u = next((u for u in w["units"] if u["owner"] == 0 and u["built"] >= 1 and u["type"] in types
+              and types[u["type"]]["pages"]), None)
+    assert u, f"(r4) seat 0 has no unit the layout pages: {[(u['id'], u['type']) for u in w['units'] if u['owner'] == 0]}"
+    return u, types[u["type"]]["pages"]
+
+
+def rewind_r4(c):
+    """(r4) Try it on the live entry: the strip opened, rew, a track drag, Play from here twice (a fork in stall mode),
+    then the world: a builder selected, a building armed on the column and placed on the map, standing; rewind and
+    Back to now from the open strip, a close: L still across the open, the selection and the armed building kept;
+    rewind, rew and Back to now from the past: nothing selected and nothing armed after it (the release), logged"""
+    gt0, ring0 = c.gametime(), c.ring()
+    d = c.dump()
+    press(c, d, "try")
+    d = settled_live(c, "(r4) Try it did not start the live replay for the player",
+                     lambda d: d["try"] and d["replay"]["try"] and any(h.get("src") == HIT_HUD for h in d["hits"]))
+    # the live game played on far enough for a refresh behind it (the turbo, then the clock)
+    turbo(c, 8)
+    try:
+        d = wait_dump(c, lambda d: d["replay"]["game_tick"] >= 900, "(r4) the live game did not reach tick 900", seconds=120)
+    finally:
+        turbo(c, 0)
+    d = settled_live(c, "(r4) the frame", lambda d: True)
+    hud_click(c, d, "rewind")
+    d = settled_live(c, "(r4) rewind did not open the strip", lambda d: live_of(d)["rw"] == RW_OPEN
+                     and {h["key"] for h in d["hits"] if h.get("src") == HIT_HUD} >= set(STRIP))
+    L = live_of(d)
+    G, l0 = L["G"], d["replay"]["game_tick"]
+    assert l0 == G, f"(r4) the open at G {G} left the live game at {l0}"
+    said = [f"rewind opened at G {G}, the strip's {', '.join(STRIP)} drawn"]
+    hud_click(c, d, "rew")
+    want = seek_shows(L, max(L["now"] - 300, L["first"] + 1))
+    d = settled_live(c, f"(r4) rew did not show {want}", lambda d: live_of(d)["rw"] == RW_PAST and live_of(d)["now"] == want)
+    said.append(f"rew showed {want}")
+    # the track: pressed at 30 % of its run, dragged in 5 moves to 60 %, let go there
+    x0, x1, _ = d["hud_run"]
+    tr = hit_of(d, "track", HIT_HUD)
+    y = (tr[1] + tr[3]) // 2
+    per = (d["hud_span"][1] - d["hud_span"][0]) / max(1, x1 - x0)
+    at = lambda f: x0 + round(f * (x1 - x0))
+    near = lambda d, x: abs(live_of(d)["now"] - seek_shows(live_of(d), span_tick(d, x))) <= per + 1
+    c.keys("dmove:%d,%d" % (at(0.3), y), "ddown:%d,%d" % (at(0.3), y))
+    d = settled_live(c, "(r4) the track was not held at 30 %", lambda d: d["replay"]["press_held"] == "track" and near(d, at(0.3)))
+    for k in range(1, 6):
+        x = at(0.3 + 0.06 * k)
+        c.keys("dmove:%d,%d" % (x, y))
+        d = settled_live(c, f"(r4) the drag to {x} did not show {seek_shows(L, span_tick(d, x))}", lambda d: near(d, x))
+    c.keys("dup:%d,%d" % (at(0.6), y))
+    d = settled_live(c, "(r4) the track's release did not land at 60 %",
+                     lambda d: not d["replay"]["press_held"] and near(d, at(0.6)))
+    said.append(f"the track pressed at 30 % and dragged to 60 % showed {live_of(d)['now']}")
+    start = c.mark()
+    hud_click(c, d, "live_play")
+    d = settled_live(c, "(r4) Play from here neither armed nor forked",
+                     lambda d: live_of(d)["arm"] == ARM_ARMED or len(live_of(d)["timelines"]) == 2)
+    if len(live_of(d)["timelines"]) < 2:
+        assert d["frame"]["toast"].startswith("Click again to play from"), f"(r4) the arm's toast: {d['frame']['toast']!r}"
+        said.append(f"Play from here armed at {live_of(d)['arm_R']} ('{d['frame']['toast']}')")
+        hud_click(c, d, "live_play")
+        d = settled_live(c, "(r4) the second Play from here did not fork", lambda d: len(live_of(d)["timelines"]) == 2)
+    L = live_of(d)
+    tl = L["timelines"][1]
+    assert L["rw"] == RW_IDLE and L["selected"] == 1 and tl["parent"] == 0 and tl["mode"] == ECON_STALL, \
+        f"(r4) the fork: rw {L['rw']}, selected {L['selected']}, {tl}"
+    assert d["frame"]["toast"].startswith("Playing from"), f"(r4) the fork's toast: {d['frame']['toast']!r}"
+    fork_line = wait_line(c, start, r"wiki: the rewind forked F1 at", "(r4) the fork's time was not said")
+    said.append(f"forked F1 at {tl['R']} in stall mode ({fork_line.split('wiki: ', 1)[1]})")
+
+    # the world: the builder selected with a click on it, its pages on the column
+    u, pages = seat0_builder(d)
+    c.keys("dclick:%d,%d" % frame_client(d, u["x"], u["z"]))
+    d = settled_live(c, f"(r4) a click on {u['id']} did not select it and show its page",
+                     lambda d: any(v["id"] == u["id"] and v["selected"] for v in live_of(d)["world"]["units"])
+                     and (live_of(d)["world"]["side"] or {}).get("unit") == u["id"])
+    sd = live_of(d)["world"]["side"]
+    lay = d["layout"]
+    gads = lay["screens"][sd["screen"]]["gadgets"]
+    i = next((k for k, g in enumerate(gads) if g["role"] == "build" and g.get("unit") and not g.get("hidden")
+              and sd["state"][k] == 0), None)
+    assert i is not None, f"(r4) {sd['screen']} shows no live build button: {sd['state']}"
+    T = gads[i]["unit"]
+    gx, gy, gw, gh = gads[i]["rect"]
+    c.keys("dclick:%d,%d" % frame_client(d, -SIDE_W + gx + gw / 2, lay["screens"][sd["screen"]]["y"] + gy + gh / 2 - 32))
+    d = settled_live(c, f"(r4) {T}'s button did not arm it", lambda d: live_of(d)["world"]["mode"] == T)
+    said.append(f"{u['id']} selected and {T} armed from {sd['screen']}")
+    # the placement: the first point round the builder where the ghost is green
+    before = {v["id"] for v in live_of(d)["world"]["units"]}
+    mw, mh = d["map"][0] * 16, d["map"][1] * 16
+    spot = None
+    for r_ in (96, 144, 192, 240):
+        for a in range(8):
+            x, z = u["x"] + r_ * math.cos(a * math.pi / 4), u["z"] + r_ * math.sin(a * math.pi / 4)
+            if not (32 <= x < mw - 32 and 32 <= z < mh - 32):
+                continue
+            c.keys("dmove:%d,%d" % frame_client(d, x, z))
+            try:
+                d = settled_live(c, "ghost", lambda d: d["try_world"] == 1 and live_of(d)["world"]["has_ghost"]
+                                 and abs(live_of(d)["world"]["cursor"][0] - x) < 2, seconds=5)
+            except AssertionError:
+                continue
+            if live_of(d)["world"]["ghost_ok"]:
+                spot = (x, z)
+                break
+        if spot:
+            break
+    assert spot, f"(r4) no point round {u['id']} at ({u['x']:.0f}, {u['z']:.0f}) gives a green ghost of {T}"
+    c.keys("dclick:%d,%d" % frame_client(d, *spot))
+    turbo(c, 8)
+    try:
+        d = wait_dump(c, lambda d: any(v["id"] not in before and v["type"] == T and v["owner"] == 0
+                                       for v in live_of(d)["world"]["units"]),
+                      f"(r4) no {T} stands where it was placed at ({spot[0]:.0f}, {spot[1]:.0f})", seconds=90)
+    finally:
+        turbo(c, 0)
+    new = next(v for v in live_of(d)["world"]["units"] if v["id"] not in before and v["type"] == T)
+    said.append(f"{T} placed at ({spot[0]:.0f}, {spot[1]:.0f}) stands as {new['id']} ({new['built']:.2f} built)")
+
+    # rewind then Back to now, twice: from the open strip a close, which rebuilds nothing (the selection and the armed
+    # building kept, L still across the open); from the past Back to now, whose release lets go of both, logged on F1
+    d = settled_live(c, "(r4) the frame", lambda d: True)
+    if live_of(d)["world"]["mode"] != T:
+        c.keys("dclick:%d,%d" % frame_client(d, -SIDE_W + gx + gw / 2, lay["screens"][sd["screen"]]["y"] + gy + gh / 2 - 32))
+        d = settled_live(c, f"(r4) {T}'s button did not arm it again", lambda d: live_of(d)["world"]["mode"] == T)
+    assert any(v["id"] == u["id"] and v["selected"] for v in live_of(d)["world"]["units"]), f"(r4) {u['id']} is not selected"
+    hud_click(c, d, "rewind")
+    d = settled_live(c, "(r4) rewind did not open the strip again", lambda d: live_of(d)["rw"] == RW_OPEN)
+    G2 = live_of(d)["G"]
+    time.sleep(1.0)
+    d = settled_live(c, "(r4) the frame", lambda d: True)
+    assert d["replay"]["game_tick"] == G2, f"(r4) the live game ran under the open strip: {G2} -> {d['replay']['game_tick']}"
+    hud_click(c, d, "live_now")
+    d = settled_live(c, "(r4) Back to now did not close the open strip", lambda d: live_of(d)["rw"] == RW_IDLE)
+    w = live_of(d)["world"]
+    assert w["mode"] == T and any(v["id"] == u["id"] and v["selected"] for v in w["units"]), \
+        f"(r4) the close from the open strip let go of the selection or the armed {T}: armed {w['mode']!r}"
+    said.append(f"rewind at G {G2} held the live game still and Back to now from the open strip closed it, "
+                f"{u['id']} selected and {T} armed as before")
+    nlog = live_of(d)["timelines"][1]["nlog"]
+    hud_click(c, d, "rewind")
+    d = settled_live(c, "(r4) rewind did not open the strip a third time", lambda d: live_of(d)["rw"] == RW_OPEN)
+    hud_click(c, d, "rew")
+    d = settled_live(c, "(r4) rew did not show the past", lambda d: live_of(d)["rw"] == RW_PAST)
+    hud_click(c, d, "live_now")
+    d = settled_live(c, "(r4) Back to now did not return", lambda d: live_of(d)["rw"] == RW_IDLE)
+    w = live_of(d)["world"]
+    sel = [v["id"] for v in w["units"] if v["owner"] == 0 and v["selected"]]
+    assert not sel and not w["mode"], f"(r4) after Back to now: selected {sel}, armed {w['mode']!r}"
+    assert live_of(d)["timelines"][1]["nlog"] > nlog, "(r4) Back to now's release was not logged on F1"
+    assert any(v["id"] == new["id"] for v in w["units"]), f"(r4) {new['id']} is gone after Back to now"
+    said.append(f"from the past Back to now released (nothing selected, nothing armed, logged on F1), {new['id']} "
+                f"still standing")
+    assert c.gametime() == gt0, f"(r4) GameTime ran under the page: {gt0} -> {c.gametime()}"
+    assert c.ring() == ring0, f"(r4) the engine's key ring moved: {ring0} -> {c.ring()}"
+    print(f"wiki rewind: (r4) Try it: {'; '.join(said)}; GameTime stood and the key ring stayed equal")
+    return fork_line
+
+
+def rewind_r5(c, fork_line):
+    """(r5) the costs: the window closed and opened again (the page's cost counts from its open), Try it, the live game
+    played on, the strip opened and the track clicked at its end -- the longest seek, a new past game re-simulated
+    from tick 0 -- its demo steps and seconds, the most one fill cost the game thread, and the fork's time from (r4)"""
+    c.keys("esc")
+    wait_dump(c, lambda d: not d["open"], "(r5) Esc did not close the window")
+    d = rewind_open(c)
+    # Try it outlives a close (the page reopens on it), so the demo is picked afresh, which leaves Try it, and Try it
+    # pressed from there starts a new live game from tick 0
+    press(c, d, "demo:0")
+    d = wait_dump(c, lambda d: d["demo"] == entry_demos(REWIND)[0]["id"] and not d["try"], "(r5) the first demo was not picked")
+    press(c, d, "try")
+    settled_live(c, "(r5) Try it did not start again", lambda d: d["try"] and d["replay"]["try"])
+    turbo(c, 8)
+    try:
+        wait_dump(c, lambda d: d["replay"]["game_tick"] >= 1500, "(r5) the live game did not reach tick 1500", seconds=120)
+    finally:
+        turbo(c, 0)
+    d = settled_live(c, "(r5) the frame", lambda d: True)
+    hud_click(c, d, "rewind")
+    d = settled_live(c, "(r5) rewind did not open the strip", lambda d: live_of(d)["rw"] == RW_OPEN and d["hud_run"][1] > d["hud_run"][0])
+    x0, x1, _ = d["hud_run"]
+    tr = hit_of(d, "track", HIT_HUD)
+    k0, t0 = d["replay"]["tick"], time.monotonic()
+    c.keys("dclick:%d,%d" % (x1 - 1, (tr[1] + tr[3]) // 2))
+    d = settled_live(c, "(r5) the seek to the strip's end did not finish",
+                     lambda d: live_of(d)["rw"] == RW_PAST and live_of(d)["now"] >= live_of(d)["last"] - 2)
+    secs = time.monotonic() - t0
+    L = live_of(d)
+    print(f"wiki rewind: (r5) the longest seek, a past game from tick 0 to {L['now']} (G {L['G']}), in "
+          f"{d['replay']['tick'] - k0} demo steps and {secs:.1f} s; the page cost the game thread at most "
+          f"{d['cost_max_ms']:.3f} ms in one frame over {d['cost_frames']} frames (the target 0.5 ms); "
+          f"{fork_line.split('wiki: ', 1)[1]}")
+    start = c.mark()
+    c.keys("esc")
+    wait_dump(c, lambda d: not d["open"], "(r5) Esc did not close the window")
+    print(f"wiki rewind: (r5) {wait_line(c, start, r'wiki: the stage HUD cost the render thread', '(r5) no stage HUD cost line', 30).split('] ', 1)[-1]}")
+
+
+def rewind(c, shots, res):
+    """(r1)..(r5): Rewind a skirmish, a live entry, on the page"""
+    held_at(c, HELD_AT)
+    d = rewind_open(c)
+    rewind_r1(d)
+    rewind_r2(c, d)
+    if shots:
+        rewind_r3(c, d, shots, res)
+    fork_line = rewind_r4(c)
+    rewind_r5(c, fork_line)
 
 
 def hud(c):
@@ -2715,29 +3202,43 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
 MODS_WATCH = ("play", 150)                    # (w6) Watching's first demo, paused, no seek pending
 
 
-def mods_bars(c, display, pack, out, row):
+def mods_bars(c, display, pack, out, row, live=False):
     """(w6) Watching's first demo held at a tick through tagpu_wiki.shot: the frame's two bars, each client pixel
     against the texel of bar.js's picture on the setup's pack (side and badge colour the record's, every number 0)
     its nearest sampling shows (either, on an edge, as the column's check takes it), Impure's emblems' columns left
     out (the stage draws them over the bar, from the kit). A side the pack has no bars for draws the whitebox strips
-    and is said, not compared."""
+    and is said, not compared. (w7), `live`: the same of Rewind's first demo early on, a live frame, whose bars show
+    the record's numbers (bar.js given the record's `bar`) and whose emblems run from the wiki's at right[0]."""
     import numpy as np
-    demo, tick = MODS_WATCH
-    d = watch_shot(c, demo, tick)
-    png = out / f"{WATCH}-{demo}-t{tick}.window.png"
+    step, key = ("w7", "live_bars") if live else ("w6", "bars")
+    if live:
+        demo, tick = REWIND_BAR
+        d = rewind_shot(c, [dm["id"] for dm in entry_demos(REWIND)].index(demo) + 1, demo, tick)
+        entry = REWIND
+    else:
+        demo, tick = MODS_WATCH
+        d = watch_shot(c, demo, tick)
+        entry = WATCH
+    png = out / f"{entry}-{demo}-t{tick}.window.png"
     window_grab(display, d, png)
     img = png_rgba(png)
-    f, raw = d["frame_fit"], out / "bars.rgba"
+    f, raw = d["frame_fit"], out / f"{key}.rgba"
+    num = []
+    if live:
+        assert d["frame"]["live"] and (d["frame"]["bar"]["e"] or d["frame"]["bar"]["m"]), \
+            f"({step}) {entry}/{demo}@{tick}: the live record shows no numbers: {d['frame']['bar']}"
+        (out / f"{key}.num.json").write_text(json.dumps(d["frame"]["bar"]))
+        num = [str(out / f"{key}.num.json")]
     r = subprocess.run(["node", str(TREE / "tools/wiki/barcheck.mjs"), "--compose", str(pack), str(d["ctx"]["side"]),
-                        str(d["frame"]["colour"]), str(f["Wg"]), str(f["Hg"]), str(raw)],
+                        str(d["frame"]["colour"]), str(f["Wg"]), str(f["Hg"]), str(raw), *num],
                        capture_output=True, text=True, timeout=120)
-    assert r.returncode == 0, f"(w6) barcheck --compose: {r.stderr.strip()[-400:]}"
+    assert r.returncode == 0, f"({step}) barcheck --compose: {r.stderr.strip()[-400:]}"
     if r.stdout.strip() == "none":
-        row["bars"] = "none: the pack has no bars for the side"
-        print(f"wiki mods: (w6) {pack.name} side {d['ctx']['side']}: bar.js composes no bars, the stage the whitebox")
+        row[key] = "none: the pack has no bars for the side"
+        print(f"wiki mods: ({step}) {pack.name} side {d['ctx']['side']}: bar.js composes no bars, the stage the whitebox")
         return
     w = int(r.stdout.strip())
-    assert w == f["Wg"] - 128, f"(w6) bar.js's bars are {w} wide, the frame's {f['Wg'] - 128}"
+    assert w == f["Wg"] - 128, f"({step}) bar.js's bars are {w} wide, the frame's {f['Wg'] - 128}"
     comp = np.frombuffer(raw.read_bytes(), np.uint8).reshape(64, 2048, 4)[:, :, :3].astype(int)
     R, eps, said = frame_rects(d), 1e-6, []
 
@@ -2753,13 +3254,15 @@ def mods_bars(c, display, pack, out, row):
             for tx in (tx0, tx1):
                 ok |= np.all(shown == comp[row0 + ty][:, tx], axis=2)
         if part == "top":
-            # the emblems: frame x Wg - 75 .. Wg - 17 (the presentation spec's 3.4), bar texels from 128 less
-            ok[:, (tx1 >= f["Wg"] - 76 - 128) & (tx0 < f["Wg"] - 16 - 128)] = True
+            # the emblems: frame x Wg - 75 .. Wg - 17 (the presentation spec's 3.4), a live frame's from the wiki's
+            # at right[0], Wg - 106 (rewind-spec.md 9.4); bar texels from 128 less
+            ok[:, (tx1 >= f["Wg"] - (107 if live else 76) - 128) & (tx0 < f["Wg"] - 16 - 128)] = True
         bad = int((~ok).sum())
-        assert bad == 0, f"(w6) {bad} of {ok.size} pixels of the {part} bar differ from bar.js on {pack.name}"
+        assert bad == 0, f"({step}) {bad} of {ok.size} pixels of the {part} bar differ from bar.js on {pack.name}"
         said.append(f"{part} {ok.size} px")
-    row["bars"] = ", ".join(said) + " equal to bar.js"
-    print(f"wiki mods: (w6) {WATCH}/{demo} at tick {tick} on {pack.name}, side {d['ctx']['side']}: the {row['bars']}")
+    row[key] = ", ".join(said) + " equal to bar.js" + (f" (energy {d['frame']['bar']['e']:g}, metal {d['frame']['bar']['m']:g})"
+                                                         if live else "")
+    print(f"wiki mods: ({step}) {entry}/{demo} at tick {tick} on {pack.name}, side {d['ctx']['side']}: the {row[key]}")
 
 
 def mods_setup(tacompat, setup, dll, out):
@@ -2851,6 +3354,8 @@ def mods_setup(tacompat, setup, dll, out):
         poll("b4")
         mods_bars(c, display, pack, out, row)
         poll("w6")
+        mods_bars(c, display, pack, out, row, live=True)
+        poll("w7")
         c.keys("esc")
         wait_dump(c, lambda d: not d["open"], "(w4) Esc did not close the window")
         time.sleep(2)
@@ -2894,7 +3399,8 @@ def mods_table(rows):
         print(f"   {r.get('load')}; the screen {r.get('screen')}; boxes: {r['boxes'] or 'none'}; "
               f"the first mounts {[arc(m['archive']) for m in rep.get('mounts', [])][:4]}")
         print(f"   sidebar ({r.get('pack')}'s pack): the engine's {r.get('live')}; the layout {r.get('layout')}; "
-              f"the stage {r.get('stage')}; the lock {r.get('lock')}; the frame's bars {r.get('bars')}")
+              f"the stage {r.get('stage')}; the lock {r.get('lock')}; the frame's bars {r.get('bars')}; "
+              f"the live frame's {r.get('live_bars')}")
         for st in rep.get("stages", []):
             srcs = "; ".join(f"{s['map']} <- {arc(s['from'])}" + ("" if s["ok"] else f" ({s['why']})")
                              for s in st.get("sources", []))
@@ -2991,8 +3497,8 @@ def offline_checks():
     assert not failed, f"the offline checks {', '.join(failed)} did not pass"
 
 
-GATE_MODES = ("sp", "page", "demos", "try", "asset", "stage3d", "units", "cursor", "watch")
-GATE_SHOTS = {"demos", "stage3d", "units", "cursor", "watch"}    # the modes that take --shots DIR
+GATE_MODES = ("sp", "page", "demos", "try", "asset", "stage3d", "units", "cursor", "watch", "rewind")
+GATE_SHOTS = {"demos", "stage3d", "units", "cursor", "watch", "rewind"}    # the modes that take --shots DIR
 GATE_RES = "1920x1080"                                  # each game lane's private display, and so its game's screen
 GATE_LANE_S = 3600                                      # a lane still running after this is hung, not slow: the
                                                         # slowest, units, takes some 750 s alone and 863 s at -j 6
@@ -3209,7 +3715,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("instance")
     p.add_argument("mode", choices=("sp", "page", "demos", "try", "recorded", "asset", "stage3d", "units", "cursor", "watch",
-                                    "mp", "mods", "offline", "gate"))
+                                    "rewind", "mp", "mods", "offline", "gate"))
     p.add_argument("--launch", action="store_true",
                    help="sp/recorded: launch on place-basic.json first, under the run lock")
     p.add_argument("--res", default="1920x1080", help="sp/recorded: the game's resolution")
@@ -3218,7 +3724,8 @@ def main():
                                   "named <stem>-<entry>-<demo>, mid-replay)")
     p.add_argument("--shots", type=Path, help="demos: grab each entry's demo mid-play, and the mockup's, into this folder; "
                                               "stage3d, units: the captures of the wiki's target and the presented frames; "
-                                              "watch: each Watching demo's frame, four beside the mockup's")
+                                              "watch: each Watching demo's frame, four beside the mockup's; "
+                                              "rewind: four Rewind frames beside the mockup's")
     p.add_argument("--jobs", "-j", type=int, default=6, help="gate: the game lanes played at once")
     p.add_argument("--offline-jobs", type=int, default=8, help="gate: the offline checks run at once, 0 for none")
     p.add_argument("--modes", default=",".join(GATE_MODES), help="gate: the single-player modes, each a lane")
@@ -3259,6 +3766,8 @@ def main():
                     cursor(c, a.shots, a.res)
                 elif a.mode == "watch":
                     watch(c, a.shots, a.res)
+                elif a.mode == "rewind":
+                    rewind(c, a.shots, a.res)
                 else:
                     recorded(c)
             finally:

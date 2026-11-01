@@ -401,6 +401,9 @@ static int            s_repGen = -1, s_repQuiet = -1;   /* the replay's sound, a
    acts only on the replay that map was drawn for (frame_current). Wraps after 2^32 makes and frees,
    which no session reaches. */
 static uint32_t       s_repSerial;
+static int            s_liveMove;               /* Try it's world point is held for a live replay
+                                                   (live_flush), freed with the replay           */
+static double         s_liveX, s_liveZ;
 
 static const WIKIDATA* data(void)
 {
@@ -527,6 +530,7 @@ static void sim_free(void)
     s_frameHave = 0;
     s_heldGv.game = s_heldGv.nseat = 0;
     s_repGen = s_repQuiet = -1;
+    s_liveMove = 0;
     tagpu_wikiframe_press_init(&s_press);
 }
 
@@ -557,15 +561,73 @@ static unsigned s_downReal;                     /* B_L/B_R: held by a press of t
 static TRYIN    s_log[TRY_LOG];                 /* this Try it's inputs, for the state dump      */
 static int      s_nlog, s_logCut;
 
-static int try_on(void)
+/* TRY IT ON A LIVE FRAME (rewind-spec.md 9.6, wiki.js liveWorld, liveFlush): the world takes the
+   player's pointer, buttons and keys through tagpu_wikireplay_input, never the simulation directly,
+   and the replay takes them only after a fork (LOGGED FIRST, tagpu_wikireplay.h). The pointer's moves
+   are coalesced: the last world point is held here and sent once, before each replay step and before
+   each press -- a press of a button on the world replaces the held point with its own and sends it,
+   then its down -- so the timelines' logs grow by at most one move a demo step. The held point is
+   s_liveMove's (with the replay's statics, above). */
+static int frame_try(void);
+static int frame_current(void);
+
+/* the live replay takes Try it's world input: its drawn frame is the running replay's */
+static int live_try(void)
 {
-    return s_try && s_simOn;
+    return frame_try() && s_rep.live && frame_current();
 }
 
-/* one input to Try it's simulation, and its line in the log */
+static void live_input(int kind, int key, double x, double z)
+{
+    WIKIINPUT in;
+    memset(&in, 0, sizeof in);
+    in.down = in.up = in.build = -1;
+    switch (kind) {
+    case TRY_MOVE:  in.has = WIKI_IN_MOVE; in.move.x = x; in.move.z = z; break;
+    case TRY_DOWN:  in.down = key; break;
+    case TRY_UP:    in.up = key; break;
+    }
+    tagpu_wikireplay_input(&s_rep, &in);
+}
+
+/* the held world point sent to the replay, once */
+static void live_flush(void)
+{
+    if (!s_liveMove || !s_repOn) return;
+    s_liveMove = 0;
+    live_input(TRY_MOVE, -1, s_liveX, s_liveZ);
+}
+
+/* Try it's simulation takes input: the page demo's, or a live replay's world (live_try). An up is
+   sent to a live Try-it replay whatever its frame, so no key it took down stays held in it; the
+   replay refuses what its state does not take. */
+static int try_on(void)
+{
+    return s_try && (s_simOn || live_try());
+}
+
+static int try_up_on(void)
+{
+    return s_try && (s_simOn || (s_repOn && s_repTry && s_rep.live));
+}
+
+/* one input to Try it's simulation, and its line in the log; on a live replay a move is held
+   (live_flush sends it) and a key or button goes after the held move */
 static void try_send(int kind, int key, double x, double z)
 {
     WIKIINPUT in;
+    if (!s_simOn) {
+        if (!s_repOn) return;
+        if (kind == TRY_MOVE) {
+            s_liveMove = 1;
+            s_liveX = x;
+            s_liveZ = z;
+            return;
+        }
+        live_flush();
+        live_input(kind, key, x, z);
+        return;
+    }
     memset(&in, 0, sizeof in);
     in.down = in.up = in.build = -1;
     switch (kind) {
@@ -613,7 +675,7 @@ static void try_up(int k)
     s_ndown--;
     if (k == WIKI_KEY_LMB) s_downReal &= ~B_L;
     if (k == WIKI_KEY_RMB) s_downReal &= ~B_R;
-    if (try_on()) try_send(TRY_UP, k, 0, 0);
+    if (try_up_on()) try_send(TRY_UP, k, 0, 0);
 }
 
 /* wiki.js releaseAll: every held key's up in the order they went down, `send` 0 when the
@@ -621,9 +683,37 @@ static void try_up(int k)
 static void try_release_all(int send)
 {
     int i;
-    for (i = 0; send && try_on() && i < s_ndown; i++) try_send(TRY_UP, s_down[i], 0, 0);
+    for (i = 0; send && try_up_on() && i < s_ndown; i++) try_send(TRY_UP, s_down[i], 0, 0);
     s_ndown = 0;
     s_downReal = 0;
+}
+
+/* A LIVE FRAME'S WORLD POINT (frame.js onWorld, wiki.js liveWorld): client point (cx, cy) through the
+   drawn frame's fit -- its `stage` hit, its unit and its column's rows, with tagpu_wikistage_fit, the
+   one function both threads fit a frame with -- when the topmost control of that frame under the point
+   is the stage itself, so no stage HUD control, no part of Leave's question and nothing of the page
+   lies over it, and the point is on the column or the map. The map is the held view's, the size every
+   simulation of the entry has. In world units as the game simulation takes them, the column's rows
+   starting at the top bar's first (sim.js DZ). A Watching frame takes none: its viewer is not seat 0. */
+static int live_world(int cx, int cy, double* wx, double* wz)
+{
+    char key[TAGPU_WIKI_KEY];
+    const TAGPU_CMD_WIKIHIT* h;
+    WIKISTAGEFIT f;
+    int src, Wg, Hg;
+    double x, z;
+    if (!live_try() || !s_frameHave) return 0;
+    h = hit_src(cx, cy, key, &src);
+    if (!h || src != WIKIHIT_PAGE || strcmp(key, "stage")) return 0;
+    tagpu_wikistage_fit(s_frameView.w, s_frameView.h, s_hit.side_h, 1, h->x1 - h->x0, h->y1 - h->y0, s_hit.u, &f);
+    tagpu_wikiframe_size(s_frameView.w, s_frameView.h, s_hit.side_h, &Wg, &Hg);
+    if (!(f.s > 0)) return 0;
+    x = (cx - h->x0 - f.ox) / f.s;
+    z = (cy - h->y0 - f.oz) / f.s;
+    if (!tagpu_wikiframe_on_world(x, z, Hg, s_frameView.w * WIKI_CELL, s_frameView.h * WIKI_CELL)) return 0;
+    *wx = x;
+    *wz = z;
+    return 1;
 }
 
 /* THE WORLD POINT COMES FROM THE FRAME THE PLAYER SAW: client point (cx, cy) on the stage of the
@@ -636,8 +726,8 @@ static void try_release_all(int send)
    drew (TAGPU_CMD_WIKI.side_h), not the running simulation's, which may have turned its sidebar
    on or off since -- a press is mapped through what the player saw, never through a column no
    frame has shown. The frame must have drawn the window open, for the entry selected now, with a
-   view on its stage. 0 when the point is not on that stage, and always on a whole game frame
-   (s_hit.frame): its viewer is not seat 0, so its world and its column take no click. */
+   view on its stage. 0 when the point is not on that stage. A whole game frame (s_hit.frame) is
+   live_world's. */
 static int stage_world(int cx, int cy, double* wx, double* wz)
 {
     const WIKIENTRY* e = entry_of(data());
@@ -645,7 +735,8 @@ static int stage_world(int cx, int cy, double* wx, double* wz)
     WIKISTAGEFIT f;
     double x, z;
     unsigned i;
-    if (!e || cx < 0 || !s_hit.drawn || !s_hit.open || !s_hit.view || s_hit.frame || s_hit.entry != s_entry) return 0;
+    if (!e || cx < 0 || !s_hit.drawn || !s_hit.open || !s_hit.view || s_hit.entry != s_entry) return 0;
+    if (s_hit.frame) return live_world(cx, cy, wx, wz);
     for (i = 0; i < s_hit.n && !h; i++)
         if (!strncmp(s_hit.hit[i].key, "stage", TAGPU_WIKI_KEY)) h = &s_hit.hit[i];
     if (!h || cx < h->x0 || cx >= h->x1 || cy < h->y0 || cy >= h->y1) return 0;
@@ -682,6 +773,7 @@ static int try_press(unsigned bit, int cx, int cy, int real)
     if (cx < 0 && !mouse_last_client(&cx, &cy)) return 0;
     if (!stage_world(cx, cy, &x, &z)) return 0;
     try_send(TRY_MOVE, -1, x, z);
+    live_flush();
     if (try_held(k) < 0) {
         if (real) s_downReal |= bit;
         else s_downReal &= ~bit;
@@ -1194,6 +1286,7 @@ static int replay_steps(int want)
     while (n < want && !s_rep.done && !pause_due()) {
         const int c = tagpu_wikireplay_cost(&s_rep);
         if (n && spent + c > WIKI_REPLAY_FILL) break;
+        live_flush();
         tagpu_wikireplay_step(&s_rep);
         spent += c;
         n++;
@@ -1201,28 +1294,55 @@ static int replay_steps(int want)
     return n;
 }
 
-/* TRY IT'S PRESS on the replay (the press machine's output): it acts at once. Leave, then Yes ends
-   Try it yourself (decision 23): the stage holds the replay it left, `left`, and the page offers
-   Try it again. */
+/* TRY IT'S PRESS on the replay (the press machine's output): it acts at once, after the pointer's
+   held world point (live_flush). Leave, then Yes ends Try it yourself (decision 23): the stage holds
+   the replay it left, `left`, and the page offers Try it again. A live rewind that leaves idle takes no
+   key or button of the world until it is idle again, and has let go of every one L held (its open,
+   and Back to now's release), so the page holds none down either (wiki.js pressOut). A fork's time,
+   the press that makes it, is said: the lane's cost (wiki_regression.py rewind). */
 static void replay_press(int control, int value)
 {
+    const int ntl = s_rep.ntl;
+    LARGE_INTEGER t0, t1;
+    live_flush();
+    QueryPerformanceCounter(&t0);
     tagpu_wikireplay_press(&s_rep, control, value);
+    QueryPerformanceCounter(&t1);
+    if (s_rep.live && s_rep.ntl > ntl)
+        tagpu_logf("wiki: the rewind forked F%d at %d in %.3f ms", s_rep.tl[s_rep.selected].id,
+                   s_rep.tl[s_rep.selected].R, s_qpf.QuadPart > 0 ? (double)(t1.QuadPart - t0.QuadPart) * 1000.0 /
+                                                                     (double)s_qpf.QuadPart : 0.0);
+    if (s_rep.live && s_rep.rw != WIKI_RW_IDLE) {
+        s_ndown = 0;
+        s_downReal = 0;
+    }
     if (s_rep.left) s_try = 0;
 }
 
 /* THE TRACK'S TICK under client column `cx`: its place on the playhead's run as the last frame drawn
-   it (TAGPU_CMD_WIKI hud_x0, hud_x1), clamped to the run, times the end that frame drew it with,
-   rounded, as the game's HUD maps a click (tagpu_hudinput.c seek_at). THE STALE AXIS: the run is the
-   render thread's data and turns a pixel into a tick only, and tagpu_wikireplay_press clamps the
-   tick to the game again, so an axis a frame old costs a seek to a slightly different tick, never
-   one outside the demo. 0 when no track was drawn. */
+   it (TAGPU_CMD_WIKI hud_x0, hud_x1), clamped to the run, then rounded on the span that frame drew the
+   run for -- a replay's [0, end] (hud_end), as the game's HUD maps a click (tagpu_hudinput.c seek_at),
+   a live strip's [first, max(G, first)] (hud_first, hud_G), as live_seek_at maps one.
+   THE ORDERING: the run, the span and rep_serial are written by the render thread in one
+   tagpu_wikistate_drawn, all from the record of the one packet it drew, and reach this thread whole,
+   by value, in the command record tagpu_wiki_take copies; every caller first asks frame_current, so
+   the map is of the replay running now. No new lock or handshake: the command record is the only
+   way in. THE STALE AXIS (THE BOUND): the run and the span are the render thread's data and turn a
+   pixel into a tick only, and tagpu_wikireplay_press clamps the tick to the game again -- live, to
+   the rewind's own span, whose G may be a later open's than the frame drawn -- so an axis a frame old
+   costs a seek to a slightly different tick, never one outside the demo. 0 when no track was drawn. */
 static int track_tick(int cx)
 {
     const int x0 = s_hit.hud_x0, x1 = s_hit.hud_x1;
     double f;
-    if (x1 <= x0 || s_hit.hud_end <= 0) return 0;
+    if (x1 <= x0) return 0;
     f = (double)(cx - x0) / (double)(x1 - x0);
     f = f < 0 ? 0 : f > 1 ? 1 : f;
+    if (s_rep.live) {
+        const int first = s_hit.hud_first, G = s_hit.hud_G > first ? s_hit.hud_G : first;
+        return first + (int)(f * (double)(G - first) + 0.5);
+    }
+    if (s_hit.hud_end <= 0) return 0;
     return (int)(f * (double)s_hit.hud_end + 0.5);
 }
 
@@ -1294,9 +1414,17 @@ static void replay_fill(TAGPU_PK_WIKI* w, const WIKIENTRY* e)
         s_frameHave = 1;
     }
     tagpu_wikiframe_record(&rv, s_frameHave ? &s_heldGv : NULL, s_ctx.side, s_repTry, s_press.held, &w->frame);
-    /* the armed building's ghost goes with the simulation's cursor. Try it's world input reaches no
-       game frame (stage_world), so in Try it the player's own pointer is the one cursor */
-    if (shown) tagpu_wikiframe_view(&s_frameView, s_lay, s_ctx.side, s_laySrc, mode, w->frame.simcur && !s_repTry);
+    /* THE ONE CURSOR (rewind-spec.md 9.5): the armed building's ghost goes with the simulation's cursor,
+       drawn in a demo whenever it is the one drawn, and in Try it only while the player's pointer lies
+       on the live frame's world (stage_world), where the stage draws the simulation's cursor at the
+       pointer. try_world carries that one answer to the render thread, so the ghost and the cursor
+       are never decided apart. */
+    {
+        double x, z;
+        w->try_world = (uint8_t)(s_repTry && w->frame.simcur && w->ptr_x >= 0 && stage_world(w->ptr_x, w->ptr_y, &x, &z));
+    }
+    if (shown)
+        tagpu_wikiframe_view(&s_frameView, s_lay, s_ctx.side, s_laySrc, mode, w->frame.simcur && (!s_repTry || w->try_world));
     if (!s_frameHave) {
         /* a seek began before any world was shown (a capture asked mid-seek): wiki.js says the same */
         if (!w->msg[0]) lstrcpynA(w->msg, "loading\xE2\x80\xA6", sizeof w->msg);
@@ -1932,6 +2060,8 @@ void tagpu_wiki_take(const TAGPU_CMD_WIKI* c)
     if (s_hit.side_h < 0 || s_hit.side_h > WIKI_SIDE_ROWS) s_hit.side_h = 0;
     s_hit.frame = (uint8_t)(s_hit.frame != 0);
     if (s_hit.hud_end < 0 || s_hit.hud_end > WIKI_GAME_END_MAX) s_hit.hud_end = 0;
+    if (s_hit.hud_first < 0 || s_hit.hud_G < s_hit.hud_first || s_hit.hud_G > WIKI_GAME_END_MAX)
+        s_hit.hud_first = s_hit.hud_G = 0;
     for (i = 0; i < (int)TAGPU_WIKI_NSCROLL; i++) {
         s_hit.scroll_max[i] = bounded(s_hit.scroll_max[i], 1e6f);
         s_hit.scroll[i] = bounded(s_hit.scroll[i], s_hit.scroll_max[i]);
@@ -2035,7 +2165,77 @@ static void frame_json(FILE* f, const WIKIFRAMEREC* r)
     jstr(f, r->cur.from, sizeof r->cur.from);
     fprintf(f, ",\"to\":");
     jstr(f, r->cur.to, sizeof r->cur.to);
-    fprintf(f, ",\"from_v\":%d,\"to_v\":%d,\"i\":%d,\"n\":%d}}", (int)r->cur.from_v, (int)r->cur.to_v, r->cur.i, r->cur.n);
+    fprintf(f, ",\"from_v\":%d,\"to_v\":%d,\"i\":%d,\"n\":%d}", (int)r->cur.from_v, (int)r->cur.to_v, r->cur.i, r->cur.n);
+    fprintf(f, ",\"live\":%d,\"rw\":%d,\"arm\":%d,\"first\":%d,\"G\":%d,\"now\":%d,\"last\":%d,\"armR\":%d,"
+               "\"bar\":{\"e\":%.9g,\"m\":%.9g,\"ei\":%.9g,\"eo\":%.9g,\"mi\":%.9g,\"mo\":%.9g,\"emax\":%.9g,"
+               "\"mmax\":%.9g,\"raw_e\":%.9g,\"raw_m\":%.9g},\"simcur\":%d,\"sim\":{\"x\":%.9g,\"z\":%.9g,"
+               "\"shape\":%d,\"age\":%d}}", r->live, r->rw, r->arm, (int)r->first, (int)r->G, (int)r->now, (int)r->last,
+            (int)r->arm_R, r->bar.e, r->bar.m, r->bar.ei, r->bar.eo, r->bar.mi, r->bar.mo, r->bar.emax, r->bar.mmax,
+            r->bar.raw_e, r->bar.raw_m, r->simcur, r->sim.x, r->sim.z, r->sim.shape, (int)r->sim.age);
+}
+
+/* A LIVE REPLAY'S STATE, for the lane (tools/wiki_regression.py rewind): the rewind, the arm, the
+   timelines and the past simulation as the replay's view gives them, and the world shown -- the past
+   simulation's while the past is shown, else the live one's -- as the lane reads it back: its tick,
+   the armed type, the units with their selection and build, the sites, the economy's mode, the keys
+   held and its column. Called after the fill, so the view taken here is read before any step can
+   free its simulation. */
+static void live_json(FILE* f, const WIKIREPLAYVIEW* rv)
+{
+    WIKISIM* g = rv->rw == WIKI_RW_PAST ? tagpu_wikireplay_past(&s_rep) : tagpu_wikireplay_game(&s_rep);
+    const WIKIVIEW* v;
+    const WIKIENTRY* en;
+    int i, n;
+    fprintf(f, ",\"live\":{\"rw\":%d,\"G\":%d,\"first\":%d,\"last\":%d,\"now\":%d,\"arm\":%d,\"arm_R\":%d,"
+               "\"arm_evict\":%d,\"drag_t\":%d,\"clash\":%d,\"nlogged\":%d,\"selected\":%d,\"full\":%d,\"back\":%d,"
+               "\"toast_evict\":%d,\"past\":", rv->rw, rv->G, rv->first, rv->last, rv->now, rv->arm, rv->arm_R, rv->arm_evict,
+            rv->drag_t, rv->clash, rv->nlogged, rv->selected, rv->full, rv->back, rv->toast_evict);
+    if (rv->has_past) fprintf(f, "{\"tick\":%d,\"target\":%d,\"gen\":%d}", rv->past_tick, rv->past_target, rv->past_gen);
+    else fputs("null", f);
+    fprintf(f, ",\"timelines\":[");
+    for (i = 0; i < rv->ntl && i < RECR_TIMELINES; i++)
+        fprintf(f, "%s{\"id\":%d,\"parent\":%d,\"R\":%d,\"last\":%d,\"live\":%d,\"used\":%d,\"mode\":%d,\"nlog\":%d}",
+                i ? "," : "", rv->tl[i].id, rv->tl[i].parent, rv->tl[i].R, rv->tl[i].last, rv->tl[i].live, rv->tl[i].used,
+                rv->tl[i].mode, rv->tl[i].nlog);
+    fprintf(f, "],\"world\":");
+    if (!g) {
+        fputs("null}", f);
+        return;
+    }
+    v = tagpu_wikisim_view(g);
+    en = g->entry;
+    fprintf(f, "{\"tick\":%d,\"mode\":", g->tick);
+    jstr(f, v->mode >= 0 && v->mode < en->ndef ? en->def[v->mode].name : "", 64);
+    fprintf(f, ",\"econ_mode\":%d,\"starved\":%d,\"has_ghost\":%d,\"ghost_ok\":%d,\"nsite\":%d,\"nqueued\":%d,"
+               "\"cursor\":[%.9g,%.9g],\"held\":[", v->econ_mode, v->starved, v->has_ghost, v->has_ghost && v->ghost.ok,
+            v->nsite, v->nqueued, v->cursor_x, v->cursor_z);
+    for (i = n = 0; i < WIKI_NKEYS; i++)
+        if (v->held[i]) {
+            if (n++) fputc(',', f);
+            jstr(f, key_name(i), 16);
+        }
+    fprintf(f, "],\"units\":[");
+    for (i = 0; i < v->nunit; i++) {
+        const WIKIVUNIT* u = &v->unit[i];
+        fprintf(f, "%s{\"id\":", i ? "," : "");
+        jstr(f, u->id ? u->id : "", WIKI_ID_MAX);
+        fprintf(f, ",\"type\":");
+        jstr(f, u->type >= 0 && u->type < en->ndef ? en->def[u->type].name : "", 64);
+        fprintf(f, ",\"owner\":%d,\"selected\":%d,\"x\":%.9g,\"z\":%.9g,\"built\":%.9g}", u->owner, u->selected, u->x,
+                u->z, u->built);
+    }
+    fprintf(f, "],\"side\":");
+    if (v->has_side && s_lay && v->side.screen >= 0 && v->side.screen < s_lay->nscreen) {
+        fprintf(f, "{\"screen\":");
+        jstr(f, s_lay->screen[v->side.screen].name, WIKI_SIDE_NAME);
+        fprintf(f, ",\"unit\":");
+        jstr(f, v->side.unit, sizeof v->side.unit);
+        fprintf(f, ",\"page\":%d,\"state\":[", v->side.page);
+        for (i = 0; i < v->side.nstate && i < WIKI_SIDE_GADGETS; i++) fprintf(f, "%s%d", i ? "," : "", v->side.state[i]);
+        fputs("]}", f);
+    } else
+        fputs("null", f);
+    fputs("}}", f);
 }
 
 /* THE STATE, FOR THE TESTS (tools/wiki_regression.py): written when tagpu_wiki.dump appears, after
@@ -2094,7 +2294,8 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
                    "\"press_held\":", rv.tick, rv.clock, rv.game_tick, rv.end, rv.playhead, rv.paused, rv.speed,
                 rv.target, rv.gen, rv.walked, rv.left, s_repTry);
         jstr(f, s_press.held, sizeof s_press.held);
-        fprintf(f, "},\"frame\":");
+        if (rv.live) live_json(f, &rv);
+        fprintf(f, "},\"try_world\":%d,\"frame\":", w->try_world);
         frame_json(f, &w->frame);
     }
     /* the caption as the record carries it, filled, its UTF-8 as it is */
@@ -2160,8 +2361,8 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
                 b->x0, b->y0, b->x1, b->y1, b->thumb_y, b->thumb_h, b->per_px);
     }
     fprintf(f, "],\"drawn\":%u,\"drawn_open\":%u,\"drawn_entry\":%d,\"drawn_frame\":%u,\"hud_run\":[%d,%d,%ld],"
-               "\"hits\":[", (unsigned)s_hit.drawn, (unsigned)s_hit.open, (int)s_hit.entry, (unsigned)s_hit.frame,
-            s_hit.hud_x0, s_hit.hud_x1, (long)s_hit.hud_end);
+               "\"hud_span\":[%ld,%ld],\"hits\":[", (unsigned)s_hit.drawn, (unsigned)s_hit.open, (int)s_hit.entry,
+            (unsigned)s_hit.frame, s_hit.hud_x0, s_hit.hud_x1, (long)s_hit.hud_end, (long)s_hit.hud_first, (long)s_hit.hud_G);
     for (i = 0; i < s_hit.n; i++) {
         const TAGPU_CMD_WIKIHIT* h = &s_hit.hit[i];
         fprintf(f, "%s{\"key\":", i ? "," : "");

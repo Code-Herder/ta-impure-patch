@@ -31,7 +31,7 @@
 /* THE HIT MAP: every control a frame of the wiki draws -- the page's WIKI_MAXHOT, a frame:game
    stage's HUD's HUD_MAXHOT and Leave's question's four (tagpu_wikistate.c holds the two bounds to
    these numbers at build time) */
-#define TAGPU_CMD_WIKIHITS (160u + 128u + 4u)   /* TAGPU_CMD_WIKI is 10032 bytes (sizeof, the DLL's
+#define TAGPU_CMD_WIKIHITS (160u + 128u + 4u)   /* TAGPU_CMD_WIKI is 10040 bytes (sizeof, the DLL's
                                                    compiler): tagpu_packet.c's assert holds the
                                                    command record to its reserve                  */
 #define TAGPU_WIKI_FOLDS   32u      /* fold words: a bit for each of the tree's 1024 nodes the
@@ -85,6 +85,12 @@ typedef struct TAGPU_PK_WIKI {
                                    layout's sides, and the game thread names a side only after
                                    it read WIKISIDE_READY, which is final                    */
     char     held[TAGPU_WIKI_KEY];          /* the control held down; "" none                */
+    uint8_t  try_world;         /* Try it on a live frame: the pointer (ptr_x, ptr_y) lies on
+                                   the frame's world as the game thread mapped it, through the
+                                   hit map it read (tagpu_wiki.c stage_world). The one fact both
+                                   halves of THE ONE CURSOR read: the view keeps the armed
+                                   building's ghost and the stage draws the simulation's cursor
+                                   at the pointer only with it; data, taken as 0 or 1          */
     uint32_t fold[TAGPU_WIKI_FOLDS];        /* bit n: tree node n is folded                  */
     float    scroll[TAGPU_WIKI_NSCROLL];    /* each panel's offset, units, as asked: the layout
                                                holds it to the limit                         */
@@ -137,6 +143,11 @@ typedef struct TAGPU_CMD_WIKI {
     int16_t  hud_x0, hud_x1;    /* the stage HUD's playhead run as drawn, client pixels; equal:
                                    no track was drawn                                        */
     int32_t  hud_end;           /* the game tick the run's end stood for (the record's end)   */
+    int32_t  hud_first, hud_G;  /* a live strip's drawn span, game ticks: the run stood for
+                                   [first, max(G, first)] (the record's); 0, 0 on any other
+                                   frame. DATA: it turns a pixel into a tick only, and the
+                                   replay clamps the tick to its own span (tagpu_wiki.c
+                                   track_tick)                                               */
     uint32_t rep_serial;        /* TAGPU_PK_WIKI.rep_serial of the packet that frame drew: the
                                    replay its stage HUD, its run and its end are of; data,
                                    compared for equality only                                */
