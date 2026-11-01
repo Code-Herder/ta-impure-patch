@@ -9,7 +9,7 @@
   "text": [
     "A skirmish records itself as it plays. The rewind button in the top bar holds the game still and opens a strip under the bar: back 10 s, forward 10 s, or a time on its track.",
     "Play from here plays the game on from the past, as a fork: a timeline of its own, which can be rewound and forked again. A fork starts only where the recording keeps a whole world, every 10 s, and the game keeps at most three forks.",
-    "In the game the other players go on as computer players after a fork."
+    "In the game the other players go on as computer players after a fork. Here every timeline stops at 1:30, a fork of your own in Try it yourself too."
   ],
   "units": {
     "ARMCOM": {

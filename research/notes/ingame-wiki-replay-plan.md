@@ -177,8 +177,11 @@ it on its own.
 
 **Decisions taken in the build**, each held by both simulations and checked by `simcheck.mjs`:
 
-- **The game's end is 2700 ticks** (1:30) in every demo. Every timeline holds at it, a Try-it
-  fork's included (decision 26), and a seek to it takes 43 steps of `WIKI_REPLAY_SEEK` (64).
+- **The game's end is 2700 ticks** (1:30) in every demo, long enough for the stall case to run
+  dry in every pack with the units' scripts playing: a builder starts work only once its script's
+  INBUILDSTANCE gate opens, and TA Twilight's game runs dry only by tick 2250 (MEASURED 2026-11-01;
+  1800 left it unstarved). Every timeline holds at it, a Try-it fork's included (decision 26), and a
+  seek to it takes 43 steps of `WIKI_REPLAY_SEEK` (64).
 - **Seat 0 builds through the ARMCK.** The fixture layout (`art/wiki/side/fixture.json`), the
   sidebar the offline checks play, pages a build menu on the ARM side only for ARMCK and ARMACK,
   so the commander has none there: in the four demos with the sidebar the opening's ARMSOLAR and
