@@ -8205,9 +8205,10 @@ static void tk_live(char* ta, unsigned P)
    No step of the takeover needs the pause: R0..R17 and TK0..TK4b run inside this one frame visit;
    the next frame's pause test 0x496920 passes, its step makes GameTime T, and that step's capture
    point 0x4954ED starts the timeline tagpu_rec_fork_arm armed.
-   What it keeps: a pause the test pacing took (s_pause_taken), which `resume` ends; and no window
-   holds a pause here, because the in-game wiki does not open while a takeover is queued
-   (pause_in_flight, tagpu_wiki.c).
+   What it keeps: a pause the test pacing took (s_pause_taken), which `resume` ends. No other
+   writer of ours holds the bit to put it back later: the in-game wiki does not open while a
+   takeover is queued (pause_in_flight, tagpu_wiki.c), and Leave and Take over exclude each other
+   (tagpu_hudinput.c, s_leaveWant).
    THE BOUND beside the write: a network game never reaches here -- a playing's level is single
    player: the Start's and Watch's refusals, and play never sets main+0x2A44 bit 0 -- so the write
    is the Pause key's flip 0x4960AA..0x4960BC without its message 0x19 (0x49609F..0x4960E0,
@@ -8215,9 +8216,16 @@ static void tk_live(char* ta, unsigned P)
    The first unpaused frame runs up to five ticks: the scheduler was not called while paused, so
    its elapsed (0x495236..0x495255: clock - base, then base = clock) is the whole pause and its
    due clamps to 5 (0x4953EF..0x4953FE, DISASSEMBLED), as after the Pause key.
-   A menu that opens after the Take over click and before this visit (two inputs in one frame)
-   finds the live game running, as a network game's menu does; its close (0x460A33) leaves it
-   running.
+   A MENU OPENED BEFORE THIS VISIT HOLDS THE WORLD ITSELF. The in-game key handler 0x495E90 runs at
+   0x496971, before this visit at the draw call 0x4969CD; its menu case calls the in-game menu's
+   set-up 0x460CC0 (0x4961B7), which sets the pause (0x460E00), and then sets main+0x37EBE bit 0
+   (0x4961C1), as the menu button (0x49477E) and the options opener (0x45D002) do. Clearing the
+   pause here leaves that bit, and the next frame tests it at 0x496918 and jumps at 0x49691E to
+   0x49697B, past the pause test, the scheduler and the step, so the world stays held until the
+   menu's close clears both (0x460A33, 0x460A3F) [DISASSEMBLED]. Options opened directly close
+   through handlers that clear main+0x37EBE bit 0 alone (0x45D2B1 and five others, engine/sim.md
+   *The menus' pause*), so the game runs on at that close where without the takeover it would stay
+   paused: the running live game this run is for.
    Returns the takeover line's tail, what the run did, so the line is true in every case. */
 static const char* tk_run(char* ta)
 {
@@ -10656,7 +10664,10 @@ void tagpu_replay_rewind_state(TAGPU_REPLAY_RWSTATE* out)
     }
     out->G = s_rw.G;
     out->T = s_rw.T;
-    out->tk_queued = s_seek.pending && s_seek.mode == SK_TAKEOVER;
+    /* the frame visit's own gate (frame_visit): a takeover queued on a level whose first step
+       then failed (s_dead) is never run, so it is not queued */
+    out->tk_queued = tagpu_puppet_on() && s_rd && !s_dead && s_seek.pending &&
+                     s_seek.mode == SK_TAKEOVER;
 }
 
 void tagpu_replay_result(TAGPU_REPLAY_RESULT* out)
