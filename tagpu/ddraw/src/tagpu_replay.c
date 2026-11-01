@@ -10653,6 +10653,7 @@ void tagpu_replay_rewind_state(TAGPU_REPLAY_RWSTATE* out)
     }
     out->G = s_rw.G;
     out->T = s_rw.T;
+    out->tk_queued = s_seek.pending && s_seek.mode == SK_TAKEOVER;
 }
 
 void tagpu_replay_result(TAGPU_REPLAY_RESULT* out)

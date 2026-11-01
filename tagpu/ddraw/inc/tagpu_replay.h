@@ -188,6 +188,8 @@ typedef struct TAGPU_REPLAY_RWSTATE {
     unsigned first, last;    /* the live recording's span while one is open                 */
     unsigned G;              /* the GameTime the rewind opened at: now                       */
     unsigned T;              /* the last seek's target; 0 none yet                           */
+    int      tk_queued;      /* a takeover waits for the frame visit, whose run ends the
+                                playing's pause (tk_run)                                     */
 } TAGPU_REPLAY_RWSTATE;
 void tagpu_replay_rewind_state(TAGPU_REPLAY_RWSTATE* out);
 
