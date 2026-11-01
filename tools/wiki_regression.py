@@ -778,9 +778,9 @@ def page(c, shot=None):
     if shot:
         grab(c, shot)
 
-    # Building's leaves are nodes 2 and 3; Reclaiming's entry, node 5, and the Replays category's Watching and
-    # Rewind, nodes WATCH_NODE and the next, are drawn either way
-    rest = sorted(["entry:5", f"entry:{WATCH_NODE}", f"entry:{tree_node(REWIND)}"])
+    # Building's leaves are nodes 2 and 3; Reclaiming's entry, node 5, and the Replays category's Watching, Take over
+    # and Rewind are drawn either way
+    rest = sorted(["entry:5", f"entry:{WATCH_NODE}", f"entry:{tree_node(TAKEOVER)}", f"entry:{tree_node(REWIND)}"])
     press(c, d, "fold:1")
     d = wait_dump(c, lambda d: d["folds"] == [1] and keys_of(d, "entry:") == rest, "(p3) fold:1 did not fold Building")
     press(c, d, "fold:1")
