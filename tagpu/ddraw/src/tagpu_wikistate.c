@@ -18,6 +18,10 @@
 #include "tagpu_wikibar.h"
 #include "tagpu_wikiframe.h"
 
+/* the frame record's fork block is the packet's (tagpu_wikiframe.h, THE FORKS THE STAGE HUD LISTS) */
+typedef char wikistate_forks_are_the_packets[WIKIFRAME_FORKS == TAGPU_PK_HUD_FORKS && WIKIFRAME_FORK_WATCHED == TAGPU_PK_FORK_WATCHED &&
+                                             WIKIFRAME_FORK_CHAIN == TAGPU_PK_FORK_CHAIN && WIKIFRAME_FORK_ARMED == TAGPU_PK_FORK_ARMED ? 1 : -1];
+
 static HUDOPS        s_ops;             /* the page's; 400 KB, never on a stack                  */
 static WIKISTAGEOPS  s_stage;           /* the stage's; 0.9 MB                                   */
 static WIKISTAGEVIEW s_view;            /* the record's stage, copied and bounded as data        */
@@ -71,16 +75,15 @@ static int          s_dlgX, s_dlgY;     /* the canvas's corner on the attachment
 static HUDOP        s_top[WIKISTATE_TOPMAX];
 static int          s_ntop, s_saidTop;
 /* THE FRAME'S BARS (tagpu_wikibar.h): composed when what they are composed of changes -- the
-   published sidebar art, which is immutable, and the side, the colour and the frame's size -- and
-   only then, which is exact, since the composer is pure and its numbers are fixed: the viewed
-   record is the viewer's, whose every number is 0 (presentation spec 3.5). A new composition moves
-   the generation, which tagpu_vk_hud.c sends whole. This thread's alone. */
+   published sidebar art, which is immutable, the side, the top bar's side, the colour, the frame's
+   size and the numbers (bar_bind) -- and only then, which is exact, since the composer is pure. A
+   new composition moves the generation, which tagpu_vk_hud.c sends whole. This thread's alone. */
 static uint8_t          s_barIdx[WIKIBAR_W * WIKIBAR_H];          /* 128 KB               */
 static unsigned char    s_barRgba[WIKIBAR_W * WIKIBAR_H * 4];     /* 512 KB               */
 static unsigned         s_barGen;       /* bumped at every new composition; 0: none yet       */
 static int              s_barW;         /* its width, -1 when the key composes nothing        */
 static const WIKISIDE*  s_barOf;
-static int              s_barSide = -2, s_barColour = -1, s_barWg, s_barHg;
+static int              s_barSide = -2, s_barTop = -2, s_barColour = -1, s_barWg, s_barHg;
 static WIKIFRAMEBAR     s_barNum;       /* the numbers composed                               */
 /* what the stage HUD costs this thread, told when the window closes */
 static LARGE_INTEGER    s_qpf;
@@ -328,14 +331,16 @@ const unsigned char* tagpu_wikistate_bar(unsigned* gen)
 
 /* the bars for the bounded record on `side`'s art in a frame Wg x Hg, showing its numbers (a live
    frame's memo, Watching's zeros): their width, 0 for the whitebox strips. Composed again only when
-   the art, the side, the badge, the size or a number changes. A live frame's numbers include seat
-   0's stored values, which move whenever the economy flows, so its bars are composed again about
-   once a game tick; Watching's are zeros and compose once. */
+   the art, the side, the top bar's side, the badge, the size or a number changes. A live frame's
+   numbers include the human seat's stored values, which move whenever the economy flows, so its
+   bars are composed again about once a game tick; Watching's are zeros and compose once. The top
+   bar is the record's top_side's (decision 15), the human seat's in a takeover's live game and the
+   side everywhere else. */
 static int bar_bind(const WIKISIDE* side, int Wg, int Hg)
 {
     if (!side) return 0;
-    if (side != s_barOf || s_rec.side != s_barSide || s_rec.colour != s_barColour || Wg != s_barWg || Hg != s_barHg ||
-        memcmp(&s_rec.bar, &s_barNum, sizeof s_barNum)) {
+    if (side != s_barOf || s_rec.side != s_barSide || s_rec.top_side != s_barTop || s_rec.colour != s_barColour ||
+        Wg != s_barWg || Hg != s_barHg || memcmp(&s_rec.bar, &s_barNum, sizeof s_barNum)) {
         const WIKIFRAMEBAR* b = &s_rec.bar;
         WIKIBARNUM n;
         memset(&n, 0, sizeof n);
@@ -344,11 +349,13 @@ static int bar_bind(const WIKISIDE* side, int Wg, int Hg)
         n.raw_e = b->raw_e; n.raw_m = b->raw_m;
         s_barOf = side;
         s_barSide = s_rec.side;
+        s_barTop = s_rec.top_side;
         s_barColour = s_rec.colour;
         s_barWg = Wg;
         s_barHg = Hg;
         s_barNum = s_rec.bar;
-        s_barW = s_rec.side < 0 ? -1 : tagpu_wikibar_compose(side, s_rec.side, s_rec.colour, Wg, Hg, &n, s_barIdx);
+        s_barW = s_rec.side < 0 || s_rec.top_side < 0 ? -1
+                 : tagpu_wikibar_compose(side, s_rec.side, s_rec.top_side, s_rec.colour, Wg, Hg, &n, s_barIdx);
         if (s_barW > 0) {
             tagpu_wikibar_rgba(side, s_barIdx, s_barW, s_barRgba);
             if (++s_barGen == 0) s_barGen = 1;

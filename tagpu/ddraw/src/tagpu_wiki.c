@@ -1381,7 +1381,7 @@ static void replay_fill(TAGPU_PK_WIKI* w, const WIKIENTRY* e)
     WIKISIM* g;
     const char* cap;
     uint32_t t = 0;
-    int shown, mode;
+    int shown, mode, human;
     tagpu_wikireplay_view(&s_rep, &rv);
     mode = !rv.live ? WIKIFRAME_WATCH : rv.rw == WIKI_RW_PAST ? WIKIFRAME_PAST : WIKIFRAME_PLAYER;
     g = mode == WIKIFRAME_PAST ? tagpu_wikireplay_past(&s_rep) : tagpu_wikireplay_game(&s_rep);
@@ -1390,9 +1390,11 @@ static void replay_fill(TAGPU_PK_WIKI* w, const WIKIENTRY* e)
         s_repQuiet = rv.quiet;
         s_heard = rv.quiet;
     }
+    /* the human seat's view: seat 0's but in a takeover's live game, the seat taken over's */
+    human = rv.live ? rv.human : 0;
     shown = rv.target < 0 && g;
     if (shown) {
-        const WIKIVIEW* v = tagpu_wikisim_view(g);
+        const WIKIVIEW* v = tagpu_wikisim_view_as(g, human);
         int k;
         t = tagpu_wikistage_copy(&s_frameView, v, g->entry, s_laySrc) & ~WIKISTAGE_TRUNC_CAPTION;
         s_heldGv.game = v->game;
@@ -1413,11 +1415,12 @@ static void replay_fill(TAGPU_PK_WIKI* w, const WIKIENTRY* e)
         s_frameView.tick = g->tick;
         if (mode == WIKIFRAME_PAST) {
             WIKISIM* L = tagpu_wikireplay_game(&s_rep);
-            tagpu_wikistage_side(&s_frameView, L ? tagpu_wikisim_view(L) : NULL, s_laySrc);
+            tagpu_wikistage_side(&s_frameView, L ? tagpu_wikisim_view_as(L, human) : NULL, s_laySrc);
         }
         s_frameHave = 1;
     }
-    tagpu_wikiframe_record(&rv, s_frameHave ? &s_heldGv : NULL, s_ctx.side, s_repTry, s_press.held, &w->frame);
+    tagpu_wikiframe_record(&rv, s_frameHave ? &s_heldGv : NULL, s_ctx.side, s_repTry, s_press.held,
+                           tagpu_wikiframe_seat_side(s_lay, s_ctx.side, human), &w->frame);
     /* THE ONE CURSOR (rewind-spec.md 9.5): the armed building's ghost goes with the simulation's cursor,
        drawn in a demo whenever it is the one drawn, and in Try it only while the player's pointer lies
        on the live frame's world (stage_world), where the stage draws the simulation's cursor at the
@@ -1428,7 +1431,8 @@ static void replay_fill(TAGPU_PK_WIKI* w, const WIKIENTRY* e)
         w->try_world = (uint8_t)(s_repTry && w->frame.simcur && w->ptr_x >= 0 && stage_world(w->ptr_x, w->ptr_y, &x, &z));
     }
     if (shown)
-        tagpu_wikiframe_view(&s_frameView, s_lay, s_ctx.side, s_laySrc, mode, w->frame.simcur && (!s_repTry || w->try_world));
+        tagpu_wikiframe_view(&s_frameView, s_lay, s_ctx.side, s_laySrc, mode, w->frame.simcur && (!s_repTry || w->try_world),
+                             human);
     if (!s_frameHave) {
         /* a seek began before any world was shown (a capture asked mid-seek): wiki.js says the same */
         if (!w->msg[0]) lstrcpynA(w->msg, "loading\xE2\x80\xA6", sizeof w->msg);
@@ -1793,7 +1797,9 @@ static void check(void)
 static void frame_down(int src, const char* key, int cx)
 {
     int c, v;
-    if (frame_try() && frame_current() && tagpu_wikiframe_press_down(&s_press, src, key, 0, track_tick(cx), &c, &v))
+    /* no lane is known to have been drawn: the command record carries none, so a lane's control is
+       taken and does nothing (tagpu_wikiframe.h, THE INDEXED CONTROLS) */
+    if (frame_try() && frame_current() && tagpu_wikiframe_press_down(&s_press, src, key, 0, track_tick(cx), NULL, 0, &c, &v))
         replay_press(c, v);
 }
 
@@ -1816,7 +1822,7 @@ static void frame_up(void)
         T = track_tick(cx);
     } else
         T = s_press.last;
-    if (tagpu_wikiframe_press_up(&s_press, on ? key : "", T, &c, &v)) replay_press(c, v);
+    if (tagpu_wikiframe_press_up(&s_press, on ? key : "", T, NULL, 0, &c, &v)) replay_press(c, v);
 }
 
 /* A press of button `bit` at client point (cx, cy), engine point (gx, gy), from either path:

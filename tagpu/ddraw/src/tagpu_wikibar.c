@@ -162,23 +162,30 @@ static void right(const BAR* b, const char* s, int rect, uint8_t col)
    truncating as Math.trunc does */
 static void kilo(double v, char* out, size_t n) { snprintf(out, n, "%ldK", (long)(ftol(v) / 1000)); }
 
-int tagpu_wikibar_compose(const WIKISIDE* sd, int side, int colour, int Wg, int Hg, const WIKIBARNUM* n, uint8_t* idx)
+/* a side with bar art whose frames lie in the sheet: what both sides of a composition are held to */
+static int side_ok(const WIKISIDE* sd, int side)
+{
+    return side >= 0 && side < sd->layout.nside && side < WIKI_SIDE_SIDES && sd->has_bar[side] && frame_ok(sd, &sd->bar[side].top) &&
+           frame_ok(sd, &sd->bar[side].bot);
+}
+
+int tagpu_wikibar_compose(const WIKISIDE* sd, int side, int top, int colour, int Wg, int Hg, const WIKIBARNUM* n, uint8_t* idx)
 {
     BAR b;
-    const WIKIBARART* B;
+    const WIKIBARART *B, *L;
     const uint8_t* gui;
     char s[64];
     int x, first, r;
     memset(idx, 0, (size_t)WIKIBAR_W * WIKIBAR_H);
-    if (!sd || !n || side < 0 || side >= sd->layout.nside || side >= WIKI_SIDE_SIDES || !sd->has_bar[side] ||
-        !sd->has_gui || Wg - COL < 1 || Wg - COL > WIKIBAR_W || Hg < 2 * ROWS)
+    if (!sd || !n || !side_ok(sd, side) || !side_ok(sd, top) || !sd->has_gui || Wg - COL < 1 || Wg - COL > WIKIBAR_W ||
+        Hg < 2 * ROWS)
         return -1;
-    B = &sd->bar[side];
+    /* THE TWO SIDES (tagpu_wikibar.h): the top bar's art is `top`'s, the bottom bar's `side`'s */
+    B = &sd->bar[top];
+    L = &sd->bar[side];
     gui = sd->gui;
-    /* the bounds the reads below rest on, which the loader holds for a published block */
-    if (!frame_ok(sd, &B->top) || !frame_ok(sd, &B->bot) || B->font_off > WIKI_FNT_BYTES ||
-        B->font_len > WIKI_FNT_BYTES - B->font_off || B->font_len < 4 + 2 * 256)
-        return -1;
+    /* the bounds the font's reads below rest on, which the loader holds for a published block */
+    if (B->font_off > WIKI_FNT_BYTES || B->font_len > WIKI_FNT_BYTES - B->font_off || B->font_len < 4 + 2 * 256) return -1;
     b.sd = sd;
     b.B = B;
     b.idx = idx;
@@ -207,8 +214,8 @@ int tagpu_wikibar_compose(const WIKISIDE* sd, int side, int colour, int Wg, int 
         }
     }
 
-    /* THE TILES, 0x469050..0x46909D: from frame column 129 while x < Wg, PANELTOP[side] for the
-       first tile and PANELBOT[side] for every later one (the index s + 5 x (x > 0x81)), each frame 0
+    /* THE TILES, 0x469050..0x46909D: from frame column 129 while x < Wg, PANELTOP[top] for the
+       first tile and PANELBOT[top] for every later one (the index s + 5 x (x > 0x81)), each frame 0
        at its top left, x advanced by its width (at least 1: frame_ok). PANELBOT is 33 rows; its
        last lands on the viewport's first row, outside this picture. */
     for (x = TILE_X, first = 1; x < Wg; first = 0) {
@@ -269,8 +276,9 @@ int tagpu_wikibar_compose(const WIKISIDE* sd, int side, int colour, int Wg, int 
     at(&b, s, WB_METALCONSUMED, gui[GUI_EXPENSE]);
 
     /* THE BOTTOM BAR, 0x46A860 (0x46A8A6..0x46A8D5): PANELBOT[side] tiled from frame column 129
-       along the frame's last 32 rows, and nothing else on it while nothing is selected. */
-    for (x = TILE_X; x < Wg; x += B->bot.w) blit(&b, &B->bot, B->bot_key, x - COL, ROWS, ROWS, WIKIBAR_H);
+       along the frame's last 32 rows, and nothing else on it while nothing is selected; the load's
+       side whatever the top bar's. */
+    for (x = TILE_X; x < Wg; x += L->bot.w) blit(&b, &L->bot, L->bot_key, x - COL, ROWS, ROWS, WIKIBAR_H);
 
     return b.w;
 }

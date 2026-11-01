@@ -6,7 +6,7 @@
    game entry the file ENTRY holds through the replay layer, its viewer's script played, in the
    context the arguments give (simparity.mjs's: the layout LAYOUT of PAK or "-", the castings in the
    files CASTING and RIVAL or "-", the Interface Type), and with TRY Try it yourself on its first
-   demo with the pointer's events the file TRY holds (below). One JSON line a chosen demo tick (THE
+   demo, or the demo TRY names, with the pointer's events the file TRY holds (below). One JSON line a chosen demo tick (THE
    TICKS below): {"e", "d", "t", "rec": the frame record from tagpu_wikiframe_record, before the
    bound, in frame.js record()'s names; "st": the HUD state tagpu_wikiframe_hudstate makes of the
    bounded record (`dump_state`); "px", "rest", "no", "game": the stage HUD's unit and the rest
@@ -19,10 +19,10 @@
    refuses is one line {"e", "d", "refused"}.
    THE TICKS: tick 0, every 15th, the last, and each tick on which the viewer's clock stands at a
    trip's start, at its press (HUD_DOWN on) or at its release; in Try it, every tick.
-   TRY is {"end": N, "events": [[tick, op, src, key, right, T], ...]}: after a tick's line, each of
-   its events goes to the press machine (op "down", "drag" or "up"; src 1 the HUD, 2 the
-   question), and each press it gives to tagpu_wikireplay_press; the record's held control is the
-   machine's.
+   TRY is {"end": N, "demo": index (0 without), "events": [[tick, op, src, key, right, T], ...]}:
+   after a tick's line, each of its events goes to the press machine (op "down", "drag" or "up";
+   src 1 the HUD, 2 the question) with the lanes that line's frame draws, and each press it gives
+   to tagpu_wikireplay_press; the record's held control is the machine's.
 
    `wikiframetest readstates HUDDIR FILE`: each line of FILE a {"st": a frame.js hudState, "px"},
    read by tools/hudart/hudstatejson.c as laycheck.c reads a state (fork_max the layout's, as
@@ -34,7 +34,8 @@
    `wikiframetest glide FILE`: each line "a b i n"; tagpu_wikiframe_glide's answer, %.17g.
 
    `wikiframetest press FILE`: FILE a JSON list of sequences, each a list of [op, src, key, right,
-   T]; one line a sequence, the press machine's answer to each event: [control, value] or null.
+   T, lanes?] (lanes the fork ids drawn, none without); one line a sequence, the press machine's
+   answer to each event: [control, value] or null.
 
    `wikiframetest colours DIR`: a side pack's art (wikisideart.h); tagpu_wikiframe_seat_colour of
    every colour index from -1 to two past its badge frames, one line, as "#rrggbb".
@@ -188,7 +189,14 @@ static void dump_rec(const WIKIFRAMEREC* f)
     fnum(f->sim.x);
     fputs(",\"z\":", stdout);
     fnum(f->sim.z);
-    printf(",\"shape\":%d,\"age\":%d}}", f->sim.shape, (int)f->sim.age);
+    printf(",\"shape\":%d,\"age\":%d}", f->sim.shape, (int)f->sim.age);
+    printf(",\"tk\":%d,\"pick\":%d,\"lanes\":%d,\"nfork\":%d,\"human\":%d,\"fork_max\":%d,\"tk_full\":%d,\"chain_last\":%d,"
+           "\"fill_to\":%d,\"pickR\":%d,\"pickEvict\":%d,\"fork\":[", f->tk, f->pick, f->lanes, f->nfork, f->human, f->fork_max,
+           f->tk_full, (int)f->chain_last, (int)f->fill_to, (int)f->pick_R, (int)f->pick_evict);
+    for (k = 0; k < f->nfork && k < WIKIFRAME_FORKS; k++)
+        printf("%s{\"id\":%d,\"from\":%d,\"end\":%d,\"parent\":%d,\"seat\":%d,\"flags\":%d}", k ? "," : "", (int)f->fork[k].id,
+               (int)f->fork[k].from, (int)f->fork[k].end, (int)f->fork[k].parent, f->fork[k].seat, f->fork[k].flags);
+    printf("],\"top_side\":%d}", f->top_side);
 }
 
 static void dump_state(const HUDSTATE* st)
@@ -237,6 +245,17 @@ static void dump_state(const HUDSTATE* st)
     printf(",\"team\":%d,\"npt\":%d,\"ngroup\":%d}", st->stats.team, st->stats.npt, st->stats.ngroup);
     F_(ends); F_(len); F_(fill_to); I_(nfork); I_(fork_max); I_(timeline); I_(lanes_open); I_(picker); I_(pick_down);
     I_(replace); I_(armed); I_(live); I_(live_open); I_(rw_down); I_(rw_arm);
+    fputs(",\"fork\":[", stdout);
+    for (k = 0; k < st->nfork && k < HUD_MAXFORK; k++) {
+        printf("%s{\"id\":%d,\"name\":", k ? "," : "", st->fork[k].id);
+        str(st->fork[k].name);
+        fputs(",\"from\":", stdout);
+        fnum(st->fork[k].from);
+        fputs(",\"end\":", stdout);
+        fnum(st->fork[k].end);
+        printf(",\"parent\":%d,\"flags\":%d}", st->fork[k].parent, st->fork[k].flags);
+    }
+    putchar(']');
 #undef F_
 #undef I_
     putchar('}');
@@ -315,9 +334,11 @@ static const HUDOP* hot_of(const HUDOPS* o, const char* k)
     return b;
 }
 
-/* one line: the record, its HUD state, the HUD's controls laid out from it and the cursor's point */
-static void emit(const HUDLAY* hud, const WIKIREPLAY* r, const char* e, const char* d, int try_it, const char* held,
-                 const WIKILAYOUT* lay, HUDOPS* ops)
+/* one line: the record, its HUD state, the HUD's controls laid out from it and the cursor's point;
+   the lanes the frame draws into `lane` (WIKIFRAME_FORKS ids), their count returned, for the press
+   machine's events after it */
+static int emit(const HUDLAY* hud, const WIKIREPLAY* r, const char* e, const char* d, int try_it, const char* held,
+                const WIKILAYOUT* lay, HUDOPS* ops, int32_t* lane)
 {
     static HUDSTATE st, pst;
     char err[256];
@@ -326,14 +347,17 @@ static void emit(const HUDLAY* hud, const WIKIREPLAY* r, const char* e, const ch
     WIKISTAGESIDE sd;
     WIKISTAGEFIT fit;
     WIKIFRAMEDLG dlg;
-    const WIKIVIEW* gv = r->game ? tagpu_wikisim_view(r->game) : NULL;
+    const WIKIVIEW* gv;
     const double ends = tagpu_hudlay_globals(hud)->track_ends;
     double fx, fy, rx, ry, nx, ny, gx, gy, x, y;
     float px;
-    int Wg, Hg, i, chart = 0, side_h, nbox = 0;
+    int Wg, Hg, i, chart = 0, side_h, nbox = 0, human;
     const char* unresolved = "";
     tagpu_wikireplay_view(r, &rv);
-    tagpu_wikiframe_record(&rv, gv, 0, try_it, held, &rec);
+    /* the human seat's view, as tagpu_wiki.c replay_fill takes it */
+    human = rv.live ? rv.human : 0;
+    gv = r->game ? tagpu_wikisim_view_as(r->game, human) : NULL;
+    tagpu_wikiframe_record(&rv, gv, 0, try_it, held, tagpu_wikiframe_seat_side(lay, 0, human), &rec);
     printf("{\"e\":");
     str(e);
     fputs(",\"d\":", stdout);
@@ -394,6 +418,7 @@ static void emit(const HUDLAY* hud, const WIKIREPLAY* r, const char* e, const ch
     printf("],\"pt\":[%.17g,%.17g],\"chart\":%d,\"unresolved\":", x, y, chart);
     str(unresolved);
     fputs("}\n", stdout);
+    return tagpu_wikiframe_lanes(&b, lane);
 }
 
 /* THE TICKS (the header) */
@@ -409,6 +434,7 @@ static int chosen(const WIKIREPLAYVIEW* v)
 static int frames(char** a, int ntry)
 {
     static HUDOPS ops;
+    int32_t lanes[WIKIFRAME_FORKS];
     char err[256];
     GAMERUN g;
     HUDLAY* hud;
@@ -430,7 +456,7 @@ static int frames(char** a, int ntry)
         }
         for (;;) {
             tagpu_wikireplay_view(&r, &v);
-            if (chosen(&v)) emit(hud, &r, g.e.id, g.e.demo[j].id, 0, NULL, g.lay, &ops);
+            if (chosen(&v)) emit(hud, &r, g.e.id, g.e.demo[j].id, 0, NULL, g.lay, &ops, lanes);
             if (r.done) break;
             tagpu_wikireplay_step(&r);
         }
@@ -443,16 +469,19 @@ static int frames(char** a, int ntry)
         const TJV* T = doc ? tagpu_json_root(doc) : NULL;
         const TJV* ev = tj_get(T, "events");
         const int end = (int)tj_num(tj_get(T, "end"), 0);
+        /* the demo whose data Try it takes: the file's `demo`, the first without one */
+        const int dj = (int)tj_num(tj_get(T, "demo"), 0);
+        const WIKIDEMO* dm = &g.e.demo[dj >= 0 && dj < g.e.ndemo ? dj : 0];
         WIKIREPLAY r;
         WIKIFRAMEPRESS m;
         char name[96];
         if (!doc) { fprintf(stderr, "wikiframetest: %s: %s\n", a[7], text ? err : "cannot read it"); return 2; }
-        snprintf(name, sizeof name, "%s/try", g.e.demo[0].id);
+        snprintf(name, sizeof name, "%s/try", dm->id);
         tagpu_wikiframe_press_init(&m);
-        if (tagpu_wikireplay_init(&r, &g.e, &g.e.demo[0], WIKI_PLAY_TRY, g.lay, &g.ctx, err, sizeof err)) {
+        if (tagpu_wikireplay_init(&r, &g.e, dm, WIKI_PLAY_TRY, g.lay, &g.ctx, err, sizeof err)) {
             for (;;) {
                 const TJV* x;
-                emit(hud, &r, g.e.id, name, 1, m.held, g.lay, &ops);
+                const int nlane = emit(hud, &r, g.e.id, name, 1, m.held, g.lay, &ops, lanes);
                 if (r.done || r.tick >= end) break;
                 for (x = ev ? ev->first : NULL; x; x = x->next) {
                     const char* op = tj_str(tj_at(x, 1), "");
@@ -461,9 +490,9 @@ static int frames(char** a, int ntry)
                     int c = -1, val = 0, got;
                     if ((int)tj_num(tj_at(x, 0), -1) != r.tick) continue;
                     got = !strcmp(op, "down") ? tagpu_wikiframe_press_down(&m, (int)tj_num(tj_at(x, 2), 1), key,
-                                                                            tj_is(tj_at(x, 4), TJ_TRUE), T_, &c, &val)
+                                                                            tj_is(tj_at(x, 4), TJ_TRUE), T_, lanes, nlane, &c, &val)
                         : !strcmp(op, "drag") ? tagpu_wikiframe_press_drag(&m, T_, &c, &val)
-                        : tagpu_wikiframe_press_up(&m, key, T_, &c, &val);
+                        : tagpu_wikiframe_press_up(&m, key, T_, lanes, nlane, &c, &val);
                     if (got) tagpu_wikireplay_press(&r, c, val);
                 }
                 tagpu_wikireplay_step(&r);
@@ -560,10 +589,15 @@ static int press(const char* path)
             const char* op = tj_str(tj_at(ev, 0), "");
             const char* key = tj_is(tj_at(ev, 2), TJ_STR) ? tj_str(tj_at(ev, 2), "") : NULL;
             const int T = (int)tj_num(tj_at(ev, 4), 0);
-            int c = -1, v = 0, got;
-            got = !strcmp(op, "down") ? tagpu_wikiframe_press_down(&m, (int)tj_num(tj_at(ev, 1), 1), key, tj_is(tj_at(ev, 3), TJ_TRUE), T, &c, &v)
+            /* the lanes drawn at the event, its sixth element, none without one */
+            const TJV* ids = tj_at(ev, 5);
+            int32_t lane[WIKIFRAME_FORKS];
+            int c = -1, v = 0, got, nlane = 0;
+            for (; ids && nlane < ids->n && nlane < WIKIFRAME_FORKS; nlane++) lane[nlane] = (int32_t)tj_num(tj_at(ids, nlane), -1);
+            got = !strcmp(op, "down") ? tagpu_wikiframe_press_down(&m, (int)tj_num(tj_at(ev, 1), 1), key, tj_is(tj_at(ev, 3), TJ_TRUE), T,
+                                                                    lane, nlane, &c, &v)
                 : !strcmp(op, "drag") ? tagpu_wikiframe_press_drag(&m, T, &c, &v)
-                : tagpu_wikiframe_press_up(&m, key, T, &c, &v);
+                : tagpu_wikiframe_press_up(&m, key, T, lane, nlane, &c, &v);
             printf("%s", first ? "" : ",");
             first = 0;
             if (got) {
@@ -659,6 +693,22 @@ static int ok_live(const WIKIFRAMEREC* f)
            f->sim.age == 0 && f->sim.shape == WIKI_CURSOR_ARROW && !f->simcur && f->cur.on && !strcmp(f->cur.from, WIKIFRAME_AT_GAME);
 }
 static int ok_not_live(const WIKIFRAMEREC* f) { return !f->live && !f->simcur && !f->cur.on; }
+static int ok_tk(const WIKIFRAMEREC* f)
+{
+    const WIKIFRAMEFORK* q = &f->fork[0];
+    return f->tk == 1 && f->pick == 0 && f->lanes == 1 && f->human == -1 && f->fork_max == WIKIFRAME_FORKS && f->tk_full == 1 &&
+           f->top_side == f->side && f->chain_last == 0 && f->fill_to == f->end && f->pick_R == 0 && f->pick_evict == -1 &&
+           f->nfork == 1 && q->id == 3 && q->from == 0 && q->end == f->end && q->seat == 0xFF &&
+           q->flags == (WIKIFRAME_FORK_WATCHED | WIKIFRAME_FORK_CHAIN | WIKIFRAME_FORK_ARMED) && f->fork[1].id == 0;
+}
+static int ok_not_tk(const WIKIFRAMEREC* f)
+{
+    return !f->tk && !f->pick && !f->lanes && !f->nfork && !f->human && !f->fork_max && !f->tk_full && f->top_side == f->side &&
+           !f->chain_last && !f->fill_to && !f->pick_R && !f->pick_evict && !f->fork[0].id;
+}
+static int ok_tk_kept_side(const WIKIFRAMEREC* f) { return f->tk == 1 && f->live == 1 && f->top_side == 1 && f->side == 0; }
+static int ok_tk_keys(const WIKIFRAMEREC* f) { return !f->held[0] && !f->cur.on; }
+static int ok_tk_keys_kept(const WIKIFRAMEREC* f) { return !strcmp(f->held, "lane:2") && f->cur.on && !strcmp(f->cur.to, "takeas:3"); }
 
 static void base(WIKIFRAMEREC* f)
 {
@@ -774,6 +824,40 @@ static int selftest(const char* huddir)
     f.simcur = 1;
     snprintf(f.cur.from, sizeof f.cur.from, WIKIFRAME_AT_GAME);
     hostile(hud, &ops, &f, "bound: @game and the simulation's cursor in a record that is not live", 1, 0, ok_not_live);
+    base(&f);
+    f.tk = 5;
+    f.pick = 9;
+    f.lanes = 3;
+    f.human = 40;
+    f.fork_max = 200;
+    f.tk_full = 4;
+    f.top_side = 99;
+    f.chain_last = -5;
+    f.fill_to = 1 << 30;
+    f.pick_R = -1;
+    f.pick_evict = 999;
+    f.nfork = 200;
+    f.fork[0].id = 0;
+    f.fork[1].id = 70000;
+    f.fork[2].id = 3; f.fork[2].from = -10; f.fork[2].end = 1000000; f.fork[2].flags = 0xFF; f.fork[2].seat = 99;
+    hostile(hud, &ops, &f, "bound: a takeover record's flags, picker, seat, counts, ticks and forks", 1, 0, ok_tk);
+    base(&f);
+    f.live = 1;
+    f.tk = 1;
+    f.top_side = 1;
+    hostile(hud, &ops, &f, "bound: a live takeover record's top side within the layout", 2, 0, ok_tk_kept_side);
+    base(&f);
+    f.pick = 2; f.lanes = 1; f.nfork = 2; f.human = 1; f.fork_max = 3; f.top_side = 1; f.pick_evict = 4;
+    f.fork[0].id = 4; f.fork[1].id = 5;
+    hostile(hud, &ops, &f, "bound: a record that is not a takeover's carries none of its block", 2, 0, ok_not_tk);
+    base(&f);
+    snprintf(f.held, sizeof f.held, "lane:7");
+    snprintf(f.cur.to, sizeof f.cur.to, "takeas:%d", WIKI_SEATS);
+    hostile(hud, &ops, &f, "bound: indexed keys past their caps", 1, 0, ok_tk_keys);
+    base(&f);
+    snprintf(f.held, sizeof f.held, "lane:2");
+    snprintf(f.cur.to, sizeof f.cur.to, "takeas:3");
+    hostile(hud, &ops, &f, "bound: indexed keys within their caps are kept", 1, 0, ok_tk_keys_kept);
     partition_cases();
     tagpu_hudlay_free(hud);
     return s_bad;

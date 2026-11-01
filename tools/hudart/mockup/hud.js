@@ -263,10 +263,12 @@ const HUD = (() => {
     return h + lines + `<div class="box" data-lanehead="${g.tx + g.ends} ${g.tw - 2 * g.ends} ${Hd.w}" style="${rect({ x: X(st.t) - Hd.w / 2, y: py, w: Hd.w, h: g.ty - py })};background:${Hd.colour};pointer-events:none"></div>`;
   }
 
-  // Take over at the playhead: a button on the transport plate, as wide as it, level with the lanes; it opens the picker
+  /* Take over at the playhead: a button on the transport plate, as wide as it, level with the lanes; it opens the
+     picker, and is down from its click until the picker closes -- asked for, sought to or open (st.pickDown), as
+     tagpu_hudlay.c `takeover` draws it; a state without pickDown has only the picker's open */
   function takeover(st, tb) {
     const T = L.proposed.forks.takeover, b = { x: tb.x, y: tb.y - T.gap - T.h, w: tb.w, h: T.h };
-    return button({ act: 'takeover', text: { ...T.text, html: T.label } }, T, b, st, st.picker);
+    return button({ act: 'takeover', text: { ...T.text, html: T.label } }, T, b, st, st.pickDown ?? st.picker);
   }
 
   /* the player picker, opened by Take over: every player, the one taken over is played by you from the playhead and the

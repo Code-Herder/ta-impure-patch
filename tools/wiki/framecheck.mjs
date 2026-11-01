@@ -14,7 +14,10 @@
    types 1 and 0), its viewer's script played through replay.js and through the C replay, at demo tick 0, every 15th
    tick, the last, and each tick the viewer's clock stands at a trip's start, its press or its release; and Try it
    yourself on the entry's first demo, every tick, with TRY's pointer events through both press machines (a live
-   entry's: LIVE_TRY's). Per tick, C and JS must agree on:
+   entry's: LIVE_TRY's; a takeover entry's: TK_TRY's, on the demo it names). The takeover fixture (takeover-fixture.mjs)
+   is played beside the tree's entries: its demos draw the picker asked, sought and open, the Forks bay with its
+   lanes, a fork saved and deleted, the eviction's warning and a seat taken over into the live game. Per tick, C and
+   JS must agree on:
    1. the frame record, tagpu_wikiframe_record's against record()'s, field for field (a float as a float: the record
       carries floats);
    2. the HUD state: hudState() of the record, read by hudstatejson.c as laycheck.c reads the mockup's, against
@@ -25,15 +28,17 @@
       tagpu_wikiframe_dialog and tagpu_wikiframe_game_point).
    A live entry's records carry the rewind's state, the top bar's numbers and seat 0's cursor, its HUD state the live
    HUD's, its toasts the live HUD's five, and its cursor glides from and to seat 0's (@game) and runs the track on
-   the strip's [first, G].
+   the strip's [first, G]. A takeover's records carry the Take over block, its live records the seat taken over's
+   view, numbers, cursor and top bar's side, and its cursor resolves the indexed keys (takeas:<seat>, lane:<k>,
+   export:<k>, delete:<k>) among C's boxes.
    The filtered view (frame.js view against tagpu_wikiframe_view) is stagecheck.mjs's frame mode, which draws it.
 
    THE TABLES. glide() against tagpu_wikiframe_glide to 1e-12; the press machine on PRESSES' event sequences; the
    seat colours of every pack present, seatColour() against tagpu_wikiframe_seat_colour from one before its first
    badge frame to two past its last; and wikiframetest's selftest: tagpu_wikiframe_bound on hostile records (every
    count past its cap, unterminated strings, unknown keys, NaN and infinite floats, out-of-range ticks, indices and
-   glides), the HUD built from each, and tagpu_huddraw_partition on synthetic batch lists with groups in lists 0, 3,
-   4 and 6.
+   glides, a takeover block's flags, picker, seat, counts, ticks and forks, indexed keys past their caps), the HUD
+   built from each, and tagpu_huddraw_partition on synthetic batch lists with groups in lists 0, 3, 4 and 6.
 
    THE IDLE SIDE. frame.js idleSide is a second copy of sim.js gadgetState(g, null, false), so it is pinned: for
    every layout side of the fixture layouts and of every pack present, idleSide's states equal those a fresh
@@ -58,6 +63,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { takeoverFixture } from './takeover-fixture.mjs';
 
 const require = createRequire(import.meta.url);
 const WikiSim = require('./mockup/sim.js');
@@ -83,7 +89,7 @@ const FIXTURE = JSON.parse(fs.readFileSync(path.join(ROOT, 'tools/wiki/casting-f
 const CASTINGS = FIXTURE.castings, RIVALS = FIXTURE.rivals;
 const GAMES = fs.readdirSync(path.join(ROOT, 'art/wiki/entries')).filter(f => f.endsWith('.json')).sort()
   .map(f => [f.slice(0, -5), JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries', f), 'utf8'))])
-  .filter(([, e]) => e.frame === 'game');
+  .filter(([, e]) => e.frame === 'game').concat([['takeover-fixture', takeoverFixture()]]);
 
 /* TRY: Try it yourself's pointer events, [demo tick, op, src (1 the HUD, 2 the question), key, right, T], each made
    after that tick's frame: play pressed and released on it, speed, a press on fwd released on rew (nothing), the
@@ -114,6 +120,20 @@ const LIVE_TRY = { end: 180, events: [[1, 'down', 1, 'rewind', false, 0], [2, 'u
   [158, 'down', 1, 'live_play', false, 0], [159, 'up', 1, 'live_play', false, 0], [163, 'down', 1, 'live_now', false, 0], [164, 'up', 1, 'live_now', false, 0],
   [170, 'down', 1, 'track', false, 40], [171, 'up', 1, 'track', false, 50]] };
 
+/* TK_TRY: a takeover entry's Try it yourself on its third demo (two kept forks, F1 and F2): the bay opened, F1's lane
+   pressed (watched), F2 saved and saved again (Cannot save), F2's Delete armed, a lane pressed and released on the
+   other lane (nothing) and a lane that is not drawn pressed (nothing), F2's Delete again (deleted), Back to main
+   recording, Take over asked and, once open, Bram's row (the takeover into the live game), then the rewind opened
+   and closed in it */
+const TK_TRY = { end: 380, demo: 2, events: [[50, 'down', 1, 'lanes', false, 0], [51, 'up', 1, 'lanes', false, 0],
+  [55, 'down', 1, 'lane:0', false, 0], [56, 'up', 1, 'lane:0', false, 0], [120, 'down', 1, 'export:1', false, 0], [121, 'up', 1, 'export:1', false, 0],
+  [125, 'down', 1, 'export:1', false, 0], [126, 'up', 1, 'export:1', false, 0], [130, 'down', 1, 'delete:1', false, 0], [131, 'up', 1, 'delete:1', false, 0],
+  [135, 'down', 1, 'lane:1', false, 0], [136, 'up', 1, 'lane:0', false, 0], [138, 'down', 1, 'lane:2', false, 0], [139, 'up', 1, 'lane:2', false, 0],
+  [140, 'down', 1, 'delete:1', false, 0], [141, 'up', 1, 'delete:1', false, 0], [150, 'down', 1, 'main', false, 0], [151, 'up', 1, 'main', false, 0],
+  [200, 'down', 1, 'play', false, 0], [201, 'up', 1, 'play', false, 0], [230, 'down', 1, 'takeover', false, 0], [231, 'up', 1, 'takeover', false, 0],
+  [290, 'down', 1, 'takeas:1', false, 0], [291, 'up', 1, 'takeas:1', false, 0], [330, 'down', 1, 'rewind', false, 0], [331, 'up', 1, 'rewind', false, 0],
+  [350, 'down', 1, 'rewind', false, 0], [351, 'up', 1, 'rewind', false, 0]] };
+
 const TRY = { end: 150, events: [[5, 'down', 1, 'play', false, 0], [6, 'up', 1, 'play', false, 0], [10, 'down', 1, 'speed', false, 0],
   [11, 'up', 1, 'speed', false, 0], [15, 'down', 1, 'fwd', false, 0], [16, 'up', 1, 'rew', false, 0], [20, 'down', 1, 'track', false, 300],
   [21, 'drag', 1, 'track', false, 600], [22, 'drag', 1, 'track', false, 600], [23, 'up', 1, 'play', false, 700],
@@ -124,12 +144,16 @@ const TRY = { end: 150, events: [[5, 'down', 1, 'play', false, 0], [6, 'up', 1, 
   [70, 'down', 1, 'leave', false, 0], [71, 'up', 1, 'leave', false, 0], [75, 'down', 2, 'no', false, 0], [76, 'up', 2, 'no', false, 0],
   [80, 'down', 1, 'leave', false, 0], [81, 'up', 1, 'leave', false, 0], [90, 'down', 2, 'yes', false, 0], [91, 'up', 2, 'yes', false, 0]] };
 
-/* PRESSES: the press machine's sequences, [op, src, key, right, T]: a button pressed and released on itself and on
+/* PRESSES: the press machine's sequences, [op, src, key, right, T, lanes?]: a button pressed and released on itself and on
    another; the track pressed, dragged (once to the same tick) and released at another tick and at its last; a right
    press; a second press while one is held; a drag with nothing held; the question's four keys, and Yes released on
    No; keys that are no control (uiscale, a row, leave:yes from the HUD, the empty key); leave:no from the HUD; the
    live HUD's: the rewind button, Play from here and Back to now pressed and released on themselves and on each
-   other, and the strip's plate (no control: nothing) */
+   other, and the strip's plate (no control: nothing); the Take over set's: a picker row released on itself (takeas with
+   its seat) and on another row (nothing), a row past the seats (nothing), the plain act names (no control: nothing),
+   Take over, the bay and Back to main; a lane, a Save and a Delete released on themselves (their fork), a lane
+   released where the list no longer draws it or draws another fork (nothing: the held lane), and a control on a lane
+   that is not drawn (not held: nothing) */
 const PRESSES = [
   [['down', 1, 'play', false, 0], ['up', 1, 'play', false, 0]],
   [['down', 1, 'speed', false, 0], ['up', 1, 'rew', false, 0], ['up', 1, 'speed', false, 0]],
@@ -147,6 +171,16 @@ const PRESSES = [
   [['down', 1, 'rewind', false, 0], ['up', 1, 'rewind', false, 0], ['down', 1, 'live_play', false, 0], ['up', 1, 'live_now', false, 0],
     ['down', 1, 'live_now', false, 0], ['up', 1, 'live_now', false, 0], ['down', 1, 'live', false, 0], ['up', 1, 'live', false, 0],
     ['down', 1, 'live_play', false, 0], ['up', 1, 'live_play', false, 0]],
+  [['down', 1, 'takeas:3', false, 0], ['up', 1, 'takeas:3', false, 0], ['down', 1, 'takeas:1', false, 0], ['up', 1, 'takeas:2', false, 0],
+    ['down', 1, 'takeas:4', false, 0], ['up', 1, 'takeas:4', false, 0], ['down', 1, 'takeas', false, 0], ['up', 1, 'takeas', false, 0],
+    ['down', 1, 'lane', false, 0, [1]], ['up', 1, 'lane', false, 0, [1]]],
+  [['down', 1, 'takeover', false, 0], ['up', 1, 'takeover', false, 0], ['down', 1, 'lanes', false, 0], ['up', 1, 'lanes', false, 0],
+    ['down', 1, 'main', false, 0], ['up', 1, 'main', false, 0]],
+  [['down', 1, 'lane:0', false, 0, [1, 2]], ['up', 1, 'lane:0', false, 0, [1, 2]], ['down', 1, 'export:1', false, 0, [1, 2]],
+    ['up', 1, 'export:1', false, 0, [1, 2]], ['down', 1, 'delete:1', false, 0, [3, 7]], ['up', 1, 'delete:1', false, 0, [3, 7]]],
+  [['down', 1, 'lane:1', false, 0, [1, 2]], ['up', 1, 'lane:1', false, 0, [2]], ['down', 1, 'delete:0', false, 0, [1, 2]],
+    ['up', 1, 'delete:0', false, 0, [2, 3]], ['down', 1, 'export:2', false, 0, [1, 2]], ['up', 1, 'export:2', false, 0, [1, 2]],
+    ['down', 1, 'lane:0', false, 0, [1, 2]], ['up', 1, 'lane:1', false, 0, [1, 2]], ['down', 1, 'lane:0', false, 0], ['up', 1, 'lane:0', false, 0]],
 ];
 
 class CannotRun extends Error {}
@@ -193,10 +227,11 @@ function chosen(rv) {
   return rv.clock === c.at || rv.clock === c.at + WikiReplay.HUD_DOWN || rv.clock === rel;
 }
 
-/* one frame's JS answers, from the replay `R` in its layout and the press machine's held control (Try it) */
+/* one frame's JS answers, from the replay `R` in its layout and the press machine's held control (Try it); the world
+   the human seat's view, as wiki.js takes it */
 function frameJs(R, layout, tryIt, held) {
-  const rv = R.view(), gv = R.game ? R.game.view() : null;
-  const rec = WikiFrame.record(rv, gv, 0, tryIt, held);
+  const rv = R.view(), human = rv.live ? rv.live.human : 0, gv = R.game ? R.game.view(human) : null;
+  const rec = WikiFrame.record(rv, gv, 0, tryIt, held, WikiFrame.seatSide(layout, 0, human));
   const sd = WikiFrame.idleSide(layout, 0);
   const M = gv ? gv.map : { w: 1, h: 1 }, cell = +M.cell || 16;
   const { Wg, Hg } = WikiFrame.size(M, sd ? sd.h : 0);
@@ -301,8 +336,8 @@ function tablesCheck(exe, tmp) {
   fs.writeFileSync(path.join(tmp, 'press.json'), JSON.stringify(PRESSES));
   lines(run(exe, ['press', path.join(tmp, 'press.json')])).forEach((c, s) => {
     const P = WikiFrame.Press();
-    const j = PRESSES[s].map(([op, src, key, right, T]) => {
-      const r = op === 'down' ? P.down(src === 2 ? 'dialog' : 'hud', key, right, T) : op === 'drag' ? P.drag(T) : P.up(key, T);
+    const j = PRESSES[s].map(([op, src, key, right, T, ids = []]) => {
+      const r = op === 'down' ? P.down(src === 2 ? 'dialog' : 'hud', key, right, T, ids) : op === 'drag' ? P.drag(T) : P.up(key, T, ids);
       return r.length ? r[0] : null;
     });
     tables++;
@@ -340,6 +375,7 @@ function framesCheck(exe, tmp) {
   }
   fs.writeFileSync(path.join(tmp, 'try.json'), JSON.stringify(TRY));
   fs.writeFileSync(path.join(tmp, 'livetry.json'), JSON.stringify(LIVE_TRY));
+  fs.writeFileSync(path.join(tmp, 'tktry.json'), JSON.stringify(TK_TRY));
   let context = 0;
   for (const side of ['fixture', 'fixture-tall', null]) for (const cname of [null, ...Object.keys(CASTINGS)]) for (const iface of [1, 0]) {
     if (context++ % SHARDS !== SHARD - 1) continue;
@@ -349,7 +385,7 @@ function framesCheck(exe, tmp) {
       fs.writeFileSync(path.join(tmp, 'game.json'), JSON.stringify(entry));
       const cout = lines(run(exe, ['frames', path.join(tmp, 'wiki.bin'), path.join(tmp, 'game.json'), side || '-',
         cname ? path.join(tmp, `casting-${cname}.json`) : '-', cname ? path.join(tmp, `rival-${cname}.json`) : '-', String(iface), HUDDIR,
-        path.join(tmp, entry.live ? 'livetry.json' : 'try.json')]));
+        path.join(tmp, entry.live ? 'livetry.json' : entry.takeover ? 'tktry.json' : 'try.json')]));
       const js = [];
       const play = (demo, name, make, presses) => {
         let R;
@@ -357,12 +393,18 @@ function framesCheck(exe, tmp) {
         const P = WikiFrame.Press();
         for (;;) {
           const rv = R.view();
-          if (presses || chosen(rv)) js.push({ e: id, d: name, ...frameJs(R, layout, !!presses, P.held) });
+          // the lanes the tick's frame draws, which the presses after it are made on
+          let ids = [];
+          if (presses || chosen(rv)) {
+            const f = frameJs(R, layout, !!presses, P.held);
+            js.push({ e: id, d: name, ...f });
+            ids = WikiFrame.lanes(f.rec);
+          }
           if (rv.done || (presses && R.tick >= presses.end)) break;
           if (presses)
             for (const [t, op, src, key, right, T] of presses.events) {
               if (t !== R.tick) continue;
-              const r = op === 'down' ? P.down(src === 2 ? 'dialog' : 'hud', key, right, T) : op === 'drag' ? P.drag(T) : P.up(key, T);
+              const r = op === 'down' ? P.down(src === 2 ? 'dialog' : 'hud', key, right, T, ids) : op === 'drag' ? P.drag(T) : P.up(key, T, ids);
               for (const [c, v] of r) R.press(c, v);
             }
           R.step();
@@ -370,7 +412,8 @@ function framesCheck(exe, tmp) {
         R.free();
       };
       for (const demo of entry.demos) play(demo, demo.id, () => WikiReplay.play(entry, demo, layout, ctx), null);
-      play(entry.demos[0], `${entry.demos[0].id}/try`, () => WikiReplay.create(entry, entry.demos[0], layout, ctx), entry.live ? LIVE_TRY : TRY);
+      const tr = entry.live ? LIVE_TRY : entry.takeover ? TK_TRY : TRY, td = entry.demos[tr.demo || 0] || entry.demos[0];
+      play(td, `${td.id}/try`, () => WikiReplay.create(entry, td, layout, ctx), tr);
       // the JS states through C's reader, one line each
       const states = js.filter(f => !f.refused);
       fs.writeFileSync(path.join(tmp, 'states.jsonl'), states.map(f => JSON.stringify({ st: f.st, px: f.px })).join('\n') + '\n');

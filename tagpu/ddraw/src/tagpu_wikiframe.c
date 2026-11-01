@@ -41,6 +41,36 @@ static int control(const char* k)
     return c >= 0 && c < WIKI_NHUD;
 }
 
+int tagpu_wikiframe_indexed(const char* key, int* control_, int* index)
+{
+    static const struct { const char* act; int c, n; } IX[4] = {
+        { "takeas", WIKI_HUD_TAKEAS, WIKI_SEATS },
+        { "lane", WIKI_HUD_LANE, WIKIFRAME_FORKS },
+        { "export", WIKI_HUD_EXPORT, WIKIFRAME_FORKS },
+        { "delete", WIKI_HUD_DELETE, WIKIFRAME_FORKS },
+    };
+    const char* colon = key ? strchr(key, ':') : NULL;
+    size_t k;
+    int i;
+    /* one digit: every index is below 10 */
+    if (!colon || colon[1] < '0' || colon[1] > '9' || colon[2]) return 0;
+    k = (size_t)(colon - key);
+    for (i = 0; i < 4; i++)
+        if (strlen(IX[i].act) == k && !strncmp(key, IX[i].act, k) && colon[1] - '0' < IX[i].n) {
+            *control_ = IX[i].c;
+            *index = colon[1] - '0';
+            return 1;
+        }
+    return 0;
+}
+
+/* a replay control's key or an indexed one: what a record names as held or as a cursor's end */
+static int known(const char* k)
+{
+    int c, n;
+    return control(k) || tagpu_wikiframe_indexed(k, &c, &n);
+}
+
 /* a game tick as m:ss into `b`: a bookmark's from 0, the live strip's from the rewind's first
    GameTime (tagpu_hudinput.c live_clock) */
 static const char* clock_of(char* b, size_t n, int T, int first)
@@ -50,7 +80,17 @@ static const char* clock_of(char* b, size_t n, int T, int first)
     return b;
 }
 
-void tagpu_wikiframe_toast(const WIKIREPLAYVIEW* rv, char* out)
+/* a game tick as the Take over set's toasts name it, tagpu_hudinput.c clock_at: whole seconds from
+   tick 0 (a takeover replay's watching starts there, as its dock's clock), rounded as the dock's
+   clock rounds */
+static const char* clock_at(char* b, size_t n, int T)
+{
+    const unsigned s = ((unsigned)(T > 0 ? T : 0) + TICK / 2) / TICK;
+    snprintf(b, n, "%u:%02u", s / 60, s % 60);
+    return b;
+}
+
+void tagpu_wikiframe_toast(const WIKIREPLAYVIEW* rv, const WIKIFRAMESEAT* seat, int nseat, char* out)
 {
     char c[16];
     out[0] = 0;
@@ -69,8 +109,83 @@ void tagpu_wikiframe_toast(const WIKIREPLAYVIEW* rv, char* out)
         else snprintf(out, HUD_TOASTLEN, "Click again to play from %s", c);
         break;
     case WIKI_TOAST_PLAYING_FROM: snprintf(out, HUD_TOASTLEN, "Playing from %s", c); break;
+    case WIKI_TOAST_TAKING_OVER:
+        snprintf(out, HUD_TOASTLEN, "Taking over %s at %s",
+                 rv->toast_seat >= 0 && rv->toast_seat < nseat ? seat[rv->toast_seat].name : "", clock_at(c, sizeof c, rv->toast_value));
+        break;
+    case WIKI_TOAST_CANNOT_TAKE: snprintf(out, HUD_TOASTLEN, "Cannot take over at %s", clock_at(c, sizeof c, rv->toast_value)); break;
+    case WIKI_TOAST_SAVED: snprintf(out, HUD_TOASTLEN, "F%d saved as a replay of its own", rv->toast_value); break;
+    case WIKI_TOAST_CANNOT_SAVE: snprintf(out, HUD_TOASTLEN, "Cannot save F%d", rv->toast_value); break;
+    case WIKI_TOAST_CLICK_DELETE: snprintf(out, HUD_TOASTLEN, "Click again to delete F%d", rv->toast_value); break;
+    case WIKI_TOAST_DELETED: snprintf(out, HUD_TOASTLEN, "F%d deleted", rv->toast_value); break;
     default: copy(out, HUD_TOASTLEN, "Rewind refused"); break;
     }
+}
+
+/* A trip's control as the HUD keys it (THE INDEXED CONTROLS): a picker row by its seat, a lane's
+   control by the place of the fork `v` in the record's list, "" (the rest point) when the list
+   does not hold it; any other control by its name. */
+static void key_of(const WIKIFRAMEREC* f, int c, int v, char* out)
+{
+    int k;
+    if (c == WIKI_HUD_TAKEAS) {
+        snprintf(out, HUD_KEYLEN, "takeas:%d", v);
+        return;
+    }
+    if (c == WIKI_HUD_LANE || c == WIKI_HUD_EXPORT || c == WIKI_HUD_DELETE) {
+        out[0] = 0;
+        for (k = 0; k < f->nfork && k < WIKIFRAME_FORKS; k++)
+            if (f->fork[k].id == v) {
+                snprintf(out, HUD_KEYLEN, "%s:%d", tagpu_wikiframe_key(c), k);
+                return;
+            }
+        return;
+    }
+    copy(out, HUD_KEYLEN, tagpu_wikiframe_key(c));
+}
+
+/* THE TAKE OVER BLOCK of a record from a takeover replay's view: the picker, the lanes, the fork
+   list by (R, id) as tagpu_hudstate.c fill_forks lists the game's, each with its flags -- the
+   watched one, the members of the watched chain, the Delete armed while the lanes are open -- and
+   the ticks the stage HUD's track reads */
+static void tk_block(const WIKIREPLAYVIEW* rv, WIKIFRAMEREC* out)
+{
+    int order[RECR_TIMELINES], n = 0, i, j, k, ntl = rv->ntl < RECR_TIMELINES ? rv->ntl : RECR_TIMELINES;
+    unsigned char chain[RECR_TIMELINES];
+    out->tk = 1;
+    out->pick = (uint8_t)(rv->pick == WIKI_PICKER_OPEN ? 2 : rv->pick == WIKI_PICKER_CLOSED ? 0 : 1);
+    out->lanes = (uint8_t)(rv->lanes != 0);
+    out->human = (int8_t)(rv->human >= -1 && rv->human < WIKI_SEATS ? rv->human : -1);
+    out->fork_max = WIKIFRAME_FORKS;
+    out->tk_full = (uint8_t)(rv->tk_full != 0);
+    out->chain_last = rv->chain_last;
+    out->fill_to = rv->fill_to;
+    out->pick_R = rv->pick_R;
+    out->pick_evict = rv->pick_evict;
+    /* the watched chain, from the selected timeline up its parents (a row's index is its id) */
+    memset(chain, 0, sizeof chain);
+    for (k = rv->selected, i = 0; k >= 0 && k < ntl && i < ntl; k = rv->tl[k].parent, i++) chain[k] = 1;
+    for (i = 0; i < ntl; i++) {
+        if (rv->tl[i].id <= 0 || !rv->tl[i].live) continue;
+        for (j = n; j > 0 && (rv->tl[order[j - 1]].R > rv->tl[i].R ||
+                              (rv->tl[order[j - 1]].R == rv->tl[i].R && rv->tl[order[j - 1]].id > rv->tl[i].id)); j--)
+            order[j] = order[j - 1];
+        order[j] = i;
+        n++;
+    }
+    for (k = 0; k < n && k < WIKIFRAME_FORKS; k++) {
+        const int r = order[k];
+        WIKIFRAMEFORK* f = &out->fork[k];
+        f->id = rv->tl[r].id;
+        f->from = rv->tl[r].R;
+        f->end = rv->tl[r].last;
+        f->parent = rv->tl[r].parent;
+        f->seat = (uint8_t)(rv->tl[r].seat >= 0 && rv->tl[r].seat < 0xFF ? rv->tl[r].seat : 0xFF);
+        f->flags = (uint8_t)((f->id == rv->selected ? WIKIFRAME_FORK_WATCHED : 0) |
+                             (f->id < RECR_TIMELINES && chain[f->id] ? WIKIFRAME_FORK_CHAIN : 0) |
+                             (rv->lanes && rv->armed == f->id ? WIKIFRAME_FORK_ARMED : 0));
+    }
+    out->nfork = (uint8_t)k;
 }
 
 /* the tick under a trip's cursor on clock tick `at`: the press's, or along its drag */
@@ -81,9 +196,11 @@ static int trip_tick(const WIKIREPLAYVIEW* rv, int at)
 }
 
 void tagpu_wikiframe_record(const WIKIREPLAYVIEW* rv, const WIKIVIEW* gv, int side, int try_it, const char* try_held,
-                            WIKIFRAMEREC* out)
+                            int top_side, WIKIFRAMEREC* out)
 {
     const int n = WIKI_REPLAY_HUD_DOWN;
+    /* the human seat: seat 0 in Rewind, the seat taken over in a takeover's live game */
+    const int h = rv->live && rv->human >= 0 && rv->human < WIKI_SEATS ? rv->human : 0;
     int k, nseat = gv && gv->game ? gv->nseat : 0;
     memset(out, 0, sizeof *out);
     if (nseat > WIKI_SEATS) nseat = WIKI_SEATS;
@@ -93,7 +210,8 @@ void tagpu_wikiframe_record(const WIKIREPLAYVIEW* rv, const WIKIVIEW* gv, int si
     out->question = (uint8_t)(rv->question != 0);
     out->nseat = (uint8_t)nseat;
     out->side = (int8_t)(side >= -128 && side <= 127 ? side : -1);
-    out->colour = 0;
+    out->top_side = out->side;
+    out->colour = (uint8_t)(rv->live ? h : 0);
     out->speed = (uint8_t)rv->speed;
     out->try_it = (uint8_t)(try_it != 0);
     out->playhead = rv->playhead;
@@ -119,9 +237,13 @@ void tagpu_wikiframe_record(const WIKIREPLAYVIEW* rv, const WIKIVIEW* gv, int si
         out->mark[out->nmark].kind = HUD_MK_BOOKMARK;
         out->mark[out->nmark].seat = -1;
     }
-    if (try_it) copy(out->held, sizeof out->held, control(try_held) ? try_held : "");
-    else copy(out->held, sizeof out->held, rv->held >= 0 ? tagpu_wikiframe_key(rv->held) : "");
-    tagpu_wikiframe_toast(rv, out->toast);
+    if (rv->tk) {
+        tk_block(rv, out);
+        if (rv->live && top_side >= -128 && top_side <= 127) out->top_side = (int8_t)top_side;
+    }
+    if (try_it) copy(out->held, sizeof out->held, known(try_held) ? try_held : "");
+    else if (rv->held >= 0) key_of(out, rv->held, rv->value, out->held);
+    tagpu_wikiframe_toast(rv, out->seat, nseat, out->toast);
     out->cur.from_v = out->cur.to_v = -1;
     out->cur.i = out->cur.n = (uint8_t)n;
     if (rv->live) {
@@ -133,8 +255,8 @@ void tagpu_wikiframe_record(const WIKIREPLAYVIEW* rv, const WIKIVIEW* gv, int si
         out->now = rv->now;
         out->last = rv->last;
         out->arm_R = rv->arm != WIKI_ARM_NONE ? rv->arm_R : 0;
-        if (nseat > 0) {
-            const WIKIECON* z = &gv->econ[0];
+        if (h < nseat) {
+            const WIKIECON* z = &gv->econ[h];
             out->bar.e = rv->be;
             out->bar.m = rv->bm;
             out->bar.ei = rv->rates[0];
@@ -160,17 +282,17 @@ void tagpu_wikiframe_record(const WIKIREPLAYVIEW* rv, const WIKIVIEW* gv, int si
         return;
     }
     if (rv->live && rv->has_cursor && rv->back >= rv->at) {
-        /* the return glide: this trip's release left the rewind idle */
-        copy(out->cur.from, sizeof out->cur.from, tagpu_wikiframe_key(rv->to));
+        /* the return glide: this trip's release left the rewind idle, or took a seat over */
+        key_of(out, rv->to, rv->value, out->cur.from);
         out->cur.from_v = rv->to == WIKI_HUD_TRACK ? trip_tick(rv, rv->back) : -1;
         copy(out->cur.to, sizeof out->cur.to, WIKIFRAME_AT_GAME);
         out->cur.i = (uint8_t)clampi(rv->clock - rv->back, 0, n);
         out->simcur = (uint8_t)(rv->rw == WIKI_RW_IDLE && rv->clock - rv->back >= n);
     } else if (rv->has_cursor) {
-        copy(out->cur.from, sizeof out->cur.from, rv->from == WIKI_REPLAY_AT_GAME ? WIKIFRAME_AT_GAME
-                                                  : rv->from >= 0 ? tagpu_wikiframe_key(rv->from) : "");
+        if (rv->from == WIKI_REPLAY_AT_GAME) copy(out->cur.from, sizeof out->cur.from, WIKIFRAME_AT_GAME);
+        else if (rv->from >= 0) key_of(out, rv->from, rv->from_value, out->cur.from);
         out->cur.from_v = rv->from >= 0 ? rv->from_value : -1;
-        copy(out->cur.to, sizeof out->cur.to, tagpu_wikiframe_key(rv->to));
+        key_of(out, rv->to, rv->value, out->cur.to);
         out->cur.to_v = trip_tick(rv, rv->clock);
         out->cur.i = (uint8_t)clampi(rv->clock - rv->at, 0, n);
     } else
@@ -185,12 +307,12 @@ static float econ(float v)
     return v < -WIKI_ECON_MAX ? (float)-WIKI_ECON_MAX : v;
 }
 
-/* a key terminated in its array and among the replay's controls, else ""; with `game`, seat 0's
-   cursor's key too */
+/* a key terminated in its array and among the replay's controls or the indexed ones, else ""; with
+   `game`, the human seat's cursor's key too */
 static int key_ok(char* k, int game)
 {
     k[HUD_KEYLEN - 1] = 0;
-    if (!k[0] || control(k) || (game && !strcmp(k, WIKIFRAME_AT_GAME))) return 1;
+    if (!k[0] || known(k) || (game && !strcmp(k, WIKIFRAME_AT_GAME))) return 1;
     k[0] = 0;
     return 0;
 }
@@ -263,6 +385,39 @@ void tagpu_wikiframe_bound(WIKIFRAMEREC* f, int nside, int nlogo)
         f->sim.shape = WIKI_CURSOR_ARROW;
         f->simcur = 0;
     }
+    /* TAKE OVER: a record that is not tk carries nothing of it */
+    f->tk = (uint8_t)(f->tk != 0);
+    if (!f->tk) {
+        f->pick = f->lanes = f->nfork = f->fork_max = f->tk_full = 0;
+        f->human = 0;
+        f->chain_last = f->fill_to = f->pick_R = f->pick_evict = 0;
+        memset(f->fork, 0, sizeof f->fork);
+        f->top_side = f->side;
+        return;
+    }
+    f->lanes = (uint8_t)(f->lanes != 0);
+    f->tk_full = (uint8_t)(f->tk_full != 0);
+    if (f->pick > 2) f->pick = 0;
+    if (f->human < -1 || f->human >= f->nseat) f->human = -1;
+    if (f->fork_max > WIKIFRAME_FORKS) f->fork_max = WIKIFRAME_FORKS;
+    /* the top bar's side is the human seat's in the live game only */
+    if (!f->live || f->top_side < -1 || f->top_side >= nside) f->top_side = f->side;
+    f->chain_last = clampi(f->chain_last, 0, f->end);
+    f->fill_to = clampi(f->fill_to, 0, f->end);
+    f->pick_R = clampi(f->pick_R, 0, f->end);
+    if (f->pick_evict < 1 || f->pick_evict >= RECR_TIMELINES) f->pick_evict = -1;
+    if (f->nfork > WIKIFRAME_FORKS) f->nfork = WIKIFRAME_FORKS;
+    for (k = j = 0; k < f->nfork; k++) {
+        WIKIFRAMEFORK q = f->fork[k];
+        if (q.id < 1 || q.id >= RECR_TIMELINES) continue;
+        q.from = clampi(q.from, 0, f->end);
+        q.end = clampi(q.end, 0, f->end);
+        q.flags &= WIKIFRAME_FORK_WATCHED | WIKIFRAME_FORK_CHAIN | WIKIFRAME_FORK_ARMED;
+        if (q.seat >= f->nseat) q.seat = 0xFF;
+        f->fork[j++] = q;
+    }
+    for (k = j; k < WIKIFRAME_FORKS; k++) memset(&f->fork[k], 0, sizeof f->fork[k]);
+    f->nfork = (uint8_t)j;
 }
 
 int tagpu_wikiframe_idle_side(const WIKILAYOUT* lay, int side, WIKISTAGESIDE* out)
@@ -289,13 +444,15 @@ int tagpu_wikiframe_idle_side(const WIKILAYOUT* lay, int side, WIKISTAGESIDE* ou
     return 1;
 }
 
-void tagpu_wikiframe_view(WIKISTAGEVIEW* v, const WIKILAYOUT* lay, int side, int layout_src, int mode, int cursor)
+void tagpu_wikiframe_view(WIKISTAGEVIEW* v, const WIKILAYOUT* lay, int side, int layout_src, int mode, int cursor, int human)
 {
     int i;
     v->frame = 1;
     v->cursor_shape = WIKI_CURSOR_N;
     if (mode == WIKIFRAME_PLAYER) {
         if (!cursor) v->has_ghost = 0;
+        for (i = 0; i < v->nunit && i < WIKISTAGE_UNITS; i++)
+            if (v->unit[i].owner != human) v->unit[i].selected = 0;
     } else {
         if (mode != WIKIFRAME_PAST) memset(v->fog, 0, sizeof v->fog);
         v->has_ghost = 0;
@@ -353,7 +510,8 @@ void tagpu_wikiframe_hudstate(const WIKIFRAMEREC* f, int Wg, int Hg, float px, c
         q->colour = tagpu_wikiframe_seat_colour(sd, z->colour);
         q->units = z->units;
         q->lost = z->lost;
-        q->out = z->out;
+        /* the game's rule, tagpu_hudstate.c: a seat with no unit is out, its picker row refused */
+        q->out = z->units == 0;
         q->m = z->m; q->mmax = z->mmax; q->mi = z->mi; q->mo = z->mo;
         q->e = z->e; q->emax = z->emax; q->ei = z->ei; q->eo = z->eo;
         st->team_n[i] = 1;
@@ -375,6 +533,33 @@ void tagpu_wikiframe_hudstate(const WIKIFRAMEREC* f, int Wg, int Hg, float px, c
     st->ends = st->len = st->fill_to = (float)T;
     st->fork_max = HUD_MAXFORK;
     st->timeline = st->replace = st->armed = -1;
+    if (f->tk && !f->live) {
+        /* a takeover's watching, as tagpu_hudstate.c `forks` and `present` with the track from tick
+           0 on the axis `end`: the playhead stops at the watched chain's last */
+        st->len = (float)(f->chain_last / (double)TICK);
+        st->fill_to = (float)(f->fill_to / (double)TICK);
+        st->t = (float)((f->playhead < f->chain_last ? f->playhead : f->chain_last) / (double)TICK);
+        st->fork_max = f->fork_max;
+        st->nfork = f->nfork < WIKIFRAME_FORKS ? f->nfork : WIKIFRAME_FORKS;
+        for (i = 0; i < st->nfork; i++) {
+            const WIKIFRAMEFORK* k = &f->fork[i];
+            HUDFORK* q = &st->fork[i];
+            q->id = k->id;
+            /* the bound leaves a seat below nseat or 0xFF, which no seat names */
+            copy(q->name, sizeof q->name, k->seat < f->nseat && k->seat < WIKI_SEATS ? f->seat[k->seat].name : "Unknown seat");
+            q->from = (float)(k->from / (double)TICK);
+            q->end = (float)(k->end / (double)TICK);
+            q->parent = k->parent;
+            q->flags = k->flags & (WIKIFRAME_FORK_WATCHED | WIKIFRAME_FORK_CHAIN);
+            /* the first of each, as frame.js finds them */
+            if ((k->flags & WIKIFRAME_FORK_WATCHED) && st->timeline < 0) st->timeline = i;
+            if ((k->flags & WIKIFRAME_FORK_ARMED) && st->armed < 0) st->armed = i;
+            if (f->pick == 2 && k->id == f->pick_evict && st->replace < 0) st->replace = i;
+        }
+        st->picker = f->pick == 2;
+        st->pick_down = f->pick != 0;
+        st->lanes_open = f->lanes;
+    }
     if (f->live) {
         /* the live HUD as tagpu_hudstate.c present_live sets it: the strip from the rewind's first
            GameTime to G, the playhead at the GameTime shown within it, never playing */
@@ -477,8 +662,22 @@ void tagpu_wikiframe_game_point(const WIKIFRAMEREC* f, const WIKISTAGEFIT* fit, 
 
 int tagpu_wikiframe_pressed(const WIKIFRAMEREC* f, WIKIFRAMEREC* out)
 {
+    int k;
     *out = *f;
     if (!f->live || strcmp(f->cur.to, WIKIFRAME_AT_GAME)) return 0;
+    if (!strncmp(f->cur.from, "takeas:", 7)) {
+        /* a takeover's glide back from its row: the replay HUD with the picker open, as many
+           placeholder forks as draw the limit's warning when the takeover's picker drew it */
+        out->live = 0;
+        out->rw = WIKI_RW_IDLE;
+        out->pick = 2;
+        out->nfork = (uint8_t)(f->tk_full ? f->fork_max : 0);
+        for (k = 0; k < WIKIFRAME_FORKS; k++) {
+            memset(&out->fork[k], 0, sizeof out->fork[k]);
+            out->fork[k].id = k + 1;
+        }
+        return 1;
+    }
     out->rw = WIKI_RW_PAST;
     out->now = f->first;
     out->arm = WIKI_ARM_NONE;
@@ -514,10 +713,28 @@ int tagpu_wikiframe_on_world(double x, double z, int Hg, int mw, int mh)
            (x >= 0 && x < mw && z >= 0 && z < mh);
 }
 
+int tagpu_wikiframe_seat_side(const WIKILAYOUT* lay, int side, int seat)
+{
+    int r;
+    if (seat == 0 || !lay) return side;
+    for (r = 0; r < lay->nside && r < WIKI_SIDE_SIDES; r++)
+        if (r != side) return r;
+    return side;
+}
+
+int tagpu_wikiframe_lanes(const WIKIFRAMEREC* f, int32_t* lane)
+{
+    int k, n = 0;
+    if (!f->tk || f->live || !f->lanes) return 0;
+    for (k = 0; k < f->nfork && k < WIKIFRAME_FORKS; k++) lane[n++] = f->fork[k].id;
+    return n;
+}
+
 void tagpu_wikiframe_press_init(WIKIFRAMEPRESS* m)
 {
     m->held[0] = 0;
     m->last = -1;
+    m->lane = -1;
 }
 
 static int give(int c, int v, int* control, int* value)
@@ -527,11 +744,27 @@ static int give(int c, int v, int* control, int* value)
     return 1;
 }
 
-/* a button: a control a demo presses that is not the track */
-static int button(const char* k) { return control(k) && strcmp(k, "track"); }
-
-int tagpu_wikiframe_press_down(WIKIFRAMEPRESS* m, int src, const char* key, int right, int T, int* control_, int* value)
+/* a button: a control a demo presses that is not the track, a picker row and a lane's controls
+   by their indexed keys alone (the HUD keys no other) */
+static int button(const char* k)
 {
+    int c, n;
+    if (tagpu_wikiframe_indexed(k, &c, &n)) return 1;
+    c = control(k) ? tagpu_wikidata_hud(k) : -1;
+    return c >= 0 && c != WIKI_HUD_TRACK && c != WIKI_HUD_TAKEAS && c != WIKI_HUD_LANE && c != WIKI_HUD_EXPORT &&
+           c != WIKI_HUD_DELETE;
+}
+
+/* the fork lane n showed, or -1 past the lanes drawn */
+static int32_t lane_at(const int32_t* lane, int nlane, int n)
+{
+    return lane && n >= 0 && n < nlane && n < WIKIFRAME_FORKS ? lane[n] : -1;
+}
+
+int tagpu_wikiframe_press_down(WIKIFRAMEPRESS* m, int src, const char* key, int right, int T, const int32_t* lane, int nlane,
+                               int* control_, int* value)
+{
+    int c, n;
     if (!key) key = "";
     if (right || m->held[0]) return 0;
     if (src == WIKIHIT_DIALOG) {
@@ -544,6 +777,10 @@ int tagpu_wikiframe_press_down(WIKIFRAMEPRESS* m, int src, const char* key, int 
         m->last = T;
         return give(WIKI_HUD_TRACK, T, control_, value);
     }
+    if (tagpu_wikiframe_indexed(key, &c, &n) && c != WIKI_HUD_TAKEAS) {
+        /* a lane's control is held only on a lane drawn, with the fork it showed */
+        if ((m->lane = lane_at(lane, nlane, n)) < 0) return 0;
+    }
     if (button(key)) copy(m->held, sizeof m->held, key);
     return 0;
 }
@@ -555,15 +792,24 @@ int tagpu_wikiframe_press_drag(WIKIFRAMEPRESS* m, int T, int* control_, int* val
     return give(WIKI_HUD_TRACK, T, control_, value);
 }
 
-int tagpu_wikiframe_press_up(WIKIFRAMEPRESS* m, const char* key, int T, int* control_, int* value)
+int tagpu_wikiframe_press_up(WIKIFRAMEPRESS* m, const char* key, int T, const int32_t* lane, int nlane, int* control_,
+                             int* value)
 {
     char h[HUD_KEYLEN];
+    int c, n;
+    const int32_t id = m->lane;
     copy(h, sizeof h, m->held);
     m->held[0] = 0;
+    m->lane = -1;
     if (!key) key = "";
     if (!strcmp(h, "track")) return T == m->last ? 0 : give(WIKI_HUD_TRACK, T, control_, value);
     if (!h[0] || strcmp(key, h)) return 0;
     if (!strcmp(h, "yes")) return give(WIKI_HUD_LEAVE_YES, 0, control_, value);
     if (!strcmp(h, "no")) return give(WIKI_HUD_LEAVE_NO, 0, control_, value);
+    if (tagpu_wikiframe_indexed(h, &c, &n)) {
+        if (c == WIKI_HUD_TAKEAS) return give(c, n, control_, value);
+        /* THE HELD LANE: the same fork at the same place at the press and at the release */
+        return id >= 0 && lane_at(lane, nlane, n) == id ? give(c, id, control_, value) : 0;
+    }
     return give(tagpu_wikidata_hud(h), 0, control_, value);
 }

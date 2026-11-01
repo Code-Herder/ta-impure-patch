@@ -22,6 +22,11 @@
    idle and the viewer's hand is free, `@game` the point a trip starts from and a return glide ends
    at.
 
+   TAKE OVER, a takeover entry's replay (frame.js's header states it): watching, the replay HUD
+   with its Take over set -- the picker, the Forks bay and the lanes, the record's fork block --;
+   after the takeover, a live frame as Rewind's with seat h, the seat taken, where Rewind reads
+   seat 0, and the top bar in seat h's side's art (`top_side`).
+
    PURE. No global, no engine address, no allocation; pure C99 and the C library, so framecheck.mjs
    compiles it natively. The DLL computes it on SSE2 (Makefile, THE WIKI'S FRAME), so its doubles
    are frame.js's. */
@@ -69,20 +74,37 @@ typedef struct {
    and metal and the rates last sampled (tagpu_wikireplay.h) -- with the shown seat 0's storages
    and stored values; Watching's are 0, the viewer's zeroed record (decision 13) */
 typedef struct { float e, m, ei, eo, mi, mo, emax, mmax, raw_e, raw_m; } WIKIFRAMEBAR;
-/* SEAT 0'S CURSOR in the shown world: its world point, its shape (WIKI_CURSOR_*) and the ticks
-   since that shape began, which its animation runs from */
+/* THE HUMAN SEAT'S CURSOR in the shown world (seat 0's in Rewind, the seat taken over in a
+   takeover's live game): its world point, its shape (WIKI_CURSOR_*) and the ticks since that shape
+   began, which its animation runs from */
 typedef struct {
     float   x, z;
     int32_t age;
     uint8_t shape, pad[3];
 } WIKIFRAMESIM;
+/* THE FORKS THE STAGE HUD LISTS: TAGPU_PK_HUD's fork part (tagpu_packet.h), the forks a file keeps
+   (REC_FORK_LIMIT, the packet's TAGPU_PK_HUD_FORKS and the HUD's HUD_MAXFORK, held equal below and
+   in tagpu_wikistate.c), each its id, R, last and parent's id in game ticks, the seat it took
+   (0xFF none) and its flags, the packet's TAGPU_PK_FORK_* (tagpu_wikistate.c holds them equal) */
+#define WIKIFRAME_FORKS          REC_FORK_LIMIT
+#define WIKIFRAME_FORK_WATCHED   1u                /* the timeline watched                       */
+#define WIKIFRAME_FORK_CHAIN     2u                /* a member of the watched timeline's chain    */
+#define WIKIFRAME_FORK_ARMED     4u                /* its Delete is armed, while the lanes are open */
+typedef char wikiframe_forks_fit[WIKIFRAME_FORKS == HUD_MAXFORK ? 1 : -1];
+typedef struct {
+    int32_t id, from, end, parent;
+    uint8_t seat, flags, pad[2];
+} WIKIFRAMEFORK;
 typedef struct {
     uint8_t       on;                       /* a frame:game entry's replay is on the stage               */
     uint8_t       playing;                  /* the game is not paused and not at its end                 */
     uint8_t       question;                 /* Leave's question is open                                  */
     uint8_t       nseat;                    /* <= WIKI_SEATS                                             */
-    int8_t        side;                     /* the panel's, the bars' and the badge's layout side        */
-    uint8_t       colour;                   /* the badge's: seat 0's colour index; 0xFF none             */
+    int8_t        side;                     /* the load's layout side: the panel's, PANELSIDE's, the
+                                               bottom bar's and, but in a takeover's live game, the
+                                               top bar's (top_side)                                     */
+    uint8_t       colour;                   /* the badge's: the human seat's colour index (seat 0 but
+                                               in a takeover's live game); 0xFF none                    */
     uint8_t       speed;                    /* tenths: 5, 10, 20, 40, 80                                 */
     uint8_t       try_it;                   /* the presses are the player's: no scripted cursor          */
     int32_t       playhead, end;            /* game ticks                                                */
@@ -98,27 +120,56 @@ typedef struct {
        while unarmed), game ticks */
     uint8_t       live, rw, arm, simcur;
     int32_t       first, G, now, last, arm_R;
-    WIKIFRAMEBAR  bar;
+    WIKIFRAMEBAR  bar;                      /* the human seat's numbers                                  */
     WIKIFRAMESIM  sim;
+    /* TAKE OVER (`tk` 0 leaves the rest 0 and top_side the side): the picker, 0 closed, 1 asked or
+       seeking, 2 open (TAGPU_PK_HUD's `pick`); the lanes open; the forks listed, by (R, id); the
+       seat taken over, -1 while watching; the fork limit; whether the takeover's picker drew the
+       limit's warning; THE TOP BAR'S SIDE (decision 15 as M0-T #2 MEASURED it: a CORE seat taken on
+       an ARM load takes CORE's top bar -- its background, labels and the badge's place -- while the
+       column, the minimap and the bottom bar stay the load's), the side of the seat taken over in a
+       takeover's live game and `side` in every other record; the watched chain's last tick, the R
+       its fill stops at, the picker's R and the fork it evicts (-1 none), game ticks */
+    uint8_t       tk, pick, lanes, nfork;
+    int8_t        human;
+    uint8_t       fork_max, tk_full;
+    int8_t        top_side;
+    int32_t       chain_last, fill_to, pick_R, pick_evict;
+    WIKIFRAMEFORK fork[WIKIFRAME_FORKS];
 } WIKIFRAMEREC;
+
+/* THE INDEXED CONTROLS of the Take over set, as tagpu_hudlay.c keys them: a picker row
+   `takeas:<row>` (a row is its seat: the record lists the seats in order), and a lane's
+   `lane:<k>`, `export:<k>` and `delete:<k>`, k its place in the record's fork list. 1 when `key` is
+   one, with its control (WIKI_HUD_*) and index; the index is below WIKI_SEATS for a row and below
+   WIKIFRAME_FORKS for a lane's. */
+int tagpu_wikiframe_indexed(const char* key, int* control, int* index);
+
+/* The layout side seat `seat` plays on, the top bar's in a takeover's live game: seat 0 the load's
+   `side`; any other seat the opponent's, the first layout side other than `side`, which a game
+   entry's rival units are cast by (tagpu_wiki.c rival_of); `side` with no layout or no other side. */
+int tagpu_wikiframe_seat_side(const WIKILAYOUT* lay, int side, int seat);
 
 /* The replay HUD's control `c` (WIKI_HUD_*, leave:yes included) by the key the HUD's hit map and
    the replay name it; "" for none. A control a demo presses is one of the WIKI_NHUD. */
 const char* tagpu_wikiframe_key(int c);
 
 /* The toast the HUD shows at demo tick rv->tick, the game's strings (tagpu_hudinput.c), into `out`
-   (HUD_TOASTLEN bytes); "" for none. */
-void tagpu_wikiframe_toast(const WIKIREPLAYVIEW* rv, char* out);
+   (HUD_TOASTLEN bytes); "" for none. `seat` (`nseat` of them) names a seat a toast names (Taking
+   over NAME); one past them is named "". */
+void tagpu_wikiframe_toast(const WIKIREPLAYVIEW* rv, const WIKIFRAMESEAT* seat, int nseat, char* out);
 
 /* THE FRAME RECORD from replay view `rv` and the game view `gv` it shows (NULL: no seats), the
-   layout side of the controlled seat `side`, `try_it` (the presses are the player's) and in Try it
-   the control the press machine holds (`try_held`, NULL or "" none). THE LIFETIME: called after the
+   load's layout side `side`, `try_it` (the presses are the player's), in Try it the control the
+   press machine holds (`try_held`, NULL or "" none), and `top_side`, the layout side of the human
+   seat (tagpu_wikiframe_seat_side), which the record takes only in a takeover's live game. In a
+   live game `gv` is the human seat's view (tagpu_wikisim_view_as). THE LIFETIME: called after the
    fill's last tagpu_wikireplay_step or _press, because `gv` points into the game simulation's view
    arrays, which the next step or press may free; the record holds values only, so it outlives
    them. The cursor's glide is on the viewer's clock, the toast's age on the demo tick (frame.js,
    THE GLIDE). */
 void tagpu_wikiframe_record(const WIKIREPLAYVIEW* rv, const WIKIVIEW* gv, int side, int try_it, const char* try_held,
-                            WIKIFRAMEREC* out);
+                            int top_side, WIKIFRAMEREC* out);
 
 /* THE BOUND, on the render thread's own copy before anything reads it: the record is DATA until
    here. Flags to 0/1; nseat to WIKI_SEATS and nmark to WIKIFRAME_MARKS; end to 1..WIKI_GAME_END_MAX
@@ -127,11 +178,18 @@ void tagpu_wikiframe_record(const WIKIREPLAYVIEW* rv, const WIKIVIEW* gv, int si
    -1; the badge's colour below `nlogo`, else none (0xFF); a seat's colour below `nlogo` or below
    WIKI_SEATS (the whitebox table), else 0xFF (grey); every float finite and within WIKI_ECON_MAX;
    every string terminated in its array; the held key and the cursor's keys among the replay's
-   controls (a held key that is not becomes "", a cursor key that is not turns the cursor off), and
-   the cursor's n in 1..64 with i <= n, else the cursor off. Live: the flags to 0/1, rw and arm to
-   their enums, else idle and none; first, G, now, last and arm_R to 0..WIKI_GAME_END_MAX; every bar
-   float finite and within WIKI_ECON_MAX; the cursor's point finite and within the frame's largest
-   map and column, its shape a WIKI_CURSOR_* and its age 0 or more, else simcur off. */
+   controls or the indexed ones (tagpu_wikiframe_indexed; a held key that is neither becomes "", a
+   cursor key that is neither turns the cursor off), and the cursor's n in 1..64 with i <= n, else
+   the cursor off. Live: the flags to 0/1, rw and arm to their enums, else idle and none; first, G,
+   now, last and arm_R to 0..WIKI_GAME_END_MAX; every bar float finite and within WIKI_ECON_MAX; the
+   cursor's point finite and within the frame's largest map and column, its shape a WIKI_CURSOR_*
+   and its age 0 or more, else simcur off. Take over: tk, lanes and tk_full to 0/1, and a record
+   that is not tk has its whole block 0 and top_side its side; pick to 0..2, else 0; human to
+   -1..nseat - 1, else -1; fork_max to WIKIFRAME_FORKS; top_side below `nside` in a live record,
+   else the side; nfork to WIKIFRAME_FORKS, a fork whose id is outside 1..RECR_TIMELINES - 1
+   dropped, its from and end to 0..end, its flags to their three bits and a seat outside
+   0..nseat - 1 to 0xFF (named "Unknown seat", as the game's HUD names one); chain_last, fill_to
+   and pick_R to 0..end; pick_evict -1 or an id of 1..RECR_TIMELINES - 1, else -1. */
 void tagpu_wikiframe_bound(WIKIFRAMEREC* f, int nside, int nlogo);
 
 /* ---- the watcher's view ------------------------------------------------------------------------ */
@@ -152,7 +210,9 @@ int tagpu_wikiframe_idle_side(const WIKILAYOUT* lay, int side, WIKISTAGESIDE* ou
    names to the render thread, whatever the game script's sidebar says: that key governs seat 0's
    recorded inputs, and the frame is the watcher's screen.
    WIKIFRAME_PLAYER, the live rewind idle or open: the view as the simulation made it (MEASURED, M0
-   #1), the ghost only with `cursor` (the simulation's cursor is the one drawn).
+   #1), the ghost only with `cursor` (the simulation's cursor is the one drawn), the copy being of
+   seat `human`'s view, and the selection seat `human`'s alone: a unit's selected flag is set only
+   by its owner's seat, and the view carries every seat's.
    WIKIFRAME_PAST, the live rewind's past: the past simulation's world and fog under the column the
    copy carries, which the caller has copied from the live simulation's view (tagpu_wikistage_side)
    with no unit under it; nothing selected, no ghost, sites, queued sites, cursor, lines, drag, sweep
@@ -160,7 +220,7 @@ int tagpu_wikiframe_idle_side(const WIKILAYOUT* lay, int side, WIKISTAGESIDE* ou
    No frame view keeps a cursor of its own. A live view without a column takes the idle MAIN2 of
    `side`; none at all when the layout has no such side. */
 enum { WIKIFRAME_WATCH, WIKIFRAME_PLAYER, WIKIFRAME_PAST };
-void tagpu_wikiframe_view(WIKISTAGEVIEW* v, const WIKILAYOUT* lay, int side, int layout_src, int mode, int cursor);
+void tagpu_wikiframe_view(WIKISTAGEVIEW* v, const WIKILAYOUT* lay, int side, int layout_src, int mode, int cursor, int human);
 
 /* ---- the stage HUD ---------------------------------------------------------------------------- */
 
@@ -173,11 +233,20 @@ uint32_t tagpu_wikiframe_seat_colour(const struct WIKISIDE* sd, int k);
    hud.js's state() as frame.js hudState makes it: a screen of the frame's own size at 100 % (Q3),
    the engine frame the column and both bars, every switch on and nothing folded as a fresh Watch,
    each seat a team of one, no sight, no follow, no forks, no pointer (mx, my -1), the record's held
-   control and toast; a live record the live HUD as tagpu_hudstate.c present_live sets it. `sd` the published sidebar art for the seats' colours, or NULL.
+   control and toast; a live record the live HUD as tagpu_hudstate.c present_live sets it. `sd` the
+   published sidebar art for the seats' colours, or NULL. A seat is out, its row dimmed and its
+   picker row refused, while it has no unit: the game's rule (tagpu_hudstate.c, `out` is units ==
+   0), which the takeover refuses by too (tk_bound).
+   A TAKEOVER'S WATCHING, a tk record that is not live, as tagpu_hudstate.c `forks` and `present`
+   set the game's from the packet, with the track's start at tick 0 and its axis the end (every
+   chain's last lies within it): the time text's second clock the watched chain's last, the fill
+   to fill_to, the playhead held to the chain's last, the forks in seconds named by their seats,
+   the watched one, the armed Delete and, while the picker is open, the one it would replace by
+   their places, the picker drawn while open and the Take over button down while asked, sought or
+   open, the lanes as open as the record says and fork_max the record's.
    THE CHART: the stats window stays closed, so no build of this state emits HOP_CHART. That is what
    keeps the HUD pass's one chart image the replay HUD's; the stage must have its own before it
-   opens the window (P). fork_max is HUD_MAXFORK until the recorder's constant reaches here through
-   an engine-free header (R1). */
+   opens the window (P). */
 void tagpu_wikiframe_hudstate(const WIKIFRAMEREC* f, int Wg, int Hg, float px, const struct WIKISIDE* sd, HUDSTATE* st);
 
 /* LEAVE'S QUESTION in canvas device pixels for the fit `fit` of a frame Wg x Hg: YESORNO.GUI's own
@@ -200,11 +269,14 @@ void tagpu_wikiframe_game_point(const WIKIFRAMEREC* f, const WIKISTAGEFIT* fit, 
                                 double* y);
 
 /* THE HUD THE TRIP PRESSED (frame.js pressed), the record whose HUD the cursor's point is resolved
-   among: for a return glide, which leaves a control of the strip its press closed, `f` with the
-   strip open over the past, fwd live (`now` at the strip's first) and nothing armed, the HUD as
-   drawn at that press -- its controls lie where they lie whatever the playhead or the arm; for any
-   other record `f` itself. Its boxes only: the HUD drawn is `f`'s own. 1 when `out` differs from
-   `f`, a return glide's. */
+   among: for a return glide from a picker row (a takeover's), `f` as the replay HUD with the picker
+   open, its fork list placeholders as many as make the picker draw the limit's warning when the
+   takeover's did (tk_full) -- a row lies where the seat count and the warning put it
+   (tagpu_hudlay.c picker) and nowhere else; for any other return glide, which leaves a control of
+   the strip its press closed, `f` with the strip open over the past, fwd live (`now` at the
+   strip's first) and nothing armed, the HUD as drawn at that press -- its controls lie where they
+   lie whatever the playhead or the arm; for any other record `f` itself. Its boxes only: the HUD
+   drawn is `f`'s own. 1 when `out` differs from `f`, a return glide's. */
 int tagpu_wikiframe_pressed(const WIKIFRAMEREC* f, WIKIFRAMEREC* out);
 
 /* THE CURSOR'S POINT, in HUD units, for a bounded record: each key at its control's HOP_HOT box
@@ -239,17 +311,32 @@ enum { WIKIHIT_PAGE, WIKIHIT_HUD, WIKIHIT_DIALOG };
    taken and does nothing, so a press reaches nothing but the stage's replay; no press plays a sound
    (decision 9). Each call gives at most one press for tagpu_wikireplay_press: 1 with `*control`
    (WIKI_HUD_*) and `*value` set, else 0.
+   THE INDEXED CONTROLS (tagpu_wikiframe_indexed) are buttons too: a picker row's release gives
+   takeas with the row, a lane's control's its control with the fork the lane showed. `lane` (`nlane`
+   of them, NULL for none) is the fork ids of the lanes the pressed frame drew, in their keys' order
+   (tagpu_hudstate.c fills the game's `lane_id` the same way); a lane's control is held only when
+   it names a lane drawn, and acts at its release only when the lanes then drawn name the same fork
+   at that place: a list that changed under the pointer between the two -- a deletion's, a fork
+   made -- never sends the release to the fork that moved into its place (tagpu_hudinput.c
+   held_lane, the game's rule). The id is DATA: the replay refuses one that is not a live fork.
    THE TRACK'S TICK `T` is the pointer's x on the playhead's run as the render thread last drew it,
    clamped to the run, times the end it was drawn with. That axis is the render thread's data and
    turns a pixel into a tick only, and tagpu_wikireplay_press clamps the tick to the game again, so a
    stale axis costs a seek to a slightly different tick, never one outside the demo. */
 typedef struct {
-    char held[HUD_KEYLEN];                  /* "" none; a control's key, or the question's yes / no */
-    int  last;                              /* the track's tick last sought while it is held        */
+    char    held[HUD_KEYLEN];               /* "" none; a control's key, or the question's yes / no */
+    int     last;                           /* the track's tick last sought while it is held        */
+    int32_t lane;                           /* a lane's control held: the fork its lane showed      */
 } WIKIFRAMEPRESS;
+/* The lanes a bounded record's stage HUD draws, in their keys' order: the fork ids of its list
+   while it watches a takeover's replay with the lanes open, none otherwise. Their count into
+   `lane` (WIKIFRAME_FORKS ids). */
+int  tagpu_wikiframe_lanes(const WIKIFRAMEREC* f, int32_t* lane);
 void tagpu_wikiframe_press_init(WIKIFRAMEPRESS* m);
-int  tagpu_wikiframe_press_down(WIKIFRAMEPRESS* m, int src, const char* key, int right, int T, int* control, int* value);
+int  tagpu_wikiframe_press_down(WIKIFRAMEPRESS* m, int src, const char* key, int right, int T, const int32_t* lane, int nlane,
+                                int* control, int* value);
 int  tagpu_wikiframe_press_drag(WIKIFRAMEPRESS* m, int T, int* control, int* value);
-int  tagpu_wikiframe_press_up(WIKIFRAMEPRESS* m, const char* key, int T, int* control, int* value);
+int  tagpu_wikiframe_press_up(WIKIFRAMEPRESS* m, const char* key, int T, const int32_t* lane, int nlane, int* control,
+                              int* value);
 
 #endif

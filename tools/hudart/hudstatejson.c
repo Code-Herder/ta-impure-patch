@@ -78,9 +78,11 @@ void hudstate_json(const TJV* S, HUDSTATE* st)
     st->picker = tj_is(tj_get(S, "picker"), TJ_TRUE);
     st->armed = (int)tj_num(tj_get(S, "armed"), -1);
     st->replace = (int)tj_num(tj_get(S, "replace"), -1);
-    /* the Take over button is down while the picker is open, and the picker's title is the
-       playhead's clock: the mockup's st.t */
-    st->pick_down = st->picker;
+    /* the Take over button is down while the picker is asked for, sought to or open, the mockup's
+       pickDown, and with none while it is open; the picker's title is the playhead's clock, the
+       mockup's st.t */
+    v = tj_get(S, "pickDown");
+    st->pick_down = v ? tj_is(v, TJ_TRUE) : st->picker;
     v = tj_get(S, "forks");
     for (e = v ? v->first : NULL; e && st->nfork < HUD_MAXFORK; e = e->next) {
         HUDFORK* f = &st->fork[st->nfork++];

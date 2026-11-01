@@ -4,11 +4,12 @@
    usage: node tools/wiki/barcheck.mjs [--js] [--pack DIR]
      exit 0 when every check holds, 1 when one fails, 2 when it cannot run; --js runs the JavaScript halves alone
      (the capture and the reader), building nothing
-   usage: node tools/wiki/barcheck.mjs --compose DIR SIDE COLOUR WG HG OUT [NUM]
+   usage: node tools/wiki/barcheck.mjs --compose DIR SIDE COLOUR WG HG OUT [NUM [TOP]]
      bar.js's bars of pack DIR's layout side SIDE with badge colour COLOUR in a frame WG x HG, the numbers all 0 (the
      viewer's record, as the stage draws them) or, with NUM, a JSON file of a live frame record's `bar` (each number
-     taken as the f32 it is): OUT gets the RGBA, BAR_W x BAR_H x 4 bytes, and the bars' width is printed, or `none`
-     when bar.js composes nothing (tools/wiki_regression.py mods (w6), (w7) read both)
+     taken as the f32 it is), the top bar in layout side TOP's art (SIDE's without it; a takeover's live game, the
+     record's top_side): OUT gets the RGBA, BAR_W x BAR_H x 4 bytes, and the bars' width is printed, or `none` when
+     bar.js composes nothing (tools/wiki_regression.py mods (w6), (w7) read both)
 
    THE CAPTURE. research/notes/assets/hud-art/backdrop.png is a 1280 x 720 replay frame of our renderer at full map:
    the viewer's record, ARM, colour 4, every number 0 and both storages 0 (MEASURED: the badge matches colour 4's
@@ -31,6 +32,10 @@
    bits past the file, a glyph 0 or 33 wide, too many badge frames, a GUI table of the wrong length -- drops exactly
    that element to null and says so in a problem line, and bar.js composes nothing for a side without a bar.
 
+   THE TWO SIDES (decision 15, takeover-spec.md 7.7). On every pack present with two sides with bars, for each pair
+   of them, the bars of side A with the top bar in side B's art: its top bar's rows past column 0 equal B's own bars',
+   and column 0 on both bars' rows (PANELSIDE's column 128) and the bottom bar's rows equal A's own bars'.
+
    THE C HALF. tagpu/ddraw/tests/wikibartest.c, built natively with the sanitizers over tagpu_wikibar.c, is handed
    each pack's bar art as the asset loader fills WIKISIDE (tools/wiki/assetcheck.py --side holds the loader's art
    equal to the pack's, frame for frame) and composes the same cases as bar.js; every picture's indices, and its RGBA
@@ -38,8 +43,10 @@
    every one under tools/wiki/mockup/gfx/side/ that is present, and two synthetic ones (the reader's well-formed
    pack, and the same with a badge rect half outside the picture and strings past its edges). The cases: every
    layout side (one without a bar too) x Wg 640, 768, 1024, 1280 and 2176 (the widest, 128 + 16 x 128) each with its
-   own Hg x the badge colours 0, 4, the last frame and one past it x the number sets of NUMBERS below; RGBA for the
-   zeros at colour 0; and, on the first pack, the frames outside the composer's bounds. */
+   own Hg x the badge colours 0, 4, the last frame and one past it x the number sets of NUMBERS below; every layout
+   side's bars with the top bar in each other side's art, every frame x colours 0 and 4 x NUMBERS; RGBA for the
+   zeros at colour 0; and, on the first pack, the frames outside the composer's bounds and top bar sides outside
+   the layout. */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -103,11 +110,12 @@ function readPack(dir) {
   return { json, ...WikiSide.read(json, bin(A.sheet && A.sheet.file), bin(A.palette), bin(A.minimap && A.minimap.seen), bin(A.greyed), fonts) };
 }
 if (process.argv[2] === '--compose') {
-  const [dir, side, colour, Wg, Hg, out, numFile] = process.argv.slice(3);
+  const [dir, side, colour, Wg, Hg, out, numFile, top] = process.argv.slice(3);
   // the numbers a live frame's record shows (its `bar`), each the f32 the record holds; without NUM all 0
   const num = { ...WikiBar.ZERO };
   if (numFile) for (const [k, v] of Object.entries(JSON.parse(fs.readFileSync(numFile, 'utf8')))) if (k in num) num[k] = Math.fround(Number(v));
-  const p = readPack(dir), c = p.art ? WikiBar.compose(p.art, Number(side), Number(colour), Number(Wg), Number(Hg), num) : null;
+  const p = readPack(dir), c = p.art ? WikiBar.compose(p.art, Number(side), Number(colour), Number(Wg), Number(Hg), num,
+    top === undefined ? Number(side) : Number(top)) : null;
   if (!c) { console.log('none'); process.exit(0); }
   fs.writeFileSync(out, WikiBar.rgba(p.art, c));
   console.log(c.w);
@@ -282,11 +290,19 @@ function casesOf(art, edges) {
   for (let side = 0; side < art.bar.length; side++)
     for (const [Wg, Hg] of FRAMES)
       colours.forEach((colour, ci) => NUMBERS.forEach(([name, num], ni) =>
-        out.push({ side, colour, Wg, Hg, rgba: ci === 0 && ni === 0, num, name })));
+        out.push({ side, top: side, colour, Wg, Hg, rgba: ci === 0 && ni === 0, num, name })));
+  // THE TWO SIDES: every top bar's side on every load's side (a takeover's live game), each frame, two badges
+  for (let side = 0; side < art.bar.length; side++)
+    for (let top = 0; top < art.bar.length; top++)
+      if (top !== side)
+        for (const [Wg, Hg] of FRAMES)
+          [0, 4].forEach((colour, ci) => NUMBERS.forEach(([name, num], ni) =>
+            out.push({ side, top, colour, Wg, Hg, rgba: ci === 0 && ni === 0, num, name: `${name}, top ${top}` })));
   if (edges)
-    for (const [side, Wg, Hg] of [[0, 128, 544], [0, 129, 544], [0, 128 + WikiBar.BAR_W + 1, 544], [0, 768, 63], [0, 768, 64],
-      [-1, 768, 544], [art.bar.length, 768, 544]])
-      out.push({ side, colour: 0, Wg, Hg, rgba: true, num: NUMBERS[1][1], name: 'bounds' });
+    for (const [side, top, Wg, Hg] of [[0, 0, 128, 544], [0, 0, 129, 544], [0, 0, 128 + WikiBar.BAR_W + 1, 544], [0, 0, 768, 63],
+      [0, 0, 768, 64], [-1, -1, 768, 544], [art.bar.length, art.bar.length, 768, 544], [0, -1, 768, 544], [0, art.bar.length, 768, 544],
+      [-1, 0, 768, 544]])
+      out.push({ side, top, colour: 0, Wg, Hg, rgba: true, num: NUMBERS[1][1], name: 'bounds' });
   return out;
 }
 
@@ -315,14 +331,14 @@ function cCheck(lines) {
       const dir = path.join(tmp, `pack${pi}`), cases = casesOf(p.art, pi === 0);
       writeC(p.art, dir);
       fs.writeFileSync(path.join(dir, 'cases.txt'), cases.map(c =>
-        [c.side, c.colour, c.Wg, c.Hg, c.rgba ? 1 : 0, ...FIELDS.map(f => String(c.num[f]))].join(' ')).join('\n') + '\n');
+        [c.side, c.top, c.colour, c.Wg, c.Hg, c.rgba ? 1 : 0, ...FIELDS.map(f => String(c.num[f]))].join(' ')).join('\n') + '\n');
       const out = path.join(dir, 'out.bin'), fd = fs.openSync(out, 'w');
       run(exe, ['compose', dir, path.join(dir, 'cases.txt')], { stdio: ['ignore', fd, 'pipe'] });
       fs.closeSync(fd);
       const b = fs.readFileSync(out), N = WikiBar.BAR_W * WikiBar.BAR_H;
       let o = 0, bad = 0, drawn = 0, pictures = 0;
       for (const c of cases) {
-        const want = WikiBar.compose(p.art, c.side, c.colour, c.Wg, c.Hg, c.num), got = b.readInt32LE(o);
+        const want = WikiBar.compose(p.art, c.side, c.colour, c.Wg, c.Hg, c.num, c.top), got = b.readInt32LE(o);
         const what = `${name} side ${c.side} colour ${c.colour} ${c.Wg} x ${c.Hg} ${c.name}`;
         o += 4;
         if ((want ? want.w : -1) !== got) {
@@ -357,11 +373,39 @@ function cCheck(lines) {
   return failed;
 }
 
+/* ---- the two sides ---- */
+function twoSidesCheck(lines) {
+  let failed = 0;
+  if (!fs.existsSync(PACKS)) return 0;
+  for (const mod of fs.readdirSync(PACKS).sort()) {
+    if (!fs.existsSync(path.join(PACKS, mod, 'side.json'))) continue;
+    const p = readPack(path.join(PACKS, mod)), A = p.art, n = A && A.bar ? A.bar.length : 0;
+    let pairs = 0;
+    for (let side = 0; side < n; side++)
+      for (let top = 0; top < n; top++) {
+        if (top === side || !A.bar[side] || !A.bar[top]) continue;
+        const num = NUMBERS[1][1], c = WikiBar.compose(A, side, 4, 1280, 720, num, top);
+        const own = WikiBar.compose(A, side, 4, 1280, 720, num), their = WikiBar.compose(A, top, 4, 1280, 720, num);
+        if (!c || !own || !their) { failed++; lines.push(`  two sides: ${mod} ${side} under ${top}: bar.js composes nothing`); continue; }
+        pairs++;
+        let bad = null;
+        for (let y = 0; y < WikiBar.BAR_H && !bad; y++)
+          for (let x = 0; x < c.w && !bad; x++) {
+            const i = y * WikiBar.BAR_W + x, want = y < WikiBar.BAR_H / 2 && x > 0 ? their.idx[i] : own.idx[i];
+            if (c.idx[i] !== want) bad = `row ${y}, column ${x}: ${c.idx[i]}, the ${y < WikiBar.BAR_H / 2 && x > 0 ? 'top' : 'load'} side's ${want}`;
+          }
+        if (bad) { failed++; lines.push(`  two sides: ${mod} side ${side} with side ${top}'s top bar DIFFERS at ${bad}`); }
+      }
+    if (pairs) lines.push(`  two sides: ${mod}: ${pairs} pairs, the top bar the top side's and column 0 and the bottom bar the load's`);
+  }
+  return failed;
+}
+
 let code = 0;
 try {
   const JS_ONLY = process.argv.includes('--js');
   const lines = [];
-  const failed = captureCheck(lines) + readerCheck(lines) + (JS_ONLY ? 0 : cCheck(lines));
+  const failed = captureCheck(lines) + readerCheck(lines) + twoSidesCheck(lines) + (JS_ONLY ? 0 : cCheck(lines));
   console.log(failed ? `barcheck: ${failed} checks FAIL` : `barcheck: bar.js holds -- the capture's two bars and the reader` +
     (JS_ONLY ? '' : '; tagpu_wikibar.c equals it on every pack'));
   for (const l of lines) console.log(l);

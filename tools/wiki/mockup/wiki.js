@@ -505,16 +505,17 @@ function frameClear() {
   if (!stageHud.hidden) { stageHud.hidden = true; stageTop.getContext('2d').clearRect(0, 0, stageTop.width, stageTop.height); }
 }
 /* the bars in the mod's own art (bar.js) under the game look with the pack's art, as the column is, showing the
-   record's numbers (a live frame's memo, Watching's zeros); null for the whitebox. Composed again only when the art,
-   the side, the badge, the size or a number changes, as the DLL's bar_bind */
+   record's numbers (a live frame's memo, Watching's zeros), the top bar in the record's top_side's art (the human seat's
+   side in a takeover's live game, decision 15); null for the whitebox. Composed again only when the art, the side, the
+   top bar's side, the badge, the size or a number changes, as the DLL's bar_bind */
 const BARCV = document.createElement('canvas');
 let barKey = null;
-function barArt(side, colour, Wg, Hg, num) {
+function barArt(side, colour, Wg, Hg, num, top) {
   const p = pack();
   if (!gameLook() || !p || !p.art || simLayout !== p.layout || typeof WikiBar === 'undefined') return null;
-  const key = `${S.mod}|${side}|${colour}|${Wg}|${Hg}|${JSON.stringify(num)}`;
+  const key = `${S.mod}|${side}|${top}|${colour}|${Wg}|${Hg}|${JSON.stringify(num)}`;
   if (key !== barKey) {
-    const c = WikiBar.compose(p.art, side, colour, Wg, Hg, num);
+    const c = WikiBar.compose(p.art, side, colour, Wg, Hg, num, top);
     barKey = key;
     BARCV.width = WikiBar.BAR_W; BARCV.height = WikiBar.BAR_H;
     if (c) BARCV.getContext('2d').putImageData(new ImageData(WikiBar.rgba(p.art, c), WikiBar.BAR_W, WikiBar.BAR_H), 0, 0);
@@ -526,27 +527,29 @@ function barArt(side, colour, Wg, Hg, num) {
 }
 function drawReplay() {
   const g = stage.getContext('2d'), W = stage.width, H = stage.height, U = G.gh / 720;
-  let rv, mode = 'watch';
+  let rv, mode = 'watch', human = 0;
   try {
     rv = rep.view();
     mode = !rv.live ? 'watch' : rv.live.rw === 'past' ? 'past' : 'player';
+    // the human seat's view: seat 0's but in a takeover's live game, the seat taken over's
+    human = rv.live ? rv.live.human : 0;
     const shown = mode === 'past' ? rep.past : rep.game;
     if (rv.game.target < 0 && shown) {
-      FR.gv = shown.view(); FR.poses = shown.poses(); FR.tick = shown.tick;
+      FR.gv = shown.view(human); FR.poses = shown.poses(); FR.tick = shown.tick;
       // the past's column is the live simulation's, which is never stepped while the past is shown
-      FR.lside = mode === 'past' && rep.game ? rep.game.view().side || null : null;
+      FR.lside = mode === 'past' && rep.game ? rep.game.view(human).side || null : null;
     }
   } catch (x) { fail(x); frameClear(); WikiStage.draw(g, null, { W, H, U, msg: simErr }); return null; }
   // THE SOUND: what a seek re-simulated is heard already -- each new game or finished seek starts the count at `quiet`
   if (rv.game.gen !== FR.gen || rv.game.quiet !== FR.quiet) { FR.gen = rv.game.gen; FR.quiet = rv.game.quiet; heard = rv.game.quiet; }
   if (FR.gv && rv.game.target < 0 && typeof WikiSound !== 'undefined') heard = WikiSound.drain(soundRoot(), FR.gv, heard, (mode === 'past' ? rep.past : rep.game)?.types);
   const side = simCtx ? simCtx.side : 0;
-  const rec = FR.gv ? WikiFrame.record(rv, FR.gv, side, repTry, PRESS.held) : null;
+  const rec = FR.gv ? WikiFrame.record(rv, FR.gv, side, repTry, PRESS.held, WikiFrame.seatSide(simLayout, side, human)) : null;
   /* THE ONE CURSOR in Try it: after a fork the simulation's follows the player's pointer while it is over the world and
      on no control of the HUD, and is the one drawn there, the browser's hidden (rewind-spec.md 9.5) */
   const onWorld = !!(rec && rec.simcur && repTry && PTR && overStage && liveWorld(PTR));
   const gv = mode === 'past' && FR.gv ? { ...FR.gv, side: FR.lside || undefined } : FR.gv;
-  const fv = WikiFrame.view(gv, simLayout, side, mode, !!rec && rec.simcur && (!repTry || onWorld));
+  const fv = WikiFrame.view(gv, simLayout, side, mode, !!rec && rec.simcur && (!repTry || onWorld), human);
   if (!fv) { frameClear(); FIT = WikiStage.draw(g, null, { W, H, U, msg: 'loading…' }); return null; }
   const C = WikiStage.content(fv), fit = WikiStage.fit(C, W, H, U), Wg = C.w, Hg = C.h;
   const fx = hudSnap(fit.ox + C.x0 * fit.s), fy = hudSnap(fit.oz + C.z0 * fit.s), hpx = Hg * fit.s / WikiFrame.HUD_H;
@@ -563,14 +566,17 @@ function drawReplay() {
     Object.assign(stageHud.style, { left: `${sr.left - br.left - box.clientLeft + fx / G.k}px`, top: `${sr.top - br.top - box.clientTop + fy / G.k}px`,
       width: `${Wg * fit.s / G.k}px`, height: `${Hg * fit.s / G.k}px` });
     stageHud.style.setProperty('--u', `${hpx / G.k}px`);
+    // a control's key as tagpu_hudlay.c makes it: its act, and a Take over row's seat or a lane's place (frame.js indexed)
+    const keyOf = e => 'track' in e.dataset ? 'track' : e.dataset.act
+      + (e.dataset.seat != null ? `:${e.dataset.seat}` : e.dataset.fork != null ? `:${e.dataset.fork}` : '');
     const boxes = () => [...stageHud.querySelectorAll('[data-act], [data-track]')].map(e => ({
-      key: 'track' in e.dataset ? 'track' : e.dataset.act, off: e.classList.contains('off'),
+      key: keyOf(e), off: e.classList.contains('off'),
       ub: (e.dataset.ub || '0 0 0 0').split(' ').map(Number), ends: +e.dataset.ends || 0 }));
     const pr = rec.cur.on ? WikiFrame.pressed(rec) : rec;
     let among = null;
     if (pr !== rec) { HUD.draw(stageHud, WikiFrame.hudState(pr, Wg, Hg, art), hpx, G.k); among = boxes(); }
     HUD.draw(stageHud, st, hpx, G.k);
-    const down = rec.held && stageHud.querySelector(`.art.hot[data-act="${rec.held}"]`);
+    const down = rec.held && [...stageHud.querySelectorAll('.art.hot[data-act]')].find(e => keyOf(e) === rec.held);
     if (down) HUD.press(down, true);
     FR.boxes = boxes();
     const M = fv.map, cell = +M.cell || 16;
@@ -592,7 +598,8 @@ function drawReplay() {
     }
   }
   FR.rec = rec;
-  FR.hud = { fx, fy, hpx, Wg, Hg, dlg, cursor, fit, side_h: fv.side ? fv.side.h : 0 };
+  FR.hud = { fx, fy, hpx, Wg, Hg, dlg, cursor, fit, side_h: fv.side ? fv.side.h : 0,
+    bar: { side, top: rec.top_side, colour: rec.colour } };
   const r = window.WikiGfx ? WikiGfx.frame(stageId(), fv, FR.tick, stageDir(), FR.poses) : null;
   IMG = r && { complete: r.complete, ground: r.ground, resolved: [...r.resolved], refused: r.refused };
   const image = r && r.complete ? {
@@ -601,7 +608,7 @@ function drawReplay() {
   } : null;
   FIT = WikiStage.draw(g, fv, { W, H, U, icons: ICONS, cursors: CURSORS, tick: FR.tick, cursor: false, image,
     side: { layout: simLayout, art: sideArt(fv, simLayout) },
-    frame: { bar: barArt(side, rec.colour, Wg, Hg, rec.bar), button: LAY.button, top: stageTop.getContext('2d'),
+    frame: { bar: barArt(side, rec.colour, Wg, Hg, rec.bar, rec.top_side), button: LAY.button, top: stageTop.getContext('2d'),
       question: rec.question ? dlg : null, held: PRESS.held, cursor, live: rec.live } });
   FR.hud.emblems = FIT ? FIT.emblems : null;
   stage.classList.toggle('try', onWorld);
@@ -679,7 +686,7 @@ stage.addEventListener('mousedown', e => {
   if (!frameTry()) return;
   e.preventDefault();
   const q = canvasPoint(e), h = frameHit(q);
-  if (h) { pressOut(PRESS.down(h.src, h.key, e.button !== 0, trackTick(q))); return; }
+  if (h) { pressOut(PRESS.down(h.src, h.key, e.button !== 0, trackTick(q), FR.rec ? WikiFrame.lanes(FR.rec) : [])); return; }
   const w = liveTry() && liveWorld(q), b = BTN[e.button];
   if (w && b) { liveMove = w; liveFlush(); if (!down.has(b)) { down.add(b); send({ down: b }); } }
 });
@@ -692,7 +699,7 @@ window.addEventListener('mousemove', e => {
 window.addEventListener('mouseup', e => {
   if (!frameTry() || !PRESS.held || e.button !== 0) return;
   const q = canvasPoint(e), h = frameHit(q);
-  pressOut(PRESS.up(h ? h.key : null, trackTick(q)));
+  pressOut(PRESS.up(h ? h.key : null, trackTick(q), FR.rec ? WikiFrame.lanes(FR.rec) : []));
 });
 // while the track is held, a seek each frame the pointer's tick changes, as the game seeks during a drag
 function frameDrag() { if (frameTry() && PRESS.held === 'track' && PTR) pressOut(PRESS.drag(trackTick(PTR))); }

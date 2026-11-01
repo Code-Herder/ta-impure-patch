@@ -104,6 +104,16 @@ CASES = [
     ("1024-stock-rewind-past", (1024, 768), "mod=stock&entry=rewind&demo=2", {"tick": 800}),
     ("4k-tazero-rewind-armed", (3840, 2160), "mod=tazero&entry=rewind&demo=3", {"tick": 1250}),
     ("1080-stock-rewind-fork", (1920, 1080), "mod=stock&entry=rewind&demo=4", {"tick": 1290}),
+    # a takeover entry, Take over a replay: the Take over button down while the picker is sought, the picker open over
+    # two seats, the Forks bay's lanes with the watched one and its Back to main recording, an armed Delete, the
+    # picker's warning with the lane it would replace outlined, and the live game after Bram (seat 1, CORE on an ARM
+    # load) is taken over -- its bars' sides ARM below and CORE above, the emblem at the live place
+    ("1080-stock-takeover-seeking", (1920, 1080), "mod=stock&entry=takeover", {"tick": 470}),
+    ("1080-stock-takeover-picker", (1920, 1080), "mod=stock&entry=takeover", {"tick": 520}),
+    ("1440-esc-takeover-lanes", (2560, 1440), "mod=escalation&entry=takeover&demo=2", {"tick": 400}),
+    ("1024-stock-takeover-armed", (1024, 768), "mod=stock&entry=takeover&demo=3", {"tick": 400}),
+    ("4k-tazero-takeover-warning", (3840, 2160), "mod=tazero&entry=takeover&demo=4", {"tick": 580}),
+    ("1080-stock-takeover-live", (1920, 1080), "mod=stock&entry=takeover", {"tick": 640}),
 ]
 
 KEYNAME = {"Shift": "shift", "Alt": "alt", "Ctrl": "ctrl", "Z": "z", "X": "x", "E": "e", "Left-click": "lmb", "Right-click": "rmb"}
@@ -255,6 +265,8 @@ COLLECT = r"""async () => {
           ? ':' + e.dataset.team : e.dataset.seat != null ? ':' + e.dataset.seat : e.dataset.fork != null ? ':' + e.dataset.fork : ''),
           ...e.dataset.dev.split(' ').map((n, i) => +n + (i % 2 ? cy + FD.fy : cx + FD.fx))]),
       cursor: FD.cursor ? [cx + FD.cursor.x, cy + FD.cursor.y] : null,
+      // the bars' sides and badge the stage composes (wiki.js barArt): the load's side, the top bar's, the colour
+      bar: FD.bar ? [FD.bar.side, FD.bar.top, FD.bar.colour] : null,
       emblems: (FD.emblems || []).map(at),
       dialog: rec.question ? Object.fromEntries(['panel', 'title', 'yes', 'no'].map(k => [k, at(FD.dlg[k])])) : null };
   }
@@ -436,7 +448,8 @@ def stage_hud(c, d):
     """STAGEHUD: a game entry's stage HUD, the game's (wikilaycheck.c stagehud) against the mockup's, on the mockup's
     own frame record. The frame's size, its canvas and its corner, every control's device box by its key, the emblems
     and Leave's question are drawn on whole device pixels and must be equal; the viewer's cursor is a point, within
-    TOL_CURSOR_PX. Returns the disagreements, 0 for a page with no game entry's stage on either side."""
+    TOL_CURSOR_PX; the bars' sides and badge (the load's side, the top bar's, the colour) must be the same three.
+    Returns the disagreements, 0 for a page with no game entry's stage on either side."""
     if c is None and d is None:
         return 0
     if c is None or d is None:
@@ -462,6 +475,7 @@ def stage_hud(c, d):
         paired += min(len(a), len(b))
         same(f"the control {k!r}", [v for r in a for v in r], [v for r in b for v in r])
     same("the cursor", c.get("cursor"), d.get("cursor"), TOL_CURSOR_PX)
+    same("the bars' sides and badge", c.get("bar"), d.get("bar"))
     same("the emblems", [v for r in c["emblems"] for v in r], [round(v) for r in d["emblems"] for v in r])
     dc, dd = c.get("dialog"), d.get("dialog")
     if (dc is None) != (dd is None):
@@ -471,7 +485,7 @@ def stage_hud(c, d):
         for k in ("panel", "title", "yes", "no"):
             same(f"the question's {k}", dc[k], [round(v) for v in dd[k]])
     flag = " <-- DIFFERS" if bad else ""
-    print(f"  stagehud frame {c['Wg']} x {c['Hg']}, {paired} controls paired, cursor {'on' if c.get('cursor') else 'off'}, "
+    print(f"  stagehud frame {c['Wg']} x {c['Hg']}, bars {c.get('bar')}, {paired} controls paired, cursor {'on' if c.get('cursor') else 'off'}, "
           f"{'question open' if dc else 'no question'}{flag}")
     for n in notes[:8]:
         print(f"        {n}")

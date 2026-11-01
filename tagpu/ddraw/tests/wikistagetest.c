@@ -35,7 +35,9 @@
    (0.3 W + (7 k) % 50, 0.45 H + (5 k) % 40): stagecheck.mjs draws the same. A live entry's frame
    is the player's: the view filtered in mode k % 3 (WIKIFRAME_WATCH, _PLAYER, _PAST) with the
    ghost kept when k is even, the emblem at layout.json's right[0] (the argument after CFG), and
-   the cursor the simulation's, shape k % 4 and age 7 k.
+   the cursor the simulation's, shape k % 4 and age 7 k. A takeover entry's frame cycles the same
+   three modes, as the human seat (k / 3) % the seats -- the view that seat's (tagpu_wikisim_view_as),
+   its selection the player's in the player's mode -- and is the player's but in the watcher's.
 
    Exit 0 when everything loaded and ran; the comparison is stagecheck.mjs's. */
 #define STB_TRUETYPE_IMPLEMENTATION
@@ -311,12 +313,17 @@ static int ops(char** a, const char* cob)
                     if (e->frame == WIKI_FRAME_GAME) {
                         double cx, cy, cw, ch;
                         WIKISTAGEFRAME fr;
-                        const int kf = s.tick / 30;
+                        const int kf = s.tick / 30, mode = e->live || e->takeover ? kf % 3 : WIKIFRAME_WATCH;
+                        const WIKIVIEW* g0 = tagpu_wikisim_view(&s);
+                        const int ns = g0->game && g0->nseat > 0 ? g0->nseat : 1, human = e->takeover ? (kf / 3) % ns : 0;
                         vf = v;
-                        tagpu_wikiframe_view(&vf, sd ? &sd->layout : NULL, 0, WIKISTAGE_LAYOUT_MOD,
-                                             e->live ? kf % 3 : WIKIFRAME_WATCH, kf % 2 == 0);
+                        if (human) {
+                            tagpu_wikistage_copy(&vf, tagpu_wikisim_view_as(&s, human), e, WIKISTAGE_LAYOUT_MOD);
+                            vf.tick = s.tick;
+                        }
+                        tagpu_wikiframe_view(&vf, sd ? &sd->layout : NULL, 0, WIKISTAGE_LAYOUT_MOD, mode, kf % 2 == 0, human);
                         tagpu_wikistage_canvas(r, u, &cx, &cy, &cw, &ch);
-                        frame_of(kf, e->live, cw, ch, btn, &art, emblem, &vf, &fr);
+                        frame_of(kf, e->live || (e->takeover && mode != WIKIFRAME_WATCH), cw, ch, btn, &art, emblem, &vf, &fr);
                         tagpu_wikistage_build(&vf, NULL, r, u, 1, &fr, &art, &o);
                         frame(&o, &vf, e->id, e->demo[j].id, s.tick, r, u);
                     }

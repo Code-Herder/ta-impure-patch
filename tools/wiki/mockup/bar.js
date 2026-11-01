@@ -4,9 +4,9 @@
    are DISASSEMBLED, each cited where it is applied (research/notes/ingame-wiki-replay-plan.md, *What R0 found*),
    and the result is pixel-exact against a capture of the game frame (tools/wiki/barcheck.mjs).
 
-   compose() is a pure function: art, the side, the badge colour, the frame's size and the numbers in; palette
-   indices out. The DLL's tagpu_wikibar.c is to be its port, compared byte for byte. All arithmetic is in doubles,
-   ftol is the engine's 0x4E43A0 under RC=11 (truncation), and every write is clipped to the picture.
+   compose() is a pure function: art, the side, the badge colour, the frame's size, the numbers and the top bar's side
+   in; palette indices out. The DLL's tagpu_wikibar.c is to be its port, compared byte for byte. All arithmetic is in
+   doubles, ftol is the engine's 0x4E43A0 under RC=11 (truncation), and every write is clipped to the picture.
 
    THE PICTURE is BAR_W x BAR_H indices, BAR_W a row: rows 0..31 the top bar, rows 32..63 the bottom bar, each
    w = Wg - 128 columns wide, column x being the frame's column 128 + x. Column 0 is the frame's column 128, which
@@ -54,12 +54,16 @@ const WikiBar = (() => {
 
   /* THE BARS for layout side `side` with badge colour `colour`, in a frame Wg x Hg game pixels, showing the numbers
      `num` ({e, m: the eased stored energy and metal; emax, mmax: the storages; ei, eo, mi, mo: the rates, income and
-     expense; raw_e, raw_m: the stored values and lev_e, lev_m: the share levels, for the ticks}). Returns { idx, w }
-     or null when the side has no bar art (the stage draws the whitebox strips) or the frame is outside
-     129..128 + BAR_W columns or under 64 rows. */
-  function compose(art, side, colour, Wg, Hg, num = ZERO) {
-    const B = art && art.bar && art.bar[side], gui = art && art.gui;
-    if (!B || !gui || !Number.isInteger(Wg) || !Number.isInteger(Hg) || Wg - COL < 1 || Wg - COL > BAR_W || Hg < 2 * ROWS)
+     expense; raw_e, raw_m: the stored values and lev_e, lev_m: the share levels, for the ticks}), the top bar in layout
+     side `top`'s art. THE TWO SIDES (decision 15 as M0-T #2 MEASURED it: a CORE seat taken over on an ARM load): the top
+     bar -- its PANELTOP and the PANELBOT tiles after it, the rects, the bars' colours and the font -- is `top`'s, and so
+     is the badge's place, while the badge's frame is the colour's; the bottom bar and PANELSIDE's column 128 on both
+     bars' rows are `side`'s, the load's. `top` is `side` but in a takeover's live game. Returns { idx, w } or null when
+     either side has no bar art (the stage draws the whitebox strips) or the frame is outside 129..128 + BAR_W columns or
+     under 64 rows. */
+  function compose(art, side, colour, Wg, Hg, num = ZERO, top = side) {
+    const B = art && art.bar && art.bar[top], gui = art && art.gui, bot = art && art.bar && art.bar[side] && art.bar[side].bot;
+    if (!B || !bot || !gui || !Number.isInteger(Wg) || !Number.isInteger(Hg) || Wg - COL < 1 || Wg - COL > BAR_W || Hg < 2 * ROWS)
       return null;
     const w = Wg - COL, idx = new Uint8Array(BAR_W * BAR_H), S = art.sheet, R = B.rects, font = B.font;
 
@@ -94,8 +98,8 @@ const WikiBar = (() => {
       }
     }
 
-    /* THE TILES, 0x469050..0x46909D: from frame column 129 while x < Wg, PANELTOP[side] for the first tile and
-       PANELBOT[side] for every later one (the index s + 5 x (x > 0x81)), each frame 0 at its top left, x advanced by
+    /* THE TILES, 0x469050..0x46909D: from frame column 129 while x < Wg, PANELTOP[top] for the first tile and
+       PANELBOT[top] for every later one (the index s + 5 x (x > 0x81)), each frame 0 at its top left, x advanced by
        its width. PANELBOT is 33 rows; its last lands on the viewport's first row, outside this picture. */
     for (let x = TILE_X, first = true; x < Wg; first = false) {
       const fr = first ? B.top : B.bot;
@@ -177,8 +181,8 @@ const WikiBar = (() => {
     at(fixed1(Math.abs(num.mo)), 'metalconsumed', gui[GUI_EXPENSE]);
 
     /* THE BOTTOM BAR, 0x46A860 (0x46A8A6..0x46A8D5): PANELBOT[side] tiled from frame column 129 along the frame's
-       last 32 rows, and nothing else on it while nothing is selected. */
-    for (let x = TILE_X; x < Wg; x += B.bot.f[2]) blit(B.bot, x - COL, ROWS, ROWS, BAR_H);
+       last 32 rows, and nothing else on it while nothing is selected; the load's side whatever the top bar's. */
+    for (let x = TILE_X; x < Wg; x += bot.f[2]) blit(bot, x - COL, ROWS, ROWS, BAR_H);
 
     return { idx, w };
   }

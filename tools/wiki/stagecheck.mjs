@@ -54,7 +54,9 @@
    call's clip -- save, a rect, clip, restore -- and each op's clip must be the call's, the canvas's where there is none.
    A live entry's frame is the player's: by k, frame.js view's mode -- the watcher's, the player's, the past's -- with
    the armed ghost kept on the even frames, the emblem at layout.json's button.right[0], and the cursor the
-   simulation's, its shape the k % 4th of the four and its age 7 k ticks.
+   simulation's, its shape the k % 4th of the four and its age 7 k ticks. A takeover entry's frame cycles the same
+   three modes as the human seat (k / 3) % the seats -- the view that seat's (sim.view(h)), its selection the
+   player's in the player's mode -- and is the player's but in the watcher's.
 
    THE UNITS' SCRIPTS. With a gfx pack built (tools/wiki/gfx.py, gitignored: read from the game), the demos play once
    more with the fixture's sidebar at the first size and the units' scripts -- sim.js through serve.py's host
@@ -386,9 +388,11 @@ try {
             const v = sim.view();
             sb.frames.push({ key: `${ids[i]}/${demo.id}/${sim.tick}`, v, tick: sim.tick });
             if (entry.frame === 'game') {
-              const k = Math.floor(sim.tick / 30), mode = entry.live ? ['watch', 'player', 'past'][k % 3] : 'watch';
-              sb.frames.push({ key: `${ids[i]}/${demo.id}/frame/${sim.tick}`, v: WikiFrame.view(v, sb.layout, 0, mode, k % 2 === 0), tick: sim.tick,
-                frame: true, live: !!entry.live });
+              const k = Math.floor(sim.tick / 30), mode = entry.live || entry.takeover ? ['watch', 'player', 'past'][k % 3] : 'watch';
+              const ns = (v.game && v.game.seats ? v.game.seats.length : 0) || 1, human = entry.takeover ? Math.floor(k / 3) % ns : 0;
+              sb.frames.push({ key: `${ids[i]}/${demo.id}/frame/${sim.tick}`,
+                v: WikiFrame.view(human ? sim.view(human) : v, sb.layout, 0, mode, k % 2 === 0, human), tick: sim.tick,
+                frame: true, live: !!entry.live || (!!entry.takeover && mode !== 'watch') });
             }
             if (v.parts.length) { nspray += v.parts.length; nsprayed++; }
           }

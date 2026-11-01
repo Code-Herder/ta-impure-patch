@@ -103,6 +103,16 @@ static void faces(WIKIFACES* f, const char* dir)
     }
 }
 
+/* the stage HUD's text in the game's faces, as tagpu_hudart.c measures it for the HUD's layout: a
+   box sized to its text -- a watched lane's Back to main recording -- is the text's advance and its
+   padding, as the game draws it */
+static double hud_measure(void* ctx, int style, double size, const char* s)
+{
+    (void)ctx;
+    if (style < 0 || style >= s_g->nstyle || style >= 24 || !s_info[style].data) return 0;
+    return tagpu_hudtext_width(&s_info[style], (float)size, s_g->style[style].spacing, s_g->style[style].upper, s, strlen(s));
+}
+
 /* the browser's advance of a code point the faces lack, from the state's `fallback` */
 static double missing(void* ctx, int style, double size, uint32_t cp)
 {
@@ -257,6 +267,29 @@ static void rec_json(const TJV* R, WIKIFRAMEREC* f)
     f->sim.z = (float)tj_num(tj_get(v, "z"), 0);
     f->sim.shape = (uint8_t)tj_num(tj_get(v, "shape"), 0);
     f->sim.age = (int32_t)tj_num(tj_get(v, "age"), 0);
+    /* the Take over block: none in a record without it */
+    f->tk = (uint8_t)tj_num(tj_get(R, "tk"), 0);
+    f->pick = (uint8_t)tj_num(tj_get(R, "pick"), 0);
+    f->lanes = (uint8_t)tj_num(tj_get(R, "lanes"), 0);
+    f->human = (int8_t)tj_num(tj_get(R, "human"), 0);
+    f->fork_max = (uint8_t)tj_num(tj_get(R, "fork_max"), 0);
+    f->tk_full = (uint8_t)tj_num(tj_get(R, "tk_full"), 0);
+    f->top_side = (int8_t)tj_num(tj_get(R, "top_side"), f->side);
+    f->chain_last = (int32_t)tj_num(tj_get(R, "chain_last"), 0);
+    f->fill_to = (int32_t)tj_num(tj_get(R, "fill_to"), 0);
+    f->pick_R = (int32_t)tj_num(tj_get(R, "pickR"), 0);
+    f->pick_evict = (int32_t)tj_num(tj_get(R, "pickEvict"), 0);
+    v = tj_get(R, "fork");
+    for (k = 0, e = v ? v->first : NULL; e && k < WIKIFRAME_FORKS; e = e->next, k++) {
+        WIKIFRAMEFORK* q = &f->fork[k];
+        q->id = (int32_t)tj_num(tj_get(e, "id"), 0);
+        q->from = (int32_t)tj_num(tj_get(e, "from"), 0);
+        q->end = (int32_t)tj_num(tj_get(e, "end"), 0);
+        q->parent = (int32_t)tj_num(tj_get(e, "parent"), 0);
+        q->seat = (uint8_t)tj_num(tj_get(e, "seat"), 0);
+        q->flags = (uint8_t)tj_num(tj_get(e, "flags"), 0);
+    }
+    f->nfork = (uint8_t)k;
 }
 
 static void box_out(const char* name, double x, double y, double w, double h)
@@ -271,7 +304,8 @@ static void box_out(const char* name, double x, double y, double w, double h)
    the cursor (tagpu_wikiframe_point among the controls of tagpu_wikiframe_pressed's HUD, or the
    simulation's at tagpu_wikiframe_game_point outside Try it), the emblems at art/wiki/layout.json's
    `button` place -- right[0] for a live frame, right[1] for a replay's -- and Leave's question, every one in page device pixels; a box as x0 y0 x1 y1, each edge
-   snapped as the HUD's draw snaps it (tagpu_hud_snap, tagpu_hud_edge). */
+   snapped as the HUD's draw snaps it (tagpu_hud_snap, tagpu_hud_edge); and the bars' sides and badge as
+   tagpu_wikistate.c bar_bind composes them from the bounded record: [side, top_side, colour]. */
 static void stagehud(const TJV* H, HUDRECT stage, double px, const char* lt, size_t nl, const HUDLAY* hud)
 {
     static HUDSTATE st, pst;
@@ -300,7 +334,7 @@ static void stagehud(const TJV* H, HUDRECT stage, double px, const char* lt, siz
     hpx = (float)(Hg * fit.s / WIKIFRAME_HUD_H);
     tagpu_wikiframe_hudstate(&rec, Wg, Hg, hpx, NULL, &st);
     if (!tagpu_hudlay_build(hud, &st, &ops, err, sizeof err)) { fprintf(stderr, "wikilaycheck: the stage HUD: %s\n", err); exit(1); }
-    printf(",\n\"stagehud\":{\"Wg\":%d,\"Hg\":%d,\"hpx\":%.9g,", Wg, Hg, hpx);
+    printf(",\n\"stagehud\":{\"Wg\":%d,\"Hg\":%d,\"hpx\":%.9g,\"bar\":[%d,%d,%d],", Wg, Hg, hpx, rec.side, rec.top_side, rec.colour);
     box_out("canvas", X0, Y0, cw, ch);
     printf(",\"corner\":[%.4f,%.4f],\"hot\":[", X0 + fx, Y0 + fy);
     for (i = 0; i < ops.n; i++) {
@@ -420,6 +454,7 @@ int main(int argc, char** argv)
     S = tagpu_json_root(sd);
     memset(&f, 0, sizeof f);
     faces(&f, argv[1]);
+    tagpu_hudlay_measure(hud, hud_measure, NULL);
     s_fallback = tj_get(S, "fallback");
     s_sizes = tj_get(S, "sizes");
     f.missing = missing;

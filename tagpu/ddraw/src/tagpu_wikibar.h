@@ -43,11 +43,17 @@ typedef struct {
 } WIKIBARNUM;
 
 /* THE BARS of layout side `side` with badge colour `colour`, in a frame Wg x Hg game pixels,
-   showing `n`, into `idx` (WIKIBAR_W x WIKIBAR_H, cleared first). Returns the bars' width
-   w = Wg - 128, or -1 when there is nothing to compose -- the side has no bar art or the pack no
-   GUI table (the stage draws the whitebox strips), or the frame is outside 129..128 + WIKIBAR_W
-   columns or under 64 rows. A colour that is not one of the badge's frames draws no badge. */
-int  tagpu_wikibar_compose(const struct WIKISIDE* sd, int side, int colour, int Wg, int Hg,
+   showing `n`, the top bar in layout side `top`'s art, into `idx` (WIKIBAR_W x WIKIBAR_H, cleared
+   first). THE TWO SIDES (decision 15 as M0-T #2 MEASURED it: a CORE seat taken over on an ARM
+   load): the top bar -- its PANELTOP and the PANELBOT tiles after it (0x469050..0x46909D), the
+   RaceSideData rects, the bars' colours and the font -- is `top`'s, and so is the badge's place,
+   while the badge's frame is the colour's (0x467C00: by colour, not by side); the bottom bar
+   (0x46A860's PANELBOT tiles) and PANELSIDE's column 128 on both bars' rows are `side`'s, the
+   load's. `top` is `side` but in a takeover's live game. Returns the bars' width w = Wg - 128, or
+   -1 when there is nothing to compose -- either side has no bar art, or the pack no GUI table (the
+   stage draws the whitebox strips), or the frame is outside 129..128 + WIKIBAR_W columns or under
+   64 rows. A colour that is not one of the badge's frames draws no badge. */
+int  tagpu_wikibar_compose(const struct WIKISIDE* sd, int side, int top, int colour, int Wg, int Hg,
                            const WIKIBARNUM* n, uint8_t* idx);
 
 /* The composed bars as RGBA through the pack's palette, alpha 255, WIKIBAR_W a row; the columns
