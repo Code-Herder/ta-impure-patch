@@ -1,0 +1,301 @@
+# The mod manager, planned
+
+**Written** 2026-11-01, after the design grill and before anything is built. Nothing here has been
+measured in the game except where it says so. Engine facts carry their address and how they were
+established: DISASSEMBLED, MEASURED, cited from [the engine map](exe-reverse-engineering.html), or
+[INFERRED]. When the work closes, this file is folded into the module notes, `roadmap.md` and
+[compatibility](compat/setups.html), and then deleted.
+
+## What it is
+
+A **Mods** screen in the style of Factorio's: Manage, Explore and Updates tabs, a detail pane, and
+Back and Confirm buttons. It opens from a **MODS** button under REPLAYS on the main menu. From it the
+player downloads, updates and switches total-conversion mods and small **mutators**. All of them run
+on the player's own `TotalA.exe`, the one they double-click in their TA folder. No exe is ever
+hosted. The drop-in route (Impure's DLL dropped into a folder already modded by hand) keeps working
+unchanged, and it is the reference the managed route is tested against.
+
+## Decisions
+
+Each decision is listed with what it was chosen over.
+
+### Switching
+
+- **Confirm restarts the same exe with `mod=` written to `impure.cfg`.** We chose this over swapping
+  mods inside the running process, which the engine does not allow:
+  - the mount list is append-only (unmount `0x4BE270` has no caller; the prune is `0x4BE180`);
+  - Patch Loader patches, the registry root and the exe bytes are fixed at start-up.
+
+  The compute restorer's relaunch (CreateProcessA of TotalA.exe itself) is the precedent. Steam
+  losing track of the game across the relaunch is accepted.
+- **Every mod runs on the player's own exe, patched in memory.** Two alternatives were rejected:
+  - one full game folder per mod, rejected as clumsy;
+  - handing off to the mod's own exe, accepted at first and then dropped, because a package that
+    contains `TotalA.exe` cannot be hosted (the exe is Cavedog's copyright).
+
+### Exes
+
+- **Every mod's exe is the stock 3.1 exe plus a small byte delta.** MEASURED 2026-10-29, section by
+  section against `pristine/TotalA.exe.pristine`. All of them have identical section sizes (`.text`
+  0xFA92A, `.rdata` 0x468C, `.data` 0x10A00, `.tls` 0x14):
+
+  | setup | delta from stock 3.1 |
+  |---|---|
+  | Total Mayhem 11.3.0, ProTA 4.8 | none: byte-identical (they patch through the Patch Loader's table) |
+  | TA Twilight 2.0b98, gammata | header 4 B, `.text` 12–14 B, `.rdata` 8 B, `.data` 15–19 B |
+  | TA Zero Alpha 5 | header 12 B, `.text` 823 B in 79 runs, `.rdata` 12 B, `.data` 154 B, `.tls` 403 B [INFERRED: a code cave], `.rsrc` icon 3072 → 39936 B |
+  | Escalation 10.2 | header 8 B including the LAA bit (Characteristics 0x12B), `.text` 2875 B in 211 runs, `.rdata` 34 B, `.data` 95 B |
+
+  The renamed imports (`TAESC`/`EMUSI`/`EPLAYX`, `ZDRAW`/`ZMUSI`/`ZPLAYX`, `TDRAW`/`TMUSI`/`TPLAYX`)
+  belong to TADR's route and are dropped from the delta.
+- **A mod's exe patch is a table derived once by us** (a diff against stock 3.1). For Mayhem and
+  ProTA it is their Patch Loader table.
+- **Known modded base exes are reverted first.** Each known modded exe has an XOR revert patch
+  (covering the exe plus its folder's loader). The sequence runs at the exe's entry point, after
+  every DllMain, so a folder's Patch Loader has finished:
+  1. revert the base;
+  2. hash the code against stock 3.1 (the import table and its slots masked);
+  3. apply the mod's table;
+  4. hash against stock+mod.
+
+  A mismatch refuses before any game code runs. We chose this over testing every mod's table
+  against every modded exe for byte clashes.
+- **An unknown exe makes the MODS button open an engine message box**, in the same style as the
+  DirectX version box (`0x4B5070`, called from `0x4266A0`; Impure suppresses that box at
+  `0x4266A7`). The box says mods are not available because this exe is not one Impure knows.
+
+### Content, choices and options
+
+- **`mods\<id>\` holds only downloaded content**, replaced wholesale on update.
+- **Per-mod play options come in three layers, each with one home:**
+  1. **Impure's built-in defaults**, in code.
+  2. **The mod's config**, a per-mod source file `mods/<id>.json` merged into the catalog by the
+     packing tool. For each option it says whether the mod **allows** it and what its **default**
+     is. It replaces the hardcoded `defaults(mod)` in `tagpu_profiles.c` and the rules half of
+     today's `profiles\<mod>.ini` (`manual_snapping`, `quick_build`, `default_radius`, `max_radius`,
+     `quick_build_default`), the `@<version>` override files included. A drop-in folder identified
+     as a catalog mod reads the same entry.
+  3. **The player's changes, in `profiles\<id>.ini`.** A missing key means "the mod's default". The
+     file absorbs `quick_build.<mod>` and `resource_radius.<mod>` from `impure.cfg`, moved once by
+     the existing migration machinery (`impure-migration.txt`) with nothing kept for compatibility.
+     It also holds the content switches `file.<path>=on|off` and `hide.<archive>=on|off`.
+
+  `impure.cfg` keeps only global settings. Profile names come from the catalog, not the fixed
+  seven-name list. A `file.` key naming a file the current version no longer has is ignored with a
+  log line, not rejected. We rejected keeping the player's per-mod choices split between
+  `impure.cfg` and `profiles\`, and keeping mod rules hardcoded in the DLL.
+- **Play options are per mod; visuals are not.** Building, placement, snapping, reclaim and orders
+  are per mod: Quick Build and resource snapping today, with placement spacing and the reclaim sweep
+  as candidates once they are declared. Visuals, display and audio stay global in the Visuals menu.
+- **The exe patch is all or nothing.** It is not a switch: the hash check only holds for the whole
+  table. Turning a mod "off" means choosing another mod.
+
+### One mod plus mutators
+
+- **One base mod at a time, or none**, plus small **mutators** (QOL, small fixes, a unit's look).
+  We chose this over Factorio-style stacking, because exe tables cannot stack and total conversions
+  replace the same files. A mutator declares `base=<mod id>`; "no mod" counts as an id.
+- **Mutators carry game files only, never exe patches.** Code-level QOL is Impure's own job. A
+  mutator may hide base-mod files.
+- **A mutator's fit is checked file by file, not against version lists.** The packing tool records
+  the hash of every base file the mutator replaces. If an installed base file differs, the mutator
+  is greyed out and the pane names the file. New files and hides need no check. Mutators are listed
+  only under their base mod.
+- **Two mutators replacing the same file are mutually exclusive,** and the pane names the file. We
+  chose this over a load order where the last one wins silently.
+
+### Catalog and packages
+
+- **The catalog is `mods/catalog.json` in the repo.** Each entry has:
+  - `id`, `kind` (`mod` or `mutator`), `name`, `author`, `version`, `summary`, `homepage`;
+  - `packages`: an ordered list of `{url, sha256, size}`;
+  - mods: `exe` (the name of its table in the patch pack) and `hide` (the TA-folder archives hidden
+    by default), plus the play options;
+  - mutators: `base`, `base_hashes` and `files`;
+  - `permission`: where the author's permission to host is recorded. No entry ships without one.
+- **A binary patch pack goes beside the catalog**, zstd-compressed. It holds the mod exe tables
+  with the stock+mod hash each one must produce, and the XOR reverts keyed by the modded exe's hash.
+- **Both are built by `tools/modpack/` and packed into the DLL** as a `MODPAK` RCDATA, like `HUDPAK`
+  and `WIKIPAK` in `res.rc`. The JSON reader `tagpu_json.c` reads them.
+- **Exe patches only ever ship inside the DLL.** In v1, updates arrive with a new Impure release.
+  A later website serves a signed `catalog.json`.
+- **One package format, `.tar.zst`.** The packing tool rebuilds every mod's original package, so
+  the DLL never reads `.rar` or `.zip`: there is no unRAR licence and no miniz. While rebuilding,
+  the tool:
+  - strips every file whose hash is in the original-game manifest;
+  - packs all files, loose ones included, into the package's own archive;
+  - drops mod DLLs.
+
+### Download and install
+
+- **WinHTTP on a background thread that touches only files.** The Mods screen reads its progress
+  from a few atomic counters.
+- **Nothing unpacks from an unverified file.** The download goes to `mods\<id>.part` and is checked
+  against the catalog's size and sha256 (BCrypt) before anything is unpacked.
+- **The tar reader is bounded to the package's declared file list.** It refuses absolute paths,
+  `..`, undeclared files and truncation.
+- **Unpacking goes into `mods\<id>.new\`**, which gets a done marker when complete. It is swapped in
+  at start-up, before any archive is mounted. A `.new` without the marker is deleted. The live
+  folder is always either the old version or the new one.
+
+### Updates
+
+- **Updates are manual only:** an Update button per row and an Update all. There is no background
+  check.
+- **One version of each mod is installed.** The player's profile survives the update.
+- **Mutators broken by a base update** are listed as "needs an update for X".
+- **Old replays keep today's hint**, not a refusal (`tagpu_replays.c`, `mod_lines`: "The installed
+  archives differ."). Replay records gain the mutator list, and the hint names the exact versions.
+
+### Archives and loose files
+
+These are the engine rules the design rests on:
+- **Opening a file tries the loose file first.** `0x4BB2E0(path, mode)` tries the loose path
+  relative to the current directory first. It then walks the archives in mount order, and the first
+  archive that has the file wins. DISASSEMBLED 2026-10-26
+  ([3D stage plan](ingame-wiki-3d-stage-plan.html)).
+- **`InitTAHPIAry 0x41D4C0` mounts in a fixed order:** `rev31.gp3`, `*.ccx`, `*.ufo`, `*.hpi`. The
+  mount list is `*(0x51FBD0)+0x618`, with its count at `+0x61C`. That order is why a `.ufo` cannot
+  override a path a stock archive has (MEASURED, [file formats](file-formats.html) §5).
+- **Loose files behave differently by type.** A loose `units\*.fbi` makes its unit vanish (the
+  "came from an archive" test `0x4BB650` in `0x42A8D0`). A loose `.cob` overrides.
+- **Enumerations list loose files first.** That covers the unit definitions (`0x4BCA30`) and the
+  feature TDFs.
+
+What follows from those rules:
+- **Impure builds the mount list:** mutators first, then the base mod, then the TA folder's original
+  archives. Precedence is then one rule for every file type.
+- **Under a managed mod, the engine's loose-file step is closed** for both opens and enumerations.
+  The exception is a short list of paths that stock TA really does open loose (saved games, for
+  instance), which must be measured. The drop-in route and "no mod" keep the loose step.
+- **Files the engine reads by plain path** rather than through `0x4BB2E0` (music, for instance) are
+  listed by the packing tool for each mod. v1 drops them with a log line.
+
+### Drop-in folders
+
+- **The folder's own setup is a fixed first row**, "This folder (Mayhem 11.3)". It is identified as
+  the replays and profiles identify it today, and it runs when `mod=` is empty.
+- **Under a managed mod, the TA folder contributes only the original game's archives.** They are
+  recognised by the SHA-256 of the ~30 original archives, which the DLL carries as hashes only, never
+  content. The owner accepted this as a new class of published data. Each archive is hashed once and
+  cached by name, size and date. We rejected recognising archives by name, because mods reuse and
+  replace archive names.
+- **A folder's Patch Loader follows the exe rule above:** a known pair is reverted, an unknown one
+  gets the box.
+
+### Multiplayer
+
+- **What stock TA does:** its only check is the per-unit CRC handshake (`0x1A UNIT_DATA`,
+  `CRC_all`/`CRC_weapons`). On a mismatch it **disables the affected unit types on both peers and
+  starts anyway, with no message** (MEASURED 2026-09-02, [networking](networking-lobbies.html)).
+- **Impure players compare a content fingerprint.** It combines:
+  - the stock+mod exe hash;
+  - the hash of every mounted file, except known-cosmetic types (`.gaf`, `.pcx`, `.bmp`, `.wav`,
+    fonts, menu `.gui`). Unknown types count.
+
+  That lets drop-in and managed players of the same mod match, and a cosmetic mutator mixes.
+- **A mismatch between Impure players blocks Start**, with a line naming who differs and how.
+- **A player without Impure sends no fingerprint and passes as today.**
+
+### The screen
+
+- **A custom Impure UI, like the in-game wiki:** full colour, scaled to the player's resolution and
+  aspect ratio in wiki units (screen height / 720). The owner chose this over an engine `MODS.GUI`
+  built the way REPLAYS is.
+- **The wiki's primitives are extracted first.** They are static in `tagpu_wikilay.c` today: text
+  wrap, scroll panels, rows, art parts, solids and the hit map. They move into a shared pure-C kit
+  with no change in behaviour, and the proof is `wikilaycheck` passing unchanged. The mockup side
+  gets shared JS in `tools/uikit/`.
+- **The Mods screen is built mockup-first on that kit:** `tools/mods/mockup/`,
+  `art/mods/layout.json`, a pure `tagpu_modslay.c` and a `modslaycheck`.
+- **The art is the wiki's kit**, plus new parts: checkbox/radio, progress bar, three tabs, and the
+  badges for active, update, greyed and conflict.
+- **The screen needs a shell-time version of the wiki's pass.** The wiki draws only in a level, on
+  the Vulkan renderer, under the replay HUD's pass (`tagpu_wiki.h`, `tagpu_wiki_fill`).
+- **Input is modal on the main menu** and reuses the wiki's paired press/release bookkeeping.
+- **It is Vulkan only.** On GDI, the MODS button opens an engine message box: the screen needs
+  Vulkan, here is the running mod, and `mod=` in `impure.cfg` can be edited by hand. Choosing and
+  loading a mod is start-up code and works on every renderer.
+- **The MODS button goes under REPLAYS**, through the same main-menu insertion REPLAYS uses
+  (`tagpu_replays.c`: S1 `0x4AACAE`, S2 `0x42644C`, S3 `0x429290`, the builder `0x4263B0`). Its moves
+  for each mod's menu are measured against each setup.
+
+### 4 GB (LAA)
+
+- **The bit has to be in the exe header before Windows loads the process.** It cannot be set at run
+  time.
+- **The catalog flags the mods that need it**, e.g. `memory=4gb` on Escalation.
+- **Confirming a flagged mod on an exe without the bit:**
+  1. renames `TotalA.exe` to `TotalA.exe.pre-4gb` (Windows allows renaming a running exe);
+  2. writes a copy with LAA set and the header checksum fixed;
+  3. restarts.
+- **Exe identification ignores that bit.**
+- **The bit stays on afterwards.** Every setup must pass an LAA-on compat row. Until a setup does,
+  its entry is marked bit-off and Confirm restores the `.pre-4gb` copy for it.
+- **If Steam's file verification reverts the exe,** the next Confirm of a flagged mod sets the bit
+  again.
+- **There is no global switch in v1.**
+
+### The v1 catalog
+
+- **Five mods:** Total Mayhem, ProTA, Escalation, TA Zero and TA Twilight. The owner has permission
+  from all their authors, and each entry records it in `permission`.
+- **Not included:** the official expansions (Core Contingency and Battle Tactics are part of "no
+  mod") and gammata (a DLL patch).
+- **No mutator ships until a real one exists.**
+- **Managed Twilight drops its `dsound.dll` proxy.** That proxy writes a jmp at `0x42DD79`, right
+  after the download-menu allocation in `0x42DCF0` [INFERRED: Twilight's fix for the same
+  download-record overflow Impure's `fix_download_records` fixes]. The managed column has to show
+  Impure's fix covers it.
+
+## Landings
+
+| # | landing | what it does | verified by (run it) |
+|---|---|---|---|
+| 1 | Shared UI kit | Moves the wiki's layout primitives into a shared pure-C kit + `tools/uikit/`, with no behaviour change | `wikilaycheck` passes unchanged; `tools/wiki_regression.py` page/demos pass |
+| 2 | modpack + catalog | `tools/modpack/`: strips by manifest hash, packs all files into the mod's archive, builds `.tar.zst`, derives exe tables + XOR reverts, writes `mods/catalog.json` + the patch pack, embeds `MODPAK`; catalog schema check in `make` | offline: each table reproduces its mod's exe from stock (minus TADR import renames); each revert gives stock; no package file matches the original manifest; the schema check fails on a missing sha256 / base / permission |
+| 3 | Per-mod options | `mods/<id>.json` carries allowed + default per play option, replacing `defaults(mod)` and the rules in `profiles\<mod>.ini`; `profiles\<id>.ini` becomes the player's changes only; one-time migration out of `impure.cfg`; a forbidden option cannot be set | drop-in runs of every v1 setup and retail behave as today; a migrated `impure.cfg` + old profiles give the same choices with no per-mod key left in `impure.cfg`; a hand-edited forbidden option is refused with a log line |
+| 4 | Managed start-up | `mod=`; identify → revert → patch → hash checks at the entry point (refusal box); the mount list (mutators, base, originals by shipped SHA-256 + cache); the loose step closed under a managed mod; Confirm's relaunch | compat suite **managed column**: each v1 mod, installed by hand into a clean stock folder, equals its drop-in run (mounted archive list + hashes, patched exe hash, unit CRCs, menu / fight / two-player game); the base-exe × mod matrix |
+| 5 | Download + install | WinHTTP thread, `.part` + sha256, bounded tar reader, `.new` + done marker + start-up swap | against a local HTTP server in the harness, never the real CDN: a good package installs, a corrupt one is refused, an interrupted download or unpack leaves the live folder intact and the half `.new` is deleted at the next start, an update swaps at restart and keeps the profile; the tar reader refuses `..`, absolute paths, undeclared files and truncation |
+| 6 | Mods screen | The shell-time Vulkan pass; the MODS button; Manage / Explore / Updates; the detail pane with play options (marker, reset, locked rows) and file/hide switches; the unknown-exe and GDI boxes | `modslaycheck` against the mockup; a `tacli` UI regression clicks tabs, switches, Update and Confirm and sees the game restart on the chosen mod; the button and screen checked over each v1 mod's menu art |
+| 7 | Mutators | Layering, `base_hashes` greying, mutual exclusion, Updates' "needs an update", the mutator list in replay records and the hint | offline: conflict and stale-base cases in modpack's tests; in game: a test mutator overrides a unit's look over its base, and a stale one is greyed with the file named |
+| 8 | Multiplayer fingerprint | The content fingerprint exchanged in the battle room; Start blocked between differing Impure players | MP runs: managed and drop-in peers of the same mod start; a gameplay mutator on one side blocks Start; a cosmetic one does not; a peer without Impure passes as today |
+| 9 | 4 GB (LAA) | The `memory=4gb` flag; Confirm's rename + LAA copy + restart; restore for bit-off entries | an LAA-on compat row for every v1 setup; managed Escalation starts with LAA set; a reverted exe is set again on the next Confirm |
+
+Landing 1 needs nothing else and can start first. Landings 2 and 3 are independent of each other.
+
+## Not closed
+
+**Needs the owner:**
+- Where each author's permission is recorded (the `permission` field), needed before landing 2's
+  catalog builds.
+- Which CDN, and what URL scheme, will the packages live at? Needed before landing 5 points at real
+  packages.
+- The new art parts for the screen, needed for landing 6.
+
+**Needs research or a measurement:**
+- Which paths does stock TA really open through the loose-file step? This must be measured before
+  landing 4 closes it.
+- Does any v1 mod need a plain-path file (music tracks, for example) to play correctly, or is
+  dropping them with a log line enough? modpack's listing in landing 2 answers it.
+- What channel carries the fingerprint in the battle room? No Impure message exists there today, so
+  this needs research before landing 8.
+- Which v1 setups are safe with LAA on? Landing 9's row answers it.
+
+**Later, outside v1:**
+- the website, with a signed catalog and its coexistence with the DLL-packed one;
+- an HD menu-graphics mutator, the owner's idea;
+- drop-in Twilight's `dsound.dll` proxy on Windows, which stays a compat blind spot (its jmp target
+  may be a heap stub that the "leads into a folder DLL" check cannot see). Managed Twilight avoids
+  it.
+
+## Facts gathered for the plan
+
+- **Where the mods come from.** TA Forever's API (`https://api.taforever.com/data/featuredMod`,
+  field `installPackage`) lists ordered package URLs and "folders" regex rules for each featured
+  mod. Its files sit on Vultr Object Storage (`sjc1.vultrobjects.com`, which exposes
+  `x-amz-meta-sha256`) and on `content.taforever.com`. Neither has a CDN in front.
+- **The TAUniverse mod sites** (Mayhem, ProTA, Escalation) answer every direct file URL with a
+  Cloudflare JavaScript challenge (HTTP 403), so a plain download cannot fetch them.
+- **`win32.dll`** is the Steam/GOG CD-audio-to-MP3 shim, and it is already in the player's folder.
+  Mayhem's copy equals `tmusi.dll` (BASS). ProTA's is a 66 048 B build using `audiere.dll`.
