@@ -37,7 +37,9 @@
    (replayHash, tagpu_wikireplay_hash's twin, a live entry's rewind state and P's hash included), the game's view,
    orders and hash -- and Try it yourself's press trace through replay.js's create and wikitest `replaytrace`: TRACE
    on a replay entry, LIVE_TRACE (the live HUD's presses and the world's input) on a live one. The fork pass forks
-   each distinct game at the refresh ticks (forkCases). It then plays simcheck.mjs's rule cases -- the rules no demo shows -- through both: each case is run
+   each distinct game at the refresh ticks (forkCases); the release sweep plays each live entry's games with Back to
+   now's release after every tick up to the script's last input, each to its end, through sim.js and wikitest
+   `sweep`, in two contexts. It then plays simcheck.mjs's rule cases -- the rules no demo shows -- through both: each case is run
    against sim.js with every call recorded, `create` and `play` with the layout and the context each was given, the
    recording is
    replayed through the C sim, and every answer the case read (each view, with the state hash after it, orders, done)
@@ -392,12 +394,12 @@ const TRACE = { end: 150, presses: [[3, 'play', 0], [20, 'play', 0], [30, 'play'
 /* THE LIVE PRESS TRACE, Try it yourself on a live entry's first demo (rewind-spec.md 12.1): the presses as TRACE's
    and the world inputs as [demo tick, 'move', x, z], [demo tick, 'down' | 'up', key], each given through R.input
    after that tick's frame. In order: the rewind refused (an empty span) and a replay HUD's play (nothing); a move
-   before any fork (the world takes none); after the demo's scripted opening, the open, rew, a track press forward
-   and Play from here while that seek is pending (ignored), fwd near now (Back to now, its release logged on the
-   original: the opening's builds stand before it, since a build the script makes after a release names no selection
-   and locks the game); the open, a track press, Play from here twice (the snap to 301, then fork 1 in stall mode);
-   in fork 1 a click on the builder, a click on the column's solar button (DZ: its row less the bar), a placement,
-   the button again and a Shift-drag line; armed again, Shift held across the open (its up logged into L), moves
+   before any fork (the world takes none); inside the opening's first build trip, the open, rew, a track press
+   forward and Play from here on the same tick, while that seek is pending (ignored), fwd near now (Back to now, its
+   release logged on the original: it drops the rest of the trip, so the solar is never armed, and the script's next
+   build selects its own builder on its tick, sim.js THE LIVE DATA RULE); the open, a track press, Play from here
+   twice (the snap to 301, then fork 1 in stall mode); in fork 1 a click on the builder, a click on the column's
+   solar button (DZ: its row less the bar), a placement, the button again and a Shift-drag line; armed again, Shift held across the open (its up logged into L), moves
    over the world while open (logged, the ghost follows) and a click there (ignored), Back to now from the open (a
    close); later a seek to 301, which shows 300 and plans 301, the segment's first (Cannot play), a seek forward and
    the snap to 601 and fork 2 of fork 1; in fork 2 an order; a seek into the original's segment and Play from here,
@@ -407,8 +409,8 @@ const TRACE = { end: 150, presses: [[3, 'play', 0], [20, 'play', 0], [30, 'play'
    only the builder has pages, at 80 workerTime, so no Try-it fork starves within the game's end: the stall mode's
    ledgers are compared tick by tick here, and its debt in the game pass's stall case. */
 const LIVE_TRACE = { end: 1500, presses: [
-  [1, 'rewind', 0], [3, 'play', 0], [4, 'move', 300, 300], [250, 'rewind', 0], [251, 'rew', 0], [254, 'track', 80],
-  [255, 'live_play', 0], [260, 'fwd', 0], [400, 'rewind', 0], [401, 'track', 350], [410, 'live_play', 0],
+  [1, 'rewind', 0], [3, 'play', 0], [4, 'move', 300, 300], [50, 'rewind', 0], [51, 'rew', 0], [54, 'track', 30],
+  [54, 'live_play', 0], [60, 'fwd', 0], [400, 'rewind', 0], [401, 'track', 350], [410, 'live_play', 0],
   [430, 'live_play', 0], [432, 'move', 140, 330], [433, 'down', 'lmb'], [434, 'up', 'lmb'], [436, 'move', -34, 158],
   [437, 'down', 'lmb'], [438, 'up', 'lmb'], [440, 'move', 72, 312], [441, 'down', 'lmb'], [442, 'up', 'lmb'],
   [444, 'move', -34, 158], [445, 'down', 'lmb'], [446, 'up', 'lmb'], [448, 'down', 'shift'], [449, 'move', 300, 120],
@@ -934,9 +936,13 @@ function gameRefusalCases(game, page) {
   replay('a demo with no end', 'accepted', [], (e, d) => { delete d.end; });
   for (const c of ['rewind', 'live_play', 'live_now']) replay(`a replay demo pressing ${c}`, 'refused', [{ at: 10, hud: c }]);
 
-  /* A LIVE ENTRY (sim.js checkGame's live rule, checkViewer's two sets, the fork parts' rules; tagpu_wikidata.c's
-     entry, viewer_input and forks): played as a game, which checks the viewer's script and the parts too */
-  const live = (e, d) => { e.live = true; d.inputs = []; };
+  /* A LIVE ENTRY (sim.js checkGame's live rule, checkViewer's two sets, the fork parts' rules, THE LIVE DATA RULE;
+     tagpu_wikidata.c's entry, viewer_input, forks and live_builds): played as a game, which checks the viewer's script
+     and the parts too. The game script turned live has each build after a click on the commander's place on its
+     tick, as the live rule asks. */
+  const pick = t => [{ at: t, move: [200, 300] }, { at: t, down: 'select' }, { at: t, up: 'select' }];
+  const picked = inputs => inputs.flatMap(e => typeof e.build === 'string' && e.build ? [...pick(e.at), e] : [e]);
+  const live = (e, d) => { e.live = true; d.inputs = []; d.game.inputs = picked(d.game.inputs); };
   const L = (name, want, edit) => g(`live: ${name}`, want, (e, d, sc, G) => { live(e, d); edit(e, d, sc, G); });
   L('live true', 'accepted', () => {});
   g('live: live false', 'accepted', e => { e.live = false; });
@@ -949,6 +955,20 @@ function gameRefusalCases(game, page) {
   for (const c of WikiSim.REPLAY_CONTROLS.filter(c => !WikiSim.LIVE_CONTROLS.includes(c)))
     L(`a live demo pressing ${c}`, 'refused', (e, d) => { d.inputs = [{ at: 10, hud: c }]; });
   L('a live demo pressing leave:yes', 'refused', (e, d) => { d.inputs = [{ at: 10, hud: 'leave:yes' }]; });
+  // THE LIVE DATA RULE: a build after the click selecting its builder on its own tick, in the order inputs are fed
+  const B = (name, want, inputs) => L(`the live data rule, ${name}`, want, (e, d) => { d.game.inputs.push(...inputs); });
+  B('a build after its click', 'accepted', [...pick(1000), { at: 1000, build: 'ARMSOLAR' }]);
+  B('a build with no click', 'refused', [{ at: 1000, build: 'ARMSOLAR' }]);
+  B('a build after a click on the tick before', 'refused', [...pick(999), { at: 1000, build: 'ARMSOLAR' }]);
+  B('a build before its click', 'refused', [{ at: 1000, build: 'ARMSOLAR' }, ...pick(1000)]);
+  B('a build after a click with no move', 'refused', [...pick(1000).slice(1), { at: 1000, build: 'ARMSOLAR' }]);
+  B('a build after a click aimed after the press', 'refused', [pick(1000)[1], pick(1000)[0], pick(1000)[2], { at: 1000, build: 'ARMSOLAR' }]);
+  B('a build after a press not released', 'refused', [...pick(1000).slice(0, 2), { at: 1000, build: 'ARMSOLAR' }, { at: 1001, up: 'select' }]);
+  B('a build after an order click', 'refused', [{ at: 1000, move: [200, 300] }, { at: 1000, down: 'order' }, { at: 1000, up: 'order' }, { at: 1000, build: 'ARMSOLAR' }]);
+  B('a build after its click in one input', 'accepted', [{ at: 1000, move: [200, 300], down: 'select', up: 'select' }, { at: 1000, build: 'ARMSOLAR' }]);
+  B('a build after a move then a click', 'accepted', [{ at: 1000, move: [100, 100] }, ...pick(1000), { at: 1000, build: 'ARMSOLAR' }]);
+  B('a build of no type with no click', 'accepted', [{ at: 1000, build: null }]);
+  g('live: a replay entry\'s build with no click', 'accepted', (e, d) => { d.game.inputs.push({ at: 1000, build: 'ARMSOLAR' }); });
   // the fork parts
   const part = (k = {}) => ({ id: 1, from: 301, parent: 0, inputs: [{ at: 301, move: [100, 250] }, { at: 302, down: 'select' }, { at: 304, up: 'select' }], ...k });
   const F = (name, want, forks, edit = () => {}) => L(`forks, ${name}`, want, (e, d, sc, G) => { d.forks = typeof forks === 'function' ? forks(G) : forks; edit(e, d, sc, G); });
@@ -980,7 +1000,9 @@ function gameRefusalCases(game, page) {
   ins('a wait', 'refused', [{ at: 400, until: 'idle', max: 60 }]);
   ins('of seat 1', 'refused', [{ at: 400, seat: 1, move: [1, 1] }]);
   ins('of seat 0', 'accepted', [{ at: 400, seat: 0, move: [1, 1] }]);
-  ins('building a type of the entry', 'accepted', [{ at: 400, build: 'ARMSOLAR' }]);
+  ins('building a type of the entry', 'accepted', [...pick(400), { at: 400, build: 'ARMSOLAR' }]);
+  ins('building with no click selecting its builder', 'refused', [{ at: 400, build: 'ARMSOLAR' }]);
+  ins('building after a click on the tick before', 'refused', [...pick(399), { at: 400, build: 'ARMSOLAR' }]);
   ins('building no type', 'refused', [{ at: 400, build: 'NOPE' }]);
   ins('a reclaim not true', 'refused', [{ at: 400, reclaim: 1 }]);
   ins('a pick of no kind', 'refused', [{ at: 400, pick: 'wood' }]);
@@ -1056,13 +1078,20 @@ function forkCases() {
          plays on a game without the sidebar, whose builds take no trip through the column (sim.js TRIP) */
       const R = 601, held = JSON.parse(JSON.stringify(demo));
       if (!demo.game.sidebar) {
-        held.game.inputs.push({ at: R - 6, build: 'ARMSOLAR' }, { at: R - 5, move: [300, 200] }, { at: R - 4, down: 'shift' },
+        // the commander picked where it stands on the build's tick, as a live entry's build needs (THE LIVE DATA RULE)
+        const probe = WikiSim.game(whole, demo, A[1], A[2], 'refuse');
+        while (probe.tick < R - 7) probe.step();
+        const c0 = probe.view().units.find(u => u.id === 'c0');
+        probe.free();
+        held.game.inputs.push({ at: R - 6, move: [c0.x, c0.z] }, { at: R - 6, down: 'select' }, { at: R - 6, up: 'select' },
+          { at: R - 6, build: 'ARMSOLAR' }, { at: R - 5, move: [300, 200] }, { at: R - 4, down: 'shift' },
           { at: R - 3, down: 'lmb' }, { at: R - 2, move: [340, 200] }, { at: R + 5, up: 'lmb' }, { at: R + 6, up: 'shift' });
         cases.push({ name: `fork -- ${id}/${demo.id} (${A[0]}) the handoff at ${R}`, layout: A[1], ctx: A[2], run: G => {
           const sim = G(whole, held, 'refuse');
           play(sim, R - 1);
           const v0 = sim.view();
-          if (!v0.keys.includes('shift') || !v0.keys.includes('lmb') || v0.mode !== 'build:ARMSOLAR') return `FAIL nothing held before the fork: ${v0.keys} ${v0.mode}`;
+          if (!v0.keys.includes('shift') || !v0.keys.includes('lmb') || v0.mode !== 'build:ARMSOLAR' || !v0.units.some(u => u.id === 'c0' && u.selected))
+            return `FAIL nothing held before the fork: ${v0.keys} ${v0.mode}, selected ${v0.units.filter(u => u.selected).map(u => u.id)}`;
           if (sim.fork(R, [], 'refuse') !== 'ok') return 'FAIL the fork was refused';
           const v = sim.view();
           if (v.keys.length || v.mode !== 'contextual' || v.sites.length || v.drag || v.units.some(u => u.selected))
@@ -1112,10 +1141,11 @@ function forkCases() {
 }
 
 /* ---- THE COLUMN PASS (rewind-spec.md section 12.1): DZ's arithmetic. A game with the sidebar forced on, its first
-   scene builder of seat 0 selected, a build trip to every type it builds (each must arm: the trip lands on the
-   drawn gadget only when centreOf and inside agree on DZ), then a click at the centre of every gadget of the
-   builder's pages taken in world z, the column's row minus FRAME_BAR, and two clicks over the minimap's rows; with
-   the fixture's column and the tall one, at both Interface Types. ---- */
+   scene builder of seat 0 selected, a build trip to every type it builds, each after a click on the builder on its
+   tick (sim.js THE LIVE DATA RULE), and each must arm (the trip lands on the drawn gadget only when centreOf and
+   inside agree on DZ), then a click at the centre of every gadget of the builder's pages taken in world z, the
+   column's row minus FRAME_BAR, and two clicks over the minimap's rows; with the fixture's column and the tall one,
+   at both Interface Types. ---- */
 function columnCases() {
   const cases = [], T = WikiSim.TRIP, BAR = 32;
   for (const [id, whole] of GAMES) {
@@ -1126,8 +1156,10 @@ function columnCases() {
       if (!u) continue;
       const builds = whole.units[u.type].builds, inputs = [];
       let t = 10;
+      // each build after a click on the builder on its tick, as a live entry's build needs (sim.js THE LIVE DATA RULE)
       const arms = builds.map(b => {
-        inputs.push({ at: t, build: b }, { at: t + T, down: 'cancel' }, { at: t + T + 2, up: 'cancel' });
+        inputs.push({ at: t, move: u.at }, { at: t, down: 'select' }, { at: t, up: 'select' }, { at: t, build: b },
+          { at: t + T, down: 'cancel' }, { at: t + T + 2, up: 'cancel' });
         const a = [t + WikiSim.TRIP_UP + 5, b];
         t += T + 10;
         return a;
@@ -1143,7 +1175,7 @@ function columnCases() {
       const demo = { ...whole.demos[0], scene: { ...(whole.demos[0].scene || {}), selected: [u.id] },
         game: { end: t + 10, sidebar: true, inputs } };
       for (const iface of [1, 0])
-        cases.push({ name: `column -- ${id} (${ln}, type ${iface}): ${builds.length} trips, ${(inputs.length - 3 * builds.length) / 3} clicks`,
+        cases.push({ name: `column -- ${id} (${ln}, type ${iface}): ${builds.length} trips, ${(inputs.length - 6 * builds.length) / 3} clicks`,
           layout, ctx: { side: 0, iface, casting: null, rival: null }, run: G => {
             const sim = G(whole, demo, 'refuse');
             let bad = null;
@@ -1436,6 +1468,41 @@ try {
       else console.log(`equal  ${c.name}: ${expected.length} answers (${verdict})`);
     });
   }
+
+  /* ---- THE RELEASE SWEEP (simcheck.mjs releaseSweep, wikitest sweep): each live entry's games with Back to now's
+     release after every tick up to the script's last input, then played on to the end, the hash and the stop compared
+     at each end; in the fork pass's two contexts, the last two shards. sim.js's own verdict, that no release stops a
+     game, is simcheck's. ---- */
+  [['fixture, own types, type 1', null, 1], ['fixture, shifted, type 0', 'shifted', 0]].forEach(([named, cname, iface], k) => {
+    if (SHARDS > 1 && SHARD !== SHARDS - k) return;
+    const ctx = { side: 0, iface, casting: cname ? CASTINGS[cname][0] : null, rival: cname ? RIVALS[cname] : null };
+    for (const [id, entry] of GAMES.filter(([, e]) => e.live)) {
+      fs.writeFileSync(path.join(tmp, 'game.json'), JSON.stringify(entry));
+      const cout = lines(wikitest(['sweep', 'wiki.bin', 'game.json', 'fixture', cname ? `casting-${cname}.json` : '-',
+        cname ? `rival-${cname}.json` : '-', String(iface), '-']));
+      let at = 0, n = 0, first = null;
+      for (const demo of entry.demos) {
+        const last = Math.max(0, ...demo.game.inputs.map(e => e.at));
+        for (let r = 0; r <= last; r++, n++) {
+          const sim = WikiSim.game(entry, demo, FIXTURE, ctx, 'refuse');
+          while (sim.tick < r && !sim.done) sim.step();
+          sim.release();
+          while (!sim.done) sim.step();
+          const v = sim.view();
+          const j = { entry: id, demo: demo.id, r, t: sim.tick, stopped: v.locked !== null || v.game.starved || v.game.badKill || v.stalled,
+            h: stateHash(sim, v) };
+          sim.free();
+          const d = at < cout.length ? diff(JSON.parse(cout[at]), j, '') : { at: '(the C sweep ended early)', c: null, j: null };
+          at++;
+          if (d && !first) first = { demo: demo.id, r, ...d };
+        }
+      }
+      if (!first && at !== cout.length) first = { demo: '', r: '', at: `the C sweep printed ${cout.length - at} lines more`, c: null, j: null };
+      cases++;
+      if (first) { failed++; console.log(`DIFFER release sweep -- ${id} (${named}) ${first.demo} released after ${first.r}: ${first.at}: C ${show(first.c)}, sim.js ${show(first.j)}`); }
+      else console.log(`equal  release sweep -- ${id} (${named}): ${n} releases, each game's end alike`);
+    }
+  });
 
   if (SHARD === 1) {
     /* ---- simcheck.mjs's rule cases, recorded on sim.js and replayed through the C sim ---- */
