@@ -8198,17 +8198,49 @@ static void tk_live(char* ta, unsigned P)
     *(uint32_t*)(*(char**)(ta + OFF_OBJECTIVE) + OBJ_ARMED) = 1;
 }
 
+/* THE TAKEOVER STARTS THE LIVE GAME RUNNING. The pause the level stands in here is the playing's
+   -- the replay HUD's play button and Take over's own click (pick_act, tagpu_replay_pause), the
+   Pause key during the playing, a frame seek -- and the playing has ended, so its pause ends with
+   it, at the frame visit that ran the takeover, before the draw.
+   No step of the takeover needs the pause: R0..R17 and TK0..TK4b run inside this one frame visit;
+   the next frame's pause test 0x496920 passes, its step makes GameTime T, and that step's capture
+   point 0x4954ED starts the timeline tagpu_rec_fork_arm armed.
+   What it keeps: a pause the test pacing took (s_pause_taken), which `resume` ends; and no window
+   holds a pause here, because the in-game wiki does not open while a takeover is queued
+   (pause_in_flight, tagpu_wiki.c).
+   THE BOUND beside the write: a network game never reaches here -- a playing's level is single
+   player: the Start's and Watch's refusals, and play never sets main+0x2A44 bit 0 -- so the write
+   is the Pause key's flip 0x4960AA..0x4960BC without its message 0x19 (0x49609F..0x4960E0,
+   DISASSEMBLED), which has no peer to reach.
+   The first unpaused frame runs up to five ticks: the scheduler was not called while paused, so
+   its elapsed (0x495236..0x495255: clock - base, then base = clock) is the whole pause and its
+   due clamps to 5 (0x4953EF..0x4953FE, DISASSEMBLED), as after the Pause key.
+   A menu that opens after the Take over click and before this visit (two inputs in one frame)
+   finds the live game running, as a network game's menu does; its close (0x460A33) leaves it
+   running.
+   Returns the takeover line's tail, what the run did, so the line is true in every case. */
+static const char* tk_run(char* ta)
+{
+    unsigned short* pause = (unsigned short*)(ta + OFF_PAUSE);
+    if (s_pause_taken) return "; the test's pause holds it until resume";
+    if ((ta[OFF_NETWORK] & 1) || !(*pause & 1)) return "";
+    *pause &= (unsigned short)~1u;
+    return "; the playing's pause ended";
+}
+
 /* TK4b, last: the playing ends and the recorder is armed. THE ORDER: the line is formatted first,
    since the step-down clears the counts; the puppet table goes off, so every gate predicate is
    false, the elimination's included; the step-down follows the seek's lines, which read the world
    through s_rd, and frees the reader -- afterwards every entry point returns at its `!s_rd` test,
-   and s_opt and s_vinfo stay for the level's end; the arm comes last (tagpu_recorder.c,
-   tagpu_rec_fork_arm). */
-static void tk_end(unsigned T, unsigned P, unsigned D, unsigned ms, unsigned read,
+   and s_opt and s_vinfo stay for the level's end; then the arm (tagpu_recorder.c,
+   tagpu_rec_fork_arm), and last, for a playing's takeover, the end of its pause (tk_run); a
+   rewind's fork leaves the pause to rw_finish, which puts back the one the rewind found. */
+static void tk_end(char* ta, unsigned T, unsigned P, unsigned D, unsigned ms, unsigned read,
                    unsigned rebuild, unsigned built, LONGLONG hz)
 {
     const RecHeader* h = recr_header(s_rd);
     char line[700], seats[80], tail[96];
+    const char* run;
     unsigned i, n = 0, id = s_tk.fork.id, parent = s_tk.fork.parent;
     seats[0] = 0;
     for (i = 0; i < h->nseats && n < sizeof seats; i++)
@@ -8241,7 +8273,8 @@ static void tk_end(unsigned T, unsigned P, unsigned D, unsigned ms, unsigned rea
                    id);
         snprintf(tail, sizeof tail, "; timeline %u is not recorded", id);
     }
-    tagpu_logf("%s%s", line, tail);
+    run = s_rw.state ? "" : tk_run(ta);       /* a rewind's fork: rw_finish's pause */
+    tagpu_logf("%s%s%s", line, tail, run);
     s_tk.on = 0;
 }
 
@@ -8600,7 +8633,7 @@ static int seek_run(char* ta)
     /* TK4b (THE TAKEOVER, tk_end): s_rd is gone afterwards */
     if (back) rw_finish(ta, 1);
     else if (tk)
-        tk_end(T, P, (unsigned)D, sk_ms(t2.QuadPart - t0.QuadPart, hz.QuadPart),
+        tk_end(ta, T, P, (unsigned)D, sk_ms(t2.QuadPart - t0.QuadPart, hz.QuadPart),
                sk_ms(t1.QuadPart - t0.QuadPart, hz.QuadPart),
                sk_ms(t2.QuadPart - t1.QuadPart, hz.QuadPart), s_st.obuilt - built0, hz.QuadPart);
     if (tk && !back && s_rw.state) rw_finish(ta, 0);
