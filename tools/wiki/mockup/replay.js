@@ -44,9 +44,9 @@ const WikiReplay = (() => {
      the game ticks a seek and the walk play in one step (SEEK, WALK), rew's and fwd's 10 s (STEP), a bookmark's reach
      of 3 s (NEAR), the bookmarks and markers held (BOOKS; MARKS: a death per kill of a commander, a defeat per seat),
      the most game ticks a page's fill lets a replay run (FILL, the presentation's), and a press's trip (HUD_DOWN,
-     HUD_UP: the popup pick's without its glide back); PRESSES, what Try it may press: the controls and the question's
-     Yes (WIKI_HUD_LEAVE_YES) */
-  const CONTROLS = Sim.HUD_CONTROLS, HUD_DOWN = Sim.HUD_DOWN, HUD_UP = Sim.HUD_UP, PRESSES = [...CONTROLS, 'leave:yes'];
+     HUD_UP: the popup pick's without its glide back); PRESSES, what Try it may press: the replay HUD's controls and
+     the question's Yes (WIKI_HUD_LEAVE_YES), never a live HUD's */
+  const CONTROLS = Sim.HUD_CONTROLS, HUD_DOWN = Sim.HUD_DOWN, HUD_UP = Sim.HUD_UP, PRESSES = [...Sim.REPLAY_CONTROLS, 'leave:yes'];
   const SPEEDS = [5, 10, 20, 40, 80], SPEED0 = 10;
   // SEEK, WALK and FILL are set from the tick's cost in the game: tagpu_wikireplay.h states the measurement
   const SEEK = 64, WALK = 64, STEP = 300, NEAR = 90, BOOKS = 64, MARKS = Sim.GAME_KILLS + Sim.SEATS, FILL = 64;
@@ -112,7 +112,7 @@ const WikiReplay = (() => {
     }
     /* THE CONTROLS, as the game's HUD acts (hud-in-game.md, the keys' table). While Leave's question is open every
        press but its two answers is ignored, and an answer with none open is, and leave:yes in a replay that plays a
-       script; each ignored press is counted. */
+       script, and a live HUD's control, which a replay has none of; each ignored press is counted. */
     function act(c, value) {
       if (failed) return;
       const answer = c === 'leave:no' || c === 'leave:yes';
@@ -143,7 +143,8 @@ const WikiReplay = (() => {
           toast = { kind: 'added', at: R.tick, value: playhead };
         }
       } else if (c === 'leave') { question = { wasPaused: paused }; paused = true; }
-      else { paused = question.wasPaused; question = null; }
+      else if (c === 'leave:no') { paused = question.wasPaused; question = null; }
+      else ignored++;
     }
     /* THE TRIP's events on clock tick c: a button acts at its release; the track seeks at its press, during a drag at
        each tick i = 1..over to to + trunc((drag - to) i / over) when that differs from the last, and at the release to

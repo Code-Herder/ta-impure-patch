@@ -187,12 +187,15 @@ enum { WIKI_IN_MOVE = 1, WIKI_IN_BUILD = 2, WIKI_IN_CAPTION = 4, WIKI_IN_UNTIL =
 enum { WIKI_UNTIL_IDLE = 1, WIKI_UNTIL_ARRIVED = 2, WIKI_UNTIL_BUILT = 3, WIKI_UNTIL_SEEKED = 4 };
 #define WIKI_UNTIL_MAX 3600
 
-/* THE REPLAY HUD'S CONTROLS a game entry's viewer's script presses (sim.js's HUD_CONTROLS, in its
-   order; the game's keys, hud-in-game.md), WIKI_NHUD of them. leave:yes is the player's alone,
+/* THE HUD'S CONTROLS a game entry's viewer's script presses (sim.js's HUD_CONTROLS, in its order;
+   the game's keys, hud-in-game.md), WIKI_NHUD of them: the replay HUD's eight, then the live HUD's
+   own three. A replay entry's script presses the replay HUD's, a live entry's the live HUD's,
+   which share rew, fwd and track (tagpu_wikidata_hud_presses). leave:yes is the player's alone,
    never a script's: Try it yourself may press it (replay.js PRESSES, tagpu_wikireplay_press), so it
    is numbered after the script's controls and has no name the loader reads. */
 enum { WIKI_HUD_PLAY, WIKI_HUD_SPEED, WIKI_HUD_REW, WIKI_HUD_FWD, WIKI_HUD_TRACK, WIKI_HUD_BOOKMARK, WIKI_HUD_LEAVE,
-       WIKI_HUD_LEAVE_NO, WIKI_NHUD, WIKI_HUD_LEAVE_YES = WIKI_NHUD, WIKI_NPRESS };
+       WIKI_HUD_LEAVE_NO, WIKI_HUD_REWIND, WIKI_HUD_LIVE_PLAY, WIKI_HUD_LIVE_NOW, WIKI_NHUD,
+       WIKI_HUD_LEAVE_YES = WIKI_NHUD, WIKI_NPRESS };
 
 /* One input of a demo's timeline, or one the player gives Try it yourself. */
 typedef struct {
@@ -226,6 +229,20 @@ typedef struct {
     int              has_sidebar, sidebar;
 } WIKIGAME;
 
+/* A LIVE DEMO'S FORK PART (sim.js checkGame): the game inputs the viewer's fork of `id` goes on
+   with, made at `from` with `parent` its parent timeline. id 1..WIKI_FORK_IDS - 1, no two parts of
+   one id; from 2..the game's end; parent 0..id - 1; each input a game input at a tick from..end, a
+   unit killed at most once in the part and at most WIKI_GAME_KILLS kills. A demo holds at most
+   WIKI_DEMO_FORKS. WIKI_FORK_IDS is the recorder's RECR_TIMELINES, the timelines a recording
+   holds, which tagpu_wiki.c asserts at build time; sim.js's TIMELINES and DEMO_FORKS. */
+#define WIKI_DEMO_FORKS 8
+#define WIKI_FORK_IDS   64
+typedef struct {
+    int              id, from, parent;
+    int              ninput;
+    WIKIINPUT*       input;             /* in file order */
+} WIKIFORK;
+
 /* An entry's frame: a page (the wiki's tutorial page) or a game (`"frame": "game"`, a small game) */
 enum { WIKI_FRAME_PAGE, WIKI_FRAME_GAME };
 
@@ -248,6 +265,8 @@ typedef struct {
     int              sidebar;           /* the sidebar, else a mobile builder of the player's does */
     int              has_game;          /* a game entry's demo: its game script */
     WIKIGAME         game;
+    int              nfork;             /* a live entry's demo: its fork parts, in file order */
+    WIKIFORK*        fork;
 } WIKIDEMO;
 
 typedef struct {
@@ -259,6 +278,8 @@ typedef struct {
     const char**     locked_in;         /* the mods that turn the feature off */
     double           pace;              /* construction and reclaim run this many times faster */
     int              frame;             /* WIKI_FRAME_*; a game entry has no pace (1) */
+    int              live;              /* a game entry's `live`: its demos play a live skirmish with
+                                           the rewind, never a replay */
     WIKIDEF*         def;               /* in the file's order, which breaks the sim's ties */
     WIKIFEATDEF*     feat;              /* the `features` table, in the file's order */
     int              nscene;            /* 1 or more, every map the first one's size */
@@ -328,6 +349,9 @@ const char* tagpu_wikidata_kind_name(int kind);
    the control of a name, or -1. */
 const char* tagpu_wikidata_hud_name(int hud);
 int         tagpu_wikidata_hud(const char* name);
+/* 1 when a demo of a live entry (`live` 1: sim.js's LIVE_CONTROLS) or of a replay entry (0: its
+   REPLAY_CONTROLS) presses control `hud`, else 0 */
+int         tagpu_wikidata_hud_presses(int hud, int live);
 
 /* A feature of the entry's table by name, or -1. */
 int tagpu_wikidata_feat(const WIKIENTRY* e, const char* name);

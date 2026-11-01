@@ -844,7 +844,7 @@ function gameRefusalCases(game, page) {
   game.demos.forEach(d => g(`the authored demo ${d.id} as a replay`, 'accepted', e => { e.demos = [clone(d)]; }));
   cases.slice(-game.demos.length).forEach(c => { c.replay = true; });
   const UP = WikiReplay.HUD_UP, DOWN = WikiReplay.HUD_DOWN, end = game.demos[0].game.end;
-  replay('a caption, a wait and every control', 'accepted', [{ at: 0, caption: 'x' }, ...WikiReplay.CONTROLS.map((c, i) =>
+  replay('a caption, a wait and every control', 'accepted', [{ at: 0, caption: 'x' }, ...WikiSim.REPLAY_CONTROLS.map((c, i) =>
     ({ at: 10 + 40 * i, hud: c, ...(c === 'track' ? { to: 100 } : {}) })), { at: 400, until: 'seeked', max: 60 }]);
   replay('no inputs', 'accepted', []);
   replay('inputs not a list: read as none', 'accepted', { a: 1 });
@@ -884,6 +884,80 @@ function gameRefusalCases(game, page) {
     replay(`a game input, ${Object.keys(k)[0]}`, 'refused', [{ at: 10, ...k }]);
   replay('a demo end that is no number', 'refused', [], (e, d) => { d.end = '300'; });
   replay('a demo with no end', 'accepted', [], (e, d) => { delete d.end; });
+  for (const c of ['rewind', 'live_play', 'live_now']) replay(`a replay demo pressing ${c}`, 'refused', [{ at: 10, hud: c }]);
+
+  /* A LIVE ENTRY (sim.js checkGame's live rule, checkViewer's two sets, the fork parts' rules; tagpu_wikidata.c's
+     entry, viewer_input and forks): played as a game, which checks the viewer's script and the parts too */
+  const live = (e, d) => { e.live = true; d.inputs = []; };
+  const L = (name, want, edit) => g(`live: ${name}`, want, (e, d, sc, G) => { live(e, d); edit(e, d, sc, G); });
+  L('live true', 'accepted', () => {});
+  g('live: live false', 'accepted', e => { e.live = false; });
+  for (const v of [1, 'true', null]) g(`live: live ${JSON.stringify(v)}`, 'refused', e => { e.live = v; });
+  p('live: live true on a page entry', 'refused', e => { e.live = true; });
+  p('live: live false on a page entry', 'refused', e => { e.live = false; });
+  L('every live control', 'accepted', (e, d) => {
+    d.inputs = WikiSim.LIVE_CONTROLS.map((c, i) => ({ at: 10 + 40 * i, hud: c, ...(c === 'track' ? { to: 100, drag: 50, over: 5 } : {}) }));
+  });
+  for (const c of WikiSim.REPLAY_CONTROLS.filter(c => !WikiSim.LIVE_CONTROLS.includes(c)))
+    L(`a live demo pressing ${c}`, 'refused', (e, d) => { d.inputs = [{ at: 10, hud: c }]; });
+  L('a live demo pressing leave:yes', 'refused', (e, d) => { d.inputs = [{ at: 10, hud: 'leave:yes' }]; });
+  // the fork parts
+  const part = (k = {}) => ({ id: 1, from: 301, parent: 0, inputs: [{ at: 301, move: [100, 250] }, { at: 302, down: 'select' }, { at: 304, up: 'select' }], ...k });
+  const F = (name, want, forks, edit = () => {}) => L(`forks, ${name}`, want, (e, d, sc, G) => { d.forks = typeof forks === 'function' ? forks(G) : forks; edit(e, d, sc, G); });
+  F('one part', 'accepted', [part()]);
+  F('none', 'accepted', []);
+  F('an object', 'refused', { a: part() });
+  F('a string', 'refused', 'x');
+  g('forks on a replay entry\'s demo', 'refused', (e, d) => { d.forks = []; });
+  p('forks on a page entry\'s demo', 'refused', (e, d) => { d.forks = []; });
+  F(`${WikiSim.DEMO_FORKS} parts`, 'accepted', Array.from({ length: WikiSim.DEMO_FORKS }, (_, i) => part({ id: i + 1, parent: i })));
+  F(`${WikiSim.DEMO_FORKS + 1} parts`, 'refused', Array.from({ length: WikiSim.DEMO_FORKS + 1 }, (_, i) => part({ id: i + 1, parent: i })));
+  F('a part not an object', 'refused', [[1, 301, 0, []]]);
+  F('a part without inputs', 'refused', [(({ inputs, ...k }) => k)(part())]);
+  F('a part with a key more', 'refused', [part({ seat: 0 })]);
+  for (const [v, want] of [[0, 'refused'], [1, 'accepted'], [WikiSim.TIMELINES - 1, 'accepted'], [WikiSim.TIMELINES, 'refused'], [1.5, 'refused'], ['1', 'refused']])
+    F(`an id ${JSON.stringify(v)}`, want, [part({ id: v })]);
+  F('two parts of one id', 'refused', [part(), part({ from: 401, inputs: [] })]);
+  for (const [v, want] of [[1, 'refused'], [2, 'accepted'], [end, 'accepted'], [end + 1, 'refused'], [2.5, 'refused']])
+    F(`a from of ${v}`, want, [part({ from: v, inputs: [] })]);
+  for (const [id, v, want] of [[1, -1, 'refused'], [1, 0, 'accepted'], [3, 2, 'accepted'], [3, 3, 'refused'], [3, 0.5, 'refused']])
+    F(`id ${id}, parent ${v}`, want, [part({ id, parent: v })]);
+  F('inputs an object', 'refused', [part({ inputs: {} })]);
+  const ins = (name, want, inputs) => F(`an input ${name}`, want, [part({ inputs })]);
+  ins('before from', 'refused', [{ at: 300, move: [1, 1] }]);
+  ins('at the end', 'accepted', [{ at: end, move: [1, 1] }]);
+  ins('past the end', 'refused', [{ at: end + 1, move: [1, 1] }]);
+  ins('with no tick', 'refused', [{ move: [1, 1] }]);
+  ins('a caption', 'refused', [{ at: 400, caption: 'x' }]);
+  ins('a wait', 'refused', [{ at: 400, until: 'idle', max: 60 }]);
+  ins('of seat 1', 'refused', [{ at: 400, seat: 1, move: [1, 1] }]);
+  ins('of seat 0', 'accepted', [{ at: 400, seat: 0, move: [1, 1] }]);
+  ins('building a type of the entry', 'accepted', [{ at: 400, build: 'ARMSOLAR' }]);
+  ins('building no type', 'refused', [{ at: 400, build: 'NOPE' }]);
+  ins('a reclaim not true', 'refused', [{ at: 400, reclaim: 1 }]);
+  ins('a pick of no kind', 'refused', [{ at: 400, pick: 'wood' }]);
+  ins('a move of one number', 'refused', [{ at: 400, move: 5 }]);
+  ins('a key no input names', 'refused', [{ at: 400, down: 'meta' }]);
+  ins('an action', 'accepted', [{ at: 400, down: 'order' }, { at: 402, up: 'order' }]);
+  ins('a kill of a scene unit', 'accepted', [{ at: 400, kill: 'c1' }]);
+  ins('a kill of a unit the game script kills too', 'accepted', [{ at: 1300, kill: 'w1' }]);
+  ins('a kill naming no unit', 'refused', [{ at: 400, kill: 'nobody' }]);
+  ins('a kill with a move', 'refused', [{ at: 400, kill: 'c1', move: [1, 1] }]);
+  ins('a unit killed twice', 'refused', [{ at: 400, kill: 'c1' }, { at: 500, kill: 'c1' }]);
+  F('a unit killed in two parts', 'accepted', [part({ inputs: [{ at: 400, kill: 'c1' }] }), part({ id: 2, from: 401, inputs: [{ at: 450, kill: 'c1' }] })]);
+  // 64 kills in a part and 65: the demo's scene adds rival walkers to kill
+  for (const [n, want] of [[64, 'accepted'], [65, 'refused']])
+    L(`forks, ${n} kills in a part`, want, (e, d) => {
+      d.scene = { units: Array.from({ length: n }, (_, k) => ({ id: `k${k}`, type: 'CORAK', owner: 1, at: [24 + 32 * (k % 19), 72 + 32 * Math.floor(k / 19)] })) };
+      d.forks = [part({ inputs: d.scene.units.map((u, k) => ({ at: 400 + k, kill: u.id })) })];
+    });
+  // the features plus every kill, the game script's two and the parts': 254 + 2 accepted alone (above)
+  for (const [n, want] of [[253, 'accepted'], [254, 'refused']])
+    L(`forks, ${n} features, two kills and a part's kill`, want, (e, d, sc) => {
+      e.features.pebble = { footprint: [1, 1], metal: 1 };
+      sc.features = pebbles(n);
+      d.forks = [part({ inputs: [{ at: 400, kill: 'c1' }] })];
+    });
   return cases;
 }
 

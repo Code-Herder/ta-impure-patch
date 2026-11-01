@@ -20,7 +20,8 @@ static const char* const KIND_NAMES[WIKI_NKINDS] = { "metal", "energy", "all" };
 static const char* const CAST_NAMES[WIKI_NCAST] = { "builder", "advbuilder", "mex", "moho", "geo",
                                                     "walker", "tower", "wall", "solar", "commander" };
 /* sim.js's HUD_CONTROLS, in WIKI_HUD_* order */
-static const char* const HUD_NAMES[WIKI_NHUD] = { "play", "speed", "rew", "fwd", "track", "bookmark", "leave", "leave:no" };
+static const char* const HUD_NAMES[WIKI_NHUD] = { "play", "speed", "rew", "fwd", "track", "bookmark", "leave", "leave:no",
+                                                   "rewind", "live_play", "live_now" };
 
 const char* tagpu_wikidata_key_name(int key)
 {
@@ -48,6 +49,14 @@ int tagpu_wikidata_hud(const char* name)
     for (k = 0; name && k < WIKI_NHUD; k++)
         if (!strcmp(HUD_NAMES[k], name)) return k;
     return -1;
+}
+
+int tagpu_wikidata_hud_presses(int hud, int live)
+{
+    if (live)
+        return hud == WIKI_HUD_REWIND || hud == WIKI_HUD_REW || hud == WIKI_HUD_FWD || hud == WIKI_HUD_TRACK
+            || hud == WIKI_HUD_LIVE_PLAY || hud == WIKI_HUD_LIVE_NOW;
+    return hud >= WIKI_HUD_PLAY && hud <= WIKI_HUD_LEAVE_NO;
 }
 
 /* a sweep kind by name, or -1 */
@@ -744,6 +753,8 @@ static int viewer_input(R* r, const TJV* v, WIKIINPUT* in, int end)
         if (tj_is(c, TJ_STR) && !strcmp(c->str, "leave:yes")) return refuse(r, "leave:yes is the player's, never a demo's", NULL);
         if (!tj_is(c, TJ_STR) || (in->hud = tagpu_wikidata_hud(c->str)) < 0)
             return refuse(r, "a press names no control a demo presses", NULL);
+        if (!tagpu_wikidata_hud_presses(in->hud, r->e->live))
+            return refuse(r, r->e->live ? "a press names no control a live demo presses:" : "a press names no control a replay demo presses:", c->str);
         in->has |= WIKI_IN_HUD;
         if (in->hud != WIKI_HUD_TRACK)
             return keys_in(v, PRESS, 1) ? 1 : refuse(r, "a press carries a key it does not know", NULL);
@@ -801,6 +812,55 @@ static int viewer_order(R* r, const WIKIDEMO* d)
     return 1;
 }
 
+/* A LIVE DEMO'S FORK PARTS (sim.js checkGame, WIKIFORK's rules): a list of at most WIKI_DEMO_FORKS
+   parts, each exactly {id, from, parent, inputs}; each input a game input (input), at a tick
+   from..end, a kill of a unit of the merged scene by its explicit id, once in the part, at most
+   WIKI_GAME_KILLS. THE BOUND the game simulation's features rest on, over the parts too: the merged
+   scene's features, the game script's kills and every part's together are at most WIKI_FEATS_MAX
+   (tagpu_wikisim_fork holds a fork to the same at run time). */
+static int forks(R* r, const TJV* v, WIKIDEMO* d)
+{
+    static const char* const PART[] = { "id", "from", "parent", "inputs" };
+    const WIKISCENE* sc[2] = { &r->e->scenes[d->on], &d->scene };
+    const TJV *p, *c;
+    int i, j, k = 0, n = 0, kills = 0;
+    if (!tj_is(v, TJ_ARR) || v->n > WIKI_DEMO_FORKS) return refuse(r, "forks is not a list of at most 8 parts", NULL);
+    if (!(d->fork = (WIKIFORK*)zalloc(r, (size_t)v->n, sizeof *d->fork))) return 0;
+    for (p = v->first; p; p = p->next) {
+        WIKIFORK* f = &d->fork[d->nfork++];
+        const TJV* inputs = tj_get(p, "inputs");
+        int partkills = 0;
+        if (!tj_is(p, TJ_OBJ) || p->n != 4 || !keys_in(p, PART, 4) || !tj_get(p, "id") || !tj_get(p, "from") || !tj_get(p, "parent") || !inputs)
+            return refuse(r, "a fork part is not {id, from, parent, inputs}", NULL);
+        if (!integer(r, tj_get(p, "id"), 1, WIKI_FORK_IDS - 1, &f->id, "a fork part's id")
+            || !integer(r, tj_get(p, "from"), 2, (int)d->game.end, &f->from, "a fork part's from")
+            || !integer(r, tj_get(p, "parent"), 0, f->id - 1, &f->parent, "a fork part's parent"))
+            return 0;
+        for (i = 0; i < d->nfork - 1; i++)
+            if (d->fork[i].id == f->id) return refuse(r, "two fork parts have one id", NULL);
+        if (!tj_is(inputs, TJ_ARR)) return refuse(r, "a fork part's inputs are not a list", NULL);
+        if (!(f->input = (WIKIINPUT*)zalloc(r, (size_t)inputs->n, sizeof *f->input))) return 0;
+        for (c = inputs->first; c; c = c->next) {
+            WIKIINPUT* in = &f->input[f->ninput++];
+            if (!tj_is(tj_get(c, "at"), TJ_NUM)) return refuse(r, "a game input has no tick", NULL);
+            if (!input(r, c, in, 1)) return 0;
+            if (!(in->at >= f->from && in->at <= d->game.end)) return refuse(r, "a fork part's input is outside its ticks", NULL);
+            if (!(in->has & WIKI_IN_KILL)) continue;
+            if (!scene_has_id(r->e, d, in->kill)) return refuse(r, "a kill names no unit of the scene:", in->kill);
+            for (j = 0; j < f->ninput - 1; j++)
+                if ((f->input[j].has & WIKI_IN_KILL) && !strcmp(f->input[j].kill, in->kill))
+                    return refuse(r, "a unit is killed twice in a fork part:", in->kill);
+            if (partkills == WIKI_GAME_KILLS) return refuse(r, "a fork part has more than 64 kills", NULL);
+            partkills++;
+        }
+        kills += partkills;
+    }
+    for (k = 0; k < 2; k++) n += sc[k]->nfeat;
+    for (i = 0; i < d->game.ninput; i++) kills += (d->game.input[i].has & WIKI_IN_KILL) != 0;
+    if (n + kills > WIKI_FEATS_MAX) return refuse(r, "the scene's features and the kills pass 256", NULL);
+    return 1;
+}
+
 static int demo(R* r, const TJV* v, WIKIDEMO* d)
 {
     const TJV *c, *inputs = tj_get(v, "inputs"), *end = tj_get(v, "end");
@@ -823,6 +883,11 @@ static int demo(R* r, const TJV* v, WIKIDEMO* d)
         for (i = 0; i < d->scene.nunit; i++)
             if (d->scene.unit[i].owner >= r->e->scenes[d->on].nseat) return refuse(r, "a unit's owner is no seat of its scene", NULL);
         if (!(d->has_game = game(r, c, d))) return 0;
+    }
+    /* `forks` is a live entry's demo's alone */
+    if ((c = tj_get(v, "forks"))) {
+        if (!r->e->live) return refuse(r, "forks are a live entry's demo's", NULL);
+        if (!forks(r, c, d)) return 0;
     }
     d->ninput = count(inputs);
     if (!(d->input = (WIKIINPUT*)zalloc(r, (size_t)d->ninput, sizeof *d->input))) return 0;
@@ -857,11 +922,13 @@ static void scene_free(WIKISCENE* s)
 
 void tagpu_wikidata_entry_free(WIKIENTRY* e)
 {
-    int i;
+    int i, k;
     for (i = 0; e->demo && i < e->ndemo; i++) {
         scene_free(&e->demo[i].scene);
         free(e->demo[i].input);
         free(e->demo[i].game.input);
+        for (k = 0; e->demo[i].fork && k < e->demo[i].nfork; k++) free(e->demo[i].fork[k].input);
+        free(e->demo[i].fork);
     }
     free(e->demo);
     for (i = 0; e->scenes && i < e->nscene; i++) scene_free(&e->scenes[i]);
@@ -1066,9 +1133,13 @@ int tagpu_wikidata_entry(WIKIENTRY* e, const char* text, size_t len, char* err, 
     /* sim.js isGame: `frame` absent, or "game"; a game entry has no pace */
     c = tj_get(root, "frame");
     e->frame = c && tj_is(c, TJ_STR) && !strcmp(c->str, "game") ? WIKI_FRAME_GAME : WIKI_FRAME_PAGE;
+    /* sim.js checkGame: `live` a game entry's, a boolean; the rule refuses anything else below */
+    e->live = e->frame == WIKI_FRAME_GAME && tj_is(tj_get(root, "live"), TJ_TRUE);
     if (tj_num(tj_get(root, "format"), 0) != 2) refuse(&r, "is not format 2", NULL);
     else if (c && e->frame != WIKI_FRAME_GAME) refuse(&r, "has a frame other than \"game\"", NULL);
     else if (e->frame == WIKI_FRAME_GAME && tj_get(root, "pace")) refuse(&r, "is a game entry with a pace", NULL);
+    else if ((c = tj_get(root, "live")) && (e->frame != WIKI_FRAME_GAME || !(tj_is(c, TJ_TRUE) || tj_is(c, TJ_FALSE))))
+        refuse(&r, "has a live that is not a game entry's true or false", NULL);
     else if (e->frame == WIKI_FRAME_GAME && count(tj_get(root, "demos")) > WIKI_THEATRE_TABS)
         refuse(&r, "is a game entry with more demos than the theatre's tabs", NULL);
     else if (!strings(&r, tj_get(root, "text"), &e->text, &e->ntext)) {}
