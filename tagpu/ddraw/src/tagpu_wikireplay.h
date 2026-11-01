@@ -42,7 +42,22 @@
    then applied through the function a re-simulation applies it with; one that cannot be logged is
    not applied, so every fork can be made again exactly.
    ONE CURSOR: in a scripted live demo, while the viewer's trip or its return glide runs and the
-   rewind is idle, L feeds seat 0 no input; a step that does sets `clash` and ends the replay.
+   rewind is idle, L feeds the human seat no input; a step that does sets `clash` and ends the
+   replay.
+
+   TAKE OVER, a takeover entry's demo (WIKIENTRY.takeover): a replay with the replay HUD's Take
+   over, the game's own state for state with its waits removed. replay.js's header states it --
+   watch mode on the selected timeline's chain, the picker as pick_fill, the switch's two paths and
+   why the re-chained one is exact, the export's no-overwrite rule, the deletion through the
+   nearest live ancestor, the takeover into live mode with the seat taken as the human -- with:
+   THE BOUND, WATCH: a switch restarts the walker on the new chain without holding the clock; a
+   step runs the game's part first and gives the walker what is left of WIKI_REPLAY_WALK, so it
+   still runs at most max(WIKI_REPLAY_SEEK, WIKI_REPLAY_WALK, 8) game ticks, plus one fork
+   operation per chain member crossed. The timelines are at most RECR_TIMELINES (the plan refuses
+   the one past it), the forks saved at most as many, each once.
+   THE LIFETIME, WATCH: a sought switch frees `game` before the new one is made, as a backward seek
+   does, and a switch frees the walker before the new one is made; the takeover frees the walker,
+   which live mode has none of. A kept fork's part points into the entry's data, only read.
 
    ENGINE-FREE, WIN32-FREE AND WITHOUT GLOBALS, as tagpu_wikisim.c: one WIKIREPLAY is used by one
    thread at a time, and it lives as long as its caller keeps it. The DLL compiles this file for
@@ -87,10 +102,19 @@
 
 /* a toast's kind, replay.js's TOASTS: a bookmark's two, then the live HUD's five (tagpu_hudinput.c's
    strings: "Playing on from m:ss", "Cannot play from m:ss", "Click again to play from m:ss" with
-   ", replacing F<n>", "Playing from m:ss", "Rewind refused"); a marker's is HUD_MK_DEATH or
-   HUD_MK_DEFEAT */
+   ", replacing F<n>", "Playing from m:ss", "Rewind refused"), then the Take over set's six
+   ("Taking over NAME at m:ss", "Cannot take over at m:ss", "F<id> saved as a replay of its own",
+   "Cannot save F<id>", "Click again to delete F<id>", "F<id> deleted"); a marker's is HUD_MK_DEATH
+   or HUD_MK_DEFEAT */
 enum { WIKI_TOAST_ADDED, WIKI_TOAST_REMOVED, WIKI_TOAST_PLAYING_ON, WIKI_TOAST_CANNOT, WIKI_TOAST_ARMED,
-       WIKI_TOAST_PLAYING_FROM, WIKI_TOAST_REFUSED };
+       WIKI_TOAST_PLAYING_FROM, WIKI_TOAST_REFUSED, WIKI_TOAST_TAKING_OVER, WIKI_TOAST_CANNOT_TAKE, WIKI_TOAST_SAVED,
+       WIKI_TOAST_CANNOT_SAVE, WIKI_TOAST_CLICK_DELETE, WIKI_TOAST_DELETED };
+
+/* TAKE OVER's names (replay.js PICKS, MODES): the picker's states (tagpu_hudinput.c PICK_CLOSED,
+   _ASKED, _SEEKING, _OPEN) and a takeover replay's modes, watching the recording and the live game
+   its takeover made */
+enum { WIKI_PICKER_CLOSED, WIKI_PICKER_ASKED, WIKI_PICKER_SEEKING, WIKI_PICKER_OPEN };
+enum { WIKI_TK_WATCH, WIKI_TK_LIVE };
 
 /* THE LIVE MODE's names and bounds (replay.js RW, ARMS, FIRST, RATE, LOG, LOG_KEEP, AT_GAME): the
    rewind's states (tagpu_replay.c's IDLE, OPEN and PAST; its FLUSH and ENDING are instantaneous
@@ -109,20 +133,23 @@ enum { WIKI_LOG_MOVE, WIKI_LOG_DOWN, WIKI_LOG_UP, WIKI_LOG_RELEASE };
 
 /* An entry of a timeline's log: applied live between two ticks, applied again by every
    re-simulation at the same point. tau the tick it first acts on (the simulation stands at tau - 1);
-   kind WIKI_LOG_*; key a WIKI_KEY_* for DOWN and UP; x, z a MOVE's world point. */
+   kind WIKI_LOG_*; key a WIKI_KEY_* for DOWN and UP; seat the human seat whose input or release it
+   is; x, z a MOVE's world point. */
 typedef struct {
     int32_t tau;
-    int8_t  kind, key;
+    int8_t  kind, key, seat;
     double  x, z;
 } WIKIREPLAYLOG;
 
 /* A TIMELINE: the original (id 0) or a fork, in creation order, its index its id. parent -1 for the
-   original; R its first tick; last the span's last when it stopped being the selected one; live 0
-   once deleted; used the demo tick it was made on (the recorder's last-used stamp); mode WIKI_ECON_*;
-   part the fork part's inputs in the entry's data (only read, NULL for the original and Try it's);
-   the log on the heap, the replay's own. */
+   original; R its first tick; last the span's last when it stopped being the selected one (a
+   takeover replay's original and kept forks: the tick its chain plays to); live 0 once deleted;
+   used the demo tick it was made or left on (the recorder's last-used stamp); mode WIKI_ECON_*;
+   seat the seat its fork operation takes; part the fork part's or kept fork's inputs in the
+   entry's data (only read, NULL for the original and Try it's); the log on the heap, the replay's
+   own. */
 typedef struct {
-    int                id, parent, R, last, live, used, mode;
+    int                id, parent, R, last, live, used, mode, seat;
     const WIKIINPUT*   part;
     int                npart;
     WIKIREPLAYLOG*     log;
@@ -153,6 +180,7 @@ typedef struct {
     int         nbook;
     int         book[WIKI_REPLAY_BOOKS];        /* sorted                                            */
     int         toast_kind, toast_at, toast_value;  /* toast_kind -1: none                          */
+    int         toast_seat;                     /* the seat a toast names (Taking over), -1 none     */
     int         question, was_paused;           /* Leave's question is open, and the pause before it */
     int         left;                           /* Try it's Yes left the replay: it is done          */
     /* LIVE (replay.js's view's `live`; `live` 0 leaves the rest 0): the rewind's WIKI_RW_*, the
@@ -161,13 +189,23 @@ typedef struct {
        logs hold; the selected timeline and the timelines; the past simulation (has_past 0 none), its
        tick, the seek's T (-1 none) and its generation; the top bar's memo, f32 as the engine's, and
        the DisplayTimer; the return glide's start (-1 none); whether Try it's input is past what the
-       logs keep; the toast's evicted fork (-1 none) */
+       logs keep; the toast's evicted fork (-1 none, and in a takeover replay's watch mode); the human
+       seat. The timelines (ntl, tl) are a takeover replay's in either mode too. */
     int         live;
     int         rw, G, first, last, now, arm, arm_R, arm_evict, drag_t, clash, nlogged, selected, ntl;
-    struct { int id, parent, R, last, live, used, mode, nlog; } tl[RECR_TIMELINES];
+    struct { int id, parent, R, last, live, used, mode, nlog, seat; } tl[RECR_TIMELINES];
     int         has_past, past_tick, past_target, past_gen;
     float       be, bm, rates[4];               /* rates: energy in, out; metal in, out          */
-    int         dt, back, full, toast_evict;
+    int         dt, back, full, toast_evict, human;
+    /* TAKE OVER (replay.js's view's `tk`; `tk` 0 leaves the rest 0): the WIKI_TK_* mode; the human
+       seat (-1 while watching); the WIKI_PICKER_* state and its plan (R, the fork it evicts or -1,
+       the parent, the timeline and the serial it was made on); the lanes open; the fork armed for
+       deletion (0 none); the selected timeline's chain's last and the tick the track fills to (the
+       R of its member whose parent is the original, else the end); the rows' serial; the forks
+       saved; whether the walker walks in the background and its tick (-1 none); whether the
+       takeover's picker drew the fork limit's warning */
+    int         tk, tk_mode, pick, pick_R, pick_evict, pick_parent, pick_tl, pick_serial, lanes, armed;
+    int         chain_last, fill_to, serial, nsaved, saved[RECR_TIMELINES], bg, walker_tick, tk_full;
 } WIKIREPLAYVIEW;
 
 /* The replay; the caller owns it and reads nothing of it but through the functions below. */
@@ -202,7 +240,8 @@ typedef struct {
        clash; the return glide's start; the arm, its start and its eviction; the timelines, the
        selected one and the entries every log holds; `made` numbers each simulation made; the top
        bar's memo and DisplayTimer, and the shown world's figures it eases toward (s_*: the shown
-       tick, seat 0's stored values, storage and rates); the toast's evicted fork */
+       tick, the human seat's stored values, storage and rates); the toast's evicted fork and seat;
+       the human seat (a live entry's 0) */
     int               live;
     WIKISIM*          past;
     int               pgen, npchain, pm, pl, pchain[RECR_TIMELINES];
@@ -212,7 +251,13 @@ typedef struct {
     float             be, bm, rates[4];
     int               dt, s_tick;
     double            s_e, s_m, s_emax, s_mmax, s_ei, s_eo, s_mi, s_mo;
-    int               toast_evict;
+    int               toast_evict, toast_seat, human;
+    /* TAKE OVER (replay.js's takeover state; `tk` a takeover entry's replay, `live` set from its
+       takeover on): the picker's WIKI_PICKER_* and its plan; the rows' serial, raised by a
+       deletion; the lanes open; the fork armed for deletion (0 none); the forks saved, each once;
+       whether the walker walks in the background; whether the takeover's picker drew the warning */
+    int               tk, pick, pick_R, pick_evict, pick_parent, pick_tl, pick_serial;
+    int               serial, lanes, armed, nsaved, saved[RECR_TIMELINES], bg, tk_full;
 } WIKIREPLAY;
 
 /* replay.js's play (`scripted` WIKI_PLAY_DEMO: the viewer's script plays) or create (WIKI_PLAY_TRY:
@@ -232,15 +277,17 @@ void tagpu_wikireplay_step(WIKIREPLAY* r);
 int tagpu_wikireplay_cost(const WIKIREPLAY* r);
 
 /* Try it yourself's press, acting at once: a replay HUD's WIKI_HUD_*, the question's Yes included,
-   or in a live replay a live HUD's (tagpu_wikidata_hud_presses; anything else does nothing), and
-   for the track the game tick under the pointer, which the seek clamps to the game (live, to the
-   rewind's span). Nothing while the replay is done or still walking. */
+   a takeover replay's watch mode also its Take over set (tagpu_wikidata_hud_takeover), or in a
+   live replay a live HUD's (tagpu_wikidata_hud_presses; anything else does nothing); for the track
+   the game tick under the pointer, which the seek clamps to the game (live, to the rewind's span),
+   for a picker row its seat, for a lane's controls the fork's id. Nothing while the replay is done
+   or still walking before it shows (a background walk is no such walk). */
 void tagpu_wikireplay_press(WIKIREPLAY* r, int control, int value);
 
 /* Try it yourself's world input in a live replay (replay.js R.input), given between two steps: a
-   MOVE, else a `down`, else an `up` of a WIKI_KEY_* (anything else does nothing). Taken only after a
-   fork, every kind while the rewind is idle and a move alone while it is open, none in the past,
-   and only while the log can hold it (THE BOUND); LOGGED FIRST. */
+   MOVE, else a `down`, else an `up` of a WIKI_KEY_* (anything else does nothing), as the human
+   seat's. Taken only after a fork, every kind while the rewind is idle and a move alone while it
+   is open, none in the past, and only while the log can hold it (THE BOUND); LOGGED FIRST. */
 void tagpu_wikireplay_input(WIKIREPLAY* r, const WIKIINPUT* in);
 
 /* The game simulation shown now, NULL only when `failed`; not const, since tagpu_wikisim_view
@@ -267,7 +314,11 @@ void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v);
    rw, G, the GameTime shown, arm, arm_R, arm_evict, drag_t, clash, nlogged, selected, the timeline
    count and each one's id, parent, R, last, live, used, mode and log count; the toast's evicted
    fork (-1 with none); back; full; be, bm and the four rates as their f32 bits; dt; last the past
-   simulation's tagpu_wikisim_hash, low then high, or 0 and 0 with none. */
+   simulation's tagpu_wikisim_hash, low then high, or 0 and 0 with none. Then, a takeover replay's
+   only, so no other replay's hash takes a byte more: the WIKI_TK_* mode, human, pick, pick_R,
+   pick_evict, pick_parent, pick_tl, pick_serial, serial, lanes, armed, bg, tk_full, the saved
+   count and each, the timeline count and each one's id, parent, R, last, live, used, mode and
+   seat; last the walker's tick, -1 with none. */
 uint64_t tagpu_wikireplay_hash(const WIKIREPLAY* r);
 
 /* Frees every simulation the replay holds and its script; `r` holds nothing after. */

@@ -46,6 +46,16 @@ static int is_done(const WIKIREPLAY* r)
 }
 
 static void live_act(WIKIREPLAY* r, int c, int value);
+static int pick_act(WIKIREPLAY* r, int c, int value);
+static int lane_act(WIKIREPLAY* r, int c, int value);
+static int chain_step(WIKIREPLAY* r, WIKISIM* s);
+
+/* the selected chain's last tick: a takeover replay's watch mode plays its selected timeline to
+   that timeline's last */
+static int chain_last(const WIKIREPLAY* r)
+{
+    return r->tk ? r->tl[r->selected].last : r->end;
+}
 
 /* a seat's lost rising, a death; its out set, a defeat. BOUND: WIKI_REPLAY_MARKS (tagpu_wikireplay.h),
    and the guard holds the array whatever. The walker's seats are its scene's, at most WIKI_SEATS. */
@@ -75,6 +85,7 @@ static void end_walk(WIKIREPLAY* r)
     r->walked = r->walker->tick;
     game_free(r->walker);
     r->walker = NULL;
+    r->bg = 0;
 }
 
 /* THE SEEK, to `t` clamped to the game: back, a new game; forward, the target; to where it stands,
@@ -83,7 +94,7 @@ static void seek(WIKIREPLAY* r, int t)
 {
     char err[256];
     if (t < 0) t = 0;
-    if (t > r->end) t = r->end;
+    if (t > chain_last(r)) t = chain_last(r);
     if (t < r->game->tick) {
         /* THE LIFETIME: the old game is freed before the new one is made and r->game is cleared with
            it, so no code can reach the freed simulation; nothing else holds it -- a view taken from it
@@ -133,9 +144,10 @@ static void act(WIKIREPLAY* r, int c, int value)
         return;
     }
     playhead = r->target >= 0 ? r->target : r->game->tick;
+    if (r->tk && (pick_act(r, c, value) || lane_act(r, c, value))) return;
     switch (c) {
     case WIKI_HUD_PLAY:
-        if (playhead == r->end) {
+        if (playhead == chain_last(r)) {
             seek(r, 0);
             r->paused = 0;
         } else r->paused = !r->paused;
@@ -154,6 +166,7 @@ static void act(WIKIREPLAY* r, int c, int value)
         for (i = 0, k = -1; i < r->nbook; i++)
             if (abs(r->book[i] - playhead) <= WIKI_REPLAY_NEAR && (k < 0 || abs(r->book[i] - playhead) < abs(r->book[k] - playhead)))
                 k = i;
+        r->toast_evict = r->toast_seat = -1;
         if (k >= 0) {
             r->toast_kind = WIKI_TOAST_REMOVED;
             r->toast_value = r->book[k];
@@ -194,7 +207,7 @@ static void trip(WIKIREPLAY* r, int c)
 {
     const int press = r->at + WIKI_REPLAY_HUD_DOWN;
     if (r->to != WIKI_HUD_TRACK) {
-        if (c == r->at + WIKI_REPLAY_HUD_UP) act(r, r->to, 0);
+        if (c == r->at + WIKI_REPLAY_HUD_UP) act(r, r->to, r->value);
         return;
     }
     if (c == press) {
@@ -232,7 +245,9 @@ static void feed(WIKIREPLAY* r, int c)
             r->from_value = !from_game && r->has_cursor ? r->pos : -1;
             r->has_cursor = 1;
             r->to = e->hud;
-            r->value = e->hud == WIKI_HUD_TRACK ? e->to : -1;
+            /* a trip's value: the track's tick, a picker row's seat, a lane's fork, -1 for any
+               other button */
+            r->value = e->hud == WIKI_HUD_TRACK ? e->to : e->hud == WIKI_HUD_TAKEAS ? e->seat : e->fork >= 0 ? e->fork : -1;
             r->at = c;
             r->drag = e->hud == WIKI_HUD_TRACK ? e->drag : -1;
             r->over = r->drag >= 0 ? e->over : 0;
@@ -241,29 +256,31 @@ static void feed(WIKIREPLAY* r, int c)
     }
 }
 
-/* the game's part of a step: a seek's ticks, else the speed's */
-static void play(WIKIREPLAY* r)
+/* the game's part of a step: a seek's ticks, else the speed's, along the selected chain; the ticks
+   it ran */
+static int play(WIKIREPLAY* r)
 {
     WIKISIM* g = r->game;
-    int i, n;
+    int ran = 0, n;
     if (r->target >= 0) {
         n = r->target - g->tick < WIKI_REPLAY_SEEK ? r->target - g->tick : WIKI_REPLAY_SEEK;
-        for (i = 0; i < n && !g->done; i++) tagpu_wikisim_step(g);
-        if (g->tick == r->target) {
+        for (; ran < n && !g->done && chain_step(r, g); ran++) {}
+        if (!r->failed && g->tick == r->target) {
             r->target = -1;
             r->quiet = g->snd_total;
         }
     } else if (!r->paused) {
         r->acc += r->speed;
-        while (r->acc >= 10 && g->tick < r->end && !g->done) {
-            tagpu_wikisim_step(g);
+        while (r->acc >= 10 && g->tick < chain_last(r) && !g->done && chain_step(r, g)) {
             r->acc -= 10;
+            ran++;
         }
-        if (g->tick == r->end) {
+        if (g->tick == chain_last(r)) {
             r->paused = 1;
             r->acc = 0;
         }
     }
+    return ran;
 }
 
 /* ---- THE LIVE MODE (tagpu_wikireplay.h, LIVE; replay.js's functions, under its names) ---- */
@@ -306,17 +323,18 @@ static int chain_of(const WIKIREPLAY* r, int id, int* c)
     return n;
 }
 
-/* a log entry applied to a simulation, by the call that applied it live: an input as Try it gives
-   one (tagpu_wiki.c try_send), or the release */
+/* a log entry applied to a simulation, by the call that applied it live: an input of its seat's as
+   Try it gives one (tagpu_wiki.c try_send), or its seat's release */
 static void apply(WIKISIM* s, const WIKIREPLAYLOG* x)
 {
     WIKIINPUT in;
     if (x->kind == WIKI_LOG_RELEASE) {
-        tagpu_wikisim_release(s, 0);
+        tagpu_wikisim_release(s, x->seat);
         return;
     }
     memset(&in, 0, sizeof in);
-    in.down = in.up = in.build = -1;
+    in.down = in.up = in.build = in.fork = -1;
+    in.seat = x->seat;
     if (x->kind == WIKI_LOG_MOVE) {
         in.has = WIKI_IN_MOVE;
         in.move.x = x->x;
@@ -339,9 +357,9 @@ static int log_room(WIKITIMELINE* t, int k)
     return 1;
 }
 
-/* LOGGED FIRST (tagpu_wikireplay.h): the entry joins the selected timeline's log, then L takes it,
-   with `spare` more entries left in the block; 0, nothing applied, when memory runs out. The
-   callers keep WIKI_REPLAY_LOG's bound. */
+/* LOGGED FIRST (tagpu_wikireplay.h): the entry, the human seat's, joins the selected timeline's
+   log, then L takes it, with `spare` more entries left in the block; 0, nothing applied, when
+   memory runs out. The callers keep WIKI_REPLAY_LOG's bound. */
 static int log_apply(WIKIREPLAY* r, int kind, int key, double x, double z, int spare)
 {
     WIKITIMELINE* t = &r->tl[r->selected];
@@ -351,6 +369,7 @@ static int log_apply(WIKIREPLAY* r, int kind, int key, double x, double z, int s
     e->tau = r->game->tick + 1;
     e->kind = (int8_t)kind;
     e->key = (int8_t)key;
+    e->seat = (int8_t)r->human;
     e->x = x;
     e->z = z;
     r->nlogged++;
@@ -358,40 +377,39 @@ static int log_apply(WIKIREPLAY* r, int kind, int key, double x, double z, int s
     return 1;
 }
 
-static void toast_of(WIKIREPLAY* r, int kind, int value, int evict)
+/* a toast; `seat` names a picker row's seat (Taking over NAME), -1 none */
+static void toast_of(WIKIREPLAY* r, int kind, int value, int evict, int seat)
 {
     r->toast_kind = kind;
     r->toast_at = r->tick;
     r->toast_value = value;
     r->toast_evict = evict;
+    r->toast_seat = seat;
 }
 
-/* a plan: the fork's first tick, its parent's id, and the fork it evicts (-1 none) */
+/* a plan: the fork's first tick, its parent's id, the fork it evicts (-1 none); refused, `next`
+   the tick it may be made again at (0 none) */
 typedef struct {
-    int R, parent, evict;
+    int R, parent, evict, next;
 } PLAN;
 
 /* THE PLAN (tagpu_replay.c takeover_point, tagpu_recreader.c recr_append_point): a fork asked for at
    GameTime T starts in the chain member holding T, at the last GameTime of the member's segment up
-   to T that the recorder's writer flags a refresh (reclossy_is_refresh, walked from the member's
-   first with the ordinal from 1); the member's first is refused, as is a timeline past
-   RECR_TIMELINES and a live fork set rec_fork_evict cannot bound. At most the game's end of
-   integer steps: it runs on a click, never per step. */
+   to T that the recorder's writer flags a refresh (tagpu_wikidata_refresh_at, walked from the
+   member's first with the ordinal from 1); the member's first is refused, with `next` its second
+   (a refresh: T is the segment's first iteration, and the picker plans again there), as is a
+   timeline past RECR_TIMELINES and a live fork set rec_fork_evict cannot bound. At most the game's
+   end of integer steps: it runs on a click, never per step. */
 static int plan(const WIKIREPLAY* r, int T, PLAN* p)
 {
-    int chain[RECR_TIMELINES], n = chain_of(r, r->selected, chain), k = n - 1, t, i;
-    unsigned nth = 1, prev = 0;
+    int chain[RECR_TIMELINES], n = chain_of(r, r->selected, chain), k = n - 1, i;
     RecForkRow rows[RECR_TIMELINES];
     uint32_t evict;
     const WIKITIMELINE* m;
     while (k > 0 && r->tl[chain[k]].R > T) k--;
     m = &r->tl[chain[k]];
-    p->R = m->R;
-    for (t = m->R; t <= T; t++, nth++)
-        if (reclossy_is_refresh(nth, (unsigned)t, prev, REC_REFRESH_TICKS)) {
-            p->R = t;
-            prev = (unsigned)t;
-        }
+    p->R = tagpu_wikidata_refresh_at(m->R, T);
+    p->next = p->R == m->R ? m->R + 1 : 0;
     if (p->R == m->R || r->ntl >= RECR_TIMELINES) return 0;
     for (i = 0; i < r->ntl; i++) {
         rows[i].id = (uint32_t)r->tl[i].id;
@@ -414,10 +432,10 @@ static void live_open(WIKIREPLAY* r)
     int held[WIKI_NKEYS], k;
     if (L->tick - 1 <= WIKI_REPLAY_FIRST || r->nlogged > WIKI_REPLAY_LOG - WIKI_REPLAY_LOG_KEEP
         || !log_room(&r->tl[r->selected], WIKI_REPLAY_LOG_KEEP)) {
-        toast_of(r, WIKI_TOAST_REFUSED, 0, -1);
+        toast_of(r, WIKI_TOAST_REFUSED, 0, -1, -1);
         return;
     }
-    memcpy(held, L->in[0].held, sizeof held);
+    memcpy(held, L->in[r->human].held, sizeof held);
     if (!r->scripted && r->selected != 0)
         for (k = 0; k < WIKI_NKEYS; k++)
             if (held[k]) log_apply(r, WIKI_LOG_UP, k, 0, 0, 0);
@@ -471,22 +489,32 @@ static void live_seek(WIKIREPLAY* r, int T)
     r->target = T;
 }
 
+/* A CHAIN MEMBER'S FORK OPERATION on simulation s standing at m->R - 1, as the timeline was made:
+   m's part, played as m's seat, in m's mode. Refused -- the replay fails -- when that seat is no
+   seat of the game's or has no unit there (the picker draws such a seat's row dimmed, with no hot
+   area: tagpu_hudlay.c) or the fork operation refuses. */
+static int fork_member(WIKIREPLAY* r, WIKISIM* s, const WIKITIMELINE* m)
+{
+    char err[256];
+    if (m->seat < 0 || m->seat >= s->nseat || m->seat >= WIKI_SEATS || s->econ[m->seat].units == 0
+        || !tagpu_wikisim_fork(s, m->R, m->seat, m->part, m->npart, m->mode, err, sizeof err)) {
+        r->failed = 1;
+        return 0;
+    }
+    return 1;
+}
+
 /* ONE TICK OF P along the chain, from t to t + 1: at the next member's R the member's fork
    operation, then the entries that member logged at t + 1, in log order, through the calls that
    applied them live, so P's world is the world the timeline was played with by construction */
 static void past_tick(WIKIREPLAY* r)
 {
-    char err[256];
     WIKISIM* P = r->past;
     const int t = P->tick;
     const WIKITIMELINE* m;
     if (r->pm + 1 < r->npchain && t + 1 == r->tl[r->pchain[r->pm + 1]].R) {
-        m = &r->tl[r->pchain[++r->pm]];
         r->pl = 0;
-        if (!tagpu_wikisim_fork(P, m->R, 0, m->part, m->npart, m->mode, err, sizeof err)) {
-            r->failed = 1;
-            return;
-        }
+        if (!fork_member(r, P, &r->tl[r->pchain[++r->pm]])) return;
     }
     m = &r->tl[r->pchain[r->pm]];
     for (; r->pl < m->nlog && m->log[r->pl].tau <= t + 1; r->pl++)
@@ -514,53 +542,52 @@ static void sweep(WIKIREPLAY* r)
         }
 }
 
-/* THE FORK, with P standing at p->R - 1 and no seek pending: the part a scripted demo gives the
-   timeline of the next id (its from and parent must be the plan's), or Try it's none in stall
-   mode, the economy's stall mode's caller; the fork operation, which ends with the release; the
-   selected row closed at G, the evicted one deleted, the new row selected, and P takes L's place
-   (THE LIFETIME). The game's fork sets the DisplayTimer to the GameTime shown (MEASURED,
-   m0-facts.md: 1200 at the fork that takes over at 1201). The new id is below RECR_TIMELINES: the
-   plan refused the one past it. */
+/* THE NEXT FORK'S ROW, `t`, of id r->ntl, made at R0 from `parent` as `seat`: its part, the one a
+   scripted demo gives that id -- its from, parent and seat must be the fork's -- or Try it's none
+   in stall mode, the economy's stall mode's caller. 0, the replay failed, when the part is not
+   there. The id is below RECR_TIMELINES: the plan refused the one past it. */
+static int part_of(WIKIREPLAY* r, int R0, int parent, int seat, WIKITIMELINE* t)
+{
+    int i;
+    memset(t, 0, sizeof *t);
+    t->id = r->ntl;
+    t->parent = parent;
+    t->R = R0;
+    t->last = R0 - 1;
+    t->live = 1;
+    t->used = r->tick;
+    t->seat = seat;
+    t->mode = WIKI_ECON_STALL;
+    if (!r->scripted) return 1;
+    for (i = 0; i < r->d->nfork; i++)
+        if (r->d->fork[i].id == t->id) {
+            const WIKIFORK* f = &r->d->fork[i];
+            if (f->from != R0 || f->parent != parent || f->seat != seat) break;
+            t->part = f->input;
+            t->npart = f->ninput;
+            t->mode = WIKI_ECON_REFUSE;
+            return 1;
+        }
+    r->failed = 1;
+    return 0;
+}
+
+/* THE FORK, with P standing at p->R - 1 and no seek pending: the part of the next id (part_of),
+   then the fork operation as the human seat, which ends with the release; the selected row closed
+   at G, the evicted one deleted, the new row selected, and P takes L's place (THE LIFETIME). The
+   game's fork sets the DisplayTimer to the GameTime shown (MEASURED, m0-facts.md: 1200 at the
+   fork that takes over at 1201). */
 static void fork_at(WIKIREPLAY* r, const PLAN* p)
 {
-    char err[256];
     WIKISIM* P = r->past;
-    const int id = r->ntl;
-    const WIKIINPUT* part = NULL;
-    int npart = 0, mode = WIKI_ECON_STALL, i;
-    WIKITIMELINE* t;
-    if (r->scripted) {
-        const WIKIFORK* f = NULL;
-        for (i = 0; i < r->d->nfork && !f; i++)
-            if (r->d->fork[i].id == id) f = &r->d->fork[i];
-        if (!f || f->from != p->R || f->parent != p->parent) {
-            r->failed = 1;
-            return;
-        }
-        part = f->input;
-        npart = f->ninput;
-        mode = WIKI_ECON_REFUSE;
-    }
-    if (!tagpu_wikisim_fork(P, p->R, 0, part, npart, mode, err, sizeof err)) {
-        r->failed = 1;
-        return;
-    }
+    WIKITIMELINE t;
+    if (!part_of(r, p->R, p->parent, r->human, &t) || !fork_member(r, P, &t)) return;
     r->dt = p->R - 1;
     r->tl[r->selected].last = r->G;
     if (p->evict >= 0) r->tl[p->evict].live = 0;
-    t = &r->tl[id];
-    memset(t, 0, sizeof *t);
-    t->id = id;
-    t->parent = p->parent;
-    t->R = p->R;
-    t->last = p->R - 1;
-    t->live = 1;
-    t->used = r->tick;
-    t->mode = mode;
-    t->part = part;
-    t->npart = npart;
+    r->tl[t.id] = t;
     r->ntl++;
-    r->selected = id;
+    r->selected = t.id;
     sweep(r);
     game_free(r->game);
     r->game = P;
@@ -571,7 +598,7 @@ static void fork_at(WIKIREPLAY* r, const PLAN* p)
     r->rw = WIKI_RW_IDLE;
     r->arm = WIKI_ARM_NONE;
     r->back = r->clock;
-    toast_of(r, WIKI_TOAST_PLAYING_FROM, p->R, -1);
+    toast_of(r, WIKI_TOAST_PLAYING_FROM, p->R, -1, -1);
 }
 
 /* PLAY FROM HERE (tagpu_hudinput.c live_play): open, it closes and plays on; in the past, armed it
@@ -583,13 +610,13 @@ static void play_from(WIKIREPLAY* r, int now)
     PLAN p;
     if (r->rw == WIKI_RW_OPEN) {
         live_close(r);
-        toast_of(r, WIKI_TOAST_PLAYING_ON, r->G, -1);
+        toast_of(r, WIKI_TOAST_PLAYING_ON, r->G, -1, -1);
         return;
     }
     if (r->rw != WIKI_RW_PAST || r->arm == WIKI_ARM_SEEKING) return;
     if (!plan(r, now + 1, &p)) {
         r->arm = WIKI_ARM_NONE;
-        toast_of(r, WIKI_TOAST_CANNOT, now, -1);
+        toast_of(r, WIKI_TOAST_CANNOT, now, -1, -1);
         return;
     }
     if (r->arm == WIKI_ARM_ARMED || (p.R == now + 1 && p.evict < 0)) {
@@ -660,9 +687,9 @@ static void live_play(WIKIREPLAY* r)
     int i, n, fed;
     if (r->rw == WIKI_RW_IDLE) {
         if (L->tick >= r->end || L->done) return;
-        fed = L->in[0].fed;
+        fed = L->in[r->human].fed;
         tagpu_wikisim_step(L);
-        if (r->scripted && in_hand(r, r->clock) && L->in[0].fed != fed) r->clash = 1;
+        if (r->scripted && in_hand(r, r->clock) && L->in[r->human].fed != fed) r->clash = 1;
     } else if (r->rw == WIKI_RW_PAST && r->target >= 0 && r->past) {
         n = r->target - 1 - r->past->tick < WIKI_REPLAY_SEEK ? r->target - 1 - r->past->tick : WIKI_REPLAY_SEEK;
         for (i = 0; i < n && !r->past->done && !r->failed; i++) past_tick(r);
@@ -681,15 +708,16 @@ static void arm_fill(WIKIREPLAY* r)
     if (r->rw != WIKI_RW_PAST) r->arm = WIKI_ARM_NONE;
     else if (r->arm == WIKI_ARM_SEEKING && r->target < 0 && r->past->tick + 1 == r->arm_R) {
         r->arm = WIKI_ARM_ARMED;
-        toast_of(r, WIKI_TOAST_ARMED, r->arm_R, r->arm_evict);
+        toast_of(r, WIKI_TOAST_ARMED, r->arm_R, r->arm_evict, -1);
     } else if (r->arm == WIKI_ARM_ARMED && r->past->tick + 1 != r->arm_R) r->arm = WIKI_ARM_NONE;
 }
 
-/* the shown world's figures the top bar eases toward: its tick and seat 0's stored values,
-   storage and rates (a game has a seat 0: its scene has one seat at least) */
+/* the shown world's figures the top bar eases toward: its tick and the human seat's stored values,
+   storage and rates (a seat of the scene's: a live entry's 0, which a scene has, or the seat a
+   takeover's row named, bounded by the picker) */
 static void shown_from(WIKIREPLAY* r, const WIKISIM* s)
 {
-    const WIKIECON* z = &s->econ[0];
+    const WIKIECON* z = &s->econ[r->human];
     r->s_tick = s->tick;
     r->s_e = z->e;
     r->s_m = z->m;
@@ -737,6 +765,304 @@ static void bar_frame(WIKIREPLAY* r)
     }
 }
 
+/* ---- TAKE OVER (tagpu_wikireplay.h, TAKE OVER; replay.js's functions, under its names) ---- */
+
+/* ONE TICK of simulation s along the selected chain: at a member's R its fork operation first. R
+   strictly increases along a chain (a fork starts after its parent's first), so at most one member
+   starts on the tick after s's. 0, nothing stepped, when that fork operation failed the replay. */
+static int chain_step(WIKIREPLAY* r, WIKISIM* s)
+{
+    int chain[RECR_TIMELINES], n, k;
+    if (r->tk) {
+        n = chain_of(r, r->selected, chain);
+        for (k = 1; k < n; k++)
+            if (r->tl[chain[k]].R == s->tick + 1) {
+                if (!fork_member(r, s, &r->tl[chain[k]])) return 0;
+                break;
+            }
+    }
+    tagpu_wikisim_step(s);
+    return 1;
+}
+
+/* a fork the file holds: a timeline's id other than the original's, not deleted. `id` is DATA (a
+   press's value), bounded by the rows before it indexes them. */
+static int live_fork(const WIKIREPLAY* r, int id)
+{
+    return id >= 1 && id < r->ntl && r->tl[id].live;
+}
+
+static int any_fork(const WIKIREPLAY* r)
+{
+    int i;
+    for (i = 1; i < r->ntl; i++)
+        if (r->tl[i].live) return 1;
+    return 0;
+}
+
+/* the selected chain's tick the stage's track fills to: the R of its member whose parent is the
+   original, else the original's end (tagpu_hudstate.c fill_forks' fill_to) */
+static int fill_to(const WIKIREPLAY* r)
+{
+    int chain[RECR_TIMELINES], n = chain_of(r, r->selected, chain), k;
+    for (k = 1; k < n; k++)
+        if (r->tl[chain[k]].parent == 0) return r->tl[chain[k]].R;
+    return r->end;
+}
+
+/* THE WALK RESTARTED on the selected chain (THE LIFETIME, WATCH: the old walker freed before the
+   new one is made), the markers blank until it has walked, in the background (THE BOUND, WATCH) */
+static void restart_walk(WIKIREPLAY* r)
+{
+    char err[256];
+    game_free(r->walker);
+    r->walker = NULL;
+    r->nmark = 0;
+    memset(r->prev_lost, 0, sizeof r->prev_lost);
+    memset(r->prev_out, 0, sizeof r->prev_out);
+    r->walked = 0;
+    if (!(r->walker = game_new(r, 1, err, sizeof err))) {
+        r->failed = 1;
+        return;
+    }
+    r->bg = 1;
+    publish(r);
+}
+
+/* the background walk's share of a step that ran `ran` of the game's ticks (THE BOUND, WATCH) */
+static void bg_walk(WIKIREPLAY* r, int ran)
+{
+    int i, n;
+    if (!r->bg || !r->walker) return;
+    n = WIKI_REPLAY_WALK - ran < chain_last(r) - r->walker->tick ? WIKI_REPLAY_WALK - ran : chain_last(r) - r->walker->tick;
+    for (i = 0; i < n && !r->walker->done && chain_step(r, r->walker); i++) publish(r);
+    if (r->failed) return;
+    if (r->walker->done || r->walker->tick >= chain_last(r)) end_walk(r);
+    else r->walked = r->walker->tick;
+}
+
+/* THE SWITCH to timeline `id`, a live one (tagpu_replay.c, the switch): the timeline left stamped
+   as used, the picker closed; RE-CHAINED when the chain members the game has crossed (R <= its
+   tick) are the same on both chains -- the world at that tick was made by the same fork operations
+   and the game's script is the last such member's, so it is the new chain's world by construction
+   -- the game kept and a pending seek clamped to the new chain; else SOUGHT to the playhead
+   clamped to the new chain, the game freed before the new one is made (THE LIFETIME, WATCH); then
+   the walk restarted on the new chain */
+static void switch_to(WIKIREPLAY* r, int id)
+{
+    char err[256];
+    int a[RECR_TIMELINES], b[RECR_TIMELINES], na, nb, ka = 0, kb = 0, same, T;
+    const int t = r->game->tick;
+    r->tl[r->selected].used = r->tick;
+    r->pick = WIKI_PICKER_CLOSED;
+    na = chain_of(r, r->selected, a);
+    nb = chain_of(r, id, b);
+    while (ka < na && r->tl[a[ka]].R <= t) ka++;
+    while (kb < nb && r->tl[b[kb]].R <= t) kb++;
+    same = ka == kb && !memcmp(a, b, (size_t)ka * sizeof a[0]);
+    if (same) {
+        if (r->target > r->tl[id].last) r->target = r->tl[id].last;
+    } else {
+        T = r->target >= 0 ? r->target : t;
+        if (T > r->tl[id].last) T = r->tl[id].last;
+        game_free(r->game);
+        r->game = NULL;
+        if (!(r->game = game_new(r, 0, err, sizeof err))) {
+            r->failed = 1;
+            return;
+        }
+        r->gen++;
+        r->quiet = 0;
+        r->acc = 0;
+        r->target = T == 0 ? -1 : T;
+    }
+    r->selected = id;
+    restart_walk(r);
+}
+
+/* A DELETION of fork `id`, a live one (tagpu_replay.c, the delete): the watched fork is left
+   first for the nearest live timeline up its chain (fork_fallback: the original is always live,
+   so the walk ends there), then the fork is gone and the rows' serial moves; the bay closes with
+   its last fork, and a deleted row's part goes unless a live chain reads it (sweep) */
+static void delete_fork(WIKIREPLAY* r, int id)
+{
+    int f;
+    if (id == r->selected) {
+        for (f = r->tl[id].parent; f > 0 && !r->tl[f].live; f = r->tl[f].parent) {}
+        switch_to(r, f < 0 ? 0 : f);
+        if (r->failed) return;
+    }
+    r->tl[id].live = 0;
+    r->serial++;
+    if (!any_fork(r)) r->lanes = 0;
+    sweep(r);
+}
+
+/* THE TAKEOVER of seat h, with the picker open: the game stands at pick_R - 1, paused, no seek
+   pending (pick_fill keeps that). The part of the next id (part_of) and the fork operation as seat
+   h, in the walker's stead (THE LIFETIME, WATCH); the timeline watched stamped as left [INFERRED:
+   the playing's stamps are written when it ends, tagpu_replay.c, and read only by a later
+   eviction in the live game, which no demo reaches]; the evicted fork deleted, the new row
+   selected; then LIVE MODE with seat h the human, the cursor's glide back from the row to seat h's
+   cursor starting now. THE BAR AT THE TAKEOVER (MEASURED, m0t-facts.md #1f): the memo is carried,
+   not reset -- the watch mode's zeros, the viewer's, as the game's memo persists through a seek and
+   a fork -- so it eases from 0 toward seat h's stored values; the DisplayTimer is R - 1, so the
+   step that plays R samples seat h's rates and raises it to R + 29. The game after the fix that
+   runs a takeover's live game at once (takeover-pause-fix-spec.md) draws the takeover's own frame
+   at R - 1 before its first batch of ticks; the wiki's first live frame is R's. */
+static void take_over(WIKIREPLAY* r, int h)
+{
+    WIKITIMELINE t;
+    int before = 0, i;
+    if (!part_of(r, r->pick_R, r->pick_parent, h, &t)) return;
+    game_free(r->walker);
+    r->walker = NULL;
+    r->bg = 0;
+    for (i = 1; i < r->ntl; i++) before += r->tl[i].live != 0;
+    if (!fork_member(r, r->game, &t)) return;
+    r->tl[r->selected].used = r->tick;
+    if (r->pick_evict >= 0) r->tl[r->pick_evict].live = 0;
+    r->tl[t.id] = t;
+    r->ntl++;
+    r->selected = t.id;
+    sweep(r);
+    r->live = 1;
+    r->human = h;
+    r->rw = WIKI_RW_IDLE;
+    r->arm = WIKI_ARM_NONE;
+    r->G = 0;
+    r->back = r->clock;
+    r->tk_full = before >= REC_FORK_LIMIT;
+    r->quiet = r->game->snd_total;
+    r->dt = r->pick_R - 1;
+    toast_of(r, WIKI_TOAST_TAKING_OVER, r->pick_R - 1, -1, h);
+}
+
+/* THE PICKER'S KEYS (tagpu_hudinput.c pick_act): 1 when the press is one of them. rew, fwd, play
+   and the track close the picker and go on to act; Take over asks, pausing the playback, or
+   closes; a row acts only with the picker open and on a seat with a unit (a dimmed row has no hot
+   area), else it is ignored and counted. The row's seat is DATA, bounded by the game's seats. */
+static int pick_act(WIKIREPLAY* r, int c, int value)
+{
+    if (c == WIKI_HUD_REW || c == WIKI_HUD_FWD || c == WIKI_HUD_PLAY || c == WIKI_HUD_TRACK) {
+        r->pick = WIKI_PICKER_CLOSED;
+        return 0;
+    }
+    if (c == WIKI_HUD_TAKEOVER) {
+        if (r->pick != WIKI_PICKER_CLOSED) r->pick = WIKI_PICKER_CLOSED;
+        else {
+            r->paused = 1;
+            r->pick = WIKI_PICKER_ASKED;
+        }
+        return 1;
+    }
+    if (c != WIKI_HUD_TAKEAS) return 0;
+    if (r->pick != WIKI_PICKER_OPEN || value < 0 || value >= r->game->nseat || value >= WIKI_SEATS || r->game->econ[value].units == 0)
+        r->ignored++;
+    else {
+        r->pick = WIKI_PICKER_CLOSED;
+        take_over(r, value);
+    }
+    return 1;
+}
+
+/* THE LANES' KEYS (tagpu_hudinput.c lane_act): 1 when the press is one of them. The bay toggles the
+   lanes while the file holds a fork; a lane, its Save and its Delete act on a fork the open lanes
+   list (the id is DATA, bounded by live_fork), and Back to main recording while a fork is watched;
+   anything else is ignored and counted. A lane and Back to main clear Delete's arm; the watched
+   lane does nothing. Save writes a fork once (THE BOUND: each id once, below RECR_TIMELINES);
+   Delete arms, then deletes. */
+static int lane_act(WIKIREPLAY* r, int c, int value)
+{
+    int i;
+    if (c == WIKI_HUD_LANES) {
+        if (any_fork(r)) r->lanes ^= 1;
+        else r->ignored++;
+        return 1;
+    }
+    if (c == WIKI_HUD_MAIN) {
+        if (r->lanes && r->selected != 0) {
+            r->armed = 0;
+            switch_to(r, 0);
+        } else r->ignored++;
+        return 1;
+    }
+    if (c != WIKI_HUD_LANE && c != WIKI_HUD_EXPORT && c != WIKI_HUD_DELETE) return 0;
+    if (!r->lanes || !live_fork(r, value)) {
+        r->ignored++;
+        return 1;
+    }
+    if (c == WIKI_HUD_LANE) {
+        r->armed = 0;
+        if (value != r->selected) switch_to(r, value);
+    } else if (c == WIKI_HUD_EXPORT) {
+        for (i = 0; i < r->nsaved && r->saved[i] != value; i++) {}
+        if (i < r->nsaved) toast_of(r, WIKI_TOAST_CANNOT_SAVE, value, -1, -1);
+        else {
+            r->saved[r->nsaved++] = value;
+            toast_of(r, WIKI_TOAST_SAVED, value, -1, -1);
+        }
+    } else if (r->armed != value) {
+        r->armed = value;
+        toast_of(r, WIKI_TOAST_CLICK_DELETE, value, -1, -1);
+    } else {
+        r->armed = 0;
+        delete_fork(r, value);
+        toast_of(r, WIKI_TOAST_DELETED, value, -1, -1);
+    }
+    return 1;
+}
+
+/* THE PICKER'S FILL (tagpu_hudinput.c pick_fill), after the game's part of each watch step, the
+   playhead p the seek's target while one is pending: asked, it plans at p + 1 (the chain's last at
+   most), once more one tick on when that is a segment's first, and snaps the playback back to
+   R - 1; sought, it opens when the game stands at R - 1; open, it closes when the playback runs or
+   the playhead leaves R - 1 (every wiki seek completes, and every press that would start another
+   closes the picker first). A switch closes it; a deletion plans it again at R, which keeps it
+   with the new eviction or closes it. */
+static void pick_fill(WIKIREPLAY* r)
+{
+    const int p = r->target >= 0 ? r->target : r->game->tick;
+    PLAN q;
+    int ok;
+    if (r->pick == WIKI_PICKER_ASKED) {
+        ok = plan(r, p + 1 < chain_last(r) ? p + 1 : chain_last(r), &q);
+        if (!ok && q.next) ok = plan(r, q.next, &q);
+        if (!ok) {
+            toast_of(r, WIKI_TOAST_CANNOT_TAKE, p, -1, -1);
+            r->pick = WIKI_PICKER_CLOSED;
+            return;
+        }
+        r->pick_R = q.R;
+        r->pick_evict = q.evict;
+        r->pick_parent = q.parent;
+        r->pick_tl = r->selected;
+        r->pick_serial = r->serial;
+        if (!(r->target < 0 && r->game->tick + 1 == r->pick_R)) seek(r, r->pick_R - 1);
+        if (r->failed) return;
+        r->pick = WIKI_PICKER_SEEKING;
+    }
+    if (r->pick == WIKI_PICKER_SEEKING) {
+        if (r->target < 0 && r->game->tick + 1 == r->pick_R) r->pick = WIKI_PICKER_OPEN;
+    } else if (r->pick == WIKI_PICKER_OPEN && (!r->paused || r->target >= 0 || r->game->tick + 1 != r->pick_R))
+        r->pick = WIKI_PICKER_CLOSED;
+    if (r->pick != WIKI_PICKER_CLOSED && r->selected != r->pick_tl) r->pick = WIKI_PICKER_CLOSED;
+    if ((r->pick == WIKI_PICKER_SEEKING || r->pick == WIKI_PICKER_OPEN) && r->serial != r->pick_serial) {
+        r->pick_serial = r->serial;
+        if (plan(r, r->pick_R, &q) && q.R == r->pick_R) r->pick_evict = q.evict;
+        else {
+            toast_of(r, WIKI_TOAST_CANNOT_TAKE, r->pick_R - 1, -1, -1);
+            r->pick = WIKI_PICKER_CLOSED;
+        }
+    }
+}
+
+/* THE ARM's hold (tagpu_hudinput.c lane_fill): only while the lanes are open and list its fork */
+static void lane_fill(WIKIREPLAY* r)
+{
+    if (r->armed && (!r->lanes || !live_fork(r, r->armed))) r->armed = 0;
+}
+
 /* the viewer's script in the order it is fed: by tick, then file order (the pointers' order) */
 static int by_tick(const void* a, const void* b)
 {
@@ -761,6 +1087,7 @@ int tagpu_wikireplay_init(WIKIREPLAY* r, const WIKIENTRY* e, const WIKIDEMO* d, 
     r->has_ctx = ctx != NULL;
     if (ctx) r->ctx = *ctx;
     r->live = e->frame == WIKI_FRAME_GAME && e->live;
+    r->tk = e->frame == WIKI_FRAME_GAME && e->takeover;
     if (!(r->game = game_new(r, 0, err, errn))) return 0;
     /* a live replay has no walker: the live HUD has no markers */
     if (!r->live && !(r->walker = game_new(r, 1, err, errn))) {
@@ -786,11 +1113,42 @@ int tagpu_wikireplay_init(WIKIREPLAY* r, const WIKIENTRY* e, const WIKIDEMO* d, 
     r->pos = -1;
     r->toast_kind = -1;
     r->toast_evict = -1;
+    r->toast_seat = -1;
+    if (r->tk) {
+        /* the rows: the original, its last the game's end, then each kept fork as it was played,
+           its part the entry's (only read). THE BOUND: at most REC_FORK_LIMIT kept forks, the
+           loader's, so the rows fit RECR_TIMELINES. */
+        r->human = -1;
+        r->pick_evict = -1;
+        /* the live game's state before the takeover starts it, as a live entry's starts */
+        r->made = 1;
+        r->drag_t = -1;
+        r->back = -1;
+        r->arm_evict = -1;
+        r->tl[0].parent = -1;
+        r->tl[0].R = WIKI_REPLAY_FIRST;
+        r->tl[0].last = r->end;
+        r->tl[0].live = 1;
+        r->tl[0].mode = WIKI_ECON_REFUSE;
+        r->ntl = 1;
+        for (i = 0; i < d->nkept && r->ntl < RECR_TIMELINES; i++, r->ntl++) {
+            WIKITIMELINE* t = &r->tl[r->ntl];
+            t->id = r->ntl;
+            t->parent = d->kept[i].parent;
+            t->R = d->kept[i].from;
+            t->last = d->kept[i].end;
+            t->live = 1;
+            t->mode = WIKI_ECON_REFUSE;
+            t->seat = d->kept[i].seat;
+            t->part = d->kept[i].input;
+            t->npart = d->kept[i].ninput;
+        }
+    }
     /* the seats as the scene and the script's tick 0 leave them, a walk that has nothing to play,
        the clock's tick 0 */
     if (!r->live) {
         publish(r);
-        if (r->walker->done) end_walk(r);
+        if (r->walker->done || r->walker->tick >= chain_last(r)) end_walk(r);
     } else {
         /* the original timeline; the memo before the level's first frame: seat 0's stored values
            (its settings), no rate read, the DisplayTimer 0 as in a record no frame has drawn
@@ -817,20 +1175,20 @@ int tagpu_wikireplay_init(WIKIREPLAY* r, const WIKIENTRY* e, const WIKIDEMO* d, 
 
 /* ONE STEP, a demo tick: while the walk runs, WIKI_REPLAY_WALK of its ticks and nothing else; then
    the viewer's clock (a held wait releases when no seek is pending and stalls past its max) and the
-   game's part */
+   game's part; live, the arm's fill and the top bar's frame after it; a takeover replay's watch
+   mode, the picker's and the arm's fill and the background walk after it */
 void tagpu_wikireplay_step(WIKIREPLAY* r)
 {
-    int i, n;
+    int i, n, ran;
     if (r->done) return;
     r->tick++;
-    if (r->walker) {
-        n = r->end - r->walker->tick < WIKI_REPLAY_WALK ? r->end - r->walker->tick : WIKI_REPLAY_WALK;
-        for (i = 0; i < n && !r->walker->done; i++) {
-            tagpu_wikisim_step(r->walker);
-            publish(r);
+    if (r->walker && !r->bg) {
+        n = chain_last(r) - r->walker->tick < WIKI_REPLAY_WALK ? chain_last(r) - r->walker->tick : WIKI_REPLAY_WALK;
+        for (i = 0; i < n && !r->walker->done && chain_step(r, r->walker); i++) publish(r);
+        if (!r->failed) {
+            if (r->walker->done || r->walker->tick >= chain_last(r)) end_walk(r);
+            else r->walked = r->walker->tick;
         }
-        if (r->walker->done) end_walk(r);
-        else r->walked = r->walker->tick;
         r->done = is_done(r);
         return;
     }
@@ -843,13 +1201,21 @@ void tagpu_wikireplay_step(WIKIREPLAY* r)
             arm_fill(r);
             bar_frame(r);
         }
-    } else if (!r->failed) play(r);
+    } else if (!r->failed) {
+        ran = play(r);
+        if (r->tk && !r->failed) {
+            pick_fill(r);
+            lane_fill(r);
+        }
+        if (r->tk && !r->failed) bg_walk(r, ran);
+    }
     r->done = is_done(r);
 }
 
 int tagpu_wikireplay_cost(const WIKIREPLAY* r)
 {
-    int n;
+    int n, w;
+    const int last = chain_last(r);
     if (r->done) return 0;
     if (r->live) {
         if (r->rw == WIKI_RW_IDLE) return r->game->tick < r->end && !r->game->done;
@@ -857,18 +1223,25 @@ int tagpu_wikireplay_cost(const WIKIREPLAY* r)
         n = r->target - 1 - r->past->tick;
         return n < WIKI_REPLAY_SEEK ? n : WIKI_REPLAY_SEEK;
     }
-    if (r->walker) return r->end - r->walker->tick < WIKI_REPLAY_WALK ? r->end - r->walker->tick : WIKI_REPLAY_WALK;
-    if (r->target >= 0) return r->target - r->game->tick < WIKI_REPLAY_SEEK ? r->target - r->game->tick : WIKI_REPLAY_SEEK;
-    if (r->paused) return 0;
-    n = (r->acc + r->speed) / 10;
-    return n < r->end - r->game->tick ? n : r->end - r->game->tick;
+    if (r->walker && !r->bg) return last - r->walker->tick < WIKI_REPLAY_WALK ? last - r->walker->tick : WIKI_REPLAY_WALK;
+    if (r->target >= 0) n = r->target - r->game->tick < WIKI_REPLAY_SEEK ? r->target - r->game->tick : WIKI_REPLAY_SEEK;
+    else if (r->paused) n = 0;
+    else {
+        n = (r->acc + r->speed) / 10;
+        if (n > last - r->game->tick) n = last - r->game->tick;
+    }
+    if (!r->walker) return n;
+    /* the background walk's share: what is left of WIKI_REPLAY_WALK, to the chain's last */
+    w = WIKI_REPLAY_WALK - n < last - r->walker->tick ? WIKI_REPLAY_WALK - n : last - r->walker->tick;
+    return n + (w > 0 ? w : 0);
 }
 
 void tagpu_wikireplay_press(WIKIREPLAY* r, int control, int value)
 {
-    if (r->done || r->walker || control < 0 || control >= WIKI_NPRESS) return;
+    if (r->done || (r->walker && !r->bg) || control < 0 || control >= WIKI_NPRESS) return;
     if (r->live ? !tagpu_wikidata_hud_presses(control, 1)
-                : !(control == WIKI_HUD_LEAVE_YES || tagpu_wikidata_hud_presses(control, 0)))
+                : !(control == WIKI_HUD_LEAVE_YES || tagpu_wikidata_hud_presses(control, 0)
+                    || (r->tk && tagpu_wikidata_hud_takeover(control))))
         return;
     act(r, control, value);
     r->done = is_done(r);
@@ -952,9 +1325,46 @@ void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v)
     v->toast_kind = r->toast_kind;
     v->toast_at = r->toast_kind >= 0 ? r->toast_at : 0;
     v->toast_value = r->toast_kind >= 0 ? r->toast_value : 0;
+    v->toast_seat = r->toast_kind >= 0 ? r->toast_seat : -1;
+    v->toast_evict = r->toast_kind >= 0 ? r->toast_evict : -1;
     v->question = r->question;
     v->was_paused = r->question ? r->was_paused : 0;
     v->left = r->left;
+    if (r->live || r->tk) {
+        v->ntl = r->ntl;
+        for (i = 0; i < r->ntl; i++) {
+            v->tl[i].id = r->tl[i].id;
+            v->tl[i].parent = r->tl[i].parent;
+            v->tl[i].R = r->tl[i].R;
+            v->tl[i].last = r->tl[i].last;
+            v->tl[i].live = r->tl[i].live;
+            v->tl[i].used = r->tl[i].used;
+            v->tl[i].mode = r->tl[i].mode;
+            v->tl[i].nlog = r->tl[i].nlog;
+            v->tl[i].seat = r->tl[i].seat;
+        }
+    }
+    if ((v->tk = r->tk)) {
+        v->tk_mode = r->live ? WIKI_TK_LIVE : WIKI_TK_WATCH;
+        v->human = r->human;
+        v->pick = r->pick;
+        v->pick_R = r->pick_R;
+        v->pick_evict = r->pick_evict;
+        v->pick_parent = r->pick_parent;
+        v->pick_tl = r->pick_tl;
+        v->pick_serial = r->pick_serial;
+        v->lanes = r->lanes;
+        v->armed = r->armed;
+        v->selected = r->selected;
+        v->chain_last = chain_last(r);
+        v->fill_to = fill_to(r);
+        v->serial = r->serial;
+        v->nsaved = r->nsaved;
+        memcpy(v->saved, r->saved, sizeof v->saved);
+        v->bg = r->bg;
+        v->walker_tick = r->walker ? r->walker->tick : -1;
+        v->tk_full = r->tk_full;
+    }
     if (!(v->live = r->live)) return;
     v->rw = r->rw;
     v->G = r->G;
@@ -968,17 +1378,7 @@ void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v)
     v->clash = r->clash;
     v->nlogged = r->nlogged;
     v->selected = r->selected;
-    v->ntl = r->ntl;
-    for (i = 0; i < r->ntl; i++) {
-        v->tl[i].id = r->tl[i].id;
-        v->tl[i].parent = r->tl[i].parent;
-        v->tl[i].R = r->tl[i].R;
-        v->tl[i].last = r->tl[i].last;
-        v->tl[i].live = r->tl[i].live;
-        v->tl[i].used = r->tl[i].used;
-        v->tl[i].mode = r->tl[i].mode;
-        v->tl[i].nlog = r->tl[i].nlog;
-    }
+    v->human = r->human;
     v->has_past = r->past != NULL;
     v->past_tick = r->past ? r->past->tick : 0;
     v->past_target = r->past ? r->target : -1;
@@ -989,7 +1389,6 @@ void tagpu_wikireplay_view(const WIKIREPLAY* r, WIKIREPLAYVIEW* v)
     v->dt = r->dt;
     v->back = r->back;
     v->full = r->nlogged >= WIKI_REPLAY_LOG - WIKI_REPLAY_LOG_KEEP;
-    v->toast_evict = r->toast_kind >= 0 ? r->toast_evict : -1;
 }
 
 /* ---- the replay's hash, in tagpu_wikireplay.h's order ---- */
@@ -1029,6 +1428,8 @@ static void fnv_str(uint64_t* h, const char* str)
     fnv_int(h, (int)n);
     fnv_bytes(h, str, n);
 }
+
+static void live_hash(const WIKIREPLAY* r, const WIKIREPLAYVIEW* v, uint64_t* hp);
 
 uint64_t tagpu_wikireplay_hash(const WIKIREPLAY* r)
 {
@@ -1083,17 +1484,23 @@ uint64_t tagpu_wikireplay_hash(const WIKIREPLAY* r)
     if (r->game) g = tagpu_wikisim_hash(r->game);
     fnv_u32(&h, (uint32_t)(g & 0xFFFFFFFFu));
     fnv_u32(&h, (uint32_t)(g >> 32));
-    if (!v.live) return h;
-    fnv_int(&h, v.rw);
-    fnv_int(&h, v.G);
-    fnv_int(&h, v.now);
-    fnv_int(&h, v.arm);
-    fnv_int(&h, v.arm_R);
-    fnv_int(&h, v.arm_evict);
-    fnv_int(&h, v.drag_t);
-    fnv_int(&h, v.clash ? 1 : 0);
-    fnv_int(&h, v.nlogged);
-    fnv_int(&h, v.selected);
+    if (v.live) live_hash(r, &v, &h);
+    if (!v.tk) return h;
+    fnv_int(&h, v.tk_mode);
+    fnv_int(&h, v.human);
+    fnv_int(&h, v.pick);
+    fnv_int(&h, v.pick_R);
+    fnv_int(&h, v.pick_evict);
+    fnv_int(&h, v.pick_parent);
+    fnv_int(&h, v.pick_tl);
+    fnv_int(&h, v.pick_serial);
+    fnv_int(&h, v.serial);
+    fnv_int(&h, v.lanes);
+    fnv_int(&h, v.armed);
+    fnv_int(&h, v.bg ? 1 : 0);
+    fnv_int(&h, v.tk_full ? 1 : 0);
+    fnv_int(&h, v.nsaved);
+    for (i = 0; i < v.nsaved; i++) fnv_int(&h, v.saved[i]);
     fnv_int(&h, v.ntl);
     for (i = 0; i < v.ntl; i++) {
         fnv_int(&h, v.tl[i].id);
@@ -1103,19 +1510,49 @@ uint64_t tagpu_wikireplay_hash(const WIKIREPLAY* r)
         fnv_int(&h, v.tl[i].live ? 1 : 0);
         fnv_int(&h, v.tl[i].used);
         fnv_int(&h, v.tl[i].mode);
-        fnv_int(&h, v.tl[i].nlog);
+        fnv_int(&h, v.tl[i].seat);
     }
-    fnv_int(&h, v.toast_evict);
-    fnv_int(&h, v.back);
-    fnv_int(&h, v.full ? 1 : 0);
-    fnv_f32(&h, v.be);
-    fnv_f32(&h, v.bm);
-    for (i = 0; i < 4; i++) fnv_f32(&h, v.rates[i]);
-    fnv_int(&h, v.dt);
+    fnv_int(&h, v.walker_tick);
+    return h;
+}
+
+/* the hash's live block, tagpu_wikireplay.h's order */
+static void live_hash(const WIKIREPLAY* r, const WIKIREPLAYVIEW* v, uint64_t* hp)
+{
+    uint64_t h = *hp, g;
+    int i;
+    fnv_int(&h, v->rw);
+    fnv_int(&h, v->G);
+    fnv_int(&h, v->now);
+    fnv_int(&h, v->arm);
+    fnv_int(&h, v->arm_R);
+    fnv_int(&h, v->arm_evict);
+    fnv_int(&h, v->drag_t);
+    fnv_int(&h, v->clash ? 1 : 0);
+    fnv_int(&h, v->nlogged);
+    fnv_int(&h, v->selected);
+    fnv_int(&h, v->ntl);
+    for (i = 0; i < v->ntl; i++) {
+        fnv_int(&h, v->tl[i].id);
+        fnv_int(&h, v->tl[i].parent);
+        fnv_int(&h, v->tl[i].R);
+        fnv_int(&h, v->tl[i].last);
+        fnv_int(&h, v->tl[i].live ? 1 : 0);
+        fnv_int(&h, v->tl[i].used);
+        fnv_int(&h, v->tl[i].mode);
+        fnv_int(&h, v->tl[i].nlog);
+    }
+    fnv_int(&h, v->toast_evict);
+    fnv_int(&h, v->back);
+    fnv_int(&h, v->full ? 1 : 0);
+    fnv_f32(&h, v->be);
+    fnv_f32(&h, v->bm);
+    for (i = 0; i < 4; i++) fnv_f32(&h, v->rates[i]);
+    fnv_int(&h, v->dt);
     g = r->past ? tagpu_wikisim_hash(r->past) : 0;
     fnv_u32(&h, (uint32_t)(g & 0xFFFFFFFFu));
     fnv_u32(&h, (uint32_t)(g >> 32));
-    return h;
+    *hp = h;
 }
 
 void tagpu_wikireplay_free(WIKIREPLAY* r)

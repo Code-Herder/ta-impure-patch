@@ -812,9 +812,9 @@ static void live_view(const WIKIREPLAYVIEW* v)
     static const char* const RW[] = { "idle", "open", "past" }, * const ARM[] = { "none", "seeking", "armed" };
     int i;
     printf(",\"live\":{\"rw\":\"%s\",\"G\":%d,\"first\":%d,\"last\":%d,\"now\":%d,\"arm\":\"%s\",\"armR\":%d,"
-           "\"armEvict\":%d,\"dragT\":%d,\"clash\":%s,\"nlogged\":%d,\"selected\":%d,\"timelines\":[",
+           "\"armEvict\":%d,\"dragT\":%d,\"clash\":%s,\"nlogged\":%d,\"selected\":%d,\"human\":%d,\"timelines\":[",
            RW[v->rw], v->G, v->first, v->last, v->now, ARM[v->arm], v->arm_R, v->arm_evict, v->drag_t,
-           v->clash ? "true" : "false", v->nlogged, v->selected);
+           v->clash ? "true" : "false", v->nlogged, v->selected, v->human);
     for (i = 0; i < v->ntl; i++)
         printf("%s{\"id\":%d,\"parent\":%d,\"R\":%d,\"last\":%d,\"live\":%s,\"used\":%d,\"mode\":\"%s\",\"nlog\":%d}",
                i ? "," : "", v->tl[i].id, v->tl[i].parent, v->tl[i].R, v->tl[i].last, v->tl[i].live ? "true" : "false",
@@ -832,6 +832,26 @@ static void live_view(const WIKIREPLAYVIEW* v)
         f32(v->rates[i]);
     }
     printf("],\"dt\":%d},\"back\":%d,\"full\":%s}", v->dt, v->back, v->full ? "true" : "false");
+}
+
+/* a takeover replay's `tk` block in replay.js's shape */
+static void tk_view(const WIKIREPLAYVIEW* v)
+{
+    static const char* const PICK[] = { "closed", "asked", "seeking", "open" };
+    int i;
+    printf(",\"tk\":{\"mode\":\"%s\",\"human\":%d,\"pick\":\"%s\",\"pickR\":%d,\"pickEvict\":%d,\"pickParent\":%d,"
+           "\"pickTl\":%d,\"pickSerial\":%d,\"lanes\":%d,\"armed\":%d,\"selected\":%d,\"chainLast\":%d,\"fillTo\":%d,"
+           "\"serial\":%d,\"saved\":[",
+           v->tk_mode == WIKI_TK_LIVE ? "live" : "watch", v->human, PICK[v->pick], v->pick_R, v->pick_evict, v->pick_parent,
+           v->pick_tl, v->pick_serial, v->lanes, v->armed, v->selected, v->chain_last, v->fill_to, v->serial);
+    for (i = 0; i < v->nsaved; i++) printf("%s%d", i ? "," : "", v->saved[i]);
+    printf("],\"bg\":%s,\"walker\":%d,\"tkFull\":%s,\"timelines\":[", v->bg ? "true" : "false", v->walker_tick,
+           v->tk_full ? "true" : "false");
+    for (i = 0; i < v->ntl; i++)
+        printf("%s{\"id\":%d,\"parent\":%d,\"R\":%d,\"last\":%d,\"live\":%s,\"used\":%d,\"mode\":\"%s\",\"seat\":%d}",
+               i ? "," : "", v->tl[i].id, v->tl[i].parent, v->tl[i].R, v->tl[i].last, v->tl[i].live ? "true" : "false",
+               v->tl[i].used, v->tl[i].mode == WIKI_ECON_STALL ? "stall" : "refuse", v->tl[i].seat);
+    fputs("]}", stdout);
 }
 
 /* the replay's view in replay.js's R.view() shape */
@@ -875,9 +895,11 @@ static void replay_view(const WIKIREPLAYVIEW* v)
     putchar(']');
     key("toast", 0);
     if (v->toast_kind >= 0) {
-        static const char* const TOASTS[] = { "added", "removed", "playing_on", "cannot", "armed", "playing_from", "refused" };
+        static const char* const TOASTS[] = { "added", "removed", "playing_on", "cannot", "armed", "playing_from", "refused",
+                                              "taking_over", "cannot_take", "saved", "cannot_save", "click_delete", "deleted" };
         printf("{\"kind\":\"%s\",\"at\":%d,\"value\":%d", TOASTS[v->toast_kind], v->toast_at, v->toast_value);
-        if (v->live) printf(",\"evict\":%d", v->toast_evict);
+        if (v->live || v->tk) printf(",\"evict\":%d", v->toast_evict);
+        if (v->toast_seat >= 0) printf(",\"seat\":%d", v->toast_seat);
         putchar('}');
     } else fputs("null", stdout);
     key("question", 0);
@@ -885,6 +907,7 @@ static void replay_view(const WIKIREPLAYVIEW* v)
     else fputs("null", stdout);
     key("left", 0); fputs(v->left ? "true" : "false", stdout);
     if (v->live) live_view(v);
+    if (v->tk) tk_view(v);
     putchar('}');
 }
 

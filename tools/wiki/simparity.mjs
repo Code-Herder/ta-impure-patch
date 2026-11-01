@@ -128,7 +128,21 @@ function replayHash(R) {
   h.int(v.walked); h.int(v.marks.length); for (const m of v.marks) for (const x of m) h.int(x);
   const gh = R.game ? stateHash(R.game, R.game.view()) : '0000000000000000';
   h.int(parseInt(gh.slice(8), 16)); h.int(parseInt(gh.slice(0, 8), 16));
-  if (!v.live) return h.hex();
+  if (v.live) liveHash(R, v, h);
+  if (!v.tk) return h.hex();
+  // a takeover replay's block, tagpu_wikireplay.h's order
+  const T = v.tk;
+  h.int(WikiReplay.MODES.indexOf(T.mode)); h.int(T.human); h.int(WikiReplay.PICKS.indexOf(T.pick)); h.int(T.pickR); h.int(T.pickEvict);
+  h.int(T.pickParent); h.int(T.pickTl); h.int(T.pickSerial); h.int(T.serial); h.int(T.lanes); h.int(T.armed); b(T.bg); b(T.tkFull);
+  h.int(T.saved.length); for (const x of T.saved) h.int(x);
+  h.int(T.timelines.length);
+  for (const t of T.timelines) { h.int(t.id); h.int(t.parent); h.int(t.R); h.int(t.last); b(t.live); h.int(t.used); h.int(t.mode === 'stall' ? 1 : 0); h.int(t.seat); }
+  h.int(T.walker);
+  return h.hex();
+}
+// the hash's live block
+function liveHash(R, v, h) {
+  const b = x => h.int(x ? 1 : 0);
   const L = v.live;
   h.int(WikiReplay.RW.indexOf(L.rw)); h.int(L.G); h.int(L.now); h.int(WikiReplay.ARMS.indexOf(L.arm)); h.int(L.armR); h.int(L.armEvict);
   h.int(L.dragT); b(L.clash); h.int(L.nlogged); h.int(L.selected); h.int(L.timelines.length);
@@ -137,7 +151,6 @@ function replayHash(R) {
   h.int(f32bits(L.bar.be)); h.int(f32bits(L.bar.bm)); for (const x of L.bar.rates) h.int(f32bits(x)); h.int(L.bar.dt);
   const ph = R.past ? stateHash(R.past, R.past.view()) : '0000000000000000';
   h.int(parseInt(ph.slice(8), 16)); h.int(parseInt(ph.slice(0, 8), 16));
-  return h.hex();
 }
 const KEYS = ['shift', 'alt', 'ctrl', 'z', 'x', 'e', 'lmb', 'rmb'];          // WIKI_KEY_* order
 const ORDER = { move: 0, build: 1, reclaim: 2, guard: 3 };                   // WIKI_ORDER_*
@@ -402,8 +415,9 @@ const RIVALS = JSON.parse(fs.readFileSync(path.join(ROOT, 'tools/wiki/casting-fi
 /* THE TAKEOVER FIXTURE: a takeover entry (`"takeover": true`) on Rewind's field, its four demos the ones
    takeover-spec.md section 9 lays out -- the picker and a seat taken (Bram, seat 1, while Ada's recorded inputs play
    on), the lanes with a kept fork watched and left, a fork saved and two deleted (the watched one after a return to
-   the original), and the fourth fork's eviction -- the data the takeover entry's refusal cases edit. Each click is
-   aimed where its unit stands on its tick in the simulation; a takeover's part is quiet through the return glide. */
+   the original), and the fourth fork's eviction -- so that the replay layer's Take over is compared in both twins
+   demo tick by demo tick. Each click is aimed where its unit stands on its tick in the simulation; a takeover's part
+   is quiet through the return glide. */
 function takeoverFixture() {
   const base = JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries/rewind.json'), 'utf8'));
   // a click selecting what stands at p, and an order to q on the three ticks after, both of `seat`
@@ -445,6 +459,8 @@ function takeoverFixture() {
 const GAMES = fs.readdirSync(path.join(ROOT, 'art/wiki/entries')).filter(f => f.endsWith('.json')).sort()
   .map(f => [f.slice(0, -5), JSON.parse(fs.readFileSync(path.join(ROOT, 'art/wiki/entries', f), 'utf8'))])
   .filter(([, e]) => e.frame === 'game');
+// the games the game pass and the replay pass play: the entries and the takeover fixture
+const PLAYS = [...GAMES, ['takeover-fixture', takeoverFixture()]];
 const WIKI_SEAT_MIN = 200;
 /* THE PRESS TRACE, Try it yourself's presses as [demo tick, control, value], each made after that tick's frame: one
    during the walk (nothing), the pause and the play, every speed, rew and fwd, a track press and its drag back and
@@ -491,6 +507,32 @@ const LIVE_TRACE = { end: 1500, presses: [
   [948, 'up', 'lmb'], [950, 'move', 260, 200], [1000, 'rewind', 0], [1001, 'track', 30], [1010, 'live_now', 0],
   [1400, 'rewind', 0], [1401, 'track', 340], [1412, 'live_play', 0], [1430, 'live_play', 0], [1440, 'rewind', 0],
   [1441, 'track', 330], [1450, 'live_now', 0]] };
+/* THE TAKEOVER PRESS TRACES, Try it yourself on a takeover entry's last demo, which holds three kept forks (F1 from
+   301, seat 1, to 1200; F2 from 601, seat 1, to 1500; F3 from 1201, seat 0, to 2100): presses as TRACE's, values a
+   row's seat or a lane's fork, and in live mode world inputs as LIVE_TRACE's. The first: during the walk (nothing);
+   a row and a lane with the picker closed and the lanes shut (each ignored); the lanes opened, F1's lane (re-chained),
+   play (paused), a seek on F1's chain, F3's lane past its R (sought), Back to main (re-chained); a seek to 0 and Take
+   over there (the snap forward to 2, evicting F2, the one never watched); Take over again (closed); Take over then
+   rew (closed, moved); a seek, Take over and F1's lane (closed by the switch, sought), Back to main (sought); Take
+   over at the limit (evicting F2), then Delete of F2 twice (planned again: two forks left, none evicted); Save twice
+   (the second refused); F3's lane and its Delete twice (the watched fork: back to the original first); a row with the
+   picker closed and one out of range (ignored); Take over and Bram's row (live, seat 1). Live: a click on Bram's
+   commander (his), one on Ada's (nothing of seat 1's), the commander sent; the rewind, a seek to 620 and Play from here
+   twice (fork 5, of the takeover's fork 4 at 602, as seat 1); a click, Shift held across the open (its up logged), Back to now; a
+   seek in the past and Back to now from there (seat 1's release logged). The second: a seek to 1100 and Take over at
+   the limit, every fork unwatched (evicting F1, the earliest), Ada's row (the warning's takeover). */
+const TAKEOVER_TRACES = [{ end: 500, presses: [
+  [10, 'lanes', 0], [50, 'takeas', 1], [52, 'lane', 1], [53, 'lanes', 0], [55, 'lane', 1], [56, 'play', 0], [58, 'track', 1100],
+  [80, 'lane', 3], [100, 'main', 0], [102, 'track', 0], [104, 'takeover', 0], [108, 'takeover', 0], [110, 'takeover', 0],
+  [112, 'rew', 0], [114, 'track', 700], [130, 'takeover', 0], [140, 'lane', 1], [160, 'main', 0], [175, 'takeover', 0],
+  [178, 'delete', 2], [180, 'delete', 2], [182, 'export', 1], [184, 'export', 1], [186, 'lane', 3], [188, 'delete', 3],
+  [190, 'delete', 3], [192, 'takeas', 1], [194, 'takeover', 0], [196, 'takeas', 7], [198, 'takeas', 1],
+  [205, 'move', 460, 200], [206, 'down', 'lmb'], [207, 'up', 'lmb'], [210, 'move', 330, 270], [211, 'down', 'lmb'],
+  [212, 'up', 'lmb'], [214, 'move', 460, 200], [215, 'down', 'lmb'], [216, 'up', 'lmb'], [218, 'move', 600, 100],
+  [219, 'down', 'rmb'], [220, 'up', 'rmb'], [300, 'rewind', 0], [301, 'track', 620], [320, 'live_play', 0], [340, 'live_play', 0],
+  [345, 'move', 460, 200], [346, 'down', 'lmb'], [347, 'up', 'lmb'], [348, 'down', 'shift'], [350, 'rewind', 0],
+  [352, 'live_now', 0], [400, 'rewind', 0], [401, 'track', 350], [410, 'live_now', 0]] },
+{ end: 150, presses: [[50, 'play', 0], [52, 'track', 1100], [80, 'takeover', 0], [110, 'takeas', 0], [115, 'move', 330, 270]] }];
 function refusalCases(entry) {
   const clone = v => JSON.parse(JSON.stringify(v));
   const T = WikiSim.TRIP, base = { id: 'm', scene: { selected: ['ck'] }, inputs: [{ at: 5, build: 'ARMMEX' }], end: 5 + T };
@@ -1366,7 +1408,8 @@ function forkCases() {
    at both Interface Types. ---- */
 function columnCases() {
   const cases = [], T = WikiSim.TRIP, BAR = 32;
-  for (const [id, whole] of GAMES) {
+  // a takeover entry's game has no column: its sidebar is false (sim.js checkGame)
+  for (const [id, whole] of GAMES.filter(([, e]) => !e.takeover)) {
     const scene = Object.values(whole.scenes)[0];
     for (const [ln, layout] of [['fixture', FIXTURE], ['fixture-tall', SIDE('fixture-tall')]]) {
       const types = layout.sides[0].types;
@@ -1609,8 +1652,6 @@ try {
     return [n, { ...(t ? { cob: t.cob, visible: t.visible, offset: t.offset, parent: t.parent, top: t.top } : {}),
                  ...(SOUNDS[n] ? { sound: SOUNDS[n] } : {}) }];
   }))));
-  fs.writeFileSync(path.join(tmp, 'trace.json'), JSON.stringify(TRACE));
-  fs.writeFileSync(path.join(tmp, 'livetrace.json'), JSON.stringify(LIVE_TRACE));
   if (!COBS.includes(true)) console.log('note   no gfx pack under tools/wiki/mockup/gfx/ holds a script: the demos play without their units\' scripts only');
   let context = 0;
   for (const cob of COBS) for (const side of ['fixture', 'fixture-tall', null]) for (const cname of [null, ...Object.keys(CASTINGS)]) for (const iface of [1, 0]) {
@@ -1673,7 +1714,7 @@ try {
        STALL CASE, every seat's settings cut to SEAT_MIN so that the builds run dry: in stall mode tick for tick, and in
        refuse mode, which must end starved on the same pass in both ---- */
     const gctx = { ...ctx, rival: cname ? RIVALS[cname] : null };
-    for (const [id, whole] of GAMES) {
+    for (const [id, whole] of PLAYS) {
       /* each game once: demos that share their scene and their game script play the same game, tick for tick, in
          both simulations, so the game pass plays the first of them (the replay pass below plays every demo) */
       const games = new Set(), entry = { ...whole, demos: whole.demos.filter(d => {
@@ -1758,7 +1799,7 @@ try {
         while (at < cout.length && JSON.parse(cout[at]).demo === demo.id && JSON.parse(cout[at]).entry === id) at++;
       } else console.log(`equal  ${id}/${demo.id} (${named}): ${ticks} demo ticks`);
     };
-    for (const [id, entry] of GAMES) {
+    for (const [id, entry] of PLAYS) {
       fs.writeFileSync(path.join(tmp, 'game.json'), JSON.stringify(entry));
       const args = ['wiki.bin', 'game.json', side || '-', cname ? `casting-${cname}.json` : '-', cname ? `rival-${cname}.json` : '-',
         String(iface), cob ? 'cob.json' : '-'];
@@ -1766,12 +1807,18 @@ try {
       at = 0;
       for (const demo of entry.demos) compareReplay(id, demo, () => WikiReplay.play(entry, demo, layout, gctx), `${named}, replay`, null);
       if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}, replay) the C replay played ${cout.length - at} frames more`); }
-      // a live entry's Try it takes the live HUD's presses and the world's input: LIVE_TRACE
-      cout = lines(wikitest(['replaytrace', ...args, entry.live ? 'livetrace.json' : 'trace.json']));
-      at = 0;
-      compareReplay(id, entry.demos[0], () => WikiReplay.create(entry, entry.demos[0], layout, gctx), `${named}, press trace`,
-        entry.live ? LIVE_TRACE : TRACE);
-      if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}, press trace) the C replay played ${cout.length - at} frames more`); }
+      // a live entry's Try it takes the live HUD's presses and the world's input: LIVE_TRACE; a takeover entry's its
+      // TAKEOVER_TRACES, on its last demo
+      const traces = entry.takeover ? TAKEOVER_TRACES.map(t => [t, { ...entry, demos: [entry.demos[entry.demos.length - 1]] }])
+        : [[entry.live ? LIVE_TRACE : TRACE, entry]];
+      for (const [trace, te] of traces) {
+        fs.writeFileSync(path.join(tmp, 'presses.json'), JSON.stringify(trace));
+        fs.writeFileSync(path.join(tmp, 'pressgame.json'), JSON.stringify(te));
+        cout = lines(wikitest(['replaytrace', ...args.map(a => a === 'game.json' ? 'pressgame.json' : a), 'presses.json']));
+        at = 0;
+        compareReplay(id, te.demos[0], () => WikiReplay.create(te, te.demos[0], layout, gctx), `${named}, press trace`, trace);
+        if (at !== cout.length) { failed++; differ++; console.log(`DIFFER (${named}, press trace) the C replay played ${cout.length - at} frames more`); }
+      }
     }
   }
 
@@ -2020,7 +2067,7 @@ print(json.dumps({'REFRESH_TICKS': tarec.REC_REFRESH_TICKS, 'TIMELINES': tarec.R
          they turn live themselves (gameRefusalCases, A LIVE ENTRY); a live entry's own data loads alike in the demo
          plays */
       const all = [...refusalCases(entry), ...GAMES.filter(([, game]) => !game.live && !game.takeover).flatMap(([, game]) => gameRefusalCases(game, entry)),
-        ...takeoverRefusalCases(takeoverFixture(), entry)];
+        ...takeoverRefusalCases(PLAYS[PLAYS.length - 1][1], entry)];
       fs.writeFileSync(path.join(tmp, 'refuse.jsonl'), all.map(c =>
         JSON.stringify({ name: c.name, scripted: c.scripted, layout: c.layout, side: c.side, iface: c.iface, casting: c.casting,
                          rival: c.rival ?? null, replay: !!c.replay }) + '\n' +
