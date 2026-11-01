@@ -450,9 +450,9 @@ loader is `0x466050`.
 | `+0x78` | control groups, 10 × 0x20 | `0x480190`, `0x4801F0` | kept by `0x480250(unit, group)` from unit `+0xAC`; the restore rebuilds it (`0x487270`) |
 | `+0x7C..+0x88` | sight counters; the grid's width, height and length | init `0x464849..0x46487B`; teardown | `0x4827B0`, `0x4816A0` |
 | `+0x8C..+0xE0` | the economy: the saver's keys | the economy pass `0x401360` (types 1 and 2), the `0x28` receiver, the transfers, the level start `0x465E30`, the ATM cheat `0x4170C0` | the resource bars of DrawGameScreen (the energy fill `0x46912E` over `+0xA4`, the metal fill `0x469412` over `+0xA8`); the replay HUD, from the playback's image of the record (`tagpu_replay_players`): floats energy `+0x8C`, income `+0x90`, expense `+0x94`, metal `+0x98`/`+0x9C`/`+0xA0`, storage maxima energy `+0xA4` and metal `+0xA8`. MEASURED 2026-10-08 in the HUD's state dumps of a skirmish recording: the maxima read 2,000 metal and 5,000 energy at the start, as the engine's bars showed; the replay HUD's stats walker, from the recording's image (`tagpu_hudmarks.c`): income `+0x90` and `+0x9C`, and MetalWasted, the double `+0xD4` |
-| `+0xE4`/`+0xE8` | share limits | SetShareMetal `0x4193C5`, SetShareEnergy `0x419485` | the auto-share `0x457D30`, network only |
+| `+0xE4`/`+0xE8` | share limits | SetShareMetal `0x4193C5`, SetShareEnergy `0x419485` | the auto-share `0x457D30`, network only; the resource bar's ticks of the viewed record, each drawn only while its level is not 0 and the raw stored value `+0x98`/`+0x8C` is above it (energy `0x469133..0x4691B2`, metal in `0x469391..0x469492`; *The four rects* in [render.md](render.md)) |
 | `+0xEC` | a 0x34-byte resource accumulator | init `0x4647D7` | |
-| `+0xF0` | UpdateTime, the 30-tick pass | init `0x464715`; the players phase adds 30 (`0x465092`) | |
+| `+0xF0` | UpdateTime, the 30-tick pass | init `0x464715` (GameTime, `0x46470C`); the players phase adds 30 (`0x465092`) | the players phase: the record's whole 30-tick block, the economy pass `0x401360` at `0x46555A` included, runs only once GameTime has reached it (`0x46507D..0x465089`, `ja` past the block) |
 | `+0xF4` | WinLoseTime | init, loader | the saver only |
 | `+0xF8` | DisplayTimer, a GameTime deadline | init `0x464765` (GameTime), loader, DrawGameScreen `0x468F87` | a write on the draw path, for the viewed record only: 30 is added while it is below GameTime, and then the resource bar's rates refresh (`0x468F73..0x468F9A`) |
 | `+0xFC`/`+0xFE` | kills, losses | the destructor `0x4868C1`, `0x486906`, `0x486A33`; the `0x28` receiver | the replay HUD's stats walker, from the recording's image (`tagpu_hudmarks.c`), as words |
@@ -461,7 +461,7 @@ loader is `0x466050`.
 | `+0x108`/`+0x113`, 11 each | alliances and their mirror: byte j of `+0x108` is 1 when this record allies record j; the reset and the activation set the record's own byte, so a record always allies itself | `0x452960`, the lobby, the removal, dispatcher `0x454D2A`, the seat fill `0x47A760` (the store at `0x47A890`), the reset `0x4645B3`, the activation `0x464290` | the allied victory `0x490080`, the skirmish victory `0x490230`; the replay HUD's teams, which join two records when each one's row marks the other (`tagpu_hudstate.c`) |
 | `+0x11E`/`+0x129`/`+0x134`, 11 each | the final-statistics handshake | `0x45591D`, `0x455930`, `0x45768A` | |
 | `+0x13F` | the lobby team, 5 for none | activation, reset, the lobby | lobby code only |
-| `+0x140`/`+0x144` | units created, alive (`+0x144` a word: `decw` at `0x486DFC`, `cmp bx` at `0x486E09`) | the creates, the destructor | "out" = none alive of some created; the replay HUD's units and its dimmed "out" row (`+0x144` = 0); its marker walker's defeats and its stats walker's units, from the recording's image (`tagpu_hudmarks.c`). DIS |
+| `+0x140`/`+0x144` | units created, alive (`+0x144` a word: `decw` at `0x486DFC`, `cmp bx` at `0x486E09`) | the creates, the destructor; `+0x144` is incremented at `0x486187` and `0x486322` only (`incw [main + p + 330p + 0x1CA7]`; every `0x1CA7`-based operand in `.text` searched, the rest reads) | "out" = none alive of some created; the replay HUD's units and its dimmed "out" row (`+0x144` = 0); its marker walker's defeats and its stats walker's units, from the recording's image (`tagpu_hudmarks.c`). DIS |
 | `+0x146` | own index, 10 when free | ctor, reset, activation, the lobby's renumbering | copied into unit `+0xFF` |
 | `+0x147` | start position | activation, `0x45517B`, `0x456C96` | the network level setup |
 | `+0x148` | scoreboard rank | activation, the destructor; the scoreboard `0x4948E0` (`0x494E27`), whose one caller is DrawGameScreen (`0x469F65`), compacts the ranks while the scoreboard is shown (`[0x51F2D8]` > 0, `0x494986`). In a network or mode-2 game (`0x435100` = 3 or 2) the destructor's rank update reads a ranked record's `+0x148` (`0x486B2D`), computes its new rank from the other records' scores, then increments every record's rank that is at least the new one and below the old one — a loop over all ten records with **no activity test** (`0x486BE7..0x486C13`), so unseated records at rank 0 become 1 when the new rank is 0 — and stores the new rank (`0x486C17`). DISASSEMBLED; MEASURED 2026-10-05 in a four-actor network recording: rows 4..9 (unseated) went 0 → 1 at one death | the destructor's lead message (`0x486B2D..0x486C17`) |
@@ -1029,6 +1029,18 @@ byte), `0x486679`–`7D`, `0x486810`–`15`, `0x486F10`–`19` and `0x42B019`–
   `0x49B03E`), handed to `0x499EB0` (`0x49B074`). Its area damage runs
   only on the dying unit's owner's peer (the owner gate `0x49A03F..0x49A047`); elsewhere it is a
   picture.
+- **Its sound** [DISASSEMBLED 2026-10-31]. The impact `0x499EB0` takes the cell under the point
+  (`0x4815A0`, `0x499EC0`) and sets `ebx` when the cell's height `+5` is below the sea level
+  `main+0x1427F` (`0x499ECF..0x499EDC`). Under water, with its second argument 0 (the death
+  explosion passes 0), it plays the weapon's `soundwater` `+0xF8` (`0x499FCF..0x499FD8`); otherwise
+  its `soundhit` `+0xF6` (read at `0x499FE9`, the call `0x499FF2`) -- both through the positional
+  sound `0x47F300(sound, point, 0)`, the 0 meaning not sent on the network. `0x47F300` plays it only
+  where the **viewed** record (`main+0x2A43`) sees the point: its LOS bytes when `main+0x14281` bit
+  1 is set, else the record's bit in the cell's word of `main+0x14273` (`0x47F3E8..0x47F4A8`); it
+  tests nothing about whose unit died. The weapon is ExplodeAs or SelfDestructAs as picked above;
+  how the loader fills `+0xF6`/`+0xF8` is in [weapons.md](weapons.md), *The keys' weapons and their
+  sync*. The in-game wiki plays a killed unit's death WAV by these rules
+  (`tagpu_wikiasset.c` `death_load`, `tagpu_wikisim.h` `WIKI_SND_DEATH`).
 - **Its two callers.** The destructor at `0x486D50`, when the record's severity `rec+9 > 0`
   (`0x486D28`) and `+0x104` is 0.0 (`0x486D2F..0x486D40`), with `selfd` = (the record's kind
   nibble `== 3`) (`0x486D42..0x486D4B`); and kill-all at `0x486F9E` with `selfd` = 1.

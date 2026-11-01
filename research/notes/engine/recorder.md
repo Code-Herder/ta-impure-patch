@@ -505,8 +505,13 @@ and [*Rebuild, takeover and rewind, measured*](../tadr-port/demo-recorder-state-
   stamps sight (`0x48B684..0x48B6BF`). Then `+0x110` bit 16 is set, the turns written to
   `+0x64..+0x69` and the move object's `+0x20` (`0x48B6C4..0x48B6F9`). The probe's player wrote
   positions by this recipe.
-- **MobileBuild `0x403A20`** (stdcall (unit, node, events), `ret 0xC`): event bit 3 →
-  `0x47F780(unit, 7)` and `0x41C110`, answer 8; bit 1 → `0x41C110`, answer 5; otherwise by the
+- **MobileBuild `0x403A20`** (stdcall (unit, node, events), `ret 0xC`): event bit 3 -- the
+  target's death, which the death walk `0x489740` ORs into every node naming the dying unit -- →
+  `0x47F780(unit, 7, "Construction terminated")` (the cant notice, its text `0x5015A4`) and
+  `0x41C110(unit)`, answer 8 (`0x403A27..0x403A47`), which the dispatch's table unlinks and frees
+  (`0x43B8A8`, [orders.md](orders.md), *The dispatch*) [DISASSEMBLED 2026-10-31]; only the running
+  order's node is reached this way [INFERRED: a queued build of the same site holds no reference
+  until it runs]; bit 1 → `0x41C110`, answer 5; otherwise by the
   state `node+5` through `0x403F5C` = {`0x403A8D`, `0x403B45`, `0x403DF5`, `0x403E0C`,
   `0x403F2D`}. State 0 snaps the site to the footprint (def `+0x14A`) into `+0x22`/`+0x2A`, clears
   `+0x3E`, calls `0x438AD0`, sets node `+6` = `0xE0` and answers 1; state 2 calls
@@ -2200,8 +2205,13 @@ loads MAIN2 once, from the viewed record's side (`0x497B56..0x497BD8`): it reads
 (`0x497B56`), PlayerInfo `+0x95` through `+0x27` (`0x497B7D`), formats `%sMAIN2.GUI` (`0x509570`)
 with the side's name at `main+0x37F5B + side·0x232` into `main+0x37EA0` through `0x4E42B0`
 (`0x497BAA`), loads it into the desktop GUI `main+0x519` with `0x4AA8F0` (`0x497BC6`) and stores
-`0x494890` into the screen's `+8`, its OnCommand, and `main` into `+0xC` (`0x497BCB`, `0x497BD8`). The chrome
-and both bars read the side every frame (`0x467D98..0x467DB3`).
+`0x494890` into the screen's `+8`, its OnCommand, and `main` into `+0xC` (`0x497BCB`, `0x497BD8`).
+The chrome painter `0x467D70` reads the viewed side too (`0x467D98..0x467DB3`), but runs **once a
+level**, from its one call `0x49842A` at the in-play entry, so PANELSIDE is painted at the load
+only. **The per-frame readers of the viewed side** are the resource bar's block in DrawGameScreen
+(`0x468FEF..0x468FF4`, every redraw) and the bottom bar `0x46A860` (`0x46A8A6..0x46A8D5`), which
+tile that side's PANELTOP and PANELBOT ([ui.md](ui.md), *The resource bar tiles in a loop*)
+[DISASSEMBLED 2026-10-31].
 
 **The explosion's owner gate tests type 3 alone** [DISASSEMBLED 2026-10-06]: `0x49A01B..0x49A047`
 forms the owner record from the projectile's owner byte `+0x66` and skips the damage when the

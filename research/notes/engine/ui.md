@@ -2096,6 +2096,56 @@ instead: at **`0x469093`** the running x (`edi`, advanced by each frame's own wi
 `0x46909D` jumps back to `0x469055` while it is short. That is the measurement's mechanism,
 found in the binary rather than inferred from pixels.
 
+**What the loop tiles, and from where** [DISASSEMBLED 2026-10-31]. The block draws the **viewed**
+record `main+0x2A43` (`0x468E4B`), its side `s` the PlayerInfo byte `+0x95` (`0x468FEF..0x468FF4`).
+The first tile, at x `0x81` (129, `0x469050`), is **PANELTOP[s]** and every later one
+**PANELBOT[s]**: the index is `s + 5·(x > 0x81)` over the array at `main+0x1481F`
+(`0x469059..0x46906B`), frame 0 (`0x4B7F30`), blitted by `0x467A20(ctx, frame, x, 0)` (its one
+caller `0x469083`), which adds the frame's hotspot to the point (`0x467A20..0x467A40`) for
+`CopyGafToContext 0x4B7F90` to subtract again, so a frame's top-left lands at (x, 0) whatever its
+hotspot; x advances by the frame's width. The arrays are filled once a process by `0x429870`
+(called at `0x49134D` in the process init `0x491200`): its loop `0x429F2B..0x429FE1` formats
+`SIDE%d` (`0x5033F4`), reads the section's `intgaf` (`0x5033EC`, 30 characters) from
+`gamedata\sidedata.TDF`, opens `anims\<intgaf>.GAF` through the bank cache `0x429700` and stores
+the bank (`main+0x14907 + 4s`, `0x429F97`) and the three sequences `0x4B8D40` finds
+(`0x429F8B..0x429FD9`): `PANELTOP` (`0x5033E0`) at `main+0x1481F + 4s` (`0x429FAF`), `PANELSIDE`
+(`0x5033D4`) at `+0x14847` (`0x429FC7`), `PANELBOT` (`0x5033C8`) at `+0x14833` (`0x429FD9`).
+**A capacity, not a bound**: the arrays are five slots each, `0x14` bytes apart, and the loop stops
+only at the first missing `SIDE` section (`0x429F57`), so a sixth side would write PANELTOP[5] over
+PANELBOT[0]. The other art and the block's rules:
+
+- **The badge** `0x467C00` at `0x4690AB` (below in [render.md](render.md)) draws frame `c` of
+  `32xlogos`: `0x4318C0` (called at `0x491486`) opens `textures\logos.GAF` (`0x503720`, `0x504734`,
+  through `0x4290F0` and `0x4B8C60`; the handle at `main+0x148D7`, `0x4318F4`), pushes the sequence's
+  name `32xlogos` (`0x504728`) at `0x4318EF` for `0x4B8D40`, called at `0x431906`, and stores the
+  sequence at `main+0x148DB` (`0x431911`).
+- **The rects, colours and font** are `0x431A60`'s (called at `0x491481`), into `RaceSideData`
+  `main+0x37F3D + 0x232·s`: the font from `fonts\<font>.FNT` -- `fonts` (`0x50338C`) and `FNT`
+  (`0x503394`) pushed at `0x431BCF..0x431BDC` for `0x4290F0`, the file read by `0x4BBE50` at
+  `0x431BF1`, a missing one reported through `0x4B6290` -- then `energycolor` and `metalcolor`
+  (`0x431C0F..0x431C39`, `+0x222`/`+0x226`), then the fifteen top-bar rects and the bottom bar's
+  as `{x1; y1; x2; y2}` sub-sections (`0x431C82..0x4324B9`), as `tools/tamem_ghidra.h` lays
+  `RaceSideData` out.
+- **The memo, the easing and the rates**: *The four rects* in [render.md](render.md).
+- **The ten strings**, `DrawTextCustomFont 0x4C14F0(ctx, s, x, y, −1)`, ten calls in the block, in
+  GUI colours `0xF` (the stored value, `"0"`, the storage right-aligned at the rect's `x1` less the
+  width `0x4C1480` measures), `0xA` (income) and `0xC` (expense). Energy's income takes `"%dK"`
+  (`0x50783C`) of `trunc(v/1000)` only above 99999.0 (`0x4FD56C`); its expense only below −99999.0
+  (`0x4FD570`), so **a positive expense never takes the K** -- and the expense's compare is `test
+  ah,1` (`0x469311`), C0 alone, so a NaN takes it (`0x4692FB..0x46938C`). Metal's two rates are
+  `"%.1f"` (`0x507834`), the expense through `fabs` (`0x469391..0x46960B`). `TOTALUNITS` and
+  `TOTALTIME` are loaded and not drawn. **A string is refused whole** unless its box {x, y, x +
+  width, y + the font's rows} lies inside the surface's clip (`0x4C1629..0x4C169E`, the containment
+  test `0x4B6750`; the block's clip is the whole surface, reset at `0x468E3A` by `0x4C69C0`).
+- **The bottom bar is `0x46A860`'s** (one caller, `0x469615`, every frame): while `main+0x3923B`
+  bits 0 and 1 are both set (`0x46A88F..0x46A8A0`) it tiles **PANELBOT of the viewed side** (the
+  side byte at `0x46A8A6..0x46A8D5`, the slot `main+0x14833 + 4s`) from x `0x81` at y
+  `0x4B6710() − 0x20`, each frame's hotspot added, until x reaches the screen width
+  (`0x46A8E0..0x46A929`); then its own readouts, which this map has not read.
+- **The in-game wiki composes both bars by these rules** (`tagpu_wikibar.c`, `tools/wiki/mockup/bar.js`,
+  held equal byte for byte by `tools/wiki/barcheck.mjs` and pixel-exact against a capture of the
+  game's frame); [the in-game wiki](../ingame-wiki.html), *The game frame on the stage*.
+
 The readouts themselves are **not** placed from the screen width: `DrawTextCustomFont
 0x4C14F0` is called at `0x4691F3` and `0x469212` with x and y out of `[esi+0x62]`/`[esi+0x66]`
 and `[esi+0xD2]`/`[esi+0xD6]`, and again at `0x46926B` and `0x4692C0`. So the metal and

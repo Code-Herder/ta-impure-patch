@@ -179,37 +179,73 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
   | `+0xD0` / `+0xE8` | `+0x14` / `+0x2C` | energy / metal requested in the last pass's period |
 
   **The writers.** `0x4011C0(e, m)` (thiscall on the ledger, `ret 8`) always adds the request to
-  `+0x04`/`+0x1C`, returns 0 while either debt `+0x0C`/`+0x24` is above 0.0, and otherwise adds it
-  to the granted `+0x08`/`+0x20` and returns 1; it never reads stored resources. Its callers are
-  the build step `0x41BA60` (`0x41BC60`) and BuildWeapon `0x402B70`, the stockpile
-  (`0x402C6B`). `0x401180(e)` is its energy-only twin, called by the repair step `0x41BD10`
+  `+0x04`/`+0x1C` (`0x4011D1..0x4011E3`), returns 0 while either debt `+0x0C`/`+0x24` is above 0.0
+  (the energy debt's test `0x4011C0..0x4011E6`, the metal's `0x4011E8..0x4011F6`, each against 0.0
+  at `0x4FC478`), and otherwise adds it to the granted `+0x08`/`+0x20` and returns 1
+  (`0x4011F8..0x401212`); it never reads stored resources. Its callers are the build step
+  `0x41BA60` and BuildWeapon `0x402B70`, the stockpile (`0x402C6B`). **The build step asks on the
+  builder's ledger**, not the target's (`lea ecx,[ebp+0xbc]` at `0x41BC5A`, `ebp` the builder; the
+  call `0x41BC60`): the request is the built type's BuildCostEnergy `+0x186` and BuildCostMetal
+  `+0x18A` (the FBI keys `0x50383C` and `0x50382C`, stored at `0x42C10F` and `0x42C133`) times the
+  step's increment (`0x41BB36..0x41BB5C`), and the step applies its progress only on a grant
+  (`test eax,eax; je` at `0x41BC65..0x41BC67`) [DISASSEMBLED 2026-10-31]. The in-game wiki's game
+  mode charges a build so (`tagpu_wikisim.c` `econ_request`). `0x401180(e)` is its energy-only twin, called by the repair step `0x41BD10`
   (`0x41BDB7`). `0x4012A0(e, m)` pays at once from the owner's stored energy `+0x8C` and metal
   `+0x98` when both suffice, adds to the requested `+0x04`/`+0x1C` only and returns 1, else 0
   with nothing written: a weapon's shot, from its def's `+0xC0`/`+0xC4` (`0x49E533`, the fire
   path, skipped when the shooter's `+0x111` bit 28 is set). `0x401220`/`0x401260` are the same
   for one resource and only ever run on a player's `+0xEC` record (`0x464BC4`, `0x464CF4`). The
-  economy pass `0x401360` itself, once a pass and behind each unit's state bits, adds the def's
-  `+0x1C6` when positive to the energy requested `+0xC0` and, with no energy debt, to the granted
-  `+0xC4` (`0x4013ED..0x401421`, `0x401643..0x401668`), and when negative its negation to the
-  produced `+0xBC`; the metal a unit makes into `+0xD4`, only when that energy was granted
-  (`0x401480..0x401545`); two def factors times two `main` values into `+0xBC` (`+0x1D2` ×
-  `main+0x37EDE`, `+0x1D6` × `main+0x14267`, `0x401550..0x4016B5`) [INFERRED: tidal and wind];
-  a finished unit's def `+0x1C2` into `+0xBC` and `+0x1CA` into `+0xD4` (`0x4016DC..0x401795`);
-  and a cloaked unit's cost (def `+0x1DA`, or `+0x1DE` when `+0x110 & 0xC`) paid from storage
-  into `+0xC0` (`0x401806..0x40185E`). A type-2 player's production is scaled by the difficulty
-  in each of these. Nothing else in the exe stores to these unit offsets (every
+  economy pass `0x401360` itself, once a pass, walks the owner's units in creation order (the
+  block `[+0x67, +0x6B]`, stride `0x118`) that have the alive bit (`+0x110` bit 28,
+  `0x4013AC..0x4013B4`) [DISASSEMBLED 2026-10-31]:
+
+  - **a structure** (`+0x110` bit 29, `0x4013BA`) counts these only while active (`+0x10E` bit 0,
+    `0x4013C5`; inactive, it goes straight to the finished-unit terms below): its EnergyUse `+0x1C6`
+    when positive to the energy requested `+0xC0` and, with no energy debt, to the granted `+0xC4`
+    (`0x4013ED..0x401421`), and when negative its negation to the produced `+0xBC`
+    (`0x401429..0x401478`); then an extractor (ExtractsMetal `+0x1CE` above 0, `0x401480..0x401497`)
+    whose energy was just granted adds its `+0x58` -- ExtractsMetal × its SetSpeed ([cob.md](cob.md))
+    -- to the metal produced `+0xD4` (`0x4014A1..0x4014C8`, `0x401504..0x401545`); a MakesMetal unit
+    (the byte `+0x22D`) whose energy was granted adds that to `+0xD4` (`0x4014CA..0x4014F7`); any
+    other structure adds WindGenerator `+0x1D2` × `main+0x37EDE` and TidalGenerator `+0x1D6` ×
+    `main+0x14267` to `+0xBC`, each only when its factor is above 0 (`0x401550..0x4016B5`);
+  - **a mobile unit** active or moving (`+0x10E` bit 0, or `+0x110 & 0xC`, `0x401617..0x401622`)
+    requests or produces its EnergyUse the same way (`0x401641..0x401668`, `0x401670..0x4016B5`);
+  - **a finished unit** (`+0x104` = 0.0, `0x4016C5..0x4016D6`) of either kind produces its
+    EnergyMake `+0x1C2` into `+0xBC` and MetalMake `+0x1CA` into `+0xD4` (`0x4016DC..0x401795`) and
+    adds its EnergyStorage `+0x1E2` and MetalStorage `+0x1E6` to the owner's `+0xA4`/`+0xA8`
+    (`0x40179B..0x4017C5`).
+
+  The FBI keys behind the def offsets, as the parser stores them: `energymake` `+0x1C2`,
+  `energyuse` `+0x1C6`, `metalmake` `+0x1CA`, `extractsmetal` `+0x1CE`, `makesmetal` the byte
+  `+0x22D` (`0x42C2F1`), **`windgenerator` `+0x1D2` (`0x503D54`, stored at `0x42C307`) and
+  `tidalgenerator` `+0x1D6` (`0x503D44`, `0x42C31D`)**, `energystorage` `+0x1E2`, `metalstorage`
+  `+0x1E6` (`0x42C27F..0x42C348`) -- so `main+0x37EDE` is the wind's strength and `main+0x14267` the
+  tide's [INFERRED from the keys]. The walk also pays a cloaked unit's cost (def `+0x1DA`, or
+  `+0x1DE` when `+0x110 & 0xC`) from storage into `+0xC0` (`0x401806..0x40185E`). A type-2
+  player's production is scaled by the difficulty in each of these. Nothing else in the exe stores to these unit offsets (every
   float and dword store to `+0xC0`, `+0xC4`, `+0xD8`, `+0xDC` searched: the rest are weapon defs
   `0x42E56D..0x42E5AE`, the player loader `0x4661BD` and other records).
 
   **The settle.** The economy pass runs for each type-1/2 player on its 30-tick pass (`0x46555A`,
-  *The Deathmatch respawn*). It sums the six current floats of every unit with `+0x110` bit 28 and
+  *The Deathmatch respawn*): the player init seeds the deadline `+0xF0` with GameTime
+  (`0x46470C..0x464715`), and the players phase, after GameTime's increment, runs the record's
+  30-tick block only once GameTime has reached it, adding 30 (`0x46507D..0x465092`, `ja` past the
+  whole block), so the pass runs on the first phase after the level's init and every 30 ticks after
+  it, every seat on the same tick in record order, after the units' tick. It sums the six current floats of every unit with `+0x110` bit 28 and
   of the `+0xEC` record (`0x401877..0x40193D`), pays the debts first and then the granted from
   current plus production, keeping the fraction paid of each (`0x401A4D..0x401AB1`), and then
-  settles every such unit (`0x401B3D..0x401B99`): produced → last produced, requested → last
-  requested, the three zeroed, and debt := granted × (1 − the fraction of granted paid) + debt ×
-  (1 − the fraction of debts paid). So a stalled owner's builders fail every request until a
-  later pass pays. The player's expense `+0x94`/`+0xA0` is the summed **requested**, refused
-  requests included (`0x4019DD`, `0x401A05`).
+  settles every such unit (the loop `0x401B3D..0x401BAC`, the arithmetic `0x401B42..0x401B99`):
+  produced → last produced, requested → last requested, the three zeroed, and debt := granted ×
+  (1 − the fraction of granted paid) + debt × (1 − the fraction of debts paid), in that order of
+  `fmul`, `fsubr` and `faddp`. So a stalled owner's builders fail every request until a later pass
+  pays. Before the payment the base storage `+0xDC`/`+0xE0` joins the storages only while `+0x149`
+  bit 0 is set (`0x401941`, `0x401988..0x4019AA`), and the player's rates are written
+  (`0x4019C6..0x401A2D`): income `+0x90`/`+0x9C` the summed produced (`0x4019C6`, `0x401A05`), and
+  expense `+0x94`/`+0xA0` the summed **requested**, refused requests included (`0x4019DD`,
+  `0x401A2D`). The new stored energy and metal `+0x8C`/`+0x98` are held to the storages, the excess
+  added to the player's doubles `+0xCC`/`+0xD4` [INFERRED: the totals wasted]
+  (`0x401AB3..0x401B27`).
 
   **What it costs a recording.** `+0xC0`, `+0xC4`, `+0xD8` and `+0xDC` are float accumulators
   that grow every tick a unit builds, repairs, stockpiles or fires a weapon that costs a resource,
@@ -1097,7 +1133,13 @@ sight. Out of sight (`0x4673AF`), **`0x4673B1` reads the attacker's owner**: `mo
   SelfDestructAs with it at `0x42CEA8` and `0x42CEE1`, each value read by `0x4C48C0` into a
   0x80-byte buffer (`0x42CE9B`, `0x42CED4`), and stores them at `def+0x220` and `+0x224`
   (`0x42CEB7`, `0x42CEEC`); a name it does not find gets the stock array's first record
-  (`esi` = `main+0x2CF3` since `0x42CDE8`; `0x42CEB1`, `0x42CEEA`).
+  (`esi` = `main+0x2CF3` since `0x42CDE8`; the test `cmp eax,ebx` at `0x42CEAD`, then `0x42CEB1`,
+  `0x42CEEA`). A weapon's own sounds are read by the weapon-TDF loader: `soundhit` (`0x503FA0`)
+  through `0x4C48C0` (`0x42EF0B..0x42EF28`), named to `0x429470` at `0x42EF2A..0x42EF30`, whose answer
+  is stored as the word `+0xF6` (`0x42EF35`), and `soundwater` (`0x503F94`) the same into `+0xF8`
+  (`0x42EF45..0x42EF6F`); with no key each takes `si` (`0x42EF3E`, `0x42EF78`) [INFERRED: the
+  "no sound" `0xFFFF` that `0x47F300` refuses at `0x47F32D`]. Which of the two an impact plays:
+  *The death explosion* in [units.md](units.md) [DISASSEMBLED 2026-10-31].
 - **The menu-time loader's folds.** `0x42A8D0` XORs into `CRC_weapons` (def `+0x146`) the stored CRC
   (`[section+0x25]`) of each weapon section the unit's weapon keys, ExplodeAs (key `0x5037F4`,
   `0x42AF23`) and SelfDestructAs (`0x5037E4`, `0x42AF99`) name, each found by rewinding the weapon-TDF contexts (`*0x5122A0`,

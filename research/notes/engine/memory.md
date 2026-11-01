@@ -340,13 +340,15 @@ a passenger dies of the loop only on its owner's peer. **Kind 6 comes from nowhe
 `Send_UnitDeath` takes the severity as `(100·(−hp)/maxhp + byte +0xF7) / 2`, clamped to 1..100
 (`0x48655E..0x4865AB`; maxhp the def's `+0x1FA`), and asks the `Killed` script for the corpse type
 (`0x4865C3`). Kind 7 skips the script with corpse type 1 and severity 0; kinds 4, 5 and 9, and a unit
-with HP left, give 0 and 0; a nanoframe (`+0x104` not 0.0) gives corpse type 0. The `0x0C` record
+with HP left, give 0 and 0; a nanoframe (`+0x104` not 0.0) gives corpse type 0 (`0x4865D2..0x4865E5`), so an unfinished unit
+leaves no wreck, and the destructor runs no death explosion for it either (`0x486D2F..0x486D40`). The `0x0C` record
 carries the severity at `rec+9` and the kind and corpse type as the high and low nibbles of
 `rec+0x0A` (`0x4865E9..0x486621`). The destructor hands a corpse type above 0 to `0x486360(unit,
-type, kind ≠ 7)` (`0x486D55..0x486D6F`), which starts from the def's corpse feature `+0x1BC`, steps
+type, kind ≠ 7)` (the nibble tested at `0x486D55..0x486D5A`, the call `0x486D6F`), which starts from the def's corpse feature `+0x1BC`, steps
 `type − 1` times through each feature def's FeatureDead (`+0xF4`; the defs at `main+0x1426F`,
 stride `0x100`), and spawns nothing once the index is `0xFFFB` or above; otherwise it spawns at the
-unit's footprint cell (`0x481550(+0x76, +0x78)`, `0x423C50` at `0x4863F9`). Its other four reads of
+unit's footprint cell (`0x481550(+0x76, +0x78)` at `0x4863C1`; no cell, off the map, spawns nothing,
+`0x4863CA`; `0x423C50` at `0x4863F9`, whose own refusals are its row in [map.md](map.md)). Its other four reads of
 `rec+0x0A` take the high nibble alone (`0x4867DA`, `0x486880`, `0x486CA2`, `0x486D42`)
 ([map.md](map.md#the-demo-recorders-features-the-grid-the-wreck-pool-and-the-calls-that-change-them-disassembled-measured-2026-09-30),
 *What a playing's corpse call rests on*).

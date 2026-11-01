@@ -649,7 +649,7 @@ straight-line spans with UI between them, not one. The whole call list of
 | `0x468E16`, `0x468E30` | `0x4BE950` | **two lines at an EYE-RELATIVE position** — `esi`/`edi` are `main+0x2CAC/+0x2CB0/+0x2CB4` minus the eye `+0x1431F`/`+0x14323` with the `+0x80`/`+0x20` bias, i.e. the world-space projection idiom. Gated on `main+0x14280 == 2` (`0x468DFF jne 0x468E35`). Colour `[ebx+0x0F]` | WORLD |
 | **`0x468E3A`** | `0x4C69C0` | the clip reset; the join of that branch, so it is reached on every call | **WORLD closes** |
 | `0x468E40..0x469610` | — | the METAL/ENERGY resource block | UI |
-| `0x469615` | `0x46A860` | `stdcall(ctx) ret 4`, sole caller. Reads `main+0x37E23` (screen H) and `main+0x147A7` and draws along the bottom of the screen; `chrome_emit` (`tagpu_gui_hook.c`) records that its two GAF sites redraw the bar's FIRST tile rather than the continuation, so it is **not** the function that lays the repeats. [INFERRED: the bottom HUD bar.] Not disassembled further | UI |
+| `0x469615` | `0x46A860` | `stdcall(ctx) ret 4`, sole caller. **The bottom bar** [DISASSEMBLED 2026-10-31]: while `main+0x3923B` bits 0 and 1 are both set it tiles PANELBOT of the viewed side from x `0x81` at y `0x4B6710() − 0x20` to the screen's width (`0x46A8A6..0x46A929`, [ui.md](ui.md), *The resource bar tiles in a loop*), then draws its own readouts (not read here). It reads `main+0x37E23` (screen H) and `main+0x147A7` at its start | UI |
 | `0x46961F` | `0x466B00` `DrawMinimap` | the minimap | UI |
 | `0x46964F` | `0x4C6B10` | the draw context re-seeded from `main+0x37E27` | — |
 | `0x4696CD`/`0x4696E7` | `0x4C1420`/`0x4C13A0` | the marker block's font and text-colour latch | — |
@@ -725,23 +725,47 @@ number's animation state: `0x468E83`/`0x468E90` convert the old and new values a
 asymmetry is what makes byte 0 the only one a fork may poison to force a redraw without
 fabricating a value the engine then displays.
 
-What the block draws, all through leaves the GUI observer already has: four rects via `DrawBar
-0x4BF6F0`, the six numbers via `DrawTextCustomFont 0x4C14F0` ×3 — which
-reaches the hooked glyph blitter `0x4CCF60` internally — and the player's colour badge via
-`0x467C00` at `0x4690AB`.
+What the block draws, all through leaves the GUI observer already has: the tiles (PANELTOP then
+PANELBOT, [ui.md](ui.md), *The resource bar tiles in a loop*), four rects via `DrawBar 0x4BF6F0`,
+ten strings via `DrawTextCustomFont 0x4C14F0` (ten calls in `0x468E3F..0x46960B`) — which reaches
+the hooked glyph blitter `0x4CCF60` internally — and the player's colour badge via `0x467C00` at
+`0x4690AB`.
+
+**The memo's layout** [DISASSEMBLED 2026-10-31]: 33 bytes at `main+0x37E3F`, copied to `[esp+0x78]`
+and compared whole (`repz cmpsb`, `0x468FD9`; equal, nothing below is drawn, `je 0x469610`): byte 0
+the viewed record's `+0x146`; `+1` the eased energy; `+5` energy income; `+9` energy expense; `+0xD`
+the eased metal; `+0x11` metal income; `+0x15` metal expense; `+0x19` energy storage `+0xA4`; `+0x1D`
+metal storage `+0xA8` (floats). **The easing** (`0x468E7B..0x468F12`): `d = ftol(stored) −
+ftol(old)`, the step `d/8` truncated toward zero and at least ±1 when `d ≠ 0`, the new value
+`ftol(old) + step` kept as a float; energy eases toward `+0x8C`, metal toward `+0x98`. **The clamp**
+(`0x468F14..0x468F6C`): each eased value above its storage is set to it. **The rates**
+(`0x468F73..0x468FBF`): only when the DisplayTimer `+0xF8` is below GameTime is it raised by 30 and
+the four rates re-read through `0x464AB0` (`+0x90`), `0x464AC0` (`+0x94`), `0x464AF0` (`+0x9C`)
+and `0x464B00` (`+0xA0`), each `fld [arg+off]; ret 4`. So the stored values ease every frame and
+the rates shown are sampled once a game second.
 
 The four rects [DISASSEMBLED 2026-10-07]:
 
-- **The energy fill**, at `0x46912E`. Its right edge is the bar rect's left plus its width times the
-  eased value at `[esp+0x79]` (the memo's bytes 1..4 above), over the storage `[ebp+0xa4]`.
-- **The metal fill**, at `0x469412`. The same, with `[esp+0x85]` over `[ebp+0xa8]`; that
-  `[esp+0x85]` is metal's eased value is [INFERRED] from the energy case.
+- **The energy fill**, at `0x46912E` (`0x4690B0..0x46912E`: the side's `ENERGYBAR` rect `+0x52`
+  copied, the fill and its tick skipped when the storage is 0.0). Its right edge is
+  `ftol(x1 + (x2 − x1) · eased / storage)`, the eased value at `[esp+0x79]` (the memo's bytes 1..4
+  above), the storage `[ebp+0xa4]`, in the side's `energycolor`.
+- **The metal fill**, at `0x469412`. The same, with `[esp+0x85]` over `[ebp+0xa8]`; `[esp+0x85]`
+  (the memo's `+0xD`) is metal's eased value (`0x468ECF..0x468F45`: read, eased toward `+0x98` and
+  stored back) [DISASSEMBLED 2026-10-31].
+- **Both fills are inclusive of both ends**: `DrawBar` clips to the surface (`0x4BF620`) and fills
+  through `0x4CCDEA`, whose width is `x2 − x1 + 1` (`0x4CCE20`, `0x4CCE66`) and whose rows run
+  `y1..y2` by `dec; jns`. So an empty bar with a storage above 0 still draws its rect's column
+  `x1`.
 - **Their colours.** Each fill takes the side data's colour: `RaceSideData +0x222 energycolor` and
   `+0x226 metalcolor` (`tools/tamem_ghidra.h`). `sidedata.tdf` sets them to 208 and 224, which
   `PALETTE.PAL` holds as `#ffff00` and `#d3dbff`.
-- **A tick after each fill**, 2 px wide (`0x4691B2` energy, `0x469492` metal). It sits at a second
-  level over the same storage (`[ebp+0xe8]`, `[ebp+0xe4]`), in colour byte `[edi+0xc]`. That the
-  level is the share setting is [INFERRED].
+- **A tick after each fill**, 3 columns wide: the rect {T, y1, T + 2, y2}, filled inclusive, with
+  `T = ftol(x1 + (x2 − x1) · level / storage)` (`0x469159..0x4691B2` energy, `0x469492` metal). It
+  sits at a second level over the same storage (`[ebp+0xe8]`, `[ebp+0xe4]`), in colour byte
+  `[edi+0xc]`, and is drawn only while that level is not 0.0 and the record's **raw** stored value
+  (`+0x8C`, `+0x98`) is above it (`0x469133..0x469157`). The player init zeroes both levels
+  (`0x4647B3`, `0x4647B9`). That the level is the share setting is [INFERRED].
 
 The `0x4691B2` call is the energy tick, not a fill. The guard above the first bar — `fcomps 0x4FD568` at `0x4690BD`, `jne 0x4691B9` at `0x4690ED`
 — is a divide-by-zero check on max storage, not a dirty test.

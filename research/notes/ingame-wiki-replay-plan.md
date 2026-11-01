@@ -2,12 +2,17 @@
 
 ## Status
 
-**Designed 2026-10-30/31 in a design interview with the owner; R0 done, nothing built.** The owner
+**Designed 2026-10-30/31 in a design interview with the owner. R0 done; the first entry,
+Watching, built in the mockup and the DLL and about to land; Players and the camera, Take over
+and Rewind not built.** The owner
 wants the in-game wiki to teach the replay system and the live skirmish rewind the way it teaches
 the building and reclaiming features: demos that play on the stage, and Try it yourself. The stage
 shows a small game with a handful of units in a whole game frame -- the top bar, the left sidebar,
 the map and the replay HUD -- and the demos operate the replay HUD's controls on it, forks
-included, the rewind button at the top right among them.
+included, the rewind button at the top right among them. What is built is described as it stands
+in [the in-game wiki](ingame-wiki.md), *The game frame on the stage: the replay entries*, *A game*
+and *The data format*; the engine facts it rests on are in the engine map's entries of the
+functions it imitates. This note keeps the decisions, the landings and what they measured.
 
 The decisions below are the owner's, each with its reason. The existing wiki is
 [the in-game wiki](ingame-wiki.md); the replay HUD is [the replay HUD in game](hud-in-game.md);
@@ -24,7 +29,7 @@ the rules the wiki copies are the recorder's ([S4b, the takeover](tadr-port/demo
 | 4 | Timelines | **Two clocks.** The **game script** (`"game": { "inputs": [...] }`) runs on game time; the **viewer's script** (`"inputs"`, the HUD's clicks, the captions, the waits) runs on demo time and drives the game clock through the HUD: paused, a speed, a seek. In Rewind a skirmish the viewer is seat 0: before the rewind its inputs go into the game live; after Play from here they are the fork's game inputs. Take over is the same from the takeover tick. Try it yourself is the viewer, HUD only, until a fork or a takeover | One timeline cannot express a seek: every later game input would land at the wrong game time |
 | 5 | Seats | **Every seat acts through the cursor-level inputs** (`"seat": n` on a game input, 0 when absent), each with its own cursor, held keys, selection and armed mode, played by the same rules. **At most 4 seats** in the data, bounded in both simulations; the demos are authored with 2, the player and an opponent, each on their side's cast | The overlays show real recorded cursors, clicks and selections, and Take over hands the viewer a seat that acted the way they will. Seat 0 in a watching demo is already a recorded seat, so the input state comes apart from the viewer in any case |
 | 6 | Room on screen | **A theatre layout** for an entry that declares `"frame": "game"`: the stage spans the window under the title bar, the demos become a row of numbered tabs above the caption strip, the text a panel an *About* control opens over the stage, the tree a drawer on its own control. The frame is laid out at the stage's own pixel size | On the normal page the stage is about 560 × 370 at 1024 × 768 (measured against `art/wiki/layout.json`): the whole frame at half scale, the HUD's labels about 5 px. A second page layout in `tagpu_wikilay.c` and `wiki.js`, held equal by `wikilaycheck.py` |
-| 7 | The top bar and its numbers | **The mod's own resource bar, its numbers from a non-limiting economy** per seat: storage at the start from the scene, income from extractors and generators, spending at the rate builds draw. It never slows a build, so every existing demo plays as now; **both simulations refuse a demo whose storage would fall below zero**, so a demo that passes would never have stalled in the game. A whitebox bar until R0 maps the engine's art. The rewind button and the sprocket are drawn over it as in the game | Fixed numbers would show metal that never moves while extractors are built; a bar without readouts is not the whole game area. The players column (`HUDSEAT`) reads the same numbers |
+| 7 | The top bar and its numbers | **The mod's own resource bar, its numbers from a non-limiting economy** per seat: storage at the start from the scene, income from extractors and generators, spending at the rate builds draw. It never slows a build, so every existing demo plays as now; **both simulations refuse a demo whose storage would fall below zero**, so a demo that passes would never have stalled in the game. The bar's art is the mod's own (decision 20). The rewind button and the sprocket are drawn over it as in the game | Fixed numbers would show metal that never moves while extractors are built; a bar without readouts is not the whole game area. The players column (`HUDSEAT`) reads the same numbers |
 | 8 | The other seats after a fork | **They play on from their recorded inputs**, through the same rules on a world that may now differ; a fork's own script may give any seat inputs from T. **A fork drops every recorded kill after T**: a death in a fork comes from the fork's script alone. The text says in one line that in the game the other players become AIs | The game seats an AI for each other player (S4b); the wiki has none and grows none. Idle seats would teach that a fork freezes the opponent. Dropping the kills makes "fork before the commander dies and it lives" hold by construction, as in the game, where a death after T is not fated |
 | 9 | The fork rules | **The recorder's own, from its own constants**: forks only at multiples of `REC_REFRESH_TICKS` (`inc/tagpu_recfmt.h`, included, not copied) with the HUD's two-click snap back; at most three live forks; the least recently used evicted, never the original or the one watched, with the HUD's warning; forks of forks with parents. "Save as a replay" shows its toast and keeps the fork in a list of the demo's own | A player meets on the stage exactly what the game does, and a change to the recorder's interval or cap reaches the wiki. The eviction order is one pure function both simulations share |
 | 10 | The entries | Four, under a new top-level category **Replays** (below). **Chat is left out** -- it would need recorded chat lines, a new input kind -- with one line of text | |
@@ -85,7 +90,7 @@ them, as they refuse the existing rules ([the data format](ingame-wiki.md#the-da
 
 - **`"frame": "game"`** on the entry: the theatre layout and the whole game frame on the stage.
 - **A demo's `game`**: `{ "inputs": [...] }`, the recording's script on game time, its inputs the
-  existing kinds with an optional `"seat"` (0..3) and the new `{ "kill": "<unit>" }`. A unit's
+  existing kinds with an optional `"seat"` (0..3 in the design; 0 only until decision 16's entry) and the new `{ "kill": "<unit>" }`. A unit's
   `owner` in a scene is its seat.
 - **A demo's `inputs`** on such an entry are the viewer's, on demo time: the captions, the waits
   and `{ "hud": "<control>", ... }`, each played as the cursor's trip to the drawn control, as a
@@ -98,23 +103,84 @@ them, as they refuse the existing rules ([the data format](ingame-wiki.md#the-da
 - **A scene's economy**: each seat's storage at the start; income and spending follow from the
   casting's figures.
 
-The exact keys are W1's to settle in the mockup.
+The keys as built, with every rule both readers refuse, are in [the in-game wiki](ingame-wiki.md),
+*The data format*: `"seats"` on a scene, `"game": {end, inputs, sidebar}` on a demo, `"seat"` (0
+only, decision 16) and `{ "kill": "<id>" }` on a game input, `"rival"` and `"corpse"` on a unit,
+the economy's figures, and the viewer's `{ "hud": … }` presses and `{ "until": "seeked" }` wait.
+Watching's demos press `play`, `speed`, `rew`, `fwd`, `track` (with `to`, and `drag` with `over`),
+`bookmark`, `leave` and `leave:no`; the other controls above wait for their entries, and a fork's
+part for R1.
 
-## Landings
+## The landings
 
-| # | Landing | Carries |
+| # | Landing | Carries | Status |
+|---|---|---|---|
+| R0 | Research, no code | the resource bar's art and drawing; the side panel while watching; the HUD's inputs; a wiki tick's cost | **done 2026-10-31** (*What R0 found*, below) |
+| W | **Watching a replay**: the simulation and the data (C1-C5), the mockup's presentation (F1-F4) and the DLL's (G1-G5), as one landing | below | **built, about to land** |
+| R1-R3 | Rewind a skirmish | the fork rules, the top bar's rewind button, the strip; the economy's `stall` mode gets its first caller | not started |
+| T1-T3 | Take over a replay | the picker, the Forks bay, the lanes, the eviction; a second seat's cursor (decision 16) | not started |
+| P1-P3 | Players and the camera | Jump, Follow, Sight (a fog per seat), the overlays, the stats window on the stage (its own chart image) | not started |
+
+Watching went first because it builds the frame, the two clocks, seek and the kills, which every
+other entry stands on, without forks. **Rewind is next**, the owner's own example, whose fork
+machinery Take over reuses; then Take over, then Players and the camera.
+
+**Watching, as built.** The planned W1 (mockup), W2 (C) and W3 (in the game) became one landing
+cut along the two specs' seams: the simulation and the data in five steps, each in `sim.js` and
+its C twin at once, and the presentation in four mockup steps and five DLL steps. The planned
+landing B (a whitebox top bar) was dropped by decision 20.
+
+| step | what it carries | commits |
 |---|---|---|
-| R0 | Research, no code (**done 2026-10-31**, below) | the resource bar's art and drawing; the side panel while watching; the HUD's inputs; a wiki tick's cost |
-| W1 | Mockup: Watching a replay | `sim.js`: the two clocks, the seats, kills and corpses, the economy and its refusal, seek by re-simulation; `wiki.js`: the theatre layout and the frame (a whitebox top bar, the sidebar, the map, `tools/hudart/mockup/hud.js`'s HUD); the entry's demos |
-| W2 | C: the simulation and the data, equal to W1 | `tagpu_wikisim.c`, `tagpu_wikidata.c`, `simparity.mjs` extended; the tick cost measured in the game |
-| W3 | In the game: the frame on the stage | the theatre layout in `tagpu_wikilay.c` (`wikilaycheck.py`), the HUD built by `tagpu_hudlay_build` (pure: `tagpu_hudlay.h`) inside the stage, the viewer's presses on its controls in Try it yourself, the `wiki_regression.py` lanes |
-| R1-R3 | Rewind a skirmish, the same three steps | the fork rules, the top bar's rewind button, the strip |
-| T1-T3 | Take over a replay | the picker, the Forks bay, the lanes, the eviction |
-| P1-P3 | Players and the camera | Jump, Follow, Sight (a fog per seat), the overlays, the stats window |
+| C1 | the castings: the `commander` cast (the tenth), every cast's economy figures and its corpse, in `gfx.py`, `tagpu_wikiasset.c`, `sim.js`, `text.js` and `tagpu_wikidata.c` | `6125ce11` |
+| C2 | game mode in both simulations: seats, `rival`, kills (the builder's running order dropped with cant), wrecks by the engine's placement rules, the death sound and its asset (ExplodeAs → `soundhit`), the per-unit ledgers and the economy pass in `refuse` and `stall`, hash item 12; `watching.json` | `19f63da5`, `0d9c8d3e` (the death sound's weapon table is the build's weapon array) |
+| C3 | the replay layer, `replay.js` and `tagpu_wikireplay.c`: the two clocks, the controls, the walker and its markers, seek by re-simulation; the viewer's data rules; the seven demos | `6861004f` |
+| C4 | the tree's Replays category naming Watching; the in-game check playing a game entry's demos and logging each replay's cost | `a4c6aef3` |
+| C5 | SEEK, WALK and FILL set to 64 from the measured cost (*The measured costs*) | in `6276cf23` |
+| F1 | `bar.js`, the side pack's bar art, logos and GUI table, `barcheck.mjs`'s JS half | `a9543870` |
+| F2 | the theatre in the mockup: About, the Entries drawer, the numbered tabs, `layout.json` `theatre` | `74d0060a` |
+| F3 | `frame.js` and the stage's frame mode: the watcher's view, both bars, the emblems, the replay HUD at 100 %, Leave's question, the viewer's cursor, pacing by cost, the held view, Try it's presses, `leave:yes` | `7a632e0f` |
+| F4 | `framecheck.mjs`'s JS half | with G3, `e80fea6b` |
+| G1 | the bars' art in the DLL's sidebar loader, the three exe names, `tagpu_wikibar.c`, `barcheck.mjs`'s C half | `28b6c9c1` |
+| G2 | the theatre in `tagpu_wikilay.c`, its check states, `WIKI_THEATRE_TABS` in both readers | `7d6a78c6` |
+| G3 | `tagpu_wikiframe.c`, the stage's frame mode in C, `HOP_BAR` and the bar texture, `tagpu_huddraw_partition`, `framecheck.mjs`; the game entry's 4:3 bound (Watching 64 cells wide); `wikilaycheck.py`'s theatre on Watching and its stage HUD pairing | `e80fea6b`, `8c0cb243`, `614752a4` |
+| G4 | the threads: the record and the theatre's fields in the packet, the replay in the game thread's fill paced by cost, the render thread's own stage HUD and bars, the hit map's sources, the HUD pass's seven lists; the `watch` lane and `mods`' w6 | `6276cf23`, `f1b6d74a`, `4d9ca0d4` |
+| G5 | the documentation pass: the engine map (the economy, the wrecks, the death sound, MobileBuild's result 8, the resource and bottom bars, with the corrections R0 and the scouts found), the module note, [the in-game wiki](ingame-wiki.md) and this note | the `docs:` commit |
 
-Watching goes first because it builds the frame, the two clocks, seek and the kills, which every
-other entry stands on, without forks; Rewind second, the owner's own example, whose fork machinery
-Take over reuses.
+**Not closed by Watching** (each also in [the in-game wiki](ingame-wiki.md), *Gaps*): the other
+three entries; a second seat's cursor (decision 16); Leave's question and the watcher's column are
+not yet compared with a real Watch's (the question's place and the column's state are
+[INFERRED]); a hovered unit's readout on the bottom bar (decision 24); sound at 2× to 8× (*Open*);
+Escalation's dear ticks (*The measured costs*).
+
+## The measured costs
+
+MEASURED 2026-10-31 on the reference setup, the DLL's i686 build under Wine; the tick costs by
+`tagpu_wiki.check` under every setup of the compatibility suite, the rest by
+`wiki_regression.py`'s `watch` and `demos` lanes at 1920 × 1080.
+
+- **A replay tick** costs 1.5 to 3.8 µs on average on every setup but Escalation, where it costs
+  11.6 to 15.3 µs. The dearest 64-tick step is 3.57 ms under Escalation and 0.41 ms or less
+  elsewhere.
+- **Why Escalation's are dear**: its commanders' scripts (ARMCOM, CORCOM) scan every unit id from 1
+  to `MAX_ID` -- 1024 in the wiki's host, `WIKICOB_UNITS` -- for its height, team, build left and
+  alliance every 2.5 to 5 s, so about one tick in 55 costs 0.7 to 1.4 ms natively (gcc `-O2`,
+  Watching's demos). It is the mod's content, not a defect of the host. Answering `MAX_ID` with the
+  highest id the simulation has spawned would cut the scan to the units that exist; whether the
+  host should is **open, the owner's to decide** (it changes what a script reads, so both
+  simulations and the parity check would follow it).
+- **The pacing** (C5): SEEK, WALK and FILL at 64 game ticks hold Escalation's worst fill at
+  1.75 ms natively (4.1 ms at 256); a seek to the end of Watching's game (1800 ticks) takes 29
+  steps, about a second at 1×, and one to `WIKI_GAME_END_MAX` (5400) 85, under three seconds.
+- **The page**: Watching's page cost the game thread at most 0.462 ms in one frame over 174
+  frames. The `demos` lane's (d5) maximum over every page demo is 0.628 ms, equal on `main` and on
+  this branch, so it is not this landing's; it is over the plan's 0.5 ms target, and the lane does
+  not fail on it.
+- **The render thread**: the stage HUD's two builds at most 0.159 ms in a frame; the bars 0.301 ms
+  in a frame that composes them, nothing in one that keeps them; the wiki's layer peaked at 1 309
+  of 32 768 instances (87 batches of 1024).
+- **The packet**: `TAGPU_PK_WIKI` 167 528 bytes with the frame record (1 512 of them), the head 320
+  unchanged; `TAGPU_CMD_WIKI` 10 028.
 
 ## What R0 found
 
@@ -127,7 +193,8 @@ Take over reuses.
   ease an eighth of the way a frame and the rates are sampled once a game second. A reproduction in
   Python matched a capture of our renderer on every pixel but Impure's sprocket (36 464 of 36 832,
   MEASURED 2026-10-31); Total Mayhem, Twilight, Escalation and TA Zero each differ in art or rects.
-  The engine map gets these facts, verified, in landing B's documentation pass.
+  The facts are in the engine map, re-checked against the disassembly: [ui.md](engine/ui.md),
+  *The resource bar tiles in a loop*, and [render.md](engine/render.md), *The four rects*.
 - **The side panel while watching** is `<prefix>MAIN2` of the side the level loaded, the
   recording's controlled seat's at full map; Sight does not change it. The viewer controls the
   spectator record, whose unit list is empty, so nothing is selected and no build menu shows
@@ -135,8 +202,9 @@ Take over reuses.
 - **The HUD's inputs**: `tagpu_hudlay_build` needs no change; the stage needs a second `HUDOPS`
   drawn with the HUD's art and its own hit map. The markers and the stats cover the whole recording,
   ahead of the playhead, so a replay demo plays its game script to the end once before it shows.
-  `hud.js` runs only in a page: whether a HUD press's cursor trip is simulation state or
-  presentation is W1's to settle.
+  `hud.js` runs only in a page. Settled in W1: a press's cursor trip is the replay's state
+  (its hash covers the viewer's cursor), not the game simulation's, and the stage builds its own
+  `HUDOPS` on the render thread.
 - **A tick's cost**: every demo, with the units' scripts, natively at `-O2`: the longest 1 068 ticks
   in 3.56 ms, the dearest 1 033 ticks in 4.37 ms (4.78 ms with the DLL's compiler under Wine), the
   worst single tick 33 µs (MEASURED 2026-10-31). A seek needs no snapshots. A seek must count the
@@ -144,6 +212,9 @@ Take over reuses.
 
 ## Open
 
-- **Sound during a seek and at speed**: a re-simulated tick plays nothing; what the stage plays at
-  2× to 8× follows what the game does, which R0 measures [INFERRED until then].
+- **Sound at speed**: a re-simulated tick plays nothing (a seek's end marks every sound it
+  re-simulated as heard); what the stage plays at 2× to 8× should follow what the game does, which
+  is not measured [INFERRED until then].
+- **Escalation's `MAX_ID` scan** (*The measured costs*): whether the wiki's host answers `MAX_ID`
+  with the highest id spawned is the owner's decision.
 - **Chat** and **combat** are out of this program. The `ExplodeAs` explosion is a later polish.
