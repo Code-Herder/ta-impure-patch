@@ -97,6 +97,11 @@
 #include "tagpu_wikitext.h"
 #include "tagpu_replays.h"
 #include "tagpu_pak.h"
+#include "tagpu_recreader.h"
+
+/* a live demo's fork part's id is a timeline's: the wiki's bound is the recorder's own
+   (ingame-wiki-replay-plan.md, decision 9), and the wiki's engine-free loader cannot include it */
+_Static_assert(WIKI_FORK_IDS == RECR_TIMELINES, "a fork part's ids are the recorder's timelines");
 
 #define DUMP_ASK  "tagpu_wiki.dump"
 #define DUMP_OUT  "tagpu_wiki.json"

@@ -136,8 +136,8 @@ void tagpu_wikireplay_step(WIKIREPLAY* r);
    adds at most WIKI_REPLAY_SEEK. */
 int tagpu_wikireplay_cost(const WIKIREPLAY* r);
 
-/* Try it yourself's press, acting at once: a WIKI_HUD_* below WIKI_NPRESS, the question's Yes
-   included (anything else does nothing), and for the track the game tick under the pointer, which
+/* Try it yourself's press, acting at once: a replay HUD's WIKI_HUD_*, the question's Yes included
+   (anything else, a live HUD's control among it, does nothing), and for the track the game tick under the pointer, which
    the seek clamps to the game. Nothing while the replay is done or still walking. */
 void tagpu_wikireplay_press(WIKIREPLAY* r, int control, int value);
 

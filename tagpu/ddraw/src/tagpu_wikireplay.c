@@ -105,8 +105,8 @@ static void seek(WIKIREPLAY* r, int t)
 
 /* THE CONTROLS, as the game's HUD acts (hud-in-game.md, the keys' table). While Leave's question
    is open every press but its two answers is ignored, and an answer with none open is, and
-   leave:yes in a replay that plays a script; each ignored press is counted. `c` is a WIKI_HUD_*
-   below WIKI_NPRESS: the callers bound it. */
+   leave:yes in a replay that plays a script, and a live HUD's control, which a replay has none of;
+   each ignored press is counted. `c` is a WIKI_HUD_* below WIKI_NPRESS: the callers bound it. */
 static void act(WIKIREPLAY* r, int c, int value)
 {
     int playhead, k, i;
@@ -169,10 +169,13 @@ static void act(WIKIREPLAY* r, int c, int value)
         r->was_paused = r->paused;
         r->paused = 1;
         break;
-    default: /* WIKI_HUD_LEAVE_NO */
+    case WIKI_HUD_LEAVE_NO:
         r->paused = r->was_paused;
         r->question = 0;
         r->was_paused = 0;
+        break;
+    default:
+        r->ignored++;
         break;
     }
 }
@@ -344,7 +347,9 @@ int tagpu_wikireplay_cost(const WIKIREPLAY* r)
 
 void tagpu_wikireplay_press(WIKIREPLAY* r, int control, int value)
 {
-    if (r->done || r->walker || control < 0 || control >= WIKI_NPRESS) return;
+    if (r->done || r->walker || control < 0 || control >= WIKI_NPRESS
+        || !(control == WIKI_HUD_LEAVE_YES || tagpu_wikidata_hud_presses(control, 0)))
+        return;
     act(r, control, value);
     r->done = is_done(r);
 }

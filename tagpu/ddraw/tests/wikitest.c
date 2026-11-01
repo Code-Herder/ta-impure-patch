@@ -934,7 +934,27 @@ static int trace(const char* path)
             /* a `build` names a type of the entry the sim plays, the bound one with a casting */
             if (!tagpu_wikidata_input(c->s.entry, tj_get(v, "ev"), &in, err, sizeof err)) rc = cannot(err);
             else tagpu_wikisim_input(&c->s, &in);
-        } else if (!strcmp(op, "step")) tagpu_wikisim_step(&c->s);
+        } else if (!strcmp(op, "fork")) {
+            /* a fork's part, each a game input read against the entry as written, whose type
+               indices the bound one keeps (a part names the entry's types, as its game script
+               does); the kills' ids point into this call's tree, which lives with the case. The
+               answer is "ok" or "refused", as sim.js's fork returns or throws. */
+            const TJV *list = tj_get(v, "inputs"), *e;
+            const char* mode = tj_str(tj_get(v, "mode"), "");
+            const int ni = tj_is(list, TJ_ARR) ? list->n : 0;
+            WIKIINPUT* ins = (WIKIINPUT*)calloc((size_t)ni + 1, sizeof *ins);
+            int k = 0, ok = ins != NULL;
+            for (e = ok && ni ? list->first : NULL; ok && e; e = e->next)
+                if (!tagpu_wikidata_game_input(&c->e, e, &ins[k++], err, sizeof err)) ok = 0;
+            if (!ins) rc = cannot("out of memory");
+            else if (!ok) rc = cannot(err);
+            else puts(tagpu_wikisim_fork(&c->s, (int)tj_num(tj_get(v, "R"), 0), ins, ni,
+                                         !strcmp(mode, "stall") ? WIKI_ECON_STALL : !strcmp(mode, "refuse") ? WIKI_ECON_REFUSE : -1,
+                                         err, sizeof err) ? "\"ok\"" : "\"refused\"");
+            free(ins);
+        } else if (!strcmp(op, "fed")) printf("%d\n", c->s.fed);
+        else if (!strcmp(op, "release")) tagpu_wikisim_release(&c->s);
+        else if (!strcmp(op, "step")) tagpu_wikisim_step(&c->s);
         else if (!strcmp(op, "view")) { view(&c->s, 1); putchar('\n'); }
         else if (!strcmp(op, "orders")) { orders(&c->s, tj_str(tj_get(v, "id"), "")); putchar('\n'); }
         else if (!strcmp(op, "done")) puts(c->s.done ? "true" : "false");

@@ -604,6 +604,11 @@ typedef struct {
     WIKIINPUT*       resolved;
     const WIKIINPUT** script;
     double           end;           /* the clock it is done on; never for Try it yourself */
+    const char*      demo_id;       /* the demo's id, for a refused fork's message; it lives in the
+                                       entry's document, which the caller keeps as long as the sim */
+    int              fed;           /* the inputs of seat 0's the script and its trips have fed since
+                                       the sim was made, its kills and waits not counted: the replay
+                                       layer's clash rule reads it, and no hash does */
     /* THE DEMO'S CLOCK (sim.js's clock): the tick its inputs, trips and end are written in. It runs
        with `tick` except while a wait holds it: waiting the WIKI_UNTIL_* it waits for (0 none),
        from the tick it began, at most wait_max ticks; one past its max stops the demo, stalled */
@@ -643,6 +648,11 @@ typedef struct {
 
     /* the sidebar, sim.js's sb; `lay` NULL: off for the sim's whole life */
     const WIKILAYOUT* lay;
+    /* DZ: in the frame the column starts at the top bar's first row (stage.js drawFrame),
+       WIKI_FRAME_BAR above the map; a page's column starts with the map. 0 on a page, so every
+       page demo's arithmetic is the same doubles. A column's row meets a world z only through
+       row_of and the z = row + dz of the popup and a gadget's centre. */
+    int              dz;
     int              trips;         /* a scripted demo with the sidebar: a build is its trip */
     int              ltype[WIKI_MAX_DEFS];  /* each entry type's index in lay->type, or -1 */
     int              screen;        /* the routed screen, an index < lay->nscreen */
@@ -819,6 +829,31 @@ int tagpu_wikisim_orders(const WIKISIM* s, const char* id, const WIKIORDER** o);
    the states, footprints from the types, the pace from the entry. The tick the cursor's shape
    began is history rather than state, and is left out. */
 uint64_t tagpu_wikisim_hash(const WIKISIM* s);
+
+/* THE FORK (sim.js's sim.fork; research/notes/ingame-wiki-replay-plan.md, decision 8): a game
+   simulation's timeline handed over at R, the world of R - 1 kept whole, the recorded future
+   dropped and the `n` inputs at `in` (a fork's part, seat 0's game inputs as the loader reads them:
+   the seat taken off, a kill's id in the entry's document) its new script, its economy in
+   `econ_mode` (WIKI_ECON_*) from here on. 1, or 0 with a message in `err` and the sim untouched:
+   refused unless it is a game standing at R - 1 that has not stopped (a lock, a pass that starved,
+   a kill that found no unit), the mode is one of the two, every input is at R or later and neither
+   a caption nor a wait, the features standing and gone plus the part's kills stay within
+   WIKI_FEATS_MAX, and the part resolves from nothing held (tagpu_wikidata_buttons) and, with the
+   sidebar's trips, keeps their data rule (tagpu_wikidata_trips); or memory runs out.
+
+   THE ORDERING: called between two ticks with the simulation at R - 1; feed(t) feeds exactly the
+   inputs of tick <= t, so every input not yet fed has its tick >= R and is the recorded future the
+   fork replaces. Then the release (tagpu_wikisim_release), as the game's fork leaves the player.
+   THE LIFETIME: the sim copies the part into a block of its own and frees the old script's; `in` is
+   only read. */
+int tagpu_wikisim_fork(WIKISIM* s, int R, const WIKIINPUT* in, int n, int econ_mode, char* err, size_t errn);
+
+/* THE RELEASE (sim.js's sim.release), between two ticks: what the game's rebuild leaves of seat 0's
+   input after Back to now and in a fork (tagpu_wikisim.c says how that was measured): no key or
+   button held, no drag, no placement or reclaim gesture, no gadget captured, all let go without
+   acting; nothing selected and nothing armed, the column routed to MAIN2; the spacing and the
+   sweep's kind kept. The fork calls it, and the replay layer at Back to now. */
+void tagpu_wikisim_release(WIKISIM* s);
 
 
 #endif
