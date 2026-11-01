@@ -23,6 +23,9 @@ page's controls and the demos playing on the stage.
     wiki_regression.py <instance> rewind --launch [--shots DIR]
                                                       Rewind a skirmish, a live entry: its live frame, the
                                                       records, and Try it's rewind, fork and world input
+    wiki_regression.py <instance> takeover --launch [--shots DIR]
+                                                      Take over a replay, a takeover entry: its frame, the
+                                                      records, and Try it's lanes, takeover and world input
     wiki_regression.py <name> mp                     a two-player network game on Wine, started by
                                                       tools/compat/tacompat.py's launcher
     wiki_regression.py all|<setup>[,<setup>...] mods --shots DIR
@@ -175,6 +178,29 @@ from simparity's records of it, none written here:
   (r5) reopened, Try it played to tick 1500 and the track clicked at the strip's end: the longest seek's steps and
        seconds, the most one fill cost the game thread (the target 0.5 ms), the fork's time from (r4); Esc, and the
        render thread's stage HUD cost from the log.
+takeover, on the same launch as sp (takeover-spec.md 10.5). Every tick it uses is read from
+art/wiki/entries/takeover.json or from simparity's records of it, none written here:
+  (t1) the tree's Take over drawn as a watching frame, demo lanes picked (a file with a fork, without which the bay
+       takes no click): the replay HUD's Take over button and the Forks bay hit at the game's geometry (the button as
+       wide as the transport plate and its layout height above it, the bay between the plate and the track, level
+       with it, both inside the frame through frame_fit), and none of the live HUD's controls;
+  (t2) demos lanes and evict paused (tagpu_wiki.pause, under the turbo) at ticks spread over each state the demo
+       reaches with no seek running -- watching, the lanes open, the picker open, live after the takeover: the record's
+       FRAME_KEYS, live block, bar, simulation's cursor and Take over block, and the replay's hash, equal replay.js's;
+  (t3) with --shots DIR, demo evict held at the open picker at the fork limit (the warning, the lane it replaces
+       outlined), demo lanes with F1 watched, and demo takeover after Bram is taken: each grabbed beside the mockup at
+       the same state, the column and both bars pixel-equal -- the last one's top bar in the taken seat's side's art
+       (top_side), the bottom bar the load's --, and its bars put beside M0-T's capture of a CORE seat taken on an ARM
+       load (.data/wiki-replay/m0t-shots, for the eye; different screens, so not measured);
+  (t4) Try it on demo evict's data through device clicks: the bay opens three lanes, a lane switches and Back to main
+       recording returns, Save once and again (refused), Take over at the limit (the snap to R - 1, the warning's
+       eviction), Bram's row (live, human 1, the evicted fork gone, the takeover's time said); then the world as Bram
+       through the frame's fit: a click on Ada's commander selects nothing, one on Bram's selects it, a click on the
+       ground (a right one at Interface Type 1) orders it there and it goes; afresh, a Delete armed and made, and the
+       watched fork deleted through its parent; GameTime stands and the key ring's indices stay equal;
+  (t5) reopened, Try it with the playhead at the end, the longest sought switch (F3's lane) and the snap there: their
+       demo steps and seconds, the most one fill cost the game thread (the target 0.5 ms), the takeover's time from
+       (t4); Esc, and the render thread's stage HUD cost from the log.
 recorded:
   (r) the button sits 3 bar pixels left of the rewind button (the two frames' hit maps); the rewind
       button opens the rewind; while it is open a click on the wiki button opens nothing and the log
@@ -267,6 +293,8 @@ Twilight), one game a setup, under the run lock (the plan's landing 6i; the side
        (tools/wiki/barcheck.mjs --compose) -- the per-mod bar art the loader reads (Mayhem's GUI table, TA Zero's three
        sides and logos, Escalation's NEWINT) as the game draws it;
   (w7) the same of Rewind's first demo early on, a live frame: its bars against bar.js given the record's numbers;
+  (w8) the same of Take over's first demo after Bram (seat 1) is taken: the top bar of his side's art (bar.js given
+       the record's top_side), the bottom bar the load's, the numbers his;
   (w4) Esc closes the window;
   (w5) each stage drew what the report resolved: a ground that resolved in 3D on every frame of the
        line, one that did not as the whitebox on every frame.
@@ -2287,18 +2315,12 @@ def rewind_r1(d):
           f"Wg - 75 .. Wg - 48, rows 2..29 (within a pixel of {want}); the HUD's controls {sorted(hud)}, no replay control")
 
 
-def rewind_frames(d, asks):
-    """simparity.mjs --hash --frame for Rewind at each (demo, tick) of `asks` in the dump's context: the record of the
-    world shown and the replay's hash, keyed (demo, the tick it reached), with `pending` whether a seek runs there"""
-    return simparity_frames(d, asks, REWIND)
-
-
-def rewind_candidates(d, demos):
-    """Every REWIND_STRIDE-th demo tick of each demo of `demos` up to its end and the longest wait past it, through
-    simparity: {demo: [(tick, hash, record), ...]} in tick order"""
-    byid = {dm["id"]: dm for dm in entry_demos(REWIND)}
+def rewind_candidates(d, demos, entry=REWIND):
+    """Every REWIND_STRIDE-th demo tick of each demo of `demos` of `entry` up to its end and the longest wait past it,
+    through simparity: {demo: [(tick, hash, record), ...]} in tick order"""
+    byid = {dm["id"]: dm for dm in entry_demos(entry)}
     asks = [(k, t) for k in demos for t in range(REWIND_STRIDE, int(byid[k]["end"]) + 600, REWIND_STRIDE)]
-    got = rewind_frames(d, asks)
+    got = simparity_frames(d, asks, entry)
     out = {k: [] for k in demos}
     for (k, t), (h, rec) in sorted(got.items(), key=lambda p: p[0][1]):
         if k in out and not any(t == q for q, _, _ in out[k]):
@@ -2365,11 +2387,11 @@ def rewind_r2(c, d):
           f"the replay's hash equal replay.js's")
 
 
-def rewind_shot(c, n, demo, tick):
-    """Demo number `n` of Rewind held at a tick through tagpu_wiki.shot, once the game frame drawn is that one's: the
+def rewind_shot(c, n, demo, tick, entry=REWIND):
+    """Demo number `n` of `entry` held at a tick through tagpu_wiki.shot, once the game frame drawn is that one's: the
     dump"""
     start = c.mark()
-    trigger(c.gamedir / "tagpu_wiki.shot", f"{REWIND} {n} {tick}\n")
+    trigger(c.gamedir / "tagpu_wiki.shot", f"{entry} {n} {tick}\n")
     asked = wait_line(c, start, r"wiki: shot \d+ asked|wiki: tagpu_wiki\.shot: ", f"{demo} {tick}")
     assert " asked: " in asked and asked.endswith(f"held at tick {tick}"), asked
     d = wait_dump(c, lambda d: d["demo"] == demo and not d["playing"] and d.get("frame_fit") and d["tick"] == tick,
@@ -2659,6 +2681,410 @@ def rewind(c, shots, res):
         rewind_r3(c, d, shots, res)
     fork_line = rewind_r4(c)
     rewind_r5(c, fork_line)
+
+
+# ---- takeover: a takeover entry on the page, Take over a replay (takeover-spec.md 10.5) ----
+
+TAKEOVER = "takeover"
+TK_KEYS = ("tk", "pick", "lanes", "nfork", "human", "fork_max", "tk_full", "chain_last", "fill_to", "pickR", "pickEvict",
+           "fork", "top_side")                          # (t2) the record's Take over block
+LIVE_ONLY = ("rewind", "live", "live_play", "live_now")  # the live HUD's, which a watching frame draws none of
+TK_T2 = ("lanes", "evict")                              # (t2) the demos whose records are compared
+TK_PICK_OPEN = 2                                        # the record's pick: 0 closed, 1 asked or sought, 2 open
+TK_WATCHED = 1                                          # WIKIFRAME_FORK_WATCHED
+TK_LIVE_EMBLEM, TK_WATCH_EMBLEM = 107, 76               # the emblems' first column, Wg less this (rewind-spec.md 9.4)
+TK_TRY = ("evict", 1100)                                # (t4) Try it on demo 4's data, taken over from GameTime 1100
+TK_BAR = ("takeover", 700)                              # (w8) demo 1 after Bram is taken, the glide back over and the
+                                                        # top bar's memo eased to his numbers
+M0T_BARS = "m0t-shots/q2-401-R+1"                       # (t3) M0-T's CORE seat taken on an ARM load, R + 1
+
+
+def data_root():
+    """The main checkout's .data (gitignored, so a linked worktree has none of its own)"""
+    common = subprocess.run(["git", "rev-parse", "--git-common-dir"], capture_output=True, text=True, cwd=TREE).stdout.strip()
+    return (TREE / common).resolve().parent / ".data"
+
+
+def tk_of(d):
+    assert d.get("replay") and d["replay"].get("tk"), f"the dump holds no takeover replay: {d.get('replay')}"
+    return d["replay"]["tk"]
+
+
+def takeover_open(c):
+    """The wiki opened on Take over a replay, drawn as a game frame with its stage HUD"""
+    d = c.open_wiki(expect_pause=True)
+    d = wait_dump(c, lambda d: d["drawn_open"], "(t1) the page was not drawn")
+    if d["entry"] != TAKEOVER:
+        c.keys("dclick:%d,%d" % c.centre(c.hit(d, f"entry:{tree_node(TAKEOVER)}")))
+    return wait_dump(c, lambda d: d["entry"] == TAKEOVER and d.get("drawn_frame") and d.get("frame_fit")
+                     and d["frame"]["tk"] and any(h.get("src") == HIT_HUD for h in d["hits"]),
+                     "(t1) the tree did not draw Take over's game frame with its stage HUD", seconds=60)
+
+
+def takeover_t1(c, d):
+    """(t1) a watching frame of demo lanes, whose file keeps a fork (with none the bay is drawn dimmed and takes no
+    click, tagpu_hudlay.c forks_bay): the replay HUD with Take over's button and the Forks bay at the game's geometry
+    (tagpu_hudlay.c `takeover`, `forks_bay`: the button on the transport plate, as wide as it, its layout height
+    above it; the bay at the timeline housing's left end, level with the track), inside the frame, and none of the live
+    HUD's controls"""
+    ids = [dm["id"] for dm in entry_demos(TAKEOVER)]
+    press(c, d, f"demo:{ids.index('lanes')}")
+    d = wait_dump(c, lambda d: d["demo"] == "lanes" and d.get("drawn_frame") and d.get("frame_fit") and d["frame"]["nfork"]
+                  and any(h.get("src") == HIT_HUD and h["key"] == "lanes" for h in d["hits"]),
+                  "(t1) demo lanes did not draw the Forks bay with its fork", seconds=60)
+    hud = {h["key"]: h["rect"] for h in d["hits"] if h.get("src") == HIT_HUD}
+    want = {"takeover", "lanes", "rew", "play", "fwd", "track"}
+    assert want <= set(hud), f"(t1) the watching frame lacks {sorted(want - set(hud))}: {sorted(hud)}"
+    bad = sorted(set(hud) & set(LIVE_ONLY))
+    assert not bad, f"(t1) the watching frame draws the live HUD's {bad}"
+    lay = json.loads((TREE / "art/hud/layout.json").read_text())
+    T = lay["proposed"]["forks"]["takeover"]
+    f = d["frame_fit"]
+    u = f["Hg"] * f["s"] / 720                    # client pixels a HUD unit (tagpu_wikiframe.h WIKIFRAME_HUD_H)
+    R, tk, bay, tr = frame_rects(d), hud["takeover"], hud["lanes"], hud["track"]
+    plate = [min(hud[k][0] for k in ("rew", "play", "fwd")), min(hud[k][1] for k in ("rew", "play", "fwd")),
+             max(hud[k][2] for k in ("rew", "play", "fwd")), max(hud[k][3] for k in ("rew", "play", "fwd"))]
+    inside = lambda r: R["frame"][0] <= r[0] and r[2] <= R["frame"][2] and R["frame"][1] <= r[1] and r[3] <= R["frame"][3]
+    assert inside(tk) and inside(bay), f"(t1) Take over {tk} or the bay {bay} lies outside the frame {R['frame']}"
+    assert abs((tk[3] - tk[1]) - T["h"] * u) <= 1, f"(t1) Take over is {tk[3] - tk[1]} px tall, not {T['h']} units ({T['h'] * u:.1f} px)"
+    assert tk[0] <= plate[0] + 1 and tk[2] >= plate[2] - 1, f"(t1) Take over {tk} is not as wide as the transport {plate}"
+    assert tk[3] <= plate[1], f"(t1) Take over {tk} does not stand above the transport {plate}"
+    assert bay[0] >= plate[2] - 1 and bay[2] <= tr[0] + 1 and bay[1] < tr[3] and bay[3] > tr[1], \
+        f"(t1) the bay {bay} is not between the transport {plate} and the track {tr}, level with it"
+    print(f"wiki takeover: (t1) a watching frame {f['Wg']} x {f['Hg']}: Take over {tk} ({T['h']} units tall, as wide as "
+          f"the transport {plate}, above it), the Forks bay {bay} at the housing's left end level with the track; no live "
+          f"HUD control among {sorted(hud)}")
+
+
+def tk_record_diff(rec, want):
+    """The fields of a takeover frame record that differ from replay.js's: record_diff's and the Take over block"""
+    return record_diff(rec, want) + [k for k in TK_KEYS if rec[k] != want[k]]
+
+
+def tk_state(rec):
+    """A watching record's state as the lane picks ticks by: live, the picker open, the lanes open, or neither"""
+    return "live" if rec["live"] else "picker" if rec["pick"] == TK_PICK_OPEN else "lanes" if rec["lanes"] else "watch"
+
+
+def takeover_t2(c, d):
+    """(t2) demos 2 and 4 paused at demo ticks spread over each state the demo reaches with no seek running -- watching,
+    the lanes open, the picker open, live after the takeover: the frame record the game thread placed (FRAME_KEYS, the
+    live block, the bar, the simulation's cursor and the Take over block) and the replay's hash equal replay.js's"""
+    cand = rewind_candidates(d, TK_T2, TAKEOVER)
+    ids = [dm["id"] for dm in entry_demos(TAKEOVER)]
+    want_states = {"lanes": {"lanes"}, "evict": {"lanes", "picker", "live"}}
+    turbo(c, 8)
+    said = []
+    try:
+        for k in TK_T2:
+            by = {}
+            for t, h, rec in cand[k]:
+                if not rec["pending"]:
+                    by.setdefault(tk_state(rec), []).append((t, h, rec))
+            assert want_states[k] <= set(by), f"(t2) {k} reaches the states {sorted(by)} with no seek running"
+            picks = sorted({rows[i][0]: rows[i] for rows in by.values() for i in (0, len(rows) // 2, -1)}.values(),
+                           key=lambda p: p[0])
+            for t, h, want in picks:
+                g = paused_at(c, TAKEOVER, ids.index(k) + 1, k, t, "(t2)")
+                bad = tk_record_diff(g["frame"], want)
+                assert not bad, f"(t2) {k}@{t}: the record's {bad} differ: game {[g['frame'].get(f.split('.')[0]) for f in bad]}, " \
+                                f"replay.js {[want.get(f.split('.')[0]) for f in bad]}"
+                assert g["hash"] == h, f"(t2) {k}@{t}: the replay's hash {g['hash']}, replay.js's {h}"
+            said.append(f"{k} at {len(picks)} ticks over {', '.join(sorted(by))} "
+                        f"({', '.join(f'{p[0]} {tk_state(p[2])}' for p in picks)})")
+    finally:
+        turbo(c, 0)
+    print(f"wiki takeover: (t2) {'; '.join(said)}: each record's {', '.join(FRAME_KEYS + LIVE_KEYS + TK_KEYS)}, bar and "
+          f"sim, and the replay's hash equal replay.js's")
+
+
+def bars_beside(game_png, R, path):
+    """The game frame's top and bottom bars beside M0-T's capture of a CORE seat taken on an ARM load (its top rows and
+    the bottom rows of its 1024 x 768 screen, right of the column), each scaled to one width, for the eye: the two are
+    different screens, so nothing is measured"""
+    from PIL import Image
+    src = data_root() / "wiki-replay" / M0T_BARS
+    top, shot = Path(f"{src}-topbar.png"), Path(f"{src}-shot.png")
+    if not (top.exists() and shot.exists()):
+        print(f"wiki takeover: (t3) no M0-T capture at {src}-*.png: the bars are not put beside it")
+        return
+    g = Image.open(game_png).convert("RGB")
+    s = Image.open(shot).convert("RGB")
+    W = 1024
+    t = Image.open(top).convert("RGB")
+    rows = [g.crop(tuple(R["top"])), t.crop((128, 0, t.width, t.height)), g.crop(tuple(R["bottom"])),
+            s.crop((128, s.height - 32, s.width, s.height))]
+    rows = [r.resize((W, max(1, round(r.height * W / r.width))), Image.NEAREST) for r in rows]
+    out = Image.new("RGB", (W, sum(r.height + 4 for r in rows)), (255, 0, 255))
+    y = 0
+    for r in rows:
+        out.paste(r, (0, y))
+        y += r.height + 4
+    out.save(path)
+    print(f"wiki takeover: (t3) the top and bottom bars beside M0-T's (game, M0-T, game, M0-T) in {path}")
+
+
+def takeover_t3(c, d, shots, res):
+    """(t3) demo 4 held at the open picker (the warning, the lane it replaces outlined), demo 2 with F1 watched, and demo
+    1 after the takeover of Bram: each presented frame grabbed and the mockup's at the same state beside it -- the
+    column and both bars pixel-equal (the emblems' columns and the HUD's controls left out), the world measured; the
+    last one's top bar in the taken seat's side's art (`top_side`), and its bars beside M0-T's capture"""
+    shots.mkdir(parents=True, exist_ok=True)
+    cand = rewind_candidates(d, ("takeover", "lanes", "evict"), TAKEOVER)
+    first = lambda k, pred, what: next((t for t, _, rec in cand[k] if not rec["pending"] and pred(rec)), None) or \
+        (_ for _ in ()).throw(AssertionError(f"(t3) {k} reaches no {what} with no seek running"))
+    t_open = first("evict", lambda r: r["pick"] == TK_PICK_OPEN and r["nfork"] == r["fork_max"] and r["pickEvict"] > 0
+                   and r["cur"]["i"] >= r["cur"]["n"], "open picker at the limit")
+    t_lane = first("lanes", lambda r: r["lanes"] and any(f["flags"] & TK_WATCHED for f in r["fork"]), "watched lane")
+    t_live = first("takeover", lambda r: r["live"] and r["human"] == 1 and r["simcur"] and r["bar"]["e"] > 0, "taken seat")
+    ids = [dm["id"] for dm in entry_demos(TAKEOVER)]
+    for demo, tick, what in (("evict", t_open, "picker"), ("lanes", t_lane, "lane"), ("takeover", t_live, "taken")):
+        d = rewind_shot(c, ids.index(demo) + 1, demo, tick, TAKEOVER)
+        r = d["frame"]
+        if what == "taken":
+            assert r["live"] and r["human"] == 1 and r["colour"] == 1 and r["top_side"] != r["side"], \
+                f"(t3) {demo}@{tick}: not Bram's live frame with the top bar of his side: live {r['live']}, human " \
+                f"{r['human']}, colour {r['colour']}, top_side {r['top_side']}, side {r['side']}"
+        base = shots / f"{res}-{TAKEOVER}-{demo}-t{tick}"
+        grab(c, base.with_suffix(".game.png"))
+        base.with_suffix(".frame.json").write_text(json.dumps({"frame_fit": d["frame_fit"], "rects": frame_rects(d),
+                                                               "record": r, "hud": [h for h in d["hits"] if h.get("src") == HIT_HUD]}))
+        at = mockup_shot({"res": [int(v) for v in res.split("x")], "entry": TAKEOVER, "demo_n": ids.index(demo),
+                          "tick": tick, "mod": "stock", "look": "game"}, base.with_suffix(".mockup.png"))
+        g, m = png_rgba(base.with_suffix(".game.png")), png_rgba(base.with_suffix(".mockup.png"))
+        R, f = frame_rects(d), d["frame_fit"]
+        hud = [h["rect"] for h in d["hits"] if h.get("src") == HIT_HUD]
+        if at:
+            hud.append([round(at[0]) - 64, round(at[1]) - 64, round(at[0]) + 64, round(at[1]) + 64])
+        cx, s_, ox = f["canvas"][0], f["s"], f["ox"]
+        emb = [cx + math.floor(ox + (f["Wg"] - 128 - k) * s_ + 0.5 + 1 / 64)
+               for k in ((TK_LIVE_EMBLEM if r["live"] else TK_WATCH_EMBLEM), 16)]
+        said = []
+        for part, tex in (("column", (128, f["Hg"])), ("top", (f["Wg"] - 128, 32)), ("bottom", (f["Wg"] - 128, 32))):
+            n, of, mx = region_diff(g, m, R[part], tex, emb if part == "top" else None, hud)
+            assert of > 0, f"(t3) {demo}@{tick}: the {part} rect {R[part]} is empty"
+            assert n == 0, f"(t3) {demo}@{tick} ({what}): {n} of {of} pixels of the {part} differ from the mockup's (up to {mx})"
+            said.append(f"{part} {of} px equal")
+        n, of, mx = region_diff(g, m, [emb[0], R["top"][1], emb[1], R["top"][3]])
+        said.append(f"the emblems {n} of {of} px differ (up to {mx})")
+        n, of, mx = region_diff(g, m, R["world"])
+        said.append(f"world and HUD {n} of {of} px differ (up to {mx})")
+        print(f"wiki takeover: (t3) {demo} at tick {tick} ({what}: pick {r['pick']}, lanes {r['lanes']}, live {r['live']}, "
+              f"human {r['human']}, side {r['side']}, top_side {r['top_side']}, toast {r['toast']!r}): {'; '.join(said)}")
+        if what == "taken":
+            bars_beside(base.with_suffix(".game.png"), R, base.with_suffix(".m0t.png"))
+    print(f"wiki takeover: (t3) 3 frames grabbed to {shots}")
+
+
+def tk_settled(c, what, pred=lambda d: True, seconds=60):
+    """The dump once the takeover replay runs no seek, its walk is over, the frame drawn is the running replay's, and
+    `pred` holds"""
+    def ok(d):
+        if not (d.get("replay") and d["replay"].get("tk") and d.get("drawn_frame") and d["replay"]["target"] < 0):
+            return False
+        L = d["replay"].get("live")
+        return (L is None or L["past"] is None or L["past"]["target"] < 0) and pred(d)
+    return wait_dump(c, ok, what, seconds=seconds)
+
+
+def tk_try_start(c, demo):
+    """Try it afresh on `demo`'s data, its walk over, paused: the dump"""
+    ids = [dm["id"] for dm in entry_demos(TAKEOVER)]
+    d = c.dump()
+    press(c, d, f"demo:{ids.index(demo)}")
+    d = wait_dump(c, lambda d: d["demo"] == demo and not d["try"], f"(t4) demo:{ids.index(demo)} did not pick {demo}")
+    press(c, d, "try")
+    d = tk_settled(c, "(t4) Try it did not start the replay for the player",
+                   lambda d: d["try"] and d["replay"]["try"] and d["replay"]["walked"] >= d["replay"]["end"]
+                   and any(h.get("src") == HIT_HUD for h in d["hits"]))
+    if not d["replay"]["paused"]:
+        hud_click(c, d, "play")
+        d = tk_settled(c, "(t4) play did not pause the replay", lambda d: d["replay"]["paused"])
+    return d
+
+
+def tk_seek(c, d, T):
+    """The track clicked where the drawn run puts tick T: the dump once the seek has ended, and the demo ticks and
+    seconds it took"""
+    x0, x1, hend = d["hud_run"]
+    tr = hit_of(d, "track", HIT_HUD)
+    x = x0 + round(T / hend * (x1 - x0))
+    k0, t0 = d["replay"]["tick"], time.monotonic()
+    c.keys("dclick:%d,%d" % (x, (tr[1] + tr[3]) // 2))
+    per = hend / max(1, x1 - x0)
+    d = tk_settled(c, f"(t4) the track did not seek to {T}", lambda d: abs(d["replay"]["playhead"] - T) <= per + 1)
+    return d, d["replay"]["tick"] - k0, time.monotonic() - t0
+
+
+def unit_of(d, uid):
+    w = live_of(d)["world"]
+    u = next((u for u in w["units"] if u["id"] == uid), None)
+    assert u, f"(t4) no unit {uid} in the live world: {[v['id'] for v in w['units']]}"
+    return u
+
+
+def takeover_t4(c):
+    """(t4) Try it on demo 4's data through device clicks: the bay opens three lanes, a lane switches and Back to main
+    recording returns, Save as a replay once and again (refused), Take over at the limit (the snap, the picker's
+    warning and the fork it evicts), Bram's row (live, human 1, the evicted fork gone); then the world as Bram: a click
+    on Ada's commander selects nothing, one on Bram's selects it, and a click on the ground (a right one at Interface
+    Type 1) orders it there, where it goes. Afresh: a Delete armed and then made, and the watched fork deleted through
+    its parent. GameTime stands and the key ring's indices stay equal. The steps of the sought switch and of the snap,
+    and the takeover's time."""
+    gt0, ring0 = c.gametime(), c.ring()
+    demo, T0 = TK_TRY
+    d = tk_try_start(c, demo)
+    d, _, _ = tk_seek(c, d, T0)
+    p = d["replay"]["playhead"]
+    said = [f"Try it on {demo}'s data at {p}"]
+    hud_click(c, d, "lanes")
+    d = tk_settled(c, "(t4) the bay did not open three lanes",
+                   lambda d: tk_of(d)["lanes"] and len(d["hud_lanes"]) == 3
+                   and {f"lane:{k}" for k in range(3)} <= {h["key"] for h in d["hits"] if h.get("src") == HIT_HUD})
+    lanes = d["hud_lanes"]
+    said.append(f"the bay opened the lanes {lanes}")
+    k0, g0, t0 = d["replay"]["tick"], d["replay"]["gen"], time.monotonic()
+    hud_click(c, d, "lane:0")
+    d = tk_settled(c, f"(t4) lane:0 did not switch to F{lanes[0]}", lambda d: tk_of(d)["selected"] == lanes[0])
+    hud_click(c, d, "main")
+    d = tk_settled(c, "(t4) Back to main recording did not return", lambda d: tk_of(d)["selected"] == 0)
+    said.append(f"lane:0 watched F{lanes[0]} and Back to main recording returned at {d['replay']['playhead']} "
+                f"({d['replay']['tick'] - k0} demo steps, {time.monotonic() - t0:.1f} s, "
+                f"{d['replay']['gen'] - g0} of the two switches sought)")
+    hud_click(c, d, "export:1")
+    d = tk_settled(c, f"(t4) Save did not save F{lanes[1]}", lambda d: lanes[1] in tk_of(d)["saved"]
+                   and d["frame"]["toast"] == f"F{lanes[1]} saved as a replay of its own")
+    hud_click(c, d, "export:1")
+    d = tk_settled(c, f"(t4) a second Save of F{lanes[1]} was not refused",
+                   lambda d: d["frame"]["toast"] == f"Cannot save F{lanes[1]}")
+    said.append(f"F{lanes[1]} saved, then 'Cannot save F{lanes[1]}'")
+    k0, t0 = d["replay"]["tick"], time.monotonic()
+    hud_click(c, d, "takeover")
+    d = tk_settled(c, "(t4) Take over did not open the picker", lambda d: tk_of(d)["pick"] == "open")
+    snap = (d["replay"]["tick"] - k0, time.monotonic() - t0)
+    T = tk_of(d)
+    R, ev = T["pickR"], T["pickEvict"]
+    assert R <= p + 1 and d["replay"]["playhead"] == R - 1, f"(t4) the snap: pickR {R} from {p}, the playhead {d['replay']['playhead']}"
+    assert d["frame"]["pick"] == TK_PICK_OPEN and d["frame"]["nfork"] == d["frame"]["fork_max"] and ev == lanes[1], \
+        f"(t4) the picker at the limit: pick {d['frame']['pick']}, {d['frame']['nfork']} of {d['frame']['fork_max']} " \
+        f"forks, evicting F{ev}, not F{lanes[1]} (the least recently watched, the earlier on a tie)"
+    rows = {h["key"] for h in d["hits"] if h.get("src") == HIT_HUD and h["key"].startswith("takeas:")}
+    assert {"takeas:0", "takeas:1"} <= rows, f"(t4) the picker's rows: {sorted(rows)}"
+    said.append(f"Take over snapped {p} to {R - 1} ({snap[0]} demo steps, {snap[1]:.1f} s) and warned of F{ev}")
+    start = c.mark()
+    hud_click(c, d, "takeas:1")
+    d = tk_settled(c, "(t4) Bram's row did not take over",
+                   lambda d: tk_of(d)["mode"] == "live" and tk_of(d)["human"] == 1 and d["replay"].get("live"))
+    T = tk_of(d)
+    gone = next(t for t in T["timelines"] if t["id"] == ev)
+    me = T["timelines"][T["selected"]]
+    assert not gone["live"] and me["R"] == R and me["seat"] == 1 and me["parent"] == 0, \
+        f"(t4) after the takeover: F{ev} {gone}, the new timeline {me}"
+    assert d["frame"]["toast"].startswith("Taking over Bram at"), f"(t4) the takeover's toast: {d['frame']['toast']!r}"
+    fork_line = wait_line(c, start, r"wiki: the takeover forked F\d+ at", "(t4) the takeover's time was not said")
+    said.append(f"Bram taken over as F{me['id']} at {R} (F{ev} gone; {fork_line.split('wiki: ', 1)[1]})")
+
+    # the world as seat 1: Ada's commander takes no selection of Bram's, Bram's commander is selected and ordered
+    d = settled_live(c, "(t4) the live frame", lambda d: d["try_world"] in (0, 1))
+    c0, c1 = unit_of(d, "c0"), unit_of(d, "c1")
+    c.keys("dclick:%d,%d" % frame_client(d, c0["x"], c0["z"]))
+    time.sleep(1.0)
+    d = settled_live(c, "(t4) the frame after the click on c0")
+    mine = [u["id"] for u in live_of(d)["world"]["units"] if u["owner"] == 1 and u["selected"]]
+    assert not mine and unit_of(d, "c0")["selected"] == c0["selected"], \
+        f"(t4) a click on Ada's c0 as Bram: Bram's selected {mine}, c0 {c0['selected']} -> {unit_of(d, 'c0')['selected']}"
+    c1 = unit_of(d, "c1")
+    c.keys("dclick:%d,%d" % frame_client(d, c1["x"], c1["z"]))
+    d = settled_live(c, "(t4) a click on Bram's c1 did not select it", lambda d: unit_of(d, "c1")["selected"])
+    c1 = unit_of(d, "c1")
+    mw, mh = d["map"][0] * 16, d["map"][1] * 16
+    goal = (min(max(c1["x"] + 160, 48), mw - 48), min(max(c1["z"] + 96, 48), mh - 48))
+    if math.hypot(goal[0] - c1["x"], goal[1] - c1["z"]) < 96:
+        goal = (min(max(c1["x"] - 160, 48), mw - 48), min(max(c1["z"] - 96, 48), mh - 48))
+    far = math.hypot(goal[0] - c1["x"], goal[1] - c1["z"])
+    # the move: a right press at Interface Type 1, a left click at type 0 (sim.js rightClick, leftClick)
+    c.keys(("drclick:%d,%d" if d["ctx"]["iface"] else "dclick:%d,%d") % frame_client(d, *goal))
+    turbo(c, 8)
+    try:
+        d = wait_dump(c, lambda d: math.hypot(goal[0] - unit_of(d, "c1")["x"], goal[1] - unit_of(d, "c1")["z"]) < far / 2,
+                      f"(t4) c1 did not go towards ({goal[0]:.0f}, {goal[1]:.0f})", seconds=90)
+    finally:
+        turbo(c, 0)
+    c1b = unit_of(d, "c1")
+    said.append(f"as Bram a click on c0 selected nothing, one on c1 selected it, and a {'right ' if d['ctx']['iface'] else ''}"
+                f"click on the ground at ({goal[0]:.0f}, {goal[1]:.0f}) ordered it there: from {far:.0f} to "
+                f"{math.hypot(goal[0] - c1b['x'], goal[1] - c1b['z']):.0f} units away")
+
+    # afresh: a Delete in two clicks, and the watched fork deleted through its parent
+    d = tk_try_start(c, demo)
+    hud_click(c, d, "lanes")
+    d = tk_settled(c, "(t4) the bay did not open again", lambda d: len(d["hud_lanes"]) == 3)
+    lanes = d["hud_lanes"]
+    hud_click(c, d, "delete:2")
+    d = tk_settled(c, f"(t4) Delete did not arm F{lanes[2]}", lambda d: tk_of(d)["armed"] == lanes[2]
+                   and d["frame"]["toast"] == f"Click again to delete F{lanes[2]}")
+    hud_click(c, d, "delete:2")
+    d = tk_settled(c, f"(t4) the second Delete did not delete F{lanes[2]}",
+                   lambda d: not next(t for t in tk_of(d)["timelines"] if t["id"] == lanes[2])["live"]
+                   and d["frame"]["toast"] == f"F{lanes[2]} deleted" and len(d["hud_lanes"]) == 2)
+    said.append(f"F{lanes[2]}'s Delete armed and then deleted it (lanes {d['hud_lanes']})")
+    lanes = d["hud_lanes"]
+    hud_click(c, d, "lane:0")
+    d = tk_settled(c, f"(t4) lane:0 did not watch F{lanes[0]}", lambda d: tk_of(d)["selected"] == lanes[0])
+    hud_click(c, d, "delete:0")
+    d = tk_settled(c, f"(t4) Delete did not arm the watched F{lanes[0]}", lambda d: tk_of(d)["armed"] == lanes[0])
+    hud_click(c, d, "delete:0")
+    d = tk_settled(c, f"(t4) the watched F{lanes[0]} was not deleted through its parent",
+                   lambda d: tk_of(d)["selected"] == 0 and not next(t for t in tk_of(d)["timelines"] if t["id"] == lanes[0])["live"])
+    said.append(f"the watched F{lanes[0]} deleted: the replay went back to the recording first")
+    assert c.gametime() == gt0, f"(t4) GameTime ran under the page: {gt0} -> {c.gametime()}"
+    assert c.ring() == ring0, f"(t4) the engine's key ring moved: {ring0} -> {c.ring()}"
+    print(f"wiki takeover: (t4) Try it: {'; '.join(said)}; GameTime stood and the key ring stayed equal")
+    return fork_line
+
+
+def takeover_t5(c, fork_line):
+    """(t5) the costs: the window closed and opened again (the page's cost counts from its open), Try it on demo 4's
+    data with the playhead at the end, the lanes opened and F3's lane pressed -- a switch sought from tick 0 to the
+    playhead, the longest -- then Take over there, the snap; each one's demo steps and seconds, the most one fill cost
+    the game thread (the target 0.5 ms), and the takeover's time from (t4); Esc, and the render thread's stage HUD cost"""
+    c.keys("esc")
+    wait_dump(c, lambda d: not d["open"], "(t5) Esc did not close the window")
+    d = takeover_open(c)
+    demo = TK_TRY[0]
+    d = tk_try_start(c, demo)
+    d, steps, secs = tk_seek(c, d, d["replay"]["end"])
+    said = [f"the seek to {d['replay']['playhead']} in {steps} demo steps, {secs:.1f} s"]
+    hud_click(c, d, "lanes")
+    d = tk_settled(c, "(t5) the bay did not open", lambda d: len(d["hud_lanes"]) == 3)
+    last = d["hud_lanes"][2]
+    k0, t0 = d["replay"]["tick"], time.monotonic()
+    hud_click(c, d, "lane:2")
+    d = tk_settled(c, f"(t5) lane:2 did not switch to F{last}", lambda d: tk_of(d)["selected"] == last)
+    said.append(f"the switch to F{last} sought to {d['replay']['playhead']} in {d['replay']['tick'] - k0} demo steps, "
+                f"{time.monotonic() - t0:.1f} s")
+    k0, t0 = d["replay"]["tick"], time.monotonic()
+    hud_click(c, d, "takeover")
+    d = tk_settled(c, "(t5) Take over did not open the picker", lambda d: tk_of(d)["pick"] == "open")
+    said.append(f"the snap to {tk_of(d)['pickR'] - 1} in {d['replay']['tick'] - k0} demo steps, {time.monotonic() - t0:.1f} s")
+    print(f"wiki takeover: (t5) {'; '.join(said)}; the page cost the game thread at most {d['cost_max_ms']:.3f} ms in one "
+          f"frame over {d['cost_frames']} frames (the target 0.5 ms); {fork_line.split('wiki: ', 1)[1]}")
+    start = c.mark()
+    c.keys("esc")
+    wait_dump(c, lambda d: not d["open"], "(t5) Esc did not close the window")
+    print(f"wiki takeover: (t5) {wait_line(c, start, r'wiki: the stage HUD cost the render thread', '(t5) no stage HUD cost line', 30).split('] ', 1)[-1]}")
+
+
+def takeover(c, shots, res):
+    """(t1)..(t5): Take over a replay, a takeover entry, on the page"""
+    held_at(c, HELD_AT)
+    d = takeover_open(c)
+    takeover_t1(c, d)
+    takeover_t2(c, d)
+    if shots:
+        takeover_t3(c, d, shots, res)
+    fork_line = takeover_t4(c)
+    takeover_t5(c, fork_line)
 
 
 def hud(c):
@@ -3201,16 +3627,25 @@ def stage_sidebar(c, display, gamedir, pack, out, row):
 MODS_WATCH = ("play", 150)                    # (w6) Watching's first demo, paused, no seek pending
 
 
-def mods_bars(c, display, pack, out, row, live=False):
+def mods_bars(c, display, pack, out, row, kind="watch"):
     """(w6) Watching's first demo held at a tick through tagpu_wiki.shot: the frame's two bars, each client pixel
     against the texel of bar.js's picture on the setup's pack (side and badge colour the record's, every number 0)
     its nearest sampling shows (either, on an edge, as the column's check takes it), Impure's emblems' columns left
     out (the stage draws them over the bar, from the kit). A side the pack has no bars for draws the whitebox strips
-    and is said, not compared. (w7), `live`: the same of Rewind's first demo early on, a live frame, whose bars show
-    the record's numbers (bar.js given the record's `bar`) and whose emblems run from the wiki's at right[0]."""
+    and is said, not compared. (w7), `kind` "live": the same of Rewind's first demo early on, a live frame, whose bars
+    show the record's numbers (bar.js given the record's `bar`) and whose emblems run from the wiki's at right[0].
+    (w8), "takeover": the same of Take over's first demo after Bram is taken, a live frame whose top bar is his side's
+    (bar.js given the record's top_side) and whose bottom bar is the load's."""
     import numpy as np
-    step, key = ("w7", "live_bars") if live else ("w6", "bars")
-    if live:
+    live = kind != "watch"
+    step, key = {"watch": ("w6", "bars"), "live": ("w7", "live_bars"), "takeover": ("w8", "takeover_bars")}[kind]
+    if kind == "takeover":
+        demo, tick = TK_BAR
+        d = rewind_shot(c, [dm["id"] for dm in entry_demos(TAKEOVER)].index(demo) + 1, demo, tick, TAKEOVER)
+        entry = TAKEOVER
+        assert d["frame"]["live"] and d["frame"]["human"] == 1, \
+            f"({step}) {entry}/{demo}@{tick}: not the live game of the seat taken: {d['frame']['live']}, {d['frame']['human']}"
+    elif live:
         demo, tick = REWIND_BAR
         d = rewind_shot(c, [dm["id"] for dm in entry_demos(REWIND)].index(demo) + 1, demo, tick)
         entry = REWIND
@@ -3228,6 +3663,8 @@ def mods_bars(c, display, pack, out, row, live=False):
             f"({step}) {entry}/{demo}@{tick}: the live record shows no numbers: {d['frame']['bar']}"
         (out / f"{key}.num.json").write_text(json.dumps(d["frame"]["bar"]))
         num = [str(out / f"{key}.num.json")]
+    if kind == "takeover":
+        num.append(str(d["frame"]["top_side"]))
     r = subprocess.run(["node", str(TREE / "tools/wiki/barcheck.mjs"), "--compose", str(pack), str(d["ctx"]["side"]),
                         str(d["frame"]["colour"]), str(f["Wg"]), str(f["Hg"]), str(raw), *num],
                        capture_output=True, text=True, timeout=120)
@@ -3260,7 +3697,8 @@ def mods_bars(c, display, pack, out, row, live=False):
         assert bad == 0, f"({step}) {bad} of {ok.size} pixels of the {part} bar differ from bar.js on {pack.name}"
         said.append(f"{part} {ok.size} px")
     row[key] = ", ".join(said) + " equal to bar.js" + (f" (energy {d['frame']['bar']['e']:g}, metal {d['frame']['bar']['m']:g})"
-                                                         if live else "")
+                                                         if live else "") + \
+        (f", the top bar of layout side {d['frame']['top_side']}" if kind == "takeover" else "")
     print(f"wiki mods: ({step}) {entry}/{demo} at tick {tick} on {pack.name}, side {d['ctx']['side']}: the {row[key]}")
 
 
@@ -3353,8 +3791,10 @@ def mods_setup(tacompat, setup, dll, out):
         poll("b4")
         mods_bars(c, display, pack, out, row)
         poll("w6")
-        mods_bars(c, display, pack, out, row, live=True)
+        mods_bars(c, display, pack, out, row, "live")
         poll("w7")
+        mods_bars(c, display, pack, out, row, "takeover")
+        poll("w8")
         c.keys("esc")
         wait_dump(c, lambda d: not d["open"], "(w4) Esc did not close the window")
         time.sleep(2)
@@ -3399,7 +3839,7 @@ def mods_table(rows):
               f"the first mounts {[arc(m['archive']) for m in rep.get('mounts', [])][:4]}")
         print(f"   sidebar ({r.get('pack')}'s pack): the engine's {r.get('live')}; the layout {r.get('layout')}; "
               f"the stage {r.get('stage')}; the lock {r.get('lock')}; the frame's bars {r.get('bars')}; "
-              f"the live frame's {r.get('live_bars')}")
+              f"the live frame's {r.get('live_bars')}; the takeover's {r.get('takeover_bars')}")
         for st in rep.get("stages", []):
             srcs = "; ".join(f"{s['map']} <- {arc(s['from'])}" + ("" if s["ok"] else f" ({s['why']})")
                              for s in st.get("sources", []))
@@ -3496,8 +3936,8 @@ def offline_checks():
     assert not failed, f"the offline checks {', '.join(failed)} did not pass"
 
 
-GATE_MODES = ("sp", "page", "demos", "try", "asset", "stage3d", "units", "cursor", "watch", "rewind")
-GATE_SHOTS = {"demos", "stage3d", "units", "cursor", "watch", "rewind"}    # the modes that take --shots DIR
+GATE_MODES = ("sp", "page", "demos", "try", "asset", "stage3d", "units", "cursor", "watch", "rewind", "takeover")
+GATE_SHOTS = {"demos", "stage3d", "units", "cursor", "watch", "rewind", "takeover"}    # the modes that take --shots DIR
 GATE_RES = "1920x1080"                                  # each game lane's private display, and so its game's screen
 GATE_LANE_S = 3600                                      # a lane still running after this is hung, not slow: the
                                                         # slowest, units, takes some 750 s alone and 863 s at -j 6
@@ -3714,7 +4154,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("instance")
     p.add_argument("mode", choices=("sp", "page", "demos", "try", "recorded", "asset", "stage3d", "units", "cursor", "watch",
-                                    "rewind", "mp", "mods", "offline", "gate"))
+                                    "rewind", "takeover", "mp", "mods", "offline", "gate"))
     p.add_argument("--launch", action="store_true",
                    help="sp/recorded: launch on place-basic.json first, under the run lock")
     p.add_argument("--res", default="1920x1080", help="sp/recorded: the game's resolution")
@@ -3724,7 +4164,8 @@ def main():
     p.add_argument("--shots", type=Path, help="demos: grab each entry's demo mid-play, and the mockup's, into this folder; "
                                               "stage3d, units: the captures of the wiki's target and the presented frames; "
                                               "watch: each Watching demo's frame, four beside the mockup's; "
-                                              "rewind: four Rewind frames beside the mockup's")
+                                              "rewind: four Rewind frames beside the mockup's; "
+                                              "takeover: three Take over frames beside the mockup's")
     p.add_argument("--jobs", "-j", type=int, default=6, help="gate: the game lanes played at once")
     p.add_argument("--offline-jobs", type=int, default=8, help="gate: the offline checks run at once, 0 for none")
     p.add_argument("--modes", default=",".join(GATE_MODES), help="gate: the single-player modes, each a lane")
@@ -3767,6 +4208,8 @@ def main():
                     watch(c, a.shots, a.res)
                 elif a.mode == "rewind":
                     rewind(c, a.shots, a.res)
+                elif a.mode == "takeover":
+                    takeover(c, a.shots, a.res)
                 else:
                     recorded(c)
             finally:

@@ -31,7 +31,7 @@
 /* THE HIT MAP: every control a frame of the wiki draws -- the page's WIKI_MAXHOT, a frame:game
    stage's HUD's HUD_MAXHOT and Leave's question's four (tagpu_wikistate.c holds the two bounds to
    these numbers at build time) */
-#define TAGPU_CMD_WIKIHITS (160u + 128u + 4u)   /* TAGPU_CMD_WIKI is 10040 bytes (sizeof, the DLL's
+#define TAGPU_CMD_WIKIHITS (160u + 128u + 4u)   /* TAGPU_CMD_WIKI is 10056 bytes (sizeof, the DLL's
                                                    compiler): tagpu_packet.c's assert holds the
                                                    command record to its reserve                  */
 #define TAGPU_WIKI_FOLDS   32u      /* fold words: a bit for each of the tree's 1024 nodes the
@@ -151,6 +151,14 @@ typedef struct TAGPU_CMD_WIKI {
     uint32_t rep_serial;        /* TAGPU_PK_WIKI.rep_serial of the packet that frame drew: the
                                    replay its stage HUD, its run and its end are of; data,
                                    compared for equality only                                */
+    uint8_t  nlane;             /* the lanes that frame's stage HUD drew, their keys' lane:<k>
+                                   order: tagpu_wikiframe_lanes of the bounded record the HUD
+                                   was built from (tagpu_hudstate.c fills the game's lane_id
+                                   the same way); 0 on any other frame                       */
+    int32_t  lane_id[WIKIFRAME_FORKS];  /* the fork each lane showed. DATA: a lane's control
+                                   takes a place only below nlane, and the game thread acts on
+                                   an id only while it names a live fork of the replay
+                                   rep_serial names (tagpu_wiki.c drawn_lanes)               */
     float    u;                 /* the client pixels a wiki unit was on that frame            */
     float    scroll[TAGPU_WIKI_NSCROLL];     /* each panel's scroll as drawn, units           */
     float    scroll_max[TAGPU_WIKI_NSCROLL]; /* and its limit                                 */

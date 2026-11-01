@@ -944,7 +944,12 @@ void tagpu_wikistate_drawn(int drew, int cursor)
             s_map.hud_G = s_rec.G > s_rec.first ? s_rec.G : s_rec.first;
         }
     }
-    /* the replay this map's HUD, run and end are of: the serial of the packet they were drawn from */
+    /* the lanes this frame's stage HUD drew, from the bounded record its HUD state was built from
+       (tagpu_wikiframe_hudstate lists the same forks in the same order as lane:<k>), so a lane's
+       control names the fork the player saw on it */
+    if (s_frameOn && s_hudOn) s_map.nlane = (uint8_t)tagpu_wikiframe_lanes(&s_rec, s_map.lane_id);
+    /* the replay this map's HUD, run, end and lanes are of: the serial of the packet they were
+       drawn from */
     s_map.rep_serial = s_repSerial;
     s_drew = 1;
 }

@@ -698,7 +698,9 @@ static void try_release_all(int send)
    is the stage itself, so no stage HUD control, no part of Leave's question and nothing of the page
    lies over it, and the point is on the column or the map. The map is the held view's, the size every
    simulation of the entry has. In world units as the game simulation takes them, the column's rows
-   starting at the top bar's first (sim.js DZ). A Watching frame takes none: its viewer is not seat 0. */
+   starting at the top bar's first (sim.js DZ), given to the human seat (seat 0, or the seat a takeover
+   took). A watching frame takes none -- Watching's, and a takeover entry's before its takeover: its
+   viewer plays no seat (live_try). */
 static int live_world(int cx, int cy, double* wx, double* wz)
 {
     char key[TAGPU_WIKI_KEY];
@@ -1303,19 +1305,22 @@ static int replay_steps(int want)
    the replay it left, `left`, and the page offers Try it again. A live rewind that leaves idle takes no
    key or button of the world until it is idle again, and has let go of every one L held (its open,
    and Back to now's release), so the page holds none down either (wiki.js pressOut). A fork's time,
-   the press that makes it, is said: the lane's cost (wiki_regression.py rewind). */
+   the press that makes it -- a rewind's, or a takeover's, which turns a takeover replay live -- is
+   said: the lanes' cost (wiki_regression.py rewind, takeover). */
 static void replay_press(int control, int value)
 {
-    const int ntl = s_rep.ntl;
+    const int ntl = s_rep.ntl, was_live = s_rep.live;
     LARGE_INTEGER t0, t1;
     live_flush();
     QueryPerformanceCounter(&t0);
     tagpu_wikireplay_press(&s_rep, control, value);
     QueryPerformanceCounter(&t1);
-    if (s_rep.live && s_rep.ntl > ntl)
-        tagpu_logf("wiki: the rewind forked F%d at %d in %.3f ms", s_rep.tl[s_rep.selected].id,
-                   s_rep.tl[s_rep.selected].R, s_qpf.QuadPart > 0 ? (double)(t1.QuadPart - t0.QuadPart) * 1000.0 /
-                                                                     (double)s_qpf.QuadPart : 0.0);
+    if (s_rep.live && s_rep.ntl > ntl) {
+        const double ms = s_qpf.QuadPart > 0 ? (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)s_qpf.QuadPart : 0.0;
+        const WIKITIMELINE* f = &s_rep.tl[s_rep.selected];
+        if (was_live) tagpu_logf("wiki: the rewind forked F%d at %d in %.3f ms", f->id, f->R, ms);
+        else tagpu_logf("wiki: the takeover forked F%d at %d as seat %d in %.3f ms", f->id, f->R, s_rep.human, ms);
+    }
     if (s_rep.live && s_rep.rw != WIKI_RW_IDLE) {
         s_ndown = 0;
         s_downReal = 0;
@@ -1788,19 +1793,43 @@ static void check(void)
                ms_between(t0, t1));
 }
 
+/* THE LANES THE PLAYER SAW (TAGPU_CMD_WIKI nlane, lane_id), into `lane` (WIKIFRAME_FORKS ids): their
+   count, each place's fork, or -1 where the place names no live fork of the running replay.
+   THE ORDERING: the lanes, the run and rep_serial are written by the render thread in one
+   tagpu_wikistate_drawn, all from the bounded record of the one packet it drew, and reach this
+   thread whole, by value, in the command record tagpu_wiki_take copies; every caller first asks
+   frame_current, so they are the drawn frame's lanes of the replay running now. No new lock,
+   handshake or lifetime: the command record is the only way in. THE BOUND: tagpu_wiki_take holds
+   the count to WIKIFRAME_FORKS and each id to 1..RECR_TIMELINES - 1, and here an id counts only
+   while it names a live fork of this replay, so a list a frame old -- a deletion since -- costs a
+   lane's press that does nothing, never a press on a fork that is gone; and a lane's control acts
+   at its release only when the lanes then drawn name the same fork at the same place
+   (tagpu_hudinput.c held_lane, the press machine's rule), so a list that changed between the press
+   and the release never sends it to the fork that moved into the place. */
+static int drawn_lanes(int32_t* lane)
+{
+    int k;
+    for (k = 0; k < s_hit.nlane; k++) {
+        const int32_t id = s_hit.lane_id[k];
+        lane[k] = s_rep.tk && id > 0 && id < s_rep.ntl && s_rep.tl[id].live ? id : -1;
+    }
+    return s_hit.nlane;
+}
+
 /* A LEFT PRESS ON THE STAGE HUD OR ON LEAVE'S QUESTION (src WIKIHIT_HUD, _DIALOG) at client
    column `cx`: in Try it yourself on a replay, the press machine's (tagpu_wikiframe.h), whose output
    is a press of the replay's; in a demo it is taken and does nothing, the presses being the viewer's
    script's. A control that is not one of the replay's (the HUD's containers, uiscale, a row) is
    taken by the machine and does nothing, so no press here reaches the game or the real replay HUD:
-   these hits are the stage HUD's own, never tagpu_hudstate's. No sound (decision 9). */
+   these hits are the stage HUD's own, never tagpu_hudstate's. A lane's control takes the fork its
+   lane showed (drawn_lanes). No sound (decision 9). */
 static void frame_down(int src, const char* key, int cx)
 {
-    int c, v;
-    /* no lane is known to have been drawn: the command record carries none, so a lane's control is
-       taken and does nothing (tagpu_wikiframe.h, THE INDEXED CONTROLS) */
-    if (frame_try() && frame_current() && tagpu_wikiframe_press_down(&s_press, src, key, 0, track_tick(cx), NULL, 0, &c, &v))
-        replay_press(c, v);
+    int32_t lane[WIKIFRAME_FORKS];
+    int c, v, n;
+    if (!frame_try() || !frame_current()) return;
+    n = drawn_lanes(lane);
+    if (tagpu_wikiframe_press_down(&s_press, src, key, 0, track_tick(cx), lane, n, &c, &v)) replay_press(c, v);
 }
 
 /* the left button's release, wherever it is made: the control held is let go, acting when the
@@ -1810,7 +1839,8 @@ static void frame_down(int src, const char* key, int cx)
 static void frame_up(void)
 {
     char key[TAGPU_WIKI_KEY];
-    int cx, cy, src, c, v, T, on = 0;
+    int32_t lane[WIKIFRAME_FORKS];
+    int cx, cy, src, c, v, T, n, on = 0;
     if (!s_press.held[0]) return;
     if (!frame_try() || !frame_current()) {
         tagpu_wikiframe_press_init(&s_press);
@@ -1822,7 +1852,8 @@ static void frame_up(void)
         T = track_tick(cx);
     } else
         T = s_press.last;
-    if (tagpu_wikiframe_press_up(&s_press, on ? key : "", T, NULL, 0, &c, &v)) replay_press(c, v);
+    n = drawn_lanes(lane);
+    if (tagpu_wikiframe_press_up(&s_press, on ? key : "", T, lane, n, &c, &v)) replay_press(c, v);
 }
 
 /* A press of button `bit` at client point (cx, cy), engine point (gx, gy), from either path:
@@ -2077,7 +2108,7 @@ static float bounded(float v, float hi)
 void tagpu_wiki_take(const TAGPU_CMD_WIKI* c)
 {
     int i;
-    if (!c) { s_hit.n = 0; s_hit.drawn = 0; return; }
+    if (!c) { s_hit.n = 0; s_hit.drawn = 0; s_hit.nlane = 0; return; }
     s_hit = *c;
     if (s_hit.n > TAGPU_CMD_WIKIHITS) s_hit.n = TAGPU_CMD_WIKIHITS;
     s_hit.u = bounded(s_hit.u, 1000);
@@ -2086,6 +2117,9 @@ void tagpu_wiki_take(const TAGPU_CMD_WIKI* c)
     if (s_hit.hud_end < 0 || s_hit.hud_end > WIKI_GAME_END_MAX) s_hit.hud_end = 0;
     if (s_hit.hud_first < 0 || s_hit.hud_G < s_hit.hud_first || s_hit.hud_G > WIKI_GAME_END_MAX)
         s_hit.hud_first = s_hit.hud_G = 0;
+    if (s_hit.nlane > WIKIFRAME_FORKS) s_hit.nlane = WIKIFRAME_FORKS;
+    for (i = 0; i < WIKIFRAME_FORKS; i++)
+        if (i >= s_hit.nlane || s_hit.lane_id[i] < 1 || s_hit.lane_id[i] >= RECR_TIMELINES) s_hit.lane_id[i] = -1;
     for (i = 0; i < (int)TAGPU_WIKI_NSCROLL; i++) {
         s_hit.scroll_max[i] = bounded(s_hit.scroll_max[i], 1e6f);
         s_hit.scroll[i] = bounded(s_hit.scroll[i], s_hit.scroll_max[i]);
@@ -2194,17 +2228,26 @@ static void frame_json(FILE* f, const WIKIFRAMEREC* r)
     fprintf(f, ",\"live\":%d,\"rw\":%d,\"arm\":%d,\"first\":%d,\"G\":%d,\"now\":%d,\"last\":%d,\"armR\":%d,"
                "\"bar\":{\"e\":%.9g,\"m\":%.9g,\"ei\":%.9g,\"eo\":%.9g,\"mi\":%.9g,\"mo\":%.9g,\"emax\":%.9g,"
                "\"mmax\":%.9g,\"raw_e\":%.9g,\"raw_m\":%.9g},\"simcur\":%d,\"sim\":{\"x\":%.9g,\"z\":%.9g,"
-               "\"shape\":%d,\"age\":%d}}", r->live, r->rw, r->arm, (int)r->first, (int)r->G, (int)r->now, (int)r->last,
+               "\"shape\":%d,\"age\":%d}", r->live, r->rw, r->arm, (int)r->first, (int)r->G, (int)r->now, (int)r->last,
             (int)r->arm_R, r->bar.e, r->bar.m, r->bar.ei, r->bar.eo, r->bar.mi, r->bar.mo, r->bar.emax, r->bar.mmax,
             r->bar.raw_e, r->bar.raw_m, r->simcur, r->sim.x, r->sim.z, r->sim.shape, (int)r->sim.age);
+    fprintf(f, ",\"tk\":%d,\"pick\":%d,\"lanes\":%d,\"nfork\":%d,\"human\":%d,\"fork_max\":%d,\"tk_full\":%d,"
+               "\"chain_last\":%d,\"fill_to\":%d,\"pickR\":%d,\"pickEvict\":%d,\"fork\":[", r->tk, r->pick, r->lanes, r->nfork,
+            r->human, r->fork_max, r->tk_full, (int)r->chain_last, (int)r->fill_to, (int)r->pick_R, (int)r->pick_evict);
+    for (k = 0; k < r->nfork && k < WIKIFRAME_FORKS; k++)
+        fprintf(f, "%s{\"id\":%d,\"from\":%d,\"end\":%d,\"parent\":%d,\"seat\":%d,\"flags\":%d}", k ? "," : "",
+                (int)r->fork[k].id, (int)r->fork[k].from, (int)r->fork[k].end, (int)r->fork[k].parent, r->fork[k].seat,
+                r->fork[k].flags);
+    fprintf(f, "],\"top_side\":%d}", r->top_side);
 }
 
-/* A LIVE REPLAY'S STATE, for the lane (tools/wiki_regression.py rewind): the rewind, the arm, the
-   timelines and the past simulation as the replay's view gives them, and the world shown -- the past
-   simulation's while the past is shown, else the live one's -- as the lane reads it back: its tick,
-   the armed type, the units with their selection and build, the sites, the economy's mode, the keys
-   held and its column. Called after the fill, so the view taken here is read before any step can
-   free its simulation. */
+/* A LIVE REPLAY'S STATE, for the lanes (tools/wiki_regression.py rewind, takeover): the rewind, the
+   arm, the timelines and the past simulation as the replay's view gives them, the human seat, and
+   the world shown -- the past simulation's while the past is shown, else the live one's -- as the
+   human seat sees it (tagpu_wikisim_view_as) and the lane reads it back: its tick, the seat's armed
+   type, the units with their owners, raw selection flags (every seat's) and build, the seat's
+   sites, the economy's mode, the seat's keys held and its column. Called after the fill, so the
+   view taken here is read before any step can free its simulation. */
 static void live_json(FILE* f, const WIKIREPLAYVIEW* rv)
 {
     WIKISIM* g = rv->rw == WIKI_RW_PAST ? tagpu_wikireplay_past(&s_rep) : tagpu_wikireplay_game(&s_rep);
@@ -2213,21 +2256,21 @@ static void live_json(FILE* f, const WIKIREPLAYVIEW* rv)
     int i, n;
     fprintf(f, ",\"live\":{\"rw\":%d,\"G\":%d,\"first\":%d,\"last\":%d,\"now\":%d,\"arm\":%d,\"arm_R\":%d,"
                "\"arm_evict\":%d,\"drag_t\":%d,\"clash\":%d,\"nlogged\":%d,\"selected\":%d,\"full\":%d,\"back\":%d,"
-               "\"toast_evict\":%d,\"past\":", rv->rw, rv->G, rv->first, rv->last, rv->now, rv->arm, rv->arm_R, rv->arm_evict,
-            rv->drag_t, rv->clash, rv->nlogged, rv->selected, rv->full, rv->back, rv->toast_evict);
+               "\"toast_evict\":%d,\"human\":%d,\"past\":", rv->rw, rv->G, rv->first, rv->last, rv->now, rv->arm, rv->arm_R,
+            rv->arm_evict, rv->drag_t, rv->clash, rv->nlogged, rv->selected, rv->full, rv->back, rv->toast_evict, rv->human);
     if (rv->has_past) fprintf(f, "{\"tick\":%d,\"target\":%d,\"gen\":%d}", rv->past_tick, rv->past_target, rv->past_gen);
     else fputs("null", f);
     fprintf(f, ",\"timelines\":[");
     for (i = 0; i < rv->ntl && i < RECR_TIMELINES; i++)
-        fprintf(f, "%s{\"id\":%d,\"parent\":%d,\"R\":%d,\"last\":%d,\"live\":%d,\"used\":%d,\"mode\":%d,\"nlog\":%d}",
-                i ? "," : "", rv->tl[i].id, rv->tl[i].parent, rv->tl[i].R, rv->tl[i].last, rv->tl[i].live, rv->tl[i].used,
-                rv->tl[i].mode, rv->tl[i].nlog);
+        fprintf(f, "%s{\"id\":%d,\"parent\":%d,\"R\":%d,\"last\":%d,\"live\":%d,\"used\":%d,\"mode\":%d,\"nlog\":%d,"
+                   "\"seat\":%d}", i ? "," : "", rv->tl[i].id, rv->tl[i].parent, rv->tl[i].R, rv->tl[i].last, rv->tl[i].live,
+                rv->tl[i].used, rv->tl[i].mode, rv->tl[i].nlog, rv->tl[i].seat);
     fprintf(f, "],\"world\":");
     if (!g) {
         fputs("null}", f);
         return;
     }
-    v = tagpu_wikisim_view(g);
+    v = tagpu_wikisim_view_as(g, rv->human >= 0 ? rv->human : 0);
     en = g->entry;
     fprintf(f, "{\"tick\":%d,\"mode\":", g->tick);
     jstr(f, v->mode >= 0 && v->mode < en->ndef ? en->def[v->mode].name : "", 64);
@@ -2261,6 +2304,29 @@ static void live_json(FILE* f, const WIKIREPLAYVIEW* rv)
     } else
         fputs("null", f);
     fputs("}}", f);
+}
+
+/* A TAKEOVER REPLAY'S STATE, for the lane (tools/wiki_regression.py takeover): replay.js's view's
+   `tk` block in its names (tests/wikitest.c prints the same for simparity) -- the mode, the human
+   seat, the picker and its plan, the lanes, the armed fork, the selected timeline, its chain's last
+   and the fill, the rows' serial, the forks saved, the background walk and the walker's tick, the
+   takeover's warning, and the timelines with their seats -- in either mode. */
+static void tk_json(FILE* f, const WIKIREPLAYVIEW* rv)
+{
+    static const char* const PICK[] = { "closed", "asked", "seeking", "open" };
+    int i;
+    fprintf(f, ",\"tk\":{\"mode\":\"%s\",\"human\":%d,\"pick\":\"%s\",\"pickR\":%d,\"pickEvict\":%d,\"pickParent\":%d,"
+               "\"pickTl\":%d,\"pickSerial\":%d,\"lanes\":%d,\"armed\":%d,\"selected\":%d,\"chainLast\":%d,\"fillTo\":%d,"
+               "\"serial\":%d,\"saved\":[", rv->tk_mode == WIKI_TK_LIVE ? "live" : "watch", rv->human,
+            PICK[rv->pick >= 0 && rv->pick <= WIKI_PICKER_OPEN ? rv->pick : 0], rv->pick_R, rv->pick_evict, rv->pick_parent,
+            rv->pick_tl, rv->pick_serial, rv->lanes, rv->armed, rv->selected, rv->chain_last, rv->fill_to, rv->serial);
+    for (i = 0; i < rv->nsaved && i < RECR_TIMELINES; i++) fprintf(f, "%s%d", i ? "," : "", rv->saved[i]);
+    fprintf(f, "],\"bg\":%d,\"walker\":%d,\"tkFull\":%d,\"timelines\":[", rv->bg, rv->walker_tick, rv->tk_full);
+    for (i = 0; i < rv->ntl && i < RECR_TIMELINES; i++)
+        fprintf(f, "%s{\"id\":%d,\"parent\":%d,\"R\":%d,\"last\":%d,\"live\":%d,\"used\":%d,\"mode\":%d,\"seat\":%d}",
+                i ? "," : "", rv->tl[i].id, rv->tl[i].parent, rv->tl[i].R, rv->tl[i].last, rv->tl[i].live, rv->tl[i].used,
+                rv->tl[i].mode, rv->tl[i].seat);
+    fputs("]}", f);
 }
 
 /* THE STATE, FOR THE TESTS (tools/wiki_regression.py): written when tagpu_wiki.dump appears, after
@@ -2320,6 +2386,7 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
                 rv.target, rv.gen, rv.walked, rv.left, s_repTry);
         jstr(f, s_press.held, sizeof s_press.held);
         if (rv.live) live_json(f, &rv);
+        if (rv.tk) tk_json(f, &rv);
         fprintf(f, "},\"try_world\":%d,\"frame\":", w->try_world);
         frame_json(f, &w->frame);
     }
@@ -2386,8 +2453,10 @@ static void dump(const TAGPU_PK_WIKI* w, uint32_t carried)
                 b->x0, b->y0, b->x1, b->y1, b->thumb_y, b->thumb_h, b->per_px);
     }
     fprintf(f, "],\"drawn\":%u,\"drawn_open\":%u,\"drawn_entry\":%d,\"drawn_frame\":%u,\"hud_run\":[%d,%d,%ld],"
-               "\"hud_span\":[%ld,%ld],\"hits\":[", (unsigned)s_hit.drawn, (unsigned)s_hit.open, (int)s_hit.entry,
+               "\"hud_span\":[%ld,%ld],\"hud_lanes\":[", (unsigned)s_hit.drawn, (unsigned)s_hit.open, (int)s_hit.entry,
             (unsigned)s_hit.frame, s_hit.hud_x0, s_hit.hud_x1, (long)s_hit.hud_end, (long)s_hit.hud_first, (long)s_hit.hud_G);
+    for (i = 0; i < s_hit.nlane && i < WIKIFRAME_FORKS; i++) fprintf(f, "%s%ld", i ? "," : "", (long)s_hit.lane_id[i]);
+    fprintf(f, "],\"hits\":[");
     for (i = 0; i < s_hit.n; i++) {
         const TAGPU_CMD_WIKIHIT* h = &s_hit.hit[i];
         fprintf(f, "%s{\"key\":", i ? "," : "");
