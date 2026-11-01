@@ -192,21 +192,28 @@ it on its own.
   commander builds the solar and the ARMCK the extractor, each build whole on one tick (select,
   arm, place).
 - **The release drops the trip in flight.** Back to now can land while seat 0's script is inside
-  a build trip; the release empties the selection the trip was planned from, so the rest of the
-  trip would press the MAIN2 the column now shows and lock the game. The release therefore drops
-  every generated input not yet fed (`trip_next = ntrip_in`, `genNext = gen.length`) with the
-  held state, and the fork drops a timeline's trips only by calling it, so one place does it. A
-  release costs the game at most the one order in hand: a trip it cuts off, or a building armed
-  and not yet placed.
-- **A live build selects its builder on its own tick** (the live data rule, a load refusal:
-  `tagpu_wikidata.c` `live_builds`, `sim.js` `checkLiveBuilds`). In a live entry each build
-  naming a type, in seat 0's game script and in every fork part, has on its own tick and before
-  it the click that selects its builder: a move, then select pressed, then select released. It
-  holds **by construction**: the release runs only between two ticks (Back to now and the fork
-  call it between steps, and a re-simulation applies a logged release at its tick before the
-  step), so it cannot fall between that click and the build. Reselecting before each build on an
-  earlier tick did not close it: a release could still land between the select and the build.
-  The refusal names the demo, the fork part and the tick.
+  a build or reclaim trip; the release empties the selection the trip was planned from, so the
+  rest of the trip would press the MAIN2 the column now shows and lock the game. The release
+  therefore drops every generated input not yet fed (`trip_next = ntrip_in`, `genNext =
+  gen.length`) with the held state, and the fork drops a timeline's trips only by calling it, so
+  one place does it. A release costs the game at most the one order in hand: a trip it cuts off,
+  or a building or reclaim armed and not yet used.
+- **A live build or reclaim selects its unit on its own tick** (the live data rule, a load
+  refusal: `tagpu_wikidata.c` `live_orders`, `sim.js` `checkLiveOrders`). In a live entry each
+  build naming a type and each reclaim, in seat 0's game script and in every fork part, has on
+  its own tick and before it the click that selects its builder or reclaimer: a move, then select
+  pressed, then select released. It holds **by construction**: the release runs only between two
+  ticks (Back to now and the fork call it between steps, and a re-simulation applies a logged
+  release at its tick before the step), so it cannot fall between that click and the order.
+  Reselecting before each order on an earlier tick does not close it: a release can still land
+  between the select and the order, and the order then finds no RECLAIM or build button on MAIN2
+  and stops the game. **A live entry has no pick**: its popup stands only while reclaim is armed,
+  and with the sidebar's trips a reclaim arms only when its trip clicks RECLAIM, ticks after the
+  reclaim's own, while the trips' data rule keeps every other input out of the reclaim's tick
+  after it and out of its 90-tick trip. A pick is therefore always on a later tick than its
+  reclaim, a release between them closes the popup, and the pick trip stops the game; the loader
+  is not given the layout, so it refuses a pick whether or not the sidebar would be on. The
+  refusal names the demo, the fork part and the tick.
 - **The sweep proves it.** `simcheck.mjs`'s release sweep plays each live entry's distinct games
   with the release after every tick from 0 to the script's last input, each to its end, and fails
   on a lock, a starved pass, a kill that found no unit or a stalled wait: 2266 releases over

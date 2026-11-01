@@ -100,8 +100,9 @@ held back so that the open and Back to now can always log what they let go. **Th
 without acting, empties the selection and the armed mode, and drops every trip input not yet fed,
 as the game's rebuild leaves the player (MEASURED 2026-11-01, [the replay
 plan](../ingame-wiki-replay-plan.html), *What the game's live rewind leaves*); it runs only between
-two ticks, and the loader's live data rule (`live_builds`) puts each build's select on the build's
-own tick, so it can never split them. **The view by mode** (`tagpu_wikiframe_view`): `WIKIFRAME_WATCH`
+two ticks, and the loader's live data rule (`live_orders`) puts each build's and each reclaim's
+select on the order's own tick, so it can never split them, and refuses a pick, whose popup a
+release closes. **The view by mode** (`tagpu_wikiframe_view`): `WIKIFRAME_WATCH`
 for a replay, the watcher's; `WIKIFRAME_PLAYER` while the rewind is idle or open, the live
 simulation's view as it made it, the armed ghost only while the simulation's cursor is the one
 drawn; `WIKIFRAME_PAST` while the past is shown, P's world and fog under L's column with nothing

@@ -1480,8 +1480,9 @@ it runs for a replay entry.
   selected and nothing armed, the column routed to MAIN2 (MEASURED, the plan's *What the game's live
   rewind leaves*); the spacing and the sweep's kind kept; and every generated trip input not yet fed
   dropped, so a release costs the game at most the one order in hand. The fork calls the same
-  release. The live data rule (*The data format*) keeps each build's select on the build's own tick,
-  which a release between two ticks cannot split.
+  release. The live data rule (*The data format*) keeps each build's and each reclaim's select on
+  the order's own tick, which a release between two ticks cannot split, and refuses a pick, whose
+  popup a release closes.
 - **Try it's world input after a fork** (`tagpu_wikireplay_input`, `R.input`) is **logged first**
   and then applied, so every fork can be made again exactly: only after a fork; every kind while the
   rewind is idle, a move alone while it is open, none in the past; and only while the logs can hold
@@ -1887,14 +1888,18 @@ A node is a category (`title`, `children`) or a leaf (`entry`, the id of `entrie
       `parent`, fails the replay, and so does a part the fork refuses (`tagpu_wikisim_fork`): one
       that presses a held button or lets go of one that is up, starting from nothing held, or breaks
       the trip's rule.
-    - **the live data rule**: each build naming a type, in the game script and in every part, has on
-      its own tick and before it -- by tick, then file order, and within one input its move, then
-      its press, then its release -- the click that selects its builder: a move, then `select`
-      pressed, then `select` released (`tagpu_wikidata.c` `live_builds`, `sim.js`
-      `checkLiveBuilds`). The refusal names the demo, the fork part and the tick. **Why**: the
-      release can come between any two ticks and empties the selection a build is made from; it runs
-      only between two ticks, so it cannot fall between a click and a build on one tick. Whether the
-      click lands on a builder is the world's, which `simcheck.mjs`'s release sweep plays out.
+    - **the live data rule**: each build naming a type and each reclaim, in the game script and in
+      every part, has on its own tick and before it -- by tick, then file order, and within one
+      input its move, then its press, then its release -- the click that selects its builder or
+      reclaimer: a move, then `select` pressed, then `select` released; and no input is a `pick`
+      (`tagpu_wikidata.c` `live_orders`, `sim.js` `checkLiveOrders`). The refusal names the demo,
+      the fork part and the tick. **Why**: the release can come between any two ticks, empties the
+      selection an order is given from and disarms reclaim; it runs only between two ticks, so it
+      cannot fall between a click and an order on one tick. A pick cannot share its reclaim's tick:
+      the popup it clicks opens only when the reclaim's trip clicks RECLAIM, and the trips' rule
+      keeps every other input out of that trip, so a release could always close the popup first.
+      Whether the click lands on a builder or a reclaimer is the world's, which `simcheck.mjs`'s
+      release sweep plays out.
 - **The ground's grid**: the map's size and every fog rectangle are whole tiles, even numbers of
   cells, because the stage's ground is drawn in the map's 32-unit tiles and its fog in the engine's
   32-unit blocks. A scene has no broad metal rectangle (one that touches both opposite edges of the

@@ -5226,14 +5226,15 @@ refused:
    building or reclaim goes, so the column routes to MAIN2; the spacing and the sweep's kind,
    settings rather than what the measurement read, stay.
 
-   Every generated input not yet fed goes too: the rest of a build, reclaim or pick trip the
-   release cuts off. The trip was planned from the selection the release empties, so what is left
-   of it would press the column MAIN2 now shows; dropped, the release costs the game at most the one
-   order in hand, a trip it cuts off or a building armed and not yet placed, as a player whose click
-   is cut off loses their selection and the half-made order with it. This is the one place a
-   timeline's trips are dropped: the fork drops them by calling this. A data input is never
-   dropped, and THE LIVE DATA RULE (tagpu_wikidata.c live_builds) puts the select of a build's
-   builder on the build's own tick, which a release, between two ticks, cannot split. */
+   Every generated input not yet fed goes too: the rest of a build or reclaim trip the release cuts
+   off (a live entry has no pick). The trip was planned from the selection the release empties, so
+   what is left of it would press the column MAIN2 now shows; dropped, the release costs the game at
+   most the one order in hand, a trip it cuts off or a building or reclaim armed and not yet used, as
+   a player whose click is cut off loses their selection and the half-made order with it. This is
+   the one place a timeline's trips are dropped: the fork drops them by calling this. A data input
+   is never dropped, and THE LIVE DATA RULE (tagpu_wikidata.c live_orders) puts the select of a
+   build's builder and of a reclaim's reclaimer on the order's own tick, which a release, between
+   two ticks, cannot split, and keeps out of a live entry the pick, whose popup a release closes. */
 void tagpu_wikisim_release(WIKISIM* s)
 {
     int k;
@@ -5259,8 +5260,8 @@ void tagpu_wikisim_release(WIKISIM* s)
    comes before the first write, so a refused fork leaves the sim as it was. The release (above)
    drops the trips' recorded future, the new script replaces the script's, and the release leaves
    the player as the game's fork does: an authored part begins with the selection it needs, on the
-   tick of each build it makes (THE LIVE DATA RULE). The other seats' inputs are empty under
-   decision 16's data rule; T1/P1 carries the parent's seat-k inputs of tick >= R here. */
+   tick of each build or reclaim it makes (THE LIVE DATA RULE). The other seats' inputs are empty
+   under decision 16's data rule; T1/P1 carries the parent's seat-k inputs of tick >= R here. */
 int tagpu_wikisim_fork(WIKISIM* s, int R, const WIKIINPUT* in, int n, int econ_mode, char* err, size_t errn)
 {
     const char* id = s->demo_id ? s->demo_id : "?";

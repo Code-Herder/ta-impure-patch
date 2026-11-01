@@ -85,15 +85,21 @@ static int cast_of(const char* s)
 
 /* A number as JS's String() writes it, for messages that quote sim.js's: the shortest %g that
    reads back as the same double, which is the digits JS gives for every value a message here
-   quotes (ticks, small integers and their fractions). */
+   quotes (ticks, small integers and their fractions). %g turns to an exponent once the decimal
+   exponent reaches the precision (1000 at one digit is "1e+03"), where JS writes the digits out for
+   every exponent from -6 to 20, so such a value is written again in fixed notation with the same
+   significant digits. */
 static const char* jsnum(char* out, size_t n, double v)
 {
-    int p;
+    const char* e;
+    int p, x;
     for (p = 1; p < 17; p++) {
         snprintf(out, n, "%.*g", p, v);
-        if (strtod(out, NULL) == v) return out;
+        if (strtod(out, NULL) == v) break;
     }
-    snprintf(out, n, "%.17g", v);
+    if (p == 17) snprintf(out, n, "%.17g", v);
+    if ((e = strchr(out, 'e')) != NULL && (x = (int)strtol(e + 1, NULL, 10)) >= -6 && x <= 20)
+        snprintf(out, n, "%.*f", p - 1 - x > 0 ? p - 1 - x : 0, v);
     return out;
 }
 
@@ -671,25 +677,41 @@ static int scene_has_id(const WIKIENTRY* e, const WIKIDEMO* d, const char* id)
     return 0;
 }
 
-/* THE LIVE DATA RULE (sim.js checkLiveBuilds): in a live entry the release
+/* THE LIVE DATA RULE (sim.js checkLiveOrders): in a live entry the release
    (tagpu_wikisim_release) can come between any two ticks of seat 0's game script and of a fork's
-   part, and it empties the selection a build is made from. So each build naming a type has, on its
-   own tick and before it in the order the inputs are fed (by tick, then file order; within one
-   input its move, then its press, then its release, as the sim's input() reads them), the click
-   that selects its builder: a move aiming the cursor, then select pressed, then select released.
-   The release runs only between two ticks, so it cannot fall between that click and the build; the
-   move is on the tick too because a trip the release cuts off leaves the cursor wherever it was.
-   Whether the click lands on a builder is the world's, which simcheck.mjs's release sweep plays
-   out. `part` is the fork part's id, 0 for the game script. */
-static int live_builds(R* r, const WIKIINPUT* in, int n, int part)
+   part, and it empties the selection an order is given from and disarms reclaim. So each build
+   naming a type and each reclaim has, on its own tick and before it in the order the inputs are
+   fed (by tick, then file order; within one input its move, then its press, then its release, as
+   the sim's input() reads them), the click that selects its builder or reclaimer: a move aiming the
+   cursor, then select pressed, then select released. The release runs only between two ticks, so
+   it cannot fall between that click and the order; the move is on the tick too because a trip the
+   release cuts off leaves the cursor wherever it was. Whether the click lands on a builder or a
+   reclaimer is the world's, which simcheck.mjs's release sweep plays out.
+   A live entry has no pick: the popup it clicks stands only while reclaim is armed, and with the
+   sidebar's trips a reclaim arms only when its trip clicks RECLAIM, ticks after the reclaim's own,
+   while tagpu_wikidata_trips keeps every other input out of the reclaim's tick after it and out of
+   its WIKI_TRIP ticks; so a pick is always on a later tick than its reclaim, and a release between
+   the two closes the popup the pick needs (pick_trip then stops the demo). Whether the sidebar is
+   on is the layout's, which the loader is not given, so a pick is refused whatever. `part` is the
+   fork part's id, 0 for the game script. */
+static int live_orders(R* r, const WIKIINPUT* in, int n, int part)
 {
     int i, j;
     for (i = 0; i < n; i++) {
         /* step: 1 the cursor aimed, 2 then select pressed, 3 then released, over the inputs fed
-           before the build */
+           before the order */
         int step = 0;
-        char why[224], num[32];
-        if (!(in[i].has & WIKI_IN_BUILD) || in[i].build < 0) continue;
+        char why[256], num[32], where[48];
+        const char* what = (in[i].has & WIKI_IN_BUILD) && in[i].build >= 0 ? "build"
+                         : (in[i].has & WIKI_IN_RECLAIM) ? "reclaim" : NULL;
+        where[0] = 0;
+        if (part) snprintf(where, sizeof where, "the fork part %d: ", part);
+        if (in[i].has & WIKI_IN_PICK) {
+            snprintf(why, sizeof why, "%sthe pick at tick %s: a live entry has no pick, since the popup it clicks opens on a "
+                     "later tick than its reclaim and a release between them closes it", where, jsnum(num, sizeof num, in[i].at));
+            return refuse(r, why, NULL);
+        }
+        if (!what) continue;
         for (j = 0; j < i; j++) {
             if (in[j].at != in[i].at) continue;
             if ((in[j].has & WIKI_IN_MOVE) && step < 3) step = 1;
@@ -697,12 +719,9 @@ static int live_builds(R* r, const WIKIINPUT* in, int n, int part)
             if (in[j].up == WIKI_ACT_SELECT && step == 2) step = 3;
         }
         if (step == 3) continue;
-        if (part)
-            snprintf(why, sizeof why, "the fork part %d: the build at tick %s has no click selecting its builder on its own tick "
-                     "(a move, then select pressed and released), which a live entry's build needs", part, jsnum(num, sizeof num, in[i].at));
-        else
-            snprintf(why, sizeof why, "the build at tick %s has no click selecting its builder on its own tick "
-                     "(a move, then select pressed and released), which a live entry's build needs", jsnum(num, sizeof num, in[i].at));
+        snprintf(why, sizeof why, "%sthe %s at tick %s has no click selecting its %s on its own tick "
+                 "(a move, then select pressed and released), which a live entry's %s needs", where, what,
+                 jsnum(num, sizeof num, in[i].at), what[0] == 'b' ? "builder" : "reclaimer", what);
         return refuse(r, why, NULL);
     }
     return 1;
@@ -711,11 +730,11 @@ static int live_builds(R* r, const WIKIINPUT* in, int n, int part)
 /* A GAME ENTRY'S DEMO'S GAME, sim.js checkGame: {end, inputs, sidebar} and no other key; end an
    integer 1..WIKI_GAME_END_MAX, sidebar a boolean; each input a game input (input), each kill of a
    unit of the merged scene by its explicit id, once, at most WIKI_GAME_KILLS, at or before the end;
-   on a live entry, each build after the click selecting its builder (THE LIVE DATA RULE,
-   live_builds). THE BOUND the game simulation's features rest on: no feature of the merged scene
-   takes a unit's id (its id, or f<k + 1> when it has none, sim.js's naming), since a unit's wreck
-   takes the unit's, and the merged scene's features and the kills together are at most
-   WIKI_FEATS_MAX. */
+   on a live entry, each build and reclaim after the click selecting its builder or reclaimer, and
+   no pick (THE LIVE DATA RULE, live_orders). THE BOUND the game simulation's features rest on: no
+   feature of the merged scene takes a unit's id (its id, or f<k + 1> when it has none, sim.js's
+   naming), since a unit's wreck takes the unit's, and the merged scene's features and the kills
+   together are at most WIKI_FEATS_MAX. */
 static int game(R* r, const TJV* v, WIKIDEMO* d)
 {
     const TJV *c, *k, *inputs = tj_get(v, "inputs");
@@ -759,7 +778,7 @@ static int game(R* r, const TJV* v, WIKIDEMO* d)
         if (!(in->at <= g->end)) return refuse(r, "a kill is after the game's end", NULL);
         kills++;
     }
-    if (e->live && !live_builds(r, g->input, g->ninput, 0)) return 0;
+    if (e->live && !live_orders(r, g->input, g->ninput, 0)) return 0;
     if (n + kills > WIKI_FEATS_MAX) return refuse(r, "the scene's features and the kills pass 256", NULL);
     return 1;
 }
@@ -855,8 +874,8 @@ static int viewer_order(R* r, const WIKIDEMO* d)
 /* A LIVE DEMO'S FORK PARTS (sim.js checkGame, WIKIFORK's rules): a list of at most WIKI_DEMO_FORKS
    parts, each exactly {id, from, parent, inputs}; each input a game input (input), at a tick
    from..end, a kill of a unit of the merged scene by its explicit id, once in the part, at most
-   WIKI_GAME_KILLS; each build after the click selecting its builder (THE LIVE DATA RULE,
-   live_builds). THE BOUND the game simulation's features rest on, over the parts too: the merged
+   WIKI_GAME_KILLS; each build and reclaim after the click selecting its builder or reclaimer, and
+   no pick (THE LIVE DATA RULE, live_orders). THE BOUND the game simulation's features rest on, over the parts too: the merged
    scene's features, the game script's kills and every part's together are at most WIKI_FEATS_MAX
    (tagpu_wikisim_fork holds a fork to the same at run time). */
 static int forks(R* r, const TJV* v, WIKIDEMO* d)
@@ -894,7 +913,7 @@ static int forks(R* r, const TJV* v, WIKIDEMO* d)
             if (partkills == WIKI_GAME_KILLS) return refuse(r, "a fork part has more than 64 kills", NULL);
             partkills++;
         }
-        if (!live_builds(r, f->input, f->ninput, f->id)) return 0;
+        if (!live_orders(r, f->input, f->ninput, f->id)) return 0;
         kills += partkills;
     }
     for (k = 0; k < 2; k++) n += sc[k]->nfeat;

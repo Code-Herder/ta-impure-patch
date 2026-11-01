@@ -550,18 +550,27 @@ const WikiSim = (() => {
      that fails it. */
   const FRAME_BAR = 32;
   const frameFits = (w, h) => 3 * (SIDE_W + CELL * w) >= 4 * (CELL * Math.max(h, 2 * Math.ceil(SIDE_ROWS / (2 * CELL))) + 2 * FRAME_BAR);
-  /* THE LIVE DATA RULE (tagpu_wikidata.c live_builds): in a live entry the release (sim.release) can come between any
-     two ticks of seat 0's game script and of a fork's part, and it empties the selection a build is made from. So
-     each `build` naming a type has, on its own tick and before it in the order the inputs are fed (by tick, then file
-     order; within one input its move, then its press, then its release, as input() reads them), the click that
-     selects its builder: a `move` aiming the cursor, then `select` pressed, then `select` released. The release runs
-     only between two ticks, so it cannot fall between that click and the build; the move is on the tick too because
-     a trip the release cuts off leaves the cursor wherever it was. Whether the click lands on a builder is the
-     world's, which simcheck's release sweep plays out. `w` names the demo, or the demo and the fork part. */
-  function checkLiveBuilds(w, inputs) {
+  /* THE LIVE DATA RULE (tagpu_wikidata.c live_orders): in a live entry the release (sim.release) can come between any
+     two ticks of seat 0's game script and of a fork's part, and it empties the selection an order is given from and
+     disarms reclaim. So each `build` naming a type and each `reclaim` has, on its own tick and before it in the order
+     the inputs are fed (by tick, then file order; within one input its move, then its press, then its release, as
+     input() reads them), the click that selects its builder or reclaimer: a `move` aiming the cursor, then `select`
+     pressed, then `select` released. The release runs only between two ticks, so it cannot fall between that click
+     and the order; the move is on the tick too because a trip the release cuts off leaves the cursor wherever it was.
+     Whether the click lands on a builder or a reclaimer is the world's, which simcheck's release sweep plays out.
+     A live entry has no `pick`: the popup it clicks stands only while reclaim is armed, and with the sidebar's trips a
+     reclaim arms only when its trip clicks RECLAIM, ticks after the reclaim's own, while checkTrips keeps every other
+     input out of the reclaim's tick after it and out of its TRIP ticks; so a pick is always on a later tick than its
+     reclaim, and a release between the two closes the popup the pick needs (pickTrip then stops the demo). Whether
+     the sidebar is on is the layout's, which checkGame is not given, so a pick is refused whatever. `w` names the
+     demo, or the demo and the fork part. */
+  function checkLiveOrders(w, inputs) {
     inputs.forEach((e, i) => {
-      if (!(typeof e.build === 'string' && e.build)) return;
-      // step: 1 the cursor aimed, 2 then select pressed, 3 then released, over the inputs fed before the build
+      if ('pick' in e) throw new Error(`${w}: the pick at tick ${e.at}: a live entry has no pick, since the popup it ` +
+        'clicks opens on a later tick than its reclaim and a release between them closes it');
+      const what = typeof e.build === 'string' && e.build ? 'build' : 'reclaim' in e ? 'reclaim' : null;
+      if (!what) return;
+      // step: 1 the cursor aimed, 2 then select pressed, 3 then released, over the inputs fed before the order
       let step = 0;
       for (let j = 0; j < i; j++) {
         const f = inputs[j];
@@ -570,8 +579,9 @@ const WikiSim = (() => {
         if (f.down === 'select' && step === 1) step = 2;
         if (f.up === 'select' && step === 2) step = 3;
       }
-      if (step < 3) throw new Error(`${w}: the build at tick ${e.at} has no click selecting its builder on its own tick ` +
-        '(a move, then select pressed and released), which a live entry\'s build needs');
+      if (step < 3) throw new Error(`${w}: the ${what} at tick ${e.at} has no click selecting its ` +
+        `${what === 'build' ? 'builder' : 'reclaimer'} on its own tick (a move, then select pressed and released), ` +
+        `which a live entry's ${what} needs`);
     });
   }
   function checkGame(entry, demo) {
@@ -629,7 +639,7 @@ const WikiSim = (() => {
       if (!(e.at <= g.end)) throw new Error(`${w}: the kill is after the game's end`);
       killed.add(e.kill);
     }
-    if (live) checkLiveBuilds(at, g.inputs);
+    if (live) checkLiveOrders(at, g.inputs);
     let partKills = 0;
     if ('forks' in demo) {
       const F = demo.forks, partIds = [];
@@ -667,7 +677,7 @@ const WikiSim = (() => {
             throw new Error(`${v}: a move is not two numbers`);
           if (!key(e.down) || !key(e.up)) throw new Error(`${v}: no key ${key(e.down) ? e.up : e.down}`);
         }
-        checkLiveBuilds(w, p.inputs);
+        checkLiveOrders(w, p.inputs);
         partKills += kills.size;
       }
     }
@@ -3130,13 +3140,14 @@ const WikiSim = (() => {
        empties and the armed building or reclaim goes, so the column routes to MAIN2; the spacing and the sweep's kind,
        settings rather than what the measurement read, stay.
 
-       Every generated input not yet fed goes too: the rest of a build, reclaim or pick trip the release cuts off. The
-       trip was planned from the selection the release empties, so what is left of it would press the column MAIN2 now
-       shows; dropped, the release costs the game at most the one order in hand, a trip it cuts off or a building armed
-       and not yet placed, as a player whose click is cut off loses their selection and the half-made order with it.
-       This is the one place a timeline's trips are dropped: the fork drops them by calling this. A data input is never
-       dropped, and THE LIVE DATA RULE (checkLiveBuilds) puts the select of a build's builder on the build's own tick,
-       which a release, between two ticks, cannot split. */
+       Every generated input not yet fed goes too: the rest of a build or reclaim trip the release cuts off (a live
+       entry has no pick). The trip was planned from the selection the release empties, so what is left of it would
+       press the column MAIN2 now shows; dropped, the release costs the game at most the one order in hand, a trip it
+       cuts off or a building or reclaim armed and not yet used, as a player whose click is cut off loses their
+       selection and the half-made order with it. This is the one place a timeline's trips are dropped: the fork drops
+       them by calling this. A data input is never dropped, and THE LIVE DATA RULE (checkLiveOrders) puts the select of
+       a build's builder and of a reclaim's reclaimer on the order's own tick, which a release, between two ticks,
+       cannot split, and keeps out of a live entry the pick, whose popup a release closes. */
     function letGo() {
       genNext = gen.length;
       st.held = new Set(); st.drag = null; st.gesture = null; st.place = null; st.shiftPlaced = false; st.rg = null;
@@ -3159,8 +3170,8 @@ const WikiSim = (() => {
        <= t, so every input not yet fed has its tick >= R and is the recorded future the fork replaces: the script's
        inputs by its new script, the trips' generated ones by the release, which drops them. The release comes before
        the new script is installed, as the game's fork leaves the player: an authored part begins with the selection
-       it needs, on the tick of each build it makes (THE LIVE DATA RULE, checkLiveBuilds). The other seats' inputs are
-       empty under decision 16's data rule; T1/P1 carries the parent's seat-k inputs of tick >= R here. */
+       it needs, on the tick of each build or reclaim it makes (THE LIVE DATA RULE, checkLiveOrders). The other seats'
+       inputs are empty under decision 16's data rule; T1/P1 carries the parent's seat-k inputs of tick >= R here. */
     if (GAME) sim.fork = (R, inputs, mode) => {
       const at = `demo ${demo.id}: the fork at tick ${R}`;
       if (sim.tick !== R - 1) throw new Error(`${at}: the game stands at tick ${sim.tick}`);

@@ -855,7 +855,8 @@ int tagpu_wikisim_fork(WIKISIM* s, int R, const WIKIINPUT* in, int n, int econ_m
    button held, no drag, no placement or reclaim gesture, no gadget captured, all let go without
    acting; nothing selected and nothing armed, the column routed to MAIN2; the spacing and the
    sweep's kind kept; and every generated (trip) input not yet fed dropped, so a release costs the
-   game at most the one order in hand, a trip it cuts off or a building armed and not yet placed.
+   game at most the one order in hand, a trip it cuts off or a building or reclaim armed and not
+   yet used (THE LIVE DATA RULE, tagpu_wikidata.c live_orders, keeps a live entry's orders so).
    The fork calls it, and the replay layer at Back to now. */
 void tagpu_wikisim_release(WIKISIM* s);
 

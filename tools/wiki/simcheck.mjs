@@ -1494,8 +1494,9 @@ function stallClaims(entry, d, layout, ctx, ok) {
 /* THE RELEASE SWEEP, a live entry's game (rewind-spec.md section 5.2; sim.js THE RELEASE and THE LIVE DATA RULE):
    Back to now's release between tick r and r + 1, for every r from 0 to the game script's last input, then the
    script played on to the game's end, which it must reach without a lock, a starved pass, a kill that found no unit
-   or a stalled wait. The release drops the trip it cuts off and every build's builder is selected on the build's own
-   tick, so a release costs the game at most that one order; this plays every such cost out, the economy's included,
+   or a stalled wait. The release drops the trip it cuts off, every build's builder and every reclaim's reclaimer is
+   selected on the order's own tick and a live entry has no pick, so a release costs the game at most that one order;
+   this plays every such cost out, the economy's included,
    rather than arguing it. Each r is a fresh game, so the sweep costs (last input + 1) games: about 2300 for the
    rewind entry's four distinct games, 20 s a context. It runs in every context without the units' scripts, which
    reach the game only through a builder's INBUILDSTANCE gate (sim.js stance); with them a game costs about 75 times

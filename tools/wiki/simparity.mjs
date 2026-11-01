@@ -941,11 +941,11 @@ function gameRefusalCases(game, page) {
   for (const c of ['rewind', 'live_play', 'live_now']) replay(`a replay demo pressing ${c}`, 'refused', [{ at: 10, hud: c }]);
 
   /* A LIVE ENTRY (sim.js checkGame's live rule, checkViewer's two sets, the fork parts' rules, THE LIVE DATA RULE;
-     tagpu_wikidata.c's entry, viewer_input, forks and live_builds): played as a game, which checks the viewer's script
-     and the parts too. The game script turned live has each build after a click on the commander's place on its
-     tick, as the live rule asks. */
+     tagpu_wikidata.c's entry, viewer_input, forks and live_orders): played as a game, which checks the viewer's script
+     and the parts too. The game script turned live has each build and each reclaim after a click on the commander's
+     place on its tick, as the live rule asks. */
   const pick = t => [{ at: t, move: [200, 300] }, { at: t, down: 'select' }, { at: t, up: 'select' }];
-  const picked = inputs => inputs.flatMap(e => typeof e.build === 'string' && e.build ? [...pick(e.at), e] : [e]);
+  const picked = inputs => inputs.flatMap(e => (typeof e.build === 'string' && e.build) || 'reclaim' in e ? [...pick(e.at), e] : [e]);
   const live = (e, d) => { e.live = true; d.inputs = []; d.game.inputs = picked(d.game.inputs); };
   const L = (name, want, edit) => g(`live: ${name}`, want, (e, d, sc, G) => { live(e, d); edit(e, d, sc, G); });
   L('live true', 'accepted', () => {});
@@ -959,7 +959,8 @@ function gameRefusalCases(game, page) {
   for (const c of WikiSim.REPLAY_CONTROLS.filter(c => !WikiSim.LIVE_CONTROLS.includes(c)))
     L(`a live demo pressing ${c}`, 'refused', (e, d) => { d.inputs = [{ at: 10, hud: c }]; });
   L('a live demo pressing leave:yes', 'refused', (e, d) => { d.inputs = [{ at: 10, hud: 'leave:yes' }]; });
-  // THE LIVE DATA RULE: a build after the click selecting its builder on its own tick, in the order inputs are fed
+  /* THE LIVE DATA RULE: a build or a reclaim after the click selecting its builder or reclaimer on its own tick, in
+     the order inputs are fed, and no pick */
   const B = (name, want, inputs) => L(`the live data rule, ${name}`, want, (e, d) => { d.game.inputs.push(...inputs); });
   B('a build after its click', 'accepted', [...pick(1000), { at: 1000, build: 'ARMSOLAR' }]);
   B('a build with no click', 'refused', [{ at: 1000, build: 'ARMSOLAR' }]);
@@ -972,7 +973,16 @@ function gameRefusalCases(game, page) {
   B('a build after its click in one input', 'accepted', [{ at: 1000, move: [200, 300], down: 'select', up: 'select' }, { at: 1000, build: 'ARMSOLAR' }]);
   B('a build after a move then a click', 'accepted', [{ at: 1000, move: [100, 100] }, ...pick(1000), { at: 1000, build: 'ARMSOLAR' }]);
   B('a build of no type with no click', 'accepted', [{ at: 1000, build: null }]);
+  B('a reclaim after its click', 'accepted', [...pick(1000), { at: 1000, reclaim: true }]);
+  B('a reclaim with no click', 'refused', [{ at: 1000, reclaim: true }]);
+  B('a reclaim after a click on the tick before', 'refused', [...pick(999), { at: 1000, reclaim: true }]);
+  B('a reclaim before its click', 'refused', [{ at: 1000, reclaim: true }, ...pick(1000)]);
+  B('a pick on its reclaim\'s tick, after it', 'refused', [...pick(1000), { at: 1000, reclaim: true }, { at: 1000, pick: 'metal' }]);
+  B('a pick after its reclaim\'s trip', 'refused', [...pick(1000), { at: 1000, reclaim: true }, { at: 1000 + T, pick: 'metal' }]);
+  B('a pick with no reclaim', 'refused', [{ at: 1000, pick: 'all' }]);
   g('live: a replay entry\'s build with no click', 'accepted', (e, d) => { d.game.inputs.push({ at: 1000, build: 'ARMSOLAR' }); });
+  g('live: a replay entry\'s reclaim with no click', 'accepted', (e, d) => { d.game.inputs.push({ at: 1000, reclaim: true }); });
+  g('live: a replay entry\'s pick after its reclaim', 'accepted', (e, d) => { d.game.inputs.push({ at: 1000, reclaim: true }, { at: 1000 + T, pick: 'metal' }); });
   // the fork parts
   const part = (k = {}) => ({ id: 1, from: 301, parent: 0, inputs: [{ at: 301, move: [100, 250] }, { at: 302, down: 'select' }, { at: 304, up: 'select' }], ...k });
   const F = (name, want, forks, edit = () => {}) => L(`forks, ${name}`, want, (e, d, sc, G) => { d.forks = typeof forks === 'function' ? forks(G) : forks; edit(e, d, sc, G); });
@@ -1008,6 +1018,11 @@ function gameRefusalCases(game, page) {
   ins('building with no click selecting its builder', 'refused', [{ at: 400, build: 'ARMSOLAR' }]);
   ins('building after a click on the tick before', 'refused', [...pick(399), { at: 400, build: 'ARMSOLAR' }]);
   ins('building no type', 'refused', [{ at: 400, build: 'NOPE' }]);
+  ins('reclaiming after its click', 'accepted', [...pick(400), { at: 400, reclaim: true }]);
+  ins('reclaiming with no click selecting its reclaimer', 'refused', [{ at: 400, reclaim: true }]);
+  ins('reclaiming after a click on the tick before', 'refused', [...pick(399), { at: 400, reclaim: true }]);
+  ins('a pick on its reclaim\'s tick', 'refused', [...pick(400), { at: 400, reclaim: true }, { at: 400, pick: 'metal' }]);
+  ins('a pick after its reclaim\'s trip', 'refused', [...pick(400), { at: 400, reclaim: true }, { at: 400 + T, pick: 'metal' }]);
   ins('a reclaim not true', 'refused', [{ at: 400, reclaim: 1 }]);
   ins('a pick of no kind', 'refused', [{ at: 400, pick: 'wood' }]);
   ins('a move of one number', 'refused', [{ at: 400, move: 5 }]);
